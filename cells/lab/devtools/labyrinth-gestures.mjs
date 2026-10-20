@@ -26,6 +26,7 @@ export const state = (w) => {
   for (const [v, st] of w.stairs) s.set(`s${v}`, st.d);
   for (const v of w.paving) s.set(`p${v}`, 1);
   for (const [v] of w.piers) s.set(`r${v}`, 1);
+  for (const [v, l] of w.ladders) s.set(`l${v}`, l.n);
   return s;
 };
 /** a gesture, as a hand might make it, in the world's own cells */

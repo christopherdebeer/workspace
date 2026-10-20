@@ -259,11 +259,46 @@ const waysCross: Rule = {
   },
 };
 
+/**
+ * A flight of the hand's whose head lands against a wall: the landing it arrives on, and the hand's stone straight ahead
+ * of it at that height, rising past it. A stair is climbed to go somewhere: aimed at a wall, the wall opens. Where
+ * there's somewhere to stand beyond a wall a cell thick, an arch through it, the way going on; else (a building's own
+ * door aside, buildings.ts) a blind door in its face, where it's met. The ladder: the arch; framed, a lantern each side
+ * of it; a pergola over the landing, a threshold.
+ */
+const flightMeetsWall: Rule = {
+  id: 'flight-meets-wall',
+  find(w) {
+    const out: Found[] = [], at = new Map<number, number>(), seen = new Set<number>();
+    // (the hand's operation each stair is of: a connection's steps (what it laid), or stairs laid as they are)
+    w.ops.forEach((op, n) => { for (const c of [...(w.reached.get(op)?.cells ?? []), ...(op.stairs ?? []).map((s) => [s[0], s[1], s[2]] as Cell)]) if (!at.has(key(...c))) at.set(key(...c), n); });
+    for (const f of w.flights) {
+      const [a, b] = DIRS[f.d], [kt, it, jt] = f.cells[f.cells.length - 1], H: Cell = [kt + 1, it + a, jt + b], B: Cell = [kt + 1, H[1] + a, H[2] + b], C: Cell = [kt + 1, B[1] + a, B[2] + b];
+      // (the hand's flight (laid by a way or a stair of its own), landing on a place, a plain block of the hand's ahead)
+      const by = at.get(key(...f.cells[f.cells.length - 1])) ?? at.get(key(...f.cells[0])) ?? -1;
+      if (by < 0 || w.ops[by].derived || !place(w, H) || w.occupied(...H) || !w.block(...B) || seen.has(key(...B))) continue;
+      // (through it, a cell thick, to somewhere to stand: an arch, the way going on)
+      if (!place(w, C) || w.occupied(...C)) continue;
+      seen.add(key(...B));
+      const born = w.ops[by].born ?? 0, arch: Op = { arches: [[...B, f.d % 2, born]] };
+      out.push({
+        rule: this.id, name: 'a flight aimed at a wall', where: 'at its head', anchor: B, cells: [H, B, C], by: [by], insists: (o) => !!o.connect || !!o.stairs?.length,
+        candidates: [
+          { level: 0, label: 'an arch through the wall at its head', verbs: ['open'], op: arch },
+          { level: 1, label: 'the arch, a lantern each side of it', verbs: ['open', 'frame'], op: join(arch, lantern(H), lantern(C)) },
+          { level: 2, label: 'the arch, a pergola over its landing', verbs: ['open', 'shelter'], op: join(arch, lantern(C), { dress: [[...H, DRESS.pergola, 1]] }) },
+        ],
+      });
+    }
+    return out;
+  },
+};
+
 /** what counts as making two ways' meeting again: another way (not the stone round it) */
 const ways = (op: Op) => !!op.connect || !!op.pave?.length;
 
 /** every rule, in the order they're resolved (a later one never lays where an earlier one has) */
-export const RULES: Rule[] = [waysMeet, levelApart, waysCross, wayEnds];
+export const RULES: Rule[] = [waysMeet, levelApart, waysCross, wayEnds, flightMeetsWall];
 
 // ─── resolving them ───
 
@@ -272,7 +307,9 @@ const lays = (op: Op): Cell[] => [...(op.add ?? []), ...(op.walls ?? []), ...(op
 /** whether a candidate keeps every claim (a passage, a stair's way, a tree, water: nothing a meeting lays goes in
  * any of them), and stays out of what other meetings have laid */
 function keeps(w: World, c: Candidate, taken: Set<number>): boolean {
-  for (const cell of lays(c.op)) if (taken.has(key(...cell)) || w.occupied(...cell) || w.claim(...cell)) return false;
+  // (an arch opened in the hand's plain stone (the verb open) lays nothing new: it's let through what's there)
+  const opens = new Set((c.op.arches ?? []).filter(([k, i, j]) => w.block(k, i, j)).map(([k, i, j]) => key(k, i, j)));
+  for (const cell of lays(c.op)) if (taken.has(key(...cell)) || (!opens.has(key(...cell)) && (w.occupied(...cell) || w.claim(...cell)))) return false;
   // (and a stair it lays has its own way clear: its foot, the room over it, its head and the room over that)
   for (const [k, i, j, d] of c.op.stairs ?? []) {
     const [a, b] = DIRS[d], way: Cell[] = [[k, i - a, j - b], [k + 1, i, j], [k + 1, i + a, j + b], [k + 2, i + a, j + b]];
@@ -288,7 +325,10 @@ function insistence(w: World, m: Found): number {
   for (let q = after + 1; q < w.ops.length; q++) {
     const o = w.ops[q];
     if (o.derived || (m.insists && !m.insists(o))) continue;
-    const foot = [...lays(o), ...(w.walks.get(o) ?? [])].map((c) => [c[1], c[2]] as [number, number]).concat(o.pave ?? []);
+    // (where it acts: what it lays and walks, and the course it was drawn along (made again where it's already built, a
+    // way lays nothing new, but it's been drawn there again))
+    const course: Array<[number, number]> = o.connect ? [...o.connect.path, ...(o.connect.to ? [[o.connect.to[1], o.connect.to[2]] as [number, number]] : [])] : [];
+    const foot = [...lays(o), ...(w.walks.get(o) ?? [])].map((c) => [c[1], c[2]] as [number, number]).concat(o.pave ?? [], course);
     if (foot.some(([i, j]) => near(i, j))) n++;
   }
   return n;

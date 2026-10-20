@@ -10,7 +10,8 @@
  *   left sideways, where nothing walls that side: a lane along its foot, a terrace along its head, are its ways too.
  * - **Not under a flight** where its masonry is, or where what's left under it is too low to stand in.
  * - **A way through an arch** (stone with a way through it, a gate in a wall) is a place too, walked only along its way.
- * - **Places lead to places** beside them at the same height, and a stair from its foot to its head.
+ * - **Places lead to places** beside them at the same height, a stair from its foot to its head, and a ladder from the
+ *   place at its foot to the top it leans on.
  *
  * Places are keyed as cells are given (`[k, i, j]`: the height stood at, then the column).
  */
@@ -59,6 +60,8 @@ export function navigate(w: World, inside: Array<[Cell, Cell]> = []): Nav {
     }
     for (const [a, b] of DIRS.slice(0, 2)) if (standing(w, k, i + a, j + b)) link(v, key(k, i + a, j + b));
   }
+  // (a ladder: from the place at its foot to the top it leans on)
+  for (const [v, l] of w.ladders) { const [k, i, j] = unkey(v), [a, b] = DIRS[l.d]; link(v, key(k + l.n, i + a, j + b)); }
   for (const [a, b] of inside) link(key(...a), key(...b));
   return { places, next };
 }

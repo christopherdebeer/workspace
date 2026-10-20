@@ -71,7 +71,7 @@ function judge(w0, w1, g, op) {
 const R0 = Number(opt.seed) || 1, tally = {}, byKind = {}, flagged = [];
 // (what was built against what was drawn: how often, and how, the reading took liberties with the gesture (`Op.took`))
 const took = {}, authorship = { built: 0, literal: 0, liberty: 0, moved: 0, reformed: 0, otherKind: 0, refused: 0, offered: 0 };
-const OTHER_KIND = ['tower-instead', 'walkway-instead', 'wall-instead', 'court-instead', 'chosen-instead', 'jetty'];
+const OTHER_KIND = ['tower-instead', 'ladder-instead', 'walkway-instead', 'wall-instead', 'court-instead', 'chosen-instead', 'jetty'];
 // (the liberties that change where the gesture acts, the hand's strongest say; the rest change how it's resolved, the
 // world's freedom)
 const WHERE = ['routed-round', 'begun-beside', 'from-foot', 'begun-on', 'moved-beside', 'trimmed', 'from-bank', 'arrives-along', 'arrives-first-reach', 'skirted', 'foot-back'];

@@ -88,7 +88,7 @@ function dressUp(w: World): Map<number, Dress> {
       const stairs = m.cells.filter((c) => w.stair(...c) >= 0);
       // (a flight with a drop beside it is railed, always, and the landings between its stairs with it; a long or high one
       // with none, now and then)
-      const over = (c: Cell) => DIRS.some(([a, b]) => { const x = c[1] + a, z = c[2] + b; return !w.occupied(c[0], x, z) && w.stair(c[0], x, z) < 0 && Math.max(height(w, x, z), w.ground(x, z)) < c[0]; });
+      const over = (c: Cell) => DIRS.some(([a, b]) => { const x = c[1] + a, z = c[2] + b; return !w.occupied(c[0], x, z) && w.stair(c[0], x, z) < 0 && Math.max(height(w, x, z), w.ground(x, z)) < c[0] - 1; });
       const drop = stairs.some(over);
       if (drop || ((stairs.length >= 3 || k >= 2) && chance(0.4, n, 2))) {
         const rail = chance(0.2, n, 3) ? DRESS.jali : DRESS.balustrade;
@@ -115,11 +115,12 @@ function dressUp(w: World): Map<number, Dress> {
     }
   }
 
-  // (any stair with a drop beside it, flight or no: railed)
+  // (any stair with a real drop beside it, flight or no: railed; a step or two up off the ground stays plain, a stoop,
+  // not a balustraded stair)
   for (const v of w.stairs.keys()) {
     const c = unkey(v);
     if (map.get(v)?.parapet) continue;
-    if (DIRS.some(([a, b]) => { const x = c[1] + a, z = c[2] + b; return !w.occupied(c[0], x, z) && w.stair(c[0], x, z) < 0 && Math.max(height(w, x, z), w.ground(x, z)) < c[0]; })) put(c, { parapet: true, rail: DRESS.balustrade });
+    if (DIRS.some(([a, b]) => { const x = c[1] + a, z = c[2] + b; return !w.occupied(c[0], x, z) && w.stair(c[0], x, z) < 0 && Math.max(height(w, x, z), w.ground(x, z)) < c[0] - 1; })) put(c, { parapet: true, rail: DRESS.balustrade });
   }
   // (anything high with a drop at its edge: a parapet round it, a top at a time, all of it or none)
   const tops = new Set<number>(), seen = new Set<number>();

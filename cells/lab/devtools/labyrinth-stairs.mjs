@@ -107,6 +107,17 @@ export const SCENES = [
     },
   },
   {
+    name: 'a ladder: too steep, no room to fold, against a wall',
+    run(w, H) {
+      for (let j = 3; j <= 8; j++) H.column([8, j], 4);
+      for (let j = 3; j <= 8; j++) if (j !== 5) H.column([6, j], 2);
+      H.column([7, 4], 1); H.column([7, 6], 1);
+      const op = H.stroke([7, 5], [8, 5], 'way', [8, 5]);
+      ok(`${this.tag}: a ladder, the lightest way up`, op.why === 'ladder', { why: op.why, note: op.note, took: op.took });
+      ok(`${this.tag}: climbed, from its foot to the top`, walks(w, at(w, H.T, [7, 5]), at(w, H.T, [8, 5], 4)));
+    },
+  },
+  {
     name: 'chosen: a free-standing flight made solid, then hung on piers',
     run(w, H) {
       H.block(8, 9, 5, 6, 4);

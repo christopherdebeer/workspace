@@ -254,5 +254,13 @@ function find(w: World): Buildings {
     for (const [x, z] of cols) for (let k = baseOf(x, z); k < h; k++) of.set(key(k, x, z), b);
     list.push(b);
   }
+  // (a flight aimed at a wall that's no building's, and no arch through it (encounters.ts opens one where there's
+  // somewhere to go beyond): a blind door in its face where the stair arrives, so a stair never just runs at a blank wall)
+  for (const f of w.flights) {
+    const [a, b2] = DIRS[f.d], [kt, it, jt] = f.cells[f.cells.length - 1], H: Cell = [kt + 1, it + a, jt + b2], B: Cell = [kt + 1, H[1] + a, H[2] + b2];
+    if (!standing(w, ...H) || !w.block(...B) || of.has(key(...B))) continue;
+    const d = (f.d + 2) % 4, id = `${B[0]}.${B[1]}.${B[2]}.${d}`;
+    if (!at.has(id)) at.set(id, { kind: 'door', style: 'arched', k: B[0], i: B[1], j: B[2], d });
+  }
   return { list, at, inside, of };
 }

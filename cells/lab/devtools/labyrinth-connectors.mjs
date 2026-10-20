@@ -236,6 +236,17 @@ const SCENES = [
       meetings(w, this.tag, 'ways-cross');
     },
   },
+  {
+    name: 'a flight aimed at a wall: up to a narrow terrace against a wall, another terrace beyond it',
+    run(w, H) {
+      for (let j = 3; j <= 8; j++) H.column([7, j], 4);
+      for (let j = 4; j <= 6; j++) { H.column([6, j], 2); H.column([8, j], 2); }
+      H.stroke([2, 5], [6, 5], 'way', [6, 5]);
+      meetings(w, this.tag, 'flight-meets-wall');
+      const [, i, j] = at(w, H.T, [7, 5]);
+      ok(`${this.tag}: left to itself, an arch through the wall at its head`, w.archway(2, i, j) >= 0, w.archway(2, i, j));
+    },
+  },
 ];
 
 const t0 = Date.now(), scenes = [];

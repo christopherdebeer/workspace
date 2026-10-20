@@ -231,10 +231,14 @@ export function walk(path: Array<[number, number]>): { cells: Array<[number, num
 export function adds(w: World, op: Op): number {
   const sim = new World(w.seed, w.landSeed); sim.ops = [...w.ops, op]; sim.rebuild();
   let n = 0;
-  for (const v of sim.mass.keys()) if (!w.mass.has(v)) n++;
+  // (what it lays itself: not what meetings make of it, laid round it (a way that lays nothing isn't made something by
+  // the arch or the floor a meeting puts beside it))
+  if (op.connect) { const r = sim.reached.get(op); return (r?.cells.length ?? 0) + op.connect.path.filter(([i, j]) => sim.paved(i, j) && !w.paved(i, j)).length; }
+  for (const v of sim.mass.keys()) if (!w.mass.has(v) && !sim.derivedMass.has(v)) n++;
   for (const v of sim.stairs.keys()) if (!w.stairs.has(v)) n++;
   for (const v of sim.paving) if (!w.paving.has(v)) n++;
   for (const v of sim.piers.keys()) if (!w.piers.has(v)) n++;
+  for (const v of sim.ladders.keys()) if (!w.ladders.has(v)) n++;
   return n;
 }
 
@@ -492,7 +496,11 @@ function read(w: World, start: Pick, path: Array<[number, number]>, end: Pick | 
     if (fits) return tower ? { ...fits, alts: [{ label: 'a stair tower', op: tower }] } : fits;
     // (folded back on itself beside the stroke, still a flight: a switchback; the tower the other reading)
     const sw = to && to[0] > h0 ? switchback(w, h0, cells, to, now) : null;
-    if (sw) return { ...sw, took: ['switchback'], alts: [...(tower ? [{ label: 'a stair tower', op: tower }] : []), ...(far ? [{ label: 'a flight round what\'s in the way, further off', op: far }] : [])] };
+    const lad = to && to[0] > h0 ? ladder(w, h0, cells, to, now) : null;
+    const light = [...(lad ? [{ label: 'a ladder', op: lad }] : []), ...(tower ? [{ label: 'a stair tower', op: tower }] : [])];
+    if (sw) return { ...sw, took: ['switchback'], alts: [...light, ...(far ? [{ label: 'a flight round what\'s in the way, further off', op: far }] : [])] };
+    // (else the lightest way up: a ladder against it; the stair tower the other reading)
+    if (lad) return { ...lad, took: ['ladder-instead'], alts: [...(tower ? [{ label: 'a stair tower', op: tower }] : []), ...(far ? [{ label: 'a flight round what\'s in the way, further off', op: far }] : [])] };
     if (tower) return { ...tower, took: ['tower-instead'], ...(far ? { alts: [{ label: 'a flight round what\'s in the way, further off', op: far }] } : {}) };
     // (ending on a top: the connection's what the hand insisted on, how it gets there the world's; round, further off)
     if (aimed && far) return far;
@@ -528,8 +536,8 @@ function read(w: World, start: Pick, path: Array<[number, number]>, end: Pick | 
     if (!reaches(op)) {
       const flight = op, near = round(2), far = near ? null : round(Infinity);
       // (a flight further round than a cell off the stroke is another place: offered, never built unasked)
-      const sw = near ? null : switchback(w, h0, cells, to, now);
-      const better = near ?? (sw ? { ...sw, took: ['switchback'] } : tower ? { ...tower, took: ['tower-instead'] } : aimed ? far : null);
+      const sw = near ? null : switchback(w, h0, cells, to, now), lad = near || sw ? null : ladder(w, h0, cells, to, now);
+      const better = near ?? (sw ? { ...sw, took: ['switchback'] } : lad ? { ...lad, took: ['ladder-instead'] } : tower ? { ...tower, took: ['tower-instead'] } : aimed ? far : null);
       if (better) {
         op = better; alts.unshift({ label: 'joining what it meets', op: { ...flight, note: 'joining what it meets', reading: 'joining what it meets' } });
         if (better.why !== 'tower' && tower) alts.push({ label: 'a stair tower', op: tower });
@@ -619,7 +627,12 @@ function way(w: World, h0: number, cells: Array<[number, number]>, to: Cell | nu
   }
   // (too steep for a flight along it: folded back beside it, a switchback, still a way; else a stair tower)
   const sw = !r?.reached && dest[0] > h0 ? switchback(w, h0, [...path, [dest[1], dest[2]]], dest, now) : null;
-  if (sw) return { ...mark(sw, 'switchback'), alts: [{ label: 'the way as drawn, joining what it meets', op: { ...op, note, reading: note } }, ...(tower ? [{ label: 'a stair tower', op: tower }] : []), ...alts] };
+  const lad = dest[0] > h0 ? ladder(w, h0, [...path, [dest[1], dest[2]]], dest, now) : null;
+  const light = [...(lad ? [{ label: 'a ladder', op: lad }] : []), ...(tower ? [{ label: 'a stair tower', op: tower }] : [])];
+  if (sw) return { ...mark(sw, 'switchback'), alts: [{ label: 'the way as drawn, joining what it meets', op: { ...op, note, reading: note } }, ...light, ...alts] };
+  if (!r?.reached && lad) return { ...mark(lad, 'ladder-instead'), alts: [{ label: 'the way as drawn, joining what it meets', op: { ...op, note, reading: note } }, ...(tower ? [{ label: 'a stair tower', op: tower }] : []), ...alts] };
+  // (reached by a flight: a ladder offered too, the lighter way up)
+  if (r?.reached && lad) alts.push({ label: 'a ladder instead', op: lad });
   if (!r?.reached && tower) return { ...mark(tower, 'tower-instead'), alts: [{ label: 'the way as drawn, joining what it meets', op: { ...op, note, reading: note } }, { label: 'a walkway at the height it starts', op: walkway }, ...alts] };
   // (nothing of it can be made from where it starts (begun on a rock, or the foot of a bank too steep to climb there):
   // begun a cell or two on, where it can; and if nothing at all, said, not built empty)
@@ -863,6 +876,30 @@ export function switchback(w: World, h0: number, cells: Array<[number, number]>,
       const note = `a switchback, climbing ${N} level${N > 1 ? 's' : ''}, a landing between its flights`;
       return { add, stairs, born: now, why: 'stairs', note, reading: note };
     }
+  }
+  return null;
+}
+
+/**
+ * A ladder, the lightest way up: from the place at the foot of what the stroke climbs to, leaning on it, to its top.
+ * Where the stroke comes to it, or beside any face of it near the stroke. Null where none will stand.
+ */
+export function ladder(w: World, h0: number, cells: Array<[number, number]>, to: Cell, now: number): Op | null {
+  const H = to[0], dest: [number, number] = [to[1], to[2]], e = cells[cells.length - 2];
+  if (!e || H <= h0) return null;
+  const solid = (k: number, i: number, j: number) => w.stone(k, i, j) || w.earth(k, i, j);
+  const near = ([i, j]: [number, number]) => cells.some(([x, z]) => Math.max(Math.abs(x - i), Math.abs(z - j)) <= 1);
+  const feet: Array<[number, number]> = [e, ...DIRS.map(([a, b]) => [dest[0] - a, dest[1] - b] as [number, number]).filter((c) => (c[0] !== e[0] || c[1] !== e[1]) && near(c))];
+  for (const f of feet) {
+    const d = DIR(f, dest);
+    if (d < 0) continue;
+    const k = w.ground(f[0], f[1]), n = H - k;
+    if (n < 1 || !standing(w, k, f[0], f[1]) || w.claim(k, f[0], f[1])) continue;
+    let ok = true;
+    for (let q = 0; q < n && ok; q++) if (w.occupied(k + q, f[0], f[1]) || w.claim(k + q, f[0], f[1]) || !solid(k + q, dest[0], dest[1])) ok = false;
+    if (!ok || !standing(w, H, dest[0], dest[1])) continue;
+    const note = `a ladder up to it, ${n} level${n > 1 ? 's' : ''}`;
+    return { ladders: [[k, f[0], f[1], d, n, now]], born: now, why: 'ladder', note, reading: note };
   }
   return null;
 }

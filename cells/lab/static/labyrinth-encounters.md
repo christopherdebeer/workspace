@@ -217,6 +217,8 @@ The fourth, **ways cross** (Astra's "a crossing: the lower passage is kept and t
 ![ways cross: left as they are; a flight from the lane up to the bridge's deck; the flight with a lantern at its head](labyrinth/e-cross.jpg)
 ![a way ends in the air: a parapet across its end; a balustraded belvedere; on its own pier, a lantern](labyrinth/e-belvedere.jpg)
 
+The fifth, **a flight aimed at a wall** (what a stair is for: going somewhere): a flight of the hand's whose head lands against its plain stone, somewhere to stand beyond a wall a cell thick. Rungs: an arch through the wall (the default: a stair never just runs at a blank face; with nowhere beyond, buildings.ts gives that face a blind door instead); a lantern each side of the arch; a pergola over the landing. It needed one new verb, *open* (an arch let through the hand's own stone, which lays nothing new, so keeps no claim against it), and one fix to the framework that every rule now has: a stroke made again over a course that's already built lays nothing new, so its insistence is counted by the course it was drawn along, not only what it laid.
+
 ### Adding an encounter
 
 1. Write the rule in `encounters.ts`: `find(w)` returns meetings, each `{ rule, name, anchor, cells, by, candidates, insists? }`; candidates are operations made with the verbs (add a verb if a new kind of change is needed, once, for every rule after).

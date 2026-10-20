@@ -665,6 +665,15 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
     if (d?.prop === DRESS.pot) pot(i + mid[0], j + mid[1], k + 1, w.born(k, i, j));
   }
   pergolas();
+  // (ladders: two poles leaning against the stone they climb, a little out from it at the foot, their tops standing up
+  // past the edge to hold by; rungs between)
+  for (const [v, l] of w.ladders) {
+    const [k, i, j] = unkey(v), [a, b] = DIRS[l.d], [ta, tb] = DIRS[(l.d + 1) % 4], cx = X(i) + 0.5, cz = Z(j) + 0.5;
+    cur = { born: l.born, pivot: k, how: 1, tone: 0.5, dress: 0, sel: selected.has(v) };
+    const top = k + l.n + 0.45, at = (y: number, s: number): V3 => { const t = (y - k) / (top - k), off = 0.5 - 0.06 - (1 - t) * 0.32; return [cx + a * off + ta * s, y, cz + b * off + tb * s]; };
+    for (const s of [-0.2, 0.2]) for (let y = k; y < top - 1e-6; y += 0.2) { const y1 = Math.min(top, y + 0.2), c = at((y + y1) / 2, s); box(c[0] - 0.035, c[0] + 0.035, y, y1, c[2] - 0.035, c[2] + 0.035, MAT.wood, 0.85); }
+    for (let y = k + 0.28; y < k + l.n + 0.05; y += 0.28) bar(at(y, -0.2), at(y, 0.2), 0.04, 0.04, MAT.wood);
+  }
   return { data: new Float32Array(out), count: out.length / STRIDE };
 
   /**

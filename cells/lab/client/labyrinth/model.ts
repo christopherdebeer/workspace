@@ -53,6 +53,9 @@ export interface Op {
   add?: Array<[number, number, number, number]>; stairs?: Array<[number, number, number, number, number]>; cut?: Cell[]; why?: string;
   /** stone with a way through it: its cell, axis (0 x, 1 z), when */
   arches?: Array<[number, number, number, number, number]>;
+  /** ladders: the cell at a ladder's foot (where it stands), the way it leans (a DIRS index, toward the stone it's
+   * against), how many levels it climbs (to the top of that stone), when */
+  ladders?: Array<[number, number, number, number, number, number]>;
   /** cypresses (on a floor) and pools (let into the stone): cell, when */
   trees?: Array<[number, number, number, number]>; pools?: Array<[number, number, number]>;
   /** water let into a top, up off the ground: a basin; its cell (the level of the water, over the stone it's let into),
@@ -250,6 +253,8 @@ export class World {
   meetings: Meeting[] = [];
   private bridged = new Set<number>();
   trees = new Map<number, number>();
+  /** ladders, by the cell at the foot: the way each leans, how many levels it climbs, when */
+  ladders = new Map<number, { d: number; n: number; born: number }>();
   pools = new Map<number, number>();
   basins = new Map<number, number>();
   /** where basins spill (one spout each, over the deepest drop), and the bowls the rules put where they land */
@@ -449,6 +454,16 @@ export class World {
       }
     }
     mark(list.length - 1);
+    // (ladders, where they still stand: a floor at the foot, nothing in the way up, the stone they lean on there, and a
+    // place to step off on to at its top)
+    this.ladders.clear();
+    for (const op of list) for (const [k, i, j, d, n, b] of op.ladders ?? []) {
+      const [a, c] = DIRS[d], x = i + a, z = j + c;
+      if (!inGrid(i, j) || !(k === this.ground(i, j) || this.stone(k - 1, i, j))) continue;
+      let ok = true;
+      for (let q = 0; q < n && ok; q++) if (this.occupied(k + q, i, j) || !(this.stone(k + q, x, z) || this.earth(k + q, x, z))) ok = false;
+      if (ok && !this.occupied(k + n, x, z)) this.ladders.set(key(k, i, j), { d, n, born: b });
+    }
     this.tall = this.measureTop(); this.levels = this.tall + 2;
     this.resolve();
     this.spill();
@@ -483,13 +498,15 @@ export class World {
   claim(k: number, i: number, j: number): 'passage' | 'stair' | 'tree' | 'water' | null {
     if (!inGrid(i, j)) return null;
     if (this.passages.has(key(k, i, j))) return 'passage';
-    if (this.stairs.has(key(k, i, j)) || this.way(k, i, j)) return 'stair';
+    if (this.stairs.has(key(k, i, j)) || this.way(k, i, j) || this.onLadder(k, i, j)) return 'stair';
     for (let kk = k - 2; kk <= k; kk++) if (kk >= 0 && this.trees.has(key(kk, i, j))) return 'tree';
     if ((k === this.ground(i, j) && this.pool(i, j)) || this.basins.has(key(k, i, j))) return 'water';
     return null;
   }
   /** whether a stair at a cell, come to from `prev`, would stand across another way's walk (cutting it) */
   private crosses(k: number, i: number, j: number, prev: [number, number]) { const a = this.passages.get(key(k, i, j)); return a !== undefined && a !== (prev[0] !== i ? 0 : 1); }
+  /** whether a cell is in a ladder's way: the levels it climbs through, over its foot */
+  onLadder(k: number, i: number, j: number) { for (let q = 0; q <= k; q++) { const l = this.ladders.get(key(k - q, i, j)); if (l && q < l.n) return true; } return false; }
   /** the passage a cell keeps open, and which way it runs (-1 if none) */
   passage(k: number, i: number, j: number): number { return inGrid(i, j) ? this.passages.get(key(k, i, j)) ?? -1 : -1; }
 
@@ -1025,7 +1042,18 @@ export class World {
 
   /** the operations, as text (to keep, and to make again: when they were laid isn't kept) */
   /** what's been done, written down (on the land, with the land's seed) */
-  encode(): string { const ops = this.ops.map((o) => [o.add?.map((c) => c.slice(0, 3)) ?? 0, o.stairs?.map((c) => c.slice(0, 4)) ?? 0, o.cut ?? 0, o.arches?.map((c) => c.slice(0, 4)) ?? 0, o.trees?.map((c) => c.slice(0, 3)) ?? 0, o.pools?.map((c) => c.slice(0, 2)) ?? 0, o.bridge ? 1 : 0, o.connect ? [o.connect.from, o.connect.to, o.connect.path, ...(o.connect.rest?.length || o.connect.follow ? [o.connect.rest ?? 0] : []), ...(o.connect.follow ? [1] : [])] : 0, o.dress ?? 0, o.rule ?? 0, o.walls?.map((c) => c.slice(0, 4)) ?? 0, ...(o.basins?.length || o.pave?.length || o.choose?.length ? [o.basins?.map((c) => c.slice(0, 3)) ?? 0] : []), ...(o.pave?.length || o.choose?.length ? [o.pave ?? 0] : []), ...(o.choose?.length ? [o.choose] : [])]); return JSON.stringify(this.land ? { land: this.landSeed, ops } : ops); }
+  encode(): string {
+    // (the fields after the eleventh only as far as the last one there is: an encoding made before a field existed reads
+    // the same)
+    const z = <T,>(a: T[] | undefined) => (a?.length ? a : 0);
+    const ops = this.ops.map((o) => {
+      const e: unknown[] = [o.add?.map((c) => c.slice(0, 3)) ?? 0, o.stairs?.map((c) => c.slice(0, 4)) ?? 0, o.cut ?? 0, o.arches?.map((c) => c.slice(0, 4)) ?? 0, o.trees?.map((c) => c.slice(0, 3)) ?? 0, o.pools?.map((c) => c.slice(0, 2)) ?? 0, o.bridge ? 1 : 0, o.connect ? [o.connect.from, o.connect.to, o.connect.path, ...(o.connect.rest?.length || o.connect.follow ? [o.connect.rest ?? 0] : []), ...(o.connect.follow ? [1] : [])] : 0, o.dress ?? 0, o.rule ?? 0, o.walls?.map((c) => c.slice(0, 4)) ?? 0,
+        z(o.basins?.map((c) => c.slice(0, 3))), z(o.pave), z(o.choose), z(o.ladders?.map((c) => c.slice(0, 5)))];
+      while (e.length > 11 && e[e.length - 1] === 0) e.pop();
+      return e;
+    });
+    return JSON.stringify(this.land ? { land: this.landSeed, ops } : ops);
+  }
 }
 
 /** a world made again from its operations (as `encode` wrote them), all laid long ago */
@@ -1047,6 +1075,7 @@ export function replay(text: string, seed = 1): World {
       arches: at(3)?.map((c) => [c[0], c[1], c[2], c[3], -100] as [number, number, number, number, number]), trees: at(4)?.map((c) => [c[0], c[1], c[2], -100] as [number, number, number, number]), pools: at(5)?.map((c) => [c[0], c[1], -100] as [number, number, number]), bridge: o[6] === 1, basins: at(11)?.map((c) => [c[0], c[1], c[2], -100] as [number, number, number, number]),
       pave: (at(12) as Array<[number, number]> | null) ?? undefined,
       choose: (at(13) as Array<[number, number, number, number]> | null) ?? undefined,
+      ladders: at(14)?.map((c) => [c[0], c[1], c[2], c[3], c[4], -100] as [number, number, number, number, number, number]),
     });
   }
   w.rebuild(-100);

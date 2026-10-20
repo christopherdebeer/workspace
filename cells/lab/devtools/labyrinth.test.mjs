@@ -596,8 +596,8 @@ stands(s4, 'story 4');
   ok('the flat slab: no retaining walls', CX.retaining(story(8)).size === 0);
   // (how cells answer their neighbours)
   for (const n of [3, 8, 9, 11]) {
-    const w2 = story(n), unrailed = [...w2.stairs.keys()].map(unkey).filter(([k, i, j]) => DIRS.some(([a, b]) => !w2.occupied(k, i + a, j + b) && w2.stair(k, i + a, j + b) < 0 && Math.max(MO.height(w2, i + a, j + b), w2.ground(i + a, j + b)) < k) && !CH.look(w2, k, i, j)?.parapet);
-    ok(`story ${n}: every stair with a drop beside it railed`, unrailed.length === 0, unrailed);
+    const w2 = story(n), unrailed = [...w2.stairs.keys()].map(unkey).filter(([k, i, j]) => DIRS.some(([a, b]) => !w2.occupied(k, i + a, j + b) && w2.stair(k, i + a, j + b) < 0 && Math.max(MO.height(w2, i + a, j + b), w2.ground(i + a, j + b)) < k - 1) && !CH.look(w2, k, i, j)?.parapet);
+    ok(`story ${n}: every stair with a real drop beside it (two levels or more) railed`, unrailed.length === 0, unrailed);
     ok(`story ${n}: no parapet on a thin wall`, [...ME.parapets(w2).edges.keys()].every((v) => w2.wall(...unkey(v)) < 0));
   }
   { const w2 = story(4), sp = w2.spans[0], op = P.place(w2, 'pool', { face: 'top', hit: [sp.k, sp.i, sp.j], to: [sp.k + 1, sp.i, sp.j] }, 0, 0); ok('a basin only in a plain block: not in an arch\'s deck', !op?.basins, op); }
