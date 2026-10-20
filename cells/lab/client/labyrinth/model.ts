@@ -98,8 +98,8 @@ export const RULE = { none: 0, lintel: 1, pier: 2, colonnade: 3, arch: 4, noRoof
  * How a flight is carried. Worked out from its setting (the hand can choose another, kept at its foot: `RULE.solid`,
  * `rampant`, `hung`):
  * - **ground**: every step stands on something already (the ground, stone, the land);
- * - **hung**: a wall (or the bank) beside every step that's over nothing: the steps cantilevered out of it, the space
- *   under them open;
+ * - **hung**: a wall beside every step that's over nothing: the steps cantilevered out of it, the space under them
+ *   open (beside the land's bank instead, it's built up solid against it, unless that can't be);
  * - **rampant**: on an arch rising with it, springing from its foot and leaning on what it climbs to, the space under
  *   it open where it's high enough to walk;
  * - **solid**: a short flight on the ground, filled down to the ground under it (never over a passage the hand made);
@@ -803,6 +803,8 @@ export class World {
       const sideOf = (c: Cell) => [(s.d + 1) % 4, (s.d + 3) % 4].filter((q) => solidAt(c[0], c[1] + DIRS[q][0], c[2] + DIRS[q][1]));
       const common = [(s.d + 1) % 4, (s.d + 3) % 4].find((q) => loose.every((c) => sideOf(c).includes(q)));
       const hangs = loose.length > 0 && loose.every((c) => sideOf(c).length > 0);
+      // (beside the land's bank, not a wall: built up solid against it, a retaining stair, not hung out of the earth)
+      const byBank = hangs && !loose.every((c) => sideOf(c).some((q) => this.mass.has(key(c[0], c[1] + DIRS[q][0], c[2] + DIRS[q][1]))));
       const asked = this.rules.get(v);
       const options: Carriage[] = !loose.length ? ['ground'] : [...(hangs ? ['hung' as const] : []), ...(footRests && headRests ? ['rampant' as const] : []), ...(founded && !passageUnder ? ['solid' as const] : []), 'pier'];
       let carriage: Carriage;
@@ -811,6 +813,7 @@ export class World {
       else if (asked === RULE.rampant && footRests && headRests) carriage = 'rampant';
       else if (asked === RULE.solid && founded && !passageUnder) carriage = 'solid';
       else if (asked === RULE.pier) carriage = 'pier';
+      else if (byBank && founded && !passageUnder) carriage = 'solid';
       else if (hangs) carriage = 'hung';
       else if (footRests && headRests && (n >= 3 || passageUnder || !founded)) carriage = 'rampant';
       else if (founded && !passageUnder) carriage = 'solid';

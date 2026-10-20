@@ -198,9 +198,12 @@ ok(`auto never builds into a stair's way (${ways.ok} of ${ways.tried})`, ways.ok
   const w = new World(3), top = (i, j) => ({ face: 'top', hit: [w.topFrom(0, i, j) - 1, i, j], to: [w.topFrom(0, i, j), i, j] }), ground = (i, j) => ({ face: 'ground', hit: [-1, i, j], to: [0, i, j] });
   for (let k = 0; k < 3; k++) w.apply({ add: [[k, 6, 5, 0]] });
   const short = G.trace(w, ground(4, 5), [[4, 5], [5, 5]], top(6, 5), () => 0);
-  ok('too steep for a flight: a stair tower instead', short?.why === 'tower' && !short.refused, short);
+  // (folded back beside the stroke, still a flight: a switchback that reaches; the stair tower the other reading)
+  ok('too steep for a flight: a switchback beside it, a stair tower the other reading', short?.took?.includes('switchback') && short.alts?.some((a) => a.op.why === 'tower'), short);
+  { const t = replay(w.encode()); t.apply({ ...short, alts: undefined }); ok('the switchback reaches the top', NAV.reaches(BU.walkable(t), [0, 4, 6], [3, 6, 5]) || NAV.reaches(BU.walkable(t), [0, 4, 4], [3, 6, 5])); }
   {
-    const t = replay(w.encode()); t.apply(short);
+    const tower = short.alts.find((a) => a.op.why === 'tower').op;
+    const t = replay(w.encode()); t.apply(tower);
     const b = BU.buildings(t).list.find((x) => x.cols.some(([i, j]) => i === 5 && j === 5));
     ok('the stair tower: a building, a door at its foot facing the way it was come to, a stair inside', !!b && b.inside && b.openings.some((o) => o.kind === 'door' && o.k === 0 && o.d === 2), b && { inside: b.inside, openings: b.openings });
     ok('and it reaches the top', NAV.reaches(BU.walkable(t), [0, 4, 5], [3, 6, 5]));
@@ -210,7 +213,7 @@ ok(`auto never builds into a stair's way (${ways.ok} of ${ways.tried})`, ways.ok
     // (ending on the top, the connection's insisted on: a flight round what's in the way reaching it, else a walkway
     // toward it, else refused, saying why)
     const reachesIt = (o) => { const v = replay(w.encode()); v.apply(o); return !!v.reached.get(v.ops.at(-1))?.reached; };
-    ok('too steep, and no room for a tower: a flight round to it that reaches, or a walkway toward it, or refused, saying why', (steep?.why === 'stairs' && steep.took?.includes('routed-round') && reachesIt(steep)) || (!steep?.refused && steep?.why === 'walkway' && /steep/.test(steep.note)) || /steep/.test(steep?.refused), steep);
+    ok('too steep, and no room for a tower: a switchback or a flight round to it that reaches, or a walkway toward it, or refused, saying why', (steep?.why === 'stairs' && ((steep.took?.includes('routed-round') && reachesIt(steep)) || (steep.took?.includes('switchback') && (() => { const v = replay(w.encode()); v.apply({ ...steep, alts: undefined }); return NAV.reaches(BU.walkable(v), [0, 5, 6], [2, 5, 8]); })()))) || (!steep?.refused && steep?.why === 'walkway' && /steep/.test(steep.note)) || /steep/.test(steep?.refused), steep);
   }
   const long = G.trace(w, ground(2, 5), [[2, 5], [3, 5], [4, 5], [5, 5]], top(6, 5), () => 0);
   ok('drawn longer: stairs', long?.why === 'stairs', long);

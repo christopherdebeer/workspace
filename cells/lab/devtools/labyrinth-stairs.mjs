@@ -21,6 +21,8 @@ function hand(w, T) {
   const apply = (op, what) => { if (!op || op.refused) throw new Error(`${what}: ${op?.refused ?? 'nothing'}`); w.apply({ ...op, alts: undefined }); return op; };
   return {
     T,
+    /** a stroke through several points (each a cell, in the scene's frame) */
+    trace: (pts, intent, end = null) => apply(G.trace(w, top(pts[0]), G.connect(pts.map(T)), end ? top(end) : null, () => 0, 0, [], intent), `trace ${pts}`),
     stroke: (a, b, intent, end = null) => apply(G.trace(w, top(a), G.connect([T(a), T(b)]), end ? top(end) : null, () => 0, 0, [], intent), `stroke ${a}→${b}`),
     column: (c, n) => { const [i, j] = T(c), g = w.ground(i, j); w.apply({ add: Array.from({ length: n }, (_, k) => [g + k, i, j, 0]) }); },
     block: (i0, i1, j0, j1, n) => { const add = []; for (let i = i0; i <= i1; i++) for (let j = j0; j <= j1; j++) { const [x, z] = T([i, j]), g = w.ground(x, z); for (let k = 0; k < n; k++) add.push([g + k, x, z, 0]); } w.apply({ add }); },
@@ -83,6 +85,25 @@ export const SCENES = [
       H.flight([5, 5], 0, 3);
       ok(`${this.tag}: up it, and off sideways on to the terrace`, walks(w, at(w, H.T, [4, 5]), at(w, H.T, [6, 7], 3)));
       ok(`${this.tag}: hung from the terrace's side`, carried(w, H, [7, 5], 2) === 'hung', carried(w, H, [7, 5], 2));
+    },
+  },
+  {
+    name: 'switchback: a short stroke to a tall tower, folded back on itself',
+    run(w, H) {
+      H.block(8, 9, 5, 6, 5);
+      const op = H.stroke([6, 5], [8, 5], 'way', [8, 5]);
+      ok(`${this.tag}: read as a switchback, the tower the other reading`, op.took?.includes('switchback') && op.alts?.some((a) => a.label === 'a stair tower'), { took: op.took, note: op.note, alts: op.alts?.map((a) => a.label) });
+      ok(`${this.tag}: walked from the ground to the top`, walks(w, at(w, H.T, [7, 8]), at(w, H.T, [8, 5], 5)));
+      ok(`${this.tag}: two flights, each carried`, w.flights.length === 2 && w.flights.every((f) => f.carriage !== 'pier'), w.flights.map((f) => [f.cells.length, f.carriage]));
+    },
+  },
+  {
+    name: 'folded by hand: a hairpin stroke climbing to a tower, followed as drawn',
+    run(w, H) {
+      H.block(8, 9, 5, 6, 4);
+      const op = H.trace([[7, 6], [3, 6], [3, 5], [8, 5]], 'way', [8, 5]);
+      ok(`${this.tag}: followed as drawn (not smoothed, not a ring, not refolded)`, !!op.connect && !op.took?.includes('switchback') && op.connect.path.length >= 8, { took: op.took, note: op.note, path: op.connect?.path?.length });
+      ok(`${this.tag}: walked from the ground to the top`, walks(w, at(w, H.T, [7, 7]), at(w, H.T, [8, 5], 4)));
     },
   },
   {

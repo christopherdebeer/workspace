@@ -176,11 +176,12 @@ export function wallKind(w: World, i: number, j: number): 'plain' | 'gated' | 'a
  * A stroke's cells with its jogs taken out: a step aside and straight back again (a hand's wobble, a cell off the line
  * and back) gone, so it runs straight on there. What it was drawn round, and its turns that stay turned, it keeps.
  */
-export function unjog(cells: Array<[number, number]>): Array<[number, number]> {
+export function unjog(cells: Array<[number, number]>, deep = true): Array<[number, number]> {
   const out = cells.slice();
   for (let q = 0; q + 3 < out.length; ) {
     const [a, d] = [out[q], out[q + 3]];
-    if (Math.abs(a[0] - d[0]) + Math.abs(a[1] - d[1]) === 1) { out.splice(q + 1, 2); q = Math.max(0, q - 2); } else q++;
+    // (each jog taken out, and what that leaves looked at again; not `deep`, a hairpin folded back on purpose is left)
+    if (Math.abs(a[0] - d[0]) + Math.abs(a[1] - d[1]) === 1) { out.splice(q + 1, 2); q = deep ? Math.max(0, q - 2) : q + 1; } else q++;
   }
   return out;
 }
@@ -338,10 +339,15 @@ export function reading(w: World, start: Pick, path: Array<[number, number]>, en
  * - whole-piece: a lift of all the top joined at that height, not just the column touched.
  */
 function read(w: World, start: Pick, path: Array<[number, number]>, end: Pick | null, born: (i: number, j: number) => number, now: number, rest: Array<[number, number]>, intent: Intent, took: string[]): Op | Refusal | null {
-  const walked = walk(path), cells = walked.closed ? walked.cells : unjog(walked.cells);
+  // (a stroke ending on a top at another height than it began climbs (or goes down): folded back on itself, to gain the
+  // length its steps need, its fold's meant, not a jog to smooth away, nor a ring drawn round)
+  const climbs = !!end && end.face === 'top' && surface(w, end) !== surface(w, start);
+  const walked = walk(path), cells = walked.closed ? walked.cells : unjog(walked.cells, !climbs);
   // (a way drawn round, back to within a cell or two of its start: round, too; the gap closed)
   const gap = Math.max(Math.abs(cells[cells.length - 1][0] - cells[0][0]), Math.abs(cells[cells.length - 1][1] - cells[0][1]));
-  const nearly = !walked.closed && cells.length >= 10 && gap <= (intent === 'way' ? 3 : 2);
+  // (nearly closed: a ring drawn round, its ends a cell or so apart; not one that ends on a top at another height than it
+  // began: that's a climb, folded back to gain the length its steps need)
+  const nearly = !walked.closed && !climbs && cells.length >= 10 && gap <= (intent === 'way' ? 3 : 2);
   if (nearly) cells.push(...connect([cells[cells.length - 1], cells[0]]).slice(1, -1));
   const closed = walked.closed || nearly;
   const h0 = surface(w, start);
@@ -484,6 +490,9 @@ function read(w: World, start: Pick, path: Array<[number, number]>, end: Pick | 
     // will stand; else it's refused, saying why)
     const fits = round(2), far = fits ? null : round(Infinity);
     if (fits) return tower ? { ...fits, alts: [{ label: 'a stair tower', op: tower }] } : fits;
+    // (folded back on itself beside the stroke, still a flight: a switchback; the tower the other reading)
+    const sw = to && to[0] > h0 ? switchback(w, h0, cells, to, now) : null;
+    if (sw) return { ...sw, took: ['switchback'], alts: [...(tower ? [{ label: 'a stair tower', op: tower }] : []), ...(far ? [{ label: 'a flight round what\'s in the way, further off', op: far }] : [])] };
     if (tower) return { ...tower, took: ['tower-instead'], ...(far ? { alts: [{ label: 'a flight round what\'s in the way, further off', op: far }] } : {}) };
     // (ending on a top: the connection's what the hand insisted on, how it gets there the world's; round, further off)
     if (aimed && far) return far;
@@ -519,7 +528,8 @@ function read(w: World, start: Pick, path: Array<[number, number]>, end: Pick | 
     if (!reaches(op)) {
       const flight = op, near = round(2), far = near ? null : round(Infinity);
       // (a flight further round than a cell off the stroke is another place: offered, never built unasked)
-      const better = near ?? (tower ? { ...tower, took: ['tower-instead'] } : aimed ? far : null);
+      const sw = near ? null : switchback(w, h0, cells, to, now);
+      const better = near ?? (sw ? { ...sw, took: ['switchback'] } : tower ? { ...tower, took: ['tower-instead'] } : aimed ? far : null);
       if (better) {
         op = better; alts.unshift({ label: 'joining what it meets', op: { ...flight, note: 'joining what it meets', reading: 'joining what it meets' } });
         if (better.why !== 'tower' && tower) alts.push({ label: 'a stair tower', op: tower });
@@ -607,6 +617,9 @@ function way(w: World, h0: number, cells: Array<[number, number]>, to: Cell | nu
       }
     }
   }
+  // (too steep for a flight along it: folded back beside it, a switchback, still a way; else a stair tower)
+  const sw = !r?.reached && dest[0] > h0 ? switchback(w, h0, [...path, [dest[1], dest[2]]], dest, now) : null;
+  if (sw) return { ...mark(sw, 'switchback'), alts: [{ label: 'the way as drawn, joining what it meets', op: { ...op, note, reading: note } }, ...(tower ? [{ label: 'a stair tower', op: tower }] : []), ...alts] };
   if (!r?.reached && tower) return { ...mark(tower, 'tower-instead'), alts: [{ label: 'the way as drawn, joining what it meets', op: { ...op, note, reading: note } }, { label: 'a walkway at the height it starts', op: walkway }, ...alts] };
   // (nothing of it can be made from where it starts (begun on a rock, or the foot of a bank too steep to climb there):
   // begun a cell or two on, where it can; and if nothing at all, said, not built empty)
@@ -813,6 +826,45 @@ export function stairTower(w: World, h0: number, cells: Array<[number, number]>,
   // (from a top, a walkway to it at the start's height: a door where it arrives)
   if (up && h0 > 0) return { ...op, connect: { from: [h0, cells[0][0], cells[0][1]], to: null, path: path2 } };
   return op;
+}
+
+/**
+ * A switchback, for a climb too steep for a flight along the stroke: folded back on itself beside where it was drawn. A
+ * lower flight climbs away from the destination in the lane beside the stroke's, a landing across both lanes turns it
+ * about, and the upper flight climbs on in the stroke's own lane, into the destination. Each flight's carried as its
+ * setting has it (model.ts `carry`): the upper leans from the landing to the top it climbs to; the lower springs from the
+ * ground to the landing. Its foot is beside the destination's face, on the ground. Null where one won't fit.
+ */
+export function switchback(w: World, h0: number, cells: Array<[number, number]>, to: Cell, now: number): Op | null {
+  const H = to[0], N = H - h0, e = cells[cells.length - 2];
+  if (N < 2 || !e) return null;
+  const n2 = Math.ceil(N / 2), n1 = N - n2, L = H - n2;
+  const clear = (k: number, i: number, j: number) => inGrid(i, j) && w.onSlab(i, j) && k >= w.ground(i, j) && !w.occupied(k, i, j) && !w.tree(k, i, j) && !(k > 0 && w.tree(k - 1, i, j)) && !(k > 0 && w.stair(k - 1, i, j) >= 0) && !w.claim(k, i, j) && !(k === w.ground(i, j) && w.pool(i, j));
+  // (near what was drawn: every cell of it within two of the stroke)
+  const near = ([i, j]: [number, number]) => cells.some(([x, z]) => Math.max(Math.abs(x - i), Math.abs(z - j)) <= 2);
+  // (into the cell drawn to, the way the stroke came first; then its other faces; then the same top a cell along)
+  const d0 = DIR(e, [to[1], to[2]]), dests: Array<[number, number]> = [[to[1], to[2]], ...sameTop(w, to, 1)];
+  for (const dest of dests) for (const d of [d0, 0, 1, 2, 3].filter((q, n, a) => q >= 0 && a.indexOf(q) === n)) {
+    const [a, b] = DIRS[d];
+    for (const t of [(d + 1) % 4, (d + 3) % 4]) {
+      const [ta, tb] = DIRS[t];
+      const LU: [number, number] = [dest[0] - (n2 + 1) * a, dest[1] - (n2 + 1) * b], LD: [number, number] = [LU[0] + ta, LU[1] + tb];
+      const stairs: Array<[number, number, number, number, number]> = [];
+      // (the upper flight, into the destination; the lower, in the lane beside it, climbing away to the landing)
+      for (let q = 1; q <= n2; q++) stairs.push([H - q, dest[0] - q * a, dest[1] - q * b, d, now]);
+      for (let q = 1; q <= n1; q++) stairs.push([L - q, LD[0] + q * a, LD[1] + q * b, (d + 2) % 4, now]);
+      const foot: Cell = [h0, LD[0] + (n1 + 1) * a, LD[1] + (n1 + 1) * b];
+      if (![...stairs.map(([, i, j]) => [i, j] as [number, number]), LU, LD, [foot[1], foot[2]] as [number, number]].every(near)) continue;
+      // (each step with room over it; the landing clear, with room to stand, and stone under it; the foot a place to stand)
+      if (!stairs.every(([k, i, j]) => clear(k, i, j) && clear(k + 1, i, j))) continue;
+      if (![LU, LD].every(([i, j]) => clear(L, i, j) && clear(L + 1, i, j) && L - 1 >= w.ground(i, j) && (w.stone(L - 1, i, j) || clear(L - 1, i, j)))) continue;
+      if (!standing(w, ...foot)) continue;
+      const add = [LU, LD].filter(([i, j]) => !w.stone(L - 1, i, j)).map(([i, j]) => [L - 1, i, j, now] as [number, number, number, number]);
+      const note = `a switchback, climbing ${N} level${N > 1 ? 's' : ''}, a landing between its flights`;
+      return { add, stairs, born: now, why: 'stairs', note, reading: note };
+    }
+  }
+  return null;
 }
 
 /** a climb (up or down) from the stroke's start round whatever's in its way to a straight flight into the destination,

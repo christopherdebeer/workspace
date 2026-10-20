@@ -131,4 +131,8 @@ What's been built from this so far, and where (each checked in `devtools/labyrin
 
   ![before and after, setting by setting: free-standing (a rampant arch), along a wall (hung), over a lane (the lane kept under it), its head against a wall (left sideways on to a terrace, hung from it), and chosen on piers](labyrinth/e-stairs.jpg)
 
-Not yet: the remaining junctions (split landing, switchback), a room's door on to the passage through it, cross vaults, joined roofs, terrain and water transitions.
+- **Flights that fold back** (§4 switchback). A climb too steep for the stroke drawn to it is folded back beside it, still a way (`switchback()` in `gesture.ts`): a lower flight climbing away from the destination in the lane beside the stroke's, a landing across both lanes, the upper flight into the destination; into any face of the cell drawn to, or the same top a cell along, never more than two cells from the stroke; the stair tower is the other reading now, not the answer. And a hand can fold it itself: a hairpin stroke that climbs to a top is followed as drawn (its fold was being smoothed away as a jog, or closed as a ring drawn round). A flight beside the land's bank is built up solid against it (a retaining stair), not hung out of the earth.
+
+  ![a hairpin drawn by hand, followed as drawn (two views); a switchback folded beside a short stroke](labyrinth/e-switchback.jpg)
+
+Not yet: the remaining junctions (split landing), a room's door on to the passage through it, cross vaults, joined roofs, terrain and water transitions.
