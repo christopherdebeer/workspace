@@ -279,6 +279,16 @@ export class World {
     this.now = now;
     this.mass.clear(); this.stairs.clear(); this.archways.clear(); this.thin.clear(); this.bridged.clear(); this.trees.clear(); this.pools.clear(); this.basins.clear();
     this.laid.clear(); this.reached.clear(); this.rules.clear(); this.dress.clear(); this.paving.clear();
+    // (and what was worked out from them last time (piers, spans, courts and their pools, basins' water), so nothing laid
+    // now is laid against what was there before: a world rebuilt is the same world, however often)
+    this.piers.clear(); this.spans = []; this.spanOf.clear(); this.under.clear(); this.corbels.clear(); this.courts.clear(); this.decor = []; this.bowls.clear(); this.falls = [];
+    // (how high a way may be looked for, from what's asked for, not from what was built last time)
+    let hi = this.land ? Math.max(...this.land.g) : 0;
+    for (const op of this.ops) {
+      for (const c of [...(op.add ?? []), ...(op.walls ?? []), ...(op.arches ?? []), ...(op.stairs ?? []), ...(op.trees ?? [])]) hi = Math.max(hi, c[0] + 1);
+      if (op.connect) hi = Math.max(hi, op.connect.from[0], op.connect.to?.[0] ?? 0);
+    }
+    this.levels = Math.min(CEIL - 4, hi + 2);
     for (const op of this.ops) {
       if (op.connect) {
         // (stone and rules laid with it, first: a stair tower it walks to)

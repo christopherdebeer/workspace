@@ -48,6 +48,8 @@ export interface Refusal { refused: string; alts?: Alt[] }
 export function tap(w: World, p: Pick, now: number, anyway = false, intent: Intent = 'mass'): Op | Refusal | null {
   // (a way's touch on the land's ground: a place to stand, not a block)
   if (intent === 'way' && w.land && p.face === 'ground' && !anyway) { const op = placeToStand(w, p, now); if (op) return op; }
+  // (a way's touch on a top: a way up on to it)
+  if (intent === 'way' && p.face === 'top' && !anyway) { const op = wayUp(w, p, now); if (op) return op; }
   const [k, i, j] = tapCell(w, p);
   if (k >= CEIL || !inGrid(i, j) || w.stone(k, i, j) || w.stair(k, i, j) >= 0) return null;
   // (never into a stair's way (its foot, its head, the room over them): refused, but offered anyway)
@@ -87,6 +89,34 @@ function placeToStand(w: World, p: Pick, now: number): Op | null {
   }
   const pave: Array<[number, number]> = [[i, j], ...DIRS.map(([a, b]) => [i + a, j + b] as [number, number]).filter(([x, z]) => inGrid(x, z) && w.ground(x, z) === g && standing(w, g, x, z) && !w.paved(x, z))];
   return { pave, born: now, why: 'place', note: 'a place to stand, paved', reading: 'a place to stand', alts };
+}
+
+/**
+ * A top touched with a way in hand: a way up on to it, a flight from the ground beside it, straight in from whichever
+ * side one will stand (beginning by a way already made, where there is one), laying least. A house's roof isn't
+ * somewhere to go: said, its course offered. Another course, the other reading.
+ */
+function wayUp(w: World, p: Pick, now: number): Op | Refusal | null {
+  const [, i, j] = p.hit, T = surface(w, p);
+  const course = tap(w, p, now, true), alts: Alt[] = course && !('refused' in course) ? [{ label: 'raise a course', op: { ...course, note: 'a course raised', reading: 'raise a course' } }] : [];
+  if (roofed(w).has(`${i}.${j}`)) return { refused: 'that\'s a house\'s roof: a way goes to its door', alts };
+  let best: { op: Op; score: number } | null = null;
+  for (const [a, b] of DIRS) {
+    const [x1, z1] = [i - a, j - b];
+    if (!inGrid(x1, z1) || w.ground(x1, z1) >= T) continue;
+    const climb = T - w.ground(x1, z1), line: Array<[number, number]> = [];
+    for (let n = Math.min(climb + 2, 10); n >= 1; n--) line.push([i - a * n, j - b * n]);
+    if (!line.every(([x, z]) => inGrid(x, z))) continue;
+    const [sx, sz] = line[0], op = way(w, w.ground(sx, sz), [...line, [i, j]], [T, i, j], now, () => false, true);
+    if (!op || 'refused' in op) continue;
+    const v = new World(w.seed, w.landSeed); v.ops = [...w.ops, op]; v.rebuild();
+    if (!v.reached.get(op)?.reached) continue;
+    const near = DIRS.some(([c, d]) => w.paved(sx + c, sz + d)) || w.paved(sx, sz) ? 0 : 3, score = adds(w, op) + near;
+    if (!best || score < best.score) best = { op, score };
+  }
+  if (!best) return null;
+  const note = `a way up on to it${best.op.note ? `: ${best.op.note.replace(/^a way: /, '')}` : ''}`;
+  return { ...best.op, note, reading: 'a way up on to it', alts: [...alts, ...(best.op.alts ?? [])] };
 }
 
 /**
@@ -284,6 +314,15 @@ export function reading(w: World, start: Pick, path: Array<[number, number]>, en
     const off = way(w, wh, wc, to, now, resting);
     // (begun beside it and nothing will stand from there: from where it was touched, then, the flight's own height)
     if ((!off || 'refused' in off) && wc !== cells) { const on = way(w, h0, cells, to, now, resting); if (on && !('refused' in on)) return on; }
+    // (from a top, over more stone, and nothing made of it from up there that lays anything and reaches: the way's on the
+    // ground it comes down to, from the foot of what it was drawn from)
+    const good = (o: Op | Refusal | null): o is Op => !!o && !('refused' in o) && adds(w, o) > 0;
+    const there = (o: Op) => { const v = new World(w.seed, w.landSeed); v.ops = [...w.ops, o]; v.rebuild(); return !!v.reached.get(o)?.reached; };
+    if (start.face !== 'ground' && !(good(off) && there(off))) {
+      const q = cells.findIndex(([i, j], n) => n > 0 && !w.stone(w.ground(i, j), i, j) && w.stair(w.ground(i, j), i, j) < 0 && standing(w, w.ground(i, j), i, j));
+      const foot = q > 0 && cells.length - q >= 3 ? way(w, w.ground(...cells[q]), cells.slice(q), to, now, resting) : null;
+      if (good(foot) && (there(foot) || !good(off))) return { ...foot, note: `${foot.note}, from the foot of it`, reading: `${foot.reading ?? foot.note}, from the foot of it` };
+    }
     // (from a top out over where nothing stands (water, a drop): out at its height, a jetty, a pier, to walk out on)
     if ((!off || 'refused' in off) && start.face !== 'ground' && cells.length > 2) {
       const out: Op = { connect: { from: [h0, cells[0][0], cells[0][1]], to: null, path: cells }, born: now, why: 'walkway', note: 'a walkway out at its height', reading: 'a walkway out at its height' };

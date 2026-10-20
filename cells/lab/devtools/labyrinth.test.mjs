@@ -672,6 +672,15 @@ stands(s4, 'story 4');
     ok('a zigzag gathered into straight runs: it starts and ends where it did', JSON.stringify(s4[0]) === '[0,0]' && JSON.stringify(s4.at(-1)) === '[4,4]' && s4.length === z.length, s4);
     const ST = (await load('../client/labyrinth/model.ts')).straights;
     ok('and has room for stairs where the zigzag had none', ST(z, null).length === 0 && ST(s4, null).length >= 2, ST(s4, null)); }
+  // (a tap on a top with a way in hand: a way up on to it, that reaches it; on a house's roof, said, not a way up)
+  { const w = new World(3), top = (i, j) => ({ face: 'top', hit: [w.topFrom(0, i, j) - 1, i, j], to: [w.topFrom(0, i, j), i, j] });
+    for (let k = 0; k < 2; k++) w.apply({ add: [[k, 6, 5, 0]] });
+    const up = G.tap(w, top(6, 5), 0, false, 'way'), sim = new World(3); sim.ops = [...w.ops, up]; sim.rebuild();
+    ok('a way\'s tap on a top: a way up on to it, and it gets there', !up?.refused && /way up/.test(up?.note) && !!sim.reached.get(up)?.reached, up);
+    ok('with another course the other reading', up?.alts?.some((a) => a.label === 'raise a course'));
+    const s8 = story(8), house = BU.buildings(s8).list.find((b) => b.roof), [hi, hj] = house.cols[0], roof = { face: 'top', hit: [s8.topFrom(s8.ground(hi, hj) - 1, hi, hj) - 1, hi, hj], to: [s8.topFrom(s8.ground(hi, hj) - 1, hi, hj), hi, hj] };
+    const r = G.tap(s8, roof, 0, false, 'way');
+    ok('on a house\'s roof: said, not unroofed', /roof/.test(r?.refused ?? ''), r); }
   // (ways on the land, drawn as a hand draws them (diagonal, curving): never an empty way. Each builds something, or
   // says why not)
   { let tried = 0, empty = 0, reached = 0, refused = 0;
@@ -796,6 +805,17 @@ stands(s4, 'story 4');
     ok('a way climbing, paused on the way: it reaches, with a landing (no stair) where it paused', op && !op.refused && sim.reached.get(op)?.reached && [0, 1, 2, 3].every((k) => sim.stair(k, 6, 5) < 0), { op: op?.connect, r: sim.reached.get(op) }); }
   // (a stroke's wobble, a cell aside and back, taken out)
   ok('a wobble taken out of a stroke', JSON.stringify(G.unjog([[0, 0], [1, 0], [1, 1], [2, 1], [2, 0], [3, 0]])) === JSON.stringify([[0, 0], [1, 0], [2, 0], [3, 0]]), G.unjog([[0, 0], [1, 0], [1, 1], [2, 1], [2, 0], [3, 0]]));
+}
+// (a world rebuilt is the same world, however often: nothing in it laid against what was worked out the time before)
+{
+  const snap = (w) => JSON.stringify([[...w.mass.keys()].sort(), [...w.stairs.keys()].sort(), [...w.paving].sort(), [...w.piers.keys()].sort()]);
+  const differ = [];
+  for (let s = 1; s <= 15; s++) { const w = story(s), a = snap(w); w.rebuild(0); if (snap(w) !== a) differ.push(s); }
+  ok('a world rebuilt again is the same world (every story)', !differ.length, differ);
+  // (a land with courts, their pools, and ways laid by them, as the explorer found it drifting on each rebuild)
+  const found = replay("{\"land\":6,\"ops\":[[0,0,0,0,0,0,0,[[1,10,10],[1,10,10],[[10,10],[9,10],[9,11],[9,12],[8,12],[8,13],[7,13],[6,13],[6,12],[5,12],[4,12],[4,11],[4,10],[4,9],[4,8],[5,8],[6,8],[7,8],[8,8],[9,8],[9,9],[10,9]],0,1],0,0,0],[0,0,0,0,0,0,0,[[1,4,8],[2,6,4],[[4,8],[4,7],[4,6],[5,6],[5,5],[6,5]],0,1],0,0,0],[0,0,0,0,0,0,0,[[1,7,12],[2,11,5],[[7,12],[7,11],[6,11],[6,10],[6,9],[7,9],[8,9],[9,9],[10,9],[10,8],[10,7],[11,7],[11,6]],0,1],0,0,0],[[[2,0,7]],0,0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,[[2,10,5],[3,7,3],[[10,5],[9,5],[8,5],[8,4],[7,4]],0,1],0,0,0],[0,0,0,0,0,0,0,[[1,2,11],[1,9,12],[[2,11],[3,11],[4,11],[5,11],[5,12],[6,12],[7,12],[8,12]],0,1],0,0,0],[[[2,6,3]],0,0,0,0,0,0,0,0,0,0],[[[2,5,5]],0,0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,[[1,5,7],[3,8,2],[[5,7],[6,7],[6,6],[6,5],[6,4],[7,4],[7,3],[8,3]],0,1],0,0,0],[0,0,0,0,0,0,0,0,0,0,0,0,[[0,4],[1,4],[0,5],[-1,4],[0,3]]],[[[1,12,6],[2,12,5],[2,12,3],[3,12,1],[4,12,0],[4,12,-1]],0,0,[[2,12,4,0],[3,12,2,0]],0,0,0,0,0,0,0],[0,0,0,0,0,0,0,[[3,0,7],[1,5,9],[[0,7],[1,7],[1,8],[2,8],[3,8],[3,9],[4,9]]],0,0,0],[[[1,7,8]],0,0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,[[1,2,9],[1,1,11],[[2,9],[2,10],[1,10]],0,1],0,0,0],[[[1,11,12],[1,9,12],[1,7,12]],0,0,[[1,10,12,1],[1,8,12,1]],0,0,0,0,0,0,0],[0,0,0,0,0,0,0,[[3,2,6],[3,0,7],[[2,6],[1,6],[0,6]],0,1],0,0,0],[[[3,7,3],[3,9,3],[3,10,3],[2,11,3],[2,11,4],[1,12,7],[1,12,8],[1,12,9],[1,11,9],[1,10,9],[1,10,10],[1,9,10],[1,8,10],[1,8,9],[1,7,9],[1,6,9],[2,6,6],[2,6,5],[3,7,4]],0,0,[[3,8,3,1]],0,0,0,0,0,0,0]]}"), was = snap(found);
+  found.rebuild(0);
+  ok('a world rebuilt again is the same world (ways by courts\' pools, on the land)', snap(found) === was);
 }
 if (process.env.DEBUG) (await import('node:fs')).writeFileSync(process.env.DEBUG, JSON.stringify(walked.saw));
 console.log(`${checks - fails} of ${checks} checks hold · gestures read as ${JSON.stringify(made)} · declined: ${JSON.stringify(declines)} · dressed by the rules: ${lively.dressed} of ${lively.worlds} worlds, gated or arcaded walls: ${lively.gates}`);

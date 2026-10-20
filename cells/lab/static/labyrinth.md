@@ -39,12 +39,14 @@ The labyrinth is built on a piece of land (`land.ts`): small, composed, seeded, 
 
 Over the brushes, while auto is held, two choices say what a stroke is for. The land decides how a stroke is built, never what it's for.
 - **Mass**: raise, extend and enclose. A tap raises, a stroke on the ground is a wall (each cell on its own column's ground), and a stroke drawn round walls in a court. From a top, as ever, it reaches out or climbs.
-- **Way**: a stroke connects where it starts to where it ends, a top or the ground, and the land says how. It follows the stroke as drawn, never routed elsewhere unasked, and is worked out by the cheapest heights along it:
+- **Way**: a stroke connects where it starts to where it ends, a top or the ground, and the land says how. It follows the stroke as drawn (only round something in its way, or a house it would walk over, and then the way as drawn is offered), and is worked out by the cheapest heights along it:
   - walking on the ground costs nothing, and it's paved there;
   - raised over the ground costs by how high, with stone laid under it, carried on arches over anything low: a bridge;
   - a step up or down costs more, and goes only where the way runs straight. A flight turns about only after a landing, so it can always be walked.
 
   A way never goes into the land or into what's built, never stands in water (stone over the stream is carried on an arch, the water under it), and never lays stone in another stair's way. It passes through a gate along its way. Where it can't reach as drawn, it goes as far as it can and stops on the level there; a stair tower is offered first, and a walkway at the height it started. What it comes to ("a way: 3 paved, a flight of 2, a bridge of 1") is said before it's let go. On the land a way is the choice the first time, and on the slab, mass; it's kept between visits after that.
+
+  With a way in hand, a tap on the ground is somewhere to stand (paved, or the way brought on to it from paving within three cells); a tap on a top is a way up on to it, a flight straight in from whichever side one will stand; a house's roof isn't somewhere to go, and says so. A way drawn from a top that nothing from up there would reach begins at the foot of it, on the ground it comes down to; drawn from a top out over the water, it's a walkway out at that height. A walk drawn round goes round any house in its path, not over it. And no reading is ever shown that would lay nothing: if what it says it is would add nothing that isn't there already, the first of its other readings that does is what it is, or it's said, not built.
 
 ![12 · on the land: a court walled round on the shelf, a way up to its gate, a house across the ravine, a way over the stream to it](labyrinth/v-story-12.jpg)
 ![on the land, close: the way climbing to the court's gate; the arch over the stream](labyrinth/v-land-close.jpg)
