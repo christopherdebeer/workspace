@@ -769,7 +769,11 @@ export class World {
         for (const v of [...loose]) {
           if (!this.mass.has(v) || this.bridged.has(v) || this.rules.get(v) === RULE.pier) continue;
           const [, i, j] = unkey(v);
-          const d = [0, 1, 2, 3].find((q) => { const [a, b] = DIRS[q]; return ((this.stone(k, i + a, j + b) && !loose.has(key(k, i + a, j + b)) && below(k, i + a, j + b)) || this.earth(k, i + a, j + b)) && !this.occupied(k, i - a, j - b); });
+          // (from stone with a face under it to spring from; from stone that stands on a pier only where a pier of its
+          // own would come down on something below, not to the ground: a deck's corner over open ground is on a pier)
+          let clear = true;
+          for (let kk = k - 1; kk >= this.ground(i, j); kk--) if (this.occupied(kk, i, j)) clear = false;
+          const d = [0, 1, 2, 3].find((q) => { const [a, b] = DIRS[q]; return ((this.stone(k, i + a, j + b) && !loose.has(key(k, i + a, j + b)) && below(k, i + a, j + b) && !(clear && this.piers.has(key(k - 1, i + a, j + b)))) || this.earth(k, i + a, j + b)) && !this.occupied(k, i - a, j - b); });
           if (d === undefined) continue;
           this.corbels.set(v, d); loose.delete(v); corbelled = true;
         }

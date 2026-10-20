@@ -257,6 +257,17 @@ ok(`walls come out gated or arcaded, now and then (${lively.gates})`, lively.gat
   let top = 0; for (let q = 1; q < mesh.data.length; q += 12) top = Math.max(top, mesh.data[q]);
   ok('drawn to the top', top >= H - 0.01, top);
 }
+// (a deck held out two levels up on piers over open ground: its corners are the deck's, square, not a wall turning
+// round them; and nothing's held out on brackets springing from a pier)
+{
+  const w = new World(1), add = [];
+  for (let i = 9; i <= 10; i++) for (let j = 3; j <= 9; j++) for (let k = 0; k < 5; k++) add.push([k, i, j, 0]);
+  for (let i = 4; i <= 8; i++) for (let j = 3; j <= 8; j++) add.push([2, i, j, 0]);
+  w.apply({ add });
+  const corners = [[4, 3], [4, 8]];
+  ok('a deck on piers: its free corners are mass, not a turning wall', corners.every(([i, j]) => !FO.wallCell(w, 2, i, j) && !FO.turnOf(w, 2, i, j)), corners.map(([i, j]) => FO.wallCell(w, 2, i, j)));
+  ok('a deck on piers over open ground: nothing corbelled from a pier', [...w.corbels.keys()].every((v) => { const [k, i, j] = unkey(v), [a, b] = DIRS[w.corbels.get(v)]; return !w.pier(k - 1, i + a, j + b); }), [...w.corbels.keys()].map(unkey));
+}
 // (a pier landing on a walkway below stands aside, slim, and the walkway past it stays open)
 {
   const M = await load('../client/labyrinth/mesh.ts');

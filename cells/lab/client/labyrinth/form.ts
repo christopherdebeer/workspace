@@ -44,8 +44,8 @@ export function wallCell(w: World, k: number, i: number, j: number): boolean {
   if (c.wall.has(v)) return c.wall.get(v)!;
   c.wall.set(v, false);
   let r = !buildings(w).of.has(v);
-  // (part of something two deep: mass)
-  if (r) for (const [a, b] of [[1, 1], [1, -1], [-1, 1], [-1, -1]]) if (w.block(k, i + a, j) && w.block(k, i, j + b) && w.block(k, i + a, j + b)) r = false;
+  // (part of something two deep: mass; the stone across the corner can be carried on an arch, a deck over piers)
+  if (r) for (const [a, b] of [[1, 1], [1, -1], [-1, 1], [-1, -1]]) if (w.block(k, i + a, j) && w.block(k, i, j + b) && (w.block(k, i + a, j + b) || !!w.span(k, i + a, j + b))) r = false;
   let n = 0;
   if (r) for (let d = 0; d < 4; d++) {
     const [a, b] = DIRS[d];
