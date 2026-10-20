@@ -183,6 +183,13 @@ export class World {
   archways = new Map<number, number>();
   /** which stone is a thin wall (and the way it runs when nothing beside it says) */
   thin = new Map<number, number>();
+  /**
+   * The void the hand's ways need kept open (the reserved void of `static/labyrinth-connective.md`): each cell a way
+   * laid by hand walks through (its paving, a walkway's or a bridge's deck, a landing), and which way it runs (0 along
+   * i, 1 along j). Stone laid there after is an archway, the passage kept through it; a pier never stands in it. Only
+   * what was authored claims it: the rules' own work (a court's pool, a roof) doesn't.
+   */
+  passages = new Map<number, number>();
   private bridged = new Set<number>();
   trees = new Map<number, number>();
   pools = new Map<number, number>();
@@ -280,7 +287,7 @@ export class World {
   /** the operations replayed into the intended solid, and that resolved */
   rebuild(now = 0) {
     this.now = now;
-    this.mass.clear(); this.stairs.clear(); this.archways.clear(); this.thin.clear(); this.bridged.clear(); this.trees.clear(); this.pools.clear(); this.basins.clear();
+    this.mass.clear(); this.stairs.clear(); this.archways.clear(); this.thin.clear(); this.bridged.clear(); this.trees.clear(); this.pools.clear(); this.basins.clear(); this.passages.clear();
     this.laid.clear(); this.reached.clear(); this.rules.clear(); this.dress.clear(); this.paving.clear();
     // (and what was worked out from them last time (piers, spans, courts and their pools, basins' water), so nothing laid
     // now is laid against what was there before: a world rebuilt is the same world, however often)
@@ -295,7 +302,7 @@ export class World {
     for (const op of this.ops) {
       if (op.connect) {
         // (stone and rules laid with it, first: a stair tower it walks to)
-        for (const [k, i, j, b] of op.add ?? []) if (k >= 0 && k < CEIL && inGrid(i, j) && !this.stairs.has(key(k, i, j))) this.mass.set(key(k, i, j), this.mass.get(key(k, i, j)) ?? b);
+        for (const [k, i, j, b] of op.add ?? []) if (k >= 0 && k < CEIL && inGrid(i, j) && !this.stairs.has(key(k, i, j))) this.place(k, i, j, b);
         for (const [k, i, j, r] of op.rule ?? []) if (inGrid(i, j)) { if (r) this.rules.set(key(k, i, j), r); else this.rules.delete(key(k, i, j)); }
         this.realise(op); continue;
       }
@@ -305,13 +312,15 @@ export class World {
         this.bridged.delete(key(k, i, j)); this.laid.delete(key(k, i, j));
       }
       for (const [k, i, j, a, b] of op.arches ?? []) if (k >= 0 && k < CEIL && inGrid(i, j)) { this.stairs.delete(key(k, i, j)); this.thin.delete(key(k, i, j)); this.mass.set(key(k, i, j), b); this.archways.set(key(k, i, j), a); }
-      for (const [k, i, j, a, b] of op.walls ?? []) if (k >= 0 && k < CEIL && inGrid(i, j)) { this.stairs.delete(key(k, i, j)); this.archways.delete(key(k, i, j)); this.mass.set(key(k, i, j), b); this.thin.set(key(k, i, j), a); }
+      for (const [k, i, j, a, b] of op.walls ?? []) if (k >= 0 && k < CEIL && inGrid(i, j)) { this.stairs.delete(key(k, i, j)); this.archways.delete(key(k, i, j)); if (this.passages.has(key(k, i, j))) { this.place(k, i, j, b); continue; } this.mass.set(key(k, i, j), b); this.thin.set(key(k, i, j), a); }
       for (const [k, i, j, b] of op.trees ?? []) if (inGrid(i, j)) this.trees.set(key(k, i, j), b);
       for (const [i, j, b] of op.pools ?? []) if (inGrid(i, j)) this.pools.set(key(0, i, j), b);
       for (const [k, i, j, b] of op.basins ?? []) if (inGrid(i, j) && k > 0 && k < CEIL) this.basins.set(key(k, i, j), b);
       for (const [i, j] of op.pave ?? []) if (inGrid(i, j) && !this.pool(i, j) && !this.occupied(this.ground(i, j), i, j)) this.paving.add(key(0, i, j));
+      // (paving laid by hand is a passage: which way it runs, from the paving beside it)
+      for (const [i, j] of op.pave ?? []) if (this.paving.has(key(0, i, j))) { const along = this.paving.has(key(0, i - 1, j)) || this.paving.has(key(0, i + 1, j)); this.passages.set(key(this.ground(i, j), i, j), along ? 0 : 1); }
       if (op.bridge) for (const [k, i, j] of op.add ?? []) this.bridged.add(key(k, i, j));
-      for (const [k, i, j, b] of op.add ?? []) if (k >= 0 && k < CEIL && inGrid(i, j) && !this.stairs.has(key(k, i, j))) this.mass.set(key(k, i, j), this.mass.get(key(k, i, j)) ?? b);
+      for (const [k, i, j, b] of op.add ?? []) if (k >= 0 && k < CEIL && inGrid(i, j) && !this.stairs.has(key(k, i, j))) this.place(k, i, j, b);
       for (const [k, i, j, d, b] of op.stairs ?? []) if (k >= 0 && k < CEIL && inGrid(i, j)) { this.mass.delete(key(k, i, j)); this.thin.delete(key(k, i, j)); this.stairs.set(key(k, i, j), { d, born: b }); }
       for (const [k, i, j, r] of op.rule ?? []) if (inGrid(i, j)) { if (r) this.rules.set(key(k, i, j), r); else this.rules.delete(key(k, i, j)); }
       for (const [k, i, j, kind, on] of op.dress ?? []) {
@@ -342,6 +351,23 @@ export class World {
    * landings climbing evenly from one height to the other. Where it meets anything at the height it walks (the hand's
    * stone, a stair, a tree), it stops: it joins what it meets, and cuts nothing.
    */
+  /** stone laid by hand: where it's in a passage, an archway, the way kept through it (its arch springing from what's
+   * either side); elsewhere, stone */
+  private place(k: number, i: number, j: number, born: number) {
+    const v = key(k, i, j);
+    this.mass.set(v, this.mass.get(v) ?? born);
+    const a = this.passages.get(v);
+    if (a !== undefined) { this.archways.set(v, a); this.thin.delete(v); }
+  }
+  /** a cell a way laid by hand walks through, at `k`, come to from `prev`: kept open after (`passages`) */
+  private reserve(k: number, i: number, j: number, prev: [number, number] | null) {
+    if (k < 0 || k >= CEIL || !inGrid(i, j)) return;
+    const v = key(k, i, j);
+    if (!this.passages.has(v)) this.passages.set(v, prev && prev[0] !== i ? 0 : 1);
+  }
+  /** the passage a cell keeps open, and which way it runs (-1 if none) */
+  passage(k: number, i: number, j: number): number { return inGrid(i, j) ? this.passages.get(key(k, i, j)) ?? -1 : -1; }
+
   private realise(op: Op) {
     if (op.connect!.follow && op.connect!.to && this.follow(op)) return;
     const c = op.connect!, born = op.born ?? -100, [h0] = c.from, h1 = c.to ? c.to[0] : h0;
@@ -381,6 +407,7 @@ export class World {
         // (a landing, or the walkway: nothing in the way at the height it walks, nor only a stair to stand on)
         if (taken(h, i, j) || unsteady(h, i, j) || blocks(h - 1, i, j)) { stopped = s; break; }
         lay(h - 1, i, j, s);
+        this.reserve(h, i, j, prev);
       }
     }
     // (a stair that would lead straight into what stopped the way is no stair: it's taken back, and the stone laid under
@@ -433,6 +460,12 @@ export class World {
         const g = this.ground(i, j);
         // (through a gate: stone with a way through it the way the way goes)
         if (s >= 0 && this.archways.has(key(k, i, j)) && !this.stairs.has(key(k, i, j))) { const prev = s > 0 ? along[s - 1] : path[0]; return this.archways.get(key(k, i, j)) === (prev[0] !== i ? 0 : 1) && this.floor(k, i, j) ? 0 : -1; }
+        // (the hand's wall, a cell thick across the way, drawn straight through: a gate opened in it, the stone kept over
+        // and round the opening (a route through a wall opens a passage, not a way round it))
+        if (s >= 0 && s < n - 1 && this.mass.has(key(k, i, j)) && !this.laid.has(key(k, i, j)) && k >= g && (k === g || this.stone(k - 1, i, j))) {
+          const prev = s > 0 ? along[s - 1] : path[0], next = along[s + 1];
+          if (i - prev[0] === next[0] - i && j - prev[1] === next[1] - j && !taken(k, ...prev) && !taken(k, ...next) && !this.stairs.has(key(k, i, j))) return 2.5;
+        }
         if (k < g || taken(k, i, j) || unsteady(k, i, j) || (k === g && this.pool(i, j))) return -1;
         if (k > g && !taken(k - 1, i, j) && this.way(k - 1, i, j)) return -1;
         // (raised over the ground costs more than a step down and back up again: a way on the land goes with the
@@ -493,10 +526,18 @@ export class World {
       const [i, j] = along[s], prev = s > 0 ? along[s - 1] : path[0];
       const k = kind === -1 ? h - 1 : h;
       if (kind !== 0) { this.stairs.set(key(k, i, j), { d: kind === 1 ? dirTo(prev, [i, j]) : dirTo([i, j], prev), born: born + s * 0.05 }); this.laid.add(key(k, i, j)); cells.push([k, i, j]); }
+      if (kind === 0) {
+        // (walked through: kept open; and a wall it went through, opened, a gate)
+        this.reserve(k, i, j, prev);
+        if (this.mass.has(key(k, i, j)) && !this.archways.has(key(k, i, j))) { this.archways.set(key(k, i, j), prev[0] !== i ? 0 : 1); this.thin.delete(key(k, i, j)); }
+      }
       if (this.archways.has(key(k, i, j))) return;
       if (k === this.ground(i, j)) { if (kind === 0) this.paving.add(key(0, i, j)); }
       else lay(k - 1, i, j, s);
     });
+    // (its ends kept open too: where it sets out from, and, if it got there, where it arrives (the cell a door's to open on))
+    if (along.length) this.reserve(h0, path[0][0], path[0][1], along[0]);
+    if (last === n && c.to && !this.occupied(h1, c.to[1], c.to[2])) this.reserve(h1, c.to[1], c.to[2], along[n - 1] ?? path[0]);
     this.reached.set(op, { reached: last === n, stopped: last === n ? -1 : last, cells });
     return true;
   }
@@ -508,15 +549,19 @@ export class World {
     this.piers.clear(); this.spans = []; this.spanOf.clear(); this.under.clear(); this.corbels.clear();
     // (stone stands on what's under it; not on water, at the ground's level: there it's carried over the stream)
     const below = (k: number, i: number, j: number) => (k === 0 || this.occupied(k - 1, i, j)) && !(k === this.ground(i, j) && this.pool(i, j));
-    const raisePier = (k: number, i: number, j: number, born: number) => {
+    /** whether a pier can come down here from `k` without standing in a passage the hand made */
+    const pierable = (k: number, i: number, j: number) => { for (let kk = k - 1; kk >= 0 && !this.occupied(kk, i, j) && !this.under.has(key(kk, i, j)); kk--) if (this.passages.has(key(kk, i, j))) return false; return true; };
+    const raisePier = (k: number, i: number, j: number, born: number, anyway = false) => {
+      if (!anyway && !pierable(k, i, j)) return false;
       for (let kk = k - 1; kk >= 0 && !this.occupied(kk, i, j) && !this.under.has(key(kk, i, j)); kk--) this.piers.set(key(kk, i, j), this.first(`p${kk}.${i}.${j}`, born - 0.15));
+      return true;
     };
     for (let k = this.land ? 0 : 1; k < this.levels; k++) {
       // (what's at this level with nothing under it)
       const loose = new Set<number>();
       for (const v of [...this.mass.keys(), ...this.stairs.keys()]) { const [kk, i, j] = unkey(v); if (kk === k && !below(k, i, j)) loose.add(v); }
       // (a stair over nothing stands on a pier; so does stone where the hand asked for one)
-      for (const v of [...loose]) if (this.stairs.has(v) || this.rules.get(v) === RULE.pier) { const [, i, j] = unkey(v); raisePier(k, i, j, this.born(k, i, j)); loose.delete(v); }
+      for (const v of [...loose]) if (this.stairs.has(v) || this.rules.get(v) === RULE.pier) { const [, i, j] = unkey(v); raisePier(k, i, j, this.born(k, i, j), true); loose.delete(v); }
       const abuts = (i: number, j: number) => ((this.stone(k, i, j) || this.stair(k, i, j) >= 0) && !loose.has(key(k, i, j)) && below(k, i, j)) || this.earth(k, i, j);
       /** the run of loose stone through a cell along an axis, and whether stone that stands bounds it each end */
       const run = (i: number, j: number, a: number) => {
@@ -551,8 +596,17 @@ export class World {
         for (const v of loose) { const [, i, j] = unkey(v); for (const a of [0, 1]) { const r = run(i, j, a); if (r.startBound && r.endBound && (!arcade || r.n < arcade.n)) arcade = r; } }
         if (arcade) {
           const [di, dj] = DIRS[arcade.a];
-          for (const q of bays(arcade.n, most(arcade))) { const pi = arcade.s[0] + q * di, pj = arcade.s[1] + q * dj; raisePier(k, pi, pj, this.born(k, pi, pj)); loose.delete(key(k, pi, pj)); }
-          continue;
+          // (a bay's pier never in a passage: one cell along, if that's clear, else the arch spans it)
+          let placed = 0;
+          for (const q of bays(arcade.n, most(arcade))) {
+            for (const dq of [0, 1, -1]) {
+              const qq = q + dq; if (qq < 0 || qq >= arcade.n) continue;
+              const pi = arcade.s[0] + qq * di, pj = arcade.s[1] + qq * dj;
+              if (!loose.has(key(k, pi, pj)) || !raisePier(k, pi, pj, this.born(k, pi, pj))) continue;
+              loose.delete(key(k, pi, pj)); placed++; break;
+            }
+          }
+          if (placed) continue;
         }
         // (else a pier: at a free end, so arches can span the rest)
         let at: [number, number] | null = null;
@@ -566,7 +620,9 @@ export class World {
           if (at) break;
         }
         if (!at) { const [, i, j] = unkey(loose.values().next().value!); at = [i, j]; }
-        raisePier(k, at[0], at[1], this.born(k, at[0], at[1]));
+        // (not down into a passage: another loose cell, if any will take a pier; only if none, there anyway)
+        if (!pierable(k, at[0], at[1])) for (const v of loose) { const [, i, j] = unkey(v); if (pierable(k, i, j)) { at = [i, j]; break; } }
+        raisePier(k, at[0], at[1], this.born(k, at[0], at[1]), true);
         loose.delete(key(k, at[0], at[1]));
       }
       this.alike(k);

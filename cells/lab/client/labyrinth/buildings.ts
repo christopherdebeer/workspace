@@ -128,8 +128,12 @@ function find(w: World): Buildings {
       const d = w.rules.get(key(0, ...stairTower))! - RULE.tower, f = faces.find((q) => q.k === w.ground(q.i, q.j) && q.i === stairTower[0] && q.j === stairTower[1] && q.d === d && standing(w, ...q.out));
       if (f) doors.push(f);
     }
+    // (a way laid by hand that runs up to its foot, square on to the wall: a door where it arrives, never a blank face
+    // (the tower landing of static/labyrinth-connective.md))
+    const landed = foot.filter((f) => w.passage(...f.out) === f.d % 2);
+    for (const f of landed) if (!doors.includes(f)) doors.push(f);
     // (a house (its top not walked, so lived in under a roof) has a door at its foot too, as a rule)
-    if (!stairTower && foot.length && (unreached || (!arrives && chance(0.85, id, 7)) || ((upper.length || court.length) && chance(0.4, id, 2)))) {
+    if (!stairTower && !landed.length && foot.length && (unreached || (!arrives && chance(0.85, id, 7)) || ((upper.length || court.length) && chance(0.4, id, 2)))) {
       const pickFrom = court.length ? court : foot;
       doors.push(pickFrom[hash(w.seed, id, 3) % pickFrom.length]);
     }
