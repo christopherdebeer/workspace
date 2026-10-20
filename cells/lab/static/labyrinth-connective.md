@@ -141,4 +141,10 @@ What's been built from this so far, and where (each checked in `devtools/labyrin
 
   ![a flight aimed at a wall: the arch through it; framed by lanterns; a pergola over its landing; and a ladder up a tall wall where nothing else fits](labyrinth/e-stairhead.jpg)
 
-Not yet: the remaining junctions (split landing), a room's door on to the passage through it, cross vaults, joined roofs, terrain and water transitions.
+- **Joins.** A house whose plan isn't a rectangle (an L, a T, a U) is roofed in **wings** (`Building.wings`): the fewest largest rectangles covering it, each hipped, so where one runs into another its end slopes down under the other's roof and they meet in valleys (it was left a flat terrace). Two of the hand's ways **crossing square** under stone make a **cross vault** (`World.crossings`, `cross()`): a groin vault, an arch open on each of its four faces, piers at the corners, walked through both ways and turned in. A house a way passes through has its rooms' **door in the passage's side**, under the vault, where its inside stair already came out. And a way that ends at the stream's edge, where the bank's about level with the water, gets a **landing stage**: stone steps down into the water and a post to tie up to.
+
+  ![an L and a T roofed in wings, meeting in valleys](labyrinth/e-wings.jpg)
+
+  ![two ways crossing: a cross vault on its own (a four-way arch), and a house over the crossroads, a way through it each way](labyrinth/e-vault.jpg)
+
+Not yet: the split landing (three approaches at unequal heights meeting on one surface), a water stair (basins stepping down beside a dry route).

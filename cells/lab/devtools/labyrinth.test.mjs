@@ -300,6 +300,28 @@ ok(`walls come out gated or arcaded, now and then (${lively.gates})`, lively.gat
   const ld = P.take(w, { face: 'side', hit: [1, 6, 6], to: [1, 5, 6] }, 2); w.apply(ld, 2);
   ok('take: a ladder touched is taken, the stone it leant on left', !w.ladders.size && w.stone(1, 6, 6), ld);
 }
+// (joins: a plan that isn't a rectangle roofed in wings; two ways crossing under stone, a cross vault open all four ways;
+// a house a way passes through, its door in the passage's side)
+{
+  let w = new World(1); const add = [];
+  for (let i = 2; i <= 5; i++) for (let j = 2; j <= 3; j++) for (let k = 0; k < 3; k++) add.push([k, i, j, 0]);
+  for (let i = 2; i <= 3; i++) for (let j = 4; j <= 6; j++) for (let k = 0; k < 3; k++) add.push([k, i, j, 0]);
+  w.apply({ add });
+  const L = BU.buildings(w).list[0];
+  ok('an L-shaped house is roofed, in two wings', !!L?.roof && L.wings?.length === 2, L && { roof: L.roof, wings: L.wings });
+  ok('its wings cover its plan', L?.cols.every(([x, z]) => L.wings.some((g) => x >= g.i0 && x <= g.i1 && z >= g.j0 && z <= g.j1)));
+  const way = (a, b) => { const op = G.trace(w, { face: 'ground', hit: [-1, ...a], to: [0, ...a] }, G.connect([a, b]), null, () => 0, 0, [], 'way'); w.apply({ ...op, alts: undefined }); };
+  w = new World(1); way([2, 6], [10, 6]); way([6, 2], [6, 10]); w.apply({ add: [[0, 6, 6, 0]] });
+  const nav = BU.walkable(w);
+  ok('two ways crossing, stone laid on the crossing: a cross vault', w.cross(0, 6, 6) && w.stone(0, 6, 6), { cross: w.cross(0, 6, 6), aw: w.archway(0, 6, 6) });
+  ok('walked through it both ways, and turning in it', NAV.reaches(nav, [0, 3, 6], [0, 9, 6]) && NAV.reaches(nav, [0, 6, 3], [0, 6, 9]) && NAV.reaches(nav, [0, 3, 6], [0, 6, 9]));
+  ok('drawn', ME.buildMesh(w).data.length > 0);
+  w = new World(1); way([2, 6], [10, 6]);
+  const house = []; for (let i = 5; i <= 7; i++) for (let j = 5; j <= 7; j++) for (let k = 0; k < 2; k++) house.push([k, i, j, 0]);
+  w.apply({ add: house });
+  const H = BU.buildings(w).list[0], pd = H?.openings.find((o) => o.kind === 'door' && w.archway(o.k, o.i, o.j) >= 0);
+  ok('a house a way passes through: its door in the passage\'s side, into its rooms', !!pd && w.block(pd.k, pd.i + DIRS[pd.d][0], pd.j + DIRS[pd.d][1]), H?.openings);
+}
 // (a pier landing on a walkway below stands aside, slim, and the walkway past it stays open)
 {
   const M = await load('../client/labyrinth/mesh.ts');

@@ -69,7 +69,8 @@ export function covered(w: World, k: number, i: number, j: number, d: number) {
   if (w.earth(k, x, z)) return true;
   if (w.block(k, x, z)) return !wallCell(w, k, x, z);
   const aw = w.archway(k, x, z);
-  if (aw >= 0) return aw !== d % 2;
+  // (a cross vault opens on every side)
+  if (aw >= 0) return !w.cross(k, x, z) && aw !== d % 2;
   const s = w.stair(k, x, z);
   return s >= 0 && (s + 2) % 4 === d;
 }

@@ -39,7 +39,7 @@ export function navigate(w: World, inside: Array<[Cell, Cell]> = []): Nav {
       const [di, dj] = DIRS[d];
       // (its foot: a place at its level behind it, or a stair of the same flight below; its head: the next place up)
       // (or a way through an arch, along its way)
-      const gate = (kk: number, x: number, z: number) => through(w, kk, x, z) && w.archway(kk, x, z) === d % 2;
+      const gate = (kk: number, x: number, z: number) => through(w, kk, x, z) && (w.archway(kk, x, z) === d % 2 || w.cross(kk, x, z));
       if (standing(w, k, i - di, j - dj) || gate(k, i - di, j - dj)) link(v, key(k, i - di, j - dj));
       if (w.stair(k - 1, i - di, j - dj) === d) link(v, key(k - 1, i - di, j - dj));
       if (standing(w, k + 1, i + di, j + dj) || w.stair(k + 1, i + di, j + dj) === d || gate(k + 1, i + di, j + dj)) link(v, key(k + 1, i + di, j + dj));
@@ -54,8 +54,8 @@ export function navigate(w: World, inside: Array<[Cell, Cell]> = []): Nav {
     }
     if (through(w, k, i, j)) {
       // (through an arch: on along its way, to a place or the next arch the same way)
-      const ax = w.archway(k, i, j);
-      for (const s of [1, -1]) { const x = i + s * DIRS[ax][0], z = j + s * DIRS[ax][1]; if (standing(w, k, x, z) || (through(w, k, x, z) && w.archway(k, x, z) === ax)) link(v, key(k, x, z)); }
+      // (under a cross vault, on all four ways)
+      for (const ax of w.cross(k, i, j) ? [0, 1] : [w.archway(k, i, j)]) for (const s of [1, -1]) { const x = i + s * DIRS[ax][0], z = j + s * DIRS[ax][1]; if (standing(w, k, x, z) || (through(w, k, x, z) && (w.archway(k, x, z) === ax || w.cross(k, x, z)))) link(v, key(k, x, z)); }
       continue;
     }
     for (const [a, b] of DIRS.slice(0, 2)) if (standing(w, k, i + a, j + b)) link(v, key(k, i + a, j + b));

@@ -125,7 +125,7 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
     if (w.earth(k, ni, nj)) return true;
     if (w.block(k, ni, nj)) return !wallCell(w, k, ni, nj);
     const aw = w.archway(k, ni, nj);
-    if (aw >= 0) return aw !== d % 2;
+    if (aw >= 0) return !w.cross(k, ni, nj) && aw !== d % 2;
     const s = w.stair(k, ni, nj);
     return s >= 0 && (s + 2) % 4 === d;
   };
@@ -370,7 +370,7 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
       continue;
     }
     if (w.wall(k, i, j) >= 0) { cur = at(w.born(k, i, j), y0, k, i, j); thinWall(k, i, j); continue; }
-    if (w.archway(k, i, j) >= 0 && !w.span(k, i, j)) { cur = at(w.born(k, i, j), y0, k, i, j); archCell(k, i, j, w.archway(k, i, j)); continue; }
+    if (w.archway(k, i, j) >= 0 && !w.span(k, i, j)) { cur = at(w.born(k, i, j), y0, k, i, j); if (w.cross(k, i, j)) crossCell(k, i, j); else archCell(k, i, j, w.archway(k, i, j)); continue; }
     const d = w.stair(k, i, j);
     if (d >= 0) {
       cur = at(w.born(k, i, j), y0, k, i, j);
@@ -813,6 +813,32 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
         foam(ex + a * 0.22, y1 + 0.012, ez + b * 0.22, i * 5 + j * 11 + d);
       }
     }
+    // (a way the hand laid that ends at the stream's edge: a landing stage, stone steps down into the water from the
+    // end of it, and a post to tie up to)
+    const stages = new Set<string>();
+    for (const op of w.ops) {
+      if (op.derived) continue;
+      const cs = w.walks.get(op) ?? [];
+      for (const e of cs.length > 1 ? [cs[0], cs[cs.length - 1]] : []) {
+        const [k, i, j] = e;
+        if (k !== w.ground(i, j)) continue;
+        for (let d = 0; d < 4; d++) {
+          const [a, b] = DIRS[d], x = i + a, z = j + b;
+          if (!wet(x, z) || w.ground(x, z) > k || w.ground(x, z) < k - 1 || stages.has(`${x}.${z}.${d}`) || !w.onSlab(x, z)) continue;
+          stages.add(`${x}.${z}.${d}`);
+          const [ta, tb] = DIRS[(d + 1) % 4], ex = X(i) + 0.5 + a * 0.5, ez = Z(j) + 0.5 + b * 0.5, yw = w.ground(x, z) - 0.17;
+          const P = (u: number, sv: number, y: number): V3 => [ex + a * u + ta * sv, y, ez + b * u + tb * sv];
+          cur = { born: Math.max(op.born ?? 0, -1e3) + 0.3, pivot: yw, how: 1, tone: 0.5, dress: 0, sel: false };
+          const top = k + 0.01, N = Math.max(2, Math.round((top - yw) / 0.12));
+          for (let q = 0; q < N; q++) {
+            const y = top - ((q + 1) * (top - yw + 0.04)) / N, u0 = q * (0.42 / N), u1 = u0 + 0.42 / N;
+            box(Math.min(P(u0, -0.34, 0)[0], P(u1, 0.34, 0)[0]), Math.max(P(u0, -0.34, 0)[0], P(u1, 0.34, 0)[0]), y - 0.05, y + 0.02, Math.min(P(u0, -0.34, 0)[2], P(u1, 0.34, 0)[2]), Math.max(P(u0, -0.34, 0)[2], P(u1, 0.34, 0)[2]), MAT.stone, 0.85);
+          }
+          const pp = P(0.06, 0.42, 0);
+          lathe(pp[0], pp[2], [[0.035, yw - 0.1], [0.035, top + 0.22], [0.045, top + 0.24], [0, top + 0.27]], MAT.wood, 6);
+        }
+      }
+    }
     // (a court's paving, and a way's on the ground: flags laid on the land's level middles)
     for (let j = B.j0; j <= B.j1; j++) for (let i = B.i0; i <= B.i1; i++) {
       const court = w.courts.has(key(0, i, j)), paved = w.paved(i, j);
@@ -969,10 +995,12 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
    * leans on), or a dome on a drum. Tiled in terracotta (the dome in lead), out over the walls at the eaves, its
    * underside showing; a ridge along the top.
    */
-  function roof(b: Building) {
+  function roof(b: Building, wing?: { i0: number; i1: number; j0: number; j1: number }) {
+    // (a plan in wings: a roof over each, the same height at the eaves, meeting the others in valleys)
+    if (b.wings && !wing) { for (const wg of b.wings) roof(b, wg); return; }
     const O = 0.12, y = b.h, ye = y + 0.02;
-    // (over the plan, or the part of it left beside a terrace)
-    const P = b.roofPlan ?? b, xa = X(P.i0), xb = X(P.i1 + 1), za = Z(P.j0), zb = Z(P.j1 + 1), along = xb - xa >= zb - za ? 0 : 1;
+    // (over the plan, or the part of it left beside a terrace, or a wing of it)
+    const P = wing ?? b.roofPlan ?? b, xa = X(P.i0), xb = X(P.i1 + 1), za = Z(P.j0), zb = Z(P.j1 + 1), along = xb - xa >= zb - za ? 0 : 1;
     cur = { born: Math.max(...b.cols.map(([i, j]) => w.born(b.h - 1, i, j))) + 0.2, pivot: y, how: 1, tone: 0.5, dress: 0, sel: b.cols.some(([i, j]) => selected.has(key(b.h - 1, i, j))) };
     // (each slope a slab of tiles with a thickness: its top, its underside a little below, and its edges (the eaves, the
     // verges over a gable, the hips) closed, so where it overhangs a wall it reads as a roof, not a cut)
@@ -1125,6 +1153,15 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
       }
     }
     for (const s of [-1, 1]) quad(P(-0.5, s * HW, y0), P(0.5, s * HW, y0), P(0.5, s * HW, lower ? y1 : ys), P(-0.5, s * HW, lower ? y1 : ys), nW(-s), upper ? 0.85 : [0.7, 0.7, 0.95, 0.95], MAT.within);
+    // (a door in its side, into the rooms of the building it passes through: planks under a round head, a little in)
+    for (const s of [-1, 1]) {
+      const d = a === 0 ? (s > 0 ? 1 : 3) : s > 0 ? 0 : 2;
+      if (buildings(w).at.get(`${k}.${i}.${j}.${d}`)?.kind !== 'door') continue;
+      const wv = s * (HW - 0.006), DW = 0.14, DH = k + 0.3, pts: V3[] = [P(-DW, wv, k), P(DW, wv, k), P(DW, wv, DH)];
+      for (let q = 1; q < 6; q++) { const t = (q / 6) * Math.PI; pts.push(P(DW * Math.cos(t), wv, DH + DW * 0.9 * Math.sin(t))); }
+      pts.push(P(-DW, wv, DH));
+      face(pts, MAT.door, 0.8, true, P(0, s * 0.5, k + 0.25));
+    }
     if (!lower) for (let q = 0; q < CURVE; q++) {
       const t0 = -HW + (2 * HW * q) / CURVE, t1 = -HW + (2 * HW * (q + 1)) / CURVE, tm = (t0 + t1) / 2;
       const n = nW(-tm / HW); n[1] = -Math.sqrt(Math.max(0, HW * HW - tm * tm)) / HW;
@@ -1143,6 +1180,46 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
     }
     if (lower) { if (!w.block(k + 1, i, j)) for (const [w0, w1] of [[-0.5, -HW], [HW, 0.5]]) quad(P(-0.5, w0, y1), P(0.5, w0, y1), P(0.5, w1, y1), P(-0.5, w1, y1), [0, 1, 0], 1, MAT.stone); }
     else topFace(k, i, j, y1);
+  }
+
+  /**
+   * A cross vault: two ways crossing under stone, a groin vault over the crossing, an arch open on each of its four
+   * faces, a pier at each corner; each barrel drawn where it's the higher of the two, so they meet in the groins.
+   */
+  function crossCell(k: number, i: number, j: number) {
+    const y1 = k + 1, ys = k + 0.5, cx = X(i) + 0.5, cz = Z(j) + 0.5, y0 = founded(k, i, j) ? k - FOUND : k;
+    const head = (t: number) => ys + Math.sqrt(Math.max(0, HW * HW - t * t));
+    for (const a of [0, 1]) {
+      const P = (u: number, wv: number, y: number): V3 => (a === 0 ? [cx + u, y, cz + wv] : [cx + wv, y, cz + u]);
+      const nU = (s: number): V3 => (a === 0 ? [s, 0, 0] : [0, 0, s]), nW = (s: number): V3 => (a === 0 ? [0, 0, s] : [s, 0, 0]);
+      // (its two open faces this way: the stone round the arch, its ring of voussoirs)
+      for (const s of [-1, 1]) {
+        const d = a === 0 ? (s > 0 ? 0 : 2) : s > 0 ? 1 : 3;
+        if (hides(k, i, j, d)) continue;
+        const foot = floored(k, i + DIRS[d][0], j + DIRS[d][1]) ? 0.6 : 1;
+        quad(P(s * 0.5, -0.5, y0), P(s * 0.5, -HW, y0), P(s * 0.5, -HW, y1), P(s * 0.5, -0.5, y1), nU(s), [foot, foot, 1, 1], MAT.stone);
+        quad(P(s * 0.5, HW, y0), P(s * 0.5, 0.5, y0), P(s * 0.5, 0.5, y1), P(s * 0.5, HW, y1), nU(s), [foot, foot, 1, 1], MAT.stone);
+        for (let q = 0; q < CURVE; q++) {
+          const t0 = -HW + (2 * HW * q) / CURVE, t1 = -HW + (2 * HW * (q + 1)) / CURVE;
+          quad(P(s * 0.5, t0, head(t0)), P(s * 0.5, t1, head(t1)), P(s * 0.5, t1, y1), P(s * 0.5, t0, y1), nU(s), 1, MAT.stone);
+        }
+        const R0 = HW, R1 = HW + 0.08, V = 7, off = s * (0.5 + 0.012);
+        const ring = (r: number, th: number, u: number): V3 => P(u, -r * Math.cos(th), ys + r * Math.sin(th));
+        for (let v = 0; v < V; v++) {
+          const ta = (Math.PI * v) / V + 0.012, tb = (Math.PI * (v + 1)) / V - 0.012, ro = v === 3 ? R1 + 0.025 : R1;
+          quad(ring(R0, ta, off), ring(R0, tb, off), ring(ro, tb, off), ring(ro, ta, off), nU(s), 0.95, MAT.stone);
+        }
+      }
+      // (the corner piers' faces along this way, in from each face to the crossing)
+      for (const s of [-1, 1]) for (const [u0, u1] of [[-0.5, -HW], [HW, 0.5]]) quad(P(u0, s * HW, y0), P(u1, s * HW, y0), P(u1, s * HW, ys), P(u0, s * HW, ys), nW(-s), [0.7, 0.7, 0.95, 0.95], MAT.within);
+      // (this barrel, out from the groins, where it's higher than the other)
+      for (let q = 0; q < CURVE; q++) {
+        const t0 = -HW + (2 * HW * q) / CURVE, t1 = -HW + (2 * HW * (q + 1)) / CURVE, tm = (t0 + t1) / 2, g = Math.abs(tm);
+        const n = nW(-tm / HW); n[1] = -Math.sqrt(Math.max(0, HW * HW - tm * tm)) / HW;
+        for (const [u0, u1] of [[-0.5, -g], [g, 0.5]]) quad(P(u0, t0, head(t0)), P(u1, t0, head(t0)), P(u1, t1, head(t1)), P(u0, t1, head(t1)), n, 0.95, MAT.within);
+      }
+    }
+    topFace(k, i, j, y1);
   }
 
   /** an arch under a run of stone, and the stone over it: spandrels, deck, its underside lit from within */
@@ -1372,6 +1449,8 @@ export function inStone(w: World, x: number, y: number, z: number): boolean {
   }
   if (w.stone(k, i, j)) {
     const sp = w.span(k, i, j), aw = w.archway(k, i, j);
+    // (a cross vault: stone in its corner piers, and over both barrels)
+    if (!sp && aw >= 0 && w.cross(k, i, j)) { const inA = Math.abs(fz) < HW && fy < 0.5 + Math.sqrt(Math.max(0, HW * HW - fz * fz)), inB = Math.abs(fx) < HW && fy < 0.5 + Math.sqrt(Math.max(0, HW * HW - fx * fx)); return !inA && !inB; }
     if (!sp && aw >= 0) { const wv = aw === 0 ? fz : fx; return Math.abs(wv) > HW || (w.archway(k + 1, i, j) !== aw && fy > 0.5 + Math.sqrt(Math.max(0, HW * HW - wv * wv))); }
     if (!sp) return true;
     // (over an arch: stone above its curve)

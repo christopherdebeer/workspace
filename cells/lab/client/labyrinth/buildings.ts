@@ -53,6 +53,32 @@ export interface Building {
   id: number;
   /** a roof sloping away from (the way it falls, for a shed) */
   fall: number;
+  /** a plan that isn't a rectangle (an L, a T, a U), roofed in wings: rectangles covering it, each with its own roof,
+   * meeting the others' in valleys */
+  wings?: Array<{ i0: number; i1: number; j0: number; j1: number }>;
+}
+
+/** a plan's wings: the fewest largest rectangles that cover it (overlapping where they meet), or null if it takes more
+ * than four, or one's too thin to roof (a plan that ragged is left a terrace) */
+function wingsOf(cols: Array<[number, number]>): Array<{ i0: number; i1: number; j0: number; j1: number }> | null {
+  const has = new Set(cols.map(([x, z]) => `${x}.${z}`)), left = new Set(has), out: Array<{ i0: number; i1: number; j0: number; j1: number }> = [];
+  const full = (i0: number, i1: number, j0: number, j1: number) => { for (let x = i0; x <= i1; x++) for (let z = j0; z <= j1; z++) if (!has.has(`${x}.${z}`)) return false; return true; };
+  while (left.size) {
+    // (the largest rectangle in the plan over the first cell not yet roofed)
+    const [x0, z0] = [...left][0].split('.').map(Number);
+    let best: { i0: number; i1: number; j0: number; j1: number } | null = null, area = 0, gain = 0;
+    for (const [x, z] of cols) for (const [u, v] of cols) {
+      const i0 = Math.min(x, u), i1 = Math.max(x, u), j0 = Math.min(z, v), j1 = Math.max(z, v);
+      if (x0 < i0 || x0 > i1 || z0 < j0 || z0 > j1 || !full(i0, i1, j0, j1)) continue;
+      let g = 0; for (let p = i0; p <= i1; p++) for (let q = j0; q <= j1; q++) if (left.has(`${p}.${q}`)) g++;
+      const a = (i1 - i0 + 1) * (j1 - j0 + 1);
+      if (g > gain || (g === gain && a > area)) { best = { i0, i1, j0, j1 }; area = a; gain = g; }
+    }
+    if (!best || Math.min(best.i1 - best.i0, best.j1 - best.j0) < 1 || out.length >= 4) return null;
+    out.push(best);
+    for (let p = best.i0; p <= best.i1; p++) for (let q = best.j0; q <= best.j1; q++) left.delete(`${p}.${q}`);
+  }
+  return out;
 }
 export interface Buildings { list: Building[]; at: Map<string, Opening>; inside: Array<[Cell, Cell]>; of: Map<number, Building> }
 
@@ -203,6 +229,11 @@ function find(w: World): Buildings {
       doors.push(pickFrom[hash(w.seed, id, 3) % pickFrom.length]);
     }
     for (const f of doors) b.openings.push({ kind: 'door', style: 'arched', k: f.k, i: f.i, j: f.j, d: f.d });
+    // (a passage through its foot: its rooms' door is in the passage's side, under the vault, where it's come in from)
+    if (through.length) {
+      const side = through.flatMap(([x, z, a]) => [0, 1, 2, 3].filter((d) => d % 2 !== a && !w.cross(baseOf(x, z), x, z)).map((d) => ({ x, z, d }))).filter(({ x, z, d }) => mine.has(`${x + DIRS[d][0]}.${z + DIRS[d][1]}`) && w.block(baseOf(x, z), x + DIRS[d][0], z + DIRS[d][1]));
+      if (side.length) { const s = side[hash(w.seed, id, 9) % side.length]; b.openings.push({ kind: 'door', style: 'arched', k: baseOf(s.x, s.z), i: s.x, j: s.z, d: s.d }); }
+    }
     // (the stair inside: every door to the next, and to the passage through it (the way in from under it), and up to
     // the top if the top's walked)
     const ends: Cell[] = doors.map((f) => f.out);
@@ -244,7 +275,11 @@ function find(w: World): Buildings {
     const watered = cols.some(([x, z]) => w.basin(h, x, z));
     // (the part of its plan a roof would go over: all of it, or what's left beside a terrace)
     const R = b.roofPlan ?? { i0, i1, j0, j1 }, rcols = cols.filter(([x, z]) => x >= R.i0 && x <= R.i1 && z >= R.j0 && z <= R.j1), rmine = new Set(rcols.map(([x, z]) => `${x}.${z}`));
-    if (rule === RULE.noRoof || watered || (!rule && ((b.walked && !b.roofPlan) || dressedTop || !b.rect))) b.roof = null;
+    // (a plan that isn't a rectangle: roofed in wings, if it's no more than four of them two cells wide or more)
+    const wings = !b.rect && !b.roofPlan ? wingsOf(cols) : null;
+    if (rule === RULE.noRoof || watered || (!rule && ((b.walked && !b.roofPlan) || dressedTop || (!b.rect && !wings)))) b.roof = null;
+    // (each wing hipped, so where one runs into another its end slopes down under the other's roof)
+    else if (wings) { b.wings = wings; b.roof = 'hipped'; }
     else if (rule >= RULE.hipped && rule <= RULE.dome) b.roof = (['hipped', 'gable', 'shed', 'dome'] as const)[rule - RULE.hipped];
     else {
       // (the rules' choice: leaning on taller stone, a shed roof falling away from it; square, hipped (now and then a dome

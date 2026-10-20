@@ -90,7 +90,9 @@ function gatehouse(w, H, tag) {
   ok(`${tag}: one building, over the way`, !!b && b.cols.length === 6 && B.list.length === 1, B.list.map((x) => x.cols));
   ok(`${tag}: the way through its foot`, !!b && b.through.length === 2, b?.through);
   ok(`${tag}: roofed whole`, !!b?.roof && BU.underRoof(b).length === 6, b && { roof: b.roof, walked: b.walked });
-  ok(`${tag}: no door or window cut in the passage`, !!b && !b.openings.some((o) => w.archway(o.k, o.i, o.j) >= 0), b?.openings);
+  // (nothing across its way through; a door in its side, into the rooms, is the passage's own)
+  ok(`${tag}: no door or window cut across the passage`, !!b && !b.openings.some((o) => w.archway(o.k, o.i, o.j) >= 0 && (o.kind !== 'door' || o.d % 2 === w.archway(o.k, o.i, o.j))), b?.openings);
+  ok(`${tag}: and a door in its side, into the rooms`, !!b && b.openings.some((o) => o.kind === 'door' && w.archway(o.k, o.i, o.j) >= 0 && o.d % 2 !== w.archway(o.k, o.i, o.j) && w.block(o.k, o.i + DIRS[o.d][0], o.j + DIRS[o.d][1])), b?.openings);
   ok(`${tag}: and the way walks end to end`, walks(w, at(w, H.T, [3, 6]), at(w, H.T, [9, 6])));
 }
 const at = (w, T, c) => { const [i, j] = T(c); return [w.ground(i, j), i, j]; };

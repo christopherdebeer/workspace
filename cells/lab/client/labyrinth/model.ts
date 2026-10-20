@@ -257,6 +257,8 @@ export class World {
    * what was authored claims it: the rules' own work (a court's pool, a roof) doesn't.
    */
   passages = new Map<number, number>();
+  /** where two of the hand's passages cross, square (`cross`) */
+  crossings = new Set<number>();
   /** for each column, the first of the hand's operations (by its place in `ops`) that laid stone or steps in it: what
    * an assembly's identity is anchored to, so it's never re-rolled by a later neighbour */
   firstOp = new Map<number, number>();
@@ -326,6 +328,8 @@ export class World {
   wall(k: number, i: number, j: number): number { return inGrid(i, j) ? this.thin.get(key(k, i, j)) ?? -1 : -1; }
   /** stone with a way through it: which way (0 x, 1 z), or −1 */
   archway(k: number, i: number, j: number): number { return inGrid(i, j) ? this.archways.get(key(k, i, j)) ?? -1 : -1; }
+  /** whether two of the hand's passages cross here (stone over it a cross vault, open all four ways) */
+  cross(k: number, i: number, j: number) { return inGrid(i, j) && this.crossings.has(key(k, i, j)) && this.archways.has(key(k, i, j)); }
   tree(k: number, i: number, j: number) { return inGrid(i, j) && this.trees.has(key(k, i, j)); }
   /** the kind of plant growing from a cell (`PLANT`), or -1 */
   plant(k: number, i: number, j: number): number { return this.tree(k, i, j) ? this.treeKind.get(key(k, i, j)) ?? PLANT.cypress : -1; }
@@ -411,7 +415,7 @@ export class World {
   /** `list` replayed into the intended solid, and that resolved */
   private build(list: Op[], now: number) {
     this.now = now;
-    this.mass.clear(); this.stairs.clear(); this.archways.clear(); this.thin.clear(); this.bridged.clear(); this.trees.clear(); this.treeKind.clear(); this.pools.clear(); this.basins.clear(); this.passages.clear(); this.firstOp.clear(); this.walks.clear(); this.choices.clear();
+    this.mass.clear(); this.stairs.clear(); this.archways.clear(); this.thin.clear(); this.bridged.clear(); this.trees.clear(); this.treeKind.clear(); this.pools.clear(); this.basins.clear(); this.passages.clear(); this.crossings.clear(); this.firstOp.clear(); this.walks.clear(); this.choices.clear();
     this.laid.clear(); this.reached.clear(); this.rules.clear(); this.dress.clear(); this.paving.clear();
     // (and what was worked out from them last time (piers, spans, courts and their pools, basins' water), so nothing laid
     // now is laid against what was there before: a world rebuilt is the same world, however often)
@@ -516,7 +520,10 @@ export class World {
   private reserve(k: number, i: number, j: number, prev: [number, number] | null) {
     if (k < 0 || k >= CEIL || !inGrid(i, j)) return;
     const v = key(k, i, j);
-    if (!this.passages.has(v)) this.passages.set(v, prev && prev[0] !== i ? 0 : 1);
+    const a = prev && prev[0] !== i ? 0 : 1, had = this.passages.get(v);
+    if (had === undefined) this.passages.set(v, a);
+    // (a second way across the first, square to it: a crossing, and stone over it a vault open all four ways)
+    else if (prev && had !== a) this.crossings.add(v);
   }
   private walked(op: Op, c: Cell) { const l = this.walks.get(op); if (l) l.push(c); else this.walks.set(op, [c]); }
   /**
