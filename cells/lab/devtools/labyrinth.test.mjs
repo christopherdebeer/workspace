@@ -268,6 +268,38 @@ ok(`walls come out gated or arcaded, now and then (${lively.gates})`, lively.gat
   ok('a deck on piers: its free corners are mass, not a turning wall', corners.every(([i, j]) => !FO.wallCell(w, 2, i, j) && !FO.turnOf(w, 2, i, j)), corners.map(([i, j]) => FO.wallCell(w, 2, i, j)));
   ok('a deck on piers over open ground: nothing corbelled from a pier', [...w.corbels.keys()].every((v) => { const [k, i, j] = unkey(v), [a, b] = DIRS[w.corbels.get(v)]; return !w.pier(k - 1, i + a, j + b); }), [...w.corbels.keys()].map(unkey));
 }
+// (take anything: what the rules made is taken by changing what made it, and stays taken)
+{
+  const deck = () => { const w = new World(1), add = []; for (let i = 9; i <= 10; i++) for (let j = 3; j <= 9; j++) for (let k = 0; k < 5; k++) add.push([k, i, j, 0]); for (let i = 4; i <= 8; i++) for (let j = 3; j <= 8; j++) add.push([2, i, j, 0]); w.apply({ add }); return w; };
+  let w = deck();
+  const p0 = [...w.piers.keys()].map(unkey).find((c) => c[0] === 1), mass0 = w.mass.size;
+  const op = P.take(w, { face: 'side', hit: p0, to: [p0[0], p0[1] + 1, p0[2]] }, 1);
+  w.apply(op, 1);
+  ok('take: a pier touched is gone, what it carried still there, held another way', !w.pier(1, p0[1], p0[2]) && !w.pier(0, p0[1], p0[2]) && w.mass.size === mass0, { op, mass: w.mass.size });
+  ok('take: and it stays gone as more is built', (w.apply({ add: [[3, 4, 3, 2]] }, 2), !w.pier(1, p0[1], p0[2])));
+  // (every pier taken, one after another: the deck carried as long as something will carry it, and never refused)
+  w = deck();
+  let refused = 0;
+  for (let n = 0; n < 60 && w.piers.size; n++) { const c = [...w.piers.keys()].map(unkey)[0], o = P.take(w, { face: 'side', hit: c, to: c }, n); if (!o) { refused++; break; } w.apply(o, n); }
+  ok('take: piers taken one after another, never refused, until none stand', !refused && !w.piers.size, { refused, piers: w.piers.size });
+  // (a roof, before the stone under it)
+  w = new World(1);
+  w.apply({ add: [[0, 5, 5, 0], [1, 5, 5, 0], [2, 5, 5, 0], [0, 6, 5, 0], [1, 6, 5, 0], [2, 6, 5, 0]] });
+  const b = BU.buildings(w).list[0];
+  if (b?.roof) {
+    const r = P.take(w, { face: 'top', hit: [b.h - 1, 5, 5], to: [b.h, 5, 5] }, 1); w.apply(r, 1);
+    ok('take: a roof touched comes off, the stone under it stays', !BU.buildings(w).list[0]?.roof && w.stone(2, 5, 5), r);
+  } else ok('take: a house to take the roof off', false, b);
+  // (paving, and a ladder)
+  w = new World(1);
+  w.apply({ pave: [[3, 3], [4, 3], [5, 3]] });
+  const pv = P.take(w, { face: 'ground', hit: [-1, 4, 3], to: [0, 4, 3] }, 1); w.apply(pv, 1);
+  ok('take: paving touched is taken up', !w.paving.has(key(0, 4, 3)) && w.paving.has(key(0, 3, 3)), pv);
+  w.apply({ add: [[0, 6, 6, 0], [1, 6, 6, 0]] }); w.apply({ ladders: [[0, 5, 6, 0, 2, 0]] });
+  ok('take: a ladder to take', w.ladders.size === 1);
+  const ld = P.take(w, { face: 'side', hit: [1, 6, 6], to: [1, 5, 6] }, 2); w.apply(ld, 2);
+  ok('take: a ladder touched is taken, the stone it leant on left', !w.ladders.size && w.stone(1, 6, 6), ld);
+}
 // (a pier landing on a walkway below stands aside, slim, and the walkway past it stays open)
 {
   const M = await load('../client/labyrinth/mesh.ts');

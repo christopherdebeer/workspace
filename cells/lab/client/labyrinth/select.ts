@@ -10,6 +10,7 @@
  */
 import { buildings } from './buildings';
 import { meetingAt, readingsOf } from './encounters';
+import { take } from './palette';
 import { DIRS, RULE, key, unkey, type Cell, type Op, type Span, type World } from './model';
 import type { Motif } from './motifs';
 
@@ -57,7 +58,7 @@ export function selectCell(w: World, c: Cell, view: number, now: number): Select
   const m = meetingAt(w, c);
   if (m) {
     const at = Math.max(0, m.candidates.findIndex((q) => q.level === m.laid));
-    return { title: `where ${m.name}: ${m.candidates[at]?.label ?? 'nothing laid'}`, cells: m.at, readings: readingsOf(m).map((r, n) => (n === at ? { ...r, op: null } : r)), at, remove: null, stone: m.at };
+    return { title: `where ${m.name}: ${m.candidates[at]?.label ?? 'nothing laid'}`, cells: m.at, readings: readingsOf(m).map((r, n) => (n === at ? { ...r, op: null } : r)), at, remove: { choose: [[...m.anchor, -1]], why: 'take', note: `${m.name}: left as it is` }, stone: m.at };
   }
   const sp = w.span(k, i, j);
   if (sp) {
@@ -70,7 +71,7 @@ export function selectCell(w: World, c: Cell, view: number, now: number): Select
     for (let kk = top; kk >= 0 && w.pier(kk, i, j); kk--) col.push([kk, i, j]);
     const column = DIRS.some(([a, b]) => w.span(top + 1, i + a, j + b)?.order === 'colonnade');
     const readings: Reading[] = [{ label: column ? 'a column' : 'a pier', op: null }, { label: 'solid', op: { add: col.map(([kk]) => [kk, i, j, now] as [number, number, number, number]), why: 'reading' } }];
-    return { title: column ? 'a column of a colonnade, the rules\' own' : 'a pier, the rules\' own, carrying what has nothing else under it', cells: col, readings, at: 0, remove: null, stone: col };
+    return { title: column ? 'a column of a colonnade, the rules\' own' : 'a pier, the rules\' own, carrying what has nothing else under it', cells: col, readings, at: 0, remove: take(w, { face: 'side', hit: [top, i, j], to: [top, i, j] }, now), stone: col };
   }
   const d = w.stair(k, i, j);
   if (d >= 0) {

@@ -138,7 +138,7 @@ What's built has residents (`cats.ts`). They show how a place can be lived in: a
 | **hand** | says what it is, and what it's part of | turns the view |
 | **auto** | raises | builds a wall, reaches out, climbs (below) |
 | **piece** (hold it, or touch it again, for the sheet; it's always called piece, and its picture is what it holds) | puts one piece, or dresses a stone | a run of pieces, or dresses every stone passed over |
-| **take** | takes a piece away (a lantern or pot on it first) | carves through: what's over the cut is carried on an arch |
+| **take** | takes anything away, the outermost first (a pergola, a basin, a lantern or pot, a roof, a ladder, then the stone, paving or stair under them); what the rules made is taken by changing what made it, so it stays taken: a pier is asked not to stand (what it carried is held another way, or taken with it if nothing else will), a meeting's stone is read at a rung that doesn't lay it. Only the land itself stays | carves through: what's over the cut is carried on an arch |
 | **select** | takes up a piece; again, the whole it's part of | turns the view |
 
 Two fingers, from any brush, turn the view (across), tilt it (up and down), and pinch closer to where they are.

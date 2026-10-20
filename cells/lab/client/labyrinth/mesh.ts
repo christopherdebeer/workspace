@@ -464,6 +464,8 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
   // to carry it, so the way under it stays open)
   for (const [v, d] of w.corbels) {
     const [k, i, j] = unkey(v), y0 = k, cx = X(i) + 0.5, cz = Z(j) + 0.5, [a, b] = DIRS[d], [ta, tb] = DIRS[(d + 1) % 4], U = 0.86, HW2 = 0.075;
+    // (held from stone that stands on a pier, there's no face under it to spring from: the slab's simply held out)
+    if (w.pier(k - 1, i + a, j + b) && !w.earth(k, i + a, j + b)) continue;
     cur = at(w.born(k, i, j), y0, k, i, j);
     const P = (u: number, sv: number, y: number): V3 => [cx + a * (0.5 - u) + ta * sv, y, cz + b * (0.5 - u) + tb * sv];
     const prof: Array<[number, number]> = [[0, y0], [U, y0], [U, y0 - 0.1]];

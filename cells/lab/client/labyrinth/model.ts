@@ -97,7 +97,7 @@ export interface Op {
 }
 /** readings of the rules' work a hand can switch to: an arch read as a lintel, a pier asked for; a building's roof (none, or
  * which kind), kept at the lowest cell of its top */
-export const RULE = { none: 0, lintel: 1, pier: 2, colonnade: 3, arch: 4, noRoof: 10, hipped: 11, gable: 12, shed: 13, dome: 14, tower: 20, solid: 30, rampant: 31, hung: 32 } as const;
+export const RULE = { none: 0, lintel: 1, pier: 2, colonnade: 3, arch: 4, noPier: 5, noRoof: 10, hipped: 11, gable: 12, shed: 13, dome: 14, tower: 20, solid: 30, rampant: 31, hung: 32 } as const;
 
 /**
  * How a flight is carried. Worked out from its setting (the hand can choose another, kept at its foot: `RULE.solid`,
@@ -428,6 +428,8 @@ export class World {
       for (const c of [...(o.add ?? []), ...(o.walls ?? []), ...(o.arches ?? []), ...(o.stairs ?? [])]) at(c[1], c[2]);
       for (const c of this.reached.get(o)?.cells ?? []) at(c[1], c[2]);
     };
+    /** ladders taken, by the cell at the foot: the place in the list of the last op that took one there */
+    const ladderCut = new Map<number, number>();
     for (const [n, op] of list.entries()) {
       mark(n - 1);
       for (const [k, i, j, lv] of op.choose ?? []) this.choices.set(key(k, i, j), lv);
@@ -438,7 +440,10 @@ export class World {
         this.realise(op); continue;
       }
       for (const [k, i, j] of op.cut ?? []) {
+        // (k −1: a pool; −2: paving on the ground, and the way it ran)
+        if (k === -2) { this.paving.delete(key(0, i, j)); this.passages.delete(key(this.ground(i, j), i, j)); continue; }
         if (k < 0) { this.pools.delete(key(0, i, j)); continue; }
+        ladderCut.set(key(k, i, j), n);
         for (const m of [this.mass, this.stairs, this.archways, this.thin, this.trees, this.dress, this.basins]) m.delete(key(k, i, j));
         this.bridged.delete(key(k, i, j)); this.laid.delete(key(k, i, j));
       }
@@ -474,8 +479,9 @@ export class World {
     // (ladders, where they still stand: a floor at the foot, nothing in the way up, the stone they lean on there, and a
     // place to step off on to at its top)
     this.ladders.clear();
-    for (const op of list) for (const [k, i, j, d, n, b] of op.ladders ?? []) {
+    for (const [at, op] of list.entries()) for (const [k, i, j, d, n, b] of op.ladders ?? []) {
       const [a, c] = DIRS[d], x = i + a, z = j + c;
+      if ((ladderCut.get(key(k, i, j)) ?? -1) > at) continue;
       if (!inGrid(i, j) || !(k === this.ground(i, j) || this.stone(k - 1, i, j))) continue;
       let ok = true;
       for (let q = 0; q < n && ok; q++) if (this.occupied(k + q, i, j) || !(this.stone(k + q, x, z) || this.earth(k + q, x, z))) ok = false;
@@ -729,7 +735,7 @@ export class World {
     // (stone stands on what's under it; not on water, at the ground's level: there it's carried over the stream)
     const below = (k: number, i: number, j: number) => (k === 0 || this.occupied(k - 1, i, j)) && !(k === this.ground(i, j) && this.pool(i, j));
     /** whether a pier can come down here from `k` without standing in a passage the hand made */
-    const pierable = (k: number, i: number, j: number) => { for (let kk = k - 1; kk >= 0 && !this.occupied(kk, i, j) && !this.under.has(key(kk, i, j)); kk--) if (this.passages.has(key(kk, i, j))) return false; return true; };
+    const pierable = (k: number, i: number, j: number) => { if (this.rules.get(key(k, i, j)) === RULE.noPier) return false; for (let kk = k - 1; kk >= 0 && !this.occupied(kk, i, j) && !this.under.has(key(kk, i, j)); kk--) if (this.passages.has(key(kk, i, j))) return false; return true; };
     const raisePier = (k: number, i: number, j: number, born: number, anyway = false) => {
       if (!anyway && !pierable(k, i, j)) return false;
       for (let kk = k - 1; kk >= 0 && !this.occupied(kk, i, j) && !this.under.has(key(kk, i, j)); kk--) this.piers.set(key(kk, i, j), this.first(`p${kk}.${i}.${j}`, born - 0.15));
@@ -809,6 +815,11 @@ export class World {
         if (!at) { const [, i, j] = unkey(loose.values().next().value!); at = [i, j]; }
         // (not down into a passage: another loose cell, if any will take a pier; only if none, there anyway)
         if (!pierable(k, at[0], at[1])) for (const v of loose) { const [, i, j] = unkey(v); if (pierable(k, i, j)) { at = [i, j]; break; } }
+        // (where the hand took the pier, held out from what stands beside it if anything does, before a pier anyway)
+        if (this.rules.get(key(k, at[0], at[1])) === RULE.noPier) {
+          const [i, j] = at, d = [0, 1, 2, 3].find((q) => abuts(i + DIRS[q][0], j + DIRS[q][1]));
+          if (d !== undefined) { this.corbels.set(key(k, i, j), d); loose.delete(key(k, i, j)); continue; }
+        }
         raisePier(k, at[0], at[1], this.born(k, at[0], at[1]), true);
         loose.delete(key(k, at[0], at[1]));
       }

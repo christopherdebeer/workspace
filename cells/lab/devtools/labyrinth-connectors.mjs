@@ -10,6 +10,7 @@ const { World, key, DIRS } = await import('../client/labyrinth/model.ts');
 const G = await import('../client/labyrinth/gesture.ts');
 const NAV = await import('../client/labyrinth/nav.ts');
 const BU = await import('../client/labyrinth/buildings.ts');
+const PA = await import('../client/labyrinth/palette.ts');
 
 const opt = Object.fromEntries(process.argv.slice(2).filter((a) => a.startsWith('--')).map((a) => [a.slice(2).split('=')[0], a.split('=')[1] ?? true]));
 let checks = 0, fails = 0;
@@ -66,6 +67,16 @@ function meetings(w, tag, expect) {
       const here = new Set((n?.at ?? []).map((q) => q.join()));
       if (below) ok(`${tag}: rung ${c.level} lays all that rung ${c.level - 1} does`, [...below].every((q) => here.has(q)), { below: [...below], here: [...here] });
       below = here;
+    }
+    // (taken by touch: each thing the meeting laid at its highest rung, touched with take, is gone, and stays gone)
+    const top = m.candidates[m.candidates.length - 1].level, v0 = replay(w.encode(), w.seed);
+    v0.apply({ choose: [[...m.anchor, top]], why: 'reading' });
+    const at0 = v0.meetings.find((q) => q.anchor.join() === m.anchor.join())?.at ?? [];
+    for (const c of at0.filter((q) => v0.stone(...q) || v0.stair(...q) >= 0)) {
+      const u = replay(v0.encode(), v0.seed), op = PA.take(u, { face: 'side', hit: c, to: c }, 0);
+      if (op) u.apply(op);
+      const after = u.meetings.find((q) => q.anchor.join() === m.anchor.join())?.at ?? [];
+      ok(`${tag}: what the meeting laid at ${c} is taken by a touch`, !!op && !after.some((q) => q.join() === c.join()), op);
     }
     // (insisting: the last of the things that made it, made again)
     const v = replay(w.encode(), w.seed); v.apply(JSON.parse(JSON.stringify(w.ops[Math.max(...m.by)])));

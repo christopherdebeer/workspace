@@ -223,7 +223,7 @@ type Gesture = {
 let g: Gesture | null = null;
 const fingers = new Map<number, { x: number; y: number }>();
 let pinch0 = 0, zoom0 = 1, mid0 = 0, midY0 = 0;
-const SAYS: Record<Exclude<Hand, 'auto'>, string> = { block: 'a block stands on the stone, or on stone', wall: 'a wall stands on the stone, or on stone, or runs out from a side', arch: 'an arch stands on the stone, or on stone', stair: 'a stair wants a floor to start from', bridge: 'a bridge goes across a gap, from stone to stone level with it', cypress: 'a cypress wants a floor, and room above it', pool: 'a pool is let into the ground, or into a top', take: 'nothing of yours there to take' };
+const SAYS: Record<Exclude<Hand, 'auto'>, string> = { block: 'a block stands on the stone, or on stone', wall: 'a wall stands on the stone, or on stone, or runs out from a side', arch: 'an arch stands on the stone, or on stone', stair: 'a stair wants a floor to start from', bridge: 'a bridge goes across a gap, from stone to stone level with it', cypress: 'a cypress wants a floor, and room above it', pool: 'a pool is let into the ground, or into a top', take: 'nothing there to take' };
 const bar = document.getElementById('hands')!, sheet = document.getElementById('sheet')!, pieceB = bar.querySelector('[data-brush="piece"]') as HTMLElement;
 /**
  * What auto's strokes are for: mass (a stroke on the ground is a wall; from a top, it reaches out or climbs, as ever) or
@@ -688,7 +688,7 @@ const up = (e: PointerEvent) => {
       else if (isDress(held)) { const c = dressAt(world, start, held); op = c ? dress(world, held, [c]) : null; }
       else op = placeOr(world, held, start, looking(), now());
       if (op) { world.apply(op, now()); settle([...(op.add ?? []), ...(op.arches ?? []), ...(op.stairs ?? [])].map((c) => [c[0], c[1], c[2]])); kept(); if (op.note) say(op.alts?.length ? `${op.note} · hold to read it otherwise` : op.note); }
-      else say(brush === 'auto' ? 'nothing more will stand there' : brush === 'take' ? SAYS.take : isDress(held) ? (held === 'lantern' || held === 'pot' ? 'that wants a top with room over it' : held === 'pergola' ? 'a pergola wants a place to stand, with room over it' : 'dressing goes on stone') : SAYS[held as Piece]);
+      else say(brush === 'auto' ? 'nothing more will stand there' : brush === 'take' ? (world.earth(...start.hit) ? 'the land itself stays' : SAYS.take) : isDress(held) ? (held === 'lantern' || held === 'pot' ? 'that wants a top with room over it' : held === 'pergola' ? 'a pergola wants a place to stand, with room over it' : 'dressing goes on stone') : SAYS[held as Piece]);
     }
   } else if (m === 'trace' || m === 'run') { unselect(); traceStep(e.clientX, e.clientY, true); }
   else if (m === 'carve' || m === 'paint') { unselect(); kept(); }

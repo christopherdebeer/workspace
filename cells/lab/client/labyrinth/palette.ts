@@ -13,12 +13,15 @@
  *   olive; on a plant, grown a size. Drawn along, a row; drawn round, a grove.
  * - **pool**: let into the stone itself: into the ground, or (touched on a top) into that top, a basin, up off the ground,
  *   which spills over its edge where there's a drop (model.ts's `spill`).
- * - **take**: what was touched, taken away (the rules then carry what was on it, on an arch or a pier).
+ * - **take**: anything touched, taken away, the outermost first (a pergola, a basin, a lantern, a roof, a ladder, then
+ *   what's under them); what the rules made, by changing what made it (`take()`); the rules then carry what was on it.
  */
 import { plantStroke, plantTap } from './green';
-import { CEIL, DIRS, DRESS, inGrid, key, straights, type Cell, type Op, type World } from './model';
+import { CEIL, DIRS, DRESS, RULE, inGrid, key, unkey, straights, type Cell, type Op, type World } from './model';
 import { connect, surface, type Pick } from './gesture';
 import { look } from './character';
+import { buildings, underRoof } from './buildings';
+import { lays, meetingAt } from './encounters';
 
 /** the pieces a specific brush can hold, and the dressing */
 export type Piece = 'block' | 'wall' | 'arch' | 'stair' | 'bridge' | 'cypress' | 'pool';
@@ -48,19 +51,7 @@ export function span(w: World, k: number, i: number, j: number, only?: number): 
 /** the operation a piece in hand makes where it's touched (`view`: the way the eye looks, a DIRS index), or null */
 export function place(w: World, hand: Exclude<Hand, 'auto'>, p: Pick, view: number, now: number): Op | null {
   const [hk, hi, hj] = p.hit;
-  if (hand === 'take') {
-    // (a pergola over the place touched, before anything else there)
-    const over: Cell = p.face === 'ground' ? p.to : [hk + 1, hi, hj];
-    if (p.face !== 'side' && look(w, ...over)?.pergola) return { dress: [[...over, DRESS.pergola, 0]], why: 'take' };
-    if (p.face === 'ground') return w.pools.has(key(0, hi, hj)) ? { cut: [[-1, hi, hj]], why: 'take' } : null;
-    // (a basin in the top touched, before the stone it's let into)
-    if (p.face === 'top' && w.basin(hk + 1, hi, hj)) return { cut: [[hk + 1, hi, hj]], why: 'take' };
-    // (a lantern or a pot on what was touched, before the stone itself)
-    const prop = look(w, hk, hi, hj)?.prop;
-    if (prop && p.face === 'top') return { dress: [[hk, hi, hj, prop, 0]], why: 'take' };
-    for (let k = hk; k >= 0; k--) if (w.stone(k, hi, hj) || w.stair(k, hi, hj) >= 0 || w.tree(k, hi, hj)) return { cut: [[k, hi, hj]], why: 'take' };
-    return null;
-  }
+  if (hand === 'take') return take(w, p, now);
   if (hand === 'pool') {
     if (p.face === 'ground') return !w.pool(hi, hj) && w.free(...p.to) ? { pools: [[hi, hj, now]], why: 'pool' } : null;
     return p.face === 'top' && w.block(hk, hi, hj) && w.free(hk + 1, hi, hj) ? { basins: [[hk + 1, hi, hj, now]], why: 'basin', note: 'a basin let into the top' } : null;
@@ -206,5 +197,55 @@ export function placeOr(w: World, hand: Exclude<Hand, 'auto'>, p: Pick, view: nu
   const onTop: Pick = { face: 'top', hit: [tk - 1, hi, hj], to: [tk, hi, hj] };
   if (hand === 'bridge') { const b = place(w, 'block', p, view, now); return b ? { ...b, note: 'no gap to bridge there: a block out from it' } : null; }
   if (p.face === 'side' && (hand === 'stair' || hand === 'cypress' || hand === 'pool')) { const t = place(w, hand, onTop, view, now); return t ? { ...t, note: `on its top instead` } : null; }
+  return null;
+}
+
+/**
+ * Taking whatever was touched: the outermost thing there first. The hand's own pieces are cut; what the rules or a
+ * meeting made is taken by changing what made it, so it stays taken as more is built: a meeting read at a rung that
+ * doesn't lay it, a building's roof left off, a pier asked not to stand (what it carried then held another way, or, if
+ * nothing else will carry it, taken with it). Only the land itself stays.
+ */
+export function take(w: World, p: Pick, now: number): Op | null {
+  const [hk, hi, hj] = p.hit;
+  /** a cell a meeting laid: that meeting read at the highest rung below it that doesn't lay it (or none) */
+  const unmeet = (c: Cell): Op | null => {
+    const m = meetingAt(w, c);
+    if (!m || m.laid < 0) return null;
+    const lays_ = (o: Op) => [...lays(o), ...(o.pave ?? []).map(([i, j]) => [w.ground(i, j), i, j] as Cell)].some((q) => q[0] === c[0] && q[1] === c[1] && q[2] === c[2]);
+    const lower = m.candidates.filter((x) => x.level < m.laid && !lays_(x.op)).sort((a, b) => b.level - a.level)[0];
+    return { choose: [[...m.anchor, lower ? lower.level : -1]], why: 'take', note: lower ? lower.label : `${m.name}: left as it is` };
+  };
+  // (a pergola over the place touched, before anything else there)
+  const over: Cell = p.face === 'ground' ? p.to : [hk + 1, hi, hj];
+  if (p.face !== 'side' && look(w, ...over)?.pergola) return { dress: [[...over, DRESS.pergola, 0]], why: 'take' };
+  if (p.face === 'ground') {
+    if (w.pools.has(key(0, hi, hj))) return { cut: [[-1, hi, hj]], why: 'take' };
+    if (!w.paving.has(key(0, hi, hj))) return null;
+    return unmeet([w.ground(hi, hj), hi, hj]) ?? { cut: [[-2, hi, hj]], why: 'take', note: 'the paving taken up' };
+  }
+  // (a basin in the top touched, before the stone it's let into)
+  if (p.face === 'top' && w.basin(hk + 1, hi, hj)) return { cut: [[hk + 1, hi, hj]], why: 'take' };
+  // (a lantern or a pot on what was touched, before the stone itself)
+  const prop = look(w, hk, hi, hj)?.prop;
+  if (prop && p.face === 'top') return { dress: [[hk, hi, hj, prop, 0]], why: 'take' };
+  // (a ladder leaning on the face touched, before the stone it leans on)
+  if (p.face === 'side') {
+    const [lk, li, lj] = p.to;
+    for (let k = lk; k >= 0; k--) { const l = w.ladders.get(key(k, li, lj)); if (l && lk - k < l.n) return { cut: [[k, li, lj]], why: 'take', note: 'the ladder taken' }; }
+  }
+  // (a roof over the top touched, before the stone under it)
+  const b = buildings(w).of.get(key(hk, hi, hj));
+  if (b?.roof && hk === b.h - 1 && underRoof(b).some(([x, z]) => x === hi && z === hj)) { const [rk, ri, rj] = unkey(b.id); return { rule: [[rk, ri, rj, RULE.noRoof]], why: 'take', note: 'the roof taken off' }; }
+  // (a pier: asked not to stand, what it carried held another way; if nothing else will hold it, taken with it)
+  if (w.pier(hk, hi, hj)) {
+    let k = hk; while (w.pier(k, hi, hj)) k++;
+    const ask: Op = { rule: [[k, hi, hj, RULE.noPier]], why: 'take', note: 'the pier taken, what it carried held another way' };
+    w.apply(ask, now); const stands = w.pier(hk, hi, hj); w.undo(now);
+    if (!stands) return ask;
+    return unmeet([k, hi, hj]) ?? { cut: [[k, hi, hj]], why: 'take', note: 'the pier taken, and what it carried with it' };
+  }
+  if (w.earth(hk, hi, hj)) return null;
+  for (let k = hk; k >= 0; k--) if (w.stone(k, hi, hj) || w.stair(k, hi, hj) >= 0 || w.tree(k, hi, hj)) return unmeet([k, hi, hj]) ?? { cut: [[k, hi, hj]], why: 'take' };
   return null;
 }

@@ -303,7 +303,7 @@ export const RULES: Rule[] = [waysMeet, levelApart, waysCross, wayEnds, flightMe
 // ─── resolving them ───
 
 /** the cells an operation lays something in */
-const lays = (op: Op): Cell[] => [...(op.add ?? []), ...(op.walls ?? []), ...(op.arches ?? []), ...(op.stairs ?? [])].map((c) => [c[0], c[1], c[2]] as Cell);
+export const lays = (op: Op): Cell[] => [...(op.add ?? []), ...(op.walls ?? []), ...(op.arches ?? []), ...(op.stairs ?? [])].map((c) => [c[0], c[1], c[2]] as Cell);
 /** whether a candidate keeps every claim (a passage, a stair's way, a tree, water: nothing a meeting lays goes in
  * any of them), and stays out of what other meetings have laid */
 function keeps(w: World, c: Candidate, taken: Set<number>): boolean {
