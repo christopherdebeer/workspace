@@ -228,8 +228,8 @@ const bar = document.getElementById('hands')!, sheet = document.getElementById('
  * a way (a stroke connects where it starts to where it ends, and the land says how: paving, flights, a bridge). Taps
  * raise either way. Kept between visits; on the land, a way, the first time.
  */
-let intent: Intent = (() => { try { const v = localStorage.getItem('labyrinth.intent'); if (v === 'mass' || v === 'way') return v; } catch { /* */ } return world.land ? 'way' : 'mass'; })();
-if (qs.get('intent') === 'mass' || qs.get('intent') === 'way') intent = qs.get('intent') as Intent;
+let intent: Intent = (() => { try { const v = localStorage.getItem('labyrinth.intent'); if (v === 'mass' || v === 'way' || v === 'green') return v; } catch { /* */ } return world.land ? 'way' : 'mass'; })();
+if (qs.get('intent') === 'mass' || qs.get('intent') === 'way' || qs.get('intent') === 'green') intent = qs.get('intent') as Intent;
 const intentEl = document.getElementById('intent') as HTMLElement;
 function setIntent(v: Intent) { intent = v; try { localStorage.setItem('labyrinth.intent', v); } catch { /* */ } showBrush(); hint(); }
 for (const b of Array.from(intentEl.querySelectorAll('button')) as HTMLElement[]) b.addEventListener('click', () => setIntent(b.dataset.intent as Intent));
@@ -259,7 +259,7 @@ for (const b of Array.from(bar.querySelectorAll('button')) as HTMLElement[]) {
 for (const b of Array.from(sheet.querySelectorAll('button')) as HTMLElement[]) b.addEventListener('click', () => { setBrush(b.dataset.held!); openSheet(false); say(BRUSH_SAYS.piece()); });
 const BRUSH_SAYS: Record<Brush, () => string> = {
   hand: () => 'drag to turn it · tap to ask what something is, or to meet a cat',
-  auto: () => (intent === 'way' ? 'way: a stroke connects places; paving, flights and bridges as the land asks' : 'mass: tap raises · trace builds, reaches out and climbs'),
+  auto: () => (intent === 'green' ? 'green: tap plants what suits the place, again grows it · a stroke a row · a ring a grove' : intent === 'way' ? 'way: a stroke connects places; paving, flights and bridges as the land asks' : 'mass: tap raises · trace builds, reaches out and climbs'),
   piece: () => (isDress(held) ? `${held}: tap a stone, or stroke over stones, to dress them` : `${held}: tap to put one · trace for a run of them`),
   take: () => 'tap takes a piece away · trace carves through',
   select: () => 'tap something to take it up · tap again for the whole of it',

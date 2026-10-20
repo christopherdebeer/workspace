@@ -20,7 +20,8 @@ import { hash } from '../kit/rng';
 import { character, look } from './character';
 import { buildings, opening, underRoof, type Building, type Opening } from './buildings';
 import { BUT, BUTH, BUTW, WT, buttresses, inBlock, outline, reach, wallCell, type Edge } from './form';
-import { CENTER, DECK, DIRS, DRESS, key, soffit as flightSoffit, unkey, type Span, type World } from './model';
+import { CENTER, DECK, DIRS, DRESS, PLANT, key, soffit as flightSoffit, unkey, type Span, type World } from './model';
+import { grow, growths } from './plants';
 import { LAND, surfaceY } from './land';
 import { groundY, retaining } from './context';
 
@@ -96,10 +97,13 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
   const dressed = (k: number, i: number, j: number) => look(w, k, i, j, plain);
   const out: number[] = [];
   let cur = { born: -1e3, pivot: 0, how: 1, tone: 0, dress: 0, sel: false };
+  /** leaves' kind, for their colour (0 a cypress's dark green, 1 an olive's silver, 2 a stone pine's blue-green, 3 a
+   * clipped box's bright green) */
+  let leaf = 0;
   /** a cell's dressing, as it's drawn over its stone */
   const dressOf = (k: number, i: number, j: number) => { const d = dressed(k, i, j); return d ? (d.mat ?? 0) * KIND + (d.moss ? MOSS : 0) + (d.ivy ? IVY : 0) : 0; };
   const at = (born: number, pivot: number, k: number, i: number, j: number, how = 1) => ({ born, pivot, how, tone: tone(k, i, j), dress: dressOf(k, i, j), sel: selected.has(key(k, i, j)) });
-  const vert = (p: V3, n: V3, ao: number, mat: number) => out.push(p[0], p[1], p[2], n[0], n[1], n[2], ao, (mat === MAT.stone || mat === MAT.within ? mat + cur.dress : mat) + (cur.sel ? SEL : 0), cur.born, cur.pivot, cur.how, cur.tone);
+  const vert = (p: V3, n: V3, ao: number, mat: number) => out.push(p[0], p[1], p[2], n[0], n[1], n[2], ao, (mat === MAT.stone || mat === MAT.within ? mat + cur.dress : mat === MAT.leaves ? mat + leaf * KIND : mat) + (cur.sel ? SEL : 0), cur.born, cur.pivot, cur.how, cur.tone);
   const quad = (a: V3, b: V3, c: V3, d: V3, n: V3, ao: number[] | number, mat: number) => {
     const A = typeof ao === 'number' ? [ao, ao, ao, ao] : ao;
     const ux = b[0] - a[0], uy = b[1] - a[1], uz = b[2] - a[2], vx = c[0] - a[0], vy = c[1] - a[1], vz = c[2] - a[2];
@@ -475,7 +479,16 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
   for (const b of buildings(w).list) if (b.roof) roof(b);
 
   // ─── what grows in the courtyards ───
-  const hand = [...[...w.pools.entries()].map(([v, b]) => { const [, i, j] = unkey(v); return { kind: 'pool' as const, i, j, born: b, k: w.ground(i, j) }; }), ...[...w.trees.entries()].map(([v, b]) => { const [k, i, j] = unkey(v); return { kind: 'cypress' as const, i, j, born: b, k }; })];
+  const hand = [...[...w.pools.entries()].map(([v, b]) => { const [, i, j] = unkey(v); return { kind: 'pool' as const, i, j, born: b, k: w.ground(i, j) }; }), ...[...w.trees.entries()].filter(([v]) => (w.treeKind.get(v) ?? PLANT.cypress) === PLANT.cypress).map(([v, b]) => { const [k, i, j] = unkey(v); return { kind: 'cypress' as const, i, j, born: b, k }; })];
+  // (the hand's other plants, each as it grows (plants.ts); in a planter where it stands on stone)
+  for (const [v, b] of w.trees) {
+    const kind = w.treeKind.get(v) ?? PLANT.cypress, [k, i, j] = unkey(v);
+    if (kind === PLANT.cypress) continue;
+    if (k > w.ground(i, j) && w.stone(k - 1, i, j)) planter(k, i, j, b);
+    if (kind === PLANT.shrub) shrubAt(i, j, k, b);
+    else if (kind === PLANT.hedge) hedge(i, j, k, b);
+    else tree(growths(w).get(v) ?? grow(w, k, i, j, kind), i, j, k, b);
+  }
   for (const dc of [...w.decor.map((d) => ({ ...d, k: w.ground(d.i, d.j) })), ...hand]) {
     cur = { born: dc.born, pivot: -0.4, how: 1, tone: 0.5, dress: 0, sel: false };
     const x0 = X(dc.i), z0 = Z(dc.j);
@@ -489,6 +502,7 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
         quad(A, B, [B[0], g0, B[2]], [A[0], g0, A[2]], [-a, 0, -b], [0.6, 0.6, 0.9, 0.9], MAT.court);
       }
     } else if (dc.kind === 'pot') pot(dc.i, dc.j, dc.k, dc.born);
+    else if (dc.kind === 'olive') tree(grow(w, dc.k, dc.i, dc.j, PLANT.olive), dc.i, dc.j, dc.k, dc.born);
     else cypress(dc.i, dc.j, dc.k, dc.born);
   }
 
@@ -1180,6 +1194,53 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
   }
 
   /** a cypress: a dark spindle of leaves on a short trunk */
+  /** a trunk: a tube along its points, tapering, bark */
+  function trunkOf(pts: Array<[number, number, number]>, girth: number) {
+    const SEG = 7;
+    const ring = (q: number) => {
+      const p = pts[q], n = pts[Math.min(pts.length - 1, q + 1)], m = pts[Math.max(0, q - 1)];
+      let t: V3 = [n[0] - m[0], n[1] - m[1], n[2] - m[2]]; const tl = Math.hypot(...t) || 1; t = [t[0] / tl, t[1] / tl, t[2] / tl];
+      const u0: V3 = Math.abs(t[1]) < 0.9 ? [0, 1, 0] : [1, 0, 0];
+      let a: V3 = [t[1] * u0[2] - t[2] * u0[1], t[2] * u0[0] - t[0] * u0[2], t[0] * u0[1] - t[1] * u0[0]]; const al = Math.hypot(...a) || 1; a = [a[0] / al, a[1] / al, a[2] / al];
+      const c: V3 = [t[1] * a[2] - t[2] * a[1], t[2] * a[0] - t[0] * a[2], t[0] * a[1] - t[1] * a[0]];
+      const r = girth * (1 - 0.45 * (q / Math.max(1, pts.length - 1))) * (q === 0 ? 1.35 : 1);
+      return Array.from({ length: SEG }, (_, s) => { const g = (s / SEG) * Math.PI * 2; return { p: [p[0] + (a[0] * Math.cos(g) + c[0] * Math.sin(g)) * r, p[1] + (a[1] * Math.cos(g) + c[1] * Math.sin(g)) * r, p[2] + (a[2] * Math.cos(g) + c[2] * Math.sin(g)) * r] as V3, n: [a[0] * Math.cos(g) + c[0] * Math.sin(g), a[1] * Math.cos(g) + c[1] * Math.sin(g), a[2] * Math.cos(g) + c[2] * Math.sin(g)] as V3 }; });
+    };
+    for (let q = 0; q + 1 < pts.length; q++) { const A = ring(q), B = ring(q + 1); for (let s = 0; s < SEG; s++) { const s1 = (s + 1) % SEG; quad(A[s].p, A[s1].p, B[s1].p, B[s].p, A[s].n, 0.55 + 0.1 * q, MAT.bark); } }
+  }
+  /** a clump of leaves: a rounded mass, a little flat beneath */
+  function clump(c: { x: number; y: number; z: number; r: number }) {
+    lathe(c.x, c.z, Array.from({ length: 8 }, (_, n) => { const t = (n / 7) * Math.PI; return [Math.sin(t) * c.r * (1 + 0.07 * Math.sin(n * 2.1 + c.x * 7)), c.y - c.r * 0.5 + c.r * 0.9 * (1 - Math.cos(t))] as [number, number]; }), MAT.leaves, 11);
+  }
+  /** a tree grown out (plants.ts): its trunk, and its crown's clumps */
+  function tree(g: ReturnType<typeof grow>, i: number, j: number, k: number, born: number) {
+    cur = { born, pivot: k, how: 2, tone: 0.5, dress: 0, sel: selected.has(key(k, i, j)) };
+    trunkOf(g.trunk, g.girth);
+    leaf = g.kind === PLANT.pine ? 2 : 1;
+    g.crown.forEach((c, n) => { cur.tone = 0.35 + 0.3 * ((n * 37) % 10) / 10; clump(c); });
+    leaf = 0;
+  }
+  /** a shrub: a rounded bush, waist high */
+  function shrubAt(i: number, j: number, k: number, born: number) {
+    cur = { born, pivot: k, how: 2, tone: 0.55, dress: 0, sel: selected.has(key(k, i, j)) };
+    leaf = 3; clump({ x: X(i) + 0.5, y: k + 0.28, z: Z(j) + 0.5, r: 0.34 }); leaf = 0;
+  }
+  /** a hedge: clipped box, joined to the hedge beside it, a little narrower than its cell */
+  function hedge(i: number, j: number, k: number, born: number) {
+    cur = { born, pivot: k, how: 2, tone: 0.5, dress: 0, sel: selected.has(key(k, i, j)) };
+    const cx = X(i) + 0.5, cz = Z(j) + 0.5, R = 0.32, H = 0.72, arm = DIRS.map(([a, b]) => w.plant(k, i + a, j + b) === PLANT.hedge);
+    leaf = 3;
+    box(cx - R, cx + R, k, k + H, cz - R, cz + R, MAT.leaves, [0.6, 0.6, 1, 1]);
+    for (let d = 0; d < 4; d++) if (arm[d]) { const [a, b] = DIRS[d]; box(a > 0 ? cx + R : a < 0 ? cx - 0.5 : cx - R, a > 0 ? cx + 0.5 : a < 0 ? cx - R : cx + R, k, k + H, b > 0 ? cz + R : b < 0 ? cz - 0.5 : cz - R, b > 0 ? cz + 0.5 : b < 0 ? cz - R : cz + R, MAT.leaves, [0.6, 0.6, 1, 1]); }
+    leaf = 0;
+  }
+  /** a planter: a low stone kerb round a plant on a top, earth inside it */
+  function planter(k: number, i: number, j: number, born: number) {
+    cur = { born, pivot: k, how: 1, tone: 0.5, dress: 0, sel: false };
+    const x0 = X(i) + 0.1, x1 = X(i) + 0.9, z0 = Z(j) + 0.1, z1 = Z(j) + 0.9, T = 0.08, Hh = 0.24;
+    box(x0, x1, k, k + Hh, z0, z0 + T, MAT.stone); box(x0, x1, k, k + Hh, z1 - T, z1, MAT.stone); box(x0, x0 + T, k, k + Hh, z0, z1, MAT.stone); box(x1 - T, x1, k, k + Hh, z0, z1, MAT.stone);
+    quad([x0 + T, k + Hh - 0.04, z0 + T], [x1 - T, k + Hh - 0.04, z0 + T], [x1 - T, k + Hh - 0.04, z1 - T], [x0 + T, k + Hh - 0.04, z1 - T], [0, 1, 0], 0.6, MAT.bark);
+  }
   function cypress(i: number, j: number, y0: number, born: number, how = 2) {
     const cx = X(i) + 0.5, cz = Z(j) + 0.5, Ht = 1.85, SEG = 12, RINGS = 16, seed = i * 31 + j * 17;
     cur = { born, pivot: y0, how, tone: 0.5, dress: 0, sel: selected.has(key(y0, i, j)) };

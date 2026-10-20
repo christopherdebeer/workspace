@@ -89,11 +89,12 @@ await withWood(async (lab) => {
   const pr = await probe();
   c.ok('trace from a top up to a higher top: steps and landings', pr.whys.at(-1) === 'stairs' && pr.stairs >= 1, pr);
   c.ok('and the landings along the wall rest on it', await W((w) => w.stone(1, 5, 7) && w.stone(1, 6, 7)));
-  // (too steep for a flight along the stroke: a stair tower instead, beside the terrace, climbing inside; undone after)
+  // (too steep for a flight along the stroke: folded back beside it, a switchback, or else a ladder or a stair tower;
+  // whichever, climbed to the terrace; undone after)
   { const n0 = (await probe()).ops;
     await drag([[9, 6, 0], [9, 5, 0], [9, 4, 3]]);
     const pr = await probe();
-    c.ok('a climb too steep for a flight: a stair tower, and it can be climbed', pr.ops === n0 + 1 && pr.whys.at(-1) === 'tower' && await W((w) => w.stone(2, 9, 5)), { n0, pr, last: await W((w) => JSON.stringify(w.ops.at(-1))) });
+    c.ok('a climb too steep for a flight: a switchback (or a ladder, or a stair tower), and it reaches the terrace', pr.ops === n0 + 1 && ['stairs', 'ladder', 'tower'].includes(pr.whys.at(-1)) && await W((w) => w.ops.at(-1).stairs?.length || w.ops.at(-1).ladders?.length || w.stone(2, 9, 5)), { n0, pr, last: await W((w) => JSON.stringify(w.ops.at(-1))) });
     await p.evaluate(() => { const w = window.__labyrinth.world; w.undo(0); }); }
   // (the take brush: a stroke over the wall under the walkway carves it)
   await p.evaluate(() => window.__labyrinth.setBrush('take'));

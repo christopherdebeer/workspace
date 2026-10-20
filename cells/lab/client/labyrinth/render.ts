@@ -33,7 +33,7 @@ void main() {
 const PIERCE = `
 bool pierced(vec3 p, vec3 n, float m) {
   int mi = int(m + .5) % 256;
-  if ((mi / 64) % 4 != 3 || abs(n.y) > .5) return false;
+  if ((mi / 64) % 4 != 3 || abs(n.y) > .5 || mi % 16 == 3) return false;
   float u = abs(n.x) > .5 ? p.z : p.x, v = p.y;
   if (mi % 16 == 15) {
     // (a mashrabiya's lattice: fine turned spindles in a grid, small square lights between)
@@ -183,7 +183,16 @@ void main() {
   float landFeat = 0.;
   if (fur) { base = coat(m0 - 512, vU, n, vTone); wrap = .5; }
   else if (mat == 2) base = vec3(.13, .25, .25);
-  else if (mat == 3) { base = mix(vec3(.10, .17, .08), vec3(.20, .27, .12), fbm(vPos * 7.)) * (.8 + .4 * vTone); wrap = .35; }
+  else if (mat == 3) {
+    // (leaves, by kind: a cypress's dark green; an olive's grey-green, silver where it turns; a stone pine's deep
+    // blue-green; clipped box, a brighter green)
+    float f = fbm(vPos * 7.);
+    if (kind == 1) base = mix(vec3(.24, .29, .20), vec3(.42, .46, .36), f);
+    else if (kind == 2) base = mix(vec3(.07, .15, .10), vec3(.15, .23, .14), f);
+    else if (kind == 3) base = mix(vec3(.13, .23, .08), vec3(.25, .35, .13), f);
+    else base = mix(vec3(.10, .17, .08), vec3(.20, .27, .12), f);
+    base *= .8 + .4 * vTone; wrap = .35;
+  }
   else if (mat == 4) base = vec3(.32, .24, .17);
   else if (mat == 9) base = vec3(1.);
   else if (mat == 11) {

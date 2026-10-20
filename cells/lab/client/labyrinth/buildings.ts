@@ -229,7 +229,8 @@ function find(w: World): Buildings {
     }
     // (a roof, where the top isn't walked and nothing's been put on it)
     const rule = w.rules.get(id) ?? 0;
-    const dressedTop = cols.some(([x, z]) => { const d = w.dressed(h - 1, x, z); return !!(d?.prop || d?.parapet); });
+    // (or something's growing up there: a roof garden, never a roof over a tree)
+    const dressedTop = cols.some(([x, z]) => { const d = w.dressed(h - 1, x, z); return !!(d?.prop || d?.parapet) || w.tree(h, x, z); });
     // (and never over water let into its top)
     const watered = cols.some(([x, z]) => w.basin(h, x, z));
     // (the part of its plan a roof would go over: all of it, or what's left beside a terrace)

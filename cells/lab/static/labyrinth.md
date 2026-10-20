@@ -95,6 +95,16 @@ What's built and the land it's on ask things of each other (`context.ts`, `build
 ![water: a tower's basin spilling onto a terrace's, that one into a bowl on the ground; a channel along a wall spilling at its end; a pond filled by a stroke drawn round](labyrinth/v-water.jpg)
 ![close: the spout's lip, the sheet, the foam, the bowl](labyrinth/v-water-close.jpg)
 
+## What grows
+
+A third intent beside **mass** and **way**: **green** (`green.ts`, `plants.ts`). Plants come in sizes, each standing in its cell (nothing's built or walked there), each a size up from the last, so a plant made again grows: a **shrub** (waist high), a **hedge** (clipped, joined to the hedge beside it), a **cypress** (slender, two levels), an **olive** (a gnarled trunk, a round silver-green crown over head height), a **stone pine** (a tall leaning trunk, an umbrella crown two cells out, high over walls).
+
+- **A tap** plants what suits the place: against a wall, a cypress; on a top, an olive in a planter (and that top is a roof garden: never roofed over); in the open, an olive. Tapped again it grows: shrub to olive, olive to stone pine. The other kinds are the other readings.
+- **A stroke** plants a row: along a wall or a way, an avenue of cypresses; in the open, olives; a hedge, an avenue of stone pines, shrubs, the other readings. **A ring** plants a grove of olives in what it encloses; an orchard in rows, or a hedge round it, the others. Never in a way the hand made, a stair's way, or water.
+- **How they meet what's built**, with no rule for each: a crown leans away from tall stone beside it, toward the open side, and a clump of it that would be in stone isn't (a crown pruned round a wall, a terrace built up under it); stone laid round a trunk leaves it a pit; a big court grows an olive in a corner, a smaller one a cypress. Checked in `devtools/labyrinth-plants.mjs` (seven scenes, eight orientations).
+
+![what grows: a stone pine leaning from a wall; a terrace laid round an olive (its pit); an olive in a planter on a roof garden; a hedge and shrubs; tapped, grown, and a cypress against a wall; an avenue of cypresses and a grove of olives; a garden court](labyrinth/v-plants.jpg)
+
 ## The cats
 
 What's built has residents (`cats.ts`). They show how a place can be lived in: a warm ledge becomes a bed, a coping a way to balance along, a court somewhere to play.

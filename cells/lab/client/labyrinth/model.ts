@@ -56,6 +56,8 @@ export interface Op {
   /** ladders: the cell at a ladder's foot (where it stands), the way it leans (a DIRS index, toward the stone it's
    * against), how many levels it climbs (to the top of that stone), when */
   ladders?: Array<[number, number, number, number, number, number]>;
+  /** plants of a kind (`PLANT`): the cell it stands in (the level it grows from), its kind, when */
+  plants?: Array<[number, number, number, number, number]>;
   /** cypresses (on a floor) and pools (let into the stone): cell, when */
   trees?: Array<[number, number, number, number]>; pools?: Array<[number, number, number]>;
   /** water let into a top, up off the ground: a basin; its cell (the level of the water, over the stone it's let into),
@@ -137,6 +139,16 @@ export function soffit(f: Flight, u: number): number {
   return yb + (ye - yb) * Math.sqrt(Math.max(0, 1 - (1 - t) * (1 - t)));
 }
 /** a stair tower (kept at its foot): a building however slim, its door at its foot facing the way `tower + d` says */
+/**
+ * What grows, by size: a **shrub** (waist high, a cell), a **hedge** (clipped, a cell of a row that joins its
+ * neighbours), a **cypress** (slender, two levels), an **olive** (a gnarled trunk and a round crown a cell out each way,
+ * over head height), a **stone pine** (a tall leaning trunk, an umbrella crown two cells out each way, high over walls).
+ * Each stands in its cell (nothing's built or walked there, as a cypress's), and each a size up from the one before it,
+ * so a plant made again grows (`gesture.ts`).
+ */
+export const PLANT = { cypress: 0, shrub: 1, hedge: 2, olive: 3, pine: 4 } as const;
+/** how many levels of a plant's cell (and over it) its trunk or body takes, and how high it reaches */
+export const PLANT_TALL = [2, 1, 1, 2, 4];
 export const isTower = (r: number | undefined) => r !== undefined && r >= RULE.tower && r < RULE.tower + 4;
 /** dressing: three stones (travertine is the stone's own), then what's on it */
 export const DRESS = { travertine: 0, brick: 1, marble: 2, moss: 3, ivy: 4, parapet: 5, lantern: 6, pot: 7, balustrade: 8, jali: 9, pergola: 10, mashrabiya: 11, colonnettes: 12 } as const;
@@ -170,7 +182,7 @@ export interface Alt { label: string; op: Op }
 export interface Reached { reached: boolean; stopped: number; cells: Cell[] }
 /** an arch, carrying a run of stone along an axis (0 x, 1 z): its level, first cell, length, and the level it springs from */
 export interface Span { k: number; a: number; i: number; j: number; n: number; low: number; born: number; /** a flat lintel, not an arch */ flat?: boolean; /** carried as part of a colonnade: on columns, under an entablature */ order?: 'colonnade' }
-export interface Decor { kind: 'pool' | 'cypress' | 'pot'; i: number; j: number; born: number }
+export interface Decor { kind: 'pool' | 'cypress' | 'pot' | 'olive'; i: number; j: number; born: number }
 /** water falling: from a basin's spout (its cell, the way it spills), down to where it lands (that column's surface,
  * and whether that's water, or a bowl the rules put there to catch it) */
 export interface Fall { k: number; i: number; j: number; d: number; land: number; into: 'water' | 'bowl' | 'stone'; born: number }
@@ -253,6 +265,8 @@ export class World {
   meetings: Meeting[] = [];
   private bridged = new Set<number>();
   trees = new Map<number, number>();
+  /** what each tree is (`PLANT`; a cypress if it isn't said) */
+  treeKind = new Map<number, number>();
   /** ladders, by the cell at the foot: the way each leans, how many levels it climbs, when */
   ladders = new Map<number, { d: number; n: number; born: number }>();
   pools = new Map<number, number>();
@@ -311,6 +325,8 @@ export class World {
   /** stone with a way through it: which way (0 x, 1 z), or −1 */
   archway(k: number, i: number, j: number): number { return inGrid(i, j) ? this.archways.get(key(k, i, j)) ?? -1 : -1; }
   tree(k: number, i: number, j: number) { return inGrid(i, j) && this.trees.has(key(k, i, j)); }
+  /** the kind of plant growing from a cell (`PLANT`), or -1 */
+  plant(k: number, i: number, j: number): number { return this.tree(k, i, j) ? this.treeKind.get(key(k, i, j)) ?? PLANT.cypress : -1; }
   /** stone laid as a bridge's */
   bridge(k: number, i: number, j: number) { return inGrid(i, j) && this.bridged.has(key(k, i, j)); }
   /** stone a connection laid (not the hand's own) */
@@ -345,7 +361,7 @@ export class World {
   private tall = 0;
   /** how many levels there are to look through: what's built, and the air over it */
   levels = 1;
-  private measureTop() { let t = this.land ? Math.max(...this.land.g) : 0; for (const v of [...this.mass.keys(), ...this.stairs.keys()]) t = Math.max(t, unkey(v)[0] + 1); for (const v of this.trees.keys()) t = Math.max(t, unkey(v)[0] + 2); return t; }
+  private measureTop() { let t = this.land ? Math.max(...this.land.g) : 0; for (const v of [...this.mass.keys(), ...this.stairs.keys()]) t = Math.max(t, unkey(v)[0] + 1); for (const [v] of this.trees) t = Math.max(t, unkey(v)[0] + PLANT_TALL[this.treeKind.get(v) ?? 0]); return t; }
   born(k: number, i: number, j: number) { return this.mass.get(key(k, i, j)) ?? this.stairs.get(key(k, i, j))?.born ?? this.piers.get(key(k, i, j)) ?? this.trees.get(key(k, i, j)) ?? -1e3; }
 
   // ─── what the hand did ───
@@ -393,7 +409,7 @@ export class World {
   /** `list` replayed into the intended solid, and that resolved */
   private build(list: Op[], now: number) {
     this.now = now;
-    this.mass.clear(); this.stairs.clear(); this.archways.clear(); this.thin.clear(); this.bridged.clear(); this.trees.clear(); this.pools.clear(); this.basins.clear(); this.passages.clear(); this.firstOp.clear(); this.walks.clear(); this.choices.clear();
+    this.mass.clear(); this.stairs.clear(); this.archways.clear(); this.thin.clear(); this.bridged.clear(); this.trees.clear(); this.treeKind.clear(); this.pools.clear(); this.basins.clear(); this.passages.clear(); this.firstOp.clear(); this.walks.clear(); this.choices.clear();
     this.laid.clear(); this.reached.clear(); this.rules.clear(); this.dress.clear(); this.paving.clear();
     // (and what was worked out from them last time (piers, spans, courts and their pools, basins' water), so nothing laid
     // now is laid against what was there before: a world rebuilt is the same world, however often)
@@ -428,7 +444,8 @@ export class World {
       }
       for (const [k, i, j, a, b] of op.arches ?? []) if (k >= 0 && k < CEIL && inGrid(i, j)) { this.stairs.delete(key(k, i, j)); this.thin.delete(key(k, i, j)); this.mass.set(key(k, i, j), b); this.archways.set(key(k, i, j), a); }
       for (const [k, i, j, a, b] of op.walls ?? []) if (k >= 0 && k < CEIL && inGrid(i, j)) { this.stairs.delete(key(k, i, j)); this.archways.delete(key(k, i, j)); if (this.passages.has(key(k, i, j))) { this.place(k, i, j, b); continue; } this.mass.set(key(k, i, j), b); this.thin.set(key(k, i, j), a); }
-      for (const [k, i, j, b] of op.trees ?? []) if (inGrid(i, j)) this.trees.set(key(k, i, j), b);
+      for (const [k, i, j, b] of op.trees ?? []) if (inGrid(i, j)) { this.trees.set(key(k, i, j), b); this.treeKind.delete(key(k, i, j)); }
+      for (const [k, i, j, kind, b] of op.plants ?? []) if (inGrid(i, j) && !this.mass.has(key(k, i, j))) { this.trees.set(key(k, i, j), this.trees.get(key(k, i, j)) ?? b); this.treeKind.set(key(k, i, j), kind); }
       for (const [i, j, b] of op.pools ?? []) if (inGrid(i, j)) this.pools.set(key(0, i, j), b);
       for (const [k, i, j, b] of op.basins ?? []) if (inGrid(i, j) && k > 0 && k < CEIL) this.basins.set(key(k, i, j), b);
       for (const [i, j] of op.pave ?? []) if (inGrid(i, j) && !this.pool(i, j) && !this.occupied(this.ground(i, j), i, j)) this.paving.add(key(0, i, j));
@@ -480,6 +497,8 @@ export class World {
    * either side); elsewhere, stone */
   private place(k: number, i: number, j: number, born: number) {
     const v = key(k, i, j);
+    // (round a tree's trunk, a pit left for it: stone laid where it grows goes round it, as a passage's goes over it)
+    if (this.trees.has(v) || (k > 0 && this.trees.has(key(k - 1, i, j)) && (PLANT_TALL[this.treeKind.get(key(k - 1, i, j)) ?? 0] > 1))) return;
     this.mass.set(v, this.mass.get(v) ?? born);
     const a = this.passages.get(v);
     if (a !== undefined) { this.archways.set(v, a); this.thin.delete(v); }
@@ -966,7 +985,8 @@ export class World {
         const corners = region.filter(([x, z]) => !this.way(this.ground(x, z), x, z) && !this.pier(this.ground(x, z), x, z) && !pools.some((p) => p[0] === x && p[1] === z) && DIRS.filter(([a, b]) => !inside.has(key(0, x + a, z + b))).length >= 2);
         if (corners.length) {
           const q = hash(this.seed, id) % corners.length, [x, z] = corners[q];
-          this.decor.push({ kind: 'cypress', i: x, j: z, born: this.first(`t${x}.${z}`, when) });
+          // (a big court, an olive spreading over its corner; a smaller one, a cypress standing up out of it)
+          this.decor.push({ kind: region.length >= 20 ? 'olive' : 'cypress', i: x, j: z, born: this.first(`t${x}.${z}`, when) });
           // (and, as it happens, pots in the other corners)
           for (const [n, [px, pz]] of corners.entries()) if (n !== q && hash(this.seed, px, pz, 77) % 100 < 45) this.decor.push({ kind: 'pot', i: px, j: pz, born: this.first(`o${px}.${pz}`, when) });
         }
@@ -1048,7 +1068,7 @@ export class World {
     const z = <T,>(a: T[] | undefined) => (a?.length ? a : 0);
     const ops = this.ops.map((o) => {
       const e: unknown[] = [o.add?.map((c) => c.slice(0, 3)) ?? 0, o.stairs?.map((c) => c.slice(0, 4)) ?? 0, o.cut ?? 0, o.arches?.map((c) => c.slice(0, 4)) ?? 0, o.trees?.map((c) => c.slice(0, 3)) ?? 0, o.pools?.map((c) => c.slice(0, 2)) ?? 0, o.bridge ? 1 : 0, o.connect ? [o.connect.from, o.connect.to, o.connect.path, ...(o.connect.rest?.length || o.connect.follow ? [o.connect.rest ?? 0] : []), ...(o.connect.follow ? [1] : [])] : 0, o.dress ?? 0, o.rule ?? 0, o.walls?.map((c) => c.slice(0, 4)) ?? 0,
-        z(o.basins?.map((c) => c.slice(0, 3))), z(o.pave), z(o.choose), z(o.ladders?.map((c) => c.slice(0, 5)))];
+        z(o.basins?.map((c) => c.slice(0, 3))), z(o.pave), z(o.choose), z(o.ladders?.map((c) => c.slice(0, 5))), z(o.plants?.map((c) => c.slice(0, 4)))];
       while (e.length > 11 && e[e.length - 1] === 0) e.pop();
       return e;
     });
@@ -1076,6 +1096,7 @@ export function replay(text: string, seed = 1): World {
       pave: (at(12) as Array<[number, number]> | null) ?? undefined,
       choose: (at(13) as Array<[number, number, number, number]> | null) ?? undefined,
       ladders: at(14)?.map((c) => [c[0], c[1], c[2], c[3], c[4], -100] as [number, number, number, number, number, number]),
+      plants: at(15)?.map((c) => [c[0], c[1], c[2], c[3], -100] as [number, number, number, number, number]),
     });
   }
   w.rebuild(-100);

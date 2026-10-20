@@ -25,6 +25,7 @@
 import { hash } from '../kit/rng';
 import { standing, through } from './nav';
 import { buildings, underRoof } from './buildings';
+import { plantStroke, plantTap } from './green';
 import { CEIL, DIRS, DRESS, RULE, World, inGrid, key, straighten, straights, unkey, type Alt, type Cell, type Op } from './model';
 
 /** what a touch struck: the stone slab (`hit[0]` −1), a top, or a side; `hit` the cell struck, `to` the free cell on that
@@ -46,6 +47,8 @@ export const tapCell = (w: World, p: Pick): Cell => (p.face === 'ground' ? [w.gr
 export interface Refusal { refused: string; alts?: Alt[] }
 
 export function tap(w: World, p: Pick, now: number, anyway = false, intent: Intent = 'mass'): Op | Refusal | null {
+  // (the green intent: what grows there (green.ts))
+  if (intent === 'green') return plantTap(w, p.face === 'side' ? p.to : p.hit, now);
   // (a way's touch on the land's ground: a place to stand, not a block)
   if (intent === 'way' && w.land && p.face === 'ground' && !anyway) { const op = placeToStand(w, p, now); if (op) return op; }
   // (a way's touch on a top: a way up on to it)
@@ -249,6 +252,8 @@ export function adds(w: World, op: Op): number {
  * of thing than was drawn is the hand's to choose.
  */
 export function trace(w: World, start: Pick, path: Array<[number, number]>, end: Pick | null, born: (i: number, j: number) => number, now = 0, rest: Array<[number, number]> = [], intent: Intent = 'mass'): Op | Refusal | null {
+  // (the green intent: a row along it, or a grove in what it rings (green.ts))
+  if (intent === 'green') { const walked = walk(path); return plantStroke(w, walked.closed ? walked.cells : unjog(walked.cells), walked.closed, now); }
   const op = laid(w, start, path, end, born, now, rest, intent);
   // (only a way can meet another, so far: the rest needn't be tried)
   return op && !('refused' in op) && op.connect ? meeting(w, op) : op;
@@ -550,7 +555,7 @@ function read(w: World, start: Pick, path: Array<[number, number]>, end: Pick | 
 
 /** what a stroke's for: mass (raise, extend, enclose: a stroke on the ground is a wall) or a way (it connects places,
  * and the land says how: paving, flights, a bridge) */
-export type Intent = 'mass' | 'way';
+export type Intent = 'mass' | 'way' | 'green';
 
 /**
  * A way, along the stroke as it was drawn, from where it started to where it ended (a top, or the ground: the end of
