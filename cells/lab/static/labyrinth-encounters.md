@@ -208,6 +208,8 @@ What the exercise asked of the engine is now its foundation (`client/labyrinth/e
 
 The first rule, **ways meet** (encounters 12 and 19, and Astra's two bridges meeting diagonally): two raised ways of the hand's ending corner to corner, a cell apart in line, or a way a cell short of a top at its height. Rungs: a corner slab, or the gap closed; a small terrace or landing where they meet; that on its own pier, with a lantern.
 
+The second rule, **ways a level apart** (Astra's "two bridges cross at different heights": a connection offered by the geometry, not forced): two of the hand's ways side by side, one a level higher, a cell between them where a step would go. Rungs: left as they are (the layering legible; the restrained answer, and the default); a step between them; the step with a lantern at its head. Adding it took about forty lines of rule and an eight-line scene, and it passed every generic check in all eight orientations on its first run; the one thing the unit tests found (a derived step whose own way the hand's stone stood in) was fixed in the framework (a stair a candidate lays must have its way clear), so every later rule has it. A rung can also lay nothing (its verb *separate*); the walk check skips it, and the meeting stays selectable at its anchor.
+
 ### Adding an encounter
 
 1. Write the rule in `encounters.ts`: `find(w)` returns meetings, each `{ rule, name, anchor, cells, by, candidates, insists? }`; candidates are operations made with the verbs (add a verb if a new kind of change is needed, once, for every rule after).

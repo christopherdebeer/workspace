@@ -129,11 +129,49 @@ const waysMeet: Rule = {
   },
 };
 
+/**
+ * Two of the hand's ways side by side a level apart, a cell between them where a step would go (one's walk at k beside
+ * that cell, the other's at k + 1 beyond it, in line). The ladder: left as they are, two ways at two levels (often the
+ * best answer: the layering's legible); a step between them; the step, a lantern at its head.
+ */
+const levelApart: Rule = {
+  id: 'ways-a-level-apart',
+  find(w) {
+    const out: Found[] = [], upper = new Map<number, number>(), seen = new Set<number>(), pairs = new Set<string>();
+    const walks = w.ops.map((op) => w.walks.get(op) ?? []);
+    walks.forEach((cs, n) => { for (const c of cs) if (!upper.has(key(...c))) upper.set(key(...c), n); });
+    walks.forEach((cs, a) => {
+      for (const lo of cs) {
+        const [k, i, j] = lo;
+        for (const [d, [dx, dz]] of DIRS.entries()) {
+          const s: Cell = [k, i + dx, j + dz], u: Cell = [k + 1, i + 2 * dx, j + 2 * dz], b = upper.get(key(...u)) ?? -1;
+          // (one step between any two ways: the first place along them it would go)
+          if (b < 0 || b === a || seen.has(key(...s)) || pairs.has(`${a}.${b}`)) continue;
+          // (room for a step: nothing there or over it, and something it can stand on, or air over open ground to lay it on)
+          if (!inGrid(s[1], s[2]) || w.occupied(...s) || w.occupied(k + 1, s[1], s[2]) || w.claim(...s) || w.claim(k + 1, s[1], s[2]) || (k > w.ground(s[1], s[2]) && w.occupied(k - 1, s[1], s[2]) && !w.stone(k - 1, s[1], s[2]))) continue;
+          seen.add(key(...s)); pairs.add(`${a}.${b}`);
+          const born = Math.max(w.ops[a].born ?? 0, w.ops[b].born ?? 0);
+          const step = join(k > w.ground(s[1], s[2]) && !w.stone(k - 1, s[1], s[2]) ? floor(w, s, born) : {}, { stairs: [[k, s[1], s[2], d, born]] });
+          out.push({
+            rule: this.id, name: 'two ways side by side, a level apart', anchor: s, cells: [lo, s, u], by: [a, b], insists: ways,
+            candidates: [
+              { level: 0, label: 'two ways at two levels, left as they are', verbs: ['separate'], op: {} },
+              { level: 1, label: 'a step between them', verbs: ['step'], op: step },
+              { level: 2, label: 'a step between them, a lantern at its head', verbs: ['step', 'frame'], op: join(step, lantern(u)) },
+            ],
+          });
+        }
+      }
+    });
+    return out;
+  },
+};
+
 /** what counts as making two ways' meeting again: another way (not the stone round it) */
 const ways = (op: Op) => !!op.connect || !!op.pave?.length;
 
 /** every rule, in the order they're resolved (a later one never lays where an earlier one has) */
-export const RULES: Rule[] = [waysMeet];
+export const RULES: Rule[] = [waysMeet, levelApart];
 
 // ─── resolving them ───
 
@@ -143,6 +181,11 @@ const lays = (op: Op): Cell[] => [...(op.add ?? []), ...(op.walls ?? []), ...(op
  * any of them), and stays out of what other meetings have laid */
 function keeps(w: World, c: Candidate, taken: Set<number>): boolean {
   for (const cell of lays(c.op)) if (taken.has(key(...cell)) || w.occupied(...cell) || w.claim(...cell)) return false;
+  // (and a stair it lays has its own way clear: its foot, the room over it, its head and the room over that)
+  for (const [k, i, j, d] of c.op.stairs ?? []) {
+    const [a, b] = DIRS[d], way: Cell[] = [[k, i - a, j - b], [k + 1, i, j], [k + 1, i + a, j + b], [k + 2, i + a, j + b]];
+    if (way.some((q) => w.occupied(...q) || taken.has(key(...q)))) return false;
+  }
   for (const [i, j] of c.op.pave ?? []) if (taken.has(key(w.ground(i, j), i, j)) || w.claim(w.ground(i, j), i, j) === 'water') return false;
   return true;
 }
@@ -167,7 +210,7 @@ export function meet(w: World): Op[] {
     const wanted = choice ?? Math.min(top, insistence(w, m));
     const fit = m.candidates.filter((c) => c.level <= wanted && keeps(w, c, taken)).sort((p, q) => q.level - p.level)[0];
     found.push({ ...m, wanted, laid: fit ? fit.level : -1, chosen: choice !== undefined, at: fit ? [...lays(fit.op), ...(fit.op.pave ?? []).map(([i, j]) => [w.ground(i, j), i, j] as Cell)] : [] });
-    if (!fit) continue;
+    if (!fit || !Object.keys(fit.op).length) continue;
     for (const c of lays(fit.op)) taken.add(key(...c));
     for (const [i, j] of fit.op.pave ?? []) taken.add(key(w.ground(i, j), i, j));
     out.push({ ...fit.op, derived: true, why: 'meeting', note: fit.label, born: Math.max(...m.by.map((q) => w.ops[q].born ?? 0)) });
@@ -177,6 +220,6 @@ export function meet(w: World): Op[] {
 }
 
 /** the meeting whose resolution a cell is (a slab or landing it laid), if any */
-export const meetingAt = (w: World, [k, i, j]: Cell): Meeting | null => w.meetings.find((m) => m.at.some((c) => c[0] === k && c[1] === i && c[2] === j)) ?? null;
+export const meetingAt = (w: World, [k, i, j]: Cell): Meeting | null => w.meetings.find((m) => (m.at.length ? m.at : [m.anchor]).some((c) => c[0] === k && c[1] === i && c[2] === j)) ?? null;
 /** a meeting's readings, as the hand chooses among them: each rung's operation is the choice, kept */
 export const readingsOf = (m: Meeting): Array<{ label: string; op: Op }> => m.candidates.map((c) => ({ label: c.label, op: { choose: [[...m.anchor, c.level]], why: 'reading', note: c.label } }));

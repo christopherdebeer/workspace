@@ -57,9 +57,10 @@ function meetings(w, tag, expect) {
       ok(`${tag}: chosen, rung ${c.level} (${c.label}) is what's laid`, n?.laid === c.level, n && { laid: n.laid, wanted: n.wanted });
       const intoClaims = (n?.at ?? []).filter(([k, i, j]) => (v.passage(k, i, j) >= 0 && !v.archway(k, i, j)) || v.way(k, i, j));
       ok(`${tag}: rung ${c.level} lays nothing in a passage or a stair's way`, !intoClaims.length, intoClaims);
-      // (walked between: from one's end to the other's, or to the top it fell short of)
+      // (walked between: from one's end to the other's, or to the top it fell short of; unless this rung is to leave
+      // them apart)
       const to = ends.length > 1 ? ends[1] : m.cells[m.cells.length - 1];
-      ok(`${tag}: at rung ${c.level}, walked between, end to end`, walks(v, ends[0], to), { from: ends[0], to });
+      if (!c.verbs.includes('separate')) ok(`${tag}: at rung ${c.level}, walked between, end to end`, walks(v, ends[0], to), { from: ends[0], to });
       const here = new Set((n?.at ?? []).map((q) => q.join()));
       if (below) ok(`${tag}: rung ${c.level} lays all that rung ${c.level - 1} does`, [...below].every((q) => here.has(q)), { below: [...below], here: [...here] });
       below = here;
@@ -166,6 +167,14 @@ const SCENES = [
       H.column([3, 3], 2); H.walkway([[3, 3], [4, 3], [5, 3], [6, 3]]);
       H.column([8, 3], 2); H.column([8, 4], 2);
       meetings(w, this.tag, 'ways-meet');
+    },
+  },
+  {
+    name: 'ways a level apart: two raised walkways side by side, one a level higher',
+    run(w, H) {
+      H.column([3, 3], 2); H.walkway([[3, 3], [4, 3], [5, 3], [6, 3], [7, 3], [8, 3]]);
+      H.column([3, 5], 3); H.walkway([[3, 5], [4, 5], [5, 5], [6, 5], [7, 5], [8, 5]]);
+      meetings(w, this.tag, 'ways-a-level-apart');
     },
   },
 ];
