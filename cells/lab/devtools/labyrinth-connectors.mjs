@@ -91,6 +91,31 @@ const SCENES = [
       ok(`${this.tag}: a door on the face the way arrives at`, !!door, b?.openings.filter((o) => o.kind === 'door'));
     },
   },
+  {
+    name: 'roof terrace seam: a bridge on to one edge of a roofed house keeps the rest of its roof',
+    run(w, H) {
+      for (let i = 6; i <= 8; i++) for (let j = 5; j <= 6; j++) H.column([i, j], 3);
+      const house = () => BU.buildings(w).list.find((x) => x.cols.some(([i, j]) => { const [a, c] = H.T([7, 5]); return i === a && j === c; }));
+      ok(`${this.tag}: the house roofed to begin with`, !!house()?.roof, house()?.roof);
+      H.column([3, 5], 3);
+      H.stroke([3, 5], [6, 5], 'mass', [6, 5]);
+      const b = house(), [ti, tj] = H.T([6, 5]);
+      ok(`${this.tag}: arrived on along one edge, that edge a terrace`, !!b?.terrace?.some(([i, j]) => i === ti && j === tj), b && { terrace: b.terrace, roof: b.roof });
+      ok(`${this.tag}: and the rest of it still roofed`, !!b?.roof && BU.underRoof(b).length >= 2, b && { roof: b.roof, under: BU.underRoof(b) });
+    },
+  },
+  {
+    name: 'stable identity: a house extended by a column keeps its windows',
+    run(w, H) {
+      for (const c of [[6, 6], [7, 6], [6, 7], [7, 7]]) H.column(c, 3);
+      const of = () => BU.buildings(w).list.find((x) => x.cols.some(([i, j]) => { const [a, c] = H.T([7, 7]); return i === a && j === c; }));
+      const before = of(), style = before?.openings.find((o) => o.kind === 'window')?.style, id = before?.id;
+      for (const c of [[5, 6], [6, 5], [5, 7], [8, 6]]) H.column(c, 3);
+      const after = of();
+      ok(`${this.tag}: the same identity`, after?.id === id, { id, after: after?.id });
+      ok(`${this.tag}: the same windows`, after?.openings.find((o) => o.kind === 'window')?.style === style, { style, after: after?.openings.find((o) => o.kind === 'window')?.style });
+    },
+  },
 ];
 
 const t0 = Date.now();

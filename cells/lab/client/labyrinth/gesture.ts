@@ -24,7 +24,7 @@
  */
 import { hash } from '../kit/rng';
 import { standing, through } from './nav';
-import { buildings } from './buildings';
+import { buildings, underRoof } from './buildings';
 import { CEIL, DIRS, DRESS, RULE, World, inGrid, key, straighten, straights, unkey, type Alt, type Cell, type Op } from './model';
 
 /** what a touch struck: the stone slab (`hit[0]` −1), a top, or a side; `hit` the cell struck, `to` the free cell on that
@@ -649,7 +649,7 @@ function sameTop(w: World, to: Cell, r: number): Array<[number, number]> {
 }
 
 /** the columns of the houses that are roofed (`i.j`): what a way walks round, never over */
-const roofed = (w: World) => new Set(buildings(w).list.filter((b) => b.roof).flatMap((b) => b.cols.map(([i, j]) => `${i}.${j}`)));
+const roofed = (w: World) => new Set(buildings(w).list.flatMap((b) => underRoof(b).map(([i, j]) => `${i}.${j}`)));
 
 /**
  * A way round what's in a stroke's way: the cheapest walk from its first cell to its last over the ground near it (four

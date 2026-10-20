@@ -190,6 +190,9 @@ export class World {
    * what was authored claims it: the rules' own work (a court's pool, a roof) doesn't.
    */
   passages = new Map<number, number>();
+  /** for each column, the first of the hand's operations (by its place in `ops`) that laid stone or steps in it: what
+   * an assembly's identity is anchored to, so it's never re-rolled by a later neighbour */
+  firstOp = new Map<number, number>();
   private bridged = new Set<number>();
   trees = new Map<number, number>();
   pools = new Map<number, number>();
@@ -287,7 +290,7 @@ export class World {
   /** the operations replayed into the intended solid, and that resolved */
   rebuild(now = 0) {
     this.now = now;
-    this.mass.clear(); this.stairs.clear(); this.archways.clear(); this.thin.clear(); this.bridged.clear(); this.trees.clear(); this.pools.clear(); this.basins.clear(); this.passages.clear();
+    this.mass.clear(); this.stairs.clear(); this.archways.clear(); this.thin.clear(); this.bridged.clear(); this.trees.clear(); this.pools.clear(); this.basins.clear(); this.passages.clear(); this.firstOp.clear();
     this.laid.clear(); this.reached.clear(); this.rules.clear(); this.dress.clear(); this.paving.clear();
     // (and what was worked out from them last time (piers, spans, courts and their pools, basins' water), so nothing laid
     // now is laid against what was there before: a world rebuilt is the same world, however often)
@@ -299,7 +302,15 @@ export class World {
       if (op.connect) hi = Math.max(hi, op.connect.from[0], op.connect.to?.[0] ?? 0);
     }
     this.levels = Math.min(CEIL - 4, hi + 2);
-    for (const op of this.ops) {
+    // (the columns each operation laid in, marked as the next begins: the first to lay in a column keeps it)
+    const mark = (n: number) => {
+      const o = this.ops[n]; if (!o) return;
+      const at = (i: number, j: number) => { if (inGrid(i, j) && !this.firstOp.has(key(0, i, j))) this.firstOp.set(key(0, i, j), n); };
+      for (const c of [...(o.add ?? []), ...(o.walls ?? []), ...(o.arches ?? []), ...(o.stairs ?? [])]) at(c[1], c[2]);
+      for (const c of this.reached.get(o)?.cells ?? []) at(c[1], c[2]);
+    };
+    for (const [n, op] of this.ops.entries()) {
+      mark(n - 1);
       if (op.connect) {
         // (stone and rules laid with it, first: a stair tower it walks to)
         for (const [k, i, j, b] of op.add ?? []) if (k >= 0 && k < CEIL && inGrid(i, j) && !this.stairs.has(key(k, i, j))) this.place(k, i, j, b);
@@ -338,6 +349,7 @@ export class World {
         this.dress.set(v, d);
       }
     }
+    mark(this.ops.length - 1);
     this.tall = this.measureTop(); this.levels = this.tall + 2;
     this.resolve();
     this.spill();

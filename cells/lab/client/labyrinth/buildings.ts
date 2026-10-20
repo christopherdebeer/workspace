@@ -36,6 +36,8 @@ export interface Building {
   inside: boolean;
   /** its top: walked (a way arrives there), and the roof on it if it isn't */
   walked: boolean; roof: Roof | null;
+  /** walked along one edge only: that edge a terrace, the roof over the rest of the plan (these bounds) */
+  roofPlan?: { i0: number; i1: number; j0: number; j1: number }; terrace?: Array<[number, number]>;
   /** where a roof the hand chose is kept: the lowest cell of its top */
   id: number;
   /** a roof sloping away from (the way it falls, for a shed) */
@@ -56,6 +58,8 @@ export function buildings(w: World): Buildings {
 export const opening = (w: World, k: number, i: number, j: number, d: number) => buildings(w).at.get(`${k}.${i}.${j}.${d}`) ?? null;
 /** where a figure could walk, ways inside buildings too */
 export const walkable = (w: World): Nav => navigate(w, buildings(w).inside);
+/** the columns a building's roof is over (none if it has none; not those of a terrace beside it) */
+export const underRoof = (b: Building): Array<[number, number]> => (b.roof ? b.cols.filter(([x, z]) => !b.terrace?.some(([p, q]) => p === x && q === z)) : []);
 
 function find(w: World): Buildings {
   const list: Building[] = [], at = new Map<string, Opening>(), inside: Array<[Cell, Cell]> = [], of = new Map<number, Building>();
@@ -97,7 +101,10 @@ function find(w: World): Buildings {
     const deep = cols.some(([x, z]) => has.has(`${x + 1}.${z}`) && has.has(`${x}.${z + 1}`) && has.has(`${x + 1}.${z + 1}`)), tower = (cols.length <= 2 && h >= 3) || !!stairTower;
     const whole = massOf.get(`${i}.${j}`);
     if (!deep && !tower && !(whole?.deep && whole.heights.size > 1)) continue;
-    const mine = new Set(cols.map(([x, z]) => `${x}.${z}`)), id = Math.min(...cols.map(([x, z]) => key(h - 1, x, z)));
+    // (its identity: the column first laid by the hand, the lowest of those if several (not the lowest of all its cells:
+    // a neighbour added later never re-rolls its windows, door or roof))
+    const first = Math.min(...cols.map(([x, z]) => w.firstOp.get(key(0, x, z)) ?? 1e9));
+    const mine = new Set(cols.map(([x, z]) => `${x}.${z}`)), id = Math.min(...cols.filter(([x, z]) => (w.firstOp.get(key(0, x, z)) ?? 1e9) === first).map(([x, z]) => key(h - 1, x, z)));
     const b: Building = { cols, h, i0, i1, j0, j1, rect: cols.length === (i1 - i0 + 1) * (j1 - j0 + 1), tower, openings: [], inside: false, walked: false, roof: null, id, fall: -1 };
     // (its faces: each column's sides that look out, at each level, and what's outside them)
     const faces: Array<{ k: number; i: number; j: number; d: number; out: Cell }> = [];
@@ -146,6 +153,20 @@ function find(w: World): Buildings {
       b.inside = ends.length >= 2;
     }
     b.walked = arrives;
+    // (come on to along one edge only (a way arriving on its top there): that edge a terrace, and the rest still under
+    // its roof, if two cells or more are left (the roof terrace seam of static/labyrinth-connective.md: never the whole
+    // roof lost to a step on to part of it))
+    if (arrives && b.rect && !stairTower) {
+      const come = cols.filter(([x, z]) => (nav.next.get(key(h, x, z)) ?? []).some((u) => !topSet.has(u)));
+      const sides: Array<[(c: [number, number]) => boolean, { i0: number; i1: number; j0: number; j1: number }]> = [
+        [([x]) => x === i0, { i0: i0 + 1, i1, j0, j1 }], [([x]) => x === i1, { i0, i1: i1 - 1, j0, j1 }],
+        [([, z]) => z === j0, { i0, i1, j0: j0 + 1, j1 }], [([, z]) => z === j1, { i0, i1, j0, j1: j1 - 1 }],
+      ];
+      for (const [on, rest] of sides) {
+        if (!come.length || !come.every(on) || (rest.i1 - rest.i0 + 1) * (rest.j1 - rest.j0 + 1) < 2) continue;
+        b.roofPlan = rest; b.terrace = cols.filter(on); break;
+      }
+    }
     // (windows: one style to a building; alternating along a front and from level to level; climbing round a tower
     // with a stair inside, a slit a level)
     const isDoor = (f: (typeof faces)[number]) => doors.some((g) => g.k === f.k && g.i === f.i && g.j === f.j && g.d === f.d);
@@ -160,16 +181,18 @@ function find(w: World): Buildings {
     const dressedTop = cols.some(([x, z]) => { const d = w.dressed(h - 1, x, z); return !!(d?.prop || d?.parapet); });
     // (and never over water let into its top)
     const watered = cols.some(([x, z]) => w.basin(h, x, z));
-    if (rule === RULE.noRoof || watered || (!rule && (b.walked || dressedTop || !b.rect))) b.roof = null;
+    // (the part of its plan a roof would go over: all of it, or what's left beside a terrace)
+    const R = b.roofPlan ?? { i0, i1, j0, j1 }, rcols = cols.filter(([x, z]) => x >= R.i0 && x <= R.i1 && z >= R.j0 && z <= R.j1), rmine = new Set(rcols.map(([x, z]) => `${x}.${z}`));
+    if (rule === RULE.noRoof || watered || (!rule && ((b.walked && !b.roofPlan) || dressedTop || !b.rect))) b.roof = null;
     else if (rule >= RULE.hipped && rule <= RULE.dome) b.roof = (['hipped', 'gable', 'shed', 'dome'] as const)[rule - RULE.hipped];
     else {
       // (the rules' choice: leaning on taller stone, a shed roof falling away from it; square, hipped (now and then a dome
       // on a tower); long, a gable along it)
-      const W = i1 - i0 + 1, D = j1 - j0 + 1;
+      const W = R.i1 - R.i0 + 1, D = R.j1 - R.j0 + 1;
       // (against taller stone, or set into a bank whose ground comes up to its eaves: the hill)
-      const taller = [0, 1, 2, 3].filter((d) => { const [a, bb] = DIRS[d]; const out = cols.filter(([x, z]) => !mine.has(`${x + a}.${z + bb}`)); return out.length > 0 && out.filter(([x, z]) => height(x + a, z + bb) > h || (!!w.land && w.ground(x + a, z + bb) >= h - 1)).length * 2 >= out.length; });
+      const taller = [0, 1, 2, 3].filter((d) => { const [a, bb] = DIRS[d]; const out = rcols.filter(([x, z]) => !mine.has(`${x + a}.${z + bb}`)); return out.length > 0 && out.filter(([x, z]) => height(x + a, z + bb) > h || (!!w.land && w.ground(x + a, z + bb) >= h - 1)).length * 2 >= out.length; });
       // (leaning on more than one side, it falls away from the highest)
-      const rise = (d: number) => { const [a, bb] = DIRS[d], o = cols.filter(([x, z]) => !mine.has(`${x + a}.${z + bb}`)); return o.reduce((t, [x, z]) => t + Math.max(height(x + a, z + bb), w.ground(x + a, z + bb)), 0) / Math.max(1, o.length); };
+      const rise = (d: number) => { const [a, bb] = DIRS[d], o = rcols.filter(([x, z]) => !rmine.has(`${x + a}.${z + bb}`)); return o.reduce((t, [x, z]) => t + Math.max(height(x + a, z + bb), w.ground(x + a, z + bb)), 0) / Math.max(1, o.length); };
       const lean = taller.sort((p, q) => rise(q) - rise(p) || p - q)[0];
       b.roof = taller.length ? 'shed' : W === D ? (tower && chance(0.35, id, 4) ? 'dome' : 'hipped') : chance(0.25, id, 5) ? 'hipped' : 'gable';
       if (taller.length) b.fall = (lean + 2) % 4;

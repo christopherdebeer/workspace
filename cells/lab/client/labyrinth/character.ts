@@ -27,7 +27,7 @@
 import { hash } from '../kit/rng';
 import { DIRS, DRESS, key, unkey, type Cell, type Dress, type World } from './model';
 import { height, motifs } from './motifs';
-import { buildings } from './buildings';
+import { buildings, underRoof } from './buildings';
 import { outline } from './form';
 
 const cache = new WeakMap<World, { v: number; map: Map<number, Dress> }>();
@@ -57,7 +57,7 @@ function dressUp(w: World): Map<number, Dress> {
   const chance = (p: number, ...n: number[]) => hash(w.seed, ...n) % 1000 < p * 1000;
   // (nothing goes on a top that has a roof over it)
   const roofed = new Set<number>();
-  for (const b of buildings(w).list) if (b.roof) for (const [x, z] of b.cols) roofed.add(key(b.h - 1, x, z));
+  for (const b of buildings(w).list) for (const [x, z] of underRoof(b)) roofed.add(key(b.h - 1, x, z));
   // (and nothing stands in a stair's way (its foot, its head, the room over them), nor before a door)
   const doorways = new Set(buildings(w).list.flatMap((b) => b.openings.filter((o) => o.kind === 'door').map((o) => key(o.k, o.i + DIRS[o.d][0], o.j + DIRS[o.d][1]))));
   const put = (c: Cell, d: Dress) => { const v = key(...c); if (roofed.has(v) && (d.prop || d.parapet)) return; if (d.prop && (w.way(c[0] + 1, c[1], c[2]) || doorways.has(key(c[0] + 1, c[1], c[2])) || w.basin(c[0] + 1, c[1], c[2]))) return; if (d.pergola && w.way(...c)) return; const o = map.get(v) ?? {}; map.set(v, { ...o, ...d }); };

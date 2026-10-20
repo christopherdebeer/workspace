@@ -18,7 +18,7 @@
  */
 import { hash } from '../kit/rng';
 import { character, look } from './character';
-import { buildings, opening, type Building, type Opening } from './buildings';
+import { buildings, opening, underRoof, type Building, type Opening } from './buildings';
 import { BUT, BUTH, BUTW, WT, buttresses, inBlock, outline, reach, wallCell, type Edge } from './form';
 import { CENTER, DECK, DIRS, DRESS, key, unkey, type Span, type World } from './model';
 import { LAND, surfaceY } from './land';
@@ -897,7 +897,8 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
    */
   function roof(b: Building) {
     const O = 0.12, y = b.h, ye = y + 0.02;
-    const xa = X(b.i0), xb = X(b.i1 + 1), za = Z(b.j0), zb = Z(b.j1 + 1), along = xb - xa >= zb - za ? 0 : 1;
+    // (over the plan, or the part of it left beside a terrace)
+    const P = b.roofPlan ?? b, xa = X(P.i0), xb = X(P.i1 + 1), za = Z(P.j0), zb = Z(P.j1 + 1), along = xb - xa >= zb - za ? 0 : 1;
     cur = { born: Math.max(...b.cols.map(([i, j]) => w.born(b.h - 1, i, j))) + 0.2, pivot: y, how: 1, tone: 0.5, dress: 0, sel: b.cols.some(([i, j]) => selected.has(key(b.h - 1, i, j))) };
     // (each slope a slab of tiles with a thickness: its top, its underside a little below, and its edges (the eaves, the
     // verges over a gable, the hips) closed, so where it overhangs a wall it reads as a roof, not a cut)
@@ -1165,7 +1166,7 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
 export function parapets(w: World, plain = false) {
   const dressed = (k: number, i: number, j: number) => look(w, k, i, j, plain);
   const edges = new Map<number, boolean[]>(), rails = new Map<number, number>(), flowRails = new Map<number, number>(), roofed = new Set<number>();
-  for (const b of buildings(w).list) if (b.roof) for (const [x, z] of b.cols) roofed.add(key(b.h - 1, x, z));
+  for (const b of buildings(w).list) for (const [x, z] of underRoof(b)) roofed.add(key(b.h - 1, x, z));
   for (const v of [...w.mass.keys()]) {
     const [k, i, j] = unkey(v), d = dressed(k, i, j), sp = w.span(k, i, j);
     // (not on a thin wall: it's too thin to carry one)

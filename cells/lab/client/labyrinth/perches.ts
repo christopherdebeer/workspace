@@ -19,7 +19,7 @@
  */
 import { CENTER, DIRS, key, unkey, type Cell, type World } from './model';
 import { navigate } from './nav';
-import { buildings } from './buildings';
+import { buildings, underRoof } from './buildings';
 import { inStone, parapets, wallArms } from './mesh';
 import { reach } from './form';
 import { groundY, retaining } from './context';
@@ -69,7 +69,7 @@ export function perches(w: World): Perches {
   const roomy = (x: number, y: number, z: number) => !solid(x, y + 0.05, z) && !solid(x, y + 0.16, z);
   const nav = navigate(w), B = buildings(w), rails = parapets(w);
   const roofTop = new Set<number>();
-  for (const b of B.list) if (b.roof) for (const [x, z] of b.cols) roofTop.add(key(b.h, x, z));
+  for (const b of B.list) for (const [x, z] of underRoof(b)) roofTop.add(key(b.h, x, z));
   const decor = new Set(w.decor.filter((d) => d.kind !== 'pool').map((d) => d.j * 1000 + d.i));
   const add = (kind: SpotKind, k: number, i: number, j: number, x: number, y: number, z: number, d = -1, narrow = false): Spot | null => {
     const name = `${kind}.${k}.${i}.${j}.${d}`;
