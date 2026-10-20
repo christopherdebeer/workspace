@@ -150,6 +150,32 @@ await withWood(async (lab) => {
     await q.close();
   }
   {
+    // (with nothing said ahead (no mass or way in hand): the land's ground drawn up to its shelf is a way; the switch is
+    // gone; and on the slab a stroke across the bare stone is a wall, a way one hold away)
+    const q = await lab.open('zoom=1&land=6');
+    await q.evaluate(() => { localStorage.clear(); }); await q.reload(); await q.waitForFunction(() => window.__labyrinth); await q.waitForTimeout(1200);
+    c.ok('no mass/way switch on the page', !(await q.$('#intent')));
+    const at2 = (i, j) => q.evaluate(([a, b]) => { const L = window.__labyrinth; return L.screenOf(a, b, L.world.ground(a, b)); }, [i, j]);
+    const pts = await Promise.all([[1, 11], [1, 10], [1, 9], [1, 8], [1, 7], [1, 6], [1, 5]].map(([i, j]) => at2(i, j)));
+    await q.mouse.move(pts[0][0], pts[0][1]); await q.mouse.down();
+    for (let n = 1; n < pts.length; n++) for (let t = 1; t <= 6; t++) { await q.mouse.move(pts[n - 1][0] + ((pts[n][0] - pts[n - 1][0]) * t) / 6, pts[n - 1][1] + ((pts[n][1] - pts[n - 1][1]) * t) / 6); await q.waitForTimeout(20); }
+    await q.mouse.up(); await q.waitForTimeout(500);
+    const got = await q.evaluate(() => { const w = window.__labyrinth.world, o = w.ops.at(-1); return o && { why: o.why, reached: w.reached.get(o)?.reached, stairs: w.stairs.size }; });
+    c.ok('read from where it\'s drawn: up the land, a way, climbing as it rises', got?.why === 'way' && got.reached && got.stairs >= 2, got);
+    await q.close();
+    const r = await lab.open('zoom=0.55&flat');
+    await r.waitForTimeout(900);
+    const sc = (i, j) => r.evaluate(([a, b]) => window.__labyrinth.screenOf(a, b, 0), [i, j]);
+    const a = await sc(3, 3), b = await sc(8, 3);
+    await r.mouse.move(a[0], a[1]); await r.mouse.down();
+    for (let t = 1; t <= 24; t++) { await r.mouse.move(a[0] + ((b[0] - a[0]) * t) / 24, a[1] + ((b[1] - a[1]) * t) / 24); await r.waitForTimeout(20); }
+    await r.mouse.up(); await r.waitForTimeout(500);
+    const wall = await r.evaluate(() => { const o = window.__labyrinth.world.ops.at(-1); return o && { why: o.why, alts: (o.alts ?? []).map((x) => x.label) }; });
+    c.ok('on the slab, a stroke across the bare stone: a wall, a way offered with it', wall?.why === 'wall' && wall.alts.some((l) => /way|paved|path/.test(l)), wall);
+    c.ok('nothing thrown, with nothing in hand', !r.errors.length, r.errors);
+    await r.close();
+  }
+  {
     // (the cats: residents as many as it's home for; the hand brush meets one, and the eye can follow it, and come back;
     // a bridge built in front of them, they go and see it)
     const q = await lab.open('zoom=0.5&story=13&catsat=20');

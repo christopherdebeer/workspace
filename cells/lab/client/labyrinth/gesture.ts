@@ -276,6 +276,58 @@ export function trace(w: World, start: Pick, path: Array<[number, number]>, end:
   }
   return withMeeting(w, op);
 }
+/**
+ * What a stroke is for, with nothing in hand to say: read from where it's drawn. Going somewhere is a way: up or down
+ * to a top at another height, along paving, or from or to a place one goes from (a door, a flight's foot, the end of a
+ * way, a ladder's foot); a stroke from a top, along it or out from it, is mass. On open ground with neither, the land
+ * asks for a way and the slab for a wall.
+ */
+export function meant(w: World, start: Pick, path: Array<[number, number]>, end: Pick | null): Intent {
+  const h0 = surface(w, start), cells = walk(path).cells;
+  if (end && end.face !== 'ground' && surface(w, end) !== h0) return 'way';
+  if (start.face !== 'ground') return end?.face === 'ground' && surface(w, end) < h0 ? 'way' : 'mass';
+  if (cells.filter(([i, j]) => w.paved(i, j)).length >= Math.max(2, cells.length * 0.6)) return 'way';
+  const ends = [cells[0], cells[cells.length - 1]].filter(Boolean);
+  if (ends.some(([i, j]) => isPlace(w, i, j))) return 'way';
+  return w.land ? 'way' : 'mass';
+}
+/** a place on the ground one goes from or to: paving, a door beside it, a flight's foot, a ladder's foot */
+function isPlace(w: World, i: number, j: number): boolean {
+  if (!inGrid(i, j)) return false;
+  const g = w.ground(i, j), doors = buildings(w).at;
+  if (w.paved(i, j) || w.ladders.has(key(g, i, j))) return true;
+  return DIRS.some(([a, b], d) => {
+    const x = i + a, z = j + b, s = w.stair(g, x, z);
+    return (s >= 0 && DIRS[s][0] === -a && DIRS[s][1] === -b) || w.paved(x, z) || doors.get(`${g}.${x}.${z}.${(d + 2) % 4}`)?.kind === 'door';
+  });
+}
+/** the same stone (and the same way) laid, whatever it's called: two readings that are one */
+const same = (a: Op, b: Op) => JSON.stringify([a.add, a.walls, a.arches, a.stairs, a.pave, a.connect && [a.connect.from, a.connect.to, a.connect.path]]) === JSON.stringify([b.add, b.walls, b.arches, b.stairs, b.pave, b.connect && [b.connect.from, b.connect.to, b.connect.path]]);
+/** two readings made one: the first as it is, the other offered with it (or in its place, if the first won't stand) */
+function either(first: Op | Refusal | null, other: Op | Refusal | null): Op | Refusal | null {
+  const ok = (o: Op | Refusal | null): o is Op => !!o && !('refused' in o);
+  const alt = (o: Op): Alt => ({ label: o.reading ?? o.note ?? o.why ?? 'otherwise', op: { ...o, alts: undefined } });
+  if (ok(first)) {
+    if (!ok(other) || same(first, other)) return first;
+    const alts = [...(first.alts ?? [])];
+    if (!alts.some((a) => same(a.op, other))) alts.push(alt(other));
+    return { ...first, alts };
+  }
+  if (ok(other)) return { ...other, alts: [...(other.alts ?? []), ...(first?.alts ?? []).filter((a) => !same(a.op, other))] };
+  if (first && other) return { refused: first.refused, alts: [...(first.alts ?? []), ...(other.alts ?? [])] };
+  return first ?? other;
+}
+/** a stroke, read as what it's for from where it's drawn (`meant`), the other kind of thing offered with it */
+export function stroke(w: World, start: Pick, path: Array<[number, number]>, end: Pick | null, born: (i: number, j: number) => number, now = 0, rest: Array<[number, number]> = [], both = true): Op | Refusal | null {
+  const m = meant(w, start, path, end), first = trace(w, start, path, end, born, now, rest, m);
+  // (while it's being drawn, only what it's read as (the other's for when it's let go, or held))
+  if (!both && first && !('refused' in first)) return first;
+  return either(first, trace(w, start, path, end, born, now, rest, m === 'way' ? 'mass' : 'way'));
+}
+/** a tap, read without an intent: raised, with a way up on to it, or a place to stand, offered with it */
+export function touch(w: World, p: Pick, now: number): Op | Refusal | null {
+  return either(tap(w, p, now, false, 'mass'), tap(w, p, now, false, 'way'));
+}
 function withMeeting(w: World, op: Op | Refusal | null): Op | Refusal | null {
   // (only a way can meet another, so far: the rest needn't be tried)
   return op && !('refused' in op) && op.connect ? meeting(w, op) : op;

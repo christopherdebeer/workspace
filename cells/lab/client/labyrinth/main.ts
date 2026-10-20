@@ -18,7 +18,7 @@ import { CENTER, World, inGrid, key, replay, unkey, type Alt, type Cell, type Op
 import { buildMesh, inLand, inStone, setBleed } from './mesh';
 import { LAND } from './land';
 import { Renderer, camera, invert, type View } from './render';
-import { carve, lift, surface, tap, trace, type Intent, type Pick } from './gesture';
+import { carve, lift, stroke, surface, tap, touch, trace, type Intent, type Pick } from './gesture';
 import { story } from './demo';
 import { randomSeed } from '../kit/rng';
 import { DRESSINGS, PIECES, dress, dressAt, place, placeOr, run, type Dressing, type Hand, type Piece } from './palette';
@@ -210,6 +210,8 @@ type Gesture = {
   op?: Op | null;
   /** refused, what it could be instead: held, they're offered, none taken unasked */
   instead?: Alt[];
+  /** the stroke read in full (its other kind of reading too), for when it's held */
+  full?: () => Op | null;
   /** where the finger paused on the way, and when it last moved */
   rest: Array<[number, number]>; moved: number;
   /** whether it's lifting (or lowering) the stone it started on: drawn straight up or down the screen from it; and what
@@ -226,18 +228,14 @@ let pinch0 = 0, zoom0 = 1, mid0 = 0, midY0 = 0;
 const SAYS: Record<Exclude<Hand, 'auto'>, string> = { block: 'a block stands on the stone, or on stone', wall: 'a wall stands on the stone, or on stone, or runs out from a side', arch: 'an arch stands on the stone, or on stone', stair: 'a stair wants a floor to start from', bridge: 'a bridge goes across a gap, from stone to stone level with it', cypress: 'a cypress wants a floor, and room above it', pool: 'a pool is let into the ground, or into a top', take: 'nothing there to take' };
 const bar = document.getElementById('hands')!, sheet = document.getElementById('sheet')!, pieceB = bar.querySelector('[data-brush="piece"]') as HTMLElement;
 /**
- * What auto's strokes are for: mass (a stroke on the ground is a wall; from a top, it reaches out or climbs, as ever) or
- * a way (a stroke connects where it starts to where it ends, and the land says how: paving, flights, a bridge). Taps
- * raise either way. Kept between visits; on the land, a way, the first time.
+ * What auto's strokes are for isn't said ahead: each is read from where it's drawn (`stroke`, `touch` in gesture.ts),
+ * mass or a way, the other kind offered with it. `?intent=mass|way` holds one fixed, for the harnesses.
  */
-let intent: Intent = (() => { try { const v = localStorage.getItem('labyrinth.intent'); if (v === 'mass' || v === 'way') return v; } catch { /* */ } return world.land ? 'way' : 'mass'; })();
-if (qs.get('intent') === 'mass' || qs.get('intent') === 'way') intent = qs.get('intent') as Intent;
-const intentEl = document.getElementById('intent') as HTMLElement;
-function setIntent(v: Intent) { intent = v; try { localStorage.setItem('labyrinth.intent', v); } catch { /* */ } showBrush(); hint(); }
-for (const b of Array.from(intentEl.querySelectorAll('button')) as HTMLElement[]) b.addEventListener('click', () => setIntent(b.dataset.intent as Intent));
+let intent: Intent | null = qs.get('intent') === 'mass' || qs.get('intent') === 'way' ? (qs.get('intent') as Intent) : null;
+function setIntent(v: Intent | null) { intent = v; hint(); }
+const tapNow = (p: Pick) => (intent ? tap(world, p, now(), false, intent) : touch(world, p, now()));
 function showBrush() {
   document.body.classList.toggle('auto', brush === 'auto');
-  for (const b of Array.from(intentEl.querySelectorAll('button')) as HTMLElement[]) { const on = b.dataset.intent === intent; b.classList.toggle('on', on); b.setAttribute('aria-checked', String(on)); }
   for (const b of Array.from(bar.querySelectorAll('button')) as HTMLElement[]) { const on = b.dataset.brush === brush; b.classList.toggle('on', on); b.setAttribute('aria-pressed', String(on)); }
   // (the piece brush is always 'piece'; it shows what it holds as its picture)
   const src = sheet.querySelector(`[data-held="${held}"]`) as HTMLElement | null;
@@ -261,14 +259,14 @@ for (const b of Array.from(bar.querySelectorAll('button')) as HTMLElement[]) {
 for (const b of Array.from(sheet.querySelectorAll('button')) as HTMLElement[]) b.addEventListener('click', () => { setBrush(b.dataset.held!); openSheet(false); say(BRUSH_SAYS.piece()); });
 const BRUSH_SAYS: Record<Brush, () => string> = {
   hand: () => 'drag to turn it · tap to ask what something is, or to meet a cat',
-  auto: () => (intent === 'way' ? 'way: a stroke connects places; paving, flights and bridges as the land asks' : 'mass: tap raises · trace builds, reaches out and climbs'),
+  auto: () => 'tap raises · trace builds, connects and climbs · hold at the end to read it otherwise',
   piece: () => (isDress(held) ? `${held}: tap a stone, or stroke over stones, to dress them` : `${held}: tap to put one · trace for a run of them`),
   take: () => 'tap takes a piece away · trace carves through',
   select: () => 'tap something to take it up · tap again for the whole of it',
 };
 function hint(text?: string) {
   const el = document.getElementById('hint')!;
-  el.textContent = text ?? (brush !== 'auto' ? '' : intent === 'way' ? (world.ops.length < 3 ? 'way: trace from one place to another · the land says how' : '') : world.ops.length === 0 ? (world.land ? 'tap the ground to raise it · trace to wall' : 'tap the stone to raise it · trace to build') : world.ops.length < 4 ? 'trace from a top to reach out · trace up to a higher top to climb' : '');
+  el.textContent = text ?? (brush !== 'auto' ? '' : world.ops.length === 0 ? (world.land ? 'tap the ground to raise it · trace from place to place for a way' : 'tap the stone to raise it · trace to build') : world.ops.length < 4 ? 'trace from a top to reach out · trace up to a higher top to climb' : '');
   el.classList.toggle('on', !!el.textContent);
 }
 let hintT = 0;
@@ -421,9 +419,10 @@ function readingsNow(): Array<{ label: string; op: Op }> | null {
   if (!g) return null;
   const strip = (o: Op): Op => ({ ...o, alts: undefined });
   if (g.mode === 'trace' && !g.op && g.instead?.length) return g.instead.map((a) => ({ label: a.label, op: strip(a.op) }));
+  if (g.mode === 'trace' && g.full && g.op) { const f = g.full(); if (f?.alts?.length) g.op = { ...g.op, alts: f.alts }; g.full = undefined; }
   if (g.mode === 'trace' && g.op?.alts?.length) return [{ label: g.op.reading ?? g.op.note ?? 'as drawn', op: strip(g.op) }, ...g.op.alts.map((a) => ({ label: a.label, op: strip(a.op) }))];
   if (g.mode === 'pending' && g.start && brush === 'auto') {
-    const r = tap(world, g.start, now(), false, intent);
+    const r = tapNow(g.start);
     if (!r) return null;
     const first = 'refused' in r ? null : r, list = [...(first ? [{ label: first.reading ?? first.note ?? 'raised', op: strip(first) }] : []), ...(r.alts ?? []).map((a) => ({ label: a.label, op: strip(a.op) }))];
     return list.length > 1 || (!first && list.length) ? list : null;
@@ -540,7 +539,7 @@ function traceStep(cx: number, cy: number, final: boolean) {
     // (a side grabbed is always lifted; from a top, only with mass in hand, and not if it's come to rest on another top:
     // that's a stroke to it. A way drawn up the screen from a top goes somewhere)
     const there = final ? null : pick(cx, cy, before), other = !!goal(there) && (there?.inset ?? 0) >= SQUARE;
-    const may = g.start.face === 'side' || (intent === 'mass' && !other);
+    const may = g.start.face === 'side' || (intent !== 'way' && !other);
     if (may && (upright || g.lifting)) {
       if (brush && !g.lifting) { g.pulls = brush; g.x0 = ox; g.y0 = oy; }
       const n = Math.round(-(cy - g.y0) / per);
@@ -573,7 +572,8 @@ function traceStep(cx: number, cy: number, final: boolean) {
   if (!final && k && k !== goal(g.target) && (end?.inset ?? 0) >= SQUARE) g.count = SURE;
   if (g.count >= SURE) { g.target = k ? g.candPick : null; g.count = 0; }
   for (const [i, j] of g.cells) if (!g.seen.has(`${i}.${j}`)) g.seen.set(`${i}.${j}`, now());
-  const op = trace(before, g.start, g.cells, g.target, (i, j) => g!.seen.get(`${i}.${j}`) ?? now(), g.born, g.rest, intent);
+  const bornAt = (i: number, j: number) => g!.seen.get(`${i}.${j}`) ?? now(), op = intent ? trace(before, g.start, g.cells, g.target, bornAt, g.born, g.rest, intent) : stroke(before, g.start, g.cells, g.target, bornAt, g.born, g.rest, final);
+  if (!intent && !final) { const [s0, c0, t0, b0, r0] = [g.start, g.cells.slice(), g.target, g.born, g.rest.slice()]; g.full = () => { const o = stroke(before, s0, c0, t0, bornAt, b0, r0, true); return o && !('refused' in o) ? o : null; }; }
   const refused = op && 'refused' in op ? op.refused : '';
   g.instead = op && 'refused' in op ? op.alts : undefined;
   if (refused && refused !== g.said) say(g.instead?.length ? `${refused} · hold to ${g.instead[0].label}` : refused);
@@ -678,7 +678,7 @@ const up = (e: PointerEvent) => {
       unselect();
       let op: Op | null = null;
       if (brush === 'auto') {
-        const r = tap(world, start, now(), false, intent);
+        const r = tapNow(start);
         // (refused outright (rare now): its first other reading, if it has one, is what's built)
         if (r && 'refused' in r) { declined('tap', r.refused); say(r.alts?.length ? `${r.refused} · hold to ${r.alts[0].label}` : r.refused); g = null; return; }
         op = r;
