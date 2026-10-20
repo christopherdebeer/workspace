@@ -76,6 +76,16 @@ export function selectCell(w: World, c: Cell, view: number, now: number): Select
   if (d >= 0) {
     const readings: Reading[] = [0, 1, 2, 3].map((q) => ({ label: ['climbing east', 'climbing south', 'climbing west', 'climbing north'][(d + q) % 4], op: q === 0 ? null : { stairs: [[k, i, j, (d + q) % 4, now]], why: 'reading' } as Op }));
     readings.push({ label: 'a block', op: { cut: [c], add: [[k, i, j, now]], why: 'reading' } });
+    // (one of a flight carried over something: how it's carried, as its setting allows, first)
+    const fl = w.flight(k, i, j);
+    if (fl && fl.f.options.length > 1) {
+      const said: Record<string, string> = { hung: 'hung from the wall', rampant: 'on a rampant arch', solid: 'solid', pier: 'on piers' };
+      const rule: Record<string, number> = { hung: RULE.hung, rampant: RULE.rampant, solid: RULE.solid, pier: RULE.pier };
+      const foot = fl.f.cells[0], cells = fl.f.cells;
+      const carried: Reading[] = fl.f.options.map((o) => ({ label: `a flight ${said[o]}`, op: o === fl.f.carriage ? null : { rule: [[...foot, rule[o]] as [number, number, number, number]], why: 'reading' } }));
+      const at = fl.f.options.indexOf(fl.f.carriage);
+      return { title: `a flight of ${cells.length}, ${said[fl.f.carriage]}`, cells, readings: [...carried, ...readings.slice(1)], at, remove: { cut: [c], why: 'take' }, stone: cells };
+    }
     return { title: 'a stair', cells: [c], readings, at: 0, remove: { cut: [c], why: 'take' }, stone: [c] };
   }
   if (w.tree(k, i, j) || w.tree(k - 1, i, j)) {

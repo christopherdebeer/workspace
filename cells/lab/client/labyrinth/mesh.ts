@@ -20,7 +20,7 @@ import { hash } from '../kit/rng';
 import { character, look } from './character';
 import { buildings, opening, underRoof, type Building, type Opening } from './buildings';
 import { BUT, BUTH, BUTW, WT, buttresses, inBlock, outline, reach, wallCell, type Edge } from './form';
-import { CENTER, DECK, DIRS, DRESS, key, unkey, type Span, type World } from './model';
+import { CENTER, DECK, DIRS, DRESS, key, soffit as flightSoffit, unkey, type Span, type World } from './model';
 import { LAND, surfaceY } from './land';
 import { groundY, retaining } from './context';
 
@@ -371,6 +371,13 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
       const [a, b] = DIRS[d];
       const pt = (u: number, wv: number, y: number): V3 => { const cx = x0 + 0.5, cz = z0 + 0.5; return a ? [cx + a * (u - 0.5), y, cz + (wv - 0.5)] : [cx + (wv - 0.5), y, cz + b * (u - 0.5)]; };
       const across = [(d + 1) % 4, (d + 3) % 4];
+      // (carried as its flight is (model.ts `carry`): what's under each step, by how far along the flight it is)
+      const fl = w.flight(k, i, j), carriage = fl?.f.carriage ?? 'ground', q = fl?.q ?? 0, over = k > w.ground(i, j) && !w.stone(k - 1, i, j) && !w.earth(k - 1, i, j) && w.stair(k - 1, i, j) < 0 && !w.pier(k - 1, i, j);
+      let floorAt = k;
+      while (floorAt > w.ground(i, j) && w.underFlight(floorAt - 1, i, j) === 'fill') floorAt--;
+      const g = w.ground(i, j), last = !fl || q === fl.f.cells.length - 1;
+      const base = (u: number) => !over || carriage === 'ground' || carriage === 'pier' ? y0 : carriage === 'solid' ? floorAt : Math.max(g, flightSoffit(fl!.f, q + u));
+      const TH = 0.3;
       for (let s = 0; s < STEPS; s++) {
         const u0 = s / STEPS, u1 = (s + 1) / STEPS, h = y0 + (s + 1) / STEPS, h0 = y0 + s / STEPS;
         // (each tread with a nosing a little proud of the riser under it)
@@ -378,16 +385,39 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
         quad(pt(u0 - nz, 0, h), pt(u1, 0, h), pt(u1, 1, h), pt(u0 - nz, 1, h), [0, 1, 0], [0.8, 0.95, 0.95, 0.8], MAT.stone);
         quad(pt(u0 - nz, 0, h - nh), pt(u0 - nz, 1, h - nh), pt(u0 - nz, 1, h), pt(u0 - nz, 0, h), [-a, 0, -b], 1, MAT.stone);
         quad(pt(u0 - nz, 0, h - nh), pt(u0, 0, h - nh), pt(u0, 1, h - nh), pt(u0 - nz, 1, h - nh), [0, -1, 0], 0.55, MAT.stone);
+        if (over && carriage === 'hung') {
+          // (hung from the wall: each step its own block, cantilevered out of it, open under)
+          const yb = h - TH;
+          quad(pt(u0, 0, yb), pt(u0, 1, yb), pt(u0, 1, h - nh), pt(u0, 0, h - nh), [-a, 0, -b], [0.5, 0.5, 0.8, 0.8], MAT.stone);
+          quad(pt(u0, 0, yb), pt(u1, 0, yb), pt(u1, 1, yb), pt(u0, 1, yb), [0, -1, 0], 0.45, MAT.stone);
+          for (const qq of across) {
+            if (hides(k, i, j, qq)) continue;
+            const dd = DIRS[qq], wv = (a ? dd[1] : dd[0]) > 0 ? 1 : 0;
+            quad(pt(u0, wv, yb), pt(u1, wv, yb), pt(u1, wv, h), pt(u0, wv, h), [dd[0], 0, dd[1]], [0.6, 0.6, 1, 1], MAT.stone);
+          }
+          continue;
+        }
         quad(pt(u0, 0, h0), pt(u0, 1, h0), pt(u0, 1, h - nh), pt(u0, 0, h - nh), [-a, 0, -b], [0.6, 0.6, 0.8, 0.8], MAT.stone);
-        for (const q of across) {
-          if (hides(k, i, j, q)) continue;
-          const dd = DIRS[q], wv = (a ? dd[1] : dd[0]) > 0 ? 1 : 0;
-          quad(pt(u0, wv, y0), pt(u1, wv, y0), pt(u1, wv, h), pt(u0, wv, h), [dd[0], 0, dd[1]], [0.7, 0.7, 1, 1], MAT.stone);
+        const b0 = base(u0), b1 = base(u1);
+        for (const qq of across) {
+          if (hides(k, i, j, qq)) continue;
+          const dd = DIRS[qq], wv = (a ? dd[1] : dd[0]) > 0 ? 1 : 0;
+          quad(pt(u0, wv, b0), pt(u1, wv, b1), pt(u1, wv, h), pt(u0, wv, h), [dd[0], 0, dd[1]], [0.7, 0.7, 1, 1], MAT.stone);
+        }
+        // (on a rampant arch: its soffit, rising with it)
+        if (over && carriage === 'rampant' && (b0 > g + 0.001 || b1 > g + 0.001)) {
+          const sl = (b1 - b0) * STEPS, l = Math.hypot(1, sl);
+          quad(pt(u0, 0, b0), pt(u1, 0, b1), pt(u1, 1, b1), pt(u0, 1, b0), [a * sl / l, -1 / l, b * sl / l], 0.45, MAT.stone);
         }
       }
-      if (!hides(k, i, j, d)) quad(pt(1, 0, y0), pt(1, 1, y0), pt(1, 1, y1), pt(1, 0, y1), [a, 0, b], [0.7, 0.7, 1, 1], MAT.stone);
-      // (its underside, where it's over nothing: carried on a pier, or out over a drop)
-      if (k > w.ground(i, j) && !w.occupied(k - 1, i, j)) quad(pt(0, 0, y0), pt(0, 1, y0), pt(1, 1, y0), pt(1, 0, y0), [0, -1, 0], 0.5, MAT.stone);
+      // (its end: at the head of the flight, down to what it stands on, or to its soffit; and where the next step's carried
+      // higher than this one goes down (a solid first step, the flight hung beyond it), what shows between)
+      const nx = fl && !last ? fl.f.cells[q + 1] : null, nextOver = !!nx && nx[0] > w.ground(nx[1], nx[2]) && !w.stone(nx[0] - 1, nx[1], nx[2]) && !w.earth(nx[0] - 1, nx[1], nx[2]);
+      const below = nextOver ? (carriage === 'hung' ? y1 + 1 / STEPS - TH : Math.max(g, flightSoffit(fl!.f, q + 1))) : y1;
+      const endTop = last ? y1 : Math.min(y1, below);
+      if (!(over && carriage === 'hung') && endTop > base(1) + 0.01 && (last ? !hides(k, i, j, d) : true)) quad(pt(1, 0, base(1)), pt(1, 1, base(1)), pt(1, 1, endTop), pt(1, 0, endTop), [a, 0, b], [0.7, 0.7, 1, 1], MAT.stone);
+      // (its underside, where it's over nothing and on a pier, or out over a drop)
+      if (over && carriage === 'pier') quad(pt(0, 0, y0), pt(0, 1, y0), pt(1, 1, y0), pt(1, 0, y0), [0, -1, 0], 0.5, MAT.stone);
       // (on the land, its foundation down into it)
       if (founded(k, i, j)) for (let q = 0; q < 4; q++) { const [qa, qb] = DIRS[q]; if (w.occupied(k, i + qa, j + qb)) continue; const A: V3 = qa ? [qa > 0 ? x0 + 1 : x0, y0 - FOUND, z0] : [x0, y0 - FOUND, qb > 0 ? z0 + 1 : z0], B: V3 = qa ? [A[0], y0 - FOUND, z0 + 1] : [x0 + 1, y0 - FOUND, A[2]]; quad(A, B, [B[0], y0, B[2]], [A[0], y0, A[2]], [qa, 0, qb], [0.35, 0.35, 0.6, 0.6], MAT.stone); }
       continue;

@@ -177,7 +177,7 @@ Traced, a piece makes a run along the stroke, at the height the stroke started f
 - **blocks**: a wall;
 - **walls**: a thin wall along the stroke, turning its corners;
 - **arches**: an arcaded wall, each way through running across the stroke;
-- **stairs**: a flight, a step up for every cell where the stroke runs straight, carried on piers or small arches where there's nothing under it.
+- **stairs**: a flight, a step up for every cell where the stroke runs straight, carried as a whole as its setting has it: hung from a wall beside it, on a rampant arch from its foot to what it climbs to (open under, a lane can go on beneath), solid as a short stoop, or on piers with nothing to lean on; stepped on to from beside its foot, left sideways at its head, and never laid across another way's walk. Selecting a step offers the carriages its setting allows.
 
 The rest (bridge, tree, pool) are put once, where the stroke began. An arch put by hand carries what's on it like any stone, and a pool by hand sits in a court beside the court's own water.
 

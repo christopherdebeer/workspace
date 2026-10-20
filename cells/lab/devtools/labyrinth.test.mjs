@@ -29,6 +29,10 @@ function stands(w, tag) {
     if (k === 0 || w.occupied(k - 1, i, j)) continue;
     const cb = w.corbel(k, i, j);
     if (cb >= 0) { const [a, b] = DIRS[cb]; ok(`${where}: held out on corbels from stone that stands (or the land), a cell out, nothing beyond`, ((w.stone(k, i + a, j + b) && (k === 0 || w.occupied(k - 1, i + a, j + b))) || w.earth(k, i + a, j + b)) && !w.occupied(k, i - a, j - b)); continue; }
+    // (a step over nothing: carried by its flight, as its setting has it (hung from a wall beside it, on a rampant arch
+    // between its foot and what it climbs to, solid))
+    const fl = w.stair(k, i, j) >= 0 ? w.flight(k, i, j) : null;
+    if (fl) { ok(`${where}: a step over nothing, carried by its flight`, ['hung', 'rampant', 'solid'].includes(fl.f.carriage), fl.f.carriage); continue; }
     const sp = w.span(k, i, j);
     ok(`${where}: with nothing under it, it's carried on an arch`, !!sp);
     if (!sp) continue;

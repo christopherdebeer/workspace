@@ -6,7 +6,9 @@
  *   in it: not stone, a stair or a tree. A pier's slender column stands aside, so it's walked past. The air under an
  *   arch counts, so a passage cut under stone is walked.
  * - **A stair** is a place too, between its foot (the cell behind it, at its level) and its head (the cell ahead, a
- *   level up), or the next stair of a flight.
+ *   level up), or the next stair of a flight. A flight's first step can be stepped on to from beside it, and its last
+ *   left sideways, where nothing walls that side: a lane along its foot, a terrace along its head, are its ways too.
+ * - **Not under a flight** where its masonry is, or where what's left under it is too low to stand in.
  * - **A way through an arch** (stone with a way through it, a gate in a wall) is a place too, walked only along its way.
  * - **Places lead to places** beside them at the same height, and a stair from its foot to its head.
  *
@@ -17,7 +19,7 @@ import { CEIL, DIRS, inGrid, key, unkey, type Cell, type World } from './model';
 export interface Nav { places: Set<number>; next: Map<number, number[]> }
 
 /** a place to stand at height k on a column */
-export const standing = (w: World, k: number, i: number, j: number) => k >= 0 && k < CEIL && inGrid(i, j) && w.floor(k, i, j) && !w.stone(k, i, j) && w.stair(k, i, j) < 0 && !w.tree(k, i, j) && !(k > 0 && w.tree(k - 1, i, j)) && !(k === w.ground(i, j) && w.pool(i, j));
+export const standing = (w: World, k: number, i: number, j: number) => k >= 0 && k < CEIL && inGrid(i, j) && w.floor(k, i, j) && !w.stone(k, i, j) && w.stair(k, i, j) < 0 && !w.tree(k, i, j) && !(k > 0 && w.tree(k - 1, i, j)) && !(k === w.ground(i, j) && w.pool(i, j)) && !w.underFlight(k, i, j);
 
 /** a way through an arch at height k: stone with a way through it, with a floor under it */
 export const through = (w: World, k: number, i: number, j: number) => w.archway(k, i, j) >= 0 && !w.span(k, i, j) && (k === w.ground(i, j) ? !w.pool(i, j) : w.stone(k - 1, i, j) && w.archway(k - 1, i, j) < 0);
@@ -40,6 +42,13 @@ export function navigate(w: World, inside: Array<[Cell, Cell]> = []): Nav {
       if (standing(w, k, i - di, j - dj) || gate(k, i - di, j - dj)) link(v, key(k, i - di, j - dj));
       if (w.stair(k - 1, i - di, j - dj) === d) link(v, key(k - 1, i - di, j - dj));
       if (standing(w, k + 1, i + di, j + dj) || w.stair(k + 1, i + di, j + dj) === d || gate(k + 1, i + di, j + dj)) link(v, key(k + 1, i + di, j + dj));
+      // (stepped on to from beside its first step, and left sideways from its last, where that side's open)
+      const first = w.stair(k - 1, i - di, j - dj) !== d, last = w.stair(k + 1, i + di, j + dj) !== d;
+      for (const q of [(d + 1) % 4, (d + 3) % 4]) {
+        const x = i + DIRS[q][0], z = j + DIRS[q][1];
+        if (first && standing(w, k, x, z) && !w.occupied(k + 1, x, z)) link(v, key(k, x, z));
+        if (last && standing(w, k + 1, x, z)) link(v, key(k + 1, x, z));
+      }
       continue;
     }
     if (through(w, k, i, j)) {
