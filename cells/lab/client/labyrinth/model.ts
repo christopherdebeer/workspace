@@ -524,7 +524,20 @@ export class World {
     // (where the finger paused: a landing, never a stair; by the cells paused over, so a stroke straightened keeps them)
     const restAt = new Set((c.rest ?? []).map((q) => c.path[q + 1]).filter(Boolean).map(([i, j]) => `${i}.${j}`));
     const search = (path: Array<[number, number]>) => {
-      const along = path.slice(1), n = along.length, rested = new Set(along.map(([i, j], s) => (restAt.has(`${i}.${j}`) ? s : -1)).filter((s) => s >= 0));
+      const along = path.slice(1), n = along.length;
+      /** the run of the hand's stone a straight stretch of the way goes through at `k`, about `s`: open-able if it's three
+       * cells or fewer, the way straight through it, and clear where it goes in and comes out */
+      const step = (q: number) => { const p = q > 0 ? along[q - 1] : path[0]; return `${along[q][0] - p[0]}.${along[q][1] - p[1]}`; };
+      const solidAt = (k: number, q: number) => { const [x, z] = along[q]; return this.mass.has(key(k, x, z)) && !this.laid.has(key(k, x, z)) && !this.stairs.has(key(k, x, z)) && (k === this.ground(x, z) || this.stone(k - 1, x, z)); };
+      const thru = (k: number, s: number) => {
+        const d = step(s);
+        let a = s, b = s;
+        while (a > 0 && step(a) === d && solidAt(k, a - 1) && step(a - 1) === d) a--;
+        while (b + 1 < n && solidAt(k, b + 1) && step(b + 1) === d) b++;
+        if (b - a + 1 > 3 || b + 1 >= n || step(b + 1) !== d) return false;
+        return !taken(k, ...(a > 0 ? along[a - 1] : path[0])) && !taken(k, ...along[b + 1]);
+      };
+      const rested = new Set(along.map(([i, j], s) => (restAt.has(`${i}.${j}`) ? s : -1)).filter((s) => s >= 0));
       const straight = new Set(straights(path, c.to).filter((s) => !rested.has(s)));
       // (a level a cell can be walked at, or a stair stand at: over the ground, nothing in it, not in water, and the
       // stone under it not in another stair's way; and what it costs to raise it there)
@@ -532,12 +545,10 @@ export class World {
         const g = this.ground(i, j);
         // (through a gate: stone with a way through it the way the way goes)
         if (s >= 0 && this.archways.has(key(k, i, j)) && !this.stairs.has(key(k, i, j))) { const prev = s > 0 ? along[s - 1] : path[0]; return this.archways.get(key(k, i, j)) === (prev[0] !== i ? 0 : 1) && this.floor(k, i, j) ? 0 : -1; }
-        // (the hand's wall, a cell thick across the way, drawn straight through: a gate opened in it, the stone kept over
-        // and round the opening (a route through a wall opens a passage, not a way round it))
-        if (s >= 0 && s < n - 1 && this.mass.has(key(k, i, j)) && !this.laid.has(key(k, i, j)) && k >= g && (k === g || this.stone(k - 1, i, j))) {
-          const prev = s > 0 ? along[s - 1] : path[0], next = along[s + 1];
-          if (i - prev[0] === next[0] - i && j - prev[1] === next[1] - j && !taken(k, ...prev) && !taken(k, ...next) && !this.stairs.has(key(k, i, j))) return 2.5;
-        }
+        // (the hand's stone across the way, drawn straight through: a wall a cell thick, or a building's foot up to three
+        // cells deep: a passage opened in it, the stone kept over and round the opening (a route through a wall opens a
+        // gate, not a way round it; through a house, a passage under it, as if the way had been there first))
+        if (s >= 0 && s < n - 1 && this.mass.has(key(k, i, j)) && !this.laid.has(key(k, i, j)) && k >= g && (k === g || this.stone(k - 1, i, j)) && thru(k, s)) return 2.5;
         if (k < g || taken(k, i, j) || unsteady(k, i, j) || (k === g && this.pool(i, j))) return -1;
         if (k > g && !taken(k - 1, i, j) && this.way(k - 1, i, j)) return -1;
         // (raised over the ground costs more than a step down and back up again: a way on the land goes with the

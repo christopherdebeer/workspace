@@ -71,6 +71,15 @@ function meetings(w, tag, expect) {
     ok(`${tag}: made again, a rung higher`, (n?.laid ?? -1) >= 1, n && { laid: n.laid, wanted: n.wanted });
   }
 }
+/** a gatehouse's checks: one building over the way, its roof whole over it, the way through its foot, walked */
+function gatehouse(w, H, tag) {
+  const [, i, j] = at(w, H.T, [5, 6]), B = BU.buildings(w), b = B.of.get(key(1, i, j));
+  ok(`${tag}: one building, over the way`, !!b && b.cols.length === 6 && B.list.length === 1, B.list.map((x) => x.cols));
+  ok(`${tag}: the way through its foot`, !!b && b.through.length === 2, b?.through);
+  ok(`${tag}: roofed whole`, !!b?.roof && BU.underRoof(b).length === 6, b && { roof: b.roof, walked: b.walked });
+  ok(`${tag}: no door or window cut in the passage`, !!b && !b.openings.some((o) => w.archway(o.k, o.i, o.j) >= 0), b?.openings);
+  ok(`${tag}: and the way walks end to end`, walks(w, at(w, H.T, [3, 6]), at(w, H.T, [9, 6])));
+}
 const at = (w, T, c) => { const [i, j] = T(c); return [w.ground(i, j), i, j]; };
 
 const SCENES = [
@@ -151,6 +160,36 @@ const SCENES = [
       const after = of();
       ok(`${this.tag}: the same identity`, after?.id === id, { id, after: after?.id });
       ok(`${this.tag}: the same windows`, after?.openings.find((o) => o.kind === 'window')?.style === style, { style, after: after?.openings.find((o) => o.kind === 'window')?.style });
+    },
+  },
+  {
+    name: 'gatehouse: a way, then a tower over it',
+    run(w, H) {
+      H.stroke([2, 6], [10, 6], 'way');
+      for (let i = 5; i <= 6; i++) for (let j = 5; j <= 7; j++) H.column([i, j], 4);
+      gatehouse(w, H, this.tag);
+    },
+  },
+  {
+    name: 'gatehouse, the other order: a tower, then a way drawn through it',
+    run(w, H) {
+      for (let i = 5; i <= 6; i++) for (let j = 5; j <= 7; j++) H.column([i, j], 4);
+      const op = H.stroke([2, 6], [10, 6], 'way');
+      ok(`${this.tag}: not routed round it`, !op.took?.includes('routed-round'), op.took);
+      gatehouse(w, H, this.tag);
+    },
+  },
+  {
+    name: 'inhabited bridge: a bridge, then rooms on it',
+    run(w, H) {
+      H.column([3, 6], 2); H.column([9, 6], 2);
+      H.stroke([3, 6], [9, 6], 'mass', [9, 6]);
+      for (let i = 5; i <= 7; i++) { const [x, z] = H.T([i, 6]); w.apply({ add: [[2, x, z, 0], [3, x, z, 0]] }); }
+      const b = BU.buildings(w).list.find((x) => x.cols.length === 3);
+      ok(`${this.tag}: the rooms on it one building`, !!b, BU.buildings(w).list.map((x) => x.cols));
+      ok(`${this.tag}: standing on the deck, the passage at its foot`, !!b && b.base.every((k) => k === 2) && b.through.length === 3, b && { base: b.base, through: b.through });
+      ok(`${this.tag}: roofed, with windows`, !!b?.roof && b.openings.some((o) => o.kind === 'window'), b && { roof: b.roof });
+      ok(`${this.tag}: and the bridge still walks end to end`, walks(w, [2, ...H.T([3, 6])], [2, ...H.T([9, 6])]));
     },
   },
   {

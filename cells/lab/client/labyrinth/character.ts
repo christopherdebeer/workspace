@@ -27,7 +27,7 @@
 import { hash } from '../kit/rng';
 import { DIRS, DRESS, key, unkey, type Cell, type Dress, type World } from './model';
 import { height, motifs } from './motifs';
-import { buildings, underRoof } from './buildings';
+import { buildings, cellsOf, underRoof } from './buildings';
 import { outline } from './form';
 
 const cache = new WeakMap<World, { v: number; map: Map<number, Dress> }>();
@@ -147,12 +147,12 @@ function dressUp(w: World): Map<number, Dress> {
   // (houses: mashrabiya at the upper windows; colonnettes where the windows are arched; a pergola where a door gives on a court)
   const kept = new Set(w.decor.map((d) => key(0, d.i, d.j)));
   for (const b of buildings(w).list) {
-    const all = b.cols.flatMap(([x, z]) => Array.from({ length: b.h }, (_, k) => [k, x, z] as Cell));
+    const all = cellsOf(b).filter((c) => w.block(...c));
     const upper = b.openings.some((o) => o.kind === 'window' && o.k >= 1 && o.style !== 'slit');
-    if (b.roof && upper && chance(0.3, b.id, 21)) for (const c of all) if (c[0] >= 1) put(c, { oriel: true });
+    if (b.roof && upper && chance(0.3, b.id, 21)) for (const c of all) if (c[0] > w.ground(c[1], c[2])) put(c, { oriel: true });
     if (b.openings.some((o) => o.style === 'arched' && o.kind === 'window') && chance(0.4, b.id, 22)) for (const c of all) put(c, { colonnettes: true });
     for (const o of b.openings) {
-      if (o.kind !== 'door' || o.k !== 0) continue;
+      if (o.kind !== 'door' || o.k !== w.ground(o.i, o.j)) continue;
       const [a, bb] = DIRS[o.d], x = o.i + a, z = o.j + bb;
       // (a house's door on to a court, or on to open ground: the way out from it, now and then shaded)
       if (!b.roof || !chance(w.courts.has(key(0, x, z)) ? 0.5 : 0.3, b.id, o.i, o.j, 23)) continue;

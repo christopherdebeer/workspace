@@ -949,10 +949,11 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
       if (along === 0) { slope([A, D, r0]); slope([B, C, r1]); } else { slope([A, B, r0]); slope([D, C, r1]); }
     } else {
       // (the gable ends: walled up in stone, in the plane of the wall, a band at their foot along the eaves' line)
-      const hAt = (d: number) => ye + H * (1 - d / (S / 2));
+      // (the slope's height a distance d in from the eave; at the wall's own line, the eaves' overhang in)
+      const hAt = (d: number) => ye + H * Math.min(1, d / (S / 2)), hg = hAt(O);
       const mid: V3 = [cx, y, cz];
-      if (along === 0) for (const x of [xa, xb]) { face([[x, y, za], [x, y, zb], [x, hAt(O), zb], [x, hAt(O), za]], MAT.stone, 0.85, true, mid); face([[x, hAt(O), za], [x, hAt(O), zb], [x, ye + H, cz]], MAT.stone, 0.85, true, mid); const o = x === xa ? -0.03 : 0.03; box(Math.min(x, x + o), Math.max(x, x + o), y - 0.02, y + 0.04, za, zb, MAT.stone, 0.9); }
-      else for (const z of [za, zb]) { face([[xa, y, z], [xb, y, z], [xb, hAt(O), z], [xa, hAt(O), z]], MAT.stone, 0.85, true, mid); face([[xa, hAt(O), z], [xb, hAt(O), z], [cx, ye + H, z]], MAT.stone, 0.85, true, mid); const o = z === za ? -0.03 : 0.03; box(xa, xb, y - 0.02, y + 0.04, Math.min(z, z + o), Math.max(z, z + o), MAT.stone, 0.9); }
+      if (along === 0) for (const x of [xa, xb]) { face([[x, y, za], [x, y, zb], [x, hg, zb], [x, hg, za]], MAT.stone, 0.85, true, mid); face([[x, hg, za], [x, hg, zb], [x, ye + H, cz]], MAT.stone, 0.85, true, mid); const o = x === xa ? -0.03 : 0.03; box(Math.min(x, x + o), Math.max(x, x + o), y - 0.02, y + 0.04, za, zb, MAT.stone, 0.9); }
+      else for (const z of [za, zb]) { face([[xa, y, z], [xb, y, z], [xb, hg, z], [xa, hg, z]], MAT.stone, 0.85, true, mid); face([[xa, hg, z], [xb, hg, z], [cx, ye + H, z]], MAT.stone, 0.85, true, mid); const o = z === za ? -0.03 : 0.03; box(xa, xb, y - 0.02, y + 0.04, Math.min(z, z + o), Math.max(z, z + o), MAT.stone, 0.9); }
     }
     // (the ridge)
     const RW = 0.035;
