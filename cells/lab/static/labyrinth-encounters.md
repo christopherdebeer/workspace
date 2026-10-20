@@ -226,6 +226,10 @@ The fifth, **a flight aimed at a wall** (what a stair is for: going somewhere): 
 3. Add a scene to `devtools/labyrinth-connectors.mjs` that makes the encounter by gestures, calling `meetings(w, tag, ruleId)`: all the checks above run, in eight orientations.
 4. `--render` draws the scene at every rung in WebGL.
 
-Next rules, by what the exercise found most (frame, merge, step, yield, carry): a flight meeting a terrace (15: notch, top landing, half-landing), two flights opposed (switchback), a way meeting a tree (11, 14: yield, bow, ring), a balcony on rock (16: carry by what's there).
+Next rules, by what the exercise found most (frame, merge, step, yield, carry): a flight meeting a terrace (15: notch, top landing, half-landing), two flights opposed (switchback), a balcony on rock (16: carry by what's there).
+
+The sixth rule, **a way passing a tree** (11, 14): a way of the hand's walking beside a shade tree it planted on the ground (an olive, a stone pine; a cypress is an avenue's, not a place's). The tree claims its cell, so the way already yields. Rungs: the way passing it; a ring of paving round it, the way opening into a small place in its shade (wrap); the ring and a low stone seat round its trunk (wrap, shelter). A scene in `labyrinth-connectors.mjs` checks every rung in eight orientations.
+
+![a way passing an olive: a ring of paving round it; and the ring with a seat round its trunk](labyrinth/e-tree.jpg)
 
 Some encounters need no rule at all, because a foundation answers them: a tower over a way, or rooms on a bridge, are buildings with a passage through their foot (`buildings.ts`), so the gatehouse and the inhabited bridge come of the reserved void and the building reading together (`labyrinth-connective.md`, Progress).

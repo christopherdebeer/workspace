@@ -146,12 +146,12 @@ export function soffit(f: Flight, u: number): number {
  * Each stands in its cell (nothing's built or walked there, as a cypress's), and each a size up from the one before it,
  * so a plant made again grows (`gesture.ts`).
  */
-export const PLANT = { cypress: 0, shrub: 1, hedge: 2, olive: 3, pine: 4 } as const;
+export const PLANT = { cypress: 0, shrub: 1, hedge: 2, olive: 3, pine: 4, vine: 5 } as const;
 /** how many levels of a plant's cell (and over it) its trunk or body takes, and how high it reaches */
-export const PLANT_TALL = [2, 1, 1, 2, 4];
+export const PLANT_TALL = [2, 1, 1, 2, 4, 1];
 export const isTower = (r: number | undefined) => r !== undefined && r >= RULE.tower && r < RULE.tower + 4;
 /** dressing: three stones (travertine is the stone's own), then what's on it */
-export const DRESS = { travertine: 0, brick: 1, marble: 2, moss: 3, ivy: 4, parapet: 5, lantern: 6, pot: 7, balustrade: 8, jali: 9, pergola: 10, mashrabiya: 11, colonnettes: 12 } as const;
+export const DRESS = { travertine: 0, brick: 1, marble: 2, moss: 3, ivy: 4, parapet: 5, lantern: 6, pot: 7, balustrade: 8, jali: 9, pergola: 10, mashrabiya: 11, colonnettes: 12, seat: 13 } as const;
 /** a cell's dressing: each part set (by the hand, or by the rules' own dressing, character.ts) or not; a part set off
  * by hand stays off whatever the rules would put */
 export interface Dress {
@@ -161,6 +161,8 @@ export interface Dress {
   /** a thin wall pierced as a jali screen; a pergola over a place (kept at the place, not the stone); a building's upper
    * windows behind mashrabiya; its doors and arched windows framed with colonnettes */
   screen?: boolean; pergola?: boolean; oriel?: boolean; colonnettes?: boolean;
+  /** a low stone seat round a tree (kept at the tree's cell) */
+  seat?: boolean;
 }
 /**
  * A connection: from a surface (the height stood on, and the column), along the columns the stroke crossed (the start's
@@ -471,6 +473,7 @@ export class World {
         else if (kind === DRESS.pergola) d.pergola = !!on;
         else if (kind === DRESS.mashrabiya) d.oriel = !!on;
         else if (kind === DRESS.colonnettes) d.colonnettes = !!on;
+        else if (kind === DRESS.seat) d.seat = !!on;
         else d.prop = on ? kind : 0;
         this.dress.set(v, d);
       }

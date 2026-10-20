@@ -32,6 +32,28 @@ const centroid = (cs) => cs.reduce((a, c) => [a[0] + c.x / cs.length, a[1] + c.z
 
 export const SCENES = [
   {
+    name: 'a climber: tapped at a house\'s foot, it climbs the face, as high as the house, and over a walked top',
+    run(w, H) {
+      H.block(6, 7, 5, 6, 3);
+      const op = H.tap([5, 5]), [k, i, j] = at(w, H.T, [5, 5]), c = PL.climb(w, k, i, j);
+      ok(`${this.tag}: a climber, first, against a house`, w.plant(k, i, j) === PLANT.vine, { why: op.why, note: op.note });
+      const [fi, fj] = H.T([6, 5]);
+      ok(`${this.tag}: up the house's face, its whole height`, c && i + DIRS[c.d][0] === fi && j + DIRS[c.d][1] === fj && c.h === 3, c);
+      ok(`${this.tag}: and not over a roof`, c && !c.over === !!BU.buildings(w).list[0]?.roof, { c, roof: BU.buildings(w).list[0]?.roof });
+    },
+  },
+  {
+    name: 'climbers along a wall: a stroke beside a wall offers climbers, each where there\'s a face to climb',
+    run(w, H) {
+      for (let i = 3; i <= 8; i++) H.block(i, i, 7, 7, 2);
+      const op = G.trace(w, H.pick([3, 6]), G.connect([H.T([3, 6]), H.T([8, 6])]), null, () => 0, 0, [], 'mass');
+      const all = [op, ...(op?.alts ?? []).map((a) => a.op)].filter((o) => o?.plants?.some((p) => p[3] === PLANT.vine));
+      ok(`${this.tag}: climbers are one of its readings`, all.length === 1, (op?.alts ?? []).map((a) => a.label));
+      const v = all[0];
+      ok(`${this.tag}: each against the wall`, v && v.plants.every(([k, i, j]) => DIRS.some(([a, b]) => w.occupied(k, i + a, j + b))), v?.plants);
+    },
+  },
+  {
     name: 'against a wall: a stone pine beside a tall wall leans from it, its crown pruned round the stone',
     run(w, H) {
       for (let j = 2; j <= 9; j++) H.block(7, 7, j, j, 4);

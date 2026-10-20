@@ -6,7 +6,7 @@
 //   --only=NAME   --ops (print each scene's ops, to replay with ?ops= in the browser)   --render (each scene, unturned,
 //   drawn by the page in WebGL: devtools/out/connectors/*.png; --zoom=, --turn= to frame them)
 import './labyrinth-node.mjs';
-const { World, key, DIRS } = await import('../client/labyrinth/model.ts');
+const { World, key, DIRS, PLANT } = await import('../client/labyrinth/model.ts');
 const G = await import('../client/labyrinth/gesture.ts');
 const NAV = await import('../client/labyrinth/nav.ts');
 const BU = await import('../client/labyrinth/buildings.ts');
@@ -245,6 +245,21 @@ const SCENES = [
       H.column([3, 6], 2); H.column([9, 6], 2);
       H.stroke([3, 6], [9, 6], 'mass', [9, 6]);
       meetings(w, this.tag, 'ways-cross');
+    },
+  },
+  {
+    name: 'a way passes a tree: an olive planted, then a way drawn by it',
+    run(w, H) {
+      const [i, j] = H.T([6, 5]);
+      w.apply({ plants: [[w.ground(i, j), i, j, PLANT.olive, 0]], born: 0, why: 'plant' });
+      H.stroke([3, 6], [9, 6], 'way');
+      meetings(w, this.tag, 'way-meets-tree');
+      ok(`${this.tag}: the tree stands, and the way goes by it`, w.plant(w.ground(i, j), i, j) === PLANT.olive);
+      const m = w.meetings.find((q) => q.rule === 'way-meets-tree');
+      if (m) {
+        const v = replay(w.encode(), w.seed); v.apply({ choose: [[...m.anchor, 2]], why: 'reading' });
+        ok(`${this.tag}: at the top rung, a seat round it`, !!v.dressed(...m.anchor)?.seat, v.dressed(...m.anchor));
+      }
     },
   },
   {

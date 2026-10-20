@@ -67,8 +67,14 @@ float reach(vec3 p) {
   float rag = (bnoise(vec3(p.x * .35, 0., p.z * .35)) - .5) * 2.5;
   return (1. - smoothstep(.8, 5.5, dB + rag * .8)) * smoothstep(.2, 3.2, dE + rag * .6);
 }
-// (a thing lying on the land (its rise marked 3 + its own chance), left out where the drawing doesn't reach: whole)
-bool leftOut(vec3 p, float u) { return uBleed > .5 && u >= 3. && u < 4. && fract(u) > reach(vec3(floor(p.x) + .5, 0., floor(p.z) + .5)) * 1.25 - .08; }
+// (a thing lying on the land (its rise marked 3 + its own chance), left out where the drawing doesn't reach: whole; a
+// thing wider than its cell (a tree's crown) marked 4 + its foot's cell and its chance, so it's kept or left whole)
+bool leftOut(vec3 p, float u) {
+  if (uBleed < .5 || u < 3. || u >= 5.) return false;
+  if (u < 4.) return fract(u) > reach(vec3(floor(p.x) + .5, 0., floor(p.z) + .5)) * 1.25 - .08;
+  float f = (u - 4.) * 10000., at = floor(f);
+  return fract(f) / .9 > reach(vec3(mod(at, 64.) - 29.5, 0., floor(at / 64.) - 29.5)) * 1.25 - .08;
+}
 `;
 const FS = COMMON + PIERCE + REACH + `
 in vec3 vPos, vNrm; in float vAo, vMat, vTone, vU; in vec4 vLs;
@@ -187,7 +193,10 @@ void main() {
     // (leaves, by kind: a cypress's dark green; an olive's grey-green, silver where it turns; a stone pine's deep
     // blue-green; clipped box, a brighter green)
     float f = fbm(vPos * 7.);
-    if (kind == 1) base = mix(vec3(.24, .29, .20), vec3(.42, .46, .36), f);
+    // (and a climber's: its own fresh green, and its bracts in flower, a deep magenta)
+    if (moss) base = mix(vec3(.55, .10, .32), vec3(.78, .22, .48), f);
+    else if (ivy) base = mix(vec3(.16, .28, .09), vec3(.30, .42, .16), f);
+    else if (kind == 1) base = mix(vec3(.24, .29, .20), vec3(.42, .46, .36), f);
     else if (kind == 2) base = mix(vec3(.07, .15, .10), vec3(.15, .23, .14), f);
     else if (kind == 3) base = mix(vec3(.13, .23, .08), vec3(.25, .35, .13), f);
     else base = mix(vec3(.10, .17, .08), vec3(.20, .27, .12), f);
@@ -269,7 +278,7 @@ void main() {
     }
   }
   // (moss: in the joints and the shade, thicker on tops and low down; ivy: hanging leaves over a side)
-  if (moss && mat != 5) {
+  if (moss && mat != 5 && mat != 3) {
     // (moss where it has a reason: in the shade (faces turned from the sun), at the damp foot of a course, and in the
     // joints and along the edges of a top, not across it)
     float shade = 1. - smoothstep(-.1, .45, dot(n, uSun));
@@ -280,7 +289,7 @@ void main() {
     base = mix(base, mc * (.8 + .3 * noise(vPos * 26.)), where * spot * .65);
   }
   // (ivy's leaves are its own geometry (mesh.ts); under them, where it grows, the stone is a little stained)
-  if (ivy && abs(n.y) < .5) base *= .93 - .05 * noise(vPos * 6.);
+  if (ivy && mat != 3 && abs(n.y) < .5) base *= .93 - .05 * noise(vPos * 6.);
   // (the sun, and its shadows: soft, a few taps round where this is in its map)
   vec3 ls = vLs.xyz / vLs.w * .5 + .5;
   float sh = 0., bias = .0012 + .0025 * (1. - abs(dot(n, uSun)));

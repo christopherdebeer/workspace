@@ -19,7 +19,7 @@
  * new kind of encounter is a new rule; the ladder, the claims, the choosing and the checking (devtools/
  * labyrinth-connectors.mjs runs every rule's scene through the same checks) come with it.
  */
-import { DIRS, DRESS, RULE, inGrid, key, type Cell, type Op, type World } from './model';
+import { DIRS, DRESS, PLANT, RULE, inGrid, key, type Cell, type Op, type World } from './model';
 
 /** the verbs: how architecture behaves touched by other architecture (static/labyrinth-encounters.md) */
 export type Verb = 'merge' | 'open' | 'carry' | 'wrap' | 'step' | 'shelter' | 'frame' | 'yield' | 'separate';
@@ -297,8 +297,52 @@ const flightMeetsWall: Rule = {
 /** what counts as making two ways' meeting again: another way (not the stone round it) */
 const ways = (op: Op) => !!op.connect || !!op.pave?.length;
 
+/**
+ * A way of the hand's passing beside a shade tree the hand planted (an olive, a stone pine) on the ground: the tree
+ * claims its cell, so the way goes by it. The ladder: left so, the way passing it (the restrained answer); a ring of
+ * paving round it, the way opening into a small place in its shade; the ring with a low stone seat round its trunk.
+ */
+const wayMeetsTree: Rule = {
+  id: 'way-meets-tree',
+  find(w) {
+    const out: Found[] = [], seen = new Set<number>();
+    w.ops.forEach((op, p) => {
+      if (op.derived) return;
+      for (const [k, i, j, kind] of op.plants ?? []) {
+        const T: Cell = [k, i, j];
+        if ((kind !== PLANT.olive && kind !== PLANT.pine) || k !== w.ground(i, j) || w.plant(k, i, j) !== kind || seen.has(key(...T))) continue;
+        // (the first of the hand's ways that walks beside it, at its foot)
+        let a = -1, by: Cell | null = null;
+        for (let q = 0; q < w.ops.length && a < 0; q++) {
+          if (w.ops[q].derived) continue;
+          const c = (w.walks.get(w.ops[q]) ?? []).find(([ck, ci, cj]) => ck === k && Math.abs(ci - i) + Math.abs(cj - j) === 1);
+          if (c) { a = q; by = c; }
+        }
+        if (a < 0 || !by) continue;
+        seen.add(key(...T));
+        // (the ring: the ground round it, level with its foot, free, not already paved or a passage)
+        const ring: Array<[number, number]> = [];
+        for (const [x, z] of [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]]) {
+          const ci = i + x, cj = j + z;
+          if (inGrid(ci, cj) && w.ground(ci, cj) === k && !w.occupied(k, ci, cj) && !w.tree(k, ci, cj) && !w.pool(ci, cj) && !w.paved(ci, cj) && w.passage(k, ci, cj) < 0 && !w.way(k, ci, cj)) ring.push([ci, cj]);
+        }
+        const paved: Op = ring.length ? { pave: ring } : {};
+        out.push({
+          rule: this.id, name: 'a way passing a tree', where: 'by the tree', anchor: T, cells: [T, by], by: [a, p].sort((x, y) => x - y), insists: ways,
+          candidates: [
+            { level: 0, label: 'the way passing it', verbs: ['yield'], op: {} },
+            ...(ring.length ? [{ level: 1 as const, label: 'a ring of paving round it, a place in its shade', verbs: ['wrap'] as Verb[], op: paved }] : []),
+            { level: 2, label: `${ring.length ? 'the ring, and ' : ''}a low stone seat round its trunk`, verbs: ['wrap', 'shelter'], op: join(paved, { dress: [[k, i, j, DRESS.seat, 1]] }) },
+          ],
+        });
+      }
+    });
+    return out;
+  },
+};
+
 /** every rule, in the order they're resolved (a later one never lays where an earlier one has) */
-export const RULES: Rule[] = [waysMeet, levelApart, waysCross, wayEnds, flightMeetsWall];
+export const RULES: Rule[] = [waysMeet, levelApart, waysCross, wayEnds, flightMeetsWall, wayMeetsTree];
 
 // ─── resolving them ───
 

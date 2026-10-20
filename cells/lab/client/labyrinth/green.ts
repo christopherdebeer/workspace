@@ -2,8 +2,8 @@
  * The green intent: what a gesture plants (model.ts `PLANT`, plants.ts), read from where it's made, as the other
  * intents read stone and ways from theirs.
  *
- * - **A tap** plants what suits the place: beside a wall or a building's face, a cypress (slender, standing up out of
- *   it); on a top, an olive in a planter (a roof garden); on open ground, an olive. A tap on a plant grows it: a shrub
+ * - **A tap** plants what suits the place: against a building's face, a climber (up the face, over the top, in flower);
+ *   beside a wall, a cypress (slender, standing up out of it), a climber offered; on a top, an olive in a planter (a roof garden); on open ground, an olive. A tap on a plant grows it: a shrub
  *   to an olive, an olive to a stone pine (insisting develops it, as elsewhere).
  * - **A stroke** plants a row along it: beside a wall or a way, an avenue of cypresses a cell apart from each other; in
  *   the open, olives two cells apart. The other readings: a hedge (every cell, clipped), an avenue of stone pines (three
@@ -14,6 +14,7 @@
  * Never in a way the hand made, a stair's way, or water: what's planted keeps every claim (`World.claim`), and a plant
  * standing where a way runs would close it.
  */
+import { buildings } from './buildings';
 import { DIRS, PLANT, inGrid, key, type Alt, type Cell, type Op, type World } from './model';
 
 /** where a plant could stand at a column: on what's there (the ground or a top), with nothing in the way there, and no
@@ -29,11 +30,13 @@ function spot(w: World, i: number, j: number): Cell | null {
 /** beside stone that stands up past it (a wall, a building's face) */
 const byWall = (w: World, [k, i, j]: Cell) => DIRS.some(([a, b]) => w.occupied(k, i + a, j + b) && w.occupied(k + 1, i + a, j + b));
 /** beside a way the hand made */
+/** against a building's face (a house, a tower): what a climber's planted against */
+const byHouse = (w: World, [k, i, j]: Cell) => DIRS.some(([a, b]) => buildings(w).of.has(key(k, i + a, j + b)) && w.occupied(k + 1, i + a, j + b));
 const byWay = (w: World, [k, i, j]: Cell) => DIRS.some(([a, b]) => w.passage(k, i + a, j + b) >= 0);
 const plant = (cells: Cell[], kind: number, now: number, note: string): Op => ({ plants: cells.map(([k, i, j]) => [k, i, j, kind, now] as [number, number, number, number, number]), born: now, why: 'plant', note, reading: note });
 /** what each kind grows into, made again */
 const GROWS: Record<number, number> = { [PLANT.shrub]: PLANT.olive, [PLANT.olive]: PLANT.pine };
-const NAME: Record<number, string> = { [PLANT.cypress]: 'a cypress', [PLANT.shrub]: 'a shrub', [PLANT.hedge]: 'a hedge', [PLANT.olive]: 'an olive', [PLANT.pine]: 'a stone pine' };
+const NAME: Record<number, string> = { [PLANT.cypress]: 'a cypress', [PLANT.shrub]: 'a shrub', [PLANT.hedge]: 'a hedge', [PLANT.olive]: 'an olive', [PLANT.pine]: 'a stone pine', [PLANT.vine]: 'a climber' };
 
 /** a tap with the green intent: at the column touched */
 export function plantTap(w: World, hit: Cell, now: number): Op | { refused: string; alts?: Alt[] } | null {
@@ -50,9 +53,9 @@ export function plantTap(w: World, hit: Cell, now: number): Op | { refused: stri
   const c = spot(w, i, j);
   if (!c) return { refused: 'nothing grows there: it\'s built on, a way\'s, or water' };
   const onTop = c[0] > w.ground(i, j);
-  const first = byWall(w, c) ? PLANT.cypress : PLANT.olive;
-  const kinds = [first, ...[PLANT.olive, PLANT.cypress, PLANT.pine, PLANT.shrub, PLANT.hedge].filter((q) => q !== first)];
-  const say = (q: number) => `${NAME[q]}${onTop ? ', in a planter' : ''}${q === PLANT.cypress && byWall(w, c) ? ', against the wall' : ''}`;
+  const walled = byWall(w, c), first = byHouse(w, c) ? PLANT.vine : walled ? PLANT.cypress : PLANT.olive;
+  const kinds = [first, ...[PLANT.olive, PLANT.cypress, ...(walled ? [PLANT.vine] : []), PLANT.pine, PLANT.shrub, PLANT.hedge].filter((q) => q !== first)];
+  const say = (q: number) => `${NAME[q]}${onTop ? ', in a planter' : ''}${q === PLANT.cypress && walled ? ', against the wall' : q === PLANT.vine ? ', up the face' : ''}`;
   return { ...plant([c], first, now, say(first)), alts: kinds.slice(1).map((q) => ({ label: say(q), op: plant([c], q, now, say(q)) })) };
 }
 
@@ -82,10 +85,12 @@ export function plantStroke(w: World, cells: Array<[number, number]>, closed: bo
   const edged = ok.filter(([c]) => byWall(w, c) || byWay(w, c)).length * 2 >= ok.length;
   const every = (n: number) => ok.filter(([, q]) => q % n === 0).map(([c]) => c);
   const rows: Array<[number, number, string]> = edged
-    ? [[PLANT.cypress, 2, 'an avenue of cypresses'], [PLANT.hedge, 1, 'a hedge'], [PLANT.pine, 3, 'an avenue of stone pines'], [PLANT.olive, 2, 'a row of olives'], [PLANT.shrub, 1, 'shrubs']]
+    ? [[PLANT.cypress, 2, 'an avenue of cypresses'], [PLANT.vine, 1, 'climbers along the wall'], [PLANT.hedge, 1, 'a hedge'], [PLANT.pine, 3, 'an avenue of stone pines'], [PLANT.olive, 2, 'a row of olives'], [PLANT.shrub, 1, 'shrubs']]
     : [[PLANT.olive, 2, 'a row of olives'], [PLANT.hedge, 1, 'a hedge'], [PLANT.pine, 3, 'an avenue of stone pines'], [PLANT.cypress, 2, 'a row of cypresses'], [PLANT.shrub, 1, 'shrubs']];
+  // (climbers only where there's a face to climb)
+  const where = (kind: number, n: number) => (kind === PLANT.vine ? every(n).filter((c) => byWall(w, c)) : every(n));
   const [k0, n0, s0] = rows[0];
-  return { ...plant(every(n0), k0, now, s0), alts: rows.slice(1).map(([k, n, s]) => ({ label: s, op: plant(every(n), k, now, s) })) };
+  return { ...plant(where(k0, n0), k0, now, s0), alts: rows.slice(1).filter(([k, n]) => where(k, n).length).map(([k, n, s]) => ({ label: s, op: plant(where(k, n), k, now, s) })) };
 }
 
 /** whether a plant stands at a column (for the page to say what a green touch is on) */

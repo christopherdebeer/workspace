@@ -21,8 +21,8 @@ import { character, look } from './character';
 import { buildings, opening, underRoof, type Building, type Opening } from './buildings';
 import { BUT, BUTH, BUTW, WT, buttresses, inBlock, outline, reach, wallCell, type Edge } from './form';
 import { CENTER, DECK, DIRS, DRESS, PLANT, key, soffit as flightSoffit, unkey, type Span, type World } from './model';
-import { grow, growths } from './plants';
-import { LAND, surfaceY } from './land';
+import { climb, grow, growths } from './plants';
+import { LAND, noise2, surfaceY } from './land';
 import { groundY, retaining } from './context';
 
 /** floats a vertex: position, normal, ao (1 open .. 0 shut in), material (MAT), its rising (when laid, the height it
@@ -100,10 +100,12 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
   /** leaves' kind, for their colour (0 a cypress's dark green, 1 an olive's silver, 2 a stone pine's blue-green, 3 a
    * clipped box's bright green) */
   let leaf = 0;
+  /** leaves in flower (a climber's bracts), or a climber's own fresh green: drawn over the kind, in the shader */
+  let bloom = 0;
   /** a cell's dressing, as it's drawn over its stone */
   const dressOf = (k: number, i: number, j: number) => { const d = dressed(k, i, j); return d ? (d.mat ?? 0) * KIND + (d.moss ? MOSS : 0) + (d.ivy ? IVY : 0) : 0; };
   const at = (born: number, pivot: number, k: number, i: number, j: number, how = 1) => ({ born, pivot, how, tone: tone(k, i, j), dress: dressOf(k, i, j), sel: selected.has(key(k, i, j)) });
-  const vert = (p: V3, n: V3, ao: number, mat: number) => out.push(p[0], p[1], p[2], n[0], n[1], n[2], ao, (mat === MAT.stone || mat === MAT.within ? mat + cur.dress : mat === MAT.leaves ? mat + leaf * KIND : mat) + (cur.sel ? SEL : 0), cur.born, cur.pivot, cur.how, cur.tone);
+  const vert = (p: V3, n: V3, ao: number, mat: number) => out.push(p[0], p[1], p[2], n[0], n[1], n[2], ao, (mat === MAT.stone || mat === MAT.within ? mat + cur.dress : mat === MAT.leaves ? mat + leaf * KIND + bloom : mat) + (cur.sel ? SEL : 0), cur.born, cur.pivot, cur.how, cur.tone);
   const quad = (a: V3, b: V3, c: V3, d: V3, n: V3, ao: number[] | number, mat: number) => {
     const A = typeof ao === 'number' ? [ao, ao, ao, ao] : ao;
     const ux = b[0] - a[0], uy = b[1] - a[1], uz = b[2] - a[2], vx = c[0] - a[0], vy = c[1] - a[1], vz = c[2] - a[2];
@@ -489,7 +491,9 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
     if (k > w.ground(i, j) && w.stone(k - 1, i, j)) planter(k, i, j, b);
     if (kind === PLANT.shrub) shrubAt(i, j, k, b);
     else if (kind === PLANT.hedge) hedge(i, j, k, b);
+    else if (kind === PLANT.vine) vine(i, j, k, b);
     else tree(growths(w).get(v) ?? grow(w, k, i, j, kind), i, j, k, b);
+    if (dressed(k, i, j)?.seat) seat(k, i, j, b);
   }
   for (const dc of [...w.decor.map((d) => ({ ...d, k: w.ground(d.i, d.j) })), ...hand]) {
     cur = { born: dc.born, pivot: -0.4, how: 1, tone: 0.5, dress: 0, sel: false };
@@ -853,9 +857,17 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
         boulder(at(i, j, a * 0.28, b * 0.28), 0.16 + 0.14 * r(q, 10), q);
         if (r(q, 11) < 0.5) boulder(at(i, j, a * 0.1 + (r(q, 12) - 0.5) * 0.4, b * 0.1 + (r(q, 13) - 0.5) * 0.4), 0.08 + 0.06 * r(q, 14), q + 7);
       }
-      // (shrubs on the banks; a cypress now and then on open ground)
-      if (bank && r(q, 20) < 0.18) for (let n = 0; n < 1 + Math.floor(r(q, 21) * 3); n++) shrub(at(i, j, (r(q, 22, n) - 0.5) * 0.7, (r(q, 23, n) - 0.5) * 0.7), 0.1 + 0.08 * r(q, 24, n), q + n);
-      else if (!bank && r(q, 30) < 0.035) cypress(i, j, g, -1e3, 3 + 0.999 * r(q, 42));
+      // (what grows wild: scrub on the banks; olives in groves on the shelves, where the land's grove field is high; stone
+      // pines on the rises and by the outcrop, alone or in twos; a cypress now and then. Never right up against what's
+      // built: round that it's cleared)
+      const cleared = [[0, 0], ...DIRS, [1, 1], [1, -1], [-1, 1], [-1, -1]].some(([a, b]) => w.occupied(g, i + a, j + b) || w.occupied(g + 1, i + a, j + b) || w.paved(i + a, j + b));
+      // (a tree's whole kept or left out where the land's drawing fades, by its foot: marked with its foot's cell)
+      const rise = higher.filter((h) => h < 0).length >= 3, how = 4 + (Math.floor(X(i)) + 30 + (Math.floor(Z(j)) + 30) * 64 + 0.9 * r(q, 42)) / 10000, field = noise2(land.seed + 17, i * 0.3, j * 0.3);
+      if (bank && r(q, 20) < 0.22) for (let n = 0; n < 1 + Math.floor(r(q, 21) * 3); n++) shrub(at(i, j, (r(q, 22, n) - 0.5) * 0.7, (r(q, 23, n) - 0.5) * 0.7), 0.1 + 0.08 * r(q, 24, n), q + n);
+      else if (!bank && !cleared && !byWater && field > 0.62 && (i + j) % 2 === 0 && r(q, 31) < 0.8) tree(grow(w, g, i, j, PLANT.olive), i, j, g, -1e3, how);
+      else if (!cleared && (rise || nearRock) && r(q, 32) < 0.3) tree(grow(w, g, i, j, PLANT.pine), i, j, g, -1e3, how);
+      else if (!bank && !cleared && r(q, 30) < 0.03) cypress(i, j, g, -1e3, how);
+      else if (!bank && field > 0.5 && r(q, 33) < 0.12) shrub(at(i, j, (r(q, 34) - 0.5) * 0.5, (r(q, 35) - 0.5) * 0.5), 0.12 + 0.06 * r(q, 36), q + 3);
     }
     cur = { born: -1e3, pivot: 0, how: 1, tone: 0, dress: 0, sel: false };
   }
@@ -1215,12 +1227,58 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
     lathe(c.x, c.z, Array.from({ length: 8 }, (_, n) => { const t = (n / 7) * Math.PI; return [Math.sin(t) * c.r * (1 + 0.07 * Math.sin(n * 2.1 + c.x * 7)), c.y - c.r * 0.5 + c.r * 0.9 * (1 - Math.cos(t))] as [number, number]; }), MAT.leaves, 11);
   }
   /** a tree grown out (plants.ts): its trunk, and its crown's clumps */
-  function tree(g: ReturnType<typeof grow>, i: number, j: number, k: number, born: number) {
-    cur = { born, pivot: k, how: 2, tone: 0.5, dress: 0, sel: selected.has(key(k, i, j)) };
+  function tree(g: ReturnType<typeof grow>, i: number, j: number, k: number, born: number, how = 2) {
+    cur = { born, pivot: k, how, tone: 0.5, dress: 0, sel: selected.has(key(k, i, j)) };
     trunkOf(g.trunk, g.girth);
+    for (const st of g.stems ?? []) trunkOf(st, g.girth * 0.7);
     leaf = g.kind === PLANT.pine ? 2 : 1;
     g.crown.forEach((c, n) => { cur.tone = 0.35 + 0.3 * ((n * 37) % 10) / 10; clump(c); });
     leaf = 0;
+  }
+  /**
+   * A climber (plants.ts `climb`): stems up the face of what it's planted against, fanning out as they rise, leaves in
+   * clumps along them, flowering here and there; over the top where the top's open, hanging a little down the far side.
+   * With nothing to climb, a low mound.
+   */
+  function vine(i: number, j: number, k: number, born: number) {
+    cur = { born, pivot: k, how: 2, tone: 0.5, dress: 0, sel: selected.has(key(k, i, j)) };
+    const c = climb(w, k, i, j), rr = (n: number) => (hash(w.seed, i, j, k, 700 + n) % 1000) / 1000;
+    if (!c) { leaf = 0; bloom = IVY; clump({ x: X(i) + 0.5, y: k + 0.18, z: Z(j) + 0.5, r: 0.28 }); bloom = 0; return; }
+    const [a, b] = DIRS[c.d], [ta, tb] = DIRS[(c.d + 1) % 4], cx = X(i) + 0.5, cz = Z(j) + 0.5, F = 0.42;
+    // (a point on the face: s across it, u out from it, at y)
+    const P = (sv: number, u: number, y: number): [number, number, number] => [cx + a * (F - u) + ta * sv, y, cz + b * (F - u) + tb * sv];
+    const H = c.h - 0.05;
+    for (let n = 0; n < 3; n++) {
+      const end = (n - 1) * (0.25 + 0.15 * rr(n)), pts: Array<[number, number, number]> = [];
+      for (let q = 0; q <= 5; q++) { const t = q / 5; pts.push(P(end * t + (rr(10 + n * 7 + q) - 0.5) * 0.08, 0.05, k + t * H)); }
+      trunkOf(pts, 0.022);
+    }
+    leaf = 0;
+    const N = Math.round(7 + 6 * c.h);
+    for (let n = 0; n < N; n++) {
+      const t = Math.pow(rr(100 + n), 0.8), sv = (rr(200 + n) - 0.5) * (0.3 + 0.75 * t), y = k + 0.15 + t * (H - 0.1);
+      bloom = rr(300 + n) < 0.22 ? MOSS : IVY; cur.tone = 0.35 + 0.4 * rr(400 + n);
+      const p = P(sv, 0.09 + 0.05 * rr(500 + n), y); clump({ x: p[0], y: p[1], z: p[2], r: 0.15 + 0.09 * rr(600 + n) });
+    }
+    // (over the top, and a little down the far side)
+    if (c.over) for (let n = 0; n < 6; n++) {
+      const sv = (rr(800 + n) - 0.5) * 0.9, u = -0.1 - 0.5 * rr(810 + n), y = k + c.h + 0.06 - (u < -0.45 ? 0.15 : 0);
+      bloom = rr(820 + n) < 0.35 ? MOSS : IVY;
+      const p = P(sv, u, y); clump({ x: p[0], y: p[1], z: p[2], r: 0.14 + 0.06 * rr(830 + n) });
+    }
+    bloom = 0;
+  }
+  /** a seat round a tree: a low ring of stone round its trunk, eight-sided, coped, earth inside it */
+  function seat(k: number, i: number, j: number, born: number) {
+    cur = { born, pivot: k, how: 1, tone: 0.5, dress: 0, sel: false };
+    const cx = X(i) + 0.5, cz = Z(j) + 0.5, R0 = 0.3, R1 = 0.44, H = 0.26, N = 8, P = (r: number, q: number, y: number): V3 => { const a = ((q + 0.5) / N) * Math.PI * 2; return [cx + Math.cos(a) * r, y, cz + Math.sin(a) * r]; };
+    for (let q = 0; q < N; q++) {
+      const a = ((q + 1) / N) * Math.PI * 2, n: V3 = [Math.cos(a), 0, Math.sin(a)];
+      quad(P(R1, q, k), P(R1, q + 1, k), P(R1, q + 1, k + H), P(R1, q, k + H), n, [0.6, 0.6, 0.95, 0.95], MAT.stone);
+      quad(P(R0, q + 1, k), P(R0, q, k), P(R0, q, k + H), P(R0, q + 1, k + H), [-n[0], 0, -n[2]], 0.7, MAT.stone);
+      quad(P(R0 - 0.02, q, k + H), P(R0 - 0.02, q + 1, k + H), P(R1 + 0.03, q + 1, k + H), P(R1 + 0.03, q, k + H), [0, 1, 0], 1, MAT.stone);
+      quad(P(R0, q, k + H - 0.05), P(R0, q + 1, k + H - 0.05), P(0.05, q + 1, k + H - 0.05), P(0.05, q, k + H - 0.05), [0, 1, 0], 0.6, MAT.bark);
+    }
   }
   /** a shrub: a rounded bush, waist high */
   function shrubAt(i: number, j: number, k: number, born: number) {
@@ -1244,7 +1302,7 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
     quad([x0 + T, k + Hh - 0.04, z0 + T], [x1 - T, k + Hh - 0.04, z0 + T], [x1 - T, k + Hh - 0.04, z1 - T], [x0 + T, k + Hh - 0.04, z1 - T], [0, 1, 0], 0.6, MAT.bark);
   }
   function cypress(i: number, j: number, y0: number, born: number, how = 2) {
-    const cx = X(i) + 0.5, cz = Z(j) + 0.5, Ht = 1.85, SEG = 12, RINGS = 16, seed = i * 31 + j * 17;
+    const seed = i * 31 + j * 17, cx = X(i) + 0.5, cz = Z(j) + 0.5, Ht = 1.85 * (0.8 + 0.4 * (Math.abs(Math.sin(seed * 7.31) * 43758.5453) % 1)), SEG = 12, RINGS = 16;
     cur = { born, pivot: y0, how, tone: 0.5, dress: 0, sel: selected.has(key(y0, i, j)) };
     const rnd = (q: number) => { const x = Math.sin((seed * 97 + q) * 12.9898) * 43758.5453; return x - Math.floor(x); };
     for (let s = 0; s < 6; s++) {
