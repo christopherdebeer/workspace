@@ -194,3 +194,25 @@ In three of six (05, 10, 16) the third thing made the result richer; in the othe
 5. **New relative to the connective spec:** shelter over places (not only buildings), water as a path through and past structure, living things with claims, and shared rhythm between neighbouring assemblies.
 
 The next step this points to is building the encounter ladder for one pairing that's nearly in reach (a flight meeting a terrace, 15: notch, landing, half-landing), with the compatibility check, before generalising.
+
+## Built: the encounter framework
+
+What the exercise asked of the engine is now its foundation (`client/labyrinth/encounters.ts`), so a new kind of encounter is a small rule and inherits everything else:
+
+- **Rules find meetings and offer a ladder.** A rule says where its meetings are (which of the hand's things meet, where it would act) and, for each, its candidates as ordinary operations, built from shared verbs (`floor`, `pier`, `lantern`, `join`, more to come), at rung 0 (the smallest sufficient), 1 (the obvious) and 2 (the surprising).
+- **The framework chooses.** The rung is the hand's choice if it made one (kept on its gesture as `Op.choose`), else the smallest, a rung higher for each later gesture that makes it again (a rule says what counts: for ways meeting, another way, not the stone round it). The highest candidate at or below that rung that keeps every **claim** (`World.claim`: a passage the hand made, a stair's way, a tree, water) and doesn't fall where another meeting's resolution lies is laid.
+- **What it lays is just operations.** Marked `derived` (never kept, worked out again on every rebuild), laid after the hand's, so supports, buildings, the walk and the mesh treat it as they treat the hand's. A rebuild is two passes when anything meets.
+- **What the hand builds on, it makes its own.** If a gesture stands on stone a meeting laid (a way arriving on a meeting's landing), that stone is copied into the gesture (`World.adopt`), so it no longer depends on how the meeting is read as more is built round it. (Found by the land tests: without it a later way lost its floor when the meeting it rested on was re-read.)
+- **The hand can see and choose.** A stroke that makes a meeting says what it became ("…; where it meets: a corner slab joining them") and offers the other rungs when held; selecting a meeting's slab offers its rungs as readings.
+- **Every rule is checked the same way** (`devtools/labyrinth-connectors.mjs`, `meetings()`): in a scene turned to all four sides and mirrored, each meeting is found; left alone it's the smallest; each rung can be chosen and is what's laid; nothing laid is in a passage or a stair's way; the things that met can be walked between at every rung; each rung lays all the one below does; and made again, it climbs. These checks found three bugs in the first rule before it shipped (one meeting found twice from each end, a repeat found as a third, the target's own columns counted as insistence).
+
+The first rule, **ways meet** (encounters 12 and 19, and Astra's two bridges meeting diagonally): two raised ways of the hand's ending corner to corner, a cell apart in line, or a way a cell short of a top at its height. Rungs: a corner slab, or the gap closed; a small terrace or landing where they meet; that on its own pier, with a lantern.
+
+### Adding an encounter
+
+1. Write the rule in `encounters.ts`: `find(w)` returns meetings, each `{ rule, name, anchor, cells, by, candidates, insists? }`; candidates are operations made with the verbs (add a verb if a new kind of change is needed, once, for every rule after).
+2. Add it to `RULES`.
+3. Add a scene to `devtools/labyrinth-connectors.mjs` that makes the encounter by gestures, calling `meetings(w, tag, ruleId)`: all the checks above run, in eight orientations.
+4. `--render` draws the scene at every rung in WebGL.
+
+Next rules, by what the exercise found most (frame, merge, step, yield, carry): a flight meeting a terrace (15: notch, top landing, half-landing), two flights opposed (switchback), a way meeting a tree (11, 14: yield, bow, ring), a balcony on rock (16: carry by what's there).

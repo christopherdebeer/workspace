@@ -119,4 +119,6 @@ What's been built from this so far, and where (each checked in `devtools/labyrin
 - **Roof terrace seam** (§4): a building arrived on along one edge only makes that edge a terrace, and the rest keeps its roof, if two cells or more are left (`Building.roofPlan`, `terrace`; `underRoof()`).
 - **Stable identity** (§5): a building's character (windows, door, roof) is anchored to the column the hand laid first (`World.firstOp`), so a column added beside it later never re-rolls it.
 
-Not yet: junctions (corner bay, split landing, switchback), buildings above air (inhabited bridge, gatehouse room), cross vaults, joined roofs, terrain and water transitions.
+- **Encounters** (§4, §6; `static/labyrinth-encounters.md`): a framework for what the hand's pieces make of meeting, a ladder of resolutions per meeting chosen by insistence or by hand and checked against every claim; first rule, raised ways meeting corner to corner or a cell apart (a corner slab, a meeting terrace, a corner bay on a pier).
+
+Not yet: the remaining junctions (split landing, switchback), buildings above air (inhabited bridge, gatehouse room), cross vaults, joined roofs, terrain and water transitions.

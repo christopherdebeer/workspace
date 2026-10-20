@@ -31,6 +31,7 @@
  */
 import { hash } from '../kit/rng';
 import { DOMAIN, LAND, groundOf, makeLand, type Land } from './land';
+import { meet, type Meeting } from './encounters';
 
 export const N = 48, LO = -18, HI = LO + N - 1;
 /** far over anything a hand would build: only a guard */
@@ -76,6 +77,11 @@ export interface Op {
   /** what it is as a reading of the gesture that made it, and the other ways that gesture could have been read (a
    * touch after it reads it so instead); neither kept */
   reading?: string; alts?: Alt[];
+  /** the hand's choice of how a meeting is resolved (`encounters.ts`): the meeting's anchor cell and the level chosen
+   * (0 the smallest sufficient, 1 the obvious, 2 the surprising), kept */
+  choose?: Array<[number, number, number, number]>;
+  /** laid by an encounter's resolution, not the hand (worked out on every rebuild, never kept) */
+  derived?: boolean;
   /** the liberties the reading took with the gesture as it was made (re-routed, begun elsewhere, another kind of thing
    * than drawn: `gesture.ts` names them), so how often a hand gets other than it drew can be counted; not kept */
   took?: string[];
@@ -193,6 +199,11 @@ export class World {
   /** for each column, the first of the hand's operations (by its place in `ops`) that laid stone or steps in it: what
    * an assembly's identity is anchored to, so it's never re-rolled by a later neighbour */
   firstOp = new Map<number, number>();
+  /** each connection's walking cells (the level it walks at): what encounters read as a way's course and its ends */
+  walks = new Map<Op, Cell[]>();
+  /** the hand's choices of how meetings are resolved (anchor cell → level), and the meetings found, as resolved */
+  choices = new Map<number, number>();
+  meetings: Meeting[] = [];
   private bridged = new Set<number>();
   trees = new Map<number, number>();
   pools = new Map<number, number>();
@@ -281,36 +292,72 @@ export class World {
   born(k: number, i: number, j: number) { return this.mass.get(key(k, i, j)) ?? this.stairs.get(key(k, i, j))?.born ?? this.piers.get(key(k, i, j)) ?? this.trees.get(key(k, i, j)) ?? -1e3; }
 
   // ─── what the hand did ───
-  apply(op: Op, now = 0) { this.ops.push(op); this.rebuild(now); }
+  apply(op: Op, now = 0) { const seen = new Set(this.derivedMass); this.ops.push(op); this.rebuild(now); this.adopt(op, now, seen); }
   /** put the last operation as it now is (a trace still under the finger) */
-  replaceLast(op: Op, now = 0) { this.ops[this.ops.length - 1] = op; this.rebuild(now); }
+  replaceLast(op: Op, now = 0) { const seen = new Set(this.derivedMass); this.ops[this.ops.length - 1] = op; this.rebuild(now); this.adopt(op, now, seen); }
   undo(now = 0): Op | null { const op = this.ops.pop() ?? null; if (op) this.rebuild(now); return op; }
   clear() { this.ops = []; this.seen.clear(); this.rebuild(0); }
 
   /** the operations replayed into the intended solid, and that resolved */
+  /**
+   * The operations replayed into the intended solid, and resolved; then what the hand's pieces make of meeting
+   * (`encounters.ts`), worked out on that and laid as operations of their own, and the whole resolved again with them.
+   */
   rebuild(now = 0) {
+    this.build(this.ops, now);
+    const met = meet(this);
+    this.derivedMass.clear();
+    if (met.length) {
+      const found = this.meetings, before = new Set(this.mass.keys());
+      this.build([...this.ops, ...met], now); this.meetings = found;
+      for (const v of this.mass.keys()) if (!before.has(v)) this.derivedMass.add(v);
+    }
+    this.version++;
+  }
+  /** the stone meetings laid (not the hand): what's built on it is adopted by what's built on it (`adopt`) */
+  derivedMass = new Set<number>();
+  /**
+   * What the hand builds on, it makes its own: where an operation stands on stone a meeting laid (a way walking over a
+   * meeting's landing, a block set on its slab), that stone is put in the operation, so it no longer hangs on how the
+   * meeting is read (which can change as more is built round it).
+   */
+  private adopt(op: Op, now: number, seen: Set<number>) {
+    if (!seen.size && !this.derivedMass.size) return;
+    // (against the meetings as the hand saw them when it made this, and as they are now)
+    const derived = (v: number) => seen.has(v) || this.derivedMass.has(v);
+    const c = op.connect, ends: Cell[] = c ? [[c.from[0], c.path[0][0], c.path[0][1]], ...(c.to ? [c.to] : [])] : [];
+    const rests: Cell[] = [...(this.walks.get(op) ?? []), ...ends, ...[...(op.add ?? []), ...(op.walls ?? []), ...(op.stairs ?? [])].map((q) => [q[0], q[1], q[2]] as Cell)];
+    const need = [...new Set(rests.map(([k, i, j]) => key(k - 1, i, j)).filter(derived))].filter((v) => !(op.add ?? []).some((q) => key(q[0], q[1], q[2]) === v));
+    if (!need.length) return;
+    op.add = [...(op.add ?? []), ...need.map((v) => { const [k, i, j] = unkey(v); return [k, i, j, op.born ?? now] as [number, number, number, number]; })];
+    this.rebuild(now);
+  }
+
+  /** `list` replayed into the intended solid, and that resolved */
+  private build(list: Op[], now: number) {
     this.now = now;
-    this.mass.clear(); this.stairs.clear(); this.archways.clear(); this.thin.clear(); this.bridged.clear(); this.trees.clear(); this.pools.clear(); this.basins.clear(); this.passages.clear(); this.firstOp.clear();
+    this.mass.clear(); this.stairs.clear(); this.archways.clear(); this.thin.clear(); this.bridged.clear(); this.trees.clear(); this.pools.clear(); this.basins.clear(); this.passages.clear(); this.firstOp.clear(); this.walks.clear(); this.choices.clear();
     this.laid.clear(); this.reached.clear(); this.rules.clear(); this.dress.clear(); this.paving.clear();
     // (and what was worked out from them last time (piers, spans, courts and their pools, basins' water), so nothing laid
     // now is laid against what was there before: a world rebuilt is the same world, however often)
     this.piers.clear(); this.spans = []; this.spanOf.clear(); this.under.clear(); this.corbels.clear(); this.courts.clear(); this.decor = []; this.bowls.clear(); this.falls = [];
     // (how high a way may be looked for, from what's asked for, not from what was built last time)
     let hi = this.land ? Math.max(...this.land.g) : 0;
-    for (const op of this.ops) {
+    for (const op of list) {
       for (const c of [...(op.add ?? []), ...(op.walls ?? []), ...(op.arches ?? []), ...(op.stairs ?? []), ...(op.trees ?? [])]) hi = Math.max(hi, c[0] + 1);
       if (op.connect) hi = Math.max(hi, op.connect.from[0], op.connect.to?.[0] ?? 0);
     }
     this.levels = Math.min(CEIL - 4, hi + 2);
     // (the columns each operation laid in, marked as the next begins: the first to lay in a column keeps it)
     const mark = (n: number) => {
-      const o = this.ops[n]; if (!o) return;
+      const o = list[n]; if (!o || o.derived) return;
       const at = (i: number, j: number) => { if (inGrid(i, j) && !this.firstOp.has(key(0, i, j))) this.firstOp.set(key(0, i, j), n); };
       for (const c of [...(o.add ?? []), ...(o.walls ?? []), ...(o.arches ?? []), ...(o.stairs ?? [])]) at(c[1], c[2]);
       for (const c of this.reached.get(o)?.cells ?? []) at(c[1], c[2]);
     };
-    for (const [n, op] of this.ops.entries()) {
+    for (const [n, op] of list.entries()) {
       mark(n - 1);
+      for (const [k, i, j, lv] of op.choose ?? []) this.choices.set(key(k, i, j), lv);
       if (op.connect) {
         // (stone and rules laid with it, first: a stair tower it walks to)
         for (const [k, i, j, b] of op.add ?? []) if (k >= 0 && k < CEIL && inGrid(i, j) && !this.stairs.has(key(k, i, j))) this.place(k, i, j, b);
@@ -349,13 +396,12 @@ export class World {
         this.dress.set(v, d);
       }
     }
-    mark(this.ops.length - 1);
+    mark(list.length - 1);
     this.tall = this.measureTop(); this.levels = this.tall + 2;
     this.resolve();
     this.spill();
     if (this.decor.some((d) => d.kind === 'cypress')) this.tall = Math.max(this.tall, 2);
     this.ext = this.measure();
-    this.version++;
   }
 
   /**
@@ -376,6 +422,19 @@ export class World {
     if (k < 0 || k >= CEIL || !inGrid(i, j)) return;
     const v = key(k, i, j);
     if (!this.passages.has(v)) this.passages.set(v, prev && prev[0] !== i ? 0 : 1);
+  }
+  private walked(op: Op, c: Cell) { const l = this.walks.get(op); if (l) l.push(c); else this.walks.set(op, [c]); }
+  /**
+   * Who has a claim on a cell, that anything added must keep: a passage the hand made (`passages`), a stair's way, a
+   * tree's trunk and crown, water. The one place encounters (and anything else) ask before laying there.
+   */
+  claim(k: number, i: number, j: number): 'passage' | 'stair' | 'tree' | 'water' | null {
+    if (!inGrid(i, j)) return null;
+    if (this.passages.has(key(k, i, j))) return 'passage';
+    if (this.stairs.has(key(k, i, j)) || this.way(k, i, j)) return 'stair';
+    for (let kk = k - 2; kk <= k; kk++) if (kk >= 0 && this.trees.has(key(kk, i, j))) return 'tree';
+    if ((k === this.ground(i, j) && this.pool(i, j)) || this.basins.has(key(k, i, j))) return 'water';
+    return null;
   }
   /** the passage a cell keeps open, and which way it runs (-1 if none) */
   passage(k: number, i: number, j: number): number { return inGrid(i, j) ? this.passages.get(key(k, i, j)) ?? -1 : -1; }
@@ -420,6 +479,7 @@ export class World {
         if (taken(h, i, j) || unsteady(h, i, j) || blocks(h - 1, i, j)) { stopped = s; break; }
         lay(h - 1, i, j, s);
         this.reserve(h, i, j, prev);
+        this.walked(op, [h, i, j]);
       }
     }
     // (a stair that would lead straight into what stopped the way is no stair: it's taken back, and the stone laid under
@@ -541,6 +601,7 @@ export class World {
       if (kind === 0) {
         // (walked through: kept open; and a wall it went through, opened, a gate)
         this.reserve(k, i, j, prev);
+        this.walked(op, [k, i, j]);
         if (this.mass.has(key(k, i, j)) && !this.archways.has(key(k, i, j))) { this.archways.set(key(k, i, j), prev[0] !== i ? 0 : 1); this.thin.delete(key(k, i, j)); }
       }
       if (this.archways.has(key(k, i, j))) return;
@@ -548,8 +609,8 @@ export class World {
       else lay(k - 1, i, j, s);
     });
     // (its ends kept open too: where it sets out from, and, if it got there, where it arrives (the cell a door's to open on))
-    if (along.length) this.reserve(h0, path[0][0], path[0][1], along[0]);
-    if (last === n && c.to && !this.occupied(h1, c.to[1], c.to[2])) this.reserve(h1, c.to[1], c.to[2], along[n - 1] ?? path[0]);
+    if (along.length) { this.reserve(h0, path[0][0], path[0][1], along[0]); this.walks.set(op, [[h0, path[0][0], path[0][1]], ...(this.walks.get(op) ?? [])]); }
+    if (last === n && c.to && !this.occupied(h1, c.to[1], c.to[2])) { this.reserve(h1, c.to[1], c.to[2], along[n - 1] ?? path[0]); this.walked(op, [h1, c.to[1], c.to[2]]); }
     this.reached.set(op, { reached: last === n, stopped: last === n ? -1 : last, cells });
     return true;
   }
@@ -832,7 +893,7 @@ export class World {
 
   /** the operations, as text (to keep, and to make again: when they were laid isn't kept) */
   /** what's been done, written down (on the land, with the land's seed) */
-  encode(): string { const ops = this.ops.map((o) => [o.add?.map((c) => c.slice(0, 3)) ?? 0, o.stairs?.map((c) => c.slice(0, 4)) ?? 0, o.cut ?? 0, o.arches?.map((c) => c.slice(0, 4)) ?? 0, o.trees?.map((c) => c.slice(0, 3)) ?? 0, o.pools?.map((c) => c.slice(0, 2)) ?? 0, o.bridge ? 1 : 0, o.connect ? [o.connect.from, o.connect.to, o.connect.path, ...(o.connect.rest?.length || o.connect.follow ? [o.connect.rest ?? 0] : []), ...(o.connect.follow ? [1] : [])] : 0, o.dress ?? 0, o.rule ?? 0, o.walls?.map((c) => c.slice(0, 4)) ?? 0, ...(o.basins?.length || o.pave?.length ? [o.basins?.map((c) => c.slice(0, 3)) ?? 0] : []), ...(o.pave?.length ? [o.pave] : [])]); return JSON.stringify(this.land ? { land: this.landSeed, ops } : ops); }
+  encode(): string { const ops = this.ops.map((o) => [o.add?.map((c) => c.slice(0, 3)) ?? 0, o.stairs?.map((c) => c.slice(0, 4)) ?? 0, o.cut ?? 0, o.arches?.map((c) => c.slice(0, 4)) ?? 0, o.trees?.map((c) => c.slice(0, 3)) ?? 0, o.pools?.map((c) => c.slice(0, 2)) ?? 0, o.bridge ? 1 : 0, o.connect ? [o.connect.from, o.connect.to, o.connect.path, ...(o.connect.rest?.length || o.connect.follow ? [o.connect.rest ?? 0] : []), ...(o.connect.follow ? [1] : [])] : 0, o.dress ?? 0, o.rule ?? 0, o.walls?.map((c) => c.slice(0, 4)) ?? 0, ...(o.basins?.length || o.pave?.length || o.choose?.length ? [o.basins?.map((c) => c.slice(0, 3)) ?? 0] : []), ...(o.pave?.length || o.choose?.length ? [o.pave ?? 0] : []), ...(o.choose?.length ? [o.choose] : [])]); return JSON.stringify(this.land ? { land: this.landSeed, ops } : ops); }
 }
 
 /** a world made again from its operations (as `encode` wrote them), all laid long ago */
@@ -853,6 +914,7 @@ export function replay(text: string, seed = 1): World {
       dress: (at(8) as Op['dress'] | null) ?? undefined, rule: (at(9) as Op['rule'] | null) ?? undefined, walls: at(10)?.map((c) => [c[0], c[1], c[2], c[3], -100] as [number, number, number, number, number]),
       arches: at(3)?.map((c) => [c[0], c[1], c[2], c[3], -100] as [number, number, number, number, number]), trees: at(4)?.map((c) => [c[0], c[1], c[2], -100] as [number, number, number, number]), pools: at(5)?.map((c) => [c[0], c[1], -100] as [number, number, number]), bridge: o[6] === 1, basins: at(11)?.map((c) => [c[0], c[1], c[2], -100] as [number, number, number, number]),
       pave: (at(12) as Array<[number, number]> | null) ?? undefined,
+      choose: (at(13) as Array<[number, number, number, number]> | null) ?? undefined,
     });
   }
   w.rebuild(-100);

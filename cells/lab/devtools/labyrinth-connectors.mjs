@@ -30,11 +30,46 @@ function hand(w, T) {
     stroke: (a, b, intent, end = null) => { const cells = G.connect([T(a), T(b)]); return apply(G.trace(w, top(a), cells, end ? top(end) : null, () => 0, 0, [], intent), `stroke ${a}→${b}`); },
     /** a tap, with mass or a way in hand */
     tap: (c, intent = 'mass') => apply(G.tap(w, top(c), 0, false, intent), `tap ${c}`),
+    /** a raised walkway as the model holds one (from a top, out along cells, at that top's height), turned with the scene */
+    walkway: (cells) => { const P = cells.map((c) => T(c)), [i, j] = P[0], h = w.topFrom(w.ground(i, j) - 1, i, j); w.apply({ connect: { from: [h, i, j], to: null, path: P }, born: 0, why: 'walkway' }); },
     /** stone laid as a block is, by the hand (a column `n` high) */
     column: (c, n) => { const [i, j] = T(c), g = w.ground(i, j); w.apply({ add: Array.from({ length: n }, (_, k) => [g + k, i, j, 0]) }); },
   };
 }
 const walks = (w, a, b) => NAV.reaches(BU.walkable(w), a, b);
+const { replay } = await import('../client/labyrinth/model.ts');
+
+/**
+ * The checks every encounter rule gets, whatever it is (client/labyrinth/encounters.ts): for each meeting found, each
+ * rung can be chosen and is laid as chosen; nothing it lays is in a passage or a stair's way; the things that met can
+ * be walked between, end to end, at every rung; the rungs only add (each lays what the one below it does, and more);
+ * and touching it again (the second thing made again) climbs a rung.
+ */
+function meetings(w, tag, expect) {
+  ok(`${tag}: the meeting found (${expect})`, w.meetings.some((m) => m.rule === expect), w.meetings.map((m) => m.rule));
+  for (const m of w.meetings.filter((q) => q.rule === expect)) {
+    ok(`${tag}: left to itself, the smallest sufficient (${m.candidates[0].label})`, m.laid === 0, { laid: m.laid, wanted: m.wanted });
+    const ends = m.by.map((q) => w.walks.get(w.ops[q]) ?? []).map((cs) => cs[cs.length - 1]).filter(Boolean);
+    let below = null;
+    for (const c of m.candidates) {
+      const v = replay(w.encode(), w.seed); v.apply({ choose: [[...m.anchor, c.level]], why: 'reading' });
+      const n = v.meetings.find((q) => q.anchor.join() === m.anchor.join());
+      ok(`${tag}: chosen, rung ${c.level} (${c.label}) is what's laid`, n?.laid === c.level, n && { laid: n.laid, wanted: n.wanted });
+      const intoClaims = (n?.at ?? []).filter(([k, i, j]) => (v.passage(k, i, j) >= 0 && !v.archway(k, i, j)) || v.way(k, i, j));
+      ok(`${tag}: rung ${c.level} lays nothing in a passage or a stair's way`, !intoClaims.length, intoClaims);
+      // (walked between: from one's end to the other's, or to the top it fell short of)
+      const to = ends.length > 1 ? ends[1] : m.cells[m.cells.length - 1];
+      ok(`${tag}: at rung ${c.level}, walked between, end to end`, walks(v, ends[0], to), { from: ends[0], to });
+      const here = new Set((n?.at ?? []).map((q) => q.join()));
+      if (below) ok(`${tag}: rung ${c.level} lays all that rung ${c.level - 1} does`, [...below].every((q) => here.has(q)), { below: [...below], here: [...here] });
+      below = here;
+    }
+    // (insisting: the last of the things that made it, made again)
+    const v = replay(w.encode(), w.seed); v.apply(JSON.parse(JSON.stringify(w.ops[Math.max(...m.by)])));
+    const n = v.meetings.find((q) => q.anchor.join() === m.anchor.join());
+    ok(`${tag}: made again, a rung higher`, (n?.laid ?? -1) >= 1, n && { laid: n.laid, wanted: n.wanted });
+  }
+}
 const at = (w, T, c) => { const [i, j] = T(c); return [w.ground(i, j), i, j]; };
 
 const SCENES = [
@@ -117,6 +152,22 @@ const SCENES = [
       ok(`${this.tag}: the same windows`, after?.openings.find((o) => o.kind === 'window')?.style === style, { style, after: after?.openings.find((o) => o.kind === 'window')?.style });
     },
   },
+  {
+    name: 'ways meet corner to corner: two raised walkways, one ending diagonal to the other\'s end',
+    run(w, H) {
+      H.column([3, 3], 2); H.walkway([[3, 3], [4, 3], [5, 3], [6, 3]]);
+      H.column([7, 8], 2); H.walkway([[7, 8], [7, 7], [7, 6], [7, 5], [7, 4]]);
+      meetings(w, this.tag, 'ways-meet');
+    },
+  },
+  {
+    name: 'ways meet a cell short: a raised walkway ending a cell short of a top at its height',
+    run(w, H) {
+      H.column([3, 3], 2); H.walkway([[3, 3], [4, 3], [5, 3], [6, 3]]);
+      H.column([8, 3], 2); H.column([8, 4], 2);
+      meetings(w, this.tag, 'ways-meet');
+    },
+  },
 ];
 
 const t0 = Date.now(), scenes = [];
@@ -127,7 +178,12 @@ for (const S of SCENES) {
     S.tag = `${S.name.split(':')[0]} (turned ${r}${m ? ', mirrored' : ''})`;
     try { S.run(w, H); } catch (e) { checks++; fails++; console.log(`FAIL  ${S.tag}: ${String(e.message ?? e).slice(0, 200)}`); }
     if (opt.ops && r === 0 && !m) console.log(`${S.name}\n  ?ops=${encodeURIComponent(w.encode())}`);
-    if (r === 0 && !m) scenes.push({ name: S.name, ops: w.encode() });
+    if (r === 0 && !m) {
+      scenes.push({ name: S.name, ops: w.encode() });
+      // (a meeting's every rung, drawn too: the ladder, as the hand would see it chosen)
+      const mt = w.meetings[0];
+      if (mt) for (const c of mt.candidates.filter((q) => q.level > 0)) { const v = replay(w.encode(), w.seed); v.apply({ choose: [[...mt.anchor, c.level]], why: 'reading' }); scenes.push({ name: `${S.name.split(':')[0]}, rung ${c.level}: ${c.label}`, ops: v.encode() }); }
+    }
   }
 }
 console.log(`${checks - fails} of ${checks} connector checks hold (${SCENES.length} scenes × ${ORIENT.length} orientations, ${((Date.now() - t0) / 1000).toFixed(1)}s)`);

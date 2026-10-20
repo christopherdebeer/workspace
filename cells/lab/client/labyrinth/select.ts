@@ -9,6 +9,7 @@
  * the hand's from then on.
  */
 import { buildings } from './buildings';
+import { meetingAt, readingsOf } from './encounters';
 import { DIRS, RULE, key, unkey, type Cell, type Op, type Span, type World } from './model';
 import type { Motif } from './motifs';
 
@@ -52,6 +53,12 @@ function arches(w: World, spans: Span[], now: number, between: Cell[] = []): { r
 
 export function selectCell(w: World, c: Cell, view: number, now: number): Selection | null {
   const [k, i, j] = c;
+  // (where two of the hand's things met: what the meeting came to, and what else it could be (encounters.ts))
+  const m = meetingAt(w, c);
+  if (m) {
+    const at = Math.max(0, m.candidates.findIndex((q) => q.level === m.laid));
+    return { title: `where ${m.name}: ${m.candidates[at]?.label ?? 'nothing laid'}`, cells: m.at, readings: readingsOf(m).map((r, n) => (n === at ? { ...r, op: null } : r)), at, remove: null, stone: m.at };
+  }
   const sp = w.span(k, i, j);
   if (sp) {
     const r = arches(w, [sp], now);

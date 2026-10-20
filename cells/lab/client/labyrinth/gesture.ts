@@ -244,6 +244,26 @@ export function adds(w: World, op: Op): number {
  * of thing than was drawn is the hand's to choose.
  */
 export function trace(w: World, start: Pick, path: Array<[number, number]>, end: Pick | null, born: (i: number, j: number) => number, now = 0, rest: Array<[number, number]> = [], intent: Intent = 'mass'): Op | Refusal | null {
+  const op = laid(w, start, path, end, born, now, rest, intent);
+  // (only a way can meet another, so far: the rest needn't be tried)
+  return op && !('refused' in op) && op.connect ? meeting(w, op) : op;
+}
+
+/**
+ * Where a stroke meets another of the hand's things (encounters.ts): what the meeting comes to, said with it, and what
+ * else it could be offered as other readings (held, chosen; the choice kept on the stroke as `Op.choose`).
+ */
+function meeting(w: World, op: Op): Op {
+  const sim = new World(w.seed, w.landSeed); sim.ops = [...w.ops, op]; sim.rebuild();
+  const m = sim.meetings.find((q) => q.by.includes(w.ops.length) && q.candidates.length > 1);
+  if (!m) return op;
+  const now = m.candidates.find((c) => c.level === m.laid), note = now ? `${op.note ?? op.reading ?? op.why}; where it meets: ${now.label}` : op.note;
+  const others: Alt[] = m.candidates.filter((c) => c.level !== m.laid).map((c) => ({ label: `where it meets: ${c.label}`, op: { ...op, alts: undefined, choose: [...(op.choose ?? []), [...m.anchor, c.level] as [number, number, number, number]], note: `${op.note ?? op.why}; where it meets: ${c.label}` } }));
+  return { ...op, note, alts: [...(op.alts ?? []), ...others] };
+}
+
+/** a stroke read, and what it lays (never something that says it's something and lays nothing) */
+function laid(w: World, start: Pick, path: Array<[number, number]>, end: Pick | null, born: (i: number, j: number) => number, now = 0, rest: Array<[number, number]> = [], intent: Intent = 'mass'): Op | Refusal | null {
   const op = reading(w, start, path, end, born, now, rest, intent);
   if (op && ('refused' in op || adds(w, op))) return op;
   // (what it says is there already (or nothing at all, over what's built): drawn again, it's more of it, where the hand
