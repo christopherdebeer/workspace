@@ -47,8 +47,16 @@ export const tapCell = (w: World, p: Pick): Cell => (p.face === 'ground' ? [w.gr
 export interface Refusal { refused: string; alts?: Alt[] }
 
 export function tap(w: World, p: Pick, now: number, anyway = false, intent: Intent = 'mass'): Op | Refusal | null {
-  // (the green intent: what grows there (green.ts))
-  if (intent === 'green') return plantTap(w, p.face === 'side' ? p.to : p.hit, now);
+  const op = tapRead(w, p, now, anyway, intent);
+  // (a plant touched grows, whatever's in hand; and anywhere something could grow, planting it is another reading)
+  if (!anyway && isPlant(w, p)) { const g = plantTap(w, p.hit, now); if (g && !('refused' in g)) return { ...g, alts: [...(g.alts ?? []), ...(op && !('refused' in op) ? [{ label: op.reading ?? op.note ?? 'as before', op: { ...op, alts: undefined } }] : [])] }; }
+  if (anyway || !op || 'refused' in op) return op;
+  const g = plantTap(w, p.face === 'side' ? p.to : p.hit, now);
+  return g && !('refused' in g) ? { ...op, alts: [...(op.alts ?? []), { label: `${g.reading ?? g.note} here instead`, op: { ...g, alts: undefined } }] } : op;
+}
+/** whether a touch is on a plant (its trunk, or the cell it grows in) */
+const isPlant = (w: World, p: Pick) => { const [k, i, j] = p.hit; return w.plant(k, i, j) >= 0 || w.plant(k + 1, i, j) >= 0 || w.plant(k - 1, i, j) >= 0; };
+function tapRead(w: World, p: Pick, now: number, anyway = false, intent: Intent = 'mass'): Op | Refusal | null {
   // (a way's touch on the land's ground: a place to stand, not a block)
   if (intent === 'way' && w.land && p.face === 'ground' && !anyway) { const op = placeToStand(w, p, now); if (op) return op; }
   // (a way's touch on a top: a way up on to it)
@@ -256,9 +264,19 @@ export function adds(w: World, op: Op): number {
  * of thing than was drawn is the hand's to choose.
  */
 export function trace(w: World, start: Pick, path: Array<[number, number]>, end: Pick | null, born: (i: number, j: number) => number, now = 0, rest: Array<[number, number]> = [], intent: Intent = 'mass'): Op | Refusal | null {
-  // (the green intent: a row along it, or a grove in what it rings (green.ts))
-  if (intent === 'green') { const walked = walk(path); return plantStroke(w, walked.closed ? walked.cells : unjog(walked.cells), walked.closed, now); }
   const op = laid(w, start, path, end, born, now, rest, intent);
+  // (on the ground, planting along it (a row, a hedge) or in what it rings (a grove) is another reading (green.ts))
+  // (and where stone would add nothing there (along a wall already there), the planting's what it is: chosen instead)
+  if (start.face === 'ground' && (!op || 'refused' in op || op.why === 'wall' || op.why === 'way')) {
+    const walked = walk(path), g = plantStroke(w, walked.closed ? walked.cells : unjog(walked.cells), walked.closed, now);
+    if (g && !('refused' in g)) {
+      if (!op || 'refused' in op) return { ...g, took: ['chosen-instead'] };
+      return withMeeting(w, { ...op, alts: [...(op.alts ?? []), { label: g.reading ?? g.note ?? 'planted along it', op: { ...g, alts: undefined } }, ...(g.alts ?? []).slice(0, 1)] });
+    }
+  }
+  return withMeeting(w, op);
+}
+function withMeeting(w: World, op: Op | Refusal | null): Op | Refusal | null {
   // (only a way can meet another, so far: the rest needn't be tried)
   return op && !('refused' in op) && op.connect ? meeting(w, op) : op;
 }
@@ -559,7 +577,7 @@ function read(w: World, start: Pick, path: Array<[number, number]>, end: Pick | 
 
 /** what a stroke's for: mass (raise, extend, enclose: a stroke on the ground is a wall) or a way (it connects places,
  * and the land says how: paving, flights, a bridge) */
-export type Intent = 'mass' | 'way' | 'green';
+export type Intent = 'mass' | 'way';
 
 /**
  * A way, along the stroke as it was drawn, from where it started to where it ended (a top, or the ground: the end of

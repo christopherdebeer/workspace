@@ -22,8 +22,9 @@ function hand(w, T) {
     T, pick,
     block: (i0, i1, j0, j1, n, from = 0) => { const add = []; for (let i = i0; i <= i1; i++) for (let j = j0; j <= j1; j++) { const [x, z] = T([i, j]); for (let k = from; k < from + n; k++) add.push([k, x, z, 0]); } w.apply({ add }); },
     plant: (c, kind, k = null) => { const [i, j] = T(c); w.apply({ plants: [[k ?? w.topFrom(w.ground(i, j) - 1, i, j), i, j, kind, 0]] }); },
-    tap: (c, intent = 'green') => apply(G.tap(w, pick(c), 0, false, intent), `tap ${c}`),
-    stroke: (a, b, intent = 'green') => apply(G.trace(w, pick(a), G.connect([T(a), T(b)]), null, () => 0, 0, [], intent), `stroke ${a}→${b}`),
+    /** a tap, and its planting reading taken (held, chosen), or what it is if that's planting already (a plant grown) */
+    tap: (c) => { const op = G.tap(w, pick(c), 0, false, 'mass'); return apply(op?.plants ? op : op?.alts?.find((a) => a.op.plants)?.op, `tap ${c}`); },
+    stroke: (a, b) => { const op = G.trace(w, pick(a), G.connect([T(a), T(b)]), null, () => 0, 0, [], 'mass'); return apply(op?.plants ? op : op?.alts?.find((x) => x.op.plants)?.op ? { ...op.alts.find((x) => x.op.plants).op, alts: op.alts.filter((x) => x.op.plants) } : null, `stroke ${a}→${b}`); },
   };
 }
 const at = (w, T, c, k) => { const [i, j] = T(c); return [k ?? w.ground(i, j), i, j]; };
@@ -74,7 +75,7 @@ export const SCENES = [
     },
   },
   {
-    name: 'green taps: an olive in the open, a cypress against a wall, grown when tapped again, never on a way',
+    name: 'planting taps: an olive in the open, a cypress against a wall, grown when tapped again, never on a way',
     run(w, H) {
       for (let j = 2; j <= 9; j++) H.block(9, 9, j, j, 3);
       const op = H.tap([4, 5]), [k, i, j] = at(w, H.T, [4, 5]);
@@ -84,19 +85,19 @@ export const SCENES = [
       const op2 = H.tap([8, 5]);
       ok(`${this.tag}: against the wall, a cypress`, w.plant(...at(w, H.T, [8, 5])) === PLANT.cypress, op2.note);
       w.apply({ ...G.trace(w, H.pick([2, 8]), G.connect([H.T([2, 8]), H.T([7, 8])]), null, () => 0, 0, [], 'way'), alts: undefined });
-      const r = G.tap(w, H.pick([4, 8]), 0, false, 'green');
-      ok(`${this.tag}: not on a way`, !!r?.refused, r);
+      const r = G.tap(w, H.pick([4, 8]), 0, false, 'mass');
+      ok(`${this.tag}: not on a way (no planting offered there)`, !r?.plants && !r?.alts?.some((a) => a.op.plants), r?.alts?.map((a) => a.label));
     },
   },
   {
-    name: 'green strokes: an avenue of cypresses along a wall, a grove in a ring',
+    name: 'planting strokes: an avenue of cypresses along a wall, a grove in a ring',
     run(w, H) {
       for (let i = 2; i <= 9; i++) H.block(i, i, 2, 2, 3);
       const row = H.stroke([2, 3], [9, 3]);
       ok(`${this.tag}: along the wall, an avenue of cypresses`, row.plants?.length >= 3 && row.plants.every((p) => p[3] === PLANT.cypress), row.note);
       ok(`${this.tag}: a hedge, the other reading`, row.alts?.some((a) => a.label === 'a hedge'));
       const ring = [[3, 6], [8, 6], [8, 10], [3, 10], [3, 6]].map(H.T);
-      const op = G.trace(w, H.pick([3, 6]), G.connect(ring), null, () => 0, 0, [], 'green');
+      const r0 = G.trace(w, H.pick([3, 6]), G.connect(ring), null, () => 0, 0, [], 'mass'), op = r0?.alts?.find((a) => a.op.plants)?.op;
       ok(`${this.tag}: a ring, a grove in it`, op?.plants?.length >= 4 && op.plants.every(([, i, j]) => { const [x0, z0] = H.T([3, 6]), [x1, z1] = H.T([8, 10]); return i > Math.min(x0, x1) && i < Math.max(x0, x1) && j > Math.min(z0, z1) && j < Math.max(z0, z1); }), op?.note ?? op?.refused);
       w.apply({ ...op, alts: undefined });
     },

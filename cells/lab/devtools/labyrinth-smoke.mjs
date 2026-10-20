@@ -71,7 +71,7 @@ await withWood(async (lab) => {
   // a lean toward one reads it so (in place of what it built), and letting go keeps it)
   {
     const n = await probe(), alts = await p.evaluate(() => window.__labyrinth.alts());
-    c.ok('after a gesture, the other ways it could be read are known, and no chips stand in the way', alts && alts.labels.length === 4 && !(await p.isVisible('#alts')), alts);
+    c.ok('after a gesture, the other ways it could be read are known, and no chips stand in the way', alts && alts.labels.length >= 4 && alts.labels.some((l) => /olive|hedge|cypress/.test(l)) && !(await p.isVisible('#alts')), alts);
     await p.evaluate(() => window.__labyrinth.world.undo(0)); await p.waitForTimeout(300);
     let seen = null, leaned = null;
     await drag([[4, 7, 0], [6, 7, 0], [8, 7, 0]], 0, async () => {

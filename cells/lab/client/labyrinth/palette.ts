@@ -9,11 +9,13 @@
  * - **stair**: a flight up a level, climbing toward the stone it was put against (or onto a neighbour's top).
  * - **bridge**: across the gap at that level, from stone to stone, the whole span at once (up to seven cells), carried
  *   on one arch.
- * - **cypress**: on a floor, with room above it.
+ * - **tree**: what grows there (green.ts): against a wall, a cypress; on a top, an olive in a planter; in the open, an
+ *   olive; on a plant, grown a size. Drawn along, a row; drawn round, a grove.
  * - **pool**: let into the stone itself: into the ground, or (touched on a top) into that top, a basin, up off the ground,
  *   which spills over its edge where there's a drop (model.ts's `spill`).
  * - **take**: what was touched, taken away (the rules then carry what was on it, on an arch or a pier).
  */
+import { plantStroke, plantTap } from './green';
 import { CEIL, DIRS, DRESS, inGrid, key, straights, type Cell, type Op, type World } from './model';
 import { connect, surface, type Pick } from './gesture';
 import { look } from './character';
@@ -77,7 +79,7 @@ export function place(w: World, hand: Exclude<Hand, 'auto'>, p: Pick, view: numb
   if (hand === 'block' && (side || w.floor(k, i, j))) return { add: [[k, i, j, now]], why: 'block' };
   if (hand === 'wall' && (side || w.floor(k, i, j))) return { walls: [[k, i, j, side ? toward % 2 : w.wall(k - 1, i, j) >= 0 ? w.wall(k - 1, i, j) : (view + 1) % 2, now]], why: 'wall piece' };
   if (!w.floor(k, i, j)) return null;
-  if (hand === 'cypress') return w.free(k + 1, i, j) ? { trees: [[k, i, j, now]], why: 'cypress' } : null;
+  if (hand === 'cypress') { const g = plantTap(w, [k - 1, i, j], now); return g && !('refused' in g) ? g : null; }
   if (hand === 'stair') {
     let d = toward;
     if (d < 0) for (let q = 0; q < 4 && d < 0; q++) if (w.stone(k, i + DIRS[q][0], j + DIRS[q][1]) && w.free(k + 1, i + DIRS[q][0], j + DIRS[q][1])) d = q;
@@ -101,6 +103,7 @@ export function run(w: World, piece: Piece, start: Pick, path: Array<[number, nu
   if (ring.length < 2) return place(w, piece, start, view, now);
   // (a stroke drawn round, back to where it began: water or blocks fill what it closes round; the rest go round it)
   const inside = closed(ring), filled = piece === 'pool' || piece === 'block';
+  if (piece === 'cypress') { const g = plantStroke(w, ring, !!inside, now); return g && !('refused' in g) ? g : null; }
   const cells = filled && inside ? [...ring, ...inside] : ring;
   if (piece === 'pool') {
     const out = cells.filter(([i, j]) => (start.face === 'ground' ? w.ground(i, j) === h0 && !w.pool(i, j) && w.free(h0, i, j) : w.block(h0 - 1, i, j) && w.free(h0, i, j)));

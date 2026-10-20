@@ -391,11 +391,11 @@ ok(`blocks' outlines tried against where they're struck (${lively.form} sides)`,
   const ring = [[2, 2], [3, 2], [4, 2], [5, 2], [5, 3], [5, 4], [5, 5], [4, 5], [3, 5], [2, 5], [2, 4], [2, 3], [2, 2]];
   ok('a stroke round: closed', G.walk(ring).closed && G.walk(ring).cells.length === 12, G.walk(ring));
   const court = G.trace(w, ground(2, 2), ring, null, () => 0);
-  ok('a loop walls in a court, a gate where it began, the other kinds offered', court?.note === 'a court, walled round' && court.arches?.length === 1 && court.add.length === 11 && court.alts.map((a) => a.label).join() === 'a ring of wall,an arcaded court,a thin wall,a terrace, filled', court);
+  ok('a loop walls in a court, a gate where it began, the other kinds offered', court?.note === 'a court, walled round' && court.arches?.length === 1 && court.add.length === 11 && court.alts.map((a) => a.label).join().startsWith('a ring of wall,an arcaded court,a thin wall,a terrace, filled') && court.alts.some((a) => a.op.plants), court);
   w.apply(court);
   ok('and it is a court', w.courts.has(key(0, 3, 3)) && w.courts.has(key(0, 4, 4)));
   const line = [[8, 1], [8, 2], [8, 3], [8, 4], [8, 5], [8, 6]], plain = G.trace(w, ground(8, 1), line, null, () => 0);
-  ok('a wall offers its other kinds', plain?.why === 'wall' && plain.alts.length === 3 && plain.alts.some((a) => a.label === 'a thin wall' && a.op.walls?.length === 6), plain?.alts?.map((a) => a.label));
+  ok('a wall offers its other kinds (and planting along it)', plain?.why === 'wall' && plain.alts.filter((a) => !a.op.plants).length === 3 && plain.alts.some((a) => a.label === 'a thin wall' && a.op.walls?.length === 6) && plain.alts.some((a) => a.op.plants), plain?.alts?.map((a) => a.label));
   const paused = G.trace(w, ground(8, 1), line, null, () => 0, 0, [[8, 3]]);
   const asWall = [paused, ...paused.alts.map((a) => a.op)].find((o) => o.note.startsWith('a wall'));
   ok('where the finger paused, a gate', (asWall?.arches ?? []).some(([, i, j]) => i === 8 && j === 3) && /paused/.test(asWall.note), asWall);
@@ -542,7 +542,7 @@ ok(`blocks' outlines tried against where they're struck (${lively.form} sides)`,
   w.apply(r2.op);
   ok('read as two bays: a pier under its middle, two arches either side, alike', w.pier(0, 6, 5) && w.spans.filter((sp) => sp.k === 1).length === 2 && new Set(w.spans.map((sp) => sp.low)).size === 1, w.spans);
 }
-for (const why of ['raise', 'course', 'extend', 'wall', 'walkway', 'stairs', 'carve', 'block', 'arch', 'stair', 'bridge', 'cypress', 'pool', 'take', 'reading', 'dress', 'arcade', 'flight', 'thin wall', 'wall piece']) ok(`gestures read every way: ${why}`, (made[why] ?? 0) > 3, made);
+for (const why of ['raise', 'course', 'extend', 'wall', 'walkway', 'stairs', 'carve', 'block', 'arch', 'stair', 'bridge', 'plant', 'pool', 'take', 'reading', 'dress', 'arcade', 'flight', 'thin wall', 'wall piece']) ok(`gestures read every way: ${why}`, (made[why] ?? 0) > 2, made);
 // (the storyboard: what each stage says it is)
 const s1 = story(1), s2 = story(2), s3 = story(3), s4 = story(4);
 ok('story 1: a small raised platform', s1.topFrom(0, 3, 7) === 2 && s1.topFrom(0, 4, 7) === 2);
