@@ -80,7 +80,7 @@ for (const B of BASES) {
     try { k0 = kind(w, read(w, g)); } catch { continue; }
     gestures++; byBase[B.name].gestures++;
     const here = touched(w, g);
-    for (const v of variants(w, g)) {
+    for (const [q, v] of variants(w, g).entries()) {
       let k1;
       try { k1 = kind(w, read(w, v.g)); } catch { k1 = 'crash'; }
       tried++; byBase[B.name].variants++;
@@ -92,7 +92,7 @@ for (const B of BASES) {
       const pair = `${k0} → ${k1}`;
       pairs[pair] ??= { all: 0, unsteady: 0 };
       pairs[pair].all++; if (same) pairs[pair].unsteady++;
-      flips.push({ id: `${B.name}-g${n}-${v.change.replace(/ /g, '-')}`, base: B.name, built: B.built, change: v.change, same, from: k0, to: k1, gesture: g, variant: v.g, world: w.encode() });
+      flips.push({ id: `${B.name}-g${n}-${v.change.replace(/ /g, '-')}-${q}`, base: B.name, built: B.built, change: v.change, same, from: k0, to: k1, gesture: g, variant: v.g, world: w.encode() });
     }
   }
 }
