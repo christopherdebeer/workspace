@@ -203,7 +203,10 @@ ok(`auto never builds into a stair's way (${ways.ok} of ${ways.tried})`, ways.ok
     for (let k = 0; k < 2; k++) w.apply({ add: [[k, 5, 8, 0]] });
     w.apply({ trees: [[0, 5, 7, 0]] });
     const steep = G.trace(w, ground(5, 6), [[5, 6], [5, 7]], top(5, 8), () => 0);
-    ok('too steep, and no room for a tower: a walkway out toward it if one lays anything, else refused, saying why', (!steep?.refused && steep?.why === 'walkway' && /steep/.test(steep.note)) || /steep/.test(steep?.refused), steep);
+    // (ending on the top, the connection's insisted on: a flight round what's in the way reaching it, else a walkway
+    // toward it, else refused, saying why)
+    const reachesIt = (o) => { const v = replay(w.encode()); v.apply(o); return !!v.reached.get(v.ops.at(-1))?.reached; };
+    ok('too steep, and no room for a tower: a flight round to it that reaches, or a walkway toward it, or refused, saying why', (steep?.why === 'stairs' && steep.took?.includes('routed-round') && reachesIt(steep)) || (!steep?.refused && steep?.why === 'walkway' && /steep/.test(steep.note)) || /steep/.test(steep?.refused), steep);
   }
   const long = G.trace(w, ground(2, 5), [[2, 5], [3, 5], [4, 5], [5, 5]], top(6, 5), () => 0);
   ok('drawn longer: stairs', long?.why === 'stairs', long);
@@ -672,6 +675,26 @@ stands(s4, 'story 4');
     ok('a zigzag gathered into straight runs: it starts and ends where it did', JSON.stringify(s4[0]) === '[0,0]' && JSON.stringify(s4.at(-1)) === '[4,4]' && s4.length === z.length, s4);
     const ST = (await load('../client/labyrinth/model.ts')).straights;
     ok('and has room for stairs where the zigzag had none', ST(z, null).length === 0 && ST(s4, null).length >= 2, ST(s4, null)); }
+  // (a gesture made again over what it made: more of it, where the hand drew: a way wider, then covered; a wall higher)
+  { let w = null, flat = null;
+    for (const seed of [2, 3, 5, 6, 7, 8, 9, 10]) {
+      w = new World(1, seed);
+      for (let j = -2; j < 12 && !flat; j++) for (let i = -2; i < 9 && !flat; i++) if ([-1, 0, 1].every((dj) => [0, 1, 2, 3, 4].every((d) => w.onSlab(i + d, j + dj) && w.ground(i + d, j + dj) === w.ground(i, j) && NAV.standing(w, w.ground(i, j), i + d, j + dj)))) flat = [i, j];
+      if (flat) break;
+    }
+    const cells = G.connect([flat, [flat[0] + 4, flat[1]]]), g0 = (i, j) => ({ face: 'ground', hit: [w.ground(i, j) - 1, i, j], to: [w.ground(i, j), i, j] });
+    const draw = () => G.trace(w, g0(...cells[0]), cells, null, () => 0, 0, [], 'way');
+    const first = draw(); w.apply(first);
+    const second = draw();
+    ok('a way drawn again over itself: wider, paved alongside, where it was drawn', !second?.refused && /widened/.test(second?.note ?? '') && second.pave?.length >= 4 && second.pave.every(([i, j]) => Math.abs(j - flat[1]) === 1 && i >= flat[0] && i <= flat[0] + 4), second);
+    w.apply(second);
+    const third = draw();
+    ok('and again: covered, a pergola over it', !third?.refused && /pergola/.test(third?.note ?? '') && third.dress?.length >= 2, third); }
+  { const w = new World(1), g0 = (i, j) => ({ face: 'ground', hit: [-1, i, j], to: [0, i, j] });
+    const cells = G.connect([[3, 4], [8, 4]]), draw = () => { const t = w.topFrom(0, 3, 4); return G.trace(w, w.stone(0, 3, 4) ? { face: 'top', hit: [t - 1, 3, 4], to: [t, 3, 4] } : g0(3, 4), cells, null, () => 0, 0, [], 'mass'); };
+    w.apply(draw()); const h1 = w.topFrom(0, 5, 4), again = draw();
+    ok('a wall drawn again along itself: a course higher, along it', !again?.refused && /course higher/.test(again?.note ?? '') && (again.add ?? again.walls ?? []).every((c) => c[2] === 4), again);
+    w.apply(again); ok('and it stands a course higher', w.topFrom(0, 5, 4) === h1 + 1, [h1, w.topFrom(0, 5, 4)]); }
   // (a ring drawn on past its start, over its own second cell: closed there, not cut back to two cells by "doubling back")
   { const ring = [[5, 13], [5, 12], [4, 12], [4, 11], [3, 11], [3, 10], [4, 10], [4, 9], [4, 8], [5, 8], [6, 8], [7, 8], [8, 8], [8, 9], [8, 10], [8, 11], [8, 12], [7, 12], [6, 12], [5, 12]], r = G.walk(ring);
     ok('a ring drawn on past its start is a ring (a lasso), not a stroke cut short', r.closed && r.cells.length >= 18, r);
@@ -685,7 +708,7 @@ stands(s4, 'story 4');
     ok('with another course the other reading', up?.alts?.some((a) => a.label === 'raise a course'));
     const s8 = story(8), house = BU.buildings(s8).list.find((b) => b.roof), [hi, hj] = house.cols[0], roof = { face: 'top', hit: [s8.topFrom(s8.ground(hi, hj) - 1, hi, hj) - 1, hi, hj], to: [s8.topFrom(s8.ground(hi, hj) - 1, hi, hj), hi, hj] };
     const r = G.tap(s8, roof, 0, false, 'way');
-    ok('on a house\'s roof: said, not unroofed', /roof/.test(r?.refused ?? ''), r); }
+    ok('on a house\'s roof: a way up on to it, its roof a terrace (or, if none will stand, nothing unasked)', (!r?.refused && /terrace/.test(r?.note ?? '')) || r === null || /roof|stand/.test(r?.refused ?? ''), r); }
   // (ways on the land, drawn as a hand draws them (diagonal, curving): never an empty way. Each builds something, or
   // says why not)
   { let tried = 0, empty = 0, reached = 0, refused = 0;
@@ -761,18 +784,21 @@ stands(s4, 'story 4');
       }
     }
     ok('a wall over uneven land keeps one line of coping: no cell dips out of it', walls >= 8 && dips === 0, { walls, dips }); }
-  // (stone drawn straight up the screen: the piece it's part of raised; down, lowered, never below the ground)
+  // (stone drawn straight up the screen: the part pulled raised (the column touched, or what's selected); the whole
+  // piece the other reading; down, lowered, never below the ground)
   { const w = new World(1);
     for (const i of [4, 5, 6]) w.apply({ add: [[0, i, 5, 0], [1, i, 5, 0]] });
     w.apply({ add: [[0, 9, 9, 0]] });
     const p = { face: 'top', hit: [1, 5, 5], to: [2, 5, 5] };
     const up = G.lift(w, p, 2, 0);
-    ok('drawn up from a top: the whole run raised, two courses', up && !up.refused && up.add?.length === 6 && up.add.every((c) => c[0] === 2 || c[0] === 3) && up.why === 'lift', up);
-    ok('and just the column, the other reading', up?.alts?.[0]?.label === 'just this column' && up.alts[0].op.add?.length === 2);
-    ok('the block apart from it untouched', !up.add.some((c) => c[1] === 9));
-    const down = G.lift(w, p, -5, 0);
-    ok('drawn down: courses taken off, to the ground and no further', down && down.cut?.length === 6 && down.cut.every((c) => c[0] >= 0) && down.why === 'lower', down);
-    w.apply(up); ok('raised, it stands four high', w.topFrom(0, 5, 5) === 4 && w.topFrom(0, 4, 5) === 4);
+    ok('drawn up from a top: the column pulled raised, two courses', up && !up.refused && up.add?.length === 2 && up.add.every((c) => c[1] === 5 && c[2] === 5 && (c[0] === 2 || c[0] === 3)) && up.why === 'lift', up);
+    ok('and the whole run, the other reading, offered not taken', /whole of it \(3 across\)/.test(up?.alts?.[0]?.label ?? '') && up.alts[0].op.add?.length === 6 && !up.took?.length, up?.alts);
+    const picked = G.lift(w, p, 1, 0, [[4, 5], [5, 5]]);
+    ok('with part of it selected: all that\'s selected rises, nothing else', picked?.add?.length === 2 && picked.add.every((c) => c[0] === 2 && c[2] === 5 && (c[1] === 4 || c[1] === 5)) && picked.alts?.[0]?.label === 'just this column', picked);
+    ok('the block apart from it untouched', !up.add.some((c) => c[1] === 9) && !up.alts[0].op.add.some((c) => c[1] === 9));
+    const down = G.lift(w, p, -5, 0, 'whole');
+    ok('drawn down (the whole of it): courses taken off, to the ground and no further', down && down.cut?.length === 6 && down.cut.every((c) => c[0] >= 0) && down.why === 'lower', down);
+    w.apply(up.alts[0].op); ok('raised, it stands four high', w.topFrom(0, 5, 5) === 4 && w.topFrom(0, 4, 5) === 4);
     ok('a tap still adds a course (no drag, no lift)', G.lift(w, p, 0, 0) === null); }
   // (a wall drawn a cell alongside one already there, the same way: joined to it, not doubled into a slab)
   { const w = new World(1);

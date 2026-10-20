@@ -49,7 +49,9 @@ function judge(w0, w1, g, op) {
   if (!added.length && !removed.length) flags.push('no-change');
   const meant = g.kind === 'lift' && g.by < 0;
   if (removed.length && !meant) flags.push('destroyed');
-  if (!meant && unroofed(w0, w1)) flags.push('unroofed');
+  // (a roof the gesture went to (tapped, or ended on) is the hand's reason for it: a house become a tower with a terrace)
+  const aimedAt = g.path ? g.path.at(-1) : g.at, goneTo = buildings(w0).list.some((b) => b.roof && b.cols.some(([i, j]) => i === aimedAt[0] && j === aimedAt[1]));
+  if (!meant && !goneTo && unroofed(w0, w1)) flags.push('unroofed');
   const r = w1.reached.get(w1.ops.at(-1));
   if (op.connect && r) { if (!r.reached && !r.cells.length && !added.some((k) => k[0] === 'p')) flags.push('empty-way'); else if (!r.reached && r.stopped >= 0 && r.stopped < (op.connect.path.length - 1) * 0.5) flags.push('stopped-short'); }
   if (op.connect?.follow && w1.land && r?.cells.length >= 3) { const up = r.cells.filter(([k, i, j]) => k > w1.ground(i, j) && w1.stone(k, i, j)).length; if (up / r.cells.length > 0.5) flags.push('raised-way'); }
@@ -68,8 +70,30 @@ function judge(w0, w1, g, op) {
 // ─── the runs ───
 const R0 = Number(opt.seed) || 1, tally = {}, byKind = {}, flagged = [];
 // (what was built against what was drawn: how often, and how, the reading took liberties with the gesture (`Op.took`))
-const took = {}, authorship = { built: 0, literal: 0, liberty: 0, otherKind: 0, refused: 0, offered: 0 };
+const took = {}, authorship = { built: 0, literal: 0, liberty: 0, moved: 0, reformed: 0, otherKind: 0, refused: 0, offered: 0 };
 const OTHER_KIND = ['tower-instead', 'walkway-instead', 'wall-instead', 'court-instead', 'chosen-instead', 'jetty'];
+// (the liberties that change where the gesture acts, the hand's strongest say; the rest change how it's resolved, the
+// world's freedom)
+const WHERE = ['routed-round', 'begun-beside', 'from-foot', 'begun-on', 'moved-beside', 'trimmed', 'from-bank', 'arrives-along', 'arrives-first-reach', 'skirted', 'foot-back'];
+// (where it acted: of what was laid, how much within a cell of the stroke (or the tap); of the stroke, how much has
+// something laid within a cell of it)
+const placed = { gestures: 0, near: 0, covered: 0, displaced: 0 };
+function placement(w0, w1, g, op) {
+  const a = state(w0), cols = [...new Set([...state(w1).keys()].filter((k) => !a.has(k)).map((k) => { const [, i, j] = unkey(Number(k.slice(1))); return `${i}.${j}`; }))].map((c) => c.split('.').map(Number));
+  if (!cols.length) return null;
+  const S = g.path ?? [g.at], d = (p, q) => Math.max(Math.abs(p[0] - q[0]), Math.abs(p[1] - q[1]));
+  const near = cols.filter((c) => S.some((s) => d(c, s) <= 1)).length / cols.length, covered = S.filter((s) => cols.some((c) => d(c, s) <= 1)).length / S.length;
+  // (a tap acts on what it touched: what grows from there (a flight up to it) is attached, not elsewhere)
+  // (and a way that ends on what was tapped, from wherever it climbs, acts on it)
+  let attached = !g.path && op?.connect?.to && op.connect.to[1] === g.at[0] && op.connect.to[2] === g.at[1] && !!w1.reached.get(w1.ops.at(-1))?.reached;
+  if (!g.path && !attached) {
+    const seen = new Set(), q = cols.filter((c) => d(c, g.at) <= 1);
+    for (const c of q) seen.add(c.join('.'));
+    while (q.length) { const c = q.pop(); for (const o of cols) if (!seen.has(o.join('.')) && d(o, c) <= 1) { seen.add(o.join('.')); q.push(o); } }
+    attached = seen.size >= cols.length * 0.8;
+  }
+  return { near: attached ? 1 : near, covered };
+}
 let n = 0, t0 = Date.now();
 for (const W of WORLDS) for (let run = 0; run < RUNS; run++) {
   const R = rng(R0 * 7919 + run * 104729 + W.name.split('').reduce((a, c) => a * 31 + c.charCodeAt(0), 7));
@@ -88,6 +112,10 @@ for (const W of WORLDS) for (let run = 0; run < RUNS; run++) {
         authorship.built++;
         const t = op.took ?? [];
         if (!t.length) authorship.literal++; else authorship.liberty++;
+        if (t.some((x) => WHERE.includes(x))) authorship.moved++;
+        if (t.some((x) => !WHERE.includes(x))) authorship.reformed++;
+        const pl = placement(w0, w1, g, op);
+        if (pl) { placed.gestures++; placed.near += pl.near; placed.covered += pl.covered; if (pl.near < 0.5) { placed.displaced++; flags.push('displaced'); } }
         if (t.some((x) => OTHER_KIND.includes(x))) authorship.otherKind++;
         for (const x of t) took[x] = (took[x] ?? 0) + 1;
       }
@@ -103,7 +131,8 @@ for (const W of WORLDS) for (let run = 0; run < RUNS; run++) {
   }
 }
 const secs = (Date.now() - t0) / 1000;
-const summary = { gestures: n, seconds: secs, perGestureMs: Math.round((secs * 1000) / n), flaggedGestures: flagged.length, tally, authorship, took, byKind };
+const where = { gestures: placed.gestures, near: Math.round((100 * placed.near) / (placed.gestures || 1)), covered: Math.round((100 * placed.covered) / (placed.gestures || 1)), displaced: placed.displaced };
+const summary = { gestures: n, seconds: secs, perGestureMs: Math.round((secs * 1000) / n), flaggedGestures: flagged.length, tally, authorship, where, took, byKind };
 writeFileSync(join(OUT, 'summary.json'), `${JSON.stringify(summary, null, 1)}\n`);
 // (a sample of each flag, written apart: what's to be read blind, and what's revealed after)
 const picked = new Set();
@@ -117,4 +146,5 @@ for (const c of picked) {
 }
 writeFileSync(join(OUT, 'flagged.json'), `${JSON.stringify(flagged.map(({ before, after, ...c }) => c), null, 1)}\n`);
 console.log(`${n} gestures in ${secs.toFixed(1)}s (${summary.perGestureMs}ms each) · ${flagged.length} flagged · ${JSON.stringify(tally)} · ${picked.size} cases written to ${OUT}/cases`);
-console.log(`authorship: ${authorship.built} built, ${authorship.literal} as drawn, ${authorship.liberty} with liberties (${authorship.otherKind} another kind of thing); ${authorship.refused} refused (${authorship.offered} offering another reading) · ${JSON.stringify(took)}`);
+console.log(`authorship: ${authorship.built} built, ${authorship.literal} as drawn, ${authorship.liberty} with liberties: ${authorship.moved} where it acts, ${authorship.reformed} how it's resolved (${authorship.otherKind} another kind of thing); ${authorship.refused} refused (${authorship.offered} offering another reading) · ${JSON.stringify(took)}`);
+console.log(`where it acted: of what was laid, ${where.near}% within a cell of the stroke; of the stroke, ${where.covered}% with something laid by it; ${where.displaced} gestures laid mostly elsewhere`);

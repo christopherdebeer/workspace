@@ -212,8 +212,9 @@ type Gesture = {
   instead?: Alt[];
   /** where the finger paused on the way, and when it last moved */
   rest: Array<[number, number]>; moved: number;
-  /** whether it's lifting (or lowering) the stone it started on: drawn straight up or down the screen from it */
-  lifting?: boolean;
+  /** whether it's lifting (or lowering) the stone it started on: drawn straight up or down the screen from it; and what
+   * it pulls (what was selected when it began, or the part touched) */
+  lifting?: boolean; pulls?: 'part' | Array<[number, number]>;
   /** where the finger last came to rest, and when (for holding still to choose); whether it's been offered */
   still: { x: number; y: number; t: number; f?: number }; offered?: boolean;
 };
@@ -535,7 +536,8 @@ function traceStep(cx: number, cy: number, final: boolean) {
       const n = Math.round(-dy / per);
       g.lifting = upright || Math.abs(dx) <= Math.abs(dy) * 0.45;
       if (g.lifting) {
-        const r = lift(before, g.start, n, g.born), op = r && !('refused' in r) ? r : null;
+        g.pulls ??= sel ? [...new Map(sel.s.cells.map(([, i, j]) => [`${i}.${j}`, [i, j] as [number, number]])).values()] : 'part';
+        const r = lift(before, g.start, n, g.born, g.pulls), op = r && !('refused' in r) ? r : null;
         const said = r && 'refused' in r ? r.refused : '';
         if (said && said !== g.said) say(said);
         g.said = said;
@@ -573,7 +575,7 @@ function traceStep(cx: number, cy: number, final: boolean) {
     const [k0, i0, j0] = g.start.hit, a = at3(i0 + 0.5, j0 + 0.5, k0 + 1), b = at3(i0 + 0.5, j0 + 0.5, k0 + 2), per = Math.max(8, Math.hypot(a[0] - b[0], a[1] - b[1]));
     const dx = cx - g.x0, dy = cy - g.y0;
     if (Math.abs(dy) >= per * 0.6 && Math.abs(dx) <= Math.abs(dy) * 0.3) {
-      const n = Math.round(-dy / per), l = lift(before, g.start, n, g.born);
+      const n = Math.round(-dy / per), l = lift(before, g.start, n, g.born, g.pulls ?? 'part');
       if (l && !('refused' in l)) built = { ...built, alts: [...(built.alts ?? []), { label: n > 0 ? 'raise it instead' : 'lower it instead', op: { ...l, alts: undefined } }] };
     }
   }
