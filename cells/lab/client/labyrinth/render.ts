@@ -599,6 +599,13 @@ export class Renderer {
   top = 8;
   /** (for looking at it: the sun's shadows, or none) */
   shadows = true;
+  /**
+   * What drawing costs, measured (main.ts copies it out on a double tap on the title): the GPU's own time for each pass,
+   * where the browser lets it be timed (EXT_disjoint_timer_query_webgl2; Safari doesn't), averaged over the last frames
+   * it's come back for; and the CPU's time handing each frame over.
+   */
+  timing = { gpu: null as null | { shadow: number; main: number; post: number; frames: number }, cpuDraw: 0, frames: 0 };
+  private timer: { ext: { TIME_ELAPSED_EXT: number; GPU_DISJOINT_EXT: number }; pending: Array<{ q: WebGLQuery[] }>; sum: number[]; n: number } | null = null;
   constructor(public canvas: HTMLCanvasElement) {
     const gl = canvas.getContext('webgl2', { antialias: false, preserveDrawingBuffer: true })!;
     if (!gl) throw new Error('no WebGL2');
@@ -617,6 +624,8 @@ export class Renderer {
     this.dvao = gl.createVertexArray()!; this.dbuf = gl.createBuffer()!;
     gl.bindVertexArray(this.dvao); gl.bindBuffer(gl.ARRAY_BUFFER, this.dbuf); layout();
     gl.bindVertexArray(null);
+    const tq = gl.getExtension('EXT_disjoint_timer_query_webgl2');
+    if (tq) this.timer = { ext: tq as unknown as { TIME_ELAPSED_EXT: number; GPU_DISJOINT_EXT: number }, pending: [], sum: [0, 0, 0], n: 0 };
     this.shadowTex = this.depthTex(2048, 2048);
     this.shadowFb = gl.createFramebuffer()!;
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.shadowFb);
@@ -637,6 +646,8 @@ export class Renderer {
     for (const [k, v] of [[gl.TEXTURE_MIN_FILTER, gl.NEAREST], [gl.TEXTURE_MAG_FILTER, gl.NEAREST], [gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE], [gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE]]) gl.texParameteri(gl.TEXTURE_2D, k, v);
     return t;
   }
+  /** the vertices drawn: the stone's (fixed till it changes), and what moves */
+  get counts() { return { stone: this.count, moving: this.dcount }; }
   upload(m: Mesh) {
     const gl = this.gl;
     gl.bindBuffer(gl.ARRAY_BUFFER, this.buf);
@@ -700,12 +711,30 @@ export class Renderer {
     this.shadowTexel = tx; this.shadowRange = 2 * rr;
     return mul(ortho(sx - r, sx + r, sy - r, sy + r, -pz - rr, -pz + rr), V);
   }
+  /** the GPU's times come back a few frames late: those that have, summed (and their queries let go) */
+  private collect() {
+    const gl = this.gl, T = this.timer!;
+    while (T.pending.length) {
+      const f = T.pending[0];
+      if (!gl.getQueryParameter(f.q[2], gl.QUERY_RESULT_AVAILABLE)) break;
+      T.pending.shift();
+      const ok = !gl.getParameter(T.ext.GPU_DISJOINT_EXT);
+      f.q.forEach((q, k) => { if (ok) T.sum[k] += (gl.getQueryParameter(q, gl.QUERY_RESULT) as number) / 1e6; gl.deleteQuery(q); });
+      if (ok) T.n++;
+    }
+    if (T.n >= 30) { this.timing.gpu = { shadow: T.sum[0] / T.n, main: T.sum[1] / T.n, post: T.sum[2] / T.n, frames: T.n }; T.sum = [0, 0, 0]; T.n = 0; }
+  }
   draw(view: View, time: number, dpr: number) {
+    const t0 = performance.now();
     const gl = this.gl, cv = this.canvas, w = cv.width, h = cv.height;
+    const T = this.timer, qs: WebGLQuery[] = [];
+    if (T) this.collect();
+    const timed = !!T && T.pending.length < 6, begin = () => { if (!timed) return; const q = gl.createQuery()!; gl.beginQuery(T!.ext.TIME_ELAPSED_EXT, q); qs.push(q); }, end = () => { if (timed) gl.endQuery(T!.ext.TIME_ELAPSED_EXT); };
     this.targets(w, h);
     const cam = camera(view, w / h), light = this.lightVP(view, w / h);
     gl.enable(gl.DEPTH_TEST); gl.enable(gl.CULL_FACE);
     // (the sun's depths)
+    begin();
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.shadowFb); gl.viewport(0, 0, 2048, 2048);
     gl.clear(gl.DEPTH_BUFFER_BIT);
     gl.useProgram(this.shadow);
@@ -716,6 +745,7 @@ export class Renderer {
     gl.bindVertexArray(this.vao); gl.drawArrays(gl.TRIANGLES, 0, this.count);
     if (this.dcount) { gl.bindVertexArray(this.dvao); gl.drawArrays(gl.TRIANGLES, 0, this.dcount); gl.bindVertexArray(this.vao); }
     gl.cullFace(gl.BACK);
+    end(); begin();
     // (the stone, lit)
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.ms ?? this.fb); gl.viewport(0, 0, w, h);
     gl.clearBufferfv(gl.COLOR, 0, [0.94, 0.91, 0.85, 0]); gl.clearBufferfv(gl.COLOR, 1, [0, 0, 0, 0]); gl.clear(gl.DEPTH_BUFFER_BIT);
@@ -739,6 +769,7 @@ export class Renderer {
       gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1]);
       gl.bindFramebuffer(gl.READ_FRAMEBUFFER, null); gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, null);
     }
+    end(); begin();
     // (ink, and paper)
     gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.viewport(0, 0, w, h);
     gl.disable(gl.DEPTH_TEST); gl.disable(gl.CULL_FACE);
@@ -751,6 +782,9 @@ export class Renderer {
     gl.uniform1f(P('uWorldPx'), (2 * view.zoom) / h);
     gl.uniformMatrix3fv(P('uViewRot'), false, cam.rot);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
+    end();
+    if (timed && qs.length === 3) T!.pending.push({ q: qs });
+    this.timing.cpuDraw = this.timing.cpuDraw * 0.95 + (performance.now() - t0) * 0.05; this.timing.frames++;
     return cam;
   }
 }

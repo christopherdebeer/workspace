@@ -65,7 +65,9 @@ const plain = qs.has('plain');
 /** the mesh, as the world is now and with what's taken up marked on it (worked out again when either changes) */
 let meshSel = '';
 const selKeys = () => (sel ? new Set(sel.s.cells.map((c) => key(...c))) : new Set<number>());
-function remesh() { const ks = selKeys(); R.upload(buildMesh(world, plain, ks)); meshVersion = world.version; meshSel = [...ks].join(','); }
+/** how long a remesh takes (building the mesh, handing it to the GPU): the last, the slowest, and how many */
+const meshTimes = { last: 0, upload: 0, max: 0, n: 0 };
+function remesh() { const ks = selKeys(), t0 = performance.now(), m = buildMesh(world, plain, ks), t1 = performance.now(); R.upload(m); meshVersion = world.version; meshSel = [...ks].join(','); const t2 = performance.now(); meshTimes.last = t1 - t0; meshTimes.upload = t2 - t1; meshTimes.max = Math.max(meshTimes.max, t1 - t0); meshTimes.n++; }
 
 // ─── how it's seen ───
 const corner = (k: number) => Math.PI / 4 + (k * Math.PI) / 2;
@@ -822,9 +824,12 @@ document.getElementById('frame')!.addEventListener('click', () => { zoomK = Numb
 let last = performance.now(), zoomFit = framing().fit;
 /** frames drawn: a hold is a finger still over several of them as well as for long enough (a slow frame isn't a hold) */
 let frameNo = 0;
+/** each frame's interval and the time spent in it on the CPU (the last few hundred): what telemetry reports */
+const intervals = new Float32Array(600), busy = new Float32Array(600);
 function frame() {
   frameNo++;
-  const t = performance.now(), dt = Math.min(0.05, (t - last) / 1000); last = t;
+  const t = performance.now(), dt = Math.min(0.05, (t - last) / 1000);
+  intervals[frameNo % 600] = t - last; last = t;
   if (world.version !== meshVersion || [...selKeys()].join(',') !== meshSel) remesh();
   if (preview && !still) view.az += dt * 0.12;
   else if (azGoal !== null) { const k = instant ? 1 : 1 - Math.exp(-dt * 8); view.az += (azGoal - view.az) * k; if (Math.abs(azGoal - view.az) < 1e-4) { view.az = azGoal; azGoal = null; } }
@@ -870,7 +875,47 @@ function frame() {
     g2.fillStyle = `rgba(150,128,100,${(0.45 * (1 - p.life / 1.1)).toFixed(3)})`;
     g2.beginPath(); g2.arc(p.x, p.y, p.r, 0, Math.PI * 2); g2.fill();
   }
+  busy[frameNo % 600] = performance.now() - t;
   requestAnimationFrame(frame);
+}
+// ─── telemetry: a double tap on the title copies what drawing costs on this device, to be pasted where it's needed ───
+function telemetry(): string {
+  const gl = R.gl, dbg = gl.getExtension('WEBGL_debug_renderer_info');
+  const n = Math.min(frameNo, 600), take = (a: Float32Array) => Array.from(a.slice(0, n)).filter((x) => x > 0).sort((p, q) => p - q);
+  const stat = (a: number[]) => a.length ? { mean: +(a.reduce((p, q) => p + q, 0) / a.length).toFixed(2), p50: +a[Math.floor(a.length * 0.5)].toFixed(2), p95: +a[Math.floor(a.length * 0.95)].toFixed(2), p99: +a[Math.floor(a.length * 0.99)].toFixed(2), max: +a[a.length - 1].toFixed(2) } : null;
+  const iv = take(intervals), cpu = take(busy);
+  return JSON.stringify({
+    when: new Date().toISOString(), url: location.search, ua: navigator.userAgent,
+    screen: { w: screen.width, h: screen.height, dpr: devicePixelRatio, drawn: [R.canvas.width, R.canvas.height] },
+    gl: {
+      renderer: dbg ? gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER), vendor: dbg ? gl.getParameter(dbg.UNMASKED_VENDOR_WEBGL) : gl.getParameter(gl.VENDOR),
+      maxSamples: gl.getParameter(gl.MAX_SAMPLES), msaa: R.msaa, maxTexture: gl.getParameter(gl.MAX_TEXTURE_SIZE),
+      ext: ['EXT_color_buffer_float', 'EXT_color_buffer_half_float', 'EXT_disjoint_timer_query_webgl2', 'OES_texture_float_linear', 'EXT_float_blend'].filter((e) => !!gl.getSupportedExtensions()?.includes(e)),
+    },
+    frames: { counted: iv.length, fps: iv.length ? +(1000 / stat(iv)!.mean).toFixed(1) : 0, interval: stat(iv), cpuInFrame: stat(cpu), cpuDraw: +R.timing.cpuDraw.toFixed(2) },
+    gpu: R.timing.gpu ?? (gl.getExtension('EXT_disjoint_timer_query_webgl2') ? 'timing (needs 30 frames)' : 'not timed here (no EXT_disjoint_timer_query_webgl2)'),
+    mesh: { ...R.counts, buildMs: +meshTimes.last.toFixed(1), uploadMs: +meshTimes.upload.toFixed(1), slowestMs: +meshTimes.max.toFixed(1), builds: meshTimes.n },
+    world: { ops: world.ops.length, land: world.land ? world.landSeed : null, meetings: world.meetings.length, top: world.top() },
+    view: { zoom: +view.zoom.toFixed(3), el: +view.el.toFixed(3), az: +view.az.toFixed(3), shadows: R.shadows, bleed: R.bleed },
+    memory: (performance as unknown as { memory?: { usedJSHeapSize: number } }).memory?.usedJSHeapSize ?? null,
+  }, null, 1);
+}
+{
+  const title = document.querySelector('nav h1') as HTMLElement | null;
+  if (title) {
+    title.style.pointerEvents = 'auto'; title.style.touchAction = 'manipulation'; title.style.cursor = 'default';
+    const small = title.querySelector('small'), was = small?.textContent ?? '';
+    let lastTap = 0;
+    const copy = async () => {
+      const text = telemetry();
+      let ok = false;
+      // (the clipboard as it's asked for now, given a moment; if it doesn't answer, the older way)
+      try { ok = await Promise.race([navigator.clipboard.writeText(text).then(() => true), new Promise<boolean>((r) => setTimeout(() => r(false), 600))]); } catch { ok = false; }
+      if (!ok) { const ta = document.createElement('textarea'); ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0'; document.body.appendChild(ta); ta.select(); try { ok = document.execCommand('copy'); } catch { ok = false; } ta.remove(); }
+      if (small) { small.textContent = ok ? 'telemetry copied' : 'couldn\'t copy'; setTimeout(() => { small.textContent = was; }, 1600); }
+    };
+    title.addEventListener('pointerup', (e) => { const t = e.timeStamp; if (t - lastTap < 350) { lastTap = 0; void copy(); } else lastTap = t; });
+  }
 }
 // ─── what moves ───
 /** `?cats=study`: every pose, side by side (the motion sheet); `?cats=0`: none */
@@ -969,6 +1014,7 @@ if (qs.has('at')) { const [i, j] = qs.get('at')!.split('.').map(Number); view.ta
 requestAnimationFrame(frame);
 
 (window as unknown as { __labyrinth: unknown }).__labyrinth = {
+  telemetry,
   get world() { return world; }, view, R, pick, onPlane, inStone: (x: number, y: number, z: number) => inStone(world, x, y, z), inLand: (x: number, y: number, z: number) => inLand(world, x, y, z), setHand: (h: Hand | Dressing | Brush) => setBrush(h), setBrush,
   get brush() { return brush; }, get held() { return held; }, get intent() { return intent; }, setIntent,
   cats: () => cats.list.map((c) => ({ name: c.name, coat: COATS[c.coat], doing: c.doing, x: c.x, y: c.y, z: c.z, at: c.at, want: c.want, air: c.air, asleep: c.asleep, call: c.call })), catScreen: (name: string) => { const c = cats.list.find((q) => q.name === name); if (!c) return null; const h = cats.headOf(c); return screenOf(h[0], h[1] - 0.04, h[2]); }, catsHome: () => cats.P?.capacity ?? 0,
