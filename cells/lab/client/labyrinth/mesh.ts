@@ -23,7 +23,7 @@ import { BUT, BUTH, BUTW, WT, buttresses, inBlock, outline, reach, wallCell, typ
 import { CENTER, DECK, DIRS, DRESS, PLANT, key, soffit as flightSoffit, unkey, type Span, type World } from './model';
 import { climb, grow, growths } from './plants';
 import { strokes, type StrokeLand } from './strokes';
-import { LAND, noise2, surfaceY } from './land';
+import { DOMAIN, LAND, noise2, surfaceY } from './land';
 import { groundY, retaining } from './context';
 
 /** floats a vertex: position, normal, ao (1 open .. 0 shut in), material (MAT), its rising (when laid, the height it
@@ -96,6 +96,15 @@ const tone = (k: number, i: number, j: number) => (((k * 73856093) ^ (i * 193496
 /** the land drawn bleeding into the page (no sides, no table under it): see the renderer's `bleed` */
 let bleed = false;
 export const setBleed = (b: boolean) => { bleed = b; };
+/** how far past what's shown of the land (its extent) the land's drawn, bleeding into the page: room for the picture to
+ * go to the drawing gradually, and for the drawing to carry on. Only drawn: what's built and struck stays the extent's */
+const DRAWN_MARGIN = 7;
+/** the cells the land's drawn over: its extent, and bleeding, a margin past it (as far as the land goes) */
+export function drawnBox(w: World): { i0: number; i1: number; j0: number; j1: number } {
+  const e = w.extent();
+  if (!bleed || !w.land) return e;
+  return { i0: Math.max(DOMAIN.i0, e.i0 - DRAWN_MARGIN), i1: Math.min(DOMAIN.i1, e.i1 + DRAWN_MARGIN), j0: Math.max(DOMAIN.j0, e.j0 - DRAWN_MARGIN), j1: Math.min(DOMAIN.j1, e.j1 + DRAWN_MARGIN) };
+}
 export function buildMesh(w: World, plain = false, selected: Set<number> = new Set()): Mesh {
   /** how a cell's dressed: the rules' dressing and the hand's (`plain`: the hand's alone) */
   const dressed = (k: number, i: number, j: number) => look(w, k, i, j, plain);
@@ -881,7 +890,7 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
    * banks; a cypress or two. None of them where anything's built.
    */
   function landMesh() {
-    const land = w.land!, B = w.extent(), x0 = B.i0, x1 = B.i1 + 1, z0 = B.j0, z1 = B.j1 + 1, RES = (x1 - x0) * (z1 - z0) > 500 ? 3 : 4;
+    const land = w.land!, B = drawnBox(w), x0 = B.i0, x1 = B.i1 + 1, z0 = B.j0, z1 = B.j1 + 1, RES = (x1 - x0) * (z1 - z0) > 500 ? 3 : 4;
     const Y0 = (gx: number, gz: number) => groundY(w, Math.min(x1 - 1e-4, Math.max(x0, gx)), Math.min(z1 - 1e-4, Math.max(z0, gz)));
     // (where it's steep (a cliff, a bank's face), the rock in its beds: the height stepped into ledges a third of a level
     // thick, each ledge's lip a little rounded, so a cliff is broken by shelves and overhang-like lips, not a smooth
@@ -896,7 +905,7 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
       return y + (ledge - y) * steep * 0.85;
     };
     cur = { born: -1e3, pivot: 0, how: 1, tone: 0.5, dress: 0, sel: false };
-    drawnLand = { Y, B, bed: bedAt };
+    drawnLand = { Y, B, bed: bedAt, on: (i, j) => i >= B.i0 && i <= B.i1 && j >= B.j0 && j <= B.j1 };
     const nx = (x1 - x0) * RES, nz = (z1 - z0) * RES;
     const P = (a: number, b: number): V3 => { const gx = x0 + a / RES, gz = z0 + b / RES; return [gx - CENTER, Y(gx, gz), gz - CENTER]; };
     const Nrm = (a: number, b: number): V3 => {
@@ -942,7 +951,7 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
     // from one (in its `tone`), laid in a little grid so the depth can change across the cell)
     const order = new Map(land.stream.map(([i, j], q) => [j * 1000 + i, q]));
     for (const [i, j] of land.stream) {
-      if (!w.onSlab(i, j)) continue;
+      if (i < B.i0 || i > B.i1 || j < B.j0 || j > B.j1) continue;
       const g = w.ground(i, j), y = g - 0.17, cx = X(i), cz = Z(j), q0 = order.get(j * 1000 + i)!;
       const next = land.stream[q0 + 1], prev = land.stream[q0 - 1], to = next ?? [i + (i - (prev?.[0] ?? i)), j + (j - (prev?.[1] ?? j))];
       const ang = Math.atan2(to[1] - j, to[0] - i), how = 1 + ((ang / (2 * Math.PI) + 1) % 1) * 0.98 + 0.001;

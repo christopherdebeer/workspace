@@ -40,6 +40,8 @@ export interface StrokeLand {
   Y: (gx: number, gz: number) => number; B: { i0: number; i1: number; j0: number; j1: number };
   /** how thick the rock's beds are about a point, where a cliff's stepped into ledges */
   bed: (gx: number, gz: number) => number;
+  /** whether a cell's drawn (past what's shown of the land, bleeding into the page, the land's still drawn) */
+  on: (i: number, j: number) => boolean;
 }
 
 /**
@@ -81,7 +83,7 @@ export function strokes(w: World, land: StrokeLand): Float32Array {
   // wall, not built against, not the stream's own bed))
   const drop = (i: number, j: number, d: number) => {
     const [a, b] = DIRS[d], x = i + a, z = j + b;
-    if (!w.onSlab(x, z) || wet(i, j)) return 0;
+    if (!land.on(x, z) || wet(i, j)) return 0;
     const hi = w.ground(i, j), lo = w.ground(x, z), dd = hi - lo;
     if (dd < 1 || held.has(`${i}.${j}.${d}`)) return 0;
     if (w.occupied(hi, i, j) || w.occupied(lo, x, z) || w.stair(lo, x, z) >= 0) return 0;
@@ -241,7 +243,7 @@ export function strokes(w: World, land: StrokeLand): Float32Array {
   // ─── water: its current along it, a steep bank's line, its falls and where they land ───
   const order = new Map(w.land.stream.map(([i, j], q) => [j * 1000 + i, q]));
   for (const [i, j] of w.land.stream) {
-    if (!w.onSlab(i, j)) continue;
+    if (!land.on(i, j)) continue;
     const q0 = order.get(j * 1000 + i)!, next = w.land.stream[q0 + 1], prev = w.land.stream[q0 - 1];
     const to = next ?? [i + (i - (prev?.[0] ?? i)), j + (j - (prev?.[1] ?? j))];
     const fa = to[0] - i, fb = to[1] - j, g = w.ground(i, j), y = g - 0.17 + 0.006, r = rng(w.land.seed, i, j, 0x3a7);

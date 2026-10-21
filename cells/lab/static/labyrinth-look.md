@@ -154,6 +154,12 @@ On the phone, a band showed between the rendered core and the strokes: a pale wa
 
 Past the picture's reach, it's strokes on the paper only.
 
+**Wider (after the phone).** The way from full paint to full linework is now about seven cells long, not three:
+- **Even falloff:** the picture's reach falls evenly with the distance from what's built, instead of along a curve that did most of its change in a narrow middle band.
+- **Room to finish:** bleeding into the page, the land is drawn seven cells past what's shown of it (`drawnBox`), as drawing only. The fade has room to complete, and the strokes carry on past it, instead of the land's edge cutting it short. What's built and struck is still the extent's.
+
+![The wider fade](labyrinth/look-fade.jpg)
+
 ## Stage 10: marks with reasons (after Taohua)
 
 ![The drawing's marks, laid by the features that call for them](labyrinth/look-strokes.jpg)

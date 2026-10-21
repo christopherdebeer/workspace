@@ -15,7 +15,7 @@
  * renderer, where every transition is frames it hasn't time for)
  */
 import { CENTER, World, inGrid, key, replay, unkey, type Alt, type Cell, type Op } from './model';
-import { buildMesh, inLand, inStone, setBleed } from './mesh';
+import { buildMesh, drawnBox, inLand, inStone, setBleed } from './mesh';
 import { LAND } from './land';
 import { Renderer, camera, invert, type View } from './render';
 import { carve, lift, stroke, surface, tap, touch, trace, type Intent, type Pick } from './gesture';
@@ -103,12 +103,12 @@ function shown(): [number, number, number, number] {
  * a cell over the land, each the distance in cells to the nearest built column (a chamfer: a pass down and a pass back),
  * as a byte, 16 cells at most. With nothing built yet, round the middle of the bare land's piece.
  */
-let focusOf: World | null = null, focusAt = -1;
+let focusOf: World | null = null, focusAt = -1, focusBled = false;
 function focusOn() {
-  if (focusOf === world && focusAt === world.version) return;
-  focusOf = world; focusAt = world.version;
+  if (focusOf === world && focusAt === world.version && focusBled === R.bleed) return;
+  focusOf = world; focusAt = world.version; focusBled = R.bleed;
   if (!world.land) return;
-  const e = world.extent(), S = 2, W = (e.i1 + 1 - e.i0) * S, H = (e.j1 + 1 - e.j0) * S, d = new Float32Array(W * H).fill(1e9);
+  const e = drawnBox(world), S = 2, W = (e.i1 + 1 - e.i0) * S, H = (e.j1 + 1 - e.j0) * S, d = new Float32Array(W * H).fill(1e9);
   const cols = new Set<number>();
   for (const m of [world.mass, world.stairs, world.piers]) for (const v of m.keys()) { const [, i, j] = unkey(v); cols.add(j * 4096 + i); }
   if (!cols.size) { const mid = (LAND.i0 + LAND.i1 + 1) / 2; for (let i = Math.floor(mid - 1.5); i < mid + 1.5; i++) for (let j = Math.floor(mid - 1.5); j < mid + 1.5; j++) cols.add(j * 4096 + i); }
@@ -872,7 +872,7 @@ function frame() {
   R.area = [fr.cx, fr.cz, fr.half + 2]; R.top = world.top();
   // (what's drawn of the land: gathered round what's built)
   focusOn();
-  { const e = world.extent(); R.landBox = world.land ? [e.i0 - CENTER, e.j0 - CENTER, e.i1 + 1 - CENTER, e.j1 + 1 - CENTER] : [-1e3, -1e3, 1e3, 1e3]; }
+  { const e = drawnBox(world); R.landBox = world.land ? [e.i0 - CENTER, e.j0 - CENTER, e.i1 + 1 - CENTER, e.j1 + 1 - CENTER] : [-1e3, -1e3, 1e3, 1e3]; }
   { const b = bleedOn && !!world.land; if (b !== R.bleed) { R.bleed = b; setBleed(b); meshVersion = -1; } }
   if (catsOn) {
     catMemory();

@@ -72,7 +72,8 @@ float reach(vec3 p) {
   if (uPaper > .5) return 0.;
   float dB = builtD(p), dE = min(min(p.x - uLand.x, uLand.z - p.x), min(p.z - uLand.y, uLand.w - p.z));
   float rag = (bnoise(vec3(p.x * .35, 0., p.z * .35)) - .5) * 2.5;
-  return (1. - smoothstep(.9, 4.4, dB + rag * .6)) * smoothstep(.2, 3.2, dE + rag * .6);
+  // (falling evenly with the distance, so the way to the drawing is as gradual at its start as at its end)
+  return (1. - clamp((dB + rag * .8 - .7) / 7., 0., 1.)) * smoothstep(.2, 3.2, dE + rag * .6);
 }
 // (the line's reach: much further, thinning out to the land's edge)
 float reachLines(vec3 p) {
@@ -518,7 +519,7 @@ void main() {
   float drawn = 0.;
   vec3 washC = c;
   if (onPaper && !sel && !fur) {
-    drawn = 1. - smoothstep(.1, .85, gT);
+    drawn = 1. - smoothstep(.05, .9, gT);
     float L = dot(c, vec3(.3, .55, .15));
     // (its colour drained toward the paper's own warmth, not toward grey, so it never reads paler than the page; then
     // given back to the page)
@@ -613,7 +614,7 @@ float noise(vec3 x) { vec3 i = floor(x), f = fract(x); f = f * f * (3. - 2. * f)
 void main() {
   float across = vSA.x, fam = floor(vFam.x + .001), weight = fract(vFam.x + .001), persist = vFam.y, pick = vFam.z;
   if (pick > reachLines(vPos) * 1.3 - .05) discard;
-  float R0 = reach(vPos), t = R0 + (noise(vec3(vPos.xz * .9, 5.)) - .5) * .3 * min(1., R0 * 4.), drawn = 1. - smoothstep(.1, .85, t);
+  float R0 = reach(vPos), t = R0 + (noise(vec3(vPos.xz * .9, 5.)) - .5) * .3 * min(1., R0 * 4.), drawn = 1. - smoothstep(.05, .9, t);
   float aa = max(fwidth(across), 1e-4);
   float cov = (1. - smoothstep(1. - aa, 1. + aa * .5, abs(across))) * min(1., 2. / aa);
   float dry = smoothstep(.18, .32, noise(vec3(vPos.xz * 7.5 + vPos.y * 3., fam * 3.1)));
