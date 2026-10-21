@@ -509,23 +509,21 @@ void main() {
     c = mix(vec3(.4, .5, .51), vec3(.93, .95, .94), smoothstep(.38, .78, st)) * (.82 + .18 * sh);
   }
   if (mat == 2 && vTone > .99) c = vec3(.93, .94, .91) * (.86 + .14 * noise(vPos * 40. + uTime));
-  // (the ramp from the picture to the page, by the picture's reach: whole round what's built; then, step by step, less
-  // coloured and paler, the ink coming up over it, till by the wash's edge (crisp, granulating, pooling a little darker,
-  // as a watercolour dries) it's barely a tint on the paper, so the edge is quiet; past it, the marks alone, as far as
-  // the lines reach. \`drawn\`: how far along it this is (0 the render, 1 the page), handed to the post pass so its
+  // (the ramp from the picture to the page, by the picture's reach: whole round what's built; then, without an edge
+  // anywhere, the picture less coloured and paler, all the way to the paper itself, as the ink comes up over it; past
+  // it, the strokes alone, as far as the lines reach. No wash between: nothing laid as a tone of its own, nothing with a
+  // border to show. \`drawn\`: how far along it this is (0 the render, 1 the page), handed to the post pass so its
   // lines come up as the drawing takes over)
   vec3 PAP = vec3(.95, .90, .80);
-  float drawn = 0., washA = 1.;
+  float drawn = 0.;
   vec3 washC = c;
   if (onPaper && !sel && !fur) {
-    float t = gT, rg = min(1., max(t, 0.) * 4.);
-    drawn = 1. - smoothstep(.1, .85, t);
-    float wv = t - .02 + (onIt ? (noise(vPos * 4.5) - .5) * .1 + (noise(vPos * 13.) - .5) * .04 : 0.) * rg;
-    washA = smoothstep(.0, .03, wv);
-    float L = dot(c, vec3(.3, .55, .15)), fd = smoothstep(.0, 1., drawn);
-    // (less coloured toward the paper's own warmth, not toward grey, so the wash never reads paler than the page)
-    washC = mix(c, mix(PAP * (L / .9), c, .7), smoothstep(.0, .5, drawn));
-    washC = mix(washC, PAP, .82 * fd * fd) * (1. - .1 * washA * (1. - smoothstep(.03, .1, wv))) * (1. + (.05 * noise(vPos * 31.) - .025) * fd);
+    drawn = 1. - smoothstep(.1, .85, gT);
+    float L = dot(c, vec3(.3, .55, .15));
+    // (its colour drained toward the paper's own warmth, not toward grey, so it never reads paler than the page; then
+    // given back to the page)
+    washC = mix(c, mix(PAP * (L / .9), c, .6), smoothstep(.0, .6, drawn));
+    washC = mix(washC, PAP, smoothstep(.15, .95, drawn));
     // (and over the wash, in the shade, the pen's hatching: one way where it's in shade, crossed where it's darker; laid
     // in the world so it stays on what it shades, and left out where its lines would crowd together)
     float h1 = (vPos.x - vPos.z) * 9. + vPos.y * 6., h2 = (vPos.x + vPos.z) * 9. - vPos.y * 6.;
@@ -539,24 +537,15 @@ void main() {
   // (the land, held back: most of the way to its own pale, unlit, the shade still on it)
   bool land = mat == 5 && moss;
   if (land && onPaper) {
-    // (after Taohua: the open ground is the paper itself, unlit. Only its features are drawn, in marks: a bank hatched in
-    // short strokes down its fall; a cliff washed grey as a dry brush lays it, streaked down its face, strokes dragged
-    // down it, a broken ink line along its top; the shade cast on the ground laid on in dry strokes. Away from what's
-    // built and toward the land's edge there are fewer and fewer of them, each as dark as ever: the land isn't faded
-    // out, it's drawn less, till there's only the page)
+    // (after Taohua: the open ground is the paper itself, unlit, no tone laid on it. Only strokes: its features' own
+    // marks (strokes.ts: rims, hachures, bedding, fractures, contacts) and here its contours. Away from what's built and
+    // toward the land's edge there are fewer and fewer of them, each as dark as ever: the land isn't faded out, it's
+    // drawn less, till there's only the page)
     float R = reachLines(vPos);
-    vec3 GREY = vec3(.72, .64, .53), g = PAP;
+    vec3 g = PAP;
     float up = n.y, rough = noise(vPos * vec3(1.7, 2.3, 1.7)) * .6 + noise(vPos * 6.) * .4;
     float cut = .41 - (up + (rough - .5) * .14), cliff = smoothstep(-.09, .09, cut), steep = smoothstep(.97, .7, up);
     vec2 fall = normalize(n.xz + 1e-4), con = vec2(-fall.y, fall.x);
-    if (cliff > 0.) {
-      float toL = dot(fall, normalize(uSun.xz + 1e-4)), u = dot(vPos.xz, con);
-      vec3 wash = mix(vec3(.66, .59, .5), vec3(.84, .78, .68), smoothstep(-.4, .5, toL)) * (.92 + .12 * noise(vPos * 1.4));
-      // (the wash as a dry brush lays it, streaked down the face: as far as the drawing reaches, then broken, then gone)
-      float br = noise(vec3(u * 7., vPos.y * 1.1, 4.)) * .72 + noise(vec3(u * 21., vPos.y * 3., 7.)) * .28;
-      float laid = smoothstep(1. - R * 1.25, 1.06 - R * 1.25, br);
-      g = mix(g, mix(PAP, wash, .7), cliff * laid);
-    }
     // (the lie of the land in contours: a line each third of a level up it, every third one a little heavier, where the
     // ground's gentle enough for them to stand apart (on a cliff they'd crowd: its hatching says it there); broken here
     // and there, fewer further out; in the world, so they stay where they are as the eye moves)
@@ -567,21 +556,13 @@ void main() {
       cl *= step(1. - R * 1.4, noise(vPos * vec3(1.1, .4, 1.1) + 7.));
       g = mix(g, vec3(.38, .3, .22), cl * (.45 + .25 * heavy));
     }
-    // (the shade cast on the ground: laid on as a dry brush lays grey, breaking up at its edge, and further out, gone)
-    float shade = (1. - sh) * (.75 + .25 * (1. - vAo)), sR = shade * (.25 + .75 * R);
-    float brush = noise(vec3(vPos.x * 1.1, vPos.z * 9., 2.)) * .75 + noise(vec3(vPos.x * 4., vPos.z * 24., 5.)) * .25;
-    float lay = smoothstep(1. - sR * 1.2, 1.05 - sR * 1.2, brush);
-    g = mix(g, GREY, .42 * lay * smoothstep(.05, .3, shade) * (1. - .6 * cliff));
-    // (near what's built, the land as the light finds it, whole; then the wash of it with the marks over it; further
-    // out the marks alone)
-    // (the marks a little softer than ink straight from the pen, so the page and the picture aren't at odds)
     g = mix(PAP, g, .72);
-    c = mix(g, washC * mix(vec3(1.), g / PAP, smoothstep(.2, .7, drawn)), washA);
+    c = washC * mix(vec3(1.), g / PAP, smoothstep(.15, .7, drawn));
   }
   else if (onPaper && mat == 2 && !fur) {
     // (the stream, away from what's built: its water laid in broken strokes along it, then only a line or two)
     float R = reachLines(vPos), br = noise(vec3(vPos.x * 3., vPos.z * 3., 9.)) * .6 + noise(vec3(vPos.x * 11., vPos.y, vPos.z * 11.)) * .4;
-    float Rw = uPaper > .5 ? 0. : min(1., reach(vPos) + .25), wet = smoothstep(1. - Rw * 1.3, 1.06 - Rw * 1.3, br);
+    float Rw = uPaper > .5 ? 0. : min(1., reach(vPos) + .25), wet = smoothstep(.15, .85, Rw);
     vec2 q = vec2(vPos.x + vPos.z, vPos.x - vPos.z) * .707;
     float lines = max(strokes(q, .09, .35, .35, 3., max(fwidth(q.y), 1e-5), .7, .02, .25), strokes(q.yx, .09, .35, .35, 5., max(fwidth(q.x), 1e-5), .7, .02, .25));
     vec3 pale = mix(PAP, vec3(.62, .80, .80), .55 * smoothstep(.0, .5, R) * (1. - uPaper));
@@ -589,7 +570,7 @@ void main() {
   }
   else if (land) c = mix(c, base * (.86 + .14 * sh) * (.92 + .08 * vAo), .55);
   // (what stands out on the land (a rock, a shrub, a tree), and anything built out toward its edge: washed the same way)
-  if (onPaper && !land && !sel && !fur && mat != 2) c = mix(PAP, washC, washA);
+  if (onPaper && !land && !sel && !fur && mat != 2) c = washC;
   // (a crown as it's drawn: its tufts' edges in the pen's small scalloped marks, as a hand draws leaves)
   if (onPaper && mat == 3 && !fur) {
     float lf = bnoise(vPos * 4.2 + 11.), fl = max(fwidth(lf), 1e-4);

@@ -143,6 +143,17 @@ These follow the two study sheets, [one](labyrinth/ref-transition-1.jpg) and [tw
 
 ![Printed: the whole of it on the paper](labyrinth/look-print.jpg)
 
+## Stage 11: no wash between
+
+![The picture going to the page without an edge](labyrinth/look-seam.jpg)
+
+On the phone, a band showed between the rendered core and the strokes: a pale wash with a crisp, granulated edge, plus grey dry-brush smears where the shade and the cliffs had been laid as tones. That's gone. The transition is now one continuous move from high definition to linework:
+- the picture loses its colour toward the paper's warmth and lightens all the way to the paper itself, with no tint left behind an edge;
+- the ink comes up over it at the same rate (the drawing's marks, the post pass's lines, the contours), and nothing is laid as a tone of its own, so nothing has a border to show;
+- the stream's paint fades the same way, without a broken edge.
+
+Past the picture's reach, it's strokes on the paper only.
+
 ## Stage 10: marks with reasons (after Taohua)
 
 ![The drawing's marks, laid by the features that call for them](labyrinth/look-strokes.jpg)
