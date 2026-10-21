@@ -245,6 +245,22 @@ void main() {
   }
   else if (mat == 4) base = vec3(.32, .24, .17);
   else if (mat == 9) base = vec3(1.);
+  else if (mat == 11 && vTone > 1.5) {
+    // (the house's paint (in the tone past 2: sage, blue-grey, oxblood): a shutter's louvres, each slat's lower edge in
+    // shadow, the paint worn through here and there to grey wood; past 5, canvas, in stripes across it, a little soiled)
+    vec3 T = normalize(vec3(-n.z, 0., n.x) + 1e-5);
+    float u = dot(vPos, T);
+    int pc = int(mod(floor(vTone + .01), 3.));
+    vec3 paint = pc == 0 ? vec3(.43, .53, .42) : pc == 1 ? vec3(.40, .51, .58) : vec3(.55, .30, .24);
+    if (vTone > 4.5) {
+      float st = step(.5, fract(u * 6.5));
+      base = mix(vec3(.90, .86, .76), paint * 1.1, st) * (.93 + .07 * noise(vPos * 24.)) * (1. - .08 * smoothstep(.5, .8, fbm(vPos * 5.)));
+    } else {
+      float sl = fract(vPos.y * 30.);
+      base = paint * (.8 + .28 * smoothstep(.0, .45, sl) * keep(30.)) * (.94 + .08 * noise(vPos * 30.));
+      base = mix(base, vec3(.48, .45, .40), .55 * smoothstep(.7, .85, noise(vPos * vec3(9., 3., 9.) + 3.)));
+    }
+  }
   else if (mat == 11) {
     // (a door: planks, upright, weathered dark, with a darker line between each)
     float u = abs(n.x) > .5 ? vPos.z : vPos.x, pl = fract(u * 14.);

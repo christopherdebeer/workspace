@@ -266,6 +266,42 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
       for (const sg of [-1, 1]) { face([Q(sg * BUTW, r0, y0), Q(sg * BUTW, r1, y0), Q(sg * BUTW, r1, yT), Q(sg * BUTW, r0, yS)], MAT.stone, 0.8, true, Q(0, (r0 + r1) / 2, y0 + 0.3)); }
     }
   };
+  /** each house's paint, for its shutters and its awning: one of a few, by the house */
+  const paintOf = new Map<string, number>();
+  for (const b of buildings(w).list) { const c = hash(w.seed, b.i0, b.j0, 41) % 3; for (const o of b.openings) paintOf.set(`${o.k}.${o.i}.${o.j}.${o.d}`, c); }
+  /**
+   * What says it's lived in, at an opening: a window's shutters, in the house's paint, most folded back flat against the
+   * wall either side of it, a few closed over it; over a door at the foot of a house, now and then, an awning of striped
+   * canvas, out from the wall and falling a little, its valance along its front. (Their paint in the door's tone, past
+   * its own: 2 + the colour for a shutter, 5 + it for canvas; render.ts)
+   */
+  const lived = (d: number, s0: number, s1: number, op: Opening, P: (d: number, s: number, y: number, inset?: number) => V3, n: V3, hw: number, yb: number, sp: number, top: number, arched: boolean, slit: boolean, door: boolean, r: number, colonnettes: boolean, oriel: boolean) => {
+    if (slit || colonnettes || oriel) return;
+    const rnd = (q: number) => hash(w.seed, op.k, op.i, op.j, op.d, q) / 4294967296, paint = paintOf.get(`${op.k}.${op.i}.${op.j}.${op.d}`) ?? 0, keepTone = cur.tone;
+    const slab = (sa: number, sb: number, ya: number, yb2: number, ia: number, ib: number, ao: number) => {
+      const A = P(d, sa, ya, ia), B = P(d, sb, yb2, ib);
+      box(Math.min(A[0], B[0]), Math.max(A[0], B[0]), ya, yb2, Math.min(A[2], B[2]), Math.max(A[2], B[2]), MAT.door, ao);
+    };
+    if (!door && rnd(1) < 0.7) {
+      cur.tone = 2 + paint;
+      const yt = arched ? sp + hw * 0.7 : sp, room = -2 * hw - 0.03 > s0 && 2 * hw + 0.03 < s1;
+      if (room && rnd(2) < 0.78) for (const sg of [-1, 1]) slab(sg * (hw + 0.012), sg * (2 * hw + 0.012), yb - 0.01, yt, -0.022, -0.008, 0.85);
+      else for (const sg of [-1, 1]) slab(0, sg * hw, yb, sp, r * 0.35 + 0.014, r * 0.35, 0.8);
+    }
+    if (door && rnd(3) < 0.4) {
+      cur.tone = 5 + paint;
+      const [a, b] = DIRS[d], W = hw + 0.1, OUT = 0.3, DROP = 0.12, y1 = top + 0.12, y2 = y1 - DROP, V = 0.05, l = Math.hypot(OUT, DROP);
+      const up: V3 = [(a * DROP) / l, OUT / l, (b * DROP) / l];
+      quad(P(d, -W, y1), P(d, W, y1), P(d, W, y2, -OUT), P(d, -W, y2, -OUT), up, 1, MAT.door);
+      quad(P(d, -W, y1), P(d, W, y1), P(d, W, y2, -OUT), P(d, -W, y2, -OUT), [-up[0], -up[1], -up[2]], 0.6, MAT.door);
+      // (its valance, both sides; its ends)
+      quad(P(d, -W, y2 - V, -OUT), P(d, W, y2 - V, -OUT), P(d, W, y2, -OUT), P(d, -W, y2, -OUT), n, 0.9, MAT.door);
+      quad(P(d, -W, y2 - V, -OUT), P(d, W, y2 - V, -OUT), P(d, W, y2, -OUT), P(d, -W, y2, -OUT), [-n[0], 0, -n[2]], 0.6, MAT.door);
+      const [ta, tb] = DIRS[(d + 1) % 4];
+      for (const sg of [-1, 1]) tri(P(d, sg * W, y1), P(d, sg * W, y2, -OUT), P(d, sg * W, y2 - V, -OUT), [sg * ta, 0, sg * tb], 0.8, MAT.door);
+    }
+    cur.tone = keepTone;
+  };
   /**
    * A face with an opening in it: a door (an arched way in, its leaf of planks set back in the wall, a step at its
    * foot), or a window (arched, square, or a slit; its glass set back, a sill under it). The wall round it, the opening's
@@ -306,6 +342,7 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
     };
     if (door) ledge(hw + 0.05, k, 0.03, 0.06); else if (!slit) ledge(hw + 0.03, yb - 0.04, 0.04, 0.035);
     const dr = dressed(op.k, op.i, op.j);
+    lived(d, s0, s1, op, P, n, hw, yb, sp, top, arched, slit, door, r, !!dr?.colonnettes, !!(dr?.oriel && !door && !slit && k >= 1));
     // (colonnettes: slim shafts framing it, a pair each side of a door, one each side of an arched window, each on a
     // little base and under a little capital where the arch springs)
     if (dr?.colonnettes && arched && !slit) {

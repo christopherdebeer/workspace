@@ -80,6 +80,20 @@ Also: **telemetry.** A double tap on the title copies what drawing costs on the 
 
 Optimisation waits on these numbers from the phone.
 
+## Stage 7: the land, the crowns and signs of life
+
+![The four views after this pass](labyrinth/look-lived.jpg)
+
+- **Open ground:** grey-brown earth rather than sand, under drifts of dry grass running from straw to olive, with a fine grain to the blades while they're big enough to see.
+- **Wet banks:** each point of the land knows how near it is to the stream, both across and in height (baked on the mesh), so a bank is greener and darker where it's wet. A cliff the stream runs along the top or foot of stays dry.
+- **Rock beds:** level, each a little thicker or thinner than the next. They step a little at their fractures, as settled blocks do, instead of waving.
+- **Crowns as one mass:** each clump's normals lean toward the whole crown's, so a crown is lit as one mass with clumps swelling on it, darker underneath and toward its middle. Leaves are cut through only toward the outline, so the paper never shows through a crown's middle. The sun's view still cuts throughout, so the shade stays dappled.
+- **Tops:** laid as flags in staggered half-cell rows, not one slab a cell square.
+- **Signs of life:**
+  - most windows have shutters in the house's paint (sage, blue-grey or oxblood): louvred, worn through to grey wood here and there, mostly folded back against the wall, a few closed;
+  - now and then a door at the foot of a house has an awning of striped canvas with its valance.
+- **On the phone:** shadows are now hardware-filtered (13 fetches instead of 34). A long press on the title runs a profile sweep that times the drawing with each costly part turned off in turn: sun map, multisampling, contact shade, leaf cutting, three-quarter and half resolution. The result is included in the telemetry copied by a double tap.
+
 ## Next
 
 1. **Terrain, further:**
