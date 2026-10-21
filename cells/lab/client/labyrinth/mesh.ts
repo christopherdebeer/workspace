@@ -841,8 +841,24 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
     };
     const pts: V3[][] = [], nrm: V3[][] = [];
     for (let a = 0; a <= nx; a++) { pts.push([]); nrm.push([]); for (let b = 0; b <= nz; b++) { pts[a].push(P(a, b)); nrm[a].push(Nrm(a, b)); } }
-    const v = (a: number, b: number, ao = 1) => vert(pts[a][b], nrm[a][b], ao, LANDMAT);
+    // (how near the water each point is (in its `tone`): the ground darker and greener where it's wet, at a bank)
+    const damp: number[][] = [];
+    for (let a = 0; a <= nx; a++) {
+      damp.push([]);
+      for (let b = 0; b <= nz; b++) {
+        // (near it across, and near its level: not up the face of a cliff the stream runs along the top or foot of)
+        const gx = x0 + a / RES, gz = z0 + b / RES, y = pts[a][b][1]; let d = 9;
+        for (let i = Math.floor(gx) - 2; i <= Math.floor(gx) + 2; i++) for (let j = Math.floor(gz) - 2; j <= Math.floor(gz) + 2; j++) {
+          if (!land.water.has(j * 1000 + i)) continue;
+          const up = Math.max(0, Math.abs(y - (w.ground(i, j) - 0.17)) - 0.12) * 2;
+          d = Math.min(d, Math.hypot(Math.max(i - gx, 0, gx - i - 1), Math.max(j - gz, 0, gz - j - 1), up));
+        }
+        damp[a].push(Math.max(0, 1 - d / 1.1) ** 1.5);
+      }
+    }
+    const v = (a: number, b: number, ao = 1) => { cur.tone = damp[a][b]; vert(pts[a][b], nrm[a][b], ao, LANDMAT); };
     for (let a = 0; a < nx; a++) for (let b = 0; b < nz; b++) { v(a, b); v(a, b + 1); v(a + 1, b); v(a, b + 1); v(a + 1, b + 1); v(a + 1, b); }
+    cur.tone = 0;
     // (its sides: rock, down from its edge to the table; bleeding into the page, after Taohua, neither: the land's
     // ground is all there is of it)
     const foot = -SLAB;
@@ -854,6 +870,7 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
     quad([xa - R, foot, za - R], [xb + R, foot, za - R], [xb + R, foot, zb + R], [xa - R, foot, zb + R], [0, 1, 0], 1, MAT.table);
     for (const [qa, qb, qc, qd] of [[-T, -T, T, za - R], [-T, zb + R, T, T], [-T, za - R, xa - R, zb + R], [xb + R, za - R, T, zb + R]]) quad([qa, foot, qb], [qc, foot, qb], [qc, foot, qd], [qa, foot, qd], [0, 1, 0], 1, MAT.table);
     }
+    cur.tone = 0.5;
     // (the stream: its water a little under its banks, a fall where its bed steps down to the next)
     const wet = (i: number, j: number) => land.water.has(j * 1000 + i);
     // (each cell's water knows which way it runs (to the next cell down the stream: its angle, in the vertex's `how`, past
@@ -1420,6 +1437,28 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
     };
     for (let q = 0; q + 1 < pts.length; q++) { const A = ring(q), B = ring(q + 1); for (let s = 0; s < SEG; s++) { const s1 = (s + 1) % SEG; quad(A[s].p, A[s1].p, B[s1].p, B[s].p, A[s].n, 0.55 + 0.1 * q, MAT.bark); } }
   }
+  /**
+   * A crown's clump of leaves: a rounded mass, a little flat beneath, its normals mostly the whole crown's (out from the
+   * crown's middle, a little squat) and only partly its own, so a crown is lit as one mass with its clumps swelling on
+   * it, not as a heap of balls; darker toward the crown's underside and its middle, where the light gets in least
+   */
+  function crownClump(c: { x: number; y: number; z: number; r: number }, C: V3, R: number) {
+    const SEG = 11, rings = Array.from({ length: 8 }, (_, n) => { const t = (n / 7) * Math.PI; return [Math.sin(t) * c.r * (1 + 0.07 * Math.sin(n * 2.1 + c.x * 7)), c.y - c.r * 0.5 + c.r * 0.9 * (1 - Math.cos(t)), t] as [number, number, number]; });
+    const at = (q: number, s: number) => {
+      const [r, y, t] = rings[q], g = (s / SEG) * Math.PI * 2, p: V3 = [c.x + Math.cos(g) * r, y, c.z + Math.sin(g) * r];
+      const own: V3 = [Math.cos(g) * Math.sin(t), -Math.cos(t), Math.sin(g) * Math.sin(t)];
+      const m: V3 = [p[0] - C[0], (p[1] - C[1]) * 1.5, p[2] - C[2]], ml = Math.hypot(...m) || 1;
+      const n: V3 = [own[0] * 0.5 + (m[0] / ml) * 0.5, own[1] * 0.5 + (m[1] / ml) * 0.5, own[2] * 0.5 + (m[2] / ml) * 0.5], nl = Math.hypot(...n) || 1;
+      const out = Math.min(1, Math.hypot(p[0] - C[0], p[1] - C[1], p[2] - C[2]) / R);
+      return { p, n: [n[0] / nl, n[1] / nl, n[2] / nl] as V3, ao: 0.42 + 0.3 * (n[1] / nl * 0.5 + 0.5) + 0.28 * out };
+    };
+    for (let q = 0; q + 1 < rings.length; q++) for (let s = 0; s < SEG; s++) {
+      const P = [at(q, s), at(q, s + 1), at(q + 1, s + 1), at(q + 1, s)];
+      const [a, b, d] = [P[0].p, P[1].p, P[2].p], ux = b[0] - a[0], uy = b[1] - a[1], uz = b[2] - a[2], vx = d[0] - a[0], vy = d[1] - a[1], vz = d[2] - a[2];
+      const fn = P[0].n, flip = (uy * vz - uz * vy) * fn[0] + (uz * vx - ux * vz) * fn[1] + (ux * vy - uy * vx) * fn[2] < 0;
+      for (const k of flip ? [0, 2, 1, 0, 3, 2] : [0, 1, 2, 0, 2, 3]) vert(P[k].p, P[k].n, P[k].ao, MAT.leaves);
+    }
+  }
   /** a clump of leaves: a rounded mass, a little flat beneath */
   function clump(c: { x: number; y: number; z: number; r: number }) {
     lathe(c.x, c.z, Array.from({ length: 8 }, (_, n) => { const t = (n / 7) * Math.PI; return [Math.sin(t) * c.r * (1 + 0.07 * Math.sin(n * 2.1 + c.x * 7)), c.y - c.r * 0.5 + c.r * 0.9 * (1 - Math.cos(t))] as [number, number]; }), MAT.leaves, 11);
@@ -1441,7 +1480,10 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
       }
     }
     leaf = g.kind === PLANT.pine ? 2 : 1;
-    g.crown.forEach((c, n) => { cur.tone = 0.35 + 0.3 * ((n * 37) % 10) / 10; clump(c); });
+    const C: V3 = [0, 0, 0];
+    for (const c of g.crown) { C[0] += c.x / g.crown.length; C[1] += c.y / g.crown.length; C[2] += c.z / g.crown.length; }
+    const R = Math.max(0.2, ...g.crown.map((c) => Math.hypot(c.x - C[0], c.y - C[1], c.z - C[2]) + c.r));
+    g.crown.forEach((c, n) => { cur.tone = 0.35 + 0.3 * ((n * 37) % 10) / 10; crownClump(c, C, R); });
     leaf = 0;
   }
   /**

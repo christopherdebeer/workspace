@@ -69,14 +69,16 @@ float reach(vec3 p) {
 }
 // (a tree's crown (an olive's, a stone pine's: leaves, kind 1 or 2) isn't a ball of green but leaves in tufts with sky
 // between them: where the leaf pattern thins it's cut through, in the picture and in the sun's view both, so its shade
-// on the ground is dappled. \`rim\`: how edge-on the clump's surface is to the eye (cut more there, so its outline breaks))
+// on the ground is dappled. \`at\`: how thin the pattern may be and still stand: in the picture only toward the crown's
+// outline (its normals are the whole crown's, so that's where it's edge-on to the eye), so it breaks there and nowhere
+// is the paper seen through its middle; in the sun's view throughout, for the dappling)
 uniform float uLeafCut;
-bool leafCut(vec3 p, float m, float rim) {
+bool leafCut(vec3 p, float m, float at) {
   if (uLeafCut < .5) return false;
   int mi = int(m + .5) % 256;
   if (mi % 16 != 3 || ((mi / 64) % 4 != 1 && (mi / 64) % 4 != 2) || (mi / 16) % 4 != 0) return false;
   float lf = bnoise(p * 7.5) * .6 + bnoise(p * 19. + 3.) * .4;
-  return lf < .3 + .42 * rim * rim;
+  return lf < at;
 }
 // (a thing lying on the land (its rise marked 3 + its own chance), left out where the drawing doesn't reach: whole; a
 // thing wider than its cell (a tree's crown) marked 4 + its foot's cell and its chance, so it's kept or left whole)
@@ -94,6 +96,7 @@ uniform highp sampler2DShadow uShadow; uniform highp sampler2D uShadowRaw; unifo
 // in the world's own units whatever it's fitted to)
 uniform float uTexel, uDepthRange;
 layout(location=0) out vec4 oCol; layout(location=1) out vec4 oNrm;
+float leafEdge(vec3 n) { float rim = 1. - abs(dot(n, normalize(uDir))); return .78 * rim * rim - .1; }
 float hash(vec3 p) { return fract(sin(dot(p, vec3(127.1, 311.7, 74.7))) * 43758.5453); }
 float noise(vec3 x) { vec3 i = floor(x), f = fract(x); f = f * f * (3. - 2. * f);
   return mix(mix(mix(hash(i), hash(i + vec3(1,0,0)), f.x), mix(hash(i + vec3(0,1,0)), hash(i + vec3(1,1,0)), f.x), f.y),
@@ -169,8 +172,15 @@ float ashlar(vec2 q, float tone, out vec2 id) {
   id = vec2(b, cr);
   return min(min(fract(bu), 1. - fract(bu)) * L, min(fract(q.y / ch), 1. - fract(q.y / ch)) * ch);
 }
-// (a top: flags a cell each, their joints)
-float flags(vec2 q, out vec2 id) { vec2 f = fract(q + uN * .5), g = min(f, 1. - f); id = floor(q + uN * .5); return min(g.x, g.y); }
+// (a top: flags in rows half a cell wide, each a length of its own, the rows' joints staggered, so a top reads as laid
+// stone and not as one slab a cell square)
+float flags(vec2 q, out vec2 id) {
+  q += uN * .5;
+  float rw = .5, r = floor(q.y / rw), L = mix(.36, .62, hash(vec3(r, 4.7, 1.)));
+  float bu = (q.x + hash(vec3(r, 8.3, 2.)) * 2.) / L, b = floor(bu);
+  id = vec2(b, r);
+  return min(min(fract(bu), 1. - fract(bu)) * L, min(fract(q.y / rw), 1. - fract(q.y / rw)) * rw);
+}
 // (how high the face stands at a distance d from its joint: the mortar back, the block's arris rounded off)
 float arris(float d) { return smoothstep(.008, .055, d); }
 // (a cat's coat: its colour, its markings (a tabby's bands round its body, legs and tail, darker along its back), paler
@@ -205,7 +215,7 @@ vec3 coat(int c, float h, vec3 n, float tone) {
 void main() {
   vec3 n = normalize(vNrm);
   if (pierced(vPos, n, vMat)) discard;
-  if (vMat < 511.5 && leafCut(vPos, vMat, 1. - abs(dot(n, normalize(uDir))))) discard;
+  if (vMat < 511.5 && leafCut(vPos, vMat, leafEdge(n))) discard;
   int m0 = int(vMat + .5), m = m0 % 256, mat = m % 16, kind = (m / 64) % 4;
   bool fur = m0 >= 512;
   if (!fur && leftOut(vPos, vU)) discard;
@@ -281,22 +291,32 @@ void main() {
     float up = n.y, rough = noise(vPos * vec3(1.7, 2.3, 1.7)) * .6 + noise(vPos * 6.) * .4;
     float cliff = smoothstep(.8, .52, up + (rough - .5) * .16);
     landFeat = cliff;
-    float patchy = fbm(vec3(vPos.xz * 1.1, 2.)), fine = noise(vPos * 9.);
-    vec3 soil = mix(vec3(.84, .77, .64), vec3(.79, .73, .60), patchy);
-    soil = mix(soil, vec3(.70, .68, .53), .5 * smoothstep(.5, .72, fbm(vec3(vPos.xz * 2.3, 7.))) * smoothstep(.75, .95, up));
-    soil = mix(soil, vec3(.56, .58, .42), .35 * smoothstep(.62, .8, fbm(vec3(vPos.xz * 3.1, 11.))) * (1. - vAo * .5));
-    soil *= .94 + .1 * fine;
-    // (the rock: its beds by height, warped a little; a bedding line at each bed's foot, a fracture now and then down it)
-    float bedV = vPos.y * 2.9 + noise(vPos * vec3(.6, .3, .6)) * .9, bedF = fract(bedV), bedI = floor(bedV);
-    vec3 rock = mix(vec3(.80, .76, .68), vec3(.88, .85, .78), hash(vec3(bedI, 3., 1.)) * .7 + .3 * rough);
+    // (open ground: warm grey-brown earth, not sand; dry grass over most of the level ground in drifts, straw going to
+    // olive, its blades a fine grain while they're big enough to see; greener where it's damp and low and at the water's
+    // edge (how near the water, from the mesh, in its tone), and darker there, wet)
+    float wetv = clamp(vTone, 0., 1.), patchy = fbm(vec3(vPos.xz * 1.1, 2.)), fine = noise(vPos * 9.);
+    vec3 earth = mix(vec3(.72, .66, .55), vec3(.65, .59, .49), patchy);
+    float gr = smoothstep(.36, .6, fbm(vec3(vPos.xz * 1.6, 7.)) + .3 * (up - .85)) * smoothstep(.7, .9, up);
+    vec3 straw = mix(vec3(.73, .68, .51), vec3(.61, .61, .44), smoothstep(.4, .7, fbm(vec3(vPos.xz * .7, 13.))));
+    straw *= .87 + .2 * mix(.5, noise(vec3(vPos.x * 31., vPos.y * 4., vPos.z * 31.)), keep(30.));
+    vec3 soil = mix(earth, straw, gr * .85);
+    soil = mix(soil, vec3(.48, .54, .34), clamp(.35 * smoothstep(.62, .8, fbm(vec3(vPos.xz * 3.1, 11.))) * (1. - vAo * .5) + .5 * wetv, 0., .7));
+    soil *= (.94 + .1 * fine) * (1. - .3 * smoothstep(.45, .95, wetv));
+    // (the rock: its beds level, a little thicker or thinner each; a bedding line at each bed's foot, a fracture now and
+    // then down it, and across a fracture the bed's line a little higher or lower, as the blocks have settled)
     vec2 fall = normalize(n.xz + 1e-4), con = vec2(-fall.y, fall.x);
-    float fr = abs(noise(vec3(dot(vPos.xz, con) * 3.2, bedI * .37, 4.)) - .5);
-    rock *= 1. - .1 * (1. - smoothstep(.0, .06, bedF)) - .14 * (1. - smoothstep(.0, .03, fr)) * step(.4, hash(vec3(bedI, floor(dot(vPos.xz, con) * 1.6), 9.)));
+    float bedR = vPos.y * 2.9 + (noise(vPos * vec3(.45, .2, .45)) - .5) * .3;
+    float cc = dot(vPos.xz, con) * 1.3 + hash(vec3(floor(bedR), 5., 5.)) + (noise(vPos * vec3(2., 3., 2.)) - .5) * .25, colI = floor(cc);
+    float bedV = bedR + (hash(vec3(colI, floor(bedR), 6.)) - .5) * .2, bedF = fract(bedV), bedI = floor(bedV);
+    vec3 rock = mix(vec3(.80, .76, .68), vec3(.88, .85, .78), hash(vec3(bedI, colI, 1.)) * .7 + .3 * rough);
+    float fr = min(fract(cc), 1. - fract(cc)) / 1.3;
+    rock *= 1. - .1 * (1. - smoothstep(.0, .06, bedF)) - (.07 + .1 * hash(vec3(bedI, colI, 9.))) * (1. - smoothstep(.0, .03, fr));
     rock = mix(rock, vec3(.62, .58, .50), .25 * smoothstep(.6, .9, fbm(vPos * 1.7 + 4.)));
+    rock *= 1. - .28 * wetv;
     base = mix(soil, rock, cliff);
     // (the beds' faces turned a little each, the bedding lines and fractures cut in, for the light)
     float kL = keep(6.);
-    nS = normalize(n + (vec3(con.x, 0., con.y) * (hash(vec3(bedI, 7., 2.)) - .5) * .5 + vec3(0., 1., 0.) * (smoothstep(.0, .12, bedF) - .5) * .35 + vec3(con.x, 0., con.y) * sign(noise(vec3(dot(vPos.xz, con) * 3.2, bedI * .37, 4.)) - .5) * (1. - smoothstep(.0, .05, fr)) * .5) * cliff * kL);
+    nS = normalize(n + (vec3(con.x, 0., con.y) * (hash(vec3(bedI, 7., 2.)) - .5) * .5 + vec3(0., 1., 0.) * (smoothstep(.0, .12, bedF) - .5) * .35 + vec3(con.x, 0., con.y) * sign(fract(cc) - .5) * (1. - smoothstep(.0, .05, fr)) * .5) * cliff * kL);
     cav = 1. - cliff * (.3 * (1. - smoothstep(.0, .09, bedF)) + .2 * (1. - smoothstep(.0, .035, fr)));
   }
   else if (mat == 5) base = travertine(vPos * .8 + 11., .5) * 1.03;
@@ -502,7 +522,7 @@ const SHADOW_FS = `#version 300 es
 precision highp float;
 in vec3 vPos, vNrm; in float vAo, vMat, vTone, vU; in vec4 vLs;
 ` + PIERCE + REACH + `
-out vec4 o; void main() { if (pierced(vPos, normalize(vNrm), vMat) || (vMat < 511.5 && (leftOut(vPos, vU) || leafCut(vPos, vMat, .3)))) discard; o = vec4(1.); }`;
+out vec4 o; void main() { if (pierced(vPos, normalize(vNrm), vMat) || (vMat < 511.5 && (leftOut(vPos, vU) || leafCut(vPos, vMat, .34)))) discard; o = vec4(1.); }`;
 const POST_VS = `#version 300 es
 out vec2 vUv; void main() { vec2 p = vec2(gl_VertexID == 1 ? 3. : -1., gl_VertexID == 2 ? 3. : -1.); vUv = p * .5 + .5; gl_Position = vec4(p, 0., 1.); }`;
 const POST_FS = `#version 300 es
