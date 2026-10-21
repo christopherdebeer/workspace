@@ -1,8 +1,8 @@
 {
   "cell": "c15r/lab",
   "cellId": "lab-8928acf3",
-  "treeVersion": "tree:eb54bd2e997b2b009758be40515fd5431c07c064789b7fedc8c3bdae20b585cd",
-  "syncedAt": "2026-10-21T11:51:35.336Z",
+  "treeVersion": "tree:a22fa5be0998a97b266a3c8b3360d65b4168db6df3162dc76b16170449a5a26a",
+  "syncedAt": "2026-10-21T11:52:00.868Z",
   "files": {
     "README.md": "sha256:665df4179140457c44ea9e0f6f5820bd6e9b557fb196a37cf1245a07cb11f7c6",
     "client/bricks/build.ts": "sha256:e6ec53d7f179e4184809a1db345a074364781b5a9c44aa524818c0d264051479",
@@ -71,7 +71,7 @@
     "client/labyrinth/gesture.ts": "sha256:37179f83009e14636574f718a91f397a70676e39cf96e833b65e4f74d9a7c64f",
     "client/labyrinth/green.ts": "sha256:debf42f3db17acf2a72ebbf3bbfce1068bb125a4de6846e200b53cc00bd49675",
     "client/labyrinth/land.ts": "sha256:7e6588188c9747e04edd1212dab64149d4a23f67bb3130f1966e3b06f5e02986",
-    "client/labyrinth/main.ts": "sha256:0ccec2b91748c4f74b74dcd556e0e16a94125522e366c21d181be1e26df691a1",
+    "client/labyrinth/main.ts": "sha256:0dca75366017b37e58cce100243fbc9ca339d17e7d5ca6ba8cf37153b0921b5e",
     "client/labyrinth/mesh.ts": "sha256:36de9daaa37e20aa17683ea4a151cfee4072162c96ce0719c8bafe2213ab2f78",
     "client/labyrinth/model.ts": "sha256:0eccda0ae82569b6409fce9e051816e4c8397e5a47f9ad2d13bd5d851fbc8c34",
     "client/labyrinth/motifs.ts": "sha256:cd2e3c656aace111edc7ff61ec683fe5646cf19bf7330a4d2f59234bf768a5e2",
@@ -80,7 +80,7 @@
     "client/labyrinth/palette.ts": "sha256:5325a8cf2263b5fa22922d99a2e5cb72c5a782caa0c9b7bd1a4d71009133534e",
     "client/labyrinth/perches.ts": "sha256:69a5646c1eb0c478f4377ed4375d4907d44abf753b5c162585ffcf7c08f5b4ba",
     "client/labyrinth/plants.ts": "sha256:87440a436b9be82ebf27f2d39413531598b617fc6f14c785fa9cd2f867e22064",
-    "client/labyrinth/render.ts": "sha256:9ffb8677da93794da9631bfd2884b1d14d2e6bc85cc646c82308d7196c683844",
+    "client/labyrinth/render.ts": "sha256:b39312aeb3cc9031dbfebdcfe13dc5a08bae5e5200415a7d402065405f8e1183",
     "client/labyrinth/select.ts": "sha256:7bb082790d939b7a900868f00b9b812d512210d90eececee9f8ad289362f1bc0",
     "client/labyrinth/views.mjs": "sha256:d4624f07134d1c9c5f0d03189a4e256547826a10c70a42ab641e3fcfc1d35991",
     "client/main.ts": "sha256:58d02398010b364a951fb0bfc4ff67f1911b7e48407e0de0e2c78b083f07e0c9",
