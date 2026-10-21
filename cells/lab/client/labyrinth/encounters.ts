@@ -20,12 +20,13 @@
  * labyrinth-connectors.mjs runs every rule's scene through the same checks) come with it.
  */
 import { DIRS, DRESS, PLANT, RULE, inGrid, key, type Cell, type Op, type World } from './model';
-import { carryRound, cutBack, own, setBack } from './outline';
+import { alongside, carryRound, cutBack, landingIn, own, setBack, solidUnder } from './outline';
 
 /** the verbs: how architecture behaves touched by other architecture (static/labyrinth-encounters.md) */
 export type Verb = 'merge' | 'open' | 'carry' | 'wrap' | 'step' | 'shelter' | 'frame' | 'yield' | 'separate';
 export type Level = 0 | 1 | 2;
-export interface Candidate { level: Level; label: string; verbs: Verb[]; op: Op }
+export interface Candidate { level: Level; label: string; verbs: Verb[]; op: Op; /** the cells it rebuilds, where it may lay though
+ * something's there (it takes that out, or it's the same thing's own: a flight re-laid in its own way) */ within?: Cell[] }
 export interface Meeting {
   /** which rule found it, and what it's called; and how a stroke that makes it says where (by default "where it meets") */
   rule: string; name: string; where?: string;
@@ -36,6 +37,8 @@ export interface Meeting {
   candidates: Candidate[];
   /** the rung it starts at, where the setting says which of its answers it is (by default the first) */
   start?: number;
+  /** its answers are alternatives, not a ladder (each a different organisation, none more than another) */
+  branches?: boolean;
   /** the rung wanted (chosen, or by insistence), and the one laid (-1 if none would keep every claim), and where */
   wanted: number; laid: number; chosen: boolean; at: Cell[];
 }
@@ -367,13 +370,13 @@ const flightMeetsTerrace: Rule = {
           const terrace = w.ops.findIndex((o, n) => n !== by && !o.derived && (o.add ?? []).some((c) => c[0] === k && c[1] === X[1] && c[2] === X[2]));
           if (terrace < 0) continue;
           seen.add(key(...X));
-          const gap: Op = { dress: [[k, i, j, DRESS.gap, 1]] };
+          const gap: Op = { dress: [[k, i, j, DRESS.gap, 1]] }, landing = landingIn(w, f, q, Math.max(w.ops[by].born ?? 0, w.ops[terrace].born ?? 0));
           out.push({
-            rule: this.id, name: 'a terrace beside a flight', where: 'by the terrace', anchor: X, cells: [S, X], by: [by, terrace].sort((p, r) => p - r), insists: (o) => !!o.connect || !!o.add?.length,
+            rule: this.id, name: 'a terrace beside a flight', where: 'by the terrace', anchor: X, cells: [S, X], by: [by, terrace].sort((p, r) => p - r), insists: (o) => !!o.connect || !!o.add?.length, branches: true, start: landing ? 1 : 0,
             candidates: [
               { level: 0, label: 'the terrace and the flight apart, as they are', verbs: ['separate'], op: {} },
-              { level: 1, label: 'the flight opened at that step, stepped off on to the terrace', verbs: ['open', 'step'], op: gap },
-              { level: 2, label: 'stepped off on to the terrace, a lantern there', verbs: ['open', 'step', 'frame'], op: join(gap, lantern([X[0], X[1] + sa, X[2] + sb])) },
+              ...(landing ? [{ level: 1 as Level, label: 'a landing let into the flight level with the terrace, its lower steps moved back', verbs: ['merge', 'step'] as Verb[], op: landing.op, within: landing.within }] : []),
+              { level: 2, label: 'the flight opened at that step, stepped off sideways on to the terrace', verbs: ['open', 'step'], op: gap },
             ],
           });
         }
@@ -418,13 +421,13 @@ const flightBesideWater: Rule = {
         if (!ok || basins.length < 2) continue;
         seen.add(key(0, ...P));
         const H = f.cells[f.cells.length - 1], A: Cell = [H[0] + 1, H[1] + a, H[2] + b];
-        const cascade: Op = { add, basins, pools };
+        const cascade: Op = { add, basins, pools }, mass = solidUnder(w, f, born);
         out.push({
-          rule: this.id, name: 'a flight beside water', where: 'beside the flight', anchor: [k0, i0 + sa, j0 + sb], cells: [[0, ...P], f.cells[0], A], by: [by, pond(...P)].sort((p, r) => p - r), insists: (o) => !!o.connect || !!o.pools?.length,
+          rule: this.id, name: 'a flight beside water', where: 'beside the flight', branches: true, anchor: [k0, i0 + sa, j0 + sb], cells: [[0, ...P], f.cells[0], A], by: [by, pond(...P)].sort((p, r) => p - r), insists: (o) => !!o.connect || !!o.pools?.length,
           candidates: [
             { level: 0, label: 'the stair and the water apart', verbs: ['separate'], op: {} },
             { level: 1, label: 'a cascade beside the stair, a basin at each step, falling to the pool', verbs: ['merge', 'step'], op: cascade },
-            { level: 2, label: 'the cascade, a lantern at its head', verbs: ['merge', 'step', 'frame'], op: { ...cascade, ...lantern(A) } },
+            ...(mass ? [{ level: 2 as Level, label: 'the stair and the cascade one mass, built up solid together, the water let in beside the steps', verbs: ['merge'] as Verb[], op: { ...join(cascade, mass.op), basins, pools }, within: mass.within }] : []),
           ],
         });
       }
@@ -550,8 +553,37 @@ const wayAtFace: Rule = {
   },
 };
 
+/**
+ * Two flights of the hand's side by side, a cell apart across, climbing the same way from the same level as far, but a
+ * cell or two out of step: drawn twice beside itself, a stair broadens. Re-laid step for step beside the first (outline.ts
+ * `alongside`), the two are one broad flight; or left as drawn, two flights.
+ */
+const flightsAlongside: Rule = {
+  id: 'flights-alongside',
+  find(w) {
+    const out: Found[] = [], at = new Map<number, number>(), seen = new Set<number>();
+    w.ops.forEach((op, n) => { for (const c of [...(w.reached.get(op)?.cells ?? []), ...(op.stairs ?? []).map((s) => [s[0], s[1], s[2]] as Cell)]) if (!at.has(key(...c))) at.set(key(...c), n); });
+    const by = (f: { cells: Cell[] }) => at.get(key(...f.cells[0])) ?? -1;
+    for (const f of w.flights) for (const g of w.flights) {
+      const a = by(f), b = by(g);
+      if (f === g || a < 0 || b <= a || w.ops[a].derived || w.ops[b].derived || seen.has(key(...g.cells[0]))) continue;
+      const r = alongside(w, f, g, w.ops[b].born ?? 0);
+      if (!r) continue;
+      seen.add(key(...g.cells[0]));
+      out.push({
+        rule: this.id, name: 'two flights side by side', where: 'by the flights', anchor: g.cells[0], cells: [f.cells[0], g.cells[0]], by: [a, b], insists: ways, branches: true, start: 1,
+        candidates: [
+          { level: 0, label: 'two flights side by side, as drawn', verbs: ['separate'], op: {} },
+          { level: 1, label: 'one broad flight, the second re-laid step for step beside the first', verbs: ['merge'], op: r.op, within: r.within },
+        ],
+      });
+    }
+    return out;
+  },
+};
+
 /** every rule, in the order they're resolved (a later one never lays where an earlier one has) */
-export const RULES: Rule[] = [waysMeet, levelApart, waysCross, wayEnds, flightMeetsWall, wayMeetsTree, flightMeetsTerrace, flightBesideWater, stoneInCrown, edgeRoundCypress, wayAtFace];
+export const RULES: Rule[] = [waysMeet, levelApart, waysCross, wayEnds, flightMeetsWall, wayMeetsTree, flightMeetsTerrace, flightBesideWater, stoneInCrown, edgeRoundCypress, wayAtFace, flightsAlongside];
 
 // ─── resolving them ───
 
@@ -560,17 +592,18 @@ export const lays = (op: Op): Cell[] => [...(op.add ?? []), ...(op.walls ?? []),
 /** whether a candidate keeps every claim (a passage, a stair's way, a tree, water: nothing a meeting lays goes in
  * any of them), and stays out of what other meetings have laid */
 function keeps(w: World, c: Candidate, taken: Set<number>): boolean {
-  // (an arch opened in the hand's plain stone (the verb open) lays nothing new: it's let through what's there)
-  const opens = new Set((c.op.arches ?? []).filter(([k, i, j]) => w.block(k, i, j)).map(([k, i, j]) => key(k, i, j)));
+  // (an arch opened in the hand's plain stone (the verb open) lays nothing new: it's let through what's there; and what
+  // a candidate rebuilds, it may lay in)
+  const opens = new Set([...(c.op.arches ?? []).filter(([k, i, j]) => w.block(k, i, j)).map(([k, i, j]) => key(k, i, j)), ...(c.within ?? []).map((q) => key(...q))]);
   for (const cell of lays(c.op)) if (taken.has(key(...cell)) || (!opens.has(key(...cell)) && (w.occupied(...cell) || w.claim(...cell)))) return false;
   // (and a stair it lays has its own way clear: its foot, the room over it, its head and the room over that)
   for (const [k, i, j, d] of c.op.stairs ?? []) {
     const [a, b] = DIRS[d], way: Cell[] = [[k, i - a, j - b], [k + 1, i, j], [k + 1, i + a, j + b], [k + 2, i + a, j + b]];
-    if (way.some((q) => w.occupied(...q) || taken.has(key(...q)))) return false;
+    if (way.some((q) => (w.occupied(...q) && !opens.has(key(...q))) || taken.has(key(...q)))) return false;
   }
   for (const [i, j] of c.op.pave ?? []) if (taken.has(key(w.ground(i, j), i, j)) || w.claim(w.ground(i, j), i, j) === 'water') return false;
   // (and what it cuts is the hand's own stone, nothing another meeting's laid on)
-  for (const cell of c.op.cut ?? []) if (taken.has(key(...cell)) || !own(w, ...cell)) return false;
+  for (const cell of c.op.cut ?? []) if (taken.has(key(...cell)) || (!own(w, ...cell) && !opens.has(key(...cell)))) return false;
   return true;
 }
 /** how many of the hand's gestures, after those that made it, touched a meeting again (each a rung higher) */

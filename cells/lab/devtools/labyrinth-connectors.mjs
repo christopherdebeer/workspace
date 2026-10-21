@@ -67,7 +67,8 @@ function meetings(w, tag, expect) {
       const to = ends.length > 1 ? ends[1] : m.cells[m.cells.length - 1];
       if (!c.verbs.includes('separate') && ends.length) ok(`${tag}: at rung ${c.level}, walked between, end to end`, walks(v, ends[0], to), { from: ends[0], to });
       const here = new Set((n?.at ?? []).map((q) => q.join()));
-      if (below) ok(`${tag}: rung ${c.level} lays all that rung ${c.level - 1} does`, [...below].every((q) => here.has(q)), { below: [...below], here: [...here] });
+      // (a ladder only adds; a rule whose answers are alternatives (branches) needn't)
+      if (below && !m.branches) ok(`${tag}: rung ${c.level} lays all that rung ${c.level - 1} does`, [...below].every((q) => here.has(q)), { below: [...below], here: [...here] });
       below = here;
     }
     // (taken by touch: each thing the meeting laid at its highest rung, touched with take, is gone, and stays gone)
@@ -314,6 +315,10 @@ const SCENES = [
       for (const u of [-1, 0, 1]) for (const t of [1, 2]) { const x = i + sa * t + a * u, z = j + sb * t + b * u; for (let q = w.ground(x, z); q <= k; q++) add.push([q, x, z, 0]); }
       w.apply({ add, born: 0, why: 'raise' });
       meetings(w, this.tag, 'flight-meets-terrace');
+      // (where there's room, the flight re-laid round a landing level with the terrace: walked from its foot on to the
+      // landing, the terrace, and on up)
+      const m = w.meetings.find((q) => q.rule === 'flight-meets-terrace');
+      ok(`${this.tag}: a landing let into the flight, level with the terrace`, m?.laid === 1 && w.stone(k, i, j) && w.stair(k, i, j) < 0 && walks(w, at(w, H.T, [3, 5]), [k + 1, i + sa, j + sb]) && walks(w, [k + 1, i, j], [4, ...H.T([9, 5])]), { laid: m?.laid, start: m?.start });
     },
   },
   {

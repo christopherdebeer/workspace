@@ -127,7 +127,9 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
     const aw = w.archway(k, ni, nj);
     if (aw >= 0) return !w.cross(k, ni, nj) && aw !== d % 2;
     const s = w.stair(k, ni, nj);
-    return s >= 0 && (s + 2) % 4 === d;
+    // (a stair against its foot; or one beside it climbing the same way at the same level: one broad flight, no face
+    // between them)
+    return s >= 0 && ((s + 2) % 4 === d || (s === w.stair(k, i, j) && s % 2 !== d % 2));
   };
   const floored = (k: number, i: number, j: number) => !w.occupied(k, i, j) && w.floor(k, i, j);
   /** on the land, at its column's ground: what's built there goes down into it, so it meets the slope */

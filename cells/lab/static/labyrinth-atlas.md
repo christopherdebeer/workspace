@@ -151,6 +151,30 @@ Three encounter rules use them, and the setting says which answer each starts at
 
 Also fixed on the way: stone is never laid in a tree's crown over its trunk (it was laid two courses over an olive); the tree meeting's first answer and the terrace-beside-a-flight's are now labelled as what they are (apart, as they are), not "yield" and "notched". Every new rule runs through the connector checks in eight orientations (1680 checks).
 
+## Junctions: the shared piece rebuilt
+
+The second capability: where two things meet, the piece they share is worked out as one, and both are rebuilt to it, instead of one being cut open for the other. Three more operations in `outline.ts`, each saying which cells it rebuilds, so the encounter lets it lay where the old piece was:
+
+- **a landing let into a flight** (`landingIn`): the flight re-laid with a landing at one of its steps; the steps below it move back a cell to make room.
+- **flights drawn together** (`alongside`): a flight re-laid step for step beside another, as one broad flight.
+- **built up solid** (`solidUnder`): stone filled under a flight to the ground, so it and the cascade beside it are one mass.
+
+The rules that use them now offer **branches** (`Meeting.branches`): different organisations, none more than another, not a ladder ending in a lantern.
+
+- **A terrace beside a flight** offers three. The default, where there's room, is a landing let into the flight level with the terrace. The other answers are apart as they are, or the old sideways step off.
+- **A flight beside water** offers apart; a cascade beside the stair; or the stair and the cascade as one mass. The lantern rung is gone.
+
+Two stairs drawn side by side to the same top come out in step, so the drawing now treats them as one broad flight: no faces between them, rails only at its outer sides.
+
+![junctions: four cases](labyrinth/atlas-junctions.jpg)
+
+| Case | What it is now | Best? |
+|---|---|---|
+| **flight × terrace**: a terrace laid beside a flight, level with a step | the flight re-laid round a landing level with the terrace, walked from its foot on to the landing, the terrace, and on up | ✓ |
+| **terrace × flight**: the flight drawn past a terrace already there | the same landing: whichever came first | ✓ |
+| **broaden**: a second stair drawn beside the first | one broad flight, one carriage, rails at its outer sides | ✓ |
+| **stair × cascade**: a stair up beside a wall, a pool at its foot | apart as laid; **a reading away**, the stair and the cascade one mass, built up solid, the water falling beside the steps | ○ |
+
 ## Next
 
 What the atlas hasn't mapped yet: a stair meeting an arcade (through a bay, or up beside its piers), water and a court (a channel along a way, a fountain at a crossing), and combinations of combinations: one of these settings met by two strokes in different orders, to see whether the result depends on which came first.

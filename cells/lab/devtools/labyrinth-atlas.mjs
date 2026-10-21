@@ -348,6 +348,39 @@ CASES.push(...[
   },
 ].map((c) => ({ group: 'reshape', ...c })));
 
+/** a terrace two deep beside step `s` of the first flight, on its left, level with that step's top */
+const besideStep = (w, s = 1) => { const f = w.flights[0]; if (!f) return; const [k, i, j] = f.cells[s], [sa, sb] = DIRS[(f.d + 1) % 4], [a, b] = DIRS[f.d], add = []; for (const u of [-1, 0, 1]) for (const t of [1, 2]) { const x = i + sa * t + a * u, z = j + sb * t + b * u; for (let q = w.ground(x, z); q <= k; q++) add.push([q, x, z, 0]); } w.apply({ add, born: 1, why: 'raise' }, 1); w.apply({ dress: add.filter(([q, x, z]) => q === k).map(([q, x, z]) => [q, x, z, 5, 1]), born: 1, why: 'dress' }, 1); };
+/**
+ * Junctions: where two things meet, the piece they share rebuilt as one: a landing let into a flight level with a
+ * terrace (whichever came first), two stairs as one broad flight, a stair and a cascade one mass.
+ */
+CASES.push(...[
+  {
+    name: 'flight × terrace: a terrace laid beside a flight, level with a step',
+    best: 'a landing let into the flight level with the terrace, its lower steps moved back: one shared landing, the flight going on up from it',
+    set(w) { S.block(w, 9, 10, 4, 5, 4); lay(w, [[3, 4], [9, 4]]); },
+    act: (w) => { besideStep(w, 1); return { laid: true, note: 'a terrace laid beside it' }; },
+  },
+  {
+    name: 'terrace × flight: a flight drawn up past a terrace beside its line',
+    best: 'the same: the landing let in where it passes the terrace, whichever was there first',
+    set(w) { S.block(w, 9, 10, 4, 5, 4); S.block(w, 6, 8, 2, 3, 2); railed(w, 6, 8, 2, 3, 1); },
+    pts: [[3, 4], [9, 4]],
+  },
+  {
+    name: 'broaden: a second stair drawn beside the first, to the same top',
+    best: 'one broad flight, drawn as one: one carriage, rails only at its outer sides',
+    set(w) { S.block(w, 9, 10, 4, 5, 3); lay(w, [[2, 4], [9, 4]]); },
+    pts: [[4, 5], [9, 5]],
+  },
+  {
+    name: 'stair × cascade: a stair up beside a wall, a pool at its foot',
+    best: 'the stair and the cascade one mass, built up solid together, the water let in beside the steps',
+    set(w) { S.wall(w, 3, 8, 6, 3); S.block(w, 9, 10, 4, 5, 3); S.pools(w, [[4, 5], [5, 5]]); },
+    pts: [[2, 4], [9, 4]],
+  },
+].map((c) => ({ group: 'junctions', turn: 2, ...c })));
+
 /** whether each case came to what it would be at its best (`before`: the setting's stone) */
 const stairIn = (w, before) => before.filter((c) => w.stair(...c) >= 0 || w.passage(...c) >= 0).length;
 const BEST = {
@@ -393,6 +426,10 @@ const BEST = {
   'terrace × cypress': (w) => w.plant(0, 6, 5) >= 0 && w.stone(2, 5, 5) && w.stone(2, 7, 5) && !w.stone(1, 5, 5) && !w.stone(2, 6, 5),
   'way × house': (w) => w.archway(0, 6, 5) >= 0 && w.stone(1, 6, 5) && BU.buildings(w).list.some((b) => b.openings.some((o) => o.kind === 'door' && o.i === 6 && o.j === 6 && o.k === 0)),
   'olive × terrace': (w) => w.plant(0, 6, 4) >= 0 && [5, 6, 7].every((i) => w.stone(1, i, 5)),
+  'flight × terrace': (w) => w.meetings.some((m) => m.rule === 'flight-meets-terrace' && m.laid === 1) && NAV.reaches(BU.walkable(w), [0, 3, 4], [4, 9, 4]),
+  'terrace × flight': (w) => w.meetings.some((m) => m.rule === 'flight-meets-terrace' && m.laid === 1) && NAV.reaches(BU.walkable(w), [0, 3, 4], [4, 9, 4]),
+  broaden: (w) => w.flights.length === 2 && w.flights[0].cells.every(([k, i, j], q) => { const [k2, i2, j2] = w.flights[1].cells[q] ?? []; return k === k2 && Math.abs(i - i2) + Math.abs(j - j2) === 1; }),
+  'stair × cascade': (w) => [...w.basins.keys()].length >= 2 && w.flights.some((f) => f.cells.every(([k, i, j]) => k === w.ground(i, j) || w.stone(k - 1, i, j))),
   'beside + stair': (w) => { const nav = BU.walkable(w), [f, g] = w.flights; if (!f || !g) return false; const hk = (x) => x.cells[x.cells.length - 1]; return NAV.reaches(nav, hk(f), g.cells[0]) && Math.abs(hk(f)[1] - g.cells[0][1]) + Math.abs(hk(f)[2] - g.cells[0][2]) <= 3; },
 };
 /** what a world is, to compare before and after: each wall cell's state, the walked places, the flights */
@@ -438,7 +475,7 @@ for (const C of CASES) {
     if (BEST[C.name.split(':')[0]]?.(v, before)) { offered = c.label; offeredOps = v.encode(); }
   }
   if (opt.v && !refused) console.log(C.name.split(':')[0], JSON.stringify({ from: op.connect?.from, to: op.connect?.to, took: op.took, flights: w.flights.map((f) => [f.cells[0], f.cells.length]) }));
-  results.push({ group: C.group, name: C.name, best: C.best, verdict, met, offered, reading: refused ? op?.refused ?? 'nothing' : op.reading ?? op.note ?? op.why, how: how.join('; '), alts: refused ? (op?.alts ?? []).map((a) => a.label) : (op.alts ?? []).map((a) => a.label), flights: flights.map((f) => `${f.n} steps, ${f.carriage}`), ops: offeredOps || w.encode() });
+  results.push({ group: C.group, name: C.name, best: C.best, verdict, met, offered, reading: refused ? op?.refused ?? 'nothing' : op.reading ?? op.note ?? op.why, how: how.join('; '), alts: refused ? (op?.alts ?? []).map((a) => a.label) : (op.alts ?? []).map((a) => a.label), flights: flights.map((f) => `${f.n} steps, ${f.carriage}`), ops: offeredOps || w.encode(), turn: C.turn });
 }
 const pad = (s, n) => (s.length > n ? s.slice(0, n - 1) + '…' : s.padEnd(n));
 for (const r of results) console.log(`${r.met ? '✓' : r.offered ? '○' : '·'} ${pad(r.verdict, 9)} ${pad(r.name.split(':')[0], 16)} ${r.reading}${r.how ? ` — ${r.how}` : ''}\n${' '.repeat(27)}best: ${r.best}${r.alts.length ? `\n${' '.repeat(27)}also: ${r.alts.join(' · ')}` : ''}`);
@@ -452,7 +489,7 @@ if (opt.render) {
   mkdirSync(dir, { recursive: true });
   await withWood(async (lab) => {
     for (const [n, r] of results.entries()) {
-      const p = await lab.open(`instant&cats=0&zoom=${opt.zoom ?? 0.42}&turn=${opt.turn ?? 1}&el=0.62&at=6.5&ops=${encodeURIComponent(r.ops)}`);
+      const p = await lab.open(`instant&cats=0&zoom=${opt.zoom ?? 0.42}&turn=${opt.turn ?? r.turn ?? 1}&el=0.62&at=6.5&ops=${encodeURIComponent(r.ops)}`);
       await p.waitForTimeout(8000);
       const file = new URL(`${String(n + 1).padStart(2, '0')}-${r.name.split(':')[0].replace(/[^a-z]+/gi, '-')}${r.offered ? '-a-reading-away' : ''}.png`, dir).pathname;
       await p.screenshot({ path: file, timeout: 300000 });
