@@ -23,7 +23,7 @@
  *    platform and the old wall, ivy on the terrace, a parapet on the walkway, pots on the terrace; and a garden of thin
  *    walls run with the wall piece.
  */
-import { DRESS, RULE, World, type Cell, type Op } from './model';
+import { DRESS, PLANT, RULE, World, type Cell, type Op } from './model';
 import { carve, tap, trace, type Intent, type Pick } from './gesture';
 import { place, run, type Hand } from './palette';
 
@@ -40,6 +40,7 @@ export function story(stage: number): World {
   if (stage === 13) return forCats();
   if (stage === 14) return water();
   if (stage === 15) return onTheSlope();
+  if (stage === 16) return study();
   const w = new World(7);
   const t = -100;
   const tapAt = (p: Pick) => { const op = tap(w, p, t); if (op && !('refused' in op)) w.apply(op, t); };
@@ -334,5 +335,21 @@ function onTheSlope(): World {
   // (a way from the low ground up past them)
   const op = trace(w, g(7, 10), [[7, 10], [7, 9], [7, 8], [7, 7], [7, 6], [7, 5], [7, 4], [8, 4], [8, 3], [8, 2]], g(8, 2), () => t, t, [], 'way');
   if (op && !('refused' in op)) w.apply({ ...op, alts: undefined }, t);
+  return w;
+}
+
+/**
+ * storyboard 16: the study, the renderer's fixed reference (static/labyrinth-look.md): the slope's two houses, the
+ * tower set into the cliff and the way up past them (15), and a third house by the way's foot, an arcade along the
+ * shelf, an olive planted by the stair. Every look at the drawing is judged in the same few views of it.
+ */
+function study(): World {
+  const w = onTheSlope(), t = -100;
+  const g = (i: number, j: number): Pick => { const k = w.ground(i, j); return { face: 'ground', hit: [k - 1, i, j], to: [k, i, j] }; };
+  const raise = (i: number, j: number, n: number) => w.apply({ add: Array.from({ length: n }, (_, k) => [w.ground(i, j) + k, i, j, t] as [number, number, number, number]) }, t);
+  for (const i of [9, 10]) for (const j of [11, 12]) raise(i, j, 2);
+  const wall = trace(w, g(9, 9), [[9, 9], [10, 9], [11, 9], [12, 9], [13, 9]], null, () => t, t, [], 'mass');
+  if (wall && !('refused' in wall)) w.apply({ ...((wall.alts ?? []).find((a) => a.label === 'an arcaded wall')?.op ?? wall), alts: undefined }, t);
+  w.apply({ plants: [[w.ground(6, 7), 6, 7, PLANT.olive, t]] }, t);
   return w;
 }

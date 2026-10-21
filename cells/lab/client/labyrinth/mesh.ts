@@ -28,6 +28,8 @@ import { groundY, retaining } from './context';
 /** floats a vertex: position, normal, ao (1 open .. 0 shut in), material (MAT), its rising (when laid, the height it
  * grows from, how), and a seed for its stone's tone */
 export const STRIDE = 12;
+/** roof tiles: columns across a slope, a unit's width (render.ts lays them the same way, the caps on every other one) */
+export const TILE_U = 7;
 export const MAT = { stone: 0, within: 1, water: 2, leaves: 3, bark: 4, slab: 5, slabSide: 6, table: 7, court: 8, lamp: 9, clay: 10, door: 11, glass: 12, tile: 13, lead: 14, wood: 15 };
 /** the land (the slab's own, marked: drawn barely, its steep faces rock) */
 export const LANDMAT = MAT.slab + 16;
@@ -105,7 +107,46 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
   /** a cell's dressing, as it's drawn over its stone */
   const dressOf = (k: number, i: number, j: number) => { const d = dressed(k, i, j); return d ? (d.mat ?? 0) * KIND + (d.moss ? MOSS : 0) + (d.ivy ? IVY : 0) : 0; };
   const at = (born: number, pivot: number, k: number, i: number, j: number, how = 1) => ({ born, pivot, how, tone: tone(k, i, j), dress: dressOf(k, i, j), sel: selected.has(key(k, i, j)) });
-  const vert = (p: V3, n: V3, ao: number, mat: number) => out.push(p[0], p[1], p[2], n[0], n[1], n[2], ao, (mat === MAT.stone || mat === MAT.within ? mat + cur.dress : mat === MAT.leaves ? mat + leaf * KIND + bloom : mat) + (cur.sel ? SEL : 0), cur.born, cur.pivot, cur.how, cur.tone);
+  /**
+   * How much of the sky a point on a surface sees (1 all of its half of it, 0 none): rays out over the half the surface
+   * faces, cosine-weighted, marched through what's built and the land a few cells; a ray that runs into stone or under
+   * the ground is shut. Baked into the vertex's ao with what was there (the foot of a face a little shut in), so it's
+   * what the indirect light (the sky, and what the ground throws back) sees: an arch's mouth lit, its depth dim; a court
+   * shut in, a terrace open. Not the sun's: that's the shadow map's. Worked out once at each place and facing.
+   */
+  const solid = new Map<number, boolean>();
+  const solidAt = (x: number, y: number, z: number) => {
+    const i = Math.floor(x + CENTER), j = Math.floor(z + CENTER), k = Math.floor(y), v = ((k + 16) * 512 + i + 256) * 512 + j + 256;
+    let s = solid.get(v);
+    if (s === undefined) { s = k < w.ground(i, j) || (k >= 0 && (w.occupied(k, i, j) || w.earth(k, i, j))); solid.set(v, s); }
+    return s;
+  };
+  const seen = new Map<number, number>();
+  const skyVis = (p: V3, n: V3) => {
+    const id = (((Math.round(p[0] * 8) + 512) * 1024 + Math.round(p[1] * 8) + 512) * 1024 + Math.round(p[2] * 8) + 512) * 729 + ((Math.round(n[0] * 4) + 4) * 9 + Math.round(n[1] * 4) + 4) * 9 + Math.round(n[2] * 4) + 4;
+    const had = seen.get(id);
+    if (had !== undefined) return had;
+    // (a frame round the normal; rays at two heights round it, eight about each)
+    const t = Math.abs(n[1]) < 0.9 ? [0, 1, 0] : [1, 0, 0];
+    let a = [t[1] * n[2] - t[2] * n[1], t[2] * n[0] - t[0] * n[2], t[0] * n[1] - t[1] * n[0]]; const al = Math.hypot(a[0], a[1], a[2]) || 1; a = a.map((v) => v / al);
+    const b = [n[1] * a[2] - n[2] * a[1], n[2] * a[0] - n[0] * a[2], n[0] * a[1] - n[1] * a[0]];
+    let open = 0, all = 0;
+    for (const [ct, wt] of [[0.85, 1], [0.42, 0.9]]) {
+      const st = Math.sqrt(1 - ct * ct);
+      for (let q = 0; q < 8; q++) {
+        const ph = (q + (ct > 0.5 ? 0.5 : 0)) * Math.PI / 4, c = Math.cos(ph) * st, sn = Math.sin(ph) * st;
+        const d = [n[0] * ct + a[0] * c + b[0] * sn, n[1] * ct + a[1] * c + b[1] * sn, n[2] * ct + a[2] * c + b[2] * sn];
+        let hit = false;
+        for (let r = 0.3; r < 3.3 && !hit; r += 0.5) hit = solidAt(p[0] + n[0] * 0.04 + d[0] * r, p[1] + n[1] * 0.04 + d[1] * r, p[2] + n[2] * 0.04 + d[2] * r);
+        const ww = wt * ct; all += ww; if (!hit) open += ww;
+      }
+    }
+    const v = open / all;
+    seen.set(id, v);
+    return v;
+  };
+  const SKYLIT = new Set([MAT.stone, MAT.within, MAT.court, MAT.slab, MAT.tile, MAT.clay, MAT.wood, MAT.door, MAT.lead]);
+  const vert = (p: V3, n: V3, ao: number, mat: number) => out.push(p[0], p[1], p[2], n[0], n[1], n[2], SKYLIT.has(mat % 16) ? ao * (0.25 + 0.75 * skyVis(p, n)) : ao, (mat === MAT.stone || mat === MAT.within ? mat + cur.dress : mat === MAT.leaves ? mat + leaf * KIND + bloom : mat) + (cur.sel ? SEL : 0), cur.born, cur.pivot, cur.how, cur.tone);
   const quad = (a: V3, b: V3, c: V3, d: V3, n: V3, ao: number[] | number, mat: number) => {
     const A = typeof ao === 'number' ? [ao, ao, ao, ao] : ao;
     const ux = b[0] - a[0], uy = b[1] - a[1], uz = b[2] - a[2], vx = c[0] - a[0], vy = c[1] - a[1], vz = c[2] - a[2];
@@ -1010,6 +1051,24 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
       const q = p.map((c) => [c[0] - n[0] * RT, c[1] - n[1] * RT, c[2] - n[2] * RT] as V3), mid = p.reduce((a, c) => [a[0] + c[0] / p.length, a[1] + c[1] / p.length, a[2] + c[2] / p.length], [0, 0, 0]) as V3;
       face(p, MAT.tile, 1, true); face(q, MAT.tile, 0.45, false);
       for (let e = 0; e < p.length; e++) { const a = p[e], b = p[(e + 1) % p.length]; face([a, b, q[(e + 1) % p.length], q[e]], MAT.tile, 0.8, true, [mid[0] - n[0] * RT / 2, mid[1] - n[1] * RT / 2, mid[2] - n[2] * RT / 2]); }
+      // (along its eaves, the tiles' own ends: each cap tile's round end out over the edge, where the shader's tiles have
+      // their crowns (render.ts: columns TILE_U across the slope, the caps on every other one), so the eave's line is
+      // scalloped and throws its little shadows)
+      const T: V3 = (() => { const t = [-n[2], 0, n[0]], l = Math.hypot(t[0], t[2]) || 1; return [t[0] / l, 0, t[2] / l]; })();
+      const S: V3 = (() => { const c = [n[1] * T[2] - n[2] * T[1], n[2] * T[0] - n[0] * T[2], n[0] * T[1] - n[1] * T[0]]; const l = Math.hypot(c[0], c[1], c[2]) || 1; return (c[1] < 0 ? [-c[0] / l, -c[1] / l, -c[2] / l] : [c[0] / l, c[1] / l, c[2] / l]) as V3; })();
+      for (let e = 0; e < p.length; e++) {
+        const a = p[e], b2 = p[(e + 1) % p.length];
+        if (Math.abs(a[1] - ye) > 0.01 || Math.abs(b2[1] - ye) > 0.01) continue;
+        const ua = (a[0] * T[0] + a[2] * T[2]) * TILE_U, ub = (b2[0] * T[0] + b2[2] * T[2]) * TILE_U, lo = Math.min(ua, ub), hi = Math.max(ua, ub);
+        for (let u = Math.ceil((lo - 0.5) / 2) * 2 + 0.5; u < hi - 0.4; u += 2) {
+          if (u < lo + 0.4) continue;
+          const f = (u - ua) / (ub - ua), c: V3 = [a[0] + (b2[0] - a[0]) * f, a[1] + (b2[1] - a[1]) * f, a[2] + (b2[2] - a[2]) * f];
+          halfRound(c, [-S[0], -S[1], -S[2]], T, n as V3, 0.042 * (0.92 + 0.16 * hash(Math.round(c[0] * 97), Math.round(c[2] * 97), 3) / 0xffffffff), 0.16, MAT.tile);
+          // (and the pan beside it, its hollow end: a trough, lower, between the caps)
+          const f2 = (u + 1 - ua) / (ub - ua);
+          if (u + 1 < hi - 0.4) { const c2: V3 = [a[0] + (b2[0] - a[0]) * f2 + n[0] * 0.035, a[1] + (b2[1] - a[1]) * f2 + n[1] * 0.035, a[2] + (b2[2] - a[2]) * f2 + n[2] * 0.035]; halfRound(c2, [-S[0], -S[1], -S[2]], T, [-n[0], -n[1], -n[2]], 0.05, 0.12, MAT.tile); }
+        }
+      }
     };
     // (over a gable's ends, only a little past the wall: the verge)
     const OG = b.roof === 'gable' ? 0.05 : O;
@@ -1048,9 +1107,49 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
       if (along === 0) for (const x of [xa, xb]) { face([[x, y, za], [x, y, zb], [x, hg, zb], [x, hg, za]], MAT.stone, 0.85, true, mid); face([[x, hg, za], [x, hg, zb], [x, ye + H, cz]], MAT.stone, 0.85, true, mid); const o = x === xa ? -0.03 : 0.03; box(Math.min(x, x + o), Math.max(x, x + o), y - 0.02, y + 0.04, za, zb, MAT.stone, 0.9); }
       else for (const z of [za, zb]) { face([[xa, y, z], [xb, y, z], [xb, hg, z], [xa, hg, z]], MAT.stone, 0.85, true, mid); face([[xa, hg, z], [xb, hg, z], [cx, ye + H, z]], MAT.stone, 0.85, true, mid); const o = z === za ? -0.03 : 0.03; box(xa, xb, y - 0.02, y + 0.04, Math.min(z, z + o), Math.max(z, z + o), MAT.stone, 0.9); }
     }
-    // (the ridge)
-    const RW = 0.035;
-    if (along === 0) box(r0[0], r1[0], ye + H - 0.01, ye + H + 0.04, cz - RW, cz + RW, MAT.tile, 0.9); else box(cx - RW, cx + RW, ye + H - 0.01, ye + H + 0.04, r0[2], r1[2], MAT.tile, 0.9);
+    // (the ridge, and the hips: capped in round tiles, each overlapping the next, set in a bed of mortar)
+    capRun(r0, r1, 0.05);
+    if (b.roof === 'hipped') {
+      for (const [c, r] of (along === 0 ? [[A, r0], [D, r0], [B, r1], [C, r1]] : [[A, r0], [B, r0], [D, r1], [C, r1]]) as Array<[V3, V3]>) capRun(r, c, 0.045);
+      // (where the hips meet the ridge, or each other: a round boss of mortar and tile over the joint)
+      for (const r of r0[0] === r1[0] && r0[2] === r1[2] ? [r0] : [r0, r1]) lathe(r[0], r[2], [[0.075, r[1] - 0.02], [0.08, r[1] + 0.03], [0.06, r[1] + 0.07], [0, r[1] + 0.09]], MAT.tile, 8);
+    }
+  }
+  /**
+   * A half-round tile, its hollow downward: its axis from c along d (toward its own length), round over e2 (up off what
+   * it lies on), across e1; r its radius, len how long. Its open end at c, a lip.
+   */
+  function halfRound(c: V3, d: V3, e1: V3, e2: V3, r: number, len: number, mat: number) {
+    const N = 6, ring = (t: number, rr: number, y0: number) => Array.from({ length: N + 1 }, (_, q) => { const th = (q / N) * Math.PI, co = Math.cos(th), si = Math.sin(th); return { p: [c[0] + d[0] * t + (e1[0] * co + e2[0] * si) * rr + e2[0] * y0, c[1] + d[1] * t + (e1[1] * co + e2[1] * si) * rr + e2[1] * y0, c[2] + d[2] * t + (e1[2] * co + e2[2] * si) * rr + e2[2] * y0] as V3, n: [e1[0] * co + e2[0] * si, e1[1] * co + e2[1] * si, e1[2] * co + e2[2] * si] as V3 }; });
+    const a = ring(-0.015, r * 1.06, 0), b = ring(-len, r, 0), inner = ring(-0.015, r * 0.7, 0);
+    const smooth = (p: { p: V3; n: V3 }, ao: number) => vert(p.p, p.n, ao, mat);
+    for (let q = 0; q < N; q++) {
+      // (its back, rounded, toward the eye from above)
+      const P = [a[q], a[q + 1], b[q + 1], b[q]], u = P[1].p.map((x, k) => x - P[0].p[k]), v = P[2].p.map((x, k) => x - P[0].p[k]);
+      // (wound so it faces the way its normals do: out from the tile)
+      const flip = (u[1] * v[2] - u[2] * v[1]) * P[0].n[0] + (u[2] * v[0] - u[0] * v[2]) * P[0].n[1] + (u[0] * v[1] - u[1] * v[0]) * P[0].n[2] < 0;
+      for (const k of flip ? [0, 2, 1, 0, 3, 2] : [0, 1, 2, 0, 2, 3]) smooth(P[k], k < 2 ? 0.95 : 0.8);
+      // (its lip: the open end, a ring of tile, dark inside)
+      quad(a[q].p, a[q + 1].p, inner[q + 1].p, inner[q].p, d, [0.9, 0.9, 0.35, 0.35], mat);
+    }
+  }
+  /** a run of round cap tiles from p0 to p1 (a ridge, a hip): each overlapping the next, a little wider at its foot */
+  function capRun(p0: V3, p1: V3, r: number) {
+    const L = Math.hypot(p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2]);
+    if (L < 0.05) return;
+    const d: V3 = [(p1[0] - p0[0]) / L, (p1[1] - p0[1]) / L, (p1[2] - p0[2]) / L];
+    // (across it, level; and up off it)
+    let e1: V3 = [d[2], 0, -d[0]]; const l1 = Math.hypot(e1[0], e1[2]) || 1; e1 = [e1[0] / l1, 0, e1[2] / l1];
+    const e2: V3 = [d[1] * e1[2] - d[2] * e1[1], d[2] * e1[0] - d[0] * e1[2], d[0] * e1[1] - d[1] * e1[0]];
+    const up: V3 = e2[1] < 0 ? [-e2[0], -e2[1], -e2[2]] : e2;
+    // (laid from its lower end up, so each tile's foot lies over the one below)
+    const lowFirst = p0[1] <= p1[1], a0 = lowFirst ? p0 : p1, dd: V3 = lowFirst ? d : [-d[0], -d[1], -d[2]];
+    const n = Math.max(1, Math.round(L / 0.2)), step = L / n;
+    for (let q = n - 1; q >= 0; q--) {
+      // (each from its own foot, lying up the run over the foot of the one above it)
+      const c: V3 = [a0[0] + dd[0] * step * q, a0[1] + dd[1] * step * q, a0[2] + dd[2] * step * q];
+      halfRound(c, [-dd[0], -dd[1], -dd[2]], e1, up, r * (1 + 0.04 * (q % 2)), step + 0.03, MAT.tile);
+    }
   }
   /**
    * A colonnade's column, the part of it in level k: massive, swelling a little a third of the way up (entasis) and

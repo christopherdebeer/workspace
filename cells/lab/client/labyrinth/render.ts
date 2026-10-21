@@ -146,6 +146,19 @@ vec3 marble(vec3 p, vec3 n, float tone) {
   else { vec2 f = fract(p.xz), g = min(f, 1. - f); jt = min(g.x, g.y); }
   return c * (1. - .1 * (1. - smoothstep(.003, .009, jt)));
 }
+// (dressed stone, laid in courses: which block a point on an upright face is in (u along the face, v up it), and how
+// far it is from its nearest joint. Its colour, its relief and its roughness all come from these same blocks: three
+// courses a level, each block its own length, the upright joints staggered course to course)
+float ashlar(vec2 q, float tone, out vec2 id) {
+  float ch = 1. / 3., cr = floor(q.y / ch), L = mix(.42, .82, hash(vec3(cr, tone * 7., 1.3)));
+  float bu = (q.x + hash(vec3(cr, 2.1, tone)) * 3.) / L, b = floor(bu);
+  id = vec2(b, cr);
+  return min(min(fract(bu), 1. - fract(bu)) * L, min(fract(q.y / ch), 1. - fract(q.y / ch)) * ch);
+}
+// (a top: flags a cell each, their joints)
+float flags(vec2 q, out vec2 id) { vec2 f = fract(q + uN * .5), g = min(f, 1. - f); id = floor(q + uN * .5); return min(g.x, g.y); }
+// (how high the face stands at a distance d from its joint: the mortar back, the block's arris rounded off)
+float arris(float d) { return smoothstep(.008, .055, d); }
 // (a cat's coat: its colour, its markings (a tabby's bands round its body, legs and tail, darker along its back), paler
 // underneath and at the muzzle; where on the body (h: part × 10 + along it) keeps the markings on the cat as it moves.
 // Parts: 0 body, 1 head, 2 tail, 3 legs, 4 ears, 5 muzzle)
@@ -185,6 +198,9 @@ void main() {
   if (fur) { mat = 16; kind = 0; m = 0; }
   bool moss = (m / 16) % 2 == 1, ivy = (m / 32) % 2 == 1;
   vec3 base; float spec = 0., wrap = 0.;
+  // (the surface as the light sees it: the face's own normal, turned by the relief of what it's made of (joints, tiles);
+  // and how shut in its little hollows are. The ink still sees the face's own)
+  vec3 nS = n; float cav = 1.;
   // (how much of the land here is a feature of it (a cliff's rock, a bank's dashes), not its open ground)
   float landFeat = 0.;
   if (fur) { base = coat(m0 - 512, vU, n, vTone); wrap = .5; }
@@ -212,14 +228,23 @@ void main() {
   }
   else if (mat == 12) base = vec3(.09, .10, .11);
   else if (mat == 13) {
-    // (roof tiles: terracotta, in courses up the slope, each a curved tile a shade of its own, the next course's lip
-    // shading the one under it)
-    float row = vPos.y * 9., r = floor(row), fr = fract(row);
-    float u = (abs(n.x) > abs(n.z) ? vPos.z : vPos.x) * 7. + r * .5, cu = floor(u), fu = fract(u);
-    float tint = hash(vec3(cu, r, 7.));
-    base = mix(vec3(.62, .34, .23), vec3(.74, .47, .32), tint) * (.82 + .18 * sin(fu * 3.14159));
-    base *= .7 + .3 * smoothstep(.0, .25, fr);
-    base = mix(base, vec3(.45, .47, .38), .18 * smoothstep(.55, .8, fbm(vPos * 2.)));
+    // (roof tiles: laid in the slope's own frame (across it along the eaves, up it), so they're one size whatever the
+    // pitch: columns of round tiles, caps and pans by turns (the caps standing up, the pans hollow between them); in
+    // courses up the slope, each tile's lip proud of the one below it and throwing a little shadow on it; each a shade of
+    // its own, now and then one weathered)
+    vec3 T = normalize(vec3(-n.z, 0., n.x) + 1e-5), S = normalize(cross(n, T)); if (S.y < 0.) S = -S;
+    float u = dot(vPos, T) * 7., v = dot(vPos, S) * 9., cu = floor(u), cv = floor(v), fv = fract(v);
+    float tint = hash(vec3(cu, cv, 7.)), kT = keep(9.);
+    base = mix(vec3(.63, .37, .26), vec3(.70, .44, .31), tint);
+    if (hash(vec3(cu, cv, 3.)) > .9) base = mix(base, vec3(.50, .40, .30), .45);
+    base = mix(base, vec3(.47, .47, .40), .16 * smoothstep(.55, .8, fbm(vPos * 2.)));
+    // (across: round over a cap, hollow in a pan; up: each tile rising toward its lip)
+    float across = cos(u * 3.14159), along = -.9;
+    nS = normalize(n + (T * across * .55 + S * along * .1) * kT);
+    // (the lip's shadow on the tile under it; the lip's own edge catching the light; the pans darker than the caps)
+    float lip = smoothstep(.78, 1., fv) * kT;
+    cav = (1. - .45 * lip) * (1. - .3 * (.5 - .5 * sin(u * 3.14159)) * kT);
+    base *= 1. + .12 * (1. - smoothstep(0., .08, fv)) * kT;
   }
   else if (mat == 15) {
     // (timber: weathered, its grain along it)
@@ -265,16 +290,24 @@ void main() {
   else if (kind == 2) base = marble(vPos, n, vTone);
   else {
     base = travertine(vPos, vTone) * (kind == 3 ? 1.04 : 1.);
-    // (dressed stone, laid in courses: a joint every third of a level, the upright joints staggered course to course;
-    // on a top, a joint at each cell's edge. Not on what's curved)
-    if (mat == 0 && kind != 3) {
-      float jt;
-      if (abs(n.y) < .5) {
-        float u = abs(n.x) > .5 ? vPos.z : vPos.x, cy = vPos.y * 3., course = floor(cy);
-        float hy = min(fract(cy), 1. - fract(cy)) / 3., ux = fract((u + course * .43 + vTone) / .62), hu = min(ux, 1. - ux) * .62;
-        jt = min(hy, hu);
-      } else { vec2 f = fract(vPos.xz + uN * .5), g = min(f, 1. - f); jt = min(g.x, g.y); }
-      base *= 1. - .14 * (1. - smoothstep(.004, .016 + .006 * noise(vPos * 31.), jt));
+    // (dressed stone, in its blocks (ashlar, or a top's flags): each block a shade of its own; its joints recessed, the
+    // mortar a little paler and duller; each arris rounded so it catches the light, each face a little out of true; the
+    // detail gone where it's smaller than the eye can hold)
+    if (mat == 0 && kind != 3 && n.y > -.5) {
+      bool upright = abs(n.y) < .5;
+      vec3 T = upright ? normalize(vec3(-n.z, 0., n.x) + 1e-5) : vec3(1., 0., 0.), B = upright ? vec3(0., 1., 0.) : vec3(0., 0., 1.);
+      vec2 q = vec2(dot(vPos, T), upright ? vPos.y : vPos.z), id, id2;
+      const float e = .004;
+      float d0 = upright ? ashlar(q, vTone, id) : flags(q, id);
+      float du = upright ? ashlar(q + vec2(e, 0.), vTone, id2) : flags(q + vec2(e, 0.), id2);
+      float dv = upright ? ashlar(q + vec2(0., e), vTone, id2) : flags(q + vec2(0., e), id2);
+      float h0 = arris(d0), kS = keep(36.);
+      vec3 g = ((arris(du) - h0) * T + (arris(dv) - h0) * B) / e;
+      float t1 = hash(vec3(id, vTone * 5. + 1.)), t2 = hash(vec3(id, vTone * 5. + 2.));
+      nS = normalize(n - g * .03 * kS + (T * (t1 - .5) + B * (t2 - .5)) * .08 * keep(4.));
+      base *= .93 + .14 * hash(vec3(id, vTone * 3.));
+      base = mix(vec3(.62, .58, .50) * (.92 + .08 * noise(vPos * 50.)), base, mix(1., smoothstep(.007, .018, d0), keep(40.)));
+      cav = mix(1., mix(.55, 1., h0), kS);
     }
   }
   // (moss: in the joints and the shade, thicker on tops and low down; ivy: hanging leaves over a side)
@@ -290,6 +323,11 @@ void main() {
   }
   // (ivy's leaves are its own geometry (mesh.ts); under them, where it grows, the stone is a little stained)
   if (ivy && mat != 3 && abs(n.y) < .5) base *= .93 - .05 * noise(vPos * 6.);
+  // ─── light. The colours above are as they're seen; taken back to light (linear) here, lit, and put through the display
+  // transform once, at the end. What lights it is kept apart: the sun, shut out only by its shadow; the sky over it, cool,
+  // and the warm light the sunlit ground and stone throw back up, both shut out by what's round it (the vertex's ao: the
+  // sky it sees, baked); and a sheen by how rough the material is ───
+  vec3 alb = pow(base, vec3(2.2));
   // (the sun, and its shadows: soft, a few taps round where this is in its map)
   vec3 ls = vLs.xyz / vLs.w * .5 + .5;
   float sh = 0., bias = .0012 + .0025 * (1. - abs(dot(n, uSun)));
@@ -306,23 +344,33 @@ void main() {
   float leafy = fbm(vec3(lp * vec2(9., 11.), uTime * .05));
   float leaves = smoothstep(.48, .6, leafy) * smoothstep(-.35, -.85, lp.x * .75 - lp.y * .45);
   sh *= 1. - .38 * leaves * (1. - smoothstep(uArea.z - 3., uArea.z, max(abs(vPos.x - uArea.x), abs(vPos.z - uArea.y))));
-  float nl = dot(n, uSun), key = max((nl + wrap) / (1. + wrap), 0.) * sh;
-  vec3 sun = vec3(1.0, .86, .68) * 1.05, sky = mix(vec3(.50, .43, .36), vec3(.62, .62, .64), n.y * .5 + .5);
-  vec3 c = base * (sky * (.25 + .45 * vAo) + sun * key * (.65 + .35 * vAo));
-  // (a sheen that differs by what it is: polished marble most, travertine a little, brick and clay hardly, leaves some)
+  float nl = dot(nS, uSun), key = max((nl + wrap) / (1. + wrap), 0.) * sh * mix(.8, 1., cav);
+  // (the sun warm and strong; the sky cooler and quieter from above; what's thrown back warm from below and the sides)
+  vec3 SUN = vec3(1., .83, .64) * 3., SKY = vec3(.47, .48, .54) * 1.05, BOUNCE = vec3(.70, .52, .34) * .75;
+  float up = nS.y * .5 + .5, seen = vAo;
+  vec3 indirect = (SKY * mix(.45, 1., up) + BOUNCE * (1. - up * up)) * seen * mix(.55, 1., seen) * cav;
+  vec3 c = alb * (indirect + SUN * key);
+  // (its sheen: how rough each material is says how wide and how strong; polished marble most, glass, lead; travertine a
+  // little, brick and clay hardly; leaves some)
   {
+    float rough = mat == 12 ? .12 : mat == 14 ? .4 : mat == 3 ? .55 : mat == 10 || mat == 13 ? .62 : kind == 2 ? .3 : kind == 1 ? .8 : .7;
     vec3 hv = normalize(uSun - normalize(uDir));
-    float glo = mat == 12 ? 90. : mat == 14 ? 30. : mat == 3 ? 18. : mat == 10 || mat == 13 ? 8. : kind == 2 ? 60. : kind == 1 ? 8. : 14.;
-    float ks = mat == 12 ? .6 : mat == 14 ? .2 : mat == 3 ? .06 : mat == 10 || mat == 13 ? .03 : kind == 2 ? .22 : kind == 1 ? .015 : .045;
-    if (mat == 0 || mat == 1 || mat == 3 || mat == 10 || (mat >= 12 && mat <= 15)) c += sun * ks * pow(max(dot(n, hv), 0.), glo) * sh * (.5 + .5 * vAo);
+    float g = 2. / max(rough * rough * rough * rough, 1e-3) - 2., f0 = mat == 12 ? .06 : .035;
+    float fr = f0 + (1. - f0) * pow(1. - max(dot(hv, -normalize(uDir)), 0.), 5.);
+    if (mat != 2 && mat != 9 && !(mat == 5 && moss)) c += SUN * fr * (g + 8.) / 25.13 * pow(max(dot(nS, hv), 0.), g) * max(nl, 0.) * sh * mix(.6, 1., seen);
   }
   // (a coat's soft sheen where it turns from the eye, lit)
-  if (fur) c += base * vec3(1., .9, .75) * .35 * pow(1. - abs(dot(n, normalize(uDir))), 2.5) * (.4 + .6 * sh);
-  // (light gathers in the archways)
-  // (light bounced up into an arch from the sunlit ground: warm near its mouth, little where it's deep)
-  if (mat == 1) c += base * vec3(1., .74, .48) * .26 * vAo * vAo;
+  if (fur) c += alb * vec3(1., .86, .66) * .8 * pow(1. - abs(dot(n, normalize(uDir))), 2.5) * (.4 + .6 * sh);
+  // (the display transform: exposure; a filmic curve with a soft shoulder, on how bright it is, so a colour keeps its hue
+  // (terracotta doesn't go orange as it brightens); the brightest a little paler, as film takes them; back to how it's
+  // seen)
+  vec3 xc = c * .5;
+  float L0 = max(dot(xc, vec3(.2126, .7152, .0722)), 1e-5), L1 = clamp((L0 * (2.51 * L0 + .03)) / (L0 * (2.43 * L0 + .59) + .14), 0., 1.);
+  c = xc * (L1 / L0);
+  c = mix(c, vec3(L1), smoothstep(.55, 1., L1) * .35);
+  c = pow(clamp(c, 0., 1.), vec3(1. / 2.2));
   // (a lamp: lit from within)
-  if (mat == 9) c = vec3(1.25, .92, .55);
+  if (mat == 9) c = vec3(1., .86, .58);
   if (mat == 2) {
     // (water: dark, the sky and the sun on it, a little stirred)
     vec3 w = normalize(vec3(.06 * (noise(vec3(vPos.xz * 6., uTime * .4)) - .5), 1., .06 * (noise(vec3(vPos.zx * 6., uTime * .4 + 3.)) - .5)));
@@ -337,9 +385,6 @@ void main() {
     c = mix(vec3(.4, .5, .51), vec3(.93, .95, .94), smoothstep(.38, .78, st)) * (.82 + .18 * sh);
   }
   if (mat == 2 && vTone > .99) c = vec3(.93, .94, .91) * (.86 + .14 * noise(vPos * 40. + uTime));
-  // (a filmic shoulder, warm)
-  c = c / (c + .7) * 1.62;
-  c = pow(c, vec3(1.03, 1.04, 1.07));
   // (the land, held back: most of the way to its own pale, unlit, the shade still on it)
   bool land = mat == 5 && moss;
   if (land && uBleed > .5) {
