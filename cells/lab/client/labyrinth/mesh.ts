@@ -251,6 +251,27 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
     if (k === w.ground(i, j)) band(k, k + 0.09, 0.03, 0.05);
     // (its foundation: on the land, down into it under each open side, rougher, shut in)
     if (founded(k, i, j)) { const keep2 = cur.dress; cur.dress = keep2 % KIND; E.forEach((e) => { if (e.open) quad(L(e.a, y0 - FOUND), L(e.b, y0 - FOUND), L(e.b, y0), L(e.a, y0), nOf(e), [0.35, 0.35, 0.6, 0.6], MAT.stone); }); cur.dress = keep2; }
+    // (and the land come up to it: a skirt of the land's own ground, banked a little up its foot outside the plinth and
+    // settling onto the ground beside it, so earth and grass run to the stone rather than stopping at a line; its corners
+    // mitred. Not where the ground falls away from it: there the foundation's cut face shows)
+    if (founded(k, i, j) && w.land && k === w.ground(i, j)) {
+      const near = shift(E, (e) => (e.open ? -0.02 : 0)), far = shift(E, (e) => (e.open ? -0.3 : 0)), keepT = cur.tone;
+      const gY = (p: [number, number]) => groundY(w, cx + p[0] + CENTER, cz + p[1] + CENTER);
+      cur.tone = 0;
+      E.forEach((e, n) => {
+        if (!e.open) return;
+        const fa = gY(far[n].a), fb = gY(far[n].b);
+        if (y0 - Math.min(fa, fb) > 0.22) return;
+        const ya = Math.min(y0 - 0.004, fa + 0.004), yb2 = Math.min(y0 - 0.004, fb + 0.004), rise = y0 + 0.07 - (ya + yb2) / 2, nv = nOf(e), l = Math.hypot(rise, 0.28);
+        // (damp at the wall's foot, where the rain off it gathers: greener there, drying out across it (the land's tone))
+        const P4 = [L(near[n].a, y0 + 0.07), L(near[n].b, y0 + 0.07), L(far[n].b, yb2), L(far[n].a, ya)], wet = [0.62, 0.62, 0, 0], ao = [0.75, 0.75, 1, 1];
+        const sn: V3 = [(nv[0] * rise) / l, 0.28 / l, (nv[2] * rise) / l];
+        const ux = P4[1][0] - P4[0][0], uz = P4[1][2] - P4[0][2], vx = P4[2][0] - P4[0][0], vy = P4[2][1] - P4[0][1], vz = P4[2][2] - P4[0][2];
+        const flip = (-uz * vy) * sn[0] + (uz * vx - ux * vz) * sn[1] + (ux * vy) * sn[2] < 0;
+        for (const q of flip ? [0, 2, 1, 0, 3, 2] : [0, 1, 2, 0, 2, 3]) { cur.tone = wet[q]; vert(P4[q], sn, ao[q], LANDMAT); }
+      });
+      cur.tone = keepT;
+    }
     if (lid && !ol.wall && k >= 1) { cur.dress = 0; band(y1 - 0.15, y1 - 0.09, 0.035); cur.dress = keep; }
     const under = w.block(k - 1, i, j) ? dressOf(k - 1, i, j) : -1;
     if (under >= 0 && Math.floor(under / KIND) !== Math.floor(keep / KIND)) { cur.dress = 0; band(y0 - 0.02, y0 + 0.05, 0.025); cur.dress = keep; }
