@@ -805,6 +805,17 @@ const roofed = (w: World) => new Set(buildings(w).list.flatMap((b) => underRoof(
  * columns (`avoid`); dearer the further from the stroke and the more it climbs, so it keeps to what was drawn. Null if
  * there's none.
  */
+/** a wall drawn across water, carried over it: its stone laid, the cells over the water arched across the wall's run */
+function wallOver(w: World, cells: Array<[number, number]>, born: (i: number, j: number) => number): Op | null {
+  const add: Array<[number, number, number, number]> = [], arches: Array<[number, number, number, number, number]> = [];
+  cells.forEach(([i, j], q) => {
+    const g = w.ground(i, j), p = cells[Math.max(0, q - 1)], n = cells[Math.min(cells.length - 1, q + 1)];
+    if (w.stone(g, i, j) || w.stair(g, i, j) >= 0 || w.crown(g, i, j)) return;
+    if (w.pool(i, j)) arches.push([g, i, j, n[0] !== p[0] ? 1 : 0, born(i, j)]);
+    else add.push([g, i, j, born(i, j)]);
+  });
+  return arches.length ? { add, arches, born: born(cells[0][0], cells[0][1]), why: 'wall', note: 'a wall, carried over the water on an arch', reading: 'a wall, carried over the water on an arch' } : null;
+}
 function detour(w: World, cells: Array<[number, number]>, avoid: Set<string>, reach = 4): Array<[number, number]> | null {
   const [s, e] = [cells[0], cells[cells.length - 1]], M = reach;
   const xs = cells.map((c) => c[0]), zs = cells.map((c) => c[1]), x0 = Math.min(...xs) - M, x1 = Math.max(...xs) + M, z0 = Math.min(...zs) - M, z1 = Math.max(...zs) + M;
@@ -840,6 +851,18 @@ const DIR = (a: [number, number], b: [number, number]) => DIRS.findIndex(([x, z]
 /** a wall along the stroke (on the stone, from the stone to the stone), as the rules choose it, the others offered: a
  * wall's kind; a ring of it, where the stroke came round, walling in a court */
 function wall(w: World, cells: Array<[number, number]>, closed: boolean, born: (i: number, j: number) => number, resting: (i: number, j: number) => boolean): Op | null {
+  // (drawn through a tree, or across water: bowed round it, a cell out and back, what it meets kept (yield); and across
+  // water, carried over it on an arch, the other reading)
+  const kept = (i: number, j: number) => w.crown(w.ground(i, j), i, j) || w.pool(i, j);
+  if (!closed && cells.length > 2 && cells.slice(1, -1).some(([i, j]) => kept(i, j))) {
+    const avoid = new Set(cells.filter(([i, j]) => kept(i, j)).map(([i, j]) => `${i}.${j}`)), round = detour(w, cells, avoid, 1);
+    const bowed = round && !round.some(([i, j]) => kept(i, j)) ? wall(w, round, false, born, resting) : null;
+    if (bowed) {
+      const wet = cells.filter(([i, j]) => w.pool(i, j) && !w.crown(w.ground(i, j), i, j));
+      const over = wet.length && wet.length === avoid.size ? (() => { const o = wallOver(w, cells, born); return o ? [{ label: 'carried over the water on an arch', op: o }] : []; })() : [];
+      return { ...bowed, took: [...(bowed.took ?? []), 'bowed'], note: `${bowed.note}, bowed round ${wet.length === avoid.size ? 'the water' : 'the tree'}`, reading: `${bowed.reading ?? bowed.note}, bowed round ${wet.length === avoid.size ? 'the water' : 'the tree'}`, alts: [...over, ...(bowed.alts ?? [])] };
+    }
+  }
   // (what kind of wall is the rules' choice, seeded by where it starts, so it's chosen once and kept as the stroke goes
   // on: plain; gated, a way through it two cells in and every six after; or arcaded, a way through every other cell.
   // Its openings count from the start, so going on never moves them; and where the finger paused, a gate)

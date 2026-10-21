@@ -322,6 +322,20 @@ ok(`walls come out gated or arcaded, now and then (${lively.gates})`, lively.gat
   const H = BU.buildings(w).list[0], pd = H?.openings.find((o) => o.kind === 'door' && w.archway(o.k, o.i, o.j) >= 0);
   ok('a house a way passes through: its door in the passage\'s side, into its rooms', !!pd && w.block(pd.k, pd.i + DIRS[pd.d][0], pd.j + DIRS[pd.d][1]), H?.openings);
 }
+// (yield: a wall drawn through a tree, or across water, bows round it; a way never goes through or over a tree)
+{
+  const { PLANT } = await load('../client/labyrinth/model.ts');
+  const ground = (c) => ({ face: 'ground', hit: [-1, ...c], to: [0, ...c] });
+  let w = new World(1); w.apply({ plants: [[0, 6, 5, PLANT.olive, 0]] });
+  let op = G.stroke(w, ground([2, 5]), G.connect([[2, 5], [10, 5]]), null, () => 1, 1, []);
+  ok('a wall drawn through an olive bows round it', !!op && op.why === 'wall' && op.took?.includes('bowed') && !(op.add ?? []).some((c) => c[1] === 6 && c[2] === 5) && (op.add ?? []).some((c) => c[1] === 6 && c[2] !== 5), op && { note: op.note, took: op.took });
+  w = new World(1); w.apply({ pools: [[6, 5, 0]] });
+  op = G.stroke(w, ground([2, 5]), G.connect([[2, 5], [10, 5]]), null, () => 1, 1, []);
+  ok('a wall drawn across a pool bows round it, carried over it on an arch the other reading', !!op && op.took?.includes('bowed') && (op.alts ?? []).some((a) => /over the water/.test(a.label)), op && { note: op.note, alts: (op.alts ?? []).map((a) => a.label) });
+  w = new World(1); w.apply({ plants: [[0, 6, 5, PLANT.olive, 0]] });
+  w.apply({ connect: { from: [0, 2, 5], to: null, path: G.connect([[2, 5], [10, 5]]), follow: true }, born: 1, why: 'way' });
+  ok('a way never goes through or over a tree\'s crown', ![0, 1, 2, 3].some((k) => w.stone(k, 6, 5) || w.stair(k, 6, 5) >= 0) && w.plant(0, 6, 5) === PLANT.olive);
+}
 // (a pier landing on a walkway below stands aside, slim, and the walkway past it stays open)
 {
   const M = await load('../client/labyrinth/mesh.ts');

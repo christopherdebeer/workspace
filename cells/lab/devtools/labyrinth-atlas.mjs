@@ -117,7 +117,75 @@ export const CASES = [
     set(w) { S.wall(w, 3, 8, 5, 4); S.block(w, 9, 10, 3, 4, 2); w.apply({ dress: [[1, 9, 3], [1, 10, 3], [1, 9, 4], [1, 10, 4]].map((c) => [...c, 5, 1]), born: 0, why: 'dress' }); const op = stroke(w, [[2, 4], [9, 4]]); if (op && !op.refused) w.apply({ ...op, alts: undefined }); S.block(w, 1, 2, 2, 3, 4); },
     pts: [[9, 3], [2, 3]],
   },
-];
+].map((c) => ({ group: 'wall-stair', ...c }));
+
+/** taps, each read as the app reads one (no intent in hand) and laid; the last one's reading returned */
+function taps(w, cells) { let last = null; for (const c of cells) { const op = G.touch(w, pick(w, c), 1); if (op && !('refused' in op)) { w.apply({ ...op, alts: undefined }, 1); last = op; } } return last && { ...last, laid: true }; }
+/** the cells of a block from i0..i1, j0..j1 but the one at (ci, cj), each tapped `h` times (a course a tap) */
+const ringOf = (i0, i1, j0, j1, ci, cj, h) => Array.from({ length: h }, () => { const c = []; for (let i = i0; i <= i1; i++) for (let j = j0; j <= j1; j++) if (i !== ci || j !== cj) c.push([i, j]); return c; }).flat();
+/** a stroke from a place one goes from (paving laid there first, so it's read as a way) */
+const fromPlace = (w, pts) => { w.apply({ pave: [pts[0]], born: 0, why: 'way' }); return stroke(w, pts); };
+
+/**
+ * Yield: what gives way to what. A tree, a well (a pool), a railed edge, met by a wall, a way, a stair, a terrace, a
+ * house: at their best the one gives way round the other (notched, bowed, stepped back, wrapped), the other kept.
+ */
+CASES.push(...[
+  {
+    name: 'wall × tree: a wall drawn straight through an olive',
+    best: 'the wall bows round the tree, a cell out and back, the tree kept',
+    set(w) { S.tree(w, 6, 5); },
+    pts: [[2, 5], [10, 5]],
+  },
+  {
+    name: 'way × tree: a way drawn straight through an olive',
+    best: 'the way bows round it (or opens into a ring round it), the tree kept',
+    set(w) { S.tree(w, 6, 5); },
+    act: (w) => fromPlace(w, [[2, 5], [10, 5]]),
+  },
+  {
+    name: 'stair × tree: a stair up to a terrace, an olive on its line',
+    best: 'the flight yields: steps round the tree, or the tree in a pit beside a landing',
+    set(w) { S.block(w, 9, 10, 4, 6, 2); S.tree(w, 5, 5); },
+    pts: [[2, 5], [9, 5]],
+  },
+  {
+    name: 'terrace × tree: a terrace tapped up round an olive',
+    best: 'the terrace notched round the trunk: a pit, the tree growing up through it',
+    set(w) { S.tree(w, 6, 6); },
+    act: (w) => taps(w, [[5, 5], [6, 5], [7, 5], [5, 6], [7, 6], [5, 7], [6, 7], [7, 7], [6, 6]]),
+  },
+  {
+    name: 'house × tree: a house raised round an olive',
+    best: 'the house wraps the tree: a court open to the sky in the middle of it, the tree in it',
+    set(w) { S.tree(w, 6, 6); },
+    act: (w) => taps(w, ringOf(4, 8, 4, 8, 6, 6, 2)),
+  },
+  {
+    name: 'wall × well: a wall drawn straight across a pool',
+    best: 'the wall carried over the water on an arch (a water gate), or bowed round it',
+    set(w) { S.pools(w, [[6, 5]]); },
+    pts: [[2, 5], [10, 5]],
+  },
+  {
+    name: 'house × well: a house raised round a pool',
+    best: 'the house wraps the well: a court with the well in it',
+    set(w) { S.pools(w, [[6, 6]]); },
+    act: (w) => taps(w, ringOf(4, 8, 4, 8, 6, 6, 2)),
+  },
+  {
+    name: 'rail × arrival: a way up on to the edge of a railed terrace',
+    best: 'the rail opens where the way arrives, and runs on round the rest',
+    set(w) { S.block(w, 6, 9, 4, 7, 2); w.apply({ dress: [6, 7, 8, 9].flatMap((i) => [4, 5, 6, 7].map((j) => [1, i, j, 5, 1])), born: 0, why: 'dress' }); },
+    pts: [[1, 5], [6, 5]],
+  },
+  {
+    name: 'wall × tree × way: a wall through an olive, then a way across the wall beside it',
+    best: 'the wall bows round the tree and opens a gate for the way beside it',
+    set(w) { S.tree(w, 6, 5); const op = stroke(w, [[2, 5], [10, 5]]); if (op && !op.refused) w.apply({ ...op, alts: undefined }); },
+    act: (w) => fromPlace(w, [[7, 2], [7, 9]]),
+  },
+].map((c) => ({ group: 'yield', ...c })));
 
 /** whether each case came to what it would be at its best (`before`: the setting's stone) */
 const stairIn = (w, before) => before.filter((c) => w.stair(...c) >= 0 || w.passage(...c) >= 0).length;
@@ -134,6 +202,15 @@ const BEST = {
   'beside + tree': (w) => [...w.trees.keys()].length === 1 && w.flights.length >= 1,
   'across + way': (w, before) => before.some((c) => w.archway(...c) >= 0 || w.stair(...c) >= 0),
   'top + house': (w) => BU.buildings(w).list.some((b) => b.openings.some((o) => o.kind === 'door' && o.k > 0)),
+  'wall × tree': (w) => w.plant(0, 6, 5) >= 0 && (w.stone(0, 6, 4) || w.stone(0, 6, 6)) && w.stone(0, 5, 5) && w.stone(0, 7, 5),
+  'way × tree': (w) => w.plant(0, 6, 5) >= 0 && [...w.walks.values()].some((cs) => cs.some(([, i]) => i >= 9)),
+  'stair × tree': (w) => w.plant(0, 5, 5) >= 0 && w.flights.length > 0 && [...w.reached.values()].some((r) => r.reached),
+  'terrace × tree': (w) => w.plant(0, 6, 6) >= 0 && !w.stone(0, 6, 6) && w.stone(0, 5, 6) && w.stone(0, 7, 6),
+  'house × tree': (w) => w.plant(0, 6, 6) >= 0 && BU.buildings(w).list.some((b) => b.cols.length >= 6) && !w.stone(1, 6, 6),
+  'wall × well': (w) => w.pool(6, 5) && (!!w.span(0, 6, 5) || w.stone(0, 6, 4) || w.stone(0, 6, 6)) && w.stone(0, 5, 5) && w.stone(0, 7, 5),
+  'house × well': (w) => w.pool(6, 6) && BU.buildings(w).list.some((b) => b.cols.length >= 6),
+  'rail × arrival': (w) => { const { edges } = ME.parapets(w); const e = edges.get(key(1, 6, 5)); const others = [[1, 6, 6], [1, 6, 7], [1, 9, 5]].filter((c) => (edges.get(key(...c)) ?? []).some(Boolean)).length; return !!e && !e[2] && others >= 2 && [...w.reached.values()].some((r) => r.reached); },
+  'wall × tree × way': (w) => w.plant(0, 6, 5) >= 0 && [4, 5, 6].some((j) => [5, 6, 7, 8].some((i) => w.archway(0, i, j) >= 0)),
   'beside + stair': (w) => { const nav = BU.walkable(w), [f, g] = w.flights; if (!f || !g) return false; const hk = (x) => x.cells[x.cells.length - 1]; return NAV.reaches(nav, hk(f), g.cells[0]) && Math.abs(hk(f)[1] - g.cells[0][1]) + Math.abs(hk(f)[2] - g.cells[0][2]) <= 3; },
 };
 /** what a world is, to compare before and after: each wall cell's state, the walked places, the flights */
@@ -148,12 +225,14 @@ function state(w, cells) {
 const results = [];
 for (const C of CASES) {
   if (opt.only && !C.name.includes(opt.only)) continue;
+  if (opt.set && C.group !== opt.set) continue;
   const w = new World(1);
   C.set(w);
   // (the wall: the stone the setting laid, before the stroke)
   const before = [...w.mass.keys()].map(unkey), s0 = state(w, before), f0 = w.flights.length;
-  const op = stroke(w, C.pts), refused = !op || 'refused' in op;
-  if (!refused) w.apply({ ...op, alts: undefined }, 1);
+  const nOps = w.ops.length, op = C.act ? C.act(w) : stroke(w, C.pts), refused = !op || 'refused' in op;
+  if (!refused && !op.laid) w.apply({ ...op, alts: undefined }, 1);
+  void nOps;
   const s1 = state(w, before);
   const changed = before.filter((c) => s0.cells.get(key(...c)) !== s1.cells.get(key(...c)));
   const walkedTop = [...s1.tops].filter((v) => !s0.tops.has(v));
@@ -173,7 +252,7 @@ for (const C of CASES) {
     if (BEST[C.name.split(':')[0]]?.(v, before)) { offered = c.label; offeredOps = v.encode(); }
   }
   if (opt.v && !refused) console.log(C.name.split(':')[0], JSON.stringify({ from: op.connect?.from, to: op.connect?.to, took: op.took, flights: w.flights.map((f) => [f.cells[0], f.cells.length]) }));
-  results.push({ name: C.name, best: C.best, verdict, met, offered, reading: refused ? op?.refused ?? 'nothing' : op.reading ?? op.note ?? op.why, how: how.join('; '), alts: refused ? (op?.alts ?? []).map((a) => a.label) : (op.alts ?? []).map((a) => a.label), flights: flights.map((f) => `${f.n} steps, ${f.carriage}`), ops: offeredOps || w.encode() });
+  results.push({ group: C.group, name: C.name, best: C.best, verdict, met, offered, reading: refused ? op?.refused ?? 'nothing' : op.reading ?? op.note ?? op.why, how: how.join('; '), alts: refused ? (op?.alts ?? []).map((a) => a.label) : (op.alts ?? []).map((a) => a.label), flights: flights.map((f) => `${f.n} steps, ${f.carriage}`), ops: offeredOps || w.encode() });
 }
 const pad = (s, n) => (s.length > n ? s.slice(0, n - 1) + '…' : s.padEnd(n));
 for (const r of results) console.log(`${r.met ? '✓' : r.offered ? '○' : '·'} ${pad(r.verdict, 9)} ${pad(r.name.split(':')[0], 16)} ${r.reading}${r.how ? ` — ${r.how}` : ''}\n${' '.repeat(27)}best: ${r.best}${r.alts.length ? `\n${' '.repeat(27)}also: ${r.alts.join(' · ')}` : ''}`);
@@ -183,7 +262,7 @@ if (opt.json) (await import('node:fs')).writeFileSync(opt.json, JSON.stringify(r
 if (opt.render) {
   process.env.EXPERIMENT = 'labyrinth'; process.env.READY = '__labyrinth';
   const { withWood } = await import('./harness.mjs'), { mkdirSync } = await import('node:fs');
-  const dir = new URL('./out/atlas/', import.meta.url);
+  const dir = new URL(`./out/atlas/${opt.set ? `${opt.set}/` : ''}`, import.meta.url);
   mkdirSync(dir, { recursive: true });
   await withWood(async (lab) => {
     for (const [n, r] of results.entries()) {

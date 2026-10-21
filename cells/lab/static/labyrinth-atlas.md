@@ -49,7 +49,33 @@ That's generous, so each case also names what it would be **at its best** and ch
 | **Dissolve** | a thin wall carries no cantilevered steps; beside a flight it becomes a screen (the rules' dressing) | thin |
 | **Water with levels** | an encounter, a flight beside water (`flight-beside-water`): apart, or a cascade of basins at each step falling to the pool, or that with a lantern at its head | water |
 
-Still to come of the first list: **yield** (notch, bow, step back), the one most likely to compound across other pairings.
+## Yield: what gives way to what
+
+The second set (`--set=yield`): a tree, a well (a pool), a railed edge, met by a wall, a way, a stair, a terrace, a house. At their best one gives way round the other, which is kept.
+
+![yield: nine cases](labyrinth/atlas-yield.jpg)
+
+| Case | At its best | What it is now | Best? |
+|---|---|---|---|
+| **wall × tree**: a wall drawn straight through an olive | bowed round it | bowed round it a cell out and back, the tree kept | ✓ |
+| **way × tree**: a way drawn straight through one | round it | round it at its foot (it went up and over it before: the crown wasn't claimed) | ✓ |
+| **stair × tree**: a stair up to a terrace, an olive on its line | the flight yields | the flight beside it, the tree kept | ✓ |
+| **terrace × tree**: tapped up round an olive | notched round the trunk | a pit, the tree up through it (the last tap, on the tree, grows it) | ✓ |
+| **house × tree**: raised round an olive, two deep | the house wraps it, a court open to the sky | a courtyard house: its roof in wings sloping in to the opening over the tree | ✓ |
+| **wall × well**: drawn straight across a pool | bowed round it, or over it on an arch | bowed round it; carried over the water on an arch, the other reading | ✓ |
+| **house × well**: raised round a pool | the house wraps the well | a courtyard house round the well | ✓ |
+| **rail × arrival**: a way up on to a railed terrace's edge | the rail opens where it arrives | open there, railed round the rest | ✓ |
+| **wall × tree × way** | bowed round the tree, a gate for the way beside it | both | ✓ |
+
+What made the difference, all general:
+
+- **A tree claims its crown** (`World.crown`): nothing a way lays goes through or over a tree's trunk and the crown above it, so a way meeting one goes round, near the stroke.
+- **A wall bows** (gesture.ts `wall`): drawn through a tree or across water, it goes round it a cell out and back (the same routing a way round something uses, a cell from the stroke), and over water the other reading carries it across on an arch (`wallOver`).
+- What was there already did the rest: stone laid where a tree grows leaves it a pit; a plan with a hole in it is roofed in wings, which slope in to it.
+
+Together: **21 of 22 at their best as laid, the last a reading away.**
+
+Next: pairings that put these to work together (court × way, arcade × wall, tower × bridge, roof × stair), and three-way combinations of what's here.
 
 ## Next pairings
 

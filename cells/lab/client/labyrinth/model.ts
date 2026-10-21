@@ -338,6 +338,13 @@ export class World {
   /** whether two of the hand's passages cross here (stone over it a cross vault, open all four ways) */
   cross(k: number, i: number, j: number) { return inGrid(i, j) && this.crossings.has(key(k, i, j)) && this.archways.has(key(k, i, j)); }
   tree(k: number, i: number, j: number) { return inGrid(i, j) && this.trees.has(key(k, i, j)); }
+  /** whether a cell's in a tree's trunk or its crown over it: nothing a way lays goes through or over a tree (it bows
+   * round it); a shrub or a hedge, its own height only */
+  crown(k: number, i: number, j: number) {
+    if (!inGrid(i, j)) return false;
+    for (let q = 0; q <= 4 && k - q >= 0; q++) { const v = key(k - q, i, j); if (this.trees.has(v)) return q <= Math.max(1, PLANT_TALL[this.treeKind.get(v) ?? 0]); }
+    return false;
+  }
   /** the kind of plant growing from a cell (`PLANT`), or -1 */
   plant(k: number, i: number, j: number): number { return this.tree(k, i, j) ? this.treeKind.get(key(k, i, j)) ?? PLANT.cypress : -1; }
   /** stone laid as a bridge's */
@@ -557,7 +564,7 @@ export class World {
     if (op.connect!.follow && op.connect!.to && this.follow(op)) return;
     const c = op.connect!, born = op.born ?? -100, [h0] = c.from, h1 = c.to ? c.to[0] : h0;
     const along = c.path.slice(1), cells: Cell[] = [];
-    const taken = (k: number, i: number, j: number) => k >= 0 && (this.earth(k, i, j) || this.mass.has(key(k, i, j)) || this.stairs.has(key(k, i, j)) || this.trees.has(key(k, i, j)) || (k > 0 && this.trees.has(key(k - 1, i, j))));
+    const taken = (k: number, i: number, j: number) => k >= 0 && (this.earth(k, i, j) || this.mass.has(key(k, i, j)) || this.stairs.has(key(k, i, j)) || this.crown(k, i, j));
     // (and nothing to stand on but a stair or a tree beneath: it can't rest there)
     // (stone it would lay where another stair needs its way open: it stops short)
     const blocks = (k: number, i: number, j: number) => k >= 0 && !taken(k, i, j) && this.way(k, i, j);
@@ -627,7 +634,7 @@ export class World {
   private follow(op: Op): boolean {
     const c = op.connect!, born = op.born ?? -100, h0 = c.from[0], h1 = c.to![0];
     if (c.path.length < 2) return false;
-    const taken = (k: number, i: number, j: number) => k >= 0 && (this.earth(k, i, j) || this.mass.has(key(k, i, j)) || this.stairs.has(key(k, i, j)) || this.trees.has(key(k, i, j)) || (k > 0 && this.trees.has(key(k - 1, i, j))));
+    const taken = (k: number, i: number, j: number) => k >= 0 && (this.earth(k, i, j) || this.mass.has(key(k, i, j)) || this.stairs.has(key(k, i, j)) || this.crown(k, i, j));
     const unsteady = (k: number, i: number, j: number) => k > 0 && (this.stairs.has(key(k - 1, i, j)) || this.trees.has(key(k - 1, i, j)));
     const top = this.levels + 4, INF = 1e9, idx = (h: number, m: number) => h * 3 + m + 1;
     /**
