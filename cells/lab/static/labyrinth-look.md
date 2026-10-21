@@ -143,6 +143,32 @@ These follow the two study sheets, [one](labyrinth/ref-transition-1.jpg) and [tw
 
 ![Printed: the whole of it on the paper](labyrinth/look-print.jpg)
 
+## Stage 10: marks with reasons (after Taohua)
+
+![The drawing's marks, laid by the features that call for them](labyrinth/look-strokes.jpg)
+
+![`?marks`: each mark coloured by why it's there](labyrinth/look-marks.jpg)
+
+The first step of the architecture Astra's comparison with Taohua proposed: the illustration as an interpretation of the world, not a treatment of an image of it. The drawing's marks on the land no longer come from the shader reading a surface's height, slope or depth jump. They're geometry (`strokes.ts`), laid by the features of the world that call for them, after Taohua's `marks.ts` and `pathmarks.ts`. Each is a tapered ribbon in the world, so it stays put as the eye moves, and each is seeded from its own feature's cells, so it stays put as what's built changes elsewhere.
+
+| Feature | Found from | Its evidence (family) |
+| --- | --- | --- |
+| escarpment | a run of cell edges where the land drops a level or more, the same way (not held by a wall, not built against) | a broken **rim** along the top, firmer the higher it is; **hachures** down the face, long and short by turns, interrupted at each bed; **bedding** along the face at the ledges the mesh steps it into, a little higher or lower across each fracture; a **fracture** down it now and then |
+| retention | a column built on the land, its open faces | its **contact**, a broken line at its foot, on the land banked up to it |
+| water | the stream's cells, their order, their neighbours | **current** along the way it runs (crowding the outer side at a bend); a steep **bank**'s line; a **fall**'s streaks where the bed steps; the **impact**'s rings below |
+
+- **Each family has its own presence over the full render:** a rim holds some, a hachure none, since the render already says what a hachure would. Where the drawing takes over, all of a mark is laid. Where it thins out, whole marks are left out by their pick, never faded.
+- **Retired:** the shader's hachures, the cliff drags, the rim line it found from a depth fold, and the post pass's lines on the land's own folds.
+- **Kept, for now:** the shader's contours and its tonal washes.
+- **`?marks`** (and `--marks` in the look harness) fades the picture nearly to the paper and colours each mark by its family: rim red, hachure brown, bedding green, fracture purple, contact orange, current blue, bank teal, fall violet, impact pink.
+
+Next, in the order the comparison proposed:
+1. **Passage marks:** stair treads and landings, and path edges, heavier where something happens.
+2. **The land conditioned by construction:** the geology kept as it was made, and a second surface derived from it that what's built has cut and filled (excavation, embankment, retained earth), with the marks read from that. To be tried first on a single stair and crossing.
+3. **Each channel's persistence by its feature,** in place of one ramp position for nearly everything.
+4. **An outline policy by material.**
+5. **`?ink`, a composition-only view.**
+
 **Foundations meet the land.** Where stone stands on the land, a skirt of the land's own ground is banked a little up its foot outside the plinth and settles onto the ground beside it, with its corners mitred. So earth and grass run to the stone instead of stopping at a line, damp and greener at the wall's foot where the rain off it gathers. Where the ground falls away, there's no skirt and the foundation's cut face shows.
 
 ## Next

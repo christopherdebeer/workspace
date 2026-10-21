@@ -7,6 +7,7 @@
  * Everything rises as it's built: each vertex knows when it was built and the height it grows from, and the vertex
  * shader draws it that far grown.
  */
+import { STROKE_STRIDE } from './strokes';
 import { STRIDE, type Mesh } from './mesh';
 
 export interface View { az: number; el: number; zoom: number; target: [number, number, number] }
@@ -106,7 +107,7 @@ in vec3 vPos, vNrm; in float vAo, vMat, vTone, vU; in vec4 vLs;
 uniform highp sampler2DShadow uShadow; uniform highp sampler2D uShadowRaw; uniform vec3 uSun, uEye, uDir, uArea; uniform float uN, uShadows;
 // (the sun's map: how much of the world a texel of it covers, and how deep its range is, so its bias and its softness are
 // in the world's own units whatever it's fitted to)
-uniform float uTexel, uDepthRange;
+uniform float uTexel, uDepthRange, uMarks;
 layout(location=0) out vec4 oCol; layout(location=1) out vec4 oNrm;
 float leafEdge(vec3 n) { float rim = 1. - abs(dot(n, normalize(uDir))); return .78 * rim * rim - .1; }
 float hash(vec3 p) { return fract(sin(dot(p, vec3(127.1, 311.7, 74.7))) * 43758.5453); }
@@ -548,11 +549,6 @@ void main() {
     float up = n.y, rough = noise(vPos * vec3(1.7, 2.3, 1.7)) * .6 + noise(vPos * 6.) * .4;
     float cut = .41 - (up + (rough - .5) * .14), cliff = smoothstep(-.09, .09, cut), steep = smoothstep(.97, .7, up);
     vec2 fall = normalize(n.xz + 1e-4), con = vec2(-fall.y, fall.x);
-    if (steep > 0. && cliff < 1.) {
-      vec2 ph = vec2(dot(vPos.xz, fall) * 1.3 - vPos.y, dot(vPos.xz, con));
-      float h = strokes(ph, .17, .7, (.1 + .5 * steep) * R, 15., max(fwidth(ph.y), 1e-5), 1.15, .015, .2);
-      g = mix(g, vec3(.45, .36, .27), h * .85 * smoothstep(0., .45, steep) * (1. - cliff));
-    }
     if (cliff > 0.) {
       float toL = dot(fall, normalize(uSun.xz + 1e-4)), u = dot(vPos.xz, con);
       vec3 wash = mix(vec3(.66, .59, .5), vec3(.84, .78, .68), smoothstep(-.4, .5, toL)) * (.92 + .12 * noise(vPos * 1.4));
@@ -560,13 +556,6 @@ void main() {
       float br = noise(vec3(u * 7., vPos.y * 1.1, 4.)) * .72 + noise(vec3(u * 21., vPos.y * 3., 7.)) * .28;
       float laid = smoothstep(1. - R * 1.25, 1.06 - R * 1.25, br);
       g = mix(g, mix(PAP, wash, .7), cliff * laid);
-      vec2 pw = vec2(-vPos.y, u);
-      float drag = strokes(pw, .11, .8, .75 * sqrt(R), 12., max(fwidth(pw.y), 1e-5), 1.2, .03, .3);
-      g = mix(g, vec3(.31, .24, .18), drag * .8 * cliff);
-      // (its top: where the cut begins, an ink line, broken)
-      float rimD = cut / max(fwidth(cut), 1e-4), downhill = dFdx(cut) * dFdx(vPos.y) + dFdy(cut) * dFdy(vPos.y);
-      float rim = (1. - smoothstep(1.2, 2.4, rimD)) * step(0., rimD) * step(downhill, 0.) * step(.3, noise(vPos * vec3(.9, 2., .9)) + .25 * R) * step(1. - R * 1.4, bnoise(vPos * .7));
-      g = mix(g, vec3(.2, .15, .11), rim * .85);
     }
     // (the lie of the land in contours: a line each third of a level up it, every third one a little heavier, where the
     // ground's gentle enough for them to stand apart (on a cliff they'd crowd: its hatching says it there); broken here
@@ -609,6 +598,7 @@ void main() {
   }
   // (what's taken up: a faint warm tint; its outline is drawn after, where the mask changes)
   if (sel) c = mix(c, c * vec3(1.1, .98, .84) + vec3(.05, .025, 0.), .6);
+  if (uMarks > .5) c = mix(c, PAP, .82);
   oCol = vec4(c, 1.);
   // (its kind for the post pass, and within land's and the rest's how far it's drawn: land .12–.38, the rest .41–.54)
   oNrm = vec4(n * .5 + .5, sel ? 1. : land ? .12 + .26 * drawn : fur ? .6 : .41 + .13 * drawn);
@@ -618,11 +608,46 @@ precision highp float;
 in vec3 vPos, vNrm; in float vAo, vMat, vTone, vU; in vec4 vLs;
 ` + PIERCE + REACH + `
 out vec4 o; void main() { if (pierced(vPos, normalize(vNrm), vMat) || (vMat < 511.5 && (leftOut(vPos, vU) || leafCut(vPos, vMat, .34)))) discard; o = vec4(1.); }`;
+/**
+ * The drawing's marks (strokes.ts): ribbons laid in the world, inked onto what they lie on in the picture's own pass,
+ * their edge drawn smooth however thin they are, broken here and there along them as a dry brush breaks. How much of a
+ * mark is laid is its weight; over the picture where it's whole, only as much as its family holds there (a rim some, a
+ * hachure none), all of it where the drawing has taken over; and where the drawing thins out, whole marks are left out
+ * by their pick. They leave the mask as it is (the post pass's kinds and how far each is drawn). \`?marks\`: each
+ * coloured by its family, the picture faded nearly to the paper under them.
+ */
+const STROKE_VS = `#version 300 es
+layout(location=0) in vec3 aPos; layout(location=1) in vec2 aSA; layout(location=2) in vec3 aFam;
+uniform mat4 uVP;
+out vec3 vPos; out vec2 vSA; out vec3 vFam;
+void main() { vPos = aPos; vSA = aSA; vFam = aFam; gl_Position = uVP * vec4(aPos, 1.); }`;
+const STROKE_FS = COMMON + REACH + `
+in vec3 vPos; in vec2 vSA; in vec3 vFam;
+uniform float uMarks;
+layout(location=0) out vec4 oCol; layout(location=1) out vec4 oNrm;
+float hash(vec3 p) { return fract(sin(dot(p, vec3(127.1, 311.7, 74.7))) * 43758.5453); }
+float noise(vec3 x) { vec3 i = floor(x), f = fract(x); f = f * f * (3. - 2. * f);
+  return mix(mix(mix(hash(i), hash(i + vec3(1,0,0)), f.x), mix(hash(i + vec3(0,1,0)), hash(i + vec3(1,1,0)), f.x), f.y),
+             mix(mix(hash(i + vec3(0,0,1)), hash(i + vec3(1,0,1)), f.x), mix(hash(i + vec3(0,1,1)), hash(i + vec3(1,1,1)), f.x), f.y), f.z); }
+void main() {
+  float across = vSA.x, fam = floor(vFam.x + .001), weight = fract(vFam.x + .001), persist = vFam.y, pick = vFam.z;
+  if (pick > reachLines(vPos) * 1.3 - .05) discard;
+  float R0 = reach(vPos), t = R0 + (noise(vec3(vPos.xz * .9, 5.)) - .5) * .3 * min(1., R0 * 4.), drawn = 1. - smoothstep(.1, .85, t);
+  float aa = max(fwidth(across), 1e-4);
+  float cov = (1. - smoothstep(1. - aa, 1. + aa * .5, abs(across))) * min(1., 2. / aa);
+  float dry = smoothstep(.18, .32, noise(vec3(vPos.xz * 7.5 + vPos.y * 3., fam * 3.1)));
+  float a = cov * weight * mix(.55, 1., dry) * (uMarks > .5 ? 1.2 : mix(persist, 1., drawn));
+  if (a < .02) discard;
+  // (the land's in sepia; the water's a cooler ink)
+  vec3 col = fam > 4.5 ? vec3(.2, .27, .3) : vec3(.26, .19, .13);
+  if (uMarks > .5) col = fam < .5 ? vec3(.85, .2, .15) : fam < 1.5 ? vec3(.5, .35, .1) : fam < 2.5 ? vec3(.15, .55, .25) : fam < 3.5 ? vec3(.55, .2, .7) : fam < 4.5 ? vec3(.9, .5, .1) : fam < 5.5 ? vec3(.15, .35, .8) : fam < 6.5 ? vec3(.1, .6, .6) : fam < 7.5 ? vec3(.4, .2, .8) : vec3(.9, .3, .6);
+  oCol = vec4(col, min(1., a)); oNrm = vec4(0.);
+}`;
 const POST_VS = `#version 300 es
 out vec2 vUv; void main() { vec2 p = vec2(gl_VertexID == 1 ? 3. : -1., gl_VertexID == 2 ? 3. : -1.); vUv = p * .5 + .5; gl_Position = vec4(p, 0., 1.); }`;
 const POST_FS = `#version 300 es
 precision highp float;
-in vec2 vUv; uniform sampler2D uCol, uNrm, uDepth; uniform vec2 uPx; uniform float uRange, uPrint, uDpr, uBleed, uWorldPx, uContact; uniform mat3 uViewRot;
+in vec2 vUv; uniform sampler2D uCol, uNrm, uDepth; uniform vec2 uPx; uniform float uRange, uPrint, uDpr, uBleed, uWorldPx, uContact, uMarks; uniform mat3 uViewRot;
 out vec4 o;
 // (printed, it's drawn just as the page is where the picture doesn't reach)
 float bleedOn() { return max(uBleed, uPrint); }
@@ -685,7 +710,7 @@ void main() {
   float drawn = bleedOn() < .5 ? 0. : m > .405 && m < .545 ? clamp((m - .41) / .13, 0., 1.) : m > .1 && m < .4 ? clamp((m - .12) / .26, 0., 1.) : 0.;
   float fold = smoothstep(.04, .14, lap), crease = smoothstep(.3, .6, turn);
   float wt = (furOn > .5 ? .4 : mix(.16, .8, drawn)) * fold * (1. - onLand) + crease * drawn * .6 * (1. - onLand);
-  wt = max(wt, onLand * smoothstep(.15, .6, drawn) * max(fold, smoothstep(.1, .3, turn)) * .32);
+  if (uMarks > .5) wt *= .15;
   o = vec4(mix(mix(c, ink * 1.6, max(wt * (1. - step(.5, skyN)), rim * .8)), vec3(.69, .36, .12), ring * .9), 1.);
   // (bleeding: the same paper under everything, its edge a shade darker, so the ground and the page are one sheet)
   if (bleedOn() > .5) o.rgb *= 1. - .06 * smoothstep(.35, .75, length((vUv - .5) * vec2(1.2, 1.)));
@@ -741,7 +766,11 @@ export function camera(v: View, aspect: number): { vp: M4; eye: number[]; dir: n
 
 export class Renderer {
   gl: WebGL2RenderingContext;
-  private main: WebGLProgram; private shadow: WebGLProgram; private post: WebGLProgram;
+  private main: WebGLProgram; private shadow: WebGLProgram; private post: WebGLProgram; private stroke: WebGLProgram;
+  /** the drawing's marks (strokes.ts): their own buffer, made with the mesh */
+  private svao: WebGLVertexArrayObject; private sbuf: WebGLBuffer; private scount = 0;
+  /** \`?marks\`: the drawing's marks by family, the picture faded under them */
+  marks = false;
   private vao: WebGLVertexArrayObject; private buf: WebGLBuffer; private count = 0;
   /** what moves (the cats): its own buffer, filled again each frame, drawn with the stone */
   private dvao: WebGLVertexArrayObject; private dbuf: WebGLBuffer; private dcount = 0;
@@ -798,7 +827,7 @@ export class Renderer {
     const gl = canvas.getContext('webgl2', { antialias: false, preserveDrawingBuffer: true })!;
     if (!gl) throw new Error('no WebGL2');
     this.gl = gl;
-    this.main = compile(gl, VS, FS); this.shadow = compile(gl, VS, SHADOW_FS); this.post = compile(gl, POST_VS, POST_FS);
+    this.main = compile(gl, VS, FS); this.shadow = compile(gl, VS, SHADOW_FS); this.post = compile(gl, POST_VS, POST_FS); this.stroke = compile(gl, STROKE_VS, STROKE_FS);
     const layout = () => {
       const F = 4;
       gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 3, gl.FLOAT, false, STRIDE * F, 0);
@@ -811,6 +840,12 @@ export class Renderer {
     gl.bindVertexArray(this.vao); gl.bindBuffer(gl.ARRAY_BUFFER, this.buf); layout();
     this.dvao = gl.createVertexArray()!; this.dbuf = gl.createBuffer()!;
     gl.bindVertexArray(this.dvao); gl.bindBuffer(gl.ARRAY_BUFFER, this.dbuf); layout();
+    this.svao = gl.createVertexArray()!; this.sbuf = gl.createBuffer()!;
+    gl.bindVertexArray(this.svao); gl.bindBuffer(gl.ARRAY_BUFFER, this.sbuf);
+    { const F = 4, S = STROKE_STRIDE * F;
+      gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 3, gl.FLOAT, false, S, 0);
+      gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1, 2, gl.FLOAT, false, S, 3 * F);
+      gl.enableVertexAttribArray(2); gl.vertexAttribPointer(2, 3, gl.FLOAT, false, S, 5 * F); }
     gl.bindVertexArray(null);
     const tq = gl.getExtension('EXT_disjoint_timer_query_webgl2');
     if (tq) this.timer = { ext: tq as unknown as { TIME_ELAPSED_EXT: number; GPU_DISJOINT_EXT: number }, pending: [], sum: [0, 0, 0], n: 0 };
@@ -844,6 +879,9 @@ export class Renderer {
     gl.bindBuffer(gl.ARRAY_BUFFER, this.buf);
     gl.bufferData(gl.ARRAY_BUFFER, m.data, gl.STATIC_DRAW);
     this.count = m.count;
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.sbuf);
+    gl.bufferData(gl.ARRAY_BUFFER, m.strokes, gl.STATIC_DRAW);
+    this.scount = m.strokes.length / STROKE_STRIDE;
   }
   /** what moves, as it is this frame (STRIDE floats a vertex) */
   moving(data: Float32Array, count: number) {
@@ -948,11 +986,23 @@ export class Renderer {
     gl.uniformMatrix4fv(U('uVP'), false, cam.vp); gl.uniformMatrix4fv(U('uLight'), false, light);
     gl.uniform1f(U('uTime'), time); gl.uniform3fv(U('uSun'), this.sun); gl.uniform3fv(U('uEye'), cam.eye); gl.uniform3fv(U('uDir'), cam.dir); gl.uniform1f(U('uN'), 12); gl.uniform3fv(U('uArea'), this.area); gl.uniform1f(U('uShadows'), this.shadows ? 1 : 0); gl.uniform1f(U('uBleed'), this.bleed ? 1 : 0); gl.uniform1f(U('uPaper'), this.print ? 1 : 0); gl.uniform4fv(U('uLand'), this.landBox); this.bindFocus(this.main);
     gl.uniform1f(U('uTexel'), this.shadowTexel); gl.uniform1f(U('uDepthRange'), this.shadowRange);
-    gl.uniform1f(U('uLeafCut'), this.leafCut ? 1 : 0);
+    gl.uniform1f(U('uLeafCut'), this.leafCut ? 1 : 0); gl.uniform1f(U('uMarks'), this.marks ? 1 : 0);
     gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, this.shadowTex); gl.bindSampler(0, this.sCompare); gl.uniform1i(U('uShadow'), 0);
     gl.activeTexture(gl.TEXTURE3); gl.bindTexture(gl.TEXTURE_2D, this.shadowTex); gl.bindSampler(3, this.sRaw); gl.uniform1i(U('uShadowRaw'), 3);
     gl.drawArrays(gl.TRIANGLES, 0, this.count);
     if (this.dcount) { gl.bindVertexArray(this.dvao); gl.drawArrays(gl.TRIANGLES, 0, this.dcount); }
+    // (the drawing's marks, inked onto what they lie on: over it, behind what stands in front of it, the mask left be)
+    if (this.scount) {
+      gl.useProgram(this.stroke);
+      const S = (n: string) => gl.getUniformLocation(this.stroke, n);
+      gl.uniformMatrix4fv(S('uVP'), false, cam.vp); gl.uniform1f(S('uMarks'), this.marks ? 1 : 0);
+      gl.uniform1f(S('uBleed'), this.bleed ? 1 : 0); gl.uniform1f(S('uPaper'), this.print ? 1 : 0); gl.uniform4fv(S('uLand'), this.landBox); this.bindFocus(this.stroke);
+      gl.bindVertexArray(this.svao);
+      gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA); gl.depthMask(false); gl.disable(gl.CULL_FACE);
+      gl.enable(gl.POLYGON_OFFSET_FILL); gl.polygonOffset(-2, -4);
+      gl.drawArrays(gl.TRIANGLES, 0, this.scount);
+      gl.disable(gl.POLYGON_OFFSET_FILL); gl.disable(gl.BLEND); gl.depthMask(true); gl.enable(gl.CULL_FACE);
+    }
     gl.bindVertexArray(null);
     if (this.ms) {
       // (resolved: each colour, then the depth)
@@ -975,7 +1025,7 @@ export class Renderer {
     gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, this.col); gl.uniform1i(P('uCol'), 0);
     gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, this.nrm); gl.uniform1i(P('uNrm'), 1);
     gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, this.dep); gl.uniform1i(P('uDepth'), 2);
-    gl.uniform2f(P('uPx'), 1 / w, 1 / h); gl.uniform1f(P('uRange'), cam.range); gl.uniform1f(P('uPrint'), this.print ? 1 : 0); gl.uniform1f(P('uDpr'), dpr); gl.uniform1f(P('uBleed'), this.bleed ? 1 : 0);
+    gl.uniform2f(P('uPx'), 1 / w, 1 / h); gl.uniform1f(P('uRange'), cam.range); gl.uniform1f(P('uPrint'), this.print ? 1 : 0); gl.uniform1f(P('uMarks'), this.marks ? 1 : 0); gl.uniform1f(P('uDpr'), dpr); gl.uniform1f(P('uBleed'), this.bleed ? 1 : 0);
     gl.uniform1f(P('uWorldPx'), (2 * view.zoom) / h); gl.uniform1f(P('uContact'), this.contact ? 1 : 0);
     gl.uniformMatrix3fv(P('uViewRot'), false, cam.rot);
     gl.drawArrays(gl.TRIANGLES, 0, 3);

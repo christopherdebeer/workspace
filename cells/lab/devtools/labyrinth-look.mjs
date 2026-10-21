@@ -3,6 +3,7 @@
 // stream and its fall), drawn wide and close, each view a picture in devtools/out/look/NAME-VIEW.png and all of them on
 // one sheet, static/labyrinth/look-NAME.jpg. Every change to the renderer is looked at in these, before and after.
 //   --only=VIEW   --size=900   --frames (a time for each view's first frames, as a rough measure: not the phone's)
+//   --marks (the drawing's marks by family, the picture faded under them)   --print (all of it on the paper)
 process.env.EXPERIMENT = 'labyrinth'; process.env.READY = '__labyrinth';
 const opt = Object.fromEntries(process.argv.slice(2).filter((a) => a.startsWith('--')).map((a) => [a.slice(2).split('=')[0], a.split('=')[1] ?? true]));
 const { withWood } = await import('./harness.mjs');
@@ -23,7 +24,7 @@ const files = [];
 await withWood(async (lab) => {
   for (const v of VIEWS) {
     if (opt.only && v.name !== opt.only) continue;
-    const p = await lab.open(`instant&cats=0&${v.query}`);
+    const p = await lab.open(`instant&cats=0&${v.query}${opt.marks ? '&marks' : ''}${opt.print ? '&print' : ''}`);
     await p.waitForTimeout(6000);
     // (only the drawing: the brushes and buttons hidden)
     await p.evaluate(() => { const keep = new Set(); for (const c of document.querySelectorAll('canvas')) for (let e = c; e; e = e.parentElement) keep.add(e); for (const e of document.querySelectorAll('body *')) if (!keep.has(e) && !e.querySelector('canvas')) e.style.visibility = 'hidden'; for (const c of document.querySelectorAll('canvas')) if (c.id !== 'stone') c.style.visibility = 'hidden'; });

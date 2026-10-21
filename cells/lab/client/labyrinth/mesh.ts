@@ -22,6 +22,7 @@ import { buildings, opening, underRoof, type Building, type Opening } from './bu
 import { BUT, BUTH, BUTW, WT, buttresses, inBlock, outline, reach, wallCell, type Edge } from './form';
 import { CENTER, DECK, DIRS, DRESS, PLANT, key, soffit as flightSoffit, unkey, type Span, type World } from './model';
 import { climb, grow, growths } from './plants';
+import { strokes, type StrokeLand } from './strokes';
 import { LAND, noise2, surfaceY } from './land';
 import { groundY, retaining } from './context';
 
@@ -86,7 +87,8 @@ export function wallArms(w: World, k: number, i: number, j: number): boolean[] {
   return arms;
 }
 
-export interface Mesh { data: Float32Array; count: number }
+/** what's drawn: the picture's triangles, and the drawing's marks (strokes.ts), each from the same world */
+export interface Mesh { data: Float32Array; count: number; strokes: Float32Array }
 type V3 = [number, number, number];
 const X = (i: number) => i - CENTER, Z = (j: number) => j - CENTER;
 const tone = (k: number, i: number, j: number) => (((k * 73856093) ^ (i * 19349663) ^ (j * 83492791)) >>> 0) / 4294967296;
@@ -98,6 +100,8 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
   /** how a cell's dressed: the rules' dressing and the hand's (`plain`: the hand's alone) */
   const dressed = (k: number, i: number, j: number) => look(w, k, i, j, plain);
   const out: number[] = [];
+  /** the land as it's drawn, for the drawing's marks to be laid on (landMesh) */
+  let drawnLand: StrokeLand | null = null;
   let cur = { born: -1e3, pivot: 0, how: 1, tone: 0, dress: 0, sel: false };
   /** leaves' kind, for their colour (0 a cypress's dark green, 1 an olive's silver, 2 a stone pine's blue-green, 3 a
    * clipped box's bright green) */
@@ -797,7 +801,7 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
     for (const s of [-0.2, 0.2]) for (let y = k; y < top - 1e-6; y += 0.2) { const y1 = Math.min(top, y + 0.2), c = at((y + y1) / 2, s); box(c[0] - 0.035, c[0] + 0.035, y, y1, c[2] - 0.035, c[2] + 0.035, MAT.wood, 0.85); }
     for (let y = k + 0.28; y < k + l.n + 0.05; y += 0.28) bar(at(y, -0.2), at(y, 0.2), 0.04, 0.04, MAT.wood);
   }
-  return { data: new Float32Array(out), count: out.length / STRIDE };
+  return { data: new Float32Array(out), count: out.length / STRIDE, strokes: drawnLand ? strokes(w, drawnLand) : new Float32Array(0) };
 
   /**
    * Pergolas, over the places dressed so: posts at the corners of the ground they cover (and along a long side, every
@@ -882,15 +886,17 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
     // (where it's steep (a cliff, a bank's face), the rock in its beds: the height stepped into ledges a third of a level
     // thick, each ledge's lip a little rounded, so a cliff is broken by shelves and overhang-like lips, not a smooth
     // sheet; where it's level (where things are built), the ground as it is)
+    const bedAt = (gx: number, gz: number) => 0.34 * (0.85 + 0.3 * noise2(land.seed, gx * 0.7 + 3.1, gz * 0.7 - 1.7));
     const Y = (gx: number, gz: number) => {
       const y = Y0(gx, gz), e = 0.18, sl = Math.hypot(Y0(gx + e, gz) - Y0(gx - e, gz), Y0(gx, gz + e) - Y0(gx, gz - e)) / (2 * e);
       const steep = Math.min(1, Math.max(0, (sl - 0.9) / 1.4));
       if (steep <= 0) return y;
-      const bed = 0.34 * (0.85 + 0.3 * noise2(land.seed, gx * 0.7 + 3.1, gz * 0.7 - 1.7)), f = y / bed, fl = Math.floor(f), t = f - fl;
+      const bed = bedAt(gx, gz), f = y / bed, fl = Math.floor(f), t = f - fl;
       const ledge = (fl + (t < 0.35 ? 0 : t > 0.7 ? 1 : (t - 0.35) / 0.35)) * bed;
       return y + (ledge - y) * steep * 0.85;
     };
     cur = { born: -1e3, pivot: 0, how: 1, tone: 0.5, dress: 0, sel: false };
+    drawnLand = { Y, B, bed: bedAt };
     const nx = (x1 - x0) * RES, nz = (z1 - z0) * RES;
     const P = (a: number, b: number): V3 => { const gx = x0 + a / RES, gz = z0 + b / RES; return [gx - CENTER, Y(gx, gz), gz - CENTER]; };
     const Nrm = (a: number, b: number): V3 => {

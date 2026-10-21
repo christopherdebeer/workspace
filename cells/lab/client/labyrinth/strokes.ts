@@ -1,0 +1,224 @@
+/**
+ * The drawing's marks, each with a reason to be there (after Taohua's marks.ts and pathmarks.ts): not a pattern laid
+ * over a surface by its height or its slope or where its depth jumps, but strokes the world's own features call for,
+ * found from what the land and what's built say they are, and laid as geometry in the world, so each stays where it is
+ * as the eye moves and as what's built changes elsewhere.
+ *
+ * Features, and their evidence:
+ * - **escarpment** (where the land drops a level or more between cells: a storey's height of rock, the mesh steps it
+ *   into ledges): its rim, a broken line along the top of the drop, firmer the higher it is; its face, interrupted,
+ *   hachures down it between its beds, long and short by turns; its **bedding**, the strata along the face at its
+ *   ledges, each a little higher or lower across a **fracture**; and a fracture now and then, a crack down the face;
+ * - **retention** (where what's built is founded on the land): its contact, a broken line at its foot;
+ * - **water**: its **current**, strokes along the way it runs; its **bank**, a line along a steep one; its **fall**,
+ *   streaks down the sheet where its bed steps, and the **impact**'s rings in the pool below.
+ *
+ * A feature is found by its cells (a run of a drop's edges, from the cell it starts at; a stream's cell; a founded
+ * column's face), and every mark of it is seeded from those, so it's the same mark whenever it's made. Each carries its
+ * family and weight; how much of it holds over the picture where the picture's whole (a rim does, a hachure doesn't:
+ * the render says what a hachure would); and a pick, so where the drawing thins out, whole marks are left out, never
+ * faded. The renderer draws them in the picture's own pass, inked onto what they lie on (render.ts `STROKE_FS`).
+ */
+import { hash } from '../kit/rng';
+import { outline } from './form';
+import { retaining } from './context';
+import { CENTER, DIRS, type World } from './model';
+
+/** why a mark is there */
+export const FAM = { rim: 0, hachure: 1, bedding: 2, fracture: 3, contact: 4, current: 5, bank: 6, fall: 7, impact: 8 } as const;
+/** a mark's vertex: x, y, z; across it (-1..1); along it (0..1); its family + weight (under 1); how much it holds over
+ * the whole picture (0..1); its pick (0..1) */
+export const STROKE_STRIDE = 8;
+type V3 = [number, number, number];
+
+/** the land as drawn: its height at a point (grid units, as mesh.ts lays it), and the box of cells it's drawn over */
+export interface StrokeLand {
+  Y: (gx: number, gz: number) => number; B: { i0: number; i1: number; j0: number; j1: number };
+  /** how thick the rock's beds are about a point, where a cliff's stepped into ledges */
+  bed: (gx: number, gz: number) => number;
+}
+
+/**
+ * A ribbon through the points: so wide at its fullest, tapering to a hair at both ends, swelling a little past its
+ * middle as a brush presses and lifts; across the ground (to the left of its way), or, given `side`, across that way
+ */
+export function ribbon(out: number[], pts: V3[], w: number, fam: number, weight: number, persist: number, pick: number, side?: V3) {
+  if (pts.length < 2) return;
+  const L: number[] = [0];
+  for (let i = 1; i < pts.length; i++) L.push(L[i - 1] + Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1], pts[i][2] - pts[i - 1][2]));
+  const total = L[L.length - 1] || 1;
+  const V = (i: number, s: number) => {
+    const t = L[i] / total, a = pts[Math.max(0, i - 1)], b = pts[Math.min(pts.length - 1, i + 1)];
+    let sx: number, sy: number, sz: number;
+    if (side) [sx, sy, sz] = side; else { const dx = b[0] - a[0], dz = b[2] - a[2], l = Math.hypot(dx, dz) || 1; sx = -dz / l; sy = 0; sz = dx / l; }
+    const taper = Math.pow(Math.sin(Math.PI * Math.pow(Math.min(1, Math.max(0, t)), 0.85)), 0.7), hw = (w / 2) * Math.max(0.12, taper), p = pts[i];
+    return [p[0] + sx * hw * s, p[1] + sy * hw * s, p[2] + sz * hw * s, s, t, fam + Math.min(0.99, weight), persist, pick];
+  };
+  for (let i = 0; i < pts.length - 1; i++) {
+    const a = V(i, -1), b = V(i, 1), c = V(i + 1, 1), d = V(i + 1, -1);
+    out.push(...a, ...b, ...c, ...a, ...c, ...d);
+  }
+}
+
+/** a seeded stream of numbers for one feature's marks */
+const rng = (...n: number[]) => { let s = hash(...n) >>> 0; return () => { s = hash(s, 0x51ed) >>> 0; return s / 4294967296; }; };
+const ramp = (r: () => number, a: number, b: number) => a + r() * (b - a);
+/** a mark's lift off what it's drawn on, so it lies on it, not in it */
+const LIFT = 0.02;
+/** how far into each cell a drop's band reaches (land.ts: the flat middle is FLAT of the half-width) */
+const BAND = 0.31;
+
+export function strokes(w: World, land: StrokeLand): Float32Array {
+  const out: number[] = [];
+  if (!w.land) return new Float32Array(0);
+  const { Y, B, bed } = land, held = retaining(w), wet = (i: number, j: number) => !!w.land?.water.has(j * 1000 + i);
+  const at = (gx: number, gz: number, lift = LIFT): V3 => [gx - CENTER, Y(gx, gz) + lift, gz - CENTER];
+  // (a drop between a cell and the one its way d: how many levels, if it's one the land shows as its own (not held by a
+  // wall, not built against, not the stream's own bed))
+  const drop = (i: number, j: number, d: number) => {
+    const [a, b] = DIRS[d], x = i + a, z = j + b;
+    if (!w.onSlab(x, z) || wet(i, j)) return 0;
+    const hi = w.ground(i, j), lo = w.ground(x, z), dd = hi - lo;
+    if (dd < 1 || held.has(`${i}.${j}.${d}`)) return 0;
+    if (w.occupied(hi, i, j) || w.occupied(lo, x, z) || w.stair(lo, x, z) >= 0) return 0;
+    return dd;
+  };
+  const cls = (dd: number) => (dd >= 2 ? 2 : dd);
+
+  // ─── escarpments and banks: a run of a drop's edges, the same way and the same kind, from the cell it starts at ───
+  for (let j = B.j0; j <= B.j1; j++) for (let i = B.i0; i <= B.i1; i++) for (let d = 0; d < 4; d++) {
+    const dd = drop(i, j, d);
+    if (!dd) continue;
+    const [ta, tb] = DIRS[(d + 1) % 4];
+    if (cls(drop(i - ta, j - tb, d)) === cls(dd)) continue;
+    let n = 1;
+    while (n < 40 && cls(drop(i + ta * n, j + tb * n, d)) === cls(dd)) n++;
+    edgeRun(i, j, d, n, cls(dd));
+  }
+  function edgeRun(i: number, j: number, d: number, n: number, kind: number) {
+    const [a, b] = DIRS[d], [ta, tb] = DIRS[(d + 1) % 4], cliff = kind >= 1, tall = kind >= 2;
+    // (the edge's line: from the run's first corner, along it; across, u from the top cell (−) to the low one (+))
+    const e0x = i + 0.5 + a * 0.5 - ta * 0.5, e0z = j + 0.5 + b * 0.5 - tb * 0.5;
+    const Q = (s: number, u: number): [number, number] => [e0x + ta * s + a * u, e0z + tb * s + b * u];
+    const side: V3 = [ta, 0, tb];
+    const r = rng(w.land!.seed, i, j, d, 0xe5c);
+    const hi = w.ground(i, j), lo = w.ground(i + a, j + b);
+    // (the rim: along the top of the drop, broken, firmer on a cliff; held a little over the whole picture)
+    for (let s = ramp(r, 0, 0.3); s < n;) {
+      const len = Math.min(n - s, ramp(r, cliff ? 0.8 : 0.5, cliff ? 2 : 1.3)), pts: V3[] = [];
+      for (let q = 0; q <= Math.max(2, Math.round(len / 0.2)); q++) { const ss = s + (len * q) / Math.max(2, Math.round(len / 0.2)); const [gx, gz] = Q(ss, -BAND + 0.035 + (r() - 0.5) * 0.015); pts.push(at(gx, gz)); }
+      ribbon(out, pts, tall ? 0.05 : 0.042, FAM.rim, tall ? 0.9 : 0.75, tall ? 0.45 : 0.35, r());
+      s += len + ramp(r, cliff ? 0.08 : 0.15, cliff ? 0.3 : 0.55);
+    }
+    // (down the face: hachures from the rim toward the foot, close-set and short down a cliff, broken at each bed so the
+    // face reads interrupted; long and short by turns down a bank, further apart)
+    const beds = (y: number, gx: number, gz: number) => { const b = bed(gx, gz); return Math.abs(y / b - Math.round(y / b)) * b; };
+    let k = 0;
+    for (let s = ramp(r, 0.03, 0.1); s < n; s += (tall ? 0.1 : 0.14) * ramp(r, 0.75, 1.3), k++) {
+      const reachU = (k % 2 ? 1 : ramp(r, 0.45, 0.7)) * (cliff ? 0.9 : 1), wob = (r() - 0.5) * 0.04;
+      let pts: V3[] = [];
+      const N = cliff ? 10 : 5;
+      for (let q = 0; q <= N; q++) {
+        const u = -BAND + 0.05 + (2 * BAND - 0.1) * reachU * (q / N), [gx, gz] = Q(s + wob * (q / N), u), p = at(gx, gz, LIFT + 0.01);
+        p[0] += a * 0.045; p[2] += b * 0.045;
+        if (cliff && beds(p[1] - LIFT, gx, gz) < 0.035) { if (pts.length > 1) ribbon(out, pts, 0.032, FAM.hachure, 0.55, 0, r(), side); pts = []; continue; }
+        pts.push(p);
+      }
+      ribbon(out, pts, 0.032, FAM.hachure, cliff ? 0.55 : 0.5, 0, r(), side);
+    }
+    if (!cliff) return;
+    // (its bedding: along the face at each bed's height, found on the face where it stands, a little higher or lower
+    // across each fracture, in long runs with gaps; and a crack down the face here and there)
+    const uAt = (s: number, y: number) => {
+      let u0 = -BAND, u1 = BAND;
+      for (let q = 0; q < 14; q++) { const um = (u0 + u1) / 2, [gx, gz] = Q(s, um); if (Y(gx, gz) > y) u0 = um; else u1 = um; }
+      return (u0 + u1) / 2;
+    };
+    // (each bed's joint where it shows on the face: the foot of its riser, the ledge the mesh steps it into; by the bed's
+    // own thickness there, so it lies on the ledge it marks)
+    const b0 = bed(...Q(n / 2, 0));
+    for (let kb = Math.ceil((lo + 0.12) / b0); kb * b0 < hi - 0.12; kb++) {
+      for (let s = ramp(r, 0, 0.4); s < n;) {
+        const len = Math.min(n - s, ramp(r, 0.7, 2)), pts: V3[] = [], M = Math.max(2, Math.round(len / 0.15));
+        for (let q = 0; q <= M; q++) {
+          const ss = s + (len * q) / M, blk = Math.floor(ss * 1.3 + hash(w.land!.seed, kb, 5) / 4294967296);
+          const [mx, mz] = Q(ss, 0), yy = kb * bed(mx, mz) + 0.025 + ((hash(w.land!.seed, i, j, d, blk, kb) / 4294967296) - 0.5) * 0.04;
+          const [gx, gz] = Q(ss, uAt(ss, yy)), p: V3 = [gx - CENTER + a * 0.05, yy, gz - CENTER + b * 0.05];
+          pts.push(p);
+        }
+        ribbon(out, pts, 0.03, FAM.bedding, 0.55, 0.2, r(), [0, 1, 0]);
+        s += len + ramp(r, 0.2, 0.6);
+      }
+    }
+    for (let s = ramp(r, 0.3, 1); s < n; s += ramp(r, 0.8, 1.8)) {
+      if (r() < 0.4) continue;
+      const pts: V3[] = [], y0 = hi - ramp(r, 0.05, 0.2), y1 = Math.max(lo + 0.1, y0 - ramp(r, 0.4, 1.2));
+      for (let q = 0; q <= 5; q++) { const y = y0 + (y1 - y0) * (q / 5), ss = s + (r() - 0.5) * 0.06, [gx, gz] = Q(ss, uAt(ss, y)); pts.push([gx - CENTER + a * 0.03, y, gz - CENTER + b * 0.03]); }
+      ribbon(out, pts, 0.04, FAM.fracture, 0.75, 0.3, r(), side);
+    }
+  }
+
+  // ─── retention: what's founded on the land, its contact at its foot ───
+  for (let j = B.j0; j <= B.j1; j++) for (let i = B.i0; i <= B.i1; i++) {
+    const k = w.ground(i, j);
+    if (!w.block(k, i, j)) continue;
+    const r = rng(w.land.seed, i, j, 0xc0a), cx = i + 0.5, cz = j + 0.5;
+    for (const e of outline(w, k, i, j).edges) {
+      if (!e.open) continue;
+      const dx = e.b[0] - e.a[0], dz = e.b[1] - e.a[1], l = Math.hypot(dx, dz);
+      if (l < 0.05) continue;
+      const nx = dz / l, nz = -dx / l;
+      // (only where it meets the land beside it at its own level: not where the ground falls away, nor against more)
+      const fx = cx + (e.a[0] + e.b[0]) / 2 + nx * 0.2, fz = cz + (e.a[1] + e.b[1]) / 2 + nz * 0.2;
+      if (Math.abs(Y(fx, fz) - k) > 0.15 || w.occupied(k, Math.floor(fx), Math.floor(fz))) continue;
+      for (let s = ramp(r, 0, 0.15) * l; s < l;) {
+        const len = Math.min(l - s, ramp(r, 0.3, 0.8)), pts: V3[] = [];
+        for (let q = 0; q <= 3; q++) { const t = (s + (len * q) / 3) / l, px = cx + e.a[0] + dx * t + nx * 0.05, pz = cz + e.a[1] + dz * t + nz * 0.05; pts.push([px - CENTER, k + 0.062 + LIFT, pz - CENTER]); }
+        ribbon(out, pts, 0.036, FAM.contact, 0.6, 0.3, r());
+        s += len + ramp(r, 0.05, 0.3);
+      }
+    }
+  }
+
+  // ─── water: its current along it, a steep bank's line, its falls and where they land ───
+  const order = new Map(w.land.stream.map(([i, j], q) => [j * 1000 + i, q]));
+  for (const [i, j] of w.land.stream) {
+    if (!w.onSlab(i, j)) continue;
+    const q0 = order.get(j * 1000 + i)!, next = w.land.stream[q0 + 1], prev = w.land.stream[q0 - 1];
+    const to = next ?? [i + (i - (prev?.[0] ?? i)), j + (j - (prev?.[1] ?? j))];
+    const fa = to[0] - i, fb = to[1] - j, g = w.ground(i, j), y = g - 0.17 + 0.006, r = rng(w.land.seed, i, j, 0x3a7);
+    const bend = prev && next && (next[0] - i !== i - prev[0] || next[1] - j !== j - prev[1]);
+    // (the current: strokes along the way it runs, more of them, and crowding the outer side, where it bends)
+    for (let c = 0, nC = bend ? 4 : 3; c < nC; c++) {
+      let off = ramp(r, -0.3, 0.3);
+      if (bend && prev) { const oa = (next![0] - i) - (i - prev[0]), ob = (next![1] - j) - (j - prev[1]); off = Math.abs(off) * Math.sign(-fb * oa + fa * ob || 1); }
+      const s0 = ramp(r, -0.4, 0.1), len = ramp(r, 0.35, 0.8), pts: V3[] = [];
+      for (let q = 0; q <= 4; q++) { const s = s0 + (len * q) / 4, wv = Math.sin((s + c) * 5) * 0.025; pts.push([i + 0.5 + fa * s - fb * (off + wv) - CENTER, y, j + 0.5 + fb * s + fa * (off + wv) - CENTER]); }
+      ribbon(out, pts, 0.032, FAM.current, 0.45, 0.12, r());
+    }
+    for (let d = 0; d < 4; d++) {
+      const [a, b] = DIRS[d], [ta, tb] = DIRS[(d + 1) % 4], x = i + a, z = j + b;
+      // (a bank: where it's cut steep, a line along it on the water)
+      if (!wet(x, z) && w.ground(x, z) > g) {
+        const pts: V3[] = [], s0 = ramp(r, -0.45, -0.2), s1 = ramp(r, 0.2, 0.45);
+        for (let q = 0; q <= 4; q++) { const s = s0 + (s1 - s0) * (q / 4); pts.push([i + 0.5 + a * 0.42 + ta * s - CENTER, y, j + 0.5 + b * 0.42 + tb * s - CENTER]); }
+        ribbon(out, pts, 0.034, FAM.bank, 0.5, 0, r());
+      }
+      // (a fall: where its bed steps down to the next, streaks down the sheet, and rings where it lands)
+      if (wet(x, z) && w.ground(x, z) < g) {
+        const y1 = w.ground(x, z) - 0.17, ex = i + 0.5 + a * 0.5, ez = j + 0.5 + b * 0.5;
+        for (let s = -0.36; s <= 0.36; s += ramp(r, 0.07, 0.14)) {
+          const pts: V3[] = [], t0 = ramp(r, 0, 0.25), t1 = ramp(r, 0.6, 1);
+          for (let q = 0; q <= 4; q++) { const t = t0 + (t1 - t0) * (q / 4); pts.push([ex + ta * s + a * (0.012 + t * 0.03) - CENTER, y + (y1 - y) * t, ez + tb * s + b * (0.012 + t * 0.03) - CENTER]); }
+          ribbon(out, pts, 0.028, FAM.fall, 0.6, 0.25, r(), [ta, 0, tb]);
+        }
+        for (const rad of [0.12, 0.22, 0.32]) {
+          const pts: V3[] = [], a0 = ramp(r, -0.6, -0.2), a1 = ramp(r, 0.2, 0.6);
+          for (let q = 0; q <= 8; q++) { const th = a0 + (a1 - a0) * (q / 8); pts.push([ex + a * (0.05 + rad * Math.cos(th)) + ta * rad * Math.sin(th) * 1.2 - CENTER, y1 + 0.007, ez + b * (0.05 + rad * Math.cos(th)) + tb * rad * Math.sin(th) * 1.2 - CENTER]); }
+          ribbon(out, pts, 0.028, FAM.impact, 0.5, 0.15, r());
+        }
+      }
+    }
+  }
+  return new Float32Array(out);
+}

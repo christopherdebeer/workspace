@@ -10,7 +10,7 @@
  * pinch to come close. Undo, print, clear. What's built is kept on this device.
  *
  * `?story=1..4` (the storyboard: first touch, a wall traced, an elevated connection, a resolved labyrinth) ·
- * `?ops=` (operations, as the model writes them) · `?brush=` · `?sheet` · `?select=k.i.j[&whole]` · `?print` · `?turn=` ·
+ * `?ops=` (operations, as the model writes them) · `?brush=` · `?sheet` · `?select=k.i.j[&whole]` · `?print` · `?marks` (the drawing's marks by why they're there) · `?turn=` ·
  * `?zoom=` · `?preview` · `?still` · `?instant` (no rising, no gliding, no dust, no cats: for pictures taken by a slow
  * renderer, where every transition is frames it hasn't time for)
  */
@@ -34,6 +34,7 @@ const canvas = document.getElementById('stone') as HTMLCanvasElement, guide = do
 const g2 = guide.getContext('2d')!;
 const R = new Renderer(canvas);
 R.print = qs.has('print');
+R.marks = qs.has('marks');
 R.shadows = !qs.has('noshadow');
 // (the land as Taohua draws its hill: the open ground the paper itself, only its features drawn, bleeding into the page,
 // no plinth; `?plinth`: on its plinth instead. The flat slab is always a slab on its table)
