@@ -20,6 +20,7 @@
  * labyrinth-connectors.mjs runs every rule's scene through the same checks) come with it.
  */
 import { DIRS, DRESS, PLANT, RULE, inGrid, key, type Cell, type Op, type World } from './model';
+import { carryRound, cutBack, own, setBack } from './outline';
 
 /** the verbs: how architecture behaves touched by other architecture (static/labyrinth-encounters.md) */
 export type Verb = 'merge' | 'open' | 'carry' | 'wrap' | 'step' | 'shelter' | 'frame' | 'yield' | 'separate';
@@ -33,6 +34,8 @@ export interface Meeting {
   /** the hand's operations that made it (their places in `ops`) */
   by: number[];
   candidates: Candidate[];
+  /** the rung it starts at, where the setting says which of its answers it is (by default the first) */
+  start?: number;
   /** the rung wanted (chosen, or by insistence), and the one laid (-1 if none would keep every claim), and where */
   wanted: number; laid: number; chosen: boolean; at: Cell[];
 }
@@ -330,7 +333,7 @@ const wayMeetsTree: Rule = {
         out.push({
           rule: this.id, name: 'a way passing a tree', where: 'by the tree', anchor: T, cells: [T, by], by: [a, p].sort((x, y) => x - y), insists: ways,
           candidates: [
-            { level: 0, label: 'the way passing it', verbs: ['yield'], op: {} },
+            { level: 0, label: 'the way passing it', verbs: ['separate'], op: {} },
             ...(ring.length ? [{ level: 1 as const, label: 'a ring of paving round it, a place in its shade', verbs: ['wrap'] as Verb[], op: paved }] : []),
             { level: 2, label: `${ring.length ? 'the ring, and ' : ''}a low stone seat round its trunk`, verbs: ['wrap', 'shelter'], op: join(paved, { dress: [[k, i, j, DRESS.seat, 1]] }) },
           ],
@@ -368,7 +371,7 @@ const flightMeetsTerrace: Rule = {
           out.push({
             rule: this.id, name: 'a terrace beside a flight', where: 'by the terrace', anchor: X, cells: [S, X], by: [by, terrace].sort((p, r) => p - r), insists: (o) => !!o.connect || !!o.add?.length,
             candidates: [
-              { level: 0, label: 'the terrace notched round the flight, the two apart', verbs: ['yield', 'separate'], op: {} },
+              { level: 0, label: 'the terrace and the flight apart, as they are', verbs: ['separate'], op: {} },
               { level: 1, label: 'the flight opened at that step, stepped off on to the terrace', verbs: ['open', 'step'], op: gap },
               { level: 2, label: 'stepped off on to the terrace, a lantern there', verbs: ['open', 'step', 'frame'], op: join(gap, lantern([X[0], X[1] + sa, X[2] + sb])) },
             ],
@@ -430,8 +433,125 @@ const flightBesideWater: Rule = {
   },
 };
 
+/**
+ * The hand's stone in a tree's crown: a terrace, a house, a tower standing where the crown of an olive or a stone pine
+ * of the hand's spreads (a cell round its trunk, at the crown's height: an olive's a course over its foot, a pine's
+ * three), at the outline's edge (a tree the stone's wholly round is in a court of its own already). Two answers,
+ * neither more than the other: the crown pruned round the stone, as a tree grown against a wall is; or the stone cut
+ * back round the crown (outline.ts `cutBack`), open to the sky there, the courses under it kept, a ledge at the tree's
+ * foot: a terrace notched, a house's roof cut back round it, a tower stepped back. Which, by what came first: stone laid
+ * after the tree gives way to it; a tree planted after the stone is pruned to it.
+ */
+const stoneInCrown: Rule = {
+  id: 'stone-in-crown',
+  find(w) {
+    const out: Found[] = [];
+    w.ops.forEach((op, p) => {
+      if (op.derived) return;
+      for (const [k, i, j, kind] of op.plants ?? []) {
+        if ((kind !== PLANT.olive && kind !== PLANT.pine) || w.plant(k, i, j) !== kind) continue;
+        const kc = k + (kind === PLANT.pine ? 3 : 1);
+        const ring = [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]].map(([a, b]) => [i + a, j + b] as [number, number]);
+        const inCrown = ring.filter(([x, z]) => own(w, kc, x, z));
+        if (!inCrown.length || DIRS.every(([a, b]) => w.occupied(kc, i + a, j + b))) continue;
+        const cut = cutBack(w, inCrown, kc);
+        const by = Math.min(...inCrown.map(([x, z]) => w.firstOp.get(key(0, x, z)) ?? 1e9));
+        if (!cut || by >= w.ops.length || by === p) continue;
+        const what = kc - 1 > w.ground(i, j) + 1 ? 'stepped back round its crown' : 'cut back round its crown';
+        out.push({
+          rule: this.id, name: "stone in a tree's crown", where: 'round the tree', anchor: [k, i, j], cells: [[k, i, j], ...inCrown.map(([x, z]) => [kc, x, z] as Cell)], by: [p, by].sort((a, b) => a - b), start: by > p ? 1 : 0,
+          insists: (o) => !!o.plants?.length || !!o.add?.length,
+          candidates: [
+            { level: 0, label: 'the crown pruned round the stone', verbs: ['separate'], op: {} },
+            { level: 1, label: what === 'stepped back round its crown' ? 'the stone stepped back round its crown, full below' : 'the stone cut back round its crown, open to the sky, a ledge at its foot', verbs: ['yield'], op: cut },
+          ],
+        });
+      }
+    });
+    return out;
+  },
+};
+
+/**
+ * A cypress of the hand's at the foot of a raised edge of its stone (a terrace, a wall's top, two courses up or more):
+ * the edge reaches round it on both sides at the top's level, out in the air, carried on corbels (outline.ts
+ * `carryRound`), so the cypress stands in a bay of it and the rail follows round; or it stands against the edge as it
+ * is. A cypress against a raised edge is received by it, so the bay's where it starts.
+ */
+const edgeRoundCypress: Rule = {
+  id: 'edge-round-cypress',
+  find(w) {
+    const out: Found[] = [], seen = new Set<number>();
+    w.ops.forEach((op, p) => {
+      if (op.derived) return;
+      for (const [k, i, j, kind] of op.plants ?? []) {
+        if (kind !== PLANT.cypress || w.plant(k, i, j) !== kind || seen.has(key(k, i, j))) continue;
+        for (let d = 0; d < 4; d++) {
+          const [a, b] = DIRS[d], [t, u] = DIRS[(d + 1) % 4], ex = i + a, ez = j + b;
+          if (!own(w, k, ex, ez)) continue;
+          let kt = k; while (own(w, kt + 1, ex, ez)) kt++;
+          if (kt < k + 1 || w.occupied(kt + 1, ex, ez)) continue;
+          const arms: Array<[number, number]> = [[i + t, j + u], [i - t, j - u]];
+          // (each arm against the edge's stone at that level, nothing under it at the top's level but air)
+          if (!arms.every(([x, z]) => own(w, kt, x + a, z + b) && !w.occupied(kt - 1, x, z))) continue;
+          const by = w.firstOp.get(key(0, ex, ez)) ?? -1, round = carryRound(w, arms, kt, Math.max(op.born ?? 0, w.ops[by]?.born ?? 0));
+          if (by < 0 || !round) continue;
+          seen.add(key(k, i, j));
+          out.push({
+            rule: this.id, name: 'a cypress at the foot of a raised edge', where: 'by the cypress', anchor: [k, i, j], cells: [[k, i, j], ...arms.map(([x, z]) => [kt, x, z] as Cell)], by: [p, by].sort((x, y) => x - y), start: 1,
+            insists: (o) => !!o.plants?.length || !!o.add?.length,
+            candidates: [
+              { level: 0, label: 'the cypress against the edge, as it is', verbs: ['separate'], op: {} },
+              { level: 1, label: 'the edge reaching round it, a bay for it', verbs: ['wrap'], op: round },
+            ],
+          });
+          break;
+        }
+      }
+    });
+    return out;
+  },
+};
+
+/**
+ * A way of the hand's arriving square on at the foot of a mass of its stone (two cells wide or more, two deep behind
+ * where it arrives, two courses high): a door in its face (buildings.ts); or the door set back a cell under an arch, a
+ * porch (outline.ts `setBack`). Set back where the mass is three deep there, room for it; in its face where it's less.
+ */
+const wayAtFace: Rule = {
+  id: 'way-at-face',
+  find(w) {
+    const out: Found[] = [], seen = new Set<number>();
+    w.ops.forEach((op, p) => {
+      if (op.derived) return;
+      for (const [k, oi, oj] of w.walks.get(op) ?? []) {
+        if (k !== w.ground(oi, oj)) continue;
+        const ax = w.passage(k, oi, oj);
+        for (let D = 0; D < 4; D++) {
+          if (D % 2 !== ax) continue;
+          const [a, b] = DIRS[D], C: Cell = [k, oi + a, oj + b], [t, u] = DIRS[(D + 1) % 4];
+          if (seen.has(key(...C)) || !own(w, ...C) || !own(w, k, C[1] + a, C[2] + b) || !own(w, k + 1, C[1], C[2])) continue;
+          if (!own(w, k, C[1] + t, C[2] + u) && !own(w, k, C[1] - t, C[2] - u)) continue;
+          const by = w.firstOp.get(key(0, C[1], C[2])) ?? -1, porch = setBack(w, C, (D + 2) % 4, Math.max(op.born ?? 0, w.ops[by]?.born ?? 0));
+          if (by < 0 || by === p || !porch) continue;
+          seen.add(key(...C));
+          let deep = 1; while (deep < 4 && own(w, k, C[1] + a * deep, C[2] + b * deep)) deep++;
+          out.push({
+            rule: this.id, name: 'a way at a face', where: 'where it arrives', anchor: C, cells: [C, [k, oi, oj]], by: [p, by].sort((x, y) => x - y), start: deep >= 3 ? 1 : 0, insists: ways,
+            candidates: [
+              { level: 0, label: 'a door in its face', verbs: ['open'], op: {} },
+              { level: 1, label: 'the door set back under an arch, a porch', verbs: ['open', 'shelter'], op: porch },
+            ],
+          });
+        }
+      }
+    });
+    return out;
+  },
+};
+
 /** every rule, in the order they're resolved (a later one never lays where an earlier one has) */
-export const RULES: Rule[] = [waysMeet, levelApart, waysCross, wayEnds, flightMeetsWall, wayMeetsTree, flightMeetsTerrace, flightBesideWater];
+export const RULES: Rule[] = [waysMeet, levelApart, waysCross, wayEnds, flightMeetsWall, wayMeetsTree, flightMeetsTerrace, flightBesideWater, stoneInCrown, edgeRoundCypress, wayAtFace];
 
 // ─── resolving them ───
 
@@ -449,6 +569,8 @@ function keeps(w: World, c: Candidate, taken: Set<number>): boolean {
     if (way.some((q) => w.occupied(...q) || taken.has(key(...q)))) return false;
   }
   for (const [i, j] of c.op.pave ?? []) if (taken.has(key(w.ground(i, j), i, j)) || w.claim(w.ground(i, j), i, j) === 'water') return false;
+  // (and what it cuts is the hand's own stone, nothing another meeting's laid on)
+  for (const cell of c.op.cut ?? []) if (taken.has(key(...cell)) || !own(w, ...cell)) return false;
   return true;
 }
 /** how many of the hand's gestures, after those that made it, touched a meeting again (each a rung higher) */
@@ -472,11 +594,11 @@ export function meet(w: World): Op[] {
   const out: Op[] = [], taken = new Set<number>(), found: Meeting[] = [];
   for (const rule of RULES) for (const m of rule.find(w) as Found[]) {
     const choice = w.choices.get(key(...m.anchor)), top = Math.max(...m.candidates.map((c) => c.level));
-    const wanted = choice ?? Math.min(top, insistence(w, m));
+    const wanted = choice ?? Math.min(top, (m.start ?? 0) + insistence(w, m));
     const fit = m.candidates.filter((c) => c.level <= wanted && keeps(w, c, taken)).sort((p, q) => q.level - p.level)[0];
     found.push({ ...m, wanted, laid: fit ? fit.level : -1, chosen: choice !== undefined, at: fit ? [...lays(fit.op), ...(fit.op.pave ?? []).map(([i, j]) => [w.ground(i, j), i, j] as Cell)] : [] });
     if (!fit || !Object.keys(fit.op).length) continue;
-    for (const c of lays(fit.op)) taken.add(key(...c));
+    for (const c of [...lays(fit.op), ...(fit.op.cut ?? [])]) taken.add(key(...c));
     for (const [i, j] of fit.op.pave ?? []) taken.add(key(w.ground(i, j), i, j));
     out.push({ ...fit.op, derived: true, why: 'meeting', note: fit.label, born: Math.max(...m.by.map((q) => w.ops[q].born ?? 0)) });
   }

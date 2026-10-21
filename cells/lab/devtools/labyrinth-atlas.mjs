@@ -300,6 +300,54 @@ CASES.push(...[
   },
 ].map((c) => ({ group: 'combinations', ...c })));
 
+/** a top railed all round (so it's a terrace, walked, not a house's roof) */
+const railed = (w, i0, i1, j0, j1, k) => { const dress = []; for (let i = i0; i <= i1; i++) for (let j = j0; j <= j1; j++) dress.push([k, i, j, 5, 1]); w.apply({ dress, born: 0, why: 'dress' }); };
+/** a plant put where it's touched, by hand */
+const plant = (w, kind, [i, j]) => { const op = { plants: [[w.ground(i, j), i, j, kind, 1]], born: 1, why: 'plant' }; w.apply(op, 1); return { ...op, laid: true, note: 'planted' }; };
+/**
+ * Reshape: the hand's outline changed in place where it meets something: cut back round a tree's crown (a terrace
+ * notched, a roof cut back, a tower stepped back), reaching round a cypress, set back where a way arrives. And which
+ * answer, by what came first.
+ */
+CASES.push(...[
+  {
+    name: 'terrace × olive: a terrace laid up to an olive at its edge',
+    best: 'notched round the crown, open to the sky, the lower course kept as a ledge at its foot',
+    set(w) { S.tree(w, 6, 5); },
+    act: (w) => { S.block(w, 4, 8, 5, 7, 2); railed(w, 4, 8, 5, 7, 1); return { laid: true, note: 'a terrace laid round it' }; },
+  },
+  {
+    name: 'roof × olive: a house raised against an olive',
+    best: 'its roof cut back round the crown, the plan notched, the roof winged round the notch',
+    set(w) { S.tree(w, 6, 5); },
+    act: (w) => { S.block(w, 4, 8, 5, 8, 3); return { laid: true, note: 'a house raised against it' }; },
+  },
+  {
+    name: 'tower × pine: a tower raised beside a stone pine',
+    best: 'the tower stepped back where the pine spreads at its height, full below',
+    set(w) { S.tree(w, 6, 5, PLANT.pine); },
+    act: (w) => { S.block(w, 5, 7, 6, 7, 5); return { laid: true, note: 'a tower raised beside it' }; },
+  },
+  {
+    name: 'terrace × cypress: a cypress planted at the foot of a terrace\'s edge',
+    best: 'the edge reaches round it, a bay for it, carried on corbels, the rail following round',
+    set(w) { S.block(w, 4, 8, 6, 8, 3); railed(w, 4, 8, 6, 8, 2); },
+    act: (w) => plant(w, PLANT.cypress, [6, 5]),
+  },
+  {
+    name: 'way × house: a way drawn up to a house\'s face',
+    best: 'the door set back under an arch, a porch, the way running into it',
+    set(w) { S.block(w, 4, 8, 5, 8, 2); },
+    act: (w) => fromPlace(w, [[6, 1], [6, 4]]),
+  },
+  {
+    name: 'olive × terrace: an olive planted at the edge of a terrace already there',
+    best: 'the terrace kept (it was there first), the crown pruned round it',
+    set(w) { S.block(w, 4, 8, 5, 7, 2); railed(w, 4, 8, 5, 7, 1); },
+    act: (w) => plant(w, PLANT.olive, [6, 4]),
+  },
+].map((c) => ({ group: 'reshape', ...c })));
+
 /** whether each case came to what it would be at its best (`before`: the setting's stone) */
 const stairIn = (w, before) => before.filter((c) => w.stair(...c) >= 0 || w.passage(...c) >= 0).length;
 const BEST = {
@@ -339,6 +387,12 @@ const BEST = {
   'tower × bridge × bridge': (w) => w.archway(2, 6, 6) >= 0 && w.stone(3, 6, 6) && w.cross(2, 6, 6) && NAV.reaches(BU.walkable(w), [2, 3, 6], [2, 9, 6]) && NAV.reaches(BU.walkable(w), [2, 6, 3], [2, 6, 9]),
   'roof × stair × wall': (w) => w.flights.some((f) => f.carriage === 'hung') && BU.buildings(w).list.some((b) => b.roof && b.terrace?.length),
   'alongside × tree': (w) => w.plant(0, 6, 3) >= 0 && [[3, 4, 5], [7, 8, 9]].every((is) => is.some((i) => look(w, 0, i, 3)?.pergola)) && [...w.reached.values()].some((r) => r.reached),
+  'terrace × olive': (w) => w.plant(0, 6, 5) >= 0 && [[5, 5], [7, 5], [5, 6], [6, 6], [7, 6]].every(([i, j]) => !w.stone(1, i, j) && w.stone(0, i, j)) && w.stone(1, 4, 5) && w.stone(1, 8, 7),
+  'roof × olive': (w) => w.plant(0, 6, 5) >= 0 && [[5, 5], [7, 5], [5, 6], [6, 6], [7, 6]].every(([i, j]) => !w.stone(1, i, j) && w.stone(0, i, j)) && BU.buildings(w).list.some((b) => b.roof && b.cols.length >= 10),
+  'tower × pine': (w) => w.plant(0, 6, 5) >= 0 && [5, 6, 7].every((i) => !w.stone(3, i, 6) && w.stone(2, i, 6) && w.stone(4, i, 7)),
+  'terrace × cypress': (w) => w.plant(0, 6, 5) >= 0 && w.stone(2, 5, 5) && w.stone(2, 7, 5) && !w.stone(1, 5, 5) && !w.stone(2, 6, 5),
+  'way × house': (w) => w.archway(0, 6, 5) >= 0 && w.stone(1, 6, 5) && BU.buildings(w).list.some((b) => b.openings.some((o) => o.kind === 'door' && o.i === 6 && o.j === 6 && o.k === 0)),
+  'olive × terrace': (w) => w.plant(0, 6, 4) >= 0 && [5, 6, 7].every((i) => w.stone(1, i, 5)),
   'beside + stair': (w) => { const nav = BU.walkable(w), [f, g] = w.flights; if (!f || !g) return false; const hk = (x) => x.cells[x.cells.length - 1]; return NAV.reaches(nav, hk(f), g.cells[0]) && Math.abs(hk(f)[1] - g.cells[0][1]) + Math.abs(hk(f)[2] - g.cells[0][2]) <= 3; },
 };
 /** what a world is, to compare before and after: each wall cell's state, the walked places, the flights */
@@ -358,6 +412,7 @@ for (const C of CASES) {
   C.set(w);
   // (the wall: the stone the setting laid, before the stroke)
   const before = [...w.mass.keys()].map(unkey), s0 = state(w, before), f0 = w.flights.length;
+  const m0 = new Set(w.meetings.map((m) => `${m.rule}.${key(...m.anchor)}.${m.laid}`));
   const nOps = w.ops.length, op = C.act ? C.act(w) : stroke(w, C.pts), refused = !op || 'refused' in op;
   if (!refused && !op.laid) w.apply({ ...op, alts: undefined }, 1);
   void nOps;
@@ -370,6 +425,9 @@ for (const C of CASES) {
   if (walkedTop.length) how.push(`its top walked (${walkedTop.length} cell${walkedTop.length > 1 ? 's' : ''})`);
   if (hung.length) how.push('a flight hung from it');
   if (flights.length > 1) how.push(`${flights.length} flights`);
+  // (and what the meetings it made reshaped: an outline cut back, carried round, set back)
+  const reacted = w.meetings.filter((m) => !m0.has(`${m.rule}.${key(...m.anchor)}.${m.laid}`) && m.laid >= 0 && Object.keys(m.candidates.find((c) => c.level === m.laid)?.op ?? {}).length);
+  for (const m of reacted) how.push(`met: ${m.candidates.find((c) => c.level === m.laid).label}`);
   const verdict = refused ? 'refused' : how.length ? 'adapts' : 'attaches';
   const met = !refused && !!BEST[C.name.split(':')[0]]?.(w, before);
   // (not as it's laid, but a reading away: a meeting it made, chosen at another rung)

@@ -120,7 +120,36 @@ What was added, all general:
 - **A way bows round a tree before it's followed**: drawn through a tree, it goes a cell out and back round it there, so it yields to the tree wherever it is, in a court or out, and opens gates in walls as drawn.
 - **A walkway crosses another inside stone**: a bridge through a tower that already has a walkway through it passes through too, and the two make a crossing under a cross vault (`World.crossings`).
 
-Together: **36 of 37 at their best as laid, the last a reading away.**
+Together: **36 of 37 at their best as laid, the last a reading away** (42 of 43 with reshape below).
+
+## Reshape: an outline changed in place
+
+Astra's critique of the encounters: the verbs (yield, wrap, frame) were tags on candidates, not capabilities. "Yield" laid nothing; "notched" laid nothing; "wrap" was a ring of paving; "frame", a lantern. The engine couldn't take an outline and make it give way.
+
+So the first capability, **reshape a boundary locally** (`client/labyrinth/outline.ts`), is three operations on the hand's own stone, laid like any other, so everything worked out after them (supports, roofs and their wings, rails, the walk, buildings and doors) reads the new outline as it reads one the hand drew:
+
+- **cut back** (`cutBack`): columns taken out from a level up to the sky, the courses under kept;
+- **carried round** (`carryRound`): stone added beside the outline, out in the air, the rules carrying it on corbels;
+- **set back** (`setBack`): a face opened at its foot under an arch that runs in and stops: a porch, the door at its back.
+
+Three encounter rules use them, and the setting says which answer each starts at. They aren't rungs of more and more:
+
+- **stone in a crown** (`stone-in-crown`): the hand's stone where an olive's or a pine's crown spreads. Either the crown is pruned to the stone, or the stone is cut back round the crown. **What came first decides:** stone laid after the tree gives way to it; a tree planted after the stone is pruned to it.
+- **a cypress at a raised edge** (`edge-round-cypress`): the edge reaches round it on both sides, a bay for it, or it stands against the edge as it is.
+- **a way at a face** (`way-at-face`): a door in the face, or set back under an arch. Set back where the mass is three deep there, in the face where it's less.
+
+![reshape: six cases](labyrinth/atlas-reshape.jpg)
+
+| Case | What it is now | Best? |
+|---|---|---|
+| **terrace × olive**: a terrace laid up to an olive at its edge | notched round the crown, open to the sky, the lower course kept as a ledge at its foot, the rail following the notch | ✓ |
+| **roof × olive**: a house raised against an olive | the plan notched; the roof over what's two cells wide or more, the thin arms beside the notch flat (a plan with parts too thin to roof is now roofed where it can be, the rest a terrace, instead of losing its roof) | ✓ |
+| **tower × pine**: a tower beside a stone pine | stepped back three courses up where the pine spreads, full below | ✓ |
+| **terrace × cypress**: a cypress planted at a terrace's foot | the edge reaching round it on corbels, a bay for it | ✓ |
+| **way × house**: a way drawn up to a house's face | a porch: the door set back a cell under an arch | ✓ |
+| **olive × terrace**: an olive planted at a terrace already there | the terrace kept, the crown pruned to it (the other answer, by order) | ✓ |
+
+Also fixed on the way: stone is never laid in a tree's crown over its trunk (it was laid two courses over an olive); the tree meeting's first answer and the terrace-beside-a-flight's are now labelled as what they are (apart, as they are), not "yield" and "notched". Every new rule runs through the connector checks in eight orientations (1680 checks).
 
 ## Next
 

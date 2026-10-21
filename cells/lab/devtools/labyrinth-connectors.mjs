@@ -49,7 +49,9 @@ const { replay } = await import('../client/labyrinth/model.ts');
 function meetings(w, tag, expect) {
   ok(`${tag}: the meeting found (${expect})`, w.meetings.some((m) => m.rule === expect), w.meetings.map((m) => m.rule));
   for (const m of w.meetings.filter((q) => q.rule === expect)) {
-    ok(`${tag}: left to itself, the smallest sufficient (${m.candidates[0].label})`, m.laid === 0, { laid: m.laid, wanted: m.wanted });
+    // (the smallest sufficient, or where the setting says it starts (a stone laid after a tree gives way to it))
+    const start = m.start ?? 0, startLabel = m.candidates.find((c) => c.level === start)?.label;
+    ok(`${tag}: left to itself, ${start ? 'where the setting starts it' : 'the smallest sufficient'} (${startLabel})`, m.laid === start, { laid: m.laid, wanted: m.wanted });
     const ends = m.by.map((q) => w.walks.get(w.ops[q]) ?? []).map((cs) => cs[cs.length - 1]).filter(Boolean);
     let below = null;
     for (const c of m.candidates) {
@@ -63,7 +65,7 @@ function meetings(w, tag, expect) {
       // (walked between: from one's end to the other's, or to the top it fell short of; unless this rung is to leave
       // them apart)
       const to = ends.length > 1 ? ends[1] : m.cells[m.cells.length - 1];
-      if (!c.verbs.includes('separate')) ok(`${tag}: at rung ${c.level}, walked between, end to end`, walks(v, ends[0], to), { from: ends[0], to });
+      if (!c.verbs.includes('separate') && ends.length) ok(`${tag}: at rung ${c.level}, walked between, end to end`, walks(v, ends[0], to), { from: ends[0], to });
       const here = new Set((n?.at ?? []).map((q) => q.join()));
       if (below) ok(`${tag}: rung ${c.level} lays all that rung ${c.level - 1} does`, [...below].every((q) => here.has(q)), { below: [...below], here: [...here] });
       below = here;
@@ -81,7 +83,8 @@ function meetings(w, tag, expect) {
     // (insisting: the last of the things that made it, made again)
     const v = replay(w.encode(), w.seed); v.apply(JSON.parse(JSON.stringify(w.ops[Math.max(...m.by)])));
     const n = v.meetings.find((q) => q.anchor.join() === m.anchor.join());
-    ok(`${tag}: made again, a rung higher`, (n?.laid ?? -1) >= 1, n && { laid: n.laid, wanted: n.wanted });
+    const most = Math.max(...m.candidates.map((c) => c.level));
+    ok(`${tag}: made again, a rung higher (or kept at the top)`, (n?.laid ?? -1) >= Math.min(most, (m.start ?? 0) + 1), n && { laid: n.laid, wanted: n.wanted });
   }
 }
 /** a gatehouse's checks: one building over the way, its roof whole over it, the way through its foot, walked */
@@ -262,6 +265,40 @@ const SCENES = [
         const v = replay(w.encode(), w.seed); v.apply({ choose: [[...m.anchor, 2]], why: 'reading' });
         ok(`${this.tag}: at the top rung, a seat round it`, !!v.dressed(...m.anchor)?.seat, v.dressed(...m.anchor));
       }
+    },
+  },
+  {
+    name: 'stone in a crown: an olive planted, then a house raised against it',
+    run(w, H) {
+      const [i, j] = H.T([6, 5]);
+      w.apply({ plants: [[w.ground(i, j), i, j, PLANT.olive, 0]], born: 0, why: 'plant' });
+      for (let a = 4; a <= 8; a++) for (let b = 5; b <= 8; b++) if (a !== 6 || b !== 5) H.column([a, b], 3);
+      meetings(w, this.tag, 'stone-in-crown');
+      const g = w.ground(i, j), [x, z] = H.T([6, 6]);
+      ok(`${this.tag}: cut back round the crown, a ledge kept at its foot`, !w.stone(g + 1, x, z) && w.stone(g, x, z) && w.plant(g, i, j) === PLANT.olive);
+      ok(`${this.tag}: still a roofed house round the notch`, BU.buildings(w).list.some((b) => b.roof && b.cols.length >= 10), BU.buildings(w).list.map((b) => [b.cols.length, b.roof]));
+    },
+  },
+  {
+    name: 'a cypress at a raised edge: a terrace, then a cypress planted at its foot',
+    run(w, H) {
+      for (let a = 4; a <= 8; a++) for (let b = 6; b <= 8; b++) H.column([a, b], 3);
+      const [i, j] = H.T([6, 5]);
+      w.apply({ plants: [[w.ground(i, j), i, j, PLANT.cypress, 1]], born: 1, why: 'plant' });
+      meetings(w, this.tag, 'edge-round-cypress');
+      const g = w.ground(i, j), arms = [[5, 5], [7, 5]].map((c) => H.T(c));
+      ok(`${this.tag}: the edge reaches round it, out over the air`, arms.every(([x, z]) => w.stone(g + 2, x, z) && !w.stone(g + 1, x, z)) && w.plant(g, i, j) === PLANT.cypress);
+    },
+  },
+  {
+    name: 'a way at a face: a house, then a way drawn up to its face',
+    run(w, H) {
+      for (let a = 4; a <= 8; a++) for (let b = 5; b <= 8; b++) H.column([a, b], 2);
+      H.stroke([6, 1], [6, 4], 'way');
+      meetings(w, this.tag, 'way-at-face');
+      const [k, i, j] = at(w, H.T, [6, 5]), [, x, z] = at(w, H.T, [6, 6]);
+      ok(`${this.tag}: a porch, the door at its back`, w.archway(k, i, j) >= 0 && w.stone(k + 1, i, j) && BU.buildings(w).list.some((b) => b.openings.some((o) => o.kind === 'door' && o.i === x && o.j === z && o.k === k)), BU.buildings(w).list.map((b) => b.openings.filter((o) => o.kind === 'door')));
+      ok(`${this.tag}: walked into it`, walks(w, at(w, H.T, [6, 3]), [k, i, j]), { walks: [...w.walks.values()].map((c) => c.map((q) => q.join('.')).join(' ')), porch: [k, i, j] });
     },
   },
   {

@@ -526,7 +526,7 @@ export class World {
   private place(k: number, i: number, j: number, born: number) {
     const v = key(k, i, j);
     // (round a tree's trunk, a pit left for it: stone laid where it grows goes round it, as a passage's goes over it)
-    if (this.trees.has(v) || (k > 0 && this.trees.has(key(k - 1, i, j)) && (PLANT_TALL[this.treeKind.get(key(k - 1, i, j)) ?? 0] > 1))) return;
+    if (this.trees.has(v) || this.crown(k, i, j)) return;
     this.mass.set(v, this.mass.get(v) ?? born);
     const a = this.passages.get(v);
     if (a !== undefined) { this.archways.set(v, a); this.thin.delete(v); }
