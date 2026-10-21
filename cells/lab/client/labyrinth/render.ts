@@ -79,6 +79,9 @@ bool leftOut(vec3 p, float u) {
 const FS = COMMON + PIERCE + REACH + `
 in vec3 vPos, vNrm; in float vAo, vMat, vTone, vU; in vec4 vLs;
 uniform sampler2D uShadow; uniform vec3 uSun, uEye, uDir, uArea; uniform float uN, uShadows;
+// (the sun's map: how much of the world a texel of it covers, and how deep its range is, so its bias and its softness are
+// in the world's own units whatever it's fitted to)
+uniform float uTexel, uDepthRange;
 layout(location=0) out vec4 oCol; layout(location=1) out vec4 oNrm;
 float hash(vec3 p) { return fract(sin(dot(p, vec3(127.1, 311.7, 74.7))) * 43758.5453); }
 float noise(vec3 x) { vec3 i = floor(x), f = fract(x); f = f * f * (3. - 2. * f);
@@ -330,19 +333,21 @@ void main() {
   vec3 alb = pow(base, vec3(2.2));
   // (the sun, and its shadows: soft, a few taps round where this is in its map)
   vec3 ls = vLs.xyz / vLs.w * .5 + .5;
-  float sh = 0., bias = .0012 + .0025 * (1. - abs(dot(n, uSun)));
-  // (soft where what casts it is far off, crisp where it's close: how far the casters are, then filtered that wide)
-  float bsum = 0., bn = 0.;
-  for (int a = -2; a <= 2; a += 2) for (int b = -2; b <= 2; b += 2) { float d = texture(uShadow, ls.xy + vec2(a, b) * 3. / 2048.).r; if (d < ls.z - bias) { bsum += d; bn += 1.; } }
-  float pen = bn > 0. ? clamp((ls.z - bsum / bn) * 380., .7, 3.6) : 1.;
-  for (int a = -2; a <= 2; a++) for (int b = -2; b <= 2; b++) sh += step(ls.z - bias, texture(uShadow, ls.xy + vec2(a, b) * 1.1 * pen / 2048.).r);
+  float sh = 0., bias = uTexel * (1.6 + 3.2 * (1. - abs(dot(n, uSun)))) / uDepthRange;
+  // (soft where what casts it is far off, crisp where it's close: how far the casters are, then filtered that wide; the
+  // softness in the world's units, so it's the same however close the map's fitted)
+  float bsum = 0., bn = 0., reachT = max(3., .045 / uTexel);
+  for (int a = -2; a <= 2; a += 2) for (int b = -2; b <= 2; b += 2) { float d = texture(uShadow, ls.xy + vec2(a, b) * reachT / 2048.).r; if (d < ls.z - bias) { bsum += d; bn += 1.; } }
+  float penW = bn > 0. ? clamp((ls.z - bsum / bn) * uDepthRange * .012, .011, .055) : .016, pen = penW / uTexel;
+  for (int a = -2; a <= 2; a++) for (int b = -2; b <= 2; b++) sh += step(ls.z - bias, texture(uShadow, ls.xy + vec2(a, b) * .55 * pen / 2048.).r);
   // (out past the sun's map: lit)
   if (any(lessThan(ls, vec3(0.))) || any(greaterThan(ls, vec3(1.)))) sh = 25.;
   sh = mix(1., sh / 25., uShadows);
   // (and the leaves of a tree out of the picture, between the sun and one side of it, stirring)
-  vec2 lp = vLs.xy / vLs.w;
-  float leafy = fbm(vec3(lp * vec2(9., 11.), uTime * .05));
-  float leaves = smoothstep(.48, .6, leafy) * smoothstep(-.35, -.85, lp.x * .75 - lp.y * .45);
+  // (where the sun's ray through this point meets the ground plane: the leaves' shade fixed there, not in the map's frame)
+  vec2 lw = (vPos.xz - uSun.xz / max(uSun.y, .2) * vPos.y - uArea.xy) / max(uArea.z, 1.);
+  float leafy = fbm(vec3(lw * vec2(9., 11.), uTime * .05));
+  float leaves = smoothstep(.48, .6, leafy) * smoothstep(-.35, -.85, lw.x * .75 - lw.y * .45);
   sh *= 1. - .38 * leaves * (1. - smoothstep(uArea.z - 3., uArea.z, max(abs(vPos.x - uArea.x), abs(vPos.z - uArea.y))));
   float nl = dot(nS, uSun), key = max((nl + wrap) / (1. + wrap), 0.) * sh * mix(.8, 1., cav);
   // (the sun warm and strong; the sky cooler and quieter from above; what's thrown back warm from below and the sides)
@@ -448,7 +453,7 @@ const POST_VS = `#version 300 es
 out vec2 vUv; void main() { vec2 p = vec2(gl_VertexID == 1 ? 3. : -1., gl_VertexID == 2 ? 3. : -1.); vUv = p * .5 + .5; gl_Position = vec4(p, 0., 1.); }`;
 const POST_FS = `#version 300 es
 precision highp float;
-in vec2 vUv; uniform sampler2D uCol, uNrm, uDepth; uniform vec2 uPx; uniform float uRange, uPrint, uDpr, uBleed;
+in vec2 vUv; uniform sampler2D uCol, uNrm, uDepth; uniform vec2 uPx; uniform float uRange, uPrint, uDpr, uBleed, uWorldPx; uniform mat3 uViewRot;
 out vec4 o;
 float D(vec2 uv) { return texture(uDepth, uv).r * uRange; }
 vec3 Nn(vec2 uv) { return texture(uNrm, uv).xyz * 2. - 1.; }
@@ -470,6 +475,24 @@ void main() {
   if (sky < .5 && skyN > 0. && !(uBleed > .5 && m0 > .1 && m0 < .4)) edge = 1.;
   vec3 c = texture(uCol, vUv).rgb;
   vec2 q = gl_FragCoord.xy;
+  // (contact: where something stands close in front of a surface within a short reach (a wall's foot on the ground, the
+  // eaves over a wall, a step's riser under its tread, a pot on a top), a little shade in the crease. Short, so a broad
+  // pale wall gets no halo; the broad shutting-in is the world's own (baked); not on the land drawn as paper, nor the sky)
+  float m1 = texture(uNrm, vUv).a;
+  if (sky < .5 && uPrint < .5 && !(uBleed > .5 && m1 > .1 && m1 < .4)) {
+    // (what's sampled, in the camera's own frame: across and up the picture, and toward the eye; it shades only if it's in
+    // front of the surface, along its normal, and near)
+    vec3 nv = uViewRot * n;
+    float R = .3, rp = R / uWorldPx, occ = 0., rot = mod(floor(q.x) + 2. * floor(q.y), 4.) * 1.5708;
+    for (int k = 0; k < 8; k++) {
+      float a = float(k) * 2.39996 + rot, t = (float(k) + .5) / 8.;
+      vec2 o = vec2(cos(a), sin(a)) * rp * t;
+      vec3 v = vec3(o * uWorldPx, d - D(vUv + o * uPx));
+      float l = length(v);
+      occ += smoothstep(.2, .45, dot(v, nv) / max(l, 1e-4)) * (1. - smoothstep(R * .5, R, l));
+    }
+    c *= 1. - .32 * smoothstep(.5, 4., occ);
+  }
   // (what's taken up, outlined: where the selection mask changes, on the side that's selected)
   float m = texture(uNrm, vUv).a, ring = 0.;
   // (a cat's contour: drawn where its coat meets anything else, on its own side)
@@ -544,11 +567,13 @@ const norm = (a: number[]) => { const l = Math.hypot(a[0], a[1], a[2]) || 1; ret
 export const SUN = norm([-0.62, 0.72, -0.3]);
 
 /** the camera: square-on to nothing, looking down at `el` from `az` round, orthographic (as the prints draw it) */
-export function camera(v: View, aspect: number): { vp: M4; eye: number[]; dir: number[]; range: number } {
+export function camera(v: View, aspect: number): { vp: M4; eye: number[]; dir: number[]; range: number; rot: Float32Array } {
   const d = [Math.cos(v.el) * Math.sin(v.az), Math.sin(v.el), Math.cos(v.el) * Math.cos(v.az)], R = 120;
   const eye = [v.target[0] + d[0] * R, v.target[1] + d[1] * R, v.target[2] + d[2] * R];
-  const h = v.zoom, w = h * aspect;
-  return { vp: mul(ortho(-w, w, -h, h, 1, 4 * R), lookAt(eye, v.target, [0, 1, 0])), eye, dir: [-d[0], -d[1], -d[2]], range: 4 * R - 1 };
+  const h = v.zoom, w = h * aspect, V = lookAt(eye, v.target, [0, 1, 0]);
+  // (its turn alone: the world's directions into the camera's own, across, up and toward the eye)
+  const rot = new Float32Array([V[0], V[1], V[2], V[4], V[5], V[6], V[8], V[9], V[10]]);
+  return { vp: mul(ortho(-w, w, -h, h, 1, 4 * R), V), eye, dir: [-d[0], -d[1], -d[2]], range: 4 * R - 1, rot };
 }
 
 export class Renderer {
@@ -654,16 +679,31 @@ export class Renderer {
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     this.size = [w, h];
   }
-  /** the sun's view: square on to it, over the whole slab and as high as it can be built */
-  private lightVP(): M4 {
-    const [ax, az, e] = this.area, top = Math.max(4, this.top + 2), c = [ax, top / 2, az], s = this.sun;
-    const eye = [c[0] + s[0] * 60, c[1] + s[1] * 60, c[2] + s[2] * 60], r = Math.hypot(e * 1.42, top / 2) + 1;
-    return mul(ortho(-r, r, -r, r, 60 - r - 2, 60 + r + 2), lookAt(eye, c, [0, 1, 0]));
+  /** how much of the world a texel of the sun's map covers, and the depth of its range (set by `lightVP`) */
+  private shadowTexel = 0.015; private shadowRange = 30;
+  /**
+   * The sun's view: square on to it, over what's in the picture (the slab, or as much of it as the camera sees, and a
+   * little round it for what casts into it), as high as it can be built; its frame stepped a whole texel at a time as the
+   * camera moves, so the shadows' edges don't crawl.
+   */
+  private lightVP(view: View, aspect: number): M4 {
+    const [ax, az, e] = this.area, top = Math.max(4, this.top + 2), s = this.sun;
+    // (what the camera sees on the ground: as wide as the picture, and as deep as its height looking down at el)
+    const seen = Math.hypot(view.zoom * aspect, view.zoom / Math.max(0.3, Math.sin(view.el))) + 2;
+    const all = e * 1.42, fit = seen < all;
+    const c = fit ? [view.target[0], top / 2, view.target[2]] : [ax, top / 2, az];
+    const r = Math.hypot(fit ? seen : all, top / 2) + 1;
+    // (the sun's frame, fixed; the middle put in it, and stepped to the texel)
+    const V = lookAt([s[0] * 60, s[1] * 60, s[2] * 60], [0, 0, 0], [0, 1, 0]);
+    const px = V[0] * c[0] + V[4] * c[1] + V[8] * c[2] + V[12], py = V[1] * c[0] + V[5] * c[1] + V[9] * c[2] + V[13], pz = V[2] * c[0] + V[6] * c[1] + V[10] * c[2] + V[14];
+    const tx = (2 * r) / 2048, sx = Math.round(px / tx) * tx, sy = Math.round(py / tx) * tx, rr = r + 2;
+    this.shadowTexel = tx; this.shadowRange = 2 * rr;
+    return mul(ortho(sx - r, sx + r, sy - r, sy + r, -pz - rr, -pz + rr), V);
   }
   draw(view: View, time: number, dpr: number) {
     const gl = this.gl, cv = this.canvas, w = cv.width, h = cv.height;
     this.targets(w, h);
-    const cam = camera(view, w / h), light = this.lightVP();
+    const cam = camera(view, w / h), light = this.lightVP(view, w / h);
     gl.enable(gl.DEPTH_TEST); gl.enable(gl.CULL_FACE);
     // (the sun's depths)
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.shadowFb); gl.viewport(0, 0, 2048, 2048);
@@ -683,6 +723,7 @@ export class Renderer {
     const U = (n: string) => gl.getUniformLocation(this.main, n);
     gl.uniformMatrix4fv(U('uVP'), false, cam.vp); gl.uniformMatrix4fv(U('uLight'), false, light);
     gl.uniform1f(U('uTime'), time); gl.uniform3fv(U('uSun'), this.sun); gl.uniform3fv(U('uEye'), cam.eye); gl.uniform3fv(U('uDir'), cam.dir); gl.uniform1f(U('uN'), 12); gl.uniform3fv(U('uArea'), this.area); gl.uniform1f(U('uShadows'), this.shadows ? 1 : 0); gl.uniform1f(U('uBleed'), this.bleed ? 1 : 0); gl.uniform4fv(U('uLand'), this.landBox); gl.uniform4fv(U('uBuilt'), this.built);
+    gl.uniform1f(U('uTexel'), this.shadowTexel); gl.uniform1f(U('uDepthRange'), this.shadowRange);
     gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, this.shadowTex); gl.uniform1i(U('uShadow'), 0);
     gl.drawArrays(gl.TRIANGLES, 0, this.count);
     if (this.dcount) { gl.bindVertexArray(this.dvao); gl.drawArrays(gl.TRIANGLES, 0, this.dcount); }
@@ -707,6 +748,8 @@ export class Renderer {
     gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, this.nrm); gl.uniform1i(P('uNrm'), 1);
     gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, this.dep); gl.uniform1i(P('uDepth'), 2);
     gl.uniform2f(P('uPx'), 1 / w, 1 / h); gl.uniform1f(P('uRange'), cam.range); gl.uniform1f(P('uPrint'), this.print ? 1 : 0); gl.uniform1f(P('uDpr'), dpr); gl.uniform1f(P('uBleed'), this.bleed ? 1 : 0);
+    gl.uniform1f(P('uWorldPx'), (2 * view.zoom) / h);
+    gl.uniformMatrix3fv(P('uViewRot'), false, cam.rot);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     return cam;
   }
