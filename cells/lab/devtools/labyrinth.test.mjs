@@ -336,6 +336,32 @@ ok(`walls come out gated or arcaded, now and then (${lively.gates})`, lively.gat
   w.apply({ connect: { from: [0, 2, 5], to: null, path: G.connect([[2, 5], [10, 5]]), follow: true }, born: 1, why: 'way' });
   ok('a way never goes through or over a tree\'s crown', ![0, 1, 2, 3].some((k) => w.stone(k, 6, 5) || w.stair(k, 6, 5) >= 0) && w.plant(0, 6, 5) === PLANT.olive);
 }
+// (combinations: a wall drawn on from an arcade goes on as it, its beat kept; a wall drawn up to an arch lands on a
+// pier; a way across a walled court bows round a tree in it, gated in and out; two walkways cross in a tower)
+{
+  const { PLANT } = await load('../client/labyrinth/model.ts');
+  const ground = (c) => ({ face: 'ground', hit: [-1, ...c], to: [0, ...c] });
+  const st = (w, a, b) => G.stroke(w, ground(a), G.connect([a, b]), null, () => 1, 1, []);
+  const arcade = (w, a, b) => { const op = st(w, a, b); w.apply({ ...(op.note.startsWith('an arcaded') ? op : op.alts.find((x) => x.label === 'an arcaded wall').op), alts: undefined }); };
+  const row = (w, i0, i1) => Array.from({ length: i1 - i0 + 1 }, (_, q) => (w.archway(0, i0 + q, 5) >= 0 ? 'A' : w.stone(0, i0 + q, 5) ? '#' : '.')).join('');
+  let w = new World(1); arcade(w, [1, 5], [6, 5]);
+  let op = st(w, [7, 5], [11, 5]); w.apply({ ...op, alts: undefined });
+  ok('a wall drawn on from an arcade goes on as it, the beat kept through the join', /going on as the wall it meets/.test(op.note) && row(w, 1, 11) === '#A#A#A#A#A#', row(w, 1, 11));
+  w = new World(1); arcade(w, [1, 5], [11, 5]);
+  const had = row(w, 1, 11);
+  op = st(w, [6, 10], [6, 6]); w.apply({ ...op, alts: undefined });
+  ok('a wall drawn up to an arch lands on a pier, the arches either side kept', had[5] === 'A' && /landing on a pier/.test(op.note) && row(w, 1, 11) === had.slice(0, 5) + '#' + had.slice(6), { had, now: row(w, 1, 11) });
+  w = new World(1); for (let i = 4; i <= 8; i++) for (let j = 4; j <= 8; j++) if (i === 4 || i === 8 || j === 4 || j === 8) for (let k = 0; k < 2; k++) w.apply({ add: [[k, i, j, 0]] });
+  w.apply({ plants: [[0, 6, 6, PLANT.olive, 0]] }); w.apply({ pave: [[6, 1]] });
+  op = st(w, [6, 1], [6, 11]); w.apply({ ...op, alts: undefined });
+  ok('a way across a walled court bows round the olive in it, gated in and out', op.took?.includes('bowed') && w.archway(0, 6, 4) >= 0 && w.archway(0, 6, 8) >= 0 && w.plant(0, 6, 6) === PLANT.olive && [...w.reached.values()].some((r) => r.reached), { note: op.note, took: op.took });
+  w = new World(1);
+  const blk = (i0, i1, j0, j1, h) => { for (let i = i0; i <= i1; i++) for (let j = j0; j <= j1; j++) for (let k = 0; k < h; k++) w.apply({ add: [[k, i, j, 0]] }); };
+  blk(6, 6, 6, 6, 5); blk(2, 3, 6, 6, 2); blk(9, 10, 6, 6, 2); blk(6, 6, 2, 3, 2); blk(6, 6, 9, 10, 2);
+  const top = (i, j) => ({ face: 'top', hit: [w.topFrom(0, i, j) - 1, i, j], to: [w.topFrom(0, i, j), i, j] });
+  for (const [a, b] of [[[3, 6], [9, 6]], [[6, 3], [6, 9]]]) { const o = G.stroke(w, top(...a), G.connect([a, b]), top(...b), () => 1, 1, []); w.apply({ ...o, alts: undefined }); }
+  ok('two walkways through one tower cross in it, under a cross vault', w.cross(2, 6, 6) && w.stone(3, 6, 6) && NAV.reaches(NAV.navigate(w), [2, 3, 6], [2, 9, 6]) && NAV.reaches(NAV.navigate(w), [2, 6, 3], [2, 6, 9]));
+}
 // (a pier landing on a walkway below stands aside, slim, and the walkway past it stays open)
 {
   const M = await load('../client/labyrinth/mesh.ts');

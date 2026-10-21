@@ -14,6 +14,7 @@ const NAV = await import('../client/labyrinth/nav.ts');
 const BU = await import('../client/labyrinth/buildings.ts');
 const ME = await import('../client/labyrinth/mesh.ts');
 const CH = await import('../client/labyrinth/character.ts');
+const P = await import('../client/labyrinth/palette.ts');
 const look = (w, k, i, j) => CH.look(w, k, i, j);
 
 const opt = Object.fromEntries(process.argv.slice(2).filter((a) => a.startsWith('--')).map((a) => [a.slice(2).split('=')[0], a.split('=')[1] ?? true]));
@@ -188,6 +189,8 @@ CASES.push(...[
   },
 ].map((c) => ({ group: 'yield', ...c })));
 
+/** taps on the sides of stone ([k, i, j] struck, [i, j] the cell before it), each read and laid */
+function sides(w, list) { let last = null; for (const [k, i, j, x, z] of list) { const op = G.touch(w, { face: 'side', hit: [k, i, j], to: [k, x, z] }, 1); if (op && !('refused' in op)) { w.apply({ ...op, alts: undefined }, 1); last = op; } } return last && { ...last, laid: true }; }
 /** a ring of wall round i0..i1, j0..j1 (a court's), `h` high */
 const ring = (w, i0, i1, j0, j1, h) => { const add = []; for (let i = i0; i <= i1; i++) for (let j = j0; j <= j1; j++) if (i === i0 || i === i1 || j === j0 || j === j1) for (let k = 0; k < h; k++) add.push([k, i, j, 0]); w.apply({ add, born: 0, why: 'wall' }); };
 /**
@@ -233,6 +236,70 @@ CASES.push(...[
   },
 ].map((c) => ({ group: 'reactions', ...c })));
 
+/** a stroke read and laid, the kind of wall it makes chosen by label if `kind` (an alt's label) */
+const lay = (w, pts, kind) => { let op = stroke(w, pts); if (op && kind) op = op.note?.startsWith(kind) ? op : (op.alts ?? []).find((a) => a.label === kind)?.op ?? op; if (op && !op.refused) w.apply({ ...op, alts: undefined }); return op; };
+/** a piece in hand, put where it's touched */
+const put = (w, hand, c) => { const op = P.place(w, hand, pick(w, c), 0, 1); if (op) w.apply(op, 1); return op && { ...op, laid: true }; };
+/**
+ * Combinations: an arcade met, water with a terrace, and the reactions above with a third thing.
+ */
+CASES.push(...[
+  {
+    name: 'arcade on: a wall drawn on from the end of an arcade',
+    best: 'the arcade goes on, its rhythm kept across the join (no two arches side by side, no gap in the beat)',
+    set(w) { lay(w, [[1, 5], [6, 5]], 'an arcaded wall'); },
+    pts: [[7, 5], [11, 5]],
+  },
+  {
+    name: 'arcade × wall: a wall drawn up to the middle of an arcade',
+    best: 'it lands on a pier: the bay it meets made solid, the arches either side kept',
+    set(w) { lay(w, [[1, 5], [11, 5]], 'an arcaded wall'); },
+    pts: [[6, 10], [6, 6]],
+  },
+  {
+    name: 'water × terrace: a basin let into a terrace at its edge, a pool below',
+    best: 'the basin spills over the edge into the pool: water with levels',
+    set(w) { S.block(w, 6, 9, 4, 7, 2); S.pools(w, [[5, 5], [4, 5], [5, 6], [4, 6]]); },
+    act: (w) => put(w, 'pool', [6, 5]),
+  },
+  {
+    name: 'terrace × water: a terrace drawn out over a pool',
+    best: 'the terrace stands out over the water on arches, the pool kept under it',
+    set(w) { S.block(w, 7, 9, 4, 7, 2); S.pools(w, [[5, 5], [4, 5], [5, 6], [4, 6], [6, 5], [6, 6]]); },
+    act: (w) => sides(w, [[1, 7, 5, 6, 5], [1, 7, 6, 6, 6], [1, 6, 5, 5, 5], [1, 6, 6, 5, 6]]),
+  },
+  {
+    name: 'court × way × tree: a way across a walled court, an olive in its middle',
+    best: 'gates in and out, the way bowing round the tree in the court',
+    set(w) { ring(w, 4, 8, 4, 8, 2); S.tree(w, 6, 6); },
+    act: (w) => fromPlace(w, [[6, 1], [6, 11]]),
+  },
+  {
+    name: 'court × way × way: a second way across a court, crossing the first',
+    best: 'four gates, the two ways crossing in the court\'s middle',
+    set(w) { ring(w, 4, 8, 4, 8, 2); const op = fromPlace(w, [[6, 1], [6, 11]]); if (op && !op.refused) w.apply({ ...op, alts: undefined }); },
+    act: (w) => fromPlace(w, [[1, 6], [11, 6]]),
+  },
+  {
+    name: 'tower × bridge × bridge: two walkways through one tower, crossing in it',
+    best: 'both pass through the tower, crossing inside it under a cross vault',
+    set(w) { S.block(w, 6, 6, 6, 6, 5); S.block(w, 2, 3, 6, 6, 2); S.block(w, 9, 10, 6, 6, 2); S.block(w, 6, 6, 2, 3, 2); S.block(w, 6, 6, 9, 10, 2); const op = stroke(w, [[3, 6], [9, 6]]); if (op && !op.refused) w.apply({ ...op, alts: undefined }); },
+    pts: [[6, 3], [6, 9]],
+  },
+  {
+    name: 'roof × stair × wall: a stair beside a wall, up on to a roofed house',
+    best: 'hung from the wall, arriving on a terrace let into the roof',
+    set(w) { S.wall(w, 1, 5, 4, 3); S.block(w, 6, 9, 4, 7, 2); },
+    pts: [[2, 5], [6, 5]],
+  },
+  {
+    name: 'alongside × tree: a way along the inside of a court\'s wall, an olive on its line',
+    best: 'a gallery along the wall, giving way round the tree',
+    set(w) { ring(w, 2, 10, 2, 10, 2); w.apply({ pave: [[3, 3]], born: 0, why: 'way' }); S.tree(w, 6, 3); },
+    pts: [[3, 3], [9, 3]],
+  },
+].map((c) => ({ group: 'combinations', ...c })));
+
 /** whether each case came to what it would be at its best (`before`: the setting's stone) */
 const stairIn = (w, before) => before.filter((c) => w.stair(...c) >= 0 || w.passage(...c) >= 0).length;
 const BEST = {
@@ -263,6 +330,15 @@ const BEST = {
   alongside: (w) => [5, 6, 7, 8].some((i) => look(w, 0, i, 4)?.pergola || w.dressed(0, i, 4)?.pergola || w.span(1, i, 4)),
   'bridge × bridge': (w) => { const nav = BU.walkable(w); return NAV.reaches(nav, [2, 2, 5], [2, 6, 9]) && NAV.reaches(nav, [2, 6, 2], [2, 10, 5]); },
   retrace: (w) => [3, 4, 5, 6, 7, 8, 9].filter((i) => w.stone(1, i, 5)).length >= 5,
+  'arcade on': (w) => { const a = (i) => w.archway(0, i, 5) >= 0; const xs = [2, 3, 4, 5, 6, 7, 8, 9, 10].map(a); return [7, 8, 9, 10].filter(a).length >= 2 && xs.every((x, q) => q === 0 || !(x && xs[q - 1])) && xs.every((x, q) => q < 2 || x || xs[q - 1] || xs[q - 2]); },
+  'arcade × wall': (w) => w.archway(0, 6, 5) < 0 && w.stone(0, 6, 5) && w.stone(0, 6, 7) && [2, 3, 4, 5, 7, 8, 9, 10].filter((i) => w.archway(0, i, 5) >= 0).length >= 3 && [5, 7].some((i) => w.stone(0, i, 5)),
+  'water × terrace': (w) => w.falls.some((f) => f.into === 'water'),
+  'terrace × water': (w) => [[5, 5], [6, 5], [5, 6], [6, 6]].filter(([i, j]) => w.pool(i, j)).length >= 3 && [[5, 5], [6, 5], [5, 6], [6, 6]].filter(([i, j]) => w.block(1, i, j) || w.block(0, i, j)).length >= 2 && [[5, 5], [6, 5], [5, 6], [6, 6]].every(([i, j]) => !w.stone(0, i, j) || w.archway(0, i, j) >= 0),
+  'court × way × tree': (w) => w.plant(0, 6, 6) >= 0 && [[6, 4], [6, 8]].every(([i, j]) => w.archway(0, i, j) >= 0) && [...w.reached.values()].some((r) => r.reached),
+  'court × way × way': (w) => [[6, 4], [6, 8], [4, 6], [8, 6]].every(([i, j]) => w.archway(0, i, j) >= 0),
+  'tower × bridge × bridge': (w) => w.archway(2, 6, 6) >= 0 && w.stone(3, 6, 6) && w.cross(2, 6, 6) && NAV.reaches(BU.walkable(w), [2, 3, 6], [2, 9, 6]) && NAV.reaches(BU.walkable(w), [2, 6, 3], [2, 6, 9]),
+  'roof × stair × wall': (w) => w.flights.some((f) => f.carriage === 'hung') && BU.buildings(w).list.some((b) => b.roof && b.terrace?.length),
+  'alongside × tree': (w) => w.plant(0, 6, 3) >= 0 && [[3, 4, 5], [7, 8, 9]].every((is) => is.some((i) => look(w, 0, i, 3)?.pergola)) && [...w.reached.values()].some((r) => r.reached),
   'beside + stair': (w) => { const nav = BU.walkable(w), [f, g] = w.flights; if (!f || !g) return false; const hk = (x) => x.cells[x.cells.length - 1]; return NAV.reaches(nav, hk(f), g.cells[0]) && Math.abs(hk(f)[1] - g.cells[0][1]) + Math.abs(hk(f)[2] - g.cells[0][2]) <= 3; },
 };
 /** what a world is, to compare before and after: each wall cell's state, the walked places, the flights */
@@ -290,7 +366,7 @@ for (const C of CASES) {
   const walkedTop = [...s1.tops].filter((v) => !s0.tops.has(v));
   const flights = s1.flights.slice(f0), hung = flights.filter((f) => f.carriage === 'hung' || f.wall >= 0);
   const how = [];
-  if (changed.length) how.push(`the wall changed in ${changed.length} cell${changed.length > 1 ? 's' : ''} (${[...new Set(changed.map((c) => (w.archway(...c) >= 0 ? 'arched' : !w.stone(...c) ? 'cut' : w.stair(...c) >= 0 ? 'a stair' : 'dressed')))].join(', ')})`);
+  if (changed.length) how.push(`the wall changed in ${changed.length} cell${changed.length > 1 ? 's' : ''} (${[...new Set(changed.map((c) => (w.archway(...c) >= 0 ? 'arched' : JSON.parse(s0.cells.get(key(...c)))[2] >= 0 && w.stone(...c) ? 'filled' : !w.stone(...c) ? 'cut' : w.stair(...c) >= 0 ? 'a stair' : 'dressed')))].join(', ')})`);
   if (walkedTop.length) how.push(`its top walked (${walkedTop.length} cell${walkedTop.length > 1 ? 's' : ''})`);
   if (hung.length) how.push('a flight hung from it');
   if (flights.length > 1) how.push(`${flights.length} flights`);

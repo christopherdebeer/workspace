@@ -95,8 +95,33 @@ What was added, all general:
 - **A walkway passes through the hand's stone** (`realise`): a level way at height meeting a mass up to three cells thick, with stone over it, goes through it as an arched passage instead of stopping or climbing over. A gesture bridge whose line meets such a mass now prefers that, going round offered (and a short tower whose top it would merely take off isn't pierced: it goes round).
 - **A gallery accompanies a wall** (the rules' dressing): a way laid along the inside of a court's wall for three cells or more gets a pergola over it.
 
-Together: **27 of 28 at their best as laid, the last a reading away.**
+## Combinations: arcades met, water with levels, three at once
+
+The fourth set (`--set=combinations`): an arcade drawn on from and drawn up to, water and a terrace, and the reactions above with a third thing.
+
+![combinations: nine cases](labyrinth/atlas-combinations.jpg)
+
+| Case | At its best | What it is now | Best? |
+|---|---|---|---|
+| **arcade on**: a wall drawn on from the end of an arcade | the arcade goes on, its beat kept across the join | an arcaded wall going on as the one it meets; the old end pier, an end no longer, opened again in the beat | ✓ |
+| **arcade × wall**: a wall drawn up to the middle of an arcade | it lands on a pier, the arches either side kept | the arch it met filled solid (its way would have come out into the wall's end), the rest kept | ✓ |
+| **water × terrace**: a basin let into a terrace's edge, a pool below | it spills into the pool | a spout over the edge into the pool | ✓ |
+| **terrace × water**: the terrace pushed out over a pool | it stands over the water on arches, the pool kept | carried on an arch, the pool under it | ✓ |
+| **court × way × tree**: a way across a walled court, an olive in its middle | gates in and out, the way bowing round the tree | so (it climbed over the court's walls before: nothing let it go round the tree) | ✓ |
+| **court × way × way**: a second way across the court, crossing the first | four gates, crossing in the middle | so | ✓ |
+| **tower × bridge × bridge**: two walkways through one tower | both through it, crossing under a cross vault | so (the second went round before) | ✓ |
+| **roof × stair × wall**: a stair beside a wall up to a roofed house | hung from the wall, on to a terrace in the roof | so | ✓ |
+| **alongside × tree**: a way along a court's wall, an olive on its line | a gallery along the wall, giving way round the tree | a pergola each side of the tree, the way bowed round it | ✓ |
+
+What was added, all general:
+
+- **A wall reconciles with the wall it goes on from** (`runOf`, gesture.ts `wall`): drawn on from the end of a wall, in line with it, it takes that wall's kind (thin, arcaded, gated, plain) and its beat: an arcade's arches every other cell counted from its last, a gated wall's gates six apart. An arcade's end pier, an end no longer, is opened again so the arches run on through.
+- **A wall lands on a pier**: drawn up to a gate or an arch square to it, where the arch's way would come out into the wall's end, that bay's filled solid. A gate a way was drawn through is never filled.
+- **A way bows round a tree before it's followed**: drawn through a tree, it goes a cell out and back round it there, so it yields to the tree wherever it is, in a court or out, and opens gates in walls as drawn.
+- **A walkway crosses another inside stone**: a bridge through a tower that already has a walkway through it passes through too, and the two make a crossing under a cross vault (`World.crossings`).
+
+Together: **36 of 37 at their best as laid, the last a reading away.**
 
 ## Next
 
-Pairings still to map, by how much they'd exercise what's here: **arcade × wall** (dissolve, reconcile rhythms), **water × terrace** (water with levels), and three-way combinations: each of the above with a third thing (a tree, a crossing way, another stair, a roof).
+What the atlas hasn't mapped yet: a stair meeting an arcade (through a bay, or up beside its piers), water and a court (a channel along a way, a fountain at a crossing), and combinations of combinations: one of these settings met by two strokes in different orders, to see whether the result depends on which came first.

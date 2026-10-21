@@ -598,7 +598,7 @@ function read(w: World, start: Pick, path: Array<[number, number]>, end: Pick | 
   if (spans) alts.push({ label: great ? 'a bridge on an arcade' : 'a bridge on one great arch', op: make(path2, !great, great ? 'a bridge, on an arcade' : 'a bridge, on one great arch') });
   // (at one height, and something in the way: round it, the way through it offered. Unless it goes through as drawn,
   // a passage through what's in the way at that height (a tower a cell to three thick): then through, round offered)
-  const piercing = !!to && to[0] === h0 && reaches(op) && (() => { const v = new World(w.seed, w.landSeed); v.ops = [...w.ops, op]; v.rebuild(); return path2.some(([i, j]) => v.archway(h0, i, j) >= 0 && w.archway(h0, i, j) < 0 && w.stone(h0, i, j)); })();
+  const piercing = !!to && to[0] === h0 && reaches(op) && (() => { const v = new World(w.seed, w.landSeed); v.ops = [...w.ops, op]; v.rebuild(); return path2.some(([i, j]) => v.archway(h0, i, j) >= 0 && w.stone(h0, i, j) && (w.archway(h0, i, j) < 0 || v.cross(h0, i, j))); })();
   if (piercing) {
     const round0 = around(w, h0, path2, to!);
     if (round0) alts.push({ label: 'a bridge round it', op: { ...make(round0, false, 'a bridge, round what\'s in the way'), took: ['routed-round'] } });
@@ -664,6 +664,16 @@ function way(w: World, h0: number, cells: Array<[number, number]>, to: Cell | nu
   }
   if (!to) while (cells.length > 2) { const [i, j] = cells[cells.length - 1]; if (standing(w, w.ground(i, j), i, j)) break; cells = cells.slice(0, -1); }
   if (!to && cells.length < n0 && !lib.includes('from-bank')) lib.push('trimmed');
+  // (drawn through a tree on the ground: bowed round it there, a cell out and back, before it's followed, so it gives
+  // way to the tree wherever it is, in a court or out (yield); the rest of it as drawn)
+  const crowned = (i: number, j: number) => w.crown(w.ground(i, j), i, j);
+  for (let q = 1; q < cells.length - 1; q++) {
+    if (!crowned(...cells[q])) continue;
+    let e = q; while (e + 1 < cells.length - 1 && crowned(...cells[e + 1])) e++;
+    const sub = detour(w, cells.slice(q - 1, e + 2), new Set(cells.slice(q, e + 1).map(([i, j]) => `${i}.${j}`)), 1);
+    if (sub && !sub.some(([i, j]) => crowned(i, j))) { cells = [...cells.slice(0, q - 1), ...sub, ...cells.slice(e + 2)]; q += sub.length - 3; if (!lib.includes('bowed')) lib.push('bowed'); }
+    else q = e;
+  }
   const last = cells[cells.length - 1];
   const dest: Cell = to ?? [w.ground(last[0], last[1]), last[0], last[1]];
   const path = cells.slice(0, -1);
@@ -856,6 +866,23 @@ const DIR = (a: [number, number], b: [number, number]) => DIRS.findIndex(([x, z]
 
 /** a wall along the stroke (on the stone, from the stone to the stone), as the rules choose it, the others offered: a
  * wall's kind; a ring of it, where the stroke came round, walling in a court */
+/** the wall a stroke's drawn on from: in line with it behind its first cell, a cell across; its kind (thin; arcaded,
+ * arches every other cell; gated, any; plain) and how many cells back its last arch is (`since`) */
+function runOf(w: World, cells: Array<[number, number]>): { kind: 'plain' | 'gated' | 'arcaded' | 'thin'; since: number; di: number; dj: number } | null {
+  if (cells.length < 2) return null;
+  const [i0, j0] = cells[0], di = i0 - cells[1][0], dj = j0 - cells[1][1];
+  if (Math.abs(di) + Math.abs(dj) !== 1) return null;
+  const seq: Array<'arch' | 'solid' | 'thin'> = [];
+  for (let q = 1; q <= 12; q++) {
+    const x = i0 + di * q, z = j0 + dj * q, g = w.ground(x, z);
+    if (!inGrid(x, z) || !w.stone(g, x, z) || w.stone(g, x + dj, z + di) || w.stone(g, x - dj, z - di)) break;
+    seq.push(w.archway(g, x, z) >= 0 ? 'arch' : w.thin.has(key(g, x, z)) ? 'thin' : 'solid');
+  }
+  if (!seq.length) return null;
+  const arches = seq.map((c, q) => (c === 'arch' ? q : -1)).filter((q) => q >= 0);
+  const kind = seq[0] === 'thin' ? 'thin' : arches.length >= 2 && arches.every((q, m) => m === 0 || q - arches[m - 1] === 2) ? 'arcaded' : arches.length ? 'gated' : 'plain';
+  return { kind, since: arches.length ? arches[0] : seq.length, di, dj };
+}
 function wall(w: World, cells: Array<[number, number]>, closed: boolean, born: (i: number, j: number) => number, resting: (i: number, j: number) => boolean): Op | null {
   // (drawn through a tree, or across water: bowed round it, a cell out and back, what it meets kept (yield); and across
   // water, carried over it on an arch, the other reading)
@@ -881,10 +908,27 @@ function wall(w: World, cells: Array<[number, number]>, closed: boolean, born: (
   const straight = (q: number) => (closed || (q > 0 && q < n - 1)) && prev(q)[0] - at(q)[0] === at(q)[0] - next(q)[0] && prev(q)[1] - at(q)[1] === at(q)[1] - next(q)[1];
   type Kind = 'plain' | 'gated' | 'arcaded' | 'thin' | 'court' | 'ring';
   const label: Record<Kind, string> = { plain: 'a wall', gated: 'a gated wall', arcaded: 'an arcaded wall', thin: 'a thin wall', court: 'a court, walled round', ring: 'a ring of wall' };
+  // (drawn on from the end of a wall, in line with it: it goes on as that wall goes (reconcile), its kind and its beat
+  // kept across the join: an arcade's arches every other cell counted from its last, a gated wall's gates six apart)
+  const on = closed ? null : runOf(w, cells);
+  const beat = (q: number) => straight(q) || (q === 0 && !!on);
+  // (and drawn up to a gate or an arcade's arch square to it, its end where the arch's way comes out: it lands on a
+  // pier, that bay filled solid, the arches either side kept. Never a way's gate the hand made: that's kept open)
+  const lands: Cell[] = [];
+  if (!closed) for (const [c, d] of [[cells[n - 1], cells[n - 2]], [cells[0], cells[1]]] as Array<[[number, number], [number, number] | undefined]>) {
+    if (!d) continue;
+    const a = c[0] - d[0], b = c[1] - d[1], x = c[0] + a, z = c[1] + b;
+    if (!inGrid(x, z) || Math.abs(a) + Math.abs(b) !== 1 || cells.some((e) => e[0] === x && e[1] === z)) continue;
+    if (w.archway(G(x, z), x, z) === (a !== 0 ? 0 : 1) && !w.passages.has(key(G(x, z), x, z))) lands.push([G(x, z), x, z]);
+  }
   const build = (kind: Kind): Op => {
     const gate = new Set<number>();
-    if (kind === 'gated') for (let q = 2; q < n - 1; q += 6) if (straight(q)) gate.add(q);
-    if (kind === 'arcaded') for (let q = closed ? 0 : 1; q < (closed ? n : n - 1); q += 2) if (straight(q)) gate.add(q);
+    const cont = !!on && on.kind === kind;
+    if (kind === 'gated') for (let q = cont ? Math.max(0, 5 - on!.since) : 2; q < n - 1; q += 6) if (beat(q)) gate.add(q);
+    if (kind === 'arcaded') for (let q = cont ? (on!.since % 2 + 1) % 2 : closed ? 0 : 1; q < (closed ? n : n - 1); q += 2) if (cont ? beat(q) : straight(q)) gate.add(q);
+    // (an arcade's end pier, no longer its end: opened again in the beat, so the arches run on through the join)
+    const reopen: Array<[number, number, number, number, number]> = [];
+    if (cont && kind === 'arcaded') for (let m = on!.since - 2; m >= 0; m -= 2) { const x = cells[0][0] + on!.di * (m + 1), z = cells[0][1] + on!.dj * (m + 1); reopen.push([G(x, z), x, z, on!.di ? 1 : 0, born(x, z)]); }
     if (kind === 'court') { const q = Array.from({ length: n }, (_, q2) => q2).find(straight); if (q !== undefined) gate.add(q); }
     if (kind !== 'thin' && kind !== 'arcaded') cells.forEach(([i, j], q) => { if (resting(i, j) && straight(q)) gate.add(q); });
     const add: Array<[number, number, number, number]> = [], arches: Array<[number, number, number, number, number]> = [], walls: Array<[number, number, number, number, number]> = [];
@@ -921,10 +965,13 @@ function wall(w: World, cells: Array<[number, number]>, closed: boolean, born: (
         else add.push([k, i, j, born(i, j)]);
       }
     });
-    const note = label[kind] + (gate.size && kind !== 'gated' && kind !== 'arcaded' && kind !== 'court' ? ', a gate where you paused' : '');
-    return { add, ...(arches.length ? { arches } : {}), ...(walls.length ? { walls } : {}), why: 'wall', note, reading: note };
+    const landed = kind === 'thin' || !lands.length ? [] : lands;
+    for (const [k, i, j] of landed) add.push([k, i, j, born(i, j)]);
+    const note = label[kind] + (gate.size && kind !== 'gated' && kind !== 'arcaded' && kind !== 'court' ? ', a gate where you paused' : '') + (cont ? ', going on as the wall it meets' : '') + (landed.length ? ', landing on a pier' : '');
+    arches.push(...reopen);
+    return { add, ...(arches.length ? { arches } : {}), ...(walls.length ? { walls } : {}), ...(landed.length ? { cut: landed.map(([k, i, j]) => [k, i, j] as Cell) } : {}), why: 'wall', note, reading: note };
   };
-  const first: Kind = closed ? 'court' : wallKind(w, cells[0][0], cells[0][1]);
+  const first: Kind = closed ? 'court' : on?.kind ?? wallKind(w, cells[0][0], cells[0][1]);
   const kinds: Kind[] = closed ? ['court', 'ring', 'arcaded', 'thin'] : [first, ...(['plain', 'gated', 'arcaded', 'thin'] as Kind[]).filter((k) => k !== first)];
   const op = build(first);
   const alts: Alt[] = kinds.slice(1).map((k) => ({ label: label[k] === label.arcaded && closed ? 'an arcaded court' : label[k], op: build(k) }));
