@@ -25,6 +25,12 @@ export interface Experiment {
 
 export const EXPERIMENTS: Experiment[] = [
   {
+    id: 'cloudfold', title: 'Cloudfold', group: 'Contemplation',
+    blurb: 'Keep folding space and hiding symmetry until cloud happens. An evolving volumetric KIFS cloud: orbit, gather, reveal the folds, and move the light from day through afterglow to storm.',
+    page: 'static/cloudfold.html', preview: 'preview&seed=1947', readme: 'static/cloudfold.md',
+    presets: [{ label: 'daylight', query: 'seed=1947' }, { label: 'afterglow', query: 'seed=1947&light=dusk' }, { label: 'storm', query: 'seed=819&light=storm&fullness=.8' }, { label: 'reveal the folds', query: 'seed=1947&conceal=0&still' }],
+  },
+  {
     id: 'labyrinth', title: 'Labyrinth', group: 'Play',
     blurb: 'Architecture that follows the hand, on a piece of land: shelves, a ravine with a stream, an outcrop (or the flat travertine slab). Five brushes: auto reads gestures (tap raises, trace builds a wall, reaches out or climbs) and the stone works out what it takes to stand; a piece brush for one thing exactly, or dressing (brick, marble, moss, ivy, parapets, lanterns, pots); take; and select, to take up a piece or a whole arcade, flight or tower and read it another way. Arches and arcades under what has nothing beneath it, courtyards where walls close round the ground. Kept as a print, too.',
     page: 'static/labyrinth.html', preview: 'preview', readme: 'static/labyrinth.md',

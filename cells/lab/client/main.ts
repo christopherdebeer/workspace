@@ -28,6 +28,7 @@ const experiments: Record<string, () => Promise<unknown>> = {
   taohua: () => import('./taohua/main'),
   fab: () => import('./fab/main'),
   labyrinth: () => import('./labyrinth/main'),
+  cloudfold: () => import('./cloudfold/main'),
 };
 
 const id = document.documentElement.dataset.exp ?? '';
