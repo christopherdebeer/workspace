@@ -94,6 +94,20 @@ Optimisation waits on these numbers from the phone.
   - now and then a door at the foot of a house has an awning of striped canvas with its valance.
 - **On the phone:** shadows are now hardware-filtered (13 fetches instead of 34). A long press on the title runs a profile sweep that times the drawing with each costly part turned off in turn: sun map, multisampling, contact shade, leaf cutting, three-quarter and half resolution. The result is included in the telemetry copied by a double tap.
 
+## Stage 8: from the picture to the page
+
+![The four views with the softer ramp](labyrinth/look-bleed4.jpg)
+
+The render no longer switches to the paper over a narrow ragged band. It goes over a broad one, by the drawing's reach:
+
+1. **Rendered:** near what's built.
+2. **Washed:** the render laid as a watercolour wash, lighter and less coloured. Its edge is crisp, granulated and pools a little darker, as a wash dries. The ink marks lie over it.
+3. **Hatched:** in the wash's shade, the pen's hatching, crossed where it's darker. It's laid in the world so it stays on what it shades, and left out where the lines would crowd.
+4. **Marks:** the marks alone on the paper.
+
+- **Things on the land** (rocks, shrubs, trees) and anything built out toward its edge are washed the same way. Each takes the ramp at its foot, so a crown is never torn in two.
+- **Ink lines:** how far along the ramp each pixel is gets handed to the post pass, which brings the lines up as the drawing takes over. They get heavier and are drawn at creases as well as folds, and on the land's ledges and banks too, broken.
+
 ## Next
 
 1. **Terrain, further:**

@@ -476,6 +476,34 @@ void main() {
     c = mix(vec3(.4, .5, .51), vec3(.93, .95, .94), smoothstep(.38, .78, st)) * (.82 + .18 * sh);
   }
   if (mat == 2 && vTone > .99) c = vec3(.93, .94, .91) * (.86 + .14 * noise(vPos * 40. + uTime));
+  // (the ramp from the picture to the page, by the drawing's reach: fully rendered near what's built; then, over a broad
+  // band, the render as a wash (lighter, less coloured, laid to a crisp edge that granulates and pools a little darker,
+  // as a watercolour dries) with the ink laid over it; then the marks alone on the paper. \`drawn\`: how far along it
+  // this is (0 the render, 1 the page), handed to the post pass so its lines come up as the drawing takes over)
+  vec3 PAP = vec3(.94, .91, .85);
+  float drawn = 0., washA = 1.;
+  vec3 washC = c;
+  if (uBleed > .5 && !sel && !fur) {
+    // (the land's edge ragged at every scale; a thing on it by the broad shape only, so it isn't torn in two)
+    bool onIt = mat == 5 && moss;
+    vec3 at = vPos;
+    if (vU >= 4. && vU < 5.) { float at0 = floor((vU - 4.) * 10000.); at = vec3(mod(at0, 64.) - 29.5, 0., floor(at0 / 64.) - 29.5); }
+    else if (vU >= 3. && vU < 4.) at = vec3(floor(vPos.x) + .5, 0., floor(vPos.z) + .5);
+    float t = reach(at) + (fbm(vec3(at.xz * .9, 5.)) - .5) * .35 + (onIt ? (noise(vPos * 3.1) - .5) * .12 : 0.);
+    drawn = 1. - smoothstep(.42, .88, t);
+    float wv = t + (onIt ? (noise(vPos * 4.5) - .5) * .1 + (noise(vPos * 13.) - .5) * .04 : 0.);
+    washA = smoothstep(.16, .19, wv);
+    float L = dot(c, vec3(.3, .55, .15));
+    washC = mix(PAP, mix(vec3(L), c, .8), .58) * (1. - .13 * washA * (1. - smoothstep(.19, .27, wv))) * (.97 + .05 * noise(vPos * 31.));
+    // (and over the wash, in the shade, the pen's hatching: one way where it's in shade, crossed where it's darker; laid
+    // in the world so it stays on what it shades, and left out where its lines would crowd together)
+    float h1 = (vPos.x - vPos.z) * 9. + vPos.y * 6., h2 = (vPos.x + vPos.z) * 9. - vPos.y * 6.;
+    float f1 = max(fwidth(h1), 1e-4), f2 = max(fwidth(h2), 1e-4);
+    float l1 = (1. - smoothstep(.35, 1.1, min(fract(h1), 1. - fract(h1)) / f1)) * (1. - smoothstep(.25, .45, f1));
+    float l2 = (1. - smoothstep(.35, 1.1, min(fract(h2), 1. - fract(h2)) / f2)) * (1. - smoothstep(.25, .45, f2));
+    float brk = step(.25, noise(vec3(h1 * .35, h2 * .35, 3.)));
+    washC *= 1. - .5 * max(l1 * smoothstep(.6, .38, L), l2 * smoothstep(.4, .24, L)) * brk;
+  }
   // (the land, held back: most of the way to its own pale, unlit, the shade still on it)
   bool land = mat == 5 && moss;
   if (land && uBleed > .5) {
@@ -485,7 +513,7 @@ void main() {
     // built and toward the land's edge there are fewer and fewer of them, each as dark as ever: the land isn't faded
     // out, it's drawn less, till there's only the page)
     float R = reach(vPos);
-    vec3 PAP = vec3(.94, .91, .85), GREY = vec3(.62, .58, .53), g = PAP;
+    vec3 GREY = vec3(.62, .58, .53), g = PAP;
     float up = n.y, rough = noise(vPos * vec3(1.7, 2.3, 1.7)) * .6 + noise(vPos * 6.) * .4;
     float cut = .41 - (up + (rough - .5) * .14), cliff = smoothstep(-.09, .09, cut), steep = smoothstep(.97, .7, up);
     vec2 fall = normalize(n.xz + 1e-4), con = vec2(-fall.y, fall.x);
@@ -514,11 +542,9 @@ void main() {
     float brush = noise(vec3(vPos.x * 1.1, vPos.z * 9., 2.)) * .75 + noise(vec3(vPos.x * 4., vPos.z * 24., 5.)) * .25;
     float lay = smoothstep(1. - sR * 1.2, 1.05 - sR * 1.2, brush);
     g = mix(g, GREY, .42 * lay * smoothstep(.05, .3, shade) * (1. - .6 * cliff));
-    // (near what's built, the land as the light finds it, whole; further out the drawing of it in marks; between, the
-    // painted land breaking up raggedly into the marks, as a wash dries out at its edge)
-    float rag = fbm(vec3(vPos.xz * .9, 5.)) * .55 + noise(vPos * 3.1) * .2;
-    float lit = smoothstep(.55, .62, R * 1.1 + rag - .55);
-    c = mix(g, c, lit);
+    // (near what's built, the land as the light finds it, whole; then the wash of it with the marks over it; further
+    // out the marks alone)
+    c = mix(mix(g, washC * (g / PAP), washA), c, 1. - drawn);
   }
   else if (uBleed > .5 && mat == 2 && !fur) {
     // (the stream, away from what's built: its water laid in broken strokes along it, then only a line or two)
@@ -529,10 +555,13 @@ void main() {
     c = mix(mix(vec3(.94, .91, .85), vec3(.2, .22, .23), lines * .55 * (1. - wet) * smoothstep(0., .25, R + .15)), c, wet);
   }
   else if (land) c = mix(c, base * (.86 + .14 * sh) * (.92 + .08 * vAo), .55);
+  // (what stands out on the land (a rock, a shrub, a tree), and anything built out toward its edge: washed the same way)
+  if (uBleed > .5 && !land && !sel && !fur && mat != 2) c = mix(mix(PAP, washC, washA), c, 1. - drawn);
   // (what's taken up: a faint warm tint; its outline is drawn after, where the mask changes)
   if (sel) c = mix(c, c * vec3(1.1, .98, .84) + vec3(.05, .025, 0.), .6);
   oCol = vec4(c, 1.);
-  oNrm = vec4(n * .5 + .5, sel ? 1. : land ? .25 : fur ? .6 : .5);
+  // (its kind for the post pass, and within land's and the rest's how far it's drawn: land .12–.38, the rest .41–.54)
+  oNrm = vec4(n * .5 + .5, sel ? 1. : land ? .12 + .26 * drawn : fur ? .6 : .41 + .13 * drawn);
 }`;
 const SHADOW_FS = `#version 300 es
 precision highp float;
@@ -613,7 +642,14 @@ void main() {
   // (as it is: barely a line, only where the depth folds; never on the land itself, whose folds are its own)
   // (not against the sky: the table's far edge isn't drawn)
   float onLand = uBleed > .5 ? step(m, .4) : step(.1, m) * step(m, .4);
-  o = vec4(mix(mix(c, ink * 1.6, max(smoothstep(.04, .14, lap) * (furOn > .5 ? .4 : .16) * (1. - step(.5, skyN)) * (1. - onLand), rim * .8)), vec3(.69, .36, .12), ring * .9), 1.);
+  // (as the drawing takes over from the render (how far, from the mask), the lines come up: heavier, and at creases as
+  // well as folds; on the land too, its ledges and banks, a little lighter, broken)
+  float drawn = uBleed < .5 ? 0. : m > .405 && m < .545 ? clamp((m - .41) / .13, 0., 1.) : m > .1 && m < .4 ? clamp((m - .12) / .26, 0., 1.) : 0.;
+  float fold = smoothstep(.04, .14, lap), crease = smoothstep(.3, .6, turn);
+  float wt = (furOn > .5 ? .4 : mix(.16, .8, drawn)) * fold * (1. - onLand) + crease * drawn * .6 * (1. - onLand);
+  float brk = step(.35, fract(sin(dot(floor(q / (5. * uDpr)), vec2(12.9898, 78.233))) * 43758.5453));
+  wt = max(wt, onLand * smoothstep(.15, .6, drawn) * max(fold, smoothstep(.1, .3, turn)) * .6 * brk);
+  o = vec4(mix(mix(c, ink * 1.6, max(wt * (1. - step(.5, skyN)), rim * .8)), vec3(.69, .36, .12), ring * .9), 1.);
   // (bleeding: the same paper under everything, its edge a shade darker, so the ground and the page are one sheet)
   if (uBleed > .5) o.rgb *= 1. - .06 * smoothstep(.35, .75, length((vUv - .5) * vec2(1.2, 1.)));
 }`;
