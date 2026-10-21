@@ -595,6 +595,19 @@ export class World {
         h--;
         this.stairs.set(key(h, i, j), { d: dirTo([i, j], prev), born: born + s * 0.05 }); this.laid.add(key(h, i, j)); cells.push([h, i, j]); stairAt.set(key(h, i, j), s);
       } else {
+        // (through the hand's stone at the height it walks, straight, a cell to three thick and clear where it comes out:
+        // a passage through it, the stone kept over it (a walkway through a tower))
+        const solid = (q: number) => { const [x, z] = along[q]; return this.mass.has(key(h, x, z)) && !this.laid.has(key(h, x, z)) && !this.stairs.has(key(h, x, z)) && this.stone(h - 1, x, z) && this.mass.has(key(h + 1, x, z)); };
+        const dirAt = (q: number) => { const a = q > 0 ? along[q - 1] : c.path[0]; return `${along[q][0] - a[0]}.${along[q][1] - a[1]}`; };
+        if (taken(h, i, j) && solid(s) && h > this.ground(i, j)) {
+          let e = s; while (e + 1 < along.length && e - s < 3 && solid(e + 1) && dirAt(e + 1) === dirAt(s)) e++;
+          const out = along[e + 1];
+          if (e - s < 3 && out && dirAt(e + 1) === dirAt(s) && !taken(h, out[0], out[1]) && !step.has(e + 1)) {
+            for (let q = s; q <= e; q++) { const [x, z] = along[q], p2 = q > 0 ? along[q - 1] : c.path[0]; this.archways.set(key(h, x, z), p2[0] !== x ? 0 : 1); this.thin.delete(key(h, x, z)); this.reserve(h, x, z, p2); this.walked(op, [h, x, z]); }
+            s = e;
+            continue;
+          }
+        }
         // (a landing, or the walkway: nothing in the way at the height it walks, nor only a stair to stand on, nor a stair
         // just over it (no room to walk under a flight's steps))
         if (taken(h, i, j) || unsteady(h, i, j) || blocks(h - 1, i, j) || this.stairs.has(key(h + 1, i, j))) { stopped = s; break; }

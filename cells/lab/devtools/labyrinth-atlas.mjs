@@ -14,6 +14,7 @@ const NAV = await import('../client/labyrinth/nav.ts');
 const BU = await import('../client/labyrinth/buildings.ts');
 const ME = await import('../client/labyrinth/mesh.ts');
 const CH = await import('../client/labyrinth/character.ts');
+const look = (w, k, i, j) => CH.look(w, k, i, j);
 
 const opt = Object.fromEntries(process.argv.slice(2).filter((a) => a.startsWith('--')).map((a) => [a.slice(2).split('=')[0], a.split('=')[1] ?? true]));
 
@@ -187,6 +188,51 @@ CASES.push(...[
   },
 ].map((c) => ({ group: 'yield', ...c })));
 
+/** a ring of wall round i0..i1, j0..j1 (a court's), `h` high */
+const ring = (w, i0, i1, j0, j1, h) => { const add = []; for (let i = i0; i <= i1; i++) for (let j = j0; j <= j1; j++) if (i === i0 || i === i1 || j === j0 || j === j1) for (let k = 0; k < h; k++) add.push([k, i, j, 0]); w.apply({ add, born: 0, why: 'wall' }); };
+/**
+ * Reactions: pairings that call on several capabilities at once (penetrate, accompany, exchange roles, interlock,
+ * develop).
+ */
+CASES.push(...[
+  {
+    name: 'court × way: a way drawn straight across a walled court',
+    best: 'a gate where it goes in, across the court, a gate where it comes out: thresholds',
+    set(w) { ring(w, 4, 8, 4, 8, 2); },
+    act: (w) => fromPlace(w, [[6, 1], [6, 11]]),
+  },
+  {
+    name: 'tower × bridge: a walkway from a terrace through a tower to another',
+    best: 'the walkway passes through the tower: a passage through it at that height, the tower over it',
+    set(w) { S.block(w, 2, 3, 5, 6, 2); S.block(w, 6, 6, 5, 5, 5); S.block(w, 9, 10, 5, 6, 2); },
+    pts: [[3, 5], [9, 5]],
+  },
+  {
+    name: 'roof × stair: a stair up on to a roofed house',
+    best: 'the roof gives way where the stair arrives: a terrace there, the roof kept over the rest',
+    set(w) { S.block(w, 6, 9, 4, 7, 2); },
+    pts: [[2, 5], [6, 5]],
+  },
+  {
+    name: 'alongside: a way drawn along the inside of a court\'s wall',
+    best: 'it accompanies the wall: a gallery along it (a pergola, a loggia), the court\'s middle kept open',
+    set(w) { ring(w, 3, 9, 3, 9, 2); w.apply({ pave: [[4, 4]], born: 0, why: 'way' }); },
+    pts: [[4, 4], [8, 4]],
+  },
+  {
+    name: 'bridge × bridge: two walkways crossing at one height',
+    best: 'they share the crossing: one deck where they meet, the walk on each way from it',
+    set(w) { S.block(w, 1, 2, 5, 5, 2); S.block(w, 10, 11, 5, 5, 2); S.block(w, 6, 6, 1, 2, 2); S.block(w, 6, 6, 9, 10, 2); const op = stroke(w, [[2, 5], [10, 5]]); if (op && !op.refused) w.apply({ ...op, alts: undefined }); },
+    pts: [[6, 2], [6, 9]],
+  },
+  {
+    name: 'retrace: a wall drawn, then drawn along again',
+    best: 'drawn again it develops: a course higher (again: higher still, or arcaded)',
+    set(w) { const op = stroke(w, [[2, 5], [10, 5]]); if (op && !op.refused) w.apply({ ...op, alts: undefined }); },
+    pts: [[2, 5], [10, 5]],
+  },
+].map((c) => ({ group: 'reactions', ...c })));
+
 /** whether each case came to what it would be at its best (`before`: the setting's stone) */
 const stairIn = (w, before) => before.filter((c) => w.stair(...c) >= 0 || w.passage(...c) >= 0).length;
 const BEST = {
@@ -211,6 +257,12 @@ const BEST = {
   'house × well': (w) => w.pool(6, 6) && BU.buildings(w).list.some((b) => b.cols.length >= 6),
   'rail × arrival': (w) => { const { edges } = ME.parapets(w); const e = edges.get(key(1, 6, 5)); const others = [[1, 6, 6], [1, 6, 7], [1, 9, 5]].filter((c) => (edges.get(key(...c)) ?? []).some(Boolean)).length; return !!e && !e[2] && others >= 2 && [...w.reached.values()].some((r) => r.reached); },
   'wall × tree × way': (w) => w.plant(0, 6, 5) >= 0 && [4, 5, 6].some((j) => [5, 6, 7, 8].some((i) => w.archway(0, i, j) >= 0)),
+  'court × way': (w) => [[6, 4], [6, 8]].every(([i, j]) => w.archway(0, i, j) >= 0) && [...w.reached.values()].some((r) => r.reached),
+  'tower × bridge': (w) => w.archway(2, 6, 5) >= 0 && w.stone(3, 6, 5) && NAV.reaches(BU.walkable(w), [2, 3, 5], [2, 9, 5]),
+  'roof × stair': (w) => BU.buildings(w).list.some((b) => b.roof && b.terrace?.length),
+  alongside: (w) => [5, 6, 7, 8].some((i) => look(w, 0, i, 4)?.pergola || w.dressed(0, i, 4)?.pergola || w.span(1, i, 4)),
+  'bridge × bridge': (w) => { const nav = BU.walkable(w); return NAV.reaches(nav, [2, 2, 5], [2, 6, 9]) && NAV.reaches(nav, [2, 6, 2], [2, 10, 5]); },
+  retrace: (w) => [3, 4, 5, 6, 7, 8, 9].filter((i) => w.stone(1, i, 5)).length >= 5,
   'beside + stair': (w) => { const nav = BU.walkable(w), [f, g] = w.flights; if (!f || !g) return false; const hk = (x) => x.cells[x.cells.length - 1]; return NAV.reaches(nav, hk(f), g.cells[0]) && Math.abs(hk(f)[1] - g.cells[0][1]) + Math.abs(hk(f)[2] - g.cells[0][2]) <= 3; },
 };
 /** what a world is, to compare before and after: each wall cell's state, the walked places, the flights */

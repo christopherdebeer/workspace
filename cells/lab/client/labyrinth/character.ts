@@ -140,6 +140,16 @@ function dressUp(w: World): Map<number, Dress> {
       for (const c of region) put(c, { parapet: true, rail });
     }
   }
+  // (a way the hand made along the inside of a court's wall, three cells or more: accompanied by it, a gallery, a pergola
+  // over it along the wall)
+  const along = (k: number, i: number, j: number) => w.passage(k, i, j) >= 0 && w.courts.has(key(0, i, j)) && DIRS.some(([a, b]) => w.stone(k, i + a, j + b) && w.wall(k, i + a, j + b) < 0 || w.block(k, i + a, j + b));
+  for (const v of w.passages.keys()) {
+    const [k, i, j] = unkey(v);
+    if (k !== w.ground(i, j) || !along(k, i, j)) continue;
+    const a = w.passage(k, i, j), [di, dj] = DIRS[a];
+    let run = 1; for (const sg of [1, -1]) for (let q = 1; q < 4 && along(k, i + sg * di * q, j + sg * dj * q); q++) run++;
+    if (run >= 3) put([k, i, j], { pergola: true });
+  }
   // (thin walls beside a court, now and then a jali, a stretch at a time; and beside a flight, always, from its foot up:
   // the wall dissolves into a screen beside the stair, light through it on the steps)
   for (const v of w.thin.keys()) {

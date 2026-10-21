@@ -75,8 +75,28 @@ What made the difference, all general:
 
 Together: **21 of 22 at their best as laid, the last a reading away.**
 
-Next: pairings that put these to work together (court × way, arcade × wall, tower × bridge, roof × stair), and three-way combinations of what's here.
+## Reactions: the gestures put to work
 
-## Next pairings
+The third set (`--set=reactions`): pairings that ask a form to react to a gesture (cross through, pass alongside, retrace) rather than only to sit beside another.
 
-wall × stair is the first. Then, by how much they'd exercise the capabilities above: **roof × stair** (a roof becoming a terrace; a stair over the eaves), **court × way** (divide, wrap, a threshold), **arcade × wall** (dissolve, reconcile rhythms), **tower × bridge** (interlock, penetrate), **water × terrace** (water with levels), and each with a third thing: a tree, a crossing way, another stair, a roof.
+![reactions: six cases](labyrinth/atlas-reactions.jpg)
+
+| Case | At its best | What it is now | Best? |
+|---|---|---|---|
+| **court × way**: a way drawn in across a walled court and out the far side | a gate in, across the court, a gate out: thresholds | the wall arched where it goes in and where it comes out, the way paved across | ✓ |
+| **tower × bridge**: a bridge between two blocks, straight through a taller tower | the walkway passes through the tower, the tower over it | through it, an arched passage at that height (round it, the other reading) | ✓ |
+| **roof × stair**: a stair up to a roofed house | the roof gives way where it arrives: a terrace there | up to a terrace in the roof, the roof kept over the rest | ✓ |
+| **alongside**: a way drawn inside a court, along its wall | a gallery along the wall, the middle kept open | a pergola along it, the middle open | ✓ |
+| **bridge × bridge**: a second bridge across the first | one deck where they meet | they share the crossing | ✓ |
+| **retrace**: a wall drawn again | it develops | a course higher (again: higher still, or arcaded) | ✓ |
+
+What was added, all general:
+
+- **A walkway passes through the hand's stone** (`realise`): a level way at height meeting a mass up to three cells thick, with stone over it, goes through it as an arched passage instead of stopping or climbing over. A gesture bridge whose line meets such a mass now prefers that, going round offered (and a short tower whose top it would merely take off isn't pierced: it goes round).
+- **A gallery accompanies a wall** (the rules' dressing): a way laid along the inside of a court's wall for three cells or more gets a pergola over it.
+
+Together: **27 of 28 at their best as laid, the last a reading away.**
+
+## Next
+
+Pairings still to map, by how much they'd exercise what's here: **arcade × wall** (dissolve, reconcile rhythms), **water × terrace** (water with levels), and three-way combinations: each of the above with a third thing (a tree, a crossing way, another stair, a roof).

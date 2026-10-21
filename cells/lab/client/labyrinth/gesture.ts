@@ -596,8 +596,14 @@ function read(w: World, start: Pick, path: Array<[number, number]>, end: Pick | 
   let op = make(path2, great);
   if (descent) alts.push({ label: 'a walkway at the height it starts', op: { connect: { from: [h0, cells[0][0], cells[0][1]], to: null, path: cells }, born: now, why: 'walkway', note: 'a walkway', reading: 'a walkway' } });
   if (spans) alts.push({ label: great ? 'a bridge on an arcade' : 'a bridge on one great arch', op: make(path2, !great, great ? 'a bridge, on an arcade' : 'a bridge, on one great arch') });
-  // (at one height, and something in the way: round it, the way through it offered)
-  if (to && to[0] === h0) {
+  // (at one height, and something in the way: round it, the way through it offered. Unless it goes through as drawn,
+  // a passage through what's in the way at that height (a tower a cell to three thick): then through, round offered)
+  const piercing = !!to && to[0] === h0 && reaches(op) && (() => { const v = new World(w.seed, w.landSeed); v.ops = [...w.ops, op]; v.rebuild(); return path2.some(([i, j]) => v.archway(h0, i, j) >= 0 && w.archway(h0, i, j) < 0 && w.stone(h0, i, j)); })();
+  if (piercing) {
+    const round0 = around(w, h0, path2, to!);
+    if (round0) alts.push({ label: 'a bridge round it', op: { ...make(round0, false, 'a bridge, round what\'s in the way'), took: ['routed-round'] } });
+    op = { ...op, note: `${op.note ?? 'a bridge'}, through what's in its way`, reading: `${op.reading ?? op.note ?? 'a bridge'}, through what's in its way` };
+  } else if (to && to[0] === h0) {
     const round0 = around(w, h0, path2, to), close = !!round0 && round0.every((c) => cells.some((d) => Math.max(Math.abs(c[0] - d[0]), Math.abs(c[1] - d[1])) <= 1));
     if (round0 && !close) alts.push({ label: 'a bridge round it, further off', op: { ...make(round0, false, 'a bridge, round what\'s in the way'), took: ['routed-round'] } });
     const round = close ? round0 : null;
