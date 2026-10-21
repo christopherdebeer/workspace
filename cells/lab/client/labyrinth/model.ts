@@ -261,6 +261,8 @@ export class World {
   passages = new Map<number, number>();
   /** where two of the hand's passages cross, square (`cross`) */
   crossings = new Set<number>();
+  /** the hand's stone a way's stair was carved out of (the step, and its headroom) */
+  carved = new Set<number>();
   /** for each column, the first of the hand's operations (by its place in `ops`) that laid stone or steps in it: what
    * an assembly's identity is anchored to, so it's never re-rolled by a later neighbour */
   firstOp = new Map<number, number>();
@@ -417,7 +419,7 @@ export class World {
   /** `list` replayed into the intended solid, and that resolved */
   private build(list: Op[], now: number) {
     this.now = now;
-    this.mass.clear(); this.stairs.clear(); this.archways.clear(); this.thin.clear(); this.bridged.clear(); this.trees.clear(); this.treeKind.clear(); this.pools.clear(); this.basins.clear(); this.passages.clear(); this.crossings.clear(); this.firstOp.clear(); this.walks.clear(); this.choices.clear();
+    this.mass.clear(); this.stairs.clear(); this.archways.clear(); this.thin.clear(); this.bridged.clear(); this.trees.clear(); this.treeKind.clear(); this.pools.clear(); this.basins.clear(); this.passages.clear(); this.crossings.clear(); this.carved.clear(); this.firstOp.clear(); this.walks.clear(); this.choices.clear();
     this.laid.clear(); this.reached.clear(); this.rules.clear(); this.dress.clear(); this.paving.clear();
     // (and what was worked out from them last time (piers, spans, courts and their pools, basins' water), so nothing laid
     // now is laid against what was there before: a world rebuilt is the same world, however often)
@@ -647,6 +649,10 @@ export class World {
         return !taken(k, ...(a > 0 ? along[a - 1] : path[0])) && !taken(k, ...along[b + 1]);
       };
       const rested = new Set(along.map(([i, j], s) => (restAt.has(`${i}.${j}`) ? s : -1)).filter((s) => s >= 0));
+      /** whether a step can be carved into the hand's stone at `k` (standing on stone or the ground, its headroom the
+       * hand's stone or clear) */
+      const handStone = (k: number, i: number, j: number) => this.mass.has(key(k, i, j)) && !this.laid.has(key(k, i, j)) && !this.stairs.has(key(k, i, j)) && !this.earth(k, i, j);
+      const carve = (k: number, i: number, j: number) => k >= this.ground(i, j) && handStone(k, i, j) && (k === this.ground(i, j) || this.stone(k - 1, i, j)) && (handStone(k + 1, i, j) || !taken(k + 1, i, j)) && !unsteady(k, i, j);
       const straight = new Set(straights(path, c.to).filter((s) => !rested.has(s)));
       // (a level a cell can be walked at, or a stair stand at: over the ground, nothing in it, not in water, and the
       // stone under it not in another stair's way; and what it costs to raise it there)
@@ -657,11 +663,13 @@ export class World {
         // (the hand's stone across the way, drawn straight through: a wall a cell thick, or a building's foot up to three
         // cells deep: a passage opened in it, the stone kept over and round the opening (a route through a wall opens a
         // gate, not a way round it; through a house, a passage under it, as if the way had been there first))
-        if (s >= 0 && s < n - 1 && this.mass.has(key(k, i, j)) && !this.laid.has(key(k, i, j)) && k >= g && (k === g || this.stone(k - 1, i, j)) && thru(k, s)) return 2.5;
+        if (s >= 0 && s < n - 1 && this.mass.has(key(k, i, j)) && !this.laid.has(key(k, i, j)) && k >= g && (k === g || this.stone(k - 1, i, j)) && thru(k, s)) return 1;
         if (k < g || taken(k, i, j) || unsteady(k, i, j) || (k === g && this.pool(i, j)) || this.stairs.has(key(k + 1, i, j))) return -1;
         if (k > g && !taken(k - 1, i, j) && this.way(k - 1, i, j)) return -1;
         // (raised over the ground costs more than a step down and back up again: a way on the land goes with the
-        // ground, and stands up off it only where it must (low ground, water), not as a causeway over every dip)
+        // ground, and stands up off it only where it must (low ground, water), not as a causeway over every dip. On stone
+        // the hand's already laid there (a wall's top, a terrace), nothing's laid: the top's walked as it is)
+        if (k > g && this.mass.has(key(k - 1, i, j)) && !this.laid.has(key(k - 1, i, j))) return 0.3;
         return (k - g) * 1.2;
       };
       const cost: number[][] = Array.from({ length: n + 1 }, () => new Array((top + 1) * 3).fill(INF));
@@ -681,6 +689,9 @@ export class World {
             const prev = s > 0 ? along[s - 1] : path[0], ax = prev[0] !== i ? 0 : 1, across = (q: number) => { const a = this.passages.get(key(q, i, j)); return a !== undefined && a !== ax; };
             const up = m === -1 || taken(p + 1, i, j) || across(p) ? -1 : at(p, i, j);
             if (up >= 0) go(p + 1, 1, 1 + up);
+            // (or carved up through the hand's stone where the stroke's drawn over or through it: a stair in the wall's
+            // thickness, its headroom cut, the stone over it kept (carried on an arch); dearer than any open step)
+            else if (m !== -1 && !across(p) && carve(p, i, j)) go(p + 1, 1, 3.5 + Math.max(0, p - this.ground(i, j)) * 1.2);
             const down = m === 1 || p < 1 || taken(p, i, j) || across(p - 1) ? -1 : at(p - 1, i, j);
             if (down >= 0) go(p - 1, -1, 1 + down);
           }
@@ -719,6 +730,14 @@ export class World {
     plan.forEach(({ h, kind }, s) => {
       const [i, j] = along[s], prev = s > 0 ? along[s - 1] : path[0];
       const k = kind === -1 ? h - 1 : h;
+      // (a step carved into the hand's stone: it and its headroom cut out of it, what's over them kept)
+      if (kind === 1 && this.mass.has(key(k, i, j))) {
+        const cut = (kk: number) => { this.mass.delete(key(kk, i, j)); this.thin.delete(key(kk, i, j)); this.archways.delete(key(kk, i, j)); this.carved.add(key(kk, i, j)); };
+        for (const kk of [k, k + 1]) if (this.mass.has(key(kk, i, j)) && !this.laid.has(key(kk, i, j))) cut(kk);
+        // (and above, where what's kept over it would have nothing to span to along the flight: open to the sky there)
+        const [a, b] = DIRS[this.stairs.get(key(k, i, j))?.d ?? dirTo(prev, [i, j])];
+        for (let kk = k + 2; this.mass.has(key(kk, i, j)) && !this.laid.has(key(kk, i, j)); kk++) { if (this.stone(kk, i - a, j - b) && this.stone(kk, i + a, j + b)) break; cut(kk); }
+      }
       if (kind !== 0) { this.stairs.set(key(k, i, j), { d: kind === 1 ? dirTo(prev, [i, j]) : dirTo([i, j], prev), born: born + s * 0.05 }); this.laid.add(key(k, i, j)); cells.push([k, i, j]); }
       if (kind === 0) {
         // (walked through: kept open; and a wall it went through, opened, a gate)
