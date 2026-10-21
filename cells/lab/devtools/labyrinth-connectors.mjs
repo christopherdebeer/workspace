@@ -265,6 +265,21 @@ const SCENES = [
     },
   },
   {
+    name: 'a terrace beside a flight: a way up to a tower, then a terrace laid level with a step along it',
+    run(w, H) {
+      H.column([9, 5], 4); H.column([9, 6], 4); H.column([10, 5], 4); H.column([10, 6], 4);
+      H.stroke([3, 5], [9, 5], 'way', [9, 5]);
+      const f = w.flights[0];
+      ok(`${this.tag}: a flight up to the tower`, !!f && f.cells.length >= 3, w.flights.length);
+      if (!f) return;
+      // (a terrace two cells deep, on the side away from the camera's turn, its top level with the second step's)
+      const [k, i, j] = f.cells[1], s = (f.d + 1) % 4, [sa, sb] = DIRS[s], [a, b] = DIRS[f.d], add = [];
+      for (const u of [-1, 0, 1]) for (const t of [1, 2]) { const x = i + sa * t + a * u, z = j + sb * t + b * u; for (let q = w.ground(x, z); q <= k; q++) add.push([q, x, z, 0]); }
+      w.apply({ add, born: 0, why: 'raise' });
+      meetings(w, this.tag, 'flight-meets-terrace');
+    },
+  },
+  {
     name: 'a flight aimed at a wall: up to a narrow terrace against a wall, another terrace beyond it',
     run(w, H) {
       for (let j = 3; j <= 8; j++) H.column([7, j], 4);

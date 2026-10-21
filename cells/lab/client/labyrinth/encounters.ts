@@ -341,8 +341,47 @@ const wayMeetsTree: Rule = {
   },
 };
 
+/**
+ * A flight of the hand's, and a terrace of its stone laid beside it, level with one of its steps along the way (not its
+ * last: that's arriving): the terrace stops at the flight (it can't be laid in its steps). The ladder: notched round
+ * it, the two apart (the restrained answer); the flight opened at that step, stepped off on to the terrace; and a
+ * lantern there.
+ */
+const flightMeetsTerrace: Rule = {
+  id: 'flight-meets-terrace',
+  find(w) {
+    const out: Found[] = [], at = new Map<number, number>(), seen = new Set<number>();
+    w.ops.forEach((op, n) => { for (const c of [...(w.reached.get(op)?.cells ?? []), ...(op.stairs ?? []).map((s) => [s[0], s[1], s[2]] as Cell)]) if (!at.has(key(...c))) at.set(key(...c), n); });
+    for (const f of w.flights) {
+      const by = at.get(key(...f.cells[f.cells.length - 1])) ?? at.get(key(...f.cells[0])) ?? -1;
+      if (by < 0 || w.ops[by].derived) continue;
+      for (let q = 0; q < f.cells.length - 1; q++) {
+        const S = f.cells[q], [k, i, j] = S;
+        for (const s of [(f.d + 1) % 4, (f.d + 3) % 4]) {
+          const [sa, sb] = DIRS[s], X: Cell = [k + 1, i + sa, j + sb];
+          // (a terrace: the hand's stone level with the step's top, two cells deep from the flight, somewhere to stand)
+          if (!w.block(k, X[1], X[2]) || !w.block(k, X[1] + sa, X[2] + sb) || !place(w, X) || w.occupied(...X) || seen.has(key(...X))) continue;
+          const terrace = w.ops.findIndex((o, n) => n !== by && !o.derived && (o.add ?? []).some((c) => c[0] === k && c[1] === X[1] && c[2] === X[2]));
+          if (terrace < 0) continue;
+          seen.add(key(...X));
+          const gap: Op = { dress: [[k, i, j, DRESS.gap, 1]] };
+          out.push({
+            rule: this.id, name: 'a terrace beside a flight', where: 'by the terrace', anchor: X, cells: [S, X], by: [by, terrace].sort((p, r) => p - r), insists: (o) => !!o.connect || !!o.add?.length,
+            candidates: [
+              { level: 0, label: 'the terrace notched round the flight, the two apart', verbs: ['yield', 'separate'], op: {} },
+              { level: 1, label: 'the flight opened at that step, stepped off on to the terrace', verbs: ['open', 'step'], op: gap },
+              { level: 2, label: 'stepped off on to the terrace, a lantern there', verbs: ['open', 'step', 'frame'], op: join(gap, lantern([X[0], X[1] + sa, X[2] + sb])) },
+            ],
+          });
+        }
+      }
+    }
+    return out;
+  },
+};
+
 /** every rule, in the order they're resolved (a later one never lays where an earlier one has) */
-export const RULES: Rule[] = [waysMeet, levelApart, waysCross, wayEnds, flightMeetsWall, wayMeetsTree];
+export const RULES: Rule[] = [waysMeet, levelApart, waysCross, wayEnds, flightMeetsWall, wayMeetsTree, flightMeetsTerrace];
 
 // ─── resolving them ───
 

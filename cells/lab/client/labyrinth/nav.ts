@@ -44,11 +44,12 @@ export function navigate(w: World, inside: Array<[Cell, Cell]> = []): Nav {
       if (w.stair(k - 1, i - di, j - dj) === d) link(v, key(k - 1, i - di, j - dj));
       if (standing(w, k + 1, i + di, j + dj) || w.stair(k + 1, i + di, j + dj) === d || gate(k + 1, i + di, j + dj)) link(v, key(k + 1, i + di, j + dj));
       // (stepped on to from beside its first step, and left sideways from its last, where that side's open)
-      const first = w.stair(k - 1, i - di, j - dj) !== d, last = w.stair(k + 1, i + di, j + dj) !== d;
+      // (or off any step left open at its side (a meeting's), on to what's beside it level with its top)
+      const first = w.stair(k - 1, i - di, j - dj) !== d, last = w.stair(k + 1, i + di, j + dj) !== d, open = !!w.dress.get(key(k, i, j))?.gap;
       for (const q of [(d + 1) % 4, (d + 3) % 4]) {
         const x = i + DIRS[q][0], z = j + DIRS[q][1];
         if (first && standing(w, k, x, z) && !w.occupied(k + 1, x, z)) link(v, key(k, x, z));
-        if (last && standing(w, k + 1, x, z)) link(v, key(k + 1, x, z));
+        if ((last || open) && standing(w, k + 1, x, z)) link(v, key(k + 1, x, z));
       }
       continue;
     }

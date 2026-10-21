@@ -226,10 +226,14 @@ The fifth, **a flight aimed at a wall** (what a stair is for: going somewhere): 
 3. Add a scene to `devtools/labyrinth-connectors.mjs` that makes the encounter by gestures, calling `meetings(w, tag, ruleId)`: all the checks above run, in eight orientations.
 4. `--render` draws the scene at every rung in WebGL.
 
-Next rules, by what the exercise found most (frame, merge, step, yield, carry): a flight meeting a terrace (15: notch, top landing, half-landing), two flights opposed (switchback), a balcony on rock (16: carry by what's there).
+Next rules, by what the exercise found most (frame, merge, step, yield, carry): two flights opposed (switchback), a balcony on rock (16: carry by what's there), and the half-landing reading of 15 (a terrace across a flight's middle, the flight in two: it needs the flight relaid either side, not an operation laid beside it).
 
 The sixth rule, **a way passing a tree** (11, 14): a way of the hand's walking beside a shade tree it planted on the ground (an olive, a stone pine; a cypress is an avenue's, not a place's). The tree claims its cell, so the way already yields. Rungs: the way passing it; a ring of paving round it, the way opening into a small place in its shade (wrap); the ring and a low stone seat round its trunk (wrap, shelter). A scene in `labyrinth-connectors.mjs` checks every rung in eight orientations.
 
 ![a way passing an olive: a ring of paving round it; and the ring with a seat round its trunk](labyrinth/e-tree.jpg)
+
+The seventh, **a terrace beside a flight** (15): a terrace of the hand's stone, two cells deep, laid beside one of its flights level with a step along the way (not the last, which is arriving). The terrace can't be laid in the steps, so it stops at the flight. Rungs: notched round it, the two apart (separate); the flight opened at that step (`DRESS.gap`, which the walk honours: a step off sideways on to what's level with its top), so the terrace is walked, and then a terrace, not a roofed house; that, with a lantern. The rail stays where a step stands above the terrace.
+
+![a terrace laid beside a flight: left to itself, a house beside the steps; opened at the step level with it, a walked terrace, a lantern there](labyrinth/e-terrace.jpg)
 
 Some encounters need no rule at all, because a foundation answers them: a tower over a way, or rooms on a bridge, are buildings with a passage through their foot (`buildings.ts`), so the gatehouse and the inhabited bridge come of the reserved void and the building reading together (`labyrinth-connective.md`, Progress).
