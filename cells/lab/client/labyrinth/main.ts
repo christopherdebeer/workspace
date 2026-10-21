@@ -630,7 +630,7 @@ canvas.addEventListener('pointerdown', (e) => {
   }
   const start = pick(e.clientX, e.clientY);
   if (brush !== 'hand') hideAlts();
-  g = { id: e.pointerId, start, x0: e.clientX, y0: e.clientY, t0: performance.now(), mode: brush === 'hand' ? 'look' : !start ? 'turn' : 'pending', pts: [], base: world.ops.length, seen: new Map(), cut: [], painted: [], cells: [], target: null, cand: '', candPick: null, count: 0, laid: '', said: '', born: 0, rest: [], moved: 0, still: { x: e.clientX, y: e.clientY, t: performance.now(), f: frameNo } };
+  g = { id: e.pointerId, start, x0: e.clientX, y0: e.clientY, t0: performance.now(), mode: brush === 'hand' || following ? 'look' : !start ? 'turn' : 'pending', pts: [], base: world.ops.length, seen: new Map(), cut: [], painted: [], cells: [], target: null, cand: '', candPick: null, count: 0, laid: '', said: '', born: 0, rest: [], moved: 0, still: { x: e.clientX, y: e.clientY, t: performance.now(), f: frameNo } };
 });
 canvas.addEventListener('pointermove', (e) => {
   const f = fingers.get(e.pointerId);
@@ -669,6 +669,8 @@ const up = (e: PointerEvent) => {
   fan = null;
   if (cancelled && m !== 'turn' && m !== 'look') { if (world.ops.length > g.base) { world.ops.length = g.base; world.rebuild(now()); } g = null; return; }
   const pet = m === 'look' ? catAt(e.clientX, e.clientY) : null;
+  // (following one: a tap is where it's shown to go, a tap on it a touch, a tap on another follows that one instead)
+  if (m === 'look' && following && met) { if (pet === met) say(cats.pet(met)); else if (pet) meet(pet); else if (start) say(cats.call(met, start.to)); g = null; return; }
   if (pet) meet(pet);
   else if (m === 'look' && start) say(describe(start));
   else if (m === 'pending' && start) {
@@ -856,6 +858,7 @@ function frame() {
   // (held still long enough on a stroke, or a tap, that could be read another way: the readings fan out)
   if (g && !fan && !g.offered && fingers.size === 1 && (g.mode === 'trace' || (g.mode === 'pending' && brush === 'auto')) && performance.now() - g.still.t > HOLD) openFan();
   guides();
+  shownTo();
   drawFan();
   label();
   for (let q = dust.length - 1; q >= 0; q--) {
@@ -938,8 +941,17 @@ function showCat() {
   catFollowB.textContent = following ? '‹ Return to building' : 'Follow ›';
 }
 function unfollow() { following = false; document.body.classList.remove('following'); zoomK = zoomBefore; follow = true; showCat(); }
-catFollowB.addEventListener('click', () => { if (following) { unfollow(); return; } following = true; zoomBefore = zoomK; document.body.classList.add('following'); showCat(); });
+catFollowB.addEventListener('click', () => { if (following) { unfollow(); return; } following = true; zoomBefore = zoomK; document.body.classList.add('following'); showCat(); say(`tap somewhere to show ${met?.name ?? 'it'} where to go`); });
 document.getElementById('catclose')!.addEventListener('click', () => meet(null));
+/** while following: where the cat's been shown to go, marked until it's there (dashed: as near as it can get) */
+function shownTo() {
+  const c = following && met?.call;
+  if (!c) return;
+  const [x, y] = screenOf(c.x, c.y + 0.02, c.z), r = 7 + 2 * Math.sin(performance.now() / 260);
+  g2.strokeStyle = WARM + '.85)'; g2.lineWidth = 1.6; g2.setLineDash(c.short ? [3, 4] : []);
+  g2.beginPath(); g2.ellipse(x, y, r * 1.4, r * 0.8, 0, 0, Math.PI * 2); g2.stroke(); g2.setLineDash([]);
+  g2.fillStyle = WARM + '.9)'; g2.beginPath(); g2.arc(x, y, 2, 0, Math.PI * 2); g2.fill();
+}
 /** while following: the eye goes with the cat, close */
 function followCat(dt: number) {
   if (!met || !following) return;
@@ -959,10 +971,10 @@ requestAnimationFrame(frame);
 (window as unknown as { __labyrinth: unknown }).__labyrinth = {
   get world() { return world; }, view, R, pick, onPlane, inStone: (x: number, y: number, z: number) => inStone(world, x, y, z), inLand: (x: number, y: number, z: number) => inLand(world, x, y, z), setHand: (h: Hand | Dressing | Brush) => setBrush(h), setBrush,
   get brush() { return brush; }, get held() { return held; }, get intent() { return intent; }, setIntent,
-  cats: () => cats.list.map((c) => ({ name: c.name, coat: COATS[c.coat], doing: c.doing, x: c.x, y: c.y, z: c.z, at: c.at, want: c.want, air: c.air })), catScreen: (name: string) => { const c = cats.list.find((q) => q.name === name); if (!c) return null; const h = cats.headOf(c); return screenOf(h[0], h[1] - 0.04, h[2]); }, catsHome: () => cats.P?.capacity ?? 0,
+  cats: () => cats.list.map((c) => ({ name: c.name, coat: COATS[c.coat], doing: c.doing, x: c.x, y: c.y, z: c.z, at: c.at, want: c.want, air: c.air, asleep: c.asleep, call: c.call })), catScreen: (name: string) => { const c = cats.list.find((q) => q.name === name); if (!c) return null; const h = cats.headOf(c); return screenOf(h[0], h[1] - 0.04, h[2]); }, catsHome: () => cats.P?.capacity ?? 0,
   fan: () => (fan ? { labels: fan.list.map((f) => f.label), at: fan.at } : null), get gesture() { return g ? { mode: g.mode, id: g.id, rest: g.rest.length } : null; },
   release: () => { const op = held_back.shift(); if (op) world.apply(op, now()); return !!op; }, catsRun: (s: number) => cats.run(world, s),
-  meet: (name: string) => meet(cats.list.find((c) => c.name === name) ?? null), get following() { return following; }, follow: () => { if (met && !following) catFollowB.click(); }, catAt,
+  meet: (name: string) => meet(cats.list.find((c) => c.name === name) ?? null), get following() { return following; }, follow: () => { if (met && !following) catFollowB.click(); }, catAt, callTo: (k: number, i: number, j: number) => (met && following ? cats.call(met, [k, i, j]) : null), pet: () => (met ? cats.pet(met) : null),
   selection: () => (sel ? { title: sel.s.title, readings: sel.s.readings.map((r) => r.label), at: sel.s.at, whole: sel.idx, cells: sel.s.cells.length } : null),
   switchReading, takeAway, dressSel, alts: () => (altsNow ? { labels: altsNow.list.map((a) => a.label), at: altsNow.at } : null), readAs, declines: () => declines.slice(), motifs: () => motifsNow().map((m) => ({ kind: m.kind, label: m.label, cells: m.cells.length })),
   probe: () => ({ ops: world.ops.length, top: world.top(), stone: world.mass.size, stairs: world.stairs.size, piers: world.piers.size, arches: world.spans.length, courts: world.courts.size, decor: world.decor.length, whys: world.ops.map((o) => o.why ?? '') }),

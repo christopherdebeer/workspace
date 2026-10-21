@@ -16,6 +16,11 @@
  * - **What building does to them**: stone going up nearby, they look; close by, they get up and move aside, then,
  *   when it's settled, the curious go to see, sniff it, and may claim it as a new place to rest. Stone rising under a
  *   cat lifts it; stone taken from under one, it jumps clear. They never fall, and never stand in the hand's way.
+ * - **Shown somewhere** (while it's followed, a tap on a place: `call`): it answers as it is. Awake, it looks where
+ *   it's shown, and goes, the bold at once, the incurious in their own time (a wash first); far, at a trot. Asleep, an
+ *   ear turns, and only a second call soon after wakes it. Where it can't get, it goes as near as it can. Somewhere to
+ *   rest, it may settle there; and it learns the place (shown it, it's a little more its own, kept between visits). A
+ *   tap on the cat itself: a slow blink, a purr (`pet`).
  */
 import { hash, seeded, type Rand } from '../kit/rng';
 import { CENTER, DIRS, unkey, type World } from './model';
@@ -50,6 +55,12 @@ export interface Cat {
   /** something new nearby to go and see (cells, from when) */
   interest: { cells: Array<[number, number, number]>; at: number } | null;
   leaving: boolean; gone: boolean; play: number;
+  /** where it's been shown to go (while it's on its way there), and as near as it can get if it can't get there */
+  call: { x: number; y: number; z: number; short: boolean } | null;
+  /** what it's been asked to do, taken up as soon as it's on its feet (not mid-jump, nor unseen inside) */
+  pending: Task | null;
+  /** when it was last called asleep (an ear turned; called again soon after, it wakes) */
+  roused: number;
 }
 export interface Memory { arrived: number; fav: Array<Array<[string, number]>> }
 
@@ -133,7 +144,7 @@ export class Cats {
       fav, x: 0, y: 0, z: 0, yaw: h(11) * 6.28, pitch: 0, at: '', next: '', resting: '',
       pose: POSES.stand, want: 'stand', rate: 6, moving: 0, phase: 0, stride: 0.3,
       head: { yaw: 0, pitch: 0 }, gaze: null, stir: { t: h(12) * 100, breath: h(13), twitch: 0, flick: 0 },
-      hidden: false, air: false, asleep: false, awake: true, doing: '', task: null, epoch: this.epoch, rng: seeded(hash(this.seed, n, 99)), interest: null, leaving: false, gone: false, play: 0,
+      hidden: false, air: false, asleep: false, awake: true, doing: '', task: null, epoch: this.epoch, rng: seeded(hash(this.seed, n, 99)), interest: null, leaving: false, gone: false, play: 0, call: null, pending: null, roused: -1e9,
     };
     // (no two the same name)
     while (this.list.some((o) => o.name === c.name)) c.name = NAMES[(NAMES.indexOf(c.name) + 1) % NAMES.length];
@@ -187,7 +198,9 @@ export class Cats {
   }
 
   // ─── living ───
-  private start(c: Cat, task: Task) { c.task = task; c.epoch = this.epoch; }
+  /** the tasks that are a call answered: while one's what it's doing, where it was shown stays marked */
+  private calls = new WeakSet<Task>();
+  private start(c: Cat, task: Task) { c.task = task; c.epoch = this.epoch; if (!this.calls.has(task)) c.call = null; }
   private live(c: Cat, dt: number) {
     c.stir.t += dt;
     c.stir.breath += dt / (c.asleep ? 3.4 : c.moving > 0.5 ? 0.9 : 2.2);
@@ -196,6 +209,7 @@ export class Cats {
     if (c.rng() < dt * 0.08) c.stir.flick = 1;
     this.hold(c, dt);
     this.dt = dt;
+    if (c.pending && !c.air && !c.hidden) { const p = c.pending; c.pending = null; this.start(c, p); }
     if (!c.task) this.start(c, this.life(c, false));
     const r = c.task!.next();
     if (r.done) c.task = null;
@@ -231,7 +245,7 @@ export class Cats {
     const s = this.place(c.at);
     if (s && Math.hypot(s.x - c.x, s.y - c.y, s.z - c.z) < 0.2) return;
     const ground = groundY(w, c.x + CENTER, c.z + CENTER);
-    if (c.y > ground + 0.05 && !solid(c.y - 0.06) && !solid(c.y - 0.2) && c.moving < 0.02 && this.t - this.built > 1) this.stale = true;
+    if (c.y > ground + 0.05 && !c.next && !solid(c.y - 0.06) && !solid(c.y - 0.2) && c.moving < 0.02 && this.t - this.built > 1) this.stale = true;
   }
 
   /** its life, when it's not doing anything in particular: rest, wander, groom, play, go and see something new */
@@ -595,6 +609,80 @@ export class Cats {
     c.want = 'sit'; c.rate = 4; yield* this.wait(c, 1.5 + c.rng());
     c.doing = 'grooming'; c.want = 'groom'; yield* this.wait(c, 2.5 + c.rng() * 2);
     c.want = 'sit'; yield* this.wait(c, 1.5);
+  }
+
+  // ─── shown somewhere ───
+  /**
+   * Shown a place to go (the cell touched): the place there nearest it that it could be, free, and that it can get to
+   * from where it is, or as near as it can get. What it does is said, plainly, for the hand.
+   */
+  call(c: Cat, [k, i, j]: [number, number, number]): string {
+    const P = this.P, here = this.place(c.at);
+    if (!P || !here || c.gone || c.leaving) return `${c.name} isn't listening`;
+    const off = (s: Spot) => Math.hypot(s.i - i, (s.k - k) * 0.8, s.j - j);
+    const d = reachable(P, here.id);
+    let shown: Spot | null = null, best: Spot | null = null;
+    for (const s of P.spots) {
+      if (!shown || off(s) < off(shown)) shown = s;
+      if (isFinite(d[s.id]) && !this.taken(s, c) && (!best || off(s) < off(best))) best = s;
+    }
+    if (!shown || off(shown) > 1.6) return `nowhere there ${c.name} could be`;
+    if (!best || off(best) > 6) return `${c.name} looks, but sees no way there`;
+    // (asleep: an ear turns; called again soon after, it wakes and goes)
+    if (c.asleep && this.t - c.roused > 8) { c.roused = this.t; c.stir.flick = 1; c.stir.twitch = 1; return `${c.name}'s ear turns; it's asleep (show it again to wake it)`; }
+    // (another's already there: beside it; else, where it can't get, as near as it can)
+    const there = best !== shown && off(best) > 0.6, other = there ? this.list.find((o) => o !== c && !o.gone && this.taken(shown!, c) && (o.resting === shown!.name || o.at === shown!.name)) : undefined;
+    const short = there && !other;
+    c.call = { x: best.x, y: best.y, z: best.z, short };
+    c.pending = this.called(c, best, short, d[best.id]); this.calls.add(c.pending);
+    return other ? `${other.name} is there; ${c.name} goes to be beside it` : short ? `${c.name} can't get there; as near as it can` : best === here ? `${c.name} is there already` : `${c.name} looks, and goes`;
+  }
+  private *called(c: Cat, s: Spot, short: boolean, far: number): Task {
+    const woke = c.asleep;
+    c.asleep = false; c.awake = true; c.interest = null; c.next = ''; c.moving = 0; c.pitch = 0;
+    // (somewhere to rest, kept for it while it goes)
+    c.resting = s.rest ? s.name : '';
+    if (woke) { c.doing = 'waking'; c.want = 'loaf'; c.rate = 3; yield* this.wait(c, 1); c.doing = 'stretching'; c.want = 'stretch'; yield* this.wait(c, 1.4); }
+    // (a look first, at where it's been shown)
+    c.doing = 'looking where you showed it';
+    c.gaze = { x: s.x, y: s.y + 0.1, z: s.z, until: this.t + 1.8 };
+    c.want = 'stand'; c.rate = 6;
+    yield* this.wait(c, 0.4 + (1 - c.likes.bold) * 0.6);
+    // (in its own time, if it isn't much inclined to: a wash first)
+    if (c.rng() > 0.45 + 0.55 * c.likes.curious) {
+      c.doing = 'in its own time'; c.want = 'sit'; c.rate = 5; yield* this.wait(c, 0.6);
+      c.want = 'groom'; yield* this.wait(c, 1.5 + c.rng() * 2);
+    }
+    c.doing = short ? 'going as near as it can' : 'going where you showed it';
+    const there = yield* this.goTo(c, s, far > 4 || Math.hypot(s.x - c.x, s.z - c.z) > 4 ? TROT : WALK);
+    c.call = null;
+    if (!there) { c.resting = ''; c.doing = 'thinking better of it'; c.want = 'sit'; c.rate = 5; yield* this.wait(c, 1.5); return; }
+    // (a place it's been shown is a little more its own)
+    c.fav.set(s.name, Math.min(5, (c.fav.get(s.name) ?? 0) + 0.6));
+    if (s.rest && !this.taken(s, c)) { yield* this.settle(c, s, false); return; }
+    c.resting = '';
+    c.doing = 'sniffing about'; c.want = 'sniff'; c.rate = 5; yield* this.wait(c, 1 + c.rng());
+    c.doing = 'looking about'; c.want = 'sit'; yield* this.wait(c, 3 + c.rng() * 3);
+  }
+  /** touched, itself: a slow blink, a purr; asleep, it purrs in its sleep */
+  pet(c: Cat): string {
+    if (c.gone || c.leaving) return `${c.name} is on its way`;
+    c.stir.flick = 1;
+    if (c.asleep) { c.doing = 'purring in its sleep'; return `${c.name} purrs in its sleep`; }
+    c.call = null;
+    c.pending = this.petted(c);
+    return `${c.name} gives you a slow blink`;
+  }
+  private *petted(c: Cat): Task {
+    const resting = this.place(c.resting);
+    c.next = ''; c.moving = 0; c.pitch = 0; c.gaze = null;
+    c.doing = 'a slow blink'; c.want = 'sit'; c.rate = 5; c.head.pitch = -0.2;
+    yield* this.wait(c, 1.2);
+    c.doing = 'purring'; c.want = 'loaf'; c.rate = 3; c.stir.twitch = 1;
+    yield* this.wait(c, 3 + c.rng() * 2);
+    // (where it was resting, it rests on)
+    if (resting && resting.name === c.at) { yield* this.settle(c, resting, true); return; }
+    c.resting = '';
   }
 
   // ─── what building does to them ───
