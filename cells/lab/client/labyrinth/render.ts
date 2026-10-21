@@ -56,16 +56,25 @@ bool pierced(vec3 p, vec3 n, float m) {
  * whole or not at all, more of them left out the further they are.
  */
 const REACH = `
-uniform float uBleed; uniform vec4 uLand, uBuilt;
+uniform float uBleed; uniform vec4 uLand, uFocusBox; uniform sampler2D uFocus;
 float bhash(vec3 p) { return fract(sin(dot(p, vec3(127.1, 311.7, 74.7))) * 43758.5453); }
 float bnoise(vec3 x) { vec3 i = floor(x), f = fract(x); f = f * f * (3. - 2. * f);
   return mix(mix(mix(bhash(i), bhash(i + vec3(1,0,0)), f.x), mix(bhash(i + vec3(0,1,0)), bhash(i + vec3(1,1,0)), f.x), f.y),
              mix(mix(bhash(i + vec3(0,0,1)), bhash(i + vec3(1,0,1)), f.x), mix(bhash(i + vec3(0,1,1)), bhash(i + vec3(1,1,1)), f.x), f.y), f.z); }
+// (how far it is, in cells, to the nearest thing built: a field over the land, worked out whenever what's built changes
+// (main.ts), so the drawing gathers round what's built and not round the box it fits in)
+float builtD(vec3 p) { return texture(uFocus, (p.xz - uFocusBox.xy) / (uFocusBox.zw - uFocusBox.xy)).r * 16.; }
+// (the picture's reach: close round what's built, where it's drawn whole)
 float reach(vec3 p) {
-  float dB = max(max(uBuilt.x - p.x, p.x - uBuilt.z), max(uBuilt.y - p.z, p.z - uBuilt.w));
-  float dE = min(min(p.x - uLand.x, uLand.z - p.x), min(p.z - uLand.y, uLand.w - p.z));
+  float dB = builtD(p), dE = min(min(p.x - uLand.x, uLand.z - p.x), min(p.z - uLand.y, uLand.w - p.z));
   float rag = (bnoise(vec3(p.x * .35, 0., p.z * .35)) - .5) * 2.5;
-  return (1. - smoothstep(.8, 5.5, dB + rag * .8)) * smoothstep(.2, 3.2, dE + rag * .6);
+  return (1. - smoothstep(.9, 4.4, dB + rag * .6)) * smoothstep(.2, 3.2, dE + rag * .6);
+}
+// (the line's reach: much further, thinning out to the land's edge)
+float reachLines(vec3 p) {
+  float dB = builtD(p), dE = min(min(p.x - uLand.x, uLand.z - p.x), min(p.z - uLand.y, uLand.w - p.z));
+  float rag = (bnoise(vec3(p.x * .35, 0., p.z * .35)) - .5) * 2.5;
+  return (1. - smoothstep(1.5, 11., dB + rag * 1.2)) * smoothstep(.2, 2.6, dE + rag * .6);
 }
 // (a tree's crown (an olive's, a stone pine's: leaves, kind 1 or 2) isn't a ball of green but leaves in tufts with sky
 // between them: where the leaf pattern thins it's cut through, in the picture and in the sun's view both, so its shade
@@ -84,9 +93,9 @@ bool leafCut(vec3 p, float m, float at) {
 // thing wider than its cell (a tree's crown) marked 4 + its foot's cell and its chance, so it's kept or left whole)
 bool leftOut(vec3 p, float u) {
   if (uBleed < .5 || u < 3. || u >= 5.) return false;
-  if (u < 4.) return fract(u) > reach(vec3(floor(p.x) + .5, 0., floor(p.z) + .5)) * 1.25 - .08;
+  if (u < 4.) return fract(u) > reachLines(vec3(floor(p.x) + .5, 0., floor(p.z) + .5)) * 1.25 - .08;
   float f = (u - 4.) * 10000., at = floor(f);
-  return fract(f) / .9 > reach(vec3(mod(at, 64.) - 29.5, 0., floor(at / 64.) - 29.5)) * 1.25 - .08;
+  return fract(f) / .9 > reachLines(vec3(mod(at, 64.) - 29.5, 0., floor(at / 64.) - 29.5)) * 1.25 - .08;
 }
 `;
 const FS = COMMON + PIERCE + REACH + `
@@ -476,10 +485,11 @@ void main() {
     c = mix(vec3(.4, .5, .51), vec3(.93, .95, .94), smoothstep(.38, .78, st)) * (.82 + .18 * sh);
   }
   if (mat == 2 && vTone > .99) c = vec3(.93, .94, .91) * (.86 + .14 * noise(vPos * 40. + uTime));
-  // (the ramp from the picture to the page, by the drawing's reach: fully rendered near what's built; then, over a broad
-  // band, the render as a wash (lighter, less coloured, laid to a crisp edge that granulates and pools a little darker,
-  // as a watercolour dries) with the ink laid over it; then the marks alone on the paper. \`drawn\`: how far along it
-  // this is (0 the render, 1 the page), handed to the post pass so its lines come up as the drawing takes over)
+  // (the ramp from the picture to the page, by the picture's reach: whole round what's built; then, step by step, less
+  // coloured and paler, the ink coming up over it, till by the wash's edge (crisp, granulating, pooling a little darker,
+  // as a watercolour dries) it's barely a tint on the paper, so the edge is quiet; past it, the marks alone, as far as
+  // the lines reach. \`drawn\`: how far along it this is (0 the render, 1 the page), handed to the post pass so its
+  // lines come up as the drawing takes over)
   vec3 PAP = vec3(.94, .91, .85);
   float drawn = 0., washA = 1.;
   vec3 washC = c;
@@ -489,12 +499,15 @@ void main() {
     vec3 at = vPos;
     if (vU >= 4. && vU < 5.) { float at0 = floor((vU - 4.) * 10000.); at = vec3(mod(at0, 64.) - 29.5, 0., floor(at0 / 64.) - 29.5); }
     else if (vU >= 3. && vU < 4.) at = vec3(floor(vPos.x) + .5, 0., floor(vPos.z) + .5);
-    float t = reach(at) + (fbm(vec3(at.xz * .9, 5.)) - .5) * .35 + (onIt ? (noise(vPos * 3.1) - .5) * .12 : 0.);
-    drawn = 1. - smoothstep(.42, .88, t);
-    float wv = t + (onIt ? (noise(vPos * 4.5) - .5) * .1 + (noise(vPos * 13.) - .5) * .04 : 0.);
-    washA = smoothstep(.16, .19, wv);
-    float L = dot(c, vec3(.3, .55, .15));
-    washC = mix(PAP, mix(vec3(L), c, .8), .58) * (1. - .13 * washA * (1. - smoothstep(.19, .27, wv))) * (.97 + .05 * noise(vPos * 31.));
+    // (ragged only where there's something to be ragged: out past the picture's reach, no islands of wash)
+    float R0 = reach(at), rg = min(1., R0 * 4.);
+    float t = R0 + ((fbm(vec3(at.xz * .9, 5.)) - .5) * .3 + (onIt ? (noise(vPos * 3.1) - .5) * .1 : 0.)) * rg;
+    drawn = 1. - smoothstep(.1, .85, t);
+    float wv = t - .02 + (onIt ? (noise(vPos * 4.5) - .5) * .1 + (noise(vPos * 13.) - .5) * .04 : 0.) * rg;
+    washA = smoothstep(.0, .03, wv);
+    float L = dot(c, vec3(.3, .55, .15)), fd = smoothstep(.0, 1., drawn);
+    washC = mix(c, mix(vec3(L), c, .65), smoothstep(.0, .5, drawn));
+    washC = mix(washC, PAP, .82 * fd * fd) * (1. - .1 * washA * (1. - smoothstep(.03, .1, wv))) * (1. + (.05 * noise(vPos * 31.) - .025) * fd);
     // (and over the wash, in the shade, the pen's hatching: one way where it's in shade, crossed where it's darker; laid
     // in the world so it stays on what it shades, and left out where its lines would crowd together)
     float h1 = (vPos.x - vPos.z) * 9. + vPos.y * 6., h2 = (vPos.x + vPos.z) * 9. - vPos.y * 6.;
@@ -502,7 +515,7 @@ void main() {
     float l1 = (1. - smoothstep(.35, 1.1, min(fract(h1), 1. - fract(h1)) / f1)) * (1. - smoothstep(.25, .45, f1));
     float l2 = (1. - smoothstep(.35, 1.1, min(fract(h2), 1. - fract(h2)) / f2)) * (1. - smoothstep(.25, .45, f2));
     float brk = step(.25, noise(vec3(h1 * .35, h2 * .35, 3.)));
-    washC *= 1. - .5 * max(l1 * smoothstep(.6, .38, L), l2 * smoothstep(.4, .24, L)) * brk;
+    washC *= 1. - .3 * max(l1 * smoothstep(.6, .38, L), l2 * smoothstep(.4, .24, L)) * brk * smoothstep(.15, .5, drawn) * (1. - smoothstep(.65, .95, drawn)) * (mat == 3 ? 0. : 1.);
   }
   // (the land, held back: most of the way to its own pale, unlit, the shade still on it)
   bool land = mat == 5 && moss;
@@ -512,7 +525,7 @@ void main() {
     // down it, a broken ink line along its top; the shade cast on the ground laid on in dry strokes. Away from what's
     // built and toward the land's edge there are fewer and fewer of them, each as dark as ever: the land isn't faded
     // out, it's drawn less, till there's only the page)
-    float R = reach(vPos);
+    float R = reachLines(vPos);
     vec3 GREY = vec3(.62, .58, .53), g = PAP;
     float up = n.y, rough = noise(vPos * vec3(1.7, 2.3, 1.7)) * .6 + noise(vPos * 6.) * .4;
     float cut = .41 - (up + (rough - .5) * .14), cliff = smoothstep(-.09, .09, cut), steep = smoothstep(.97, .7, up);
@@ -544,19 +557,21 @@ void main() {
     g = mix(g, GREY, .42 * lay * smoothstep(.05, .3, shade) * (1. - .6 * cliff));
     // (near what's built, the land as the light finds it, whole; then the wash of it with the marks over it; further
     // out the marks alone)
-    c = mix(mix(g, washC * (g / PAP), washA), c, 1. - drawn);
+    // (the marks a little softer than ink straight from the pen, so the page and the picture aren't at odds)
+    g = mix(PAP, g, .72);
+    c = mix(g, washC * mix(vec3(1.), g / PAP, smoothstep(.2, .7, drawn)), washA);
   }
   else if (uBleed > .5 && mat == 2 && !fur) {
     // (the stream, away from what's built: its water laid in broken strokes along it, then only a line or two)
-    float R = reach(vPos), br = noise(vec3(vPos.x * 3., vPos.z * 3., 9.)) * .6 + noise(vec3(vPos.x * 11., vPos.y, vPos.z * 11.)) * .4;
-    float wet = smoothstep(1. - R * 1.3, 1.06 - R * 1.3, br);
+    float R = reachLines(vPos), br = noise(vec3(vPos.x * 3., vPos.z * 3., 9.)) * .6 + noise(vec3(vPos.x * 11., vPos.y, vPos.z * 11.)) * .4;
+    float wet = smoothstep(1. - reach(vPos) * 1.3, 1.06 - reach(vPos) * 1.3, br);
     vec2 q = vec2(vPos.x + vPos.z, vPos.x - vPos.z) * .707;
     float lines = max(strokes(q, .09, .35, .35, 3., max(fwidth(q.y), 1e-5), .7, .02, .25), strokes(q.yx, .09, .35, .35, 5., max(fwidth(q.x), 1e-5), .7, .02, .25));
     c = mix(mix(vec3(.94, .91, .85), vec3(.2, .22, .23), lines * .55 * (1. - wet) * smoothstep(0., .25, R + .15)), c, wet);
   }
   else if (land) c = mix(c, base * (.86 + .14 * sh) * (.92 + .08 * vAo), .55);
   // (what stands out on the land (a rock, a shrub, a tree), and anything built out toward its edge: washed the same way)
-  if (uBleed > .5 && !land && !sel && !fur && mat != 2) c = mix(mix(PAP, washC, washA), c, 1. - drawn);
+  if (uBleed > .5 && !land && !sel && !fur && mat != 2) c = mix(PAP, washC, washA);
   // (what's taken up: a faint warm tint; its outline is drawn after, where the mask changes)
   if (sel) c = mix(c, c * vec3(1.1, .98, .84) + vec3(.05, .025, 0.), .6);
   oCol = vec4(c, 1.);
@@ -648,7 +663,7 @@ void main() {
   float fold = smoothstep(.04, .14, lap), crease = smoothstep(.3, .6, turn);
   float wt = (furOn > .5 ? .4 : mix(.16, .8, drawn)) * fold * (1. - onLand) + crease * drawn * .6 * (1. - onLand);
   float brk = step(.35, fract(sin(dot(floor(q / (5. * uDpr)), vec2(12.9898, 78.233))) * 43758.5453));
-  wt = max(wt, onLand * smoothstep(.15, .6, drawn) * max(fold, smoothstep(.1, .3, turn)) * .6 * brk);
+  wt = max(wt, onLand * smoothstep(.15, .6, drawn) * max(fold, smoothstep(.1, .3, turn)) * .32 * brk);
   o = vec4(mix(mix(c, ink * 1.6, max(wt * (1. - step(.5, skyN)), rim * .8)), vec3(.69, .36, .12), ring * .9), 1.);
   // (bleeding: the same paper under everything, its edge a shade darker, so the ground and the page are one sheet)
   if (uBleed > .5) o.rgb *= 1. - .06 * smoothstep(.35, .75, length((vUv - .5) * vec2(1.2, 1.)));
@@ -719,8 +734,29 @@ export class Renderer {
   area: [number, number, number] = [0, 0, 10];
   /** the land bleeding into the page (after Taohua), and the land's extent in the scene (x0, z0, x1, z1) */
   bleed = false; landBox: [number, number, number, number] = [-1e3, -1e3, 1e3, 1e3];
-  /** what's built, its extent in the scene (x0, z0, x1, z1): bleeding, the land's given back to the paper away from it */
-  built: [number, number, number, number] = [-5, -5, 5, 5];
+  /**
+   * How far each point of the land is from anything built (cells, 16 at most, as a byte over the box in the scene it
+   * covers (x0, z0, x1, z1)): bleeding, the picture gathers round what's built and the land's given back to the paper
+   * away from it (`focus`)
+   */
+  private focusTex: WebGLTexture | null = null; private focusBox: [number, number, number, number] = [-1e3, -1e3, 1e3, 1e3];
+  focus(field: Uint8Array, w: number, h: number, box: [number, number, number, number]) {
+    const gl = this.gl;
+    if (!this.focusTex) this.focusTex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, this.focusTex);
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, w, h, 0, gl.RED, gl.UNSIGNED_BYTE, field);
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 4);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    this.focusBox = box;
+  }
+  private bindFocus(prog: WebGLProgram) {
+    const gl = this.gl;
+    if (!this.focusTex) this.focus(new Uint8Array([0]), 1, 1, [-1e3, -1e3, 1e3, 1e3]);
+    gl.activeTexture(gl.TEXTURE5); gl.bindTexture(gl.TEXTURE_2D, this.focusTex);
+    gl.uniform1i(gl.getUniformLocation(prog, 'uFocus'), 5); gl.uniform4fv(gl.getUniformLocation(prog, 'uFocusBox'), this.focusBox);
+  }
   /** how high it's built (the sun's view reaches over it) */
   top = 8;
   /** (for looking at it: the sun's shadows, or none) */
@@ -876,7 +912,7 @@ export class Renderer {
     gl.uniformMatrix4fv(gl.getUniformLocation(this.shadow, 'uVP'), false, light);
     gl.uniform1f(gl.getUniformLocation(this.shadow, 'uTime'), time);
     gl.uniform1f(gl.getUniformLocation(this.shadow, 'uLeafCut'), this.leafCut ? 1 : 0);
-    gl.uniform1f(gl.getUniformLocation(this.shadow, 'uBleed'), this.bleed ? 1 : 0); gl.uniform4fv(gl.getUniformLocation(this.shadow, 'uLand'), this.landBox); gl.uniform4fv(gl.getUniformLocation(this.shadow, 'uBuilt'), this.built);
+    gl.uniform1f(gl.getUniformLocation(this.shadow, 'uBleed'), this.bleed ? 1 : 0); gl.uniform4fv(gl.getUniformLocation(this.shadow, 'uLand'), this.landBox); this.bindFocus(this.shadow);
     gl.cullFace(gl.FRONT);
     gl.bindVertexArray(this.vao);
     if (this.shadows) { gl.drawArrays(gl.TRIANGLES, 0, this.count); if (this.dcount) { gl.bindVertexArray(this.dvao); gl.drawArrays(gl.TRIANGLES, 0, this.dcount); gl.bindVertexArray(this.vao); } }
@@ -888,7 +924,7 @@ export class Renderer {
     gl.useProgram(this.main);
     const U = (n: string) => gl.getUniformLocation(this.main, n);
     gl.uniformMatrix4fv(U('uVP'), false, cam.vp); gl.uniformMatrix4fv(U('uLight'), false, light);
-    gl.uniform1f(U('uTime'), time); gl.uniform3fv(U('uSun'), this.sun); gl.uniform3fv(U('uEye'), cam.eye); gl.uniform3fv(U('uDir'), cam.dir); gl.uniform1f(U('uN'), 12); gl.uniform3fv(U('uArea'), this.area); gl.uniform1f(U('uShadows'), this.shadows ? 1 : 0); gl.uniform1f(U('uBleed'), this.bleed ? 1 : 0); gl.uniform4fv(U('uLand'), this.landBox); gl.uniform4fv(U('uBuilt'), this.built);
+    gl.uniform1f(U('uTime'), time); gl.uniform3fv(U('uSun'), this.sun); gl.uniform3fv(U('uEye'), cam.eye); gl.uniform3fv(U('uDir'), cam.dir); gl.uniform1f(U('uN'), 12); gl.uniform3fv(U('uArea'), this.area); gl.uniform1f(U('uShadows'), this.shadows ? 1 : 0); gl.uniform1f(U('uBleed'), this.bleed ? 1 : 0); gl.uniform4fv(U('uLand'), this.landBox); this.bindFocus(this.main);
     gl.uniform1f(U('uTexel'), this.shadowTexel); gl.uniform1f(U('uDepthRange'), this.shadowRange);
     gl.uniform1f(U('uLeafCut'), this.leafCut ? 1 : 0);
     gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, this.shadowTex); gl.bindSampler(0, this.sCompare); gl.uniform1i(U('uShadow'), 0);

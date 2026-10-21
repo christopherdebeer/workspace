@@ -108,6 +108,15 @@ The render no longer switches to the paper over a narrow ragged band. It goes ov
 - **Things on the land** (rocks, shrubs, trees) and anything built out toward its edge are washed the same way. Each takes the ramp at its foot, so a crown is never torn in two.
 - **Ink lines:** how far along the ramp each pixel is gets handed to the post pass, which brings the lines up as the drawing takes over. They get heavier and are drawn at creases as well as folds, and on the land's ledges and banks too, broken.
 
+**Gathered round what's built.** The drawing's reach is no longer the box round everything built. It's a distance field over the land: each point knows how far it is from the nearest built column, recomputed whenever what's built changes. Two reaches come from it:
+
+- **The picture's reach:** short, so full fidelity gathers round the buildings themselves.
+- **The line's reach:** much longer, so the pen work (hachures, the cliffs' washes and drags, rocks, shrubs and trees drawn in outline) goes on across the land and thins out toward its edge.
+
+Between them the render fades steadily, less coloured and paler, with the ink coming up over it. By the wash's edge it's barely a tint, so the edge is quiet and the picture and the page aren't at odds. The marks themselves are a little softer than straight ink. The wash is ragged only where the picture reaches, so there are no islands of it out on the paper. Leaves aren't hatched.
+
+![Gathered round what's built](labyrinth/look-focus.jpg)
+
 **Foundations meet the land.** Where stone stands on the land, a skirt of the land's own ground is banked a little up its foot outside the plinth and settles onto the ground beside it, with its corners mitred. So earth and grass run to the stone instead of stopping at a line, damp and greener at the wall's foot where the rain off it gathers. Where the ground falls away, there's no skirt and the foundation's cut face shows.
 
 ## Next
