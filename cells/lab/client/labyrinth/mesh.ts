@@ -820,7 +820,18 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
    */
   function landMesh() {
     const land = w.land!, B = w.extent(), x0 = B.i0, x1 = B.i1 + 1, z0 = B.j0, z1 = B.j1 + 1, RES = (x1 - x0) * (z1 - z0) > 500 ? 3 : 4;
-    const Y = (gx: number, gz: number) => groundY(w, Math.min(x1 - 1e-4, Math.max(x0, gx)), Math.min(z1 - 1e-4, Math.max(z0, gz)));
+    const Y0 = (gx: number, gz: number) => groundY(w, Math.min(x1 - 1e-4, Math.max(x0, gx)), Math.min(z1 - 1e-4, Math.max(z0, gz)));
+    // (where it's steep (a cliff, a bank's face), the rock in its beds: the height stepped into ledges a third of a level
+    // thick, each ledge's lip a little rounded, so a cliff is broken by shelves and overhang-like lips, not a smooth
+    // sheet; where it's level (where things are built), the ground as it is)
+    const Y = (gx: number, gz: number) => {
+      const y = Y0(gx, gz), e = 0.18, sl = Math.hypot(Y0(gx + e, gz) - Y0(gx - e, gz), Y0(gx, gz + e) - Y0(gx, gz - e)) / (2 * e);
+      const steep = Math.min(1, Math.max(0, (sl - 0.9) / 1.4));
+      if (steep <= 0) return y;
+      const bed = 0.34 * (0.85 + 0.3 * noise2(land.seed, gx * 0.7 + 3.1, gz * 0.7 - 1.7)), f = y / bed, fl = Math.floor(f), t = f - fl;
+      const ledge = (fl + (t < 0.35 ? 0 : t > 0.7 ? 1 : (t - 0.35) / 0.35)) * bed;
+      return y + (ledge - y) * steep * 0.85;
+    };
     cur = { born: -1e3, pivot: 0, how: 1, tone: 0.5, dress: 0, sel: false };
     const nx = (x1 - x0) * RES, nz = (z1 - z0) * RES;
     const P = (a: number, b: number): V3 => { const gx = x0 + a / RES, gz = z0 + b / RES; return [gx - CENTER, Y(gx, gz), gz - CENTER]; };

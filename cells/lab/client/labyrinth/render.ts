@@ -263,24 +263,29 @@ void main() {
   else if (mat == 7) base = vec3(.90, .89, .86) * (.98 + .03 * noise(vPos * 3.));
   else if (mat == 6) base = travertine(vPos, .6) * .9;
   else if (mat == 5 && moss) {
-    // (the land: barely there. Its open ground the paper's own warm pale, a faint grain in it; where it slopes, a few
-    // dashes down the fall of it; where it's steep (a cliff, the land's edge), rock: a grey wash, mottled, cracked)
+    // (the land, as the light finds it near what's built (further out it's given back to the paper, below): open ground
+    // warm earth and dry grass, greener where it's damp and low; where it's steep, limestone in its beds, the bedding
+    // lines across it and the fractures down it, each bed's face a little out of true, weathered darker at its foot)
     float up = n.y, rough = noise(vPos * vec3(1.7, 2.3, 1.7)) * .6 + noise(vPos * 6.) * .4;
-    landFeat = smoothstep(.5, .32, up + (rough - .5) * .14);
-    base = vec3(.88, .84, .76) * (.97 + .05 * noise(vPos * vec3(3., 1., 3.)));
-    float steep = smoothstep(.97, .7, up), cliff = smoothstep(.5, .32, up + (rough - .5) * .14);
-    if (steep > 0. && cliff < 1.) {
-      vec2 fall = normalize(n.xz + 1e-4), con = vec2(-fall.y, fall.x);
-      float a = dot(vPos.xz, con) * mix(9., 5., uBleed), b = dot(vPos.xz, fall) * mix(3., 1.4, uBleed) - vPos.y * mix(3., 1.4, uBleed);
-      float row = floor(a), lane = abs(fract(a) - .5);
-      float on = step(hash(vec3(row, floor(b), 3.)), mix(.16 + .22 * steep, .1 + .16 * steep, uBleed)) * step(lane, .05 + .03 * steep) * step(mix(.35, .55, uBleed), fract(b + hash(vec3(row, 1., 9.))));
-      base = mix(base, vec3(.55, .52, .47), on * .5 * steep * (1. - cliff));
-      landFeat = max(landFeat, on * steep * (1. - cliff));
-    }
-    vec3 rock = mix(vec3(.62, .60, .56), vec3(.80, .77, .71), rough) * (.9 + .1 * vTone);
-    float crack = smoothstep(.47, .5, noise(vPos * vec3(5., 9., 5.))) * smoothstep(.53, .5, noise(vPos * vec3(5., 9., 5.)));
-    rock = mix(rock, vec3(.36, .34, .31), crack * .7);
-    base = mix(base, rock, cliff);
+    float cliff = smoothstep(.5, .32, up + (rough - .5) * .14);
+    landFeat = cliff;
+    float patch = fbm(vec3(vPos.xz * 1.1, 2.)), fine = noise(vPos * 9.);
+    vec3 soil = mix(vec3(.80, .69, .52), vec3(.74, .66, .48), patch);
+    soil = mix(soil, vec3(.63, .62, .43), .55 * smoothstep(.5, .72, fbm(vec3(vPos.xz * 2.3, 7.))) * smoothstep(.75, .95, up));
+    soil = mix(soil, vec3(.50, .54, .36), .4 * smoothstep(.62, .8, fbm(vec3(vPos.xz * 3.1, 11.))) * (1. - vAo * .5));
+    soil *= .94 + .1 * fine;
+    // (the rock: its beds by height, warped a little; a bedding line at each bed's foot, a fracture now and then down it)
+    float bedV = vPos.y * 2.9 + noise(vPos * vec3(.6, .3, .6)) * .9, bedF = fract(bedV), bedI = floor(bedV);
+    vec3 rock = mix(vec3(.80, .76, .68), vec3(.88, .85, .78), hash(vec3(bedI, 3., 1.)) * .7 + .3 * rough);
+    vec2 fall = normalize(n.xz + 1e-4), con = vec2(-fall.y, fall.x);
+    float fr = abs(noise(vec3(dot(vPos.xz, con) * 3.2, bedI * .37, 4.)) - .5);
+    rock *= 1. - .22 * (1. - smoothstep(.0, .09, bedF)) - .18 * (1. - smoothstep(.0, .035, fr)) * step(.4, hash(vec3(bedI, floor(dot(vPos.xz, con) * 1.6), 9.)));
+    rock = mix(rock, vec3(.62, .58, .50), .25 * smoothstep(.6, .9, fbm(vPos * 1.7 + 4.)));
+    base = mix(soil, rock, cliff);
+    // (the beds' faces turned a little each, the bedding lines and fractures cut in, for the light)
+    float kL = keep(6.);
+    nS = normalize(n + (vec3(con.x, 0., con.y) * (hash(vec3(bedI, 7., 2.)) - .5) * .5 + vec3(0., 1., 0.) * (smoothstep(.0, .12, bedF) - .5) * .35 + vec3(con.x, 0., con.y) * sign(noise(vec3(dot(vPos.xz, con) * 3.2, bedI * .37, 4.)) - .5) * (1. - smoothstep(.0, .05, fr)) * .5) * cliff * kL);
+    cav = 1. - cliff * (.3 * (1. - smoothstep(.0, .09, bedF)) + .2 * (1. - smoothstep(.0, .035, fr)));
   }
   else if (mat == 5) base = travertine(vPos * .8 + 11., .5) * 1.03;
   else if (mat == 8) {
@@ -428,7 +433,11 @@ void main() {
     float brush = noise(vec3(vPos.x * 1.1, vPos.z * 9., 2.)) * .75 + noise(vec3(vPos.x * 4., vPos.z * 24., 5.)) * .25;
     float lay = smoothstep(1. - sR * 1.2, 1.05 - sR * 1.2, brush);
     g = mix(g, GREY, .42 * lay * smoothstep(.05, .3, shade) * (1. - .6 * cliff));
-    c = g;
+    // (near what's built, the land as the light finds it, whole; further out the drawing of it in marks; between, the
+    // painted land breaking up raggedly into the marks, as a wash dries out at its edge)
+    float rag = fbm(vec3(vPos.xz * .9, 5.)) * .55 + noise(vPos * 3.1) * .2;
+    float lit = smoothstep(.55, .62, R * 1.1 + rag - .55);
+    c = mix(g, c, lit);
   }
   else if (uBleed > .5 && mat == 2 && !fur) {
     // (the stream, away from what's built: its water laid in broken strokes along it, then only a line or two)
