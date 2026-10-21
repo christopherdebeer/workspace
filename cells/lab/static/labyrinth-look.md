@@ -117,6 +117,25 @@ Between them the render fades steadily, less coloured and paler, with the ink co
 
 ![Gathered round what's built](labyrinth/look-focus.jpg)
 
+## Stage 9: after the transition studies
+
+![After the render ↔ drawing transition studies](labyrinth/look-drawing.jpg)
+
+These follow the two study sheets, [one](labyrinth/ref-transition-1.jpg) and [two](labyrinth/ref-transition-2.jpg) (continuous world, spatial legibility, construction grows, selective detail, persistent marks).
+
+- **Paper and ink:** warm parchment, and sepia ink for every mark and line. The page behind matches.
+- **Each feature at its own rate.** Where a point sits on the way from the picture to the page is worked out once, at the top of the shader, by the picture's reach at it (a thing on the land is judged at its foot), with an offset for each kind of thing:
+  - what's built holds on longest;
+  - water nearly as long;
+  - then the ground;
+  - trees soonest, going to drawn canopy while what they stand by is still whole.
+- **Reduced texture first:** a material's fine detail goes before its colour and form do. Joints, tiles, pores, bed lines and grain all fade through the same switch that already drops what's too small to see.
+- **Wash toward the paper's warmth:** colour drains toward the page's own hue, not toward grey, so the wash never reads paler than the page.
+- **Drawn terrain in contours:** a line each third of a level, every third one heavier, where the ground is gentle enough for them to stand apart. Cliffs keep their hatching instead. The contours break here and there and thin out further away.
+- **Drawn canopy:** a crown being drawn is cut through more, so its limbs show, and its tufts' edges get the pen's small scalloped marks.
+- **Water continuous:** past the painted stream, a pale wash of its colour with its flow lines, as far as the lines reach.
+- **Persistent marks:** the land's ink lines are no longer broken by a pattern fixed to the screen. Every mark is anchored in the world.
+
 **Foundations meet the land.** Where stone stands on the land, a skirt of the land's own ground is banked a little up its foot outside the plinth and settles onto the ground beside it, with its corners mitred. So earth and grass run to the stone instead of stopping at a line, damp and greener at the wall's foot where the rain off it gathers. Where the ground falls away, there's no skirt and the foundation's cut face shows.
 
 ## Next

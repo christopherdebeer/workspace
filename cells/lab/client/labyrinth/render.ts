@@ -132,7 +132,10 @@ float strokes(vec2 p, float rs, float len, float dens, float seed, float fy, flo
 }
 // (travertine: cream, banded as it was laid down, pitted with its little pores, each block a shade of its own)
 // (how much fine detail at a frequency survives at this distance: none once a cycle is smaller than a pixel or so)
-float keep(float f) { return 1. - smoothstep(.25, .6, length(fwidth(vPos)) * f); }
+// (and none of it where the picture's giving way to the drawing (\`gDetail\`): the material's grain goes first, its
+// colour and its form after)
+float gDetail = 1.;
+float keep(float f) { return (1. - smoothstep(.25, .6, length(fwidth(vPos)) * f)) * gDetail; }
 vec3 travertine(vec3 p, float tone) {
   // (quiet over a large face: banded as it was laid down, a few pores, softer as it goes away)
   vec3 c = vec3(.86, .82, .74) * (.96 + .06 * tone);
@@ -224,13 +227,29 @@ vec3 coat(int c, float h, vec3 n, float tone) {
 void main() {
   vec3 n = normalize(vNrm);
   if (pierced(vPos, n, vMat)) discard;
-  if (vMat < 511.5 && leafCut(vPos, vMat, leafEdge(n))) discard;
   int m0 = int(vMat + .5), m = m0 % 256, mat = m % 16, kind = (m / 64) % 4;
   bool fur = m0 >= 512;
-  if (!fur && leftOut(vPos, vU)) discard;
   bool sel = m0 >= 256 && !fur;
   if (fur) { mat = 16; kind = 0; m = 0; }
   bool moss = (m / 16) % 2 == 1, ivy = (m / 32) % 2 == 1;
+  // (where this is on the way from the picture to the page (\`gT\`: past .85 the picture whole, under .1 the page), worked
+  // out first: by the picture's reach at it (a thing on the land by its foot, so it isn't torn in two), ragged where the
+  // picture reaches; and each kind of thing at its own rate: what's built holds on longest, then the water, the ground,
+  // and soonest the trees, which go to drawn canopy while what they stand by is still whole)
+  float gT = 2.;
+  bool onIt = mat == 5 && moss;
+  if (uBleed > .5 && !sel && !fur) {
+    vec3 at = vPos;
+    if (vU >= 4. && vU < 5.) { float at0 = floor((vU - 4.) * 10000.); at = vec3(mod(at0, 64.) - 29.5, 0., floor(at0 / 64.) - 29.5); }
+    else if (vU >= 3. && vU < 4.) at = vec3(floor(vPos.x) + .5, 0., floor(vPos.z) + .5);
+    float R0 = reach(at), rg = min(1., R0 * 4.);
+    float rate = onIt ? 0. : mat == 3 ? -.07 : mat == 4 ? -.03 : mat == 2 ? .25 : .3;
+    gT = R0 + ((fbm(vec3(at.xz * .9, 5.)) - .5) * .3 + (onIt ? (noise(vPos * 3.1) - .5) * .1 : 0.)) * rg + rate * rg;
+  }
+  gDetail = smoothstep(.5, .85, gT);
+  // (a crown cut through more as it's drawn, so its limbs show and it reads as drawn canopy)
+  if (vMat < 511.5 && leafCut(vPos, vMat, leafEdge(n) + .32 * (1. - smoothstep(.1, .7, gT)))) discard;
+  if (!fur && leftOut(vPos, vU)) discard;
   vec3 base; float spec = 0., wrap = 0.;
   // (the surface as the light sees it: the face's own normal, turned by the relief of what it's made of (joints, tiles);
   // and how shut in its little hollows are. The ink still sees the face's own)
@@ -490,23 +509,17 @@ void main() {
   // as a watercolour dries) it's barely a tint on the paper, so the edge is quiet; past it, the marks alone, as far as
   // the lines reach. \`drawn\`: how far along it this is (0 the render, 1 the page), handed to the post pass so its
   // lines come up as the drawing takes over)
-  vec3 PAP = vec3(.94, .91, .85);
+  vec3 PAP = vec3(.95, .90, .80);
   float drawn = 0., washA = 1.;
   vec3 washC = c;
   if (uBleed > .5 && !sel && !fur) {
-    // (the land's edge ragged at every scale; a thing on it by the broad shape only, so it isn't torn in two)
-    bool onIt = mat == 5 && moss;
-    vec3 at = vPos;
-    if (vU >= 4. && vU < 5.) { float at0 = floor((vU - 4.) * 10000.); at = vec3(mod(at0, 64.) - 29.5, 0., floor(at0 / 64.) - 29.5); }
-    else if (vU >= 3. && vU < 4.) at = vec3(floor(vPos.x) + .5, 0., floor(vPos.z) + .5);
-    // (ragged only where there's something to be ragged: out past the picture's reach, no islands of wash)
-    float R0 = reach(at), rg = min(1., R0 * 4.);
-    float t = R0 + ((fbm(vec3(at.xz * .9, 5.)) - .5) * .3 + (onIt ? (noise(vPos * 3.1) - .5) * .1 : 0.)) * rg;
+    float t = gT, rg = min(1., max(t, 0.) * 4.);
     drawn = 1. - smoothstep(.1, .85, t);
     float wv = t - .02 + (onIt ? (noise(vPos * 4.5) - .5) * .1 + (noise(vPos * 13.) - .5) * .04 : 0.) * rg;
     washA = smoothstep(.0, .03, wv);
     float L = dot(c, vec3(.3, .55, .15)), fd = smoothstep(.0, 1., drawn);
-    washC = mix(c, mix(vec3(L), c, .65), smoothstep(.0, .5, drawn));
+    // (less coloured toward the paper's own warmth, not toward grey, so the wash never reads paler than the page)
+    washC = mix(c, mix(PAP * (L / .9), c, .7), smoothstep(.0, .5, drawn));
     washC = mix(washC, PAP, .82 * fd * fd) * (1. - .1 * washA * (1. - smoothstep(.03, .1, wv))) * (1. + (.05 * noise(vPos * 31.) - .025) * fd);
     // (and over the wash, in the shade, the pen's hatching: one way where it's in shade, crossed where it's darker; laid
     // in the world so it stays on what it shades, and left out where its lines would crowd together)
@@ -526,29 +539,39 @@ void main() {
     // built and toward the land's edge there are fewer and fewer of them, each as dark as ever: the land isn't faded
     // out, it's drawn less, till there's only the page)
     float R = reachLines(vPos);
-    vec3 GREY = vec3(.62, .58, .53), g = PAP;
+    vec3 GREY = vec3(.72, .64, .53), g = PAP;
     float up = n.y, rough = noise(vPos * vec3(1.7, 2.3, 1.7)) * .6 + noise(vPos * 6.) * .4;
     float cut = .41 - (up + (rough - .5) * .14), cliff = smoothstep(-.09, .09, cut), steep = smoothstep(.97, .7, up);
     vec2 fall = normalize(n.xz + 1e-4), con = vec2(-fall.y, fall.x);
     if (steep > 0. && cliff < 1.) {
       vec2 ph = vec2(dot(vPos.xz, fall) * 1.3 - vPos.y, dot(vPos.xz, con));
       float h = strokes(ph, .17, .7, (.1 + .5 * steep) * R, 15., max(fwidth(ph.y), 1e-5), 1.15, .015, .2);
-      g = mix(g, vec3(.36, .33, .3), h * .85 * smoothstep(0., .45, steep) * (1. - cliff));
+      g = mix(g, vec3(.45, .36, .27), h * .85 * smoothstep(0., .45, steep) * (1. - cliff));
     }
     if (cliff > 0.) {
       float toL = dot(fall, normalize(uSun.xz + 1e-4)), u = dot(vPos.xz, con);
-      vec3 wash = mix(vec3(.55, .53, .5), vec3(.75, .73, .69), smoothstep(-.4, .5, toL)) * (.92 + .12 * noise(vPos * 1.4));
+      vec3 wash = mix(vec3(.66, .59, .5), vec3(.84, .78, .68), smoothstep(-.4, .5, toL)) * (.92 + .12 * noise(vPos * 1.4));
       // (the wash as a dry brush lays it, streaked down the face: as far as the drawing reaches, then broken, then gone)
       float br = noise(vec3(u * 7., vPos.y * 1.1, 4.)) * .72 + noise(vec3(u * 21., vPos.y * 3., 7.)) * .28;
       float laid = smoothstep(1. - R * 1.25, 1.06 - R * 1.25, br);
       g = mix(g, mix(PAP, wash, .7), cliff * laid);
       vec2 pw = vec2(-vPos.y, u);
       float drag = strokes(pw, .11, .8, .75 * sqrt(R), 12., max(fwidth(pw.y), 1e-5), 1.2, .03, .3);
-      g = mix(g, vec3(.22, .21, .2), drag * .8 * cliff);
+      g = mix(g, vec3(.31, .24, .18), drag * .8 * cliff);
       // (its top: where the cut begins, an ink line, broken)
       float rimD = cut / max(fwidth(cut), 1e-4), downhill = dFdx(cut) * dFdx(vPos.y) + dFdy(cut) * dFdy(vPos.y);
       float rim = (1. - smoothstep(1.2, 2.4, rimD)) * step(0., rimD) * step(downhill, 0.) * step(.3, noise(vPos * vec3(.9, 2., .9)) + .25 * R) * step(1. - R * 1.4, bnoise(vPos * .7));
-      g = mix(g, vec3(.13, .12, .11), rim * .85);
+      g = mix(g, vec3(.2, .15, .11), rim * .85);
+    }
+    // (the lie of the land in contours: a line each third of a level up it, every third one a little heavier, where the
+    // ground's gentle enough for them to stand apart (on a cliff they'd crowd: its hatching says it there); broken here
+    // and there, fewer further out; in the world, so they stay where they are as the eye moves)
+    {
+      float cy = vPos.y * 3., fw = max(fwidth(cy), 1e-4);
+      float cl = (1. - smoothstep(.5, 1.3, min(fract(cy), 1. - fract(cy)) / fw)) * (1. - smoothstep(.12, .3, fw)) * (1. - cliff) * smoothstep(.995, .95, up);
+      float heavy = step(mod(floor(cy + .5), 3.), .5);
+      cl *= step(1. - R * 1.4, noise(vPos * vec3(1.1, .4, 1.1) + 7.));
+      g = mix(g, vec3(.38, .3, .22), cl * (.45 + .25 * heavy));
     }
     // (the shade cast on the ground: laid on as a dry brush lays grey, breaking up at its edge, and further out, gone)
     float shade = (1. - sh) * (.75 + .25 * (1. - vAo)), sR = shade * (.25 + .75 * R);
@@ -564,14 +587,21 @@ void main() {
   else if (uBleed > .5 && mat == 2 && !fur) {
     // (the stream, away from what's built: its water laid in broken strokes along it, then only a line or two)
     float R = reachLines(vPos), br = noise(vec3(vPos.x * 3., vPos.z * 3., 9.)) * .6 + noise(vec3(vPos.x * 11., vPos.y, vPos.z * 11.)) * .4;
-    float wet = smoothstep(1. - reach(vPos) * 1.3, 1.06 - reach(vPos) * 1.3, br);
+    float Rw = min(1., reach(vPos) + .25), wet = smoothstep(1. - Rw * 1.3, 1.06 - Rw * 1.3, br);
     vec2 q = vec2(vPos.x + vPos.z, vPos.x - vPos.z) * .707;
     float lines = max(strokes(q, .09, .35, .35, 3., max(fwidth(q.y), 1e-5), .7, .02, .25), strokes(q.yx, .09, .35, .35, 5., max(fwidth(q.x), 1e-5), .7, .02, .25));
-    c = mix(mix(vec3(.94, .91, .85), vec3(.2, .22, .23), lines * .55 * (1. - wet) * smoothstep(0., .25, R + .15)), c, wet);
+    vec3 pale = mix(PAP, vec3(.62, .80, .80), .55 * smoothstep(.0, .5, R));
+    c = mix(mix(pale, vec3(.24, .33, .36), lines * .55 * (1. - wet) * smoothstep(0., .25, R + .15)), c, wet);
   }
   else if (land) c = mix(c, base * (.86 + .14 * sh) * (.92 + .08 * vAo), .55);
   // (what stands out on the land (a rock, a shrub, a tree), and anything built out toward its edge: washed the same way)
   if (uBleed > .5 && !land && !sel && !fur && mat != 2) c = mix(PAP, washC, washA);
+  // (a crown as it's drawn: its tufts' edges in the pen's small scalloped marks, as a hand draws leaves)
+  if (uBleed > .5 && mat == 3 && !fur) {
+    float lf = bnoise(vPos * 4.2 + 11.), fl = max(fwidth(lf), 1e-4);
+    float mk = (1. - smoothstep(.5, 1.3, abs(lf - .55) / fl)) * (1. - smoothstep(.06, .12, fl)) * step(.35, bnoise(vPos * 9. + 2.));
+    c = mix(c, vec3(.32, .27, .18), mk * .55 * smoothstep(.4, .85, drawn));
+  }
   // (what's taken up: a faint warm tint; its outline is drawn after, where the mask changes)
   if (sel) c = mix(c, c * vec3(1.1, .98, .84) + vec3(.05, .025, 0.), .6);
   oCol = vec4(c, 1.);
@@ -592,7 +622,7 @@ out vec4 o;
 float D(vec2 uv) { return texture(uDepth, uv).r * uRange; }
 vec3 Nn(vec2 uv) { return texture(uNrm, uv).xyz * 2. - 1.; }
 void main() {
-  vec3 paper = vec3(.94,.91,.85);
+  vec3 paper = vec3(.95,.90,.80);
   float d = D(vUv);
   vec2 px = uPx * max(1., uDpr * .75);
   // (ink where the depth folds (a laplacian, so a sloping face doesn't draw) or the surface turns sharply)
@@ -639,7 +669,7 @@ void main() {
     o = vec4(paper * (1. - .12 * v * v * (1. - uBleed)) * (1. - .06 * uBleed * smoothstep(.35, .75, length((vUv - .5) * vec2(1.2, 1.)))), 1.);
     return;
   }
-  vec3 ink = vec3(.17,.14,.12);
+  vec3 ink = vec3(.22,.16,.11);
   if (uPrint > .5) {
     // (a lithograph: the light as hatching, closer and crossed as it darkens)
     float L = dot(c, vec3(.3,.55,.15));
@@ -662,8 +692,7 @@ void main() {
   float drawn = uBleed < .5 ? 0. : m > .405 && m < .545 ? clamp((m - .41) / .13, 0., 1.) : m > .1 && m < .4 ? clamp((m - .12) / .26, 0., 1.) : 0.;
   float fold = smoothstep(.04, .14, lap), crease = smoothstep(.3, .6, turn);
   float wt = (furOn > .5 ? .4 : mix(.16, .8, drawn)) * fold * (1. - onLand) + crease * drawn * .6 * (1. - onLand);
-  float brk = step(.35, fract(sin(dot(floor(q / (5. * uDpr)), vec2(12.9898, 78.233))) * 43758.5453));
-  wt = max(wt, onLand * smoothstep(.15, .6, drawn) * max(fold, smoothstep(.1, .3, turn)) * .32 * brk);
+  wt = max(wt, onLand * smoothstep(.15, .6, drawn) * max(fold, smoothstep(.1, .3, turn)) * .32);
   o = vec4(mix(mix(c, ink * 1.6, max(wt * (1. - step(.5, skyN)), rim * .8)), vec3(.69, .36, .12), ring * .9), 1.);
   // (bleeding: the same paper under everything, its edge a shade darker, so the ground and the page are one sheet)
   if (uBleed > .5) o.rgb *= 1. - .06 * smoothstep(.35, .75, length((vUv - .5) * vec2(1.2, 1.)));

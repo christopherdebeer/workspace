@@ -3,17 +3,17 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
-  <meta name="theme-color" content="#efe8da">
+  <meta name="theme-color" content="#f2e6cc">
   <title>Labyrinth</title>
   <style>
-    html, body { margin: 0; height: 100%; background: #efe8da; overflow: hidden; touch-action: none; }
+    html, body { margin: 0; height: 100%; background: #f2e6cc; overflow: hidden; touch-action: none; }
     body { color: #2b2420; font-family: "Iowan Old Style", Palatino, Georgia, serif; -webkit-user-select: none; user-select: none; }
     canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
     #guide { pointer-events: none; z-index: 1; }
     nav { position: fixed; top: max(12px, env(safe-area-inset-top)); left: 16px; right: 16px; display: flex; align-items: baseline; gap: 14px; z-index: 2; pointer-events: none; }
     nav a { pointer-events: auto; font-size: 13px; letter-spacing: .1em; font-variant: small-caps; color: #2b2420; text-decoration: none; opacity: .75; min-height: 44px; display: flex; align-items: center; }
     nav h1 { margin: 0; font-weight: 400; font-size: 15px; letter-spacing: .32em; text-transform: uppercase; }
-    #hint { position: fixed; left: 0; right: 0; bottom: calc(max(12px, env(safe-area-inset-bottom)) + 76px); text-align: center; font-style: italic; font-size: 15px; opacity: 0; transition: opacity .6s; pointer-events: none; text-shadow: 0 0 8px #efe8da, 0 0 3px #efe8da; }
+    #hint { position: fixed; left: 0; right: 0; bottom: calc(max(12px, env(safe-area-inset-bottom)) + 76px); text-align: center; font-style: italic; font-size: 15px; opacity: 0; transition: opacity .6s; pointer-events: none; text-shadow: 0 0 8px #f2e6cc, 0 0 3px #f2e6cc; }
     #hint.on { opacity: .85; }
     #hands { position: fixed; left: 10px; right: 10px; bottom: max(12px, env(safe-area-inset-bottom)); z-index: 2; display: flex; gap: 2px; justify-content: space-between; padding: 6px; border-radius: 26px; background: rgba(246,241,231,.86); box-shadow: 0 2px 14px rgba(70,50,30,.12), inset 0 0 0 1px rgba(70,50,30,.08); -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); overflow-x: auto; scrollbar-width: none; }
     #hands::-webkit-scrollbar { display: none; }
