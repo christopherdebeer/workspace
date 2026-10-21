@@ -70,7 +70,9 @@ float reach(vec3 p) {
 // (a tree's crown (an olive's, a stone pine's: leaves, kind 1 or 2) isn't a ball of green but leaves in tufts with sky
 // between them: where the leaf pattern thins it's cut through, in the picture and in the sun's view both, so its shade
 // on the ground is dappled. \`rim\`: how edge-on the clump's surface is to the eye (cut more there, so its outline breaks))
+uniform float uLeafCut;
 bool leafCut(vec3 p, float m, float rim) {
+  if (uLeafCut < .5) return false;
   int mi = int(m + .5) % 256;
   if (mi % 16 != 3 || ((mi / 64) % 4 != 1 && (mi / 64) % 4 != 2) || (mi / 16) % 4 != 0) return false;
   float lf = bnoise(p * 7.5) * .6 + bnoise(p * 19. + 3.) * .4;
@@ -87,7 +89,7 @@ bool leftOut(vec3 p, float u) {
 `;
 const FS = COMMON + PIERCE + REACH + `
 in vec3 vPos, vNrm; in float vAo, vMat, vTone, vU; in vec4 vLs;
-uniform sampler2D uShadow; uniform vec3 uSun, uEye, uDir, uArea; uniform float uN, uShadows;
+uniform highp sampler2DShadow uShadow; uniform highp sampler2D uShadowRaw; uniform vec3 uSun, uEye, uDir, uArea; uniform float uN, uShadows;
 // (the sun's map: how much of the world a texel of it covers, and how deep its range is, so its bias and its softness are
 // in the world's own units whatever it's fitted to)
 uniform float uTexel, uDepthRange;
@@ -351,13 +353,15 @@ void main() {
   float sh = 0., bias = uTexel * (1.6 + 3.2 * (1. - abs(dot(n, uSun)))) / uDepthRange;
   // (soft where what casts it is far off, crisp where it's close: how far the casters are, then filtered that wide; the
   // softness in the world's units, so it's the same however close the map's fitted)
+  // (the casters' distance from four raw taps; then nine taps compared by the hardware, each itself filtered over four
+  // texels, spread as wide as that distance says)
   float bsum = 0., bn = 0., reachT = max(3., .045 / uTexel);
-  for (int a = -2; a <= 2; a += 2) for (int b = -2; b <= 2; b += 2) { float d = texture(uShadow, ls.xy + vec2(a, b) * reachT / 2048.).r; if (d < ls.z - bias) { bsum += d; bn += 1.; } }
+  for (int a = -1; a <= 1; a += 2) for (int b = -1; b <= 1; b += 2) { float d = texture(uShadowRaw, ls.xy + vec2(a, b) * reachT / 2048.).r; if (d < ls.z - bias) { bsum += d; bn += 1.; } }
   float penW = bn > 0. ? clamp((ls.z - bsum / bn) * uDepthRange * .012, .011, .055) : .016, pen = penW / uTexel;
-  for (int a = -2; a <= 2; a++) for (int b = -2; b <= 2; b++) sh += step(ls.z - bias, texture(uShadow, ls.xy + vec2(a, b) * .55 * pen / 2048.).r);
+  for (int a = -1; a <= 1; a++) for (int b = -1; b <= 1; b++) sh += texture(uShadow, vec3(ls.xy + vec2(a, b) * 1.1 * pen / 2048., ls.z - bias));
   // (out past the sun's map: lit)
-  if (any(lessThan(ls, vec3(0.))) || any(greaterThan(ls, vec3(1.)))) sh = 25.;
-  sh = mix(1., sh / 25., uShadows);
+  if (any(lessThan(ls, vec3(0.))) || any(greaterThan(ls, vec3(1.)))) sh = 9.;
+  sh = mix(1., sh / 9., uShadows);
   // (and the leaves of a tree out of the picture, between the sun and one side of it, stirring)
   // (where the sun's ray through this point meets the ground plane: the leaves' shade fixed there, not in the map's frame)
   vec2 lw = (vPos.xz - uSun.xz / max(uSun.y, .2) * vPos.y - uArea.xy) / max(uArea.z, 1.);
@@ -503,7 +507,7 @@ const POST_VS = `#version 300 es
 out vec2 vUv; void main() { vec2 p = vec2(gl_VertexID == 1 ? 3. : -1., gl_VertexID == 2 ? 3. : -1.); vUv = p * .5 + .5; gl_Position = vec4(p, 0., 1.); }`;
 const POST_FS = `#version 300 es
 precision highp float;
-in vec2 vUv; uniform sampler2D uCol, uNrm, uDepth; uniform vec2 uPx; uniform float uRange, uPrint, uDpr, uBleed, uWorldPx; uniform mat3 uViewRot;
+in vec2 vUv; uniform sampler2D uCol, uNrm, uDepth; uniform vec2 uPx; uniform float uRange, uPrint, uDpr, uBleed, uWorldPx, uContact; uniform mat3 uViewRot;
 out vec4 o;
 float D(vec2 uv) { return texture(uDepth, uv).r * uRange; }
 vec3 Nn(vec2 uv) { return texture(uNrm, uv).xyz * 2. - 1.; }
@@ -529,7 +533,7 @@ void main() {
   // eaves over a wall, a step's riser under its tread, a pot on a top), a little shade in the crease. Short, so a broad
   // pale wall gets no halo; the broad shutting-in is the world's own (baked); not on the land drawn as paper, nor the sky)
   float m1 = texture(uNrm, vUv).a;
-  if (sky < .5 && uPrint < .5 && !(uBleed > .5 && m1 > .1 && m1 < .4)) {
+  if (uContact > .5 && sky < .5 && uPrint < .5 && !(uBleed > .5 && m1 > .1 && m1 < .4)) {
     // (what's sampled, in the camera's own frame: across and up the picture, and toward the eye; it shades only if it's in
     // front of the surface, along its normal, and near)
     vec3 nv = uViewRot * n;
@@ -649,6 +653,10 @@ export class Renderer {
   top = 8;
   /** (for looking at it: the sun's shadows, or none) */
   shadows = true;
+  /** what can be switched off to see what it costs (main.ts's profile sweep): the contact shade, the leaves' cutting */
+  contact = true; leafCut = true;
+  /** the sun's map read two ways: compared by the hardware (filtered), and raw (for how far the casters are) */
+  private sCompare: WebGLSampler; private sRaw: WebGLSampler;
   /**
    * What drawing costs, measured (main.ts copies it out on a double tap on the title): the GPU's own time for each pass,
    * where the browser lets it be timed (EXT_disjoint_timer_query_webgl2; Safari doesn't), averaged over the last frames
@@ -677,6 +685,9 @@ export class Renderer {
     const tq = gl.getExtension('EXT_disjoint_timer_query_webgl2');
     if (tq) this.timer = { ext: tq as unknown as { TIME_ELAPSED_EXT: number; GPU_DISJOINT_EXT: number }, pending: [], sum: [0, 0, 0], n: 0 };
     this.shadowTex = this.depthTex(2048, 2048);
+    this.sCompare = gl.createSampler()!; this.sRaw = gl.createSampler()!;
+    for (const [k, v] of [[gl.TEXTURE_MIN_FILTER, gl.LINEAR], [gl.TEXTURE_MAG_FILTER, gl.LINEAR], [gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE], [gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE], [gl.TEXTURE_COMPARE_MODE, gl.COMPARE_REF_TO_TEXTURE], [gl.TEXTURE_COMPARE_FUNC, gl.LEQUAL]]) gl.samplerParameteri(this.sCompare, k, v);
+    for (const [k, v] of [[gl.TEXTURE_MIN_FILTER, gl.NEAREST], [gl.TEXTURE_MAG_FILTER, gl.NEAREST], [gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE], [gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE]]) gl.samplerParameteri(this.sRaw, k, v);
     this.shadowFb = gl.createFramebuffer()!;
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.shadowFb);
     gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.TEXTURE_2D, this.shadowTex, 0);
@@ -712,8 +723,10 @@ export class Renderer {
     gl.bindBuffer(gl.ARRAY_BUFFER, this.dbuf);
     gl.bufferData(gl.ARRAY_BUFFER, data.subarray(0, count * STRIDE), gl.DYNAMIC_DRAW);
   }
+  private builtMsaa = true;
   private targets(w: number, h: number) {
-    if (this.size[0] === w && this.size[1] === h && this.fb) return;
+    if (this.size[0] === w && this.size[1] === h && this.fb && this.builtMsaa === this.msaa) return;
+    this.builtMsaa = this.msaa;
     const gl = this.gl;
     for (const t of [this.col, this.nrm, this.dep]) if (t) gl.deleteTexture(t);
     if (this.fb) gl.deleteFramebuffer(this.fb);
@@ -790,10 +803,11 @@ export class Renderer {
     gl.useProgram(this.shadow);
     gl.uniformMatrix4fv(gl.getUniformLocation(this.shadow, 'uVP'), false, light);
     gl.uniform1f(gl.getUniformLocation(this.shadow, 'uTime'), time);
+    gl.uniform1f(gl.getUniformLocation(this.shadow, 'uLeafCut'), this.leafCut ? 1 : 0);
     gl.uniform1f(gl.getUniformLocation(this.shadow, 'uBleed'), this.bleed ? 1 : 0); gl.uniform4fv(gl.getUniformLocation(this.shadow, 'uLand'), this.landBox); gl.uniform4fv(gl.getUniformLocation(this.shadow, 'uBuilt'), this.built);
     gl.cullFace(gl.FRONT);
-    gl.bindVertexArray(this.vao); gl.drawArrays(gl.TRIANGLES, 0, this.count);
-    if (this.dcount) { gl.bindVertexArray(this.dvao); gl.drawArrays(gl.TRIANGLES, 0, this.dcount); gl.bindVertexArray(this.vao); }
+    gl.bindVertexArray(this.vao);
+    if (this.shadows) { gl.drawArrays(gl.TRIANGLES, 0, this.count); if (this.dcount) { gl.bindVertexArray(this.dvao); gl.drawArrays(gl.TRIANGLES, 0, this.dcount); gl.bindVertexArray(this.vao); } }
     gl.cullFace(gl.BACK);
     end(); begin();
     // (the stone, lit)
@@ -804,7 +818,9 @@ export class Renderer {
     gl.uniformMatrix4fv(U('uVP'), false, cam.vp); gl.uniformMatrix4fv(U('uLight'), false, light);
     gl.uniform1f(U('uTime'), time); gl.uniform3fv(U('uSun'), this.sun); gl.uniform3fv(U('uEye'), cam.eye); gl.uniform3fv(U('uDir'), cam.dir); gl.uniform1f(U('uN'), 12); gl.uniform3fv(U('uArea'), this.area); gl.uniform1f(U('uShadows'), this.shadows ? 1 : 0); gl.uniform1f(U('uBleed'), this.bleed ? 1 : 0); gl.uniform4fv(U('uLand'), this.landBox); gl.uniform4fv(U('uBuilt'), this.built);
     gl.uniform1f(U('uTexel'), this.shadowTexel); gl.uniform1f(U('uDepthRange'), this.shadowRange);
-    gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, this.shadowTex); gl.uniform1i(U('uShadow'), 0);
+    gl.uniform1f(U('uLeafCut'), this.leafCut ? 1 : 0);
+    gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, this.shadowTex); gl.bindSampler(0, this.sCompare); gl.uniform1i(U('uShadow'), 0);
+    gl.activeTexture(gl.TEXTURE3); gl.bindTexture(gl.TEXTURE_2D, this.shadowTex); gl.bindSampler(3, this.sRaw); gl.uniform1i(U('uShadowRaw'), 3);
     gl.drawArrays(gl.TRIANGLES, 0, this.count);
     if (this.dcount) { gl.bindVertexArray(this.dvao); gl.drawArrays(gl.TRIANGLES, 0, this.dcount); }
     gl.bindVertexArray(null);
@@ -820,6 +836,7 @@ export class Renderer {
       gl.bindFramebuffer(gl.READ_FRAMEBUFFER, null); gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, null);
     }
     end(); begin();
+    gl.bindSampler(0, null); gl.bindSampler(3, null);
     // (ink, and paper)
     gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.viewport(0, 0, w, h);
     gl.disable(gl.DEPTH_TEST); gl.disable(gl.CULL_FACE);
@@ -829,7 +846,7 @@ export class Renderer {
     gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, this.nrm); gl.uniform1i(P('uNrm'), 1);
     gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, this.dep); gl.uniform1i(P('uDepth'), 2);
     gl.uniform2f(P('uPx'), 1 / w, 1 / h); gl.uniform1f(P('uRange'), cam.range); gl.uniform1f(P('uPrint'), this.print ? 1 : 0); gl.uniform1f(P('uDpr'), dpr); gl.uniform1f(P('uBleed'), this.bleed ? 1 : 0);
-    gl.uniform1f(P('uWorldPx'), (2 * view.zoom) / h);
+    gl.uniform1f(P('uWorldPx'), (2 * view.zoom) / h); gl.uniform1f(P('uContact'), this.contact ? 1 : 0);
     gl.uniformMatrix3fv(P('uViewRot'), false, cam.rot);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     end();

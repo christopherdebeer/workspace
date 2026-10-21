@@ -73,9 +73,11 @@ function remesh() { const ks = selKeys(), t0 = performance.now(), m = buildMesh(
 const corner = (k: number) => Math.PI / 4 + (k * Math.PI) / 2;
 const view: View = { az: corner(Number(qs.get('turn') ?? 0)), el: Number(qs.get('el') ?? 0.6), zoom: 1, target: [0, 0, 0] };
 let zoomK = Number(qs.get('zoom') ?? 0.64), azGoal: number | null = null;
+/** the drawing's resolution, as a share of the screen's (the profile sweep tries less) */
+let resScale = 1;
 function resize() {
   const dpr = Math.min(2, devicePixelRatio || 1);
-  canvas.width = Math.round(canvas.clientWidth * dpr); canvas.height = Math.round(canvas.clientHeight * dpr);
+  canvas.width = Math.round(canvas.clientWidth * dpr * resScale); canvas.height = Math.round(canvas.clientHeight * dpr * resScale);
   guide.width = Math.round(guide.clientWidth * dpr); guide.height = Math.round(guide.clientHeight * dpr);
   g2.setTransform(dpr, 0, 0, dpr, 0, 0);
   aspect = canvas.clientWidth / Math.max(1, canvas.clientHeight);
@@ -898,12 +900,39 @@ function telemetry(): string {
     world: { ops: world.ops.length, land: world.land ? world.landSeed : null, meetings: world.meetings.length, top: world.top() },
     view: { zoom: +view.zoom.toFixed(3), el: +view.el.toFixed(3), az: +view.az.toFixed(3), shadows: R.shadows, bleed: R.bleed },
     memory: (performance as unknown as { memory?: { usedJSHeapSize: number } }).memory?.usedJSHeapSize ?? null,
+    profile: lastProfile ?? 'none yet (long-press the title to run one)',
   }, null, 1);
 }
+/**
+ * The profile sweep (a long press on the title): the same view drawn as it is, then with one thing at a time taken
+ * away (the sun's map, multisampling, the contact shade, the leaves' cutting, some of the resolution), a few dozen frames
+ * each; how long a frame takes in each says what each costs on this device, where the GPU can't be timed directly.
+ */
+let lastProfile: unknown = null, profiling = false;
+async function profileSweep(say: (t: string) => void) {
+  if (profiling) return;
+  profiling = true;
+  const nextFrame = () => new Promise<number>((r) => requestAnimationFrame(r));
+  const measure = async () => { for (let q = 0; q < 12; q++) await nextFrame(); const ts: number[] = []; let t0 = await nextFrame(); for (let q = 0; q < 36; q++) { const t = await nextFrame(); ts.push(t - t0); t0 = t; } ts.sort((a, b) => a - b); return { median: +ts[18].toFixed(1), mean: +(ts.reduce((a, b) => a + b, 0) / ts.length).toFixed(1), p90: +ts[32].toFixed(1) }; };
+  const configs: Array<[string, () => void, () => void]> = [
+    ['as it is', () => {}, () => {}],
+    ['no sun map', () => { R.shadows = false; }, () => { R.shadows = !qs.has('noshadow'); }],
+    ['no multisampling', () => { R.msaa = false; }, () => { R.msaa = !qs.has('nomsaa'); }],
+    ['no contact shade', () => { R.contact = false; }, () => { R.contact = true; }],
+    ['no leaf cutting', () => { R.leafCut = false; }, () => { R.leafCut = true; }],
+    ['three-quarter resolution', () => { resScale = 0.75; resize(); }, () => { resScale = 1; resize(); }],
+    ['half resolution', () => { resScale = 0.5; resize(); }, () => { resScale = 1; resize(); }],
+  ];
+  const out: Record<string, unknown> = { drawn: [R.canvas.width, R.canvas.height], vertices: R.counts };
+  for (const [n, [name, on, off]] of configs.entries()) { say(`profiling ${n + 1}/${configs.length}`); on(); out[name] = await measure(); off(); }
+  lastProfile = out; profiling = false;
+  say('profiled · double tap to copy');
+}
+
 {
   const title = document.querySelector('nav h1') as HTMLElement | null;
   if (title) {
-    title.style.pointerEvents = 'auto'; title.style.touchAction = 'manipulation'; title.style.cursor = 'default';
+    title.style.pointerEvents = 'auto'; title.style.touchAction = 'manipulation'; title.style.cursor = 'default'; title.style.userSelect = 'none'; title.style.setProperty('-webkit-user-select', 'none'); title.style.setProperty('-webkit-touch-callout', 'none');
     const small = title.querySelector('small'), was = small?.textContent ?? '';
     let lastTap = 0;
     const copy = async () => {
@@ -914,7 +943,11 @@ function telemetry(): string {
       if (!ok) { const ta = document.createElement('textarea'); ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0'; document.body.appendChild(ta); ta.select(); try { ok = document.execCommand('copy'); } catch { ok = false; } ta.remove(); }
       if (small) { small.textContent = ok ? 'telemetry copied' : 'couldn\'t copy'; setTimeout(() => { small.textContent = was; }, 1600); }
     };
-    title.addEventListener('pointerup', (e) => { const t = e.timeStamp; if (t - lastTap < 350) { lastTap = 0; void copy(); } else lastTap = t; });
+    let held: ReturnType<typeof setTimeout> | null = null;
+    title.addEventListener('pointerdown', () => { held = setTimeout(() => { held = null; lastTap = 0; void profileSweep((t) => { if (small) small.textContent = t; }); }, 800); });
+    title.addEventListener('pointerup', (e) => { if (held) { clearTimeout(held); held = null; } else return; const t = e.timeStamp; if (t - lastTap < 350) { lastTap = 0; void copy(); } else lastTap = t; });
+    title.addEventListener('pointercancel', () => { if (held) { clearTimeout(held); held = null; } });
+    title.addEventListener('contextmenu', (e) => e.preventDefault());
   }
 }
 // ─── what moves ───
@@ -1014,7 +1047,7 @@ if (qs.has('at')) { const [i, j] = qs.get('at')!.split('.').map(Number); view.ta
 requestAnimationFrame(frame);
 
 (window as unknown as { __labyrinth: unknown }).__labyrinth = {
-  telemetry,
+  telemetry, profileSweep,
   get world() { return world; }, view, R, pick, onPlane, inStone: (x: number, y: number, z: number) => inStone(world, x, y, z), inLand: (x: number, y: number, z: number) => inLand(world, x, y, z), setHand: (h: Hand | Dressing | Brush) => setBrush(h), setBrush,
   get brush() { return brush; }, get held() { return held; }, get intent() { return intent; }, setIntent,
   cats: () => cats.list.map((c) => ({ name: c.name, coat: COATS[c.coat], doing: c.doing, x: c.x, y: c.y, z: c.z, at: c.at, want: c.want, air: c.air, asleep: c.asleep, call: c.call })), catScreen: (name: string) => { const c = cats.list.find((q) => q.name === name); if (!c) return null; const h = cats.headOf(c); return screenOf(h[0], h[1] - 0.04, h[2]); }, catsHome: () => cats.P?.capacity ?? 0,
