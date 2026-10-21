@@ -688,6 +688,22 @@ function way(w: World, h0: number, cells: Array<[number, number]>, to: Cell | nu
   // the other reading)
   if (!direct) {
     const roofs = roofed(w), over = path.slice(1).some(([i, j]) => roofs.has(`${i}.${j}`));
+    // (drawn over a house to its top: in at a door at its foot where the stroke meets it, up its stair inside, out on its
+    // top (which is a terrace then))
+    const house = to && over ? buildings(w).of.get(key(to[0] - 1, to[1], to[2])) : undefined;
+    if (house && to![0] === house.h) {
+      const mineH = new Set(house.cols.map(([x, z]) => `${x}.${z}`)), q = path.findIndex(([x, z]) => mineH.has(`${x}.${z}`));
+      const [ox, oz] = q > 0 ? path[q - 1] : [-1, -1], [hx, hz] = q > 0 ? path[q] : [-1, -1], d = DIRS.findIndex(([a, b]) => a === ox - hx && b === oz - hz);
+      if (q > 0 && d >= 0 && standing(w, w.ground(ox, oz), ox, oz)) {
+        const base = house.base[house.cols.findIndex(([x, z]) => x === hx && z === hz)];
+        const rule: Op['rule'] = [[base, hx, hz, RULE.within + d]];
+        const up = q > 1 ? way(w, h0, path.slice(0, q), null, now, resting, true) : null;
+        const approach: Op = up && !('refused' in up) ? { ...up, alts: undefined } : { pave: [[ox, oz]], born: now, why: 'way' };
+        const label = 'in at a door, up its stair inside, out on its top';
+        const inside: Op = { ...approach, rule: [...(approach.rule ?? []), ...rule], note: `a way: ${label}`, reading: label, why: 'way' };
+        return { ...mark(inside, 'within'), alts: [{ label: 'the way as drawn, joining what it meets', op: { ...op, note, reading: note } }] };
+      }
+    }
     if (!r?.reached || over) {
       // (round it within a cell of the stroke: where the hand drew, still; further round than that is another place, so
       // it's offered, not built)
@@ -704,8 +720,12 @@ function way(w: World, h0: number, cells: Array<[number, number]>, to: Cell | nu
       }
     }
   }
-  // (too steep for a flight along it: folded back beside it, a switchback, still a way; else a stair tower)
-  const sw = !r?.reached && dest[0] > h0 ? switchback(w, h0, [...path, [dest[1], dest[2]]], dest, now) : null;
+  // (too steep for a flight along it: folded back beside it, a switchback, still a way; else a stair tower. And drawn
+  // folding back on itself, climbing: the fold's the hand's, so both legs climb, sharing a landing at the turn)
+  // (only where, followed as drawn, it climbs in one flight, the fold flattened: drawn climbing both ways, as drawn)
+  const oneFlight = new Set((r?.cells ?? []).map((c) => sim.flight(...c)?.f).filter(Boolean)).size <= 1;
+  const folded = folds([...path, [dest[1], dest[2]]]) && dest[0] - h0 >= 2 && oneFlight;
+  const sw = (!r?.reached || folded) && dest[0] > h0 ? switchback(w, h0, [...path, [dest[1], dest[2]]], dest, now) : null;
   const lad = dest[0] > h0 ? ladder(w, h0, [...path, [dest[1], dest[2]]], dest, now) : null;
   const light = [...(lad ? [{ label: 'a ladder', op: lad }] : []), ...(tower ? [{ label: 'a stair tower', op: tower }] : [])];
   if (sw) return { ...mark(sw, 'switchback'), alts: [{ label: 'the way as drawn, joining what it meets', op: { ...op, note, reading: note } }, ...light, ...alts] };
@@ -930,6 +950,20 @@ export function stairTower(w: World, h0: number, cells: Array<[number, number]>,
  * setting has it (model.ts `carry`): the upper leans from the landing to the top it climbs to; the lower springs from the
  * ground to the landing. Its foot is beside the destination's face, on the ground. Null where one won't fit.
  */
+/** whether a stroke folds back on itself: a run one way, a cell or two across, and a run back the other way */
+function folds(cells: Array<[number, number]>): boolean {
+  const dirs: number[] = [];
+  for (let q = 1; q < cells.length; q++) dirs.push(DIRS.findIndex(([a, b]) => a === cells[q][0] - cells[q - 1][0] && b === cells[q][1] - cells[q - 1][1]));
+  for (let q = 0; q < dirs.length; q++) {
+    let a = q; while (a + 1 < dirs.length && dirs[a + 1] === dirs[q]) a++;
+    if (a - q < 1) continue;
+    let b = a + 1; while (b < dirs.length && b - a <= 2 && dirs[b] !== (dirs[q] + 2) % 4) b++;
+    if (b >= dirs.length || dirs[b] !== (dirs[q] + 2) % 4 || b === a + 1) continue;
+    let c = b; while (c + 1 < dirs.length && dirs[c + 1] === dirs[b]) c++;
+    if (c - b >= 1) return true;
+  }
+  return false;
+}
 export function switchback(w: World, h0: number, cells: Array<[number, number]>, to: Cell, now: number): Op | null {
   const H = to[0], N = H - h0, e = cells[cells.length - 2];
   if (N < 2 || !e) return null;

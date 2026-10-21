@@ -1412,6 +1412,9 @@ export function parapets(w: World, plain = false) {
   const dressed = (k: number, i: number, j: number) => look(w, k, i, j, plain);
   const edges = new Map<number, boolean[]>(), rails = new Map<number, number>(), flowRails = new Map<number, number>(), roofed = new Set<number>();
   for (const b of buildings(w).list) for (const [x, z] of underRoof(b)) roofed.add(key(b.h - 1, x, z));
+  const prom = buildings(w).promenade;
+  /** a top a cell across at its height (a wall's, a wall-like step of a house): not part of something two deep there */
+  const narrow = (k: number, i: number, j: number) => ![[1, 1], [1, -1], [-1, 1], [-1, -1]].some(([a, b]) => w.stone(k, i + a, j) && w.stone(k, i, j + b) && w.stone(k, i + a, j + b) && !w.stone(k + 1, i + a, j) && !w.stone(k + 1, i, j + b));
   for (const v of [...w.mass.keys()]) {
     const [k, i, j] = unkey(v), d = dressed(k, i, j), sp = w.span(k, i, j);
     // (not on a thin wall: it's too thin to carry one)
@@ -1422,7 +1425,9 @@ export function parapets(w: World, plain = false) {
     // (and along a way the hand laid to be walked two levels up or more, whatever carries it: railed as it was laid,
     // not as the arches under it happen to fall)
     const walkedHigh = !colonnade && w.passage(k + 1, i, j) >= 0 && k + 1 - w.ground(i, j) >= 2 && w.archway(k + 1, i, j) < 0;
-    const bridge = (!!sp && k >= 1 && (sp.n >= 3 || k >= 2 || w.bridge(k, i, j))) || colonnade || walkedHigh;
+    // (and a wall's top a way arrives on, walked along as a promenade, two levels up or more: railed both sides)
+    const promenade = !colonnade && !walkedHigh && narrow(k, i, j) && prom.has(key(k + 1, i, j)) && k + 1 - w.ground(i, j) >= 2;
+    const bridge = (!!sp && k >= 1 && (sp.n >= 3 || k >= 2 || w.bridge(k, i, j))) || colonnade || walkedHigh || promenade;
     if (!d?.parapet && !bridge) continue;
     // (on a flowing wall, round its curve or along its diagonal)
     if (w.block(k, i, j) && outline(w, k, i, j).flow) { flowRails.set(v, d?.parapet && d.rail ? d.rail : DRESS.parapet); continue; }

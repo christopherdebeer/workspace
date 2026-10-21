@@ -140,10 +140,12 @@ function dressUp(w: World): Map<number, Dress> {
       for (const c of region) put(c, { parapet: true, rail });
     }
   }
-  // (thin walls beside a court, now and then a jali, a stretch at a time)
+  // (thin walls beside a court, now and then a jali, a stretch at a time; and beside a flight, always, from its foot up:
+  // the wall dissolves into a screen beside the stair, light through it on the steps)
   for (const v of w.thin.keys()) {
     const [k, i, j] = unkey(v);
-    if (DIRS.some(([a, b]) => w.courts.has(key(0, i + a, j + b))) && chance(0.45, Math.floor(i / 3), Math.floor(j / 3), k, 12)) put([k, i, j], { screen: true });
+    const byFlight = DIRS.some(([a, b]) => { for (let q = k; q >= Math.max(0, k - 1); q--) if (w.stair(q, i + a, j + b) >= 0) return true; return false; });
+    if (byFlight || (DIRS.some(([a, b]) => w.courts.has(key(0, i + a, j + b))) && chance(0.45, Math.floor(i / 3), Math.floor(j / 3), k, 12))) put([k, i, j], { screen: true });
   }
   // (houses: mashrabiya at the upper windows; colonnettes where the windows are arched; a pergola where a door gives on a court)
   const kept = new Set(w.decor.map((d) => key(0, d.i, d.j)));

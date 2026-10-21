@@ -23,33 +23,33 @@ That's generous, so each case also names what it would be **at its best** and ch
 | Case | At its best | What it is now | Best? |
 |---|---|---|---|
 | **beside**: up beside a wall to a terrace past its end | cantilevered steps hung from the wall | a flight hung from the wall | ✓ |
-| **across**: up across a wall to a terrace beyond | the stair through the wall | a gate through the wall's foot, the flight beyond it | ✓ |
-| **fold**: folding back against a wall | two flights, a shared landing, a door in the wall | one straight flight; the fold drawn is lost | · |
-| **thick**: up a wall two cells thick | the stair contained in its thickness | a house (two deep is a building); the way goes round it | · |
-| **thin**: beside a thin wall | the thin wall a screen beside an exposed stair | hung from it, the wall unchanged | · |
-| **top**: up to a long wall's top | the wall a promenade, walked, railed | a flight up to it; the top not railed | · |
-| **spine**: along a wall that steps up | a stepped spine, its top a stair | read as a tower and roofs; routed round | · |
-| **cut**: from the ground along a wall's length to its top | steps cut into the wall, out on its top | steps cut into the wall, out on its top | ✓ |
-| **water**: beside a wall, pools at its foot | dry stair and cascade sharing the wall | the pools ignored | · |
+| **across**: up across a wall taller than the terrace beyond | the stair through the wall | climbs to a gate in the wall, the way on through it | ✓ |
+| **fold**: a climb drawn folding back against a wall | two flights, a shared landing | a switchback: two flights, a landing at the turn | ✓ |
+| **thick**: up a mass two cells thick (a house) | the stair inside it | in at a door at its foot, up its stair inside, out on its top (a terrace now) | ✓ |
+| **thin**: beside a thin wall | a screen beside an exposed stair | the flight stands free (a thin wall carries no steps), the wall a jali beside it | ✓ |
+| **top**: up to a long wall's top | the wall a promenade | walked along its top, railed both sides | ✓ |
+| **spine**: along a wall that steps up | a stepped spine, its top a stair | walked up its top, a step at each rise | ✓ |
+| **cut**: from the ground along a wall's length to its top | steps cut into the wall | steps cut into the wall, out on its top | ✓ |
+| **water**: beside a wall, pools at its foot | a dry stair and a cascade | apart, as laid; **a reading away**, a cascade of basins beside the stair falling to the pool | ○ |
 | **beside + tree** | the stair yields round the tree | passes it, hung from the wall | ✓ |
-| **across + way** (a way along the far side) | through the wall, landing on the way | through the wall's foot | ✓ |
-| **top + house** | the wall-top promenade arrives at a door in the house | a flight up; no door at that level | · |
-| **beside + stair** (a second, the other way) | the two interlock, one landing shared | a second long flight, apart | · |
+| **across + way** (a way along the far side) | through the wall, landing on the way | through the gate on to it | ✓ |
+| **top + house** | the promenade arriving at a door in the house | walked, railed, an arched door in the house's face there (the wall itself read as an inhabited step of the house, windows in it) | ✓ |
+| **beside + stair** (a second from the first's terrace, back the other way) | the two interlock, one landing shared | the terrace their landing, a switchback against the wall | ✓ |
 
-**5 of 13 at their best** (2 of 12 before this round).
+**12 of 13 at their best as laid, the last a reading away** (2 of 12 at the start).
 
-## What the misses need: capabilities, not pieces
+## The capabilities, built
 
-| Capability (Astra's terms) | Cases it would turn | Status |
+| Capability (Astra's terms) | What it is in the model | Cases |
 |---|---|---|
-| **Penetrate / thickness**: a way may pass through the hand's stone, climbing; the stone over it kept as an arch, or opened to the sky where it can't span | across, across + way, cut | **built**: a step carved into the hand's stone with its headroom (`World.carved`), dearer than any open step so only strokes drawn over or through stone use it; a level way through stone a cell to three thick opens a gate, now preferred over climbing over |
-| **Edge becomes surface** (exchange roles): a top arrived on is walked as it is, railed as a promenade; met by a house face at that level, a door | top, top + house, spine | begun: walking on the hand's existing tops now costs almost nothing (it lays nothing), so ways use them; rails and doors to come |
-| **Fold / interlock**: a drawn fold kept; two flights sharing a landing; a door at the landing | fold, beside + stair | next |
-| **Inside implied**: two-deep stone a building, entered and climbed inside when a stroke ends on its top | thick | next |
-| **Dissolve**: a thin wall beside an exposed stair becomes a screen | thin | small |
-| **Water with levels**: a cascade beside a dry stair, sharing the retaining wall | water | larger |
+| **Penetrate / thickness** | a way's step can be carved into the hand's stone where the stroke's drawn over or through it, headroom cut, the stone over it kept as an arch or opened to the sky where it can't span (`World.carved`); a level way through stone a cell to three thick opens a gate, preferred to climbing over | across, across + way, cut |
+| **Edge becomes surface** (exchange roles) | walking the hand's existing tops lays nothing, so costs almost nothing; a top a way arrives on is a **promenade** (`Buildings.promenade`): walked on along it at that height, railed both sides where it's a cell across and two up; a house face met at that height gets a door | top, top + house, spine |
+| **Fold / interlock** | a climb drawn folding back on itself, that followed as drawn would climb in one flight, is read as a switchback; a terrace a flight arrives on is the next one's landing | fold, beside + stair |
+| **Inside implied** | a stroke drawn over a house to its top: in at a door where the stroke meets it, up its stair inside, out on its top (`RULE.within`, kept at its foot) | thick |
+| **Dissolve** | a thin wall carries no cantilevered steps; beside a flight it becomes a screen (the rules' dressing) | thin |
+| **Water with levels** | an encounter, a flight beside water (`flight-beside-water`): apart, or a cascade of basins at each step falling to the pool, or that with a lantern at its head | water |
 
-The order follows the count of cases each turns, and how many other pairings it would reach: **yield** (notch, bow, step back) and **edge becomes surface** recur across stair × terrace, roof × tree, building × well and parapet × arrival, so they compound.
+Still to come of the first list: **yield** (notch, bow, step back), the one most likely to compound across other pairings.
 
 ## Next pairings
 

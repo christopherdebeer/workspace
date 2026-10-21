@@ -29,7 +29,7 @@
  *   tower. Only on a plan that's a plain rectangle, for now. The hand can switch it (select), kept as a rule.
  */
 import { hash } from '../kit/rng';
-import { DIRS, RULE, isTower, key, unkey, type Cell, type World } from './model';
+import { DIRS, RULE, isTower, isWithin, key, unkey, type Cell, type World } from './model';
 import { navigate, standing, type Nav } from './nav';
 
 export type Roof = 'hipped' | 'gable' | 'shed' | 'dome';
@@ -80,7 +80,10 @@ function wingsOf(cols: Array<[number, number]>): Array<{ i0: number; i1: number;
   }
   return out;
 }
-export interface Buildings { list: Building[]; at: Map<string, Opening>; inside: Array<[Cell, Cell]>; of: Map<number, Building> }
+export interface Buildings { list: Building[]; at: Map<string, Opening>; inside: Array<[Cell, Cell]>; of: Map<number, Building>;
+  /** the raised tops a way the hand made arrives on, and what's walked on from there at its height (a wall's top become a
+   * promenade): places, by key */
+  promenade: Set<number> }
 
 const cache = new WeakMap<World, { v: number; b: Buildings }>();
 /** the buildings in a world (worked out once for each state of it) */
@@ -141,6 +144,11 @@ function find(w: World): Buildings {
   // (on the land, its ground at each column's own level)
   for (const v of nav.places) { const [k, i, j] = unkey(v); if (k === w.ground(i, j)) { ground.add(v); st.push(v); } }
   while (st.length) { const v = st.pop()!; for (const u of nav.next.get(v) ?? []) if (!ground.has(u)) { ground.add(u); st.push(u); } }
+  // (promenades: from where the hand's ways walk, up off the ground, on along the tops at that height (never down a
+  // stair or up one: a promenade is a level walk))
+  const promenade = new Set<number>(), pst: number[] = [];
+  for (const op of w.ops) if (!op.derived) for (const c of w.walks.get(op) ?? []) { const v = key(...c); if (c[0] > w.ground(c[1], c[2]) && nav.places.has(v) && !promenade.has(v)) { promenade.add(v); pst.push(v); } }
+  while (pst.length) { const v = pst.pop()!, [k] = unkey(v); for (const u of nav.next.get(v) ?? []) { const [ku, iu, ju] = unkey(u); if (ku === k && !promenade.has(u) && ku > w.ground(iu, ju) && w.stair(ku, iu, ju) < 0) { promenade.add(u); pst.push(u); } } }
   const chance = (p: number, ...n: number[]) => hash(w.seed, ...n) % 1000 < p * 1000;
   // (masses as a whole, whatever height each column of them reaches: one built across a slope, steps of it at
   // different heights, is read as stepping, each step a building of its own if the whole is deep)
@@ -199,12 +207,17 @@ function find(w: World): Buildings {
     // (its top: walked if a way arrives there from beyond it)
     const tops = cols.map(([x, z]) => key(h, x, z)).filter((v) => nav.places.has(v)), topSet = new Set(tops);
     // (a stair tower's top is always come to: that's what it's for, even where it's become part of what it climbs to)
-    const arrives = tops.some((v) => (nav.next.get(v) ?? []).some((u) => !topSet.has(u)) || served.has(v));
+    // (and one the hand climbs inside (`RULE.within`): its top walked, come to by its stair, its door where it was asked)
+    const within = cols.flatMap(([x, z]) => { const r = w.rules.get(key(baseOf(x, z), x, z)); return isWithin(r) ? [{ x, z, d: r! - RULE.within }] : []; });
+    const arrives = tops.some((v) => (nav.next.get(v) ?? []).some((u) => !topSet.has(u)) || served.has(v)) || within.length > 0;
     // (doors where ways arrive against its walls, at height)
     const placeAt = (c: Cell) => key(...c);
     // (above its own foot: a door from a way at height, or (set into a bank) from the hill above)
     // (not out onto another building's top: that's under its roof)
-    const upper = faces.filter((f) => f.plain && f.k > baseOf(f.i, f.j) && standing(w, ...f.out) && (!(anyH(f.out[1], f.out[2]) && height(f.out[1], f.out[2]) === f.k) || (!!stairTower && served.has(placeAt(f.out)))));
+    // (and onto a wall's top level with it only where that's walked, a promenade: never a door on to a wall that isn't)
+    const twoDeep = (x: number, z: number) => { const h = height(x, z); return [[1, 1], [1, -1], [-1, 1], [-1, -1]].some(([a, c]) => [[x + a, z], [x, z + c], [x + a, z + c]].every(([p, q]) => anyH(p, q) && height(p, q) === h)); };
+    const wallTop = (f: (typeof faces)[number]) => anyH(f.out[1], f.out[2]) && height(f.out[1], f.out[2]) === f.k && !twoDeep(f.out[1], f.out[2]);
+    const upper = faces.filter((f) => f.plain && f.k > baseOf(f.i, f.j) && standing(w, ...f.out) && (!(anyH(f.out[1], f.out[2]) && height(f.out[1], f.out[2]) === f.k) || (wallTop(f) && promenade.has(placeAt(f.out))) || (!!stairTower && served.has(placeAt(f.out)))));
     // (a stair inside, if a way at one of those doors, or on its top, can't be reached from the slab otherwise)
     const unreached = upper.some((f) => !ground.has(placeAt(f.out))) || (arrives && tops.some((v) => !ground.has(v)));
     const atFoot = faces.filter((f) => f.plain && foot(f) && standing(w, ...f.out) && ground.has(placeAt(f.out)));
@@ -220,7 +233,7 @@ function find(w: World): Buildings {
     }
     // (a way laid by hand that runs up to its foot, square on to the wall: a door where it arrives, never a blank face
     // (the tower landing of static/labyrinth-connective.md))
-    const landed = atFoot.filter((f) => w.passage(...f.out) === f.d % 2);
+    const landed = atFoot.filter((f) => w.passage(...f.out) === f.d % 2 || within.some((q) => q.x === f.i && q.z === f.j && q.d === f.d));
     for (const f of landed) if (!doors.includes(f)) doors.push(f);
     // (a house (its top not walked, so lived in under a roof) has a door at its foot too, as a rule; not one with a
     // passage through it: that's its way in)
@@ -307,5 +320,5 @@ function find(w: World): Buildings {
     const d = (f.d + 2) % 4, id = `${B[0]}.${B[1]}.${B[2]}.${d}`;
     if (!at.has(id)) at.set(id, { kind: 'door', style: 'arched', k: B[0], i: B[1], j: B[2], d });
   }
-  return { list, at, inside, of };
+  return { list, at, inside, of, promenade };
 }

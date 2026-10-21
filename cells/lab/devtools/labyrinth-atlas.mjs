@@ -8,11 +8,12 @@
 // What each case would be at its best (from the encounters exercise and Astra's notes) is written beside it, so the
 // gaps are plain.   --render (devtools/out/atlas/*.png)   --only=NAME   --json
 import './labyrinth-node.mjs';
-const { World, DIRS, key, unkey, PLANT } = await import('../client/labyrinth/model.ts');
+const { World, DIRS, key, unkey, PLANT, replay } = await import('../client/labyrinth/model.ts');
 const G = await import('../client/labyrinth/gesture.ts');
 const NAV = await import('../client/labyrinth/nav.ts');
 const BU = await import('../client/labyrinth/buildings.ts');
 const ME = await import('../client/labyrinth/mesh.ts');
+const CH = await import('../client/labyrinth/character.ts');
 
 const opt = Object.fromEntries(process.argv.slice(2).filter((a) => a.startsWith('--')).map((a) => [a.slice(2).split('=')[0], a.split('=')[1] ?? true]));
 
@@ -57,7 +58,7 @@ export const CASES = [
   },
   {
     name: 'thick: a stair up a wall two cells thick, to its top',
-    best: 'the stair contained in the wall\'s thickness, entered by a door at its foot, out on the top',
+    best: 'the stair contained in its thickness (two deep, it\'s a house): in at a door at its foot, up inside, out on its top',
     set(w) { S.block(w, 2, 10, 5, 6, 3); },
     pts: [[1, 5], [9, 5]],
   },
@@ -76,7 +77,7 @@ export const CASES = [
   {
     name: 'spine: a stroke along a wall that steps up, from its low end to its high',
     best: 'a stepped spine: the wall\'s top a stair, inhabited, each step a landing',
-    set(w) { S.steps(w, [[3, 5, 1], [4, 5, 1], [5, 5, 2], [6, 5, 2], [7, 5, 3], [8, 5, 3], [9, 5, 4]]); },
+    set(w) { S.steps(w, [[3, 5, 1], [4, 5, 1], [5, 5, 2], [6, 5, 2], [7, 5, 3], [8, 5, 3], [9, 5, 3]]); },
     pts: [[3, 5], [9, 5]],
   },
   {
@@ -88,7 +89,7 @@ export const CASES = [
   {
     name: 'water: a stair beside a wall with pools at its foot',
     best: 'a dry stair and a cascade sharing the wall that retains them',
-    set(w) { S.wall(w, 3, 8, 5, 3); S.block(w, 9, 10, 3, 4, 3); S.pools(w, [[4, 3], [5, 3], [6, 3], [7, 3]]); },
+    set(w) { S.wall(w, 3, 8, 5, 3); S.block(w, 9, 10, 3, 4, 3); S.pools(w, [[4, 3], [5, 3]]); },
     pts: [[2, 4], [9, 4]],
   },
   // (a third thing)
@@ -111,10 +112,10 @@ export const CASES = [
     pts: [[3, 3], [5, 3], [5, 5]],
   },
   {
-    name: 'beside + stair: a second stair beside the first, along the same wall, the other way',
-    best: 'the two flights interlock: one landing shared, a switchback against the wall',
-    set(w) { S.wall(w, 3, 8, 5, 3); S.block(w, 9, 10, 3, 4, 3); const op = stroke(w, [[2, 4], [9, 4]]); if (op && !op.refused) w.apply({ ...op, alts: undefined }); S.block(w, 1, 2, 2, 3, 3); },
-    pts: [[8, 3], [2, 3]],
+    name: 'beside + stair: a stair up beside a wall to a low terrace, then from it a second back the other way, higher',
+    best: 'the two flights interlock: the terrace their shared landing, a switchback against the wall',
+    set(w) { S.wall(w, 3, 8, 5, 4); S.block(w, 9, 10, 3, 4, 2); w.apply({ dress: [[1, 9, 3], [1, 10, 3], [1, 9, 4], [1, 10, 4]].map((c) => [...c, 5, 1]), born: 0, why: 'dress' }); const op = stroke(w, [[2, 4], [9, 4]]); if (op && !op.refused) w.apply({ ...op, alts: undefined }); S.block(w, 1, 2, 2, 3, 4); },
+    pts: [[9, 3], [2, 3]],
   },
 ];
 
@@ -124,10 +125,10 @@ const BEST = {
   beside: (w) => w.flights.some((f) => f.carriage === 'hung'),
   across: (w, before) => before.some((c) => w.archway(...c) >= 0 || w.stair(...c) >= 0),
   fold: (w) => w.flights.length >= 2,
-  thick: (w, before) => stairIn(w, before) >= 2,
-  thin: (w) => [...w.thin.keys()].some((v) => w.dress.get(v)?.screen),
+  thick: (w) => BU.buildings(w).list.some((b) => b.inside && b.walked && b.openings.some((o) => o.kind === 'door' && o.k === b.base[0])),
+  thin: (w) => [...w.thin.keys()].filter((v) => CH.look(w, ...unkey(v))?.screen).length >= 2 && w.flights.every((f) => f.carriage !== 'hung'),
   top: (w, before) => { const { edges } = ME.parapets(w); return before.filter((c) => (edges.get(key(...c)) ?? []).some(Boolean)).length >= 4; },
-  spine: (w) => NAV.reaches(BU.walkable(w), [1, 3, 5], [4, 9, 5]) && w.flights.every((f) => f.cells.every(([, i, j]) => j === 5)),
+  spine: (w) => NAV.reaches(BU.walkable(w), [1, 3, 5], [3, 9, 5]) && w.flights.length > 0 && w.flights.every((f) => f.cells.every(([, i, j]) => j === 5)),
   cut: (w, before) => stairIn(w, before) >= 2,
   water: (w) => [...w.basins.keys()].length >= 2,
   'beside + tree': (w) => [...w.trees.keys()].length === 1 && w.flights.length >= 1,
@@ -164,12 +165,20 @@ for (const C of CASES) {
   if (flights.length > 1) how.push(`${flights.length} flights`);
   const verdict = refused ? 'refused' : how.length ? 'adapts' : 'attaches';
   const met = !refused && !!BEST[C.name.split(':')[0]]?.(w, before);
-  results.push({ name: C.name, best: C.best, verdict, met, reading: refused ? op?.refused ?? 'nothing' : op.reading ?? op.note ?? op.why, how: how.join('; '), alts: refused ? (op?.alts ?? []).map((a) => a.label) : (op.alts ?? []).map((a) => a.label), flights: flights.map((f) => `${f.n} steps, ${f.carriage}`), ops: w.encode() });
+  // (not as it's laid, but a reading away: a meeting it made, chosen at another rung)
+  let offered = '', offeredOps = '';
+  if (!refused && !met) for (const m of w.meetings) for (const c of m.candidates) {
+    if (offered || c.level === m.laid) continue;
+    const v = replay(w.encode(), w.seed); v.apply({ choose: [[...m.anchor, c.level]], why: 'reading' });
+    if (BEST[C.name.split(':')[0]]?.(v, before)) { offered = c.label; offeredOps = v.encode(); }
+  }
+  if (opt.v && !refused) console.log(C.name.split(':')[0], JSON.stringify({ from: op.connect?.from, to: op.connect?.to, took: op.took, flights: w.flights.map((f) => [f.cells[0], f.cells.length]) }));
+  results.push({ name: C.name, best: C.best, verdict, met, offered, reading: refused ? op?.refused ?? 'nothing' : op.reading ?? op.note ?? op.why, how: how.join('; '), alts: refused ? (op?.alts ?? []).map((a) => a.label) : (op.alts ?? []).map((a) => a.label), flights: flights.map((f) => `${f.n} steps, ${f.carriage}`), ops: offeredOps || w.encode() });
 }
 const pad = (s, n) => (s.length > n ? s.slice(0, n - 1) + '…' : s.padEnd(n));
-for (const r of results) console.log(`${r.met ? '✓' : '·'} ${pad(r.verdict, 9)} ${pad(r.name.split(':')[0], 16)} ${r.reading}${r.how ? ` — ${r.how}` : ''}\n${' '.repeat(27)}best: ${r.best}${r.alts.length ? `\n${' '.repeat(27)}also: ${r.alts.join(' · ')}` : ''}`);
+for (const r of results) console.log(`${r.met ? '✓' : r.offered ? '○' : '·'} ${pad(r.verdict, 9)} ${pad(r.name.split(':')[0], 16)} ${r.reading}${r.how ? ` — ${r.how}` : ''}\n${' '.repeat(27)}best: ${r.best}${r.alts.length ? `\n${' '.repeat(27)}also: ${r.alts.join(' · ')}` : ''}`);
 const tally = results.reduce((t, r) => ((t[r.verdict] = (t[r.verdict] ?? 0) + 1), t), {});
-console.log(`\n${results.length} cases: ${Object.entries(tally).map(([k, n]) => `${n} ${k}`).join(', ')}; ${results.filter((r) => r.met).length} come to what they'd be at their best`);
+console.log(`\n${results.length} cases: ${Object.entries(tally).map(([k, n]) => `${n} ${k}`).join(', ')}; ${results.filter((r) => r.met).length} come to what they'd be at their best, ${results.filter((r) => r.offered).length} more a reading away`);
 if (opt.json) (await import('node:fs')).writeFileSync(opt.json, JSON.stringify(results.map(({ ops, ...r }) => r), null, 1));
 if (opt.render) {
   process.env.EXPERIMENT = 'labyrinth'; process.env.READY = '__labyrinth';
@@ -180,7 +189,7 @@ if (opt.render) {
     for (const [n, r] of results.entries()) {
       const p = await lab.open(`instant&cats=0&zoom=${opt.zoom ?? 0.42}&turn=${opt.turn ?? 1}&el=0.62&at=6.5&ops=${encodeURIComponent(r.ops)}`);
       await p.waitForTimeout(8000);
-      const file = new URL(`${String(n + 1).padStart(2, '0')}-${r.name.split(':')[0].replace(/[^a-z]+/gi, '-')}.png`, dir).pathname;
+      const file = new URL(`${String(n + 1).padStart(2, '0')}-${r.name.split(':')[0].replace(/[^a-z]+/gi, '-')}${r.offered ? '-a-reading-away' : ''}.png`, dir).pathname;
       await p.screenshot({ path: file, timeout: 300000 });
       console.log(`drawn: ${file}`);
       await p.close();

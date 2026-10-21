@@ -280,6 +280,18 @@ const SCENES = [
     },
   },
   {
+    name: 'a flight beside water: pools at the foot of a stair up beside a wall',
+    run(w, H) {
+      for (let i = 3; i <= 8; i++) H.column([i, 5], 3);
+      for (const c of [[9, 3], [9, 4], [10, 3], [10, 4]]) H.column(c, 3);
+      w.apply({ pools: [[4, 3], [5, 3]].map((c) => [...H.T(c), 0]), born: 0, why: 'pool' });
+      H.stroke([2, 4], [9, 4], 'way', [9, 4]);
+      meetings(w, this.tag, 'flight-beside-water');
+      const m = w.meetings.find((q) => q.rule === 'flight-beside-water');
+      if (m) { const v = replay(w.encode(), w.seed); v.apply({ choose: [[...m.anchor, 1]], why: 'reading' }); ok(`${this.tag}: chosen, a cascade of basins beside the stair`, v.basins.size >= 2, v.basins.size); }
+    },
+  },
+  {
     name: 'a flight aimed at a wall: up to a narrow terrace against a wall, another terrace beyond it',
     run(w, H) {
       for (let j = 3; j <= 8; j++) H.column([7, j], 4);

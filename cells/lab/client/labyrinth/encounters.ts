@@ -380,8 +380,58 @@ const flightMeetsTerrace: Rule = {
   },
 };
 
+/**
+ * A flight of the hand's with a pool of its at its foot, beside it: water and a dry stair that could climb together.
+ * The ladder: apart (the restrained answer); a cascade beside the flight, a basin level with each step from the second
+ * up, each spilling into the one below and the lowest into the pool (a water stair); and a lantern at its head.
+ */
+const flightBesideWater: Rule = {
+  id: 'flight-beside-water',
+  find(w) {
+    const out: Found[] = [], at = new Map<number, number>(), seen = new Set<number>();
+    w.ops.forEach((op, n) => { for (const c of [...(w.reached.get(op)?.cells ?? []), ...(op.stairs ?? []).map((s) => [s[0], s[1], s[2]] as Cell)]) if (!at.has(key(...c))) at.set(key(...c), n); });
+    const pond = (i: number, j: number) => w.ops.findIndex((o) => !o.derived && (o.pools ?? []).some(([x, z]) => x === i && z === j));
+    for (const f of w.flights) {
+      const by = at.get(key(...f.cells[f.cells.length - 1])) ?? at.get(key(...f.cells[0])) ?? -1;
+      if (by < 0 || w.ops[by].derived || f.cells.length < 2) continue;
+      const [a, b] = DIRS[f.d], [k0, i0, j0] = f.cells[0];
+      for (const s of [(f.d + 1) % 4, (f.d + 3) % 4]) {
+        const [sa, sb] = DIRS[s];
+        // (the pool: beside the foot, or a cell or two before it, on that side)
+        const P = [0, 1, 2].map((q) => [i0 + sa - a * q, j0 + sb - b * q] as [number, number]).find(([x, z]) => w.pool(x, z) && pond(x, z) >= 0);
+        if (!P || seen.has(key(0, ...P))) continue;
+        // (a basin beside each step from the second up, on a column of stone, at the step's level; the first, a pool)
+        const add: Array<[number, number, number, number]> = [], basins: Array<[number, number, number, number]> = [], pools: Array<[number, number, number]> = [];
+        let ok = true;
+        const born = w.ops[by].born ?? 0;
+        f.cells.forEach(([k, i, j], q) => {
+          const x = i + sa, z = j + sb, g = w.ground(x, z);
+          if (!inGrid(x, z) || w.claim(g, x, z) === 'passage' || w.way(g, x, z)) { ok = false; return; }
+          if (w.pool(x, z)) return;
+          for (let kk = g; kk <= k; kk++) if (w.occupied(kk, x, z) || w.tree(kk, x, z)) ok = false;
+          if (k === g) pools.push([x, z, born]);
+          else { for (let kk = g; kk < k; kk++) add.push([kk, x, z, born]); basins.push([k, x, z, born]); }
+        });
+        if (!ok || basins.length < 2) continue;
+        seen.add(key(0, ...P));
+        const H = f.cells[f.cells.length - 1], A: Cell = [H[0] + 1, H[1] + a, H[2] + b];
+        const cascade: Op = { add, basins, pools };
+        out.push({
+          rule: this.id, name: 'a flight beside water', where: 'beside the flight', anchor: [k0, i0 + sa, j0 + sb], cells: [[0, ...P], f.cells[0], A], by: [by, pond(...P)].sort((p, r) => p - r), insists: (o) => !!o.connect || !!o.pools?.length,
+          candidates: [
+            { level: 0, label: 'the stair and the water apart', verbs: ['separate'], op: {} },
+            { level: 1, label: 'a cascade beside the stair, a basin at each step, falling to the pool', verbs: ['merge', 'step'], op: cascade },
+            { level: 2, label: 'the cascade, a lantern at its head', verbs: ['merge', 'step', 'frame'], op: { ...cascade, ...lantern(A) } },
+          ],
+        });
+      }
+    }
+    return out;
+  },
+};
+
 /** every rule, in the order they're resolved (a later one never lays where an earlier one has) */
-export const RULES: Rule[] = [waysMeet, levelApart, waysCross, wayEnds, flightMeetsWall, wayMeetsTree, flightMeetsTerrace];
+export const RULES: Rule[] = [waysMeet, levelApart, waysCross, wayEnds, flightMeetsWall, wayMeetsTree, flightMeetsTerrace, flightBesideWater];
 
 // ─── resolving them ───
 

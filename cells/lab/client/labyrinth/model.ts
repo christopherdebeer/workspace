@@ -97,7 +97,7 @@ export interface Op {
 }
 /** readings of the rules' work a hand can switch to: an arch read as a lintel, a pier asked for; a building's roof (none, or
  * which kind), kept at the lowest cell of its top */
-export const RULE = { none: 0, lintel: 1, pier: 2, colonnade: 3, arch: 4, noPier: 5, noRoof: 10, hipped: 11, gable: 12, shed: 13, dome: 14, tower: 20, solid: 30, rampant: 31, hung: 32 } as const;
+export const RULE = { none: 0, lintel: 1, pier: 2, colonnade: 3, arch: 4, noPier: 5, noRoof: 10, hipped: 11, gable: 12, shed: 13, dome: 14, tower: 20, solid: 30, rampant: 31, hung: 32, within: 40 } as const;
 
 /**
  * How a flight is carried. Worked out from its setting (the hand can choose another, kept at its foot: `RULE.solid`,
@@ -150,6 +150,9 @@ export const PLANT = { cypress: 0, shrub: 1, hedge: 2, olive: 3, pine: 4, vine: 
 /** how many levels of a plant's cell (and over it) its trunk or body takes, and how high it reaches */
 export const PLANT_TALL = [2, 1, 1, 2, 4, 1];
 export const isTower = (r: number | undefined) => r !== undefined && r >= RULE.tower && r < RULE.tower + 4;
+/** a house climbed inside (the rule kept at a cell of its foot, `RULE.within` + the way its door faces): a door there,
+ * its stair inside, out on its top */
+export const isWithin = (r: number | undefined) => r !== undefined && r >= RULE.within && r < RULE.within + 4;
 /** dressing: three stones (travertine is the stone's own), then what's on it */
 export const DRESS = { travertine: 0, brick: 1, marble: 2, moss: 3, ivy: 4, parapet: 5, lantern: 6, pot: 7, balustrade: 8, jali: 9, pergola: 10, mashrabiya: 11, colonnettes: 12, seat: 13, gap: 14 } as const;
 /** a cell's dressing: each part set (by the hand, or by the rules' own dressing, character.ts) or not; a part set off
@@ -883,7 +886,9 @@ export class World {
       // (a passage the hand made under it: never filled)
       const passageUnder = loose.some(([kk, x, z]) => { for (let q = this.ground(x, z); q < kk; q++) if (this.passages.has(key(q, x, z))) return true; return false; });
       // (a wall beside every step over nothing: the same side for all, if there is one)
-      const sideOf = (c: Cell) => [(s.d + 1) % 4, (s.d + 3) % 4].filter((q) => solidAt(c[0], c[1] + DIRS[q][0], c[2] + DIRS[q][1]));
+      // (a thin wall can't carry steps cantilevered out of it: beside one, the flight stands free, and the wall becomes
+      // a screen beside it (character.ts))
+      const sideOf = (c: Cell) => [(s.d + 1) % 4, (s.d + 3) % 4].filter((q) => solidAt(c[0], c[1] + DIRS[q][0], c[2] + DIRS[q][1]) && !this.thin.has(key(c[0], c[1] + DIRS[q][0], c[2] + DIRS[q][1])));
       const common = [(s.d + 1) % 4, (s.d + 3) % 4].find((q) => loose.every((c) => sideOf(c).includes(q)));
       const hangs = loose.length > 0 && loose.every((c) => sideOf(c).length > 0);
       // (beside the land's bank, not a wall: built up solid against it, a retaining stair, not hung out of the earth)
