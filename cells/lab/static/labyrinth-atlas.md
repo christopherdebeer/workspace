@@ -175,6 +175,33 @@ Two stairs drawn side by side to the same top come out in step, so the drawing n
 | **broaden**: a second stair drawn beside the first | one broad flight, one carriage, rails at its outer sides | ✓ |
 | **stair × cascade**: a stair up beside a wall, a pool at its foot | apart as laid; **a reading away**, the stair and the cascade one mass, built up solid, the water falling beside the steps | ○ |
 
+## Chains: a result is an ingredient
+
+The third capability. Before this, the encounters were found once, against what the hand had built, and what they laid was applied and never looked at again. Several rules skipped anything a meeting had made. Now:
+
+- **Meeting runs in rounds** (`MEET_ROUNDS = 3`, model.ts `rebuild`, encounters.ts `meet`). What one round lays is built, then looked at again with everything else, so it can meet what's beside it. A meeting already found isn't found again, and no round lays where an earlier one did.
+- **Rules take results as participants.** A meeting's paving is a place. A meeting's stone can be the terrace a flight's landing joins, and it gives way to a tree's crown, since it came after.
+- **A way to a tree makes a place there.** A way *ending* by a shade tree starts at the ring of paving round it. One that only passes it still just passes it.
+- **Two rules work on places a meeting made:**
+  - `place-meets-flight`: a stair's foot a cell or two from the place gets paving joining them into one platform.
+  - `place-by-wall`: a wall of the hand's beside the place becomes its enclosure, with a stone bench along its foot.
+- **The landing stage is a place now** (`way-at-water`). It used to be steps drawn in the mesh where a way reached the stream. Now, a level above the water, it's stone out over the water, carried and walked on, with steps down from its end and a post. Level with the water, it's the steps from the bank. Either way, the meeting can be chosen, taken, and built from.
+
+![chains: three cases](labyrinth/atlas-chains.jpg)
+
+| Case | What it is now | Best? |
+|---|---|---|
+| **tree → place → stair → wall**: a way drawn to an olive, a stair's foot and a wall near it | three rounds: a ring of paving in its shade; the stair's foot opened on to it, one platform; a bench along the wall | ✓ |
+| **court → tree → place → wall**: a way through a court's gate to an olive in its corner | the gate, the ring of paving, benches along the court's wall (and the gallery's pergola along it, the reactions rule, on the way in) | ✓ |
+| **way → water → stage**: a way to the stream, the water a level below | a landing stage: stone out over the water, walked on, steps down from its end, a post | ✓ |
+
+**Recognisable intent.** A ground stroke for stone that can't be built (or would add nothing) used to become planting, chosen in its place. Now the planting is offered alongside the refusal, never chosen for it. Where the other reading applies, as with a way along a wall already there, that's laid, and the planting comes with it as alternatives.
+
+Together: **48 of 50 at their best as laid**; the other two (water, stair × cascade) are a reading away.
+
 ## Next
 
-What the atlas hasn't mapped yet: a stair meeting an arcade (through a bay, or up beside its piers), water and a court (a channel along a way, a fountain at a crossing), and combinations of combinations: one of these settings met by two strokes in different orders, to see whether the result depends on which came first.
+- **Sections**, not just plans: deep reveals, recessed bays, wall thickness that varies, offset supports, spaces carved within mass. These change a silhouette and the experience of an assembly, not its feature count.
+- **More chains**: a vault that joins a gallery; a cascade that passes through later construction; a landing stage that becomes a quay.
+- **More order tests**: the same setting met by two strokes in different orders (a flight and a terrace, either first, already agree).
+- **Not yet mapped**: a stair meeting an arcade; water in a court (a channel along a way, a fountain at a crossing).

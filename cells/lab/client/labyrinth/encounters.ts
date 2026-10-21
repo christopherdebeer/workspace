@@ -333,8 +333,10 @@ const wayMeetsTree: Rule = {
           if (inGrid(ci, cj) && w.ground(ci, cj) === k && !w.occupied(k, ci, cj) && !w.tree(k, ci, cj) && !w.pool(ci, cj) && !w.paved(ci, cj) && w.passage(k, ci, cj) < 0 && !w.way(k, ci, cj)) ring.push([ci, cj]);
         }
         const paved: Op = ring.length ? { pave: ring } : {};
+        // (a way that goes to the tree, ending by it, makes a place there; one going past, passes)
+        const walk = w.walks.get(w.ops[a]) ?? [], end = walk[walk.length - 1], to = !!end && end.join() === by.join();
         out.push({
-          rule: this.id, name: 'a way passing a tree', where: 'by the tree', anchor: T, cells: [T, by], by: [a, p].sort((x, y) => x - y), insists: ways,
+          rule: this.id, name: 'a way passing a tree', where: 'by the tree', anchor: T, cells: [T, by], by: [a, p].sort((x, y) => x - y), insists: ways, start: to && ring.length ? 1 : 0,
           candidates: [
             { level: 0, label: 'the way passing it', verbs: ['separate'], op: {} },
             ...(ring.length ? [{ level: 1 as const, label: 'a ring of paving round it, a place in its shade', verbs: ['wrap'] as Verb[], op: paved }] : []),
@@ -367,7 +369,8 @@ const flightMeetsTerrace: Rule = {
           const [sa, sb] = DIRS[s], X: Cell = [k + 1, i + sa, j + sb];
           // (a terrace: the hand's stone level with the step's top, two cells deep from the flight, somewhere to stand)
           if (!w.block(k, X[1], X[2]) || !w.block(k, X[1] + sa, X[2] + sb) || !place(w, X) || w.occupied(...X) || seen.has(key(...X))) continue;
-          const terrace = w.ops.findIndex((o, n) => n !== by && !o.derived && (o.add ?? []).some((c) => c[0] === k && c[1] === X[1] && c[2] === X[2]));
+          // (the hand's, or what a meeting laid: a terrace a meeting made is met in turn)
+          const terrace = w.ops.findIndex((o, n) => n !== by && (o.add ?? []).some((c) => c[0] === k && c[1] === X[1] && c[2] === X[2]));
           if (terrace < 0) continue;
           seen.add(key(...X));
           const gap: Op = { dress: [[k, i, j, DRESS.gap, 1]] }, landing = landingIn(w, f, q, Math.max(w.ops[by].born ?? 0, w.ops[terrace].born ?? 0));
@@ -458,7 +461,8 @@ const stoneInCrown: Rule = {
         const inCrown = ring.filter(([x, z]) => own(w, kc, x, z));
         if (!inCrown.length || DIRS.every(([a, b]) => w.occupied(kc, i + a, j + b))) continue;
         const cut = cutBack(w, inCrown, kc);
-        const by = Math.min(...inCrown.map(([x, z]) => w.firstOp.get(key(0, x, z)) ?? 1e9));
+        // (laid by the hand, or by a meeting: what a meeting laid came after the tree, so gives way to it)
+        const by = Math.min(...inCrown.map(([x, z]) => w.firstOp.get(key(0, x, z)) ?? w.ops.findIndex((o) => !!o.derived && (o.add ?? []).some((c) => c[1] === x && c[2] === z))).filter((n) => n >= 0), 1e9);
         if (!cut || by >= w.ops.length || by === p) continue;
         const what = kc - 1 > w.ground(i, j) + 1 ? 'stepped back round its crown' : 'cut back round its crown';
         out.push({
@@ -582,8 +586,121 @@ const flightsAlongside: Rule = {
   },
 };
 
+/** the places a meeting has made on the ground (a ring of paving round a tree, a platform): each with the meeting's
+ * operation's place in the list (they're among the operations in a later round of meeting) */
+const places = (w: World) => w.ops.map((o, n) => ({ cells: o.derived ? o.pave ?? [] : [], n })).filter((q) => q.cells.length >= 2);
+
+/**
+ * A flight of the hand's whose foot is a cell or two from a place a meeting made on the ground (a ring of paving round a
+ * tree): a result met in turn. The stair's foot opened on to the place: paving from where it's come to, to the place,
+ * and across the flight's foot, one platform; or apart, as they are.
+ */
+const placeMeetsFlight: Rule = {
+  id: 'place-meets-flight',
+  find(w) {
+    const out: Found[] = [], at = new Map<number, number>(), P = places(w);
+    if (!P.length) return out;
+    w.ops.forEach((op, n) => { for (const c of [...(w.reached.get(op)?.cells ?? []), ...(op.stairs ?? []).map((s) => [s[0], s[1], s[2]] as Cell)]) if (!at.has(key(...c))) at.set(key(...c), n); });
+    for (const f of w.flights) {
+      const by = at.get(key(...f.cells[0])) ?? -1, [k, i, j] = f.cells[0];
+      if (by < 0 || w.ops[by].derived || k !== w.ground(i, j)) continue;
+      const [a, b] = DIRS[f.d], A: [number, number] = [i - a, j - b], [t, u] = DIRS[(f.d + 1) % 4];
+      const free = ([x, z]: [number, number]) => inGrid(x, z) && w.ground(x, z) === k && !w.occupied(k, x, z) && !w.pool(x, z) && !w.tree(k, x, z);
+      if (!free(A)) continue;
+      for (const { cells, n } of P) {
+        if (cells.some(([x, z]) => x === A[0] && z === A[1])) continue;
+        const near = cells.filter(([x, z]) => w.ground(x, z) === k && Math.max(Math.abs(x - A[0]), Math.abs(z - A[1])) <= 2).sort((p, q) => Math.abs(p[0] - A[0]) + Math.abs(p[1] - A[1]) - Math.abs(q[0] - A[0]) - Math.abs(q[1] - A[1]))[0];
+        if (!near) continue;
+        const path: Array<[number, number]> = [A];
+        for (let [x, z] = A; x !== near[0] || z !== near[1]; ) { if (x !== near[0]) x += Math.sign(near[0] - x); else z += Math.sign(near[1] - z); path.push([x, z]); }
+        const pave = [...path, [A[0] + t, A[1] + u], [A[0] - t, A[1] - u]].filter((c) => free(c as [number, number]) && !w.paved(c[0], c[1]) && !cells.some(([x, z]) => x === c[0] && z === c[1])) as Array<[number, number]>;
+        if (!pave.length || path.slice(1, -1).some((c) => !free(c))) continue;
+        out.push({
+          rule: this.id, name: "a stair's foot by a place", where: "at the stair's foot", anchor: [k, ...A], cells: [[k, ...A], [k, ...near]], by: [by, n].sort((p, q) => p - q), insists: ways, branches: true, start: 1,
+          candidates: [
+            { level: 0, label: "the stair's foot and the place apart", verbs: ['separate'], op: {} },
+            { level: 1, label: "the stair's foot opened on to the place: one platform", verbs: ['merge'], op: { pave } },
+          ],
+        });
+        break;
+      }
+    }
+    return out;
+  },
+};
+
+/**
+ * A place a meeting made on the ground (a ring of paving, a platform) against a wall of the hand's, two courses high
+ * or more: the wall becomes its enclosure, a stone bench along its foot where the place meets it; or the place beside
+ * the wall, as it is.
+ */
+const placeByWall: Rule = {
+  id: 'place-by-wall',
+  find(w) {
+    const out: Found[] = [], seen = new Set<number>();
+    for (const { cells, n } of places(w)) {
+      const bench: Array<[number, number, number]> = [];
+      let by = -1;
+      for (const [x, z] of cells) {
+        const g = w.ground(x, z);
+        if (seen.has(key(g, x, z)) || w.occupied(g, x, z) || w.tree(g, x, z)) continue;
+        const d = DIRS.findIndex(([a, b]) => own(w, g, x + a, z + b) && own(w, g + 1, x + a, z + b) && w.firstOp.has(key(0, x + a, z + b)));
+        if (d < 0) continue;
+        bench.push([g, x, z]); seen.add(key(g, x, z));
+        if (by < 0) by = w.firstOp.get(key(0, x + DIRS[d][0], z + DIRS[d][1]))!;
+      }
+      if (bench.length < 2 || by < 0) continue;
+      out.push({
+        rule: this.id, name: 'a place against a wall', where: 'along the wall', anchor: bench[0], cells: bench, by: [by, n].sort((p, q) => p - q), branches: true, start: 1,
+        candidates: [
+          { level: 0, label: 'the place beside the wall, as it is', verbs: ['separate'], op: {} },
+          { level: 1, label: 'a stone bench along the wall: the place enclosed by it', verbs: ['wrap', 'shelter'], op: { dress: bench.map(([g, x, z]) => [g, x, z, DRESS.seat, 1] as [number, number, number, number, number]) } },
+        ],
+      });
+    }
+    return out;
+  },
+};
+
+/**
+ * A way of the hand's that ends at water's edge (the stream, a pool) a level above it, or level with it: a landing stage,
+ * stone out over the water a cell, carried over it, steps down into the water from its end and a post to tie up to (a
+ * place, walked on, that can be built from); level with the water, the steps down from the bank. Or the way ending at
+ * the bank.
+ */
+const wayAtWater: Rule = {
+  id: 'way-at-water',
+  find(w) {
+    const out: Found[] = [], seen = new Set<string>();
+    w.ops.forEach((op, p) => {
+      if (op.derived) return;
+      const cs = w.walks.get(op) ?? [];
+      for (const e of cs.length > 1 ? [cs[0], cs[cs.length - 1]] : []) {
+        const [k, i, j] = e;
+        if (k !== w.ground(i, j)) continue;
+        for (let d = 0; d < 4; d++) {
+          const [a, b] = DIRS[d], x = i + a, z = j + b;
+          if (!inGrid(x, z) || !w.pool(x, z) || w.ground(x, z) > k || w.ground(x, z) < k - 1 || seen.has(`${x}.${z}`) || !w.onSlab(x, z)) continue;
+          seen.add(`${x}.${z}`);
+          const stage = w.ground(x, z) === k - 1 && !w.occupied(k - 1, x, z) && !w.tree(k - 1, x, z);
+          out.push({
+            rule: this.id, name: "a way at the water's edge", where: 'at the water', anchor: [k, x, z], cells: [e, [w.ground(x, z), x, z]], by: [p], insists: ways, branches: true, start: 1,
+            candidates: [
+              { level: 0, label: 'the way ending at the bank', verbs: ['separate'], op: {} },
+              stage
+                ? { level: 1, label: 'a landing stage out over the water, steps down from its end, a post to tie up to', verbs: ['merge', 'step'], op: { add: [[k - 1, x, z, op.born ?? 0]] }, within: [[k - 1, x, z]] }
+                : { level: 1, label: 'steps down into the water from the bank, a post to tie up to', verbs: ['step'], op: {} },
+            ],
+          });
+        }
+      }
+    });
+    return out;
+  },
+};
+
 /** every rule, in the order they're resolved (a later one never lays where an earlier one has) */
-export const RULES: Rule[] = [waysMeet, levelApart, waysCross, wayEnds, flightMeetsWall, wayMeetsTree, flightMeetsTerrace, flightBesideWater, stoneInCrown, edgeRoundCypress, wayAtFace, flightsAlongside];
+export const RULES: Rule[] = [waysMeet, levelApart, waysCross, wayEnds, flightMeetsWall, wayMeetsTree, flightMeetsTerrace, flightBesideWater, stoneInCrown, edgeRoundCypress, wayAtFace, flightsAlongside, wayAtWater, placeMeetsFlight, placeByWall];
 
 // ─── resolving them ───
 
@@ -622,19 +739,33 @@ function insistence(w: World, m: Found): number {
   return n;
 }
 
-/** the meetings in what's been built, each resolved; what they come to, as operations (model.ts lays them) */
-export function meet(w: World): Op[] {
-  const out: Op[] = [], taken = new Set<number>(), found: Meeting[] = [];
-  for (const rule of RULES) for (const m of rule.find(w) as Found[]) {
-    const choice = w.choices.get(key(...m.anchor)), top = Math.max(...m.candidates.map((c) => c.level));
-    const wanted = choice ?? Math.min(top, (m.start ?? 0) + insistence(w, m));
-    const fit = m.candidates.filter((c) => c.level <= wanted && keeps(w, c, taken)).sort((p, q) => q.level - p.level)[0];
-    found.push({ ...m, wanted, laid: fit ? fit.level : -1, chosen: choice !== undefined, at: fit ? [...lays(fit.op), ...(fit.op.pave ?? []).map(([i, j]) => [w.ground(i, j), i, j] as Cell)] : [] });
-    if (!fit || !Object.keys(fit.op).length) continue;
-    for (const c of [...lays(fit.op), ...(fit.op.cut ?? [])]) taken.add(key(...c));
-    for (const [i, j] of fit.op.pave ?? []) taken.add(key(w.ground(i, j), i, j));
-    out.push({ ...fit.op, derived: true, why: 'meeting', note: fit.label, born: Math.max(...m.by.map((q) => w.ops[q].born ?? 0)) });
-  }
+/** where the rounds of meeting have got to: what they've laid (built now, so it can meet things in turn), what they've
+ * found, and the cells they've laid in */
+export interface Round { ops: Op[]; found: Meeting[]; taken: Set<number> }
+/**
+ * The meetings in what's been built, each resolved; what they come to, as operations (model.ts lays them). In rounds:
+ * what the earlier rounds laid (`round.ops`) is built, and is among the things the rules look at (a meeting's result is
+ * an ingredient, and meets what's beside it in turn); a meeting already found isn't found again.
+ */
+export function meet(w: World, round: Round = { ops: [], found: [], taken: new Set() }): Op[] {
+  const out: Op[] = [], taken = round.taken, found = round.found, had = new Set(found.map((m) => `${m.rule}.${key(...m.anchor)}`));
+  const hand = w.ops;
+  w.ops = [...hand, ...round.ops];
+  try {
+    for (const rule of RULES) for (const m of rule.find(w) as Found[]) {
+      const id = `${m.rule}.${key(...m.anchor)}`;
+      if (had.has(id)) continue;
+      had.add(id);
+      const choice = w.choices.get(key(...m.anchor)), top = Math.max(...m.candidates.map((c) => c.level));
+      const wanted = choice ?? Math.min(top, (m.start ?? 0) + insistence(w, m));
+      const fit = m.candidates.filter((c) => c.level <= wanted && keeps(w, c, taken)).sort((p, q) => q.level - p.level)[0];
+      found.push({ ...m, wanted, laid: fit ? fit.level : -1, chosen: choice !== undefined, at: fit ? [...lays(fit.op), ...(fit.op.pave ?? []).map(([i, j]) => [w.ground(i, j), i, j] as Cell)] : [] });
+      if (!fit || !Object.keys(fit.op).length) continue;
+      for (const c of [...lays(fit.op), ...(fit.op.cut ?? [])]) taken.add(key(...c));
+      for (const [i, j] of fit.op.pave ?? []) taken.add(key(w.ground(i, j), i, j));
+      out.push({ ...fit.op, derived: true, why: 'meeting', note: fit.label, born: Math.max(...m.by.map((q) => w.ops[q]?.born ?? 0)) });
+    }
+  } finally { w.ops = hand; }
   w.meetings = found;
   return out;
 }

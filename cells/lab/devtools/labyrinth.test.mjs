@@ -362,6 +362,21 @@ ok(`walls come out gated or arcaded, now and then (${lively.gates})`, lively.gat
   for (const [a, b] of [[[3, 6], [9, 6]], [[6, 3], [6, 9]]]) { const o = G.stroke(w, top(...a), G.connect([a, b]), top(...b), () => 1, 1, []); w.apply({ ...o, alts: undefined }); }
   ok('two walkways through one tower cross in it, under a cross vault', w.cross(2, 6, 6) && w.stone(3, 6, 6) && NAV.reaches(NAV.navigate(w), [2, 3, 6], [2, 9, 6]) && NAV.reaches(NAV.navigate(w), [2, 6, 3], [2, 6, 9]));
 }
+// (a way to the stream's edge, the water a level below: a landing stage out over it, stone, walked on, a place)
+{
+  const w = new World(1, 9);
+  let stage = null;
+  for (let i = 0; i < 14 && !stage; i++) for (let j = 0; j < 14 && !stage; j++) {
+    if (!w.land?.water.has(j * 1000 + i)) continue;
+    for (const [a, b] of DIRS) { const x = i - a, z = j - b, x4 = i - 4 * a, z4 = j - 4 * b; if (!w.pool(x, z) && w.ground(x, z) === w.ground(i, j) + 1 && [1, 2, 3, 4].every((q) => !w.pool(i - q * a, j - q * b) && w.ground(i - q * a, j - q * b) === w.ground(x, z))) { stage = { water: [i, j], from: [x4, z4], to: [x, z] }; break; } }
+  }
+  if (stage) {
+    const g = w.ground(...stage.from);
+    w.apply({ connect: { from: [g, ...stage.from], to: null, path: G.connect([stage.from, stage.to]), follow: true }, born: 1, why: 'way' });
+    const m = w.meetings.find((q) => q.rule === 'way-at-water');
+    ok('a way to the water a level below: a landing stage, stone out over the water, walked on', m?.laid === 1 && w.stone(g - 1, ...stage.water) && NAV.reaches(NAV.navigate(w), [g, ...stage.from], [g, ...stage.water]), { m: m && { laid: m.laid, cells: m.cells }, stage });
+  } else ok('a bank a level over the stream to try a landing stage on', false);
+}
 // (a pier landing on a walkway below stands aside, slim, and the walkway past it stays open)
 {
   const M = await load('../client/labyrinth/mesh.ts');

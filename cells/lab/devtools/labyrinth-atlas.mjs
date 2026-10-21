@@ -381,6 +381,37 @@ CASES.push(...[
   },
 ].map((c) => ({ group: 'junctions', turn: 2, ...c })));
 
+/** the meetings laid, by rule, and at what */
+const laid = (w, rule) => w.meetings.filter((m) => m.rule === rule && m.laid >= 1);
+/**
+ * Chains: a meeting's result met in turn. What one meeting lays is built and looked at again, a few rounds at most, so
+ * it can meet what's beside it: a place made by a tree meets a stair's foot and a wall; a landing stage is a place.
+ */
+CASES.push(...[
+  {
+    name: 'tree → place → stair → wall: a way drawn to an olive, a stair\'s foot and a wall near it',
+    best: 'a place in the olive\'s shade (a ring of paving); the stair\'s foot opened on to it, one platform; the wall its enclosure, a bench along it',
+    set(w) { S.wall(w, 4, 8, 3, 2); S.tree(w, 6, 5); S.block(w, 9, 10, 7, 8, 2); lay(w, [[3, 8], [9, 8]]); },
+    act: (w) => fromPlace(w, [[2, 5], [5, 5]]),
+    turn: 3,
+  },
+  {
+    name: 'court → tree → place → wall: a way through a court\'s gate to an olive in it',
+    best: 'a place in its shade, and the court\'s wall its enclosure, benches along it',
+    set(w) { ring(w, 3, 9, 3, 9, 2); S.tree(w, 5, 4); },
+    act: (w) => fromPlace(w, [[11, 4], [6, 4]]),
+    turn: 0,
+  },
+  {
+    name: 'way → water → stage: a way drawn to the stream\'s edge, the water a level below',
+    best: 'a landing stage: stone out over the water, walked on, steps down from its end, a post; a place that can be built from',
+    land: 9,
+    turn: 0,
+    set() {},
+    act: (w) => { const op = { connect: { from: [w.ground(1, 2), 1, 2], to: null, path: G.connect([[1, 2], [1, 5]]), follow: true }, born: 1, why: 'way' }; w.apply(op, 1); return { ...op, laid: true, note: 'a way to the water' }; },
+  },
+].map((c) => ({ group: 'chains', turn: 2, ...c })));
+
 /** whether each case came to what it would be at its best (`before`: the setting's stone) */
 const stairIn = (w, before) => before.filter((c) => w.stair(...c) >= 0 || w.passage(...c) >= 0).length;
 const BEST = {
@@ -430,6 +461,9 @@ const BEST = {
   'terrace × flight': (w) => w.meetings.some((m) => m.rule === 'flight-meets-terrace' && m.laid === 1) && NAV.reaches(BU.walkable(w), [0, 3, 4], [4, 9, 4]),
   broaden: (w) => w.flights.length === 2 && w.flights[0].cells.every(([k, i, j], q) => { const [k2, i2, j2] = w.flights[1].cells[q] ?? []; return k === k2 && Math.abs(i - i2) + Math.abs(j - j2) === 1; }),
   'stair × cascade': (w) => [...w.basins.keys()].length >= 2 && w.flights.some((f) => f.cells.every(([k, i, j]) => k === w.ground(i, j) || w.stone(k - 1, i, j))),
+  'tree → place → stair → wall': (w) => laid(w, 'way-meets-tree').length && laid(w, 'place-meets-flight').length && laid(w, 'place-by-wall').length,
+  'court → tree → place → wall': (w) => laid(w, 'way-meets-tree').length && laid(w, 'place-by-wall').length && w.plant(0, 5, 4) >= 0,
+  'way → water → stage': (w) => laid(w, 'way-at-water').length && w.stone(w.ground(1, 6), 1, 6),
   'beside + stair': (w) => { const nav = BU.walkable(w), [f, g] = w.flights; if (!f || !g) return false; const hk = (x) => x.cells[x.cells.length - 1]; return NAV.reaches(nav, hk(f), g.cells[0]) && Math.abs(hk(f)[1] - g.cells[0][1]) + Math.abs(hk(f)[2] - g.cells[0][2]) <= 3; },
 };
 /** what a world is, to compare before and after: each wall cell's state, the walked places, the flights */
@@ -445,7 +479,7 @@ const results = [];
 for (const C of CASES) {
   if (opt.only && !C.name.includes(opt.only)) continue;
   if (opt.set && C.group !== opt.set) continue;
-  const w = new World(1);
+  const w = new World(1, C.land);
   C.set(w);
   // (the wall: the stone the setting laid, before the stroke)
   const before = [...w.mass.keys()].map(unkey), s0 = state(w, before), f0 = w.flights.length;

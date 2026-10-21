@@ -82,7 +82,8 @@ function meetings(w, tag, expect) {
       ok(`${tag}: what the meeting laid at ${c} is taken by a touch`, !!op && !after.some((q) => q.join() === c.join()), op);
     }
     // (insisting: the last of the things that made it, made again)
-    const v = replay(w.encode(), w.seed); v.apply(JSON.parse(JSON.stringify(w.ops[Math.max(...m.by)])));
+    // (the hand's: a meeting met in turn has a meeting's result among what made it)
+    const v = replay(w.encode(), w.seed); v.apply(JSON.parse(JSON.stringify(w.ops[Math.max(...m.by.filter((q) => q < w.ops.length))])));
     const n = v.meetings.find((q) => q.anchor.join() === m.anchor.join());
     const most = Math.max(...m.candidates.map((c) => c.level));
     ok(`${tag}: made again, a rung higher (or kept at the top)`, (n?.laid ?? -1) >= Math.min(most, (m.start ?? 0) + 1), n && { laid: n.laid, wanted: n.wanted });
@@ -300,6 +301,24 @@ const SCENES = [
       const [k, i, j] = at(w, H.T, [6, 5]), [, x, z] = at(w, H.T, [6, 6]);
       ok(`${this.tag}: a porch, the door at its back`, w.archway(k, i, j) >= 0 && w.stone(k + 1, i, j) && BU.buildings(w).list.some((b) => b.openings.some((o) => o.kind === 'door' && o.i === x && o.j === z && o.k === k)), BU.buildings(w).list.map((b) => b.openings.filter((o) => o.kind === 'door')));
       ok(`${this.tag}: walked into it`, walks(w, at(w, H.T, [6, 3]), [k, i, j]), { walks: [...w.walks.values()].map((c) => c.map((q) => q.join('.')).join(' ')), porch: [k, i, j] });
+    },
+  },
+  {
+    name: 'a chain: a stair up to a tower and a wall, then a way drawn to an olive between them',
+    run(w, H) {
+      for (let a = 4; a <= 8; a++) H.column([a, 3], 2);
+      const [ti, tj] = H.T([6, 5]);
+      w.apply({ plants: [[w.ground(ti, tj), ti, tj, PLANT.olive, 0]], born: 0, why: 'plant' });
+      for (const c of [[9, 7], [9, 8], [10, 7], [10, 8]]) H.column(c, 2);
+      H.stroke([3, 8], [9, 8], 'way', [9, 8]);
+      w.apply({ pave: [H.T([2, 5])], born: 0, why: 'way' });
+      H.stroke([2, 5], [5, 5], 'way');
+      // (round one: a place in the olive's shade; round two, that place met by the stair's foot, and by the wall)
+      meetings(w, this.tag, 'way-meets-tree');
+      meetings(w, this.tag, 'place-meets-flight');
+      meetings(w, this.tag, 'place-by-wall');
+      const f = w.flights.find((q) => q.cells.length >= 2);
+      ok(`${this.tag}: from the stair's foot, across the place, to the tree's shade and the bench`, !!f && walks(w, [f.cells[0][0], f.cells[0][1] - DIRS[f.d][0], f.cells[0][2] - DIRS[f.d][1]], at(w, H.T, [5, 4])), f?.cells);
     },
   },
   {

@@ -497,6 +497,8 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
     else tree(growths(w).get(v) ?? grow(w, k, i, j, kind), i, j, k, b);
     if (dressed(k, i, j)?.seat) seat(k, i, j, b);
   }
+  // (a seat where there's no tree: a bench along the wall beside it)
+  for (const [v, d] of w.dress) { if (!d.seat || w.trees.has(v)) continue; const [k, i, j] = unkey(v); if (!w.occupied(k, i, j)) bench(k, i, j); }
   for (const dc of [...w.decor.map((d) => ({ ...d, k: w.ground(d.i, d.j) })), ...hand]) {
     cur = { born: dc.born, pivot: -0.4, how: 1, tone: 0.5, dress: 0, sel: false };
     const x0 = X(dc.i), z0 = Z(dc.j);
@@ -815,31 +817,25 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
         foam(ex + a * 0.22, y1 + 0.012, ez + b * 0.22, i * 5 + j * 11 + d);
       }
     }
-    // (a way the hand laid that ends at the stream's edge: a landing stage, stone steps down into the water from the
-    // end of it, and a post to tie up to)
-    const stages = new Set<string>();
-    for (const op of w.ops) {
-      if (op.derived) continue;
-      const cs = w.walks.get(op) ?? [];
-      for (const e of cs.length > 1 ? [cs[0], cs[cs.length - 1]] : []) {
-        const [k, i, j] = e;
-        if (k !== w.ground(i, j)) continue;
-        for (let d = 0; d < 4; d++) {
-          const [a, b] = DIRS[d], x = i + a, z = j + b;
-          if (!wet(x, z) || w.ground(x, z) > k || w.ground(x, z) < k - 1 || stages.has(`${x}.${z}.${d}`) || !w.onSlab(x, z)) continue;
-          stages.add(`${x}.${z}.${d}`);
-          const [ta, tb] = DIRS[(d + 1) % 4], ex = X(i) + 0.5 + a * 0.5, ez = Z(j) + 0.5 + b * 0.5, yw = w.ground(x, z) - 0.17;
-          const P = (u: number, sv: number, y: number): V3 => [ex + a * u + ta * sv, y, ez + b * u + tb * sv];
-          cur = { born: Math.max(op.born ?? 0, -1e3) + 0.3, pivot: yw, how: 1, tone: 0.5, dress: 0, sel: false };
-          const top = k + 0.01, N = Math.max(2, Math.round((top - yw) / 0.12));
-          for (let q = 0; q < N; q++) {
-            const y = top - ((q + 1) * (top - yw + 0.04)) / N, u0 = q * (0.42 / N), u1 = u0 + 0.42 / N;
-            box(Math.min(P(u0, -0.34, 0)[0], P(u1, 0.34, 0)[0]), Math.max(P(u0, -0.34, 0)[0], P(u1, 0.34, 0)[0]), y - 0.05, y + 0.02, Math.min(P(u0, -0.34, 0)[2], P(u1, 0.34, 0)[2]), Math.max(P(u0, -0.34, 0)[2], P(u1, 0.34, 0)[2]), MAT.stone, 0.85);
-          }
-          const pp = P(0.06, 0.42, 0);
-          lathe(pp[0], pp[2], [[0.035, yw - 0.1], [0.035, top + 0.22], [0.045, top + 0.24], [0, top + 0.27]], MAT.wood, 6);
-        }
+    // (a way the hand laid that ends at the water's edge (encounters.ts `way-at-water`): stone steps down into the water,
+    // from the end of the landing stage it made out over the water (a place, in the model), or from the bank; and a post
+    // to tie up to)
+    for (const m of w.meetings) {
+      if (m.rule !== 'way-at-water' || m.laid !== 1) continue;
+      const [[k, i, j], [, x, z]] = m.cells, d = DIRS.findIndex(([a, b]) => a === x - i && b === z - j);
+      if (d < 0) continue;
+      const [a, b] = DIRS[d], staged = w.stone(k - 1, x, z), [ei, ej] = staged ? [x, z] : [i, j], [wx, wz] = staged ? [x + a, z + b] : [x, z];
+      if (!w.pool(wx, wz)) continue;
+      const [ta, tb] = DIRS[(d + 1) % 4], ex = X(ei) + 0.5 + a * 0.5, ez = Z(ej) + 0.5 + b * 0.5, yw = w.ground(wx, wz) - 0.17;
+      const P = (u: number, sv: number, y: number): V3 => [ex + a * u + ta * sv, y, ez + b * u + tb * sv];
+      cur = { born: Math.max(...m.by.map((q) => w.ops[q]?.born ?? 0), -1e3) + 0.3, pivot: yw, how: 1, tone: 0.5, dress: 0, sel: false };
+      const top = k + 0.01, N = Math.max(2, Math.round((top - yw) / 0.12)), reach = Math.min(0.42, 0.06 * N + 0.12);
+      for (let q = 0; q < N; q++) {
+        const y = top - ((q + 1) * (top - yw + 0.04)) / N, u0 = q * (reach / N), u1 = u0 + reach / N;
+        box(Math.min(P(u0, -0.34, 0)[0], P(u1, 0.34, 0)[0]), Math.max(P(u0, -0.34, 0)[0], P(u1, 0.34, 0)[0]), y - 0.05, y + 0.02, Math.min(P(u0, -0.34, 0)[2], P(u1, 0.34, 0)[2]), Math.max(P(u0, -0.34, 0)[2], P(u1, 0.34, 0)[2]), MAT.stone, 0.85);
       }
+      const pp = P(0.06, 0.42, 0);
+      lathe(pp[0], pp[2], [[0.035, yw - 0.1], [0.035, top + 0.22], [0.045, top + 0.24], [0, top + 0.27]], MAT.wood, 6);
     }
     // (a court's paving, and a way's on the ground: flags laid on the land's level middles)
     for (let j = B.j0; j <= B.j1; j++) for (let i = B.i0; i <= B.i1; i++) {
@@ -1346,6 +1342,19 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
       const p = P(sv, u, y); clump({ x: p[0], y: p[1], z: p[2], r: 0.14 + 0.06 * rr(830 + n) });
     }
     bloom = 0;
+  }
+  /** a bench along a wall: a low coped block of stone against each face of the hand's stone beside the cell, in it */
+  function bench(k: number, i: number, j: number) {
+    cur = { born: w.born(k, i, j), pivot: k, how: 1, tone: 0.5, dress: 0, sel: false };
+    const x0 = X(i), z0 = Z(j), D = 0.3, H = 0.24;
+    for (const [a, b] of DIRS) {
+      if (!w.stone(k, i + a, j + b)) continue;
+      // (across the cell along the face, D deep out from it)
+      const span = (c: number, s: number) => (s > 0 ? [c + 1 - D, c + 1] : s < 0 ? [c, c + D] : [c + 0.04, c + 0.96]);
+      const [xa, xb] = span(x0, a), [za, zb] = span(z0, b);
+      box(xa, xb, k, k + H, za, zb, MAT.stone, [0.6, 0.6, 0.95, 0.95]);
+      box(xa - 0.02, xb + 0.02, k + H, k + H + 0.04, za - 0.02, zb + 0.02, MAT.stone, 1);
+    }
   }
   /** a seat round a tree: a low ring of stone round its trunk, eight-sided, coped, earth inside it */
   function seat(k: number, i: number, j: number, born: number) {

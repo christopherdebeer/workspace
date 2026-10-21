@@ -35,7 +35,7 @@
  */
 import { hash } from '../kit/rng';
 import { DOMAIN, LAND, groundOf, makeLand, type Land } from './land';
-import { meet, type Meeting } from './encounters';
+import { meet, type Meeting, type Round } from './encounters';
 
 export const N = 48, LO = -18, HI = LO + N - 1;
 /** far over anything a hand would build: only a guard */
@@ -193,6 +193,9 @@ export interface Decor { kind: 'pool' | 'cypress' | 'pot' | 'olive'; i: number; 
 /** water falling: from a basin's spout (its cell, the way it spills), down to where it lands (that column's surface,
  * and whether that's water, or a bowl the rules put there to catch it) */
 export interface Fall { k: number; i: number; j: number; d: number; land: number; into: 'water' | 'bowl' | 'stone'; born: number }
+
+/** how many rounds of meeting a build goes to: what one round lays can meet things in the next */
+export const MEET_ROUNDS = 3;
 
 /** how big a court has to be for water in it, and for a cypress */
 export const POOL_COURT = 6, TREE_COURT = 4;
@@ -398,11 +401,18 @@ export class World {
    */
   rebuild(now = 0) {
     this.build(this.ops, now);
-    const met = meet(this);
+    const round: Round = { ops: [], found: [], taken: new Set() };
+    let met = meet(this, round);
     this.derivedMass.clear();
     if (met.length) {
-      const found = this.meetings, before = new Set(this.mass.keys());
-      this.build([...this.ops, ...met], now); this.meetings = found;
+      const before = new Set(this.mass.keys());
+      // (what the meetings laid can meet what's beside it in turn: built with it, and met again, a few rounds at most)
+      for (let n = 0; met.length && n < MEET_ROUNDS; n++) {
+        round.ops.push(...met);
+        this.build([...this.ops, ...round.ops], now);
+        met = n + 1 < MEET_ROUNDS ? meet(this, round) : [];
+      }
+      this.meetings = round.found;
       for (const v of this.mass.keys()) if (!before.has(v)) this.derivedMass.add(v);
     }
     this.version++;

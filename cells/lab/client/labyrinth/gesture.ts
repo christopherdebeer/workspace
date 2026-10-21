@@ -265,12 +265,15 @@ export function adds(w: World, op: Op): number {
  */
 export function trace(w: World, start: Pick, path: Array<[number, number]>, end: Pick | null, born: (i: number, j: number) => number, now = 0, rest: Array<[number, number]> = [], intent: Intent = 'mass'): Op | Refusal | null {
   const op = laid(w, start, path, end, born, now, rest, intent);
-  // (on the ground, planting along it (a row, a hedge) or in what it rings (a grove) is another reading (green.ts))
-  // (and where stone would add nothing there (along a wall already there), the planting's what it is: chosen instead)
+  // (on the ground, planting along it (a row, a hedge) or in what it rings (a grove) is another reading (green.ts));
+  // where stone would add nothing there, or can't be laid, the planting's offered, never chosen in its place: a stroke
+  // for stone that becomes trees is too far from what was drawn)
   if (start.face === 'ground' && (!op || 'refused' in op || op.why === 'wall' || op.why === 'way')) {
     const walked = walk(path), g = plantStroke(w, walked.closed ? walked.cells : unjog(walked.cells), walked.closed, now);
     if (g && !('refused' in g)) {
-      if (!op || 'refused' in op) return { ...g, took: ['chosen-instead'] };
+      const plant = { label: g.reading ?? g.note ?? 'planted along it', op: { ...g, alts: undefined } };
+      if (!op) return { refused: 'nothing to lay along that', alts: [plant, ...(g.alts ?? [])] };
+      if ('refused' in op) return { ...op, alts: [...(op.alts ?? []), plant, ...(g.alts ?? [])] };
       return withMeeting(w, { ...op, alts: [...(op.alts ?? []), { label: g.reading ?? g.note ?? 'planted along it', op: { ...g, alts: undefined } }, ...(g.alts ?? []).slice(0, 1)] });
     }
   }
@@ -313,7 +316,7 @@ function either(first: Op | Refusal | null, other: Op | Refusal | null): Op | Re
     if (!alts.some((a) => same(a.op, other))) alts.push(alt(other));
     return { ...first, alts };
   }
-  if (ok(other)) return { ...other, alts: [...(other.alts ?? []), ...(first?.alts ?? []).filter((a) => !same(a.op, other))] };
+  if (ok(other)) { const alts: Alt[] = []; for (const a of [...(other.alts ?? []), ...(first?.alts ?? []).filter((x) => !same(x.op, other))]) if (!alts.some((b) => b.label === a.label)) alts.push(a); return { ...other, alts }; }
   if (first && other) return { refused: first.refused, alts: [...(first.alts ?? []), ...(other.alts ?? [])] };
   return first ?? other;
 }
