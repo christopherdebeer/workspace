@@ -856,11 +856,24 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
     }
     // (the stream: its water a little under its banks, a fall where its bed steps down to the next)
     const wet = (i: number, j: number) => land.water.has(j * 1000 + i);
+    // (each cell's water knows which way it runs (to the next cell down the stream: its angle, in the vertex's `how`, past
+    // 1, so the shader moves its ripples that way) and how deep it is at each point: shallow at a dry bank, deeper away
+    // from one (in its `tone`), laid in a little grid so the depth can change across the cell)
+    const order = new Map(land.stream.map(([i, j], q) => [j * 1000 + i, q]));
     for (const [i, j] of land.stream) {
       if (!w.onSlab(i, j)) continue;
-      const g = w.ground(i, j), y = g - 0.17, cx = X(i), cz = Z(j);
+      const g = w.ground(i, j), y = g - 0.17, cx = X(i), cz = Z(j), q0 = order.get(j * 1000 + i)!;
+      const next = land.stream[q0 + 1], prev = land.stream[q0 - 1], to = next ?? [i + (i - (prev?.[0] ?? i)), j + (j - (prev?.[1] ?? j))];
+      const ang = Math.atan2(to[1] - j, to[0] - i), how = 1 + ((ang / (2 * Math.PI) + 1) % 1) * 0.98 + 0.001;
+      const dry = DIRS.map(([a, b]) => !wet(i + a, j + b));
+      const deep = (fx: number, fz: number) => { let d = 1; if (dry[0]) d = Math.min(d, 1 - fx); if (dry[2]) d = Math.min(d, fx); if (dry[1]) d = Math.min(d, 1 - fz); if (dry[3]) d = Math.min(d, fz); return Math.min(0.97, Math.max(0, d / 0.5)); };
+      const S = 4;
+      for (let a = 0; a < S; a++) for (let b = 0; b < S; b++) {
+        const f0 = a / S, f1 = (a + 1) / S, h0 = b / S, h1 = (b + 1) / S, ex = (f: number) => (f <= 0 ? -0.05 : f >= 1 ? 1.05 : f);
+        const V = (fx: number, fz: number): V3 => [cx + ex(fx), y, cz + ex(fz)];
+        for (const [fx, fz] of [[f0, h0], [f1, h1], [f1, h0], [f0, h0], [f0, h1], [f1, h1]] as Array<[number, number]>) { cur = { born: -1e3, pivot: 0, how, tone: deep(fx, fz), dress: 0, sel: false }; vert(V(fx, fz), [0, 1, 0], 1, MAT.water); }
+      }
       cur = { born: -1e3, pivot: 0, how: 1, tone: 0.5, dress: 0, sel: false };
-      quad([cx - 0.05, y, cz - 0.05], [cx + 1.05, y, cz - 0.05], [cx + 1.05, y, cz + 1.05], [cx - 0.05, y, cz + 1.05], [0, 1, 0], 1, MAT.water);
       for (let d = 0; d < 4; d++) {
         const [a, b] = DIRS[d];
         if (!wet(i + a, j + b) || w.ground(i + a, j + b) >= g) continue;
@@ -1416,6 +1429,17 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
     cur = { born, pivot: k, how, tone: 0.5, dress: 0, sel: selected.has(key(k, i, j)) };
     trunkOf(g.trunk, g.girth);
     for (const st of g.stems ?? []) trunkOf(st, g.girth * 0.7);
+    // (its limbs: from where the trunk forks out toward its furthest clumps, most of the way, so where the crown's open
+    // they show through it, dark)
+    const fork = g.trunk[g.trunk.length - 1];
+    if (fork && g.crown.length > 3) {
+      const far = [...g.crown].sort((p, q) => Math.hypot(q.x - fork[0], q.z - fork[2]) - Math.hypot(p.x - fork[0], p.z - fork[2])).slice(0, g.kind === PLANT.pine ? 5 : 4);
+      for (const c of far) {
+        const e: [number, number, number] = [fork[0] + (c.x - fork[0]) * 0.75, fork[1] + (c.y - fork[1]) * 0.75 - 0.04, fork[2] + (c.z - fork[2]) * 0.75];
+        const m: [number, number, number] = [(fork[0] + e[0]) / 2, (fork[1] + e[1]) / 2 + 0.06, (fork[2] + e[2]) / 2];
+        trunkOf([fork, m, e], g.girth * 0.42);
+      }
+    }
     leaf = g.kind === PLANT.pine ? 2 : 1;
     g.crown.forEach((c, n) => { cur.tone = 0.35 + 0.3 * ((n * 37) % 10) / 10; clump(c); });
     leaf = 0;

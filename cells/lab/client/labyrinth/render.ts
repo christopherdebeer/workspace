@@ -67,6 +67,15 @@ float reach(vec3 p) {
   float rag = (bnoise(vec3(p.x * .35, 0., p.z * .35)) - .5) * 2.5;
   return (1. - smoothstep(.8, 5.5, dB + rag * .8)) * smoothstep(.2, 3.2, dE + rag * .6);
 }
+// (a tree's crown (an olive's, a stone pine's: leaves, kind 1 or 2) isn't a ball of green but leaves in tufts with sky
+// between them: where the leaf pattern thins it's cut through, in the picture and in the sun's view both, so its shade
+// on the ground is dappled. \`rim\`: how edge-on the clump's surface is to the eye (cut more there, so its outline breaks))
+bool leafCut(vec3 p, float m, float rim) {
+  int mi = int(m + .5) % 256;
+  if (mi % 16 != 3 || ((mi / 64) % 4 != 1 && (mi / 64) % 4 != 2) || (mi / 16) % 4 != 0) return false;
+  float lf = bnoise(p * 7.5) * .6 + bnoise(p * 19. + 3.) * .4;
+  return lf < .3 + .42 * rim * rim;
+}
 // (a thing lying on the land (its rise marked 3 + its own chance), left out where the drawing doesn't reach: whole; a
 // thing wider than its cell (a tree's crown) marked 4 + its foot's cell and its chance, so it's kept or left whole)
 bool leftOut(vec3 p, float u) {
@@ -194,6 +203,7 @@ vec3 coat(int c, float h, vec3 n, float tone) {
 void main() {
   vec3 n = normalize(vNrm);
   if (pierced(vPos, n, vMat)) discard;
+  if (vMat < 511.5 && leafCut(vPos, vMat, 1. - abs(dot(n, normalize(uDir))))) discard;
   int m0 = int(vMat + .5), m = m0 % 256, mat = m % 16, kind = (m / 64) % 4;
   bool fur = m0 >= 512;
   if (!fur && leftOut(vPos, vU)) discard;
@@ -267,19 +277,19 @@ void main() {
     // warm earth and dry grass, greener where it's damp and low; where it's steep, limestone in its beds, the bedding
     // lines across it and the fractures down it, each bed's face a little out of true, weathered darker at its foot)
     float up = n.y, rough = noise(vPos * vec3(1.7, 2.3, 1.7)) * .6 + noise(vPos * 6.) * .4;
-    float cliff = smoothstep(.5, .32, up + (rough - .5) * .14);
+    float cliff = smoothstep(.8, .52, up + (rough - .5) * .16);
     landFeat = cliff;
-    float patch = fbm(vec3(vPos.xz * 1.1, 2.)), fine = noise(vPos * 9.);
-    vec3 soil = mix(vec3(.80, .69, .52), vec3(.74, .66, .48), patch);
-    soil = mix(soil, vec3(.63, .62, .43), .55 * smoothstep(.5, .72, fbm(vec3(vPos.xz * 2.3, 7.))) * smoothstep(.75, .95, up));
-    soil = mix(soil, vec3(.50, .54, .36), .4 * smoothstep(.62, .8, fbm(vec3(vPos.xz * 3.1, 11.))) * (1. - vAo * .5));
+    float patchy = fbm(vec3(vPos.xz * 1.1, 2.)), fine = noise(vPos * 9.);
+    vec3 soil = mix(vec3(.84, .77, .64), vec3(.79, .73, .60), patchy);
+    soil = mix(soil, vec3(.70, .68, .53), .5 * smoothstep(.5, .72, fbm(vec3(vPos.xz * 2.3, 7.))) * smoothstep(.75, .95, up));
+    soil = mix(soil, vec3(.56, .58, .42), .35 * smoothstep(.62, .8, fbm(vec3(vPos.xz * 3.1, 11.))) * (1. - vAo * .5));
     soil *= .94 + .1 * fine;
     // (the rock: its beds by height, warped a little; a bedding line at each bed's foot, a fracture now and then down it)
     float bedV = vPos.y * 2.9 + noise(vPos * vec3(.6, .3, .6)) * .9, bedF = fract(bedV), bedI = floor(bedV);
     vec3 rock = mix(vec3(.80, .76, .68), vec3(.88, .85, .78), hash(vec3(bedI, 3., 1.)) * .7 + .3 * rough);
     vec2 fall = normalize(n.xz + 1e-4), con = vec2(-fall.y, fall.x);
     float fr = abs(noise(vec3(dot(vPos.xz, con) * 3.2, bedI * .37, 4.)) - .5);
-    rock *= 1. - .22 * (1. - smoothstep(.0, .09, bedF)) - .18 * (1. - smoothstep(.0, .035, fr)) * step(.4, hash(vec3(bedI, floor(dot(vPos.xz, con) * 1.6), 9.)));
+    rock *= 1. - .1 * (1. - smoothstep(.0, .06, bedF)) - .14 * (1. - smoothstep(.0, .03, fr)) * step(.4, hash(vec3(bedI, floor(dot(vPos.xz, con) * 1.6), 9.)));
     rock = mix(rock, vec3(.62, .58, .50), .25 * smoothstep(.6, .9, fbm(vPos * 1.7 + 4.)));
     base = mix(soil, rock, cliff);
     // (the beds' faces turned a little each, the bedding lines and fractures cut in, for the light)
@@ -369,6 +379,14 @@ void main() {
     float fr = f0 + (1. - f0) * pow(1. - max(dot(hv, -normalize(uDir)), 0.), 5.);
     if (mat != 2 && mat != 9 && !(mat == 5 && moss)) c += SUN * fr * (g + 8.) / 25.13 * pow(max(dot(nS, hv), 0.), g) * max(nl, 0.) * sh * mix(.6, 1., seen);
   }
+  // (leaves: a little of the sun through those turned from it; an olive's leaves silver where they turn, at a glance)
+  if (mat == 3) {
+    // (in tufts: each tuft's leaves turned out from it, the hollows between them darker)
+    float t0 = bnoise(vPos * 7.5) * .6 + bnoise(vPos * 19. + 3.) * .4;
+    c *= mix(.62, 1.12, smoothstep(.3, .8, t0));
+    c += alb * SUN * .16 * max(-nl, 0.) * mix(.5, 1., sh);
+    if (kind == 1 && !moss && !ivy) c += vec3(.55, .6, .58) * .22 * pow(1. - abs(dot(nS, normalize(uDir))), 3.) * (.4 + .6 * sh);
+  }
   // (a coat's soft sheen where it turns from the eye, lit)
   if (fur) c += alb * vec3(1., .86, .66) * .8 * pow(1. - abs(dot(n, normalize(uDir))), 2.5) * (.4 + .6 * sh);
   // (the display transform: exposure; a filmic curve with a soft shoulder, on how bright it is, so a colour keeps its hue
@@ -382,11 +400,34 @@ void main() {
   // (a lamp: lit from within)
   if (mat == 9) c = vec3(1., .86, .58);
   if (mat == 2) {
-    // (water: dark, the sky and the sun on it, a little stirred)
-    vec3 w = normalize(vec3(.06 * (noise(vec3(vPos.xz * 6., uTime * .4)) - .5), 1., .06 * (noise(vec3(vPos.zx * 6., uTime * .4 + 3.)) - .5)));
-    vec3 v = -normalize(uDir), r = reflect(-v, w);
-    float fr = .08 + .9 * pow(1. - max(dot(w, v), 0.), 4.);
-    c = mix(base * (.5 + .5 * sh), vec3(.86, .84, .8), fr * .7) + vec3(1., .9, .75) * pow(max(dot(reflect(-uSun, w), v), 0.), 120.) * 2. * sh;
+    // (water: clear, turquoise as it deepens over a pale bed, the bed showing through where it's shallow at a bank (its
+    // depth, from the mesh, in tone); running water (its way, an angle, in how past 1) stirred along its run, the ripples
+    // carried down it, a pale line of wet and froth along a bank; still water barely stirred; the sky in it, more at a
+    // glance, and the sun's glints)
+    bool runs = vU > 1.0005 && vU < 2.;
+    float ang = (vU - 1.001) / .98 * 6.2832;
+    vec2 fl = runs ? vec2(cos(ang), sin(ang)) : vec2(0.), cr = vec2(-fl.y, fl.x);
+    vec2 q = runs ? vec2(dot(vPos.xz, fl), dot(vPos.xz, cr)) : vPos.xz;
+    float t = uTime * (runs ? .55 : .12);
+    vec2 a1 = runs ? vec2(q.x * 3. - t * 2., q.y * 9.) : q * 5., a2 = runs ? vec2(q.x * 7. - t * 3.1, q.y * 17.) : q * 11.;
+    float n1 = noise(vec3(a1, t * .3)) - .5, n2 = noise(vec3(a2, 3. + t * .2)) - .5;
+    float amp = runs ? .11 : .035;
+    vec2 tilt = (runs ? fl * n1 * 1.2 + cr * n2 : vec2(n1, n2)) * amp;
+    vec3 wn = normalize(vec3(tilt.x, 1., tilt.y));
+    float depth = clamp(vTone, 0., 1.);
+    vec3 bed = vec3(.74, .72, .60), shallow = vec3(.46, .74, .70), deepC = vec3(.13, .45, .50);
+    vec3 body = mix(mix(bed, shallow, smoothstep(.0, .3, depth)), deepC, smoothstep(.25, .95, depth));
+    body *= .78 + .22 * sh;
+    vec3 v = -normalize(uDir);
+    float fres = .04 + .96 * pow(1. - max(dot(wn, v), 0.), 5.);
+    c = mix(body, vec3(.84, .88, .90), clamp(fres * 1.6, 0., .55));
+    c += vec3(1., .93, .8) * pow(max(dot(reflect(-uSun, wn), v), 0.), 90.) * 1.6 * sh;
+    // (froth: along a bank where it runs, and in streaks down fast water)
+    if (runs) {
+      float streak = smoothstep(.62, .82, noise(vec3(q.x * 2.2 - t * 2.4, q.y * 14., 5.))) * (.35 + .65 * (1. - smoothstep(.1, .5, depth)));
+      float edge = 1. - smoothstep(.02, .14, depth);
+      c = mix(c, vec3(.94, .95, .93), clamp(streak * .55 + edge * .5 * (.6 + .4 * noise(vec3(q * 9., t))), 0., .8));
+    }
   }
   // (falling water: white streaks running down it; where it lands, foam)
   if (mat == 2 && abs(n.y) < .6) {
@@ -457,7 +498,7 @@ const SHADOW_FS = `#version 300 es
 precision highp float;
 in vec3 vPos, vNrm; in float vAo, vMat, vTone, vU; in vec4 vLs;
 ` + PIERCE + REACH + `
-out vec4 o; void main() { if (pierced(vPos, normalize(vNrm), vMat) || (vMat < 511.5 && leftOut(vPos, vU))) discard; o = vec4(1.); }`;
+out vec4 o; void main() { if (pierced(vPos, normalize(vNrm), vMat) || (vMat < 511.5 && (leftOut(vPos, vU) || leafCut(vPos, vMat, .3)))) discard; o = vec4(1.); }`;
 const POST_VS = `#version 300 es
 out vec2 vUv; void main() { vec2 p = vec2(gl_VertexID == 1 ? 3. : -1., gl_VertexID == 2 ? 3. : -1.); vUv = p * .5 + .5; gl_Position = vec4(p, 0., 1.); }`;
 const POST_FS = `#version 300 es

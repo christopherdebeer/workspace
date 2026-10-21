@@ -48,9 +48,41 @@ One fixed place, the **study** (`?story=16`, demo.ts): three houses, a tower set
 - **The sun's map fitted to what's in the picture.** It covers what the camera sees on the ground, not the whole settlement, so close views get sharp shadows (the olives' leaves on the roofs). Its frame steps a whole texel at a time so edges don't crawl. Its bias and its softness are in world units, so they hold however close it's fitted.
 - **Contact** (post pass): where something stands close in front of a surface (a wall's foot, the eaves, a riser under its tread), a little shade in the crease. It is oriented by the surface's normal, so convex edges don't darken, and it reaches only a third of a cell, so broad pale walls get no halo. Not on the paper land or the sky.
 
+## Stage 4: the land, lit near what's built
+
+Near what's built, the land is lit like everything else. Further out it breaks up raggedly into the drawing's marks, as a wash dries at its edge, then the paper. The three zones Astra described, by the drawing's reach:
+
+- **Open ground:** warm earth and dry grass, greener where it's low and damp.
+- **Steep ground:** limestone in its beds, with bedding lines across it, fractures down it, each bed's face a little out of true, and weathering at its foot.
+- **The mesh:** steep ground is stepped into ledges a third of a level thick, so a cliff is broken by shelves, not a smooth sheet. Level ground, where things are built, is exactly as it was.
+
+## Stage 5: water
+
+The stream knows which way it runs (the next cell down, carried on its vertices) and how deep it is at each point (shallow at a dry bank).
+
+- It's clear and turquoise as it deepens, over a pale bed that shows through in the shallows.
+- Ripples are carried down its run, with streaks of froth in fast water and a pale wet line along the banks.
+- The sky shows in it more at a glance, with the sun's glints.
+- Pools and basins are still water, barely stirred.
+
+## Stage 6: trees
+
+- **Crowns cut through.** An olive's or a pine's crown is cut through where its leaf pattern thins, more at its rim, so its outline breaks into tufts. The same cut applies in the sun's view, so its shade on the ground is dappled.
+- **Tufts shaded,** with darker hollows.
+- **Light and sheen:** a little of the sun comes through leaves turned from it, and an olive's leaves are silver at a glance.
+- **Limbs** run from the fork toward the furthest clumps, showing through the gaps.
+
+Also: **telemetry.** A double tap on the title copies what drawing costs on the device as JSON:
+- frame intervals and CPU time per frame (mean, p50, p95, p99, max);
+- GPU time per pass, where the browser lets it be timed;
+- mesh vertex counts and build times;
+- GL renderer, extensions, screen and DPR.
+
+Optimisation waits on these numbers from the phone.
+
 ## Next
 
-1. **Terrain integration:**
+1. **Terrain, further:**
    - near the city, coherent rock masses (ledges, fracture planes, rubble at the foot, soil on shelves);
    - foundations that meet the land (a skirt, a retaining course, a cut face);
    - the paper treatment kept for the outer margin.
