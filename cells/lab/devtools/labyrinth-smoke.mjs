@@ -193,6 +193,19 @@ await withWood(async (lab) => {
     await q.click('#catfollow'); await q.waitForTimeout(4000);
     const d1 = await gap();
     c.ok('followed: the eye goes with it, close', d1.on && (d1.d < 0.5 || d1.d < d0 * 0.7), { d0, d1 });
+    // (following, a tap on a place is where it's shown to go, not something built: nothing's laid, a ring marks it, it goes)
+    const ops0 = await L((L) => L.world.ops.length), me0 = (await L((L) => L.cats())).find((x) => x.name === one.name);
+    const to = await L((L, n) => { const c = L.cats().find((x) => x.name === n), C = 6; const i = Math.round(c.x + C - 0.5), j = Math.round(c.z + C - 0.5); for (const [a, b] of [[3, 0], [-3, 0], [0, 3], [0, -3], [2, 2], [-2, -2]]) { const w = L.world, ii = i + a, jj = j + b; if (!w.stone(w.ground(ii, jj), ii, jj) && w.pool(ii, jj)) continue; return [w.topFrom(w.ground(ii, jj) - 1, ii, jj), ii, jj]; } return null; }, one.name);
+    if (to) {
+      const p = await L((L, t) => L.screenOf(t[1], t[2], t[0]), to);
+      await q.mouse.click(p[0], p[1]); await q.waitForTimeout(300);
+      const said = await q.textContent('#say'), after = await L((L) => L.world.ops.length);
+      c.ok('following: a tap on a place builds nothing, and says what the cat makes of it', after === ops0 && /goes|ear turns|as near|there already|beside it/.test(said ?? ''), { said, ops0, after });
+      if (/ear turns/.test(said ?? '')) { await q.mouse.click(p[0], p[1]); await q.waitForTimeout(300); }
+      await q.waitForTimeout(9000);
+      const me1 = (await L((L) => L.cats())).find((x) => x.name === one.name);
+      c.ok('and it goes toward where it was shown', !!me1 && Math.hypot(me1.x - me0.x, me1.z - me0.z) > 0.5, { me0, me1 });
+    }
     await q.click('#catfollow'); await q.waitForTimeout(300);
     c.ok('and back to building', !(await L((L) => L.following)));
     await q.close();
