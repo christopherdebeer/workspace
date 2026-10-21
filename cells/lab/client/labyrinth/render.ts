@@ -639,8 +639,8 @@ void main() {
   float a = cov * weight * mix(.55, 1., dry) * (uMarks > .5 ? 1.2 : mix(persist, 1., drawn));
   if (a < .02) discard;
   // (the land's in sepia; the water's a cooler ink)
-  vec3 col = fam > 4.5 ? vec3(.2, .27, .3) : vec3(.26, .19, .13);
-  if (uMarks > .5) col = fam < .5 ? vec3(.85, .2, .15) : fam < 1.5 ? vec3(.5, .35, .1) : fam < 2.5 ? vec3(.15, .55, .25) : fam < 3.5 ? vec3(.55, .2, .7) : fam < 4.5 ? vec3(.9, .5, .1) : fam < 5.5 ? vec3(.15, .35, .8) : fam < 6.5 ? vec3(.1, .6, .6) : fam < 7.5 ? vec3(.4, .2, .8) : vec3(.9, .3, .6);
+  vec3 col = fam > 4.5 && fam < 8.5 ? vec3(.2, .27, .3) : vec3(.26, .19, .13);
+  if (uMarks > .5) col = fam < .5 ? vec3(.85, .2, .15) : fam < 1.5 ? vec3(.5, .35, .1) : fam < 2.5 ? vec3(.15, .55, .25) : fam < 3.5 ? vec3(.55, .2, .7) : fam < 4.5 ? vec3(.9, .5, .1) : fam < 5.5 ? vec3(.15, .35, .8) : fam < 6.5 ? vec3(.1, .6, .6) : fam < 7.5 ? vec3(.4, .2, .8) : fam < 8.5 ? vec3(.9, .3, .6) : fam < 9.5 ? vec3(.1, .1, .1) : fam < 10.5 ? vec3(.55, .55, .1) : fam < 11.5 ? vec3(.05, .45, .35) : vec3(.6, .45, .35);
   oCol = vec4(col, min(1., a)); oNrm = vec4(0.);
 }`;
 const POST_VS = `#version 300 es

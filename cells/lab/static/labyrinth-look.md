@@ -155,15 +155,17 @@ The first step of the architecture Astra's comparison with Taohua proposed: the 
 | --- | --- | --- |
 | escarpment | a run of cell edges where the land drops a level or more, the same way (not held by a wall, not built against) | a broken **rim** along the top, firmer the higher it is; **hachures** down the face, long and short by turns, interrupted at each bed; **bedding** along the face at the ledges the mesh steps it into, a little higher or lower across each fracture; a **fracture** down it now and then |
 | retention | a column built on the land, its open faces | its **contact**, a broken line at its foot, on the land banked up to it |
+| passage | each flight (`World.flights`), and each cell a hand-laid way walks through (`World.passages`), its level and its direction | a flight's worn **tread** nosings, now and then, most at its foot and head; its **string**s, its pitch along each open side (not between two flights laid side by side as one); a way's **edge**s along its open sides and its flags' **joint**s across it, heavier at its ends, crossings and where it meets a flight |
 | water | the stream's cells, their order, their neighbours | **current** along the way it runs (crowding the outer side at a bend); a steep **bank**'s line; a **fall**'s streaks where the bed steps; the **impact**'s rings below |
 
 - **Each family has its own presence over the full render:** a rim holds some, a hachure none, since the render already says what a hachure would. Where the drawing takes over, all of a mark is laid. Where it thins out, whole marks are left out by their pick, never faded.
 - **Retired:** the shader's hachures, the cliff drags, the rim line it found from a depth fold, and the post pass's lines on the land's own folds.
 - **Kept, for now:** the shader's contours and its tonal washes.
-- **`?marks`** (and `--marks` in the look harness) fades the picture nearly to the paper and colours each mark by its family: rim red, hachure brown, bedding green, fracture purple, contact orange, current blue, bank teal, fall violet, impact pink.
+- **`?marks`** (and `--marks` in the look harness) fades the picture nearly to the paper and colours each mark by its family: rim red, hachure brown, bedding green, fracture purple, contact orange, current blue, bank teal, fall violet, impact pink, tread black, string olive, edge dark teal, joint tan.
+- **Passages barely show near what's built,** where a way is rendered (its marks hold a little at most). Where a way runs out into the drawing, they're how it carries on: edges, joints, treads. That's the sheets' "surface → edges → implied route". Print (`--print`) shows them everywhere.
 
 Next, in the order the comparison proposed:
-1. **Passage marks:** stair treads and landings, and path edges, heavier where something happens.
+1. **The shade's hatching made feature-driven.** It's still the shader's, laid uniformly over every shadow, and it's what most dominates print. Recesses, undersides and occlusion behind a feature should be hatched; open shade should be left to the wash.
 2. **The land conditioned by construction:** the geology kept as it was made, and a second surface derived from it that what's built has cut and filled (excavation, embankment, retained earth), with the marks read from that. To be tried first on a single stair and crossing.
 3. **Each channel's persistence by its feature,** in place of one ramp position for nearly everything.
 4. **An outline policy by material.**

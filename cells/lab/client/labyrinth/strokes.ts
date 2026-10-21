@@ -10,6 +10,10 @@
  *   hachures down it between its beds, long and short by turns; its **bedding**, the strata along the face at its
  *   ledges, each a little higher or lower across a **fracture**; and a fracture now and then, a crack down the face;
  * - **retention** (where what's built is founded on the land): its contact, a broken line at its foot;
+ * - **passage** (a flight, and the ways the hand laid, `World.passages`): a flight's worn **tread** nosings, now and
+ *   then, most at its foot and head; its **string**s, its pitch along each side; a way's **edge**s where its sides are
+ *   open, and its flags' **joint**s across it; all heavier where something happens (a way's end, a crossing, where it
+ *   meets a flight), lighter between, so the eye travels along it;
  * - **water**: its **current**, strokes along the way it runs; its **bank**, a line along a steep one; its **fall**,
  *   streaks down the sheet where its bed steps, and the **impact**'s rings in the pool below.
  *
@@ -22,10 +26,10 @@
 import { hash } from '../kit/rng';
 import { outline } from './form';
 import { retaining } from './context';
-import { CENTER, DIRS, type World } from './model';
+import { CENTER, DIRS, unkey, type World } from './model';
 
 /** why a mark is there */
-export const FAM = { rim: 0, hachure: 1, bedding: 2, fracture: 3, contact: 4, current: 5, bank: 6, fall: 7, impact: 8 } as const;
+export const FAM = { rim: 0, hachure: 1, bedding: 2, fracture: 3, contact: 4, current: 5, bank: 6, fall: 7, impact: 8, tread: 9, string: 10, edge: 11, joint: 12 } as const;
 /** a mark's vertex: x, y, z; across it (-1..1); along it (0..1); its family + weight (under 1); how much it holds over
  * the whole picture (0..1); its pick (0..1) */
 export const STROKE_STRIDE = 8;
@@ -177,6 +181,60 @@ export function strokes(w: World, land: StrokeLand): Float32Array {
         ribbon(out, pts, 0.036, FAM.contact, 0.6, 0.3, r());
         s += len + ramp(r, 0.05, 0.3);
       }
+    }
+  }
+
+  // ─── passage: flights and the ways the hand laid ───
+  const smooth = (a: number, b: number, x: number) => { const t = Math.max(0, Math.min(1, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
+  const STEPS = 6;
+  for (const f of w.flights) {
+    const [a, b] = DIRS[f.d], N = f.cells.length * STEPS, [k0, i0, j0] = f.cells[0], r = rng(w.land.seed, k0, i0, j0, f.d, 0x57a);
+    // (a point on the flight: so far up it (u, in cells from its foot's near edge), so far across (wv, 0..1))
+    const pt = (q: number, u: number, wv: number, y: number): V3 => { const [, i, j] = f.cells[q], cx = i + 0.5, cz = j + 0.5; return a ? [cx + a * (u - 0.5) - CENTER, y, cz + (wv - 0.5) - CENTER] : [cx + (wv - 0.5) - CENTER, y, cz + b * (u - 0.5) - CENTER]; };
+    f.cells.forEach(([k], q) => {
+      for (let s = 0; s < STEPS; s++) {
+        const g = q * STEPS + s, busy = 1 - smooth(1, 5, Math.min(g, N - 1 - g)), h = k + (s + 1) / STEPS + 0.008, u = s / STEPS - 0.028;
+        if (r() > 0.18 + 0.72 * busy) continue;
+        // (a tread's worn nosing: whole, or worn through where the feet go, its two ends left)
+        const worn = r() < 0.5, pieces = worn ? [[0.07, ramp(r, 0.3, 0.42)], [ramp(r, 0.58, 0.7), 0.93]] : [[ramp(r, 0.05, 0.15), ramp(r, 0.85, 0.95)]];
+        for (const [w0, w1] of pieces) ribbon(out, [pt(q, u, w0, h), pt(q, u, (w0 + w1) / 2, h), pt(q, u, w1, h)], 0.03, FAM.tread, 0.5 + 0.3 * busy, 0.1, r());
+      }
+    });
+    // (its strings: its pitch along each side that's open, from its foot's nosing to its head's; not between it and a
+    // flight laid beside it, step for step: those two are one broad flight)
+    for (const wv of [0.025, 0.975]) {
+      const sg = wv < 0.5 ? -1 : 1, ox = a ? 0 : sg, oz = a ? sg : 0;
+      if (w.stair(k0, i0 + ox, j0 + oz) === f.d) continue;
+      const pts: V3[] = [];
+      f.cells.forEach(([k], q) => { for (let s = 0; s < STEPS; s += 2) pts.push(pt(q, s / STEPS - 0.028, wv, k + (s + 1) / STEPS + 0.01)); });
+      const [kl] = f.cells[f.cells.length - 1]; pts.push(pt(f.cells.length - 1, 1, wv, kl + 1 + 0.01));
+      ribbon(out, pts, 0.034, FAM.string, 0.6, 0.12, r());
+    }
+  }
+  const walk = (k: number, i: number, j: number) => w.passage(k, i, j) >= 0;
+  for (const [v, dir] of w.passages) {
+    const [k, i, j] = unkey(v);
+    const r = rng(w.land.seed, k, i, j, 0x9a5), y = (k === w.ground(i, j) ? Y(i + 0.5, j + 0.5) + 0.012 : k) + 0.012;
+    const [a, b] = DIRS[dir], [ta, tb] = DIRS[dir + 1];
+    // (how much happens here: a way's end, a crossing, where it meets a flight)
+    const along = [walk(k, i + a, j + b), walk(k, i - a, j - b)].filter(Boolean).length, side = [walk(k, i + ta, j + tb), walk(k, i - ta, j - tb)].filter(Boolean).length;
+    const nearFlight = DIRS.some(([da, db]) => w.stair(k, i + da, j + db) >= 0 || w.stair(k - 1, i + da, j + db) >= 0);
+    const busy = along < 2 || side > 0 || nearFlight ? 1 : 0.3;
+    // (its edges: along each side that's open, broken, set in a little from the cell's edge)
+    for (const sg of [-1, 1]) {
+      if (walk(k, i + ta * sg, j + tb * sg)) continue;
+      for (let s = ramp(r, 0, 0.15); s < 1;) {
+        const len = Math.min(1 - s, ramp(r, 0.3, 0.75)), pts: V3[] = [];
+        for (let q = 0; q <= 3; q++) { const t = s + (len * q) / 3 - 0.5; pts.push([i + 0.5 + a * t + ta * sg * 0.4 - CENTER, y, j + 0.5 + b * t + tb * sg * 0.4 - CENTER]); }
+        ribbon(out, pts, 0.03, FAM.edge, 0.45 + 0.3 * busy, 0.2, r());
+        s += len + ramp(r, 0.04, 0.25 - 0.15 * busy);
+      }
+    }
+    // (its flags' joints across it, a few, more where it's busy)
+    for (const t of [-0.25, 0.25]) {
+      if (r() > 0.25 + 0.5 * busy) continue;
+      const w0 = ramp(r, -0.38, -0.2), w1 = ramp(r, 0.2, 0.38);
+      ribbon(out, [0, 0.5, 1].map((q) => [i + 0.5 + a * t + ta * (w0 + (w1 - w0) * q) - CENTER, y, j + 0.5 + b * t + tb * (w0 + (w1 - w0) * q) - CENTER] as V3), 0.024, FAM.joint, 0.4, 0, r());
     }
   }
 
