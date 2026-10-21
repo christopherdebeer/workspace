@@ -95,13 +95,13 @@ function shown(): [number, number, number, number] {
   shownOf = world; shownAt = world.version;
   const mid = world.land ? (LAND.i0 + LAND.i1 + 1) / 2 : CENTER;
   let i0 = mid - 3.5, i1 = mid + 3.5, j0 = mid - 3.5, j1 = mid + 3.5;
-  for (const m of [world.mass, world.stairs, world.piers]) for (const v of m.keys()) { const [, i, j] = unkey(v); i0 = Math.min(i0, i); i1 = Math.max(i1, i + 1); j0 = Math.min(j0, j); j1 = Math.max(j1, j + 1); }
+  for (const m of [world.mass, world.stairs, world.piers, world.pools, world.basins, world.paving]) for (const v of m.keys()) { const [, i, j] = unkey(v); i0 = Math.min(i0, i); i1 = Math.max(i1, i + 1); j0 = Math.min(j0, j); j1 = Math.max(j1, j + 1); }
   return (shownBox = [i0, j0, i1, j1]);
 }
 /**
  * How far each point of the land is from what's built, for the drawing to gather round (render.ts `focus`): two texels
  * a cell over the land, each the distance in cells to the nearest built column (a chamfer: a pass down and a pass back),
- * as a byte, 16 cells at most. With nothing built yet, round the middle of the bare land's piece.
+ * as a byte, 32 cells at most. With nothing built yet, round the middle of the bare land's piece.
  */
 let focusOf: World | null = null, focusAt = -1, focusBled = false;
 function focusOn() {
@@ -110,14 +110,15 @@ function focusOn() {
   if (!world.land) return;
   const e = drawnBox(world), S = 2, W = (e.i1 + 1 - e.i0) * S, H = (e.j1 + 1 - e.j0) * S, d = new Float32Array(W * H).fill(1e9);
   const cols = new Set<number>();
-  for (const m of [world.mass, world.stairs, world.piers]) for (const v of m.keys()) { const [, i, j] = unkey(v); cols.add(j * 4096 + i); }
+  // (what's built: stone, stairs, piers, and the water and the paving the hand laid: a pool, a basin, a way's ground)
+  for (const m of [world.mass, world.stairs, world.piers, world.pools, world.basins, world.paving]) for (const v of m.keys()) { const [, i, j] = unkey(v); cols.add(j * 4096 + i); }
   if (!cols.size) { const mid = (LAND.i0 + LAND.i1 + 1) / 2; for (let i = Math.floor(mid - 1.5); i < mid + 1.5; i++) for (let j = Math.floor(mid - 1.5); j < mid + 1.5; j++) cols.add(j * 4096 + i); }
   for (let b = 0; b < H; b++) for (let a = 0; a < W; a++) if (cols.has((e.j0 + Math.floor(b / S)) * 4096 + e.i0 + Math.floor(a / S))) d[b * W + a] = 0;
   const D = Math.SQRT2, at = (a: number, b: number) => (a < 0 || b < 0 || a >= W || b >= H ? 1e9 : d[b * W + a]);
   for (let b = 0; b < H; b++) for (let a = 0; a < W; a++) d[b * W + a] = Math.min(d[b * W + a], at(a - 1, b) + 1, at(a, b - 1) + 1, at(a - 1, b - 1) + D, at(a + 1, b - 1) + D);
   for (let b = H - 1; b >= 0; b--) for (let a = W - 1; a >= 0; a--) d[b * W + a] = Math.min(d[b * W + a], at(a + 1, b) + 1, at(a, b + 1) + 1, at(a + 1, b + 1) + D, at(a - 1, b + 1) + D);
   const field = new Uint8Array(W * H);
-  for (let q = 0; q < W * H; q++) field[q] = Math.round(Math.min(16, d[q] / S) / 16 * 255);
+  for (let q = 0; q < W * H; q++) field[q] = Math.round(Math.min(32, d[q] / S) / 32 * 255);
   R.focus(field, W, H, [e.i0 - CENTER, e.j0 - CENTER, e.i1 + 1 - CENTER, e.j1 + 1 - CENTER]);
 }
 /** the box the view frames (cells, far sides exclusive): on land, what's drawn and the drawing's fade round it; on the slab, the slab */

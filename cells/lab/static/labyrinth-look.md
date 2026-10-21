@@ -160,6 +160,14 @@ Past the picture's reach, it's strokes on the paper only.
 
 ![The wider fade](labyrinth/look-fade.jpg)
 
+**Further, and what counts as built.**
+- **Further land:** bleeding into the page, the land is drawn fourteen cells past what's shown of it. The lines' reach falls off over about twenty cells from what's built, so the drawing carries on to the edges of the view.
+- **Things out there are drawn:** the land's own things (rocks, scrub, olives, pines) thin out the further they are past what's shown, and are made more simply: a tree's crown in a few broad masses. Their marks thin the same way, so what the drawing would leave out isn't made. With the land drawn that far, the study's mesh goes from 129k vertices to about 317k, plus 134k for the marks. Without the thinning it was 1.35M.
+- **Water counts as built:** a pool or basin the hand laid, and the paving of its ways, are built as much as stone is. The picture gathers round them, and the view frames them.
+- **Contours off the levels:** contours now sit half a step off the levels. A terrace's floor is at a whole level, and a contour there spread along its flat into a soft grey band. That band, and the shade's hatching crowding into a tone on steep faces, were what still read as wash far out.
+
+![Further](labyrinth/look-lines.jpg)
+
 ## Stage 10: marks with reasons (after Taohua)
 
 ![The drawing's marks, laid by the features that call for them](labyrinth/look-strokes.jpg)

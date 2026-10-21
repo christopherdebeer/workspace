@@ -42,6 +42,9 @@ export interface StrokeLand {
   bed: (gx: number, gz: number) => number;
   /** whether a cell's drawn (past what's shown of the land, bleeding into the page, the land's still drawn) */
   on: (i: number, j: number) => boolean;
+  /** how far past what's shown of the land a cell is (0 within it), and how far the drawing goes past it: out there the
+   * marks thin out as the drawing does, so the ones it would leave out aren't made */
+  out: (i: number, j: number) => number; margin: number;
 }
 
 /**
@@ -108,6 +111,8 @@ export function strokes(w: World, land: StrokeLand): Float32Array {
     const Q = (s: number, u: number): [number, number] => [e0x + ta * s + a * u, e0z + tb * s + b * u];
     const side: V3 = [ta, 0, tb];
     const r = rng(w.land!.seed, i, j, d, 0xe5c);
+    // (a mark at so far along the run is made if the drawing still reaches it there)
+    const kept = (s: number) => { const o = land.out(Math.floor(i + ta * s), Math.floor(j + tb * s)); return o <= 0 || r() < Math.pow(Math.max(0, 1 - o / land.margin), 1.3); };
     const hi = w.ground(i, j), lo = w.ground(i + a, j + b);
     // (the rim: along the top of the drop, broken, firmer on a cliff; held a little over the whole picture)
     for (let s = ramp(r, 0, 0.3); s < n;) {
@@ -122,6 +127,7 @@ export function strokes(w: World, land: StrokeLand): Float32Array {
     let k = 0;
     for (let s = ramp(r, 0.03, 0.1); s < n; s += (tall ? 0.1 : 0.14) * ramp(r, 0.75, 1.3), k++) {
       const reachU = (k % 2 ? 1 : ramp(r, 0.45, 0.7)) * (cliff ? 0.9 : 1), wob = (r() - 0.5) * 0.04;
+      if (!kept(s)) continue;
       let pts: V3[] = [];
       const N = cliff ? 10 : 5;
       for (let q = 0; q <= N; q++) {
@@ -146,6 +152,7 @@ export function strokes(w: World, land: StrokeLand): Float32Array {
     for (let kb = Math.ceil((lo + 0.12) / b0); kb * b0 < hi - 0.12; kb++) {
       for (let s = ramp(r, 0, 0.4); s < n;) {
         const len = Math.min(n - s, ramp(r, 0.7, 2)), pts: V3[] = [], M = Math.max(2, Math.round(len / 0.15));
+        if (!kept(s)) { s += len + ramp(r, 0.2, 0.6); continue; }
         for (let q = 0; q <= M; q++) {
           const ss = s + (len * q) / M, blk = Math.floor(ss * 1.3 + hash(w.land!.seed, kb, 5) / 4294967296);
           const [mx, mz] = Q(ss, 0), yy = kb * bed(mx, mz) + 0.025 + ((hash(w.land!.seed, i, j, d, blk, kb) / 4294967296) - 0.5) * 0.04;

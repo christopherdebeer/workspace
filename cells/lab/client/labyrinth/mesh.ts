@@ -98,7 +98,7 @@ let bleed = false;
 export const setBleed = (b: boolean) => { bleed = b; };
 /** how far past what's shown of the land (its extent) the land's drawn, bleeding into the page: room for the picture to
  * go to the drawing gradually, and for the drawing to carry on. Only drawn: what's built and struck stays the extent's */
-const DRAWN_MARGIN = 7;
+const DRAWN_MARGIN = 14;
 /** the cells the land's drawn over: its extent, and bleeding, a margin past it (as far as the land goes) */
 export function drawnBox(w: World): { i0: number; i1: number; j0: number; j1: number } {
   const e = w.extent();
@@ -109,6 +109,8 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
   /** how a cell's dressed: the rules' dressing and the hand's (`plain`: the hand's alone) */
   const dressed = (k: number, i: number, j: number) => look(w, k, i, j, plain);
   const out: number[] = [];
+  /** making what's out past what's shown of the land, only drawn there: made more simply */
+  let coarse = false;
   /** the land as it's drawn, for the drawing's marks to be laid on (landMesh) */
   let drawnLand: StrokeLand | null = null;
   let cur = { born: -1e3, pivot: 0, how: 1, tone: 0, dress: 0, sel: false };
@@ -905,7 +907,8 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
       return y + (ledge - y) * steep * 0.85;
     };
     cur = { born: -1e3, pivot: 0, how: 1, tone: 0.5, dress: 0, sel: false };
-    drawnLand = { Y, B, bed: bedAt, on: (i, j) => i >= B.i0 && i <= B.i1 && j >= B.j0 && j <= B.j1 };
+    const Eo = w.extent();
+    drawnLand = { Y, B, bed: bedAt, on: (i, j) => i >= B.i0 && i <= B.i1 && j >= B.j0 && j <= B.j1, out: (i, j) => Math.max(Eo.i0 - i, i - Eo.i1, Eo.j0 - j, j - Eo.j1, 0), margin: DRAWN_MARGIN };
     const nx = (x1 - x0) * RES, nz = (z1 - z0) * RES;
     const P = (a: number, b: number): V3 => { const gx = x0 + a / RES, gz = z0 + b / RES; return [gx - CENTER, Y(gx, gz), gz - CENTER]; };
     const Nrm = (a: number, b: number): V3 => {
@@ -1023,9 +1026,15 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
       lathe(p[0], p[2], Array.from({ length: 6 }, (_, n) => { const t = (n / 5) * Math.PI; return [Math.sin(t) * s * (1 + 0.1 * Math.sin(n * 2.3 + q)), p[1] - 0.02 + s * 0.7 * (1 - Math.cos(t))] as [number, number]; }), MAT.leaves, 8);
       cur = { born: -1e3, pivot: 0, how: 1, tone: 0.5, dress: 0, sel: false };
     };
+    const E = w.extent();
     for (let j = B.j0; j <= B.j1; j++) for (let i = B.i0; i <= B.i1; i++) {
       if (!bare(i, j)) continue;
       const g = w.ground(i, j), q = (j - LAND.j0) * 100 + (i - LAND.i0);
+      // (past what's shown of the land, where it's only drawn: fewer things the further out, as the drawing thins, and
+      // each made more simply (it's drawn as a few lines there))
+      const out = Math.max(E.i0 - i, i - E.i1, E.j0 - j, j - E.j1, 0);
+      if (out > 0 && r(q, 77) > Math.pow(1 - out / DRAWN_MARGIN, 1.5)) continue;
+      coarse = out > 0;
       const higher = DIRS.map(([a, b]) => w.ground(i + a, j + b) - g), cliff = higher.findIndex((h) => h >= 2), bank = higher.some((h) => h !== 0);
       const nearRock = Math.abs(i - land.rock[0]) + Math.abs(j - land.rock[1]) <= 1, byWater = DIRS.some(([a, b]) => land.water.has((j + b) * 1000 + i + a));
       // (rocks: at a cliff's foot, on the outcrop, by the stream)
@@ -1048,6 +1057,7 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
       else if (!bank && !cleared && r(q, 30) < 0.03) cypress(i, j, g, -1e3, how);
       else if (!bank && field > 0.5 && r(q, 33) < 0.12) shrub(at(i, j, (r(q, 34) - 0.5) * 0.5, (r(q, 35) - 0.5) * 0.5), 0.12 + 0.06 * r(q, 36), q + 3);
     }
+    coarse = false;
     cur = { born: -1e3, pivot: 0, how: 1, tone: 0, dress: 0, sel: false };
   }
   /**
@@ -1516,7 +1526,7 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
    * it, not as a heap of balls; darker toward the crown's underside and its middle, where the light gets in least
    */
   function crownClump(c: { x: number; y: number; z: number; r: number }, C: V3, R: number) {
-    const SEG = 11, rings = Array.from({ length: 8 }, (_, n) => { const t = (n / 7) * Math.PI; return [Math.sin(t) * c.r * (1 + 0.07 * Math.sin(n * 2.1 + c.x * 7)), c.y - c.r * 0.5 + c.r * 0.9 * (1 - Math.cos(t)), t] as [number, number, number]; });
+    const SEG = coarse ? 7 : 11, NR = coarse ? 5 : 8, rings = Array.from({ length: NR }, (_, n) => { const t = (n / (NR - 1)) * Math.PI; return [Math.sin(t) * c.r * (1 + 0.07 * Math.sin(n * 2.1 + c.x * 7)), c.y - c.r * 0.5 + c.r * 0.9 * (1 - Math.cos(t)), t] as [number, number, number]; });
     const at = (q: number, s: number) => {
       const [r, y, t] = rings[q], g = (s / SEG) * Math.PI * 2, p: V3 = [c.x + Math.cos(g) * r, y, c.z + Math.sin(g) * r];
       const own: V3 = [Math.cos(g) * Math.sin(t), -Math.cos(t), Math.sin(g) * Math.sin(t)];
@@ -1553,6 +1563,8 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
       }
     }
     leaf = g.kind === PLANT.pine ? 2 : 1;
+    // (only drawn, out past what's shown: its crown in a few broad masses, as a hand would outline it)
+    if (coarse) g = { ...g, crown: g.crown.filter((_, n) => n % 3 === 0).map((c) => ({ ...c, r: c.r * 1.45 })) };
     const C: V3 = [0, 0, 0];
     for (const c of g.crown) { C[0] += c.x / g.crown.length; C[1] += c.y / g.crown.length; C[2] += c.z / g.crown.length; }
     const R = Math.max(0.2, ...g.crown.map((c) => Math.hypot(c.x - C[0], c.y - C[1], c.z - C[2]) + c.r));

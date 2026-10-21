@@ -66,7 +66,7 @@ float bnoise(vec3 x) { vec3 i = floor(x), f = fract(x); f = f * f * (3. - 2. * f
              mix(mix(bhash(i + vec3(0,0,1)), bhash(i + vec3(1,0,1)), f.x), mix(bhash(i + vec3(0,1,1)), bhash(i + vec3(1,1,1)), f.x), f.y), f.z); }
 // (how far it is, in cells, to the nearest thing built: a field over the land, worked out whenever what's built changes
 // (main.ts), so the drawing gathers round what's built and not round the box it fits in)
-float builtD(vec3 p) { return texture(uFocus, (p.xz - uFocusBox.xy) / (uFocusBox.zw - uFocusBox.xy)).r * 16.; }
+float builtD(vec3 p) { return texture(uFocus, (p.xz - uFocusBox.xy) / (uFocusBox.zw - uFocusBox.xy)).r * 32.; }
 // (the picture's reach: close round what's built, where it's drawn whole)
 float reach(vec3 p) {
   if (uPaper > .5) return 0.;
@@ -79,7 +79,7 @@ float reach(vec3 p) {
 float reachLines(vec3 p) {
   float dB = builtD(p), dE = min(min(p.x - uLand.x, uLand.z - p.x), min(p.z - uLand.y, uLand.w - p.z));
   float rag = (bnoise(vec3(p.x * .35, 0., p.z * .35)) - .5) * 2.5;
-  return (uPaper > .5 ? 1. : 1. - smoothstep(1.5, 11., dB + rag * 1.2)) * smoothstep(.2, 2.6, dE + rag * .6);
+  return (uPaper > .5 ? 1. : 1. - smoothstep(2., 20., dB + rag * 1.5)) * smoothstep(.2, 2.6, dE + rag * .6);
 }
 // (a tree's crown (an olive's, a stone pine's: leaves, kind 1 or 2) isn't a ball of green but leaves in tufts with sky
 // between them: where the leaf pattern thins it's cut through, in the picture and in the sun's view both, so its shade
@@ -529,8 +529,9 @@ void main() {
     // in the world so it stays on what it shades, and left out where its lines would crowd together)
     float h1 = (vPos.x - vPos.z) * 9. + vPos.y * 6., h2 = (vPos.x + vPos.z) * 9. - vPos.y * 6.;
     float f1 = max(fwidth(h1), 1e-4), f2 = max(fwidth(h2), 1e-4);
-    float l1 = (1. - smoothstep(.35, 1.1, min(fract(h1), 1. - fract(h1)) / f1)) * (1. - smoothstep(.25, .45, f1));
-    float l2 = (1. - smoothstep(.35, 1.1, min(fract(h2), 1. - fract(h2)) / f2)) * (1. - smoothstep(.25, .45, f2));
+    // (gone before they'd crowd into a tone: once they'd be under about five pixels apart)
+    float l1 = (1. - smoothstep(.35, 1.1, min(fract(h1), 1. - fract(h1)) / f1)) * (1. - smoothstep(.12, .2, f1));
+    float l2 = (1. - smoothstep(.35, 1.1, min(fract(h2), 1. - fract(h2)) / f2)) * (1. - smoothstep(.12, .2, f2));
     float brk = step(.25, noise(vec3(h1 * .35, h2 * .35, 3.)));
     if (uPaper > .5) washC = PAP * (1. + (.05 * noise(vPos * 31.) - .025));
     washC *= 1. - (uPaper > .5 ? .26 : .3 * (1. - smoothstep(.65, .95, drawn))) * max(l1 * smoothstep(.55, .33, L), l2 * smoothstep(.3, .16, L)) * brk * smoothstep(.15, .5, drawn) * (mat == 3 ? 0. : 1.);
@@ -551,8 +552,12 @@ void main() {
     // ground's gentle enough for them to stand apart (on a cliff they'd crowd: its hatching says it there); broken here
     // and there, fewer further out; in the world, so they stay where they are as the eye moves)
     {
-      float cy = vPos.y * 3., fw = max(fwidth(cy), 1e-4);
-      float cl = (1. - smoothstep(.5, 1.3, min(fract(cy), 1. - fract(cy)) / fw)) * (1. - smoothstep(.12, .3, fw)) * (1. - cliff) * smoothstep(.995, .95, up);
+      // (half a step off the levels: a terrace's floor is at a whole level, and a contour there would lie along the whole
+      // of its flat, spreading into a tone)
+      float cy = vPos.y * 3. + .5, fw = max(fwidth(cy), 1e-4);
+      // (left out before they'd crowd into a tone: on the steepening ground at a terrace's edge, and wherever they'd be a
+      // few pixels apart)
+      float cl = (1. - smoothstep(.5, 1.3, min(fract(cy), 1. - fract(cy)) / fw)) * (1. - smoothstep(.05, .11, fw)) * (1. - cliff) * smoothstep(.985, .95, up) * smoothstep(.8, .88, up);
       float heavy = step(mod(floor(cy + .5), 3.), .5);
       cl *= step(1. - R * 1.4, noise(vPos * vec3(1.1, .4, 1.1) + 7.));
       g = mix(g, vec3(.38, .3, .22), cl * (.45 + .25 * heavy));
@@ -768,7 +773,7 @@ export class Renderer {
   /** the land bleeding into the page (after Taohua), and the land's extent in the scene (x0, z0, x1, z1) */
   bleed = false; landBox: [number, number, number, number] = [-1e3, -1e3, 1e3, 1e3];
   /**
-   * How far each point of the land is from anything built (cells, 16 at most, as a byte over the box in the scene it
+   * How far each point of the land is from anything built (cells, 32 at most, as a byte over the box in the scene it
    * covers (x0, z0, x1, z1)): bleeding, the picture gathers round what's built and the land's given back to the paper
    * away from it (`focus`)
    */
