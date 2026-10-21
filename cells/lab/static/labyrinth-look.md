@@ -136,6 +136,13 @@ These follow the two study sheets, [one](labyrinth/ref-transition-1.jpg) and [tw
 - **Water continuous:** past the painted stream, a pale wash of its colour with its flow lines, as far as the lines reach.
 - **Persistent marks:** the land's ink lines are no longer broken by a pattern fixed to the screen. Every mark is anchored in the world.
 
+**Print is the page, not another renderer.** Printing used to turn the whole picture into a lithograph's screen of hatching. Now it's the far end of the same ramp, everywhere:
+- every feature is drawn on the paper, with no paint, no tint and no water colour;
+- the pen's lines, contours, hachures, drawn canopy and the shade's hatching all reach the whole of it;
+- the post pass treats it exactly as it treats the page where the picture doesn't reach.
+
+![Printed: the whole of it on the paper](labyrinth/look-print.jpg)
+
 **Foundations meet the land.** Where stone stands on the land, a skirt of the land's own ground is banked a little up its foot outside the plinth and settles onto the ground beside it, with its corners mitred. So earth and grass run to the stone instead of stopping at a line, damp and greener at the wall's foot where the rain off it gathers. Where the ground falls away, there's no skirt and the foundation's cut face shows.
 
 ## Next
