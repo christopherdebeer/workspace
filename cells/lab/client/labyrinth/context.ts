@@ -18,7 +18,7 @@ import { surfaceY } from './land';
 export interface Retain { i: number; j: number; d: number; lo: number; hi: number }
 const cache = new WeakMap<World, { v: number; r: Map<string, Retain>; sharp: (i: number, j: number, d: number) => boolean }>();
 /** a column of stone at a cell filling from its ground (the stream's bed, if it's wet) up to a level: a bank built against */
-const filledTo = (w: World, x: number, z: number, hi: number) => { const lo = w.ground(x, z); if (lo >= hi) return false; for (let k = lo; k < hi; k++) if (!w.block(k, x, z)) return false; return true; };
+const filledTo = (w: World, x: number, z: number, hi: number) => { const lo = w.ground(x, z); if (lo >= hi) return false; for (let k = lo; k < hi; k++) if (!w.stone(k, x, z)) return false; return true; };
 
 /** where the land's banks are held by walls (keyed from both sides: `i.j.d`) */
 export function retaining(w: World): Map<string, Retain> { return worked(w).r; }

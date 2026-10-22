@@ -1128,8 +1128,10 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
       const court = w.courts.has(key(0, i, j)), paved = w.paved(i, j);
       if (!court && !paved) continue;
       const g = w.ground(i, j), y = g + 0.012, cx = X(i), cz = Z(j);
-      const carries = (d: number) => { const [a, b] = DIRS[d], x = i + a, z = j + b; return w.ground(x, z) === g && (w.courts.has(key(0, x, z)) || w.paved(x, z) || w.occupied(g, x, z)); };
-      const flush = (d: number) => { const [a, b] = DIRS[d], x = i + a, z = j + b; return carries(d) || w.block(g - 1, x, z) || w.stair(g, x, z) === d || w.passage(g, x, z) >= 0 && w.block(g - 1, x, z); };
+      // (what carries on at its level: more paving, a court, what's built on the same ground, or stone (a block, a bridge's
+      // span) whose top is its level; there it runs flush and has no kerb)
+      const carries = (d: number) => { const [a, b] = DIRS[d], x = i + a, z = j + b; return (w.ground(x, z) === g && (w.courts.has(key(0, x, z)) || w.paved(x, z) || w.occupied(g, x, z))) || w.stone(g - 1, x, z); };
+      const flush = (d: number) => { const [a, b] = DIRS[d], x = i + a, z = j + b; return carries(d) || w.stair(g, x, z) === d; };
       const e = (d: number) => (flush(d) ? 0 : 0.05);
       cur = { born: -1e3, pivot: 0, how: 1, tone: 0, dress: 0, sel: selected.has(key(g, i, j)) };
       quad([cx + e(2), y, cz + e(3)], [cx + 1 - e(0), y, cz + e(3)], [cx + 1 - e(0), y, cz + 1 - e(1)], [cx + e(2), y, cz + 1 - e(1)], [0, 1, 0], 0.95, MAT.court);
@@ -1652,6 +1654,40 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
         quad(P(u1, -0.5, yb), P(u1, 0.5, yb), P(u1, 0.5, ys), P(u1, -0.5, ys), a === 0 ? [-e, 0, 0] : [0, 0, -e], 0.85, MAT.stone);
         quad(P(u0, -0.5, ys), P(u1, -0.5, ys), P(u1, 0.5, ys), P(u0, 0.5, ys), [0, 1, 0], 1, MAT.stone);
         quad(P(u0, -0.5, yb), P(u1, -0.5, yb), P(u1, 0.5, yb), P(u0, 0.5, yb), [0, -1, 0], 0.55, MAT.stone);
+      }
+    }
+    // (a bridge's abutments: where the span lands on the ground at either end (no stone going on there, the ground at
+    // its deck's level or just under), a block of masonry set a third of a cell into the bank and down into the bed, a
+    // little proud of the span's faces, so it's anchored in the banks and doesn't spring off the slope; and a string
+    // course along its sides, over the abutments)
+    const ends = [-1, 1].filter((e) => { const q = e < 0 ? -1 : n, ci = sp.i + q * di, cj = sp.j + q * dj, g = w.ground(ci, cj); return !w.stone(k, ci, cj) && w.stair(k, ci, cj) < 0 && g <= k + 1 && g >= k && w.land; });
+    if (ends.length) {
+      const D = 0.34, PR = 0.03;
+      for (const e of ends) {
+        const q = e < 0 ? -1 : n, ci = sp.i + q * di, cj = sp.j + q * dj, yb = Math.min(sp.low, w.ground(ci, cj)) - 0.45, uF = e * half, uB = e * (half + D);
+        for (const s of [-1, 1]) quad(P(uF, s * (0.5 + PR), yb), P(uB, s * (0.5 + PR), yb), P(uB, s * (0.5 + PR), yT), P(uF, s * (0.5 + PR), yT), nW(s), [0.5, 0.5, 0.95, 0.95], MAT.stone);
+        quad(P(uF, -0.5 - PR, yb), P(uF, 0.5 + PR, yb), P(uF, 0.5 + PR, ys), P(uF, -0.5 - PR, ys), a === 0 ? [-e, 0, 0] : [0, 0, -e], [0.45, 0.45, 0.7, 0.7], MAT.stone);
+        for (const s of [-1, 1]) quad(P(uF, s * 0.5, ys), P(uF, s * (0.5 + PR), ys), P(uF, s * (0.5 + PR), yT), P(uF, s * 0.5, yT), a === 0 ? [-e, 0, 0] : [0, 0, -e], 0.8, MAT.stone);
+        for (const s of [-1, 1]) quad(P(uF, s * 0.5, yT), P(uB, s * 0.5, yT), P(uB, s * (0.5 + PR), yT), P(uF, s * (0.5 + PR), yT), [0, 1, 0], 1, MAT.stone);
+      }
+      const u0 = ends.includes(-1) ? -half - D : -half, u1 = ends.includes(1) ? half + D : half;
+      for (const s of [-1, 1]) {
+        if (sideHidden(cellAt(0), s)) continue;
+        const o = s * (0.5 + PR + 0.035), i0 = s * (0.5 + (ends.length ? PR : 0)), ya = yT - 0.13, yb2 = yT - 0.06;
+        quad(P(u0, o, ya), P(u1, o, ya), P(u1, o, yb2), P(u0, o, yb2), nW(s), 0.95, MAT.stone);
+        quad(P(u0, i0, yb2), P(u1, i0, yb2), P(u1, o, yb2), P(u0, o, yb2), [0, 1, 0], 1, MAT.stone);
+        quad(P(u0, i0, ya), P(u1, i0, ya), P(u1, o, ya), P(u0, o, ya), [0, -1, 0], 0.5, MAT.stone);
+        for (const [ue, sg] of [[u0, -1], [u1, 1]] as Array<[number, number]>) quad(P(ue, i0, ya), P(ue, o, ya), P(ue, o, yb2), P(ue, i0, yb2), a === 0 ? [sg, 0, 0] : [0, 0, sg], 0.85, MAT.stone);
+      }
+    }
+    // (and where it carries a way, a low parapet along each side, over the abutments: a bridge, not a ledge over water)
+    if (ends.length && Array.from({ length: n }, (_, q) => w.passage(k + 1, sp.i + q * di, sp.j + q * dj) >= 0).every(Boolean)) {
+      const u0 = (ends.includes(-1) ? -half - 0.34 : -half) + 0.02, u1 = (ends.includes(1) ? half + 0.34 : half) - 0.02, H = 0.17;
+      for (const sd of [-1, 1]) {
+        if (sideHidden(cellAt(0), sd)) continue;
+        const wo = sd * 0.53, wi = sd * 0.43, yp = yT + H;
+        box(Math.min(P(u0, wi, 0)[0], P(u1, wo, 0)[0]), Math.max(P(u0, wi, 0)[0], P(u1, wo, 0)[0]), yT, yp, Math.min(P(u0, wi, 0)[2], P(u1, wo, 0)[2]), Math.max(P(u0, wi, 0)[2], P(u1, wo, 0)[2]), MAT.stone, [0.7, 0.7, 1, 1]);
+        box(Math.min(P(u0, wi - sd * 0.015, 0)[0], P(u1, wo + sd * 0.015, 0)[0]), Math.max(P(u0, wi - sd * 0.015, 0)[0], P(u1, wo + sd * 0.015, 0)[0]), yp, yp + 0.035, Math.min(P(u0, wi - sd * 0.015, 0)[2], P(u1, wo + sd * 0.015, 0)[2]), Math.max(P(u0, wi - sd * 0.015, 0)[2], P(u1, wo + sd * 0.015, 0)[2]), MAT.stone, 1);
       }
     }
     for (let s = 0; s < n; s++) { cur = at(sp.born, yT, k, sp.i + s * di, sp.j + s * dj); topFace(k, sp.i + s * di, sp.j + s * dj, yT); }

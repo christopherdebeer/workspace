@@ -216,6 +216,13 @@ The fixes:
 
 A way across a bank or out to the stream is a built causeway standing on the ground. The terrain's left as it is: the built part answers it.
 
+**Bridges.** A way's span over the stream (or any gap where it lands on the ground at either end) was an arch springing straight off the sloping land. Now:
+- **Abutments:** at each end where it lands, an abutment of masonry is set a third of a cell into the bank and down into the bed, a little proud of the span's faces.
+- **String course:** one runs along the bridge's sides, over the abutments.
+- **Parapet:** where it carries a way, a low parapet with a coping runs along each side, over the abutments.
+- **The way's bed:** it runs flush onto the span with no kerb there (any stone whose top is at its level counts).
+- **The banks:** the land holds flat to the span as it does to any stone filling a bank.
+
 ## Stage 15: gradual again, the cliffs' shade back (after the phone)
 
 ![Gradual, with the cliffs' shade](labyrinth/look-gradual.jpg)
