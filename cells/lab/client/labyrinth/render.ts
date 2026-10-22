@@ -363,20 +363,21 @@ void main() {
     float bedR = vPos.y * 2.9 + (noise(vPos * vec3(.45, .2, .45)) - .5) * .3;
     float cc = dot(vPos.xz, con) * 1.3 + hash(vec3(floor(bedR), 5., 5.)) + (noise(vPos * vec3(2., 3., 2.)) - .5) * .25, colI = floor(cc);
     float bedV = bedR + (hash(vec3(colI, floor(bedR), 6.)) - .5) * .2, bedF = fract(bedV), bedI = floor(bedV);
-    vec3 rock = mix(vec3(.80, .76, .68), vec3(.88, .85, .78), hash(vec3(bedI, colI, 1.)) * .7 + .3 * rough);
+    // (its tone the plane's (the mesh lights each block as one), only a little moving over it)
+    vec3 rock = mix(vec3(.85, .78, .66), vec3(.90, .85, .75), .55 + .15 * hash(vec3(bedI, colI, 1.)) + .3 * (rough - .5));
     float fr = min(fract(cc), 1. - fract(cc)) / 1.3;
     // (the geometry carries the planes now (mesh.ts: beds and blocks); the material only a little more: a bedding line
     // here and there, broken, and a few fractures, not a course on every bed and a joint on every block, which read as
     // masonry)
     float bedOn = step(.55, noise(vec3(dot(vPos.xz, con) * .9, bedI * 1.7, 3.))), frOn = step(.62, hash(vec3(bedI, colI, 9.)));
     rock *= 1. - .1 * (1. - smoothstep(.0, .05, bedF)) * bedOn - .14 * (1. - smoothstep(.0, .025, fr)) * frOn;
-    rock = mix(rock, vec3(.62, .58, .50), .25 * smoothstep(.6, .9, fbm(vPos * 1.7 + 4.)));
+    rock = mix(rock, vec3(.66, .61, .52), .15 * smoothstep(.65, .9, fbm(vPos * 1.7 + 4.)));
     rock *= 1. - .28 * wetv;
     base = mix(soil, rock, cliff);
     plain = mix(vec3(.72, .67, .52), vec3(.84, .80, .72), cliff);
     // (the beds' faces turned a little each, the bedding lines and fractures cut in, for the light)
     float kL = keep(6.);
-    nS = normalize(n + (vec3(con.x, 0., con.y) * (hash(vec3(bedI, 7., 2.)) - .5) * .18 + vec3(con.x, 0., con.y) * sign(fract(cc) - .5) * (1. - smoothstep(.0, .05, fr)) * .4 * frOn) * cliff * kL);
+    nS = normalize(n + (vec3(con.x, 0., con.y) * sign(fract(cc) - .5) * (1. - smoothstep(.0, .05, fr)) * .4 * frOn) * cliff * kL);
     cav = 1. - cliff * (.22 * (1. - smoothstep(.0, .07, bedF)) * bedOn + .2 * (1. - smoothstep(.0, .035, fr)) * frOn);
   }
   else if (mat == 5) base = travertine(vPos * .8 + 11., .5) * 1.03;
@@ -449,10 +450,15 @@ void main() {
   float leaves = smoothstep(.48, .6, leafy) * smoothstep(-.35, -.85, lw.x * .75 - lw.y * .45);
   sh *= 1. - .38 * leaves * (1. - smoothstep(uArea.z - 3., uArea.z, max(abs(vPos.x - uArea.x), abs(vPos.z - uArea.y))));
   float nl = dot(nS, uSun), key = max((nl + wrap) / (1. + wrap), 0.) * sh * mix(.8, 1., cav);
+  // (after the mobile studies: the land's rock and the trees' leaves lit in a few flat tones, each plane one tone, the
+  // steps between them soft, not a smooth gradient over every facet)
+  if ((mat == 5 && moss) || mat == 3) { float k3 = key * 3.; key = mix(key, (floor(k3) + smoothstep(.35, .65, fract(k3))) / 3., .8); }
   // (the sun warm and strong; the sky cooler and quieter from above; what's thrown back warm from below and the sides)
   vec3 SUN = vec3(1., .83, .64) * 3., SKY = vec3(.47, .48, .54) * 1.05, BOUNCE = vec3(.70, .52, .34) * .75;
   float up = nS.y * .5 + .5, seen = vAo;
   vec3 indirect = (SKY * mix(.45, 1., up) + BOUNCE * (1. - up * up)) * seen * mix(.55, 1., seen) * cav;
+  // (the land's rock in shade warm, as the studies keep it, not the sky's grey)
+  if (mat == 5 && moss) indirect *= vec3(1.12, 1.02, .88) * mix(1., 1.35, landFeat);
   vec3 c = alb * (indirect + SUN * key);
   // (its sheen: how rough each material is says how wide and how strong; polished marble most, glass, lead; travertine a
   // little, brick and clay hardly; leaves some)
@@ -467,7 +473,7 @@ void main() {
   if (mat == 3) {
     // (in tufts: each tuft's leaves turned out from it, the hollows between them darker)
     float t0 = bnoise(vPos * 7.5) * .6 + bnoise(vPos * 19. + 3.) * .4;
-    c *= mix(.62, 1.12, smoothstep(.3, .8, t0));
+    c *= mix(.8, 1.06, smoothstep(.3, .8, t0));
     c += alb * SUN * .16 * max(-nl, 0.) * mix(.5, 1., sh);
     if (kind == 1 && !moss && !ivy) c += vec3(.55, .6, .58) * .22 * pow(1. - abs(dot(nS, normalize(uDir))), 3.) * (.4 + .6 * sh);
   }
@@ -589,8 +595,12 @@ void main() {
     float Rw = uPaper > .5 ? 0. : min(1., reach(vPos) + .25), wet = smoothstep(.15, .85, Rw);
     vec2 q = vec2(vPos.x + vPos.z, vPos.x - vPos.z) * .707;
     float lines = max(strokes(q, .09, .35, .35, 3., max(fwidth(q.y), 1e-5), .7, .02, .25), strokes(q.yx, .09, .35, .35, 5., max(fwidth(q.x), 1e-5), .7, .02, .25));
-    vec3 pale = mix(PAP, vec3(.62, .80, .80), .55 * smoothstep(.0, .5, R) * (1. - uPaper));
-    c = mix(mix(pale, vec3(.24, .33, .36), lines * .55 * (1. - wet) * smoothstep(0., .25, R + .15)), c, wet);
+    // (after the mobile studies: the water keeps its colour out into the drawing, flat turquoise in a few faceted
+    // patches, so the stream can be followed across the page; only print gives it to the paper)
+    vec2 fq = floor(vec2(q.x * 1.6 + noise(vPos * 1.3) * .8, q.y * 2.4));
+    vec3 flat_ = mix(vec3(.45, .70, .71), vec3(.55, .78, .77), step(.55, hash(vec3(fq, 4.))));
+    vec3 pale = mix(PAP, flat_, (1. - uPaper) * smoothstep(-.1, .3, R));
+    c = mix(mix(pale, vec3(.24, .33, .36), lines * (uPaper > .5 ? .55 : .25) * (1. - wet) * smoothstep(0., .25, R + .15)), c, wet);
   }
   else if (land) c = mix(c, base * (.86 + .14 * sh) * (.92 + .08 * vAo), .55);
   // (what stands out on the land (a rock, a shrub, a tree), and anything built out toward its edge: washed the same way)
@@ -742,6 +752,8 @@ void main() {
   float fold = smoothstep(.04, .14, lap), crease = smoothstep(.3, .6, turn);
   float wt = (furOn > .5 ? .4 : leafM ? mix(.08, .3, drawn) : mix(.16, .8, drawn)) * fold * (1. - onLand) + (leafM ? 0. : crease * drawn * .6) * (1. - onLand);
   wt = max(wt, onLand * smoothstep(.2, .5, lap) * mix(.12, .55, drawn));
+  // (the land's rock, where it's painted: its planes edged where they meet at a sharp turn, lightly)
+  wt = max(wt, onLand * smoothstep(.5, .8, turn) * .32 * (1. - drawn * .5));
   if (uMarks > .5) wt *= .15;
   o = vec4(mix(mix(c, ink * 1.6, max(wt * (1. - step(.5, skyN)), rim * .8)), vec3(.69, .36, .12), ring * .9), 1.);
   // (bleeding: the same paper under everything, its edge a shade darker, so the ground and the page are one sheet)

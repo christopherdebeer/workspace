@@ -168,6 +168,24 @@ Past the picture's reach, it's strokes on the paper only.
 
 ![Further](labyrinth/look-lines.jpg)
 
+## Stage 14: after the mobile studies
+
+![After the mobile studies](labyrinth/look-mobile.jpg)
+
+![Drawn](labyrinth/look-mobileprint.jpg)
+
+The mobile studies (continuous terrain, line hierarchy, material to paper, olive, geology, occupation) are flatter and more graphic than the first set: broad planes in a few tones, crisp edges where planes meet, sparse drawing, water that stays water.
+
+- **Rock in planes:**
+  - **Block planes:** each block of a cliff's face is lit as its one plane: turned toward the fall, a little to one side and back, its own for the block. Ledges included: at this grid's resolution each tread and riser was a triangle of its own, and they read as a scatter of facets.
+  - **No per-vertex sky term on the land:** the baked sky visibility varied triangle by triangle over its stepped geometry, laying a facet pattern over everything.
+  - **Quieter rock pattern:** the shader's own rock colour and normal no longer vary by a grid of their own; the mesh's blocks carry it.
+  - **Warm and light:** the rock is warm cream, its shade warm and lighter, not the sky's grey.
+- **A few flat tones:** the land and the leaves are lit in a few steps with soft edges between them, not a smooth gradient over every facet. A tree's tufts are subtler, so its clusters read in two tones.
+- **Edges:** where the land is painted, its planes are edged lightly where they meet at a sharp turn.
+- **Water stays water:** out into the drawing, the stream keeps its colour: flat turquoise in a few faceted patches, its lines over it. Only print gives it to the paper.
+- **Sparse drawn terrain:** hachures only in shade and recesses, about a third as many; bedding seldom; the vertical joints (fractures) a little more often.
+
 ## Stage 13: silhouettes, within the budget
 
 ![Forms: angular cliffs, branching trees](labyrinth/look-forms.jpg)

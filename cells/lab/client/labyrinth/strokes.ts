@@ -160,7 +160,8 @@ export function strokes(w: World, land: StrokeLand, trees: Skeleton[] = []): Flo
     const shaded = a * SUN_XZ[0] + b * SUN_XZ[1] < 0.1;
     const recess = (s: number) => 1 - Math.min(1, Math.min(s, n - s) / 0.7);
     let k = 0;
-    for (let s = ramp(r, 0.03, 0.1); s < n; s += (tall ? 0.1 : 0.13) * ramp(r, 0.75, 1.3) * (shaded ? 1 : 2.8 - 1.8 * recess(s)), k++) {
+    // (after the mobile studies: a few, not a texture of them; none across a lit face but in its recesses)
+    for (let s = ramp(r, 0.03, 0.1); s < n; s += (tall ? 0.24 : 0.32) * ramp(r, 0.75, 1.3) * (shaded ? 1 : 4 - 3 * recess(s)), k++) {
       const reachU = (k % 2 ? 1 : ramp(r, 0.45, 0.7)) * (shaded ? 0.92 : 0.55 + 0.35 * recess(s)), wob = (r() - 0.5) * 0.04;
       if (!kept(s)) continue;
       let pts: V3[] = [];
@@ -194,7 +195,7 @@ export function strokes(w: World, land: StrokeLand, trees: Skeleton[] = []): Flo
     for (let kb = Math.ceil((lo + 0.12) / b0); kb * b0 < hi - 0.12; kb++) {
       for (let s = ramp(r, 0, 0.4); s < n;) {
         const len = Math.min(n - s, ramp(r, 0.7, 2)), pts: V3[] = [], M = Math.max(2, Math.round(len / 0.15));
-        if (!kept(s)) { s += len + ramp(r, 0.2, 0.6); continue; }
+        if (!kept(s) || r() < 0.65) { s += len + ramp(r, 0.2, 0.6); continue; }
         for (let q = 0; q <= M; q++) {
           const ss = s + (len * q) / M, blk = Math.floor(ss * 1.3 + hash(w.land!.seed, kb, 5) / 4294967296);
           const [mx, mz] = Q(ss, 0), yy = kb * bed(mx, mz) + 0.025 + ((hash(w.land!.seed, i, j, d, blk, kb) / 4294967296) - 0.5) * 0.04;
@@ -205,8 +206,8 @@ export function strokes(w: World, land: StrokeLand, trees: Skeleton[] = []): Flo
         s += len + ramp(r, 0.2, 0.6);
       }
     }
-    for (let s = ramp(r, 0.3, 1); s < n; s += ramp(r, 0.8, 1.8)) {
-      if (r() < 0.4) continue;
+    for (let s = ramp(r, 0.2, 0.7); s < n; s += ramp(r, 0.5, 1.2)) {
+      if (r() < 0.25) continue;
       const pts: V3[] = [], y0 = hi - ramp(r, 0.05, 0.2), y1 = Math.max(lo + 0.1, y0 - ramp(r, 0.4, 1.2));
       for (let q = 0; q <= 5; q++) { const y = y0 + (y1 - y0) * (q / 5), ss = s + (r() - 0.5) * 0.06, [gx, gz] = Q(ss, uAt(ss, y)); pts.push([gx - CENTER + a * 0.03, y, gz - CENTER + b * 0.03]); }
       ribbon(out, pts, 0.04, FAM.fracture, 0.75, 0.3, r(), side);

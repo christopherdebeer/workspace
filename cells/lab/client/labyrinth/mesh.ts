@@ -163,7 +163,7 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
     return v;
   };
   const SKYLIT = new Set([MAT.stone, MAT.within, MAT.court, MAT.slab, MAT.tile, MAT.clay, MAT.wood, MAT.door, MAT.lead]);
-  const vert = (p: V3, n: V3, ao: number, mat: number) => out.push(p[0], p[1], p[2], n[0], n[1], n[2], SKYLIT.has(mat % 16) ? ao * (0.25 + 0.75 * skyVis(p, n)) : ao, (mat === MAT.stone || mat === MAT.within ? mat + cur.dress : mat === MAT.leaves ? mat + leaf * KIND + bloom : mat) + (cur.sel ? SEL : 0), cur.born, cur.pivot, cur.how, cur.tone);
+  const vert = (p: V3, n: V3, ao: number, mat: number) => out.push(p[0], p[1], p[2], n[0], n[1], n[2], SKYLIT.has(mat % 16) && mat !== LANDMAT ? ao * (0.25 + 0.75 * skyVis(p, n)) : ao, (mat === MAT.stone || mat === MAT.within ? mat + cur.dress : mat === MAT.leaves ? mat + leaf * KIND + bloom : mat) + (cur.sel ? SEL : 0), cur.born, cur.pivot, cur.how, cur.tone);
   const quad = (a: V3, b: V3, c: V3, d: V3, n: V3, ao: number[] | number, mat: number) => {
     const A = typeof ao === 'number' ? [ao, ao, ao, ao] : ao;
     const ux = b[0] - a[0], uy = b[1] - a[1], uz = b[2] - a[2], vx = c[0] - a[0], vy = c[1] - a[1], vz = c[2] - a[2];
@@ -902,15 +902,20 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
     // face is a few angular planes with joints between, not one rounded sheet. Where it's level (where things are
     // built), the ground as it is)
     const bedAt = (gx: number, gz: number) => 0.34 * (0.85 + 0.3 * noise2(land.seed, gx * 0.7 + 3.1, gz * 0.7 - 1.7));
-    const Y = (gx: number, gz: number) => {
+    // (the block a point of a face is in: which way the face falls, the block along it, its bed)
+    const blockOf = (gx: number, gz: number) => {
       const e = 0.18, ddx = Y0(gx + e, gz) - Y0(gx - e, gz), ddz = Y0(gx, gz + e) - Y0(gx, gz - e), sl = Math.hypot(ddx, ddz) / (2 * e);
       const steep = Math.min(1, Math.max(0, (sl - 0.9) / 1.4));
-      if (steep <= 0) return Y0(gx, gz);
-      // (the block it's in, along the face: its joint lines square to the face, the blocks 0.4 to 0.9 of a cell wide;
-      // the block set forward or back by sampling the drop that much further out or in)
       const fl0 = Math.hypot(ddx, ddz) || 1, fx = -ddx / fl0, fz = -ddz / fl0, along = gx * -fz + gz * fx;
       const yb = Y0(gx, gz), bed0 = bedAt(gx, gz), kb = Math.floor(yb / bed0);
       const u = along * 1.6 + noise2(land.seed + 7, kb * 0.37, along * 0.3) * 1.4, blk = Math.floor(u);
+      return { steep, fx, fz, kb, blk };
+    };
+    const Y = (gx: number, gz: number) => {
+      // (the block it's in, along the face: its joint lines square to the face, the blocks 0.4 to 0.9 of a cell wide;
+      // the block set forward or back by sampling the drop that much further out or in)
+      const { steep, fx, fz, kb, blk } = blockOf(gx, gz);
+      if (steep <= 0) return Y0(gx, gz);
       const push = ((hash(land.seed, blk, kb, 77) / 4294967296) - 0.5) * 0.2 * steep;
       const y = Y0(gx + fx * push, gz + fz * push);
       const bed = bedAt(gx, gz), f = y / bed, fl = Math.floor(f), t = f - fl;
@@ -949,7 +954,17 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
       const p0 = pts[A[0]][A[1]], p1 = pts[Bv[0]][Bv[1]], p2 = pts[Cv[0]][Cv[1]];
       const ux = p1[0] - p0[0], uy = p1[1] - p0[1], uz = p1[2] - p0[2], vx = p2[0] - p0[0], vy = p2[1] - p0[1], vz = p2[2] - p0[2];
       let fn: V3 = [uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx]; const fl = Math.hypot(...fn) || 1; fn = [fn[0] / fl, fn[1] / fl, fn[2] / fl]; if (fn[1] < 0) fn = [-fn[0], -fn[1], -fn[2]];
-      const flat = Math.min(1, Math.max(0, (0.82 - fn[1]) / 0.2));
+      let flat = Math.min(1, Math.max(0, (0.82 - fn[1]) / 0.2));
+      // (a riser of the rock lit as its block's one plane: turned toward the fall, a little to one side and back, its own
+      // for the block, so a block is one tone and a cliff a few broad planes, not a scatter of facets)
+      {
+        const gx = (p0[0] + p1[0] + p2[0]) / 3 + CENTER, gz = (p0[2] + p1[2] + p2[2]) / 3 + CENTER, bk = blockOf(gx, gz);
+        if (bk.steep > 0.45 || (flat > 0 && bk.steep > 0.3)) {
+          const h1 = hash(land.seed, bk.blk, bk.kb, 91) / 4294967296 - 0.5, h2 = hash(land.seed, bk.blk, bk.kb, 92) / 4294967296;
+          const cx2 = -bk.fz, cz2 = bk.fx, bn: V3 = [bk.fx + cx2 * h1 * 0.7, 0.12 + 0.3 * h2, bk.fz + cz2 * h1 * 0.7], bl = Math.hypot(...bn);
+          if (bn[0] * fn[0] + bn[2] * fn[2] > -0.05 || fn[1] > 0.9) { fn = [bn[0] / bl, bn[1] / bl, bn[2] / bl]; flat = 1; }
+        }
+      }
       for (const [a, b] of [A, Bv, Cv]) {
         const sn = nrm[a][b], n: V3 = [sn[0] + (fn[0] - sn[0]) * flat, sn[1] + (fn[1] - sn[1]) * flat, sn[2] + (fn[2] - sn[2]) * flat], nl = Math.hypot(...n) || 1;
         cur.tone = damp[a][b]; vert(pts[a][b], [n[0] / nl, n[1] / nl, n[2] / nl], 1, LANDMAT);
