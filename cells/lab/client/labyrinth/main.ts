@@ -850,7 +850,7 @@ function offScreen() {
 document.getElementById('frame')!.addEventListener('click', () => { zoomK = Number(qs.get('zoom') ?? 0.64); follow = true; });
 
 // ─── each frame ───
-let last = performance.now(), zoomFit = framing().fit;
+let last = performance.now(), zoomFit = framing().fit, lastRemesh = 0;
 /** frames drawn: a hold is a finger still over several of them as well as for long enough (a slow frame isn't a hold) */
 let frameNo = 0;
 /** each frame's interval and the time spent in it on the CPU (the last few hundred): what telemetry reports */
@@ -863,7 +863,12 @@ function frame() {
   // (a pointer's handlers) before this one could begin)
   perf.frame(last, t - last, busy[(frameNo - 1) % 600]);
   last = t;
-  if (world.version !== meshVersion || [...selKeys()].join(',') !== meshSel) remesh();
+  // (while a finger's drawing, the mesh is worked out again at most every 140 ms (what the stroke would build is still
+  // read at every move); at once when it lifts, or for anything else)
+  if (world.version !== meshVersion || [...selKeys()].join(',') !== meshSel) {
+    const drawing = !!g && (g.mode === 'trace' || g.mode === 'run' || g.mode === 'paint' || g.mode === 'carve');
+    if (!drawing || t - lastRemesh > 140) { remesh(); lastRemesh = t; } else perf.tag('remesh deferred');
+  }
   if (preview && !still) view.az += dt * 0.12;
   else if (azGoal !== null) { const k = instant ? 1 : 1 - Math.exp(-dt * 8); view.az += (azGoal - view.az) * k; if (Math.abs(azGoal - view.az) < 1e-4) { view.az = azGoal; azGoal = null; } }
   // (it frames what's built when asked to (at the start, the frame button, or when what's built reaches the edge of the

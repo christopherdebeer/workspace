@@ -89,7 +89,33 @@ export function wallArms(w: World, k: number, i: number, j: number): boolean[] {
 }
 
 /** what's drawn: the picture's triangles, and the drawing's marks (strokes.ts), each from the same world */
-export interface Mesh { data: Float32Array; count: number; strokes: Float32Array }
+export interface Mesh { data: Float32Array; count: number; strokes: Float32Array; /** the ground's, kept from build to build while nothing it reads changes (render.ts draws it from its own buffer) */ ground?: Float32Array }
+
+/**
+ * The ground's mesh (the land, the stream, its paving, banks and walls, what lies and grows wild on it) kept from the last
+ * build, and the drawing's strokes with it, so a build that changes nothing the ground reads (a block laid on a terrace,
+ * a stair, a roof) takes them as they were. What it reads, as a signature: the world itself, the land's seed, how much
+ * of it is drawn, bleeding or not, what's selected of the ground itself, the hand's dressing or the rules', and round each cell drawn, its
+ * ground, water, paving, court, way, trees, and what's built from just under it to three levels over (the ground's
+ * scatter keeps off what's built; its paving's light is what the walls round it leave of the sky; its banks hold what
+ * stands on them).
+ */
+let groundCache: { w: World; sig: string; verts: Float32Array; skel: Skeleton[]; land: StrokeLand | null; strokeSig: string; strokes: Float32Array | null } | null = null;
+function groundSig(w: World, plain: boolean, selected: Set<number>): string {
+  const B = drawnBox(w), E = w.extent(), parts: string[] = [`${w.landSeed}|${bleed}|${plain}|${B.i0},${B.i1},${B.j0},${B.j1}|${E.i0},${E.i1},${E.j0},${E.j1}|${[...selected].filter((v) => { const [k, i, j] = unkey(v); return k <= w.ground(i, j); }).sort((a, b) => a - b).join(',')}|`];
+  const row: number[] = [];
+  for (let j = B.j0 - 2; j <= B.j1 + 2; j++) for (let i = B.i0 - 2; i <= B.i1 + 2; i++) {
+    const g = w.ground(i, j);
+    let bits = (w.pool(i, j) ? 1 : 0) | (w.paved(i, j) ? 2 : 0) | (w.courts.has(key(0, i, j)) ? 4 : 0) | (w.way(g, i, j) ? 8 : 0) | (w.tree(g, i, j) ? 16 : 0);
+    for (let k = g - 1, b = 32; k <= g + 3; k++, b *= 2) if (w.occupied(k, i, j)) bits |= b;
+    row.push(g * 4096 + bits);
+  }
+  return parts[0] + row.join(',');
+}
+/** the kept ground let go (for checking that what's kept is what would be built) */
+export function forgetGround() { groundCache = null; }
+/** a cheap signature of the trees' skeletons (what the strokes' branch lines are drawn from) */
+const skelSig = (sk: Skeleton[]) => { let h = sk.length; for (const s of sk) for (const l of s.lines) for (const p of l) h = (h * 31 + Math.round(p[0] * 100) * 7 + Math.round(p[1] * 100) * 13 + Math.round(p[2] * 100)) | 0; return String(h); };
 type V3 = [number, number, number];
 const X = (i: number) => i - CENTER, Z = (j: number) => j - CENTER;
 const tone = (k: number, i: number, j: number) => (((k * 73856093) ^ (i * 19349663) ^ (j * 83492791)) >>> 0) / 4294967296;
@@ -437,7 +463,19 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
 
   // ─── the land, and the table it's on ───
   perf.begin('mesh.build.ground');
-  if (w.land) landMesh();
+  let groundF32: Float32Array | null = null, gsig = '';
+  if (w.land) {
+    gsig = groundSig(w, plain, selected);
+    if (groundCache && groundCache.w === w && groundCache.sig === gsig) {
+      groundF32 = groundCache.verts; skeletons.push(...groundCache.skel); drawnLand = groundCache.land; perf.count('mesh.groundKept');
+    } else {
+      const g0 = out.length, s0 = skeletons.length;
+      landMesh();
+      groundF32 = new Float32Array(out.splice(g0));
+      groundCache = { w, sig: gsig, verts: groundF32, skel: skeletons.slice(s0), land: drawnLand, strokeSig: '', strokes: null };
+      perf.count('mesh.groundBuilt');
+    }
+  }
   // ─── the stone, and the table it's on ───
   else {
     const ex = w.extent(), xa = X(ex.i0) - MARGIN, xb = X(ex.i1 + 1) + MARGIN, za = Z(ex.j0) - MARGIN, zb = Z(ex.j1 + 1) + MARGIN;
@@ -825,9 +863,16 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
     for (let y = k + 0.28; y < k + l.n + 0.05; y += 0.28) bar(at(y, -0.2), at(y, 0.2), 0.04, 0.04, MAT.wood);
   }
   perf.end();
-  const drawn = perf.time('mesh.build.strokes', () => (drawnLand ? strokes(w, drawnLand, skeletons) : new Float32Array(0)));
+  // (the strokes, kept with the ground while neither it nor the trees' skeletons change)
+  const ssig = gsig + '|' + skelSig(skeletons);
+  let drawn: Float32Array;
+  if (groundCache && groundCache.w === w && groundCache.sig === gsig && groundCache.strokeSig === ssig && groundCache.strokes) { drawn = groundCache.strokes; perf.count('mesh.strokesKept'); }
+  else {
+    drawn = perf.time('mesh.build.strokes', () => (drawnLand ? strokes(w, drawnLand, skeletons) : new Float32Array(0)));
+    if (groundCache && groundCache.w === w && groundCache.sig === gsig) { groundCache.strokeSig = ssig; groundCache.strokes = drawn; }
+  }
   perf.add('mesh.build.sky', skyMs); perf.count('mesh.skyRays', skyN * 16); perf.count('mesh.vertices', out.length / STRIDE);
-  return { data: new Float32Array(out), count: out.length / STRIDE, strokes: drawn };
+  return { data: new Float32Array(out), count: out.length / STRIDE, strokes: drawn, ground: groundF32 ?? undefined };
 
   /**
    * Pergolas, over the places dressed so: posts at the corners of the ground they cover (and along a long side, every
@@ -944,6 +989,7 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
       const gx = x0 + a / RES, gz = z0 + b / RES, e = 0.5 / RES, dx = Y(gx + e, gz) - Y(gx - e, gz), dz = Y(gx, gz + e) - Y(gx, gz - e), l = Math.hypot(dx, 2 * e, dz);
       return [-dx / l, (2 * e) / l, -dz / l];
     };
+    perf.begin('mesh.build.ground.grid');
     const pts: V3[][] = [], nrm: V3[][] = [];
     for (let a = 0; a <= nx; a++) { pts.push([]); nrm.push([]); for (let b = 0; b <= nz; b++) { pts[a].push(P(a, b)); nrm[a].push(Nrm(a, b)); } }
     // (how much sky each point of the land sees, for the shade in its recesses, under its shelves and at the foot of its
@@ -968,6 +1014,7 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
         damp[a].push(Math.max(0, 1 - d / 1.1) ** 1.5);
       }
     }
+    perf.end(); perf.begin('mesh.build.ground.tris');
     // (where it's steep, each triangle lit as the plane it is (a cliff's faces flat, their edges crisp); where it's
     // gentle, smooth across them)
     const tri3 = (A: [number, number], Bv: [number, number], Cv: [number, number]) => {
@@ -1004,6 +1051,7 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
     for (const [qa, qb, qc, qd] of [[-T, -T, T, za - R], [-T, zb + R, T, T], [-T, za - R, xa - R, zb + R], [xb + R, za - R, T, zb + R]]) quad([qa, foot, qb], [qc, foot, qb], [qc, foot, qd], [qa, foot, qd], [0, 1, 0], 1, MAT.table);
     }
     cur.tone = 0.5;
+    perf.end(); perf.begin('mesh.build.ground.water');
     // (the stream: its water a little under its banks, a fall where its bed steps down to the next)
     const wet = (i: number, j: number) => land.water.has(j * 1000 + i);
     // (each cell's water knows which way it runs (to the next cell down the stream: its angle, in the vertex's `how`, past
@@ -1052,6 +1100,7 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
       const pp = P(0.06, 0.42, 0);
       lathe(pp[0], pp[2], [[0.035, yw - 0.1], [0.035, top + 0.22], [0.045, top + 0.24], [0, top + 0.27]], MAT.wood, 6);
     }
+    perf.end(); perf.begin('mesh.build.ground.paving');
     // (a court's paving, and a way's on the ground: flags laid on the land's level middles)
     for (let j = B.j0; j <= B.j1; j++) for (let i = B.i0; i <= B.i1; i++) {
       const court = w.courts.has(key(0, i, j)), paved = w.paved(i, j);
@@ -1060,9 +1109,11 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
       cur = { born: -1e3, pivot: 0, how: 1, tone: 0, dress: 0, sel: selected.has(key(g, i, j)) };
       quad([cx + e(2), y, cz + e(3)], [cx + 1 - e(0), y, cz + e(3)], [cx + 1 - e(0), y, cz + 1 - e(1)], [cx + e(2), y, cz + 1 - e(1)], [0, 1, 0], 0.95, MAT.court);
     }
+    perf.end(); perf.begin('mesh.build.ground.walls');
     // (banks held by walls, where what's beside them is used: context.ts)
     for (const r of new Set(retaining(w).values())) retainingWall(r);
     cur = { born: -1e3, pivot: 0, how: 1, tone: 0.5, dress: 0, sel: false };
+    perf.end(); perf.begin('mesh.build.ground.scatter');
     // (what grows and lies on it, sparing, where nothing's built)
     const r = (...n: number[]) => hash(land.seed, ...n) / 4294967296;
     const bare = (i: number, j: number) => { const g = w.ground(i, j); return !w.occupied(g, i, j) && !w.occupied(g + 1, i, j) && !w.pool(i, j) && !w.courts.has(key(0, i, j)) && !w.way(g, i, j) && !w.paved(i, j); };
@@ -1115,6 +1166,7 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
       else if (!bank && field > 0.5 && r(q, 33) < 0.12) shrub(at(i, j, (r(q, 34) - 0.5) * 0.5, (r(q, 35) - 0.5) * 0.5), 0.12 + 0.06 * r(q, 36), q + 3);
     }
     coarse = false;
+    perf.end();
     cur = { born: -1e3, pivot: 0, how: 1, tone: 0, dress: 0, sel: false };
   }
   /**

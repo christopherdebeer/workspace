@@ -817,6 +817,9 @@ export class Renderer {
   /** \`?marks\`: the drawing's marks by family, the picture faded under them */
   marks = false;
   private vao: WebGLVertexArrayObject; private buf: WebGLBuffer; private count = 0;
+  /** the ground's own (mesh.ts keeps it from one build to the next while nothing it reads changes): handed to the GPU
+   * only when it's new */
+  private gvao: WebGLVertexArrayObject; private gbuf: WebGLBuffer; private gcount = 0; private gdata: Float32Array | null = null; private sdata: Float32Array | null = null;
   /** what moves (the cats): its own buffer, filled again each frame, drawn with the stone */
   private dvao: WebGLVertexArrayObject; private dbuf: WebGLBuffer; private dcount = 0;
   private shadowFb: WebGLFramebuffer; private shadowTex: WebGLTexture;
@@ -883,6 +886,8 @@ export class Renderer {
     };
     this.vao = gl.createVertexArray()!; this.buf = gl.createBuffer()!;
     gl.bindVertexArray(this.vao); gl.bindBuffer(gl.ARRAY_BUFFER, this.buf); layout();
+    this.gvao = gl.createVertexArray()!; this.gbuf = gl.createBuffer()!;
+    gl.bindVertexArray(this.gvao); gl.bindBuffer(gl.ARRAY_BUFFER, this.gbuf); layout();
     this.dvao = gl.createVertexArray()!; this.dbuf = gl.createBuffer()!;
     gl.bindVertexArray(this.dvao); gl.bindBuffer(gl.ARRAY_BUFFER, this.dbuf); layout();
     this.svao = gl.createVertexArray()!; this.sbuf = gl.createBuffer()!;
@@ -920,15 +925,15 @@ export class Renderer {
     return t;
   }
   /** the vertices drawn: the stone's (fixed till it changes), and what moves */
-  get counts() { return { stone: this.count, moving: this.dcount }; }
+  get counts() { return { stone: this.count, ground: this.gcount, moving: this.dcount }; }
   upload(m: Mesh) {
     const gl = this.gl;
     gl.bindBuffer(gl.ARRAY_BUFFER, this.buf);
     gl.bufferData(gl.ARRAY_BUFFER, m.data, gl.STATIC_DRAW);
     this.count = m.count;
-    gl.bindBuffer(gl.ARRAY_BUFFER, this.sbuf);
-    gl.bufferData(gl.ARRAY_BUFFER, m.strokes, gl.STATIC_DRAW);
-    this.scount = m.strokes.length / STROKE_STRIDE;
+    const ground = m.ground ?? new Float32Array(0);
+    if (ground !== this.gdata) { gl.bindBuffer(gl.ARRAY_BUFFER, this.gbuf); gl.bufferData(gl.ARRAY_BUFFER, ground, gl.STATIC_DRAW); this.gdata = ground; this.gcount = ground.length / STRIDE; perf.count('upload.ground'); }
+    if (m.strokes !== this.sdata) { gl.bindBuffer(gl.ARRAY_BUFFER, this.sbuf); gl.bufferData(gl.ARRAY_BUFFER, m.strokes, gl.STATIC_DRAW); this.sdata = m.strokes; this.scount = m.strokes.length / STROKE_STRIDE; perf.count('upload.strokes'); }
   }
   /** what moves, as it is this frame (STRIDE floats a vertex) */
   moving(data: Float32Array, count: number) {
@@ -1023,7 +1028,7 @@ export class Renderer {
     gl.uniform1f(gl.getUniformLocation(this.shadow, 'uBleed'), this.bleed ? 1 : 0); gl.uniform1f(gl.getUniformLocation(this.shadow, 'uPaper'), this.print ? 1 : 0); gl.uniform4fv(gl.getUniformLocation(this.shadow, 'uLand'), this.landBox); this.bindFocus(this.shadow);
     gl.cullFace(gl.FRONT);
     gl.bindVertexArray(this.vao);
-    if (this.shadows) { gl.drawArrays(gl.TRIANGLES, 0, this.count); if (this.dcount) { gl.bindVertexArray(this.dvao); gl.drawArrays(gl.TRIANGLES, 0, this.dcount); gl.bindVertexArray(this.vao); } }
+    if (this.shadows) { gl.drawArrays(gl.TRIANGLES, 0, this.count); if (this.gcount) { gl.bindVertexArray(this.gvao); gl.drawArrays(gl.TRIANGLES, 0, this.gcount); gl.bindVertexArray(this.vao); } if (this.dcount) { gl.bindVertexArray(this.dvao); gl.drawArrays(gl.TRIANGLES, 0, this.dcount); gl.bindVertexArray(this.vao); } }
     gl.cullFace(gl.BACK);
     end(); begin();
     // (the stone, lit)
@@ -1038,6 +1043,7 @@ export class Renderer {
     gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, this.shadowTex); gl.bindSampler(0, this.sCompare); gl.uniform1i(U('uShadow'), 0);
     gl.activeTexture(gl.TEXTURE3); gl.bindTexture(gl.TEXTURE_2D, this.shadowTex); gl.bindSampler(3, this.sRaw); gl.uniform1i(U('uShadowRaw'), 3);
     gl.drawArrays(gl.TRIANGLES, 0, this.count);
+    if (this.gcount) { gl.bindVertexArray(this.gvao); gl.drawArrays(gl.TRIANGLES, 0, this.gcount); gl.bindVertexArray(this.vao); }
     if (this.dcount) { gl.bindVertexArray(this.dvao); gl.drawArrays(gl.TRIANGLES, 0, this.dcount); }
     // (the drawing's marks, inked onto what they lie on: over it, behind what stands in front of it, the mask left be)
     if (this.scount) {

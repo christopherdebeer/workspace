@@ -559,6 +559,27 @@ ok(`blocks' outlines tried against where they're struck (${lively.form} sides)`,
   ok('story 12: from the low ground into the court, and over the stream to the house, on foot', NAV.reaches(n12, [1, 1, 10], [3, 1, 5]) && NAV.reaches(n12, [1, 1, 10], [3, 7, 4]), { court: NAV.reaches(n12, [1, 1, 10], [3, 1, 5]), house: NAV.reaches(n12, [1, 1, 10], [3, 7, 4]) });
   ok('story 12: the house across the ravine is a house', BU.buildings(s12).list.some((x) => x.cols.some(([i, j]) => i === 7 && j === 2) && x.roof));
   ok('story 12: drawn', ME.buildMesh(s12).count > 0);
+  // (the ground kept from one build to the next is exactly the ground that would be built: each of the land's stories
+  // laid an operation at a time, each build compared with one made fresh)
+  {
+    const same = (a, b) => a === b || (!!a && !!b && a.length === b.length && a.every((v, q) => v === b[q]));
+    let builds = 0, kept = 0, wrong = [];
+    for (const n of [12, 14, 15, 16]) {
+      let s; try { s = story(n); } catch { continue; }
+      if (!s.land) continue;
+      const w = new World(s.seed, s.landSeed);
+      for (const [q, op] of s.ops.entries()) {
+        w.apply(op, op.born ?? 0);
+        const before = ME.buildMesh(w), wasKept = before.ground && ME.buildMesh(w).ground === before.ground;
+        ME.forgetGround();
+        const fresh = ME.buildMesh(w);
+        builds++; if (wasKept) kept++;
+        if (!same(before.ground, fresh.ground) || !same(before.strokes, fresh.strokes) || !same(before.data, fresh.data)) wrong.push(`story ${n}, op ${q}`);
+      }
+    }
+    ok(`the ground kept between builds is the ground built afresh (${builds} builds)`, builds > 10 && !wrong.length, wrong.slice(0, 5));
+    void kept;
+  }
   // (random gestures on the land, mass and way: what stands, stands; nothing's built into the land; ways reach or join
   // what they meet, and what reached can be walked; auto never builds into a stair's way)
   let tried = 0, walkedOk = 0, wayTried = 0, reached = 0, inLand = 0, intoWays = 0;
