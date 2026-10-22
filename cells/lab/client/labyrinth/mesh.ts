@@ -132,7 +132,9 @@ export function drawnBox(w: World): { i0: number; i1: number; j0: number; j1: nu
   if (!bleed || !w.land) return e;
   return { i0: Math.max(DOMAIN.i0, e.i0 - DRAWN_MARGIN), i1: Math.min(DOMAIN.i1, e.i1 + DRAWN_MARGIN), j0: Math.max(DOMAIN.j0, e.j0 - DRAWN_MARGIN), j1: Math.min(DOMAIN.j1, e.j1 + DRAWN_MARGIN) };
 }
-export function buildMesh(w: World, plain = false, selected: Set<number> = new Set()): Mesh {
+export function buildMesh(w: World, plain = false, selected: Set<number> = new Set(), keepGround = false): Mesh {
+  /** `keepGround`: the ground and its strokes taken as they were last built, whatever's changed (while a finger draws:
+   * worked out again once it's lifted) */
   /** how a cell's dressed: the rules' dressing and the hand's (`plain`: the hand's alone) */
   const dressed = (k: number, i: number, j: number) => look(w, k, i, j, plain);
   const out: number[] = [];
@@ -466,7 +468,7 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
   let groundF32: Float32Array | null = null, gsig = '';
   if (w.land) {
     gsig = groundSig(w, plain, selected);
-    if (groundCache && groundCache.w === w && groundCache.sig === gsig) {
+    if (groundCache && groundCache.w === w && (groundCache.sig === gsig || keepGround)) {
       groundF32 = groundCache.verts; skeletons.push(...groundCache.skel); drawnLand = groundCache.land; perf.count('mesh.groundKept');
     } else {
       const g0 = out.length, s0 = skeletons.length;
@@ -866,7 +868,7 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
   // (the strokes, kept with the ground while neither it nor the trees' skeletons change)
   const ssig = gsig + '|' + skelSig(skeletons);
   let drawn: Float32Array;
-  if (groundCache && groundCache.w === w && groundCache.sig === gsig && groundCache.strokeSig === ssig && groundCache.strokes) { drawn = groundCache.strokes; perf.count('mesh.strokesKept'); }
+  if (groundCache && groundCache.w === w && groundCache.strokes && (keepGround || (groundCache.sig === gsig && groundCache.strokeSig === ssig))) { drawn = groundCache.strokes; perf.count('mesh.strokesKept'); }
   else {
     drawn = perf.time('mesh.build.strokes', () => (drawnLand ? strokes(w, drawnLand, skeletons) : new Float32Array(0)));
     if (groundCache && groundCache.w === w && groundCache.sig === gsig) { groundCache.strokeSig = ssig; groundCache.strokes = drawn; }

@@ -40,7 +40,7 @@ R.shadows = !qs.has('noshadow');
 // (the land as Taohua draws its hill: the open ground the paper itself, only its features drawn, bleeding into the page,
 // no plinth; `?plinth`: on its plinth instead. The flat slab is always a slab on its table)
 const bleedOn = !qs.has('plinth') || qs.has('bleed');
-R.msaa = !qs.has('nomsaa');
+R.msaa = qs.has('msaa');
 
 // ─── what's built ───
 const KEY = 'labyrinth.v3';
@@ -69,7 +69,9 @@ let meshSel = '';
 const selKeys = () => (sel ? new Set(sel.s.cells.map((c) => key(...c))) : new Set<number>());
 /** how long a remesh takes (building the mesh, handing it to the GPU): the last, the slowest, and how many */
 const meshTimes = { last: 0, upload: 0, max: 0, n: 0 };
-function remesh() { const ks = selKeys(), t0 = performance.now(), m = buildMesh(world, plain, ks), t1 = performance.now(); R.upload(m); meshVersion = world.version; meshSel = [...ks].join(','); const t2 = performance.now(); meshTimes.last = t1 - t0; meshTimes.upload = t2 - t1; perf.add('mesh.build', t1 - t0); perf.add('mesh.upload', t2 - t1); perf.tag('remesh'); meshTimes.max = Math.max(meshTimes.max, t1 - t0); meshTimes.n++; }
+/** whether the ground's been taken as it was (while drawing), and is still to be worked out again */
+let groundStale = false;
+function remesh(keepGround = false) { const ks = selKeys(), t0 = performance.now(), m = buildMesh(world, plain, ks, keepGround), t1 = performance.now(); groundStale = keepGround; R.upload(m); meshVersion = world.version; meshSel = [...ks].join(','); const t2 = performance.now(); meshTimes.last = t1 - t0; meshTimes.upload = t2 - t1; perf.add('mesh.build', t1 - t0); perf.add('mesh.upload', t2 - t1); perf.tag('remesh'); meshTimes.max = Math.max(meshTimes.max, t1 - t0); meshTimes.n++; }
 
 // ─── how it's seen ───
 const corner = (k: number) => Math.PI / 4 + (k * Math.PI) / 2;
@@ -850,7 +852,7 @@ function offScreen() {
 document.getElementById('frame')!.addEventListener('click', () => { zoomK = Number(qs.get('zoom') ?? 0.64); follow = true; });
 
 // ─── each frame ───
-let last = performance.now(), zoomFit = framing().fit, lastRemesh = 0;
+let last = performance.now(), zoomFit = framing().fit, lastRemesh = 0, lastDrawing = -1e9;
 /** frames drawn: a hold is a finger still over several of them as well as for long enough (a slow frame isn't a hold) */
 let frameNo = 0;
 /** each frame's interval and the time spent in it on the CPU (the last few hundred): what telemetry reports */
@@ -867,8 +869,11 @@ function frame() {
   // read at every move); at once when it lifts, or for anything else)
   if (world.version !== meshVersion || [...selKeys()].join(',') !== meshSel) {
     const drawing = !!g && (g.mode === 'trace' || g.mode === 'run' || g.mode === 'paint' || g.mode === 'carve');
-    if (!drawing || t - lastRemesh > 140) { remesh(); lastRemesh = t; } else perf.tag('remesh deferred');
-  }
+    if (drawing) lastDrawing = t;
+    // (the ground and its strokes are the slowest part to work out (on a phone, more than a second): while drawing, and
+    // just after, kept as they were, so what's built shows at once; worked out again a moment later)
+    if (!drawing || t - lastRemesh > 140) { remesh(drawing || t - lastDrawing < 300); lastRemesh = t; } else perf.tag('remesh deferred');
+  } else if (groundStale && !g && t - lastDrawing > 300) { remesh(false); perf.tag('ground caught up'); }
   if (preview && !still) view.az += dt * 0.12;
   else if (azGoal !== null) { const k = instant ? 1 : 1 - Math.exp(-dt * 8); view.az += (azGoal - view.az) * k; if (Math.abs(azGoal - view.az) < 1e-4) { view.az = azGoal; azGoal = null; } }
   // (it frames what's built when asked to (at the start, the frame button, or when what's built reaches the edge of the
@@ -968,7 +973,7 @@ async function profileSweep(say: (t: string) => void) {
   const configs: Array<[string, () => void, () => void]> = [
     ['as it is', () => {}, () => {}],
     ['no sun map', () => { R.shadows = false; }, () => { R.shadows = !qs.has('noshadow'); }],
-    ['no multisampling', () => { R.msaa = false; }, () => { R.msaa = !qs.has('nomsaa'); }],
+    [R.msaa ? 'no multisampling' : 'with multisampling', () => { R.msaa = !R.msaa; }, () => { R.msaa = qs.has('msaa'); }],
     ['no contact shade', () => { R.contact = false; }, () => { R.contact = true; }],
     ['no leaf cutting', () => { R.leafCut = false; }, () => { R.leafCut = true; }],
     ['three-quarter resolution', () => { resScale = 0.75; resize(); }, () => { resScale = 1; resize(); }],

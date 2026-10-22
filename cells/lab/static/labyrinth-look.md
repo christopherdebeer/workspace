@@ -87,6 +87,8 @@ A frame much slower than those round it (more than 1.8 times the median of the l
 - or the browser's scripts;
 - or, if none of those accounts for it, "unaccounted", with what was going on.
 
+**What the first captures showed, and what changed.** On an iPhone (804×1428 drawn) a frame took 107 ms with 4× multisampling and 23 ms without; on an M4 Pro at 2300×1306, 67 and 17. Multisampling is now off unless asked for (`?msaa`), and the post pass smooths edges instead (FXAA). A stroke's every step rebuilt the whole mesh, the ground and its strokes the most of it (on the phone 1.7 to 1.9 s a step: the strokes about one second, the ground about 700 ms); now, while a finger draws and just after, the ground and its strokes are kept as they were and only what's built is worked out again (at most every 140 ms), and the ground catches up 300 ms after the finger lifts.
+
 `?perf` shows a meter: frames per second, p95 interval, each phase's mean over the last two seconds, and the last heavy frame's cause. `__labyrinth.perf()` returns the whole report, and it's in the telemetry a double tap copies. `node devtools/labyrinth-perf.mjs` runs the page through being left alone, turned, drawn on, tapped, zoomed and a cat followed, and reports each interaction's breakdown and heavy frames (headless Chromium draws in software: read where the time goes, not how much).
 
 Also: **telemetry.** A double tap on the title copies what drawing costs on the device as JSON:

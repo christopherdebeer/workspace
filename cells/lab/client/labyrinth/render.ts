@@ -686,8 +686,25 @@ const POST_VS = `#version 300 es
 out vec2 vUv; void main() { vec2 p = vec2(gl_VertexID == 1 ? 3. : -1., gl_VertexID == 2 ? 3. : -1.); vUv = p * .5 + .5; gl_Position = vec4(p, 0., 1.); }`;
 const POST_FS = `#version 300 es
 precision highp float;
-in vec2 vUv; uniform sampler2D uCol, uNrm, uDepth; uniform vec2 uPx; uniform float uRange, uPrint, uDpr, uBleed, uWorldPx, uContact, uMarks; uniform mat3 uViewRot;
+in vec2 vUv; uniform sampler2D uCol, uNrm, uDepth; uniform vec2 uPx; uniform float uRange, uPrint, uDpr, uBleed, uWorldPx, uContact, uMarks, uAA; uniform mat3 uViewRot;
 out vec4 o;
+// (the edges smoothed where nothing's multisampled: the colour's luma across the pixel's corners says which way an edge
+// runs, and it's sampled along it (FXAA, after Lottes), kept only where it stays within the luma round it)
+vec3 fxaa(vec2 uv) {
+  vec2 p = uPx; const vec3 L = vec3(.299, .587, .114);
+  vec3 cM = texture(uCol, uv).rgb;
+  float nw = dot(texture(uCol, uv + vec2(-1., -1.) * p).rgb, L), ne = dot(texture(uCol, uv + vec2(1., -1.) * p).rgb, L);
+  float sw = dot(texture(uCol, uv + vec2(-1., 1.) * p).rgb, L), se = dot(texture(uCol, uv + vec2(1., 1.) * p).rgb, L), m = dot(cM, L);
+  float lo = min(m, min(min(nw, ne), min(sw, se))), hi = max(m, max(max(nw, ne), max(sw, se)));
+  if (hi - lo < max(.04, hi * .1)) return cM;
+  vec2 dir = vec2(-((nw + ne) - (sw + se)), (nw + sw) - (ne + se));
+  float red = max((nw + ne + sw + se) * .03125, 1. / 128.), rcp = 1. / (min(abs(dir.x), abs(dir.y)) + red);
+  dir = clamp(dir * rcp, vec2(-8.), vec2(8.)) * p;
+  vec3 A = .5 * (texture(uCol, uv + dir * (1. / 3. - .5)).rgb + texture(uCol, uv + dir * (2. / 3. - .5)).rgb);
+  vec3 B = A * .5 + .25 * (texture(uCol, uv - dir * .5).rgb + texture(uCol, uv + dir * .5).rgb);
+  float lB = dot(B, L);
+  return lB < lo || lB > hi ? A : B;
+}
 // (printed, it's drawn just as the page is where the picture doesn't reach)
 float bleedOn() { return max(uBleed, uPrint); }
 float D(vec2 uv) { return texture(uDepth, uv).r * uRange; }
@@ -708,7 +725,7 @@ void main() {
   // (but not round the land, bleeding into the page: it has no edge to draw)
   float m0 = texture(uNrm, vUv).a;
   if (sky < .5 && skyN > 0. && !(bleedOn() > .5 && m0 > .1 && m0 < .4)) edge = 1.;
-  vec3 c = texture(uCol, vUv).rgb;
+  vec3 c = uAA > .5 ? fxaa(vUv) : texture(uCol, vUv).rgb;
   vec2 q = gl_FragCoord.xy;
   // (contact: where something stands close in front of a surface within a short reach (a wall's foot on the ground, the
   // eaves over a wall, a step's riser under its tread, a pot on a top), a little shade in the crease. Short, so a broad
@@ -826,7 +843,9 @@ export class Renderer {
   private fb: WebGLFramebuffer | null = null;
   /** drawn multisampled (4×), then resolved into the textures the ink reads */
   private ms: WebGLFramebuffer | null = null; private msBufs: WebGLRenderbuffer[] = [];
-  msaa = true; private col: WebGLTexture | null = null; private nrm: WebGLTexture | null = null; private dep: WebGLTexture | null = null; private size = [0, 0];
+  /** multisampling: off unless asked for (`?msaa`). On a phone it was four fifths of each frame (the telemetry's
+   * profile sweep: 107 ms with it, 23 without); the post pass smooths the edges instead (FXAA) */
+  msaa = false; private col: WebGLTexture | null = null; private nrm: WebGLTexture | null = null; private dep: WebGLTexture | null = null; private size = [0, 0];
   sun = SUN;
   print = false;
   /** what the sun must cover: the middle of the slab (x, z), and how far out from it */
@@ -917,11 +936,11 @@ export class Renderer {
     for (const [k, v] of [[gl.TEXTURE_MIN_FILTER, gl.NEAREST], [gl.TEXTURE_MAG_FILTER, gl.NEAREST], [gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE], [gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE]]) gl.texParameteri(gl.TEXTURE_2D, k, v);
     return t;
   }
-  private colTex(w: number, h: number) {
-    const gl = this.gl, t = gl.createTexture()!;
+  private colTex(w: number, h: number, linear = false) {
+    const gl = this.gl, t = gl.createTexture()!, f = linear ? gl.LINEAR : gl.NEAREST;
     gl.bindTexture(gl.TEXTURE_2D, t);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
-    for (const [k, v] of [[gl.TEXTURE_MIN_FILTER, gl.NEAREST], [gl.TEXTURE_MAG_FILTER, gl.NEAREST], [gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE], [gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE]]) gl.texParameteri(gl.TEXTURE_2D, k, v);
+    for (const [k, v] of [[gl.TEXTURE_MIN_FILTER, f], [gl.TEXTURE_MAG_FILTER, f], [gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE], [gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE]]) gl.texParameteri(gl.TEXTURE_2D, k, v);
     return t;
   }
   /** the vertices drawn: the stone's (fixed till it changes), and what moves */
@@ -950,7 +969,7 @@ export class Renderer {
     const gl = this.gl;
     for (const t of [this.col, this.nrm, this.dep]) if (t) gl.deleteTexture(t);
     if (this.fb) gl.deleteFramebuffer(this.fb);
-    this.col = this.colTex(w, h); this.nrm = this.colTex(w, h); this.dep = this.depthTex(w, h);
+    this.col = this.colTex(w, h, true); this.nrm = this.colTex(w, h); this.dep = this.depthTex(w, h);
     this.fb = gl.createFramebuffer()!;
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.fb);
     gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, this.col, 0);
@@ -1079,7 +1098,7 @@ export class Renderer {
     gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, this.col); gl.uniform1i(P('uCol'), 0);
     gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, this.nrm); gl.uniform1i(P('uNrm'), 1);
     gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, this.dep); gl.uniform1i(P('uDepth'), 2);
-    gl.uniform2f(P('uPx'), 1 / w, 1 / h); gl.uniform1f(P('uRange'), cam.range); gl.uniform1f(P('uPrint'), this.print ? 1 : 0); gl.uniform1f(P('uMarks'), this.marks ? 1 : 0); gl.uniform1f(P('uDpr'), dpr); gl.uniform1f(P('uBleed'), this.bleed ? 1 : 0);
+    gl.uniform2f(P('uPx'), 1 / w, 1 / h); gl.uniform1f(P('uRange'), cam.range); gl.uniform1f(P('uPrint'), this.print ? 1 : 0); gl.uniform1f(P('uMarks'), this.marks ? 1 : 0); gl.uniform1f(P('uDpr'), dpr); gl.uniform1f(P('uBleed'), this.bleed ? 1 : 0); gl.uniform1f(P('uAA'), this.ms ? 0 : 1);
     gl.uniform1f(P('uWorldPx'), (2 * view.zoom) / h); gl.uniform1f(P('uContact'), this.contact ? 1 : 0);
     gl.uniformMatrix3fv(P('uViewRot'), false, cam.rot);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
