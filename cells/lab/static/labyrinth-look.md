@@ -210,6 +210,12 @@ The fixes:
 
 **And where stone fills a bank.** Where what's built fills a bank's face from the lower ground up to the higher (stone built up from below, or a bridge from the stream's bed), the land on both sides now stays flat to it, as it does at a retaining wall (context.ts `sharp`). The ground meets the stone, without a slope running into it or a gully beside it. Wild things (boulders, scrub on the banks and on the open ground) are kept off a cell and its eight neighbours wherever anything is built, paved, a way or a flight's foot, so no shrubs on a stair's head or a boulder against a wall.
 
+**Ways on a bed.** A way laid on the ground was a sheet of flags at its level, floating wherever the land fell away under it (a bank, the stream's edge), and inset from its edges so the land showed between it and a bridge. Now its flags are laid on a bed of masonry:
+- **Flush where it carries on:** it runs right up to what continues at its level: more paving, a court, a bridge's deck or other stone whose top is at its level, a flight's foot.
+- **A kerb elsewhere:** it stops a little short, and its bed shows as a kerb, going down into the land as deep as the land falls away under that edge.
+
+A way across a bank or out to the stream is a built causeway standing on the ground. The terrain's left as it is: the built part answers it.
+
 ## Stage 15: gradual again, the cliffs' shade back (after the phone)
 
 ![Gradual, with the cliffs' shade](labyrinth/look-gradual.jpg)

@@ -1119,13 +1119,37 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
       lathe(pp[0], pp[2], [[0.035, yw - 0.1], [0.035, top + 0.22], [0.045, top + 0.24], [0, top + 0.27]], MAT.wood, 6);
     }
     perf.end(); perf.begin('mesh.build.ground.paving');
-    // (a court's paving, and a way's on the ground: flags laid on the land's level middles)
+    // (a court's paving, and a way's on the ground: flags laid on a bed of masonry, not on the land as a sheet. Where it
+    // meets what carries on at its level (more paving, a court, a bridge's deck or other stone whose top is at its level,
+    // a flight's foot) it runs flush to it; elsewhere it stops a little short, and its bed shows as a kerb, going down
+    // into the land as deep as the land falls away under that edge, so a way across a bank or to the stream's edge is a
+    // built causeway standing on the ground, not a slab floating over it)
     for (let j = B.j0; j <= B.j1; j++) for (let i = B.i0; i <= B.i1; i++) {
       const court = w.courts.has(key(0, i, j)), paved = w.paved(i, j);
       if (!court && !paved) continue;
-      const g = w.ground(i, j), y = g + 0.012, cx = X(i), cz = Z(j), e = (d: number) => { const [a, b] = DIRS[d]; return w.ground(i + a, j + b) === g && (w.courts.has(key(0, i + a, j + b)) || w.paved(i + a, j + b) || w.occupied(g, i + a, j + b)) ? 0 : 0.12; };
+      const g = w.ground(i, j), y = g + 0.012, cx = X(i), cz = Z(j);
+      const carries = (d: number) => { const [a, b] = DIRS[d], x = i + a, z = j + b; return w.ground(x, z) === g && (w.courts.has(key(0, x, z)) || w.paved(x, z) || w.occupied(g, x, z)); };
+      const flush = (d: number) => { const [a, b] = DIRS[d], x = i + a, z = j + b; return carries(d) || w.block(g - 1, x, z) || w.stair(g, x, z) === d || w.passage(g, x, z) >= 0 && w.block(g - 1, x, z); };
+      const e = (d: number) => (flush(d) ? 0 : 0.05);
       cur = { born: -1e3, pivot: 0, how: 1, tone: 0, dress: 0, sel: selected.has(key(g, i, j)) };
       quad([cx + e(2), y, cz + e(3)], [cx + 1 - e(0), y, cz + e(3)], [cx + 1 - e(0), y, cz + 1 - e(1)], [cx + e(2), y, cz + 1 - e(1)], [0, 1, 0], 0.95, MAT.court);
+      // (its bed's sides, along each edge it doesn't carry on across, down into the land under it)
+      for (let d = 0; d < 4; d++) {
+        if (carries(d)) continue;
+        const [a, b] = DIRS[d], [ta, tb] = DIRS[(d + 1) % 4], ox = cx + 0.5 + a * (0.5 - e(d)), oz = cz + 0.5 + b * (0.5 - e(d));
+        const S = 4;
+        // (each end held in from a corner by the inset of the side across it, so the kerbs meet at the corner)
+        const s0 = -0.5 + e((d + 3) % 4), s1 = 0.5 - e((d + 1) % 4);
+        let any = false; const pts: Array<[V3, V3]> = [];
+        for (let q = 0; q <= S; q++) {
+          const s = s0 + ((s1 - s0) * q) / S, px = ox + ta * s, pz = oz + tb * s, land = Y(px + CENTER, pz + CENTER);
+          const bot = Math.min(y - 0.09, land - 0.1);
+          if (land < y - 0.05) any = true;
+          pts.push([[px, y, pz], [px, bot, pz]]);
+        }
+        if (!any) continue;
+        for (let q = 0; q < S; q++) quad(pts[q][1], pts[q + 1][1], pts[q + 1][0], pts[q][0], [a, 0, b], [0.55, 0.55, 0.95, 0.95], MAT.stone);
+      }
     }
     perf.end(); perf.begin('mesh.build.ground.walls');
     // (banks held by walls, where what's beside them is used: context.ts)
