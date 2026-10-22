@@ -27,6 +27,7 @@ import { selectCell, selectMotif, selectStructure, type Selection } from './sele
 import { DIRS } from './model';
 import { Out, POSES, cat, gait, type PoseName } from './catbody';
 import { COATS, Cats, type Cat } from './cats';
+import { perf } from './perf';
 
 const qs = new URLSearchParams(location.search);
 const preview = qs.has('preview'), still = qs.has('still'), instant = qs.has('instant');
@@ -68,7 +69,7 @@ let meshSel = '';
 const selKeys = () => (sel ? new Set(sel.s.cells.map((c) => key(...c))) : new Set<number>());
 /** how long a remesh takes (building the mesh, handing it to the GPU): the last, the slowest, and how many */
 const meshTimes = { last: 0, upload: 0, max: 0, n: 0 };
-function remesh() { const ks = selKeys(), t0 = performance.now(), m = buildMesh(world, plain, ks), t1 = performance.now(); R.upload(m); meshVersion = world.version; meshSel = [...ks].join(','); const t2 = performance.now(); meshTimes.last = t1 - t0; meshTimes.upload = t2 - t1; meshTimes.max = Math.max(meshTimes.max, t1 - t0); meshTimes.n++; }
+function remesh() { const ks = selKeys(), t0 = performance.now(), m = buildMesh(world, plain, ks), t1 = performance.now(); R.upload(m); meshVersion = world.version; meshSel = [...ks].join(','); const t2 = performance.now(); meshTimes.last = t1 - t0; meshTimes.upload = t2 - t1; perf.add('mesh.build', t1 - t0); perf.add('mesh.upload', t2 - t1); perf.tag('remesh'); meshTimes.max = Math.max(meshTimes.max, t1 - t0); meshTimes.n++; }
 
 // ─── how it's seen ───
 const corner = (k: number) => Math.PI / 4 + (k * Math.PI) / 2;
@@ -76,7 +77,8 @@ const view: View = { az: corner(Number(qs.get('turn') ?? 0)), el: Number(qs.get(
 let zoomK = Number(qs.get('zoom') ?? 0.64), azGoal: number | null = null;
 /** the drawing's resolution, as a share of the screen's (the profile sweep tries less) */
 let resScale = 1;
-function resize() {
+function resize() { perf.tag('resize'); perf.time('resize', resizeNow); }
+function resizeNow() {
   const dpr = Math.min(2, devicePixelRatio || 1);
   canvas.width = Math.round(canvas.clientWidth * dpr * resScale); canvas.height = Math.round(canvas.clientHeight * dpr * resScale);
   guide.width = Math.round(guide.clientWidth * dpr); guide.height = Math.round(guide.clientHeight * dpr);
@@ -261,7 +263,7 @@ const bar = document.getElementById('hands')!, sheet = document.getElementById('
  */
 let intent: Intent | null = qs.get('intent') === 'mass' || qs.get('intent') === 'way' ? (qs.get('intent') as Intent) : null;
 function setIntent(v: Intent | null) { intent = v; hint(); }
-const tapNow = (p: Pick) => (intent ? tap(world, p, now(), false, intent) : touch(world, p, now()));
+const tapNow = (p: Pick) => perf.time('gesture.tap', () => (intent ? tap(world, p, now(), false, intent) : touch(world, p, now())));
 function showBrush() {
   document.body.classList.toggle('auto', brush === 'auto');
   for (const b of Array.from(bar.querySelectorAll('button')) as HTMLElement[]) { const on = b.dataset.brush === brush; b.classList.toggle('on', on); b.setAttribute('aria-pressed', String(on)); }
@@ -536,7 +538,8 @@ function lay(built: Op | null) {
   g.laid = sig; g.op = built;
 }
 /** a stroke under the finger (auto's trace, or a run of pieces): its columns, and what it builds, read again */
-function traceStep(cx: number, cy: number, final: boolean) {
+function traceStep(cx: number, cy: number, final: boolean) { perf.time(final ? 'gesture.release' : 'gesture.trace', () => traceStepNow(cx, cy, final)); }
+function traceStepNow(cx: number, cy: number, final: boolean) {
   if (!g?.start) return;
   if (!g.before) {
     // (read against the world as it was before this stroke: a copy, so picking never strikes the stroke's own stone)
@@ -644,7 +647,7 @@ function carveAt(cx: number, cy: number) {
   if (world.ops.length > g.base) world.replaceLast({ cut: g.cut.slice(), why: 'carve' }, now()); else world.apply({ cut: g.cut.slice(), why: 'carve' }, now());
 }
 
-canvas.addEventListener('pointerdown', (e) => {
+canvas.addEventListener('pointerdown', perf.wrap('input.down', (e: PointerEvent) => {
   canvas.setPointerCapture(e.pointerId);
   fingers.set(e.pointerId, { x: e.clientX, y: e.clientY });
   azGoal = null;
@@ -659,8 +662,8 @@ canvas.addEventListener('pointerdown', (e) => {
   const start = pick(e.clientX, e.clientY);
   if (brush !== 'hand') hideAlts();
   g = { id: e.pointerId, start, x0: e.clientX, y0: e.clientY, t0: performance.now(), mode: brush === 'hand' || following ? 'look' : !start ? 'turn' : 'pending', pts: [], base: world.ops.length, seen: new Map(), cut: [], painted: [], cells: [], target: null, cand: '', candPick: null, count: 0, laid: '', said: '', born: 0, rest: [], moved: 0, still: { x: e.clientX, y: e.clientY, t: performance.now(), f: frameNo } };
-});
-canvas.addEventListener('pointermove', (e) => {
+}));
+canvas.addEventListener('pointermove', perf.wrap('input.move', (e: PointerEvent) => {
   const f = fingers.get(e.pointerId);
   if (!f) return;
   const dx = e.clientX - f.x; f.x = e.clientX; f.y = e.clientY;
@@ -686,8 +689,8 @@ canvas.addEventListener('pointermove', (e) => {
   if (g.mode === 'trace' || g.mode === 'run') traceStep(e.clientX, e.clientY, false);
   else if (g.mode === 'carve') carveAt(e.clientX, e.clientY);
   else if (g.mode === 'paint') paintAt(e.clientX, e.clientY);
-});
-const up = (e: PointerEvent) => {
+}));
+const up = perf.wrap('input.up', (e: PointerEvent) => {
   fingers.delete(e.pointerId);
   // (let go near a corner, it settles on it; anywhere else, it stays where it was left)
   if (fingers.size === 0) { const c = corner(Math.round((view.az - Math.PI / 4) / (Math.PI / 2))); azGoal = Math.abs(c - view.az) < 0.22 ? c : null; }
@@ -723,9 +726,9 @@ const up = (e: PointerEvent) => {
   } else if (m === 'trace' || m === 'run') { unselect(); traceStep(e.clientX, e.clientY, true); }
   else if (m === 'carve' || m === 'paint') { unselect(); kept(); }
   g = null;
-};
+});
 canvas.addEventListener('pointerup', up); canvas.addEventListener('pointercancel', up);
-canvas.addEventListener('wheel', (e) => { e.preventDefault(); zoomAt(e.clientX, e.clientY, Math.max(0.06, Math.min(1.3, zoomK * (1 + e.deltaY * 0.001)))); }, { passive: false });
+canvas.addEventListener('wheel', perf.wrap('input.wheel', (e: WheelEvent) => { e.preventDefault(); zoomAt(e.clientX, e.clientY, Math.max(0.06, Math.min(1.3, zoomK * (1 + e.deltaY * 0.001)))); }), { passive: false });
 { const h = qs.get('hand') ?? qs.get('brush'); if (h) setBrush(h); }
 // (for looking at them: `?sheet` opens the piece brush's sheet; `?select=k.i.j` takes up what's there, `&whole` the whole)
 if (qs.has('sheet')) { setBrush('piece'); openSheet(true); }
@@ -855,7 +858,11 @@ const intervals = new Float32Array(600), busy = new Float32Array(600);
 function frame() {
   frameNo++;
   const t = performance.now(), dt = Math.min(0.05, (t - last) / 1000);
-  intervals[frameNo % 600] = t - last; last = t;
+  intervals[frameNo % 600] = t - last;
+  // (the frame before this one, closed now: from its start to this one's, what it did and whatever came in after it
+  // (a pointer's handlers) before this one could begin)
+  perf.frame(last, t - last, busy[(frameNo - 1) % 600]);
+  last = t;
   if (world.version !== meshVersion || [...selKeys()].join(',') !== meshSel) remesh();
   if (preview && !still) view.az += dt * 0.12;
   else if (azGoal !== null) { const k = instant ? 1 : 1 - Math.exp(-dt * 8); view.az += (azGoal - view.az) * k; if (Math.abs(azGoal - view.az) < 1e-4) { view.az = azGoal; azGoal = null; } }
@@ -877,14 +884,14 @@ function frame() {
   { const b = bleedOn && !!world.land; if (b !== R.bleed) { R.bleed = b; setBleed(b); meshVersion = -1; } }
   if (catsOn) {
     catMemory();
-    cats.update(world, dt, !!g && g.mode !== 'turn' && g.mode !== 'look' && g.mode !== 'pending');
-    followCat(dt); showCat(); keepCats(now());
+    perf.time('cats', () => { cats.update(world, dt, !!g && g.mode !== 'turn' && g.mode !== 'look' && g.mode !== 'pending'); followCat(dt); showCat(); keepCats(now()); });
   }
-  moving(now());
+  perf.time('cats.draw', () => moving(now()));
   view.zoom = zoomFit * zoomK;
   // (instant: drawn as if long after, so everything's already risen)
-  R.draw(view, now() + (instant ? 1e3 : 0), Math.min(2, devicePixelRatio || 1));
+  perf.time('draw', () => R.draw(view, now() + (instant ? 1e3 : 0), Math.min(2, devicePixelRatio || 1)));
   // (the guides, only while a finger's down: the stroke traced, in faint ink)
+  perf.begin('overlay');
   g2.clearRect(0, 0, guide.clientWidth, guide.clientHeight);
   // (held still long enough on a stroke, or a tap, that could be read another way: the readings fan out)
   if (g && !fan && !g.offered && fingers.size === 1 && (g.mode === 'trace' || (g.mode === 'pending' && brush === 'auto')) && performance.now() - g.still.t > HOLD) openFan();
@@ -901,8 +908,22 @@ function frame() {
     g2.fillStyle = `rgba(150,128,100,${(0.45 * (1 - p.life / 1.1)).toFixed(3)})`;
     g2.beginPath(); g2.arc(p.x, p.y, p.r, 0, Math.PI * 2); g2.fill();
   }
+  perf.end();
   busy[frameNo % 600] = performance.now() - t;
+  // (what was going on, for telling heavy frames apart)
+  if (g) perf.tag(`gesture:${g.mode}`); if (following) perf.tag('following'); if (fingers.size > 1) perf.tag('two fingers'); if (profiling) perf.tag('profiling');
+  perfMeter();
   requestAnimationFrame(frame);
+}
+// ─── the meter (\`?perf\`): where the last two seconds went, on the screen, each phase's mean per frame; heavy frames counted ───
+const meterEl = qs.has('perf') ? Object.assign(document.createElement('pre'), { id: 'perfmeter' }) : null;
+if (meterEl) { Object.assign(meterEl.style, { position: 'fixed', left: '6px', top: '64px', zIndex: '50', margin: '0', padding: '6px 8px', font: '10px/1.35 ui-monospace,monospace', color: '#2b2420', background: 'rgba(247,242,232,.86)', borderRadius: '6px', pointerEvents: 'none', whiteSpace: 'pre' }); document.body.appendChild(meterEl); }
+let meterAt = 0;
+function perfMeter() {
+  if (!meterEl || performance.now() - meterAt < 250) return;
+  meterAt = performance.now();
+  const r = perf.recent(2), h = perf.heavy[perf.heavy.length - 1];
+  meterEl.textContent = `${r.fps} fps · p95 ${r.p95.toFixed(1)} ms · heavy ${r.heavy}\n` + Object.entries(r.phases).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k.padEnd(8)} ${v.toFixed(2)}`).join('\n') + (h ? `\nlast heavy: ${h.cause} — ${h.why}`.slice(0, 160) : '');
 }
 // ─── telemetry: a double tap on the title copies what drawing costs on this device, to be pasted where it's needed ───
 function telemetry(): string {
@@ -925,6 +946,7 @@ function telemetry(): string {
     view: { zoom: +view.zoom.toFixed(3), el: +view.el.toFixed(3), az: +view.az.toFixed(3), shadows: R.shadows, bleed: R.bleed },
     memory: (performance as unknown as { memory?: { usedJSHeapSize: number } }).memory?.usedJSHeapSize ?? null,
     profile: lastProfile ?? 'none yet (long-press the title to run one)',
+    perf: perf.report(),
   }, null, 1);
 }
 /**
@@ -1071,7 +1093,7 @@ if (qs.has('at')) { const [i, j] = qs.get('at')!.split('.').map(Number); view.ta
 requestAnimationFrame(frame);
 
 (window as unknown as { __labyrinth: unknown }).__labyrinth = {
-  telemetry, profileSweep,
+  telemetry, profileSweep, perf: () => perf.report(), perfReset: () => perf.reset(),
   get world() { return world; }, view, R, pick, onPlane, inStone: (x: number, y: number, z: number) => inStone(world, x, y, z), inLand: (x: number, y: number, z: number) => inLand(world, x, y, z), setHand: (h: Hand | Dressing | Brush) => setBrush(h), setBrush,
   get brush() { return brush; }, get held() { return held; }, get intent() { return intent; }, setIntent,
   cats: () => cats.list.map((c) => ({ name: c.name, coat: COATS[c.coat], doing: c.doing, x: c.x, y: c.y, z: c.z, at: c.at, want: c.want, air: c.air, asleep: c.asleep, call: c.call })), catScreen: (name: string) => { const c = cats.list.find((q) => q.name === name); if (!c) return null; const h = cats.headOf(c); return screenOf(h[0], h[1] - 0.04, h[2]); }, catsHome: () => cats.P?.capacity ?? 0,

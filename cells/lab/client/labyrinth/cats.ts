@@ -25,6 +25,7 @@
 import { hash, seeded, type Rand } from '../kit/rng';
 import { CENTER, DIRS, unkey, type World } from './model';
 import { inStone } from './mesh';
+import { perf } from './perf';
 import { groundY } from './context';
 import { perches, route, reachable, stairY, type Link, type Perches, type Spot } from './perches';
 import { POSES, S, cat as body, gait, look, mix, type Out, type Pose, type PoseName } from './catbody';
@@ -103,7 +104,7 @@ export class Cats {
   /** a new world (or the first): the residents it's home for, where they'd be */
   private begin(w: World) {
     this.seed = hash(w.landSeed || 0, w.seed); this.rng = seeded(hash(this.seed, 4242));
-    this.w = w; this.P = perches(w); this.v = w.version; this.built = this.t; this.stale = false; this.epoch++;
+    this.w = w; this.P = perf.time('cats.perches', () => perches(w)); this.v = w.version; this.built = this.t; this.stale = false; this.epoch++;
     this.stone = this.solidSet(w);
     this.list = []; this.arrived = 0;
     const want = this.P.capacity;
@@ -122,7 +123,7 @@ export class Cats {
   }
   private rebuild() {
     const w = this.w!;
-    this.P = perches(w); this.built = this.t; this.stale = false; this.epoch++;
+    this.P = perf.time('cats.perches', () => perches(w)); this.built = this.t; this.stale = false; this.epoch++;
     for (const c of this.list) {
       if (c.gone) continue;
       const s = this.place(c.at), near = s && Math.hypot(s.x - c.x, s.y - c.y, s.z - c.z) < 0.3;

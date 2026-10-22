@@ -72,6 +72,23 @@ The stream knows which way it runs (the next cell down, carried on its vertices)
 - **Light and sheen:** a little of the sun comes through leaves turned from it, and an olive's leaves are silver at a glance.
 - **Limbs** run from the fork toward the furthest clumps, showing through the gaps.
 
+**Where a frame's time goes** (`perf.ts`). Every frame is kept (the last 900, about fifteen seconds):
+- its interval (from its start to the next frame's) and its time on the CPU;
+- what it spent, by phase: `input` (a pointer's handlers, between frames, put on the frame they held up), `mesh` (build and upload), `cats`, `draw`, `overlay`, `resize`;
+- what it spent by part, inside those: `gesture.trace`, `world.rebuild`, `mesh.build.ground`, `.stone`, `.plants`, `.water`, `.dressing`, `.strokes`, `.sky` (the sky's visibility rays), `cats.perches`;
+- what it counted: worlds made (`world.new`, a gesture's readings), rebuilt, sky rays cast;
+- what was going on (`gesture:trace`, `remesh`, `following`, `two fingers`, `profiling`);
+- the GPU's time for it, per pass (shadow, main, post), where the browser can time it, matched to the frame that issued it;
+- in Chrome, the long animation frame that covered it, and its scripts.
+
+A frame much slower than those round it (more than 1.8 times the median of the last two seconds, and over 34 ms), or with more than 24 ms on the CPU, is a **heavy frame**, kept with its cause:
+- the phase that spent most, with its largest parts;
+- or the GPU's passes;
+- or the browser's scripts;
+- or, if none of those accounts for it, "unaccounted", with what was going on.
+
+`?perf` shows a meter: frames per second, p95 interval, each phase's mean over the last two seconds, and the last heavy frame's cause. `__labyrinth.perf()` returns the whole report, and it's in the telemetry a double tap copies. `node devtools/labyrinth-perf.mjs` runs the page through being left alone, turned, drawn on, tapped, zoomed and a cat followed, and reports each interaction's breakdown and heavy frames (headless Chromium draws in software: read where the time goes, not how much).
+
 Also: **telemetry.** A double tap on the title copies what drawing costs on the device as JSON:
 - frame intervals and CPU time per frame (mean, p50, p95, p99, max);
 - GPU time per pass, where the browser lets it be timed;

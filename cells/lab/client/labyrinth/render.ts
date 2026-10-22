@@ -9,6 +9,7 @@
  */
 import { STROKE_STRIDE } from './strokes';
 import { STRIDE, type Mesh } from './mesh';
+import { perf } from './perf';
 
 export interface View { az: number; el: number; zoom: number; target: [number, number, number] }
 
@@ -866,7 +867,7 @@ export class Renderer {
    * it's come back for; and the CPU's time handing each frame over.
    */
   timing = { gpu: null as null | { shadow: number; main: number; post: number; frames: number }, cpuDraw: 0, frames: 0 };
-  private timer: { ext: { TIME_ELAPSED_EXT: number; GPU_DISJOINT_EXT: number }; pending: Array<{ q: WebGLQuery[] }>; sum: number[]; n: number } | null = null;
+  private timer: { ext: { TIME_ELAPSED_EXT: number; GPU_DISJOINT_EXT: number }; pending: Array<{ q: WebGLQuery[]; frame: number }>; sum: number[]; n: number } | null = null;
   constructor(public canvas: HTMLCanvasElement) {
     const gl = canvas.getContext('webgl2', { antialias: false, preserveDrawingBuffer: true })!;
     if (!gl) throw new Error('no WebGL2');
@@ -996,7 +997,8 @@ export class Renderer {
       if (!gl.getQueryParameter(f.q[2], gl.QUERY_RESULT_AVAILABLE)) break;
       T.pending.shift();
       const ok = !gl.getParameter(T.ext.GPU_DISJOINT_EXT);
-      f.q.forEach((q, k) => { if (ok) T.sum[k] += (gl.getQueryParameter(q, gl.QUERY_RESULT) as number) / 1e6; gl.deleteQuery(q); });
+      const ms = f.q.map((q) => { const v = ok ? (gl.getQueryParameter(q, gl.QUERY_RESULT) as number) / 1e6 : 0; gl.deleteQuery(q); return v; });
+      if (ok) { ms.forEach((v, k) => { T.sum[k] += v; }); perf.gpu(f.frame, ms[0], ms[1], ms[2]); }
       if (ok) T.n++;
     }
     if (T.n >= 30) { this.timing.gpu = { shadow: T.sum[0] / T.n, main: T.sum[1] / T.n, post: T.sum[2] / T.n, frames: T.n }; T.sum = [0, 0, 0]; T.n = 0; }
@@ -1076,7 +1078,7 @@ export class Renderer {
     gl.uniformMatrix3fv(P('uViewRot'), false, cam.rot);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     end();
-    if (timed && qs.length === 3) T!.pending.push({ q: qs });
+    if (timed && qs.length === 3) T!.pending.push({ q: qs, frame: perf.frameId });
     this.timing.cpuDraw = this.timing.cpuDraw * 0.95 + (performance.now() - t0) * 0.05; this.timing.frames++;
     return cam;
   }

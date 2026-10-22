@@ -17,6 +17,7 @@
  * x and z are centred on the slab; y up, the slab's top at 0.
  */
 import { hash } from '../kit/rng';
+import { perf } from './perf';
 import { character, look } from './character';
 import { buildings, opening, underRoof, type Building, type Opening } from './buildings';
 import { BUT, BUTH, BUTW, WT, buttresses, inBlock, outline, reach, wallCell, type Edge } from './form';
@@ -139,10 +140,13 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
     return s;
   };
   const seen = new Map<number, number>();
+  // (what working out the sky's visibility costs, across the whole build: how often, and how long)
+  let skyN = 0, skyMs = 0;
   const skyVis = (p: V3, n: V3) => {
     const id = (((Math.round(p[0] * 8) + 512) * 1024 + Math.round(p[1] * 8) + 512) * 1024 + Math.round(p[2] * 8) + 512) * 729 + ((Math.round(n[0] * 4) + 4) * 9 + Math.round(n[1] * 4) + 4) * 9 + Math.round(n[2] * 4) + 4;
     const had = seen.get(id);
     if (had !== undefined) return had;
+    skyN++; const sky0 = performance.now();
     // (a frame round the normal; rays at two heights round it, eight about each)
     const t = Math.abs(n[1]) < 0.9 ? [0, 1, 0] : [1, 0, 0];
     let a = [t[1] * n[2] - t[2] * n[1], t[2] * n[0] - t[0] * n[2], t[0] * n[1] - t[1] * n[0]]; const al = Math.hypot(a[0], a[1], a[2]) || 1; a = a.map((v) => v / al);
@@ -160,6 +164,7 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
     }
     const v = open / all;
     seen.set(id, v);
+    skyMs += performance.now() - sky0;
     return v;
   };
   const SKYLIT = new Set([MAT.stone, MAT.within, MAT.court, MAT.slab, MAT.tile, MAT.clay, MAT.wood, MAT.door, MAT.lead]);
@@ -431,6 +436,7 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
   };
 
   // ─── the land, and the table it's on ───
+  perf.begin('mesh.build.ground');
   if (w.land) landMesh();
   // ─── the stone, and the table it's on ───
   else {
@@ -463,6 +469,7 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
     for (const [x0, z0, x1, z1] of [[-T, -T, T, za - R], [-T, zb + R, T, T], [-T, za - R, xa - R, zb + R], [xb + R, za - R, T, zb + R]]) quad([x0, -SLAB, z0], [x1, -SLAB, z0], [x1, -SLAB, z1], [x0, -SLAB, z1], [0, 1, 0], 1, MAT.table);
   }
 
+  perf.end(); perf.begin('mesh.build.stone');
   // ─── the hand's stone: blocks and stairs ───
   const ext = w.extent();
   for (let k = 0; k < w.levels; k++) for (let j = ext.j0; j <= ext.j1; j++) for (let i = ext.i0; i <= ext.i1; i++) {
@@ -600,6 +607,7 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
   }
   for (const b of buildings(w).list) if (b.roof) roof(b);
 
+  perf.end(); perf.begin('mesh.build.plants');
   // ─── what grows in the courtyards ───
   const hand = [...[...w.pools.entries()].map(([v, b]) => { const [, i, j] = unkey(v); return { kind: 'pool' as const, i, j, born: b, k: w.ground(i, j) }; }), ...[...w.trees.entries()].filter(([v]) => (w.treeKind.get(v) ?? PLANT.cypress) === PLANT.cypress).map(([v, b]) => { const [k, i, j] = unkey(v); return { kind: 'cypress' as const, i, j, born: b, k }; })];
   // (the hand's other plants, each as it grows (plants.ts); in a planter where it stands on stone)
@@ -632,6 +640,7 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
     else cypress(dc.i, dc.j, dc.k, dc.born);
   }
 
+  perf.end(); perf.begin('mesh.build.water');
   // ─── water falling: from a basin's spout to what's below it, a splash where it lands, a bowl to catch it ───
   for (const f of w.falls) {
     const [a, b] = DIRS[f.d], [ta, tb] = DIRS[(f.d + 1) % 4], cx = X(f.i) + 0.5, cz = Z(f.j) + 0.5, x = f.i + a, z = f.j + b;
@@ -707,6 +716,7 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
     }
   }
 
+  perf.end(); perf.begin('mesh.build.dressing');
   // ─── dressing: parapets (by hand, and along a bridge of its own accord), lanterns and pots ───
   // (first, which edges of which tops have one: open edges, with nothing at that height beyond them)
   const { edges, rails, flowRails, roofed } = parapets(w, plain);
@@ -814,7 +824,10 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
     for (const s of [-0.2, 0.2]) for (let y = k; y < top - 1e-6; y += 0.2) { const y1 = Math.min(top, y + 0.2), c = at((y + y1) / 2, s); box(c[0] - 0.035, c[0] + 0.035, y, y1, c[2] - 0.035, c[2] + 0.035, MAT.wood, 0.85); }
     for (let y = k + 0.28; y < k + l.n + 0.05; y += 0.28) bar(at(y, -0.2), at(y, 0.2), 0.04, 0.04, MAT.wood);
   }
-  return { data: new Float32Array(out), count: out.length / STRIDE, strokes: drawnLand ? strokes(w, drawnLand, skeletons) : new Float32Array(0) };
+  perf.end();
+  const drawn = perf.time('mesh.build.strokes', () => (drawnLand ? strokes(w, drawnLand, skeletons) : new Float32Array(0)));
+  perf.add('mesh.build.sky', skyMs); perf.count('mesh.skyRays', skyN * 16); perf.count('mesh.vertices', out.length / STRIDE);
+  return { data: new Float32Array(out), count: out.length / STRIDE, strokes: drawn };
 
   /**
    * Pergolas, over the places dressed so: posts at the corners of the ground they cover (and along a long side, every

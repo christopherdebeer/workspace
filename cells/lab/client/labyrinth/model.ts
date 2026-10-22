@@ -33,6 +33,7 @@
  * levels goes only as far as `levels`, what's built and the air over it. The slab under it is only as big as it needs to be: what's built, and MARGIN cells more all round, never less
  * than the square it starts as (`extent`). Build at its edge and it grows.
  */
+import { perf } from './perf';
 import { hash } from '../kit/rng';
 import { DOMAIN, LAND, groundOf, makeLand, type Land } from './land';
 import { meet, type Meeting, type Round } from './encounters';
@@ -308,7 +309,7 @@ export class World {
   private now = 0;
   /** the land it's built on (land.ts), or none: the flat slab */
   readonly land: Land | null;
-  constructor(public seed = 1, readonly landSeed = 0) { this.land = landSeed ? makeLand(landSeed) : null; if (this.land) this.rebuild(0); }
+  constructor(public seed = 1, readonly landSeed = 0) { perf.count('world.new'); this.land = landSeed ? makeLand(landSeed) : null; if (this.land) this.rebuild(0); }
   /** the ground's level in a column: 0 on the slab; on the land, its column's (`earth` fills it below that) */
   ground(i: number, j: number) { return this.land ? groundOf(this.land, i, j) : 0; }
   /** ground a way walks on, paved (by column) */
@@ -399,7 +400,8 @@ export class World {
    * The operations replayed into the intended solid, and resolved; then what the hand's pieces make of meeting
    * (`encounters.ts`), worked out on that and laid as operations of their own, and the whole resolved again with them.
    */
-  rebuild(now = 0) {
+  rebuild(now = 0) { perf.count('world.rebuild'); const t0 = performance.now(); try { this.rebuildNow(now); } finally { perf.add('world.rebuild', performance.now() - t0); } }
+  private rebuildNow(now = 0) {
     this.build(this.ops, now);
     const round: Round = { ops: [], found: [], taken: new Set() };
     let met = meet(this, round);

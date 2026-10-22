@@ -208,6 +208,9 @@ await withWood(async (lab) => {
     }
     await q.click('#catfollow'); await q.waitForTimeout(300);
     c.ok('and back to building', !(await L((L) => L.following)));
+    // (telemetry: frames kept with what they spent; a heavy frame, if any, with its cause)
+    const pr = await L((L) => L.perf());
+    c.ok('perf: frames kept, each phase timed (draw, cats), the heavy ones explained', pr.frames > 10 && !!pr.spans.draw && !!pr.spans['cats.draw'] && pr.heavy.every((h) => !!h.cause && !!h.why), { frames: pr.frames, spans: Object.keys(pr.spans), heavy: pr.heavy.slice(-2) });
     await q.close();
     const r = await lab.open('zoom=0.5&story=13&hold=1&catsat=25');
     await r.waitForTimeout(800);
