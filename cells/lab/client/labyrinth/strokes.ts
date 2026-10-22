@@ -138,7 +138,10 @@ export function strokes(w: World, land: StrokeLand, trees: Skeleton[] = []): Flo
         return pts;
       };
       // (the rim)
-      ribbon(out, lineAt(sg.hi, (b) => b.tiers[0].rTop - bevelOf(sg), LIFT), small ? 0.034 : tall ? 0.052 : 0.046, FAM.rim, small ? 0.55 : tall ? 0.92 : 0.8, small ? 0.2 : 0.45, pick);
+      // (the rim, at each block's own top: up and down where a block's sunk under the terrace)
+      const rim: V3[] = [];
+      sg.blocks.forEach((b, q) => { const t0 = b.tiers[0], rr = t0.rTop - bevelOf(sg); rim.push(W(q === 0 ? b.s0 - e0(t0.top) : b.s0, rr, t0.top, 0.012, LIFT), W(q === nB - 1 ? b.s1 + e1(t0.top) : b.s1, rr, t0.top, 0.012, LIFT)); });
+      ribbon(out, rim, small ? 0.034 : tall ? 0.052 : 0.046, FAM.rim, small ? 0.55 : tall ? 0.92 : 0.8, small ? 0.2 : 0.45, pick);
       if (small) continue;
       // (the ledges between its courses, and its foot on the ground below)
       const T = sg.blocks[0].tiers;

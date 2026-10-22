@@ -219,8 +219,14 @@ Offsets are measured out from the edge into the low cell. At a corner of the hig
 
 **Cost:** building the study's mesh with the land bleeding into the page went from about 5.4 s to 0.9 s in node, since the land no longer samples ledges and blocks at every grid point. The ground went from 167k vertices to 158k, and the marks from 123k to 101k.
 
+**Less regular, and lived on.**
+- **Blocks:** longer, 0.45–1.5 cells, and the courses lean further.
+- **Sunk blocks:** now and then a block between a segment's ends has its top 0.06–0.22 under the terrace. The terrace's edge stands over it as a riser of rock, and where neighbouring tops differ, the higher one's side shows over the lower. The rim steps up and down, and the drawing's rim follows each block's own top.
+- **Rubble and scrub from the runs:** fallen rubble at a face's foot; scrub there, on ledges, and along the rim on the terrace over it. It's placed from the cliff's own blocks, so it's never inside the rock (the old cliff-foot boulders could be), and never on what's used or in the water.
+- **The scrub's colour:** the garrigue's grey-green, a brighter green now and then. It used to draw in the darkest leaf kind and read as black specks in shade. It's no longer culled as small on the screen; stones still are.
+
 **Still to come** (from the review's order):
-- rock faces with fewer, larger masses: some blocks' tops a little under the terrace, broken corners, rubble and scrub at feet and in fissures;
+- broken corners at the high ground's corners;
 - transition channels (relief, lighting, pigment, structural ink, detail ink) in place of the one ramp;
 - roof and masonry rebalanced, and trees as unequal masses round their primary branches;
 - immediate feedback separated from rebuilding, and regional rebuilds.

@@ -1163,11 +1163,48 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
       }
     };
     const shrub = (p: V3, s: number, q: number) => {
-      cur = { born: -1e3, pivot: p[1], how: 3 + 0.999 * r(q, 41), tone: r(q, 5), dress: 0, sel: false };
+      // (the scrub of the garrigue: grey-green mostly, a brighter green now and then)
+      leaf = r(q, 43) < 0.3 ? 3 : 1;
+      cur = { born: -1e3, pivot: p[1], how: 3 + 0.999 * r(q, 41), tone: 0.35 + 0.65 * r(q, 5), dress: 0, sel: false };
       lathe(p[0], p[2], Array.from({ length: 6 }, (_, n) => { const t = (n / 5) * Math.PI; return [Math.sin(t) * s * (1 + 0.1 * Math.sin(n * 2.3 + q)), p[1] - 0.02 + s * 0.7 * (1 - Math.cos(t))] as [number, number]; }), MAT.leaves, 8);
+      leaf = 0;
       cur = { born: -1e3, pivot: 0, how: 1, tone: 0.5, dress: 0, sel: false };
     };
+    // (never against what's built, nor on a way: round that it's cleared)
+    const clearedAt = (i: number, j: number, g: number) => [[0, 0], ...DIRS, [1, 1], [1, -1], [-1, 1], [-1, -1]].some(([a, b]) => w.occupied(g, i + a, j + b) || w.occupied(g + 1, i + a, j + b) || w.occupied(g - 1, i + a, j + b) || w.paved(i + a, j + b) || w.way(g, i + a, j + b) || w.stair(g, i + a, j + b) >= 0 || w.stair(g - 1, i + a, j + b) >= 0);
     const E = w.extent();
+    // (at the cliffs (cliffs.ts): rubble fallen at a face's foot, scrub rooted there and on its ledges, now and then a
+    // block's worth; never on what's used, nor in the water)
+    for (const run of runs) for (const sg of run.segs) {
+      if (sg.hi - sg.lo < 0.6) continue;
+      sg.blocks.forEach((b, nb) => {
+        const rr = (...n: number[]) => hash(run.id, Math.round(sg.x * 7), Math.round(sg.z * 7), nb, ...n) / 4294967296;
+        const at2 = (s0: number, off: number, y: number): V3 => { const p = along(sg, s0, off, y); return [p[0] - CENTER, y, p[2] - CENTER]; };
+        const cellOf = (s0: number, off: number) => { const p = along(sg, s0, off, 0); return [Math.floor(p[0]), Math.floor(p[2])] as const; };
+        const [ci, cj] = cellOf((b.s0 + b.s1) / 2, offsetAt(b, sg.lo) + 0.2), out = Math.max(E.i0 - ci, ci - E.i1, E.j0 - cj, cj - E.j1, 0);
+        if (out > 0 && rr(77) > Math.pow(1 - out / DRAWN_MARGIN, 1.5)) return;
+        coarse = out > 0;
+        const lowOk = !land.water.has(cj * 1000 + ci) && bare(ci, cj) && !clearedAt(ci, cj, w.ground(ci, cj));
+        if (lowOk && rr(1) < 0.5) {
+          cur = { born: -1e3, pivot: 0, how: 3 + 0.999 * rr(40), tone: 0.5, dress: 0, sel: false };
+          for (let n = 0, N = 1 + Math.floor(rr(2) * 3); n < N; n++) {
+            const s0 = b.s0 + (b.s1 - b.s0) * rr(3, n), sz = 0.06 + 0.1 * rr(4, n) * (n ? 0.7 : 1);
+            boulder(at2(s0, offsetAt(b, sg.lo) + sz * 0.6 + 0.12 * rr(5, n), sg.lo), sz, Math.floor(rr(6, n) * 1e6));
+          }
+        }
+        if (lowOk && rr(7) < 0.5) for (let n = 0, N = 1 + Math.floor(rr(16) * 3); n < N; n++) shrub(at2(b.s0 + (b.s1 - b.s0) * rr(8, n), offsetAt(b, sg.lo) + 0.14 + 0.15 * rr(9, n), sg.lo), (0.13 + 0.12 * rr(10, n)) * (n ? 0.75 : 1), Math.floor(rr(11, n) * 1e6));
+        // (and along its rim on the terrace over it, where that's open)
+        const [hi0, hj0] = cellOf((b.s0 + b.s1) / 2, -0.2);
+        if (rr(17) < 0.35 && bare(hi0, hj0) && !clearedAt(hi0, hj0, w.ground(hi0, hj0)) && !land.water.has(hj0 * 1000 + hi0)) for (let n = 0, N = 1 + Math.floor(rr(18) * 2); n < N; n++) shrub(at2(b.s0 + (b.s1 - b.s0) * rr(19, n), -0.16 - 0.15 * rr(20, n), sg.hi), (0.12 + 0.1 * rr(21, n)) * (n ? 0.8 : 1), Math.floor(rr(22, n) * 1e6));
+        b.tiers.forEach((t, k) => {
+          if (!k || rr(12, k) > 0.35) return;
+          const up = b.tiers[k - 1].rBot, ledge = t.rTop - bevelOf(sg) - up;
+          if (ledge < 0.05) return;
+          shrub(at2(b.s0 + (b.s1 - b.s0) * rr(13, k), up + ledge * 0.55, t.top), 0.07 + 0.05 * rr(14, k), Math.floor(rr(15, k) * 1e6));
+        });
+      });
+    }
+    coarse = false;
     for (let j = B.j0; j <= B.j1; j++) for (let i = B.i0; i <= B.i1; i++) {
       if (!bare(i, j)) continue;
       const g = w.ground(i, j), q = (j - LAND.j0) * 100 + (i - LAND.i0);
@@ -1176,13 +1213,13 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
       const out = Math.max(E.i0 - i, i - E.i1, E.j0 - j, j - E.j1, 0);
       if (out > 0 && r(q, 77) > Math.pow(1 - out / DRAWN_MARGIN, 1.5)) continue;
       coarse = out > 0;
-      const higher = DIRS.map(([a, b]) => w.ground(i + a, j + b) - g), cliff = higher.findIndex((h) => h >= 2), bank = higher.some((h) => h !== 0);
+      const higher = DIRS.map(([a, b]) => w.ground(i + a, j + b) - g), bank = higher.some((h) => h !== 0);
       const nearRock = Math.abs(i - land.rock[0]) + Math.abs(j - land.rock[1]) <= 1, byWater = DIRS.some(([a, b]) => land.water.has((j + b) * 1000 + i + a));
       // (rocks: at a cliff's foot, on the outcrop, by the stream)
       // (never against what's built, nor on a way: round that it's cleared)
-      const cleared = [[0, 0], ...DIRS, [1, 1], [1, -1], [-1, 1], [-1, -1]].some(([a, b]) => w.occupied(g, i + a, j + b) || w.occupied(g + 1, i + a, j + b) || w.occupied(g - 1, i + a, j + b) || w.paved(i + a, j + b) || w.way(g, i + a, j + b) || w.stair(g, i + a, j + b) >= 0 || w.stair(g - 1, i + a, j + b) >= 0);
-      if (!cleared && ((cliff >= 0 && r(q, 1) < 0.45) || (nearRock && r(q, 6) < 0.7) || (byWater && r(q, 7) < 0.3))) {
-        const [a, b] = cliff >= 0 ? DIRS[cliff] : [r(q, 8) - 0.5, r(q, 9) - 0.5];
+      const cleared = clearedAt(i, j, g);
+      if (!cleared && ((nearRock && r(q, 6) < 0.7) || (byWater && r(q, 7) < 0.3))) {
+        const [a, b] = [r(q, 8) - 0.5, r(q, 9) - 0.5];
         // (each thing on the land marked as such, with its own chance of being drawn where the land bleeds away)
         cur = { born: -1e3, pivot: 0, how: 3 + 0.999 * r(q, 40), tone: 0.5, dress: 0, sel: false };
         boulder(at(i, j, a * 0.28, b * 0.28), 0.16 + 0.14 * r(q, 10), q);
@@ -1245,12 +1282,21 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
           // ground at its segment's end (the next one's starts at the corner), stopped at the next in a corner of it)
           const rIn = k ? b.tiers[k - 1].rBot : Math.min(0, t.rTop - bv);
           if (rc - rIn > 0.004) plane(P(sg, b.s0 - e0(t.top + 1e-3, 0, true), rIn, t.top), P(sg, b.s1 + e1(t.top + 1e-3, 0, true), rIn, t.top), P(sg, b.s1 + e1(t.top, bv, true), rc, t.top), P(sg, b.s0 - e0(t.top, bv, true), rc, t.top), UP, 1, 1);
-          // (the return to the next block along, where one stands forward of the other)
+          // (a block sunk a little under the terrace: the terrace's edge standing over it)
+          if (k === 0 && t.top < sg.hi - 1e-3) plane(P(sg, b.s0, 0.003, sg.hi), P(sg, b.s1, 0.003, sg.hi), P(sg, b.s1, 0.003, t.top), P(sg, b.s0, 0.003, t.top), [oa, 0, ob], 0.95, 0.8);
+          // (the return to the next block along, where one stands forward of the other; and where their tops differ, the
+          // higher one's side over the lower)
           if (!last) {
-            const u = sg.blocks[q + 1].tiers[k];
-            if (Math.abs(u.rTop - t.rTop) + Math.abs(u.rBot - t.rBot) > 0.008) {
-              const fwd = u.rTop + u.rBot > t.rTop + t.rBot, rn: V3 = fwd ? [-ta, 0, -tb] : [ta, 0, tb];
-              plane(P(sg, b.s1, t.rTop - bv, t.top), P(sg, b.s1, u.rTop - bv, t.top), P(sg, b.s1, u.rBot, t.bot), P(sg, b.s1, t.rBot, t.bot), rn, 0.9, foot ? 0.55 : 0.7);
+            const nb = sg.blocks[q + 1], u = nb.tiers[k], yT = Math.min(t.top, u.top);
+            const at = (X: typeof b, tt: typeof t) => (tt.top <= yT + 1e-6 ? tt.rTop - bv : offsetAt(X, yT));
+            const ra = at(b, t), rb2 = at(nb, u);
+            if (Math.abs(rb2 - ra) + Math.abs(u.rBot - t.rBot) > 0.008) {
+              const fwd = rb2 + u.rBot > ra + t.rBot, rn: V3 = fwd ? [-ta, 0, -tb] : [ta, 0, tb];
+              plane(P(sg, b.s1, ra, yT), P(sg, b.s1, rb2, yT), P(sg, b.s1, u.rBot, t.bot), P(sg, b.s1, t.rBot, t.bot), rn, 0.9, foot ? 0.55 : 0.7);
+            }
+            if (Math.abs(u.top - t.top) > 1e-3) {
+              const [H, Ht] = u.top > t.top ? [nb, u] : [b, t], rn: V3 = u.top > t.top ? [-ta, 0, -tb] : [ta, 0, tb];
+              plane(P(sg, b.s1, 0, Ht.top), P(sg, b.s1, Ht.rTop - bv, Ht.top), P(sg, b.s1, offsetAt(H, yT), yT), P(sg, b.s1, 0, yT), rn, 0.95, 0.8);
             }
           }
           // (its ends, where the run ends or goes on at another height: the rock's end, from the edge out to its face)

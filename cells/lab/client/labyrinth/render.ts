@@ -259,8 +259,9 @@ void main() {
   // (a crown cut through more as it's drawn, so its limbs show and it reads as drawn canopy)
   if (vMat < 511.5 && leafCut(vPos, vMat, leafEdge(n) + .32 * (1. - smoothstep(.1, .7, gT)))) discard;
   if (!fur && leftOut(vPos, vU)) discard;
-  // (a stone or a shrub on the land, small on the screen: most of them left out, so a far view isn't peppered)
-  if (!fur && vU >= 3. && vU < 4. && length(fwidth(vPos)) > .04 && fract(vU * 7.31) < smoothstep(.04, .08, length(fwidth(vPos))) * .75) discard;
+  // (a stone on the land, small on the screen: most of them left out, so a far view isn't peppered; not the scrub,
+  // whose clumps are the land's green against the rock)
+  if (!fur && mat != 3 && vU >= 3. && vU < 4. && length(fwidth(vPos)) > .04 && fract(vU * 7.31) < smoothstep(.04, .08, length(fwidth(vPos))) * .75) discard;
   vec3 base; float spec = 0., wrap = 0.;
   // (the surface as the light sees it: the face's own normal, turned by the relief of what it's made of (joints, tiles);
   // and how shut in its little hollows are. The ink still sees the face's own)

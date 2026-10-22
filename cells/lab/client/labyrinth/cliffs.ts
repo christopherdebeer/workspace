@@ -132,8 +132,8 @@ export function cliffs(w: World, B: { i0: number; i1: number; j0: number; j1: nu
         if (wetBelow) for (let q2 = q; q2 < q + n; q2++) back.set(`${es[q2].i}.${es[q2].j}.${e.d}`, S);
         const nT = cuts.length - 1;
         for (let s = 0; s < n - 1e-6;) {
-          let L = ramp(r, 0.4, 1.2);
-          if (n - s - L < 0.3) L = n - s;
+          let L = ramp(r, 0.45, 1.5);
+          if (n - s - L < 0.35) L = n - s;
           const tiers: Tier[] = [];
           // (each course's top edge rounded off by the run's bevel: so a course stands at least that far out of the one
           // over it, or of the terrace's edge)
@@ -143,11 +143,17 @@ export function cliffs(w: World, B: { i0: number; i1: number; j0: number; j1: nu
             const top = cuts[k], bot = cuts[k + 1];
             let rTop: number, rBot: number;
             if (wetBelow) { rTop = k ? rr + bv + ramp(r, 0, 0.04) : rr; rBot = Math.max(rTop, -S + (S * (k + 1)) / nT - ramp(r, 0.02, 0.06)); }
-            else { rTop = k ? rr + bv + ramp(r, 0, 0.08) : rr; rBot = rTop + (small ? 0.01 : ramp(r, 0.03, 0.12)) * (top - bot); }
+            else { rTop = k ? rr + bv + ramp(r, 0, 0.08) : rr; rBot = rTop + (small ? 0.01 : ramp(r, 0.03, 0.14)) * (top - bot); }
             tiers.push({ top, bot, rTop, rBot }); rr = rBot;
           }
           blocks.push({ s0: s, s1: s + L, tiers });
           s += L;
+        }
+        // (the rim broken: now and then a block between the segment's ends its top a little under the terrace, the
+        // terrace's edge standing over it; not at the ends, where it meets the next segment round a corner)
+        if (!small && !wetBelow) for (let q2 = 1; q2 + 1 < blocks.length; q2++) {
+          const t0 = blocks[q2].tiers[0];
+          if (r() < 0.4 && t0.top - t0.bot > 0.45) t0.top -= ramp(r, 0.06, 0.22);
         }
         segs.push({ x: e.sx, z: e.sz, t: [ta, tb], o: [oa, ob], n, hi: e.hi, lo: e.lo, blocks, cells: es.slice(q, q + n).map((x) => [x.i, x.j] as [number, number]), prev: null, next: null, pj: 'open', nj: 'open' });
         q += n;
