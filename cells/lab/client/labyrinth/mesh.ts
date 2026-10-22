@@ -933,6 +933,13 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
     };
     const pts: V3[][] = [], nrm: V3[][] = [];
     for (let a = 0; a <= nx; a++) { pts.push([]); nrm.push([]); for (let b = 0; b <= nz; b++) { pts[a].push(P(a, b)); nrm[a].push(Nrm(a, b)); } }
+    // (how much sky each point of the land sees, for the shade in its recesses, under its shelves and at the foot of its
+    // cliffs: worked out at each point, then softened across its neighbours, so it lies in broad darkenings and not
+    // triangle by triangle over the stepped faces)
+    let sky: number[][] = pts.map((col, a) => col.map((p, b) => 0.25 + 0.75 * skyVis(p, nrm[a][b])));
+    for (let pass = 0; pass < 2; pass++) {
+      sky = sky.map((col, a) => col.map((_, b) => { let t = 0, c = 0; for (let da = -1; da <= 1; da++) for (let db = -1; db <= 1; db++) { const v = sky[a + da]?.[b + db]; if (v !== undefined) { t += v; c++; } } return t / c; }));
+    }
     // (how near the water each point is (in its `tone`): the ground darker and greener where it's wet, at a bank)
     const damp: number[][] = [];
     for (let a = 0; a <= nx; a++) {
@@ -967,7 +974,7 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
       }
       for (const [a, b] of [A, Bv, Cv]) {
         const sn = nrm[a][b], n: V3 = [sn[0] + (fn[0] - sn[0]) * flat, sn[1] + (fn[1] - sn[1]) * flat, sn[2] + (fn[2] - sn[2]) * flat], nl = Math.hypot(...n) || 1;
-        cur.tone = damp[a][b]; vert(pts[a][b], [n[0] / nl, n[1] / nl, n[2] / nl], 1, LANDMAT);
+        cur.tone = damp[a][b]; vert(pts[a][b], [n[0] / nl, n[1] / nl, n[2] / nl], sky[a][b], LANDMAT);
       }
     };
     for (let a = 0; a < nx; a++) for (let b = 0; b < nz; b++) { tri3([a, b], [a, b + 1], [a + 1, b]); tri3([a, b + 1], [a + 1, b + 1], [a + 1, b]); }

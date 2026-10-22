@@ -73,7 +73,7 @@ float reach(vec3 p) {
   float dB = builtD(p), dE = min(min(p.x - uLand.x, uLand.z - p.x), min(p.z - uLand.y, uLand.w - p.z));
   float rag = (bnoise(vec3(p.x * .35, 0., p.z * .35)) - .5) * 2.5;
   // (falling evenly with the distance, so the way to the drawing is as gradual at its start as at its end)
-  return (1. - clamp((dB + rag * .8 - .7) / 7., 0., 1.)) * smoothstep(.2, 3.2, dE + rag * .6);
+  return (1. - clamp((dB + rag * .8 - .7) / 10., 0., 1.)) * smoothstep(.2, 3.2, dE + rag * .6);
 }
 // (the line's reach: much further, thinning out to the land's edge)
 float reachLines(vec3 p) {
@@ -251,15 +251,6 @@ void main() {
     float rate = onIt ? 0. : mat == 3 ? -.07 : mat == 4 ? -.03 : mat == 2 ? .25 : .3;
     // (a little uneven, no more: over a broad fade, patches of more and less picture would lie on it as clouds)
     gT = R0 + (fbm(vec3(at.xz * .9, 5.)) - .5) * .08 * rg + rate * rg;
-    // (the land given to the page in patches that follow it, not an airbrushed halo: each terrace (each level of
-    // ground) a little ahead or behind the next, so a patch ends at a cliff's edge; and broad patches across it; each
-    // patch going over a short way, the patches spread over the whole broad way)
-    if (onIt) {
-      float lv = floor(vPos.y * 3. + .5 - smoothstep(.5, .9, 1. - n.y) * .5);
-      float patchT = (hash(vec3(lv, 11., 3.)) - .5) * .5 + (fbm(vec3(vPos.xz * .45, 9.)) - .5) * .55;
-      gT = .5 + (smoothstep(.0, 1., R0 + patchT * rg) - .5) * 1.0;
-      gT = mix(gT, smoothstep(.3, .62, gT), .7);
-    }
     if (uPaper > .5) gT = .08;
   }
   gDetail = smoothstep(.5, .85, gT);
@@ -461,13 +452,13 @@ void main() {
   float nl = dot(nS, uSun), key = max((nl + wrap) / (1. + wrap), 0.) * sh * mix(.8, 1., cav);
   // (after the mobile studies: the land's rock and the trees' leaves lit in a few flat tones, each plane one tone, the
   // steps between them soft, not a smooth gradient over every facet)
-  if ((mat == 5 && moss) || mat == 3) { float k3 = key * 3.; key = mix(key, (floor(k3) + smoothstep(.35, .65, fract(k3))) / 3., .8); }
+  if ((mat == 5 && moss) || mat == 3) { float k3 = key * 3.; key = mix(key, (floor(k3) + smoothstep(.3, .7, fract(k3))) / 3., .35); }
   // (the sun warm and strong; the sky cooler and quieter from above; what's thrown back warm from below and the sides)
   vec3 SUN = vec3(1., .83, .64) * 3., SKY = vec3(.47, .48, .54) * 1.05, BOUNCE = vec3(.70, .52, .34) * .75;
   float up = nS.y * .5 + .5, seen = vAo;
   vec3 indirect = (SKY * mix(.45, 1., up) + BOUNCE * (1. - up * up)) * seen * mix(.55, 1., seen) * cav;
   // (the land's rock in shade warm, as the studies keep it, not the sky's grey)
-  if (mat == 5 && moss) indirect *= vec3(1.12, 1.02, .88) * mix(1., 1.35, landFeat);
+  if (mat == 5 && moss) indirect *= vec3(1.08, 1.01, .92);
   vec3 c = alb * (indirect + SUN * key);
   // (its sheen: how rough each material is says how wide and how strong; polished marble most, glass, lead; travertine a
   // little, brick and clay hardly; leaves some)

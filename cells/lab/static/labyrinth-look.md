@@ -168,18 +168,19 @@ Past the picture's reach, it's strokes on the paper only.
 
 ![Further](labyrinth/look-lines.jpg)
 
-## Stage 15: patches, not a halo (after the phone)
+## Stage 15: gradual again, the cliffs' shade back (after the phone)
 
-![Patches, not a halo](labyrinth/look-patch.jpg)
+![Gradual, with the cliffs' shade](labyrinth/look-gradual.jpg)
 
-The phone, before and after stage 14, showed three things still keeping it from the studies:
-- the painted area ending in a soft, even oval round what's built, which reads as an airbrushed halo;
-- the drawn cliffs' rims carrying rows of evenly spaced short hachures, which read as combs at that size;
-- the drawn trees heavier than the terrain round them.
+Two regressions, reported from the phone:
+- **Cliffs went flat.** Taking the land out of the baked sky visibility (to rid it of a facet pattern) took away all its shade in recesses, under shelves and at cliffs' feet. The flat-tone banding and a brightened rock shade flattened what was left.
+- **The transition went sharp.** The terrace-by-terrace patches of stage 15's first try made a halo'd, sharp edge to the paper.
 
-- **Patches:** the land goes to the page in patches that follow it. Each level of ground is a little ahead or behind the next, so a patch ends at a cliff's edge, and broad patches run across it. Each patch goes over a short way, softly, while the patches are spread over the whole broad way. So the painted area ends in pieces of terrace, as the material-to-paper study's colour does, not a gradient.
-- **No combs:** hachures thin out hard as cells get small on the screen. At the phone's play view a drawn cliff is its rim, its foot and a joint or two.
-- **Lighter trees:** in the drawing, a tree's leaf marks go as it gets small, and its crown's outline is lighter.
+The fixes:
+- **Shade back, softened:** the land has its sky visibility again, worked out at each point of its grid and softened across its neighbours (two passes), so it lies in broad darkenings, not triangle by triangle.
+- **Rock shade restored:** its shade is back to nearly as it was, and the banding is mostly gone (a light step only).
+- **No patches:** the fade is one smooth ramp again, now over about ten cells from what's built.
+- **Kept from the first try:** combs gone (hachures thin hard at small sizes) and drawn trees lighter.
 
 ## Stage 14: after the mobile studies
 
