@@ -29,7 +29,10 @@ import { retaining } from './context';
 import { CENTER, DIRS, unkey, type World } from './model';
 
 /** why a mark is there */
-export const FAM = { rim: 0, hachure: 1, bedding: 2, fracture: 3, contact: 4, current: 5, bank: 6, fall: 7, impact: 8, tread: 9, string: 10, edge: 11, joint: 12, foot: 13 } as const;
+export const FAM = { rim: 0, hachure: 1, bedding: 2, fracture: 3, contact: 4, current: 5, bank: 6, fall: 7, impact: 8, tread: 9, string: 10, edge: 11, joint: 12, foot: 13, branch: 14 } as const;
+/** a tree's skeleton, for its branch lines: each line of it (trunk, stems, limbs) foot to tip, how thick at its foot,
+ * and its chance of being left out where the drawing thins (the tree's own, so its lines go with it) */
+export interface Skeleton { lines: V3[][]; girth: number; pick: number }
 /**
  * A mark's vertex: its centre line's point (x, y, z); the way across it (x, y, z) and its half-width there at its
  * fullest, and how much of that its taper leaves here; which side of the centre (-1, 1); along it (0..1); its family +
@@ -37,7 +40,7 @@ export const FAM = { rim: 0, hachure: 1, bedding: 2, fracture: 3, contact: 4, cu
  * width on the screen by its family, so a mark that matters holds at any distance, its taper kept)
  */
 export const STROKE_STRIDE = 13;
-type V3 = [number, number, number];
+export type V3 = [number, number, number];
 
 /** the land as drawn: its height at a point (grid units, as mesh.ts lays it), and the box of cells it's drawn over */
 export interface StrokeLand {
@@ -83,8 +86,30 @@ const LIFT = 0.02;
 /** how far into each cell a drop's band reaches (land.ts: the flat middle is FLAT of the half-width) */
 const BAND = 0.31;
 
-export function strokes(w: World, land: StrokeLand): Float32Array {
+/**
+ * A branch line: through a tree's skeleton, its side turned to the eye when it's drawn (its tangent carried where a
+ * mark's side is, render.ts turns it), thinning from foot to tip
+ */
+function branch(out: number[], pts: V3[], w0: number, w1: number, pick: number) {
+  if (pts.length < 2) return;
+  const V = (i: number, s: number) => {
+    const a = pts[Math.max(0, i - 1)], b = pts[Math.min(pts.length - 1, i + 1)], t = i / (pts.length - 1), p = pts[i];
+    const tx = b[0] - a[0], ty = b[1] - a[1], tz = b[2] - a[2], tl = Math.hypot(tx, ty, tz) || 1;
+    return [p[0], p[1], p[2], tx / tl, ty / tl, tz / tl, (w0 + (w1 - w0) * t) / 2, 1, s, t, FAM.branch + 0.8, 0.12, pick];
+  };
+  for (let i = 0; i < pts.length - 1; i++) { const a = V(i, -1), b = V(i, 1), c = V(i + 1, 1), d = V(i + 1, -1); out.push(...a, ...b, ...c, ...a, ...c, ...d); }
+}
+
+export function strokes(w: World, land: StrokeLand, trees: Skeleton[] = []): Float32Array {
   const out: number[] = [];
+  // ─── trees: their trunks and limbs, the drawing's branch lines (its crown's outline is the post pass's, lightly) ───
+  for (const t of trees) for (const l of t.lines) {
+    // (a smooth line through the skeleton's points, a few between each)
+    const pts: V3[] = [];
+    for (let q = 0; q + 1 < l.length; q++) for (let u = 0; u < 3; u++) { const f = u / 3, a = l[q], b = l[q + 1]; pts.push([a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f, a[2] + (b[2] - a[2]) * f]); }
+    pts.push(l[l.length - 1]);
+    branch(out, pts, t.girth * 1.6, t.girth * 0.5, t.pick);
+  }
   if (!w.land) return new Float32Array(0);
   const { Y, B, bed } = land, held = retaining(w), wet = (i: number, j: number) => !!w.land?.water.has(j * 1000 + i);
   const at = (gx: number, gz: number, lift = LIFT): V3 => [gx - CENTER, Y(gx, gz) + lift, gz - CENTER];

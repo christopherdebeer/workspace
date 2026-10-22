@@ -168,6 +168,31 @@ Past the picture's reach, it's strokes on the paper only.
 
 ![Further](labyrinth/look-lines.jpg)
 
+## Stage 13: silhouettes, within the budget
+
+![Forms: angular cliffs, branching trees](labyrinth/look-forms.jpg)
+
+![The same, drawn](labyrinth/look-formsprint.jpg)
+
+After the second set of studies (geology, form before texture; the olive, render to drawing), and Astra's note on spending detail where it changes recognition, depth or silhouette on a phone. First step: rebuild the cliff and tree silhouettes within the existing triangle budget. The study's mesh went from 317k to 322k vertices.
+
+- **Cliffs: deliberate planes, not rounded geometry.** In the same height grid:
+  - each bed is a shelf with a sharp lip and a steep riser under it (broad treads, not rounded steps);
+  - along the face, the rock is in blocks of unequal width (0.4 to 0.9 of a cell), each set a little forward or back of the next, so the face is a few angular planes with joints between;
+  - steep triangles are lit as the planes they are (their own normal), gentle ground smooth across them.
+- **The material quieter:** the shader no longer lays a bedding course on every bed and a joint on every block (they read as masonry over the new planes). A bedding line now shows here and there, broken, with a few fractures, and the per-bed normal turn is reduced, since the geometry carries the planes.
+- **Trees: a skeleton and a few clusters** (plants.ts `clusters`). Limbs go out from the fork, each bending up and out to its own end, with a side branch now and then; the leaves are gathered at each end in a cluster of four or five clumps, wider than tall, with sky between the clusters.
+  - **Olive:** a short trunk that twists as it rises, forking low into two or three limbs; now and then a second stem with a cluster of its own.
+  - **Pine:** a tall, slightly crooked trunk with four or five limbs spreading to flat pads, now and then a lower tier on a long limb.
+  - Each cluster is lit as one mass round its own middle, and each clump's envelope is lumpy, not a ball. About the same number of clumps as before.
+- **Branch lines:** each tree's skeleton (trunk, stems, limbs) is laid as strokes. The ribbon carries its tangent, and the stroke shader turns it across to face the eye. These lines go with their tree (left out by the tree's own chance) and show through the crown's gaps. In the drawing, a tree is its branching first and its crown's outline second.
+
+Next, in Astra's order:
+1. a small, coherent stone, roof and foliage material set;
+2. lighting and contact from cached information;
+3. sparse structural drawing over coarse opaque surfaces;
+4. simplification by projected size for geometry, materials and strokes.
+
 ## Stage 12: pass 1, the drawing on its own
 
 ![The drawing on its own: print, all material colour off (wide, close, turned, far side, far)](labyrinth/look-p1print.jpg)

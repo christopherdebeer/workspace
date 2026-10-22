@@ -365,15 +365,19 @@ void main() {
     float bedV = bedR + (hash(vec3(colI, floor(bedR), 6.)) - .5) * .2, bedF = fract(bedV), bedI = floor(bedV);
     vec3 rock = mix(vec3(.80, .76, .68), vec3(.88, .85, .78), hash(vec3(bedI, colI, 1.)) * .7 + .3 * rough);
     float fr = min(fract(cc), 1. - fract(cc)) / 1.3;
-    rock *= 1. - .1 * (1. - smoothstep(.0, .06, bedF)) - (.07 + .1 * hash(vec3(bedI, colI, 9.))) * (1. - smoothstep(.0, .03, fr));
+    // (the geometry carries the planes now (mesh.ts: beds and blocks); the material only a little more: a bedding line
+    // here and there, broken, and a few fractures, not a course on every bed and a joint on every block, which read as
+    // masonry)
+    float bedOn = step(.55, noise(vec3(dot(vPos.xz, con) * .9, bedI * 1.7, 3.))), frOn = step(.62, hash(vec3(bedI, colI, 9.)));
+    rock *= 1. - .1 * (1. - smoothstep(.0, .05, bedF)) * bedOn - .14 * (1. - smoothstep(.0, .025, fr)) * frOn;
     rock = mix(rock, vec3(.62, .58, .50), .25 * smoothstep(.6, .9, fbm(vPos * 1.7 + 4.)));
     rock *= 1. - .28 * wetv;
     base = mix(soil, rock, cliff);
     plain = mix(vec3(.72, .67, .52), vec3(.84, .80, .72), cliff);
     // (the beds' faces turned a little each, the bedding lines and fractures cut in, for the light)
     float kL = keep(6.);
-    nS = normalize(n + (vec3(con.x, 0., con.y) * (hash(vec3(bedI, 7., 2.)) - .5) * .5 + vec3(0., 1., 0.) * (smoothstep(.0, .12, bedF) - .5) * .35 + vec3(con.x, 0., con.y) * sign(fract(cc) - .5) * (1. - smoothstep(.0, .05, fr)) * .5) * cliff * kL);
-    cav = 1. - cliff * (.3 * (1. - smoothstep(.0, .09, bedF)) + .2 * (1. - smoothstep(.0, .035, fr)));
+    nS = normalize(n + (vec3(con.x, 0., con.y) * (hash(vec3(bedI, 7., 2.)) - .5) * .18 + vec3(con.x, 0., con.y) * sign(fract(cc) - .5) * (1. - smoothstep(.0, .05, fr)) * .4 * frOn) * cliff * kL);
+    cav = 1. - cliff * (.22 * (1. - smoothstep(.0, .07, bedF)) * bedOn + .2 * (1. - smoothstep(.0, .035, fr)) * frOn);
   }
   else if (mat == 5) base = travertine(vPos * .8 + 11., .5) * 1.03;
   else if (mat == 8) {
@@ -619,22 +623,24 @@ out vec4 o; void main() { if (pierced(vPos, normalize(vNrm), vMat) || (vMat < 51
  */
 const STROKE_VS = `#version 300 es
 layout(location=0) in vec3 aPos; layout(location=1) in vec3 aSide; layout(location=2) in vec2 aHW; layout(location=3) in vec2 aSA; layout(location=4) in vec3 aFam;
-uniform mat4 uVP; uniform vec2 uView; uniform float uDpr;
+uniform mat4 uVP; uniform vec2 uView; uniform float uDpr; uniform vec3 uDir;
 out vec3 vPos; out vec2 vSA; out vec3 vFam; out float vKeep;
 // (the least a mark of each family is on the screen, in the page's own pixels, so the land's structure holds at any
 // distance: a rim most; a foot, a fracture, a contact, a way's edge, a flight's string next; the rest less)
 float least(float f) {
-  return f < .5 ? 2.2 : f < 1.5 ? 1. : f < 2.5 ? 1.15 : f < 4.5 ? 1.5 : f < 5.5 ? 1.1 : f < 6.5 ? 1.3 : f < 8.5 ? 1. : f < 9.5 ? 1.1 : f < 11.5 ? 1.4 : f < 12.5 ? .9 : 1.5;
+  return f < .5 ? 2.2 : f < 1.5 ? 1. : f < 2.5 ? 1.15 : f < 4.5 ? 1.5 : f < 5.5 ? 1.1 : f < 6.5 ? 1.3 : f < 8.5 ? 1. : f < 9.5 ? 1.1 : f < 11.5 ? 1.4 : f < 12.5 ? .9 : f < 13.5 ? 1.5 : 1.3;
 }
 void main() {
   float fam = floor(aFam.x + .001);
+  // (a branch line carries its tangent where a mark carries its side: its side is across it, turned to the eye)
+  vec3 side = fam > 13.5 && fam < 14.5 ? normalize(cross(aSide, uDir) + vec3(1e-4)) : aSide;
   // (how many of the page's pixels a cell is, from the camera; and how wide this mark would be there)
   vec2 ux = (uVP * vec4(1., 0., 0., 0.)).xy * .5 * uView, uz = (uVP * vec4(0., 0., 1., 0.)).xy * .5 * uView;
   float cellPx = max(length(ux), length(uz)) / uDpr;
-  vec4 c0 = uVP * vec4(aPos, 1.), c1 = uVP * vec4(aPos + aSide * aHW.x, 1.);
+  vec4 c0 = uVP * vec4(aPos, 1.), c1 = uVP * vec4(aPos + side * aHW.x, 1.);
   float px = length((c1.xy - c0.xy) * .5 * uView);
   float k = min(4., max(1., least(fam) * uDpr * .5 / max(px, 1e-3)));
-  vec3 p = aPos + aSide * aHW.x * aHW.y * aSA.x * k;
+  vec3 p = aPos + side * aHW.x * aHW.y * aSA.x * k;
   // (the detail (hachures, bedding, current, rings, treads, joints) thinned as it gets small, so a far view simplifies
   // and keeps its structure: whole marks left out, by their pick)
   bool detail = (fam > .5 && fam < 2.5) || (fam > 4.5 && fam < 5.5) || (fam > 7.5 && fam < 9.5) || (fam > 11.5 && fam < 12.5);
@@ -652,7 +658,8 @@ float noise(vec3 x) { vec3 i = floor(x), f = fract(x); f = f * f * (3. - 2. * f)
              mix(mix(hash(i + vec3(0,0,1)), hash(i + vec3(1,0,1)), f.x), mix(hash(i + vec3(0,1,1)), hash(i + vec3(1,1,1)), f.x), f.y), f.z); }
 void main() {
   float across = vSA.x, fam = floor(vFam.x + .001), weight = fract(vFam.x + .001), persist = vFam.y, pick = vFam.z;
-  if (pick > reachLines(vPos) * 1.3 - .05 || pick > vKeep) discard;
+  // (a branch line goes with its tree: left out where the tree is, by the tree's own chance)
+  if (fam > 13.5 && fam < 14.5 ? pick > reachLines(vPos) * 1.25 - .08 : (pick > reachLines(vPos) * 1.3 - .05 || pick > vKeep)) discard;
   float R0 = reach(vPos), t = R0 + (noise(vec3(vPos.xz * .9, 5.)) - .5) * .08 * min(1., R0 * 4.), drawn = 1. - smoothstep(.05, .9, t);
   float aa = max(fwidth(across), 1e-4);
   float cov = (1. - smoothstep(1. - aa, 1. + aa * .5, abs(across))) * min(1., 2. / aa);
@@ -1022,7 +1029,7 @@ export class Renderer {
     if (this.scount) {
       gl.useProgram(this.stroke);
       const S = (n: string) => gl.getUniformLocation(this.stroke, n);
-      gl.uniformMatrix4fv(S('uVP'), false, cam.vp); gl.uniform1f(S('uMarks'), this.marks ? 1 : 0); gl.uniform2f(S('uView'), w, h); gl.uniform1f(S('uDpr'), dpr);
+      gl.uniformMatrix4fv(S('uVP'), false, cam.vp); gl.uniform1f(S('uMarks'), this.marks ? 1 : 0); gl.uniform2f(S('uView'), w, h); gl.uniform1f(S('uDpr'), dpr); gl.uniform3fv(S('uDir'), cam.dir);
       gl.uniform1f(S('uBleed'), this.bleed ? 1 : 0); gl.uniform1f(S('uPaper'), this.print ? 1 : 0); gl.uniform4fv(S('uLand'), this.landBox); this.bindFocus(this.stroke);
       gl.bindVertexArray(this.svao);
       gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA); gl.depthMask(false); gl.disable(gl.CULL_FACE);

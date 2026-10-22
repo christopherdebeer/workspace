@@ -22,7 +22,7 @@ import { buildings, opening, underRoof, type Building, type Opening } from './bu
 import { BUT, BUTH, BUTW, WT, buttresses, inBlock, outline, reach, wallCell, type Edge } from './form';
 import { CENTER, DECK, DIRS, DRESS, PLANT, key, soffit as flightSoffit, unkey, type Span, type World } from './model';
 import { climb, grow, growths } from './plants';
-import { strokes, type StrokeLand } from './strokes';
+import { strokes, type Skeleton, type StrokeLand } from './strokes';
 import { DOMAIN, LAND, noise2, surfaceY } from './land';
 import { groundY, retaining } from './context';
 
@@ -109,6 +109,8 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
   /** how a cell's dressed: the rules' dressing and the hand's (`plain`: the hand's alone) */
   const dressed = (k: number, i: number, j: number) => look(w, k, i, j, plain);
   const out: number[] = [];
+  /** each tree's skeleton, for the drawing's branch lines (strokes.ts) */
+  const skeletons: Skeleton[] = [];
   /** making what's out past what's shown of the land, only drawn there: made more simply */
   let coarse = false;
   /** the land as it's drawn, for the drawing's marks to be laid on (landMesh) */
@@ -812,7 +814,7 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
     for (const s of [-0.2, 0.2]) for (let y = k; y < top - 1e-6; y += 0.2) { const y1 = Math.min(top, y + 0.2), c = at((y + y1) / 2, s); box(c[0] - 0.035, c[0] + 0.035, y, y1, c[2] - 0.035, c[2] + 0.035, MAT.wood, 0.85); }
     for (let y = k + 0.28; y < k + l.n + 0.05; y += 0.28) bar(at(y, -0.2), at(y, 0.2), 0.04, 0.04, MAT.wood);
   }
-  return { data: new Float32Array(out), count: out.length / STRIDE, strokes: drawnLand ? strokes(w, drawnLand) : new Float32Array(0) };
+  return { data: new Float32Array(out), count: out.length / STRIDE, strokes: drawnLand ? strokes(w, drawnLand, skeletons) : new Float32Array(0) };
 
   /**
    * Pergolas, over the places dressed so: posts at the corners of the ground they cover (and along a long side, every
@@ -894,17 +896,26 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
   function landMesh() {
     const land = w.land!, B = drawnBox(w), x0 = B.i0, x1 = B.i1 + 1, z0 = B.j0, z1 = B.j1 + 1, RES = (x1 - x0) * (z1 - z0) > 500 ? 3 : 4;
     const Y0 = (gx: number, gz: number) => groundY(w, Math.min(x1 - 1e-4, Math.max(x0, gx)), Math.min(z1 - 1e-4, Math.max(z0, gz)));
-    // (where it's steep (a cliff, a bank's face), the rock in its beds: the height stepped into ledges a third of a level
-    // thick, each ledge's lip a little rounded, so a cliff is broken by shelves and overhang-like lips, not a smooth
-    // sheet; where it's level (where things are built), the ground as it is)
+    // (where it's steep (a cliff, a bank's face), the rock in its beds and its blocks, after the geological studies: form
+    // before texture. Each bed a shelf with a sharp lip and a steep riser under it (broad treads, not rounded steps);
+    // and along the face, the rock in blocks of unequal width, each set a little forward or back of the next, so the
+    // face is a few angular planes with joints between, not one rounded sheet. Where it's level (where things are
+    // built), the ground as it is)
     const bedAt = (gx: number, gz: number) => 0.34 * (0.85 + 0.3 * noise2(land.seed, gx * 0.7 + 3.1, gz * 0.7 - 1.7));
     const Y = (gx: number, gz: number) => {
-      const y = Y0(gx, gz), e = 0.18, sl = Math.hypot(Y0(gx + e, gz) - Y0(gx - e, gz), Y0(gx, gz + e) - Y0(gx, gz - e)) / (2 * e);
+      const e = 0.18, ddx = Y0(gx + e, gz) - Y0(gx - e, gz), ddz = Y0(gx, gz + e) - Y0(gx, gz - e), sl = Math.hypot(ddx, ddz) / (2 * e);
       const steep = Math.min(1, Math.max(0, (sl - 0.9) / 1.4));
-      if (steep <= 0) return y;
+      if (steep <= 0) return Y0(gx, gz);
+      // (the block it's in, along the face: its joint lines square to the face, the blocks 0.4 to 0.9 of a cell wide;
+      // the block set forward or back by sampling the drop that much further out or in)
+      const fl0 = Math.hypot(ddx, ddz) || 1, fx = -ddx / fl0, fz = -ddz / fl0, along = gx * -fz + gz * fx;
+      const yb = Y0(gx, gz), bed0 = bedAt(gx, gz), kb = Math.floor(yb / bed0);
+      const u = along * 1.6 + noise2(land.seed + 7, kb * 0.37, along * 0.3) * 1.4, blk = Math.floor(u);
+      const push = ((hash(land.seed, blk, kb, 77) / 4294967296) - 0.5) * 0.2 * steep;
+      const y = Y0(gx + fx * push, gz + fz * push);
       const bed = bedAt(gx, gz), f = y / bed, fl = Math.floor(f), t = f - fl;
-      const ledge = (fl + (t < 0.35 ? 0 : t > 0.7 ? 1 : (t - 0.35) / 0.35)) * bed;
-      return y + (ledge - y) * steep * 0.85;
+      const ledge = (fl + (t < 0.55 ? 0 : t > 0.78 ? 1 : (t - 0.55) / 0.23)) * bed;
+      return y + (ledge - y) * steep * 0.9;
     };
     cur = { born: -1e3, pivot: 0, how: 1, tone: 0.5, dress: 0, sel: false };
     const Eo = w.extent();
@@ -932,8 +943,19 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
         damp[a].push(Math.max(0, 1 - d / 1.1) ** 1.5);
       }
     }
-    const v = (a: number, b: number, ao = 1) => { cur.tone = damp[a][b]; vert(pts[a][b], nrm[a][b], ao, LANDMAT); };
-    for (let a = 0; a < nx; a++) for (let b = 0; b < nz; b++) { v(a, b); v(a, b + 1); v(a + 1, b); v(a, b + 1); v(a + 1, b + 1); v(a + 1, b); }
+    // (where it's steep, each triangle lit as the plane it is (a cliff's faces flat, their edges crisp); where it's
+    // gentle, smooth across them)
+    const tri3 = (A: [number, number], Bv: [number, number], Cv: [number, number]) => {
+      const p0 = pts[A[0]][A[1]], p1 = pts[Bv[0]][Bv[1]], p2 = pts[Cv[0]][Cv[1]];
+      const ux = p1[0] - p0[0], uy = p1[1] - p0[1], uz = p1[2] - p0[2], vx = p2[0] - p0[0], vy = p2[1] - p0[1], vz = p2[2] - p0[2];
+      let fn: V3 = [uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx]; const fl = Math.hypot(...fn) || 1; fn = [fn[0] / fl, fn[1] / fl, fn[2] / fl]; if (fn[1] < 0) fn = [-fn[0], -fn[1], -fn[2]];
+      const flat = Math.min(1, Math.max(0, (0.82 - fn[1]) / 0.2));
+      for (const [a, b] of [A, Bv, Cv]) {
+        const sn = nrm[a][b], n: V3 = [sn[0] + (fn[0] - sn[0]) * flat, sn[1] + (fn[1] - sn[1]) * flat, sn[2] + (fn[2] - sn[2]) * flat], nl = Math.hypot(...n) || 1;
+        cur.tone = damp[a][b]; vert(pts[a][b], [n[0] / nl, n[1] / nl, n[2] / nl], 1, LANDMAT);
+      }
+    };
+    for (let a = 0; a < nx; a++) for (let b = 0; b < nz; b++) { tri3([a, b], [a, b + 1], [a + 1, b]); tri3([a, b + 1], [a + 1, b + 1], [a + 1, b]); }
     cur.tone = 0;
     // (its sides: rock, down from its edge to the table; bleeding into the page, after Taohua, neither: the land's
     // ground is all there is of it)
@@ -1528,7 +1550,9 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
   function crownClump(c: { x: number; y: number; z: number; r: number }, C: V3, R: number) {
     const SEG = coarse ? 7 : 11, NR = coarse ? 5 : 8, rings = Array.from({ length: NR }, (_, n) => { const t = (n / (NR - 1)) * Math.PI; return [Math.sin(t) * c.r * (1 + 0.07 * Math.sin(n * 2.1 + c.x * 7)), c.y - c.r * 0.5 + c.r * 0.9 * (1 - Math.cos(t)), t] as [number, number, number]; });
     const at = (q: number, s: number) => {
-      const [r, y, t] = rings[q], g = (s / SEG) * Math.PI * 2, p: V3 = [c.x + Math.cos(g) * r, y, c.z + Math.sin(g) * r];
+      // (its envelope lumpy, not a ball: each point pushed out or in a little, the same at the seam)
+      const [r0, y, t] = rings[q], g = (s / SEG) * Math.PI * 2, lump = 1 + 0.22 * (noise2(17, c.x * 9 + Math.cos(g) * 1.3, c.z * 9 + Math.sin(g) * 1.3 + q * 0.7) - 0.5) * Math.sin(t), r = r0 * lump;
+      const p: V3 = [c.x + Math.cos(g) * r, y, c.z + Math.sin(g) * r];
       const own: V3 = [Math.cos(g) * Math.sin(t), -Math.cos(t), Math.sin(g) * Math.sin(t)];
       const m: V3 = [p[0] - C[0], (p[1] - C[1]) * 1.5, p[2] - C[2]], ml = Math.hypot(...m) || 1;
       const n: V3 = [own[0] * 0.5 + (m[0] / ml) * 0.5, own[1] * 0.5 + (m[1] / ml) * 0.5, own[2] * 0.5 + (m[2] / ml) * 0.5], nl = Math.hypot(...n) || 1;
@@ -1551,24 +1575,24 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
     cur = { born, pivot: k, how, tone: 0.5, dress: 0, sel: selected.has(key(k, i, j)) };
     trunkOf(g.trunk, g.girth);
     for (const st of g.stems ?? []) trunkOf(st, g.girth * 0.7);
-    // (its limbs: from where the trunk forks out toward its furthest clumps, most of the way, so where the crown's open
-    // they show through it, dark)
-    const fork = g.trunk[g.trunk.length - 1];
-    if (fork && g.crown.length > 3) {
-      const far = [...g.crown].sort((p, q) => Math.hypot(q.x - fork[0], q.z - fork[2]) - Math.hypot(p.x - fork[0], p.z - fork[2])).slice(0, g.kind === PLANT.pine ? 5 : 4);
-      for (const c of far) {
-        const e: [number, number, number] = [fork[0] + (c.x - fork[0]) * 0.75, fork[1] + (c.y - fork[1]) * 0.75 - 0.04, fork[2] + (c.z - fork[2]) * 0.75];
-        const m: [number, number, number] = [(fork[0] + e[0]) / 2, (fork[1] + e[1]) / 2 + 0.06, (fork[2] + e[2]) / 2];
-        trunkOf([fork, m, e], g.girth * 0.42);
-      }
-    }
+    // (its limbs: the skeleton the crown hangs on (plants.ts), thinner as they go, showing dark where the crown's open)
+    for (const l of g.limbs ?? []) trunkOf(l, g.girth * (l.length > 2 ? 0.5 : 0.32));
+    // (and its skeleton for the drawing: its lines, and the chance it's left out where the drawing thins (its \`how\`))
+    const pick = how >= 4 && how < 5 ? (((how - 4) * 10000) % 1) / 0.9 : 0;
+    skeletons.push({ lines: [g.trunk, ...(g.stems ?? []), ...(g.limbs ?? [])].map((l) => l.map(([x, y, z]) => [x, y, z] as V3)), girth: g.girth, pick });
     leaf = g.kind === PLANT.pine ? 2 : 1;
     // (only drawn, out past what's shown: its crown in a few broad masses, as a hand would outline it)
     if (coarse) g = { ...g, crown: g.crown.filter((_, n) => n % 3 === 0).map((c) => ({ ...c, r: c.r * 1.45 })) };
-    const C: V3 = [0, 0, 0];
-    for (const c of g.crown) { C[0] += c.x / g.crown.length; C[1] += c.y / g.crown.length; C[2] += c.z / g.crown.length; }
-    const R = Math.max(0.2, ...g.crown.map((c) => Math.hypot(c.x - C[0], c.y - C[1], c.z - C[2]) + c.r));
-    g.crown.forEach((c, n) => { cur.tone = 0.35 + 0.3 * ((n * 37) % 10) / 10; crownClump(c, C, R); });
+    // (each cluster lit as one mass, round its own middle: a crown in a few masses with sky between, not one ball)
+    const groups = new Map<number, typeof g.crown>();
+    for (const c of g.crown) { const k2 = c.g ?? 0; if (!groups.has(k2)) groups.set(k2, []); groups.get(k2)!.push(c); }
+    let n = 0;
+    for (const cl of groups.values()) {
+      const C: V3 = [0, 0, 0];
+      for (const c of cl) { C[0] += c.x / cl.length; C[1] += c.y / cl.length; C[2] += c.z / cl.length; }
+      const R = Math.max(0.2, ...cl.map((c) => Math.hypot(c.x - C[0], c.y - C[1], c.z - C[2]) + c.r));
+      for (const c of cl) { cur.tone = 0.35 + 0.3 * ((n++ * 37) % 10) / 10; crownClump(c, C, R); }
+    }
     leaf = 0;
   }
   /**

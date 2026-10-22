@@ -11,7 +11,8 @@ import { hash } from '../kit/rng';
 import { buildings, underRoof } from './buildings';
 import { CENTER, DIRS, PLANT, key, unkey, type World } from './model';
 
-export interface Clump { x: number; y: number; z: number; r: number }
+/** a clump of leaves; \`g\`: which of the crown's clusters it's in (each the leaves at one limb's end, lit as one mass) */
+export interface Clump { x: number; y: number; z: number; r: number; g?: number }
 export interface Growth {
   kind: number;
   /** the trunk, as points from its foot up (a leaning line, a fork at the top for the trees) */
@@ -20,6 +21,33 @@ export interface Growth {
   crown: Clump[];
   /** more stems or limbs than the trunk: an olive's second stem, a pine's limb out to a lower tier */
   stems?: Array<Array<[number, number, number]>>;
+  /** its limbs, from where the trunk forks out to each cluster of the crown, the skeleton the crown hangs on (thinner
+   * than stems, drawn in the picture where the crown's open, and as the drawing's branch lines) */
+  limbs?: Array<Array<[number, number, number]>>;
+}
+type P3 = [number, number, number];
+/**
+ * A crown as a few clusters, not a ball: limbs out from the fork, each bending up and out to its own end, and the
+ * leaves gathered there in a cluster of a few clumps, wider than tall, with sky between the clusters. \`spread\`: how
+ * far out the limbs go; \`rise\`: how far up; \`flat\`: how much wider than tall a cluster is.
+ */
+function clusters(fork: P3, n: number, toward: number, spread: number, rise: number, per: number, cr: number, flat: number, r: (n: number) => number, seed: number): { limbs: P3[][]; crown: Clump[] } {
+  const limbs: P3[][] = [], crown: Clump[] = [];
+  for (let q = 0; q < n; q++) {
+    // (round the fork, but leaning toward the light: the first limb that way, the rest spread from it)
+    const a = toward + (q === 0 ? (r(seed + q) - 0.5) * 0.6 : (q / n) * Math.PI * 2 + (r(seed + 10 + q) - 0.5) * 0.9);
+    const out = spread * (q === 0 ? 1 : 0.7 + 0.35 * r(seed + 20 + q)), up = rise * (0.75 + 0.5 * r(seed + 30 + q));
+    const m: P3 = [fork[0] + Math.cos(a) * out * 0.45, fork[1] + up * 0.55, fork[2] + Math.sin(a) * out * 0.45];
+    const tip: P3 = [fork[0] + Math.cos(a + (r(seed + 40 + q) - 0.5) * 0.4) * out, fork[1] + up, fork[2] + Math.sin(a + (r(seed + 40 + q) - 0.5) * 0.4) * out];
+    limbs.push([fork, m, tip]);
+    // (a side branch now and then, off the limb's middle)
+    if (r(seed + 50 + q) < 0.5) { const b = a + (r(seed + 60 + q) < 0.5 ? 0.7 : -0.7); limbs.push([m, [m[0] + Math.cos(b) * out * 0.35, m[1] + up * 0.3, m[2] + Math.sin(b) * out * 0.35]]); }
+    for (let c = 0; c < per; c++) {
+      const b = (c / per) * Math.PI * 2 + r(seed + 70 + q * 7 + c) * 1.2, d = (c === 0 ? 0 : 0.5 + 0.5 * r(seed + 90 + q * 7 + c)) * cr * 1.1;
+      crown.push({ x: tip[0] + Math.cos(b) * d, y: tip[1] + cr * 0.25 + (r(seed + 110 + q * 7 + c) - 0.5) * cr * flat * 0.5, z: tip[2] + Math.sin(b) * d, r: cr * (0.75 + 0.4 * r(seed + 130 + q * 7 + c)), g: q });
+    }
+  }
+  return { limbs, crown };
 }
 
 /** a climber: the face it goes up (a DIRS index), how high, and whether it spills over the top there */
@@ -51,41 +79,41 @@ export function grow(w: World, k: number, i: number, j: number, kind: number): G
   // (its age: how big it's grown)
   const s = 0.78 + 0.42 * r(90);
   if (kind === PLANT.olive) {
-    // (a short gnarled trunk, twisting, forking at head height (now and then two stems from the foot); a round crown of
-    // clumps over it, as wide as it's old)
-    const lean = 0.18 + 0.12 * r(2), top: [number, number, number] = [cx + lx * lean, k + 1.15 * s, cz + lz * lean];
-    const trunk: Array<[number, number, number]> = [[cx, k, cz], [cx + lx * lean * 0.3 + (r(3) - 0.5) * 0.1, k + 0.5 * s, cz + lz * lean * 0.3 + (r(4) - 0.5) * 0.1], top];
-    const crown: Clump[] = [], N = Math.round(8 + 6 * s);
-    for (let n = 0; n < N; n++) {
-      const a = (n / N) * Math.PI * 2 + r(10 + n) * 0.6, d = n === 0 ? 0 : (0.45 + 0.45 * r(30 + n)) * s;
-      crown.push({ x: top[0] + Math.cos(a) * d, y: top[1] + 0.35 * s + 0.35 * r(50 + n) - d * 0.25, z: top[2] + Math.sin(a) * d, r: (0.3 + 0.16 * r(70 + n)) * (0.85 + 0.2 * s) });
-    }
-    const out: Growth = { kind, trunk, girth: 0.07 + 0.03 * s, crown: crown.filter((c) => !inStone(w, c.x, c.y, c.z)) };
+    // (a short gnarled trunk, twisting as it goes, forking low into two or three limbs, each bending up and out to its
+    // own cluster of leaves: an olive's crown open, the sky through it between the clusters; now and then a second stem)
+    const lean = 0.18 + 0.12 * r(2), H = 0.85 * s, tw = (r(3) - 0.5) * 0.16;
+    const fork: P3 = [cx + lx * lean, k + H, cz + lz * lean];
+    const trunk: P3[] = [[cx, k, cz], [cx + lx * lean * 0.25 + tw, k + H * 0.35, cz + lz * lean * 0.25 - tw], [cx + lx * lean * 0.6 - tw * 0.6, k + H * 0.7, cz + lz * lean * 0.6 + tw * 0.8], fork];
+    const n = 2 + (r(5) < 0.55 ? 1 : 0), cr = (0.3 + 0.05 * r(6)) * (0.85 + 0.2 * s);
+    const { limbs, crown } = clusters(fork, n, Math.atan2(lz, lx), 0.62 * s, 0.55 * s, 4, cr, 0.6, r, 200);
+    const out: Growth = { kind, trunk, girth: 0.08 + 0.035 * s, crown: crown.filter((c) => !inStone(w, c.x, c.y, c.z)), limbs };
     if (r(91) < 0.3) {
-      // (a second stem, from the foot, leaning the other way round the light)
-      const a = Math.atan2(lz, lx) + (r(92) < 0.5 ? 1 : -1) * (0.9 + 0.5 * r(93)), t2: [number, number, number] = [cx + Math.cos(a) * 0.32 * s, k + 0.95 * s, cz + Math.sin(a) * 0.32 * s];
-      out.stems = [[[cx, k, cz], [cx + Math.cos(a) * 0.12, k + 0.45 * s, cz + Math.sin(a) * 0.12], t2]];
-      for (let n = 0; n < 5; n++) { const b = (n / 5) * Math.PI * 2 + r(110 + n), d = 0.3 * s * r(120 + n); const c = { x: t2[0] + Math.cos(b) * d, y: t2[1] + 0.3 * s + 0.2 * r(130 + n), z: t2[2] + Math.sin(b) * d, r: 0.26 * (0.85 + 0.2 * s) }; if (!inStone(w, c.x, c.y, c.z)) out.crown.push(c); }
+      // (a second stem, from the foot, leaning the other way round the light, with a cluster of its own)
+      const a = Math.atan2(lz, lx) + (r(92) < 0.5 ? 1 : -1) * (0.9 + 0.5 * r(93)), t2: P3 = [cx + Math.cos(a) * 0.32 * s, k + 0.8 * s, cz + Math.sin(a) * 0.32 * s];
+      out.stems = [[[cx, k, cz], [cx + Math.cos(a) * 0.12, k + 0.4 * s, cz + Math.sin(a) * 0.12], t2]];
+      const more = clusters(t2, 1, a, 0.3 * s, 0.35 * s, 4, cr * 0.9, 0.6, r, 400);
+      out.limbs!.push(...more.limbs);
+      for (const c of more.crown) if (!inStone(w, c.x, c.y, c.z)) out.crown.push({ ...c, g: n });
     }
     return out;
   }
   if (kind === PLANT.pine) {
-    // (a tall trunk leaning toward the light, bare to high over walls; an umbrella crown, flat beneath, domed above)
-    const lean = 0.5 + 0.35 * r(2), H = (3.1 + 0.4 * r(3)) * Math.min(1.1, s), top: [number, number, number] = [cx + lx * lean, k + H, cz + lz * lean];
-    const trunk: Array<[number, number, number]> = [[cx, k, cz], [cx + lx * lean * 0.25, k + H * 0.4, cz + lz * lean * 0.25], [cx + lx * lean * 0.7, k + H * 0.8, cz + lz * lean * 0.7], top];
-    const crown: Clump[] = [];
-    for (let n = 0; n < 22; n++) {
-      const a = (n / 22) * Math.PI * 2 * 2.618 + r(10 + n), d = Math.sqrt((n + 0.5) / 22) * 1.55;
-      crown.push({ x: top[0] + Math.cos(a) * d * s, y: top[1] + 0.12 + 0.28 * (1 - d / 1.6) + 0.1 * r(50 + n), z: top[2] + Math.sin(a) * d * s, r: (0.38 + 0.14 * r(70 + n)) * (0.85 + 0.15 * s) });
-    }
-    // (now and then a lower tier, out on a limb to one side: the umbrella in two)
-    const stems: Array<Array<[number, number, number]>> = [];
+    // (a tall trunk leaning toward the light, bare to high over walls, a little crooked; at its head, limbs spreading
+    // out and up, each holding a flat pad of leaves: the umbrella in pads with sky between, flat beneath, domed above)
+    const lean = 0.5 + 0.35 * r(2), H = (3.1 + 0.4 * r(3)) * Math.min(1.1, s), kink = (r(4) - 0.5) * 0.25;
+    const top: P3 = [cx + lx * lean, k + H, cz + lz * lean];
+    const trunk: P3[] = [[cx, k, cz], [cx + lx * lean * 0.2 + kink, k + H * 0.4, cz + lz * lean * 0.2 - kink], [cx + lx * lean * 0.65, k + H * 0.78, cz + lz * lean * 0.65], top];
+    const n = 4 + (r(5) < 0.5 ? 1 : 0), cr = (0.36 + 0.06 * r(6)) * (0.85 + 0.15 * s);
+    const { limbs, crown } = clusters(top, n, Math.atan2(lz, lx), 1.05 * s, 0.32, 5, cr, 0.35, r, 300);
+    // (now and then a lower tier, out on a long limb to one side: the umbrella in two)
+    const stems: P3[][] = [];
     if (r(94) < 0.35) {
-      const a = Math.atan2(lz, lx) + Math.PI * (0.5 + r(95)), at = trunk[2], tip: [number, number, number] = [at[0] + Math.cos(a) * 0.9 * s, at[1] - 0.15, at[2] + Math.sin(a) * 0.9 * s];
-      stems.push([at, [(at[0] + tip[0]) / 2, at[1] - 0.05, (at[2] + tip[2]) / 2], tip]);
-      for (let n = 0; n < 9; n++) { const b = (n / 9) * Math.PI * 2 * 2.618, d = Math.sqrt((n + 0.5) / 9) * 0.85 * s; crown.push({ x: tip[0] + Math.cos(b) * d, y: tip[1] + 0.12 + 0.15 * (1 - d), z: tip[2] + Math.sin(b) * d, r: 0.32 }); }
+      const a = Math.atan2(lz, lx) + Math.PI * (0.5 + r(95)), at = trunk[2];
+      const low = clusters(at, 1, a, 0.95 * s, 0.1, 6, cr * 0.95, 0.35, r, 500);
+      stems.push(low.limbs[0]);
+      crown.push(...low.crown.map((c) => ({ ...c, g: n })));
     }
-    return { kind, trunk, girth: 0.1 + 0.03 * s, crown: crown.filter((c) => !inStone(w, c.x, c.y, c.z)), ...(stems.length ? { stems } : {}) };
+    return { kind, trunk, girth: 0.1 + 0.03 * s, crown: crown.filter((c) => !inStone(w, c.x, c.y, c.z)), limbs, ...(stems.length ? { stems } : {}) };
   }
   return { kind, trunk: [], girth: 0, crown: [] };
 }
