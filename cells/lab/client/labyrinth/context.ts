@@ -12,7 +12,7 @@
  *   building's downhill side stands on carried down to the lower ground (a retaining wall under it).
  */
 import { DIRS, key, type World } from './model';
-import { groundAt } from './cliffs';
+import { groundAt } from './terrain';
 
 /** a bank held by a wall: the high cell, the way to the low one, the two grounds */
 export interface Retain { i: number; j: number; d: number; lo: number; hi: number }
@@ -63,5 +63,5 @@ function worked(w: World) {
 }
 /** whether the bank between a cell and the next its way d is held by a wall, or filled by what's built against it */
 export function walled(w: World): (i: number, j: number, d: number) => boolean { return worked(w).sharp; }
-/** the ground as it's drawn (grid units: cell (i, j) spans i..i+1): its terraces and their cliffs (cliffs.ts) */
+/** the ground as it's drawn (grid units: cell (i, j) spans i..i+1): the hill and the benches let into it (terrain.ts) */
 export function groundY(w: World, x: number, z: number): number { return groundAt(w, x, z); }

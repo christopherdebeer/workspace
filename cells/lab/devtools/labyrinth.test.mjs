@@ -544,7 +544,21 @@ ok(`blocks' outlines tried against where they're struck (${lively.form} sides)`,
     ok(`land ${seed}: its stream falls all the way, a cell at a time, and its bed is under its banks`, l.stream.every(([i, j], q) => q === 0 || (Math.abs(i - l.stream[q - 1][0]) + Math.abs(j - l.stream[q - 1][1]) === 1 && G(i, j) <= G(...l.stream[q - 1]))) && l.stream.every(([i, j]) => DIRS.every(([x, z]) => !LA.onLand(i + x, j + z) || l.water.has((j + z) * 1000 + i + x) || G(i + x, j + z) >= G(i, j))));
     const flat = [-1, 0, 1].every((dj) => [-1, 0, 1].every((di) => !LA.onLand(l.shelf[0] + di, l.shelf[1] + dj) || l.water.has((l.shelf[1] + dj) * 1000 + l.shelf[0] + di) || G(l.shelf[0] + di, l.shelf[1] + dj) === G(...l.shelf)));
     ok(`land ${seed}: a shelf flat enough for a court (its middle all one level, but where the stream runs)`, flat);
-    ok(`land ${seed}: its surface is flat at each column's level through its middle`, [[2, 3], [5, 5], [8, 1]].every(([i, j]) => Math.abs(LA.surfaceY(l, i + 0.5, j + 0.5) - G(i, j) + (l.water.has(j * 1000 + i) ? 0.3 : 0)) < 1e-9));
+  }
+  // (the land as it's drawn and walked (terrain.ts): a continuous hill, a bench let in exactly where something's built)
+  {
+    const TE = await load('../client/labyrinth/terrain.ts'), w = story(16);
+    let benches = 0, benchOk = true, nearOk = true, maxStep = 0;
+    for (let j = 0; j <= 14; j++) for (let i = -2; i <= 14; i++) {
+      const lv = TE.levelAt(w, i, j), y = TE.groundAt(w, i + 0.5, j + 0.5);
+      if (TE.benched(w, i, j)) { benches++; if (Math.abs(y - lv) > 1e-9) benchOk = false; }
+      else if (!w.land.water.has(j * 1000 + i) && Math.abs(y - lv) >= 1) nearOk = false;
+      if (TE.benched(w, i, j)) continue;
+      for (let f = 0.05; f < 0.95; f += 0.1) { const a = TE.groundAt(w, i + f, j + 0.5), b = TE.groundAt(w, i + f + 0.1, j + 0.5); if (!TE.benched(w, Math.floor(i + f + 0.1), j)) maxStep = Math.max(maxStep, Math.abs(a - b)); }
+    }
+    ok('the land: under what\'s built, the ground is flat at its level exactly', benches > 20 && benchOk);
+    ok('the land: on open ground, near each column\'s level at its middle, never a level off', nearOk);
+    ok('the land: on open ground, continuous (no step of more than a fraction of a level across it)', maxStep < 0.6);
   }
   // (storyboard 12: four gestures make a place)
   const s12 = story(12);

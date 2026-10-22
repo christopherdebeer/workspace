@@ -36,6 +36,7 @@ const g2 = guide.getContext('2d')!;
 const R = new Renderer(canvas);
 R.print = qs.has('print');
 R.marks = qs.has('marks');
+R.clay = qs.has('clay');
 R.shadows = !qs.has('noshadow');
 // (the land as Taohua draws its hill: the open ground the paper itself, only its features drawn, bleeding into the page,
 // no plinth; `?plinth`: on its plinth instead. The flat slab is always a slab on its table)

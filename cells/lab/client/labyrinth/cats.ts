@@ -298,6 +298,11 @@ export class Cats {
     }
     c.moving = 0;
   }
+  /** never through stone on foot: what's been built in its way since it set off, it steps up onto */
+  private over(x: number, y: number, z: number) {
+    for (let n = 0; n < 4 && inStone(this.w!, x, y + 0.06, z); n++) y = Math.floor(y + 0.06) + 1;
+    return y;
+  }
   /** walk (or run) straight to a point, turning as it goes, its height as `yAt` says along the way */
   private *walkTo(c: Cat, x: number, z: number, speed: number, yAt: (f: number, px: number, pz: number) => number): Task {
     const x0 = c.x, z0 = c.z, L = Math.hypot(x - x0, z - z0);
@@ -312,7 +317,7 @@ export class Cats {
       const step = Math.min(L - done, speed * this.dt * Math.min(1, 0.4 + done * 3));
       done += step;
       const f = done / L, py = c.y;
-      c.x = x0 + (x - x0) * f; c.z = z0 + (z - z0) * f; c.y = yAt(f, c.x, c.z);
+      c.x = x0 + (x - x0) * f; c.z = z0 + (z - z0) * f; c.y = this.over(c.x, yAt(f, c.x, c.z), c.z);
       c.pitch += (Math.atan2(c.y - py, step || 1e-3) * 0.55 - c.pitch) * Math.min(1, this.dt * 10);
       c.phase += step / (c.stride * S); c.moving = speed;
       yield;
@@ -424,7 +429,7 @@ export class Cats {
       // (heading: toward a little way ahead, the body following its head)
       const ahead = at(Math.min(total, d + 0.22)), want = Math.atan2(ahead.z - p.z, ahead.x - p.x);
       if (Math.hypot(ahead.x - p.x, ahead.z - p.z) > 0.02) c.yaw += wrap(want - c.yaw) * Math.min(1, this.dt * 6);
-      c.x = p.x; c.z = p.z; c.y = p.y;
+      c.x = p.x; c.z = p.z; c.y = this.over(p.x, p.y, p.z);
       c.pitch += (Math.atan2(c.y - py, step || 1e-3) * 0.5 - c.pitch) * Math.min(1, this.dt * 8);
       c.phase += step / (c.stride * S); c.moving = v;
       // (now and then a stop on the way: a look round; once in a while it sits a moment)

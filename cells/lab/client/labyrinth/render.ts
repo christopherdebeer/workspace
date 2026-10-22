@@ -110,7 +110,7 @@ in vec3 vPos, vNrm; in float vAo, vMat, vTone, vU; in vec4 vLs;
 uniform highp sampler2DShadow uShadow; uniform highp sampler2D uShadowRaw; uniform vec3 uSun, uEye, uDir, uArea; uniform float uN, uShadows;
 // (the sun's map: how much of the world a texel of it covers, and how deep its range is, so its bias and its softness are
 // in the world's own units whatever it's fitted to)
-uniform float uTexel, uDepthRange, uMarks;
+uniform float uTexel, uDepthRange, uMarks, uClay;
 layout(location=0) out vec4 oCol; layout(location=1) out vec4 oNrm;
 float leafEdge(vec3 n) { float rim = 1. - abs(dot(n, normalize(uDir))); return .8 * pow(rim, 1.6) - .08; }
 float hash(vec3 p) { return fract(sin(dot(p, vec3(127.1, 311.7, 74.7))) * 43758.5453); }
@@ -245,7 +245,7 @@ void main() {
   // picture reaches; and each kind of thing at its own rate: what's built holds on longest, then the water, the ground,
   // and soonest the trees, which go to drawn canopy while what they stand by is still whole)
   float gT = 2.;
-  bool onIt = mat == 5 && moss, onPaper = uBleed > .5 || uPaper > .5;
+  bool onIt = mat == 5 && moss, onPaper = (uBleed > .5 || uPaper > .5) && uClay < .5;
   if (onPaper && !sel && !fur) {
     vec3 at = vPos;
     if (vU >= 4. && vU < 5.) { float at0 = floor((vU - 4.) * 10000.); at = vec3(mod(at0, 64.) - 29.5, 0., floor(at0 / 64.) - 29.5); }
@@ -383,7 +383,7 @@ void main() {
     // (the geometry carries the planes now (mesh.ts: beds and blocks); the material only a little more: a bedding line
     // here and there, broken, and a few fractures, not a course on every bed and a joint on every block, which read as
     // masonry)
-    // (the courses are the mesh's now (cliffs.ts); the bedding only a faint line now and then; the fractures down
+    // (the courses were the mesh's (stage 17); the bedding only a faint line now and then; the fractures down
     // the faces carry it, a few to a block, wandering a little)
     float bedOn = step(.7, noise(vec3(dot(vPos.xz, con) * .9, bedI * 1.7, 3.))), frOn = step(.5, hash(vec3(bedI, colI, 9.)));
     rock *= 1. - .05 * (1. - smoothstep(.0, .04, bedF)) * bedOn - .16 * (1. - smoothstep(.0, .022, fr)) * frOn;
@@ -447,6 +447,8 @@ void main() {
   }
   // (ivy's leaves are its own geometry (mesh.ts); under them, where it grows, the stone is a little stained)
   if (ivy && mat != 3 && abs(n.y) < .5) base *= .93 - .05 * noise(vPos * 6.);
+  // (\`?clay\`: every surface one clay, its own normal, for judging the forms alone: no material, no paper, no ink)
+  if (uClay > .5) { base = mat == 2 ? vec3(.62, .70, .74) : vec3(.80, .78, .74); nS = n; cav = 1.; spec = 0.; }
   // ─── light. The colours above are as they're seen; taken back to light (linear) here, lit, and put through the display
   // transform once, at the end. What lights it is kept apart: the sun, shut out only by its shadow; the sky over it, cool,
   // and the warm light the sunlit ground and stone throw back up, both shut out by what's round it (the vertex's ao: the
@@ -602,7 +604,7 @@ void main() {
     {
       // (half a step off the levels: a terrace's floor is at a whole level, and a contour there would lie along the whole
       // of its flat, spreading into a tone)
-      float cy = vPos.y * 3. + .5, fw = max(fwidth(cy), 1e-4);
+      float cy = vPos.y * 1.5 + .5, fw = max(fwidth(cy), 1e-4);
       // (left out before they'd crowd into a tone: on the steepening ground at a terrace's edge, and wherever they'd be a
       // few pixels apart)
       float cl = (1. - smoothstep(.5, 1.3, min(fract(cy), 1. - fract(cy)) / fw)) * (1. - smoothstep(.05, .11, fw)) * (1. - cliff) * smoothstep(.985, .95, up) * smoothstep(.8, .88, up);
@@ -709,7 +711,7 @@ const POST_VS = `#version 300 es
 out vec2 vUv; void main() { vec2 p = vec2(gl_VertexID == 1 ? 3. : -1., gl_VertexID == 2 ? 3. : -1.); vUv = p * .5 + .5; gl_Position = vec4(p, 0., 1.); }`;
 const POST_FS = `#version 300 es
 precision highp float;
-in vec2 vUv; uniform sampler2D uCol, uNrm, uDepth; uniform vec2 uPx; uniform float uRange, uPrint, uDpr, uBleed, uWorldPx, uContact, uMarks, uAA; uniform mat3 uViewRot;
+in vec2 vUv; uniform sampler2D uCol, uNrm, uDepth; uniform vec2 uPx; uniform float uRange, uPrint, uDpr, uBleed, uWorldPx, uContact, uMarks, uAA, uClay; uniform mat3 uViewRot;
 out vec4 o;
 // (the edges smoothed where nothing's multisampled: the colour's luma across the pixel's corners says which way an edge
 // runs, and it's sampled along it (FXAA, after Lottes), kept only where it stays within the luma round it)
@@ -796,6 +798,7 @@ void main() {
   // (the land's rock, where it's painted: its planes edged where they meet at a sharp turn, lightly)
   wt = max(wt, onLand * smoothstep(.5, .8, turn) * .32 * (1. - drawn * .5));
   if (uMarks > .5) wt *= .15;
+  if (uClay > .5) wt = 0.;
   o = vec4(mix(mix(c, ink * 1.6, max(wt * (1. - step(.5, skyN)), rim * .8)), vec3(.69, .36, .12), ring * .9), 1.);
   // (bleeding: the same paper under everything, its edge a shade darker, so the ground and the page are one sheet)
   if (bleedOn() > .5) o.rgb *= 1. - .06 * smoothstep(.35, .75, length((vUv - .5) * vec2(1.2, 1.)));
@@ -856,6 +859,8 @@ export class Renderer {
   private svao: WebGLVertexArrayObject; private sbuf: WebGLBuffer; private scount = 0;
   /** \`?marks\`: the drawing's marks by family, the picture faded under them */
   marks = false;
+  /** \`?clay\`: every surface one clay, no paper, no ink: the forms alone */
+  clay = false;
   private vao: WebGLVertexArrayObject; private buf: WebGLBuffer; private count = 0;
   /** the ground's own (mesh.ts keeps it from one build to the next while nothing it reads changes): handed to the GPU
    * only when it's new */
@@ -1081,14 +1086,14 @@ export class Renderer {
     gl.uniformMatrix4fv(U('uVP'), false, cam.vp); gl.uniformMatrix4fv(U('uLight'), false, light);
     gl.uniform1f(U('uTime'), time); gl.uniform3fv(U('uSun'), this.sun); gl.uniform3fv(U('uEye'), cam.eye); gl.uniform3fv(U('uDir'), cam.dir); gl.uniform1f(U('uN'), 12); gl.uniform3fv(U('uArea'), this.area); gl.uniform1f(U('uShadows'), this.shadows ? 1 : 0); gl.uniform1f(U('uBleed'), this.bleed ? 1 : 0); gl.uniform1f(U('uPaper'), this.print ? 1 : 0); gl.uniform4fv(U('uLand'), this.landBox); this.bindFocus(this.main);
     gl.uniform1f(U('uTexel'), this.shadowTexel); gl.uniform1f(U('uDepthRange'), this.shadowRange);
-    gl.uniform1f(U('uLeafCut'), this.leafCut ? 1 : 0); gl.uniform1f(U('uMarks'), this.marks ? 1 : 0);
+    gl.uniform1f(U('uLeafCut'), this.leafCut ? 1 : 0); gl.uniform1f(U('uMarks'), this.marks ? 1 : 0); gl.uniform1f(U('uClay'), this.clay ? 1 : 0);
     gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, this.shadowTex); gl.bindSampler(0, this.sCompare); gl.uniform1i(U('uShadow'), 0);
     gl.activeTexture(gl.TEXTURE3); gl.bindTexture(gl.TEXTURE_2D, this.shadowTex); gl.bindSampler(3, this.sRaw); gl.uniform1i(U('uShadowRaw'), 3);
     gl.drawArrays(gl.TRIANGLES, 0, this.count);
     if (this.gcount) { gl.bindVertexArray(this.gvao); gl.drawArrays(gl.TRIANGLES, 0, this.gcount); gl.bindVertexArray(this.vao); }
     if (this.dcount) { gl.bindVertexArray(this.dvao); gl.drawArrays(gl.TRIANGLES, 0, this.dcount); }
     // (the drawing's marks, inked onto what they lie on: over it, behind what stands in front of it, the mask left be)
-    if (this.scount) {
+    if (this.scount && !this.clay) {
       gl.useProgram(this.stroke);
       const S = (n: string) => gl.getUniformLocation(this.stroke, n);
       gl.uniformMatrix4fv(S('uVP'), false, cam.vp); gl.uniform1f(S('uMarks'), this.marks ? 1 : 0); gl.uniform2f(S('uView'), w, h); gl.uniform1f(S('uDpr'), dpr); gl.uniform3fv(S('uDir'), cam.dir);
@@ -1121,7 +1126,7 @@ export class Renderer {
     gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, this.col); gl.uniform1i(P('uCol'), 0);
     gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, this.nrm); gl.uniform1i(P('uNrm'), 1);
     gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, this.dep); gl.uniform1i(P('uDepth'), 2);
-    gl.uniform2f(P('uPx'), 1 / w, 1 / h); gl.uniform1f(P('uRange'), cam.range); gl.uniform1f(P('uPrint'), this.print ? 1 : 0); gl.uniform1f(P('uMarks'), this.marks ? 1 : 0); gl.uniform1f(P('uDpr'), dpr); gl.uniform1f(P('uBleed'), this.bleed ? 1 : 0); gl.uniform1f(P('uAA'), this.ms ? 0 : 1);
+    gl.uniform2f(P('uPx'), 1 / w, 1 / h); gl.uniform1f(P('uRange'), cam.range); gl.uniform1f(P('uPrint'), this.print ? 1 : 0); gl.uniform1f(P('uMarks'), this.marks ? 1 : 0); gl.uniform1f(P('uClay'), this.clay ? 1 : 0); gl.uniform1f(P('uDpr'), dpr); gl.uniform1f(P('uBleed'), this.bleed ? 1 : 0); gl.uniform1f(P('uAA'), this.ms ? 0 : 1);
     gl.uniform1f(P('uWorldPx'), (2 * view.zoom) / h); gl.uniform1f(P('uContact'), this.contact ? 1 : 0);
     gl.uniformMatrix3fv(P('uViewRot'), false, cam.rot);
     gl.drawArrays(gl.TRIANGLES, 0, 3);

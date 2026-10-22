@@ -7,9 +7,8 @@
  * It's held two ways that never disagree:
  * - **by column** (`g`): the level the ground is at in each cell. What's built is in whole levels, so this is what
  *   stands, walks and is struck: earth fills each column below it (`World.earth`), and its top is a floor;
- * - **as it's drawn** (cliffs.ts): terraces at the columns' levels, their outlines the lie of the land rather than the
- *   cells' edges, limestone cliffs between; the middle of every column at its own level, so what's built on a column
- *   sits on the ground as drawn.
+ * - **as it's drawn** (terrain.ts): a continuous hillside through the columns' levels, flat only in benches where
+ *   something's built, so what's built on a column sits on the ground as drawn.
  */
 import { hash, smooth } from '../kit/rng';
 

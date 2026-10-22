@@ -187,7 +187,56 @@ Past the picture's reach, it's strokes on the paper only.
 
 ![Further](labyrinth/look-lines.jpg)
 
-## Stage 20: the land off the grid (after the phone: "more blocky and voxel than before")
+## Stage 21: a hillside first, construction let into it (after the review: "continuous land first")
+
+![The hill in clay: no materials, no ink](labyrinth/look-hill-clay.jpg)
+
+![The hill drawn](labyrinth/look-hill.jpg)
+
+Stage 20's contour fields still drew the land as platforms with skirts, flat terraces stepping at every level. Here the land starts as a continuous surface, and is only flattened where something needs it to be flat.
+
+**The hill** (terrain.ts, which replaces cliffs.ts):
+- **Shape:** the columns' levels are blended through a broad Gaussian kernel (5×5 cells), then moved by two octaves of noise.
+- **Result:** a step of a level reads as a slope, the ravine as a valley, an outcrop as a knoll. The grid no longer shows in the land.
+
+**Benches, only where construction needs them:**
+- **Which cells:** a cell is flat at its level, exactly, when any of these holds:
+  - something's built on it, or against its ground;
+  - a wall holds its edge;
+  - it's paved, a court, a pool, or a way.
+- **Meeting the hill:** around a bench the ground blends back into the hill asymmetrically.
+  - Where the hill is above, it's cut steep and short (`CUT` 0.45 of a cell).
+  - Where it's below, it's filled gentle and long (`FILL` 0.95).
+  - So a way along a slope has its bank uphill and its fall downhill.
+
+**The stream:**
+- Its course is a smooth line through its cells (corners cut three times).
+- Its channel is carved continuously into the hill: a flat bed, and banks that widen the higher they rise.
+- The water is a ribbon along the course, stepping at each fall, with a fall face and foam.
+- The banks are inked along the ribbon, with current marks and fall streaks.
+
+**One surface:**
+- The ground mesh is a heightfield sampled three to a cell, each square split along its better diagonal.
+- Reading the ground from the same `groundAt` (through context.ts `groundY`): the drawing, picks, perches and the cats.
+- Cats on foot now step up onto stone that's been built in their way, rather than walking through it (cats.ts `over`).
+- **Clay view:** `?clay` shows forms only, with no materials and no ink. It's for judging the silhouette.
+
+**Marks:**
+- Where a bench is cut into the hill, a rim line at the top of the cut, with grouped hachures down it.
+- Where a bench stands out over a fall, a light, broken foot line.
+- The land's contour lines at 1.5 to a level.
+
+**Cost:** the study builds in about 0.9–1.0 s in node (stage 20: 1.1 s). Ground vertices fell from 236k to 184k, marks to 21k.
+
+**Still to do:**
+- **Steep slopes:** they still take stage 17's rock tone, a muddy brown.
+- **Relief:** the land is soft and low; there are no rock escarpments or rock masses yet.
+- **Then, from Taohua:**
+  - classify each boundary (natural slope, escarpment, retaining wall, path cut, riverbank) and give each its own cross-section;
+  - paper as the default ground;
+  - selective path marks.
+
+## Stage 20: the land off the grid (superseded by stage 21) (after the phone: "more blocky and voxel than before")
 
 ![The land off the grid](labyrinth/look-terrain.jpg)
 
