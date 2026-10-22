@@ -187,6 +187,44 @@ Past the picture's reach, it's strokes on the paper only.
 
 ![Further](labyrinth/look-lines.jpg)
 
+## Stage 17: limestone (after the in-situ target sheets)
+
+![Terraces and their cliffs](labyrinth/look-cliffs.jpg)
+
+The in-situ target sheets (the same settlement, the same five views, overpainted) and the review with them put geology first. The terrain was a sampled height surface: banks were a smoothed band about a cell wide between level plateaus, roughened with noise, with shelves and block offsets laid over it. However the normals and colours were tuned, it read as crumpled, triangular folds. The target has broad limestone masses: a few decisive planes, ledges, fractures that belong to the blocks, and flat terraces.
+
+**One description of the cliffs, for the rock and its drawing** (cliffs.ts):
+- **Runs:** every edge where the land steps down from one cell to the next is chained along the drop, with the high ground on the left. A cliff is followed round its corners as one thing: a loop round a rise, or a run that ends where a retaining wall, a flight or something built takes over the bank.
+- **Segments:** straight stretches at one height, from corner to corner.
+- **Tiers:** the drop in one to four courses, the same down the whole run (its strata). Each course stands a little further out than the one above, with a ledge between.
+- **Blocks:** each segment is cut into blocks 0.4–1.2 cells long. Each is set a little forward or back of the next and leans back a little. Each course's top edge is rounded off by a bevel.
+
+Offsets are measured out from the edge into the low cell. At a corner of the high ground the faces run on to meet; in a corner of it they stop at the next.
+
+**The land is terraces** (land.ts `surfaceY`, mesh.ts `landMesh`, `rock`):
+- **Terraces:** each cell is flat at its level. The cell is laid finely where its shade can change (by a drop, near what's shown) and in one quad where it can't.
+- **Rock:** the cliffs are built from the runs, course by course: face, rounded edge, top or ledge, the returns where one block stands forward of the next, and the ends where a run stops or changes height.
+- **Shading:** each face is lit as the plane it is, its shade the sky its corners see. Each block has a slightly different tone. The limestone is paler: weathered a little darker toward each course's foot, fractures down the faces, and only a faint bedding line now and then (the courses carry the strata now).
+- **Backing:** behind each cliff, the terrace's own side runs down to the next, dark. Where three heights meet and the faces don't quite close, the gap reads as a crevice, not a hole.
+
+**Down to the stream, cut back.** A one-cell channel between vertical banks hides its water from this camera. Where the low side is water, the cliff's rim is set back 0.3–0.42 into the bank, its foot at the water's edge. The terrace stops at the rim, and a corner square is cut where two such rims meet. The channel opens upward and the water's seen. Banks aren't cut back where something built leans on that ground (on it, or beside it along the edge). The tower is an example: its faces against the bank aren't drawn, so cut back, there'd be a hole through it.
+
+**The drawing is the rock's own edges** (strokes.ts):
+- **Structure, one pick per run:** the rim along the rock's rounded top edge, in and out at its blocks and round its corners. Also the ledges between courses, the foot, and the plane changes down the face: at a corner of the high ground, and where one block stands forward of the next. A cliff stays or goes whole where the drawing thins, so the land far out is still a continuous set of terraces in outline.
+- **Spent first:** hachures down faces turned from the sun, a few per course, and a crack now and then. These are thinned past what's shown.
+
+**Colour off** (`--print`): the terraces, the runs of cliff, the stream's course and every tree still read.
+
+![Colour off](labyrinth/look-cliffs-print.jpg)
+
+**Cost:** building the study's mesh with the land bleeding into the page went from about 5.4 s to 0.9 s in node, since the land no longer samples ledges and blocks at every grid point. The ground went from 167k vertices to 158k, and the marks from 123k to 101k.
+
+**Still to come** (from the review's order):
+- rock faces with fewer, larger masses: some blocks' tops a little under the terrace, broken corners, rubble and scrub at feet and in fissures;
+- transition channels (relief, lighting, pigment, structural ink, detail ink) in place of the one ramp;
+- roof and masonry rebalanced, and trees as unequal masses round their primary branches;
+- immediate feedback separated from rebuilding, and regional rebuilds.
+
 ## Stage 16: the land meets what's built; quieter close up (after the phone)
 
 ![The land meeting what's built](labyrinth/look-meet.jpg)

@@ -21,7 +21,6 @@ export const LAND = { i0: -1, i1: 12, j0: -1, j1: 12 } as const;
  * on low; it's shown only as far as what's built near its edge has asked for (`World.extent`) */
 export const DOMAIN = { i0: -18, i1: 29, j0: -18, j1: 29 } as const;
 /** how wide a cell's flat middle is (of its half-width); the rest is the band its ground meets its neighbours' across */
-export const FLAT = 0.38;
 /** how high the land goes, at most */
 export const PEAK = 5;
 
@@ -164,22 +163,12 @@ export const groundOf = (land: Land, i: number, j: number) => (onLand(i, j) ? la
 
 /**
  * The ground as it's drawn, at a point (x, z: cells, from the land's grid origin, so cell (i, j) spans i..i+1): flat at
- * its column's level through its middle, meeting its neighbours' across the band at its edge, roughened where it slopes.
- * Off the land, nothing (−1).
+ * its column's level across the whole cell. Off the land, nothing (−1).
  */
-export function surfaceY(land: Land, x: number, z: number, sharp?: (i: number, j: number, d: number) => boolean): number {
+export function surfaceY(land: Land, x: number, z: number, _sharp?: (i: number, j: number, d: number) => boolean): number {
   const i = Math.floor(x), j = Math.floor(z);
   if (!onLand(i, j)) return -1;
-  // (the stream's bed a little under its banks)
-  const G = (a: number, b: number) => { const x = Math.max(DOMAIN.i0, Math.min(DOMAIN.i1, a)), y = Math.max(DOMAIN.j0, Math.min(DOMAIN.j1, b)); return land.g[atD(x, y)] - (land.water.has(y * 1000 + x) ? 0.3 : 0); };
-  const fx = x - i - 0.5, fz = z - j - 0.5, sx = Math.sign(fx) || 1, sz = Math.sign(fz) || 1;
-  // (how far into the band toward the neighbour each way: none through the flat middle, a half at the cell's edge)
-  // (where a bank's held by a wall (`sharp`, toward a neighbour: 0 +x, 1 +z, 2 −x, 3 −z), each side flat to the wall)
-  const wx = sharp?.(i, j, sx > 0 ? 0 : 2) ? 0 : 0.5 * smooth(FLAT * 0.5, 0.5, Math.abs(fx)), wz = sharp?.(i, j, sz > 0 ? 1 : 3) ? 0 : 0.5 * smooth(FLAT * 0.5, 0.5, Math.abs(fz));
-  const g0 = G(i, j), gx = G(i + sx, j), gz = G(i, j + sz), gd = G(i + sx, j + sz);
-  let y = g0 + wx * (gx - g0) + wz * (gz - g0) + wx * wz * (gd - gx - gz + g0);
-  // (rough where it slopes: a bank's not a ramp)
-  const slope = Math.abs(gx - g0) * wx + Math.abs(gz - g0) * wz + Math.abs(gd - g0) * wx * wz;
-  if (slope > 0) y += (noise2(land.seed + 21, x * 2.3, z * 2.3) - 0.5) * 0.32 * Math.min(1, slope) + (noise2(land.seed + 22, x * 6, z * 6) - 0.5) * 0.1 * Math.min(1, slope);
-  return y;
+  // (each cell flat at its level, the stream's bed a little under its banks: the land a set of terraces, and where one
+  // steps down to the next, a cliff (cliffs.ts), its rock built as its own faces, not a slope of the ground)
+  return land.g[atD(i, j)] - (land.water.has(j * 1000 + i) ? 0.3 : 0);
 }

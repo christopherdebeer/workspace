@@ -5,10 +5,12 @@
  * as the eye moves and as what's built changes elsewhere.
  *
  * Features, and their evidence:
- * - **escarpment** (where the land drops a level or more between cells: a storey's height of rock, the mesh steps it
- *   into ledges): its rim, a broken line along the top of the drop, firmer the higher it is; its face, interrupted,
- *   hachures down it between its beds, long and short by turns; its **bedding**, the strata along the face at its
- *   ledges, each a little higher or lower across a **fracture**; and a fracture now and then, a crack down the face;
+ * - **cliff** (cliffs.ts: where the land steps from one terrace to the next, the rock the mesh builds from the same
+ *   description): its **rim** along the top of the rock, in and out at its blocks and round its corners, firmer the
+ *   higher it is; its **ledges** between its courses (bedding); its **foot**; the plane changes down it (a fracture's
+ *   family), at a corner of the high ground and where a block stands forward of the next; all one pick for the run, so a
+ *   cliff stays or goes whole where the drawing thins. Spent first: **hachures** down its faces turned from the sun, a
+ *   few to a course, and a crack now and then;
  * - **retention** (where what's built is founded on the land): its contact, a broken line at its foot;
  * - **passage** (a flight, and the ways the hand laid, `World.passages`): a flight's worn **tread** nosings, now and
  *   then, most at its foot and head; its **string**s, its pitch along each side; a way's **edge**s where its sides are
@@ -17,7 +19,7 @@
  * - **water**: its **current**, strokes along the way it runs; its **bank**, a line along a steep one; its **fall**,
  *   streaks down the sheet where its bed steps, and the **impact**'s rings in the pool below.
  *
- * A feature is found by its cells (a run of a drop's edges, from the cell it starts at; a stream's cell; a founded
+ * A feature is found by its cells (a cliff's run, by its first edge; a stream's cell; a founded
  * column's face), and every mark of it is seeded from those, so it's the same mark whenever it's made. Each carries its
  * family and weight; how much of it holds over the picture where the picture's whole (a rim does, a hachure doesn't:
  * the render says what a hachure would); and a pick, so where the drawing thins out, whole marks are left out, never
@@ -25,7 +27,7 @@
  */
 import { hash } from '../kit/rng';
 import { outline } from './form';
-import { retaining } from './context';
+import { along, bevelOf, offsetAt, reachAt, type Run } from './cliffs';
 import { CENTER, DIRS, unkey, type World } from './model';
 
 /** why a mark is there */
@@ -45,8 +47,8 @@ export type V3 = [number, number, number];
 /** the land as drawn: its height at a point (grid units, as mesh.ts lays it), and the box of cells it's drawn over */
 export interface StrokeLand {
   Y: (gx: number, gz: number) => number; B: { i0: number; i1: number; j0: number; j1: number };
-  /** how thick the rock's beds are about a point, where a cliff's stepped into ledges */
-  bed: (gx: number, gz: number) => number;
+  /** the land's cliffs over the box (cliffs.ts): the rock the mesh builds, whose edges the drawing draws */
+  runs: Run[];
   /** whether a cell's drawn (past what's shown of the land, bleeding into the page, the land's still drawn) */
   on: (i: number, j: number) => boolean;
   /** how far past what's shown of the land a cell is (0 within it), and how far the drawing goes past it: out there the
@@ -83,8 +85,6 @@ const ramp = (r: () => number, a: number, b: number) => a + r() * (b - a);
 const SUN_XZ: [number, number] = [-0.9, -0.44];
 /** a mark's lift off what it's drawn on, so it lies on it, not in it */
 const LIFT = 0.02;
-/** how far into each cell a drop's band reaches (land.ts: the flat middle is FLAT of the half-width) */
-const BAND = 0.31;
 
 /**
  * A branch line: through a tree's skeleton, its side turned to the eye when it's drawn (its tangent carried where a
@@ -111,106 +111,71 @@ export function strokes(w: World, land: StrokeLand, trees: Skeleton[] = []): Flo
     branch(out, pts, t.girth * 1.6, t.girth * 0.5, t.pick);
   }
   if (!w.land) return new Float32Array(0);
-  const { Y, B, bed } = land, held = retaining(w), wet = (i: number, j: number) => !!w.land?.water.has(j * 1000 + i);
+  const { Y, B } = land, wet = (i: number, j: number) => !!w.land?.water.has(j * 1000 + i);
   const at = (gx: number, gz: number, lift = LIFT): V3 => [gx - CENTER, Y(gx, gz) + lift, gz - CENTER];
-  // (a drop between a cell and the one its way d: how many levels, if it's one the land shows as its own (not held by a
-  // wall, not built against, not the stream's own bed))
-  const drop = (i: number, j: number, d: number) => {
-    const [a, b] = DIRS[d], x = i + a, z = j + b;
-    if (!land.on(x, z) || wet(i, j)) return 0;
-    const hi = w.ground(i, j), lo = w.ground(x, z), dd = hi - lo;
-    if (dd < 1 || held.has(`${i}.${j}.${d}`)) return 0;
-    if (w.occupied(hi, i, j) || w.occupied(lo, x, z) || w.stair(lo, x, z) >= 0) return 0;
-    return dd;
-  };
-  const cls = (dd: number) => (dd >= 2 ? 2 : dd);
 
-  // ─── escarpments and banks: a run of a drop's edges, the same way and the same kind, from the cell it starts at ───
-  for (let j = B.j0; j <= B.j1; j++) for (let i = B.i0; i <= B.i1; i++) for (let d = 0; d < 4; d++) {
-    const dd = drop(i, j, d);
-    if (!dd) continue;
-    const [ta, tb] = DIRS[(d + 1) % 4];
-    if (cls(drop(i - ta, j - tb, d)) === cls(dd)) continue;
-    let n = 1;
-    while (n < 40 && cls(drop(i + ta * n, j + tb * n, d)) === cls(dd)) n++;
-    edgeRun(i, j, d, n, cls(dd));
-  }
-  function edgeRun(i: number, j: number, d: number, n: number, kind: number) {
-    const [a, b] = DIRS[d], [ta, tb] = DIRS[(d + 1) % 4], cliff = kind >= 1, tall = kind >= 2;
-    // (the edge's line: from the run's first corner, along it; across, u from the top cell (−) to the low one (+))
-    const e0x = i + 0.5 + a * 0.5 - ta * 0.5, e0z = j + 0.5 + b * 0.5 - tb * 0.5;
-    const Q = (s: number, u: number): [number, number] => [e0x + ta * s + a * u, e0z + tb * s + b * u];
-    const side: V3 = [ta, 0, tb];
-    const r = rng(w.land!.seed, i, j, d, 0xe5c);
-    // (a mark at so far along the run is made if the drawing still reaches it there)
-    const kept = (s: number) => { const o = land.out(Math.floor(i + ta * s), Math.floor(j + tb * s)); return o <= 0 || r() < Math.pow(Math.max(0, 1 - o / land.margin), 1.3); };
-    const hi = w.ground(i, j), lo = w.ground(i + a, j + b);
-    // (the rim: along the top of the drop, broken, firmer on a cliff; held a little over the whole picture)
-    for (let s = ramp(r, 0, 0.3); s < n;) {
-      const len = Math.min(n - s, ramp(r, 1.4, 3.2)), pts: V3[] = [];
-      for (let q = 0; q <= Math.max(2, Math.round(len / 0.2)); q++) { const ss = s + (len * q) / Math.max(2, Math.round(len / 0.2)); const [gx, gz] = Q(ss, -BAND + 0.035 + (r() - 0.5) * 0.015); pts.push(at(gx, gz)); }
-      ribbon(out, pts, tall ? 0.05 : 0.042, FAM.rim, tall ? 0.9 : 0.75, tall ? 0.45 : 0.35, r());
-      s += len + ramp(r, 0.04, 0.16);
-    }
-    // (down the face: hachures from the rim toward the foot, close-set and short down a cliff, broken at each bed so the
-    // face reads interrupted; long and short by turns down a bank, further apart)
-    const beds = (y: number, gx: number, gz: number) => { const b = bed(gx, gz); return Math.abs(y / b - Math.round(y / b)) * b; };
-    // (a face turned from the sun is in shade: hatched close; one in the sun only where it's shut in, at a run's ends
-    // where it turns (a recess), and sparsely between, shorter: the hatching says where the shade is, not where an edge is)
-    const shaded = a * SUN_XZ[0] + b * SUN_XZ[1] < 0.1;
-    const recess = (s: number) => 1 - Math.min(1, Math.min(s, n - s) / 0.7);
-    let k = 0;
-    // (after the mobile studies: a few, not a texture of them; none across a lit face but in its recesses)
-    for (let s = ramp(r, 0.03, 0.1); s < n; s += (tall ? 0.24 : 0.32) * ramp(r, 0.75, 1.3) * (shaded ? 1 : 4 - 3 * recess(s)), k++) {
-      const reachU = (k % 2 ? 1 : ramp(r, 0.45, 0.7)) * (shaded ? 0.92 : 0.55 + 0.35 * recess(s)), wob = (r() - 0.5) * 0.04;
-      if (!kept(s)) continue;
-      let pts: V3[] = [];
-      const N = cliff ? 10 : 5;
-      for (let q = 0; q <= N; q++) {
-        const u = -BAND + 0.1 + (2 * BAND - 0.15) * reachU * (q / N), [gx, gz] = Q(s + wob * (q / N), u), p = at(gx, gz, LIFT + 0.01);
-        p[0] += a * 0.045; p[2] += b * 0.045;
-        if (cliff && beds(p[1] - LIFT, gx, gz) < 0.035) { if (pts.length > 1) ribbon(out, pts, 0.032, FAM.hachure, 0.55, 0, r(), side); pts = []; continue; }
-        pts.push(p);
+  // ─── cliffs (cliffs.ts): the rock's own edges, the ones the mesh builds it with, so the drawn cliff is the cliff ───
+  // (its rim, along the top of the rock, round its corners and in and out at its joints; its ledges; its foot; the
+  // plane changes down it, at a corner of the high ground and where a block stands forward of the next: a run's
+  // structure kept whole, one pick for the run, so where the drawing thins a cliff goes or stays as one thing. Then,
+  // spent first: hachures down its faces turned from the sun, a crack now and then)
+  for (const run of land.runs) {
+    const pick = rng(run.id, 0x9c1)();
+    for (const sg of run.segs) {
+      const r = rng(run.id, Math.round(sg.x * 7), Math.round(sg.z * 13), 0xe5c), [oa, ob] = sg.o, [ta, tb] = sg.t, drop = sg.hi - sg.lo;
+      const small = drop < 0.6, tall = drop >= 1.6, [ci, cj] = sg.cells[Math.floor(sg.cells.length / 2)], o = land.out(ci, cj);
+      const kept = () => o <= 0 || r() < Math.pow(Math.max(0, 1 - o / land.margin), 1.3);
+      const W = (s: number, rr: number, y: number, out = 0.012, up = 0): V3 => { const p = along(sg, s, rr + out, y + up); return [p[0] - CENTER, p[1], p[2] - CENTER]; };
+      const nB = sg.blocks.length, e0 = (y: number) => reachAt(sg, 0, y), e1 = (y: number) => reachAt(sg, 1, y);
+      // (a line along the face at a height, at each block's offset there, stepping in and out at the joints)
+      const lineAt = (y: number, rOf: (b: (typeof sg.blocks)[number]) => number, up: number) => {
+        const pts: V3[] = [];
+        sg.blocks.forEach((b, q) => {
+          const rb = rOf(b);
+          pts.push(W(q === 0 ? b.s0 - e0(y) : b.s0, rb, y, 0.012, up));
+          pts.push(W(q === nB - 1 ? b.s1 + e1(y) : b.s1, rb, y, 0.012, up));
+        });
+        return pts;
+      };
+      // (the rim)
+      ribbon(out, lineAt(sg.hi, (b) => b.tiers[0].rTop - bevelOf(sg), LIFT), small ? 0.034 : tall ? 0.052 : 0.046, FAM.rim, small ? 0.55 : tall ? 0.92 : 0.8, small ? 0.2 : 0.45, pick);
+      if (small) continue;
+      // (the ledges between its courses, and its foot on the ground below)
+      const T = sg.blocks[0].tiers;
+      for (let k = 1; k < T.length; k++) ribbon(out, lineAt(T[k].top, (b) => b.tiers[k].rTop - bevelOf(sg), LIFT * 0.5), 0.034, FAM.bedding, 0.6, 0.3, pick);
+      ribbon(out, lineAt(sg.lo + 0.01, (b) => offsetAt(b, sg.lo), 0.005), 0.036, FAM.foot, 0.62, 0.28, pick);
+      // (the plane changes down it: at each joint where one block stands forward of the next, and round the high
+      // ground's corner at its end, top to foot through its courses)
+      const down = (s: (y: number) => number, rOf: (y: number) => number, w0: number, weight: number) => {
+        const pts: V3[] = [];
+        const ys = [sg.hi, ...T.slice(1).flatMap((t) => [t.top + 0.001, t.top - 0.001]), sg.lo + 0.01];
+        for (const y of ys) pts.push(W(s(y), rOf(y), y, 0.014));
+        ribbon(out, pts, w0, FAM.fracture, weight, 0.3, pick, [ta, 0, tb]);
+      };
+      for (let q = 0; q + 1 < nB; q++) {
+        const b = sg.blocks[q], c = sg.blocks[q + 1];
+        if (Math.abs(b.tiers[0].rTop - c.tiers[0].rTop) + Math.abs(offsetAt(b, sg.lo) - offsetAt(c, sg.lo)) < 0.03) continue;
+        down(() => b.s1, (y) => Math.max(offsetAt(b, y), offsetAt(c, y)), 0.036, 0.6);
       }
-      ribbon(out, pts, 0.032, FAM.hachure, cliff ? 0.55 : 0.5, 0, r(), side);
-    }
-    // (its foot: where the face meets the ground below it, a lighter line, broken more)
-    for (let s = ramp(r, 0, 0.4); s < n;) {
-      const len = Math.min(n - s, ramp(r, 0.6, 1.8)), pts: V3[] = [];
-      for (let q = 0; q <= Math.max(2, Math.round(len / 0.2)); q++) { const ss = s + (len * q) / Math.max(2, Math.round(len / 0.2)); const [gx, gz] = Q(ss, BAND - 0.05 + (r() - 0.5) * 0.02); pts.push(at(gx, gz)); }
-      ribbon(out, pts, 0.034, FAM.foot, 0.6, 0.25, r());
-      s += len + ramp(r, 0.15, 0.6);
-    }
-    if (!cliff) return;
-    // (its bedding: along the face at each bed's height, found on the face where it stands, a little higher or lower
-    // across each fracture, in long runs with gaps; and a crack down the face here and there)
-    const uAt = (s: number, y: number) => {
-      let u0 = -BAND, u1 = BAND;
-      for (let q = 0; q < 14; q++) { const um = (u0 + u1) / 2, [gx, gz] = Q(s, um); if (Y(gx, gz) > y) u0 = um; else u1 = um; }
-      return (u0 + u1) / 2;
-    };
-    // (each bed's joint where it shows on the face: the foot of its riser, the ledge the mesh steps it into; by the bed's
-    // own thickness there, so it lies on the ledge it marks)
-    const b0 = bed(...Q(n / 2, 0));
-    for (let kb = Math.ceil((lo + 0.12) / b0); kb * b0 < hi - 0.12; kb++) {
-      for (let s = ramp(r, 0, 0.4); s < n;) {
-        const len = Math.min(n - s, ramp(r, 0.7, 2)), pts: V3[] = [], M = Math.max(2, Math.round(len / 0.15));
-        if (!kept(s) || r() < 0.65) { s += len + ramp(r, 0.2, 0.6); continue; }
-        for (let q = 0; q <= M; q++) {
-          const ss = s + (len * q) / M, blk = Math.floor(ss * 1.3 + hash(w.land!.seed, kb, 5) / 4294967296);
-          const [mx, mz] = Q(ss, 0), yy = kb * bed(mx, mz) + 0.025 + ((hash(w.land!.seed, i, j, d, blk, kb) / 4294967296) - 0.5) * 0.04;
-          const [gx, gz] = Q(ss, uAt(ss, yy)), p: V3 = [gx - CENTER + a * 0.05, yy, gz - CENTER + b * 0.05];
-          pts.push(p);
+      if (sg.nj === 'convex') down((y) => sg.n + e1(y), (y) => offsetAt(sg.blocks[nB - 1], y), 0.042, 0.78);
+      // (hachures down a face turned from the sun, course by course, a few; a crack now and then)
+      const shaded = oa * SUN_XZ[0] + ob * SUN_XZ[1] < 0.1;
+      for (const b of sg.blocks) {
+        b.tiers.forEach((t) => {
+          if (!shaded) return;
+          for (let s = b.s0 + ramp(r, 0.05, 0.15); s < b.s1 - 0.04; s += ramp(r, 0.14, 0.26)) {
+            if (!kept()) continue;
+            const reach = ramp(r, 0.35, 0.9) * (t.top - t.bot - 0.04), pts: V3[] = [];
+            for (let q = 0; q <= 4; q++) { const y = t.top - 0.03 - (reach * q) / 4; pts.push(W(s + (r() - 0.5) * 0.01, offsetAt(b, y), y, 0.016)); }
+            ribbon(out, pts, 0.03, FAM.hachure, 0.5, 0, r(), [ta, 0, tb]);
+          }
+        });
+        if (r() < 0.45 && kept()) {
+          const s0 = ramp(r, b.s0 + 0.15, b.s1 - 0.15), y0 = sg.hi - ramp(r, 0, 0.08), y1 = Math.max(sg.lo + 0.1, y0 - ramp(r, 0.3, Math.min(1.4, drop))), pts: V3[] = [];
+          for (let q = 0; q <= 5; q++) { const y = y0 + (y1 - y0) * (q / 5), ss = s0 + (r() - 0.5) * 0.05; pts.push(W(ss, offsetAt(b, y), y, 0.016)); }
+          ribbon(out, pts, 0.034, FAM.fracture, 0.62, 0.15, r(), [ta, 0, tb]);
         }
-        ribbon(out, pts, 0.03, FAM.bedding, 0.55, 0.2, r(), [0, 1, 0]);
-        s += len + ramp(r, 0.2, 0.6);
       }
-    }
-    for (let s = ramp(r, 0.2, 0.7); s < n; s += ramp(r, 0.5, 1.2)) {
-      if (r() < 0.25) continue;
-      const pts: V3[] = [], y0 = hi - ramp(r, 0.05, 0.2), y1 = Math.max(lo + 0.1, y0 - ramp(r, 0.4, 1.2));
-      for (let q = 0; q <= 5; q++) { const y = y0 + (y1 - y0) * (q / 5), ss = s + (r() - 0.5) * 0.06, [gx, gz] = Q(ss, uAt(ss, y)); pts.push([gx - CENTER + a * 0.03, y, gz - CENTER + b * 0.03]); }
-      ribbon(out, pts, 0.04, FAM.fracture, 0.75, 0.3, r(), side);
     }
   }
 

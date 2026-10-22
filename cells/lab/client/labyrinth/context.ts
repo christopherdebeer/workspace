@@ -61,6 +61,8 @@ function worked(w: World) {
   cache.set(w, out);
   return out;
 }
+/** whether the bank between a cell and the next its way d is held by a wall, or filled by what's built against it */
+export function walled(w: World): (i: number, j: number, d: number) => boolean { return worked(w).sharp; }
 /** the ground as it's drawn (grid units: cell (i, j) spans i..i+1), its banks held where they're walled */
 export function groundY(w: World, x: number, z: number): number {
   if (!w.land) return 0;

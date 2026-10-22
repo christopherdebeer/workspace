@@ -366,13 +366,17 @@ void main() {
     float cc = dot(vPos.xz, con) * 1.3 + hash(vec3(floor(bedR), 5., 5.)) + (noise(vPos * vec3(2., 3., 2.)) - .5) * .25, colI = floor(cc);
     float bedV = bedR + (hash(vec3(colI, floor(bedR), 6.)) - .5) * .2, bedF = fract(bedV), bedI = floor(bedV);
     // (its tone the plane's (the mesh lights each block as one), only a little moving over it)
-    vec3 rock = mix(vec3(.85, .78, .66), vec3(.90, .85, .75), .55 + .15 * hash(vec3(bedI, colI, 1.)) + .3 * (rough - .5));
+    vec3 rock = mix(vec3(.90, .85, .75), vec3(.95, .92, .84), .55 + .15 * hash(vec3(bedI, colI, 1.)) + .3 * (rough - .5));
     float fr = min(fract(cc), 1. - fract(cc)) / 1.3;
     // (the geometry carries the planes now (mesh.ts: beds and blocks); the material only a little more: a bedding line
     // here and there, broken, and a few fractures, not a course on every bed and a joint on every block, which read as
     // masonry)
-    float bedOn = step(.55, noise(vec3(dot(vPos.xz, con) * .9, bedI * 1.7, 3.))), frOn = step(.62, hash(vec3(bedI, colI, 9.)));
-    rock *= 1. - .1 * (1. - smoothstep(.0, .05, bedF)) * bedOn - .14 * (1. - smoothstep(.0, .025, fr)) * frOn;
+    // (the courses are the mesh's now (cliffs.ts); the bedding only a faint line now and then; the fractures down
+    // the faces carry it, a few to a block, wandering a little)
+    float bedOn = step(.7, noise(vec3(dot(vPos.xz, con) * .9, bedI * 1.7, 3.))), frOn = step(.5, hash(vec3(bedI, colI, 9.)));
+    rock *= 1. - .05 * (1. - smoothstep(.0, .04, bedF)) * bedOn - .16 * (1. - smoothstep(.0, .022, fr)) * frOn;
+    // (weathered a little darker toward each course's foot, lighter at its top where the sun and the rain wash it)
+    rock *= .94 + .1 * smoothstep(.0, .3, fract(vPos.y * 1.1 + .3 * hash(vec3(colI, 2., 2.))));
     rock = mix(rock, vec3(.66, .61, .52), .15 * smoothstep(.65, .9, fbm(vPos * 1.7 + 4.)));
     rock *= 1. - .28 * wetv;
     base = mix(soil, rock, cliff);
