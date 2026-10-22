@@ -249,19 +249,24 @@ void main() {
     else if (vU >= 3. && vU < 4.) at = vec3(floor(vPos.x) + .5, 0., floor(vPos.z) + .5);
     float R0 = reach(at), rg = min(1., R0 * 4.);
     float rate = onIt ? 0. : mat == 3 ? -.07 : mat == 4 ? -.03 : mat == 2 ? .25 : .3;
-    gT = R0 + ((fbm(vec3(at.xz * .9, 5.)) - .5) * .3 + (onIt ? (noise(vPos * 3.1) - .5) * .1 : 0.)) * rg + rate * rg;
+    // (a little uneven, no more: over a broad fade, patches of more and less picture would lie on it as clouds)
+    gT = R0 + (fbm(vec3(at.xz * .9, 5.)) - .5) * .08 * rg + rate * rg;
     if (uPaper > .5) gT = .08;
   }
   gDetail = smoothstep(.5, .85, gT);
   // (a crown cut through more as it's drawn, so its limbs show and it reads as drawn canopy)
   if (vMat < 511.5 && leafCut(vPos, vMat, leafEdge(n) + .32 * (1. - smoothstep(.1, .7, gT)))) discard;
   if (!fur && leftOut(vPos, vU)) discard;
+  // (a stone or a shrub on the land, small on the screen: most of them left out, so a far view isn't peppered)
+  if (!fur && vU >= 3. && vU < 4. && length(fwidth(vPos)) > .04 && fract(vU * 7.31) < smoothstep(.04, .08, length(fwidth(vPos))) * .75) discard;
   vec3 base; float spec = 0., wrap = 0.;
   // (the surface as the light sees it: the face's own normal, turned by the relief of what it's made of (joints, tiles);
   // and how shut in its little hollows are. The ink still sees the face's own)
   vec3 nS = n; float cav = 1.;
   // (how much of the land here is a feature of it (a cliff's rock, a bank's dashes), not its open ground)
   float landFeat = 0.;
+  // (its colour simplified: what it is as a whole, without its patches and drifts, for the way to the drawing)
+  vec3 plain = vec3(-1.);
   if (fur) { base = coat(m0 - 512, vU, n, vTone); wrap = .5; }
   else if (mat == 2) base = vec3(.13, .25, .25);
   else if (mat == 3) {
@@ -364,6 +369,7 @@ void main() {
     rock = mix(rock, vec3(.62, .58, .50), .25 * smoothstep(.6, .9, fbm(vPos * 1.7 + 4.)));
     rock *= 1. - .28 * wetv;
     base = mix(soil, rock, cliff);
+    plain = mix(vec3(.72, .67, .52), vec3(.84, .80, .72), cliff);
     // (the beds' faces turned a little each, the bedding lines and fractures cut in, for the light)
     float kL = keep(6.);
     nS = normalize(n + (vec3(con.x, 0., con.y) * (hash(vec3(bedI, 7., 2.)) - .5) * .5 + vec3(0., 1., 0.) * (smoothstep(.0, .12, bedF) - .5) * .35 + vec3(con.x, 0., con.y) * sign(fract(cc) - .5) * (1. - smoothstep(.0, .05, fr)) * .5) * cliff * kL);
@@ -521,10 +527,18 @@ void main() {
   if (onPaper && !sel && !fur) {
     drawn = 1. - smoothstep(.05, .9, gT);
     float L = dot(c, vec3(.3, .55, .15));
-    // (its colour drained toward the paper's own warmth, not toward grey, so it never reads paler than the page; then
-    // given back to the page)
-    washC = mix(c, mix(PAP * (L / .9), c, .6), smoothstep(.0, .6, drawn));
-    washC = mix(washC, PAP, smoothstep(.15, .95, drawn));
+    // (each of its parts going at its own pace, not all on one ramp: the light first (the picture flattened to its own
+    // colours, no sun or shade or sky on it, so it never fades through a fog of half-light); then its colour, drained
+    // toward the paper's own warmth; then it's the paper. What the light said goes on as the shade's hatching (below),
+    // and in its recesses a narrow wash, held after the rest has gone)
+    washC = mix(c, base, smoothstep(.0, .25, drawn));
+    // (and its colours simplified, before they drain: the land's drifts and patches gone to one colour for each surface,
+    // so they don't lie on it as clouds as they pale)
+    if (plain.x >= 0.) washC = mix(washC, plain, smoothstep(.0, .3, drawn));
+    // (then straight to the page: never through a colour darker than both it and the paper)
+    washC = mix(washC, PAP, smoothstep(.2, .95, drawn));
+    // (only what's built has recesses to hold it: on the land the sky's shut out over whole banks, and it'd lie as fog)
+    if (!onIt) washC *= 1. - .22 * smoothstep(.55, .2, vAo) * smoothstep(.2, .6, drawn) * (1. - smoothstep(.88, 1., drawn));
     // (and over the wash, in the shade, the pen's hatching: one way where it's in shade, crossed where it's darker; laid
     // in the world so it stays on what it shades, and left out where its lines would crowd together)
     float h1 = (vPos.x - vPos.z) * 9. + vPos.y * 6., h2 = (vPos.x + vPos.z) * 9. - vPos.y * 6.;
@@ -534,7 +548,7 @@ void main() {
     float l2 = (1. - smoothstep(.35, 1.1, min(fract(h2), 1. - fract(h2)) / f2)) * (1. - smoothstep(.12, .2, f2));
     float brk = step(.25, noise(vec3(h1 * .35, h2 * .35, 3.)));
     if (uPaper > .5) washC = PAP * (1. + (.05 * noise(vPos * 31.) - .025));
-    washC *= 1. - (uPaper > .5 ? .26 : .3 * (1. - smoothstep(.65, .95, drawn))) * max(l1 * smoothstep(.55, .33, L), l2 * smoothstep(.3, .16, L)) * brk * smoothstep(.15, .5, drawn) * (mat == 3 ? 0. : 1.);
+    washC *= 1. - (uPaper > .5 ? .26 : .34 * (1. - smoothstep(.8, 1., drawn))) * max(l1 * smoothstep(.55, .33, L), l2 * smoothstep(.3, .16, L)) * brk * smoothstep(.06, .3, drawn) * (mat == 3 ? 0. : 1.);
   }
   // (the land, held back: most of the way to its own pale, unlit, the shade still on it)
   bool land = mat == 5 && moss;
@@ -581,14 +595,14 @@ void main() {
   if (onPaper && mat == 3 && !fur) {
     float lf = bnoise(vPos * 4.2 + 11.), fl = max(fwidth(lf), 1e-4);
     float mk = (1. - smoothstep(.5, 1.3, abs(lf - .55) / fl)) * (1. - smoothstep(.06, .12, fl)) * step(.35, bnoise(vPos * 9. + 2.));
-    c = mix(c, vec3(.32, .27, .18), mk * .55 * smoothstep(.4, .85, drawn));
+    c = mix(c, vec3(.32, .27, .18), mk * .3 * smoothstep(.4, .85, drawn));
   }
   // (what's taken up: a faint warm tint; its outline is drawn after, where the mask changes)
   if (sel) c = mix(c, c * vec3(1.1, .98, .84) + vec3(.05, .025, 0.), .6);
   if (uMarks > .5) c = mix(c, PAP, .82);
   oCol = vec4(c, 1.);
-  // (its kind for the post pass, and within land's and the rest's how far it's drawn: land .12–.38, the rest .41–.54)
-  oNrm = vec4(n * .5 + .5, sel ? 1. : land ? .12 + .26 * drawn : fur ? .6 : .41 + .13 * drawn);
+  // (its kind for the post pass, and within each how far it's drawn: land .12–.38, the rest .41–.47, leaves .49–.54)
+  oNrm = vec4(n * .5 + .5, sel ? 1. : land ? .12 + .26 * drawn : fur ? .6 : mat == 3 ? .49 + .05 * drawn : .41 + .06 * drawn);
 }`;
 const SHADOW_FS = `#version 300 es
 precision highp float;
@@ -604,12 +618,32 @@ out vec4 o; void main() { if (pierced(vPos, normalize(vNrm), vMat) || (vMat < 51
  * coloured by its family, the picture faded nearly to the paper under them.
  */
 const STROKE_VS = `#version 300 es
-layout(location=0) in vec3 aPos; layout(location=1) in vec2 aSA; layout(location=2) in vec3 aFam;
-uniform mat4 uVP;
-out vec3 vPos; out vec2 vSA; out vec3 vFam;
-void main() { vPos = aPos; vSA = aSA; vFam = aFam; gl_Position = uVP * vec4(aPos, 1.); }`;
+layout(location=0) in vec3 aPos; layout(location=1) in vec3 aSide; layout(location=2) in vec2 aHW; layout(location=3) in vec2 aSA; layout(location=4) in vec3 aFam;
+uniform mat4 uVP; uniform vec2 uView; uniform float uDpr;
+out vec3 vPos; out vec2 vSA; out vec3 vFam; out float vKeep;
+// (the least a mark of each family is on the screen, in the page's own pixels, so the land's structure holds at any
+// distance: a rim most; a foot, a fracture, a contact, a way's edge, a flight's string next; the rest less)
+float least(float f) {
+  return f < .5 ? 2.2 : f < 1.5 ? 1. : f < 2.5 ? 1.15 : f < 4.5 ? 1.5 : f < 5.5 ? 1.1 : f < 6.5 ? 1.3 : f < 8.5 ? 1. : f < 9.5 ? 1.1 : f < 11.5 ? 1.4 : f < 12.5 ? .9 : 1.5;
+}
+void main() {
+  float fam = floor(aFam.x + .001);
+  // (how many of the page's pixels a cell is, from the camera; and how wide this mark would be there)
+  vec2 ux = (uVP * vec4(1., 0., 0., 0.)).xy * .5 * uView, uz = (uVP * vec4(0., 0., 1., 0.)).xy * .5 * uView;
+  float cellPx = max(length(ux), length(uz)) / uDpr;
+  vec4 c0 = uVP * vec4(aPos, 1.), c1 = uVP * vec4(aPos + aSide * aHW.x, 1.);
+  float px = length((c1.xy - c0.xy) * .5 * uView);
+  float k = min(4., max(1., least(fam) * uDpr * .5 / max(px, 1e-3)));
+  vec3 p = aPos + aSide * aHW.x * aHW.y * aSA.x * k;
+  // (the detail (hachures, bedding, current, rings, treads, joints) thinned as it gets small, so a far view simplifies
+  // and keeps its structure: whole marks left out, by their pick)
+  bool detail = (fam > .5 && fam < 2.5) || (fam > 4.5 && fam < 5.5) || (fam > 7.5 && fam < 9.5) || (fam > 11.5 && fam < 12.5);
+  vKeep = detail ? clamp((cellPx - 16.) / 55., .12, 1.) : 1.;
+  vPos = p; vSA = aSA; vFam = aFam;
+  gl_Position = uVP * vec4(p, 1.);
+}`;
 const STROKE_FS = COMMON + REACH + `
-in vec3 vPos; in vec2 vSA; in vec3 vFam;
+in vec3 vPos; in vec2 vSA; in vec3 vFam; in float vKeep;
 uniform float uMarks;
 layout(location=0) out vec4 oCol; layout(location=1) out vec4 oNrm;
 float hash(vec3 p) { return fract(sin(dot(p, vec3(127.1, 311.7, 74.7))) * 43758.5453); }
@@ -618,8 +652,8 @@ float noise(vec3 x) { vec3 i = floor(x), f = fract(x); f = f * f * (3. - 2. * f)
              mix(mix(hash(i + vec3(0,0,1)), hash(i + vec3(1,0,1)), f.x), mix(hash(i + vec3(0,1,1)), hash(i + vec3(1,1,1)), f.x), f.y), f.z); }
 void main() {
   float across = vSA.x, fam = floor(vFam.x + .001), weight = fract(vFam.x + .001), persist = vFam.y, pick = vFam.z;
-  if (pick > reachLines(vPos) * 1.3 - .05) discard;
-  float R0 = reach(vPos), t = R0 + (noise(vec3(vPos.xz * .9, 5.)) - .5) * .3 * min(1., R0 * 4.), drawn = 1. - smoothstep(.05, .9, t);
+  if (pick > reachLines(vPos) * 1.3 - .05 || pick > vKeep) discard;
+  float R0 = reach(vPos), t = R0 + (noise(vec3(vPos.xz * .9, 5.)) - .5) * .08 * min(1., R0 * 4.), drawn = 1. - smoothstep(.05, .9, t);
   float aa = max(fwidth(across), 1e-4);
   float cov = (1. - smoothstep(1. - aa, 1. + aa * .5, abs(across))) * min(1., 2. / aa);
   float dry = smoothstep(.18, .32, noise(vec3(vPos.xz * 7.5 + vPos.y * 3., fam * 3.1)));
@@ -694,9 +728,13 @@ void main() {
   float onLand = bleedOn() > .5 ? step(m, .4) : step(.1, m) * step(m, .4);
   // (as the drawing takes over from the render (how far, from the mask), the lines come up: heavier, and at creases as
   // well as folds; on the land too, its ledges and banks, a little lighter, broken)
-  float drawn = bleedOn() < .5 ? 0. : m > .405 && m < .545 ? clamp((m - .41) / .13, 0., 1.) : m > .1 && m < .4 ? clamp((m - .12) / .26, 0., 1.) : 0.;
+  // (the hierarchy: the land's own occlusions (a bank passing in front of another) and what's built firmest; a tree
+  // lightest, its crown's outline a hint, not a ring round each part of it)
+  bool leafM = m > .485 && m < .545;
+  float drawn = bleedOn() < .5 ? 0. : m > .405 && m < .475 ? clamp((m - .41) / .06, 0., 1.) : leafM ? clamp((m - .49) / .05, 0., 1.) : m > .1 && m < .4 ? clamp((m - .12) / .26, 0., 1.) : 0.;
   float fold = smoothstep(.04, .14, lap), crease = smoothstep(.3, .6, turn);
-  float wt = (furOn > .5 ? .4 : mix(.16, .8, drawn)) * fold * (1. - onLand) + crease * drawn * .6 * (1. - onLand);
+  float wt = (furOn > .5 ? .4 : leafM ? mix(.08, .3, drawn) : mix(.16, .8, drawn)) * fold * (1. - onLand) + (leafM ? 0. : crease * drawn * .6) * (1. - onLand);
+  wt = max(wt, onLand * smoothstep(.2, .5, lap) * mix(.12, .55, drawn));
   if (uMarks > .5) wt *= .15;
   o = vec4(mix(mix(c, ink * 1.6, max(wt * (1. - step(.5, skyN)), rim * .8)), vec3(.69, .36, .12), ring * .9), 1.);
   // (bleeding: the same paper under everything, its edge a shade darker, so the ground and the page are one sheet)
@@ -831,8 +869,10 @@ export class Renderer {
     gl.bindVertexArray(this.svao); gl.bindBuffer(gl.ARRAY_BUFFER, this.sbuf);
     { const F = 4, S = STROKE_STRIDE * F;
       gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 3, gl.FLOAT, false, S, 0);
-      gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1, 2, gl.FLOAT, false, S, 3 * F);
-      gl.enableVertexAttribArray(2); gl.vertexAttribPointer(2, 3, gl.FLOAT, false, S, 5 * F); }
+      gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1, 3, gl.FLOAT, false, S, 3 * F);
+      gl.enableVertexAttribArray(2); gl.vertexAttribPointer(2, 2, gl.FLOAT, false, S, 6 * F);
+      gl.enableVertexAttribArray(3); gl.vertexAttribPointer(3, 2, gl.FLOAT, false, S, 8 * F);
+      gl.enableVertexAttribArray(4); gl.vertexAttribPointer(4, 3, gl.FLOAT, false, S, 10 * F); }
     gl.bindVertexArray(null);
     const tq = gl.getExtension('EXT_disjoint_timer_query_webgl2');
     if (tq) this.timer = { ext: tq as unknown as { TIME_ELAPSED_EXT: number; GPU_DISJOINT_EXT: number }, pending: [], sum: [0, 0, 0], n: 0 };
@@ -982,7 +1022,7 @@ export class Renderer {
     if (this.scount) {
       gl.useProgram(this.stroke);
       const S = (n: string) => gl.getUniformLocation(this.stroke, n);
-      gl.uniformMatrix4fv(S('uVP'), false, cam.vp); gl.uniform1f(S('uMarks'), this.marks ? 1 : 0);
+      gl.uniformMatrix4fv(S('uVP'), false, cam.vp); gl.uniform1f(S('uMarks'), this.marks ? 1 : 0); gl.uniform2f(S('uView'), w, h); gl.uniform1f(S('uDpr'), dpr);
       gl.uniform1f(S('uBleed'), this.bleed ? 1 : 0); gl.uniform1f(S('uPaper'), this.print ? 1 : 0); gl.uniform4fv(S('uLand'), this.landBox); this.bindFocus(this.stroke);
       gl.bindVertexArray(this.svao);
       gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA); gl.depthMask(false); gl.disable(gl.CULL_FACE);

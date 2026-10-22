@@ -1,6 +1,6 @@
 // The look of the drawing, judged in the same few views of the same place (node cells/lab/devtools/labyrinth-look.mjs
 // --tag=NAME): the study (demo.ts story 16: three houses, a tower set into the cliff, an arcade, a stair, olives, the
-// stream and its fall), drawn wide and close, each view a picture in devtools/out/look/NAME-VIEW.png and all of them on
+// stream and its fall, a way out across it into the drawn land), drawn wide, close and far, each view a picture in devtools/out/look/NAME-VIEW.png and all of them on
 // one sheet, static/labyrinth/look-NAME.jpg. Every change to the renderer is looked at in these, before and after.
 //   --only=VIEW   --size=900   --frames (a time for each view's first frames, as a rough measure: not the phone's)
 //   --marks (the drawing's marks by family, the picture faded under them)   --print (all of it on the paper)
@@ -15,6 +15,7 @@ export const VIEWS = [
   { name: 'close', query: 'story=16&zoom=0.2&at=10.6' },
   { name: 'turned', query: 'story=16&zoom=0.5&turn=1' },
   { name: 'far side', query: 'story=16&zoom=0.26&at=5.2&turn=3' },
+  { name: 'far', query: 'story=16&zoom=1.2' },
 ];
 
 const tag = opt.tag ?? 'now', size = Number(opt.size ?? 900);

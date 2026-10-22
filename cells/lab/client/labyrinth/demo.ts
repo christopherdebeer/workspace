@@ -351,5 +351,11 @@ function study(): World {
   const wall = trace(w, g(9, 9), [[9, 9], [10, 9], [11, 9], [12, 9], [13, 9]], null, () => t, t, [], 'mass');
   if (wall && !('refused' in wall)) w.apply({ ...((wall.alts ?? []).find((a) => a.label === 'an arcaded wall')?.op ?? wall), alts: undefined }, t);
   w.apply({ plants: [[w.ground(6, 7), 6, 7, PLANT.olive, t]] }, t);
+  // (and a way from the arcade's foot west, across the stream and on out into the land the drawing takes over: for the
+  // passage from the picture to the page to be judged along a way, over water)
+  const out: Array<[number, number]> = [];
+  for (let i = 8; i >= -1; i--) out.push([i, 9]);
+  const way = trace(w, g(8, 9), out, g(-1, 9), () => t, t, [], 'way');
+  if (way && !('refused' in way)) w.apply({ ...way, alts: undefined }, t);
   return w;
 }

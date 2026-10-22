@@ -168,6 +168,33 @@ Past the picture's reach, it's strokes on the paper only.
 
 ![Further](labyrinth/look-lines.jpg)
 
+## Stage 12: pass 1, the drawing on its own
+
+![The drawing on its own: print, all material colour off (wide, close, turned, far side, far)](labyrinth/look-p1print.jpg)
+
+![The same views with the picture](labyrinth/look-p1.jpg)
+
+After Astra's review of the phone screenshots: the transition read as a rendered island dissolving into paper, with outlined objects round it. The terrain went before the trees did, so the trees became symbols floating on the page. The milestone is spatial continuity: the drawing on its own must hold a readable three-dimensional place, close and far. Print (everything at the paper's end) is the acceptance view, and the study gained a way out across the stream into the drawn land. The look harness gained a far view, matching the zoomed-out screenshot.
+
+- **Marks hold at any distance:**
+  - Each mark is widened, in the vertex shader, to a least width on the screen by its family, and keeps its taper. A rim holds firmest; a foot, a fracture, a contact, a way's edge and a flight's string next; detail least.
+  - The detail families (hachures, bedding, current, rings, treads, joints) thin out as they get small on the screen, whole marks left out. A far view simplifies and keeps its structure.
+- **Terrain first:**
+  - A rim is now connected, broken only here and there.
+  - Each drop has a **foot**, a lighter line where the face meets the ground below.
+  - Hachures gather on faces turned from the sun and in the recesses at a run's ends, sparse and shorter across a lit face, and begin a little below the rim, so they no longer hang off it as a fringe.
+  - The land's own occlusions are drawn (where a bank passes in front of another): lines from depth jumps only, never from creases.
+- **Vegetation demoted:** a tree's leaves have their own range in the mask, so the post pass draws a crown's outline as a hint, not a ring round each clump, and its leaf marks are lighter. Small stones and scrub are mostly left out once they're small on the screen.
+- **The stream can be followed:** every bank gets a line along the water's edge, laid on the ground where the land comes down to it, firmer where it's steep.
+- **No clouds.** Each channel goes at its own pace instead of all on one ramp:
+  1. **Light first:** the picture flattened to its own colours by a quarter of the way.
+  2. **Colours simplified:** the land's drifts and patches settle to one colour for each surface (grass, rock), so they don't lie on it as clouds as they pale.
+  3. **Then straight to the page,** never through a colour darker than both the colour and the paper.
+
+  What the light said goes on as the shade's hatching, and in what's built a narrow wash holds in recesses. The ramp's own unevenness is slight: over a broad fade, patches of more and less picture had read as fog.
+
+Next: pass 2 (material restoration: construction and local terrain colour back without weakening the drawing round them), then pass 3 (the source forms: trees with branching trunks, irregular crowns and gaps; cliffs with broader angular faces, interrupted shelves and fractured masses).
+
 ## Stage 10: marks with reasons (after Taohua)
 
 ![The drawing's marks, laid by the features that call for them](labyrinth/look-strokes.jpg)
