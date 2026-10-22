@@ -168,6 +168,19 @@ Past the picture's reach, it's strokes on the paper only.
 
 ![Further](labyrinth/look-lines.jpg)
 
+## Stage 15: patches, not a halo (after the phone)
+
+![Patches, not a halo](labyrinth/look-patch.jpg)
+
+The phone, before and after stage 14, showed three things still keeping it from the studies:
+- the painted area ending in a soft, even oval round what's built, which reads as an airbrushed halo;
+- the drawn cliffs' rims carrying rows of evenly spaced short hachures, which read as combs at that size;
+- the drawn trees heavier than the terrain round them.
+
+- **Patches:** the land goes to the page in patches that follow it. Each level of ground is a little ahead or behind the next, so a patch ends at a cliff's edge, and broad patches run across it. Each patch goes over a short way, softly, while the patches are spread over the whole broad way. So the painted area ends in pieces of terrace, as the material-to-paper study's colour does, not a gradient.
+- **No combs:** hachures thin out hard as cells get small on the screen. At the phone's play view a drawn cliff is its rim, its foot and a joint or two.
+- **Lighter trees:** in the drawing, a tree's leaf marks go as it gets small, and its crown's outline is lighter.
+
 ## Stage 14: after the mobile studies
 
 ![After the mobile studies](labyrinth/look-mobile.jpg)

@@ -251,6 +251,15 @@ void main() {
     float rate = onIt ? 0. : mat == 3 ? -.07 : mat == 4 ? -.03 : mat == 2 ? .25 : .3;
     // (a little uneven, no more: over a broad fade, patches of more and less picture would lie on it as clouds)
     gT = R0 + (fbm(vec3(at.xz * .9, 5.)) - .5) * .08 * rg + rate * rg;
+    // (the land given to the page in patches that follow it, not an airbrushed halo: each terrace (each level of
+    // ground) a little ahead or behind the next, so a patch ends at a cliff's edge; and broad patches across it; each
+    // patch going over a short way, the patches spread over the whole broad way)
+    if (onIt) {
+      float lv = floor(vPos.y * 3. + .5 - smoothstep(.5, .9, 1. - n.y) * .5);
+      float patchT = (hash(vec3(lv, 11., 3.)) - .5) * .5 + (fbm(vec3(vPos.xz * .45, 9.)) - .5) * .55;
+      gT = .5 + (smoothstep(.0, 1., R0 + patchT * rg) - .5) * 1.0;
+      gT = mix(gT, smoothstep(.3, .62, gT), .7);
+    }
     if (uPaper > .5) gT = .08;
   }
   gDetail = smoothstep(.5, .85, gT);
@@ -609,7 +618,7 @@ void main() {
   if (onPaper && mat == 3 && !fur) {
     float lf = bnoise(vPos * 4.2 + 11.), fl = max(fwidth(lf), 1e-4);
     float mk = (1. - smoothstep(.5, 1.3, abs(lf - .55) / fl)) * (1. - smoothstep(.06, .12, fl)) * step(.35, bnoise(vPos * 9. + 2.));
-    c = mix(c, vec3(.32, .27, .18), mk * .3 * smoothstep(.4, .85, drawn));
+    c = mix(c, vec3(.32, .27, .18), mk * .3 * smoothstep(.4, .85, drawn) * keep(3.));
   }
   // (what's taken up: a faint warm tint; its outline is drawn after, where the mask changes)
   if (sel) c = mix(c, c * vec3(1.1, .98, .84) + vec3(.05, .025, 0.), .6);
@@ -654,7 +663,7 @@ void main() {
   // (the detail (hachures, bedding, current, rings, treads, joints) thinned as it gets small, so a far view simplifies
   // and keeps its structure: whole marks left out, by their pick)
   bool detail = (fam > .5 && fam < 2.5) || (fam > 4.5 && fam < 5.5) || (fam > 7.5 && fam < 9.5) || (fam > 11.5 && fam < 12.5);
-  vKeep = detail ? clamp((cellPx - 16.) / 55., .12, 1.) : 1.;
+  vKeep = detail ? clamp((cellPx - 24.) / 70., fam > .5 && fam < 1.5 ? .04 : .12, 1.) : 1.;
   vPos = p; vSA = aSA; vFam = aFam;
   gl_Position = uVP * vec4(p, 1.);
 }`;
@@ -750,7 +759,7 @@ void main() {
   bool leafM = m > .485 && m < .545;
   float drawn = bleedOn() < .5 ? 0. : m > .405 && m < .475 ? clamp((m - .41) / .06, 0., 1.) : leafM ? clamp((m - .49) / .05, 0., 1.) : m > .1 && m < .4 ? clamp((m - .12) / .26, 0., 1.) : 0.;
   float fold = smoothstep(.04, .14, lap), crease = smoothstep(.3, .6, turn);
-  float wt = (furOn > .5 ? .4 : leafM ? mix(.08, .3, drawn) : mix(.16, .8, drawn)) * fold * (1. - onLand) + (leafM ? 0. : crease * drawn * .6) * (1. - onLand);
+  float wt = (furOn > .5 ? .4 : leafM ? mix(.06, .2, drawn) : mix(.16, .8, drawn)) * fold * (1. - onLand) + (leafM ? 0. : crease * drawn * .6) * (1. - onLand);
   wt = max(wt, onLand * smoothstep(.2, .5, lap) * mix(.12, .55, drawn));
   // (the land's rock, where it's painted: its planes edged where they meet at a sharp turn, lightly)
   wt = max(wt, onLand * smoothstep(.5, .8, turn) * .32 * (1. - drawn * .5));
