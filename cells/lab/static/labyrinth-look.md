@@ -187,6 +187,26 @@ Past the picture's reach, it's strokes on the paper only.
 
 ![Further](labyrinth/look-lines.jpg)
 
+## Stage 20: the land off the grid (after the phone: "more blocky and voxel than before")
+
+![The land off the grid](labyrinth/look-terrain.jpg)
+
+Stage 17's cliffs followed every cell's edge, so each run of the land was a staircase of right angles: a voxel landscape, more so than the soft banks before it. The target's terraces and limestone are as flat and as blocky, but their outlines wander, round off and run across the grid.
+
+**The levels as fields** (cliffs.ts):
+- **Each level a field:** for each level the land steps up to, a field over the ground. It's each cell's own (whether its ground is that high), blended with its neighbours' through a smooth kernel, moved a little by noise. The terrace is where the field is over a half; its edge is the contour there. So a staircase of cells reads as a diagonal, a corner is rounded, a lone rise is a knoll, and every edge wanders.
+- **Where things stand stays true:** the middle of every cell keeps its own level, so nothing that stands at a cell floats or sinks. Where anything's built, the cell is kept square and exact: on it or against its ground, a wall or what's built holding its bank, a way, paving, a court, a pool, a flight, a fall of the stream. The land meets what's built as it did.
+- **Near the stream:** the levels over its bed are held back from it, the higher the further. Its banks open upward in steps and its water is seen. The water lies on the bed's own terraces, so it follows the banks' winding, not the cells.
+
+**The ground, the rock and the drawing from the same contours:**
+- **Terraces:** each square of samples (four to a cell) is cut along the contours that cross it, each part flat at its level. Uniform squares run on along their row.
+- **Cliffs:** each contour is chained into a run, its line simplified to what its shape needs. Where two levels' contours lie apart, the cliff is in two steps with a ledge between. Where they lie together, as at an exact edge, it's one cliff the whole height.
+- **Blocks:** set forward or back, leaning back, with bevelled tops. Now and then a block is sunk, and a tall face is in two courses.
+- **Ink:** the rim along the rock's top, its ledges and foot, plane changes where blocks meet and where the line turns sharply, and the stream's bank at the water's edge.
+- **Ground height:** read from the same fields (`groundAt`, through context.ts `groundY`), so the cats, the picks and what's placed on the land agree with what's drawn.
+
+**Cost:** the study with the land bleeding into the page now builds in about 1.1 s in node, against 0.7 s for stage 17 and 5.4 s before it. Ground vertices went from 158k to 236k (the contours are finer than cell edges), and the marks from 101k to 81k.
+
 ## Stage 19: what's built and what grows, rebalanced
 
 ![Stage 19](labyrinth/look-stage19.jpg)

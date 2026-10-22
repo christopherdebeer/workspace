@@ -26,7 +26,7 @@ import { climb, grow, growths } from './plants';
 import { strokes, type Skeleton, type StrokeLand } from './strokes';
 import { DOMAIN, LAND, noise2, onLand } from './land';
 import { groundY, retaining } from './context';
-import { along, bevelOf, cliffEdges, cliffs, cutBack, levelAt, offsetAt, type Run, type Seg } from './cliffs';
+import { blockAt, courses, landForm, levelAt, type LandForm, type V2 } from './cliffs';
 
 /** floats a vertex: position, normal, ao (1 open .. 0 shut in), material (MAT), its rising (when laid, the height it
  * grows from, how), and a seed for its stone's tone */
@@ -973,14 +973,13 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
    */
   function landMesh() {
     const land = w.land!, B = drawnBox(w), x0 = B.i0, x1 = B.i1 + 1, z0 = B.j0, z1 = B.j1 + 1;
-    // (the ground: each cell flat at its level, a terrace; where the land steps from one to the next, a cliff of its own,
-    // built from cliffs.ts, so the rock is a few broad planes and the drawing's lines are its edges)
+    // (the ground: its terraces and the cliffs between them (cliffs.ts), their outlines the lie of the land and not the
+    // cells' edges; square and exact only where something's built)
     const Y = (gx: number, gz: number) => groundY(w, Math.min(x1 - 1e-4, Math.max(x0, gx)), Math.min(z1 - 1e-4, Math.max(z0, gz)));
-    const lev = (i: number, j: number) => levelAt(w, Math.min(B.i1, Math.max(B.i0, i)), Math.min(B.j1, Math.max(B.j0, j)));
-    const runs = cliffs(w, B), back = cutBack(w, B), edgesC = cliffEdges(w, B);
+    const form = landForm(w, B);
     cur = { born: -1e3, pivot: 0, how: 1, tone: 0.5, dress: 0, sel: false };
     const Eo = w.extent();
-    drawnLand = { Y, B, runs, on: (i, j) => i >= B.i0 && i <= B.i1 && j >= B.j0 && j <= B.j1, out: (i, j) => Math.max(Eo.i0 - i, i - Eo.i1, Eo.j0 - j, j - Eo.j1, 0), margin: DRAWN_MARGIN };
+    drawnLand = { Y, B, form, on: (i, j) => i >= B.i0 && i <= B.i1 && j >= B.j0 && j <= B.j1, out: (i, j) => Math.max(Eo.i0 - i, i - Eo.i1, Eo.j0 - j, j - Eo.j1, 0), margin: DRAWN_MARGIN };
     perf.begin('mesh.build.ground.grid');
     // (how near the water a point is (in its `tone`): the ground darker and greener where it's wet, at a bank)
     const dampAt = (gx: number, gz: number, y: number) => {
@@ -992,8 +991,8 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
       }
       return Math.max(0, 1 - d / 1.1) ** 1.5;
     };
-    // (each terrace's cell: in a few quads where its shade can change across it (by a drop, by what's built, near what's
-    // shown), in one where it can't; its shade the sky each corner sees, so it darkens at a cliff's foot and in a court)
+    // (each piece of terrace flat at its level; its shade the sky each corner sees, so it darkens at a cliff's foot and
+    // in a court)
     const UP: V3 = [0, 1, 0];
     const skyAt = new Map<number, number>();
     const skyOf = (gx: number, gz: number, y: number) => {
@@ -1002,56 +1001,46 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
       if (v === undefined) { v = 0.25 + 0.75 * skyVis([gx - CENTER, y, gz - CENTER], UP); skyAt.set(k, v); }
       return v;
     };
-    for (let j = B.j0; j <= B.j1; j++) for (let i = B.i0; i <= B.i1; i++) {
-      if (!onLand(i, j)) continue;
-      const y = lev(i, j), out = Math.max(Eo.i0 - i, i - Eo.i1, Eo.j0 - j, j - Eo.j1, 0);
-      let fine = out <= 1;
-      for (let a = -1; a <= 1 && !fine; a++) for (let b = -1; b <= 1 && !fine; b++) if (Math.abs(lev(i + a, j + b) - y) > 0.01) fine = true;
-      const R = fine ? 3 : 1;
-      // (where its cliff's cut back to the stream below, it stops at the rim; and in a corner the cut-back rims of the two
-      // cells beside it meet in, a square out of its corner)
-      const ins = DIRS.map((_, d) => back.get(`${i}.${j}.${d}`) ?? 0);
-      let ax = i + ins[2], bx = i + 1 - ins[0], az = j + ins[3], bz = j + 1 - ins[1];
-      const rects: Array<[number, number, number, number]> = [];
-      let cut: [number, number, number, number] | null = null;
-      for (let d = 0; d < 4 && !cut; d++) {
-        const d2 = (d + 1) % 4, [a1, b1] = DIRS[d], [a2, b2] = DIRS[d2];
-        if (ins[d] || ins[d2]) continue;
-        const s1 = back.get(`${i + a1}.${j + b1}.${d2}`), s2 = back.get(`${i + a2}.${j + b2}.${d}`);
-        if (s1 && s2 && lev(i + a1, j + b1) === y && lev(i + a2, j + b2) === y) { const wx = a1 ? s2 : s1, wz = a1 ? s1 : s2, cx = a1 + a2 > 0 ? 1 : -1, cz = b1 + b2 > 0 ? 1 : -1; cut = [cx, cz, wx, wz]; }
-      }
-      if (!cut) rects.push([ax, bx, az, bz]);
-      else {
-        const [cx, cz, wx, wz] = cut;
-        if (cz > 0) { rects.push([ax, bx, az, bz - wz]); rects.push(cx > 0 ? [ax, bx - wx, bz - wz, bz] : [ax + wx, bx, bz - wz, bz]); }
-        else { rects.push([ax, bx, az + wz, bz]); rects.push(cx > 0 ? [ax, bx - wx, az, az + wz] : [ax + wx, bx, az, az + wz]); }
-      }
-      // (behind each of its cliffs, the ground's own side down to the next terrace, dark: the rock stands in front of it,
-      // and where the rock's faces don't quite close (where three heights meet) the gap's a crevice, not a hole)
-      for (let d = 0; d < 4; d++) {
-        if (!edgesC.has(`${i}.${j}.${d}`)) continue;
-        const [a, b] = DIRS[d], lo = lev(i + a, j + b) - 0.1;
-        const x = a > 0 ? bx : a < 0 ? ax : 0, z = b > 0 ? bz : b < 0 ? az : 0;
-        const A: V3 = a ? [x - CENTER, y, az - CENTER] : [ax - CENTER, y, z - CENTER], Bq: V3 = a ? [x - CENTER, y, bz - CENTER] : [bx - CENTER, y, z - CENTER];
-        quad(A, Bq, [Bq[0], lo, Bq[2]], [A[0], lo, A[2]], [a, 0, b], [0.45, 0.45, 0.3, 0.3], LANDMAT);
-      }
-      for (const [rx0, rx1, rz0, rz1] of rects) {
-        const nA = Math.max(1, Math.round((rx1 - rx0) * R)), nB = Math.max(1, Math.round((rz1 - rz0) * R));
-        for (let a = 0; a < nA; a++) for (let b = 0; b < nB; b++) {
-          const P = (fa: number, fb: number) => { const gx = rx0 + ((rx1 - rx0) * fa) / nA, gz = rz0 + ((rz1 - rz0) * fb) / nB; cur.tone = dampAt(gx, gz, y); vert([gx - CENTER, y, gz - CENTER], UP, skyOf(gx, gz, y), LANDMAT); };
-          for (const [fa, fb] of [[a, b], [a, b + 1], [a + 1, b], [a, b + 1], [a + 1, b + 1], [a + 1, b]]) P(fa, fb);
-        }
-      }
+    const wet = (i: number, j: number) => land.water.has(j * 1000 + i);
+    const order = new Map(land.stream.map(([i, j], q) => [j * 1000 + i, q]));
+    // (the stream's water over its bed: which way it runs where (the angle to the next cell down it, in the vertex's
+    // `how`, past 1, so the shader moves its ripples that way), and how deep, shallow toward a dry bank)
+    const flowOf = (i: number, j: number) => {
+      const q0 = order.get(j * 1000 + i);
+      if (q0 === undefined) return 1.001;
+      const next = land.stream[q0 + 1], prev = land.stream[q0 - 1], to = next ?? [i + (i - (prev?.[0] ?? i)), j + (j - (prev?.[1] ?? j))];
+      const ang = Math.atan2(to[1] - j, to[0] - i);
+      return 1 + ((ang / (2 * Math.PI) + 1) % 1) * 0.98 + 0.001;
+    };
+    const deepAt = (gx: number, gz: number, level: number) => {
+      // (how far in from ground that isn't this bed: sampled round about)
+      let d = 0.6;
+      for (const [a, b] of [[1, 0], [-1, 0], [0, 1], [0, -1], [0.7, 0.7], [-0.7, 0.7], [0.7, -0.7], [-0.7, -0.7]]) for (const r of [0.15, 0.3, 0.45, 0.6]) if (r < d && Math.abs(Y(gx + a * r, gz + b * r) - level) > 0.01) { d = r; break; }
+      return Math.min(0.97, Math.max(0, (d - 0.05) / 0.45));
+    };
+    for (const rg of form.regions) {
+      const y = rg.level, P = rg.poly;
+      const V = (p: V2) => { cur.tone = dampAt(p[0], p[1], y); vert([p[0] - CENTER, y, p[1] - CENTER], UP, skyOf(p[0], p[1], y), LANDMAT); };
+      for (let q = 1; q + 1 < P.length; q++) { V(P[0]); V(P[q + 1]); V(P[q]); }
+      if (!form.beds.has(y)) continue;
+      // (the water over a piece of the stream's bed: from the cell of the stream it's in, or beside)
+      const cx = P.reduce((t, p) => t + p[0], 0) / P.length, cz = P.reduce((t, p) => t + p[1], 0) / P.length, ci = Math.floor(cx), cj = Math.floor(cz);
+      let fi = ci, fj = cj;
+      if (!wet(ci, cj)) for (const [a, b] of [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]]) if (wet(ci + a, cj + b) && levelAt(w, ci + a, cj + b) === y) { fi = ci + a; fj = cj + b; break; }
+      const how = flowOf(fi, fj), yw = y + 0.13;
+      const W = (p: V2) => { cur = { born: -1e3, pivot: 0, how, tone: deepAt(p[0], p[1], y), dress: 0, sel: false }; vert([p[0] - CENTER, yw, p[1] - CENTER], UP, 1, MAT.water); };
+      for (let q = 1; q + 1 < P.length; q++) { W(P[0]); W(P[q + 1]); W(P[q]); }
+      cur = { born: -1e3, pivot: 0, how: 1, tone: 0.5, dress: 0, sel: false };
     }
     cur.tone = 0;
     perf.end(); perf.begin('mesh.build.ground.rock');
-    rock(runs);
+    rock(form);
     // (its sides: rock, down from its edge to the table; bleeding into the page, after Taohua, neither: the land's
     // ground is all there is of it)
     const foot = -SLAB;
     if (!bleed) {
-      for (let i = B.i0; i <= B.i1; i++) for (const [j, zz, n] of [[B.j0, z0, -1], [B.j1, z1, 1]] as const) { const y = lev(i, j); quad([i - CENTER, y, zz - CENTER], [i + 1 - CENTER, y, zz - CENTER], [i + 1 - CENTER, foot, zz - CENTER], [i - CENTER, foot, zz - CENTER], [0, 0, n], [1, 1, 0.6, 0.6], LANDMAT); }
-      for (let j = B.j0; j <= B.j1; j++) for (const [i, xx, n] of [[B.i0, x0, -1], [B.i1, x1, 1]] as const) { const y = lev(i, j); quad([xx - CENTER, y, j - CENTER], [xx - CENTER, y, j + 1 - CENTER], [xx - CENTER, foot, j + 1 - CENTER], [xx - CENTER, foot, j - CENTER], [n, 0, 0], [1, 1, 0.6, 0.6], LANDMAT); }
+      for (let i = B.i0; i <= B.i1; i++) for (const [zz, n] of [[z0, -1], [z1, 1]] as const) { const y = Y(i + 0.5, zz + (n < 0 ? 0.001 : -0.001)); quad([i - CENTER, y, zz - CENTER], [i + 1 - CENTER, y, zz - CENTER], [i + 1 - CENTER, foot, zz - CENTER], [i - CENTER, foot, zz - CENTER], [0, 0, n], [1, 1, 0.6, 0.6], LANDMAT); }
+      for (let j = B.j0; j <= B.j1; j++) for (const [xx, n] of [[x0, -1], [x1, 1]] as const) { const y = Y(xx + (n < 0 ? 0.001 : -0.001), j + 0.5); quad([xx - CENTER, y, j - CENTER], [xx - CENTER, y, j + 1 - CENTER], [xx - CENTER, foot, j + 1 - CENTER], [xx - CENTER, foot, j - CENTER], [n, 0, 0], [1, 1, 0.6, 0.6], LANDMAT); }
       // (the table round it)
       const T = 90, R = 1.6, xa = x0 - CENTER, xb = x1 - CENTER, za = z0 - CENTER, zb = z1 - CENTER;
       quad([xa - R, foot, za - R], [xb + R, foot, za - R], [xb + R, foot, zb + R], [xa - R, foot, zb + R], [0, 1, 0], 1, MAT.table);
@@ -1059,30 +1048,15 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
     }
     cur.tone = 0.5;
     perf.end(); perf.begin('mesh.build.ground.water');
-    // (the stream: its water a little under its banks, a fall where its bed steps down to the next)
-    const wet = (i: number, j: number) => land.water.has(j * 1000 + i);
-    // (each cell's water knows which way it runs (to the next cell down the stream: its angle, in the vertex's `how`, past
-    // 1, so the shader moves its ripples that way) and how deep it is at each point: shallow at a dry bank, deeper away
-    // from one (in its `tone`), laid in a little grid so the depth can change across the cell)
-    const order = new Map(land.stream.map(([i, j], q) => [j * 1000 + i, q]));
+    // (where the stream's bed steps down to the next cell of it, a fall, foaming where it lands)
     for (const [i, j] of land.stream) {
       if (i < B.i0 || i > B.i1 || j < B.j0 || j > B.j1) continue;
-      const g = w.ground(i, j), y = g - 0.17, cx = X(i), cz = Z(j), q0 = order.get(j * 1000 + i)!;
-      const next = land.stream[q0 + 1], prev = land.stream[q0 - 1], to = next ?? [i + (i - (prev?.[0] ?? i)), j + (j - (prev?.[1] ?? j))];
-      const ang = Math.atan2(to[1] - j, to[0] - i), how = 1 + ((ang / (2 * Math.PI) + 1) % 1) * 0.98 + 0.001;
-      const dry = DIRS.map(([a, b]) => !wet(i + a, j + b));
-      const deep = (fx: number, fz: number) => { let d = 1; if (dry[0]) d = Math.min(d, 1 - fx); if (dry[2]) d = Math.min(d, fx); if (dry[1]) d = Math.min(d, 1 - fz); if (dry[3]) d = Math.min(d, fz); return Math.min(0.97, Math.max(0, d / 0.5)); };
-      const S = 4;
-      for (let a = 0; a < S; a++) for (let b = 0; b < S; b++) {
-        const f0 = a / S, f1 = (a + 1) / S, h0 = b / S, h1 = (b + 1) / S, ex = (f: number) => (f <= 0 ? -0.05 : f >= 1 ? 1.05 : f);
-        const V = (fx: number, fz: number): V3 => [cx + ex(fx), y, cz + ex(fz)];
-        for (const [fx, fz] of [[f0, h0], [f1, h1], [f1, h0], [f0, h0], [f0, h1], [f1, h1]] as Array<[number, number]>) { cur = { born: -1e3, pivot: 0, how, tone: deep(fx, fz), dress: 0, sel: false }; vert(V(fx, fz), [0, 1, 0], 1, MAT.water); }
-      }
-      cur = { born: -1e3, pivot: 0, how: 1, tone: 0.5, dress: 0, sel: false };
+      const g = w.ground(i, j), y = g - 0.17, cx = X(i), cz = Z(j);
       for (let d = 0; d < 4; d++) {
         const [a, b] = DIRS[d];
         if (!wet(i + a, j + b) || w.ground(i + a, j + b) >= g) continue;
         const y1 = w.ground(i + a, j + b) - 0.17, [ta, tb] = DIRS[(d + 1) % 4], ex = cx + 0.5 + a * 0.5, ez = cz + 0.5 + b * 0.5;
+        cur = { born: -1e3, pivot: 0, how: 1, tone: 0.5, dress: 0, sel: false };
         quad([ex - ta * 0.42, y1, ez - tb * 0.42], [ex + ta * 0.42, y1, ez + tb * 0.42], [ex + ta * 0.42, y, ez + tb * 0.42], [ex - ta * 0.42, y, ez - tb * 0.42], [a, 0.3, b], 1, MAT.water);
         foam(ex + a * 0.22, y1 + 0.012, ez + b * 0.22, i * 5 + j * 11 + d);
       }
@@ -1175,33 +1149,33 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
     const E = w.extent();
     // (at the cliffs (cliffs.ts): rubble fallen at a face's foot, scrub rooted there and on its ledges, now and then a
     // block's worth; never on what's used, nor in the water)
-    for (const run of runs) for (const sg of run.segs) {
-      if (sg.hi - sg.lo < 0.6) continue;
-      sg.blocks.forEach((b, nb) => {
-        const rr = (...n: number[]) => hash(run.id, Math.round(sg.x * 7), Math.round(sg.z * 7), nb, ...n) / 4294967296;
-        const at2 = (s0: number, off: number, y: number): V3 => { const p = along(sg, s0, off, y); return [p[0] - CENTER, y, p[2] - CENTER]; };
-        const cellOf = (s0: number, off: number) => { const p = along(sg, s0, off, 0); return [Math.floor(p[0]), Math.floor(p[2])] as const; };
-        const [ci, cj] = cellOf((b.s0 + b.s1) / 2, offsetAt(b, sg.lo) + 0.2), out = Math.max(E.i0 - ci, ci - E.i1, E.j0 - cj, cj - E.j1, 0);
+    for (const run of form.runs) {
+      const nP = run.pts.length;
+      run.blocks.forEach((b, nb) => {
+        const rr = (...n: number[]) => hash(run.id, nb, ...n) / 4294967296;
+        // (a point of the block: so far into it, so far out from the contour, at a height)
+        const at2 = (f: number, out: number, y?: number): [V3, number] => {
+          const s0 = b.s0 + (b.s1 - b.s0) * f;
+          let q = 0; while (q < nP - 2 && run.s[q + 1] < s0) q++;
+          const u = Math.min(1, Math.max(0, (s0 - run.s[q]) / Math.max(1e-6, run.s[q + 1] - run.s[q]))), p = run.pts[q], p2 = run.pts[q + 1], n = run.nrm[q];
+          if (!run.face[q]) return [[0, -99, 0], q];
+          const c = courses(run, q), r = (y === undefined ? c.tiers[c.tiers.length - 1].r1 : 0) + out, yy = y ?? run.bot[q];
+          return [[p[0] + (p2[0] - p[0]) * u + n[0] * r - CENTER, yy, p[1] + (p2[1] - p[1]) * u + n[1] * r - CENTER], q];
+        };
+        const [mid, qm] = at2(0.5, 0.2);
+        if (mid[1] < -50 || run.t - run.bot[qm] < 0.6 || run.bank[qm]) return;
+        const ci = Math.floor(mid[0] + CENTER), cj = Math.floor(mid[2] + CENTER), out = Math.max(E.i0 - ci, ci - E.i1, E.j0 - cj, cj - E.j1, 0);
         if (out > 0 && rr(77) > Math.pow(1 - out / DRAWN_MARGIN, 1.5)) return;
         coarse = out > 0;
         const lowOk = !land.water.has(cj * 1000 + ci) && bare(ci, cj) && !clearedAt(ci, cj, w.ground(ci, cj));
         if (lowOk && rr(1) < 0.5) {
           cur = { born: -1e3, pivot: 0, how: 3 + 0.999 * rr(40), tone: 0.5, dress: 0, sel: false };
-          for (let n = 0, N = 1 + Math.floor(rr(2) * 3); n < N; n++) {
-            const s0 = b.s0 + (b.s1 - b.s0) * rr(3, n), sz = 0.06 + 0.1 * rr(4, n) * (n ? 0.7 : 1);
-            boulder(at2(s0, offsetAt(b, sg.lo) + sz * 0.6 + 0.12 * rr(5, n), sg.lo), sz, Math.floor(rr(6, n) * 1e6));
-          }
+          for (let n = 0, N = 1 + Math.floor(rr(2) * 3); n < N; n++) { const sz = 0.06 + 0.1 * rr(4, n) * (n ? 0.7 : 1), [p] = at2(rr(3, n), sz * 0.6 + 0.12 * rr(5, n)); if (p[1] > -50) boulder(p, sz, Math.floor(rr(6, n) * 1e6)); }
         }
-        if (lowOk && rr(7) < 0.5) for (let n = 0, N = 1 + Math.floor(rr(16) * 3); n < N; n++) shrub(at2(b.s0 + (b.s1 - b.s0) * rr(8, n), offsetAt(b, sg.lo) + 0.14 + 0.15 * rr(9, n), sg.lo), (0.13 + 0.12 * rr(10, n)) * (n ? 0.75 : 1), Math.floor(rr(11, n) * 1e6));
+        if (lowOk && rr(7) < 0.5) for (let n = 0, N = 1 + Math.floor(rr(16) * 3); n < N; n++) { const [p] = at2(rr(8, n), 0.14 + 0.15 * rr(9, n)); if (p[1] > -50) shrub(p, (0.13 + 0.12 * rr(10, n)) * (n ? 0.75 : 1), Math.floor(rr(11, n) * 1e6)); }
         // (and along its rim on the terrace over it, where that's open)
-        const [hi0, hj0] = cellOf((b.s0 + b.s1) / 2, -0.2);
-        if (rr(17) < 0.35 && bare(hi0, hj0) && !clearedAt(hi0, hj0, w.ground(hi0, hj0)) && !land.water.has(hj0 * 1000 + hi0)) for (let n = 0, N = 1 + Math.floor(rr(18) * 2); n < N; n++) shrub(at2(b.s0 + (b.s1 - b.s0) * rr(19, n), -0.16 - 0.15 * rr(20, n), sg.hi), (0.12 + 0.1 * rr(21, n)) * (n ? 0.8 : 1), Math.floor(rr(22, n) * 1e6));
-        b.tiers.forEach((t, k) => {
-          if (!k || rr(12, k) > 0.35) return;
-          const up = b.tiers[k - 1].rBot, ledge = t.rTop - bevelOf(sg) - up;
-          if (ledge < 0.05) return;
-          shrub(at2(b.s0 + (b.s1 - b.s0) * rr(13, k), up + ledge * 0.55, t.top), 0.07 + 0.05 * rr(14, k), Math.floor(rr(15, k) * 1e6));
-        });
+        const [rim] = at2(0.5, -0.25, run.t), hi0 = Math.floor(rim[0] + CENTER), hj0 = Math.floor(rim[2] + CENTER);
+        if (rr(17) < 0.35 && bare(hi0, hj0) && !clearedAt(hi0, hj0, w.ground(hi0, hj0)) && !land.water.has(hj0 * 1000 + hi0)) for (let n = 0, N = 1 + Math.floor(rr(18) * 2); n < N; n++) { const [p] = at2(rr(19, n), -0.16 - 0.15 * rr(20, n), run.t); if (p[1] > -50 && Math.abs(Y(p[0] + CENTER, p[2] + CENTER) - run.t) < 0.01) shrub(p, (0.12 + 0.1 * rr(21, n)) * (n ? 0.8 : 1), Math.floor(rr(22, n) * 1e6)); }
       });
     }
     coarse = false;
@@ -1241,75 +1215,66 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
     cur = { born: -1e3, pivot: 0, how: 1, tone: 0, dress: 0, sel: false };
   }
   /**
-   * The land's cliffs (cliffs.ts), block by block and course by course: each course's face, leaning back a little; its
-   * top, a ledge out from the course over it (the cliff's own top, out from the high ground's edge); where one block's
-   * set forward of the next, the return between them; where a run ends, or goes on at another height, its end. Faces
-   * meet round the high ground's corners and stop at the next in a corner of it, so a cliff is closed rock, not sheets.
-   * Each lit as the plane it is, its shade the sky its corners see (dark at its foot, in a recess, under a ledge).
+   * The land's cliffs (cliffs.ts), stretch by stretch along each contour: behind it, the ground's own side down to the
+   * terrace below, dark (a crevice wherever the rock doesn't quite close); in front, where the rock's built, each course
+   * of it: its top out from the terrace's edge (or the course over it), its rounded edge, its face leaning back a little,
+   * a sunk block's terrace edge standing over it; and an end where a block meets the next, the rock stops, or the run
+   * ends. Each lit as the plane it is, its shade the sky its corners see; each block a little its own tone.
    */
-  function rock(runs: Run[]) {
+  function rock(form: LandForm) {
     cur = { born: -1e3, pivot: 0, how: 1, tone: 0, dress: 0, sel: false };
-    const P = (sg: Seg, s: number, r: number, y: number): V3 => { const p = along(sg, s, r, y); return [p[0] - CENTER, p[1], p[2] - CENTER]; };
+    const P = (p: V2, n: V2, r: number, y: number): V3 => [p[0] + n[0] * r - CENTER, y, p[1] + n[1] * r - CENTER];
     const lit = (p: V3, n: V3, base: number) => base * (0.5 + 0.5 * skyVis(p, n));
-    const plane = (A: V3, Bv: V3, Cc: V3, D: V3, n: V3, top: number, bot: number) => quad(A, Bv, Cc, D, n, [lit(A, n, top), lit(Bv, n, top), lit(Cc, n, bot), lit(D, n, bot)], LANDMAT);
+    const plane = (A: V3, Bq: V3, Cq: V3, D: V3, out: V3, top: number, bot: number) => {
+      // (its normal from its own corners, turned out)
+      const ux = Bq[0] - A[0], uy = Bq[1] - A[1], uz = Bq[2] - A[2], vx = D[0] - A[0], vy = D[1] - A[1], vz = D[2] - A[2];
+      let n: V3 = [uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx];
+      const l = Math.hypot(n[0], n[1], n[2]);
+      if (l < 1e-9) return;
+      n = [n[0] / l, n[1] / l, n[2] / l];
+      if (n[0] * out[0] + n[1] * out[1] + n[2] * out[2] < 0) n = [-n[0], -n[1], -n[2]];
+      quad(A, Bq, Cq, D, n, [lit(A, n, top), lit(Bq, n, top), lit(Cq, n, bot), lit(D, n, bot)], LANDMAT);
+    };
     const UP: V3 = [0, 1, 0];
-    for (const run of runs) for (const sg of run.segs) {
-      const [oa, ob] = sg.o, [ta, tb] = sg.t, nB = sg.blocks.length, bv = bevelOf(sg);
-      const nbFirst = sg.next?.blocks[0], nbLast = sg.prev?.blocks[sg.prev.blocks.length - 1];
-      // (how far a line of the profile at a height (its offset there less `inset`) runs past an end of the segment to meet
-      // the next one's: on round the high ground's corner, short of it in a corner of it)
-      const ext = (end: 0 | 1, y: number, inset: number, onlyEnd = false) => {
-        const j = end ? sg.nj : sg.pj, nb = end ? nbFirst : nbLast;
-        if (!nb) return 0;
-        if (j === 'concave') return -(offsetAt(nb, y) - inset);
-        if (j === 'convex' && (!onlyEnd || end)) return offsetAt(nb, y) - inset;
-        return 0;
-      };
-      sg.blocks.forEach((b, q) => {
-        const first = q === 0, last = q === nB - 1;
-        const e0 = (y: number, inset = 0, cap = false) => (first ? ext(0, y, inset, cap) : 0), e1 = (y: number, inset = 0, cap = false) => (last ? ext(1, y, inset, cap) : 0);
-        // (each block a little its own tone, so a cliff reads as its blocks)
-        cur.tone = 0.16 * (hash(run.id, Math.round(sg.x * 7 + b.s0 * 3), Math.round(sg.z * 7)) / 4294967296);
-        b.tiers.forEach((t, k) => {
-          const h = t.top - t.bot, dr = t.rBot - t.rTop, nl = Math.hypot(h, dr), n: V3 = [(oa * h) / nl, dr / nl, (ob * h) / nl];
-          const foot = k === b.tiers.length - 1, yb = t.top - bv, rb = offsetAt(b, yb);
-          // (its face, from under its rounded edge down)
-          plane(P(sg, b.s0 - e0(yb), rb, yb), P(sg, b.s1 + e1(yb), rb, yb), P(sg, b.s1 + e1(t.bot), t.rBot, t.bot), P(sg, b.s0 - e0(t.bot), t.rBot, t.bot), n, 0.97, foot ? 0.62 : 0.8);
-          // (the rounded edge: from its top's outer line down to its face)
-          const rc = t.rTop - bv, bev: V3 = [oa * 0.7, 0.71, ob * 0.7];
-          plane(P(sg, b.s0 - e0(t.top, bv, true), rc, t.top), P(sg, b.s1 + e1(t.top, bv, true), rc, t.top), P(sg, b.s1 + e1(yb), rb, yb), P(sg, b.s0 - e0(yb), rb, yb), bev, 1, 0.97);
-          // (its top: from the course over it (or the terrace's edge) out to the edge; run on round a corner of the high
-          // ground at its segment's end (the next one's starts at the corner), stopped at the next in a corner of it)
-          const rIn = k ? b.tiers[k - 1].rBot : Math.min(0, t.rTop - bv);
-          if (rc - rIn > 0.004) plane(P(sg, b.s0 - e0(t.top + 1e-3, 0, true), rIn, t.top), P(sg, b.s1 + e1(t.top + 1e-3, 0, true), rIn, t.top), P(sg, b.s1 + e1(t.top, bv, true), rc, t.top), P(sg, b.s0 - e0(t.top, bv, true), rc, t.top), UP, 1, 1);
-          // (a block sunk a little under the terrace: the terrace's edge standing over it)
-          if (k === 0 && t.top < sg.hi - 1e-3) plane(P(sg, b.s0, 0.003, sg.hi), P(sg, b.s1, 0.003, sg.hi), P(sg, b.s1, 0.003, t.top), P(sg, b.s0, 0.003, t.top), [oa, 0, ob], 0.95, 0.8);
-          // (the return to the next block along, where one stands forward of the other; and where their tops differ, the
-          // higher one's side over the lower)
-          if (!last) {
-            const nb = sg.blocks[q + 1], u = nb.tiers[k], yT = Math.min(t.top, u.top);
-            const at = (X: typeof b, tt: typeof t) => (tt.top <= yT + 1e-6 ? tt.rTop - bv : offsetAt(X, yT));
-            const ra = at(b, t), rb2 = at(nb, u);
-            if (Math.abs(rb2 - ra) + Math.abs(u.rBot - t.rBot) > 0.008) {
-              const fwd = rb2 + u.rBot > ra + t.rBot, rn: V3 = fwd ? [-ta, 0, -tb] : [ta, 0, tb];
-              plane(P(sg, b.s1, ra, yT), P(sg, b.s1, rb2, yT), P(sg, b.s1, u.rBot, t.bot), P(sg, b.s1, t.rBot, t.bot), rn, 0.9, foot ? 0.55 : 0.7);
-            }
-            if (Math.abs(u.top - t.top) > 1e-3) {
-              const [H, Ht] = u.top > t.top ? [nb, u] : [b, t], rn: V3 = u.top > t.top ? [-ta, 0, -tb] : [ta, 0, tb];
-              plane(P(sg, b.s1, 0, Ht.top), P(sg, b.s1, Ht.rTop - bv, Ht.top), P(sg, b.s1, offsetAt(H, yT), yT), P(sg, b.s1, 0, yT), rn, 0.95, 0.8);
-            }
-          }
-          // (its ends, where the run ends or goes on at another height: the rock's end, from the edge out to its face)
-          for (const end of [0, 1] as const) {
-            if (!(end ? last : first)) continue;
-            const j = end ? sg.nj : sg.pj;
-            if (j !== 'open' && j !== 'straight') continue;
-            const s = end ? b.s1 : b.s0, en: V3 = end ? [ta, 0, tb] : [-ta, 0, -tb], r0 = Math.min(0, b.tiers[0].rTop - bv);
-            // (cut back to the stream, its end closes the ground beside it as far as the edge, which nothing else holds)
-            plane(P(sg, s, r0, t.top), P(sg, s, Math.max(0, t.rTop), t.top), P(sg, s, Math.max(0, t.rBot), t.bot), P(sg, s, r0, t.bot), en, 0.9, foot ? 0.55 : 0.7);
+    for (const run of form.runs) {
+      const nP = run.pts.length, blockIx = (q: number) => run.blocks.indexOf(blockAt(run, (run.s[q] + run.s[q + 1]) / 2));
+      for (let q = 0; q < nP - 1; q++) {
+        const pa = run.pts[q], pb = run.pts[q + 1], na = run.nrm[q], nb = run.nrm[q + 1], top = run.t, bot = run.bot[q];
+        const nm: V3 = [(na[0] + nb[0]) / 2, 0, (na[1] + nb[1]) / 2];
+        // (the ground's own side behind it, where nothing higher stands in the same place)
+        if (run.face[q] || bot < top - 0.06) {
+          cur.tone = 0;
+          quad(P(pa, na, 0, top), P(pb, nb, 0, top), P(pb, nb, 0, bot - 0.1), P(pa, na, 0, bot - 0.1), nm, [0.45, 0.45, 0.3, 0.3], LANDMAT);
+        }
+        if (!run.face[q]) continue;
+        const c = courses(run, q), bi = blockIx(q);
+        cur.tone = 0.16 * (hash(run.id, bi, 7) / 4294967296);
+        const tx = pb[0] - pa[0], tz = pb[1] - pa[1], tl = Math.hypot(tx, tz) || 1, along: V3 = [tx / tl, 0, tz / tl];
+        // (a block's end: where the next stretch is another block, isn't rock, or the run ends)
+        const endAt = (e: 0 | 1) => {
+          const o = e ? q + 1 : q - 1;
+          if (o < 0 || o >= nP - 1) return !run.closed;
+          return !run.face[o] || blockIx(o) !== bi;
+        };
+        c.tiers.forEach((t, k) => {
+          const yb = t.top - c.bev, rb = t.r0 + ((t.r1 - t.r0) * c.bev) / Math.max(1e-3, t.top - t.bot), rc = t.r0 - c.bev;
+          // (its face)
+          plane(P(pa, na, rb, yb), P(pb, nb, rb, yb), P(pb, nb, t.r1, t.bot), P(pa, na, t.r1, t.bot), nm, 0.97, k === c.tiers.length - 1 ? 0.62 : 0.8);
+          // (its rounded edge)
+          plane(P(pa, na, rc, t.top), P(pb, nb, rc, t.top), P(pb, nb, rb, yb), P(pa, na, rb, yb), [nm[0], 1, nm[2]], 1, 0.97);
+          // (its top: from the terrace's edge, or the course over it, out to its edge)
+          const rIn = k ? c.tiers[k - 1].r1 : 0;
+          if (rc - rIn > 0.004) plane(P(pa, na, rIn, t.top), P(pb, nb, rIn, t.top), P(pb, nb, rc, t.top), P(pa, na, rc, t.top), UP, 1, 1);
+          // (a sunk block: the terrace's edge standing over it)
+          if (k === 0 && t.top < top - 1e-3) plane(P(pa, na, 0.003, top), P(pb, nb, 0.003, top), P(pb, nb, 0.003, t.top), P(pa, na, 0.003, t.top), nm, 0.95, 0.8);
+          // (its ends: the rock's end, from the terrace's edge out to its face)
+          for (const e of [0, 1] as const) {
+            if (!endAt(e)) continue;
+            const p = e ? pb : pa, n = e ? nb : na, en: V3 = e ? along : [-along[0], 0, -along[2]];
+            plane(P(p, n, 0, k ? t.top : top), P(p, n, t.r0, t.top), P(p, n, t.r1, t.bot), P(p, n, 0, t.bot), en, 0.9, 0.6);
           }
         });
-      });
+      }
     }
     cur = { born: -1e3, pivot: 0, how: 1, tone: 0.5, dress: 0, sel: false };
   }

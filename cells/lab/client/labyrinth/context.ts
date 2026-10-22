@@ -12,7 +12,7 @@
  *   building's downhill side stands on carried down to the lower ground (a retaining wall under it).
  */
 import { DIRS, key, type World } from './model';
-import { surfaceY } from './land';
+import { groundAt } from './cliffs';
 
 /** a bank held by a wall: the high cell, the way to the low one, the two grounds */
 export interface Retain { i: number; j: number; d: number; lo: number; hi: number }
@@ -63,12 +63,5 @@ function worked(w: World) {
 }
 /** whether the bank between a cell and the next its way d is held by a wall, or filled by what's built against it */
 export function walled(w: World): (i: number, j: number, d: number) => boolean { return worked(w).sharp; }
-/** the ground as it's drawn (grid units: cell (i, j) spans i..i+1), its banks held where they're walled */
-export function groundY(w: World, x: number, z: number): number {
-  if (!w.land) return 0;
-  const s = worked(w).sharp, y = surfaceY(w.land, x, z, s);
-  // (on a cell's edge, where a wall holds the bank, the higher side's)
-  const fx = x - Math.round(x), fz = z - Math.round(z);
-  if (Math.abs(fx) < 1e-6 || Math.abs(fz) < 1e-6) return Math.max(y, surfaceY(w.land, x - 1e-4, z - 1e-4, s), surfaceY(w.land, x + 1e-4, z + 1e-4, s), surfaceY(w.land, x - 1e-4, z + 1e-4, s), surfaceY(w.land, x + 1e-4, z - 1e-4, s));
-  return y;
-}
+/** the ground as it's drawn (grid units: cell (i, j) spans i..i+1): its terraces and their cliffs (cliffs.ts) */
+export function groundY(w: World, x: number, z: number): number { return groundAt(w, x, z); }

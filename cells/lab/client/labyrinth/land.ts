@@ -7,10 +7,9 @@
  * It's held two ways that never disagree:
  * - **by column** (`g`): the level the ground is at in each cell. What's built is in whole levels, so this is what
  *   stands, walks and is struck: earth fills each column below it (`World.earth`), and its top is a floor;
- * - **as a surface** (`surfaceY`): the ground as it's drawn, continuous: each cell flat at its own level through its
- *   middle, falling or rising to its neighbours' across a band at its edge (a bank where they differ by a level, a
- *   cliff where they differ by more), roughened a little where it slopes. Its flat middles are exactly the columns'
- *   levels, so what's built on a column sits on the ground as drawn.
+ * - **as it's drawn** (cliffs.ts): terraces at the columns' levels, their outlines the lie of the land rather than the
+ *   cells' edges, limestone cliffs between; the middle of every column at its own level, so what's built on a column
+ *   sits on the ground as drawn.
  */
 import { hash, smooth } from '../kit/rng';
 
@@ -161,14 +160,3 @@ export function makeLand(seed: number): Land {
 /** the ground's level in a column (0 off the land) */
 export const groundOf = (land: Land, i: number, j: number) => (onLand(i, j) ? land.g[atD(i, j)] : 0);
 
-/**
- * The ground as it's drawn, at a point (x, z: cells, from the land's grid origin, so cell (i, j) spans i..i+1): flat at
- * its column's level across the whole cell. Off the land, nothing (−1).
- */
-export function surfaceY(land: Land, x: number, z: number, _sharp?: (i: number, j: number, d: number) => boolean): number {
-  const i = Math.floor(x), j = Math.floor(z);
-  if (!onLand(i, j)) return -1;
-  // (each cell flat at its level, the stream's bed a little under its banks: the land a set of terraces, and where one
-  // steps down to the next, a cliff (cliffs.ts), its rock built as its own faces, not a slope of the ground)
-  return land.g[atD(i, j)] - (land.water.has(j * 1000 + i) ? 0.3 : 0);
-}

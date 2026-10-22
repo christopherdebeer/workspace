@@ -27,7 +27,7 @@
  */
 import { hash } from '../kit/rng';
 import { outline } from './form';
-import { along, bevelOf, offsetAt, reachAt, type Run } from './cliffs';
+import { courses, type LandForm } from './cliffs';
 import { CENTER, DIRS, unkey, type World } from './model';
 
 /** why a mark is there */
@@ -47,8 +47,8 @@ export type V3 = [number, number, number];
 /** the land as drawn: its height at a point (grid units, as mesh.ts lays it), and the box of cells it's drawn over */
 export interface StrokeLand {
   Y: (gx: number, gz: number) => number; B: { i0: number; i1: number; j0: number; j1: number };
-  /** the land's cliffs over the box (cliffs.ts): the rock the mesh builds, whose edges the drawing draws */
-  runs: Run[];
+  /** the land's forms over the box (cliffs.ts): the rock the mesh builds, whose edges the drawing draws */
+  form: LandForm;
   /** whether a cell's drawn (past what's shown of the land, bleeding into the page, the land's still drawn) */
   on: (i: number, j: number) => boolean;
   /** how far past what's shown of the land a cell is (0 within it), and how far the drawing goes past it: out there the
@@ -115,69 +115,70 @@ export function strokes(w: World, land: StrokeLand, trees: Skeleton[] = []): Flo
   const at = (gx: number, gz: number, lift = LIFT): V3 => [gx - CENTER, Y(gx, gz) + lift, gz - CENTER];
 
   // ─── cliffs (cliffs.ts): the rock's own edges, the ones the mesh builds it with, so the drawn cliff is the cliff ───
-  // (its rim, along the top of the rock, round its corners and in and out at its joints; its ledges; its foot; the
-  // plane changes down it, at a corner of the high ground and where a block stands forward of the next: a run's
-  // structure kept whole, one pick for the run, so where the drawing thins a cliff goes or stays as one thing. Then,
-  // spent first: hachures down its faces turned from the sun, a crack now and then)
-  for (const run of land.runs) {
-    const pick = rng(run.id, 0x9c1)();
-    for (const sg of run.segs) {
-      const r = rng(run.id, Math.round(sg.x * 7), Math.round(sg.z * 13), 0xe5c), [oa, ob] = sg.o, [ta, tb] = sg.t, drop = sg.hi - sg.lo;
-      const small = drop < 0.6, tall = drop >= 1.6, [ci, cj] = sg.cells[Math.floor(sg.cells.length / 2)], o = land.out(ci, cj);
-      const kept = () => o <= 0 || r() < Math.pow(Math.max(0, 1 - o / land.margin), 1.3);
-      const W = (s: number, rr: number, y: number, out = 0.012, up = 0): V3 => { const p = along(sg, s, rr + out, y + up); return [p[0] - CENTER, p[1], p[2] - CENTER]; };
-      const nB = sg.blocks.length, e0 = (y: number) => reachAt(sg, 0, y), e1 = (y: number) => reachAt(sg, 1, y);
-      // (a line along the face at a height, at each block's offset there, stepping in and out at the joints)
-      const lineAt = (y: number, rOf: (b: (typeof sg.blocks)[number]) => number, up: number) => {
-        const pts: V3[] = [];
-        sg.blocks.forEach((b, q) => {
-          const rb = rOf(b);
-          pts.push(W(q === 0 ? b.s0 - e0(y) : b.s0, rb, y, 0.012, up));
-          pts.push(W(q === nB - 1 ? b.s1 + e1(y) : b.s1, rb, y, 0.012, up));
-        });
-        return pts;
-      };
-      // (the rim)
-      // (the rim, at each block's own top: up and down where a block's sunk under the terrace)
-      const rim: V3[] = [];
-      sg.blocks.forEach((b, q) => { const t0 = b.tiers[0], rr = t0.rTop - bevelOf(sg); rim.push(W(q === 0 ? b.s0 - e0(t0.top) : b.s0, rr, t0.top, 0.012, LIFT), W(q === nB - 1 ? b.s1 + e1(t0.top) : b.s1, rr, t0.top, 0.012, LIFT)); });
-      ribbon(out, rim, small ? 0.034 : tall ? 0.052 : 0.046, FAM.rim, small ? 0.55 : tall ? 0.92 : 0.8, small ? 0.2 : 0.45, pick);
-      if (small) continue;
-      // (the ledges between its courses, and its foot on the ground below)
-      const T = sg.blocks[0].tiers;
-      for (let k = 1; k < T.length; k++) ribbon(out, lineAt(T[k].top, (b) => b.tiers[k].rTop - bevelOf(sg), LIFT * 0.5), 0.034, FAM.bedding, 0.6, 0.3, pick);
-      ribbon(out, lineAt(sg.lo + 0.01, (b) => offsetAt(b, sg.lo), 0.005), 0.036, FAM.foot, 0.62, 0.28, pick);
-      // (the plane changes down it: at each joint where one block stands forward of the next, and round the high
-      // ground's corner at its end, top to foot through its courses)
-      const down = (s: (y: number) => number, rOf: (y: number) => number, w0: number, weight: number) => {
-        const pts: V3[] = [];
-        const ys = [sg.hi, ...T.slice(1).flatMap((t) => [t.top + 0.001, t.top - 0.001]), sg.lo + 0.01];
-        for (const y of ys) pts.push(W(s(y), rOf(y), y, 0.014));
-        ribbon(out, pts, w0, FAM.fracture, weight, 0.3, pick, [ta, 0, tb]);
-      };
-      for (let q = 0; q + 1 < nB; q++) {
-        const b = sg.blocks[q], c = sg.blocks[q + 1];
-        if (Math.abs(b.tiers[0].rTop - c.tiers[0].rTop) + Math.abs(offsetAt(b, sg.lo) - offsetAt(c, sg.lo)) < 0.03) continue;
-        down(() => b.s1, (y) => Math.max(offsetAt(b, y), offsetAt(c, y)), 0.036, 0.6);
+  // (its rim, along the top of the rock, in and out at its blocks; its ledge where it's in two courses; its foot; the
+  // plane changes down it, where one block meets the next and where it turns sharply: a run's structure kept whole, one
+  // pick for the run, so where the drawing thins a cliff goes or stays as one thing. The stream's bank: a line at the
+  // water's edge. Then, spent first: hachures down its faces turned from the sun, a crack now and then)
+  for (const run of land.form.runs) {
+    const pick = rng(run.id, 0x9c1)(), r = rng(run.id, 0xe5c), nP = run.pts.length;
+    const W = (q: number, e: 0 | 1, rr: number, y: number, out = 0.012): V3 => { const p = run.pts[q + e], n = run.nrm[q + e]; return [p[0] + n[0] * (rr + out) - CENTER, y, p[1] + n[1] * (rr + out) - CENTER]; };
+    const [c0i, c0j] = run.pts[Math.floor(nP / 2)], o = land.out(Math.floor(c0i), Math.floor(c0j));
+    const kept = () => o <= 0 || r() < Math.pow(Math.max(0, 1 - o / land.margin), 1.3);
+    const C = run.pts.slice(0, -1).map((_, q) => (run.face[q] ? courses(run, q) : null));
+    // (a line along the run, stretch by stretch, broken where the rock isn't built)
+    const along = (pt: (q: number, e: 0 | 1, c: NonNullable<(typeof C)[number]>) => V3 | null, w0: number, fam: number, weight: number, persist: number) => {
+      let pts: V3[] = [];
+      const flush = () => { if (pts.length > 1) ribbon(out, pts, w0, fam, weight, persist, pick); pts = []; };
+      for (let q = 0; q < nP - 1; q++) {
+        const c = C[q];
+        if (!c) { flush(); continue; }
+        const a = pt(q, 0, c), b = pt(q, 1, c);
+        if (!a || !b) { flush(); continue; }
+        if (pts.length && Math.hypot(pts[pts.length - 1][0] - a[0], pts[pts.length - 1][1] - a[1], pts[pts.length - 1][2] - a[2]) > 0.02) pts.push(a);
+        else if (!pts.length) pts.push(a);
+        pts.push(b);
       }
-      if (sg.nj === 'convex') down((y) => sg.n + e1(y), (y) => offsetAt(sg.blocks[nB - 1], y), 0.042, 0.78);
-      // (hachures down a face turned from the sun, course by course, a few; a crack now and then)
-      const shaded = oa * SUN_XZ[0] + ob * SUN_XZ[1] < 0.1;
-      for (const b of sg.blocks) {
-        b.tiers.forEach((t) => {
-          if (!shaded) return;
-          for (let s = b.s0 + ramp(r, 0.05, 0.15); s < b.s1 - 0.04; s += ramp(r, 0.14, 0.26)) {
-            if (!kept()) continue;
-            const reach = ramp(r, 0.35, 0.9) * (t.top - t.bot - 0.04), pts: V3[] = [];
-            for (let q = 0; q <= 4; q++) { const y = t.top - 0.03 - (reach * q) / 4; pts.push(W(s + (r() - 0.5) * 0.01, offsetAt(b, y), y, 0.016)); }
-            ribbon(out, pts, 0.03, FAM.hachure, 0.5, 0, r(), [ta, 0, tb]);
-          }
-        });
-        if (r() < 0.45 && kept()) {
-          const s0 = ramp(r, b.s0 + 0.15, b.s1 - 0.15), y0 = sg.hi - ramp(r, 0, 0.08), y1 = Math.max(sg.lo + 0.1, y0 - ramp(r, 0.3, Math.min(1.4, drop))), pts: V3[] = [];
-          for (let q = 0; q <= 5; q++) { const y = y0 + (y1 - y0) * (q / 5), ss = s0 + (r() - 0.5) * 0.05; pts.push(W(ss, offsetAt(b, y), y, 0.016)); }
-          ribbon(out, pts, 0.034, FAM.fracture, 0.62, 0.15, r(), [ta, 0, tb]);
+      flush();
+    };
+    const smallRun = run.bot.every((b) => run.t - b < 0.6), tall = run.bot.some((b) => run.t - b >= 1.6);
+    // (the rim)
+    along((q, e, c) => W(q, e, c.tiers[0].r0 - c.bev, c.tiers[0].top + LIFT), smallRun ? 0.034 : tall ? 0.052 : 0.046, FAM.rim, smallRun ? 0.55 : tall ? 0.92 : 0.8, smallRun ? 0.2 : 0.45);
+    // (the stream's bank: at the water's edge)
+    along((q, e, c) => (run.bank[q] ? W(q, e, c.tiers[c.tiers.length - 1].r1 * 0.5 + 0.02, run.bot[q] + 0.13 + 0.006) : null), 0.036, FAM.bank, 0.7, 0.1);
+    if (smallRun) continue;
+    // (its ledge, where it's in two courses; its foot on the ground below)
+    along((q, e, c) => (c.tiers.length > 1 ? W(q, e, c.tiers[1].r0 - c.bev, c.tiers[1].top + LIFT * 0.5) : null), 0.034, FAM.bedding, 0.6, 0.3);
+    along((q, e, c) => (run.bank[q] || run.t - run.bot[q] < 0.6 ? null : W(q, e, c.tiers[c.tiers.length - 1].r1 - 0.1 * (c.tiers[c.tiers.length - 1].r1 - c.tiers[c.tiers.length - 1].r0), run.bot[q] + 0.01, 0.005)), 0.036, FAM.foot, 0.62, 0.28);
+    // (the plane changes down it: where a block meets the next, and where it turns sharply)
+    for (let q = 1; q < nP - 1; q++) {
+      const A = C[q - 1], Bc = C[q];
+      if (!A || !Bc) continue;
+      const turn = run.nrm[q - 1][0] * run.nrm[q + 1][0] + run.nrm[q - 1][1] * run.nrm[q + 1][1] < 0.5;
+      if (A.b === Bc.b && !turn) continue;
+      const c = A.tiers[0].r0 >= Bc.tiers[0].r0 ? A : Bc, pts: V3[] = [];
+      for (const t of c.tiers) { pts.push(W(q, 0, t.r0, t.top - 0.02, 0.014)); pts.push(W(q, 0, t.r1, Math.max(t.bot, run.bot[q] + 0.01), 0.014)); }
+      const tl = [run.pts[q + 1][0] - run.pts[q - 1][0], run.pts[q + 1][1] - run.pts[q - 1][1]], ll = Math.hypot(tl[0], tl[1]) || 1;
+      ribbon(out, pts, turn ? 0.042 : 0.036, FAM.fracture, turn ? 0.75 : 0.6, 0.3, pick, [tl[0] / ll, 0, tl[1] / ll]);
+    }
+    // (hachures down a face turned from the sun, a few to a stretch; a crack now and then)
+    for (let q = 0; q < nP - 1; q++) {
+      const c = C[q];
+      if (!c || run.t - run.bot[q] < 0.6) continue;
+      const n = run.nrm[q], shaded = n[0] * SUN_XZ[0] + n[1] * SUN_XZ[1] < 0.1, len = run.s[q + 1] - run.s[q];
+      const tl = [run.pts[q + 1][0] - run.pts[q][0], run.pts[q + 1][1] - run.pts[q][1]], ll = Math.hypot(tl[0], tl[1]) || 1, side: V3 = [tl[0] / ll, 0, tl[1] / ll];
+      const P = (u: number, rr: number, y: number): V3 => { const a = W(q, 0, rr, y, 0.016), b = W(q, 1, rr, y, 0.016); return [a[0] + (b[0] - a[0]) * u, y, a[2] + (b[2] - a[2]) * u]; };
+      if (shaded) for (let u = ramp(r, 0.05, 0.4); u < 1; u += ramp(r, 0.6, 1.1) / Math.max(0.1, len) * 0.2) {
+        if (!kept()) continue;
+        for (const t of c.tiers) {
+          const reach = ramp(r, 0.35, 0.9) * (t.top - t.bot - 0.12), pts: V3[] = [];
+          for (let k = 0; k <= 4; k++) { const y = t.top - 0.03 - (reach * k) / 4, f = (t.top - y) / Math.max(1e-3, t.top - t.bot); pts.push(P(u, t.r0 + (t.r1 - t.r0) * f, y)); }
+          ribbon(out, pts, 0.03, FAM.hachure, 0.5, 0, r(), side);
         }
+      }
+      if (r() < 0.12 && kept()) {
+        const t = c.tiers[0], u = ramp(r, 0.2, 0.8), y0 = t.top - ramp(r, 0, 0.08), y1 = Math.max(t.bot + 0.1, y0 - ramp(r, 0.3, 1.2)), pts: V3[] = [];
+        for (let k = 0; k <= 5; k++) { const y = y0 + (y1 - y0) * (k / 5), f = (t.top - y) / Math.max(1e-3, t.top - t.bot); pts.push(P(Math.min(1, Math.max(0, u + (r() - 0.5) * 0.08)), t.r0 + (t.r1 - t.r0) * f, y)); }
+        ribbon(out, pts, 0.034, FAM.fracture, 0.62, 0.15, r(), side);
       }
     }
   }
@@ -276,14 +277,6 @@ export function strokes(w: World, land: StrokeLand, trees: Skeleton[] = []): Flo
     }
     for (let d = 0; d < 4; d++) {
       const [a, b] = DIRS[d], [ta, tb] = DIRS[(d + 1) % 4], x = i + a, z = j + b;
-      // (its bank: where it meets dry ground, a line along the water's edge, so the stream can be followed wherever the
-      // drawing has it; firmer where the bank's cut steep)
-      if (!wet(x, z)) {
-        const steep = w.ground(x, z) > g, pts: V3[] = [], s0 = ramp(r, -0.55, -0.4), s1 = ramp(r, 0.4, 0.55);
-        // (laid on the ground at the water's edge, where the land comes down to it, not under it)
-        for (let q = 0; q <= 4; q++) { const s = s0 + (s1 - s0) * (q / 4); pts.push(at(i + 0.5 + a * 0.47 + ta * s, j + 0.5 + b * 0.47 + tb * s)); }
-        ribbon(out, pts, 0.036, FAM.bank, steep ? 0.7 : 0.55, 0.1, r());
-      }
       // (a fall: where its bed steps down to the next, streaks down the sheet, and rings where it lands)
       if (wet(x, z) && w.ground(x, z) < g) {
         const y1 = w.ground(x, z) - 0.17, ex = i + 0.5 + a * 0.5, ez = j + 0.5 + b * 0.5;
