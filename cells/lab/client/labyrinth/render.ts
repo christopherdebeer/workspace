@@ -381,7 +381,8 @@ void main() {
     rock = mix(rock, vec3(.66, .61, .52), .15 * smoothstep(.65, .9, fbm(vPos * 1.7 + 4.)));
     rock *= 1. - .28 * wetv;
     base = mix(soil, rock, cliff);
-    plain = mix(vec3(.72, .67, .52), vec3(.84, .80, .72), cliff);
+    // (its colour as the drawing takes it: the terraces a warm ochre, never a grey on the way to the page; the rock pale)
+    plain = mix(vec3(.85, .75, .52), vec3(.91, .88, .80), cliff);
     // (the beds' faces turned a little each, the bedding lines and fractures cut in, for the light)
     float kL = keep(6.);
     nS = normalize(n + (vec3(con.x, 0., con.y) * sign(fract(cc) - .5) * (1. - smoothstep(.0, .05, fr)) * .4 * frOn) * cliff * kL);
@@ -555,7 +556,8 @@ void main() {
     // so they don't lie on it as clouds as they pale)
     if (plain.x >= 0.) washC = mix(washC, plain, smoothstep(.0, .3, drawn));
     // (then straight to the page: never through a colour darker than both it and the paper)
-    washC = mix(washC, PAP, smoothstep(.2, .95, drawn));
+    // (the pigment outlasting the light: the land's held a little longer as a wash before it goes to the page)
+    washC = mix(washC, PAP, onIt ? smoothstep(.3, .97, drawn) : smoothstep(.2, .95, drawn));
     // (only what's built has recesses to hold it: on the land the sky's shut out over whole banks, and it'd lie as fog)
     if (!onIt) washC *= 1. - .22 * smoothstep(.55, .2, vAo) * smoothstep(.2, .6, drawn) * (1. - smoothstep(.88, 1., drawn));
     // (and over the wash, in the shade, the pen's hatching: one way where it's in shade, crossed where it's darker; laid

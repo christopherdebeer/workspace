@@ -187,6 +187,16 @@ Past the picture's reach, it's strokes on the paper only.
 
 ![Further](labyrinth/look-lines.jpg)
 
+## Stage 18: the pigment outlasts the light
+
+![Stage 18](labyrinth/look-stage18.jpg)
+
+Between the picture and the page, the terraces passed through a muddy olive-grey (their simplified colour, (.72, .67, .52)) as they paled. That grey, over a broad band, read as smoke round the settlement. The target sheets keep a warm ochre wash on the terraces that pales into the page: the pigment outlasts the light.
+- **Ochre, not grey:** the land's colour as the drawing takes it is now a warm ochre for the terraces and a pale limestone for the rock.
+- **Held a little longer:** the land's wash goes to the page over a slightly later part of the ramp (.3–.97 of `drawn`, from .2–.95). The light still goes first, so the wash is flat colour with no shade in it.
+
+The order is now: relief, then light, then the colour's detail, then the colour itself, with the structural ink (each cliff's rim, ledges, foot and corners) up before the light has gone. The review's fuller split into independent channels, varied by each rock face's and terrace's own identity, is still to do.
+
 ## Stage 17: limestone (after the in-situ target sheets)
 
 ![Terraces and their cliffs](labyrinth/look-cliffs.jpg)
