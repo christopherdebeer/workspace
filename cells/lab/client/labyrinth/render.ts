@@ -149,9 +149,9 @@ vec3 travertine(vec3 p, float tone) {
   c *= 1. - .05 * smoothstep(.5, .75, band);
   c = mix(c, vec3(.80, .71, .58), .18 * smoothstep(.64, .8, fbm(vec3(p.x * 1.4, p.y * 12., p.z * 1.4) + 3.)));
   float pore = noise(vec3(p.x * 13., p.y * 30., p.z * 13.) + tone * 17.);
-  c *= 1. - .2 * smoothstep(.84, .92, pore) * keep(30.);
+  c *= 1. - .08 * smoothstep(.84, .92, pore) * keep(30.);
   float pit = noise(p * 41. + tone * 5.);
-  c *= 1. - .12 * smoothstep(.88, .94, pit) * keep(41.);
+  c *= 1. - .05 * smoothstep(.88, .94, pit) * keep(41.);
   return c * (.98 + .03 * noise(p * 90.) * keep(90.));
 }
 // (brick: narrow courses, each brick a shade of its own (now and then a burnt one, or a pale), its edges a little worn
@@ -174,7 +174,8 @@ vec3 marble(vec3 p, vec3 n, float tone) {
   vec3 c = vec3(.93, .92, .89) * (.97 + .03 * tone);
   vec3 q = p * .55 + vec3(fbm(p * .7 + 1.), fbm(p * .7 + 7.), fbm(p * .7 + 13.)) * 1.6;
   float v = abs(fbm(q + tone * 3.) * 2. - 1.);
-  c = mix(vec3(.66, .65, .66), c, mix(1., smoothstep(.0, .07, v), .75 * keep(6.)));
+  // (its veins faint, a few: marble, not a map)
+  c = mix(vec3(.80, .79, .78), c, mix(1., smoothstep(.0, .04, v), .4 * keep(6.)));
   c = mix(c, vec3(.83, .81, .79), .25 * smoothstep(.55, .8, fbm(p * 1.6 + 2.)));
   float jt;
   if (abs(n.y) < .5) { float u = abs(n.x) > .5 ? p.z : p.x, cy = p.y * 2.; jt = min(min(fract(cy), 1. - fract(cy)) / 2., min(fract(u + floor(cy) * .5), 1. - fract(u + floor(cy) * .5))); }
@@ -406,10 +407,12 @@ void main() {
       float h0 = arris(d0), kS = keep(36.);
       vec3 g = ((arris(du) - h0) * T + (arris(dv) - h0) * B) / e;
       float t1 = hash(vec3(id, vTone * 5. + 1.)), t2 = hash(vec3(id, vTone * 5. + 2.));
-      nS = normalize(n - g * .03 * kS + (T * (t1 - .5) + B * (t2 - .5)) * .08 * keep(4.));
-      base *= .93 + .14 * hash(vec3(id, vTone * 3.));
-      base = mix(vec3(.62, .58, .50) * (.92 + .08 * noise(vPos * 50.)), base, mix(1., smoothstep(.007, .018, d0), keep(40.)));
-      cav = mix(1., mix(.55, 1., h0), kS);
+      // (quiet close up, as the studies keep it: each block barely its own shade or angle, the joints fine and only a
+      // little darker, so a wall reads as a wall of blocks and not as a pattern of dark ones)
+      nS = normalize(n - g * .018 * kS + (T * (t1 - .5) + B * (t2 - .5)) * .035 * keep(4.));
+      base *= .975 + .05 * hash(vec3(id, vTone * 3.));
+      base = mix(vec3(.74, .70, .62) * (.95 + .05 * noise(vPos * 50.)), base, mix(1., smoothstep(.005, .013, d0), keep(40.)));
+      cav = mix(1., mix(.8, 1., h0), kS);
     }
   }
   // (moss: in the joints and the shade, thicker on tops and low down; ivy: hanging leaves over a side)
@@ -421,7 +424,7 @@ void main() {
     float where = n.y > .5 ? (1. - smoothstep(.02, .14, min(ge.x, ge.y))) * .8 : (1. - smoothstep(.0, .35, fract(vPos.y))) * (.35 + .65 * shade);
     float spot = smoothstep(.48, .7, fbm(vPos * 2.6 + 2.) + .18 * noise(vPos * 18.));
     vec3 mc = mix(vec3(.30, .35, .18), vec3(.44, .48, .24), smoothstep(.6, .9, noise(vPos * 40.)));
-    base = mix(base, mc * (.8 + .3 * noise(vPos * 26.)), where * spot * .65);
+    base = mix(base, mc * (.85 + .2 * noise(vPos * 26.)), where * spot * .4);
   }
   // (ivy's leaves are its own geometry (mesh.ts); under them, where it grows, the stone is a little stained)
   if (ivy && mat != 3 && abs(n.y) < .5) base *= .93 - .05 * noise(vPos * 6.);

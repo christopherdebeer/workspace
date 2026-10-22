@@ -187,6 +187,27 @@ Past the picture's reach, it's strokes on the paper only.
 
 ![Further](labyrinth/look-lines.jpg)
 
+## Stage 16: the land meets what's built; quieter close up (after the phone)
+
+![The land meeting what's built](labyrinth/look-meet.jpg)
+
+From the phone, close in on a stair-and-terrace complex set into a cliff:
+- wedges and spikes of rock showed against walls and beside stairs;
+- the rims were sawtoothed;
+- the masonry was too heavy close up.
+
+The fixes:
+- **No wedges against walls:** where what's built stands (on a cell's ground or just under it, a stair, or a wall holding its bank), the land's own ledges and block offsets give way within half a cell. The ground meets the wall or the stair as the land is, without wedges against it. (The ground cache's signature already covers what's built on each cell, so this is kept and rebuilt correctly.)
+- **Less sawtooth:**
+  - risers are a little less sharp, since a sharper riser sampled a third of a cell apart aliases into a sawtooth along the rim;
+  - the blocks' push forward and back is halved;
+  - neighbouring blocks' planes differ less, so a triangle across a joint doesn't stand out as a tooth.
+- **Quieter close up:**
+  - masonry: each block barely its own shade or angle, the joints fine and only a little darker, the cavity lighter;
+  - travertine's pores and pits fainter;
+  - moss lighter;
+  - marble's veins faint and few.
+
 ## Stage 15: gradual again, the cliffs' shade back (after the phone)
 
 ![Gradual, with the cliffs' shade](labyrinth/look-gradual.jpg)

@@ -971,16 +971,32 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
       const u = along * 1.6 + noise2(land.seed + 7, kb * 0.37, along * 0.3) * 1.4, blk = Math.floor(u);
       return { steep, fx, fz, kb, blk };
     };
+    // (whether what's built stands at a cell, on its ground or just under it, or holds its bank: there the land's own
+    // ledges and blocks give way, so the ground meets the wall or the stair cleanly, not in wedges and spikes of rock
+    // against it)
+    const builtAt = new Map<number, boolean>(), held = retaining(w);
+    const built = (i: number, j: number) => {
+      const q = j * 4096 + i; let b = builtAt.get(q);
+      if (b === undefined) {
+        const g = w.ground(i, j);
+        b = w.occupied(g, i, j) || w.occupied(g - 1, i, j) || w.stair(g, i, j) >= 0 || w.stair(g - 1, i, j) >= 0 || DIRS.some((_, d) => held.has(`${i}.${j}.${d}`));
+        builtAt.set(q, b);
+      }
+      return b;
+    };
+    const nearBuilt = (gx: number, gz: number) => { const i0 = Math.floor(gx - 0.45), i1 = Math.floor(gx + 0.45), j0 = Math.floor(gz - 0.45), j1 = Math.floor(gz + 0.45); return built(i0, j0) || built(i1, j0) || built(i0, j1) || built(i1, j1); };
     const Y = (gx: number, gz: number) => {
       // (the block it's in, along the face: its joint lines square to the face, the blocks 0.4 to 0.9 of a cell wide;
       // the block set forward or back by sampling the drop that much further out or in)
       const { steep, fx, fz, kb, blk } = blockOf(gx, gz);
-      if (steep <= 0) return Y0(gx, gz);
-      const push = ((hash(land.seed, blk, kb, 77) / 4294967296) - 0.5) * 0.2 * steep;
+      if (steep <= 0 || nearBuilt(gx, gz)) return Y0(gx, gz);
+      const push = ((hash(land.seed, blk, kb, 77) / 4294967296) - 0.5) * 0.1 * steep;
       const y = Y0(gx + fx * push, gz + fz * push);
       const bed = bedAt(gx, gz), f = y / bed, fl = Math.floor(f), t = f - fl;
-      const ledge = (fl + (t < 0.55 ? 0 : t > 0.78 ? 1 : (t - 0.55) / 0.23)) * bed;
-      return y + (ledge - y) * steep * 0.9;
+      // (the riser not so sharp the grid can't hold it: a sharper one, sampled a third of a cell apart, aliases into a
+      // sawtooth along the rim)
+      const ledge = (fl + (t < 0.45 ? 0 : t > 0.8 ? 1 : (t - 0.45) / 0.35)) * bed;
+      return y + (ledge - y) * steep * 0.85;
     };
     cur = { born: -1e3, pivot: 0, how: 1, tone: 0.5, dress: 0, sel: false };
     const Eo = w.extent();
@@ -1030,7 +1046,7 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
         const gx = (p0[0] + p1[0] + p2[0]) / 3 + CENTER, gz = (p0[2] + p1[2] + p2[2]) / 3 + CENTER, bk = blockOf(gx, gz);
         if (bk.steep > 0.45 || (flat > 0 && bk.steep > 0.3)) {
           const h1 = hash(land.seed, bk.blk, bk.kb, 91) / 4294967296 - 0.5, h2 = hash(land.seed, bk.blk, bk.kb, 92) / 4294967296;
-          const cx2 = -bk.fz, cz2 = bk.fx, bn: V3 = [bk.fx + cx2 * h1 * 0.7, 0.12 + 0.3 * h2, bk.fz + cz2 * h1 * 0.7], bl = Math.hypot(...bn);
+          const cx2 = -bk.fz, cz2 = bk.fx, bn: V3 = [bk.fx + cx2 * h1 * 0.3, 0.2 + 0.12 * h2, bk.fz + cz2 * h1 * 0.3], bl = Math.hypot(...bn);
           if (bn[0] * fn[0] + bn[2] * fn[2] > -0.05 || fn[1] > 0.9) { fn = [bn[0] / bl, bn[1] / bl, bn[2] / bl]; flat = 1; }
         }
       }
