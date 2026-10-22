@@ -1164,7 +1164,9 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
       const higher = DIRS.map(([a, b]) => w.ground(i + a, j + b) - g), cliff = higher.findIndex((h) => h >= 2), bank = higher.some((h) => h !== 0);
       const nearRock = Math.abs(i - land.rock[0]) + Math.abs(j - land.rock[1]) <= 1, byWater = DIRS.some(([a, b]) => land.water.has((j + b) * 1000 + i + a));
       // (rocks: at a cliff's foot, on the outcrop, by the stream)
-      if ((cliff >= 0 && r(q, 1) < 0.45) || (nearRock && r(q, 6) < 0.7) || (byWater && r(q, 7) < 0.3)) {
+      // (never against what's built, nor on a way: round that it's cleared)
+      const cleared = [[0, 0], ...DIRS, [1, 1], [1, -1], [-1, 1], [-1, -1]].some(([a, b]) => w.occupied(g, i + a, j + b) || w.occupied(g + 1, i + a, j + b) || w.occupied(g - 1, i + a, j + b) || w.paved(i + a, j + b) || w.way(g, i + a, j + b) || w.stair(g, i + a, j + b) >= 0 || w.stair(g - 1, i + a, j + b) >= 0);
+      if (!cleared && ((cliff >= 0 && r(q, 1) < 0.45) || (nearRock && r(q, 6) < 0.7) || (byWater && r(q, 7) < 0.3))) {
         const [a, b] = cliff >= 0 ? DIRS[cliff] : [r(q, 8) - 0.5, r(q, 9) - 0.5];
         // (each thing on the land marked as such, with its own chance of being drawn where the land bleeds away)
         cur = { born: -1e3, pivot: 0, how: 3 + 0.999 * r(q, 40), tone: 0.5, dress: 0, sel: false };
@@ -1174,14 +1176,13 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
       // (what grows wild: scrub on the banks; olives in groves on the shelves, where the land's grove field is high; stone
       // pines on the rises and by the outcrop, alone or in twos; a cypress now and then. Never right up against what's
       // built: round that it's cleared)
-      const cleared = [[0, 0], ...DIRS, [1, 1], [1, -1], [-1, 1], [-1, -1]].some(([a, b]) => w.occupied(g, i + a, j + b) || w.occupied(g + 1, i + a, j + b) || w.paved(i + a, j + b));
       // (a tree's whole kept or left out where the land's drawing fades, by its foot: marked with its foot's cell)
       const rise = higher.filter((h) => h < 0).length >= 3, how = 4 + (Math.floor(X(i)) + 30 + (Math.floor(Z(j)) + 30) * 64 + 0.9 * r(q, 42)) / 10000, field = noise2(land.seed + 17, i * 0.3, j * 0.3);
-      if (bank && r(q, 20) < 0.22) for (let n = 0; n < 1 + Math.floor(r(q, 21) * 3); n++) shrub(at(i, j, (r(q, 22, n) - 0.5) * 0.7, (r(q, 23, n) - 0.5) * 0.7), 0.1 + 0.08 * r(q, 24, n), q + n);
+      if (bank && !cleared && r(q, 20) < 0.22) for (let n = 0; n < 1 + Math.floor(r(q, 21) * 3); n++) shrub(at(i, j, (r(q, 22, n) - 0.5) * 0.7, (r(q, 23, n) - 0.5) * 0.7), 0.1 + 0.08 * r(q, 24, n), q + n);
       else if (!bank && !cleared && !byWater && field > 0.62 && (i + j) % 2 === 0 && r(q, 31) < 0.8) tree(grow(w, g, i, j, PLANT.olive), i, j, g, -1e3, how);
       else if (!cleared && (rise || nearRock) && r(q, 32) < 0.3) tree(grow(w, g, i, j, PLANT.pine), i, j, g, -1e3, how);
       else if (!bank && !cleared && r(q, 30) < 0.03) cypress(i, j, g, -1e3, how);
-      else if (!bank && field > 0.5 && r(q, 33) < 0.12) shrub(at(i, j, (r(q, 34) - 0.5) * 0.5, (r(q, 35) - 0.5) * 0.5), 0.12 + 0.06 * r(q, 36), q + 3);
+      else if (!bank && !cleared && field > 0.5 && r(q, 33) < 0.12) shrub(at(i, j, (r(q, 34) - 0.5) * 0.5, (r(q, 35) - 0.5) * 0.5), 0.12 + 0.06 * r(q, 36), q + 3);
     }
     coarse = false;
     perf.end();

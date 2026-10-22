@@ -17,13 +17,15 @@ import { surfaceY } from './land';
 /** a bank held by a wall: the high cell, the way to the low one, the two grounds */
 export interface Retain { i: number; j: number; d: number; lo: number; hi: number }
 const cache = new WeakMap<World, { v: number; r: Map<string, Retain>; sharp: (i: number, j: number, d: number) => boolean }>();
+/** a column of stone at a cell filling from its ground (the stream's bed, if it's wet) up to a level: a bank built against */
+const filledTo = (w: World, x: number, z: number, hi: number) => { const lo = w.ground(x, z); if (lo >= hi) return false; for (let k = lo; k < hi; k++) if (!w.block(k, x, z)) return false; return true; };
 
 /** where the land's banks are held by walls (keyed from both sides: `i.j.d`) */
 export function retaining(w: World): Map<string, Retain> { return worked(w).r; }
 function worked(w: World) {
   const c = cache.get(w);
   if (c && c.v === w.version) return c;
-  const r = new Map<string, Retain>();
+  const r = new Map<string, Retain>(), filled = new Set<string>();
   if (w.land) {
     const e = w.extent(), wet = (i: number, j: number) => !!w.land?.water.has(j * 1000 + i);
     const used = (i: number, j: number) => {
@@ -32,6 +34,12 @@ function worked(w: World) {
     };
     for (let j = e.j0; j <= e.j1; j++) for (let i = e.i0; i <= e.i1; i++) {
       const hi = w.ground(i, j);
+      // (where what's built below fills the bank's face, ground (or the stream's bed: a bridge) to top, the land on both
+      // sides stays flat to it: the stone holds the bank, and the ground meets it, not a slope running into it)
+      if (!wet(i, j)) for (let d = 0; d < 4; d++) {
+        const [a, b] = DIRS[d], x = i + a, z = j + b;
+        if (w.onSlab(x, z) && filledTo(w, x, z, hi)) { filled.add(`${i}.${j}.${d}`); filled.add(`${x}.${z}.${(d + 2) % 4}`); }
+      }
       if (wet(i, j)) continue;
       for (let d = 0; d < 4; d++) {
         const [a, b] = DIRS[d], x = i + a, z = j + b;
@@ -49,7 +57,7 @@ function worked(w: World) {
       }
     }
   }
-  const out = { v: w.version, r, sharp: (i: number, j: number, d: number) => r.has(`${i}.${j}.${d}`) };
+  const out = { v: w.version, r, sharp: (i: number, j: number, d: number) => r.has(`${i}.${j}.${d}`) || filled.has(`${i}.${j}.${d}`) };
   cache.set(w, out);
   return out;
 }

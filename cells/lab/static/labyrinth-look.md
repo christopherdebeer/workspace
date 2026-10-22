@@ -208,6 +208,8 @@ The fixes:
   - moss lighter;
   - marble's veins faint and few.
 
+**And where stone fills a bank.** Where what's built fills a bank's face from the lower ground up to the higher (stone built up from below, or a bridge from the stream's bed), the land on both sides now stays flat to it, as it does at a retaining wall (context.ts `sharp`). The ground meets the stone, without a slope running into it or a gully beside it. Wild things (boulders, scrub on the banks and on the open ground) are kept off a cell and its eight neighbours wherever anything is built, paved, a way or a flight's foot, so no shrubs on a stair's head or a boulder against a wall.
+
 ## Stage 15: gradual again, the cliffs' shade back (after the phone)
 
 ![Gradual, with the cliffs' shade](labyrinth/look-gradual.jpg)
