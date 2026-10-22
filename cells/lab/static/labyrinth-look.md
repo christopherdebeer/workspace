@@ -187,6 +187,19 @@ Past the picture's reach, it's strokes on the paper only.
 
 ![Further](labyrinth/look-lines.jpg)
 
+## Stage 19: what's built and what grows, rebalanced
+
+![Stage 19](labyrinth/look-stage19.jpg)
+
+From the review: the roofs were the most assertive material, their dark channels striping them, while the masonry was so quiet that the houses read as smooth boxes; the olives were rings of equal round puffs.
+- **Masonry at the distance a house is seen from:** each block's shade now varies by about ±6%, up from ±2.5%. It holds while a block is still a good few pixels across, so a wall reads as a wall of blocks in the wide views. Close up, the joints are as quiet as before.
+- **Roofs as tiles, not stripes:** the pans are only a little darker than the caps (16%, from 30%) and the caps turn less. Each course's lip and shadow carry the roof, and the tiles vary a little more in colour.
+- **Olives with a shape:**
+  - each crown's clusters are unequal: the one toward the light is its main mass, the others smaller;
+  - each cluster is more, smaller clumps, lower toward its edge;
+  - the limbs reach further, so there's sky between the clusters and the primary branches show.
+- **Foliage in sprays:** each tuft of leaves is turned its own way to the light, lit on its top and dark in the gaps between, so a crown is dappled and not a smooth ball. The edge is broken in tufts the size of a spray, not of a clump. This goes as soon as a tuft is too small to see.
+
 ## Stage 18: the pigment outlasts the light
 
 ![Stage 18](labyrinth/look-stage18.jpg)

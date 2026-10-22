@@ -42,9 +42,13 @@ function clusters(fork: P3, n: number, toward: number, spread: number, rise: num
     limbs.push([fork, m, tip]);
     // (a side branch now and then, off the limb's middle)
     if (r(seed + 50 + q) < 0.5) { const b = a + (r(seed + 60 + q) < 0.5 ? 0.7 : -0.7); limbs.push([m, [m[0] + Math.cos(b) * out * 0.35, m[1] + up * 0.3, m[2] + Math.sin(b) * out * 0.35]]); }
-    for (let c = 0; c < per; c++) {
-      const b = (c / per) * Math.PI * 2 + r(seed + 70 + q * 7 + c) * 1.2, d = (c === 0 ? 0 : 0.5 + 0.5 * r(seed + 90 + q * 7 + c)) * cr * 1.1;
-      crown.push({ x: tip[0] + Math.cos(b) * d, y: tip[1] + cr * 0.25 + (r(seed + 110 + q * 7 + c) - 0.5) * cr * flat * 0.5, z: tip[2] + Math.sin(b) * d, r: cr * (0.75 + 0.4 * r(seed + 130 + q * 7 + c)), g: q });
+    // (the clusters unequal: the first, toward the light, the crown's main mass; the others smaller, so the crown has a
+    // shape and not a ring of equal puffs; each of more, smaller clumps the further out, its edge broken, not one ball)
+    const big = q === 0 ? 1.2 : 0.62 + 0.3 * r(seed + 140 + q), m2 = per + (q === 0 ? 2 : 0);
+    for (let c = 0; c < m2; c++) {
+      const b = (c / m2) * Math.PI * 2 + r(seed + 70 + q * 7 + c) * 1.2, d = (c === 0 ? 0 : 0.45 + 0.55 * r(seed + 90 + q * 7 + c)) * cr * 1.25 * big;
+      const rc = cr * big * (c === 0 ? 0.85 : 0.5 + 0.3 * r(seed + 130 + q * 7 + c));
+      crown.push({ x: tip[0] + Math.cos(b) * d, y: tip[1] + cr * 0.25 * big + (r(seed + 110 + q * 7 + c) - 0.5) * cr * flat * 0.5 - (d / (cr * 1.25 * big + 1e-6)) * rc * 0.35, z: tip[2] + Math.sin(b) * d, r: rc, g: q });
     }
   }
   return { limbs, crown };
@@ -85,7 +89,7 @@ export function grow(w: World, k: number, i: number, j: number, kind: number): G
     const fork: P3 = [cx + lx * lean, k + H, cz + lz * lean];
     const trunk: P3[] = [[cx, k, cz], [cx + lx * lean * 0.25 + tw, k + H * 0.35, cz + lz * lean * 0.25 - tw], [cx + lx * lean * 0.6 - tw * 0.6, k + H * 0.7, cz + lz * lean * 0.6 + tw * 0.8], fork];
     const n = 2 + (r(5) < 0.55 ? 1 : 0), cr = (0.3 + 0.05 * r(6)) * (0.85 + 0.2 * s);
-    const { limbs, crown } = clusters(fork, n, Math.atan2(lz, lx), 0.62 * s, 0.55 * s, 4, cr, 0.6, r, 200);
+    const { limbs, crown } = clusters(fork, n, Math.atan2(lz, lx), 0.74 * s, 0.55 * s, 5, cr, 0.6, r, 200);
     const out: Growth = { kind, trunk, girth: 0.08 + 0.035 * s, crown: crown.filter((c) => !inStone(w, c.x, c.y, c.z)), limbs };
     if (r(91) < 0.3) {
       // (a second stem, from the foot, leaning the other way round the light, with a cluster of its own)

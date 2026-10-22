@@ -92,7 +92,8 @@ bool leafCut(vec3 p, float m, float at) {
   if (uLeafCut < .5) return false;
   int mi = int(m + .5) % 256;
   if (mi % 16 != 3 || ((mi / 64) % 4 != 1 && (mi / 64) % 4 != 2) || (mi / 16) % 4 != 0) return false;
-  float lf = bnoise(p * 7.5) * .6 + bnoise(p * 19. + 3.) * .4;
+  // (in tufts the size of a spray of leaves, not of a clump: the edge broken into leaves, not a ball's smooth rim)
+  float lf = bnoise(p * 11.) * .5 + bnoise(p * 27. + 3.) * .5;
   return lf < at;
 }
 // (a thing lying on the land (its rise marked 3 + its own chance), left out where the drawing doesn't reach: whole; a
@@ -111,7 +112,7 @@ uniform highp sampler2DShadow uShadow; uniform highp sampler2D uShadowRaw; unifo
 // in the world's own units whatever it's fitted to)
 uniform float uTexel, uDepthRange, uMarks;
 layout(location=0) out vec4 oCol; layout(location=1) out vec4 oNrm;
-float leafEdge(vec3 n) { float rim = 1. - abs(dot(n, normalize(uDir))); return .78 * rim * rim - .1; }
+float leafEdge(vec3 n) { float rim = 1. - abs(dot(n, normalize(uDir))); return .8 * pow(rim, 1.6) - .08; }
 float hash(vec3 p) { return fract(sin(dot(p, vec3(127.1, 311.7, 74.7))) * 43758.5453); }
 float noise(vec3 x) { vec3 i = floor(x), f = fract(x); f = f * f * (3. - 2. * f);
   return mix(mix(mix(hash(i), hash(i + vec3(1,0,0)), f.x), mix(hash(i + vec3(0,1,0)), hash(i + vec3(1,1,0)), f.x), f.y),
@@ -284,6 +285,15 @@ void main() {
     else if (kind == 3) base = mix(vec3(.13, .23, .08), vec3(.25, .35, .13), f);
     else base = mix(vec3(.10, .17, .08), vec3(.20, .27, .12), f);
     base *= .8 + .4 * vTone; wrap = .35;
+    // (in its sprays, not a smooth ball: each tuft of leaves turned its own way to the light, lit on its top and dark
+    // in the gaps between, so a crown's dappled; gone where a tuft's smaller than the eye can hold)
+    if (!moss && !ivy) {
+      float kL = keep(10.), tf = bnoise(vPos * 16. + 5.), tf2 = bnoise(vPos * 31. + 9.);
+      vec3 jt = vec3(noise(vPos * 14.), noise(vPos * 14. + 7.), noise(vPos * 14. + 13.)) - .5;
+      nS = normalize(n + jt * 1.1 * kL);
+      base *= mix(1., .82 + .36 * (tf * .65 + tf2 * .35), kL);
+      cav = mix(1., .72 + .28 * smoothstep(.25, .6, tf), kL);
+    }
   }
   else if (mat == 4) base = vec3(.32, .24, .17);
   else if (mat == 9) base = vec3(1.);
@@ -318,15 +328,16 @@ void main() {
     vec3 T = normalize(vec3(-n.z, 0., n.x) + 1e-5), S = normalize(cross(n, T)); if (S.y < 0.) S = -S;
     float u = dot(vPos, T) * 7., v = dot(vPos, S) * 9., cu = floor(u), cv = floor(v), fv = fract(v);
     float tint = hash(vec3(cu, cv, 7.)), kT = keep(9.);
-    base = mix(vec3(.63, .37, .26), vec3(.70, .44, .31), tint);
+    base = mix(vec3(.62, .36, .25), vec3(.72, .46, .32), tint);
     if (hash(vec3(cu, cv, 3.)) > .9) base = mix(base, vec3(.50, .40, .30), .45);
     base = mix(base, vec3(.47, .47, .40), .16 * smoothstep(.55, .8, fbm(vPos * 2.)));
     // (across: round over a cap, hollow in a pan; up: each tile rising toward its lip)
     float across = cos(u * 3.14159), along = -.9;
-    nS = normalize(n + (T * across * .55 + S * along * .1) * kT);
+    nS = normalize(n + (T * across * .4 + S * along * .1) * kT);
     // (the lip's shadow on the tile under it; the lip's own edge catching the light; the pans darker than the caps)
     float lip = smoothstep(.78, 1., fv) * kT;
-    cav = (1. - .45 * lip) * (1. - .3 * (.5 - .5 * sin(u * 3.14159)) * kT);
+    // (the pans only a little darker than the caps, so the roof reads as its tiles, row by row, not as stripes down it)
+    cav = (1. - .42 * lip) * (1. - .16 * (.5 - .5 * sin(u * 3.14159)) * kT);
     base *= 1. + .12 * (1. - smoothstep(0., .08, fv)) * kT;
   }
   else if (mat == 15) {
@@ -416,7 +427,9 @@ void main() {
       // (quiet close up, as the studies keep it: each block barely its own shade or angle, the joints fine and only a
       // little darker, so a wall reads as a wall of blocks and not as a pattern of dark ones)
       nS = normalize(n - g * .018 * kS + (T * (t1 - .5) + B * (t2 - .5)) * .035 * keep(4.));
-      base *= .975 + .05 * hash(vec3(id, vTone * 3.));
+      // (each block its own shade, enough to read as blocks at the distance a house is seen from, gone before a block's
+      // a few pixels: a wall of blocks, not a smooth box and not a pattern)
+      base *= mix(1., .93 + .13 * hash(vec3(id, vTone * 3.)), keep(5.));
       base = mix(vec3(.74, .70, .62) * (.95 + .05 * noise(vPos * 50.)), base, mix(1., smoothstep(.005, .013, d0), keep(40.)));
       cav = mix(1., mix(.8, 1., h0), kS);
     }
