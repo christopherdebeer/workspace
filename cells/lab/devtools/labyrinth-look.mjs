@@ -3,21 +3,23 @@
 // stream and its fall, a way out across it into the drawn land), drawn wide, close and far, each view a picture in devtools/out/look/NAME-VIEW.png and all of them on
 // one sheet, static/labyrinth/look-NAME.jpg. Every change to the renderer is looked at in these, before and after.
 //   --only=VIEW   --size=900   --frames (a time for each view's first frames, as a rough measure: not the phone's)
-//   --marks (the drawing's marks by family, the picture faded under them)   --print (all of it on the paper)
+//   --q=QUERY (one view of its own)   --marks (the drawing's marks by family, the picture faded under them)   --print (all of it on the paper)
 process.env.EXPERIMENT = 'labyrinth'; process.env.READY = '__labyrinth';
-const opt = Object.fromEntries(process.argv.slice(2).filter((a) => a.startsWith('--')).map((a) => [a.slice(2).split('=')[0], a.split('=')[1] ?? true]));
+const opt = Object.fromEntries(process.argv.slice(2).filter((a) => a.startsWith('--')).map((a) => [a.slice(2).split('=')[0], a.includes('=') ? a.slice(a.indexOf('=') + 1) : true]));
 const { withWood } = await import('./harness.mjs');
 const { mkdirSync } = await import('node:fs');
 const { execFileSync } = await import('node:child_process');
 
 export const VIEWS = [
   { name: 'wide', query: 'story=16&zoom=0.55' },
-  { name: 'close', query: 'story=16&zoom=0.2&at=10.6' },
+  { name: 'close', query: 'story=16&zoom=0.2' },
   { name: 'turned', query: 'story=16&zoom=0.5&turn=1' },
-  { name: 'far side', query: 'story=16&zoom=0.26&at=5.2&turn=3' },
+  { name: 'far side', query: 'story=16&zoom=0.26&turn=3' },
   { name: 'far', query: 'story=16&zoom=1.2' },
 ];
 
+// (--q=QUERY: a view of its own instead of the set, for looking at one place: e.g. --q='story=16&zoom=0.12&at=0.9&turn=3')
+if (opt.q) VIEWS.splice(0, VIEWS.length, { name: 'q', query: opt.q });
 const tag = opt.tag ?? 'now', size = Number(opt.size ?? 900);
 const dir = new URL('./out/look/', import.meta.url).pathname;
 mkdirSync(dir, { recursive: true });

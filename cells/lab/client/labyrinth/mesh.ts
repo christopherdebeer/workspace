@@ -571,7 +571,7 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
         quad(pt(u0, 0, h0), pt(u0, 1, h0), pt(u0, 1, h - nh), pt(u0, 0, h - nh), [-a, 0, -b], [0.6, 0.6, 0.8, 0.8], MAT.stone);
         const b0 = base(u0), b1 = base(u1);
         for (const qq of across) {
-          if (hides(k, i, j, qq)) continue;
+          if (!over || hides(k, i, j, qq)) continue;
           const dd = DIRS[qq], wv = (a ? dd[1] : dd[0]) > 0 ? 1 : 0;
           quad(pt(u0, wv, b0), pt(u1, wv, b1), pt(u1, wv, h), pt(u0, wv, h), [dd[0], 0, dd[1]], [0.7, 0.7, 1, 1], MAT.stone);
         }
@@ -579,6 +579,23 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
         if (over && carriage === 'rampant' && (b0 > g + 0.001 || b1 > g + 0.001)) {
           const sl = (b1 - b0) * STEPS, l = Math.hypot(1, sl);
           quad(pt(u0, 0, b0), pt(u1, 0, b1), pt(u1, 1, b1), pt(u0, 1, b0), [a * sl / l, -1 / l, b * sl / l], 0.45, MAT.stone);
+        }
+      }
+      // (on the ground, a cheek along each open side instead of the steps' own stepped ends: a low wall raking with the
+      // flight, its top a little over the line of the nosings, so the flight reads as one thing laid up the slope, not
+      // a stack of boxes; it starts low at the flight's foot and ends a little proud of the ground at its head)
+      if (!over) {
+        const CW = 0.1, CH = 0.1, first = !fl || q === 0;
+        const tl = (u: number) => (last ? Math.min(y0 + 1 / STEPS + u, y1) : y0 + 1 / STEPS + u) + CH;
+        const T0 = tl(0), T1 = tl(1), m = T1 - T0, ml = Math.hypot(1, m);
+        for (const qq of across) {
+          if (hides(k, i, j, qq)) continue;
+          const dd = DIRS[qq], out = (a ? dd[1] : dd[0]) > 0 ? 1 : 0, inn = out ? 1 - CW : CW;
+          quad(pt(0, out, y0), pt(1, out, y0), pt(1, out, T1), pt(0, out, T0), [dd[0], 0, dd[1]], [0.7, 0.7, 1, 1], MAT.stone);
+          quad(pt(0, inn, y0), pt(1, inn, y1), pt(1, inn, T1), pt(0, inn, T0), [-dd[0], 0, -dd[1]], [0.6, 0.6, 0.95, 0.95], MAT.stone);
+          quad(pt(0, out, T0), pt(1, out, T1), pt(1, inn, T1), pt(0, inn, T0), [-a * m / ml, 1 / ml, -b * m / ml], 1, MAT.stone);
+          if (first) quad(pt(0, out, y0), pt(0, inn, y0), pt(0, inn, T0), pt(0, out, T0), [-a, 0, -b], [0.7, 0.7, 1, 1], MAT.stone);
+          if (last) quad(pt(1, out, y1), pt(1, inn, y1), pt(1, inn, T1), pt(1, out, T1), [a, 0, b], 0.9, MAT.stone);
         }
       }
       // (its end: at the head of the flight, down to what it stands on, or to its soffit; and where the next step's carried
@@ -1217,28 +1234,44 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
   /**
    * A retaining wall, holding a bank where it's used: along the edge between the high cell and the low, its face out
    * into the low one, battered (thicker at its foot), from a little under the low ground up to the high, coped; a low
-   * upstand over the coping where the ground above is open; an end where it doesn't run on
+   * upstand over the coping where the ground above is open. Where it ends and the bank it holds runs on unheld beside
+   * it, its top rakes down to the bank's there, so it finishes against the bank instead of standing out of it as a
+   * square end; where it ends at a corner, or into ground as high as it, it stays its height to the end.
    */
   function retainingWall(r: { i: number; j: number; d: number; lo: number; hi: number }) {
     const [a, b] = DIRS[r.d], [ta, tb] = DIRS[(r.d + 1) % 4], bx = X(r.i) + 0.5 + a * 0.5, bz = Z(r.j) + 0.5 + b * 0.5;
-    const up = w.occupied(r.hi, r.i, r.j) ? 0 : 0.1, yb = r.lo - 0.35, yt = r.hi + up, TB = 0.24, TT = 0.13, C = 0.05;
+    const up = w.occupied(r.hi, r.i, r.j) ? 0 : 0.1, yb = r.lo - 0.35, TB = 0.24, TT = 0.13, C = 0.05;
     const P = (s: number, u: number, y: number): V3 => [bx + ta * s + a * u, y, bz + tb * s + b * u];
-    const on = (sg: number) => retaining(w).has(`${r.i + sg * ta}.${r.j + sg * tb}.${r.d}`);
+    const held = retaining(w), on = (sg: number) => held.has(`${r.i + sg * ta}.${r.j + sg * tb}.${r.d}`);
+    // (the ground its top comes down to at an end: the bank's, just beyond it along the edge; not at a corner, where the
+    // high cell's next side is held too, nor where a flight climbs the bank beside it, its head against the wall's end)
+    const endAt = (sg: number) => {
+      if (on(sg) || held.has(`${r.i}.${r.j}.${(r.d + (sg > 0 ? 1 : 3)) % 4}`) || w.stair(r.hi - 1, r.i + sg * ta, r.j + sg * tb) >= 0) return r.hi;
+      const e = P(sg * 0.58, 0.06, 0);
+      return Math.min(r.hi, Math.max(r.lo + 0.12, groundY(w, e[0] + CENTER, e[2] + CENTER)));
+    };
+    const E = [endAt(-1), endAt(1)], RK = 0.45;
+    // (and never under the ground just behind it)
+    const behind = (s: number) => { const e = P(s, -0.12, 0); return Math.min(r.hi, groundY(w, e[0] + CENTER, e[2] + CENTER)); };
+    const top = (s: number) => { const sg = s < 0 ? 0 : 1, f = Math.min(1, Math.max(0, (Math.abs(s) - (0.5 - RK)) / RK)), ff = f * f * (3 - 2 * f); return (E[sg] < r.hi ? Math.max(r.hi + (E[sg] - r.hi) * ff, behind(s)) : r.hi) + up; };
     cur = { born: -1e3, pivot: yb, how: 1, tone: (((r.i * 73856093) ^ (r.j * 19349663) ^ (r.d * 83492791)) >>> 0) / 4294967296, dress: 0, sel: false };
-    const n = Math.hypot(yt - yb, TB - TT);
-    quad(P(-0.5, TB, yb), P(0.5, TB, yb), P(0.5, TT, yt), P(-0.5, TT, yt), [a * (yt - yb) / n, (TB - TT) / n, b * (yt - yb) / n], [0.55, 0.55, 0.9, 0.9], MAT.stone);
-    // (its coping: out a little either side, its top, its edges)
-    const c0 = -0.07, c1 = TT + 0.04;
-    quad(P(-0.5, c0, yt + C), P(0.5, c0, yt + C), P(0.5, c1, yt + C), P(-0.5, c1, yt + C), [0, 1, 0], 1, MAT.stone);
-    quad(P(-0.5, c1, yt), P(0.5, c1, yt), P(0.5, c1, yt + C), P(-0.5, c1, yt + C), [a, 0, b], 0.9, MAT.stone);
-    quad(P(-0.5, c1, yt), P(0.5, c1, yt), P(0.5, TT, yt), P(-0.5, TT, yt), [0, -1, 0], 0.5, MAT.stone);
-    if (up > 0) quad(P(-0.5, c0, r.hi), P(0.5, c0, r.hi), P(0.5, c0, yt + C), P(-0.5, c0, yt + C), [-a, 0, -b], 0.85, MAT.stone);
+    const raked = E[0] < r.hi || E[1] < r.hi, S = raked ? 6 : 1, c0 = -0.07, c1 = TT + 0.04;
+    for (let q = 0; q < S; q++) {
+      const s0 = -0.5 + q / S, s1 = -0.5 + (q + 1) / S, t0 = top(s0), t1 = top(s1), m = (t1 - t0) / (s1 - s0), ml = Math.hypot(1, m);
+      const n = Math.hypot((t0 + t1) / 2 - yb, TB - TT);
+      quad(P(s0, TB, yb), P(s1, TB, yb), P(s1, TT, t1), P(s0, TT, t0), [a * ((t0 + t1) / 2 - yb) / n, (TB - TT) / n, b * ((t0 + t1) / 2 - yb) / n], [0.55, 0.55, 0.9, 0.9], MAT.stone);
+      // (its coping: out a little either side, its top (sloped where it rakes), its edges)
+      quad(P(s0, c0, t0 + C), P(s1, c0, t1 + C), P(s1, c1, t1 + C), P(s0, c1, t0 + C), [-ta * m / ml, 1 / ml, -tb * m / ml], 1, MAT.stone);
+      quad(P(s0, c1, t0), P(s1, c1, t1), P(s1, c1, t1 + C), P(s0, c1, t0 + C), [a, 0, b], 0.9, MAT.stone);
+      quad(P(s0, c1, t0), P(s1, c1, t1), P(s1, TT, t1), P(s0, TT, t0), [0, -1, 0], 0.5, MAT.stone);
+      if (up > 0) quad(P(s0, c0, t0 - up), P(s1, c0, t1 - up), P(s1, c0, t1 + C), P(s0, c0, t0 + C), [-a, 0, -b], 0.85, MAT.stone);
+    }
     for (const sg of [-1, 1]) {
       if (on(sg)) continue;
-      const s = sg * 0.5;
+      const s = sg * 0.5, yt = top(s);
       quad(P(s, 0, yb), P(s, TB, yb), P(s, TT, yt), P(s, 0, yt), [ta * sg, 0, tb * sg], 0.8, MAT.stone);
       quad(P(s, c0, yt), P(s, c1, yt), P(s, c1, yt + C), P(s, c0, yt + C), [ta * sg, 0, tb * sg], 0.9, MAT.stone);
-      if (up > 0) quad(P(s, c0, r.hi), P(s, 0, r.hi), P(s, 0, yt), P(s, c0, yt), [ta * sg, 0, tb * sg], 0.85, MAT.stone);
+      if (up > 0) quad(P(s, c0, yt - up), P(s, 0, yt - up), P(s, 0, yt), P(s, c0, yt), [ta * sg, 0, tb * sg], 0.85, MAT.stone);
     }
   }
   /** a thin wall: a wall's thickness, full height, running out from its middle to the stone beside it */

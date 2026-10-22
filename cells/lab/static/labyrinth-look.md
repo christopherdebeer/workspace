@@ -223,6 +223,14 @@ A way across a bank or out to the stream is a built causeway standing on the gro
 - **The way's bed:** it runs flush onto the span with no kerb there (any stone whose top is at its level counts).
 - **The banks:** the land holds flat to the span as it does to any stone filling a bank.
 
+**Flights and the banks beside them.** A flight on the ground was a stack of boxes, each step's end its own block. The walls holding the banks beside it and at its head stood full height to square ends, a storey above the flight's foot, with the bank they held sloping away beside them. Now:
+- **A cheek on each open side:** a low wall raking with the flight, its top a little over the line of the nosings. It starts low at the foot, where the paving runs up to the first step, and ends a little proud of the ground at the head.
+- **Walls finish against the bank:** where a retaining wall ends and the bank it holds runs on unheld, its top rakes down over the last half cell to the bank's height just beyond, and never below the ground just behind it. So a wall beside a flight comes down with the bank at the flight's foot. It keeps its height to the end at a corner, where the next side is held too, and where a flight's head is against its end.
+
+![A flight up a bank](labyrinth/look-joins.jpg)
+
+(The look harness takes `--q=QUERY` for one view of its own. `?at=i.j` now holds its cell in view: the first frame's check that everything is in frame had been re-framing the whole world.)
+
 ## Stage 15: gradual again, the cliffs' shade back (after the phone)
 
 ![Gradual, with the cliffs' shade](labyrinth/look-gradual.jpg)

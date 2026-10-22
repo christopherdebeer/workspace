@@ -1099,7 +1099,7 @@ function followCat(dt: number) {
 if (catsOn) { catMemory(); if (qs.has('catsat')) cats.run(world, Number(qs.get('catsat'))); }
 
 // (`?at=i.j`: looking at that cell, not framing it all)
-if (qs.has('at')) { const [i, j] = qs.get('at')!.split('.').map(Number); view.target = [i + 0.5 - CENTER, world.top() * 0.35, j + 0.5 - CENTER]; zoomFit = framing().fit; follow = false; }
+if (qs.has('at')) { const [i, j] = qs.get('at')!.split('.').map(Number); view.target = [i + 0.5 - CENTER, world.top() * 0.35, j + 0.5 - CENTER]; zoomFit = framing().fit; follow = false; edgeChecked = world.version; }
 requestAnimationFrame(frame);
 
 (window as unknown as { __labyrinth: unknown }).__labyrinth = {
