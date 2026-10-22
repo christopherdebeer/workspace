@@ -245,7 +245,7 @@ void main() {
   // picture reaches; and each kind of thing at its own rate: what's built holds on longest, then the water, the ground,
   // and soonest the trees, which go to drawn canopy while what they stand by is still whole)
   float gT = 2.;
-  bool onIt = mat == 5 && moss, onPaper = (uBleed > .5 || uPaper > .5) && uClay < .5;
+  bool onIt = mat == 5 && moss && vTone < 1.5, onPaper = (uBleed > .5 || uPaper > .5) && uClay < .5;
   if (onPaper && !sel && !fur) {
     vec3 at = vPos;
     if (vU >= 4. && vU < 5.) { float at0 = floor((vU - 4.) * 10000.); at = vec3(mod(at0, 64.) - 29.5, 0., floor(at0 / 64.) - 29.5); }
@@ -353,51 +353,39 @@ void main() {
   else if (mat == 10) base = vec3(.70, .40, .27) * (.9 + .15 * noise(vPos * 18.));
   else if (mat == 7) base = vec3(.90, .89, .86) * (.98 + .03 * noise(vPos * 3.));
   else if (mat == 6) base = travertine(vPos, .6) * .9;
+  else if (mat == 5 && moss && vTone > 1.5) {
+    // (the limestone breaking through the hill (mesh.ts outcrops): pale, warm in its hollows, a few dark fissures down it
+    // and lichen in grey spots; a little stained at its foot where it comes out of the earth)
+    float fis = noise(vec3(vPos.x * 5. + vPos.z * 3., vPos.y * 1.5, vPos.z * 5. - vPos.x * 2.));
+    base = mix(vec3(.80, .78, .72), vec3(.88, .86, .80), smoothstep(.3, .8, noise(vPos * 3.1)));
+    base *= 1. - .3 * (1. - smoothstep(.0, .035, abs(fis - .5))) * keep(8.);
+    base = mix(base, vec3(.66, .66, .60), .45 * smoothstep(.66, .8, noise(vPos * 9. + 4.)) * keep(10.));
+    base *= .86 + .14 * smoothstep(-.05, .12, n.y + .1);
+    plain = vec3(.93, .91, .86);
+    landFeat = 1.;
+  }
   else if (mat == 5 && moss) {
-    // (the land, as the light finds it near what's built (further out it's given back to the paper, below): open ground
-    // warm earth and dry grass, greener where it's damp and low; where it's steep, limestone in its beds, the bedding
-    // lines across it and the fractures down it, each bed's face a little out of true, weathered darker at its foot)
-    float up = n.y, rough = noise(vPos * vec3(1.7, 2.3, 1.7)) * .6 + noise(vPos * 6.) * .4;
-    float cliff = smoothstep(.8, .52, up + (rough - .5) * .16);
-    landFeat = cliff;
-    // (open ground: warm grey-brown earth, not sand; dry grass over most of the level ground in drifts, straw going to
-    // olive, its blades a fine grain while they're big enough to see; greener where it's damp and low and at the water's
-    // edge (how near the water, from the mesh, in its tone), and darker there, wet)
-    float wetv = clamp(vTone, 0., 1.), patchy = fbm(vec3(vPos.xz * 1.1, 2.)), fine = noise(vPos * 9.);
-    vec3 earth = mix(vec3(.72, .66, .55), vec3(.65, .59, .49), patchy);
-    float gr = smoothstep(.36, .6, fbm(vec3(vPos.xz * 1.6, 7.)) + .3 * (up - .85)) * smoothstep(.7, .9, up);
-    vec3 straw = mix(vec3(.73, .68, .51), vec3(.61, .61, .44), smoothstep(.4, .7, fbm(vec3(vPos.xz * .7, 13.))));
-    straw *= .87 + .2 * mix(.5, noise(vec3(vPos.x * 31., vPos.y * 4., vPos.z * 31.)), keep(30.));
-    vec3 soil = mix(earth, straw, gr * .85);
-    soil = mix(soil, vec3(.48, .54, .34), clamp(.35 * smoothstep(.62, .8, fbm(vec3(vPos.xz * 3.1, 11.))) * (1. - vAo * .5) + .5 * wetv, 0., .7));
-    soil *= (.94 + .1 * fine) * (1. - .3 * smoothstep(.45, .95, wetv));
-    // (the rock: its beds level, a little thicker or thinner each; a bedding line at each bed's foot, a fracture now and
-    // then down it, and across a fracture the bed's line a little higher or lower, as the blocks have settled)
-    vec2 fall = normalize(n.xz + 1e-4), con = vec2(-fall.y, fall.x);
-    float bedR = vPos.y * 2.9 + (noise(vPos * vec3(.45, .2, .45)) - .5) * .3;
-    float cc = dot(vPos.xz, con) * 1.3 + hash(vec3(floor(bedR), 5., 5.)) + (noise(vPos * vec3(2., 3., 2.)) - .5) * .25, colI = floor(cc);
-    float bedV = bedR + (hash(vec3(colI, floor(bedR), 6.)) - .5) * .2, bedF = fract(bedV), bedI = floor(bedV);
-    // (its tone the plane's (the mesh lights each block as one), only a little moving over it)
-    vec3 rock = mix(vec3(.90, .85, .75), vec3(.95, .92, .84), .55 + .15 * hash(vec3(bedI, colI, 1.)) + .3 * (rough - .5));
-    float fr = min(fract(cc), 1. - fract(cc)) / 1.3;
-    // (the geometry carries the planes now (mesh.ts: beds and blocks); the material only a little more: a bedding line
-    // here and there, broken, and a few fractures, not a course on every bed and a joint on every block, which read as
-    // masonry)
-    // (the courses were the mesh's (stage 17); the bedding only a faint line now and then; the fractures down
-    // the faces carry it, a few to a block, wandering a little)
-    float bedOn = step(.7, noise(vec3(dot(vPos.xz, con) * .9, bedI * 1.7, 3.))), frOn = step(.5, hash(vec3(bedI, colI, 9.)));
-    rock *= 1. - .05 * (1. - smoothstep(.0, .04, bedF)) * bedOn - .16 * (1. - smoothstep(.0, .022, fr)) * frOn;
-    // (weathered a little darker toward each course's foot, lighter at its top where the sun and the rain wash it)
-    rock *= .94 + .1 * smoothstep(.0, .3, fract(vPos.y * 1.1 + .3 * hash(vec3(colI, 2., 2.))));
-    rock = mix(rock, vec3(.66, .61, .52), .15 * smoothstep(.65, .9, fbm(vPos * 1.7 + 4.)));
-    rock *= 1. - .28 * wetv;
-    base = mix(soil, rock, cliff);
-    // (its colour as the drawing takes it: the terraces a warm ochre, never a grey on the way to the page; the rock pale)
-    plain = mix(vec3(.85, .75, .52), vec3(.91, .88, .80), cliff);
-    // (the beds' faces turned a little each, the bedding lines and fractures cut in, for the light)
-    float kL = keep(6.);
-    nS = normalize(n + (vec3(con.x, 0., con.y) * sign(fract(cc) - .5) * (1. - smoothstep(.0, .05, fr)) * .4 * frOn) * cliff * kL);
-    cav = 1. - cliff * (.22 * (1. - smoothstep(.0, .07, bedF)) * bedOn + .2 * (1. - smoothstep(.0, .035, fr)) * frOn);
+    // (the land, as the light finds it near what's built (further out it's given back to the paper, below): after the
+    // sheet, dry straw over the whole of the hill, its slopes too, in drifts from gold to olive, a fine grain of blades
+    // while they're big enough to see; worn to pale earth where it's walked (in its tone, below nought: an unpaved bench,
+    // the fringe of a way); the earth showing where the hill's cut steep; greener and darker at the water's edge)
+    float up = n.y, wetv = clamp(vTone, 0., 1.), walk = clamp(-vTone, 0., 1.);
+    float patchy = fbm(vec3(vPos.xz * 1.1, 2.)), fine = noise(vPos * 9.);
+    vec3 earth = mix(vec3(.82, .74, .60), vec3(.76, .67, .52), patchy);
+    float bare = smoothstep(.62, .42, up + (fine - .5) * .12);
+    vec3 straw = mix(vec3(.85, .76, .53), vec3(.75, .68, .46), smoothstep(.35, .7, fbm(vec3(vPos.xz * .7, 13.))));
+    straw = mix(straw, vec3(.62, .62, .43), .5 * smoothstep(.5, .72, fbm(vec3(vPos.xz * 2.3, 11.))));
+    straw = mix(straw, vec3(.88, .82, .66), .35 * smoothstep(.55, .8, noise(vPos * 4.3 + 9.)));
+    float blade = noise(vec3(vPos.x * 34., vPos.y * 4., vPos.z * 34.));
+    straw *= .9 + .18 * mix(.5, blade, keep(30.));
+    float worn = smoothstep(.15, .6, walk + (fine - .5) * .3);
+    vec3 soil = mix(straw, earth, max(bare, worn));
+    soil = mix(soil, vec3(.50, .56, .36), clamp(.55 * wetv, 0., .55));
+    soil *= (.95 + .08 * fine) * (1. - .28 * smoothstep(.45, .95, wetv));
+    base = soil;
+    landFeat = bare * .6;
+    // (its colour as the drawing takes it: a warm ochre, never a grey on the way to the page; the bare cut paler)
+    plain = mix(vec3(.87, .77, .53), vec3(.88, .82, .70), max(bare, worn));
   }
   else if (mat == 5) base = travertine(vPos * .8 + 11., .5) * 1.03;
   else if (mat == 8) {
@@ -587,7 +575,7 @@ void main() {
     washC *= 1. - (uPaper > .5 ? .26 : .34 * (1. - smoothstep(.8, 1., drawn))) * max(l1 * smoothstep(.55, .33, L), l2 * smoothstep(.3, .16, L)) * brk * smoothstep(.06, .3, drawn) * (mat == 3 ? 0. : 1.);
   }
   // (the land, held back: most of the way to its own pale, unlit, the shade still on it)
-  bool land = mat == 5 && moss;
+  bool land = onIt;
   if (land && onPaper) {
     // (after Taohua: the open ground is the paper itself, unlit, no tone laid on it. Only strokes: its features' own
     // marks (strokes.ts: rims, hachures, bedding, fractures, contacts) and here its contours. Away from what's built and

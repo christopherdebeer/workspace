@@ -187,6 +187,40 @@ Past the picture's reach, it's strokes on the paper only.
 
 ![Further](labyrinth/look-lines.jpg)
 
+## Stage 22: the hill's own material (after the "continuous land / local construction" sheet)
+
+![Stage 22](labyrinth/look-land22.jpg)
+
+Next to the sheet, stage 21's hill had three problems: it was bare, its slopes went a muddy brown, and the stream ran through a plain trench. The sheet shows straw grass over the whole hill, limestone breaking through it, scrub everywhere, and a rocky gorge at the fall.
+
+**Ground** (render.ts):
+- **Straw:** covers the slopes too, in drifts from gold to olive, with a pale tint now and then. Its blades show as a fine grain while they're big enough to see.
+- **Bare earth:** only where the hill is cut steep, and where it's walked. Walked ground is an unpaved bench, or a patchy fringe along paving and ways. The mesh passes this in the ground's tone, below zero, so the shader needs nothing new.
+- **Gone:** stage 17's rock bedding and fractures on the slopes, which shaded brown.
+
+**Limestone outcrops** (mesh.ts `outcrop`):
+- **Shape:** each is one to four tabular blocks set along the contour. Their tops sit near level and follow the hill a little, their arrises are bevelled, and each is sunk at its foot into the slope.
+- **Where:** they break through where the hill is steep, in patches a broad noise field picks, and now and then on open ground. They always stand on the outcrop cell.
+- **Kept clear of:** benches, stairs and the water. Next to a bench they're held back and kept small.
+- **Gorge:** along the stream, a block every few points on either bank. At a fall they're bigger and closer, so the water comes down between them.
+- **Shading:** the shader marks them as rock in their tone: pale limestone with fissures and grey lichen, a little stained at the foot. They draw as things on the land, outlined, not as ground.
+
+**Scrub:**
+- **Clumps:** a bigger bush with smaller ones touching it.
+- **How many:** more where a broad drift field is thick, on steep ground and around the rock.
+- **Where:** right up to what's built, but never on a bench, a way, a stair or the water.
+- **Cost:** small bushes are built with fewer rings and segments.
+
+**Cost:** the study still builds in about 1.0–1.1 s in node. Ground vertices are 267k: 184k for stage 21, 236k for stage 20.
+
+**Still to do from the sheet:**
+- a dressed-stone plinth where a foundation meets the slope;
+- dry-stone retaining walls along the cut beside a stair;
+- worn footpaths through the grass between places;
+- foam and white water at the fall;
+- the scrub a greyer olive with lighter tops;
+- the shaded cut faces are still a little heavy.
+
 ## Stage 21: a hillside first, construction let into it (after the review: "continuous land first")
 
 ![The hill in clay: no materials, no ink](labyrinth/look-hill-clay.jpg)

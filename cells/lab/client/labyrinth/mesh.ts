@@ -26,7 +26,7 @@ import { climb, grow, growths } from './plants';
 import { strokes, type Skeleton, type StrokeLand } from './strokes';
 import { DOMAIN, LAND, noise2, onLand } from './land';
 import { groundY, retaining } from './context';
-import { benched, riverOf } from './terrain';
+import { benched, nearRiver, riverOf } from './terrain';
 
 /** floats a vertex: position, normal, ao (1 open .. 0 shut in), material (MAT), its rising (when laid, the height it
  * grows from, how), and a seed for its stone's tone */
@@ -1007,7 +1007,18 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
       }
       return Math.max(0, 1 - d / 1.1) ** 1.5;
     }));
-    const V = (a: number, b: number) => { cur.tone = damp[a][b]; vert(pts[a][b], nrm[a][b], sky[a][b], LANDMAT); };
+    // (where it's walked: worn to bare earth on a bench that isn't paved, and in a fringe along the paving and the ways,
+    // patchy, as a path's edge is; in the tone too, below nought, where it's not wet)
+    const walked = (i: number, j: number) => w.paved(i, j) || w.courts.has(key(0, i, j)) || w.way(w.ground(i, j), i, j);
+    const trod = pts.map((col) => col.map((p) => {
+      const gx = p[0] + CENTER, gz = p[2] + CENTER, i = Math.floor(gx), j = Math.floor(gz);
+      if (!onLand(i, j)) return 0;
+      if (benched(w, i, j) && !walked(i, j)) return 0.75;
+      let d = 9;
+      for (let b = -1; b <= 1; b++) for (let a = -1; a <= 1; a++) if (walked(i + a, j + b)) d = Math.min(d, Math.hypot(Math.max(i + a - gx, 0, gx - i - a - 1), Math.max(j + b - gz, 0, gz - j - b - 1)));
+      return (1 - Math.min(1, d / (0.22 + 0.25 * noise2(land.seed + 73, gx * 1.3, gz * 1.3)))) * 0.85;
+    }));
+    const V = (a: number, b: number) => { cur.tone = damp[a][b] > trod[a][b] * 0.5 ? damp[a][b] : -trod[a][b]; vert(pts[a][b], nrm[a][b], sky[a][b], LANDMAT); };
     for (let a = 0; a < nx; a++) for (let b = 0; b < nz; b++) {
       const gx = x0 + (a + 0.5) / RES, gz = z0 + (b + 0.5) / RES;
       if (!onLand(Math.floor(gx), Math.floor(gz))) continue;
@@ -1127,27 +1138,53 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
     const r = (...n: number[]) => hash(land.seed, ...n) / 4294967296;
     const bare = (i: number, j: number) => { const g = w.ground(i, j); return !w.occupied(g, i, j) && !w.occupied(g + 1, i, j) && !w.pool(i, j) && !w.courts.has(key(0, i, j)) && !w.way(g, i, j) && !w.paved(i, j); };
     const at = (i: number, j: number, fx: number, fz: number): V3 => { const gx = i + 0.5 + fx, gz = j + 0.5 + fz; return [gx - CENTER, Y(gx, gz), gz - CENTER]; };
-    const boulder = (p: V3, s: number, q: number) => {
-      const seg = 6 + (q % 3), turn = r(q, 2) * 6.28;
-      for (let n = 0; n < seg; n++) {
-        const a0 = turn + (n / seg) * 6.28, a1 = turn + ((n + 1) / seg) * 6.28, k0 = 0.75 + 0.5 * r(q, n, 3), k1 = 0.75 + 0.5 * r(q, (n + 1) % seg, 3);
-        const lo = (a: number, k: number): V3 => [p[0] + Math.cos(a) * s * k, p[1] - 0.05, p[2] + Math.sin(a) * s * k * 0.85];
-        const mid = (a: number, k: number): V3 => [p[0] + Math.cos(a) * s * k * 0.8, p[1] + s * 0.55, p[2] + Math.sin(a) * s * k * 0.7];
-        const top: V3 = [p[0] + s * 0.1, p[1] + s * 0.8, p[2]];
-        face([lo(a0, k0), lo(a1, k1), mid(a1, k1), mid(a0, k0)], LANDMAT, 0.8, true, [p[0], p[1] + s * 0.3, p[2]]);
-        face([mid(a0, k0), mid(a1, k1), top], LANDMAT, 1, true, [p[0], p[1] + s * 0.3, p[2]]);
-      }
-    };
     const shrub = (p: V3, s: number, q: number) => {
-      // (the scrub of the garrigue: grey-green mostly, a brighter green now and then)
+      // (the scrub of the garrigue: grey-green mostly, a brighter green now and then; the small ones simpler)
       leaf = r(q, 43) < 0.3 ? 3 : 1;
       cur = { born: -1e3, pivot: p[1], how: 3 + 0.999 * r(q, 41), tone: 0.35 + 0.65 * r(q, 5), dress: 0, sel: false };
-      lathe(p[0], p[2], Array.from({ length: 6 }, (_, n) => { const t = (n / 5) * Math.PI; return [Math.sin(t) * s * (1 + 0.1 * Math.sin(n * 2.3 + q)), p[1] - 0.02 + s * 0.7 * (1 - Math.cos(t))] as [number, number]; }), MAT.leaves, 8);
+      const R = s < 0.08 ? 2 : s < 0.12 ? 3 : 4;
+      lathe(p[0], p[2], Array.from({ length: R + 1 }, (_, n) => { const t = (n / R) * Math.PI; return [Math.sin(t) * s * (1 + 0.1 * Math.sin(n * 2.3 + q)), p[1] - 0.02 + s * 0.7 * (1 - Math.cos(t))] as [number, number]; }), MAT.leaves, s < 0.08 ? 5 : s < 0.12 ? 6 : 7);
       leaf = 0;
+      cur = { born: -1e3, pivot: 0, how: 1, tone: 0.5, dress: 0, sel: false };
+    };
+    // (limestone breaking through the hill: a few tabular blocks together, set along the contour, their tops near level
+    // and their arrises bevelled, each sunk at its foot into the slope so it's of the hill, not on it. Marked as rock in
+    // its tone, so the shader gives it the stone and the drawing an outline)
+    const ledge = (bx: number, bz: number, rr: number, h: number, q: number, fall: number) => {
+      const seg = 5 + (q % 3), turn = r(q, 65) * 6.28, cf = Math.cos(fall), sf = Math.sin(fall), ca = -sf, sa = cf;
+      const yc = Y(bx, bz), top = yc + h;
+      const ring = Array.from({ length: seg }, (_, n) => {
+        const a = turn + (n / seg) * 6.28 + (r(q, 66, n) - 0.5) * 0.6, k = 0.75 + 0.4 * r(q, 67, n);
+        const u = Math.cos(a) * rr * k * 1.3, v = Math.sin(a) * rr * k * 0.8, x = bx + ca * u + cf * v, z = bz + sa * u + sf * v, gy = Y(x, z);
+        // (its top following the hill a little, never under the ground there)
+        const ty = Math.max(gy + h * 0.45, top + (gy - yc) * 0.45 + (r(q, 68, n) - 0.5) * h * 0.25);
+        return { x, z, gy, ty };
+      });
+      const W = (x: number, y: number, z: number): V3 => [x - CENTER, y, z - CENTER];
+      const C: V3 = W(bx, top - h * 0.5, bz), T: V3 = W(bx, ring.reduce((m, p) => m + p.ty, 0) / seg + h * 0.06, bz);
+      for (let n = 0; n < seg; n++) {
+        const A = ring[n], Bq = ring[(n + 1) % seg], ins = 0.78;
+        const aT = W(bx + (A.x - bx) * ins, A.ty, bz + (A.z - bz) * ins), bT = W(bx + (Bq.x - bx) * ins, Bq.ty, bz + (Bq.z - bz) * ins);
+        const aM = W(A.x, A.ty - h * 0.22, A.z), bM = W(Bq.x, Bq.ty - h * 0.22, Bq.z);
+        face([W(A.x, A.gy - 0.08, A.z), W(Bq.x, Bq.gy - 0.08, Bq.z), bM, aM], LANDMAT, 0.8, true, C);
+        face([aM, bM, bT, aT], LANDMAT, 0.92, true, C);
+        face([aT, bT, T], LANDMAT, 1, true);
+      }
+    };
+    const outcrop = (cx: number, cz: number, s: number, q: number, fall: number) => {
+      cur = { born: -1e3, pivot: 0, how: 3 + 0.999 * r(q, 40), tone: 2, dress: 0, sel: false };
+      const nB = 1 + Math.floor(r(q, 60) * (s > 0.2 ? 3.4 : 2.2)), ca = -Math.sin(fall), sa = Math.cos(fall);
+      for (let k = 0; k < nB; k++) {
+        const along = (k - (nB - 1) / 2) * s * 1.15 + (r(q, 61, k) - 0.5) * s * 0.5, out = (r(q, 62, k) - 0.5) * s * 0.7;
+        const rr = s * (k === 0 ? 1 : 0.5 + 0.4 * r(q, 63, k));
+        ledge(cx + ca * along + Math.cos(fall) * out, cz + sa * along + Math.sin(fall) * out, rr, rr * (0.4 + 0.35 * r(q, 64, k)), q * 7 + k, fall);
+      }
       cur = { born: -1e3, pivot: 0, how: 1, tone: 0.5, dress: 0, sel: false };
     };
     // (never against what's built, nor on a way: round that it's cleared)
     const clearedAt = (i: number, j: number, g: number) => [[0, 0], ...DIRS, [1, 1], [1, -1], [-1, 1], [-1, -1]].some(([a, b]) => w.occupied(g, i + a, j + b) || w.occupied(g + 1, i + a, j + b) || w.occupied(g - 1, i + a, j + b) || w.paved(i + a, j + b) || w.way(g, i + a, j + b) || w.stair(g, i + a, j + b) >= 0 || w.stair(g - 1, i + a, j + b) >= 0);
+    const smooth01 = (t: number) => { const u = Math.max(0, Math.min(1, t)); return u * u * (3 - 2 * u); };
+    const nearRiverAt = (x: number, z: number) => nearRiver(w, x, z);
     const E = w.extent();
     coarse = false;
     for (let j = B.j0; j <= B.j1; j++) for (let i = B.i0; i <= B.i1; i++) {
@@ -1163,25 +1200,62 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
       // (rocks: at a cliff's foot, on the outcrop, by the stream)
       // (never against what's built, nor on a way: round that it's cleared)
       const cleared = clearedAt(i, j, g);
-      if (!cleared && ((nearRock && r(q, 6) < 0.7) || (byWater && r(q, 7) < 0.3))) {
-        const [a, b] = [r(q, 8) - 0.5, r(q, 9) - 0.5];
-        // (each thing on the land marked as such, with its own chance of being drawn where the land bleeds away)
-        cur = { born: -1e3, pivot: 0, how: 3 + 0.999 * r(q, 40), tone: 0.5, dress: 0, sel: false };
-        boulder(at(i, j, a * 0.28, b * 0.28), 0.16 + 0.14 * r(q, 10), q);
-        if (r(q, 11) < 0.5) boulder(at(i, j, a * 0.1 + (r(q, 12) - 0.5) * 0.4, b * 0.1 + (r(q, 13) - 0.5) * 0.4), 0.08 + 0.06 * r(q, 14), q + 7);
+      // (how steep the hill is here and which way it falls: the limestone breaks through where it's steep, in patches
+      // (a broad field says where), and now and then on the open ground; on the outcrop always. Off the stream's water,
+      // and held back from a bench beside it, smaller there, so it never stands on what's built or paved)
+      const mx = i + 0.5, mz = j + 0.5, sx = Y(mx + 0.5, mz) - Y(mx - 0.5, mz), sz = Y(mx, mz + 0.5) - Y(mx, mz - 0.5);
+      const steep = smooth01((Math.hypot(sx, sz) - 0.15) / 0.5), fallA = Math.atan2(-sz, -sx), rockF = noise2(land.seed + 61, i * 0.35, j * 0.35);
+      const byBench = DIRS.map(([a, b]) => benched(w, i + a, j + b));
+      const onStair = w.stair(g, i, j) >= 0 || w.stair(g - 1, i, j) >= 0;
+      if (!onStair && !benched(w, i, j) && (nearRock ? r(q, 6) < 0.8 : r(q, 6) < (0.02 + 0.6 * steep) * (0.3 + 0.7 * smooth01((rockF - 0.25) * 3)) * (out > 0 ? 0.4 : 1))) {
+        let cx = mx + (r(q, 8) - 0.5) * 0.3, cz = mz + (r(q, 9) - 0.5) * 0.3, s = 0.13 + 0.12 * r(q, 10) + 0.1 * steep + (nearRock ? 0.08 : 0);
+        byBench.forEach((on, d) => { if (on) { cx -= DIRS[d][0] * 0.14; cz -= DIRS[d][1] * 0.14; s = Math.min(s, 0.17); } });
+        const rv = nearRiverAt(cx, cz);
+        if (!rv || rv.d > rv.hw + s * 1.2) outcrop(cx, cz, s, q, fallA);
       }
       // (what grows wild: scrub on the banks; olives in groves on the shelves, where the land's grove field is high; stone
       // pines on the rises and by the outcrop, alone or in twos; a cypress now and then. Never right up against what's
       // built: round that it's cleared)
       // (a tree's whole kept or left out where the land's drawing fades, by its foot: marked with its foot's cell)
       const rise = higher.filter((h) => h < 0).length >= 3, how = 4 + (Math.floor(X(i)) + 30 + (Math.floor(Z(j)) + 30) * 64 + 0.9 * r(q, 42)) / 10000, field = noise2(land.seed + 17, i * 0.3, j * 0.3);
-      if (bank && !cleared && r(q, 20) < 0.22) for (let n = 0; n < 1 + Math.floor(r(q, 21) * 3); n++) shrub(at(i, j, (r(q, 22, n) - 0.5) * 0.7, (r(q, 23, n) - 0.5) * 0.7), 0.1 + 0.08 * r(q, 24, n), q + n);
-      else if (!bank && !cleared && !byWater && field > 0.62 && (i + j) % 2 === 0 && r(q, 31) < 0.8) tree(grow(w, g, i, j, PLANT.olive), i, j, g, -1e3, how);
+      // (the scrub: all over the hill in drifts (a broad field), thicker where it's steep and round the rock; small, a
+      // dab or two to a cell, the odd one bigger. Up to what's built too, but never on a bench, a way or the water)
+      if (!onStair && !benched(w, i, j)) {
+        // (in clumps: a bigger bush with smaller ones round it, touching, as the scrub grows; more clumps where the drift's
+        // thick, on the steep and round the rock)
+        const fS = noise2(land.seed + 71, i * 0.5, j * 0.5), nC = Math.floor((0.3 + r(q, 80)) * (0.6 + 3 * fS * fS + 1.6 * steep + (nearRock ? 1.2 : 0)) * (cleared ? 0.7 : 1) * (out > 0 ? 0.5 : 1));
+        for (let n = 0; n < nC; n++) {
+          const cx = (r(q, 22, n) - 0.5) * 0.7, cz = (r(q, 23, n) - 0.5) * 0.7, big = 0.09 + 0.07 * r(q, 24, n), nB = 1 + Math.floor(r(q, 26, n) * 3.5);
+          for (let m = 0; m < nB; m++) {
+            const a = r(q, 27, n, m) * 6.28, sz = m ? big * (0.45 + 0.35 * r(q, 28, n, m)) : big, dd = m ? big + sz * 0.6 : 0;
+            const fx = cx + Math.cos(a) * dd, fz = cz + Math.sin(a) * dd, rv = nearRiverAt(i + 0.5 + fx, j + 0.5 + fz);
+            if (Math.abs(fx) > 0.5 || Math.abs(fz) > 0.5 || (rv && rv.d < rv.hw + 0.1)) continue;
+            if (DIRS.some(([da, db], d) => byBench[d] && da * fx + db * fz > 0.5 - sz - 0.06)) continue;
+            shrub(at(i, j, fx, fz), sz, q * 31 + n * 5 + m);
+          }
+        }
+      }
+      if (!bank && !cleared && !byWater && field > 0.62 && (i + j) % 2 === 0 && r(q, 31) < 0.8) tree(grow(w, g, i, j, PLANT.olive), i, j, g, -1e3, how);
       else if (!cleared && (rise || nearRock) && r(q, 32) < 0.3) tree(grow(w, g, i, j, PLANT.pine), i, j, g, -1e3, how);
       else if (!bank && !cleared && r(q, 30) < 0.03) cypress(i, j, g, -1e3, how);
-      else if (!bank && !cleared && field > 0.5 && r(q, 33) < 0.12) shrub(at(i, j, (r(q, 34) - 0.5) * 0.5, (r(q, 35) - 0.5) * 0.5), 0.12 + 0.06 * r(q, 36), q + 3);
     }
     coarse = false;
+    // (the stream's gorge: limestone along its banks, a block every so often either side, bigger and closer at a fall,
+    // where the water comes down between them; none where it's built or paved over)
+    if (rv) for (let q = 1; q + 1 < rv.pts.length; q++) {
+      const fallHere = rv.falls.some((f) => Math.abs(f - q) <= 2);
+      if (!fallHere && q % 3) continue;
+      const [px, pz] = rv.pts[q], [ax, az] = rv.pts[q - 1], [bx, bz] = rv.pts[q + 1], l = Math.hypot(bx - ax, bz - az) || 1, nx2 = -(bz - az) / l, nz2 = (bx - ax) / l;
+      for (const sd of [-1, 1]) {
+        const qq = q * 2 + (sd > 0 ? 1 : 0) + 7000;
+        if (r(qq, 90) > (fallHere ? 0.85 : 0.5)) continue;
+        const s = (fallHere ? 0.2 : 0.11) + 0.1 * r(qq, 91), off = rv.hw[q] + s * 0.9 + 0.08 * r(qq, 92), cx = px + nx2 * sd * off, cz = pz + nz2 * sd * off;
+        const ci = Math.floor(cx), cj = Math.floor(cz);
+        if (!onLand(ci, cj) || !drawnLand!.on(ci, cj) || !bare(ci, cj) || benched(w, ci, cj) || clearedAt(ci, cj, w.ground(ci, cj)) && !fallHere) continue;
+        if (w.paved(ci, cj) || DIRS.some(([a, b]) => w.paved(ci + a, cj + b) && Math.hypot(cx - (ci + a + 0.5), cz - (cj + b + 0.5)) < 0.5 + s)) continue;
+        outcrop(cx, cz, s, qq, Math.atan2(-nz2 * sd, -nx2 * sd));
+      }
+    }
     perf.end();
     cur = { born: -1e3, pivot: 0, how: 1, tone: 0, dress: 0, sel: false };
   }
