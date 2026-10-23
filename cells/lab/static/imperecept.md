@@ -1,51 +1,27 @@
-# Imperecept
+# Imperecept — a listening skin
 
-The unseen ground between *percept* and *precept*.
+The unseen ground between percept and precept. The sound collection inhabits the same continuous substrate as the interaction.
 
-Local time-reversal is the medium. The experience is the latent rule that shapes what can be heard without declaring itself.
+## Explore
 
-## The threefold structure
+Enter & listen. Five stable, overlapping places contain rain/glass, bronze/air, pulse/breath, steps/stone and water/hollow. These are deterministic procedural sound compositions generated locally, with no archive fetch or external audio dependency.
 
-**Imperecept** pulls three vectors at once:
+Move across the material to blend sources. Hold still to gather temporal coherence. Fast movement introduces tension; holding leaves a slowly decaying memory that makes a place easier to gather again. Lift your hand and the current mixture continues. Two simultaneous touches combine their respective places. Their separation changes the mixture through the same spatial weighting; this version does not implement independent time stretching between fingers.
 
-1. **The Imperceptible Imperative**  
-   A constraint that governs the system without making itself directly visible. It is felt only by its effects on the space.
+Reveal separates the drawn layers, names the sources and displays current grain duration, coherence and audio-clock-driven reversed read-head marks. The interaction remains live. Close layers returns to the surface.
 
-2. **Sub-threshold Signal**  
-   A sensory transformation so continuous or embedded that it operates below deliberate awareness, yet still dictates what remains intelligible.
+Bring sound opens a local audio file; touch the surface to place it, or cancel placement. Files are decoded on the device and never uploaded. The first 30 seconds, up to two channels, are retained for this session. Maximum input size is 25 MB. Up to three imported places coexist; a fourth replaces the oldest imported place. Reloading clears imported sounds and touch memory.
 
-3. **Latent State**  
-   The hidden space where the rule and the experience fold into each other — the unrendered substrate.
+## Temporal material
 
-```
-  [ IMPERCEPTIBLE ]  ─── (the hidden, unrendered substrate)
-          │
-          ▼
-   ┌──────────────┐
-   │  imperecept  │
-   └──────────────┘
-     ╱          ╲
-    ▼            ▼
-[ PERCEPT ]   [ PRECEPT ]
-(the surface)  (the law)
-```
+Continuous audio transport schedules Hann-windowed grains with three-way overlap. Coherence shortens reversed grains and blends in forward grains. Parameter changes affect upcoming grains without restarting the source. Spatial mixture weights are smoothed; source positions supply stereo placement. A master fade and compressor control transitions and peaks. This is an expressive reconstruction instrument, not a controlled reversed-speech perception test.
 
-## How the experiment embodies this
+The drawn fibres respond to source coherence, actual output amplitude, touch deformation and decaying traces. Source memory is regional; the visible trail is spatial. The surface uses bounded Canvas 2D geometry at capped pixel density. Audio scheduling is separate from animation, with bounded lookahead and node cleanup. Hidden pages fade and suspend audio; returning requires Listen.
 
-- By default you hear only the processed stream. The original is not offered as the primary object of attention. The rule is already acting.
-- Grain size (the current precept) can drift slowly on its own or follow the amplitude of the source, so the constraint feels alive rather than fixed by the user.
-- “Reveal substrate” makes the reversed segments, the numerical grain, and the threefold diagram visible. Until that moment the infrastructure remains unrendered.
-- Returning the surface hides the diagram and the block shading again. Only the effects of the rule remain.
+## Keyboard and motion
 
-The classic perceptual fact (Saberi & Perrott, 1999) is still the engine: short reversed segments can be restored by the auditory system; longer ones collapse into texture. Here that fact is placed in the service of a quieter question — what is operating as an imperecept while you listen?
+Focus the surface. Arrow keys explore, Space gathers (or places a pending import), R reveals. All controls are keyboard accessible. Reduced-motion preference removes autonomous fibre drift while retaining direct manipulation feedback. Preview mode is silent and does not construct an audio context.
 
-## Use
+## Validation
 
-All built-in loops are drawn from the **BBC Sound Effects** archive under the RemArc non-commercial licence (research, educational and personal use). Choose an ambient bed (rain, wind, forest edge, water, rural night), or bring your own short file. Listen. Optionally let the rule drift. When you wish to see the ground that has been shaping the experience, reveal the substrate. Then return the surface.
-
-Attribution is shown whenever a BBC source is active.
-
-## References
-
-- Kourosh Saberi & David R. Perrott, “Cognitive restoration of reversed speech”, *Nature* 398, 760 (1999).
-- The conceptual braid of imperceptibility, percept and precept that gives the experiment its name and form.
+Strict standalone TypeScript checking and local Chromium checks cover startup, holding/coherence, two-touch mixing, stopping/node cleanup and local WAV placement. Phone-sized surface and revealed-layer layouts inspected at 402 × 874. iPhone Safari listening and tactile evaluation remain device checks.

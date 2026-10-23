@@ -1,8 +1,8 @@
 {
   "cell": "c15r/lab",
   "cellId": "lab-8928acf3",
-  "treeVersion": "tree:ad705a0e06aa6acbe319b7cfdf15e204c055117c7a584c01b99c8d0bbee788ef",
-  "syncedAt": "2026-10-23T12:05:00.323Z",
+  "treeVersion": "tree:3613edfc1ae38471f52b1ee2c2c82fc16fe8cfe288cffe990deeaebf2744121c",
+  "syncedAt": "2026-10-23T12:30:02.432Z",
   "files": {
     "README.md": "sha256:665df4179140457c44ea9e0f6f5820bd6e9b557fb196a37cf1245a07cb11f7c6",
     "client/bricks/build.ts": "sha256:e6ec53d7f179e4184809a1db345a074364781b5a9c44aa524818c0d264051479",
@@ -58,7 +58,7 @@
     "client/fungi/straw.ts": "sha256:646110556d5d42bce84944aaf0ecfb35edccedd678967744d22fb98583b84dd1",
     "client/fungi/terrarium.ts": "sha256:850197f9c2d62deb3e627b65fc10d012301cfd2c9a9a69d760db9eada70648d7",
     "client/fungi/visitors.ts": "sha256:e57c2d81fb0fa32c584c576cf7444ac560b43239983fe41648aa3feee8f0095d",
-    "client/imperecept/main.ts": "sha256:02eb5e352cb55430c664e20833acdee350b23a5d3c2715983993eddc5b791730",
+    "client/imperecept/main.ts": "sha256:75bce679237ebdbce4892158bedf0494ec1ad69e67576b84db5a9714d9bdba8f",
     "client/kit/nozoom.ts": "sha256:dbbc156ebb4f863ae8600ecac4acd8dd8b3ca6c719592f6516ae7a2e22e47260",
     "client/kit/pencil.ts": "sha256:51afe003d548d09f136469d9a9caeb0da79e319c8101a9913e34982a0cca2336",
     "client/kit/rng.ts": "sha256:cf8f19fc9ec1217284aed5c5ee99cd9194fb0799b7c947c604445dde9c417cfa",
@@ -325,7 +325,7 @@
     "static/fungi.html": "sha256:8e39e5d920614154f35bf965807e178d39162c651dabc0d3dc3e2627c57f3d07",
     "static/fungi.md": "sha256:342a0ab1181a2e4064f83f89535ab21bdcb193d4f82de266eb731cf4434f492a",
     "static/imperecept.html": "sha256:ee53f5cc6a344750d00e1d95e9feefe75068054adbd753f3d31e4229f4534b68",
-    "static/imperecept.md": "sha256:0339e30234802026d731414e084ebfd55920e763f222ee46f62b823d5ea13e0d",
+    "static/imperecept.md": "sha256:f0e8663c82518ee22ce7297e7932d263ff857e889b2585364cd74d418d9118ad",
     "static/labyrinth-atlas.md": "sha256:fa31990e9f235f1da74ab7bf5680df890a5d2a344330ce355f1d80ce4001064f",
     "static/labyrinth-connective.md": "sha256:fcef2217fb3f0149c27ed4c699081bf11e7c9848083fbe3229f6feead552ad6f",
     "static/labyrinth-encounters.md": "sha256:65b59fa6ed926807e9192dd87fa369c02b04c8e33de88ca068d0c8644850a0de",

@@ -1,0 +1,1184 @@
+[
+  {
+    "round": "r4",
+    "id": "land7-1",
+    "kind": "meander",
+    "mode": null,
+    "desc": "meander from 10,10 (top 1) to 10,3 (top 3)",
+    "preferred": "Lay a single path/way climbing the hillside along the traced line, from the low ground to the boulder pair, with steps where it steepens",
+    "prefPl": 0.65,
+    "nHyp": 4,
+    "verdict": "fulfilled",
+    "matched": "h1",
+    "matchedPreferred": true,
+    "prefMet": 3,
+    "prefN": 4,
+    "locationHonoured": "yes",
+    "endpointsHonoured": "yes",
+    "coherence": 3,
+    "surprise": "welcome",
+    "handResponse": "build-on",
+    "disconnect": "live hint said nothing would be laid; path straightened",
+    "observed": "A stone way now climbs the slope along the stroke: a short paved landing near the start, a stair flight up onto a large raised terrace block, a second stair flight, then a paved upper terrace ending beside the boulders where the arrow was. The rest of the hillside is still there, though the dark ravine on the left is rendered much paler/foggier than before.",
+    "delta": "Expected a path following the stroke with steps on steep parts; got exactly that in spirit, but laid as a straightened, more monumental stepped axis (two flights and a raised terrace) rather than a modest path tracing every wiggle. The small kink onto the flat rock is not reproduced.",
+    "ops": [
+      {
+        "why": "way",
+        "reading": "a way: 8 paved, a flight of 2",
+        "note": "a way: 8 paved, a flight of 2",
+        "reached": {
+          "reached": true,
+          "stopped": -1,
+          "cells": [
+            [
+              1,
+              10,
+              8
+            ],
+            [
+              2,
+              10,
+              4
+            ]
+          ]
+        }
+      }
+    ],
+    "alts": {
+      "labels": [
+        "a way: 8 paved, a flight of 2",
+        "a row of olives",
+        "a hedge",
+        "a wall"
+      ],
+      "at": 0
+    },
+    "declines": [],
+    "said": "a way: 8 paved, a flight of 2 · hold at the end to read it otherwise",
+    "during": "nothing to lay along that · hold to a row of olives"
+  },
+  {
+    "round": "r4",
+    "id": "land7-2",
+    "kind": "tap",
+    "mode": null,
+    "desc": "tap at 4,5",
+    "preferred": "Raise a single stone block/plinth on the ground at the tapped spot by the stream",
+    "prefPl": 0.5,
+    "nHyp": 4,
+    "verdict": "fulfilled",
+    "matched": "h1",
+    "matchedPreferred": true,
+    "prefMet": 3,
+    "prefN": 3,
+    "locationHonoured": "yes",
+    "endpointsHonoured": "n/a",
+    "coherence": 2,
+    "surprise": "none",
+    "handResponse": "build-on",
+    "disconnect": "no hint acknowledged the tap",
+    "observed": "A single dark grey stone block appeared just above the tap point (~190,450), standing on the ravine floor beside the stream at the foot of the cliff. The stream still flows past it out to the left. The previously faded upper-left area is now rendered again, showing the dark ravine. Nothing else changed.",
+    "delta": "Matches the preferred reading (one block raised at the tap). It sits slightly up-slope of the dot and reads as being down in the ravine bed rather than on the open bank; its dark tone differs from the pale stone of the earlier stairs.",
+    "ops": [
+      {
+        "why": "raise",
+        "reached": null
+      }
+    ],
+    "alts": null,
+    "declines": [],
+    "said": "trace from a top to reach out · trace up to a higher top to climb",
+    "during": null
+  },
+  {
+    "round": "r4",
+    "id": "land7-3",
+    "kind": "meander",
+    "mode": null,
+    "desc": "meander from 3,6 (top 3) to 6,-1 (top 4)",
+    "preferred": "A way that goes down into the gorge, crosses the stream, and climbs out the other side up to the boulders, following the stroke (stairs down, crossing, stairs up)",
+    "prefPl": 0.45,
+    "nHyp": 4,
+    "verdict": "acceptable-alternative",
+    "matched": "h2",
+    "matchedPreferred": false,
+    "prefMet": 2,
+    "prefN": 5,
+    "locationHonoured": "yes",
+    "endpointsHonoured": "partly",
+    "coherence": 2,
+    "surprise": "welcome",
+    "handResponse": "keep",
+    "disconnect": "bridged over instead of going down; camera jumped",
+    "observed": "The view zoomed out after release (the whole hillside is now smaller and re-centred), which makes before/after comparison harder. Built: a paved platform on the left rim where the stroke began, a short walled bridge/causeway (with a reddish-brown section) spanning the gorge over the stream, a paved landing on the far side, then one stair flight climbing north-east to a paved upper terrace toward the boulders. The earlier stepped way and dark block are still visible below.",
+    "delta": "I preferred a route that goes down into the gorge and back up following the dip of the stroke; instead the toy kept the route high and bridged the gorge at rim level. That is my second hypothesis and a sensible reading. The end appears to stop at a paved terrace on the slope; whether it reaches the boulder group is hard to confirm because the camera moved.",
+    "ops": [
+      {
+        "why": "way",
+        "reading": "a way: 10 paved, a flight of 1, a bridge of 1",
+        "note": "a way: 10 paved, a flight of 1, a bridge of 1",
+        "reached": {
+          "reached": true,
+          "stopped": -1,
+          "cells": [
+            [
+              2,
+              5,
+              3
+            ],
+            [
+              2,
+              6,
+              3
+            ],
+            [
+              2,
+              7,
+              3
+            ],
+            [
+              3,
+              6,
+              0
+            ]
+          ]
+        }
+      }
+    ],
+    "alts": {
+      "labels": [
+        "a way: 10 paved, a flight of 1, a bridge of 1",
+        "a row of olives",
+        "a hedge",
+        "a gated wall"
+      ],
+      "at": 0
+    },
+    "declines": [],
+    "said": "a way: 10 paved, a flight of 1, a bridge of 1 · hold at the end to read it otherwise",
+    "during": "nothing to lay along that · hold to a row of olives"
+  },
+  {
+    "round": "r4",
+    "id": "land12-1",
+    "kind": "tap",
+    "mode": "mass",
+    "desc": "tap at 7,4",
+    "preferred": "Raise one stone block on the open ground exactly where tapped",
+    "prefPl": 0.7,
+    "nHyp": 3,
+    "verdict": "fulfilled",
+    "matched": "h1",
+    "matchedPreferred": true,
+    "prefMet": 3,
+    "prefN": 3,
+    "locationHonoured": "yes",
+    "endpointsHonoured": "n/a",
+    "coherence": 2,
+    "surprise": "none",
+    "handResponse": "build-on",
+    "disconnect": "",
+    "observed": "A pale stone block (cube with a slightly crenellated top edge) now stands with its base at the tapped spot (~215,490), with a pale flat square of paving or a lower step immediately behind/up-slope of it. Gorge, stream, tree and boulders are unchanged. The hint line changed to 'trace from a top to reach out · trace up to a higher top to climb'.",
+    "delta": "As expected: one block raised at the tap. It is a bit larger than a single paving stone and has a small paved apron behind it, but reads as one element.",
+    "ops": [
+      {
+        "why": "raise",
+        "reached": null
+      }
+    ],
+    "alts": null,
+    "declines": [],
+    "said": "trace from a top to reach out · trace up to a higher top to climb",
+    "during": null
+  },
+  {
+    "round": "r4",
+    "id": "land12-2",
+    "kind": "fromTop",
+    "mode": "mass",
+    "desc": "fromTop from 7,4 (top 2) to 2,0 (top 3)",
+    "preferred": "Reach out from the top of the block: a raised walkway/causeway leaving the block at its top level and running east along the stroke, coming down to ground (or ending in a step/stair) toward the end",
+    "prefPl": 0.45,
+    "nHyp": 4,
+    "verdict": "partial",
+    "matched": "h1",
+    "matchedPreferred": true,
+    "prefMet": 2,
+    "prefN": 4,
+    "locationHonoured": "partly",
+    "endpointsHonoured": "no",
+    "coherence": 1,
+    "surprise": "unwelcome",
+    "handResponse": "undo-and-retry",
+    "disconnect": "'a walkway' named, but it barely left the block",
+    "observed": "The single block became two plain cubes side by side (a second cube of the same height added immediately to the right/down-slope of the first; the crenellated rim is no longer evident). The pale flat apron behind them now seems to run a little further up-right, and where the pale rock outcrop stood (~290,457) there is now a dark angular chevron-shaped piece. Nothing at all was built along the long eastward part of the stroke; the open slope toward the arrow is unchanged. Post-release hint: 'a walkway'.",
+    "delta": "Expected a raised walkway leaving the block top and running east ~190px to the arrow. Got roughly one extra block-width at top height next to the original block and an odd dark piece at the outcrop; roughly 80% of the stroke produced nothing. The toy called it 'a walkway' but it does not read as one.",
+    "ops": [
+      {
+        "why": "walkway",
+        "reading": "a walkway",
+        "note": "a walkway",
+        "reached": {
+          "reached": false,
+          "stopped": 3,
+          "cells": [
+            [
+              1,
+              7,
+              3
+            ]
+          ]
+        }
+      }
+    ],
+    "alts": null,
+    "declines": [],
+    "said": "a walkway",
+    "during": "trace from a top to reach out · trace up to a higher top to climb"
+  },
+  {
+    "round": "r4",
+    "id": "land12-3",
+    "kind": "loop",
+    "mode": "mass",
+    "desc": "loop round 9,0 r~2.8 left open",
+    "preferred": "Enclose the lower slope below the tower with a wall (a courtyard/compound), the existing cubes closing the open side",
+    "prefPl": 0.45,
+    "nHyp": 4,
+    "verdict": "fulfilled",
+    "matched": "h1",
+    "matchedPreferred": true,
+    "prefMet": 3,
+    "prefN": 4,
+    "locationHonoured": "yes",
+    "endpointsHonoured": "partly",
+    "coherence": 2,
+    "surprise": "welcome",
+    "handResponse": "keep",
+    "disconnect": "patchwork wall; boulders inside vanished; live hint said nothing",
+    "observed": "After release the view re-framed (zoomed out and shifted), so positions moved. A long wall now wraps the area below/right of the original two cubes: it begins with a row of three pale cubes up-slope to the right of the originals, runs down the right side as a crenellated, partly rounded wall with small openings (trees in some), turns along the bottom through a red-brick arched section and a grey section, and rises at the left end into a tall pale pier/tower near the big tree. Together with the original cubes it makes a U-shaped enclosure around a shadowed hollow. The big tree survives; a cypress appears at bottom-left. The large pale boulder cluster that was inside the loop is no longer visible.",
+    "delta": "Matches the enclosure reading: a wall follows the loop and its ends come back near the original cubes. Differences: the wall is a patchwork of styles (white blocks, rounded crenellations, red brick, grey slabs), the left end finishes in a tall tower with a small gap to the cubes rather than meeting them, and the boulder cluster inside seems to have gone.",
+    "ops": [
+      {
+        "why": "wall",
+        "reading": "an arcaded wall",
+        "note": "an arcaded wall",
+        "reached": null
+      }
+    ],
+    "alts": {
+      "labels": [
+        "an arcaded wall",
+        "a wall",
+        "a gated wall",
+        "a thin wall",
+        "a row of olives",
+        "a hedge"
+      ],
+      "at": 0
+    },
+    "declines": [],
+    "said": "an arcaded wall · hold at the end to read it otherwise",
+    "during": "nothing to lay along that · hold to a row of olives"
+  },
+  {
+    "round": "r4",
+    "id": "land20-1",
+    "kind": "tap",
+    "mode": null,
+    "desc": "tap at 5,10",
+    "preferred": "Raise one stone block on the ground where tapped",
+    "prefPl": 0.7,
+    "nHyp": 3,
+    "verdict": "fulfilled",
+    "matched": "h1",
+    "matchedPreferred": true,
+    "prefMet": 1,
+    "prefN": 3,
+    "locationHonoured": "yes",
+    "endpointsHonoured": "n/a",
+    "coherence": 2,
+    "surprise": "neutral",
+    "handResponse": "build-on",
+    "disconnect": "left of landscape faded out after the tap",
+    "observed": "One pale stone cube with a beaded/crenellated top edge stands at ~(312,410), its base just up-left of the tap point. It seems to overlap the right end of the pale outcrop that was beside the dot; the outcrop's left part is still visible. Separately, the coloured/rendered area of the landscape shrank toward the tap: the left half of the valley (left of ~x 130) is now shown as faded sketch lines rather than coloured terrain.",
+    "delta": "As preferred: one block at the tap. Minor: it sits a little up-left of the dot, eating into the neighbouring outcrop. The rendered region shifting is a view change, not a build, but it makes the landscape look like it vanished on the left.",
+    "ops": [
+      {
+        "why": "raise",
+        "reached": null
+      }
+    ],
+    "alts": null,
+    "declines": [],
+    "said": "trace from a top to reach out · trace up to a higher top to climb",
+    "during": null
+  },
+  {
+    "round": "r4",
+    "id": "land20-2",
+    "kind": "fromTop",
+    "mode": null,
+    "desc": "fromTop from 5,10 (top 2) to 1,7 (top 2)",
+    "preferred": "A way down from the cube top to the stream: stair or ramp descending the slope and ending at the water's edge",
+    "prefPl": 0.45,
+    "nHyp": 4,
+    "verdict": "acceptable-alternative",
+    "matched": "h2",
+    "matchedPreferred": false,
+    "prefMet": 2,
+    "prefN": 3,
+    "locationHonoured": "yes",
+    "endpointsHonoured": "partly",
+    "coherence": 2,
+    "surprise": "neutral",
+    "handResponse": "look-for-alternative",
+    "disconnect": "stayed high over the water instead of going down to it",
+    "observed": "A raised flat deck now runs from the cube southward toward the viewer and out over the stream, with an arched/open underside through which the stream still flows; a lower block sits beside it on the right. The cube itself looks taller/split into two tones. No stair down to the bank is visible. The scribble area at the water is covered by the end of the deck.",
+    "delta": "I preferred a stair/ramp descending to the water's edge; the toy instead kept the height and pushed a walkway out over the stream (my h2). The descent offer exists only as an alternative ('a way: 1 paved, a flight of 2'). The zig-zag was not read as anything distinct.",
+    "ops": [
+      {
+        "why": "walkway",
+        "reading": "a walkway",
+        "note": "a walkway",
+        "reached": {
+          "reached": true,
+          "stopped": -1,
+          "cells": [
+            [
+              1,
+              4,
+              10
+            ],
+            [
+              1,
+              4,
+              9
+            ],
+            [
+              1,
+              3,
+              9
+            ],
+            [
+              1,
+              3,
+              8
+            ]
+          ]
+        }
+      }
+    ],
+    "alts": {
+      "labels": [
+        "a walkway",
+        "a way: 1 paved, a flight of 2",
+        "lower it instead"
+      ],
+      "at": 0
+    },
+    "declines": [],
+    "said": "a walkway · hold at the end to read it otherwise",
+    "during": "trace from a top to reach out · trace up to a higher top to climb"
+  },
+  {
+    "round": "r4",
+    "id": "land20-3",
+    "kind": "meander",
+    "mode": null,
+    "desc": "meander from 9,6 (top 1) to 12,9 (top 1)",
+    "preferred": "A switchback path/stair climbing the hillside in zig-zags, following the stroke",
+    "prefPl": 0.5,
+    "nHyp": 4,
+    "verdict": "partial",
+    "matched": "h2",
+    "matchedPreferred": false,
+    "prefMet": 1,
+    "prefN": 3,
+    "locationHonoured": "partly",
+    "endpointsHonoured": "no",
+    "coherence": 1,
+    "surprise": "unwelcome",
+    "handResponse": "undo-and-retry",
+    "disconnect": "switchback collapsed into a small paved patch at the start",
+    "observed": "The coloured region of the landscape widened to the left, so the slope where the stroke was drawn is now rendered. On it there is a small rectangle of pale paving (about two slabs) with a low step edge, at ~(136-196,380-426) - overlapping the lower/right part of where the zig-zag was drawn and extending a little right of it. Nothing zig-zags and nothing reaches the end point (~148,354). The cube and walkway at right are unchanged.",
+    "delta": "Expected a switchback climbing through all three legs to the upper end. Got a short, straight paved patch with a single step around the start of the stroke; the climb to the end and the zig-zag shape are missing. The toy's own label ('a way: 2 paved, a flight of 1') matches the small size of what appeared.",
+    "ops": [
+      {
+        "why": "way",
+        "reading": "a way: 2 paved, a flight of 1",
+        "note": "a way: 2 paved, a flight of 1",
+        "reached": {
+          "reached": true,
+          "stopped": -1,
+          "cells": [
+            [
+              1,
+              8,
+              6
+            ]
+          ]
+        }
+      }
+    ],
+    "alts": {
+      "labels": [
+        "a way: 2 paved, a flight of 1",
+        "a row of olives",
+        "a hedge",
+        "a wall"
+      ],
+      "at": 0
+    },
+    "declines": [],
+    "said": "a way: 2 paved, a flight of 1 · hold at the end to read it otherwise",
+    "during": "nothing to lay along that · hold to a row of olives"
+  },
+  {
+    "round": "r5",
+    "id": "land23-1",
+    "kind": "meander",
+    "mode": null,
+    "desc": "meander from 5,2 (top 3) to 5,7 (top 2)",
+    "preferred": "A winding footpath from the flat rock down the slope to the edge of the gully, following the drawn line",
+    "prefPl": 0.6,
+    "nHyp": 4,
+    "verdict": "acceptable-alternative",
+    "matched": "h2",
+    "matchedPreferred": false,
+    "prefMet": 3,
+    "prefN": 3,
+    "locationHonoured": "yes",
+    "endpointsHonoured": "yes",
+    "coherence": 2,
+    "surprise": "neutral",
+    "handResponse": "keep",
+    "disconnect": "drew a trail, got a hefty stepped causeway; live hint said nothing would be laid",
+    "observed": "Four broad, raised, paved stone platforms now step down the hillside from where the big flat rock was (near the start ring) to a tall block on the near lip of the dark gully (near the arrow). The small loop became a curved landing between platforms. The platforms are much wider than a finger trail and stand on vertical stone sides, reading as a stepped causeway/terraced way rather than a ground-level footpath. Stream untouched.",
+    "delta": "Expected a winding footpath laid on the ground along the line; got a smoothed, chunky raised paved way of terraced segments following the same corridor. Route and endpoints match; scale and form (raised slabs vs trail) differ.",
+    "ops": [
+      {
+        "why": "way",
+        "reading": "a way: 4 paved",
+        "note": "a way: 4 paved",
+        "took": [
+          "trimmed"
+        ],
+        "reached": {
+          "reached": true,
+          "stopped": -1,
+          "cells": [
+            [
+              2,
+              6,
+              4
+            ],
+            [
+              2,
+              5,
+              4
+            ],
+            [
+              2,
+              5,
+              5
+            ]
+          ]
+        }
+      }
+    ],
+    "alts": {
+      "labels": [
+        "a way: 4 paved",
+        "a row of olives",
+        "a hedge",
+        "an arcaded wall"
+      ],
+      "at": 0
+    },
+    "declines": [],
+    "said": "a way: 4 paved · hold at the end to read it otherwise",
+    "during": "nothing to lay along that · hold to a row of olives"
+  },
+  {
+    "round": "r5",
+    "id": "land23-2",
+    "kind": "tap",
+    "mode": null,
+    "desc": "tap at 3,-1",
+    "preferred": "Raise a single block/mound of stone at the tapped spot",
+    "prefPl": 0.65,
+    "nHyp": 3,
+    "verdict": "fulfilled",
+    "matched": "h1",
+    "matchedPreferred": true,
+    "prefMet": 3,
+    "prefN": 3,
+    "locationHonoured": "yes",
+    "endpointsHonoured": "n/a",
+    "coherence": 2,
+    "surprise": "neutral",
+    "handResponse": "build-on",
+    "disconnect": "block built where tapped, but the view jumped so it isn't under the finger",
+    "observed": "A single squarish raised stone block now stands on the upper slope left of the start of the paved way, on its own, about where the tap was in the scene (relative to the way and slope). The view also changed: the whole scene is reframed (zoomed out a little and shifted right/down), so in screen terms the block sits at ~90,393 rather than under the tap at 39,381. The existing way is intact.",
+    "delta": "Matches the preferred expectation (one modest block at the tapped spot). Unexpected: the camera reframed after the tap, so the result is not under the finger on screen.",
+    "ops": [
+      {
+        "why": "raise",
+        "reached": null
+      }
+    ],
+    "alts": null,
+    "declines": [],
+    "said": "trace from a top to reach out · trace up to a higher top to climb",
+    "during": null
+  },
+  {
+    "round": "r5",
+    "id": "land23-3",
+    "kind": "loop",
+    "mode": null,
+    "desc": "loop round 3,4 r~2.4 left open",
+    "preferred": "Enclose the patch of slope below the way (a walled yard/garden bounded by the stroke and the way)",
+    "prefPl": 0.4,
+    "nHyp": 4,
+    "verdict": "acceptable-alternative",
+    "matched": "h4",
+    "matchedPreferred": false,
+    "prefMet": 1,
+    "prefN": 2,
+    "locationHonoured": "yes",
+    "endpointsHonoured": "yes",
+    "coherence": 2,
+    "surprise": "neutral",
+    "handResponse": "look-for-alternative",
+    "disconnect": "loop became a solid paved forecourt; label says 'walk round' but no ring is visible",
+    "observed": "A broad, flat, pale paved area now occupies the region outlined by the loop, below/left of the original way and joined to it, with a long low parapet/kerb running diagonally along its upper edge. From the picture it reads as one filled paved terrace/forecourt, not a ring path around grass and not a walled yard. The jagged zigzag on the left left no visible trace; the outline is regularised into a straight-edged shape. Original slabs and cube block remain; the view was reframed slightly again.",
+    "delta": "Preferred expectation was an enclosure (wall along the outline, yard inside). Result is a filled paved platform in the outlined area (my h4). The toy's own label calls it 'a walk all the way round' (my h2), but visually there is no distinguishable inner unpaved area, so the walk is not legible as a loop.",
+    "ops": [
+      {
+        "why": "way",
+        "reading": "a walk all the way round",
+        "note": "a walk all the way round",
+        "reached": {
+          "reached": true,
+          "stopped": -1,
+          "cells": [
+            [
+              2,
+              4,
+              3
+            ],
+            [
+              2,
+              4,
+              4
+            ]
+          ]
+        }
+      }
+    ],
+    "alts": {
+      "labels": [
+        "a walk all the way round",
+        "a court, walled round",
+        "a row of olives",
+        "a hedge",
+        "a court, walled round"
+      ],
+      "at": 0
+    },
+    "declines": [],
+    "said": "a walk all the way round · hold at the end to read it otherwise",
+    "during": "nothing to lay along that · hold to an avenue of cypresses"
+  },
+  {
+    "round": "r5",
+    "id": "land23-4",
+    "kind": "tapTop",
+    "mode": null,
+    "desc": "tap at 5,4",
+    "preferred": "Raise the tapped piece of paving one step higher (or add a block on top there)",
+    "prefPl": 0.55,
+    "nHyp": 3,
+    "verdict": "fulfilled",
+    "matched": "h1",
+    "matchedPreferred": true,
+    "prefMet": 2,
+    "prefN": 2,
+    "locationHonoured": "yes",
+    "endpointsHonoured": "n/a",
+    "coherence": 3,
+    "surprise": "welcome",
+    "handResponse": "build-on",
+    "disconnect": "hint line went blank instead of naming the new gate",
+    "observed": "Exactly at the tap point a tall stone block now rises from the paving, with round-arched openings through it on two faces, so it reads as an arched gate/pavilion standing over the way, with the curved slab and lower slabs still passing beneath/around it. Nothing else in the complex changed; the view did not reframe this time. The hint line under the scene became empty.",
+    "delta": "Expected the tapped spot to be raised (a block stacked on the paving). Got that, with the added nicety that it is pierced by arches so it does not block the way - closer to a small gate building (h3) in form.",
+    "ops": [
+      {
+        "why": "course",
+        "reached": null
+      }
+    ],
+    "alts": null,
+    "declines": [],
+    "said": "",
+    "during": null
+  },
+  {
+    "round": "r5",
+    "id": "land27-1",
+    "kind": "tap",
+    "mode": "mass",
+    "desc": "tap at 5,0",
+    "preferred": "Raise a single block of stone on the ground at the tapped spot",
+    "prefPl": 0.7,
+    "nHyp": 3,
+    "verdict": "fulfilled",
+    "matched": "h1",
+    "matchedPreferred": true,
+    "prefMet": 2,
+    "prefN": 3,
+    "locationHonoured": "yes",
+    "endpointsHonoured": "n/a",
+    "coherence": 2,
+    "surprise": "neutral",
+    "handResponse": "build-on",
+    "disconnect": "block where tapped, but the whole view jumped and the stream slid out of the light",
+    "observed": "A single tall squarish stone block (a cube on a slightly wider base, with a shadowed apron below) now stands on the hillside right of the dark hollow, which corresponds roughly to the tapped spot on the right-hand slope. The camera reframed strongly: the lit area now centres on the hill and the new block, and the stream/gorge sits mostly outside the lit area at the far left, so the scene looks very different from the before frame and the block is not under the finger on screen (block ~285,385 vs tap 326,372).",
+    "delta": "As expected, one block raised at the tapped place. Unexpected: a large view change, making it hard to confirm placement against the nearby grey slabs.",
+    "ops": [
+      {
+        "why": "raise",
+        "reached": null
+      }
+    ],
+    "alts": null,
+    "declines": [],
+    "said": "trace from a top to reach out · trace up to a higher top to climb",
+    "during": null
+  },
+  {
+    "round": "r5",
+    "id": "land27-2",
+    "kind": "fromTop",
+    "mode": "mass",
+    "desc": "fromTop from 5,0 (top 3) to 3,2 (top 4)",
+    "preferred": "Reach out from the top of the block to the ridge crest: an elevated walkway/bridge or causeway linking them",
+    "prefPl": 0.5,
+    "nHyp": 3,
+    "verdict": "partial",
+    "matched": "h1",
+    "matchedPreferred": true,
+    "prefMet": 1,
+    "prefN": 3,
+    "locationHonoured": "partly",
+    "endpointsHonoured": "partly",
+    "coherence": 1,
+    "surprise": "unwelcome",
+    "handResponse": "undo-and-retry",
+    "disconnect": "labelled a walkway but I can't see it reach the ridge; the block got reshaped and planted instead",
+    "observed": "The view did not move this time. The block itself changed: its top is now wider with a rounded corner and carries two small dark trees in planters; a pale, flat, level shelf/terrace now extends from the block's top-left toward the ridge, roughly over the area the stroke crossed, and the left side of the block has grown out to about where the stroke turned upward. The cave mouth left of the block is partly obscured (a shrub/dark notch remains). A thin new diagonal strip (ledge or narrow wall) appears on the block's right side, away from the stroke. I cannot see a distinct walkway arriving at the ridge point where the arrow ended; the shelf merges into the sand short of / below it.",
+    "delta": "Expected a clear stone link from the block top to the ridge crest. Got a widening of the block top plus a vague level shelf toward the ridge, with decorative trees; the far end of the link is not legible and the dip-and-climb shape is gone.",
+    "ops": [
+      {
+        "why": "walkway",
+        "reading": "a walkway",
+        "note": "a walkway",
+        "reached": {
+          "reached": false,
+          "stopped": 4,
+          "cells": [
+            [
+              2,
+              4,
+              0
+            ],
+            [
+              2,
+              5,
+              1
+            ],
+            [
+              2,
+              5,
+              2
+            ]
+          ]
+        }
+      }
+    ],
+    "alts": null,
+    "declines": [],
+    "said": "a walkway",
+    "during": "trace from a top to reach out · trace up to a higher top to climb"
+  },
+  {
+    "round": "r5",
+    "id": "land27-3",
+    "kind": "tap",
+    "mode": "mass",
+    "desc": "tap at 12,4",
+    "preferred": "Raise a new block on open ground at the tapped spot (a second 'top', separate from the first)",
+    "prefPl": 0.7,
+    "nHyp": 3,
+    "verdict": "fulfilled",
+    "matched": "h1",
+    "matchedPreferred": true,
+    "prefMet": 3,
+    "prefN": 3,
+    "locationHonoured": "yes",
+    "endpointsHonoured": "n/a",
+    "coherence": 2,
+    "surprise": "neutral",
+    "handResponse": "build-on",
+    "disconnect": "view jumped again after the tap",
+    "observed": "A new single cube block stands on the lower slope below-right of the hill, a short way above the stream, separate from the first block. The lit (coloured) area grew to take in this lower ground, revealing more rocks, scrub and a tree, and the view reframed (scene shifted up-left and zoomed out slightly), so on screen the new block is at ~300,495 rather than under the tap at 339,533.",
+    "delta": "Matches the preferred expectation. The tap on the faded fringe was accepted and the playable/lit area expanded to include it. Only surprise is the view jump.",
+    "ops": [
+      {
+        "why": "raise",
+        "reached": null
+      }
+    ],
+    "alts": null,
+    "declines": [],
+    "said": "trace from a top to reach out · trace up to a higher top to climb",
+    "during": null
+  },
+  {
+    "round": "r5",
+    "id": "land27-4",
+    "kind": "sweep",
+    "mode": "mass",
+    "desc": "sweep from 0,5 (top 4) to -1,0 (top 4)",
+    "preferred": "A short path/way climbing from the low left edge up onto the hill's upper-left shoulder",
+    "prefPl": 0.45,
+    "nHyp": 4,
+    "verdict": "misread",
+    "matched": "h3",
+    "matchedPreferred": false,
+    "prefMet": 0,
+    "prefN": 3,
+    "locationHonoured": "partly",
+    "endpointsHonoured": "no",
+    "coherence": 1,
+    "surprise": "unwelcome",
+    "handResponse": "undo-and-retry",
+    "disconnect": "a quick climbing line became a hulking walled tower; no path offered",
+    "observed": "The view reframed again (lit area extended left over the gorge rim; scene shifted right/down). On the hill's upper-left flank, roughly where the short stroke was, a bulky new structure now stands: a tall reddish-brown masonry face (possibly with small arched openings, unclear at this size) on a broad sloping stone base, topped by a cluster of three or four pale stone cubes. It reads as a fortified building or tower cluster, much larger and taller than a short ascending stroke suggests. No path or stairs. Existing blocks remain.",
+    "delta": "Expected a short path (or stairs) climbing the slope along the stroke. Got a massive wall/building (labelled 'an arcaded wall') - my lower-ranked wall reading, but at a scale and height far beyond a ~90px stroke, and it does not visibly trace the stroke's climbing line.",
+    "ops": [
+      {
+        "why": "wall",
+        "reading": "an arcaded wall",
+        "note": "an arcaded wall",
+        "reached": null
+      }
+    ],
+    "alts": {
+      "labels": [
+        "an arcaded wall",
+        "a wall",
+        "a gated wall",
+        "a thin wall",
+        "a row of olives",
+        "a hedge"
+      ],
+      "at": 0
+    },
+    "declines": [],
+    "said": "an arcaded wall · hold at the end to read it otherwise",
+    "during": "nothing to lay along that · hold to a row of olives"
+  },
+  {
+    "round": "r6",
+    "id": "land29-1",
+    "kind": "sweep",
+    "mode": null,
+    "desc": "sweep from 2,12 (top 3) to 6,10 (top 3)",
+    "preferred": "A short stone path or stair running down the slope along the stroke, from the upper slope to the edge of the shaded drop.",
+    "prefPl": 0.55,
+    "nHyp": 3,
+    "verdict": "partial",
+    "matched": "h1",
+    "matchedPreferred": true,
+    "prefMet": 1,
+    "prefN": 4,
+    "locationHonoured": "yes",
+    "endpointsHonoured": "partly",
+    "coherence": 2,
+    "surprise": "neutral",
+    "handResponse": "keep",
+    "disconnect": "asked for a footpath, got a blocky paved patch; hint said 'nothing' then built anyway",
+    "observed": "The after view is framed differently (camera appears pulled back / steeper, island smaller and shifted down). On the upper-left hill, left of the ravine, a pale flat paved surface has appeared: about 5 square paving cells arranged in a staircase/zig-zag running from upper-right to lower-left, i.e. the same diagonal as the stroke. It looks like a broad flat paved patch rather than a narrow path; no visible steps down the slope. Stream and ravine pillars look intact. Hint line now reads 'trace from a top to reach out · trace up to a higher top to climb'.",
+    "delta": "Expected a narrow path/stair tracing the line from the upper slope down to the slope lip. Got a chunky paved way of ~5 wide cells along the right diagonal; reads more like a paved terrace/patch than a footpath, and seems flat rather than stepping down. Exact endpoints cannot be confirmed because the view changed.",
+    "ops": [
+      {
+        "why": "way",
+        "reading": "a way: 5 paved",
+        "note": "a way: 5 paved",
+        "reached": {
+          "reached": true,
+          "stopped": -1,
+          "cells": []
+        }
+      }
+    ],
+    "alts": {
+      "labels": [
+        "a way: 5 paved",
+        "a row of olives",
+        "a hedge",
+        "an arcaded wall"
+      ],
+      "at": 0
+    },
+    "declines": [],
+    "said": "a way: 5 paved · hold at the end to read it otherwise",
+    "during": "nothing to lay along that · hold to a row of olives"
+  },
+  {
+    "round": "r6",
+    "id": "land29-2",
+    "kind": "tap",
+    "mode": null,
+    "desc": "tap at 7,6",
+    "preferred": "Raise a single stone block / small mound at the tapped spot on the stream bank.",
+    "prefPl": 0.55,
+    "nHyp": 3,
+    "verdict": "fulfilled",
+    "matched": "h1",
+    "matchedPreferred": true,
+    "prefMet": 1,
+    "prefN": 3,
+    "locationHonoured": "yes",
+    "endpointsHonoured": "n/a",
+    "coherence": 2,
+    "surprise": "neutral",
+    "handResponse": "build-on",
+    "disconnect": "silent result; land quietly grew south of the stream",
+    "observed": "A single pale squared stone block (a cube, roughly one 'cell' in size, about 1.5 storeys tall by eye) now stands at about (210,500), immediately above the tap point, at the mouth of the ravine on the bank beside the existing boulders. Water still shows on both sides of it (west at ~170,512 and east at ~235,500). Separately, the coloured terrain south of the stream now extends further down (to ~y 600) where before it faded into sketched paper at ~y 525. Hint text unchanged.",
+    "delta": "Matches the preferred reading: one raised block at the tap. Unexpected extra: the landscape south of the stream grew/filled in. Block sits ~15px north of the fingertip and hugs the water's edge.",
+    "ops": [
+      {
+        "why": "raise",
+        "reached": null
+      }
+    ],
+    "alts": null,
+    "declines": [],
+    "said": "trace from a top to reach out · trace up to a higher top to climb",
+    "during": null
+  },
+  {
+    "round": "r6",
+    "id": "land29-3",
+    "kind": "fromTop",
+    "mode": null,
+    "desc": "fromTop from 8,5 (top 2) to 12,1 (top 1)",
+    "preferred": "A stair or ramp descending from the top of the block, over the stream, down to the ground on the south slope.",
+    "prefPl": 0.5,
+    "nHyp": 3,
+    "verdict": "fulfilled",
+    "matched": "h1",
+    "matchedPreferred": true,
+    "prefMet": 3,
+    "prefN": 4,
+    "locationHonoured": "yes",
+    "endpointsHonoured": "partly",
+    "coherence": 3,
+    "surprise": "welcome",
+    "handResponse": "build-on",
+    "disconnect": "stair lands short of where the finger stopped; path wigglier than the stroke",
+    "observed": "From the cube at the ravine mouth, a raised stone walkway at roughly block height now runs south in an S-curve (bending left then right), crossing over where the stream bends, and ends in a landing block with a clear flight of stairs descending to the sandy slope at about (222,552). The cube remains as the upper end. The coloured land extended further south again (fades now at ~y 640, with a new tree sketch and boulder further out). Stream still visible on both sides of the crossing.",
+    "delta": "Matches h1 (descend from the top, cross the stream, reach the ground) with two differences: the walkway curves more than the fairly straight stroke did, and the stair foot lands ~30px short of the arrow rather than at it. The descent is concentrated in one stair at the end rather than spread along the line.",
+    "ops": [
+      {
+        "why": "stairs",
+        "reading": "going down 1 level",
+        "note": "going down 1 level",
+        "reached": {
+          "reached": true,
+          "stopped": -1,
+          "cells": [
+            [
+              1,
+              8,
+              4
+            ],
+            [
+              1,
+              9,
+              4
+            ],
+            [
+              1,
+              10,
+              4
+            ],
+            [
+              1,
+              10,
+              3
+            ],
+            [
+              1,
+              10,
+              2
+            ],
+            [
+              1,
+              11,
+              2
+            ]
+          ]
+        }
+      }
+    ],
+    "alts": {
+      "labels": [
+        "going down 1 level",
+        "a walkway at the height it starts",
+        "lower it instead"
+      ],
+      "at": 0
+    },
+    "declines": [],
+    "said": "going down 1 level · hold at the end to read it otherwise",
+    "during": "trace from a top to reach out · trace up to a higher top to climb"
+  },
+  {
+    "round": "r6",
+    "id": "land29-4",
+    "kind": "tapTop",
+    "mode": null,
+    "desc": "tap at 10,4",
+    "preferred": "Raise the tapped piece of the walkway one level (stack a block / make a little tower there).",
+    "prefPl": 0.45,
+    "nHyp": 3,
+    "verdict": "fulfilled",
+    "matched": "h1",
+    "matchedPreferred": true,
+    "prefMet": 3,
+    "prefN": 3,
+    "locationHonoured": "yes",
+    "endpointsHonoured": "n/a",
+    "coherence": 2,
+    "surprise": "welcome",
+    "handResponse": "build-on",
+    "disconnect": "hint went blank; unclear if the walk still passes through",
+    "observed": "At the tapped west bend of the walkway, a cube one level taller than the walkway now stands, with an arched opening on its west face (reads like a small arched room/gatehouse). It occupies the bend the finger touched; the cube at the north end, the east part of the curve and the landing with the stair are still there. Stream still visible west of the structure. The hint line at the bottom went blank after the tap.",
+    "delta": "Expected one piece of the walkway raised a level; got exactly that, plus an arched opening that makes it read as a little room or gate rather than a solid block. Unclear whether the walk still runs through (via the arch) or is now blocked at that bend.",
+    "ops": [
+      {
+        "why": "course",
+        "reached": null
+      }
+    ],
+    "alts": null,
+    "declines": [],
+    "said": "",
+    "during": null
+  },
+  {
+    "round": "r6",
+    "id": "land31-1",
+    "kind": "meander",
+    "mode": null,
+    "desc": "meander from 12,8 (top 0) to 5,8 (top 2)",
+    "preferred": "A winding (labyrinth-like) path that follows the drawn zigzag, crossing the stream where the line crosses it.",
+    "prefPl": 0.4,
+    "nHyp": 3,
+    "verdict": "partial",
+    "matched": "h2",
+    "matchedPreferred": false,
+    "prefMet": 0,
+    "prefN": 3,
+    "locationHonoured": "yes",
+    "endpointsHonoured": "partly",
+    "coherence": 1,
+    "surprise": "unwelcome",
+    "handResponse": "undo-and-retry",
+    "disconnect": "drew a winding path, got a hulking decked block over the stream",
+    "observed": "The view is reframed (smaller, shifted; big sketched trees now appear to the north). In the area the stroke covered, a large pale stone construction now straddles the stream: two broad, railed, paved decks running roughly across the valley, a squared raised mass with a tall sheer wall facing the gorge, and the stream visible only at the west end, in a slot between the decks, and emerging at the gorge mouth. The meander's switchbacks and north loop are not recognisable; the terrain around looks flattened/filled where the valley sides were. It reads more like a quay/dam-and-bridge complex than a winding path.",
+    "delta": "Expected a winding path following the zigzag with crossings at each stream crossing (h1), or at least a clear single route from the west bank to the east hillside (h2). Got a heavy, blocky multi-deck platform over the stream in the right general area; it carries a way across but the drawn shape is lost and the bulk is far larger than a path.",
+    "ops": [
+      {
+        "why": "way",
+        "reading": "a way: 5 paved, a flight of 1, hung from the wall",
+        "note": "a way: 5 paved, a flight of 1, hung from the wall; at the water: steps down into the water from the bank, a post to tie up to",
+        "took": [
+          "from-bank"
+        ],
+        "reached": {
+          "reached": true,
+          "stopped": -1,
+          "cells": [
+            [
+              0,
+              12,
+              8
+            ],
+            [
+              0,
+              12,
+              9
+            ],
+            [
+              0,
+              10,
+              8
+            ],
+            [
+              0,
+              9,
+              8
+            ],
+            [
+              0,
+              8,
+              8
+            ],
+            [
+              1,
+              7,
+              8
+            ]
+          ]
+        }
+      }
+    ],
+    "alts": {
+      "labels": [
+        "a way: 5 paved, a flight of 1, hung from the wall",
+        "a row of olives",
+        "a hedge",
+        "at the water: the way ending at the bank",
+        "a gated wall"
+      ],
+      "at": 0
+    },
+    "declines": [],
+    "said": "a way: 5 paved, a flight of 1, hung from the wall; at the water: steps down into the water from the bank, a post to tie up to · hold at the end to read it otherwise",
+    "during": "tap the ground to raise it · trace from place to place for a way"
+  },
+  {
+    "round": "r6",
+    "id": "land31-2",
+    "kind": "pause",
+    "mode": null,
+    "desc": "pause from 9,4 (top 1) to 9,1 (top 1)",
+    "preferred": "A short footpath leading out south-west from near the structure across the slope (pause just a hesitation or a waypoint).",
+    "prefPl": 0.5,
+    "nHyp": 3,
+    "verdict": "fulfilled",
+    "matched": "h1",
+    "matchedPreferred": true,
+    "prefMet": 3,
+    "prefN": 3,
+    "locationHonoured": "yes",
+    "endpointsHonoured": "yes",
+    "coherence": 2,
+    "surprise": "none",
+    "handResponse": "keep",
+    "disconnect": "hint promised a gate or landing at the pause; none appeared",
+    "observed": "A short pale paved strip, slightly raised with a railing along its upper (north-west) edge, now lies along the stroke line on the slope south-west of the decked structure, running NE-SW over roughly the stroke's length. No gate or widened landing is visible where the pause was. The view shifted slightly up, and the coloured land expanded to the west/south-west (a tree now sits at the left edge, ground extends where paper was). The existing decked structure looks unchanged.",
+    "delta": "Matches the preferred short path, though it is a railed deck-like strip rather than a ground-level footpath, and it doesn't connect to the structure it starts near. The pause produced no visible feature even though the live hint promised one.",
+    "ops": [
+      {
+        "why": "way",
+        "reading": "a way: 2 paved",
+        "note": "a way: 2 paved",
+        "reached": {
+          "reached": true,
+          "stopped": -1,
+          "cells": []
+        }
+      }
+    ],
+    "alts": {
+      "labels": [
+        "a way: 2 paved",
+        "a row of olives",
+        "a hedge",
+        "a gated wall"
+      ],
+      "at": 0
+    },
+    "declines": [],
+    "said": "a way: 2 paved · hold at the end to read it otherwise",
+    "during": "a pause: a gate here, or a landing"
+  },
+  {
+    "round": "r6",
+    "id": "land31-3",
+    "kind": "tap",
+    "mode": null,
+    "desc": "tap at 5,10",
+    "preferred": "Raise a single stone block on the ridge at the tap (a first 'top' across the gorge).",
+    "prefPl": 0.6,
+    "nHyp": 3,
+    "verdict": "fulfilled",
+    "matched": "h1",
+    "matchedPreferred": true,
+    "prefMet": 3,
+    "prefN": 3,
+    "locationHonoured": "yes",
+    "endpointsHonoured": "n/a",
+    "coherence": 2,
+    "surprise": "none",
+    "handResponse": "build-on",
+    "disconnect": "",
+    "observed": "A single low, flat-topped squared stone block (a slab-like plinth, lower than a full cube) now sits on the ridge at about (330,408), ~15px up-slope of the tap point, on the crest east of the gorge. The small rocks/scrub that were exactly at the tap look replaced by it, and a paler flattened patch of ground extends a little NE from it. The rest of the scene (decked structure, gorge, stream, SW strip) is unchanged; the view did not move.",
+    "delta": "As expected: one raised block at the tap. It is lower and flatter than expected (more plinth than block), sits slightly up-slope of the fingertip, and the local crest rocks were cleared.",
+    "ops": [
+      {
+        "why": "raise",
+        "reached": null
+      }
+    ],
+    "alts": null,
+    "declines": [],
+    "said": "trace from a top to reach out · trace up to a higher top to climb",
+    "during": null
+  },
+  {
+    "round": "r6",
+    "id": "land31-4",
+    "kind": "tapTop",
+    "mode": null,
+    "desc": "tap at 8,8",
+    "preferred": "Raise the tapped piece of the deck one level (stack a block/room on it).",
+    "prefPl": 0.45,
+    "nHyp": 3,
+    "verdict": "acceptable-alternative",
+    "matched": "h1",
+    "matchedPreferred": true,
+    "prefMet": 2,
+    "prefN": 3,
+    "locationHonoured": "partly",
+    "endpointsHonoured": "n/a",
+    "coherence": 2,
+    "surprise": "neutral",
+    "handResponse": "keep",
+    "disconnect": "rose next to where I tapped; explanation not visible on screen",
+    "observed": "A raised squared block with an arched opening (a small arched room/gatehouse) now stands on the southern deck, but at about (211-245, 397-428), i.e. up-left of the tap, at the deck's junction with the tall central mass rather than on the spot over the water slot. The slot below the deck still shows water flowing to the gorge. Everything else is unchanged. The hint line at the bottom of the after screenshot is blank.",
+    "delta": "Expected the tapped piece of deck itself to rise; instead the rise was placed one piece over ('beside it'), ~25px from the fingertip, apparently to keep a way open. Content (a raised arched block on the deck) matches; position is shifted.",
+    "ops": [
+      {
+        "why": "raise",
+        "reading": "beside the stair",
+        "note": "raised beside it: the stair's way kept open",
+        "took": [
+          "moved-beside"
+        ],
+        "reached": null
+      }
+    ],
+    "alts": null,
+    "declines": [],
+    "said": "raised beside it: the stair's way kept open · hold to read it otherwise",
+    "during": null
+  }
+]

@@ -1,509 +1,213 @@
-/**
- * Imperecept — full WebGL surface, touch-responsive.
- * Local time-reversal as latent rule. BBC ambient sources under RemArc.
- */
-
-const qs = new URLSearchParams(location.search);
-const isPreview = qs.has('preview');
-
-// ---------- minimal DOM shell (GL owns the visual) ----------
-const root = document.createElement('div');
-root.id = 'imperecept';
-document.body.appendChild(root);
-
-root.innerHTML = `
-<canvas id="gl"></canvas>
-<div class="hud" id="hud">
-  <header class="top">
-    <a href="/" class="back">← lab</a>
-    <span class="name">Imperecept</span>
-    <button type="button" id="reveal-btn" class="ghost">Reveal</button>
-  </header>
-  <div class="presence" id="presence">
-    <p class="prompt" id="prompt">A sound is present.</p>
-    <p class="hint" id="hint">The rule remains beneath the surface.</p>
-  </div>
-  <div class="controls" id="controls">
-    <div class="row">
-      <button type="button" id="play" class="primary">Listen</button>
-      <button type="button" id="stop" disabled>Silence</button>
-    </div>
-    <div class="row soft">
-      <label><input type="checkbox" id="drift" checked> Drift</label>
-      <label><input type="checkbox" id="follow"> Amplitude</label>
-    </div>
-    <div class="grain-wrap">
-      <input type="range" id="grain" min="12" max="180" step="1" value="38" aria-label="Grain size">
-      <output id="grain-val">38 ms</output>
-    </div>
-    <div class="row">
-      <input type="file" id="file" accept="audio/*" hidden>
-      <button type="button" id="load">Bring sound</button>
-      <select id="sample" aria-label="BBC ambient">
-        <option value="">BBC ambient…</option>
-        <option value="rain">Rain on leaves</option>
-        <option value="wind">Soft wind</option>
-        <option value="forest">Forest edge</option>
-        <option value="water">Distant water</option>
-        <option value="rural">Rural night</option>
-      </select>
-    </div>
-    <p class="credit" id="credit" hidden>BBC Sound Effects · RemArc</p>
-  </div>
-</div>
-<aside class="substrate" id="substrate" hidden>
-  <div class="diagram">
-    <div class="node hidden-node">IMPERCEPTIBLE</div>
-    <div class="arrow">↓</div>
-    <div class="node core">imperecept</div>
-    <div class="fork">
-      <div class="node">PERCEPT</div>
-      <div class="node">PRECEPT</div>
-    </div>
-  </div>
-  <p class="note">Grain is the current precept. It governs without being named.</p>
-  <button type="button" id="hide-btn" class="ghost">Return surface</button>
-</aside>
-`;
-
+/** Imperecept — a continuous listening skin. No remote audio dependency. */
+export {};
+const preview = new URLSearchParams(location.search).has('preview');
+const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+const root = document.createElement('main');
+document.body.append(root);
+root.innerHTML = `<canvas id="skin" tabindex="0" aria-label="Sound substrate. Arrow keys explore; hold Space to gather sound; R reveals the temporal layers."></canvas>
+<header><a href="/">← lab</a><span>IMPERECEPT</span><button id="reveal" aria-pressed="false">Reveal</button></header>
+<section id="intro"><small>A LISTENING SKIN</small><h1>What lies<br>between sounds.</h1><p>Move to discover. Hold to gather.<br>Leave an impression.</p><button id="begin">Enter & listen <span>↗</span></button></section>
+<footer><p id="hint" role="status" aria-live="polite">Five sounds inhabit this surface.</p><div><button id="sound">Listen</button><span id="where">touch / hold / wander</span><button id="bring">+ Bring sound</button></div><small id="detail"></small></footer><input id="file" type="file" accept="audio/*" hidden>`;
 const style = document.createElement('style');
-style.textContent = `
-:root {
-  --text: #e8e6e1;
-  --muted: #8a8780;
-  --accent: #7c9cff;
-  --dim: rgba(255,255,255,0.08);
-  font-family: system-ui, -apple-system, sans-serif;
-  color: var(--text);
-  background: #050608;
+style.textContent = `*{box-sizing:border-box}html,body{margin:0;overflow:hidden;background:#080d10;color:#eee8d9;font-family:system-ui,-apple-system,sans-serif}main{position:fixed;inset:0}canvas{width:100%;height:100%;display:block;touch-action:none;outline:none}canvas:focus-visible{outline:1px solid #e0c795;outline-offset:-5px}header,footer{position:absolute;left:0;right:0;padding:0 max(22px,env(safe-area-inset-right)) 0 max(22px,env(safe-area-inset-left));pointer-events:none}header{top:max(12px,env(safe-area-inset-top));display:flex;align-items:center;justify-content:space-between}header span{font-size:10px;letter-spacing:.28em;color:#bbb9af}button,a{pointer-events:auto;color:inherit;font:inherit;font-size:12px;background:none;border:0;min-height:44px;padding:10px 0;text-decoration:none;cursor:pointer}button:focus-visible,a:focus-visible{outline:1px solid #ddc28b;outline-offset:5px}header a{color:#a2aca9}#reveal[aria-pressed=true]{color:#e6bd7e}footer{bottom:max(15px,env(safe-area-inset-bottom));background:linear-gradient(transparent,#080d10bd);padding-top:30px}footer>div{display:flex;justify-content:space-between;align-items:center;gap:10px}#where{font:10px ui-monospace,monospace;letter-spacing:.06em;color:#a1b4ae;text-align:center}#hint{font-size:12px;color:#b8c3bc;text-align:center;min-height:18px;margin:0 0 10px}#detail{display:block;text-align:center;color:#9ba8a4;font:10px ui-monospace,monospace;min-height:14px}#intro{position:absolute;top:26%;left:10%;right:8%;pointer-events:none;transition:opacity 1s}#intro small{font-size:9px;letter-spacing:.28em;color:#b5c5bc}h1{font-family:Georgia,serif;font-size:clamp(44px,9vw,92px);font-weight:normal;line-height:1.05;letter-spacing:-.045em;margin:24px 0}#intro p{font-size:13px;line-height:1.9;color:#bec9c1}#begin{border-bottom:1px solid #a8b8ac;min-width:170px;text-align:left;margin-top:18px}#begin span{float:right}main.entered #intro{opacity:0;visibility:hidden}main.preview header,main.preview footer,main.preview #intro{display:none}@media(max-height:520px){#intro{top:70px;left:8%}#intro h1{font-size:32px;margin:10px 0}#intro p{display:none}#begin{margin-top:0}#hint{margin-bottom:0}footer{padding-top:8px}}@media(prefers-reduced-motion:reduce){*{transition:none!important}}`;
+document.head.append(style);
+const el = <T extends HTMLElement>(id:string)=>root.querySelector<T>('#'+id)!;
+const canvas=el<HTMLCanvasElement>('skin'), ctx=canvas.getContext('2d',{alpha:false})!;
+const hint=el('hint'), where=el('where'), detail=el('detail'), sound=el<HTMLButtonElement>('sound');
+let W=innerWidth,H=innerHeight,DPR=1,entered=preview,reveal=false,revealMix=0,playing=false;
+let ac:AudioContext|null=null, master:GainNode|null=null, analyser:AnalyserNode|null=null;
+let audioData:Uint8Array<ArrayBuffer>|null=null, clock=0, level=0, last=performance.now(), frameId=0;
+let pending:AudioBuffer|null=null, pendingName='', importing=false;
+type Place={x:number;y:number;name:string;color:number[];buffer?:AudioBuffer;reverse?:AudioBuffer;weight:number;coherence:number;memory:number;next:number;phase:number;grain:number};
+const places:Place[]=[
+ {x:.22,y:.29,name:'rain / glass',color:[139,189,184]},
+ {x:.76,y:.27,name:'bronze / air',color:[219,175,112]},
+ {x:.49,y:.51,name:'pulse / breath',color:[189,148,137]},
+ {x:.21,y:.73,name:'steps / stone',color:[161,181,151]},
+ {x:.78,y:.74,name:'water / hollow',color:[117,158,193]},
+].map((p,i)=>({...p,weight:i===2?1:0,coherence:.1,memory:0,next:0,phase:i*1.73,grain:.25}));
+type Touch={x:number;y:number;speed:number;age:number};
+const touches=new Map<number,Touch>();
+let focus={x:.49,y:.51};
+const traces:{x:number;y:number;v:number}[]=[];
+let traceClock=0;
+const clamp=(v:number,a=0,b=1)=>Math.max(a,Math.min(b,v));
+function resize(){W=innerWidth;H=innerHeight;DPR=Math.min(devicePixelRatio||1,1.6);canvas.width=Math.round(W*DPR);canvas.height=Math.round(H*DPR);ctx.setTransform(DPR,0,0,DPR,0,0);}
+addEventListener('resize',resize);resize();
+// Deterministic, distinct source compositions. They are real buffers, not shader-driven tones.
+function synth(kind:number):AudioBuffer {
+ const sr=24000,duration=12,b=ac!.createBuffer(1,sr*duration,sr),d=b.getChannelData(0);
+ let seed=721+kind*801,low=0;const random=()=>{seed=(Math.imul(seed,1664525)+1013904223)|0;return (seed>>>0)/4294967296*2-1;};
+ for(let i=0;i<d.length;i++){
+  const t=i/sr,n=random();low=low*.97+n*.03;let v=0;
+  if(kind===0){const q=t%.37;v=low*.5+n*.08+Math.sin(q*6100)*Math.exp(-q*100)*.18;}
+  if(kind===1){const q=t%2;v=(Math.sin(q*1382)+.45*Math.sin(q*3671)+.23*Math.sin(q*5703))*Math.exp(-q*2.8)*Math.min(1,q*180)*.45;}
+  if(kind===2){const q=t%3;v=low*Math.pow(Math.sin(Math.PI*q/3),2)*2;for(const off of [.2,.49]){const a=q-off;if(a>=0)v+=Math.sin(a*410)*Math.exp(-a*26)*Math.min(1,a*150)*.55;}}
+  if(kind===3){const q=t%.6;v=(low*4+Math.sin(q*430)*.35)*Math.exp(-q*32)*Math.min(1,q*220);}
+  if(kind===4){const q=t%.75;v=low*.65+Math.sin(1800*q+38*Math.sin(q*13))*Math.exp(-q*12)*Math.min(1,q*220)*.5;}
+  d[i]=v*Math.min(1,t*50,(duration-t)*50);
+ }
+ return b;
 }
-* { box-sizing: border-box; }
-html, body { margin: 0; height: 100%; overflow: hidden; touch-action: manipulation; }
-#imperecept { position: fixed; inset: 0; }
-#gl {
-  position: absolute; inset: 0;
-  width: 100%; height: 100%;
-  display: block;
-  touch-action: none;
+function attach(p:Place,b:AudioBuffer){
+ p.buffer=b;const r=ac!.createBuffer(b.numberOfChannels,b.length,b.sampleRate);
+ for(let c=0;c<b.numberOfChannels;c++){const src=b.getChannelData(c),dst=r.getChannelData(c);for(let i=0;i<src.length;i++)dst[i]=src[src.length-1-i];}
+ p.reverse=r;p.next=ac!.currentTime+.04;
 }
-.hud {
-  position: absolute; inset: 0;
-  display: flex; flex-direction: column;
-  pointer-events: none;
-  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+function initAudio(){
+ if(ac)return;ac=new AudioContext();master=ac.createGain();master.gain.value=0;
+ const limit=ac.createDynamicsCompressor();limit.threshold.value=-12;limit.knee.value=12;limit.ratio.value=8;limit.attack.value=.003;limit.release.value=.2;
+ analyser=ac.createAnalyser();analyser.fftSize=256;audioData=new Uint8Array(256);
+ master.connect(limit);limit.connect(analyser);analyser.connect(ac.destination);
+ places.forEach((p,i)=>attach(p,synth(i)));
 }
-.hud > * { pointer-events: auto; }
-.top {
-  height: 52px; padding: 0 16px;
-  display: flex; align-items: center; justify-content: space-between;
-  background: linear-gradient(to bottom, rgba(5,6,8,0.75), transparent);
+async function listen(){
+ try{initAudio();await ac!.resume();playing=true;entered=true;root.classList.add('entered');master!.gain.setTargetAtTime(.6,ac!.currentTime,.12);sound.textContent='Silence';hint.textContent='Hold to gather. Wander to find another sound.';}
+ catch{hint.textContent='Audio could not start. Tap Listen to try again.';}
 }
-.back { color: var(--muted); text-decoration: none; font-size: 13px; padding: 10px 0; }
-.name { font-size: 10px; letter-spacing: 0.2em; text-transform: uppercase; color: var(--muted); }
-.ghost {
-  font: inherit; font-size: 13px; background: none; border: 0;
-  color: var(--accent); cursor: pointer; padding: 10px 4px; min-height: 44px;
-}
-.presence {
-  flex: 1; display: flex; flex-direction: column; justify-content: center;
-  align-items: center; text-align: center; padding: 0 24px;
-  pointer-events: none;
-}
-.prompt { font-size: clamp(18px, 4.5vw, 24px); font-weight: 400; margin: 0 0 8px; letter-spacing: 0.01em; }
-.hint { font-size: 13px; color: var(--muted); margin: 0; max-width: 34ch; line-height: 1.45; }
-.controls {
-  padding: 12px 16px max(20px, env(safe-area-inset-bottom));
-  background: linear-gradient(to top, rgba(5,6,8,0.88), transparent);
-  display: flex; flex-direction: column; gap: 12px;
-}
-.row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
-.row.soft { font-size: 13px; color: var(--muted); gap: 16px; }
-.row.soft label { display: flex; align-items: center; gap: 6px; min-height: 44px; cursor: pointer; }
-button, select {
-  font: inherit; font-size: 14px; border-radius: 8px;
-  border: 1px solid var(--dim); background: rgba(22,24,29,0.85);
-  color: var(--text); padding: 12px 16px; min-height: 44px; cursor: pointer;
-  -webkit-tap-highlight-color: transparent;
-}
-button.primary { background: var(--accent); color: #050608; border-color: var(--accent); }
-button:disabled { opacity: 0.4; }
-select { min-width: 120px; }
-.grain-wrap {
-  display: flex; align-items: center; gap: 12px;
-}
-.grain-wrap input[type=range] {
-  flex: 1; height: 44px; margin: 0; accent-color: var(--accent);
-  touch-action: pan-x;
-}
-.grain-wrap output {
-  font-variant-numeric: tabular-nums; font-size: 13px; color: var(--muted); min-width: 52px; text-align: right;
-}
-.credit { font-size: 10px; color: var(--muted); letter-spacing: 0.04em; margin: 0; }
-.substrate {
-  position: absolute; inset: 0; z-index: 20;
-  background: rgba(5,6,8,0.94);
-  display: flex; flex-direction: column; align-items: center; justify-content: center;
-  gap: 24px; padding: 24px;
-}
-.substrate[hidden] { display: none; }
-.diagram { text-align: center; font-size: 12px; letter-spacing: 0.06em; }
-.node {
-  display: inline-block; padding: 10px 16px; border: 1px solid var(--dim);
-  border-radius: 4px; margin: 4px;
-}
-.hidden-node { opacity: 0.5; border-style: dashed; }
-.core { background: var(--accent); color: #050608; border-color: var(--accent); letter-spacing: 0.14em; }
-.arrow { color: var(--muted); margin: 4px 0; }
-.fork { display: flex; gap: 20px; justify-content: center; margin-top: 6px; }
-.note { max-width: 36ch; text-align: center; font-size: 14px; color: var(--muted); line-height: 1.5; margin: 0; }
-.preview .top, .preview .controls, .preview .hint { display: none; }
-.preview .presence { padding-top: 40%; }
-@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
-`;
-document.head.appendChild(style);
-
-// ---------- WebGL field ----------
-const canvas = root.querySelector('#gl') as HTMLCanvasElement;
-const gl = canvas.getContext('webgl', { antialias: true, alpha: false })!;
-if (!gl) throw new Error('WebGL required');
-
-function resize() {
-  const dpr = Math.min(window.devicePixelRatio || 1, 2);
-  const w = window.innerWidth;
-  const h = window.innerHeight;
-  canvas.width = Math.floor(w * dpr);
-  canvas.height = Math.floor(h * dpr);
-  canvas.style.width = w + 'px';
-  canvas.style.height = h + 'px';
-  gl.viewport(0, 0, canvas.width, canvas.height);
-}
-window.addEventListener('resize', resize);
-resize();
-
-const vertSrc = `
-attribute vec2 a_pos;
-void main() {
-  gl_Position = vec4(a_pos, 0.0, 1.0);
-}
-`;
-
-const fragSrc = `
-precision mediump float;
-uniform vec2 u_res;
-uniform float u_time;
-uniform float u_grain;   // 0..1 mapped from ms
-uniform float u_level;   // audio amplitude proxy 0..1
-uniform float u_reveal;  // 0 surface, 1 substrate
-uniform float u_play;    // 0 or 1
-
-float hash(vec2 p) {
-  return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
-}
-float noise(vec2 p) {
-  vec2 i = floor(p);
-  vec2 f = fract(p);
-  float a = hash(i);
-  float b = hash(i + vec2(1.0, 0.0));
-  float c = hash(i + vec2(0.0, 1.0));
-  float d = hash(i + vec2(1.0, 1.0));
-  vec2 u = f * f * (3.0 - 2.0 * f);
-  return mix(a, b, u.x) + (c - a) * u.y * (1.0 - u.x) + (d - b) * u.x * u.y;
-}
-
-void main() {
-  vec2 uv = gl_FragCoord.xy / u_res;
-  vec2 p = (gl_FragCoord.xy - 0.5 * u_res) / min(u_res.x, u_res.y);
-
-  // soft field — the unrendered substrate
-  float t = u_time * 0.08;
-  float n1 = noise(p * 2.2 + vec2(t * 0.4, t * 0.25));
-  float n2 = noise(p * 5.5 - vec2(t * 0.3, -t * 0.2));
-  float field = n1 * 0.65 + n2 * 0.35;
-
-  // grain modulates spatial frequency — the precept as texture
-  float g = mix(0.15, 1.4, u_grain);
-  float grainField = noise(p * (8.0 + g * 28.0) + t * 1.2);
-  float bands = step(0.5, fract(uv.x * (12.0 + u_grain * 40.0) + t * 0.15));
-  bands = mix(0.0, bands, u_reveal * 0.35);
-
-  // amplitude breathes the field
-  float breath = 0.04 + u_level * 0.12 + u_play * 0.03;
-
-  // base dark surface
-  vec3 col = vec3(0.035, 0.038, 0.048);
-  col += vec3(0.04, 0.05, 0.09) * field;
-  col += vec3(0.06, 0.08, 0.14) * grainField * (0.25 + u_grain * 0.5);
-  col += vec3(0.12, 0.16, 0.28) * bands;
-
-  // soft radial falloff so HUD text stays readable
-  float vignette = smoothstep(1.35, 0.25, length(p));
-  col *= 0.55 + 0.45 * vignette;
-
-  // reveal lifts the field into visibility
-  col = mix(col, col * 1.35 + vec3(0.02, 0.03, 0.06), u_reveal * 0.5);
-
-  // gentle pulse when playing
-  col += vec3(0.02, 0.025, 0.05) * u_play * (0.5 + 0.5 * sin(u_time * 1.6));
-
-  gl_FragColor = vec4(col, 1.0);
-}
-`;
-
-function compile(type: number, src: string) {
-  const s = gl.createShader(type)!;
-  gl.shaderSource(s, src);
-  gl.compileShader(s);
-  if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
-    console.error(gl.getShaderInfoLog(s));
+function silence(){playing=false;if(ac&&master)master.gain.setTargetAtTime(0,ac.currentTime,.06);sound.textContent='Listen';}
+el('begin').onclick=()=>void listen();sound.onclick=()=>playing?silence():void listen();
+// Scheduled Hann-windowed grains. Offsets follow the same running clock, never reset by touch.
+const active=new Set<AudioBufferSourceNode>();
+function schedule(){
+ if(!ac||!playing||ac.state!=='running')return;
+ const now=ac.currentTime;
+ for(const p of places){
+  if(!p.buffer||!p.reverse)continue;
+  if(p.next<now)p.next=now+.025;
+  if(p.weight<.008){p.next=now+.03;continue;}
+  let count=0;
+  while(p.next<now+.13&&count++<16){
+   const dur=Math.min(p.buffer.duration,.045+(1-p.coherence)*.27);p.grain=dur;
+   const phase=(p.next+p.phase)%Math.max(.01,p.buffer.duration-dur);
+   // A growing forward contribution makes the settling source unambiguously recoverable.
+   const forward=p.coherence*p.coherence;
+   for(const rev of [false,true]){
+    const mix=rev?1-forward:forward;if(mix<.005)continue;
+    const src=ac.createBufferSource(),gain=ac.createGain(),pan=ac.createStereoPanner();
+    src.buffer=rev?p.reverse:p.buffer;
+    const offset=rev?Math.max(0,p.buffer.duration-phase-dur):phase;
+    const env=new Float32Array(48),amp=p.weight*mix*.48;
+    for(let i=0;i<env.length;i++)env[i]=Math.sin(Math.PI*i/(env.length-1))**2*amp;
+    gain.gain.setValueCurveAtTime(env,p.next,dur);pan.pan.value=(p.x-.5)*1.3;
+    src.connect(gain);gain.connect(pan);pan.connect(master!);active.add(src);
+    src.onended=()=>{active.delete(src);src.disconnect();gain.disconnect();pan.disconnect();};
+    src.start(p.next,offset,dur);
+   }
+   p.next+=dur/3;
   }
-  return s;
+ }
 }
-
-const prog = gl.createProgram()!;
-gl.attachShader(prog, compile(gl.VERTEX_SHADER, vertSrc));
-gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, fragSrc));
-gl.linkProgram(prog);
-gl.useProgram(prog);
-
-const buf = gl.createBuffer();
-gl.bindBuffer(gl.ARRAY_BUFFER, buf);
-gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
-const aPos = gl.getAttribLocation(prog, 'a_pos');
-gl.enableVertexAttribArray(aPos);
-gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
-
-const uRes = gl.getUniformLocation(prog, 'u_res');
-const uTime = gl.getUniformLocation(prog, 'u_time');
-const uGrain = gl.getUniformLocation(prog, 'u_grain');
-const uLevel = gl.getUniformLocation(prog, 'u_level');
-const uReveal = gl.getUniformLocation(prog, 'u_reveal');
-const uPlay = gl.getUniformLocation(prog, 'u_play');
-
-let revealAmount = 0;
-let targetReveal = 0;
-let levelProxy = 0;
-
-function frame(t: number) {
-  revealAmount += (targetReveal - revealAmount) * 0.06;
-  gl.uniform2f(uRes, canvas.width, canvas.height);
-  gl.uniform1f(uTime, t * 0.001);
-  gl.uniform1f(uGrain, (+grainEl.value - 12) / 168);
-  gl.uniform1f(uLevel, levelProxy);
-  gl.uniform1f(uReveal, revealAmount);
-  gl.uniform1f(uPlay, playing ? 1 : 0);
-  gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
-  requestAnimationFrame(frame);
-}
-requestAnimationFrame(frame);
-
-// ---------- audio state ----------
-let audioCtx: AudioContext | null = null;
-let originalBuffer: AudioBuffer | null = null;
-let processedBuffer: AudioBuffer | null = null;
-let currentSource: AudioBufferSourceNode | null = null;
-let playing = false;
-let driftTimer: number | null = null;
-
-const grainEl = root.querySelector('#grain') as HTMLInputElement;
-const grainVal = root.querySelector('#grain-val') as HTMLOutputElement;
-const promptEl = root.querySelector('#prompt') as HTMLParagraphElement;
-const hintEl = root.querySelector('#hint') as HTMLParagraphElement;
-const driftEl = root.querySelector('#drift') as HTMLInputElement;
-const followEl = root.querySelector('#follow') as HTMLInputElement;
-const creditEl = root.querySelector('#credit') as HTMLElement;
-
-function ensureCtx() {
-  if (!audioCtx) audioCtx = new AudioContext();
-  return audioCtx;
-}
-
-function setPresence(main: string, sub?: string) {
-  promptEl.textContent = main;
-  hintEl.textContent = sub ?? '';
-}
-
-function reverseLocal(buf: AudioBuffer, grainMs: number): AudioBuffer {
-  const ctx = ensureCtx();
-  const out = ctx.createBuffer(buf.numberOfChannels, buf.length, buf.sampleRate);
-  const grain = Math.max(1, Math.round((grainMs / 1000) * buf.sampleRate));
-  for (let ch = 0; ch < buf.numberOfChannels; ch++) {
-    const src = buf.getChannelData(ch);
-    const dst = out.getChannelData(ch);
-    for (let i = 0; i < src.length; i += grain) {
-      const end = Math.min(i + grain, src.length);
-      for (let j = i; j < end; j++) dst[j] = src[end - 1 - (j - i)];
-    }
-  }
-  return out;
-}
-
-function reprocess() {
-  if (!originalBuffer) return;
-  const grainMs = +grainEl.value;
-  processedBuffer = reverseLocal(originalBuffer, grainMs);
-  grainVal.textContent = `${grainMs} ms`;
-  // rough level proxy from first channel
-  const d = originalBuffer.getChannelData(0);
-  let s = 0;
-  for (let i = 0; i < d.length; i += 128) s += Math.abs(d[i]);
-  levelProxy = Math.min(1, (s / (d.length / 128)) * 4);
-}
-
-grainEl.addEventListener('input', () => {
-  reprocess();
-  if (playing) { stop(); play(); }
-});
-
-function startDrift() {
-  stopDrift();
-  if (!driftEl.checked) return;
-  driftTimer = window.setInterval(() => {
-    if (followEl.checked) return;
-    const cur = +grainEl.value;
-    const next = Math.min(180, Math.max(12, cur + (Math.random() - 0.5) * 4.5));
-    grainEl.value = String(Math.round(next));
-    reprocess();
-    if (playing) { stop(); play(); }
-  }, 2200);
-}
-function stopDrift() {
-  if (driftTimer !== null) { clearInterval(driftTimer); driftTimer = null; }
-}
-driftEl.addEventListener('change', () => driftEl.checked ? startDrift() : stopDrift());
-followEl.addEventListener('change', () => {
-  if (followEl.checked && originalBuffer) {
-    const d = originalBuffer.getChannelData(0);
-    let s = 0;
-    for (let i = 0; i < d.length; i += 64) s += Math.abs(d[i]);
-    const avg = s / (d.length / 64);
-    grainEl.value = String(Math.round(Math.min(160, Math.max(16, 18 + avg * 140))));
-    reprocess();
-  }
-});
-
-function stop() {
-  if (currentSource) { try { currentSource.stop(); } catch {} currentSource = null; }
-  playing = false;
-  (root.querySelector('#stop') as HTMLButtonElement).disabled = true;
-  (root.querySelector('#play') as HTMLButtonElement).disabled = false;
-}
-function play() {
-  if (!processedBuffer) return;
-  stop();
-  const ctx = ensureCtx();
-  if (ctx.state === 'suspended') ctx.resume();
-  const src = ctx.createBufferSource();
-  src.buffer = processedBuffer;
-  src.connect(ctx.destination);
-  src.onended = () => {
-    playing = false;
-    (root.querySelector('#stop') as HTMLButtonElement).disabled = true;
-    (root.querySelector('#play') as HTMLButtonElement).disabled = false;
-    setPresence('Returned to silence.', 'The rule remains.');
-  };
-  src.start();
-  currentSource = src;
-  playing = true;
-  (root.querySelector('#stop') as HTMLButtonElement).disabled = false;
-  (root.querySelector('#play') as HTMLButtonElement).disabled = true;
-  setPresence('Listening.', 'The precept is active beneath the surface.');
-}
-root.querySelector('#play')!.addEventListener('click', play);
-root.querySelector('#stop')!.addEventListener('click', stop);
-
-async function loadArrayBuffer(ab: ArrayBuffer) {
-  const ctx = ensureCtx();
-  originalBuffer = await ctx.decodeAudioData(ab.slice(0));
-  reprocess();
-  setPresence('A sound has been brought in.', 'It is already under the rule.');
-  creditEl.hidden = true;
-  if (driftEl.checked) startDrift();
-}
-root.querySelector('#load')!.addEventListener('click', () => (root.querySelector('#file') as HTMLInputElement).click());
-root.querySelector('#file')!.addEventListener('change', async (e) => {
-  const f = (e.target as HTMLInputElement).files?.[0];
-  if (!f) return;
-  await loadArrayBuffer(await f.arrayBuffer());
-});
-
-const BBC_AMBIENTS: Record<string, { label: string; urls: string[] }> = {
-  rain: { label: 'Rain on leaves', urls: ['https://sound-effects-media.bbcrewind.co.uk/mp3/07026098.mp3', 'https://sound-effects-media.bbcrewind.co.uk/mp3/NHU05013181.mp3'] },
-  wind: { label: 'Soft wind', urls: ['https://sound-effects-media.bbcrewind.co.uk/mp3/07042175.mp3', 'https://sound-effects-media.bbcrewind.co.uk/mp3/NHU05071067.mp3'] },
-  forest: { label: 'Forest edge', urls: ['https://sound-effects-media.bbcrewind.co.uk/mp3/NHU05013181.mp3', 'https://sound-effects-media.bbcrewind.co.uk/mp3/07026098.mp3'] },
-  water: { label: 'Distant water', urls: ['https://sound-effects-media.bbcrewind.co.uk/mp3/07034176.mp3', 'https://sound-effects-media.bbcrewind.co.uk/mp3/07026098.mp3'] },
-  rural: { label: 'Rural night', urls: ['https://sound-effects-media.bbcrewind.co.uk/mp3/NHU05071067.mp3', 'https://sound-effects-media.bbcrewind.co.uk/mp3/07042175.mp3'] },
+const timer=window.setInterval(schedule,25);
+function point(e:PointerEvent){return {x:clamp(e.clientX/W),y:clamp(e.clientY/H)}}
+canvas.onpointerdown=e=>{
+ e.preventDefault();canvas.focus();canvas.setPointerCapture(e.pointerId);
+ if(pending){placeImported(point(e));return;}
+ if(touches.size>=2)return;
+ const p=point(e);touches.set(e.pointerId,{...p,speed:0,age:0});focus=p;
+ if(!playing)void listen();
 };
-
-function makeFallbackBed(duration = 8): AudioBuffer {
-  const ctx = ensureCtx();
-  const sr = ctx.sampleRate;
-  const len = Math.floor(sr * duration);
-  const buf = ctx.createBuffer(1, len, sr);
-  const d = buf.getChannelData(0);
-  let last = 0;
-  for (let i = 0; i < len; i++) {
-    const t = i / sr;
-    const env = Math.min(1, t * 1.5) * Math.min(1, (duration - t) * 1.2);
-    last = (last + (Math.random() * 2 - 1) * 0.04) * 0.98;
-    d[i] = last * 0.35 * env;
+canvas.onpointermove=e=>{const t=touches.get(e.pointerId);if(!t)return;const p=point(e);t.speed=clamp(t.speed+Math.hypot(p.x-t.x,p.y-t.y)*18);t.x=p.x;t.y=p.y;focus=p;};
+function release(e:PointerEvent){touches.delete(e.pointerId);}
+canvas.onpointerup=release;canvas.onpointercancel=release;canvas.onlostpointercapture=release;
+function toggleReveal(){reveal=!reveal;el('reveal').setAttribute('aria-pressed',String(reveal));el('reveal').textContent=reveal?'Close layers':'Reveal';hint.textContent=reveal?'The moving marks follow the grains. Warm traces remember your hand.':'Hold to gather. Move between sounds. Two fingers bring places together.';}
+el('reveal').onclick=toggleReveal;
+canvas.onkeydown=e=>{
+ if(['ArrowUp','ArrowDown','ArrowLeft','ArrowRight',' '].includes(e.key)){e.preventDefault();if(!playing)void listen();
+  if(e.key==='ArrowUp')focus.y=clamp(focus.y-.025,.12,.84);if(e.key==='ArrowDown')focus.y=clamp(focus.y+.025,.12,.84);
+  if(e.key==='ArrowLeft')focus.x=clamp(focus.x-.025,.04,.96);if(e.key==='ArrowRight')focus.x=clamp(focus.x+.025,.04,.96);
+  if(pending){if(e.key===' ')placeImported(focus);return;}
+  const old=touches.get(-1);touches.set(-1,{...focus,speed:e.key===' '?0:.4,age:old?.age||0});
+ }else if(e.key.toLowerCase()==='r')toggleReveal();
+};
+canvas.onkeyup=e=>{if(e.key===' '||e.key.startsWith('Arrow'))touches.delete(-1);};
+addEventListener('blur',()=>touches.clear());
+el('bring').onclick=()=>{if(pending){pending=null;hint.textContent='Placement cancelled.';el('bring').textContent='+ Bring sound';return;}el<HTMLInputElement>('file').click();};
+el<HTMLInputElement>('file').onchange=async e=>{
+ const input=e.target as HTMLInputElement,f=input.files?.[0];input.value='';if(!f||importing)return;
+ if(f.size>25*1024*1024){hint.textContent='Choose an audio file smaller than 25 MB.';return;}
+ importing=true;hint.textContent='Opening your sound…';
+ try{initAudio();const decoded=await ac!.decodeAudioData(await f.arrayBuffer());
+  if(decoded.duration<.05)throw new Error("Sound too short");
+  const frames=Math.min(decoded.length,Math.floor(decoded.sampleRate*30));
+  pending=ac!.createBuffer(Math.min(2,decoded.numberOfChannels),frames,decoded.sampleRate);
+  for(let c=0;c<pending.numberOfChannels;c++)pending.copyToChannel(decoded.getChannelData(c).subarray(0,frames),c);
+  pendingName=f.name.replace(/\.[^.]+$/,'').slice(0,32);hint.textContent='Touch a place for your sound. Up to 30 seconds stays on this device.';el('bring').textContent='Cancel placement';canvas.focus();
+ }catch{hint.textContent='That audio could not be decoded. Try MP3, WAV or M4A.';}finally{importing=false;}
+};
+function placeImported(pos:{x:number;y:number}){
+ if(!pending)return;
+ const p:Place={...pos,y:clamp(pos.y,.15,.82),name:pendingName,color:[216,190,155],weight:0,coherence:.2,memory:.3,next:0,phase:0,grain:.2};
+ // Bound audio and rendering work; replacing the oldest imported place leaves native places intact.
+ if(places.length>=8)places.splice(5,1);attach(p,pending);places.push(p);pending=null;focus={x:p.x,y:p.y};
+ el('bring').textContent='+ Bring sound';void listen();hint.textContent='Your sound lives here. Hold to gather it.';
+}
+function update(dt:number){
+ const ts=[...touches.values()];for(const t of ts){t.age+=dt;t.speed*=Math.exp(-dt*5);}
+ const points=ts.length?ts:[{...focus,speed:0,age:0}];
+ const raw=places.map(p=>points.reduce((s,t)=>s+Math.exp(-((p.x-t.x)**2+(p.y-t.y)**2)/.048),0));
+ const total=raw.reduce((a,b)=>a+b,0)||1;
+ places.forEach((p,i)=>{
+  p.weight+=(raw[i]/total-p.weight)*(1-Math.exp(-dt*3));
+  const influence=ts.reduce((s,t)=>Math.max(s,Math.exp(-((p.x-t.x)**2+(p.y-t.y)**2)/.035)*(1-t.speed)),0);
+  p.memory=clamp(p.memory+dt*(influence*.12-p.memory*.025));
+  const target=clamp(.07+p.memory*.35+influence*.75);
+  p.coherence+=(target-p.coherence)*(1-Math.exp(-dt*(target>p.coherence?1.4:.7)));
+ });
+ traceClock+=dt;if(ts.length&&traceClock>.06){traceClock=0;ts.forEach(t=>traces.push({x:t.x,y:t.y,v:1}));if(traces.length>160)traces.splice(0,traces.length-160);}
+ for(let i=traces.length-1;i>=0;i--){traces[i].v-=dt/18;if(traces[i].v<=0)traces.splice(i,1);}
+ revealMix+=(Number(reveal)-revealMix)*(1-Math.exp(-dt*5));
+}
+function paint(){
+ ctx.fillStyle='#080d10';ctx.fillRect(0,0,W,H);
+ // Overlapping volumes share the entire field; no tile boundaries or sample buttons.
+ for(const p of places){
+  const [r,g,b]=p.color,x=p.x*W,y=p.y*H,rad=Math.max(W*.43,H*.29);
+  const glow=ctx.createRadialGradient(x,y,0,x,y,rad);glow.addColorStop(0,`rgba(${r},${g},${b},${.055+p.weight*.065+level*.07})`);glow.addColorStop(1,`rgba(${r},${g},${b},0)`);ctx.fillStyle=glow;ctx.fillRect(0,0,W,H);
+ }
+ const separation=revealMix*22;
+ for(let layer=0;layer<3;layer++){
+  for(let line=0;line<48;line++){
+   const yy=(.12+line/62)*H,phase=line*.31+layer*.8;
+   ctx.beginPath();let tint=places[Math.floor(line/10)%places.length].color;
+   for(let j=0;j<=52;j++){
+    const x=j/52*W,nx=x/W,ny=yy/H;let displacement=0,coherence=0;
+    for(const p of places){const dist=(nx-p.x)**2+(ny-p.y)**2,k=Math.exp(-dist/.045);
+     coherence+=k*p.coherence;displacement+=k*Math.sin(nx*9+phase+p.phase+clock*(reduced?0:.12))*(19+level*55)*(1-p.coherence*.65);
+    }
+    for(const t of touches.values()){const dx=nx-t.x,dy=ny-t.y,k=Math.exp(-(dx*dx+dy*dy)/.022);displacement+=k*dy*H*.4;}
+    for(let q=0;q<traces.length;q+=4){const t=traces[q],k=Math.exp(-((nx-t.x)**2+(ny-t.y)**2)/.004);displacement+=k*t.v*3;}
+    const fine=Math.sin(nx*54+phase*3+Math.sin(nx*11+phase))*2.5*(1-clamp(coherence));
+    const y=yy+displacement+fine+layer*2+separation*(layer-1)*Math.sin(nx*3+1);
+    if(j===0)ctx.moveTo(x,y);else ctx.lineTo(x,y);
+   }
+   ctx.strokeStyle=`rgba(${tint.join(',')},${.12+layer*.065})`;ctx.lineWidth=layer===2?.65:1;ctx.stroke();
   }
-  return buf;
+ }
+ for(const t of traces){ctx.beginPath();ctx.ellipse(t.x*W,t.y*H,2+t.v*4,1.2,0,0,Math.PI*2);ctx.fillStyle=`rgba(229,199,151,${t.v*.13})`;ctx.fill();}
+ if(touches.size===2){const [a,b]=[...touches.values()];ctx.beginPath();ctx.moveTo(a.x*W,a.y*H);ctx.bezierCurveTo(a.x*W,b.y*H,b.x*W,a.y*H,b.x*W,b.y*H);ctx.strokeStyle='rgba(225,207,170,.35)';ctx.lineWidth=1;ctx.stroke();}
+ for(const t of touches.values()){
+  const radius=18+Math.min(t.age,3)*10;const glow=ctx.createRadialGradient(t.x*W,t.y*H,0,t.x*W,t.y*H,radius*2);glow.addColorStop(0,'rgba(237,224,188,.23)');glow.addColorStop(1,'rgba(237,224,188,0)');ctx.fillStyle=glow;ctx.fillRect(t.x*W-radius*2,t.y*H-radius*2,radius*4,radius*4);
+  ctx.beginPath();ctx.arc(t.x*W,t.y*H,radius,0,Math.PI*2);ctx.strokeStyle='rgba(231,219,185,.4)';ctx.lineWidth=.6;ctx.stroke();
+ }
+ for(const p of places){
+  const x=p.x*W,y=p.y*H;ctx.fillStyle=`rgba(${p.color.join(',')},${.35+p.weight*.5})`;ctx.beginPath();ctx.arc(x,y,1.8,0,Math.PI*2);ctx.fill();
+  if(revealMix>.01){ctx.save();ctx.globalAlpha=revealMix;ctx.font='10px ui-monospace,monospace';ctx.textAlign='center';ctx.fillStyle='#d5d4c4';ctx.fillText(p.name,x,y-29);ctx.fillStyle='#92a49f';ctx.fillText(`${Math.round(p.grain*1000)} ms · ${Math.round(p.coherence*100)}% gathered`,x,y-14);
+   // The read head traverses an exposed temporal ribbon in reverse, using the audio clock.
+   ctx.strokeStyle='rgba(184,198,182,.35)';ctx.beginPath();ctx.moveTo(x-34,y+12);ctx.lineTo(x+34,y+12);ctx.stroke();
+   const ph=ac?(ac.currentTime+p.phase)%p.grain/p.grain:0;ctx.fillStyle='#e2bb7b';ctx.fillRect(x+34-ph*68,y+9,2,6);ctx.restore();}
+ }
+ if(pending){ctx.strokeStyle='#e6d6b7';ctx.setLineDash([3,6]);ctx.beginPath();ctx.arc(focus.x*W,focus.y*H,27,0,Math.PI*2);ctx.stroke();ctx.setLineDash([]);}
 }
-
-async function loadBbcAmbient(key: string) {
-  const entry = BBC_AMBIENTS[key];
-  if (!entry) return;
-  setPresence('Bringing a BBC atmosphere…', '');
-  creditEl.hidden = false;
-  const ctx = ensureCtx();
-  for (const url of entry.urls) {
-    try {
-      const res = await fetch(url, { mode: 'cors' });
-      if (!res.ok) throw new Error(String(res.status));
-      originalBuffer = await ctx.decodeAudioData((await res.arrayBuffer()).slice(0));
-      reprocess();
-      setPresence(`${entry.label} is present.`, 'BBC · the rule is already acting.');
-      if (driftEl.checked) startDrift();
-      return;
-    } catch {}
-  }
-  creditEl.hidden = true;
-  originalBuffer = makeFallbackBed();
-  reprocess();
-  setPresence('Archive unreachable.', 'A quiet bed is used. Bring your own sound if you wish.');
-  if (driftEl.checked) startDrift();
+let textClock=0;
+function frame(now:number){
+ const dt=Math.min(.05,(now-last)/1000);last=now;clock+=dt;update(dt);
+ if(analyser&&audioData&&playing){analyser.getByteTimeDomainData(audioData);let s=0;for(const a of audioData)s+=((a-128)/128)**2;level+=(Math.sqrt(s/audioData.length)*4-level)*.2;}else level*=.95;
+ paint();textClock+=dt;
+ if(textClock>.25){textClock=0;const ranked=[...places].sort((a,b)=>b.weight-a.weight);where.textContent=entered?ranked.filter(p=>p.weight>.23).slice(0,2).map(p=>p.name).join(' × '):'touch / hold / wander';detail.textContent=reveal?'local reversal / continuous transport / decaying touch memory':pending?'local audio · never uploaded':'';}
+ frameId=requestAnimationFrame(frame);
 }
-
-root.querySelector('#sample')!.addEventListener('change', (e) => {
-  const v = (e.target as HTMLSelectElement).value;
-  if (v && BBC_AMBIENTS[v]) void loadBbcAmbient(v);
-});
-
-// reveal / hide
-const substrate = root.querySelector('#substrate') as HTMLElement;
-root.querySelector('#reveal-btn')!.addEventListener('click', () => {
-  targetReveal = 1;
-  substrate.hidden = false;
-  setPresence('Substrate visible.', 'You are reading the rule as well as hearing its effects.');
-});
-root.querySelector('#hide-btn')!.addEventListener('click', () => {
-  targetReveal = 0;
-  substrate.hidden = true;
-  setPresence(playing ? 'Listening.' : 'A sound is present.', playing ? 'The precept is active beneath the surface.' : 'The rule remains beneath the surface.');
-});
-
-// query + preview
-const grainQ = qs.get('grain');
-if (grainQ && !Number.isNaN(+grainQ)) {
-  grainEl.value = String(Math.min(180, Math.max(12, +grainQ)));
-  grainVal.textContent = `${grainEl.value} ms`;
-}
-if (isPreview) {
-  document.documentElement.classList.add('preview');
-  originalBuffer = makeFallbackBed(3.5);
-  if (!grainQ) { grainEl.value = '36'; grainVal.textContent = '36 ms'; }
-  reprocess();
-  setPresence('A sound is present.', '');
-} else {
-  setPresence('A sound is present.', 'The rule that shapes it remains beneath the surface.');
-}
+if(preview)root.classList.add('preview');
+frameId=requestAnimationFrame(frame);
+document.addEventListener('visibilitychange',()=>{if(document.hidden){touches.clear();silence();if(ac)void ac.suspend();cancelAnimationFrame(frameId);}else{last=performance.now();frameId=requestAnimationFrame(frame);}});
+addEventListener('pagehide',(event:PageTransitionEvent)=>{if(event.persisted){silence();return;}clearInterval(timer);cancelAnimationFrame(frameId);for(const s of active)try{s.stop();}catch{}if(ac)void ac.close();});
