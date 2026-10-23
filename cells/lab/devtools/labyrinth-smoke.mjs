@@ -148,7 +148,7 @@ await withWood(async (lab) => {
   const land0 = await p.evaluate(() => window.__labyrinth.R.dials.land);
   await p.evaluate(() => { const i = document.querySelectorAll('#layers .dial input')[1]; i.value = '1000'; i.dispatchEvent(new Event('input', { bubbles: true })); });
   const after = await p.evaluate(() => ({ land: window.__labyrinth.R.dials.land, q: location.search }));
-  c.ok('a layer touched opens its sliders; dragged, the picture follows and the address keeps it', (await p.locator('#layers .dial').count()) === 3 && land0 < 1 && after.land === 1 && /print/.test(after.q) && /terrain=1/.test(after.q) && !/[?&]land=/.test(after.q), { land0, after });
+  c.ok('a layer touched opens its sliders; dragged, the picture follows and the address keeps it', (await p.locator('#layers .dial').count()) === 4 && land0 < 1 && after.land === 1 && /print/.test(after.q) && /terrain=1/.test(after.q) && !/[?&]land=/.test(after.q), { land0, after });
   await p.click('#print'); await p.waitForTimeout(200);
   c.ok('and out of print, the brushes again', (await visible('#hands')) && !(await visible('#layers')) && !/print/.test(await p.evaluate(() => location.search)));
   const kept = await p.evaluate(() => window.__labyrinth.world.encode());

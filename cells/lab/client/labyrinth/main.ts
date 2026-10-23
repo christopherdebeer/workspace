@@ -11,7 +11,7 @@
  *
  * `?story=1..4` (the storyboard: first touch, a wall traced, an elevated connection, a resolved labyrinth) ·
  * `?ops=` (operations, as the model writes them) · `?brush=` · `?sheet` · `?select=k.i.j[&whole]` · `?print` (the layers in hand) · `?paper` · `?marks` (the drawing's marks by why they're there) · `?turn=` ·
- * `?zoom=` · `?preview` · `?still` · `?held` (the view never reframes on its own) · `?look=picture` · `?built= ?terrain= ?water= ?colour= ?shadow= ?landshadow= ?toward= ?fade= ?lines= ?under= ?edges=` (the dials: picture and drawing, judged apart) · `?instant` (no rising, no gliding, no dust, no cats: for pictures taken by a slow
+ * `?zoom=` · `?preview` · `?still` · `?held` (the view never reframes on its own) · `?look=picture` · `?built= ?terrain= ?water= ?colour= ?colourreach= ?shade= ?cast= ?hollow= ?landlight= ?lightreach= ?lines= ?edges= ?inkreach= ?inkfade= ?under= ?toward=` (the dials: picture and drawing, judged apart) · `?instant` (no rising, no gliding, no dust, no cats: for pictures taken by a slow
  * renderer, where every transition is frames it hasn't time for)
  */
 import { CENTER, World, inGrid, key, replay, unkey, type Alt, type Cell, type Op } from './model';
@@ -39,24 +39,29 @@ const R = new Renderer(canvas);
 R.print = qs.has('paper');
 R.marks = qs.has('marks');
 R.clay = qs.has('clay');
-// (the dials, to judge the picture and the drawing apart: `?built=`, `?terrain=` and `?water=` 0–1 the picture's colour over
-// the page, what's built, the land and its water apart (`?colour=`, or `color`, all; the water as the land unless set);
-// `?shadow=` 0–2 its light as a layer of its own (`?landshadow=` the land's and its water's apart, as `?shadow=` if
-// that's set); `?toward=` 0–1 how far everything's taken along its way to the page; `?fade=` how far its way to the page
-// runs (a multiple), `?lines=` 0–1 the marks', `?under=` 0–1 how much of the line layer carries on under the picture,
-// `?edges=` 0–1 the outline ink's. Unset, they're at the house setting (static/labyrinth-look.md, "The house setting"):
-// what's built in its colour, a little quieted; the land the paper's own, its shade a warm wash and its contours
-// through it; the water still water. `?look=picture`: the whole picture as it's lit, every dial at its plain value)
+// (the dials, to judge the picture and the drawing apart, each a layer's strength or its reach (layers.ts): the colour,
+// `?built=`, `?terrain=`, `?water=` 0–1 (`?colour=`, or `color`, all; the water as the land unless set) and
+// `?colourreach=`; the light by kind, `?shade= ?cast= ?hollow=` 0–2, `?landlight=` the land's share of its shade and
+// hollows, `?lightreach=`; the ink, `?lines=` (the marks, and the contours and hatching laid into the picture),
+// `?edges=` (the outlines), `?inkreach=`, `?inkfade=` 0 thinning out, 1 fading; `?under=` how much of the drawing lies
+// under the picture; `?toward=` how far everything's taken to the page. The reaches are multiples (1 as it was). Unset,
+// they're at the house setting (static/labyrinth-look.md, "The house setting"); `?look=picture`: the whole picture as
+// it's lit, every dial at its plain value)
 {
   const dial = (k: string, lo: number, hi: number) => { const v = Number(qs.get(k)); return qs.has(k) && Number.isFinite(v) ? Math.min(hi, Math.max(lo, v)) : null; };
   const base = qs.get('look') === 'picture' ? PRESETS.picture : HOUSE;
-  const colour = dial('colour', 0, 1) ?? dial('color', 0, 1), shadow = dial('shadow', 0, 2);
-  // (the land's colour is `?terrain=`: `?land=` is the land's own seed)
+  // (the older dials still read: \`?shadow=\` every kind of light at once, \`?landshadow=\` the land's share of it, \`?fade=\`
+  // every reach at once)
+  const colour = dial('colour', 0, 1) ?? dial('color', 0, 1), shadow = dial('shadow', 0, 2), landshadow = dial('landshadow', 0, 2), fade = dial('fade', 0.1, 10);
   const land = dial('terrain', 0, 1) ?? colour ?? base.land;
   R.dials = {
     built: dial('built', 0, 1) ?? colour ?? base.built, land, water: dial('water', 0, 1) ?? (colour ?? dial('terrain', 0, 1) ?? base.water),
-    shadow: shadow ?? base.shadow, landshadow: dial('landshadow', 0, 2) ?? shadow ?? base.landshadow,
-    toward: dial('toward', 0, 1) ?? base.toward, fade: dial('fade', 0.1, 10) ?? base.fade, lines: dial('lines', 0, 1) ?? base.lines, under: dial('under', 0, 1) ?? base.under, edges: dial('edges', 0, 1) ?? base.edges,
+    colourreach: dial('colourreach', 0.1, 10) ?? fade ?? base.colourreach,
+    shade: dial('shade', 0, 2) ?? shadow ?? base.shade, cast: dial('cast', 0, 2) ?? shadow ?? base.cast, hollow: dial('hollow', 0, 2) ?? shadow ?? base.hollow,
+    landlight: dial('landlight', 0, 2) ?? (landshadow !== null ? landshadow / Math.max(shadow ?? 1, 0.05) : base.landlight),
+    lightreach: dial('lightreach', 0.1, 10) ?? fade ?? base.lightreach,
+    lines: dial('lines', 0, 1) ?? base.lines, edges: dial('edges', 0, 1) ?? base.edges, inkreach: dial('inkreach', 0.1, 10) ?? fade ?? base.inkreach, inkfade: dial('inkfade', 0, 1) ?? base.inkfade,
+    under: dial('under', 0, 1) ?? base.under, toward: dial('toward', 0, 1) ?? base.toward,
   };
 }
 R.shadows = !qs.has('noshadow');

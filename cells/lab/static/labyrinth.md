@@ -264,11 +264,13 @@ There's no cap on how high it goes: tap a column up as far as you like, and the 
 
 | Layer | Its sliders |
 |---|---|
-| **page** | how far everything's taken to the page; the reach of that fade; and where to start from (house, picture, drawing, page) |
+| **page** | how far everything's taken to the page; where to start from (house, picture, drawing, study, page) |
 | **under** | how much of the drawing lies under the picture |
-| **colour** | what's built, the land, the water |
-| **light** | the shade and shadows of what's built, and of the land |
-| **ink** | the marks, and the outlines |
+| **colour** | what's built, the land, the water; its reach |
+| **light** | shade, cast, hollows; how much of them the land keeps; its reach |
+| **ink** | marks, outlines; their reach; thin ↔ fade (how they give out) |
+
+Each layer's reach is how far out from what's built it goes, so the colour can be held close while the light carries on past it (in sepia on the paper) and the lines further still.
 
 - **Using it:** touch a layer and its sliders open under it. The picture follows as you drag, and a small mark on each slider shows the house value; a double tap on a slider's name puts it back. Each layer's slot shows its first value as a line under its name.
 - **The stone:** while print is open, the stone is only turned and asked about (the hand brush). The brush you had comes back when you leave print.

@@ -193,23 +193,34 @@ Past the picture's reach, it's strokes on the paper only.
 
 In the app, **print** puts these in hand as layers with sliders (labyrinth.md, "Print: the layers in hand"), and the address keeps what's set. As URL dials, they're for looking at the layers separately. Unset, each is at the house setting (below); `?look=picture` sets them all to their plain values, the whole picture as it's lit.
 
-| Dial | Range | What it does |
+![Reaches: the light past the colour; lines thinning or fading](labyrinth/look-reach.jpg)
+
+Each layer is a strength and a reach. The strength is how much of it there is. The reach is how far out from what's built it goes before it gives way to the page: a multiple of its own, 1 as it was. So the colour can be held close round the settlement, the light can carry on past it onto the paper (in sepia there), and the lines can go further still.
+
+| Dial | Range, house value | What it does |
 |---|---|---|
-| `built` | 0–1, house .8 | The colour of what's built, as a layer multiplied over the page: how strongly its colour lies on the paper. Its light is a separate layer (`shadow`). |
-| `terrain` | 0–1, house .3 | The same for the land: the ground, its rock and dry-stone, and what grows on it. |
-| `water` | 0–1, house .8 (else as `terrain`) | The same for the water, which otherwise follows the land. |
-| `colour` (or `color`) | 0–1 | Sets `built`, `terrain` and `water` together; each can still be set on its own. |
-| `shadow` | 0–2, house 1.15 | The light as its own layer: the shade side, cast shadows and the hollows, as how much darker each surface is than in full sun. 0 is flat colour, 1 is as lit, 2 is twice as deep. It holds whatever the colour is, so `colour=0` leaves the shading on the paper. |
-| `landshadow` | 0–2, house .5 (else as `shadow`) | The light layer for the land and its water, apart from what's built. Where the colour's taken off, the light goes to a warm sepia, not the sky's grey. |
-| `toward` | 0–1, default 0 | How far everything is taken along its own way to the page: trees first, then the ground and the water, then what's built. The light goes first on that way, so shadows go with it. (This was `colour` before.) |
-| `fade` | ×0.1–10, default 1 | How far that way to the page runs: a multiple of the picture's falloff and the lines' reach. |
-| `lines` | 0–1, default 1 | The ink marks' opacity: rims, hachures, contours, banks, branches. |
-| `under` | 0–1, house .7 | How much of the drawing lies under the picture (the marks, the land's contours, the outlines). It's multiplied through it, as ink under a wash: the lines darken whatever is over them, so they show even at full `colour`. |
-| `edges` | 0–1, default 1 | The outline ink's opacity (the post pass's silhouettes and creases). |
+| `built` | 0–1, .8 | The colour of what's built, as a layer multiplied over the page. |
+| `terrain` | 0–1, .3 | The same for the land: the ground, its rock and dry-stone, and what grows on it. (`?land=` is the land's seed, so the land's colour is `terrain`.) |
+| `water` | 0–1, .8 | The same for the water. |
+| `colour` (or `color`) | 0–1 | Sets `built`, `terrain` and `water` together. |
+| `colourreach` | ×.25–4, 1 | How far the colour goes from what's built. Where it's gone, a thing is drawn rather than painted: its material's detail, a tree's crown cut through. |
+| `shade` | 0–2, 1.15 | The light, by kind: a thing's side turned from the sun. 0 none, 1 as lit, 2 twice as deep. |
+| `cast` | 0–2, .75 | The shadows things cast, as deep wherever they fall, on a wall or on the ground. |
+| `hollow` | 0–2, 1.15 | What shuts out the sky: recesses, the feet of walls, under eaves. |
+| `landlight` | 0–2, .45 | How much of its shade and hollows the land keeps (its cast shadows are `cast`'s). |
+| `lightreach` | ×.25–4, 1 | How far the light goes. Past the colour's reach, it lies on the paper in sepia. |
+| `lines` | 0–1, 1 | The ink marks: rims, hachures, banks, branches, and the land's contours and the shade's hatching. |
+| `edges` | 0–1, 1 | The outline ink (the post pass's silhouettes and creases). |
+| `inkreach` | ×.25–4, 1 | How far the lines go, and the things drawn by them (rocks, scrub, trees out on the land), before they give out. |
+| `inkfade` | 0–1, 0 | How the lines give out: 0 thinning (fewer of them, each as dark), 1 fading (all of them, paler), or between. |
+| `under` | 0–1, .7 | How much of the drawing lies under the picture, its lines darkening through it. |
+| `toward` | 0–1, 0 | How far everything is taken to the page at once. |
 
 The layers composite as multiply, bottom to top: paper; the drawing under (`under`); the colour (`built`, `terrain`, `water`), each surface's colour as it is in full sun; the light (`shadow`); then the marks and outlines (`lines`, `edges`). Each ink is measured as a fraction of the paper, so on bare paper it's its own colour. The colour is taken out from under the drawing's own ink (hatching, contours), which stays. With `?look=picture` the look is as it was before the dials (within 1/255 on average).
 
-Together: `?colour=0&under=1` is the scene as a drawing on paper with its shading; `?terrain=0` is the built in colour on a drawn, shaded land; `?colour=1&under=1` is the full picture with the drawing showing through it; `?shadow=0` is flat colour; `?toward=1` is the whole scene taken to the page.
+The older dials still read: `shadow` sets `shade`, `cast` and `hollow` together, `landshadow` becomes `landlight`, and `fade` sets all three reaches.
+
+Together: `?colour=0&under=1` is the scene as a drawing on paper with its shading; `?terrain=0` is the built in colour on a drawn, shaded land; `?colour=1&under=1` is the full picture with the drawing showing through it; `?shade=0&cast=0&hollow=0` is flat colour; `?colourreach=0.6&lightreach=1.6&inkreach=2&inkfade=0.6` holds the colour close, the light past it, and the lines furthest, fading (print's "study"); `?toward=1` is the whole scene taken to the page.
 
 ## The house setting: found by looking
 
