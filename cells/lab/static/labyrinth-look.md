@@ -195,16 +195,20 @@ URL dials for looking at the layers separately. With none set, the look is uncha
 
 | Dial | Range | What it does |
 |---|---|---|
-| `colour` (or `color`) | 0–1, default 1 | The coloured picture's opacity, as a layer multiplied over the page: its colour and its light (the sun's side, cast shadows, the hollows) fade toward the paper together, in proportion. Where the scene is already drawn, it's left as it is. |
+| `built` | 0–1, default 1 | The colour of what's built, as a layer multiplied over the page: how strongly its colour lies on the paper. Its light is a separate layer (`shadow`). |
+| `land` (or `terrain`) | 0–1, default 1 | The same for the land: the ground, its rock and dry-stone, and what grows on it. |
+| `water` | 0–1, default `land` | The same for the water, which otherwise follows the land. |
+| `colour` (or `color`) | 0–1 | Sets `built`, `land` and `water` together; each can still be set on its own. |
+| `shadow` | 0–2, default 1 | The light as its own layer: the shade side, cast shadows and the hollows, as how much darker each surface is than in full sun. 0 is flat colour, 1 is as lit, 2 is twice as deep. It holds whatever the colour is, so `colour=0` leaves the shading on the paper. |
 | `toward` | 0–1, default 0 | How far everything is taken along its own way to the page: trees first, then the ground and the water, then what's built. The light goes first on that way, so shadows go with it. (This was `colour` before.) |
 | `fade` | ×0.1–10, default 1 | How far that way to the page runs: a multiple of the picture's falloff and the lines' reach. |
 | `lines` | 0–1, default 1 | The ink marks' opacity: rims, hachures, contours, banks, branches. |
 | `under` | 0–1, default 0 | How much of the drawing lies under the picture (the marks, the land's contours, the outlines). It's multiplied through it, as ink under a wash: the lines darken whatever is over them, so they show even at full `colour`. |
 | `edges` | 0–1, default 1 | The outline ink's opacity (the post pass's silhouettes and creases). |
 
-The layers composite as multiply, bottom to top: paper, the drawing under (`under`), the picture (`colour`), then the marks and outlines (`lines`, `edges`), each ink as a fraction of the paper so on bare paper it's its own colour. With no dials set the look is as before (within 1/255 on average).
+The layers composite as multiply, bottom to top: paper; the drawing under (`under`); the colour (`built`, `land`, `water`), each surface's colour as it is in full sun; the light (`shadow`); then the marks and outlines (`lines`, `edges`). Each ink is measured as a fraction of the paper, so on bare paper it's its own colour. The colour is taken out from under the drawing's own ink (hatching, contours), which stays. With no dials set the look is as before (within 1/255 on average).
 
-Together: `?colour=0&under=1` is the scene as a drawing on paper; `?colour=1&under=1` is the full picture with the drawing showing through it; `?colour=0.5&under=0.8` is a half-faded picture over the drawing, its shadows half-faded with it; `?toward=1` is the whole scene taken to the page.
+Together: `?colour=0&under=1` is the scene as a drawing on paper with its shading; `?land=0` is the built in colour on a drawn, shaded land; `?colour=1&under=1` is the full picture with the drawing showing through it; `?shadow=0` is flat colour; `?toward=1` is the whole scene taken to the page.
 
 ## Stage 23: crags, broken ground, and what the sheet still asked for
 

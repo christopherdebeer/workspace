@@ -114,9 +114,10 @@ uniform highp sampler2DShadow uShadow; uniform highp sampler2D uShadowRaw; unifo
 // (the sun's map: how much of the world a texel of it covers, and how deep its range is, so its bias and its softness are
 // in the world's own units whatever it's fitted to)
 uniform float uTexel, uDepthRange, uMarks, uClay;
-// (\`?colour=\`: the picture's opacity over the page (unset: whole); \`?toward=\`: how far everything's taken along its way
-// to the page (unset: not at all))
-uniform float uPale, uToward, uUnder;
+// (\`?built= ?land= ?water=\` (\`?colour=\` all): the picture's colour over the page, what's built, the land and the water
+// apart (unset: whole; the water as the land); \`?shadow=\`: its light (the sun's side and the shade, what's cast, the hollows) as a layer of its own, 0 none, 1
+// as lit, 2 twice as deep; \`?toward=\`: how far everything's taken along its way to the page (unset: not at all))
+uniform float uBuiltK, uLandK, uWaterK, uShade, uToward, uUnder;
 layout(location=0) out vec4 oCol; layout(location=1) out vec4 oNrm;
 float leafEdge(vec3 n) { float rim = 1. - abs(dot(n, normalize(uDir))); return .8 * pow(rim, 1.6) - .08; }
 float hash(vec3 p) { return fract(sin(dot(p, vec3(127.1, 311.7, 74.7))) * 43758.5453); }
@@ -237,6 +238,16 @@ vec3 coat(int c, float h, vec3 n, float tone) {
   c0 = mix(c0, pale, under * (white > 0. ? 1. : .75));
   if (part == 4.) c0 *= .82;
   return c0;
+}
+// (the display transform: exposure; a filmic curve with a soft shoulder, on how bright it is, so a colour keeps its hue
+// (terracotta doesn't go orange as it brightens); the brightest a little paler, as film takes them; back to how it's
+// seen)
+vec3 shown(vec3 c) {
+  vec3 xc = c * .5;
+  float L0 = max(dot(xc, vec3(.2126, .7152, .0722)), 1e-5), L1 = clamp((L0 * (2.51 * L0 + .03)) / (L0 * (2.43 * L0 + .59) + .14), 0., 1.);
+  c = xc * (L1 / L0);
+  c = mix(c, vec3(L1), smoothstep(.55, 1., L1) * .35);
+  return pow(clamp(c, 0., 1.), vec3(1. / 2.2));
 }
 void main() {
   vec3 n = normalize(vNrm);
@@ -516,16 +527,14 @@ void main() {
   }
   // (a coat's soft sheen where it turns from the eye, lit)
   if (fur) c += alb * vec3(1., .86, .66) * .8 * pow(1. - abs(dot(n, normalize(uDir))), 2.5) * (.4 + .6 * sh);
-  // (the display transform: exposure; a filmic curve with a soft shoulder, on how bright it is, so a colour keeps its hue
-  // (terracotta doesn't go orange as it brightens); the brightest a little paler, as film takes them; back to how it's
-  // seen)
-  vec3 xc = c * .5;
-  float L0 = max(dot(xc, vec3(.2126, .7152, .0722)), 1e-5), L1 = clamp((L0 * (2.51 * L0 + .03)) / (L0 * (2.43 * L0 + .59) + .14), 0., 1.);
-  c = xc * (L1 / L0);
-  c = mix(c, vec3(L1), smoothstep(.55, 1., L1) * .35);
-  c = pow(clamp(c, 0., 1.), vec3(1. / 2.2));
+  // (the display transform, once; and the same surface wholly in the sun, unshaded, nothing shutting out its sky: what
+  // it's lit as is then a layer of its own, \`lit\`, how much darker than that it's seen (its shade, the shadows cast on
+  // it, its hollows), for \`?shadow=\` to scale apart from its colour)
+  vec3 full = shown(alb * (SKY + SUN));
+  c = shown(c);
+  vec3 lit = clamp(c / max(full, vec3(.02)), 0., 1.25);
   // (a lamp: lit from within)
-  if (mat == 9) c = vec3(1., .86, .58);
+  if (mat == 9) { c = vec3(1., .86, .58); lit = vec3(1.); }
   if (mat == 2) {
     // (water: clear, turquoise as it deepens over a pale bed, the bed showing through where it's shallow at a bank (its
     // depth, from the mesh, in tone); running water (its way, an angle, in how past 1) stirred along its run, the ripples
@@ -563,6 +572,8 @@ void main() {
     c = mix(vec3(.4, .5, .51), vec3(.93, .95, .94), smoothstep(.38, .78, st)) * (.82 + .18 * sh);
   }
   if (mat == 2 && vTone > .99) c = vec3(.93, .94, .91) * (.86 + .14 * noise(vPos * 40. + uTime));
+  // (water's light: only the shadow cast on it)
+  if (mat == 2) lit = vec3(vTone > .99 ? 1. : .8 + .2 * sh);
   // (the ramp from the picture to the page, by the picture's reach: whole round what's built; then, without an edge
   // anywhere, the picture less coloured and paler, all the way to the paper itself, as the ink comes up over it; past
   // it, the strokes alone, as far as the lines reach. No wash between: nothing laid as a tone of its own, nothing with a
@@ -573,6 +584,9 @@ void main() {
   vec3 washC = c;
   // (the land's own lines (its contours), kept apart, so they can show under a fainter picture (\`?under=\`))
   vec3 landInk = vec3(1.);
+  // (and all the ink laid into the picture here (the shade's hatching, the contours), so the colour can be taken from
+  // under it and leave it)
+  vec3 inkK = vec3(1.);
   if (onPaper && !sel && !fur) {
     drawn = 1. - smoothstep(.05, .9, gT);
     float L = dot(c, vec3(.3, .55, .15));
@@ -581,6 +595,7 @@ void main() {
     // toward the paper's own warmth; then it's the paper. What the light said goes on as the shade's hatching (below),
     // and in its recesses a narrow wash, held after the rest has gone)
     washC = mix(c, base, smoothstep(.0, .25, drawn));
+    lit = mix(lit, vec3(1.), smoothstep(.0, .25, drawn));
     // (and its colours simplified, before they drain: the land's drifts and patches gone to one colour for each surface,
     // so they don't lie on it as clouds as they pale)
     if (plain.x >= 0.) washC = mix(washC, plain, smoothstep(.0, .3, drawn));
@@ -598,7 +613,9 @@ void main() {
     float l2 = (1. - smoothstep(.35, 1.1, min(fract(h2), 1. - fract(h2)) / f2)) * (1. - smoothstep(.12, .2, f2));
     float brk = step(.25, noise(vec3(h1 * .35, h2 * .35, 3.)));
     if (uPaper > .5) washC = PAP * (1. + (.05 * noise(vPos * 31.) - .025));
-    washC *= 1. - (uPaper > .5 ? .26 : .34 * (1. - smoothstep(.8, 1., drawn))) * max(l1 * smoothstep(.55, .33, L), l2 * smoothstep(.3, .16, L)) * brk * smoothstep(.06, .3, drawn) * (mat == 3 ? 0. : 1.);
+    float hatch = 1. - (uPaper > .5 ? .26 : .34 * (1. - smoothstep(.8, 1., drawn))) * max(l1 * smoothstep(.55, .33, L), l2 * smoothstep(.3, .16, L)) * brk * smoothstep(.06, .3, drawn) * (mat == 3 ? 0. : 1.);
+    washC *= hatch;
+    if (mat != 2) inkK = vec3(hatch);
   }
   // (the land, held back: most of the way to its own pale, unlit, the shade still on it)
   bool land = onIt;
@@ -629,6 +646,7 @@ void main() {
     g = mix(PAP, g, .72);
     landInk = g / PAP;
     c = washC * mix(vec3(1.), landInk, smoothstep(.15, .7, drawn));
+    inkK *= mix(vec3(1.), landInk, smoothstep(.15, .7, drawn));
   }
   else if (onPaper && mat == 2 && !fur) {
     // (the stream, away from what's built: its water laid in broken strokes along it, then only a line or two)
@@ -655,11 +673,17 @@ void main() {
   // (what's taken up: a faint warm tint; its outline is drawn after, where the mask changes)
   if (sel) c = mix(c, c * vec3(1.1, .98, .84) + vec3(.05, .025, 0.), .6);
   if (uMarks > .5) c = mix(c, PAP, .82);
-  // (the layers multiplied, as a wash over ink on paper: \`?colour=\` the picture's opacity, its colour and its light (sun,
-  // shadow, hollows) going to the paper together, only where it's still a picture (what's drawn stays drawn); and
-  // \`?under=\`, as much of the drawing as lies under it, its lines darkening through whatever's over them)
+  // (the layers multiplied, as washes over ink on paper, each with its own opacity: the colour (\`?built= ?land= ?water=\`: what's built; the land, with what grows on it; its
+  // water), as it's seen in the sun, going to the paper; over it the light (\`?shadow=\`), how much darker than that
+  // it's seen, as deep as it's set whatever the colour; and under both, as much of the drawing as \`?under=\` lays there,
+  // its lines darkening through whatever's over them)
   if (!sel && !fur) {
-    if (uPale > 0.) c = mix(c, PAP, uPale * (1. - drawn));
+    bool ofLand = mat == 3 || mat == 4 || (mat == 5 && moss);
+    float colK = mat == 2 ? uWaterK : ofLand ? uLandK : uBuiltK;
+    if (colK < 1. || uShade != 1.) {
+      vec3 lt = clamp(lit, vec3(.03), vec3(1.25)), ik = max(inkK, vec3(.05));
+      c = mix(PAP, min(c / (lt * ik), vec3(1.)), colK) * pow(lt, vec3(uShade)) * ik;
+    }
     c *= mix(vec3(1.), landInk, uUnder * (1. - smoothstep(.15, .7, drawn)));
   }
   oCol = vec4(c, 1.);
@@ -709,9 +733,9 @@ void main() {
 const STROKE_FS = COMMON + REACH + `
 in vec3 vPos; in vec2 vSA; in vec3 vFam; in float vKeep;
 uniform float uMarks;
-// (\`?colour=\`, as in the picture; \`?lines=\`: the marks' opacity (as how much is taken off it); \`?under=\`: how much of the
+// (\`?toward=\`, as in the picture; \`?lines=\`: the marks' opacity (as how much is taken off it); \`?under=\`: how much of the
 // drawing lies under the picture, multiplied through it (unset: only the marks that keep there anyway))
-uniform float uPale, uToward, uLinesOff, uUnder;
+uniform float uToward, uLinesOff, uUnder;
 layout(location=0) out vec4 oCol; layout(location=1) out vec4 oNrm;
 float hash(vec3 p) { return fract(sin(dot(p, vec3(127.1, 311.7, 74.7))) * 43758.5453); }
 float noise(vec3 x) { vec3 i = floor(x), f = fract(x); f = f * f * (3. - 2. * f);
@@ -740,7 +764,7 @@ const POST_VS = `#version 300 es
 out vec2 vUv; void main() { vec2 p = vec2(gl_VertexID == 1 ? 3. : -1., gl_VertexID == 2 ? 3. : -1.); vUv = p * .5 + .5; gl_Position = vec4(p, 0., 1.); }`;
 const POST_FS = `#version 300 es
 precision highp float;
-in vec2 vUv; uniform sampler2D uCol, uNrm, uDepth; uniform vec2 uPx; uniform float uRange, uPrint, uDpr, uBleed, uWorldPx, uContact, uMarks, uAA, uClay, uEdgesOff, uPale, uUnder; uniform mat3 uViewRot;
+in vec2 vUv; uniform sampler2D uCol, uNrm, uDepth; uniform vec2 uPx; uniform float uRange, uPrint, uDpr, uBleed, uWorldPx, uContact, uMarks, uAA, uClay, uEdgesOff, uUnder; uniform mat3 uViewRot;
 out vec4 o;
 // (the edges smoothed where nothing's multisampled: the colour's luma across the pixel's corners says which way an edge
 // runs, and it's sampled along it (FXAA, after Lottes), kept only where it stays within the luma round it)
@@ -895,10 +919,10 @@ export class Renderer {
   marks = false;
   /** \`?clay\`: every surface one clay, no paper, no ink: the forms alone */
   clay = false;
-  /** the dials (\`?colour= ?toward= ?fade= ?lines= ?under= ?edges=\`): the picture's opacity over the page (its light kept as
-   * shading), how far everything's taken along its way to the page, how far that way runs (a multiple), the marks'
+  /** the dials (\`?built= ?land= ?water= ?shadow= ?toward= ?fade= ?lines= ?under= ?edges=\`; \`?colour=\` sets both colours): the
+   * picture's colour over the page, what's built, the land and its water apart; its light as a layer of its own (0–2); how far everything's taken along its way to the page, how far that way runs (a multiple), the marks'
    * opacity, how much of the line layer carries on under the picture, the outline ink's opacity */
-  dials = { colour: 1, toward: 0, fade: 1, lines: 1, under: 0, edges: 1 };
+  dials = { built: 1, land: 1, water: 1, shadow: 1, toward: 0, fade: 1, lines: 1, under: 0, edges: 1 };
   private vao: WebGLVertexArrayObject; private buf: WebGLBuffer; private count = 0;
   /** the ground's own (mesh.ts keeps it from one build to the next while nothing it reads changes): handed to the GPU
    * only when it's new */
@@ -1125,7 +1149,7 @@ export class Renderer {
     gl.uniformMatrix4fv(U('uVP'), false, cam.vp); gl.uniformMatrix4fv(U('uLight'), false, light);
     gl.uniform1f(U('uTime'), time); gl.uniform3fv(U('uSun'), this.sun); gl.uniform3fv(U('uEye'), cam.eye); gl.uniform3fv(U('uDir'), cam.dir); gl.uniform1f(U('uN'), 12); gl.uniform3fv(U('uArea'), this.area); gl.uniform1f(U('uShadows'), this.shadows ? 1 : 0); gl.uniform1f(U('uBleed'), this.bleed ? 1 : 0); gl.uniform1f(U('uPaper'), this.print ? 1 : 0); gl.uniform4fv(U('uLand'), this.landBox); this.bindFocus(this.main);
     gl.uniform1f(U('uTexel'), this.shadowTexel); gl.uniform1f(U('uDepthRange'), this.shadowRange);
-    gl.uniform1f(U('uLeafCut'), this.leafCut ? 1 : 0); gl.uniform1f(U('uMarks'), this.marks ? 1 : 0); gl.uniform1f(U('uClay'), this.clay ? 1 : 0); gl.uniform1f(U('uPale'), 1 - this.dials.colour); gl.uniform1f(U('uToward'), this.dials.toward); gl.uniform1f(U('uUnder'), this.dials.under);
+    gl.uniform1f(U('uLeafCut'), this.leafCut ? 1 : 0); gl.uniform1f(U('uMarks'), this.marks ? 1 : 0); gl.uniform1f(U('uClay'), this.clay ? 1 : 0); gl.uniform1f(U('uBuiltK'), this.dials.built); gl.uniform1f(U('uLandK'), this.dials.land); gl.uniform1f(U('uWaterK'), this.dials.water); gl.uniform1f(U('uShade'), this.dials.shadow); gl.uniform1f(U('uToward'), this.dials.toward); gl.uniform1f(U('uUnder'), this.dials.under);
     gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, this.shadowTex); gl.bindSampler(0, this.sCompare); gl.uniform1i(U('uShadow'), 0);
     gl.activeTexture(gl.TEXTURE3); gl.bindTexture(gl.TEXTURE_2D, this.shadowTex); gl.bindSampler(3, this.sRaw); gl.uniform1i(U('uShadowRaw'), 3);
     gl.drawArrays(gl.TRIANGLES, 0, this.count);
@@ -1137,7 +1161,7 @@ export class Renderer {
       const S = (n: string) => gl.getUniformLocation(this.stroke, n);
       gl.uniformMatrix4fv(S('uVP'), false, cam.vp); gl.uniform1f(S('uMarks'), this.marks ? 1 : 0); gl.uniform2f(S('uView'), w, h); gl.uniform1f(S('uDpr'), dpr); gl.uniform3fv(S('uDir'), cam.dir);
       gl.uniform1f(S('uBleed'), this.bleed ? 1 : 0); gl.uniform1f(S('uPaper'), this.print ? 1 : 0); gl.uniform4fv(S('uLand'), this.landBox); this.bindFocus(this.stroke);
-      gl.uniform1f(S('uPale'), 1 - this.dials.colour); gl.uniform1f(S('uToward'), this.dials.toward); gl.uniform1f(S('uLinesOff'), 1 - this.dials.lines); gl.uniform1f(S('uUnder'), this.dials.under);
+      gl.uniform1f(S('uToward'), this.dials.toward); gl.uniform1f(S('uLinesOff'), 1 - this.dials.lines); gl.uniform1f(S('uUnder'), this.dials.under);
       gl.bindVertexArray(this.svao);
       gl.enable(gl.BLEND); gl.blendFunc(gl.DST_COLOR, gl.ZERO); gl.depthMask(false); gl.disable(gl.CULL_FACE);
       gl.enable(gl.POLYGON_OFFSET_FILL); gl.polygonOffset(-2, -4);
@@ -1167,7 +1191,7 @@ export class Renderer {
     gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, this.nrm); gl.uniform1i(P('uNrm'), 1);
     gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, this.dep); gl.uniform1i(P('uDepth'), 2);
     gl.uniform2f(P('uPx'), 1 / w, 1 / h); gl.uniform1f(P('uRange'), cam.range); gl.uniform1f(P('uPrint'), this.print ? 1 : 0); gl.uniform1f(P('uMarks'), this.marks ? 1 : 0); gl.uniform1f(P('uClay'), this.clay ? 1 : 0); gl.uniform1f(P('uDpr'), dpr); gl.uniform1f(P('uBleed'), this.bleed ? 1 : 0); gl.uniform1f(P('uAA'), this.ms ? 0 : 1);
-    gl.uniform1f(P('uWorldPx'), (2 * view.zoom) / h); gl.uniform1f(P('uContact'), this.contact ? 1 : 0); gl.uniform1f(P('uEdgesOff'), 1 - this.dials.edges); gl.uniform1f(P('uPale'), 1 - this.dials.colour); gl.uniform1f(P('uUnder'), this.dials.under);
+    gl.uniform1f(P('uWorldPx'), (2 * view.zoom) / h); gl.uniform1f(P('uContact'), this.contact ? 1 : 0); gl.uniform1f(P('uEdgesOff'), 1 - this.dials.edges); gl.uniform1f(P('uUnder'), this.dials.under);
     gl.uniformMatrix3fv(P('uViewRot'), false, cam.rot);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     end();

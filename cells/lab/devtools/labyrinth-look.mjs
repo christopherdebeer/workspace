@@ -3,7 +3,7 @@
 // stream and its fall, a way out across it into the drawn land), drawn wide, close and far, each view a picture in devtools/out/look/NAME-VIEW.png and all of them on
 // one sheet, static/labyrinth/look-NAME.jpg. Every change to the renderer is looked at in these, before and after.
 //   --only=VIEW   --size=900   --frames (a time for each view's first frames, as a rough measure: not the phone's)
-//   --clay (every surface one clay: the forms alone)   --q=QUERY (one view of its own)   --marks (the drawing's marks by family, the picture faded under them)   --print (all of it on the paper)
+//   --clay (every surface one clay: the forms alone)   --q=QUERY (one view of its own)   --marks (the drawing's marks by family, the picture faded under them)   --print (all of it on the paper)   --views=wide,far (only those)   --dials=QUERY (laid on every view)
 process.env.EXPERIMENT = 'labyrinth'; process.env.READY = '__labyrinth';
 const opt = Object.fromEntries(process.argv.slice(2).filter((a) => a.startsWith('--')).map((a) => [a.slice(2).split('=')[0], a.includes('=') ? a.slice(a.indexOf('=') + 1) : true]));
 const { withWood } = await import('./harness.mjs');
@@ -20,6 +20,9 @@ export const VIEWS = [
 
 // (--q=QUERY: a view of its own instead of the set, for looking at one place: e.g. --q='story=16&zoom=0.12&at=0.9&turn=3')
 if (opt.q) VIEWS.splice(0, VIEWS.length, { name: 'q', query: opt.q });
+// (--views=wide,far: only those of the set; --dials=QUERY: the dials laid on every view, e.g. --dials='land=0.4&shadow=1.2')
+if (opt.views) { const want = new Set(String(opt.views).split(',')); VIEWS.splice(0, VIEWS.length, ...VIEWS.filter((v) => want.has(v.name))); }
+if (opt.dials) for (const v of VIEWS) v.query += `&${opt.dials}`;
 const tag = opt.tag ?? 'now', size = Number(opt.size ?? 900);
 const dir = new URL('./out/look/', import.meta.url).pathname;
 mkdirSync(dir, { recursive: true });
