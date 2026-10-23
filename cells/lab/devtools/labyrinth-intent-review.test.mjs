@@ -61,3 +61,24 @@ test('incomplete captures cannot be reviewed', t => {
   const root = fixture(t), m = readJSON(join(root, 'manifest.json')); m.complete = false;
   writeJSON(join(root, 'manifest.json'), m); assert.throws(() => review(root, 'next'), /incomplete/);
 });
+test('an authored intent is shown only after the critique is locked, and the next gesture waits on its judgment', t => {
+  const root = fixture(t);
+  writeJSON(join(root, 'sealed', 'land3-1', 'authored.json'), { id: 'land3-1', recipe: 'cross', intent: 'SECRET INTENT: a way across the stream' });
+  const next = review(root, 'next'); assert(!JSON.stringify(next).includes('SECRET'));
+  assert(!existsSync(join(root, 'reviews', 'land3-1', 'authored.json')));
+  expectation(root);
+  assert.throws(() => review(root, 'author'), /critique/);
+  const revealed = review(root, 'reveal'), c = readJSON(revealed.critique);
+  Object.assign(c, { reviewer: 'test', verdict: 'partial', matchedHypothesis: 'h1', observed: 'o', delta: 'd', evidence: 'e', preservation: 'p', feedback: 'f', recovery: 'r', nextExperiment: 'n' });
+  c.criteria[0].result = 'met'; c.criteria[0].evidence = 'seen'; writeJSON(revealed.critique, c);
+  assert.match(review(root, 'critique').instruction, /author/);
+  assert.match(review(root, 'next').instruction, /author/);
+  assert.equal(review(root, 'status').reviewed, 0);
+  const a = review(root, 'author'), j = readJSON(a.judgment);
+  assert.match(JSON.stringify(readJSON(a.authored)), /a way across/);
+  assert.throws(() => review(root, 'judge'), /reviewer/);
+  Object.assign(j, { reviewer: 'test', recovered: 'partly', recoveredBy: 'h1', toyVerdict: 'partial', evidence: 'e', gap: 'g' }); writeJSON(a.judgment, j);
+  review(root, 'judge');
+  assert.equal(review(root, 'next').id, 'land3-2');
+  assert.equal(review(root, 'status').reviewed, 1);
+});

@@ -72,7 +72,12 @@ export function hillAt(w: World, x: number, z: number): number {
     const dx = x - (i + a + 0.5), dz = z - (j + b + 0.5), k = Math.exp(-(dx * dx + dz * dz) / (2 * 0.8 * 0.8));
     num += k * lev(w, C, i + a, j + b); den += k;
   }
-  const h = num / den + (noise2(seed + 41, x * 0.55, z * 0.55) - 0.5) * 0.35 + (noise2(seed + 42, x * 1.7, z * 1.7) - 0.5) * 0.1 + roughAt(w, x, z);
+  const h0 = num / den + (noise2(seed + 41, x * 0.55, z * 0.55) - 0.5) * 0.35 + (noise2(seed + 42, x * 1.7, z * 1.7) - 0.5) * 0.1 + roughAt(w, x, z);
+  // (and honest about the levels the hand builds on (after the blind reviews: a hill drawn a level off a column read as
+  // a slope the column hasn't): over each column's middle the ground's held within a quarter level of the column's own,
+  // softly, the hold let go toward its edges so the slope between columns runs on unbroken)
+  const L = lev(w, C, i, j), d = Math.max(Math.abs(x - i - 0.5), Math.abs(z - j - 0.5));
+  const h = L < 0 ? h0 : L + 0.25 * Math.tanh((h0 - L) / 0.25) + (h0 - L - 0.25 * Math.tanh((h0 - L) / 0.25)) * smooth(0.12, 0.45, d);
   // (the stream's channel cut down into it: its bed flat across, its banks rising to the hill, wider the higher they are)
   const rv = nearRiver(w, x, z);
   if (!rv) return h;

@@ -74,8 +74,18 @@ function packet(root, id) {
   const img = readFileSync(imagePath(dir, 'before'));
   return { dir, before: JSON.parse(raw), hash: digest(Buffer.concat([raw, img])) };
 }
+/** an authored gesture (intent written before it was drawn) has one more stage, after the critique: the intent shown */
+const authoredOf = (root, id) => join(root, 'sealed', id, 'authored.json');
+const done = (root, id) => existsSync(join(root, 'reviews', id, 'critique.lock.json')) && (!existsSync(authoredOf(root, id)) || existsSync(join(root, 'reviews', id, 'authored.lock.json')));
 function active(root, m) {
-  return m.ids.find(id => !existsSync(join(root, 'reviews', id, 'critique.lock.json')));
+  return m.ids.find(id => !done(root, id));
+}
+export function validateJudgment(j, id, e) {
+  assert(j.id === id && text(j.reviewer), 'Judgment needs matching id and reviewer');
+  assert(['yes', 'partly', 'no'].includes(j.recovered), 'recovered: did your preferred reading express the authored intent (yes, partly, no)?');
+  assert(j.recoveredBy === null || e.hypotheses.some(h => h.id === j.recoveredBy), 'recoveredBy: the hypothesis of yours that matches the authored intent, or null');
+  assert(['fulfilled', 'acceptable-alternative', 'partial', 'misread', 'no-effect', 'unjudgeable'].includes(j.toyVerdict), 'toyVerdict: the result against the AUTHORED intent');
+  assert(text(j.evidence) && typeof j.gap === 'string', 'Give evidence, and the gap in a phrase (empty if none)');
 }
 function locked(root, id) {
   const p = packet(root, id), dir = join(root, 'reviews', id);
@@ -87,11 +97,13 @@ function locked(root, id) {
 export function review(root, command, file) {
   root = resolve(root);
   const m = manifest(root), id = active(root, m);
-  if (command === 'status') return { total: m.ids.length, reviewed: m.ids.filter(x => existsSync(join(root, 'reviews', x, 'critique.lock.json'))).length, active: id ?? null };
-  assert(['next', 'expect', 'reveal', 'critique'].includes(command), 'Commands: next, expect, reveal, critique, status');
+  if (command === 'status') return { total: m.ids.length, reviewed: m.ids.filter(x => done(root, x)).length, active: id ?? null };
+  assert(['next', 'expect', 'reveal', 'critique', 'author', 'judge'].includes(command), 'Commands: next, expect, reveal, critique, author, judge, status');
   if (!id) return { complete: true, message: 'All gestures reviewed' };
   const dir = join(root, 'reviews', id);
   mkdirSync(dir, { recursive: true });
+  const critiqued = existsSync(join(dir, 'critique.lock.json'));
+  if (command === 'next' && critiqued) return { id, instruction: 'This gesture was drawn for an intent written beforehand: run author to see it, then judge' };
   if (command === 'next') {
     assert(!existsSync(join(dir, 'revealed.json')), 'Finish the current critique before requesting the next gesture');
     const p = packet(root, id);
@@ -116,6 +128,19 @@ export function review(root, command, file) {
     return { id, committed: true, instruction: 'Expectation is locked. Run reveal.' };
   }
   const { p, e } = locked(root, id);
+  if (command === 'author' || command === 'judge') {
+    assert(critiqued, 'Commit the critique against your own expectation first');
+    const a = readJSON(authoredOf(root, id));
+    if (command === 'author') {
+      writeJSON(join(dir, 'authored.json'), a);
+      if (!existsSync(join(dir, 'judgment.json'))) writeJSON(join(dir, 'judgment.json'), { id, reviewer: '', recovered: '', recoveredBy: null, toyVerdict: '', evidence: '', gap: '' });
+      writeFileSync(join(dir, 'AUTHORED.md'), '# What the gesture was drawn for\n\nThis intent was written down before the gesture was drawn. Your expectation and critique are locked; do not revise them. Two separate questions:\n\n- recovered (yes, partly, no) and recoveredBy: did your PREFERRED reading express this intent? Which of your hypotheses (if any) matches it?\n- toyVerdict: judged against THIS intent, not yours, what did the toy make of it (fulfilled, acceptable-alternative, partial, misread, no-effect, unjudgeable)?\n\nevidence: from the before/after images and the visible text. gap: the difference in a phrase, empty if none. Fill judgment.json and run judge.\n');
+      return { id, authored: join(dir, 'authored.json'), judgment: join(dir, 'judgment.json'), instruction: 'Fill judgment.json, then run judge' };
+    }
+    const value = readJSON(file ?? join(dir, 'judgment.json')); validateJudgment(value, id, e.value);
+    writeJSON(join(dir, 'authored.lock.json'), { committedAt: new Date().toISOString(), value }, true);
+    return { id, committed: true, instruction: 'Run next for the next blind gesture' };
+  }
   if (command === 'reveal') {
     const resultRaw = readFileSync(join(p.dir, 'result.json')), after = readFileSync(imagePath(p.dir, 'after'));
     const resultHash = digest(Buffer.concat([resultRaw, after]));
@@ -142,10 +167,10 @@ export function review(root, command, file) {
   assert(receipt.expectationHash === e.valueHash, 'Reveal receipt does not match expectation');
   assert(receipt.resultHash === digest(Buffer.concat([readFileSync(join(p.dir, 'result.json')), readFileSync(imagePath(p.dir, 'after'))])), 'Result changed after reveal');
   writeJSON(join(dir, 'critique.lock.json'), { committedAt: new Date().toISOString(), expectationHash: e.valueHash, resultHash: receipt.resultHash, value }, true);
-  return { id, committed: true, instruction: 'Run next for the next blind gesture' };
+  return { id, committed: true, instruction: existsSync(authoredOf(root, id)) ? 'Run author: this gesture was drawn for an intent written beforehand' : 'Run next for the next blind gesture' };
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   const [command, root, file] = process.argv.slice(2);
-  try { assert(root, 'Usage: node labyrinth-intent-review.mjs <next|expect|reveal|critique|status> OUT [input.json]'); console.log(JSON.stringify(review(root, command, file), null, 2)); }
+  try { assert(root, 'Usage: node labyrinth-intent-review.mjs <next|expect|reveal|critique|author|judge|status> OUT [input.json]'); console.log(JSON.stringify(review(root, command, file), null, 2)); }
   catch (e) { console.error(e.message); process.exitCode = 1; }
 }

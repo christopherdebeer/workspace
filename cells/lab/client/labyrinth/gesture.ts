@@ -274,7 +274,8 @@ export function trace(w: World, start: Pick, path: Array<[number, number]>, end:
       const plant = { label: g.reading ?? g.note ?? 'planted along it', op: { ...g, alts: undefined } };
       if (!op) return { refused: 'nothing to lay along that', alts: [plant, ...(g.alts ?? [])] };
       if ('refused' in op) return { ...op, alts: [...(op.alts ?? []), plant, ...(g.alts ?? [])] };
-      return withMeeting(w, { ...op, alts: [...(op.alts ?? []), { label: g.reading ?? g.note ?? 'planted along it', op: { ...g, alts: undefined } }, ...(g.alts ?? []).slice(0, 1)] });
+      // (one planting offered, not two: the fan's room is for the other ways it could be built)
+      return withMeeting(w, { ...op, alts: [...(op.alts ?? []), { label: g.reading ?? g.note ?? 'planted along it', op: { ...g, alts: undefined } }] });
     }
   }
   return withMeeting(w, op);
@@ -406,6 +407,11 @@ function again(w: World, cells: Array<[number, number]>, intent: Intent, now: nu
 }
 
 /** a stroke read as it is, with the liberties taken with it (`Op.took`) */
+/** a stroke read as drawn, every turn kept (offered when the reading smoothed its jogs away: `smoothed`) */
+export function asDrawn(w: World, start: Pick, path: Array<[number, number]>, end: Pick | null, born: (i: number, j: number) => number, now = 0, rest: Array<[number, number]> = [], intent: Intent = 'mass'): Op | null {
+  const op = read(w, start, path, end, born, now, rest, intent, [], true);
+  return op && !('refused' in op) && adds(w, op) ? { ...op, alts: undefined, note: `${op.note ?? op.why}, as drawn`, reading: `${op.reading ?? op.note ?? op.why}, as drawn` } : null;
+}
 export function reading(w: World, start: Pick, path: Array<[number, number]>, end: Pick | null, born: (i: number, j: number) => number, now = 0, rest: Array<[number, number]> = [], intent: Intent = 'mass'): Op | Refusal | null {
   const took: string[] = [], op = read(w, start, path, end, born, now, rest, intent, took);
   return op && !('refused' in op) && (took.length || op.took?.length) ? { ...op, took: [...new Set([...took, ...(op.took ?? [])])] } : op;
@@ -419,16 +425,18 @@ export function reading(w: World, start: Pick, path: Array<[number, number]>, en
  * - from-foot: from a top, begun on the ground at its foot; jetty: out over water at the top's height;
  * - routed-round: round something in its way; arrives-along: on to the same top a cell or two from where it ended; skirted: a walk round, round a house; from-bank: begun on the bank;
  * - trimmed: its ends in the water left off; begun-on: begun a cell or more along it;
- * - straightened: its zigzags gathered into runs; foot-back: a flight's foot laid behind where it began;
+ * - straightened: its zigzags gathered into runs; smoothed: its jogs (a cell aside and back) run straight, the stroke
+ *   as drawn offered; foot-back: a flight's foot laid behind where it began;
  * - tower-instead, walkway-instead, wall-instead, court-instead: another kind of thing than drawn;
  * - chosen-instead: offered in place of a reading that lays nothing; moved-beside: a tap moved off a stair's way;
  * - whole-piece: a lift of all the top joined at that height, not just the column touched.
  */
-function read(w: World, start: Pick, path: Array<[number, number]>, end: Pick | null, born: (i: number, j: number) => number, now: number, rest: Array<[number, number]>, intent: Intent, took: string[]): Op | Refusal | null {
+function read(w: World, start: Pick, path: Array<[number, number]>, end: Pick | null, born: (i: number, j: number) => number, now: number, rest: Array<[number, number]>, intent: Intent, took: string[], exact = false): Op | Refusal | null {
   // (a stroke ending on a top at another height than it began climbs (or goes down): folded back on itself, to gain the
   // length its steps need, its fold's meant, not a jog to smooth away, nor a ring drawn round)
   const climbs = !!end && end.face === 'top' && surface(w, end) !== surface(w, start);
-  const walked = walk(path), cells = walked.closed ? walked.cells : unjog(walked.cells, !climbs);
+  const walked = walk(path), cells = walked.closed || exact ? walked.cells.slice() : unjog(walked.cells, !climbs);
+  if (cells.length < walked.cells.length) took.push('smoothed');
   // (a way drawn round, back to within a cell or two of its start: round, too; the gap closed)
   const gap = Math.max(Math.abs(cells[cells.length - 1][0] - cells[0][0]), Math.abs(cells[cells.length - 1][1] - cells[0][1]));
   // (nearly closed: a ring drawn round, its ends a cell or so apart; not one that ends on a top at another height than it
@@ -467,8 +475,10 @@ function read(w: World, start: Pick, path: Array<[number, number]>, end: Pick | 
   // so it's the last cell's ground)
   const last = cells[cells.length - 1], clear = cells.filter(([i, j]) => !w.stone(w.ground(i, j), i, j)).length;
   const q0 = cells.findIndex(([i, j]) => !w.stone(w.ground(i, j), i, j)), meets = q0 > 0 && cells.slice(q0).some(([i, j]) => w.stone(h0, i, j) || w.stone(h0 - 1, i, j));
-  const lastGround = !end && clear >= 2 && !meets && standing(w, w.ground(last[0], last[1]), last[0], last[1]) && w.ground(last[0], last[1]) < h0;
-  const descent = intent === 'mass' && start.face === 'top' && ((end?.face === 'ground' && surface(w, end) < h0) || lastGround);
+  // (after the blind reviews: and up to it, where it ends over ground higher than the top it left; read so in either
+  // intent, not only with mass in hand: a stroke from a top to ground at another height goes there)
+  const lastGround = !end && clear >= 2 && !meets && standing(w, w.ground(last[0], last[1]), last[0], last[1]) && w.ground(last[0], last[1]) !== h0;
+  const descent = start.face === 'top' && !closed && ((end?.face === 'ground' && surface(w, end) !== h0) || lastGround);
   if (!closed && end && (end.face !== 'ground' || intent === 'way' || descent) && !(end.hit[1] === cells[0][0] && end.hit[2] === cells[0][1])) {
     to = [surface(w, end), end.hit[1], end.hit[2]];
     // (climbing to a top it crossed onto earlier: it arrives where it first reached it, from the side it came)

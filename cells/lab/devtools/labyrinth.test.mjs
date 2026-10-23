@@ -552,14 +552,14 @@ ok(`blocks' outlines tried against where they're struck (${lively.form} sides)`,
     for (let j = 0; j <= 14; j++) for (let i = -2; i <= 14; i++) {
       const lv = TE.levelAt(w, i, j), y = TE.groundAt(w, i + 0.5, j + 0.5);
       if (TE.benched(w, i, j)) { benches++; if (Math.abs(y - lv) > 1e-9) benchOk = false; }
-      else if (!w.land.water.has(j * 1000 + i) && Math.abs(y - lv) >= 1) nearOk = false;
+      else if (!w.land.water.has(j * 1000 + i) && Math.abs(TE.hillAt(w, i + 0.5, j + 0.5) - lv) > 0.26) nearOk = false;
       if (TE.benched(w, i, j)) continue;
       // (a stream's bank where a bench stands over it is a quay: it falls straight to the water, by rights)
       if (w.land.water.has(j * 1000 + i) && [[1, 0], [-1, 0], [0, 1], [0, -1]].some(([a, b]) => TE.benched(w, i + a, j + b))) continue;
       for (let f = 0.05; f < 0.95; f += 0.1) { const a = TE.groundAt(w, i + f, j + 0.5), b = TE.groundAt(w, i + f + 0.1, j + 0.5); if (!TE.benched(w, Math.floor(i + f + 0.1), j)) maxStep = Math.max(maxStep, Math.abs(a - b)); }
     }
     ok('the land: under what\'s built, the ground is flat at its level exactly', benches > 20 && benchOk);
-    ok('the land: on open ground, near each column\'s level at its middle, never a level off', nearOk);
+    ok('the land: the hill within a quarter level of each column\'s own at its middle (the levels the hand builds on, honestly drawn; only a bench\'s cut or fill moves it further)', nearOk);
     ok('the land: on open ground, continuous (no step of more than a fraction of a level across it)', maxStep < 0.6);
     // (built right up to the stream on both banks: its water's never buried, the benches' edges fall to the bank)
     const MO = await load('../client/labyrinth/model.ts'), buried = [];

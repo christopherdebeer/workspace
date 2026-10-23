@@ -64,6 +64,76 @@ SETS[4] = [
   { name: 'land29', q: 'land=29&zoom=0.62&turn=1', seed: 2901, n: 4 },
   { name: 'land31', q: 'land=31&zoom=0.62&turn=2', seed: 3101, n: 4 },
 ];
+// (a fifth: intent first (after critique-001). Each gesture is drawn for an intent written down beforehand, from what
+// the land offers (its stream, its slopes, what's been built), and that intent is sealed with it: the reviewer reads the
+// gesture blind as before, then, the critique locked, is shown what it was drawn for. Two questions kept apart: did the
+// gesture say it (legibility), and did the toy build it (interpretation). The view held still (`held`))
+const AUTHORED = ['block', 'down-to-water', 'pair-a', 'pair-b', 'link', 'climb', 'cross', 'yard', 'winding'];
+SETS[5] = [
+  { name: 'land33', q: 'land=33&zoom=0.62&held', seed: 3301, script: AUTHORED },
+  { name: 'land35', q: 'land=35&zoom=0.62&turn=1&held', seed: 3501, script: AUTHORED },
+  { name: 'land37', q: 'land=37&zoom=0.62&turn=2&held', seed: 3701, script: AUTHORED },
+  { name: 'land39', q: 'land=39&zoom=0.62&turn=3&held', seed: 3901, script: AUTHORED },
+];
+const INTENTS = {
+  block: 'Raise a single block here.',
+  'down-to-water': 'A way down from the top of the block I just raised to the water\'s edge.',
+  'pair-a': 'Raise a block here, the first of two I mean to join.',
+  'pair-b': 'Raise a second block here, at the same ground level, to be joined to the first.',
+  link: 'A walkway joining the tops of the two blocks, at their height.',
+  climb: 'A path up the slope from here to the higher ground where I stop.',
+  cross: 'A way across the stream, from one bank to the other.',
+  yard: 'A walled yard enclosing this patch of ground.',
+  winding: 'A winding path on the ground that keeps the zigzags I drew.',
+};
+/** a gesture for an intent, from what the land offers now (null if it offers nowhere for it) */
+function authored(recipe, cells, stream, mem, R) {
+  const at = new Map(cells.map((c) => [`${c.i}.${c.j}`, c])), C = (i, j) => at.get(`${i}.${j}`);
+  const clear = (c) => c && !c.wet && !c.built && [[0, 0], [1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]].every(([a, b]) => !C(c.i + a, c.j + b)?.built);
+  const wetD = (c) => Math.min(...cells.filter((q) => q.wet).map((q) => Math.abs(q.i - c.i) + Math.abs(q.j - c.j)), 99);
+  const mid = (c) => Math.hypot(c.i - 5.5, c.j - 5.5);
+  const shuffle = (xs) => xs.map((x) => [R(), x]).sort((a, b) => a[0] - b[0]).map((x) => x[1]);
+  const best = (xs, score) => shuffle(xs).sort((a, b) => score(a) - score(b))[0] ?? null;
+  const line = (a, b, mids = 1, off = 0.1) => { const A = [a.i, a.j], B = [b.i, b.j], L = Math.hypot(B[0] - A[0], B[1] - A[1]), nx = -(B[1] - A[1]) / (L || 1), ny = (B[0] - A[0]) / (L || 1), ctl = [A]; for (let q = 1; q <= mids; q++) { const t = q / (mids + 1), o = (R() - 0.5) * off; ctl.push([A[0] + (B[0] - A[0]) * t + nx * o, A[1] + (B[1] - A[1]) * t + ny * o]); } ctl.push(B); return spline(ctl, 10); };
+  const tapAt = (c) => ({ kind: c.built ? 'tapTop' : 'tap', wpts: [[c.i + (R() - 0.5) * 0.2, c.j + (R() - 0.5) * 0.2]], desc: `tap at ${c.i},${c.j}` });
+  if (recipe === 'block') { const c = best(cells.filter((c) => clear(c) && wetD(c) >= 3 && wetD(c) <= 4), mid); if (!c) return null; mem.block = c; return tapAt(c); }
+  if (recipe === 'down-to-water') {
+    const b = mem.block && C(mem.block.i, mem.block.j); if (!b || !b.built) return null;
+    const bank = best(cells.filter((c) => !c.wet && !c.built && wetD(c) === 1 && c.g < b.top), (c) => Math.hypot(c.i - b.i, c.j - b.j)); if (!bank) return null;
+    return { kind: 'fromTop', wpts: line(b, bank), desc: `fromTop from ${b.i},${b.j} (top ${b.top}) to ${bank.i},${bank.j} (top ${bank.top})` };
+  }
+  if (recipe === 'pair-a') { const c = best(cells.filter((c) => clear(c) && wetD(c) >= 2 && cells.some((d) => clear(d) && d.g === c.g && wetD(d) >= 2 && Math.hypot(d.i - c.i, d.j - c.j) >= 3 && Math.hypot(d.i - c.i, d.j - c.j) <= 4)), mid); if (!c) return null; mem.x = c; return tapAt(c); }
+  if (recipe === 'pair-b') { const x = mem.x; if (!x) return null; const c = best(cells.filter((d) => clear(d) && d.g === x.g && wetD(d) >= 2 && Math.hypot(d.i - x.i, d.j - x.j) >= 3 && Math.hypot(d.i - x.i, d.j - x.j) <= 4), mid); if (!c) return null; mem.y = c; return tapAt(c); }
+  if (recipe === 'link') { const x = mem.x && C(mem.x.i, mem.x.j), y = mem.y && C(mem.y.i, mem.y.j); if (!x?.built || !y?.built) return null; return { kind: 'fromTop', wpts: line(x, y), desc: `fromTop from ${x.i},${x.j} (top ${x.top}) to ${y.i},${y.j} (top ${y.top})` }; }
+  if (recipe === 'climb') {
+    const pairs = []; for (const a of cells) if (clear(a)) for (const b of cells) { const d = Math.hypot(b.i - a.i, b.j - a.j); if (clear(b) && b.g - a.g >= 2 && d >= 4 && d <= 6) pairs.push([a, b]); }
+    const pr = best(pairs, ([a, b]) => mid(a) + mid(b)); if (!pr) return null;
+    return { kind: 'sweep', wpts: line(pr[0], pr[1], 1, 0.3), desc: `sweep from ${pr[0].i},${pr[0].j} (top ${pr[0].top}) to ${pr[1].i},${pr[1].j} (top ${pr[1].top})` };
+  }
+  if (recipe === 'cross') {
+    const opts = [];
+    for (const [si, sj] of stream) { const s = C(si, sj); if (!s) continue; for (const [a, b] of [[1, 0], [0, 1]]) {
+      const ends = [-1, 1].map((sg) => { for (let k = 1; k <= 2; k++) { const c = C(si + a * sg * k, sj + b * sg * k); if (c && !c.wet) { const o = C(c.i + a * sg, c.j + b * sg); return o && !o.wet && !o.built ? o : null; } } return null; });
+      if (ends[0] && ends[1]) opts.push(ends);
+    } }
+    const pr = best(opts, ([a, b]) => mid(a) + mid(b)); if (!pr) return null;
+    return { kind: 'sweep', wpts: line(pr[0], pr[1], 1, 0.15), desc: `sweep from ${pr[0].i},${pr[0].j} (top ${pr[0].top}) to ${pr[1].i},${pr[1].j} (top ${pr[1].top})` };
+  }
+  if (recipe === 'yard') {
+    const c = best(cells.filter((c) => { const ring = []; for (let b = -1; b <= 1; b++) for (let a = -1; a <= 1; a++) ring.push(C(c.i + a, c.j + b)); return ring.every(clear) && Math.max(...ring.map((q) => q.g)) - Math.min(...ring.map((q) => q.g)) <= 1; }), mid); if (!c) return null;
+    const a0 = R() * 6.28, ring = []; for (let q = 0; q <= 8; q++) { const a = a0 + (q / 8) * 6.28 * 1.02; ring.push([c.i + Math.cos(a) * 1.7, c.j + Math.sin(a) * 1.7]); }
+    return { kind: 'loop', wpts: spline(ring, 8), desc: `loop round ${c.i},${c.j} r~1.7 closed` };
+  }
+  if (recipe === 'winding') {
+    const pairs = []; for (const a of cells) if (clear(a)) for (const b of cells) { const d = Math.hypot(b.i - a.i, b.j - a.j); if (clear(b) && Math.abs(b.g - a.g) <= 1 && d >= 5 && d <= 7) pairs.push([a, b]); }
+    const pr = best(pairs, ([a, b]) => mid(a) + mid(b)); if (!pr) return null;
+    const [a, b] = pr, L = Math.hypot(b.i - a.i, b.j - a.j), nx = -(b.j - a.j) / L, ny = (b.i - a.i) / L, ctl = [[a.i, a.j]];
+    for (let q = 1; q <= 3; q++) { const t = q / 4, o = (q % 2 ? 1 : -1) * 1.3; ctl.push([a.i + (b.i - a.i) * t + nx * o, a.j + (b.j - a.j) * t + ny * o]); }
+    ctl.push([b.i, b.j]);
+    return { kind: 'meander', wpts: spline(ctl, 10), desc: `meander from ${a.i},${a.j} (top ${a.top}) to ${b.i},${b.j} (top ${b.top})` };
+  }
+  return null;
+}
 const CASES = (SETS[Number(opt.set) || 1] ?? []).filter((c) => !opt.cases || String(opt.cases).split(',').includes(c.name));
 if (!CASES.length) throw new Error('No matching cases');
 
@@ -99,7 +169,9 @@ await withWood(async (lab) => {
     await p.evaluate(() => { const raf = window.requestAnimationFrame.bind(window); window.__frames = 0; window.requestAnimationFrame = (f) => raf((t) => { window.__frames++; f(t); }); });
     const frames = async (n) => { const f0 = await p.evaluate(() => window.__frames); for (let t = 0; t < 240; t++) { await p.waitForTimeout(250); if ((await p.evaluate(() => window.__frames)) - f0 >= n) return; } throw new Error('Timed out waiting for rendered frames'); };
     const settle = async () => { let a = null; for (let t = 0; t < 60; t++) { await frames(2); const b = await p.evaluate(() => window.__labyrinth.screenOf(0, 0, 0)); if (a && Math.hypot(a[0] - b[0], a[1] - b[1]) < 0.3) return; a = b; } throw new Error('Timed out waiting for camera to settle'); };
-    for (let n = 1; n <= (opt.n === undefined ? cs.n ?? N : N); n++) {
+    const mem = {};
+    let made = 0;
+    for (let n = 1; n <= (cs.script ? cs.script.length : opt.n === undefined ? cs.n ?? N : N); n++) {
       await settle();
       // (what's there to touch: each cell's top. Chosen, and the stroke made, in the room's own cells, not the screen's
       // pixels, so the same seed makes the same gestures however the view frames them; projected only to be made)
@@ -109,7 +181,7 @@ await withWood(async (lab) => {
         const b = w.land ? { i0: Math.max(e.i0, -1), i1: Math.min(e.i1, 12), j0: Math.max(e.j0, -1), j1: Math.min(e.j1, 12) } : e;
         for (let i = b.i0; i <= b.i1; i++) for (let j = b.j0; j <= b.j1; j++) {
           const g = w.ground(i, j); let k = g; while (w.stone(k, i, j) || w.stair(k, i, j) >= 0) k++;
-          out.push({ i, j, g, top: k, built: k > g });
+          out.push({ i, j, g, top: k, built: k > g, wet: !!w.land?.water.has(j * 1000 + i) });
         }
         return out;
       });
@@ -119,8 +191,18 @@ await withWood(async (lab) => {
       const pickC = (from = ok) => from[Math.floor(R() * from.length)];
       const near = (c, d0, d1) => ok.filter((q) => { const d = Math.hypot(q.i - c.i, q.j - c.j); return d >= d0 && d <= d1; });
       // (made again, the next way the seed goes, if it would run off the screen: a stroke must be made where it's drawn)
-      let kind, wpts, pauses, tap, desc, pts;
+      let kind, wpts, pauses, tap, desc, pts, intentText = null;
+      const stream = cs.script ? await p.evaluate(() => window.__labyrinth.world.land?.stream ?? []) : [];
       for (let attempt = 0; attempt < 8; attempt++) {
+        if (cs.script) {
+          const a = authored(cs.script[n - 1], cells, stream, mem, R);
+          if (!a) { kind = null; break; }
+          ({ kind, wpts } = a); desc = `authored ${cs.script[n - 1]}: ${a.desc}`; pauses = []; tap = null; intentText = INTENTS[cs.script[n - 1]];
+          const proj = await p.evaluate((q) => q.map(([i, j, y]) => window.__labyrinth.screenOf(i, j, y)), wpts.map(([i, j]) => [i, j, topAt.get(`${Math.round(i)}.${Math.round(j)}`) ?? 0]));
+          pts = proj.map((s, q) => [Math.min(SAFE.x1, Math.max(SAFE.x0, s[0] + Math.sin(q * 1.7 + R()) * 1.2)), Math.min(SAFE.y1, Math.max(SAFE.y0, s[1] + Math.cos(q * 1.3 + R()) * 1.2))]);
+          if (proj.filter(([x, y]) => !safe([x, y])).length <= proj.length * 0.1) break;
+          kind = null; continue;
+        }
         // (the kind of gesture: weighted, and from a top only if there's one)
         const kinds = [['tap', 2], ['sweep', 3], ['meander', 1.5], ['loop', 1.5], ['pause', 1], ...(built.length ? [['tapTop', 1.5], ['fromTop', 2.5]] : [])];
         let r = R() * kinds.reduce((a, k) => a + k[1], 0); kind = kinds[0][0];
@@ -151,8 +233,10 @@ await withWood(async (lab) => {
         const off = proj.filter(([x, y]) => !safe([x, y])).length;
         if (off <= proj.length * 0.1) break;
       }
+      // (an authored step the land offers nowhere for, or that won't stay on the screen: left out, said so)
+      if (!kind) { console.log(`${cs.name}: ${cs.script?.[n - 1] ?? 'gesture'} skipped (nowhere for it)`); continue; }
       if (kind === 'tap' || kind === 'tapTop') { tap = pts[0]; pts = []; }
-      const id = `${cs.name}-${n}`, dir = join(OUT, 'sealed', id);
+      const id = `${cs.name}-${++made}`, dir = join(OUT, 'sealed', id);
       mkdirSync(dir, { recursive: true });
       const pace = tap ? null : 8 + R() * 14;
       const delays = pts.map((_, q) => q ? pace * (0.6 + 0.8 * Math.sin((q / pts.length) * Math.PI)) + (pauses.includes(q) ? 560 : 0) : 0);
@@ -169,8 +253,9 @@ await withWood(async (lab) => {
         gesture: { kind, points: tap ? [tap] : pts, pauses, delayAfterPointMs: delays, releaseDelayMs: tap ? 0 : 60, input: tap ? 'mouse' : 'touch, dispatched in the page at its own pace' },
         legend: 'White ring: start; arrow: finish; dotted rings: 560ms pauses; small filled dot: tap. Coordinates are CSS pixels.',
         question: 'What might this hand mean in this visible scene? List plausible expectations before inspecting any result.' });
+      if (intentText) writeJSON(join(dir, 'authored.json'), { schema: 'labyrinth-intent-authored/1', id, recipe: cs.script[n - 1], intent: intentText });
       writeJSON(join(dir, 'replay.json'), { schema: 'labyrinth-intent-replay/1', id, query: cs.q + '&instant', generatorSeed: cs.seed,
-        description: desc, before, points: pts, tap, pauses, delays,
+        description: desc, ...(intentText ? { authored: intentText } : {}), before, points: pts, tap, pauses, delays,
         capture: { instant: true, cats: false, viewport: { width: 430, height: 900, dpr: 1 } } });
       // (before: the world, and the stroke over it as it will be made)
       await p.evaluate(({ pts, tap, pauses }) => {

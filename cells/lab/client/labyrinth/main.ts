@@ -11,14 +11,14 @@
  *
  * `?story=1..4` (the storyboard: first touch, a wall traced, an elevated connection, a resolved labyrinth) ·
  * `?ops=` (operations, as the model writes them) · `?brush=` · `?sheet` · `?select=k.i.j[&whole]` · `?print` · `?marks` (the drawing's marks by why they're there) · `?turn=` ·
- * `?zoom=` · `?preview` · `?still` · `?instant` (no rising, no gliding, no dust, no cats: for pictures taken by a slow
+ * `?zoom=` · `?preview` · `?still` · `?held` (the view never reframes on its own) · `?instant` (no rising, no gliding, no dust, no cats: for pictures taken by a slow
  * renderer, where every transition is frames it hasn't time for)
  */
 import { CENTER, World, inGrid, key, replay, unkey, type Alt, type Cell, type Op } from './model';
 import { buildMesh, drawnBox, inLand, inStone, setBleed } from './mesh';
 import { LAND } from './land';
 import { Renderer, camera, invert, type View } from './render';
-import { carve, lift, stroke, surface, tap, touch, trace, type Intent, type Pick } from './gesture';
+import { asDrawn, carve, lift, stroke, surface, tap, touch, trace, type Intent, type Pick } from './gesture';
 import { story } from './demo';
 import { randomSeed } from '../kit/rng';
 import { DRESSINGS, PIECES, dress, dressAt, place, placeOr, run, type Dressing, type Hand, type Piece } from './palette';
@@ -30,7 +30,7 @@ import { COATS, Cats, type Cat } from './cats';
 import { perf } from './perf';
 
 const qs = new URLSearchParams(location.search);
-const preview = qs.has('preview'), still = qs.has('still'), instant = qs.has('instant');
+const preview = qs.has('preview'), still = qs.has('still'), instant = qs.has('instant'), heldView = qs.has('held');
 const canvas = document.getElementById('stone') as HTMLCanvasElement, guide = document.getElementById('guide') as HTMLCanvasElement;
 const g2 = guide.getContext('2d')!;
 const R = new Renderer(canvas);
@@ -619,8 +619,17 @@ function traceStepNow(cx: number, cy: number, final: boolean) {
   g.instead = op && 'refused' in op ? op.alts : undefined;
   if (refused && refused !== g.said) say(g.instead?.length ? `${refused} · hold to ${g.instead[0].label}` : refused);
   if (final && refused) declined('trace', refused);
-  g.said = refused;
   let built = op && !('refused' in op) ? op : null;
+  // (its jogs run straight: the stroke as drawn, every turn kept, offered next after it (worked out once, on letting go))
+  if (final && built?.took?.includes('smoothed')) {
+    const exact = asDrawn(before, g.start, g.cells, g.target, bornAt, g.born, g.rest, intent ?? (built.connect ? 'way' : 'mass'));
+    if (exact) built = { ...built, alts: [{ label: exact.reading ?? 'as drawn', op: exact }, ...(built.alts ?? [])] };
+  }
+  // (and what it's read as, as it's drawn: a refusal said while the stroke was still too short to lay anything is
+  // replaced once it reads as something, so what's under the finger is what letting go builds)
+  const reads = !final && built ? built.reading ?? built.note ?? '' : '';
+  if (reads && reads !== g.said) say(reads);
+  g.said = refused || reads;
   // (drawn up or down the screen from stone, but read as going somewhere: lifting it, the other reading)
   if (built && g.start.face !== 'ground') {
     const [k0, i0, j0] = g.start.hit, a = at3(i0 + 0.5, j0 + 0.5, k0 + 1), b = at3(i0 + 0.5, j0 + 0.5, k0 + 2), per = Math.max(8, Math.hypot(a[0] - b[0], a[1] - b[1]));
@@ -637,6 +646,8 @@ function traceStepNow(cx: number, cy: number, final: boolean) {
     settle(r?.cells ?? (built.add ?? []).map((q) => [q[0], q[1], q[2]])); kept();
     // (never quietly short: if it stopped on the way, it says where it joined)
     if (r && !r.reached && built.connect?.to) { say(r.stopped > 0 ? 'it joins the stone it meets on the way' : 'nothing to build there'); declined(built.why ?? 'trace', 'stopped short'); }
+    // (and one going nowhere in particular that stops short of where the stroke ended: said, not left to be noticed)
+    else if (r && !r.reached && built.connect) { say(`${built.note ?? built.why}: it stops short, where what's in its way rises to meet it`); declined(built.why ?? 'trace', 'stopped short'); }
     else if (built.note) say(built.alts?.length && heldHints++ < 4 ? `${built.note} · hold at the end to read it otherwise` : built.note);
     showAlts(built, built.alts, g.base);
   }
@@ -730,7 +741,9 @@ const up = perf.wrap('input.up', (e: PointerEvent) => {
       else if (brush === 'take') op = place(world, 'take', start, looking(), now());
       else if (isDress(held)) { const c = dressAt(world, start, held); op = c ? dress(world, held, [c]) : null; }
       else op = placeOr(world, held, start, looking(), now());
-      if (op) { world.apply(op, now()); settle([...(op.add ?? []), ...(op.arches ?? []), ...(op.stairs ?? [])].map((c) => [c[0], c[1], c[2]])); kept(); if (op.note) say(op.alts?.length ? `${op.note} · hold to read it otherwise` : op.note); }
+      // (every tap named: what it raised, or what it did)
+      const named = op?.note ?? (op?.why === 'raise' ? 'a block raised' : op?.why === 'course' ? 'a course higher' : '');
+      if (op) { world.apply(op, now()); settle([...(op.add ?? []), ...(op.arches ?? []), ...(op.stairs ?? [])].map((c) => [c[0], c[1], c[2]])); kept(); if (named) say(op.alts?.length ? `${named} · hold to read it otherwise` : named); }
       else say(brush === 'auto' ? 'nothing more will stand there' : brush === 'take' ? (world.earth(...start.hit) ? 'the land itself stays' : SAYS.take) : isDress(held) ? (held === 'lantern' || held === 'pot' ? 'that wants a top with room over it' : held === 'pergola' ? 'a pergola wants a place to stand, with room over it' : 'dressing goes on stone') : SAYS[held as Piece]);
     }
   } else if (m === 'trace' || m === 'run') { unselect(); traceStep(e.clientX, e.clientY, true); }
@@ -887,7 +900,7 @@ function frame() {
   // (it frames what's built when asked to (at the start, the frame button, or when what's built reaches the edge of the
   // screen), and then stays put: the work doesn't shrink away from the hand as it grows, and never moves under a finger)
   const fr = framing();
-  if (!g && world.version !== edgeChecked) { edgeChecked = world.version; if (offScreen()) follow = true; }
+  if (!g && world.version !== edgeChecked) { edgeChecked = world.version; if (!heldView && offScreen()) follow = true; }
   if (follow && (!g || g.mode === 'turn')) {
     const top = world.top(), q = instant ? 1 : 1 - Math.exp(-dt * 3), ty = top * 0.35;
     view.target[0] += (fr.cx - view.target[0]) * q; view.target[2] += (fr.cz - view.target[2]) * q;
