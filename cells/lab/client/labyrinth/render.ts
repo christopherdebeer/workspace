@@ -292,6 +292,8 @@ void main() {
     float RL = reachK(at, rk(uReachL)), rgL = min(1., RL * 4.);
     gTL = RL + jit * .08 * rgL + rate * rgL;
     gT = mix(gT, max(gT, 1.2), nearB); gTL = mix(gTL, max(gTL, 1.2), nearB);
+    // (and what's built is always the picture, however short the colour's or the light's reach: the reaches are the land's)
+    if (!(mat == 2 || mat == 3 || mat == 4 || (mat == 5 && moss))) { gT = max(gT, 1.2); gTL = max(gTL, 1.2); }
     if (uPaper > .5) { gT = .08; gTL = .08; }
     gT *= 1. - uToward; gTL *= 1. - uToward;
   }
@@ -729,7 +731,16 @@ void main() {
     c = mix(PAP, min(c / (ltIn * ik), vec3(1.)), colK) * lay * mix(vec3(1.), ik, inkOn);
     c *= mix(vec3(1.), landInk, uUnder * inkOn * (1. - smoothstep(.15, .7, drawn)));
   }
-  oCol = vec4(c, 1.);
+  // (how much of the outline ink is here, for the post pass (in the colour's alpha): what's built whole; the land's as
+  // far as the ink's reach, thinning (in patches, as its contours do) or fading; a thing on it whole or not at all,
+  // fading with the rest)
+  float edgeK = 1.;
+  if (onPaper && !sel && !fur && (mat == 2 || mat == 3 || mat == 4 || (mat == 5 && moss)) && nearB < .5) {
+    float RI = reachLines(vPos);
+    bool thing = vU >= 3. && vU < 5.;
+    edgeK = inkFade(RI) * (thing ? 1. : step(1. - inkThin(RI) * 1.4, noise(vPos * vec3(1.1, .4, 1.1) + 13.)));
+  }
+  oCol = vec4(c, max(edgeK, .004));
   // (its kind for the post pass, and within each how far it's drawn: land .12–.38, the rest .41–.47, leaves .49–.54)
   oNrm = vec4(n * .5 + .5, sel ? 1. : land ? .12 + .26 * drawn : fur ? .6 : mat == 3 ? .49 + .05 * drawn : .41 + .06 * drawn);
 }`;
@@ -899,6 +910,11 @@ void main() {
   if (uMarks > .5) wt *= .15;
   // (\`?edges=\`: the outline ink's opacity)
   wt *= 1. - uEdgesOff;
+  // (as far as the ink reaches (the main pass's alpha): the most of it round this pixel, so an outline against the paper
+  // takes what it's the outline of)
+  { float ea = texture(uCol, vUv).a;
+    for (int a = 0; a < 4; a++) { vec2 o4 = vec2(a == 0 ? 1. : a == 1 ? -1. : 0., a == 2 ? 1. : a == 3 ? -1. : 0.) * uPx; ea = max(ea, texture(uCol, vUv + o4).a); }
+    wt *= ea; }
   if (uClay > .5) wt = 0.;
   // (the outline ink multiplied in, measured against the paper's own, so on the paper it's as it ever was)
   o = vec4(mix(c * mix(vec3(1.), min(ink * 1.6 / vec3(.95, .90, .80), vec3(1.)), max(wt * (1. - step(.5, skyN)), rim * .8)), vec3(.69, .36, .12), ring * .9), 1.);

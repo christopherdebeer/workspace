@@ -205,14 +205,14 @@ Each layer is a strength and a reach. The strength is how much of it there is. T
 | `terrain` | 0–1, .3 | The same for the land: the ground, its rock and dry-stone, and what grows on it. (`?land=` is the land's seed, so the land's colour is `terrain`.) Trees and climbers within about two cells of what's built belong to it instead: its colour, its light, and its reach, going over to the land's by about three cells out. The land's scrub stays the land's. |
 | `water` | 0–1, .8 | The same for the water. |
 | `colour` (or `color`) | 0–1 | Sets `built`, `terrain` and `water` together. |
-| `colourreach` | ×.25–4, 1 | How far the colour goes from what's built. Where it's gone, a thing is drawn rather than painted: its material's detail, a tree's crown cut through. |
+| `colourreach` | ×.25–4, 1 | How far the colour goes from what's built, over the land. Where it's gone, a thing is drawn rather than painted: its material's detail, a tree's crown cut through. What's built itself always keeps its colour and light, whatever the reaches. |
 | `shade` | 0–2, 1.15 | The light, by kind: a thing's side turned from the sun. 0 none, 1 as lit, 2 twice as deep. |
 | `cast` | 0–2, .75 | The shadows things cast, as deep wherever they fall, on a wall or on the ground. |
 | `hollow` | 0–2, 1.15 | What shuts out the sky: recesses, the feet of walls, under eaves. |
 | `landlight` | 0–2, .45 | How much of its shade and hollows the land keeps (its cast shadows are `cast`'s). |
 | `lightreach` | ×.25–4, 1 | How far the light goes. Past the colour's reach, it lies on the paper in sepia. |
 | `lines` | 0–1, 1 | The ink marks: rims, hachures, banks, branches, and the land's contours and the shade's hatching. |
-| `edges` | 0–1, 1 | The outline ink (the post pass's silhouettes and creases). |
+| `edges` | 0–1, 1 | The outline ink (the post pass's silhouettes and creases). On the land it follows `inkreach` and `inkfade` like the lines: fading, or thinning in patches as the contours do; a rock's or tree's outline goes with the thing itself. What's built keeps its outlines. |
 | `inkreach` | ×.25–4, 1 | How far the lines go, and the things drawn by them (rocks, scrub, trees out on the land), before they give out. |
 | `inkfade` | 0–1, 0 | How the lines give out: 0 thinning (fewer of them, each as dark), 1 fading (all of them, paler), or between. |
 | `under` | 0–1, .7 | How much of the drawing lies under the picture, its lines darkening through it. |
