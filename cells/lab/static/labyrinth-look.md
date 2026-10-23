@@ -187,6 +187,42 @@ Past the picture's reach, it's strokes on the paper only.
 
 ![Further](labyrinth/look-lines.jpg)
 
+## Stage 23: crags, broken ground, and what the sheet still asked for
+
+![Stage 23](labyrinth/look-land23.jpg)
+
+![Stage 23 in clay](labyrinth/look-land23-clay.jpg)
+
+After the phone: "some larger outcrops as well, and some sparse, less smooth terrain"; then the rest of the sheet.
+
+**Broken ground** (terrain.ts `roughness`):
+- **Where:** a few patches of the hill, picked by a broad field.
+- **Shape:** folded in ridges (a ridged noise at a little over a cell's grain), with a finer noise over that.
+- **One surface:** it's part of the hill itself, so ground height, picking and the cats all see it, and benches flatten it like the rest.
+- **Rock:** more of it breaks through in these patches.
+
+**Crags** (mesh.ts):
+- **Shape:** two or three tiers of the limestone stepping up the slope, each set back from the one below and smaller, with blocks fallen from them below.
+- **Where:** mostly in the broken ground where it's steep; now and then on any steep slope.
+- **Kept clear of:** what's built, stairs, and the stream, by a cell round. Scrub and the smaller rocks keep off them.
+
+**Dry-stone cuts:** where the hill is cut back more than about a quarter level behind a bench, the cut face is held in dry stone.
+- **Mesh:** marks those points in the ground's tone.
+- **Shader:** lays rough courses of the pale stone along the slope, each stone its own shade, the joints a little uneven.
+
+**Footpaths** (mesh.ts `footpaths`):
+- **Where they run:** between paved places near each other that aren't joined, and from each paved group one path off over the hill, away from the settlement.
+- **Shape:** each runs a little off the straight.
+- **How they're drawn:** worn into the ground's tone. Trodden ground is now a pale dust, distinctly lighter than the straw. Before, it was the same tone and didn't show.
+
+**Plinths:** where the ground falls away from a founded building, a course stepped out from its foot and carried down into the ground, so it stands on the slope on a podium.
+
+**Smaller items:**
+- **The fall:** its face is white water.
+- **Scrub:** a greyer olive, lighter on top.
+
+**Cost:** builds in about 1.2 s in node; 282k ground vertices.
+
 ## Stage 22: the hill's own material (after the "continuous land / local construction" sheet)
 
 ![Stage 22](labyrinth/look-land22.jpg)

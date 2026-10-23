@@ -280,6 +280,8 @@ void main() {
     // (and a climber's: its own fresh green, and its bracts in flower, a deep magenta)
     if (moss) base = mix(vec3(.55, .10, .32), vec3(.78, .22, .48), f);
     else if (ivy) base = mix(vec3(.16, .28, .09), vec3(.30, .42, .16), f);
+    // (the scrub on the hill (a thing on the land): a greyer olive, its top lighter where it's in the sky's light)
+    else if (vU >= 3. && vU < 4.) base = (kind == 3 ? mix(vec3(.30, .37, .18), vec3(.46, .52, .28), f) : mix(vec3(.33, .37, .26), vec3(.52, .55, .41), f)) * (.82 + .3 * smoothstep(-.2, .9, n.y));
     else if (kind == 1) base = mix(vec3(.24, .29, .20), vec3(.42, .46, .36), f);
     else if (kind == 2) base = mix(vec3(.07, .15, .10), vec3(.15, .23, .14), f);
     else if (kind == 3) base = mix(vec3(.13, .23, .08), vec3(.25, .35, .13), f);
@@ -369,7 +371,7 @@ void main() {
     // sheet, dry straw over the whole of the hill, its slopes too, in drifts from gold to olive, a fine grain of blades
     // while they're big enough to see; worn to pale earth where it's walked (in its tone, below nought: an unpaved bench,
     // the fringe of a way); the earth showing where the hill's cut steep; greener and darker at the water's edge)
-    float up = n.y, wetv = clamp(vTone, 0., 1.), walk = clamp(-vTone, 0., 1.);
+    float up = n.y, wetv = vTone > 1.05 ? 0. : clamp(vTone, 0., 1.), walk = clamp(-vTone, 0., 1.);
     float patchy = fbm(vec3(vPos.xz * 1.1, 2.)), fine = noise(vPos * 9.);
     vec3 earth = mix(vec3(.82, .74, .60), vec3(.76, .67, .52), patchy);
     float bare = smoothstep(.62, .42, up + (fine - .5) * .12);
@@ -379,11 +381,26 @@ void main() {
     float blade = noise(vec3(vPos.x * 34., vPos.y * 4., vPos.z * 34.));
     straw *= .9 + .18 * mix(.5, blade, keep(30.));
     float worn = smoothstep(.15, .6, walk + (fine - .5) * .3);
-    vec3 soil = mix(straw, earth, max(bare, worn));
+    vec3 soil = mix(straw, earth, bare);
+    // (what's walked paler than the straw and the cut alike: trodden to a pale dust)
+    soil = mix(soil, mix(vec3(.91, .86, .75), vec3(.86, .80, .68), patchy) * (.96 + .06 * fine), worn);
     soil = mix(soil, vec3(.50, .56, .36), clamp(.55 * wetv, 0., .55));
     soil *= (.95 + .08 * fine) * (1. - .28 * smoothstep(.45, .95, wetv));
     base = soil;
     landFeat = bare * .6;
+    // (a cut held in dry stone (in its tone, from the mesh): rough courses of the pale limestone along the slope, each
+    // stone its own shade, the joints dark and a little uneven; the stones bigger toward the foot)
+    if (vTone > 1.05 && vTone < 1.5) {
+      vec2 dl = normalize(n.xz + 1e-4), ac = vec2(-dl.y, dl.x);
+      float cv = vPos.y / .12 + (noise(vPos * vec3(1.3, .3, 1.3)) - .5) * .6, row = floor(cv);
+      float cu = dot(vPos.xz, ac) / (.18 + .1 * hash(vec3(row, 3., 1.))) + hash(vec3(row, 2., 2.)), col = floor(cu);
+      float jt = min(min(fract(cv), 1. - fract(cv)), min(fract(cu), 1. - fract(cu)) * 1.6) + (noise(vPos * 28.) - .5) * .06;
+      float joint = (1. - smoothstep(.03, .09, jt)) * keep(12.);
+      base = mix(vec3(.78, .75, .68), vec3(.90, .87, .80), hash(vec3(col, row, 4.))) * (.94 + .08 * noise(vPos * 19.));
+      base *= 1. - .26 * joint;
+      cav = 1. - .18 * joint;
+      plain = vec3(.86, .83, .76);
+    }
     // (its colour as the drawing takes it: a warm ochre, never a grey on the way to the page; the bare cut paler)
     plain = mix(vec3(.87, .77, .53), vec3(.88, .82, .70), max(bare, worn));
   }

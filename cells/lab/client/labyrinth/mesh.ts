@@ -26,7 +26,7 @@ import { climb, grow, growths } from './plants';
 import { strokes, type Skeleton, type StrokeLand } from './strokes';
 import { DOMAIN, LAND, noise2, onLand } from './land';
 import { groundY, retaining } from './context';
-import { benched, nearRiver, riverOf } from './terrain';
+import { benched, CUT, nearRiver, riverOf, roughness } from './terrain';
 
 /** floats a vertex: position, normal, ao (1 open .. 0 shut in), material (MAT), its rising (when laid, the height it
  * grows from, how), and a seed for its stone's tone */
@@ -304,6 +304,22 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
     if (k === w.ground(i, j)) band(k, k + 0.09, 0.03, 0.05);
     // (its foundation: on the land, down into it under each open side, rougher, shut in)
     if (founded(k, i, j)) { const keep2 = cur.dress; cur.dress = keep2 % KIND; E.forEach((e) => { if (e.open) quad(L(e.a, y0 - FOUND), L(e.b, y0 - FOUND), L(e.b, y0), L(e.a, y0), nOf(e), [0.35, 0.35, 0.6, 0.6], MAT.stone); }); cur.dress = keep2; }
+    // (where the ground falls away from it, a footing: a course stepped out from its foot and carried down into the
+    // ground, so on a slope it stands on a podium of bigger stone, not on a cut face)
+    if (founded(k, i, j) && w.land && k === w.ground(i, j)) {
+      const far = shift(E, (e) => (e.open ? -0.3 : 0)), pod = shift(E, (e) => (e.open ? -0.075 : 0));
+      const gY = (p: [number, number]) => groundY(w, cx + p[0] + CENTER, cz + p[1] + CENTER);
+      if (E.some((e, n) => e.open && Math.min(gY(far[n].a), gY(far[n].b)) < y0 - 0.14)) {
+        const keep2 = cur.dress, yt = y0 + 0.035;
+        cur.dress = keep2 % KIND;
+        E.forEach((e, n) => {
+          if (!e.open) return;
+          quad(L(pod[n].a, y0 - FOUND), L(pod[n].b, y0 - FOUND), L(pod[n].b, yt), L(pod[n].a, yt), nOf(e), [0.4, 0.4, 0.8, 0.8], MAT.stone);
+          quad(L(pod[n].a, yt), L(pod[n].b, yt), L(e.b, yt), L(e.a, yt), [0, 1, 0], 0.8, MAT.stone);
+        });
+        cur.dress = keep2;
+      }
+    }
     // (and the land come up to it: a skirt of the land's own ground, banked a little up its foot outside the plinth and
     // settling onto the ground beside it, so earth and grass run to the stone rather than stopping at a line; its corners
     // mitred. Not where the ground falls away from it: there the foundation's cut face shows)
@@ -973,6 +989,41 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
    * things of its own, sparing: rocks at the foot of its cliffs, on the outcrop and along the stream; low shrubs on its
    * banks; a cypress or two. None of them where anything's built.
    */
+  /**
+   * The footpaths worn through the grass: between the places the hand paved that lie near each other but aren't joined,
+   * the way people go across; and from each, one wandering off over the hill to somewhere out of the picture. Each a
+   * line a little off the straight, weaving as a path does round the lie of the land.
+   */
+  function footpaths(walked: (i: number, j: number) => boolean) {
+    const land = w.land!, B = drawnBox(w), seen = new Set<number>(), groups: Array<Array<[number, number]>> = [];
+    for (let j = B.j0; j <= B.j1; j++) for (let i = B.i0; i <= B.i1; i++) {
+      if (seen.has(j * 1000 + i) || !walked(i, j)) continue;
+      const g: Array<[number, number]> = [], st: Array<[number, number]> = [[i, j]];
+      seen.add(j * 1000 + i);
+      while (st.length) { const [a, b] = st.pop()!; g.push([a, b]); for (const [da, db] of DIRS) { const x = a + da, z = b + db, k = z * 1000 + x; if (!seen.has(k) && walked(x, z) && x >= B.i0 && x <= B.i1 && z >= B.j0 && z <= B.j1) { seen.add(k); st.push([x, z]); } } }
+      groups.push(g);
+    }
+    const out: Array<{ p: Array<[number, number]>; x0: number; x1: number; z0: number; z1: number }> = [];
+    const lay = (ax: number, az: number, bx: number, bz: number, seed: number) => {
+      const L = Math.hypot(bx - ax, bz - az), n = Math.max(2, Math.ceil(L / 0.3)), nx = -(bz - az) / (L || 1), nz = (bx - ax) / (L || 1), p: Array<[number, number]> = [];
+      for (let q = 0; q <= n; q++) { const t = q / n, off = Math.sin(t * Math.PI) * (noise2(land.seed + 75 + seed, t * L * 0.5, seed) - 0.5) * 1.2 * Math.min(1, L / 3); p.push([ax + (bx - ax) * t + nx * off, az + (bz - az) * t + nz * off]); }
+      out.push({ p, x0: Math.min(...p.map((v) => v[0])) - 0.3, x1: Math.max(...p.map((v) => v[0])) + 0.3, z0: Math.min(...p.map((v) => v[1])) - 0.3, z1: Math.max(...p.map((v) => v[1])) + 0.3 });
+    };
+    // (between groups near each other, from their nearest cells' edges)
+    for (let a = 0; a < groups.length; a++) for (let b = a + 1; b < groups.length; b++) {
+      let best: [number, number, number, number, number] | null = null;
+      for (const [i, j] of groups[a]) for (const [x, z] of groups[b]) { const d = Math.hypot(x - i, z - j); if (!best || d < best[0]) best = [d, i, j, x, z]; }
+      if (best && best[0] >= 2 && best[0] <= 6) lay(best[1] + 0.5, best[2] + 0.5, best[3] + 0.5, best[4] + 0.5, a * 31 + b);
+    }
+    // (and one from each, off over the hill, away from the middle of what's built)
+    const all = groups.flat(), mx = all.reduce((t, c) => t + c[0], 0) / (all.length || 1), mz = all.reduce((t, c) => t + c[1], 0) / (all.length || 1);
+    groups.forEach((g, q) => {
+      const far = g.reduce((f, c) => (Math.hypot(c[0] - mx, c[1] - mz) > Math.hypot(f[0] - mx, f[1] - mz) ? c : f), g[0]);
+      const ang = Math.atan2(far[1] + 0.5 - mz, far[0] + 0.5 - mx) + (noise2(land.seed + 76, q, 0) - 0.5) * 1.2, L = 3 + 3 * noise2(land.seed + 77, q, 1);
+      lay(far[0] + 0.5, far[1] + 0.5, far[0] + 0.5 + Math.cos(ang) * L, far[1] + 0.5 + Math.sin(ang) * L, 500 + q);
+    });
+    return out;
+  }
   function landMesh() {
     const land = w.land!, B = drawnBox(w), x0 = B.i0, x1 = B.i1 + 1, z0 = B.j0, z1 = B.j1 + 1;
     // (the ground: the hill, and the benches let into it where something's built (terrain.ts); one surface)
@@ -1010,15 +1061,39 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
     // (where it's walked: worn to bare earth on a bench that isn't paved, and in a fringe along the paving and the ways,
     // patchy, as a path's edge is; in the tone too, below nought, where it's not wet)
     const walked = (i: number, j: number) => w.paved(i, j) || w.courts.has(key(0, i, j)) || w.way(w.ground(i, j), i, j);
+    const tracks = footpaths(walked);
     const trod = pts.map((col) => col.map((p) => {
       const gx = p[0] + CENTER, gz = p[2] + CENTER, i = Math.floor(gx), j = Math.floor(gz);
       if (!onLand(i, j)) return 0;
       if (benched(w, i, j) && !walked(i, j)) return 0.75;
       let d = 9;
       for (let b = -1; b <= 1; b++) for (let a = -1; a <= 1; a++) if (walked(i + a, j + b)) d = Math.min(d, Math.hypot(Math.max(i + a - gx, 0, gx - i - a - 1), Math.max(j + b - gz, 0, gz - j - b - 1)));
-      return (1 - Math.min(1, d / (0.22 + 0.25 * noise2(land.seed + 73, gx * 1.3, gz * 1.3)))) * 0.85;
+      let t = (1 - Math.min(1, d / (0.22 + 0.25 * noise2(land.seed + 73, gx * 1.3, gz * 1.3)))) * 0.85;
+      // (and the footpaths worn through the grass between them, patchy along their length)
+      for (const tr of tracks) {
+        if (gx < tr.x0 || gx > tr.x1 || gz < tr.z0 || gz > tr.z1) continue;
+        let e = 9;
+        for (let q = 0; q + 1 < tr.p.length; q++) {
+          const [ax, az] = tr.p[q], [bx, bz] = tr.p[q + 1], dx = bx - ax, dz = bz - az, l2 = dx * dx + dz * dz || 1, u = Math.max(0, Math.min(1, ((gx - ax) * dx + (gz - az) * dz) / l2));
+          e = Math.min(e, Math.hypot(gx - ax - dx * u, gz - az - dz * u));
+        }
+        t = Math.max(t, (1 - Math.min(1, e / 0.3)) * (0.75 + 0.35 * noise2(land.seed + 74, gx * 2.1, gz * 2.1)));
+      }
+      return t;
     }));
-    const V = (a: number, b: number) => { cur.tone = damp[a][b] > trod[a][b] * 0.5 ? damp[a][b] : -trod[a][b]; vert(pts[a][b], nrm[a][b], sky[a][b], LANDMAT); };
+    // (where the hill's cut back high behind a bench, its face is held in dry stone, as the cut by a stair or a house is
+    // on a hillside: in the tone too, between the damp and the rock)
+    const dry = pts.map((col) => col.map((p) => {
+      const gx = p[0] + CENTER, gz = p[2] + CENTER, i = Math.floor(gx), j = Math.floor(gz);
+      if (!onLand(i, j) || benched(w, i, j)) return false;
+      for (let b = -1; b <= 1; b++) for (let a = -1; a <= 1; a++) {
+        if ((!a && !b) || !benched(w, i + a, j + b)) continue;
+        const L = w.ground(i + a, j + b), d = Math.hypot(Math.max(i + a - gx, 0, gx - i - a - 1), Math.max(j + b - gz, 0, gz - j - b - 1));
+        if (p[1] - L > 0.28 && d < CUT + 0.04) return true;
+      }
+      return false;
+    }));
+    const V = (a: number, b: number) => { cur.tone = dry[a][b] ? 1.25 : damp[a][b] > trod[a][b] * 0.5 ? damp[a][b] : -trod[a][b]; vert(pts[a][b], nrm[a][b], sky[a][b], LANDMAT); };
     for (let a = 0; a < nx; a++) for (let b = 0; b < nz; b++) {
       const gx = x0 + (a + 0.5) / RES, gz = z0 + (b + 0.5) / RES;
       if (!onLand(Math.floor(gx), Math.floor(gz))) continue;
@@ -1066,7 +1141,8 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
         const ya = rv.bed[q] + 0.13, yb = rv.bed[q + 1] + 0.13;
         if (!fall) { span(pa, sa, rv.hw[q], pb, sb, rv.hw[q + 1], ya); continue; }
         span(pa, sa, rv.hw[q], pm, sm, hm, ya); span(pm, sm, hm, pb, sb, rv.hw[q + 1], yb);
-        cur = { born: -1e3, pivot: 0, how: 1, tone: 0.5, dress: 0, sel: false };
+        // (the fall itself white water)
+        cur = { born: -1e3, pivot: 0, how: 1, tone: 1, dress: 0, sel: false };
         const w2 = hm * 0.9, hiY = Math.max(ya, yb), loY = Math.min(ya, yb), dir: V3 = [(pb[0] - pa[0]) * Math.sign(ya - yb), 0.3, (pb[1] - pa[1]) * Math.sign(ya - yb)];
         quad([pm[0] - sm[0] * w2 - CENTER, loY, pm[1] - sm[1] * w2 - CENTER], [pm[0] + sm[0] * w2 - CENTER, loY, pm[1] + sm[1] * w2 - CENTER], [pm[0] + sm[0] * w2 - CENTER, hiY, pm[1] + sm[1] * w2 - CENTER], [pm[0] - sm[0] * w2 - CENTER, hiY, pm[1] - sm[1] * w2 - CENTER], dir, 1, MAT.water);
         const fx = Math.sign(ya - yb) * (pb[0] - pa[0]), fz = Math.sign(ya - yb) * (pb[1] - pa[1]), fl = Math.hypot(fx, fz) || 1;
@@ -1187,6 +1263,40 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
     const nearRiverAt = (x: number, z: number) => nearRiver(w, x, z);
     const E = w.extent();
     coarse = false;
+    // (the crags: here and there in the broken ground, where it's steep, a big mass of the limestone in tiers stepping up
+    // the slope, with blocks fallen from it below; the scrub and the smaller rocks keep off it. Clear of what's built
+    // and of the stream by a cell round)
+    const crags: Array<[number, number, number]> = [];
+    for (let j = B.j0 + 1; j < B.j1; j++) for (let i = B.i0 + 1; i < B.i1; i++) {
+      const q = (j - LAND.j0) * 100 + (i - LAND.i0) + 9000, mx = i + 0.5, mz = j + 0.5;
+      const rgh = roughness(w, mx, mz);
+      if (r(q, 1) > (rgh > 0.5 ? 0.35 : 0.06) || crags.some(([x, z]) => Math.hypot(x - mx, z - mz) < 2.5)) continue;
+      let clear = true;
+      for (let b = -1; b <= 1 && clear; b++) for (let a = -1; a <= 1 && clear; a++) { const x = i + a, z = j + b, g = w.ground(x, z); if (!onLand(x, z) || !bare(x, z) || benched(w, x, z) || land.water.has(z * 1000 + x) || w.stair(g, x, z) >= 0 || w.stair(g - 1, x, z) >= 0) clear = false; }
+      const rv = nearRiverAt(mx, mz);
+      if (!clear || (rv && rv.d < rv.hw + 0.9)) continue;
+      const sx = Y(mx + 0.6, mz) - Y(mx - 0.6, mz), sz = Y(mx, mz + 0.6) - Y(mx, mz - 0.6);
+      if (Math.hypot(sx, sz) < (rgh > 0.5 ? 0.25 : 0.45)) continue;
+      const fall = Math.atan2(-sz, -sx), s = 0.42 + 0.3 * r(q, 2), out0 = Math.max(E.i0 - i, i - E.i1, E.j0 - j, j - E.j1, 0);
+      if (out0 > 0 && r(q, 7) > Math.pow(1 - out0 / DRAWN_MARGIN, 1.5)) continue;
+      crags.push([mx, mz, s * 1.4]);
+      cur = { born: -1e3, pivot: 0, how: 3 + 0.999 * r(q, 40), tone: 2, dress: 0, sel: false };
+      coarse = out0 > 0;
+      // (its tiers, each set back up the slope from the one below and a little smaller, the lowest the biggest)
+      const tiers = 2 + Math.floor(r(q, 3) * 2), ca = -Math.sin(fall), sa = Math.cos(fall);
+      for (let t = 0; t < tiers; t++) {
+        const back = (t - 0.6) * s * 0.55, side = (r(q, 4, t) - 0.5) * s * 0.5, rr = s * (1 - 0.18 * t);
+        ledge(mx - Math.cos(fall) * back + ca * side, mz - Math.sin(fall) * back + sa * side, rr, rr * (0.55 + 0.25 * r(q, 5, t)), q * 11 + t, fall + (r(q, 6, t) - 0.5) * 0.5);
+      }
+      // (what's fallen from it, below)
+      for (let n = 0; n < 2 + Math.floor(r(q, 8) * 3); n++) {
+        const a = fall + (r(q, 9, n) - 0.5) * 1.8, d = s * (1.1 + 0.6 * r(q, 10, n)), bs = s * (0.18 + 0.15 * r(q, 11, n));
+        ledge(mx + Math.cos(a) * d, mz + Math.sin(a) * d, bs, bs * 0.7, q * 13 + n + 5, a);
+      }
+      coarse = false;
+    }
+    const inCrag = (x: number, z: number) => crags.some(([cx, cz, rr]) => Math.hypot(x - cx, z - cz) < rr);
+    cur = { born: -1e3, pivot: 0, how: 1, tone: 0.5, dress: 0, sel: false };
     for (let j = B.j0; j <= B.j1; j++) for (let i = B.i0; i <= B.i1; i++) {
       if (!bare(i, j)) continue;
       const g = w.ground(i, j), q = (j - LAND.j0) * 100 + (i - LAND.i0);
@@ -1207,11 +1317,11 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
       const steep = smooth01((Math.hypot(sx, sz) - 0.15) / 0.5), fallA = Math.atan2(-sz, -sx), rockF = noise2(land.seed + 61, i * 0.35, j * 0.35);
       const byBench = DIRS.map(([a, b]) => benched(w, i + a, j + b));
       const onStair = w.stair(g, i, j) >= 0 || w.stair(g - 1, i, j) >= 0;
-      if (!onStair && !benched(w, i, j) && (nearRock ? r(q, 6) < 0.8 : r(q, 6) < (0.02 + 0.6 * steep) * (0.3 + 0.7 * smooth01((rockF - 0.25) * 3)) * (out > 0 ? 0.4 : 1))) {
+      if (!onStair && !benched(w, i, j) && (nearRock ? r(q, 6) < 0.8 : r(q, 6) < (0.02 + 0.6 * steep + 0.35 * roughness(w, mx, mz)) * (0.3 + 0.7 * smooth01((rockF - 0.25) * 3)) * (out > 0 ? 0.4 : 1))) {
         let cx = mx + (r(q, 8) - 0.5) * 0.3, cz = mz + (r(q, 9) - 0.5) * 0.3, s = 0.13 + 0.12 * r(q, 10) + 0.1 * steep + (nearRock ? 0.08 : 0);
         byBench.forEach((on, d) => { if (on) { cx -= DIRS[d][0] * 0.14; cz -= DIRS[d][1] * 0.14; s = Math.min(s, 0.17); } });
         const rv = nearRiverAt(cx, cz);
-        if (!rv || rv.d > rv.hw + s * 1.2) outcrop(cx, cz, s, q, fallA);
+        if ((!rv || rv.d > rv.hw + s * 1.2) && !inCrag(cx, cz)) outcrop(cx, cz, s, q, fallA);
       }
       // (what grows wild: scrub on the banks; olives in groves on the shelves, where the land's grove field is high; stone
       // pines on the rises and by the outcrop, alone or in twos; a cypress now and then. Never right up against what's
@@ -1229,7 +1339,7 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
           for (let m = 0; m < nB; m++) {
             const a = r(q, 27, n, m) * 6.28, sz = m ? big * (0.45 + 0.35 * r(q, 28, n, m)) : big, dd = m ? big + sz * 0.6 : 0;
             const fx = cx + Math.cos(a) * dd, fz = cz + Math.sin(a) * dd, rv = nearRiverAt(i + 0.5 + fx, j + 0.5 + fz);
-            if (Math.abs(fx) > 0.5 || Math.abs(fz) > 0.5 || (rv && rv.d < rv.hw + 0.1)) continue;
+            if (Math.abs(fx) > 0.5 || Math.abs(fz) > 0.5 || (rv && rv.d < rv.hw + 0.1) || inCrag(i + 0.5 + fx, j + 0.5 + fz)) continue;
             if (DIRS.some(([da, db], d) => byBench[d] && da * fx + db * fz > 0.5 - sz - 0.06)) continue;
             shrub(at(i, j, fx, fz), sz, q * 31 + n * 5 + m);
           }

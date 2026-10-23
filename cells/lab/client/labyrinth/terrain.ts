@@ -72,7 +72,7 @@ export function hillAt(w: World, x: number, z: number): number {
     const dx = x - (i + a + 0.5), dz = z - (j + b + 0.5), k = Math.exp(-(dx * dx + dz * dz) / (2 * 0.8 * 0.8));
     num += k * lev(w, C, i + a, j + b); den += k;
   }
-  const h = num / den + (noise2(seed + 41, x * 0.55, z * 0.55) - 0.5) * 0.35 + (noise2(seed + 42, x * 1.7, z * 1.7) - 0.5) * 0.1;
+  const h = num / den + (noise2(seed + 41, x * 0.55, z * 0.55) - 0.5) * 0.35 + (noise2(seed + 42, x * 1.7, z * 1.7) - 0.5) * 0.1 + roughAt(w, x, z);
   // (the stream's channel cut down into it: its bed flat across, its banks rising to the hill, wider the higher they are)
   const rv = nearRiver(w, x, z);
   if (!rv) return h;
@@ -80,6 +80,17 @@ export function hillAt(w: World, x: number, z: number): number {
   if (rv.d >= rv.hw + bw) return h;
   const top = Math.max(h, rv.bed + 0.18);
   return rv.bed + (top - rv.bed) * smooth(rv.hw, rv.hw + bw, rv.d);
+}
+/** how broken the hill is at a point: nought over most of it; in a few patches (a broad field picks them) the ground's
+ * rougher, folded in ridges at a finer grain, where the rock's near the surface. The crags stand in these (mesh.ts) */
+export function roughness(w: World, x: number, z: number): number {
+  return w.land ? smooth(0.56, 0.74, noise2(w.land.seed + 43, x * 0.18, z * 0.18)) : 0;
+}
+function roughAt(w: World, x: number, z: number): number {
+  const rg = roughness(w, x, z);
+  if (rg <= 0) return 0;
+  const seed = w.land!.seed, rid = 1 - Math.abs(2 * noise2(seed + 44, x * 1.25, z * 1.25) - 1);
+  return rg * ((rid - 0.55) * 0.62 + (noise2(seed + 45, x * 2.6, z * 2.6) - 0.5) * 0.22);
 }
 // ─── the stream, carved through the hill ───
 /** the stream's course: a smooth line down its cells (their middles, corners cut), the bed's level at each point (stepping
