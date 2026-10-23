@@ -1,7 +1,7 @@
 // Replay a captured blind-intent run against the current build: each gesture of a case, in order, with its recorded
 // points and pace, from the case's own starting query. Prints what the build makes now beside what it made when
 // captured. Diagnostic only: it reads sealed/, so it's for after a round's reviews are locked, never before.
-// node cells/lab/devtools/labyrinth-intent-replay.mjs DIR CASE [--shots=OUTDIR]
+// node cells/lab/devtools/labyrinth-intent-replay.mjs DIR CASE [--shots=OUTDIR] [--alts]
 import { readFileSync, existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 process.env.EXPERIMENT = 'labyrinth';
@@ -37,7 +37,8 @@ await withWood(async (lab) => {
     }, { pts: rp.points, delays: rp.delays });
     await p.waitForTimeout(1200);
     const now = await p.evaluate((ops0) => { const w = window.__labyrinth.world; return w.ops.slice(ops0).map((o) => ({ op: o })); }, ops0);
-    console.log(`${id}\n  then: ${brief(was.operations)}\n  now:  ${brief(now)}`);
+    const alts = await p.evaluate(() => window.__labyrinth.alts()?.labels ?? []);
+    console.log(`${id}\n  then: ${brief(was.operations)}\n  now:  ${brief(now)}${process.argv.includes('--alts') ? `\n  alts: ${alts.slice(1).join(' | ')}` : ''}`);
     if (shots) await p.screenshot({ path: join(shots, `${id}.jpg`), type: 'jpeg', quality: 80 });
   }
   await p.close();

@@ -577,27 +577,36 @@ function traceStepNow(cx: number, cy: number, final: boolean) {
     const brush = brushed.length >= 2 ? brushed : null;
     const [ox, oy] = brush ? g.pts[t] : [g.x0, g.y0];
     const dx = cx - ox, dy = cy - oy, upright = Math.abs(dy) >= per * 0.6 && Math.abs(dx) <= Math.abs(dy) * 0.3;
-    // (lowering only while the finger's still over what it lowers (its face, or the ground just at its foot): a stroke
-    // that runs on down the screen out over the land is going somewhere, however the view's turned. Raising goes up
-    // into what's behind, so it's not held to that)
-    const under = pick(cx, cy, before), lowered = brush ?? [[i0, j0]], tall = g.h0! - before.ground(i0, j0);
-    const onIt = !under ? dy <= 0 : (under.face !== 'ground' ? lowered.some(([x, z]) => under.hit[1] === x && under.hit[2] === z)
-      : Math.abs(under.hit[1] - i0) + Math.abs(under.hit[2] - j0) <= 1 && dy <= per * (tall + 0.8));
+    // (lowering only while the finger's still on the stone it lowers, its face or its top: a stroke that runs on down the
+    // screen out over the land is going somewhere, however the view's turned; and one that ends on the ground at its foot
+    // is a way down to there (after the authored reviews: a block's foot is where a way down off it ends), never the
+    // block taken away. Raising goes up into what's behind, so it's not held to that)
+    const under = pick(cx, cy, before), lowered = brush ?? [[i0, j0]];
+    const onIt = !under ? dy <= 0 : under.face !== 'ground' && lowered.some(([x, z]) => under.hit[1] === x && under.hit[2] === z);
     if (dy > 0 && !onIt) g.lifting = false;
     // (a side grabbed is always lifted; from a top, only with mass in hand, and not if it's come to rest on another top:
     // that's a stroke to it. A way drawn up the screen from a top goes somewhere)
     const there = final ? null : pick(cx, cy, before), other = !!goal(there) && (there?.inset ?? 0) >= SQUARE;
     const may = g.start.face === 'side' || (intent !== 'way' && !other);
-    if (may && (upright || g.lifting) && (dy <= 0 || onIt)) {
+    // (and letting go never turns a stroke into a lift it wasn't already: what was shown under the finger is what's built)
+    if (may && (upright || g.lifting) && (dy <= 0 || onIt) && (!final || g.lifting)) {
       if (brush && !g.lifting) { g.pulls = brush; g.x0 = ox; g.y0 = oy; }
       const n = Math.round(-(cy - g.y0) / per);
       g.lifting = upright || Math.abs(cx - g.x0) <= Math.abs(cy - g.y0) * 0.45;
       if (g.lifting) {
         g.pulls ??= sel ? [...new Map(sel.s.cells.map(([, i, j]) => [`${i}.${j}`, [i, j] as [number, number]])).values()] : 'part';
-        const r = lift(before, g.start, n, g.born, g.pulls), op = r && !('refused' in r) ? r : null;
-        const said = r && 'refused' in r ? r.refused : '';
+        const r = lift(before, g.start, n, g.born, g.pulls);
+        let op = r && !('refused' in r) ? r : null;
+        // (said as it's read, not only when refused: a lowering under the finger is named before it's let go)
+        const said = r && 'refused' in r ? r.refused : op?.note ?? '';
         if (said && said !== g.said) say(said);
         g.said = said;
+        // (lowered, on letting go: the stroke read as going somewhere (a way down to where it ended) offered with it, so a
+        // way meant isn't only to be had by undoing a block taken away)
+        if (final && op && n < 0) {
+          const seen = (i: number, j: number) => g!.seen.get(`${i}.${j}`) ?? now(), go = intent ? trace(before, g.start, g.cells, g.target, seen, g.born, g.rest, intent) : stroke(before, g.start, g.cells, g.target, seen, g.born, g.rest, true);
+          if (go && !('refused' in go)) op = { ...op, alts: [{ label: go.reading ?? go.note ?? 'a way down to there', op: { ...go, alts: undefined } }, ...(op.alts ?? [])] };
+        }
         lay(op); g.op = op;
         if (final && op) { settle([...(op.add ?? []), ...(op.walls ?? [])].map((q) => [q[0], q[1], q[2]])); kept(); say(op.alts?.length && heldHints++ < 4 ? `${op.note} · hold at the end to read it otherwise` : op.note ?? ''); showAlts(op, op.alts, g.base); }
         return;
