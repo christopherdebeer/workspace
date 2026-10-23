@@ -191,24 +191,56 @@ Past the picture's reach, it's strokes on the paper only.
 
 ![The dials](labyrinth/look-dials.jpg)
 
-URL dials for looking at the layers separately. With none set, the look is unchanged.
+URL dials for looking at the layers separately. Unset, each is at the house setting (below); `?look=picture` sets them all to their plain values, the whole picture as it's lit.
 
 | Dial | Range | What it does |
 |---|---|---|
-| `built` | 0–1, default 1 | The colour of what's built, as a layer multiplied over the page: how strongly its colour lies on the paper. Its light is a separate layer (`shadow`). |
-| `land` (or `terrain`) | 0–1, default 1 | The same for the land: the ground, its rock and dry-stone, and what grows on it. |
-| `water` | 0–1, default `land` | The same for the water, which otherwise follows the land. |
+| `built` | 0–1, house .8 | The colour of what's built, as a layer multiplied over the page: how strongly its colour lies on the paper. Its light is a separate layer (`shadow`). |
+| `land` (or `terrain`) | 0–1, house .3 | The same for the land: the ground, its rock and dry-stone, and what grows on it. |
+| `water` | 0–1, house .8 (else as `land`) | The same for the water, which otherwise follows the land. |
 | `colour` (or `color`) | 0–1 | Sets `built`, `land` and `water` together; each can still be set on its own. |
-| `shadow` | 0–2, default 1 | The light as its own layer: the shade side, cast shadows and the hollows, as how much darker each surface is than in full sun. 0 is flat colour, 1 is as lit, 2 is twice as deep. It holds whatever the colour is, so `colour=0` leaves the shading on the paper. |
+| `shadow` | 0–2, house 1.15 | The light as its own layer: the shade side, cast shadows and the hollows, as how much darker each surface is than in full sun. 0 is flat colour, 1 is as lit, 2 is twice as deep. It holds whatever the colour is, so `colour=0` leaves the shading on the paper. |
+| `landshadow` | 0–2, house .5 (else as `shadow`) | The light layer for the land and its water, apart from what's built. Where the colour's taken off, the light goes to a warm sepia, not the sky's grey. |
 | `toward` | 0–1, default 0 | How far everything is taken along its own way to the page: trees first, then the ground and the water, then what's built. The light goes first on that way, so shadows go with it. (This was `colour` before.) |
 | `fade` | ×0.1–10, default 1 | How far that way to the page runs: a multiple of the picture's falloff and the lines' reach. |
 | `lines` | 0–1, default 1 | The ink marks' opacity: rims, hachures, contours, banks, branches. |
-| `under` | 0–1, default 0 | How much of the drawing lies under the picture (the marks, the land's contours, the outlines). It's multiplied through it, as ink under a wash: the lines darken whatever is over them, so they show even at full `colour`. |
+| `under` | 0–1, house .7 | How much of the drawing lies under the picture (the marks, the land's contours, the outlines). It's multiplied through it, as ink under a wash: the lines darken whatever is over them, so they show even at full `colour`. |
 | `edges` | 0–1, default 1 | The outline ink's opacity (the post pass's silhouettes and creases). |
 
-The layers composite as multiply, bottom to top: paper; the drawing under (`under`); the colour (`built`, `land`, `water`), each surface's colour as it is in full sun; the light (`shadow`); then the marks and outlines (`lines`, `edges`). Each ink is measured as a fraction of the paper, so on bare paper it's its own colour. The colour is taken out from under the drawing's own ink (hatching, contours), which stays. With no dials set the look is as before (within 1/255 on average).
+The layers composite as multiply, bottom to top: paper; the drawing under (`under`); the colour (`built`, `land`, `water`), each surface's colour as it is in full sun; the light (`shadow`); then the marks and outlines (`lines`, `edges`). Each ink is measured as a fraction of the paper, so on bare paper it's its own colour. The colour is taken out from under the drawing's own ink (hatching, contours), which stays. With `?look=picture` the look is as it was before the dials (within 1/255 on average).
 
 Together: `?colour=0&under=1` is the scene as a drawing on paper with its shading; `?land=0` is the built in colour on a drawn, shaded land; `?colour=1&under=1` is the full picture with the drawing showing through it; `?shadow=0` is flat colour; `?toward=1` is the whole scene taken to the page.
+
+## The house setting: found by looking
+
+![Six of the settings tried](labyrinth/look-dials.jpg)
+
+![The house setting in the five views](labyrinth/look-house.jpg)
+
+After the phone: "Colour should be separate for built vs terrain? Shadows should be scalable independent of color. Given my direction so far let's find/explore what the right setting is."
+
+The picture is now two layers multiplied over the paper. The first is the colour, each surface's colour as it is in full sun. The second is the light: how much darker than that each surface is seen, which covers its shade side, the shadows cast on it, and its hollows. Colour has its own opacity for what's built, the land and the water. The light has its own depth, for what's built and for the land.
+
+**What it was judged against** (the direction so far):
+- the open ground is the paper itself, drawn rather than painted (after Taohua);
+- broad planes in a few tones, and water stays water (the mobile studies);
+- the pigment outlasts the light: a warm ochre, never a grey reading as smoke (stage 18);
+- the cliffs keep their shade (stage 15);
+- the roofs aren't the loudest thing (stage 19);
+- shadows are kept when the colour's lighter (the first dials).
+
+**Three rounds, 19 settings, each in the wide, close and far views:**
+- **The picture as lit:** its strongest colour is the land's yellow halo round the settlement. It reads as a spotlight, and from far off as a blot.
+- **Land colour off:** what's built stands out, but the land's light, the sky's cool grey, lay on the warm paper as smoke. This is stage 18's complaint again. **The fix:** where colour is taken off, the light goes to a warm sepia (the red channel darkened least, the blue most).
+- **All colour off, warm shade:** a handsome sepia drawing, but it loses the place: the terracotta, the olives, the water.
+- **All colour at .7:** the roofs quieten, but the halo stays. The land has to drop much further than what's built.
+- **Land shade below .5:** the ravine and the cliffs go flat.
+- **Land colour above about .4:** the halo comes back.
+
+**The house setting:** built .8, land .3, water .8, shadow 1.15, land shadow .5, under .7.
+- What's built carries the colour, a little quieted.
+- The land is the paper's own, with its shade a warm wash and its contours through it, so it meets the drawn land beyond with no edge.
+- The water stays water. Far off, the settlement is a coloured piece on a drawn land, not a pool of yellow.
 
 ## Stage 23: crags, broken ground, and what the sheet still asked for
 
