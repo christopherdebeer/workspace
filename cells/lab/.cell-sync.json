@@ -1,8 +1,8 @@
 {
   "cell": "c15r/lab",
   "cellId": "lab-8928acf3",
-  "treeVersion": "tree:93fb589dd44cdb7d7ecdaa57fb0e069ef97802325be4b1850f1c046f703a8d0a",
-  "syncedAt": "2026-10-23T12:44:32.525Z",
+  "treeVersion": "tree:215169c31c0c17ea02401ad9d23f6aa28fc31a17faba76b5a2f37309ef702ffa",
+  "syncedAt": "2026-10-23T12:44:50.236Z",
   "files": {
     "README.md": "sha256:665df4179140457c44ea9e0f6f5820bd6e9b557fb196a37cf1245a07cb11f7c6",
     "client/bricks/build.ts": "sha256:e6ec53d7f179e4184809a1db345a074364781b5a9c44aa524818c0d264051479",
@@ -196,6 +196,8 @@
     "devtools/fungi.test.mjs": "sha256:87f6bc647143f0ce6d51581caa61ad15924904dc1b27f612c5f6274e2786b562",
     "devtools/harness.mjs": "sha256:1e1a2f49ed056a93d8b0edef1946494147cea0262f4d12e12035a2009bcab206",
     "devtools/input.test.mjs": "sha256:ab651ef5a92e639bcb27e4f11503261fb3bb46d0132fe9b9d9db7d77cc0f4eed",
+    "devtools/intent-reviews/critique-001.md": "sha256:e14fd8bf260cb9da330ae15ddcc6c853a53d5bbbf7be0b98b91489e112ca623d",
+    "devtools/intent-reviews/features-001.json": "sha256:8390f4123763f218d9e597c62a5e2c181b226d953e80c3d9719c26dd1a25c60a",
     "devtools/intent-reviews/headless-001.md": "sha256:7f9f92869d305965ff91b346f174ab838b568dce4058eca4fca1fa36a482c93c",
     "devtools/intent-reviews/headless-001.tar.gz": "sha256:0d072c7c9c1b8b911f82c4169adb3b915e390d3ee20b5bb42cf41ba094d6ff89",
     "devtools/intent-reviews/land-001-cases.jpg": "sha256:55b953ddd605ccdab4a7927178b467f20a53ebf774eeb0b6918b592857ba29d3",
@@ -218,6 +220,7 @@
     "devtools/intent-reviews/land-002/r5-land27.tar.gz": "sha256:b2804188e5cc08cfa45e503b3e4df99bb14f2ce840f2d1582e3a2f700b76aec8",
     "devtools/intent-reviews/land-002/r6-land29.tar.gz": "sha256:ee6d235de112fba22b8a4bc6b28f52426699eba7ad9a9029b69f7d4f7608a929",
     "devtools/intent-reviews/land-002/r6-land31.tar.gz": "sha256:0c0d5e0d7738d155ef6972799c5745077604c2645f610d72f8954c737cc28c2c",
+    "devtools/intent-reviews/second-reviews-001.tar.gz": "sha256:1a84b87f861a01d99e3949e2f3e83d1e4f99ec78b8eb90983ffe5bbb00517823",
     "devtools/journey.test.mjs": "sha256:a1f60e714e2c75bb7e0c838372edee69dd33dc1ae4f43a3477a04b23cf04c02b",
     "devtools/labyrinth-atlas.mjs": "sha256:14c77149900dc3dc234208eebb0f59f45b2a39feeee886008dcb1ec6d35f5818",
     "devtools/labyrinth-connectors.mjs": "sha256:e4e4190fe9dcf6b11a95c79426dfbc433ef2f71bf56bcf47e6199de8bbec9386",
