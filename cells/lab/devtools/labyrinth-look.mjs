@@ -20,7 +20,7 @@ export const VIEWS = [
 
 // (--q=QUERY: a view of its own instead of the set, for looking at one place: e.g. --q='story=16&zoom=0.12&at=0.9&turn=3')
 if (opt.q) VIEWS.splice(0, VIEWS.length, { name: 'q', query: opt.q });
-// (--views=wide,far: only those of the set; --dials=QUERY: the dials laid on every view, e.g. --dials='land=0.4&shadow=1.2')
+// (--views=wide,far: only those of the set; --dials=QUERY: the dials laid on every view, e.g. --dials='terrain=0.4&shadow=1.2')
 if (opt.views) { const want = new Set(String(opt.views).split(',')); VIEWS.splice(0, VIEWS.length, ...VIEWS.filter((v) => want.has(v.name))); }
 if (opt.dials) for (const v of VIEWS) v.query += `&${opt.dials}`;
 const tag = opt.tag ?? 'now', size = Number(opt.size ?? 900);
@@ -30,7 +30,7 @@ const files = [];
 await withWood(async (lab) => {
   for (const v of VIEWS) {
     if (opt.only && v.name !== opt.only) continue;
-    const p = await lab.open(`instant&cats=0&${v.query}${opt.marks ? '&marks' : ''}${opt.print ? '&print' : ''}${opt.clay ? '&clay' : ''}`);
+    const p = await lab.open(`instant&cats=0&${v.query}${opt.marks ? '&marks' : ''}${opt.print ? '&paper' : ''}${opt.clay ? '&clay' : ''}`);
     await p.waitForTimeout(6000);
     // (only the drawing: the brushes and buttons hidden)
     await p.evaluate(() => { const keep = new Set(); for (const c of document.querySelectorAll('canvas')) for (let e = c; e; e = e.parentElement) keep.add(e); for (const e of document.querySelectorAll('body *')) if (!keep.has(e) && !e.querySelector('canvas')) e.style.visibility = 'hidden'; for (const c of document.querySelectorAll('canvas')) if (c.id !== 'stone') c.style.visibility = 'hidden'; });

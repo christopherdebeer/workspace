@@ -142,7 +142,15 @@ await withWood(async (lab) => {
   c.ok('a drag from the background turns it, and it settles on a corner', Math.abs(az - az0) > 1 && Math.abs(q - Math.round(q)) < 1e-3, { az0, az });
   c.ok('and builds nothing', (await probe()).ops === n - 1);
   await p.click('#print'); await p.waitForTimeout(300);
-  c.ok('print draws it as a print', await p.evaluate(() => window.__labyrinth.R.print));
+  const visible = (sel) => p.evaluate((s) => getComputedStyle(document.querySelector(s)).display !== 'none', sel);
+  c.ok('print: the layers in place of the brushes', (await visible('#layers')) && !(await visible('#hands')));
+  await p.click('#layers [data-layer="colour"]'); await p.waitForTimeout(200);
+  const land0 = await p.evaluate(() => window.__labyrinth.R.dials.land);
+  await p.evaluate(() => { const i = document.querySelectorAll('#layers .dial input')[1]; i.value = '1000'; i.dispatchEvent(new Event('input', { bubbles: true })); });
+  const after = await p.evaluate(() => ({ land: window.__labyrinth.R.dials.land, q: location.search }));
+  c.ok('a layer touched opens its sliders; dragged, the picture follows and the address keeps it', (await p.locator('#layers .dial').count()) === 3 && land0 < 1 && after.land === 1 && /print/.test(after.q) && /terrain=1/.test(after.q) && !/[?&]land=/.test(after.q), { land0, after });
+  await p.click('#print'); await p.waitForTimeout(200);
+  c.ok('and out of print, the brushes again', (await visible('#hands')) && !(await visible('#layers')) && !/print/.test(await p.evaluate(() => location.search)));
   const kept = await p.evaluate(() => window.__labyrinth.world.encode());
   await p.reload(); await p.waitForFunction(() => window.__labyrinth); await p.waitForTimeout(500);
   c.ok('what\'s built is kept across a reload', (await p.evaluate(() => window.__labyrinth.world.encode())) === kept && (await probe()).ops === n - 1);

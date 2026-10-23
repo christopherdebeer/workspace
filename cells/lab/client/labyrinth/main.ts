@@ -10,8 +10,8 @@
  * pinch to come close. Undo, print, clear. What's built is kept on this device.
  *
  * `?story=1..4` (the storyboard: first touch, a wall traced, an elevated connection, a resolved labyrinth) ·
- * `?ops=` (operations, as the model writes them) · `?brush=` · `?sheet` · `?select=k.i.j[&whole]` · `?print` · `?marks` (the drawing's marks by why they're there) · `?turn=` ·
- * `?zoom=` · `?preview` · `?still` · `?held` (the view never reframes on its own) · `?look=picture` · `?built= ?land= ?water= ?colour= ?shadow= ?landshadow= ?toward= ?fade= ?lines= ?under= ?edges=` (the dials: picture and drawing, judged apart) · `?instant` (no rising, no gliding, no dust, no cats: for pictures taken by a slow
+ * `?ops=` (operations, as the model writes them) · `?brush=` · `?sheet` · `?select=k.i.j[&whole]` · `?print` (the layers in hand) · `?paper` · `?marks` (the drawing's marks by why they're there) · `?turn=` ·
+ * `?zoom=` · `?preview` · `?still` · `?held` (the view never reframes on its own) · `?look=picture` · `?built= ?terrain= ?water= ?colour= ?shadow= ?landshadow= ?toward= ?fade= ?lines= ?under= ?edges=` (the dials: picture and drawing, judged apart) · `?instant` (no rising, no gliding, no dust, no cats: for pictures taken by a slow
  * renderer, where every transition is frames it hasn't time for)
  */
 import { CENTER, World, inGrid, key, replay, unkey, type Alt, type Cell, type Op } from './model';
@@ -28,16 +28,18 @@ import { DIRS } from './model';
 import { Out, POSES, cat, gait, type PoseName } from './catbody';
 import { COATS, Cats, type Cat } from './cats';
 import { perf } from './perf';
+import { HOUSE, PRESETS, address, layersPalette, type Dials } from './layers';
 
 const qs = new URLSearchParams(location.search);
 const preview = qs.has('preview'), still = qs.has('still'), instant = qs.has('instant'), heldView = qs.has('held');
 const canvas = document.getElementById('stone') as HTMLCanvasElement, guide = document.getElementById('guide') as HTMLCanvasElement;
 const g2 = guide.getContext('2d')!;
 const R = new Renderer(canvas);
-R.print = qs.has('print');
+// (`?paper`: the whole of it drawn on the paper, as one fixed look, for the harnesses; `?print` opens print, below)
+R.print = qs.has('paper');
 R.marks = qs.has('marks');
 R.clay = qs.has('clay');
-// (the dials, to judge the picture and the drawing apart: `?built=`, `?land=` and `?water=` 0–1 the picture's colour over
+// (the dials, to judge the picture and the drawing apart: `?built=`, `?terrain=` and `?water=` 0–1 the picture's colour over
 // the page, what's built, the land and its water apart (`?colour=`, or `color`, all; the water as the land unless set);
 // `?shadow=` 0–2 its light as a layer of its own (`?landshadow=` the land's and its water's apart, as `?shadow=` if
 // that's set); `?toward=` 0–1 how far everything's taken along its way to the page; `?fade=` how far its way to the page
@@ -47,15 +49,14 @@ R.clay = qs.has('clay');
 // through it; the water still water. `?look=picture`: the whole picture as it's lit, every dial at its plain value)
 {
   const dial = (k: string, lo: number, hi: number) => { const v = Number(qs.get(k)); return qs.has(k) && Number.isFinite(v) ? Math.min(hi, Math.max(lo, v)) : null; };
-  const base = qs.get('look') === 'picture'
-    ? { built: 1, land: 1, water: 1, shadow: 1, landshadow: 1, under: 0 }
-    : { built: 0.8, land: 0.3, water: 0.8, shadow: 1.15, landshadow: 0.5, under: 0.7 };
+  const base = qs.get('look') === 'picture' ? PRESETS.picture : HOUSE;
   const colour = dial('colour', 0, 1) ?? dial('color', 0, 1), shadow = dial('shadow', 0, 2);
-  const land = dial('land', 0, 1) ?? dial('terrain', 0, 1) ?? colour ?? base.land;
+  // (the land's colour is `?terrain=`: `?land=` is the land's own seed)
+  const land = dial('terrain', 0, 1) ?? colour ?? base.land;
   R.dials = {
-    built: dial('built', 0, 1) ?? colour ?? base.built, land, water: dial('water', 0, 1) ?? (colour ?? dial('land', 0, 1) ?? dial('terrain', 0, 1) ?? base.water),
+    built: dial('built', 0, 1) ?? colour ?? base.built, land, water: dial('water', 0, 1) ?? (colour ?? dial('terrain', 0, 1) ?? base.water),
     shadow: shadow ?? base.shadow, landshadow: dial('landshadow', 0, 2) ?? shadow ?? base.landshadow,
-    toward: dial('toward', 0, 1) ?? 0, fade: dial('fade', 0.1, 10) ?? 1, lines: dial('lines', 0, 1) ?? 1, under: dial('under', 0, 1) ?? base.under, edges: dial('edges', 0, 1) ?? 1,
+    toward: dial('toward', 0, 1) ?? base.toward, fade: dial('fade', 0.1, 10) ?? base.fade, lines: dial('lines', 0, 1) ?? base.lines, under: dial('under', 0, 1) ?? base.under, edges: dial('edges', 0, 1) ?? base.edges,
   };
 }
 R.shadows = !qs.has('noshadow');
@@ -791,9 +792,24 @@ if (qs.has('select')) {
 }
 
 // ─── its buttons ───
-const printB = document.getElementById('print')!;
-const showPrint = () => { printB.classList.toggle('on', R.print); printB.setAttribute('aria-pressed', String(R.print)); };
-printB.addEventListener('click', () => { R.print = !R.print; showPrint(); });
+/**
+ * Print: the brushes give way to the drawing's layers (layers.ts), each touched for its sliders; the stone's only turned
+ * and asked about while it's open (the hand), and the brush that was in hand comes back after. The address keeps what's
+ * set (`?print` and the dials that differ from the house's).
+ */
+const printB = document.getElementById('print')!, layersEl = document.getElementById('layers')!;
+let printing = false, brushBefore: Brush = 'auto';
+const pal = layersPalette(layersEl, () => R.dials as Dials, (d) => { R.dials = d; history.replaceState(null, '', address(d, printing)); });
+function setPrinting(on: boolean) {
+  if (on === printing) return;
+  printing = on;
+  document.body.classList.toggle('printing', on);
+  printB.classList.toggle('on', on); printB.setAttribute('aria-pressed', String(on));
+  if (on) { brushBefore = brush; openSheet(false); setBrush('hand'); pal.refresh(); say('the layers of the print: touch one for its values'); }
+  else setBrush(brushBefore);
+  history.replaceState(null, '', address(R.dials as Dials, on));
+}
+printB.addEventListener('click', () => setPrinting(!printing));
 document.getElementById('undo')!.addEventListener('click', () => { if (world.undo(now())) { unselect(); kept(); } });
 /**
  * Start again: what's built cleared away, back to the land it was on; on bare land already, a new piece of land.
@@ -806,7 +822,9 @@ function startAgain() {
   say(world.ops.length ? '' : world.land ? 'a new piece of land' : 'the stone, bare');
 }
 document.getElementById('again')!.addEventListener('click', startAgain);
-showPrint(); showBrush(); hint();
+showBrush(); hint();
+// (once the rest is set up: what it says is further on)
+if (qs.has('print')) queueMicrotask(() => setPrinting(true));
 if (preview) document.body.classList.add('preview');
 
 // ─── what the hand is asking for, while it's asking ───

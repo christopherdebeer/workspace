@@ -81,6 +81,35 @@
     #catcard #catclose { background: none; color: #2b2420; font-size: 20px; width: 34px; padding: 0; }
     .following #hint, .following #alts { display: none !important; }
     .preview #catcard { display: none !important; }
+    /* print: the layers in place of the brushes, the one touched open under them with its sliders (layers.ts) */
+    #layers { position: fixed; left: 10px; right: 10px; bottom: max(12px, env(safe-area-inset-bottom)); z-index: 2; display: none; flex-direction: column; padding: 6px; border-radius: 26px; background: rgba(246,241,231,.9); box-shadow: 0 2px 14px rgba(70,50,30,.12), inset 0 0 0 1px rgba(70,50,30,.08); -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); max-width: 560px; margin: 0 auto; }
+    .printing #layers { display: flex; }
+    .printing #hands, .printing #sheet, .printing #alts, .printing #card, .printing #hint { display: none !important; }
+    #layers .row { display: flex; gap: 2px; justify-content: space-between; }
+    #layers .row button { appearance: none; border: 0; background: none; color: #4a3f36; flex: 1 1 0; min-width: 52px; min-height: 56px; border-radius: 20px; display: grid; justify-items: center; align-content: center; gap: 3px; cursor: pointer; font: inherit; -webkit-tap-highlight-color: transparent; }
+    #layers .row svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round; }
+    #layers .row i { font-style: normal; font-size: 9px; letter-spacing: .14em; text-transform: uppercase; }
+    #layers .row s { display: block; width: 26px; height: 2px; border-radius: 1px; background: rgba(43,36,32,.16); overflow: hidden; text-decoration: none; }
+    #layers .row s b { display: block; height: 100%; background: currentColor; }
+    #layers .row button.on { background: #2b2420; color: #f3ede1; }
+    #layers .row button.on s { background: rgba(243,237,225,.25); }
+    #layers .tray { display: none; padding: 6px 8px 4px; }
+    #layers.open .tray { display: grid; gap: 0; }
+    #layers .dial { display: grid; grid-template-columns: 82px 1fr 46px; align-items: center; gap: 10px; min-height: 44px; }
+    #layers .dial span { font-size: 13px; font-style: italic; }
+    #layers .dial output { font-size: 11.5px; text-align: right; font-variant-numeric: tabular-nums; opacity: .7; }
+    #layers .track { position: relative; height: 44px; display: flex; align-items: center; }
+    #layers .track em { position: absolute; top: 50%; width: 2px; height: 12px; margin: -6px 0 0 -1px; background: #b05c1e; opacity: .55; border-radius: 1px; pointer-events: none; }
+    #layers input[type=range] { -webkit-appearance: none; appearance: none; width: 100%; height: 44px; margin: 0; background: transparent; cursor: pointer; touch-action: none; }
+    #layers input[type=range]::-webkit-slider-runnable-track { height: 3px; border-radius: 2px; background: linear-gradient(to right, #2b2420 var(--t, 0%), rgba(43,36,32,.18) var(--t, 0%)); }
+    #layers input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 24px; height: 24px; margin-top: -10.5px; border-radius: 50%; background: #f6f1e7; box-shadow: 0 1px 5px rgba(40,30,20,.3), inset 0 0 0 1.5px #2b2420; }
+    #layers input[type=range]::-moz-range-track { height: 3px; border-radius: 2px; background: rgba(43,36,32,.18); }
+    #layers input[type=range]::-moz-range-progress { height: 3px; border-radius: 2px; background: #2b2420; }
+    #layers input[type=range]::-moz-range-thumb { width: 22px; height: 22px; border: 0; border-radius: 50%; background: #f6f1e7; box-shadow: 0 1px 5px rgba(40,30,20,.3), inset 0 0 0 1.5px #2b2420; }
+    #layers .starts { display: flex; gap: 5px; align-items: center; flex-wrap: wrap; margin-top: 4px; padding-top: 8px; border-top: 1px solid rgba(43,36,32,.1); }
+    #layers .starts i { font-style: normal; font-size: 10px; letter-spacing: .12em; text-transform: uppercase; opacity: .6; margin-right: 4px; }
+    #layers .starts button { appearance: none; border: 0; font: inherit; font-size: 12.5px; font-style: italic; color: #2b2420; background: none; box-shadow: inset 0 0 0 1px rgba(43,36,32,.18); border-radius: 14px; min-height: 34px; padding: 0 12px; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+    .preview #layers { display: none; }
   </style>
 </head>
 <body>
@@ -90,7 +119,7 @@
   <div id="acts">
     <button id="undo" aria-label="undo" title="undo"><svg viewBox="0 0 20 20"><path d="M7 5L3.5 8.5 7 12"/><path d="M3.5 8.5h8a4.5 4.5 0 010 9H9"/></svg></button>
     <button id="frame" aria-label="frame it all" title="frame it all"><svg viewBox="0 0 20 20"><path d="M3 7V3h4M13 3h4v4M17 13v4h-4M7 17H3v-4"/><rect x="7" y="7" width="6" height="6"/></svg></button>
-    <button id="print" aria-pressed="false" aria-label="as a print" title="as a print"><svg viewBox="0 0 20 20"><path d="M3 17L17 3M3 11L11 3M9 17L17 9M3 5l2-2M15 17l2-2"/></svg></button>
+    <button id="print" aria-pressed="false" aria-label="print: the layers" title="print: the layers"><svg viewBox="0 0 20 20"><path d="M3 17L17 3M3 11L11 3M9 17L17 9M3 5l2-2M15 17l2-2"/></svg></button>
     <button id="again" aria-label="clear the stone" title="clear the stone"><svg viewBox="0 0 20 20"><path d="M4 10a6 6 0 1 0 2-4.5"/><path d="M3.5 3v3.5H7"/></svg></button>
   </div>
   <div id="hint"></div>
@@ -135,6 +164,7 @@
       <button data-held="colonnettes"><svg viewBox="0 0 24 24"><path d="M8 21V11a4 4 0 018 0v10"/><path d="M5 21V11M3.8 11h2.4M3.8 21h2.4M19 21V11M17.8 11h2.4M17.8 21h2.4"/></svg><i>colonnettes</i></button>
     </div>
   </div>
+  <div id="layers" aria-label="the print's layers"></div>
   <div id="hands" role="toolbar" aria-label="brushes">
     <button data-brush="hand" aria-label="hand: turn it, and ask what something is"><svg viewBox="0 0 24 24"><path d="M8 13V5.5a1.5 1.5 0 013 0V12M11 11V4a1.5 1.5 0 013 0v7M14 11V5.5a1.5 1.5 0 013 0V14c0 4-2.5 7-6 7-2.5 0-4-1.2-5.5-3.5L3.8 15a1.4 1.4 0 012.3-1.6L8 15.5"/></svg><i>hand</i></button>
     <button data-brush="auto" aria-label="auto: tap raises, trace builds"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="2.2"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="9.5" opacity=".5"/></svg><i>auto</i></button>

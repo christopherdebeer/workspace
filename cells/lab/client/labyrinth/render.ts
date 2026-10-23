@@ -114,7 +114,7 @@ uniform highp sampler2DShadow uShadow; uniform highp sampler2D uShadowRaw; unifo
 // (the sun's map: how much of the world a texel of it covers, and how deep its range is, so its bias and its softness are
 // in the world's own units whatever it's fitted to)
 uniform float uTexel, uDepthRange, uMarks, uClay;
-// (\`?built= ?land= ?water=\` (\`?colour=\` all): the picture's colour over the page, what's built, the land and the water
+// (\`?built= ?terrain= ?water=\` (\`?colour=\` all): the picture's colour over the page, what's built, the land and the water
 // apart (unset: whole; the water as the land); \`?shadow=\`: its light (the sun's side and the shade, what's cast, the hollows) as a layer of its own, 0 none, 1
 // as lit, 2 twice as deep (\`?landshadow=\`: the land's and its water's, as \`?shadow=\` unless set); \`?toward=\`: how far everything's taken along its way to the page (unset: not at all))
 uniform float uBuiltK, uLandK, uWaterK, uShade, uLandShade, uToward, uUnder;
@@ -673,7 +673,7 @@ void main() {
   // (what's taken up: a faint warm tint; its outline is drawn after, where the mask changes)
   if (sel) c = mix(c, c * vec3(1.1, .98, .84) + vec3(.05, .025, 0.), .6);
   if (uMarks > .5) c = mix(c, PAP, .82);
-  // (the layers multiplied, as washes over ink on paper, each with its own opacity: the colour (\`?built= ?land= ?water=\`: what's built; the land, with what grows on it; its
+  // (the layers multiplied, as washes over ink on paper, each with its own opacity: the colour (\`?built= ?terrain= ?water=\`: what's built; the land, with what grows on it; its
   // water), as it's seen in the sun, going to the paper; over it the light (\`?shadow=\`), how much darker than that
   // it's seen, as deep as it's set whatever the colour; and under both, as much of the drawing as \`?under=\` lays there,
   // its lines darkening through whatever's over them)
