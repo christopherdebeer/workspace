@@ -524,9 +524,6 @@ void main() {
   c = xc * (L1 / L0);
   c = mix(c, vec3(L1), smoothstep(.55, 1., L1) * .35);
   c = pow(clamp(c, 0., 1.), vec3(1. / 2.2));
-  // (how much the light makes of it, as it's seen: lighter or darker than its own colour (the sun, the shade cast on it,
-  // the sky it sees): kept, when the picture's made fainter over the page, as the shading on the paper)
-  float litShade = clamp(dot(c, vec3(.3, .55, .15)) / max(dot(base, vec3(.3, .55, .15)), .05), 0., 1.12);
   // (a lamp: lit from within)
   if (mat == 9) c = vec3(1., .86, .58);
   if (mat == 2) {
@@ -658,12 +655,12 @@ void main() {
   // (what's taken up: a faint warm tint; its outline is drawn after, where the mask changes)
   if (sel) c = mix(c, c * vec3(1.1, .98, .84) + vec3(.05, .025, 0.), .6);
   if (uMarks > .5) c = mix(c, PAP, .82);
-  // (\`?colour=\`: the picture fainter over the page, as a layer: its colour given to the paper, its light kept there as
-  // shading (the sun's side, the shadows cast, the hollows), only where it's still a picture: what's drawn stays drawn)
-  // (and under it, as much of the drawing as \`?under=\` lays there, showing as the picture's made fainter over it)
-  if (uPale > 0. && !sel && !fur) {
-    c = mix(c, PAP * mix(1., litShade, .9), uPale * (1. - drawn));
-    c *= mix(vec3(1.), landInk, uPale * uUnder * (1. - smoothstep(.15, .7, drawn)));
+  // (the layers multiplied, as a wash over ink on paper: \`?colour=\` the picture's opacity, its colour and its light (sun,
+  // shadow, hollows) going to the paper together, only where it's still a picture (what's drawn stays drawn); and
+  // \`?under=\`, as much of the drawing as lies under it, its lines darkening through whatever's over them)
+  if (!sel && !fur) {
+    if (uPale > 0.) c = mix(c, PAP, uPale * (1. - drawn));
+    c *= mix(vec3(1.), landInk, uUnder * (1. - smoothstep(.15, .7, drawn)));
   }
   oCol = vec4(c, 1.);
   // (its kind for the post pass, and within each how far it's drawn: land .12–.38, the rest .41–.47, leaves .49–.54)
@@ -713,7 +710,7 @@ const STROKE_FS = COMMON + REACH + `
 in vec3 vPos; in vec2 vSA; in vec3 vFam; in float vKeep;
 uniform float uMarks;
 // (\`?colour=\`, as in the picture; \`?lines=\`: the marks' opacity (as how much is taken off it); \`?under=\`: how much of the
-// drawing lies under the picture, showing through as \`?colour=\` makes it fainter (unset: only the marks that keep there anyway))
+// drawing lies under the picture, multiplied through it (unset: only the marks that keep there anyway))
 uniform float uPale, uToward, uLinesOff, uUnder;
 layout(location=0) out vec4 oCol; layout(location=1) out vec4 oNrm;
 float hash(vec3 p) { return fract(sin(dot(p, vec3(127.1, 311.7, 74.7))) * 43758.5453); }
@@ -725,8 +722,8 @@ void main() {
   // (a branch line goes with its tree: left out where the tree is, by the tree's own chance)
   if (fam > 13.5 && fam < 14.5 ? pick > reachLines(vPos) * 1.25 - .08 : (pick > reachLines(vPos) * 1.3 - .05 || pick > vKeep)) discard;
   float R0 = reach(vPos), t = (R0 + (noise(vec3(vPos.xz * .9, 5.)) - .5) * .08 * min(1., R0 * 4.)) * (1. - uToward), drawn = 1. - smoothstep(.05, .9, t);
-  // (the marks under the picture come up as it's made fainter over them: the line layer beneath, showing through)
-  float shows = 1. - (1. - drawn) * (1. - uPale * uUnder);
+  // (the marks under the picture (\`?under=\`), multiplied in: they darken through it, as ink under a wash)
+  float shows = 1. - (1. - drawn) * (1. - uUnder);
   float aa = max(fwidth(across), 1e-4);
   float cov = (1. - smoothstep(1. - aa, 1. + aa * .5, abs(across))) * min(1., 2. / aa);
   float dry = smoothstep(.18, .32, noise(vec3(vPos.xz * 7.5 + vPos.y * 3., fam * 3.1)));
@@ -735,7 +732,9 @@ void main() {
   // (the land's in sepia; the water's a cooler ink)
   vec3 col = fam > 4.5 && fam < 8.5 ? vec3(.2, .27, .3) : vec3(.26, .19, .13);
   if (uMarks > .5) col = fam < .5 ? vec3(.85, .2, .15) : fam < 1.5 ? vec3(.5, .35, .1) : fam < 2.5 ? vec3(.15, .55, .25) : fam < 3.5 ? vec3(.55, .2, .7) : fam < 4.5 ? vec3(.9, .5, .1) : fam < 5.5 ? vec3(.15, .35, .8) : fam < 6.5 ? vec3(.1, .6, .6) : fam < 7.5 ? vec3(.4, .2, .8) : fam < 8.5 ? vec3(.9, .3, .6) : fam < 9.5 ? vec3(.1, .1, .1) : fam < 10.5 ? vec3(.55, .55, .1) : fam < 11.5 ? vec3(.05, .45, .35) : vec3(.6, .45, .35);
-  oCol = vec4(col, min(1., a)); oNrm = vec4(0.);
+  // (multiplied into what's under it (the blend's dst × src): the ink as a fraction of the paper's own, so on the paper
+  // it's the ink's colour, and over the picture darker as the picture is; the mask left be (× 1))
+  oCol = vec4(mix(vec3(1.), col / vec3(.95, .90, .80), min(1., a)), 1.); oNrm = vec4(1.);
 }`;
 const POST_VS = `#version 300 es
 out vec2 vUv; void main() { vec2 p = vec2(gl_VertexID == 1 ? 3. : -1., gl_VertexID == 2 ? 3. : -1.); vUv = p * .5 + .5; gl_Position = vec4(p, 0., 1.); }`;
@@ -822,8 +821,8 @@ void main() {
   // lightest, its crown's outline a hint, not a ring round each part of it)
   bool leafM = m > .485 && m < .545;
   float drawn = bleedOn() < .5 ? 0. : m > .405 && m < .475 ? clamp((m - .41) / .06, 0., 1.) : leafM ? clamp((m - .49) / .05, 0., 1.) : m > .1 && m < .4 ? clamp((m - .12) / .26, 0., 1.) : 0.;
-  // (the outlines under the picture (\`?under=\`), coming through as it's made fainter (\`?colour=\`))
-  if (bleedOn() > .5 && m > .1 && m < .6) drawn = 1. - (1. - drawn) * (1. - uPale * uUnder);
+  // (the outlines under the picture (\`?under=\`), multiplied through it)
+  if (bleedOn() > .5 && m > .1 && m < .6) drawn = 1. - (1. - drawn) * (1. - uUnder);
   float fold = smoothstep(.04, .14, lap), crease = smoothstep(.3, .6, turn);
   float wt = (furOn > .5 ? .4 : leafM ? mix(.06, .2, drawn) : mix(.16, .8, drawn)) * fold * (1. - onLand) + (leafM ? 0. : crease * drawn * .6) * (1. - onLand);
   wt = max(wt, onLand * smoothstep(.2, .5, lap) * mix(.12, .55, drawn));
@@ -833,7 +832,8 @@ void main() {
   // (\`?edges=\`: the outline ink's opacity)
   wt *= 1. - uEdgesOff;
   if (uClay > .5) wt = 0.;
-  o = vec4(mix(mix(c, ink * 1.6, max(wt * (1. - step(.5, skyN)), rim * .8)), vec3(.69, .36, .12), ring * .9), 1.);
+  // (the outline ink multiplied in, measured against the paper's own, so on the paper it's as it ever was)
+  o = vec4(mix(c * mix(vec3(1.), min(ink * 1.6 / vec3(.95, .90, .80), vec3(1.)), max(wt * (1. - step(.5, skyN)), rim * .8)), vec3(.69, .36, .12), ring * .9), 1.);
   // (bleeding: the same paper under everything, its edge a shade darker, so the ground and the page are one sheet)
   if (bleedOn() > .5) o.rgb *= 1. - .06 * smoothstep(.35, .75, length((vUv - .5) * vec2(1.2, 1.)));
 }`;
@@ -1139,7 +1139,7 @@ export class Renderer {
       gl.uniform1f(S('uBleed'), this.bleed ? 1 : 0); gl.uniform1f(S('uPaper'), this.print ? 1 : 0); gl.uniform4fv(S('uLand'), this.landBox); this.bindFocus(this.stroke);
       gl.uniform1f(S('uPale'), 1 - this.dials.colour); gl.uniform1f(S('uToward'), this.dials.toward); gl.uniform1f(S('uLinesOff'), 1 - this.dials.lines); gl.uniform1f(S('uUnder'), this.dials.under);
       gl.bindVertexArray(this.svao);
-      gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA); gl.depthMask(false); gl.disable(gl.CULL_FACE);
+      gl.enable(gl.BLEND); gl.blendFunc(gl.DST_COLOR, gl.ZERO); gl.depthMask(false); gl.disable(gl.CULL_FACE);
       gl.enable(gl.POLYGON_OFFSET_FILL); gl.polygonOffset(-2, -4);
       gl.drawArrays(gl.TRIANGLES, 0, this.scount);
       gl.disable(gl.POLYGON_OFFSET_FILL); gl.disable(gl.BLEND); gl.depthMask(true); gl.enable(gl.CULL_FACE);
