@@ -48,6 +48,16 @@ export function validateCritique(c, id, e) {
   }
   assert(text(c.preservation) && text(c.feedback) && text(c.recovery) && text(c.nextExperiment), 'Assess preservation, feedback, recovery and next experiment (use unknown if unobserved)');
   assert(strings(c.possibleCauses), 'possibleCauses must be an array; these are hypotheses, not observations');
+  // (the scene axes, where given: optional, so earlier reviews stay valid)
+  if (c.scene && Object.values(c.scene).some((v) => v !== '' && v !== null)) {
+    const s = c.scene, one = (v, xs, what) => assert(xs.includes(v), `scene.${what}: one of ${xs.join(', ')}`);
+    one(s.locationHonoured, ['yes', 'partly', 'no', 'n/a'], 'locationHonoured');
+    one(s.endpointsHonoured, ['yes', 'partly', 'no', 'n/a'], 'endpointsHonoured');
+    assert(Number.isInteger(s.coherence) && s.coherence >= 0 && s.coherence <= 3, 'scene.coherence: 0..3');
+    one(s.surprise, ['none', 'welcome', 'neutral', 'unwelcome'], 'surprise');
+    one(s.handResponse, ['build-on', 'keep', 'look-for-alternative', 'undo-and-retry', 'unsure'], 'handResponse');
+    assert(typeof s.disconnect === 'string', 'scene.disconnect: a short phrase, or empty if none');
+  }
 }
 function manifest(root) {
   const m = readJSON(join(root, 'manifest.json'));
@@ -120,8 +130,10 @@ export function review(root, command, file) {
       id, reviewer: '', verdict: '', matchedHypothesis: null, observed: '', delta: '', evidence: '',
       criteria: e.value.hypotheses.flatMap(h => h.successCriteria.map((criterion, index) => ({ hypothesis: h.id, index, criterion, result: 'uncertain', evidence: '' }))),
       preservation: '', feedback: '', recovery: '', possibleCauses: [], nextExperiment: '',
+      // (for comparing across gestures and rounds, judged from the scene, not the implementation)
+      scene: { locationHonoured: '', endpointsHonoured: '', coherence: null, surprise: '', handResponse: '', disconnect: '' },
     });
-    writeFileSync(join(dir, 'CRITIQUE.md'), '# Compare against the locked expectation\n\nRead expectation.lock.json BEFORE the after image and result.json. Score the original criteria; do not retrofit them. Distinguish observed geometry, implementation diagnostics and speculative causes. Operation appended is not intent fulfilled; reached is not proof of visual agreement. Say unknown for feedback/recovery not observed. Record surprising but acceptable results as alternatives. Fill critique.json and run critique.\n');
+    writeFileSync(join(dir, 'CRITIQUE.md'), '# Compare against the locked expectation\n\nRead expectation.lock.json BEFORE the after image and result.json. Score the original criteria; do not retrofit them. Distinguish observed geometry, implementation diagnostics and speculative causes. Operation appended is not intent fulfilled; reached is not proof of visual agreement. Say unknown for feedback/recovery not observed. Record surprising but acceptable results as alternatives. Judge from the after image first; the diagnostics only after.\n\nscene: locationHonoured / endpointsHonoured (yes, partly, no, n/a): did it act where the hand touched, and join what the stroke joined? coherence 0..3: does the result read as one sensible piece of construction in this landscape (0 nonsense, 3 inevitable)? surprise: none, welcome, neutral or unwelcome. handResponse: what would this hand most likely do next (build-on, keep, look-for-alternative, undo-and-retry, unsure)? disconnect: in a short phrase, the gap between what was meant and what happened, in your own words (empty if none).\n\nFill critique.json and run critique.\n');
     return { id, expectation: join(dir, 'expectation.lock.json'), image: join(dir, afterName), diagnostics: join(dir, 'result.json'), critique: join(dir, 'critique.json') };
   }
   assert(existsSync(join(dir, 'revealed.json')), 'Reveal the result before critiquing it');

@@ -43,6 +43,17 @@ SETS[2] = [
   { name: 'flat', q: 'ops=[]&zoom=0.55', seed: 77, n: 5 },
   { name: 'story15', q: 'story=15&zoom=0.5', seed: 15, n: 3 },
 ];
+// (a third, on the continuous hillside (stage 21 on): lands no earlier round has seen, each a run of gestures so the later
+// ones are made on what the earlier built; three rounds, by --cases)
+SETS[3] = [
+  { name: 'land6', q: 'land=6&zoom=0.62', seed: 601, n: 3 },
+  { name: 'land10', q: 'land=10&zoom=0.62&turn=1', seed: 1001, intent: 'mass', n: 3 },
+  { name: 'land14', q: 'land=14&zoom=0.62&turn=2', seed: 1401, n: 3 },
+  { name: 'land17', q: 'land=17&zoom=0.62', seed: 1701, n: 4 },
+  { name: 'land19', q: 'land=19&zoom=0.62&turn=3', seed: 1901, intent: 'mass', n: 4 },
+  { name: 'land22', q: 'land=22&zoom=0.62&turn=1', seed: 2201, n: 4 },
+  { name: 'land25', q: 'land=25&zoom=0.62', seed: 2501, n: 4 },
+];
 const CASES = (SETS[Number(opt.set) || 1] ?? []).filter((c) => !opt.cases || String(opt.cases).split(',').includes(c.name));
 if (!CASES.length) throw new Error('No matching cases');
 
