@@ -116,8 +116,8 @@ uniform highp sampler2DShadow uShadow; uniform highp sampler2D uShadowRaw; unifo
 uniform float uTexel, uDepthRange, uMarks, uClay;
 // (\`?built= ?land= ?water=\` (\`?colour=\` all): the picture's colour over the page, what's built, the land and the water
 // apart (unset: whole; the water as the land); \`?shadow=\`: its light (the sun's side and the shade, what's cast, the hollows) as a layer of its own, 0 none, 1
-// as lit, 2 twice as deep; \`?toward=\`: how far everything's taken along its way to the page (unset: not at all))
-uniform float uBuiltK, uLandK, uWaterK, uShade, uToward, uUnder;
+// as lit, 2 twice as deep (\`?landshadow=\`: the land's and its water's, as \`?shadow=\` unless set); \`?toward=\`: how far everything's taken along its way to the page (unset: not at all))
+uniform float uBuiltK, uLandK, uWaterK, uShade, uLandShade, uToward, uUnder;
 layout(location=0) out vec4 oCol; layout(location=1) out vec4 oNrm;
 float leafEdge(vec3 n) { float rim = 1. - abs(dot(n, normalize(uDir))); return .8 * pow(rim, 1.6) - .08; }
 float hash(vec3 p) { return fract(sin(dot(p, vec3(127.1, 311.7, 74.7))) * 43758.5453); }
@@ -679,10 +679,14 @@ void main() {
   // its lines darkening through whatever's over them)
   if (!sel && !fur) {
     bool ofLand = mat == 3 || mat == 4 || (mat == 5 && moss);
-    float colK = mat == 2 ? uWaterK : ofLand ? uLandK : uBuiltK;
-    if (colK < 1. || uShade != 1.) {
+    float colK = mat == 2 ? uWaterK : ofLand ? uLandK : uBuiltK, shK = mat == 2 || ofLand ? uLandShade : uShade;
+    if (colK < 1. || shK != 1.) {
       vec3 lt = clamp(lit, vec3(.03), vec3(1.25)), ik = max(inkK, vec3(.05));
-      c = mix(PAP, min(c / (lt * ik), vec3(1.)), colK) * pow(lt, vec3(uShade)) * ik;
+      // (the light, as the colour's taken from under it, in the pen's warm sepia, not the sky's grey: on the warm
+      // paper a grey shade lies as smoke)
+      float lm = dot(lt, vec3(.3, .55, .15));
+      vec3 sh3 = mix(lt, pow(vec3(min(lm, 1.)), vec3(.82, 1., 1.3)) * max(lm, 1.), 1. - colK);
+      c = mix(PAP, min(c / (lt * ik), vec3(1.)), colK) * pow(sh3, vec3(shK)) * ik;
     }
     c *= mix(vec3(1.), landInk, uUnder * (1. - smoothstep(.15, .7, drawn)));
   }
@@ -919,10 +923,10 @@ export class Renderer {
   marks = false;
   /** \`?clay\`: every surface one clay, no paper, no ink: the forms alone */
   clay = false;
-  /** the dials (\`?built= ?land= ?water= ?shadow= ?toward= ?fade= ?lines= ?under= ?edges=\`; \`?colour=\` sets both colours): the
-   * picture's colour over the page, what's built, the land and its water apart; its light as a layer of its own (0–2); how far everything's taken along its way to the page, how far that way runs (a multiple), the marks'
+  /** the dials (\`?built= ?land= ?water= ?shadow= ?landshadow= ?toward= ?fade= ?lines= ?under= ?edges=\`; \`?colour=\` sets both colours): the
+   * picture's colour over the page, what's built, the land and its water apart; its light as a layer of its own (0–2), what's built and the land's apart; how far everything's taken along its way to the page, how far that way runs (a multiple), the marks'
    * opacity, how much of the line layer carries on under the picture, the outline ink's opacity */
-  dials = { built: 1, land: 1, water: 1, shadow: 1, toward: 0, fade: 1, lines: 1, under: 0, edges: 1 };
+  dials = { built: 1, land: 1, water: 1, shadow: 1, landshadow: 1, toward: 0, fade: 1, lines: 1, under: 0, edges: 1 };
   private vao: WebGLVertexArrayObject; private buf: WebGLBuffer; private count = 0;
   /** the ground's own (mesh.ts keeps it from one build to the next while nothing it reads changes): handed to the GPU
    * only when it's new */
@@ -1149,7 +1153,7 @@ export class Renderer {
     gl.uniformMatrix4fv(U('uVP'), false, cam.vp); gl.uniformMatrix4fv(U('uLight'), false, light);
     gl.uniform1f(U('uTime'), time); gl.uniform3fv(U('uSun'), this.sun); gl.uniform3fv(U('uEye'), cam.eye); gl.uniform3fv(U('uDir'), cam.dir); gl.uniform1f(U('uN'), 12); gl.uniform3fv(U('uArea'), this.area); gl.uniform1f(U('uShadows'), this.shadows ? 1 : 0); gl.uniform1f(U('uBleed'), this.bleed ? 1 : 0); gl.uniform1f(U('uPaper'), this.print ? 1 : 0); gl.uniform4fv(U('uLand'), this.landBox); this.bindFocus(this.main);
     gl.uniform1f(U('uTexel'), this.shadowTexel); gl.uniform1f(U('uDepthRange'), this.shadowRange);
-    gl.uniform1f(U('uLeafCut'), this.leafCut ? 1 : 0); gl.uniform1f(U('uMarks'), this.marks ? 1 : 0); gl.uniform1f(U('uClay'), this.clay ? 1 : 0); gl.uniform1f(U('uBuiltK'), this.dials.built); gl.uniform1f(U('uLandK'), this.dials.land); gl.uniform1f(U('uWaterK'), this.dials.water); gl.uniform1f(U('uShade'), this.dials.shadow); gl.uniform1f(U('uToward'), this.dials.toward); gl.uniform1f(U('uUnder'), this.dials.under);
+    gl.uniform1f(U('uLeafCut'), this.leafCut ? 1 : 0); gl.uniform1f(U('uMarks'), this.marks ? 1 : 0); gl.uniform1f(U('uClay'), this.clay ? 1 : 0); gl.uniform1f(U('uBuiltK'), this.dials.built); gl.uniform1f(U('uLandK'), this.dials.land); gl.uniform1f(U('uWaterK'), this.dials.water); gl.uniform1f(U('uShade'), this.dials.shadow); gl.uniform1f(U('uLandShade'), this.dials.landshadow); gl.uniform1f(U('uToward'), this.dials.toward); gl.uniform1f(U('uUnder'), this.dials.under);
     gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, this.shadowTex); gl.bindSampler(0, this.sCompare); gl.uniform1i(U('uShadow'), 0);
     gl.activeTexture(gl.TEXTURE3); gl.bindTexture(gl.TEXTURE_2D, this.shadowTex); gl.bindSampler(3, this.sRaw); gl.uniform1i(U('uShadowRaw'), 3);
     gl.drawArrays(gl.TRIANGLES, 0, this.count);
