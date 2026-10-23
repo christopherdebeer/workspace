@@ -1,8 +1,8 @@
 {
   "cell": "c15r/lab",
   "cellId": "lab-8928acf3",
-  "treeVersion": "tree:5f183c0642b9d219556b902df91635bf62293cd846fb320b36e3a6c32169331d",
-  "syncedAt": "2026-10-23T22:48:34.931Z",
+  "treeVersion": "tree:f4da39ff77307e81dfd105e630d12adafa5e00979f04779fe47f8d3e36c891da",
+  "syncedAt": "2026-10-23T22:49:07.670Z",
   "files": {
     "README.md": "sha256:665df4179140457c44ea9e0f6f5820bd6e9b557fb196a37cf1245a07cb11f7c6",
     "client/bricks/build.ts": "sha256:e6ec53d7f179e4184809a1db345a074364781b5a9c44aa524818c0d264051479",
@@ -84,7 +84,7 @@
     "client/labyrinth/perches.ts": "sha256:69a5646c1eb0c478f4377ed4375d4907d44abf753b5c162585ffcf7c08f5b4ba",
     "client/labyrinth/perf.ts": "sha256:7bea171f5c6166b0026e81f86a02940f121085d0842068f2bcaf328c6eb80ff8",
     "client/labyrinth/plants.ts": "sha256:e4152c1c1baba2e487b2311234b189f6851640b0a8c3b8e0991f1bdfae2e0374",
-    "client/labyrinth/render.ts": "sha256:ece7f8284242611c23be59498374160d37690f282ac42e95b0c01ff88412546f",
+    "client/labyrinth/render.ts": "sha256:1da1918f53ac10e7729b66d6c3cc7c62d2d152b254dd114cba3fe9f7271c9a66",
     "client/labyrinth/select.ts": "sha256:7bb082790d939b7a900868f00b9b812d512210d90eececee9f8ad289362f1bc0",
     "client/labyrinth/strokes.ts": "sha256:79908267b8435d013915d658f253d23f3bb47d5755c1b13c988908d8e1c37bf0",
     "client/labyrinth/terrain.ts": "sha256:0f2d8d820727a04368fbb0e5a78bb25d669182fe05aa26849af1ca997b116722",
@@ -352,7 +352,7 @@
     "static/labyrinth-atlas.md": "sha256:fa31990e9f235f1da74ab7bf5680df890a5d2a344330ce355f1d80ce4001064f",
     "static/labyrinth-connective.md": "sha256:fcef2217fb3f0149c27ed4c699081bf11e7c9848083fbe3229f6feead552ad6f",
     "static/labyrinth-encounters.md": "sha256:65b59fa6ed926807e9192dd87fa369c02b04c8e33de88ca068d0c8644850a0de",
-    "static/labyrinth-look.md": "sha256:5a0dbd4bb3f04e320c19e34332eddea53480e964d258c555fa40f41a99c66a88",
+    "static/labyrinth-look.md": "sha256:28e84cb27fda82e1ac6e5233458c747a2c0b488b04406c7094d3c7c08cda2256",
     "static/labyrinth.html": "sha256:7039a53f7e90294b5f0f1b8ab3207cea9de3638f4978488d44f1a1f80d2098e9",
     "static/labyrinth.md": "sha256:e91fa51af25cb89c18f8f5453af293fbd7fa092658248afc049e391b1f4ea28b",
     "static/labyrinth/atlas-chains.jpg": "sha256:f8dd7d3105a0d51ed4bea59779f75eb563456e5c0e13b3991ad1e4c59673ca5e",
