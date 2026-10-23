@@ -187,6 +187,22 @@ Past the picture's reach, it's strokes on the paper only.
 
 ![Further](labyrinth/look-lines.jpg)
 
+## Dials: the picture and the drawing, judged apart
+
+![The dials](labyrinth/look-dials.jpg)
+
+URL dials for looking at the layers separately. With none set, the look is unchanged.
+
+| Dial | Range | What it does |
+|---|---|---|
+| `colour` (or `color`) | 0–1, default 1 | How much of the coloured picture stays. Lower moves everything along its own way to the page: trees first, then the ground and the water, then what's built. So at 0.35 the land is mostly paper while the buildings keep a wash; at 0 it's all drawing. |
+| `fade` | ×0.1–10, default 1 | How far that way to the page runs: a multiple of the picture's falloff and the lines' reach. 2 spreads the colour twice as wide round what's built. |
+| `lines` | 0–1, default 1 | The ink marks' opacity: rims, hachures, contours, banks, branches. |
+| `under` | 0–1, default 0 | How much of the line layer carries on under the picture, where it's whole. At 0 only the marks that always persist there remain. At 1 the full drawing runs through the coloured core. |
+| `edges` | 0–1, default 1 | The outline ink's opacity (the post pass's silhouettes and creases). |
+
+Together: `?colour=0&under=1` is the scene as a line drawing; `?colour=0.35&under=0.8` shows the drawing coming up through the picture.
+
 ## Stage 23: crags, broken ground, and what the sheet still asked for
 
 ![Stage 23](labyrinth/look-land23.jpg)
