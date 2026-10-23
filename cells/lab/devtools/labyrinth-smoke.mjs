@@ -8,7 +8,7 @@ process.env.EXPERIMENT = 'labyrinth';
 process.env.READY = '__labyrinth';
 const c = checks();
 await withWood(async (lab) => {
-  const p = await lab.open('zoom=0.55&flat&intent=mass');
+  const p = await lab.open('zoom=0.55&flat&intent=mass&brush=auto');
   await p.evaluate(() => { localStorage.clear(); });
   await p.reload(); await p.waitForFunction(() => window.__labyrinth);
   await p.waitForTimeout(500);
@@ -161,7 +161,7 @@ await withWood(async (lab) => {
   await p.close();
   {
     // (on the land, as a way: a stroke from the low ground up to the shelf, drawn with the pointer: the land says how)
-    const q = await lab.open('zoom=1&land=6&intent=way');
+    const q = await lab.open('zoom=1&land=6&intent=way&brush=auto');
     await q.waitForTimeout(1200);
     const at2 = (i, j) => q.evaluate(([a, b]) => { const L = window.__labyrinth; return L.screenOf(a, b, L.world.ground(a, b)); }, [i, j]);
     const pts = await Promise.all([[1, 11], [1, 10], [1, 9], [1, 8], [1, 7], [1, 6], [1, 5]].map(([i, j]) => at2(i, j)));
@@ -175,7 +175,7 @@ await withWood(async (lab) => {
   {
     // (with nothing said ahead (no mass or way in hand): the land's ground drawn up to its shelf is a way; the switch is
     // gone; and on the slab a stroke across the bare stone is a wall, a way one hold away)
-    const q = await lab.open('zoom=1&land=6');
+    const q = await lab.open('zoom=1&land=6&brush=auto');
     await q.evaluate(() => { localStorage.clear(); }); await q.reload(); await q.waitForFunction(() => window.__labyrinth); await q.waitForTimeout(1200);
     c.ok('no mass/way switch on the page', !(await q.$('#intent')));
     const at2 = (i, j) => q.evaluate(([a, b]) => { const L = window.__labyrinth; return L.screenOf(a, b, L.world.ground(a, b)); }, [i, j]);
@@ -186,7 +186,7 @@ await withWood(async (lab) => {
     const got = await q.evaluate(() => { const w = window.__labyrinth.world, o = w.ops.at(-1); return o && { why: o.why, reached: w.reached.get(o)?.reached, stairs: w.stairs.size }; });
     c.ok('read from where it\'s drawn: up the land, a way, climbing as it rises', got?.why === 'way' && got.reached && got.stairs >= 2, got);
     await q.close();
-    const r = await lab.open('zoom=0.55&flat');
+    const r = await lab.open('zoom=0.55&flat&brush=auto');
     await r.waitForTimeout(900);
     const sc = (i, j) => r.evaluate(([a, b]) => window.__labyrinth.screenOf(a, b, 0), [i, j]);
     const a = await sc(3, 3), b = await sc(8, 3);
@@ -287,17 +287,23 @@ await withWood(async (lab) => {
     };
     const ms = await L((L) => L.motifs());
     c.ok('motifs found: an arcade, a flight, a court, a tower', ['arcade', 'flight', 'court', 'tower'].every((k) => ms.some((m) => m.kind === k)), ms);
-    // (hand: a tap asks what it is)
-    await q.click('[data-brush="hand"]');
+    // (it opens in the hand; the hand's tap takes up what's touched, the card shut to what it is, and the selection holds
+    // without its details, and on into select)
+    c.ok('it opens in the hand', await q.locator('[data-brush="hand"].on').count() === 1);
     await tap(10, 7, 3);
-    c.ok('hand: a tap says what it is, and what it\'s part of', /arch/.test(await q.textContent('#hint')) && /arcade/.test(await q.textContent('#hint')), await q.textContent('#hint'));
-    // (select: the arch, then the whole arcade; its readings switched, and back)
+    const h1 = await L((L) => L.selection());
+    c.ok('hand: a tap takes up what\'s touched, the card shut to what it is', h1 && /arch/.test(h1.title) && await q.isVisible('#card') && !(await q.isVisible('#readings')), h1);
     await q.click('[data-brush="select"]');
+    c.ok('and it stays taken up in select, its details unopened', !!(await L((L) => L.selection())) && !(await q.isVisible('#readings')));
+    await q.click('#close');
+    c.ok('put down from the card', !(await L((L) => L.selection())));
+    // (select: the arch, then the whole arcade; its readings switched, and back)
     await tap(10, 7, 3);
     const s1 = await L((L) => L.selection());
     c.ok('select: a tap takes up the piece', s1 && /arch/.test(s1.title) && await q.isVisible('#card'), s1);
     await tap(10, 7, 3);
     const s2 = await L((L) => L.selection());
+    await q.click('#more');
     c.ok('and again, the whole it\'s part of', s2 && /arcade/.test(s2.title) && s2.cells > s1.cells, s2);
     const n0 = await L((L) => L.world.ops.length);
     c.ok('the card shows every reading at once, the current one marked', await q.locator('#readings button').count() === s2.readings.length && await q.locator('#readings button.on').count() === 1);

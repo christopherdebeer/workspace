@@ -158,7 +158,7 @@ await withWood(async (lab) => {
   // Outcomes remain in sealed/<id>; the review CLI exposes one gesture at a time.
   for (const cs of CASES) {
     const R = rng(cs.seed);
-    const p = await lab.open(`${cs.q}&instant`, { width: 430, height: 900 });
+    const p = await lab.open(`${cs.q}&instant&brush=auto`, { width: 430, height: 900 });
     await p.evaluate(() => { try { localStorage.removeItem('labyrinth.intent'); } catch { /* */ } });
     await p.waitForTimeout(2500);
     if (cs.intent) { await p.evaluate((i) => window.__labyrinth.setIntent(i), cs.intent); await p.waitForTimeout(300); }

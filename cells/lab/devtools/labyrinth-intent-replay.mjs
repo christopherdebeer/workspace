@@ -17,7 +17,7 @@ const { withWood } = await import('./harness.mjs');
 const brief = (ops) => ops.map((o) => `${o.op.why ?? '?'}${o.op.note ? `: ${o.op.note}` : ''}${o.op.refused ? ` (refused: ${o.op.refused})` : ''}`).join(' + ') || '(nothing)';
 await withWood(async (lab) => {
   const first = J(join(root, 'sealed', ids[0], 'replay.json'));
-  const p = await lab.open(first.query, { width: 430, height: 900 });
+  const p = await lab.open(`${first.query}&brush=auto`, { width: 430, height: 900 });
   await p.evaluate(() => { try { localStorage.removeItem('labyrinth.intent'); } catch { /* */ } });
   await p.waitForTimeout(2500);
   const intent = first.before.intent;

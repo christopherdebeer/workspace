@@ -38,6 +38,13 @@
     #card { position: fixed; left: 10px; right: 10px; bottom: calc(max(12px, env(safe-area-inset-bottom)) + 74px); z-index: 2; padding: 10px 12px; border-radius: 20px; background: rgba(246,241,231,.94); box-shadow: 0 3px 16px rgba(70,50,30,.15), inset 0 0 0 1px rgba(176,92,30,.35); display: none; }
     #card.on { display: block; }
     #card .row { display: flex; align-items: center; gap: 8px; }
+    #card .details { display: none; }
+    #card.detailed .details { display: block; }
+    #card #what { cursor: pointer; }
+    #card #more { background: none; width: 36px; padding: 0; display: grid; place-items: center; }
+    #card #more svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+    #card #more .down, #card.detailed #more .up { display: none; }
+    #card.detailed #more .down { display: inline; }
     #card b { flex: 1; font-weight: 400; font-size: 15px; font-style: italic; }
     #card .acts { display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; }
     #card button { appearance: none; border: 0; font: inherit; font-size: 13px; color: #2b2420; background: rgba(43,36,32,.07); border-radius: 14px; min-height: 36px; padding: 0 12px; cursor: pointer; -webkit-tap-highlight-color: transparent; }
@@ -130,11 +137,13 @@
     <button id="catfollow">Follow ›</button><button id="catclose" aria-label="let it be">×</button>
   </div>
   <div id="card" role="dialog" aria-label="what's taken up">
-    <div class="row"><b id="what"></b><button id="close" aria-label="put it down">×</button></div>
+    <div class="row"><b id="what"></b><button id="more" aria-label="its details" aria-expanded="false"><svg viewBox="0 0 20 20"><path class="up" d="M5 12l5-5 5 5"/><path class="down" d="M5 8l5 5 5-5"/></svg></button><button id="close" aria-label="put it down">×</button></div>
+    <div class="details">
     <div id="scope" class="chips" aria-label="how much of it"></div>
     <div id="readings" class="readings" aria-label="read it as"></div>
     <div id="dressrow" class="dressrow" aria-label="dress it"></div>
     <div class="acts"><button id="takeaway">take it away</button></div>
+    </div>
   </div>
   <div id="sheet" role="menu" aria-label="what the piece brush holds">
     <h2>pieces</h2>

@@ -243,14 +243,16 @@ function settle(cells: Array<[number, number, number]>, at = 0.85) {
  * away, a stroke carves through), **select** (take up a piece, or the whole it's part of, and read it another way).
  */
 type Brush = 'hand' | 'auto' | 'piece' | 'take' | 'select';
-let brush: Brush = 'auto', held: Piece | Dressing = 'block', lastDress: Dressing = 'moss';
+// (it opens in the hand: looking, turning, taking things up, before building)
+let brush: Brush = 'hand', held: Piece | Dressing = 'block', lastDress: Dressing = 'moss';
 const isDress = (h: string): h is Dressing => (DRESSINGS as string[]).includes(h);
 /** a brush (or anything the old palette called a hand: a piece puts that piece in the piece brush) */
 function setBrush(h: string) {
   if (h === 'hand' || h === 'auto' || h === 'take' || h === 'select') brush = h;
   else if (h === 'piece') brush = 'piece';
   else if ((PIECES as string[]).includes(h) || isDress(h)) { brush = 'piece'; held = h as Piece | Dressing; if (isDress(h)) lastDress = h; }
-  if (brush !== 'select') unselect();
+  // (what's taken up stays taken up in the hand and in select: only building puts it down)
+  if (brush !== 'select' && brush !== 'hand') unselect();
   showBrush(); hint();
 }
 /** the way the eye looks, along the ground: the nearest of the four ways */
@@ -313,7 +315,7 @@ for (const b of Array.from(bar.querySelectorAll('button')) as HTMLElement[]) {
 }
 for (const b of Array.from(sheet.querySelectorAll('button')) as HTMLElement[]) b.addEventListener('click', () => { setBrush(b.dataset.held!); openSheet(false); say(BRUSH_SAYS.piece()); });
 const BRUSH_SAYS: Record<Brush, () => string> = {
-  hand: () => 'drag to turn it · tap to ask what something is, or to meet a cat',
+  hand: () => 'drag to turn it · tap to take something up, again for more of it · or to meet a cat',
   auto: () => 'tap raises · trace builds, connects and climbs · hold at the end to read it otherwise',
   piece: () => (isDress(held) ? `${held}: tap a stone, or stroke over stones, to dress them` : `${held}: tap to put one · trace for a run of them`),
   take: () => 'tap takes a piece away · trace carves through',
@@ -321,7 +323,7 @@ const BRUSH_SAYS: Record<Brush, () => string> = {
 };
 function hint(text?: string) {
   const el = document.getElementById('hint')!;
-  el.textContent = text ?? (brush !== 'auto' ? '' : world.ops.length === 0 ? (world.land ? 'tap the ground to raise it · trace from place to place for a way' : 'tap the stone to raise it · trace to build') : world.ops.length < 4 ? 'trace from a top to reach out · trace up to a higher top to climb' : '');
+  el.textContent = text ?? (brush === 'hand' && !sel && world.ops.length === 0 ? 'tap to take something up · drag to turn · auto to build' : brush !== 'auto' ? '' : world.ops.length === 0 ? (world.land ? 'tap the ground to raise it · trace from place to place for a way' : 'tap the stone to raise it · trace to build') : world.ops.length < 4 ? 'trace from a top to reach out · trace up to a higher top to climb' : '');
   el.classList.toggle('on', !!el.textContent);
 }
 let hintT = 0;
@@ -343,21 +345,22 @@ function scopeAt(c: Cell, whole: Motif[], idx: number): Selection | null {
   if (idx < whole.length) return selectMotif(world, whole[idx], now());
   return selectStructure(world, c);
 }
-function selectAt(p: Pick) {
+function selectAt(p: Pick, quiet = false): boolean {
   const c = cellOf(p), same = sel && sel.cell.every((v, q) => v === c[q]);
   if (same && sel) {
     // (again: the next scope out, round to the piece)
     for (let n = 1; n <= sel.whole.length + 2; n++) {
       const idx = ((sel.idx + 1 + n) % (sel.whole.length + 2)) - 1, s = scopeAt(c, sel.whole, idx);
-      if (s) { sel = { ...sel, idx, s, switched: null }; showSel(); return; }
+      if (s) { sel = { ...sel, idx, s, switched: null }; showSel(); return true; }
     }
   }
   const whole = around(motifsNow(), c);
   for (let idx = p.face === 'ground' ? 0 : -1; idx <= whole.length; idx++) {
     const s = scopeAt(c, whole, idx);
-    if (s) { sel = { cell: c, whole, idx, s, switched: null }; showSel(); return; }
+    if (s) { sel = { cell: c, whole, idx, s, switched: null }; showSel(); return true; }
   }
-  unselect(); say('nothing there to take up');
+  unselect(); if (!quiet) say('nothing there to take up');
+  return false;
 }
 function scopeTo(idx: number) { if (!sel) return; const s = scopeAt(sel.cell, sel.whole, idx); if (s) { sel = { ...sel, idx, s, switched: null }; showSel(); } }
 function unselect() { sel = null; showSel(); }
@@ -381,9 +384,14 @@ const READING_ICONS: Array<[RegExp, string]> = [
   [/climbing|stair/, '<path d="M3 21h4v-4h4v-4h4V9h4V5h2"/>'],
 ];
 const icon = (label: string) => `<svg viewBox="0 0 24 24">${READING_ICONS.find(([r]) => r.test(label))?.[1] ?? '<circle cx="12" cy="12" r="3"/>'}</svg>`;
+/** whether the card's details are open (kept from one selection to the next): shut, it's only what's taken up, and the
+ * selection holds all the same */
+let detailed = false;
 function showSel() {
-  document.body.classList.toggle('selecting', !!sel);
+  document.body.classList.toggle('selecting', !!sel && detailed);
   card.classList.toggle('on', !!sel);
+  card.classList.toggle('detailed', detailed);
+  (card.querySelector('#more') as HTMLElement).setAttribute('aria-expanded', String(detailed));
   if (!sel) return;
   const { s } = sel;
   (card.querySelector('#what') as HTMLElement).textContent = s.title;
@@ -426,6 +434,7 @@ function takeAway() { if (!sel?.s.remove) return; world.apply(sel.s.remove, now(
 function dressSel(kind: Dressing = lastDress) { if (!sel) return; lastDress = kind; const op = dress(world, kind, kind === 'pergola' && sel.s.motif?.kind === 'court' ? sel.s.cells : sel.s.stone); if (op) { world.apply(op, now()); kept(); } }
 card.querySelector('#takeaway')!.addEventListener('click', takeAway);
 card.querySelector('#close')!.addEventListener('click', unselect);
+for (const el of [card.querySelector('#more')!, card.querySelector('#what')!]) el.addEventListener('click', () => { detailed = !detailed; showSel(); });
 /** what a touch is on, said plainly (the hand brush's tap) */
 function describe(p: Pick): string {
   const c = cellOf(p), s = p.face === 'ground' ? null : selectCell(world, c, looking(), now()), whole = around(motifsNow(), c);
@@ -755,7 +764,10 @@ const up = perf.wrap('input.up', (e: PointerEvent) => {
   // (following one: a tap is where it's shown to go, a tap on it a touch, a tap on another follows that one instead)
   if (m === 'look' && following && met) { if (pet === met) say(cats.pet(met)); else if (pet) meet(pet); else if (start) say(cats.call(met, start.to)); g = null; return; }
   if (pet) meet(pet);
-  else if (m === 'look' && start) say(describe(start));
+  // (the hand's tap: what's touched taken up (again, more of it); where there's nothing to take up, what it is said; on
+  // nothing, what was taken up put down)
+  else if (m === 'look' && start) { if (!selectAt(start, true)) say(describe(start)); }
+  else if (m === 'look' && !start && !cancelled) unselect();
   else if (m === 'pending' && start) {
     // (a tap: what it does depends on the brush)
     if (brush === 'select') selectAt(start);
@@ -788,7 +800,7 @@ canvas.addEventListener('wheel', perf.wrap('input.wheel', (e: WheelEvent) => { e
 if (qs.has('sheet')) { setBrush('piece'); openSheet(true); }
 if (qs.has('select')) {
   const [k, i, j] = qs.get('select')!.split('.').map(Number), p: Pick = { face: 'top', hit: [k, i, j], to: [k + 1, i, j] };
-  setBrush('select'); selectAt(p); if (qs.has('whole')) selectAt(p);
+  detailed = true; setBrush('select'); selectAt(p); if (qs.has('whole')) selectAt(p);
 }
 
 // ─── its buttons ───
