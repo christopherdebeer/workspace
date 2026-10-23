@@ -1131,7 +1131,7 @@ let catSaved = 0;
 function keepCats(t: number) { if (fixed || t - catSaved < 12) return; catSaved = t; try { localStorage.setItem(catKey(), JSON.stringify(cats.remembered())); } catch { /* */ } }
 const catCard = document.getElementById('catcard')!, catFollowB = document.getElementById('catfollow')!;
 /** the cat met (its card showing), and whether the eye's following it */
-let met: Cat | null = null, following = false, zoomBefore = 0.64;
+let met: Cat | null = null, following = false;
 const COAT_CSS = ['#c98a4b', '#6d6f73', '#e4d7bf', '#87705a', '#252120', 'linear-gradient(160deg,#c98a4b 45%,#f1ece2 46%)', '#b3b2ae', 'linear-gradient(160deg,#252120 50%,#f1ece2 51%)'];
 /** the cat under a point on the screen, if one's close to it */
 function catAt(cx: number, cy: number): Cat | null {
@@ -1160,8 +1160,8 @@ function showCat() {
   if (el.textContent !== t) el.textContent = t;
   catFollowB.textContent = following ? '‹ Return to building' : 'Follow ›';
 }
-function unfollow() { following = false; document.body.classList.remove('following'); zoomK = zoomBefore; follow = true; showCat(); }
-catFollowB.addEventListener('click', () => { if (following) { unfollow(); return; } following = true; zoomBefore = zoomK; document.body.classList.add('following'); showCat(); say(`tap somewhere to show ${met?.name ?? 'it'} where to go`); });
+function unfollow() { following = false; document.body.classList.remove('following'); follow = true; showCat(); }
+catFollowB.addEventListener('click', () => { if (following) { unfollow(); return; } following = true; document.body.classList.add('following'); showCat(); say(`tap somewhere to show ${met?.name ?? 'it'} where to go`); });
 document.getElementById('catclose')!.addEventListener('click', () => meet(null));
 /** while following: where the cat's been shown to go, marked until it's there (dashed: as near as it can get) */
 function shownTo() {
@@ -1172,13 +1172,12 @@ function shownTo() {
   g2.beginPath(); g2.ellipse(x, y, r * 1.4, r * 0.8, 0, 0, Math.PI * 2); g2.stroke(); g2.setLineDash([]);
   g2.fillStyle = WARM + '.9)'; g2.beginPath(); g2.arc(x, y, 2, 0, Math.PI * 2); g2.fill();
 }
-/** while following: the eye goes with the cat, close */
+/** while following: the eye goes with the cat, kept on it; how close is the hand's (pinch), never taken over */
 function followCat(dt: number) {
   if (!met || !following) return;
   if (met.gone) { meet(null); return; }
   const q = 1 - Math.exp(-dt * 4), y = met.y + 0.15;
   view.target[0] += (met.x - view.target[0]) * q; view.target[1] += (y - view.target[1]) * q; view.target[2] += (met.z - view.target[2]) * q;
-  zoomK += (0.13 - zoomK) * q;
   follow = false;
 }
 // (`?catsat=s`: the cats' lives run on that long before it's shown, for a picture)

@@ -213,9 +213,12 @@ await withWood(async (lab) => {
     c.ok('the hand brush: a tap on a cat meets it (its name, what it\'s doing)', await q.isVisible('#catcard') && (await q.textContent('#catname')) === one.name && !!(await q.textContent('#catdoing')), { one, s, card: await q.textContent('#catcard') });
     const gap = async () => { const f = await L((L) => ({ on: L.following, t: L.view.target.slice(), c: L.cats() })), me = f.c.find((x) => x.name === one.name); return { on: f.on, d: Math.hypot(f.t[0] - me.x, f.t[2] - me.z) }; };
     const d0 = (await gap()).d;
+    const z0 = await L((L) => L.view.zoom);
     await q.click('#catfollow'); await q.waitForTimeout(4000);
+    const z1 = await L((L) => L.view.zoom);
+    c.ok('following keeps how close it is: only where the eye is goes with the cat', Math.abs(z1 / z0 - 1) < 0.03, { z0, z1 });
     const d1 = await gap();
-    c.ok('followed: the eye goes with it, close', d1.on && (d1.d < 0.5 || d1.d < d0 * 0.7), { d0, d1 });
+    c.ok('followed: the eye goes with it', d1.on && (d1.d < 0.5 || d1.d < d0 * 0.7), { d0, d1 });
     // (following, a tap on a place is where it's shown to go, not something built: nothing's laid, a ring marks it, it goes)
     const ops0 = await L((L) => L.world.ops.length), me0 = (await L((L) => L.cats())).find((x) => x.name === one.name);
     const to = await L((L, n) => { const c = L.cats().find((x) => x.name === n), C = 6; const i = Math.round(c.x + C - 0.5), j = Math.round(c.z + C - 0.5); for (const [a, b] of [[3, 0], [-3, 0], [0, 3], [0, -3], [2, 2], [-2, -2]]) { const w = L.world, ii = i + a, jj = j + b; if (!w.stone(w.ground(ii, jj), ii, jj) && w.pool(ii, jj)) continue; return [w.topFrom(w.ground(ii, jj) - 1, ii, jj), ii, jj]; } return null; }, one.name);
