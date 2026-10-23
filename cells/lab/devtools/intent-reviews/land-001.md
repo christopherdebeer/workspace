@@ -13,7 +13,7 @@ Three rounds and 25 gestures, on seven land seeds no earlier review had seen (se
 
 **Critique fields.** The critique gained a `scene` block of axes for comparing gestures and rounds: location honoured, endpoints honoured, coherence (0–3), surprise, the hand's likely next move, and the disconnect as a phrase in the reviewer's own words.
 
-**Pooling.** The pooled dataset is `land-001-dataset.json`. It joins each locked expectation and critique with the sealed diagnostics: the operations and their readings, liberties taken, `reached`, the hint during the stroke and the alternatives. The full review directories are in `land-001.tar.gz`.
+**Pooling.** The pooled dataset is `land-001-dataset.json`. It joins each locked expectation and critique with the sealed diagnostics: the operations and their readings, liberties taken, `reached`, the hint during the stroke and the alternatives. The full review directories are in `land-001/`, one archive per round and land (`r1-land6.tar.gz` …). Images are recompressed, and the review folders' copies of the before/after images are left out because they duplicate `sealed/`.
 
 **Analysis.** Causes below are marked **verified** only where I reproduced them against the source after the reviews were locked. Everything else is a hypothesis.
 
