@@ -195,13 +195,14 @@ URL dials for looking at the layers separately. With none set, the look is uncha
 
 | Dial | Range | What it does |
 |---|---|---|
-| `colour` (or `color`) | 0–1, default 1 | How much of the coloured picture stays. Lower moves everything along its own way to the page: trees first, then the ground and the water, then what's built. So at 0.35 the land is mostly paper while the buildings keep a wash; at 0 it's all drawing. |
-| `fade` | ×0.1–10, default 1 | How far that way to the page runs: a multiple of the picture's falloff and the lines' reach. 2 spreads the colour twice as wide round what's built. |
+| `colour` (or `color`) | 0–1, default 1 | The coloured picture's opacity over the page, as a layer. Its colour goes to the paper while its light stays as shading on the paper: the sun's side, cast shadows, the hollows. Where the scene is already drawn, it's left as it is. |
+| `toward` | 0–1, default 0 | How far everything is taken along its own way to the page: trees first, then the ground and the water, then what's built. The light goes first on that way, so shadows go with it. (This was `colour` before.) |
+| `fade` | ×0.1–10, default 1 | How far that way to the page runs: a multiple of the picture's falloff and the lines' reach. |
 | `lines` | 0–1, default 1 | The ink marks' opacity: rims, hachures, contours, banks, branches. |
-| `under` | 0–1, default 0 | How much of the line layer carries on under the picture, where it's whole. At 0 only the marks that always persist there remain. At 1 the full drawing runs through the coloured core. |
+| `under` | 0–1, default 0 | How much of the drawing lies under the picture (the marks, the land's contours, the outlines), showing through as `colour` makes the picture fainter. Roughly, what shows in the coloured core is `under × (1 − colour)`. |
 | `edges` | 0–1, default 1 | The outline ink's opacity (the post pass's silhouettes and creases). |
 
-Together: `?colour=0&under=1` is the scene as a line drawing; `?colour=0.35&under=0.8` shows the drawing coming up through the picture.
+Together: `?colour=0&under=1` is the scene as a drawing on shaded paper; `?colour=0.5&under=0.8` shows the drawing coming up through a half-faded picture, its shadows kept; `?toward=1` is the whole scene taken to the page.
 
 ## Stage 23: crags, broken ground, and what the sheet still asked for
 

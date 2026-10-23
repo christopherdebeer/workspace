@@ -114,8 +114,9 @@ uniform highp sampler2DShadow uShadow; uniform highp sampler2D uShadowRaw; unifo
 // (the sun's map: how much of the world a texel of it covers, and how deep its range is, so its bias and its softness are
 // in the world's own units whatever it's fitted to)
 uniform float uTexel, uDepthRange, uMarks, uClay;
-// (\`?colour=\`: the picture's opacity, as how far it's given to the page (unset: none of it))
-uniform float uPale;
+// (\`?colour=\`: the picture's opacity over the page (unset: whole); \`?toward=\`: how far everything's taken along its way
+// to the page (unset: not at all))
+uniform float uPale, uToward, uUnder;
 layout(location=0) out vec4 oCol; layout(location=1) out vec4 oNrm;
 float leafEdge(vec3 n) { float rim = 1. - abs(dot(n, normalize(uDir))); return .8 * pow(rim, 1.6) - .08; }
 float hash(vec3 p) { return fract(sin(dot(p, vec3(127.1, 311.7, 74.7))) * 43758.5453); }
@@ -260,7 +261,7 @@ void main() {
     // (a little uneven, no more: over a broad fade, patches of more and less picture would lie on it as clouds)
     gT = R0 + (fbm(vec3(at.xz * .9, 5.)) - .5) * .08 * rg + rate * rg;
     if (uPaper > .5) gT = .08;
-    gT *= 1. - uPale;
+    gT *= 1. - uToward;
   }
   gDetail = smoothstep(.5, .85, gT);
   // (a crown cut through more as it's drawn, so its limbs show and it reads as drawn canopy)
@@ -523,6 +524,9 @@ void main() {
   c = xc * (L1 / L0);
   c = mix(c, vec3(L1), smoothstep(.55, 1., L1) * .35);
   c = pow(clamp(c, 0., 1.), vec3(1. / 2.2));
+  // (how much the light makes of it, as it's seen: lighter or darker than its own colour (the sun, the shade cast on it,
+  // the sky it sees): kept, when the picture's made fainter over the page, as the shading on the paper)
+  float litShade = clamp(dot(c, vec3(.3, .55, .15)) / max(dot(base, vec3(.3, .55, .15)), .05), 0., 1.12);
   // (a lamp: lit from within)
   if (mat == 9) c = vec3(1., .86, .58);
   if (mat == 2) {
@@ -570,6 +574,8 @@ void main() {
   vec3 PAP = vec3(.95, .90, .80);
   float drawn = 0.;
   vec3 washC = c;
+  // (the land's own lines (its contours), kept apart, so they can show under a fainter picture (\`?under=\`))
+  vec3 landInk = vec3(1.);
   if (onPaper && !sel && !fur) {
     drawn = 1. - smoothstep(.05, .9, gT);
     float L = dot(c, vec3(.3, .55, .15));
@@ -624,7 +630,8 @@ void main() {
       g = mix(g, vec3(.38, .3, .22), cl * (.45 + .25 * heavy));
     }
     g = mix(PAP, g, .72);
-    c = washC * mix(vec3(1.), g / PAP, smoothstep(.15, .7, drawn));
+    landInk = g / PAP;
+    c = washC * mix(vec3(1.), landInk, smoothstep(.15, .7, drawn));
   }
   else if (onPaper && mat == 2 && !fur) {
     // (the stream, away from what's built: its water laid in broken strokes along it, then only a line or two)
@@ -651,6 +658,13 @@ void main() {
   // (what's taken up: a faint warm tint; its outline is drawn after, where the mask changes)
   if (sel) c = mix(c, c * vec3(1.1, .98, .84) + vec3(.05, .025, 0.), .6);
   if (uMarks > .5) c = mix(c, PAP, .82);
+  // (\`?colour=\`: the picture fainter over the page, as a layer: its colour given to the paper, its light kept there as
+  // shading (the sun's side, the shadows cast, the hollows), only where it's still a picture: what's drawn stays drawn)
+  // (and under it, as much of the drawing as \`?under=\` lays there, showing as the picture's made fainter over it)
+  if (uPale > 0. && !sel && !fur) {
+    c = mix(c, PAP * mix(1., litShade, .9), uPale * (1. - drawn));
+    c *= mix(vec3(1.), landInk, uPale * uUnder * (1. - smoothstep(.15, .7, drawn)));
+  }
   oCol = vec4(c, 1.);
   // (its kind for the post pass, and within each how far it's drawn: land .12–.38, the rest .41–.47, leaves .49–.54)
   oNrm = vec4(n * .5 + .5, sel ? 1. : land ? .12 + .26 * drawn : fur ? .6 : mat == 3 ? .49 + .05 * drawn : .41 + .06 * drawn);
@@ -699,8 +713,8 @@ const STROKE_FS = COMMON + REACH + `
 in vec3 vPos; in vec2 vSA; in vec3 vFam; in float vKeep;
 uniform float uMarks;
 // (\`?colour=\`, as in the picture; \`?lines=\`: the marks' opacity (as how much is taken off it); \`?under=\`: how much of the
-// drawing's lines carry on under the picture, where it's whole (unset: only the marks that keep there anyway))
-uniform float uPale, uLinesOff, uUnder;
+// drawing lies under the picture, showing through as \`?colour=\` makes it fainter (unset: only the marks that keep there anyway))
+uniform float uPale, uToward, uLinesOff, uUnder;
 layout(location=0) out vec4 oCol; layout(location=1) out vec4 oNrm;
 float hash(vec3 p) { return fract(sin(dot(p, vec3(127.1, 311.7, 74.7))) * 43758.5453); }
 float noise(vec3 x) { vec3 i = floor(x), f = fract(x); f = f * f * (3. - 2. * f);
@@ -710,11 +724,13 @@ void main() {
   float across = vSA.x, fam = floor(vFam.x + .001), weight = fract(vFam.x + .001), persist = vFam.y, pick = vFam.z;
   // (a branch line goes with its tree: left out where the tree is, by the tree's own chance)
   if (fam > 13.5 && fam < 14.5 ? pick > reachLines(vPos) * 1.25 - .08 : (pick > reachLines(vPos) * 1.3 - .05 || pick > vKeep)) discard;
-  float R0 = reach(vPos), t = (R0 + (noise(vec3(vPos.xz * .9, 5.)) - .5) * .08 * min(1., R0 * 4.)) * (1. - uPale), drawn = 1. - smoothstep(.05, .9, t);
+  float R0 = reach(vPos), t = (R0 + (noise(vec3(vPos.xz * .9, 5.)) - .5) * .08 * min(1., R0 * 4.)) * (1. - uToward), drawn = 1. - smoothstep(.05, .9, t);
+  // (the marks under the picture come up as it's made fainter over them: the line layer beneath, showing through)
+  float shows = 1. - (1. - drawn) * (1. - uPale * uUnder);
   float aa = max(fwidth(across), 1e-4);
   float cov = (1. - smoothstep(1. - aa, 1. + aa * .5, abs(across))) * min(1., 2. / aa);
   float dry = smoothstep(.18, .32, noise(vec3(vPos.xz * 7.5 + vPos.y * 3., fam * 3.1)));
-  float a = cov * weight * mix(.55, 1., dry) * (uMarks > .5 ? 1.2 : mix(max(persist, uUnder), 1., drawn)) * (1. - uLinesOff);
+  float a = cov * weight * mix(.55, 1., dry) * (uMarks > .5 ? 1.2 : mix(persist, 1., shows)) * (1. - uLinesOff);
   if (a < .02) discard;
   // (the land's in sepia; the water's a cooler ink)
   vec3 col = fam > 4.5 && fam < 8.5 ? vec3(.2, .27, .3) : vec3(.26, .19, .13);
@@ -725,7 +741,7 @@ const POST_VS = `#version 300 es
 out vec2 vUv; void main() { vec2 p = vec2(gl_VertexID == 1 ? 3. : -1., gl_VertexID == 2 ? 3. : -1.); vUv = p * .5 + .5; gl_Position = vec4(p, 0., 1.); }`;
 const POST_FS = `#version 300 es
 precision highp float;
-in vec2 vUv; uniform sampler2D uCol, uNrm, uDepth; uniform vec2 uPx; uniform float uRange, uPrint, uDpr, uBleed, uWorldPx, uContact, uMarks, uAA, uClay, uEdgesOff; uniform mat3 uViewRot;
+in vec2 vUv; uniform sampler2D uCol, uNrm, uDepth; uniform vec2 uPx; uniform float uRange, uPrint, uDpr, uBleed, uWorldPx, uContact, uMarks, uAA, uClay, uEdgesOff, uPale, uUnder; uniform mat3 uViewRot;
 out vec4 o;
 // (the edges smoothed where nothing's multisampled: the colour's luma across the pixel's corners says which way an edge
 // runs, and it's sampled along it (FXAA, after Lottes), kept only where it stays within the luma round it)
@@ -806,6 +822,8 @@ void main() {
   // lightest, its crown's outline a hint, not a ring round each part of it)
   bool leafM = m > .485 && m < .545;
   float drawn = bleedOn() < .5 ? 0. : m > .405 && m < .475 ? clamp((m - .41) / .06, 0., 1.) : leafM ? clamp((m - .49) / .05, 0., 1.) : m > .1 && m < .4 ? clamp((m - .12) / .26, 0., 1.) : 0.;
+  // (the outlines under the picture (\`?under=\`), coming through as it's made fainter (\`?colour=\`))
+  if (bleedOn() > .5 && m > .1 && m < .6) drawn = 1. - (1. - drawn) * (1. - uPale * uUnder);
   float fold = smoothstep(.04, .14, lap), crease = smoothstep(.3, .6, turn);
   float wt = (furOn > .5 ? .4 : leafM ? mix(.06, .2, drawn) : mix(.16, .8, drawn)) * fold * (1. - onLand) + (leafM ? 0. : crease * drawn * .6) * (1. - onLand);
   wt = max(wt, onLand * smoothstep(.2, .5, lap) * mix(.12, .55, drawn));
@@ -877,9 +895,10 @@ export class Renderer {
   marks = false;
   /** \`?clay\`: every surface one clay, no paper, no ink: the forms alone */
   clay = false;
-  /** the dials (\`?colour= ?fade= ?lines= ?under= ?edges=\`): the picture's opacity, how far its way to the page runs (a
-   * multiple), the marks' opacity, how much of the line layer carries on under the picture, the outline ink's opacity */
-  dials = { colour: 1, fade: 1, lines: 1, under: 0, edges: 1 };
+  /** the dials (\`?colour= ?toward= ?fade= ?lines= ?under= ?edges=\`): the picture's opacity over the page (its light kept as
+   * shading), how far everything's taken along its way to the page, how far that way runs (a multiple), the marks'
+   * opacity, how much of the line layer carries on under the picture, the outline ink's opacity */
+  dials = { colour: 1, toward: 0, fade: 1, lines: 1, under: 0, edges: 1 };
   private vao: WebGLVertexArrayObject; private buf: WebGLBuffer; private count = 0;
   /** the ground's own (mesh.ts keeps it from one build to the next while nothing it reads changes): handed to the GPU
    * only when it's new */
@@ -1106,7 +1125,7 @@ export class Renderer {
     gl.uniformMatrix4fv(U('uVP'), false, cam.vp); gl.uniformMatrix4fv(U('uLight'), false, light);
     gl.uniform1f(U('uTime'), time); gl.uniform3fv(U('uSun'), this.sun); gl.uniform3fv(U('uEye'), cam.eye); gl.uniform3fv(U('uDir'), cam.dir); gl.uniform1f(U('uN'), 12); gl.uniform3fv(U('uArea'), this.area); gl.uniform1f(U('uShadows'), this.shadows ? 1 : 0); gl.uniform1f(U('uBleed'), this.bleed ? 1 : 0); gl.uniform1f(U('uPaper'), this.print ? 1 : 0); gl.uniform4fv(U('uLand'), this.landBox); this.bindFocus(this.main);
     gl.uniform1f(U('uTexel'), this.shadowTexel); gl.uniform1f(U('uDepthRange'), this.shadowRange);
-    gl.uniform1f(U('uLeafCut'), this.leafCut ? 1 : 0); gl.uniform1f(U('uMarks'), this.marks ? 1 : 0); gl.uniform1f(U('uClay'), this.clay ? 1 : 0); gl.uniform1f(U('uPale'), 1 - this.dials.colour);
+    gl.uniform1f(U('uLeafCut'), this.leafCut ? 1 : 0); gl.uniform1f(U('uMarks'), this.marks ? 1 : 0); gl.uniform1f(U('uClay'), this.clay ? 1 : 0); gl.uniform1f(U('uPale'), 1 - this.dials.colour); gl.uniform1f(U('uToward'), this.dials.toward); gl.uniform1f(U('uUnder'), this.dials.under);
     gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, this.shadowTex); gl.bindSampler(0, this.sCompare); gl.uniform1i(U('uShadow'), 0);
     gl.activeTexture(gl.TEXTURE3); gl.bindTexture(gl.TEXTURE_2D, this.shadowTex); gl.bindSampler(3, this.sRaw); gl.uniform1i(U('uShadowRaw'), 3);
     gl.drawArrays(gl.TRIANGLES, 0, this.count);
@@ -1118,7 +1137,7 @@ export class Renderer {
       const S = (n: string) => gl.getUniformLocation(this.stroke, n);
       gl.uniformMatrix4fv(S('uVP'), false, cam.vp); gl.uniform1f(S('uMarks'), this.marks ? 1 : 0); gl.uniform2f(S('uView'), w, h); gl.uniform1f(S('uDpr'), dpr); gl.uniform3fv(S('uDir'), cam.dir);
       gl.uniform1f(S('uBleed'), this.bleed ? 1 : 0); gl.uniform1f(S('uPaper'), this.print ? 1 : 0); gl.uniform4fv(S('uLand'), this.landBox); this.bindFocus(this.stroke);
-      gl.uniform1f(S('uPale'), 1 - this.dials.colour); gl.uniform1f(S('uLinesOff'), 1 - this.dials.lines); gl.uniform1f(S('uUnder'), this.dials.under);
+      gl.uniform1f(S('uPale'), 1 - this.dials.colour); gl.uniform1f(S('uToward'), this.dials.toward); gl.uniform1f(S('uLinesOff'), 1 - this.dials.lines); gl.uniform1f(S('uUnder'), this.dials.under);
       gl.bindVertexArray(this.svao);
       gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA); gl.depthMask(false); gl.disable(gl.CULL_FACE);
       gl.enable(gl.POLYGON_OFFSET_FILL); gl.polygonOffset(-2, -4);
@@ -1148,7 +1167,7 @@ export class Renderer {
     gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, this.nrm); gl.uniform1i(P('uNrm'), 1);
     gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, this.dep); gl.uniform1i(P('uDepth'), 2);
     gl.uniform2f(P('uPx'), 1 / w, 1 / h); gl.uniform1f(P('uRange'), cam.range); gl.uniform1f(P('uPrint'), this.print ? 1 : 0); gl.uniform1f(P('uMarks'), this.marks ? 1 : 0); gl.uniform1f(P('uClay'), this.clay ? 1 : 0); gl.uniform1f(P('uDpr'), dpr); gl.uniform1f(P('uBleed'), this.bleed ? 1 : 0); gl.uniform1f(P('uAA'), this.ms ? 0 : 1);
-    gl.uniform1f(P('uWorldPx'), (2 * view.zoom) / h); gl.uniform1f(P('uContact'), this.contact ? 1 : 0); gl.uniform1f(P('uEdgesOff'), 1 - this.dials.edges);
+    gl.uniform1f(P('uWorldPx'), (2 * view.zoom) / h); gl.uniform1f(P('uContact'), this.contact ? 1 : 0); gl.uniform1f(P('uEdgesOff'), 1 - this.dials.edges); gl.uniform1f(P('uPale'), 1 - this.dials.colour); gl.uniform1f(P('uUnder'), this.dials.under);
     gl.uniformMatrix3fv(P('uViewRot'), false, cam.rot);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     end();

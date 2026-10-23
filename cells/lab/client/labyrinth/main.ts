@@ -11,7 +11,7 @@
  *
  * `?story=1..4` (the storyboard: first touch, a wall traced, an elevated connection, a resolved labyrinth) ·
  * `?ops=` (operations, as the model writes them) · `?brush=` · `?sheet` · `?select=k.i.j[&whole]` · `?print` · `?marks` (the drawing's marks by why they're there) · `?turn=` ·
- * `?zoom=` · `?preview` · `?still` · `?held` (the view never reframes on its own) · `?colour= ?fade= ?lines= ?under= ?edges=` (the dials: picture and drawing, judged apart) · `?instant` (no rising, no gliding, no dust, no cats: for pictures taken by a slow
+ * `?zoom=` · `?preview` · `?still` · `?held` (the view never reframes on its own) · `?colour= ?toward= ?fade= ?lines= ?under= ?edges=` (the dials: picture and drawing, judged apart) · `?instant` (no rising, no gliding, no dust, no cats: for pictures taken by a slow
  * renderer, where every transition is frames it hasn't time for)
  */
 import { CENTER, World, inGrid, key, replay, unkey, type Alt, type Cell, type Op } from './model';
@@ -37,12 +37,13 @@ const R = new Renderer(canvas);
 R.print = qs.has('print');
 R.marks = qs.has('marks');
 R.clay = qs.has('clay');
-// (the dials, to judge the picture and the drawing apart: `?colour=` (or `color`) 0–1 the picture's opacity, `?fade=` how
+// (the dials, to judge the picture and the drawing apart: `?colour=` (or `color`) 0–1 the picture's opacity over the page,
+// its light kept as shading; `?toward=` 0–1 how far everything's taken along its way to the page; `?fade=` how
 // far its way to the page runs (a multiple), `?lines=` 0–1 the marks', `?under=` 0–1 how much of the line layer carries
 // on under the picture, `?edges=` 0–1 the outline ink's)
 {
   const dial = (k: string, lo: number, hi: number) => { const v = Number(qs.get(k)); return qs.has(k) && Number.isFinite(v) ? Math.min(hi, Math.max(lo, v)) : null; };
-  R.dials = { colour: dial('colour', 0, 1) ?? dial('color', 0, 1) ?? 1, fade: dial('fade', 0.1, 10) ?? 1, lines: dial('lines', 0, 1) ?? 1, under: dial('under', 0, 1) ?? 0, edges: dial('edges', 0, 1) ?? 1 };
+  R.dials = { colour: dial('colour', 0, 1) ?? dial('color', 0, 1) ?? 1, toward: dial('toward', 0, 1) ?? 0, fade: dial('fade', 0.1, 10) ?? 1, lines: dial('lines', 0, 1) ?? 1, under: dial('under', 0, 1) ?? 0, edges: dial('edges', 0, 1) ?? 1 };
 }
 R.shadows = !qs.has('noshadow');
 // (the land as Taohua draws its hill: the open ground the paper itself, only its features drawn, bleeding into the page,
