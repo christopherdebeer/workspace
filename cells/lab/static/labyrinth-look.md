@@ -193,6 +193,8 @@ Past the picture's reach, it's strokes on the paper only.
 
 In the app, **print** puts these in hand as layers with sliders (labyrinth.md, "Print: the layers in hand"), and the address keeps what's set. As URL dials, they're for looking at the layers separately. Unset, each is at the house setting (below); `?look=picture` sets them all to their plain values, the whole picture as it's lit.
 
+![Trees by what's built, before and after](labyrinth/look-trees-near.jpg)
+
 ![Reaches: the light past the colour; lines thinning or fading](labyrinth/look-reach.jpg)
 
 Each layer is a strength and a reach. The strength is how much of it there is. The reach is how far out from what's built it goes before it gives way to the page: a multiple of its own, 1 as it was. So the colour can be held close round the settlement, the light can carry on past it onto the paper (in sepia there), and the lines can go further still.
@@ -200,7 +202,7 @@ Each layer is a strength and a reach. The strength is how much of it there is. T
 | Dial | Range, house value | What it does |
 |---|---|---|
 | `built` | 0–1, .8 | The colour of what's built, as a layer multiplied over the page. |
-| `terrain` | 0–1, .3 | The same for the land: the ground, its rock and dry-stone, and what grows on it. (`?land=` is the land's seed, so the land's colour is `terrain`.) |
+| `terrain` | 0–1, .3 | The same for the land: the ground, its rock and dry-stone, and what grows on it. (`?land=` is the land's seed, so the land's colour is `terrain`.) Trees and climbers within about two cells of what's built belong to it instead: its colour, its light, and its reach, going over to the land's by about three cells out. The land's scrub stays the land's. |
 | `water` | 0–1, .8 | The same for the water. |
 | `colour` (or `color`) | 0–1 | Sets `built`, `terrain` and `water` together. |
 | `colourreach` | ×.25–4, 1 | How far the colour goes from what's built. Where it's gone, a thing is drawn rather than painted: its material's detail, a tree's crown cut through. |

@@ -272,11 +272,17 @@ void main() {
   // picture reaches; and each kind of thing at its own rate: what's built holds on longest, then the water, the ground,
   // and soonest the trees, which go to drawn canopy while what they stand by is still whole)
   float gT = 2., gTL = 2.;
+  // (what grows close by what's built (a tree beside a stair, a climber on a wall, an olive in a court) belongs to it:
+  // painted as long as it is, its colour and its light what's built has, not the land's; going over to the land's
+  // within about three cells of it)
+  float nearB = 0.;
   bool onIt = mat == 5 && moss && vTone < 1.5, onPaper = (uBleed > .5 || uPaper > .5) && uClay < .5;
   if (onPaper && !sel && !fur) {
     vec3 at = vPos;
     if (vU >= 4. && vU < 5.) { float at0 = floor((vU - 4.) * 10000.); at = vec3(mod(at0, 64.) - 29.5, 0., floor(at0 / 64.) - 29.5); }
     else if (vU >= 3. && vU < 4.) at = vec3(floor(vPos.x) + .5, 0., floor(vPos.z) + .5);
+    // (trees and climbers: the land's scrub, scattered on the ground, stays the land's)
+    if ((mat == 3 || mat == 4) && !(vU >= 3. && vU < 4.)) nearB = 1. - smoothstep(1.5, 3.5, builtD(at));
     float R0 = reach(at), rg = min(1., R0 * 4.);
     float rate = onIt ? 0. : mat == 3 ? -.07 : mat == 4 ? -.03 : mat == 2 ? .25 : .3;
     // (a little uneven, no more: over a broad fade, patches of more and less picture would lie on it as clouds)
@@ -285,6 +291,7 @@ void main() {
     // (the light's own way to the page, as far as its reach says: the same ragged edge, its own distance)
     float RL = reachK(at, rk(uReachL)), rgL = min(1., RL * 4.);
     gTL = RL + jit * .08 * rgL + rate * rgL;
+    gT = mix(gT, max(gT, 1.2), nearB); gTL = mix(gTL, max(gTL, 1.2), nearB);
     if (uPaper > .5) { gT = .08; gTL = .08; }
     gT *= 1. - uToward; gTL *= 1. - uToward;
   }
@@ -708,11 +715,11 @@ void main() {
   // of the drawing as \`?under=\` lays there, its lines darkening through whatever's over them)
   if (!sel && !fur) {
     bool ofLand = mat == 3 || mat == 4 || (mat == 5 && moss);
-    float colK = mat == 2 ? uWaterK : ofLand ? uLandK : uBuiltK, inkOn = 1. - uLinesOff;
+    float colK = mat == 2 ? uWaterK : ofLand ? mix(uLandK, uBuiltK, nearB) : uBuiltK, inkOn = 1. - uLinesOff;
     // (the light that came with the colour, taken out, so it can be laid again as its own layer: where the colour's gone
     // to the page it took its light with it)
     vec3 ltIn = clamp(onPaper ? mix(lit, vec3(1.), smoothstep(.0, .25, drawn)) : lit, vec3(.03), vec3(1.25)), ik = max(inkK, vec3(.05));
-    float kS = uShadeK * (ofLand ? uLandLight : 1.), kH = uHollowK * (ofLand ? uLandLight : 1.);
+    float landL = ofLand ? mix(uLandLight, 1., nearB) : 1., kS = uShadeK * landL, kH = uHollowK * landL;
     vec3 Lk = pow(shadeR, vec3(kS)) * pow(castR, vec3(uCastK)) * pow(hollowR, vec3(kH)) * pow(restR, vec3(min(kS, 1.)));
     // (where there's less colour under it, the light's in sepia, not the sky's grey: on the warm paper a grey shade lies
     // as smoke)
