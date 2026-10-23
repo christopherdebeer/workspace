@@ -208,6 +208,20 @@ export const EXPERIMENTS: Experiment[] = [
     ],
   },
   {
+    id: 'percept',
+    title: 'Percept',
+    group: 'Perception',
+    blurb: 'Local time-reversal of short audio segments. The brain restores the original message when grains stay short; longer grains become uncanny or abstract. A controllable medium for perceptual and generative sound work.',
+    page: 'static/percept.html',
+    preview: 'preview',
+    readme: 'static/percept.md',
+    presets: [
+      { label: 'transparent 30 ms', query: 'grain=30' },
+      { label: 'uncanny 70 ms', query: 'grain=70' },
+      { label: 'collapse 130 ms', query: 'grain=130' },
+    ],
+  },
+  {
     id: 'fungi',
     title: 'Hat-throwers',
     group: 'Drawings',

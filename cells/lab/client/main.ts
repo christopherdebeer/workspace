@@ -29,6 +29,7 @@ const experiments: Record<string, () => Promise<unknown>> = {
   fab: () => import('./fab/main'),
   labyrinth: () => import('./labyrinth/main'),
   cloudfold: () => import('./cloudfold/main'),
+  percept: () => import('./percept/main'),
 };
 
 const id = document.documentElement.dataset.exp ?? '';
