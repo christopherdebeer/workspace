@@ -54,6 +54,16 @@ SETS[3] = [
   { name: 'land22', q: 'land=22&zoom=0.62&turn=1', seed: 2201, n: 4 },
   { name: 'land25', q: 'land=25&zoom=0.62', seed: 2501, n: 4 },
 ];
+// (a fourth, after the first fixes from set 3's reviews: lands again unseen, the same mix)
+SETS[4] = [
+  { name: 'land7', q: 'land=7&zoom=0.62', seed: 701, n: 3 },
+  { name: 'land12', q: 'land=12&zoom=0.62&turn=1', seed: 1201, intent: 'mass', n: 3 },
+  { name: 'land20', q: 'land=20&zoom=0.62&turn=2', seed: 2001, n: 3 },
+  { name: 'land23', q: 'land=23&zoom=0.62&turn=3', seed: 2301, n: 4 },
+  { name: 'land27', q: 'land=27&zoom=0.62', seed: 2701, intent: 'mass', n: 4 },
+  { name: 'land29', q: 'land=29&zoom=0.62&turn=1', seed: 2901, n: 4 },
+  { name: 'land31', q: 'land=31&zoom=0.62&turn=2', seed: 3101, n: 4 },
+];
 const CASES = (SETS[Number(opt.set) || 1] ?? []).filter((c) => !opt.cases || String(opt.cases).split(',').includes(c.name));
 if (!CASES.length) throw new Error('No matching cases');
 

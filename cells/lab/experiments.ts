@@ -208,13 +208,13 @@ export const EXPERIMENTS: Experiment[] = [
     ],
   },
   {
-    id: 'percept',
-    title: 'Percept',
+    id: 'imperecept',
+    title: 'Imperecept',
     group: 'Perception',
-    blurb: 'Local time-reversal of short audio segments. The brain restores the original message when grains stay short; longer grains become uncanny or abstract. A controllable medium for perceptual and generative sound work.',
-    page: 'static/percept.html',
+    blurb: 'The unseen ground between percept and precept. Local time-reversal as latent rule: a constraint that shapes what can be heard without declaring itself. Drift, amplitude-following, and a revealable substrate.',
+    page: 'static/imperecept.html',
     preview: 'preview',
-    readme: 'static/percept.md',
+    readme: 'static/imperecept.md',
     presets: [
       { label: 'transparent 30 ms', query: 'grain=30' },
       { label: 'uncanny 70 ms', query: 'grain=70' },

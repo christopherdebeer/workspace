@@ -52,6 +52,21 @@ await withWood(async (lab) => {
     c.ok('drawn straight up from a top: lifted two courses', pr.whys.at(-1) === 'lift' && await W((w) => w.stone(2, 3, 7) && w.stone(3, 3, 7) && !w.stone(4, 3, 7)), pr);
     await p.evaluate(() => window.__labyrinth.world.undo(0)); await p.waitForTimeout(300);
   }
+  // (drawn straight down its face from a top: lowered, a course; and a stroke from the top that runs on down the screen
+  // out over the stone, away from it, is going somewhere: never a lowering, whatever the screen's direction)
+  {
+    await tapAt(3, 7, 2); await p.waitForTimeout(900);
+    const a = await at(3, 7, 3), b = await at(3, 7, 2), per = Math.hypot(a[0] - b[0], a[1] - b[1]);
+    await finger([a, ...Array.from({ length: 10 }, (_, t) => [a[0] + 1, a[1] + (per * 1.1 * (t + 1)) / 10])], { down: true, up: true }); await p.waitForTimeout(300);
+    const pr = await probe();
+    c.ok('drawn straight down its face from a top: lowered a course', pr.whys.at(-1) === 'lower' && await W((w) => w.stone(1, 3, 7) && !w.stone(2, 3, 7)), pr);
+    await p.evaluate(() => window.__labyrinth.world.undo(0)); await p.waitForTimeout(600);
+    const n0 = (await probe()).ops;
+    await finger([a, ...Array.from({ length: 16 }, (_, t) => [a[0] + 1, a[1] + (per * 7 * (t + 1)) / 16])], { down: true, up: true }); await p.waitForTimeout(300);
+    const pr2 = await probe();
+    c.ok('a stroke from a top running on down the screen over the stone, away from it: not a lowering', await W((w) => w.stone(2, 3, 7)) && !(pr2.ops > n0 && /lift|lower/.test(pr2.whys.at(-1) ?? '')), pr2);
+    while ((await probe()).ops > n0 - 1) { await p.evaluate(() => window.__labyrinth.world.undo(0)); await p.waitForTimeout(200); }
+  }
   // (a brush, then a lift: drawn across a top, taking in what it passes over, then straight up the screen: all of what
   // was brushed raised together; then undone, and the top it was on)
   {

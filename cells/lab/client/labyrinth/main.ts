@@ -570,11 +570,18 @@ function traceStepNow(cx: number, cy: number, final: boolean) {
     const brush = brushed.length >= 2 ? brushed : null;
     const [ox, oy] = brush ? g.pts[t] : [g.x0, g.y0];
     const dx = cx - ox, dy = cy - oy, upright = Math.abs(dy) >= per * 0.6 && Math.abs(dx) <= Math.abs(dy) * 0.3;
+    // (lowering only while the finger's still over what it lowers (its face, or the ground just at its foot): a stroke
+    // that runs on down the screen out over the land is going somewhere, however the view's turned. Raising goes up
+    // into what's behind, so it's not held to that)
+    const under = pick(cx, cy, before), lowered = brush ?? [[i0, j0]], tall = g.h0! - before.ground(i0, j0);
+    const onIt = !under ? dy <= 0 : (under.face !== 'ground' ? lowered.some(([x, z]) => under.hit[1] === x && under.hit[2] === z)
+      : Math.abs(under.hit[1] - i0) + Math.abs(under.hit[2] - j0) <= 1 && dy <= per * (tall + 0.8));
+    if (dy > 0 && !onIt) g.lifting = false;
     // (a side grabbed is always lifted; from a top, only with mass in hand, and not if it's come to rest on another top:
     // that's a stroke to it. A way drawn up the screen from a top goes somewhere)
     const there = final ? null : pick(cx, cy, before), other = !!goal(there) && (there?.inset ?? 0) >= SQUARE;
     const may = g.start.face === 'side' || (intent !== 'way' && !other);
-    if (may && (upright || g.lifting)) {
+    if (may && (upright || g.lifting) && (dy <= 0 || onIt)) {
       if (brush && !g.lifting) { g.pulls = brush; g.x0 = ox; g.y0 = oy; }
       const n = Math.round(-(cy - g.y0) / per);
       g.lifting = upright || Math.abs(cx - g.x0) <= Math.abs(cy - g.y0) * 0.45;

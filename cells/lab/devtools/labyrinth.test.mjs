@@ -554,11 +554,23 @@ ok(`blocks' outlines tried against where they're struck (${lively.form} sides)`,
       if (TE.benched(w, i, j)) { benches++; if (Math.abs(y - lv) > 1e-9) benchOk = false; }
       else if (!w.land.water.has(j * 1000 + i) && Math.abs(y - lv) >= 1) nearOk = false;
       if (TE.benched(w, i, j)) continue;
+      // (a stream's bank where a bench stands over it is a quay: it falls straight to the water, by rights)
+      if (w.land.water.has(j * 1000 + i) && [[1, 0], [-1, 0], [0, 1], [0, -1]].some(([a, b]) => TE.benched(w, i + a, j + b))) continue;
       for (let f = 0.05; f < 0.95; f += 0.1) { const a = TE.groundAt(w, i + f, j + 0.5), b = TE.groundAt(w, i + f + 0.1, j + 0.5); if (!TE.benched(w, Math.floor(i + f + 0.1), j)) maxStep = Math.max(maxStep, Math.abs(a - b)); }
     }
     ok('the land: under what\'s built, the ground is flat at its level exactly', benches > 20 && benchOk);
     ok('the land: on open ground, near each column\'s level at its middle, never a level off', nearOk);
     ok('the land: on open ground, continuous (no step of more than a fraction of a level across it)', maxStep < 0.6);
+    // (built right up to the stream on both banks: its water's never buried, the benches' edges fall to the bank)
+    const MO = await load('../client/labyrinth/model.ts'), buried = [];
+    for (const seed of [6, 14, 25]) {
+      const wl = new MO.World(1, seed), add = [];
+      for (const [i, j] of wl.land.stream) for (const [a, b] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) { const x = i + a, z = j + b; if (!wl.land.water.has(z * 1000 + x) && !add.some((c) => c[1] === x && c[2] === z)) add.push([wl.ground(x, z), x, z, 0]); }
+      wl.apply({ add }, 0);
+      const R = TE.riverOf(wl);
+      R.pts.forEach(([x, z], q) => { if (!TE.benched(wl, Math.floor(x), Math.floor(z)) && TE.groundAt(wl, x, z) > R.bed[q] + 0.14) buried.push([seed, x.toFixed(2), z.toFixed(2)]); });
+    }
+    ok('the land: built right up to the stream, its water\'s never buried', buried.length === 0, buried.slice(0, 5));
   }
   // (storyboard 12: four gestures make a place)
   const s12 = story(12);

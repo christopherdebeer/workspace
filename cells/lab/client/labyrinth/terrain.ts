@@ -155,12 +155,14 @@ export function groundAt(w: World, x: number, z: number): number {
   if (on > -Infinity) return on;
   // (off them, the hill, going to meet the nearest bench: cut steep above it, filled gentle below)
   const h = hillAt(w, x, z);
+  // (never over the stream: its channel's kept open however near a bench comes, the bench's edge falling to the bank)
+  const rv = nearRiver(w, x, z), open = rv ? smooth(rv.hw + 0.05, rv.hw + 0.45, rv.d) : 1;
   let best = 0, at = h;
   for (let b = -1; b <= 1; b++) for (let a = -1; a <= 1; a++) {
     if ((!a && !b) || !bench(w, C, i + a, j + b)) continue;
     const ci = i + a, cj = j + b, L = lev(w, C, ci, cj);
     const d = Math.hypot(Math.max(ci - x, 0, x - ci - 1), Math.max(cj - z, 0, z - cj - 1));
-    const wgt = 1 - smooth(0, h > L ? CUT : FILL, d);
+    const wgt = (1 - smooth(0, h > L ? CUT : FILL, d)) * (h > L ? 1 : open);
     if (wgt > best) { best = wgt; at = L; }
   }
   return h + (at - h) * best;
