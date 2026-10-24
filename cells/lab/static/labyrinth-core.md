@@ -336,4 +336,4 @@ These values and choices need a decision. The values above are recommendations.
 
 ## 16. Next step: comparison
 
-The next document will compare this specification with the implementation. For each section, it will record: the same, different, missing in the implementation, or missing in this specification. It will then propose the changes in the sequence of the most important differences.
+The comparison is in [labyrinth-core-compare.md](labyrinth-core-compare.md). For each section, it will record: the same, different, missing in the implementation, or missing in this specification. It will then propose the changes in the sequence of the most important differences.
