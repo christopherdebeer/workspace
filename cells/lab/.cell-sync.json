@@ -1,8 +1,8 @@
 {
   "cell": "c15r/lab",
   "cellId": "lab-8928acf3",
-  "treeVersion": "tree:65347f165e92b8da4b8073abc29b51c7706536ba984ebb2063add8b9cac92ae1",
-  "syncedAt": "2026-10-24T16:11:12.923Z",
+  "treeVersion": "tree:c10206cb92f26d687599fab365a0cc87808b99eb98d1c7429b3b6fbca67e9b46",
+  "syncedAt": "2026-10-24T16:12:00.311Z",
   "files": {
     "README.md": "sha256:665df4179140457c44ea9e0f6f5820bd6e9b557fb196a37cf1245a07cb11f7c6",
     "client/bricks/build.ts": "sha256:e6ec53d7f179e4184809a1db345a074364781b5a9c44aa524818c0d264051479",
@@ -67,7 +67,7 @@
     "client/labyrinth/cats.ts": "sha256:04ba21dea64a43a68b963285b6db418cca268d22504992d6ace60f0ae3c49c92",
     "client/labyrinth/character.ts": "sha256:733b2de0f58390196aaf336a9a48a75c482455566078bbf78c7ddea2a7bb1b82",
     "client/labyrinth/context.ts": "sha256:b355759c2021bd551f04386b3be999a80e7cbc8ea576b2a4db2e05ca546fa3a3",
-    "client/labyrinth/demo.ts": "sha256:3e12b8c62d40c348bface20618e514cfe6491496da84a6aba52c68e4747b2bc2",
+    "client/labyrinth/demo.ts": "sha256:ffd84ce69b1eddf97e5a1a0e5aba68d74b867db1a921f06c85ea650016a3d193",
     "client/labyrinth/encounters.ts": "sha256:006111055c68ca862af699cd0a6cdb25b3dc444e521c0f78a78dc35499824a0c",
     "client/labyrinth/form.ts": "sha256:97077fd21f7dd27cba66af7b556b80ca59e9a64464ec8aec6badc3c2274123c6",
     "client/labyrinth/gesture.ts": "sha256:ba0791eea5e57f941efb3818095080f6e17e1f4b38cda4eebe2e811bfcda78f8",
@@ -232,6 +232,7 @@
     "devtools/intent-reviews/land-003/a4.tar.gz": "sha256:2a3efa32114a1a3a5823cbde89b275c0c1918ea34102ef43c5145f2069ff1ec5",
     "devtools/intent-reviews/second-reviews-001.tar.gz": "sha256:1a84b87f861a01d99e3949e2f3e83d1e4f99ec78b8eb90983ffe5bbb00517823",
     "devtools/journey.test.mjs": "sha256:a1f60e714e2c75bb7e0c838372edee69dd33dc1ae4f43a3477a04b23cf04c02b",
+    "devtools/lab-globals.mjs": "sha256:9bcafb72a8e04e41a30113062275e089390793c298cd050b79d01fb7573e0267",
     "devtools/labyrinth-atlas.mjs": "sha256:14c77149900dc3dc234208eebb0f59f45b2a39feeee886008dcb1ec6d35f5818",
     "devtools/labyrinth-connectors.mjs": "sha256:e4e4190fe9dcf6b11a95c79426dfbc433ef2f71bf56bcf47e6199de8bbec9386",
     "devtools/labyrinth-encounters-draw.mjs": "sha256:3da7bd5b6a301c830d344bbd0579bb59fd3e64cbeb7fdc2ac9e5646ed2d3ee7b",
