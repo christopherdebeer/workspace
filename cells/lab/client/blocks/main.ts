@@ -1,9 +1,11 @@
 /**
- * Blocks: set stone blocks on a lattice with a finger, and each one becomes what the blocks round it, and theirs, make
- * it (rules.ts): a pebble alone, a column in a run, an arch where it's carried over nothing, a wall with windows, a
- * battlement on a roof's edge; melted into its neighbours where they meet, softer in a thin build, crisper deep in a
- * mass (shape.ts). Every block reads two cells each way, so one block set changes the shapes of those up to four away,
- * and the change runs out from the finger ring by ring.
+ * Blocks: set stone blocks on a lattice with a finger. No block has a shape or a part of its own: each is read from
+ * the blocks round it, and theirs (rules.ts), as a few plain quantities (how open each face is, how much rests on it,
+ * what stands near it, what pushes on it), and one shape program makes it from those (shape.ts). Columns, arches and
+ * buttresses come where the quantities fall that way, and nothing names them. Its carving is chosen by its
+ * surroundings too, turned to a canonical orientation (render.ts): blocks with the same surroundings are carved alike.
+ * Every block reads two cells each way, so one block set changes the shapes of those up to four away, and the change
+ * runs out from the finger ring by ring.
  *
  * The hand: touch to see where the block would go (it shows already as it would be there); lift to set it. Drag to
  * lay a run of them in the plane you touched (a floor across a top, a wall up a side). Hold on a block to take it, and
@@ -14,11 +16,11 @@
  * the next frames (a few milliseconds of shaping a frame), each shape made once and kept by name (shape.ts). Shapes
  * spring, settle and sink in the vertex shader, so a touch is felt without any work on the CPU.
  *
- * `?demo=castle|arcade|harbour|house` starts from a build; `?preview` builds one by itself, slowly, turning (the lab's
- * index). `window.__blocks` is for the harness.
+ * `?demo=…` starts from a build (demos.ts); `?preview` builds one by itself, slowly, turning (the lab's index);
+ * `?debug=1` no shadows, `2` normals, `3` each block coloured by its code. `window.__blocks` is for the harness.
  */
 import { World, key, unkey } from './world';
-import { Reads, read, type Read } from './rules';
+import { Reads, read, thinning, type Read } from './rules';
 import { patch, cellMesh, cacheStats, known, keep, type Mesh } from './shape';
 import type { Job, Done } from './mesher';
 import { Renderer, chunkOf, perspective, ortho, lookAt, mul, invert, type Drawn } from './render';
@@ -189,7 +191,7 @@ function undo() {
   const e = world.undo();
   if (!e) return;
   changed([...e.add, ...e.del], e.add);
-  click(0, 3, false);
+  click(0, 1, false);
   save();
 }
 
@@ -316,13 +318,13 @@ function beginStroke(e: PointerEvent, h: Hit) {
 function take1(c: Cell, join: boolean) {
   if (!has(...c)) return;
   const e = commit([], [key(...c)], join);
-  if (e) { click(c[1], 0, true); buzz(6); }
+  if (e) { click(c[1], 1, true); buzz(6); }
   showMark(null);
 }
 function set1(c: Cell, join: boolean) {
   if (c[1] < 0 || has(...c)) return;
   const e = commit([key(...c)], [], join);
-  if (e) { const r = reads.at(...c); click(c[1], r.role, false); buzz(5); }
+  if (e) { const r = reads.at(...c), [tx, tz] = thinning(r); click(c[1], 1 + 0.35 * Math.min(tx, tz) - 0.2 * (1 - r.soft / 7), false); buzz(5); }
 }
 function moveStroke(e: PointerEvent) {
   const s = stroke!;
@@ -441,7 +443,7 @@ $('again')?.addEventListener('click', () => {
   if (!world.cells.size) return;
   const all = [...world.cells];
   commit([], all);
-  click(0, 6, true);
+  click(0, 0.8, true);
 });
 let soundOn = true;
 try { soundOn = localStorage.getItem('blocks:sound') !== 'off'; } catch { /* default */ }
@@ -460,10 +462,11 @@ function audio() {
   if (ac || preview) return;
   try { ac = new AudioContext(); } catch { ac = null; }
 }
-function click(y: number, role: number, down: boolean) {
+/** `tone`: the stone's own (higher for a slender one, deeper in a mass) */
+function click(y: number, tone: number, down: boolean) {
   if (!ac || !soundOn) return;
   if (ac.state === 'suspended') void ac.resume();
-  const t = ac.currentTime, f = (down ? 180 : 320) * Math.pow(2, Math.min(y, 14) / 14) * (role === 2 ? 1.25 : role === 6 ? 0.8 : role === 1 ? 1.4 : 1);
+  const t = ac.currentTime, f = (down ? 180 : 320) * Math.pow(2, Math.min(y, 14) / 14) * tone;
   // (the knock: a short burst of noise through a band, and the stone's own note under it)
   const n = ac.createBuffer(1, Math.floor(ac.sampleRate * 0.04), ac.sampleRate), ch = n.getChannelData(0);
   for (let i = 0; i < ch.length; i++) ch[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / ch.length, 3);

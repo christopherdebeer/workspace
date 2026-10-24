@@ -1,148 +1,173 @@
 /**
- * What a block is, read from what's round it: its neighbours, and theirs (two cells each way, 124 cells). Nothing is
- * kept; a block is read again whenever what's round it changes, so the same arrangement is always the same block.
+ * What a block is, read from what's round it: the cells two each way (124 of them). No block is given a part to play
+ * and no form has a name. A block is read as a few plain quantities over its neighbourhood, and its shape (shape.ts)
+ * and its carving (render.ts) are made from those alone:
+ * - **joins**: which of its faces meet stone;
+ * - **softness**: how little stone there is round it (alone, soft; deep in a mass, crisp);
+ * - **openness**, face by face: open, sheltered (stone two out), or closed;
+ * - **load**: how much stone rests on it, straight up;
+ * - **support**: whether it stands on something, and if it doesn't, which blocks round it at its level do (its
+ *   underside springs from them);
+ * - **thrust**: whether something carried over nothing pushes on it from one side, low enough that it can spread its
+ *   foot the other way, down to the ground.
  *
- * From its neighbours, a block knows which of its faces are joined (and melts into what's there) and how dense the
- * build round it is: alone or in a thin run it's soft, pebble-like; deep in a mass it's crisp, a dressed stone. From
- * its neighbours' neighbours it knows what part it plays:
- * - a **column**: stone above or below and nothing beside it. Slender, with a base where its run starts and a capital
- *   where it ends;
- * - a **span**: nothing under it, carried on both sides along a run (up to three cells between supports). An arch is
- *   cut from under it, a part of the one arch the whole span makes; carried both ways, a groin vault;
- * - a **corbel**: nothing under it and carried on one side only. Its underside tapers toward the free end;
- * - a **wall**: stone above or below, beside it along one way only, open both sides across it. Where the wall is
- *   three or more high, windows, in rhythm along its run;
- * - a **roof edge**: nothing above, on a wall or a mass, part of a top at least two wide, open on a side. Battlements
- *   along that side;
- * - on the **ground**: a plinth along its open sides;
- * - **alone**: a pebble.
+ * A column is what stone open all round and lightly loaded makes; an arch, what stone over nothing between stones
+ * that stand makes; a buttress, what a pier pushed from one side makes. Where the quantities fall that way, those
+ * forms come; where they fall between, something between.
+ *
+ * And the neighbourhood itself, turned to a canonical orientation (the least of its eight turns and mirrors about the
+ * vertical), as a code: blocks with the same surroundings, however turned, get the same code, and the carving that
+ * comes of it, turned with them. Nothing is kept: a block is read again whenever what's round it changes.
  */
 import { key } from './world';
 
 export type Look = (x: number, y: number, z: number) => boolean;
 
-export const ROLE = { none: 0, pebble: 1, column: 2, span: 3, corbel: 4, wall: 5, mass: 6, plain: 7 } as const;
-export type Role = (typeof ROLE)[keyof typeof ROLE];
-
-/** a block as read from what's round it (all small integers, so it can name a shape) */
+/** a block as read from what's round it */
 export type Read = {
-  role: Role;
-  /** which faces are joined to a neighbour: +x −x +y −y +z −z (bits 0..5) */
+  solid: boolean;
+  /** faces joined to stone: +x −x +y −y +z −z (bits 0..5) */
   joins: number;
-  /** how dense the build is round it: 0 (alone) … 3 (deep in a mass) */
-  dense: number;
-  /** a span: along which ways it's carried (bit 0 x, bit 1 z), and for each, the span's length and this block's place
-   * in it (0 … len−1) */
-  spanX: number; posX: number; spanZ: number; posZ: number;
-  /** a corbel: the way to its support (0 +x, 1 −x, 2 +z, 3 −z) */
-  toward: number;
-  /** a column: a base under it (bit 0), a capital over it (bit 1) */
-  ends: number;
-  /** a wall: windows on its open faces (bit per face, as `joins`) */
-  windows: number;
-  /** a roof edge: battlements along its open sides (bit per side: +x −x +z −z) and which of them stand here (merlon)
-   * or are gaps (crenel), by the place along the edge */
-  merlons: number;
-  /** on the ground with open sides: a plinth (bit per side) */
-  plinth: number;
-  /** nothing under it, off the ground: bit 25 set, and which cells round it at its level (two each way) stand on
-   * something, bit (a + 2) * 5 + (c + 2) for the cell (x + a, z + c): what its underside springs from */
+  /** how little stone is round it: 0 (deep in a mass) … 7 (alone) */
+  soft: number;
+  /** each face (as `joins`), in quarters: 0 closed (stone, or the ground), 3 sheltered (stone two out), 4 open */
+  open: number[];
+  /** stone resting on it, straight up: 0, 1, 2 (or more) */
+  above: number;
+  /** on stone or on the ground */
+  standing: boolean;
+  /** how high over the ground: 0 … 3 (or more) */
+  level: number;
+  /** nothing under it, held by stone beside it: bit 25, and which cells round it at its level stand (bit
+   * (a + 2) * 5 + (c + 2) for the cell (x + a, z + c)); 0 otherwise */
   under: number;
+  /** pushed from one side by stone over nothing: for each side +x −x +z −z, the level it's pushed at, plus one, when
+   * the push is from the opposite side and this side is open down to the ground (so it spreads its foot this way) */
+  thrust: number[];
+  /** its surroundings, turned to their canonical orientation: 12 bits from the 26 cells round it, 12 from all 124 */
+  code: number;
+  /** which of the eight turns and mirrors about the vertical brings it to that orientation */
+  frame: number;
+  /** the read in short, and two hashes of that (to name shapes by) */
+  name: string;
+  h1: number;
+  h2: number;
 };
 
-const EMPTY: Read = { role: ROLE.none, joins: 0, dense: 0, spanX: 0, posX: 0, spanZ: 0, posZ: 0, toward: 0, ends: 0, windows: 0, merlons: 0, plinth: 0, under: 0 };
 export const FACES: Array<[number, number, number]> = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]];
-const SIDES: Array<[number, number]> = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+/** the four sides: +x −x +z −z, as (dx, dz), and their faces */
+export const SIDES: Array<[number, number]> = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+export const SIDE_FACE = [0, 1, 4, 5];
 
-/** how many cells round it (two each way) are filled, as a level 0..3 */
-export function denseAt(has: Look, x: number, y: number, z: number): number {
-  let n = 0;
-  for (let a = -2; a <= 2; a++) for (let b = -2; b <= 2; b++) for (let c = -2; c <= 2; c++) if ((a || b || c) && has(x + a, y + b, z + c)) n++;
-  return n < 3 ? 0 : n < 10 ? 1 : n < 26 ? 2 : 3;
+// ─── the neighbourhood, gathered once a read: 0 empty, 1 stone, 2 the ground ───
+const G = new Uint8Array(125);
+const gi = (a: number, b: number, c: number) => ((a + 2) * 5 + (b + 2)) * 5 + (c + 2);
+const stone = (a: number, b: number, c: number) => G[gi(a, b, c)] === 1;
+const occupied = (a: number, b: number, c: number) => G[gi(a, b, c)] !== 0;
+
+// ─── turns and mirrors about the vertical ───
+/** the 124 cells round a block, in a fixed order: the 26 next to it, then the 98 beyond */
+const ROUND: Array<[number, number, number]> = [];
+for (const ring of [1, 2]) for (let b = -2; b <= 2; b++) for (let a = -2; a <= 2; a++) for (let c = -2; c <= 2; c++) if (Math.max(Math.abs(a), Math.abs(b), Math.abs(c)) === ring) ROUND.push([a, b, c]);
+/** the turn g (a mirror of x if g & 4, then a quarter turn, g & 3 times) of a horizontal offset */
+export function turn(g: number, a: number, c: number): [number, number] {
+  if (g & 4) a = -a;
+  for (let k = 0; k < (g & 3); k++) [a, c] = [-c, a];
+  return [a, c];
 }
+function unturn(g: number, a: number, c: number): [number, number] {
+  for (let k = 0; k < (g & 3); k++) [a, c] = [c, -a];
+  if (g & 4) a = -a;
+  return [a, c];
+}
+/** for each turn, where each cell of the canonical order comes from */
+const FROM = Array.from({ length: 8 }, (_, g) => Int16Array.from(ROUND.map(([a, b, c]) => { const [u, w] = unturn(g, a, c); return gi(u, b, w); })));
 
-/** stands on something: the ground, or a filled cell under it */
-const standing = (has: Look, x: number, y: number, z: number) => y === 0 || has(x, y - 1, z);
+const fnv = (seq: ArrayLike<number>, n: number, seed: number) => {
+  let h = seed >>> 0;
+  for (let i = 0; i < n; i++) { h ^= seq[i]; h = Math.imul(h, 16777619) >>> 0; }
+  h ^= h >>> 13; h = Math.imul(h, 0x5bd1e995) >>> 0; h ^= h >>> 15;
+  return h >>> 0;
+};
+const textHash = (s: string, seed: number) => {
+  let h = seed >>> 0;
+  for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619) >>> 0; }
+  h ^= h >>> 13; h = Math.imul(h, 0x5bd1e995) >>> 0; h ^= h >>> 15;
+  return h >>> 0;
+};
 
-/** along (dx, dz) from a block with nothing under it: the support it reaches through filled cells, within two, or 0 */
-function reach(has: Look, x: number, y: number, z: number, dx: number, dz: number): number {
-  for (let s = 1; s <= 2; s++) {
-    if (!has(x + dx * s, y, z + dz * s)) return 0;
-    if (standing(has, x + dx * s, y, z + dz * s)) return s;
+/** the surroundings in canonical orientation: the least of the eight turns of them, cell by cell; which turn that is */
+const SEQ = new Uint8Array(124);
+function canonical(): [number, number] {
+  let best = 0;
+  for (let g = 1; g < 8; g++) {
+    const A = FROM[g], B = FROM[best];
+    for (let i = 0; i < 124; i++) { const u = G[A[i]], w = G[B[i]]; if (u !== w) { if (u < w) best = g; break; } }
   }
-  return 0;
+  const F = FROM[best];
+  for (let i = 0; i < 124; i++) SEQ[i] = G[F[i]];
+  return [((fnv(SEQ, 26, 2166136261) & 0xfff) | ((fnv(SEQ, 124, 0x9e3779b9) & 0xfff) << 12)) >>> 0, best];
 }
+
+/** how much a block's open sides are drawn in along x and along z (0 … 1): by how open both sides are, and by the
+ * run it's part of across them (a block in a run is drawn in less than one alone, and the end of a run least: it
+ * stands as a pier); a block held by nothing at all, hardly */
+const RUN = [1, 0.35, 0.5];
+export function thinning(r: Read): [number, number] {
+  if (!r.solid) return [0, 0];
+  const held = r.standing || (r.joins & 0b110011) !== 0 ? 1 : 0.3;
+  const zj = ((r.joins >> 4) & 1) + ((r.joins >> 5) & 1), xj = (r.joins & 1) + ((r.joins >> 1) & 1);
+  return [(r.open[0] / 4) * (r.open[1] / 4) * RUN[zj] * held, (r.open[4] / 4) * (r.open[5] / 4) * RUN[xj] * held];
+}
+/** how exposed a block is: its faces' openness, averaged (0 … 1) */
+export const exposure = (r: Read) => r.open.reduce((s, o) => s + o, 0) / 24;
+
+const EMPTY_OPEN = [0, 0, 0, 0, 0, 0], NO_THRUST = [0, 0, 0, 0];
 
 export function read(has: Look, x: number, y: number, z: number): Read {
-  if (!has(x, y, z)) return { ...EMPTY, dense: denseAt(has, x, y, z) };
+  for (let a = -2; a <= 2; a++) for (let b = -2; b <= 2; b++) for (let c = -2; c <= 2; c++) G[gi(a, b, c)] = y + b < 0 ? 2 : has(x + a, y + b, z + c) ? 1 : 0;
+  let n = 0;
+  for (let i = 0; i < 125; i++) if (G[i] === 1) n++;
+  if (G[gi(0, 0, 0)] === 1) n--;
+  const soft = Math.round(7 * Math.min(1, Math.max(0, 1 - n / 36)));
+  if (!stone(0, 0, 0)) {
+    const name = `.${soft}`;
+    return { solid: false, joins: 0, soft, open: EMPTY_OPEN, above: 0, standing: false, level: Math.min(Math.max(y, 0), 3), under: 0, thrust: NO_THRUST, code: 0, frame: 0, name, h1: textHash(name, 1), h2: textHash(name, 7) };
+  }
   let joins = 0;
-  FACES.forEach(([a, b, c], f) => { if (has(x + a, y + b, z + c)) joins |= 1 << f; });
-  const r: Read = { ...EMPTY, joins, dense: denseAt(has, x, y, z) };
-  const up = (joins & 4) !== 0;
-  const hx = joins & 3, hz = (joins >> 4) & 3, sides = hx | (hz << 2);
-  if (joins === 63) { r.role = ROLE.mass; return r; }
-  if (!joins && y > 0) { r.role = ROLE.pebble; return r; }
-  // (nothing under it, off the ground: carried, or held out)
-  if (y > 0 && !(joins & 8)) {
-    let u = 1 << 25;
-    for (let a = -2; a <= 2; a++) for (let c = -2; c <= 2; c++) if ((a || c) && has(x + a, y, z + c) && standing(has, x + a, y, z + c)) u |= 1 << ((a + 2) * 5 + (c + 2));
-    r.under = u;
-    const px = reach(has, x, y, z, 1, 0), nx = reach(has, x, y, z, -1, 0), pz = reach(has, x, y, z, 0, 1), nz = reach(has, x, y, z, 0, -1);
-    if ((px && nx) || (pz && nz)) {
-      r.role = ROLE.span;
-      if (px && nx) { r.spanX = px + nx - 1; r.posX = nx - 1; }
-      if (pz && nz) { r.spanZ = pz + nz - 1; r.posZ = nz - 1; }
-      return r;
-    }
-    if (sides) { r.role = ROLE.corbel; r.toward = joins & 1 ? 0 : joins & 2 ? 1 : joins & 16 ? 2 : 3; return r; }
+  const open = FACES.map(([a, b, c], f) => {
+    if (stone(a, b, c)) joins |= 1 << f;
+    return occupied(a, b, c) ? 0 : occupied(2 * a, 2 * b, 2 * c) ? 3 : 4;
+  });
+  const above = stone(0, 1, 0) ? (stone(0, 2, 0) ? 2 : 1) : 0;
+  const standing = occupied(0, -1, 0);
+  // (nothing under it, but held beside: which blocks round it at its level stand)
+  let under = 0;
+  if (!standing && joins & 0b110011) {
+    for (let a = -2; a <= 2; a++) for (let c = -2; c <= 2; c++) if ((a || c) && stone(a, 0, c) && occupied(a, -1, c)) under |= 1 << ((a + 2) * 5 + (c + 2));
+    if (under) under |= 1 << 25;
   }
-  // (a column: a run up and down, nothing beside)
-  if (!sides && (up || (joins & 8))) {
-    r.role = ROLE.column;
-    if (!(joins & 8)) r.ends |= 1;
-    if (!up) r.ends |= 2;
-    return r;
-  }
-  // (a wall: beside it along one way only, open across it, stone above or below; windows where it's three high)
-  if ((hx && !hz) || (hz && !hx)) {
-    if (up || (joins & 8)) {
-      r.role = ROLE.wall;
-      let run = 1;
-      for (let s = 1; s <= 2 && has(x, y + s, z); s++) run++;
-      for (let s = 1; s <= 2 && y - s >= 0 && has(x, y - s, z); s++) run++;
-      // (in rhythm along the wall: every other block, counted from where the wall begins (within two), else by place)
-      const [dx, dz] = hx ? [1, 0] : [0, 1];
-      let from = 0;
-      while (from < 2 && has(x - dx * (from + 1), y, z - dz * (from + 1))) from++;
-      const at = from < 2 ? from : (x * dx + z * dz) & 1;
-      if (run >= 3 && up && (joins & 8) && at % 2 === 0) r.windows = hx ? (1 << 4) | (1 << 5) : 3;
-    }
-  }
-  if (r.role === ROLE.none) r.role = ROLE.plain;
-  // (a roof edge: nothing over it, a top at least two wide, battlements along its open sides)
-  // (on a wall or a mass, that is: not the head of a column, or a span)
-  const onWall = has(x, y - 1, z) && (has(x + 1, y - 1, z) || has(x - 1, y - 1, z) || has(x, y - 1, z + 1) || has(x, y - 1, z - 1));
-  if (!up && countBits(sides) >= 2 && y > 0 && onWall) {
-    let m = 0;
+  // (pushed from one side by stone over nothing, low enough to reach the ground: a pier, from the ground up to where
+  // the push comes in, open all the way down on the other side)
+  const thrust = NO_THRUST.slice();
+  let pier = standing && y <= 2;
+  for (let k = 1; k <= y && pier; k++) pier = stone(0, -k, 0);
+  if (pier) {
     SIDES.forEach(([dx, dz], s) => {
-      if (sides & (1 << s)) return;
-      // (merlon or crenel by the place along that edge)
-      const along = dx ? z : x;
-      if ((along & 1) === 0) m |= 1 << s;
-      m |= 1 << (s + 4);
+      for (let t = 2; t >= Math.max(y, 1); t--) {
+        let up = true;
+        for (let b = 1; b <= t - y && up; b++) up = stone(0, b, 0);
+        if (!up || !stone(-dx, t - y, -dz) || occupied(-dx, t - y - 1, -dz)) continue;
+        let free = true;
+        for (let b = -y; b <= t - y && free; b++) free = !occupied(dx, b, dz);
+        if (free) { thrust[s] = t + 1; return; }
+      }
     });
-    r.merlons = m;
   }
-  if (y === 0) SIDES.forEach(([, ], s) => { if (!(sides & (1 << s))) r.plinth |= 1 << s; });
-  return r;
-}
-
-const countBits = (n: number) => { let c = 0; while (n) { c += n & 1; n >>= 1; } return c; };
-
-/** a read as a short code, to name the shape it gives with its neighbours' */
-export function code(r: Read): string {
-  if (r.role === ROLE.none) return `.${r.dense}`;
-  return `${r.role}${r.joins.toString(36)}${r.dense}${r.spanX}${r.posX}${r.spanZ}${r.posZ}${r.toward}${r.ends}${r.windows.toString(36)}${r.merlons.toString(36)}${r.plinth.toString(36)}u${r.under.toString(36)}`;
+  const [code, frame] = canonical();
+  const level = Math.min(y, 3);
+  const name = `${joins}.${soft}.${open.join('')}.${above}${standing ? 1 : 0}${level}.${under.toString(36)}.${thrust.join('')}.${code.toString(36)}.${frame}`;
+  return { solid: true, joins, soft, open, above, standing, level, under, thrust, code, frame, name, h1: textHash(name, 1), h2: textHash(name, 7) };
 }
 
 /** reads, remembered until what's round them changes */

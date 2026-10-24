@@ -53,6 +53,25 @@ function house(): Cell[] {
   return dedupe(out);
 }
 
+/** two tiers of piers three apart, an arch between each two: the lower tier's end piers pushed outward */
+function aqueduct(): Cell[] {
+  const out: Cell[] = [];
+  for (const [y0, y1] of [[0, 2], [3, 5]]) {
+    for (let x = 0; x <= 12; x += 3) for (let y = y0; y < y1; y++) out.push([x, y, 0]);
+    for (let x = 0; x <= 12; x++) out.push([x, y1, 0]);
+  }
+  return dedupe(out);
+}
+
+/** stones of one to four blocks high in a ring, and in the middle two pairs with a block across them */
+function stones(): Cell[] {
+  const out: Cell[] = [];
+  [[4, 0], [3, 3], [0, 4], [-3, 3], [-4, 0], [-3, -3], [0, -4], [3, -3]].forEach(([x, z], i) => { for (let y = 0; y <= (i * 5) % 4; y++) out.push([x, y, z]); });
+  for (let y = 0; y < 2; y++) out.push([-1, y, 0], [1, y, 0]);
+  for (let x = -1; x <= 1; x++) out.push([x, 2, 0]);
+  return dedupe(out);
+}
+
 function dedupe(cells: Cell[]): Cell[] {
   const seen = new Set<string>(), out: Cell[] = [];
   for (const c of cells) { const k = c.join(); if (!seen.has(k)) { seen.add(k); out.push(c); } }
@@ -60,4 +79,4 @@ function dedupe(cells: Cell[]): Cell[] {
   return out.sort((a, b) => a[1] - b[1]);
 }
 
-export const DEMOS: Record<string, () => Cell[]> = { castle, arcade, harbour, house };
+export const DEMOS: Record<string, () => Cell[]> = { castle, arcade, aqueduct, stones, house, harbour };

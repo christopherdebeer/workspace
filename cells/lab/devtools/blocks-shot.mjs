@@ -12,7 +12,7 @@ mkdirSync(out, { recursive: true });
 const only = process.argv[3]?.split(',');
 const settle = (page) => page.waitForFunction(() => window.__blocks.settled() && window.__blocks.frames > 3, null, { timeout: 300000 });
 await withWood(async (wood) => {
-  const views = [['castle', 'demo=castle', [-0.7, 0.55, 22]], ['arcade', 'demo=arcade', [-0.5, 0.42, 19]], ['house', 'demo=house', [-0.8, 0.5, 14]], ['harbour', 'demo=harbour', [-0.3, 0.38, 16]]];
+  const views = [['castle', 'demo=castle', [-0.7, 0.55, 22]], ['arcade', 'demo=arcade', [-0.5, 0.42, 19]], ['aqueduct', 'demo=aqueduct', [-0.45, 0.3, 19]], ['stones', 'demo=stones', [-0.6, 0.45, 17]], ['house', 'demo=house', [-0.8, 0.5, 14]], ['harbour', 'demo=harbour', [-0.3, 0.38, 16]]];
   for (const [name, q, v] of views) {
     if (only && !only.includes(name)) continue;
     const page = await wood.open(q);

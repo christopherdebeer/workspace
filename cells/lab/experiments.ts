@@ -32,9 +32,9 @@ export const EXPERIMENTS: Experiment[] = [
   },
   {
     id: 'blocks', title: 'Blocks', group: 'Play',
-    blurb: 'Stone blocks on a lattice, set with a finger, each becoming what the blocks round it (and theirs) make it: a pebble alone, a column in a run, an arch where it\'s carried over nothing, a corbel held out, a wall with windows, battlements on a roof\'s edge; melted into its neighbours where they meet, softer in a thin build, crisper in a mass. One block changes shapes four cells away, and the change runs out from the finger.',
+    blurb: 'Stone blocks on a lattice, set with a finger, and no block has a shape or a part of its own. Each is read from the blocks round it, and theirs, as a few plain quantities (how open each face is, how much rests on it, what stands near it, what pushes on it), and one shape program makes every block from those: columns, arches, capitals, buttresses come where the quantities fall that way, and nothing names them. Its carving comes from its surroundings too, so blocks with the same surroundings, however turned, are carved alike, and the build rhymes where it repeats.',
     page: 'static/blocks.html', preview: 'preview', readme: 'static/blocks.md',
-    presets: [{ label: 'build', query: '' }, { label: 'a castle', query: 'demo=castle' }, { label: 'an arcade', query: 'demo=arcade' }, { label: 'a house', query: 'demo=house' }, { label: 'a harbour', query: 'demo=harbour' }],
+    presets: [{ label: 'build', query: '' }, { label: 'an aqueduct', query: 'demo=aqueduct' }, { label: 'standing stones', query: 'demo=stones' }, { label: 'an arcade', query: 'demo=arcade' }, { label: 'a castle', query: 'demo=castle' }, { label: 'a house', query: 'demo=house' }, { label: 'a harbour', query: 'demo=harbour' }, { label: 'the rhymes', query: 'demo=castle&debug=3' }],
   },
   {
     id: 'labyrinth', title: 'Labyrinth', group: 'Play',
