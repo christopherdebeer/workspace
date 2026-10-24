@@ -1,8 +1,8 @@
 {
   "cell": "c15r/lab",
   "cellId": "lab-8928acf3",
-  "treeVersion": "tree:f4da39ff77307e81dfd105e630d12adafa5e00979f04779fe47f8d3e36c891da",
-  "syncedAt": "2026-10-24T11:27:49.314Z",
+  "treeVersion": "tree:99c977bb21cc4b480c948d32918ad2e43716e0ac5bc6023c598655651b1036a5",
+  "syncedAt": "2026-10-24T11:28:38.926Z",
   "files": {
     "README.md": "sha256:665df4179140457c44ea9e0f6f5820bd6e9b557fb196a37cf1245a07cb11f7c6",
     "client/bricks/build.ts": "sha256:e6ec53d7f179e4184809a1db345a074364781b5a9c44aa524818c0d264051479",
@@ -353,8 +353,9 @@
     "static/labyrinth-connective.md": "sha256:fcef2217fb3f0149c27ed4c699081bf11e7c9848083fbe3229f6feead552ad6f",
     "static/labyrinth-encounters.md": "sha256:65b59fa6ed926807e9192dd87fa369c02b04c8e33de88ca068d0c8644850a0de",
     "static/labyrinth-look.md": "sha256:28e84cb27fda82e1ac6e5233458c747a2c0b488b04406c7094d3c7c08cda2256",
+    "static/labyrinth-ste.md": "sha256:9a0b8a8a2860158088d97ff7c5e9835f2e6317e58df8501da2ef752569e80dbf",
     "static/labyrinth.html": "sha256:7039a53f7e90294b5f0f1b8ab3207cea9de3638f4978488d44f1a1f80d2098e9",
-    "static/labyrinth.md": "sha256:e91fa51af25cb89c18f8f5453af293fbd7fa092658248afc049e391b1f4ea28b",
+    "static/labyrinth.md": "sha256:48989050154b46a02ed5b18dc8da94a1691d27111f66ea1a779c2e45aadc953e",
     "static/labyrinth/atlas-chains.jpg": "sha256:f8dd7d3105a0d51ed4bea59779f75eb563456e5c0e13b3991ad1e4c59673ca5e",
     "static/labyrinth/atlas-combinations.jpg": "sha256:2075129c7824dc291afc6af20a20b7ca156ee23412b117d3bc70ede6a661a479",
     "static/labyrinth/atlas-junctions.jpg": "sha256:5aca9317a4bfbcf930c22be76378905733d4aae24bbb6ad70d197a739205321e",
