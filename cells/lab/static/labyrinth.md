@@ -4,6 +4,8 @@ Architecture that follows the hand. A piece of land on a table in the sun (or, w
 
 > Townscaper interprets where you place blocks. Labyrinth should interpret what you're trying to construct.
 
+The specification and a critique, in Simplified Technical English (ASD-STE100): [labyrinth-ste.md](labyrinth-ste.md).
+
 ![a resolved labyrinth: a passage under a walkway, a court, a bridge on one great arch](labyrinth/v-story-4-turned.jpg)
 
 ## The land
