@@ -13,3 +13,6 @@ const src = out.outputFiles[0].text, bad = [];
 for (const m of src.matchAll(/^var ([^;=\n]+)[;=]/gm)) for (const n of m[1].split(',').map((x) => x.trim().split(/\s/)[0])) if (HELD.has(n)) bad.push(n);
 if (bad.length) { console.log(`FAIL  module-level names the page's window holds read-only: ${[...new Set(bad)].join(', ')}`); process.exit(1); }
 console.log('ok    no module-level name takes one the window holds read-only');
+// (nor `import.meta`: a classic script can't be parsed with it in, and the whole lab would fail on that page)
+if (/\bimport\.meta\b/.test(src)) { console.log('FAIL  the bundle uses import.meta, which a page loading it as a classic script cannot parse'); process.exit(1); }
+console.log('ok    no import.meta in the bundle');

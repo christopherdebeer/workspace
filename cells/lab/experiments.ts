@@ -31,6 +31,12 @@ export const EXPERIMENTS: Experiment[] = [
     presets: [{ label: 'daylight', query: 'seed=1947' }, { label: 'afterglow', query: 'seed=1947&light=dusk' }, { label: 'storm', query: 'seed=819&light=storm&fullness=.8' }, { label: 'reveal the folds', query: 'seed=1947&conceal=0&still' }],
   },
   {
+    id: 'blocks', title: 'Blocks', group: 'Play',
+    blurb: 'Stone blocks on a lattice, set with a finger, each becoming what the blocks round it (and theirs) make it: a pebble alone, a column in a run, an arch where it\'s carried over nothing, a corbel held out, a wall with windows, battlements on a roof\'s edge; melted into its neighbours where they meet, softer in a thin build, crisper in a mass. One block changes shapes four cells away, and the change runs out from the finger.',
+    page: 'static/blocks.html', preview: 'preview', readme: 'static/blocks.md',
+    presets: [{ label: 'build', query: '' }, { label: 'a castle', query: 'demo=castle' }, { label: 'an arcade', query: 'demo=arcade' }, { label: 'a house', query: 'demo=house' }, { label: 'a harbour', query: 'demo=harbour' }],
+  },
+  {
     id: 'labyrinth', title: 'Labyrinth', group: 'Play',
     blurb: 'Architecture that follows the hand, on a piece of land: shelves, a ravine with a stream, an outcrop (or the flat travertine slab). Five brushes: auto reads gestures (tap raises, trace builds a wall, reaches out or climbs) and the stone works out what it takes to stand; a piece brush for one thing exactly, or dressing (brick, marble, moss, ivy, parapets, lanterns, pots); take; and select, to take up a piece or a whole arcade, flight or tower and read it another way. Arches and arcades under what has nothing beneath it, courtyards where walls close round the ground. Kept as a print, too.',
     page: 'static/labyrinth.html', preview: 'preview', readme: 'static/labyrinth.md',
