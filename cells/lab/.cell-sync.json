@@ -1,8 +1,8 @@
 {
   "cell": "c15r/lab",
   "cellId": "lab-8928acf3",
-  "treeVersion": "tree:99c977bb21cc4b480c948d32918ad2e43716e0ac5bc6023c598655651b1036a5",
-  "syncedAt": "2026-10-24T15:41:30.954Z",
+  "treeVersion": "tree:65347f165e92b8da4b8073abc29b51c7706536ba984ebb2063add8b9cac92ae1",
+  "syncedAt": "2026-10-24T15:42:20.121Z",
   "files": {
     "README.md": "sha256:665df4179140457c44ea9e0f6f5820bd6e9b557fb196a37cf1245a07cb11f7c6",
     "client/bricks/build.ts": "sha256:e6ec53d7f179e4184809a1db345a074364781b5a9c44aa524818c0d264051479",
@@ -351,6 +351,7 @@
     "static/imperecept.md": "sha256:f0e8663c82518ee22ce7297e7932d263ff857e889b2585364cd74d418d9118ad",
     "static/labyrinth-atlas.md": "sha256:fa31990e9f235f1da74ab7bf5680df890a5d2a344330ce355f1d80ce4001064f",
     "static/labyrinth-connective.md": "sha256:fcef2217fb3f0149c27ed4c699081bf11e7c9848083fbe3229f6feead552ad6f",
+    "static/labyrinth-core.md": "sha256:b1eeb3694b9601e8095277d1b4fe7d265a1b2176f0f3df05a22229214188d12c",
     "static/labyrinth-encounters.md": "sha256:65b59fa6ed926807e9192dd87fa369c02b04c8e33de88ca068d0c8644850a0de",
     "static/labyrinth-look.md": "sha256:28e84cb27fda82e1ac6e5233458c747a2c0b488b04406c7094d3c7c08cda2256",
     "static/labyrinth-ste.md": "sha256:9a0b8a8a2860158088d97ff7c5e9835f2e6317e58df8501da2ef752569e80dbf",
