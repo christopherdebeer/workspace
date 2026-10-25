@@ -267,7 +267,7 @@ export class Cats {
       }
       const r = c.rng();
       if (r < 0.04 + 0.1 * c.likes.play && this.t > c.play) {
-        const mate = this.list.find((o) => o !== c && !o.gone && !o.leaving && o.awake && !o.air && !o.hidden && o.likes.play > 0.25 && this.t > o.play && Math.hypot(o.x - c.x, o.z - c.z) < 4.5 && Math.abs(o.y - c.y) < 1.2);
+        const mate = this.list.find((o) => o !== c && !o.gone && !o.leaving && o.awake && !o.air && !o.hidden && o.likes.play > 0.25 && this.t > o.play && Math.hypot(o.x - c.x, o.z - c.z) < 4.5 * (this.w?.bay ?? 1) && Math.abs(o.y - c.y) < 1.2);
         if (mate) { yield* this.chase(c, mate); continue; }
       }
       if (r < 0.74) {
@@ -310,16 +310,18 @@ export class Cats {
     const want = Math.atan2(z - z0, x - x0);
     if (Math.abs(wrap(want - c.yaw)) > 1.2) yield* this.face(c, want);
     c.want = 'walk'; c.rate = 9; c.stride = speed > 0.8 ? 0.46 : speed > 0.5 ? 0.38 : 0.3;
+    // (its pace in cells: on the half grid, twice the squares a second; its stride and its pitch measured in cells)
+    const U = this.w?.bay ?? 1;
     let done = 0;
     while (done < L) {
       const dyaw = wrap(Math.atan2(z - c.z, x - c.x) - c.yaw);
       c.yaw += Math.sign(dyaw) * Math.min(Math.abs(dyaw), this.dt * 5);
-      const step = Math.min(L - done, speed * this.dt * Math.min(1, 0.4 + done * 3));
+      const step = Math.min(L - done, speed * U * this.dt * Math.min(1, 0.4 + (done / U) * 3));
       done += step;
       const f = done / L, py = c.y;
       c.x = x0 + (x - x0) * f; c.z = z0 + (z - z0) * f; c.y = this.over(c.x, yAt(f, c.x, c.z), c.z);
-      c.pitch += (Math.atan2(c.y - py, step || 1e-3) * 0.55 - c.pitch) * Math.min(1, this.dt * 10);
-      c.phase += step / (c.stride * S); c.moving = speed;
+      c.pitch += (Math.atan2(c.y - py, step / U || 1e-3) * 0.55 - c.pitch) * Math.min(1, this.dt * 10);
+      c.phase += step / U / (c.stride * S); c.moving = speed;
       yield;
     }
     c.moving = 0; c.pitch = 0;
@@ -413,25 +415,26 @@ export class Cats {
     if (total > 0.05) { const p = at(Math.min(total, 0.2)); if (Math.abs(wrap(Math.atan2(p.z - c.z, p.x - c.x) - c.yaw)) > 1.6) yield* this.face(c, Math.atan2(p.z - c.z, p.x - c.x)); }
     c.want = 'walk'; c.rate = 8;
     let d = 0, v = 0, seg = -1;
-    const seed = c.n * 7.31;
+    const seed = c.n * 7.31, U = this.w?.bay ?? 1;
     while (d < total - 1e-4) {
       if (this.epoch !== epoch) return false;
       const t = c.stir.t;
       // (its pace: drifting about what it means, easing in, slowing to stop)
       const mood = 0.78 + 0.22 * Math.sin(t * 0.53 + seed) + 0.14 * Math.sin(t * 1.37 + seed * 2.1);
-      const goal = speed * mood * Math.min(1, (total - d) / 0.35 + 0.25);
+      // (in cells: on the half grid, twice the squares)
+      const goal = speed * mood * Math.min(1, (total - d) / U / 0.35 + 0.25);
       v += (goal - v) * Math.min(1, this.dt * 3.5);
       c.stride = v > 0.8 ? 0.46 : v > 0.5 ? 0.38 : 0.3;
-      const step = Math.min(total - d, v * this.dt);
+      const step = Math.min(total - d, v * U * this.dt);
       d += step;
       const p = at(d), py = c.y;
       if (p.seg !== seg) { seg = p.seg; c.at = run[seg].name; c.next = run[seg + 1].name; }
       // (heading: toward a little way ahead, the body following its head)
-      const ahead = at(Math.min(total, d + 0.22)), want = Math.atan2(ahead.z - p.z, ahead.x - p.x);
+      const ahead = at(Math.min(total, d + 0.22 * U)), want = Math.atan2(ahead.z - p.z, ahead.x - p.x);
       if (Math.hypot(ahead.x - p.x, ahead.z - p.z) > 0.02) c.yaw += wrap(want - c.yaw) * Math.min(1, this.dt * 6);
       c.x = p.x; c.z = p.z; c.y = this.over(p.x, p.y, p.z);
-      c.pitch += (Math.atan2(c.y - py, step || 1e-3) * 0.5 - c.pitch) * Math.min(1, this.dt * 8);
-      c.phase += step / (c.stride * S); c.moving = v;
+      c.pitch += (Math.atan2(c.y - py, step / U || 1e-3) * 0.5 - c.pitch) * Math.min(1, this.dt * 8);
+      c.phase += step / U / (c.stride * S); c.moving = v;
       // (now and then a stop on the way: a look round; once in a while it sits a moment)
       if (speed < 0.5 && d > 0.3 && total - d > 0.5 && c.rng() < this.dt * 0.05) {
         c.moving = 0; v = 0; c.pitch = 0;
@@ -479,7 +482,7 @@ export class Cats {
     yield* this.wait(c, 0.34);
     c.gaze = null;
     c.air = true; c.want = 'reach'; c.rate = 14;
-    const T = 0.3 + 0.12 * dist + 0.06 * Math.abs(dy), h = dy > 0 ? dy / 2 + 0.18 : l.kind === 'leap' ? 0.32 : 0.15;
+    const T = 0.3 + (0.12 * dist) / (this.w?.bay ?? 1) + 0.06 * Math.abs(dy), h = dy > 0 ? dy / 2 + 0.18 : l.kind === 'leap' ? 0.32 : 0.15;
     for (let t = 0; t < T; t += this.dt) {
       const f = Math.min(1, t / T);
       c.x = fx + (lx - fx) * f; c.z = fz + (lz - fz) * f; c.y = fy + dy * f + h * 4 * f * (1 - f);
@@ -660,7 +663,7 @@ export class Cats {
       c.want = 'groom'; yield* this.wait(c, 1.5 + c.rng() * 2);
     }
     c.doing = short ? 'going as near as it can' : 'going where you showed it';
-    const there = yield* this.goTo(c, s, far > 4 || Math.hypot(s.x - c.x, s.z - c.z) > 4 ? TROT : WALK);
+    const there = yield* this.goTo(c, s, far > 4 * (this.w?.bay ?? 1) || Math.hypot(s.x - c.x, s.z - c.z) > 4 * (this.w?.bay ?? 1) ? TROT : WALK);
     c.call = null;
     if (!there) { c.resting = ''; c.doing = 'thinking better of it'; c.want = 'sit'; c.rate = 5; yield* this.wait(c, 1.5); return; }
     // (a place it's been shown is a little more its own)
@@ -714,7 +717,7 @@ export class Cats {
     yield* this.wait(c, 0.4);
     // (aside: the nearest place to rest a little way off)
     const here = this.place(c.at);
-    const s = here && this.chooseRest(c, here, (p) => { const d = Math.hypot(p.x - sx, p.z - sz); return d < 1.8 ? -9 : -Math.abs(d - 2.4) * 0.8; });
+    const s = here && this.chooseRest(c, here, (p) => { const d = Math.hypot(p.x - sx, p.z - sz) / (this.w?.bay ?? 1); return d < 1.8 ? -9 : -Math.abs(d - 2.4) * 0.8; });
     if (s) {
       c.resting = s.name;
       if (yield* this.goTo(c, s, TROT)) {

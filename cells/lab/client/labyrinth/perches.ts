@@ -239,7 +239,8 @@ export function perches(w: World): Perches {
     const base = s.kind === 'ledge' ? 0.25 : s.kind === 'rail' ? 0.2 : s.kind === 'coping' ? 0.3 : s.court ? 0.4 : s.ground ? (w.paved(s.i, s.j) ? 0.08 : 0.02) : 0.6;
     habitable += base + (s.ground && !s.court ? 0 : s.shelter * 0.4);
   }
-  const capacity = Math.max(0, Math.min(7, Math.floor(habitable / 12 + 0.3)));
+  // (in cells: on the half grid, four squares to one)
+  const capacity = Math.max(0, Math.min(7, Math.floor(habitable / (12 * w.bay * w.bay) + 0.3)));
   return { spots, byName, capacity, habitable };
 }
 

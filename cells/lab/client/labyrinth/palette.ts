@@ -36,11 +36,13 @@ export function span(w: World, k: number, i: number, j: number, only?: number): 
   let best: { a: number; i: number; j: number; n: number } | null = null;
   for (const a of only === undefined ? [0, 1] : [only]) {
     const [di, dj] = DIRS[a];
+    // (seven cells at most: on the half grid, fourteen squares)
+    const M = 7 * w.bay;
     let lo = 0, hi = 0;
-    while (lo < 7 && w.free(k, i - (lo + 1) * di, j - (lo + 1) * dj)) lo++;
-    while (hi < 7 && w.free(k, i + (hi + 1) * di, j + (hi + 1) * dj)) hi++;
+    while (lo < M && w.free(k, i - (lo + 1) * di, j - (lo + 1) * dj)) lo++;
+    while (hi < M && w.free(k, i + (hi + 1) * di, j + (hi + 1) * dj)) hi++;
     const n = lo + hi + 1;
-    if (n > 7 || !w.stone(k, i - (lo + 1) * di, j - (lo + 1) * dj) || !w.stone(k, i + (hi + 1) * di, j + (hi + 1) * dj)) continue;
+    if (n > M || !w.stone(k, i - (lo + 1) * di, j - (lo + 1) * dj) || !w.stone(k, i + (hi + 1) * di, j + (hi + 1) * dj)) continue;
     // (never across a stair's way: a bridge laid over its foot, its head or the room over them would shut it)
     if (Array.from({ length: n }, (_, q) => [i + (q - lo) * di, j + (q - lo) * dj]).some(([x, z]) => w.way(k, x, z))) continue;
     if (!best || n < best.n) best = { a, i: i - lo * di, j: j - lo * dj, n };
