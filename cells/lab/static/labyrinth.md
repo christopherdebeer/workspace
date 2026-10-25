@@ -125,7 +125,8 @@ of the first two over one land, a sketch of lands with more than one; a way from
 
 ## Fronts: a building composed, not opened a face at a time
 
-Where a tradition composes round a court (the plateau, so far: facades.ts), a building's faces are read as runs of
+Three traditions compose their fronts (facades.ts); the middle sea opens each face to itself, as it did. Where a
+tradition composes round a court (the plateau), a building's faces are read as runs of
 bays, each knowing what it looks onto, and composed as fronts:
 
 - **on a court, at the ground**: an arcade cut into the building's own mass, a gallery of pointed arches, each with a
@@ -139,13 +140,30 @@ bays, each knowing what it looks onto, and composed as fronts:
 - **every floor** marked by a band along the front;
 - **its flat top**: a wind-catcher over a corner of a house of four cells or more, slotted at its head; on one of six
   or more, now and then, a little pavilion on four columns under a tiled dome.
+- **its top storey over the court**, in a house in two: a loggia, a gallery behind slender columns paired where bays
+  meet, a band of tile over them, a low parapet between;
+- **over a drop** (an upper face over ground lower than the building's own foot, air all the way down): a timber
+  balcony on two brackets, its rail a lattice, every other bay along the top two storeys;
+- **its court**: the pool rimmed in tile with a jet at its heart, its water run out in channels to the court's sides
+  (a cross where the court's near square and three cells or more each way, else along its length), and beds of shrubs
+  and flowers in a kerb along its walls wherever no gallery, portal or door is. The channels lie on the paving and are
+  stepped over: what the model walks doesn't change.
 
-What's built is untouched: a gallery and an iwan are cut into stone that's already there. The only thing that stands
-out past what's built is a portal's frame, a twelfth of a cell, never into a way kept for a stair, a passage the hand
-kept open, or other stone; the roof's things stand on the building's own cells where nothing's put and no way goes.
-None of it is walked.
+Where a tradition composes to the street (the north): every storey over the ground is jettied out an eighth of a cell
+over the one under it, a beam along its foot, round its corners, out only into free air; and along the front the
+house's door is in, each bay but the door's is a shopfront: a wide opening under a timber beam, a stall board, the
+window lit behind it, a board hinged up over it.
 
-![The fronts' fixture (story 17) in the middle sea and on the plateau, and the study on the plateau](labyrinth/traditions-fronts.jpg)
+Where a tradition composes on verandas (the east): at the ground, onto open ground, under the skirt of tile over it,
+a deck of boards on posts, and the front behind it a lattice of screens, lit like paper.
+
+What's built is untouched: galleries, iwans and loggias are cut into stone that's already there. What stands out past
+it does so by a third of a cell at most (a portal's frame a twelfth, a jetty an eighth, a veranda's deck about a
+fifth, a balcony a third) and only into free air: never into a way kept for a stair, a passage the hand kept open, or
+other stone. The roof's things stand on the building's own cells where nothing's put and no way goes. None of it is
+walked.
+
+![The fronts' fixture (story 17) and the study, in the middle sea, on the plateau, in the north and in the east](labyrinth/traditions-fronts.jpg)
 
 `?story=17` is the fronts' fixture, a courtyard house: wings two storeys high round a court, the north wing three, a
 gate through the south. `node devtools/labyrinth-traditions.mjs --only=fronts` draws the sheet. A rebuild of story 8

@@ -612,6 +612,83 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
     else cypress(dc.i, dc.j, dc.k, dc.born);
   }
 
+  courtGardens();
+  /**
+   * A court laid out by its tradition, where it composes round courts (the plateau's): its pool's water run out in
+   * channels to the court's sides (a cross where the court's near square and three cells or more each way, else along
+   * its length), each a narrow cut in the paving rimmed in tile, its pool rimmed in tile too and a jet at its heart;
+   * beds along its walls, a kerb round shrubs and flowers, wherever the wall isn't a gallery or a portal and no door
+   * opens. All drawn: the channels are stepped over, the beds stand at the wall's foot, nothing the model walks changes.
+   */
+  function courtGardens() {
+    const seen = new Set<number>();
+    for (const v of w.courts) {
+      if (seen.has(v)) continue;
+      const region: Array<[number, number]> = [], st = [v];
+      seen.add(v);
+      while (st.length) { const u = st.pop()!, [, i, j] = unkey(u); region.push([i, j]); for (const [a, b] of DIRS) { const q = key(0, i + a, j + b); if (w.courts.has(q) && !seen.has(q)) { seen.add(q); st.push(q); } } }
+      const g = grammarHere(w, w.ground(region[0][0], region[0][1]), region[0][0], region[0][1]);
+      if (g.facade !== 'court') continue;
+      const inR = new Set(region.map(([i, j]) => `${i}.${j}`)), pools = w.decor.filter((dc) => dc.kind === 'pool' && inR.has(`${dc.i}.${dc.j}`));
+      const k = w.ground(region[0][0], region[0][1]), born = pools.length ? Math.min(...pools.map((p) => p.born)) : -1e3;
+      cur = { born, pivot: k - 0.3, how: 1, tone: 0.5, dress: 0, sel: false };
+      const isPool = (i: number, j: number) => pools.some((p) => p.i === i && p.j === j), taken = (i: number, j: number) => w.decor.some((dc) => dc.kind !== 'pool' && dc.i === i && dc.j === j) || w.way(k, i, j) || w.tree(k, i, j);
+      const tile = (A: V3, B: V3, C: V3, D: V3) => { cur.tone = 2; quad(A, B, C, D, [0, 1, 0], 1, MAT.lead); cur.tone = 0.5; };
+      const lines: Array<{ along: number; at: number }> = [];
+      if (pools.length) {
+        // (the pool rimmed in tile, a jet at its heart)
+        for (const p of pools) for (let d = 0; d < 4; d++) {
+          const [a, b] = DIRS[d]; if (isPool(p.i + a, p.j + b)) continue;
+          const x0 = X(p.i), z0 = Z(p.j), R = 0.07, y = k + 0.004;
+          if (a) { const x = a > 0 ? x0 + 1 : x0 - R; tile([x, y, z0 - R], [x + R, y, z0 - R], [x + R, y, z0 + 1 + R], [x, y, z0 + 1 + R]); }
+          else { const z = b > 0 ? z0 + 1 : z0 - R; tile([x0 - R, y, z], [x0 + 1 + R, y, z], [x0 + 1 + R, y, z + R], [x0 - R, y, z + R]); }
+        }
+        const mx = pools.reduce((t, p) => t + p.i, 0) / pools.length, mz = pools.reduce((t, p) => t + p.j, 0) / pools.length;
+        lathe(X(mx) + 0.5, Z(mz) + 0.5, [[0.035, k - 0.1], [0.022, k + 0.05], [0.012, k + 0.24], [0, k + 0.27]], MAT.water, 8);
+        // (its channels: across the court's longer way, or both ways where it's near square)
+        const xs = region.map(([i]) => i), zs = region.map(([, j]) => j), W = Math.max(...xs) - Math.min(...xs) + 1, D = Math.max(...zs) - Math.min(...zs) + 1;
+        const cross = Math.max(W, D) / Math.min(W, D) < 1.6 && Math.min(W, D) >= 3;
+        if (W >= D || cross) lines.push({ along: 0, at: Math.round(mz) });
+        if (D > W || cross) lines.push({ along: 1, at: Math.round(mx) });
+        // (the court's paving is the ground's, drawn over the cell whole: the channel's water lies just on it, its rims a
+        // little prouder)
+        const CW = 0.08, yw = k + 0.006;
+        for (const ln of lines) for (const [i, j] of region) {
+          if ((ln.along === 0 ? j : i) !== ln.at || isPool(i, j) || taken(i, j)) continue;
+          // (the strip through this cell, its water sunk a little, its sides, its rims in tile; an end where it stops)
+          const c = ln.along === 0 ? Z(j) + 0.5 : X(i) + 0.5, u0 = ln.along === 0 ? X(i) : Z(j), u1 = u0 + 1;
+          const Q = (u: number, s2: number, y: number): V3 => (ln.along === 0 ? [u, y, c + s2] : [c + s2, y, u]);
+          quad(Q(u0, -CW, yw), Q(u1, -CW, yw), Q(u1, CW, yw), Q(u0, CW, yw), [0, 1, 0], 1, MAT.water);
+          for (const sg of [-1, 1]) tile(Q(u0, sg * CW, k + 0.01), Q(u1, sg * CW, k + 0.01), Q(u1, sg * (CW + 0.045), k + 0.01), Q(u0, sg * (CW + 0.045), k + 0.01));
+          for (const [e, u] of [[-1, u0], [1, u1]] as Array<[number, number]>) {
+            const ni = ln.along === 0 ? i + e : i, nj = ln.along === 0 ? j : j + e;
+            if (inR.has(`${ni}.${nj}`) && !taken(ni, nj)) continue;
+            tile(Q(u - (e < 0 ? 0 : 0.045), -CW - 0.045, k + 0.01), Q(u + (e < 0 ? 0.045 : 0), -CW - 0.045, k + 0.01), Q(u + (e < 0 ? 0.045 : 0), CW + 0.045, k + 0.01), Q(u - (e < 0 ? 0 : 0.045), CW + 0.045, k + 0.01));
+          }
+        }
+      }
+      // (beds along its walls: where the wall's not a gallery or a portal, no door opens, and nothing else stands)
+      const onLine = (i: number, j: number) => lines.some((ln) => (ln.along === 0 ? j : i) === ln.at);
+      for (const [i, j] of region) {
+        if (isPool(i, j) || taken(i, j) || onLine(i, j)) continue;
+        for (let d = 0; d < 4; d++) {
+          const [a, b] = DIRS[d], ni = i + a, nj = j + b, back = (d + 2) % 4;
+          if (inR.has(`${ni}.${nj}`) || !w.stone(k, ni, nj)) continue;
+          const by = bayAt(w, k, ni, nj, back);
+          if ((by && by.role !== 'blank') || opening(w, k, ni, nj, back)?.kind === 'door' || w.archway(k, ni, nj) >= 0) continue;
+          const BD = 0.24, cx = X(i) + 0.5, cz = Z(j) + 0.5, [ta, tb] = DIRS[(d + 1) % 4];
+          const P2 = (s2: number, o: number, y: number): V3 => [cx + a * (0.5 - o) + ta * s2, y, cz + b * (0.5 - o) + tb * s2];
+          const k0 = P2(-0.5, BD, k), k1 = P2(0.5, 0, k + 0.07);
+          box(Math.min(k0[0], k1[0]), Math.max(k0[0], k1[0]), k, k + 0.07, Math.min(k0[2], k1[2]), Math.max(k0[2], k1[2]), MAT.stone, [0.7, 0.7, 1, 1]);
+          leaf = 3; bloom = hash(w.seed, i, j, d, 71) % 3 === 0 ? MOSS : 0;
+          const l0 = P2(-0.46, BD - 0.03, k), l1 = P2(0.46, 0.02, k);
+          box(Math.min(l0[0], l1[0]), Math.max(l0[0], l1[0]), k + 0.07, k + 0.22 + 0.06 * (hash(w.seed, i, j, d, 72) % 3), Math.min(l0[2], l1[2]), Math.max(l0[2], l1[2]), MAT.leaves, [0.7, 0.7, 1, 1]);
+          leaf = 0; bloom = 0;
+        }
+      }
+    }
+  }
+
   perf.end(); perf.begin('mesh.build.water');
   // ─── water falling: from a basin's spout to what's below it, a splash where it lands, a bowl to catch it ───
   for (const f of w.falls) {

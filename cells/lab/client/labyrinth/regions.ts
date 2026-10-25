@@ -38,9 +38,10 @@ export interface Grammar {
   /** what the rules dress its stone in, now and then (character.ts): marble or brick; brick alone; neither (it's
    * whitewashed) */
   stone: 'mixed' | 'brick' | 'none';
-  /** how its façades are composed (facades.ts): round a court, galleried, a portal, paired windows over it; or (null)
-   * each face to itself, as buildings.ts lays its openings */
-  facade: 'court' | null;
+  /** how its façades are composed (facades.ts): round a court (galleried, a portal, paired windows over it); to the
+   * street (its upper storeys jettied out, shopfronts along its door's front); on verandas (a deck under the skirt, the
+   * front screens); or (null) each face to itself, as buildings.ts lays its openings */
+  facade: 'court' | 'street' | 'veranda' | null;
 }
 
 export type RegionMode = 'land' | 'mixed' | GrammarId;
@@ -115,6 +116,6 @@ export function archStations(f: ArchFamily, hw: number, n: number): number[] {
 export const GRAMMARS: Record<GrammarId, Grammar> = {
   mediterranean: { id: 'mediterranean', wall: 'ashlar', roof: 'tile', arch: ROUND, span: () => ROUND, windows: ['arched', 'square', 'slit'], doorHead: 'arched', shutters: true, panes: null, stone: 'mixed', facade: null },
   persian: { id: 'persian', wall: 'ashlar', roof: 'flat', arch: POINTED, span: (n) => (n >= 2 ? FOUR : POINTED), windows: ['square', 'arched', 'arched', 'arched'], doorHead: 'arched', shutters: false, panes: { paints: [0, 1, 2], fine: false, lit: 0.55 }, stone: 'mixed', facade: 'court' },
-  timber: { id: 'timber', wall: 'frame', roof: 'steep', arch: ROUND, span: () => ROUND, windows: ['square'], doorHead: 'square', shutters: false, panes: { paints: [3, 4, 1], fine: false, lit: 0.45 }, stone: 'brick', facade: null },
-  eaves: { id: 'eaves', wall: 'plaster', roof: 'eave', arch: ROUND, span: () => ROUND, windows: ['square'], doorHead: 'square', shutters: false, panes: { paints: [5, 5, 6], fine: true, lit: 0.65 }, stone: 'none', facade: null },
+  timber: { id: 'timber', wall: 'frame', roof: 'steep', arch: ROUND, span: () => ROUND, windows: ['square'], doorHead: 'square', shutters: false, panes: { paints: [3, 4, 1], fine: false, lit: 0.45 }, stone: 'brick', facade: 'street' },
+  eaves: { id: 'eaves', wall: 'plaster', roof: 'eave', arch: ROUND, span: () => ROUND, windows: ['square'], doorHead: 'square', shutters: false, panes: { paints: [5, 5, 6], fine: true, lit: 0.65 }, stone: 'none', facade: 'veranda' },
 };

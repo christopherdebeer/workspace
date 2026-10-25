@@ -1101,6 +1101,20 @@ if (process.env.DEBUG) (await import('node:fs')).writeFileSync(process.env.DEBUG
   const m = ME.buildMesh(p17);
   let bad = 0; for (let q = 0; q < m.count * ME.STRIDE; q++) if (!Number.isFinite(m.data[q])) bad++;
   ok('fronts: the composed mesh whole (no NaN)', bad === 0, bad);
+  ok('fronts: a loggia or paired windows over the court; balconies only over a drop', bays.every((by) => by.role !== 'balcony' || p17.ground(by.out[1], by.out[2]) < by.k - 1));
+  // (the north's and the east's: what stands out (a jetty, a veranda's deck, a shopfront's board) only into free air)
+  for (const t of ['timber', 'eaves']) {
+    RG.setRegions(t);
+    for (const s of [8, 16, 17]) {
+      const w = story(s), bs = [...FA.facades(w).values()], rs = new Set(bs.map((by) => by.role));
+      ok(`fronts (${t}, story ${s}): composed its own way`, t === 'timber' ? rs.has('jetty') && [...rs].every((r) => r === 'jetty' || r === 'shop') : rs.has('veranda') && rs.size === 1, [...rs]);
+      ok(`fronts (${t}, story ${s}): out only into free air`, bs.every((by) => { const [k, i, j] = by.out; return !w.occupied(k, i, j) && !w.way(k, i, j) && w.passage(k, i, j) < 0; }));
+      ok(`fronts (${t}, story ${s}): what's built the same`, built(w) === built((RG.setRegions('mediterranean'), story(s))));
+      RG.setRegions(t);
+      const mm = ME.buildMesh(w); let nan = 0; for (let q = 0; q < mm.count * ME.STRIDE; q++) if (!Number.isFinite(mm.data[q])) nan++;
+      ok(`fronts (${t}, story ${s}): its mesh whole`, nan === 0, nan);
+    }
+  }
   RG.setRegions('mediterranean');
 }
 console.log(`${checks - fails} of ${checks} checks hold · gestures read as ${JSON.stringify(made)} · declined: ${JSON.stringify(declines)} · dressed by the rules: ${lively.dressed} of ${lively.worlds} worlds, gated or arcaded walls: ${lively.gates}`);

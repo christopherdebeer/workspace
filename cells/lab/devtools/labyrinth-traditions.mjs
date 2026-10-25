@@ -5,8 +5,9 @@
 //   static/labyrinth/traditions-same.jpg, a column to a tradition.
 // - **across**: one tradition over several builds (stories 8, 9, 13, 16): various, and still one place;
 //   static/labyrinth/traditions-across-NAME.jpg.
-// - **fronts**: the fronts' fixture (story 17, a courtyard house) in the middle sea and composed on the plateau, from two
-//   sides, and the study on the plateau close (facades.ts); static/labyrinth/traditions-fronts.jpg.
+// - **fronts**: the fronts' fixture (story 17, a courtyard house) and the study, composed (facades.ts): in the middle sea
+//   (as it was), on the plateau (from two sides, its court from over it, a balcony), in the north and in the east;
+//   static/labyrinth/traditions-fronts.jpg.
 process.env.EXPERIMENT = 'labyrinth'; process.env.READY = '__labyrinth';
 const opt = Object.fromEntries(process.argv.slice(2).filter((a) => a.startsWith('--')).map((a) => [a.slice(2).split('=')[0], a.includes('=') ? a.slice(a.indexOf('=') + 1) : true]));
 const { withWood } = await import('./harness.mjs');
@@ -29,7 +30,7 @@ await withWood(async (lab) => {
     return file;
   };
   if (!opt.only || opt.only === 'same') for (const t of TRADITIONS) for (const [v, q] of [['close', 'zoom=0.24'], ['wide', 'zoom=0.5']]) shots.push(['same', `${t} ${v}`, await draw(`same-${t}-${v}`, `story=16&region=${t}&${q}`)]);
-  if (!opt.only || opt.only === 'fronts') for (const [n, q] of [['story 17, the middle sea', 'story=17&region=mediterranean&zoom=0.34'], ['story 17, the plateau', 'story=17&region=persian&zoom=0.34'], ['story 17, the plateau, turned', 'story=17&region=persian&zoom=0.34&turn=2'], ['the study, the plateau', 'story=16&region=persian&zoom=0.24']]) shots.push(['fronts', n, await draw(`fronts-${shots.length}`, q)]);
+  if (!opt.only || opt.only === 'fronts') for (const [n, q] of [['story 17, the middle sea', 'story=17&region=mediterranean&zoom=0.34'], ['story 17, the plateau', 'story=17&region=persian&zoom=0.34'], ['story 17, the plateau, turned', 'story=17&region=persian&zoom=0.34&turn=2'], ['the study, the plateau', 'story=16&region=persian&zoom=0.24'], ['story 17, the plateau, its court', 'story=17&region=persian&zoom=0.22&el=1.1&at=5.5'], ['the study, the plateau, a balcony', 'story=16&region=persian&zoom=0.22&turn=1'], ['story 17, the north', 'story=17&region=timber&zoom=0.3'], ['the study, the north', 'story=16&region=timber&zoom=0.22'], ['story 17, the east', 'story=17&region=eaves&zoom=0.3'], ['the study, the east', 'story=16&region=eaves&zoom=0.22']]) shots.push(['fronts', n, await draw(`fronts-${shots.length}`, q)]);
   const t = opt.tradition ?? 'timber';
   if (!opt.only || opt.only === 'across') for (const s of [8, 9, 13, 16]) shots.push([`across-${t}`, `${t}: story ${s}`, await draw(`across-${t}-${s}`, `story=${s}&region=${t}&zoom=0.4`)]);
 }, { width: 700, height: 700 });

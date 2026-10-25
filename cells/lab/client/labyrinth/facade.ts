@@ -4,8 +4,8 @@
  */
 import { hash } from '../kit/rng';
 import { DIRS } from './model';
-import { buildings, grammarHere, type Opening } from './buildings';
-import { FRAME_OUT, FRAME_UP, type Bay } from './facades';
+import { buildings, grammarHere, opening, type Opening } from './buildings';
+import { DECK_OUT, FRAME_OUT, FRAME_UP, JETTY, type Bay } from './facades';
 import { ROUND, archNormal, archY } from './regions';
 import { KIND, MAT, PIERCED, type Emit, type V3 } from './emit';
 
@@ -168,6 +168,102 @@ export function openings(E: Emit) {
       quad(P(d, s0, ys, -0.03), P(d, s1, ys, -0.03), P(d, s1, ys), P(d, s0, ys), [0, -1, 0], 0.5, MAT.stone);
       return;
     }
+    if (by.role === 'jetty') {
+      // (the storey stood out over the one under it: its front out by JETTY (run on round a corner), its windows in it as
+      // the house has them; its underside, a beam along its foot; its ends, where it ends; its top, under the eaves)
+      const J = JETTY, a0 = s0 - (by.ext?.[0] ?? 0), a1 = s1 + (by.ext?.[1] ?? 0), ends = by.ends ?? [true, true];
+      const PJ = (dd: number, s2: number, y: number, inset = 0) => P(dd, s2, y, inset - J);
+      const op = opening(w, k, by.i, by.j, d);
+      if (op) holed(d, a0, a1, y0, yt, op, PJ, n, 1); else quad(PJ(d, a0, y0), PJ(d, a1, y0), PJ(d, a1, yt), PJ(d, a0, yt), n, 1, MAT.stone);
+      quad(P(d, a0, k, 0), P(d, a1, k, 0), P(d, a1, k, -J), P(d, a0, k, -J), [0, -1, 0], 0.45, MAT.wood);
+      const keepHow = E.cur.how; E.cur.how = 1;
+      const bA = P(d, a0, k, -J - 0.015), bB = P(d, a1, k + 0.07, -J + 0.03);
+      box(Math.min(bA[0], bB[0]), Math.max(bA[0], bB[0]), k, k + 0.07, Math.min(bA[2], bB[2]), Math.max(bA[2], bB[2]), MAT.wood, 0.85);
+      E.cur.how = keepHow;
+      if (ends[0]) quad(P(d, a0, y0, 0), P(d, a0, y0, -J), P(d, a0, yt, -J), P(d, a0, yt, 0), [-ta, 0, -tb], 0.8, MAT.stone);
+      if (ends[1]) quad(P(d, a1, y0, -J), P(d, a1, y0, 0), P(d, a1, yt, 0), P(d, a1, yt, -J), [ta, 0, tb], 0.8, MAT.stone);
+      if (k === by.b.h - 1) quad(P(d, a0, yt, -J), P(d, a1, yt, -J), P(d, a1, yt, 0), P(d, a0, yt, 0), [0, 1, 0], 0.9, MAT.stone);
+      return;
+    }
+    if (by.role === 'shop') {
+      // (a shopfront: piers either side, a timber beam over a wide opening, under it a stall board and the window lit
+      // behind it, small panes; a board hinged up over it, out a little)
+      const hw = 0.37, yB = k + 0.74, yS = k + 0.3, R = 0.07;
+      quad(P(d, s0, y0), P(d, -hw, y0), P(d, -hw, yt), P(d, s0, yt), n, [foot, foot, 1, 1], MAT.stone);
+      quad(P(d, hw, y0), P(d, s1, y0), P(d, s1, yt), P(d, hw, yt), n, [foot, foot, 1, 1], MAT.stone);
+      quad(P(d, -hw, yB), P(d, hw, yB), P(d, hw, yt), P(d, -hw, yt), n, 1, MAT.stone);
+      const bm0 = P(d, -hw - 0.04, yB, -0.03), bm1 = P(d, hw + 0.04, yB + 0.08, 0.01);
+      box(Math.min(bm0[0], bm1[0]), Math.max(bm0[0], bm1[0]), yB, yB + 0.08, Math.min(bm0[2], bm1[2]), Math.max(bm0[2], bm1[2]), MAT.wood, 0.9);
+      quad(P(d, -hw, k, 0.01), P(d, hw, k, 0.01), P(d, hw, yS, 0.01), P(d, -hw, yS, 0.01), n, 0.85, MAT.wood);
+      quad(P(d, -hw, yS, 0.01), P(d, hw, yS, 0.01), P(d, hw, yS, R), P(d, -hw, yS, R), [0, 1, 0], 0.8, MAT.wood);
+      glass(P(d, -hw, yS, R), P(d, hw, yS, R), P(d, hw, yB, R), P(d, -hw, yB, R), false, hash(w.seed, by.k, by.i, by.j, d, 15) % 100 < 70);
+      for (const sg of [-1, 1]) quad(P(d, sg * hw, yS, 0), P(d, sg * hw, yS, R), P(d, sg * hw, yB, R), P(d, sg * hw, yB, 0), [-sg * ta, 0, -sg * tb], 0.6, MAT.stone);
+      quad(P(d, -hw, yB - 0.001, 0), P(d, hw, yB - 0.001, 0), P(d, hw, yB - 0.001, R), P(d, -hw, yB - 0.001, R), [0, -1, 0], 0.5, MAT.stone);
+      face([P(d, -hw, yB + 0.1, -0.01), P(d, hw, yB + 0.1, -0.01), P(d, hw, yB + 0.04, -0.2), P(d, -hw, yB + 0.04, -0.2)], MAT.wood, 0.9, true);
+      return;
+    }
+    if (by.role === 'veranda') {
+      // (a veranda: the front a lattice of screens, lit, in a timber frame, a beam over it; out before it a deck of
+      // boards, a post at each of its ends and between bays, up to the skirt over it)
+      const yB = k + 0.82, ends = by.ends ?? [true, true];
+      quad(P(d, s0, yB), P(d, s1, yB), P(d, s1, yt), P(d, s0, yt), n, 1, MAT.stone);
+      glass(P(d, s0, k, 0.02), P(d, s1, k, 0.02), P(d, s1, yB, 0.02), P(d, s0, yB, 0.02), true, true);
+      const keepHow = E.cur.how; E.cur.how = 1;
+      for (const sx of [s0 + 0.03, (s0 + s1) / 2, s1 - 0.03]) { const c = P(d, sx, 0, 0.01); box(c[0] - 0.025, c[0] + 0.025, k, yB, c[2] - 0.025, c[2] + 0.025, MAT.wood, 0.8); }
+      const bm0 = P(d, s0, yB, -0.01), bm1 = P(d, s1, yB + 0.06, 0.02);
+      box(Math.min(bm0[0], bm1[0]), Math.max(bm0[0], bm1[0]), yB, yB + 0.06, Math.min(bm0[2], bm1[2]), Math.max(bm0[2], bm1[2]), MAT.wood, 0.85);
+      const dk0 = P(d, s0, k, -DECK_OUT), dk1 = P(d, s1, k + 0.1, 0);
+      box(Math.min(dk0[0], dk1[0]), Math.max(dk0[0], dk1[0]), k, k + 0.1, Math.min(dk0[2], dk1[2]), Math.max(dk0[2], dk1[2]), MAT.wood, [0.6, 0.6, 1, 1]);
+      for (const [sx, on] of [[s0 + 0.03, ends[0]], [s1 - 0.03, true]] as Array<[number, boolean]>) {
+        if (!on) continue;
+        const c = P(d, sx, 0, -DECK_OUT + 0.03); box(c[0] - 0.025, c[0] + 0.025, k + 0.1, k + 0.97, c[2] - 0.025, c[2] + 0.025, MAT.wood, 0.85);
+      }
+      E.cur.how = keepHow;
+      return;
+    }
+    if (by.role === 'balcony') {
+      // (its wall with a tall window, as the house opens it; out in front, a timber floor on two brackets, a lattice rail
+      // round it, a post at each corner)
+      holed(d, s0, s1, y0, yt, { kind: 'window', style: 'arched', k, i: by.i, j: by.j, d }, P, n, foot);
+      const OUT = 0.3, W = 0.36, yf = k + 0.02, RH = 0.3, L = MAT.wood + PIERCED, keep = E.cur.dress;
+      E.cur.dress = 0;
+      const A = P(d, -W, yf, -OUT), B = P(d, W, yf + 0.05, 0);
+      box(Math.min(A[0], B[0]), Math.max(A[0], B[0]), yf, yf + 0.05, Math.min(A[2], B[2]), Math.max(A[2], B[2]), MAT.wood, 0.85);
+      for (const s2 of [-W * 0.7, W * 0.7]) {
+        face([P(d, s2 - 0.02, yf - 0.2, 0), P(d, s2 - 0.02, yf, 0), P(d, s2 - 0.02, yf, -OUT * 0.85)], MAT.wood, 0.7, true, P(d, s2, yf - 0.05, -0.05));
+        face([P(d, s2 + 0.02, yf - 0.2, 0), P(d, s2 + 0.02, yf, 0), P(d, s2 + 0.02, yf, -OUT * 0.85)], MAT.wood, 0.7, true, P(d, s2, yf - 0.05, -0.05));
+        quad(P(d, s2 - 0.02, yf - 0.2, 0), P(d, s2 + 0.02, yf - 0.2, 0), P(d, s2 + 0.02, yf, -OUT * 0.85), P(d, s2 - 0.02, yf, -OUT * 0.85), [n[0] * 0.6, -0.8, n[2] * 0.6], 0.6, MAT.wood);
+      }
+      const y1 = yf + 0.05, y2 = y1 + RH;
+      quad(P(d, -W, y1, -OUT), P(d, W, y1, -OUT), P(d, W, y2, -OUT), P(d, -W, y2, -OUT), n, 0.9, L);
+      quad(P(d, -W, y1, -OUT + 0.01), P(d, W, y1, -OUT + 0.01), P(d, W, y2, -OUT + 0.01), P(d, -W, y2, -OUT + 0.01), [-n[0], 0, -n[2]], 0.7, L);
+      for (const sg of [-1, 1]) quad(P(d, sg * W, y1, 0), P(d, sg * W, y1, -OUT), P(d, sg * W, y2, -OUT), P(d, sg * W, y2, 0), [sg * ta, 0, sg * tb], 0.85, L);
+      for (const [s2, o] of [[-W, -OUT], [W, -OUT], [-W, 0], [W, 0]]) { const c = P(d, s2, 0, o); box(c[0] - 0.02, c[0] + 0.02, y1, y2 + 0.03, c[2] - 0.02, c[2] + 0.02, MAT.wood, 0.9); }
+      const r0 = P(d, -W - 0.02, y2, -OUT - 0.02), r1 = P(d, W + 0.02, y2 + 0.03, 0);
+      box(Math.min(r0[0], r1[0]), Math.max(r0[0], r1[0]), y2, y2 + 0.03, Math.min(r0[2], r1[2]), Math.max(r0[2], r1[2]), MAT.wood, 1);
+      E.cur.dress = keep;
+      return;
+    }
+    if (by.role === 'loggia') {
+      // (a gallery behind slender columns, each bay a pair of them at its edges (paired where bays meet), a lintel and a
+      // band of tile over them; its floor, ceiling and back wall (a door and a lit window by turns), side walls only at
+      // its ends; a low parapet between the columns)
+      const D = 0.3, yl = k + 0.8, R = 0.045, e0 = s0 + 0.07, e1 = s1 - 0.07, ends = by.ends ?? [true, true];
+      quad(P(d, s0, yl, 0), P(d, s1, yl, 0), P(d, s1, yt, 0), P(d, s0, yt, 0), n, 1, MAT.stone);
+      E.cur.tone = 2; quad(P(d, s0, yl + 0.04, -0.012), P(d, s1, yl + 0.04, -0.012), P(d, s1, yl + 0.13, -0.012), P(d, s0, yl + 0.13, -0.012), n, 1, MAT.lead); E.cur.tone = keepTone;
+      quad(P(d, s0, yl, 0), P(d, s1, yl, 0), P(d, s1, yl, D), P(d, s0, yl, D), [0, -1, 0], 0.5, MAT.within);
+      quad(P(d, s0, k + 0.004, 0), P(d, s1, k + 0.004, 0), P(d, s1, k + 0.004, D), P(d, s0, k + 0.004, D), [0, 1, 0], 0.65, MAT.stone);
+      quad(P(d, s0, k, D), P(d, s1, k, D), P(d, s1, yl, D), P(d, s0, yl, D), n, 0.6, MAT.within);
+      if (ends[0]) quad(P(d, s0, k, 0), P(d, s0, k, D), P(d, s0, yl, D), P(d, s0, yl, 0), [ta, 0, tb], 0.6, MAT.within);
+      if (ends[1]) quad(P(d, s1, k, D), P(d, s1, k, 0), P(d, s1, yl, 0), P(d, s1, yl, D), [-ta, 0, -tb], 0.6, MAT.within);
+      for (const sx of [e0, e1]) { const c = P(d, sx, 0, 0.05); lathe(c[0], c[2], [[R * 1.4, k], [R, k + 0.06], [R * 0.85, yl - 0.07], [R * 1.5, yl]], MAT.stone, 8); }
+      const inD = D - 0.004;
+      if ((by.i + by.j) % 2 === 0) quad(P(d, -0.12, k, inD), P(d, 0.12, k, inD), P(d, 0.12, k + 0.62, inD), P(d, -0.12, k + 0.62, inD), n, 0.6, MAT.door);
+      else glass(P(d, -0.13, k + 0.2, inD), P(d, 0.13, k + 0.2, inD), P(d, 0.13, k + 0.66, inD), P(d, -0.13, k + 0.66, inD), false, hash(w.seed, by.k, by.i, by.j, d, 14) % 100 < 65);
+      const pa = P(d, e0 + R, k, 0.03), pb = P(d, e1 - R, k + 0.24, 0.07);
+      box(Math.min(pa[0], pb[0]), Math.max(pa[0], pb[0]), k, k + 0.24, Math.min(pa[2], pb[2]), Math.max(pa[2], pb[2]), MAT.stone, [0.8, 0.8, 1, 1]);
+      return;
+    }
     // (an arch cut into the stone: half-width hw, its crown at yC, cut in to D; the front at `out` (a portal's frame
     // stands proud))
     const portal = by.role === 'portal', hw = portal ? 0.34 : 0.33, out = portal ? -FRAME_OUT : 0, D = portal ? 0.42 : 0.32;
@@ -175,11 +271,11 @@ export function openings(E: Emit) {
     const top = portal ? by.top + FRAME_UP : yt, e0 = portal ? -0.5 : s0, e1 = portal ? 0.5 : s1, N = 12;
     // (the front: piers either side, and the spandrel over the arch; a portal's faced in tile (lead's material, its tone
     // past 2: render.ts), a gallery's stone)
-    const face = portal ? MAT.lead : MAT.stone;
+    const faceMat = portal ? MAT.lead : MAT.stone;
     if (portal) E.cur.tone = 2;
-    quad(P(d, e0, y0, out), P(d, -hw, y0, out), P(d, -hw, top, out), P(d, e0, top, out), n, [foot, foot, 1, 1], face);
-    quad(P(d, hw, y0, out), P(d, e1, y0, out), P(d, e1, top, out), P(d, hw, top, out), n, [foot, foot, 1, 1], face);
-    for (let q = 0; q < N; q++) { const t0 = -hw + (2 * hw * q) / N, t1 = -hw + (2 * hw * (q + 1)) / N; quad(P(d, t0, head(t0), out), P(d, t1, head(t1), out), P(d, t1, top, out), P(d, t0, top, out), n, 1, face); }
+    quad(P(d, e0, y0, out), P(d, -hw, y0, out), P(d, -hw, top, out), P(d, e0, top, out), n, [foot, foot, 1, 1], faceMat);
+    quad(P(d, hw, y0, out), P(d, e1, y0, out), P(d, e1, top, out), P(d, hw, top, out), n, [foot, foot, 1, 1], faceMat);
+    for (let q = 0; q < N; q++) { const t0 = -hw + (2 * hw * q) / N, t1 = -hw + (2 * hw * (q + 1)) / N; quad(P(d, t0, head(t0), out), P(d, t1, head(t1), out), P(d, t1, top, out), P(d, t0, top, out), n, 1, faceMat); }
     E.cur.tone = keepTone;
     if (portal) {
       // (its frame's edges, in stone: its sides and top out of the wall, the back of it over the roof; a moulding round it)
