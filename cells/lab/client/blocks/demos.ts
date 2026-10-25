@@ -4,6 +4,18 @@
  */
 export type Cell = [number, number, number];
 
+/** a courtyard house: a hall at the back, three high, a porch in the middle of it (an empty bay two deep, covered);
+ * over it a terrace; wings two high either side of a court; a front wall with a gate. Nothing else is said: the water,
+ * beds, trees, doors and windows are what the stone round them makes of the empty cells */
+function courtyard(): Cell[] {
+  const out: Cell[] = [];
+  for (let x = 0; x <= 10; x++) for (let z = 6; z <= 8; z++) for (let y = 0; y <= 2; y++) if (!(x >= 4 && x <= 6 && z <= 7 && y <= 1)) out.push([x, y, z]);
+  for (let x = 3; x <= 7; x++) for (let z = 6; z <= 8; z++) out.push([x, 3, z]);
+  for (const x0 of [0, 9]) for (let x = x0; x <= x0 + 1; x++) for (let z = 0; z <= 5; z++) for (let y = 0; y <= 1; y++) out.push([x, y, z]);
+  for (let x = 2; x <= 8; x++) for (let y = 0; y <= 1; y++) if (!(x === 5 && y === 0)) out.push([x, y, 0]);
+  return dedupe(out);
+}
+
 /** a ring of wall round a court, towers at its corners, a gate in its front: windows, battlements, an arch */
 function castle(): Cell[] {
   const out: Cell[] = [], N = 7;
@@ -79,4 +91,4 @@ function dedupe(cells: Cell[]): Cell[] {
   return out.sort((a, b) => a[1] - b[1]);
 }
 
-export const DEMOS: Record<string, () => Cell[]> = { castle, arcade, aqueduct, stones, house, harbour };
+export const DEMOS: Record<string, () => Cell[]> = { courtyard, castle, arcade, aqueduct, stones, house, harbour };

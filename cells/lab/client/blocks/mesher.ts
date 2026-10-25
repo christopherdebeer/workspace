@@ -11,7 +11,9 @@ export type Done = { id: number; v: Float32Array; i: Uint32Array };
 export function serve() {
   const ctx = self as unknown as { onmessage: ((e: MessageEvent<Job>) => void) | null; postMessage: (m: Done, t: Transferable[]) => void };
   ctx.onmessage = (e) => {
-    const m = surface(e.data.reads, e.data.floor);
+    const m = surface(e.data.reads);
+    // (an empty shape is one shared one: send a new one, not it)
+    if (!m.i.length) { ctx.postMessage({ id: e.data.id, v: new Float32Array(0), i: new Uint32Array(0) }, []); return; }
     ctx.postMessage({ id: e.data.id, v: m.v, i: m.i }, [m.v.buffer, m.i.buffer]);
   };
 }

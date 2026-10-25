@@ -3,11 +3,11 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
-  <meta name="theme-color" content="#edebe6">
+  <meta name="theme-color" content="#0b0b0c">
   <title>Blocks</title>
   <style>
-    html, body { margin: 0; height: 100%; background: #edebe6; overflow: hidden; touch-action: none; overscroll-behavior: none; }
-    body { color: #34383b; font-family: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+    html, body { margin: 0; height: 100%; background: #0b0b0c; overflow: hidden; touch-action: none; overscroll-behavior: none; }
+    body { color: #e8e2d6; font-family: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
     canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
     button { all: unset; cursor: pointer; box-sizing: border-box; }
     nav { position: fixed; top: max(12px, env(safe-area-inset-top)); left: 14px; right: 14px; display: flex; gap: 14px; }
@@ -15,9 +15,9 @@
     nav button:hover, nav a:hover { opacity: 1; text-decoration: underline; text-underline-offset: 3px; }
     #tray { position: fixed; left: 0; right: 0; bottom: 0; padding: 4px 0 max(14px, env(safe-area-inset-bottom)); pointer-events: none; }
     #hands { display: flex; justify-content: center; gap: 12px; padding: 8px 14px 0; }
-    #hands button { pointer-events: auto; min-width: 84px; height: 52px; border-radius: 26px; text-align: center; line-height: 52px; -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); font-size: 15px; letter-spacing: .1em; font-variant: small-caps; background: rgba(255,255,255,.7); box-shadow: 0 4px 14px rgba(40,40,40,.07); transition: background .12s, color .12s, transform .08s; }
-    #hands button:active { background: #fff; transform: scale(.96); }
-    #hands #take.on { background: #9c2a1f; color: #fff; }
+    #hands button { pointer-events: auto; min-width: 84px; height: 52px; border-radius: 26px; text-align: center; line-height: 52px; -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); font-size: 15px; letter-spacing: .1em; font-variant: small-caps; background: rgba(40,38,34,.72); color: #ece5d6; box-shadow: 0 4px 14px rgba(0,0,0,.3); transition: background .12s, color .12s, transform .08s; }
+    #hands button:active { background: rgba(70,66,58,.9); transform: scale(.96); }
+    #hands #take.on { background: #a8382a; color: #fff; }
     #hint { position: fixed; left: 0; right: 0; top: calc(max(12px, env(safe-area-inset-top)) + 64px); text-align: center; font-style: italic; font-size: 15px; opacity: 0; transition: opacity 2s; pointer-events: none; padding: 0 24px; line-height: 1.5; }
     #hint.on { opacity: .62; }
     .preview nav, .preview #tray, .preview #hint { display: none; }

@@ -32,9 +32,9 @@ export const EXPERIMENTS: Experiment[] = [
   },
   {
     id: 'blocks', title: 'Blocks', group: 'Play',
-    blurb: 'Stone blocks on a lattice, set with a finger, and no block has a shape or a part of its own. Each is read from the blocks round it, and theirs, as a few plain quantities (how open each face is, how much rests on it, what stands near it, what pushes on it), and one shape program makes every block from those: columns, arches, capitals, buttresses come where the quantities fall that way, and nothing names them. Its carving comes from its surroundings too, so blocks with the same surroundings, however turned, are carved alike, and the build rhymes where it repeats.',
+    blurb: 'Plain stone blocks on a lattice, set with a finger, and every form comes from how they are put together. Each cell, stone or empty, is read from the cells round it as a few plain quantities (how open each face is, how much rests on it, how far walls close round an empty cell along its level), and two programs fill it with small cubes from those. Ring some ground with walls and it becomes a paved court with a tiled pool, rose beds and cypresses, windows looking onto it and a porch with a tiled door; walls grow cornices, roofs parapets and domes, stacks fluted columns, spans arches. Nothing names any of them. Drawn as a diorama on a slab in the dark.',
     page: 'static/blocks.html', preview: 'preview', readme: 'static/blocks.md',
-    presets: [{ label: 'build', query: '' }, { label: 'an aqueduct', query: 'demo=aqueduct' }, { label: 'standing stones', query: 'demo=stones' }, { label: 'an arcade', query: 'demo=arcade' }, { label: 'a castle', query: 'demo=castle' }, { label: 'a house', query: 'demo=house' }, { label: 'a harbour', query: 'demo=harbour' }, { label: 'the rhymes', query: 'demo=castle&debug=3' }],
+    presets: [{ label: 'build', query: '' }, { label: 'a courtyard house', query: 'demo=courtyard' }, { label: 'a castle', query: 'demo=castle' }, { label: 'an arcade', query: 'demo=arcade' }, { label: 'an aqueduct', query: 'demo=aqueduct' }, { label: 'standing stones', query: 'demo=stones' }, { label: 'a house', query: 'demo=house' }, { label: 'a harbour', query: 'demo=harbour' }, { label: 'the stuffs', query: 'demo=courtyard&debug=3' }],
   },
   {
     id: 'labyrinth', title: 'Labyrinth', group: 'Play',

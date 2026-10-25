@@ -1,11 +1,11 @@
 /**
- * Blocks: set stone blocks on a lattice with a finger. No block has a shape or a part of its own: each is read from
- * the blocks round it, and theirs (rules.ts), as a few plain quantities (how open each face is, how much rests on it,
- * what stands near it, what pushes on it), and one shape program makes it from those (shape.ts). Columns, arches and
- * buttresses come where the quantities fall that way, and nothing names them. Its carving is chosen by its
- * surroundings too, turned to a canonical orientation (render.ts): blocks with the same surroundings are carved alike.
- * Every block reads two cells each way, so one block set changes the shapes of those up to four away, and the change
- * runs out from the finger ring by ring.
+ * Blocks: set stone blocks on a lattice with a finger. Nothing is named: each cell, stone or empty, is read from the
+ * cells round it (rules.ts) as a few plain quantities (how open each face is, how much rests on it, what stands near
+ * it, what pushes on it; for an empty cell, how far walls close round it along its level), and two programs fill it
+ * with small cubes from its read and its neighbours' (voxels.ts): columns, arches and capitals, windows and doors, a
+ * court's paving, water, beds and cypresses, cornices, parapets and domes come where the quantities fall that way.
+ * Every cell reads two cells each way, and an empty cell's court reaches further along its level, so one block set
+ * changes the shapes round it and across its court, and the change runs out from the finger ring by ring.
  *
  * The hand: touch to see where the block would go (it shows already as it would be there); lift to set it. Drag to
  * lay a run of them in the plane you touched (a floor across a top, a wall up a side). Hold on a block to take it, and
@@ -17,13 +17,13 @@
  * spring, settle and sink in the vertex shader, so a touch is felt without any work on the CPU.
  *
  * `?demo=…` starts from a build (demos.ts); `?preview` builds one by itself, slowly, turning (the lab's index);
- * `?debug=1` no shadows, `2` normals, `3` each block coloured by its code. `window.__blocks` is for the harness.
+ * `?debug=1` no shadows, `2` normals, `3` each cube coloured plainly by its stuff. `window.__blocks` is for the harness.
  */
 import { World, key, unkey } from './world';
-import { Reads, read, thinning, type Read } from './rules';
+import { Reads, read, thinning, courtsOf, COURT, type Read } from './rules';
 import { patch, cellMesh, cacheStats, known, keep, type Mesh } from './shape';
 import type { Job, Done } from './mesher';
-import { Renderer, chunkOf, perspective, ortho, lookAt, mul, invert, type Drawn } from './render';
+import { Renderer, chunkOf, ortho, lookAt, mul, invert, type Drawn } from './render';
 import { DEMOS, type Cell } from './demos';
 
 const params = new URLSearchParams(location.search);
@@ -132,6 +132,11 @@ function changed(cells: number[], added: number[]) {
       for (let r = 0; r < ring && !nearer; r++) nearer = queue[r].has(kk);
       if (!nearer) queue[ring].add(kk);
     }
+    // (and the courts it bounds: the cells along its level that read it, and what's round them, last)
+    for (const [cx, cy, cz] of courtsOf(x, y, z)) for (let a = -2; a <= 2; a++) for (let b = -2; b <= 2; b++) for (let c = -2; c <= 2; c++) if (cy + b >= 0) {
+      const kk = key(cx + a, cy + b, cz + c);
+      if (!queue[0].has(kk) && !queue[1].has(kk) && !queue[2].has(kk) && !queue[3].has(kk)) queue[4].add(kk);
+    }
   }
   // (the touched cell at once (its shape's known already, from the ghost); its ring as soon as it can be)
   pump(pool.length ? 3 : 4, 1);
@@ -167,7 +172,12 @@ function rebuildAll() {
   R.clearChunks(); drawn.clear(); chunkCells.clear(); reads.clear();
   for (const q of queue) q.clear();
   const near = new Set<number>();
-  for (const k of world.cells) { const [x, y, z] = unkey(k); for (let a = -1; a <= 1; a++) for (let b = -1; b <= 1; b++) for (let c = -1; c <= 1; c++) if (y + b >= 0) near.add(key(x + a, y + b, z + c)); }
+  for (const k of world.cells) {
+    const [x, y, z] = unkey(k);
+    for (let a = -1; a <= 1; a++) for (let b = -1; b <= 1; b++) for (let c = -1; c <= 1; c++) if (y + b >= 0) near.add(key(x + a, y + b, z + c));
+    // (and the ground of the courts it bounds, and over it, where trees grow)
+    if (y === 0) for (let a = -COURT; a <= COURT; a++) for (let c = -COURT; c <= COURT; c++) for (let b = 0; b <= 2; b++) near.add(key(x + a, b, z + c));
+  }
   born = new Set();
   for (const k of near) queue[2].add(k);
 }
@@ -198,25 +208,27 @@ function undo() {
 // ─── the camera ───
 /** a focus the harness holds the view on */
 let held: number[] | null = null;
-const cam = { yaw: -0.65, pitch: 0.62, dist: 16, focus: [0, 1, 0], goal: [0, 1, 0] };
-let vp: Float32Array = new Float32Array(16), eye = [0, 0, 0];
+const cam = { yaw: (-3 * Math.PI) / 4, pitch: 0.6, dist: 9, focus: [0, 1, 0], goal: [0, 1, 0] };
+let vp: Float32Array = new Float32Array(16);
+/** the slab the build stands on: the ground cut square round it */
+const slab = { lo: [-4, -1.6, -4], hi: [4, -0.5, 4] };
 function frameCamera(dt: number) {
-  // (the view keeps the build in the middle of it, unless a hand's at work)
+  // (the build's extent: the slab round it, and the view kept on it, unless a hand's at work)
+  let n = 0, top = 0, x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity;
+  for (const k of world.cells) { const [x, y, z] = unkey(k); x0 = Math.min(x0, x); x1 = Math.max(x1, x); z0 = Math.min(z0, z); z1 = Math.max(z1, z); top = Math.max(top, y); n++; }
+  const goalLo = n ? [x0 - 2.5, -1.6, z0 - 2.5] : [cam.focus[0] - 4, -1.6, cam.focus[2] - 4], goalHi = n ? [x1 + 2.5, -0.5, z1 + 2.5] : [cam.focus[0] + 4, -0.5, cam.focus[2] + 4];
+  const g = 1 - Math.exp(-dt * 6);
+  for (let i = 0; i < 3; i++) { slab.lo[i] += (goalLo[i] - slab.lo[i]) * g; slab.hi[i] += (goalHi[i] - slab.hi[i]) * g; }
   if (held) cam.goal = [...held];
-  else if (!stroke) {
-    let n = 0, sx = 0, sz = 0, top = 0;
-    for (const k of world.cells) { const [x, y, z] = unkey(k); sx += x; sz += z; top = Math.max(top, y); n++; }
-    if (n) cam.goal = [sx / n, Math.min(top * 0.45, 6), sz / n];
-  }
+  else if (!stroke && n) cam.goal = [(x0 + x1) / 2, Math.min(top * 0.35, 4), (z0 + z1) / 2];
   const f = 1 - Math.exp(-dt * 3);
   for (let i = 0; i < 3; i++) cam.focus[i] += (cam.goal[i] - cam.focus[i]) * f;
-  const cp = Math.cos(cam.pitch);
-  eye = [cam.focus[0] + Math.sin(cam.yaw) * cp * cam.dist, cam.focus[1] + Math.sin(cam.pitch) * cam.dist, cam.focus[2] + Math.cos(cam.yaw) * cp * cam.dist];
-  const aspect = canvas.clientWidth / Math.max(canvas.clientHeight, 1);
-  const fov = aspect < 1 ? 0.95 : 0.75;
-  vp = mul(perspective(fov, aspect, 0.2, 400), lookAt(eye, cam.focus, [0, 1, 0]));
+  // (seen from the diagonal above, without perspective: a diorama)
+  const cp = Math.cos(cam.pitch), eye = [cam.focus[0] + Math.sin(cam.yaw) * cp * 60, cam.focus[1] + Math.sin(cam.pitch) * 60, cam.focus[2] + Math.cos(cam.yaw) * cp * 60];
+  const aspect = canvas.clientWidth / Math.max(canvas.clientHeight, 1), h = cam.dist, w = h * aspect;
+  vp = mul(ortho(-w, w, -h, h, 1, 200), lookAt(eye, cam.focus, [0, 1, 0]));
 }
-const SUN = (() => { const s = [-0.48, 0.78, 0.4], l = Math.hypot(s[0], s[1], s[2]); return s.map((v) => v / l); })();
+const SUN = (() => { const s = [-0.62, 0.62, 0.32], l = Math.hypot(s[0], s[1], s[2]); return s.map((v) => v / l); })();
 function lightMatrix(): Float32Array {
   // (the sun's view, fitted round the build)
   let r = 8;
@@ -398,7 +410,7 @@ canvas.addEventListener('pointermove', (e) => {
     const [a, b] = [...touches.values()];
     const d = Math.hypot(a.x - b.x, a.y - b.y), cx = (a.x + b.x) / 2, cy = (a.y + b.y) / 2;
     turn(cx - twoFinger.cx, cy - twoFinger.cy);
-    cam.dist = clamp(cam.dist * (twoFinger.d / Math.max(d, 1)), 4, 70);
+    cam.dist = clamp(cam.dist * (twoFinger.d / Math.max(d, 1)), 3, 40);
     twoFinger = { d, cx, cy };
     return;
   }
@@ -426,10 +438,10 @@ const up = (e: PointerEvent) => {
 canvas.addEventListener('pointerup', up);
 canvas.addEventListener('pointercancel', up);
 canvas.addEventListener('pointerleave', () => { if (!stroke) { showGhost(null); showMark(null); } });
-canvas.addEventListener('wheel', (e) => { e.preventDefault(); cam.dist = clamp(cam.dist * Math.exp(e.deltaY * 0.0015), 4, 70); }, { passive: false });
+canvas.addEventListener('wheel', (e) => { e.preventDefault(); cam.dist = clamp(cam.dist * Math.exp(e.deltaY * 0.0015), 3, 40); }, { passive: false });
 function turn(dx: number, dy: number) {
   cam.yaw -= dx * 0.008;
-  cam.pitch = clamp(cam.pitch + dy * 0.006, 0.12, 1.45);
+  cam.pitch = clamp(cam.pitch + dy * 0.006, 0.3, 1.3);
 }
 const clamp = (v: number, a: number, b: number) => Math.max(a, Math.min(b, v));
 
@@ -483,7 +495,7 @@ const buzz = (ms: number) => { try { navigator.vibrate?.(ms); } catch { /* none 
 // ─── the preview: a build by itself, a block at a time ───
 const demo = params.get('demo');
 let script: Cell[] = [], scriptAt = 0, scriptNext = 0;
-if (preview) { script = DEMOS[demo ?? 'castle']?.() ?? DEMOS.castle(); cam.dist = 20; cam.pitch = 0.55; }
+if (preview) { script = DEMOS[demo ?? 'courtyard']?.() ?? DEMOS.courtyard(); cam.dist = 9; }
 else if (demo && DEMOS[demo]) { world = new World(); for (const c of DEMOS[demo]()) world.cells.add(key(...c)); }
 if (world.cells.size) rebuildAll();
 const hint = $('hint');
@@ -507,7 +519,7 @@ function frame() {
   flush();
   meshMs = performance.now() - m0;
   frameCamera(dt);
-  R.draw({ vp, eye, light: lightMatrix(), sun: SUN, time: t, focus: cam.focus, cursor: null, ghostAlpha: 0.5 + 0.14 * Math.sin(t * 7) });
+  R.draw({ vp, light: lightMatrix(), sun: SUN, time: t, slab, cursor: null, ghostAlpha: 0.5 + 0.14 * Math.sin(t * 7) });
   frames++;
   requestAnimationFrame(frame);
 }

@@ -15,6 +15,11 @@
  * that stand makes; a buttress, what a pier pushed from one side makes. Where the quantities fall that way, those
  * forms come; where they fall between, something between.
  *
+ * An empty cell is read too, for what the stone round it makes of it: which of its faces meet stone (covered, walled),
+ * and its **court**, how many of the four ways along its level meet stone within six. On the ground in a court, far
+ * from the walls, it holds water; against a wall, a bed; in a corner of walls, a tree, which grows on up through the
+ * cells over it.
+ *
  * And the neighbourhood itself, turned to a canonical orientation (the least of its eight turns and mirrors about the
  * vertical), as a code: blocks with the same surroundings, however turned, get the same code, and the carving that
  * comes of it, turned with them. Nothing is kept: a block is read again whenever what's round it changes.
@@ -44,6 +49,10 @@ export type Read = {
   /** pushed from one side by stone over nothing: for each side +x −x +z −z, the level it's pushed at, plus one, when
    * the push is from the opposite side and this side is open down to the ground (so it spreads its foot this way) */
   thrust: number[];
+  /** an empty cell: how many of the four ways along its level meet stone within six; and, on the ground, whether it
+   * holds water (in a court, nothing within two), is a bed (in a court, against a wall), or bears a tree (a bed in a
+   * corner of a court: 1, and the cells over it 2, 3) */
+  court: number; pool: boolean; bed: boolean; tree: number;
   /** its surroundings, turned to their canonical orientation: 12 bits from the 26 cells round it, 12 from all 124 */
   code: number;
   /** which of the eight turns and mirrors about the vertical brings it to that orientation */
@@ -123,6 +132,25 @@ export function thinning(r: Read): [number, number] {
 export const exposure = (r: Read) => r.open.reduce((s, o) => s + o, 0) / 24;
 
 const EMPTY_OPEN = [0, 0, 0, 0, 0, 0], NO_THRUST = [0, 0, 0, 0];
+/** how far an empty cell's court reaches, each way along its level */
+export const COURT = 6;
+/** how many of the four ways along its level, from a cell, meet stone within COURT */
+function courtAt(has: Look, x: number, y: number, z: number): number {
+  let n = 0;
+  for (const [dx, dz] of SIDES) for (let d = 1; d <= COURT; d++) if (has(x + dx * d, y, z + dz * d)) { n++; break; }
+  return n;
+}
+/** an empty cell on the ground against walls, in a court (G gathered round the cell b over it): a bed; in a corner of
+ * walls, a tree's foot */
+function bedAt(has: Look, x: number, z: number, b: number): [boolean, boolean] {
+  // (open to the sky, as far up as the cell sees)
+  for (let k = -b; k <= 2; k++) if (stone(0, k, 0)) return [false, false];
+  const px = stone(1, -b, 0), nx = stone(-1, -b, 0), pz = stone(0, -b, 1), nz = stone(0, -b, -1);
+  if (!(px || nx || pz || nz)) return [false, false];
+  const court = courtAt(has, x, 0, z);
+  if (court < 2) return [false, false];
+  return [true, (px || nx) && (pz || nz) && court >= 3];
+}
 
 export function read(has: Look, x: number, y: number, z: number): Read {
   for (let a = -2; a <= 2; a++) for (let b = -2; b <= 2; b++) for (let c = -2; c <= 2; c++) G[gi(a, b, c)] = y + b < 0 ? 2 : has(x + a, y + b, z + c) ? 1 : 0;
@@ -130,9 +158,27 @@ export function read(has: Look, x: number, y: number, z: number): Read {
   for (let i = 0; i < 125; i++) if (G[i] === 1) n++;
   if (G[gi(0, 0, 0)] === 1) n--;
   const soft = Math.round(7 * Math.min(1, Math.max(0, 1 - n / 36)));
+  const level = Math.min(Math.max(y, 0), 3);
   if (!stone(0, 0, 0)) {
-    const name = `.${soft}`;
-    return { solid: false, joins: 0, soft, open: EMPTY_OPEN, above: 0, standing: false, level: Math.min(Math.max(y, 0), 3), under: 0, thrust: NO_THRUST, code: 0, frame: 0, name, h1: textHash(name, 1), h2: textHash(name, 7) };
+    // (an empty cell: what stone touches it, its court, and on the ground what the court makes of it)
+    let joins = 0;
+    FACES.forEach(([a, b, c], f) => { if (stone(a, b, c)) joins |= 1 << f; });
+    const court = y === 0 || (y > 0 && n) ? courtAt(has, x, y, z) : 0;
+    let pool = false, bed = false, tree = 0;
+    if (y === 0 && court >= 3) {
+      pool = true;
+      for (let a = -2; a <= 2 && pool; a++) for (let c = -2; c <= 2 && pool; c++) pool = !stone(a, 0, c) && !stone(a, 1, c);
+    }
+    if (y === 0 && !pool) { const [b, corner] = bedAt(has, x, z, 0); bed = b; if (corner) tree = 1; }
+    // (over a tree's foot, with nothing between: the tree goes on up)
+    if (y === 1 || y === 2) {
+      let clear = true;
+      for (let b = 1; b <= y && clear; b++) clear = !stone(0, -b, 0);
+      if (clear && bedAt(has, x, z, y)[1]) tree = y + 1;
+    }
+    const [code, frame] = n || pool || bed ? canonical() : [0, 0];
+    const name = `.${soft}.${joins}.${level}.${court}${pool ? 1 : 0}${bed ? 1 : 0}${tree}.${code.toString(36)}.${frame}`;
+    return { solid: false, joins, soft, open: EMPTY_OPEN, above: 0, standing: false, level, under: 0, thrust: NO_THRUST, court, pool, bed, tree, code, frame, name, h1: textHash(name, 1), h2: textHash(name, 7) };
   }
   let joins = 0;
   const open = FACES.map(([a, b, c], f) => {
@@ -165,9 +211,16 @@ export function read(has: Look, x: number, y: number, z: number): Read {
     });
   }
   const [code, frame] = canonical();
-  const level = Math.min(y, 3);
   const name = `${joins}.${soft}.${open.join('')}.${above}${standing ? 1 : 0}${level}.${under.toString(36)}.${thrust.join('')}.${code.toString(36)}.${frame}`;
-  return { solid: true, joins, soft, open, above, standing, level, under, thrust, code, frame, name, h1: textHash(name, 1), h2: textHash(name, 7) };
+  return { solid: true, joins, soft, open, above, standing, level, under, thrust, court: 0, pool: false, bed: false, tree: 0, code, frame, name, h1: textHash(name, 1), h2: textHash(name, 7) };
+}
+
+/** the cells whose court a change at a cell can change: along its level within COURT each way (and on the ground, the
+ * two cells over each, where a tree may grow) */
+export function courtsOf(x: number, y: number, z: number): Array<[number, number, number]> {
+  const out: Array<[number, number, number]> = [];
+  for (const [dx, dz] of SIDES) for (let d = 1; d <= COURT; d++) for (let b = 0; b <= (y === 0 ? 2 : 0); b++) out.push([x + dx * d, y + b, z + dz * d]);
+  return out;
 }
 
 /** reads, remembered until what's round them changes */
@@ -180,9 +233,10 @@ export class Reads {
     if (!r) { r = read(this.has, x, y, z); this.memo.set(k, r); }
     return r;
   }
-  /** what's round a changed cell reads differently: forget those (two cells each way) */
+  /** what's round a changed cell reads differently: forget those (two cells each way, and the courts it bounds) */
   changed(x: number, y: number, z: number) {
     for (let a = -2; a <= 2; a++) for (let b = -2; b <= 2; b++) for (let c = -2; c <= 2; c++) this.memo.delete(key(x + a, y + b, z + c));
+    for (const [cx, cy, cz] of courtsOf(x, y, z)) this.memo.delete(key(cx, cy, cz));
   }
   clear() { this.memo.clear(); }
 }

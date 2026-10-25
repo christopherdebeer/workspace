@@ -1,6 +1,6 @@
 // Blocks, headless: each demo build drawn when its shaping has settled, and the hand tried (a tap sets a block, a
 // drag lays a run, a hold takes one, undo), checked from what the page reports.
-// (node cells/lab/devtools/blocks-shot.mjs [outdir] [demo,demo…])
+// (node cells/lab/devtools/blocks-shot.mjs [outdir] [view,view…])
 import { join } from 'node:path';
 import { mkdirSync } from 'node:fs';
 import assert from 'node:assert/strict';
@@ -12,7 +12,7 @@ mkdirSync(out, { recursive: true });
 const only = process.argv[3]?.split(',');
 const settle = (page) => page.waitForFunction(() => window.__blocks.settled() && window.__blocks.frames > 3, null, { timeout: 300000 });
 await withWood(async (wood) => {
-  const views = [['castle', 'demo=castle', [-0.7, 0.55, 22]], ['arcade', 'demo=arcade', [-0.5, 0.42, 19]], ['aqueduct', 'demo=aqueduct', [-0.45, 0.3, 19]], ['stones', 'demo=stones', [-0.6, 0.45, 17]], ['house', 'demo=house', [-0.8, 0.5, 14]], ['harbour', 'demo=harbour', [-0.3, 0.38, 16]]];
+  const views = [['courtyard', 'demo=courtyard', [-2.356, 0.6, 8]], ['court', 'demo=courtyard', [-2.6, 0.55, 4.2, [5, 0.8, 3.5]]], ['castle', 'demo=castle', [-2.3, 0.6, 13]], ['arcade', 'demo=arcade', [-2.5, 0.5, 10]], ['aqueduct', 'demo=aqueduct', [-2.6, 0.45, 11]], ['stones', 'demo=stones', [-2.4, 0.55, 7]], ['house', 'demo=house', [-2.3, 0.6, 8]], ['harbour', 'demo=harbour', [-2.7, 0.5, 10]]];
   for (const [name, q, v] of views) {
     if (only && !only.includes(name)) continue;
     const page = await wood.open(q);
@@ -27,7 +27,7 @@ await withWood(async (wood) => {
   if (only && !only.includes('hand')) return;
   // (the hand, on an empty world)
   const page = await wood.open('', { hasTouch: false });
-  await page.evaluate(() => { localStorage.clear(); window.__blocks.view(-0.6, 0.62, 14); });
+  await page.evaluate(() => { localStorage.clear(); window.__blocks.view(-2.356, 0.62, 6); });
   await page.waitForTimeout(500);
   const W = 390, H = 844, cx = W / 2, cy = H / 2;
   await page.mouse.click(cx, cy);
