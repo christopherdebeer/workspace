@@ -20,7 +20,7 @@ import { hash } from '../kit/rng';
 import { perf } from './perf';
 import { character, look } from './character';
 import { buildings, grammarHere, opening, pairOf, underRoof, type Building, type Opening } from './buildings';
-import { BUT, BUTH, BUTW, WT, buttresses, inBlock, outline, reach, wallCell, type Edge } from './form';
+import { buttresses, dims, inBlock, outline, reach, wallCell, type Edge } from './form';
 import { CENTER, DECK, DIRS, DRESS, PLANT, key, soffit as flightSoffit, unkey, type Span, type World } from './model';
 import { climb, grow, growths } from './plants';
 import { strokes, type Skeleton, type StrokeLand } from './strokes';
@@ -364,7 +364,7 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
     for (const d of buttresses(w, k, i, j)) {
       const [a, b] = DIRS[d], [ta, tb] = DIRS[(d + 1) % 4];
       const Q = (s: number, r: number, y: number): V3 => [cx + a * r + ta * s, y, cz + b * r + tb * s];
-      const r0 = WT, r1 = WT + BUT, yT = y0 + BUTH, yS = yT + 0.25;
+      const { WT, BUT, BUTW, BUTH } = dims(w), r0 = WT, r1 = WT + BUT, yT = y0 + BUTH, yS = yT + 0.25;
       quad(Q(-BUTW, r1, y0), Q(BUTW, r1, y0), Q(BUTW, r1, yT), Q(-BUTW, r1, yT), [a, 0, b], [0.6, 0.6, 1, 1], MAT.stone);
       quad(Q(-BUTW, r1, yT), Q(BUTW, r1, yT), Q(BUTW, r0, yS), Q(-BUTW, r0, yS), [a * 0.9, 0.44, b * 0.9], 1, MAT.stone);
       for (const sg of [-1, 1]) { face([Q(sg * BUTW, r0, y0), Q(sg * BUTW, r1, y0), Q(sg * BUTW, r1, yT), Q(sg * BUTW, r0, yS)], MAT.stone, 0.8, true, Q(0, (r0 + r1) / 2, y0 + 0.3)); }

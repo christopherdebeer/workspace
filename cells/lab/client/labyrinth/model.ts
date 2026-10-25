@@ -640,9 +640,9 @@ export class World {
         const solid = (q: number) => { const [x, z] = along[q]; return this.mass.has(key(h, x, z)) && !this.laid.has(key(h, x, z)) && !this.stairs.has(key(h, x, z)) && this.stone(h - 1, x, z) && this.mass.has(key(h + 1, x, z)); };
         const dirAt = (q: number) => { const a = q > 0 ? along[q - 1] : c.path[0]; return `${along[q][0] - a[0]}.${along[q][1] - a[1]}`; };
         if (taken(h, i, j) && solid(s) && h > this.ground(i, j)) {
-          let e = s; while (e + 1 < along.length && e - s < 3 && solid(e + 1) && dirAt(e + 1) === dirAt(s)) e++;
+          let e = s; while (e + 1 < along.length && e - s < 3 * this.bay && solid(e + 1) && dirAt(e + 1) === dirAt(s)) e++;
           const out = along[e + 1];
-          if (e - s < 3 && out && dirAt(e + 1) === dirAt(s) && !taken(h, out[0], out[1]) && !step.has(e + 1)) {
+          if (e - s < 3 * this.bay && out && dirAt(e + 1) === dirAt(s) && !taken(h, out[0], out[1]) && !step.has(e + 1)) {
             for (let q = s; q <= e; q++) { const [x, z] = along[q], p2 = q > 0 ? along[q - 1] : c.path[0]; this.archways.set(key(h, x, z), p2[0] !== x ? 0 : 1); this.thin.delete(key(h, x, z)); this.reserve(h, x, z, p2); this.walked(op, [h, x, z]); }
             s = e;
             continue;
@@ -708,7 +708,7 @@ export class World {
         let a = s, b = s;
         while (a > 0 && step(a) === d && solidAt(k, a - 1) && step(a - 1) === d) a--;
         while (b + 1 < n && solidAt(k, b + 1) && step(b + 1) === d) b++;
-        if (b - a + 1 > 3 || b + 1 >= n || step(b + 1) !== d) return false;
+        if (b - a + 1 > 3 * this.bay || b + 1 >= n || step(b + 1) !== d) return false;
         return !taken(k, ...(a > 0 ? along[a - 1] : path[0])) && !taken(k, ...along[b + 1]);
       };
       const rested = new Set(along.map(([i, j], s) => (restAt.has(`${i}.${j}`) ? s : -1)).filter((s) => s >= 0));
@@ -776,7 +776,7 @@ export class World {
     // with none): whichever goes furthest, then costs clearly least, the stroke as drawn kept where it's as good)
     let best = search(c.path);
     for (const w of [4, 6, 8]) {
-      const t = search(straighten(c.path, w));
+      const t = search(straighten(c.path, w * this.bay));
       if (t.last / t.n > best.last / best.n + 1e-9 || (t.last === t.n && best.last === best.n && t.cost < best.cost - 0.5)) best = t;
     }
     const { path, along, plan, last, n } = best;
@@ -861,7 +861,8 @@ export class World {
         // (arches first: the shortest bounded run there is, three cells at most)
         let best: ReturnType<typeof run> | null = null;
         // (a bridge's stone, all of a run: one arch, to seven cells)
-        const most = (r: ReturnType<typeof run>) => { const [di, dj] = DIRS[r.a]; for (let q = 0; q < r.n; q++) if (!this.bridged.has(key(k, r.s[0] + q * di, r.s[1] + q * dj))) return 3; return 7; };
+        // (in cells: on the half grid, twice the squares)
+        const most = (r: ReturnType<typeof run>) => { const [di, dj] = DIRS[r.a]; for (let q = 0; q < r.n; q++) if (!this.bridged.has(key(k, r.s[0] + q * di, r.s[1] + q * dj))) return 3 * this.bay; return 7 * this.bay; };
         for (const v of loose) { const [, i, j] = unkey(v); for (const a of [0, 1]) { const r = run(i, j, a); if (r.startBound && r.endBound && r.n <= most(r) && (!best || r.n < best.n)) best = r; } }
         if (best) { this.arch(k, best.a, best.s[0], best.s[1], best.n, loose); continue; }
         // (stone pushed out a cell from stone that stands, with nothing beyond it: held out on corbels from that stone,
@@ -992,7 +993,7 @@ export class World {
     let flat = false, order: 'colonnade' | undefined;
     for (let s = 0; s < n; s++) { const r = this.rules.get(key(k, i + s * di, j + s * dj)); if (r === RULE.lintel) flat = true; if (r === RULE.colonnade) { flat = true; order = 'colonnade'; } }
     let low = k;
-    while (!flat && low > 0 && this.occupied(low - 1, i - di, j - dj) && this.occupied(low - 1, i + n * di, j + n * dj) && clear(low - 1) && low > k + 1 - DECK - n / 2) low--;
+    while (!flat && low > 0 && this.occupied(low - 1, i - di, j - dj) && this.occupied(low - 1, i + n * di, j + n * dj) && clear(low - 1) && low > k + 1 - DECK - n / (2 * this.bay)) low--;
     let born = -1e3;
     for (let s = 0; s < n; s++) born = Math.max(born, this.born(k, i + s * di, j + s * dj));
     const sp: Span = { k, a, i, j, n, low, born: this.first(`a${k}.${a}.${i}.${j}.${n}`, born), flat, ...(order ? { order } : {}) };
@@ -1083,9 +1084,11 @@ export class World {
       const id = region.map(([x, z]) => key(0, x, z)).sort((p, q2) => p - q2)[0];
       const when = this.first(`c${id}.${region.length}`, -1e3);
       // (and only where there's room for it: a small court is just paved; a big one keeps its water to its heart)
-      let pools = region.length >= POOL_COURT ? region.filter(([x, z]) => DIRS.every(([a, b]) => inside.has(key(0, x + a, z + b)))) : [];
-      if (pools.length > 4) { const cx = region.reduce((s, c) => s + c[0], 0) / region.length, cz = region.reduce((s, c) => s + c[1], 0) / region.length; pools = pools.sort((p, q2) => Math.hypot(p[0] - cx, p[1] - cz) - Math.hypot(q2[0] - cx, q2[1] - cz)).slice(0, 4); }
-      if (!pools.length && region.length >= POOL_COURT) {
+      // (a court's size in cells: on the half grid, four squares to one)
+      const cells = region.length / (this.bay * this.bay);
+      let pools = cells >= POOL_COURT ? region.filter(([x, z]) => DIRS.every(([a, b]) => inside.has(key(0, x + a, z + b)))) : [];
+      if (pools.length > 4 * this.bay * this.bay) { const cx = region.reduce((s, c) => s + c[0], 0) / region.length, cz = region.reduce((s, c) => s + c[1], 0) / region.length; pools = pools.sort((p, q2) => Math.hypot(p[0] - cx, p[1] - cz) - Math.hypot(q2[0] - cx, q2[1] - cz)).slice(0, 4 * this.bay * this.bay); }
+      if (!pools.length && cells >= POOL_COURT) {
         const cx = region.reduce((s, c) => s + c[0], 0) / region.length, cz = region.reduce((s, c) => s + c[1], 0) / region.length;
         pools = [region.reduce((b, c) => (Math.hypot(c[0] - cx, c[1] - cz) < Math.hypot(b[0] - cx, b[1] - cz) ? c : b))];
       }
@@ -1093,12 +1096,12 @@ export class World {
       // (nor in a pier's cell: a cloister's columns stand in it)
       pools = pools.filter(([x, z]) => !this.way(this.ground(x, z), x, z) && !this.pier(this.ground(x, z), x, z));
       for (const [x, z] of pools) this.decor.push({ kind: 'pool', i: x, j: z, born: this.first(`w${x}.${z}`, when) });
-      if (region.length >= TREE_COURT) {
+      if (cells >= TREE_COURT) {
         const corners = region.filter(([x, z]) => !this.way(this.ground(x, z), x, z) && !this.pier(this.ground(x, z), x, z) && !pools.some((p) => p[0] === x && p[1] === z) && DIRS.filter(([a, b]) => !inside.has(key(0, x + a, z + b))).length >= 2);
         if (corners.length) {
           const q = hash(this.seed, id) % corners.length, [x, z] = corners[q];
           // (a big court, an olive spreading over its corner; a smaller one, a cypress standing up out of it)
-          this.decor.push({ kind: region.length >= 20 ? 'olive' : 'cypress', i: x, j: z, born: this.first(`t${x}.${z}`, when) });
+          this.decor.push({ kind: cells >= 20 ? 'olive' : 'cypress', i: x, j: z, born: this.first(`t${x}.${z}`, when) });
           // (and, as it happens, pots in the other corners)
           for (const [n, [px, pz]] of corners.entries()) if (n !== q && hash(this.seed, px, pz, 77) % 100 < 45) this.decor.push({ kind: 'pot', i: px, j: pz, born: this.first(`o${px}.${pz}`, when) });
         }

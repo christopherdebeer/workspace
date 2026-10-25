@@ -26,6 +26,12 @@ import { buildings } from './buildings';
 export const WT = 0.34, POST = 0.4, ROUND = 0.1, BUT = 0.12, BUTW = 0.09, BUTH = 0.6;
 /** how far back a stair tower's corners are cut */
 export const TURRET = 0.2;
+/** the same for a world's grid, in its squares: on the half grid a square's half a cell, so what's a size in cells is
+ * twice the square; a wall a square thick (the half grid's thin wall) all but fills it, its posts the whole square */
+export function dims(w: World) {
+  const B = w.bay;
+  return B === 1 ? { WT, POST, ROUND, BUT, BUTW, BUTH, TURRET } : { WT: 0.42, POST: 0.5, ROUND: ROUND * B, BUT: BUT * B, BUTW: BUTW * B, BUTH, TURRET: TURRET * B };
+}
 
 export interface Edge { a: [number, number]; b: [number, number]; face: number; dist: number; open: boolean }
 export interface Outline {
@@ -79,6 +85,7 @@ export function covered(w: World, k: number, i: number, j: number, d: number) {
 export function outline(w: World, k: number, i: number, j: number): Outline {
   const c = store(w), v = key(k, i, j), had = c.out.get(v);
   if (had) return had;
+  const { WT, POST, ROUND, TURRET } = dims(w);
   const edges: Edge[] = [];
   const add = (a: [number, number], b: [number, number], open: boolean) => {
     if (Math.hypot(b[0] - a[0], b[1] - a[1]) < 1e-6) return;
@@ -177,14 +184,14 @@ export function buttresses(w: World, k: number, i: number, j: number): number[] 
   if (k !== w.ground(i, j) || !wallCell(w, k, i, j)) return [];
   const o = outline(w, k, i, j);
   if (!o.straight) return [];
-  const along = o.arms[0] ? i : j;
-  if (((along % 3) + 3) % 3 !== 0) return [];
+  const along = o.arms[0] ? i : j, every = 3 * w.bay;
+  if (((along % every) + every) % every !== 0) return [];
   return [0, 1, 2, 3].filter((d) => !o.arms[d] && !w.occupied(k, i + DIRS[d][0], j + DIRS[d][1]) && w.ground(i + DIRS[d][0], j + DIRS[d][1]) === k);
 }
 
 /** whether a point of a block's cell (x, z from its middle, y up from its floor) is in its stone */
 export function inBlock(w: World, k: number, i: number, j: number, x: number, z: number, y: number): boolean {
-  const o = outline(w, k, i, j);
+  const o = outline(w, k, i, j), { WT, BUT, BUTW, BUTH } = dims(w);
   // (inside the loop: crossings of a ray out along +x)
   let inside = false;
   for (const e of o.edges) {
