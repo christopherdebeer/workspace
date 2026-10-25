@@ -174,6 +174,33 @@ A finer grid (each cell four in plan, so thin walls and narrow paths are the def
 18 and 19, `?plan=0.5` to see them in proportion. What it costs, what it lets a hand place, and what the rules would
 need: [labyrinth-grid.md](labyrinth-grid.md).
 
+## The half grid
+
+A new world is built on a grid of half cells. Each cell of before is four squares in plan, and a storey is still a square high. A wall or a way one square thick is half a cell: thin unless it's built up. The in-between can be placed by hand: a pier half a cell thick, a storey set back half a cell, a recess, a pilaster, a path half a cell wide. `?grid=cells` makes a new world in whole cells as before, and a world already kept stays on its own grid.
+
+**What stays a cell's size**, read over two squares:
+- **Fronts:** an opening, and a front's part (a gallery's arch, a portal, paired windows, a loggia), drawn across two faces as on a cell's face.
+- **Buildings:** a building's least size, and a roof's pitch and overhang.
+- **Flights:** a flight climbs a level in two squares, each the half of the step's rise, so it keeps a cell's slope. That holds for the walk, the drawing and the cats.
+- **Reaches and limits:**
+  - an arch's longest span;
+  - a court's room for a pool or a tree;
+  - how far a way looks round what's in its way;
+  - a gesture's tolerances.
+- **The land:** the same composition at twice the resolution, its hill, scrub, rocks and strokes in cells.
+- **Things placed:** trees, pots and lanterns are drawn whole.
+- **Cats:** they pace and settle in cells.
+
+What's built is held in squares and drawn squeezed in plan to its proportions, and a touch is taken back through the squeeze to the square it was aimed at. The grid holds 24 cells each way (48 squares) for now.
+
+![the half grid: built by hand, a courtyard house, a new land](labyrinth/half-grid.jpg)
+
+**Still in cells:**
+- the north's jetties draw their windows a face at a time;
+- the courts' gardens are laid square by square.
+
+Stories 18 to 20 are on the half grid: the courtyard house made four, the house as the half grid would build it, and a scene built by hand. `node devtools/labyrinth-half-smoke.mjs` builds one in the browser. The spike that led here is [labyrinth-grid.md](labyrinth-grid.md).
+
 ## Inside: plans, uses, and the ladder
 
 Buildings now know what's inside them, though nothing of it is drawn yet. Everything is worked out from what's built, never stored.

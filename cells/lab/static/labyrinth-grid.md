@@ -1,5 +1,7 @@
 # A finer grid? The courtyard house three ways
 
+*Since adopted: new worlds are built on the half grid. What changed is in the half grid section of [labyrinth.md](labyrinth.md).*
+
 The question: should a placed cell be four of today's in plan, its storeys as tall? Then thin walls and narrow paths come by default, and today's masses are built up out of them, so there is room for the in-between: piers, setbacks, recesses, pilasters. This spike builds one fixture three ways and compares them. Measurements come from `devtools/labyrinth-grid-spike.mjs`.
 
 - **Cells** (story 17): the courtyard house as it is.
