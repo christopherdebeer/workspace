@@ -26,6 +26,7 @@ import { climb, grow, growths } from './plants';
 import { strokes, type Skeleton, type StrokeLand } from './strokes';
 import { DOMAIN, LAND, noise2, onLand } from './land';
 import { groundY, retaining } from './context';
+import { ROUND, archNormal, archOf, archStations, archUnit, archY, regionAt, regionOfId, spanArchOf, PERSIAN, type ArchFamily } from './regions';
 import { benched, CUT, nearRiver, riverOf, roughness } from './terrain';
 
 /** floats a vertex: position, normal, ao (1 open .. 0 shut in), material (MAT), its rising (when laid, the height it
@@ -49,11 +50,31 @@ export const SEL = 256;
 export const LINTEL = 0.34;
 /** where an arch's underside is, across it (`u` from its middle): its crown's height `ys`, its rise, its half-width;
  * a lintel's is flat */
-export function soffit(sp: Span) {
+export function soffit(sp: Span, f: ArchFamily = ROUND) {
   const half = sp.n / 2, yD = sp.k + 1 - DECK;
   if (sp.flat) return { half, rise: 0, ys: sp.k + 1 - LINTEL, at: () => sp.k + 1 - LINTEL };
   const rise = Math.min(half, yD - sp.low), ys = yD - rise;
+  if (f !== ROUND) return { half, rise, ys, at: (u: number) => ys + rise * archUnit(f, u / half) };
   return { half, rise, ys, at: (u: number) => ys + rise * Math.sqrt(Math.max(0, 1 - (u / half) ** 2)) };
+}
+/** the manner a cell's built in: its building's (the cell's, or the one over it: an arch carrying it), else its district's
+ * (regions.ts) */
+export function regionHere(w: World, k: number, i: number, j: number) {
+  const of = buildings(w).of, b = of.get(key(k, i, j)) ?? of.get(key(k + 1, i, j));
+  return b ? regionOfId(w, b.id) : regionAt(w, i, j);
+}
+/** a span's arch family: by the manner where its middle is, and how wide it is */
+export function spanFamily(w: World, sp: Span): ArchFamily {
+  const [a, b] = DIRS[sp.a], m = Math.floor((sp.n - 1) / 2);
+  return spanArchOf(regionHere(w, sp.k, sp.i + a * m, sp.j + b * m), sp.n);
+}
+/** a passage's arch family, by the manner where it is */
+export const passageFamily = (w: World, k: number, i: number, j: number): ArchFamily => archOf(regionHere(w, k, i, j));
+/** a point of an arch's ring (family f, half-width hw, springing at ys): `t` across it, `r` out from its intrados; as
+ * (across, up) */
+function ringAt(f: ArchFamily, hw: number, ys: number, t: number, r: number): [number, number] {
+  const [nt, ny] = archNormal(f, t, hw);
+  return [t - nt * r, ys + archY(f, t, hw) - ny * r];
 }
 export const MARGIN = 0.6, SLAB = 0.42;
 const STEPS = 6, CURVE = 14, HW = 0.3;
@@ -400,9 +421,19 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
   const holed = (d: number, s0: number, s1: number, y0: number, yt: number, op: Opening, P: (d: number, s: number, y: number, inset?: number) => V3, n: V3, foot: number) => {
     const k = Math.floor(y0 + 0.001);
     const door = op.kind === 'door', slit = op.style === 'slit', arched = door || op.style === 'arched' || slit;
-    const hw = door ? 0.17 : slit ? 0.04 : op.style === 'square' ? 0.12 : 0.11;
-    const yb = door ? k : k + (slit ? 0.28 : 0.38), sp = door ? k + 0.5 : slit ? k + 0.7 : k + (op.style === 'square' ? 0.72 : 0.62);
-    const head = (t: number) => (arched ? sp + Math.sqrt(Math.max(0, hw * hw - t * t)) : sp), top = arched ? sp + hw : sp, r = door ? 0.13 : 0.09;
+    // (its manner (regions.ts): on the plateau a pointed head, its crown where a round one's would be, and a window
+    // taller, down nearer the floor, in a painted frame)
+    const persian = regionHere(w, op.k, op.i, op.j) === PERSIAN, fam = arched && !slit ? archOf(persian ? PERSIAN : 0) : ROUND;
+    const hw = door ? 0.17 : slit ? 0.04 : op.style === 'square' ? 0.12 : persian ? 0.12 : 0.11;
+    const yb = door ? k : k + (slit ? 0.28 : persian ? 0.27 : 0.38), sp0 = door ? k + 0.5 : slit ? k + 0.7 : k + (op.style === 'square' ? 0.72 : 0.62);
+    const sp = arched ? sp0 + hw - archY(fam, 0, hw) : sp0;
+    const head = (t: number) => (arched ? (fam === ROUND ? sp + Math.sqrt(Math.max(0, hw * hw - t * t)) : sp + archY(fam, t, hw)) : sp), top = arched ? sp0 + hw : sp, r = door ? 0.13 : 0.09;
+    // (its glass: on the plateau in the house's paint, in panes, and lit within now and then (render.ts, the tone past 2))
+    const glassTone = persian && !door ? 2 + (paintOf.get(`${op.k}.${op.i}.${op.j}.${op.d}`) ?? 0) + (hash(w.seed, op.k, op.i, op.j, op.d, 11) % 100 < 55 ? 4 : 0) : -1;
+    const back = (A: V3, B: V3, C: V3, D: V3) => {
+      if (door || glassTone < 0) return quad(A, B, C, D, n, 0.7, door ? MAT.door : MAT.glass);
+      const keep = cur.tone; cur.tone = glassTone; quad(A, B, C, D, n, 0.7, MAT.glass); cur.tone = keep;
+    };
     const [ta, tb] = DIRS[(d + 1) % 4];
     // (the wall round it)
     quad(P(d, s0, y0), P(d, -hw, y0), P(d, -hw, yt), P(d, s0, yt), n, [foot, foot, 1, 1], MAT.stone);
@@ -413,16 +444,16 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
       const t0 = -hw + (2 * hw * q) / N, t1 = -hw + (2 * hw * (q + 1)) / N;
       quad(P(d, t0, head(t0)), P(d, t1, head(t1)), P(d, t1, yt), P(d, t0, yt), n, 1, MAT.stone);
       // (its head, set back)
-      const tm = (t0 + t1) / 2, hn = arched ? [-(tm / hw), -Math.sqrt(Math.max(0, 1 - (tm / hw) ** 2))] : [0, -1];
+      const tm = (t0 + t1) / 2, hn = !arched ? [0, -1] : fam === ROUND ? [-(tm / hw), -Math.sqrt(Math.max(0, 1 - (tm / hw) ** 2))] : archNormal(fam, tm, hw);
       quad(P(d, t0, head(t0)), P(d, t1, head(t1)), P(d, t1, head(t1), r), P(d, t0, head(t0), r), [ta * hn[0], hn[1], tb * hn[0]], 0.6, MAT.stone);
       // (and the back of it, under the head)
-      quad(P(d, t0, sp, r), P(d, t1, sp, r), P(d, t1, head(t1), r), P(d, t0, head(t0), r), n, 0.7, door ? MAT.door : MAT.glass);
+      back(P(d, t0, sp, r), P(d, t1, sp, r), P(d, t1, head(t1), r), P(d, t0, head(t0), r));
     }
     // (its reveals, its sill or threshold, and what's at the back: the door's planks, or glass)
     quad(P(d, -hw, yb), P(d, -hw, yb, r), P(d, -hw, sp, r), P(d, -hw, sp), [ta, 0, tb], 0.65, MAT.stone);
     quad(P(d, hw, yb), P(d, hw, yb, r), P(d, hw, sp, r), P(d, hw, sp), [-ta, 0, -tb], 0.65, MAT.stone);
     quad(P(d, -hw, yb), P(d, hw, yb), P(d, hw, yb, r), P(d, -hw, yb, r), [0, 1, 0], 0.8, MAT.stone);
-    quad(P(d, -hw, yb, r), P(d, hw, yb, r), P(d, hw, sp, r), P(d, -hw, sp, r), n, 0.7, door ? MAT.door : MAT.glass);
+    back(P(d, -hw, yb, r), P(d, hw, yb, r), P(d, hw, sp, r), P(d, -hw, sp, r));
     const ledge = (s: number, y: number, h: number, out: number) => {
       quad(P(d, -s, y, -out), P(d, s, y, -out), P(d, s, y + h, -out), P(d, -s, y + h, -out), n, 0.9, MAT.stone);
       quad(P(d, -s, y + h, -out), P(d, s, y + h, -out), P(d, s, y + h), P(d, -s, y + h), [0, 1, 0], 1, MAT.stone);
@@ -432,7 +463,7 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
     };
     if (door) ledge(hw + 0.05, k, 0.03, 0.06); else if (!slit) ledge(hw + 0.03, yb - 0.04, 0.04, 0.035);
     const dr = dressed(op.k, op.i, op.j);
-    lived(d, s0, s1, op, P, n, hw, yb, sp, top, arched, slit, door, r, !!dr?.colonnettes, !!(dr?.oriel && !door && !slit && k >= 1));
+    if (!persian) lived(d, s0, s1, op, P, n, hw, yb, sp, top, arched, slit, door, r, !!dr?.colonnettes, !!(dr?.oriel && !door && !slit && k >= 1));
     // (colonnettes: slim shafts framing it, a pair each side of a door, one each side of an arched window, each on a
     // little base and under a little capital where the arch springs)
     if (dr?.colonnettes && arched && !slit) {
@@ -1673,6 +1704,26 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
   }
 
   /** stone with a way through it along an axis; tall, with an arch the same way under or over it */
+  /** a passage's ring of voussoirs on its face `s` (P across the way `u`, along it `wv`, up): round as it was, or along
+   * a pointed arch's intrados at even lengths, the keystone across its crown */
+  function voussoirs(fam: ArchFamily, hw: number, ys: number, yA: number, s: number, P: (u: number, wv: number, y: number) => V3, n: V3, hidden: boolean) {
+    if (hidden) return;
+    const R0 = hw, R1 = hw + 0.08, V = 7, off = s * (0.5 + 0.012);
+    if (fam === ROUND) {
+      const ring = (r: number, th: number, u: number): V3 => P(u, -r * Math.cos(th), ys + r * Math.sin(th));
+      for (let v = 0; v < V; v++) {
+        const ta = (Math.PI * v) / V + 0.012, tb = (Math.PI * (v + 1)) / V - 0.012, ro = v === 3 ? R1 + 0.025 : R1;
+        quad(ring(R0, ta, off), ring(R0, tb, off), ring(ro, tb, off), ring(ro, ta, off), n, 0.95, MAT.stone);
+      }
+      return;
+    }
+    const st = archStations(fam, hw, V), G = 0.004;
+    const pt = (t: number, r: number): V3 => { const [x, y] = ringAt(fam, hw, yA, t, r); return P(off, x, y); };
+    for (let v = 0; v < V; v++) {
+      const ta = st[v] + G, tb = st[v + 1] - G, ro = (v === 3 ? R1 + 0.025 : R1) - R0;
+      quad(pt(ta, 0), pt(tb, 0), pt(tb, ro), pt(ta, ro), n, 0.95, MAT.stone);
+    }
+  }
   function archCell(k: number, i: number, j: number, a: number) {
     const y1 = k + 1, lower = w.archway(k + 1, i, j) === a, upper = w.archway(k - 1, i, j) === a;
     const ys = k + (upper ? 0.55 : 0.5), cx = X(i) + 0.5, cz = Z(j) + 0.5, y0 = founded(k, i, j) ? k - FOUND : k;
@@ -1686,7 +1737,9 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
       const A: V3 = da ? [da > 0 ? x0 + 1 : x0, y0, z0] : [x0, y0, db > 0 ? z0 + 1 : z0], B: V3 = da ? [A[0], y0, z0 + 1] : [x0 + 1, y0, A[2]];
       quad(A, B, [B[0], y1, B[2]], [A[0], y1, A[2]], [da, 0, db], [foot, foot, 1, 1], MAT.stone);
     }
-    const head = (t: number) => (lower ? y1 : ys + Math.sqrt(Math.max(0, HW * HW - t * t)));
+    // (its arch: round, or (on the plateau) pointed, its crown where a round one's would be)
+    const fam = passageFamily(w, k, i, j), yA = ys + HW - archY(fam, 0, HW);
+    const head = (t: number) => (lower ? y1 : fam === ROUND ? ys + Math.sqrt(Math.max(0, HW * HW - t * t)) : yA + archY(fam, t, HW));
     for (const s of [-1, 1]) {
       const d = a === 0 ? (s > 0 ? 0 : 2) : s > 0 ? 1 : 3;
       if (hides(k, i, j, d)) continue;
@@ -1698,7 +1751,7 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
         quad(P(s * 0.5, t0, head(t0)), P(s * 0.5, t1, head(t1)), P(s * 0.5, t1, y1), P(s * 0.5, t0, y1), nU(s), 1, MAT.stone);
       }
     }
-    for (const s of [-1, 1]) quad(P(-0.5, s * HW, y0), P(0.5, s * HW, y0), P(0.5, s * HW, lower ? y1 : ys), P(-0.5, s * HW, lower ? y1 : ys), nW(-s), upper ? 0.85 : [0.7, 0.7, 0.95, 0.95], MAT.within);
+    for (const s of [-1, 1]) quad(P(-0.5, s * HW, y0), P(0.5, s * HW, y0), P(0.5, s * HW, lower ? y1 : yA), P(-0.5, s * HW, lower ? y1 : yA), nW(-s), upper ? 0.85 : [0.7, 0.7, 0.95, 0.95], MAT.within);
     // (a door in its side, into the rooms of the building it passes through: planks under a round head, a little in)
     for (const s of [-1, 1]) {
       const d = a === 0 ? (s > 0 ? 1 : 3) : s > 0 ? 0 : 2;
@@ -1711,19 +1764,11 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
     if (!lower) for (let q = 0; q < CURVE; q++) {
       const t0 = -HW + (2 * HW * q) / CURVE, t1 = -HW + (2 * HW * (q + 1)) / CURVE, tm = (t0 + t1) / 2;
       const n = nW(-tm / HW); n[1] = -Math.sqrt(Math.max(0, HW * HW - tm * tm)) / HW;
+      if (fam !== ROUND) { const [nt, ny] = archNormal(fam, tm, HW); n.splice(0, 3, ...nW(nt)); n[1] = ny; }
       quad(P(-0.5, t0, head(t0)), P(0.5, t0, head(t0)), P(0.5, t1, head(t1)), P(-0.5, t1, head(t1)), n, 0.95, MAT.within);
     }
     // (its ring of voussoirs, on each open face)
-    if (!lower) for (const s of [-1, 1]) {
-      const d = a === 0 ? (s > 0 ? 0 : 2) : s > 0 ? 1 : 3;
-      if (hides(k, i, j, d)) continue;
-      const R0 = HW, R1 = HW + 0.08, V = 7, off = s * (0.5 + 0.012);
-      const ring = (r: number, th: number, u: number): V3 => P(u, -r * Math.cos(th), ys + r * Math.sin(th));
-      for (let v = 0; v < V; v++) {
-        const ta = (Math.PI * v) / V + 0.012, tb = (Math.PI * (v + 1)) / V - 0.012, ro = v === 3 ? R1 + 0.025 : R1;
-        quad(ring(R0, ta, off), ring(R0, tb, off), ring(ro, tb, off), ring(ro, ta, off), nU(s), 0.95, MAT.stone);
-      }
-    }
+    if (!lower) for (const s of [-1, 1]) voussoirs(fam, HW, ys, yA, s, (u, wv, y) => P(u, wv, y), nU(s), hides(k, i, j, a === 0 ? (s > 0 ? 0 : 2) : s > 0 ? 1 : 3));
     if (lower) { if (!w.block(k + 1, i, j)) for (const [w0, w1] of [[-0.5, -HW], [HW, 0.5]]) quad(P(-0.5, w0, y1), P(0.5, w0, y1), P(0.5, w1, y1), P(-0.5, w1, y1), [0, 1, 0], 1, MAT.stone); }
     else topFace(k, i, j, y1);
   }
@@ -1734,7 +1779,8 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
    */
   function crossCell(k: number, i: number, j: number) {
     const y1 = k + 1, ys = k + 0.5, cx = X(i) + 0.5, cz = Z(j) + 0.5, y0 = founded(k, i, j) ? k - FOUND : k;
-    const head = (t: number) => ys + Math.sqrt(Math.max(0, HW * HW - t * t));
+    const fam = passageFamily(w, k, i, j), yA = ys + HW - archY(fam, 0, HW);
+    const head = (t: number) => (fam === ROUND ? ys + Math.sqrt(Math.max(0, HW * HW - t * t)) : yA + archY(fam, t, HW));
     for (const a of [0, 1]) {
       const P = (u: number, wv: number, y: number): V3 => (a === 0 ? [cx + u, y, cz + wv] : [cx + wv, y, cz + u]);
       const nU = (s: number): V3 => (a === 0 ? [s, 0, 0] : [0, 0, s]), nW = (s: number): V3 => (a === 0 ? [0, 0, s] : [s, 0, 0]);
@@ -1749,19 +1795,15 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
           const t0 = -HW + (2 * HW * q) / CURVE, t1 = -HW + (2 * HW * (q + 1)) / CURVE;
           quad(P(s * 0.5, t0, head(t0)), P(s * 0.5, t1, head(t1)), P(s * 0.5, t1, y1), P(s * 0.5, t0, y1), nU(s), 1, MAT.stone);
         }
-        const R0 = HW, R1 = HW + 0.08, V = 7, off = s * (0.5 + 0.012);
-        const ring = (r: number, th: number, u: number): V3 => P(u, -r * Math.cos(th), ys + r * Math.sin(th));
-        for (let v = 0; v < V; v++) {
-          const ta = (Math.PI * v) / V + 0.012, tb = (Math.PI * (v + 1)) / V - 0.012, ro = v === 3 ? R1 + 0.025 : R1;
-          quad(ring(R0, ta, off), ring(R0, tb, off), ring(ro, tb, off), ring(ro, ta, off), nU(s), 0.95, MAT.stone);
-        }
+        voussoirs(fam, HW, ys, yA, s, P, nU(s), false);
       }
       // (the corner piers' faces along this way, in from each face to the crossing)
-      for (const s of [-1, 1]) for (const [u0, u1] of [[-0.5, -HW], [HW, 0.5]]) quad(P(u0, s * HW, y0), P(u1, s * HW, y0), P(u1, s * HW, ys), P(u0, s * HW, ys), nW(-s), [0.7, 0.7, 0.95, 0.95], MAT.within);
+      for (const s of [-1, 1]) for (const [u0, u1] of [[-0.5, -HW], [HW, 0.5]]) quad(P(u0, s * HW, y0), P(u1, s * HW, y0), P(u1, s * HW, yA), P(u0, s * HW, yA), nW(-s), [0.7, 0.7, 0.95, 0.95], MAT.within);
       // (this barrel, out from the groins, where it's higher than the other)
       for (let q = 0; q < CURVE; q++) {
         const t0 = -HW + (2 * HW * q) / CURVE, t1 = -HW + (2 * HW * (q + 1)) / CURVE, tm = (t0 + t1) / 2, g = Math.abs(tm);
         const n = nW(-tm / HW); n[1] = -Math.sqrt(Math.max(0, HW * HW - tm * tm)) / HW;
+        if (fam !== ROUND) { const [nt, ny] = archNormal(fam, tm, HW); n.splice(0, 3, ...nW(nt)); n[1] = ny; }
         for (const [u0, u1] of [[-0.5, -g], [g, 0.5]]) quad(P(u0, t0, head(t0)), P(u1, t0, head(t0)), P(u1, t1, head(t1)), P(u0, t1, head(t1)), n, 0.95, MAT.within);
       }
     }
@@ -1771,7 +1813,7 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
   /** an arch under a run of stone, and the stone over it: spandrels, deck, its underside lit from within */
   function span(sp: Span) {
     const { k, a, n } = sp, [di, dj] = DIRS[a], yT = k + 1;
-    const { half, rise, ys, at: arc } = soffit(sp);
+    const fam = spanFamily(w, sp), { half, rise, ys, at: arc } = soffit(sp, fam);
     cur = at(sp.born, yT, k, sp.i, sp.j); cur.sel = Array.from({ length: n }, (_, q) => selected.has(key(k, sp.i + q * di, sp.j + q * dj))).some(Boolean);
     const cx = X(sp.i) + 0.5 + (di * (n - 1)) / 2, cz = Z(sp.j) + 0.5 + (dj * (n - 1)) / 2;
     const P = (u: number, wv: number, y: number): V3 => (a === 0 ? [cx + u, y, cz + wv] : [cx + wv, y, cz + u]);
@@ -1809,8 +1851,20 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
     // where it springs)
     if (!sp.flat && rise > 0.15) {
       const mid = cellAt(0), RW = 0.11, off = 0.014, V = Math.max(5, Math.round((Math.PI * (half + rise)) / 2 / 0.2) | 1);
+      // (along a pointed or four-centred arch: at even lengths along it, each stone out square from the curve)
+      const st = fam === ROUND ? [] : archStations(fam, half, V);
+      const out = (u: number): [number, number] => { const e = 1e-3, sl = (arc(Math.min(half, u + e)) - arc(Math.max(-half, u - e))) / (Math.min(half, u + e) - Math.max(-half, u - e)), l = Math.hypot(sl, 1); return [-sl / l, 1 / l]; };
+      const pt = (u: number, r: number, wv: number): V3 => { const o = out(u); return P(u + o[0] * r, wv, arc(u) + o[1] * r); };
       for (const s of [-1, 1]) {
         if (sideHidden(mid, s)) continue;
+        if (fam !== ROUND) {
+          for (let v = 0; v < V; v++) {
+            const ua = st[v] + 0.01, ub = st[v + 1] - 0.01, ro = v === (V - 1) / 2 ? RW + 0.035 : RW, wv = s * (0.5 + off), o = out((ua + ub) / 2);
+            quad(pt(ua, 0, wv), pt(ub, 0, wv), pt(ub, ro, wv), pt(ua, ro, wv), nW(s), 0.95, MAT.stone);
+            quad(pt(ua, ro, s * 0.5), pt(ub, ro, s * 0.5), pt(ub, ro, wv), pt(ua, ro, wv), a === 0 ? [o[0], o[1], 0] : [0, o[1], o[0]], 0.9, MAT.stone);
+          }
+          continue;
+        }
         const ring = (r: number, th: number, wv: number): V3 => P(-(half + r) * Math.cos(th), wv, ys + (rise + r) * Math.sin(th));
         for (let v = 0; v < V; v++) {
           const ta = (Math.PI * v) / V + 0.01, tb = (Math.PI * (v + 1)) / V - 0.01, ro = v === (V - 1) / 2 ? RW + 0.035 : RW, wv = s * (0.5 + off);
@@ -2088,11 +2142,12 @@ export function inStone(w: World, x: number, y: number, z: number): boolean {
   if (w.stone(k, i, j)) {
     const sp = w.span(k, i, j), aw = w.archway(k, i, j);
     // (a cross vault: stone in its corner piers, and over both barrels)
-    if (!sp && aw >= 0 && w.cross(k, i, j)) { const inA = Math.abs(fz) < HW && fy < 0.5 + Math.sqrt(Math.max(0, HW * HW - fz * fz)), inB = Math.abs(fx) < HW && fy < 0.5 + Math.sqrt(Math.max(0, HW * HW - fx * fx)); return !inA && !inB; }
-    if (!sp && aw >= 0) { const wv = aw === 0 ? fz : fx; return Math.abs(wv) > HW || (w.archway(k + 1, i, j) !== aw && fy > 0.5 + Math.sqrt(Math.max(0, HW * HW - wv * wv))); }
+    const fam = !sp && aw >= 0 ? passageFamily(w, k, i, j) : ROUND, hd = (t: number) => 0.5 + HW - archY(fam, 0, HW) + archY(fam, t, HW);
+    if (!sp && aw >= 0 && w.cross(k, i, j)) { const inA = Math.abs(fz) < HW && fy < hd(fz), inB = Math.abs(fx) < HW && fy < hd(fx); return !inA && !inB; }
+    if (!sp && aw >= 0) { const wv = aw === 0 ? fz : fx; return Math.abs(wv) > HW || (w.archway(k + 1, i, j) !== aw && fy > hd(wv)); }
     if (!sp) return true;
     // (over an arch: stone above its curve)
-    const so = soffit(sp), u = (sp.a === 0 ? i - sp.i : j - sp.j) + (sp.a === 0 ? fx : fz) + 0.5 - so.half;
+    const so = soffit(sp, spanFamily(w, sp)), u = (sp.a === 0 ? i - sp.i : j - sp.j) + (sp.a === 0 ? fx : fz) + 0.5 - so.half;
     return y > so.at(u);
   }
   const d = w.stair(k, i, j);
@@ -2103,7 +2158,7 @@ export function inStone(w: World, x: number, y: number, z: number): boolean {
   for (let kk = k + 1; kk < w.levels; kk++) {
     const sp = w.span(kk, i, j);
     if (!sp) { if (w.occupied(kk, i, j)) break; continue; }
-    const so = soffit(sp), u = (sp.a === 0 ? i - sp.i : j - sp.j) + (sp.a === 0 ? fx : fz) + 0.5 - so.half;
+    const so = soffit(sp, spanFamily(w, sp)), u = (sp.a === 0 ? i - sp.i : j - sp.j) + (sp.a === 0 ? fx : fz) + 0.5 - so.half;
     return y > so.at(u);
   }
   return false;

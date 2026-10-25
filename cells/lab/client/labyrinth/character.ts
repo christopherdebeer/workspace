@@ -29,6 +29,7 @@ import { DIRS, DRESS, key, unkey, type Cell, type Dress, type World } from './mo
 import { height, motifs } from './motifs';
 import { buildings, cellsOf, underRoof } from './buildings';
 import { outline } from './form';
+import { PERSIAN, regionOfId } from './regions';
 
 const cache = new WeakMap<World, { v: number; map: Map<number, Dress> }>();
 
@@ -162,13 +163,16 @@ function dressUp(w: World): Map<number, Dress> {
   for (const b of buildings(w).list) {
     const all = cellsOf(b).filter((c) => w.block(...c));
     const upper = b.openings.some((o) => o.kind === 'window' && o.k >= 1 && o.style !== 'slit');
-    if (b.roof && upper && chance(0.3, b.id, 21)) for (const c of all) if (c[0] > w.ground(c[1], c[2])) put(c, { oriel: true });
+    // (on the plateau (regions.ts) a house is lived in under a flat top: a parapet round it, always)
+    const persian = regionOfId(w, b.id) === PERSIAN, lived = !!b.roof || (persian && !b.walked);
+    if (persian && !b.roof) for (const [x, z] of b.cols) put([b.h - 1, x, z], { parapet: true, rail: DRESS.parapet });
+    if (lived && upper && chance(0.3, b.id, 21)) for (const c of all) if (c[0] > w.ground(c[1], c[2])) put(c, { oriel: true });
     if (b.openings.some((o) => o.style === 'arched' && o.kind === 'window') && chance(0.4, b.id, 22)) for (const c of all) put(c, { colonnettes: true });
     for (const o of b.openings) {
       if (o.kind !== 'door' || o.k !== w.ground(o.i, o.j)) continue;
       const [a, bb] = DIRS[o.d], x = o.i + a, z = o.j + bb;
       // (a house's door on to a court, or on to open ground: the way out from it, now and then shaded)
-      if (!b.roof || !chance(w.courts.has(key(0, x, z)) ? 0.5 : 0.3, b.id, o.i, o.j, 23)) continue;
+      if (!lived || !chance(w.courts.has(key(0, x, z)) ? 0.5 : 0.3, b.id, o.i, o.j, 23)) continue;
       const [ta, tb] = DIRS[(o.d + 1) % 4], fit = (p: number, q: number) => { const g = w.ground(p, q); return w.ground(x, z) === g && w.free(g, p, q) && !w.arched(g, p, q) && !w.pier(g, p, q) && !kept.has(key(0, p, q)) && w.free(g + 1, p, q); };
       for (const s of [0, -1, 1]) if (fit(x + ta * s, z + tb * s)) put([w.ground(x + ta * s, z + tb * s), x + ta * s, z + tb * s], { pergola: true }); else if (s === 0) break;
     }

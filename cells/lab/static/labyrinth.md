@@ -88,6 +88,24 @@ What's built and the land it's on ask things of each other (`context.ts`, `build
 ![story 15: a house built across a bank, two steps under lean-tos falling downhill; a tower set into the cliff, its roof falling away from the hill, a door from the hill above; a way up the slope, its banks held by walls](labyrinth/v-slope.jpg)
 ![close: the steps, the walls holding the bank beside the way](labyrinth/v-slope-close.jpg)
 
+## Two manners: the middle sea and the plateau
+
+The land is built in two manners, and where you build says which. Districts lie over the land, each a dozen cells or
+so across, seeded by the land itself. A building takes the manner of the district where its first column was laid, the
+whole of it, so neighbours match and one district differs from the next. The manner changes how a building is
+finished and drawn, never what's built or where a way goes.
+
+| | The middle sea (as it was) | The plateau (after the Persian courtyard houses) |
+|---|---|---|
+| arches over doors, windows, passages | round | pointed (two-centred), the crown where a round one's would be |
+| arches over arcades and bridges | round | four-centred over two cells or more: round shoulders rising to a point |
+| tops | pitched roofs of terracotta (hipped, gabled, shed), now and then a dome on a tower | flat, with a parapet round them; now and then a dome on a tower |
+| windows | arched, square or slit; shutters folded back, now and then an awning over a door | tall, arched or square, in panes behind glazing bars in the house's paint (teal, oxblood or turquoise); about half lit warm from within |
+
+Mashrabiya at upper windows, colonnettes and pergolas at doors come to both.
+
+`?region=persian` or `?region=mediterranean` holds the whole land to one manner.
+
 ## Water
 
 **The pool brush lets water into whatever it touches**: the ground (a pool), or a top, up off the ground (a basin, let into the stone, a rim round it). Traced, it runs a channel along the stroke, along the ground or along a top. **A stroke drawn round, back to where it began, fills what it closes round**: a pond on the ground, a basin across a terrace. (With the block brush the same: a platform, filled.)

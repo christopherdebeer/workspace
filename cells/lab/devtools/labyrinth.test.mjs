@@ -16,6 +16,9 @@ const CH = await load('../client/labyrinth/character.ts');
 const BU = await load('../client/labyrinth/buildings.ts');
 const FO = await load('../client/labyrinth/form.ts');
 const ME = await load('../client/labyrinth/mesh.ts');
+const RG = await load('../client/labyrinth/regions.ts');
+// (the rules' promises are checked in one manner, the middle sea's, as they were made; the plateau's at the end)
+RG.setRegions('mediterranean');
 
 let fails = 0, checks = 0;
 const ok = (name, cond, saw) => { checks++; if (!cond) { fails++; if (fails < 25) console.log(`FAIL  ${name}${saw !== undefined ? ` — saw ${JSON.stringify(saw)}` : ''}`); } };
@@ -1035,6 +1038,29 @@ stands(s4, 'story 4');
   ok('a world rebuilt again is the same world (ways by courts\' pools, on the land)', snap(found) === was);
 }
 if (process.env.DEBUG) (await import('node:fs')).writeFileSync(process.env.DEBUG, JSON.stringify(walked.saw));
+// ─── regions: districts in two manners, and what the plateau's makes of a house ───
+{
+  RG.setRegions('mixed');
+  const w = new World(1, 7), seen = new Set();
+  let diff = 0, pairs = 0;
+  for (let j = -30; j < 30; j++) for (let i = -30; i < 30; i++) { const r = RG.regionAt(w, i, j); seen.add(r); if (i > -30) { pairs++; if (r !== RG.regionAt(w, i - 1, j)) diff++; } }
+  ok('regions: both manners lie over a land', seen.size === 2, [...seen]);
+  ok('regions: in districts, not a scatter (few neighbours differ)', diff / pairs < 0.08, diff / pairs);
+  ok('regions: the same land, the same districts', RG.regionAt(new World(1, 7), 11, -4) === RG.regionAt(w, 11, -4));
+  ok('regions: the arch families: a pointed crown higher than a round one, a four-centred between', RG.CROWN[RG.POINTED] > RG.CROWN[RG.FOUR] && RG.CROWN[RG.FOUR] > RG.CROWN[RG.ROUND] && Math.abs(RG.archY(RG.POINTED, 1, 1)) < 1e-9 && Math.abs(RG.archY(RG.FOUR, 1, 1)) < 1e-9);
+  RG.setRegions('persian');
+  const s8 = story(8), B = BU.buildings(s8).list;
+  ok('regions: on the plateau, no pitched roof (flat tops, now and then a dome)', B.every((b) => !b.roof || b.roof === 'dome'), B.map((b) => b.roof));
+  ok('regions: on the plateau, windows arched or square, a slit only up a stair tower', B.every((b) => b.openings.every((o) => o.kind === 'door' || o.style !== 'slit' || (b.tower && b.inside))));
+  const span = s8.spans.find((sp) => sp.n >= 2 && !sp.flat);
+  if (span) ok('regions: a wide span on the plateau four-centred', ME.spanFamily(s8, span) === RG.FOUR);
+  const m = ME.buildMesh(s8);
+  let glass = 0, lit = 0, bad = 0;
+  for (let q = 0; q < m.count; q++) { const v = m.data.subarray(q * ME.STRIDE, q * ME.STRIDE + ME.STRIDE); if (!v.every(Number.isFinite)) bad++; if ((v[7] % 16) === ME.MAT.glass && v[11] > 1.5) { glass++; if (v[11] > 5.5) lit++; } }
+  ok('regions: the plateau\'s mesh is whole (no NaN)', bad === 0, bad);
+  ok('regions: its windows in painted panes, some lit within', glass > 0 && lit > 0 && lit < glass, { glass, lit });
+  RG.setRegions('mediterranean');
+}
 console.log(`${checks - fails} of ${checks} checks hold · gestures read as ${JSON.stringify(made)} · declined: ${JSON.stringify(declines)} · dressed by the rules: ${lively.dressed} of ${lively.worlds} worlds, gated or arcaded walls: ${lively.gates}`);
 console.log(fails ? `\n${fails} failed` : '\nall passed');
 process.exitCode = fails ? 1 : 0;

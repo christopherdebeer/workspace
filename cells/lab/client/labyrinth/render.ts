@@ -223,6 +223,14 @@ float arris(float d) { return smoothstep(.008, .055, d); }
 // (a cat's coat: its colour, its markings (a tabby's bands round its body, legs and tail, darker along its back), paler
 // underneath and at the muzzle; where on the body (h: part × 10 + along it) keeps the markings on the cat as it moves.
 // Parts: 0 body, 1 head, 2 tail, 3 legs, 4 ears, 5 muzzle)
+// (a window's panes on the plateau (regions.ts): a lattice of glazing bars in the frame's paint, the glass between; 1 in
+// a pane, 0 on a bar)
+float paneOf(vec3 p, vec3 n) {
+  vec3 T = normalize(vec3(-n.z, 0., n.x) + 1e-5);
+  float u = dot(p, T) * 12.5, v = p.y * 11.;
+  float bu = min(fract(u), 1. - fract(u)), bv = min(fract(v), 1. - fract(v));
+  return smoothstep(.06, .14, bu) * smoothstep(.06, .14, bv);
+}
 vec3 coat(int c, float h, vec3 n, float tone) {
   float part = floor(h / 10. + .001), u = h - part * 10.;
   vec3 base = vec3(.80, .50, .25), mark = vec3(.60, .33, .15), pale = vec3(.93, .84, .66);
@@ -361,6 +369,13 @@ void main() {
     float u = abs(n.x) > .5 ? vPos.z : vPos.x, pl = fract(u * 14.);
     base = vec3(.30, .21, .14) * (.85 + .25 * hash(vec3(floor(u * 14.), 3., 1.))) * (.8 + .2 * noise(vec3(u * 40., vPos.y * 3., 0.)));
     base *= .75 + .25 * smoothstep(.0, .12, min(pl, 1. - pl));
+  }
+  else if (mat == 12 && vTone > 1.5) {
+    // (glass on the plateau: in the house's paint (teal, oxblood, turquoise), in panes; dark, or (its tone past 6) lit warm
+    // from within)
+    int pc = int(mod(floor(vTone + .01) - 2., 4.));
+    vec3 paint = pc == 0 ? vec3(.16, .44, .44) : pc == 1 ? vec3(.50, .17, .12) : vec3(.17, .50, .58);
+    base = mix(paint, vTone > 5.5 ? vec3(.92, .70, .40) : vec3(.10, .12, .13), mix(1., paneOf(vPos, n), keep(14.)));
   }
   else if (mat == 12) base = vec3(.09, .10, .11);
   else if (mat == 13) {
@@ -569,6 +584,12 @@ void main() {
   vec3 restR = clamp(lit / max(castR * hollowR * shadeR, vec3(.02)), .5, 2.);
   // (a lamp: lit from within)
   if (mat == 9) { c = vec3(1., .86, .58); lit = vec3(1.); castR = hollowR = shadeR = restR = vec3(1.); }
+  // (a window lit within: its panes glow, warmest low, its bars as they're lit)
+  if (mat == 12 && vTone > 5.5) {
+    float pane = mix(1., paneOf(vPos, n), keep(14.)) * .92;
+    vec3 warm = vec3(1., .80, .50) * (.86 + .14 * hash(vec3(floor(vPos * 7.)))) * (1.05 - .25 * fract(vPos.y));
+    c = mix(c, warm, pane); lit = mix(lit, vec3(1.), pane); castR = mix(castR, vec3(1.), pane); hollowR = mix(hollowR, vec3(1.), pane); shadeR = mix(shadeR, vec3(1.), pane); restR = mix(restR, vec3(1.), pane);
+  }
   if (mat == 2) {
     // (water: clear, turquoise as it deepens over a pale bed, the bed showing through where it's shallow at a bank (its
     // depth, from the mesh, in tone); running water (its way, an angle, in how past 1) stirred along its run, the ripples

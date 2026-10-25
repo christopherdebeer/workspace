@@ -26,11 +26,13 @@
  *   from one level to the next; on a tower with a stair inside, a slit a level, climbing round it as the stair does.
  * - **A roof** where the top isn't walked and has nothing put on it (nor water let into it): hipped on a square plan (a pyramid on a tower),
  *   gabled along a long one, a shed roof falling away from taller stone it leans on, now and then a dome on a marble
- *   tower. Only on a plan that's a plain rectangle, for now. The hand can switch it (select), kept as a rule.
+ *   tower. Only on a plan that's a plain rectangle, for now. The hand can switch it (select), kept as a rule. On the
+ *   plateau (regions.ts) a top is left flat, and a tower now and then domed; its windows tall, arched or square.
  */
 import { hash } from '../kit/rng';
 import { DIRS, RULE, isTower, isWithin, key, unkey, type Cell, type World } from './model';
 import { navigate, standing, type Nav } from './nav';
+import { PERSIAN, regionOfId } from './regions';
 
 export type Roof = 'hipped' | 'gable' | 'shed' | 'dome';
 export interface Opening { kind: 'door' | 'window'; style: 'arched' | 'square' | 'slit'; k: number; i: number; j: number; d: number }
@@ -233,7 +235,9 @@ function find(w: World): Buildings {
     const court = atFoot.filter((f) => w.courts.has(key(0, f.out[1], f.out[2])));
     // (one style to a building; framed with colonnettes by hand, arched, so there's an arch for them to carry)
     const framed = cols.some(([x, z]) => Array.from({ length: h }, (_, k) => w.dressed(k, x, z)?.colonnettes).some(Boolean));
-    const style = framed ? 'arched' : (['arched', 'square', 'slit'] as const)[hash(w.seed, id, 1) % 3];
+    // (on the plateau (regions.ts): tall windows, mostly arched, never a slit but in a stair tower)
+    const persian = regionOfId(w, id) === PERSIAN;
+    const style = framed ? 'arched' : persian ? (hash(w.seed, id, 1) % 4 ? 'arched' : 'square') : (['arched', 'square', 'slit'] as const)[hash(w.seed, id, 1) % 3];
     const doors: typeof faces = [...upper];
     // (a porch: a passage in at its foot that stops at its stone, the door at its back)
     const porch = through.flatMap(([x, z, a]) => [0, 1, 2, 3].filter((d) => d % 2 === a).map((d) => ({ x, z, d })))
@@ -316,8 +320,10 @@ function find(w: World): Buildings {
       // (leaning on more than one side, it falls away from the highest)
       const rise = (d: number) => { const [a, bb] = DIRS[d], o = rcols.filter(([x, z]) => !rmine.has(`${x + a}.${z + bb}`)); return o.reduce((t, [x, z]) => t + Math.max(height(x + a, z + bb), w.ground(x + a, z + bb)), 0) / Math.max(1, o.length); };
       const lean = taller.sort((p, q) => rise(q) - rise(p) || p - q)[0];
-      b.roof = taller.length ? 'shed' : W === D ? (tower && chance(0.35, id, 4) ? 'dome' : 'hipped') : chance(0.25, id, 5) ? 'hipped' : 'gable';
-      if (taller.length) b.fall = (lean + 2) % 4;
+      // (on the plateau: flat tops, now and then a dome on a tower)
+      if (persian) b.roof = tower && chance(0.5, id, 4) ? 'dome' : null;
+      else b.roof = taller.length ? 'shed' : W === D ? (tower && chance(0.35, id, 4) ? 'dome' : 'hipped') : chance(0.25, id, 5) ? 'hipped' : 'gable';
+      if (taller.length && b.roof === 'shed') b.fall = (lean + 2) % 4;
     }
     if (b.roof === 'shed' && b.fall < 0) b.fall = (hash(w.seed, id, 6) % 4);
     if (b.roof && b.roof !== 'shed') b.fall = -1;
