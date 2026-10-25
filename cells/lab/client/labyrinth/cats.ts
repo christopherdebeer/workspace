@@ -792,10 +792,11 @@ export class Cats {
 
   // ─── seen ───
   /** the cats as they are now, into the moving buffer */
-  draw(out: Out, scale = 1) {
+  /** `plan`: where they stand squeezed in plan, as what's built is drawn (main.ts: the half grid, in its proportions) */
+  draw(out: Out, scale = 1, plan = 1) {
     for (const c of this.list) {
       if (c.gone || c.hidden) continue;
-      body(out, { x: c.x, y: c.y, z: c.z, yaw: c.yaw, pitch: c.pitch, coat: c.coat, tone: c.tone, scale }, look(c.pose, c.head.yaw, c.head.pitch), c.stir);
+      body(out, { x: c.x * plan, y: c.y, z: c.z * plan, yaw: c.yaw, pitch: c.pitch, coat: c.coat, tone: c.tone, scale }, look(c.pose, c.head.yaw, c.head.pitch), c.stir);
     }
   }
   /** where a cat's head is (for touching it, and for following it) */

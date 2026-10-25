@@ -391,8 +391,7 @@ function courtHouse(): World {
  * pilasters, the court split by a thin wall with a gate in it, and a forecourt walled thin, a path half a cell wide.
  */
 function halved(w0: World): World {
-  const w = new World(w0.seed), t = -100;
-  w.bay = 2;
+  const w = new World(w0.seed, 0, 2), t = -100;
   const add: Array<[number, number, number, number]> = [], arches: Array<[number, number, number, number, number]> = [];
   const arched = [...w0.archways.keys()].map(unkey), solid = [...w0.mass.keys()].filter((c) => !w0.archways.has(c)).map(unkey);
   for (const [k, i, j] of solid) for (const [a, b] of [[0, 0], [1, 0], [0, 1], [1, 1]]) add.push([k, 2 * i + a, 2 * j + b, t]);
@@ -402,8 +401,7 @@ function halved(w0: World): World {
   return w;
 }
 function halfHouse(): World {
-  const w = new World(43), t = -100;
-  w.bay = 2;
+  const w = new World(43, 0, 2), t = -100;
   const cells: Array<[number, number, number, number]> = [];
   const box = (i0: number, i1: number, j0: number, j1: number, k0: number, k1: number) => { for (let i = i0; i <= i1; i++) for (let j = j0; j <= j1; j++) for (let k = k0; k <= k1; k++) cells.push([k, i, j, t]); };
   // (the north wing: three storeys, the top one set back half a cell from the court; along its court side at the

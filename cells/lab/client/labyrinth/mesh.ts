@@ -1307,7 +1307,7 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
       // pines on the rises and by the outcrop, alone or in twos; a cypress now and then. Never right up against what's
       // built: round that it's cleared)
       // (a tree's whole kept or left out where the land's drawing fades, by its foot: marked with its foot's cell)
-      const rise = higher.filter((h) => h < 0).length >= 3, how = 4 + (Math.floor(X(i)) + 30 + (Math.floor(Z(j)) + 30) * 64 + 0.9 * r(q, 42)) / 10000, field = noise2(land.seed + 17, i * 0.3, j * 0.3);
+      const rise = higher.filter((h) => h < 0).length >= 3, how = 4 + (Math.floor(X(i) / w.bay) + 30 + (Math.floor(Z(j) / w.bay) + 30) * 64 + 0.9 * r(q, 42)) / 10000, field = noise2(land.seed + 17, i * 0.3, j * 0.3);
       // (the scrub: all over the hill in drifts (a broad field), thicker where it's steep and round the rock; small, a
       // dab or two to a cell, the odd one bigger. Up to what's built too, but never on a bench, a way or the water)
       if (!onStair && !benched(w, i, j)) {

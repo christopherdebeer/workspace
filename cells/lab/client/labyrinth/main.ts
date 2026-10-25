@@ -17,7 +17,6 @@
 import { CENTER, World, inGrid, key, replay, unkey, type Alt, type Cell, type Op } from './model';
 import { STRIDE, buildMesh, drawnBox, inLand, inStone, setBleed } from './mesh';
 import { STROKE_STRIDE } from './strokes';
-import { LAND } from './land';
 import { Renderer, camera, invert, type View } from './render';
 import { asDrawn, carve, lift, stroke, surface, tap, touch, trace, type Intent, type Pick } from './gesture';
 import { story } from './demo';
@@ -77,16 +76,20 @@ R.msaa = qs.has('msaa');
 
 // ─── what's built ───
 const KEY = 'labyrinth.v3';
+/** `?grid=half`: a new world on the half grid (each cell four squares in plan: static/labyrinth-grid.md); one kept on
+ * the other grid is set aside for a new one */
+const gridBay = qs.get('grid') === 'half' ? 2 : 1;
 let world: World;
 if (preview) world = story(4);
 else if (qs.has('story')) world = story(Number(qs.get('story')));
 else if (qs.has('ops')) world = replay(qs.get('ops')!);
-else if (qs.has('land')) world = new World(1, Number(qs.get('land')) || 1);
+else if (qs.has('land')) world = new World(1, Number(qs.get('land')) || 1, gridBay);
 // (what was built here last, kept; or, the first time, a new piece of land (`?flat`: the flat slab, kept the same way))
 else {
   let kept = ''; try { kept = localStorage.getItem(KEY) ?? ''; } catch { /* */ }
-  world = kept ? replay(kept) : new World(1, qs.has('flat') ? 0 : randomSeed());
-  if (qs.has('flat') && world.land) world = new World(1);
+  world = kept ? replay(kept) : new World(1, qs.has('flat') ? 0 : randomSeed(), gridBay);
+  if (qs.has('flat') && world.land) world = new World(1, 0, world.bay);
+  if (qs.has('grid') && world.bay !== gridBay) world = new World(1, qs.has('flat') ? 0 : randomSeed(), gridBay);
 }
 const fixed = preview || qs.has('story') || qs.has('ops') || qs.has('land');
 /** `?hold=n`: the last n things done kept back, to be done in front of the cats (`release()`) */
@@ -104,11 +107,15 @@ const selKeys = () => (sel ? new Set(sel.s.cells.map((c) => key(...c))) : new Se
 const meshTimes = { last: 0, upload: 0, max: 0, n: 0 };
 /** whether the ground's been taken as it was (while drawing), and is still to be worked out again */
 let groundStale = false;
-/** `?plan=0.5`: what's drawn squeezed in plan, its storeys as tall as they were: a world built on a grid of half cells
- * seen in its own proportions (devtools/labyrinth-grid-spike.mjs). For looking only: a touch strikes where it would
- * have, unsqueezed */
-const planScale = Number(qs.get('plan') ?? 1);
+/**
+ * What's drawn squeezed in plan, its storeys as tall as they were: a world on the half grid seen in its own proportions
+ * (a square half a cell). Built and struck in its own squares (the grid), drawn and seen in cells (the room): `plan()`
+ * the room's size of a square; a touch's ray taken into the grid's (`pick`, `onPlane`), and a square's place out to the
+ * screen (`screenOf`). `?plan=` sets it, to look at a world as if it were on the other grid.
+ */
+const plan = () => (qs.has('plan') ? Number(qs.get('plan')) : 1 / world.bay);
 function squeeze(m: ReturnType<typeof buildMesh>) {
+  const planScale = plan();
   if (planScale === 1) return m;
   const mesh = (a: Float32Array, n: number) => { const o = a.slice(); for (let q = 0; q < n; q++) { const b = q * STRIDE; o[b] *= planScale; o[b + 2] *= planScale; const nx = o[b + 3] / planScale, nz = o[b + 5] / planScale, l = Math.hypot(nx, o[b + 4], nz) || 1; o[b + 3] = nx / l; o[b + 4] /= l; o[b + 5] = nz / l; } return o; };
   const st = m.strokes.slice(); for (let q = 0; q < st.length; q += STROKE_STRIDE) { st[q] *= planScale; st[q + 2] *= planScale; st[q + 3] *= planScale; st[q + 5] *= planScale; }
@@ -140,8 +147,8 @@ let shownOf: World | null = null, shownAt = -1, shownBox: [number, number, numbe
 function shown(): [number, number, number, number] {
   if (shownOf === world && shownAt === world.version) return shownBox;
   shownOf = world; shownAt = world.version;
-  const mid = world.land ? (LAND.i0 + LAND.i1 + 1) / 2 : CENTER;
-  let i0 = mid - 3.5, i1 = mid + 3.5, j0 = mid - 3.5, j1 = mid + 3.5;
+  const B = world.bay, mid = world.land ? (world.land.box.i0 + world.land.box.i1 + 1) / 2 : CENTER * B;
+  let i0 = mid - 3.5 * B, i1 = mid + 3.5 * B, j0 = mid - 3.5 * B, j1 = mid + 3.5 * B;
   for (const m of [world.mass, world.stairs, world.piers, world.pools, world.basins, world.paving]) for (const v of m.keys()) { const [, i, j] = unkey(v); i0 = Math.min(i0, i); i1 = Math.max(i1, i + 1); j0 = Math.min(j0, j); j1 = Math.max(j1, j + 1); }
   return (shownBox = [i0, j0, i1, j1]);
 }
@@ -159,27 +166,29 @@ function focusOn() {
   const cols = new Set<number>();
   // (what's built: stone, stairs, piers, and the water and the paving the hand laid: a pool, a basin, a way's ground)
   for (const m of [world.mass, world.stairs, world.piers, world.pools, world.basins, world.paving]) for (const v of m.keys()) { const [, i, j] = unkey(v); cols.add(j * 4096 + i); }
-  if (!cols.size) { const mid = (LAND.i0 + LAND.i1 + 1) / 2; for (let i = Math.floor(mid - 1.5); i < mid + 1.5; i++) for (let j = Math.floor(mid - 1.5); j < mid + 1.5; j++) cols.add(j * 4096 + i); }
+  if (!cols.size) { const B = world.bay, mid = (world.land.box.i0 + world.land.box.i1 + 1) / 2; for (let i = Math.floor(mid - 1.5 * B); i < mid + 1.5 * B; i++) for (let j = Math.floor(mid - 1.5 * B); j < mid + 1.5 * B; j++) cols.add(j * 4096 + i); }
   for (let b = 0; b < H; b++) for (let a = 0; a < W; a++) if (cols.has((e.j0 + Math.floor(b / S)) * 4096 + e.i0 + Math.floor(a / S))) d[b * W + a] = 0;
   const D = Math.SQRT2, at = (a: number, b: number) => (a < 0 || b < 0 || a >= W || b >= H ? 1e9 : d[b * W + a]);
   for (let b = 0; b < H; b++) for (let a = 0; a < W; a++) d[b * W + a] = Math.min(d[b * W + a], at(a - 1, b) + 1, at(a, b - 1) + 1, at(a - 1, b - 1) + D, at(a + 1, b - 1) + D);
   for (let b = H - 1; b >= 0; b--) for (let a = W - 1; a >= 0; a--) d[b * W + a] = Math.min(d[b * W + a], at(a + 1, b) + 1, at(a, b + 1) + 1, at(a + 1, b + 1) + D, at(a - 1, b + 1) + D);
   const field = new Uint8Array(W * H);
-  for (let q = 0; q < W * H; q++) field[q] = Math.round(Math.min(32, d[q] / S) / 32 * 255);
-  R.focus(field, W, H, [e.i0 - CENTER, e.j0 - CENTER, e.i1 + 1 - CENTER, e.j1 + 1 - CENTER]);
+  // (in cells, as the drawing reads it; placed in the room)
+  for (let q = 0; q < W * H; q++) field[q] = Math.round(Math.min(32, d[q] / S / world.bay) / 32 * 255);
+  const s = plan();
+  R.focus(field, W, H, [(e.i0 - CENTER) * s, (e.j0 - CENTER) * s, (e.i1 + 1 - CENTER) * s, (e.j1 + 1 - CENTER) * s]);
 }
 /** the box the view frames (cells, far sides exclusive): on land, what's drawn and the drawing's fade round it; on the slab, the slab */
 function frameBox(): [number, number, number, number] {
   const e = world.extent();
   if (!world.land) return [e.i0, e.j0, e.i1 + 1, e.j1 + 1];
-  const [i0, j0, i1, j1] = shown(), m = 3;
+  const [i0, j0, i1, j1] = shown(), m = 3 * world.bay;
   return [Math.max(e.i0, i0 - m), Math.max(e.j0, j0 - m), Math.min(e.i1 + 1, i1 + m), Math.min(e.j1 + 1, j1 + m)];
 }
 /** what the view frames: the slab, however big it's grown, or on land what's drawn of it (its middle, and how far to stand back to see it) */
 function framing() {
   const [bi0, bj0, bi1, bj1] = frameBox(), e = { i0: bi0, i1: bi1 - 1, j0: bj0, j1: bj1 - 1 };
   // (squeezed in plan (`?plan=`), framed as it's drawn)
-  const half = ((Math.max(e.i1 - e.i0, e.j1 - e.j0) / 2) * planScale + 1.5) * Math.SQRT2, top = world.top();
+  const planScale = plan(), half = ((Math.max(e.i1 - e.i0, e.j1 - e.j0) / 2) * planScale + 1.5) * Math.SQRT2, top = world.top();
   // (as wide as the slab, and as tall as what's on it: there's no cap on how high it goes)
   const fit = Math.max(Math.max(half / aspect, half * 0.75) * 1.04 + top * 0.25, (half * Math.sin(view.el) + top * Math.cos(view.el)) * 0.55 + 1);
   return { cx: ((e.i0 + e.i1 + 1) / 2 - CENTER) * planScale, cz: ((e.j0 + e.j1 + 1) / 2 - CENTER) * planScale, fit, half };
@@ -198,7 +207,8 @@ function ray(cx: number, cy: number) {
 }
 /** what a point on the screen touches: the slab, a top, or a side; the cell struck and the free cell on that face's side */
 function pick(cx: number, cy: number, w: World = world): Pick | null {
-  const { a, d, L } = ray(cx, cy), topY = w.top() + 1;
+  // (the ray taken into the grid's squares: unsqueezed in plan)
+  const r = ray(cx, cy), s = plan(), a = [r.a[0] / s, r.a[1], r.a[2] / s], dl = Math.hypot(r.d[0] / s, r.d[1], r.d[2] / s), d = [r.d[0] / s / dl, r.d[1] / dl, r.d[2] / s / dl], L = r.L * dl, topY = w.top() + 1;
   let t = d[1] < 0 ? Math.max(0, (a[1] - topY) / -d[1]) : 0, prev: number[] | null = null;
   const cell = (p: number[]) => [Math.floor(p[1]), Math.floor(p[0] + CENTER), Math.floor(p[2] + CENTER)] as [number, number, number];
   // (coarse steps through the air, then fine ones back from the first stone struck)
@@ -236,13 +246,14 @@ function pick(cx: number, cy: number, w: World = world): Pick | null {
 function onPlane(cx: number, cy: number, y: number): [number, number] | null {
   const { a, d } = ray(cx, cy);
   if (Math.abs(d[1]) < 1e-6) return null;
-  const t = (y - a[1]) / d[1], x = a[0] + d[0] * t, z = a[2] + d[2] * t;
+  const t = (y - a[1]) / d[1], s = plan(), x = (a[0] + d[0] * t) / s, z = (a[2] + d[2] * t) / s;
   const i = Math.floor(x + CENTER), j = Math.floor(z + CENTER);
   return inGrid(i, j) ? [i, j] : null;
 }
-/** where a point of the room is on the screen (css pixels) */
+/** where a point is on the screen (css pixels): given in the grid's squares (x and z from CENTER), squeezed into the
+ * room as it's drawn */
 function screenOf(x: number, y: number, z: number): [number, number] {
-  const r = canvas.getBoundingClientRect(), m = camera(view, r.width / r.height).vp, p = [x, y, z, 1];
+  const r = canvas.getBoundingClientRect(), m = camera(view, r.width / r.height).vp, s = plan(), p = [x * s, y, z * s, 1];
   const o = [0, 1, 3].map((row) => m[row] * p[0] + m[4 + row] * p[1] + m[8 + row] * p[2] + m[12 + row] * p[3]);
   return [r.left + (o[0] / o[2] * 0.5 + 0.5) * r.width, r.top + (1 - (o[1] / o[2] * 0.5 + 0.5)) * r.height];
 }
@@ -598,7 +609,7 @@ function traceStepNow(cx: number, cy: number, final: boolean) {
   if (!g?.start) return;
   if (!g.before) {
     // (read against the world as it was before this stroke: a copy, so picking never strikes the stroke's own stone)
-    g.before = new World(world.seed, world.landSeed); g.before.ops = world.ops.slice(0, g.base); g.before.rebuild(now());
+    g.before = new World(world.seed, world.landSeed, world.bay); g.before.ops = world.ops.slice(0, g.base); g.before.rebuild(now());
     g.h0 = surface(g.before, g.start); g.cells = [[g.start.hit[1], g.start.hit[2]]]; g.cellPt = [0]; g.born = now();
   }
   const before = g.before;
@@ -718,7 +729,7 @@ function paintAt(cx: number, cy: number) {
   if (!g) return;
   const p = pick(cx, cy), c = p && dressAt(g.before ?? world, p, held as Dressing);
   if (c && !g.painted.some((q) => q.every((v, n) => v === c[n]))) g.painted.push(c);
-  if (!g.before) { g.before = new World(world.seed, world.landSeed); g.before.ops = world.ops.slice(0, g.base); g.before.rebuild(now()); }
+  if (!g.before) { g.before = new World(world.seed, world.landSeed, world.bay); g.before.ops = world.ops.slice(0, g.base); g.before.rebuild(now()); }
   lay(g.painted.length ? dress(g.before, held as Dressing, g.painted) : null);
 }
 function carveAt(cx: number, cy: number) {
@@ -849,8 +860,8 @@ document.getElementById('undo')!.addEventListener('click', () => { if (world.und
  * (`?flat`, the flat slab, stays flat.)
  */
 function startAgain() {
-  if (world.ops.length) { if (!confirm(world.land ? 'Clear what\'s built, back to the land?' : 'Clear the stone?')) return; world = new World(world.seed, qs.has('flat') ? 0 : world.landSeed || randomSeed()); }
-  else world = new World(world.seed, qs.has('flat') ? 0 : randomSeed());
+  if (world.ops.length) { if (!confirm(world.land ? 'Clear what\'s built, back to the land?' : 'Clear the stone?')) return; world = new World(world.seed, qs.has('flat') ? 0 : world.landSeed || randomSeed(), world.bay); }
+  else world = new World(world.seed, qs.has('flat') ? 0 : randomSeed(), world.bay);
   meshVersion = -1; unselect(); hideAlts(); kept(); follow = true;
   say(world.ops.length ? '' : world.land ? 'a new piece of land' : 'the stone, bare');
 }
@@ -992,7 +1003,7 @@ function frame() {
   R.area = [fr.cx, fr.cz, fr.half + 2]; R.top = world.top();
   // (what's drawn of the land: gathered round what's built)
   focusOn();
-  { const e = drawnBox(world); R.landBox = world.land ? [e.i0 - CENTER, e.j0 - CENTER, e.i1 + 1 - CENTER, e.j1 + 1 - CENTER] : [-1e3, -1e3, 1e3, 1e3]; }
+  { const e = drawnBox(world), s = plan(); R.landBox = world.land ? [(e.i0 - CENTER) * s, (e.j0 - CENTER) * s, (e.i1 + 1 - CENTER) * s, (e.j1 + 1 - CENTER) * s] : [-1e3, -1e3, 1e3, 1e3]; }
   { const b = bleedOn && !!world.land; if (b !== R.bleed) { R.bleed = b; setBleed(b); meshVersion = -1; } }
   if (catsOn) {
     catMemory();
@@ -1124,7 +1135,7 @@ function moving(t: number) {
       cat(out, { x: c * sp * ax - r * sp * ax, y: 0, z: -c * sp * ax - r * sp * ax, yaw: Number(qs.get('yaw') ?? -Math.PI / 4), pitch: 0, coat: q % 8, tone: 0.5 }, p, { t, breath: t / 3, twitch: 0, flick: 0 });
     });
   }
-  if (catsOn) cats.draw(out);
+  if (catsOn) cats.draw(out, 1, plan());
   R.moving(out.data, out.count);
 }
 
@@ -1193,14 +1204,15 @@ function followCat(dt: number) {
   if (!met || !following) return;
   if (met.gone) { meet(null); return; }
   const q = 1 - Math.exp(-dt * 4), y = met.y + 0.15;
-  view.target[0] += (met.x - view.target[0]) * q; view.target[1] += (y - view.target[1]) * q; view.target[2] += (met.z - view.target[2]) * q;
+  const s = plan();
+  view.target[0] += (met.x * s - view.target[0]) * q; view.target[1] += (y - view.target[1]) * q; view.target[2] += (met.z * s - view.target[2]) * q;
   follow = false;
 }
 // (`?catsat=s`: the cats' lives run on that long before it's shown, for a picture)
 if (catsOn) { catMemory(); if (qs.has('catsat')) cats.run(world, Number(qs.get('catsat'))); }
 
 // (`?at=i.j`: looking at that cell, not framing it all)
-if (qs.has('at')) { const [i, j] = qs.get('at')!.split('.').map(Number); view.target = [i + 0.5 - CENTER, world.top() * 0.35, j + 0.5 - CENTER]; zoomFit = framing().fit; follow = false; edgeChecked = world.version; }
+if (qs.has('at')) { const [i, j] = qs.get('at')!.split('.').map(Number); view.target = [(i + 0.5 - CENTER) * plan(), world.top() * 0.35, (j + 0.5 - CENTER) * plan()]; zoomFit = framing().fit; follow = false; edgeChecked = world.version; }
 requestAnimationFrame(frame);
 
 (window as unknown as { __labyrinth: unknown }).__labyrinth = {

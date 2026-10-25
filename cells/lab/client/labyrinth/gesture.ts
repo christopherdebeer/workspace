@@ -121,7 +121,7 @@ function wayUp(w: World, p: Pick, now: number): Op | Refusal | null {
     if (!line.every(([x, z]) => inGrid(x, z))) continue;
     const [sx, sz] = line[0], op = way(w, w.ground(sx, sz), [...line, [i, j]], [T, i, j], now, () => false, true);
     if (!op || 'refused' in op) continue;
-    const v = new World(w.seed, w.landSeed); v.ops = [...w.ops, op]; v.rebuild();
+    const v = new World(w.seed, w.landSeed, w.bay); v.ops = [...w.ops, op]; v.rebuild();
     if (!v.reached.get(op)?.reached) continue;
     const near = DIRS.some(([c, d]) => w.paved(sx + c, sz + d)) || w.paved(sx, sz) ? 0 : 3, score = adds(w, op) + near;
     if (!best || score < best.score) best = { op, score };
@@ -244,7 +244,7 @@ export function walk(path: Array<[number, number]>): { cells: Array<[number, num
  */
 /** how much an op would lay that isn't there already: stone, steps, paving, piers (worked out on a copy) */
 export function adds(w: World, op: Op): number {
-  const sim = new World(w.seed, w.landSeed); sim.ops = [...w.ops, op]; sim.rebuild();
+  const sim = new World(w.seed, w.landSeed, w.bay); sim.ops = [...w.ops, op]; sim.rebuild();
   let n = 0;
   // (what it lays itself: not what meetings make of it, laid round it (a way that lays nothing isn't made something by
   // the arch or the floor a meeting puts beside it))
@@ -342,7 +342,7 @@ function withMeeting(w: World, op: Op | Refusal | null): Op | Refusal | null {
  * else it could be offered as other readings (held, chosen; the choice kept on the stroke as `Op.choose`).
  */
 function meeting(w: World, op: Op): Op {
-  const sim = new World(w.seed, w.landSeed); sim.ops = [...w.ops, op]; sim.rebuild();
+  const sim = new World(w.seed, w.landSeed, w.bay); sim.ops = [...w.ops, op]; sim.rebuild();
   const m = sim.meetings.find((q) => q.by.includes(w.ops.length) && q.candidates.length > 1);
   if (!m) return op;
   const where = m.where ?? 'where it meets', now = m.candidates.find((c) => c.level === m.laid), note = now ? `${op.note ?? op.reading ?? op.why}; ${where}: ${now.label}` : op.note;
@@ -517,7 +517,7 @@ function read(w: World, start: Pick, path: Array<[number, number]>, end: Pick | 
     // (from a top, over more stone, and nothing made of it from up there that lays anything and reaches: the way's on the
     // ground it comes down to, from the foot of what it was drawn from)
     const good = (o: Op | Refusal | null): o is Op => !!o && !('refused' in o) && adds(w, o) > 0;
-    const there = (o: Op) => { const v = new World(w.seed, w.landSeed); v.ops = [...w.ops, o]; v.rebuild(); return !!v.reached.get(o)?.reached; };
+    const there = (o: Op) => { const v = new World(w.seed, w.landSeed, w.bay); v.ops = [...w.ops, o]; v.rebuild(); return !!v.reached.get(o)?.reached; };
     if (start.face !== 'ground' && !(good(off) && there(off))) {
       const q = cells.findIndex(([i, j], n) => n > 0 && !w.stone(w.ground(i, j), i, j) && w.stair(w.ground(i, j), i, j) < 0 && standing(w, w.ground(i, j), i, j));
       const foot = q > 0 && cells.length - q >= 3 ? way(w, w.ground(...cells[q]), cells.slice(q), to, now, resting) : null;
@@ -562,7 +562,7 @@ function read(w: World, start: Pick, path: Array<[number, number]>, end: Pick | 
     const said = note ?? (!to ? 'a walkway' : to[0] === h0 ? (great ? 'a bridge, on one great arch' : 'a bridge') : `${to[0] > h0 ? 'climbing' : 'going down'} ${levels} level${levels > 1 ? 's' : ''}${restAt.length ? ', a landing where you paused' : ''}`);
     return { connect: { from: [h0, p[0][0], p[0][1]], to, path: p, ...(restAt.length && to && to[0] !== h0 ? { rest: restAt } : {}) }, born: now, why: !to ? 'walkway' : to[0] === h0 ? 'bridge' : 'stairs', note: said, reading: said, ...(great ? { bridge: true } : {}) };
   };
-  const reaches = (o: Op) => { const sim = new World(w.seed, w.landSeed); sim.ops = [...w.ops, o]; sim.rebuild(); return !!sim.reached.get(o)?.reached; };
+  const reaches = (o: Op) => { const sim = new World(w.seed, w.landSeed, w.bay); sim.ops = [...w.ops, o]; sim.rebuild(); return !!sim.reached.get(o)?.reached; };
   /** a flight round what's in the way, straight into the destination; or else on to the same top a cell or two along
    * (the top's what the hand went to, as surely as the column): no more than `extra` cells longer than the stroke (a
    * route round much longer is more the reader's than the hand's: a tower's nearer what was drawn); null if none */
@@ -611,7 +611,7 @@ function read(w: World, start: Pick, path: Array<[number, number]>, end: Pick | 
   if (spans) alts.push({ label: great ? 'a bridge on an arcade' : 'a bridge on one great arch', op: make(path2, !great, great ? 'a bridge, on an arcade' : 'a bridge, on one great arch') });
   // (at one height, and something in the way: round it, the way through it offered. Unless it goes through as drawn,
   // a passage through what's in the way at that height (a tower a cell to three thick): then through, round offered)
-  const piercing = !!to && to[0] === h0 && reaches(op) && (() => { const v = new World(w.seed, w.landSeed); v.ops = [...w.ops, op]; v.rebuild(); return path2.some(([i, j]) => v.archway(h0, i, j) >= 0 && w.stone(h0, i, j) && (w.archway(h0, i, j) < 0 || v.cross(h0, i, j))); })();
+  const piercing = !!to && to[0] === h0 && reaches(op) && (() => { const v = new World(w.seed, w.landSeed, w.bay); v.ops = [...w.ops, op]; v.rebuild(); return path2.some(([i, j]) => v.archway(h0, i, j) >= 0 && w.stone(h0, i, j) && (w.archway(h0, i, j) < 0 || v.cross(h0, i, j))); })();
   if (piercing) {
     const round0 = around(w, h0, path2, to!);
     if (round0) alts.push({ label: 'a bridge round it', op: { ...make(round0, false, 'a bridge, round what\'s in the way'), took: ['routed-round'] } });
@@ -702,7 +702,7 @@ function way(w: World, h0: number, cells: Array<[number, number]>, to: Cell | nu
   const restAt = path.slice(1).map(([i, j], q) => (resting(i, j) ? q : -1)).filter((q) => q >= 0);
   const op: Op = { connect: { from: [h0, path[0][0], path[0][1]], to: dest, path, follow: true, ...(restAt.length ? { rest: restAt } : {}) }, born: now, why: 'way' };
   // (what it comes to, worked out on a copy: said under the finger)
-  const sim = new World(w.seed, w.landSeed); sim.ops = [...w.ops, op]; sim.rebuild();
+  const sim = new World(w.seed, w.landSeed, w.bay); sim.ops = [...w.ops, op]; sim.rebuild();
   const r = sim.reached.get(op), stairs = (r?.cells ?? []).filter((c) => sim.stair(...c) >= 0).length;
   const paved = path.slice(1).filter(([i, j]) => sim.paved(i, j)).length, bridge = (r?.cells ?? []).filter((c) => sim.bridge(...c)).length;
   // (and how its flight is carried, if over anything: the setting's answer said, so a hand knows it can choose another)
@@ -740,10 +740,10 @@ function way(w: World, h0: number, cells: Array<[number, number]>, to: Cell | nu
       const alt = round ? way(w, h0, round, to, now, resting, true) : null;
       const farther = wide ? way(w, h0, wide, to, now, resting, true) : null;
       // (going to a top: the connection's the hand's, the way round the world's, further off if need be)
-      if (to && farther && !('refused' in farther) && !r?.cells.length && !paved) { const v = new World(w.seed, w.landSeed); v.ops = [...w.ops, farther]; v.rebuild(); if (v.reached.get(farther)?.reached) return { ...mark(farther, 'routed-round'), note: `${farther.note}, round what's in the way`, reading: `${farther.reading ?? farther.note}, round what's in the way`, alts: [{ label: 'as drawn', op: { ...op, note, reading: note } }] }; }
-      if (farther && !('refused' in farther)) { const v = new World(w.seed, w.landSeed); v.ops = [...w.ops, farther]; v.rebuild(); if (v.reached.get(farther)?.reached) alts.push({ label: 'round what\'s in the way, further off', op: { ...mark(farther, 'routed-round'), alts: undefined, note: `${farther.note}, round what's in the way`, reading: 'round what\'s in the way, further off' } }); }
+      if (to && farther && !('refused' in farther) && !r?.cells.length && !paved) { const v = new World(w.seed, w.landSeed, w.bay); v.ops = [...w.ops, farther]; v.rebuild(); if (v.reached.get(farther)?.reached) return { ...mark(farther, 'routed-round'), note: `${farther.note}, round what's in the way`, reading: `${farther.reading ?? farther.note}, round what's in the way`, alts: [{ label: 'as drawn', op: { ...op, note, reading: note } }] }; }
+      if (farther && !('refused' in farther)) { const v = new World(w.seed, w.landSeed, w.bay); v.ops = [...w.ops, farther]; v.rebuild(); if (v.reached.get(farther)?.reached) alts.push({ label: 'round what\'s in the way, further off', op: { ...mark(farther, 'routed-round'), alts: undefined, note: `${farther.note}, round what's in the way`, reading: 'round what\'s in the way, further off' } }); }
       if (alt && !('refused' in alt)) {
-        const v = new World(w.seed, w.landSeed); v.ops = [...w.ops, alt]; v.rebuild();
+        const v = new World(w.seed, w.landSeed, w.bay); v.ops = [...w.ops, alt]; v.rebuild();
         const rr = v.reached.get(alt);
         if (rr?.reached) return { ...mark(alt, 'routed-round'), note: `${alt.note}, round what's in the way`, reading: `${alt.reading ?? alt.note}, round what's in the way`, alts: [{ label: 'as drawn', op: { ...op, note, reading: note } }, ...(alt.alts ?? [])] };
       }
@@ -769,7 +769,7 @@ function way(w: World, h0: number, cells: Array<[number, number]>, to: Cell | nu
       const [i, j] = cells[q], g = w.ground(i, j);
       if (!standing(w, g, i, j)) continue;
       const on = way(w, g, cells.slice(q), to, now, resting, direct);
-      if (on && !('refused' in on)) { const sim2 = new World(w.seed, w.landSeed); sim2.ops = [...w.ops, on]; sim2.rebuild(); if (sim2.reached.get(on)?.cells.length || cells.slice(q + 1).some(([x, z]) => sim2.paved(x, z))) return { ...mark(on, 'begun-on'), note: `${on.note}, begun a step on`, reading: `${on.reading ?? on.note}, begun a step on` }; }
+      if (on && !('refused' in on)) { const sim2 = new World(w.seed, w.landSeed, w.bay); sim2.ops = [...w.ops, on]; sim2.rebuild(); if (sim2.reached.get(on)?.cells.length || cells.slice(q + 1).some(([x, z]) => sim2.paved(x, z))) return { ...mark(on, 'begun-on'), note: `${on.note}, begun a step on`, reading: `${on.reading ?? on.note}, begun a step on` }; }
     }
     return { refused: 'no way along that: it climbs too steeply for its length' };
   }
@@ -804,7 +804,7 @@ function circuit(w: World, h0: number, cells: Array<[number, number]>, born: (i:
   }
   const op = way(w, q ? g0 : h0, round, [g0, i0, j0], now, resting);
   // (a walk that can't get most of the way round isn't round at all: the court, then)
-  const sim = op && !('refused' in op) ? (() => { const v = new World(w.seed, w.landSeed); v.ops = [...w.ops, op]; v.rebuild(); return v.reached.get(op); })() : null;
+  const sim = op && !('refused' in op) ? (() => { const v = new World(w.seed, w.landSeed, w.bay); v.ops = [...w.ops, op]; v.rebuild(); return v.reached.get(op); })() : null;
   if (!op || 'refused' in op || !sim || (!sim.reached && sim.stopped < ring.length * 0.6)) return court ? { ...court, took: ['court-instead'], alts: op && !('refused' in op) ? [{ label: 'as far round as a walk will go', op: { ...op, alts: undefined } }] : undefined, note: 'a court, walled round (no walk round it would stand)', reading: 'a court, walled round' } : op;
   const note = 'a walk all the way round';
   return { ...op, ...(skirted ? { took: [...(op.took ?? []), 'skirted'] } : {}), note, reading: note, alts: [...alts, ...(op.alts ?? [])] };

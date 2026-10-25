@@ -35,7 +35,7 @@
  */
 import { perf } from './perf';
 import { hash } from '../kit/rng';
-import { DOMAIN, LAND, groundOf, makeLand, type Land } from './land';
+import { DOMAIN, groundOf, makeLand, type Land } from './land';
 import { meet, type Meeting, type Round } from './encounters';
 
 export const N = 48, LO = -18, HI = LO + N - 1;
@@ -247,9 +247,6 @@ export const unkey = (v: number): Cell => [Math.floor(v / (N * N)), (v % N) + LO
 
 export class World {
   ops: Op[] = [];
-  /** grid squares to a bay: 1, or 2 on the half grid (each cell four in plan), where an opening, a front's bay and a
-   * roof's pitch are read over two squares (the grid spike: static/labyrinth-grid.md) */
-  bay = 1;
   version = 0;
   /** how each connection came out, the last time it was worked out (by operation) */
   reached = new Map<Op, Reached>();
@@ -312,7 +309,12 @@ export class World {
   private now = 0;
   /** the land it's built on (land.ts), or none: the flat slab */
   readonly land: Land | null;
-  constructor(public seed = 1, readonly landSeed = 0) { perf.count('world.new'); this.land = landSeed ? makeLand(landSeed) : null; if (this.land) this.rebuild(0); }
+  /**
+   * `bay`: grid squares to a cell. 1, or 2 on the half grid (each cell four squares in plan, a storey still a square
+   * high): there a wall or a way can be half a cell, and what's read in cells (an opening, a front's bay, a roof's
+   * pitch, a building's least size, the land) is read over two squares (static/labyrinth-grid.md)
+   */
+  constructor(public seed = 1, readonly landSeed = 0, readonly bay = 1) { perf.count('world.new'); this.land = landSeed ? makeLand(landSeed, bay) : null; if (this.land) this.rebuild(0); }
   /** the ground's level in a column: 0 on the slab; on the land, its column's (`earth` fills it below that) */
   ground(i: number, j: number) { return this.land ? groundOf(this.land, i, j) : 0; }
   /** ground a way walks on, paved (by column) */
@@ -1122,23 +1124,24 @@ export class World {
     // (on the land: as much of it as is shown: its first square, and more of it, from the same seed, four cells at a
     // time toward what's built within two of its edge, as far as the grid goes)
     if (this.land) {
-      const b: { i0: number; i1: number; j0: number; j1: number } = { i0: LAND.i0, i1: LAND.i1, j0: LAND.j0, j1: LAND.j1 }, cells: Array<[number, number]> = [];
+      const b: { i0: number; i1: number; j0: number; j1: number } = { ...this.land.box }, cells: Array<[number, number]> = [], G = 4 * this.bay, E = this.bay;
       for (const m of [this.mass, this.stairs, this.piers, this.paving, this.trees]) for (const v of m.keys()) { const [, i, j] = unkey(v); cells.push([i, j]); }
       for (let grew = true; grew;) {
         grew = false;
         for (const [i, j] of cells) {
-          if (i <= b.i0 + 1 && b.i0 > DOMAIN.i0) { b.i0 = Math.max(DOMAIN.i0, b.i0 - 4); grew = true; }
-          if (i >= b.i1 - 1 && b.i1 < DOMAIN.i1) { b.i1 = Math.min(DOMAIN.i1, b.i1 + 4); grew = true; }
-          if (j <= b.j0 + 1 && b.j0 > DOMAIN.j0) { b.j0 = Math.max(DOMAIN.j0, b.j0 - 4); grew = true; }
-          if (j >= b.j1 - 1 && b.j1 < DOMAIN.j1) { b.j1 = Math.min(DOMAIN.j1, b.j1 + 4); grew = true; }
+          if (i <= b.i0 + E && b.i0 > DOMAIN.i0) { b.i0 = Math.max(DOMAIN.i0, b.i0 - G); grew = true; }
+          if (i >= b.i1 - E && b.i1 < DOMAIN.i1) { b.i1 = Math.min(DOMAIN.i1, b.i1 + G); grew = true; }
+          if (j <= b.j0 + E && b.j0 > DOMAIN.j0) { b.j0 = Math.max(DOMAIN.j0, b.j0 - G); grew = true; }
+          if (j >= b.j1 - E && b.j1 < DOMAIN.j1) { b.j1 = Math.min(DOMAIN.j1, b.j1 + G); grew = true; }
         }
       }
       return b;
     }
-    let i0 = START[0], i1 = START[1], j0 = START[0], j1 = START[1];
+    const B = this.bay, M = MARGIN_CELLS * B;
+    let i0 = START[0] * B, i1 = (START[1] + 1) * B - 1, j0 = START[0] * B, j1 = (START[1] + 1) * B - 1;
     for (const m of [this.mass, this.stairs, this.piers, this.trees, this.pools, this.basins]) for (const v of m.keys()) {
       const [, i, j] = unkey(v);
-      i0 = Math.min(i0, i - MARGIN_CELLS); i1 = Math.max(i1, i + MARGIN_CELLS); j0 = Math.min(j0, j - MARGIN_CELLS); j1 = Math.max(j1, j + MARGIN_CELLS);
+      i0 = Math.min(i0, i - M); i1 = Math.max(i1, i + M); j0 = Math.min(j0, j - M); j1 = Math.max(j1, j + M);
     }
     return { i0: Math.max(LO, i0), i1: Math.min(HI, i1), j0: Math.max(LO, j0), j1: Math.min(HI, j1) };
   }
@@ -1159,7 +1162,8 @@ export class World {
       while (e.length > 11 && e[e.length - 1] === 0) e.pop();
       return e;
     });
-    return JSON.stringify(this.land ? { land: this.landSeed, ops } : ops);
+    // (on the half grid, saying so)
+    return JSON.stringify(this.land || this.bay !== 1 ? { ...(this.land ? { land: this.landSeed } : {}), ...(this.bay !== 1 ? { bay: this.bay } : {}), ops } : ops);
   }
 }
 
@@ -1168,10 +1172,10 @@ export function replay(text: string, seed = 1): World {
   let raw: unknown = [];
   try { raw = JSON.parse(text || '[]'); } catch { raw = []; }
   // (on the land: its seed, and what was done on it)
-  let land = 0;
-  if (raw && typeof raw === 'object' && !Array.isArray(raw)) { land = Number((raw as { land?: number }).land) || 0; raw = (raw as { ops?: unknown }).ops; }
+  let land = 0, bay = 1;
+  if (raw && typeof raw === 'object' && !Array.isArray(raw)) { land = Number((raw as { land?: number }).land) || 0; bay = Number((raw as { bay?: number }).bay) === 2 ? 2 : 1; raw = (raw as { ops?: unknown }).ops; }
   if (!Array.isArray(raw)) raw = [];
-  const w = new World(seed, land);
+  const w = new World(seed, land, bay);
   for (const o of raw as unknown[][]) {
     if (!Array.isArray(o)) continue;
     const at = (q: number) => (Array.isArray(o[q]) ? (o[q] as number[][]) : null);
