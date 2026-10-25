@@ -1,12 +1,12 @@
 {
   "cell": "c15r/lab",
   "cellId": "lab-8928acf3",
-  "treeVersion": "tree:b3378c695a0ad54b2fe130e59b8d3e4c03b8c75f7107c800dac2163cfacc9106",
-  "syncedAt": "2026-10-25T00:06:57.821Z",
+  "treeVersion": "tree:59447e287b342fb8d60bf4219553b311dd704ed1aa0ae794e1c3db2f9aec32cd",
+  "syncedAt": "2026-10-25T00:07:45.519Z",
   "files": {
     "README.md": "sha256:665df4179140457c44ea9e0f6f5820bd6e9b557fb196a37cf1245a07cb11f7c6",
     "client/blocks/demos.ts": "sha256:07b9c6ae072918efd6184cb194716094930f3f916f4575169e2b641c5eadca19",
-    "client/blocks/main.ts": "sha256:ed0ab92430760d7ee00690269f860b68a16c024c8bd780b2594a9b3a178a018c",
+    "client/blocks/main.ts": "sha256:3dc00b63d8f415fd4673d6d01505fe295b2487bb536a6cbaee5a25c1482e9c1a",
     "client/blocks/mesher.ts": "sha256:6e8e2be04f442297a9ace9490f5558dfa8badcc5665cd32662af10d6b54770ab",
     "client/blocks/render.ts": "sha256:ffb924c635b0c871ca1c5b76a5a4e8edece8b108fe175995bc160ef3df288552",
     "client/blocks/rules.ts": "sha256:84e6222adc28e98fd6c9f876eca53c02e02905fcd5d23fcffc86eac1318ef642",
