@@ -1117,6 +1117,44 @@ if (process.env.DEBUG) (await import('node:fs')).writeFileSync(process.env.DEBUG
   }
   RG.setRegions('mediterranean');
 }
+// ─── inside: floor plans, uses, the ladder (plans.ts, uses.ts, ladder.ts) ───
+{
+  const PL = await load('../client/labyrinth/plans.ts'), US = await load('../client/labyrinth/uses.ts'), LD = await load('../client/labyrinth/ladder.ts');
+  for (const t of ['mediterranean', 'persian']) {
+    RG.setRegions(t);
+    for (const s of [8, 13, 16, 17, 19]) {
+      const w = story(s), ps = PL.plans(w), B = w.bay;
+      ok(`plans (${t}, story ${s}): one to each building`, ps.length === BU.buildings(w).list.length);
+      for (const p of ps) {
+        const b = p.b, floor = b.cols.reduce((n, [i, j], q) => { let c = 0; for (let k = b.base[q]; k < b.h; k++) if (w.stone(k, i, j) && w.archway(k, i, j) < 0) c++; return n + c; }, 0);
+        const inRooms = p.rooms.reduce((n, r) => n + r.squares.length, 0), seen = new Set();
+        for (const r of p.rooms) for (const [i, j] of r.squares) seen.add(`${r.k}.${i}.${j}`);
+        ok(`plans (${t}, story ${s}, #${b.id}): no square in two rooms`, seen.size === inRooms);
+        ok(`plans (${t}, story ${s}, #${b.id}): its rooms most of its floor`, inRooms >= floor * 0.6 && inRooms <= floor, [inRooms, floor]);
+        ok(`plans (${t}, story ${s}, #${b.id}): no room narrower than a cell, nor longer than two`, p.rooms.every((r) => r.short >= PL.CELL_M - 1e-6 && r.long <= PL.ROOM * PL.CELL_M + PL.CELL_M / B + 1e-6), p.rooms.map((r) => [r.long, r.short]));
+        ok(`plans (${t}, story ${s}, #${b.id}): rooms beside each other both ways`, p.rooms.every((r) => r.next.every((n) => p.rooms[n].next.includes(r.id))));
+        ok(`plans (${t}, story ${s}, #${b.id}): light a share`, p.rooms.every((r) => r.lit >= 0 && r.lit <= 1));
+        ok(`plans (${t}, story ${s}, #${b.id}): a stair where there's a storey over another`, p.storeys.length < 2 || p.rooms.some((r) => r.stair));
+        ok(`plans (${t}, story ${s}, #${b.id}): its doors are its ways out`, p.rooms.reduce((n, r) => n + r.doors, 0) === p.exits.length);
+      }
+    }
+  }
+  RG.setRegions('mediterranean');
+  const u16 = US.settlement(story(16)), u17 = US.settlement(story(17));
+  ok('uses: the study\'s four houses are dwellings', u16.count.dwelling === 4, u16.count);
+  ok('uses: the courtyard house is lived round its court, its gate a gatehouse', u17.count['court house'] === 2 && u17.count.gatehouse === 1, u17.count);
+  // (the ladder: each technique on a rung no lower than what it needs; every part's techniques on some rung)
+  const rungOf = Object.fromEntries(LD.RUNGS.flatMap((r) => r.techniques.map((q) => [q, r.n])));
+  ok('ladder: a technique never before what it needs', Object.entries(LD.AFTER).every(([q, a]) => a.every((x) => rungOf[x] <= rungOf[q])), LD.AFTER);
+  ok('ladder: every part can be reached', Object.values(LD.PARTS).every((ts) => ts.every((q) => rungOf[q] !== undefined)));
+  const r16 = LD.reckon(story(16));
+  ok('ladder: the study is a hamlet, short of a workshop', r16.rung.n === 1 && r16.next.short.some((x) => x.startsWith('workshop')), [r16.rung.n, r16.next?.short]);
+  ok('ladder: the middle sea\'s tile roofs are ahead of a hamlet', r16.ahead.includes('tile roof'));
+  RG.setRegions('persian');
+  const r17 = LD.reckon(story(17));
+  ok('ladder: the plateau\'s house built with glass and pointed arches', r17.built.has('glazed window') && r17.built.has('pointed arch'), [...r17.built.keys()]);
+  RG.setRegions('mediterranean');
+}
 console.log(`${checks - fails} of ${checks} checks hold · gestures read as ${JSON.stringify(made)} · declined: ${JSON.stringify(declines)} · dressed by the rules: ${lively.dressed} of ${lively.worlds} worlds, gated or arcaded walls: ${lively.gates}`);
 console.log(fails ? `\n${fails} failed` : '\nall passed');
 process.exitCode = fails ? 1 : 0;

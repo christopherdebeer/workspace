@@ -174,6 +174,48 @@ A finer grid (each cell four in plan, so thin walls and narrow paths are the def
 18 and 19, `?plan=0.5` to see them in proportion. What it costs, what it lets a hand place, and what the rules would
 need: [labyrinth-grid.md](labyrinth-grid.md).
 
+## Inside: plans, uses, and the ladder
+
+Buildings now know what's inside them, though nothing of it is drawn yet. Everything is worked out from what's built, never stored.
+
+**Floor plans** (plans.ts):
+- Each storey is laid out in rooms: the floor in the fewest largest rectangles, each cut along its length into rooms no longer than two cells. A cell is 3 m.
+- A room knows:
+  - its size and its light: the share of its floor within two cells of a window, a door or an open bay;
+  - its windows and doors;
+  - what it opens on to: a gallery, a shopfront, a veranda, a portal, a balcony, a loggia;
+  - the rooms beside it.
+- A room wider than a beam spans both ways is a **hall**.
+- A building knows:
+  - its ways out, by what they give on to: the ground, a way, a court, a way at height, a passage, another top;
+  - its stair, either drawn or implied by a storey over another;
+  - its outdoor places: a walked top, terraces, balconies, loggias.
+- On the half grid, a strip narrower than a cell (a pilaster, a wall's thickness beside a recess) is wall, not a room.
+
+**Uses** (uses.ts) are read from the plan:
+- **dwelling**, or **court house** (round a court): a lit room and a way in, one household per 150 m² of lit floor;
+- **shop**: behind a shopfront;
+- **workshop**: a dim ground room of 18 m² or more, come into from outside;
+- **store**: dark rooms;
+- **hall**;
+- **tower** or **lookout**;
+- **gatehouse**;
+- **inhabited bridge**.
+
+**The ladder** (ladder.ts) isn't shown and doesn't yet limit anything. It sets out:
+- **Techniques on five rungs:**
+  - shelter: drystone, timber;
+  - hamlet: mortar, arch, stair;
+  - village: ashlar, kiln, joinery, hydraulics;
+  - town: timber frame, vault, pointed arch, slate;
+  - city: dome, glass, glazed tile, four-centred arch.
+- **What each rung needs of the settlement:** households, workshops, a store, a shop, a court house, a hall.
+- **What each buildable part takes,** from a stone wall to a tiled portal.
+
+`reckon(w)` says where a settlement stands, what it can build, what the next rung would take and add, and what's built ahead of it. The study, for example, is a hamlet of four houses, short of a workshop, and its tile roofs and shutters are ahead of it.
+
+The rules will come to choose by the ladder: shutters before glass, a round arch before a pointed one, a flat timber roof before tiles. `node devtools/labyrinth-plans.mjs [--stories=… --tradition=… --rooms]` reports all of it.
+
 ## Water
 
 **The pool brush lets water into whatever it touches**: the ground (a pool), or a top, up off the ground (a basin, let into the stone, a rim round it). Traced, it runs a channel along the stroke, along the ground or along a top. **A stroke drawn round, back to where it began, fills what it closes round**: a pond on the ground, a basin across a terrace. (With the block brush the same: a platform, filled.)
