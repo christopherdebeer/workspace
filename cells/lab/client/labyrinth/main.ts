@@ -11,11 +11,12 @@
  *
  * `?story=1..4` (the storyboard: first touch, a wall traced, an elevated connection, a resolved labyrinth) ·
  * `?ops=` (operations, as the model writes them) · `?brush=` · `?sheet` · `?select=k.i.j[&whole]` · `?print` (the layers in hand) · `?paper` · `?marks` (the drawing's marks by why they're there) · `?turn=` ·
- * `?zoom=` · `?preview` · `?still` · `?held` (the view never reframes on its own) · `?look=picture` · `?built= ?terrain= ?water= ?colour= ?colourreach= ?shade= ?cast= ?hollow= ?landlight= ?lightreach= ?lines= ?edges= ?inkreach= ?inkfade= ?under= ?toward=` (the dials: picture and drawing, judged apart) · `?instant` (no rising, no gliding, no dust, no cats: for pictures taken by a slow
+ * `?zoom=` · `?plan=0.5` (squeezed in plan: a half-grid world seen in its own proportions, for looking only; static/labyrinth-grid.md) · `?preview` · `?still` · `?held` (the view never reframes on its own) · `?look=picture` · `?built= ?terrain= ?water= ?colour= ?colourreach= ?shade= ?cast= ?hollow= ?landlight= ?lightreach= ?lines= ?edges= ?inkreach= ?inkfade= ?under= ?toward=` (the dials: picture and drawing, judged apart) · `?instant` (no rising, no gliding, no dust, no cats: for pictures taken by a slow
  * renderer, where every transition is frames it hasn't time for)
  */
 import { CENTER, World, inGrid, key, replay, unkey, type Alt, type Cell, type Op } from './model';
-import { buildMesh, drawnBox, inLand, inStone, setBleed } from './mesh';
+import { STRIDE, buildMesh, drawnBox, inLand, inStone, setBleed } from './mesh';
+import { STROKE_STRIDE } from './strokes';
 import { LAND } from './land';
 import { Renderer, camera, invert, type View } from './render';
 import { asDrawn, carve, lift, stroke, surface, tap, touch, trace, type Intent, type Pick } from './gesture';
@@ -103,7 +104,17 @@ const selKeys = () => (sel ? new Set(sel.s.cells.map((c) => key(...c))) : new Se
 const meshTimes = { last: 0, upload: 0, max: 0, n: 0 };
 /** whether the ground's been taken as it was (while drawing), and is still to be worked out again */
 let groundStale = false;
-function remesh(keepGround = false) { const ks = selKeys(), t0 = performance.now(), m = buildMesh(world, plain, ks, keepGround), t1 = performance.now(); groundStale = keepGround; R.upload(m); meshVersion = world.version; meshSel = [...ks].join(','); const t2 = performance.now(); meshTimes.last = t1 - t0; meshTimes.upload = t2 - t1; perf.add('mesh.build', t1 - t0); perf.add('mesh.upload', t2 - t1); perf.tag('remesh'); meshTimes.max = Math.max(meshTimes.max, t1 - t0); meshTimes.n++; }
+/** `?plan=0.5`: what's drawn squeezed in plan, its storeys as tall as they were: a world built on a grid of half cells
+ * seen in its own proportions (devtools/labyrinth-grid-spike.mjs). For looking only: a touch strikes where it would
+ * have, unsqueezed */
+const planScale = Number(qs.get('plan') ?? 1);
+function squeeze(m: ReturnType<typeof buildMesh>) {
+  if (planScale === 1) return m;
+  const mesh = (a: Float32Array, n: number) => { const o = a.slice(); for (let q = 0; q < n; q++) { const b = q * STRIDE; o[b] *= planScale; o[b + 2] *= planScale; const nx = o[b + 3] / planScale, nz = o[b + 5] / planScale, l = Math.hypot(nx, o[b + 4], nz) || 1; o[b + 3] = nx / l; o[b + 4] /= l; o[b + 5] = nz / l; } return o; };
+  const st = m.strokes.slice(); for (let q = 0; q < st.length; q += STROKE_STRIDE) { st[q] *= planScale; st[q + 2] *= planScale; st[q + 3] *= planScale; st[q + 5] *= planScale; }
+  return { ...m, data: mesh(m.data, m.count), ground: m.ground ? mesh(m.ground, m.ground.length / STRIDE) : m.ground, strokes: st };
+}
+function remesh(keepGround = false) { const ks = selKeys(), t0 = performance.now(), m = squeeze(buildMesh(world, plain, ks, keepGround)), t1 = performance.now(); groundStale = keepGround; R.upload(m); meshVersion = world.version; meshSel = [...ks].join(','); const t2 = performance.now(); meshTimes.last = t1 - t0; meshTimes.upload = t2 - t1; perf.add('mesh.build', t1 - t0); perf.add('mesh.upload', t2 - t1); perf.tag('remesh'); meshTimes.max = Math.max(meshTimes.max, t1 - t0); meshTimes.n++; }
 
 // ─── how it's seen ───
 const corner = (k: number) => Math.PI / 4 + (k * Math.PI) / 2;
@@ -167,10 +178,11 @@ function frameBox(): [number, number, number, number] {
 /** what the view frames: the slab, however big it's grown, or on land what's drawn of it (its middle, and how far to stand back to see it) */
 function framing() {
   const [bi0, bj0, bi1, bj1] = frameBox(), e = { i0: bi0, i1: bi1 - 1, j0: bj0, j1: bj1 - 1 };
-  const half = (Math.max(e.i1 - e.i0, e.j1 - e.j0) / 2 + 1.5) * Math.SQRT2, top = world.top();
+  // (squeezed in plan (`?plan=`), framed as it's drawn)
+  const half = ((Math.max(e.i1 - e.i0, e.j1 - e.j0) / 2) * planScale + 1.5) * Math.SQRT2, top = world.top();
   // (as wide as the slab, and as tall as what's on it: there's no cap on how high it goes)
   const fit = Math.max(Math.max(half / aspect, half * 0.75) * 1.04 + top * 0.25, (half * Math.sin(view.el) + top * Math.cos(view.el)) * 0.55 + 1);
-  return { cx: (e.i0 + e.i1 + 1) / 2 - CENTER, cz: (e.j0 + e.j1 + 1) / 2 - CENTER, fit, half };
+  return { cx: ((e.i0 + e.i1 + 1) / 2 - CENTER) * planScale, cz: ((e.j0 + e.j1 + 1) / 2 - CENTER) * planScale, fit, half };
 }
 addEventListener('resize', resize); resize();
 

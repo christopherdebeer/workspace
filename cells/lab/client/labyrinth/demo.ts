@@ -23,7 +23,7 @@
  *    platform and the old wall, ivy on the terrace, a parapet on the walkway, pots on the terrace; and a garden of thin
  *    walls run with the wall piece.
  */
-import { DRESS, PLANT, RULE, World, type Cell, type Op } from './model';
+import { DRESS, PLANT, RULE, World, unkey, type Cell, type Op } from './model';
 import { carve, tap, trace, type Intent, type Pick } from './gesture';
 import { place, run, type Hand } from './palette';
 
@@ -43,6 +43,8 @@ export function story(stage: number): World {
   if (stage === 15) return onTheSlope();
   if (stage === 16) return study();
   if (stage === 17) return courtHouse();
+  if (stage === 18) return halved(courtHouse());
+  if (stage === 19) return halfHouse();
   const w = new World(7);
   const t = -100;
   const tapAt = (p: Pick) => { const op = tap(w, p, t); if (op && !('refused' in op)) w.apply(op, t); };
@@ -377,5 +379,45 @@ function courtHouse(): World {
   wing(1, 2, 3, 6, 2);
   wing(8, 9, 3, 6, 2);
   w.apply({ arches: [[0, 5, 1, 1, t], [0, 5, 2, 1, t]] }, t);
+  return w;
+}
+
+/**
+ * storyboards 18 and 19: the grid spike (devtools/labyrinth-grid-spike.mjs), the courtyard house on a grid of half
+ * cells (each cell four in plan, its storeys as tall), seen in its own proportions with `?plan=0.5`. 18 is 17 put on the
+ * finer grid as it stands, each cell made four (what the same house costs to build there); 19 is the house as the finer
+ * grid would have it built: its wings a cell and a half deep, a gallery of piers half a cell thick along the north
+ * wing's court side, its top storey set back half a cell, the gate recessed half a cell into the south front between
+ * pilasters, the court split by a thin wall with a gate in it, and a forecourt walled thin, a path half a cell wide.
+ */
+function halved(w0: World): World {
+  const w = new World(w0.seed), t = -100, add: Array<[number, number, number, number]> = [], arches: Array<[number, number, number, number, number]> = [];
+  const arched = [...w0.archways.keys()].map(unkey), solid = [...w0.mass.keys()].filter((c) => !w0.archways.has(c)).map(unkey);
+  for (const [k, i, j] of solid) for (const [a, b] of [[0, 0], [1, 0], [0, 1], [1, 1]]) add.push([k, 2 * i + a, 2 * j + b, t]);
+  for (const [k, i, j] of arched) for (const [a, b] of [[0, 0], [1, 0], [0, 1], [1, 1]]) arches.push([k, 2 * i + a, 2 * j + b, 1, t]);
+  w.apply({ add }, t);
+  w.apply({ arches }, t);
+  return w;
+}
+function halfHouse(): World {
+  const w = new World(43), t = -100;
+  const cells: Array<[number, number, number, number]> = [];
+  const box = (i0: number, i1: number, j0: number, j1: number, k0: number, k1: number) => { for (let i = i0; i <= i1; i++) for (let j = j0; j <= j1; j++) for (let k = k0; k <= k1; k++) cells.push([k, i, j, t]); };
+  // (the north wing: three storeys, the top one set back half a cell from the court; along its court side at the
+  // ground, piers half a cell thick with a cell between them, a gallery behind)
+  box(2, 19, 15, 17, 0, 1); box(2, 19, 16, 17, 2, 2); box(2, 19, 14, 14, 1, 1);
+  for (let i = 5; i <= 17; i += 3) box(i, i, 14, 14, 0, 0);
+  // (the east and west wings, a cell and a half deep; the south wing two, the gate through it)
+  box(2, 4, 6, 13, 0, 1); box(17, 19, 6, 13, 0, 1);
+  box(2, 19, 3, 5, 0, 1); box(2, 8, 2, 2, 0, 1); box(13, 19, 2, 2, 0, 1);
+  // (pilasters on the south front, half a cell out; either side of the gate's recess, and at the corners)
+  for (const i of [2, 8, 13, 19]) box(i, i, 1, 1, 0, 1);
+  // (the court split by a thin wall, a gate in it; a forecourt walled thin, a path half a cell wide inside it)
+  box(5, 9, 10, 10, 0, 0); box(12, 16, 10, 10, 0, 0);
+  box(4, 9, -1, -1, 0, 0); box(12, 17, -1, -1, 0, 0); box(4, 4, 0, 0, 0, 0); box(17, 17, 0, 0, 0, 0);
+  const arch: Array<[number, number, number, number, number]> = [];
+  for (const i of [10, 11]) for (const j of [3, 4, 5]) arch.push([0, i, j, 1, t]);
+  w.apply({ add: cells.filter(([k, i, j]) => !(k === 0 && (i === 10 || i === 11) && j >= 3 && j <= 5)) }, t);
+  w.apply({ arches: arch }, t);
   return w;
 }

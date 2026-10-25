@@ -170,6 +170,10 @@ gate through the south. `node devtools/labyrinth-traditions.mjs --only=fronts` d
 on the plateau went from about 105 ms to 118 ms in node; the courtyard house on the plateau is lighter than in the
 middle sea (53k vertices against 92k: flat tops against tiled roofs).
 
+A finer grid (each cell four in plan, so thin walls and narrow paths are the default) was tried on this house: stories
+18 and 19, `?plan=0.5` to see them in proportion. What it costs, what it lets a hand place, and what the rules would
+need: [labyrinth-grid.md](labyrinth-grid.md).
+
 ## Water
 
 **The pool brush lets water into whatever it touches**: the ground (a pool), or a top, up off the ground (a basin, let into the stone, a rim round it). Traced, it runs a channel along the stroke, along the ground or along a top. **A stroke drawn round, back to where it began, fills what it closes round**: a pond on the ground, a basin across a terrace. (With the block brush the same: a platform, filled.)
