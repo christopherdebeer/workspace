@@ -228,6 +228,14 @@ function frameCamera(dt: number) {
   const aspect = canvas.clientWidth / Math.max(canvas.clientHeight, 1), h = cam.dist, w = h * aspect;
   vp = mul(ortho(-w, w, -h, h, 1, 200), lookAt(eye, cam.focus, [0, 1, 0]));
 }
+/** near enough that what's built fills the narrower way across the screen, as it's first seen */
+function fitView() {
+  let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity, top = 0;
+  for (const k of world.cells) { const [x, y, z] = unkey(k); x0 = Math.min(x0, x); x1 = Math.max(x1, x); z0 = Math.min(z0, z); z1 = Math.max(z1, z); top = Math.max(top, y); }
+  if (x0 > x1) return;
+  const across = (x1 - x0 + 1 + z1 - z0 + 1) / Math.SQRT2 / 2, aspect = canvas.clientWidth / Math.max(canvas.clientHeight, 1);
+  cam.dist = Math.min(40, Math.max(across / aspect, across * 0.75 + top * 0.4, 6));
+}
 const SUN = (() => { const s = [-0.62, 0.62, 0.32], l = Math.hypot(s[0], s[1], s[2]); return s.map((v) => v / l); })();
 function lightMatrix(): Float32Array {
   // (the sun's view, fitted round the build)
@@ -497,6 +505,7 @@ const demo = params.get('demo');
 let script: Cell[] = [], scriptAt = 0, scriptNext = 0;
 if (preview) { script = DEMOS[demo ?? 'courtyard']?.() ?? DEMOS.courtyard(); cam.dist = 9; }
 else if (demo && DEMOS[demo]) { world = new World(); for (const c of DEMOS[demo]()) world.cells.add(key(...c)); }
+if (!preview) fitView();
 if (world.cells.size) rebuildAll();
 const hint = $('hint');
 if (hint && !world.cells.size && !preview) { hint.classList.add('on'); setTimeout(() => hint.classList.remove('on'), 6000); }
