@@ -12,6 +12,8 @@ import { hash } from '../kit/rng';
 import { key } from './model';
 import type { Building } from './buildings';
 import { grammarOfId } from './regions';
+import { grammarShown } from './realise';
+import { knows } from './ladder';
 import { facades } from './facades';
 import { KIND, MAT, TILE_U, X, Z, type Emit, type V3 } from './emit';
 
@@ -25,17 +27,20 @@ export function roof(E: Emit, b: Building, wing?: { i0: number; i1: number; j0: 
   const { w, selected, face, lathe, box } = E;
   // (a plan in wings: a roof over each, the same height at the eaves, meeting the others in valleys)
   if (b.wings && !wing) { for (const wg of b.wings) roof(E, b, wg); return; }
-  const g = grammarOfId(w, b.id), steep = g.roof === 'steep', eave = g.roof === 'eave';
+  // (as the settlement can build it (realise.ts): thatch before tile, steep and thick at the eaves, deep over the walls;
+  // the east's eaves not turned up in it, the north's no steeper than it is)
+  const g = grammarShown(w, b.id), thatch = g.cover === 'thatch', steep = g.roof === 'steep' && !thatch, eave = g.roof === 'eave' && !thatch;
   // (on the half grid (`w.bay` 2), its overhang and its pitch as a cell's: a square there half as wide)
-  const O = (eave ? 0.3 : steep ? 0.06 : 0.12) * w.bay, y = b.h, ye = y + 0.02;
+  const O = (thatch ? 0.18 : eave ? 0.3 : steep ? 0.06 : 0.12) * w.bay, y = b.h, ye = y + 0.02;
   // (over the plan, or the part of it left beside a terrace, or a wing of it)
   const P = wing ?? b.roofPlan ?? b, xa = X(P.i0), xb = X(P.i1 + 1), za = Z(P.j0), zb = Z(P.j1 + 1), along = xb - xa >= zb - za ? 0 : 1;
   // (the tiles' kind in the tone: terracotta, slate past 1.5, grey tile past 2.5: render.ts)
-  E.cur = { born: Math.max(...b.cols.map(([i, j]) => w.born(b.h - 1, i, j))) + 0.2, pivot: y, how: 1, tone: steep ? 2 : eave ? 3 : 0.5, dress: 0, sel: b.cols.some(([i, j]) => selected.has(key(b.h - 1, i, j))) };
+  // (thatch past 3.5)
+  E.cur = { born: Math.max(...b.cols.map(([i, j]) => w.born(b.h - 1, i, j))) + 0.2, pivot: y, how: 1, tone: thatch ? 4 : g.cover === 'tile' ? 0.5 : steep ? 2 : eave ? 3 : 0.5, dress: 0, sel: b.cols.some(([i, j]) => selected.has(key(b.h - 1, i, j))) };
   const born = E.cur.born;
   // (each slope a slab of tiles with a thickness: its top, its underside a little below, and its edges (the eaves, the
   // verges over a gable, the hips) closed, so where it overhangs a wall it reads as a roof, not a cut)
-  const RT = 0.07;
+  const RT = thatch ? 0.16 : 0.07;
   const slope = (p: V3[]) => {
     const u = [p[1][0] - p[0][0], p[1][1] - p[0][1], p[1][2] - p[0][2]], v = [p[2][0] - p[0][0], p[2][1] - p[0][1], p[2][2] - p[0][2]];
     let n = [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]];
@@ -50,7 +55,7 @@ export function roof(E: Emit, b: Building, wing?: { i0: number; i1: number; j0: 
     const S: V3 = (() => { const c = [n[1] * T[2] - n[2] * T[1], n[2] * T[0] - n[0] * T[2], n[0] * T[1] - n[1] * T[0]]; const l = Math.hypot(c[0], c[1], c[2]) || 1; return (c[1] < 0 ? [-c[0] / l, -c[1] / l, -c[2] / l] : [c[0] / l, c[1] / l, c[2] / l]) as V3; })();
     for (let e = 0; e < p.length; e++) {
       const a = p[e], b2 = p[(e + 1) % p.length];
-      if (steep || Math.abs(a[1] - ye) > 0.01 || Math.abs(b2[1] - ye) > 0.01) continue;
+      if (steep || thatch || g.cover === 'slate' || Math.abs(a[1] - ye) > 0.01 || Math.abs(b2[1] - ye) > 0.01) continue;
       const ua = (a[0] * T[0] + a[2] * T[2]) * TILE_U, ub = (b2[0] * T[0] + b2[2] * T[2]) * TILE_U, lo = Math.min(ua, ub), hi = Math.max(ua, ub);
       for (let u = Math.ceil((lo - 0.5) / 2) * 2 + 0.5; u < hi - 0.4; u += 2) {
         if (u < lo + 0.4) continue;
@@ -65,7 +70,9 @@ export function roof(E: Emit, b: Building, wing?: { i0: number; i1: number; j0: 
   // (over a gable's ends, only a little past the wall: the verge)
   const OG = b.roof === 'gable' ? 0.05 : O;
   const X0 = xa - (along === 0 ? OG : O), X1 = xb + (along === 0 ? OG : O), Z0 = za - (along === 1 ? OG : O), Z1 = zb + (along === 1 ? OG : O), cx = (xa + xb) / 2, cz = (za + zb) / 2;
-  if (b.roof === 'dome') {
+  // (a dome only where the vault and the dome are known: else hipped)
+  const kind = b.roof === 'dome' && !knows(w, 'dome') ? 'hipped' : b.roof;
+  if (kind === 'dome') {
     const r = Math.min(xb - xa, zb - za) * 0.42;
     lathe(cx, cz, [[r + 0.04, y], [r + 0.04, y + 0.06], [r, y + 0.06], [r, y + 0.2]], MAT.stone, 16);
     E.cur.dress = 0;
@@ -75,7 +82,7 @@ export function roof(E: Emit, b: Building, wing?: { i0: number; i1: number; j0: 
   }
   if (b.roof === 'shed') {
     // (high against what it leans on, falling to the eave the other side)
-    const f = b.fall, H = steep ? 0.8 : eave ? 0.32 : 0.45, hy = (x: number, z: number) => { const t = f === 0 ? (x - X0) / (X1 - X0) : f === 2 ? (X1 - x) / (X1 - X0) : f === 1 ? (z - Z0) / (Z1 - Z0) : (Z1 - z) / (Z1 - Z0); return ye + H * (1 - t); };
+    const f = b.fall, H = steep ? 0.8 : eave ? 0.32 : thatch ? 0.6 : 0.45, hy = (x: number, z: number) => { const t = f === 0 ? (x - X0) / (X1 - X0) : f === 2 ? (X1 - x) / (X1 - X0) : f === 1 ? (z - Z0) / (Z1 - Z0) : (Z1 - z) / (Z1 - Z0); return ye + H * (1 - t); };
     const c: V3[] = [[X0, 0, Z0], [X1, 0, Z0], [X1, 0, Z1], [X0, 0, Z1]].map(([x, , z]) => [x, hy(x, z), z] as V3);
     slope(c);
     // (its two sides walled up under the slope, in the planes of the walls across the fall)
@@ -87,9 +94,10 @@ export function roof(E: Emit, b: Building, wing?: { i0: number; i1: number; j0: 
   if (eave && !wing) skirts(E, b, xa, xb, za, zb);
   // (hipped, or gabled: a ridge along the long way, at a pitch a little under half the short span; in the north steep, a
   // spire on a tower; in the east low)
-  const S = (along === 0 ? Z1 - Z0 : X1 - X0) / w.bay, H = S * (steep ? (b.roof === 'hipped' ? 1.3 : 0.95) : eave ? 0.36 : 0.42);
-  const r0: V3 = along === 0 ? [b.roof === 'hipped' ? X0 + S / 2 : X0, ye + H, cz] : [cx, ye + H, b.roof === 'hipped' ? Z0 + S / 2 : Z0];
-  const r1: V3 = along === 0 ? [b.roof === 'hipped' ? X1 - S / 2 : X1, ye + H, cz] : [cx, ye + H, b.roof === 'hipped' ? Z1 - S / 2 : Z1];
+  // (thatch steeper: near forty-five degrees, so the rain runs off it)
+  const S = (along === 0 ? Z1 - Z0 : X1 - X0) / w.bay, H = S * (steep ? (kind === 'hipped' ? 1.3 : 0.95) : eave ? 0.36 : thatch ? 0.58 : 0.42), SP = S * w.bay;
+  const r0: V3 = along === 0 ? [kind === 'hipped' ? X0 + SP / 2 : X0, ye + H, cz] : [cx, ye + H, kind === 'hipped' ? Z0 + SP / 2 : Z0];
+  const r1: V3 = along === 0 ? [kind === 'hipped' ? X1 - SP / 2 : X1, ye + H, cz] : [cx, ye + H, kind === 'hipped' ? Z1 - SP / 2 : Z1];
   // (in the east the corners turned up)
   const UP = eave ? 0.17 : 0;
   const A: V3 = [X0, ye + UP, Z0], B: V3 = [X1, ye + UP, Z0], C: V3 = [X1, ye + UP, Z1], D: V3 = [X0, ye + UP, Z1];
@@ -106,11 +114,11 @@ export function roof(E: Emit, b: Building, wing?: { i0: number; i1: number; j0: 
   };
   const sl = (p: V3[]) => (eave ? curved(p[0], p[1], p[p.length === 3 ? 2 : 3], p[2]) : slope(p));
   if (along === 0) { sl([A, B, r1, r0]); sl([D, C, r1, r0]); } else { sl([A, D, r1, r0]); sl([B, C, r1, r0]); }
-  if (b.roof === 'hipped') {
+  if (kind === 'hipped') {
     if (along === 0) { sl([A, D, r0]); sl([B, C, r1]); } else { sl([A, B, r0]); sl([D, C, r1]); }
   } else if (steep) {
     // (the north's gable ends: stepped in brick, a little proud of the slopes; or walled up and framed in timber)
-    const hAt = (d: number) => ye + H * Math.min(1, d / (S / 2)), hg = hAt(O), stepped = hash(w.seed, b.id, 31) % 2 === 0;
+    const hAt = (d: number) => ye + H * Math.min(1, d / (SP / 2)), hg = hAt(O), stepped = hash(w.seed, b.id, 31) % 2 === 0;
     const lo = along === 0 ? za : xa, hi = along === 0 ? zb : xb, mid: V3 = [cx, y, cz];
     for (const e of [0, 1]) {
       const pt = (s2: number, yy: number, inset = 0): V3 => along === 0 ? [(e ? xb : xa) + (e ? -inset : inset), yy, s2] : [s2, yy, (e ? zb : za) + (e ? -inset : inset)];
@@ -130,12 +138,12 @@ export function roof(E: Emit, b: Building, wing?: { i0: number; i1: number; j0: 
       }
       E.cur.how = keepHow; E.cur.dress = keepDress;
     }
-    dormers(E, b, along, xa, xb, za, zb, cx, cz, ye, H, S, born);
+    dormers(E, b, along, xa, xb, za, zb, cx, cz, ye, H, SP, born);
     chimney(E, along === 0 ? [xa + 0.32, ye + H, cz] : [cx, ye + H, za + 0.32]);
   } else {
     // (the gable ends: walled up in stone, in the plane of the wall, a band at their foot along the eaves' line)
     // (the slope's height a distance d in from the eave; at the wall's own line, the eaves' overhang in)
-    const hAt = (d: number) => ye + H * Math.min(1, d / (S / 2)), hg = hAt(O);
+    const hAt = (d: number) => ye + H * Math.min(1, d / (SP / 2)), hg = hAt(O);
     const mid: V3 = [cx, y, cz];
     if (along === 0) for (const x of [xa, xb]) { face([[x, y, za], [x, y, zb], [x, hg, zb], [x, hg, za]], MAT.stone, 0.85, true, mid); face([[x, hg, za], [x, hg, zb], [x, ye + H, cz]], MAT.stone, 0.85, true, mid); const o = x === xa ? -0.03 : 0.03; box(Math.min(x, x + o), Math.max(x, x + o), y - 0.02, y + 0.04, za, zb, MAT.stone, 0.9); }
     else for (const z of [za, zb]) { face([[xa, y, z], [xb, y, z], [xb, hg, z], [xa, hg, z]], MAT.stone, 0.85, true, mid); face([[xa, hg, z], [xb, hg, z], [cx, ye + H, z]], MAT.stone, 0.85, true, mid); const o = z === za ? -0.03 : 0.03; box(xa, xb, y - 0.02, y + 0.04, Math.min(z, z + o), Math.max(z, z + o), MAT.stone, 0.9); }
@@ -144,7 +152,7 @@ export function roof(E: Emit, b: Building, wing?: { i0: number; i1: number; j0: 
   // ends raised)
   capRun(E, r0, r1, 0.05);
   if (eave) for (const r of r0[0] === r1[0] && r0[2] === r1[2] ? [r0] : [r0, r1]) box(r[0] - 0.035, r[0] + 0.035, r[1] - 0.02, r[1] + 0.13, r[2] - 0.035, r[2] + 0.035, MAT.tile, 0.9);
-  if (b.roof === 'hipped') {
+  if (kind === 'hipped') {
     for (const [c, r] of (along === 0 ? [[A, r0], [D, r0], [B, r1], [C, r1]] : [[A, r0], [B, r0], [D, r1], [C, r1]]) as Array<[V3, V3]>) capRun(E, r, c, 0.045);
     // (where the hips meet the ridge, or each other: a round boss of mortar and tile over the joint)
     for (const r of r0[0] === r1[0] && r0[2] === r1[2] ? [r0] : [r0, r1]) lathe(r[0], r[2], [[0.075, r[1] - 0.02], [0.08, r[1] + 0.03], [0.06, r[1] + 0.07], [0, r[1] + 0.09]], MAT.tile, 8);
@@ -208,7 +216,7 @@ function skirts(E: Emit, b: Building, xa: number, xb: number, za: number, zb: nu
 /** the north's dormers: along each slope of a gable, one to every two cells of it, each a little gabled box out of the
  * slope with a window in its face, lit now and then */
 function dormers(E: Emit, b: Building, along: number, xa: number, xb: number, za: number, zb: number, cx: number, cz: number, ye: number, H: number, S: number, born: number) {
-  const { w, face, quad } = E, L = along === 0 ? xb - xa : zb - za, count = Math.max(1, Math.floor(L / 2)), half = S / 2;
+  const { w, face, quad } = E, L = along === 0 ? xb - xa : zb - za, count = Math.max(1, Math.floor(L / (2 * w.bay))), half = S / 2;
   if (H < 0.6) return;
   const hS = (d: number) => ye + H * (1 - Math.min(1, Math.abs(d) / half));
   for (const sg of [-1, 1]) for (let m = 0; m < count; m++) {
@@ -272,9 +280,9 @@ export function roofTop(E: Emit, b: Building) {
       quad(Q(-0.025, y + 0.62), Q(0.025, y + 0.62), Q(0.025, y + 0.95), Q(-0.025, y + 0.95), n, 0.3, MAT.within);
     }
   }
-  // (and on a big house, now and then, a pavilion)
+  // (and on a big house, now and then, a pavilion: once a dome can be raised)
   const rest = free.filter(([x, z]) => Math.abs(x - ci) + Math.abs(z - cj) >= 2);
-  if (b.cols.length < 6 || !rest.length || hash(w.seed, b.id, 52) % 2) return;
+  if (b.cols.length < 6 || !rest.length || hash(w.seed, b.id, 52) % 2 || !knows(w, 'dome')) return;
   const [pi, pj] = rest[hash(w.seed, b.id, 53) % rest.length], px = X(pi) + 0.5, pz = Z(pj) + 0.5, PH = 0.52, PW = 0.3;
   for (const [a, c] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) lathe(px + a * PW, pz + c * PW, [[0.035, y], [0.03, y + PH]], MAT.stone, 6);
   box(px - PW - 0.07, px + PW + 0.07, y + PH, y + PH + 0.06, pz - PW - 0.07, pz + PW + 0.07, MAT.stone, 1);

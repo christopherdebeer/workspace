@@ -19,7 +19,9 @@
 import { hash } from '../kit/rng';
 import { perf } from './perf';
 import { character, look } from './character';
-import { buildings, grammarHere, opening, pairOf, underRoof, type Building, type Opening } from './buildings';
+import { buildings, opening, pairOf, underRoof, type Building, type Opening } from './buildings';
+import { grammarHere, shownRole, shownStone } from './realise';
+import { knows } from './ladder';
 import { buttresses, dims, inBlock, outline, reach, wallCell, type Edge } from './form';
 import { CENTER, DECK, DIRS, DRESS, PLANT, key, soffit as flightSoffit, unkey, type Span, type World } from './model';
 import { climb, grow, growths } from './plants';
@@ -38,10 +40,11 @@ export { STRIDE, TILE_U, MAT, LANDMAT, FOUND, PIERCED, MOSS, IVY, KIND, SEL } fr
 export const LINTEL = 0.34;
 /** where an arch's underside is, across it (`u` from its middle): its crown's height `ys`, its rise, its half-width;
  * a lintel's is flat */
-export function soffit(sp: Span, f: ArchFamily = ROUND) {
+export function soffit(sp: Span, f: ArchFamily = ROUND, bay = 1, lintel = false) {
+  // (its rise as wide as it is in cells: on the half grid, half its squares; flat under a lintel, before the arch)
   const half = sp.n / 2, yD = sp.k + 1 - DECK;
-  if (sp.flat) return { half, rise: 0, ys: sp.k + 1 - LINTEL, at: () => sp.k + 1 - LINTEL };
-  const rise = Math.min(half, yD - sp.low), ys = yD - rise;
+  if (sp.flat || lintel) return { half, rise: 0, ys: sp.k + 1 - LINTEL, at: () => sp.k + 1 - LINTEL };
+  const rise = Math.min(half / bay, yD - sp.low), ys = yD - rise;
   if (f !== ROUND) return { half, rise, ys, at: (u: number) => ys + rise * archUnit(f, u / half) };
   return { half, rise, ys, at: (u: number) => ys + rise * Math.sqrt(Math.max(0, 1 - (u / half) ** 2)) };
 }
@@ -49,6 +52,11 @@ export function soffit(sp: Span, f: ArchFamily = ROUND) {
 export function spanFamily(w: World, sp: Span): ArchFamily {
   const [a, b] = DIRS[sp.a], m = Math.floor((sp.n - 1) / 2);
   return grammarHere(w, sp.k, sp.i + a * m, sp.j + b * m).span(sp.n);
+}
+/** whether a span's drawn flat: before the arch's known, under a lintel (realise.ts) */
+export function spanFlat(w: World, sp: Span): boolean {
+  const [a, b] = DIRS[sp.a], m = Math.floor((sp.n - 1) / 2);
+  return !!grammarHere(w, sp.k, sp.i + a * m, sp.j + b * m).lintels;
 }
 /** a passage's arch family, by the manner where it is */
 export const passageFamily = (w: World, k: number, i: number, j: number): ArchFamily => grammarHere(w, k, i, j).arch;
@@ -153,7 +161,9 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
   /** leaves in flower (a climber's bracts), or a climber's own fresh green: drawn over the kind, in the shader */
   let bloom = 0;
   /** a cell's dressing, as it's drawn over its stone */
-  const dressOf = (k: number, i: number, j: number) => { const d = dressed(k, i, j); return d ? (d.mat ?? 0) * KIND + (d.moss ? MOSS : 0) + (d.ivy ? IVY : 0) : 0; };
+  /** a front's part, as the settlement can build it (realise.ts); none, and the face is as buildings.ts opens it */
+  const bayShown = (k: number, i: number, j: number, d: number) => { const by = bayAt(w, k, i, j, d); return by && shownRole(w, by.role) ? by : null; };
+  const dressOf = (k: number, i: number, j: number) => { const d = dressed(k, i, j); return d ? shownStone(w, d.mat ?? 0) * KIND + (d.moss ? MOSS : 0) + (d.ivy ? IVY : 0) : 0; };
   const at = (born: number, pivot: number, k: number, i: number, j: number, how = 1) => ({ born, pivot, how, tone: tone(k, i, j), dress: dressOf(k, i, j), sel: selected.has(key(k, i, j)) });
   /**
    * How much of the sky a point on a surface sees (1 all of its half of it, 0 none): rays out over the half the surface
@@ -290,11 +300,11 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
     E.forEach((e, n) => {
       if (!e.open) return;
       const nv = nOf(e), foot = footOf(e);
-      const whole = e.face >= 0 && Math.abs(e.dist - 0.5) < 1e-6, op = whole ? opening(w, k, i, j, e.face) : null, by = whole ? bayAt(w, k, i, j, e.face) : null;
+      const whole = e.face >= 0 && Math.abs(e.dist - 0.5) < 1e-6, op = whole ? opening(w, k, i, j, e.face) : null, by = whole ? bayShown(k, i, j, e.face) : null;
       // (on the half grid, a bay of two faces: its leading face draws its opening or its part across both, as on a cell's
       // face (twice as wide, twice as deep); its partner leaves it the room)
       const fk = `${k}.${i}.${j}.${e.face}`, bs = whole && w.bay === 2 ? buildings(w) : null, lead = bs?.partners.get(fk);
-      const ceded = !!lead && (() => { const [lk, li, lj, ld] = lead.split('.').map(Number); return !!(opening(w, lk, li, lj, ld) || bayAt(w, lk, li, lj, ld)); })();
+      const ceded = !!lead && (() => { const [lk, li, lj, ld] = lead.split('.').map(Number); return !!(opening(w, lk, li, lj, ld) || bayShown(lk, li, lj, ld)); })();
       const wide = !!bs?.pairs.has(fk) && !!(op || by), sg = wide ? pairOf(i, j, e.face).s : 0;
       const PB = wide ? (d: number, s2: number, y: number, inset = 0) => P(d, sg * 0.5 + 2 * s2, y, 2 * inset) : P;
       if (ceded && !by) { /* (its partner's) */ }
@@ -460,7 +470,8 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
       // (and in the east every wall's whitewashed, a building's or not)
       const bd = buildings(w).of.get(key(k, i, j)), fin = grammarHere(w, k, i, j).wall;
       const keepHow = cur.how;
-      if (fin === 'frame' && bd && k > w.ground(i, j)) cur.how = 6; else if (fin === 'plaster') cur.how = 7;
+      // (rubble, before stone's dressed (realise.ts), anyone's stone)
+      if (fin === 'frame' && bd && k > w.ground(i, j)) cur.how = 6; else if (fin === 'plaster') cur.how = 7; else if (fin === 'rubble') cur.how = 8;
       blockFaces(k, i, j);
       cur.how = keepHow;
       // (over a thin wall, its underside shows either side of it)
@@ -649,7 +660,8 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
       seen.add(v);
       while (st.length) { const u = st.pop()!, [, i, j] = unkey(u); region.push([i, j]); for (const [a, b] of DIRS) { const q = key(0, i + a, j + b); if (w.courts.has(q) && !seen.has(q)) { seen.add(q); st.push(q); } } }
       const g = grammarHere(w, w.ground(region[0][0], region[0][1]), region[0][0], region[0][1]);
-      if (g.facade !== 'court') continue;
+      // (and only where there's the craft of water to lay them: ladder.ts)
+      if (g.facade !== 'court' || !knows(w, 'hydraulics')) continue;
       const inR = new Set(region.map(([i, j]) => `${i}.${j}`)), pools = w.decor.filter((dc) => dc.kind === 'pool' && inR.has(`${dc.i}.${dc.j}`));
       const k = w.ground(region[0][0], region[0][1]), born = pools.length ? Math.min(...pools.map((p) => p.born)) : -1e3;
       cur = { born, pivot: k - 0.3, how: 1, tone: 0.5, dress: 0, sel: false };
@@ -695,7 +707,7 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
         for (let d = 0; d < 4; d++) {
           const [a, b] = DIRS[d], ni = i + a, nj = j + b, back = (d + 2) % 4;
           if (inR.has(`${ni}.${nj}`) || !w.stone(k, ni, nj)) continue;
-          const by = bayAt(w, k, ni, nj, back);
+          const by = bayShown(k, ni, nj, back);
           if ((by && by.role !== 'blank') || opening(w, k, ni, nj, back)?.kind === 'door' || w.archway(k, ni, nj) >= 0) continue;
           const BD = 0.24, cx = X(i) + 0.5, cz = Z(j) + 0.5, [ta, tb] = DIRS[(d + 1) % 4];
           const P2 = (s2: number, o: number, y: number): V3 => [cx + a * (0.5 - o) + ta * s2, y, cz + b * (0.5 - o) + tb * s2];
@@ -1585,9 +1597,10 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
       const A: V3 = da ? [da > 0 ? x0 + 1 : x0, y0, z0] : [x0, y0, db > 0 ? z0 + 1 : z0], B: V3 = da ? [A[0], y0, z0 + 1] : [x0 + 1, y0, A[2]];
       quad(A, B, [B[0], y1, B[2]], [A[0], y1, A[2]], [da, 0, db], [foot, foot, 1, 1], MAT.stone);
     }
-    // (its arch: round, or (on the plateau) pointed, its crown where a round one's would be)
-    const fam = passageFamily(w, k, i, j), yA = ys + HW - archY(fam, 0, HW);
-    const head = (t: number) => (lower ? y1 : fam === ROUND ? ys + Math.sqrt(Math.max(0, HW * HW - t * t)) : yA + archY(fam, t, HW));
+    // (its arch: round, or (on the plateau) pointed, its crown where a round one's would be; before the arch's known
+    // (realise.ts), square under a timber lintel)
+    const fam = passageFamily(w, k, i, j), flat = !!grammarHere(w, k, i, j).lintels, yA = flat ? ys + HW * 0.85 : ys + HW - archY(fam, 0, HW);
+    const head = (t: number) => (lower ? y1 : flat ? yA : fam === ROUND ? ys + Math.sqrt(Math.max(0, HW * HW - t * t)) : yA + archY(fam, t, HW));
     for (const s of [-1, 1]) {
       const d = a === 0 ? (s > 0 ? 0 : 2) : s > 0 ? 1 : 3;
       if (hides(k, i, j, d)) continue;
@@ -1613,10 +1626,12 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
       const t0 = -HW + (2 * HW * q) / CURVE, t1 = -HW + (2 * HW * (q + 1)) / CURVE, tm = (t0 + t1) / 2;
       const n = nW(-tm / HW); n[1] = -Math.sqrt(Math.max(0, HW * HW - tm * tm)) / HW;
       if (fam !== ROUND) { const [nt, ny] = archNormal(fam, tm, HW); n.splice(0, 3, ...nW(nt)); n[1] = ny; }
+      if (flat) n.splice(0, 3, 0, -1, 0);
       quad(P(-0.5, t0, head(t0)), P(0.5, t0, head(t0)), P(0.5, t1, head(t1)), P(-0.5, t1, head(t1)), n, 0.95, MAT.within);
     }
-    // (its ring of voussoirs, on each open face)
-    if (!lower) for (const s of [-1, 1]) voussoirs(fam, HW, ys, yA, s, (u, wv, y) => P(u, wv, y), nU(s), hides(k, i, j, a === 0 ? (s > 0 ? 0 : 2) : s > 0 ? 1 : 3));
+    // (its ring of voussoirs, on each open face; or its lintel, a timber beam across it, a little proud)
+    if (!lower && !flat) for (const s of [-1, 1]) voussoirs(fam, HW, ys, yA, s, (u, wv, y) => P(u, wv, y), nU(s), hides(k, i, j, a === 0 ? (s > 0 ? 0 : 2) : s > 0 ? 1 : 3));
+    if (!lower && flat) for (const s of [-1, 1]) { const keepHow = cur.how; cur.how = 1; const L0 = P(s * 0.5 + s * 0.015, -HW - 0.08, yA), L1 = P(s * 0.5 - s * 0.03, HW + 0.08, yA + 0.09); box(Math.min(L0[0], L1[0]), Math.max(L0[0], L1[0]), yA, yA + 0.09, Math.min(L0[2], L1[2]), Math.max(L0[2], L1[2]), MAT.wood, 0.85); cur.how = keepHow; }
     if (lower) { if (!w.block(k + 1, i, j)) for (const [w0, w1] of [[-0.5, -HW], [HW, 0.5]]) quad(P(-0.5, w0, y1), P(0.5, w0, y1), P(0.5, w1, y1), P(-0.5, w1, y1), [0, 1, 0], 1, MAT.stone); }
     else topFace(k, i, j, y1);
   }
@@ -1661,7 +1676,7 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
   /** an arch under a run of stone, and the stone over it: spandrels, deck, its underside lit from within */
   function span(sp: Span) {
     const { k, a, n } = sp, [di, dj] = DIRS[a], yT = k + 1;
-    const fam = spanFamily(w, sp), { half, rise, ys, at: arc } = soffit(sp, fam);
+    const fam = spanFamily(w, sp), { half, rise, ys, at: arc } = soffit(sp, fam, w.bay, spanFlat(w, sp));
     cur = at(sp.born, yT, k, sp.i, sp.j); cur.sel = Array.from({ length: n }, (_, q) => selected.has(key(k, sp.i + q * di, sp.j + q * dj))).some(Boolean);
     const cx = X(sp.i) + 0.5 + (di * (n - 1)) / 2, cz = Z(sp.j) + 0.5 + (dj * (n - 1)) / 2;
     const P = (u: number, wv: number, y: number): V3 => (a === 0 ? [cx + u, y, cz + wv] : [cx + wv, y, cz + u]);
@@ -1999,7 +2014,7 @@ export function inStone(w: World, x: number, y: number, z: number): boolean {
     if (!sp && aw >= 0) { const wv = aw === 0 ? fz : fx; return Math.abs(wv) > HW || (w.archway(k + 1, i, j) !== aw && fy > hd(wv)); }
     if (!sp) return true;
     // (over an arch: stone above its curve)
-    const so = soffit(sp, spanFamily(w, sp)), u = (sp.a === 0 ? i - sp.i : j - sp.j) + (sp.a === 0 ? fx : fz) + 0.5 - so.half;
+    const so = soffit(sp, spanFamily(w, sp), w.bay, spanFlat(w, sp)), u = (sp.a === 0 ? i - sp.i : j - sp.j) + (sp.a === 0 ? fx : fz) + 0.5 - so.half;
     return y > so.at(u);
   }
   const d = w.stair(k, i, j);
@@ -2011,7 +2026,7 @@ export function inStone(w: World, x: number, y: number, z: number): boolean {
   for (let kk = k + 1; kk < w.levels; kk++) {
     const sp = w.span(kk, i, j);
     if (!sp) { if (w.occupied(kk, i, j)) break; continue; }
-    const so = soffit(sp, spanFamily(w, sp)), u = (sp.a === 0 ? i - sp.i : j - sp.j) + (sp.a === 0 ? fx : fz) + 0.5 - so.half;
+    const so = soffit(sp, spanFamily(w, sp), w.bay, spanFlat(w, sp)), u = (sp.a === 0 ? i - sp.i : j - sp.j) + (sp.a === 0 ? fx : fz) + 0.5 - so.half;
     return y > so.at(u);
   }
   return false;

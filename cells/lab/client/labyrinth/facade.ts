@@ -4,7 +4,8 @@
  */
 import { hash } from '../kit/rng';
 import { DIRS } from './model';
-import { buildings, grammarHere, opening, type Opening } from './buildings';
+import { buildings, opening, type Opening } from './buildings';
+import { grammarHere } from './realise';
 import { DECK_OUT, FRAME_OUT, FRAME_UP, JETTY, type Bay } from './facades';
 import { ROUND, archNormal, archY } from './regions';
 import { KIND, MAT, PIERCED, type Emit, type V3 } from './emit';
@@ -271,8 +272,9 @@ export function openings(E: Emit) {
     const top = portal ? by.top + FRAME_UP : yt, e0 = portal ? -0.5 : s0, e1 = portal ? 0.5 : s1, N = 12;
     // (the front: piers either side, and the spandrel over the arch; a portal's faced in tile (lead's material, its tone
     // past 2: render.ts), a gallery's stone)
-    const faceMat = portal ? MAT.lead : MAT.stone;
-    if (portal) E.cur.tone = 2;
+    // (faced in tile once it's glazed (realise.ts); stone before)
+    const tiled = portal && g.mosaic !== false, faceMat = tiled ? MAT.lead : MAT.stone;
+    if (tiled) E.cur.tone = 2;
     quad(P(d, e0, y0, out), P(d, -hw, y0, out), P(d, -hw, top, out), P(d, e0, top, out), n, [foot, foot, 1, 1], faceMat);
     quad(P(d, hw, y0, out), P(d, e1, y0, out), P(d, e1, top, out), P(d, hw, top, out), n, [foot, foot, 1, 1], faceMat);
     for (let q = 0; q < N; q++) { const t0 = -hw + (2 * hw * q) / N, t1 = -hw + (2 * hw * (q + 1)) / N; quad(P(d, t0, head(t0), out), P(d, t1, head(t1), out), P(d, t1, top, out), P(d, t0, top, out), n, 1, faceMat); }

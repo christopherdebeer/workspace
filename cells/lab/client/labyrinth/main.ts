@@ -15,6 +15,7 @@
  * renderer, where every transition is frames it hasn't time for)
  */
 import { CENTER, World, inGrid, key, replay, unkey, type Alt, type Cell, type Op } from './model';
+import { setLadder } from './ladder';
 import { STRIDE, buildMesh, drawnBox, inLand, inStone, setBleed } from './mesh';
 import { STROKE_STRIDE } from './strokes';
 import { Renderer, camera, invert, type View } from './render';
@@ -80,17 +81,21 @@ const KEY = 'labyrinth.v3';
  * static/labyrinth-grid.md), or `?grid=cells` the whole cells it was first made in. A world kept is kept on its own grid
  * (`?grid=` set to the other one sets it aside for a new one); started again, it's on this */
 const gridBay = qs.get('grid') === 'cells' ? 1 : 2;
+/** a world made new here: drawn by its ladder (ladder.ts: the settlement builds as it knows how); `?ladder=0|1` sets it
+ * for any world, `?rung=n` draws as if at that rung */
+const made = (w: World) => { w.ladder = true; return w; };
+if (qs.has('ladder') || qs.has('rung')) setLadder(qs.get('ladder') !== '0', qs.has('rung') ? Number(qs.get('rung')) : undefined);
 let world: World;
 if (preview) world = story(4);
 else if (qs.has('story')) world = story(Number(qs.get('story')));
 else if (qs.has('ops')) world = replay(qs.get('ops')!);
-else if (qs.has('land')) world = new World(1, Number(qs.get('land')) || 1, gridBay);
+else if (qs.has('land')) world = made(new World(1, Number(qs.get('land')) || 1, gridBay));
 // (what was built here last, kept; or, the first time, a new piece of land (`?flat`: the flat slab, kept the same way))
 else {
   let kept = ''; try { kept = localStorage.getItem(KEY) ?? ''; } catch { /* */ }
-  world = kept ? replay(kept) : new World(1, qs.has('flat') ? 0 : randomSeed(), gridBay);
-  if (qs.has('flat') && world.land) world = new World(1, 0, world.bay);
-  if (qs.has('grid') && world.bay !== gridBay) world = new World(1, qs.has('flat') ? 0 : randomSeed(), gridBay);
+  world = kept ? replay(kept) : made(new World(1, qs.has('flat') ? 0 : randomSeed(), gridBay));
+  if (qs.has('flat') && world.land) world = made(new World(1, 0, world.bay));
+  if (qs.has('grid') && world.bay !== gridBay) world = made(new World(1, qs.has('flat') ? 0 : randomSeed(), gridBay));
 }
 const fixed = preview || qs.has('story') || qs.has('ops') || qs.has('land');
 /** `?hold=n`: the last n things done kept back, to be done in front of the cats (`release()`) */
@@ -861,8 +866,8 @@ document.getElementById('undo')!.addEventListener('click', () => { if (world.und
  * (`?flat`, the flat slab, stays flat.)
  */
 function startAgain() {
-  if (world.ops.length) { if (!confirm(world.land ? 'Clear what\'s built, back to the land?' : 'Clear the stone?')) return; world = new World(world.seed, qs.has('flat') ? 0 : world.landSeed || randomSeed(), gridBay); }
-  else world = new World(world.seed, qs.has('flat') ? 0 : randomSeed(), gridBay);
+  if (world.ops.length) { if (!confirm(world.land ? 'Clear what\'s built, back to the land?' : 'Clear the stone?')) return; world = made(new World(world.seed, qs.has('flat') ? 0 : world.landSeed || randomSeed(), gridBay)); }
+  else world = made(new World(world.seed, qs.has('flat') ? 0 : randomSeed(), gridBay));
   meshVersion = -1; unselect(); hideAlts(); kept(); follow = true;
   say(world.ops.length ? '' : world.land ? 'a new piece of land' : 'the stone, bare');
 }

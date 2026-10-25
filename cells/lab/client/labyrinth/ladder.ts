@@ -43,11 +43,23 @@ export const PARTS: Record<Part, Technique[]> = {
   arcade: ['arch'], bridge: ['arch'], basin: ['hydraulics'], 'court water': ['hydraulics'], plaster: ['mortar'],
 };
 
+/**
+ * What's known is what the settlement's rung allows, and for a craft's techniques, a workshop doing it: a kiln (fired
+ * tile and brick), a carpenter (joinery, then the timber frame), a mason (dressed stone, split slate), a glassworks
+ * (glass, glazed tile). Each workshop takes up the craft wanted next, in that order, by its building's identity (so a
+ * workshop keeps its craft as others are added)
+ */
+export type Craft = 'kiln' | 'carpenter' | 'mason' | 'glassworks';
+export const CRAFTS: Craft[] = ['kiln', 'carpenter', 'mason', 'glassworks'];
+export const CRAFT_OF: Partial<Record<Technique, Craft>> = { kiln: 'kiln', joinery: 'carpenter', frame: 'carpenter', ashlar: 'mason', slate: 'mason', glass: 'glassworks', glaze: 'glassworks' };
+
 export interface Reckoning {
   settlement: Settlement;
   /** the parts built, and where (building ids; -1 for what's no building's: arcades, bridges, water) */
   built: Map<Part, number[]>;
   rung: Rung; known: Set<Technique>;
+  /** each workshop's craft, by its building's identity */
+  crafts: Map<number, Craft>;
   /** what can be built now; what the rung above would take (and would add); what's built past what's known */
   within: Part[]; next: { rung: Rung; short: string[]; adds: Part[] } | null; ahead: Part[];
 }
@@ -100,7 +112,14 @@ export function reckon(w: World): Reckoning {
   const meets = (r: Rung) => Object.entries(r.needs).every(([u, n]) => (u === 'households' ? s.households : s.count[u as Use]) >= (n ?? 0));
   let rung = RUNGS[0];
   for (const r of RUNGS) { if (meets(r)) rung = r; else break; }
-  const known = new Set<Technique>(RUNGS.filter((r) => r.n <= rung.n).flatMap((r) => r.techniques));
+  // (the workshops' crafts, each taking the next wanted, by identity; the rung's techniques, those of a craft only where
+  // a workshop does it, and none before what it needs)
+  const workshops = s.buildings.filter((b) => b.uses.includes('workshop')).map((b) => b.plan.b.id).sort((a, b) => a - b);
+  const crafts = new Map<number, Craft>(workshops.map((id, n) => [id, CRAFTS[n % CRAFTS.length]]));
+  const done = new Set(crafts.values()), forced = (globalThis as { labyrinthRung?: number }).labyrinthRung;
+  if (forced !== undefined) rung = RUNGS[Math.max(0, Math.min(RUNGS.length - 1, forced))];
+  const known = new Set<Technique>(RUNGS.filter((r) => r.n <= rung.n).flatMap((r) => r.techniques).filter((t) => forced !== undefined || !CRAFT_OF[t] || done.has(CRAFT_OF[t]!)));
+  for (let changed = true; changed;) { changed = false; for (const t of [...known]) if (AFTER[t].some((a) => !known.has(a))) { known.delete(t); changed = true; } }
   const can = (p: Part, k: Set<Technique>) => PARTS[p].every((t) => k.has(t));
   const all = Object.keys(PARTS) as Part[];
   const up = RUNGS[rung.n + 1] ?? null;
@@ -109,5 +128,25 @@ export function reckon(w: World): Reckoning {
     short: Object.entries(up.needs).filter(([u, n]) => (u === 'households' ? s.households : s.count[u as Use]) < (n ?? 0)).map(([u, n]) => `${u}: ${u === 'households' ? s.households : s.count[u as Use]} of ${n}`),
     adds: all.filter((p) => !can(p, known) && can(p, new Set([...known, ...up.techniques]))),
   } : null;
-  return { settlement: s, built, rung, known, within: all.filter((p) => can(p, known)), next, ahead: [...built.keys()].filter((p) => !can(p, known)) };
+  return { settlement: s, built, rung, known, crafts, within: all.filter((p) => can(p, known)), next, ahead: [...built.keys()].filter((p) => !can(p, known)) };
 }
+
+/**
+ * Whether a world's drawn by its ladder (realise.ts): a world made new in the app is (its first stone piled dry, its
+ * roofs thatch, until the settlement knows better); the storyboards, and worlds kept from before, are drawn as they
+ * were. `?ladder=0|1` sets it for any world; `?rung=n` draws as if at that rung (to compare).
+ */
+const G = globalThis as { labyrinthLadder?: boolean; labyrinthRung?: number };
+export const setLadder = (on: boolean | undefined, rung?: number) => { G.labyrinthLadder = on; G.labyrinthRung = rung; };
+export const ladderOn = (w: World) => G.labyrinthLadder ?? w.ladder;
+const cache = new WeakMap<World, { v: number; r: Reckoning }>();
+/** the world's reckoning, worked out once for each state of it */
+export function reckoned(w: World): Reckoning {
+  const c = cache.get(w);
+  if (c && c.v === w.version && c.r) return c.r;
+  const r = reckon(w);
+  cache.set(w, { v: w.version, r });
+  return r;
+}
+/** whether a technique's known, as the drawing asks: always, where the world isn't drawn by its ladder */
+export const knows = (w: World, t: Technique) => !ladderOn(w) || reckoned(w).known.has(t);

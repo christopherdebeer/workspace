@@ -24,8 +24,9 @@ import { unkey, type World } from './model';
 export type GrammarId = 'mediterranean' | 'persian' | 'timber' | 'eaves';
 export interface Grammar {
   id: GrammarId;
-  /** what the walls are: dressed stone; timber frame over a stone ground storey; whitewash between posts */
-  wall: 'ashlar' | 'frame' | 'plaster';
+  /** what the walls are: dressed stone; timber frame over a stone ground storey; whitewash between posts; and, as the
+   * ladder draws it before stone's dressed (realise.ts), rubble laid dry or in mortar */
+  wall: 'ashlar' | 'frame' | 'plaster' | 'rubble';
   /** how a top is covered: pitched tile; flat, walked, a parapet round it; steep slate gables; deep eaves of grey tile */
   roof: 'tile' | 'flat' | 'steep' | 'eave';
   /** arches over doors, windows, passages; and over a span by its width */
@@ -42,6 +43,9 @@ export interface Grammar {
    * street (its upper storeys jettied out, shopfronts along its door's front); on verandas (a deck under the skirt, the
    * front screens); or (null) each face to itself, as buildings.ts lays its openings */
   facade: 'court' | 'street' | 'veranda' | null;
+  /** as the ladder draws it (realise.ts): what a pitched roof's covered with (else as its roof says: terracotta, slate,
+   * grey tile); openings and spans under flat timber lintels, before the arch; a portal faced in tile, or in stone */
+  cover?: 'tile' | 'slate' | 'grey' | 'thatch'; lintels?: boolean; mosaic?: boolean;
 }
 
 export type RegionMode = 'land' | 'mixed' | GrammarId;

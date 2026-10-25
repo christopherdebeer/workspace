@@ -248,6 +248,8 @@ export const unkey = (v: number): Cell => [Math.floor(v / (N * N)), (v % N) + LO
 
 export class World {
   ops: Op[] = [];
+  /** drawn by its ladder (ladder.ts): what's built realised as the settlement knows how to (a world made new in the app) */
+  ladder = false;
   version = 0;
   /** how each connection came out, the last time it was worked out (by operation) */
   reached = new Map<Op, Reached>();
@@ -1201,7 +1203,7 @@ export class World {
       return e;
     });
     // (on the half grid, saying so)
-    return JSON.stringify(this.land || this.bay !== 1 ? { ...(this.land ? { land: this.landSeed } : {}), ...(this.bay !== 1 ? { bay: this.bay } : {}), ops } : ops);
+    return JSON.stringify(this.land || this.bay !== 1 || this.ladder ? { ...(this.land ? { land: this.landSeed } : {}), ...(this.bay !== 1 ? { bay: this.bay } : {}), ...(this.ladder ? { ladder: 1 } : {}), ops } : ops);
   }
 }
 
@@ -1210,10 +1212,11 @@ export function replay(text: string, seed = 1): World {
   let raw: unknown = [];
   try { raw = JSON.parse(text || '[]'); } catch { raw = []; }
   // (on the land: its seed, and what was done on it)
-  let land = 0, bay = 1;
-  if (raw && typeof raw === 'object' && !Array.isArray(raw)) { land = Number((raw as { land?: number }).land) || 0; bay = Number((raw as { bay?: number }).bay) === 2 ? 2 : 1; raw = (raw as { ops?: unknown }).ops; }
+  let land = 0, bay = 1, ladder = false;
+  if (raw && typeof raw === 'object' && !Array.isArray(raw)) { land = Number((raw as { land?: number }).land) || 0; bay = Number((raw as { bay?: number }).bay) === 2 ? 2 : 1; ladder = !!(raw as { ladder?: number }).ladder; raw = (raw as { ops?: unknown }).ops; }
   if (!Array.isArray(raw)) raw = [];
   const w = new World(seed, land, bay);
+  w.ladder = ladder;
   for (const o of raw as unknown[][]) {
     if (!Array.isArray(o)) continue;
     const at = (q: number) => (Array.isArray(o[q]) ? (o[q] as number[][]) : null);

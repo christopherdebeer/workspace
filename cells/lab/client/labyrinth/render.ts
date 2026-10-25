@@ -231,6 +231,20 @@ float paneOf(vec3 p, vec3 n, float fine) {
   float bu = min(fract(u), 1. - fract(u)), bv = min(fract(v), 1. - fract(v));
   return smoothstep(.06, .14, bu) * smoothstep(.06, .14, bv);
 }
+// (rubble (realise.ts: the ladder's walls before stone's dressed): field stones, rough, irregular, laid in rough
+// courses; the nearest stone's distance and the gap to the next (the joint's width), and which stone)
+vec2 rubble(vec2 q, out vec2 id) {
+  q *= vec2(4.4, 5.6);
+  vec2 c = floor(q), f = fract(q);
+  float d1 = 9., d2 = 9.;
+  id = c;
+  for (int y = -1; y <= 1; y++) for (int x = -1; x <= 1; x++) {
+    vec2 g = vec2(float(x), float(y)), o = vec2(hash(vec3(c + g, 1.)), hash(vec3(c + g, 2.))) * .76 + .12;
+    float d = length((g + o - f) * vec2(1., 1.2));
+    if (d < d1) { d2 = d1; d1 = d; id = c + g; } else if (d < d2) d2 = d;
+  }
+  return vec2(d1, d2 - d1);
+}
 // (glass's tone, past 2: the paint of its bars (8 of them), 8 more lit within, 16 more a fine lattice)
 float glassFine(float t) { return floor(t + .01) - 2. >= 15.5 ? 1. : 0.; }
 float glassLit(float t) { return mod(floor(t + .01) - 2., 16.) >= 7.5 ? 1. : 0.; }
@@ -390,6 +404,16 @@ void main() {
     // courses up the slope, each tile's lip proud of the one below it and throwing a little shadow on it; each a shade of
     // its own, now and then one weathered)
     vec3 T = normalize(vec3(-n.z, 0., n.x) + 1e-5), S = normalize(cross(n, T)); if (S.y < 0.) S = -S;
+    if (vTone > 3.5) {
+      // (thatch (realise.ts: before a kiln fires tile): straw laid in courses up the slope, combed down it, each course's
+      // butt a little proud; greyed where it's weathered)
+      float v = dot(vPos, S) * 5., fv = fract(v), kT = keep(9.), fib = noise(vec3(dot(vPos, T) * 55., dot(vPos, S) * 3., 2.));
+      base = mix(vec3(.55, .45, .28), vec3(.70, .60, .39), fib) * (.9 + .12 * noise(vPos * 3.));
+      base = mix(base, vec3(.47, .44, .38), .35 * smoothstep(.5, .85, fbm(vPos * 1.4)));
+      float butt = smoothstep(.82, 1., fv) * kT;
+      cav = 1. - .3 * butt;
+      nS = normalize(n - S * .25 * fv * kT + T * (fib - .5) * .2 * kT);
+    } else {
     float u = dot(vPos, T) * 7., v = dot(vPos, S) * 9., cu = floor(u), cv = floor(v), fv = fract(v);
     float tint = hash(vec3(cu, cv, 7.)), kT = keep(9.);
     // (its kind, in the tone (roof.ts): terracotta; slate (past 1.5), flat, laid in courses, each slate its own grey;
@@ -406,6 +430,7 @@ void main() {
     // (the pans only a little darker than the caps, so the roof reads as its tiles, row by row, not as stripes down it)
     cav = (1. - .42 * lip) * (1. - .16 * (.5 - .5 * sin(u * 3.14159)) * kT);
     base *= 1. + .12 * (1. - smoothstep(0., .08, fv)) * kT;
+    }
   }
   else if (mat == 15) {
     // (timber: weathered, its grain along it)
@@ -499,7 +524,18 @@ void main() {
     // (a wall of its tradition's (regions.ts; the mesh's how, past 5.5): a timber frame, its posts a third of a cell
     // apart, a sill, a plate and a rail, braces in every other panel, lime between; or whitewash between dark posts at
     // the cells' edges and a beam at each floor)
-    if (mat == 0 && vU > 5.5 && vU < 7.9 && abs(n.y) < .5) {
+    // (rubble: each stone its own grey-brown, a little proud, the joints deep and dark between them)
+    if (mat == 0 && vU > 7.9 && vU < 8.9 && abs(n.y) < .5) {
+      vec3 T = normalize(vec3(-n.z, 0., n.x) + 1e-5);
+      vec2 id, r = rubble(vec2(dot(vPos, T), vPos.y), id);
+      float kR = keep(14.), joint = 1. - smoothstep(.04, .12, r.y);
+      vec3 st = mix(vec3(.60, .55, .46), vec3(.78, .72, .60), hash(vec3(id, 5.))) * (.9 + .14 * noise(vPos * 16.));
+      base = mix(base, st, .85 * keep(4.));
+      base = mix(base, vec3(.34, .30, .25), joint * kR * .8);
+      cav *= 1. - .4 * joint * kR;
+      nS = normalize(n + (T * (hash(vec3(id, 6.)) - .5) + vec3(0., hash(vec3(id, 7.)) - .5, 0.)) * .35 * kR * (1. - joint));
+    }
+    else if (mat == 0 && vU > 5.5 && vU < 7.9 && abs(n.y) < .5) {
       vec3 T = normalize(vec3(-n.z, 0., n.x) + 1e-5);
       float u = dot(vPos, T), fy = fract(vPos.y), kD = keep(10.), wood;
       if (vU < 6.5) {

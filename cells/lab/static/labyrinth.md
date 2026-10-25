@@ -229,7 +229,7 @@ Buildings now know what's inside them, though nothing of it is drawn yet. Everyt
 - **gatehouse**;
 - **inhabited bridge**.
 
-**The ladder** (ladder.ts) isn't shown and doesn't yet limit anything. It sets out:
+**The ladder** (ladder.ts) isn't shown. It sets out:
 - **Techniques on five rungs:**
   - shelter: drystone, timber;
   - hamlet: mortar, arch, stair;
@@ -241,7 +241,25 @@ Buildings now know what's inside them, though nothing of it is drawn yet. Everyt
 
 `reckon(w)` says where a settlement stands, what it can build, what the next rung would take and add, and what's built ahead of it. The study, for example, is a hamlet of four houses, short of a workshop, and its tile roofs and shutters are ahead of it.
 
-The rules will come to choose by the ladder: shutters before glass, a round arch before a pointed one, a flat timber roof before tiles. `node devtools/labyrinth-plans.mjs [--stories=… --tradition=… --rooms]` reports all of it.
+`node devtools/labyrinth-plans.mjs [--stories=… --tradition=… --rooms]` reports all of it.
+
+### The ladder, drawn
+
+A world made new in the app is drawn by its ladder (realise.ts). What its tradition would build is drawn only as far as the settlement knows how; past that, it falls back to what comes before. Plans and uses still read what the tradition intends, so the ladder never feeds back into its own reckoning.
+
+- **Crafts:** a craft's techniques also need a workshop doing that craft. Workshops take up crafts in this order: kiln, carpenter, mason, glassworks. Each is held by its building's identity, so a workshop keeps its craft as others are added.
+  - kiln: fired tile and brick;
+  - carpenter: joinery, then the timber frame;
+  - mason: dressed stone and split slate;
+  - glassworks: glass and glazed tile.
+- **Walls:** without a mason, dressed stone is laid as **rubble**: field stones, each its own colour, with deep joints. A timber frame needs the frame; plaster needs mortar. Brick needs a kiln and marble needs ashlar.
+- **Roofs:** before a kiln, roofs are **thatch**, steeper and deeper at the eaves, and with no scallops. Slate needs the mason. A dome without the dome technique is hipped, and the plateau's corner pavilion waits for the dome.
+- **Openings:** before the arch, heads are flat on timber **lintels**. A pointed or four-centred arch falls back to the one before it. Shutters need joinery. Panes need glass, else a wooden lattice, else nothing.
+- **Fronts:** galleries, loggias and portals need the arch. Balconies, shopfronts and verandas need joinery; jetties need the frame. A portal is faced in tile only with glazed tile.
+
+`?ladder=0|1` sets it for any world; `?rung=n` draws as if at that rung, with every craft at hand. The storyboards, and worlds kept from before, are drawn as built. `node devtools/labyrinth-ladder-look.mjs` draws the sheet below: stories 16 and 17 at rungs 0 to 3, and as built.
+
+![the ladder: rungs 0–3 and as built](labyrinth/look-ladder.jpg)
 
 ## Water
 
