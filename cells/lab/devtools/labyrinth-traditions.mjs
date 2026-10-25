@@ -5,6 +5,8 @@
 //   static/labyrinth/traditions-same.jpg, a column to a tradition.
 // - **across**: one tradition over several builds (stories 8, 9, 13, 16): various, and still one place;
 //   static/labyrinth/traditions-across-NAME.jpg.
+// - **fronts**: the fronts' fixture (story 17, a courtyard house) in the middle sea and composed on the plateau, from two
+//   sides, and the study on the plateau close (facades.ts); static/labyrinth/traditions-fronts.jpg.
 process.env.EXPERIMENT = 'labyrinth'; process.env.READY = '__labyrinth';
 const opt = Object.fromEntries(process.argv.slice(2).filter((a) => a.startsWith('--')).map((a) => [a.slice(2).split('=')[0], a.includes('=') ? a.slice(a.indexOf('=') + 1) : true]));
 const { withWood } = await import('./harness.mjs');
@@ -27,12 +29,14 @@ await withWood(async (lab) => {
     return file;
   };
   if (!opt.only || opt.only === 'same') for (const t of TRADITIONS) for (const [v, q] of [['close', 'zoom=0.24'], ['wide', 'zoom=0.5']]) shots.push(['same', `${t} ${v}`, await draw(`same-${t}-${v}`, `story=16&region=${t}&${q}`)]);
+  if (!opt.only || opt.only === 'fronts') for (const [n, q] of [['story 17, the middle sea', 'story=17&region=mediterranean&zoom=0.34'], ['story 17, the plateau', 'story=17&region=persian&zoom=0.34'], ['story 17, the plateau, turned', 'story=17&region=persian&zoom=0.34&turn=2'], ['the study, the plateau', 'story=16&region=persian&zoom=0.24']]) shots.push(['fronts', n, await draw(`fronts-${shots.length}`, q)]);
   const t = opt.tradition ?? 'timber';
   if (!opt.only || opt.only === 'across') for (const s of [8, 9, 13, 16]) shots.push([`across-${t}`, `${t}: story ${s}`, await draw(`across-${t}-${s}`, `story=${s}&region=${t}&zoom=0.4`)]);
 }, { width: 700, height: 700 });
 // (each set on a sheet: the same build a column to a tradition (close over wide); one tradition's builds two across)
 for (const set of [...new Set(shots.map((s) => s[0]))]) {
   const fs = shots.filter((s) => s[0] === set), cols = set === 'same' ? TRADITIONS.length : 2;
+  // (the fronts: two across, as the across sets are)
   const sheet = new URL(`../static/labyrinth/traditions-${set}.jpg`, import.meta.url).pathname;
   execFileSync('python3', ['-c', `
 import sys

@@ -412,6 +412,19 @@ void main() {
     float g = noise(vec3(vPos.x * 3. + vPos.z * 3., vPos.y * 40., 1.));
     base = vec3(.52, .40, .29) * (.85 + .2 * g) * (.9 + .1 * vTone);
   }
+  else if (mat == 14 && vTone > 1.5) {
+    // (glazed tile, faced on a portal (facades.ts; lead's material, its tone past 2): eight-pointed stars in cobalt and
+    // turquoise on cream, a small gold heart to each, laid in tesserae; seen from far, their mean)
+    bool flatF = abs(n.y) > .5;
+    vec3 T = flatF ? vec3(1., 0., 0.) : normalize(vec3(-n.z, 0., n.x) + 1e-5);
+    vec2 q = vec2(dot(vPos, T), flatF ? vPos.z : vPos.y) * 9., c = floor(q), f = fract(q) - .5;
+    float star = min(max(abs(f.x), abs(f.y)), (abs(f.x) + abs(f.y)) * .7071);
+    vec3 cc = star < .3 ? (mod(c.x + c.y, 2.) < .5 ? vec3(.10, .20, .48) : vec3(.12, .50, .55)) : vec3(.86, .82, .70);
+    if (star < .1) cc = vec3(.76, .58, .26);
+    vec2 tq = fract(q * 3.);
+    cc *= 1. - .22 * step(min(min(tq.x, 1. - tq.x), min(tq.y, 1. - tq.y)), .07) * keep(80.);
+    base = mix(vec3(.30, .54, .58), cc * (.95 + .08 * hash(vec3(floor(q * 3.), 2.))), keep(11.));
+  }
   else if (mat == 14) {
     // (lead: grey-green, in standing seams)
     float u = atan(vPos.z - floor(vPos.z) - .5, vPos.x - floor(vPos.x) - .5) * 4., su = fract(u);

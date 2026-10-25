@@ -1073,6 +1073,36 @@ if (process.env.DEBUG) (await import('node:fs')).writeFileSync(process.env.DEBUG
   }
   RG.setRegions('mediterranean');
 }
+
+// ─── fronts: a house round a court composed as fronts, where its tradition does (facades.ts) ───
+{
+  const FA = await load('../client/labyrinth/facades.ts');
+  RG.setRegions('mediterranean');
+  const m17 = story(17), built = (w) => JSON.stringify([...w.mass.keys()].sort((a, b) => a - b));
+  ok('fronts: the middle sea composes none', FA.facades(m17).size === 0);
+  RG.setRegions('persian');
+  const p17 = story(17), bays = [...FA.facades(p17).values()], roles = {};
+  for (const by of bays) roles[by.role] = (roles[by.role] ?? 0) + 1;
+  ok('fronts: what\'s built the same composed or not', built(p17) === built(m17));
+  ok('fronts: the courtyard house galleried, a portal, windows paired over the court, its outer walls blank', roles.gallery > 0 && roles.portal > 0 && roles.paired > 0 && roles.blank > 0, roles);
+  ok('fronts: a portal to a building at most', new Set(bays.filter((by) => by.role === 'portal').map((by) => by.b.id)).size === bays.filter((by) => by.role === 'portal').length);
+  ok('fronts: galleries only onto a court, at the ground', bays.filter((by) => by.role === 'gallery').every((by) => p17.courts.has(key(0, by.out[1], by.out[2])) && by.k === p17.ground(by.i, by.j)));
+  // (what stands out past what's built: a portal's frame, never into a way kept for a stair, a passage kept open, or
+  // stone, at any level in front of it, nor over its top)
+  for (const s of [8, 16, 17]) {
+    const w = story(s);
+    for (const by of FA.facades(w).values()) {
+      if (by.role !== 'portal') continue;
+      const [a, c] = DIRS[by.d];
+      for (let k = by.k; k <= by.top; k++) ok(`fronts (story ${s}): a portal's frame stands clear of ways and kept passages`, !w.way(k, by.i + a, by.j + c) && w.passage(k, by.i + a, by.j + c) < 0);
+      ok(`fronts (story ${s}): nothing over a portal's top`, !w.occupied(by.top, by.i, by.j));
+    }
+  }
+  const m = ME.buildMesh(p17);
+  let bad = 0; for (let q = 0; q < m.count * ME.STRIDE; q++) if (!Number.isFinite(m.data[q])) bad++;
+  ok('fronts: the composed mesh whole (no NaN)', bad === 0, bad);
+  RG.setRegions('mediterranean');
+}
 console.log(`${checks - fails} of ${checks} checks hold · gestures read as ${JSON.stringify(made)} · declined: ${JSON.stringify(declines)} · dressed by the rules: ${lively.dressed} of ${lively.worlds} worlds, gated or arcaded walls: ${lively.gates}`);
 console.log(fails ? `\n${fails} failed` : '\nall passed');
 process.exitCode = fails ? 1 : 0;

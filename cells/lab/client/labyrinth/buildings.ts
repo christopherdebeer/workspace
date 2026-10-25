@@ -58,6 +58,9 @@ export interface Building {
   /** a plan that isn't a rectangle (an L, a T, a U), roofed in wings: rectangles covering it, each with its own roof,
    * meeting the others' in valleys */
   wings?: Array<{ i0: number; i1: number; j0: number; j1: number }>;
+  /** its faces that look out: each column's sides at each level, what's outside them, and whether it's plain stone
+   * (facades.ts reads them as runs of bays) */
+  faces: Array<{ k: number; i: number; j: number; d: number; out: Cell; plain: boolean }>;
 }
 
 /** a plan's wings: the fewest largest rectangles that cover it (overlapping where they meet), two cells wide or more;
@@ -202,7 +205,7 @@ function find(w: World): Buildings {
     // a neighbour added later never re-rolls its windows, door or roof))
     const first = Math.min(...cols.map(([x, z]) => w.firstOp.get(key(0, x, z)) ?? 1e9));
     const mine = new Set(cols.map(([x, z]) => `${x}.${z}`)), id = Math.min(...cols.filter(([x, z]) => (w.firstOp.get(key(0, x, z)) ?? 1e9) === first).map(([x, z]) => key(h - 1, x, z)));
-    const b: Building = { cols, h, base: cols.map(([x, z]) => baseOf(x, z)), through, i0, i1, j0, j1, rect: cols.length === (i1 - i0 + 1) * (j1 - j0 + 1), tower, openings: [], inside: false, walked: false, roof: null, id, fall: -1 };
+    const b: Building = { cols, h, base: cols.map(([x, z]) => baseOf(x, z)), through, i0, i1, j0, j1, rect: cols.length === (i1 - i0 + 1) * (j1 - j0 + 1), tower, openings: [], inside: false, walked: false, roof: null, id, fall: -1, faces: [] };
     // (its faces: each column's sides that look out, at each level, and what's outside them; not where a passage
     // through it comes out (that's open), and an opening only in plain stone)
     const faces: Array<{ k: number; i: number; j: number; d: number; out: Cell; plain: boolean }> = [];
@@ -214,6 +217,7 @@ function find(w: World): Buildings {
         if (!w.stone(k, x + a, z + bb) && w.stair(k, x + a, z + bb) < 0 && !w.earth(k, x + a, z + bb)) faces.push({ k, i: x, j: z, d, out: [k, x + a, z + bb], plain: w.block(k, x, z) });
       }
     }
+    b.faces = faces;
     const foot = (f: (typeof faces)[number]) => f.k === baseOf(f.i, f.j);
     // (its top: walked if a way arrives there from beyond it)
     const tops = cols.map(([x, z]) => key(h, x, z)).filter((v) => nav.places.has(v)), topSet = new Set(tops);
@@ -309,6 +313,8 @@ function find(w: World): Buildings {
     const wings = !b.rect && !b.roofPlan ? wingsOf(cols) : null;
     if (rule === RULE.noRoof || watered || (!rule && ((b.walked && !b.roofPlan) || dressedTop || (!b.rect && !wings)))) b.roof = null;
     // (each wing hipped, so where one runs into another its end slopes down under the other's roof)
+    // (where a tradition's tops are flat, a plan in wings is too)
+    else if (!rule && g.roof === 'flat' && wings) b.roof = null;
     else if (wings) { b.wings = wings.wings; b.roof = 'hipped'; if (wings.flat.length) b.terrace = wings.flat; }
     else if (rule >= RULE.hipped && rule <= RULE.dome) b.roof = (['hipped', 'gable', 'shed', 'dome'] as const)[rule - RULE.hipped];
     else {

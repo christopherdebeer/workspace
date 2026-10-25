@@ -5,6 +5,7 @@
 import { hash } from '../kit/rng';
 import { DIRS } from './model';
 import { buildings, grammarHere, type Opening } from './buildings';
+import { FRAME_OUT, FRAME_UP, type Bay } from './facades';
 import { ROUND, archNormal, archY } from './regions';
 import { KIND, MAT, PIERCED, type Emit, type V3 } from './emit';
 
@@ -52,13 +53,13 @@ export function openings(E: Emit) {
    * foot), or a window (arched, square, or a slit; its glass set back, a sill under it). The wall round it, the opening's
    * reveals and head, and what's at the back of it.
    */
-  const holed = (d: number, s0: number, s1: number, y0: number, yt: number, op: Opening, P: (d: number, s: number, y: number, inset?: number) => V3, n: V3, foot: number) => {
+  const holed = (d: number, s0: number, s1: number, y0: number, yt: number, op: Opening, P: (d: number, s: number, y: number, inset?: number) => V3, n: V3, foot: number, narrow = 1) => {
     const k = Math.floor(y0 + 0.001);
     // (its tradition (regions.ts): its arch (round, or pointed with its crown where a round one's would be), a door's
     // head arched or square; where windows are glazed in panes, a window taller, down nearer the floor)
     const g = grammarHere(w, op.k, op.i, op.j), door = op.kind === 'door', slit = op.style === 'slit';
     const arched = (door && g.doorHead === 'arched') || op.style === 'arched' || slit, fam = arched && !slit ? g.arch : ROUND, tall = !!g.panes;
-    const hw = door ? 0.17 : slit ? 0.04 : op.style === 'square' ? 0.12 : tall ? 0.12 : 0.11;
+    const hw = (door ? 0.17 : slit ? 0.04 : op.style === 'square' ? 0.12 : tall ? 0.12 : 0.11) * narrow;
     const yb = door ? k : k + (slit ? 0.28 : tall ? 0.27 : 0.38), sp0 = door ? k + (arched ? 0.5 : 0.66) : slit ? k + 0.7 : k + (op.style === 'square' ? 0.72 : 0.62);
     const sp = arched ? sp0 + hw - archY(fam, 0, hw) : sp0;
     const head = (t: number) => (arched ? (fam === ROUND ? sp + Math.sqrt(Math.max(0, hw * hw - t * t)) : sp + archY(fam, t, hw)) : sp), top = arched ? sp0 + hw : sp, r = door ? 0.13 : 0.09;
@@ -143,5 +144,69 @@ export function openings(E: Emit) {
       E.cur.dress = keep;
     }
   };
-  return { holed };
+  /**
+   * A bay with a part in a front (facades.ts), drawn in place of the plain face: a gallery's arch and the vaulted bay
+   * cut in behind it; a portal, its frame, its deep recess, the door and the lattice at its back (drawn whole from its
+   * foot; the faces over it, `over`, are its frame's and drawn with it); or a pair of windows on a sill course.
+   */
+  const bay = (d: number, s0: number, s1: number, y0: number, yt: number, by: Bay, P: (d: number, s: number, y: number, inset?: number) => V3, n: V3, foot: number) => {
+    if (by.role === 'over') return;
+    if (by.role === 'blank') { quad(P(d, s0, y0), P(d, s1, y0), P(d, s1, yt), P(d, s0, yt), n, [foot, foot, 1, 1], MAT.stone); return; }
+    const k = by.k, g = grammarHere(w, k, by.i, by.j), fam = g.arch, [ta, tb] = DIRS[(d + 1) % 4];
+    const tN = (hn: [number, number]): V3 => [ta * hn[0], hn[1], tb * hn[0]];
+    const keepTone = E.cur.tone;
+    // (glass lit within, in bars of the house's paint; a fine lattice for a portal's)
+    const glass = (A: V3, B: V3, C: V3, D: V3, fine: boolean, lit: boolean) => { const pn = g.panes; E.cur.tone = 2 + (pn ? pn.paints[0] : 0) + (lit ? 8 : 0) + (fine ? 16 : 0); quad(A, B, C, D, n, 0.8, MAT.glass); E.cur.tone = keepTone; };
+    if (by.role === 'paired') {
+      // (two windows, each in its half; and a sill course run across the whole bay, so the bays' courses are one)
+      const op: Opening = { kind: 'window', style: 'arched', k, i: by.i, j: by.j, d };
+      const mid = (s0 + s1) / 2, off = (s1 - s0) / 4;
+      for (const c of [mid - off, mid + off]) holed(d, (c < mid ? s0 : mid) - c, (c < mid ? mid : s1) - c, y0, yt, op, (dd, s2, y, inset) => P(dd, s2 + c, y, inset), n, foot, 0.85);
+      const ys = k + 0.22;
+      quad(P(d, s0, ys, -0.03), P(d, s1, ys, -0.03), P(d, s1, ys + 0.035, -0.03), P(d, s0, ys + 0.035, -0.03), n, 0.9, MAT.stone);
+      quad(P(d, s0, ys + 0.035, -0.03), P(d, s1, ys + 0.035, -0.03), P(d, s1, ys + 0.035), P(d, s0, ys + 0.035), [0, 1, 0], 1, MAT.stone);
+      quad(P(d, s0, ys, -0.03), P(d, s1, ys, -0.03), P(d, s1, ys), P(d, s0, ys), [0, -1, 0], 0.5, MAT.stone);
+      return;
+    }
+    // (an arch cut into the stone: half-width hw, its crown at yC, cut in to D; the front at `out` (a portal's frame
+    // stands proud))
+    const portal = by.role === 'portal', hw = portal ? 0.34 : 0.33, out = portal ? -FRAME_OUT : 0, D = portal ? 0.42 : 0.32;
+    const yC = portal ? k + Math.min(1.75, by.top - k - 0.32) : k + 0.84, spring = yC - archY(fam, 0, hw), head = (t: number) => spring + archY(fam, t, hw);
+    const top = portal ? by.top + FRAME_UP : yt, e0 = portal ? -0.5 : s0, e1 = portal ? 0.5 : s1, N = 12;
+    // (the front: piers either side, and the spandrel over the arch; a portal's faced in tile (lead's material, its tone
+    // past 2: render.ts), a gallery's stone)
+    const face = portal ? MAT.lead : MAT.stone;
+    if (portal) E.cur.tone = 2;
+    quad(P(d, e0, y0, out), P(d, -hw, y0, out), P(d, -hw, top, out), P(d, e0, top, out), n, [foot, foot, 1, 1], face);
+    quad(P(d, hw, y0, out), P(d, e1, y0, out), P(d, e1, top, out), P(d, hw, top, out), n, [foot, foot, 1, 1], face);
+    for (let q = 0; q < N; q++) { const t0 = -hw + (2 * hw * q) / N, t1 = -hw + (2 * hw * (q + 1)) / N; quad(P(d, t0, head(t0), out), P(d, t1, head(t1), out), P(d, t1, top, out), P(d, t0, top, out), n, 1, face); }
+    E.cur.tone = keepTone;
+    if (portal) {
+      // (its frame's edges, in stone: its sides and top out of the wall, the back of it over the roof; a moulding round it)
+      const B = 0.05;
+      quad(P(d, -0.5, y0, out), P(d, -0.5, y0), P(d, -0.5, top), P(d, -0.5, top, out), [-ta, 0, -tb], 0.85, MAT.stone);
+      quad(P(d, 0.5, y0), P(d, 0.5, y0, out), P(d, 0.5, top, out), P(d, 0.5, top), [ta, 0, tb], 0.85, MAT.stone);
+      quad(P(d, -0.5, top, out), P(d, 0.5, top, out), P(d, 0.5, top, 0.14), P(d, -0.5, top, 0.14), [0, 1, 0], 1, MAT.stone);
+      quad(P(d, -0.5, by.top, 0.14), P(d, 0.5, by.top, 0.14), P(d, 0.5, top, 0.14), P(d, -0.5, top, 0.14), [-n[0], 0, -n[2]], 0.8, MAT.stone);
+      for (const [a0, a1, b0, b1] of [[-0.5, -0.5 + B, y0, top], [0.5 - B, 0.5, y0, top], [-0.5, 0.5, top - B, top]]) {
+        const A = P(d, a0, b0, out - 0.015), C = P(d, a1, b1, out);
+        box(Math.min(A[0], C[0]), Math.max(A[0], C[0]), b0, b1, Math.min(A[2], C[2]), Math.max(A[2], C[2]), MAT.stone, 0.95);
+      }
+    }
+    // (inside: its reveals up to the springing, its vault, its floor, and its back wall)
+    quad(P(d, -hw, k, out), P(d, -hw, k, D), P(d, -hw, spring, D), P(d, -hw, spring, out), [ta, 0, tb], 0.6, MAT.within);
+    quad(P(d, hw, k, D), P(d, hw, k, out), P(d, hw, spring, out), P(d, hw, spring, D), [-ta, 0, -tb], 0.6, MAT.within);
+    for (let q = 0; q < N; q++) {
+      const t0 = -hw + (2 * hw * q) / N, t1 = -hw + (2 * hw * (q + 1)) / N, hn = archNormal(fam, (t0 + t1) / 2, hw);
+      quad(P(d, t0, head(t0), out), P(d, t1, head(t1), out), P(d, t1, head(t1), D), P(d, t0, head(t0), D), tN(hn), 0.5, MAT.within);
+      quad(P(d, t0, k, D), P(d, t1, k, D), P(d, t1, head(t1), D), P(d, t0, head(t0), D), n, 0.45, MAT.within);
+    }
+    quad(P(d, -hw, k + 0.004, out), P(d, hw, k + 0.004, out), P(d, hw, k + 0.004, D), P(d, -hw, k + 0.004, D), [0, 1, 0], 0.6, MAT.stone);
+    // (at its back: a door, or (every other gallery bay) a window lit within; a portal's door tall, a lattice lit over it)
+    const inD = D - 0.004, door = portal || (by.i + by.j) % 2 === 0;
+    if (door) quad(P(d, -0.13, k, inD), P(d, 0.13, k, inD), P(d, 0.13, k + (portal ? 0.78 : 0.6), inD), P(d, -0.13, k + (portal ? 0.78 : 0.6), inD), n, 0.6, MAT.door);
+    else glass(P(d, -0.12, k + 0.26, inD), P(d, 0.12, k + 0.26, inD), P(d, 0.12, k + 0.66, inD), P(d, -0.12, k + 0.66, inD), false, hash(w.seed, by.k, by.i, by.j, d, 13) % 100 < 60);
+    if (portal) { const yb = k + 0.9, yh = Math.min(spring + 0.15, yC - 0.2); if (yh > yb + 0.15) glass(P(d, -0.22, yb, inD), P(d, 0.22, yb, inD), P(d, 0.22, yh, inD), P(d, -0.22, yh, inD), true, true); }
+  };
+  return { holed, bay };
 }

@@ -12,6 +12,7 @@ import { hash } from '../kit/rng';
 import { key } from './model';
 import type { Building } from './buildings';
 import { grammarOfId } from './regions';
+import { facades } from './facades';
 import { KIND, MAT, TILE_U, X, Z, type Emit, type V3 } from './emit';
 
 /**
@@ -240,4 +241,44 @@ function chimney(E: Emit, at: V3) {
   box(at[0] - r, at[0] + r, at[1] - 0.3, at[1] + 0.32, at[2] - r, at[2] + r, MAT.stone, [0.8, 0.8, 1, 1]);
   box(at[0] - r - 0.025, at[0] + r + 0.025, at[1] + 0.32, at[1] + 0.37, at[2] - r - 0.025, at[2] + r + 0.025, MAT.stone, 1);
   E.cur.dress = keep;
+}
+
+/**
+ * A flat top's own (where a tradition's tops are flat: the plateau's): on a house of four cells or more, not walked, a
+ * wind-catcher, a slim tower over a corner of it, slotted near its head to take the wind down into the rooms; on one
+ * of six or more, now and then, a little pavilion on four columns under a tiled dome as well. Only over its own cells,
+ * where nothing's put and no way goes, and clear of a portal's frame.
+ */
+export function roofTop(E: Emit, b: Building) {
+  const { w, selected, box, quad, lathe } = E;
+  if (grammarOfId(w, b.id).roof !== 'flat' || b.walked || b.cols.length < 4) return;
+  const portals = new Set([...facades(w).values()].filter((by) => by.role === 'portal' && by.b === b).map((by) => `${by.i}.${by.j}`));
+  const free = b.cols.filter(([x, z]) => !w.occupied(b.h, x, z) && w.stair(b.h, x, z) < 0 && !w.way(b.h, x, z) && !w.tree(b.h, x, z) && !E.dressed(b.h - 1, x, z)?.prop && !portals.has(`${x}.${z}`));
+  if (!free.length) return;
+  // (at a corner: the cell with fewest of its own beside it, by the building's seed among those)
+  const own = (x: number, z: number) => b.cols.filter(([p, q]) => Math.abs(p - x) + Math.abs(q - z) === 1).length;
+  const corners = free.filter(([x, z]) => own(x, z) === Math.min(...free.map(([p, q]) => own(p, q))));
+  const [ci, cj] = corners[hash(w.seed, b.id, 51) % corners.length], y = b.h;
+  E.cur = { born: Math.max(...b.cols.map(([i, j]) => w.born(b.h - 1, i, j))) + 0.3, pivot: y, how: 1, tone: 0.5, dress: 0, sel: b.cols.some(([i, j]) => selected.has(key(b.h - 1, i, j))) };
+  const cx = X(ci) + 0.5, cz = Z(cj) + 0.5, R = 0.17, H = 1.05;
+  box(cx - R, cx + R, y - 0.02, y + H, cz - R, cz + R, MAT.stone, [0.75, 0.75, 1, 1]);
+  box(cx - R - 0.03, cx + R + 0.03, y + H, y + H + 0.05, cz - R - 0.03, cz + R + 0.03, MAT.stone, 1);
+  // (its slots: three dark openings up each face near its head)
+  for (let d = 0; d < 4; d++) {
+    const [a, c] = [[1, 0], [0, 1], [-1, 0], [0, -1]][d], n: V3 = [a, 0, c], t: V3 = [-c, 0, a];
+    for (const s of [-0.09, 0, 0.09]) {
+      const Q = (u: number, yy: number): V3 => [cx + a * (R + 0.003) + t[0] * (s + u), yy, cz + c * (R + 0.003) + t[2] * (s + u)];
+      quad(Q(-0.025, y + 0.62), Q(0.025, y + 0.62), Q(0.025, y + 0.95), Q(-0.025, y + 0.95), n, 0.3, MAT.within);
+    }
+  }
+  // (and on a big house, now and then, a pavilion)
+  const rest = free.filter(([x, z]) => Math.abs(x - ci) + Math.abs(z - cj) >= 2);
+  if (b.cols.length < 6 || !rest.length || hash(w.seed, b.id, 52) % 2) return;
+  const [pi, pj] = rest[hash(w.seed, b.id, 53) % rest.length], px = X(pi) + 0.5, pz = Z(pj) + 0.5, PH = 0.52, PW = 0.3;
+  for (const [a, c] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) lathe(px + a * PW, pz + c * PW, [[0.035, y], [0.03, y + PH]], MAT.stone, 6);
+  box(px - PW - 0.07, px + PW + 0.07, y + PH, y + PH + 0.06, pz - PW - 0.07, pz + PW + 0.07, MAT.stone, 1);
+  E.cur.tone = 2;
+  lathe(px, pz, Array.from({ length: 7 }, (_, q) => { const t = (q / 6) * (Math.PI / 2); return [0.27 * Math.cos(t), y + PH + 0.06 + 0.25 * Math.sin(t)] as [number, number]; }), MAT.lead, 12);
+  E.cur.tone = 0.5;
+  lathe(px, pz, [[0.025, y + PH + 0.31], [0.012, y + PH + 0.42]], MAT.stone, 6);
 }

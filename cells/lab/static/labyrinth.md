@@ -123,6 +123,35 @@ Arcades, colonnades, balustrades and courts are still the middle sea's in every 
 `?region=` holds a land to one tradition: `mediterranean`, `persian`, `timber` or `eaves`. `?region=mixed` lays districts
 of the first two over one land, a sketch of lands with more than one; a way from one to the next isn't made yet.
 
+## Fronts: a building composed, not opened a face at a time
+
+Where a tradition composes round a court (the plateau, so far: facades.ts), a building's faces are read as runs of
+bays, each knowing what it looks onto, and composed as fronts:
+
+- **on a court, at the ground**: an arcade cut into the building's own mass, a gallery of pointed arches, each with a
+  vaulted bay behind it and a door or a lit window at its back;
+- **a portal (an iwan)**: one to a building two storeys high or more, in the middle of its longest run on a court (or,
+  with none, at its door onto a way): a deep pointed recess the height of the front, a tall door at its back and a
+  lattice lit over it, under a frame faced in tile that stands a little proud of the wall and rises past its top;
+- **over a court**: windows in pairs, every bay, on one sill course;
+- **a house turned in on its court** keeps its outer walls nearly blank: its doors at the ground, a few high windows
+  under its top;
+- **every floor** marked by a band along the front;
+- **its flat top**: a wind-catcher over a corner of a house of four cells or more, slotted at its head; on one of six
+  or more, now and then, a little pavilion on four columns under a tiled dome.
+
+What's built is untouched: a gallery and an iwan are cut into stone that's already there. The only thing that stands
+out past what's built is a portal's frame, a twelfth of a cell, never into a way kept for a stair, a passage the hand
+kept open, or other stone; the roof's things stand on the building's own cells where nothing's put and no way goes.
+None of it is walked.
+
+![The fronts' fixture (story 17) in the middle sea and on the plateau, and the study on the plateau](labyrinth/traditions-fronts.jpg)
+
+`?story=17` is the fronts' fixture, a courtyard house: wings two storeys high round a court, the north wing three, a
+gate through the south. `node devtools/labyrinth-traditions.mjs --only=fronts` draws the sheet. A rebuild of story 8
+on the plateau went from about 105 ms to 118 ms in node; the courtyard house on the plateau is lighter than in the
+middle sea (53k vertices against 92k: flat tops against tiled roofs).
+
 ## Water
 
 **The pool brush lets water into whatever it touches**: the ground (a pool), or a top, up off the ground (a basin, let into the stone, a rim round it). Traced, it runs a channel along the stroke, along the ground or along a top. **A stroke drawn round, back to where it began, fills what it closes round**: a pond on the ground, a basin across a terrace. (With the block brush the same: a platform, filled.)

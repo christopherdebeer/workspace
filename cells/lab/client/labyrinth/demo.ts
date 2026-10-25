@@ -42,6 +42,7 @@ export function story(stage: number): World {
   if (stage === 14) return water();
   if (stage === 15) return onTheSlope();
   if (stage === 16) return study();
+  if (stage === 17) return courtHouse();
   const w = new World(7);
   const t = -100;
   const tapAt = (p: Pick) => { const op = tap(w, p, t); if (op && !('refused' in op)) w.apply(op, t); };
@@ -358,5 +359,23 @@ function study(): World {
   for (let i = 8; i >= -1; i--) out.push([i, 9]);
   const way = trace(w, g(8, 9), out, g(-1, 9), () => t, t, [], 'way');
   if (way && !('refused' in way)) w.apply({ ...way, alts: undefined }, t);
+  return w;
+}
+
+/**
+ * storyboard 17: a courtyard house, the fronts' fixture (facades.ts). Wings two storeys high round a court five cells by
+ * four, the north wing three; a gate through the south wing. The rules make the court (paved, a pool at its heart, a
+ * tree in a corner); where a tradition composes round a court, its fronts are galleried at the ground, a portal in the
+ * middle of the longest, windows in pairs over it.
+ */
+function courtHouse(): World {
+  const w = new World(43), t = -100;
+  const add = (cells: Array<[number, number, number]>) => w.apply({ add: cells.map(([k, i, j]) => [k, i, j, t] as [number, number, number, number]) }, t);
+  const wing = (i0: number, i1: number, j0: number, j1: number, h: number) => { const c: Array<[number, number, number]> = []; for (let i = i0; i <= i1; i++) for (let j = j0; j <= j1; j++) for (let k = 0; k < h; k++) c.push([k, i, j]); add(c); };
+  wing(1, 9, 7, 8, 3);
+  wing(1, 9, 1, 2, 2);
+  wing(1, 2, 3, 6, 2);
+  wing(8, 9, 3, 6, 2);
+  w.apply({ arches: [[0, 5, 1, 1, t], [0, 5, 2, 1, t]] }, t);
   return w;
 }

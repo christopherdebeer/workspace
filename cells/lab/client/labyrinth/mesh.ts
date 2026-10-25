@@ -27,8 +27,9 @@ import { strokes, type Skeleton, type StrokeLand } from './strokes';
 import { DOMAIN, LAND, noise2, onLand } from './land';
 import { groundY, retaining } from './context';
 import { STRIDE, TILE_U, MAT, LANDMAT, FOUND, PIERCED, MOSS, IVY, KIND, SEL, X, Z, type V3, type Emit } from './emit';
-import { roof } from './roof';
+import { roof, roofTop } from './roof';
 import { openings } from './facade';
+import { bayAt } from './facades';
 import { ROUND, archNormal, archStations, archUnit, archY, type ArchFamily } from './regions';
 import { benched, CUT, nearRiver, riverOf, roughness } from './terrain';
 
@@ -278,8 +279,9 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
     E.forEach((e, n) => {
       if (!e.open) return;
       const nv = nOf(e), foot = footOf(e);
-      const op = e.face >= 0 && Math.abs(e.dist - 0.5) < 1e-6 ? opening(w, k, i, j, e.face) : null;
-      if (op) { const [ta, tb] = DIRS[(e.face + 1) % 4]; holed(e.face, e.a[0] * ta + e.a[1] * tb, e.b[0] * ta + e.b[1] * tb, y0, y1 - bt, op, P, nv, foot); }
+      const whole = e.face >= 0 && Math.abs(e.dist - 0.5) < 1e-6, op = whole ? opening(w, k, i, j, e.face) : null, by = whole ? bayAt(w, k, i, j, e.face) : null;
+      if (by) { const [ta, tb] = DIRS[(e.face + 1) % 4]; frontBay(e.face, e.a[0] * ta + e.a[1] * tb, e.b[0] * ta + e.b[1] * tb, y0, y1 - bt, by, P, nv, foot); }
+      else if (op) { const [ta, tb] = DIRS[(e.face + 1) % 4]; holed(e.face, e.a[0] * ta + e.a[1] * tb, e.b[0] * ta + e.b[1] * tb, y0, y1 - bt, op, P, nv, foot); }
       else quad(L(e.a, y0), L(e.b, y0), L(e.b, y1 - bt), L(e.a, y1 - bt), nv, [foot, foot, 1, 1], MAT.stone);
       if (lid) { cap(); quad(L(e.a, y1 - B), L(e.b, y1 - B), L(inner[n].b, y1), L(inner[n].a, y1), [nv[0] * Math.SQRT1_2, Math.SQRT1_2, nv[2] * Math.SQRT1_2], 1, MAT.stone); cur.dress = keep; }
     });
@@ -346,6 +348,9 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
     if (lid && !ol.wall && k >= 1) { cur.dress = 0; band(y1 - 0.15, y1 - 0.09, 0.035); cur.dress = keep; }
     const under = w.block(k - 1, i, j) ? dressOf(k - 1, i, j) : -1;
     if (under >= 0 && Math.floor(under / KIND) !== Math.floor(keep / KIND)) { cur.dress = 0; band(y0 - 0.02, y0 + 0.05, 0.025); cur.dress = keep; }
+    // (where a tradition composes its fronts (regions.ts, facades.ts), a band at every floor over the first, so a front
+    // reads in its storeys)
+    else if (under >= 0) { const bd = buildings(w).of.get(key(k, i, j)); if (bd && grammarHere(w, k, i, j).facade === 'court' && k > bd.base[bd.cols.findIndex(([x, z]) => x === i && z === j)]) band(y0 - 0.02, y0 + 0.05, 0.025); }
     // (a wall's post where it turns, meets another, or ends: capped a little above it)
     if (ol.wall && !ol.straight && !ol.flow && lid) { cap(); const h = ol.post + 0.02; box(cx - h, cx + h, y1, y1 + 0.045, cz - h, cz + h, MAT.stone, 0.95); cur.dress = keep; }
     // (buttresses along a long run on the stone: out from the wall, up, and sloped back into it)
@@ -358,7 +363,7 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
       for (const sg of [-1, 1]) { face([Q(sg * BUTW, r0, y0), Q(sg * BUTW, r1, y0), Q(sg * BUTW, r1, yT), Q(sg * BUTW, r0, yS)], MAT.stone, 0.8, true, Q(0, (r0 + r1) / 2, y0 + 0.3)); }
     }
   };
-  const { holed } = openings(E);
+  const { holed, bay: frontBay } = openings(E);
   const topFace = (k: number, i: number, j: number, y: number) => {
     if (w.block(k + 1, i, j) || w.stair(k + 1, i, j) >= 0) return;
     if (w.archway(k + 1, i, j) >= 0 && w.archway(k, i, j) === w.archway(k + 1, i, j)) return;
@@ -572,7 +577,7 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
       for (let q = 1; q + 1 < prof.length; q++) face([P(prof[q][0], sc - HW2, prof[q][1]), P(prof[q + 1][0], sc - HW2, prof[q + 1][1]), P(prof[q + 1][0], sc + HW2, prof[q + 1][1]), P(prof[q][0], sc + HW2, prof[q][1])], MAT.stone, 0.55 + 0.35 * (q / prof.length), true, inside);
     }
   }
-  for (const b of buildings(w).list) if (b.roof) roof(E, b);
+  for (const b of buildings(w).list) if (b.roof) roof(E, b); else roofTop(E, b);
 
   perf.end(); perf.begin('mesh.build.plants');
   // ─── what grows in the courtyards ───
