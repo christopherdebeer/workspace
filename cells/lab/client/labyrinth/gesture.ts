@@ -710,7 +710,7 @@ function way(w: World, h0: number, cells: Array<[number, number]>, to: Cell | nu
   // (and how its flight is carried, if over anything: the setting's answer said, so a hand knows it can choose another)
   const carried: Record<string, string> = { hung: ', hung from the wall', rampant: ', on a rampant arch', solid: ', solid', pier: ', on piers' };
   const fc = (r?.cells ?? []).map((c) => sim.flight(...c)?.f.carriage).find((c) => c && c !== 'ground');
-  const parts = [paved ? `${paved} paved` : '', stairs ? `a flight of ${stairs}${fc ? carried[fc] : ''}` : '', bridge ? `a bridge of ${bridge}` : ''].filter(Boolean);
+  const parts = [paved ? `${paved} paved` : '', stairs ? `a flight of ${Math.ceil(stairs / w.bay)}${fc ? carried[fc] : ''}` : '', bridge ? `a bridge of ${bridge}` : ''].filter(Boolean);
   const note = r?.reached ? `a way${parts.length ? ': ' + parts.join(', ') : ''}` : 'a way that can\'t reach as drawn: joining what it meets';
   const alts: Alt[] = [];
   const tower = dest[0] !== h0 ? stairTower(w, h0, [...path, [dest[1], dest[2]]], dest, now) : null;

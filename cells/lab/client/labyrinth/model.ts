@@ -315,7 +315,7 @@ export class World {
    * high): there a wall or a way can be half a cell, and what's read in cells (an opening, a front's bay, a roof's
    * pitch, a building's least size, the land) is read over two squares (static/labyrinth-grid.md)
    */
-  constructor(public seed = 1, readonly landSeed = 0, readonly bay = 1) { perf.count('world.new'); this.land = landSeed ? makeLand(landSeed, bay) : null; if (this.land) this.rebuild(0); }
+  constructor(public seed = 1, readonly landSeed = 0, readonly bay = 1) { perf.count('world.new'); this.land = landSeed ? makeLand(landSeed, bay) : null; if (this.land) this.rebuild(0); else this.ext = this.measure(); }
   /** the ground's level in a column: 0 on the slab; on the land, its column's (`earth` fills it below that) */
   ground(i: number, j: number) { return this.land ? groundOf(this.land, i, j) : 0; }
   /** ground a way walks on, paved (by column) */
@@ -689,7 +689,9 @@ export class World {
     if (c.path.length < 2) return false;
     const taken = (k: number, i: number, j: number) => k >= 0 && (this.earth(k, i, j) || this.mass.has(key(k, i, j)) || this.stairs.has(key(k, i, j)) || this.crown(k, i, j));
     const unsteady = (k: number, i: number, j: number) => k > 0 && (this.stairs.has(key(k - 1, i, j)) || this.trees.has(key(k - 1, i, j)));
-    const top = this.levels + 4, INF = 1e9, idx = (h: number, m: number) => h * 3 + m + 1;
+    // (how it was last moved: on the level (0), a step up (1) or down (−1); on the half grid a level's two squares, the
+    // first half of a step up (2) or down (−2) and the second half down (−3), each move's height the one walked at after it)
+    const top = this.levels + 4, INF = 1e9, NM = 6, half = this.bay === 2, idx = (h: number, m: number) => h * NM + m + 3;
     /**
      * The search along one path: by cell along it, the height walked at after it and how it was last moved (on the
      * level, or a step up or down): a flight turns about only after a landing, so it can always be walked. Where there's
@@ -735,40 +737,49 @@ export class World {
         if (k > g && this.mass.has(key(k - 1, i, j)) && !this.laid.has(key(k - 1, i, j))) return 0.3;
         return (k - g) * 1.2;
       };
-      const cost: number[][] = Array.from({ length: n + 1 }, () => new Array((top + 1) * 3).fill(INF));
-      const from: Array<Array<{ h: number; m: number }>> = Array.from({ length: n + 1 }, () => new Array((top + 1) * 3));
+      const cost: number[][] = Array.from({ length: n + 1 }, () => new Array((top + 1) * NM).fill(INF));
+      const from: Array<Array<{ h: number; m: number }>> = Array.from({ length: n + 1 }, () => new Array((top + 1) * NM));
       cost[0][idx(h0, 0)] = 0;
       for (let s = 0; s < n; s++) {
         const [i, j] = along[s];
-        for (let p = 0; p <= top; p++) for (let m = -1; m <= 1; m++) {
+        for (let p = 0; p <= top; p++) for (let m = -3; m <= 2; m++) {
           const here = cost[s][idx(p, m)];
           if (here >= INF) continue;
           const go = (h: number, kind: number, extra: number) => { if (h < 0 || h > top) return; const v = here + extra, q = idx(h, kind); if (v < cost[s + 1][q]) { cost[s + 1][q] = v; from[s + 1][q] = { h: p, m }; } };
+          // (half way up or down a level: on along the flight, its second half at the same level, straight on)
+          if (m === 2 || m === -2) {
+            if (!straight.has(s)) continue;
+            const prev = s > 0 ? along[s - 1] : path[0], ax = prev[0] !== i ? 0 : 1, a2 = this.passages.get(key(p, i, j));
+            const on = taken(p + 1, i, j) || (a2 !== undefined && a2 !== ax) ? -1 : at(p, i, j);
+            if (on >= 0) go(m === 2 ? p + 1 : p, m === 2 ? 1 : -3, 0.5 + on);
+            continue;
+          }
           const walk = at(p, i, j, s);
           if (walk >= 0) go(p, 0, walk);
           if (straight.has(s)) {
             // (a stair needs room over it: the level it climbs into, or comes down from)
             // (and never across another way's walk: a stair there would cut it (along it, it's that way going on up))
             const prev = s > 0 ? along[s - 1] : path[0], ax = prev[0] !== i ? 0 : 1, across = (q: number) => { const a = this.passages.get(key(q, i, j)); return a !== undefined && a !== ax; };
-            const up = m === -1 || taken(p + 1, i, j) || across(p) ? -1 : at(p, i, j);
-            if (up >= 0) go(p + 1, 1, 1 + up);
+            const cameDown = m === -1 || m === -3;
+            const up = cameDown || taken(p + 1, i, j) || across(p) ? -1 : at(p, i, j);
+            if (up >= 0) go(half ? p : p + 1, half ? 2 : 1, (half ? 0.5 : 1) + up);
             // (or carved up through the hand's stone where the stroke's drawn over or through it: a stair in the wall's
             // thickness, its headroom cut, the stone over it kept (carried on an arch); dearer than any open step)
-            else if (m !== -1 && !across(p) && carve(p, i, j)) go(p + 1, 1, 3.5 + Math.max(0, p - this.ground(i, j)) * 1.2);
+            else if (!half && !cameDown && !across(p) && carve(p, i, j)) go(p + 1, 1, 3.5 + Math.max(0, p - this.ground(i, j)) * 1.2);
             const down = m === 1 || p < 1 || taken(p, i, j) || across(p - 1) ? -1 : at(p - 1, i, j);
-            if (down >= 0) go(p - 1, -1, 1 + down);
+            if (down >= 0) go(p - 1, half ? -2 : -1, (half ? 0.5 : 1) + down);
           }
         }
       }
       let end = -1, last = n, endH = h1;
-      for (const m of [0, 1, -1]) if (cost[n][idx(h1, m)] < INF && (end < 0 || cost[n][idx(h1, m)] < cost[n][idx(h1, end)])) end = m;
+      for (const m of [0, 1, -1, -3]) if (cost[n][idx(h1, m)] < INF && (end < 0 || cost[n][idx(h1, m)] < cost[n][idx(h1, end)])) end = m;
       if (end < 0) {
         for (last = n - 1; last > 0 && end < 0; last--) for (let h = 0; h <= top; h++) if (cost[last][idx(h, 0)] < INF && (end < 0 || cost[last][idx(h, 0)] < cost[last][idx(endH, 0)])) { end = 0; endH = h; }
-        if (end < 0) return { path, along, plan: [] as Array<{ h: number; kind: 0 | 1 | -1 }>, last: 0, n, cost: 0 };
+        if (end < 0) return { path, along, plan: [] as Array<{ h: number; kind: number }>, last: 0, n, cost: 0 };
         last++;
       }
-      const plan: Array<{ h: number; kind: 0 | 1 | -1 }> = new Array(last);
-      for (let s = last, h = endH, m = end; s > 0; s--) { const f = from[s][idx(h, m)]; plan[s - 1] = { h: f.h, kind: m as 0 | 1 | -1 }; h = f.h; m = f.m; }
+      const plan: Array<{ h: number; kind: number }> = new Array(last);
+      for (let s = last, h = endH, m = end; s > 0; s--) { const f = from[s][idx(h, m)]; plan[s - 1] = { h: f.h, kind: m }; h = f.h; m = f.m; }
       return { path, along, plan, last, n, cost: cost[last][idx(endH, end)] };
     };
     // (as drawn; and drawn again with its zigzags gathered into short straight runs, never more than a cell or two off
@@ -792,7 +803,8 @@ export class World {
     };
     plan.forEach(({ h, kind }, s) => {
       const [i, j] = along[s], prev = s > 0 ? along[s - 1] : path[0];
-      const k = kind === -1 ? h - 1 : h;
+      // (a step's level: down a level, the one under; the second half of a step down, the level it's already at)
+      const k = kind === -1 || kind === -2 ? h - 1 : h;
       // (a step carved into the hand's stone: it and its headroom cut out of it, what's over them kept)
       if (kind === 1 && this.mass.has(key(k, i, j))) {
         const cut = (kk: number) => { this.mass.delete(key(kk, i, j)); this.thin.delete(key(kk, i, j)); this.archways.delete(key(kk, i, j)); this.carved.add(key(kk, i, j)); };
@@ -801,7 +813,7 @@ export class World {
         const [a, b] = DIRS[this.stairs.get(key(k, i, j))?.d ?? dirTo(prev, [i, j])];
         for (let kk = k + 2; this.mass.has(key(kk, i, j)) && !this.laid.has(key(kk, i, j)); kk++) { if (this.stone(kk, i - a, j - b) && this.stone(kk, i + a, j + b)) break; cut(kk); }
       }
-      if (kind !== 0) { this.stairs.set(key(k, i, j), { d: kind === 1 ? dirTo(prev, [i, j]) : dirTo([i, j], prev), born: born + s * 0.05 }); this.laid.add(key(k, i, j)); cells.push([k, i, j]); }
+      if (kind !== 0) { this.stairs.set(key(k, i, j), { d: kind > 0 ? dirTo(prev, [i, j]) : dirTo([i, j], prev), born: born + s * 0.05 }); this.laid.add(key(k, i, j)); cells.push([k, i, j]); }
       if (kind === 0) {
         // (walked through: kept open; and a wall it went through, opened, a gate)
         this.reserve(k, i, j, prev);
