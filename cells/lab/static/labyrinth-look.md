@@ -222,7 +222,7 @@ The layers composite as multiply, bottom to top: paper; the drawing under (`unde
 
 The older dials still read: `shadow` sets `shade`, `cast` and `hollow` together, `landshadow` becomes `landlight`, and `fade` sets all three reaches.
 
-Together: `?colour=0&under=1` is the scene as a drawing on paper with its shading; `?terrain=0` is the built in colour on a drawn, shaded land; `?colour=1&under=1` is the full picture with the drawing showing through it; `?shade=0&cast=0&hollow=0` is flat colour; `?colourreach=0.6&lightreach=1.6&inkreach=2&inkfade=0.6` holds the colour close, the light past it, and the lines furthest, fading (print's "study"); `?toward=1` is the whole scene taken to the page.
+Together: `?colour=0&under=1` is the scene as a drawing on paper with its shading; `?terrain=0` is the built in colour on a drawn, shaded land; `?colour=1&under=1` is the full picture with the drawing showing through it; `?shade=0&cast=0&hollow=0` is flat colour; `?colourreach=0.6&lightreach=1.6&inkreach=2&inkfade=0.6` holds the colour close, the light past it, and the lines furthest, fading (the study: now the house setting, below); `?toward=1` is the whole scene taken to the page.
 
 ## The house setting: found by looking
 
@@ -254,6 +254,8 @@ The picture is now two layers multiplied over the paper. The first is the colour
 - What's built carries the colour, a little quieted.
 - The land is the paper's own, with its shade a warm wash and its contours through it, so it meets the drawn land beyond with no edge.
 - The water stays water. Far off, the settlement is a coloured piece on a drawn land, not a pool of yellow.
+
+**The house setting now is the study's** (after the phone: "Study tuning should become house default"): built 1, land .2, water .6, colour reach .6; shade .6, cast .8, hollows .7, land light .8, light reach 1.6; outlines .8, ink reach 2, fading .6; under .3. The colour is held close round what's built, the light goes on past it onto the paper, and the lines go furthest, fading out. The setting above, found by looking, is still where print's drawing and page start from.
 
 ## Stage 23: crags, broken ground, and what the sheet still asked for
 

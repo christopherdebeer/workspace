@@ -22,16 +22,17 @@ export type DialKey = keyof Dials;
 
 /** the picture as it's lit: every layer whole, as far as it ever went */
 export const PLAIN: Dials = { built: 1, land: 1, water: 1, colourreach: 1, shade: 1, cast: 1, hollow: 1, landlight: 1, lightreach: 1, lines: 1, edges: 1, inkreach: 1, inkfade: 0, under: 0, toward: 0 };
-/** where it starts: the house setting (found by looking: static/labyrinth-look.md), the picture as it's lit, the
- * drawing with its shade, a study (the colour held close, the light out past it, the lines further still, fading), and
- * everything taken to the page */
-export const HOUSE: Dials = { ...PLAIN, built: 0.8, land: 0.3, water: 0.8, shade: 1.15, cast: 0.75, hollow: 1.15, landlight: 0.45, under: 0.7 };
+/** the setting first found by looking (static/labyrinth-look.md): what's built a little quieted, the land the paper's
+ * own, its light deep; the drawing and the page start from it */
+const LOOKED: Dials = { ...PLAIN, built: 0.8, land: 0.3, water: 0.8, shade: 1.15, cast: 0.75, hollow: 1.15, landlight: 0.45, under: 0.7 };
+/** where it starts: the house setting, the study (the colour held close, the light out past it, the lines further
+ * still, fading); the picture as it's lit, the drawing with its shade, and everything taken to the page */
+export const HOUSE: Dials = { ...LOOKED, built: 1, land: 0.2, water: 0.6, colourreach: 0.6, shade: 0.6, cast: 0.8, hollow: 0.7, landlight: 0.8, lightreach: 1.6, edges: 0.8, inkreach: 2, inkfade: 0.6, under: 0.3 };
 export const PRESETS: Record<string, Dials> = {
   house: HOUSE,
   picture: PLAIN,
-  drawing: { ...HOUSE, built: 0, land: 0, water: 0.6, shade: 1.1, cast: 1.1, hollow: 1.1, landlight: 0.65, under: 1 },
-  study: { ...HOUSE, built: 1, land: 0.2, water: 0.6, colourreach: 0.6, shade: 0.6, cast: 0.8, hollow: 0.7, landlight: 0.8, lightreach: 1.6, edges: 0.8, inkreach: 2, inkfade: 0.6, under: 0.3 },
-  page: { ...HOUSE, toward: 1, water: 0.5 },
+  drawing: { ...LOOKED, built: 0, land: 0, water: 0.6, shade: 1.1, cast: 1.1, hollow: 1.1, landlight: 0.65, under: 1 },
+  page: { ...LOOKED, toward: 1, water: 0.5 },
 };
 
 type Range = { key: DialKey; name: string; lo: number; hi: number; log?: boolean };

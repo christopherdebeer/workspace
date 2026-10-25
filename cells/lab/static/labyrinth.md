@@ -266,7 +266,7 @@ There's no cap on how high it goes: tap a column up as far as you like, and the 
 
 | Layer | Its sliders |
 |---|---|
-| **page** | how far everything's taken to the page; where to start from (house, picture, drawing, study, page) |
+| **page** | how far everything's taken to the page; where to start from (house, picture, drawing, page; the house setting is the study's) |
 | **under** | how much of the drawing lies under the picture |
 | **colour** | what's built, the land, the water; its reach |
 | **light** | shade, cast, hollows; how much of them the land keeps; its reach |
