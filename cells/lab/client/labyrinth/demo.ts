@@ -45,6 +45,7 @@ export function story(stage: number): World {
   if (stage === 17) return courtHouse();
   if (stage === 18) return halved(courtHouse());
   if (stage === 19) return halfHouse();
+  if (stage === 20) return halfByHand();
   const w = new World(7);
   const t = -100;
   const tapAt = (p: Pick) => { const op = tap(w, p, t); if (op && !('refused' in op)) w.apply(op, t); };
@@ -420,5 +421,27 @@ function halfHouse(): World {
   for (const i of [10, 11]) for (const j of [3, 4, 5]) arch.push([0, i, j, 1, t]);
   w.apply({ add: cells.filter(([k, i, j]) => !(k === 0 && (i === 10 || i === 11) && j >= 3 && j <= 5)) }, t);
   w.apply({ arches: arch }, t);
+  return w;
+}
+
+/**
+ * storyboard 20: the half grid, built by hand (its gestures read as a hand's would be): a terrace two storeys high and
+ * a tower four, each laid as stone; a thin wall traced on the ground and round, closing a court; a flight traced from
+ * the ground up to the terrace (two squares to a level); and from the tower's top, a way down to the terrace.
+ */
+function halfByHand(): World {
+  const w = new World(11, 0, 2), t = -100;
+  const box = (i0: number, i1: number, j0: number, j1: number, h: number) => { const c: Array<[number, number, number, number]> = []; for (let i = i0; i <= i1; i++) for (let j = j0; j <= j1; j++) for (let k = 0; k < h; k++) c.push([k, i, j, t]); w.apply({ add: c }, t); };
+  const traceAt = (start: Pick, cells: Array<[number, number]>, end: Pick | null) => { const op = trace(w, start, cells, end, () => t, t); if (op && !('refused' in op)) w.apply(op, t); return op; };
+  const line = (a: [number, number], b: [number, number]) => { const out: Array<[number, number]> = [[...a]]; let [x, z] = a; while (x !== b[0] || z !== b[1]) { if (x !== b[0]) x += Math.sign(b[0] - x); else z += Math.sign(b[1] - z); out.push([x, z]); } return out; };
+  box(18, 21, 8, 11, 2);
+  box(8, 11, 4, 7, 4);
+  // (a thin wall round a court, south of them: traced on the ground, closing on itself)
+  const ring = [...line([4, 16], [4, 26]), ...line([4, 26], [22, 26]).slice(1), ...line([22, 26], [22, 16]).slice(1), ...line([22, 16], [5, 16]).slice(1)];
+  traceAt(ground(4, 16), ring, ground(4, 16));
+  // (a flight up to the terrace from the ground west of it)
+  traceAt(ground(10, 10), line([10, 10], [18, 10]), topOf(w, 18, 10));
+  // (from the tower's top, down to the terrace)
+  traceAt(topOf(w, 11, 6), line([11, 6], [19, 6]).concat(line([19, 6], [19, 8]).slice(1)), topOf(w, 19, 8));
   return w;
 }

@@ -198,7 +198,18 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
     return v;
   };
   const SKYLIT = new Set([MAT.stone, MAT.within, MAT.court, MAT.slab, MAT.tile, MAT.clay, MAT.wood, MAT.door, MAT.lead]);
-  const vert = (p: V3, n: V3, ao: number, mat: number) => out.push(p[0], p[1], p[2], n[0], n[1], n[2], SKYLIT.has(mat % 16) && mat !== LANDMAT ? ao * (0.25 + 0.75 * skyVis(p, n)) : ao, (mat === MAT.stone || mat === MAT.within ? mat + cur.dress : mat === MAT.leaves ? mat + leaf * KIND + bloom : mat) + (cur.sel ? SEL : 0), cur.born, cur.pivot, cur.how, cur.tone);
+  /** on the half grid, where an object's drawn at its own size (`whole`): its middle, what's round it widened so the
+   * squeeze in plan that draws the grid in its proportions (main.ts) leaves it as it is */
+  let around: [number, number] | null = null;
+  const vert = (p: V3, n: V3, ao: number, mat: number) => {
+    if (around) { const B = w.bay, nx = n[0] / B, nz = n[2] / B, l = Math.hypot(nx, n[1], nz) || 1; p = [around[0] + (p[0] - around[0]) * B, p[1], around[1] + (p[2] - around[1]) * B]; n = [nx / l, n[1] / l, nz / l]; }
+    vertOut(p, n, ao, mat);
+  };
+  /** an object (a tree, a pot, a lantern) drawn whole at a square, as it would be in a cell: on the half grid not halved */
+  const whole = <T,>(i: number, j: number, f: () => T): T => wholeAt(X(i) + 0.5, Z(j) + 0.5, f);
+  /** the same round a point (as drawn: x and z from CENTER) */
+  const wholeAt = <T,>(x: number, z: number, f: () => T): T => { if (w.bay === 1) return f(); const keep = around; around = [x, z]; try { return f(); } finally { around = keep; } };
+  const vertOut = (p: V3, n: V3, ao: number, mat: number) => out.push(p[0], p[1], p[2], n[0], n[1], n[2], SKYLIT.has(mat % 16) && mat !== LANDMAT ? ao * (0.25 + 0.75 * skyVis(p, n)) : ao, (mat === MAT.stone || mat === MAT.within ? mat + cur.dress : mat === MAT.leaves ? mat + leaf * KIND + bloom : mat) + (cur.sel ? SEL : 0), cur.born, cur.pivot, cur.how, cur.tone);
   const quad = (a: V3, b: V3, c: V3, d: V3, n: V3, ao: number[] | number, mat: number) => {
     const A = typeof ao === 'number' ? [ao, ao, ao, ao] : ao;
     const ux = b[0] - a[0], uy = b[1] - a[1], uz = b[2] - a[2], vx = c[0] - a[0], vy = c[1] - a[1], vz = c[2] - a[2];
@@ -1073,7 +1084,7 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
       for (let b = -1; b <= 1; b++) for (let a = -1; a <= 1; a++) {
         if ((!a && !b) || !benched(w, i + a, j + b)) continue;
         const L = w.ground(i + a, j + b), d = Math.hypot(Math.max(i + a - gx, 0, gx - i - a - 1), Math.max(j + b - gz, 0, gz - j - b - 1));
-        if (p[1] - L > 0.28 && d < CUT + 0.04) return true;
+        if (p[1] - L > 0.28 && d < CUT * w.bay + 0.04) return true;
       }
       return false;
     }));
@@ -1254,18 +1265,21 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
     for (let j = B.j0 + 1; j < B.j1; j++) for (let i = B.i0 + 1; i < B.i1; i++) {
       const q = (j - LAND.j0) * 100 + (i - LAND.i0) + 9000, mx = i + 0.5, mz = j + 0.5;
       const rgh = roughness(w, mx, mz);
-      if (r(q, 1) > (rgh > 0.5 ? 0.35 : 0.06) || crags.some(([x, z]) => Math.hypot(x - mx, z - mz) < 2.5)) continue;
+      // (in cells: on the half grid, a quarter as many squares to a crag, each twice the squares across)
+      const BB = w.bay;
+      if (r(q, 1) > (rgh > 0.5 ? 0.35 : 0.06) / (BB * BB) || crags.some(([x, z]) => Math.hypot(x - mx, z - mz) < 2.5 * BB)) continue;
       let clear = true;
       for (let b = -1; b <= 1 && clear; b++) for (let a = -1; a <= 1 && clear; a++) { const x = i + a, z = j + b, g = w.ground(x, z); if (!onLand(x, z) || !bare(x, z) || benched(w, x, z) || land.water.has(z * 1000 + x) || w.stair(g, x, z) >= 0 || w.stair(g - 1, x, z) >= 0) clear = false; }
       const rv = nearRiverAt(mx, mz);
-      if (!clear || (rv && rv.d < rv.hw + 0.9)) continue;
-      const sx = Y(mx + 0.6, mz) - Y(mx - 0.6, mz), sz = Y(mx, mz + 0.6) - Y(mx, mz - 0.6);
+      if (!clear || (rv && rv.d < rv.hw + 0.9 * BB)) continue;
+      const sx = Y(mx + 0.6 * BB, mz) - Y(mx - 0.6 * BB, mz), sz = Y(mx, mz + 0.6 * BB) - Y(mx, mz - 0.6 * BB);
       if (Math.hypot(sx, sz) < (rgh > 0.5 ? 0.25 : 0.45)) continue;
       const fall = Math.atan2(-sz, -sx), s = 0.42 + 0.3 * r(q, 2), out0 = Math.max(E.i0 - i, i - E.i1, E.j0 - j, j - E.j1, 0);
       if (out0 > 0 && r(q, 7) > Math.pow(1 - out0 / DRAWN_MARGIN, 1.5)) continue;
-      crags.push([mx, mz, s * 1.4]);
+      crags.push([mx, mz, s * 1.4 * BB]);
       cur = { born: -1e3, pivot: 0, how: 3 + 0.999 * r(q, 40), tone: 2, dress: 0, sel: false };
       coarse = out0 > 0;
+      wholeAt(mx - CENTER, mz - CENTER, () => {
       // (its tiers, each set back up the slope from the one below and a little smaller, the lowest the biggest)
       const tiers = 2 + Math.floor(r(q, 3) * 2), ca = -Math.sin(fall), sa = Math.cos(fall);
       for (let t = 0; t < tiers; t++) {
@@ -1277,6 +1291,7 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
         const a = fall + (r(q, 9, n) - 0.5) * 1.8, d = s * (1.1 + 0.6 * r(q, 10, n)), bs = s * (0.18 + 0.15 * r(q, 11, n));
         ledge(mx + Math.cos(a) * d, mz + Math.sin(a) * d, bs, bs * 0.7, q * 13 + n + 5, a);
       }
+      });
       coarse = false;
     }
     const inCrag = (x: number, z: number) => crags.some(([cx, cz, rr]) => Math.hypot(x - cx, z - cz) < rr);
@@ -1297,15 +1312,16 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
       // (how steep the hill is here and which way it falls: the limestone breaks through where it's steep, in patches
       // (a broad field says where), and now and then on the open ground; on the outcrop always. Off the stream's water,
       // and held back from a bench beside it, smaller there, so it never stands on what's built or paved)
-      const mx = i + 0.5, mz = j + 0.5, sx = Y(mx + 0.5, mz) - Y(mx - 0.5, mz), sz = Y(mx, mz + 0.5) - Y(mx, mz - 0.5);
+      // (the slope over a cell, and what's scattered a quarter as often to a square on the half grid, each a cell's size)
+      const BB = w.bay, mx = i + 0.5, mz = j + 0.5, sx = (Y(mx + 0.5 * BB, mz) - Y(mx - 0.5 * BB, mz)) / BB, sz = (Y(mx, mz + 0.5 * BB) - Y(mx, mz - 0.5 * BB)) / BB;
       const steep = smooth01((Math.hypot(sx, sz) - 0.15) / 0.5), fallA = Math.atan2(-sz, -sx), rockF = noise2(land.seed + 61, i * 0.35, j * 0.35);
       const byBench = DIRS.map(([a, b]) => benched(w, i + a, j + b));
       const onStair = w.stair(g, i, j) >= 0 || w.stair(g - 1, i, j) >= 0;
-      if (!onStair && !benched(w, i, j) && (nearRock ? r(q, 6) < 0.8 : r(q, 6) < (0.02 + 0.6 * steep + 0.35 * roughness(w, mx, mz)) * (0.3 + 0.7 * smooth01((rockF - 0.25) * 3)) * (out > 0 ? 0.4 : 1))) {
+      if (!onStair && !benched(w, i, j) && r(q, 5) * BB * BB < 1 && (nearRock ? r(q, 6) < 0.8 : r(q, 6) < (0.02 + 0.6 * steep + 0.35 * roughness(w, mx, mz)) * (0.3 + 0.7 * smooth01((rockF - 0.25) * 3)) * (out > 0 ? 0.4 : 1))) {
         let cx = mx + (r(q, 8) - 0.5) * 0.3, cz = mz + (r(q, 9) - 0.5) * 0.3, s = 0.13 + 0.12 * r(q, 10) + 0.1 * steep + (nearRock ? 0.08 : 0);
         byBench.forEach((on, d) => { if (on) { cx -= DIRS[d][0] * 0.14; cz -= DIRS[d][1] * 0.14; s = Math.min(s, 0.17); } });
         const rv = nearRiverAt(cx, cz);
-        if ((!rv || rv.d > rv.hw + s * 1.2) && !inCrag(cx, cz)) outcrop(cx, cz, s, q, fallA);
+        if ((!rv || rv.d > rv.hw + s * 1.2 * BB) && !inCrag(cx, cz)) wholeAt(cx - CENTER, cz - CENTER, () => outcrop(cx, cz, s, q, fallA));
       }
       // (what grows wild: scrub on the banks; olives in groves on the shelves, where the land's grove field is high; stone
       // pines on the rises and by the outcrop, alone or in twos; a cypress now and then. Never right up against what's
@@ -1314,7 +1330,7 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
       const rise = higher.filter((h) => h < 0).length >= 3, how = 4 + (Math.floor(X(i) / w.bay) + 30 + (Math.floor(Z(j) / w.bay) + 30) * 64 + 0.9 * r(q, 42)) / 10000, field = noise2(land.seed + 17, i * 0.3, j * 0.3);
       // (the scrub: all over the hill in drifts (a broad field), thicker where it's steep and round the rock; small, a
       // dab or two to a cell, the odd one bigger. Up to what's built too, but never on a bench, a way or the water)
-      if (!onStair && !benched(w, i, j)) {
+      if (!onStair && !benched(w, i, j) && r(q, 21) * BB * BB < 1) whole(i, j, () => {
         // (in clumps: a bigger bush with smaller ones round it, touching, as the scrub grows; more clumps where the drift's
         // thick, on the steep and round the rock)
         const fS = noise2(land.seed + 71, i * 0.5, j * 0.5), nC = Math.floor((0.3 + r(q, 80)) * (0.6 + 3 * fS * fS + 1.6 * steep + (nearRock ? 1.2 : 0)) * (cleared ? 0.7 : 1) * (out > 0 ? 0.5 : 1));
@@ -1328,10 +1344,10 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
             shrub(at(i, j, fx, fz), sz, q * 31 + n * 5 + m);
           }
         }
-      }
-      if (!bank && !cleared && !byWater && field > 0.62 && (i + j) % 2 === 0 && r(q, 31) < 0.8) tree(grow(w, g, i, j, PLANT.olive), i, j, g, -1e3, how);
-      else if (!cleared && (rise || nearRock) && r(q, 32) < 0.3) tree(grow(w, g, i, j, PLANT.pine), i, j, g, -1e3, how);
-      else if (!bank && !cleared && r(q, 30) < 0.03) cypress(i, j, g, -1e3, how);
+      });
+      if (!bank && !cleared && !byWater && field > 0.62 && (i + j) % 2 === 0 && r(q, 31) < 0.8 / (w.bay * w.bay)) tree(grow(w, g, i, j, PLANT.olive), i, j, g, -1e3, how);
+      else if (!cleared && (rise || nearRock) && r(q, 32) < 0.3 / (w.bay * w.bay)) tree(grow(w, g, i, j, PLANT.pine), i, j, g, -1e3, how);
+      else if (!bank && !cleared && r(q, 30) < 0.03 / (w.bay * w.bay)) cypress(i, j, g, -1e3, how);
     }
     coarse = false;
     // (the stream's gorge: limestone along its banks, a block every so often either side, bigger and closer at a fall,
@@ -1514,7 +1530,8 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
     }
   }
   /** a lantern on a post: a dark post and cap, the lamp lit */
-  function lantern(i: number, j: number, y: number, born: number) {
+  function lantern(i: number, j: number, y: number, born: number) { whole(i, j, () => lantern0(i, j, y, born)); }
+  function lantern0(i: number, j: number, y: number, born: number) {
     cur = { born, pivot: y, how: 1, tone: 0.5, dress: 0, sel: false };
     const cx = X(i) + 0.5, cz = Z(j) + 0.5;
     box(cx - 0.06, cx + 0.06, y, y + 0.04, cz - 0.06, cz + 0.06, MAT.bark, 0.7);
@@ -1525,7 +1542,8 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
     lathe(cx, cz, [[0.09, y + 0.49], [0.075, y + 0.51], [0.0, y + 0.58]], MAT.bark, 4);
   }
   /** a terracotta pot with a clipped shrub in it */
-  function pot(i: number, j: number, y: number, born: number) {
+  function pot(i: number, j: number, y: number, born: number) { whole(i, j, () => pot0(i, j, y, born)); }
+  function pot0(i: number, j: number, y: number, born: number) {
     cur = { born, pivot: y, how: 2, tone: 0.5, dress: 0, sel: false };
     const cx = X(i) + 0.5, cz = Z(j) + 0.5;
     lathe(cx, cz, [[0.11, y], [0.13, y + 0.05], [0.17, y + 0.22], [0.19, y + 0.25], [0.15, y + 0.25]], MAT.clay, 12);
@@ -1792,7 +1810,8 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
     lathe(c.x, c.z, Array.from({ length: 8 }, (_, n) => { const t = (n / 7) * Math.PI; return [Math.sin(t) * c.r * (1 + 0.07 * Math.sin(n * 2.1 + c.x * 7)), c.y - c.r * 0.5 + c.r * 0.9 * (1 - Math.cos(t))] as [number, number]; }), MAT.leaves, 11);
   }
   /** a tree grown out (plants.ts): its trunk, and its crown's clumps */
-  function tree(g: ReturnType<typeof grow>, i: number, j: number, k: number, born: number, how = 2) {
+  function tree(g: ReturnType<typeof grow>, i: number, j: number, k: number, born: number, how = 2) { whole(i, j, () => tree0(g, i, j, k, born, how)); }
+  function tree0(g: ReturnType<typeof grow>, i: number, j: number, k: number, born: number, how = 2) {
     cur = { born, pivot: k, how, tone: 0.5, dress: 0, sel: selected.has(key(k, i, j)) };
     trunkOf(g.trunk, g.girth);
     for (const st of g.stems ?? []) trunkOf(st, g.girth * 0.7);
@@ -1863,7 +1882,8 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
     }
   }
   /** a seat round a tree: a low ring of stone round its trunk, eight-sided, coped, earth inside it */
-  function seat(k: number, i: number, j: number, born: number) {
+  function seat(k: number, i: number, j: number, born: number) { whole(i, j, () => seat0(k, i, j, born)); }
+  function seat0(k: number, i: number, j: number, born: number) {
     cur = { born, pivot: k, how: 1, tone: 0.5, dress: 0, sel: false };
     const cx = X(i) + 0.5, cz = Z(j) + 0.5, R0 = 0.3, R1 = 0.44, H = 0.26, N = 8, P = (r: number, q: number, y: number): V3 => { const a = ((q + 0.5) / N) * Math.PI * 2; return [cx + Math.cos(a) * r, y, cz + Math.sin(a) * r]; };
     for (let q = 0; q < N; q++) {
@@ -1875,7 +1895,8 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
     }
   }
   /** a shrub: a rounded bush, waist high */
-  function shrubAt(i: number, j: number, k: number, born: number) {
+  function shrubAt(i: number, j: number, k: number, born: number) { whole(i, j, () => shrubAt0(i, j, k, born)); }
+  function shrubAt0(i: number, j: number, k: number, born: number) {
     cur = { born, pivot: k, how: 2, tone: 0.55, dress: 0, sel: selected.has(key(k, i, j)) };
     leaf = 3; clump({ x: X(i) + 0.5, y: k + 0.28, z: Z(j) + 0.5, r: 0.34 }); leaf = 0;
   }
@@ -1895,7 +1916,8 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
     box(x0, x1, k, k + Hh, z0, z0 + T, MAT.stone); box(x0, x1, k, k + Hh, z1 - T, z1, MAT.stone); box(x0, x0 + T, k, k + Hh, z0, z1, MAT.stone); box(x1 - T, x1, k, k + Hh, z0, z1, MAT.stone);
     quad([x0 + T, k + Hh - 0.04, z0 + T], [x1 - T, k + Hh - 0.04, z0 + T], [x1 - T, k + Hh - 0.04, z1 - T], [x0 + T, k + Hh - 0.04, z1 - T], [0, 1, 0], 0.6, MAT.bark);
   }
-  function cypress(i: number, j: number, y0: number, born: number, how = 2) {
+  function cypress(i: number, j: number, y0: number, born: number, how = 2) { whole(i, j, () => cypress0(i, j, y0, born, how)); }
+  function cypress0(i: number, j: number, y0: number, born: number, how = 2) {
     const seed = i * 31 + j * 17, cx = X(i) + 0.5, cz = Z(j) + 0.5, Ht = 1.85 * (0.8 + 0.4 * (Math.abs(Math.sin(seed * 7.31) * 43758.5453) % 1)), SEG = 12, RINGS = 16;
     cur = { born, pivot: y0, how, tone: 0.5, dress: 0, sel: selected.has(key(y0, i, j)) };
     const rnd = (q: number) => { const x = Math.sin((seed * 97 + q) * 12.9898) * 43758.5453; return x - Math.floor(x); };

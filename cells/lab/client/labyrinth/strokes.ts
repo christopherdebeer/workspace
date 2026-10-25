@@ -126,22 +126,24 @@ export function strokes(w: World, land: StrokeLand, trees: Skeleton[] = []): Flo
         const [ta, tb] = DIRS[(d + 1) % 4], ex = i + 0.5 + a * 0.5, ez = j + 0.5 + b * 0.5, r = rng(w.land.seed, i, j, d, 0xc07);
         const kept = () => o <= 0 || r() < Math.pow(Math.max(0, 1 - o / land.margin), 1.3);
         if (benched(w, x, z)) continue;
+        // (the cut's reach and the fill's, in cells: on the half grid, twice the squares)
+        const CB = CUT * w.bay, FB = FILL * w.bay;
         const Pt = (s0: number, t: number, lift = LIFT): V3 => { const gx = ex + ta * s0 + a * t, gz = ez + tb * s0 + b * t; return [gx - CENTER, Y(gx, gz) + lift, gz - CENTER]; };
-        const rise = Y(ex + a * (CUT + 0.05), ez + b * (CUT + 0.05)) - L, fall = L - Y(ex + a * (FILL + 0.05), ez + b * (FILL + 0.05));
+        const rise = Y(ex + a * (CB + 0.05), ez + b * (CB + 0.05)) - L, fall = L - Y(ex + a * (FB + 0.05), ez + b * (FB + 0.05));
         if (rise > 0.22) {
           // (a cut: its rim, and hachures down it from the rim to the bench, grouped)
           const pick = r(), rim: V3[] = [];
-          for (let q = 0; q <= 5; q++) rim.push(Pt(-0.5 + q / 5, CUT * (0.92 + 0.12 * r())));
+          for (let q = 0; q <= 5; q++) rim.push(Pt(-0.5 + q / 5, CB * (0.92 + 0.12 * r())));
           ribbon(out, rim, rise > 0.6 ? 0.046 : 0.038, FAM.rim, rise > 0.6 ? 0.8 : 0.62, 0.35, pick);
           for (let s0 = -0.45 + 0.1 * r(); s0 < 0.45;) {
             const n = 2 + Math.floor(r() * 3);
-            for (let k = 0; k < n && s0 < 0.45; k++, s0 += 0.06 + 0.03 * r()) {
+            for (let k = 0; k < n && s0 < 0.45; k++, s0 += (0.06 + 0.03 * r()) * w.bay) {
               if (!kept()) continue;
-              const reach = CUT * (0.55 + 0.35 * r()), pts: V3[] = [];
-              for (let q = 0; q <= 4; q++) pts.push(Pt(s0, CUT * 0.9 - (reach * q) / 4, LIFT + 0.01));
+              const reach = CB * (0.55 + 0.35 * r()), pts: V3[] = [];
+              for (let q = 0; q <= 4; q++) pts.push(Pt(s0, CB * 0.9 - (reach * q) / 4, LIFT + 0.01));
               ribbon(out, pts, 0.03, FAM.hachure, 0.5, 0, r(), [ta, 0, tb]);
             }
-            s0 += 0.12 + 0.12 * r();
+            s0 += (0.12 + 0.12 * r()) * w.bay;
           }
         } else if (fall > 0.4 && kept()) {
           // (a fill: a light line at the bench's edge, broken)
@@ -149,7 +151,7 @@ export function strokes(w: World, land: StrokeLand, trees: Skeleton[] = []): Flo
             const len = Math.min(0.5 - s0, 0.25 + 0.35 * r()), pts: V3[] = [];
             for (let q = 0; q <= 3; q++) pts.push(Pt(s0 + (len * q) / 3, 0.03));
             ribbon(out, pts, 0.032, FAM.foot, 0.45, 0.2, r());
-            s0 += len + 0.1 + 0.2 * r();
+            s0 += len + (0.1 + 0.2 * r()) * w.bay;
           }
         }
       }
@@ -185,9 +187,11 @@ export function strokes(w: World, land: StrokeLand, trees: Skeleton[] = []): Flo
     const [a, b] = DIRS[f.d], N = f.cells.length * STEPS, [k0, i0, j0] = f.cells[0], r = rng(w.land.seed, k0, i0, j0, f.d, 0x57a);
     // (a point on the flight: so far up it (u, in cells from its foot's near edge), so far across (wv, 0..1))
     const pt = (q: number, u: number, wv: number, y: number): V3 => { const [, i, j] = f.cells[q], cx = i + 0.5, cz = j + 0.5; return a ? [cx + a * (u - 0.5) - CENTER, y, cz + (wv - 0.5) - CENTER] : [cx + (wv - 0.5) - CENTER, y, cz + b * (u - 0.5) - CENTER]; };
-    f.cells.forEach(([k], q) => {
-      for (let s = 0; s < STEPS; s++) {
-        const g = q * STEPS + s, busy = 1 - smooth(1, 5, Math.min(g, N - 1 - g)), h = k + (s + 1) / STEPS + 0.008, u = s / STEPS - 0.028;
+    // (on the half grid, each square the half of a level: its treads from where the one before left off)
+    const NS = STEPS * f.rise, y0 = (q: number) => f.k0 + q * f.rise;
+    f.cells.forEach((_c, q) => {
+      for (let s = 0; s < NS; s++) {
+        const g = q * NS + s, busy = 1 - smooth(1, 5, Math.min(g, N * f.rise - 1 - g)), h = y0(q) + (s + 1) / STEPS + 0.008, u = s / NS - 0.028;
         if (r() > 0.18 + 0.72 * busy) continue;
         // (a tread's worn nosing: whole, or worn through where the feet go, its two ends left)
         const worn = r() < 0.5, pieces = worn ? [[0.07, ramp(r, 0.3, 0.42)], [ramp(r, 0.58, 0.7), 0.93]] : [[ramp(r, 0.05, 0.15), ramp(r, 0.85, 0.95)]];
@@ -200,8 +204,8 @@ export function strokes(w: World, land: StrokeLand, trees: Skeleton[] = []): Flo
       const sg = wv < 0.5 ? -1 : 1, ox = a ? 0 : sg, oz = a ? sg : 0;
       if (w.stair(k0, i0 + ox, j0 + oz) === f.d) continue;
       const pts: V3[] = [];
-      f.cells.forEach(([k], q) => { for (let s = 0; s < STEPS; s += 2) pts.push(pt(q, s / STEPS - 0.028, wv, k + (s + 1) / STEPS + 0.01)); });
-      const [kl] = f.cells[f.cells.length - 1]; pts.push(pt(f.cells.length - 1, 1, wv, kl + 1 + 0.01));
+      f.cells.forEach((_c, q) => { for (let s = 0; s < NS; s += 2) pts.push(pt(q, s / NS - 0.028, wv, y0(q) + (s + 1) / STEPS + 0.01)); });
+      pts.push(pt(f.cells.length - 1, 1, wv, y0(f.cells.length) + 0.01));
       ribbon(out, pts, 0.034, FAM.string, 0.6, 0.12, r());
     }
   }

@@ -14,7 +14,7 @@
  * - **One surface**: the mesh lays the ground from it, the drawing lies on it, and what reads the ground's height (the
  *   cats, a pick, what's placed on the land) reads it from here.
  */
-import { DIRS, key, type World } from './model';
+import { DIRS, HI, LO, key, type World } from './model';
 import { noise2, onLand } from './land';
 import { walled } from './context';
 
@@ -34,7 +34,7 @@ const ck = (i: number, j: number) => (j + 512) * 1024 + i + 512;
 function lev(w: World, C: Cells, i: number, j: number) {
   const k = ck(i, j);
   let v = C.lev.get(k);
-  if (v === undefined) { v = levelAt(w, Math.max(-18, Math.min(29, i)), Math.max(-18, Math.min(29, j))); C.lev.set(k, v); }
+  if (v === undefined) { v = levelAt(w, Math.max(LO, Math.min(HI, i)), Math.max(LO, Math.min(HI, j))); C.lev.set(k, v); }
   return v;
 }
 /** whether a cell's a bench: flat at its level, because something's built there or it's the stream's */
@@ -66,22 +66,24 @@ function bench(w: World, C: Cells, i: number, j: number): boolean {
 /** the hill at a point, before anything's built into it */
 export function hillAt(w: World, x: number, z: number): number {
   if (!w.land) return 0;
-  const C = cellsOf(w), i = Math.floor(x), j = Math.floor(z), seed = w.land.seed;
+  // (in cells: on the half grid, a square half a cell, so its reach and its grain are twice the squares)
+  const C = cellsOf(w), i = Math.floor(x), j = Math.floor(z), seed = w.land.seed, B = w.bay, R = 2 * B, sg = 0.8 * B;
   let num = 0, den = 0;
-  for (let b = -2; b <= 2; b++) for (let a = -2; a <= 2; a++) {
-    const dx = x - (i + a + 0.5), dz = z - (j + b + 0.5), k = Math.exp(-(dx * dx + dz * dz) / (2 * 0.8 * 0.8));
+  for (let b = -R; b <= R; b++) for (let a = -R; a <= R; a++) {
+    const dx = x - (i + a + 0.5), dz = z - (j + b + 0.5), k = Math.exp(-(dx * dx + dz * dz) / (2 * sg * sg));
     num += k * lev(w, C, i + a, j + b); den += k;
   }
-  const h0 = num / den + (noise2(seed + 41, x * 0.55, z * 0.55) - 0.5) * 0.35 + (noise2(seed + 42, x * 1.7, z * 1.7) - 0.5) * 0.1 + roughAt(w, x, z);
+  const h0 = num / den + (noise2(seed + 41, (x * 0.55) / B, (z * 0.55) / B) - 0.5) * 0.35 + (noise2(seed + 42, (x * 1.7) / B, (z * 1.7) / B) - 0.5) * 0.1 + roughAt(w, x, z);
   // (and honest about the levels the hand builds on (after the blind reviews: a hill drawn a level off a column read as
   // a slope the column hasn't): over each column's middle the ground's held within a quarter level of the column's own,
   // softly, the hold let go toward its edges so the slope between columns runs on unbroken)
   const L = lev(w, C, i, j), d = Math.max(Math.abs(x - i - 0.5), Math.abs(z - j - 0.5));
-  const h = L < 0 ? h0 : L + 0.25 * Math.tanh((h0 - L) / 0.25) + (h0 - L - 0.25 * Math.tanh((h0 - L) / 0.25)) * smooth(0.12, 0.45, d);
+  // (on the half grid, let go sooner: held over every square, the hill would come in ribs)
+  const h = L < 0 ? h0 : L + 0.25 * Math.tanh((h0 - L) / 0.25) + (h0 - L - 0.25 * Math.tanh((h0 - L) / 0.25)) * smooth(0.12 / w.bay, 0.45 / w.bay, d);
   // (the stream's channel cut down into it: its bed flat across, its banks rising to the hill, wider the higher they are)
   const rv = nearRiver(w, x, z);
   if (!rv) return h;
-  const bw = Math.min(0.6, Math.max(0.3, (h - rv.bed) * 0.38));
+  const bw = Math.min(0.6, Math.max(0.3, (h - rv.bed) * 0.38)) * w.bay;
   if (rv.d >= rv.hw + bw) return h;
   const top = Math.max(h, rv.bed + 0.18);
   return rv.bed + (top - rv.bed) * smooth(rv.hw, rv.hw + bw, rv.d);
@@ -89,13 +91,13 @@ export function hillAt(w: World, x: number, z: number): number {
 /** how broken the hill is at a point: nought over most of it; in a few patches (a broad field picks them) the ground's
  * rougher, folded in ridges at a finer grain, where the rock's near the surface. The crags stand in these (mesh.ts) */
 export function roughness(w: World, x: number, z: number): number {
-  return w.land ? smooth(0.56, 0.74, noise2(w.land.seed + 43, x * 0.18, z * 0.18)) : 0;
+  return w.land ? smooth(0.56, 0.74, noise2(w.land.seed + 43, (x * 0.18) / w.bay, (z * 0.18) / w.bay)) : 0;
 }
 function roughAt(w: World, x: number, z: number): number {
   const rg = roughness(w, x, z);
   if (rg <= 0) return 0;
-  const seed = w.land!.seed, rid = 1 - Math.abs(2 * noise2(seed + 44, x * 1.25, z * 1.25) - 1);
-  return rg * ((rid - 0.55) * 0.62 + (noise2(seed + 45, x * 2.6, z * 2.6) - 0.5) * 0.22);
+  const seed = w.land!.seed, B = w.bay, rid = 1 - Math.abs(2 * noise2(seed + 44, (x * 1.25) / B, (z * 1.25) / B) - 1);
+  return rg * ((rid - 0.55) * 0.62 + (noise2(seed + 45, (x * 2.6) / B, (z * 2.6) / B) - 0.5) * 0.22);
 }
 // ─── the stream, carved through the hill ───
 /** the stream's course: a smooth line down its cells (their middles, corners cut), the bed's level at each point (stepping
@@ -119,13 +121,13 @@ export function riverOf(w: World): River | null {
   }
   const lvl = (u: number) => { const [i, j] = land.stream[Math.min(land.stream.length - 1, Math.max(0, Math.round(u)))]; return w.ground(i, j) - 0.3; };
   const pts = P.map((p) => [p.x, p.z] as [number, number]), bed = P.map((p) => lvl(p.u));
-  const hw = P.map((p) => 0.3 + (noise2(land.seed + 51, p.x * 0.8, p.z * 0.8) - 0.5) * 0.16);
+  const B = w.bay, hw = P.map((p) => (0.3 + (noise2(land.seed + 51, (p.x * 0.8) / B, (p.z * 0.8) / B) - 0.5) * 0.16) * B);
   const falls: number[] = [];
   for (let q = 0; q + 1 < bed.length; q++) if (Math.abs(bed[q] - bed[q + 1]) > 1e-3) falls.push(q);
   // (which stretches pass near each cell, for finding the nearest quickly)
   const grid = new Map<number, number[]>();
   for (let q = 0; q + 1 < pts.length; q++) {
-    const x0 = Math.floor(Math.min(pts[q][0], pts[q + 1][0]) - 1.6), x1 = Math.floor(Math.max(pts[q][0], pts[q + 1][0]) + 1.6), z0 = Math.floor(Math.min(pts[q][1], pts[q + 1][1]) - 1.6), z1 = Math.floor(Math.max(pts[q][1], pts[q + 1][1]) + 1.6);
+    const G = 1.6 * B, x0 = Math.floor(Math.min(pts[q][0], pts[q + 1][0]) - G), x1 = Math.floor(Math.max(pts[q][0], pts[q + 1][0]) + G), z0 = Math.floor(Math.min(pts[q][1], pts[q + 1][1]) - G), z1 = Math.floor(Math.max(pts[q][1], pts[q + 1][1]) + G);
     for (let z = z0; z <= z1; z++) for (let x = x0; x <= x1; x++) { const k = ck(x, z); (grid.get(k) ?? grid.set(k, []).get(k)!).push(q); }
   }
   r = { pts, bed, hw, falls, grid };
@@ -161,13 +163,13 @@ export function groundAt(w: World, x: number, z: number): number {
   // (off them, the hill, going to meet the nearest bench: cut steep above it, filled gentle below)
   const h = hillAt(w, x, z);
   // (never over the stream: its channel's kept open however near a bench comes, the bench's edge falling to the bank)
-  const rv = nearRiver(w, x, z), open = rv ? smooth(rv.hw + 0.05, rv.hw + 0.45, rv.d) : 1;
+  const rv = nearRiver(w, x, z), B = w.bay, open = rv ? smooth(rv.hw + 0.05 * B, rv.hw + 0.45 * B, rv.d) : 1;
   let best = 0, at = h;
   for (let b = -1; b <= 1; b++) for (let a = -1; a <= 1; a++) {
     if ((!a && !b) || !bench(w, C, i + a, j + b)) continue;
     const ci = i + a, cj = j + b, L = lev(w, C, ci, cj);
     const d = Math.hypot(Math.max(ci - x, 0, x - ci - 1), Math.max(cj - z, 0, z - cj - 1));
-    const wgt = (1 - smooth(0, h > L ? CUT : FILL, d)) * (h > L ? 1 : open);
+    const wgt = (1 - smooth(0, (h > L ? CUT : FILL) * B, d)) * (h > L ? 1 : open);
     if (wgt > best) { best = wgt; at = L; }
   }
   return h + (at - h) * best;
