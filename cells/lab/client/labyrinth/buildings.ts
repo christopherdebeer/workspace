@@ -32,7 +32,7 @@
 import { hash } from '../kit/rng';
 import { DIRS, RULE, isTower, isWithin, key, unkey, type Cell, type World } from './model';
 import { navigate, standing, type Nav } from './nav';
-import { PERSIAN, regionOfId } from './regions';
+import { PERSIAN, regionAt, regionOfId } from './regions';
 
 export type Roof = 'hipped' | 'gable' | 'shed' | 'dome';
 export interface Opening { kind: 'door' | 'window'; style: 'arched' | 'square' | 'slit'; k: number; i: number; j: number; d: number }
@@ -340,4 +340,10 @@ function find(w: World): Buildings {
     if (!at.has(id)) at.set(id, { kind: 'door', style: 'arched', k: B[0], i: B[1], j: B[2], d });
   }
   return { list, at, inside, of, promenade };
+}
+/** the manner a cell's built in: its building's (the cell's, or the one over it: an arch carrying it), else its district's
+ * (regions.ts) */
+export function regionHere(w: World, k: number, i: number, j: number) {
+  const of = buildings(w).of, b = of.get(key(k, i, j)) ?? of.get(key(k + 1, i, j));
+  return b ? regionOfId(w, b.id) : regionAt(w, i, j);
 }

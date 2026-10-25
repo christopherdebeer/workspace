@@ -19,33 +19,20 @@
 import { hash } from '../kit/rng';
 import { perf } from './perf';
 import { character, look } from './character';
-import { buildings, opening, underRoof, type Building, type Opening } from './buildings';
+import { buildings, opening, regionHere, underRoof, type Building, type Opening } from './buildings';
 import { BUT, BUTH, BUTW, WT, buttresses, inBlock, outline, reach, wallCell, type Edge } from './form';
 import { CENTER, DECK, DIRS, DRESS, PLANT, key, soffit as flightSoffit, unkey, type Span, type World } from './model';
 import { climb, grow, growths } from './plants';
 import { strokes, type Skeleton, type StrokeLand } from './strokes';
 import { DOMAIN, LAND, noise2, onLand } from './land';
 import { groundY, retaining } from './context';
+import { STRIDE, TILE_U, MAT, LANDMAT, FOUND, PIERCED, MOSS, IVY, KIND, SEL, X, Z, type V3, type Emit } from './emit';
+import { roof } from './roof';
+import { openings } from './facade';
 import { ROUND, archNormal, archOf, archStations, archUnit, archY, regionAt, regionOfId, spanArchOf, PERSIAN, type ArchFamily } from './regions';
 import { benched, CUT, nearRiver, riverOf, roughness } from './terrain';
 
-/** floats a vertex: position, normal, ao (1 open .. 0 shut in), material (MAT), its rising (when laid, the height it
- * grows from, how), and a seed for its stone's tone */
-export const STRIDE = 12;
-/** roof tiles: columns across a slope, a unit's width (render.ts lays them the same way, the caps on every other one) */
-export const TILE_U = 7;
-export const MAT = { stone: 0, within: 1, water: 2, leaves: 3, bark: 4, slab: 5, slabSide: 6, table: 7, court: 8, lamp: 9, clay: 10, door: 11, glass: 12, tile: 13, lead: 14, wood: 15 };
-/** the land (the slab's own, marked: drawn barely, its steep faces rock) */
-export const LANDMAT = MAT.slab + 16;
-/** how far a foundation goes down into the land under what's built on it */
-export const FOUND = 0.75;
-/** a material cut through (with KIND × 3 over stone: a jali; over wood: a mashrabiya's lattice) */
-export const PIERCED = 3 * 64;
-/** a stone's dressing, over its material (stone, or the light within an arch): 16 moss, 32 ivy, 64 × which stone
- * (travertine, brick, marble) */
-export const MOSS = 16, IVY = 32, KIND = 64;
-/** what's taken up (select): tinted, and outlined where it meets what isn't */
-export const SEL = 256;
+export { STRIDE, TILE_U, MAT, LANDMAT, FOUND, PIERCED, MOSS, IVY, KIND, SEL } from './emit';
 /** how deep a flat lintel is */
 export const LINTEL = 0.34;
 /** where an arch's underside is, across it (`u` from its middle): its crown's height `ys`, its rise, its half-width;
@@ -56,12 +43,6 @@ export function soffit(sp: Span, f: ArchFamily = ROUND) {
   const rise = Math.min(half, yD - sp.low), ys = yD - rise;
   if (f !== ROUND) return { half, rise, ys, at: (u: number) => ys + rise * archUnit(f, u / half) };
   return { half, rise, ys, at: (u: number) => ys + rise * Math.sqrt(Math.max(0, 1 - (u / half) ** 2)) };
-}
-/** the manner a cell's built in: its building's (the cell's, or the one over it: an arch carrying it), else its district's
- * (regions.ts) */
-export function regionHere(w: World, k: number, i: number, j: number) {
-  const of = buildings(w).of, b = of.get(key(k, i, j)) ?? of.get(key(k + 1, i, j));
-  return b ? regionOfId(w, b.id) : regionAt(w, i, j);
 }
 /** a span's arch family: by the manner where its middle is, and how wide it is */
 export function spanFamily(w: World, sp: Span): ArchFamily {
@@ -138,8 +119,6 @@ function groundSig(w: World, plain: boolean, selected: Set<number>): string {
 export function forgetGround() { groundCache = null; }
 /** a cheap signature of the trees' skeletons (what the strokes' branch lines are drawn from) */
 const skelSig = (sk: Skeleton[]) => { let h = sk.length; for (const s of sk) for (const l of s.lines) for (const p of l) h = (h * 31 + Math.round(p[0] * 100) * 7 + Math.round(p[1] * 100) * 13 + Math.round(p[2] * 100)) | 0; return String(h); };
-type V3 = [number, number, number];
-const X = (i: number) => i - CENTER, Z = (j: number) => j - CENTER;
 const tone = (k: number, i: number, j: number) => (((k * 73856093) ^ (i * 19349663) ^ (j * 83492791)) >>> 0) / 4294967296;
 
 /** the land drawn bleeding into the page (no sides, no table under it): see the renderer's `bleed` */
@@ -231,6 +210,8 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
     const flip = (uy * vz - uz * vy) * n[0] + (uz * vx - ux * vz) * n[1] + (ux * vy - uy * vx) * n[2] < 0;
     for (const p of flip ? [a, c, b] : [a, b, c]) vert(p, n, ao, mat);
   };
+  /** what the roofs and the openings (roof.ts, facade.ts) draw with: this world, and the same means as the rest */
+  const E: Emit = { w, selected, dressed, get cur() { return cur; }, set cur(c) { cur = c; }, vert, quad, tri, face, box, lathe };
   /** a face toward a neighbour hidden against it: a plain block, or a stair's back */
   const hides = (k: number, i: number, j: number, d: number) => {
     const ni = i + DIRS[d][0], nj = j + DIRS[d][1];
@@ -377,135 +358,7 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
       for (const sg of [-1, 1]) { face([Q(sg * BUTW, r0, y0), Q(sg * BUTW, r1, y0), Q(sg * BUTW, r1, yT), Q(sg * BUTW, r0, yS)], MAT.stone, 0.8, true, Q(0, (r0 + r1) / 2, y0 + 0.3)); }
     }
   };
-  /** each house's paint, for its shutters and its awning: one of a few, by the house */
-  const paintOf = new Map<string, number>();
-  for (const b of buildings(w).list) { const c = hash(w.seed, b.i0, b.j0, 41) % 3; for (const o of b.openings) paintOf.set(`${o.k}.${o.i}.${o.j}.${o.d}`, c); }
-  /**
-   * What says it's lived in, at an opening: a window's shutters, in the house's paint, most folded back flat against the
-   * wall either side of it, a few closed over it; over a door at the foot of a house, now and then, an awning of striped
-   * canvas, out from the wall and falling a little, its valance along its front. (Their paint in the door's tone, past
-   * its own: 2 + the colour for a shutter, 5 + it for canvas; render.ts)
-   */
-  const lived = (d: number, s0: number, s1: number, op: Opening, P: (d: number, s: number, y: number, inset?: number) => V3, n: V3, hw: number, yb: number, sp: number, top: number, arched: boolean, slit: boolean, door: boolean, r: number, colonnettes: boolean, oriel: boolean) => {
-    if (slit || colonnettes || oriel) return;
-    const rnd = (q: number) => hash(w.seed, op.k, op.i, op.j, op.d, q) / 4294967296, paint = paintOf.get(`${op.k}.${op.i}.${op.j}.${op.d}`) ?? 0, keepTone = cur.tone;
-    const slab = (sa: number, sb: number, ya: number, yb2: number, ia: number, ib: number, ao: number) => {
-      const A = P(d, sa, ya, ia), B = P(d, sb, yb2, ib);
-      box(Math.min(A[0], B[0]), Math.max(A[0], B[0]), ya, yb2, Math.min(A[2], B[2]), Math.max(A[2], B[2]), MAT.door, ao);
-    };
-    if (!door && rnd(1) < 0.7) {
-      cur.tone = 2 + paint;
-      const yt = arched ? sp + hw * 0.7 : sp, room = -2 * hw - 0.03 > s0 && 2 * hw + 0.03 < s1;
-      if (room && rnd(2) < 0.78) for (const sg of [-1, 1]) slab(sg * (hw + 0.012), sg * (2 * hw + 0.012), yb - 0.01, yt, -0.022, -0.008, 0.85);
-      else for (const sg of [-1, 1]) slab(0, sg * hw, yb, sp, r * 0.35 + 0.014, r * 0.35, 0.8);
-    }
-    if (door && rnd(3) < 0.4) {
-      cur.tone = 5 + paint;
-      const [a, b] = DIRS[d], W = hw + 0.1, OUT = 0.3, DROP = 0.12, y1 = top + 0.12, y2 = y1 - DROP, V = 0.05, l = Math.hypot(OUT, DROP);
-      const up: V3 = [(a * DROP) / l, OUT / l, (b * DROP) / l];
-      quad(P(d, -W, y1), P(d, W, y1), P(d, W, y2, -OUT), P(d, -W, y2, -OUT), up, 1, MAT.door);
-      quad(P(d, -W, y1), P(d, W, y1), P(d, W, y2, -OUT), P(d, -W, y2, -OUT), [-up[0], -up[1], -up[2]], 0.6, MAT.door);
-      // (its valance, both sides; its ends)
-      quad(P(d, -W, y2 - V, -OUT), P(d, W, y2 - V, -OUT), P(d, W, y2, -OUT), P(d, -W, y2, -OUT), n, 0.9, MAT.door);
-      quad(P(d, -W, y2 - V, -OUT), P(d, W, y2 - V, -OUT), P(d, W, y2, -OUT), P(d, -W, y2, -OUT), [-n[0], 0, -n[2]], 0.6, MAT.door);
-      const [ta, tb] = DIRS[(d + 1) % 4];
-      for (const sg of [-1, 1]) tri(P(d, sg * W, y1), P(d, sg * W, y2, -OUT), P(d, sg * W, y2 - V, -OUT), [sg * ta, 0, sg * tb], 0.8, MAT.door);
-    }
-    cur.tone = keepTone;
-  };
-  /**
-   * A face with an opening in it: a door (an arched way in, its leaf of planks set back in the wall, a step at its
-   * foot), or a window (arched, square, or a slit; its glass set back, a sill under it). The wall round it, the opening's
-   * reveals and head, and what's at the back of it.
-   */
-  const holed = (d: number, s0: number, s1: number, y0: number, yt: number, op: Opening, P: (d: number, s: number, y: number, inset?: number) => V3, n: V3, foot: number) => {
-    const k = Math.floor(y0 + 0.001);
-    const door = op.kind === 'door', slit = op.style === 'slit', arched = door || op.style === 'arched' || slit;
-    // (its manner (regions.ts): on the plateau a pointed head, its crown where a round one's would be, and a window
-    // taller, down nearer the floor, in a painted frame)
-    const persian = regionHere(w, op.k, op.i, op.j) === PERSIAN, fam = arched && !slit ? archOf(persian ? PERSIAN : 0) : ROUND;
-    const hw = door ? 0.17 : slit ? 0.04 : op.style === 'square' ? 0.12 : persian ? 0.12 : 0.11;
-    const yb = door ? k : k + (slit ? 0.28 : persian ? 0.27 : 0.38), sp0 = door ? k + 0.5 : slit ? k + 0.7 : k + (op.style === 'square' ? 0.72 : 0.62);
-    const sp = arched ? sp0 + hw - archY(fam, 0, hw) : sp0;
-    const head = (t: number) => (arched ? (fam === ROUND ? sp + Math.sqrt(Math.max(0, hw * hw - t * t)) : sp + archY(fam, t, hw)) : sp), top = arched ? sp0 + hw : sp, r = door ? 0.13 : 0.09;
-    // (its glass: on the plateau in the house's paint, in panes, and lit within now and then (render.ts, the tone past 2))
-    const glassTone = persian && !door ? 2 + (paintOf.get(`${op.k}.${op.i}.${op.j}.${op.d}`) ?? 0) + (hash(w.seed, op.k, op.i, op.j, op.d, 11) % 100 < 55 ? 4 : 0) : -1;
-    const back = (A: V3, B: V3, C: V3, D: V3) => {
-      if (door || glassTone < 0) return quad(A, B, C, D, n, 0.7, door ? MAT.door : MAT.glass);
-      const keep = cur.tone; cur.tone = glassTone; quad(A, B, C, D, n, 0.7, MAT.glass); cur.tone = keep;
-    };
-    const [ta, tb] = DIRS[(d + 1) % 4];
-    // (the wall round it)
-    quad(P(d, s0, y0), P(d, -hw, y0), P(d, -hw, yt), P(d, s0, yt), n, [foot, foot, 1, 1], MAT.stone);
-    quad(P(d, hw, y0), P(d, s1, y0), P(d, s1, yt), P(d, hw, yt), n, [foot, foot, 1, 1], MAT.stone);
-    if (yb > y0 + 0.001) quad(P(d, -hw, y0), P(d, hw, y0), P(d, hw, yb), P(d, -hw, yb), n, [foot, foot, 1, 1], MAT.stone);
-    const N = arched ? 8 : 1;
-    for (let q = 0; q < N; q++) {
-      const t0 = -hw + (2 * hw * q) / N, t1 = -hw + (2 * hw * (q + 1)) / N;
-      quad(P(d, t0, head(t0)), P(d, t1, head(t1)), P(d, t1, yt), P(d, t0, yt), n, 1, MAT.stone);
-      // (its head, set back)
-      const tm = (t0 + t1) / 2, hn = !arched ? [0, -1] : fam === ROUND ? [-(tm / hw), -Math.sqrt(Math.max(0, 1 - (tm / hw) ** 2))] : archNormal(fam, tm, hw);
-      quad(P(d, t0, head(t0)), P(d, t1, head(t1)), P(d, t1, head(t1), r), P(d, t0, head(t0), r), [ta * hn[0], hn[1], tb * hn[0]], 0.6, MAT.stone);
-      // (and the back of it, under the head)
-      back(P(d, t0, sp, r), P(d, t1, sp, r), P(d, t1, head(t1), r), P(d, t0, head(t0), r));
-    }
-    // (its reveals, its sill or threshold, and what's at the back: the door's planks, or glass)
-    quad(P(d, -hw, yb), P(d, -hw, yb, r), P(d, -hw, sp, r), P(d, -hw, sp), [ta, 0, tb], 0.65, MAT.stone);
-    quad(P(d, hw, yb), P(d, hw, yb, r), P(d, hw, sp, r), P(d, hw, sp), [-ta, 0, -tb], 0.65, MAT.stone);
-    quad(P(d, -hw, yb), P(d, hw, yb), P(d, hw, yb, r), P(d, -hw, yb, r), [0, 1, 0], 0.8, MAT.stone);
-    back(P(d, -hw, yb, r), P(d, hw, yb, r), P(d, hw, sp, r), P(d, -hw, sp, r));
-    const ledge = (s: number, y: number, h: number, out: number) => {
-      quad(P(d, -s, y, -out), P(d, s, y, -out), P(d, s, y + h, -out), P(d, -s, y + h, -out), n, 0.9, MAT.stone);
-      quad(P(d, -s, y + h, -out), P(d, s, y + h, -out), P(d, s, y + h), P(d, -s, y + h), [0, 1, 0], 1, MAT.stone);
-      quad(P(d, -s, y, -out), P(d, s, y, -out), P(d, s, y), P(d, -s, y), [0, -1, 0], 0.5, MAT.stone);
-      quad(P(d, -s, y, -out), P(d, -s, y), P(d, -s, y + h), P(d, -s, y + h, -out), [-ta, 0, -tb], 0.8, MAT.stone);
-      quad(P(d, s, y, -out), P(d, s, y), P(d, s, y + h), P(d, s, y + h, -out), [ta, 0, tb], 0.8, MAT.stone);
-    };
-    if (door) ledge(hw + 0.05, k, 0.03, 0.06); else if (!slit) ledge(hw + 0.03, yb - 0.04, 0.04, 0.035);
-    const dr = dressed(op.k, op.i, op.j);
-    if (!persian) lived(d, s0, s1, op, P, n, hw, yb, sp, top, arched, slit, door, r, !!dr?.colonnettes, !!(dr?.oriel && !door && !slit && k >= 1));
-    // (colonnettes: slim shafts framing it, a pair each side of a door, one each side of an arched window, each on a
-    // little base and under a little capital where the arch springs)
-    if (dr?.colonnettes && arched && !slit) {
-      const keep = cur.dress;
-      cur.dress = 2 * KIND;
-      for (const sg of [-1, 1]) for (const off of door ? [0.035, 0.085] : [0.03]) {
-        const c = P(d, sg * (hw + off), 0, -0.022), ya = door ? k + 0.03 : yb, rc = 0.017;
-        box(c[0] - 0.026, c[0] + 0.026, ya, ya + 0.04, c[2] - 0.026, c[2] + 0.026, MAT.stone, 0.8);
-        lathe(c[0], c[2], [[rc, ya + 0.04], [rc * 0.9, sp - 0.04]], MAT.stone, 6);
-        lathe(c[0], c[2], [[rc * 0.9, sp - 0.04], [0.03, sp - 0.005]], MAT.stone, 6);
-        box(c[0] - 0.031, c[0] + 0.031, sp - 0.005, sp + 0.02, c[2] - 0.031, c[2] + 0.031, MAT.stone, 0.95);
-      }
-      cur.dress = keep;
-    }
-    // (a mashrabiya over an upper window: a box of fine turned lattice out from the wall on corbels, solid at its foot and
-    // head, a little roof over it; the light through it in points)
-    if (dr?.oriel && !door && !slit && k >= 1) {
-      const keep = cur.dress, OW = 0.26, OD = 0.24, ya = k + 0.24, yb2 = Math.min(k + 0.93, top + 0.2), L = MAT.wood + PIERCED;
-      const Q = (s: number, out: number, y: number) => P(d, s, y, -out);
-      cur.dress = 0;
-      // (its floor and its foot, solid; its lattice front and sides; a band at its head)
-      face([Q(-OW, 0, ya), Q(OW, 0, ya), Q(OW, OD, ya), Q(-OW, OD, ya)], MAT.wood, 0.5, false);
-      const panel = (y0: number, y1: number, mat: number) => {
-        quad(Q(-OW, OD, y0), Q(OW, OD, y0), Q(OW, OD, y1), Q(-OW, OD, y1), n, 0.9, mat);
-        quad(Q(-OW, 0, y0), Q(-OW, OD, y0), Q(-OW, OD, y1), Q(-OW, 0, y1), [-ta, 0, -tb], 0.8, mat);
-        quad(Q(OW, 0, y0), Q(OW, OD, y0), Q(OW, OD, y1), Q(OW, 0, y1), [ta, 0, tb], 0.8, mat);
-      };
-      panel(ya, ya + 0.1, MAT.wood); panel(ya + 0.1, yb2 - 0.06, L); panel(yb2 - 0.06, yb2, MAT.wood);
-      // (its inner face of lattice too, so it reads from within as a screen with depth)
-      quad(Q(-OW + 0.02, OD - 0.03, ya + 0.1), Q(OW - 0.02, OD - 0.03, ya + 0.1), Q(OW - 0.02, OD - 0.03, yb2 - 0.06), Q(-OW + 0.02, OD - 0.03, yb2 - 0.06), n, 0.6, L);
-      // (its roof: a lean-to of boards out over it)
-      face([Q(-OW - 0.03, OD + 0.05, yb2), Q(OW + 0.03, OD + 0.05, yb2), Q(OW + 0.03, 0, yb2 + 0.1), Q(-OW - 0.03, 0, yb2 + 0.1)], MAT.wood, 1, true);
-      face([Q(-OW - 0.03, OD + 0.05, yb2 - 0.02), Q(OW + 0.03, OD + 0.05, yb2 - 0.02), Q(OW + 0.03, OD + 0.05, yb2), Q(-OW - 0.03, OD + 0.05, yb2)], MAT.wood, 0.8, true, Q(0, 0, yb2));
-      // (the corbels under it: two brackets out of the wall)
-      for (const sg of [-0.7, 0.7]) {
-        const s0 = sg * OW - 0.025, s1 = sg * OW + 0.025;
-        for (const sx of [s0, s1]) face([Q(sx, 0, ya - 0.16), Q(sx, 0, ya), Q(sx, OD * 0.85, ya)], MAT.wood, 0.7, true, Q(sg * OW, 0.05, ya - 0.05));
-        face([Q(s0, 0, ya - 0.16), Q(s1, 0, ya - 0.16), Q(s1, OD * 0.85, ya), Q(s0, OD * 0.85, ya)], MAT.wood, 0.6, false);
-      }
-      cur.dress = keep;
-    }
-  };
+  const { holed } = openings(E);
   const topFace = (k: number, i: number, j: number, y: number) => {
     if (w.block(k + 1, i, j) || w.stair(k + 1, i, j) >= 0) return;
     if (w.archway(k + 1, i, j) >= 0 && w.archway(k, i, j) === w.archway(k + 1, i, j)) return;
@@ -712,7 +565,7 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
       for (let q = 1; q + 1 < prof.length; q++) face([P(prof[q][0], sc - HW2, prof[q][1]), P(prof[q + 1][0], sc - HW2, prof[q + 1][1]), P(prof[q + 1][0], sc + HW2, prof[q + 1][1]), P(prof[q][0], sc + HW2, prof[q][1])], MAT.stone, 0.55 + 0.35 * (q / prof.length), true, inside);
     }
   }
-  for (const b of buildings(w).list) if (b.roof) roof(b);
+  for (const b of buildings(w).list) if (b.roof) roof(E, b);
 
   perf.end(); perf.begin('mesh.build.plants');
   // ─── what grows in the courtyards ───
@@ -1507,129 +1360,6 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
     if (from) { const c = p.reduce((a, q) => [a[0] + q[0] / p.length, a[1] + q[1] / p.length, a[2] + q[2] / p.length], [0, 0, 0]); if (n[0] * (c[0] - from[0]) + n[1] * (c[1] - from[1]) + n[2] * (c[2] - from[2]) < 0) n = [-n[0], -n[1], -n[2]]; }
     else if ((n[1] < 0) === up) n = [-n[0], -n[1], -n[2]];
     if (p.length === 3) tri(p[0], p[1], p[2], n, ao, mat); else quad(p[0], p[1], p[2], p[3], n, ao, mat);
-  }
-  /**
-   * A roof over a building (buildings.ts says which): hipped (a pyramid on a square plan, a ridge along a long one),
-   * gabled (two slopes, the ends walled up in stone), a shed roof (one slope, falling away from the taller stone it
-   * leans on), or a dome on a drum. Tiled in terracotta (the dome in lead), out over the walls at the eaves, its
-   * underside showing; a ridge along the top.
-   */
-  function roof(b: Building, wing?: { i0: number; i1: number; j0: number; j1: number }) {
-    // (a plan in wings: a roof over each, the same height at the eaves, meeting the others in valleys)
-    if (b.wings && !wing) { for (const wg of b.wings) roof(b, wg); return; }
-    const O = 0.12, y = b.h, ye = y + 0.02;
-    // (over the plan, or the part of it left beside a terrace, or a wing of it)
-    const P = wing ?? b.roofPlan ?? b, xa = X(P.i0), xb = X(P.i1 + 1), za = Z(P.j0), zb = Z(P.j1 + 1), along = xb - xa >= zb - za ? 0 : 1;
-    cur = { born: Math.max(...b.cols.map(([i, j]) => w.born(b.h - 1, i, j))) + 0.2, pivot: y, how: 1, tone: 0.5, dress: 0, sel: b.cols.some(([i, j]) => selected.has(key(b.h - 1, i, j))) };
-    // (each slope a slab of tiles with a thickness: its top, its underside a little below, and its edges (the eaves, the
-    // verges over a gable, the hips) closed, so where it overhangs a wall it reads as a roof, not a cut)
-    const RT = 0.07;
-    const slope = (p: V3[]) => {
-      const u = [p[1][0] - p[0][0], p[1][1] - p[0][1], p[1][2] - p[0][2]], v = [p[2][0] - p[0][0], p[2][1] - p[0][1], p[2][2] - p[0][2]];
-      let n = [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]];
-      const l = Math.hypot(n[0], n[1], n[2]) || 1; n = n.map((x) => x / l); if (n[1] < 0) n = n.map((x) => -x);
-      const q = p.map((c) => [c[0] - n[0] * RT, c[1] - n[1] * RT, c[2] - n[2] * RT] as V3), mid = p.reduce((a, c) => [a[0] + c[0] / p.length, a[1] + c[1] / p.length, a[2] + c[2] / p.length], [0, 0, 0]) as V3;
-      face(p, MAT.tile, 1, true); face(q, MAT.tile, 0.45, false);
-      for (let e = 0; e < p.length; e++) { const a = p[e], b = p[(e + 1) % p.length]; face([a, b, q[(e + 1) % p.length], q[e]], MAT.tile, 0.8, true, [mid[0] - n[0] * RT / 2, mid[1] - n[1] * RT / 2, mid[2] - n[2] * RT / 2]); }
-      // (along its eaves, the tiles' own ends: each cap tile's round end out over the edge, where the shader's tiles have
-      // their crowns (render.ts: columns TILE_U across the slope, the caps on every other one), so the eave's line is
-      // scalloped and throws its little shadows)
-      const T: V3 = (() => { const t = [-n[2], 0, n[0]], l = Math.hypot(t[0], t[2]) || 1; return [t[0] / l, 0, t[2] / l]; })();
-      const S: V3 = (() => { const c = [n[1] * T[2] - n[2] * T[1], n[2] * T[0] - n[0] * T[2], n[0] * T[1] - n[1] * T[0]]; const l = Math.hypot(c[0], c[1], c[2]) || 1; return (c[1] < 0 ? [-c[0] / l, -c[1] / l, -c[2] / l] : [c[0] / l, c[1] / l, c[2] / l]) as V3; })();
-      for (let e = 0; e < p.length; e++) {
-        const a = p[e], b2 = p[(e + 1) % p.length];
-        if (Math.abs(a[1] - ye) > 0.01 || Math.abs(b2[1] - ye) > 0.01) continue;
-        const ua = (a[0] * T[0] + a[2] * T[2]) * TILE_U, ub = (b2[0] * T[0] + b2[2] * T[2]) * TILE_U, lo = Math.min(ua, ub), hi = Math.max(ua, ub);
-        for (let u = Math.ceil((lo - 0.5) / 2) * 2 + 0.5; u < hi - 0.4; u += 2) {
-          if (u < lo + 0.4) continue;
-          const f = (u - ua) / (ub - ua), c: V3 = [a[0] + (b2[0] - a[0]) * f, a[1] + (b2[1] - a[1]) * f, a[2] + (b2[2] - a[2]) * f];
-          halfRound(c, [-S[0], -S[1], -S[2]], T, n as V3, 0.042 * (0.92 + 0.16 * hash(Math.round(c[0] * 97), Math.round(c[2] * 97), 3) / 0xffffffff), 0.16, MAT.tile);
-          // (and the pan beside it, its hollow end: a trough, lower, between the caps)
-          const f2 = (u + 1 - ua) / (ub - ua);
-          if (u + 1 < hi - 0.4) { const c2: V3 = [a[0] + (b2[0] - a[0]) * f2 + n[0] * 0.035, a[1] + (b2[1] - a[1]) * f2 + n[1] * 0.035, a[2] + (b2[2] - a[2]) * f2 + n[2] * 0.035]; halfRound(c2, [-S[0], -S[1], -S[2]], T, [-n[0], -n[1], -n[2]], 0.05, 0.12, MAT.tile); }
-        }
-      }
-    };
-    // (over a gable's ends, only a little past the wall: the verge)
-    const OG = b.roof === 'gable' ? 0.05 : O;
-    const X0 = xa - (along === 0 ? OG : O), X1 = xb + (along === 0 ? OG : O), Z0 = za - (along === 1 ? OG : O), Z1 = zb + (along === 1 ? OG : O), cx = (xa + xb) / 2, cz = (za + zb) / 2;
-    if (b.roof === 'dome') {
-      const r = Math.min(xb - xa, zb - za) * 0.42;
-      lathe(cx, cz, [[r + 0.04, y], [r + 0.04, y + 0.06], [r, y + 0.06], [r, y + 0.2]], MAT.stone, 16);
-      cur.dress = 0;
-      lathe(cx, cz, Array.from({ length: 9 }, (_, q) => { const t = (q / 8) * (Math.PI / 2); return [r * Math.cos(t), y + 0.2 + r * 0.95 * Math.sin(t)] as [number, number]; }), MAT.lead, 16);
-      lathe(cx, cz, [[0.03, y + 0.2 + r * 0.95], [0.02, y + 0.32 + r * 0.95], [0.045, y + 0.36 + r * 0.95], [0, y + 0.42 + r * 0.95]], MAT.lead, 6);
-      return;
-    }
-    if (b.roof === 'shed') {
-      // (high against what it leans on, falling to the eave the other side)
-      const f = b.fall, H = 0.45, hy = (x: number, z: number) => { const t = f === 0 ? (x - X0) / (X1 - X0) : f === 2 ? (X1 - x) / (X1 - X0) : f === 1 ? (z - Z0) / (Z1 - Z0) : (Z1 - z) / (Z1 - Z0); return ye + H * (1 - t); };
-      const c: V3[] = [[X0, 0, Z0], [X1, 0, Z0], [X1, 0, Z1], [X0, 0, Z1]].map(([x, , z]) => [x, hy(x, z), z] as V3);
-      slope(c);
-      // (its two sides walled up under the slope, in the planes of the walls across the fall)
-      const mid: V3 = [cx, y, cz], sides: Array<[V3, V3]> = f % 2 === 0 ? [[[xa, 0, za], [xb, 0, za]], [[xa, 0, zb], [xb, 0, zb]]] : [[[xa, 0, za], [xa, 0, zb]], [[xb, 0, za], [xb, 0, zb]]];
-      for (const [p, q] of sides) face([[p[0], y, p[2]], [q[0], y, q[2]], [q[0], hy(q[0], q[2]), q[2]], [p[0], hy(p[0], p[2]), p[2]]], MAT.stone, 0.9, true, mid);
-      return;
-    }
-    // (hipped, or gabled: a ridge along the long way, at a pitch a little under half the short span)
-    const S = along === 0 ? Z1 - Z0 : X1 - X0, H = S * 0.42;
-    const r0: V3 = along === 0 ? [b.roof === 'hipped' ? X0 + S / 2 : X0, ye + H, cz] : [cx, ye + H, b.roof === 'hipped' ? Z0 + S / 2 : Z0];
-    const r1: V3 = along === 0 ? [b.roof === 'hipped' ? X1 - S / 2 : X1, ye + H, cz] : [cx, ye + H, b.roof === 'hipped' ? Z1 - S / 2 : Z1];
-    const A: V3 = [X0, ye, Z0], B: V3 = [X1, ye, Z0], C: V3 = [X1, ye, Z1], D: V3 = [X0, ye, Z1];
-    if (along === 0) { slope([A, B, r1, r0]); slope([D, C, r1, r0]); } else { slope([A, D, r1, r0]); slope([B, C, r1, r0]); }
-    if (b.roof === 'hipped') {
-      if (along === 0) { slope([A, D, r0]); slope([B, C, r1]); } else { slope([A, B, r0]); slope([D, C, r1]); }
-    } else {
-      // (the gable ends: walled up in stone, in the plane of the wall, a band at their foot along the eaves' line)
-      // (the slope's height a distance d in from the eave; at the wall's own line, the eaves' overhang in)
-      const hAt = (d: number) => ye + H * Math.min(1, d / (S / 2)), hg = hAt(O);
-      const mid: V3 = [cx, y, cz];
-      if (along === 0) for (const x of [xa, xb]) { face([[x, y, za], [x, y, zb], [x, hg, zb], [x, hg, za]], MAT.stone, 0.85, true, mid); face([[x, hg, za], [x, hg, zb], [x, ye + H, cz]], MAT.stone, 0.85, true, mid); const o = x === xa ? -0.03 : 0.03; box(Math.min(x, x + o), Math.max(x, x + o), y - 0.02, y + 0.04, za, zb, MAT.stone, 0.9); }
-      else for (const z of [za, zb]) { face([[xa, y, z], [xb, y, z], [xb, hg, z], [xa, hg, z]], MAT.stone, 0.85, true, mid); face([[xa, hg, z], [xb, hg, z], [cx, ye + H, z]], MAT.stone, 0.85, true, mid); const o = z === za ? -0.03 : 0.03; box(xa, xb, y - 0.02, y + 0.04, Math.min(z, z + o), Math.max(z, z + o), MAT.stone, 0.9); }
-    }
-    // (the ridge, and the hips: capped in round tiles, each overlapping the next, set in a bed of mortar)
-    capRun(r0, r1, 0.05);
-    if (b.roof === 'hipped') {
-      for (const [c, r] of (along === 0 ? [[A, r0], [D, r0], [B, r1], [C, r1]] : [[A, r0], [B, r0], [D, r1], [C, r1]]) as Array<[V3, V3]>) capRun(r, c, 0.045);
-      // (where the hips meet the ridge, or each other: a round boss of mortar and tile over the joint)
-      for (const r of r0[0] === r1[0] && r0[2] === r1[2] ? [r0] : [r0, r1]) lathe(r[0], r[2], [[0.075, r[1] - 0.02], [0.08, r[1] + 0.03], [0.06, r[1] + 0.07], [0, r[1] + 0.09]], MAT.tile, 8);
-    }
-  }
-  /**
-   * A half-round tile, its hollow downward: its axis from c along d (toward its own length), round over e2 (up off what
-   * it lies on), across e1; r its radius, len how long. Its open end at c, a lip.
-   */
-  function halfRound(c: V3, d: V3, e1: V3, e2: V3, r: number, len: number, mat: number) {
-    const N = 6, ring = (t: number, rr: number, y0: number) => Array.from({ length: N + 1 }, (_, q) => { const th = (q / N) * Math.PI, co = Math.cos(th), si = Math.sin(th); return { p: [c[0] + d[0] * t + (e1[0] * co + e2[0] * si) * rr + e2[0] * y0, c[1] + d[1] * t + (e1[1] * co + e2[1] * si) * rr + e2[1] * y0, c[2] + d[2] * t + (e1[2] * co + e2[2] * si) * rr + e2[2] * y0] as V3, n: [e1[0] * co + e2[0] * si, e1[1] * co + e2[1] * si, e1[2] * co + e2[2] * si] as V3 }; });
-    const a = ring(-0.015, r * 1.06, 0), b = ring(-len, r, 0), inner = ring(-0.015, r * 0.7, 0);
-    const smooth = (p: { p: V3; n: V3 }, ao: number) => vert(p.p, p.n, ao, mat);
-    for (let q = 0; q < N; q++) {
-      // (its back, rounded, toward the eye from above)
-      const P = [a[q], a[q + 1], b[q + 1], b[q]], u = P[1].p.map((x, k) => x - P[0].p[k]), v = P[2].p.map((x, k) => x - P[0].p[k]);
-      // (wound so it faces the way its normals do: out from the tile)
-      const flip = (u[1] * v[2] - u[2] * v[1]) * P[0].n[0] + (u[2] * v[0] - u[0] * v[2]) * P[0].n[1] + (u[0] * v[1] - u[1] * v[0]) * P[0].n[2] < 0;
-      for (const k of flip ? [0, 2, 1, 0, 3, 2] : [0, 1, 2, 0, 2, 3]) smooth(P[k], k < 2 ? 0.95 : 0.8);
-      // (its lip: the open end, a ring of tile, dark inside)
-      quad(a[q].p, a[q + 1].p, inner[q + 1].p, inner[q].p, d, [0.9, 0.9, 0.35, 0.35], mat);
-    }
-  }
-  /** a run of round cap tiles from p0 to p1 (a ridge, a hip): each overlapping the next, a little wider at its foot */
-  function capRun(p0: V3, p1: V3, r: number) {
-    const L = Math.hypot(p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2]);
-    if (L < 0.05) return;
-    const d: V3 = [(p1[0] - p0[0]) / L, (p1[1] - p0[1]) / L, (p1[2] - p0[2]) / L];
-    // (across it, level; and up off it)
-    let e1: V3 = [d[2], 0, -d[0]]; const l1 = Math.hypot(e1[0], e1[2]) || 1; e1 = [e1[0] / l1, 0, e1[2] / l1];
-    const e2: V3 = [d[1] * e1[2] - d[2] * e1[1], d[2] * e1[0] - d[0] * e1[2], d[0] * e1[1] - d[1] * e1[0]];
-    const up: V3 = e2[1] < 0 ? [-e2[0], -e2[1], -e2[2]] : e2;
-    // (laid from its lower end up, so each tile's foot lies over the one below)
-    const lowFirst = p0[1] <= p1[1], a0 = lowFirst ? p0 : p1, dd: V3 = lowFirst ? d : [-d[0], -d[1], -d[2]];
-    const n = Math.max(1, Math.round(L / 0.2)), step = L / n;
-    for (let q = n - 1; q >= 0; q--) {
-      // (each from its own foot, lying up the run over the foot of the one above it)
-      const c: V3 = [a0[0] + dd[0] * step * q, a0[1] + dd[1] * step * q, a0[2] + dd[2] * step * q];
-      halfRound(c, [-dd[0], -dd[1], -dd[2]], e1, up, r * (1 + 0.04 * (q % 2)), step + 0.03, MAT.tile);
-    }
   }
   /**
    * A colonnade's column, the part of it in level k: massive, swelling a little a third of the way up (entasis) and
