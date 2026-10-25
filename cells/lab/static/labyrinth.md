@@ -88,23 +88,40 @@ What's built and the land it's on ask things of each other (`context.ts`, `build
 ![story 15: a house built across a bank, two steps under lean-tos falling downhill; a tower set into the cliff, its roof falling away from the hill, a door from the hill above; a way up the slope, its banks held by walls](labyrinth/v-slope.jpg)
 ![close: the steps, the walls holding the bank beside the way](labyrinth/v-slope-close.jpg)
 
-## Two manners: the middle sea and the plateau
+## Traditions: how a land is built
 
-The land is built in two manners, and where you build says which. Districts lie over the land, each a dozen cells or
-so across, seeded by the land itself. A building takes the manner of the district where its first column was laid, the
-whole of it, so neighbours match and one district differs from the next. The manner changes how a building is
-finished and drawn, never what's built or where a way goes.
+A land is built in one tradition, chosen by the land's own seed, so a settlement holds together. A tradition is a
+grammar of construction, not a costume: what its walls are made of, how it covers its tops, how it opens its faces.
+It decides how what's built is finished and drawn, never what's built or where a way goes.
 
-| | The middle sea (as it was) | The plateau (after the Persian courtyard houses) |
-|---|---|---|
-| arches over doors, windows, passages | round | pointed (two-centred), the crown where a round one's would be |
-| arches over arcades and bridges | round | four-centred over two cells or more: round shoulders rising to a point |
-| tops | pitched roofs of terracotta (hipped, gabled, shed), now and then a dome on a tower | flat, with a parapet round them; now and then a dome on a tower |
-| windows | arched, square or slit; shutters folded back, now and then an awning over a door | tall, arched or square, in panes behind glazing bars in the house's paint (teal, oxblood or turquoise); about half lit warm from within |
+| | The middle sea | The plateau | The north | The east |
+|---|---|---|---|---|
+| after | the Mediterranean hill towns | the Persian courtyard houses | the canal towns | the courtyard towns of China and Japan |
+| walls | dressed stone | dressed stone | timber frame over a stone ground storey | whitewash between dark posts, a beam at each floor; free walls too |
+| tops | terracotta, hipped or gabled; a shed against what's taller; now and then a dome on a tower | flat, a parapet round them; now and then a dome on a tower | slate, steep gables, the ends stepped in brick or framed; dormers; a chimney; a spire on a tower | grey tile, hipped, low, the eaves deep and turned up at the corners; a skirt of tile at each floor |
+| arches | round | pointed; four-centred over two cells or more | round | round |
+| openings | arched, square or slit windows; shutters folded back; an awning now and then | tall windows, mostly arched, in panes behind teal, oxblood or turquoise bars; about half lit | square windows, small panes in white or green bars, about half lit; square-headed doors | lattice windows and screen doors, lit like paper |
+| stone dressing | marble or brick now and then | marble or brick now and then | brick, more often | none: it's whitewashed |
 
-Mashrabiya at upper windows, colonnettes and pergolas at doors come to both.
+In the north and the east a roof leans only on taller stone, never on the hill: a house set into a bank has its own
+roof.
 
-`?region=persian` or `?region=mediterranean` holds the whole land to one manner.
+![One build in each tradition: the study, close over wide](labyrinth/traditions-same.jpg)
+
+The same build in each tradition (the study, story 16): what's built is the same (the checks hold it), the silhouettes
+and finishes each tradition's own. `node devtools/labyrinth-traditions.mjs` draws it, and one tradition over several
+builds:
+
+![The north over four builds](labyrinth/traditions-across-timber.jpg)
+
+![The east over four builds](labyrinth/traditions-across-eaves.jpg)
+
+The sheets show where it stops for now. Only the houses, their walls and the stone's dressing follow the tradition.
+Arcades, colonnades, balustrades and courts are still the middle sea's in every land, and a build with no roofed houses
+(story 13) barely changes.
+
+`?region=` holds a land to one tradition: `mediterranean`, `persian`, `timber` or `eaves`. `?region=mixed` lays districts
+of the first two over one land, a sketch of lands with more than one; a way from one to the next isn't made yet.
 
 ## Water
 

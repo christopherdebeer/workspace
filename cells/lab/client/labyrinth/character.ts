@@ -29,7 +29,7 @@ import { DIRS, DRESS, key, unkey, type Cell, type Dress, type World } from './mo
 import { height, motifs } from './motifs';
 import { buildings, cellsOf, underRoof } from './buildings';
 import { outline } from './form';
-import { PERSIAN, regionOfId } from './regions';
+import { grammarAt, grammarOfId } from './regions';
 
 const cache = new WeakMap<World, { v: number; map: Map<number, Dress> }>();
 
@@ -69,17 +69,20 @@ function dressUp(w: World): Map<number, Dress> {
 
   for (const m of motifs(w)) {
     const n = id(m.cells);
+    // (its stone as its tradition dresses it (regions.ts): marble or brick now and then; in the north brick more often,
+    // never marble; in the east neither, its walls whitewashed)
+    const st = grammarAt(w, m.cells[0][1], m.cells[0][2]).stone, brickBy = (p: number) => (st === 'none' ? 0 : st === 'brick' ? Math.min(1, p * 1.8) : p);
     if (m.kind === 'tower') {
-      const r = hash(w.seed, n, 1) % 100, mat = r < 35 ? DRESS.marble : r < 50 ? DRESS.brick : -1;
+      const r = hash(w.seed, n, 1) % 100, mat = st === 'none' ? -1 : st === 'brick' ? (r < 50 ? DRESS.brick : -1) : r < 35 ? DRESS.marble : r < 50 ? DRESS.brick : -1;
       if (mat >= 0) for (const c of m.cells) if (stone(c)) put(c, { mat });
       const tops = m.cells.filter(roomy).filter((c) => c[0] === Math.max(...m.cells.map((q) => q[0])));
       if (tops.length && chance(0.65, n, 2)) put(tops[hash(w.seed, n, 3) % tops.length], { prop: DRESS.lantern });
       if (chance(0.25, n, 4)) for (const c of tops) put(c, { parapet: true });
     } else if (m.kind === 'wall') {
-      if (chance(0.25, n, 1)) for (const c of m.cells) if (stone(c)) put(c, { mat: DRESS.brick });
+      if (chance(brickBy(0.25), n, 1)) for (const c of m.cells) if (stone(c)) put(c, { mat: DRESS.brick });
       if (chance(0.4, n, 2)) for (const c of m.cells) if (c[0] === 0 && stone(c)) put(c, { moss: true });
     } else if (m.kind === 'arcade' || m.kind === 'bridge') {
-      if (chance(0.2, n, 1)) for (const c of m.cells) if (stone(c)) put(c, { mat: DRESS.brick });
+      if (chance(brickBy(0.2), n, 1)) for (const c of m.cells) if (stone(c)) put(c, { mat: DRESS.brick });
     } else if (m.kind === 'flight') {
       // (where it arrives: the stone under the place at its head)
       // (beside where it arrives, not in the way: on the stone to one side of the place at its head)
@@ -163,9 +166,9 @@ function dressUp(w: World): Map<number, Dress> {
   for (const b of buildings(w).list) {
     const all = cellsOf(b).filter((c) => w.block(...c));
     const upper = b.openings.some((o) => o.kind === 'window' && o.k >= 1 && o.style !== 'slit');
-    // (on the plateau (regions.ts) a house is lived in under a flat top: a parapet round it, always)
-    const persian = regionOfId(w, b.id) === PERSIAN, lived = !!b.roof || (persian && !b.walked);
-    if (persian && !b.roof) for (const [x, z] of b.cols) put([b.h - 1, x, z], { parapet: true, rail: DRESS.parapet });
+    // (where a tradition's tops are flat (regions.ts) a house is lived in under one: a parapet round it, always)
+    const flat = grammarOfId(w, b.id).roof === 'flat', lived = !!b.roof || (flat && !b.walked);
+    if (flat && !b.roof) for (const [x, z] of b.cols) put([b.h - 1, x, z], { parapet: true, rail: DRESS.parapet });
     if (lived && upper && chance(0.3, b.id, 21)) for (const c of all) if (c[0] > w.ground(c[1], c[2])) put(c, { oriel: true });
     if (b.openings.some((o) => o.style === 'arched' && o.kind === 'window') && chance(0.4, b.id, 22)) for (const c of all) put(c, { colonnettes: true });
     for (const o of b.openings) {

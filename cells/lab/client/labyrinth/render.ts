@@ -225,11 +225,18 @@ float arris(float d) { return smoothstep(.008, .055, d); }
 // Parts: 0 body, 1 head, 2 tail, 3 legs, 4 ears, 5 muzzle)
 // (a window's panes on the plateau (regions.ts): a lattice of glazing bars in the frame's paint, the glass between; 1 in
 // a pane, 0 on a bar)
-float paneOf(vec3 p, vec3 n) {
+float paneOf(vec3 p, vec3 n, float fine) {
   vec3 T = normalize(vec3(-n.z, 0., n.x) + 1e-5);
-  float u = dot(p, T) * 12.5, v = p.y * 11.;
+  float u = dot(p, T) * mix(12.5, 30., fine), v = p.y * mix(11., 27., fine);
   float bu = min(fract(u), 1. - fract(u)), bv = min(fract(v), 1. - fract(v));
   return smoothstep(.06, .14, bu) * smoothstep(.06, .14, bv);
+}
+// (glass's tone, past 2: the paint of its bars (8 of them), 8 more lit within, 16 more a fine lattice)
+float glassFine(float t) { return floor(t + .01) - 2. >= 15.5 ? 1. : 0.; }
+float glassLit(float t) { return mod(floor(t + .01) - 2., 16.) >= 7.5 ? 1. : 0.; }
+vec3 glassPaint(float t) {
+  int pc = int(mod(floor(t + .01) - 2., 8.));
+  return pc == 0 ? vec3(.16, .44, .44) : pc == 1 ? vec3(.50, .17, .12) : pc == 2 ? vec3(.17, .50, .58) : pc == 3 ? vec3(.86, .84, .78) : pc == 4 ? vec3(.13, .29, .20) : pc == 5 ? vec3(.22, .15, .10) : vec3(.45, .12, .08);
 }
 vec3 coat(int c, float h, vec3 n, float tone) {
   float part = floor(h / 10. + .001), u = h - part * 10.;
@@ -371,11 +378,10 @@ void main() {
     base *= .75 + .25 * smoothstep(.0, .12, min(pl, 1. - pl));
   }
   else if (mat == 12 && vTone > 1.5) {
-    // (glass on the plateau: in the house's paint (teal, oxblood, turquoise), in panes; dark, or (its tone past 6) lit warm
-    // from within)
-    int pc = int(mod(floor(vTone + .01) - 2., 4.));
-    vec3 paint = pc == 0 ? vec3(.16, .44, .44) : pc == 1 ? vec3(.50, .17, .12) : vec3(.17, .50, .58);
-    base = mix(paint, vTone > 5.5 ? vec3(.92, .70, .40) : vec3(.10, .12, .13), mix(1., paneOf(vPos, n), keep(14.)));
+    // (glass in panes (regions.ts): behind bars in the house's paint, or a fine lattice; dark, or lit warm from within,
+    // a lattice like a paper screen)
+    float fine = glassFine(vTone);
+    base = mix(glassPaint(vTone), glassLit(vTone) > .5 ? (fine > .5 ? vec3(.95, .86, .66) : vec3(.92, .70, .40)) : vec3(.10, .12, .13), mix(1., paneOf(vPos, n, fine), keep(mix(14., 32., fine))));
   }
   else if (mat == 12) base = vec3(.09, .10, .11);
   else if (mat == 13) {
@@ -386,11 +392,14 @@ void main() {
     vec3 T = normalize(vec3(-n.z, 0., n.x) + 1e-5), S = normalize(cross(n, T)); if (S.y < 0.) S = -S;
     float u = dot(vPos, T) * 7., v = dot(vPos, S) * 9., cu = floor(u), cv = floor(v), fv = fract(v);
     float tint = hash(vec3(cu, cv, 7.)), kT = keep(9.);
-    base = mix(vec3(.62, .36, .25), vec3(.72, .46, .32), tint);
-    if (hash(vec3(cu, cv, 3.)) > .9) base = mix(base, vec3(.50, .40, .30), .45);
+    // (its kind, in the tone (roof.ts): terracotta; slate (past 1.5), flat, laid in courses, each slate its own grey;
+    // grey tile (past 2.5), round like terracotta, darker)
+    bool slate = vTone > 1.5 && vTone < 2.5, grey = vTone > 2.5;
+    base = slate ? mix(vec3(.27, .29, .31), vec3(.36, .37, .38), tint) : grey ? mix(vec3(.28, .29, .29), vec3(.37, .37, .36), tint) : mix(vec3(.62, .36, .25), vec3(.72, .46, .32), tint);
+    if (hash(vec3(cu, cv, 3.)) > .9) base = mix(base, slate || grey ? vec3(.42, .43, .38) : vec3(.50, .40, .30), .45);
     base = mix(base, vec3(.47, .47, .40), .16 * smoothstep(.55, .8, fbm(vPos * 2.)));
-    // (across: round over a cap, hollow in a pan; up: each tile rising toward its lip)
-    float across = cos(u * 3.14159), along = -.9;
+    // (across: round over a cap, hollow in a pan (a slate flat); up: each tile rising toward its lip)
+    float across = slate ? 0. : cos(u * 3.14159), along = -.9;
     nS = normalize(n + (T * across * .4 + S * along * .1) * kT);
     // (the lip's shadow on the tile under it; the lip's own edge catching the light; the pans darker than the caps)
     float lip = smoothstep(.78, 1., fv) * kT;
@@ -474,7 +483,25 @@ void main() {
     // (dressed stone, in its blocks (ashlar, or a top's flags): each block a shade of its own; its joints recessed, the
     // mortar a little paler and duller; each arris rounded so it catches the light, each face a little out of true; the
     // detail gone where it's smaller than the eye can hold)
-    if (mat == 0 && kind != 3 && n.y > -.5) {
+    // (a wall of its tradition's (regions.ts; the mesh's how, past 5.5): a timber frame, its posts a third of a cell
+    // apart, a sill, a plate and a rail, braces in every other panel, lime between; or whitewash between dark posts at
+    // the cells' edges and a beam at each floor)
+    if (mat == 0 && vU > 5.5 && vU < 7.9 && abs(n.y) < .5) {
+      vec3 T = normalize(vec3(-n.z, 0., n.x) + 1e-5);
+      float u = dot(vPos, T), fy = fract(vPos.y), kD = keep(10.), wood;
+      if (vU < 6.5) {
+        float pu = fract(u * 3.), post = step(min(pu, 1. - pu), .07), rail = step(fy, .05) + step(.94, fy) + step(abs(fy - .52), .025);
+        float pan = floor(u * 3.), br = mod(pan, 2.) < .5 ? abs(pu - fy * 2.) : abs(pu - (1. - fy * 2.)), brace = fy < .5 ? step(br, .09) : 0.;
+        wood = clamp(post + rail + brace, 0., 1.);
+        base = mix(vec3(.86, .81, .70) * (.94 + .08 * noise(vPos * 9.)), vec3(.24, .17, .11) * (.85 + .2 * noise(vPos * 30.)), wood * kD);
+      } else {
+        float pu = fract(u), post = step(min(pu, 1. - pu), .035), beam = step(fy, .045);
+        wood = clamp(post + beam, 0., 1.);
+        vec3 lime = vec3(.92, .91, .87) * (.95 + .05 * noise(vPos * 6.)) * (1. - .1 * smoothstep(.5, .9, fbm(vec3(u * 2., vPos.y * .6, 3.))));
+        base = mix(lime, vec3(.20, .15, .11) * (.85 + .2 * noise(vPos * 30.)), wood * kD);
+      }
+    }
+    else if (mat == 0 && kind != 3 && n.y > -.5) {
       bool upright = abs(n.y) < .5;
       vec3 T = upright ? normalize(vec3(-n.z, 0., n.x) + 1e-5) : vec3(1., 0., 0.), B = upright ? vec3(0., 1., 0.) : vec3(0., 0., 1.);
       vec2 q = vec2(dot(vPos, T), upright ? vPos.y : vPos.z), id, id2;
@@ -585,9 +612,9 @@ void main() {
   // (a lamp: lit from within)
   if (mat == 9) { c = vec3(1., .86, .58); lit = vec3(1.); castR = hollowR = shadeR = restR = vec3(1.); }
   // (a window lit within: its panes glow, warmest low, its bars as they're lit)
-  if (mat == 12 && vTone > 5.5) {
-    float pane = mix(1., paneOf(vPos, n), keep(14.)) * .92;
-    vec3 warm = vec3(1., .80, .50) * (.86 + .14 * hash(vec3(floor(vPos * 7.)))) * (1.05 - .25 * fract(vPos.y));
+  if (mat == 12 && vTone > 1.5 && glassLit(vTone) > .5) {
+    float fine = glassFine(vTone), pane = mix(1., paneOf(vPos, n, fine), keep(mix(14., 32., fine))) * .92;
+    vec3 warm = mix(vec3(1., .80, .50), vec3(1., .90, .70), fine) * (.86 + .14 * hash(vec3(floor(vPos * 7.)))) * (1.05 - .25 * fract(vPos.y));
     c = mix(c, warm, pane); lit = mix(lit, vec3(1.), pane); castR = mix(castR, vec3(1.), pane); hollowR = mix(hollowR, vec3(1.), pane); shadeR = mix(shadeR, vec3(1.), pane); restR = mix(restR, vec3(1.), pane);
   }
   if (mat == 2) {

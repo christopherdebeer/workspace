@@ -29,11 +29,12 @@ import { Out, POSES, cat, gait, type PoseName } from './catbody';
 import { COATS, Cats, type Cat } from './cats';
 import { perf } from './perf';
 import { HOUSE, PRESETS, address, layersPalette, type Dials } from './layers';
-import { setRegions } from './regions';
+import { ORDER, setRegions, type GrammarId, type RegionMode } from './regions';
 
 const qs = new URLSearchParams(location.search);
-/** `?region=persian` or `?region=mediterranean`: the whole land in one manner (regions.ts); unset, by district */
-{ const r = qs.get('region'); if (r === 'persian' || r === 'mediterranean') setRegions(r); }
+/** `?region=`: the land held to one tradition (mediterranean, persian, timber, eaves), or `mixed`, districts of the first
+ * two (regions.ts); unset, the land's own */
+{ const r = qs.get('region'); if (r === 'mixed' || ORDER.includes(r as GrammarId)) setRegions(r as RegionMode); }
 const preview = qs.has('preview'), still = qs.has('still'), instant = qs.has('instant'), heldView = qs.has('held');
 const canvas = document.getElementById('stone') as HTMLCanvasElement, guide = document.getElementById('guide') as HTMLCanvasElement;
 const g2 = guide.getContext('2d')!;

@@ -32,7 +32,7 @@
 import { hash } from '../kit/rng';
 import { DIRS, RULE, isTower, isWithin, key, unkey, type Cell, type World } from './model';
 import { navigate, standing, type Nav } from './nav';
-import { PERSIAN, regionAt, regionOfId } from './regions';
+import { grammarAt, grammarOfId, type Grammar } from './regions';
 
 export type Roof = 'hipped' | 'gable' | 'shed' | 'dome';
 export interface Opening { kind: 'door' | 'window'; style: 'arched' | 'square' | 'slit'; k: number; i: number; j: number; d: number }
@@ -235,9 +235,9 @@ function find(w: World): Buildings {
     const court = atFoot.filter((f) => w.courts.has(key(0, f.out[1], f.out[2])));
     // (one style to a building; framed with colonnettes by hand, arched, so there's an arch for them to carry)
     const framed = cols.some(([x, z]) => Array.from({ length: h }, (_, k) => w.dressed(k, x, z)?.colonnettes).some(Boolean));
-    // (on the plateau (regions.ts): tall windows, mostly arched, never a slit but in a stair tower)
-    const persian = regionOfId(w, id) === PERSIAN;
-    const style = framed ? 'arched' : persian ? (hash(w.seed, id, 1) % 4 ? 'arched' : 'square') : (['arched', 'square', 'slit'] as const)[hash(w.seed, id, 1) % 3];
+    // (its tradition's windows (regions.ts): the plateau's tall, mostly arched; the north's and the east's square)
+    const g = grammarOfId(w, id);
+    const style = framed ? 'arched' : g.windows[hash(w.seed, id, 1) % g.windows.length];
     const doors: typeof faces = [...upper];
     // (a porch: a passage in at its foot that stops at its stone, the door at its back)
     const porch = through.flatMap(([x, z, a]) => [0, 1, 2, 3].filter((d) => d % 2 === a).map((d) => ({ x, z, d })))
@@ -320,8 +320,14 @@ function find(w: World): Buildings {
       // (leaning on more than one side, it falls away from the highest)
       const rise = (d: number) => { const [a, bb] = DIRS[d], o = rcols.filter(([x, z]) => !rmine.has(`${x + a}.${z + bb}`)); return o.reduce((t, [x, z]) => t + Math.max(height(x + a, z + bb), w.ground(x + a, z + bb)), 0) / Math.max(1, o.length); };
       const lean = taller.sort((p, q) => rise(q) - rise(p) || p - q)[0];
-      // (on the plateau: flat tops, now and then a dome on a tower)
-      if (persian) b.roof = tower && chance(0.5, id, 4) ? 'dome' : null;
+      // (by its tradition: on the plateau flat tops, now and then a dome on a tower; in the north a steep gable (a spire
+      // on a tower); in the east hipped, under deep eaves)
+      // (and where a tradition's roofs stand clear of the slope (the north's, the east's), a lean-to only against taller
+      // stone, never against the hill: set into a bank, its roof its own, gabled or hipped)
+      const byStone = [0, 1, 2, 3].some((d) => { const [a, bb] = DIRS[d]; const out = rcols.filter(([x, z]) => !mine.has(`${x + a}.${z + bb}`)); return out.length > 0 && out.filter(([x, z]) => height(x + a, z + bb) > h).length * 2 >= out.length; });
+      if (g.roof === 'flat') b.roof = tower && chance(0.5, id, 4) ? 'dome' : null;
+      else if (g.roof === 'steep') b.roof = taller.length && byStone ? 'shed' : tower ? 'hipped' : 'gable';
+      else if (g.roof === 'eave') b.roof = taller.length && byStone ? 'shed' : 'hipped';
       else b.roof = taller.length ? 'shed' : W === D ? (tower && chance(0.35, id, 4) ? 'dome' : 'hipped') : chance(0.25, id, 5) ? 'hipped' : 'gable';
       if (taller.length && b.roof === 'shed') b.fall = (lean + 2) % 4;
     }
@@ -343,7 +349,7 @@ function find(w: World): Buildings {
 }
 /** the manner a cell's built in: its building's (the cell's, or the one over it: an arch carrying it), else its district's
  * (regions.ts) */
-export function regionHere(w: World, k: number, i: number, j: number) {
+export function grammarHere(w: World, k: number, i: number, j: number): Grammar {
   const of = buildings(w).of, b = of.get(key(k, i, j)) ?? of.get(key(k + 1, i, j));
-  return b ? regionOfId(w, b.id) : regionAt(w, i, j);
+  return b ? grammarOfId(w, b.id) : grammarAt(w, i, j);
 }

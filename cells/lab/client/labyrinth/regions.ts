@@ -1,28 +1,52 @@
 /**
- * Regions: the labyrinth is built in more than one manner, and where it stands says which. Over the land lie districts
- * (a broad field seeded by the land, a dozen cells or so across each), and a building takes the manner of the district
- * its first-laid column stands in, the whole of it, so neighbours rhyme and a district differs from the next.
+ * Traditions: how the labyrinth is built, and where. A land is built in one tradition (chosen by the land's own seed),
+ * so a settlement holds together; each tradition is a grammar of construction, not a costume: what its walls are made
+ * of, how it covers its tops, how it opens its faces. What's drawn follows from those (buildings.ts, facade.ts,
+ * roof.ts), never what's built or how a way goes.
  *
- * - **The middle sea** (as it was): round arches, roofs of terracotta, shutters folded back, now and then an awning.
- * - **The plateau** (after the Persian courtyard houses): pointed arches over doors, windows and passages, four-centred
- *   over the wider spans of arcades and bridges; flat tops; tall windows in painted frames (teal, oxblood, turquoise),
- *   many of them lit warm from within; a dome now and then on a tower.
+ * - **The middle sea**: dressed stone; pitched roofs of terracotta (hipped, gabled, a shed against what's taller);
+ *   round arches; shutters folded back, an awning now and then.
+ * - **The plateau** (after the Persian courtyard houses): stone; flat tops with a parapet, a dome now and then on a
+ *   tower; pointed arches, four-centred over wider spans; tall windows in panes, in teal, oxblood or turquoise, about
+ *   half lit within.
+ * - **The north** (after the canal towns): a stone ground storey and timber frame over it; steep gables, their ends
+ *   stepped in brick or framed, slate, dormers, chimneys; square-headed openings, small panes in white or green.
+ * - **The east** (after the courtyard towns of China and Japan): whitewashed walls between dark posts and beams;
+ *   hipped roofs of grey tile, deep eaves turned up at the corners, a skirt of tile at each floor; lattice windows,
+ *   most lit like paper screens.
  *
- * The manner is a matter of what's drawn and how a building's top is finished: never of what's built or how a way goes.
- * `?region=persian` or `?region=mediterranean` holds the whole land to one.
+ * `?region=` holds a land to one (mediterranean, persian, timber, eaves); `?region=mixed` lays districts of the first
+ * two over it, as a sketch of lands with more than one (a way from one to the next: not yet).
  */
 import { hash } from '../kit/rng';
 import { unkey, type World } from './model';
 
-export const MEDITERRANEAN = 0, PERSIAN = 1;
-export type Region = typeof MEDITERRANEAN | typeof PERSIAN;
-export type RegionMode = 'mixed' | 'persian' | 'mediterranean';
+export type GrammarId = 'mediterranean' | 'persian' | 'timber' | 'eaves';
+export interface Grammar {
+  id: GrammarId;
+  /** what the walls are: dressed stone; timber frame over a stone ground storey; whitewash between posts */
+  wall: 'ashlar' | 'frame' | 'plaster';
+  /** how a top is covered: pitched tile; flat, walked, a parapet round it; steep slate gables; deep eaves of grey tile */
+  roof: 'tile' | 'flat' | 'steep' | 'eave';
+  /** arches over doors, windows, passages; and over a span by its width */
+  arch: ArchFamily; span: (n: number) => ArchFamily;
+  /** a window's head, and a door's: arched (by the arch family), or square */
+  windows: Array<'arched' | 'square' | 'slit'>; doorHead: 'arched' | 'square';
+  /** shutters and awnings (the middle sea's); else glass in panes behind bars in a paint of the tradition's, `fine` for
+   * a lattice, lit within by this share */
+  shutters: boolean; panes: { paints: number[]; fine: boolean; lit: number } | null;
+  /** what the rules dress its stone in, now and then (character.ts): marble or brick; brick alone; neither (it's
+   * whitewashed) */
+  stone: 'mixed' | 'brick' | 'none';
+}
+
+export type RegionMode = 'land' | 'mixed' | GrammarId;
 // (held on the global object, so every copy of this module (each bundle the checks load) reads the same setting)
 const G = globalThis as { labyrinthRegions?: RegionMode };
 export const setRegions = (m: RegionMode) => { G.labyrinthRegions = m; };
-export const regionMode = (): RegionMode => G.labyrinthRegions ?? 'mixed';
+export const regionMode = (): RegionMode => G.labyrinthRegions ?? 'land';
 
-/** how broad a district is, in cells */
+/** how broad a district is, in cells (`mixed`) */
 const DISTRICT = 11;
 const lattice = (s: number, x: number, z: number) => hash(s, x, z, 97) / 4294967296;
 /** the district field at a place (0 … 1): value noise over a coarse lattice, smoothly between */
@@ -32,14 +56,17 @@ function field(w: World, i: number, j: number): number {
   const a = lattice(s, x0, z0), b = lattice(s, x0 + 1, z0), c = lattice(s, x0, z0 + 1), d = lattice(s, x0 + 1, z0 + 1);
   return (a + (b - a) * sx) * (1 - sz) + (c + (d - c) * sx) * sz;
 }
-/** the manner of the district at a place */
-export function regionAt(w: World, i: number, j: number): Region {
+export const ORDER: GrammarId[] = ['mediterranean', 'persian', 'timber', 'eaves'];
+/** the tradition at a place: the land's (one to a land), or as `?region=` holds it */
+export function grammarAt(w: World, i: number, j: number): Grammar {
   const mode = regionMode();
-  if (mode !== 'mixed') return mode === 'persian' ? PERSIAN : MEDITERRANEAN;
-  return field(w, i, j) > 0.5 ? PERSIAN : MEDITERRANEAN;
+  if (mode === 'mixed') return GRAMMARS[field(w, i, j) > 0.5 ? 'persian' : 'mediterranean'];
+  if (mode !== 'land') return GRAMMARS[mode];
+  // (a land's own: by its seed; the bare slab, and a land not yet seeded, the middle sea)
+  return GRAMMARS[w.landSeed ? ORDER[hash(w.landSeed, 211) % ORDER.length] : 'mediterranean'];
 }
-/** a building's manner: its district's, read where its first column stands (its id) */
-export const regionOfId = (w: World, id: number): Region => { const [, i, j] = unkey(id); return regionAt(w, i, j); };
+/** a building's tradition: read where its first column stands (its id) */
+export const grammarOfId = (w: World, id: number): Grammar => { const [, i, j] = unkey(id); return grammarAt(w, i, j); };
 
 // ─── arches, by family ───
 /** the arch families: round (a half circle), pointed (two-centred), four-centred (round shoulders, rising to a point) */
@@ -82,6 +109,9 @@ export function archStations(f: ArchFamily, hw: number, n: number): number[] {
   }
   return out;
 }
-/** the family of an opening's head or a passage's arch in a manner; of a span's, by how many cells wide */
-export const archOf = (r: Region): ArchFamily => (r === PERSIAN ? POINTED : ROUND);
-export const spanArchOf = (r: Region, n: number): ArchFamily => (r === PERSIAN ? (n >= 2 ? FOUR : POINTED) : ROUND);
+export const GRAMMARS: Record<GrammarId, Grammar> = {
+  mediterranean: { id: 'mediterranean', wall: 'ashlar', roof: 'tile', arch: ROUND, span: () => ROUND, windows: ['arched', 'square', 'slit'], doorHead: 'arched', shutters: true, panes: null, stone: 'mixed' },
+  persian: { id: 'persian', wall: 'ashlar', roof: 'flat', arch: POINTED, span: (n) => (n >= 2 ? FOUR : POINTED), windows: ['square', 'arched', 'arched', 'arched'], doorHead: 'arched', shutters: false, panes: { paints: [0, 1, 2], fine: false, lit: 0.55 }, stone: 'mixed' },
+  timber: { id: 'timber', wall: 'frame', roof: 'steep', arch: ROUND, span: () => ROUND, windows: ['square'], doorHead: 'square', shutters: false, panes: { paints: [3, 4, 1], fine: false, lit: 0.45 }, stone: 'brick' },
+  eaves: { id: 'eaves', wall: 'plaster', roof: 'eave', arch: ROUND, span: () => ROUND, windows: ['square'], doorHead: 'square', shutters: false, panes: { paints: [5, 5, 6], fine: true, lit: 0.65 }, stone: 'none' },
+};

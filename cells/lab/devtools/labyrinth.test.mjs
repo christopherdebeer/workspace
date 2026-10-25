@@ -1038,27 +1038,39 @@ stands(s4, 'story 4');
   ok('a world rebuilt again is the same world (ways by courts\' pools, on the land)', snap(found) === was);
 }
 if (process.env.DEBUG) (await import('node:fs')).writeFileSync(process.env.DEBUG, JSON.stringify(walked.saw));
-// ─── regions: districts in two manners, and what the plateau's makes of a house ───
+// ─── traditions: one to a land, and what each makes of a house ───
 {
+  RG.setRegions('land');
+  const seen = new Set();
+  for (let s = 1; s <= 40; s++) { const w = new World(1, s); const g = RG.grammarAt(w, 0, 0); seen.add(g.id); ok('traditions: one to a land, the same everywhere on it', RG.grammarAt(w, 17, -9).id === g.id && RG.grammarAt(w, -23, 31).id === g.id); }
+  ok('traditions: lands differ (all four among forty lands)', seen.size === 4, [...seen]);
+  ok('traditions: the bare slab the middle sea', RG.grammarAt(new World(1), 3, 3).id === 'mediterranean');
   RG.setRegions('mixed');
-  const w = new World(1, 7), seen = new Set();
+  const w = new World(1, 7), ds = new Set();
   let diff = 0, pairs = 0;
-  for (let j = -30; j < 30; j++) for (let i = -30; i < 30; i++) { const r = RG.regionAt(w, i, j); seen.add(r); if (i > -30) { pairs++; if (r !== RG.regionAt(w, i - 1, j)) diff++; } }
-  ok('regions: both manners lie over a land', seen.size === 2, [...seen]);
-  ok('regions: in districts, not a scatter (few neighbours differ)', diff / pairs < 0.08, diff / pairs);
-  ok('regions: the same land, the same districts', RG.regionAt(new World(1, 7), 11, -4) === RG.regionAt(w, 11, -4));
-  ok('regions: the arch families: a pointed crown higher than a round one, a four-centred between', RG.CROWN[RG.POINTED] > RG.CROWN[RG.FOUR] && RG.CROWN[RG.FOUR] > RG.CROWN[RG.ROUND] && Math.abs(RG.archY(RG.POINTED, 1, 1)) < 1e-9 && Math.abs(RG.archY(RG.FOUR, 1, 1)) < 1e-9);
-  RG.setRegions('persian');
-  const s8 = story(8), B = BU.buildings(s8).list;
-  ok('regions: on the plateau, no pitched roof (flat tops, now and then a dome)', B.every((b) => !b.roof || b.roof === 'dome'), B.map((b) => b.roof));
-  ok('regions: on the plateau, windows arched or square, a slit only up a stair tower', B.every((b) => b.openings.every((o) => o.kind === 'door' || o.style !== 'slit' || (b.tower && b.inside))));
-  const span = s8.spans.find((sp) => sp.n >= 2 && !sp.flat);
-  if (span) ok('regions: a wide span on the plateau four-centred', ME.spanFamily(s8, span) === RG.FOUR);
-  const m = ME.buildMesh(s8);
-  let glass = 0, lit = 0, bad = 0;
-  for (let q = 0; q < m.count; q++) { const v = m.data.subarray(q * ME.STRIDE, q * ME.STRIDE + ME.STRIDE); if (!v.every(Number.isFinite)) bad++; if ((v[7] % 16) === ME.MAT.glass && v[11] > 1.5) { glass++; if (v[11] > 5.5) lit++; } }
-  ok('regions: the plateau\'s mesh is whole (no NaN)', bad === 0, bad);
-  ok('regions: its windows in painted panes, some lit within', glass > 0 && lit > 0 && lit < glass, { glass, lit });
+  for (let j = -30; j < 30; j++) for (let i = -30; i < 30; i++) { const r = RG.grammarAt(w, i, j).id; ds.add(r); if (i > -30) { pairs++; if (r !== RG.grammarAt(w, i - 1, j).id) diff++; } }
+  ok('traditions, mixed: districts, not a scatter', ds.size === 2 && diff / pairs < 0.08, { kinds: [...ds], diff: diff / pairs });
+  ok('arches: a pointed crown higher than a round one, a four-centred between', RG.CROWN[RG.POINTED] > RG.CROWN[RG.FOUR] && RG.CROWN[RG.FOUR] > RG.CROWN[RG.ROUND] && Math.abs(RG.archY(RG.POINTED, 1, 1)) < 1e-9 && Math.abs(RG.archY(RG.FOUR, 1, 1)) < 1e-9);
+  // (the same build in each tradition: what's built the same, how it's finished its tradition's)
+  // (a walked top has none; a roof the hand chose (a rule) is the hand's)
+  const roofsOf = { mediterranean: [null, 'hipped', 'gable', 'shed', 'dome'], persian: [null, 'dome'], timber: [null, 'gable', 'hipped', 'shed'], eaves: [null, 'hipped', 'shed'] };
+  let built0 = null;
+  for (const id of RG.ORDER) {
+    RG.setRegions(id);
+    const s8 = story(8), B = BU.buildings(s8).list, g = RG.GRAMMARS[id];
+    const built = JSON.stringify([...s8.mass.keys()].sort((a, b) => a - b)) + JSON.stringify(s8.spans.map((sp) => [sp.k, sp.i, sp.j, sp.n]));
+    if (built0 === null) built0 = built;
+    ok(`traditions (${id}): what's built is the same in every tradition`, built === built0);
+    ok(`traditions (${id}): its roofs its own`, B.filter((b) => !s8.rules.get(b.id)).every((b) => roofsOf[id].includes(b.roof)), B.map((b) => b.roof));
+    ok(`traditions (${id}): its windows its own (a slit only up a stair tower)`, B.every((b) => b.openings.every((o) => o.kind === 'door' || g.windows.includes(o.style) || (o.style === 'slit' && b.tower && b.inside) || o.style === 'arched')));
+    const span = s8.spans.find((sp) => sp.n >= 2 && !sp.flat);
+    if (span) ok(`traditions (${id}): a wide span's arch its own`, ME.spanFamily(s8, span) === g.span(span.n));
+    const m = ME.buildMesh(s8);
+    let glass = 0, lit = 0, bad = 0;
+    for (let q = 0; q < m.count; q++) { const v = m.data.subarray(q * ME.STRIDE, q * ME.STRIDE + ME.STRIDE); if (!v.every(Number.isFinite)) bad++; if ((v[7] % 16) === ME.MAT.glass && v[11] > 1.5) { glass++; if ((Math.floor(v[11] + 0.01) - 2) % 16 >= 8) lit++; } }
+    ok(`traditions (${id}): its mesh whole (no NaN)`, bad === 0, bad);
+    ok(`traditions (${id}): glazed in panes, some lit, where it glazes so`, g.panes ? glass > 0 && lit > 0 : glass === 0, { glass, lit });
+  }
   RG.setRegions('mediterranean');
 }
 console.log(`${checks - fails} of ${checks} checks hold · gestures read as ${JSON.stringify(made)} · declined: ${JSON.stringify(declines)} · dressed by the rules: ${lively.dressed} of ${lively.worlds} worlds, gated or arcaded walls: ${lively.gates}`);

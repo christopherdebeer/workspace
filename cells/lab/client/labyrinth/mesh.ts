@@ -19,7 +19,7 @@
 import { hash } from '../kit/rng';
 import { perf } from './perf';
 import { character, look } from './character';
-import { buildings, opening, regionHere, underRoof, type Building, type Opening } from './buildings';
+import { buildings, grammarHere, opening, underRoof, type Building, type Opening } from './buildings';
 import { BUT, BUTH, BUTW, WT, buttresses, inBlock, outline, reach, wallCell, type Edge } from './form';
 import { CENTER, DECK, DIRS, DRESS, PLANT, key, soffit as flightSoffit, unkey, type Span, type World } from './model';
 import { climb, grow, growths } from './plants';
@@ -29,7 +29,7 @@ import { groundY, retaining } from './context';
 import { STRIDE, TILE_U, MAT, LANDMAT, FOUND, PIERCED, MOSS, IVY, KIND, SEL, X, Z, type V3, type Emit } from './emit';
 import { roof } from './roof';
 import { openings } from './facade';
-import { ROUND, archNormal, archOf, archStations, archUnit, archY, regionAt, regionOfId, spanArchOf, PERSIAN, type ArchFamily } from './regions';
+import { ROUND, archNormal, archStations, archUnit, archY, type ArchFamily } from './regions';
 import { benched, CUT, nearRiver, riverOf, roughness } from './terrain';
 
 export { STRIDE, TILE_U, MAT, LANDMAT, FOUND, PIERCED, MOSS, IVY, KIND, SEL } from './emit';
@@ -47,10 +47,10 @@ export function soffit(sp: Span, f: ArchFamily = ROUND) {
 /** a span's arch family: by the manner where its middle is, and how wide it is */
 export function spanFamily(w: World, sp: Span): ArchFamily {
   const [a, b] = DIRS[sp.a], m = Math.floor((sp.n - 1) / 2);
-  return spanArchOf(regionHere(w, sp.k, sp.i + a * m, sp.j + b * m), sp.n);
+  return grammarHere(w, sp.k, sp.i + a * m, sp.j + b * m).span(sp.n);
 }
 /** a passage's arch family, by the manner where it is */
-export const passageFamily = (w: World, k: number, i: number, j: number): ArchFamily => archOf(regionHere(w, k, i, j));
+export const passageFamily = (w: World, k: number, i: number, j: number): ArchFamily => grammarHere(w, k, i, j).arch;
 /** a point of an arch's ring (family f, half-width hw, springing at ys): `t` across it, `r` out from its intrados; as
  * (across, up) */
 function ringAt(f: ArchFamily, hw: number, ys: number, t: number, r: number): [number, number] {
@@ -432,7 +432,14 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
         topFace(k, i, j, y1);
         continue;
       }
+      // (a building's walls in its tradition's finish (regions.ts): a timber frame over a stone ground storey, or
+      // whitewash between posts; the shader's, by the how)
+      // (and in the east every wall's whitewashed, a building's or not)
+      const bd = buildings(w).of.get(key(k, i, j)), fin = grammarHere(w, k, i, j).wall;
+      const keepHow = cur.how;
+      if (fin === 'frame' && bd && k > w.ground(i, j)) cur.how = 6; else if (fin === 'plaster') cur.how = 7;
       blockFaces(k, i, j);
+      cur.how = keepHow;
       // (over a thin wall, its underside shows either side of it)
       if (w.wall(k - 1, i, j) >= 0) quad([x0, y0, z0], [x0, y0, z0 + 1], [x0 + 1, y0, z0 + 1], [x0 + 1, y0, z0], [0, -1, 0], 0.55, MAT.stone);
       continue;
