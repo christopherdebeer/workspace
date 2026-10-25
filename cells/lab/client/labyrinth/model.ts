@@ -113,8 +113,9 @@ export const RULE = { none: 0, lintel: 1, pier: 2, colonnade: 3, arch: 4, noPier
  */
 export type Carriage = 'ground' | 'hung' | 'rampant' | 'solid' | 'pier';
 export interface Flight {
-  /** its stairs, foot to head (each a level up from the last, the next cell on), which way they climb, the foot's level */
-  cells: Cell[]; d: number; k0: number;
+  /** its stairs, foot to head (each a level up from the last, the next cell on; on the half grid, each square half a
+   * level: two to a level), which way they climb, the foot's level, and how many levels each square climbs */
+  cells: Cell[]; d: number; k0: number; rise: number;
   carriage: Carriage;
   /** its foot on the ground or on what's there (not on a landing in the air); and, hung, the side it's hung from (a DIRS
    * index, -1 if each step its own) */
@@ -132,9 +133,9 @@ const FLIGHT_T = 0.34;
  */
 export function soffit(f: Flight, u: number): number {
   const n = f.cells.length;
-  if (f.carriage === 'hung') return f.k0 + Math.min(n, Math.max(0, u)) - FLIGHT_T - 0.08;
+  if (f.carriage === 'hung') return f.k0 + Math.min(n, Math.max(0, u)) * f.rise - FLIGHT_T - 0.08;
   if (f.carriage !== 'rampant') return -1e3;
-  const us = f.founded ? 1 : 0, yb = f.founded ? f.k0 : f.k0 - 0.6, ye = f.k0 + n - FLIGHT_T;
+  const us = f.founded ? 1 / f.rise : 0, yb = f.founded ? f.k0 : f.k0 - 0.6, ye = f.k0 + n * f.rise - FLIGHT_T;
   if (u <= us) return yb;
   const t = Math.min(1, (u - us) / Math.max(1e-6, n - us));
   return yb + (ye - yb) * Math.sqrt(Math.max(0, 1 - (1 - t) * (1 - t)));
@@ -326,6 +327,22 @@ export class World {
   // ─── what's where ───
   stone(k: number, i: number, j: number) { return inGrid(i, j) && this.mass.has(key(k, i, j)); }
   stair(k: number, i: number, j: number): number { return inGrid(i, j) ? this.stairs.get(key(k, i, j))?.d ?? -1 : -1; }
+  /**
+   * On the half grid a flight climbs a level in two squares, as it does in a cell: the first square the lower half of the
+   * rise (its foot behind it, at its level), the second the upper half (its head ahead, a level up). Which half a stair
+   * is: the count of stairs the same way behind it at its level, odd or even (on cells, always the whole: 0).
+   */
+  stairHalf(k: number, i: number, j: number): number {
+    if (this.bay === 1) return 0;
+    const d = this.stair(k, i, j);
+    if (d < 0) return 0;
+    const [a, b] = DIRS[d];
+    let n = 0; while (n < 8 && this.stair(k, i - a * (n + 1), j - b * (n + 1)) === d) n++;
+    return n % 2;
+  }
+  /** the square the step after this one is in (up its flight), and the one before (down it) */
+  stepAfter(k: number, i: number, j: number): Cell { const d = Math.max(0, this.stair(k, i, j)), [a, b] = DIRS[d]; return this.bay === 1 || this.stairHalf(k, i, j) === 1 ? [k + 1, i + a, j + b] : [k, i + a, j + b]; }
+  stepBefore(k: number, i: number, j: number): Cell { const d = Math.max(0, this.stair(k, i, j)), [a, b] = DIRS[d]; return this.bay === 1 || this.stairHalf(k, i, j) === 0 ? [k - 1, i - a, j - b] : [k, i - a, j - b]; }
   pier(k: number, i: number, j: number) { return inGrid(i, j) && this.piers.has(key(k, i, j)); }
   span(k: number, i: number, j: number): Span | null { return inGrid(i, j) ? this.spanOf.get(key(k, i, j)) ?? null : null; }
   /** anything at a cell: stone, a stair, a pier, the fill under a flight */
@@ -589,7 +606,9 @@ export class World {
     const stairAt = new Map<number, number>(), laidHere = new Set<number>();
     const lay = (k: number, i: number, j: number, s: number) => { if (k < 0 || taken(k, i, j)) return; laidHere.add(key(k, i, j)); this.mass.set(key(k, i, j), born + s * 0.05); this.laid.add(key(k, i, j)); if (op.bridge) this.bridged.add(key(k, i, j)); cells.push([k, i, j]); };
     const dirTo = (a: [number, number], b: [number, number]) => DIRS.findIndex(([x, z]) => x === b[0] - a[0] && z === b[1] - a[1]);
-    const dz = h1 - h0, steps = Math.abs(dz);
+    // (a level a cell: on the half grid, two squares)
+    const dz = h1 - h0, steps = Math.abs(dz) * this.bay;
+    let half = 0;
     // (the steps go where the way runs straight, together in flights: the last straight run takes as many as it can,
     // ending where it ends, then the run before it; landings between)
     const straight = straights(c.path, c.to), C = straight.length, step = new Set<number>(), runs: number[][] = [];
@@ -597,19 +616,23 @@ export class World {
     // (where the stroke paused, a landing, if there's room for the steps without it)
     const rest = new Set(c.rest ?? []), spare = straight.filter((s) => !rest.has(s));
     if (rest.size && spare.length >= steps) { runs.length = 0; for (const s of spare) { const r = runs[runs.length - 1]; if (r && r[r.length - 1] === s - 1) r.push(s); else runs.push([s]); } }
-    for (let q = runs.length - 1, left = steps; q >= 0 && left > 0; q--) { const r = runs[q], n = Math.min(left, r.length); for (let t = 0; t < n; t++) step.add(r[r.length - 1 - t]); left -= n; }
+    // (on the half grid, a level's two squares together in one run: never a landing between a step's halves)
+    for (let q = runs.length - 1, left = steps; q >= 0 && left > 0; q--) { const r = runs[q], n = Math.min(left, r.length - (r.length % this.bay)); for (let t = 0; t < n; t++) step.add(r[r.length - 1 - t]); left -= n; }
     let stopped = steps > C ? 0 : -1;
     let h = h0;
     for (let s = 0; s < along.length && stopped < 0; s++) {
       const [i, j] = along[s], prev = s > 0 ? along[s - 1] : c.path[0];
+      // (never past the grid's edge)
+      if (!inGrid(i, j)) { stopped = s; break; }
       if (step.has(s) && dz > 0) {
         if (taken(h, i, j) || unsteady(h, i, j) || blocks(h - 1, i, j) || this.crosses(h, i, j, prev)) { stopped = s; break; }
         // (no stone laid under it: the flight is carried as a whole, as its setting has it (`carry`))
         this.stairs.set(key(h, i, j), { d: dirTo(prev, [i, j]), born: born + s * 0.05 }); this.laid.add(key(h, i, j)); cells.push([h, i, j]); stairAt.set(key(h, i, j), s);
-        h++;
+        if (++half === this.bay) { h++; half = 0; }
       } else if (step.has(s)) {
-        if (taken(h - 1, i, j) || unsteady(h - 1, i, j) || blocks(h - 2, i, j) || this.crosses(h - 1, i, j, prev)) { stopped = s; break; }
-        h--;
+        const hd = half === 0 ? h - 1 : h;
+        if (taken(hd, i, j) || unsteady(hd, i, j) || blocks(hd - 1, i, j) || this.crosses(hd, i, j, prev)) { stopped = s; break; }
+        h = hd; if (++half === this.bay) half = 0;
         this.stairs.set(key(h, i, j), { d: dirTo([i, j], prev), born: born + s * 0.05 }); this.laid.add(key(h, i, j)); cells.push([h, i, j]); stairAt.set(key(h, i, j), s);
       } else {
         // (through the hand's stone at the height it walks, straight, a cell to three thick and clear where it comes out:
@@ -911,14 +934,14 @@ export class World {
     const solidAt = (k: number, i: number, j: number) => this.mass.has(key(k, i, j)) || this.earth(k, i, j);
     for (const [v, s] of this.stairs) {
       const [k, i, j] = unkey(v), [a, b] = DIRS[s.d];
-      if (this.stair(k - 1, i - a, j - b) === s.d) continue;
+      if (this.stair(...this.stepBefore(k, i, j)) === s.d) continue;
       const cells: Cell[] = [[k, i, j]];
-      for (let q = 1; this.stair(k + q, i + a * q, j + b * q) === s.d; q++) cells.push([k + q, i + a * q, j + b * q]);
+      for (let c = this.stepAfter(k, i, j); this.stair(...c) === s.d && cells.length < CEIL; c = this.stepAfter(...c)) cells.push(c);
       const n = cells.length, over = (c: Cell) => c[0] > this.ground(c[1], c[2]) && !solidAt(c[0] - 1, c[1], c[2]) && this.stair(c[0] - 1, c[1], c[2]) < 0;
       const loose = cells.filter(over);
       // (its foot on the ground or what's there; and what's at its two ends to spring from and lean on)
       const founded = !over(cells[0]), [hk, hi, hj] = cells[n - 1];
-      const headRests = solidAt(hk, hi + a, hj + b) || this.stair(hk + 1, hi + a, hj + b) >= 0;
+      const headRests = solidAt(hk, hi + a, hj + b) || this.stair(...this.stepAfter(hk, hi, hj)) >= 0;
       const footRests = founded || solidAt(k - 1, i - a, j - b);
       // (a passage the hand made under it: never filled)
       const passageUnder = loose.some(([kk, x, z]) => { for (let q = this.ground(x, z); q < kk; q++) if (this.passages.has(key(q, x, z))) return true; return false; });
@@ -943,7 +966,7 @@ export class World {
       else if (footRests && headRests && (n >= 3 || passageUnder || !founded)) carriage = 'rampant';
       else if (founded && !passageUnder) carriage = 'solid';
       else carriage = 'pier';
-      const f: Flight = { cells, d: s.d, k0: k, carriage, founded, wall: carriage === 'hung' ? common ?? -1 : -1, options };
+      const f: Flight = { cells, d: s.d, k0: k, rise: 1 / this.bay, carriage, founded, wall: carriage === 'hung' ? common ?? -1 : -1, options };
       this.flights.push(f);
       cells.forEach((c, q) => this.flightOf.set(key(...c), { f, q }));
       // (what's under it: filled, solid; under a rampant or hung one, what's under the soffit is open, what it cuts into

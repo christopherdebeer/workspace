@@ -33,6 +33,8 @@ export interface Link {
 }
 export interface Spot {
   id: number; kind: SpotKind;
+  /** a stair's: which part of its level's rise it climbs, of how many (the half grid's two squares to a level) */
+  part?: number; of?: number;
   /** its cell (the level stood at, then the column) */
   k: number; i: number; j: number;
   /** where a cat stands there (the ground under its feet) */
@@ -56,10 +58,12 @@ const X = (i: number) => i - CENTER + 0.5, Z = (j: number) => j - CENTER + 0.5;
 
 /** how high a cat's feet are on a stair, `u` of the way up its cell (0 its foot's edge, 1 its head's): along the line of
  * its steps' noses, a step up from where it starts, eased on at its foot */
-export function stairY(k: number, u: number): number {
-  if (u < -0.15) return k;
-  if (u < 0) return k + (1 / 6) * (u + 0.15) / 0.15;
-  return k + Math.min(1, u + 1 / 6);
+export function stairY(k: number, u: number, part = 0, of = 1): number {
+  // (on the half grid, a square the half of a level's rise its step climbs (`part` of `of`))
+  const y0 = k + part / of;
+  if (u < -0.15) return y0;
+  if (u < 0) return y0 + ((1 / 6) * (u + 0.15)) / 0.15 / of;
+  return y0 + Math.min(1, u + 1 / 6) / of;
 }
 /** where cats can be in a world, and the ways between */
 export function perches(w: World): Perches {
@@ -87,7 +91,7 @@ export function perches(w: World): Perches {
   // ─── the walk's places ───
   for (const v of nav.places) {
     const [k, i, j] = unkey(v), g = w.ground(i, j), x = X(i), z = Z(j);
-    if (w.stair(k, i, j) >= 0) { const s = add('stair', k, i, j, x, stairY(k, 0.5), z, w.stair(k, i, j)); if (s) atCell.set(v, s.id); continue; }
+    if (w.stair(k, i, j) >= 0) { const part = w.stairHalf(k, i, j), s = add('stair', k, i, j, x, stairY(k, 0.5, part, w.bay), z, w.stair(k, i, j)); if (s) { s.part = part; s.of = w.bay; atCell.set(v, s.id); } continue; }
     if (w.archway(k, i, j) >= 0 && !w.span(k, i, j)) { const s = add('arch', k, i, j, x, k, z, w.archway(k, i, j)); if (s) atCell.set(v, s.id); continue; }
     if (roofTop.has(v)) continue;
     if (k === g && decor.has(j * 1000 + i)) continue;

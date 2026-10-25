@@ -120,7 +120,9 @@ export function run(w: World, piece: Piece, start: Pick, path: Array<[number, nu
   if (piece === 'stair') {
     // (a flight: every straight cell a step, to wherever its last step leads)
     const last = cells[cells.length - 1], prev = cells[cells.length - 2], ahead: [number, number] = [2 * last[0] - prev[0], 2 * last[1] - prev[1]];
-    const m = straights(cells, [0, ahead[0], ahead[1]]).length;
+    // (a level to a straight cell: on the half grid, to two squares)
+    if (![...cells, ahead].every(([i, j]) => inGrid(i, j))) return null;
+    const m = Math.floor(straights(cells, [0, ahead[0], ahead[1]]).length / w.bay);
     if (!m || h0 + m >= CEIL) return null;
     return { connect: { from: [h0, cells[0][0], cells[0][1]], to: [h0 + m, ahead[0], ahead[1]], path: cells }, born: now, why: 'flight', note: `a flight of ${m} step${m > 1 ? 's' : ''}` };
   }

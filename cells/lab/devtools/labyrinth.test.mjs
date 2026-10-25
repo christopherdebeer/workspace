@@ -1155,6 +1155,59 @@ if (process.env.DEBUG) (await import('node:fs')).writeFileSync(process.env.DEBUG
   ok('ladder: the plateau\'s house built with glass and pointed arches', r17.built.has('glazed window') && r17.built.has('pointed arch'), [...r17.built.keys()]);
   RG.setRegions('mediterranean');
 }
+// ─── the half grid (static/labyrinth-grid.md): random building on worlds of half cells, the promises the same ───
+{
+  const half = { ops: 0, ways: 0, walked: 0, stairs: 0, bad: [] };
+  for (let s = 1; s <= 24; s++) {
+    const w = new World(s, s % 3 === 0 ? s : 0, 2);
+    let r = s * 104729;
+    const rnd = () => ((r = (r * 48271) % 2147483647) / 2147483647);
+    const pickAt = (i, j) => { let k = w.ground(i, j) - 1; while (k + 1 < CEIL && w.occupied(k + 1, i, j) && !w.earth(k + 1, i, j)) k++; return k < w.ground(i, j) ? { face: 'ground', hit: [k, i, j], to: [k + 1, i, j] } : { face: 'top', hit: [k, i, j], to: [k + 1, i, j] }; };
+    for (let t = 0; t < 50; t++) {
+      const e = w.extent(), i = e.i0 + Math.floor(rnd() * (e.i1 - e.i0 + 1)), j = e.j0 + Math.floor(rnd() * (e.j1 - e.j0 + 1)), what = rnd();
+      let op = null;
+      try {
+        if (what < 0.4) op = G.tap(w, pickAt(i, j), t);
+        else if (what < 0.85) {
+          // (a stroke twice as many squares as a cell stroke: as far across the land)
+          const cells = [[i, j]]; let [x, z] = [i, j], d = Math.floor(rnd() * 4);
+          for (let q = 0, L = 4 + Math.floor(rnd() * 12); q < L; q++) { if (rnd() < 0.15) d = (d + (rnd() < 0.5 ? 1 : 3)) % 4; x = Math.max(e.i0, Math.min(e.i1, x + DIRS[d][0])); z = Math.max(e.j0, Math.min(e.j1, z + DIRS[d][1])); const l = cells[cells.length - 1]; if (l[0] !== x || l[1] !== z) cells.push([x, z]); }
+          const [ex, ez] = cells[cells.length - 1];
+          op = G.trace(w, pickAt(i, j), cells, pickAt(ex, ez), () => t);
+        } else {
+          const pk = pickAt(i, j), cells = [[i, j]], d = DIRS[Math.floor(rnd() * 4)];
+          for (let q = 1; q < 2 + Math.floor(rnd() * 8); q++) cells.push([i + q * d[0], j + q * d[1]]);
+          op = P.run(w, ['block', 'arch', 'stair', 'wall'][Math.floor(rnd() * 4)], pk, cells, 1, t);
+        }
+      } catch (err) { ok(`half grid seed ${s} op ${t}: reads without failing`, false, String(err)); }
+      if (!op || op.refused) continue;
+      w.apply(op, t); half.ops++;
+      if (op.connect) {
+        const c = op.connect, rc = w.reached.get(op);
+        ok(`half grid seed ${s} op ${t}: a connection reaches, or joins what it met`, rc && (rc.reached || rc.stopped >= 0), rc);
+        if (rc?.reached && c.to) {
+          const n = NAV.navigate(w), place = (k, x, z) => n.places.has(key(k, x, z));
+          const a = place(c.from[0], ...c.path[0]) ? [c.from[0], ...c.path[0]] : [c.from[0], ...c.path[1]];
+          if (place(...a) && place(...c.to)) { half.ways++; if (NAV.reaches(n, a, c.to)) half.walked++; else if (half.bad.length < 3) half.bad.push({ s, t, c }); }
+        }
+      }
+    }
+    stands(w, `half grid seed ${s}`);
+    // (a flight's every level two squares: each stair's partner beside it, the same way, at its level)
+    for (const v of w.stairs.keys()) {
+      const [k, i, j] = unkey(v), d = w.stair(k, i, j);
+      ok(`half grid seed ${s}: a stair in the grid`, d >= 0, [k, i, j, w.stairs.get(v)]);
+      if (d < 0) continue;
+      const [a, b] = DIRS[d], hf = w.stairHalf(k, i, j);
+      half.stairs++;
+      ok(`half grid seed ${s} ${k}.${i}.${j}: a stair's two halves together`, hf === 0 ? w.stair(k, i + a, j + b) === d : w.stair(k, i - a, j - b) === d, hf);
+    }
+    const m = ME.buildMesh(w); let nan = 0; for (let q = 0; q < m.count * ME.STRIDE; q++) if (!Number.isFinite(m.data[q])) nan++;
+    ok(`half grid seed ${s}: its mesh whole`, nan === 0, nan);
+  }
+  ok('half grid: what auto connects can be walked, nearly always', half.ways > 20 && half.walked / half.ways > 0.9, half);
+  console.log(`half grid: ${half.ops} ops, ${half.stairs} stairs, ${half.walked} of ${half.ways} connections walked`);
+}
 console.log(`${checks - fails} of ${checks} checks hold · gestures read as ${JSON.stringify(made)} · declined: ${JSON.stringify(declines)} · dressed by the rules: ${lively.dressed} of ${lively.worlds} worlds, gated or arcaded walls: ${lively.gates}`);
 console.log(fails ? `\n${fails} failed` : '\nall passed');
 process.exitCode = fails ? 1 : 0;

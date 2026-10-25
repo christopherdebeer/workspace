@@ -486,7 +486,7 @@ function read(w: World, start: Pick, path: Array<[number, number]>, end: Pick | 
       const top = (i: number, j: number) => w.topFrom(w.ground(i, j) - 1, i, j);
       const q = cells.findIndex(([i, j], n) => n > 0 && n < cells.length - 1 && top(i, j) === to![0] && w.stone(to![0] - 1, i, j));
       // (only if, so shortened, it still has the room to climb there)
-      if (q > 0 && straights(cells.slice(0, q), [to[0], cells[q][0], cells[q][1]]).length >= to[0] - h0) { to = [to[0], cells[q][0], cells[q][1]]; cells.length = q + 1; took.push('arrives-first-reach'); }
+      if (q > 0 && straights(cells.slice(0, q), [to[0], cells[q][0], cells[q][1]]).length >= (to[0] - h0) * w.bay) { to = [to[0], cells[q][0], cells[q][1]]; cells.length = q + 1; took.push('arrives-first-reach'); }
     }
     // (the way goes in at the first column it passes beside the destination, not on round it)
     const at = cells.findIndex((c) => Math.abs(c[0] - to![1]) + Math.abs(c[1] - to![2]) <= 1);
@@ -539,7 +539,8 @@ function read(w: World, start: Pick, path: Array<[number, number]>, end: Pick | 
     if (along) return { ...along, took: ['wall-instead'] };
   }
   let path2 = to ? cells.slice(0, -1) : cells;
-  const climb = to ? Math.abs(to[0] - h0) : 0;
+  // (the squares a climb needs: a level a cell, two squares on the half grid; and the straight squares there are)
+  const climb = to ? Math.abs(to[0] - h0) * w.bay : 0, levels = climb / w.bay;
   let room = straights(path2, to).length;
   // (drawn across the grid's axes, a zigzag has no straight run to step on: its zigzags gathered into runs, as a way's are)
   if (to && climb > room) for (const n of [4, 6, 8]) {
@@ -548,15 +549,14 @@ function read(w: World, start: Pick, path: Array<[number, number]>, end: Pick | 
   }
   // (begun right at the foot of what it climbs to, a step short: the flight's foot laid back behind where it began,
   // over ground as level as the start's, the way the stroke came)
-  if (to && to[0] > h0 && climb > room && climb - room === 1 && start.face === 'ground') {
+  if (to && to[0] > h0 && climb > room && climb - room <= w.bay && start.face === 'ground') {
     const [a, b] = path2[0], [c, d] = path2.length > 1 ? path2[1] : [to[1], to[2]], back: Array<[number, number]> = [];
-    back.push([a - (c - a), b - (d - b)]);
+    for (let q = climb - room; q >= 1; q--) back.push([a - (c - a) * q, b - (d - b) * q]);
     const free = back.every(([i, j]) => inGrid(i, j) && w.ground(i, j) === h0 && standing(w, h0, i, j)) && path2.every(([i, j]) => standing(w, w.ground(i, j), i, j));
     const s = [...back, ...path2];
     if (free && straights(s, to).length >= climb) { path2 = s; cells.unshift(...back); room = straights(s, to).length; took.push('foot-back'); }
   }
   if (path2.length < 2 && !to) return null;
-  const levels = climb;
   const make = (p: Array<[number, number]>, great: boolean, note?: string): Op => {
     const restAt = p.slice(1).map(([i, j], q) => (resting(i, j) ? q : -1)).filter((q) => q >= 0);
     const said = note ?? (!to ? 'a walkway' : to[0] === h0 ? (great ? 'a bridge, on one great arch' : 'a bridge') : `${to[0] > h0 ? 'climbing' : 'going down'} ${levels} level${levels > 1 ? 's' : ''}${restAt.length ? ', a landing where you paused' : ''}`);
@@ -597,9 +597,9 @@ function read(w: World, start: Pick, path: Array<[number, number]>, end: Pick | 
     // (ending on a top: the connection's what the hand insisted on, how it gets there the world's; round, further off)
     if (aimed && far) return far;
     // (going down from a top, too steep for a flight here: out at the top's height, as it would be read without the drop)
-    if (descent) return { took: ['walkway-instead'], connect: { from: [h0, cells[0][0], cells[0][1]], to: null, path: cells }, born: now, why: 'walkway', note: `too steep to go down here (${climb} level${climb > 1 ? 's' : ''}): a walkway out at its height`, reading: 'a walkway' };
+    if (descent) return { took: ['walkway-instead'], connect: { from: [h0, cells[0][0], cells[0][1]], to: null, path: cells }, born: now, why: 'walkway', note: `too steep to go down here (${levels} level${levels > 1 ? 's' : ''}): a walkway out at its height`, reading: 'a walkway' };
     // (and if no tower will stand: a walkway out toward it at the height it starts from, to climb from later)
-    const said = `too steep to climb here (${climb} level${climb > 1 ? 's' : ''}, room for ${room} step${room === 1 ? '' : 's'}): a walkway out toward it`;
+    const said = `too steep to climb here (${levels} level${levels > 1 ? 's' : ''}, room for ${Math.floor(room / w.bay)} step${Math.floor(room / w.bay) === 1 ? '' : 's'}): a walkway out toward it`;
     return path2.length >= 2 ? { took: ['walkway-instead'], connect: { from: [h0, path2[0][0], path2[0][1]], to: null, path: path2 }, born: now, why: 'walkway', note: said, reading: 'a walkway toward it' } : { refused: `too steep: ${climb} level${climb > 1 ? 's' : ''} to climb, and room for ${room} step${room === 1 ? '' : 's'}; draw it longer, or straighter` };
   }
   // (a bridge four to seven long: one great arch, or an arcade, as the rules choose for where it runs; the other offered)
@@ -1056,7 +1056,8 @@ function folds(cells: Array<[number, number]>): boolean {
 export function switchback(w: World, h0: number, cells: Array<[number, number]>, to: Cell, now: number): Op | null {
   const H = to[0], N = H - h0, e = cells[cells.length - 2];
   if (N < 2 || !e) return null;
-  const n2 = Math.ceil(N / 2), n1 = N - n2, L = H - n2;
+  // (a level a cell: on the half grid, two squares)
+  const B = w.bay, n2 = Math.ceil(N / 2), n1 = N - n2, L = H - n2;
   const clear = (k: number, i: number, j: number) => inGrid(i, j) && w.onSlab(i, j) && k >= w.ground(i, j) && !w.occupied(k, i, j) && !w.tree(k, i, j) && !(k > 0 && w.tree(k - 1, i, j)) && !(k > 0 && w.stair(k - 1, i, j) >= 0) && !w.claim(k, i, j) && !(k === w.ground(i, j) && w.pool(i, j));
   // (near what was drawn: every cell of it within two of the stroke)
   const near = ([i, j]: [number, number]) => cells.some(([x, z]) => Math.max(Math.abs(x - i), Math.abs(z - j)) <= 2);
@@ -1066,12 +1067,12 @@ export function switchback(w: World, h0: number, cells: Array<[number, number]>,
     const [a, b] = DIRS[d];
     for (const t of [(d + 1) % 4, (d + 3) % 4]) {
       const [ta, tb] = DIRS[t];
-      const LU: [number, number] = [dest[0] - (n2 + 1) * a, dest[1] - (n2 + 1) * b], LD: [number, number] = [LU[0] + ta, LU[1] + tb];
+      const LU: [number, number] = [dest[0] - (n2 * B + 1) * a, dest[1] - (n2 * B + 1) * b], LD: [number, number] = [LU[0] + ta, LU[1] + tb];
       const stairs: Array<[number, number, number, number, number]> = [];
       // (the upper flight, into the destination; the lower, in the lane beside it, climbing away to the landing)
-      for (let q = 1; q <= n2; q++) stairs.push([H - q, dest[0] - q * a, dest[1] - q * b, d, now]);
-      for (let q = 1; q <= n1; q++) stairs.push([L - q, LD[0] + q * a, LD[1] + q * b, (d + 2) % 4, now]);
-      const foot: Cell = [h0, LD[0] + (n1 + 1) * a, LD[1] + (n1 + 1) * b];
+      for (let q = 1; q <= n2 * B; q++) stairs.push([H - 1 - Math.floor((q - 1) / B), dest[0] - q * a, dest[1] - q * b, d, now]);
+      for (let q = 1; q <= n1 * B; q++) stairs.push([L - 1 - Math.floor((q - 1) / B), LD[0] + q * a, LD[1] + q * b, (d + 2) % 4, now]);
+      const foot: Cell = [h0, LD[0] + (n1 * B + 1) * a, LD[1] + (n1 * B + 1) * b];
       if (![...stairs.map(([, i, j]) => [i, j] as [number, number]), LU, LD, [foot[1], foot[2]] as [number, number]].every(near)) continue;
       // (each step with room over it; the landing clear, with room to stand, and stone under it; the foot a place to stand)
       if (!stairs.every(([k, i, j]) => clear(k, i, j) && clear(k + 1, i, j))) continue;
@@ -1112,14 +1113,15 @@ export function ladder(w: World, h0: number, cells: Array<[number, number]>, to:
 /** a climb (up or down) from the stroke's start round whatever's in its way to a straight flight into the destination,
  * as many cells long as it climbs, the shortest there is (null if none) */
 function approach(w: World, h0: number, path: Array<[number, number]>, to: Cell): Array<[number, number]> | null {
-  const n = Math.abs(to[0] - h0), up = to[0] > h0, dest: [number, number] = [to[1], to[2]], s = path[0];
+  // (a level a cell: on the half grid, two squares)
+  const B = w.bay, n = Math.abs(to[0] - h0) * B, up = to[0] > h0, dest: [number, number] = [to[1], to[2]], s = path[0];
   const clear = (k: number, i: number, j: number) => inGrid(i, j) && w.onSlab(i, j) && !w.occupied(k, i, j) && !w.tree(k, i, j) && !(k > 0 && w.tree(k - 1, i, j)) && !(k > 0 && w.stair(k - 1, i, j) >= 0) && !(k === 0 && w.pool(i, j)) && !(k > 0 && w.way(k - 1, i, j) && !w.stone(k - 1, i, j));
   let best: Array<[number, number]> | null = null;
   for (const [a, b] of DIRS) {
     // (the flight: n cells in a line into the destination, each step at its height with room over it; and a cell before it)
     const run: Array<[number, number]> = Array.from({ length: n }, (_, q) => [dest[0] - a * (n - q), dest[1] - b * (n - q)]);
     const p: [number, number] = [dest[0] - a * (n + 1), dest[1] - b * (n + 1)];
-    const fits = run.every(([i, j], q) => { const k = up ? h0 + q : h0 - q - 1; return clear(k, i, j) && clear(k + 1, i, j); }) && clear(h0, ...p);
+    const fits = run.every(([i, j], q) => { const k = up ? h0 + Math.floor(q / B) : h0 - Math.floor(q / B) - 1; return clear(k, i, j) && clear(k + 1, i, j); }) && clear(h0, ...p);
     if (!fits) continue;
     const skip = new Set(run.map(([i, j]) => key(0, i, j)).concat(key(0, ...dest)));
     const lead = (p[0] === s[0] && p[1] === s[1]) ? [s] : bfs(s, p, (i, j) => clear(h0, i, j) && !skip.has(key(0, i, j)));

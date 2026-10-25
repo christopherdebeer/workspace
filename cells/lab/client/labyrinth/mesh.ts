@@ -460,8 +460,11 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
     if (w.archway(k, i, j) >= 0 && !w.span(k, i, j)) { cur = at(w.born(k, i, j), y0, k, i, j); if (w.cross(k, i, j)) crossCell(k, i, j); else archCell(k, i, j, w.archway(k, i, j)); continue; }
     const d = w.stair(k, i, j);
     if (d >= 0) {
-      cur = at(w.born(k, i, j), y0, k, i, j);
+      cur = at(w.born(k, i, j), k, k, i, j);
       const [a, b] = DIRS[d];
+      // (its treads from y0 to y1: a level's rise, or on the half grid the half its square climbs; its floor at yf, the
+      // level it stands at; STEPS treads to a level)
+      const yf = k, of = w.bay, part = w.stairHalf(k, i, j), y0 = k + part / of, y1 = y0 + 1 / of, NS = STEPS / of;
       const pt = (u: number, wv: number, y: number): V3 => { const cx = x0 + 0.5, cz = z0 + 0.5; return a ? [cx + a * (u - 0.5), y, cz + (wv - 0.5)] : [cx + (wv - 0.5), y, cz + b * (u - 0.5)]; };
       const across = [(d + 1) % 4, (d + 3) % 4];
       // (carried as its flight is (model.ts `carry`): what's under each step, by how far along the flight it is)
@@ -469,10 +472,10 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
       let floorAt = k;
       while (floorAt > w.ground(i, j) && w.underFlight(floorAt - 1, i, j) === 'fill') floorAt--;
       const g = w.ground(i, j), last = !fl || q === fl.f.cells.length - 1;
-      const base = (u: number) => !over || carriage === 'ground' || carriage === 'pier' ? y0 : carriage === 'solid' ? floorAt : Math.max(g, flightSoffit(fl!.f, q + u));
+      const base = (u: number) => !over || carriage === 'ground' || carriage === 'pier' ? yf : carriage === 'solid' ? floorAt : Math.max(g, flightSoffit(fl!.f, q + u));
       const TH = 0.3;
-      for (let s = 0; s < STEPS; s++) {
-        const u0 = s / STEPS, u1 = (s + 1) / STEPS, h = y0 + (s + 1) / STEPS, h0 = y0 + s / STEPS;
+      for (let s = 0; s < NS; s++) {
+        const u0 = s / NS, u1 = (s + 1) / NS, h = y0 + (s + 1) / STEPS, h0 = s === 0 ? yf : y0 + s / STEPS;
         // (each tread with a nosing a little proud of the riser under it)
         const nz = 0.025, nh = 0.028;
         quad(pt(u0 - nz, 0, h), pt(u1, 0, h), pt(u1, 1, h), pt(u0 - nz, 1, h), [0, 1, 0], [0.8, 0.95, 0.95, 0.8], MAT.stone);
@@ -499,7 +502,7 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
         }
         // (on a rampant arch: its soffit, rising with it)
         if (over && carriage === 'rampant' && (b0 > g + 0.001 || b1 > g + 0.001)) {
-          const sl = (b1 - b0) * STEPS, l = Math.hypot(1, sl);
+          const sl = (b1 - b0) * NS, l = Math.hypot(1, sl);
           quad(pt(u0, 0, b0), pt(u1, 0, b1), pt(u1, 1, b1), pt(u0, 1, b0), [a * sl / l, -1 / l, b * sl / l], 0.45, MAT.stone);
         }
       }
@@ -508,15 +511,15 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
       // a stack of boxes; it starts low at the flight's foot and ends a little proud of the ground at its head)
       if (!over) {
         const CW = 0.1, CH = 0.1, first = !fl || q === 0;
-        const tl = (u: number) => (last ? Math.min(y0 + 1 / STEPS + u, y1) : y0 + 1 / STEPS + u) + CH;
+        const tl = (u: number) => (last ? Math.min(y0 + 1 / STEPS + u / of, y1) : y0 + 1 / STEPS + u / of) + CH;
         const T0 = tl(0), T1 = tl(1), m = T1 - T0, ml = Math.hypot(1, m);
         for (const qq of across) {
           if (hides(k, i, j, qq)) continue;
           const dd = DIRS[qq], out = (a ? dd[1] : dd[0]) > 0 ? 1 : 0, inn = out ? 1 - CW : CW;
-          quad(pt(0, out, y0), pt(1, out, y0), pt(1, out, T1), pt(0, out, T0), [dd[0], 0, dd[1]], [0.7, 0.7, 1, 1], MAT.stone);
+          quad(pt(0, out, yf), pt(1, out, yf), pt(1, out, T1), pt(0, out, T0), [dd[0], 0, dd[1]], [0.7, 0.7, 1, 1], MAT.stone);
           quad(pt(0, inn, y0), pt(1, inn, y1), pt(1, inn, T1), pt(0, inn, T0), [-dd[0], 0, -dd[1]], [0.6, 0.6, 0.95, 0.95], MAT.stone);
           quad(pt(0, out, T0), pt(1, out, T1), pt(1, inn, T1), pt(0, inn, T0), [-a * m / ml, 1 / ml, -b * m / ml], 1, MAT.stone);
-          if (first) quad(pt(0, out, y0), pt(0, inn, y0), pt(0, inn, T0), pt(0, out, T0), [-a, 0, -b], [0.7, 0.7, 1, 1], MAT.stone);
+          if (first) quad(pt(0, out, yf), pt(0, inn, yf), pt(0, inn, T0), pt(0, out, T0), [-a, 0, -b], [0.7, 0.7, 1, 1], MAT.stone);
           if (last) quad(pt(1, out, y1), pt(1, inn, y1), pt(1, inn, T1), pt(1, out, T1), [a, 0, b], 0.9, MAT.stone);
         }
       }
@@ -527,9 +530,9 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
       const endTop = last ? y1 : Math.min(y1, below);
       if (!(over && carriage === 'hung') && endTop > base(1) + 0.01 && (last ? !hides(k, i, j, d) : true)) quad(pt(1, 0, base(1)), pt(1, 1, base(1)), pt(1, 1, endTop), pt(1, 0, endTop), [a, 0, b], [0.7, 0.7, 1, 1], MAT.stone);
       // (its underside, where it's over nothing and on a pier, or out over a drop)
-      if (over && carriage === 'pier') quad(pt(0, 0, y0), pt(0, 1, y0), pt(1, 1, y0), pt(1, 0, y0), [0, -1, 0], 0.5, MAT.stone);
+      if (over && carriage === 'pier') quad(pt(0, 0, yf), pt(0, 1, yf), pt(1, 1, yf), pt(1, 0, yf), [0, -1, 0], 0.5, MAT.stone);
       // (on the land, its foundation down into it)
-      if (founded(k, i, j)) for (let q = 0; q < 4; q++) { const [qa, qb] = DIRS[q]; if (w.occupied(k, i + qa, j + qb)) continue; const A: V3 = qa ? [qa > 0 ? x0 + 1 : x0, y0 - FOUND, z0] : [x0, y0 - FOUND, qb > 0 ? z0 + 1 : z0], B: V3 = qa ? [A[0], y0 - FOUND, z0 + 1] : [x0 + 1, y0 - FOUND, A[2]]; quad(A, B, [B[0], y0, B[2]], [A[0], y0, A[2]], [qa, 0, qb], [0.35, 0.35, 0.6, 0.6], MAT.stone); }
+      if (founded(k, i, j)) for (let q = 0; q < 4; q++) { const [qa, qb] = DIRS[q]; if (w.occupied(k, i + qa, j + qb)) continue; const A: V3 = qa ? [qa > 0 ? x0 + 1 : x0, yf - FOUND, z0] : [x0, yf - FOUND, qb > 0 ? z0 + 1 : z0], B: V3 = qa ? [A[0], yf - FOUND, z0 + 1] : [x0 + 1, yf - FOUND, A[2]]; quad(A, B, [B[0], yf, B[2]], [A[0], yf, A[2]], [qa, 0, qb], [0.35, 0.35, 0.6, 0.6], MAT.stone); }
       continue;
     }
     if (w.pier(k, i, j)) {
@@ -851,14 +854,15 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
     for (const q of [(dir + 1) % 4, (dir + 3) % 4]) {
       const [qa, qb] = DIRS[q];
       if (w.stone(k, i + qa, j + qb) || w.earth(k, i + qa, j + qb) || w.stair(k, i + qa, j + qb) >= 0 || w.stone(k + 1, i + qa, j + qb)) continue;
-      const wv = (a ? qb : qa) > 0 ? 0.95 : 0.05, rise = (u: number) => k + u;
+      // (on the half grid, the half of the rise its square climbs)
+      const of = w.bay, part = w.stairHalf(k, i, j), wv = (a ? qb : qa) > 0 ? 0.95 : 0.05, rise = (u: number) => k + (part + u) / of;
       if (kind === DRESS.jali) {
         cur.dress = (keep % KIND) + PIERCED;
-        for (const o of [-0.03, 0.03]) quad(pt(0, wv + o, k), pt(1, wv + o, k + 1), pt(1, wv + o, k + 1 + PH), pt(0, wv + o, k + PH), [qa, 0, qb], 0.9, MAT.stone);
+        for (const o of [-0.03, 0.03]) quad(pt(0, wv + o, rise(0)), pt(1, wv + o, rise(1)), pt(1, wv + o, rise(1) + PH), pt(0, wv + o, rise(0) + PH), [qa, 0, qb], 0.9, MAT.stone);
         cur.dress = keep;
-      } else for (let s = 0; s < STEPS; s++) { const u = (s + 0.5) / STEPS, p = pt(u, wv, 0); baluster(p[0], p[2], k + (s + 1) / STEPS, rise(u) + PH - 0.04); }
+      } else for (let s = 0; s < STEPS / of; s++) { const u = (s + 0.5) / (STEPS / of), p = pt(u, wv, 0); baluster(p[0], p[2], rise(0) + (s + 1) / STEPS, rise(u) + PH - 0.04); }
       bar(pt(-0.04, wv, rise(-0.04) + PH - 0.04), pt(1.04, wv, rise(1.04) + PH - 0.04), 0.09, 0.07, MAT.stone);
-      for (const u of [0.04, 0.96]) { const p = pt(u, wv, 0), y = u < 0.5 ? k : k + 1, h = PH + 0.12; if (u > 0.5 && w.stone(k, i + a, j + b)) continue; box(p[0] - 0.06, p[0] + 0.06, u < 0.5 ? k : k + 1, y + h, p[2] - 0.06, p[2] + 0.06, MAT.stone, [0.6, 0.6, 1, 1]); box(p[0] - 0.08, p[0] + 0.08, y + h, y + h + 0.04, p[2] - 0.08, p[2] + 0.08, MAT.stone, 0.95); }
+      for (const u of [0.04, 0.96]) { const p = pt(u, wv, 0), y = u < 0.5 ? rise(0) : rise(1), h = PH + 0.12; if (u > 0.5 && w.stone(k, i + a, j + b)) continue; box(p[0] - 0.06, p[0] + 0.06, y, y + h, p[2] - 0.06, p[2] + 0.06, MAT.stone, [0.6, 0.6, 1, 1]); box(p[0] - 0.08, p[0] + 0.08, y + h, y + h + 0.04, p[2] - 0.08, p[2] + 0.08, MAT.stone, 0.95); }
     }
   }
   for (const v of [...w.mass.keys()]) {
@@ -1977,7 +1981,8 @@ export function inStone(w: World, x: number, y: number, z: number): boolean {
     return y > so.at(u);
   }
   const d = w.stair(k, i, j);
-  if (d >= 0) { const [a, b] = DIRS[d], u = 0.5 + (a ? a * fx : b * fz); return fy < Math.ceil(Math.max(0.001, u) * STEPS) / STEPS; }
+  // (on the half grid, the half of its level's rise its square climbs)
+  if (d >= 0) { const [a, b] = DIRS[d], u = 0.5 + (a ? a * fx : b * fz), of = w.bay, ns = STEPS / of; return fy < (w.stairHalf(k, i, j) + Math.ceil(Math.max(0.001, u) * ns) / ns) / of; }
   if (w.pier(k, i, j)) { const ps = pierShape(w, k, i, j); return Math.abs(fx - ps.ox) < ps.r + 0.04 && Math.abs(fz - ps.oz) < ps.r + 0.04; }
   if (w.tree(k, i, j) || w.tree(k - 1, i, j)) return Math.hypot(fx, fz) < 0.26;
   // (the air under an arch over this cell: its upper part's the arch's stone)

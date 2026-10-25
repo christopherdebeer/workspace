@@ -40,16 +40,19 @@ export function navigate(w: World, inside: Array<[Cell, Cell]> = []): Nav {
       // (its foot: a place at its level behind it, or a stair of the same flight below; its head: the next place up)
       // (or a way through an arch, along its way)
       const gate = (kk: number, x: number, z: number) => through(w, kk, x, z) && (w.archway(kk, x, z) === d % 2 || w.cross(kk, x, z));
+      // (on the half grid, a level's rise in two squares: the step before or after this one may be at its own level)
+      const before = w.stepBefore(k, i, j), after = w.stepAfter(k, i, j), half = w.stairHalf(k, i, j), top = half === 0 && w.bay === 2 ? k : k + 1;
       if (standing(w, k, i - di, j - dj) || gate(k, i - di, j - dj)) link(v, key(k, i - di, j - dj));
-      if (w.stair(k - 1, i - di, j - dj) === d) link(v, key(k - 1, i - di, j - dj));
-      if (standing(w, k + 1, i + di, j + dj) || w.stair(k + 1, i + di, j + dj) === d || gate(k + 1, i + di, j + dj)) link(v, key(k + 1, i + di, j + dj));
+      if (w.stair(...before) === d) link(v, key(...before));
+      if (w.stair(...after) === d) link(v, key(...after));
+      else if (standing(w, top, i + di, j + dj) || gate(top, i + di, j + dj)) link(v, key(top, i + di, j + dj));
       // (stepped on to from beside its first step, and left sideways from its last, where that side's open)
       // (or off any step left open at its side (a meeting's), on to what's beside it level with its top)
-      const first = w.stair(k - 1, i - di, j - dj) !== d, last = w.stair(k + 1, i + di, j + dj) !== d, open = !!w.dress.get(key(k, i, j))?.gap;
+      const first = w.stair(...before) !== d, last = w.stair(...after) !== d, open = !!w.dress.get(key(k, i, j))?.gap;
       for (const q of [(d + 1) % 4, (d + 3) % 4]) {
         const x = i + DIRS[q][0], z = j + DIRS[q][1];
         if (first && standing(w, k, x, z) && !w.occupied(k + 1, x, z)) link(v, key(k, x, z));
-        if ((last || open) && standing(w, k + 1, x, z)) link(v, key(k + 1, x, z));
+        if ((last || open) && standing(w, top, x, z)) link(v, key(top, x, z));
       }
       continue;
     }

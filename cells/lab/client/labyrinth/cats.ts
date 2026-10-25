@@ -361,7 +361,7 @@ export class Cats {
     const stairs = [a, b].filter((s) => s.kind === 'stair');
     if (stairs.length) {
       const u = (s: Spot, x: number, z: number) => 0.5 + (x - s.x) * DIRS[s.d][0] + (z - s.z) * DIRS[s.d][1];
-      return (x, z) => { const s = stairs.find((q) => { const v = u(q, x, z); return v >= 0 && v <= 1; }) ?? stairs[0]; return stairY(s.k, u(s, x, z)); };
+      return (x, z) => { const s = stairs.find((q) => { const v = u(q, x, z); return v >= 0 && v <= 1; }) ?? stairs[0]; return stairY(s.k, u(s, x, z), s.part, s.of); };
     }
     if (a.ground && b.ground && land) return (x, z) => groundY(w, x + CENTER, z + CENTER);
     return (_x, _z, f) => a.y + (b.y - a.y) * f;
@@ -456,7 +456,7 @@ export class Cats {
       // (on a stair: along its steps' noses, by where it is in the stair's cell)
       const u = (s: Spot, x: number, z: number) => 0.5 + (x - s.x) * DIRS[s.d][0] + (z - s.z) * DIRS[s.d][1];
       const stairs = [a, b].filter((s) => s.kind === 'stair');
-      const onStair = (x: number, z: number) => { const s = stairs.find((q) => { const v = u(q, x, z); return v >= 0 && v <= 1; }) ?? stairs[0]; return stairY(s.k, u(s, x, z)); };
+      const onStair = (x: number, z: number) => { const s = stairs.find((q) => { const v = u(q, x, z); return v >= 0 && v <= 1; }) ?? stairs[0]; return stairY(s.k, u(s, x, z), s.part, s.of); };
       yield* this.walkTo(c, b.x, b.z, speed, (f, x, z) => (stairs.length ? onStair(x, z) : onGround ? onGroundY(x, z) : y0 + (b.y - y0) * f));
       return;
     }
