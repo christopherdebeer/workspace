@@ -8,7 +8,7 @@ process.env.EXPERIMENT = 'labyrinth';
 process.env.READY = '__labyrinth';
 const c = checks();
 await withWood(async (lab) => {
-  const p = await lab.open('zoom=0.55&flat&intent=mass&brush=auto');
+  const p = await lab.open('zoom=0.55&flat&grid=cells&intent=mass&brush=auto');
   await p.evaluate(() => { localStorage.clear(); });
   await p.reload(); await p.waitForFunction(() => window.__labyrinth);
   await p.waitForTimeout(500);
@@ -161,7 +161,7 @@ await withWood(async (lab) => {
   await p.close();
   {
     // (on the land, as a way: a stroke from the low ground up to the shelf, drawn with the pointer: the land says how)
-    const q = await lab.open('zoom=1&land=6&intent=way&brush=auto');
+    const q = await lab.open('zoom=1&land=6&grid=cells&intent=way&brush=auto');
     await q.waitForTimeout(1200);
     const at2 = (i, j) => q.evaluate(([a, b]) => { const L = window.__labyrinth; return L.screenOf(a, b, L.world.ground(a, b)); }, [i, j]);
     const pts = await Promise.all([[1, 11], [1, 10], [1, 9], [1, 8], [1, 7], [1, 6], [1, 5]].map(([i, j]) => at2(i, j)));
@@ -175,7 +175,7 @@ await withWood(async (lab) => {
   {
     // (with nothing said ahead (no mass or way in hand): the land's ground drawn up to its shelf is a way; the switch is
     // gone; and on the slab a stroke across the bare stone is a wall, a way one hold away)
-    const q = await lab.open('zoom=1&land=6&brush=auto');
+    const q = await lab.open('zoom=1&land=6&grid=cells&brush=auto');
     await q.evaluate(() => { localStorage.clear(); }); await q.reload(); await q.waitForFunction(() => window.__labyrinth); await q.waitForTimeout(1200);
     c.ok('no mass/way switch on the page', !(await q.$('#intent')));
     const at2 = (i, j) => q.evaluate(([a, b]) => { const L = window.__labyrinth; return L.screenOf(a, b, L.world.ground(a, b)); }, [i, j]);
@@ -186,7 +186,7 @@ await withWood(async (lab) => {
     const got = await q.evaluate(() => { const w = window.__labyrinth.world, o = w.ops.at(-1); return o && { why: o.why, reached: w.reached.get(o)?.reached, stairs: w.stairs.size }; });
     c.ok('read from where it\'s drawn: up the land, a way, climbing as it rises', got?.why === 'way' && got.reached && got.stairs >= 2, got);
     await q.close();
-    const r = await lab.open('zoom=0.55&flat&brush=auto');
+    const r = await lab.open('zoom=0.55&flat&grid=cells&brush=auto');
     await r.waitForTimeout(900);
     const sc = (i, j) => r.evaluate(([a, b]) => window.__labyrinth.screenOf(a, b, 0), [i, j]);
     const a = await sc(3, 3), b = await sc(8, 3);

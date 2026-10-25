@@ -1,5 +1,5 @@
 // The half grid in the browser, as a hand uses it (node cells/lab/devtools/labyrinth-half-smoke.mjs): a new world on
-// the half grid (`?grid=half`); taps that raise a square at a time where they're aimed, through the drawing's squeeze;
+// the half grid (the default for a new world); taps that raise a square at a time where they're aimed, through the drawing's squeeze;
 // a thin wall traced on the ground; a terrace raised; a trace from the ground up to it (two squares to a level); a
 // reload keeping the grid. And nothing thrown. A picture: devtools/out/labyrinth-half-smoke.png.
 import { withWood, checks } from './harness.mjs';

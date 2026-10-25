@@ -27,42 +27,42 @@ if (!Number.isInteger(N) || N < 1 || N > 100) throw new Error('--n must be an in
 
 const SETS = {};
 SETS[1] = [
-  { name: 'land3', q: 'land=3&zoom=0.62', seed: 31 },
-  { name: 'land5', q: 'land=5&zoom=0.62&turn=1', seed: 52 },
-  { name: 'land8', q: 'land=8&zoom=0.62', seed: 83 },
-  { name: 'land11', q: 'land=11&zoom=0.62&turn=2', seed: 114, intent: 'mass' },
+  { name: 'land3', q: 'grid=cells&land=3&zoom=0.62', seed: 31 },
+  { name: 'land5', q: 'grid=cells&land=5&zoom=0.62&turn=1', seed: 52 },
+  { name: 'land8', q: 'grid=cells&land=8&zoom=0.62', seed: 83 },
+  { name: 'land11', q: 'grid=cells&land=11&zoom=0.62&turn=2', seed: 114, intent: 'mass' },
   { name: 'stone', q: 'ops=[]&zoom=0.55', seed: 7 },
   { name: 'story12', q: 'story=12&zoom=0.62', seed: 12 },
 ];
 // (a second set, unseen by the first round's readings: other lands, the slope, and longer runs, so the later gestures
 // are made on what the earlier ones built; --set=2)
 SETS[2] = [
-  { name: 'land4', q: 'land=4&zoom=0.62', seed: 41, n: 4 },
-  { name: 'land9', q: 'land=9&zoom=0.62&turn=1', seed: 93, n: 4 },
-  { name: 'land13', q: 'land=13&zoom=0.62', seed: 137, intent: 'mass', n: 4 },
+  { name: 'land4', q: 'grid=cells&land=4&zoom=0.62', seed: 41, n: 4 },
+  { name: 'land9', q: 'grid=cells&land=9&zoom=0.62&turn=1', seed: 93, n: 4 },
+  { name: 'land13', q: 'grid=cells&land=13&zoom=0.62', seed: 137, intent: 'mass', n: 4 },
   { name: 'flat', q: 'ops=[]&zoom=0.55', seed: 77, n: 5 },
   { name: 'story15', q: 'story=15&zoom=0.5', seed: 15, n: 3 },
 ];
 // (a third, on the continuous hillside (stage 21 on): lands no earlier round has seen, each a run of gestures so the later
 // ones are made on what the earlier built; three rounds, by --cases)
 SETS[3] = [
-  { name: 'land6', q: 'land=6&zoom=0.62', seed: 601, n: 3 },
-  { name: 'land10', q: 'land=10&zoom=0.62&turn=1', seed: 1001, intent: 'mass', n: 3 },
-  { name: 'land14', q: 'land=14&zoom=0.62&turn=2', seed: 1401, n: 3 },
-  { name: 'land17', q: 'land=17&zoom=0.62', seed: 1701, n: 4 },
-  { name: 'land19', q: 'land=19&zoom=0.62&turn=3', seed: 1901, intent: 'mass', n: 4 },
-  { name: 'land22', q: 'land=22&zoom=0.62&turn=1', seed: 2201, n: 4 },
-  { name: 'land25', q: 'land=25&zoom=0.62', seed: 2501, n: 4 },
+  { name: 'land6', q: 'grid=cells&land=6&zoom=0.62', seed: 601, n: 3 },
+  { name: 'land10', q: 'grid=cells&land=10&zoom=0.62&turn=1', seed: 1001, intent: 'mass', n: 3 },
+  { name: 'land14', q: 'grid=cells&land=14&zoom=0.62&turn=2', seed: 1401, n: 3 },
+  { name: 'land17', q: 'grid=cells&land=17&zoom=0.62', seed: 1701, n: 4 },
+  { name: 'land19', q: 'grid=cells&land=19&zoom=0.62&turn=3', seed: 1901, intent: 'mass', n: 4 },
+  { name: 'land22', q: 'grid=cells&land=22&zoom=0.62&turn=1', seed: 2201, n: 4 },
+  { name: 'land25', q: 'grid=cells&land=25&zoom=0.62', seed: 2501, n: 4 },
 ];
 // (a fourth, after the first fixes from set 3's reviews: lands again unseen, the same mix)
 SETS[4] = [
-  { name: 'land7', q: 'land=7&zoom=0.62', seed: 701, n: 3 },
-  { name: 'land12', q: 'land=12&zoom=0.62&turn=1', seed: 1201, intent: 'mass', n: 3 },
-  { name: 'land20', q: 'land=20&zoom=0.62&turn=2', seed: 2001, n: 3 },
-  { name: 'land23', q: 'land=23&zoom=0.62&turn=3', seed: 2301, n: 4 },
-  { name: 'land27', q: 'land=27&zoom=0.62', seed: 2701, intent: 'mass', n: 4 },
-  { name: 'land29', q: 'land=29&zoom=0.62&turn=1', seed: 2901, n: 4 },
-  { name: 'land31', q: 'land=31&zoom=0.62&turn=2', seed: 3101, n: 4 },
+  { name: 'land7', q: 'grid=cells&land=7&zoom=0.62', seed: 701, n: 3 },
+  { name: 'land12', q: 'grid=cells&land=12&zoom=0.62&turn=1', seed: 1201, intent: 'mass', n: 3 },
+  { name: 'land20', q: 'grid=cells&land=20&zoom=0.62&turn=2', seed: 2001, n: 3 },
+  { name: 'land23', q: 'grid=cells&land=23&zoom=0.62&turn=3', seed: 2301, n: 4 },
+  { name: 'land27', q: 'grid=cells&land=27&zoom=0.62', seed: 2701, intent: 'mass', n: 4 },
+  { name: 'land29', q: 'grid=cells&land=29&zoom=0.62&turn=1', seed: 2901, n: 4 },
+  { name: 'land31', q: 'grid=cells&land=31&zoom=0.62&turn=2', seed: 3101, n: 4 },
 ];
 // (a fifth: intent first (after critique-001). Each gesture is drawn for an intent written down beforehand, from what
 // the land offers (its stream, its slopes, what's been built), and that intent is sealed with it: the reviewer reads the
@@ -70,10 +70,10 @@ SETS[4] = [
 // gesture say it (legibility), and did the toy build it (interpretation). The view held still (`held`))
 const AUTHORED = ['block', 'down-to-water', 'pair-a', 'pair-b', 'link', 'climb', 'cross', 'yard', 'winding'];
 SETS[5] = [
-  { name: 'land33', q: 'land=33&zoom=0.62&held', seed: 3301, script: AUTHORED },
-  { name: 'land35', q: 'land=35&zoom=0.62&turn=1&held', seed: 3501, script: AUTHORED },
-  { name: 'land37', q: 'land=37&zoom=0.62&turn=2&held', seed: 3701, script: AUTHORED },
-  { name: 'land39', q: 'land=39&zoom=0.62&turn=3&held', seed: 3901, script: AUTHORED },
+  { name: 'land33', q: 'grid=cells&land=33&zoom=0.62&held', seed: 3301, script: AUTHORED },
+  { name: 'land35', q: 'grid=cells&land=35&zoom=0.62&turn=1&held', seed: 3501, script: AUTHORED },
+  { name: 'land37', q: 'grid=cells&land=37&zoom=0.62&turn=2&held', seed: 3701, script: AUTHORED },
+  { name: 'land39', q: 'grid=cells&land=39&zoom=0.62&turn=3&held', seed: 3901, script: AUTHORED },
 ];
 const INTENTS = {
   block: 'Raise a single block here.',

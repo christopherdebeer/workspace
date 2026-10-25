@@ -76,9 +76,10 @@ R.msaa = qs.has('msaa');
 
 // ─── what's built ───
 const KEY = 'labyrinth.v3';
-/** `?grid=half`: a new world on the half grid (each cell four squares in plan: static/labyrinth-grid.md); one kept on
- * the other grid is set aside for a new one */
-const gridBay = qs.get('grid') === 'half' ? 2 : 1;
+/** the grid a new world's made on: the half grid (each cell four squares in plan, a storey a square high:
+ * static/labyrinth-grid.md), or `?grid=cells` the whole cells it was first made in. A world kept is kept on its own grid
+ * (`?grid=` set to the other one sets it aside for a new one); started again, it's on this */
+const gridBay = qs.get('grid') === 'cells' ? 1 : 2;
 let world: World;
 if (preview) world = story(4);
 else if (qs.has('story')) world = story(Number(qs.get('story')));
@@ -860,8 +861,8 @@ document.getElementById('undo')!.addEventListener('click', () => { if (world.und
  * (`?flat`, the flat slab, stays flat.)
  */
 function startAgain() {
-  if (world.ops.length) { if (!confirm(world.land ? 'Clear what\'s built, back to the land?' : 'Clear the stone?')) return; world = new World(world.seed, qs.has('flat') ? 0 : world.landSeed || randomSeed(), world.bay); }
-  else world = new World(world.seed, qs.has('flat') ? 0 : randomSeed(), world.bay);
+  if (world.ops.length) { if (!confirm(world.land ? 'Clear what\'s built, back to the land?' : 'Clear the stone?')) return; world = new World(world.seed, qs.has('flat') ? 0 : world.landSeed || randomSeed(), gridBay); }
+  else world = new World(world.seed, qs.has('flat') ? 0 : randomSeed(), gridBay);
   meshVersion = -1; unselect(); hideAlts(); kept(); follow = true;
   say(world.ops.length ? '' : world.land ? 'a new piece of land' : 'the stone, bare');
 }
