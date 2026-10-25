@@ -19,7 +19,7 @@
 import { hash } from '../kit/rng';
 import { perf } from './perf';
 import { character, look } from './character';
-import { buildings, grammarHere, opening, underRoof, type Building, type Opening } from './buildings';
+import { buildings, grammarHere, opening, pairOf, underRoof, type Building, type Opening } from './buildings';
 import { BUT, BUTH, BUTW, WT, buttresses, inBlock, outline, reach, wallCell, type Edge } from './form';
 import { CENTER, DECK, DIRS, DRESS, PLANT, key, soffit as flightSoffit, unkey, type Span, type World } from './model';
 import { climb, grow, growths } from './plants';
@@ -280,8 +280,15 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
       if (!e.open) return;
       const nv = nOf(e), foot = footOf(e);
       const whole = e.face >= 0 && Math.abs(e.dist - 0.5) < 1e-6, op = whole ? opening(w, k, i, j, e.face) : null, by = whole ? bayAt(w, k, i, j, e.face) : null;
-      if (by) { const [ta, tb] = DIRS[(e.face + 1) % 4]; frontBay(e.face, e.a[0] * ta + e.a[1] * tb, e.b[0] * ta + e.b[1] * tb, y0, y1 - bt, by, P, nv, foot); }
-      else if (op) { const [ta, tb] = DIRS[(e.face + 1) % 4]; holed(e.face, e.a[0] * ta + e.a[1] * tb, e.b[0] * ta + e.b[1] * tb, y0, y1 - bt, op, P, nv, foot); }
+      // (on the half grid, a bay of two faces: its leading face draws its opening or its part across both, as on a cell's
+      // face (twice as wide, twice as deep); its partner leaves it the room)
+      const fk = `${k}.${i}.${j}.${e.face}`, bs = whole && w.bay === 2 ? buildings(w) : null, lead = bs?.partners.get(fk);
+      const ceded = !!lead && (() => { const [lk, li, lj, ld] = lead.split('.').map(Number); return !!(opening(w, lk, li, lj, ld) || bayAt(w, lk, li, lj, ld)); })();
+      const wide = !!bs?.pairs.has(fk) && !!(op || by), sg = wide ? pairOf(i, j, e.face).s : 0;
+      const PB = wide ? (d: number, s2: number, y: number, inset = 0) => P(d, sg * 0.5 + 2 * s2, y, 2 * inset) : P;
+      if (ceded && !by) { /* (its partner's) */ }
+      else if (by) { const [ta, tb] = DIRS[(e.face + 1) % 4]; frontBay(e.face, wide ? -0.5 : e.a[0] * ta + e.a[1] * tb, wide ? 0.5 : e.b[0] * ta + e.b[1] * tb, y0, y1 - bt, by, PB, nv, foot); }
+      else if (op) { const [ta, tb] = DIRS[(e.face + 1) % 4]; holed(e.face, wide ? -0.5 : e.a[0] * ta + e.a[1] * tb, wide ? 0.5 : e.b[0] * ta + e.b[1] * tb, y0, y1 - bt, op, PB, nv, foot); }
       else quad(L(e.a, y0), L(e.b, y0), L(e.b, y1 - bt), L(e.a, y1 - bt), nv, [foot, foot, 1, 1], MAT.stone);
       if (lid) { cap(); quad(L(e.a, y1 - B), L(e.b, y1 - B), L(inner[n].b, y1), L(inner[n].a, y1), [nv[0] * Math.SQRT1_2, Math.SQRT1_2, nv[2] * Math.SQRT1_2], 1, MAT.stone); cur.dress = keep; }
     });

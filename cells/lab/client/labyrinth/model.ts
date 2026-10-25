@@ -247,6 +247,9 @@ export const unkey = (v: number): Cell => [Math.floor(v / (N * N)), (v % N) + LO
 
 export class World {
   ops: Op[] = [];
+  /** grid squares to a bay: 1, or 2 on the half grid (each cell four in plan), where an opening, a front's bay and a
+   * roof's pitch are read over two squares (the grid spike: static/labyrinth-grid.md) */
+  bay = 1;
   version = 0;
   /** how each connection came out, the last time it was worked out (by operation) */
   reached = new Map<Op, Reached>();

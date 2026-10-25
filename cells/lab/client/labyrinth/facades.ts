@@ -51,6 +51,7 @@ export function facades(w: World): Map<string, Bay> {
   const c = cache.get(w);
   if (c && c.v === w.version) return c.bays;
   const bays = compose(w);
+  if (w.bay === 2) inPairs(w, bays);
   cache.set(w, { v: w.version, bays });
   return bays;
 }
@@ -122,7 +123,7 @@ function compose(w: World): Map<string, Bay> {
     for (const f of b.faces) {
       const [, oi, oj] = f.out, k = f.k;
       if (!f.plain || k <= base(f.i, f.j) || k < b.h - 2 || bays.has(`${k}.${f.i}.${f.j}.${f.d}`) || overCourt(f.out)) continue;
-      if ((f.d % 2 ? f.i : f.j) % 2 !== k % 2) continue;
+      if (Math.floor((f.d % 2 ? f.i : f.j) / w.bay) % 2 !== k % 2) continue;
       // (a drop: the ground out there lower than the building's own foot; air all the way down to it)
       let drop = w.ground(oi, oj) < base(f.i, f.j);
       for (let q = w.ground(oi, oj); q < k && drop; q++) if (w.occupied(q, oi, oj) || w.earth(q, oi, oj)) drop = false;
@@ -131,11 +132,33 @@ function compose(w: World): Map<string, Bay> {
     // (turned in on its court: its other faces blank, but its doors and a few high windows)
     if (runs.length) for (const f of b.faces) {
       if (!f.plain || bays.has(`${f.k}.${f.i}.${f.j}.${f.d}`) || b.openings.some((o) => o.kind === 'door' && o.k === f.k && o.i === f.i && o.j === f.j && o.d === f.d)) continue;
-      const high = f.k === b.h - 1 && f.k > base(f.i, f.j) && (f.d % 2 ? f.i : f.j) % 2 === 0;
+      const high = f.k === b.h - 1 && f.k > base(f.i, f.j) && Math.floor((f.d % 2 ? f.i : f.j) / w.bay) % 2 === 0;
       if (!high) put(f, 'blank');
     }
   }
   return bays;
+}
+
+/**
+ * On the half grid, a front's bays two faces wide: each part moved to its bay's leading face (buildings.ts `pairOf`),
+ * which draws it across both, its partner left to it (`over`); a face with no partner in its bay (an odd one at a
+ * front's end) plain, but a jetty's (the storey stands out whole). A run's ends looked for a bay along, not a face.
+ */
+function inPairs(w: World, bays: Map<string, Bay>) {
+  const { pairs, partners } = buildings(w);
+  for (const [id, by] of [...bays]) {
+    const lead = partners.get(id);
+    if (lead && !bays.has(lead)) { const [k, i, j, d] = lead.split('.').map(Number); bays.set(lead, { ...by, k, i, j, d, out: [k, i + DIRS[d][0], j + DIRS[d][1]] }); }
+  }
+  for (const [id, by] of [...bays]) {
+    const p = pairs.get(id);
+    if (p) bays.set(p, { ...by, role: 'over', k: by.k, ends: undefined, ext: undefined });
+    else if (!partners.has(id) && by.role !== 'jetty') bays.set(id, { ...by, role: 'blank' });
+  }
+  for (const by of bays.values()) if ((by.role === 'loggia' || by.role === 'veranda') && pairs.has(`${by.k}.${by.i}.${by.j}.${by.d}`)) {
+    const [ta, tb] = DIRS[(by.d + 1) % 4], same = (s: number) => bays.get(`${by.k}.${by.i + ta * s}.${by.j + tb * s}.${by.d}`)?.role === by.role;
+    by.ends = [!same(-2), !same(2)];
+  }
 }
 
 const baseOf = (b: Building, i: number, j: number) => b.base[b.cols.findIndex(([x, z]) => x === i && z === j)];

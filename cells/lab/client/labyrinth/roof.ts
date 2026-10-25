@@ -26,7 +26,8 @@ export function roof(E: Emit, b: Building, wing?: { i0: number; i1: number; j0: 
   // (a plan in wings: a roof over each, the same height at the eaves, meeting the others in valleys)
   if (b.wings && !wing) { for (const wg of b.wings) roof(E, b, wg); return; }
   const g = grammarOfId(w, b.id), steep = g.roof === 'steep', eave = g.roof === 'eave';
-  const O = eave ? 0.3 : steep ? 0.06 : 0.12, y = b.h, ye = y + 0.02;
+  // (on the half grid (`w.bay` 2), its overhang and its pitch as a cell's: a square there half as wide)
+  const O = (eave ? 0.3 : steep ? 0.06 : 0.12) * w.bay, y = b.h, ye = y + 0.02;
   // (over the plan, or the part of it left beside a terrace, or a wing of it)
   const P = wing ?? b.roofPlan ?? b, xa = X(P.i0), xb = X(P.i1 + 1), za = Z(P.j0), zb = Z(P.j1 + 1), along = xb - xa >= zb - za ? 0 : 1;
   // (the tiles' kind in the tone: terracotta, slate past 1.5, grey tile past 2.5: render.ts)
@@ -86,7 +87,7 @@ export function roof(E: Emit, b: Building, wing?: { i0: number; i1: number; j0: 
   if (eave && !wing) skirts(E, b, xa, xb, za, zb);
   // (hipped, or gabled: a ridge along the long way, at a pitch a little under half the short span; in the north steep, a
   // spire on a tower; in the east low)
-  const S = along === 0 ? Z1 - Z0 : X1 - X0, H = S * (steep ? (b.roof === 'hipped' ? 1.3 : 0.95) : eave ? 0.36 : 0.42);
+  const S = (along === 0 ? Z1 - Z0 : X1 - X0) / w.bay, H = S * (steep ? (b.roof === 'hipped' ? 1.3 : 0.95) : eave ? 0.36 : 0.42);
   const r0: V3 = along === 0 ? [b.roof === 'hipped' ? X0 + S / 2 : X0, ye + H, cz] : [cx, ye + H, b.roof === 'hipped' ? Z0 + S / 2 : Z0];
   const r1: V3 = along === 0 ? [b.roof === 'hipped' ? X1 - S / 2 : X1, ye + H, cz] : [cx, ye + H, b.roof === 'hipped' ? Z1 - S / 2 : Z1];
   // (in the east the corners turned up)

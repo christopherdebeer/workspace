@@ -15,7 +15,7 @@ The question: should a placed cell be four of today's in plan, its storeys as ta
 
 `?plan=0.5` draws a half-grid world in its own proportions: squeezed in plan, its storeys as tall as before. It is for looking only. A touch strikes where it would have struck unsqueezed.
 
-![the three at a phone's size, and the half grid zoomed in](labyrinth/grid-spike.jpg)
+![the three at a phone's size, and the half grid zoomed in (the first round)](labyrinth/grid-spike-before.jpg)
 
 ## What it costs to draw
 
@@ -74,13 +74,49 @@ The hand can't set a wall half back, put a pilaster on a front, or make a path n
 
 Each reads at the zoom you'd place it at (the bottom row of the sheet).
 
-**What breaks:** the rules still measure in cells.
+**What broke in the first round:** the rules still measured in cells.
 
-- **Windows:** each face is given one window per half cell, so 19's fronts have twice as many, narrow and close-set.
+- **Windows:** each face was given one window per half cell, so 19's fronts had twice as many, narrow and close-set.
 - **Roofs:** in the middle sea, roofs formed only over the north wing, not over the wings a cell and a half deep.
-- **18:** as cells it holds together because its fronts are still two half cells to a bay. 19's are not.
 
-This is the real work a move to the half grid would need: the rules reading a run of two half cells as one bay, and a wing's depth as a length, not a count.
+### The second round: the rules read bays
+
+A world on the half grid now says so (`w.bay = 2`). These rules now read in bays of two half cells:
+
+- **Openings and a front's parts** (buildings.ts `pairOf`, facades.ts `inPairs`, mesh.ts):
+  - two plain faces side by side along a front make a bay;
+  - the one at the even square leads, and draws the bay's window, door, gallery arch, portal, paired windows or loggia across both faces, at a cell's size and depth;
+  - its partner leaves it the room;
+  - doors move to their bay's leading face;
+  - a face with no partner (an odd one at a front's end) stays plain;
+  - rhythms that went every other face (windows, balconies, high windows) now go every other bay.
+- **Buildings:**
+  - a mass is a building when it has two cells by two somewhere in it (four half cells by four);
+  - a tower is up to two cells;
+  - a plan's wings are at least a cell and a half wide, up to eight of them.
+- **Roofs** (roof.ts): pitch and overhang are worked out as a cell's.
+- **Galleries:** the top of a gallery carried along a building's own front, under its storey, is the building's own top. A way onto it doesn't make the roof walked. Without this, 19's ring was read as a terrace and left flat.
+
+Nothing changes on the cell grid: the drawing of stories 1–16 hashes the same in all four traditions.
+
+![after: bays of two](labyrinth/grid-spike.jpg)
+
+**Story 19 after:**
+
+- **In the middle sea:**
+  - the whole house is roofed: five hipped wings round the court, the set-back storey gabled over them;
+  - its windows are a cell apart, shuttered, at a cell's size;
+  - the 1.5-cell wings carry the same roof a 2-cell wing does, a little lower.
+- **On the plateau:**
+  - a gallery of arches a cell wide runs round the court, with paired windows over it;
+  - the outer walls are blank, as a court house's are.
+- **The set-back top storey reads as a building of its own:**
+  - it doesn't face the court, so its portal is at its outer door and its windows go all round;
+  - that's the same rule on cells, not the half grid.
+
+**Story 18** (the same house made four) now draws much as 17 does. Its fronts lost their doubled windows: 144k vertices against 157k.
+
+**What it costs:** meshing story 19 in the middle sea now takes about 450 ms for 194k vertices, against 130 ms and 92k for story 17. Most of that is the roof tiles: they are laid per unit of the unsqueezed drawing, so the half grid draws twice the courses. A real move to the half grid would build its geometry in true cell units, and that cost would go.
 
 ## Legible on a phone?
 
@@ -119,15 +155,25 @@ So edge walls cost the most to build into the model, and pay off mostly where th
 
 ## Where it leaves us
 
-**The half grid works**, in look, in cost (about 2× to mesh) and in effort, provided:
+**The half grid works**, in look, in cost and in effort, provided two things hold:
 
-- the default brush is two half cells wide, so mass is as quick to build as today and thin is a choice;
-- the rules learn bays: one opening, one roof span or one arcade bay per cell's width, whatever the grid.
+- **The brush:** the default is two half cells wide, so mass is as quick to build as today and thin is a choice.
+- **The rules read bays.** The second round shows that this is contained:
+  - a pairing of faces;
+  - three thresholds in buildings.ts;
+  - two in roof.ts;
+  - one change to the gallery rule.
 
-The second of these is the bigger job, and it's the one to try next before deciding. Making 19 read right (windows by bay, roofs over 1.5-cell wings) is a contained change on the fixture. If it closes the gap, the move to N=96 with a two-wide brush is mostly mechanical. If it doesn't, keep cells and add the half-thick pieces as rules-made kinds instead:
+  It needed no change to how anything is drawn.
 
-- setback;
-- pilaster;
-- narrow path.
+**What a real move would still take:**
+
+- **The grid:** from 48 to 96 across.
+- **Distances:** every distance in the rules doubled (arcade spacing, how far a court looks, a front's runs).
+- **Geometry:** built in true cell units, not squeezed after.
+- **Touch:** half-cell picking, and the two-wide brush.
+- **The other traditions:**
+  - the north's jetties still draw their windows a face at a time;
+  - the courts' gardens are laid per square.
 
 **Edge walls aren't worth a new primitive for this camera.**

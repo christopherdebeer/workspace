@@ -66,7 +66,7 @@ export interface Building {
 /** a plan's wings: the fewest largest rectangles that cover it (overlapping where they meet), two cells wide or more;
  * what's too thin to roof left flat beside them, a terrace (`flat`). Null if it takes more than four, or more of it's
  * flat than roofed (a plan that ragged is left a terrace) */
-function wingsOf(cols: Array<[number, number]>): { wings: Array<{ i0: number; i1: number; j0: number; j1: number }>; flat: Array<[number, number]> } | null {
+function wingsOf(cols: Array<[number, number]>, bay = 1): { wings: Array<{ i0: number; i1: number; j0: number; j1: number }>; flat: Array<[number, number]> } | null {
   const has = new Set(cols.map(([x, z]) => `${x}.${z}`)), left = new Set(has), out: Array<{ i0: number; i1: number; j0: number; j1: number }> = [], flat: Array<[number, number]> = [];
   const full = (i0: number, i1: number, j0: number, j1: number) => { for (let x = i0; x <= i1; x++) for (let z = j0; z <= j1; z++) if (!has.has(`${x}.${z}`)) return false; return true; };
   while (left.size) {
@@ -80,8 +80,8 @@ function wingsOf(cols: Array<[number, number]>): { wings: Array<{ i0: number; i1
       const a = (i1 - i0 + 1) * (j1 - j0 + 1);
       if (g > gain || (g === gain && a > area)) { best = { i0, i1, j0, j1 }; area = a; gain = g; }
     }
-    if (!best || Math.min(best.i1 - best.i0, best.j1 - best.j0) < 1) { left.delete(`${x0}.${z0}`); flat.push([x0, z0]); continue; }
-    if (out.length >= 4) return null;
+    if (!best || Math.min(best.i1 - best.i0, best.j1 - best.j0) < bay) { left.delete(`${x0}.${z0}`); flat.push([x0, z0]); continue; }
+    if (out.length >= 4 * bay) return null;
     out.push(best);
     for (let p = best.i0; p <= best.i1; p++) for (let q = best.j0; q <= best.j1; q++) left.delete(`${p}.${q}`);
   }
@@ -95,6 +95,9 @@ function wingsOf(cols: Array<[number, number]>): { wings: Array<{ i0: number; i1
   return { wings: out, flat };
 }
 export interface Buildings { list: Building[]; at: Map<string, Opening>; inside: Array<[Cell, Cell]>; of: Map<number, Building>;
+  /** on the half grid: each face that leads a bay of two (both its building's, plain), by its key (k.i.j.d), to its
+   * partner's key; and back */
+  pairs: Map<string, string>; partners: Map<string, string>;
   /** the raised tops a way the hand made arrives on, and what's walked on from there at its height (a wall's top become a
    * promenade): places, by key */
   promenade: Set<number> }
@@ -117,8 +120,17 @@ export const underRoof = (b: Building): Array<[number, number]> => (b.roof ? b.c
 /** every cell of a building, from each column's base up */
 export const cellsOf = (b: Building): Cell[] => b.cols.flatMap(([x, z], n) => Array.from({ length: b.h - b.base[n] }, (_, q) => [b.base[n] + q, x, z] as Cell));
 
+/** whether a plan has a square n by n at (x, z) */
+const square = (has: Set<string>, x: number, z: number, n: number) => { for (let a = 0; a < n; a++) for (let c = 0; c < n; c++) if (!has.has(`${x + a}.${z + c}`)) return false; return true; };
+/** on the half grid (`w.bay` 2), a face's partner in its bay: the faces two to a bay along a front, the one at the even
+ * square leading (an opening, a front's bay, drawn across both from it); the other, and which way along it lies */
+export function pairOf(i: number, j: number, d: number): { lead: boolean; i: number; j: number; s: number } {
+  const [ta, tb] = DIRS[(d + 1) % 4], c = ta !== 0 ? i : j, lead = ((c % 2) + 2) % 2 === 0, o = lead ? 1 : -1;
+  return { lead, i: i + Math.abs(ta) * o, j: j + Math.abs(tb) * o, s: (ta + tb) * o };
+}
+
 function find(w: World): Buildings {
-  const list: Building[] = [], at = new Map<string, Opening>(), inside: Array<[Cell, Cell]> = [], of = new Map<number, Building>();
+  const list: Building[] = [], at = new Map<string, Opening>(), inside: Array<[Cell, Cell]> = [], of = new Map<number, Building>(), pairs = new Map<string, string>(), partners = new Map<string, string>();
   const e = w.extent();
   /**
    * A column's stack: its highest run of plain stone or archways (a passage through), and where it starts: the ground,
@@ -174,7 +186,7 @@ function find(w: World): Buildings {
     massOf.set(`${i}.${j}`, m);
     while (q.length) { const [x, z] = q.pop()!; cs.push([x, z]); m.heights.add(height(x, z)); for (const [a, b] of DIRS) if (anyH(x + a, z + b) && !massOf.has(`${x + a}.${z + b}`)) { massOf.set(`${x + a}.${z + b}`, m); q.push([x + a, z + b]); } }
     const has = new Set(cs.map(([x, z]) => `${x}.${z}`));
-    m.deep = cs.some(([x, z]) => has.has(`${x + 1}.${z}`) && has.has(`${x}.${z + 1}`) && has.has(`${x + 1}.${z + 1}`));
+    m.deep = cs.some(([x, z]) => square(has, x, z, 2 * w.bay));
   }
 
   // (the tops a stair tower serves: beside its top level, a place on stone, come into from it by a door; walked, so the
@@ -196,7 +208,7 @@ function find(w: World): Buildings {
     const has = new Set(cols.map(([x, z]) => `${x}.${z}`));
     // (a stair tower, put where a climb was too steep for a flight: a building however slim, two high or more)
     const stairTower = cols.find(([x, z]) => isTower(w.rules.get(key(0, x, z))));
-    const deep = cols.some(([x, z]) => has.has(`${x + 1}.${z}`) && has.has(`${x}.${z + 1}`) && has.has(`${x + 1}.${z + 1}`)), tower = (cols.length <= 2 && h - baseOf(i, j) >= 3) || !!stairTower;
+    const deep = cols.some(([x, z]) => square(has, x, z, 2 * w.bay)), tower = (cols.length <= 2 * w.bay * w.bay && h - baseOf(i, j) >= 3) || !!stairTower;
     // (a passage through its foot: covered, if it runs under two cells of it or more (a gate in a wall is one))
     const through = cols.filter(([x, z]) => w.archway(baseOf(x, z), x, z) >= 0).map(([x, z]) => [x, z, w.archway(baseOf(x, z), x, z)] as [number, number, number]);
     const whole = massOf.get(`${i}.${j}`);
@@ -218,13 +230,24 @@ function find(w: World): Buildings {
       }
     }
     b.faces = faces;
+    // (on the half grid, its bays of two: a plain face at an even square and the plain one beside it along the front)
+    const fkey = (f: { k: number; i: number; j: number; d: number }) => `${f.k}.${f.i}.${f.j}.${f.d}`, faceAt = new Map(faces.map((f) => [fkey(f), f]));
+    if (w.bay === 2) for (const f of faces) {
+      const p = pairOf(f.i, f.j, f.d);
+      if (!p.lead || !f.plain) continue;
+      const q = faceAt.get(`${f.k}.${p.i}.${p.j}.${f.d}`);
+      if (q?.plain) { pairs.set(fkey(f), fkey(q)); partners.set(fkey(q), fkey(f)); }
+    }
     const foot = (f: (typeof faces)[number]) => f.k === baseOf(f.i, f.j);
     // (its top: walked if a way arrives there from beyond it)
     const tops = cols.map(([x, z]) => key(h, x, z)).filter((v) => nav.places.has(v)), topSet = new Set(tops);
     // (a stair tower's top is always come to: that's what it's for, even where it's become part of what it climbs to)
     // (and one the hand climbs inside (`RULE.within`): its top walked, come to by its stair, its door where it was asked)
     const within = cols.flatMap(([x, z]) => { const r = w.rules.get(key(baseOf(x, z), x, z)); return isWithin(r) ? [{ x, z, d: r! - RULE.within }] : []; });
-    const arrives = tops.some((v) => (nav.next.get(v) ?? []).some((u) => !topSet.has(u)) || served.has(v)) || within.length > 0;
+    // (on the half grid, the top of a gallery carried along its own front (a span against it, level with its top) is its
+    // own: a way there doesn't make it walked)
+    const gallery = (u: number) => { const [ku, x, z] = unkey(u); return w.bay === 2 && ku === h && w.span(h - 1, x, z) && DIRS.some(([a, c]) => mine.has(`${x + a}.${z + c}`)); };
+    const arrives = tops.some((v) => (nav.next.get(v) ?? []).some((u) => !topSet.has(u) && !gallery(u)) || served.has(v)) || within.length > 0;
     // (doors where ways arrive against its walls, at height)
     const placeAt = (c: Cell) => key(...c);
     // (above its own foot: a door from a way at height, or (set into a bank) from the hill above)
@@ -262,6 +285,8 @@ function find(w: World): Buildings {
       const pickFrom = court.length ? court : atFoot;
       doors.push(pickFrom[hash(w.seed, id, 3) % pickFrom.length]);
     }
+    // (on the half grid, a door in its bay's leading face, so it's drawn across the bay)
+    if (w.bay === 2) doors.forEach((f, n) => { const lead = partners.get(fkey(f)); if (lead && !doors.some((g) => fkey(g) === lead)) doors[n] = faceAt.get(lead)!; });
     for (const f of doors) b.openings.push({ kind: 'door', style: 'arched', k: f.k, i: f.i, j: f.j, d: f.d });
     // (a passage through its foot: its rooms' door is in the passage's side, under the vault, where it's come in from)
     if (through.length > porch.length) {
@@ -297,7 +322,9 @@ function find(w: World): Buildings {
     const isDoor = (f: (typeof faces)[number]) => doors.some((g) => g.k === f.k && g.i === f.i && g.j === f.j && g.d === f.d);
     for (const f of faces) {
       if (!f.plain || isDoor(f) || (foot(f) && arrives && !w.courts.has(key(0, f.out[1], f.out[2])))) continue;
-      const along = f.d % 2 ? f.i : f.j;
+      // (on the half grid, a window to a bay of two, in its leading face (its partner no door), counted by bays along)
+      if (w.bay === 2) { const p = pairs.get(fkey(f)); if (!p || doors.some((g) => fkey(g) === p)) continue; }
+      const along = Math.floor((f.d % 2 ? f.i : f.j) / w.bay);
       const want = b.tower && b.inside ? f.d === f.k % 4 : (along + f.k) % 2 === 0 && (f.k < h - 1 || h <= 2 || hash(w.seed, f.i, f.j, f.k, f.d) % 3 > 0);
       if (want) b.openings.push({ kind: 'window', style: b.tower && b.inside ? 'slit' : style, k: f.k, i: f.i, j: f.j, d: f.d });
     }
@@ -310,7 +337,7 @@ function find(w: World): Buildings {
     // (the part of its plan a roof would go over: all of it, or what's left beside a terrace)
     const R = b.roofPlan ?? { i0, i1, j0, j1 }, rcols = cols.filter(([x, z]) => x >= R.i0 && x <= R.i1 && z >= R.j0 && z <= R.j1), rmine = new Set(rcols.map(([x, z]) => `${x}.${z}`));
     // (a plan that isn't a rectangle: roofed in wings, if it's no more than four of them two cells wide or more)
-    const wings = !b.rect && !b.roofPlan ? wingsOf(cols) : null;
+    const wings = !b.rect && !b.roofPlan ? wingsOf(cols, w.bay) : null;
     if (rule === RULE.noRoof || watered || (!rule && ((b.walked && !b.roofPlan) || dressedTop || (!b.rect && !wings)))) b.roof = null;
     // (each wing hipped, so where one runs into another its end slopes down under the other's roof)
     // (where a tradition's tops are flat, a plan in wings is too)
@@ -351,7 +378,7 @@ function find(w: World): Buildings {
     const d = (f.d + 2) % 4, id = `${B[0]}.${B[1]}.${B[2]}.${d}`;
     if (!at.has(id)) at.set(id, { kind: 'door', style: 'arched', k: B[0], i: B[1], j: B[2], d });
   }
-  return { list, at, inside, of, promenade };
+  return { list, at, inside, of, promenade, pairs, partners };
 }
 /** the manner a cell's built in: its building's (the cell's, or the one over it: an arch carrying it), else its district's
  * (regions.ts) */
