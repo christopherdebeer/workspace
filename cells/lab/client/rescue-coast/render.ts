@@ -93,7 +93,7 @@ export const WSTRIDE = 5;
 export interface Draw { kind: string; list: Instances; pivot?: readonly [number, number] }
 export interface Frame {
   vp: M4; eye: number[]; time: number; right: number[]; up: number[];
-  zMin: number; zMax: number; focus: [number, number]; far: number;
+  zMin: number; zMax: number; focus: [number, number];
   draws: Draw[];
   wakes: Float32Array; wakeCount: number;
   fx: Float32Array; fxCount: number;
@@ -101,6 +101,8 @@ export interface Frame {
   holes: Float32Array; holeCount: number;
   /** the weather; a lightning flash (0..1); your searchlight (where, on 0..1) and which way it points */
   weather: Weather; flash: number; spot: number[]; spotDir: number[];
+  /** the lens: the distance in focus (m), how strong the focus effect is (0..1), the near and far planes */
+  focusDist: number; aperture: number; near: number; far: number;
 }
 const lin = (c: readonly number[]) => c.map((v) => v * v * (v * 0.3 + 0.7));
 
@@ -143,15 +145,9 @@ vec3 spot(vec3 P, vec3 N) {
   return vec3(1., .94, .8) * 30. * cone * max(0., dot(N, L)) / (1. + d * d * .02) * uSpot.w;
 }
 vec3 aerial(vec3 c, vec3 P) { float d = distance(P, uEye); return mix(c, uHaze * (1. + uFog.w * 2.), (1. - exp(-max(0., d - uFog.x) / uFog.y)) * uFog.z); }
-vec3 grade(vec3 c) {
-  c *= uLook.x * (1. + uFog.w * 1.5);
-  c = (c * (2.51 * c + .03)) / (c * (2.43 * c + .59) + .14);
-  c = pow(clamp(c, 0., 1.), vec3(1. / 2.2));
-  float l = dot(c, vec3(.299, .587, .114));
-  c = mix(vec3(l), c, uLook.y);
-  vec2 v = gl_FragCoord.xy / uRes - .5;
-  return c * (1. - dot(v, v) * .32);
-}`;
+/** what every surface writes: scene-linear light (the display transform is applied once, at the end) */
+uniform float uEnc;
+vec3 outc(vec3 c) { return c * uEnc; }`;
 
 const OBJ_VS = `#version 300 es
 layout(location = 0) in vec3 aPos; layout(location = 1) in vec3 aNor; layout(location = 2) in vec3 aCol; layout(location = 3) in vec2 aPM;
@@ -228,7 +224,7 @@ void main() {
   // (lamps: brighter as it darkens; windows: dark glass by day, lit warm at dusk)
   if (m == 5) c = alb * (3.5 + 6. * uLook.z);
   if (m == 8) c += lin(vec3(1., .74, .38)) * 3.2 * smoothstep(.3, .8, uLook.z);
-  o = vec4(grade(aerial(c, vW)), 1.);
+  o = vec4(outc(aerial(c, vW)), 1.);
 }`;
 const DEPTH_FS = `#version 300 es
 precision highp float;
@@ -258,7 +254,7 @@ void main() {
   if (P.y < .3) c = mix(sand, rock, steep) * mix(.85, .45, smoothstep(.3, -3., P.y));
   float sh = sunShadow(P, N);
   vec3 col = c * (uSunC * max(0., dot(N, uSun)) * sh + skyFill(N) + spot(P, N));
-  o = vec4(grade(aerial(col, P)), 1.);
+  o = vec4(outc(aerial(col, P)), 1.);
 }`;
 
 const SKY_VS = `#version 300 es
@@ -291,7 +287,7 @@ void main() {
   // (fog: the sky goes to the air's colour, most of all low down)
   float fogSky = clamp(1. - uFog.y / 900., 0., 1.) * uFog.z;
   c = mix(c, uHaze * (1. + uFog.w * 3.), fogSky * (1. - smoothstep(0., .6, r.y) * .5));
-  o = vec4(grade(c), 1.);
+  o = vec4(outc(c), 1.);
 }`;
 
 const FIELD = `
@@ -383,7 +379,7 @@ void main() {
   foam *= .75 + .25 * noise2(P * 3.1 + uTime * .5);
   vec3 white = lin(vec3(.97, .99, 1.)) * (uSunC * max(.25, N.y) * mix(.45, 1., sh) * .38 + skyFill(vec3(0., 1., 0.)) + sp * .5);
   c = mix(c, white, foam);
-  o = vec4(grade(aerial(c, vW)), 1.);
+  o = vec4(outc(aerial(c, vW)), 1.);
 }`;
 
 const WAKE_VS = `#version 300 es
@@ -411,7 +407,7 @@ void main() {
   float a = (wash * smoothstep(.2, .55, n1 + .15) + arms * smoothstep(.38, .62, n2) * .9) * k;
   if (a < .01) discard;
   vec3 c = lin(vec3(.97, .99, 1.)) * (uSunC * .4 + skyFill(vec3(0., 1., 0.)) + spot(vW, vec3(0., 1., 0.)) * .5);
-  o = vec4(grade(aerial(c, vW)), clamp(a, 0., 1.));
+  o = vec4(outc(aerial(c, vW)), clamp(a, 0., 1.));
 }`;
 
 const FX_VS = `#version 300 es
@@ -451,7 +447,60 @@ void main() {
   a *= vCol.a > 1. ? 1. : vCol.a;
   if (a < .01) discard;
   vec3 lit = vKind > 4.5 ? c * 2.5 : vKind > 1.5 && vKind < 2.5 ? c * (uSunC * .6 + skyFill(vec3(0., 1., 0.))) : vKind > 3.5 ? c * 3. : c * (uSunC * .42 + skyFill(vec3(0., 1., 0.)));
-  o = vec4(grade(lit), clamp(a, 0., 1.));
+  o = vec4(outc(lit), clamp(a, 0., 1.));
+}`;
+
+// ─── after the scene: blur and glow at lower resolutions, then one display transform ───
+
+const POST_VS = `#version 300 es
+out vec2 vUV;
+void main() { vec2 p = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2); vUV = p; gl_Position = vec4(p * 2. - 1., 0., 1.); }`;
+/** a quarter-size step down: four bilinear taps */
+const DOWN_FS = `#version 300 es
+precision highp float;
+in vec2 vUV; uniform sampler2D uSrc; uniform vec2 uTexel; out vec4 o;
+void main() {
+  vec3 c = texture(uSrc, vUV + uTexel * vec2(-.5, -.5)).rgb + texture(uSrc, vUV + uTexel * vec2(.5, -.5)).rgb + texture(uSrc, vUV + uTexel * vec2(-.5, .5)).rgb + texture(uSrc, vUV + uTexel * vec2(.5, .5)).rgb;
+  o = vec4(min(c * .25, vec3(64.)), 1.);
+}`;
+/** a separable gaussian, nine taps (by bilinear pairs) */
+const BLUR_FS = `#version 300 es
+precision highp float;
+in vec2 vUV; uniform sampler2D uSrc; uniform vec2 uDir; out vec4 o;
+void main() {
+  vec3 c = texture(uSrc, vUV).rgb * .227;
+  c += (texture(uSrc, vUV + uDir * 1.385).rgb + texture(uSrc, vUV - uDir * 1.385).rgb) * .316;
+  c += (texture(uSrc, vUV + uDir * 3.231).rgb + texture(uSrc, vUV - uDir * 3.231).rgb) * .070;
+  o = vec4(c, 1.);
+}`;
+/**
+ * the picture: a tilt-shift focus (sharp at the focus distance, softening nearer and further, as a photograph of a
+ * model would), glow round what's brightest, then exposure, the filmic curve, saturation, a warm lift, a vignette.
+ */
+const FINAL_FS = `#version 300 es
+precision highp float;
+in vec2 vUV; uniform sampler2D uColor, uDepth, uHalf, uQuarter; uniform float uDec;
+uniform vec4 uLens; uniform vec4 uLook; uniform vec2 uRes; uniform float uFlash; out vec4 o;
+float linear(float d) { float z = d * 2. - 1., n = uLens.z, f = uLens.w; return 2. * n * f / (f + n - z * (f - n)); }
+void main() {
+  vec3 c = texture(uColor, vUV).rgb * uDec, h = texture(uHalf, vUV).rgb * uDec, q = texture(uQuarter, vUV).rgb * uDec;
+  float d = linear(texture(uDepth, vUV).r), focus = uLens.x;
+  // (a sharp zone round the focus, softening slowly beyond it and a little quicker nearer; the frame's top and bottom edges a touch soft)
+  float off = d > focus ? (d - focus * 1.35) / (focus * 3. + 30.) : (focus * .7 - d) / (focus * .6 + 2.);
+  float coc = clamp(off, 0., 1.) * uLens.y;
+  coc = max(coc, smoothstep(.85, 1., abs(vUV.y - .45) * 1.6) * uLens.y * .25);
+  c = mix(c, h, smoothstep(.0, .45, coc));
+  c = mix(c, q, smoothstep(.45, 1., coc));
+  c += max(q - .9, 0.) * .35 + max(h - 1.6, 0.) * .12;
+  c *= uLook.x * (1. + uFlash * 1.5);
+  c = (c * (2.51 * c + .03)) / (c * (2.43 * c + .59) + .14);
+  c = pow(clamp(c, 0., 1.), vec3(1. / 2.2));
+  float l = dot(c, vec3(.299, .587, .114));
+  c = mix(vec3(l), c, uLook.y);
+  c = mix(c, c * vec3(1.03, 1., .95) + vec3(.012, .006, 0.), .6);
+  vec2 v = vUV - .5;
+  c *= 1. - dot(v, v) * .38;
+  o = vec4(c, 1.);
 }`;
 
 function compile(gl: WebGL2RenderingContext, vs: string, fs: string) {
@@ -478,6 +527,12 @@ export class Renderer {
   gl: WebGL2RenderingContext;
   private obj: Prog; private land: Prog; private water: Prog; private wake: Prog; private fx: Prog; private sky: Prog;
   private depthObj: Prog; private depthLand: Prog;
+  private down: Prog; private blur: Prog; private fin: Prog; private postVao: WebGLVertexArrayObject;
+  /** the scene is drawn here (multisampled), resolved to textures, then blurred down */
+  private hdr = false; private tw = 0; private th = 0;
+  private msFbo: WebGLFramebuffer | null = null; private msColor: WebGLRenderbuffer | null = null; private msDepth: WebGLRenderbuffer | null = null;
+  private resFbo: WebGLFramebuffer | null = null; private resColor: WebGLTexture | null = null; private resDepth: WebGLTexture | null = null;
+  private levels: { fbo: WebGLFramebuffer; tex: WebGLTexture; w: number; h: number }[] = [];
   private kinds = new Map<string, Kind>();
   private terrain: Static[] = []; private rocks: Static[] = []; private props: Static[] = [];
   private field: WebGLTexture | null = null;
@@ -499,6 +554,9 @@ export class Renderer {
     this.sky = compile(gl, SKY_VS, SKY_FS);
     this.depthObj = compile(gl, OBJ_VS, DEPTH_FS);
     this.depthLand = compile(gl, LAND_VS, DEPTH_FS);
+    this.down = compile(gl, POST_VS, DOWN_FS); this.blur = compile(gl, POST_VS, BLUR_FS); this.fin = compile(gl, POST_VS, FINAL_FS);
+    this.postVao = gl.createVertexArray()!;
+    this.hdr = !!gl.getExtension('EXT_color_buffer_float');
     this.skyVao = gl.createVertexArray()!;
     // (the sun's shadow map)
     this.shadowTex = gl.createTexture()!;
@@ -537,6 +595,73 @@ export class Renderer {
     this.ident = gl.createBuffer()!; gl.bindBuffer(gl.ARRAY_BUFFER, this.ident);
     const id = new Float32Array(ISTRIDE); id[6] = 1; id[8] = id[9] = id[10] = 1; id[12] = id[13] = id[14] = 1; id[16] = id[17] = id[18] = 1;
     gl.bufferData(gl.ARRAY_BUFFER, id, gl.STATIC_DRAW);
+  }
+
+  /** the scene's targets, at the drawing's size: colour in half floats where it can be (so light can go past white), else bytes */
+  private targets(w: number, h: number) {
+    if (w === this.tw && h === this.th && this.msFbo) return;
+    const gl = this.gl;
+    for (const r of [this.msColor, this.msDepth]) if (r) gl.deleteRenderbuffer(r);
+    for (const t of [this.resColor, this.resDepth, ...this.levels.map((l) => l.tex)]) if (t) gl.deleteTexture(t);
+    for (const f of [this.msFbo, this.resFbo, ...this.levels.map((l) => l.fbo)]) if (f) gl.deleteFramebuffer(f);
+    this.tw = w; this.th = h;
+    const fmt = this.hdr ? gl.RGBA16F : gl.RGBA8, samples = Math.min(4, gl.getParameter(gl.MAX_SAMPLES) as number);
+    this.msFbo = gl.createFramebuffer()!; gl.bindFramebuffer(gl.FRAMEBUFFER, this.msFbo);
+    this.msColor = gl.createRenderbuffer()!; gl.bindRenderbuffer(gl.RENDERBUFFER, this.msColor); gl.renderbufferStorageMultisample(gl.RENDERBUFFER, samples, fmt, w, h);
+    gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.RENDERBUFFER, this.msColor);
+    this.msDepth = gl.createRenderbuffer()!; gl.bindRenderbuffer(gl.RENDERBUFFER, this.msDepth); gl.renderbufferStorageMultisample(gl.RENDERBUFFER, samples, gl.DEPTH_COMPONENT24, w, h);
+    gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.RENDERBUFFER, this.msDepth);
+    const tex = (iw: number, ih: number, internal: number, format: number, type: number, filter: number) => {
+      const t = gl.createTexture()!; gl.bindTexture(gl.TEXTURE_2D, t);
+      gl.texImage2D(gl.TEXTURE_2D, 0, internal, iw, ih, 0, format, type, null);
+      for (const [k, v] of [[gl.TEXTURE_MIN_FILTER, filter], [gl.TEXTURE_MAG_FILTER, filter], [gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE], [gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE]]) gl.texParameteri(gl.TEXTURE_2D, k, v);
+      return t;
+    };
+    const ctype = this.hdr ? gl.HALF_FLOAT : gl.UNSIGNED_BYTE;
+    this.resFbo = gl.createFramebuffer()!; gl.bindFramebuffer(gl.FRAMEBUFFER, this.resFbo);
+    this.resColor = tex(w, h, fmt, gl.RGBA, ctype, gl.LINEAR); gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, this.resColor, 0);
+    this.resDepth = tex(w, h, gl.DEPTH_COMPONENT24, gl.DEPTH_COMPONENT, gl.UNSIGNED_INT, gl.NEAREST); gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.TEXTURE_2D, this.resDepth, 0);
+    // (half size twice over, quarter size twice over: for blurring back and forth)
+    this.levels = [];
+    for (const k of [2, 2, 4, 4]) {
+      const lw = Math.max(1, Math.round(w / k)), lh = Math.max(1, Math.round(h / k)), fbo = gl.createFramebuffer()!;
+      gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+      const t = tex(lw, lh, fmt, gl.RGBA, ctype, gl.LINEAR); gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, t, 0);
+      this.levels.push({ fbo, tex: t, w: lw, h: lh });
+    }
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  }
+  /** resolve, blur down, and put the picture on the screen */
+  private post(f: Frame, w: number, h: number) {
+    const gl = this.gl, enc = this.hdr ? 1 : 0.25;
+    gl.bindFramebuffer(gl.READ_FRAMEBUFFER, this.msFbo); gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, this.resFbo);
+    gl.blitFramebuffer(0, 0, w, h, 0, 0, w, h, gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT, gl.NEAREST);
+    gl.disable(gl.DEPTH_TEST); gl.disable(gl.BLEND); gl.depthMask(false);
+    gl.bindVertexArray(this.postVao);
+    const pass = (p: Prog, src: WebGLTexture, dst: { fbo: WebGLFramebuffer; w: number; h: number }, set: () => void) => {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, dst.fbo); gl.viewport(0, 0, dst.w, dst.h); gl.useProgram(p.p);
+      gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, src); gl.uniform1i(p.u('uSrc'), 0); set();
+      gl.drawArrays(gl.TRIANGLES, 0, 3);
+    };
+    const [h0, h1, q0, q1] = this.levels;
+    pass(this.down, this.resColor!, h0, () => gl.uniform2f(this.down.u('uTexel'), 1 / w, 1 / h));
+    pass(this.blur, h0.tex, h1, () => gl.uniform2f(this.blur.u('uDir'), 1 / h0.w, 0));
+    pass(this.blur, h1.tex, h0, () => gl.uniform2f(this.blur.u('uDir'), 0, 1 / h0.h));
+    pass(this.down, h0.tex, q0, () => gl.uniform2f(this.down.u('uTexel'), 1 / h0.w, 1 / h0.h));
+    for (let k = 0; k < 2; k++) {
+      pass(this.blur, q0.tex, q1, () => gl.uniform2f(this.blur.u('uDir'), (1.5 + k) / q0.w, 0));
+      pass(this.blur, q1.tex, q0, () => gl.uniform2f(this.blur.u('uDir'), 0, (1.5 + k) / q0.h));
+    }
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.viewport(0, 0, w, h);
+    const F = this.fin; gl.useProgram(F.p);
+    const bind = (unit: number, t: WebGLTexture, name: string) => { gl.activeTexture(gl.TEXTURE0 + unit); gl.bindTexture(gl.TEXTURE_2D, t); gl.uniform1i(F.u(name), unit); };
+    bind(0, this.resColor!, 'uColor'); bind(1, this.resDepth!, 'uDepth'); bind(2, h0.tex, 'uHalf'); bind(3, q0.tex, 'uQuarter');
+    gl.uniform1f(F.u('uDec'), 1 / enc);
+    gl.uniform4f(F.u('uLens'), f.focusDist, f.aperture, f.near, f.far);
+    gl.uniform4f(F.u('uLook'), f.weather.exposure, f.weather.saturation, f.weather.dark, 0);
+    gl.uniform2f(F.u('uRes'), w, h); gl.uniform1f(F.u('uFlash'), f.flash);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    gl.depthMask(true); gl.enable(gl.DEPTH_TEST);
   }
 
   private meshVao(mesh: Mesh, inst: WebGLBuffer, keep = false) {
@@ -619,7 +744,8 @@ export class Renderer {
     for (const p of this.props) if (near(p.z0, p.z1)) { gl.bindVertexArray(p.vao); gl.drawArraysInstanced(gl.TRIANGLES, 0, p.count, 1); }
     // (the people and gulls are too small for their shadows to tell: left out)
     for (const d of f.draws) { const k = this.kinds.get(d.kind); if (k && d.list.n && !/^(kid|crew|gull)/.test(d.kind)) { gl.uniform2fv(D.u('uPivot'), k.pivot); gl.bindVertexArray(k.vao); gl.drawArraysInstanced(gl.TRIANGLES, 0, k.count, d.list.n); } }
-    gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.viewport(0, 0, width, height);
+    this.targets(width, height);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.msFbo); gl.viewport(0, 0, width, height);
     gl.clearColor(0.6, 0.78, 0.93, 1); gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
     const common = (p: Prog) => {
       gl.useProgram(p.p);
@@ -634,6 +760,7 @@ export class Renderer {
       gl.uniform4f(p.u('uFog'), W.fogStart, W.fogScale, W.fogMax, f.flash);
       gl.uniform4f(p.u('uLook'), W.exposure, W.saturation, W.dark, 0);
       gl.uniform4fv(p.u('uSpot'), f.spot); gl.uniform3fv(p.u('uSpotDir'), f.spotDir);
+      gl.uniform1f(p.u('uEnc'), this.hdr ? 1 : 0.25);
     };
     gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, this.field);
     gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, this.shadowTex);
@@ -681,6 +808,7 @@ export class Renderer {
       gl.bindVertexArray(this.fxVao); gl.drawArraysInstanced(gl.TRIANGLES, 0, 6, f.fxCount);
     }
     gl.depthMask(true); gl.disable(gl.BLEND);
+    this.post(f, width, height);
     gl.bindVertexArray(null);
   }
 }

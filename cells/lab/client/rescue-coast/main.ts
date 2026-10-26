@@ -23,7 +23,7 @@ import { Joystick } from './joystick';
 import { MiniMap, clock } from './hud';
 
 const params = new URLSearchParams(location.search);
-const preview = params.has('preview'), still = params.has('still'), study = params.has('study');
+const preview = params.has('preview'), still = params.has('still') || params.has('ref'), study = params.has('study');
 const auto = params.has('auto') || preview;
 const zoom = Number(params.get('zoom') ?? 1) || 1;
 const $ = (id: string) => document.getElementById(id) as HTMLElement;
@@ -55,7 +55,7 @@ let ui: 'title' | 'race' | 'podium' = 'title';
 let paused = false, hornAt = -9;
 const marks = new Marks(), wakes = new Wakes(), sound = new Sound();
 const canvas = $('sea') as HTMLCanvasElement;
-const gl = canvas.getContext('webgl2', { antialias: true, powerPreference: 'high-performance' });
+const gl = canvas.getContext('webgl2', { antialias: false, powerPreference: 'high-performance' });
 if (!gl) { document.body.classList.add('nogl'); throw new Error('no WebGL2'); }
 const renderer = new Renderer(gl);
 renderer.addKind('boat', lifeboat());
@@ -108,6 +108,7 @@ function onBoat(p: Pose, x: number, y: number, z: number): [number, number, numb
 // ─── the camera ───
 let camYaw = 0, camDist = 26, camEl = 0.44, camLean = 0;
 const camAt = { x: 0, y: 0, z: 0 };
+const lens = { focus: 30, aperture: 0.4 };
 let vp: Float32Array = new Float32Array(16), eye = [0, 20, -30], right = [1, 0, 0], up = [0, 1, 0];
 function followed() {
   if (!auto) return race.boats[mine];
@@ -118,7 +119,8 @@ const nearArg = params.get('near');
 function camera(dt: number, t: number, w: number, h: number) {
   const portrait = h > w, aspect = w / h;
   let target: number[], from: number[], fov = portrait ? 1.02 : 0.86, shift = 0;
-  if (ui === 'title') {
+  if (refCam) { target = refCam.target; from = refCam.from; fov = refCam.fov; }
+  else if (ui === 'title') {
     // (low and ahead, to one side: your lifeboat charging toward you, the cliffs and the lighthouse behind it)
     const b = race.boats[mine], p = poses[b.id] ?? { y: 0 }, side = showPath.side, d = portrait ? 17 : 14;
     target = [b.x + (portrait ? side * 0.6 : -side * 1.2), p.y + 2.1, b.z + (portrait ? 0 : 1.5)];
@@ -169,6 +171,9 @@ function camera(dt: number, t: number, w: number, h: number) {
     shift = 0.1;
   }
   eye = from;
+  // (the lens: in focus where the camera looks, softening nearer and further; stronger for the still shots)
+  lens.focus = refCam ? refCam.focus : ui === 'race' && !study ? Math.hypot(followed().x - from[0], followed().z - from[2]) : Math.hypot(target[0] - from[0], target[1] - from[1], target[2] - from[2]);
+  lens.aperture = refCam ? refCam.aperture : ui === 'title' ? 0.9 : ui === 'podium' ? 0.6 : study ? 0.8 : ui === 'race' && camLean !== 0 && Math.abs(camLean) > 0.2 ? 0.7 : 0.4;
   const view = mat4.lookAt(from, target, [0, 1, 0]), proj = mat4.perspective(fov, aspect, 0.5, 1800);
   proj[9] = -shift;
   vp = mat4.mul(proj, view);
@@ -574,9 +579,9 @@ function frame(now: number) {
   atmosphere(t, still ? 0 : dt);
   wakes.build(vt);
   hud(t);
-  const fb = followed(), far = 1800;
+  const fb = followed();
   const f: Frame = {
-    vp, eye, time: t, right, up, far,
+    vp, eye, time: t, right, up, near: 0.5, far: 1800, focusDist: lens.focus, aperture: lens.aperture,
     zMin: Math.min(eye[2], fb.z) - 160 - 400 * Math.max(0, -Math.cos(camYaw)), zMax: Math.max(eye[2], fb.z) + 160 + 700 * Math.max(0, Math.cos(camYaw)),
     focus: ui === 'podium' ? [coast.berths[2].x, coast.berths[2].z - 30] : [fb.x, fb.z], draws, wakes: wakes.data, wakeCount: wakes.count, fx: marks.data, fxCount: marks.count, holes, holeCount: hc,
     weather, flash, spot: spotAt, spotDir,
@@ -595,13 +600,55 @@ function frame(now: number) {
   requestAnimationFrame(frame);
 }
 
+// ─── reference scenes: one fixed frame each, composed like the target studies, to judge the drawing by ───
+let refCam: { from: number[]; target: number[]; fov: number; aperture: number; focus: number } | null = null;
+const refArg = params.get('ref');
+function refScene(kind: string) {
+  document.body.classList.add('preview');
+  ui = 'race'; document.body.classList.remove('title'); document.body.classList.add('racing');
+  newGame(); race.phase = 'racing';
+  const G = { x: coast.gateX, z: GATE_Z }, me = race.boats[mine];
+  // (somewhere in open water near where it's wanted)
+  const wet = (x: number, z: number, m = 8): [number, number] => { for (let i = 0; i < 40 && shoreAt(coast, x, z) < m; i++) x += (coast.centre(z) - x) * 0.15; return [x, z]; };
+  const place = (b: { x: number; z: number; h: number; v: number }, x: number, z: number, h: number, v: number) => { [b.x, b.z] = wet(x, z, 10); b.h = h; b.v = v; };
+  vt = 12;
+  if (kind === 'rescue') {
+    place(me, G.x, G.z - 230, 0.35, 0);
+    const k = race.crafts[0], side = -1;
+    me.aboard = [{ craft: 1, person: 0 }, { craft: 2, person: 0 }, { craft: 3, person: 0 }].filter((a) => race.crafts[a.craft]);
+    me.rescued = me.aboard.length;
+    const [kx, kz] = world(me, side * (HALF_BEAM + 1.25), -1.6);
+    k.x = kx; k.z = kz; k.yaw = me.h; k.stage = 'climb'; k.by = mine; k.side = side; k.t = 0.42 * CLIMB;
+    if (k.craft.people.length < 2) k.craft.people.push({ ...k.craft.people[0], skin: (k.craft.people[0].skin + 2) % 6, hair: 2, style: 1 }), k.left = k.craft.people.length;
+    k.left = k.craft.people.length;
+    for (const o of race.boats) if (o !== me) place(o, G.x + (o.id - 2) * 30, G.z - 120 - o.id * 12, 0.1, 6);
+    const at = world(me, side * 9.5, -5.5), look = world(me, side * 2.6, -1.4);
+    refCam = { from: [at[0], 2.4, at[1]], target: [look[0], 1.1, look[1]], fov: 0.62, aperture: 0.8, focus: 9 };
+  } else {
+    place(me, G.x - 3, G.z - 172, 0.04, 8);
+    const others = race.boats.filter((o) => o !== me), spots = [[22, -122, -0.15], [-24, -96, 0.12], [6, -70, 0], [-10, -142, 0.22]];
+    others.forEach((o, i) => place(o, G.x + spots[i][0], G.z + spots[i][1], spots[i][2], 7));
+    const where = [[-19, -150], [16, -153], [-30, -128], [27, -138], [-12, -110], [14, -100], [31, -162]];
+    race.crafts.forEach((k, i) => {
+      if (i < where.length) { [k.x, k.z] = wet(G.x + where[i][0], G.z + where[i][1], 12); k.yaw = 1.3 * i; }
+      else if (k.z > G.z - 320) k.z -= 450;
+    });
+    const back = 23, from = [me.x - Math.sin(me.h) * back + 2, 9.5, me.z - Math.cos(me.h) * back];
+    refCam = { from, target: [me.x + Math.sin(me.h) * 26, 0.5, me.z + Math.cos(me.h) * 26], fov: 0.72, aperture: 0.5, focus: 25 };
+  }
+  // (their wakes and spray, as if they'd been going a while)
+  for (const b of race.boats) if (b.v > 0) for (let s = -5.5; s <= 0; s += 0.08) wakes.record(b.id, b.x + Math.sin(b.h) * b.v * s, b.z + Math.cos(b.h) * b.v * s, b.h, b.v, vt + s);
+  for (let i = 0; i < 40; i++) { people(vt - (40 - i) / 30, 1 / 30); splashes(vt - (40 - i) / 30, 1 / 30); marks.step(1 / 30); }
+}
+
 // ─── start ───
 setWeather((params.get('weather') ?? 'sunny') as WeatherName);
 newCoast(seed);
 title();
 const panelArg = params.get('panel');
+if (refArg) refScene(refArg);
 if (panelArg === 'boats' || panelArg === 'weather' || panelArg === 'settings') panel(panelArg);
-if (auto || params.has('t') || params.get('view') === 'podium' || study) {
+if (!refArg && (auto || params.has('t') || params.get('view') === 'podium' || study)) {
   ui = 'race'; document.body.classList.remove('title'); document.body.classList.add('racing');
   newGame(); start(race);
   const T = params.get('view') === 'podium' ? 1e9 : Number(params.get('t') ?? 0);
