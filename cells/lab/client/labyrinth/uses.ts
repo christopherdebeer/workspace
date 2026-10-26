@@ -8,7 +8,9 @@
  *   (a court house of 500 m² is a family and its people, not a tenement).
  * - **A shop**: a ground room behind a shopfront.
  * - **A workshop**: a ground room of 18 m² or more come into straight from outside (a door on to the ground, a way or a
- *   court; a portal; a veranda) and dim (under half of it lit): a place to work in, not to live.
+ *   court; a portal; a veranda), and either dim (under half of it lit), or in a building broad enough (three cells by
+ *   three somewhere in its plan, two storeys or more) that its ground's more than a household needs, the household
+ *   living over the work: a place to work in, not to live.
  * - **A store**: dark rooms (under a quarter lit), by their floor.
  * - **A hall**: a room wider than a beam spans both ways (its roof on a vault or posts).
  * - **A tower**: a building of a cell or two in plan, three storeys or more; a **lookout** if its top is walked.
@@ -32,7 +34,9 @@ export function usesOf(w: World, p: Plan): Uses {
   const wayIn = p.exits.length > 0 || b.through.length > 0;
   if (lit.length && wayIn) uses.push(p.court ? 'court house' : 'dwelling');
   if (ground?.rooms.some((r) => r.open.includes('shop'))) uses.push('shop');
-  if (ground?.rooms.some((r) => r.area >= 18 && r.lit < 0.5 && (r.open.some((o) => o === 'portal' || o === 'veranda') || p.exits.some((e) => e.room === r.id && (e.to === 'ground' || e.to === 'way' || e.to === 'court'))))) uses.push('workshop');
+  const has = new Set(b.cols.map(([i, j]) => `${i}.${j}`)), n = 3 * w.bay;
+  const broad = p.storeys.length >= 2 && b.cols.some(([i, j]) => Array.from({ length: n * n }, (_, q) => has.has(`${i + (q % n)}.${j + Math.floor(q / n)}`)).every(Boolean));
+  if (ground?.rooms.some((r) => r.area >= 18 && (r.lit < 0.5 || broad) && (r.open.some((o) => o === 'portal' || o === 'veranda') || p.exits.some((e) => e.room === r.id && (e.to === 'ground' || e.to === 'way' || e.to === 'court'))))) uses.push('workshop');
   const dark = p.rooms.filter((r) => r.lit < 0.25), storage = dark.reduce((t, r) => t + r.area, 0);
   if (storage > 0) uses.push('store');
   if (p.rooms.some((r) => r.hall)) uses.push('hall');

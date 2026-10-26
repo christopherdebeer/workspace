@@ -222,7 +222,7 @@ Buildings now know what's inside them, though nothing of it is drawn yet. Everyt
 **Uses** (uses.ts) are read from the plan:
 - **dwelling**, or **court house** (round a court): a lit room and a way in, one household per 150 m² of lit floor;
 - **shop**: behind a shopfront;
-- **workshop**: a dim ground room of 18 m² or more, come into from outside;
+- **workshop**: a ground room of 18 m² or more, come into from outside, and dim, or in a broad building (three cells by three, the household over the work);
 - **store**: dark rooms;
 - **hall**;
 - **tower** or **lookout**;
@@ -260,6 +260,32 @@ A world made new in the app is drawn by its ladder (realise.ts). What its tradit
 `?ladder=0|1` sets it for any world; `?rung=n` draws as if at that rung, with every craft at hand. The storyboards, and worlds kept from before, are drawn as built. `node devtools/labyrinth-ladder-look.mjs` draws the sheet below: stories 16 and 17 at rungs 0 to 3, and as built.
 
 ![the ladder: rungs 0–3 and as built](labyrinth/look-ladder.jpg)
+
+### What the uses leave outside
+
+What a building's for can now be seen from the street (props.ts). Each prop stands against the wall beside the door its use goes in and out by, never in front of it, and only on clear, level ground, half a cell from any other. Props are drawn a little larger than life (1.4×), so they read at the camera's distance.
+
+- **A workshop**, by its craft:
+  - kiln: a beehive oven of fired clay, its mouth glowing, and tiles stacked to cool;
+  - carpenter: planks stacked on battens, and a sawhorse with a plank across it;
+  - mason: squared blocks, and one on the banker, chips round its foot;
+  - glassworks: a furnace of stone with a glowing mouth and a flue up the wall, and crates.
+- **A shop**: goods on a trestle in front of its shopfront (two at most), and a sign on a bracket over it.
+- **A store**: barrels or sacks by its door; on a building two storeys or more, a hoist beam under the eaves with a sack on its rope.
+- **A dwelling**, at two of its doors at most: a bench and a pot, a bench and the washing on a line, or a pot alone.
+- **A lookout** with a room in it: a flag on its top.
+- **A gatehouse**: a lamp on the wall either side of each mouth of its passage.
+
+**Workshops can now be built on purpose.** Ground floors are windowed every other bay, so a dim ground room hardly ever happened. A ground room come into from outside is now also a workshop when its building is broad: three cells by three somewhere in its plan, two storeys or more, the household living over the work. Houses two cells deep, and a court house's wings, stay dwellings.
+
+**Story 21**, a town at work, shows all of this (`?story=21`). It's on the half grid and drawn by its ladder:
+- four workshops, three cells by four, each taking a craft;
+- a row of houses;
+- a store and a tower beside it, with a flight up to the tower's top from the store's, so the tower is a lookout.
+
+It reckons as a town. `node devtools/labyrinth-props-look.mjs` draws the sheet below, close on each.
+
+![what the uses leave outside](labyrinth/look-props.jpg)
 
 ## Water
 

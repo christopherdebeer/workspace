@@ -36,7 +36,7 @@ const qs = new URLSearchParams(location.search);
 /** `?region=`: the land held to one tradition (mediterranean, persian, timber, eaves), or `mixed`, districts of the first
  * two (regions.ts); unset, the land's own */
 { const r = qs.get('region'); if (r === 'mixed' || ORDER.includes(r as GrammarId)) setRegions(r as RegionMode); }
-const preview = qs.has('preview'), still = qs.has('still'), instant = qs.has('instant'), heldView = qs.has('held');
+const preview = qs.has('preview'), still = qs.has('still'), instant = qs.has('instant'), heldView = qs.has('held') || qs.has('at');
 const canvas = document.getElementById('stone') as HTMLCanvasElement, guide = document.getElementById('guide') as HTMLCanvasElement;
 const g2 = guide.getContext('2d')!;
 const R = new Renderer(canvas);
@@ -1217,8 +1217,8 @@ function followCat(dt: number) {
 // (`?catsat=s`: the cats' lives run on that long before it's shown, for a picture)
 if (catsOn) { catMemory(); if (qs.has('catsat')) cats.run(world, Number(qs.get('catsat'))); }
 
-// (`?at=i.j`: looking at that cell, not framing it all)
-if (qs.has('at')) { const [i, j] = qs.get('at')!.split('.').map(Number); view.target = [(i + 0.5 - CENTER) * plan(), world.top() * 0.35, (j + 0.5 - CENTER) * plan()]; zoomFit = framing().fit; follow = false; edgeChecked = world.version; }
+// (`?at=i.j`: looking at that cell, not framing it all; `?at=i.j.y`, at that height (in storeys), not a third of the way up)
+if (qs.has('at')) { const [i, j, y] = qs.get('at')!.split('.').map(Number); view.target = [(i + 0.5 - CENTER) * plan(), y ?? world.top() * 0.35, (j + 0.5 - CENTER) * plan()]; zoomFit = framing().fit; follow = false; edgeChecked = world.version; }
 requestAnimationFrame(frame);
 
 (window as unknown as { __labyrinth: unknown }).__labyrinth = {

@@ -46,6 +46,7 @@ export function story(stage: number): World {
   if (stage === 18) return halved(courtHouse());
   if (stage === 19) return halfHouse();
   if (stage === 20) return halfByHand();
+  if (stage === 21) return atWork();
   const w = new World(7);
   const t = -100;
   const tapAt = (p: Pick) => { const op = tap(w, p, t); if (op && !('refused' in op)) w.apply(op, t); };
@@ -443,5 +444,25 @@ function halfByHand(): World {
   traceAt(ground(10, 10), line([10, 10], [18, 10]), topOf(w, 18, 10));
   // (from the tower's top, down to the terrace)
   traceAt(topOf(w, 11, 6), line([11, 6], [19, 6]).concat(line([19, 6], [19, 8]).slice(1)), topOf(w, 19, 8));
+  return w;
+}
+
+/**
+ * storyboard 21: a town at work (props.ts), on the half grid and drawn by its ladder: four workshops three cells by
+ * four, the household over the work (a kiln, a carpenter, a mason, a glassworks, in the order they're taken up); a row
+ * of houses of two storeys; a store, and a tower beside it, a flight up to its top from the store's: a lookout.
+ */
+function atWork(): World {
+  const w = new World(31, 0, 2), t = -100;
+  w.ladder = true;
+  const box = (i0: number, i1: number, j0: number, j1: number, h: number, k0 = 0) => { const c: Array<[number, number, number, number]> = []; for (let i = i0; i <= i1; i++) for (let j = j0; j <= j1; j++) for (let k = k0; k < h; k++) c.push([k, i, j, t]); w.apply({ add: c }, t); };
+  const traceAt = (start: Pick, cells: Array<[number, number]>, end: Pick | null) => { const op = trace(w, start, cells, end, () => t, t); if (op && !('refused' in op)) w.apply(op, t); return op; };
+  // (to the north, the workshops, three cells by four, two storeys (the household over the work), each standing free)
+  for (const i0 of [-16, -4, 8, 20]) box(i0, i0 + 5, -14, -7, 2);
+  // (to the south, a row of houses; and the store, three storeys, narrow and deep, a tower of five beside it, a flight up
+  // to the tower's top from the store's)
+  for (const i0 of [-15, -8, 6, 13, 20]) box(i0, i0 + 3, 0, 3, 2);
+  box(-7, -4, 8, 14, 3); box(-3, -2, 11, 14, 5);
+  traceAt(topOf(w, -6, 14), [[-6, 14], [-6, 13], [-6, 12], [-5, 12], [-4, 12], [-3, 12]], topOf(w, -3, 12));
   return w;
 }

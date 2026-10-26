@@ -22,6 +22,7 @@ import { character, look } from './character';
 import { buildings, opening, pairOf, underRoof, type Building, type Opening } from './buildings';
 import { grammarHere, shownRole, shownStone } from './realise';
 import { knows } from './ladder';
+import { props, type Prop } from './props';
 import { buttresses, dims, inBlock, outline, reach, wallCell, type Edge } from './form';
 import { CENTER, DECK, DIRS, DRESS, PLANT, key, soffit as flightSoffit, unkey, type Span, type World } from './model';
 import { climb, grow, growths } from './plants';
@@ -207,11 +208,14 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
     skyMs += performance.now() - sky0;
     return v;
   };
-  const SKYLIT = new Set([MAT.stone, MAT.within, MAT.court, MAT.slab, MAT.tile, MAT.clay, MAT.wood, MAT.door, MAT.lead]);
+  const PROP = 1.4, SKYLIT = new Set([MAT.stone, MAT.within, MAT.court, MAT.slab, MAT.tile, MAT.clay, MAT.wood, MAT.door, MAT.lead]);
   /** on the half grid, where an object's drawn at its own size (`whole`): its middle, what's round it widened so the
    * squeeze in plan that draws the grid in its proportions (main.ts) leaves it as it is */
   let around: [number, number] | null = null;
+  /** a prop drawn larger than life round its foot (props: caricatured a little, to be read at the camera's distance) */
+  let grown: [number, number, number, number] | null = null;
   const vert = (p: V3, n: V3, ao: number, mat: number) => {
+    if (grown) { const [gx, gy, gz, s] = grown; p = [gx + (p[0] - gx) * s, gy + (p[1] - gy) * s, gz + (p[2] - gz) * s]; }
     if (around) { const B = w.bay, nx = n[0] / B, nz = n[2] / B, l = Math.hypot(nx, n[1], nz) || 1; p = [around[0] + (p[0] - around[0]) * B, p[1], around[1] + (p[2] - around[1]) * B]; n = [nx / l, n[1] / l, nz / l]; }
     vertOut(p, n, ao, mat);
   };
@@ -644,7 +648,159 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
     else cypress(dc.i, dc.j, dc.k, dc.born);
   }
 
+  // ─── what each building's use leaves outside it (props.ts) ───
+  for (const p of props(w)) wholeAt(X(p.x), Z(p.z), () => { grown = [X(p.x), p.y, Z(p.z), PROP]; try { prop(p); } finally { grown = null; } });
   courtGardens();
+  /**
+   * A prop, in the frame of the wall it stands against: `u` along the wall, `v` out from it, as a cell's (whole) size;
+   * drawn PROP times as large round its foot.
+   */
+  function prop(p: Prop) {
+    cur = { born: p.born, pivot: p.y, how: 1, tone: 0.5, dress: 0, sel: false };
+    const cx = X(p.x), cz = Z(p.z), [a, c] = DIRS[p.d], [ta, tb] = DIRS[(p.d + 1) % 4], y = p.y, r = (q: number) => (hash(p.n, q) % 1000) / 1000;
+    const L = (u: number, v: number, yy: number): V3 => [cx + ta * u + a * v, yy, cz + tb * u + c * v];
+    const ob = (u0: number, u1: number, v0: number, v1: number, y0: number, y1: number, mat: number, ao: number[] | number = 0.9) => {
+      const A = L(u0, v0, y0), B = L(u1, v1, y1);
+      box(Math.min(A[0], B[0]), Math.max(A[0], B[0]), y0, y1, Math.min(A[2], B[2]), Math.max(A[2], B[2]), mat, ao);
+    };
+    const turn = (u: number, v: number, rings: Array<[number, number]>, mat: number, seg = 10) => { const [x, , z] = L(u, v, 0); lathe(x, z, rings.map(([rr, h]) => [rr, y + h]), mat, seg); };
+    const barrel = (u: number, v: number, h = 0.17, R = 0.065) => {
+      turn(u, v, [[R * 0.85, 0], [R, h * 0.3], [R * 1.05, h * 0.5], [R, h * 0.7], [R * 0.85, h], [0, h]], MAT.wood, 10);
+      for (const t of [0.22, 0.78]) turn(u, v, [[R * 1.02, h * t - 0.008], [R * 1.04, h * t + 0.008]], MAT.bark, 10);
+    };
+    const sack = (u: number, v: number, s = 1) => { cur.tone = 0.5; turn(u, v, [[0.05 * s, 0], [0.07 * s, 0.03 * s], [0.065 * s, 0.09 * s], [0.035 * s, 0.13 * s], [0.012 * s, 0.15 * s], [0, 0.15 * s]], MAT.table, 8); };
+    const potted = (u: number, v: number, s: number) => {
+      turn(u, v, [[0.05 * s, 0], [0.065 * s, 0.03 * s], [0.085 * s, 0.11 * s], [0.095 * s, 0.13 * s], [0.075 * s, 0.13 * s]], MAT.clay, 10);
+      const R = 0.1 * s, cy = 0.13 * s + R * 0.8;
+      turn(u, v, Array.from({ length: 7 }, (_, q) => { const t = (q / 6) * Math.PI; return [Math.sin(t) * R, cy - Math.cos(t) * R] as [number, number]; }), MAT.leaves, 10);
+    };
+    const legs = (u0: number, u1: number, v0: number, v1: number, h: number, mat: number) => { for (const u of [u0, u1]) for (const v of [v0, v1]) ob(u - 0.012, u + 0.012, v - 0.012, v + 0.012, y, y + h, mat, 0.7); };
+    switch (p.kind) {
+      case 'kiln': {
+        // (a beehive kiln of fired clay, its mouth along the wall, glowing low; a squat flue on its crown)
+        turn(0, 0, [[0.21, 0], [0.22, 0.06], [0.2, 0.16], [0.15, 0.25], [0.08, 0.31], [0.04, 0.33]], MAT.clay, 14);
+        turn(0, 0, [[0.04, 0.33], [0.035, 0.42], [0.045, 0.43], [0, 0.43]], MAT.clay, 8);
+        ob(-0.05, 0.05, 0.17, 0.23, y, y + 0.08, MAT.lamp);
+        ob(-0.065, 0.065, 0.16, 0.235, y + 0.08, y + 0.1, MAT.clay);
+        break;
+      }
+      case 'tiles': {
+        // (fired tiles stacked on edge to cool, in short rows)
+        for (let q = 0; q < 3; q++) for (let n = 0; n < 2 + (q % 2); n++) ob(-0.12 + q * 0.09, -0.05 + q * 0.09, 0.03, 0.17, y + n * 0.045, y + n * 0.045 + 0.04, MAT.clay, 0.85);
+        break;
+      }
+      case 'timber': {
+        // (planks stacked along the wall, battens across between each layer)
+        for (let n = 0; n < 4; n++) {
+          const yy = y + n * 0.05;
+          for (const v of [0.05, 0.12, 0.19]) bar(L(-0.24, v, yy + 0.01), L(0.2 + r(n) * 0.06, v, yy + 0.01), 0.06, 0.03, MAT.wood);
+          for (const u of [-0.18, 0.14]) bar(L(u, 0.01, yy + 0.04), L(u, 0.23, yy + 0.04), 0.025, 0.01, MAT.bark);
+        }
+        break;
+      }
+      case 'sawhorse': {
+        // (a sawhorse, a plank across it half sawn)
+        for (const u of [-0.1, 0.1]) { bar(L(u, 0.06, y), L(u, 0.13, y + 0.16), 0.02, 0.02, MAT.wood); bar(L(u, 0.2, y), L(u, 0.13, y + 0.16), 0.02, 0.02, MAT.wood); }
+        bar(L(-0.14, 0.13, y + 0.16), L(0.14, 0.13, y + 0.16), 0.035, 0.03, MAT.wood);
+        bar(L(-0.03, 0.02, y + 0.19), L(-0.03, 0.3, y + 0.19), 0.09, 0.02, MAT.wood);
+        break;
+      }
+      case 'blocks': {
+        // (blocks squared at the quarry, waiting: two on the ground, one on them)
+        ob(-0.2, -0.04, 0.02, 0.16, y, y + 0.11, MAT.stone); ob(-0.02, 0.14, 0.03, 0.17, y, y + 0.1, MAT.stone);
+        ob(-0.13, 0.05, 0.04, 0.15, y + 0.105, y + 0.2, MAT.stone);
+        break;
+      }
+      case 'banker': {
+        // (the mason's banker: a block on a stone stand, at the height to work it; chips round its foot)
+        ob(-0.08, 0.08, 0.06, 0.18, y, y + 0.15, MAT.stone, 0.75);
+        ob(-0.1, 0.1, 0.04, 0.2, y + 0.15, y + 0.24, MAT.stone);
+        for (let q = 0; q < 5; q++) ob(-0.16 + r(q) * 0.3, -0.14 + r(q) * 0.3, 0.02 + r(q + 9) * 0.2, 0.04 + r(q + 9) * 0.2, y, y + 0.012, MAT.stone, 0.8);
+        break;
+      }
+      case 'furnace': {
+        // (the glassworks' furnace: a squat round of stone, domed, its glory hole glowing, a flue going up the wall)
+        turn(0, 0, [[0.19, 0], [0.19, 0.2], [0.16, 0.27], [0.1, 0.32], [0.05, 0.34], [0, 0.34]], MAT.stone, 14);
+        ob(-0.045, 0.045, 0.17, 0.2, y + 0.1, y + 0.17, MAT.lamp);
+        ob(-0.05, 0.05, -0.02, 0.06, y + 0.25, y + 0.75, MAT.stone, 0.85);
+        break;
+      }
+      case 'crates': {
+        // (crates packed in straw for the glass: two side by side, one on them)
+        ob(-0.17, -0.04, 0.02, 0.15, y, y + 0.12, MAT.wood); ob(-0.02, 0.11, 0.02, 0.15, y, y + 0.12, MAT.wood);
+        ob(-0.1, 0.03, 0.03, 0.14, y + 0.12, y + 0.23, MAT.wood);
+        break;
+      }
+      case 'goods': {
+        // (a trestle out in front of the shop, baskets on it of what it sells)
+        legs(-0.2, 0.2, -0.06, 0.06, 0.15, MAT.wood);
+        ob(-0.23, 0.23, -0.08, 0.08, y + 0.15, y + 0.17, MAT.wood);
+        for (let q = 0; q < 3; q++) {
+          const u = -0.15 + q * 0.15, yy = 0.17, fruit = hash(p.n, q, 2) % 3;
+          turn(u, 0, [[0.035, yy], [0.055, yy + 0.04], [0.05, yy + 0.04]], MAT.bark, 8);
+          if (fruit === 0) turn(u, 0, [[0.05, yy + 0.035], [0.04, yy + 0.06], [0, yy + 0.07]], MAT.leaves, 8);
+          else turn(u, 0, [[0.05, yy + 0.035], [0.042, yy + 0.06], [0, yy + 0.068]], fruit === 1 ? MAT.clay : MAT.table, 8);
+        }
+        break;
+      }
+      case 'sign': {
+        // (a bracket out from the wall over the door, a board hung from it in the house's paint)
+        bar(L(0, 0, y + 0.02), L(0, 0.3, y + 0.02), 0.02, 0.02, MAT.bark);
+        cur.tone = 2 + (p.n % 3);
+        ob(-0.008, 0.008, 0.08, 0.27, y - 0.16, y - 0.01, MAT.door, 0.95);
+        break;
+      }
+      case 'barrels': barrel(-0.1, 0.09); barrel(0.06, 0.08); barrel(-0.02, 0.09, 0.15); break;
+      case 'sacks': sack(-0.12, 0.08); sack(0.0, 0.07, 1.1); sack(0.12, 0.09, 0.9); break;
+      case 'hoist': {
+        // (a beam out from under the eaves, a pulley at its end, a sack on the rope)
+        bar(L(0, -0.02, y), L(0, 0.34, y), 0.05, 0.05, MAT.wood);
+        ob(-0.02, 0.02, 0.28, 0.32, y - 0.06, y, MAT.bark);
+        const drop = 0.55 + r(1) * 0.3;
+        ob(-0.004, 0.004, 0.296, 0.304, y - drop, y - 0.06, MAT.bark);
+        turn(0, 0.3, [[0.04, -drop - 0.13], [0.06, -drop - 0.1], [0.05, -drop - 0.03], [0.015, -drop]], MAT.table, 8);
+        break;
+      }
+      case 'bench': {
+        // (a bench against the wall: a plank on two stone feet)
+        for (const u of [-0.13, 0.13]) ob(u - 0.02, u + 0.02, 0.02, 0.12, y, y + 0.11, MAT.stone, 0.8);
+        ob(-0.17, 0.17, 0.0, 0.13, y + 0.11, y + 0.14, MAT.wood);
+        break;
+      }
+      case 'pots': potted(-0.06, 0.07, 0.9); potted(0.1, 0.06, 0.65 + r(3) * 0.3); break;
+      case 'washing': {
+        // (a line from the wall to a pole, the washing on it)
+        turn(0.28, 0.2, [[0.012, 0], [0.01, 0.55]], MAT.wood, 6);
+        bar(L(-0.25, 0, y + 0.52), L(0.28, 0.2, y + 0.52), 0.006, 0.006, MAT.bark);
+        for (let q = 0; q < 4; q++) {
+          const t0 = 0.08 + q * 0.21, t1 = t0 + 0.14, f = (t: number) => L(-0.25 + 0.53 * t, 0.2 * t, 0), h = 0.12 + r(q) * 0.08;
+          const A = f(t0), B = f(t1), cloth = hash(p.n, q, 4) % 3;
+          cur.tone = cloth === 0 ? 0.5 : 2 + (cloth % 3);
+          const mat = cloth === 0 ? MAT.table : MAT.door, n: V3 = [-(B[2] - A[2]), 0, B[0] - A[0]];
+          quad([A[0], y + 0.52, A[2]], [B[0], y + 0.52, B[2]], [B[0], y + 0.52 - h, B[2]], [A[0], y + 0.52 - h, A[2]], n, 0.95, mat);
+          quad([A[0], y + 0.52, A[2]], [B[0], y + 0.52, B[2]], [B[0], y + 0.52 - h, B[2]], [A[0], y + 0.52 - h, A[2]], [-n[0], 0, -n[2]], 0.8, mat);
+        }
+        break;
+      }
+      case 'flag': {
+        // (a pole on the top, its flag out from it)
+        lathe(cx, cz, [[0.02, y], [0.012, y + 0.95], [0.025, y + 0.96], [0, y + 0.99]], MAT.wood, 6);
+        cur.tone = 5.2 + (p.n % 3);
+        for (let q = 0; q < 4; q++) {
+          const x0 = cx + 0.015 + q * 0.07, x1 = x0 + 0.07, dz0 = Math.sin(q * 1.3) * 0.02, dz1 = Math.sin((q + 1) * 1.3) * 0.02;
+          for (const sgn of [1, -1]) quad([x0, y + 0.92, cz + dz0], [x1, y + 0.92, cz + dz1], [x1, y + 0.74, cz + dz1], [x0, y + 0.74, cz + dz0], [0, 0, sgn], 0.95, MAT.door);
+        }
+        break;
+      }
+      case 'lamp': {
+        // (a lamp on an iron bracket on the wall beside the arch)
+        bar(L(0, 0, y + 0.14), L(0, 0.11, y + 0.14), 0.015, 0.015, MAT.bark);
+        ob(-0.03, 0.03, 0.08, 0.14, y + 0.03, y + 0.12, MAT.lamp);
+        ob(-0.04, 0.04, 0.07, 0.15, y + 0.12, y + 0.14, MAT.bark);
+        break;
+      }
+    }
+  }
   /**
    * A court laid out by its tradition, where it composes round courts (the plateau's): its pool's water run out in
    * channels to the court's sides (a cross where the court's near square and three cells or more each way, else along

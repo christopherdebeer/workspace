@@ -1154,6 +1154,32 @@ if (process.env.DEBUG) (await import('node:fs')).writeFileSync(process.env.DEBUG
   const r17 = LD.reckon(story(17));
   ok('ladder: the plateau\'s house built with glass and pointed arches', r17.built.has('glazed window') && r17.built.has('pointed arch'), [...r17.built.keys()]);
   RG.setRegions('mediterranean');
+  // (what the uses leave outside (props.ts): each on clear ground level with it, none on another, beside its own
+  // building; story 21's workshops each showing their craft, and a town)
+  const PR = await load('../client/labyrinth/props.ts');
+  for (const t of ['mediterranean', 'persian', 'timber']) {
+    RG.setRegions(t);
+    for (const s of [13, 15, 16, 17, 19, 20, 21]) {
+      const w = story(s), ps = PR.props(w), B = w.bay, bad = [];
+      for (const q of ps) {
+        if (q.kind === 'hoist' || q.kind === 'sign' || q.kind === 'lamp' || q.kind === 'flag') continue;
+        const i = Math.floor(q.x), j = Math.floor(q.z);
+        if (w.occupied(q.y, i, j) || w.ground(i, j) !== q.y || w.pool(i, j) || w.stair(q.y - 1, i, j) >= 0) bad.push([q.kind, i, j]);
+      }
+      ok(`props (${t}, story ${s}): each on clear ground, level with it`, !bad.length, bad);
+      const floor = ps.filter((q) => !['hoist', 'sign', 'lamp', 'flag'].includes(q.kind));
+      ok(`props (${t}, story ${s}): none on another`, floor.every((q, n) => floor.every((o, m) => m === n || Math.hypot(o.x - q.x, o.z - q.z) > 0.5 * B)), floor.map((q) => [q.kind, q.x, q.z]));
+    }
+  }
+  RG.setRegions('mediterranean');
+  const w21 = story(21), r21 = LD.reckon(w21), p21 = PR.props(w21);
+  ok('props: story 21 a town, four workshops, a craft to each', r21.rung.n >= 3 && r21.crafts.size === 4 && new Set(r21.crafts.values()).size === 4, [r21.rung.name, [...r21.crafts]]);
+  ok('props: each craft shown at its workshop', [['kiln', 'tiles'], ['timber', 'sawhorse'], ['blocks', 'banker'], ['furnace', 'crates']].every((ks) => ks.every((k) => p21.some((q) => q.kind === k))), p21.map((q) => q.kind));
+  ok('props: a store\'s barrels or sacks, a lookout\'s flag, a house\'s bench', ['flag', 'bench'].every((k) => p21.some((q) => q.kind === k)) && p21.some((q) => q.kind === 'barrels' || q.kind === 'sacks'), p21.map((q) => q.kind));
+  ok('props: story 17\'s gate lit either side', PR.props(story(17)).filter((q) => q.kind === 'lamp').length >= 2);
+  RG.setRegions('timber');
+  ok('props: the north\'s shops show their goods, and a sign', PR.props(story(21)).some((q) => q.kind === 'goods') && PR.props(story(21)).some((q) => q.kind === 'sign'));
+  RG.setRegions('mediterranean');
 }
 // ─── the half grid (static/labyrinth-grid.md): random building on worlds of half cells, the promises the same ───
 {
