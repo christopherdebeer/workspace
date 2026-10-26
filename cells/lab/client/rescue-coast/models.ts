@@ -68,7 +68,7 @@ export function lifeboat(): Mesh {
   b.use(0, SRC.A, M.PAINT);
   b.roundBox([0, wy + 0.82, wz], [1.62, 0.84, 1.9], 0.3, WHITE, 4);
   // (its windows: wrapped round the front and along the sides)
-  b.use(0, SRC.OWN, M.GLASS);
+  b.use(0, SRC.OWN, M.WINDOW);
   for (const x of [-0.95, 0, 0.95]) b.quad([x - 0.42, wy + 1.0, wz + 1.91], [x + 0.42, wy + 1.0, wz + 1.91], [x + 0.42, wy + 1.5, wz + 1.91], [x - 0.42, wy + 1.5, wz + 1.91], GLASS);
   for (const side of [-1, 1]) for (const z of [wz - 1.2, wz, wz + 1.1]) {
     const x = side * 1.63, q: V3[] = [[x, wy + 1.0, z - 0.45], [x, wy + 1.0, z + 0.45], [x, wy + 1.5, z + 0.45], [x, wy + 1.5, z - 0.45]];
@@ -371,7 +371,7 @@ export function cottage(b: Builder, v: number) {
   b.quad([W + 0.3, H - 0.15, D + 0.3], [W + 0.3, H - 0.15, -D - 0.3], [0, H + 1.95, -D - 0.3], [0, H + 1.95, D + 0.3], roof);
   b.use(0, SRC.OWN, M.ROCK); b.box(W - 1.0, W - 0.3, H, H + 2.6, -0.4, 0.3, [0.66, 0.63, 0.58]);
   b.use(0, SRC.OWN, M.PAINT); b.box(-0.45, 0.45, 0.25, 2.1, D, D + 0.06, door);
-  for (const x of [-1.9, 1.9]) for (const z of [D + 0.03, -D - 0.06]) { b.box(x - 0.55, x + 0.55, 1.2, 2.3, z, z + 0.04, [0.98, 0.98, 0.98]); b.use(0, SRC.OWN, M.GLASS); b.box(x - 0.42, x + 0.42, 1.3, 2.2, z + (z > 0 ? 0.02 : -0.01), z + (z > 0 ? 0.06 : 0.03), GLASS); b.use(0, SRC.OWN, M.PAINT); }
+  for (const x of [-1.9, 1.9]) for (const z of [D + 0.03, -D - 0.06]) { b.box(x - 0.55, x + 0.55, 1.2, 2.3, z, z + 0.04, [0.98, 0.98, 0.98]); b.use(0, SRC.OWN, M.WINDOW); b.box(x - 0.42, x + 0.42, 1.3, 2.2, z + (z > 0 ? 0.02 : -0.01), z + (z > 0 ? 0.06 : 0.03), GLASS); b.use(0, SRC.OWN, M.PAINT); }
 }
 
 export function station(b: Builder) {

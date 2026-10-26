@@ -18,7 +18,8 @@
 import { CELL, NX, NZ, X0, Z0, type Coast } from './coast';
 import { STRIDE, type Mesh } from './shapes';
 import { ISTRIDE, type World } from './world';
-import { wavesGlsl } from './waves';
+import { SEA, wavesGlsl } from './waves';
+import type { Weather } from './weather';
 
 export type M4 = Float32Array;
 export const mat4 = {
@@ -85,7 +86,7 @@ export class Instances {
 }
 /** marks (fx): 12 floats: where and size; a second point (a line's other end) and kind; colour and alpha */
 export const FSTRIDE = 12;
-export const FX = { SPRAY: 0, FOAM: 1, LINE: 2, RING: 3, SPARK: 4 } as const;
+export const FX = { SPRAY: 0, FOAM: 1, LINE: 2, RING: 3, SPARK: 4, BEAM: 5 } as const;
 /** wake ribbons: per vertex x, z, across (-1..1), age, strength */
 export const WSTRIDE = 5;
 
@@ -98,16 +99,21 @@ export interface Frame {
   fx: Float32Array; fxCount: number;
   /** the little boats' places on the water (x, z, heading, half length): the sea isn't drawn inside them */
   holes: Float32Array; holeCount: number;
+  /** the weather; a lightning flash (0..1); your searchlight (where, on 0..1) and which way it points */
+  weather: Weather; flash: number; spot: number[]; spotDir: number[];
 }
+const lin = (c: readonly number[]) => c.map((v) => v * v * (v * 0.3 + 0.7));
 
 // ─── shared GLSL ───
 
 const COMMON = `
 uniform vec3 uEye; uniform vec3 uSun; uniform float uTime; uniform vec2 uRes;
 uniform highp sampler2DShadow uShadow; uniform mat4 uLightVP;
+/** the weather (weather.ts): the sun's colour × strength; the sky's fill from above and below; the sky; the air */
+uniform vec3 uSunC, uFillSky, uFillGround, uSkyTop, uSkyHor, uHaze;
+/** fog (start, scale, most, lightning's flash); the look (exposure, saturation, how dark, -); your searchlight */
+uniform vec4 uFog, uLook, uSpot; uniform vec3 uSpotDir;
 vec3 lin(vec3 c) { return c * c * (c * .3 + .7); }
-const vec3 SUNC = vec3(1.0, .9, .76) * 2.7;
-vec3 HAZE() { return lin(vec3(.74, .85, .95)); }
 float hash2(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
 float noise2(vec2 p) { vec2 i = floor(p), f = fract(p); f = f * f * (3. - 2. * f); return mix(mix(hash2(i), hash2(i + vec2(1, 0)), f.x), mix(hash2(i + vec2(0, 1)), hash2(i + vec2(1, 1)), f.x), f.y); }
 float fbm(vec2 p) { float s = 0., a = .5; mat2 r = mat2(.8, .6, -.6, .8); for (int i = 0; i < 4; i++) { s += a * noise2(p); p = r * p * 2.03 + 3.1; a *= .5; } return s; }
@@ -122,20 +128,27 @@ float sunShadow(vec3 P, vec3 N) {
   s += texture(uShadow, vec3(uv.xy + vec2(-.4 * k, k), uv.z - .0007));
   return s / 5.;
 }
-vec3 skyFill(vec3 N) { return mix(lin(vec3(.5, .46, .4)) * .55, lin(vec3(.55, .7, .95)) * .95, N.y * .5 + .5); }
+vec3 skyFill(vec3 N) { return mix(uFillGround * .55, uFillSky * .95, N.y * .5 + .5) * (1. + uFog.w * 3.); }
 vec3 skyCol(vec3 r) {
   float h = max(r.y, 0.);
-  vec3 c = mix(lin(vec3(.76, .87, .96)), lin(vec3(.2, .46, .86)), pow(h, .5));
+  vec3 c = mix(uSkyHor, uSkyTop, pow(h, .5));
   float sd = max(dot(r, uSun), 0.);
-  return c + lin(vec3(1., .9, .72)) * (pow(sd, 6.) * .22 + pow(sd, 300.) * 6.);
+  return c + uSunC / 2.7 * (pow(sd, 6.) * .22 + pow(sd, 300.) * 6.);
 }
-vec3 aerial(vec3 c, vec3 P) { float d = distance(P.xz, uEye.xz); return mix(c, HAZE(), (1. - exp(-max(0., d - 140.) / 900.)) * .75); }
+/** your searchlight, when it's dark: a cone of warm light ahead of the boat */
+vec3 spot(vec3 P, vec3 N) {
+  if (uSpot.w < .01) return vec3(0.);
+  vec3 L = uSpot.xyz - P; float d = length(L); L /= d;
+  float cone = smoothstep(.88, .97, dot(-L, uSpotDir));
+  return vec3(1., .94, .8) * 30. * cone * max(0., dot(N, L)) / (1. + d * d * .02) * uSpot.w;
+}
+vec3 aerial(vec3 c, vec3 P) { float d = distance(P, uEye); return mix(c, uHaze * (1. + uFog.w * 2.), (1. - exp(-max(0., d - uFog.x) / uFog.y)) * uFog.z); }
 vec3 grade(vec3 c) {
-  c *= 1.05;
+  c *= uLook.x * (1. + uFog.w * 1.5);
   c = (c * (2.51 * c + .03)) / (c * (2.43 * c + .59) + .14);
   c = pow(clamp(c, 0., 1.), vec3(1. / 2.2));
   float l = dot(c, vec3(.299, .587, .114));
-  c = mix(vec3(l), c, 1.14);
+  c = mix(vec3(l), c, uLook.y);
   vec2 v = gl_FragCoord.xy / uRes - .5;
   return c * (1. - dot(v, v) * .32);
 }`;
@@ -193,6 +206,7 @@ void main() {
   else if (m == 3) { wrap = .35; spec = .06; gloss = 18.; }
   else if (m == 6) { wrap = .45; }
   else if (m == 7) { wrap = .6; }
+  else if (m == 8) { gloss = 160.; spec = .9; coat = .6; }
   if (m == 4) {
     // (granite: grain, feldspar flecks, lichen on the tops, darker and glossy where the sea wets it)
     vec3 q = vW * .55;
@@ -206,12 +220,14 @@ void main() {
   }
   float ndl = dot(N, uSun), sh = sunShadow(vW, N);
   float diff = max(0., (ndl + wrap) / (1. + wrap));
-  vec3 c = alb * (SUNC * diff * sh + skyFill(N));
+  vec3 c = alb * (uSunC * diff * sh + skyFill(N) + spot(vW, N));
   vec3 H = normalize(uSun + V);
-  c += SUNC * spec * pow(max(dot(N, H), 0.), gloss) * sh * (gloss + 8.) / 40.;
+  c += uSunC * spec * pow(max(dot(N, H), 0.), gloss) * sh * (gloss + 8.) / 40.;
   float fres = pow(1. - max(dot(N, V), 0.), 4.);
   c += skyCol(reflect(-V, N)) * coat * (.08 + .92 * fres);
-  if (m == 5) c = alb * 3.5;
+  // (lamps: brighter as it darkens; windows: dark glass by day, lit warm at dusk)
+  if (m == 5) c = alb * (3.5 + 6. * uLook.z);
+  if (m == 8) c += lin(vec3(1., .74, .38)) * 3.2 * smoothstep(.3, .8, uLook.z);
   o = vec4(grade(aerial(c, vW)), 1.);
 }`;
 const DEPTH_FS = `#version 300 es
@@ -241,7 +257,7 @@ void main() {
   c = mix(c, rock, steep);
   if (P.y < .3) c = mix(sand, rock, steep) * mix(.85, .45, smoothstep(.3, -3., P.y));
   float sh = sunShadow(P, N);
-  vec3 col = c * (SUNC * max(0., dot(N, uSun)) * sh + skyFill(N));
+  vec3 col = c * (uSunC * max(0., dot(N, uSun)) * sh + skyFill(N) + spot(P, N));
   o = vec4(grade(aerial(col, P)), 1.);
 }`;
 
@@ -250,20 +266,31 @@ out vec2 vUV;
 void main() { vec2 p = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2); vUV = p; gl_Position = vec4(p * 2. - 1., .99999, 1.); }`;
 const SKY_FS = `#version 300 es
 precision highp float;
-in vec2 vUV; uniform mat4 uInvVP; out vec4 o;
+in vec2 vUV; uniform mat4 uInvVP; uniform vec4 uCloud; out vec4 o;
 ${COMMON}
 void main() {
   vec4 w = uInvVP * vec4(vUV * 2. - 1., 1., 1.); vec3 r = normalize(w.xyz / w.w - uEye);
   vec3 c = skyCol(r);
-  // (cumulus: piled up over the horizon, lit on top, grey beneath)
-  if (r.y > -.02) {
-    vec2 p = r.xz / (r.y + .09) * .9 + vec2(uTime * .004, 0.);
-    float d = fbm(p * .55) + .35 * fbm(p * 1.6) - .1 * r.y * 3.;
-    float k = smoothstep(.6, .8, d) * smoothstep(-.02, .05, r.y) * (1. - smoothstep(.35, .7, r.y));
-    float lit = clamp((fbm(p * .55 - uSun.xz * .25) - d) * 3. + .75, 0., 1.);
-    vec3 cloud = mix(lin(vec3(.66, .72, .82)), lin(vec3(1., .98, .95)) * 1.25, lit);
-    c = mix(c, cloud, k);
+  // (stars, on a clear night)
+  if (uCloud.w > .5 && r.y > 0.) {
+    vec2 q = r.xz / (r.y + .3) * 140.; vec2 i = floor(q);
+    float st = step(.985, hash2(i)) * smoothstep(.5, .1, length(fract(q) - .5)) * smoothstep(.0, .25, r.y);
+    c += vec3(st) * .8;
   }
+  // (cloud: cumulus piled over the horizon, or a whole grey lid; lit on top, darker beneath)
+  if (r.y > -.02) {
+    vec2 p = r.xz / (r.y + .09) * .9 + vec2(uTime * .004 * uCloud.z, uTime * .002 * uCloud.z);
+    float d = fbm(p * .55) + .35 * fbm(p * 1.6) - .1 * r.y * 3. * (1. - uCloud.x);
+    float lo = mix(.85, .2, uCloud.x);
+    float k = smoothstep(lo, lo + .2, d) * smoothstep(-.02, .05, r.y) * (1. - smoothstep(mix(.35, 1.2, uCloud.x), mix(.7, 1.6, uCloud.x), r.y));
+    float lit = clamp((fbm(p * .55 - uSun.xz * .25) - d) * 3. + .75, 0., 1.);
+    vec3 under = mix(lin(vec3(.66, .72, .82)), lin(vec3(.2, .22, .26)), uCloud.y), top = mix(lin(vec3(1., .98, .95)) * 1.25, lin(vec3(.52, .55, .6)), uCloud.y);
+    vec3 cloud = mix(under, top, lit) * mix(vec3(1.), uSunC / 2.7 + .25, .35);
+    c = mix(c, cloud * (1. + uFog.w * 4.), k);
+  }
+  // (fog: the sky goes to the air's colour, most of all low down)
+  float fogSky = clamp(1. - uFog.y / 900., 0., 1.) * uFog.z;
+  c = mix(c, uHaze * (1. + uFog.w * 3.), fogSky * (1. - smoothstep(0., .6, r.y) * .5));
   o = vec4(grade(c), 1.);
 }`;
 
@@ -294,6 +321,8 @@ const WATER_FS = `#version 300 es
 precision highp float;
 in vec3 vW; in vec3 vN; in float vFold; in float vS; in vec2 vP0;
 uniform vec4 uHoles[12]; uniform int uHoleCount;
+/** the water's own colour (deep, lit through: linear); foam, rain, wind */
+uniform vec3 uDeep, uBody, uSeaLook;
 out vec4 o;
 ${COMMON}
 ${FIELD}
@@ -319,31 +348,40 @@ void main() {
   float s = shore(P);
   vec2 rp = P * 1.7 + vec2(uTime * .7, -uTime * .45), rq = P * 2.9 - vec2(uTime * .55, uTime * .8);
   vec2 rip = vec2(noise2(rp) - .5, noise2(rp + 9.) - .5) * .5 + vec2(noise2(rq) - .5, noise2(rq + 5.) - .5) * .3;
-  vec3 N = normalize(vN + vec3(rip.x, 0., rip.y) * .55);
+  // (rain pocks the surface)
+  vec2 rain = (vec2(noise2(P * 7. + uTime * 23.), noise2(P * 7.3 - uTime * 19. + 3.)) - .5) * uSeaLook.y;
+  vec3 N = normalize(vN + vec3(rip.x + rain.x, 0., rip.y + rain.y) * .55);
   vec3 V = normalize(uEye - vW), R = reflect(-V, N);
   if (R.y < .02) R = normalize(vec3(R.x, .02, R.z));
   float fres = .02 + .98 * pow(1. - max(dot(N, V), 0.), 5.);
   // (the water's own colour: deep cobalt, lighter in the faces the light shines through, a touch of green by the rocks)
-  vec3 deep = lin(vec3(.03, .17, .45)), body = lin(vec3(.06, .36, .66)), near = lin(vec3(.08, .5, .6));
+  vec3 deep = uDeep, body = uBody, near = mix(uBody, lin(vec3(.08, .5, .6)), .6) * (uBody.b / .39);
   float face = clamp(vW.y * 1.4 + .35, 0., 1.) * clamp(dot(normalize(vec3(-uSun.x, .2, -uSun.z)), -N) + .6, 0., 1.);
   vec3 c = mix(deep, body, face * .7 + .12);
   c = mix(c, near, (1. - smoothstep(1., 9., s)) * .45);
   float sh = sunShadow(vW, vec3(0., 1., 0.));
-  c *= mix(.5, 1., sh) * (SUNC.r * .32 + .25);
+  c *= mix(.5, 1., sh) * (uSunC.r * .32 + .25);
+  // (the swell's relief: faces turned to the light brighter, backs and troughs darker)
+  float relief = clamp(dot(normalize(vN), normalize(uSun + vec3(0., .9, 0.))), 0., 1.);
+  c *= .45 + 1.05 * pow(relief, 2.2);
+  c *= .8 + .45 * clamp(vW.y / max(.4, uSea.x * .9), -.5, 1.);
   c = mix(c, skyCol(R), fres * .75);
   float sd = max(dot(R, uSun), 0.);
-  c += lin(vec3(1., .93, .78)) * (pow(sd, 90.) * .7 + pow(sd, 900.) * 9. * step(.55, noise2(P * 3.3 + uTime))) * sh;
+  c += uSunC / 2.7 * (pow(sd, 90.) * .7 + pow(sd, 900.) * 9. * step(.55, noise2(P * 3.3 + uTime))) * sh;
+  // (the searchlight on the water, and its glitter)
+  vec3 sp = spot(vW, N);
+  c += sp * (uBody * .2 + .035 + .06 * pow(max(0., dot(R, normalize(uSpot.xyz - vW))), 30.));
   // ─── foam ───
-  float crest = smoothstep(.64, .32, vFold) * (.5 + .5 * lace(P * .42 + vec2(uTime * .12, 0.) + fbm(P * .2) * 1.2));
+  float crest = smoothstep(.56 + .08 * uSeaLook.x, .28, vFold) * (.5 + .5 * lace(P * .42 + vec2(uTime * .12 * uSeaLook.z, 0.) + fbm(P * .2) * 1.2));
   // (wind streaks: the lace drawn out along the way the waves run, wandering)
   vec2 wd = vec2(.52, .85), q = vec2(dot(P, vec2(wd.y, -wd.x)) * .32, dot(P, wd) * .1) + vec2(fbm(P * .06), fbm(P * .06 + 5.)) * 2.2;
-  float veins = lace(q + vec2(0., -uTime * .06)) * smoothstep(.55, .85, fbm(P * .035 + uTime * .01)) * smoothstep(.35, .7, noise2(P * .4)) * .26;
+  float veins = lace(q + vec2(0., -uTime * .06)) * smoothstep(.62 - .08 * uSeaLook.x, .9, fbm(P * .035 + uTime * .01 * uSeaLook.z)) * smoothstep(.35, .7, noise2(P * .4)) * .26 * min(1.6, uSeaLook.x);
   float surfBand = 1. - smoothstep(.0, 8.5, s);
   float surge = .5 + .5 * sin(s * 1.15 - uTime * 2.3 + noise2(P * .15) * 6.);
   float surf = clamp((1. - smoothstep(.0, 2.6, s)) + surfBand * surge * (.45 + .55 * lace(P * .7 + uTime * .2)), 0., 1.);
   float foam = clamp(max(max(crest, veins), surf), 0., 1.);
   foam *= .75 + .25 * noise2(P * 3.1 + uTime * .5);
-  vec3 white = lin(vec3(.97, .99, 1.)) * (SUNC * max(.25, N.y) * mix(.45, 1., sh) * .38 + skyFill(vec3(0., 1., 0.)));
+  vec3 white = lin(vec3(.97, .99, 1.)) * (uSunC * max(.25, N.y) * mix(.45, 1., sh) * .38 + skyFill(vec3(0., 1., 0.)) + sp * .5);
   c = mix(c, white, foam);
   o = vec4(grade(aerial(c, vW)), 1.);
 }`;
@@ -372,14 +410,14 @@ void main() {
   float n1 = fbm(vW.xz * 1.7 + age * .7), n2 = fbm(vW.xz * .8 - age * .3);
   float a = (wash * smoothstep(.2, .55, n1 + .15) + arms * smoothstep(.38, .62, n2) * .9) * k;
   if (a < .01) discard;
-  vec3 c = lin(vec3(.97, .99, 1.)) * (SUNC * .4 + skyFill(vec3(0., 1., 0.)));
-  o = vec4(grade(c), clamp(a, 0., 1.));
+  vec3 c = lin(vec3(.97, .99, 1.)) * (uSunC * .4 + skyFill(vec3(0., 1., 0.)) + spot(vW, vec3(0., 1., 0.)) * .5);
+  o = vec4(grade(aerial(c, vW)), clamp(a, 0., 1.));
 }`;
 
 const FX_VS = `#version 300 es
 layout(location = 0) in vec2 aC;
 layout(location = 1) in vec4 iP; layout(location = 2) in vec4 iQ; layout(location = 3) in vec4 iCol;
-uniform mat4 uVP; uniform float uTime; uniform vec3 uRight; uniform vec3 uUp;
+uniform mat4 uVP; uniform float uTime; uniform vec3 uRight; uniform vec3 uUp; uniform vec3 uEye;
 ${FIELD}
 out vec2 vUV; out float vKind; out vec4 vCol;
 void main() {
@@ -389,10 +427,11 @@ void main() {
     vec2 p = iP.xz + aC * iP.w; vec3 n; float f;
     vec3 d = swell(p, uTime, calm(shore(p)), n, f);
     wp = vec3(p.x, d.y + .08, p.y);
-  } else if (kind > 1.5 && kind < 2.5) {
-    // (a stretch of line between two points, facing the camera)
-    vec3 a = iP.xyz, b = iQ.xyz, t = normalize(b - a), side = normalize(cross(t, uUp + uRight * .3));
-    wp = mix(a, b, aC.x * .5 + .5) + side * aC.y * iP.w;
+  } else if (kind > 1.5 && kind < 2.5 || kind > 4.5) {
+    // (a stretch of line between two points, facing the camera; a beam widens as it goes)
+    vec3 a = iP.xyz, b = iQ.xyz, t = normalize(b - a), side = normalize(cross(t, normalize(uEye - mix(a, b, .5))));
+    float u = aC.x * .5 + .5, wdt = kind > 4.5 ? mix(.35, iP.w, u) : iP.w;
+    wp = mix(a, b, u) + side * aC.y * wdt;
   } else wp = iP.xyz + (uRight * aC.x + uUp * aC.y) * iP.w;
   gl_Position = uVP * vec4(wp, 1.);
 }`;
@@ -407,10 +446,11 @@ void main() {
   else if (vKind < 1.5) a = smoothstep(1., .4, d + (noise2(vUV * 3. + vCol.a * 9.) - .5) * .6);
   else if (vKind < 2.5) a = smoothstep(1., .5, abs(vUV.y));
   else if (vKind < 3.5) { float ang = atan(vUV.y, vUV.x), dash = step(.4, fract(ang / 6.2832 * 22. - uTime * .3)); a = smoothstep(.1, .0, abs(d - .9)) * dash; }
-  else a = max(0., 1. - abs(vUV.x * vUV.y) * 30.) * smoothstep(1., .1, d) + smoothstep(.3, .0, d);
+  else if (vKind < 4.5) a = max(0., 1. - abs(vUV.x * vUV.y) * 30.) * smoothstep(1., .1, d) + smoothstep(.3, .0, d);
+  else { float u = vUV.x * .5 + .5; a = (1. - smoothstep(.0, 1., abs(vUV.y))) * pow(1. - u, 1.4) * smoothstep(.0, .06, u); }
   a *= vCol.a > 1. ? 1. : vCol.a;
   if (a < .01) discard;
-  vec3 lit = vKind > 1.5 && vKind < 2.5 ? c * (SUNC * .6 + skyFill(vec3(0., 1., 0.))) : vKind > 3.5 ? c * 3. : c * (SUNC * .42 + skyFill(vec3(0., 1., 0.)));
+  vec3 lit = vKind > 4.5 ? c * 2.5 : vKind > 1.5 && vKind < 2.5 ? c * (uSunC * .6 + skyFill(vec3(0., 1., 0.))) : vKind > 3.5 ? c * 3. : c * (uSunC * .42 + skyFill(vec3(0., 1., 0.)));
   o = vec4(grade(lit), clamp(a, 0., 1.));
 }`;
 
@@ -432,8 +472,6 @@ type Prog = ReturnType<typeof compile>;
 interface Kind { vao: WebGLVertexArrayObject; count: number; inst: WebGLBuffer; pivot: readonly [number, number] }
 interface Static { z0: number; z1: number; vao: WebGLVertexArrayObject; count: number; n: number; mode: number; indexed?: boolean; far?: WebGLVertexArrayObject; farCount?: number }
 
-/** the sun: high, off to the screen's right and a little behind you, so faces toward you are lit and the shade falls aft */
-export const SUN = (() => { const v = [-0.5, 0.72, -0.35], l = Math.hypot(v[0], v[1], v[2]); return v.map((x) => x / l); })();
 const SHADOW = 2048;
 
 export class Renderer {
@@ -560,6 +598,7 @@ export class Renderer {
     const gl = this.gl;
     // ─── 1. the sun's shadow map, round the followed boat ───
     const [fx, fz] = f.focus, cx = fx, R = 75;
+    const W = f.weather, SUN = W.sun;
     const lv = mat4.lookAt([cx + SUN[0] * 200, SUN[1] * 200, fz + 20 + SUN[2] * 200], [cx, 0, fz + 20], [0, 1, 0]);
     const lp = mat4.ortho(-R, R, -R, R, 20, 420), lvp = mat4.mul(lp, lv);
     // (snapped to the map's texels, so shadows don't crawl as the boat moves)
@@ -588,12 +627,20 @@ export class Renderer {
       gl.uniform1i(p.u('uShadow'), 1); gl.uniform3fv(p.u('uEye'), f.eye); gl.uniform3fv(p.u('uSun'), SUN);
       gl.uniform1f(p.u('uTime'), f.time); gl.uniform2f(p.u('uRes'), width, height);
       gl.uniform1i(p.u('uField'), 0); gl.uniform4f(p.u('uFieldBox'), X0, Z0, CELL, NX);
+      gl.uniform2f(p.u('uSea'), SEA.height, SEA.chop);
+      gl.uniform3fv(p.u('uSunC'), W.sunColour.map((v) => lin([v])[0] * W.sunStrength));
+      gl.uniform3fv(p.u('uFillSky'), lin(W.fillSky)); gl.uniform3fv(p.u('uFillGround'), lin(W.fillGround));
+      gl.uniform3fv(p.u('uSkyTop'), lin(W.skyTop)); gl.uniform3fv(p.u('uSkyHor'), lin(W.skyHorizon)); gl.uniform3fv(p.u('uHaze'), lin(W.haze));
+      gl.uniform4f(p.u('uFog'), W.fogStart, W.fogScale, W.fogMax, f.flash);
+      gl.uniform4f(p.u('uLook'), W.exposure, W.saturation, W.dark, 0);
+      gl.uniform4fv(p.u('uSpot'), f.spot); gl.uniform3fv(p.u('uSpotDir'), f.spotDir);
     };
     gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, this.field);
     gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, this.shadowTex);
     const inView = (z0: number, z1: number) => z1 >= f.zMin && z0 <= f.zMax;
     // ─── 2. the sky ───
     common(this.sky); gl.uniformMatrix4fv(this.sky.u('uInvVP'), false, mat4.invert(f.vp));
+    gl.uniform4f(this.sky.u('uCloud'), W.cloud, W.cloudDark, W.wind, W.stars ? 1 : 0);
     gl.depthMask(false); gl.bindVertexArray(this.skyVao); gl.drawArrays(gl.TRIANGLES, 0, 3); gl.depthMask(true);
     // ─── 3. the ground ───
     common(this.land);
@@ -613,11 +660,12 @@ export class Renderer {
     for (const p of this.props) if (inView(p.z0, p.z1)) { gl.bindVertexArray(p.vao); gl.drawArraysInstanced(gl.TRIANGLES, 0, p.count, 1); }
     for (const d of f.draws) { const k = this.kinds.get(d.kind); if (k && d.list.n) { gl.uniform2fv(O.u('uPivot'), k.pivot); gl.bindVertexArray(k.vao); gl.drawArraysInstanced(gl.TRIANGLES, 0, k.count, d.list.n); } }
     // ─── 5. the sea ───
-    const W = this.water;
-    common(W);
+    const Wp = this.water;
+    common(Wp);
+    gl.uniform3fv(Wp.u('uDeep'), lin(W.deep)); gl.uniform3fv(Wp.u('uBody'), lin(W.body)); gl.uniform3f(Wp.u('uSeaLook'), W.foam, W.rain, W.wind);
     const S = Renderer.WS;
-    gl.uniform2f(W.u('uOffset'), Math.round(fx / S) * S, Math.round((fz + 25) / S) * S);
-    gl.uniform4fv(W.u('uHoles'), f.holes.length ? f.holes : new Float32Array(48)); gl.uniform1i(W.u('uHoleCount'), f.holeCount);
+    gl.uniform2f(Wp.u('uOffset'), Math.round(fx / S) * S, Math.round((fz + 25) / S) * S);
+    gl.uniform4fv(Wp.u('uHoles'), f.holes.length ? f.holes : new Float32Array(48)); gl.uniform1i(Wp.u('uHoleCount'), f.holeCount);
     gl.bindVertexArray(this.waterVao); gl.drawElements(gl.TRIANGLES, this.waterCount, gl.UNSIGNED_INT, 0);
     // ─── 6. wakes, 7. marks ───
     gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA); gl.depthMask(false);

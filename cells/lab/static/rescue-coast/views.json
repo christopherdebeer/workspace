@@ -72,5 +72,58 @@
     "file": "v-study.jpg"
    }
   ]
+ },
+ {
+  "group": "Weather",
+  "views": [
+   {
+    "name": "weather-calm",
+    "title": "Calm",
+    "caption": "a gentle swell, little foam, gulls",
+    "file": "v-weather-calm.jpg"
+   },
+   {
+    "name": "weather-windy",
+    "title": "Windy",
+    "caption": "a bigger, steeper sea; whitecaps and streaks of foam; spray flying",
+    "file": "v-weather-windy.jpg"
+   },
+   {
+    "name": "weather-stormy",
+    "title": "Stormy",
+    "caption": "a big grey sea under a lid of cloud; rain, lightning, the beams already turning",
+    "file": "v-weather-stormy.jpg"
+   },
+   {
+    "name": "weather-foggy",
+    "title": "Foggy",
+    "caption": "the coast lost in it; the lighthouses’ beams and the searchlight cut through",
+    "file": "v-weather-foggy.jpg"
+   },
+   {
+    "name": "weather-night",
+    "title": "Night",
+    "caption": "stars, the moon on the water, windows lit, the beams turning, your searchlight ahead",
+    "file": "v-weather-night.jpg"
+   },
+   {
+    "name": "weather-sunset",
+    "title": "Sunset",
+    "caption": "the sun low ahead, the sea gold and the cliffs warm",
+    "file": "v-weather-sunset.jpg"
+   },
+   {
+    "name": "storm-wide",
+    "title": "A storm, on a bigger screen",
+    "caption": "the swell high enough to hide the next boat",
+    "file": "v-storm-wide.jpg"
+   },
+   {
+    "name": "night-wide",
+    "title": "Night, on a bigger screen",
+    "caption": "your searchlight on the water, the lighthouse beam sweeping the harbour mouth",
+    "file": "v-night-wide.jpg"
+   }
+  ]
  }
 ]

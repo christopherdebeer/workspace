@@ -18,10 +18,11 @@ It shares no code with the original [Rescue Race](/rescue), which stays as it is
 | choose your boat | tap one of the five cards | |
 | how good the others are | easy, medium or hard | |
 | go | the yellow button | enter or space |
-| steer | the joystick in the bottom corner: left and right turn, up goes faster, down slows and backs | the arrow keys, or WASD |
+| the weather | sunny, calm, windy, stormy, foggy, night or sunset | |
+| steer | the joystick in the bottom-right corner: left and right turn, up goes faster, down slows and backs | the arrow keys, or WASD |
 | stop | let go of the stick | let go of the keys |
 
-- **The joystick stays put** in the bottom-left corner (or bottom-right: the switch on the line-up, or `?hand=right`), so your thumb never covers the sea ahead. Push it to one side alone and the boat turns while going steadily on. Let go and the knob springs home and the boat eases to a stop.
+- **The joystick stays put** in the bottom-right corner (or bottom-left: the switch on the line-up, or `?hand=left`), so your thumb never covers the sea ahead. Push it to one side alone and the boat turns while going steadily on. Let go and the knob springs home and the boat eases to a stop.
 - **Your boat:** one of five lifeboats, all in the lifeboat look (navy hull, red below the waterline, RNLI along the bow, a tall black mast), each wheelhouse in its own colour: Puffin orange, Seal red, Gannet blue, Otter yellow, Dolphin green. That's how you tell them apart out on the water, and it's the colour of your chip in the places.
 - **The camera** rides high behind your boat, turning with it but smoothly. It rises over a cliff rather than look through it.
 
@@ -78,6 +79,37 @@ One field says where the land is: the distance to the nearest shore, positive ov
 ![On a bigger screen](rescue-coast/v-wide.jpg)
 ![The lifeboat](rescue-coast/v-study.jpg)
 
+## The weather
+
+Picked on the line-up (`?weather=`), from the boards' weather panel: Calm, Windy, Foggy, Choppy, Night, plus the title card's sunset. Each one sets:
+- **the sea:**
+  - how high the waves are and how steep (the boats ride the same waves, so a big sea pitches and rolls them and throws spray off the bow);
+  - how much foam: whitecaps where the crests fold, streaks along the wind, surf on the rocks;
+- **the light:** the sun's way, colour and strength (the moon's, at night), and the sky's fill in the shade;
+- **the sky:** its colours, how much cloud and how dark beneath, stars on a clear night;
+- **the air:** fog, how near it starts and how thick it gets.
+
+| | the sea | the air | and |
+|---|---|---|---|
+| ☀️ sunny | choppy, whitecaps | clear, cumulus | gulls |
+| 🌤️ calm | a gentle swell | clear | gulls |
+| 💨 windy | bigger, steeper, foam streaks, spray flying | broken cloud racing | gulls |
+| ⛈️ stormy | high and grey, the next boat lost behind a wave | a lid of dark cloud, rain | lightning and thunder; the beams turning |
+| 🌫️ foggy | moderate | thick fog, the coast lost in it | lighthouse beams and your searchlight cut through; a foghorn |
+| 🌙 night | moderate | stars, the moon on the water | windows lit, beams turning, your searchlight ahead |
+| 🌅 sunset | moderate | low gold sun ahead | the sea and cliffs warm |
+
+The weather doesn't change the rules: every boat rides the same sea.
+
+![Windy](rescue-coast/v-weather-windy.jpg)
+![Stormy](rescue-coast/v-weather-stormy.jpg)
+![Foggy](rescue-coast/v-weather-foggy.jpg)
+![Night](rescue-coast/v-weather-night.jpg)
+![Sunset](rescue-coast/v-weather-sunset.jpg)
+![Calm](rescue-coast/v-weather-calm.jpg)
+![A storm, on a bigger screen](rescue-coast/v-storm-wide.jpg)
+![Night, on a bigger screen](rescue-coast/v-night-wide.jpg)
+
 ## The other boats
 
 Each of the four is steered by the game:
@@ -103,7 +135,7 @@ Its own WebGL2 renderer: the lab ships one bundle with no packages, so Three.js 
 - **The finish:** one filmic tone curve over everything.
 
 The sea:
-- **The swell:** six Gerstner waves, the same sums on the CPU (the boats ride them) and in GLSL.
+- **The swell:** eight Gerstner waves, from a 24 m swell down to 1.7 m chop, the same sums on the CPU (the boats ride them) and in GLSL; the weather scales their height and steepness. Faces turned to the light are brighter, backs and troughs darker, so the relief reads from above.
 - **Its colour:** deep cobalt, lighter where the light comes through a wave, the sky reflected in it, sun glitter.
 - **Foam:**
   - lace where the crests fold;
@@ -151,12 +183,12 @@ The sea:
 - `?near=n` (or `near=any`) a little boat and the lifeboat coming for it;
 - `?study` a close look at your lifeboat;
 - `?zoom=`;
-- `?hand=right`;
+- `?hand=left`;
+- `?weather=sunny|calm|windy|stormy|foggy|night|sunset`;
 - `?preview` small and quiet.
 
 **Not here yet**, though the boards have them:
 - the world map and missions;
-- weather (windy, foggy, stormy, night);
 - stars, shells and stickers;
 - towing;
 - the other kinds of boat (inshore, hovercraft, RIB).

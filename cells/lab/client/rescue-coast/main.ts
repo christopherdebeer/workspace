@@ -8,14 +8,15 @@
  *
  * Addresses: `?seed=` a coast; `?level=easy|medium|hard`; `?boat=0..4`; `?auto` (every boat the game's); `?t=40` that
  * far into the race; `?still` time held; `?view=podium`; `?near=n` little boat n and the boat coming for it;
- * `?study` a close look at your boat; `?zoom=`; `?hand=right` the joystick on the right; `?preview` small and quiet.
+ * `?weather=sunny|calm|windy|stormy|foggy|night|sunset`; `?study` a close look at your boat; `?zoom=`; `?hand=left` the joystick on the left (it's on the right unless asked); `?preview` small and quiet.
  */
 import { CLEAR, GATE_HALF, GATE_Z, START_Z, groundAt, makeCoast, shoreAt, type Coast } from './coast';
 import { BOATS, CLIMB, HALF_BEAM, LEVELS, LINE, VMAX, local, newRace, runFor, standings, start, step, world, type Level, type Race, type Rescue } from './race';
 import { makeWorld } from './world';
 import { FX, Instances, Renderer, mat4, type Draw, type Frame } from './render';
 import { ROOF, ROOF_Y, SEATS, SHOULDER, WING, buoyMesh, craftMesh, deckAt, gull, lifeboat, person } from './models';
-import { calmAt, heightAt } from './waves';
+import { SEA, calmAt, heightAt } from './waves';
+import { WEATHERS, WEATHER_ORDER, type Weather, type WeatherName } from './weather';
 import { Marks, Wakes } from './fx';
 import { Sound } from './sound';
 import { Joystick } from './joystick';
@@ -26,7 +27,7 @@ const auto = params.has('auto') || preview;
 const zoom = Number(params.get('zoom') ?? 1) || 1;
 const $ = (id: string) => document.getElementById(id) as HTMLElement;
 if (preview || study) document.body.classList.add('preview');
-if (params.get('hand') === 'right') document.body.classList.add('hand-right');
+if (params.get('hand') !== 'left') document.body.classList.add('hand-right');
 
 // ─── looks (sRGB) ───
 const SKINS = [[0.98, 0.82, 0.68], [0.93, 0.72, 0.55], [0.8, 0.57, 0.4], [0.62, 0.42, 0.28], [0.45, 0.3, 0.2], [0.99, 0.86, 0.74]];
@@ -42,6 +43,13 @@ let seed = Number(params.get('seed') ?? 1 + Math.floor(Math.random() * 999)) || 
 let level = (['easy', 'medium', 'hard'].includes(params.get('level') ?? '') ? params.get('level') : 'easy') as Level;
 let mine = Math.max(0, Math.min(4, Number(params.get('boat') ?? 0) || 0));
 let coast!: Coast, race!: Race;
+let weather: Weather = WEATHERS.sunny;
+/** the weather: the sea's height and steepness (the boats ride the same waves), the light, the air, the sounds */
+function setWeather(name: WeatherName) {
+  weather = WEATHERS[name] ?? WEATHERS.sunny;
+  SEA.height = weather.height; SEA.chop = weather.chop;
+  sound.weather(weather.wind, weather.rain);
+}
 let ui: 'lineup' | 'race' | 'podium' = 'lineup';
 const marks = new Marks(), wakes = new Wakes(), sound = new Sound();
 const canvas = $('sea') as HTMLCanvasElement;
@@ -135,7 +143,7 @@ function camera(dt: number, t: number, w: number, h: number) {
     const yaw = camYaw + camLean, look = k ? 3 : 13;
     const tx = b.x + Math.sin(camYaw) * look, tz = b.z + Math.cos(camYaw) * look;
     camAt.x += (tx - camAt.x) * (dt > 0 ? 1 - Math.exp(-dt * 6) : 1); camAt.z += (tz - camAt.z) * (dt > 0 ? 1 - Math.exp(-dt * 6) : 1);
-    target = [camAt.x, 1.5, camAt.z];
+    target = [camAt.x, 1.5 + (poses[b.id]?.y ?? 0) * 0.6, camAt.z];
     // (rise over a cliff rather than look through it)
     let el = camEl;
     for (let tries = 0; tries < 6; tries++) {
@@ -255,7 +263,7 @@ function people(t: number, dt: number) {
     lists['buoy-' + y.kind].push(y.x, h - 0.05, y.z, 0, Math.sin(t * 1.3 + y.x) * 0.08, Math.cos(t * 1.1 + y.z) * 0.08, 1, 0, NONE, 0, NONE, 0, NONE, 0);
   }
   // (gulls, wheeling over the boat you follow)
-  for (let i = 0; i < 6; i++) {
+  for (let i = 0; i < (weather.gulls ? 6 : 0); i++) {
     const a = t * (0.22 + i * 0.03) + i * 1.9, r = 16 + i * 4, cx = fz.x + Math.sin(i * 2.3) * 22, cz = fz.z + 26 + Math.cos(i * 1.7) * 30;
     const flap = Math.sin(t * 7 + i * 1.3) > -0.2 ? Math.sin(t * 9 + i) * 0.55 : 0.1;
     lists.gull.push(cx + Math.sin(a) * r, 15 + (i % 3) * 5 + Math.sin(t + i) * 1.2, cz + Math.cos(a) * r, a + Math.PI / 2, 0, Math.sin(a) * 0.2 - 0.25, 1.4, flap, NONE, flap, NONE, 0, NONE, 0);
@@ -272,7 +280,8 @@ function splashes(t: number, dt: number) {
     const s = Math.sin(b.h), c = Math.cos(b.h);
     // (spray off the bow: more when going fast, most when it slams into a wave)
     const slam = Math.max(0, -p.pitch) * 6;
-    if (fast > 0.3 && Math.random() < dt * (30 * fast + 60 * slam)) for (const side of [-1, 1]) {
+    const rough = 0.5 + 0.35 * weather.wind * SEA.height;
+    if (fast > 0.3 && Math.random() < dt * (30 * fast + 60 * slam) * rough) for (const side of [-1, 1]) {
       const x = b.x + s * 4.3 - side * c * 1.2, z = b.z + c * 4.3 + side * s * 1.2;
       marks.spray(x, p.y + 0.4, z, -side * c * (2 + Math.random() * 3) + s * b.v * 0.5, 2 + Math.random() * 3 + slam * 3, side * s * (2 + Math.random() * 3) + c * b.v * 0.5, 0.25 + Math.random() * 0.3);
     }
@@ -284,12 +293,58 @@ function splashes(t: number, dt: number) {
     const i = Math.floor(Math.random() * n), x = S[i * 4], z = S[i * 4 + 1];
     if (Math.abs(x - eye[0]) > 120 || Math.abs(z - eye[2]) > 160) continue;
     const h = heightAt(x, z, t, 1);
-    if (h > 0.32 && Math.random() < dt * 30) {
+    if (h > 0.4 * SEA.height && Math.random() < dt * 30 * (0.5 + 0.5 * weather.wind)) {
       const nx = S[i * 4 + 2], nz = S[i * 4 + 3];
       for (let k = 0; k < 8; k++) marks.spray(x, 0.3, z, nx * (1 + Math.random() * 2) + (Math.random() - 0.5) * 2, 3 + Math.random() * 4, nz * (1 + Math.random() * 2) + (Math.random() - 0.5) * 2, 0.18 + Math.random() * 0.3, 0.9);
       marks.foam(x + nx * 1.5, z + nz * 1.5, nx, nz, 2.2, 1.6, 0.8);
     }
   }
+}
+
+// ─── the air: rain, lightning, the lighthouses' beams, your searchlight ───
+let flash = 0, nextBolt = 6, nextHorn = 8;
+const spotAt = [0, 0, 0, 0], spotDir = [0, -1, 0];
+function atmosphere(t: number, dt: number) {
+  const fb = followed(), cx = camAt.x, cz = camAt.z;
+  // (rain: streaks falling past the camera, slanted by the wind)
+  if (weather.rain > 0) {
+    const slant = weather.wind * 0.9;
+    for (let i = 0; i < 420; i++) {
+      const x = cx + ((i * 0.6180339) % 1 - 0.5) * 70 + Math.sin(i) * 3, z = cz - 20 + ((i * 0.3819660) % 1 - 0.5) * 80;
+      const y = 22 - ((t * 17 + i * 7.31) % 22);
+      marks.put(FX.LINE, x, y, z, 0.014, x - slant * 0.05, y - 0.8, z + slant * 0.03, 0.85, 0.88, 0.92, 0.22 * weather.rain);
+    }
+  }
+  // (lightning: a flash, a flicker, thunder after)
+  if (weather.lightning && dt > 0) {
+    nextBolt -= dt;
+    if (nextBolt <= 0) { flash = 1; nextBolt = 7 + Math.random() * 12; setTimeout(() => sound.thunder(), 500 + Math.random() * 1500); }
+    flash *= Math.exp(-dt * 7);
+    if (flash > 0.2 && flash < 0.35 && Math.random() < 0.3) flash = 0.7;
+  } else flash = 0;
+  // (a foghorn now and then, in the fog)
+  if (weather.name === 'foggy' && ui === 'race' && dt > 0) { nextHorn -= dt; if (nextHorn <= 0) { sound.foghorn(); nextHorn = 22 + Math.random() * 10; } }
+  // (the lighthouses' beams, turning, when it's dark or thick)
+  if (weather.dark > 0.3) {
+    let k = 0;
+    for (const p of coast.props) if (p.kind === 'lighthouse') {
+      if (Math.hypot(p.x - eye[0], p.z - eye[2]) > 650) continue;
+      const small = p.v >= 2, y = p.y + ((small ? 7 : 12) + 1.3) * p.s, a = t * 0.75 + k++ * 1.7;
+      for (const turn of [0, Math.PI]) {
+        const dx = Math.sin(a + turn), dz = Math.cos(a + turn), L = small ? 45 : 80;
+        marks.put(FX.BEAM, p.x, y, p.z, small ? 5 : 9, p.x + dx * L, y - 1.5, p.z + dz * L, 1, 0.9, 0.62, 0.3 * weather.dark);
+      }
+    }
+  }
+  // (your searchlight: on when it's dark, lighting the water ahead)
+  const on = Math.max(0, Math.min(1, (weather.dark - 0.3) / 0.4));
+  const p = poses[fb.id];
+  if (on > 0 && p) {
+    const lamp = onBoat(p, -0.9, ROOF_Y + 0.5, 0.8), pitch = -0.2;
+    spotAt[0] = lamp[0]; spotAt[1] = lamp[1]; spotAt[2] = lamp[2]; spotAt[3] = on;
+    spotDir[0] = Math.sin(fb.h) * Math.cos(pitch); spotDir[1] = Math.sin(pitch); spotDir[2] = Math.cos(fb.h) * Math.cos(pitch);
+    marks.put(FX.BEAM, lamp[0], lamp[1], lamp[2], 5, lamp[0] + spotDir[0] * 32, lamp[1] + spotDir[1] * 32, lamp[2] + spotDir[2] * 32, 1, 0.95, 0.8, 0.16 * on);
+  } else spotAt[3] = 0;
 }
 
 // ─── what's said on the screen ───
@@ -354,6 +409,8 @@ function lineup() {
   for (const el of document.querySelectorAll<HTMLElement>('#boats button')) el.onclick = () => { mine = Number(el.dataset.boat); lineup(); };
   for (const el of document.querySelectorAll<HTMLElement>('#levels button')) { el.classList.toggle('on', el.dataset.level === level); el.onclick = () => { level = el.dataset.level as Level; lineup(); }; }
   $('hand').textContent = document.body.classList.contains('hand-right') ? 'stick on the right ⇄' : 'stick on the left ⇄';
+  $('weather').innerHTML = WEATHER_ORDER.map((n) => `<button data-weather="${n}" class="${n === weather.name ? 'on' : ''}" title="${WEATHERS[n].label}"><span>${WEATHERS[n].icon}</span><small>${WEATHERS[n].label}</small></button>`).join('');
+  for (const el of document.querySelectorAll<HTMLElement>('#weather button')) el.onclick = () => { setWeather(el.dataset.weather as WeatherName); lineup(); };
 }
 function go() {
   if (ui !== 'lineup') return;
@@ -425,6 +482,7 @@ function frame(now: number) {
   const t = vt;
   camera(still ? 0 : dt, t, canvas.width, canvas.height);
   const hc = people(t, still ? 0 : dt);
+  atmosphere(t, still ? 0 : dt);
   wakes.build(vt);
   hud(t);
   const fb = followed(), far = 1800;
@@ -432,12 +490,13 @@ function frame(now: number) {
     vp, eye, time: t, right, up, far,
     zMin: Math.min(eye[2], fb.z) - 160 - 400 * Math.max(0, -Math.cos(camYaw)), zMax: Math.max(eye[2], fb.z) + 160 + 700 * Math.max(0, Math.cos(camYaw)),
     focus: ui === 'podium' ? [coast.berths[2].x, coast.berths[2].z - 30] : [fb.x, fb.z], draws, wakes: wakes.data, wakeCount: wakes.count, fx: marks.data, fxCount: marks.count, holes, holeCount: hc,
+    weather, flash, spot: spotAt, spotDir,
   };
   if (ui === 'lineup') { f.zMin = START_Z - 250; f.zMax = START_Z + 700; }
   if (ui === 'podium') { f.zMin = GATE_Z - 200; f.zMax = GATE_Z + 400; }
   renderer.draw(f, canvas.width, canvas.height);
   (window as unknown as { __rescue: unknown }).__rescue = {
-    variant: 'coast', ui, phase: race.phase, seed, name: coast.name, mine, level, t: race.t, auto, dpr, frameMs: ema,
+    variant: 'coast', ui, phase: race.phase, seed, weather: weather.name, name: coast.name, mine, level, t: race.t, auto, dpr, frameMs: ema,
     stick: { x: stick.x, y: stick.y, held: stick.held },
     boats: race.boats.map((b) => ({ x: b.x, z: b.z, h: b.h, v: b.v, rescued: b.rescued, finished: b.finished, home: b.home })),
     boarding: race.crafts.filter((k) => k.stage === 'line' || k.stage === 'climb').map((k) => ({ craft: k.craft.id, by: k.by, stage: k.stage })),
@@ -446,6 +505,7 @@ function frame(now: number) {
 }
 
 // ─── start ───
+setWeather((params.get('weather') ?? 'sunny') as WeatherName);
 newCoast(seed);
 lineup();
 if (auto || params.has('t') || params.get('view') === 'podium' || study) {

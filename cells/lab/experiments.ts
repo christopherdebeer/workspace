@@ -44,9 +44,9 @@ export const EXPERIMENTS: Experiment[] = [
   },
   {
     id: 'rescue-coast', title: 'Lily’s Rescue Boats', group: 'Play',
-    blurb: 'Lily’s rescue race, built from the concept boards: five toy lifeboats (navy hulls, RNLI on the bow, each wheelhouse its own colour) racing up a granite coast to a harbour. A joystick in the corner steers; come alongside a little boat and stop, the crew throws a line, and its people climb aboard one at a time. Rescue the most and get through the harbour mouth: 1st to 5th. Its own coast, rules and drawing, apart from the original Rescue Race.',
+    blurb: 'Lily’s rescue race, built from the concept boards: five toy lifeboats (navy hulls, RNLI on the bow, each wheelhouse its own colour) racing up a granite coast to a harbour. A joystick in the bottom-right corner steers; the weather is yours to pick (sunny, calm, windy, stormy, foggy, night, sunset); come alongside a little boat and stop, the crew throws a line, and its people climb aboard one at a time. Rescue the most and get through the harbour mouth: 1st to 5th. Its own coast, rules and drawing, apart from the original Rescue Race.',
     page: 'static/rescue-coast.html', preview: 'preview&seed=1', readme: 'static/rescue-coast.md',
-    presets: [{ label: 'play', query: '' }, { label: 'out on the coast', query: 'seed=1&auto&t=24' }, { label: 'coming alongside', query: 'seed=1&auto&t=32.5&near=6' }, { label: 'the lifeboat', query: 'seed=1&auto&t=20&study' }, { label: 'the finish', query: 'seed=1&auto&view=podium' }],
+    presets: [{ label: 'play', query: '' }, { label: 'out on the coast', query: 'seed=1&auto&t=24' }, { label: 'coming alongside', query: 'seed=1&auto&t=32.5&near=6' }, { label: 'the lifeboat', query: 'seed=1&auto&t=20&study' }, { label: 'a storm', query: 'seed=1&auto&t=44&weather=stormy' }, { label: 'fog', query: 'seed=1&auto&t=40&weather=foggy' }, { label: 'night', query: 'seed=1&auto&t=120&weather=night' }, { label: 'sunset', query: 'seed=1&auto&t=40&weather=sunset' }, { label: 'the finish', query: 'seed=1&auto&view=podium' }],
   },
   {
     id: 'labyrinth', title: 'Labyrinth', group: 'Play',

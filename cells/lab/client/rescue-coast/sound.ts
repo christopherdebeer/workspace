@@ -25,7 +25,23 @@ export class Sound {
     const n = ctx.createBufferSource(), nf = ctx.createBiquadFilter(), ng = (this.sea = ctx.createGain());
     n.buffer = buf; n.loop = true; nf.type = 'bandpass'; nf.frequency.value = 600; nf.Q.value = 0.4; ng.gain.value = 0.05;
     n.connect(nf).connect(ng).connect(master); n.start();
+    // (rain: brighter noise, quiet unless it's raining)
+    const r = ctx.createBufferSource(), rf = ctx.createBiquadFilter(), rg = (this.rainGain = ctx.createGain());
+    r.buffer = buf; r.loop = true; rf.type = 'highpass'; rf.frequency.value = 3000; rg.gain.value = 0;
+    r.connect(rf).connect(rg).connect(master); r.start(0, 0.7);
+    this.weather(this.wind, this.rain);
   }
+  private wind = 1; private rain = 0; private rainGain: GainNode | null = null;
+  /** the weather's sounds: the sea and wind louder as it blows, rain hissing */
+  weather(wind: number, rain: number) {
+    this.wind = wind; this.rain = rain;
+    if (!this.ctx) return;
+    const t = this.ctx.currentTime;
+    this.sea?.gain.setTargetAtTime(0.035 + 0.03 * wind, t, 0.5);
+    this.rainGain?.gain.setTargetAtTime(0.08 * rain, t, 0.5);
+  }
+  thunder() { this.noise(2.6, 160, 1.1); this.noise(1.2, 420, 0.4, 0.15); }
+  foghorn() { this.tone(98, 2.2, 'sawtooth', 0.09); this.tone(147, 2.2, 'sawtooth', 0.05); }
   toggle() { this.on = !this.on; if (this.master) this.master.gain.value = this.on ? 0.6 : 0; return this.on; }
   /** the engine: how hard it's working (0..1) */
   throttle(k: number) {

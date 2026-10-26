@@ -1,11 +1,12 @@
 /**
- * The wheel: a joystick that stays put in a bottom corner, so your thumb never covers the sea ahead.
+ * The wheel: a joystick that stays put in a bottom corner (the right, unless asked), so your thumb never covers the sea
+ * ahead.
  *
  * Touch anywhere on it (or near it) and drag: left and right steer, up goes faster, down slows and backs off. Push
  * to one side alone and the boat turns while going steadily on. Let go and the knob springs home and the boat eases to
  * a stop, which is how you come alongside a little boat.
  *
- * Keys do the same (arrows, or WASD). Left-handed? It goes in the other corner (`?hand=right`, or the switch on the
+ * Keys do the same (arrows, or WASD). Left-handed? It goes in the other corner (`?hand=left`, or the switch on the
  * line-up).
  */
 export class Joystick {

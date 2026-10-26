@@ -22,3 +22,14 @@ Made by `node cells/lab/views.mjs rescue-coast` from `client/rescue-coast/views.
 
 ![On a bigger screen: granite cliffs, a cobalt sea laced with foam, the wake churning white](v-wide.jpg)
 ![The lifeboat: navy hull, red below the waterline, RNLI along the bow; the wheelhouse in the boat’s own colour, a tall black mast; the crew in white helmets](v-study.jpg)
+
+## Weather
+
+![Calm: a gentle swell, little foam, gulls](v-weather-calm.jpg)
+![Windy: a bigger, steeper sea; whitecaps and streaks of foam; spray flying](v-weather-windy.jpg)
+![Stormy: a big grey sea under a lid of cloud; rain, lightning, the beams already turning](v-weather-stormy.jpg)
+![Foggy: the coast lost in it; the lighthouses’ beams and the searchlight cut through](v-weather-foggy.jpg)
+![Night: stars, the moon on the water, windows lit, the beams turning, your searchlight ahead](v-weather-night.jpg)
+![Sunset: the sun low ahead, the sea gold and the cliffs warm](v-weather-sunset.jpg)
+![A storm, on a bigger screen: the swell high enough to hide the next boat](v-storm-wide.jpg)
+![Night, on a bigger screen: your searchlight on the water, the lighthouse beam sweeping the harbour mouth](v-night-wide.jpg)

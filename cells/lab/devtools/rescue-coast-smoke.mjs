@@ -31,7 +31,7 @@ await withWood(async (lab) => {
   ok('and the race is on', s.phase === 'racing', [s.phase, s.frameMs]);
   // (the joystick: where it is, and that it stays put out of the way, in the bottom corner)
   const base = await p.locator('#stick .base').boundingBox(), vw = await p.evaluate(() => [innerWidth, innerHeight]);
-  ok('the joystick in the bottom-left corner', base && base.x < vw[0] * 0.4 && base.y > vw[1] * 0.7, base);
+  ok('the joystick in the bottom-right corner (the default)', base && base.x > vw[0] * 0.55 && base.y > vw[1] * 0.7, base);
   const cx = base.x + base.width / 2, cy = base.y + base.height / 2;
   const b0 = (await state(p)).boats[2];
   await p.mouse.move(cx, cy); await p.mouse.down(); await p.mouse.move(cx, cy - 60, { steps: 4 });
@@ -54,10 +54,16 @@ await withWood(async (lab) => {
   ok('no errors', !errors.length, errors.slice(0, 3));
   await p.close();
   // (left-handed: the stick in the other corner)
-  const q0 = await lab.open('seed=2&hand=right&t=5&auto&boat=0');
+  const q0 = await lab.open('seed=2&hand=left&t=5&auto&boat=0');
   await q0.waitForTimeout(1500);
   const rb = await q0.locator('#stick .base').boundingBox();
-  ok('hand=right: the joystick in the bottom-right corner', rb && rb.x > vw[0] * 0.55, rb);
+  ok('hand=left: the joystick in the bottom-left corner', rb && rb.x < vw[0] * 0.4, rb);
+  // (the weather: picked on the line-up)
+  const w0 = await lab.open('seed=2');
+  await w0.click('#weather button[data-weather="stormy"]');
+  const ws = await until(w0, (x) => x.weather === 'stormy', 60000);
+  ok('the weather, chosen on the line-up (stormy)', ws.weather === 'stormy', ws.weather);
+  await w0.close();
   await q0.close();
   const q = await lab.open('seed=2&auto&view=podium&still');
   await q.waitForTimeout(2500);

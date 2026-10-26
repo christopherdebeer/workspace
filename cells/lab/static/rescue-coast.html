@@ -87,6 +87,11 @@
     #levels { display: flex; gap: 3px; padding: 3px; border-radius: 16px; background: rgba(19, 40, 90, .09); }
     #levels button { padding: 5px 13px; border-radius: 13px; font-size: 13px; }
     #levels button.on { background: #fff; box-shadow: 0 1px 4px rgba(10, 30, 70, .2); font-weight: 800; }
+    #weather { display: flex; gap: 4px; flex-wrap: wrap; justify-content: center; }
+    #weather button { display: flex; flex-direction: column; align-items: center; width: 46px; padding: 4px 0 3px; border-radius: 12px; background: rgba(19, 40, 90, .07); }
+    #weather button span { font-size: 19px; line-height: 1.1; }
+    #weather button small { font-size: 10px; opacity: .75; }
+    #weather button.on { background: #fff; box-shadow: 0 0 0 2.5px var(--ink); }
     #hand { font-size: 12px; padding: 5px 10px; border-radius: 13px; background: rgba(19, 40, 90, .09); }
     .yellow { min-width: 190px; padding: 12px 28px; border-radius: 26px; background: var(--gold); color: var(--ink); font-size: 23px; font-weight: 900; text-align: center; box-shadow: inset 0 -4px 0 rgba(150, 90, 0, .35), 0 4px 12px rgba(10, 30, 70, .3); transition: transform .08s; }
     .yellow:active { transform: scale(.96); }
@@ -130,6 +135,7 @@
     <h1>Lily’s Rescue Boats<small>a game by Lily</small></h1>
     <p class="how">Steer with the stick. Come alongside the little boats and stop: your crew throws a line and everyone climbs aboard. Rescue the most, then race through the harbour mouth!</p>
     <div id="boats"></div>
+    <div id="weather"></div>
     <div class="row"><div id="levels"><button data-level="easy">easy</button><button data-level="medium">medium</button><button data-level="hard">hard</button></div><button id="hand"></button></div>
     <button id="go" class="yellow">▶ Go!</button>
     <div class="seed">the coast: <span id="seedname"></span><button id="newsea">a new coast</button></div>

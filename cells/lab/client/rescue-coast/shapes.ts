@@ -6,13 +6,14 @@
  *   a sail: the fraction is how free it is, 0 at the pole to 1 at the free end).
  * - **mat** = source + 4 × material. The source says where the colour comes from: 0 the vertex's own, 1/2/3 the
  *   instance's colours A/B/C (multiplied by the vertex colour, so a vertex can shade them). Materials: 0 matte,
- *   1 glossy painted plastic, 2 glass or metal, 3 skin and cloth, 4 granite, 5 lit (lamps), 6 foliage, 7 white sail.
+ *   1 glossy painted plastic, 2 glass or metal, 3 skin and cloth, 4 granite, 5 lit (lamps), 6 foliage, 7 white sail,
+ *   8 a window (dark glass by day, lit warm once it's dark).
  */
 export const STRIDE = 11;
 export type V3 = [number, number, number];
 export type RGB = readonly [number, number, number];
 export interface Mesh { data: Float32Array; count: number }
-export const M = { MATTE: 0, PAINT: 1, GLASS: 2, SOFT: 3, ROCK: 4, LIT: 5, LEAF: 6, SAIL: 7 } as const;
+export const M = { MATTE: 0, PAINT: 1, GLASS: 2, SOFT: 3, ROCK: 4, LIT: 5, LEAF: 6, SAIL: 7, WINDOW: 8 } as const;
 export const SRC = { OWN: 0, A: 1, B: 2, C: 3 } as const;
 export const WHITE: RGB = [1, 1, 1];
 
