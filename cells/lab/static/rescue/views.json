@@ -1,0 +1,65 @@
+[
+ {
+  "group": "The race",
+  "views": [
+   {
+    "name": "lineup",
+    "title": "The line-up",
+    "caption": "choose your boat, how good the others are, and go",
+    "file": "v-lineup.jpg"
+   },
+   {
+    "name": "racing",
+    "title": "Out on the sea",
+    "caption": "thirty seconds in: the first rescued aboard, the places along the top, how far to the finish down the side",
+    "file": "v-racing.jpg"
+   }
+  ]
+ },
+ {
+  "group": "The rescue",
+  "views": [
+   {
+    "name": "waving",
+    "title": "Near enough",
+    "caption": "a boat swings in; the people in the tiny boat wave both arms",
+    "file": "v-waving.jpg"
+   },
+   {
+    "name": "jump",
+    "title": "Coming across",
+    "caption": "one at a time, in an arc, onto the deck",
+    "file": "v-jump.jpg"
+   },
+   {
+    "name": "deck",
+    "title": "A full deck",
+    "caption": "everyone rescued stands on the deck, then the side decks, the stern, the wheelhouse roof",
+    "file": "v-deck.jpg"
+   }
+  ]
+ },
+ {
+  "group": "The finish",
+  "views": [
+   {
+    "name": "finish",
+    "title": "The finish line",
+    "caption": "a chequered band across the water, a lighthouse at each end",
+    "file": "v-finish.jpg"
+   },
+   {
+    "name": "podium",
+    "title": "1st to 5th",
+    "caption": "the boats in the harbour at their berths; the places, by most rescued",
+    "file": "v-podium.jpg"
+   },
+   {
+    "name": "wide",
+    "title": "On a bigger screen",
+    "caption": "the same race, wider",
+    "file": "v-wide.jpg"
+   }
+  ]
+ }
+]

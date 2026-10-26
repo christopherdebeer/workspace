@@ -30,6 +30,7 @@ const experiments: Record<string, () => Promise<unknown>> = {
   labyrinth: () => import('./labyrinth/main'),
   cloudfold: () => import('./cloudfold/main'),
   imperecept: () => import('./imperecept/main'),
+  rescue: () => import('./rescue/main'),
 };
 
 // (loaded as a worker by an experiment that shapes off the page's thread: serve it)

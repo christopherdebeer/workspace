@@ -37,6 +37,12 @@ export const EXPERIMENTS: Experiment[] = [
     presets: [{ label: 'build', query: '' }, { label: 'a courtyard house', query: 'demo=courtyard' }, { label: 'a castle', query: 'demo=castle' }, { label: 'an arcade', query: 'demo=arcade' }, { label: 'an aqueduct', query: 'demo=aqueduct' }, { label: 'standing stones', query: 'demo=stones' }, { label: 'a house', query: 'demo=house' }, { label: 'a harbour', query: 'demo=harbour' }, { label: 'the stuffs', query: 'demo=courtyard&debug=3' }],
   },
   {
+    id: 'rescue', title: 'Rescue Race', group: 'Play',
+    blurb: 'A game designed by Lily. Little people are waiting out on the sea in tiny boats of every colour; steer your boat near enough and they jump across onto yours. Rescue as many as you can and reach the finish line: four other boats are out there doing the same, and the winner is the boat that rescued the most, 1st to 5th. Hold a finger where you want to go.',
+    page: 'static/rescue.html', preview: 'preview', readme: 'static/rescue.md',
+    presets: [{ label: 'play', query: '' }, { label: 'a new sea', query: 'seed=moss-ford-7' }, { label: 'mid-race', query: 'auto&t=45' }, { label: 'the five racing', query: 'auto' }, { label: 'the finish', query: 'view=podium' }],
+  },
+  {
     id: 'labyrinth', title: 'Labyrinth', group: 'Play',
     blurb: 'Architecture that follows the hand, on a piece of land: shelves, a ravine with a stream, an outcrop (or the flat travertine slab). Built on a grid of half cells, so a wall or a path is thin unless it\'s built up, and a pier, a setback or a recess can be half a cell; a flight still climbs a level a cell. Five brushes: auto reads gestures (tap raises, trace builds a wall, reaches out or climbs) and the stone works out what it takes to stand; a piece brush for one thing exactly, or dressing (brick, marble, moss, ivy, parapets, lanterns, pots); take; and select, to take up a piece or a whole arcade, flight or tower and read it another way. Arches and arcades under what has nothing beneath it, courtyards where walls close round the ground. Each land is built in one of four traditions, grammars of construction rather than costumes: the middle sea\'s terracotta and round arches; the plateau\'s flat tops, pointed arches and lit windows in painted frames; the north\'s timber frame, steep slate gables stepped in brick, dormers and chimneys; the east\'s whitewash between dark posts and deep grey eaves turned up at the corners. Kept as a print, too.',
     page: 'static/labyrinth.html', preview: 'preview', readme: 'static/labyrinth.md',
