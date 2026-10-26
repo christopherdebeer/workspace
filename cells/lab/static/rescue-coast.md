@@ -20,7 +20,7 @@ It shares no code with the original [Rescue Race](/rescue), which stays as it is
 
 ## The menu
 
-The title is the boards' title card: your lifeboat charging along under the lighthouse's headland in the weather you've chosen, the logo (*All boats home* under it), and the menu:
+The title is the boards' title card: your lifeboat charging along under the lighthouse's headland in the weather you've chosen (round a smooth loop worked out for each coast: out along the rocks, a wide slow turn, back further out, a wide turn home, leaning into the turns; the camera waits a little way ahead round the loop and eases after it, so the picture never jumps or starts over), the logo (*All boats home* under it), and the menu:
 - **Play:** straight out on a call, in the Rescue Service.
 - **Rally:** Lily's race.
 - **Boats:** choose your lifeboat. All five are the same all-weather lifeboat: a navy hull with tyre fenders along its sides, a tall rounded wheelhouse with framed windows and an upper steering position, a black mast; each wheelhouse in its own colour: Puffin orange, Seal red, Gannet blue, Otter yellow, Dolphin green. Each shows your best with it.
@@ -216,7 +216,7 @@ The sea:
 - **Already in place:**
   - distant ground and boulders are drawn coarser;
   - people and gulls are left out of the shadows;
-  - the screen's resolution follows the frame time, between 0.8 and 1.75 × the CSS pixel.
+  - the screen's resolution follows the frame time, between 0.8 and 1.75 × the CSS pixel, without see-sawing: a level that was too slow isn't tried again for half a minute, and on the title it only ever steps down.
 - **Not yet done:** it hasn't been timed on a phone.
 
 | | |
@@ -243,6 +243,7 @@ The sea:
 
 **Addresses:**
 - `?mode=rally` the Rally (the Service unless asked);
+- `?at=` the title's clock, in seconds round its loop (with `still`, one moment of it);
 - `?seed=` a coast;
 - `?level=easy|medium|hard`;
 - `?boat=0..4` yours;

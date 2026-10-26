@@ -9,7 +9,7 @@
  *
  * Addresses: `?seed=` a coast; `?level=easy|medium|hard`; `?boat=0..4`; `?auto` (every boat the game's); `?t=40` that
  * far into the race; `?still` time held; `?view=podium`; `?near=n` little boat n and the boat coming for it;
- * `?mode=rally` the Rally; `?weather=sunny|calm|windy|stormy|foggy|night|sunset`; `?study` a close look at your boat; `?zoom=`; `?hand=left` the joystick on the left (it's on the right unless asked); `?preview` small and quiet.
+ * `?mode=rally` the Rally; `?at=` the title's clock (seconds round its loop); `?weather=sunny|calm|windy|stormy|foggy|night|sunset`; `?study` a close look at your boat; `?zoom=`; `?hand=left` the joystick on the left (it's on the right unless asked); `?preview` small and quiet.
  */
 import { CLEAR, GATE_HALF, GATE_Z, START_Z, groundAt, makeCoast, seaAt, seaward, shoreAt, type Coast } from './coast';
 import { BOATS, CLIMB, HALF_BEAM, LEVELS, LINE, VMAX, local, newRace, runFor, standings, start, step, world, type Level, type Mode, type Race, type Rescue } from './race';
@@ -77,7 +77,7 @@ function newCoast(s: number) {
   seed = s; coast = makeCoast(seed);
   renderer.setCoast(coast, makeWorld(coast));
   minimap.paint(coast);
-  showPath = makeShowPath();
+  showPath = makeShowPath(); titleCam = null;
   $('seedname').textContent = coast.name;
 }
 function newGame() {
@@ -112,6 +112,8 @@ function onBoat(p: Pose, x: number, y: number, z: number): [number, number, numb
 let camYaw = 0, camDist = 26, camEl = 0.44, camLean = 0, camCut = 0;
 /** the rescue the camera last cut in to (so it can ease back out) */
 let cutTo: { b: number; k: Rescue } | null = null;
+/** the title's camera, eased (null: put it straight where it wants to be) */
+let titleCam: { from: number[]; target: number[] } | null = null;
 const camAt = { x: 0, y: 0, z: 0 };
 const lens = { focus: 30, aperture: 0.4 };
 let vp: Float32Array = new Float32Array(16), eye = [0, 20, -30], right = [1, 0, 0], up = [0, 1, 0];
@@ -138,10 +140,16 @@ function camera(dt: number, t: number, w: number, h: number) {
   let target: number[], from: number[], fov = portrait ? 1.02 : 0.86, shift = 0;
   if (refCam) { target = refCam.target; from = refCam.from; fov = refCam.fov; }
   else if (ui === 'title') {
-    // (low and ahead, to one side: your lifeboat charging toward you, the cliffs and the lighthouse behind it)
-    const b = race.boats[mine], p = poses[b.id] ?? { y: 0 }, side = showPath.side, d = portrait ? 17 : 14;
-    target = [b.x + (portrait ? side * 0.6 : -side * 1.2), p.y + 2.1, b.z + (portrait ? 0 : 1.5)];
-    from = [b.x - side * (portrait ? 3.5 : 7) + Math.sin(b.h) * d, p.y + (portrait ? 4.2 : 3.4), b.z + Math.cos(b.h) * d];
+    // (low and ahead, to one side: your lifeboat charging toward you, the cliffs and the lighthouse behind it; the camera
+    // waits a little way round the loop ahead of the boat, and eases after where it wants to be, so it never jumps)
+    const b = race.boats[mine], p = poses[b.id] ?? { y: 0 }, side = showPath.side, ahead = onLoop(vt * SHOW_V + (portrait ? 17 : 14));
+    const ux = -Math.cos(ahead.h) * side, uz = Math.sin(ahead.h) * side, bx = -Math.cos(b.h) * side, bz = Math.sin(b.h) * side, off = portrait ? 3.5 : 7, lean = portrait ? -0.6 : 1.2;
+    const wantT = [b.x + bx * lean + (portrait ? 0 : Math.sin(b.h) * 1.5), p.y + 2.1, b.z + bz * lean + (portrait ? 0 : Math.cos(b.h) * 1.5)];
+    const wantF = [ahead.x + ux * off, p.y + (portrait ? 4.2 : 3.4), ahead.z + uz * off];
+    const snap = dt <= 0 || !titleCam, kf = snap ? 1 : 1 - Math.exp(-dt * 1.4), kt = snap ? 1 : 1 - Math.exp(-dt * 3.5);
+    if (!titleCam) titleCam = { from: wantF.slice(), target: wantT.slice() };
+    for (let i = 0; i < 3; i++) { titleCam.from[i] += (wantF[i] - titleCam.from[i]) * kf; titleCam.target[i] += (wantT[i] - titleCam.target[i]) * kt; }
+    target = titleCam.target.slice(); from = titleCam.from.slice();
     shift = portrait ? -0.18 : 0;
     fov = portrait ? 1.05 : 0.8;
   } else if (ui === 'podium') {
@@ -425,20 +433,75 @@ function atmosphere(t: number, dt: number) {
 }
 
 // ─── the title's hero shot: your lifeboat charging along off the lighthouse's headland ───
-let showPath = { x: (z: number) => z * 0, z0: 0, z1: 1, side: 1 };
-function makeShowPath() {
+/**
+ * The title's route: worked out once for each coast, a smooth closed loop in open water off the lighthouse's headland:
+ * a stadium round a spine that follows the coast thirty-odd metres out (found exactly, not stepped, then smoothed hard).
+ * Out along the rocks, a wide slow half circle, back further out, a half circle home; laid out a metre a step, so the
+ * boat goes round at an even speed with its heading always the curve's (and leaning into the turns). A loop never ends,
+ * so the title never jumps back.
+ */
+interface ShowLoop { pts: Float32Array; len: number; side: number; z0: number; z1: number }
+let showPath: ShowLoop = { pts: new Float32Array(4), len: 1, side: 1, z0: 0, z1: 1 };
+function makeShowPath(): ShowLoop {
   const lh = coast.props.find((p) => p.kind === 'lighthouse' && p.v === 0) ?? coast.props.find((p) => p.kind === 'lighthouse')!;
-  const side = Math.sign(lh.x - coast.centre(lh.z)) || 1;
-  // (a line about thirty metres off the rocks on the lighthouse's side, running north from it)
-  const x = (z: number) => { let xx = coast.centre(z); for (let i = 0; i < 80 && shoreAt(coast, xx + side * 2, z) > 30; i++) xx += side * 2; return xx; };
-  return { x, z0: lh.z + 20, z1: lh.z + 170, side };
+  const side = Math.sign(lh.x - coast.centre(lh.z)) || 1, W = 15;
+  const z0 = lh.z + 20, z1 = Math.min(lh.z + 190, GATE_Z - 70);
+  // (the line that many metres off the rocks on the lighthouse's side: walked out from mid-channel, then pinned down by halving)
+  const lane = (z: number, d: number) => {
+    let a = coast.centre(z);
+    if (shoreAt(coast, a, z) < d) return a;
+    let b = a;
+    for (let i = 0; i < 60; i++) { b = a + side * 4; if (shoreAt(coast, b, z) < d) break; a = b; }
+    for (let i = 0; i < 12; i++) { const m = (a + b) / 2; if (shoreAt(coast, m, z) < d) b = m; else a = m; }
+    return a;
+  };
+  // (the loop's spine: a line W metres further out than thirty off the rocks, smoothed hard; where smoothing has brought
+  // the near side too close to a headland, eased back out and smoothed again)
+  const zs: number[] = [];
+  for (let z = z0; z <= z1; z += 4) zs.push(z);
+  let c = zs.map((z) => lane(z, 30 + W));
+  const smooth = (v: number[]) => v.map((_, i) => { let t = 0, n = 0; for (let j = -6; j <= 6; j++) { const k = Math.max(0, Math.min(v.length - 1, i + j)); t += v[k]; n++; } return t / n; });
+  for (let k = 0; k < 6; k++) {
+    c = smooth(smooth(c));
+    c = c.map((x, i) => { const near = shoreAt(coast, x + side * W, zs[i]), far = shoreAt(coast, x - side * W, zs[i]); return x - side * Math.max(0, 22 - near) + side * Math.max(0, 18 - far); });
+  }
+  const spine = (z: number) => { const u = Math.max(0, Math.min(zs.length - 1.001, (z - z0) / 4)), i = Math.floor(u), f = u - i; return c[i] * (1 - f) + c[i + 1] * f; };
+  // (a stadium round the spine: out along the rocks, a half circle, back further out, a half circle home)
+  const loop: [number, number][] = [], zA = z0 + W, zB = z1 - W;
+  for (let z = zA; z < zB; z += 1) loop.push([spine(z) + side * W, z]);
+  for (let i = 0; i <= 40; i++) { const a = (Math.PI * i) / 40; loop.push([spine(zB) + side * W * Math.cos(a), zB + W * Math.sin(a)]); }
+  for (let z = zB; z > zA; z -= 1) loop.push([spine(z) - side * W, z]);
+  for (let i = 0; i <= 40; i++) { const a = Math.PI + (Math.PI * i) / 40; loop.push([spine(zA) + side * W * Math.cos(a), zA + W * Math.sin(a)]); }
+  // (a last light smoothing round the joins, then laid out a metre a step)
+  let L = loop;
+  for (let k = 0; k < 3; k++) L = L.map((_, i) => { let x = 0, z = 0; for (let j = -3; j <= 3; j++) { const q = L[(i + j + L.length) % L.length]; x += q[0]; z += q[1]; } return [x / 7, z / 7] as [number, number]; });
+  const cum = [0];
+  for (let i = 1; i <= L.length; i++) cum.push(cum[i - 1] + Math.hypot(L[i % L.length][0] - L[i - 1][0], L[i % L.length][1] - L[i - 1][1]));
+  const len = cum[cum.length - 1], n = Math.floor(len), pts = new Float32Array(n * 2);
+  for (let k = 0, i = 0; k < n; k++) {
+    const s = (k / n) * len;
+    while (cum[i + 1] < s) i++;
+    const f = (s - cum[i]) / (cum[i + 1] - cum[i] || 1), p = L[i], q = L[(i + 1) % L.length];
+    pts[k * 2] = p[0] + (q[0] - p[0]) * f; pts[k * 2 + 1] = p[1] + (q[1] - p[1]) * f;
+  }
+  return { pts, len: n, side, z0, z1 };
 }
+/** a point on the title's loop, `s` metres round: where, which way (heading), how sharply it's turning (rad per metre) */
+function onLoop(s: number) {
+  const L = showPath, n = L.len;
+  const pos = (u: number) => { const i = Math.floor(u), f = u - i, a = ((i % n) + n) % n, b = (a + 1) % n; return [L.pts[a * 2] + (L.pts[b * 2] - L.pts[a * 2]) * f, L.pts[a * 2 + 1] + (L.pts[b * 2 + 1] - L.pts[a * 2 + 1]) * f]; };
+  // (the heading from points either side, themselves in between the metre marks, so it turns smoothly, not a tick a metre)
+  const head = (u: number) => { const a = pos(u - 2), b = pos(u + 2); return Math.atan2(b[0] - a[0], b[1] - a[1]); };
+  const [x, z] = pos(s), h0 = head(s);
+  let dh = head(s + 2) - head(s - 2); while (dh > Math.PI) dh -= 2 * Math.PI; while (dh < -Math.PI) dh += 2 * Math.PI;
+  return { x, z, h: h0, bend: dh / 4 };
+}
+const SHOW_V = 8.5;
 function showcase(t: number) {
-  const b = race.boats[mine], span = showPath.z1 - showPath.z0, v = 8.5;
-  const z = showPath.z0 + ((t * v) % span), x = showPath.x(z) + 4 * Math.sin(t * 0.25);
-  const ahead = showPath.x(z + 6) + 4 * Math.sin((t + 0.7) * 0.25);
-  if (Math.abs(z - b.z) > 20) wakes.clear();
-  b.x = x; b.z = z; b.h = Math.atan2(ahead - x, 6); b.v = v; b.turn = 0;
+  const b = race.boats[mine], o = onLoop(t * SHOW_V);
+  b.x = o.x; b.z = o.z; b.h = o.h; b.v = SHOW_V;
+  // (leaning into the turns: the boat's turn is the way its heading is going, as the race has it)
+  b.turn = -o.bend * SHOW_V;
 }
 
 // ─── what's said on the screen ───
@@ -637,18 +700,22 @@ function events() {
 
 // ─── the loop ───
 let dpr = Math.min(devicePixelRatio || 1, 1.75) * (preview ? 0.6 : 1), slowFor = 0, fastFor = 0, ema = 16;
+let ceiling = Math.min(devicePixelRatio || 1, 1.75), droppedAt = -1e9;
 function resize() { canvas.width = Math.round(innerWidth * dpr); canvas.height = Math.round(innerHeight * dpr); }
 addEventListener('resize', resize);
-let last = performance.now(), vt = 0, frames = 0;
+let last = performance.now(), vt = Number(params.get('at') ?? 0) || 0, frames = 0;
 function frame(now: number) {
   const dt = Math.min(0.05, (now - last) / 1000); last = now; frames++;
   ema += (dt * 1000 - ema) * 0.05;
-  // (keep it smooth: fewer pixels when frames are slow, more when there's room)
+  // (keep it smooth: fewer pixels when frames are slow, more when there's room; but never see-sawing: a level that was too
+  // slow isn't tried again for half a minute, and on the title it only ever steps down, so the picture behind the menu
+  // doesn't keep sharpening and softening)
   if (!still && !preview) {
     if (ema > 24) { slowFor += dt; fastFor = 0; } else if (ema < 15) { fastFor += dt; slowFor = 0; } else { slowFor = fastFor = 0; }
     const cap = Math.min(devicePixelRatio || 1, 1.75);
-    if (slowFor > 1.5 && dpr > 0.8) { dpr = Math.max(0.8, dpr - 0.15); resize(); slowFor = 0; }
-    if (fastFor > 4 && dpr < cap) { dpr = Math.min(cap, dpr + 0.15); resize(); fastFor = 0; }
+    if (now - droppedAt > 30000) ceiling = cap;
+    if (slowFor > 1.5 && dpr > 0.8) { ceiling = dpr - 0.01; droppedAt = now; dpr = Math.max(0.8, dpr - 0.15); resize(); slowFor = 0; }
+    if (fastFor > 4 && dpr + 0.15 <= ceiling && ui !== 'title') { dpr = Math.min(cap, dpr + 0.15); resize(); fastFor = 0; }
   }
   if (!still) vt += dt;
   if (ui === 'title') { showcase(vt); for (const b of race.boats) wakes.record(b.id, b.x, b.z, b.h, b.v, vt); marks.step(dt); splashes(vt, dt); }
@@ -677,6 +744,7 @@ function frame(now: number) {
     weather, flash, spot: spotAt, spotDir, rally: mode === 'rally',
   };
   if (ui === 'title') { f.zMin = showPath.z0 - 400; f.zMax = showPath.z1 + 400; }
+  if (ui !== 'title') titleCam = null;
   if (ui === 'podium') { f.zMin = GATE_Z - 200; f.zMax = GATE_Z + 400; }
   renderer.draw(f, canvas.width, canvas.height);
   // (a picture for the end: taken the moment you cross the line, while the frame's still there to read)
