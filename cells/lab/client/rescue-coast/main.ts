@@ -173,7 +173,7 @@ function camera(dt: number, t: number, w: number, h: number) {
   eye = from;
   // (the lens: in focus where the camera looks, softening nearer and further; stronger for the still shots)
   lens.focus = refCam ? refCam.focus : ui === 'race' && !study ? Math.hypot(followed().x - from[0], followed().z - from[2]) : Math.hypot(target[0] - from[0], target[1] - from[1], target[2] - from[2]);
-  lens.aperture = refCam ? refCam.aperture : ui === 'title' ? 0.45 : ui === 'podium' ? 0.45 : study ? 0.5 : ui === 'race' && Math.abs(camLean) > 0.2 ? 0.5 : 0.35;
+  lens.aperture = refCam ? refCam.aperture : ui === 'title' ? 0.22 : ui === 'podium' ? 0.4 : study ? 0.5 : ui === 'race' && Math.abs(camLean) > 0.2 ? 0.5 : 0.35;
   const view = mat4.lookAt(from, target, [0, 1, 0]), proj = mat4.perspective(fov, aspect, 0.5, 1800);
   proj[9] = -shift;
   vp = mat4.mul(proj, view);
@@ -203,11 +203,22 @@ function people(t: number, dt: number) {
     if (k) {
       const side = local(b, k.x, k.z)[0] >= 0 ? -1 : 1; // (model x is to the boat's left)
       const throwing = k.stage === 'line';
-      crewAt(side * 1.45, deckAt(-3.4), -3.4, side * 1.2, throwing && side > 0 ? 2.8 : 0.5, throwing && side < 0 ? 2.8 : 0.5, throwing ? 0.4 : 1.0, 2);
-      // (the line: from the thrower's hand out to the little boat, thrown, then held)
-      const hand = onBoat(p, side * 1.9, deckAt(-3.4) + 1.2, -3.4), kp = poses[100 + race.crafts.indexOf(k)];
-      const end = [k.x, (kp?.y ?? 0) + 0.45, k.z];
-      marks.line(hand, end, throwing ? 0.6 : 0.25, 0.075, [0.98, 0.8, 0.15], throwing ? Math.min(1, k.t / LINE) : 1);
+      if (throwing) {
+        crewAt(side * 1.45, deckAt(-3.4), -3.4, side * 1.2, side > 0 ? 2.8 : 0.5, side < 0 ? 2.8 : 0.5, 0.4, 2);
+        // (the line: from the thrower's hand out to the little boat, thrown)
+        const hand = onBoat(p, side * 1.9, deckAt(-3.4) + 1.2, -3.4), kp = poses[100 + race.crafts.indexOf(k)];
+        marks.line(hand, [k.x, (kp?.y ?? 0) + 0.45, k.z], 0.6, 0.075, [0.98, 0.8, 0.15], Math.min(1, k.t / LINE));
+      } else {
+        // (at the rail where they come aboard: leaning right over and reaching down, taking the hand, pulling, then upright with an arm out)
+        const u = Math.min(1, k.t / CLIMB), a = Math.max(-4, Math.min(1.5, local(b, k.x, k.z)[1]));
+        const lean = u < 0.4 ? 0.75 - 0.25 * (u / 0.4) : u < 0.7 ? 0.5 - 0.5 * ((u - 0.4) / 0.3) : 0;
+        const rch = u < 0.4 ? 1.15 + 0.25 * (u / 0.4) : u < 0.7 ? 1.4 + 0.7 * ((u - 0.4) / 0.3) : 0.9;
+        const [X, Y, Z] = onBoat(p, side * (HALF_BEAM - 0.62), deckAt(a), a);
+        lists.crew.push(X, Y, Z, b.h + side * Math.PI / 2, p.pitch - lean, p.roll, PERSON * 0.98, u > 0.75 && side < 0 ? 0.9 : 0, CREW, u > 0.75 && side > 0 ? 0.9 : 0, SKINS[(b.id * 2 + 2) % 6], rch, NONE, 0);
+        // (the line, held slack from the deck to the little boat)
+        const kp = poses[100 + race.crafts.indexOf(k)];
+        marks.line(onBoat(p, side * 1.9, deckAt(-3.4) + 1.0, -3.4), [k.x, (kp?.y ?? 0) + 0.45, k.z], 0.25, 0.075, [0.98, 0.8, 0.15], 1);
+      }
     } else crewAt(0.9, deckAt(-3.6), -3.6, 0, 0.2, 0.2, 0, 2);
     // (aboard: the decks fill from aft, then forward, then the side decks; then the roof)
     b.aboard.forEach((a, i) => {
@@ -248,14 +259,27 @@ function people(t: number, dt: number) {
         if (slot < SEATS.length) { [dx, dz] = SEATS[slot]; dx = -dx; dy = deckAt(dz); } else { const r = ROOF[(slot - SEATS.length) % ROOF.length]; dx = -r[0]; dz = r[1]; dy = ROOF_Y; }
         const [, alongK] = local(b, k.x, k.z), side = local(b, k.x, k.z)[0] >= 0 ? -1 : 1;
         const hullOut = onBoat(bp, side * (HALF_BEAM + 0.35), 0.15, Math.max(-4, Math.min(1.5, alongK)));
-        const hullTop = onBoat(bp, side * (HALF_BEAM - 0.1), deckAt(alongK) + 0.2, Math.max(-4, Math.min(1.5, alongK)));
+        const mix = (a: number[], b2: number[], f: number) => a.map((v, n) => v + (b2[n] - v) * f) as [number, number, number];
         const seat = onBoat(bp, dx, dy, dz);
-        let X: number, Y: number, Z: number, aL = 2.7, aR = 2.7, reach = 0.6;
-        const mix = (a: number[], b2: number[], f: number) => a.map((v, n) => v + (b2[n] - v) * f);
-        if (u < 0.3) { const f = u / 0.3, q = mix([sx, sy, sz], hullOut, f); [X, Y, Z] = q; Y += Math.sin(Math.PI * f) * 0.4; reach = 1.4; aL = aR = 0.4; }
-        else if (u < 0.75) { const f = (u - 0.3) / 0.45, q = mix(hullOut, hullTop, f); [X, Y, Z] = q; aL = 2.6 + Math.sin(f * 18) * 0.35; aR = 2.6 - Math.sin(f * 18) * 0.35; reach = 0.5; }
-        else { const f = (u - 0.75) / 0.25, q = mix(hullTop, seat, f); [X, Y, Z] = q; Y += Math.sin(Math.PI * f) * 0.3; aL = aR = 0.6; }
-        lists['kid' + who.style].push(X, Y, Z, b.h + Math.PI * (side > 0 ? 0.5 : -0.5), 0, 0, PERSON * 0.92, aL, SHIRTS[who.shirt], aR, SKINS[who.skin], reach, HAIRS[who.hair], 0);
+        // (the four moments of the boards: come alongside — to the edge of the little boat, standing, reaching up; take the
+        // hand — held, lifted a little; climb aboard — feet on the fender, up the side, over the rail; safe on deck — down
+        // beside the crew, then to a place)
+        const a = Math.max(-4, Math.min(1.5, alongK));
+        const edge = mix([sx, sy, sz], hullOut, 0.55);
+        const fender = onBoat(bp, side * (HALF_BEAM + 0.32), deckAt(a) - 0.95, a), rail = onBoat(bp, side * (HALF_BEAM - 0.15), deckAt(a) + 0.3, a);
+        const beside = onBoat(bp, side * (HALF_BEAM - 1.25), deckAt(a), a + 0.7);
+        let X: number, Y: number, Z: number, aL = 0, aR = 0, reach = 2.5, lean = 0, face = b.h + Math.PI * (side > 0 ? 0.5 : -0.5);
+        const ease = (f: number) => f * f * (3 - 2 * f);
+        if (u < 0.2) { const f = ease(u / 0.2); [X, Y, Z] = mix([sx, sy, sz], edge, f); reach = 0.4 + 2.1 * f; }
+        else if (u < 0.4) { const f = (u - 0.2) / 0.2; [X, Y, Z] = edge; Y += 0.18 * ease(f); reach = 2.55; lean = -0.1 * f; }
+        else if (u < 0.7) {
+          const f = (u - 0.4) / 0.3, g = ease(f < 0.5 ? f * 2 : (f - 0.5) * 2);
+          [X, Y, Z] = f < 0.5 ? mix(edge, fender, g) : mix(fender, rail, g);
+          aL = Math.sin(f * 9) > 0 ? 0.3 : 0; aR = Math.sin(f * 9) > 0 ? 0 : 0.3; reach = 2.3 + Math.sin(f * 9) * 0.25; lean = -0.25;
+        }
+        else if (u < 0.82) { const f = ease((u - 0.7) / 0.12); [X, Y, Z] = mix(rail, beside, f); Y += Math.sin(Math.PI * f) * 0.35; reach = 1.2; aL = aR = 0.6; lean = -0.15 * (1 - f); }
+        else { const f = ease((u - 0.82) / 0.18); [X, Y, Z] = mix(beside, seat, f); Y += Math.abs(Math.sin(Math.PI * f * 2)) * 0.12; aL = aR = 0.3 + 2.2 * (1 - f) * (u > 0.9 ? 1 : 0); reach = 0.4; face = b.h; }
+        lists['kid' + who.style].push(X, Y, Z, face, lean, 0, PERSON * 0.92, aL, SHIRTS[who.shirt], aR, SKINS[who.skin], reach, HAIRS[who.hair], 0);
         if (u > 0.92 && !told.has(`land${i}:${j}`)) { told.add(`land${i}:${j}`); for (let q = 0; q < 5; q++) marks.sparkle(seat[0] + (Math.random() - 0.5), seat[1] + 1.6, seat[2] + (Math.random() - 0.5), [1, 0.85, 0.3]); }
         continue;
       }
@@ -619,13 +643,13 @@ function refScene(kind: string) {
     const k = race.crafts.find((c) => c.craft.kind === 'row') ?? race.crafts[0], side = -1;
     me.aboard = [{ craft: 1, person: 0 }, { craft: 2, person: 0 }, { craft: 3, person: 0 }].filter((a) => race.crafts[a.craft]);
     me.rescued = me.aboard.length;
-    const [kx, kz] = world(me, side * (HALF_BEAM + 1.25), -1.6);
-    k.x = kx; k.z = kz; k.yaw = me.h; k.stage = 'climb'; k.by = mine; k.side = side; k.t = 0.42 * CLIMB;
+    const [kx, kz] = world(me, side * (HALF_BEAM + 0.95), -1.6);
+    k.x = kx; k.z = kz; k.yaw = me.h + Math.PI; k.stage = 'climb'; k.by = mine; k.side = side; k.t = Number(params.get('u') ?? 0.32) * CLIMB;
     if (k.craft.people.length < 2) k.craft.people.push({ ...k.craft.people[0], skin: (k.craft.people[0].skin + 2) % 6, hair: 2, style: 1 }), k.left = k.craft.people.length;
     k.left = k.craft.people.length;
     for (const o of race.boats) if (o !== me) place(o, G.x + (o.id - 2) * 30, G.z - 120 - o.id * 12, 0.1, 6);
-    const at = world(me, side * 9.5, -5.5), look = world(me, side * 2.6, -1.4);
-    refCam = { from: [at[0], 2.4, at[1]], target: [look[0], 1.1, look[1]], fov: 0.62, aperture: 0.5, focus: 9 };
+    const at = world(me, side * 8, -9), look = world(me, side * 2.2, -1.0);
+    refCam = { from: [at[0], 2.3, at[1]], target: [look[0], 1.6, look[1]], fov: 0.66, aperture: 0.5, focus: 10 };
   } else if (kind === 'coast') {
     // (from the sea off the big headland, looking along the cliffs: the lighthouse and cottages on top, the rocks and surf below)
     const L = coast.props.find((p) => p.kind === 'lighthouse' && p.v === 0) ?? coast.props.find((p) => p.kind === 'lighthouse')!;

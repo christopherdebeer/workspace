@@ -62,7 +62,13 @@ Lily’s “near enough”, done the way a lifeboat does it:
 - **Come alongside** a little boat, with it close by your side.
 - **Ease right off.** Let go of the stick and the boat slows to a stop.
 - **The line goes over.** Your crew throws a line, and the little boat is pulled in against your hull.
-- **They climb aboard** one at a time: across to the hull, up its side, over the gunwale, to a place on deck. Each is counted as they land.
+- **They climb aboard** one at a time, in the boards' four moments:
+  - **come alongside:** they stand at the edge of their little boat and reach up, while a crew member leans right over the rail and reaches down;
+  - **take the hand:** hands held, they're lifted a little;
+  - **climb aboard:** feet on the fender, up the side, over the rail;
+  - **safe on deck:** down beside the crew member, then to a place on deck.
+
+  Each is counted as they land.
 - **Drive off** before they're all across and the rest let go, to wait for the next lifeboat.
 
 How slow is slow enough depends on the level: under half of top speed on easy, under a third on hard. On easy and medium the boat eases off by itself as you come up to a little boat, so a quick tap of the stick toward it is enough. A ring in your colour round each little boat near you says “come alongside here”. If you're too fast, the screen says so.
@@ -99,8 +105,9 @@ Each coast comes from a seed (on the line-up, and `?seed=`). It's a channel of o
 - **The finish:** the narrow harbour mouth, a lighthouse either side. Beyond it, the harbour with its quay and a town of cottages on the hill.
 
 One field says where the land is: the distance to the nearest shore, positive over water and negative on land. Everything is made from it, so nothing disagrees:
-- **the ground:** stepped granite cliffs, sandy coves, quays, the town's hill, the seabed;
-- **the boulders:** heaped along every shore and up the cliff steps, none reaching further into the water than a hull is allowed to go;
+- **the cliffs:** granite split along its joints. Stacks of big squarish blocks with rounded edges stand shoulder to shoulder along every rocky shore, as tall as the land behind them. Each block is a little set back, turned or narrower than the one below, so the face has ledges and joints and its top steps up and down. The rock is crusted with orange lichen above the splash zone and dark and wet below it;
+- **the ground:** a steep face behind the blocks, then cliff-top turf (olive and sun-dried gold, greener in the hollows, with thrift and gorse in flower), sandy coves, quays, the town's hill, the seabed;
+- **the boulders:** a few fallen at the cliffs' feet, heaped along beaches and low shores; skerries (little reefs of rock) a stone's throw off the cliffs, where the surf breaks. No rock reaches further into the water than a hull is allowed to go;
 - **where a boat can go:** the hull keeps 2.6 m from the shore, so it can't sail into a rock;
 - **the routes** the game's boats find;
 - **the swell:** a little smaller near the shore;
@@ -163,7 +170,7 @@ Its own WebGL2 renderer: the lab ships one bundle with no packages, so Three.js 
 - **The sky:** cumulus over the horizon.
 - **Distance:** hazed toward the horizon.
 - **The finish:** everything is drawn in linear light into a floating-point buffer (where the phone allows); one pass then adds the glow of the brightest things, a soft focus away from what the camera is looking at (stronger on the title and close-ups, so the scene reads as a model), the exposure, one filmic tone curve, and a light vignette.
-- **Checked against the boards:** `?ref=hero` and `?ref=rescue` hold two fixed scenes laid out like the boards' hero shot and close rescue (the HUD hidden, nothing moving). `node devtools/rescue-coast-fidelity.mjs <dir>` draws them and puts each beside its target panel, kept in `devtools/fidelity/`.
+- **Checked against the boards:** `?ref=hero`, `?ref=rescue` and `?ref=coast` hold fixed scenes laid out like the boards' hero shot, close rescue and coastal landscape (the HUD hidden, nothing moving; `&u=0..1` sets how far through the climb aboard the rescue is). `node devtools/rescue-coast-fidelity.mjs <dir>` draws them and puts each beside its target panel, kept in `devtools/fidelity/`.
 
 The sea:
 - **The swell:** eight Gerstner waves, from a 24 m swell down to 1.7 m chop, the same sums on the CPU (the boats ride them) and in GLSL; the weather scales their height and steepness. Faces turned to the light are brighter, backs and troughs darker, so the relief reads from above.
