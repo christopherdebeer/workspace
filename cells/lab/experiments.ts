@@ -43,6 +43,12 @@ export const EXPERIMENTS: Experiment[] = [
     presets: [{ label: 'play', query: '' }, { label: 'a new sea', query: 'seed=moss-ford-7' }, { label: 'mid-race', query: 'auto&t=45' }, { label: 'the five racing', query: 'auto' }, { label: 'the finish', query: 'view=podium' }],
   },
   {
+    id: 'rescue-coast', title: 'Rescue · Rocky Coast', group: 'Play',
+    blurb: 'Lily’s rescue game, in a second visual treatment. An RNLI-inspired miniature lifeboat on a rocky coast: shaped headlands, deeper blue swells, foam and spray, detailed rubber fenders and railings, and tiny people climbing aboard. Same five-boat race, different rendering experiment; the original Rescue Race remains beside it.',
+    page: 'static/rescue-coast.html', preview: 'preview&seed=7', readme: 'static/rescue-coast.md',
+    presets: [{ label: 'play', query: '' }, { label: 'the rocky coast', query: 'auto&t=22&seed=7' }, { label: 'boarding', query: 'auto&t=25&near=2' }, { label: 'the fleet', query: 'auto&t=45' }, { label: 'finish', query: 'view=podium' }],
+  },
+  {
     id: 'labyrinth', title: 'Labyrinth', group: 'Play',
     blurb: 'Architecture that follows the hand, on a piece of land: shelves, a ravine with a stream, an outcrop (or the flat travertine slab). Built on a grid of half cells, so a wall or a path is thin unless it\'s built up, and a pier, a setback or a recess can be half a cell; a flight still climbs a level a cell. Five brushes: auto reads gestures (tap raises, trace builds a wall, reaches out or climbs) and the stone works out what it takes to stand; a piece brush for one thing exactly, or dressing (brick, marble, moss, ivy, parapets, lanterns, pots); take; and select, to take up a piece or a whole arcade, flight or tower and read it another way. Arches and arcades under what has nothing beneath it, courtyards where walls close round the ground. Each land is built in one of four traditions, grammars of construction rather than costumes: the middle sea\'s terracotta and round arches; the plateau\'s flat tops, pointed arches and lit windows in painted frames; the north\'s timber frame, steep slate gables stepped in brick, dormers and chimneys; the east\'s whitewash between dark posts and deep grey eaves turned up at the corners. Kept as a print, too.',
     page: 'static/labyrinth.html', preview: 'preview', readme: 'static/labyrinth.md',

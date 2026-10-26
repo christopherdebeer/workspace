@@ -31,6 +31,7 @@ const experiments: Record<string, () => Promise<unknown>> = {
   cloudfold: () => import('./cloudfold/main'),
   imperecept: () => import('./imperecept/main'),
   rescue: () => import('./rescue/main'),
+  'rescue-coast': () => import('./rescue-coast/main'),
 };
 
 // (loaded as a worker by an experiment that shapes off the page's thread: serve it)
