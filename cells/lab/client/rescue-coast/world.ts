@@ -14,7 +14,8 @@ export const ISTRIDE = 20;
 export interface Piece { z0: number; z1: number }
 export interface TerrainPiece extends Piece { verts: Float32Array; index: Uint32Array; far: Uint32Array }
 export interface RockPiece extends Piece { kind: number; inst: Float32Array; n: number }
-export interface PropPiece extends Piece { mesh: Mesh }
+/** what's built, in pieces; `rally` for what only the Rally has (the finish banner) */
+export interface PropPiece extends Piece { mesh: Mesh; rally?: boolean }
 export interface World { terrain: TerrainPiece[]; rocks: RockPiece[]; props: PropPiece[]; boulders: Mesh[]; bouldersFar: Mesh[] }
 
 /** granite: warm, grey, a darker weathered one (sRGB) */
@@ -76,11 +77,13 @@ export function makeWorld(c: Coast): World {
     }
     b.at();
   }
-  {
-    const x0 = c.gateX - GATE_HALF + 2, x1 = c.gateX + GATE_HALF - 2, y = 7;
-    const b = at(GATE_Z); b.at(); banner(b, x0, x1, GATE_Z, y);
-  }
   const props: PropPiece[] = [...pieces.entries()].map(([k, b]) => ({ z0: Z0 + k * PIECE - 20, z1: Z0 + (k + 1) * PIECE + 20, mesh: b.done() }));
+  {
+    // (the finish banner across the harbour mouth: the Rally's; the Service comes home between the lighthouses)
+    const x0 = c.gateX - GATE_HALF + 2, x1 = c.gateX + GATE_HALF - 2, y = 10.4, b = new Builder();
+    banner(b, x0, x1, GATE_Z, y);
+    props.push({ z0: GATE_Z - 20, z1: GATE_Z + 20, mesh: b.done(), rally: true });
+  }
   const columns = [0, 1, 2, 3].map((k) => column(k + 1));
   return { terrain, rocks, props, boulders: [...[0, 1, 2, 3].map((k) => boulder(k + 1, 4)), ...columns], bouldersFar: [...[0, 1, 2, 3].map((k) => boulder(k + 1, 2)), ...columns] };
 }

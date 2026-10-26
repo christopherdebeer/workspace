@@ -1,5 +1,5 @@
 // Rescue · Rocky Coast in a browser, played by hand (node cells/lab/devtools/rescue-coast-smoke.mjs): the title and its panels
-// (a boat, a level, the weather), Play and the count, the joystick held up (the boat goes ahead), held right (it turns to the screen's right),
+// (a boat, a level, the weather), Play (the Rescue Service) and the count, the Rally from its own button, the joystick held up (the boat goes ahead), held right (it turns to the screen's right),
 // let go (it eases to a stop), the arrow keys, pause, the page saying what it should, no errors; the end's places.
 process.env.EXPERIMENT = 'rescue-coast'; process.env.READY = '__rescue';
 const { withWood } = await import('./harness.mjs');
@@ -18,7 +18,8 @@ await withWood(async (lab) => {
   await p.waitForTimeout(2000);
   let s = await state(p);
   ok('the title first', s?.ui === 'title', s?.ui);
-  ok('Play, Boats, Weather, Settings', (await p.evaluate(() => ['play', 'open-boats', 'open-weather', 'open-settings'].every((id) => !!document.getElementById(id)))));
+  ok('Play, Rally, Boats, Weather, Settings', (await p.evaluate(() => ['play', 'rally', 'open-boats', 'open-weather', 'open-settings'].every((id) => !!document.getElementById(id)))));
+  ok('the tagline: all boats home', /all boats home/i.test(await p.evaluate(() => document.querySelector('#logo .tagline')?.textContent ?? '')));
   await p.click('#open-boats');
   ok('five boats to choose from', (await p.evaluate(() => document.querySelectorAll('#boats-list button').length)) === 5);
   await p.click('#boats-list button[data-boat="2"]');
@@ -31,7 +32,7 @@ await withWood(async (lab) => {
   ok('no joystick on the title', !(await p.isVisible('#stick .base')));
   await p.click('#play');
   s = await until(p, (x) => x.ui === 'race', 60000);
-  ok('play: the count', s.ui === 'race' && (s.phase === 'countdown' || s.phase === 'racing'), [s.ui, s.phase]);
+  ok('play: the count, in the Rescue Service', s.ui === 'race' && s.mode === 'service' && (s.phase === 'countdown' || s.phase === 'racing'), [s.ui, s.mode, s.phase]);
   s = await until(p, (x) => x.phase === 'racing');
   ok('and the race is on', s.phase === 'racing', [s.phase, s.frameMs]);
   // (the joystick: where it is, and that it stays put out of the way, in the bottom corner)
@@ -55,7 +56,7 @@ await withWood(async (lab) => {
   await p.keyboard.up('ArrowUp');
   ok('the up arrow: away again', Math.hypot(s.boats[2].x - k0.x, s.boats[2].z - k0.z) > 4, [k0, s.boats[2]]);
   const words = await p.evaluate(() => ({ places: document.querySelectorAll('#ladder div').length, me: !!document.querySelector('#ladder div.me'), count: document.getElementById('count').textContent, map: document.getElementById('map').getBoundingClientRect().width > 80 }));
-  ok('the places under the map, yours marked; your count; the map', words.places === 5 && words.me && words.count !== '' && words.map, words);
+  ok('the five crews under the map, yours marked; everyone rescued so far of everyone out there; the map', words.places === 5 && words.me && /^\d+\/\d+$/.test(words.count) && words.map, words);
   await p.click('#pause');
   s = await until(p, (x) => x.paused, 30000);
   const t0 = s.t; await p.waitForTimeout(4000); s = await state(p);
@@ -78,12 +79,20 @@ await withWood(async (lab) => {
   ok('the weather, chosen on the title (stormy)', ws.weather === 'stormy', ws.weather);
   await w0.close();
   await q0.close();
-  const q = await lab.open('seed=2&auto&view=podium&still');
-  await q.waitForTimeout(2500);
-  const end = await q.evaluate(() => ({ ui: window.__rescue.ui, rows: [...document.querySelectorAll('#ranks li')].map((li) => li.querySelector('b').textContent + ' ' + li.querySelector('strong').textContent), title: document.getElementById('result').textContent }));
-  ok('the end: five places, 1st to 5th', end.ui === 'podium' && end.rows.length === 5 && end.rows[0].startsWith('1st') && end.rows[4].startsWith('5th'), end);
-  console.log(`  ${end.title} · ${end.rows.join(' · ')}`);
-  await q.close();
+  // (the Rally: from its own button on the title)
+  const r0 = await lab.open('seed=2');
+  await r0.click('#rally');
+  const rs = await until(r0, (x) => x.ui === 'race', 60000);
+  ok('Rally: Lily’s race, from its own button', rs.mode === 'rally', rs.mode);
+  await r0.close();
+  for (const [mode, want] of [['', /everyone home/i], ['&mode=rally', /wins|won|came/i]]) {
+    const q = await lab.open(`seed=2&auto${mode}&view=podium&still`);
+    await q.waitForTimeout(2500);
+    const end = await q.evaluate(() => ({ ui: window.__rescue.ui, rows: [...document.querySelectorAll('#ranks li')].map((li) => li.querySelector('b').textContent + ' ' + li.querySelector('strong').textContent), title: document.getElementById('result').textContent }));
+    ok(`the end${mode ? ' of the Rally' : ' of the Service'}: ${mode ? '' : 'everyone home, then '}five places, 1st to 5th`, end.ui === 'podium' && want.test(end.title) && end.rows.length === 5 && end.rows[0].startsWith('1st') && end.rows[4].startsWith('5th'), end);
+    console.log(`  ${end.title} · ${end.rows.join(' · ')}`);
+    await q.close();
+  }
 }, { width: 390, height: 844 });
 console.log(`${n - bad} of ${n} checks hold`);
 if (bad) process.exit(1);

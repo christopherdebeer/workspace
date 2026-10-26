@@ -105,6 +105,8 @@ export interface Frame {
   weather: Weather; flash: number; spot: number[]; spotDir: number[];
   /** the lens: the distance in focus (m), how strong the focus effect is (0..1), the near and far planes */
   focusDist: number; aperture: number; near: number; far: number;
+  /** the Rally (its finish banner drawn) or the Service */
+  rally: boolean;
 }
 const lin = (c: readonly number[]) => c.map((v) => v * v * (v * 0.3 + 0.7));
 
@@ -592,7 +594,7 @@ function compile(gl: WebGL2RenderingContext, vs: string, fs: string) {
 }
 type Prog = ReturnType<typeof compile>;
 interface Kind { vao: WebGLVertexArrayObject; count: number; inst: WebGLBuffer; pivot: readonly [number, number] }
-interface Static { z0: number; z1: number; vao: WebGLVertexArrayObject; count: number; n: number; mode: number; indexed?: boolean; far?: WebGLVertexArrayObject; farCount?: number }
+interface Static { z0: number; z1: number; vao: WebGLVertexArrayObject; count: number; n: number; mode: number; indexed?: boolean; far?: WebGLVertexArrayObject; farCount?: number; rally?: boolean }
 
 const SHADOW = 2048;
 
@@ -804,7 +806,7 @@ export class Renderer {
       this.trash.push(() => gl.deleteBuffer(ib));
       this.rocks.push({ z0: r.z0, z1: r.z1, vao: this.meshVao(w.boulders[r.kind], ib), count: w.boulders[r.kind].count, n: r.n, mode: 1, far: this.meshVao(w.bouldersFar[r.kind], ib), farCount: w.bouldersFar[r.kind].count });
     }
-    for (const p of w.props) this.props.push({ z0: p.z0, z1: p.z1, vao: this.meshVao(p.mesh, this.ident), count: p.mesh.count, n: 1, mode: 0 });
+    for (const p of w.props) this.props.push({ z0: p.z0, z1: p.z1, vao: this.meshVao(p.mesh, this.ident), count: p.mesh.count, n: 1, mode: 0, rally: p.rally });
   }
 
   draw(f: Frame, width: number, height: number) {
@@ -829,7 +831,7 @@ export class Renderer {
     gl.uniform1i(D.u('uMode'), 1);
     for (const r of this.rocks) if (near(r.z0, r.z1)) { gl.bindVertexArray(r.far!); gl.drawArraysInstanced(gl.TRIANGLES, 0, r.farCount!, r.n); }
     gl.uniform1i(D.u('uMode'), 0);
-    for (const p of this.props) if (near(p.z0, p.z1)) { gl.bindVertexArray(p.vao); gl.drawArraysInstanced(gl.TRIANGLES, 0, p.count, 1); }
+    for (const p of this.props) if (near(p.z0, p.z1) && (!p.rally || f.rally)) { gl.bindVertexArray(p.vao); gl.drawArraysInstanced(gl.TRIANGLES, 0, p.count, 1); }
     // (the people and gulls are too small for their shadows to tell: left out)
     for (const d of f.draws) { const k = this.kinds.get(d.kind); if (k && d.list.n && !/^(kid|crew|gull)/.test(d.kind)) { gl.uniform2fv(D.u('uPivot'), k.pivot); gl.bindVertexArray(k.vao); gl.drawArraysInstanced(gl.TRIANGLES, 0, k.count, d.list.n); } }
     this.targets(width, height);
@@ -872,7 +874,7 @@ export class Renderer {
       else { gl.bindVertexArray(r.far!); gl.drawArraysInstanced(gl.TRIANGLES, 0, r.farCount!, r.n); }
     }
     gl.uniform1i(O.u('uMode'), 0); gl.uniform2f(O.u('uPivot'), 0, 0);
-    for (const p of this.props) if (inView(p.z0, p.z1)) { gl.bindVertexArray(p.vao); gl.drawArraysInstanced(gl.TRIANGLES, 0, p.count, 1); }
+    for (const p of this.props) if (inView(p.z0, p.z1) && (!p.rally || f.rally)) { gl.bindVertexArray(p.vao); gl.drawArraysInstanced(gl.TRIANGLES, 0, p.count, 1); }
     for (const d of f.draws) { const k = this.kinds.get(d.kind); if (k && d.list.n) { gl.uniform2fv(O.u('uPivot'), k.pivot); gl.bindVertexArray(k.vao); gl.drawArraysInstanced(gl.TRIANGLES, 0, k.count, d.list.n); } }
     // ─── 5. the sea ───
     const Wp = this.water;

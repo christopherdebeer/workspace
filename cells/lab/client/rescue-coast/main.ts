@@ -1,14 +1,15 @@
 /**
- * Rescue · Rocky Coast: the page. The line-up (choose your lifeboat and how good the others are), the race (the
- * joystick, the camera riding behind your boat, the places along the top), and the end (1st to 5th in the harbour).
+ * Rescue · Rocky Coast: the page. The title (Play: the Rescue Service; Rally: Lily's race; your lifeboat, the weather,
+ * how good the other crews are), out on the water (the joystick, the camera riding behind your boat, the counts along
+ * the top), and the end (everyone home and the crews' honours; or 1st to 5th).
  *
- * The camera: high behind your boat and a little to the side, turning with it (smoothed, so a quick turn doesn't
- * swing the world about); it leans in when you come alongside a little boat, so you can watch them climb aboard; it
- * rises over a cliff rather than look through it.
+ * The camera: low and close behind your boat, the coast ahead on the horizon, turning with it (smoothed, so a quick
+ * turn doesn't swing the world about); easing down and round as you slow for someone waiting; cutting in low beside the
+ * hull while a little boat is alongside, to watch them climb aboard; rising over a cliff rather than look through it.
  *
  * Addresses: `?seed=` a coast; `?level=easy|medium|hard`; `?boat=0..4`; `?auto` (every boat the game's); `?t=40` that
  * far into the race; `?still` time held; `?view=podium`; `?near=n` little boat n and the boat coming for it;
- * `?weather=sunny|calm|windy|stormy|foggy|night|sunset`; `?study` a close look at your boat; `?zoom=`; `?hand=left` the joystick on the left (it's on the right unless asked); `?preview` small and quiet.
+ * `?mode=rally` the Rally; `?weather=sunny|calm|windy|stormy|foggy|night|sunset`; `?study` a close look at your boat; `?zoom=`; `?hand=left` the joystick on the left (it's on the right unless asked); `?preview` small and quiet.
  */
 import { CLEAR, GATE_HALF, GATE_Z, START_Z, groundAt, makeCoast, seaAt, seaward, shoreAt, type Coast } from './coast';
 import { BOATS, CLIMB, HALF_BEAM, LEVELS, LINE, VMAX, local, newRace, runFor, standings, start, step, world, type Level, type Mode, type Race, type Rescue } from './race';
@@ -673,7 +674,7 @@ function frame(now: number) {
     vp, eye, time: t, right, up, near: 0.5, far: 1800, focusDist: lens.focus, aperture: lens.aperture,
     zMin: Math.min(eye[2], fb.z) - 160 - 400 * Math.max(0, -Math.cos(camYaw)), zMax: Math.max(eye[2], fb.z) + 160 + 700 * Math.max(0, Math.cos(camYaw)),
     focus: ui === 'podium' ? [coast.berths[2].x, coast.berths[2].z - 30] : [fb.x, fb.z], draws, wakes: wakes.data, wakeCount: wakes.count, fx: marks.data, fxCount: marks.count, holes, holeCount: hc, hulls, hullCount: hullsOf(),
-    weather, flash, spot: spotAt, spotDir,
+    weather, flash, spot: spotAt, spotDir, rally: mode === 'rally',
   };
   if (ui === 'title') { f.zMin = showPath.z0 - 400; f.zMax = showPath.z1 + 400; }
   if (ui === 'podium') { f.zMin = GATE_Z - 200; f.zMax = GATE_Z + 400; }
@@ -720,6 +721,8 @@ function refScene(kind: string) {
     for (const o of race.boats) place(o, L.x + ox * 60 + tx * (o.id * 9 - 10), L.z + oz * 60 + tz * (o.id * 9 - 10) + 30, 0.2, 5);
     refCam = { from: [L.x + ox * 85 - tx * 70, 26, L.z + oz * 85 - tz * 70], target: [L.x + ox * 10 + tx * 25, 6, L.z + oz * 10 + tz * 25], fov: 0.8, aperture: 0.3, focus: 90 };
   } else {
+    // (the hero shot has the finish banner over the harbour mouth: the Rally's)
+    mode = 'rally';
     place(me, G.x - 3, G.z - 172, 0.04, 8);
     const others = race.boats.filter((o) => o !== me), spots = [[22, -122, -0.15], [-24, -96, 0.12], [6, -70, 0], [-10, -142, 0.22]];
     others.forEach((o, i) => place(o, G.x + spots[i][0], G.z + spots[i][1], spots[i][2], 7));

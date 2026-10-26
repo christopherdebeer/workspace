@@ -19,6 +19,7 @@ Made by `node cells/lab/views.mjs rescue-coast` from `client/rescue-coast/views.
 
 ![The line goes over: alongside and slowed right down, the little boat in the lee of the hull: the crew throws a line; the camera cuts in](v-line.jpg)
 ![Climbing aboard: held steady, the water calm in the lifeboat’s lee: a crew member leans over the rail to take a hand, and up they come](v-climb.jpg)
+![Rough water: with the little boat on the side the swell comes from, it’s bumpy alongside: they climb across more slowly, and the bar goes amber](v-rough.jpg)
 ![A full deck: the rescued fill the aft deck, then the foredeck, the side decks and the roof](v-deck.jpg)
 
 ## Home
