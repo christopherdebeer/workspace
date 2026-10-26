@@ -181,8 +181,10 @@ function camera(dt: number, t: number, w: number, h: number) {
 }
 
 // ─── each frame: where everything is ───
-const holes = new Float32Array(48);
+const holes = new Float32Array(48), hulls = new Float32Array(24);
 const told = new Set<string>();
+/** the lifeboats for the sea's foam (x, z, heading, speed) */
+function hullsOf() { race.boats.slice(0, 6).forEach((b, i) => hulls.set([b.x, b.z, b.h, Math.abs(b.v)], i * 4)); return Math.min(6, race.boats.length); }
 function people(t: number, dt: number) {
   for (const l of Object.values(lists)) l.clear();
   // (the lifeboats, their crew, and everyone they've taken aboard)
@@ -583,7 +585,7 @@ function frame(now: number) {
   const f: Frame = {
     vp, eye, time: t, right, up, near: 0.5, far: 1800, focusDist: lens.focus, aperture: lens.aperture,
     zMin: Math.min(eye[2], fb.z) - 160 - 400 * Math.max(0, -Math.cos(camYaw)), zMax: Math.max(eye[2], fb.z) + 160 + 700 * Math.max(0, Math.cos(camYaw)),
-    focus: ui === 'podium' ? [coast.berths[2].x, coast.berths[2].z - 30] : [fb.x, fb.z], draws, wakes: wakes.data, wakeCount: wakes.count, fx: marks.data, fxCount: marks.count, holes, holeCount: hc,
+    focus: ui === 'podium' ? [coast.berths[2].x, coast.berths[2].z - 30] : [fb.x, fb.z], draws, wakes: wakes.data, wakeCount: wakes.count, fx: marks.data, fxCount: marks.count, holes, holeCount: hc, hulls, hullCount: hullsOf(),
     weather, flash, spot: spotAt, spotDir,
   };
   if (ui === 'title') { f.zMin = showPath.z0 - 400; f.zMax = showPath.z1 + 400; }
@@ -623,7 +625,7 @@ function refScene(kind: string) {
     k.left = k.craft.people.length;
     for (const o of race.boats) if (o !== me) place(o, G.x + (o.id - 2) * 30, G.z - 120 - o.id * 12, 0.1, 6);
     const at = world(me, side * 9.5, -5.5), look = world(me, side * 2.6, -1.4);
-    refCam = { from: [at[0], 2.4, at[1]], target: [look[0], 1.1, look[1]], fov: 0.62, aperture: 0.8, focus: 9 };
+    refCam = { from: [at[0], 2.4, at[1]], target: [look[0], 1.1, look[1]], fov: 0.62, aperture: 0.5, focus: 9 };
   } else {
     place(me, G.x - 3, G.z - 172, 0.04, 8);
     const others = race.boats.filter((o) => o !== me), spots = [[22, -122, -0.15], [-24, -96, 0.12], [6, -70, 0], [-10, -142, 0.22]];

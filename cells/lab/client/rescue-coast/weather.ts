@@ -33,7 +33,7 @@ const base: Weather = {
   fillSky: [0.55, 0.7, 0.95], fillGround: [0.5, 0.46, 0.4],
   skyTop: [0.2, 0.46, 0.86], skyHorizon: [0.76, 0.87, 0.96], cloud: 0.5, cloudDark: 0.25,
   haze: [0.74, 0.85, 0.95], fogStart: 140, fogScale: 900, fogMax: 0.75,
-  deep: [0.03, 0.17, 0.45], body: [0.06, 0.36, 0.66],
+  deep: [0.02, 0.15, 0.33], body: [0.04, 0.4, 0.58],
   exposure: 1.05, saturation: 1.14, rain: 0, lightning: false, dark: 0, stars: false, gulls: true,
 };
 export const WEATHERS: Record<WeatherName, Weather> = {
