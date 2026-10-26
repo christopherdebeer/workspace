@@ -383,7 +383,7 @@ void main() {
   vec3 sp = spot(vW, N);
   c += sp * (uBody * .2 + .035 + .06 * pow(max(0., dot(R, normalize(uSpot.xyz - vW))), 30.));
   // ─── foam: only where it's made — breaking crests, round the hulls, at the rocks — and old foam drifting thin ───
-  float tex = foamTex(P * .9, uTime);
+  float tex = foamTex(P * 1.4, uTime);
   float pinch = smoothstep(.74 + .06 * uSeaLook.x, .3, vFold);
   float crest = pinch * smoothstep(.35, .75, tall) * smoothstep(.15, .5, noise2(P * .05 + uTime * .015)) * (.7 + .25 * uSeaLook.x);
   // (old foam: thin streaks drawn out downwind, here and there)
@@ -409,14 +409,14 @@ void main() {
   // (the surf: a white edge at the rocks, and sets of broken water rolling in)
   float sr = min(s, rockAt(P) + .3 + noise2(P * .7) * 1.2);
   float surge = .5 + .5 * sin(sr * 1.15 - uTime * 2.3 + noise2(P * .15) * 6.);
-  float surf = max((1. - smoothstep(.0, 3.5, sr)) * .95, (1. - smoothstep(.0, 11., sr)) * surge * .75);
+  float surf = max((1. - smoothstep(.0, 3.5, sr)) * .95, (1. - smoothstep(.0, 8., sr)) * surge * surge * .6);
   float cov = clamp(max(max(crest, old), max(hull, surf)), 0., 1.);
   float foam = foamMask(cov, tex);
   // (foam is lit like a rough white thing on the swell: shaded on the sides turned away, never a flat sticker; thin foam shows the sea)
-  float fl = max(dot(G, L), 0.);
+  float fl = max(dot(normalize(G + (N - G) * 1.6), L), 0.);
   vec3 white = lin(vec3(.86, .9, .93)) * (uSunC * (fl * .5 + .08) * mix(.45, 1., sh) + skyFill(G) * .85 + sp * .5);
-  white *= .82 + .18 * tex;
-  c = mix(c, white, foam * (.55 + .45 * smoothstep(.2, .8, cov)));
+  white *= .6 + .4 * tex * tex;
+  c = mix(c, white, foam * (.5 + .5 * smoothstep(.25, .85, cov)) * (.7 + .3 * smoothstep(1. - cov, 1.3 - cov, tex)));
   o = vec4(outc(aerial(c, vW)), 1.);
 }`;
 

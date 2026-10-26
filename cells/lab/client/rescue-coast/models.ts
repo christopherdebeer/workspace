@@ -13,7 +13,7 @@
 import { Builder, M, SRC, WHITE, join, smooth, type Mesh, type RGB, type V3 } from './shapes';
 import { seeded } from '../kit/rng';
 
-const NAVY: RGB = [0.05, 0.11, 0.3], BOOT: RGB = [0.75, 0.09, 0.07], DECK: RGB = [0.6, 0.63, 0.64], BLACK: RGB = [0.06, 0.06, 0.07];
+const NAVY: RGB = [0.05, 0.11, 0.3], BOOT: RGB = [0.75, 0.09, 0.07], DECK: RGB = [0.34, 0.38, 0.41], BLACK: RGB = [0.06, 0.06, 0.07];
 const STEEL: RGB = [0.85, 0.87, 0.88], GLASS: RGB = [0.06, 0.1, 0.15], ORANGE: RGB = [1, 0.38, 0.04], ROPE: RGB = [0.98, 0.82, 0.2];
 
 // ─── the lifeboat ───
@@ -21,7 +21,7 @@ const STEEL: RGB = [0.85, 0.87, 0.88], GLASS: RGB = [0.06, 0.1, 0.15], ORANGE: R
 /** the hull's shape: t from 0 at the transom to 1 at the stem */
 export const HULL = { z0: -5.4, z1: 5.6 };
 const hb = (t: number) => t < 0.5 ? 2.0 + 0.1 * Math.sin((t / 0.5) * Math.PI / 2) : 2.1 * Math.pow(Math.max(0, 1 - Math.pow((t - 0.5) / 0.5, 2.2)), 0.6);
-export const sheer = (t: number) => 1.25 + 0.22 * t + 0.6 * t ** 4;
+export const sheer = (t: number) => 1.42 + 0.24 * t + 0.55 * t ** 4;
 const keel = (t: number) => t < 0.7 ? -0.62 - 0.23 * Math.min(1, t / 0.25) : -0.85 + 1.5 * ((t - 0.7) / 0.3) ** 1.8;
 export const tAt = (z: number) => (z - HULL.z0) / (HULL.z1 - HULL.z0);
 /** the deck's height at a point along the boat */
@@ -62,48 +62,69 @@ export function lifeboat(): Mesh {
   b.use(0, SRC.A, M.PAINT); b.tube([-1.95, sheer(0) + 0.08, HULL.z0 + 0.02], [1.95, sheer(0) + 0.08, HULL.z0 + 0.02], 0.16, WHITE, 8);
   // (RNLI along the bow, both sides, following the hull's flare)
   b.use(0, SRC.OWN, M.PAINT);
-  for (const side of [-1, 1]) letters(b, 'RNLI', side, 0.3, 0.33, 0.092);
-  // ─── the wheelhouse ───
-  const wz = -0.9, wy = deckAt(wz);
-  b.use(0, SRC.A, M.PAINT);
-  b.roundBox([0, wy + 0.82, wz], [1.62, 0.84, 1.9], 0.3, WHITE, 4);
-  // (its windows: wrapped round the front and along the sides)
-  b.use(0, SRC.OWN, M.WINDOW);
-  for (const x of [-0.95, 0, 0.95]) b.quad([x - 0.42, wy + 1.0, wz + 1.91], [x + 0.42, wy + 1.0, wz + 1.91], [x + 0.42, wy + 1.5, wz + 1.91], [x - 0.42, wy + 1.5, wz + 1.91], GLASS);
-  for (const side of [-1, 1]) for (const z of [wz - 1.2, wz, wz + 1.1]) {
-    const x = side * 1.63, q: V3[] = [[x, wy + 1.0, z - 0.45], [x, wy + 1.0, z + 0.45], [x, wy + 1.5, z + 0.45], [x, wy + 1.5, z - 0.45]];
-    if (side < 0) b.quad(q[0], q[1], q[2], q[3], GLASS); else b.quad(q[1], q[0], q[3], q[2], GLASS);
+  for (const side of [-1, 1]) letters(b, 'RNLI', side, 0.3, 0.42, 0.1);
+  // (tyre fenders hung on short lines along both sides)
+  b.use(0, SRC.OWN, M.SOFT);
+  for (const side of [-1, 1]) for (const z of [-4.1, -2.6, -1.1, 3.35]) {
+    const t = tAt(z), x = side * (hb(t) + 0.13), y = sheer(t) - 0.62;
+    b.basis([x, y, z], [0, 0, 1], [0, 1, 0], [side, 0, 0]);
+    b.torus([0, 0, 0], 0.27, 0.13, () => BLACK, 14, 6);
+    b.at();
+    b.tube([x, y + 0.36, z], [side * (hb(t) - 0.02), sheer(t) + 0.06, z], 0.025, ROPE, 4);
   }
-  // (the roof: pale, with the upper steering position at its front, rails round it)
-  const ry = wy + 1.68;
-  b.use(0, SRC.OWN, M.PAINT); b.roundBox([0, ry + 0.06, wz], [1.74, 0.08, 2.04], 0.07, [0.92, 0.92, 0.9], 3);
-  b.use(0, SRC.A, M.PAINT); b.roundBox([0, ry + 0.45, wz + 1.25], [1.0, 0.36, 0.28], 0.1, WHITE, 3);
-  b.use(0, SRC.OWN, M.GLASS); b.quad([-0.85, ry + 0.82, wz + 1.38], [0.85, ry + 0.82, wz + 1.38], [0.85, ry + 1.25, wz + 1.18], [-0.85, ry + 1.25, wz + 1.18], [0.2, 0.3, 0.36]);
+  // ─── the wheelhouse: tall and chunky, its corners rounded, windows framed all round ───
+  const wz = -0.9, wy = deckAt(wz), WH = 1.02, WX = 1.6, WZ = 1.95;
+  b.use(0, SRC.A, M.PAINT);
+  b.roundBox([0, wy + WH, wz], [WX, WH, WZ], 0.34, WHITE, 5);
+  // (a darker plinth where it meets the deck)
+  b.use(0, SRC.OWN, M.PAINT); b.roundBox([0, wy + 0.1, wz], [WX + 0.04, 0.1, WZ + 0.04], 0.08, [0.15, 0.17, 0.2], 2);
+  // (windows: dark glass, a black frame proud of the wall)
+  const pane = (c: V3, u: V3, v: V3, n: V3, w: number, h: number) => {
+    const P = (a: number, bb: number, out: number): V3 => [c[0] + u[0] * a + v[0] * bb + n[0] * out, c[1] + u[1] * a + v[1] * bb + n[1] * out, c[2] + u[2] * a + v[2] * bb + n[2] * out];
+    b.use(0, SRC.OWN, M.WINDOW);
+    b.quad(P(-w, -h, 0.012), P(w, -h, 0.012), P(w, h, 0.012), P(-w, h, 0.012), GLASS);
+    b.use(0, SRC.OWN, M.PAINT);
+    const f = 0.06, d = 0.05;
+    for (const [a0, a1, b0, b1] of [[-w - f, w + f, h, h + f], [-w - f, w + f, -h - f, -h], [-w - f, -w, -h, h], [w, w + f, -h, h]]) {
+      b.quad(P(a0, b0, d), P(a1, b0, d), P(a1, b1, d), P(a0, b1, d), BLACK);
+    }
+  };
+  const wy0 = wy + 1.35, wh = 0.36;
+  for (const x of [-1.0, 0, 1.0]) pane([x, wy0, wz + WZ + 0.005], [1, 0, 0], [0, 1, 0], [0, 0, 1], 0.4, wh);
+  for (const side of [-1, 1]) for (const z of [wz - 1.25, wz, wz + 1.2]) pane([side * (WX + 0.005), wy0, z], [0, 0, -side], [0, 1, 0], [side, 0, 0], 0.46, wh);
+  for (const x of [-0.75, 0.75]) pane([x, wy0, wz - WZ - 0.005], [-1, 0, 0], [0, 1, 0], [0, 0, -1], 0.38, wh);
+  // (the roof: pale, with an upper steering position at its front — a chunky coaming in the boat's colour and a windscreen)
+  const ry = wy + WH * 2;
+  b.use(0, SRC.OWN, M.PAINT); b.roundBox([0, ry + 0.05, wz], [WX + 0.1, 0.07, WZ + 0.1], 0.07, [0.92, 0.92, 0.9], 3);
+  b.use(0, SRC.A, M.PAINT);
+  b.roundBox([0, ry + 0.34, wz + WZ - 0.12], [WX - 0.05, 0.3, 0.14], 0.1, WHITE, 3);
+  for (const side of [-1, 1]) b.roundBox([side * (WX - 0.08), ry + 0.34, wz + 0.55], [0.12, 0.3, 1.25], 0.1, WHITE, 3);
+  b.use(0, SRC.OWN, M.GLASS); b.quad([-1.3, ry + 0.64, wz + WZ - 0.1], [1.3, ry + 0.64, wz + WZ - 0.1], [1.3, ry + 1.02, wz + WZ - 0.3], [-1.3, ry + 1.02, wz + WZ - 0.3], [0.2, 0.3, 0.36]);
   b.use(0, SRC.OWN, M.GLASS);
-  for (const [x0, z0, x1, z1] of [[-1.6, -2.75, 1.6, -2.75], [-1.6, -2.75, -1.6, 0.6], [1.6, -2.75, 1.6, 0.6]] as const) b.tube([x0, ry + 0.75, wz + z0 + 0.9], [x1, ry + 0.75, wz + z1 + 0.9], 0.045, STEEL, 6);
-  for (const [x, z] of [[-1.6, -1.85], [1.6, -1.85], [-1.6, 0], [1.6, 0], [-1.6, 1.5], [1.6, 1.5], [0, -1.85]]) b.tube([x, ry + 0.1, wz + z], [x, ry + 0.75, wz + z], 0.04, STEEL, 6);
+  for (const [x0, z0, x1, z1] of [[-1.6, -2.75, 1.6, -2.75], [-1.6, -2.75, -1.6, 0.6], [1.6, -2.75, 1.6, 0.6]] as const) b.tube([x0, ry + 0.75, wz + z0 + 0.9], [x1, ry + 0.75, wz + z1 + 0.9], 0.05, STEEL, 6);
+  for (const [x, z] of [[-1.6, -1.85], [1.6, -1.85], [0, -1.85]]) b.tube([x, ry + 0.1, wz + z], [x, ry + 0.75, wz + z], 0.045, STEEL, 6);
   // (lifebuoys on the wheelhouse sides, a searchlight)
   b.use(0, SRC.OWN, M.PAINT);
   for (const side of [-1, 1]) {
-    b.basis([side * 1.66, wy + 0.7, wz - 0.2], [0, 0, 1], [0, 1, 0], [side, 0, 0]);
-    b.torus([0, 0, 0], 0.36, 0.11, (i) => (Math.floor(i / 2) % 2 ? WHITE : ORANGE), 16, 6);
+    b.basis([side * (WX + 0.06), wy + 0.72, wz - 0.2], [0, 0, 1], [0, 1, 0], [side, 0, 0]);
+    b.torus([0, 0, 0], 0.38, 0.12, (i) => (Math.floor(i / 2) % 2 ? WHITE : ORANGE), 16, 6);
     b.at();
   }
-  b.at(0.9, ry + 0.12, wz + 1.7); b.lathe([[0.12, 0], [0.16, 0.18], [0.2, 0.32], [0.2, 0.42], [0, 0.44]], [0.2, 0.2, 0.22], 10); b.at();
+  b.at(0.95, ry + 0.66, wz + WZ - 0.12); b.lathe([[0.12, 0], [0.16, 0.18], [0.2, 0.32], [0.2, 0.42], [0, 0.44]], [0.2, 0.2, 0.22], 10); b.at();
   // ─── the mast: black, tall, with its radar bar, beacon and lights; the pennant in the boat's colour ───
-  const mz = wz - 1.0;
+  const mz = wz - 1.0, MH = 2.5;
   b.use(0, SRC.OWN, M.PAINT);
-  for (const side of [-1, 1]) b.tube([side * 0.75, ry + 0.1, mz], [side * 0.42, ry + 3.0, mz + 0.15], 0.1, BLACK, 8);
-  for (const y of [1.25, 2.4]) b.tube([-0.7 + y * 0.1, ry + y, mz + y * 0.05], [0.7 - y * 0.1, ry + y, mz + y * 0.05], 0.07, BLACK, 6);
-  b.box(-1.0, 1.0, ry + 3.0, ry + 3.16, mz - 0.12, mz + 0.42, BLACK);
-  b.box(-0.85, 0.85, ry + 3.2, ry + 3.32, mz + 0.05, mz + 0.3, [0.93, 0.93, 0.93]);
-  b.tube([0, ry + 3.32, mz + 0.15], [0, ry + 4.35, mz + 0.15], 0.05, BLACK, 6);
-  for (const side of [-1, 1]) b.tube([side * 0.75, ry + 3.16, mz + 0.15], [side * 0.75, ry + 4.1, mz + 0.15], 0.025, BLACK, 4);
+  for (const side of [-1, 1]) b.tube([side * 0.8, ry + 0.1, mz], [side * 0.48, ry + MH, mz + 0.15], 0.13, BLACK, 8);
+  for (const y of [1.0, 1.9]) b.tube([-0.75 + y * 0.12, ry + y, mz + y * 0.06], [0.75 - y * 0.12, ry + y, mz + y * 0.06], 0.08, BLACK, 6);
+  b.roundBox([0, ry + MH + 0.1, mz + 0.15], [1.05, 0.1, 0.3], 0.06, BLACK, 2);
+  b.roundBox([0, ry + MH + 0.3, mz + 0.18], [0.85, 0.07, 0.16], 0.05, [0.93, 0.93, 0.93], 2);
+  b.tube([0, ry + MH + 0.36, mz + 0.15], [0, ry + MH + 1.15, mz + 0.15], 0.06, BLACK, 6);
+  for (const side of [-1, 1]) b.tube([side * 0.8, ry + MH + 0.2, mz + 0.15], [side * 0.8, ry + MH + 0.9, mz + 0.15], 0.03, BLACK, 4);
   b.use(0, SRC.OWN, M.LIT);
-  b.at(0, ry + 3.32, mz + 0.42); b.lathe([[0.13, 0], [0.13, 0.22], [0.06, 0.3], [0, 0.32]], [0.25, 0.5, 1], 10); b.at();
-  b.sphere([0, ry + 4.4, mz + 0.15], 0.08, [1, 1, 0.92], [1, 1, 1], 4, 6);
-  b.sphere([0.95, ry + 3.08, mz + 0.5], 0.07, [0.2, 1, 0.3], [1, 1, 1], 3, 5); b.sphere([-0.95, ry + 3.08, mz + 0.5], 0.07, [1, 0.2, 0.15], [1, 1, 1], 3, 5);
-  pennant(b, [0, ry + 4.25, mz + 0.15], 1.2, 0.5);
+  b.at(0, ry + MH + 0.36, mz + 0.45); b.lathe([[0.15, 0], [0.15, 0.24], [0.07, 0.32], [0, 0.34]], [0.25, 0.5, 1], 10); b.at();
+  b.sphere([0, ry + MH + 1.2, mz + 0.15], 0.09, [1, 1, 0.92], [1, 1, 1], 4, 6);
+  b.sphere([1.0, ry + MH + 0.08, mz + 0.5], 0.08, [0.2, 1, 0.3], [1, 1, 1], 3, 5); b.sphere([-1.0, ry + MH + 0.08, mz + 0.5], 0.08, [1, 0.2, 0.15], [1, 1, 1], 3, 5);
+  pennant(b, [0, ry + MH + 1.05, mz + 0.15], 1.1, 0.48);
   // ─── the aft deck: rails, a tow post, a coil of line ───
   b.use(0, SRC.OWN, M.GLASS);
   const ay = sheer(0) + 0.82;
@@ -176,7 +197,7 @@ export const SEATS: [number, number][] = (() => {
 })();
 /** the roof, for when the decks are full (across, along, height above the deck) */
 export const ROOF: [number, number][] = [[-1.0, -2.2], [1.0, -2.2], [-1.0, -1.4], [1.0, -1.4], [0, -2.5], [-1.05, -0.6], [1.05, -0.6]];
-export const ROOF_Y = deckAt(-0.9) + 1.76;
+export const ROOF_Y = deckAt(-0.9) + 2.12;
 
 // ─── people ───
 

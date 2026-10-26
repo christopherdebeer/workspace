@@ -173,7 +173,7 @@ function camera(dt: number, t: number, w: number, h: number) {
   eye = from;
   // (the lens: in focus where the camera looks, softening nearer and further; stronger for the still shots)
   lens.focus = refCam ? refCam.focus : ui === 'race' && !study ? Math.hypot(followed().x - from[0], followed().z - from[2]) : Math.hypot(target[0] - from[0], target[1] - from[1], target[2] - from[2]);
-  lens.aperture = refCam ? refCam.aperture : ui === 'title' ? 0.9 : ui === 'podium' ? 0.6 : study ? 0.8 : ui === 'race' && camLean !== 0 && Math.abs(camLean) > 0.2 ? 0.7 : 0.4;
+  lens.aperture = refCam ? refCam.aperture : ui === 'title' ? 0.45 : ui === 'podium' ? 0.45 : study ? 0.5 : ui === 'race' && Math.abs(camLean) > 0.2 ? 0.5 : 0.35;
   const view = mat4.lookAt(from, target, [0, 1, 0]), proj = mat4.perspective(fov, aspect, 0.5, 1800);
   proj[9] = -shift;
   vp = mat4.mul(proj, view);

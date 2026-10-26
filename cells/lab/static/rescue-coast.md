@@ -16,7 +16,7 @@ It shares no code with the original [Rescue Race](/rescue), which stays as it is
 
 The title is the boards' title card: your lifeboat charging along under the lighthouse's headland in the weather you've chosen, the logo over it, and the menu:
 - **Play:** straight into a race.
-- **Boats:** choose your lifeboat. All five are the same all-weather lifeboat, each wheelhouse in its own colour: Puffin orange, Seal red, Gannet blue, Otter yellow, Dolphin green. Each shows your best with it.
+- **Boats:** choose your lifeboat. All five are the same all-weather lifeboat: a navy hull with tyre fenders along its sides, a tall rounded wheelhouse with framed windows and an upper steering position, a black mast; each wheelhouse in its own colour: Puffin orange, Seal red, Gannet blue, Otter yellow, Dolphin green. Each shows your best with it.
 - **Weather:** seven tiles; the title behind changes as you pick.
 - **Settings:**
   - how good the other boats are (easy, medium, hard);
@@ -162,16 +162,18 @@ Its own WebGL2 renderer: the lab ships one bundle with no packages, so Three.js 
 - **Materials:** glossy painted toys, glass and metal, skin and cloth, granite (grain, flecks, lichen on top, darker and glossy where the sea wets it), lamps, gorse.
 - **The sky:** cumulus over the horizon.
 - **Distance:** hazed toward the horizon.
-- **The finish:** one filmic tone curve over everything.
+- **The finish:** everything is drawn in linear light into a floating-point buffer (where the phone allows); one pass then adds the glow of the brightest things, a soft focus away from what the camera is looking at (stronger on the title and close-ups, so the scene reads as a model), the exposure, one filmic tone curve, and a light vignette.
+- **Checked against the boards:** `?ref=hero` and `?ref=rescue` hold two fixed scenes laid out like the boards' hero shot and close rescue (the HUD hidden, nothing moving). `node devtools/rescue-coast-fidelity.mjs <dir>` draws them and puts each beside its target panel, kept in `devtools/fidelity/`.
 
 The sea:
 - **The swell:** eight Gerstner waves, from a 24 m swell down to 1.7 m chop, the same sums on the CPU (the boats ride them) and in GLSL; the weather scales their height and steepness. Faces turned to the light are brighter, backs and troughs darker, so the relief reads from above.
-- **Its colour:** deep cobalt, lighter where the light comes through a wave, the sky reflected in it, sun glitter.
-- **Foam:**
-  - lace where the crests fold;
-  - wind streaks drawn out along the waves;
-  - surf breaking along every shore;
-  - wakes, white straight behind the stern and two long arms;
+- **Its colour:** light coming back up out of the water, lit by the sun and the sky, dark navy in the troughs and teal where a crest is thin enough for the light to come through it, greener in the shallows; the sky reflected more at a glancing angle; a sheen toward the sun and fine glints where a ripple turns just right.
+- **Foam:** only where something makes it, as bubbly clumps that fill in as there's more of it and thin out at their edges, lit and shaded like a rough white thing on the swell:
+  - whitecaps where a high crest folds (in patches, not on every crest);
+  - old foam drawn out thin downwind, here and there;
+  - round each lifeboat's hull a collar and a bow wave that grows with speed, a lap of white round each little boat;
+  - surf along every shore and round every rock that stands through the water (the coast's field keeps the distance to both);
+  - wakes, white straight behind the stern and two long broken arms, lying on the sea as it's drawn (displaced sideways by the waves, as the boats are);
   - spray off the bow when going fast (most when it slams into a wave), and on the rocks.
 
 **Cost on a phone** (counted in the browser, a race in full swing): about 125 draw calls and 800k triangles a frame. That's within Sol's budget for draw calls, but the triangles want watching: the boulders and the ground are most of them.
