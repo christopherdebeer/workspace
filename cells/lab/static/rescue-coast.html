@@ -30,10 +30,12 @@
     #logo .lily { font-size: 50px; transform: rotate(-4deg) translateX(-30px); }
     #logo .rescue { font-size: 54px; transform: rotate(-4deg); }
     #logo svg { width: 190px; height: 22px; margin-top: 4px; transform: rotate(-4deg); filter: drop-shadow(0 2px 0 #fff) drop-shadow(0 -2px 0 #fff); }
+    #logo .tagline { margin-top: 4px; font-size: 22px; font-weight: 700; color: #fff; paint-order: stroke fill; -webkit-text-stroke: 5px var(--ink); transform: rotate(-4deg); }
     #logo .by { margin-top: 6px; font-size: 14px; font-weight: 600; color: #fff; text-shadow: 0 1px 3px rgba(10, 30, 70, .8); }
     #menu { position: fixed; left: max(16px, env(safe-area-inset-left)); bottom: calc(max(16px, env(safe-area-inset-bottom)) + 34px); flex-direction: column; gap: 9px; width: min(220px, 56vw); }
     .pill { display: flex; align-items: center; gap: 10px; padding: 10px 16px 10px 12px; border-radius: 18px; background: var(--paper); box-shadow: inset 0 -3px 0 var(--edge), 0 4px 10px rgba(10, 30, 70, .3); font-size: 20px; font-weight: 600; color: var(--ink); }
     .pill i { font-style: normal; width: 28px; text-align: center; font-size: 21px; }
+    .pill .sub { margin-left: auto; font-size: 12px; font-weight: 600; opacity: .6; }
     .pill.play { background: linear-gradient(#ffd451, var(--gold)); box-shadow: inset 0 -4px 0 var(--gold2), 0 5px 12px rgba(10, 30, 70, .35); font-size: 27px; font-weight: 700; padding: 12px 18px 12px 14px; }
     .pill.play i svg { width: 26px; height: 26px; }
     .pill:active { transform: scale(.96); }
@@ -86,6 +88,7 @@
     .stat .ic { width: 28px; height: 28px; border-radius: 50%; display: flex; align-items: center; justify-content: center; background: rgba(255, 255, 255, .16); font-size: 17px; }
     .stat small { font-size: 12px; font-weight: 600; opacity: .8; }
     .stat.bump { transform: scale(1.15); }
+    .stat .ic .dot { width: 14px; height: 14px; border-radius: 50%; box-shadow: 0 0 0 2px #fff; }
     .stat.hurry { background: rgba(200, 40, 20, .75); animation: throb .6s ease-in-out infinite alternate; }
     @keyframes throb { to { transform: scale(1.07); } }
     .lifebuoy { width: 22px; height: 22px; border-radius: 50%; background: repeating-conic-gradient(#f4561c 0 45deg, #fff 0 90deg); -webkit-mask: radial-gradient(circle, transparent 5px, #000 6px); mask: radial-gradient(circle, transparent 5px, #000 6px); }
@@ -105,8 +108,11 @@
     #bar .meter { width: 120px; height: 13px; border-radius: 7px; background: rgba(255, 255, 255, .25); overflow: hidden; box-shadow: inset 0 0 0 1.5px rgba(255, 255, 255, .6); }
     #bar .meter i { display: block; height: 100%; width: 0; background: linear-gradient(#ffa154, var(--orange)); transition: width .1s linear; }
     #bar span { font-size: 14px; font-weight: 700; }
+    #bar.rough .meter i { background: linear-gradient(#ffd25a, #e9a514); }
     @media (orientation: landscape) { #bar { bottom: auto; top: calc(max(10px, env(safe-area-inset-top)) + 64px); } }
     #arrows { position: fixed; inset: 0; pointer-events: none; }
+    #skip { position: fixed; left: 50%; bottom: calc(max(14px, env(safe-area-inset-bottom)) + 200px); transform: translateX(-50%); z-index: 3; display: none !important; font-size: 17px; }
+    #skip.on { display: flex !important; }
     #arrows .arrow { position: absolute; left: 0; top: 0; }
     #arrows .arrow span { position: absolute; left: -11px; top: -11px; width: 0; height: 0; border-top: 11px solid transparent; border-bottom: 11px solid transparent; border-left: 18px solid #fff; transform-origin: 11px 11px; filter: drop-shadow(0 1px 2px rgba(0, 0, 0, .4)); }
     #arrows .arrow b { position: absolute; left: -13px; top: -13px; width: 26px; height: 26px; border-radius: 50%; color: #fff; font-size: 14px; line-height: 26px; text-align: center; font-weight: 700; box-shadow: 0 0 0 2.5px #fff, 0 1px 3px rgba(0, 0, 0, .35); text-shadow: 0 1px 1px rgba(0, 0, 0, .4); }
@@ -169,9 +175,11 @@
     #reward .row .pill { font-size: 17px; padding: 9px 16px; }
     #reward .row .pill.play { font-size: 20px; }
     #best { font-size: 13px; opacity: .7; }
+    #fleet { font-size: 14px; font-weight: 600; opacity: .75; text-align: center; }
+    #fleet:empty { display: none; }
 
     body.nogl::after { content: 'This needs WebGL2, which this browser doesn\2019 t have.'; position: fixed; inset: 40% 20px auto; text-align: center; }
-    body.preview #labnav, body.preview .title-only, body.preview .race-only, body.preview .podium-only, body.preview #big, body.preview #bubble, body.preview #arrows, body.preview #bar, body.preview #stick, body.preview #horn, body.preview .panel, body.preview #finishflag { display: none !important; }
+    body.preview #labnav, body.preview #skip, body.preview .title-only, body.preview .race-only, body.preview .podium-only, body.preview #big, body.preview #bubble, body.preview #arrows, body.preview #bar, body.preview #stick, body.preview #horn, body.preview .panel, body.preview #finishflag { display: none !important; }
   </style>
 </head>
 <body class="title">
@@ -183,10 +191,12 @@
     <div class="lily">Lily’s</div>
     <div class="rescue">Rescue Boats</div>
     <svg viewBox="0 0 190 22" aria-hidden="true"><path d="M4 14 Q 24 2 44 12 T 84 12 T 124 12 T 164 12 T 186 8" fill="none" stroke="#2a7fd4" stroke-width="5" stroke-linecap="round"/></svg>
+    <div class="tagline">All boats home</div>
     <div class="by">a game by Lily</div>
   </div>
   <nav id="menu" class="title-only">
     <button id="play" class="pill play"><i><svg viewBox="0 0 24 24"><path d="M6 3 L21 12 L6 21 Z" fill="#15306a" stroke="#15306a" stroke-width="2" stroke-linejoin="round"/></svg></i>Play</button>
+    <button id="rally" class="pill"><i>🏁</i>Rally<small class="sub">Lily’s race</small></button>
     <button id="open-boats" class="pill"><i>⛴️</i>Boats</button>
     <button id="open-weather" class="pill"><i id="weather-icon">☀️</i>Weather</button>
     <button id="open-settings" class="pill"><i>⚙️</i>Settings</button>
@@ -206,7 +216,7 @@
   </section>
   <section id="settings-panel" class="panel">
     <h2>Settings</h2>
-    <div class="set"><span>How good are the other boats?</span><div class="seg" id="levels"><button data-level="easy">easy<small>slower, kind</small></button><button data-level="medium">medium<small>a fair race</small></button><button data-level="hard">hard<small>fast, sharp</small></button></div></div>
+    <div class="set"><span>How good are the other crews?</span><div class="seg" id="levels"><button data-level="easy">easy<small>slower, kind</small></button><button data-level="medium">medium<small>a fair race</small></button><button data-level="hard">hard<small>fast, sharp</small></button></div></div>
     <div class="set"><span>The steering stick</span><div class="seg" id="hands"><button data-hand="left">on the left</button><button data-hand="right">on the right</button></div></div>
     <div class="set"><div class="line"><span>Sound</span><button id="sound">on</button></div></div>
     <div class="set"><div class="line"><span>The coast: <b id="seedname"></b></span><button id="newsea">a new coast</button></div></div>
@@ -218,13 +228,14 @@
   <div id="pills" class="race-only">
     <button id="pause" class="glass" aria-label="pause"><svg viewBox="0 0 18 18"><rect x="3" y="2" width="4" height="14" rx="1.5" fill="#fff"/><rect x="11" y="2" width="4" height="14" rx="1.5" fill="#fff"/></svg></button>
     <div class="stat glass" id="stat-count"><span class="ic"><span class="lifebuoy"></span></span><b id="count">0</b><small>rescued</small></div>
-    <div class="stat glass" id="stat-place"><span class="ic">🏆</span><b id="place">1st</b></div>
+    <div class="stat glass" id="stat-place"><span class="ic" id="place-ic">🏆</span><b id="place">1st</b><small id="place-sub"></small></div>
     <div class="stat glass" id="stat-time"><span class="ic">⏱️</span><b id="clock">0:00</b></div>
   </div>
   <div id="mapbox" class="race-only"><canvas id="map" width="224" height="224"></canvas><div id="ladder"></div></div>
   <div id="bubble"></div>
   <div id="bar" class="glass"><span class="lifebuoy"></span><div class="meter"><i></i></div><span></span></div>
   <div id="arrows" class="race-only"></div>
+  <button id="skip" class="pill">Wait in the harbour ⏩</button>
   <div id="big"></div>
   <div id="stick"></div>
   <button id="horn" class="glass" aria-label="horn"><svg viewBox="0 0 32 32"><path d="M4 13 h6 l12 -7 v20 l-12 -7 h-6 z" fill="#fff"/><path d="M25 10 q4 6 0 12" stroke="#fff" stroke-width="2.5" fill="none" stroke-linecap="round"/></svg></button>
@@ -239,6 +250,7 @@
   <!-- the end -->
   <section id="reward" class="podium-only">
     <h2 id="result"></h2>
+    <div id="fleet"></div>
     <div id="stars"></div>
     <div class="rewardrow"><div id="polaroid"><img id="snap" alt=""><span id="snapcap"></span></div><ol id="ranks"></ol></div>
     <div id="best"></div>

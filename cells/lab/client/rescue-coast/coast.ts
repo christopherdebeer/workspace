@@ -12,6 +12,7 @@
  * east. Ashore: lighthouses, the lifeboat station at the start, cottages on the harbour hill, gorse.
  */
 import { seeded, hash, type Rand } from '../kit/rng';
+import { SWELL, calmAt } from './waves';
 
 export const CELL = 2;
 export const X0 = -300, X1 = 300, Z0 = -200;
@@ -50,7 +51,11 @@ export interface Coast {
   surf: Float32Array;
   /** where the hulls may go, on the navigation grid */
   open: Uint8Array;
+  /** how open the water is to the swell (0 sheltered behind land, 1 open), on its own coarse grid (`EXPO` m) */
+  exposure: Float32Array;
 }
+/** the exposure grid */
+export const EXPO = 8, NEX = Math.floor((X1 - X0) / EXPO) + 1, NEZ = Math.floor((Z1 - Z0) / EXPO) + 1;
 
 const ss = (a: number, b: number, v: number) => { const t = Math.max(0, Math.min(1, (v - a) / (b - a))); return t * t * (3 - 2 * t); };
 
@@ -61,6 +66,33 @@ export function sample(f: Float32Array, x: number, z: number) {
   return (f[o] * (1 - a) + f[o + 1] * a) * (1 - b) + (f[o + NX] * (1 - a) + f[o + NX + 1] * a) * b;
 }
 export const shoreAt = (c: Coast, x: number, z: number) => sample(c.shore, x, z);
+/** how open the water is here to the swell: 0 in the lee of a headland or an islet, 1 out in the open */
+export function exposureAt(c: Coast, x: number, z: number) {
+  const u = Math.max(0, Math.min(NEX - 1.001, (x - X0) / EXPO)), v = Math.max(0, Math.min(NEZ - 1.001, (z - Z0) / EXPO));
+  const i = Math.floor(u), j = Math.floor(v), a = u - i, b = v - j, o = j * NEX + i, e = c.exposure;
+  return (e[o] * (1 - a) + e[o + 1] * a) * (1 - b) + (e[o + NEX] * (1 - a) + e[o + NEX + 1] * a) * b;
+}
+/** how much of the swell there is here (0.18-1): smaller near the shore, and in the lee of land; the sea's `k` (the
+ * shader works it out the same way from the same numbers) */
+export const seaAt = (c: Coast, x: number, z: number) => calmAt(shoreAt(c, x, z)) * (0.35 + 0.65 * exposureAt(c, x, z));
+/** the exposure: look back the way the swell comes, along three rays; land close upwind shelters the water */
+function exposeCoast(c: Coast) {
+  const e = new Float32Array(NEX * NEZ), base = Math.atan2(-SWELL[0], -SWELL[1]);
+  for (let j = 0; j < NEZ; j++) for (let i = 0; i < NEX; i++) {
+    const x = X0 + i * EXPO, z = Z0 + j * EXPO;
+    if (shoreAt(c, x, z) < -4) { e[j * NEX + i] = 0; continue; }
+    let shelter = 0;
+    for (const da of [-0.38, 0, 0.38]) {
+      const dx = Math.sin(base + da), dz = Math.cos(base + da);
+      for (let d = 8; d <= 160; d += 6) {
+        if (shoreAt(c, x + dx * d, z + dz * d) < 0) { shelter += 1 - ss(12, 160, d); break; }
+      }
+    }
+    // (inside the harbour mouth it's calm whatever the swell)
+    e[j * NEX + i] = (1 - 0.9 * (shelter / 3)) * (1 - 0.7 * ss(GATE_Z - 10, GATE_Z + 30, z));
+  }
+  c.exposure = e;
+}
 export const groundAt = (c: Coast, x: number, z: number) => sample(c.ground, x, z);
 /** the way out to sea (the shore field's slope) */
 export function seaward(c: Coast, x: number, z: number): [number, number] {
@@ -187,8 +219,9 @@ function tryCoast(seed: number, attempt: number, force = false): Coast | null {
   }
   const coast: Coast = {
     seed, name: `${NAMES_A[hash(seed, 1) % NAMES_A.length]} ${NAMES_B[hash(seed, 2) % NAMES_B.length]}`,
-    shore, ground, centre, gateX, islets, rocks: [], props: [], buoys: [], crafts: [], starts: [], berths: [], surf: new Float32Array(0), open: new Uint8Array(NNX * NNZ),
+    shore, ground, centre, gateX, islets, rocks: [], props: [], buoys: [], crafts: [], starts: [], berths: [], surf: new Float32Array(0), open: new Uint8Array(NNX * NNZ), exposure: new Float32Array(0),
   };
+  exposeCoast(coast);
   // ─── where hulls may go: the navigation grid, and that the race can be run on it ───
   for (let j = 0; j < NNZ; j++) for (let i = 0; i < NNX; i++) coast.open[j * NNX + i] = shoreAt(coast, X0 + (i + 0.5) * NAV, Z0 + (j + 0.5) * NAV) > CLEAR + 3 ? 1 : 0;
   for (let k = 0; k < 5; k++) coast.starts.push({ x: centre(START_Z) + (k - 2) * 13, z: START_Z, h: 0 });
@@ -197,6 +230,11 @@ function tryCoast(seed: number, attempt: number, force = false): Coast | null {
   if (!force && (gateCell < 0 || reach[gateCell] === 0)) return null;
   for (let k = 0; k < 5; k++) coast.berths.push({ x: basin.x + (k - 2) * 9, z: basin.z + basin.rz - 12, h: 0 });
   dress(coast, rand, { west, east, capes, basin, harbourness, low: (z: number) => 1 - ss(-60, 60, z) });
+  // (the buoys are in the way too: the water round each is closed to the routes, so a line of them is gone round, not through)
+  for (const y of coast.buoys) for (let j = Math.floor((y.z - 5 - Z0) / NAV); j <= Math.floor((y.z + 5 - Z0) / NAV); j++) for (let i = Math.floor((y.x - 5 - X0) / NAV); i <= Math.floor((y.x + 5 - X0) / NAV); i++) {
+    if (i < 0 || j < 0 || i >= NNX || j >= NNZ) continue;
+    if (Math.hypot(X0 + (i + 0.5) * NAV - y.x, Z0 + (j + 0.5) * NAV - y.z) < 4.6) coast.open[j * NNX + i] = 0;
+  }
   // (the little boats: spread evenly along the course and across it, each where it can be reached)
   const crafts = coast.crafts, N = 26, z0 = 70, z1 = GATE_Z - 80;
   for (let k = 0; k < N; k++) {
@@ -367,7 +405,9 @@ function dress(c: Coast, rand: Rand, k: {
   for (const side of [-1, 1]) buoys.push({ x: c.gateX + side * (GATE_HALF - 6), z: GATE_Z - 40, kind: side < 0 ? 'red' : 'green' });
   for (const i of c.islets) {
     const dx = c.centre(i.z) - i.x, l = Math.abs(dx) || 1;
-    if (rand() < 0.5) buoys.push({ x: i.x + (dx / l) * (i.r + 11), z: i.z - 6, kind: 'yellow' });
+    // (a yellow mark off some of the rocks, in open water and not one beside another, so there's always room to pass)
+    const bx = i.x + (dx / l) * (i.r + 11), bz = i.z - 6;
+    if (rand() < 0.5 && shoreAt(c, bx, bz) >= 12 && !buoys.some((y) => Math.hypot(y.x - bx, y.z - bz) < 24)) buoys.push({ x: bx, z: bz, kind: 'yellow' });
   }
   for (let b = buoys.length - 1; b >= 0; b--) if (shoreAt(c, buoys[b].x, buoys[b].z) < 8) buoys.splice(b, 1);
   // ─── the surf line: points just off every shore, near enough for spray ───

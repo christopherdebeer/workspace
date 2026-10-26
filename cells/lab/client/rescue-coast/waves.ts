@@ -18,6 +18,13 @@ export const WAVES: readonly (readonly [number, number, number, number, number])
   [0.2, 2.3, 0.04, 0.7, 3.7],
   [-0.75, 1.7, 0.026, 0.7, 1.3],
 ];
+/** the way the swell runs (where the waves are going; they come from the other way): the waves' directions, weighted by height */
+export const SWELL: readonly [number, number] = (() => {
+  let x = 0, z = 0;
+  for (const [a, , amp] of WAVES) { x += Math.sin(a) * amp; z += Math.cos(a) * amp; }
+  const l = Math.hypot(x, z);
+  return [x / l, z / l];
+})();
 /** the weather's sea: how high, how steep (steepness past ~1.45 would fold the surface over itself) */
 export const SEA = { height: 1, chop: 1 };
 const G = 9.81;

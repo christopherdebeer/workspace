@@ -29,10 +29,11 @@ export class MiniMap {
     g.putImageData(data, 0, 0);
   }
   /**
-   * draw it round a boat: `dots` are [x, z, css colour, size]; `boats` are [x, z, heading, css colour, mine?]; the
+   * draw it round a boat: `dots` are [x, z, css colour, size, ring?] (the ring: the colour of a crew going for it); `boats`
+   * are [x, z, heading, css colour, mine?]; the
    * gate is the finish. Heading up; what's to the boat's left is on the left.
    */
-  draw(bx: number, bz: number, h: number, dots: [number, number, string, number][], boats: [number, number, number, string, boolean][], gateX: number) {
+  draw(bx: number, bz: number, h: number, dots: [number, number, string, number, string?][], boats: [number, number, number, string, boolean][], gateX: number) {
     const cv = this.canvas, g = this.ctx, W = cv.width, R = W / 2, s = R / 150;
     const cs = Math.cos(h), sn = Math.sin(h);
     const toScreen = (x: number, z: number): [number, number] => { const dx = x - bx, dz = z - bz; return [R + s * (-dx * cs + dz * sn), R - s * (dx * sn + dz * cs)]; };
@@ -48,10 +49,10 @@ export class MiniMap {
     const [g0x, g0y] = toScreen(gateX - 26, GATE_Z), [g1x, g1y] = toScreen(gateX + 26, GATE_Z);
     g.lineCap = 'butt'; g.lineWidth = 7; g.strokeStyle = '#111'; g.beginPath(); g.moveTo(g0x, g0y); g.lineTo(g1x, g1y); g.stroke();
     g.setLineDash([5, 5]); g.strokeStyle = '#fff'; g.beginPath(); g.moveTo(g0x, g0y); g.lineTo(g1x, g1y); g.stroke(); g.setLineDash([]);
-    for (const [x, z, col, n] of dots) {
+    for (const [x, z, col, n, ring] of dots) {
       const [px, py] = toScreen(x, z);
       if (Math.hypot(px - R, py - R) > R) continue;
-      g.fillStyle = col; g.strokeStyle = '#fff'; g.lineWidth = 2.5; g.beginPath(); g.arc(px, py, 4 + n * 1.5, 0, Math.PI * 2); g.fill(); g.stroke();
+      g.fillStyle = col; g.strokeStyle = ring ?? '#fff'; g.lineWidth = ring ? 4 : 2.5; g.beginPath(); g.arc(px, py, 4 + n * 1.5, 0, Math.PI * 2); g.fill(); g.stroke();
     }
     for (const [x, z, hh, col, me] of boats) {
       const [px, py] = toScreen(x, z), a = -(hh - h);

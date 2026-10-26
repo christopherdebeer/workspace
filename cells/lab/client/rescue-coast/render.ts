@@ -15,10 +15,10 @@
  * 6. **wakes**: ribbons of foam behind each boat;
  * 7. **marks**: spray, splashes, the thrown line, the ring round a little boat that says come alongside.
  */
-import { CELL, COLUMN, NX, NZ, X0, Z0, type Coast } from './coast';
+import { CELL, COLUMN, NX, NZ, X0, Z0, exposureAt, type Coast } from './coast';
 import { STRIDE, type Mesh } from './shapes';
 import { ISTRIDE, type World } from './world';
-import { SEA, wavesGlsl } from './waves';
+import { SEA, SWELL, wavesGlsl } from './waves';
 import type { Weather } from './weather';
 
 export type M4 = Float32Array;
@@ -304,6 +304,8 @@ void main() {
 
 const FIELD = `
 uniform sampler2D uField; uniform vec4 uFieldBox;
+/** the way the swell runs */
+const vec2 SWELL2 = vec2(${SWELL[0].toFixed(5)}, ${SWELL[1].toFixed(5)});
 /** the coast's shore field: metres to the nearest shore (positive over water) */
 float shore(vec2 p) {
   vec2 uv = vec2(((p.x - uFieldBox.x) / uFieldBox.z + .5) / ${NX.toFixed(1)}, ((p.y - uFieldBox.y) / uFieldBox.z + .5) / ${NZ.toFixed(1)});
@@ -316,6 +318,13 @@ float rockAt(vec2 p) {
   return texture(uField, uv).g;
 }
 float calm(float s) { float u = clamp(s / 12., 0., 1.); return .5 + .5 * u * u * (3. - 2. * u); }
+/** how open the water is to the swell (0 in the lee of land, 1 open: the coast's exposure) */
+float expo(vec2 p) {
+  vec2 uv = vec2(((p.x - uFieldBox.x) / uFieldBox.z + .5) / ${NX.toFixed(1)}, ((p.y - uFieldBox.y) / uFieldBox.z + .5) / ${NZ.toFixed(1)});
+  return texture(uField, uv).b;
+}
+/** the sea's k here, as the coast's seaAt has it: smaller near the shore and in the lee of land */
+float seaK(vec2 p) { return calm(shore(p)) * (.35 + .65 * expo(p)); }
 ${wavesGlsl()}`;
 
 const WATER_VS = `#version 300 es
@@ -326,7 +335,7 @@ out vec3 vW; out vec3 vN; out float vFold; out float vS; out vec2 vP0;
 void main() {
   vec2 p = aXZ + uOffset; float s = shore(p);
   vec3 n; float fold;
-  vec3 d = swell(p, uTime, calm(s), n, fold);
+  vec3 d = swell(p, uTime, seaK(p), n, fold);
   vW = vec3(p.x + d.x, d.y, p.y + d.z); vN = n; vFold = fold; vS = s; vP0 = p;
   gl_Position = uVP * vec4(vW, 1.);
 }`;
@@ -371,7 +380,16 @@ void main() {
   vec2 rp = P * 1.7 + vec2(uTime * .7, -uTime * .45), rq = P * 4.1 - vec2(uTime * .55, uTime * .8);
   vec2 rip = vec2(noise2(rp) - .5, noise2(rp + 9.) - .5) * .45 + vec2(noise2(rq) - .5, noise2(rq + 5.) - .5) * .22;
   vec2 rain = (vec2(noise2(P * 7. + uTime * 23.), noise2(P * 7.3 - uTime * 19. + 3.)) - .5) * uSeaLook.y;
-  vec3 G = normalize(vN), N = normalize(vN + vec3(rip.x + rain.x, 0., rip.y + rain.y) * (.35 + .15 * uSeaLook.z));
+  // (in the lee of a lifeboat lying still, the little waves are smoothed and the crests don't break: the shelter it gives)
+  float leeCalm = 0.;
+  for (int i = 0; i < 6; i++) {
+    if (i >= uHullCount) break;
+    vec4 h = uHulls[i]; vec2 d = P - h.xy, fw = vec2(sin(h.z), cos(h.z)), rt = vec2(-fw.y, fw.x);
+    float al = dot(d, fw), ac = dot(d, rt), side = dot(rt * sign(ac), SWELL2);
+    leeCalm = max(leeCalm, (1. - smoothstep(2.4, 7.5, abs(ac))) * (1. - smoothstep(4., 7.5, abs(al))) * smoothstep(.15, .6, side) * (1. - clamp(h.w / 4., 0., 1.)));
+  }
+  float ex = expo(P);
+  vec3 G = normalize(vN), N = normalize(vN + vec3(rip.x + rain.x, 0., rip.y + rain.y) * (.35 + .15 * uSeaLook.z) * (.55 + .45 * ex) * (1. - .7 * leeCalm));
   vec3 V = normalize(uEye - vW), R = reflect(-V, N);
   if (R.y < .02) R = normalize(vec3(R.x, .02, R.z));
   float NV = max(dot(N, V), 0.), fres = .02 + .98 * pow(1. - NV, 5.);
@@ -383,6 +401,8 @@ void main() {
   vec3 shallow = lin(vec3(.12, .62, .64));
   vec3 alb = mix(uDeep, uBody, .18 + .5 * tall * tall);
   alb = mix(alb, shallow * (uBody.b / .32), (1. - smoothstep(1.5, 12., s)) * .45);
+  // (sheltered water a little more turquoise: what you see says where it's calm)
+  alb = mix(alb, shallow * (uBody.b / .32), (1. - ex) * .22);
   vec3 Gd = normalize(G + (N - G) * .8);
   vec3 c = alb * (uSunC * (max(dot(Gd, L), 0.) * .55 + .12) * mix(.55, 1., sh) + skyFill(Gd) * 1.1);
   c += lin(vec3(.1, .7, .66)) * uSunC * through * .05 * mix(.4, 1., sh);
@@ -396,10 +416,10 @@ void main() {
   // ─── foam: only where it's made — breaking crests, round the hulls, at the rocks — and old foam drifting thin ───
   float tex = foamTex(P * 1.4, uTime);
   float pinch = smoothstep(.74 + .06 * uSeaLook.x, .3, vFold);
-  float crest = pinch * smoothstep(.35, .75, tall) * smoothstep(.15, .5, noise2(P * .05 + uTime * .015)) * (.7 + .25 * uSeaLook.x);
+  float crest = pinch * smoothstep(.35, .75, tall) * smoothstep(.15, .5, noise2(P * .05 + uTime * .015)) * (.7 + .25 * uSeaLook.x) * (1. - .85 * leeCalm) * (.4 + .6 * ex);
   // (old foam: thin streaks drawn out downwind, here and there)
   vec2 wd = vec2(.52, .85), q = vec2(dot(P, vec2(wd.y, -wd.x)) * .5, dot(P, wd) * .12);
-  float old = smoothstep(.55, .8, noise2(q + vec2(0., -uTime * .1)) * .6 + fbm(P * .05) * .5) * smoothstep(.5, .75, noise2(P * .03 + 7.)) * .32 * min(1.5, uSeaLook.x);
+  float old = smoothstep(.55, .8, noise2(q + vec2(0., -uTime * .1)) * .6 + fbm(P * .05) * .5) * smoothstep(.5, .75, noise2(P * .03 + 7.)) * .32 * min(1.5, uSeaLook.x) * (1. - .7 * leeCalm) * (.3 + .7 * ex);
   // (round the lifeboats: a collar at the hull, a bow wave that grows with speed; round the little boats a lap of white)
   float hull = 0.;
   for (int i = 0; i < 6; i++) {
@@ -438,7 +458,7 @@ ${FIELD}
 out vec3 vW; out vec3 vUAS; out vec3 vN;
 void main() {
   // (the surface over this world point: undo the swell's sideways shift, as heightAt does, so the wake rides the sea that's drawn)
-  vec3 n; float fold; float k = calm(shore(aXZ)); vec2 p0 = aXZ; vec3 d;
+  vec3 n; float fold; float k = seaK(aXZ); vec2 p0 = aXZ; vec3 d;
   for (int i = 0; i < 3; i++) { d = swell(p0, uTime, k, n, fold); p0 = aXZ - d.xz; }
   d = swell(p0, uTime, k, n, fold);
   vW = vec3(aXZ.x, d.y + .05, aXZ.y); vUAS = aUAS; vN = n;
@@ -474,7 +494,7 @@ void main() {
   vec3 wp;
   if (kind > .5 && kind < 1.5 || kind > 2.5 && kind < 3.5) {
     vec2 p = iP.xz + aC * iP.w; vec3 n; float f;
-    vec3 d = swell(p, uTime, calm(shore(p)), n, f);
+    vec3 d = swell(p, uTime, seaK(p), n, f);
     wp = vec3(p.x, d.y + .08, p.y);
   } else if (kind > 1.5 && kind < 2.5 || kind > 4.5) {
     // (a stretch of line between two points, facing the camera; a beam widens as it goes)
@@ -747,8 +767,8 @@ export class Renderer {
     this.field = gl.createTexture()!;
     gl.bindTexture(gl.TEXTURE_2D, this.field);
     // (two numbers per sample: metres to the shore, and metres to the nearest rock where it stands through the water — the surf wraps both)
-    const field = new Float32Array(NX * NZ * 2);
-    for (let i = 0; i < NX * NZ; i++) { field[i * 2] = c.shore[i]; field[i * 2 + 1] = 30; }
+    const field = new Float32Array(NX * NZ * 4);
+    for (let j = 0; j < NZ; j++) for (let i = 0; i < NX; i++) { const o = j * NX + i; field[o * 4] = c.shore[o]; field[o * 4 + 1] = 30; field[o * 4 + 2] = exposureAt(c, X0 + i * CELL, Z0 + j * CELL); field[o * 4 + 3] = 1; }
     for (const r of c.rocks) {
       let rad: number;
       if (r.kind >= COLUMN) { if (r.y > 0 || r.y + r.sy < 0) continue; rad = Math.max(r.sx, r.sz) * 0.95; }
@@ -757,11 +777,11 @@ export class Renderer {
       const i0 = Math.max(0, Math.floor((r.x - reach - X0) / CELL)), i1 = Math.min(NX - 1, Math.ceil((r.x + reach - X0) / CELL));
       const j0 = Math.max(0, Math.floor((r.z - reach - Z0) / CELL)), j1 = Math.min(NZ - 1, Math.ceil((r.z + reach - Z0) / CELL));
       for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) {
-        const d = Math.hypot(X0 + i * CELL - r.x, Z0 + j * CELL - r.z) - rad, o = (j * NX + i) * 2 + 1;
+        const d = Math.hypot(X0 + i * CELL - r.x, Z0 + j * CELL - r.z) - rad, o = (j * NX + i) * 4 + 1;
         if (d < field[o]) field[o] = d;
       }
     }
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RG16F, NX, NZ, 0, gl.RG, gl.FLOAT, field);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA16F, NX, NZ, 0, gl.RGBA, gl.FLOAT, field);
     for (const [k, v] of [[gl.TEXTURE_MIN_FILTER, gl.LINEAR], [gl.TEXTURE_MAG_FILTER, gl.LINEAR], [gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE], [gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE]]) gl.texParameteri(gl.TEXTURE_2D, k, v);
     for (const t of w.terrain) {
       const vao = gl.createVertexArray()!; gl.bindVertexArray(vao);
