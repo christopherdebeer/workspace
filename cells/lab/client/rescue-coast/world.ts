@@ -7,7 +7,7 @@
  */
 import { CELL, GATE_HALF, GATE_Z, NX, NZ, X0, Z0, type Coast } from './coast';
 import { Builder, type Mesh } from './shapes';
-import { banner, boulder, cottage, gorse, lighthouse, post, station } from './models';
+import { banner, boulder, column, cottage, gorse, lighthouse, post, station } from './models';
 
 export const PIECE = 80;
 export const ISTRIDE = 20;
@@ -18,7 +18,7 @@ export interface PropPiece extends Piece { mesh: Mesh }
 export interface World { terrain: TerrainPiece[]; rocks: RockPiece[]; props: PropPiece[]; boulders: Mesh[]; bouldersFar: Mesh[] }
 
 /** granite: warm, grey, a darker weathered one (sRGB) */
-const GRANITE = [[0.86, 0.72, 0.54], [0.66, 0.6, 0.53], [0.6, 0.5, 0.4], [0.9, 0.8, 0.64], [0.74, 0.63, 0.5]];
+const GRANITE = [[0.88, 0.72, 0.54], [0.72, 0.62, 0.52], [0.66, 0.52, 0.4], [0.9, 0.78, 0.6], [0.8, 0.66, 0.5]];
 
 export function makeWorld(c: Coast): World {
   // ─── the ground ───
@@ -81,5 +81,6 @@ export function makeWorld(c: Coast): World {
     const b = at(GATE_Z); b.at(); banner(b, x0, x1, GATE_Z, y);
   }
   const props: PropPiece[] = [...pieces.entries()].map(([k, b]) => ({ z0: Z0 + k * PIECE - 20, z1: Z0 + (k + 1) * PIECE + 20, mesh: b.done() }));
-  return { terrain, rocks, props, boulders: [0, 1, 2, 3].map((k) => boulder(k + 1, 4)), bouldersFar: [0, 1, 2, 3].map((k) => boulder(k + 1, 2)) };
+  const columns = [0, 1, 2, 3].map((k) => column(k + 1));
+  return { terrain, rocks, props, boulders: [...[0, 1, 2, 3].map((k) => boulder(k + 1, 4)), ...columns], bouldersFar: [...[0, 1, 2, 3].map((k) => boulder(k + 1, 2)), ...columns] };
 }

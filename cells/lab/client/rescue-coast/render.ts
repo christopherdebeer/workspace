@@ -15,7 +15,7 @@
  * 6. **wakes**: ribbons of foam behind each boat;
  * 7. **marks**: spray, splashes, the thrown line, the ring round a little boat that says come alongside.
  */
-import { CELL, NX, NZ, X0, Z0, type Coast } from './coast';
+import { CELL, COLUMN, NX, NZ, X0, Z0, type Coast } from './coast';
 import { STRIDE, type Mesh } from './shapes';
 import { ISTRIDE, type World } from './world';
 import { SEA, wavesGlsl } from './waves';
@@ -135,7 +135,7 @@ float sunShadow(vec3 P, vec3 N) {
 vec3 skyFill(vec3 N) { return mix(uFillGround * .55, uFillSky * .95, N.y * .5 + .5) * (1. + uFog.w * 3.); }
 vec3 skyCol(vec3 r) {
   float h = max(r.y, 0.);
-  vec3 c = mix(uSkyHor, uSkyTop, pow(h, .5));
+  vec3 c = mix(uSkyHor, uSkyTop, pow(h, .38));
   float sd = max(dot(r, uSun), 0.);
   return c + uSunC / 2.7 * (pow(sd, 6.) * .22 + pow(sd, 300.) * 6.);
 }
@@ -212,6 +212,11 @@ void main() {
     alb *= .78 + .38 * g; alb = mix(alb, lin(vec3(.95, .9, .82)), fleck * .25);
     float lichen = smoothstep(.55, .9, N.y) * smoothstep(.55, .75, noise2(vW.xz * .9));
     alb = mix(alb, lin(vec3(.72, .7, .38)), lichen * .45);
+    // (orange lichen crusting the faces above the splash zone; dark where the joints and hollows hold shadow and damp)
+    float dry = smoothstep(1.5, 4., vW.y);
+    float crust = smoothstep(.58, .74, noise2(vW.xz * .32 + vW.y * .45) * .7 + noise2(vW.zy * 1.3 + vW.x * .2) * .3) * dry;
+    alb = mix(alb, lin(vec3(.86, .48, .14)), crust * .6);
+    alb *= mix(.55, 1., smoothstep(-.6, .2, N.y + (g - .5)));
     float wet = 1. - smoothstep(.2, 1.4, vW.y);
     alb *= 1. - wet * .45; spec = mix(.05, .45, wet); gloss = mix(14., 80., wet);
     N = normalize(N + (vec3(noise2(vW.yz * 2.1), 0., noise2(vW.xy * 2.1)) - .5) * .35);
@@ -245,8 +250,13 @@ ${COMMON}
 void main() {
   vec3 N = normalize(vN), P = vW;
   float n1 = fbm(P.xz * .045), n2 = noise2(P.xz * .6), steep = smoothstep(.18, .45, 1. - N.y);
-  vec3 grass = mix(lin(vec3(.33, .52, .16)), lin(vec3(.55, .63, .24)), n1);
-  grass *= .85 + .3 * n2;
+  // (cliff-top turf: olive and sun-dried gold in drifts, greener in the hollows, with thrift and gorse flowering in it)
+  float n3 = noise2(P.xz * .11 + 4.), fl = noise2(P.xz * 3.1);
+  vec3 grass = mix(lin(vec3(.34, .46, .16)), lin(vec3(.68, .62, .3)), smoothstep(.3, .8, n1 * .7 + n3 * .5));
+  grass = mix(grass, lin(vec3(.26, .44, .15)), smoothstep(.55, .8, noise2(P.xz * .07 - 9.)) * .6);
+  grass *= .82 + .3 * n2;
+  grass = mix(grass, lin(vec3(.92, .55, .7)), step(.86, fl) * smoothstep(.5, .7, n3) * .7);
+  grass = mix(grass, lin(vec3(.98, .8, .15)), step(.88, noise2(P.xz * 2.3 + 7.)) * smoothstep(.55, .75, 1. - n3) * .7);
   vec3 rock = mix(lin(vec3(.62, .55, .45)), lin(vec3(.5, .48, .45)), noise2(P.xz * .13 + P.y * .3));
   rock *= .8 + .35 * fbm(vec2(P.x + P.z, P.y) * .8);
   vec3 sand = mix(lin(vec3(.86, .78, .6)), lin(vec3(.72, .68, .6)), n2);
@@ -373,8 +383,9 @@ void main() {
   vec3 shallow = lin(vec3(.12, .62, .64));
   vec3 alb = mix(uDeep, uBody, .18 + .5 * tall * tall);
   alb = mix(alb, shallow * (uBody.b / .32), (1. - smoothstep(1.5, 12., s)) * .45);
-  vec3 c = alb * (uSunC * (max(dot(G, L), 0.) * .55 + .12) * mix(.55, 1., sh) + skyFill(G) * 1.1);
-  c += lin(vec3(.1, .7, .66)) * uSunC * through * .07 * mix(.4, 1., sh);
+  vec3 Gd = normalize(G + (N - G) * .8);
+  vec3 c = alb * (uSunC * (max(dot(Gd, L), 0.) * .55 + .12) * mix(.55, 1., sh) + skyFill(Gd) * 1.1);
+  c += lin(vec3(.1, .7, .66)) * uSunC * through * .05 * mix(.4, 1., sh);
   // (the sky in it, and the sun: a broad sheen and fine glints where a ripple turns just right)
   c = mix(c, skyCol(R) * .92, fres);
   vec3 Hv = normalize(L + V); float nh = max(dot(N, Hv), 0.);
@@ -739,9 +750,10 @@ export class Renderer {
     const field = new Float32Array(NX * NZ * 2);
     for (let i = 0; i < NX * NZ; i++) { field[i * 2] = c.shore[i]; field[i * 2 + 1] = 30; }
     for (const r of c.rocks) {
-      const h = -r.y / r.sy;
-      if (Math.abs(h) >= 1) continue;
-      const rad = Math.max(r.sx, r.sz) * 0.9 * Math.sqrt(1 - h * h), reach = rad + 14;
+      let rad: number;
+      if (r.kind >= COLUMN) { if (r.y > 0 || r.y + r.sy < 0) continue; rad = Math.max(r.sx, r.sz) * 0.95; }
+      else { const h = -r.y / r.sy; if (Math.abs(h) >= 1) continue; rad = Math.max(r.sx, r.sz) * 0.9 * Math.sqrt(1 - h * h); }
+      const reach = rad + 14;
       const i0 = Math.max(0, Math.floor((r.x - reach - X0) / CELL)), i1 = Math.min(NX - 1, Math.ceil((r.x + reach - X0) / CELL));
       const j0 = Math.max(0, Math.floor((r.z - reach - Z0) / CELL)), j1 = Math.min(NZ - 1, Math.ceil((r.z + reach - Z0) / CELL));
       for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) {

@@ -354,6 +354,39 @@ export function boulder(seed: number, n: number): Mesh {
   return smooth(b.done(), 0.8);
 }
 
+/**
+ * a block of the cliff face: granite split along its joints into a squarish block (a square with its corners cut,
+ * each side a little uneven) standing on y = 0 to y = 1, its top and bottom edges rounded by weather — stacked, with
+ * their set-backs, they make the face; the rounded edges between them are its joints
+ */
+export function column(seed: number): Mesh {
+  const rand = seeded(seed * 4271 + 7), b = new Builder();
+  const ring: [number, number][] = [];
+  for (let i = 0; i < 4; i++) {
+    const a = (i / 4) * Math.PI * 2 + Math.PI / 4 + (rand() - 0.5) * 0.3, c = 0.3 + rand() * 0.22;
+    // (each corner cut: two points either side of it)
+    for (const d of [-c, c]) { const r = (1.0 + (rand() - 0.5) * 0.3) / Math.cos(Math.abs(d) * 1.1); ring.push([Math.sin(a + d) * r * 0.86, Math.cos(a + d) * r * 0.86]); }
+  }
+  const m = ring.length, tilt = [(rand() - 0.5) * 0.22, (rand() - 0.5) * 0.22], ty = (x: number, z: number) => x * tilt[0] + z * tilt[1];
+  // (profile up the block: bottom rounded in, the face, the top rounded over; [height, how far out])
+  const prof: [number, number][] = [[0, 0.78], [0.08, 0.93], [0.2, 1], [0.55, 1.03], [0.72, 0.99], [0.85, 0.9], [0.94, 0.74], [1, 0.45]];
+  const shade = (y: number): RGB => { const k = 0.7 + 0.3 * y; return [k, k, k]; };
+  b.use(0, SRC.A, M.ROCK);
+  const C: V3 = [0, 0.5, 0];
+  for (let i = 0; i < m; i++) {
+    const [x0, z0] = ring[i], [x1, z1] = ring[(i + 1) % m];
+    for (let k = 0; k < prof.length - 1; k++) {
+      const [ya, wa] = prof[k], [yb, wb] = prof[k + 1];
+      const P = (x: number, z: number, y: number, w: number): V3 => [x * w, y + (y > 0.5 ? ty(x, z) : 0), z * w];
+      const q0 = P(x0, z0, ya, wa), q1 = P(x1, z1, ya, wa), q2 = P(x1, z1, yb, wb), q3 = P(x0, z0, yb, wb);
+      b.triOut(C, q0, q1, q2, shade(ya)); b.triOut(C, q0, q2, q3, shade(ya));
+    }
+    const top: V3 = [0, 1 + 0.02, 0];
+    b.triOut([0, 0, 0], [x0 * 0.55, 1 + ty(x0, z0), z0 * 0.55], [x1 * 0.55, 1 + ty(x1, z1), z1 * 0.55], top, shade(1));
+  }
+  return smooth(b.done(), 0.8);
+}
+
 // ─── ashore ───
 
 function lump(b: Builder, c: V3, r: number, seed: number, col: (k: number) => RGB) {

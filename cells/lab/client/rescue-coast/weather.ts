@@ -31,10 +31,10 @@ const base: Weather = {
   height: 1.25, chop: 1.15, foam: 1, wind: 1,
   sun: norm([-0.5, 0.72, -0.35]), sunColour: [1, 0.9, 0.76], sunStrength: 2.7,
   fillSky: [0.55, 0.7, 0.95], fillGround: [0.5, 0.46, 0.4],
-  skyTop: [0.2, 0.46, 0.86], skyHorizon: [0.76, 0.87, 0.96], cloud: 0.5, cloudDark: 0.25,
-  haze: [0.74, 0.85, 0.95], fogStart: 140, fogScale: 900, fogMax: 0.75,
-  deep: [0.02, 0.15, 0.33], body: [0.04, 0.4, 0.58],
-  exposure: 1.05, saturation: 1.14, rain: 0, lightning: false, dark: 0, stars: false, gulls: true,
+  skyTop: [0.13, 0.39, 0.86], skyHorizon: [0.6, 0.79, 0.96], cloud: 0.5, cloudDark: 0.25,
+  haze: [0.68, 0.82, 0.95], fogStart: 220, fogScale: 1000, fogMax: 0.6,
+  deep: [0.02, 0.16, 0.3], body: [0.05, 0.47, 0.56],
+  exposure: 1.05, saturation: 1.06, rain: 0, lightning: false, dark: 0, stars: false, gulls: true,
 };
 export const WEATHERS: Record<WeatherName, Weather> = {
   sunny: base,

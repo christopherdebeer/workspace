@@ -29,7 +29,9 @@ export type CraftKind = 'row' | 'kayak' | 'sail';
 export interface Person { skin: number; hair: number; shirt: number; style: number }
 export interface Craft { id: number; x: number; z: number; yaw: number; kind: CraftKind; colour: number; people: Person[] }
 export interface Islet { x: number; z: number; r: number; kind: 'islet' | 'stacks' | 'reef'; light: boolean; wob: number[] }
+/** a boulder (kinds 0-3: centred on y, sy its half height) or a column of the cliff face (kinds 4-7: standing on y, sy its height) */
 export interface Rock { x: number; y: number; z: number; yaw: number; sx: number; sy: number; sz: number; kind: number; tint: number }
+export const COLUMN = 4;
 export type PropKind = 'cottage' | 'lighthouse' | 'station' | 'gorse' | 'post' | 'quay';
 export interface Prop { kind: PropKind; x: number; y: number; z: number; yaw: number; s: number; v: number }
 export interface Buoy { x: number; z: number; kind: 'red' | 'green' | 'yellow' }
@@ -120,17 +122,23 @@ function tryCoast(seed: number, attempt: number, force = false): Coast | null {
       islets.push({ x: x + Math.sin(a) * d, z: z + Math.cos(a) * d, r: r * (0.45 + rand() * 0.3), kind, light: false, wob: [rand() * 6.28, rand() * 6.28, 0.1] });
     }
   }
+  // (skerries: little reefs of rock a stone's throw off the cliffs, where the surf breaks)
+  for (let z = 20 + rand() * 30; z < GATE_Z - 60; z += 22 + rand() * 40) {
+    const side = rand() < 0.5 ? -1 : 1, d = 9 + rand() * 16, x = side < 0 ? west(z) + d : east(z) - d;
+    for (let k = 0; k < 1 + Math.floor(rand() * 3); k++) islets.push({ x: x + (rand() - 0.5) * 9, z: z + (rand() - 0.5) * 12, r: 1.8 + rand() * 2.6, kind: 'reef', light: false, wob: [rand() * 6.28, rand() * 6.28, 0.18] });
+  }
   const big = islets.filter((i) => i.kind === 'islet').sort((a, b) => b.r - a.r)[0];
   if (big) big.light = true;
-  const isletD = (x: number, z: number) => {
-    let d = 1e9;
+  const isletNear = (x: number, z: number): [number, Islet | null] => {
+    let d = 1e9, near: Islet | null = null;
     for (const i of islets) {
       const dx = x - i.x, dz = z - i.z, r = Math.hypot(dx, dz), a = Math.atan2(dx, dz);
       const R = i.r * (1 + i.wob[2] * Math.sin(3 * a + i.wob[0]) + 0.08 * Math.sin(5 * a + i.wob[1]));
-      d = Math.min(d, r - R);
+      if (r - R < d) { d = r - R; near = i; }
     }
-    return d;
+    return [d, near];
   };
+  const isletD = (x: number, z: number) => isletNear(x, z)[0];
   // ─── the shore field: the water's distance from the land (analytic near the shore; then spread over the grid) ───
   const raw = (x: number, z: number) => {
     let w = Math.min(x - west(z), east(z) - x, z - southShore(x));
@@ -166,8 +174,10 @@ function tryCoast(seed: number, attempt: number, force = false): Coast | null {
       if (hb > 0.5) ground[o] = Math.min(ground[o], -3.2 - Math.min(5, s * 0.3)); // (the harbour is dredged)
     } else {
       const d = -s + 2.2 * Math.sin(x * 0.17 + z * 0.11) * nz;
-      const P = 15 + 15 * nz + capeLift(x, z);
-      const cliff = P * (0.36 * ss(0, 2.6, d) + 0.26 * ss(4.2, 6.6, d) + 0.22 * ss(8.4, 10.6, d) + 0.16 * ss(12, 15, d));
+      // (one cliff face standing straight out of the sea — its jointed columns are added in dress — then the land rising gently behind; islets by kind)
+      const [di, isl] = isletNear(x, z), onIslet = isl && di < 0 && di <= -s + 0.5;
+      const P = onIslet ? (isl.kind === 'stacks' ? 16 + 10 * nz : isl.kind === 'reef' ? 1.4 + 1.2 * nz : 9 + 6 * nz) : 15 + 15 * nz + capeLift(x, z);
+      const cliff = P * (0.06 * ss(0, 2, d) + 0.74 * ss(2.8, 6.2, d) + 0.2 * ss(8, 18, d));
       const beach = Math.min(4 + 6 * nz, Math.max(0, -s) * 0.09 + Math.max(0, -s - 30) * 0.3);
       const quay = (-s < 0.6 ? 2.7 * -s / 0.6 : 2.7) + Math.max(0, -s - 14) * 0.2;
       let h = cliff + (beach - cliff) * beachy;
@@ -264,26 +274,45 @@ function dress(c: Coast, rand: Rand, k: {
     const hb = k.harbourness(jx, jz), cove = k.low(jz);
     if (hb > 0.4) continue;
     const d = -s;
-    // (denser at the waterline and on the steps' edges; thinner on beaches)
-    const p = (d < 3 ? 0.95 : d < 9 ? 0.55 : 0.3) * (1 - 0.7 * cove);
+    // (under a cliff only a few, fallen at its foot; on beaches and low shores heaped at the waterline)
+    const [ox, oz] = seaward(c, jx, jz), cliffy = groundAt(c, jx - ox * 6, jz - oz * 6) > 3 && cove < 0.5;
+    const p = cliffy ? (d < 1 ? 0.42 : d < 6 ? 0.04 : 0.1) : (d < 3 ? 0.95 : d < 9 ? 0.55 : 0.3) * (1 - 0.7 * cove);
     if (rand() > p) continue;
     const reach = CLEAR - 0.2 + d; // how far it may spread toward the water
-    let r = (d < 3 ? 2.2 + rand() * 3.2 : 1.4 + rand() * 2.6) * (1 - 0.45 * cove);
+    let r = cliffy ? (d < 1 ? 1.1 + rand() * 1.6 : 0.8 + rand() * 1.2) : (d < 3 ? 2.2 + rand() * 3.2 : 1.4 + rand() * 2.6) * (1 - 0.45 * cove);
     r = Math.min(r, Math.max(0.8, reach));
     const g = groundAt(c, jx, jz), tall = 0.55 + rand() * 0.6;
     const cap = Math.max(0.8, reach);
     rocks.push({ x: jx, y: g - r * 0.35 * tall, z: jz, yaw: rand() * 6.283, sx: Math.min(cap, r * (0.85 + rand() * 0.4)), sy: r * tall, sz: Math.min(cap, r * (0.85 + rand() * 0.4)), kind: Math.floor(rand() * 4), tint: rand() });
   }
-  // (sea stacks: tall piles; reefs: low scattered heads)
-  for (const i of c.islets) {
-    if (i.kind === 'stacks') {
-      let y = -2;
-      for (let lvl = 0; lvl < 3 + Math.floor(rand() * 3); lvl++) {
-        const x = i.x + (rand() - 0.5) * i.r * 0.3, z = i.z + (rand() - 0.5) * i.r * 0.3, cap = Math.max(1, CLEAR - 0.3 - shoreAt(c, x, z));
-        const r = Math.min(cap, i.r * (1.05 - lvl * 0.13) * (0.85 + rand() * 0.2)), h = r * (0.8 + rand() * 0.5);
-        rocks.push({ x, y: y + h * 0.5, z, yaw: rand() * 6.283, sx: r, sy: h * 0.75, sz: Math.min(cap, r * (0.9 + rand() * 0.2)), kind: Math.floor(rand() * 4), tint: rand() });
-        y += h * 0.95;
-      }
+  // ─── the cliff faces: granite split along its joints — stacks of squarish blocks shoulder to shoulder along the shore,
+  // as tall as the land behind them; each block a little set back, turned or narrower than the one below (ledges, the
+  // rounded joints between them), the tops stepping up and down; none reaching past CLEAR ───
+  const hash = new Map<number, [number, number][]>(), key = (x: number, z: number) => Math.floor(x / 6) * 100003 + Math.floor(z / 6);
+  const crowded = (x: number, z: number, m: number) => {
+    for (let a = -1; a <= 1; a++) for (let b = -1; b <= 1; b++) for (const [px, pz] of hash.get(key(x + a * 6, z + b * 6)) ?? []) if (Math.hypot(px - x, pz - z) < m) return true;
+    return false;
+  };
+  const STEPC = 2;
+  for (let z = Z0 + 2; z < Z1 - 2; z += STEPC) for (let x = X0 + 2; x < X1 - 2; x += STEPC) {
+    const jx = x + (rand() - 0.5) * STEPC, jz = z + (rand() - 0.5) * STEPC, s = shoreAt(c, jx, jz);
+    if (s > -1.0 || s < -4.2) continue;
+    if (k.harbourness(jx, jz) > 0.3) continue;
+    const [ox, oz] = seaward(c, jx, jz), top = groundAt(c, jx - ox * 5.5, jz - oz * 5.5);
+    if (top < 2.5 || crowded(jx, jz, 2.2 + rand() * 1.6)) continue;
+    (hash.get(key(jx, jz)) ?? hash.set(key(jx, jz), []).get(key(jx, jz))!).push([jx, jz]);
+    const tint = rand(), H = top + 0.8 - rand() * 2.4;
+    let y = -3 - rand() * 2, bx = jx, bz = jz, r = Math.min(-s + CLEAR - 0.4, 2 + rand() * rand() * 3.4), yaw = rand() * 6.283;
+    for (let n = 0; y < H - 0.4 && n < 9; n++) {
+      // (the foot is one block from the seabed to above the tide; then blocks of 2.5-5 m)
+      const h = Math.min(H - y, n === 0 ? 3.5 + rand() * 5 : (1.6 + rand() * 4.4) * (0.6 + r * 0.25));
+      const cap = -shoreAt(c, bx, bz) + CLEAR - 0.35;
+      if (cap < 1) break;
+      rocks.push({ x: bx, y, z: bz, yaw, sx: Math.min(cap, r * (0.85 + rand() * 0.3)), sy: h + 0.3, sz: Math.min(cap, r * (0.65 + rand() * 0.45)), kind: COLUMN + Math.floor(rand() * 4), tint: (tint + n * 0.07) % 1 });
+      y += h;
+      const back = rand() < 0.4 ? 0.6 + rand() * 1.4 : rand() * 0.3, side = (rand() - 0.5) * 1.2;
+      bx += -ox * back - oz * side; bz += -oz * back + ox * side;
+      r = Math.max(1.6, r * (0.84 + rand() * 0.32)); yaw += (rand() - 0.5) * 1.2;
     }
   }
   // ─── lighthouses: on the biggest headland, the lighthouse islet, and either side of the harbour mouth ───

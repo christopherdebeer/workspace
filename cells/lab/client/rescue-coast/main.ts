@@ -10,7 +10,7 @@
  * far into the race; `?still` time held; `?view=podium`; `?near=n` little boat n and the boat coming for it;
  * `?weather=sunny|calm|windy|stormy|foggy|night|sunset`; `?study` a close look at your boat; `?zoom=`; `?hand=left` the joystick on the left (it's on the right unless asked); `?preview` small and quiet.
  */
-import { CLEAR, GATE_HALF, GATE_Z, START_Z, groundAt, makeCoast, shoreAt, type Coast } from './coast';
+import { CLEAR, GATE_HALF, GATE_Z, START_Z, groundAt, makeCoast, seaward, shoreAt, type Coast } from './coast';
 import { BOATS, CLIMB, HALF_BEAM, LEVELS, LINE, VMAX, local, newRace, runFor, standings, start, step, world, type Level, type Race, type Rescue } from './race';
 import { makeWorld } from './world';
 import { FX, Instances, Renderer, mat4, type Draw, type Frame } from './render';
@@ -616,7 +616,7 @@ function refScene(kind: string) {
   vt = 12;
   if (kind === 'rescue') {
     place(me, G.x, G.z - 230, 0.35, 0);
-    const k = race.crafts[0], side = -1;
+    const k = race.crafts.find((c) => c.craft.kind === 'row') ?? race.crafts[0], side = -1;
     me.aboard = [{ craft: 1, person: 0 }, { craft: 2, person: 0 }, { craft: 3, person: 0 }].filter((a) => race.crafts[a.craft]);
     me.rescued = me.aboard.length;
     const [kx, kz] = world(me, side * (HALF_BEAM + 1.25), -1.6);
@@ -626,6 +626,12 @@ function refScene(kind: string) {
     for (const o of race.boats) if (o !== me) place(o, G.x + (o.id - 2) * 30, G.z - 120 - o.id * 12, 0.1, 6);
     const at = world(me, side * 9.5, -5.5), look = world(me, side * 2.6, -1.4);
     refCam = { from: [at[0], 2.4, at[1]], target: [look[0], 1.1, look[1]], fov: 0.62, aperture: 0.5, focus: 9 };
+  } else if (kind === 'coast') {
+    // (from the sea off the big headland, looking along the cliffs: the lighthouse and cottages on top, the rocks and surf below)
+    const L = coast.props.find((p) => p.kind === 'lighthouse' && p.v === 0) ?? coast.props.find((p) => p.kind === 'lighthouse')!;
+    const [ox, oz] = seaward(coast, L.x, L.z), tx = -oz, tz = ox;
+    for (const o of race.boats) place(o, L.x + ox * 60 + tx * (o.id * 9 - 10), L.z + oz * 60 + tz * (o.id * 9 - 10) + 30, 0.2, 5);
+    refCam = { from: [L.x + ox * 85 - tx * 70, 26, L.z + oz * 85 - tz * 70], target: [L.x + ox * 10 + tx * 25, 6, L.z + oz * 10 + tz * 25], fov: 0.8, aperture: 0.3, focus: 90 };
   } else {
     place(me, G.x - 3, G.z - 172, 0.04, 8);
     const others = race.boats.filter((o) => o !== me), spots = [[22, -122, -0.15], [-24, -96, 0.12], [6, -70, 0], [-10, -142, 0.22]];
