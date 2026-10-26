@@ -1,0 +1,76 @@
+[
+ {
+  "group": "The race",
+  "views": [
+   {
+    "name": "lineup",
+    "title": "Choose your lifeboat",
+    "caption": "five lifeboats, one in each colour; how good the others are; go",
+    "file": "v-lineup.jpg"
+   },
+   {
+    "name": "racing",
+    "title": "Out on the coast",
+    "caption": "riding behind your boat; the stick in its corner, the places along the top, how far to go down the side",
+    "file": "v-racing.jpg"
+   }
+  ]
+ },
+ {
+  "group": "Coming alongside",
+  "views": [
+   {
+    "name": "line",
+    "title": "The line goes over",
+    "caption": "alongside and slowed right down: the crew throws a line to the little boat",
+    "file": "v-line.jpg"
+   },
+   {
+    "name": "climb",
+    "title": "Climbing aboard",
+    "caption": "pulled in against the hull, they climb up the side one at a time",
+    "file": "v-climb.jpg"
+   },
+   {
+    "name": "deck",
+    "title": "A full deck",
+    "caption": "the rescued fill the aft deck, then the foredeck, the side decks and the roof",
+    "file": "v-deck.jpg"
+   }
+  ]
+ },
+ {
+  "group": "The finish",
+  "views": [
+   {
+    "name": "finish",
+    "title": "The harbour mouth",
+    "caption": "the finish: through the gap between the lighthouses, under the banner",
+    "file": "v-finish.jpg"
+   },
+   {
+    "name": "podium",
+    "title": "1st to 5th",
+    "caption": "in at the quay, the places by most rescued",
+    "file": "v-podium.jpg"
+   }
+  ]
+ },
+ {
+  "group": "Looks",
+  "views": [
+   {
+    "name": "wide",
+    "title": "On a bigger screen",
+    "caption": "granite cliffs, a cobalt sea laced with foam, the wake churning white",
+    "file": "v-wide.jpg"
+   },
+   {
+    "name": "study",
+    "title": "The lifeboat",
+    "caption": "navy hull, red below the waterline, RNLI along the bow; the wheelhouse in the boat’s own colour, a tall black mast; the crew in white helmets",
+    "file": "v-study.jpg"
+   }
+  ]
+ }
+]

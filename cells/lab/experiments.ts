@@ -43,10 +43,10 @@ export const EXPERIMENTS: Experiment[] = [
     presets: [{ label: 'play', query: '' }, { label: 'a new sea', query: 'seed=moss-ford-7' }, { label: 'mid-race', query: 'auto&t=45' }, { label: 'the five racing', query: 'auto' }, { label: 'the finish', query: 'view=podium' }],
   },
   {
-    id: 'rescue-coast', title: 'Rescue · Rocky Coast', group: 'Play',
-    blurb: 'Lily’s rescue game, in a second visual treatment. An RNLI-inspired miniature lifeboat on a rocky coast: shaped headlands, deeper blue swells, foam and spray, detailed rubber fenders and railings, and tiny people climbing aboard. Same five-boat race, different rendering experiment; the original Rescue Race remains beside it.',
-    page: 'static/rescue-coast.html', preview: 'preview&seed=7', readme: 'static/rescue-coast.md',
-    presets: [{ label: 'play', query: '' }, { label: 'the rocky coast', query: 'auto&t=22&seed=7' }, { label: 'boarding', query: 'auto&t=25&near=2' }, { label: 'the fleet', query: 'auto&t=45' }, { label: 'finish', query: 'view=podium' }],
+    id: 'rescue-coast', title: 'Lily’s Rescue Boats', group: 'Play',
+    blurb: 'Lily’s rescue race, built from the concept boards: five toy lifeboats (navy hulls, RNLI on the bow, each wheelhouse its own colour) racing up a granite coast to a harbour. A joystick in the corner steers; come alongside a little boat and stop, the crew throws a line, and its people climb aboard one at a time. Rescue the most and get through the harbour mouth: 1st to 5th. Its own coast, rules and drawing, apart from the original Rescue Race.',
+    page: 'static/rescue-coast.html', preview: 'preview&seed=1', readme: 'static/rescue-coast.md',
+    presets: [{ label: 'play', query: '' }, { label: 'out on the coast', query: 'seed=1&auto&t=24' }, { label: 'coming alongside', query: 'seed=1&auto&t=32.5&near=6' }, { label: 'the lifeboat', query: 'seed=1&auto&t=20&study' }, { label: 'the finish', query: 'seed=1&auto&view=podium' }],
   },
   {
     id: 'labyrinth', title: 'Labyrinth', group: 'Play',

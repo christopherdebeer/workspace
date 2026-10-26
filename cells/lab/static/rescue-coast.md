@@ -1,64 +1,164 @@
-# Rescue · Rocky Coast
+# Lily’s Rescue Boats
 
-**Lily's Rescue Race, presented as a separate coastal-visual experiment.** The original [Rescue Race](/rescue) remains available and unchanged. This experiment lives at `/rescue-coast`.
+Lily’s rescue race, built from the concept boards (“Lily’s Rescue Boats”, “Lily’s Rescue Rangers”, “Little Boats”) and Sol’s write-up. Her rules are the game:
 
-## The game (unchanged)
+> You will have a boat, and there are little people in tiny boats. There will be different colours of the tiny boats with the people inside. You have to steer the boat and try to go near enough, and then when you are near enough you will see them coming on to your boat. Try to get as many as you can and reach the finish line.
+>
+> There will be other boats in the sea, and when you get to the finish line the winner will be the one that rescued the most people. There are five of the big boats (the players), and there will be a 1st place, a 2nd place, a 3rd place, a 4th and a 5th place.
 
-Choose one of five big boats. Pilot near people waiting in little coloured dinghies; they wave and transfer aboard automatically. The five big boats compete to rescue the most people and reach the finish. First through fifth are ranked by people rescued, with crossing order breaking ties. The seeded level, AI, boarding timings and finish logic come from the existing `client/rescue/race.ts`.
+It shares no code with the original [Rescue Race](/rescue), which stays as it is: its own coast, rules, models and drawing.
 
-## iPhone screenshot feedback · second rendering pass
+![Choose your lifeboat](rescue-coast/v-lineup.jpg)
+![Out on the coast](rescue-coast/v-racing.jpg)
 
-The first screenshots confirmed the five-boat competition, rescues and finish run. They also exposed the visual problems: beige boats instead of RNLI-style vessels, an overly distant overhead viewpoint, isolated polygonal rocks, very straight white wakes and a pastel harbour. The second pass changes those causes: fleet livery, closer camera, larger figurines, striated cliff ribbons, stone cottages and a short-lived wake model. This remains a stylised procedural study, not yet a photoreal model.
+## Playing
 
-## Visual direction
+| | Touch | Keys |
+|---|---|---|
+| choose your boat | tap one of the five cards | |
+| how good the others are | easy, medium or hard | |
+| go | the yellow button | enter or space |
+| steer | the joystick in the bottom corner: left and right turn, up goes faster, down slows and backs | the arrow keys, or WASD |
+| stop | let go of the stick | let go of the keys |
 
-A deliberately small, detailed, RNLI-inspired physical miniature photographed on a temperate British rocky coast. Keep the little people vivid and readable; the water, rock, fibre-glass and metal should look physically different. Unlike the existing Rescue Race's bright tropical seaside, this version emphasises:
+- **The joystick stays put** in the bottom-left corner (or bottom-right: the switch on the line-up, or `?hand=right`), so your thumb never covers the sea ahead. Push it to one side alone and the boat turns while going steadily on. Let go and the knob springs home and the boat eases to a stop.
+- **Your boat:** one of five lifeboats, all in the lifeboat look (navy hull, red below the waterline, RNLI along the bow, a tall black mast), each wheelhouse in its own colour: Puffin orange, Seal red, Gannet blue, Otter yellow, Dolphin green. That's how you tell them apart out on the water, and it's the colour of your chip in the places.
+- **The camera** rides high behind your boat, turning with it but smoothly. It rises over a cliff rather than look through it.
 
-- Slaty, sculpted coastal stacks, fractured headlands and sparse grass.
-- Layered deep-blue sea and green-turquoise shallows, crest whitewater, coastal wash, sun glints, and boat wakes.
-- A richer rescue launch: continuous inflated collar, metal handrails, fenders, radar structures, lifelines, marker light and framed wheelhouse. Detail is merged into the existing instanced vessel mesh.
-- Slightly lower trailing camera, with the same hold-to-steer interaction and automatically animated passenger transfers.
-- Adaptive mobile rendering resolution.
+## Coming alongside
 
-## Architectural boundary
+Lily’s “near enough”, done the way a lifeboat does it:
+- **Come alongside** a little boat, with it close by your side.
+- **Ease right off.** Let go of the stick and the boat slows to a stop.
+- **The line goes over.** Your crew throws a line, and the little boat is pulled in against your hull.
+- **They climb aboard** one at a time: across to the hull, up its side, over the gunwale, to a place on deck. Each is counted as they land.
+- **Drive off** before they're all across and the rest let go, to wait for the next lifeboat.
 
-`client/rescue-coast/main.ts` is a standalone entry adapted from the original view/controller and importing the original pure rules and effects. `sea.ts` modifies both the CPU wave sampler and generated GLSL identically so a bobbing boat does not disconnect from the sea. `render.ts` is an independent fork of the original WebGL2 renderer, with coastal water and terrain materials. `mesh.ts` composes the original hull and familiar people with extra geometry and geological dressing.
+How slow is slow enough depends on the level: under half of top speed on easy, under a third on hard. On easy and medium the boat eases off by itself as you come up to a little boat, so a quick tap of the stick toward it is enough. A ring in your colour round each little boat near you says “come alongside here”. If you're too fast, the screen says so.
 
-**Non-goals of this first stage:** physically-based normal maps, authored GLB character rigs, accurate shore breaking wave simulation, dynamic weather, spray physics, networking. The procedural study does not yet claim the full quality of the generated reference image.
+![The line goes over](rescue-coast/v-line.jpg)
+![Climbing aboard](rescue-coast/v-climb.jpg)
+![A full deck](rescue-coast/v-deck.jpg)
 
-## Validation
+**On the screen:**
+- **the places** along the top, yours ringed, and your count;
+- **the strip** down the right, each boat between the start and the harbour;
+- **arrows** at the edge to the nearest little boats out of sight, each with how many are waiting;
+- **a lifebuoy and a bar** while people are coming aboard.
 
-Use `?preview` for a running thumbnail; `?auto&t=45` for a mid-race camera; `?near=0&auto&t=20` for boarding composition; `?view=podium` for the result; and `?seed=...` to compare the same sea with the original route. `window.__rescue.variant === 'coast'` identifies this experiment.
+## The finish
 
-Future passes: sculpted coastal models, bespoke lifeboat GLB, higher-quality figurines, shore-facing whitewater rather than solely depth masks, and mobile screenshot/performance evaluation against Lily's reference.
+- **The finish** is the harbour mouth: through the gap between the two lighthouses, under the FINISH banner.
+- **The first boat through** starts the last call. On easy and medium it's always long enough for you to get home from where you are, if you head straight for it.
+- **In the harbour**, each boat goes on to the quay.
+- **At the end, 1st to 5th** by Lily's rule: the boats home first, by most rescued (a tie goes to whoever was home first), then the rest by most rescued.
 
+![The harbour mouth](rescue-coast/v-finish.jpg)
+![1st to 5th](rescue-coast/v-podium.jpg)
 
-## Fidelity pass 3 · 26 October 2026
+## The coast
 
-### Critique against Lily's coastal references
+Each coast comes from a seed (on the line-up, and `?seed=`). It's a channel of open sea running north between granite cliffs:
+- **The start:** a wide bay by the lifeboat station and its slipway.
+- **The course:**
+  - headlands and coves along both shores;
+  - grassy islets, sea stacks and reefs out in the channel, one with a lighthouse;
+  - red buoys to the west and green to the east, in pairs up the course;
+  - about twenty-six little boats in six colours, spread along it and across it: rowing boats with one to three people, sailing dinghies with two, kayaks with one.
+- **The finish:** the narrow harbour mouth, a lighthouse either side. Beyond it, the harbour with its quay and a town of cottages on the hill.
 
-The preceding version was a low-poly race renderer with coastal dressing. Its strongest parts were the working five-boat rules, shared buoyancy surface and instanced geometry. Its largest visual gaps were uniform material lighting without cast shadows; widely spaced water vertices; a rectangular cabin; visibly faceted cliff ribbons; and passengers spinning through high jumps. A distant lineup also concealed the details that had been added.
+One field says where the land is: the distance to the nearest shore, positive over water and negative on land. Everything is made from it, so nothing disagrees:
+- **the ground:** stepped granite cliffs, sandy coves, quays, the town's hill, the seabed;
+- **the boulders:** heaped along every shore and up the cliff steps, none reaching further into the water than a hull is allowed to go;
+- **where a boat can go:** the hull keeps 2.6 m from the shore, so it can't sail into a rock;
+- **the routes** the game's boats find;
+- **the swell:** a little smaller near the shore;
+- **the surf:** breaking white along every shore, and spray thrown up where a crest meets the rocks.
 
-The references ask for rounded manufactured boats, small sculptural people, warm mineral cliffs against deep blue water, broken whitewater and photographed-miniature lighting. This pass addresses those rendering foundations rather than adding the stars, missions or upgrades seen in some generated boards. Those features are not part of Lily's rules.
+![On a bigger screen](rescue-coast/v-wide.jpg)
+![The lifeboat](rescue-coast/v-study.jpg)
 
-### Implemented
+## The other boats
 
-- Sun shadow map with 3×3 PCF filtering and snapped light-space translation, centred near the foreground fleet. Geometry, people and cliffs cast shadows onto opaque surfaces. This is not a full contact-AO or reflection system.
-- Separate painted, rubber, metal, fabric, glass and mineral surface responses. Warmer sun and stronger cool fill replace the former uniform bright rim.
-- Rounded cabin shell and roof, smoothed hull sections and tubular fittings, orange rubbing strip, raked three-pane front windscreen, vent slats, cleats and foredeck mat. The boat remains a procedural mesh, not a supplied GLB asset.
-- Lifejacket panels, reflective strips, buckles, boots, ears, noses, small smiles and white rescue helmets. A visible crew member is present before any passengers board.
-- Five shared analytic wave components with a second harmonic to sharpen crests; CPU buoyancy and generated GLSL use the same equations. These are shaped height waves, not a horizontal Gerstner displacement implementation.
-- Nonuniform ocean grid: roughly 0.65m spacing nearby, expanding to cover about 870m. More directional water colour, broken foam, retained stern turbulence and ballistic bow droplets.
-- Closed cliff tops, less arbitrary face-to-face colour variation, softened geological normals, mineral relief and wet bases. Alternating right-hand coves interrupt the continuous high cliff corridor. The original collision heightfield is retained.
-- Directional sky gradient and procedural clouds; lower camera, closer selected-boat lineup. `?study&seed=5&auto&t=20&still` offers a clean, low-camera inspection view.
-- Passenger transfers lose the full spin and exaggerated leap. This remains a short transfer animation; docking, stabilisation, climbing and hand/foot contacts are still outstanding.
+Each of the four is steered by the game:
+- **Choosing:** it goes for the little boat worth most to it: its people, over the time to get there and take them aboard. It prefers its own side of the channel, and passes over one another of the game's boats is plainly nearer.
+- **Finding the way:** it goes straight where the water's clear. Where an islet or a headland is in the way, it follows a route found over a 4 m grid of open water.
+- **Coming alongside:** it slows as it nears, passes with the little boat a beam's width off its side, and stops while the people come aboard.
+- **Heading home:** it makes for the harbour when nothing's worth going for, or when the last call won't wait.
 
-### Validation and limits
+The level sets how quick they are:
+- **easy:** four-fifths of your speed;
+- **medium:** nine-tenths;
+- **hard:** nearly yours.
 
-TypeScript was stripped successfully for all local modules. Geometry checks covered finite attributes and unit normals; coastline generation ran for three seeds. Five hundred analytic wave derivative checks passed with maximum error below 1e-9. Three complete AI races (seeds 5, 7, 92) finished with five ranked boats.
+On easy and medium they ease off when well ahead of you and push on when behind.
 
-All seven GPU program combinations compiled and linked under Mesa EGL/OpenGL ES 3. A staged coastal scene replayed the actual Renderer draw calls with no GL errors; two angles were inspected and used to correct dark lighting, cliff colouring and boat geometry. This is an offscreen renderer check, not an end-to-end browser or iPhone Safari test. Browser installation was unavailable in the execution environment. Mobile performance has not been measured for this pass, especially the additional shadow pass.
+## How it's drawn
 
-### Still below target
+Its own WebGL2 renderer: the lab ships one bundle with no packages, so Three.js wasn't an option here. Lit like the boards:
+- **Light:** a warm sun with shadows, and a cool sky filling the shade.
+- **Materials:** glossy painted toys, glass and metal, skin and cloth, granite (grain, flecks, lichen on top, darker and glossy where the sea wets it), lamps, gorse.
+- **The sky:** cumulus over the horizon.
+- **Distance:** hazed toward the horizon.
+- **The finish:** one filmic tone curve over everything.
 
-The rock silhouettes still reveal procedural construction. Boat proportions and tiny character expressions need further model work. The ocean lacks shore-facing breaking wave geometry, reflected scenery and persistent foam advection. Existing heightfield collisions and added cliff meshes are not one unified coastline representation. A proper alongside-and-climb rescue needs a coordinated simulation/animation change. This pass should not be described as matching the generated reference yet.
+The sea:
+- **The swell:** six Gerstner waves, the same sums on the CPU (the boats ride them) and in GLSL.
+- **Its colour:** deep cobalt, lighter where the light comes through a wave, the sky reflected in it, sun glitter.
+- **Foam:**
+  - lace where the crests fold;
+  - wind streaks drawn out along the waves;
+  - surf breaking along every shore;
+  - wakes, white straight behind the stern and two long arms;
+  - spray off the bow when going fast (most when it slams into a wave), and on the rocks.
+
+**Cost on a phone** (counted in the browser, a race in full swing): about 125 draw calls and 800k triangles a frame. That's within Sol's budget for draw calls, but the triangles want watching: the boulders and the ground are most of them.
+- **Already in place:**
+  - distant ground and boulders are drawn coarser;
+  - people and gulls are left out of the shadows;
+  - the screen's resolution follows the frame time, between 0.8 and 1.75 × the CSS pixel.
+- **Not yet done:** it hasn't been timed on a phone.
+
+| | |
+|---|---|
+| `client/rescue-coast/coast.ts` | the coast from a seed: the shore field, ground, islets, boulders, lighthouses, town, station, buoys, the little boats and their people |
+| `client/rescue-coast/race.ts` | the rules: steering, the shore and other hulls, coming alongside, the line and the climb, the game's boats (flow fields over the water), the last call, the places |
+| `client/rescue-coast/waves.ts` | the swell (CPU and GLSL) |
+| `client/rescue-coast/shapes.ts`, `models.ts` | making meshes; the lifeboat, people, little boats, buoys, boulders, lighthouses, cottages, station, banner, gulls |
+| `client/rescue-coast/world.ts` | the coast made drawable, in pieces along it |
+| `client/rescue-coast/render.ts`, `fx.ts` | the drawing; wakes, spray, the line, the rings |
+| `client/rescue-coast/joystick.ts`, `sound.ts`, `main.ts` | the stick; the sounds; the page |
+
+**Tests:**
+- The coast and the rules, without a page: `node cells/lab/devtools/rescue-coast.test.mjs`.
+  - The little boats are in open water, apart, and every one can be reached.
+  - There's a way through the harbour mouth to every berth.
+  - No boulder reaches past a hull's clearance.
+  - Alongside and slow claims; fast or far doesn't; everyone climbs aboard and is counted once; drive off and the rest wait.
+  - Whole races steered by the game finish with no hull inside the shore and the places by Lily's rule.
+  - The same seed gives the same race.
+- In a browser, by hand: `node cells/lab/devtools/rescue-coast-smoke.mjs` (the line-up, the stick up, right, let go, the keys, the left-handed corner, the end).
+- The pictures: `node cells/lab/views.mjs rescue-coast`.
+
+**Addresses:**
+- `?seed=` a coast;
+- `?level=easy|medium|hard`;
+- `?boat=0..4` yours;
+- `?auto` every boat the game's;
+- `?t=40` that far into the race;
+- `?still` time held;
+- `?view=podium` straight to the end;
+- `?near=n` (or `near=any`) a little boat and the lifeboat coming for it;
+- `?study` a close look at your lifeboat;
+- `?zoom=`;
+- `?hand=right`;
+- `?preview` small and quiet.
+
+**Not here yet**, though the boards have them:
+- the world map and missions;
+- weather (windy, foggy, stormy, night);
+- stars, shells and stickers;
+- towing;
+- the other kinds of boat (inshore, hovercraft, RIB).
+
+They're beyond Lily's two pages, and they'd come after the race itself looks and plays right.

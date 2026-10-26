@@ -1,484 +1,470 @@
 /**
- * Rescue Race: Lily's game. You have a boat; out on the sea there are little people in tiny boats of every colour.
- * Steer near enough to one and its people come across onto your boat. Rescue as many as you can, then reach the finish
- * line. Four other boats are out there doing the same; the winner is the boat that rescued the most, and there's a 1st
- * place, a 2nd, a 3rd, a 4th and a 5th.
+ * Rescue · Rocky Coast: the page. The line-up (choose your lifeboat and how good the others are), the race (the
+ * joystick, the camera riding behind your boat, the places along the top), and the end (1st to 5th in the harbour).
  *
- * The sea is `sea.ts` (from a seed), the rules `race.ts` (stepped here at 60 a second), the things `mesh.ts`, the
- * drawing `render.ts`, the marks on the water `fx.ts`, the sounds `sound.ts`. Here: the camera (looking up the course
- * from behind your boat, a little ahead of it), your hand on the wheel (hold a finger where you want to go; or the
- * arrow keys), the people's places (waiting and waving, jumping across, standing on deck), and the race's words on
- * the screen (the line-up, the count of three, your count, the places as they stand, how far to the finish, arrows to
- * tiny boats off the screen, the last call, the places at the end).
+ * The camera: high behind your boat and a little to the side, turning with it (smoothed, so a quick turn doesn't
+ * swing the world about); it leans in when you come alongside a little boat, so you can watch them climb aboard; it
+ * rises over a cliff rather than look through it.
  *
- *   ?seed=  ?level=easy|medium|hard  ?boat=0..4  ?auto (every boat the game's)  ?t=40 (that far into the race)
- *   ?view=podium (to the end)  ?still (time held)  ?zoom=  ?near=n (tiny boat n and the big boat nearest it, in view)
- *   ?preview (small and quiet: the race the game's own, on and on)
+ * Addresses: `?seed=` a coast; `?level=easy|medium|hard`; `?boat=0..4`; `?auto` (every boat the game's); `?t=40` that
+ * far into the race; `?still` time held; `?view=podium`; `?near=n` little boat n and the boat coming for it;
+ * `?study` a close look at your boat; `?zoom=`; `?hand=right` the joystick on the right; `?preview` small and quiet.
  */
-import { randomSeed, seedFrom, seedName } from '../kit/rng';
-import { BOATS, GAP, JUMP, NEAR, SEATS, VMAX, along, newRace, runFor, spotOf, standings, start, step, type Input, type Level, type Race } from '../rescue/race';
-import { BERTH_Z, HAIRS, L, SHIRTS, SKINS, START_Z, TINY_COLOURS, waveAt, type Sea } from './sea';
-import { bigBoat, buoy, person, tinyBoat, worldMesh } from './mesh';
-import { FX, Instances, Renderer, mat4, type Frame, type M4 } from './render';
-import { Marks } from './fx';
-import { Sound } from '../rescue/sound';
+import { CLEAR, GATE_HALF, GATE_Z, START_Z, groundAt, makeCoast, shoreAt, type Coast } from './coast';
+import { BOATS, CLIMB, HALF_BEAM, LEVELS, LINE, VMAX, local, newRace, runFor, standings, start, step, world, type Level, type Race, type Rescue } from './race';
+import { makeWorld } from './world';
+import { FX, Instances, Renderer, mat4, type Draw, type Frame } from './render';
+import { ROOF, ROOF_Y, SEATS, SHOULDER, WING, buoyMesh, craftMesh, deckAt, gull, lifeboat, person } from './models';
+import { calmAt, heightAt } from './waves';
+import { Marks, Wakes } from './fx';
+import { Sound } from './sound';
+import { Joystick } from './joystick';
 
 const params = new URLSearchParams(location.search);
-const preview = params.has('preview'), auto = preview || params.has('auto'), still = params.has('still');
-const STORE = 'rescue-coast:v1';
-const saved: { boat?: number; level?: Level; sound?: boolean } = (() => { try { return JSON.parse(localStorage.getItem(STORE) ?? '{}'); } catch { return {}; } })();
-const save = () => { try { localStorage.setItem(STORE, JSON.stringify(saved)); } catch { /* (no storage: kept only this time) */ } };
-const LEVEL_NAMES: Level[] = ['easy', 'medium', 'hard'];
-const clamp = (x: number, a: number, b: number) => Math.max(a, Math.min(b, x));
+const preview = params.has('preview'), still = params.has('still'), study = params.has('study');
+const auto = params.has('auto') || preview;
+const zoom = Number(params.get('zoom') ?? 1) || 1;
+const $ = (id: string) => document.getElementById(id) as HTMLElement;
+if (preview || study) document.body.classList.add('preview');
+if (params.get('hand') === 'right') document.body.classList.add('hand-right');
 
-let seed = seedFrom(params.get('seed')) ?? (preview ? 7 : randomSeed());
-let level: Level = LEVEL_NAMES.includes(params.get('level') as Level) ? (params.get('level') as Level) : saved.level ?? 'easy';
-let mine = clamp(Math.round(Number(params.get('boat') ?? saved.boat ?? 0)) || 0, 0, 4);
+// ─── looks (sRGB) ───
+const SKINS = [[0.98, 0.82, 0.68], [0.93, 0.72, 0.55], [0.8, 0.57, 0.4], [0.62, 0.42, 0.28], [0.45, 0.3, 0.2], [0.99, 0.86, 0.74]];
+const HAIRS = [[0.2, 0.13, 0.08], [0.45, 0.28, 0.12], [0.85, 0.65, 0.3], [0.1, 0.08, 0.07], [0.65, 0.25, 0.1], [0.95, 0.85, 0.55]];
+const SHIRTS = [[0.9, 0.2, 0.2], [0.2, 0.5, 0.9], [0.95, 0.8, 0.2], [0.3, 0.7, 0.35], [0.9, 0.45, 0.7], [0.55, 0.35, 0.8], [0.2, 0.75, 0.8], [1, 0.55, 0.2]];
+export const CRAFT_COLOURS = [[0.9, 0.15, 0.12], [0.15, 0.4, 0.85], [1, 0.8, 0.12], [0.2, 0.65, 0.3], [0.95, 0.45, 0.7], [0.12, 0.7, 0.75]];
+const CREW = [1, 0.8, 0.08], NONE = [1, 1, 1];
+const css = (c: readonly number[]) => `rgb(${c.map((v) => Math.round(v * 255)).join(',')})`;
+const PERSON = 1.18;
 
-const canvas = document.getElementById('sea') as HTMLCanvasElement;
-const gl = canvas.getContext('webgl2', { antialias: true, alpha: false, powerPreference: 'high-performance' });
-const $ = (id: string) => document.getElementById(id)!;
-if (preview || params.has('study')) document.body.classList.add('preview');
-if (!gl) { document.body.classList.add('nogl'); throw new Error('WebGL2 is needed'); }
-const R = new Renderer(gl);
-R.addKind('big', bigBoat()); R.addKind('tiny', tinyBoat()); R.addKind('person', person(false)); R.addKind('hat', person(true)); R.addKind('buoy', buoy());
-const marks = new Marks(), sound = new Sound();
-sound.on = saved.sound ?? true;
+// ─── the state ───
+let seed = Number(params.get('seed') ?? 1 + Math.floor(Math.random() * 999)) || 1;
+let level = (['easy', 'medium', 'hard'].includes(params.get('level') ?? '') ? params.get('level') : 'easy') as Level;
+let mine = Math.max(0, Math.min(4, Number(params.get('boat') ?? 0) || 0));
+let coast!: Coast, race!: Race;
+let ui: 'lineup' | 'race' | 'podium' = 'lineup';
+const marks = new Marks(), wakes = new Wakes(), sound = new Sound();
+const canvas = $('sea') as HTMLCanvasElement;
+const gl = canvas.getContext('webgl2', { antialias: true, powerPreference: 'high-performance' });
+if (!gl) { document.body.classList.add('nogl'); throw new Error('no WebGL2'); }
+const renderer = new Renderer(gl);
+renderer.addKind('boat', lifeboat());
+renderer.addKind('crew', person('crew'), SHOULDER);
+for (let s = 0; s < 3; s++) renderer.addKind('kid' + s, person('kid', s), SHOULDER);
+for (const k of ['row', 'kayak', 'sail'] as const) renderer.addKind(k, craftMesh(k));
+for (const k of ['red', 'green', 'yellow'] as const) renderer.addKind('buoy-' + k, buoyMesh(k));
+renderer.addKind('gull', gull(), WING);
+const lists: Record<string, Instances> = {};
+for (const k of ['boat', 'crew', 'kid0', 'kid1', 'kid2', 'row', 'kayak', 'sail', 'buoy-red', 'buoy-green', 'buoy-yellow', 'gull']) lists[k] = new Instances(64);
+const draws: Draw[] = Object.entries(lists).map(([kind, list]) => ({ kind, list }));
+const stick = new Joystick($('stick'));
 
-// ─── the race ───
-type Ui = 'lineup' | 'race' | 'podium';
-let ui: Ui = 'lineup', race!: Race, sea: Sea | null = null, endAt = -1, vt = 0;
-/** when each boat's crew last cheered (someone new aboard); when each boat last had a wake's droplets */
-const cheerUntil = [0, 0, 0, 0, 0];
-function setRace(s: number) {
-  seed = s;
-  race = newRace(seed, { level, mine, auto });
-  if (race.sea !== sea) { sea = race.sea; R.setSea(sea, worldMesh(sea)); }
-  marks.clear(); endAt = -1; cheerUntil.fill(0);
-  $('seedname').textContent = seedName(seed);
+function newCoast(s: number) {
+  seed = s; coast = makeCoast(seed);
+  renderer.setCoast(coast, makeWorld(coast));
+  $('seedname').textContent = coast.name;
 }
-function toLineup() {
-  ui = 'lineup';
-  document.body.className = document.body.className.replace(/\b(lineup|racing|podium)\b/g, '').trim();
-  document.body.classList.add('lineup');
-  lineupUi();
+function newGame() {
+  race = newRace(coast, { level, mine, auto });
+  marks.clear(); wakes.clear(); stick.reset();
+  poses.length = 0; camYaw = 0; told.clear();
 }
-function go() {
-  sound.arm();
-  if (race.phase !== 'lineup') setRace(seed);
-  start(race);
-  ui = 'race'; usedHand = false;
-  document.body.classList.remove('lineup', 'podium'); document.body.classList.add('racing');
-}
-function toPodium() {
-  ui = 'podium';
-  document.body.classList.remove('racing'); document.body.classList.add('podium');
-  const st = standings(race), place = st.findIndex((b) => b.id === mine);
-  const ORD = ['1st', '2nd', '3rd', '4th', '5th'];
-  $('result').textContent = auto ? `${st[0].name} wins!` : place === 0 ? 'You won! 1st place!' : `You came ${ORD[place]}!`;
-  $('ranks').innerHTML = st.map((b, i) => `<li class="${b.id === mine && !auto ? 'me' : ''} p${i + 1}"><b>${ORD[i]}</b><i style="background:${css(b.colour)}"></i><span>${b.name}${b.id === mine && !auto ? ' <em>you</em>' : ''}</span><strong>${b.aboard.length}</strong><small>${b.finished >= 0 ? 'rescued' : 'rescued · not home'}</small></li>`).join('');
-  sound.fanfare(auto ? 0 : place);
-}
-const css = (c: readonly number[]) => `rgb(${Math.round(c[0] * 255)},${Math.round(c[1] * 255)},${Math.round(c[2] * 255)})`;
 
-// ─── the line-up: choose your boat, how good the others are, and go ───
-function lineupUi() {
-  $('boats').innerHTML = BOATS.map((b, i) => `<button data-boat="${i}" class="${i === mine ? 'on' : ''}"><i style="background:${css(b.colour)}"></i>${b.name}</button>`).join('');
-  for (const el of $('levels').querySelectorAll('button')) el.classList.toggle('on', el.dataset.level === level);
+// ─── poses: where each boat sits on the swell (smoothed) ───
+interface Pose { y: number; pitch: number; roll: number; x: number; z: number; h: number }
+const poses: Pose[] = [];
+function poseOf(i: number, x: number, z: number, h: number, v: number, turn: number, t: number, dt: number): Pose {
+  const k = calmAt(shoreAt(coast, x, z)), s = Math.sin(h), c = Math.cos(h);
+  const at = (across: number, along: number) => heightAt(x - across * c + along * s, z + across * s + along * c, t, k);
+  const bow = at(0, 4), stern = at(0, -4), port = at(-1.9, 0), star = at(1.9, 0), mid = at(0, 0);
+  const want = { y: (bow + stern + port + star + mid * 2) / 6 - 0.08 + Math.min(1, Math.abs(v) / VMAX) * 0.12, pitch: Math.atan2(bow - stern, 8) * 0.8 + Math.min(1, Math.abs(v) / VMAX) * 0.07, roll: Math.atan2(port - star, 3.8) * 0.8 + turn * Math.min(1, Math.abs(v) / VMAX) * 0.14 };
+  const p = poses[i];
+  if (!p || dt <= 0) return (poses[i] = { ...want, x, z, h });
+  const a = 1 - Math.exp(-dt * 6);
+  p.y += (want.y - p.y) * a; p.pitch += (want.pitch - p.pitch) * a; p.roll += (want.roll - p.roll) * a; p.x = x; p.z = z; p.h = h;
+  return p;
 }
-$('boats').addEventListener('click', (e) => {
-  const el = (e.target as HTMLElement).closest('button');
-  if (!el) return;
-  mine = Number(el.dataset.boat); saved.boat = mine; save();
-  setRace(seed); lineupUi();
-});
-$('levels').addEventListener('click', (e) => {
-  const el = (e.target as HTMLElement).closest('button');
-  if (!el) return;
-  level = el.dataset.level as Level; saved.level = level; save();
-  setRace(seed); lineupUi();
-});
-$('go').addEventListener('click', go);
-$('newsea').addEventListener('click', () => { setRace(randomSeed()); lineupUi(); });
-$('again').addEventListener('click', () => { setRace(seed); go(); });
-$('next').addEventListener('click', () => { setRace(randomSeed()); go(); });
-$('choose').addEventListener('click', () => { setRace(seed); toLineup(); });
-$('sound').addEventListener('click', () => { sound.arm(); sound.toggle(); saved.sound = sound.on; save(); $('sound').textContent = sound.on ? 'sound on' : 'sound off'; });
-$('sound').textContent = sound.on ? 'sound on' : 'sound off';
+/** a point on a boat (model coordinates: x to its left, y up, z ahead) out in the world, as the shader places it */
+function onBoat(p: Pose, x: number, y: number, z: number): [number, number, number] {
+  const cr = Math.cos(p.roll), sr = Math.sin(p.roll), cp = Math.cos(p.pitch), sp = Math.sin(p.pitch), cy = Math.cos(p.h), sy = Math.sin(p.h);
+  let X = x * cr - y * sr, Y = x * sr + y * cr, Z = z;
+  const Y2 = Y * cp + Z * sp, Z2 = -Y * sp + Z * cp; Y = Y2; Z = Z2;
+  return [X * cy + Z * sy + p.x, Y + p.y, -X * sy + Z * cy + p.z];
+}
 
-// ─── the camera: up the course from behind (south), looking down a little ahead of your boat ───
-const EL = params.has('study') ? .26 : .38;
-const cam = { x: 0, z: 0, w: 34, init: false };
-let W = 1, H = 1, dpr = 1, aspect = 1, vp: M4 = new Float32Array(16), inv: M4 = new Float32Array(16), eye = [0, 0, 0], right = [1, 0, 0], up = [0, 1, 0];
-/** the boat the camera follows: yours, or (in the preview) whoever's rescued most */
-const followed = () => (auto ? standings(race)[0] : race.boats[mine]);
-function camWant(): [number, number, number] {
-  if (!sea) return [0, 0, 34];
-  const wide = aspect > 1 ? Math.min(aspect, 1.9) * 0.78 : 1, zoom = Number(params.get('zoom') ?? 1);
-  // (the line-up: yours in the top half of the screen (the sheet's below), its neighbours either side)
-  if(params.has('study')) {const b=followed();return [b.x,b.z+3,19*wide*zoom];}
-  if (ui === 'lineup') return [race.boats[mine].x, START_Z - 12, 36 * wide * zoom];
-  // (the end: the harbour, every boat at its berth, in the top half of the screen (the places are below))
-  if (ui === 'podium') return [sea.centre(BERTH_Z), BERTH_Z - 24, 58 * wide * zoom];
-  // (racing: your boat a little below the middle, a little more of what's ahead of it in view)
-  const b = followed(), lead = 2 + b.v * 0.4;
-  // (`?near=n`: tiny boat n and the big boat nearest it, both in view (for pictures of a rescue))
-  const near = race.tinies[Number(params.get('near') ?? -1)];
-  if (near) { const o = [...race.boats].sort((p, q) => Math.hypot(p.x - near.x, p.z - near.z) - Math.hypot(q.x - near.x, q.z - near.z))[0]; return [(o.x + near.x) / 2, (o.z + near.z) / 2 - 2, 26 * wide * zoom]; }
-  return [b.x + Math.sin(b.h) * lead, b.z + Math.cos(b.h) * lead + 3, (preview ? 40 : 25.5) * wide * zoom];
+// ─── the camera ───
+let camYaw = 0, camDist = 26, camEl = 0.44, camLean = 0;
+const camAt = { x: 0, y: 0, z: 0 };
+let vp: Float32Array = new Float32Array(16), eye = [0, 20, -30], right = [1, 0, 0], up = [0, 1, 0];
+function followed() {
+  if (!auto) return race.boats[mine];
+  if (params.has('boat')) return race.boats[mine];
+  return standings(race)[0];
 }
-function camera(dt: number) {
-  const [x, z, w] = camWant();
-  if (!cam.init) { cam.x = x; cam.z = z; cam.w = w; cam.init = true; }
-  const k = 1 - Math.exp(-dt * (ui === 'race' ? 3.2 : 1.6));
-  cam.x += (x - cam.x) * k; cam.z += (z - cam.z) * k; cam.w += (w - cam.w) * k;
-  const fovy = aspect < 1 ? 0.9 : 0.72, fovx = 2 * Math.atan(Math.tan(fovy / 2) * aspect), dist = cam.w / 2 / Math.tan(fovx / 2);
-  eye = [cam.x, Math.sin(EL) * dist, cam.z - Math.cos(EL) * dist];
-  const view = mat4.lookAt(eye, [cam.x, 0, cam.z], [0, 1, 0]), proj = mat4.perspective(fovy, aspect, 0.65, 850);
-  vp = mat4.mul(proj, view); inv = mat4.invert(vp);
+const nearArg = params.get('near');
+function camera(dt: number, t: number, w: number, h: number) {
+  const portrait = h > w, aspect = w / h;
+  let target: number[], from: number[], fov = portrait ? 1.02 : 0.86, shift = 0;
+  if (ui === 'lineup') {
+    const b = race.boats[mine], a = 2.55 + 0.25 * Math.sin(t * 0.15);
+    target = [b.x, 2.4, b.z + 1]; from = [b.x + Math.sin(a) * 19 * zoom, 6.5, b.z + Math.cos(a) * 19 * zoom];
+    shift = portrait ? 0.42 : 0.2;
+  } else if (ui === 'podium') {
+    const bx = coast.berths[2].x, bz = coast.berths[2].z;
+    target = [bx, 2.5, bz - 1]; from = [bx - 10, 24 * zoom, bz - 66 * zoom];
+    shift = portrait ? 0.4 : 0.22;
+  } else if (study) {
+    const b = followed(), p = poses[b.id] ?? { y: 0 }, a = b.h + 0.75;
+    target = [b.x + Math.sin(b.h) * 1.5, p.y + 2.2, b.z + Math.cos(b.h) * 1.5]; from = [b.x + Math.sin(a) * 15 * zoom, p.y + 5.2, b.z + Math.cos(a) * 15 * zoom];
+  } else {
+    let b = followed();
+    let k: Rescue | undefined = race.crafts.find((c) => c.by === b.id && (c.stage === 'line' || c.stage === 'climb'));
+    const nearK = nearArg === null ? undefined : nearArg === 'any' ? race.crafts.find((c) => c.stage === 'climb' || c.stage === 'line') : race.crafts[Number(nearArg)];
+    if (nearK) {
+      const c = nearK;
+      b = [...race.boats].sort((p, q) => Math.hypot(p.x - c.x, p.z - c.z) - Math.hypot(q.x - c.x, q.z - c.z))[0];
+      k = c;
+    }
+    // (turning with the boat, smoothed; leaning in and round to watch a little boat come alongside)
+    const wantLean = k ? Math.sign(local(b, k.x, k.z)[0] || 1) * 0.5 : 0;
+    const a = dt > 0 ? 1 - Math.exp(-dt * 1.8) : 1;
+    let dy = b.h - camYaw; while (dy > Math.PI) dy -= 2 * Math.PI; while (dy < -Math.PI) dy += 2 * Math.PI;
+    camYaw += dy * a; camLean += (wantLean - camLean) * a;
+    const wantDist = (k ? 27 : portrait ? 40 : 33) * zoom * (preview ? 1.2 : 1), wantEl = k ? 0.34 : portrait ? 0.29 : 0.27;
+    camDist += (wantDist - camDist) * a; camEl += (wantEl - camEl) * a;
+    const yaw = camYaw + camLean, look = k ? 3 : 13;
+    const tx = b.x + Math.sin(camYaw) * look, tz = b.z + Math.cos(camYaw) * look;
+    camAt.x += (tx - camAt.x) * (dt > 0 ? 1 - Math.exp(-dt * 6) : 1); camAt.z += (tz - camAt.z) * (dt > 0 ? 1 - Math.exp(-dt * 6) : 1);
+    target = [camAt.x, 1.5, camAt.z];
+    // (rise over a cliff rather than look through it)
+    let el = camEl;
+    for (let tries = 0; tries < 6; tries++) {
+      const ex = target[0] - Math.sin(yaw) * Math.cos(el) * camDist, ez = target[2] - Math.cos(yaw) * Math.cos(el) * camDist, ey = target[1] + Math.sin(el) * camDist;
+      let blocked = false;
+      for (let s = 0.25; s <= 1 && !blocked; s += 0.125) {
+        const x = target[0] + (ex - target[0]) * s, z = target[2] + (ez - target[2]) * s, y = target[1] + (ey - target[1]) * s;
+        const g = groundAt(coast, x, z) + (shoreAt(coast, x, z) < CLEAR ? 3 : 0);
+        if (g > y - 1) blocked = true;
+      }
+      if (!blocked) break;
+      el += 0.06;
+    }
+    from = [target[0] - Math.sin(yaw) * Math.cos(el) * camDist, target[1] + Math.sin(el) * camDist, target[2] - Math.cos(yaw) * Math.cos(el) * camDist];
+    shift = 0.1;
+  }
+  eye = from;
+  const view = mat4.lookAt(from, target, [0, 1, 0]), proj = mat4.perspective(fov, aspect, 0.5, 1800);
+  proj[9] = -shift;
+  vp = mat4.mul(proj, view);
   right = [view[0], view[4], view[8]]; up = [view[1], view[5], view[9]];
 }
-/** a point on the screen (css px) to where it meets the water */
-function onWater(sx: number, sy: number): { x: number; z: number } | null {
-  const nx = (sx / W) * 2 - 1, ny = 1 - (sy / H) * 2;
-  const un = (z: number) => { const v = [nx, ny, z, 1], o = [0, 0, 0, 0]; for (let i = 0; i < 4; i++) for (let k = 0; k < 4; k++) o[i] += inv[k * 4 + i] * v[k]; return [o[0] / o[3], o[1] / o[3], o[2] / o[3]]; };
-  const a = un(-1), b = un(1), dy = b[1] - a[1];
-  if (Math.abs(dy) < 1e-6) return null;
-  const t = -a[1] / dy;
-  if (t < 0) return null;
-  return { x: a[0] + (b[0] - a[0]) * t, z: a[2] + (b[2] - a[2]) * t };
-}
-/** a point in the world to the screen (css px), and whether it's in front */
-function project(x: number, y: number, z: number): [number, number, boolean] {
-  const m = vp, cx = m[0] * x + m[4] * y + m[8] * z + m[12], cy = m[1] * x + m[5] * y + m[9] * z + m[13], cw = m[3] * x + m[7] * y + m[11] * z + m[15];
-  return [((cx / cw) * 0.5 + 0.5) * W, (0.5 - (cy / cw) * 0.5) * H, cw > 0];
-}
 
-// ─── your hand on the wheel: a finger held where you want to go; or the arrow keys ───
-let finger: { id: number; x: number; y: number } | null = null, usedHand = false;
-canvas.addEventListener('pointerdown', (e) => {
-  sound.arm();
-  if (ui !== 'race') return;
-  finger = { id: e.pointerId, x: e.clientX, y: e.clientY }; usedHand = true;
-  try { canvas.setPointerCapture(e.pointerId); } catch { /* (a synthetic pointer) */ }
-});
-canvas.addEventListener('pointermove', (e) => { if (finger && e.pointerId === finger.id) { finger.x = e.clientX; finger.y = e.clientY; } });
-const lift = (e: PointerEvent) => { if (finger && e.pointerId === finger.id) finger = null; };
-canvas.addEventListener('pointerup', lift); canvas.addEventListener('pointercancel', lift);
-const keys = new Set<string>();
-addEventListener('keydown', (e) => {
-  if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', ' '].includes(e.key)) e.preventDefault();
-  if (ui === 'lineup' && (e.key === 'Enter' || e.key === ' ')) { go(); return; }
-  keys.add(e.key.toLowerCase()); if (ui === 'race') usedHand = true;
-});
-addEventListener('keyup', (e) => keys.delete(e.key.toLowerCase()));
-function hand(): Input {
-  if (ui !== 'race' || auto) return {};
-  if (finger) { const a = onWater(finger.x, finger.y); if (a) return { aim: a, throttle: 1 }; }
-  const lt = keys.has('arrowleft') || keys.has('a'), rt = keys.has('arrowright') || keys.has('d'), fw = keys.has('arrowup') || keys.has('w'), bk = keys.has('arrowdown') || keys.has('s');
-  // (the camera looks north: +x is on the screen's left, and a boat turning toward +x turns left)
-  if (lt || rt || fw || bk) return { turn: (lt ? 1 : 0) - (rt ? 1 : 0), throttle: bk ? 0 : 1 };
-  return {};
-}
-
-// ─── where everything is, this frame ───
-const boats = new Instances(8), tinies = new Instances(64), people = new Instances(128), hats = new Instances(64), buoys = new Instances(128);
-const NONE = [0, 0, 0];
-/** the little people a little larger than life, so they read from the camera's height */
-const PERSON = 1.34;
-/** a boat on the waves: its height, and how the swell pitches and rolls it (sampled at bow, stern, and either side) */
-function bob(x: number, z: number, h: number, len: number, beam: number, t: number): [number, number, number] {
-  const s = Math.sin(h), c = Math.cos(h);
-  const at = (f: number, w: number) => waveAt(sea, x + s * f + c * w, z + c * f - s * w, t)[0];
-  const hb = at(len, 0), hs = at(-len, 0), hr = at(0, beam), hl = at(0, -beam);
-  return [(hb + hs + hr + hl) / 4, Math.atan2(hb - hs, 2 * len), Math.atan2(hr - hl, 2 * beam)];
-}
-/** a point on a boat (its own x across, y up, z along) to the world, as the drawing turns it: roll, pitch, then its heading */
-function onBoat(p: readonly number[], x: number, y: number, z: number, h: number, pitch: number, roll: number): [number, number, number] {
-  let px = p[0], py = p[1], pz = p[2];
-  const cr = Math.cos(roll), sr = Math.sin(roll), cp = Math.cos(pitch), sp = Math.sin(pitch), cy = Math.cos(h), sy = Math.sin(h);
-  [px, py] = [px * cr - py * sr, px * sr + py * cr];
-  [py, pz] = [py * cp + pz * sp, -py * sp + pz * cp];
-  [px, pz] = [px * cy + pz * sy, -px * sy + pz * cy];
-  return [px + x, py + y, pz + z];
-}
-const boatPose: Array<[number, number, number]> = [[0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0]];
-const tinyPose = new Map<number, [number, number, number, number]>();
-
-function stage(t: number) {
-  boats.clear(); tinies.clear(); people.clear(); hats.clear(); buoys.clear(); tinyPose.clear();
+// ─── each frame: where everything is ───
+const holes = new Float32Array(48);
+const told = new Set<string>();
+function people(t: number, dt: number) {
+  for (const l of Object.values(lists)) l.clear();
+  // (the lifeboats, their crew, and everyone they've taken aboard)
   for (const b of race.boats) {
-    const [y, pitch, roll] = bob(b.x, b.z, b.h, 4.5, 1.9, t), fast = b.v / VMAX;
-    const p: [number, number, number] = [y + fast * 0.12, pitch + fast * 0.05, roll - b.rudder * fast * 0.13];
-    boatPose[b.id] = p;
-    boats.push(b.x, p[0], b.z, b.h, p[1], p[2], 1, 0, b.colour, 0, NONE, NONE, b.id * 1.7);
-  }
-  for(const b of race.boats){
-    const [by,bp,br]=boatPose[b.id];
-    const crew=onBoat([-.78,1.05,-.55],b.x,by,b.z,b.h,bp,br);
-    hats.push(crew[0],crew[1],crew[2],b.h,bp,br,PERSON, .16,[1,.72,.1],.25,SKINS[b.id%SKINS.length],HAIRS[b.id%HAIRS.length],0);
-  }
-  for (const tn of race.tinies) {
-    let scale = 1;
-    if (tn.claimedBy >= 0) {
-      const gone = tn.claimedAt + 0.15 + (tn.people.length - 1) * GAP + JUMP + 1.2;
-      scale = clamp(1 - (race.time - gone) / 0.8, 0, 1);
-      if (scale <= 0) continue;
-    }
-    const [y, pitch, roll] = bob(tn.x, tn.z, tn.yaw, 1.4, 0.7, t);
-    tinyPose.set(tn.id, [y, pitch, roll, scale]);
-    tinies.push(tn.x, y, tn.z, tn.yaw, pitch, roll, scale * 1.18, 0, TINY_COLOURS[tn.colour], 0, NONE, NONE, 0);
-  }
-  for (const p of race.people) {
-    const lk = p.look, list = lk.hat ? hats : people, shirt = SHIRTS[lk.shirt], skin = SKINS[lk.skin], hair = HAIRS[lk.hair];
-    const tn = race.tinies[p.tiny], seat = SEATS[tn.people.length][p.seat], wav = Math.sin(t * 9 + p.id * 1.3);
-    const seatAt = (): [number, number, number] => { const tp = tinyPose.get(tn.id) ?? [0, 0, 0, 1]; return onBoat([seat[0], -0.14, seat[1]], tn.x, tp[0], tn.z, tn.yaw, tp[1], tp[2]); };
-    if (p.boat < 0 || !p.jumped) {
-      if (!tinyPose.has(tn.id)) continue;
-      // (waiting: facing the nearest big boat, and waving both arms when one's coming)
-      let near = Infinity, face = tn.yaw;
-      for (const b of race.boats) { const d = Math.hypot(b.x - tn.x, b.z - tn.z); if (d < near) { near = d; face = Math.atan2(b.x - tn.x, b.z - tn.z); } }
-      const [x, y, z] = seatAt(), waving = near < 45 && race.phase !== 'lineup';
-      list.push(x, y, z, face, 0, 0, PERSON, waving ? 2.45 + 0.4 * wav : 0.2, shirt, waving ? 2.45 - 0.4 * wav : 0.2, skin, hair, 0);
-    } else {
-      const b = race.boats[p.boat], [by, bp, br] = boatPose[b.id], spot = spotOf(p.spot);
-      const deck = onBoat(spot, b.x, by, b.z, b.h, bp, br);
-      if (!p.landed) {
-        // (jumping across: in an arc from their seat to their spot on deck, arms up, turning once in the air)
-        const s = clamp((race.time - p.jumpAt) / JUMP, 0, 1), from = tinyPose.has(tn.id) ? seatAt() : deck, d = Math.hypot(deck[0] - from[0], deck[2] - from[2]);
-        const x = from[0] + (deck[0] - from[0]) * s, z = from[2] + (deck[2] - from[2]) * s, y = from[1] + (deck[1] - from[1]) * s + Math.sin(Math.PI * s) * (.30 + Math.min(d,6) * .045);
-        list.push(x, y, z, b.h + Math.PI, 0.12*Math.sin(s*Math.PI), 0, PERSON, 1.9, shirt, 1.3, skin, hair, 0);
-        if (!still && Math.random() < 0.015) marks.sparkle(x, y + 0.9, z, 1, [1, 0.95, 0.6], 0.3, 0.18);
-      } else {
-        // (aboard: facing aft (toward the camera, mostly), cheering when someone new comes aboard, waving at the end)
-        const cheer = race.time < cheerUntil[b.id] || (b.finished >= 0 && race.time - b.finished < 4) || ui === 'podium';
-        const armL = cheer ? 2.5 + 0.35 * wav : 0.18 + 0.05 * Math.sin(t * 1.3 + p.id), armR = cheer ? 2.5 - 0.35 * wav : 0.18 + 0.05 * Math.sin(t * 1.1 + p.id * 2);
-        list.push(deck[0], deck[1], deck[2], b.h + Math.PI + ((p.id * 0.37) % 0.6) - 0.3, 0, 0, PERSON, armL, shirt, armR, skin, hair, 0);
-      }
-    }
-  }
-  for (const d of sea!.decor) {
-    if (d.kind !== 'buoy' || d.z < frameZ[0] - 20 || d.z > frameZ[1] + 20) continue;
-    const [y, pitch, roll] = bob(d.x, d.z, 0, 0.4, 0.4, t);
-    const col = d.c === 0 ? [0.92, 0.22, 0.17] : d.c === 2 ? [0.1, 0.1, 0.12] : [0.98, 0.98, 0.96];
-    buoys.push(d.x, y - 0.15, d.z, 0, pitch * 0.6, roll * 0.6, d.z > L - 1 ? 2 : 1.4, 0, col, 0, NONE, NONE, 0);
-  }
-}
-
-// ─── what the race says: sounds, marks, the words on the screen ───
-let lastLand = 0;
-function happenings() {
-  for (const e of race.events) {
-    switch (e.kind) {
-      case 'count': say(String(e.n)); sound.count(e.n); break;
-      case 'go': say('Go!'); sound.count(0); sound.horn(); break;
-      case 'claim': { const tn = race.tinies[e.tiny]; marks.ring(tn.x, tn.z, NEAR * 0.8, 4, 0.8, 0.9, race.boats[e.boat].colour); if (e.boat === mine) cheerUntil[mine] = race.time + 1.4; break; }
-      case 'jump': {
-        const p = race.people[e.person], tn = race.tinies[p.tiny];
-        marks.splash(tn.x, 0.4, tn.z, 4, 2); marks.ring(tn.x, tn.z, 1.0, 2.6, 0.9, 0.55);
-        if (e.boat === mine || Math.hypot(tn.x - cam.x, tn.z - cam.z) < 40) sound.jump(e.boat === mine);
-        break;
-      }
-      case 'land': {
-        const b = race.boats[e.boat], [by, bp, br] = boatPose[b.id], at = onBoat(spotOf(race.people[e.person].spot), b.x, by, b.z, b.h, bp, br);
-        marks.sparkle(at[0], at[1] + 1.2, at[2], e.boat === mine ? 7 : 3, e.boat === mine ? [1, 0.92, 0.45] : b.colour);
-        cheerUntil[b.id] = Math.max(cheerUntil[b.id], race.time + 0.9);
-        if (e.boat === mine) { sound.hop(e.total, true); pop(`+1`, b.colour); lastLand = performance.now(); }
-        else if (Math.hypot(b.x - cam.x, b.z - cam.z) < 45) sound.hop(e.total, false);
-        break;
-      }
-      case 'finish': {
-        const b = race.boats[e.boat];
-        if (e.boat === mine && !auto) { say('Across the line!'); sound.horn(0.8); sound.cheer(); marks.sparkle(b.x, 4, b.z, 40, [1, 0.85, 0.3], 4, 0.5); }
-        else toast(`${b.name} is across the line${e.order === 0 ? ' first' : ''}!`);
-        break;
-      }
-      case 'lastcall': sound.bell(); if (!auto && race.boats[mine].finished < 0) say('Last call! Go for the finish!', true); break;
-      case 'bump': if (e.boat === mine) { const b = race.boats[mine], [x, z] = along(b, 4.5); sound.bump(e.hard); marks.splash(x, 0.6, z, 8, 3); } break;
-      case 'end': endAt = performance.now() + 2600; break;
-    }
-  }
-  race.events.length = 0;
-}
-
-// ─── the words on the screen ───
-let sayTimer = 0;
-function say(text: string, long = false) {
-  const el = $('big');
-  el.textContent = text; el.classList.toggle('long', long); el.classList.remove('on'); void el.offsetWidth; el.classList.add('on');
-  clearTimeout(sayTimer); sayTimer = window.setTimeout(() => el.classList.remove('on'), long ? 2400 : 1100);
-}
-function toast(text: string) {
-  const el = document.createElement('div');
-  el.className = 'toast'; el.textContent = text;
-  $('toasts').appendChild(el);
-  setTimeout(() => el.remove(), 3200);
-}
-function pop(text: string, col: readonly number[]) {
-  const b = race.boats[mine], [sx, sy] = project(b.x, 4.5, b.z);
-  const el = document.createElement('div');
-  el.className = 'pop'; el.textContent = text; el.style.left = `${sx}px`; el.style.top = `${sy}px`; el.style.color = css(col);
-  $('pops').appendChild(el);
-  setTimeout(() => el.remove(), 1000);
-}
-const ORD = ['1st', '2nd', '3rd', '4th', '5th'];
-let placesKey = '';
-function hud() {
-  if (ui !== 'race') return;
-  const st = standings(race), key = st.map((b) => `${b.id}:${b.rescued}`).join(',');
-  if (key !== placesKey) {
-    placesKey = key;
-    $('places').innerHTML = st.map((b, i) => `<div class="chip${b.id === mine && !auto ? ' me' : ''}"><small>${ORD[i]}</small><i style="background:${css(b.colour)}"></i><b>${b.rescued}</b></div>`).join('');
-    const me = race.boats[mine];
-    $('count').textContent = String(me.rescued);
-    $('me').classList.toggle('bump', performance.now() - lastLand < 300);
-  }
-  // (how far along: the five boats between the start and the finish)
-  const tr = $('track');
-  if (tr.children.length !== 6) tr.innerHTML = '<span class="flag"></span>' + race.boats.map((b) => `<i style="background:${css(b.colour)}" class="${b.id === mine ? 'me' : ''}"></i>`).join('');
-  race.boats.forEach((b, k) => { (tr.children[k + 1] as HTMLElement).style.bottom = `${clamp(b.z / L, 0, 1) * 100}%`; });
-  // (the last call)
-  const call = $('call');
-  if (race.lastCall >= 0 && race.phase === 'racing') {
-    const left = Math.max(0, Math.ceil(race.callLength - (race.time - race.lastCall))), first = race.boats[race.order[0]];
-    call.textContent = race.boats[mine].finished >= 0 && !auto ? `You're home! The others have ${left}s` : `${first.name} is home! Reach the finish: ${left}s`;
-    call.classList.add('on'); call.classList.toggle('hurry', left <= 10);
-  } else call.classList.remove('on');
-  $('hint').classList.toggle('on', !auto && race.phase === 'racing' && !usedHand && race.time - race.goAt < 9);
-  arrows();
-}
-/**
- * Arrows at the edge of the screen to the nearest tiny boats that are off it, each with how many are waiting; and, in
- * the last call, one to the finish
- */
-function arrows() {
-  const box = $('arrows'), me = race.boats[mine], want: Array<{ x: number; y: number; a: number; n: string; c: string; fin: boolean }> = [];
-  if (!auto && me.finished < 0 && race.phase === 'racing') {
-    const cx = W / 2, cy = H / 2, top = 120, bottom = 70, side = 26;
-    const edge = (x: number, z: number) => {
-      const [sx, sy, front] = project(x, 0.5, z);
-      if (front && sx > side && sx < W - side && sy > top && sy < H - bottom) return null;
-      let dx = sx - cx, dy = sy - cy;
-      if (!front) { dx = -dx; dy = -dy; }
-      const kx = dx > 0 ? (W - side - cx) / dx : dx < 0 ? (side - cx) / dx : Infinity, ky = dy > 0 ? (H - bottom - cy) / dy : dy < 0 ? (top - cy) / dy : Infinity, k = Math.min(kx, ky);
-      return { x: cx + dx * k, y: cy + dy * k, a: Math.atan2(dy, dx) };
+    const p = poseOf(b.id, b.x, b.z, b.h, b.v, b.turn, t, dt), col = BOATS[b.id].colour;
+    lists.boat.push(b.x, p.y, b.z, b.h, p.pitch, p.roll, 1, 0, col, 0, NONE, 0, NONE, b.id * 1.7);
+    const crewAt = (x: number, y: number, z: number, yaw: number, aL: number, aR: number, reach: number, look: number) => {
+      const [X, Y, Z] = onBoat(p, x, y, z);
+      lists.crew.push(X, Y, Z, b.h + yaw, p.pitch, p.roll, PERSON * 0.98, aL, CREW, aR, SKINS[(b.id * 2 + look) % 6], reach, NONE, 0);
     };
-    if (race.lastCall >= 0) { const e = edge(clamp(me.x, sea!.finish[0] + 15, sea!.finish[1] - 15), L); if (e) want.push({ ...e, n: '', c: '#183048', fin: true }); }
-    const waiting = race.tinies.filter((tn) => tn.claimedBy < 0).map((tn) => ({ tn, d: Math.hypot(tn.x - me.x, tn.z - me.z) })).filter((o) => o.d < 160).sort((a, b) => a.d - b.d);
-    for (const { tn } of waiting) {
-      if (want.length >= 3) break;
-      const e = edge(tn.x, tn.z);
-      if (e) want.push({ ...e, n: String(tn.people.length), c: css(TINY_COLOURS[tn.colour]), fin: false });
+    // (two at the upper steering position, one on the aft deck to throw the line)
+    const home = b.finished !== null && b.home, cheer = home ? Math.abs(Math.sin(t * 5 + b.id)) * 0.4 : 0;
+    crewAt(0.5, ROOF_Y, 0.15, 0, home ? 2.7 + cheer : 0.25, home ? 2.7 + cheer : 0.9, home ? 0 : 1.1, 0);
+    crewAt(-0.5, ROOF_Y, 0.1, 0, home ? 2.6 + cheer : 0.3, 0.2, 0, 1);
+    const k = race.crafts.find((c) => c.by === b.id && (c.stage === 'line' || c.stage === 'climb'));
+    if (k) {
+      const side = local(b, k.x, k.z)[0] >= 0 ? -1 : 1; // (model x is to the boat's left)
+      const throwing = k.stage === 'line';
+      crewAt(side * 1.45, deckAt(-3.4), -3.4, side * 1.2, throwing && side > 0 ? 2.8 : 0.5, throwing && side < 0 ? 2.8 : 0.5, throwing ? 0.4 : 1.0, 2);
+      // (the line: from the thrower's hand out to the little boat, thrown, then held)
+      const hand = onBoat(p, side * 1.9, deckAt(-3.4) + 1.2, -3.4), kp = poses[100 + race.crafts.indexOf(k)];
+      const end = [k.x, (kp?.y ?? 0) + 0.45, k.z];
+      marks.line(hand, end, throwing ? 0.6 : 0.25, 0.075, [0.98, 0.8, 0.15], throwing ? Math.min(1, k.t / LINE) : 1);
+    } else crewAt(0.9, deckAt(-3.6), -3.6, 0, 0.2, 0.2, 0, 2);
+    // (aboard: the decks fill from aft, then forward, then the side decks; then the roof)
+    b.aboard.forEach((a, i) => {
+      const who = race.crafts[a.craft].craft.people[a.person];
+      let x: number, z: number, y: number;
+      if (i < SEATS.length) { [x, z] = SEATS[i]; x = -x; y = deckAt(z); }
+      else { const r = ROOF[(i - SEATS.length) % ROOF.length]; x = -r[0]; z = r[1]; y = ROOF_Y; }
+      const [X, Y, Z] = onBoat(p, x, y, z);
+      const glee = home ? Math.abs(Math.sin(t * 6 + i)) : 0, wave = (t * 0.7 + i * 0.37) % 6 < 0.8;
+      const arm = home ? 2.4 + glee * 0.5 : wave ? 2.5 + Math.sin(t * 12) * 0.3 : 0.15;
+      lists['kid' + who.style].push(X, Y + glee * 0.15, Z, b.h + (i % 3 - 1) * 0.4, p.pitch, p.roll, PERSON * 0.92, arm, SHIRTS[who.shirt], home ? arm : 0.15, SKINS[who.skin], 0, HAIRS[who.hair], 0);
+    });
+  }
+  // (the little boats, and whoever's still in them; the one climbing aboard)
+  let hc = 0;
+  const me = race.boats[mine], fz = followed();
+  const nearHoles = race.crafts.map((k, i) => [i, Math.hypot(k.x - fz.x, k.z - fz.z)] as const).filter(([i]) => race.crafts[i].craft.kind !== 'kayak').sort((a, b) => a[1] - b[1]).slice(0, 12);
+  race.crafts.forEach((k, i) => {
+    const kind = k.craft.kind, c = CRAFT_COLOURS[k.craft.colour];
+    const s = calmAt(shoreAt(coast, k.x, k.z)), sh = Math.sin(k.yaw), ch = Math.cos(k.yaw);
+    const hb = heightAt(k.x + sh * 1.4, k.z + ch * 1.4, t, s), hs = heightAt(k.x - sh * 1.4, k.z - ch * 1.4, t, s), hp = heightAt(k.x - ch * 0.7, k.z + sh * 0.7, t, s), hq = heightAt(k.x + ch * 0.7, k.z - sh * 0.7, t, s);
+    const y = (hb + hs + hp + hq) / 4 + (kind === 'kayak' ? 0.12 : 0.24), pitch = Math.atan2(hb - hs, 2.8) * 0.8, roll = Math.atan2(hp - hq, 1.4) * 0.5;
+    const pose = (poses[100 + i] = { x: k.x, z: k.z, h: k.yaw, y, pitch, roll });
+    lists[kind].push(k.x, y, k.z, k.yaw, pitch, roll, 1, 0, c, 0, NONE, 0, NONE, i * 1.3);
+    // (who's waiting: facing the nearest lifeboat; waving both arms when one's close)
+    const seats = kind === 'row' ? [0.55, -0.35, -1.1] : kind === 'sail' ? [0.05, -0.95] : [-0.05];
+    const ppl = k.craft.people, first = ppl.length - k.left;
+    let nearB = race.boats[0], nd = 1e9;
+    for (const b of race.boats) { const d = Math.hypot(b.x - k.x, b.z - k.z); if (d < nd) { nd = d; nearB = b; } }
+    const face = Math.atan2(nearB.x - k.x, nearB.z - k.z);
+    for (let j = first; j < ppl.length; j++) {
+      const who = ppl[j], climbing = j === first && k.stage === 'climb', seatZ = seats[j % seats.length];
+      const [sx, sy, sz] = onBoat(pose, 0, kind === 'kayak' ? -0.3 : -0.12, seatZ);
+      if (climbing) {
+        // (across to the hull, up its side, over the gunwale, to a place on deck)
+        const b = race.boats[k.by], bp = poses[b.id], u = Math.min(1, k.t / CLIMB), slot = b.aboard.length;
+        let dx: number, dz: number, dy: number;
+        if (slot < SEATS.length) { [dx, dz] = SEATS[slot]; dx = -dx; dy = deckAt(dz); } else { const r = ROOF[(slot - SEATS.length) % ROOF.length]; dx = -r[0]; dz = r[1]; dy = ROOF_Y; }
+        const [, alongK] = local(b, k.x, k.z), side = local(b, k.x, k.z)[0] >= 0 ? -1 : 1;
+        const hullOut = onBoat(bp, side * (HALF_BEAM + 0.35), 0.15, Math.max(-4, Math.min(1.5, alongK)));
+        const hullTop = onBoat(bp, side * (HALF_BEAM - 0.1), deckAt(alongK) + 0.2, Math.max(-4, Math.min(1.5, alongK)));
+        const seat = onBoat(bp, dx, dy, dz);
+        let X: number, Y: number, Z: number, aL = 2.7, aR = 2.7, reach = 0.6;
+        const mix = (a: number[], b2: number[], f: number) => a.map((v, n) => v + (b2[n] - v) * f);
+        if (u < 0.3) { const f = u / 0.3, q = mix([sx, sy, sz], hullOut, f); [X, Y, Z] = q; Y += Math.sin(Math.PI * f) * 0.4; reach = 1.4; aL = aR = 0.4; }
+        else if (u < 0.75) { const f = (u - 0.3) / 0.45, q = mix(hullOut, hullTop, f); [X, Y, Z] = q; aL = 2.6 + Math.sin(f * 18) * 0.35; aR = 2.6 - Math.sin(f * 18) * 0.35; reach = 0.5; }
+        else { const f = (u - 0.75) / 0.25, q = mix(hullTop, seat, f); [X, Y, Z] = q; Y += Math.sin(Math.PI * f) * 0.3; aL = aR = 0.6; }
+        lists['kid' + who.style].push(X, Y, Z, b.h + Math.PI * (side > 0 ? 0.5 : -0.5), 0, 0, PERSON * 0.92, aL, SHIRTS[who.shirt], aR, SKINS[who.skin], reach, HAIRS[who.hair], 0);
+        if (u > 0.92 && !told.has(`land${i}:${j}`)) { told.add(`land${i}:${j}`); for (let q = 0; q < 5; q++) marks.sparkle(seat[0] + (Math.random() - 0.5), seat[1] + 1.6, seat[2] + (Math.random() - 0.5), [1, 0.85, 0.3]); }
+        continue;
+      }
+      const waving = nd < 32 && k.stage === 'wait', arm = waving ? 2.5 + Math.sin(t * 9 + j * 2) * 0.45 : 0.25 + Math.sin(t * 1.3 + j) * 0.08;
+      lists['kid' + who.style].push(sx, sy, sz, face, pitch * 0.5, roll * 0.5, PERSON * 0.88, arm, SHIRTS[who.shirt], waving ? 2.5 + Math.sin(t * 9 + j * 2 + Math.PI) * 0.45 : arm, SKINS[who.skin], 0, HAIRS[who.hair], 0);
+    }
+    // (the ring that says come alongside: round the little boats near you, in your colour)
+    if (ui === 'race' && !auto && k.stage === 'wait' && k.left > 0) {
+      const d = Math.hypot(k.x - me.x, k.z - me.z);
+      if (d < 55) { const col = BOATS[mine].colour; marks.put(FX.RING, k.x, 0, k.z, 4.4, 0, 0, 0, col[0], col[1], col[2], Math.min(1, (55 - d) / 20) * 0.85); }
+    }
+  });
+  for (const [i] of nearHoles) {
+    const k = race.crafts[i];
+    holes.set([k.x, k.z, k.yaw, k.craft.kind === 'sail' ? 1.7 : 1.52], hc * 4); hc++;
+  }
+  // (the buoys, bobbing)
+  for (const y of coast.buoys) {
+    const s = calmAt(shoreAt(coast, y.x, y.z)), h = heightAt(y.x, y.z, t, s);
+    lists['buoy-' + y.kind].push(y.x, h - 0.05, y.z, 0, Math.sin(t * 1.3 + y.x) * 0.08, Math.cos(t * 1.1 + y.z) * 0.08, 1, 0, NONE, 0, NONE, 0, NONE, 0);
+  }
+  // (gulls, wheeling over the boat you follow)
+  for (let i = 0; i < 6; i++) {
+    const a = t * (0.22 + i * 0.03) + i * 1.9, r = 16 + i * 4, cx = fz.x + Math.sin(i * 2.3) * 22, cz = fz.z + 26 + Math.cos(i * 1.7) * 30;
+    const flap = Math.sin(t * 7 + i * 1.3) > -0.2 ? Math.sin(t * 9 + i) * 0.55 : 0.1;
+    lists.gull.push(cx + Math.sin(a) * r, 15 + (i % 3) * 5 + Math.sin(t + i) * 1.2, cz + Math.cos(a) * r, a + Math.PI / 2, 0, Math.sin(a) * 0.2 - 0.25, 1.4, flap, NONE, flap, NONE, 0, NONE, 0);
+  }
+  return hc;
+}
+
+// ─── spray, foam, splashes on the rocks ───
+function splashes(t: number, dt: number) {
+  for (const b of race.boats) {
+    wakes.record(b.id, b.x, b.z, b.h, b.v, t);
+    const fast = Math.abs(b.v) / VMAX, p = poses[b.id];
+    if (!p || dt <= 0) continue;
+    const s = Math.sin(b.h), c = Math.cos(b.h);
+    // (spray off the bow: more when going fast, most when it slams into a wave)
+    const slam = Math.max(0, -p.pitch) * 6;
+    if (fast > 0.3 && Math.random() < dt * (30 * fast + 60 * slam)) for (const side of [-1, 1]) {
+      const x = b.x + s * 4.3 - side * c * 1.2, z = b.z + c * 4.3 + side * s * 1.2;
+      marks.spray(x, p.y + 0.4, z, -side * c * (2 + Math.random() * 3) + s * b.v * 0.5, 2 + Math.random() * 3 + slam * 3, side * s * (2 + Math.random() * 3) + c * b.v * 0.5, 0.25 + Math.random() * 0.3);
+    }
+    if (fast > 0.15 && Math.random() < dt * 25 * fast) for (const side of [-1, 1]) marks.foam(b.x + s * 3 - side * c * 2.3, b.z + c * 3 + side * s * 2.3, -side * c * 2.5, side * s * 2.5, 0.8 + Math.random() * 0.8, 1.4, 0.7);
+  }
+  // (the surf: bursts where a crest meets the rocks, near the camera)
+  const S = coast.surf, n = S.length / 4;
+  for (let q = 0; q < 24; q++) {
+    const i = Math.floor(Math.random() * n), x = S[i * 4], z = S[i * 4 + 1];
+    if (Math.abs(x - eye[0]) > 120 || Math.abs(z - eye[2]) > 160) continue;
+    const h = heightAt(x, z, t, 1);
+    if (h > 0.32 && Math.random() < dt * 30) {
+      const nx = S[i * 4 + 2], nz = S[i * 4 + 3];
+      for (let k = 0; k < 8; k++) marks.spray(x, 0.3, z, nx * (1 + Math.random() * 2) + (Math.random() - 0.5) * 2, 3 + Math.random() * 4, nz * (1 + Math.random() * 2) + (Math.random() - 0.5) * 2, 0.18 + Math.random() * 0.3, 0.9);
+      marks.foam(x + nx * 1.5, z + nz * 1.5, nx, nz, 2.2, 1.6, 0.8);
     }
   }
-  while (box.children.length < want.length) box.appendChild(Object.assign(document.createElement('div'), { className: 'arrow', innerHTML: '<span></span><b></b>' }));
-  [...box.children].forEach((el, k) => {
-    const h = el as HTMLElement, w = want[k];
-    h.style.display = w ? '' : 'none';
-    if (!w) return;
-    h.classList.toggle('fin', w.fin);
-    h.style.transform = `translate(${w.x}px, ${w.y}px)`;
-    (h.firstChild as HTMLElement).style.transform = `rotate(${w.a}rad)`;
-    (h.firstChild as HTMLElement).style.borderLeftColor = w.c;
-    (h.lastChild as HTMLElement).textContent = w.n;
-    (h.lastChild as HTMLElement).style.background = w.fin ? '' : w.c;
-  });
 }
 
-// ─── the marks: wakes and ripples as things move; shadows and near-enough rings, afresh each frame ───
-const rippleAt = new Map<number, number>();
-function markUp(dt: number) {
-  for (const b of race.boats) marks.wake(b.x, b.z, b.h, b.v, dt);
-  for (const tn of race.tinies) {
-    if (!tinyPose.has(tn.id) || Math.abs(tn.z - cam.z) > 90) continue;
-    const next = rippleAt.get(tn.id) ?? vt + (tn.id % 7) * 0.4;
-    if (vt >= next) { marks.ring(tn.x, tn.z, 1.4, 1.6, 2.4, 0.35); rippleAt.set(tn.id, vt + 2.2 + (tn.id % 5) * 0.3); }
+// ─── what's said on the screen ───
+const places = $('places'), count = $('count'), track = $('track'), bar = $('bar'), hint = $('hint'), callEl = $('call'), arrows = $('arrows');
+let shownCount = -1, hudAt = 0;
+function hud(t: number) {
+  if (ui !== 'race' || t - hudAt < 0.1) return;
+  hudAt = t;
+  const st = standings(race), me = race.boats[mine];
+  places.innerHTML = st.map((b, i) => `<span class="chip${b.id === mine ? ' me' : ''}"><small>${['1st', '2nd', '3rd', '4th', '5th'][i]}</small><i style="background:${css(BOATS[b.id].colour)}"></i><b>${b.rescued}</b></span>`).join('');
+  if (me.rescued !== shownCount) { if (shownCount >= 0) { $('me').classList.add('bump'); setTimeout(() => $('me').classList.remove('bump'), 160); } shownCount = me.rescued; count.textContent = String(me.rescued); }
+  track.innerHTML = '<span class="flag"></span>' + race.boats.map((b) => `<i class="${b.id === mine ? 'me' : ''}" style="bottom:${Math.max(0, Math.min(100, ((b.z - START_Z) / (GATE_Z - START_Z)) * 100))}%;background:${css(BOATS[b.id].colour)}"></i>`).join('');
+  // (coming aboard: a lifebuoy and a bar that fills)
+  const k = race.crafts.find((c) => c.by === mine && (c.stage === 'line' || c.stage === 'climb'));
+  if (k) {
+    const total = k.craft.people.length, done = total - k.left, f = (done + (k.stage === 'climb' ? k.t / CLIMB : 0)) / total;
+    bar.classList.add('on'); (bar.querySelector('i') as HTMLElement).style.width = `${f * 100}%`; (bar.querySelector('span') as HTMLElement).textContent = `${done} of ${total} aboard`;
+  } else bar.classList.remove('on');
+  // (a word of help: how to go, how to come alongside)
+  let say = '';
+  if (race.t < 5 && !auto) say = 'push the stick to go — let go beside a little boat to stop';
+  else if (!auto && me.finished === null) {
+    const slow = LEVELS[race.level].slow;
+    for (const c of race.crafts) if (c.stage === 'wait' && c.left > 0 && Math.hypot(c.x - me.x, c.z - me.z) < 11 && Math.abs(me.v) > slow) say = 'slow down beside them — let go of the stick';
   }
-  marks.update(dt);
-  const me = race.boats[mine];
-  marks.pack((put) => {
-    for (const b of race.boats) put(FX.SHADOW, b.x, 0, b.z, 2.6, 0.32, -b.h, 2.1, NONE, 0);
-    // (the finish line: a chequered band floating right across, where it's in view)
-    if (frameZ[0] < L + 2 && frameZ[1] > L - 2) for (let x = sea!.finish[0] + 1, k = 0; x < sea!.finish[1] - 1; x += 2, k++) put(FX.CHEQUER, x, 0, L, 1, 1, 0, 0.55, NONE, k % 2);
-    // (at the line-up, a ring round yours)
-    if (ui === 'lineup' && !auto) put(FX.NEAR, me.x, 0, me.z, 7.5, 0.95, vt * 0.3, 1, me.colour, 0);
-    for (const tn of race.tinies) { const tp = tinyPose.get(tn.id); if (tp) put(FX.SHADOW, tn.x, 0, tn.z, 0.8 * tp[3], 0.3, -tn.yaw, 2, NONE, 0); }
-    // (near enough: a dashed ring round each tiny boat near yours, brighter as you come in, in your colour when you're close)
-    if (ui === 'race' && !auto && me.finished < 0) for (const tn of race.tinies) {
-      if (tn.claimedBy >= 0) continue;
-      const d = Math.hypot(tn.x - me.x, tn.z - me.z);
-      if (d > 70) continue;
-      const close = d < NEAR + 6;
-      put(FX.NEAR, tn.x, 0, tn.z, NEAR, clamp((70 - d) / 30, 0, 1) * (close ? 0.95 : 0.55), vt * 0.2, 1, close ? me.colour : [1, 1, 1], 0);
-    }
-  });
+  hint.textContent = say; hint.classList.toggle('on', !!say);
+  if (race.lastCall && me.finished === null) {
+    const left = Math.max(0, race.lastCall.start + race.lastCall.length - race.t);
+    callEl.textContent = `Last call! ${Math.ceil(left)}s to the finish`; callEl.classList.add('on'); callEl.classList.toggle('hurry', left < 10);
+  } else callEl.classList.remove('on');
+  // (arrows at the edge to the nearest little boats out of sight; to the finish in the last call)
+  const W = innerWidth, H = innerHeight, want: { x: number; z: number; n: number; fin?: boolean; col: number[] }[] = [];
+  if (me.finished === null) {
+    const waiting = race.crafts.filter((c) => c.stage === 'wait' && c.left > 0).map((c) => ({ c, d: Math.hypot(c.x - me.x, c.z - me.z) })).sort((a, b) => a.d - b.d).slice(0, 3);
+    for (const { c } of waiting) want.push({ x: c.x, z: c.z, n: c.left, col: CRAFT_COLOURS[c.craft.colour] });
+    if (race.lastCall || !waiting.length) want.push({ x: coast.gateX, z: GATE_Z, n: 0, fin: true, col: [1, 1, 1] });
+  }
+  const html: string[] = [];
+  for (const w of want) {
+    const q = [w.x, 1, w.z, 1], cx = vp[0] * q[0] + vp[4] * q[1] + vp[8] * q[2] + vp[12], cy = vp[1] * q[0] + vp[5] * q[1] + vp[9] * q[2] + vp[13], cw = vp[3] * q[0] + vp[7] * q[1] + vp[11] * q[2] + vp[15];
+    let sx = cx / cw, sy = cy / cw;
+    if (cw > 0 && Math.abs(sx) < 0.95 && Math.abs(sy) < 0.9) continue;
+    if (cw < 0) { sx = -sx; sy = -sy; }
+    const m = Math.max(Math.abs(sx) / 0.86, Math.abs(sy) / 0.78), px = ((sx / m) * 0.5 + 0.5) * W, py = (0.5 - (sy / m) * 0.5) * H, ang = Math.atan2(-sy, sx);
+    html.push(`<div class="arrow${w.fin ? ' fin' : ''}" style="transform:translate(${px}px,${py}px)"><span style="transform:rotate(${ang}rad) translateX(20px)"></span><b style="background:${css(w.col)}">${w.fin ? '' : w.n}</b></div>`);
+  }
+  arrows.innerHTML = html.join('');
+}
+function say(text: string, long = false) {
+  const el = $('big'); el.textContent = text; el.classList.remove('on', 'long'); void el.offsetWidth; el.classList.add('on'); if (long) el.classList.add('long');
+}
+function toast(text: string) { const d = document.createElement('div'); d.className = 'toast'; d.textContent = text; $('toasts').appendChild(d); setTimeout(() => d.remove(), 3300); }
+
+// ─── the line-up and the end ───
+function boatSvg(c: readonly number[]) {
+  return `<svg viewBox="0 0 80 46" aria-hidden="true"><path d="M8 30 L72 30 L66 41 Q40 44 14 41 Z" fill="#0d1d4c"/><path d="M11 37 L69 37 L66 41 Q40 44 14 41 Z" fill="#c0180f"/><rect x="26" y="17" width="26" height="13" rx="3" fill="${css(c)}"/><rect x="29" y="20" width="20" height="4" rx="1" fill="#1a2733"/><path d="M38 17 L40 4 L42 17" stroke="#111" stroke-width="2" fill="none"/><rect x="34" y="7" width="12" height="2" fill="#111"/><path d="M8 30 L72 30" stroke="${css(c)}" stroke-width="3"/><text x="58" y="36" font-size="5" font-weight="800" fill="#fff" font-family="system-ui">RNLI</text></svg>`;
+}
+function lineup() {
+  ui = 'lineup'; document.body.className = document.body.className.replace(/\b(lineup|racing|podium)\b/g, '').trim() + ' lineup';
+  newGame();
+  $('boats').innerHTML = BOATS.map((b, i) => `<button data-boat="${i}" class="${i === mine ? 'on' : ''}">${boatSvg(b.colour)}<span>${b.name}</span></button>`).join('');
+  for (const el of document.querySelectorAll<HTMLElement>('#boats button')) el.onclick = () => { mine = Number(el.dataset.boat); lineup(); };
+  for (const el of document.querySelectorAll<HTMLElement>('#levels button')) { el.classList.toggle('on', el.dataset.level === level); el.onclick = () => { level = el.dataset.level as Level; lineup(); }; }
+  $('hand').textContent = document.body.classList.contains('hand-right') ? 'stick on the right ⇄' : 'stick on the left ⇄';
+}
+function go() {
+  if (ui !== 'lineup') return;
+  sound.wake(); sound.horn();
+  ui = 'race'; document.body.classList.remove('lineup'); document.body.classList.add('racing');
+  newGame(); start(race); shownCount = -1;
+  camYaw = race.boats[mine].h; camAt.x = race.boats[mine].x; camAt.z = race.boats[mine].z;
+}
+function podium() {
+  ui = 'podium'; document.body.classList.remove('racing'); document.body.classList.add('podium');
+  const st = standings(race), place = st.findIndex((b) => b.id === mine);
+  // (everyone in at the quay, 1st in the middle, the rest out to either side)
+  const order = [2, 1, 3, 0, 4];
+  st.forEach((b, i) => { const berth = coast.berths[order[i]]; b.x = berth.x; b.z = berth.z; b.h = berth.h; b.v = 0; b.home = true; if (b.finished === null) b.home = false; });
+  poses.length = 0;
+  $('result').textContent = auto ? `${BOATS[st[0].id].name} wins!` : place === 0 ? 'You won!' : `You came ${['1st', '2nd', '3rd', '4th', '5th'][place]}!`;
+  $('ranks').innerHTML = st.map((b, i) => `<li class="p${i + 1}${b.id === mine && !auto ? ' me' : ''}"><b>${['1st', '2nd', '3rd', '4th', '5th'][i]}</b><i style="background:${css(BOATS[b.id].colour)}"></i><span>${BOATS[b.id].name}${b.id === mine && !auto ? ' <em>you</em>' : ''}<small>${b.finished === null ? 'didn’t make it home' : 'rescued'}</small></span><strong>${b.rescued}</strong></li>`).join('');
+  sound.quiet(); sound.tune(place);
+}
+$('go').onclick = go;
+addEventListener('keydown', (e) => { if ((e.key === 'Enter' || e.key === ' ') && ui === 'lineup') { e.preventDefault(); go(); } });
+$('again').onclick = () => { lineup(); };
+$('next').onclick = () => { newCoast(1 + Math.floor(Math.random() * 999)); lineup(); };
+$('choose').onclick = () => lineup();
+$('newsea').onclick = () => { newCoast(1 + Math.floor(Math.random() * 999)); lineup(); };
+$('hand').onclick = () => { document.body.classList.toggle('hand-right'); lineup(); };
+$('sound').onclick = () => { $('sound').textContent = sound.toggle() ? 'sound on' : 'sound off'; };
+
+// ─── events from the race: sounds, words, marks ───
+function events() {
+  for (const e of race.events.splice(0)) {
+    if (e.kind === 'go') { say('Go!'); sound.horn(); }
+    else if (e.kind === 'line') { if (e.boat === mine) sound.splash(); const k = race.crafts[e.craft]; for (let q = 0; q < 6; q++) marks.spray(k.x, 0.4, k.z, (Math.random() - 0.5) * 3, 2 + Math.random() * 2, (Math.random() - 0.5) * 3, 0.3); }
+    else if (e.kind === 'aboard') { if (e.boat === mine) sound.aboard(race.boats[mine].rescued); }
+    else if (e.kind === 'clear') { if (e.boat === mine && !auto) toast(`All aboard! ${race.crafts[e.craft].craft.people.length} rescued`); }
+    else if (e.kind === 'letgo') { if (e.boat === mine && !auto) toast('Too far — they’re waiting for you to come back'); }
+    else if (e.kind === 'bump') { if (e.boat === mine) sound.bump(); }
+    else if (e.kind === 'finish') { if (e.boat === mine && !auto) say(`${['1st', '2nd', '3rd', '4th', '5th'][e.place - 1]} home!`); }
+    else if (e.kind === 'lastcall') { sound.bell(); if (!auto && race.boats[mine].finished === null) say('Last call!', true); }
+    else if (e.kind === 'over') setTimeout(() => { if (ui === 'race') podium(); }, 2500);
+  }
 }
 
-// ─── the frame ───
-let frameZ: [number, number] = [-100, 200];
-let last = performance.now(), acc = 0, slow = 0, fast = 0;
-function resize() {
-  const w = innerWidth, h = innerHeight;
-  W = w; H = h; aspect = w / h;
-  canvas.width = Math.round(w * dpr); canvas.height = Math.round(h * dpr);
-}
-dpr = Math.min(devicePixelRatio || 1, 1.65) * (preview ? 0.6 : 1);
-addEventListener('resize', resize); resize();
-
+// ─── the loop ───
+let dpr = Math.min(devicePixelRatio || 1, 1.75) * (preview ? 0.6 : 1), slowFor = 0, fastFor = 0, ema = 16;
+function resize() { canvas.width = Math.round(innerWidth * dpr); canvas.height = Math.round(innerHeight * dpr); }
+addEventListener('resize', resize);
+let last = performance.now(), vt = 0, frames = 0;
 function frame(now: number) {
-  const dt = Math.min(0.1, (now - last) / 1000);
-  last = now;
-  // (the resolution, to the frame time: down when frames are slow, up again when there's room)
-  if (!preview) {
-    if (dt > 0.024) { slow++; fast = 0; } else if (dt < 0.013) { fast++; slow = 0; }
-    if (slow > 40 && dpr > 1) { dpr = Math.max(1, dpr - 0.25); resize(); slow = 0; }
-    if (fast > 240 && dpr < Math.min(devicePixelRatio || 1, 1.65)) { dpr = Math.min(Math.min(devicePixelRatio || 1, 1.65), dpr + 0.25); resize(); fast = 0; }
+  const dt = Math.min(0.05, (now - last) / 1000); last = now; frames++;
+  ema += (dt * 1000 - ema) * 0.05;
+  // (keep it smooth: fewer pixels when frames are slow, more when there's room)
+  if (!still && !preview) {
+    if (ema > 24) { slowFor += dt; fastFor = 0; } else if (ema < 15) { fastFor += dt; slowFor = 0; } else { slowFor = fastFor = 0; }
+    const cap = Math.min(devicePixelRatio || 1, 1.75);
+    if (slowFor > 1.5 && dpr > 0.8) { dpr = Math.max(0.8, dpr - 0.15); resize(); slowFor = 0; }
+    if (fastFor > 4 && dpr < cap) { dpr = Math.min(cap, dpr + 0.15); resize(); fastFor = 0; }
   }
-  if (!still) {
-    vt += dt; acc += dt;
-    const input = hand();
-    let n = 0;
-    while (acc >= 1 / 60 && n < 8) { step(race, 1 / 60, input); acc -= 1 / 60; n++; }
-    if (n === 8) acc = 0;
-  }
-  happenings();
-  if (ui === 'race' && endAt > 0 && now >= endAt) {
-    endAt = -1;
-    if (preview) { setRace(seed + 1); start(race); } else toPodium();
-  }
-  camera(dt);
-  // (what of the course is in view: where the screen's corners meet the water)
-  const hits = [[0, 0], [W, 0], [0, H], [W, H]].map(([x, y]) => onWater(x, y)).filter(Boolean) as Array<{ x: number; z: number }>;
-  const zs = hits.map((p) => p.z), xs = hits.map((p) => p.x);
-  frameZ = hits.length < 4 ? [cam.z-180,cam.z+700] : zs.length ? [Math.max(cam.z-180,Math.min(...zs)-40), Math.min(cam.z+700,Math.max(...zs)+100)] : [cam.z - 150, cam.z + 250];
-  const centre: [number, number] = xs.length ? [xs.reduce((a, b) => a + b) / xs.length, zs.reduce((a, b) => a + b) / zs.length] : [cam.x, cam.z];
-  stage(vt);
-  markUp(still ? 0 : dt);
-  sound.engine(ui === 'race' && !auto ? race.boats[mine].v / VMAX : 0);
-  const f: Frame = { vp, eye, time: vt, right, up, zMin: frameZ[0], zMax: frameZ[1], centre, focus: [followed().x, followed().z], boats, tinies, people, hats, buoys, fx: marks.data, fxCount: marks.count };
-  R.draw(f, canvas.width, canvas.height);
-  hud();
-  (window as unknown as { __rescue: unknown }).__rescue = { variant: 'coast', visualBuild: 'coast-fidelity-3',
-    ui, phase: race.phase, time: Math.round(race.time * 10) / 10, seed, seedName: seedName(seed), level, mine, dpr,
-    boats: race.boats.map((b) => ({ name: b.name, x: Math.round(b.x), z: Math.round(b.z), rescued: b.rescued, finished: b.finished >= 0 })),
-    waiting: race.tinies.filter((t) => t.claimedBy < 0).length, places: standings(race).map((b) => b.name),
+  if (!still) vt += dt;
+  if (ui === 'race' && !still) {
+    const inp = stick.read();
+    step(race, dt, inp);
+    if (!auto && race.boats[mine].finished === null) sound.throttle(Math.max(0, inp.throttle));
+    events();
+    marks.step(dt);
+    splashes(vt, dt);
+  } else if (ui !== 'race') { marks.step(dt); if (!still) for (const b of race.boats) wakes.record(b.id, b.x, b.z, b.h, b.v, vt); }
+  else marks.step(0);
+  const t = vt;
+  camera(still ? 0 : dt, t, canvas.width, canvas.height);
+  const hc = people(t, still ? 0 : dt);
+  wakes.build(vt);
+  hud(t);
+  const fb = followed(), far = 1800;
+  const f: Frame = {
+    vp, eye, time: t, right, up, far,
+    zMin: Math.min(eye[2], fb.z) - 160 - 400 * Math.max(0, -Math.cos(camYaw)), zMax: Math.max(eye[2], fb.z) + 160 + 700 * Math.max(0, Math.cos(camYaw)),
+    focus: ui === 'podium' ? [coast.berths[2].x, coast.berths[2].z - 30] : [fb.x, fb.z], draws, wakes: wakes.data, wakeCount: wakes.count, fx: marks.data, fxCount: marks.count, holes, holeCount: hc,
+  };
+  if (ui === 'lineup') { f.zMin = START_Z - 250; f.zMax = START_Z + 700; }
+  if (ui === 'podium') { f.zMin = GATE_Z - 200; f.zMax = GATE_Z + 400; }
+  renderer.draw(f, canvas.width, canvas.height);
+  (window as unknown as { __rescue: unknown }).__rescue = {
+    variant: 'coast', ui, phase: race.phase, seed, name: coast.name, mine, level, t: race.t, auto, dpr, frameMs: ema,
+    stick: { x: stick.x, y: stick.y, held: stick.held },
+    boats: race.boats.map((b) => ({ x: b.x, z: b.z, h: b.h, v: b.v, rescued: b.rescued, finished: b.finished, home: b.home })),
+    boarding: race.crafts.filter((k) => k.stage === 'line' || k.stage === 'climb').map((k) => ({ craft: k.craft.id, by: k.by, stage: k.stage })),
   };
   requestAnimationFrame(frame);
 }
 
-// ─── off we go: a sea; the line-up (or, asked, that far into the race, or its end) ───
-setRace(seed);
-const ff = Number(params.get('t') ?? 0);
-if (preview) { start(race); ui = 'race'; document.body.classList.add('racing'); }
-else if (params.get('view') === 'podium') {
-  start(race); runFor(race, 1); for (let k = 0; k < 600 * 60 && race.phase !== 'done'; k++) step(race, 1 / 60); runFor(race, 30);
-  race.events.length = 0; toPodium();
-} else if (ff > 0) {
-  // (that far in; the last few seconds with the wakes laid behind the boats, as if it had been running)
-  start(race); runFor(race, Math.max(0, ff - 3));
-  for (let k = 0; k < Math.min(ff, 3) * 60; k++) { step(race, 1 / 60); for (const b of race.boats) marks.wake(b.x, b.z, b.h, b.v, 1 / 60); marks.update(1 / 60); }
-  race.events.length = 0; vt = race.time;
-  ui = 'race'; document.body.classList.add('racing');
-} else toLineup();
+// ─── start ───
+newCoast(seed);
+lineup();
+if (auto || params.has('t') || params.get('view') === 'podium' || study) {
+  ui = 'race'; document.body.classList.remove('lineup'); document.body.classList.add('racing');
+  newGame(); start(race);
+  const T = params.get('view') === 'podium' ? 1e9 : Number(params.get('t') ?? 0);
+  if (T > 0) {
+    // (run the race on to that moment, keeping the last few seconds of wake)
+    for (let s = 0; s < T + 3 && race.phase !== 'over'; s += 1 / 30) {
+      step(race, 1 / 30, {});
+      if (s > T + 3 - 6) for (const b of race.boats) wakes.record(b.id, b.x, b.z, b.h, b.v, s);
+      // (and the last moment's spray, so a held frame has it)
+      if (s > T + 3 - 1.2) { people(s, 1 / 30); splashes(s, 1 / 30); marks.step(1 / 30); }
+    }
+    vt = T + 3;
+    race.events.length = 0;
+    camYaw = followed().h; camAt.x = followed().x + Math.sin(camYaw) * 9; camAt.z = followed().z + Math.cos(camYaw) * 9;
+    if (race.phase === 'over' || params.get('view') === 'podium') { runFor(race, 400); podium(); }
+  } else { camYaw = 0; camAt.x = race.boats[mine].x; camAt.z = race.boats[mine].z + 9; }
+}
+resize();
 requestAnimationFrame(frame);
-

@@ -3,133 +3,142 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
-  <meta name="theme-color" content="#9ed1f7">
-  <title>Lily’s Rescue · Rocky Coast</title>
+  <meta name="theme-color" content="#2a64b8">
+  <title>Lily’s Rescue Boats</title>
   <style>
-    :root { --ink: #183048; --paper: rgba(255,255,255,.88); --soft: rgba(255,255,255,.7); --gold: #f4c542; --silver: #c7d0d8; --bronze: #df9a5c; }
-    html, body { margin: 0; height: 100%; background: #9ed1f7; overflow: hidden; touch-action: none; }
+    :root { --ink: #13285a; --paper: #fbf4e3; --edge: #e6d9b8; --gold: #f6c23a; --silver: #c9d1d9; --bronze: #e19a5c; --glass: rgba(16, 36, 84, .38); }
+    html, body { margin: 0; height: 100%; background: #7fb3e6; overflow: hidden; touch-action: none; }
     body { color: var(--ink); font-family: ui-rounded, "SF Pro Rounded", "Arial Rounded MT Bold", "Nunito", system-ui, sans-serif; -webkit-user-select: none; user-select: none; -webkit-tap-highlight-color: transparent; }
     canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
     button { all: unset; cursor: pointer; box-sizing: border-box; }
     nav { position: fixed; top: max(10px, env(safe-area-inset-top)); left: 12px; z-index: 3; }
-    nav a { font-size: 13px; letter-spacing: .04em; color: var(--ink); text-decoration: none; background: var(--soft); padding: 5px 10px; border-radius: 14px; -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); }
+    nav a { font-size: 13px; color: var(--ink); text-decoration: none; background: rgba(251, 244, 227, .85); padding: 5px 11px; border-radius: 14px; box-shadow: 0 2px 6px rgba(10, 30, 70, .2); }
+    .chip, #me, #bar, #call, .toast { background: rgba(251, 244, 227, .93); box-shadow: 0 3px 10px rgba(10, 30, 70, .25); }
 
-    /* ─── the race: the places along the top, your count, how far to go, arrows to who's waiting ─── */
+    /* ─── the race ─── */
     .hud { display: none; }
     body.racing .hud { display: flex; }
-    #places { position: fixed; top: calc(max(10px, env(safe-area-inset-top)) + 34px); left: 0; right: 0; justify-content: center; gap: 6px; pointer-events: none; }
-    #places .chip { display: flex; align-items: center; gap: 4px; padding: 4px 8px 4px 6px; border-radius: 16px; background: var(--paper); box-shadow: 0 2px 8px rgba(20,40,70,.18); -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); font-variant-numeric: tabular-nums; transition: transform .25s; }
+    #places { position: fixed; top: calc(max(10px, env(safe-area-inset-top)) + 34px); left: 0; right: 0; justify-content: center; gap: 5px; pointer-events: none; }
+    #places .chip { display: flex; align-items: center; gap: 4px; padding: 4px 8px 4px 6px; border-radius: 16px; font-variant-numeric: tabular-nums; }
     #places .chip small { font-size: 10px; opacity: .65; }
-    #places .chip i { width: 12px; height: 12px; border-radius: 50%; box-shadow: inset 0 0 0 1px rgba(0,0,0,.2); }
+    #places .chip i { width: 12px; height: 12px; border-radius: 50%; box-shadow: inset 0 0 0 1.5px rgba(0, 0, 0, .25); }
     #places .chip b { font-size: 15px; min-width: 14px; text-align: center; }
-    #places .chip.me { transform: scale(1.12); box-shadow: 0 0 0 2.5px var(--ink), 0 3px 10px rgba(20,40,70,.25); }
-    #me { position: fixed; left: 12px; top: calc(max(10px, env(safe-area-inset-top)) + 76px); align-items: center; gap: 8px; padding: 6px 14px 6px 10px; border-radius: 22px; background: var(--paper); box-shadow: 0 3px 12px rgba(20,40,70,.2); pointer-events: none; transition: transform .15s; }
-    #me.bump { transform: scale(1.12); }
+    #places .chip.me { transform: scale(1.12); box-shadow: 0 0 0 2.5px var(--ink), 0 3px 10px rgba(10, 30, 70, .3); }
+    #me { position: fixed; left: 12px; top: calc(max(10px, env(safe-area-inset-top)) + 76px); align-items: center; gap: 8px; padding: 6px 14px 6px 10px; border-radius: 22px; pointer-events: none; transition: transform .15s; }
+    #me.bump { transform: scale(1.14); }
     #me b { font-size: 30px; line-height: 1; font-variant-numeric: tabular-nums; }
     #me span { font-size: 12px; opacity: .7; line-height: 1.1; }
-    .person { position: relative; width: 16px; height: 26px; }
-    .person::before { content: ''; position: absolute; left: 3px; top: 0; width: 10px; height: 10px; border-radius: 50%; background: #f2c9a5; box-shadow: inset 0 3px 0 #5a3a22; }
-    .person::after { content: ''; position: absolute; left: 1px; top: 11px; width: 14px; height: 14px; border-radius: 7px 7px 3px 3px; background: #f25a3c; }
-    #track { position: fixed; right: 12px; top: calc(max(10px, env(safe-area-inset-top)) + 130px); bottom: 150px; width: 8px; border-radius: 4px; background: rgba(255,255,255,.55); box-shadow: 0 2px 8px rgba(20,40,70,.15); pointer-events: none; }
-    #track i { position: absolute; left: -3px; width: 14px; height: 14px; margin-bottom: -7px; border-radius: 50%; box-shadow: 0 0 0 1.5px #fff, 0 1px 3px rgba(0,0,0,.3); transition: bottom .2s linear; }
-    #track i.me { left: -6px; width: 20px; height: 20px; margin-bottom: -10px; box-shadow: 0 0 0 2.5px var(--ink), 0 1px 4px rgba(0,0,0,.35); z-index: 1; }
-    #track .flag { position: absolute; top: -22px; left: -6px; width: 20px; height: 14px; border-radius: 2px; background: repeating-conic-gradient(#222 0 25%, #fff 0 50%) 0 0 / 10px 7px; box-shadow: 0 1px 3px rgba(0,0,0,.3); }
+    .buoy { width: 26px; height: 26px; border-radius: 50%; background: repeating-conic-gradient(#f05a1a 0 45deg, #fff 0 90deg); -webkit-mask: radial-gradient(circle, transparent 6px, #000 7px); mask: radial-gradient(circle, transparent 6px, #000 7px); }
+    #track { position: fixed; right: 12px; top: calc(max(10px, env(safe-area-inset-top)) + 140px); bottom: 42%; width: 8px; border-radius: 4px; background: rgba(251, 244, 227, .7); pointer-events: none; }
+    #track i { position: absolute; left: -3px; width: 14px; height: 14px; margin-bottom: -7px; border-radius: 50%; box-shadow: 0 0 0 1.5px #fff, 0 1px 3px rgba(0, 0, 0, .3); }
+    #track i.me { left: -6px; width: 20px; height: 20px; margin-bottom: -10px; box-shadow: 0 0 0 2.5px var(--ink), 0 1px 4px rgba(0, 0, 0, .35); z-index: 1; }
+    #track .flag { position: absolute; top: -22px; left: -6px; width: 20px; height: 14px; border-radius: 2px; background: repeating-conic-gradient(#222 0 25%, #fff 0 50%) 0 0 / 10px 7px; }
+    #bar { position: fixed; top: calc(max(10px, env(safe-area-inset-top)) + 78px); left: 50%; transform: translate(-50%, -8px); align-items: center; gap: 8px; padding: 6px 12px 6px 8px; border-radius: 20px; opacity: 0; transition: opacity .25s, transform .25s; pointer-events: none; }
+    #bar.on { opacity: 1; transform: translate(-50%, 0); }
+    #bar .meter { width: 110px; height: 12px; border-radius: 6px; background: #1f3768; overflow: hidden; }
+    #bar .meter i { display: block; height: 100%; width: 0; background: linear-gradient(#ff9a3c, #f05a1a); transition: width .1s linear; }
+    #bar span { font-size: 13px; font-weight: 700; }
     #arrows { position: fixed; inset: 0; pointer-events: none; }
-    #arrows .arrow { position: absolute; left: 0; top: 0; width: 0; height: 0; }
-    #arrows .arrow span { position: absolute; left: -12px; top: -12px; width: 0; height: 0; border-top: 12px solid transparent; border-bottom: 12px solid transparent; border-left: 22px solid #fff; transform-origin: 12px 12px; filter: drop-shadow(0 1px 2px rgba(0,0,0,.35)); }
-    #arrows .arrow b { position: absolute; left: -11px; top: -11px; width: 22px; height: 22px; border-radius: 50%; color: #fff; font-size: 13px; line-height: 22px; text-align: center; box-shadow: 0 0 0 2px #fff, 0 1px 3px rgba(0,0,0,.35); }
-    #arrows .arrow.fin b { border-radius: 3px; width: 24px; height: 16px; top: -8px; left: -12px; background: repeating-conic-gradient(#222 0 25%, #fff 0 50%) 0 0 / 8px 8px; }
-    #arrows .arrow.fin span { border-left-width: 26px; }
-    #pops { position: fixed; inset: 0; pointer-events: none; overflow: hidden; }
-    .pop { position: absolute; transform: translate(-50%, -50%); font-size: 26px; font-weight: 800; text-shadow: 0 2px 0 #fff, 0 0 8px #fff; animation: pop 1s ease-out forwards; }
-    @keyframes pop { 0% { opacity: 0; transform: translate(-50%, -30%) scale(.6); } 15% { opacity: 1; transform: translate(-50%, -60%) scale(1.15); } 100% { opacity: 0; transform: translate(-50%, -180%) scale(1); } }
-    #call { position: fixed; top: calc(max(10px, env(safe-area-inset-top)) + 76px); right: 34px; left: auto; max-width: 52vw; padding: 7px 12px; border-radius: 16px; background: #fff3c4; box-shadow: 0 3px 12px rgba(20,40,70,.22); font-size: 13px; line-height: 1.25; text-align: center; opacity: 0; transform: translateY(-8px); transition: opacity .3s, transform .3s; pointer-events: none; }
-    #call.on { opacity: 1; transform: none; }
-    #call.hurry { background: #ffd0c2; animation: throb .6s ease-in-out infinite alternate; }
-    @keyframes throb { to { transform: scale(1.06); } }
-    #big { position: fixed; left: 0; right: 0; top: 34%; text-align: center; font-size: 64px; font-weight: 800; color: #fff; text-shadow: 0 3px 0 var(--ink), 0 0 18px rgba(20,40,70,.5); opacity: 0; pointer-events: none; }
+    #arrows .arrow { position: absolute; left: 0; top: 0; }
+    #arrows .arrow span { position: absolute; left: -11px; top: -11px; width: 0; height: 0; border-top: 11px solid transparent; border-bottom: 11px solid transparent; border-left: 18px solid #fff; transform-origin: 11px 11px; filter: drop-shadow(0 1px 2px rgba(0, 0, 0, .4)); }
+    #arrows .arrow b { position: absolute; left: -12px; top: -12px; width: 24px; height: 24px; border-radius: 50%; color: #fff; font-size: 13px; line-height: 24px; text-align: center; box-shadow: 0 0 0 2px #fff, 0 1px 3px rgba(0, 0, 0, .35); text-shadow: 0 1px 1px rgba(0, 0, 0, .4); }
+    #arrows .arrow.fin b { border-radius: 3px; width: 26px; height: 18px; top: -9px; left: -13px; background: repeating-conic-gradient(#222 0 25%, #fff 0 50%) 0 0 / 9px 9px !important; }
+    #call { position: fixed; top: calc(max(10px, env(safe-area-inset-top)) + 118px); left: 50%; transform: translate(-50%, -8px); padding: 7px 14px; border-radius: 16px; background: #fff1b8; font-size: 14px; font-weight: 700; opacity: 0; transition: opacity .3s, transform .3s; pointer-events: none; white-space: nowrap; }
+    #call.on { opacity: 1; transform: translate(-50%, 0); }
+    #call.hurry { background: #ffc9b5; animation: throb .6s ease-in-out infinite alternate; }
+    @keyframes throb { to { transform: translate(-50%, 0) scale(1.06); } }
+    #big { position: fixed; left: 0; right: 0; top: 30%; text-align: center; font-size: 68px; font-weight: 900; color: #fff; text-shadow: 0 4px 0 var(--ink), 0 0 20px rgba(10, 30, 70, .5); opacity: 0; pointer-events: none; }
     #big.on { animation: say 1.1s ease-out forwards; }
-    #big.long { font-size: 34px; padding: 0 24px; }
-    #big.long.on { animation-duration: 2.4s; }
-    @keyframes say { 0% { opacity: 0; transform: scale(.4); } 18% { opacity: 1; transform: scale(1.15); } 30% { transform: scale(1); } 80% { opacity: 1; } 100% { opacity: 0; transform: scale(1.05); } }
-    #toasts { position: fixed; left: 0; right: 0; bottom: 112px; display: flex; flex-direction: column; align-items: center; gap: 6px; pointer-events: none; }
-    .toast { padding: 6px 14px; border-radius: 16px; background: var(--paper); box-shadow: 0 3px 10px rgba(20,40,70,.2); font-size: 14px; animation: toast 3.2s ease-out forwards; }
+    #big.long { font-size: 40px; } #big.long.on { animation-duration: 2.2s; }
+    @keyframes say { 0% { opacity: 0; transform: scale(.4); } 18% { opacity: 1; transform: scale(1.15); } 30% { transform: scale(1); } 80% { opacity: 1; } 100% { opacity: 0; } }
+    #toasts { position: fixed; left: 0; right: 0; top: 36%; display: flex; flex-direction: column; align-items: center; gap: 6px; pointer-events: none; }
+    .toast { padding: 7px 16px; border-radius: 16px; font-size: 15px; font-weight: 700; animation: toast 3.2s ease-out forwards; }
     @keyframes toast { 0% { opacity: 0; transform: translateY(10px); } 10% { opacity: 1; transform: none; } 85% { opacity: 1; } 100% { opacity: 0; } }
-    #hint { position: fixed; left: 0; right: 0; bottom: calc(max(14px, env(safe-area-inset-bottom)) + 44px); text-align: center; font-size: 16px; color: #fff; text-shadow: 0 1px 3px rgba(10,30,60,.7); opacity: 0; transition: opacity .6s; pointer-events: none; padding: 0 20px; }
+    #hint { position: fixed; left: 0; right: 0; bottom: calc(max(14px, env(safe-area-inset-bottom)) + 178px); text-align: center; font-size: 16px; font-weight: 700; color: #fff; text-shadow: 0 1px 3px rgba(10, 30, 60, .8); opacity: 0; transition: opacity .5s; pointer-events: none; padding: 0 24px; }
     #hint.on { opacity: 1; }
-    #corner { position: fixed; right: 12px; bottom: max(12px, env(safe-area-inset-bottom)); display: flex; gap: 8px; z-index: 3; }
-    #corner button, #corner a { font-size: 12px; padding: 5px 10px; border-radius: 14px; background: var(--soft); color: var(--ink); text-decoration: none; -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); }
 
-    /* ─── the line-up: a sheet at the bottom, the boats waiting above it ─── */
-    #lineup { position: fixed; left: 0; right: 0; bottom: 0; display: none; flex-direction: column; align-items: center; gap: 10px; padding: 18px 16px calc(max(14px, env(safe-area-inset-bottom)) + 34px); border-radius: 24px 24px 0 0; background: var(--paper); box-shadow: 0 -6px 24px rgba(20,40,70,.18); -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px); }
-    body.lineup #lineup { display: flex; }
-    #lineup h1 { margin: 0; font-size: 30px; letter-spacing: .01em; }
-    #lineup .by { margin: -8px 0 0; font-size: 13px; opacity: .6; }
-    #lineup .how { margin: 0; max-width: 420px; text-align: center; font-size: 15px; line-height: 1.35; }
-    #boats { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px; }
-    #boats button { display: flex; align-items: center; gap: 6px; padding: 7px 11px 7px 8px; border-radius: 18px; background: #fff; box-shadow: 0 1px 4px rgba(20,40,70,.18); font-size: 14px; }
-    #boats button i { width: 16px; height: 16px; border-radius: 50%; box-shadow: inset 0 0 0 1px rgba(0,0,0,.2); }
-    #boats button.on { box-shadow: 0 0 0 3px var(--ink); font-weight: 700; }
-    #levels { display: flex; gap: 4px; padding: 3px; border-radius: 16px; background: rgba(24,48,72,.08); }
-    #levels button { padding: 5px 12px; border-radius: 13px; font-size: 13px; }
-    #levels button.on { background: #fff; box-shadow: 0 1px 4px rgba(20,40,70,.2); font-weight: 700; }
-    #go { min-width: 180px; padding: 13px 26px; border-radius: 28px; background: var(--ink); color: #fff; font-size: 22px; font-weight: 800; text-align: center; box-shadow: 0 4px 14px rgba(20,40,70,.35); transition: transform .08s; }
-    #go:active, #podium button:active { transform: scale(.96); }
-    #lineup .sea { font-size: 12px; opacity: .65; display: flex; gap: 8px; align-items: center; }
-    #lineup .sea button { text-decoration: underline; text-underline-offset: 2px; }
+    /* ─── the joystick: always in its corner, so the thumb never hides the sea ahead ─── */
+    #stick { position: fixed; left: max(14px, calc(env(safe-area-inset-left) + 10px)); bottom: max(16px, calc(env(safe-area-inset-bottom) + 10px)); width: 156px; height: 156px; display: none; align-items: center; justify-content: center; z-index: 2; touch-action: none; }
+    body.racing #stick { display: flex; }
+    body.hand-right #stick { left: auto; right: max(14px, calc(env(safe-area-inset-right) + 10px)); }
+    #stick .base { position: relative; width: 128px; height: 128px; border-radius: 50%; background: var(--glass); box-shadow: inset 0 0 0 3px rgba(255, 255, 255, .8), 0 4px 14px rgba(10, 30, 70, .3); -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); }
+    #stick .base i { position: absolute; width: 0; height: 0; border: 9px solid transparent; opacity: .85; }
+    #stick .l { left: 9px; top: 55px; border-right: 12px solid #fff; border-left-width: 0; }
+    #stick .r { right: 9px; top: 55px; border-left: 12px solid #fff; border-right-width: 0; }
+    #stick .u { top: 9px; left: 55px; border-bottom: 12px solid #fff; border-top-width: 0; }
+    #stick .d { bottom: 9px; left: 55px; border-top: 12px solid #fff; border-bottom-width: 0; opacity: .5; }
+    #stick .knob { position: absolute; left: 35px; top: 35px; width: 58px; height: 58px; border-radius: 50%; background: radial-gradient(circle at 35% 30%, #fff, #dfe6ef); box-shadow: 0 4px 10px rgba(0, 0, 0, .35); transition: transform .12s ease-out; }
+    #stick.held .knob { transition: none; }
+    #corner { position: fixed; right: 12px; top: max(10px, env(safe-area-inset-top)); display: flex; gap: 6px; z-index: 3; }
+    #corner button, #corner a { font-size: 12px; padding: 5px 10px; border-radius: 14px; background: rgba(251, 244, 227, .85); color: var(--ink); text-decoration: none; box-shadow: 0 2px 6px rgba(10, 30, 70, .2); }
 
-    /* ─── the end: the places, 1st to 5th ─── */
-    #podium { position: fixed; left: 0; right: 0; bottom: 0; display: none; flex-direction: column; align-items: stretch; gap: 8px; padding: 16px max(16px, calc(50vw - 200px)) calc(max(14px, env(safe-area-inset-bottom)) + 34px); border-radius: 24px 24px 0 0; background: var(--paper); box-shadow: 0 -6px 24px rgba(20,40,70,.2); -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px); animation: rise .5s ease-out; }
-    body.podium #podium { display: flex; }
+    /* ─── paper sheets: the line-up and the end ─── */
+    .sheet { position: fixed; left: 0; right: 0; bottom: 0; display: none; flex-direction: column; align-items: center; gap: 10px; padding: 16px 14px calc(max(14px, env(safe-area-inset-bottom)) + 10px); border-radius: 22px 22px 0 0; background: var(--paper); box-shadow: 0 -2px 0 var(--edge), 0 -8px 26px rgba(10, 30, 70, .25); animation: rise .45s ease-out; }
     @keyframes rise { from { opacity: 0; transform: translateY(40px); } }
-    #podium h2 { margin: 0 0 4px; text-align: center; font-size: 26px; }
+    body.lineup #lineup, body.podium #podium { display: flex; }
+    #lineup h1 { margin: 0; font-size: 31px; line-height: 1; font-weight: 900; letter-spacing: .01em; }
+    #lineup h1 small { display: block; font-size: 13px; font-weight: 600; opacity: .6; margin-top: 4px; letter-spacing: 0; }
+    #lineup .how { margin: 0; max-width: 430px; text-align: center; font-size: 14px; line-height: 1.35; }
+    #boats { display: flex; gap: 7px; overflow-x: auto; max-width: 100%; padding: 4px 2px 6px; scroll-snap-type: x mandatory; }
+    #boats button { flex: 0 0 auto; display: flex; flex-direction: column; align-items: center; width: 70px; padding: 6px 4px 5px; border-radius: 14px; background: #fff; box-shadow: 0 2px 5px rgba(10, 30, 70, .16); scroll-snap-align: center; font-size: 13px; font-weight: 700; }
+    #boats button svg { width: 62px; height: 36px; }
+    #boats button.on { box-shadow: 0 0 0 3px var(--ink), 0 3px 8px rgba(10, 30, 70, .25); }
+    .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; justify-content: center; }
+    #levels { display: flex; gap: 3px; padding: 3px; border-radius: 16px; background: rgba(19, 40, 90, .09); }
+    #levels button { padding: 5px 13px; border-radius: 13px; font-size: 13px; }
+    #levels button.on { background: #fff; box-shadow: 0 1px 4px rgba(10, 30, 70, .2); font-weight: 800; }
+    #hand { font-size: 12px; padding: 5px 10px; border-radius: 13px; background: rgba(19, 40, 90, .09); }
+    .yellow { min-width: 190px; padding: 12px 28px; border-radius: 26px; background: var(--gold); color: var(--ink); font-size: 23px; font-weight: 900; text-align: center; box-shadow: inset 0 -4px 0 rgba(150, 90, 0, .35), 0 4px 12px rgba(10, 30, 70, .3); transition: transform .08s; }
+    .yellow:active { transform: scale(.96); }
+    .seed { font-size: 12px; opacity: .7; display: flex; gap: 8px; align-items: center; }
+    .seed button { text-decoration: underline; text-underline-offset: 2px; }
+    #podium { align-items: stretch; padding-left: max(16px, calc(50vw - 210px)); padding-right: max(16px, calc(50vw - 210px)); }
+    #podium h2 { margin: 0 0 2px; text-align: center; font-size: 28px; font-weight: 900; }
     #ranks { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
-    #ranks li { display: grid; grid-template-columns: 40px 18px 1fr auto; grid-template-rows: auto auto; column-gap: 8px; align-items: center; padding: 5px 12px; border-radius: 14px; background: #fff; box-shadow: 0 1px 4px rgba(20,40,70,.12); }
-    #ranks li b { grid-row: span 2; font-size: 16px; text-align: center; border-radius: 12px; padding: 4px 0; background: rgba(24,48,72,.08); }
+    #ranks li { display: grid; grid-template-columns: 42px 16px 1fr auto; column-gap: 8px; align-items: center; padding: 6px 12px; border-radius: 14px; background: #fff; box-shadow: 0 1px 4px rgba(10, 30, 70, .12); }
+    #ranks li b { font-size: 15px; text-align: center; border-radius: 12px; padding: 4px 0; background: rgba(19, 40, 90, .08); }
     #ranks li.p1 b { background: var(--gold); } #ranks li.p2 b { background: var(--silver); } #ranks li.p3 b { background: var(--bronze); }
-    #ranks li i { grid-row: span 2; width: 16px; height: 16px; border-radius: 50%; box-shadow: inset 0 0 0 1px rgba(0,0,0,.2); }
-    #ranks li span { font-size: 16px; }
-    #ranks li em { font-style: normal; font-size: 11px; padding: 1px 6px; border-radius: 8px; background: var(--ink); color: #fff; vertical-align: 2px; }
-    #ranks li strong { grid-row: span 2; font-size: 24px; font-variant-numeric: tabular-nums; }
-    #ranks li small { font-size: 11px; opacity: .55; }
+    #ranks li i { width: 16px; height: 16px; border-radius: 50%; box-shadow: inset 0 0 0 1.5px rgba(0, 0, 0, .25); }
+    #ranks li span { font-size: 16px; font-weight: 700; display: flex; flex-direction: column; }
+    #ranks li span small { font-size: 11px; font-weight: 500; opacity: .55; }
+    #ranks li em { font-style: normal; font-size: 11px; padding: 1px 6px; border-radius: 8px; background: var(--ink); color: #fff; margin-left: 4px; vertical-align: 2px; }
+    #ranks li strong { font-size: 24px; font-variant-numeric: tabular-nums; }
     #ranks li.me { box-shadow: 0 0 0 3px var(--ink); }
-    #podium .row { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; margin-top: 4px; }
-    #podium .row button { padding: 10px 18px; border-radius: 22px; background: #fff; box-shadow: 0 2px 8px rgba(20,40,70,.2); font-size: 16px; font-weight: 700; }
-    #podium .row button#again { background: var(--ink); color: #fff; }
+    #podium .row button:not(.yellow) { padding: 10px 16px; border-radius: 22px; background: #fff; box-shadow: 0 2px 8px rgba(10, 30, 70, .2); font-size: 15px; font-weight: 800; }
+    #podium .row .yellow { min-width: 0; font-size: 18px; padding: 10px 22px; }
 
-    body:not(.racing) #call, body:not(.racing) #arrows, body:not(.racing) #hint, body:not(.racing) #pops { display: none; }
+    body:not(.racing) #call, body:not(.racing) #arrows, body:not(.racing) #hint, body:not(.racing) #bar { display: none; }
     body.nogl::after { content: 'This needs WebGL2, which this browser doesn\2019 t have.'; position: fixed; inset: 40% 20px auto; text-align: center; }
-    .preview nav, .preview .hud, .preview #lineup, .preview #podium, .preview #corner, .preview #big, .preview #toasts, .preview #hint, .preview #call, .preview #arrows, .preview #pops { display: none !important; }
+    .preview nav, .preview .hud, .preview .sheet, .preview #corner, .preview #big, .preview #toasts, .preview #hint, .preview #call, .preview #arrows, .preview #bar, .preview #stick { display: none !important; }
   </style>
 </head>
-<body>
+<body class="lineup">
   <canvas id="sea"></canvas>
-  <nav><a href="/">← lab</a> <a href="/rescue">original ↗</a></nav>
+  <nav><a href="/">← lab</a></nav>
+  <div id="corner"><button id="sound">sound on</button><a href="{{readme}}">notes</a></div>
   <div id="places" class="hud"></div>
-  <div id="me" class="hud"><div class="person"></div><b id="count">0</b><span>rescued</span></div>
+  <div id="me" class="hud"><div class="buoy"></div><b id="count">0</b><span>rescued</span></div>
   <div id="track" class="hud"></div>
+  <div id="bar" class="hud"><div class="buoy"></div><div class="meter"><i></i></div><span></span></div>
   <div id="arrows"></div>
-  <div id="pops"></div>
   <div id="call"></div>
   <div id="big"></div>
   <div id="toasts"></div>
-  <div id="hint">hold your finger on the sea where you want to go</div>
-  <section id="lineup">
-    <h1>Rescue · Rocky Coast</h1>
-    <p class="by">a game by Lily</p>
-    <p class="how">Steer near the little boats and the people will come aboard. Rescue the most, then cross the finish line!</p>
+  <div id="hint"></div>
+  <div id="stick"></div>
+  <section id="lineup" class="sheet">
+    <h1>Lily’s Rescue Boats<small>a game by Lily</small></h1>
+    <p class="how">Steer with the stick. Come alongside the little boats and stop: your crew throws a line and everyone climbs aboard. Rescue the most, then race through the harbour mouth!</p>
     <div id="boats"></div>
-    <div id="levels"><button data-level="easy">easy</button><button data-level="medium">medium</button><button data-level="hard">hard</button></div>
-    <button id="go">Go!</button>
-    <div class="sea">the sea: <span id="seedname"></span><button id="newsea">a new sea</button></div>
+    <div class="row"><div id="levels"><button data-level="easy">easy</button><button data-level="medium">medium</button><button data-level="hard">hard</button></div><button id="hand"></button></div>
+    <button id="go" class="yellow">▶ Go!</button>
+    <div class="seed">the coast: <span id="seedname"></span><button id="newsea">a new coast</button></div>
   </section>
-  <section id="podium">
+  <section id="podium" class="sheet">
     <h2 id="result"></h2>
     <ol id="ranks"></ol>
-    <div class="row"><button id="again">again</button><button id="next">a new sea</button><button id="choose">choose a boat</button></div>
+    <div class="row"><button id="again" class="yellow">again</button><button id="next">a new coast</button><button id="choose">choose a boat</button></div>
   </section>
-  <div id="corner"><button id="sound">sound on</button><a href="{{readme}}">notes</a></div>
   <script type="module" src="{{app}}"></script>
 </body>
 </html>
-
