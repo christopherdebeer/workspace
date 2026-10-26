@@ -8,23 +8,53 @@ Lily’s rescue race, built from the concept boards (“Lily’s Rescue Boats”
 
 It shares no code with the original [Rescue Race](/rescue), which stays as it is: its own coast, rules, models and drawing.
 
-![Choose your lifeboat](rescue-coast/v-lineup.jpg)
+![The title](rescue-coast/v-title.jpg)
+![Off we go](rescue-coast/v-start.jpg)
 ![Out on the coast](rescue-coast/v-racing.jpg)
+
+## The menu
+
+The title is the boards' title card: your lifeboat charging along under the lighthouse's headland in the weather you've chosen, the logo over it, and the menu:
+- **Play:** straight into a race.
+- **Boats:** choose your lifeboat. All five are the same all-weather lifeboat, each wheelhouse in its own colour: Puffin orange, Seal red, Gannet blue, Otter yellow, Dolphin green. Each shows your best with it.
+- **Weather:** seven tiles; the title behind changes as you pick.
+- **Settings:**
+  - how good the other boats are (easy, medium, hard);
+  - which side the stick goes;
+  - sound;
+  - a new coast;
+  - these notes.
+
+![Choose your boat](rescue-coast/v-boats.jpg)
+![The weather](rescue-coast/v-weather.jpg)
+![Settings](rescue-coast/v-settings.jpg)
+![The title, on a bigger screen](rescue-coast/v-title-wide.jpg)
 
 ## Playing
 
 | | Touch | Keys |
 |---|---|---|
-| choose your boat | tap one of the five cards | |
-| how good the others are | easy, medium or hard | |
-| go | the yellow button | enter or space |
-| the weather | sunny, calm, windy, stormy, foggy, night or sunset | |
-| steer | the joystick in the bottom-right corner: left and right turn, up goes faster, down slows and backs | the arrow keys, or WASD |
+| steer | the stick in the bottom-right corner: left and right turn, up goes faster, down slows and backs | the arrow keys, or WASD |
 | stop | let go of the stick | let go of the keys |
+| sound the horn | the horn by the stick (your crew wave) | |
+| pause | the button top-left | escape |
 
-- **The joystick stays put** in the bottom-right corner (or bottom-left: the switch on the line-up, or `?hand=left`), so your thumb never covers the sea ahead. Push it to one side alone and the boat turns while going steadily on. Let go and the knob springs home and the boat eases to a stop.
-- **Your boat:** one of five lifeboats, all in the lifeboat look (navy hull, red below the waterline, RNLI along the bow, a tall black mast), each wheelhouse in its own colour: Puffin orange, Seal red, Gannet blue, Otter yellow, Dolphin green. That's how you tell them apart out on the water, and it's the colour of your chip in the places.
+- **The stick stays put** in its corner (the bottom-left instead: Settings, or `?hand=left`), so your thumb never covers the sea ahead. Push it to one side alone and the boat turns while going steadily on. Let go and the knob springs home and the boat eases to a stop.
 - **The camera** rides high behind your boat, turning with it but smoothly. It rises over a cliff rather than look through it.
+
+**On the screen**, laid out as on the boards' in-game view:
+- **top-left:**
+  - pause;
+  - how many you've rescued;
+  - your place;
+  - the race's clock (in the last call, the time left, in red).
+- **top-right:**
+  - a round map turned to your heading, N going round its rim, showing the little boats still waiting (in their colours), the other lifeboats and the harbour mouth;
+  - under it, the five places.
+- **a speech bubble:** what to do next ("Push the stick to go!", "Slow down — let go of the stick!", "All aboard!", "Last call! Head for the harbour!").
+- **a lifebuoy and a bar** that fills while people come aboard.
+- **arrows** at the edge to the nearest little boats out of sight.
+- **the stick and the horn**, bottom-right.
 
 ## Coming alongside
 
@@ -41,18 +71,18 @@ How slow is slow enough depends on the level: under half of top speed on easy, u
 ![Climbing aboard](rescue-coast/v-climb.jpg)
 ![A full deck](rescue-coast/v-deck.jpg)
 
-**On the screen:**
-- **the places** along the top, yours ringed, and your count;
-- **the strip** down the right, each boat between the start and the harbour;
-- **arrows** at the edge to the nearest little boats out of sight, each with how many are waiting;
-- **a lifebuoy and a bar** while people are coming aboard.
-
 ## The finish
 
 - **The finish** is the harbour mouth: through the gap between the two lighthouses, under the FINISH banner.
 - **The first boat through** starts the last call. On easy and medium it's always long enough for you to get home from where you are, if you head straight for it.
+- **Crossing it**, a FINISH banner springs up on the screen, and a picture is taken of the moment.
 - **In the harbour**, each boat goes on to the quay.
 - **At the end, 1st to 5th** by Lily's rule: the boats home first, by most rescued (a tie goes to whoever was home first), then the rest by most rescued.
+- **The rewards**, as on the boards' finish panel:
+  - stars: three for 1st, two for 2nd or 3rd, one for getting home;
+  - the picture from the finish, as a polaroid, with how many you rescued;
+  - your best with that boat (kept in this browser).
+- **Then:** again, a new coast, or the menu.
 
 ![The harbour mouth](rescue-coast/v-finish.jpg)
 ![1st to 5th](rescue-coast/v-podium.jpg)

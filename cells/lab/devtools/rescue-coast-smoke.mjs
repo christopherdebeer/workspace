@@ -1,6 +1,6 @@
-// Rescue · Rocky Coast in a browser, played by hand (node cells/lab/devtools/rescue-coast-smoke.mjs): the line-up (a boat,
-// a level), Go and the count, the joystick held up (the boat goes ahead), held right (it turns to the screen's right),
-// let go (it eases to a stop), the arrow keys, the page saying what it should, no errors; the end's places.
+// Rescue · Rocky Coast in a browser, played by hand (node cells/lab/devtools/rescue-coast-smoke.mjs): the title and its panels
+// (a boat, a level, the weather), Play and the count, the joystick held up (the boat goes ahead), held right (it turns to the screen's right),
+// let go (it eases to a stop), the arrow keys, pause, the page saying what it should, no errors; the end's places.
 process.env.EXPERIMENT = 'rescue-coast'; process.env.READY = '__rescue';
 const { withWood } = await import('./harness.mjs');
 let n = 0, bad = 0;
@@ -17,16 +17,21 @@ await withWood(async (lab) => {
   p.on('response', (r) => { if (r.status() >= 400 && !/favicon/.test(r.url())) errors.push(`${r.status()} ${r.url()}`); });
   await p.waitForTimeout(2000);
   let s = await state(p);
-  ok('the line-up first', s?.ui === 'lineup', s?.ui);
-  ok('five boat cards', (await p.evaluate(() => document.querySelectorAll('#boats button').length)) === 5);
-  await p.click('#boats button[data-boat="2"]');
+  ok('the title first', s?.ui === 'title', s?.ui);
+  ok('Play, Boats, Weather, Settings', (await p.evaluate(() => ['play', 'open-boats', 'open-weather', 'open-settings'].every((id) => !!document.getElementById(id)))));
+  await p.click('#open-boats');
+  ok('five boats to choose from', (await p.evaluate(() => document.querySelectorAll('#boats-list button').length)) === 5);
+  await p.click('#boats-list button[data-boat="2"]');
+  await p.click('#boats-panel [data-close]');
+  await p.click('#open-settings');
   await p.click('#levels button[data-level="medium"]');
+  await p.click('#settings-panel [data-close]');
   s = await until(p, (x) => x.mine === 2 && x.level === 'medium', 60000);
   ok('a boat chosen (Gannet), a level (medium)', s.mine === 2 && s.level === 'medium', [s.mine, s.level]);
-  ok('no joystick on the line-up', !(await p.isVisible('#stick .base')));
-  await p.click('#go');
+  ok('no joystick on the title', !(await p.isVisible('#stick .base')));
+  await p.click('#play');
   s = await until(p, (x) => x.ui === 'race', 60000);
-  ok('go: the count', s.ui === 'race' && (s.phase === 'countdown' || s.phase === 'racing'), [s.ui, s.phase]);
+  ok('play: the count', s.ui === 'race' && (s.phase === 'countdown' || s.phase === 'racing'), [s.ui, s.phase]);
   s = await until(p, (x) => x.phase === 'racing');
   ok('and the race is on', s.phase === 'racing', [s.phase, s.frameMs]);
   // (the joystick: where it is, and that it stays put out of the way, in the bottom corner)
@@ -49,8 +54,15 @@ await withWood(async (lab) => {
   s = await until(p, (x) => Math.hypot(x.boats[2].x - k0.x, x.boats[2].z - k0.z) > 4);
   await p.keyboard.up('ArrowUp');
   ok('the up arrow: away again', Math.hypot(s.boats[2].x - k0.x, s.boats[2].z - k0.z) > 4, [k0, s.boats[2]]);
-  const words = await p.evaluate(() => ({ places: document.querySelectorAll('#places .chip').length, me: !!document.querySelector('#places .chip.me'), count: document.getElementById('count').textContent, track: document.querySelectorAll('#track i').length }));
-  ok('the places along the top, yours marked; your count; the five on the track', words.places === 5 && words.me && words.count !== '' && words.track === 5, words);
+  const words = await p.evaluate(() => ({ places: document.querySelectorAll('#ladder div').length, me: !!document.querySelector('#ladder div.me'), count: document.getElementById('count').textContent, map: document.getElementById('map').getBoundingClientRect().width > 80 }));
+  ok('the places under the map, yours marked; your count; the map', words.places === 5 && words.me && words.count !== '' && words.map, words);
+  await p.click('#pause');
+  s = await until(p, (x) => x.paused, 30000);
+  const t0 = s.t; await p.waitForTimeout(4000); s = await state(p);
+  ok('pause: the race holds still', s.paused && s.t === t0, [s.paused, t0, s.t]);
+  await p.click('#resume');
+  s = await until(p, (x) => !x.paused && x.t > t0, 60000);
+  ok('and goes on', !s.paused && s.t > t0);
   ok('no errors', !errors.length, errors.slice(0, 3));
   await p.close();
   // (left-handed: the stick in the other corner)
@@ -60,9 +72,10 @@ await withWood(async (lab) => {
   ok('hand=left: the joystick in the bottom-left corner', rb && rb.x < vw[0] * 0.4, rb);
   // (the weather: picked on the line-up)
   const w0 = await lab.open('seed=2');
-  await w0.click('#weather button[data-weather="stormy"]');
+  await w0.click('#open-weather');
+  await w0.click('#weather-list button[data-weather="stormy"]');
   const ws = await until(w0, (x) => x.weather === 'stormy', 60000);
-  ok('the weather, chosen on the line-up (stormy)', ws.weather === 'stormy', ws.weather);
+  ok('the weather, chosen on the title (stormy)', ws.weather === 'stormy', ws.weather);
   await w0.close();
   await q0.close();
   const q = await lab.open('seed=2&auto&view=podium&still');

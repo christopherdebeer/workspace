@@ -8,8 +8,13 @@ export const ready = '__rescue';
 const AT = (t, more = '') => `seed=1&auto&t=${t}&still${more}`;
 const PHONE = { width: 390, height: 844 };
 export const views = [
-  { name: 'lineup', group: 'The race', title: 'Choose your lifeboat', caption: 'five lifeboats, one in each colour; how good the others are; go', query: 'seed=1&boat=0', size: PHONE },
-  { name: 'racing', group: 'The race', title: 'Out on the coast', caption: 'riding behind your boat; the stick in its corner, the places along the top, how far to go down the side', query: AT(24), size: PHONE },
+  { name: 'title', group: 'The menu', title: 'Lily’s Rescue Boats', caption: 'your lifeboat charging along under the lighthouse; Play, Boats, Weather, Settings', query: 'seed=1&boat=0', size: PHONE, settle: 5000 },
+  { name: 'title-wide', group: 'The menu', title: 'The title, on a bigger screen', caption: 'the menu to the right, as on the boards', query: 'seed=1&boat=1&weather=sunset', size: { width: 1280, height: 720 }, settle: 5000 },
+  { name: 'boats', group: 'The menu', title: 'Choose your boat', caption: 'five lifeboats, a wheelhouse each in its own colour; your best with each', query: 'seed=1&boat=2&panel=boats', size: PHONE },
+  { name: 'weather', group: 'The menu', title: 'The weather', caption: 'seven, from the boards: the title behind changes as you pick', query: 'seed=1&weather=windy&panel=weather', size: PHONE },
+  { name: 'settings', group: 'The menu', title: 'Settings', caption: 'how good the others are, which side the stick goes, sound, a new coast', query: 'seed=1&panel=settings', size: PHONE },
+  { name: 'start', group: 'The race', title: 'Off we go', caption: 'the bubble says what to do; the stick waits in its corner', query: 'seed=1&t=1.5&still', size: PHONE },
+  { name: 'racing', group: 'The race', title: 'Out on the coast', caption: 'pause and your count, place and time top-left; the map top-right, turning with you, and the places under it; a word in the bubble; the horn and the stick', query: AT(24), size: PHONE },
   { name: 'line', group: 'Coming alongside', title: 'The line goes over', caption: 'alongside and slowed right down: the crew throws a line to the little boat', query: AT(32.5, '&near=6'), size: PHONE },
   { name: 'climb', group: 'Coming alongside', title: 'Climbing aboard', caption: 'pulled in against the hull, they climb up the side one at a time', query: AT(34.6, '&near=6'), size: PHONE },
   { name: 'deck', group: 'Coming alongside', title: 'A full deck', caption: 'the rescued fill the aft deck, then the foredeck, the side decks and the roof', query: AT(110, '&zoom=0.8'), size: PHONE },

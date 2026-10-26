@@ -2,10 +2,18 @@
 
 Made by `node cells/lab/views.mjs rescue-coast` from `client/rescue-coast/views.mjs`. The README is `../rescue-coast.md`.
 
+## The menu
+
+![Lily’s Rescue Boats: your lifeboat charging along under the lighthouse; Play, Boats, Weather, Settings](v-title.jpg)
+![The title, on a bigger screen: the menu to the right, as on the boards](v-title-wide.jpg)
+![Choose your boat: five lifeboats, a wheelhouse each in its own colour; your best with each](v-boats.jpg)
+![The weather: seven, from the boards: the title behind changes as you pick](v-weather.jpg)
+![Settings: how good the others are, which side the stick goes, sound, a new coast](v-settings.jpg)
+
 ## The race
 
-![Choose your lifeboat: five lifeboats, one in each colour; how good the others are; go](v-lineup.jpg)
-![Out on the coast: riding behind your boat; the stick in its corner, the places along the top, how far to go down the side](v-racing.jpg)
+![Off we go: the bubble says what to do; the stick waits in its corner](v-start.jpg)
+![Out on the coast: pause and your count, place and time top-left; the map top-right, turning with you, and the places under it; a word in the bubble; the horn and the stick](v-racing.jpg)
 
 ## Coming alongside
 

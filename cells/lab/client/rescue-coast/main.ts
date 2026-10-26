@@ -20,6 +20,7 @@ import { WEATHERS, WEATHER_ORDER, type Weather, type WeatherName } from './weath
 import { Marks, Wakes } from './fx';
 import { Sound } from './sound';
 import { Joystick } from './joystick';
+import { MiniMap, clock } from './hud';
 
 const params = new URLSearchParams(location.search);
 const preview = params.has('preview'), still = params.has('still'), study = params.has('study');
@@ -50,7 +51,8 @@ function setWeather(name: WeatherName) {
   SEA.height = weather.height; SEA.chop = weather.chop;
   sound.weather(weather.wind, weather.rain);
 }
-let ui: 'lineup' | 'race' | 'podium' = 'lineup';
+let ui: 'title' | 'race' | 'podium' = 'title';
+let paused = false, hornAt = -9;
 const marks = new Marks(), wakes = new Wakes(), sound = new Sound();
 const canvas = $('sea') as HTMLCanvasElement;
 const gl = canvas.getContext('webgl2', { antialias: true, powerPreference: 'high-performance' });
@@ -66,10 +68,13 @@ const lists: Record<string, Instances> = {};
 for (const k of ['boat', 'crew', 'kid0', 'kid1', 'kid2', 'row', 'kayak', 'sail', 'buoy-red', 'buoy-green', 'buoy-yellow', 'gull']) lists[k] = new Instances(64);
 const draws: Draw[] = Object.entries(lists).map(([kind, list]) => ({ kind, list }));
 const stick = new Joystick($('stick'));
+const minimap = new MiniMap($('map') as HTMLCanvasElement);
 
 function newCoast(s: number) {
   seed = s; coast = makeCoast(seed);
   renderer.setCoast(coast, makeWorld(coast));
+  minimap.paint(coast);
+  showPath = makeShowPath();
   $('seedname').textContent = coast.name;
 }
 function newGame() {
@@ -113,13 +118,16 @@ const nearArg = params.get('near');
 function camera(dt: number, t: number, w: number, h: number) {
   const portrait = h > w, aspect = w / h;
   let target: number[], from: number[], fov = portrait ? 1.02 : 0.86, shift = 0;
-  if (ui === 'lineup') {
-    const b = race.boats[mine], a = 2.55 + 0.25 * Math.sin(t * 0.15);
-    target = [b.x, 2.4, b.z + 1]; from = [b.x + Math.sin(a) * 19 * zoom, 6.5, b.z + Math.cos(a) * 19 * zoom];
-    shift = portrait ? 0.42 : 0.2;
+  if (ui === 'title') {
+    // (low and ahead, to one side: your lifeboat charging toward you, the cliffs and the lighthouse behind it)
+    const b = race.boats[mine], p = poses[b.id] ?? { y: 0 }, side = showPath.side, d = portrait ? 17 : 14;
+    target = [b.x + (portrait ? side * 0.6 : -side * 1.2), p.y + 2.1, b.z + (portrait ? 0 : 1.5)];
+    from = [b.x - side * (portrait ? 3.5 : 7) + Math.sin(b.h) * d, p.y + (portrait ? 4.2 : 3.4), b.z + Math.cos(b.h) * d];
+    shift = portrait ? -0.18 : 0;
+    fov = portrait ? 1.05 : 0.8;
   } else if (ui === 'podium') {
     const bx = coast.berths[2].x, bz = coast.berths[2].z;
-    target = [bx, 2.5, bz - 1]; from = [bx - 10, 24 * zoom, bz - 66 * zoom];
+    target = [bx, 3.2, bz - 1]; from = [bx - 7, 11 * zoom, bz - (portrait ? 46 : 34) * zoom];
     shift = portrait ? 0.4 : 0.22;
   } else if (study) {
     const b = followed(), p = poses[b.id] ?? { y: 0 }, a = b.h + 0.75;
@@ -181,7 +189,7 @@ function people(t: number, dt: number) {
       lists.crew.push(X, Y, Z, b.h + yaw, p.pitch, p.roll, PERSON * 0.98, aL, CREW, aR, SKINS[(b.id * 2 + look) % 6], reach, NONE, 0);
     };
     // (two at the upper steering position, one on the aft deck to throw the line)
-    const home = b.finished !== null && b.home, cheer = home ? Math.abs(Math.sin(t * 5 + b.id)) * 0.4 : 0;
+    const home = (b.finished !== null && b.home) || (b.id === mine && t - hornAt < 1.6), cheer = home ? Math.abs(Math.sin(t * 5 + b.id)) * 0.4 : 0;
     crewAt(0.5, ROOF_Y, 0.15, 0, home ? 2.7 + cheer : 0.25, home ? 2.7 + cheer : 0.9, home ? 0 : 1.1, 0);
     crewAt(-0.5, ROOF_Y, 0.1, 0, home ? 2.6 + cheer : 0.3, 0.2, 0, 1);
     const k = race.crafts.find((c) => c.by === b.id && (c.stage === 'line' || c.stage === 'climb'));
@@ -248,7 +256,7 @@ function people(t: number, dt: number) {
       lists['kid' + who.style].push(sx, sy, sz, face, pitch * 0.5, roll * 0.5, PERSON * 0.88, arm, SHIRTS[who.shirt], waving ? 2.5 + Math.sin(t * 9 + j * 2 + Math.PI) * 0.45 : arm, SKINS[who.skin], 0, HAIRS[who.hair], 0);
     }
     // (the ring that says come alongside: round the little boats near you, in your colour)
-    if (ui === 'race' && !auto && k.stage === 'wait' && k.left > 0) {
+    if (ui === 'race' && !auto && k.stage === 'wait' && k.left > 0 && race.boats[mine].finished === null) {
       const d = Math.hypot(k.x - me.x, k.z - me.z);
       if (d < 55) { const col = BOATS[mine].colour; marks.put(FX.RING, k.x, 0, k.z, 4.4, 0, 0, 0, col[0], col[1], col[2], Math.min(1, (55 - d) / 20) * 0.85); }
     }
@@ -347,37 +355,69 @@ function atmosphere(t: number, dt: number) {
   } else spotAt[3] = 0;
 }
 
+// ─── the title's hero shot: your lifeboat charging along off the lighthouse's headland ───
+let showPath = { x: (z: number) => z * 0, z0: 0, z1: 1, side: 1 };
+function makeShowPath() {
+  const lh = coast.props.find((p) => p.kind === 'lighthouse' && p.v === 0) ?? coast.props.find((p) => p.kind === 'lighthouse')!;
+  const side = Math.sign(lh.x - coast.centre(lh.z)) || 1;
+  // (a line about thirty metres off the rocks on the lighthouse's side, running north from it)
+  const x = (z: number) => { let xx = coast.centre(z); for (let i = 0; i < 80 && shoreAt(coast, xx + side * 2, z) > 30; i++) xx += side * 2; return xx; };
+  return { x, z0: lh.z + 20, z1: lh.z + 170, side };
+}
+function showcase(t: number) {
+  const b = race.boats[mine], span = showPath.z1 - showPath.z0, v = 8.5;
+  const z = showPath.z0 + ((t * v) % span), x = showPath.x(z) + 4 * Math.sin(t * 0.25);
+  const ahead = showPath.x(z + 6) + 4 * Math.sin((t + 0.7) * 0.25);
+  if (Math.abs(z - b.z) > 20) wakes.clear();
+  b.x = x; b.z = z; b.h = Math.atan2(ahead - x, 6); b.v = v; b.turn = 0;
+}
+
 // ─── what's said on the screen ───
-const places = $('places'), count = $('count'), track = $('track'), bar = $('bar'), hint = $('hint'), callEl = $('call'), arrows = $('arrows');
-let shownCount = -1, hudAt = 0;
+const $count = $('count'), bar = $('bar'), bubbleEl = $('bubble'), arrows = $('arrows');
+let shownCount = -1, hudAt = 0, note = { text: '', until: 0 };
+const ORD = ['1st', '2nd', '3rd', '4th', '5th'];
+/** say something in the bubble for a while (it gives way to nothing more pressing) */
+function bubble(text: string, secs = 2.6) { note = { text, until: performance.now() / 1000 + secs }; }
 function hud(t: number) {
-  if (ui !== 'race' || t - hudAt < 0.1) return;
+  if (ui !== 'race') return;
+  const st = standings(race), me = race.boats[mine], place = st.findIndex((b) => b.id === mine);
+  // (the map: every frame, it turns with you)
+  const dots: [number, number, string, number][] = race.crafts.filter((c) => c.stage === 'wait' && c.left > 0).map((c) => [c.x, c.z, css(CRAFT_COLOURS[c.craft.colour]), c.left]);
+  const fb = auto ? followed() : me;
+  minimap.draw(fb.x, fb.z, camYaw, dots, race.boats.map((b) => [b.x, b.z, b.h, css(BOATS[b.id].colour), b.id === fb.id]), coast.gateX);
+  if (t - hudAt < 0.1) return;
   hudAt = t;
-  const st = standings(race), me = race.boats[mine];
-  places.innerHTML = st.map((b, i) => `<span class="chip${b.id === mine ? ' me' : ''}"><small>${['1st', '2nd', '3rd', '4th', '5th'][i]}</small><i style="background:${css(BOATS[b.id].colour)}"></i><b>${b.rescued}</b></span>`).join('');
-  if (me.rescued !== shownCount) { if (shownCount >= 0) { $('me').classList.add('bump'); setTimeout(() => $('me').classList.remove('bump'), 160); } shownCount = me.rescued; count.textContent = String(me.rescued); }
-  track.innerHTML = '<span class="flag"></span>' + race.boats.map((b) => `<i class="${b.id === mine ? 'me' : ''}" style="bottom:${Math.max(0, Math.min(100, ((b.z - START_Z) / (GATE_Z - START_Z)) * 100))}%;background:${css(BOATS[b.id].colour)}"></i>`).join('');
+  if (fb.rescued !== shownCount) { if (shownCount >= 0) { $('stat-count').classList.add('bump'); setTimeout(() => $('stat-count').classList.remove('bump'), 160); } shownCount = fb.rescued; $count.textContent = String(fb.rescued); }
+  $('place').textContent = ORD[auto ? 0 : place];
+  // (the clock: the race's time; in the last call, the time left, in red)
+  const timeEl = $('stat-time');
+  if (race.lastCall && me.finished === null) { const left = race.lastCall.start + race.lastCall.length - race.t; $('clock').textContent = clock(left); timeEl.classList.add('hurry'); }
+  else { $('clock').textContent = clock(race.t); timeEl.classList.remove('hurry'); }
+  $('ladder').innerHTML = st.map((b, i) => `<div class="glass${b.id === fb.id ? ' me' : ''}"><small>${ORD[i]}</small><i style="background:${css(BOATS[b.id].colour)}"></i>${b.rescued}</div>`).join('');
   // (coming aboard: a lifebuoy and a bar that fills)
-  const k = race.crafts.find((c) => c.by === mine && (c.stage === 'line' || c.stage === 'climb'));
+  const k = race.crafts.find((c) => c.by === fb.id && (c.stage === 'line' || c.stage === 'climb'));
   if (k) {
     const total = k.craft.people.length, done = total - k.left, f = (done + (k.stage === 'climb' ? k.t / CLIMB : 0)) / total;
-    bar.classList.add('on'); (bar.querySelector('i') as HTMLElement).style.width = `${f * 100}%`; (bar.querySelector('span') as HTMLElement).textContent = `${done} of ${total} aboard`;
+    bar.classList.add('on'); (bar.querySelector('i') as HTMLElement).style.width = `${f * 100}%`; (bar.querySelectorAll('span')[1] as HTMLElement).textContent = `${done} of ${total} aboard`;
   } else bar.classList.remove('on');
-  // (a word of help: how to go, how to come alongside)
-  let say = '';
-  if (race.t < 5 && !auto) say = 'push the stick to go — let go beside a little boat to stop';
+  // (the bubble: what's happening now, else what to do next)
+  let text = '';
+  const now = performance.now() / 1000;
+  if (now < note.until) text = note.text;
   else if (!auto && me.finished === null) {
     const slow = LEVELS[race.level].slow;
-    for (const c of race.crafts) if (c.stage === 'wait' && c.left > 0 && Math.hypot(c.x - me.x, c.z - me.z) < 11 && Math.abs(me.v) > slow) say = 'slow down beside them — let go of the stick';
+    if (race.phase === 'countdown') text = 'Get ready…';
+    else if (race.t < 5) text = 'Push the stick to go!';
+    else if (k) text = k.stage === 'line' ? 'Line away!' : 'Climbing aboard — hold still!';
+    else if (race.crafts.some((c) => c.stage === 'wait' && c.left > 0 && Math.hypot(c.x - me.x, c.z - me.z) < 11 && Math.abs(me.v) > slow)) text = 'Slow down — let go of the stick!';
+    else if (race.lastCall) text = 'Last call! Head for the harbour!';
+    else if (race.t < 14) text = 'Find the little boats!';
   }
-  hint.textContent = say; hint.classList.toggle('on', !!say);
-  if (race.lastCall && me.finished === null) {
-    const left = Math.max(0, race.lastCall.start + race.lastCall.length - race.t);
-    callEl.textContent = `Last call! ${Math.ceil(left)}s to the finish`; callEl.classList.add('on'); callEl.classList.toggle('hurry', left < 10);
-  } else callEl.classList.remove('on');
+  if (text) bubbleEl.textContent = text;
+  bubbleEl.classList.toggle('on', !!text);
   // (arrows at the edge to the nearest little boats out of sight; to the finish in the last call)
   const W = innerWidth, H = innerHeight, want: { x: number; z: number; n: number; fin?: boolean; col: number[] }[] = [];
-  if (me.finished === null) {
+  if (me.finished === null && !auto) {
     const waiting = race.crafts.filter((c) => c.stage === 'wait' && c.left > 0).map((c) => ({ c, d: Math.hypot(c.x - me.x, c.z - me.z) })).sort((a, b) => a.d - b.d).slice(0, 3);
     for (const { c } of waiting) want.push({ x: c.x, z: c.z, n: c.left, col: CRAFT_COLOURS[c.craft.colour] });
     if (race.lastCall || !waiting.length) want.push({ x: coast.gateX, z: GATE_Z, n: 0, fin: true, col: [1, 1, 1] });
@@ -388,68 +428,114 @@ function hud(t: number) {
     let sx = cx / cw, sy = cy / cw;
     if (cw > 0 && Math.abs(sx) < 0.95 && Math.abs(sy) < 0.9) continue;
     if (cw < 0) { sx = -sx; sy = -sy; }
-    const m = Math.max(Math.abs(sx) / 0.86, Math.abs(sy) / 0.78), px = ((sx / m) * 0.5 + 0.5) * W, py = (0.5 - (sy / m) * 0.5) * H, ang = Math.atan2(-sy, sx);
-    html.push(`<div class="arrow${w.fin ? ' fin' : ''}" style="transform:translate(${px}px,${py}px)"><span style="transform:rotate(${ang}rad) translateX(20px)"></span><b style="background:${css(w.col)}">${w.fin ? '' : w.n}</b></div>`);
+    const m = Math.max(Math.abs(sx) / 0.84, Math.abs(sy) / 0.6), px = ((sx / m) * 0.5 + 0.5) * W, py = (0.5 - (sy / m) * 0.5) * H, ang = Math.atan2(-sy, sx);
+    html.push(`<div class="arrow${w.fin ? ' fin' : ''}" style="transform:translate(${px}px,${py}px)"><span style="transform:rotate(${ang}rad) translateX(22px)"></span><b style="background:${css(w.col)}">${w.fin ? '' : w.n}</b></div>`);
   }
   arrows.innerHTML = html.join('');
 }
 function say(text: string, long = false) {
   const el = $('big'); el.textContent = text; el.classList.remove('on', 'long'); void el.offsetWidth; el.classList.add('on'); if (long) el.classList.add('long');
 }
-function toast(text: string) { const d = document.createElement('div'); d.className = 'toast'; d.textContent = text; $('toasts').appendChild(d); setTimeout(() => d.remove(), 3300); }
 
-// ─── the line-up and the end ───
+// ─── the title, its panels; the race; the end ───
 function boatSvg(c: readonly number[]) {
-  return `<svg viewBox="0 0 80 46" aria-hidden="true"><path d="M8 30 L72 30 L66 41 Q40 44 14 41 Z" fill="#0d1d4c"/><path d="M11 37 L69 37 L66 41 Q40 44 14 41 Z" fill="#c0180f"/><rect x="26" y="17" width="26" height="13" rx="3" fill="${css(c)}"/><rect x="29" y="20" width="20" height="4" rx="1" fill="#1a2733"/><path d="M38 17 L40 4 L42 17" stroke="#111" stroke-width="2" fill="none"/><rect x="34" y="7" width="12" height="2" fill="#111"/><path d="M8 30 L72 30" stroke="${css(c)}" stroke-width="3"/><text x="58" y="36" font-size="5" font-weight="800" fill="#fff" font-family="system-ui">RNLI</text></svg>`;
+  return `<svg viewBox="0 0 120 70" aria-hidden="true"><path d="M8 44 L114 40 Q112 52 100 60 L22 61 Q12 56 8 44 Z" fill="#0d1d4c"/><path d="M13 55 L104 55 Q102 59 98 61 L22 61 Q16 59 13 55 Z" fill="#c0180f"/><path d="M8 44 L114 40" stroke="${css(c)}" stroke-width="4" stroke-linecap="round"/><rect x="36" y="22" width="38" height="20" rx="5" fill="${css(c)}"/><rect x="40" y="26" width="30" height="7" rx="2" fill="#1a2733"/><rect x="38" y="19" width="34" height="4" rx="2" fill="#eee"/><path d="M48 19 L52 2 L58 2 L62 19" stroke="#111" stroke-width="3" fill="none" stroke-linejoin="round"/><rect x="44" y="6" width="22" height="3" fill="#111"/><circle cx="55" cy="1.8" r="2" fill="#4a8cff"/><text x="80" y="51" font-size="8" font-weight="800" fill="#fff" font-family="system-ui">RNLI</text><circle cx="28" cy="30" r="4" fill="none" stroke="#f4561c" stroke-width="2.5"/></svg>`;
 }
-function lineup() {
-  ui = 'lineup'; document.body.className = document.body.className.replace(/\b(lineup|racing|podium)\b/g, '').trim() + ' lineup';
-  newGame();
-  $('boats').innerHTML = BOATS.map((b, i) => `<button data-boat="${i}" class="${i === mine ? 'on' : ''}">${boatSvg(b.colour)}<span>${b.name}</span></button>`).join('');
-  for (const el of document.querySelectorAll<HTMLElement>('#boats button')) el.onclick = () => { mine = Number(el.dataset.boat); lineup(); };
-  for (const el of document.querySelectorAll<HTMLElement>('#levels button')) { el.classList.toggle('on', el.dataset.level === level); el.onclick = () => { level = el.dataset.level as Level; lineup(); }; }
-  $('hand').textContent = document.body.classList.contains('hand-right') ? 'stick on the right ⇄' : 'stick on the left ⇄';
-  $('weather').innerHTML = WEATHER_ORDER.map((n) => `<button data-weather="${n}" class="${n === weather.name ? 'on' : ''}" title="${WEATHERS[n].label}"><span>${WEATHERS[n].icon}</span><small>${WEATHERS[n].label}</small></button>`).join('');
-  for (const el of document.querySelectorAll<HTMLElement>('#weather button')) el.onclick = () => { setWeather(el.dataset.weather as WeatherName); lineup(); };
+const store = { get: (k: string) => { try { return localStorage.getItem(k); } catch { return null; } }, set: (k: string, v: string) => { try { localStorage.setItem(k, v); } catch { /* (private window: no keeping) */ } } };
+const bests = (): Record<string, number> => { try { return JSON.parse(store.get('lily-rescue-boats-best') ?? '{}'); } catch { return {}; } };
+function panel(name: '' | 'boats' | 'weather' | 'settings') {
+  document.body.classList.remove('panel-boats', 'panel-weather', 'panel-settings');
+  if (name) document.body.classList.add('panel-' + name);
+  refreshTitle();
+}
+function refreshTitle() {
+  const B = BOATS[mine], best = bests()[mine] ?? 0;
+  $('chosen').innerHTML = `<span class="tag"><span class="dot" style="background:${css(B.colour)}"></span><b>${B.name}</b></span><span class="tag">${weather.icon} ${weather.label} · ${level}</span><span class="tag">${coast.name}</span>`;
+  $('weather-icon').textContent = weather.icon;
+  $('boat-show').innerHTML = `${boatSvg(B.colour)}<b>${B.name}</b><small>all-weather lifeboat · ${best ? `your best: ${best} rescued` : 'not raced yet'}</small>`;
+  $('boats-list').innerHTML = BOATS.map((b, i) => `<button data-boat="${i}" class="${i === mine ? 'on' : ''}">${boatSvg(b.colour)}${b.name}</button>`).join('');
+  for (const el of document.querySelectorAll<HTMLElement>('#boats-list button')) el.onclick = () => chooseBoat(Number(el.dataset.boat));
+  const g = (c: readonly number[]) => css(c);
+  $('weather-list').innerHTML = WEATHER_ORDER.map((n) => { const w = WEATHERS[n]; return `<button data-weather="${n}" class="${n === weather.name ? 'on' : ''}" style="background:linear-gradient(${g(w.skyTop)}, ${g(w.skyHorizon)} 55%, ${g(w.body)} 56%, ${g(w.deep)})"><span>${w.icon}</span>${w.label}</button>`; }).join('');
+  for (const el of document.querySelectorAll<HTMLElement>('#weather-list button')) el.onclick = () => { setWeather(el.dataset.weather as WeatherName); refreshTitle(); };
+  for (const el of document.querySelectorAll<HTMLElement>('#levels button')) { el.classList.toggle('on', el.dataset.level === level); el.onclick = () => { level = el.dataset.level as Level; refreshTitle(); }; }
+  const right = document.body.classList.contains('hand-right');
+  for (const el of document.querySelectorAll<HTMLElement>('#hands button')) { el.classList.toggle('on', (el.dataset.hand === 'right') === right); el.onclick = () => { document.body.classList.toggle('hand-right', el.dataset.hand === 'right'); refreshTitle(); }; }
+  $('sound').textContent = sound.on ? 'on' : 'off';
+}
+function chooseBoat(i: number) { mine = (i + 5) % 5; newGame(); refreshTitle(); }
+function title() {
+  ui = 'title'; paused = false;
+  document.body.classList.remove('racing', 'podium', 'paused'); document.body.classList.add('title');
+  newGame(); panel('');
+  sound.quiet();
 }
 function go() {
-  if (ui !== 'lineup') return;
+  if (ui !== 'title' && ui !== 'podium') return;
   sound.wake(); sound.horn();
-  ui = 'race'; document.body.classList.remove('lineup'); document.body.classList.add('racing');
-  newGame(); start(race); shownCount = -1;
+  ui = 'race'; paused = false; snapUrl = '';
+  document.body.classList.remove('title', 'podium', 'paused', 'panel-boats', 'panel-weather', 'panel-settings'); document.body.classList.add('racing');
+  newGame(); start(race); shownCount = -1; lastCount = 4;
   camYaw = race.boats[mine].h; camAt.x = race.boats[mine].x; camAt.z = race.boats[mine].z;
 }
+const STAR = (on: boolean, d: number) => `<svg viewBox="0 0 48 48" class="pop ${on ? '' : 'off'}" style="animation-delay:${d}s"><path d="M24 3 L30 17 L45 18 L33.5 28 L37 43 L24 35 L11 43 L14.5 28 L3 18 L18 17 Z" fill="${on ? '#ffc83a' : '#ccc'}" stroke="#d48a00" stroke-width="2.5" stroke-linejoin="round"/></svg>`;
 function podium() {
-  ui = 'podium'; document.body.classList.remove('racing'); document.body.classList.add('podium');
-  const st = standings(race), place = st.findIndex((b) => b.id === mine);
+  ui = 'podium'; paused = false;
+  document.body.classList.remove('racing', 'paused'); document.body.classList.add('podium');
+  const st = standings(race), place = st.findIndex((b) => b.id === mine), me = race.boats[mine];
   // (everyone in at the quay, 1st in the middle, the rest out to either side)
   const order = [2, 1, 3, 0, 4];
-  st.forEach((b, i) => { const berth = coast.berths[order[i]]; b.x = berth.x; b.z = berth.z; b.h = berth.h; b.v = 0; b.home = true; if (b.finished === null) b.home = false; });
+  st.forEach((b, i) => { const berth = coast.berths[order[i]]; b.x = berth.x; b.z = berth.z; b.h = berth.h; b.v = 0; b.home = b.finished !== null; });
   poses.length = 0;
-  $('result').textContent = auto ? `${BOATS[st[0].id].name} wins!` : place === 0 ? 'You won!' : `You came ${['1st', '2nd', '3rd', '4th', '5th'][place]}!`;
-  $('ranks').innerHTML = st.map((b, i) => `<li class="p${i + 1}${b.id === mine && !auto ? ' me' : ''}"><b>${['1st', '2nd', '3rd', '4th', '5th'][i]}</b><i style="background:${css(BOATS[b.id].colour)}"></i><span>${BOATS[b.id].name}${b.id === mine && !auto ? ' <em>you</em>' : ''}<small>${b.finished === null ? 'didn’t make it home' : 'rescued'}</small></span><strong>${b.rescued}</strong></li>`).join('');
+  const stars = auto ? 3 : place === 0 ? 3 : place < 3 ? 2 : 1;
+  $('result').textContent = auto ? `${BOATS[st[0].id].name} wins!` : place === 0 ? 'You won!' : `You came ${ORD[place]}!`;
+  $('stars').innerHTML = [0, 1, 2].map((i) => STAR(i < stars, 0.2 + i * 0.2)).join('');
+  $('ranks').innerHTML = st.map((b, i) => `<li class="p${i + 1}${b.id === mine && !auto ? ' me' : ''}"><b>${ORD[i]}</b><i style="background:${css(BOATS[b.id].colour)}"></i><span>${BOATS[b.id].name}<small>${b.finished === null ? 'not home' : 'rescued'}</small></span><strong>${b.rescued}</strong></li>`).join('');
+  const who = auto ? st[0] : me;
+  $('snapcap').textContent = `${who.rescued} rescued!`;
+  if (!snapUrl) snapWanted = true; else ($('snap') as HTMLImageElement).src = snapUrl;
+  if (!auto) {
+    const b = bests(), was = b[mine] ?? 0;
+    if (me.rescued > was) { b[mine] = me.rescued; store.set('lily-rescue-boats-best', JSON.stringify(b)); }
+    $('best').textContent = me.rescued > was && was > 0 ? `A new best for ${BOATS[mine].name}!` : `${BOATS[mine].name}'s best: ${Math.max(was, me.rescued)} rescued`;
+  } else $('best').textContent = '';
   sound.quiet(); sound.tune(place);
 }
-$('go').onclick = go;
-addEventListener('keydown', (e) => { if ((e.key === 'Enter' || e.key === ' ') && ui === 'lineup') { e.preventDefault(); go(); } });
-$('again').onclick = () => { lineup(); };
-$('next').onclick = () => { newCoast(1 + Math.floor(Math.random() * 999)); lineup(); };
-$('choose').onclick = () => lineup();
-$('newsea').onclick = () => { newCoast(1 + Math.floor(Math.random() * 999)); lineup(); };
-$('hand').onclick = () => { document.body.classList.toggle('hand-right'); lineup(); };
-$('sound').onclick = () => { $('sound').textContent = sound.toggle() ? 'sound on' : 'sound off'; };
+$('play').onclick = go;
+$('open-boats').onclick = () => panel('boats');
+$('open-weather').onclick = () => panel('weather');
+$('open-settings').onclick = () => panel('settings');
+for (const el of document.querySelectorAll<HTMLElement>('[data-close]')) el.onclick = () => panel('');
+$('boat-prev').onclick = () => chooseBoat(mine - 1);
+$('boat-next').onclick = () => chooseBoat(mine + 1);
+addEventListener('keydown', (e) => {
+  if ((e.key === 'Enter' || e.key === ' ') && ui === 'title' && !document.body.className.includes('panel-')) { e.preventDefault(); go(); }
+  if (e.key === 'Escape' && ui === 'race') pause(!paused);
+});
+$('again').onclick = () => go();
+$('next').onclick = () => { newCoast(1 + Math.floor(Math.random() * 999)); go(); };
+$('tomenu').onclick = () => title();
+$('newsea').onclick = () => { newCoast(1 + Math.floor(Math.random() * 999)); newGame(); refreshTitle(); };
+$('sound').onclick = () => { sound.toggle(); refreshTitle(); };
+function pause(on: boolean) { paused = on; document.body.classList.toggle('paused', on); if (on) sound.quiet(); }
+$('pause').onclick = () => pause(true);
+$('resume').onclick = () => pause(false);
+$('restart').onclick = () => go();
+$('quit').onclick = () => title();
+$('horn').onclick = () => { sound.wake(); sound.horn(); hornAt = vt; };
 
 // ─── events from the race: sounds, words, marks ───
+let lastCount = 4, snapWanted = false, snapUrl = '';
 function events() {
   for (const e of race.events.splice(0)) {
     if (e.kind === 'go') { say('Go!'); sound.horn(); }
     else if (e.kind === 'line') { if (e.boat === mine) sound.splash(); const k = race.crafts[e.craft]; for (let q = 0; q < 6; q++) marks.spray(k.x, 0.4, k.z, (Math.random() - 0.5) * 3, 2 + Math.random() * 2, (Math.random() - 0.5) * 3, 0.3); }
     else if (e.kind === 'aboard') { if (e.boat === mine) sound.aboard(race.boats[mine].rescued); }
-    else if (e.kind === 'clear') { if (e.boat === mine && !auto) toast(`All aboard! ${race.crafts[e.craft].craft.people.length} rescued`); }
-    else if (e.kind === 'letgo') { if (e.boat === mine && !auto) toast('Too far — they’re waiting for you to come back'); }
+    else if (e.kind === 'clear') { if (e.boat === mine && !auto) bubble(`All aboard! ${race.crafts[e.craft].craft.people.length} rescued`); }
+    else if (e.kind === 'letgo') { if (e.boat === mine && !auto) bubble('Come back — they’re still waiting!'); }
     else if (e.kind === 'bump') { if (e.boat === mine) sound.bump(); }
-    else if (e.kind === 'finish') { if (e.boat === mine && !auto) say(`${['1st', '2nd', '3rd', '4th', '5th'][e.place - 1]} home!`); }
-    else if (e.kind === 'lastcall') { sound.bell(); if (!auto && race.boats[mine].finished === null) say('Last call!', true); }
+    else if (e.kind === 'finish') { if (e.boat === mine && !auto) { const f = $('finishflag'); f.classList.remove('on'); void f.offsetWidth; f.classList.add('on'); snapWanted = true; bubble(`${ORD[e.place - 1]} home!`, 3); } }
+    else if (e.kind === 'lastcall') { sound.bell(); if (!auto && race.boats[mine].finished === null) { say('Last call!', true); bubble('Last call! Head for the harbour!', 4); } }
     else if (e.kind === 'over') setTimeout(() => { if (ui === 'race') podium(); }, 2500);
   }
 }
@@ -470,14 +556,17 @@ function frame(now: number) {
     if (fastFor > 4 && dpr < cap) { dpr = Math.min(cap, dpr + 0.15); resize(); fastFor = 0; }
   }
   if (!still) vt += dt;
-  if (ui === 'race' && !still) {
+  if (ui === 'title') { showcase(vt); for (const b of race.boats) wakes.record(b.id, b.x, b.z, b.h, b.v, vt); marks.step(dt); splashes(vt, dt); }
+  else if (ui === 'race' && paused) marks.step(0);
+  else if (ui === 'race' && !still) {
+    if (race.phase === 'countdown' && Math.ceil(race.count) < lastCount && race.count > 0) { lastCount = Math.ceil(race.count); say(String(lastCount)); sound.beep(); }
     const inp = stick.read();
     step(race, dt, inp);
     if (!auto && race.boats[mine].finished === null) sound.throttle(Math.max(0, inp.throttle));
     events();
     marks.step(dt);
     splashes(vt, dt);
-  } else if (ui !== 'race') { marks.step(dt); if (!still) for (const b of race.boats) wakes.record(b.id, b.x, b.z, b.h, b.v, vt); }
+  } else if (ui === 'podium') { marks.step(dt); if (!still) for (const b of race.boats) wakes.record(b.id, b.x, b.z, b.h, b.v, vt); }
   else marks.step(0);
   const t = vt;
   camera(still ? 0 : dt, t, canvas.width, canvas.height);
@@ -492,11 +581,13 @@ function frame(now: number) {
     focus: ui === 'podium' ? [coast.berths[2].x, coast.berths[2].z - 30] : [fb.x, fb.z], draws, wakes: wakes.data, wakeCount: wakes.count, fx: marks.data, fxCount: marks.count, holes, holeCount: hc,
     weather, flash, spot: spotAt, spotDir,
   };
-  if (ui === 'lineup') { f.zMin = START_Z - 250; f.zMax = START_Z + 700; }
+  if (ui === 'title') { f.zMin = showPath.z0 - 400; f.zMax = showPath.z1 + 400; }
   if (ui === 'podium') { f.zMin = GATE_Z - 200; f.zMax = GATE_Z + 400; }
   renderer.draw(f, canvas.width, canvas.height);
+  // (a picture for the end: taken the moment you cross the line, while the frame's still there to read)
+  if (snapWanted) { snapWanted = false; try { snapUrl = canvas.toDataURL('image/jpeg', 0.82); ($('snap') as HTMLImageElement).src = snapUrl; } catch { /* (no picture, then) */ } }
   (window as unknown as { __rescue: unknown }).__rescue = {
-    variant: 'coast', ui, phase: race.phase, seed, weather: weather.name, name: coast.name, mine, level, t: race.t, auto, dpr, frameMs: ema,
+    variant: 'coast', ui, paused, phase: race.phase, seed, weather: weather.name, name: coast.name, mine, level, t: race.t, auto, dpr, frameMs: ema,
     stick: { x: stick.x, y: stick.y, held: stick.held },
     boats: race.boats.map((b) => ({ x: b.x, z: b.z, h: b.h, v: b.v, rescued: b.rescued, finished: b.finished, home: b.home })),
     boarding: race.crafts.filter((k) => k.stage === 'line' || k.stage === 'climb').map((k) => ({ craft: k.craft.id, by: k.by, stage: k.stage })),
@@ -507,9 +598,11 @@ function frame(now: number) {
 // ─── start ───
 setWeather((params.get('weather') ?? 'sunny') as WeatherName);
 newCoast(seed);
-lineup();
+title();
+const panelArg = params.get('panel');
+if (panelArg === 'boats' || panelArg === 'weather' || panelArg === 'settings') panel(panelArg);
 if (auto || params.has('t') || params.get('view') === 'podium' || study) {
-  ui = 'race'; document.body.classList.remove('lineup'); document.body.classList.add('racing');
+  ui = 'race'; document.body.classList.remove('title'); document.body.classList.add('racing');
   newGame(); start(race);
   const T = params.get('view') === 'podium' ? 1e9 : Number(params.get('t') ?? 0);
   if (T > 0) {
