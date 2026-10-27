@@ -20,7 +20,7 @@ export interface PropPiece extends Piece { mesh: Mesh; rally?: boolean }
 export interface World { terrain: TerrainPiece[]; rocks: RockPiece[]; props: PropPiece[]; boulders: Mesh[]; bouldersFar: Mesh[] }
 
 /** granite: warm, grey, a darker weathered one (sRGB) */
-const GRANITE = [[0.94, 0.82, 0.66], [0.84, 0.77, 0.68], [0.8, 0.68, 0.54], [0.96, 0.86, 0.7], [0.88, 0.78, 0.64]];
+const GRANITE = [[0.82, 0.7, 0.56], [0.7, 0.65, 0.58], [0.66, 0.55, 0.43], [0.86, 0.75, 0.6], [0.76, 0.66, 0.53]];
 
 export function makeWorld(c: Coast): World {
   // ─── the ground ───

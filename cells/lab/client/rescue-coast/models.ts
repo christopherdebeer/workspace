@@ -564,37 +564,49 @@ export function boulder(seed: number, n: number): Mesh {
  * fractured planes rather than rounded stones
  */
 export function column(seed: number): Mesh {
+  // (one jointed block of granite: faces square to the coast's two joint sets — so neighbouring blocks, turned alike,
+  // line up face to face — corners broken off, and sometimes a second bed set back above a ledge)
   const rand = seeded(seed * 4271 + 7), b = new Builder();
   b.use(0, SRC.A, M.ROCK);
-  const beds = 2 + Math.floor(rand() * 3), cuts = [0];
-  for (let k = 1; k < beds; k++) cuts.push(k / beds + (rand() - 0.5) * 0.12);
-  cuts.push(1);
-  let ox = 0, oz = 0;
-  for (let k = 0; k < beds; k++) {
-    const y0 = cuts[k] + (k ? 0.012 : 0), y1 = cuts[k + 1], sides = 5 + Math.floor(rand() * 3), turn = rand() * 6.283;
-    // (the slab's outline: a polygon with uneven sides; jutting or set back a little from the bed below)
-    const ring: [number, number][] = [];
-    for (let i = 0; i < sides; i++) {
-      const a = turn + (i / sides) * 6.283 + (rand() - 0.5) * 0.5, r = 1.0 + rand() * 0.3;
-      ring.push([ox + Math.sin(a) * r, oz + Math.cos(a) * r]);
+  const hx = 1, hz = 0.72 + rand() * 0.22;
+  const outline = (inset: [number, number, number, number]) => {
+    // (a rectangle with each corner cut back by a broken-off wedge; inset pulls whole faces in)
+    const ring: [number, number][] = [], [e, n, w, s] = inset;
+    const corners: [number, number, boolean][] = [[hx - e, hz - n, true], [-hx + w, hz - n, false], [-hx + w, -hz + s, true], [hx - e, -hz + s, false]];
+    for (const [x, z, xFirst] of corners) {
+      // (the two points either side of the corner, in order round the outline: in along the face before it, then the face after)
+      const cut = 0.1 + rand() * (rand() < 0.5 ? 0.5 : 0.16), px = Math.sign(x), pz = Math.sign(z);
+      const alongX: [number, number] = [x, z - pz * cut * (0.7 + rand() * 0.6)], alongZ: [number, number] = [x - px * cut * (0.7 + rand() * 0.6), z];
+      ring.push(...(xFirst ? [alongX, alongZ] : [alongZ, alongX]));
     }
-    ox += (rand() - 0.5) * 0.14; oz += (rand() - 0.5) * 0.14;
-    const tilt = [(rand() - 0.5) * 0.12, (rand() - 0.5) * 0.12], top = (x: number, z: number) => y1 + x * tilt[0] + z * tilt[1];
-    // (the sides: flat, leaning in a touch toward the top, each split once along its height so the faces break)
-    const lean = 0.9 + rand() * 0.08, mid = 0.35 + rand() * 0.3, kink = (rand() - 0.5) * 0.08;
-    const shade = (y: number): RGB => { const v = 0.72 + 0.28 * y; return [v, v, v]; };
-    const C: V3 = [ox, (y0 + y1) / 2, oz];
-    for (let i = 0; i < sides; i++) {
-      const [x0, z0] = ring[i], [x1, z1] = ring[(i + 1) % sides];
-      const at = (x: number, z: number, f: number, w: number): V3 => [ox + (x - ox) * w, f, oz + (z - oz) * w];
-      const ym = y0 + (y1 - y0) * mid, wm = 1 + kink;
-      const a0 = at(x0, z0, y0, 1), a1 = at(x1, z1, y0, 1), m0 = at(x0, z0, ym, wm), m1 = at(x1, z1, ym, wm);
-      const t0 = at(x0, z0, top(x0 - ox, z0 - oz), lean), t1 = at(x1, z1, top(x1 - ox, z1 - oz), lean);
+    return ring;
+  };
+  const beds = rand() < 0.55 ? 2 : 1, split = 0.45 + rand() * 0.3;
+  for (let k = 0; k < beds; k++) {
+    const y0 = k ? split : 0, y1 = beds === 1 ? 1 : k ? 1 : split;
+    // (the upper bed set back from one or two faces: a ledge)
+    const inset: [number, number, number, number] = k ? [rand() < 0.5 ? 0.15 + rand() * 0.3 : 0.02, rand() < 0.4 ? 0.12 + rand() * 0.2 : 0.02, rand() * 0.06, rand() < 0.3 ? 0.1 + rand() * 0.2 : 0.02] : [0, 0, 0, 0];
+    const ring = outline(inset), n = ring.length;
+    const tilt = [(rand() - 0.5) * 0.08, (rand() - 0.5) * 0.08];
+    // (the top's height at each rim point: one plane, with a corner or two knocked lower)
+    const tops = ring.map(([x, z]) => y1 + x * tilt[0] + z * tilt[1] - (rand() < 0.25 ? 0.03 + rand() * 0.06 : 0));
+    const lean = 0.86 + rand() * 0.08, mid = 0.3 + rand() * 0.4, kink = (rand() - 0.5) * 0.14;
+    const shade = (y: number): RGB => { const v = 0.6 + 0.4 * y; return [v, v, v]; };
+    const C: V3 = [0, (y0 + y1) / 2, 0];
+    const ym = y0 + (y1 - y0) * mid;
+    for (let i = 0; i < n; i++) {
+      const j = (i + 1) % n, [x0, z0] = ring[i], [x1, z1] = ring[j];
+      const a0: V3 = [x0, y0, z0], a1: V3 = [x1, y0, z1];
+      const m0: V3 = [x0 * (1 + kink), ym, z0 * (1 + kink)], m1: V3 = [x1 * (1 + kink), ym, z1 * (1 + kink)];
+      const t0: V3 = [x0 * lean, tops[i], z0 * lean], t1: V3 = [x1 * lean, tops[j], z1 * lean];
       b.triOut(C, a0, a1, m1, shade(y0)); b.triOut(C, a0, m1, m0, shade(y0));
       b.triOut(C, m0, m1, t1, shade(ym)); b.triOut(C, m0, t1, t0, shade(ym));
-      // (the top: a flat bed plane, its rim chipped down at one corner in three)
-      const chip = rand() < 0.33 ? 0.06 + rand() * 0.06 : 0;
-      b.triOut(C, t0, t1, [ox, top(0, 0) - chip * 0.3, oz], shade(1));
+    }
+    // (the top: one fan about a single centre at the rim's mean height)
+    const cy = tops.reduce((p, q) => p + q, 0) / n;
+    for (let i = 0; i < n; i++) {
+      const j = (i + 1) % n;
+      b.triOut(C, [ring[i][0] * lean, tops[i], ring[i][1] * lean], [ring[j][0] * lean, tops[j], ring[j][1] * lean], [0, cy, 0], shade(1));
     }
   }
   return smooth(b.done(), 0.97);

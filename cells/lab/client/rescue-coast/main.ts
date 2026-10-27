@@ -496,7 +496,7 @@ function splashes(t: number, dt: number) {
       const x = b.x + s * 4.3 - side * c * 1.2, z = b.z + c * 4.3 + side * s * 1.2;
       marks.spray(x, p.y + 0.4, z, -side * c * (2 + Math.random() * 3) + s * b.v * 0.5, 2 + Math.random() * 3 + slam * 3, side * s * (2 + Math.random() * 3) + c * b.v * 0.5, 0.25 + Math.random() * 0.3);
     }
-    if (fast > 0.15 && Math.random() < dt * 25 * fast) for (const side of [-1, 1]) marks.foam(b.x + s * 3 - side * c * 2.3, b.z + c * 3 + side * s * 2.3, -side * c * 2.5, side * s * 2.5, 0.8 + Math.random() * 0.8, 1.4, 0.7);
+    if (fast > 0.15 && Math.random() < dt * 25 * fast) for (const side of [-1, 1]) marks.foam(b.x + s * 3 - side * c * 2.3, b.z + c * 3 + side * s * 2.3, -side * c * 2.5, side * s * 2.5, 0.5 + Math.random() * 0.5, 1.2, 0.5);
   }
   // (the surf: bursts where a crest meets the rocks, near the camera)
   const S = coast.surf, n = S.length / 4;
@@ -996,8 +996,8 @@ function refScene(kind: string) {
     const [ox, oz] = seaward(coast, L.x, L.z), tx = -oz, tz = ox;
     for (const o of race.boats) place(o, L.x + ox * 60 + tx * (o.id * 9 - 10), L.z + oz * 60 + tz * (o.id * 9 - 10) + 30, 0.2, 5);
     refCam = { from: [L.x + ox * 85 - tx * 70, 26, L.z + oz * 85 - tz * 70], target: [L.x + ox * 10 + tx * 25, 6, L.z + oz * 10 + tz * 25], fov: 0.8, aperture: 0.3, focus: 90 };
-  } else {
-    // (the hero shot has the finish banner over the harbour mouth: the Rally's)
+  } else if (kind === 'hero-rally') {
+    // (the old hero, up the Rally's approach to the finish banner: kept to compare against)
     mode = 'rally';
     place(me, G.x - 3, G.z - 172, 0.04, 8);
     const others = race.boats.filter((o) => o !== me), spots = [[22, -122, -0.15], [-24, -96, 0.12], [6, -70, 0], [-10, -142, 0.22]];
@@ -1009,6 +1009,30 @@ function refScene(kind: string) {
     });
     const back = 23, from = [me.x - Math.sin(me.h) * back + 2, 9.5, me.z - Math.cos(me.h) * back];
     refCam = { from, target: [me.x + Math.sin(me.h) * 26, 0.5, me.z + Math.cos(me.h) * 26], fov: 0.72, aperture: 0.5, focus: 25 };
+  } else {
+    // (the hero: out in the open sea heading for the stacks — the lighthouse islet off one bow, the cliffs of the coast
+    // off the other, the horizon open between — the crews strung out at different distances, one of them alongside a
+    // dinghy taking its people off, and a dinghy close by waving us on)
+    const S = coast.islets.find((i) => i.kind === 'stacks') ?? coast.islets.find((i) => i.kind === 'islet') ?? coast.islets[0];
+    const ahead = Number(params.get('ahead') ?? 200), [sx, sz] = wet(S.x - 0.45 * ahead, S.z + 0.9 * ahead, 30);
+    const h = Math.atan2(S.x - sx, S.z - sz), dx = Math.sin(h), dz = Math.cos(h);
+    // (f metres ahead along the heading, n to its right)
+    const at = (f: number, n: number): [number, number] => [sx + dx * f - dz * n, sz + dz * f + dx * n];
+    place(me, sx, sz, h, 8);
+    const others = race.boats.filter((o) => o !== me), spots: [number, number, number][] = [[38, 16, 0], [72, -10, 6], [104, 34, 7], [56, 52, 5]];
+    others.forEach((o, i) => place(o, ...at(spots[i][0], spots[i][1]), h + (i - 1.5) * 0.15, spots[i][2]));
+    const crafts = race.crafts.filter((k) => k.craft.kind === 'row' || k.craft.kind === 'kayak' || k.craft.kind === 'paddle');
+    // (alongside the nearest crew: a dinghy with its people climbing aboard)
+    const busy = others[0], kb = crafts[0];
+    if (kb) {
+      const side = -1, [kx, kz] = world(busy, side * (HALF_BEAM + 0.95), -1.6);
+      kb.x = kx; kb.z = kz; kb.yaw = busy.h + Math.PI; kb.stage = 'climb'; kb.by = busy.id; kb.side = side; kb.t = 0.4 * CLIMB; kb.called = true;
+    }
+    const where: [number, number][] = [[12, 11], [30, -16], [64, 30], [90, 2], [128, 18]];
+    crafts.slice(1).forEach((k, i) => { if (i < where.length) { [k.x, k.z] = wet(...at(where[i][0], where[i][1]), 12); k.yaw = 1.3 * i + 0.4; k.called = true; } });
+    for (const k of race.crafts) if (!crafts.slice(0, where.length + 1).includes(k)) k.z -= 2000;
+    const back = 18.5, from = [me.x - dx * back - dz * 2.5, 7.4, me.z - dz * back + dx * 2.5];
+    refCam = { from, target: [me.x + dx * 30, 0.8, me.z + dz * 30], fov: 0.8, aperture: 0.22, focus: 19 };
   }
   // (their wakes and spray, as if they'd been going a while)
   for (const b of race.boats) if (b.v > 0) for (let s = -5.5; s <= 0; s += 0.08) wakes.record(b.id, b.x + Math.sin(b.h) * b.v * s, b.z + Math.cos(b.h) * b.v * s, b.h, b.v, vt + s);

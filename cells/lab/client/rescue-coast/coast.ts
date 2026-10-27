@@ -647,12 +647,15 @@ function dress(c: Coast, rand: Rand, k: {
     const cap = Math.max(0.8, reach);
     rocks.push({ x: jx, y: g - r * 0.35 * tall, z: jz, yaw: rand() * 6.283, sx: Math.min(cap, r * (0.85 + rand() * 0.4)), sy: r * tall, sz: Math.min(cap, r * (0.85 + rand() * 0.4)), kind: Math.floor(rand() * 4), tint: rand() });
   }
-  // ─── the cliff faces: granite split along its joints — stacks of squarish blocks shoulder to shoulder along the shore,
-  // as tall as the land behind them; each block a little set back, turned or narrower than the one below (ledges, the
-  // rounded joints between them), the tops stepping up and down; none reaching past CLEAR ───
-  const hash = new Map<number, [number, number][]>(), key = (x: number, z: number) => Math.floor(x / 6) * 100003 + Math.floor(z / 6);
+  // ─── the cliff faces: granite split along its joints. A few big blocks per stretch, every one squared to the coast's two
+  // joint sets (which swing slowly along it) so faces line up from block to block and the joints run on across them;
+  // a ledge where a block steps back, a broken corner, blocks fallen at the foot; the same stone tone along a stretch; none
+  // reaching past CLEAR. (The sites come from the walk below, which draws on the coast's stream exactly as it always has —
+  // so everything after it is unchanged — and the blocks from a stream of their own) ───
+  const sites: { x: number; z: number; foot: number; H: number; r: number; ox: number; oz: number }[] = [];
+  const near = new Map<number, [number, number][]>(), key = (x: number, z: number) => Math.floor(x / 6) * 100003 + Math.floor(z / 6);
   const crowded = (x: number, z: number, m: number) => {
-    for (let a = -1; a <= 1; a++) for (let b = -1; b <= 1; b++) for (const [px, pz] of hash.get(key(x + a * 6, z + b * 6)) ?? []) if (Math.hypot(px - x, pz - z) < m) return true;
+    for (let a = -1; a <= 1; a++) for (let b = -1; b <= 1; b++) for (const [px, pz] of near.get(key(x + a * 6, z + b * 6)) ?? []) if (Math.hypot(px - x, pz - z) < m) return true;
     return false;
   };
   const STEPC = 2;
@@ -662,19 +665,51 @@ function dress(c: Coast, rand: Rand, k: {
     if (k.harbourness(jx, jz) > 0.3) continue;
     const [ox, oz] = seaward(c, jx, jz), top = groundAt(c, jx - ox * 5.5, jz - oz * 5.5);
     if (top < 2.5 || crowded(jx, jz, 2.2 + rand() * 1.6)) continue;
-    (hash.get(key(jx, jz)) ?? hash.set(key(jx, jz), []).get(key(jx, jz))!).push([jx, jz]);
-    const tint = rand(), H = top + 0.8 - rand() * 2.4;
-    let y = -3 - rand() * 2, bx = jx, bz = jz, r = Math.min(-s + CLEAR - 0.4, 2 + rand() * rand() * 3.4), yaw = rand() * 6.283;
+    (near.get(key(jx, jz)) ?? near.set(key(jx, jz), []).get(key(jx, jz))!).push([jx, jz]);
+    rand(); const H = top + 0.8 - rand() * 2.4;
+    let y = -3 - rand() * 2;
+    sites.push({ x: jx, z: jz, foot: y, H, r: 0, ox, oz });
+    let bx = jx, bz = jz, r = Math.min(-s + CLEAR - 0.4, 2 + rand() * rand() * 3.4);
+    sites[sites.length - 1].r = r; rand();
     for (let n = 0; y < H - 0.4 && n < 9; n++) {
       // (the foot is one block from the seabed to above the tide; then blocks of 2.5-5 m)
       const h = Math.min(H - y, n === 0 ? 3.5 + rand() * 5 : (1.6 + rand() * 4.4) * (0.6 + r * 0.25));
       const cap = -shoreAt(c, bx, bz) + CLEAR - 0.35;
       if (cap < 1) break;
-      rocks.push({ x: bx, y, z: bz, yaw, sx: Math.min(cap, r * (0.85 + rand() * 0.3)), sy: h + 0.3, sz: Math.min(cap, r * (0.65 + rand() * 0.45)), kind: COLUMN + Math.floor(rand() * 4), tint: (tint + n * 0.07) % 1 });
+      rand(); rand(); rand();
       y += h;
       const back = rand() < 0.4 ? 0.6 + rand() * 1.4 : rand() * 0.3, side = (rand() - 0.5) * 1.2;
       bx += -ox * back - oz * side; bz += -oz * back + ox * side;
-      r = Math.max(1.6, r * (0.84 + rand() * 0.32)); yaw += (rand() - 0.5) * 1.2;
+      r = Math.max(1.6, r * (0.84 + rand() * 0.32)); rand();
+    }
+  }
+  {
+    const jr = seeded(hash(c.seed, 6007)), phase = jr() * 6.283, j0 = jr() * 1.571;
+    const joint = (x: number, z: number) => j0 + 0.45 * Math.sin(z / 190 + phase) + 0.2 * Math.sin(x / 140 - z / 260);
+    const tone = (x: number, z: number) => 0.5 + 0.32 * Math.sin(x * 0.011 + z * 0.009 + phase) + 0.18 * Math.sin(z * 0.023 - x * 0.007);
+    const kept: [number, number, number][] = [];
+    for (const t of sites) {
+      // (fewer, bigger blocks: a site close under one already kept is left to it)
+      const r = Math.max(2.2, t.r * (1.15 + jr() * 0.5));
+      if (kept.some(([x, z, rr]) => Math.hypot(x - t.x, z - t.z) < 0.62 * Math.max(r, rr))) continue;
+      kept.push([t.x, t.z, r]);
+      const yaw = joint(t.x, t.z) + (jr() - 0.5) * 0.08 + (jr() < 0.5 ? 0 : Math.PI / 2), tint = (tone(t.x, t.z) + jr() * 0.12) % 1;
+      const cap = -shoreAt(c, t.x, t.z) + CLEAR - 0.35;
+      if (cap < 1) continue;
+      // (from the seabed: all the way up in one, or to a ledge with a narrower block stepped back above it)
+      // (the skyline: here and there a tor standing above the turf, elsewhere the turf rolling over a lower edge)
+      const H = t.H + (jr() < 0.28 ? 1.2 + jr() * 3.2 : -jr() * 1.6);
+      const whole = jr() < 0.4, h1 = whole ? H - t.foot : (H - t.foot) * (0.55 + jr() * 0.25);
+      rocks.push({ x: t.x, y: t.foot, z: t.z, yaw, sx: Math.min(cap, r * (0.95 + jr() * 0.3)), sy: h1 + 0.3, sz: Math.min(cap, r * (0.75 + jr() * 0.35)), kind: COLUMN + Math.floor(jr() * 4), tint });
+      if (!whole) {
+        const back = r * (0.3 + jr() * 0.35), ux = t.x - t.ox * back, uz = t.z - t.oz * back, capU = -shoreAt(c, ux, uz) + CLEAR - 0.35;
+        if (capU >= 1) rocks.push({ x: ux, y: t.foot + h1 - 0.2, z: uz, yaw: yaw + (jr() - 0.5) * 0.06, sx: Math.min(capU, r * (0.7 + jr() * 0.25)), sy: H - t.foot - h1 + 0.5 + jr() * 0.8, sz: Math.min(capU, r * (0.6 + jr() * 0.3)), kind: COLUMN + Math.floor(jr() * 4), tint: (tint + 0.04) % 1 });
+      }
+      // (now and then a block fallen at the foot, tipped, in the surf)
+      if (jr() < 0.3) {
+        const d = r * (0.9 + jr() * 0.5), fx = t.x + t.ox * d, fz = t.z + t.oz * d, capF = -shoreAt(c, fx, fz) + CLEAR - 0.25, fr = Math.min(capF, 0.9 + jr() * 1.3);
+        if (fr >= 0.7) rocks.push({ x: fx, y: groundAt(c, fx, fz) - fr * 0.25, z: fz, yaw: yaw + 0.3 + jr() * 0.5, sx: fr * 1.1, sy: fr * 0.9, sz: fr * 0.85, kind: Math.floor(jr() * 4), tint });
+      }
     }
   }
   // ─── lighthouses: on the biggest headland, the lighthouse islet, and either side of the harbour mouth ───

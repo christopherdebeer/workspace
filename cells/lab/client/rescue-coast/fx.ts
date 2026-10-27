@@ -19,8 +19,8 @@ export class Marks {
     if (this.bits.length > 3000) return;
     this.bits.push({ y: 0, vx: 0, vy: 0, vz: 0, size: 0.5, grow: 0, age: 0, life: 1, alpha: 1, col: WHITE, fall: 0, ...b });
   }
-  spray(x: number, y: number, z: number, vx: number, vy: number, vz: number, size: number, life = 0.7) { this.add({ kind: FX.SPRAY, x, y, z, vx, vy, vz, size, grow: size * 0.8, life, alpha: 0.6, fall: 9.8 }); }
-  foam(x: number, z: number, vx: number, vz: number, size: number, life = 1.2, alpha = 0.8) { this.add({ kind: FX.FOAM, x, z, vx, vz, size, grow: size * 0.9, life, alpha }); }
+  spray(x: number, y: number, z: number, vx: number, vy: number, vz: number, size: number, life = 0.7) { this.add({ kind: FX.SPRAY, x, y, z, vx, vy, vz, size, grow: size * 0.3, life, alpha: 0.45, fall: 9.8 }); }
+  foam(x: number, z: number, vx: number, vz: number, size: number, life = 1.2, alpha = 0.8) { this.add({ kind: FX.FOAM, x, z, vx, vz, size, grow: size * 0.45, life, alpha }); }
   sparkle(x: number, y: number, z: number, col: readonly number[]) { this.add({ kind: FX.SPARK, x, y, z, vy: 1.2, size: 0.45, life: 0.6, alpha: 1, col }); }
   /** move everything on, and write the survivors out (the page then puts its own marks after them) */
   step(dt: number) {

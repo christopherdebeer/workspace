@@ -210,28 +210,35 @@ void main() {
   if (m == 4) {
     // (granite: grain, feldspar flecks, lichen on the tops, darker and glossy where the sea wets it)
     vec3 q = vW * .55;
-    float g = fbm(q.xz + q.y * .7) * .6 + fbm(q.zy * 1.7) * .4, fleck = step(.8, noise2(vW.xz * 6. + vW.y * 3.));
+    float g = fbm(q.xz + q.y * .7) * .6 + fbm(q.zy * 1.7) * .4, fleck = step(.8, noise2(vW.xz * 4. + vec2(vW.y * 5.)));
     alb *= .78 + .38 * g; alb = mix(alb, lin(vec3(.95, .9, .82)), fleck * .25);
     float lichen = smoothstep(.55, .9, N.y) * smoothstep(.55, .75, noise2(vW.xz * .9));
-    alb = mix(alb, lin(vec3(.72, .7, .38)), lichen * .45);
+    alb = mix(alb, lin(vec3(.62, .62, .36)), lichen * .3);
     // (orange lichen crusting the faces above the splash zone; dark where the joints and hollows hold shadow and damp)
     float dry = smoothstep(1.5, 4., vW.y);
-    float crust = smoothstep(.48, .68, noise2(vW.xz * .32 + vW.y * .45) * .7 + noise2(vW.zy * 1.3 + vW.x * .2) * .3) * dry;
-    alb = mix(alb, lin(vec3(.92, .62, .24)), crust * .62 * smoothstep(.2, .6, noise2(vW.xz * 1.1 + vW.y * .8)));
+    // (patterns on a face measured across it and up it, not along the world's diagonals, which draw stripes)
+    vec2 along = normalize(vec2(-N.z, N.x) + 1e-4), fc = vec2(dot(vW.xz, along), vW.y);
+    float crust = smoothstep(.48, .68, noise2(fc * vec2(.3, .4) + vW.xz * .05) * .7 + noise2(fc * 1.3 + 5.) * .3) * dry;
+    alb = mix(alb, lin(vec3(.92, .62, .24)), crust * .62 * smoothstep(.2, .6, noise2(fc * .9 + 2.)));
     // (sunlit tops of the blocks a little golden)
-    alb *= mix(vec3(1.), vec3(1.06, 1., .88), smoothstep(.2, .8, N.y) * dry);
+    alb *= mix(vec3(1.), vec3(.98, .9, .76), smoothstep(.2, .8, N.y) * dry);
     alb *= mix(.7, 1., smoothstep(-.6, .2, N.y + (g - .5)));
     // (fractures: thin dark cracks running down the faces and across them, and the bedding lines between strata)
     float steep = 1. - smoothstep(.45, .8, abs(N.y));
-    float crackV = 1. - smoothstep(.0, .035, abs(noise2(vec2(dot(vW.xz, vec2(.71, .7)) * .9, vW.y * .12) + vec2(vW.y * .05, 0.)) - .5));
-    float crackH = 1. - smoothstep(.0, .05, abs(fract(vW.y * .62 + noise2(vW.xz * .15) * .8) - .5) - .45);
-    float fine = 1. - smoothstep(.0, .02, abs(noise2(vW.xz * 2.3 + vW.y * 1.7) - .5));
+    // (vertical joints: straight lines down each face, measured along it, so blocks turned alike carry the same joint on
+    // across; some stop partway, as joints do)
+    float u = dot(vW.xz, along) * .2, uj = u + (noise2(vec2(floor(u) * 5.1, 1.3)) - .5) * .6, jv = fract(uj + (noise2(vec2(u * .2, vW.y * .06)) - .5) * .2);
+    float crackV = (1. - smoothstep(.0, .015 + fwidth(u), min(jv, 1. - jv))) * step(.62, noise2(vec2(floor(uj + .5) * 3.7, vW.y * .1)));
+    // (bedding joints: thin and widely spaced, a line where the sheet's fraction comes round, not a band across most of it)
+    float bed = fract(vW.y * .2 + noise2(vW.xz * .05) * .9), bw = fwidth(vW.y) * .2;
+    float crackH = (1. - smoothstep(.0, .015 + bw, min(bed, 1. - bed))) * step(.5, noise2(vW.xz * .07 + 3.1));
+    float fine = 1. - smoothstep(.0, .02, abs(noise2(fc * vec2(1.6, .9)) - .5));
     alb *= 1. - steep * (crackV * .5 + crackH * .35 + fine * .1 * smoothstep(.6, .3, length(fwidth(vW))));
     // (each fractured plane its own tone)
-    alb *= .9 + .2 * hash2(floor(vec2(dot(N.xz, vec2(3.1, 1.7)), N.y * 4.) * 2.));
+    alb *= .94 + .12 * hash2(floor(vec2(dot(N.xz, vec2(3.1, 1.7)), N.y * 4.) * 2.));
     float wet = 1. - smoothstep(.2, 1.4, vW.y);
     alb *= 1. - wet * .45; spec = mix(.05, .45, wet); gloss = mix(14., 80., wet);
-    N = normalize(N + (vec3(noise2(vW.yz * 2.1), 0., noise2(vW.xy * 2.1)) - .5) * .35);
+    N = normalize(N + vec3(noise2(vW.yz * 2.1) - .5, 0., noise2(vW.xy * 2.1) - .5) * .35);
   }
   float ndl = dot(N, uSun), sh = sunShadow(vW, N);
   float diff = max(0., (ndl + wrap) / (1. + wrap));
@@ -440,10 +447,10 @@ void main() {
     if (i >= uHullCount) break;
     vec4 h = uHulls[i]; vec2 d = P - h.xy, fw = vec2(sin(h.z), cos(h.z)), rt = vec2(-fw.y, fw.x);
     float al = dot(d, fw), ac = dot(d, rt), sp2 = clamp(h.w / 12., 0., 1.);
-    float e = length(vec2(ac / (2.2 + sp2 * (.5 + .8 * smoothstep(0., 5., al))), al / (al > 0. ? 4.4 + sp2 * 1.5 : 5.2 + sp2 * 1.6)));
+    float e = length(vec2(ac / (2.2 + sp2 * (.3 + .4 * smoothstep(0., 5., al))), al / (al > 0. ? 4.4 + sp2 * 1.5 : 5.2 + sp2 * 1.6)));
     float bow = smoothstep(-1., 4., al), churn = noise2(P * .9 + uTime * .6) * .5 + .5;
     float slap = .25 * min(1.5, uSeaLook.x) * (1. - sp2);
-    hull = max(hull, (1. - smoothstep(.95, 1.35 + slap + .55 * sp2 + .4 * bow * sp2, e + (churn - .5) * .3)) * (.68 + sp2 * (.35 + .5 * bow)) * (.75 + .25 * sin(uTime * 2.1 + al * .9)));
+    hull = max(hull, (1. - smoothstep(.95, 1.3 + slap + .3 * sp2 + .25 * bow * sp2, e + (churn - .5) * .3)) * (.62 + sp2 * (.15 + .3 * bow)) * (.75 + .25 * sin(uTime * 2.1 + al * .9)));
   }
   for (int i = 0; i < 12; i++) {
     if (i >= uHoleCount) break;
@@ -493,13 +500,13 @@ void main() {
   float e = abs(vUAS.x), age = vUAS.y, k = vUAS.z;
   // (churned white straight behind the stern, opening and thinning over a few seconds; the wake's two arms, broken and long-lived)
   float wash = (1. - smoothstep(.0, .5 + age * .1, e)) * exp(-age * .75);
-  float arms = smoothstep(.55, .82, e) * (1. - smoothstep(.9, 1., e)) * exp(-age * .35) * .75;
+  float arms = smoothstep(.55, .82, e) * (1. - smoothstep(.9, 1., e)) * exp(-age * .35) * .55;
   float cov = clamp(max(wash, arms) * k, 0., 1.), tex = foamTex(vW.xz * 1.1 + vec2(age * .3), age);
   float a = smoothstep(1. - cov, 1.1 - cov, tex);
   if (a < .01) discard;
   vec3 G = normalize(vN);
   vec3 c = lin(vec3(.86, .9, .93)) * (uSunC * (max(dot(G, uSun), 0.) * .5 + .08) * mix(.45, 1., sunShadow(vW, G)) + skyFill(G) * .85 + spot(vW, G) * .5);
-  o = vec4(outc(aerial(c * (.82 + .18 * tex), vW)), clamp(a * (.6 + .4 * cov), 0., 1.));
+  o = vec4(outc(aerial(c * (.82 + .18 * tex), vW)), clamp(a * (.45 + .4 * cov), 0., .8));
 }`;
 
 const FX_VS = `#version 300 es
