@@ -161,9 +161,19 @@ function tryCoast(seed: number, attempt: number, force = false): Coast | null {
   }
   const big = islets.filter((i) => i.kind === 'islet').sort((a, b) => b.r - a.r)[0];
   if (big) big.light = true;
+  // (the islets binned on a coarse grid, each in every bin within reach of its shore, so the nearest is found quickly;
+  // further off than that, all that matters is that it's far)
+  const BIN = 32, REACH = 64, bins = new Map<number, Islet[]>(), binOf = (x: number, z: number) => Math.floor((z - Z0) / BIN) * 4096 + Math.floor((x - X0) / BIN);
+  for (const i of islets) {
+    const R = i.r * (1 + i.wob[2] + 0.08) + REACH;
+    for (let z = i.z - R; z < i.z + R + BIN; z += BIN) for (let x = i.x - R; x < i.x + R + BIN; x += BIN) {
+      const k = binOf(Math.min(x, i.x + R), Math.min(z, i.z + R)), list = bins.get(k) ?? bins.set(k, []).get(k)!;
+      if (list[list.length - 1] !== i) list.push(i);
+    }
+  }
   const isletNear = (x: number, z: number): [number, Islet | null] => {
     let d = 1e9, near: Islet | null = null;
-    for (const i of islets) {
+    for (const i of bins.get(binOf(x, z)) ?? []) {
       const dx = x - i.x, dz = z - i.z, r = Math.hypot(dx, dz), a = Math.atan2(dx, dz);
       const R = i.r * (1 + i.wob[2] * Math.sin(3 * a + i.wob[0]) + 0.08 * Math.sin(5 * a + i.wob[1]));
       if (r - R < d) { d = r - R; near = i; }
