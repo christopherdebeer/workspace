@@ -4,7 +4,7 @@
 // aboard, counted as they land, no one twice; drive off and the rest wait), whole races steered by the game (over, the
 // places by Lily's rule, no hull past the shore), and the same seed the same race. Then the Rescue Service: its own coast
 // (the harbour with its pier, the open sea past the headland, the calls by zone), its rules (the calls coming in, room
-// for six, landing them on the pier, holding steady in a swell), whole days with the weather changing, and the same seed
+// for everyone, landing them on the pier, holding steady in a swell), whole days with the weather changing, and the same seed
 // the same day.
 import { build } from 'esbuild';
 const load = async (f) => { const o = await build({ entryPoints: [new URL(f, import.meta.url).pathname], bundle: true, write: false, format: 'esm', platform: 'node', logLevel: 'error' }); return import('data:text/javascript;base64,' + Buffer.from(o.outputFiles[0].text).toString('base64')); };
@@ -126,26 +126,22 @@ for (const [seed, c] of sea) {
   ok(`service coast ${seed}: the little boats out in open water and apart`, c.crafts.every((k) => S(k.x, k.z) >= 14) && c.crafts.every((k, i) => c.crafts.every((o, j) => i === j || Math.hypot(k.x - o.x, k.z - o.z) >= 28)));
 }
 
-// (the rules: room for six; the rest wait for the next lifeboat)
+// (the rules: room for everyone found; home, they step ashore in the harbour, and not out on the water)
 {
   const c = sea.get(1), r = R.newRace(c, { mode: 'service', level: 'medium', mine: 0 }); R.start(r); R.runFor(r, 3.2);
   for (const b of r.boats) if (b.id) b.ai = null;
-  const me = r.boats[0], k = r.crafts.find((q) => q.called);
-  me.aboard = Array.from({ length: R.CAP - 1 }, (_, i) => ({ craft: k.craft.id, person: 0 })); me.rescued = R.CAP - 1;
+  const me = r.boats[0], k = r.crafts.find((q) => q.called), many = 9;
+  me.aboard = Array.from({ length: many }, () => ({ craft: k.craft.id, person: 0 })); me.rescued = many;
   k.craft.people = [k.craft.people[0], k.craft.people[0], k.craft.people[0]]; k.left = 3;
   me.h = 0.3; [me.x, me.z] = R.world({ x: k.x, z: k.z, h: me.h }, -4.2, 0); me.v = 1;
-  r.events.length = 0;
-  R.runFor(r, R.LINE + R.CLIMB * 3 + 1);
-  ok('service: room for six — one more climbs aboard, and the rest wait for the next lifeboat', me.aboard.length === R.CAP && k.left === 2 && k.stage === 'wait' && k.by === -1 && r.events.some((e) => e.kind === 'full' && e.boat === 0), [me.aboard.length, k.left, k.stage, k.by]);
-  R.runFor(r, 3);
-  ok('service: full, no line goes over', k.stage === 'wait' && me.aboard.length === R.CAP, [k.stage, me.aboard.length]);
-  // (home: inside the harbour they step ashore one by one; out on the water no one does)
+  for (let t = 0; t < 20 && k.left > 0; t += 0.5) R.runFor(r, 0.5);
+  ok('service: however many are aboard already, everyone waiting climbs aboard', me.aboard.length === many + 3 && k.left === 0 && k.stage === 'done', [me.aboard.length, k.left, k.stage]);
   [me.x, me.z] = [c.gateX, C.GATE_Z - 30]; me.h = 0; me.v = 3; r.events.length = 0;
   R.runFor(r, 2);
-  ok('service: no one steps ashore out on the water', me.aboard.length === R.CAP && r.ashore.length === 0);
+  ok('service: no one steps ashore out on the water', me.aboard.length === many + 3 && r.ashore.length === 0);
   [me.x, me.z] = [c.gateX, R.INSIDE + 8]; me.v = 2;
-  R.runFor(r, R.LAND * R.CAP + 0.3);
-  ok('service: in the harbour they step ashore, one at a time, counted safe', me.aboard.length === 0 && me.safe === R.CAP && r.ashore.length === R.CAP && r.events.filter((e) => e.kind === 'ashore').length === R.CAP, [me.aboard.length, me.safe, r.ashore.length]);
+  R.runFor(r, R.LAND * (many + 3) + 0.3);
+  ok('service: in the harbour they step ashore, one at a time, counted safe', me.aboard.length === 0 && me.safe === many + 3 && r.ashore.length === many + 3 && r.events.filter((e) => e.kind === 'ashore').length === many + 3, [me.aboard.length, me.safe, r.ashore.length]);
   ok('service: still people out there, so not in for the day', me.finished === null);
 }
 // (the calls: not there till they come in; then there, unless a lifeboat's right by them (they wait a little for it to go))
@@ -177,18 +173,18 @@ for (const [seed, c] of sea) {
 
 // (whole days, steered by the game: everyone home, the rules kept all day)
 const serviceLengths = [];
-let relaunched = 0, days = 0;
 for (const [seed, c] of sea) for (const level of ['easy', 'hard']) {
   const r = R.newRace(c, { mode: 'service', level, mine: 0, auto: true, sky: WX.voyage(seed, 'sunny') }); R.start(r);
-  let inside = 0, doubled = 0, unclaimed = 0, over = 0, early = 0, out = 0, backOut = 0;
+  let inside = 0, doubled = 0, unclaimed = 0, early = 0, out = 0, homeEarly = 0;
   const calledAt = new Map();
   for (let t = 0; t < 1500 && r.phase !== 'over'; t += 0.25) {
     R.runFor(r, 0.25);
-    for (const b of r.boats) { if (C.shoreAt(c, b.x, b.z) < R.HALF_BEAM - 0.5) inside++; if (b.aboard.length > R.CAP) over++; }
+    for (const b of r.boats) if (C.shoreAt(c, b.x, b.z) < R.HALF_BEAM - 0.5) inside++;
+    // (no crew heads home while there's anyone left to find)
+    if (r.crafts.some((k) => !k.called || k.left > 0)) for (const b of r.boats) if (b.ai?.target === -1 && b.z < C.GATE_Z - 40 && r.crafts.some((k) => k.called && k.left > 0 && k.claim === -1 && k.stage === 'wait')) homeEarly++;
     for (const e of r.events.splice(0)) {
       if (e.kind === 'call') calledAt.set(e.craft, r.t);
       if (e.kind === 'aboard' && !r.crafts[e.craft].called) early++;
-      if (e.kind === 'aboard' && r.boats[e.boat].safe > 0) backOut++;
       if (e.kind === 'ashore' && r.boats[e.boat].z <= R.INSIDE) out++;
     }
     // (no two crews going for the same little boat; every crew's choice claimed by it)
@@ -199,17 +195,15 @@ for (const [seed, c] of sea) for (const level of ['easy', 'hard']) {
   serviceLengths.push(r.t);
   const total = r.boats.reduce((s, b) => s + b.rescued, 0), folk = c.crafts.reduce((s, k) => s + k.people.length, 0);
   ok(`service ${seed} ${level}: over, everyone ashore and every lifeboat in`, r.phase === 'over' && total === folk && r.ashore.length === folk && r.boats.every((b) => b.finished !== null && b.aboard.length === 0), [r.phase, r.t.toFixed(0), total, r.ashore.length, folk]);
-  ok(`service ${seed} ${level}: in four to seven minutes`, r.t > 180 && r.t < 420, r.t.toFixed(0));
+  ok(`service ${seed} ${level}: in three to six minutes`, r.t > 180 && r.t < 360, r.t.toFixed(0));
   ok(`service ${seed} ${level}: no hull inside the shore`, inside === 0, inside);
-  ok(`service ${seed} ${level}: never more than six aboard; ashore only in the harbour`, over === 0 && out === 0, [over, out]);
+  ok(`service ${seed} ${level}: ashore only in the harbour; no crew heading home with someone left waiting for it`, out === 0 && homeEarly === 0, [out, homeEarly]);
   ok(`service ${seed} ${level}: the calls at their times, no one taken before theirs`, early === 0 && [...calledAt].every(([id, t]) => t >= c.crafts[id].at), early);
-  days++; if (backOut > 0) relaunched++;
   ok(`service ${seed} ${level}: no two crews after the same little boat; each going for one it has claimed`, doubled === 0 && unclaimed === 0, [doubled, unclaimed]);
   ok(`service ${seed} ${level}: no one counted twice`, new Set(r.ashore.map((a) => a.craft + ':' + a.person)).size === total);
   ok(`service ${seed} ${level}: no last call, so no one is left behind for one`, !r.lastCall || r.lastCall.length === 0);
 }
 console.log(`  service days ran ${Math.min(...serviceLengths).toFixed(0)}–${Math.max(...serviceLengths).toFixed(0)} s`);
-ok('service: on most days, crews land their people and go back out for more', relaunched >= days * 0.6, [relaunched, days]);
 {
   // (in a storm too: the sea's height is the weather's, kept to it by the race (steadiness, drift), as drawn)
   const o = await build({ stdin: { contents: "export * as R from './race'; export { SEA } from './waves'; export * as WX from './weather';", resolveDir: new URL('../client/rescue-coast/', import.meta.url).pathname, loader: 'ts' }, bundle: true, write: false, format: 'esm', platform: 'node', logLevel: 'error' });

@@ -27,7 +27,7 @@ The title is the boards' title card: your lifeboat charging along under the ligh
 - **Weather:** seven tiles; the title behind changes as you pick. In the Service it's the weather the day starts in; the forecast on the title (☀️ → 🌅 → 🌙) says where it goes from there.
 - **Settings:**
   - how good the other crews are (easy, medium, hard);
-  - which side the stick goes;
+  - where you steer from: your boat, or a stick in the bottom-left or bottom-right corner (kept in this browser);
   - sound;
   - a new coast;
   - these notes.
@@ -41,32 +41,36 @@ The title is the boards' title card: your lifeboat charging along under the ligh
 
 | | Touch | Keys |
 |---|---|---|
-| steer | the stick in the bottom-right corner: left and right turn, up goes faster, down slows and backs | the arrow keys, or WASD |
-| stop | let go of the stick | let go of the keys |
-| sound the horn | the horn by the stick (your crew wave) | |
+| steer | put your finger on your boat and drag: ahead to go faster, to one side to turn, back to slow and back off (or the stick in a corner, if you've chosen it in Settings) | the arrow keys, or WASD |
+| stop | let go | let go of the keys |
+| sound the horn | the horn, bottom-right (your crew wave) | |
 | pause | the button top-left | escape |
 
-- **The stick stays put** in its corner (the bottom-left instead: Settings, or `?hand=left`), so your thumb never covers the sea ahead. Push it to one side alone and the boat turns while going steadily on. Let go and the knob springs home and the boat eases to a stop.
+- **Your boat is the stick.** There's no stick drawn: a touch that starts on your lifeboat takes hold of it (generously: anywhere near it will do), and dragging from there is a joystick with the boat as its knob. Drag ahead and it goes, to one side and it turns while going steadily on, back and it slows and backs off; let go and it eases to a stop. While your finger is down a faint ring shows where you took hold, and a dot where you've dragged to. A touch anywhere else on the sea does nothing, so a stray hand doesn't steer. Until you've steered, a ring pulses round your boat to say where.
+- **Or a stick in a corner**, if you'd rather (Settings, or `?hand=right` / `?hand=left`): it stays put, so your thumb never covers the sea ahead; the same stick, with its own knob.
 - **The camera** rides low and close behind your boat, as on the boards' gameplay panel: your lifeboat a third of the way across, the coast ahead on the horizon. It turns with the boat but smoothly, and rises over a cliff rather than look through it. Slowing for someone waiting nearby, it eases down and round a little toward them. When a little boat is alongside it cuts in low beside your hull to watch them climb aboard (the boards' close rescue), and eases back out when they're all across.
+
+![Your boat is the stick](rescue-coast/v-steer.jpg)
+![Take hold and drag](rescue-coast/v-steer-drag.jpg)
 
 **On the screen**, laid out as on the boards' in-game view:
 - **top-left:**
   - pause;
-  - in the Service, everyone rescued so far, of everyone whose call has come in (*12/17*), and under it how many are aboard your boat of the six it holds (*4/6*, amber when it's full); in the Rally, how many you've rescued and your place;
+  - in the Service, everyone rescued so far, of everyone whose call has come in (*12/17*), and under it your own crew's count in your colour; in the Rally, how many you've rescued and your place;
   - the clock (in the Service with the weather as it is now; in the Rally's last call, the time left, in red).
 - **top-right:**
   - a round map turned to your heading, N going round its rim, showing the little boats still waiting (in their colours; in the Service, one another crew is going for has their colour round it), the other lifeboats and the harbour mouth;
   - under it, the five crews' counts (the Rally: the five places).
-- **a speech bubble:** what to do next ("Push the stick to go!", "Slow down — let go of the stick!", "Nice and steady — climbing aboard!", "Full up! Take them home to the harbour", "Home! Stepping ashore…"; the Rally's "Last call! Head for the harbour!"), the coastguard on the radio ("📻 Coastguard: A paddleboarder, in trouble just outside the harbour!", "📻 Coastguard: Fog rolling in — watch for the lighthouses"), and the other crews ("Turtle: All yours, Puffin — we'll find someone else!").
+- **a speech bubble:** what to do next ("Put your finger on your boat and drag to go!", "Slow down — let go of your boat!", "Nice and steady — climbing aboard!", "Listening for the next call…", "Everyone's aboard! Bring them home to the harbour", "Home! Stepping ashore…"; the Rally's "Last call! Head for the harbour!"), the coastguard on the radio ("📻 Coastguard: A paddleboarder, in trouble just outside the harbour!", "📻 Coastguard: Fog rolling in — watch for the lighthouses"), and the other crews ("Turtle: All yours, Puffin — we'll find someone else!").
 - **a lifebuoy and a bar** that fills while people come aboard.
-- **arrows** at the edge to the nearest little boats out of sight (in the Service, ones no other crew is going for), and to the harbour when it's time (in the Service: when you're full, or have people aboard and no one's waiting).
-- **the stick and the horn**, bottom-right.
+- **arrows** at the edge to the nearest little boats out of sight (in the Service, ones no other crew is going for), and to the harbour when it's time (in the Service: once everyone's aboard).
+- **the horn**, bottom-right (and the stick, if you've chosen one).
 
 ## Coming alongside
 
 Lily’s “near enough”, done the way a lifeboat does it:
 - **Come alongside** a little boat, with it close by your side.
-- **Ease right off.** Let go of the stick and the boat slows to a stop.
+- **Ease right off.** Let go and the boat slows to a stop.
 - **The line goes over.** Your crew throws a line, and the little boat is pulled in against your hull.
 - **They climb aboard** one at a time, in the boards' four moments:
   - **come alongside:** they stand at the edge of their little boat and reach up, while a crew member leans right over the rail and reaches down;
@@ -83,7 +87,7 @@ Lily’s “near enough”, done the way a lifeboat does it:
   On the weather side out in the open they still come across, just more slowly; nobody ever falls in. The bar fills as fast as you hold steady and goes amber when it's rough, and the bubble says what would help ("Bumpy here! Turn side-on to the waves to shelter them"). A lifeboat stopped out on the water drifts a little the way the swell runs. The other crews come alongside on the sheltered side when the swell gives them a choice. (The Rally keeps Lily's rule: once alongside and slow, the climb takes the same time anywhere.)
 - **Drive off** before they're all across and the rest let go, to wait for the next lifeboat.
 
-How slow is slow enough depends on the level: under half of top speed on easy, under a third on hard. On easy and medium the boat eases off by itself as you come up to a little boat, so a quick tap of the stick toward it is enough. A ring in your colour round each little boat near you says “come alongside here”. If you're too fast, the screen says so.
+How slow is slow enough depends on the level: under half of top speed on easy, under a third on hard. On easy and medium the boat eases off by itself as you come up to a little boat, so a quick drag toward it is enough. A ring in your colour round each little boat near you says “come alongside here”. If you're too fast, the screen says so.
 
 ![The line goes over](rescue-coast/v-line.jpg)
 ![Climbing aboard](rescue-coast/v-climb.jpg)
@@ -101,16 +105,16 @@ A day on the lifeboats, out from a little harbour and back, as many times as it 
   - out at sea, the bigger ones: a yacht that's lost its mast, three to five aboard; dinghies and rowing boats with two or three.
 
   A little boat isn't there until its call comes in (and if a lifeboat happens to be right beside the spot, the call waits until it's moved on, so no one appears out of nowhere).
-- **Room for six.** A lifeboat holds six. Full, the rest wait for the next lifeboat, and you take yours home: in through the mouth, slow down, and they step ashore one by one onto the pier, counted safe ashore, to join the crowd waving there. Then back out, if anyone's still waiting.
-- **The crews work together.** Each crew going for someone says so (it's ringed in their colour on your map) and the others leave them to it. If you're plainly nearer, they leave them to you, and say so on the radio. Nobody races anybody for a pickup. A crew with room aboard and more calls to come waits where it is for the next one; full, or nearly full with the next call far off, it takes its people home first.
+- **Room for everyone you find.** There's no limit to how many your lifeboat takes: the deck fills from aft, then forward, the side decks, the roof. When everyone's been found, take them home: in through the mouth, slow down, and they step ashore one by one onto the pier, counted safe ashore, to join the crowd waving there. (Passing through the harbour with people aboard any time, they step ashore then.)
+- **The crews work together.** Each crew going for someone says so (it's ringed in their colour on your map) and the others leave them to it. If you're plainly nearer, they leave them to you, and say so on the radio. Nobody races anybody for a pickup. A crew with no one to go for and more calls to come waits where it is for the next one; when everyone's been found, they all come home.
 - **The weather changes as the day goes on.** Each coast has its day, starting from the weather you chose: fair weather might bring a squall through (the wind getting up, a storm, clearing again), or a fog bank, or freshen into a gale, or go on into the evening and the night; a storm clears; fog lifts, or the night comes down on it; a night ends in a dawn. Each change comes on over half a minute, the coastguard warning of it a few seconds before. The sea changes with it (the boats ride it, and holding steady alongside is harder in a gale); so do the light, the sky, the fog, the rain and the sounds; the lighthouses' beams and your searchlight come on as it gets dark.
-- **Over when every call's been answered**, everyone's safe ashore, and every lifeboat is in. Home early yourself, you watch a crew at work (or wait in the harbour, ⏩, to skip to the end). A day takes four to seven minutes.
+- **Over when every call's been answered**, everyone's safe ashore, and every lifeboat is in. Home before the others, you watch a crew at work (or wait in the harbour, ⏩, to skip to the end). A day takes three and a half to five minutes.
 - **At the end:** *Everyone home!*, everyone on the pier and the crews moored along it; then the crews' honours, 1st to 5th by Lily's rule, as the postscript. Stars: three when everyone's home and your crew did its share, two when everyone's home.
 
 ![Setting out](rescue-coast/v-harbour.jpg)
 ![Along the coast](rescue-coast/v-racing.jpg)
 ![A yacht that's lost its mast](rescue-coast/v-yacht.jpg)
-![Full up](rescue-coast/v-deck.jpg)
+![A full deck](rescue-coast/v-deck.jpg)
 ![Safe ashore](rescue-coast/v-landing.jpg)
 ![Everyone home](rescue-coast/v-podium.jpg)
 
@@ -201,10 +205,10 @@ The weather doesn't change the rules: every boat rides the same sea. In the Rall
 ## The other boats
 
 Each of the four is steered by the game:
-- **Choosing:** it goes for the little boat worth most to it: its people (as many as it has room for), over the time to get there and take them aboard. In the Rally it prefers its own side of the channel, and passes over one another of the game's boats is plainly nearer. In the Service it claims the one it's going for, leaves alone any another crew has claimed, never gives up on anyone however far, and keeps to the one it chose unless another is much better (they're all over the sea, and changing its mind costs the trip). With room and more calls to come it waits where it is; full, or nearly full with the next a long way off, it goes home.
+- **Choosing:** it goes for the little boat worth most to it: its people, over the time to get there and take them aboard. In the Rally it prefers its own side of the channel, and passes over one another of the game's boats is plainly nearer. In the Service it claims the one it's going for, leaves alone any another crew has claimed, never gives up on anyone however far, and keeps to the one it chose unless another is much better (they're all over the sea, and changing its mind costs the trip). With no one to go for and more calls to come it waits where it is; when everyone's been found, it goes home.
 - **Finding the way:** it goes straight where the water's clear. Where an islet or a headland is in the way, it follows a route found over a 4 m grid of open water (the water round each buoy is closed on that grid, so a line of buoys is gone round, not through). It bends its way round a buoy, or a little boat it isn't going for, and only into clear water. If it's really getting nowhere (pinned against something, whatever its engine is doing), it backs off and tries again.
 - **Coming alongside:** it slows as it nears and passes with the little boat a beam's width off its side (in the Service, on the sheltered side when the swell gives a choice), then stops while the people come aboard.
-- **Heading home:** it makes for the harbour when nothing's left for it (in the Rally, when nothing's worth going for or the last call won't wait; in the Service, when it's full), and eases on to its berth (the Service's along the pier, landing its people on the way in).
+- **Heading home:** it makes for the harbour when nothing's left for it (in the Rally, when nothing's worth going for or the last call won't wait; in the Service, when everyone's been found), and eases on to its berth (the Service's along the pier, landing its people on the way in).
 
 The level sets how quick they are:
 - **easy:** four-fifths of your speed;
@@ -244,13 +248,13 @@ The sea:
 | | |
 |---|---|
 | `client/rescue-coast/coast.ts` | the coast from a seed (the Rally's or the Service's): the shore field, ground, islets, boulders, lighthouses, town, pier, station, buoys, the little boats and their people, the Service's calls |
-| `client/rescue-coast/race.ts` | the rules: steering, the shore and other hulls, coming alongside, the line and the climb, the game's boats (flow fields over the water), the last call, the places; the Service's calls, room aboard, landing, the search area |
+| `client/rescue-coast/race.ts` | the rules: steering, the shore and other hulls, coming alongside, the line and the climb, the game's boats (flow fields over the water), the last call, the places; the Service's calls, landing, the search area |
 | `client/rescue-coast/weather.ts` | the seven weathers, blending one into another, the Service's days |
 | `client/rescue-coast/waves.ts` | the swell (CPU and GLSL) |
 | `client/rescue-coast/shapes.ts`, `models.ts` | making meshes; the lifeboat, people, little boats, buoys, boulders, lighthouses, cottages, station, banner, gulls |
 | `client/rescue-coast/world.ts` | the coast made drawable, in pieces along it |
 | `client/rescue-coast/render.ts`, `fx.ts` | the drawing; wakes, spray, the line, the rings |
-| `client/rescue-coast/joystick.ts`, `sound.ts`, `main.ts` | the stick; the sounds; the page |
+| `client/rescue-coast/joystick.ts`, `sound.ts`, `main.ts` | the stick (on your boat, or in a corner); the sounds; the page |
 
 **Tests:**
 - The coast and the rules, without a page: `node cells/lab/devtools/rescue-coast.test.mjs`.
@@ -260,11 +264,11 @@ The sea:
   - Alongside and slow claims; fast or far doesn't; everyone climbs aboard and is counted once; drive off and the rest wait.
   - Whole races steered by the game finish with no hull inside the shore and the places by Lily's rule.
   - The Service's coast: its pier inside the mouth, the station by it, the crews moored along the pier in open water; every little boat reachable from there; the lighthouse on the harbour's headland; open sea out to the chart's edge past it, the swell bigger well out and calm in the harbour; no route past the edge of the search area; calls in all three rings, three waiting at the start, the further ones later on average, the bigger groups out at sea.
-  - The Service's rules: room for six (one more climbs aboard, the rest wait, no line goes over when full); no one steps ashore out on the water, and in the harbour they do, one at a time, counted safe; a little boat whose call hasn't come isn't taken aboard even alongside, its call waits while a lifeboat is right there and comes in once it's gone. People come across sooner in the lee of the hull than on the weather side, and sooner in sheltered water than in the open, and always come across in the end. Nearer, you take one over and the crew that had it says so.
+  - The Service's rules: however many are aboard already, everyone waiting climbs aboard; no one steps ashore out on the water, and in the harbour they do, one at a time, counted safe; a little boat whose call hasn't come isn't taken aboard even alongside, its call waits while a lifeboat is right there and comes in once it's gone. People come across sooner in the lee of the hull than on the weather side, and sooner in sheltered water than in the open, and always come across in the end. Nearer, you take one over and the crew that had it says so.
   - The weather: a day starts in the weather chosen and changes; different seeds, different days; half way through a change it's half way; the sea the race reads is the weather drawn; the night stays night or dawns.
-  - Whole days steered by the game (two levels; and in a storm): everyone ashore and every lifeboat in, in four to seven minutes; no hull inside the shore; never more than six aboard; ashore only in the harbour; the calls at their times; no two crews after one little boat; on most days crews land their people and go back out for more.
+  - Whole days steered by the game (two levels; and in a storm): everyone ashore and every lifeboat in, in three to six minutes; no hull inside the shore; ashore only in the harbour; no crew heading home while someone's left waiting for it; the calls at their times; no two crews after one little boat.
   - The same seed gives the same race, and the same day at sea.
-- In a browser, by hand: `node cells/lab/devtools/rescue-coast-smoke.mjs` (the line-up and the tagline, Play into the Service on its own coast, moored in the harbour with the first calls in, the fleet's count and room aboard, the Rally from its own button on its own coast, the stick up, right, let go, the keys, the left-handed corner, both ends).
+- In a browser, by hand: `node cells/lab/devtools/rescue-coast-smoke.mjs` (the line-up and the tagline, Play into the Service on its own coast, moored in the harbour with the first calls in, the fleet's count, the Rally from its own button on its own coast; steering from the boat: no stick drawn, a touch on the sea elsewhere does nothing, take hold of the boat and drag ahead, to the right, let go, the faint ring while held; the keys; the stick in either corner when asked; both ends).
 - The pictures: `node cells/lab/views.mjs rescue-coast`.
 
 **Addresses:**
@@ -280,7 +284,7 @@ The sea:
 - `?near=n` (or `near=any`) a little boat and the lifeboat coming for it;
 - `?study` a close look at your lifeboat;
 - `?zoom=`;
-- `?hand=left`;
+- `?hand=boat|left|right` where you steer from (your boat unless asked; a choice in Settings is kept);
 - `?weather=sunny|calm|windy|stormy|foggy|night|sunset` (the Service's day starts in it);
 - `?preview` small and quiet.
 

@@ -90,7 +90,6 @@
     .stat.bump { transform: scale(1.15); }
     .stat .ic .dot { width: 14px; height: 14px; border-radius: 50%; box-shadow: 0 0 0 2px #fff; }
     .stat.hurry { background: rgba(200, 40, 20, .75); animation: throb .6s ease-in-out infinite alternate; }
-    .stat.full { background: rgba(230, 140, 10, .85); }
     @keyframes throb { to { transform: scale(1.07); } }
     .lifebuoy { width: 22px; height: 22px; border-radius: 50%; background: repeating-conic-gradient(#f4561c 0 45deg, #fff 0 90deg); -webkit-mask: radial-gradient(circle, transparent 5px, #000 6px); mask: radial-gradient(circle, transparent 5px, #000 6px); }
     #mapbox { position: fixed; right: max(10px, env(safe-area-inset-right)); top: max(10px, env(safe-area-inset-top)); flex-direction: column; align-items: flex-end; gap: 6px; z-index: 3; pointer-events: none; }
@@ -135,9 +134,15 @@
     #stick .d { bottom: 15px; left: 59px; transform: rotate(45deg); opacity: .55 !important; }
     #stick .knob { position: absolute; left: 36px; top: 36px; width: 60px; height: 60px; border-radius: 50%; background: radial-gradient(circle at 35% 30%, #fff, #d9e2ee); box-shadow: 0 4px 10px rgba(0, 0, 0, .35), inset 0 -3px 0 rgba(20, 40, 80, .12); transition: transform .12s ease-out; }
     #stick.held .knob { transition: none; }
+    /* (steering from the boat: no stick in the corner; a faint ring where your finger took hold, and the horn in the corner) */
+    body.steer-boat #stick { display: none !important; }
+    #ghost { position: fixed; left: -48px; top: -48px; width: 96px; height: 96px; border-radius: 50%; border: 3px solid rgba(255, 255, 255, .5); box-shadow: 0 0 0 1px rgba(10, 30, 70, .25); pointer-events: none; display: none; z-index: 2; }
+    #ghost.on { display: block; }
+    #ghost i { position: absolute; left: 31px; top: 31px; width: 28px; height: 28px; border-radius: 50%; background: rgba(255, 255, 255, .6); box-shadow: 0 2px 6px rgba(0, 0, 0, .25); }
     #horn { position: fixed; bottom: calc(max(14px, env(safe-area-inset-bottom)) + 30px); right: calc(max(12px, env(safe-area-inset-right)) + 172px); width: 56px; height: 56px; border-radius: 50%; display: none; align-items: center; justify-content: center; z-index: 2; }
     body:not(.hand-right) #horn { right: auto; left: calc(max(12px, env(safe-area-inset-left)) + 172px); }
     body.racing #horn { display: flex; }
+    body.steer-boat #horn { right: max(16px, calc(env(safe-area-inset-right) + 12px)); left: auto; }
     #horn svg { width: 30px; height: 30px; }
     #horn:active { transform: scale(.92); }
 
@@ -180,7 +185,7 @@
     #fleet:empty { display: none; }
 
     body.nogl::after { content: 'This needs WebGL2, which this browser doesn\2019 t have.'; position: fixed; inset: 40% 20px auto; text-align: center; }
-    body.preview #labnav, body.preview #skip, body.preview .title-only, body.preview .race-only, body.preview .podium-only, body.preview #big, body.preview #bubble, body.preview #arrows, body.preview #bar, body.preview #stick, body.preview #horn, body.preview .panel, body.preview #finishflag { display: none !important; }
+    body.preview #labnav, body.preview #skip, body.preview .title-only, body.preview .race-only, body.preview .podium-only, body.preview #big, body.preview #bubble, body.preview #arrows, body.preview #bar, body.preview #stick, body.preview #ghost, body.preview #horn, body.preview .panel, body.preview #finishflag { display: none !important; }
   </style>
 </head>
 <body class="title">
@@ -218,7 +223,7 @@
   <section id="settings-panel" class="panel">
     <h2>Settings</h2>
     <div class="set"><span>How good are the other crews?</span><div class="seg" id="levels"><button data-level="easy">easy<small>slower, kind</small></button><button data-level="medium">medium<small>a fair race</small></button><button data-level="hard">hard<small>fast, sharp</small></button></div></div>
-    <div class="set"><span>The steering stick</span><div class="seg" id="hands"><button data-hand="left">on the left</button><button data-hand="right">on the right</button></div></div>
+    <div class="set"><span>Steering</span><div class="seg" id="hands"><button data-hand="boat">your boat</button><button data-hand="left">stick, left</button><button data-hand="right">stick, right</button></div></div>
     <div class="set"><div class="line"><span>Sound</span><button id="sound">on</button></div></div>
     <div class="set"><div class="line"><span>The coast: <b id="seedname"></b></span><button id="newsea">a new coast</button></div></div>
     <div class="set"><div class="line"><span>How it’s made</span><a href="{{readme}}">notes</a></div></div>
@@ -239,6 +244,7 @@
   <button id="skip" class="pill">Wait in the harbour ⏩</button>
   <div id="big"></div>
   <div id="stick"></div>
+  <div id="ghost"></div>
   <button id="horn" class="glass" aria-label="horn"><svg viewBox="0 0 32 32"><path d="M4 13 h6 l12 -7 v20 l-12 -7 h-6 z" fill="#fff"/><path d="M25 10 q4 6 0 12" stroke="#fff" stroke-width="2.5" fill="none" stroke-linecap="round"/></svg></button>
   <div id="pausecard"><div>
     <h2>Paused</h2>

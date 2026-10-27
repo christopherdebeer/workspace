@@ -1,8 +1,9 @@
 // Rescue · Rocky Coast in a browser, played by hand (node cells/lab/devtools/rescue-coast-smoke.mjs): the title and its panels
-// (a boat, a level, the weather), Play (the Rescue Service: moored at the pier in the harbour, the first calls in, room
-// for six) and the count, the Rally from its own button (on its own coast), the joystick held up (the boat goes ahead),
-// held right (it turns to the screen's right), let go (it eases to a stop), the arrow keys, pause, the page saying what it
-// should, no errors; the end's places.
+// (a boat, a level, the weather), Play (the Rescue Service: moored at the pier in the harbour, the first calls in) and
+// the count, the Rally from its own button (on its own coast), steering from the boat (take hold of it and drag ahead:
+// it goes ahead; to the right: it turns to the screen's right; let go: it eases to a stop; a touch on the sea elsewhere
+// does nothing), the arrow keys, the stick in either corner when asked, pause, the page saying what it should, no
+// errors; the end's places.
 process.env.EXPERIMENT = 'rescue-coast'; process.env.READY = '__rescue';
 const { withWood } = await import('./harness.mjs');
 let n = 0, bad = 0;
@@ -38,29 +39,34 @@ await withWood(async (lab) => {
   ok('moored in the harbour, the first calls in', s.boats.every((b) => b.z > 860) && s.called === 3, [s.boats.map((b) => b.z.toFixed(0)), s.called]);
   s = await until(p, (x) => x.phase === 'racing');
   ok('and the race is on', s.phase === 'racing', [s.phase, s.frameMs]);
-  // (the joystick: where it is, and that it stays put out of the way, in the bottom corner)
-  const base = await p.locator('#stick .base').boundingBox(), vw = await p.evaluate(() => [innerWidth, innerHeight]);
-  ok('the joystick in the bottom-right corner (the default)', base && base.x > vw[0] * 0.55 && base.y > vw[1] * 0.7, base);
-  const cx = base.x + base.width / 2, cy = base.y + base.height / 2;
-  const b0 = (await state(p)).boats[2];
-  await p.mouse.move(cx, cy); await p.mouse.down(); await p.mouse.move(cx, cy - 60, { steps: 4 });
+  // (steering from your boat: no stick in the corner; a touch on the sea away from it does nothing; take hold of it and drag)
+  const vw = await p.evaluate(() => [innerWidth, innerHeight]);
+  ok('steering from your boat (the default): no stick in the corner', s.steer === 'boat' && !(await p.isVisible('#stick .base')), [s.steer]);
+  s = await until(p, (x) => !!x.grab, 30000);
+  const [gx, gy] = s.grab, b0 = s.boats[2];
+  const away = [gx < vw[0] / 2 ? vw[0] - 40 : 40, gy - 150];
+  await p.mouse.move(away[0], away[1]); await p.mouse.down(); await p.mouse.move(away[0], away[1] - 60, { steps: 4 });
+  await p.waitForTimeout(3000); s = await state(p); await p.mouse.up();
+  ok('a touch on the sea away from your boat does nothing', !s.stick.held && Math.hypot(s.boats[2].x - b0.x, s.boats[2].z - b0.z) < 2, [s.stick, s.boats[2], b0]);
+  await p.mouse.move(gx, gy); await p.mouse.down(); await p.mouse.move(gx, gy - 60, { steps: 4 });
   const ahead = (x) => (x.boats[2].x - b0.x) * Math.sin(b0.h) + (x.boats[2].z - b0.z) * Math.cos(b0.h);
   s = await until(p, (x) => ahead(x) > 5);
-  ok('stick up: under way, ahead', s.stick.held && s.boats[2].v > 2 && ahead(s) > 5, [s.stick, s.boats[2], b0]);
+  ok('take hold of your boat and drag ahead: under way, ahead', s.stick.held && s.boats[2].v > 2 && ahead(s) > 5, [s.stick, s.boats[2], b0]);
+  ok('a faint ring where you took hold', await p.isVisible('#ghost'));
   const h0 = s.boats[2].h;
-  await p.mouse.move(cx + 60, cy - 20, { steps: 4 });
+  await p.mouse.move(gx + 60, gy - 20, { steps: 4 });
   s = await until(p, (x) => x.boats[2].h < h0 - 0.3);
-  ok('stick right: it turns to the screen\'s right (its heading falls)', s.boats[2].h < h0 - 0.3, [h0, s.boats[2].h]);
+  ok('drag to the right: it turns to the screen\'s right (its heading falls)', s.boats[2].h < h0 - 0.3, [h0, s.boats[2].h]);
   await p.mouse.up();
   s = await until(p, (x) => !x.stick.held && Math.abs(x.boats[2].v) < 1);
-  ok('let go: the knob springs home and the boat eases to a stop', !s.stick.held && s.stick.x === 0 && Math.abs(s.boats[2].v) < 1, [s.stick, s.boats[2].v]);
+  ok('let go: the boat eases to a stop', !s.stick.held && s.stick.x === 0 && Math.abs(s.boats[2].v) < 1 && !(await p.isVisible('#ghost')), [s.stick, s.boats[2].v]);
   const k0 = s.boats[2];
   await p.keyboard.down('ArrowUp');
   s = await until(p, (x) => Math.hypot(x.boats[2].x - k0.x, x.boats[2].z - k0.z) > 4);
   await p.keyboard.up('ArrowUp');
   ok('the up arrow: away again', Math.hypot(s.boats[2].x - k0.x, s.boats[2].z - k0.z) > 4, [k0, s.boats[2]]);
-  const words = await p.evaluate(() => ({ places: document.querySelectorAll('#ladder div').length, me: !!document.querySelector('#ladder div.me'), count: document.getElementById('count').textContent, aboard: document.getElementById('place').textContent, map: document.getElementById('map').getBoundingClientRect().width > 80 }));
-  ok('the five crews under the map, yours marked; everyone rescued so far of everyone called; aboard of six; the map', words.places === 5 && words.me && /^\d+\/\d+$/.test(words.count) && /^\d\/6$/.test(words.aboard) && words.map, words);
+  const words = await p.evaluate(() => ({ places: document.querySelectorAll('#ladder div').length, me: !!document.querySelector('#ladder div.me'), count: document.getElementById('count').textContent, crew: document.getElementById('place').textContent, map: document.getElementById('map').getBoundingClientRect().width > 80 }));
+  ok('the five crews under the map, yours marked; everyone rescued so far of everyone called; your crew\'s count; the map', words.places === 5 && words.me && /^\d+\/\d+$/.test(words.count) && /^\d+$/.test(words.crew) && words.map, words);
   await p.click('#pause');
   s = await until(p, (x) => x.paused, 30000);
   const t0 = s.t; await p.waitForTimeout(4000); s = await state(p);
@@ -70,11 +76,22 @@ await withWood(async (lab) => {
   ok('and goes on', !s.paused && s.t > t0);
   ok('no errors', !errors.length, errors.slice(0, 3));
   await p.close();
-  // (left-handed: the stick in the other corner)
+  // (the stick in a corner, when asked: the right, and for the left-handed the left; held up, the boat goes ahead)
+  const q1 = await lab.open('seed=2&hand=right&t=1');
+  await q1.waitForTimeout(1500);
+  const base = await q1.locator('#stick .base').boundingBox();
+  ok('hand=right: the stick in the bottom-right corner', base && base.x > vw[0] * 0.55 && base.y > vw[1] * 0.7, base);
+  let r1 = await until(q1, (x) => x.phase === 'racing');
+  const c0 = r1.boats[r1.mine], cx = base.x + base.width / 2, cy = base.y + base.height / 2;
+  await q1.mouse.move(cx, cy); await q1.mouse.down(); await q1.mouse.move(cx, cy - 60, { steps: 4 });
+  r1 = await until(q1, (x) => Math.hypot(x.boats[x.mine].x - c0.x, x.boats[x.mine].z - c0.z) > 5);
+  await q1.mouse.up();
+  ok('the stick held up: under way', Math.hypot(r1.boats[r1.mine].x - c0.x, r1.boats[r1.mine].z - c0.z) > 5, [c0, r1.boats[r1.mine]]);
+  await q1.close();
   const q0 = await lab.open('seed=2&hand=left&t=5&auto&boat=0');
   await q0.waitForTimeout(1500);
   const rb = await q0.locator('#stick .base').boundingBox();
-  ok('hand=left: the joystick in the bottom-left corner', rb && rb.x < vw[0] * 0.4, rb);
+  ok('hand=left: the stick in the bottom-left corner', rb && rb.x < vw[0] * 0.4, rb);
   // (the weather: picked on the line-up)
   const w0 = await lab.open('seed=2');
   await w0.click('#open-weather');

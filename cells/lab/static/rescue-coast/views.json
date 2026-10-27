@@ -52,8 +52,25 @@
    {
     "name": "racing",
     "title": "Along the coast",
-    "caption": "the first calls are just outside the harbour; everyone rescued so far (of everyone whose call has come in), how many are aboard your boat of the six it holds, the time with the weather as it is now; the map, a little boat another crew is going for ringed in their colour; the five crews’ counts under it",
+    "caption": "the first calls are just outside the harbour; everyone rescued so far (of everyone whose call has come in), your own crew’s count, the time with the weather as it is now; the map, a little boat another crew is going for ringed in their colour; the five crews’ counts under it",
     "file": "v-racing.jpg"
+   }
+  ]
+ },
+ {
+  "group": "Steering",
+  "views": [
+   {
+    "name": "steer",
+    "title": "Your boat is the stick",
+    "caption": "until you’ve steered, a ring round your boat says where: put your finger on it and drag",
+    "file": "v-steer.jpg"
+   },
+   {
+    "name": "steer-drag",
+    "title": "Take hold and drag",
+    "caption": "drag ahead to go, to one side to turn, back to slow down; a faint ring where you took hold; let go and she eases to a stop",
+    "file": "v-steer-drag.jpg"
    }
   ]
  },
@@ -103,8 +120,8 @@
    },
    {
     "name": "deck",
-    "title": "Full up",
-    "caption": "six aboard and no more room: the deck full, the pill amber; time to take them home",
+    "title": "A full deck",
+    "caption": "everyone found out there, and no one left waiting: home with all seven of them",
     "file": "v-deck.jpg"
    }
   ]
@@ -115,7 +132,7 @@
    {
     "name": "landing",
     "title": "Safe ashore",
-    "caption": "in through the mouth in the last of the light: they step ashore one by one, to the crowd waving on the pier by the station; then back out, if anyone’s still waiting",
+    "caption": "in through the mouth as night comes down: they step ashore one by one, to the crowd waving on the pier by the station",
     "file": "v-landing.jpg"
    },
    {
