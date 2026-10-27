@@ -19,8 +19,8 @@ Made by `node cells/lab/views.mjs rescue-coast` from `client/rescue-coast/views.
 
 ## Steering
 
-![Your boat is the stick: until you’ve steered, a ring round your boat says where: put your finger on it and drag](v-steer.jpg)
-![Take hold and drag: drag ahead to go, to one side to turn, back to slow down; a faint ring where you took hold; let go and she eases to a stop](v-steer-drag.jpg)
+![Touch anywhere and drag: until you’ve steered, a faint ring low down, its dot drifting up, says how: put your finger anywhere on the sea and drag up](v-steer.jpg)
+![Wherever you touch is the stick: where your finger goes down is the middle of the stick: drag ahead to go, to one side to turn, back to slow down; a faint ring where you put it; let go and she eases to a stop](v-steer-drag.jpg)
 
 ## Coming alongside
 

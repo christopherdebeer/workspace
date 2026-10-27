@@ -14,7 +14,7 @@
  *
  * Addresses: `?seed=` a coast; `?level=easy|medium|hard`; `?boat=0..4`; `?auto` (every boat the game's); `?t=40` that
  * far into the race; `?still` time held; `?view=podium`; `?near=n` little boat n and the boat coming for it;
- * `?mode=rally` the Rally; `?at=` the title's clock (seconds round its loop); `?weather=sunny|calm|windy|stormy|foggy|night|sunset`; `?study` a close look at your boat; `?zoom=`; `?hand=boat|left|right` where you steer from (your boat unless asked, or a stick in a bottom corner); `?preview` small and quiet.
+ * `?mode=rally` the Rally; `?at=` the title's clock (seconds round its loop); `?weather=sunny|calm|windy|stormy|foggy|night|sunset`; `?study` a close look at your boat; `?zoom=`; `?hand=touch|left|right` where you steer from (wherever you touch unless asked, or a stick in a bottom corner); `?preview` small and quiet.
  */
 import { CLEAR, GATE_HALF, GATE_Z, START_Z, groundAt, makeCoast, seaAt, seaward, shoreAt, type Coast, type CoastKind } from './coast';
 import { BOATS, CLIMB, HALF_BEAM, HALF_LEN, INSIDE, LEVELS, LINE, VMAX, everyoneAboard, local, newRace, runFor, standings, start, step, world, type Level, type Mode, type Race, type Rescue } from './race';
@@ -30,7 +30,7 @@ import { MiniMap, clock } from './hud';
 
 const params = new URLSearchParams(location.search);
 const preview = params.has('preview'), still = params.has('still') || params.has('ref'), study = params.has('study');
-const auto = params.has('auto') || preview;
+let auto = params.has('auto') || preview;
 const zoom = Number(params.get('zoom') ?? 1) || 1;
 const $ = (id: string) => document.getElementById(id) as HTMLElement;
 if (preview || study) document.body.classList.add('preview');
@@ -92,31 +92,23 @@ const lists: Record<string, Instances> = {};
 for (const k of ['boat', 'crew', 'kid0', 'kid1', 'kid2', 'row', 'kayak', 'sail', 'paddle', 'yacht', 'fishing', 'buoy-red', 'buoy-green', 'buoy-yellow', 'gull']) lists[k] = new Instances(64);
 const draws: Draw[] = Object.entries(lists).map(([kind, list]) => ({ kind, list }));
 const stick = new Joystick($('stick'), $('ghost'));
-/** where you steer from: your boat (a touch that starts on it takes hold of it), or a stick in a bottom corner; and whether
- * you've steered yet this time out (until you have, a ring round your boat says "here") */
-let steer: Steer = 'boat', steered = false;
+/** where you steer from: wherever you touch (that's the stick's middle while your finger's down), or a stick in a bottom
+ * corner; and whether you've steered yet this time out (until you have, a faint ring low down shows how) */
+let steer: Steer = 'touch', steered = false;
 function setSteer(s: Steer, keep = true) {
   steer = s;
-  document.body.classList.toggle('steer-boat', s === 'boat'); document.body.classList.toggle('hand-right', s !== 'left');
+  document.body.classList.toggle('steer-touch', s === 'touch'); document.body.classList.toggle('hand-right', s !== 'left');
   if (keep) store.set('lily-rescue-boats-steer', s);
 }
-stick.fromBoat(canvas, (x, y) => steer === 'boat' && ui === 'race' && !paused && !auto && onMyBoat(x, y));
-/** your lifeboat on the screen as drawn just now (CSS px): its middle, and its length */
-function myBoatOnScreen(): [number, number, number] | null {
-  const b = race.boats[mine], p = poses[b.id];
-  if (!p) return null;
-  const at = (along: number) => {
-    const [X, Y, Z] = onBoat(p, 0, 1.4, along);
-    const cx = vp[0] * X + vp[4] * Y + vp[8] * Z + vp[12], cy = vp[1] * X + vp[5] * Y + vp[9] * Z + vp[13], cw = vp[3] * X + vp[7] * Y + vp[11] * Z + vp[15];
-    return cw > 0 ? [(cx / cw * 0.5 + 0.5) * innerWidth, (0.5 - cy / cw * 0.5) * innerHeight] : null;
-  };
-  const a = at(-HALF_LEN), c = at(HALF_LEN);
-  return a && c ? [(a[0] + c[0]) / 2, (a[1] + c[1]) / 2, Math.hypot(c[0] - a[0], c[1] - a[1])] : null;
-}
-/** whether a point on the screen is on your lifeboat: generously, for a child's finger */
-function onMyBoat(px: number, py: number) {
-  const m = myBoatOnScreen();
-  return !!m && Math.hypot(px - m[0], py - m[1]) < Math.max(64, m[2] * 0.6);
+stick.anywhere(canvas, () => {
+  if (steer !== 'touch' || ui !== 'race' || paused || preview) return false;
+  // (the game steering everyone: a touch takes your boat back, unless the picture's held still)
+  if (auto) { if (still) return false; takeOver(); }
+  return true;
+});
+/** the game was steering every boat (`?auto`): yours is yours again */
+function takeOver() {
+  auto = false; race.auto = false; race.boats[mine].ai = null; steered = true;
 }
 const minimap = new MiniMap($('map') as HTMLCanvasElement);
 
@@ -406,11 +398,8 @@ function people(t: number, dt: number) {
       if (d < 55) { const col = BOATS[mine].colour; marks.put(FX.RING, k.x, 0, k.z, 4.4, 0, 0, 0, col[0], col[1], col[2], Math.min(1, (55 - d) / 20) * 0.85); }
     }
   });
-  // (steering from your boat, until you have: a ring round it, pulsing, in its colour, says "here")
-  if (ui === 'race' && !auto && steer === 'boat' && !steered && !stick.held && race.boats[mine].finished === null) {
-    const b = race.boats[mine], col = BOATS[mine].colour;
-    marks.put(FX.RING, b.x, 0, b.z, 7.5 + Math.sin(t * 5) * 0.6, 0, 0, 0, col[0], col[1], col[2], 0.6 + 0.3 * Math.sin(t * 5));
-  }
+  // (steering from wherever you touch, until you have: the faint ring low down, its dot drifting up, says how)
+  stick.hint(ui === 'race' && !auto && !paused && steer === 'touch' && !steered && !stick.held && race.boats[mine].finished === null);
   for (const [i] of nearHoles) {
     const k = race.crafts[i];
     holes.set([k.x, k.z, k.yaw, k.craft.kind === 'sail' ? 1.7 : 1.52], hc * 4); hc++;
@@ -645,13 +634,13 @@ function hud(t: number) {
   else if (!auto && me.finished === null) {
     const slow = LEVELS[race.level].slow;
     if (race.phase === 'countdown') text = 'Get ready…';
-    else if (race.t < 5 || (!steered && race.t < 15)) text = steer === 'boat' ? 'Put your finger on your boat and drag to go!' : 'Push the stick to go!';
+    else if (race.t < 5 || (!steered && race.t < 15)) text = steer === 'touch' ? 'Put your finger on the sea and drag up to go!' : 'Push the stick to go!';
     else if (k && k.stage === 'line') text = 'Line away!';
     else if (k && !service) text = 'Climbing aboard — hold still!';
     else if (k) text = Math.abs(me.v) > slow * 0.6 || Math.abs(me.turn) > 0.25 ? 'Ease off — hold her steady' : k.steady > 0.75 ? 'Nice and steady — climbing aboard!' : k.lee < 0.35 ? 'Bumpy here! Turn side-on to the waves to shelter them' : 'Hold her steady…';
     else if (service && inside && me.aboard.length && Math.abs(me.v) >= 7) text = 'Slow down so they can step ashore';
     else if (service && inside && me.aboard.length) text = 'Home! Stepping ashore…';
-    else if (race.crafts.some((c) => c.called && c.stage === 'wait' && c.left > 0 && Math.hypot(c.x - me.x, c.z - me.z) < 11 && Math.abs(me.v) > slow)) text = steer === 'boat' ? 'Slow down — let go of your boat!' : 'Slow down — let go of the stick!';
+    else if (race.crafts.some((c) => c.called && c.stage === 'wait' && c.left > 0 && Math.hypot(c.x - me.x, c.z - me.z) < 11 && Math.abs(me.v) > slow)) text = steer === 'touch' ? 'Slow down — let go!' : 'Slow down — let go of the stick!';
     else if (!service && race.lastCall) text = 'Last call! Head for the harbour!';
     else if (service && everyone && me.aboard.length) text = 'Everyone’s aboard! Bring them home to the harbour';
     else if (service && everyone) text = 'Everyone’s safe! Back to the harbour';
@@ -800,7 +789,7 @@ function callText(k: Rescue) {
 }
 function events() {
   for (const e of race.events.splice(0)) {
-    if (e.kind === 'go') { say('Go!'); sound.horn(); if (mode === 'service' && !auto) bubble(`📻 Coastguard: Launch! People need help outside the harbour — ${steer === 'boat' ? 'drag your boat' : 'push the stick'} to go!`, 4.5); }
+    if (e.kind === 'go') { say('Go!'); sound.horn(); if (mode === 'service' && !auto) bubble(`📻 Coastguard: Launch! People need help outside the harbour — ${steer === 'touch' ? 'drag up on the sea' : 'push the stick'} to go!`, 4.5); }
     else if (e.kind === 'call') { sound.radio(); if (!auto && race.boats[mine].finished === null) bubble(callText(race.crafts[e.craft]), 3.6); }
     else if (e.kind === 'edge') { if (e.boat === mine && !auto) bubble('📻 Coastguard: That’s the edge of the search area — turn back!', 3); }
     else if (e.kind === 'ashore') {
@@ -884,7 +873,7 @@ function frame(now: number) {
   if (snapWanted) { snapWanted = false; try { snapUrl = canvas.toDataURL('image/jpeg', 0.82); ($('snap') as HTMLImageElement).src = snapUrl; } catch { /* (no picture, then) */ } }
   (window as unknown as { __rescue: unknown }).__rescue = {
     variant: 'coast', mode, coast: coast.kind, ui, paused, phase: race.phase, seed, fleet: race.boats.reduce((n, b) => n + b.rescued, 0), ashore: race.ashore.length, called: race.crafts.filter((k) => k.called).length, weather: weather.name, name: coast.name, mine, level, t: race.t, auto, dpr, frameMs: ema,
-    stick: { x: stick.x, y: stick.y, held: stick.held }, steer, grab: ui === 'race' ? myBoatOnScreen() : null,
+    stick: { x: stick.x, y: stick.y, held: stick.held }, steer,
     boats: race.boats.map((b) => ({ x: b.x, z: b.z, h: b.h, v: b.v, rescued: b.rescued, finished: b.finished, home: b.home })),
     boarding: race.crafts.filter((k) => k.stage === 'line' || k.stage === 'climb').map((k) => ({ craft: k.craft.id, by: k.by, stage: k.stage })),
   };
@@ -948,7 +937,7 @@ function refScene(kind: string) {
 setWeather((params.get('weather') ?? 'sunny') as WeatherName);
 {
   const h = params.get('hand') ?? store.get('lily-rescue-boats-steer');
-  setSteer(h === 'left' || h === 'right' ? h : 'boat', false);
+  setSteer(h === 'left' || h === 'right' ? h : 'touch', false);
 }
 newCoast(seed);
 title();

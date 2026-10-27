@@ -1,9 +1,9 @@
 // Rescue · Rocky Coast in a browser, played by hand (node cells/lab/devtools/rescue-coast-smoke.mjs): the title and its panels
 // (a boat, a level, the weather), Play (the Rescue Service: moored at the pier in the harbour, the first calls in) and
-// the count, the Rally from its own button (on its own coast), steering from the boat (take hold of it and drag ahead:
-// it goes ahead; to the right: it turns to the screen's right; let go: it eases to a stop; a touch on the sea elsewhere
-// does nothing), the arrow keys, the stick in either corner when asked, pause, the page saying what it should, no
-// errors; the end's places.
+// the count, the Rally from its own button (on its own coast), steering from wherever you touch (a ring low down until
+// you have; a touch on the sea away from the boat, dragged up: it goes ahead; to the right: it turns to the screen's
+// right; let go: it eases to a stop), with the game steering a touch takes your boat back, the arrow keys, the stick in
+// either corner when asked, pause, the page saying what it should, no errors; the end's places.
 process.env.EXPERIMENT = 'rescue-coast'; process.env.READY = '__rescue';
 const { withWood } = await import('./harness.mjs');
 let n = 0, bad = 0;
@@ -39,20 +39,18 @@ await withWood(async (lab) => {
   ok('moored in the harbour, the first calls in', s.boats.every((b) => b.z > 860) && s.called === 3, [s.boats.map((b) => b.z.toFixed(0)), s.called]);
   s = await until(p, (x) => x.phase === 'racing');
   ok('and the race is on', s.phase === 'racing', [s.phase, s.frameMs]);
-  // (steering from your boat: no stick in the corner; a touch on the sea away from it does nothing; take hold of it and drag)
+  // (steering from wherever you touch: no stick in the corner; until you've steered, a ring low down says how; a touch
+  // anywhere on the sea is the stick's middle while it's down)
   const vw = await p.evaluate(() => [innerWidth, innerHeight]);
-  ok('steering from your boat (the default): no stick in the corner', s.steer === 'boat' && !(await p.isVisible('#stick .base')), [s.steer]);
-  s = await until(p, (x) => !!x.grab, 30000);
-  const [gx, gy] = s.grab, b0 = s.boats[2];
-  const away = [gx < vw[0] / 2 ? vw[0] - 40 : 40, gy - 150];
-  await p.mouse.move(away[0], away[1]); await p.mouse.down(); await p.mouse.move(away[0], away[1] - 60, { steps: 4 });
-  await p.waitForTimeout(3000); s = await state(p); await p.mouse.up();
-  ok('a touch on the sea away from your boat does nothing', !s.stick.held && Math.hypot(s.boats[2].x - b0.x, s.boats[2].z - b0.z) < 2, [s.stick, s.boats[2], b0]);
+  ok('steering from anywhere (the default): no stick in the corner', s.steer === 'touch' && !(await p.isVisible('#stick .base')), [s.steer]);
+  ok('until you\'ve steered, a ring low down shows how', await p.evaluate(() => document.getElementById('ghost').classList.contains('hint')) && await p.isVisible('#ghost'));
+  const b0 = s.boats[2], [gx, gy] = [Math.round(vw[0] * 0.3), Math.round(vw[1] * 0.62)];
   await p.mouse.move(gx, gy); await p.mouse.down(); await p.mouse.move(gx, gy - 60, { steps: 4 });
   const ahead = (x) => (x.boats[2].x - b0.x) * Math.sin(b0.h) + (x.boats[2].z - b0.z) * Math.cos(b0.h);
   s = await until(p, (x) => ahead(x) > 5);
-  ok('take hold of your boat and drag ahead: under way, ahead', s.stick.held && s.boats[2].v > 2 && ahead(s) > 5, [s.stick, s.boats[2], b0]);
-  ok('a faint ring where you took hold', await p.isVisible('#ghost'));
+  ok('a touch on the sea away from your boat, dragged up: under way, ahead', s.stick.held && s.boats[2].v > 2 && ahead(s) > 5, [s.stick, s.boats[2], b0]);
+  const ring = await p.evaluate(() => { const g = document.getElementById('ghost'); return { on: g.classList.contains('on'), hint: g.classList.contains('hint'), at: g.style.transform }; });
+  ok('a faint ring where you put your finger (the hint gone)', ring.on && !ring.hint && ring.at.includes(`${gx}px, ${gy}px`), ring);
   const h0 = s.boats[2].h;
   await p.mouse.move(gx + 60, gy - 20, { steps: 4 });
   s = await until(p, (x) => x.boats[2].h < h0 - 0.3);
@@ -76,6 +74,15 @@ await withWood(async (lab) => {
   ok('and goes on', !s.paused && s.t > t0);
   ok('no errors', !errors.length, errors.slice(0, 3));
   await p.close();
+  // (the game steering every boat: a touch takes yours back)
+  const qa = await lab.open('seed=2&auto&boat=1&t=4');
+  let ra = await until(qa, (x) => x.phase === 'racing' && x.t > 5);
+  const a0 = ra.boats[1];
+  await qa.mouse.move(vw[0] / 2, vw[1] * 0.7); await qa.mouse.down(); await qa.mouse.move(vw[0] / 2 + 64, vw[1] * 0.7, { steps: 4 });
+  ra = await until(qa, (x) => Math.abs(x.boats[1].h - a0.h) > 0.5, 60000);
+  await qa.mouse.up();
+  ok('?auto: a touch takes your boat back from the game (held hard right, it turns)', !ra.auto && Math.abs(ra.boats[1].h - a0.h) > 0.5, [ra.auto, a0.h, ra.boats[1].h]);
+  await qa.close();
   // (the stick in a corner, when asked: the right, and for the left-handed the left; held up, the boat goes ahead)
   const q1 = await lab.open('seed=2&hand=right&t=1');
   await q1.waitForTimeout(1500);

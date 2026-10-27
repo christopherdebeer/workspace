@@ -27,7 +27,7 @@ The title is the boards' title card: your lifeboat charging along under the ligh
 - **Weather:** seven tiles; the title behind changes as you pick. In the Service it's the weather the day starts in; the forecast on the title (☀️ → 🌅 → 🌙) says where it goes from there.
 - **Settings:**
   - how good the other crews are (easy, medium, hard);
-  - where you steer from: your boat, or a stick in the bottom-left or bottom-right corner (kept in this browser);
+  - where you steer from: anywhere you touch, or a stick in the bottom-left or bottom-right corner (kept in this browser);
   - sound;
   - a new coast;
   - these notes.
@@ -41,12 +41,12 @@ The title is the boards' title card: your lifeboat charging along under the ligh
 
 | | Touch | Keys |
 |---|---|---|
-| steer | put your finger on your boat and drag: ahead to go faster, to one side to turn, back to slow and back off (or the stick in a corner, if you've chosen it in Settings) | the arrow keys, or WASD |
+| steer | put your finger anywhere on the sea and drag: ahead to go faster, to one side to turn, back to slow and back off (or the stick in a corner, if you've chosen it in Settings) | the arrow keys, or WASD |
 | stop | let go | let go of the keys |
 | sound the horn | the horn, bottom-right (your crew wave) | |
 | pause | the button top-left | escape |
 
-- **Your boat is the stick.** There's no stick drawn: a touch that starts on your lifeboat takes hold of it (generously: anywhere near it will do), and dragging from there is a joystick with the boat as its knob. Drag ahead and it goes, to one side and it turns while going steadily on, back and it slows and backs off; let go and it eases to a stop. While your finger is down a faint ring shows where you took hold, and a dot where you've dragged to. A touch anywhere else on the sea does nothing, so a stray hand doesn't steer. Until you've steered, a ring pulses round your boat to say where.
+- **Wherever you touch is the stick.** There's no stick drawn: put your finger down anywhere on the sea and that spot is the middle of the stick for as long as your finger stays down. Drag ahead and the boat goes, to one side and it turns while going steadily on, back and it slows and backs off; let go and it eases to a stop. While your finger is down a faint ring shows where you put it, and a dot where you've dragged to. Until you've steered, the ring shows low down the screen with its dot drifting up, to say how. (With the game steering every boat, `?auto`, a touch takes yours back.)
 - **Or a stick in a corner**, if you'd rather (Settings, or `?hand=right` / `?hand=left`): it stays put, so your thumb never covers the sea ahead; the same stick, with its own knob.
 - **The camera** rides low and close behind your boat, as on the boards' gameplay panel: your lifeboat a third of the way across, the coast ahead on the horizon. It turns with the boat but smoothly, and rises over a cliff rather than look through it. Slowing for someone waiting nearby, it eases down and round a little toward them. When a little boat is alongside it cuts in low beside your hull to watch them climb aboard (the boards' close rescue), and eases back out when they're all across.
 
@@ -61,7 +61,7 @@ The title is the boards' title card: your lifeboat charging along under the ligh
 - **top-right:**
   - a round map turned to your heading, N going round its rim, showing the little boats still waiting (in their colours; in the Service, one another crew is going for has their colour round it), the other lifeboats and the harbour mouth;
   - under it, the five crews' counts (the Rally: the five places).
-- **a speech bubble:** what to do next ("Put your finger on your boat and drag to go!", "Slow down — let go of your boat!", "Nice and steady — climbing aboard!", "Listening for the next call…", "Everyone's aboard! Bring them home to the harbour", "Home! Stepping ashore…"; the Rally's "Last call! Head for the harbour!"), the coastguard on the radio ("📻 Coastguard: A paddleboarder, in trouble just outside the harbour!", "📻 Coastguard: Fog rolling in — watch for the lighthouses"), and the other crews ("Turtle: All yours, Puffin — we'll find someone else!").
+- **a speech bubble:** what to do next ("Put your finger on the sea and drag up to go!", "Slow down — let go!", "Nice and steady — climbing aboard!", "Listening for the next call…", "Everyone's aboard! Bring them home to the harbour", "Home! Stepping ashore…"; the Rally's "Last call! Head for the harbour!"), the coastguard on the radio ("📻 Coastguard: A paddleboarder, in trouble just outside the harbour!", "📻 Coastguard: Fog rolling in — watch for the lighthouses"), and the other crews ("Turtle: All yours, Puffin — we'll find someone else!").
 - **a lifebuoy and a bar** that fills while people come aboard.
 - **arrows** at the edge to the nearest little boats out of sight (in the Service, ones no other crew is going for), and to the harbour when it's time (in the Service: once everyone's aboard).
 - **the horn**, bottom-right (and the stick, if you've chosen one).
@@ -255,7 +255,7 @@ The sea:
 | `client/rescue-coast/shapes.ts`, `models.ts` | making meshes; the lifeboat, people, little boats, buoys, boulders, lighthouses, cottages, station, banner, gulls |
 | `client/rescue-coast/world.ts` | the coast made drawable, in pieces along it |
 | `client/rescue-coast/render.ts`, `fx.ts` | the drawing; wakes, spray, the line, the rings |
-| `client/rescue-coast/joystick.ts`, `sound.ts`, `main.ts` | the stick (on your boat, or in a corner); the sounds; the page |
+| `client/rescue-coast/joystick.ts`, `sound.ts`, `main.ts` | the stick (wherever you touch, or in a corner); the sounds; the page |
 
 **Tests:**
 - The coast and the rules, without a page: `node cells/lab/devtools/rescue-coast.test.mjs`.
@@ -270,7 +270,7 @@ The sea:
   - Driven flat out at a jetty side on: a bump, held off, still on the side it came from.
   - Whole days steered by the game (two levels; and in a storm): everyone ashore and every lifeboat in, in three to six minutes; no hull inside the shore or through a jetty or a moored boat; ashore only in the harbour; no crew heading home while someone's left waiting for it; the calls at their times; no two crews after one little boat.
   - The same seed gives the same race, and the same day at sea.
-- In a browser, by hand: `node cells/lab/devtools/rescue-coast-smoke.mjs` (the line-up and the tagline, Play into the Service on its own coast, moored in the harbour with the first calls in, the fleet's count, the Rally from its own button on its own coast; steering from the boat: no stick drawn, a touch on the sea elsewhere does nothing, take hold of the boat and drag ahead, to the right, let go, the faint ring while held; the keys; the stick in either corner when asked; both ends).
+- In a browser, by hand: `node cells/lab/devtools/rescue-coast-smoke.mjs` (the line-up and the tagline, Play into the Service on its own coast, moored in the harbour with the first calls in, the fleet's count, the Rally from its own button on its own coast; steering from anywhere: no stick drawn, a ring low down until you have, a touch on the sea away from the boat dragged up, to the right, let go, the faint ring where you touched; with the game steering, a touch takes your boat back; the keys; the stick in either corner when asked; both ends).
 - The pictures: `node cells/lab/views.mjs rescue-coast`.
 
 **Addresses:**
@@ -286,7 +286,7 @@ The sea:
 - `?near=n` (or `near=any`) a little boat and the lifeboat coming for it;
 - `?study` a close look at your lifeboat;
 - `?zoom=`;
-- `?hand=boat|left|right` where you steer from (your boat unless asked; a choice in Settings is kept);
+- `?hand=touch|left|right` where you steer from (wherever you touch unless asked; a choice in Settings is kept);
 - `?weather=sunny|calm|windy|stormy|foggy|night|sunset` (the Service's day starts in it);
 - `?preview` small and quiet.
 

@@ -1,9 +1,10 @@
 /**
  * The wheel: a joystick, in one of two places.
  *
- * - **On your boat** (unless asked otherwise): there's nothing drawn; put your finger on your lifeboat and drag, and the
- *   boat is the stick's knob: drag ahead to go, to one side to turn, back to slow and back off. While your finger's down
- *   a faint ring shows where you took hold of it. A touch that starts anywhere else on the sea does nothing.
+ * - **Wherever you touch** (unless asked otherwise): there's nothing drawn; put your finger down anywhere on the sea and
+ *   that's the middle of the stick for as long as it stays down: drag ahead to go, to one side to turn, back to slow and
+ *   back off. While your finger's down a faint ring shows where you put it, and a dot where you've dragged to. Until
+ *   you've steered, the ring shows lower down, its dot drifting up, to say how.
  * - **In a bottom corner** (the right or the left): a stick that stays put, so your thumb never covers the sea ahead.
  *   Touch anywhere on it (or near it) and drag.
  *
@@ -11,14 +12,14 @@
  * and the boat turns while going steadily on. Let go and the knob springs home and the boat eases to a stop, which is how
  * you come alongside a little boat. Keys do the same (arrows, or WASD).
  */
-export type Steer = 'boat' | 'left' | 'right';
-/** on the boat: how far (px) from where you took hold is full stick */
+export type Steer = 'touch' | 'left' | 'right';
+/** wherever you touch: how far (px) from where you put your finger is full stick */
 const REACH = 64;
 
 export class Joystick {
   x = 0; y = 0; held = false;
   private el: HTMLElement; private knob: HTMLElement; private ghost: HTMLElement; private id = -1;
-  /** where a touch on the boat took hold (null: on the corner stick) */
+  /** where a touch on the sea took hold (null: on the corner stick) */
   private grip: [number, number] | null = null;
   private keys = new Set<string>();
   constructor(host: HTMLElement, ghost: HTMLElement) {
@@ -32,10 +33,16 @@ export class Joystick {
     addEventListener('keyup', (e) => this.keys.delete(e.code));
     addEventListener('blur', () => this.keys.clear());
   }
-  /** steer from the boat on `surface`: a touch there that `onBoat` says is on your boat takes hold of it */
-  fromBoat(surface: HTMLElement, onBoat: (x: number, y: number) => boolean) {
-    surface.addEventListener('pointerdown', (e) => { if (this.id === -1 && onBoat(e.clientX, e.clientY)) this.take(surface, e, [e.clientX, e.clientY]); });
+  /** steer from wherever you touch on `surface`, while `ok` says so: where the touch starts is the stick's middle */
+  anywhere(surface: HTMLElement, ok: () => boolean) {
+    surface.addEventListener('pointerdown', (e) => { if (this.id === -1 && ok()) this.take(surface, e, [e.clientX, e.clientY]); });
     this.follow(surface);
+  }
+  /** until you've steered: the ring low down the screen, its dot drifting up (`on`) */
+  hint(on: boolean) {
+    if (this.grip) return;
+    this.ghost.classList.toggle('on', on); this.ghost.classList.toggle('hint', on);
+    if (on) { this.ghost.style.transform = `translate(${innerWidth / 2}px, ${innerHeight * 0.72}px)`; (this.ghost.firstChild as HTMLElement).style.transform = ''; }
   }
   private take(on: HTMLElement, e: PointerEvent, grip: [number, number] | null) {
     this.id = e.pointerId; on.setPointerCapture(e.pointerId); this.held = true; this.grip = grip; this.move(e); e.preventDefault();
@@ -59,7 +66,7 @@ export class Joystick {
   private show() {
     this.knob.style.transform = `translate(${this.x * 36}px, ${-this.y * 36}px)`; this.el.classList.toggle('held', this.held && !this.grip);
     // (on the boat: a faint ring where you took hold, a dot where the knob's got to)
-    this.ghost.classList.toggle('on', !!this.grip);
+    this.ghost.classList.toggle('on', !!this.grip); if (this.grip) this.ghost.classList.remove('hint');
     if (this.grip) { this.ghost.style.transform = `translate(${this.grip[0]}px, ${this.grip[1]}px)`; (this.ghost.firstChild as HTMLElement).style.transform = `translate(${this.x * REACH}px, ${-this.y * REACH}px)`; }
   }
   /** what the hand asks for: steer (right +) and throttle (ahead +) */
