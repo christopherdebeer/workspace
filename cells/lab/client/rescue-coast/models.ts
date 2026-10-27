@@ -56,8 +56,9 @@ export function lifeboat(): Mesh {
     const top = edge(side, 0.08, 0.02), rub = edge(side, -0.32, 0.07);
     b.use(0, SRC.A, M.PAINT);
     for (let i = 0; i < top.length - 1; i++) b.tube(top[i], top[i + 1], 0.16, WHITE, 8);
+    // (a broad black rubbing strake along the hull under the gunwale, its fastenings showing)
     b.use(0, SRC.OWN, M.SOFT);
-    for (let i = 0; i < rub.length - 2; i++) b.tube(rub[i], rub[i + 1], 0.11, BLACK, 6);
+    for (let i = 0; i < rub.length - 2; i++) b.tube(rub[i], rub[i + 1], 0.17, [0.08, 0.1, 0.13], 9);
   }
   b.use(0, SRC.A, M.PAINT); b.tube([-1.95, sheer(0) + 0.08, HULL.z0 + 0.02], [1.95, sheer(0) + 0.08, HULL.z0 + 0.02], 0.16, WHITE, 8);
   // (RNLI along the bow, both sides, following the hull's flare)
@@ -144,34 +145,6 @@ export function lifeboat(): Mesh {
   b.use(0, SRC.OWN, M.SOFT);
   for (let k = 0; k < 3; k++) b.torus([0, 0, k * 0.07], 0.32 - k * 0.04, 0.05, () => ROPE, 14, 4);
   b.at();
-  // A continuous broad inflatable rubbing collar defines the actual rescue-boat
-  // silhouette instead of a pencil-thin edge against the blue hull.
-  b.use(0, SRC.OWN, M.SOFT);
-  for (const side of [-1, 1]) {
-    const collar = edge(side, -0.20, 0.08);
-    for (let i = 0; i < collar.length - 2; i++) b.tube(collar[i], collar[i + 1], 0.175, [0.08, 0.1, 0.13], 9);
-    // Lower rubber seam and the fender's recognisable fastening points.
-    for (const z of [-4.55, -3.1, -1.55, 0.2, 1.9, 3.65]) {
-      const t = Math.max(.01, Math.min(.98, tAt(z)));
-      const x = side * (hb(t) + 0.10), y = sheer(t) - .31;
-      b.tube([x, y - .16, z], [x, y + .2, z], .058, [0.14, .17, .19], 7);
-    }
-    // Recessed cabin-side grab handles: small dark attachment bosses and bright rails.
-    b.use(0, SRC.OWN, M.GLASS);
-    for (const z of [wz - 1.15, wz + 1.15]) {
-      const x = side * (WX + .075);
-      b.tube([x, wy + .78, z], [x, ry - .14, z], .046, STEEL, 8);
-      for(const y of [wy + .8, ry - .16]) b.sphere([x, y, z], .08, [0.1,.12,.15], [1,1,1], 4, 8);
-    }
-    b.use(0, SRC.OWN, M.SOFT);
-  }
-  b.use(0, SRC.OWN, M.MATTE);
-  // Dark gasket and hatch inset on the foredeck: restraint rather than noisy detailing.
-  const hz = 3.12, hy = deckAt(hz) + .055;
-  b.roundBox([0, hy, hz], [.52,.035,.69], .055, [.14,.18,.22], 4);
-  b.roundBox([0, hy + .045, hz], [.41,.024,.58], .045, [.43,.49,.5], 4);
-  b.use(0, SRC.OWN, M.GLASS);
-  for(const side of [-1,1]) b.tube([side*.37, hy+.07, hz-.28],[side*.37, hy+.07, hz+.28], .028, STEEL, 6);
   return smooth(b.done(), 0.75);
 }
 
@@ -585,36 +558,46 @@ export function boulder(seed: number, n: number): Mesh {
 }
 
 /**
- * a block of the cliff face: granite split along its joints into a squarish block (a square with its corners cut,
- * each side a little uneven) standing on y = 0 to y = 1, its top and bottom edges rounded by weather — stacked, with
- * their set-backs, they make the face; the rounded edges between them are its joints
+ * a block of the cliff face: granite split along its joints, standing on y = 0 to y = 1 — two to four beds (strata) one
+ * on another, each an irregular slab of five to seven sides with sharp, flat-faced edges, a little set back or jutting
+ * out from the one under it, its corners chipped, its top tilted; stacked, the blocks make a face of ledges, joints and
+ * fractured planes rather than rounded stones
  */
 export function column(seed: number): Mesh {
   const rand = seeded(seed * 4271 + 7), b = new Builder();
-  const ring: [number, number][] = [];
-  for (let i = 0; i < 4; i++) {
-    const a = (i / 4) * Math.PI * 2 + Math.PI / 4 + (rand() - 0.5) * 0.3, c = 0.3 + rand() * 0.22;
-    // (each corner cut: two points either side of it)
-    for (const d of [-c, c]) { const r = (1.0 + (rand() - 0.5) * 0.3) / Math.cos(Math.abs(d) * 1.1); ring.push([Math.sin(a + d) * r * 0.86, Math.cos(a + d) * r * 0.86]); }
-  }
-  const m = ring.length, tilt = [(rand() - 0.5) * 0.22, (rand() - 0.5) * 0.22], ty = (x: number, z: number) => x * tilt[0] + z * tilt[1];
-  // (profile up the block: bottom rounded in, the face, the top rounded over; [height, how far out])
-  const prof: [number, number][] = [[0, 0.78], [0.08, 0.93], [0.2, 1], [0.55, 1.03], [0.72, 0.99], [0.85, 0.9], [0.94, 0.74], [1, 0.45]];
-  const shade = (y: number): RGB => { const k = 0.7 + 0.3 * y; return [k, k, k]; };
   b.use(0, SRC.A, M.ROCK);
-  const C: V3 = [0, 0.5, 0];
-  for (let i = 0; i < m; i++) {
-    const [x0, z0] = ring[i], [x1, z1] = ring[(i + 1) % m];
-    for (let k = 0; k < prof.length - 1; k++) {
-      const [ya, wa] = prof[k], [yb, wb] = prof[k + 1];
-      const P = (x: number, z: number, y: number, w: number): V3 => [x * w, y + (y > 0.5 ? ty(x, z) : 0), z * w];
-      const q0 = P(x0, z0, ya, wa), q1 = P(x1, z1, ya, wa), q2 = P(x1, z1, yb, wb), q3 = P(x0, z0, yb, wb);
-      b.triOut(C, q0, q1, q2, shade(ya)); b.triOut(C, q0, q2, q3, shade(ya));
+  const beds = 2 + Math.floor(rand() * 3), cuts = [0];
+  for (let k = 1; k < beds; k++) cuts.push(k / beds + (rand() - 0.5) * 0.12);
+  cuts.push(1);
+  let ox = 0, oz = 0;
+  for (let k = 0; k < beds; k++) {
+    const y0 = cuts[k] + (k ? 0.012 : 0), y1 = cuts[k + 1], sides = 5 + Math.floor(rand() * 3), turn = rand() * 6.283;
+    // (the slab's outline: a polygon with uneven sides; jutting or set back a little from the bed below)
+    const ring: [number, number][] = [];
+    for (let i = 0; i < sides; i++) {
+      const a = turn + (i / sides) * 6.283 + (rand() - 0.5) * 0.5, r = 1.0 + rand() * 0.3;
+      ring.push([ox + Math.sin(a) * r, oz + Math.cos(a) * r]);
     }
-    const top: V3 = [0, 1 + 0.02, 0];
-    b.triOut([0, 0, 0], [x0 * 0.55, 1 + ty(x0, z0), z0 * 0.55], [x1 * 0.55, 1 + ty(x1, z1), z1 * 0.55], top, shade(1));
+    ox += (rand() - 0.5) * 0.14; oz += (rand() - 0.5) * 0.14;
+    const tilt = [(rand() - 0.5) * 0.12, (rand() - 0.5) * 0.12], top = (x: number, z: number) => y1 + x * tilt[0] + z * tilt[1];
+    // (the sides: flat, leaning in a touch toward the top, each split once along its height so the faces break)
+    const lean = 0.9 + rand() * 0.08, mid = 0.35 + rand() * 0.3, kink = (rand() - 0.5) * 0.08;
+    const shade = (y: number): RGB => { const v = 0.72 + 0.28 * y; return [v, v, v]; };
+    const C: V3 = [ox, (y0 + y1) / 2, oz];
+    for (let i = 0; i < sides; i++) {
+      const [x0, z0] = ring[i], [x1, z1] = ring[(i + 1) % sides];
+      const at = (x: number, z: number, f: number, w: number): V3 => [ox + (x - ox) * w, f, oz + (z - oz) * w];
+      const ym = y0 + (y1 - y0) * mid, wm = 1 + kink;
+      const a0 = at(x0, z0, y0, 1), a1 = at(x1, z1, y0, 1), m0 = at(x0, z0, ym, wm), m1 = at(x1, z1, ym, wm);
+      const t0 = at(x0, z0, top(x0 - ox, z0 - oz), lean), t1 = at(x1, z1, top(x1 - ox, z1 - oz), lean);
+      b.triOut(C, a0, a1, m1, shade(y0)); b.triOut(C, a0, m1, m0, shade(y0));
+      b.triOut(C, m0, m1, t1, shade(ym)); b.triOut(C, m0, t1, t0, shade(ym));
+      // (the top: a flat bed plane, its rim chipped down at one corner in three)
+      const chip = rand() < 0.33 ? 0.06 + rand() * 0.06 : 0;
+      b.triOut(C, t0, t1, [ox, top(0, 0) - chip * 0.3, oz], shade(1));
+    }
   }
-  return smooth(b.done(), 0.8);
+  return smooth(b.done(), 0.97);
 }
 
 // ─── ashore ───

@@ -72,7 +72,7 @@ export class Wakes {
     const k = Math.max(0, Math.min(1, (Math.abs(v) - 0.8) / 8));
     // (the stern, a little aft of it; and which way is across)
     tr.push({ x: x - Math.sin(h) * 5.2, z: z - Math.cos(h) * 5.2, ax: -Math.cos(h), az: Math.sin(h), t: now, k });
-    while (tr.length && now - tr[0].t > 3.8) tr.shift();
+    while (tr.length && now - tr[0].t > 5.5) tr.shift();
   }
   build(now: number) {
     const d = this.data; let n = 0;
@@ -80,7 +80,7 @@ export class Wakes {
     for (const tr of this.trails) {
       if (!tr) continue;
       for (let i = 0; i + 1 < tr.length && (n + 6) * WSTRIDE <= d.length; i++) {
-        const p = tr[i], q = tr[i + 1], ap = now - p.t, aq = now - q.t, wp = 1.15 + ap * 1.1, wq = 1.15 + aq * 1.1;
+        const p = tr[i], q = tr[i + 1], ap = now - p.t, aq = now - q.t, wp = 1.5 + ap * 2.5, wq = 1.5 + aq * 2.5;
         if (p.k < 0.02 && q.k < 0.02) continue;
         put(p.x + p.ax * wp, p.z + p.az * wp, 1, ap, p.k); put(p.x - p.ax * wp, p.z - p.az * wp, -1, ap, p.k); put(q.x - q.ax * wq, q.z - q.az * wq, -1, aq, q.k);
         put(p.x + p.ax * wp, p.z + p.az * wp, 1, ap, p.k); put(q.x - q.ax * wq, q.z - q.az * wq, -1, aq, q.k); put(q.x + q.ax * wq, q.z + q.az * wq, 1, aq, q.k);

@@ -175,7 +175,7 @@ Each coast comes from a seed (on the line-up, and `?seed=`), in two kinds that s
 - **The finish:** the narrow harbour mouth, a lighthouse either side. Beyond it, the harbour with its quay and a town of cottages on the hill.
 
 One field says where the land is: the distance to the nearest shore, positive over water and negative on land. Everything is made from it, so nothing disagrees:
-- **the cliffs:** granite split along its joints. Stacks of big squarish blocks with rounded edges stand shoulder to shoulder along every rocky shore, as tall as the land behind them. Each block is a little set back, turned or narrower than the one below, so the face has ledges and joints and its top steps up and down. The rock is crusted with orange lichen above the splash zone and dark and wet below it;
+- **the cliffs:** granite split along its joints and its beds. Blocks stand shoulder to shoulder along every rocky shore, as tall as the land behind them, each a stack of two to four beds: angular slabs of five to seven sides with flat, sharp-edged faces, each bed a little set back or jutting from the one under it, its top tilted and sometimes chipped, so the face is all ledges, overhangs and fractured planes. The stone is drawn with thin dark cracks running down the faces and the bedding lines across them, each plane its own tone; light warm grey, patched with orange lichen above the splash zone and golden on its sunlit tops, dark and wet below.
 - **the ground:** a steep face behind the blocks, then cliff-top turf (olive and sun-dried gold, greener in the hollows, with thrift and gorse in flower), sandy coves, quays, the town's hill, the seabed;
 - **the boulders:** a few fallen at the cliffs' feet, heaped along beaches and low shores; skerries (little reefs of rock) a stone's throw off the cliffs, where the surf breaks. No rock reaches further into the water than a hull is allowed to go;
 - **where a boat can go:** the hull keeps 2.6 m from the shore, so it can't sail into a rock;
@@ -242,6 +242,7 @@ Its own WebGL2 renderer: the lab ships one bundle with no packages, so Three.js 
 - **The sky:** cumulus over the horizon.
 - **Distance:** hazed toward the horizon.
 - **The finish:** everything is drawn in linear light into a floating-point buffer (where the phone allows); one pass then adds the glow of the brightest things, a soft focus away from what the camera is looking at (stronger on the title and close-ups, so the scene reads as a model), the exposure, one filmic tone curve, and a light vignette.
+- **Measured against the boards:** besides the side-by-side sheets, the share of white water, of warm (lichen, sunlit rock) colour and the saturation in each locked scene, and the water's hue, are compared with the board's. The last pass made the sea a deeper, bluer body (its hue now the boards'), whitewater textured with a lace of bursting bubbles round its edges, more of it round the hulls (wider and churning at speed, slapping round a boat lying still), round the little boats and along the rocks, the granite lighter, layered and fractured (see the cliffs, below), with orange lichen in patches and the sunlit tops a little golden, and the grade a touch less saturated.
 - **Checked against the boards:** `?ref=hero`, `?ref=rescue` and `?ref=coast` hold fixed scenes laid out like the boards' hero shot, close rescue and coastal landscape (and `?ref=harbour` looks over the Service's harbour from above its mouth, as on the boat-choosing board) (the HUD hidden, nothing moving; `&u=0..1` sets how far through the climb aboard the rescue is). `node devtools/rescue-coast-fidelity.mjs <dir>` draws them and puts each beside its target panel, kept in `devtools/fidelity/`.
 
 The sea:
@@ -309,6 +310,7 @@ The sea:
 - `?zoom=`;
 - `?hand=touch|left|right` where you steer from (wherever you touch unless asked; a choice in Settings is kept);
 - `?weather=sunny|calm|windy|stormy|foggy|night|sunset` (the Service's day starts in it);
+- `?clean` no lens blur and no glow, to judge the materials and the water as they are (`devtools/rescue-coast-fidelity.mjs <dir> --clean` makes the comparison sheets that way);
 - `?preview` small and quiet.
 
 **Not here yet**, though the boards have them:
@@ -319,14 +321,3 @@ The sea:
 
 They're beyond Lily's two pages, and they'd come after the race itself looks and plays right.
 
-
-## Render-quality pass · 27 October 2026
-
-The original Lily reference is a **WebGL frame acceptance target**, not a mood board. The latest screenshot audit found large white foam sheets, glowing patches, flat painted surfaces and shallow-looking materials. The first fidelity-only correction therefore deliberately does not add any new missions, gameplay systems, weather presets or coastal areas.
-
-- `render.ts`: whitewater coverage now stays broken and partly translucent; old wind streaks and shoreline wash are less pervasive; foam noise is evaluated only where a wave/hull/shore actually produces foam. High-frequency water normals and sun glints are moderated to reveal swell shape instead of glitter. Painted fibreglass, glass, cloth and damp granite have different surface responses and less excessively bright specular highlights.
-- `fx.ts`: wakes persist for a shorter period and remain closer to the boat rather than expanding to enormous solid ribbons.
-- `models.ts`: rescue-boat rubber rubbing collar and its fasteners, cabin grab handles and a recessed foredeck hatch improve the material and silhouette hierarchy without introducing another draw-call-per-detail.
-- `render.ts`: bloom reduced substantially; `?clean` disables both bloom and lens blur without changing material lighting, so the raw scene remains independently judgeable. `devtools/rescue-coast-fidelity.mjs --clean` produces separate clean comparison frames without overwriting graded ones.
-
-**Quality gate:** compare `?ref=hero&clean`, `?ref=rescue&clean`, and `?ref=coast&clean` at identical fixed seeds and framing, then compare the final graded versions. Check water body/foam separation, lifeboat silhouette/material identity, coast shape and exposure. The existing test harness can generate comparison sheets. Real iPhone performance and exact image fidelity **still require visual verification**; compile/deploy alone cannot establish that the art target has been met.

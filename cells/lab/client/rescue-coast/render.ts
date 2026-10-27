@@ -201,41 +201,37 @@ void main() {
   int m = int(vMat + .5);
   if (m == 7 && dot(N, V) < 0.) N = -N;
   float gloss = 24., spec = .04, wrap = 0., coat = 0.;
-  // Subtle material microstructure; geometry defines the shape, not noisy post-effects.
-  if (m == 1) {
-    // Painted fibreglass: modest orange-peel microfinish, broad clearcoat reflections.
-    float peel = noise2(vW.xz * 18. + vW.y * 2.);
-    alb *= .97 + .055 * peel;
-    N = normalize(N + vec3(noise2(vW.yz * 12.) - .5, 0., noise2(vW.xy * 12.) - .5) * .036);
-    gloss = mix(72., 125., peel); spec = .26; coat = .17;
-  } else if (m == 2) {
-    // Glass and polished metal: distinct, more focused reflection, without white bloom.
-    gloss = 145.; spec = .44; coat = .38;
-    alb = mix(alb, skyCol(reflect(-V, N)) * .24, .24);
-  } else if (m == 3) {
-    // Cloth, rubber and skin: a soft granular finish, nearly no specular spike.
-    float weave = noise2(vW.xz * 13. + vW.y * 3.);
-    alb *= .94 + .10 * weave;
-    wrap = .28; spec = .025; gloss = 13.;
-  }
+  if (m == 1) { gloss = 110.; spec = .5; coat = .25; }
+  else if (m == 2) { gloss = 160.; spec = .9; coat = .6; }
+  else if (m == 3) { wrap = .35; spec = .06; gloss = 18.; }
   else if (m == 6) { wrap = .45; }
   else if (m == 7) { wrap = .6; }
-  else if (m == 8) { gloss = 90.; spec = .26; coat = .34; }
+  else if (m == 8) { gloss = 160.; spec = .9; coat = .6; }
   if (m == 4) {
     // (granite: grain, feldspar flecks, lichen on the tops, darker and glossy where the sea wets it)
     vec3 q = vW * .55;
     float g = fbm(q.xz + q.y * .7) * .6 + fbm(q.zy * 1.7) * .4, fleck = step(.8, noise2(vW.xz * 6. + vW.y * 3.));
-    alb *= .78 + .32 * g; alb = mix(alb, lin(vec3(.8, .77, .7)), fleck * .10);
+    alb *= .78 + .38 * g; alb = mix(alb, lin(vec3(.95, .9, .82)), fleck * .25);
     float lichen = smoothstep(.55, .9, N.y) * smoothstep(.55, .75, noise2(vW.xz * .9));
     alb = mix(alb, lin(vec3(.72, .7, .38)), lichen * .45);
     // (orange lichen crusting the faces above the splash zone; dark where the joints and hollows hold shadow and damp)
     float dry = smoothstep(1.5, 4., vW.y);
-    float crust = smoothstep(.58, .74, noise2(vW.xz * .32 + vW.y * .45) * .7 + noise2(vW.zy * 1.3 + vW.x * .2) * .3) * dry;
-    alb = mix(alb, lin(vec3(.65, .46, .29)), crust * .36);
-    alb *= mix(.55, 1., smoothstep(-.6, .2, N.y + (g - .5)));
+    float crust = smoothstep(.48, .68, noise2(vW.xz * .32 + vW.y * .45) * .7 + noise2(vW.zy * 1.3 + vW.x * .2) * .3) * dry;
+    alb = mix(alb, lin(vec3(.92, .62, .24)), crust * .62 * smoothstep(.2, .6, noise2(vW.xz * 1.1 + vW.y * .8)));
+    // (sunlit tops of the blocks a little golden)
+    alb *= mix(vec3(1.), vec3(1.06, 1., .88), smoothstep(.2, .8, N.y) * dry);
+    alb *= mix(.7, 1., smoothstep(-.6, .2, N.y + (g - .5)));
+    // (fractures: thin dark cracks running down the faces and across them, and the bedding lines between strata)
+    float steep = 1. - smoothstep(.45, .8, abs(N.y));
+    float crackV = 1. - smoothstep(.0, .035, abs(noise2(vec2(dot(vW.xz, vec2(.71, .7)) * .9, vW.y * .12) + vec2(vW.y * .05, 0.)) - .5));
+    float crackH = 1. - smoothstep(.0, .05, abs(fract(vW.y * .62 + noise2(vW.xz * .15) * .8) - .5) - .45);
+    float fine = 1. - smoothstep(.0, .02, abs(noise2(vW.xz * 2.3 + vW.y * 1.7) - .5));
+    alb *= 1. - steep * (crackV * .5 + crackH * .35 + fine * .1 * smoothstep(.6, .3, length(fwidth(vW))));
+    // (each fractured plane its own tone)
+    alb *= .9 + .2 * hash2(floor(vec2(dot(N.xz, vec2(3.1, 1.7)), N.y * 4.) * 2.));
     float wet = 1. - smoothstep(.2, 1.4, vW.y);
     alb *= 1. - wet * .45; spec = mix(.05, .45, wet); gloss = mix(14., 80., wet);
-    N = normalize(N + (vec3(noise2(vW.yz * 2.1), .5, noise2(vW.xy * 2.1)) - .5) * .16);
+    N = normalize(N + (vec3(noise2(vW.yz * 2.1), 0., noise2(vW.xy * 2.1)) - .5) * .35);
   }
   float ndl = dot(N, uSun), sh = sunShadow(vW, N);
   float diff = max(0., (ndl + wrap) / (1. + wrap));
@@ -243,15 +239,10 @@ void main() {
   vec3 H = normalize(uSun + V);
   c += uSunC * spec * pow(max(dot(N, H), 0.), gloss) * sh * (gloss + 8.) / 40.;
   float fres = pow(1. - max(dot(N, V), 0.), 4.);
-  c += skyCol(reflect(-V, N)) * coat * (.07 + .75 * fres);
+  c += skyCol(reflect(-V, N)) * coat * (.08 + .92 * fres);
   // (lamps: brighter as it darkens; windows: dark glass by day, lit warm at dusk)
   if (m == 5) c = alb * (3.5 + 6. * uLook.z);
-  if (m == 8) {
-    // Sky in darkened windows, warm interior when dusk falls. Preserve the
-    // silhouettes of the black window frames instead of turning them into lights.
-    c += skyCol(reflect(-V, N)) * (.09 + .20 * fres);
-    c += lin(vec3(1., .74, .38)) * 1.4 * smoothstep(.35, .85, uLook.z);
-  }
+  if (m == 8) c += lin(vec3(1., .74, .38)) * 3.2 * smoothstep(.3, .8, uLook.z);
   o = vec4(outc(aerial(c, vW)), 1.);
 }`;
 const DEPTH_FS = `#version 300 es
@@ -380,19 +371,14 @@ float cells(vec2 p) {
   }
   return sqrt(d1);
 }
-/** Two anisotropic scales of turbulent bubble breakup. Coverage comes from a wave
- * event, not from an omnipresent marble/noise field. */
 float foamTex(vec2 p, float t) {
-  vec2 q = p + vec2(.12, -.2) * t;
-  float fine = noise2(q * 2.1) * .55 + noise2(q * 5.2 + 11.) * .3
-             + noise2(q * 10.3 - 17.) * .15;
-  return clamp(fine * .82 + (1. - smoothstep(.12, .46, cells(q * 3.2))) * .18, 0., 1.);
+  float n = noise2(p * .9 + t * .1) * .5 + noise2(p * 2.3 - t * .17) * .3 + noise2(p * 5.7 + t * .3) * .2;
+  return clamp((n - .5) * 2.2 + .5, 0., 1.) * .78 + smoothstep(.12, .55, cells(p * 2.6 + t * .2)) * .22;
 }
-/** Sparse, semi-transparent foam even at the heart of a breaking crest. */
-float foamMask(float cov, float tex) {
-  float body = smoothstep(.38, .79, tex + cov * .34 - .27);
-  return body * smoothstep(.07, .55, cov) * (.2 + .8 * cov);
-}
+/** how much of here is covered (0..1) when foam reaches cov (0..1): the texture fills as coverage grows, with broken edges */
+float foamMask(float cov, float tex) { return smoothstep(1. - cov, 1.16 - cov, tex) * step(.01, cov); }
+/** lace: the web of thin white left between bursting bubbles, round the edge of whitewater and where it's thinning */
+float foamLace(vec2 p, float t) { float a = cells(p * 1.9 + t * .15), b = cells(p * 3.7 - t * .1 + 4.); return smoothstep(.5, .72, a) * .7 + smoothstep(.55, .75, b) * .5; }
 
 void main() {
   vec2 P = vW.xz;
@@ -406,7 +392,7 @@ void main() {
   float s = shore(P);
   // ─── the surface: the swell's own normal, then ripples (and rain) on it for the glints and the sky's reflection ───
   vec2 rp = P * 1.7 + vec2(uTime * .7, -uTime * .45), rq = P * 4.1 - vec2(uTime * .55, uTime * .8);
-  vec2 rip = vec2(noise2(rp) - .5, noise2(rp + 9.) - .5) * .26 + vec2(noise2(rq) - .5, noise2(rq + 5.) - .5) * .11;
+  vec2 rip = vec2(noise2(rp) - .5, noise2(rp + 9.) - .5) * .45 + vec2(noise2(rq) - .5, noise2(rq + 5.) - .5) * .22;
   vec2 rain = (vec2(noise2(P * 7. + uTime * 23.), noise2(P * 7.3 - uTime * 19. + 3.)) - .5) * uSeaLook.y;
   // (in the lee of a lifeboat lying still, the little waves are smoothed and the crests don't break: the shelter it gives)
   float leeCalm = 0.;
@@ -417,7 +403,7 @@ void main() {
     leeCalm = max(leeCalm, (1. - smoothstep(2.4, 7.5, abs(ac))) * (1. - smoothstep(4., 7.5, abs(al))) * smoothstep(.15, .6, side) * (1. - clamp(h.w / 4., 0., 1.)));
   }
   float ex = expo(P);
-  vec3 G = normalize(vN), N = normalize(vN + vec3(rip.x + rain.x * .55, 0., rip.y + rain.y * .55) * (.27 + .10 * uSeaLook.z) * (.55 + .45 * ex) * (1. - .7 * leeCalm));
+  vec3 G = normalize(vN), N = normalize(vN + vec3(rip.x + rain.x, 0., rip.y + rain.y) * (.35 + .15 * uSeaLook.z) * (.55 + .45 * ex) * (1. - .7 * leeCalm));
   vec3 V = normalize(uEye - vW), R = reflect(-V, N);
   if (R.y < .02) R = normalize(vec3(R.x, .02, R.z));
   float NV = max(dot(N, V), 0.), fres = .02 + .98 * pow(1. - NV, 5.);
@@ -438,49 +424,49 @@ void main() {
   c = mix(c, skyCol(R) * .92, fres);
   vec3 Hv = normalize(L + V); float nh = max(dot(N, Hv), 0.);
   vec2 gc = floor(P * 5.); float flick = step(.82, hash2(gc + floor(uTime * 6. + hash2(gc) * 6.)));
-  c += uSunC * sh * (pow(nh, 220.) * .42 + pow(nh, 1400.) * 6. * flick) * (.35 + .65 * fres * 2.);
+  c += uSunC * sh * (pow(nh, 220.) * .9 + pow(nh, 1600.) * 30. * flick) * (.4 + .6 * fres * 4.);
   vec3 sp = spot(vW, N);
   c += sp * (uBody * .2 + .035 + .06 * pow(max(0., dot(R, normalize(uSpot.xyz - vW))), 30.));
   // ─── foam: only where it's made — breaking crests, round the hulls, at the rocks — and old foam drifting thin ───
-  // Foam texture is needed only near breaking waves, hulls and the shore; keep
-  // expensive cellular breakup off the vast open-water background.
-  float tex = 0.;
+  float tex = foamTex(P * 1.4, uTime);
   float pinch = smoothstep(.74 + .06 * uSeaLook.x, .3, vFold);
-  float crest = pinch * smoothstep(.35, .75, tall) * smoothstep(.15, .5, noise2(P * .05 + uTime * .015)) * (.7 + .25 * uSeaLook.x) * (1. - .85 * leeCalm) * (.4 + .6 * ex);
+  float crest = pinch * smoothstep(.3, .7, tall) * smoothstep(.05, .45, noise2(P * .05 + uTime * .015)) * (.7 + .25 * uSeaLook.x) * (1. - .85 * leeCalm) * (.4 + .6 * ex);
   // (old foam: thin streaks drawn out downwind, here and there)
   vec2 wd = vec2(.52, .85), q = vec2(dot(P, vec2(wd.y, -wd.x)) * .5, dot(P, wd) * .12);
-  float old = smoothstep(.63, .84, noise2(q + vec2(0., -uTime * .1)) * .65 + fbm(P * .05) * .35) * smoothstep(.57, .82, noise2(P * .03 + 7.)) * .16 * min(1.4, uSeaLook.x) * (1. - .7 * leeCalm) * (.3 + .7 * ex);
+  float old = smoothstep(.55, .8, noise2(q + vec2(0., -uTime * .1)) * .6 + fbm(P * .05) * .5) * smoothstep(.5, .75, noise2(P * .03 + 7.)) * .32 * min(1.5, uSeaLook.x) * (1. - .7 * leeCalm) * (.3 + .7 * ex);
   // (round the lifeboats: a collar at the hull, a bow wave that grows with speed; round the little boats a lap of white)
   float hull = 0.;
   for (int i = 0; i < 6; i++) {
     if (i >= uHullCount) break;
     vec4 h = uHulls[i]; vec2 d = P - h.xy, fw = vec2(sin(h.z), cos(h.z)), rt = vec2(-fw.y, fw.x);
     float al = dot(d, fw), ac = dot(d, rt), sp2 = clamp(h.w / 12., 0., 1.);
-    float e = length(vec2(ac / 2.2, al / (al > 0. ? 4.4 + sp2 * 1.5 : 5.)));
-    float bow = smoothstep(-1., 4., al);
-    float washFront = (.55 + .45 * bow * sp2);
-    hull = max(hull, (1. - smoothstep(1.04, 1.29 + .22 * sp2, e)) * (.36 + .34 * sp2) * washFront * (.7 + .3 * sin(uTime * 2.1 + al * .9)));
+    float e = length(vec2(ac / (2.2 + sp2 * (.5 + .8 * smoothstep(0., 5., al))), al / (al > 0. ? 4.4 + sp2 * 1.5 : 5.2 + sp2 * 1.6)));
+    float bow = smoothstep(-1., 4., al), churn = noise2(P * .9 + uTime * .6) * .5 + .5;
+    float slap = .25 * min(1.5, uSeaLook.x) * (1. - sp2);
+    hull = max(hull, (1. - smoothstep(.95, 1.35 + slap + .55 * sp2 + .4 * bow * sp2, e + (churn - .5) * .3)) * (.68 + sp2 * (.35 + .5 * bow)) * (.75 + .25 * sin(uTime * 2.1 + al * .9)));
   }
   for (int i = 0; i < 12; i++) {
     if (i >= uHoleCount) break;
     vec4 h = uHoles[i]; vec2 d = P - h.xy; float cc = cos(h.z), ss = sin(h.z);
     vec2 l = vec2(d.x * cc - d.y * ss, d.x * ss + d.y * cc);
     float e = length(vec2(l.x / .62, l.y / h.w));
-    hull = max(hull, (1. - smoothstep(1.01, 1.35, e)) * .33);
+    hull = max(hull, (1. - smoothstep(1., 2.6, e + (noise2(P * 1.3 + uTime * .7) - .5) * .4)) * .72);
   }
   // (the surf: a white edge at the rocks, and sets of broken water rolling in)
-  float sr = min(s, rockAt(P) + .12 + (noise2(P * .63) - .5) * 1.2);
-  float surge = .5 + .5 * sin(sr * 1.7 - uTime * 2.3 + noise2(P * .18) * 4.);
-  float splashEdge = 1. - smoothstep(.15, 1.7, sr);
-  float surf = max(splashEdge * (.4 + .45 * surge), (1. - smoothstep(.2, 5.5, sr)) * surge * surge * .38);
-  float cov = clamp(max(max(crest * .79, old), max(hull, surf)), 0., .86);
-  if (cov > .07) tex = foamTex(P * 1.4, uTime);
+  float sr = min(s, rockAt(P) + .3 + noise2(P * .7) * 1.2);
+  float surge = .5 + .5 * sin(sr * 1.15 - uTime * 2.3 + noise2(P * .15) * 6.);
+  float surf = max((1. - smoothstep(.0, 6., sr)) * .98, (1. - smoothstep(.0, 14., sr)) * surge * surge * .8) * min(1., .75 + .45 * ex);
+  float cov = clamp(max(max(crest, old), max(hull, surf)), 0., 1.);
   float foam = foamMask(cov, tex);
   // (foam is lit like a rough white thing on the swell: shaded on the sides turned away, never a flat sticker; thin foam shows the sea)
   float fl = max(dot(normalize(G + (N - G) * 1.6), L), 0.);
   vec3 white = lin(vec3(.86, .9, .93)) * (uSunC * (fl * .5 + .08) * mix(.45, 1., sh) + skyFill(G) * .85 + sp * .5);
   white *= .6 + .4 * tex * tex;
-  c = mix(c, white, foam * (.38 + .35 * smoothstep(.25, .8, cov)));
+  c = mix(c, white, foam * (.5 + .5 * smoothstep(.25, .85, cov)) * (.7 + .3 * smoothstep(1. - cov, 1.3 - cov, tex)));
+  // (and round its edges, and where it's thinning, the lace of bursting bubbles; the water under thin foam paler, aerated)
+  float edge = smoothstep(.04, .3, cov) * (1. - foam);
+  c = mix(c, c * .6 + white * .4, smoothstep(.1, .6, cov) * .35);
+  c = mix(c, white * .95, edge * foamLace(P * 1.2, uTime) * (.45 + .4 * cov));
   o = vec4(outc(aerial(c, vW)), 1.);
 }`;
 
@@ -506,16 +492,14 @@ float foamTex(vec2 p, float t) { return clamp((noise2(p * .9 + t * .1) * .5 + no
 void main() {
   float e = abs(vUAS.x), age = vUAS.y, k = vUAS.z;
   // (churned white straight behind the stern, opening and thinning over a few seconds; the wake's two arms, broken and long-lived)
-  // Churn breaks into discrete bubbles and thin V-shaped streaks; no solid white ribbon.
-  float wash = (1. - smoothstep(.04, .66, e)) * exp(-age * 1.0);
-  float arms = smoothstep(.48, .86, e) * (1. - smoothstep(.94, 1., e)) * exp(-age * .66) * .5;
-  float cov = clamp(max(wash, arms) * k * .63, 0., .7);
-  float tex = foamTex(vW.xz * 1.65 + vec2(age * .4), age);
-  float a = smoothstep(.43, .8, tex + cov * .36 - .19) * cov;
+  float wash = (1. - smoothstep(.0, .5 + age * .1, e)) * exp(-age * .75);
+  float arms = smoothstep(.55, .82, e) * (1. - smoothstep(.9, 1., e)) * exp(-age * .35) * .75;
+  float cov = clamp(max(wash, arms) * k, 0., 1.), tex = foamTex(vW.xz * 1.1 + vec2(age * .3), age);
+  float a = smoothstep(1. - cov, 1.1 - cov, tex);
   if (a < .01) discard;
   vec3 G = normalize(vN);
   vec3 c = lin(vec3(.86, .9, .93)) * (uSunC * (max(dot(G, uSun), 0.) * .5 + .08) * mix(.45, 1., sunShadow(vW, G)) + skyFill(G) * .85 + spot(vW, G) * .5);
-  o = vec4(outc(aerial(c * (.78 + .22 * tex), vW)), clamp(a * .58, 0., .48));
+  o = vec4(outc(aerial(c * (.82 + .18 * tex), vW)), clamp(a * (.6 + .4 * cov), 0., 1.));
 }`;
 
 const FX_VS = `#version 300 es
@@ -595,12 +579,11 @@ void main() {
   float d = linear(texture(uDepth, vUV).r), focus = uLens.x;
   // (a sharp zone round the focus, softening slowly beyond it and a little quicker nearer; the frame's top and bottom edges a touch soft)
   float off = d > focus ? (d - focus * 1.35) / (focus * 3. + 30.) : (focus * .7 - d) / (focus * .6 + 2.);
-  float coc = clamp(off, 0., 1.) * uLens.y * uFinish;
-  coc = max(coc, smoothstep(.85, 1., abs(vUV.y - .45) * 1.6) * uLens.y * .25);
+  float coc = clamp(off, 0., 1.) * uLens.y;
+  coc = max(coc, smoothstep(.85, 1., abs(vUV.y - .45) * 1.6) * uLens.y * .25) * uFinish;
   c = mix(c, h, smoothstep(.0, .45, coc));
   c = mix(c, q, smoothstep(.45, 1., coc));
-  // Glow is an accent, not a substitute for hull, foam and rock material definition.
-  c += (max(q - 1.35, 0.) * .075 + max(h - 2.1, 0.) * .028) * uFinish;
+  c += (max(q - .9, 0.) * .35 + max(h - 1.6, 0.) * .12) * uFinish;
   c *= uLook.x * (1. + uFlash * 1.5);
   c = (c * (2.51 * c + .03)) / (c * (2.43 * c + .59) + .14);
   c = pow(clamp(c, 0., 1.), vec3(1. / 2.2));
@@ -639,8 +622,8 @@ export class Renderer {
   private down: Prog; private blur: Prog; private fin: Prog; private postVao: WebGLVertexArrayObject;
   /** the scene is drawn here (multisampled), resolved to textures, then blurred down */
   private hdr = false; private tw = 0; private th = 0;
-  /** ?clean: disable lens blur and bloom for objective material/water reference review. */
-  private readonly finishEffects = !new URLSearchParams(location.search).has('clean');
+  /** `?clean`: no lens blur and no glow, so the materials and the water can be judged as they are */
+  private readonly finish = new URLSearchParams(location.search).has('clean') ? 0 : 1;
   private msFbo: WebGLFramebuffer | null = null; private msColor: WebGLRenderbuffer | null = null; private msDepth: WebGLRenderbuffer | null = null;
   private resFbo: WebGLFramebuffer | null = null; private resColor: WebGLTexture | null = null; private resDepth: WebGLTexture | null = null;
   private levels: { fbo: WebGLFramebuffer; tex: WebGLTexture; w: number; h: number }[] = [];
@@ -770,8 +753,7 @@ export class Renderer {
     gl.uniform1f(F.u('uDec'), 1 / enc);
     gl.uniform4f(F.u('uLens'), f.focusDist, f.aperture, f.near, f.far);
     gl.uniform4f(F.u('uLook'), f.weather.exposure, f.weather.saturation, f.weather.dark, 0);
-    gl.uniform2f(F.u('uRes'), w, h); gl.uniform1f(F.u('uFlash'), f.flash);
-    gl.uniform1f(F.u('uFinish'), this.finishEffects ? 1 : 0);
+    gl.uniform2f(F.u('uRes'), w, h); gl.uniform1f(F.u('uFlash'), f.flash); gl.uniform1f(F.u('uFinish'), this.finish);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     gl.depthMask(true); gl.enable(gl.DEPTH_TEST);
   }
