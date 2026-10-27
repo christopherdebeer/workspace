@@ -43,6 +43,15 @@ export class Builder {
     const q: V3 = [n[0] / sx, n[1] / sy, n[2] / sz];
     return norm([m[0] * q[0] + m[1] * q[1] + m[2] * q[2], m[3] * q[0] + m[4] * q[1] + m[5] * q[2], m[6] * q[0] + m[7] * q[1] + m[8] * q[2]]);
   }
+  /** another builder's triangles (made in their own frame), placed as this one's placing says */
+  put(src: Builder) {
+    const o = src.out;
+    for (let i = 0; i < o.length; i += 11) {
+      const P = this.P([o[i], o[i + 1], o[i + 2]]), N = this.N([o[i + 3], o[i + 4], o[i + 5]]);
+      this.out.push(P[0], P[1], P[2], N[0], N[1], N[2], o[i + 6], o[i + 7], o[i + 8], o[i + 9], o[i + 10]);
+    }
+    return this;
+  }
   /** a vertex with its own normal (local coordinates) */
   v(p: V3, n: V3, col: RGB, part = this.part) { const P = this.P(p), N = this.N(n); this.out.push(P[0], P[1], P[2], N[0], N[1], N[2], col[0], col[1], col[2], part, this.mat); }
   /** a triangle whose normal points away from `o` (for closed lumps, whatever the winding) */

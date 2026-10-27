@@ -3,11 +3,12 @@
  * - **the ground**: the heightfield as triangles, coloured by the shader (granite where it's steep, grass on top,
  *   sand and shingle low down, the seabed under the water); deep seabed nobody can see is left out;
  * - **the boulders**: the coast's rocks, as instances of the boulder library (near pieces drawn finer than far ones);
- * - **what's built**: cottages, lighthouses, the station and slipway, the quay, gorse, the finish posts and banner.
+ * - **what's built**: cottages, lighthouses, the station and slipway, the quay, gorse, the finish posts and banner; (the
+ *   Service's harbour) the jetties, lamps, bunting and what's left about on the quay.
  */
 import { CELL, GATE_HALF, GATE_Z, NX, NZ, X0, Z0, type Coast } from './coast';
 import { Builder, type Mesh } from './shapes';
-import { banner, boulder, column, cottage, gorse, lighthouse, post, station } from './models';
+import { banner, boulder, bunting, clutter, column, cottage, gorse, jetty, lamp, lighthouse, post, station } from './models';
 
 export const PIECE = 80;
 export const ISTRIDE = 20;
@@ -70,6 +71,12 @@ export function makeWorld(c: Coast): World {
     else if (p.kind === 'lighthouse') lighthouse(b, p.v);
     else if (p.kind === 'station') station(b);
     else if (p.kind === 'gorse') gorse(b, Math.round(p.x * 13 + p.z * 7), p.v === 1);
+    else if (p.kind === 'jetty' || p.kind === 'lamp' || p.kind === 'bunting' || p.kind === 'clutter') {
+      // (made in their own frame, then placed)
+      const q = new Builder(), seed = Math.round(p.x * 13 + p.z * 7) >>> 0;
+      if (p.kind === 'jetty') jetty(q, p.v, seed); else if (p.kind === 'lamp') lamp(q); else if (p.kind === 'bunting') bunting(q, p.v, seed); else clutter(q, p.v);
+      b.put(q);
+    }
     else if (p.kind === 'quay') {
       b.use(0, 0, 4); b.box(-2.9, 2.9, -3.5, 2.75, -0.3, 2.6, [0.66, 0.64, 0.6]);
       b.use(0, 0, 4); b.box(-2.95, 2.95, 2.75, 2.95, -0.45, 1.2, [0.82, 0.8, 0.76]);

@@ -43,6 +43,9 @@ export const LEVELS: Record<Level, { ai: number; slow: number; assist: number; c
 };
 /** top speed (m/s), the hull's half length and half beam */
 export const VMAX = 12, HALF_LEN = 5.4, HALF_BEAM = 2.1;
+/** each kind of little boat: how far round it a hull is kept off; how far out from your side its middle lies when it's
+ * pulled in alongside; and how far out the game's boats aim to pass it */
+const SIZE: Record<Craft['kind'], [number, number, number]> = { row: [1.6, 1.25, 1.4], sail: [1.6, 1.25, 1.4], kayak: [1.6, 1.25, 1.4], paddle: [1.6, 1.25, 1.4], fishing: [1.9, 1.45, 1.7], yacht: [2.0, 1.55, 1.9] };
 /** alongside: the little boat within this of your side; the line's throw; each climb */
 export const GAP = 3.4, LINE = 0.6, CLIMB = 0.95;
 /** (the Service) each one stepping ashore; inside the harbour (past the mouth by this much) */
@@ -260,8 +263,20 @@ function collide(r: Race, dt: number) {
   for (const k of r.crafts) {
     if (k.stage === 'line' || k.stage === 'climb' || !k.called) continue;
     for (const b of r.boats) for (const p of circles(b)) {
-      const dx = k.x - p[0], dz = k.z - p[1], d = Math.hypot(dx, dz), m = 2.3 + (k.craft.kind === 'yacht' ? 2.0 : 1.6);
+      const dx = k.x - p[0], dz = k.z - p[1], d = Math.hypot(dx, dz), m = 2.3 + SIZE[k.craft.kind][0];
       if (d < m && d > 1e-4) { k.x += (dx / d) * (m - d) * 0.7; k.z += (dz / d) * (m - d) * 0.7; b.x -= (dx / d) * (m - d) * 0.3; b.z -= (dz / d) * (m - d) * 0.3; }
+    }
+  }
+  // (the Service's harbour: the jetties on their piles and the boats moored there hold their places; the hull's pushed off)
+  if (c.snags.length) for (const b of r.boats) {
+    if (b.z < GATE_Z) continue;
+    for (const p of circles(b)) for (const q of c.snags) {
+      const dx = p[0] - q.x, dz = p[1] - q.z;
+      if (Math.abs(dx) > 9 || Math.abs(dz) > 9) continue;
+      const d = Math.hypot(dx, dz), m = 2.3 + q.r;
+      if (d >= m || d < 1e-4) continue;
+      b.x += (dx / d) * (m - d); b.z += (dz / d) * (m - d);
+      if (Math.abs(b.v) > 1.5 && b.bump <= 0) { r.events.push({ kind: 'bump', boat: b.id, hard: Math.min(1, Math.abs(b.v) / VMAX) * 0.6 }); b.bump = 0.6; b.v *= 0.8; }
     }
   }
   for (const y of c.buoys) for (const b of r.boats) for (const p of circles(b)) {
@@ -294,7 +309,7 @@ function board(r: Race, dt: number) {
     const close = Math.abs(across) - HALF_BEAM < GAP + 2.5 && Math.abs(along) < HALF_LEN + 1.5 && Math.abs(b.v) < slow + 1.2 && b.finished === null;
     if (close) {
       // (pulled in by the line, to lie against the hull, bow to bow)
-      const [tx, tz] = world(b, k.side * (HALF_BEAM + (k.craft.kind === 'yacht' ? 1.55 : 1.25)), clamp(along, -3, 1.5));
+      const [tx, tz] = world(b, k.side * (HALF_BEAM + SIZE[k.craft.kind][1]), clamp(along, -3, 1.5));
       const dx = tx - k.x, dz = tz - k.z, d = Math.hypot(dx, dz), pull = Math.min(d, 3 * dt);
       if (d > 1e-4) { k.x += (dx / d) * pull; k.z += (dz / d) * pull; }
       k.yaw += wrap(b.h - k.yaw) * Math.min(1, dt * 2);
@@ -480,7 +495,7 @@ function think(r: Race, b: Boat, dt: number): Required<Input> {
     } else if (r.mode === 'service') side = ai.side;
     ai.side = side;
     const ux = (k.x - b.x) / d, uz = (k.z - b.z) / d;
-    const off = HALF_BEAM + (k.craft.kind === 'yacht' ? 1.9 : 1.4);
+    const off = HALF_BEAM + SIZE[k.craft.kind][2];
     gx = k.x + side * uz * off * Math.min(1, d / 8); gz = k.z - side * ux * off * Math.min(1, d / 8);
   }
   const want = heading(r, b, flowTo(r, String(ai.target)), gx, gz);

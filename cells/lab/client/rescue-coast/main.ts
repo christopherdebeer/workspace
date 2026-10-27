@@ -41,6 +41,8 @@ const HAIRS = [[0.2, 0.13, 0.08], [0.45, 0.28, 0.12], [0.85, 0.65, 0.3], [0.1, 0
 const SHIRTS = [[0.9, 0.2, 0.2], [0.2, 0.5, 0.9], [0.95, 0.8, 0.2], [0.3, 0.7, 0.35], [0.9, 0.45, 0.7], [0.55, 0.35, 0.8], [0.2, 0.75, 0.8], [1, 0.55, 0.2]];
 export const CRAFT_COLOURS = [[0.9, 0.15, 0.12], [0.15, 0.4, 0.85], [1, 0.8, 0.12], [0.2, 0.65, 0.3], [0.95, 0.45, 0.7], [0.12, 0.7, 0.75]];
 const CREW = [1, 0.8, 0.08], NONE = [1, 1, 1];
+/** how high each kind of little boat sits on the water */
+const FLOAT = { row: 0.24, sail: 0.24, kayak: 0.12, paddle: 0.05, yacht: 0.3, fishing: 0.28 } as const;
 /** (the Service) a few from the town on the quay, seeing the crews off */
 const TOWNSFOLK = [[1, 0, 5, 1], [3, 3, 1, 0], [0, 2, 7, 2], [4, 1, 2, 1], [2, 5, 0, 0], [5, 0, 3, 2], [0, 4, 6, 1]].map(([skin, hair, shirt, style]) => ({ skin, hair, shirt, style }));
 const css = (c: readonly number[]) => `rgb(${c.map((v) => Math.round(v * 255)).join(',')})`;
@@ -83,11 +85,11 @@ const renderer = new Renderer(gl);
 renderer.addKind('boat', lifeboat());
 renderer.addKind('crew', person('crew'), SHOULDER);
 for (let s = 0; s < 3; s++) renderer.addKind('kid' + s, person('kid', s), SHOULDER);
-for (const k of ['row', 'kayak', 'sail', 'paddle', 'yacht'] as const) renderer.addKind(k, craftMesh(k));
+for (const k of ['row', 'kayak', 'sail', 'paddle', 'yacht', 'fishing'] as const) renderer.addKind(k, craftMesh(k));
 for (const k of ['red', 'green', 'yellow'] as const) renderer.addKind('buoy-' + k, buoyMesh(k));
 renderer.addKind('gull', gull(), WING);
 const lists: Record<string, Instances> = {};
-for (const k of ['boat', 'crew', 'kid0', 'kid1', 'kid2', 'row', 'kayak', 'sail', 'paddle', 'yacht', 'buoy-red', 'buoy-green', 'buoy-yellow', 'gull']) lists[k] = new Instances(64);
+for (const k of ['boat', 'crew', 'kid0', 'kid1', 'kid2', 'row', 'kayak', 'sail', 'paddle', 'yacht', 'fishing', 'buoy-red', 'buoy-green', 'buoy-yellow', 'gull']) lists[k] = new Instances(64);
 const draws: Draw[] = Object.entries(lists).map(([kind, list]) => ({ kind, list }));
 const stick = new Joystick($('stick'), $('ghost'));
 /** where you steer from: your boat (a touch that starts on it takes hold of it), or a stick in a bottom corner; and whether
@@ -120,7 +122,7 @@ const minimap = new MiniMap($('map') as HTMLCanvasElement);
 
 /** each way to play has its own coast: the Rally's channel to the harbour; the Service's harbour and the open sea beyond
  * (the reference scenes are composed on the Rally's) */
-const kindFor = (m: Mode): CoastKind => (m === 'rally' || refArg ? 'rally' : 'service');
+const kindFor = (m: Mode): CoastKind => (m === 'rally' || (refArg && refArg !== 'harbour') ? 'rally' : 'service');
 function newCoast(s: number) {
   seed = s; coast = makeCoast(seed, kindFor(mode));
   renderer.setCoast(coast, makeWorld(coast));
@@ -351,12 +353,12 @@ function people(t: number, dt: number) {
     const s = seaAt(coast, k.x, k.z), sh = Math.sin(k.yaw), ch = Math.cos(k.yaw);
     const hb = heightAt(k.x + sh * 1.4, k.z + ch * 1.4, t, s), hs = heightAt(k.x - sh * 1.4, k.z - ch * 1.4, t, s), hp = heightAt(k.x - ch * 0.7, k.z + sh * 0.7, t, s), hq = heightAt(k.x + ch * 0.7, k.z - sh * 0.7, t, s);
     const held = (k.stage === 'line' || k.stage === 'climb') ? 1 - 0.6 * k.lee : 1;
-    const y = (hb + hs + hp + hq) / 4 + (kind === 'kayak' ? 0.12 : kind === 'paddle' ? 0.05 : kind === 'yacht' ? 0.3 : 0.24), pitch = Math.atan2(hb - hs, 2.8) * 0.8 * held, roll = Math.atan2(hp - hq, 1.4) * 0.5 * held;
+    const y = (hb + hs + hp + hq) / 4 + FLOAT[kind], pitch = Math.atan2(hb - hs, 2.8) * 0.8 * held, roll = Math.atan2(hp - hq, 1.4) * 0.5 * held;
     const pose = (poses[100 + i] = { x: k.x, z: k.z, h: k.yaw, y, pitch, roll });
     lists[kind].push(k.x, y, k.z, k.yaw, pitch, roll, 1, 0, c, 0, NONE, 0, NONE, i * 1.3);
     // (who's waiting: facing the nearest lifeboat; waving both arms when one's close)
-    const seats = kind === 'row' ? [0.55, -0.35, -1.1] : kind === 'sail' ? [0.05, -0.95] : kind === 'yacht' ? [-1.0, -1.7, -2.4, 1.6, 2.2] : [-0.05];
-    const seatY = kind === 'kayak' ? -0.3 : kind === 'paddle' ? 0.1 : kind === 'yacht' ? 0.5 : -0.12;
+    const seats = kind === 'row' ? [0.55, -0.35, -1.1] : kind === 'sail' ? [0.05, -0.95] : kind === 'yacht' ? [-1.0, -1.7, -2.4, 1.6, 2.2] : kind === 'fishing' ? [-0.7, -1.45, -2.0] : [-0.05];
+    const seatY = kind === 'kayak' ? -0.3 : kind === 'paddle' ? 0.1 : kind === 'yacht' ? 0.5 : kind === 'fishing' ? 0.3 : -0.12;
     const ppl = k.craft.people, first = ppl.length - k.left;
     let nearB = race.boats[0], nd = 1e9;
     for (const b of race.boats) { const d = Math.hypot(b.x - k.x, b.z - k.z); if (d < nd) { nd = d; nearB = b; } }
@@ -423,6 +425,19 @@ function people(t: number, dt: number) {
       const waving = (t * 0.6 + n * 0.31) % 3 < 1.2, arm = waving ? 2.5 + Math.sin(t * 10 + n) * 0.4 : 0.2;
       lists['kid' + who.style].push(x, y, z, Math.atan2(coast.gateX - x, GATE_Z - z) + Math.sin(n * 2.1) * 0.5, 0, 0, PERSON * 0.92, arm, SHIRTS[who.shirt], waving ? 2.5 + Math.sin(t * 10 + n + 2) * 0.4 : 0.2, SKINS[who.skin], 0, HAIRS[who.hair], 0);
     });
+  }
+  // (the Service's harbour: the boats moored along the jetties and at their buoys, riding the little swell there; someone
+  // out on each jetty)
+  coast.moored.forEach((m, i) => {
+    const s = seaAt(coast, m.x, m.z), sh = Math.sin(m.yaw), ch = Math.cos(m.yaw), sway = m.buoy ? Math.sin(t * 0.13 + i) * 0.25 : 0;
+    const hb = heightAt(m.x + sh * 1.4, m.z + ch * 1.4, t, s), hs = heightAt(m.x - sh * 1.4, m.z - ch * 1.4, t, s), hp = heightAt(m.x - ch * 0.7, m.z + sh * 0.7, t, s), hq = heightAt(m.x + ch * 0.7, m.z - sh * 0.7, t, s);
+    lists[m.kind].push(m.x, (hb + hs + hp + hq) / 4 + FLOAT[m.kind], m.z, m.yaw + sway, Math.atan2(hb - hs, 2.8) * 0.8, Math.atan2(hp - hq, 1.4) * 0.5, 1, 0, CRAFT_COLOURS[m.colour], 0, NONE, 0, NONE, i * 1.7);
+    if (m.buoy) { const bx = m.x + Math.sin(m.yaw + sway) * 4.5, bz = m.z + Math.cos(m.yaw + sway) * 4.5; lists['buoy-red'].push(bx, heightAt(bx, bz, t, s) - 0.25, bz, 0, 0, 0, 0.42, 0, NONE, 0, NONE, 0, NONE, 0); }
+  });
+  for (const p of coast.props) if (p.kind === 'jetty') {
+    const n = Math.round(p.x * 7 + p.z * 3) >>> 0, who = TOWNSFOLK[n % TOWNSFOLK.length], along = p.v * (0.45 + (n % 5) * 0.1), sx = Math.sin(p.yaw), sz = Math.cos(p.yaw), side = n % 2 ? 1 : -1;
+    const x = p.x + sx * along + sz * side * 0.7, z = p.z + sz * along - sx * side * 0.7, wave = (t * 0.5 + n) % 4 < 1.2;
+    lists['kid' + who.style].push(x, 2.35, z, p.yaw + side * 1.3, 0, 0, PERSON * 0.95, wave ? 2.5 + Math.sin(t * 9) * 0.4 : 0.25, SHIRTS[(who.shirt + n) % 8], 0.25, SKINS[who.skin], 0, HAIRS[(who.hair + n) % 6], 0);
   }
   // (the buoys, bobbing)
   for (const y of coast.buoys) {
@@ -776,7 +791,7 @@ $('horn').onclick = () => { sound.wake(); sound.horn(); hornAt = vt; };
 
 // ─── events from the race: sounds, words, marks ───
 let lastCount = 4, snapWanted = false, snapUrl = '', landed = { n: 0, at: -9 };
-const CRAFT_SAY = { row: 'a rowing boat', kayak: 'a kayaker', sail: 'a sailing dinghy', paddle: 'a paddleboarder', yacht: 'a yacht that’s lost its mast' } as const;
+const CRAFT_SAY = { row: 'a rowing boat', kayak: 'a kayaker', sail: 'a sailing dinghy', paddle: 'a paddleboarder', yacht: 'a yacht that’s lost its mast', fishing: 'a fishing boat with engine trouble' } as const;
 const WHERE = ['just outside the harbour', 'along the coast', 'out at sea'];
 /** the coastguard's call on the radio: who, how many, where */
 function callText(k: Rescue) {
@@ -900,6 +915,10 @@ function refScene(kind: string) {
     for (const o of race.boats) if (o !== me) place(o, G.x + (o.id - 2) * 30, G.z - 120 - o.id * 12, 0.1, 6);
     const at = world(me, side * 8, -9), look = world(me, side * 2.2, -1.0);
     refCam = { from: [at[0], 2.3, at[1]], target: [look[0], 1.6, look[1]], fov: 0.66, aperture: 0.5, focus: 10 };
+  } else if (kind === 'harbour') {
+    // (the Service's harbour from above its mouth: the crews moored at the pier, the jetties and their boats, the town)
+    const H = coast.harbour;
+    refCam = { from: [H.x + 62, 46, H.z - 92], target: [H.x - 12, 1, H.z + 8], fov: 0.82, aperture: 0.2, focus: 110 };
   } else if (kind === 'coast') {
     // (from the sea off the big headland, looking along the cliffs: the lighthouse and cottages on top, the rocks and surf below)
     const L = coast.props.find((p) => p.kind === 'lighthouse' && p.v === 0) ?? coast.props.find((p) => p.kind === 'lighthouse')!;

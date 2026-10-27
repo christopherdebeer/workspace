@@ -44,6 +44,12 @@
     "file": "v-start.jpg"
    },
    {
+    "name": "home",
+    "title": "Home harbour",
+    "caption": "the little harbour from above its mouth: the crews moored along the pier with its lamps and bunting, the station, timber jetties all round the basin with boats moored along them and more at their buoys, the town on the hill",
+    "file": "v-home.jpg"
+   },
+   {
     "name": "harbour",
     "title": "Setting out",
     "caption": "out through the harbour, the town on its hill, the lighthouses either side of the mouth",
@@ -115,13 +121,13 @@
    {
     "name": "yacht",
     "title": "A yacht that’s lost its mast",
-    "caption": "further out, the bigger calls: a yacht dismasted, four aboard, the mast lying along her deck",
+    "caption": "further out, the bigger calls: a yacht dismasted, five aboard, the mast lying along her deck",
     "file": "v-yacht.jpg"
    },
    {
     "name": "deck",
     "title": "A full deck",
-    "caption": "everyone found out there, and no one left waiting: home with all seven of them",
+    "caption": "everyone found out there, and no one left waiting: home with all six of them",
     "file": "v-deck.jpg"
    }
   ]

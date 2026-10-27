@@ -13,6 +13,7 @@ Made by `node cells/lab/views.mjs rescue-coast` from `client/rescue-coast/views.
 ## The Rescue Service
 
 ![Moored in the harbour: as the count goes down, a look round the harbour: the five crews moored, bows to the mouth, the town on its hill behind; a few from the town on the quay to see them off](v-start.jpg)
+![Home harbour: the little harbour from above its mouth: the crews moored along the pier with its lamps and bunting, the station, timber jetties all round the basin with boats moored along them and more at their buoys, the town on the hill](v-home.jpg)
 ![Setting out: out through the harbour, the town on its hill, the lighthouses either side of the mouth](v-harbour.jpg)
 ![Along the coast: the first calls are just outside the harbour; everyone rescued so far (of everyone whose call has come in), your own crew’s count, the time with the weather as it is now; the map, a little boat another crew is going for ringed in their colour; the five crews’ counts under it](v-racing.jpg)
 
@@ -31,8 +32,8 @@ Made by `node cells/lab/views.mjs rescue-coast` from `client/rescue-coast/views.
 
 ![The open sea: past the harbour’s headland the far shore falls away: islets and reefs out over the water, the swell bigger out here; the sun going down](v-open-sea.jpg)
 ![Rough water: out at sea, beam-on in a bigger swell: they climb across more slowly, and the bar goes amber](v-rough.jpg)
-![A yacht that’s lost its mast: further out, the bigger calls: a yacht dismasted, four aboard, the mast lying along her deck](v-yacht.jpg)
-![A full deck: everyone found out there, and no one left waiting: home with all seven of them](v-deck.jpg)
+![A yacht that’s lost its mast: further out, the bigger calls: a yacht dismasted, five aboard, the mast lying along her deck](v-yacht.jpg)
+![A full deck: everyone found out there, and no one left waiting: home with all six of them](v-deck.jpg)
 
 ## Home
 
