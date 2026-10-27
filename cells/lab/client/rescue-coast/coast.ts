@@ -88,8 +88,9 @@ export function exposureAt(c: Coast, x: number, z: number) {
 /** how much of the swell there is here (0.18-1): smaller near the shore, and in the lee of land; the sea's `k` (the
  * shader works it out the same way from the same numbers) */
 export const seaAt = (c: Coast, x: number, z: number) => calmAt(shoreAt(c, x, z)) * (0.35 + 0.65 * exposureAt(c, x, z));
-/** the exposure: look back the way the swell comes, along three rays; land close upwind shelters the water */
-function exposeCoast(c: Coast) {
+/** the exposure: look back the way the swell comes, along three rays; land close upwind shelters the water; (the
+ * Service) well off the mainland (`mainland`: metres to it), more than open */
+function exposeCoast(c: Coast, mainland: ((x: number, z: number) => number) | null) {
   const e = new Float32Array(NEX * NEZ), base = Math.atan2(-SWELL[0], -SWELL[1]);
   for (let j = 0; j < NEZ; j++) for (let i = 0; i < NEX; i++) {
     const x = X0 + i * EXPO, z = Z0 + j * EXPO;
@@ -103,7 +104,7 @@ function exposeCoast(c: Coast) {
     }
     // (inside the harbour mouth it's calm whatever the swell; out at sea, well off the land, the swell has room to build
     // and it's more than open: up to 1.45)
-    e[j * NEX + i] = (1 - 0.9 * (shelter / 3)) * (1 - 0.7 * ss(GATE_Z - 10, GATE_Z + 30, z)) * (c.kind === 'service' ? 1 + 0.45 * ss(70, 230, shoreAt(c, x, z)) : 1);
+    e[j * NEX + i] = (1 - 0.9 * (shelter / 3)) * (1 - 0.7 * ss(GATE_Z - 10, GATE_Z + 30, z)) * (mainland ? 1 + 0.45 * ss(60, 220, mainland(x, z)) : 1);
   }
   c.exposure = e;
 }
@@ -274,7 +275,7 @@ function tryCoast(seed: number, attempt: number, kind: CoastKind, force = false)
     seed, kind, name: `${NAMES_A[hash(seed, 1) % NAMES_A.length]} ${NAMES_B[hash(seed, 2) % NAMES_B.length]}`,
     shore, ground, centre, gateX, islets, rocks: [], props: [], buoys: [], crafts: [], starts: [], berths: [], harbour: basin, pier, surf: new Float32Array(0), open: new Uint8Array(NNX * NNZ), exposure: new Float32Array(0),
   };
-  exposeCoast(coast);
+  exposeCoast(coast, svc ? (x, z) => Math.min(x - west(z), east(z) - x) : null);
   // ─── where hulls may go: the navigation grid, and that the race can be run on it ───
   for (let j = 0; j < NNZ; j++) for (let i = 0; i < NNX; i++) {
     const x = X0 + (i + 0.5) * NAV, z = Z0 + (j + 0.5) * NAV;
@@ -283,7 +284,7 @@ function tryCoast(seed: number, attempt: number, kind: CoastKind, force = false)
   }
   // (the Rally lines up off the station at the far end; the Service's crews start moored along the pier, and that's where
   // they come back to)
-  const moor = (k: number) => ({ x: pier!.x1 - 7 - k * 11, z: pier!.z1 + 7, h: Math.PI / 2 });
+  const moor = (k: number) => ({ x: pier!.x1 - 4 - k * 11, z: pier!.z1 + 7, h: Math.PI / 2 });
   for (let k = 0; k < 5; k++) coast.starts.push(svc ? moor(k) : { x: centre(START_Z) + (k - 2) * 13, z: START_Z, h: 0 });
   const reach = flood(coast.open, navIndex(coast.starts[2].x, START_Z));
   const gateCell = navIndex(gateX, GATE_Z + 8);
@@ -325,16 +326,17 @@ function callOut(c: Coast, rand: Rand, reach: Uint8Array, west: (z: number) => n
   const zones = [
     // [how many, z from, z to, how far off the coast at most, the soonest and latest calls (s)]
     { n: 5, z0: GATE_Z - 400, z1: GATE_Z - 70, off: 1e9, min: 15, t0: 0, t1: 60 },
-    { n: 7, z0: 230, z1: GATE_Z - 340, off: 120, min: 15, t0: 20, t1: 110 },
-    { n: 6, z0: 210, z1: GATE_Z - 340, off: 1e9, min: 85, t0: 45, t1: 140 },
+    { n: 7, z0: 230, z1: GATE_Z - 340, off: 120, min: 15, t0: 20, t1: 100 },
+    { n: 6, z0: 210, z1: GATE_Z - 340, off: 1e9, min: 85, t0: 60, t1: 150 },
   ];
   const person = () => ({ skin: Math.floor(rand() * 6), hair: Math.floor(rand() * 6), shirt: Math.floor(rand() * 8), style: Math.floor(rand() * 3) });
   zones.forEach((Z, zone) => {
-    for (let k = 0; k < Z.n; k++) for (let tries = 0; tries < 80; tries++) {
+    for (let k = 0; k < Z.n; k++) for (let tries = 0; tries < 120; tries++) {
       const z = Z.z0 + ((k + rand()) / Z.n) * (Z.z1 - Z.z0), wx = west(z);
       const x = wx + 20 + rand() * Math.min(Z.off, X1 - EDGE - 30 - wx - 20);
       const cell = navIndex(x, z), s = shoreAt(c, x, z);
-      if (s < Z.min || cell < 0 || !reach[cell]) continue;
+      // (out at sea, among islets, a little nearer one if it must)
+      if (s < (tries < 60 ? Z.min : Math.min(Z.min, 60)) || cell < 0 || !reach[cell]) continue;
       if (c.crafts.some((o) => Math.hypot(o.x - x, o.z - z) < 30)) continue;
       if (c.buoys.some((b) => Math.hypot(b.x - x, b.z - z) < 14)) continue;
       const kind: CraftKind = zone === 0 ? (rand() < 0.5 ? 'kayak' : 'row') : zone === 1 ? (rand() < 0.6 ? 'row' : rand() < 0.5 ? 'sail' : 'kayak') : rand() < 0.5 ? 'sail' : 'row';

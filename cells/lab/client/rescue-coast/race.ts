@@ -258,7 +258,7 @@ function collide(r: Race, dt: number) {
   }
   // (a waiting little boat is nudged aside; a buoy holds its place and the hull slides round it)
   for (const k of r.crafts) {
-    if (k.stage === 'line' || k.stage === 'climb' || !k.called || k.stage === 'done') continue;
+    if (k.stage === 'line' || k.stage === 'climb' || !k.called) continue;
     for (const b of r.boats) for (const p of circles(b)) {
       const dx = k.x - p[0], dz = k.z - p[1], d = Math.hypot(dx, dz), m = 2.3 + 1.6;
       if (d < m && d > 1e-4) { k.x += (dx / d) * (m - d) * 0.7; k.z += (dz / d) * (m - d) * 0.7; b.x -= (dx / d) * (m - d) * 0.3; b.z -= (dz / d) * (m - d) * 0.3; }
@@ -310,6 +310,7 @@ function board(r: Race, dt: number) {
         else if (full(r, b)) {
           // (the Service: no more room; the rest wait for the next lifeboat, and this one takes its people home)
           k.by = -1; k.stage = 'wait'; k.t = 0; if (k.claim === b.id) k.claim = -1;
+          if (b.ai) { b.ai.target = -1; b.ai.think = 0.6; }
           r.events.push({ kind: 'full', boat: b.id }, { kind: 'letgo', boat: b.id, craft: k.craft.id });
         }
         if (k.left <= 0 && full(r, b)) r.events.push({ kind: 'full', boat: b.id });

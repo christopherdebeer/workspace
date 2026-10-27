@@ -1,6 +1,8 @@
 // Rescue · Rocky Coast in a browser, played by hand (node cells/lab/devtools/rescue-coast-smoke.mjs): the title and its panels
-// (a boat, a level, the weather), Play (the Rescue Service) and the count, the Rally from its own button, the joystick held up (the boat goes ahead), held right (it turns to the screen's right),
-// let go (it eases to a stop), the arrow keys, pause, the page saying what it should, no errors; the end's places.
+// (a boat, a level, the weather), Play (the Rescue Service: moored at the pier in the harbour, the first calls in, room
+// for six) and the count, the Rally from its own button (on its own coast), the joystick held up (the boat goes ahead),
+// held right (it turns to the screen's right), let go (it eases to a stop), the arrow keys, pause, the page saying what it
+// should, no errors; the end's places.
 process.env.EXPERIMENT = 'rescue-coast'; process.env.READY = '__rescue';
 const { withWood } = await import('./harness.mjs');
 let n = 0, bad = 0;
@@ -32,7 +34,8 @@ await withWood(async (lab) => {
   ok('no joystick on the title', !(await p.isVisible('#stick .base')));
   await p.click('#play');
   s = await until(p, (x) => x.ui === 'race', 60000);
-  ok('play: the count, in the Rescue Service', s.ui === 'race' && s.mode === 'service' && (s.phase === 'countdown' || s.phase === 'racing'), [s.ui, s.mode, s.phase]);
+  ok('play: the count, in the Rescue Service, on its own coast', s.ui === 'race' && s.mode === 'service' && s.coast === 'service' && (s.phase === 'countdown' || s.phase === 'racing'), [s.ui, s.mode, s.coast, s.phase]);
+  ok('moored in the harbour, the first calls in', s.boats.every((b) => b.z > 860) && s.called === 3, [s.boats.map((b) => b.z.toFixed(0)), s.called]);
   s = await until(p, (x) => x.phase === 'racing');
   ok('and the race is on', s.phase === 'racing', [s.phase, s.frameMs]);
   // (the joystick: where it is, and that it stays put out of the way, in the bottom corner)
@@ -41,8 +44,9 @@ await withWood(async (lab) => {
   const cx = base.x + base.width / 2, cy = base.y + base.height / 2;
   const b0 = (await state(p)).boats[2];
   await p.mouse.move(cx, cy); await p.mouse.down(); await p.mouse.move(cx, cy - 60, { steps: 4 });
-  s = await until(p, (x) => x.boats[2].z - b0.z > 5);
-  ok('stick up: under way, ahead', s.stick.held && s.boats[2].v > 2 && s.boats[2].z - b0.z > 5, [s.stick, s.boats[2], b0]);
+  const ahead = (x) => (x.boats[2].x - b0.x) * Math.sin(b0.h) + (x.boats[2].z - b0.z) * Math.cos(b0.h);
+  s = await until(p, (x) => ahead(x) > 5);
+  ok('stick up: under way, ahead', s.stick.held && s.boats[2].v > 2 && ahead(s) > 5, [s.stick, s.boats[2], b0]);
   const h0 = s.boats[2].h;
   await p.mouse.move(cx + 60, cy - 20, { steps: 4 });
   s = await until(p, (x) => x.boats[2].h < h0 - 0.3);
@@ -55,8 +59,8 @@ await withWood(async (lab) => {
   s = await until(p, (x) => Math.hypot(x.boats[2].x - k0.x, x.boats[2].z - k0.z) > 4);
   await p.keyboard.up('ArrowUp');
   ok('the up arrow: away again', Math.hypot(s.boats[2].x - k0.x, s.boats[2].z - k0.z) > 4, [k0, s.boats[2]]);
-  const words = await p.evaluate(() => ({ places: document.querySelectorAll('#ladder div').length, me: !!document.querySelector('#ladder div.me'), count: document.getElementById('count').textContent, map: document.getElementById('map').getBoundingClientRect().width > 80 }));
-  ok('the five crews under the map, yours marked; everyone rescued so far of everyone out there; the map', words.places === 5 && words.me && /^\d+\/\d+$/.test(words.count) && words.map, words);
+  const words = await p.evaluate(() => ({ places: document.querySelectorAll('#ladder div').length, me: !!document.querySelector('#ladder div.me'), count: document.getElementById('count').textContent, aboard: document.getElementById('place').textContent, map: document.getElementById('map').getBoundingClientRect().width > 80 }));
+  ok('the five crews under the map, yours marked; everyone rescued so far of everyone called; aboard of six; the map', words.places === 5 && words.me && /^\d+\/\d+$/.test(words.count) && /^\d\/6$/.test(words.aboard) && words.map, words);
   await p.click('#pause');
   s = await until(p, (x) => x.paused, 30000);
   const t0 = s.t; await p.waitForTimeout(4000); s = await state(p);
@@ -83,7 +87,7 @@ await withWood(async (lab) => {
   const r0 = await lab.open('seed=2');
   await r0.click('#rally');
   const rs = await until(r0, (x) => x.ui === 'race', 60000);
-  ok('Rally: Lily’s race, from its own button', rs.mode === 'rally', rs.mode);
+  ok('Rally: Lily’s race, from its own button, on the Rally’s coast', rs.mode === 'rally' && rs.coast === 'rally', [rs.mode, rs.coast]);
   await r0.close();
   for (const [mode, want] of [['', /everyone home/i], ['&mode=rally', /wins|won|came/i]]) {
     const q = await lab.open(`seed=2&auto${mode}&view=podium&still`);
