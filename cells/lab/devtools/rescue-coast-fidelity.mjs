@@ -14,12 +14,14 @@ const SCENES = [
 ];
 // (--only=hero,coast: just those)
 const only = process.argv.find((a) => a.startsWith('--only='))?.slice(7).split(',');
+const clean = process.argv.includes('--clean');
+const suffix = clean ? '-clean' : ''; // no bloom or lens blur: judge actual materials
 await withWood(async (lab) => {
   const shots = [];
   for (const s of SCENES.filter((s) => !only || only.includes(s.name))) {
-    const p = await lab.open(`seed=1&ref=${s.name}`, s.size);
+    const p = await lab.open(`seed=1&ref=${s.name}${clean ? '&clean' : ''}`, s.size);
     await p.waitForTimeout(4000);
-    const file = join(out, `render-${s.name}.png`);
+    const file = join(out, `render-${s.name}${suffix}.png`);
     await p.screenshot({ path: file });
     if (p.errors?.length) console.log(s.name, p.errors.slice(0, 2));
     shots.push([join(CELL, 'devtools/fidelity', s.target), file, s.name]);
@@ -31,8 +33,8 @@ await withWood(async (lab) => {
   const img = (f) => `data:image/${f.endsWith('png') ? 'png' : 'jpeg'};base64,${readFileSync(f).toString('base64')}`;
   await page.setContent(`<style>body{margin:0;background:#1d2533;font:600 16px system-ui;color:#dfe6f0}.row{display:flex;gap:10px;padding:10px}figure{margin:0}img{height:560px;display:block}figcaption{padding:4px 2px}</style>${shots.map(([t, r, n]) => `<div class="row" id="${n}"><figure><img src="${img(t)}"><figcaption>target · ${n}</figcaption></figure><figure><img src="${img(r)}"><figcaption>rescue-coast · ?ref=${n}</figcaption></figure></div>`).join('')}`);
   await page.waitForTimeout(300);
-  for (const [, , n] of shots) await page.locator('#' + n).screenshot({ path: join(out, `fidelity-${n}.jpg`), type: 'jpeg', quality: 85 });
-  await page.locator('body').screenshot({ path: join(out, 'fidelity.jpg'), type: 'jpeg', quality: 82 });
+  for (const [, , n] of shots) await page.locator('#' + n).screenshot({ path: join(out, `fidelity-${n}${suffix}.jpg`), type: 'jpeg', quality: 85 });
+  await page.locator('body').screenshot({ path: join(out, `fidelity${suffix}.jpg`), type: 'jpeg', quality: 82 });
   await page.close();
   console.log('wrote', join(out, 'fidelity.jpg'));
 });

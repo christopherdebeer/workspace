@@ -318,3 +318,15 @@ The sea:
 - a hovercraft.
 
 They're beyond Lily's two pages, and they'd come after the race itself looks and plays right.
+
+
+## Render-quality pass · 27 October 2026
+
+The original Lily reference is a **WebGL frame acceptance target**, not a mood board. The latest screenshot audit found large white foam sheets, glowing patches, flat painted surfaces and shallow-looking materials. The first fidelity-only correction therefore deliberately does not add any new missions, gameplay systems, weather presets or coastal areas.
+
+- `render.ts`: whitewater coverage now stays broken and partly translucent; old wind streaks and shoreline wash are less pervasive; foam noise is evaluated only where a wave/hull/shore actually produces foam. High-frequency water normals and sun glints are moderated to reveal swell shape instead of glitter. Painted fibreglass, glass, cloth and damp granite have different surface responses and less excessively bright specular highlights.
+- `fx.ts`: wakes persist for a shorter period and remain closer to the boat rather than expanding to enormous solid ribbons.
+- `models.ts`: rescue-boat rubber rubbing collar and its fasteners, cabin grab handles and a recessed foredeck hatch improve the material and silhouette hierarchy without introducing another draw-call-per-detail.
+- `render.ts`: bloom reduced substantially; `?clean` disables both bloom and lens blur without changing material lighting, so the raw scene remains independently judgeable. `devtools/rescue-coast-fidelity.mjs --clean` produces separate clean comparison frames without overwriting graded ones.
+
+**Quality gate:** compare `?ref=hero&clean`, `?ref=rescue&clean`, and `?ref=coast&clean` at identical fixed seeds and framing, then compare the final graded versions. Check water body/foam separation, lifeboat silhouette/material identity, coast shape and exposure. The existing test harness can generate comparison sheets. Real iPhone performance and exact image fidelity **still require visual verification**; compile/deploy alone cannot establish that the art target has been met.

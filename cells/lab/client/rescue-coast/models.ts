@@ -144,6 +144,34 @@ export function lifeboat(): Mesh {
   b.use(0, SRC.OWN, M.SOFT);
   for (let k = 0; k < 3; k++) b.torus([0, 0, k * 0.07], 0.32 - k * 0.04, 0.05, () => ROPE, 14, 4);
   b.at();
+  // A continuous broad inflatable rubbing collar defines the actual rescue-boat
+  // silhouette instead of a pencil-thin edge against the blue hull.
+  b.use(0, SRC.OWN, M.SOFT);
+  for (const side of [-1, 1]) {
+    const collar = edge(side, -0.20, 0.08);
+    for (let i = 0; i < collar.length - 2; i++) b.tube(collar[i], collar[i + 1], 0.175, [0.08, 0.1, 0.13], 9);
+    // Lower rubber seam and the fender's recognisable fastening points.
+    for (const z of [-4.55, -3.1, -1.55, 0.2, 1.9, 3.65]) {
+      const t = Math.max(.01, Math.min(.98, tAt(z)));
+      const x = side * (hb(t) + 0.10), y = sheer(t) - .31;
+      b.tube([x, y - .16, z], [x, y + .2, z], .058, [0.14, .17, .19], 7);
+    }
+    // Recessed cabin-side grab handles: small dark attachment bosses and bright rails.
+    b.use(0, SRC.OWN, M.GLASS);
+    for (const z of [wz - 1.15, wz + 1.15]) {
+      const x = side * (WX + .075);
+      b.tube([x, wy + .78, z], [x, ry - .14, z], .046, STEEL, 8);
+      for(const y of [wy + .8, ry - .16]) b.sphere([x, y, z], .08, [0.1,.12,.15], [1,1,1], 4, 8);
+    }
+    b.use(0, SRC.OWN, M.SOFT);
+  }
+  b.use(0, SRC.OWN, M.MATTE);
+  // Dark gasket and hatch inset on the foredeck: restraint rather than noisy detailing.
+  const hz = 3.12, hy = deckAt(hz) + .055;
+  b.roundBox([0, hy, hz], [.52,.035,.69], .055, [.14,.18,.22], 4);
+  b.roundBox([0, hy + .045, hz], [.41,.024,.58], .045, [.43,.49,.5], 4);
+  b.use(0, SRC.OWN, M.GLASS);
+  for(const side of [-1,1]) b.tube([side*.37, hy+.07, hz-.28],[side*.37, hy+.07, hz+.28], .028, STEEL, 6);
   return smooth(b.done(), 0.75);
 }
 
