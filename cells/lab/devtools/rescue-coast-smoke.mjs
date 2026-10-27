@@ -28,7 +28,7 @@ await withWood(async (lab) => {
   await p.click('#levels button[data-level="medium"]');
   await p.click('#settings-panel [data-close]');
   s = await until(p, (x) => x.mine === 2 && x.level === 'medium', 60000);
-  ok('a boat chosen (Gannet), a level (medium)', s.mine === 2 && s.level === 'medium', [s.mine, s.level]);
+  ok('a boat chosen (Turtle), a level (medium)', s.mine === 2 && s.level === 'medium', [s.mine, s.level]);
   ok('no joystick on the title', !(await p.isVisible('#stick .base')));
   await p.click('#play');
   s = await until(p, (x) => x.ui === 'race', 60000);

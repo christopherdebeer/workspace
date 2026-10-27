@@ -23,11 +23,12 @@ import { CLEAR, GATE_HALF, GATE_Z, NAV, NNX, NNZ, X0, Z0, navIndex, seaAt, seawa
 import { SEA, SWELL } from './waves';
 
 export const BOATS = [
+  // (Lily's boats, as she named them)
   { name: 'Puffin', colour: [1.0, 0.42, 0.05] },
-  { name: 'Seal', colour: [0.86, 0.12, 0.1] },
-  { name: 'Gannet', colour: [0.13, 0.42, 0.93] },
-  { name: 'Otter', colour: [1.0, 0.78, 0.08] },
-  { name: 'Dolphin', colour: [0.13, 0.64, 0.3] },
+  { name: 'Dolphin', colour: [0.13, 0.42, 0.93] },
+  { name: 'Turtle', colour: [0.13, 0.64, 0.3] },
+  { name: 'Sunfish', colour: [1.0, 0.78, 0.08] },
+  { name: 'Starfish', colour: [0.62, 0.3, 0.86] },
 ] as const;
 export type Level = 'easy' | 'medium' | 'hard';
 export type Mode = 'service' | 'rally';

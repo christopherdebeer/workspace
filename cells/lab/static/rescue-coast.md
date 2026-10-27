@@ -23,7 +23,7 @@ It shares no code with the original [Rescue Race](/rescue), which stays as it is
 The title is the boards' title card: your lifeboat charging along under the lighthouse's headland in the weather you've chosen (round a smooth loop worked out for each coast: out along the rocks, a wide slow turn, back further out, a wide turn home, leaning into the turns; the camera waits a little way ahead round the loop and eases after it, so the picture never jumps or starts over), the logo (*All boats home* under it), and the menu:
 - **Play:** straight out on a call, in the Rescue Service.
 - **Rally:** Lily's race.
-- **Boats:** choose your lifeboat. All five are the same all-weather lifeboat: a navy hull with tyre fenders along its sides, a tall rounded wheelhouse with framed windows and an upper steering position, a black mast; each wheelhouse in its own colour: Puffin orange, Seal red, Gannet blue, Otter yellow, Dolphin green. Each shows your best with it.
+- **Boats:** choose your lifeboat. All five are the same all-weather lifeboat: a navy hull with tyre fenders along its sides, a tall rounded wheelhouse with framed windows and an upper steering position, a black mast; each wheelhouse in its own colour, with the names Lily gave them: Puffin orange, Dolphin blue, Turtle green, Sunfish yellow, Starfish purple. Each shows your best with it.
 - **Weather:** seven tiles; the title behind changes as you pick.
 - **Settings:**
   - how good the other crews are (easy, medium, hard);
@@ -57,7 +57,7 @@ The title is the boards' title card: your lifeboat charging along under the ligh
 - **top-right:**
   - a round map turned to your heading, N going round its rim, showing the little boats still waiting (in their colours; in the Service, one another crew is going for has their colour round it), the other lifeboats and the harbour mouth;
   - under it, the five crews' counts (the Rally: the five places).
-- **a speech bubble:** what to do next ("Push the stick to go!", "Slow down — let go of the stick!", "Nice and steady — climbing aboard!", "Everyone's aboard! Bring them home to the harbour"; the Rally's "Last call! Head for the harbour!"), and the other crews on the radio ("Gannet: All yours, Puffin — we'll find someone else!").
+- **a speech bubble:** what to do next ("Push the stick to go!", "Slow down — let go of the stick!", "Nice and steady — climbing aboard!", "Everyone's aboard! Bring them home to the harbour"; the Rally's "Last call! Head for the harbour!"), and the other crews on the radio ("Turtle: All yours, Puffin — we'll find someone else!").
 - **a lifebuoy and a bar** that fills while people come aboard.
 - **arrows** at the edge to the nearest little boats out of sight (in the Service, ones no other crew is going for), and to the harbour when it's time.
 - **the stick and the horn**, bottom-right.
