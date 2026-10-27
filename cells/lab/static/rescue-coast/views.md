@@ -6,7 +6,8 @@ Made by `node cells/lab/views.mjs rescue-coast` from `client/rescue-coast/views.
 
 ![Lily’s Rescue Boats: All boats home: your lifeboat charging along under the lighthouse; Play (the Rescue Service), Rally (Lily’s race), Boats, Weather, Settings](v-title.jpg)
 ![The title, on a bigger screen: the menu to the right, as on the boards](v-title-wide.jpg)
-![Choose your boat: your crew, Lily’s five, each in its own colour; and your boat: the lifeboat, good at everything; the inshore boat, quickest but bumpy alongside out at sea; the harbour launch, slow but steadiest](v-boats.jpg)
+![Choose your boat: a small drawer; behind it, the three kinds moored side by side along your pier in your crew’s colour, the camera on the one chosen: the lifeboat, good at everything; the inshore boat, quickest but bumpy alongside out at sea; the harbour launch, slow but steadiest. Lily’s five crews below](v-boats.jpg)
+![Choose your boat, on a bigger screen: the drawer down the side, the boat chosen at its mooring](v-boats-wide.jpg)
 ![The weather: seven, from the boards: the title behind changes as you pick](v-weather.jpg)
 ![Settings: how good the others are, which side the stick goes, sound, a new coast](v-settings.jpg)
 

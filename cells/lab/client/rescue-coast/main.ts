@@ -16,7 +16,7 @@
  * far into the race; `?still` time held; `?view=podium`; `?near=n` little boat n and the boat coming for it;
  * `?mode=rally` the Rally; `?at=` the title's clock (seconds round its loop); `?weather=sunny|calm|windy|stormy|foggy|night|sunset`; `?study` a close look at your boat; `?zoom=`; `?hand=touch|left|right` where you steer from (wherever you touch unless asked, or a stick in a bottom corner); `?preview` small and quiet.
  */
-import { CLEAR, GATE_HALF, GATE_Z, START_Z, groundAt, makeCoast, seaAt, seaward, shoreAt, type Coast, type CoastKind } from './coast';
+import { CLEAR, GATE_HALF, GATE_Z, START_Z, groundAt, makeCoast, mooring, seaAt, seaward, shoreAt, type Coast, type CoastKind } from './coast';
 import { BOATS, CLIMB, HALF_BEAM, HALF_LEN, HELP, KINDS, LEVELS, LINE, VMAX, everyoneAboard, insideHome, local, newRace, runFor, serviceCrews, standings, start, step, world, type BoatKind, type Level, type Mode, type Race, type Rescue } from './race';
 import { makeWorld } from './world';
 import { FX, Instances, Renderer, mat4, type Draw, type Frame } from './render';
@@ -196,9 +196,20 @@ function followed() {
 const nearArg = params.get('near');
 function camera(dt: number, t: number, w: number, h: number) {
   const portrait = h > w, aspect = w / h;
-  let target: number[], from: number[], fov = portrait ? 1.02 : 0.86, shift = 0;
+  let target: number[], from: number[], fov = portrait ? 1.02 : 0.86, shift = 0, shiftX = 0;
   if (refCam) { target = refCam.target; from = refCam.from; fov = refCam.fov; }
-  else if (ui === 'title') {
+  else if (ui === 'title' && showroom) {
+    // (choosing your boat: a three-quarter look from across the water at the one chosen, the pier and the town behind; the
+    // camera eases along the pier as you choose another; the boat kept clear of the drawer)
+    const b = race.boats[Math.max(0, BOAT_KINDS.indexOf(boatKind))], p = poses[b.id] ?? { y: 0 };
+    const wantT = [b.x + 0.6, p.y + 1.5, b.z], wantF = [b.x + (portrait ? 13 : 12), p.y + (portrait ? 9 : 5.2), b.z + (portrait ? 25 : 14)];
+    const snap = dt <= 0 || !titleCam, kf = snap ? 1 : 1 - Math.exp(-dt * 2.5), kt = snap ? 1 : 1 - Math.exp(-dt * 3.5);
+    if (!titleCam) titleCam = { from: wantF.slice(), target: wantT.slice() };
+    for (let i = 0; i < 3; i++) { titleCam.from[i] += (wantF[i] - titleCam.from[i]) * kf; titleCam.target[i] += (wantT[i] - titleCam.target[i]) * kt; }
+    target = titleCam.target.slice(); from = titleCam.from.slice();
+    shift = portrait ? 0.36 : 0.1; shiftX = portrait ? 0 : 0.42;
+    fov = portrait ? 0.95 : 0.7;
+  } else if (ui === 'title') {
     // (low and ahead, to one side: your lifeboat charging toward you, the cliffs and the lighthouse behind it; the camera
     // waits a little way round the loop ahead of the boat, and eases after where it wants to be, so it never jumps)
     const b = race.boats[mine], p = poses[b.id] ?? { y: 0 }, side = showPath.side, ahead = onLoop(vt * SHOW_V + (portrait ? 17 : 14));
@@ -293,7 +304,7 @@ function camera(dt: number, t: number, w: number, h: number) {
   lens.focus = refCam ? refCam.focus : ui === 'race' && !study ? Math.hypot(fk.x - from[0], fk.z - from[2]) : Math.hypot(target[0] - from[0], target[1] - from[1], target[2] - from[2]);
   lens.aperture = refCam ? refCam.aperture : ui === 'title' ? 0.22 : ui === 'podium' ? 0.4 : study ? 0.5 : 0.3 + 0.22 * camCut;
   const view = mat4.lookAt(from, target, [0, 1, 0]), proj = mat4.perspective(fov, aspect, 0.5, 1800);
-  proj[9] = -shift;
+  proj[9] = -shift; proj[8] = shiftX;
   vp = mat4.mul(proj, view);
   right = [view[0], view[4], view[8]]; up = [view[1], view[5], view[9]];
 }
@@ -705,20 +716,24 @@ function say(text: string, long = false) {
 }
 
 // ─── the title, its panels; the race; the end ───
-/** a boat's picture for the cards: the lifeboat, the inshore RIB or the harbour launch, in a crew's colour */
-function boatSvg(c: readonly number[], kind: BoatKind = 'lifeboat') {
-  const col = css(c);
-  if (kind === 'inshore') return `<svg viewBox="0 0 120 70" aria-hidden="true"><path d="M12 47 L106 47 Q112 50 108 55 L96 62 L24 62 Q15 59 12 47 Z" fill="#0d1d4c"/><path d="M16 57 L102 57 L96 62 L24 62 Z" fill="#c0180f"/><path d="M14 37 L100 37 Q116 37 116 44 Q116 51 100 51 L14 51 Q8 51 8 44 Q8 37 14 37 Z" fill="${col}"/><path d="M10 47 L112 47" stroke="#111" stroke-width="2" opacity=".55"/><rect x="56" y="23" width="15" height="14" rx="3" fill="#fff"/><path d="M58 23 L62 15 L70 15 L71 23 Z" fill="#26343f"/><path d="M22 37 L27 11 M35 37 L31 11 M26 11 L32 11" stroke="#111" stroke-width="3" stroke-linecap="round"/><circle cx="29" cy="8.5" r="2.4" fill="#4a8cff"/><text x="76" y="47.5" font-size="8" font-weight="800" fill="#fff" font-family="system-ui">RNLI</text></svg>`;
-  if (kind === 'launch') return `<svg viewBox="0 0 120 70" aria-hidden="true"><path d="M6 40 L114 36 Q112 50 99 61 L19 62 Q8 57 6 40 Z" fill="#0d1d4c"/><path d="M10 55 L106 55 Q101 60 97 62 L20 62 Q14 60 10 55 Z" fill="#c0180f"/><path d="M6 40 L114 36" stroke="${col}" stroke-width="4" stroke-linecap="round"/><path d="M7 46 L112 42" stroke="#111" stroke-width="5" stroke-linecap="round"/><rect x="64" y="17" width="36" height="21" rx="5" fill="${col}"/><rect x="69" y="21" width="27" height="7" rx="2" fill="#1a2733"/><rect x="62" y="14" width="40" height="4" rx="2" fill="#eee"/><path d="M79 14 L79 2" stroke="#111" stroke-width="3"/><circle cx="79" cy="1.8" r="2" fill="#4a8cff"/><path d="M26 39 L26 22 L36 25" stroke="#111" stroke-width="2.5" fill="none" stroke-linecap="round"/><text x="72" y="35" font-size="6.5" font-weight="800" fill="#fff" font-family="system-ui">RNLI</text></svg>`;
-  return `<svg viewBox="0 0 120 70" aria-hidden="true"><path d="M8 44 L114 40 Q112 52 100 60 L22 61 Q12 56 8 44 Z" fill="#0d1d4c"/><path d="M13 55 L104 55 Q102 59 98 61 L22 61 Q16 59 13 55 Z" fill="#c0180f"/><path d="M8 44 L114 40" stroke="${col}" stroke-width="4" stroke-linecap="round"/><rect x="36" y="22" width="38" height="20" rx="5" fill="${col}"/><rect x="40" y="26" width="30" height="7" rx="2" fill="#1a2733"/><rect x="38" y="19" width="34" height="4" rx="2" fill="#eee"/><path d="M48 19 L52 2 L58 2 L62 19" stroke="#111" stroke-width="3" fill="none" stroke-linejoin="round"/><rect x="44" y="6" width="22" height="3" fill="#111"/><circle cx="55" cy="1.8" r="2" fill="#4a8cff"/><text x="80" y="51" font-size="8" font-weight="800" fill="#fff" font-family="system-ui">RNLI</text><circle cx="28" cy="30" r="4" fill="none" stroke="#f4561c" stroke-width="2.5"/></svg>`;
-}
 /** a card's bar: a label and four pips, so many lit */
 const pips = (label: string, n: number) => `<span class="pips"><i>${label}</i>${[0, 1, 2, 3].map((j) => `<b class="${j < n ? 'on' : ''}"></b>`).join('')}</span>`;
 const BOAT_KINDS: BoatKind[] = ['lifeboat', 'inshore', 'launch'];
+/** (the Boats drawer) the three kinds of boat moored side by side along your harbour's pier, all in your crew's colour;
+ * the camera goes along to the one chosen, and a tap on one chooses it */
+let showroom = false;
+function showroomPlace() {
+  BOAT_KINDS.forEach((k, i) => { const b = race.boats[i], m = mooring(coast.pier!, i); b.kind = k; b.crew = crew; b.x = m.x; b.z = m.z; b.h = m.h; b.v = 0; b.turn = 0; });
+}
 const store = { get: (k: string) => { try { return localStorage.getItem(k); } catch { return null; } }, set: (k: string, v: string) => { try { localStorage.setItem(k, v); } catch { /* (private window: no keeping) */ } } };
 const bestKey = () => mode === 'rally' ? 'lily-rescue-boats-best' : 'lily-rescue-boats-service-best';
 const bests = (): Record<string, number> => { try { return JSON.parse(store.get(bestKey()) ?? '{}'); } catch { return {}; } };
 function panel(name: '' | 'boats' | 'weather' | 'settings') {
+  // (choosing your boat: off to your harbour, where the three kinds are moored along the pier; and back out after)
+  const was = showroom;
+  showroom = name === 'boats';
+  if (showroom && !was) { mode = 'service'; if (coast.kind !== 'service') newCoast(seed); newGame(); titleCam = null; }
+  if (was && !showroom) { newGame(); titleCam = null; }
   document.body.classList.remove('panel-boats', 'panel-weather', 'panel-settings');
   if (name) document.body.classList.add('panel-' + name);
   refreshTitle();
@@ -729,11 +744,11 @@ function refreshTitle() {
   const forecast = voyage(seed, chosen).map((l) => WEATHERS[l.w].icon).join(' → ');
   $('chosen').innerHTML = `<span class="tag"><span class="dot" style="background:${css(B.colour)}"></span><b>${B.name}</b> · ${K.name.toLowerCase()}</span><span class="tag">${forecast} · ${level}</span><span class="tag">${coast.name}</span>`;
   $('weather-icon').textContent = weather.icon;
-  // (your crew's boat: its kind and its bars; the crews to choose from; the kinds of boat)
-  $('boat-show').innerHTML = `${boatSvg(B.colour, boatKind)}<b>${B.name}</b><small>${K.name.toLowerCase()} · ${best ? `your best: ${best} rescued` : 'not out yet'}</small><span class="bars">${pips('Speed', K.bars[0])}${pips('Steady', K.bars[1])}</span>`;
-  $('kinds-list').innerHTML = BOAT_KINDS.map((k) => `<button data-kind="${k}" class="${k === boatKind ? 'on' : ''}">${boatSvg(B.colour, k)}${KINDS[k].name}</button>`).join('');
+  // (the drawer: the boat chosen (you see it, moored, behind), its bars; the kinds; the crews, each in its colour)
+  $('boat-show').innerHTML = `<b>${K.name}</b><small>${B.name} · ${best ? `your best: ${best} rescued` : 'not out yet'}</small><span class="bars">${pips('Speed', K.bars[0])}${pips('Steady', K.bars[1])}</span>`;
+  $('kinds-list').innerHTML = BOAT_KINDS.map((k) => `<button data-kind="${k}" class="${k === boatKind ? 'on' : ''}">${KINDS[k].name}</button>`).join('');
   for (const el of document.querySelectorAll<HTMLElement>('#kinds-list button')) el.onclick = () => chooseKind(el.dataset.kind as BoatKind);
-  $('boats-list').innerHTML = BOATS.map((b, i) => `<button data-boat="${i}" class="${i === crew ? 'on' : ''}">${boatSvg(b.colour, boatKind)}${b.name}</button>`).join('');
+  $('boats-list').innerHTML = BOATS.map((b, i) => `<button data-boat="${i}" class="${i === crew ? 'on' : ''}"><i style="background:${css(b.colour)}"></i>${b.name}</button>`).join('');
   for (const el of document.querySelectorAll<HTMLElement>('#boats-list button')) el.onclick = () => chooseBoat(Number(el.dataset.boat));
   const g = (c: readonly number[]) => css(c);
   $('weather-list').innerHTML = WEATHER_ORDER.map((n) => { const w = WEATHERS[n]; return `<button data-weather="${n}" class="${n === weather.name ? 'on' : ''}" style="background:linear-gradient(${g(w.skyTop)}, ${g(w.skyHorizon)} 55%, ${g(w.body)} 56%, ${g(w.deep)})"><span>${w.icon}</span>${w.label}</button>`; }).join('');
@@ -742,8 +757,9 @@ function refreshTitle() {
   for (const el of document.querySelectorAll<HTMLElement>('#hands button')) { el.classList.toggle('on', el.dataset.hand === steer); el.onclick = () => { setSteer(el.dataset.hand as Steer); refreshTitle(); }; }
   $('sound').textContent = sound.on ? 'on' : 'off';
 }
-function chooseBoat(i: number) { crew = (i + 5) % 5; newGame(); refreshTitle(); }
-function chooseKind(k: BoatKind) { boatKind = k; store.set('lily-rescue-boats-kind', k); newGame(); refreshTitle(); }
+function chooseBoat(i: number) { crew = (i + 5) % 5; if (!showroom) newGame(); refreshTitle(); }
+function chooseKind(k: BoatKind) { boatKind = k; store.set('lily-rescue-boats-kind', k); if (!showroom) newGame(); refreshTitle(); }
+const nextKind = (d: number) => chooseKind(BOAT_KINDS[(BOAT_KINDS.indexOf(boatKind) + d + 3) % 3]);
 function title() {
   ui = 'title'; paused = false;
   document.body.classList.remove('racing', 'podium', 'paused'); document.body.classList.add('title');
@@ -801,8 +817,26 @@ $('open-boats').onclick = () => panel('boats');
 $('open-weather').onclick = () => panel('weather');
 $('open-settings').onclick = () => panel('settings');
 for (const el of document.querySelectorAll<HTMLElement>('[data-close]')) el.onclick = () => panel('');
-$('boat-prev').onclick = () => chooseBoat(crew - 1);
-$('boat-next').onclick = () => chooseBoat(crew + 1);
+$('boat-prev').onclick = () => nextKind(-1);
+$('boat-next').onclick = () => nextKind(1);
+/** (in the drawer) where each of the boats moored along the pier is on the screen (CSS px): its bow, middle and stern,
+ * those in front of the camera */
+function showroomPicks() {
+  return BOAT_KINDS.map((_, i) => {
+    const b = race.boats[i];
+    return [-4, 0, 4].map((along): [number, number] | null => {
+      const q = [b.x + Math.sin(b.h) * along, 1.6, b.z + Math.cos(b.h) * along], cw = vp[3] * q[0] + vp[7] * q[1] + vp[11] * q[2] + vp[15];
+      return cw <= 0 ? null : [((vp[0] * q[0] + vp[4] * q[1] + vp[8] * q[2] + vp[12]) / cw * 0.5 + 0.5) * innerWidth, (0.5 - (vp[1] * q[0] + vp[5] * q[1] + vp[9] * q[2] + vp[13]) / cw * 0.5) * innerHeight];
+    }).filter((q): q is [number, number] => !!q);
+  });
+}
+// (a tap on one of them chooses it)
+canvas.addEventListener('pointerup', (e) => {
+  if (ui !== 'title' || !showroom) return;
+  let best = -1, bd = 80;
+  showroomPicks().forEach((qs, i) => { for (const q of qs) { const d = Math.hypot(q[0] - e.clientX, q[1] - e.clientY); if (d < bd) { bd = d; best = i; } } });
+  if (best >= 0) chooseKind(BOAT_KINDS[best]);
+});
 addEventListener('keydown', (e) => {
   if ((e.key === 'Enter' || e.key === ' ') && ui === 'title' && !document.body.className.includes('panel-')) { e.preventDefault(); go('service'); }
   if (e.key === 'Escape' && ui === 'race') pause(!paused);
@@ -879,7 +913,7 @@ function frame(now: number) {
     if (fastFor > 4 && dpr + 0.15 <= ceiling && ui !== 'title') { dpr = Math.min(cap, dpr + 0.15); resize(); fastFor = 0; }
   }
   if (!still) vt += dt;
-  if (ui === 'title') { showcase(vt); for (const b of race.boats) wakes.record(b.id, b.x, b.z, b.h, b.v, vt); marks.step(dt); splashes(vt, dt); }
+  if (ui === 'title') { if (showroom) showroomPlace(); else showcase(vt); for (const b of race.boats) wakes.record(b.id, b.x, b.z, b.h, b.v, vt); marks.step(dt); splashes(vt, dt); }
   else if (ui === 'race' && paused) marks.step(0);
   else if (ui === 'race' && !still) {
     if (race.phase === 'countdown' && Math.ceil(race.count) < lastCount && race.count > 0) { lastCount = Math.ceil(race.count); say(String(lastCount)); sound.beep(); }
@@ -906,7 +940,7 @@ function frame(now: number) {
     focus: ui === 'podium' ? (coast.pier ? [coast.pier.x1 - 22, coast.berths[0].z - 30] : [coast.berths[2].x, coast.berths[2].z - 30]) : [fb.x, fb.z], draws, wakes: wakes.data, wakeCount: wakes.count, fx: marks.data, fxCount: marks.count, holes, holeCount: hc, hulls, hullCount: hullsOf(),
     weather, flash, spot: spotAt, spotDir, rally: mode === 'rally',
   };
-  if (ui === 'title') { f.zMin = showPath.z0 - 400; f.zMax = showPath.z1 + 400; }
+  if (ui === 'title') { f.zMin = showroom ? GATE_Z - 150 : showPath.z0 - 400; f.zMax = showroom ? GATE_Z + 400 : showPath.z1 + 400; }
   if (ui !== 'title') titleCam = null;
   if (ui === 'podium') { f.zMin = GATE_Z - 200; f.zMax = GATE_Z + 400; }
   renderer.draw(f, canvas.width, canvas.height);
@@ -914,7 +948,7 @@ function frame(now: number) {
   if (snapWanted) { snapWanted = false; try { snapUrl = canvas.toDataURL('image/jpeg', 0.82); ($('snap') as HTMLImageElement).src = snapUrl; } catch { /* (no picture, then) */ } }
   (window as unknown as { __rescue: unknown }).__rescue = {
     variant: 'coast', mode, coast: coast.kind, ui, paused, phase: race.phase, seed, fleet: race.boats.reduce((n, b) => n + b.rescued, 0), ashore: race.ashore.length, called: race.crafts.filter((k) => k.called).length, weather: weather.name, name: coast.name, mine, crew, kind: boatKind, level, t: race.t, auto, dpr, frameMs: ema,
-    stick: { x: stick.x, y: stick.y, held: stick.held }, steer,
+    stick: { x: stick.x, y: stick.y, held: stick.held }, steer, showroom, picks: showroom ? showroomPicks() : null,
     boats: race.boats.map((b) => ({ x: b.x, z: b.z, h: b.h, v: b.v, rescued: b.rescued, finished: b.finished, home: b.home, crew: b.crew, kind: b.kind, station: b.station })),
     boarding: race.crafts.filter((k) => k.stage === 'line' || k.stage === 'climb').map((k) => ({ craft: k.craft.id, by: k.by, stage: k.stage })),
   };

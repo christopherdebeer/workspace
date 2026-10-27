@@ -23,7 +23,7 @@ It shares no code with the original [Rescue Race](/rescue), which stays as it is
 The title is the boards' title card: your lifeboat charging along under the lighthouse's headland in the weather you've chosen (round a smooth loop worked out for each coast: out along the rocks, a wide slow turn, back further out, a wide turn home, leaning into the turns; the camera waits a little way ahead round the loop and eases after it, so the picture never jumps or starts over), the logo (*All boats home* under it), and the menu:
 - **Play:** straight out on a call, in the Rescue Service.
 - **Rally:** Lily's race.
-- **Boats:** choose your crew and your boat.
+- **Boats:** choose your crew and your boat, in a small drawer at the bottom. Behind it the camera goes to your harbour, where the three kinds of boat lie moored side by side along the pier in your crew's colour, and eases along the pier to the one chosen. Choose by its name in the drawer, the arrows either side of its card, or a tap on the boat itself; tap a crew and they all change colour. (On a wide screen the drawer is down the right-hand side.)
   - **Your crew:** Lily's five, each in its own colour, with the names she gave them: Puffin orange, Dolphin blue, Turtle green, Sunfish yellow, Starfish purple. The card shows your best with that crew.
   - **Your boat** (for the Rescue Service; the Rally's are all lifeboats), three kinds with Speed and Steady bars, as on the boards' boat-choice card (no capacity: there's room aboard for everyone you find):
     - **the lifeboat** (●●● speed, ●●● steady): the all-weather lifeboat, good at everything. A navy hull with tyre fenders along its sides, a tall rounded wheelhouse in your colour with framed windows and an upper steering position, a black mast.
@@ -40,6 +40,7 @@ The title is the boards' title card: your lifeboat charging along under the ligh
   - these notes.
 
 ![Choose your boat](rescue-coast/v-boats.jpg)
+![Choose your boat, on a bigger screen](rescue-coast/v-boats-wide.jpg)
 ![The weather](rescue-coast/v-weather.jpg)
 ![Settings](rescue-coast/v-settings.jpg)
 ![The title, on a bigger screen](rescue-coast/v-title-wide.jpg)

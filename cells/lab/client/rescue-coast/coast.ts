@@ -133,6 +133,8 @@ export const navIndex = (x: number, z: number) => {
   return i < 0 || j < 0 || i >= NNX || j >= NNZ ? -1 : j * NNX + i;
 };
 
+/** (the Service) the moorings along the pier in your harbour, from its end (yours the first): where, and heading */
+export const mooring = (pier: { x1: number; z1: number }, k: number) => ({ x: pier.x1 - 4 - k * 11, z: pier.z1 + 7, h: Math.PI / 2 });
 /** (the Service) whether a point is inside station `i`'s harbour (yours: past the mouth) */
 export function insideStation(c: Coast, i: number, x: number, z: number) {
   const a = c.stations[i]?.area;
@@ -333,7 +335,7 @@ function tryCoast(seed: number, attempt: number, kind: CoastKind, force = false)
   }
   // (the Rally lines up off the station at the far end; the Service's crews start moored along the pier, and that's where
   // they come back to)
-  const moor = (k: number) => ({ x: pier!.x1 - 4 - k * 11, z: pier!.z1 + 7, h: Math.PI / 2 });
+  const moor = (k: number) => mooring(pier!, k);
   if (svc) {
     // (the Service: one crew to each station: yours on the pier; the neighbours' at a quay in their basins, bows to the mouth)
     const NAMES = ['', 'North', 'South'];

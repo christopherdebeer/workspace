@@ -28,6 +28,17 @@ await withWood(async (lab) => {
   await p.click('#boats-list button[data-boat="2"]');
   await p.click('#kinds-list button[data-kind="inshore"]');
   ok('the card says which: the inshore boat, its speed and steadiness', await p.evaluate(() => /inshore boat/i.test(document.getElementById('boat-show').textContent) && document.querySelectorAll('#boat-show .pips b.on').length === 6));
+  s = await until(p, (x) => x.showroom && x.coast === 'service', 30000);
+  const vw0 = await p.evaluate(() => [innerWidth, innerHeight]);
+  ok('behind the drawer, the three kinds moored side by side along your harbour\'s pier, in your crew\'s colour', s.showroom && s.boats.slice(0, 3).map((b) => b.kind).join() === 'lifeboat,inshore,launch' && s.boats.slice(0, 3).every((b) => b.crew === 2 && b.z > 860 && b.z < 940), s.boats.map((b) => [b.kind, b.crew, b.z.toFixed(0)]));
+  await p.waitForTimeout(3000); s = await state(p);
+  // (a moored boat beside the one chosen, where some of it shows above the drawer)
+  const seen = (i) => s.picks[i].filter(([x, y]) => x > 12 && x < vw0[0] - 12 && y > 60 && y < vw0[1] * 0.58).sort((a, b) => Math.abs(b[0] - vw0[0] / 2) - Math.abs(a[0] - vw0[0] / 2)).pop();
+  const which = seen(2) ? 2 : 0, pk = seen(which), want = ['lifeboat', 'inshore', 'launch'][which];
+  if (pk) await p.mouse.click(pk[0], pk[1]);
+  s = await until(p, (x) => x.kind === want, 20000);
+  ok('a tap on the boat moored beside it chooses that one', !!pk && s.kind === want && await p.evaluate((w) => document.getElementById('boat-show').textContent.toLowerCase().includes(w === 'launch' ? 'harbour launch' : 'lifeboat'), want), [s.kind, want, pk, s.picks]);
+  await p.click('#kinds-list button[data-kind="inshore"]');
   await p.click('#boats-panel [data-close]');
   await p.click('#open-settings');
   await p.click('#levels button[data-level="medium"]');
