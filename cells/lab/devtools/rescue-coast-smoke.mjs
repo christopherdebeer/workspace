@@ -24,19 +24,21 @@ await withWood(async (lab) => {
   ok('Play, Rally, Boats, Weather, Settings', (await p.evaluate(() => ['play', 'rally', 'open-boats', 'open-weather', 'open-settings'].every((id) => !!document.getElementById(id)))));
   ok('the tagline: all boats home', /all boats home/i.test(await p.evaluate(() => document.querySelector('#logo .tagline')?.textContent ?? '')));
   await p.click('#open-boats');
-  ok('five boats to choose from', (await p.evaluate(() => document.querySelectorAll('#boats-list button').length)) === 5);
+  ok('five crews to choose from, and three kinds of boat', (await p.evaluate(() => [document.querySelectorAll('#boats-list button').length, document.querySelectorAll('#kinds-list button').length])).join() === '5,3');
   await p.click('#boats-list button[data-boat="2"]');
+  await p.click('#kinds-list button[data-kind="inshore"]');
+  ok('the card says which: the inshore boat, its speed and steadiness', await p.evaluate(() => /inshore boat/i.test(document.getElementById('boat-show').textContent) && document.querySelectorAll('#boat-show .pips b.on').length === 6));
   await p.click('#boats-panel [data-close]');
   await p.click('#open-settings');
   await p.click('#levels button[data-level="medium"]');
   await p.click('#settings-panel [data-close]');
-  s = await until(p, (x) => x.mine === 2 && x.level === 'medium', 60000);
-  ok('a boat chosen (Turtle), a level (medium)', s.mine === 2 && s.level === 'medium', [s.mine, s.level]);
+  s = await until(p, (x) => x.crew === 2 && x.kind === 'inshore' && x.level === 'medium', 60000);
+  ok('a crew chosen (Turtle), a boat (the inshore boat), a level (medium)', s.crew === 2 && s.kind === 'inshore' && s.level === 'medium', [s.crew, s.kind, s.level]);
   ok('no joystick on the title', !(await p.isVisible('#stick .base')));
   await p.click('#play');
   s = await until(p, (x) => x.ui === 'race', 60000);
   ok('play: the count, in the Rescue Service, on its own coast', s.ui === 'race' && s.mode === 'service' && s.coast === 'service' && (s.phase === 'countdown' || s.phase === 'racing'), [s.ui, s.mode, s.coast, s.phase]);
-  ok('moored in the harbour, the first calls in', s.boats.every((b) => b.z > 860) && s.called === 3, [s.boats.map((b) => b.z.toFixed(0)), s.called]);
+  ok('three crews: Turtle in the inshore boat at your harbour, two neighbours in the other kinds down the coast; a call in by each', s.boats.length === 3 && s.mine === 0 && s.boats[0].crew === 2 && s.boats[0].kind === 'inshore' && s.boats[0].z > 860 && s.boats.slice(1).every((b) => b.z < 600 && b.crew !== 2 && b.kind !== 'inshore') && s.boats[1].kind !== s.boats[2].kind && s.called === 3, [s.boats.map((b) => [b.crew, b.kind, b.z.toFixed(0)]), s.called]);
   s = await until(p, (x) => x.phase === 'racing');
   ok('and the race is on', s.phase === 'racing', [s.phase, s.frameMs]);
   // (steering from wherever you touch: no stick in the corner; until you've steered, a ring low down says how; a touch
@@ -44,27 +46,27 @@ await withWood(async (lab) => {
   const vw = await p.evaluate(() => [innerWidth, innerHeight]);
   ok('steering from anywhere (the default): no stick in the corner', s.steer === 'touch' && !(await p.isVisible('#stick .base')), [s.steer]);
   ok('until you\'ve steered, a ring low down shows how', await p.evaluate(() => document.getElementById('ghost').classList.contains('hint')) && await p.isVisible('#ghost'));
-  const b0 = s.boats[2], [gx, gy] = [Math.round(vw[0] * 0.3), Math.round(vw[1] * 0.62)];
+  const b0 = s.boats[s.mine], [gx, gy] = [Math.round(vw[0] * 0.3), Math.round(vw[1] * 0.62)];
   await p.mouse.move(gx, gy); await p.mouse.down(); await p.mouse.move(gx, gy - 60, { steps: 4 });
-  const ahead = (x) => (x.boats[2].x - b0.x) * Math.sin(b0.h) + (x.boats[2].z - b0.z) * Math.cos(b0.h);
+  const ahead = (x) => (x.boats[x.mine].x - b0.x) * Math.sin(b0.h) + (x.boats[x.mine].z - b0.z) * Math.cos(b0.h);
   s = await until(p, (x) => ahead(x) > 5);
-  ok('a touch on the sea away from your boat, dragged up: under way, ahead', s.stick.held && s.boats[2].v > 2 && ahead(s) > 5, [s.stick, s.boats[2], b0]);
+  ok('a touch on the sea away from your boat, dragged up: under way, ahead', s.stick.held && s.boats[s.mine].v > 2 && ahead(s) > 5, [s.stick, s.boats[s.mine], b0]);
   const ring = await p.evaluate(() => { const g = document.getElementById('ghost'); return { on: g.classList.contains('on'), hint: g.classList.contains('hint'), at: g.style.transform }; });
   ok('a faint ring where you put your finger (the hint gone)', ring.on && !ring.hint && ring.at.includes(`${gx}px, ${gy}px`), ring);
-  const h0 = s.boats[2].h;
+  const h0 = s.boats[s.mine].h;
   await p.mouse.move(gx + 60, gy - 20, { steps: 4 });
-  s = await until(p, (x) => x.boats[2].h < h0 - 0.3);
-  ok('drag to the right: it turns to the screen\'s right (its heading falls)', s.boats[2].h < h0 - 0.3, [h0, s.boats[2].h]);
+  s = await until(p, (x) => x.boats[x.mine].h < h0 - 0.3);
+  ok('drag to the right: it turns to the screen\'s right (its heading falls)', s.boats[s.mine].h < h0 - 0.3, [h0, s.boats[s.mine].h]);
   await p.mouse.up();
-  s = await until(p, (x) => !x.stick.held && Math.abs(x.boats[2].v) < 1);
-  ok('let go: the boat eases to a stop', !s.stick.held && s.stick.x === 0 && Math.abs(s.boats[2].v) < 1 && !(await p.isVisible('#ghost')), [s.stick, s.boats[2].v]);
-  const k0 = s.boats[2];
+  s = await until(p, (x) => !x.stick.held && Math.abs(x.boats[x.mine].v) < 1);
+  ok('let go: the boat eases to a stop', !s.stick.held && s.stick.x === 0 && Math.abs(s.boats[s.mine].v) < 1 && !(await p.isVisible('#ghost')), [s.stick, s.boats[s.mine].v]);
+  const k0 = s.boats[s.mine];
   await p.keyboard.down('ArrowUp');
-  s = await until(p, (x) => Math.hypot(x.boats[2].x - k0.x, x.boats[2].z - k0.z) > 4);
+  s = await until(p, (x) => Math.hypot(x.boats[x.mine].x - k0.x, x.boats[x.mine].z - k0.z) > 4);
   await p.keyboard.up('ArrowUp');
-  ok('the up arrow: away again', Math.hypot(s.boats[2].x - k0.x, s.boats[2].z - k0.z) > 4, [k0, s.boats[2]]);
+  ok('the up arrow: away again', Math.hypot(s.boats[s.mine].x - k0.x, s.boats[s.mine].z - k0.z) > 4, [k0, s.boats[s.mine]]);
   const words = await p.evaluate(() => ({ places: document.querySelectorAll('#ladder div').length, me: !!document.querySelector('#ladder div.me'), count: document.getElementById('count').textContent, crew: document.getElementById('place').textContent, map: document.getElementById('map').getBoundingClientRect().width > 80 }));
-  ok('the five crews under the map, yours marked; everyone rescued so far of everyone called; your crew\'s count; the map', words.places === 5 && words.me && /^\d+\/\d+$/.test(words.count) && /^\d+$/.test(words.crew) && words.map, words);
+  ok('the three crews under the map, yours marked; everyone rescued so far of everyone called; your crew\'s count; the map', words.places === 3 && words.me && /^\d+\/\d+$/.test(words.count) && /^\d+$/.test(words.crew) && words.map, words);
   await p.click('#pause');
   s = await until(p, (x) => x.paused, 30000);
   const t0 = s.t; await p.waitForTimeout(4000); s = await state(p);
@@ -77,11 +79,11 @@ await withWood(async (lab) => {
   // (the game steering every boat: a touch takes yours back)
   const qa = await lab.open('seed=2&auto&boat=1&t=4');
   let ra = await until(qa, (x) => x.phase === 'racing' && x.t > 5);
-  const a0 = ra.boats[1];
+  const a0 = ra.boats[ra.mine];
   await qa.mouse.move(vw[0] / 2, vw[1] * 0.7); await qa.mouse.down(); await qa.mouse.move(vw[0] / 2 + 64, vw[1] * 0.7, { steps: 4 });
-  ra = await until(qa, (x) => Math.abs(x.boats[1].h - a0.h) > 0.5, 60000);
+  ra = await until(qa, (x) => !x.auto && Math.abs(x.boats[x.mine].h - a0.h) > 0.5, 60000);
   await qa.mouse.up();
-  ok('?auto: a touch takes your boat back from the game (held hard right, it turns)', !ra.auto && Math.abs(ra.boats[1].h - a0.h) > 0.5, [ra.auto, a0.h, ra.boats[1].h]);
+  ok('?auto: a touch takes your boat back from the game (held hard right, it turns)', !ra.auto && Math.abs(ra.boats[ra.mine].h - a0.h) > 0.5, [ra.auto, a0.h, ra.boats[ra.mine].h]);
   await qa.close();
   // (the stick in a corner, when asked: the right, and for the left-handed the left; held up, the boat goes ahead)
   const q1 = await lab.open('seed=2&hand=right&t=1');
@@ -113,11 +115,11 @@ await withWood(async (lab) => {
   const rs = await until(r0, (x) => x.ui === 'race', 60000);
   ok('Rally: Lily’s race, from its own button, on the Rally’s coast', rs.mode === 'rally' && rs.coast === 'rally', [rs.mode, rs.coast]);
   await r0.close();
-  for (const [mode, want] of [['', /everyone home/i], ['&mode=rally', /wins|won|came/i]]) {
+  for (const [mode, want, rows] of [['', /everyone home/i, 3], ['&mode=rally', /wins|won|came/i, 5]]) {
     const q = await lab.open(`seed=2&auto${mode}&view=podium&still`);
     await q.waitForTimeout(2500);
     const end = await q.evaluate(() => ({ ui: window.__rescue.ui, rows: [...document.querySelectorAll('#ranks li')].map((li) => li.querySelector('b').textContent + ' ' + li.querySelector('strong').textContent), title: document.getElementById('result').textContent }));
-    ok(`the end${mode ? ' of the Rally' : ' of the Service'}: ${mode ? '' : 'everyone home, then '}five places, 1st to 5th`, end.ui === 'podium' && want.test(end.title) && end.rows.length === 5 && end.rows[0].startsWith('1st') && end.rows[4].startsWith('5th'), end);
+    ok(`the end${mode ? ' of the Rally' : ' of the Service'}: ${mode ? 'five places, 1st to 5th' : 'everyone home, then the three crews, 1st to 3rd'}`, end.ui === 'podium' && want.test(end.title) && end.rows.length === rows && end.rows[0].startsWith('1st') && end.rows[rows - 1].startsWith(rows === 5 ? '5th' : '3rd'), end);
     console.log(`  ${end.title} · ${end.rows.join(' · ')}`);
     await q.close();
   }

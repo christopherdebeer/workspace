@@ -6,39 +6,45 @@ Made by `node cells/lab/views.mjs rescue-coast` from `client/rescue-coast/views.
 
 ![Lily’s Rescue Boats: All boats home: your lifeboat charging along under the lighthouse; Play (the Rescue Service), Rally (Lily’s race), Boats, Weather, Settings](v-title.jpg)
 ![The title, on a bigger screen: the menu to the right, as on the boards](v-title-wide.jpg)
-![Choose your boat: five lifeboats, a wheelhouse each in its own colour; your best with each](v-boats.jpg)
+![Choose your boat: your crew, Lily’s five, each in its own colour; and your boat: the lifeboat, good at everything; the inshore boat, quickest but bumpy alongside out at sea; the harbour launch, slow but steadiest](v-boats.jpg)
 ![The weather: seven, from the boards: the title behind changes as you pick](v-weather.jpg)
 ![Settings: how good the others are, which side the stick goes, sound, a new coast](v-settings.jpg)
 
 ## The Rescue Service
 
-![Moored in the harbour: as the count goes down, a look round the harbour: the five crews moored, bows to the mouth, the town on its hill behind; a few from the town on the quay to see them off](v-start.jpg)
-![Home harbour: the little harbour from above its mouth: the crews moored along the pier with its lamps and bunting, the station, timber jetties all round the basin with boats moored along them and more at their buoys, the town on the hill](v-home.jpg)
+![Moored in the harbour: as the count goes down, a look round your harbour: your lifeboat moored at the end of the pier, bows to the mouth, the town on its hill behind; a few from the town on the quay to see you off](v-start.jpg)
+![Home harbour: your harbour from above its mouth: your lifeboat at the end of the pier with its lamps and bunting, the station, timber jetties all round the basin with boats moored along them and more at their buoys, the town on the hill](v-home.jpg)
 ![Setting out: out through the harbour, the town on its hill, the lighthouses either side of the mouth](v-harbour.jpg)
-![Along the coast: the first calls are just outside the harbour; everyone rescued so far (of everyone whose call has come in), your own crew’s count, the time with the weather as it is now; the map, a little boat another crew is going for ringed in their colour; the five crews’ counts under it](v-racing.jpg)
+![Along the coast: your first calls are just outside the harbour; everyone rescued so far (of everyone whose call has come in), your own crew’s count, the time with the weather as it is now; the map, a little boat another crew is going for ringed in their colour; the three crews’ counts under it](v-racing.jpg)
 
 ## Steering
 
 ![Touch anywhere and drag: until you’ve steered, a faint ring low down, its dot drifting up, says how: put your finger anywhere on the sea and drag up](v-steer.jpg)
 ![Wherever you touch is the stick: where your finger goes down is the middle of the stick: drag ahead to go, to one side to turn, back to slow down; a faint ring where you put it; let go and she eases to a stop](v-steer-drag.jpg)
 
+## Down the coast
+
+![The neighbours: North Head: a little harbour down the coast, its breakwaters round the water in front of it, a light on the end of one; the station and its slipway at the head of the basin, a jetty, boats moored along the quays; their inshore boat at its berth](v-north.jpg)
+![The neighbours: South Sound: further down, where the coast turns away west: another little harbour, their harbour launch at its berth](v-south.jpg)
+
 ## Coming alongside
 
 ![The line goes over: alongside and slowed right down, the little boat in the lee of the hull: the crew throws a line; the camera cuts in](v-line.jpg)
 ![Climbing aboard: held steady, the water calm in the lifeboat’s lee: a crew member leans over the rail to take a hand, and up they come](v-climb.jpg)
-![A paddleboarder: near the harbour the first calls are the little ones: a kayaker, a paddleboarder blown out past the headland](v-paddle.jpg)
+![A paddleboarder: near each harbour the first calls are the little ones: a kayaker, a paddleboarder blown out from the shore; here the neighbours from North Head, in their inshore boat](v-paddle.jpg)
 
 ## Out at sea
 
-![The open sea: past the harbour’s headland the far shore falls away: islets and reefs out over the water, the swell bigger out here; the sun going down](v-open-sea.jpg)
-![Rough water: out at sea, beam-on in a bigger swell: they climb across more slowly, and the bar goes amber](v-rough.jpg)
-![A yacht that’s lost its mast: further out, the bigger calls: a yacht dismasted, five aboard, the mast lying along her deck](v-yacht.jpg)
-![A full deck: everyone found out there, and no one left waiting: home with all six of them](v-deck.jpg)
+![The open sea: past the harbour’s headland the far shore falls away: islets and reefs out over the water, the swell bigger out here; the sun going down; the neighbours’ inshore boat on its way to its next call](v-open-sea.jpg)
+![Rough water: out at sea, beam-on in a bigger swell: they climb across more slowly, and the bar goes amber; the harbour launch, broad and steady, has them across quicker than most](v-rough.jpg)
+![A yacht that’s lost its mast: further out, the bigger calls: a yacht dismasted, four aboard, the mast lying along her deck](v-yacht.jpg)
+![A full deck: everyone found out there, and no one left waiting: home with all ten of them](v-deck.jpg)
 
 ## Home
 
 ![Safe ashore: in through the mouth as night comes down: they step ashore one by one, to the crowd waving on the pier by the station](v-landing.jpg)
-![Everyone home: everyone rescued, every crew in at the quay; then the crews’ honours, 1st to 5th by Lily’s rule](v-podium.jpg)
+![The neighbours home: down the coast, the North Head crew come in through their breakwaters in the dusk, and land theirs on their own quay](v-their-landing.jpg)
+![Everyone home: everyone rescued, every crew in at its own harbour, yours at the pier; then the crews’ honours, 1st to 3rd by Lily’s rule](v-podium.jpg)
 
 ## The Rally
 
@@ -49,6 +55,8 @@ Made by `node cells/lab/views.mjs rescue-coast` from `client/rescue-coast/views.
 ## Looks
 
 ![On a bigger screen: granite cliffs, sheltered water calmer and greener in the lee of the headlands, the wake churning white](v-wide.jpg)
+![The inshore boat: a rigid inflatable: its tube in the crew’s colour, RNLI along it; the console amidships, the A-frame aft with its beacon, twin outboards](v-study-inshore.jpg)
+![The harbour launch: broad and steady: its wheelhouse forward in the crew’s colour, a fat black fender all round, an open working deck aft with a davit to lift people aboard](v-study-launch.jpg)
 ![The lifeboat: navy hull, red below the waterline, RNLI along the bow; the wheelhouse in the boat’s own colour, a tall black mast; the crew in white helmets](v-study.jpg)
 
 ## Weather

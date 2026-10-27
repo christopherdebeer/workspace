@@ -17,10 +17,10 @@
  * `?mode=rally` the Rally; `?at=` the title's clock (seconds round its loop); `?weather=sunny|calm|windy|stormy|foggy|night|sunset`; `?study` a close look at your boat; `?zoom=`; `?hand=touch|left|right` where you steer from (wherever you touch unless asked, or a stick in a bottom corner); `?preview` small and quiet.
  */
 import { CLEAR, GATE_HALF, GATE_Z, START_Z, groundAt, makeCoast, seaAt, seaward, shoreAt, type Coast, type CoastKind } from './coast';
-import { BOATS, CLIMB, HALF_BEAM, HALF_LEN, INSIDE, LEVELS, LINE, VMAX, everyoneAboard, local, newRace, runFor, standings, start, step, world, type Level, type Mode, type Race, type Rescue } from './race';
+import { BOATS, CLIMB, HALF_BEAM, HALF_LEN, HELP, KINDS, LEVELS, LINE, VMAX, everyoneAboard, insideHome, local, newRace, runFor, serviceCrews, standings, start, step, world, type BoatKind, type Level, type Mode, type Race, type Rescue } from './race';
 import { makeWorld } from './world';
 import { FX, Instances, Renderer, mat4, type Draw, type Frame } from './render';
-import { ROOF, ROOF_Y, SEATS, SHOULDER, WING, buoyMesh, craftMesh, deckAt, gull, lifeboat, person } from './models';
+import { LAYOUTS, SHOULDER, WING, buoyMesh, craftMesh, gull, inshore, launch, lifeboat, person } from './models';
 import { SEA, heightAt } from './waves';
 import { WEATHERS, WEATHER_ORDER, voyage, weatherAt, type Weather, type WeatherName } from './weather';
 import { Marks, Wakes } from './fx';
@@ -51,10 +51,16 @@ const PERSON = 1.18;
 // ─── the state ───
 let seed = Number(params.get('seed') ?? 1 + Math.floor(Math.random() * 999)) || 1;
 let level = (['easy', 'medium', 'hard'].includes(params.get('level') ?? '') ? params.get('level') : 'easy') as Level;
-let mine = Math.max(0, Math.min(4, Number(params.get('boat') ?? 0) || 0));
+/** your crew (Lily's boats: 0-4) and the kind of boat you take out (the Service's; the Rally's are all lifeboats); and
+ * which of the race's boats is yours (the Service: you're at the first station; the Rally: your crew's place in line) */
+let crew = Math.max(0, Math.min(4, Number(params.get('boat') ?? 0) || 0));
+let boatKind: BoatKind = 'lifeboat';
+let mine = 0;
 /** the Rescue Service (all the crews together: everyone home) or the Rally (Lily's race) */
 let mode: Mode = params.get('mode') === 'rally' ? 'rally' : 'service';
 let coast!: Coast, race!: Race;
+/** (the Service) the neighbouring stations' quays by their berths: where, and the way inland */
+let quays: [number, number, number, number][] = [];
 let weather: Weather = WEATHERS.sunny, chosen: WeatherName = 'sunny';
 /** the weather: the sea's height and steepness (the boats ride the same waves), the light, the air, the sounds; the one
  * chosen is the title's, the Rally's, and where the Service's day starts (it changes as the day goes on: the race
@@ -82,14 +88,14 @@ const canvas = $('sea') as HTMLCanvasElement;
 const gl = canvas.getContext('webgl2', { antialias: false, powerPreference: 'high-performance' });
 if (!gl) { document.body.classList.add('nogl'); throw new Error('no WebGL2'); }
 const renderer = new Renderer(gl);
-renderer.addKind('boat', lifeboat());
+renderer.addKind('lifeboat', lifeboat()); renderer.addKind('inshore', inshore()); renderer.addKind('launch', launch());
 renderer.addKind('crew', person('crew'), SHOULDER);
 for (let s = 0; s < 3; s++) renderer.addKind('kid' + s, person('kid', s), SHOULDER);
 for (const k of ['row', 'kayak', 'sail', 'paddle', 'yacht', 'fishing'] as const) renderer.addKind(k, craftMesh(k));
 for (const k of ['red', 'green', 'yellow'] as const) renderer.addKind('buoy-' + k, buoyMesh(k));
 renderer.addKind('gull', gull(), WING);
 const lists: Record<string, Instances> = {};
-for (const k of ['boat', 'crew', 'kid0', 'kid1', 'kid2', 'row', 'kayak', 'sail', 'paddle', 'yacht', 'fishing', 'buoy-red', 'buoy-green', 'buoy-yellow', 'gull']) lists[k] = new Instances(64);
+for (const k of ['lifeboat', 'inshore', 'launch', 'crew', 'kid0', 'kid1', 'kid2', 'row', 'kayak', 'sail', 'paddle', 'yacht', 'fishing', 'buoy-red', 'buoy-green', 'buoy-yellow', 'gull']) lists[k] = new Instances(64);
 const draws: Draw[] = Object.entries(lists).map(([kind, list]) => ({ kind, list }));
 const stick = new Joystick($('stick'), $('ghost'));
 /** where you steer from: wherever you touch (that's the stick's middle while your finger's down), or a stick in a bottom
@@ -114,16 +120,24 @@ const minimap = new MiniMap($('map') as HTMLCanvasElement);
 
 /** each way to play has its own coast: the Rally's channel to the harbour; the Service's harbour and the open sea beyond
  * (the reference scenes are composed on the Rally's) */
-const kindFor = (m: Mode): CoastKind => (m === 'rally' || (refArg && refArg !== 'harbour') ? 'rally' : 'service');
+const kindFor = (m: Mode): CoastKind => (m === 'rally' || (refArg && refArg !== 'harbour' && refArg !== 'neighbour') ? 'rally' : 'service');
 function newCoast(s: number) {
   seed = s; coast = makeCoast(seed, kindFor(mode));
   renderer.setCoast(coast, makeWorld(coast));
+  // (the neighbours' quays, by their berths: the edge of the quay inland of each, and the way inland from it)
+  quays = coast.stations.slice(1).map((st) => {
+    let x = st.x, z = st.z;
+    for (let i = 0; i < 40 && shoreAt(coast, x, z) > -0.8; i++) z += 0.5;
+    const [ox, oz] = seaward(coast, x, z);
+    return [x, z, -ox, -oz];
+  });
   minimap.paint(coast);
   showPath = makeShowPath(); titleCam = null;
   $('seedname').textContent = coast.name;
 }
 function newGame() {
-  race = newRace(coast, { mode, level, mine, auto, sky: mode === 'service' ? voyage(seed, chosen) : undefined });
+  mine = mode === 'service' ? 0 : crew;
+  race = newRace(coast, { mode, level, mine, auto, sky: mode === 'service' ? voyage(seed, chosen) : undefined, ...(mode === 'service' ? serviceCrews(seed, crew, boatKind) : {}) });
   skyLeg = 0; if (weather !== WEATHERS[chosen]) showWeather(WEATHERS[chosen]);
   marks.clear(); wakes.clear(); stick.reset(); steered = false;
   poses.length = 0; camYaw = 0; camCut = 0; cutTo = null; told.clear();
@@ -132,11 +146,11 @@ function newGame() {
 // ─── poses: where each boat sits on the swell (smoothed) ───
 interface Pose { y: number; pitch: number; roll: number; x: number; z: number; h: number }
 const poses: Pose[] = [];
-function poseOf(i: number, x: number, z: number, h: number, v: number, turn: number, t: number, dt: number): Pose {
+function poseOf(i: number, x: number, z: number, h: number, v: number, turn: number, t: number, dt: number, wob = 1): Pose {
   const k = seaAt(coast, x, z), s = Math.sin(h), c = Math.cos(h);
   const at = (across: number, along: number) => heightAt(x - across * c + along * s, z + across * s + along * c, t, k);
   const bow = at(0, 4), stern = at(0, -4), port = at(-1.9, 0), star = at(1.9, 0), mid = at(0, 0);
-  const want = { y: (bow + stern + port + star + mid * 2) / 6 - 0.08 + Math.min(1, Math.abs(v) / VMAX) * 0.12, pitch: Math.atan2(bow - stern, 8) * 0.8 + Math.min(1, Math.abs(v) / VMAX) * 0.07, roll: Math.atan2(port - star, 3.8) * 0.8 + turn * Math.min(1, Math.abs(v) / VMAX) * 0.14 };
+  const want = { y: (bow + stern + port + star + mid * 2) / 6 - 0.08 + Math.min(1, Math.abs(v) / VMAX) * 0.12, pitch: Math.atan2(bow - stern, 8) * 0.8 * wob + Math.min(1, Math.abs(v) / VMAX) * 0.07, roll: Math.atan2(port - star, 3.8) * 0.8 * wob + turn * Math.min(1, Math.abs(v) / VMAX) * 0.14 };
   const p = poses[i];
   if (!p || dt <= 0) return (poses[i] = { ...want, x, z, h });
   const a = 1 - Math.exp(-dt * 6);
@@ -162,6 +176,7 @@ const lens = { focus: 30, aperture: 0.4 };
 let vp: Float32Array = new Float32Array(16), eye = [0, 20, -30], right = [1, 0, 0], up = [0, 1, 0];
 let watching = -1;
 function followed() {
+  if (refBoat !== null) return race.boats[refBoat];
   if (!auto) {
     const me = race.boats[mine];
     // (the Service, home with others still out: watch a crew at work, the same one until it's in)
@@ -174,6 +189,7 @@ function followed() {
     }
     return me;
   }
+  if (params.has('follow')) return race.boats[Math.min(race.boats.length - 1, Number(params.get('follow')) || 0)];
   if (params.has('boat')) return race.boats[mine];
   return standings(race)[0];
 }
@@ -196,8 +212,8 @@ function camera(dt: number, t: number, w: number, h: number) {
     shift = portrait ? -0.18 : 0;
     fov = portrait ? 1.05 : 0.8;
   } else if (ui === 'podium' && coast.pier) {
-    // (the Service: over the pier, everyone brought home on it, at the crews moored along it)
-    const bx = coast.berths[2].x, bz = coast.berths[2].z;
+    // (the Service: over the pier, everyone you brought home on it, your crew moored at its end)
+    const bx = coast.pier.x1 - 22, bz = coast.berths[0].z;
     target = [bx + 4, 3.4, bz - 6]; from = [bx + (portrait ? 34 : 28) * zoom, 12 * zoom, bz - (portrait ? 44 : 34) * zoom];
     shift = portrait ? 0.3 : 0.18;
   } else if (ui === 'podium') {
@@ -287,47 +303,52 @@ const holes = new Float32Array(48), hulls = new Float32Array(24);
 const told = new Set<string>();
 /** the lifeboats for the sea's foam (x, z, heading, speed) */
 function hullsOf() { race.boats.slice(0, 6).forEach((b, i) => hulls.set([b.x, b.z, b.h, Math.abs(b.v)], i * 4)); return Math.min(6, race.boats.length); }
+/** where the `i`th one aboard goes on a boat laid out so (model x, z, y) */
+function aboardAt(L: (typeof LAYOUTS)['lifeboat'], i: number): [number, number, number] {
+  if (i < L.seats.length) { const [x, z] = L.seats[i]; return [-x, z, L.deckAt(z)]; }
+  const [x, z] = L.top[(i - L.seats.length) % L.top.length];
+  return [-x, z, L.topY];
+}
 function people(t: number, dt: number) {
   for (const l of Object.values(lists)) l.clear();
   // (the lifeboats, their crew, and everyone they've taken aboard)
   for (const b of race.boats) {
-    const p = poseOf(b.id, b.x, b.z, b.h, b.v, b.turn, t, dt), col = BOATS[b.id].colour;
-    lists.boat.push(b.x, p.y, b.z, b.h, p.pitch, p.roll, 1, 0, col, 0, NONE, 0, NONE, b.id * 1.7);
+    const p = poseOf(b.id, b.x, b.z, b.h, b.v, b.turn, t, dt, KINDS[b.kind].roll), col = BOATS[b.crew].colour, L = LAYOUTS[b.kind], deckAt = L.deckAt;
+    lists[b.kind].push(b.x, p.y, b.z, b.h, p.pitch, p.roll, 1, 0, col, 0, NONE, 0, NONE, b.id * 1.7);
     const crewAt = (x: number, y: number, z: number, yaw: number, aL: number, aR: number, reach: number, look: number) => {
       const [X, Y, Z] = onBoat(p, x, y, z);
       lists.crew.push(X, Y, Z, b.h + yaw, p.pitch, p.roll, PERSON * 0.98, aL, CREW, aR, SKINS[(b.id * 2 + look) % 6], reach, NONE, 0);
     };
-    // (two at the upper steering position, one on the aft deck to throw the line)
+    // (two at the helm (the lifeboat's upper steering position, the RIB's console, the launch's wheelhouse door), one aft
+    // to throw the line)
     const home = (b.finished !== null && b.home) || (b.id === mine && t - hornAt < 1.6), cheer = home ? Math.abs(Math.sin(t * 5 + b.id)) * 0.4 : 0;
-    crewAt(0.5, ROOF_Y, 0.15, 0, home ? 2.7 + cheer : 0.25, home ? 2.7 + cheer : 0.9, home ? 0 : 1.1, 0);
-    crewAt(-0.5, ROOF_Y, 0.1, 0, home ? 2.6 + cheer : 0.3, 0.2, 0, 1);
+    crewAt(L.helm[0][0], L.helm[0][1], L.helm[0][2], 0, home ? 2.7 + cheer : 0.25, home ? 2.7 + cheer : 0.9, home ? 0 : 1.1, 0);
+    crewAt(L.helm[1][0], L.helm[1][1], L.helm[1][2], 0, home ? 2.6 + cheer : 0.3, 0.2, 0, 1);
     const k = race.crafts.find((c) => c.by === b.id && (c.stage === 'line' || c.stage === 'climb'));
     if (k) {
       const side = local(b, k.x, k.z)[0] >= 0 ? -1 : 1; // (model x is to the boat's left)
       const throwing = k.stage === 'line';
       if (throwing) {
-        crewAt(side * 1.45, deckAt(-3.4), -3.4, side * 1.2, side > 0 ? 2.8 : 0.5, side < 0 ? 2.8 : 0.5, 0.4, 2);
+        crewAt(side * (L.rail - 0.05), deckAt(L.aft), L.aft, side * 1.2, side > 0 ? 2.8 : 0.5, side < 0 ? 2.8 : 0.5, 0.4, 2);
         // (the line: from the thrower's hand out to the little boat, thrown)
-        const hand = onBoat(p, side * 1.9, deckAt(-3.4) + 1.2, -3.4), kp = poses[100 + race.crafts.indexOf(k)];
+        const hand = onBoat(p, side * (L.rail + 0.4), deckAt(L.aft) + 1.2, L.aft), kp = poses[100 + race.crafts.indexOf(k)];
         marks.line(hand, [k.x, (kp?.y ?? 0) + 0.45, k.z], 0.6, 0.075, [0.98, 0.8, 0.15], Math.min(1, k.t / LINE));
       } else {
         // (at the rail where they come aboard: leaning right over and reaching down, taking the hand, pulling, then upright with an arm out)
         const u = Math.min(1, k.t / CLIMB), a = Math.max(-4, Math.min(1.5, local(b, k.x, k.z)[1]));
         const lean = u < 0.4 ? 0.75 - 0.25 * (u / 0.4) : u < 0.7 ? 0.5 - 0.5 * ((u - 0.4) / 0.3) : 0;
         const rch = u < 0.4 ? 1.15 + 0.25 * (u / 0.4) : u < 0.7 ? 1.4 + 0.7 * ((u - 0.4) / 0.3) : 0.9;
-        const [X, Y, Z] = onBoat(p, side * (HALF_BEAM - 0.62), deckAt(a), a);
+        const [X, Y, Z] = onBoat(p, side * L.rail, deckAt(a), a);
         lists.crew.push(X, Y, Z, b.h + side * Math.PI / 2, p.pitch - lean, p.roll, PERSON * 0.98, u > 0.75 && side < 0 ? 0.9 : 0, CREW, u > 0.75 && side > 0 ? 0.9 : 0, SKINS[(b.id * 2 + 2) % 6], rch, NONE, 0);
         // (the line, held slack from the deck to the little boat)
         const kp = poses[100 + race.crafts.indexOf(k)];
-        marks.line(onBoat(p, side * 1.9, deckAt(-3.4) + 1.0, -3.4), [k.x, (kp?.y ?? 0) + 0.45, k.z], 0.25, 0.075, [0.98, 0.8, 0.15], 1);
+        marks.line(onBoat(p, side * (L.rail + 0.4), deckAt(L.aft) + 1.0, L.aft), [k.x, (kp?.y ?? 0) + 0.45, k.z], 0.25, 0.075, [0.98, 0.8, 0.15], 1);
       }
-    } else crewAt(0.9, deckAt(-3.6), -3.6, 0, 0.2, 0.2, 0, 2);
-    // (aboard: the decks fill from aft, then forward, then the side decks; then the roof)
+    } else crewAt(0.9, deckAt(L.aft - 0.2), L.aft - 0.2, 0, 0.2, 0.2, 0, 2);
+    // (aboard: the decks fill from aft, then forward, then the side decks; then the roof, or the RIB's tubes)
     b.aboard.forEach((a, i) => {
       const who = race.crafts[a.craft].craft.people[a.person];
-      let x: number, z: number, y: number;
-      if (i < SEATS.length) { [x, z] = SEATS[i]; x = -x; y = deckAt(z); }
-      else { const r = ROOF[(i - SEATS.length) % ROOF.length]; x = -r[0]; z = r[1]; y = ROOF_Y; }
+      const [x, z, y] = aboardAt(L, i);
       const [X, Y, Z] = onBoat(p, x, y, z);
       const glee = home ? Math.abs(Math.sin(t * 6 + i)) : 0, wave = (t * 0.7 + i * 0.37) % 6 < 0.8;
       const arm = home ? 2.4 + glee * 0.5 : wave ? 2.5 + Math.sin(t * 12) * 0.3 : 0.15;
@@ -361,8 +382,7 @@ function people(t: number, dt: number) {
       if (climbing) {
         // (across to the hull, up its side, over the gunwale, to a place on deck)
         const b = race.boats[k.by], bp = poses[b.id], u = Math.min(1, k.t / CLIMB), slot = b.aboard.length;
-        let dx: number, dz: number, dy: number;
-        if (slot < SEATS.length) { [dx, dz] = SEATS[slot]; dx = -dx; dy = deckAt(dz); } else { const r = ROOF[(slot - SEATS.length) % ROOF.length]; dx = -r[0]; dz = r[1]; dy = ROOF_Y; }
+        const BL = LAYOUTS[b.kind], deckAt = BL.deckAt, [dx, dz, dy] = aboardAt(BL, slot);
         const [, alongK] = local(b, k.x, k.z), side = local(b, k.x, k.z)[0] >= 0 ? -1 : 1;
         const hullOut = onBoat(bp, side * (HALF_BEAM + 0.35), 0.15, Math.max(-4, Math.min(1.5, alongK)));
         const mix = (a: number[], b2: number[], f: number) => a.map((v, n) => v + (b2[n] - v) * f) as [number, number, number];
@@ -395,7 +415,7 @@ function people(t: number, dt: number) {
     // (the ring that says come alongside: round the little boats near you, in your colour)
     if (ui === 'race' && !auto && k.stage === 'wait' && k.left > 0 && race.boats[mine].finished === null) {
       const d = Math.hypot(k.x - me.x, k.z - me.z);
-      if (d < 55) { const col = BOATS[mine].colour; marks.put(FX.RING, k.x, 0, k.z, 4.4, 0, 0, 0, col[0], col[1], col[2], Math.min(1, (55 - d) / 20) * 0.85); }
+      if (d < 55) { const col = BOATS[me.crew].colour; marks.put(FX.RING, k.x, 0, k.z, 4.4, 0, 0, 0, col[0], col[1], col[2], Math.min(1, (55 - d) / 20) * 0.85); }
     }
   });
   // (steering from wherever you touch, until you have: the faint ring low down, its dot drifting up, says how)
@@ -408,13 +428,22 @@ function people(t: number, dt: number) {
   // them, waving the lifeboats in)
   const pier = coast.pier;
   if (mode === 'service' && pier) {
-    const folk = [...TOWNSFOLK, ...race.ashore.map((a) => race.crafts[a.craft].craft.people[a.person])].slice(0, 75);
+    const folk = [...TOWNSFOLK, ...race.ashore.filter((a) => race.boats[a.boat].station === 0).map((a) => race.crafts[a.craft].craft.people[a.person])].slice(0, 75);
     folk.forEach((who, n) => {
       const row = n % 3, x = pier.x1 - 3 - Math.floor(n / 3) * 1.6 + (row - 1) * 0.5, z = pier.z0 + 1.6 + row * 1.9, y = Math.max(2.95, groundAt(coast, x, z));
       const waving = (t * 0.6 + n * 0.31) % 3 < 1.2, arm = waving ? 2.5 + Math.sin(t * 10 + n) * 0.4 : 0.2;
       lists['kid' + who.style].push(x, y, z, Math.atan2(coast.gateX - x, GATE_Z - z) + Math.sin(n * 2.1) * 0.5, 0, 0, PERSON * 0.92, arm, SHIRTS[who.shirt], waving ? 2.5 + Math.sin(t * 10 + n + 2) * 0.4 : 0.2, SKINS[who.skin], 0, HAIRS[who.hair], 0);
     });
   }
+  // (the neighbours' quays too: a few from their town, and whoever their crews have landed)
+  if (mode === 'service') quays.forEach(([qx, qz, ox, oz], i) => {
+    const folk = [...TOWNSFOLK.slice(i * 2, i * 2 + 4), ...race.ashore.filter((a) => race.boats[a.boat]?.station === i + 1).map((a) => race.crafts[a.craft].craft.people[a.person])].slice(0, 40);
+    folk.forEach((who, n) => {
+      const row = n % 3, along = (Math.floor(n / 3) - 2) * 1.6 + (row - 1) * 0.5, back = 1.4 + row * 1.7, x = qx - oz * along + ox * back, z = qz + ox * along + oz * back, y = Math.max(2.95, groundAt(coast, x, z));
+      const waving = (t * 0.6 + n * 0.31) % 3 < 1.2, arm = waving ? 2.5 + Math.sin(t * 10 + n) * 0.4 : 0.2;
+      lists['kid' + who.style].push(x, y, z, Math.atan2(-ox, -oz) + Math.sin(n * 2.1) * 0.5, 0, 0, PERSON * 0.92, arm, SHIRTS[who.shirt], waving ? 2.5 + Math.sin(t * 10 + n + 2) * 0.4 : 0.2, SKINS[who.skin], 0, HAIRS[who.hair], 0);
+    });
+  });
   // (the Service's harbour: the boats moored along the jetties and at their buoys, riding the little swell there; someone
   // out on each jetty)
   coast.moored.forEach((m, i) => {
@@ -511,7 +540,7 @@ function atmosphere(t: number, dt: number) {
   const on = Math.max(0, Math.min(1, (weather.dark - 0.3) / 0.4));
   const p = poses[fb.id];
   if (on > 0 && p) {
-    const lamp = onBoat(p, -0.9, ROOF_Y + 0.5, 0.8), pitch = -0.2;
+    const lamp = onBoat(p, -0.9, LAYOUTS[fb.kind].topY + 0.5, 0.8), pitch = -0.2;
     spotAt[0] = lamp[0]; spotAt[1] = lamp[1]; spotAt[2] = lamp[2]; spotAt[3] = on;
     spotDir[0] = Math.sin(fb.h) * Math.cos(pitch); spotDir[1] = Math.sin(pitch); spotDir[2] = Math.cos(fb.h) * Math.cos(pitch);
     marks.put(FX.BEAM, lamp[0], lamp[1], lamp[2], 5, lamp[0] + spotDir[0] * 32, lamp[1] + spotDir[1] * 32, lamp[2] + spotDir[2] * 32, 1, 0.95, 0.8, 0.16 * on);
@@ -600,9 +629,9 @@ function hud(t: number) {
   if (ui !== 'race') return;
   const service = mode === 'service', st = standings(race), me = race.boats[mine], place = st.findIndex((b) => b.id === mine);
   // (the map: every frame, it turns with you; in the Service a little boat another crew is going for has their colour round it)
-  const dots: [number, number, string, number, string?][] = race.crafts.filter((c) => c.stage === 'wait' && c.left > 0 && c.called).map((c) => [c.x, c.z, css(CRAFT_COLOURS[c.craft.colour]), c.left, service && c.claim >= 0 && c.claim !== mine ? css(BOATS[c.claim].colour) : undefined]);
+  const dots: [number, number, string, number, string?][] = race.crafts.filter((c) => c.stage === 'wait' && c.left > 0 && c.called).map((c) => [c.x, c.z, css(CRAFT_COLOURS[c.craft.colour]), c.left, service && c.claim >= 0 && c.claim !== mine ? css(BOATS[race.boats[c.claim].crew].colour) : undefined]);
   const fb = auto ? followed() : me;
-  minimap.draw(fb.x, fb.z, camYaw, dots, race.boats.map((b) => [b.x, b.z, b.h, css(BOATS[b.id].colour), b.id === fb.id]), coast.gateX);
+  minimap.draw(fb.x, fb.z, camYaw, dots, race.boats.map((b) => [b.x, b.z, b.h, css(BOATS[b.crew].colour), b.id === fb.id]), coast.gateX);
   if (t - hudAt < 0.1) return;
   hudAt = t;
   // (the Service counts everyone rescued so far against everyone whose call has come in)
@@ -610,7 +639,7 @@ function hud(t: number) {
   const shown = service ? fleet * 1000 + folk : fb.rescued;
   if (shown !== shownCount) { if (shownCount >= 0) { $('stat-count').classList.add('bump'); setTimeout(() => $('stat-count').classList.remove('bump'), 160); } shownCount = shown; $count.textContent = service ? `${fleet}/${folk}` : String(fb.rescued); }
   // (the second pill: your place in the Rally; in the Service, your own crew's count, in your colour)
-  if (service) { $('place').textContent = String(fb.rescued); $('place-ic').innerHTML = `<i class="dot" style="background:${css(BOATS[fb.id].colour)}"></i>`; $('place-sub').textContent = 'your crew'; }
+  if (service) { $('place').textContent = String(fb.rescued); $('place-ic').innerHTML = `<i class="dot" style="background:${css(BOATS[fb.crew].colour)}"></i>`; $('place-sub').textContent = 'your crew'; }
   else { $('place').textContent = ORD[auto ? 0 : place]; $('place-ic').textContent = '🏆'; $('place-sub').textContent = ''; }
   // (the clock: the time out (the Service's with the weather as it is now); in the Rally's last call, the time left, in red)
   const timeEl = $('stat-time');
@@ -618,7 +647,7 @@ function hud(t: number) {
   if (!service && race.lastCall && me.finished === null) { const left = race.lastCall.start + race.lastCall.length - race.t; $('clock').textContent = clock(left); timeEl.classList.add('hurry'); }
   else { $('clock').textContent = clock(race.t); timeEl.classList.remove('hurry'); }
   // (under the map: the Rally's places; the Service's crews, each with its count, in their own order)
-  $('ladder').innerHTML = (service ? race.boats : st).map((b, i) => `<div class="glass${b.id === fb.id ? ' me' : ''}">${service ? '' : `<small>${ORD[i]}</small>`}<i style="background:${css(BOATS[b.id].colour)}"></i>${b.rescued}${service && b.finished !== null ? ' ⚓' : ''}</div>`).join('');
+  $('ladder').innerHTML = (service ? race.boats : st).map((b, i) => `<div class="glass${b.id === fb.id ? ' me' : ''}">${service ? '' : `<small>${ORD[i]}</small>`}<i style="background:${css(BOATS[b.crew].colour)}"></i>${b.rescued}${service && b.finished !== null ? ' ⚓' : ''}</div>`).join('');
   // (coming aboard: a lifebuoy and a bar that fills; in the Service it fills as fast as you hold steady, amber when it's rough)
   const k = race.crafts.find((c) => c.by === fb.id && (c.stage === 'line' || c.stage === 'climb'));
   if (k) {
@@ -629,7 +658,7 @@ function hud(t: number) {
   // (the bubble: what's happening now, else what to do next)
   let text = '';
   const now = performance.now() / 1000, everyone = service ? everyoneAboard(race) : race.crafts.every((c) => c.left <= 0);
-  const waitingAny = race.crafts.some((c) => c.called && c.stage === 'wait' && c.left > 0), inside = me.z > INSIDE;
+  const waitingAny = race.crafts.some((c) => c.called && c.stage === 'wait' && c.left > 0), inside = service ? insideHome(race, me) : false;
   if (now < note.until) text = note.text;
   else if (!auto && me.finished === null) {
     const slow = LEVELS[race.level].slow;
@@ -653,11 +682,12 @@ function hud(t: number) {
   // (arrows at the edge to the nearest little boats out of sight — in the Service, the ones no other crew has — and to the harbour when it's time)
   const W = innerWidth, H = innerHeight, want: { x: number; z: number; n: number; fin?: boolean; col: number[] }[] = [];
   if (me.finished === null && !auto) {
-    const waiting = race.crafts.filter((c) => c.called && c.stage === 'wait' && c.left > 0 && (!service || c.claim < 0 || c.claim === mine)).map((c) => ({ c, d: Math.hypot(c.x - me.x, c.z - me.z) })).sort((a, b) => a.d - b.d).slice(0, 3);
+    // (in the Service, your own stretch's, and another's that's been waiting a while with no one going for it)
+    const waiting = race.crafts.filter((c) => c.called && c.stage === 'wait' && c.left > 0 && (!service || ((c.claim < 0 || c.claim === mine) && (c.craft.station === me.station || race.t - c.calledAt > HELP)))).map((c) => ({ c, d: Math.hypot(c.x - me.x, c.z - me.z) })).sort((a, b) => a.d - b.d).slice(0, 3);
     for (const { c } of waiting) want.push({ x: c.x, z: c.z, n: c.left, col: CRAFT_COLOURS[c.craft.colour] });
     // (the way home: in the Rally's last call, or with no one to go for; in the Service, once everyone's aboard, until you're in)
     const homeward = service ? !inside && everyone : race.lastCall || !waiting.length;
-    if (homeward) want.push({ x: coast.gateX, z: GATE_Z, n: 0, fin: true, col: [1, 1, 1] });
+    if (homeward) { const [hx, hz] = service ? coast.stations[me.station].mouth : [coast.gateX, GATE_Z]; want.push({ x: hx, z: hz, n: 0, fin: true, col: [1, 1, 1] }); }
   }
   const html: string[] = [];
   for (const w of want) {
@@ -675,9 +705,16 @@ function say(text: string, long = false) {
 }
 
 // ─── the title, its panels; the race; the end ───
-function boatSvg(c: readonly number[]) {
-  return `<svg viewBox="0 0 120 70" aria-hidden="true"><path d="M8 44 L114 40 Q112 52 100 60 L22 61 Q12 56 8 44 Z" fill="#0d1d4c"/><path d="M13 55 L104 55 Q102 59 98 61 L22 61 Q16 59 13 55 Z" fill="#c0180f"/><path d="M8 44 L114 40" stroke="${css(c)}" stroke-width="4" stroke-linecap="round"/><rect x="36" y="22" width="38" height="20" rx="5" fill="${css(c)}"/><rect x="40" y="26" width="30" height="7" rx="2" fill="#1a2733"/><rect x="38" y="19" width="34" height="4" rx="2" fill="#eee"/><path d="M48 19 L52 2 L58 2 L62 19" stroke="#111" stroke-width="3" fill="none" stroke-linejoin="round"/><rect x="44" y="6" width="22" height="3" fill="#111"/><circle cx="55" cy="1.8" r="2" fill="#4a8cff"/><text x="80" y="51" font-size="8" font-weight="800" fill="#fff" font-family="system-ui">RNLI</text><circle cx="28" cy="30" r="4" fill="none" stroke="#f4561c" stroke-width="2.5"/></svg>`;
+/** a boat's picture for the cards: the lifeboat, the inshore RIB or the harbour launch, in a crew's colour */
+function boatSvg(c: readonly number[], kind: BoatKind = 'lifeboat') {
+  const col = css(c);
+  if (kind === 'inshore') return `<svg viewBox="0 0 120 70" aria-hidden="true"><path d="M12 47 L106 47 Q112 50 108 55 L96 62 L24 62 Q15 59 12 47 Z" fill="#0d1d4c"/><path d="M16 57 L102 57 L96 62 L24 62 Z" fill="#c0180f"/><path d="M14 37 L100 37 Q116 37 116 44 Q116 51 100 51 L14 51 Q8 51 8 44 Q8 37 14 37 Z" fill="${col}"/><path d="M10 47 L112 47" stroke="#111" stroke-width="2" opacity=".55"/><rect x="56" y="23" width="15" height="14" rx="3" fill="#fff"/><path d="M58 23 L62 15 L70 15 L71 23 Z" fill="#26343f"/><path d="M22 37 L27 11 M35 37 L31 11 M26 11 L32 11" stroke="#111" stroke-width="3" stroke-linecap="round"/><circle cx="29" cy="8.5" r="2.4" fill="#4a8cff"/><text x="76" y="47.5" font-size="8" font-weight="800" fill="#fff" font-family="system-ui">RNLI</text></svg>`;
+  if (kind === 'launch') return `<svg viewBox="0 0 120 70" aria-hidden="true"><path d="M6 40 L114 36 Q112 50 99 61 L19 62 Q8 57 6 40 Z" fill="#0d1d4c"/><path d="M10 55 L106 55 Q101 60 97 62 L20 62 Q14 60 10 55 Z" fill="#c0180f"/><path d="M6 40 L114 36" stroke="${col}" stroke-width="4" stroke-linecap="round"/><path d="M7 46 L112 42" stroke="#111" stroke-width="5" stroke-linecap="round"/><rect x="64" y="17" width="36" height="21" rx="5" fill="${col}"/><rect x="69" y="21" width="27" height="7" rx="2" fill="#1a2733"/><rect x="62" y="14" width="40" height="4" rx="2" fill="#eee"/><path d="M79 14 L79 2" stroke="#111" stroke-width="3"/><circle cx="79" cy="1.8" r="2" fill="#4a8cff"/><path d="M26 39 L26 22 L36 25" stroke="#111" stroke-width="2.5" fill="none" stroke-linecap="round"/><text x="72" y="35" font-size="6.5" font-weight="800" fill="#fff" font-family="system-ui">RNLI</text></svg>`;
+  return `<svg viewBox="0 0 120 70" aria-hidden="true"><path d="M8 44 L114 40 Q112 52 100 60 L22 61 Q12 56 8 44 Z" fill="#0d1d4c"/><path d="M13 55 L104 55 Q102 59 98 61 L22 61 Q16 59 13 55 Z" fill="#c0180f"/><path d="M8 44 L114 40" stroke="${col}" stroke-width="4" stroke-linecap="round"/><rect x="36" y="22" width="38" height="20" rx="5" fill="${col}"/><rect x="40" y="26" width="30" height="7" rx="2" fill="#1a2733"/><rect x="38" y="19" width="34" height="4" rx="2" fill="#eee"/><path d="M48 19 L52 2 L58 2 L62 19" stroke="#111" stroke-width="3" fill="none" stroke-linejoin="round"/><rect x="44" y="6" width="22" height="3" fill="#111"/><circle cx="55" cy="1.8" r="2" fill="#4a8cff"/><text x="80" y="51" font-size="8" font-weight="800" fill="#fff" font-family="system-ui">RNLI</text><circle cx="28" cy="30" r="4" fill="none" stroke="#f4561c" stroke-width="2.5"/></svg>`;
 }
+/** a card's bar: a label and four pips, so many lit */
+const pips = (label: string, n: number) => `<span class="pips"><i>${label}</i>${[0, 1, 2, 3].map((j) => `<b class="${j < n ? 'on' : ''}"></b>`).join('')}</span>`;
+const BOAT_KINDS: BoatKind[] = ['lifeboat', 'inshore', 'launch'];
 const store = { get: (k: string) => { try { return localStorage.getItem(k); } catch { return null; } }, set: (k: string, v: string) => { try { localStorage.setItem(k, v); } catch { /* (private window: no keeping) */ } } };
 const bestKey = () => mode === 'rally' ? 'lily-rescue-boats-best' : 'lily-rescue-boats-service-best';
 const bests = (): Record<string, number> => { try { return JSON.parse(store.get(bestKey()) ?? '{}'); } catch { return {}; } };
@@ -687,13 +724,16 @@ function panel(name: '' | 'boats' | 'weather' | 'settings') {
   refreshTitle();
 }
 function refreshTitle() {
-  const B = BOATS[mine], best = bests()[mine] ?? 0;
+  const B = BOATS[crew], K = KINDS[boatKind], best = bests()[crew] ?? 0;
   // (the Service's forecast: the day's weather, as it'll go)
   const forecast = voyage(seed, chosen).map((l) => WEATHERS[l.w].icon).join(' → ');
-  $('chosen').innerHTML = `<span class="tag"><span class="dot" style="background:${css(B.colour)}"></span><b>${B.name}</b></span><span class="tag">${forecast} · ${level}</span><span class="tag">${coast.name}</span>`;
+  $('chosen').innerHTML = `<span class="tag"><span class="dot" style="background:${css(B.colour)}"></span><b>${B.name}</b> · ${K.name.toLowerCase()}</span><span class="tag">${forecast} · ${level}</span><span class="tag">${coast.name}</span>`;
   $('weather-icon').textContent = weather.icon;
-  $('boat-show').innerHTML = `${boatSvg(B.colour)}<b>${B.name}</b><small>all-weather lifeboat · ${best ? `your best: ${best} rescued` : 'not raced yet'}</small>`;
-  $('boats-list').innerHTML = BOATS.map((b, i) => `<button data-boat="${i}" class="${i === mine ? 'on' : ''}">${boatSvg(b.colour)}${b.name}</button>`).join('');
+  // (your crew's boat: its kind and its bars; the crews to choose from; the kinds of boat)
+  $('boat-show').innerHTML = `${boatSvg(B.colour, boatKind)}<b>${B.name}</b><small>${K.name.toLowerCase()} · ${best ? `your best: ${best} rescued` : 'not out yet'}</small><span class="bars">${pips('Speed', K.bars[0])}${pips('Steady', K.bars[1])}</span>`;
+  $('kinds-list').innerHTML = BOAT_KINDS.map((k) => `<button data-kind="${k}" class="${k === boatKind ? 'on' : ''}">${boatSvg(B.colour, k)}${KINDS[k].name}</button>`).join('');
+  for (const el of document.querySelectorAll<HTMLElement>('#kinds-list button')) el.onclick = () => chooseKind(el.dataset.kind as BoatKind);
+  $('boats-list').innerHTML = BOATS.map((b, i) => `<button data-boat="${i}" class="${i === crew ? 'on' : ''}">${boatSvg(b.colour, boatKind)}${b.name}</button>`).join('');
   for (const el of document.querySelectorAll<HTMLElement>('#boats-list button')) el.onclick = () => chooseBoat(Number(el.dataset.boat));
   const g = (c: readonly number[]) => css(c);
   $('weather-list').innerHTML = WEATHER_ORDER.map((n) => { const w = WEATHERS[n]; return `<button data-weather="${n}" class="${n === weather.name ? 'on' : ''}" style="background:linear-gradient(${g(w.skyTop)}, ${g(w.skyHorizon)} 55%, ${g(w.body)} 56%, ${g(w.deep)})"><span>${w.icon}</span>${w.label}</button>`; }).join('');
@@ -702,7 +742,8 @@ function refreshTitle() {
   for (const el of document.querySelectorAll<HTMLElement>('#hands button')) { el.classList.toggle('on', el.dataset.hand === steer); el.onclick = () => { setSteer(el.dataset.hand as Steer); refreshTitle(); }; }
   $('sound').textContent = sound.on ? 'on' : 'off';
 }
-function chooseBoat(i: number) { mine = (i + 5) % 5; newGame(); refreshTitle(); }
+function chooseBoat(i: number) { crew = (i + 5) % 5; newGame(); refreshTitle(); }
+function chooseKind(k: BoatKind) { boatKind = k; store.set('lily-rescue-boats-kind', k); newGame(); refreshTitle(); }
 function title() {
   ui = 'title'; paused = false;
   document.body.classList.remove('racing', 'podium', 'paused'); document.body.classList.add('title');
@@ -724,9 +765,9 @@ function podium() {
   ui = 'podium'; paused = false;
   document.body.classList.remove('racing', 'paused'); document.body.classList.add('podium');
   const service = mode === 'service', st = standings(race), place = st.findIndex((b) => b.id === mine), me = race.boats[mine];
-  // (everyone in at the quay, 1st in the middle, the rest out to either side)
+  // (everyone in: the Service's each at its own station; the Rally's at the quay, 1st in the middle, the rest to either side)
   const order = [2, 1, 3, 0, 4];
-  st.forEach((b, i) => { const berth = coast.berths[order[i]]; b.x = berth.x; b.z = berth.z; b.h = berth.h; b.v = 0; b.home = b.finished !== null; });
+  st.forEach((b, i) => { const berth = coast.berths[service ? b.station : order[i]]; b.x = berth.x; b.z = berth.z; b.h = berth.h; b.v = 0; b.home = b.finished !== null; });
   poses.length = 0;
   const folk = race.crafts.reduce((n, k) => n + k.craft.people.length, 0), fleet = race.boats.reduce((n, b) => n + b.rescued, 0), all = fleet === folk;
   const who = auto ? st[0] : me;
@@ -734,22 +775,22 @@ function podium() {
   if (service) {
     // (the Service: everyone home first of all; then the crews' honours, by Lily's rule, as the postscript)
     const ashore = race.ashore.length, home = ashore === folk;
-    stars = home ? (who.rescued >= folk / 7 ? 3 : 2) : 1;
+    stars = home ? (who.rescued >= folk / 5 ? 3 : 2) : 1;
     $('result').textContent = home ? 'Everyone home!' : 'Home safe';
-    $('fleet').textContent = `${ashore} of ${folk} safe ashore · five crews · ${auto ? '' : `your crew brought ${me.rescued} home · `}crew honours:`;
+    $('fleet').textContent = `${ashore} of ${folk} safe ashore · ${['', 'one crew', 'two crews', 'three crews', 'four crews', 'five crews'][race.boats.length]} · ${auto ? '' : `your crew brought ${me.rescued} home · `}crew honours:`;
   } else {
     stars = auto ? 3 : place === 0 ? 3 : place < 3 ? 2 : 1;
-    $('result').textContent = auto ? `${BOATS[st[0].id].name} wins!` : place === 0 ? 'You won!' : `You came ${ORD[place]}!`;
+    $('result').textContent = auto ? `${BOATS[st[0].crew].name} wins!` : place === 0 ? 'You won!' : `You came ${ORD[place]}!`;
     $('fleet').textContent = '';
   }
   $('stars').innerHTML = [0, 1, 2].map((i) => STAR(i < stars, 0.2 + i * 0.2)).join('');
-  $('ranks').innerHTML = st.map((b, i) => `<li class="p${i + 1}${b.id === mine && !auto ? ' me' : ''}"><b>${ORD[i]}</b><i style="background:${css(BOATS[b.id].colour)}"></i><span>${BOATS[b.id].name}<small>${b.finished === null ? 'not home' : 'rescued'}</small></span><strong>${b.rescued}</strong></li>`).join('');
+  $('ranks').innerHTML = st.map((b, i) => `<li class="p${i + 1}${b.id === mine && !auto ? ' me' : ''}"><b>${ORD[i]}</b><i style="background:${css(BOATS[b.crew].colour)}"></i><span>${BOATS[b.crew].name}<small>${b.finished === null ? 'not home' : 'rescued'}</small></span><strong>${b.rescued}</strong></li>`).join('');
   $('snapcap').textContent = `${who.rescued} rescued!`;
   if (!snapUrl) snapWanted = true; else ($('snap') as HTMLImageElement).src = snapUrl;
   if (!auto) {
-    const b = bests(), was = b[mine] ?? 0;
-    if (me.rescued > was) { b[mine] = me.rescued; store.set(bestKey(), JSON.stringify(b)); }
-    $('best').textContent = me.rescued > was && was > 0 ? `A new best for ${BOATS[mine].name}!` : `${BOATS[mine].name}'s best: ${Math.max(was, me.rescued)} rescued`;
+    const b = bests(), was = b[crew] ?? 0;
+    if (me.rescued > was) { b[crew] = me.rescued; store.set(bestKey(), JSON.stringify(b)); }
+    $('best').textContent = me.rescued > was && was > 0 ? `A new best for ${BOATS[crew].name}!` : `${BOATS[crew].name}'s best: ${Math.max(was, me.rescued)} rescued`;
   } else $('best').textContent = '';
   sound.quiet(); sound.tune(service ? (all ? 0 : 2) : place);
 }
@@ -760,8 +801,8 @@ $('open-boats').onclick = () => panel('boats');
 $('open-weather').onclick = () => panel('weather');
 $('open-settings').onclick = () => panel('settings');
 for (const el of document.querySelectorAll<HTMLElement>('[data-close]')) el.onclick = () => panel('');
-$('boat-prev').onclick = () => chooseBoat(mine - 1);
-$('boat-next').onclick = () => chooseBoat(mine + 1);
+$('boat-prev').onclick = () => chooseBoat(crew - 1);
+$('boat-next').onclick = () => chooseBoat(crew + 1);
 addEventListener('keydown', (e) => {
   if ((e.key === 'Enter' || e.key === ' ') && ui === 'title' && !document.body.className.includes('panel-')) { e.preventDefault(); go('service'); }
   if (e.key === 'Escape' && ui === 'race') pause(!paused);
@@ -801,7 +842,7 @@ function events() {
     else if (e.kind === 'letgo') { if (e.boat === mine && !auto) bubble('Come back — they’re still waiting!'); }
     else if (e.kind === 'bump') { if (e.boat === mine) sound.bump(); }
     else if (e.kind === 'finish') { if (e.boat === mine && !auto) { const f = $('finishflag'); f.textContent = mode === 'service' ? 'HOME' : 'FINISH'; f.classList.remove('on'); void f.offsetWidth; f.classList.add('on'); snapWanted = true; bubble(mode === 'service' ? `All in! Your crew rescued ${race.boats[mine].rescued}` : `${ORD[e.place - 1]} home!`, 3); } }
-    else if (e.kind === 'yield') { if (e.to === mine && !auto) bubble(`${BOATS[e.boat].name}: All yours, ${BOATS[mine].name} — we’ll find someone else!`, 3.2); }
+    else if (e.kind === 'yield') { if (e.to === mine && !auto) bubble(`${BOATS[race.boats[e.boat].crew].name}: All yours, ${BOATS[crew].name} — we’ll find someone else!`, 3.2); }
     else if (e.kind === 'allaboard') { sound.bell(); if (!auto) say('Everyone’s aboard!', true); }
     else if (e.kind === 'lastcall') { sound.bell(); if (!auto && race.boats[mine].finished === null) { say('Last call!', true); bubble('Last call! Head for the harbour!', 4); } }
     else if (e.kind === 'over') setTimeout(() => { if (ui === 'race') podium(); }, 2500);
@@ -862,7 +903,7 @@ function frame(now: number) {
   const f: Frame = {
     vp, eye, time: t, right, up, near: 0.5, far: 1800, focusDist: lens.focus, aperture: lens.aperture,
     zMin: Math.min(eye[2], fb.z) - 160 - 400 * Math.max(0, -Math.cos(camYaw)), zMax: Math.max(eye[2], fb.z) + 160 + 700 * Math.max(0, Math.cos(camYaw)),
-    focus: ui === 'podium' ? [coast.berths[2].x, coast.berths[2].z - 30] : [fb.x, fb.z], draws, wakes: wakes.data, wakeCount: wakes.count, fx: marks.data, fxCount: marks.count, holes, holeCount: hc, hulls, hullCount: hullsOf(),
+    focus: ui === 'podium' ? (coast.pier ? [coast.pier.x1 - 22, coast.berths[0].z - 30] : [coast.berths[2].x, coast.berths[2].z - 30]) : [fb.x, fb.z], draws, wakes: wakes.data, wakeCount: wakes.count, fx: marks.data, fxCount: marks.count, holes, holeCount: hc, hulls, hullCount: hullsOf(),
     weather, flash, spot: spotAt, spotDir, rally: mode === 'rally',
   };
   if (ui === 'title') { f.zMin = showPath.z0 - 400; f.zMax = showPath.z1 + 400; }
@@ -872,9 +913,9 @@ function frame(now: number) {
   // (a picture for the end: taken the moment you cross the line, while the frame's still there to read)
   if (snapWanted) { snapWanted = false; try { snapUrl = canvas.toDataURL('image/jpeg', 0.82); ($('snap') as HTMLImageElement).src = snapUrl; } catch { /* (no picture, then) */ } }
   (window as unknown as { __rescue: unknown }).__rescue = {
-    variant: 'coast', mode, coast: coast.kind, ui, paused, phase: race.phase, seed, fleet: race.boats.reduce((n, b) => n + b.rescued, 0), ashore: race.ashore.length, called: race.crafts.filter((k) => k.called).length, weather: weather.name, name: coast.name, mine, level, t: race.t, auto, dpr, frameMs: ema,
+    variant: 'coast', mode, coast: coast.kind, ui, paused, phase: race.phase, seed, fleet: race.boats.reduce((n, b) => n + b.rescued, 0), ashore: race.ashore.length, called: race.crafts.filter((k) => k.called).length, weather: weather.name, name: coast.name, mine, crew, kind: boatKind, level, t: race.t, auto, dpr, frameMs: ema,
     stick: { x: stick.x, y: stick.y, held: stick.held }, steer,
-    boats: race.boats.map((b) => ({ x: b.x, z: b.z, h: b.h, v: b.v, rescued: b.rescued, finished: b.finished, home: b.home })),
+    boats: race.boats.map((b) => ({ x: b.x, z: b.z, h: b.h, v: b.v, rescued: b.rescued, finished: b.finished, home: b.home, crew: b.crew, kind: b.kind, station: b.station })),
     boarding: race.crafts.filter((k) => k.stage === 'line' || k.stage === 'climb').map((k) => ({ craft: k.craft.id, by: k.by, stage: k.stage })),
   };
   requestAnimationFrame(frame);
@@ -882,6 +923,8 @@ function frame(now: number) {
 
 // ─── reference scenes: one fixed frame each, composed like the target studies, to judge the drawing by ───
 let refCam: { from: number[]; target: number[]; fov: number; aperture: number; focus: number } | null = null;
+/** the boat a reference scene follows (null: as usual) */
+let refBoat: number | null = null;
 const refArg = params.get('ref');
 function refScene(kind: string) {
   document.body.classList.add('preview');
@@ -908,6 +951,11 @@ function refScene(kind: string) {
     // (the Service's harbour from above its mouth: the crews moored at the pier, the jetties and their boats, the town)
     const H = coast.harbour;
     refCam = { from: [H.x + 62, 46, H.z - 92], target: [H.x - 12, 1, H.z + 8], fov: 0.82, aperture: 0.2, focus: 110 };
+  } else if (kind === 'neighbour') {
+    // (the Service: a neighbouring station's little harbour, from the sea off its mouth)
+    refBoat = Math.max(1, Math.min(2, Number(params.get('n') ?? 1)));
+    const st = coast.stations[refBoat], A = st.area!;
+    refCam = { from: [st.mouth[0] + 70, 40, st.mouth[1] - 55], target: [A.x + 4, 1, A.z + 2], fov: 0.8, aperture: 0.2, focus: 90 };
   } else if (kind === 'coast') {
     // (from the sea off the big headland, looking along the cliffs: the lighthouse and cottages on top, the rocks and surf below)
     const L = coast.props.find((p) => p.kind === 'lighthouse' && p.v === 0) ?? coast.props.find((p) => p.kind === 'lighthouse')!;
@@ -938,6 +986,10 @@ setWeather((params.get('weather') ?? 'sunny') as WeatherName);
 {
   const h = params.get('hand') ?? store.get('lily-rescue-boats-steer');
   setSteer(h === 'left' || h === 'right' ? h : 'touch', false);
+}
+{
+  const k = params.get('kind') ?? store.get('lily-rescue-boats-kind');
+  if (k === 'lifeboat' || k === 'inshore' || k === 'launch') boatKind = k;
 }
 newCoast(seed);
 title();

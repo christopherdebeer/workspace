@@ -3,9 +3,10 @@
 // mouth; the hull never inside a boulder), the rule (alongside and slow claims; fast or far does not; everyone climbs
 // aboard, counted as they land, no one twice; drive off and the rest wait), whole races steered by the game (over, the
 // places by Lily's rule, no hull past the shore), and the same seed the same race. Then the Rescue Service: its own coast
-// (the harbour with its pier, the open sea past the headland, the calls by zone), its rules (the calls coming in, room
-// for everyone, landing them on the pier, holding steady in a swell), whole days with the weather changing, and the same seed
-// the same day.
+// (your harbour with its pier, two neighbours' little harbours down the coast, the open sea past the headland, each
+// station's calls by zone), its rules (the calls coming in, room for everyone, each crew landing its people at its own
+// harbour, holding steady in a swell, the kinds of boat, helping in another's stretch), whole days with the weather
+// changing, and the same seed the same day.
 import { build } from 'esbuild';
 const load = async (f) => { const o = await build({ entryPoints: [new URL(f, import.meta.url).pathname], bundle: true, write: false, format: 'esm', platform: 'node', logLevel: 'error' }); return import('data:text/javascript;base64,' + Buffer.from(o.outputFiles[0].text).toString('base64')); };
 const C = await load('../client/rescue-coast/coast.ts'), R = await load('../client/rescue-coast/race.ts'), WX = await load('../client/rescue-coast/weather.ts');
@@ -108,8 +109,16 @@ for (const [seed, c] of sea) {
   ok(`service coast ${seed}: its own kind, the same name as the Rally's`, c.kind === 'service' && coasts.get(seed).kind === 'rally' && c.name === coasts.get(seed).name);
   ok(`service coast ${seed}: a pier out into the harbour, inside the mouth`, P && P.z0 > C.GATE_Z + 30 && S((P.x1 + P.x1 - 20) / 2, (P.z0 + P.z1) / 2) < 0 && S(P.x1 + 6, (P.z0 + P.z1) / 2) > 2, P);
   ok(`service coast ${seed}: the station by the mouth`, c.props.some((p) => p.kind === 'station' && p.z > C.GATE_Z && p.z < C.GATE_Z + 60));
-  ok(`service coast ${seed}: the crews moored along the pier, in open water, bows the same way`, c.starts.every((p) => p.z > P.z1 && p.z < P.z1 + 12 && p.x < P.x1 && S(p.x, p.z) > C.CLEAR + 3) && c.berths.every((b, i) => b.x === c.starts[i].x && b.z === c.starts[i].z), c.starts.map((p) => S(p.x, p.z).toFixed(1)));
-  const reach = C.flood(c.open, C.navIndex(c.starts[2].x, c.starts[2].z));
+  const st = c.stations, near = (reach, x, z) => [[0, 0], [0, 4], [4, 0], [-4, 0], [0, 8], [4, 4], [-4, 4], [4, -4], [-4, -4]].some(([dx, dz]) => reach[C.navIndex(x + dx, z + dz)]);
+  ok(`service coast ${seed}: three stations: yours on the pier inside the mouth; two neighbours' down the coast, apart, each in its own harbour`, st.length === 3 && st[0].z > P.z1 && st[0].z < P.z1 + 12 && st[0].x < P.x1 && st.slice(1).every((q, i) => q.z < C.GATE_Z - 300 && C.insideStation(c, i + 1, q.x, q.z) && !C.insideStation(c, 0, q.x, q.z)) && st[1].z - st[2].z > 200, st.map((q) => [q.x.toFixed(0), q.z.toFixed(0)]));
+  ok(`service coast ${seed}: each crew moored at its station in open water, bows to the way out`, st.every((q, i) => S(q.x, q.z) > C.CLEAR + 3 && c.starts[i].x === q.x && c.berths[i].z === q.z && Math.abs(q.h - Math.PI / 2) < 1e-6) && c.starts.length === 3, st.map((q) => S(q.x, q.z).toFixed(1)));
+  const reach = C.flood(c.open, C.navIndex(c.gateX, C.GATE_Z - 30));
+  ok(`service coast ${seed}: every crew can get out of its harbour and back`, st.every((q) => near(reach, q.x, q.z)) && st.slice(1).every((q) => reach[C.navIndex(q.mouth[0], q.mouth[1])]));
+  for (const i of [1, 2]) {
+    const q = st[i], A = q.area, by = (p, d) => Math.hypot(p.x - q.x, p.z - q.z) < d;
+    ok(`service coast ${seed}: the ${i === 1 ? 'nearer' : 'further'} neighbour's harbour: its station, a light on its breakwater, quays, cottages, boats moored`, c.props.some((p) => p.kind === 'station' && by(p, 75)) && c.props.some((p) => p.kind === 'lighthouse' && by(p, 80) && p.s < 0.6) && c.props.filter((p) => p.kind === 'quay' && by(p, 80)).length >= 20 && c.props.filter((p) => p.kind === 'cottage' && by(p, 130)).length >= 5 && c.moored.filter((m) => Math.hypot((m.x - A.x) / A.rx, (m.z - A.z) / A.rz) < 1.3).length >= 4);
+    ok(`service coast ${seed}: calm in the ${i === 1 ? 'nearer' : 'further'} neighbour's harbour`, C.seaAt(c, q.x, q.z) < 0.5 && C.seaAt(c, A.x, A.z) < 0.55, [C.seaAt(c, q.x, q.z).toFixed(2), C.seaAt(c, A.x, A.z).toFixed(2)]);
+  }
   ok(`service coast ${seed}: every little boat can be reached from the pier`, c.crafts.every((k) => reach[C.navIndex(k.x, k.z)]));
   ok(`service coast ${seed}: the lighthouse on the harbour's headland, across the approach`, c.props.some((p) => p.kind === 'lighthouse' && p.v === 0 && p.x > c.gateX && p.z > C.GATE_Z - 300 && p.z < C.GATE_Z - 80));
   const rows = Array.from({ length: 41 }, (_, i) => 150 + i * 10), seaward = rows.filter((z) => S(C.X1 - C.EDGE, z) > 30).length;
@@ -121,9 +130,12 @@ for (const [seed, c] of sea) {
   ok(`service coast ${seed}: no boulder reaches past the hull's clearance`, c.rocks.every((r) => S(r.x, r.z) + Math.max(r.sx, r.sz) <= C.CLEAR + 0.3));
   ok(`service coast ${seed}: buoys in open water, up the approach`, c.buoys.every((b) => S(b.x, b.z) >= 8) && c.buoys.some((b) => b.kind === 'red') && c.buoys.some((b) => b.kind === 'green'));
   const zones = [0, 1, 2].map((z) => c.crafts.filter((k) => k.zone === z)), mean = (l) => l.reduce((n, k) => n + k.people.length, 0) / l.length;
-  ok(`service coast ${seed}: calls near the harbour, along the coast, and out at sea`, zones.every((l) => l.length >= 4) && c.crafts.length >= 16, zones.map((l) => l.length));
+  const theirs = [0, 1, 2].map((i) => c.crafts.filter((k) => k.station === i));
+  ok(`service coast ${seed}: each station's stretch has its calls: near its harbour, along its coast, and out at sea`, theirs.every((l) => l.length === 5 && [0, 1, 2].every((z) => l.some((k) => k.zone === z))) && c.crafts.length === 15, theirs.map((l) => l.map((k) => k.zone).join('')));
+  ok(`service coast ${seed}: the stretches down the coast in order: yours nearest your harbour, the neighbours' further down`, theirs[0].every((k) => k.z > Math.max(...theirs[1].map((o) => o.z)) - 40) && theirs[1].every((k) => k.z > Math.max(...theirs[2].map((o) => o.z)) - 40), theirs.map((l) => l.map((k) => k.z.toFixed(0)).join(',')));
+  ok(`service coast ${seed}: no call in a harbour or its mouth`, c.crafts.every((k) => st.every((q, i) => !C.insideStation(c, i, k.x, k.z) && Math.hypot(q.mouth[0] - k.x, q.mouth[1] - k.z) >= 45)));
   const meanAt = (l) => l.reduce((n, k) => n + k.at, 0) / l.length;
-  ok(`service coast ${seed}: three waiting as the crews set out; the rest called through the day, the furthest last`, c.crafts.filter((k) => k.at === 0).length === 3 && Math.max(...c.crafts.map((k) => k.at)) < 160 && meanAt(zones[0]) < meanAt(zones[1]) && meanAt(zones[1]) < meanAt(zones[2]), zones.map((l) => meanAt(l).toFixed(0)));
+  ok(`service coast ${seed}: one waiting by each harbour as the crews set out; the rest called through the day, the furthest last`, theirs.every((l) => l.filter((k) => k.at === 0).length === 1) && Math.max(...c.crafts.map((k) => k.at)) < 160 && meanAt(zones[0]) < meanAt(zones[1]) && meanAt(zones[1]) < meanAt(zones[2]), zones.map((l) => meanAt(l).toFixed(0)));
   ok(`service coast ${seed}: bigger groups out at sea than by the harbour`, mean(zones[2]) > mean(zones[0]), [mean(zones[0]).toFixed(1), mean(zones[2]).toFixed(1)]);
   ok(`service coast ${seed}: the little boats out in open water and apart`, c.crafts.every((k) => S(k.x, k.z) >= 14) && c.crafts.every((k, i) => c.crafts.every((o, j) => i === j || Math.hypot(k.x - o.x, k.z - o.z) >= 28)));
   // (harbour life: jetties out from the quay, boats along them and alongside the quay wall, more swinging at buoys, lamps
@@ -140,11 +152,12 @@ for (const [seed, c] of sea) {
   let laidOver = 0;
   hulls.forEach((a, n) => { laidOver += hulls.slice(n + 1).filter((b) => clash(a, b)).length + decks.filter((d) => clash(a, d)).length; });
   ok(`service coast ${seed}: no boat moored over another, or over a jetty; all afloat`, laidOver === 0 && c.moored.every((m) => S(m.x, m.z) > HULL[m.kind][1] + 0.5), laidOver);
-  ok(`service coast ${seed}: none of it in the mouth's lane or by the crews' berths`, [...c.moored, ...jetties.map((j) => ({ x: tip(j)[0], z: tip(j)[1] }))].every((m) => !(m.z < H.z - 30 && Math.abs(m.x - c.gateX) < 45) && c.berths.every((b) => Math.hypot(b.x - m.x, b.z - m.z) >= 18)));
-  ok(`service coast ${seed}: no route through a jetty or a moored boat, and every crew can get out of the harbour`, c.snags.length > 100 && c.snags.every((q) => !c.open[C.navIndex(q.x, q.z)]) && c.starts.every((p) => [[0, 0], [0, 4], [4, 0], [-4, 0], [0, 8], [4, 4], [-4, 4]].some(([dx, dz]) => reach[C.navIndex(p.x + dx, p.z + dz)])) && reach[C.navIndex(c.gateX, C.GATE_Z - 30)]);
+  const segD = (x, z, a, b) => { const dx = b[0] - a[0], dz = b[1] - a[1], t = Math.max(0, Math.min(1, ((x - a[0]) * dx + (z - a[1]) * dz) / (dx * dx + dz * dz))); return Math.hypot(x - a[0] - dx * t, z - a[1] - dz * t); };
+  ok(`service coast ${seed}: none of it in the way in from a mouth, or by a crew's berth`, [...c.moored, ...jetties.map((j) => ({ x: tip(j)[0], z: tip(j)[1] }))].every((m) => !(m.z > C.GATE_Z && m.z < H.z - 30 && Math.abs(m.x - c.gateX) < 45) && st.every((q, i) => Math.hypot(q.x - m.x, q.z - m.z) >= 15 && (i === 0 || segD(m.x, m.z, q.mouth, [q.x, q.z]) >= 10))));
+  ok(`service coast ${seed}: no route through a jetty or a moored boat`, c.snags.length > 100 && c.snags.every((q) => !c.open[C.navIndex(q.x, q.z)]));
 }
 
-// (the rules: room for everyone found; home, they step ashore in the harbour, and not out on the water)
+// (the rules: room for everyone found; home, they step ashore in your harbour, and not out on the water)
 {
   const c = sea.get(1), r = R.newRace(c, { mode: 'service', level: 'medium', mine: 0 }); R.start(r); R.runFor(r, 3.2);
   for (const b of r.boats) if (b.id) b.ai = null;
@@ -173,6 +186,52 @@ for (const [seed, c] of sea) {
   let closest = 1e9;
   for (let t = 0; t < 6; t += 0.1) { R.step(r, 0.1, { throttle: 1, steer: 0 }); for (const q of c.snags) closest = Math.min(closest, Math.hypot(me.x - q.x, me.z - q.z) - q.r); }
   ok('service: flat out at a jetty: a bump, held off, still on the side it came from', r.events.some((e) => e.kind === 'bump' && e.boat === 0) && closest > 1.2 && side(me.x, me.z) === from, [closest.toFixed(2), side(me.x, me.z), from]);
+}
+// (the crews and their boats: yours in the kind you chose at your own station; the neighbours two of the other crews, in
+// the other two kinds; the Rally's are Lily's five lifeboats)
+{
+  const kinds = ['lifeboat', 'inshore', 'launch'];
+  let fair = true;
+  for (const seed of SEEDS) for (const crew of [0, 1, 2, 3, 4]) for (const kind of kinds) {
+    const { crews, kinds: ks } = R.serviceCrews(seed, crew, kind);
+    if (crews[0] !== crew || ks[0] !== kind || new Set(crews).size !== 3 || new Set(ks).size !== 3 || crews.some((q) => q < 0 || q > 4)) fair = false;
+  }
+  ok('service: your crew in the boat you chose; the neighbours two other crews in the other two kinds', fair);
+  const rally = R.newRace(coasts.get(1), { mine: 2 });
+  ok('the Rally: Lily\'s five, all lifeboats, at no station', rally.boats.length === 5 && rally.boats.every((b, i) => b.crew === i && b.kind === 'lifeboat' && b.station === -1));
+  const sv = R.newRace(sea.get(1), { mode: 'service', mine: 0, ...R.serviceCrews(1, 3, 'launch') });
+  ok('service: three crews, one to each station, yours first', sv.boats.length === 3 && sv.boats.every((b, i) => b.station === i) && sv.boats[0].crew === 3 && sv.boats[0].kind === 'launch');
+}
+// (the kinds of boat: flat out on open water, the inshore boat is quickest, the launch slowest; the inshore boat turns
+// tightest; and alongside in a sea the launch holds steadiest, the inshore boat least)
+{
+  const c = sea.get(2), kinds = ['inshore', 'lifeboat', 'launch'], speed = {}, turned = {}, steady = {};
+  for (const kind of kinds) {
+    const r = R.newRace(c, { mode: 'service', mine: 0, kinds: [kind, 'lifeboat', 'lifeboat'], sky: [{ at: 0, w: 'sunny' }] }); R.start(r); R.runFor(r, 3.2);
+    for (const b of r.boats) if (b.id) { b.ai = null; b.x = 200; b.z = 100 + b.id * 30; }
+    const me = r.boats[0]; me.x = 120; me.z = 300; me.h = 0; me.v = 0;
+    R.runFor(r, 8, { throttle: 1 }); speed[kind] = me.v;
+    const h0 = me.h; R.runFor(r, 2, { throttle: 1, steer: 1 }); turned[kind] = Math.abs(me.h - h0);
+    const k = r.crafts[0]; k.called = true; k.x = me.x + 3.4; k.z = me.z; me.v = 0; me.turn = 0; me.h = 0;
+    steady[kind] = R.steadiness(r, me, k);
+  }
+  ok('kinds: flat out, the inshore boat quickest, the launch slowest', speed.inshore > speed.lifeboat + 0.8 && speed.lifeboat > speed.launch + 0.8, Object.values(speed).map((v) => v.toFixed(1)));
+  ok('kinds: the inshore boat turns tightest, the launch least', turned.inshore > turned.lifeboat && turned.lifeboat > turned.launch, Object.values(turned).map((v) => v.toFixed(2)));
+  ok('kinds: alongside in a sea, the launch holds steadiest, the inshore boat least', steady.launch > steady.lifeboat && steady.lifeboat > steady.inshore, Object.values(steady).map((v) => v.toFixed(2)));
+}
+// (another station's stretch: a crew from elsewhere leaves a call there to that station's crew; once it's waited a while
+// with nobody going for it, a crew with nothing of its own to do goes to help)
+{
+  const c = sea.get(3), r = R.newRace(c, { mode: 'service', level: 'medium', mine: 0 }); R.start(r); R.runFor(r, 3.2);
+  r.boats[2].ai = null;
+  for (const k of r.crafts) if (k.craft.station !== 0) { k.left = 0; k.stage = 'done'; k.called = true; }
+  const k = r.crafts.find((q) => q.craft.station === 0 && q.called), helper = r.boats[1];
+  let early = false;
+  for (let t = 0; t < R.HELP - 3; t += 0.5) { R.runFor(r, 0.5); if (helper.ai.target === k.craft.id || k.claim === 1) early = true; }
+  ok('service: a call in your stretch is left to you for a while', !early && k.claim === -1, [helper.ai.target, k.claim]);
+  let helped = false;
+  for (let t = 0; t < 30 && !helped; t += 0.5) { R.runFor(r, 0.5); helped = k.claim === 1 || helper.ai.target === k.craft.id; }
+  ok('service: then, nobody going for it, a neighbour with nothing of its own to do comes to help', helped, [helper.ai.target, k.claim, r.t.toFixed(0)]);
 }
 // (the calls: not there till they come in; then there, unless a lifeboat's right by them (they wait a little for it to go))
 {
@@ -204,19 +263,21 @@ for (const [seed, c] of sea) {
 // (whole days, steered by the game: everyone home, the rules kept all day)
 const serviceLengths = [];
 for (const [seed, c] of sea) for (const level of ['easy', 'hard']) {
-  const r = R.newRace(c, { mode: 'service', level, mine: 0, auto: true, sky: WX.voyage(seed, 'sunny') }); R.start(r);
-  let inside = 0, through = 0, doubled = 0, unclaimed = 0, early = 0, out = 0, homeEarly = 0;
+  const kinds = ['lifeboat', 'inshore', 'launch'], r = R.newRace(c, { mode: 'service', level, mine: 0, auto: true, sky: WX.voyage(seed, 'sunny'), ...R.serviceCrews(seed, seed % 5, kinds[seed % 3]) }); R.start(r);
+  let inside = 0, through = 0, doubled = 0, unclaimed = 0, early = 0, out = 0, homeEarly = 0, poached = 0;
   const calledAt = new Map();
   for (let t = 0; t < 1500 && r.phase !== 'over'; t += 0.25) {
     R.runFor(r, 0.25);
     for (const b of r.boats) if (C.shoreAt(c, b.x, b.z) < R.HALF_BEAM - 0.5) inside++;
     for (const b of r.boats) if (c.snags.some((q) => Math.hypot(b.x - q.x, b.z - q.z) < q.r + 1.2)) through++;
-    // (no crew heads home while there's anyone left to find)
-    if (r.crafts.some((k) => !k.called || k.left > 0)) for (const b of r.boats) if (b.ai?.target === -1 && b.z < C.GATE_Z - 40 && r.crafts.some((k) => k.called && k.left > 0 && k.claim === -1 && k.stage === 'wait')) homeEarly++;
+    // (no crew heads home while there's anyone in its stretch left to find, or anyone waiting long for help)
+    for (const b of r.boats) if (b.ai?.target === -1 && !R.insideHome(r, b) && b.finished === null && r.crafts.some((k) => k.called && k.left > 0 && k.claim === -1 && k.stage === 'wait' && (k.craft.station === b.station || r.t - k.calledAt > R.HELP + 1))) homeEarly++;
+    // (no crew goes for a call in another's stretch till it's been waiting a while)
+    for (const b of r.boats) if (b.ai && b.ai.target >= 0) { const k = r.crafts[b.ai.target]; if (k.craft.station !== b.station && k.stage === 'wait' && r.t - k.calledAt < R.HELP - 0.5) poached++; }
     for (const e of r.events.splice(0)) {
       if (e.kind === 'call') calledAt.set(e.craft, r.t);
       if (e.kind === 'aboard' && !r.crafts[e.craft].called) early++;
-      if (e.kind === 'ashore' && r.boats[e.boat].z <= R.INSIDE) out++;
+      if (e.kind === 'ashore' && !R.insideHome(r, r.boats[e.boat])) out++;
     }
     // (no two crews going for the same little boat; every crew's choice claimed by it)
     const going = r.boats.filter((b) => b.ai && b.finished === null && b.ai.target >= 0 && r.crafts[b.ai.target].stage === 'wait').map((b) => b.ai.target);
@@ -229,7 +290,8 @@ for (const [seed, c] of sea) for (const level of ['easy', 'hard']) {
   ok(`service ${seed} ${level}: in three to six minutes`, r.t > 180 && r.t < 360, r.t.toFixed(0));
   ok(`service ${seed} ${level}: no hull inside the shore`, inside === 0, inside);
   ok(`service ${seed} ${level}: no hull through a jetty or a moored boat`, through === 0, through);
-  ok(`service ${seed} ${level}: ashore only in the harbour; no crew heading home with someone left waiting for it`, out === 0 && homeEarly === 0, [out, homeEarly]);
+  ok(`service ${seed} ${level}: each crew lands its people in its own harbour, and only there; none heading home with someone left waiting for it`, out === 0 && homeEarly === 0 && r.boats.every((b) => b.safe === b.rescued && R.insideHome(r, b)), [out, homeEarly, r.boats.map((b) => [b.safe, b.rescued, R.insideHome(r, b)])]);
+  ok(`service ${seed} ${level}: none goes for a call in another's stretch till it's waited a while`, poached === 0, poached);
   ok(`service ${seed} ${level}: the calls at their times, no one taken before theirs`, early === 0 && [...calledAt].every(([id, t]) => t >= c.crafts[id].at), early);
   ok(`service ${seed} ${level}: no two crews after the same little boat; each going for one it has claimed`, doubled === 0 && unclaimed === 0, [doubled, unclaimed]);
   ok(`service ${seed} ${level}: no one counted twice`, new Set(r.ashore.map((a) => a.craft + ':' + a.person)).size === total);

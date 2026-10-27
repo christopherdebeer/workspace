@@ -17,7 +17,7 @@
    {
     "name": "boats",
     "title": "Choose your boat",
-    "caption": "five lifeboats, a wheelhouse each in its own colour; your best with each",
+    "caption": "your crew, Lily’s five, each in its own colour; and your boat: the lifeboat, good at everything; the inshore boat, quickest but bumpy alongside out at sea; the harbour launch, slow but steadiest",
     "file": "v-boats.jpg"
    },
    {
@@ -40,13 +40,13 @@
    {
     "name": "start",
     "title": "Moored in the harbour",
-    "caption": "as the count goes down, a look round the harbour: the five crews moored, bows to the mouth, the town on its hill behind; a few from the town on the quay to see them off",
+    "caption": "as the count goes down, a look round your harbour: your lifeboat moored at the end of the pier, bows to the mouth, the town on its hill behind; a few from the town on the quay to see you off",
     "file": "v-start.jpg"
    },
    {
     "name": "home",
     "title": "Home harbour",
-    "caption": "the little harbour from above its mouth: the crews moored along the pier with its lamps and bunting, the station, timber jetties all round the basin with boats moored along them and more at their buoys, the town on the hill",
+    "caption": "your harbour from above its mouth: your lifeboat at the end of the pier with its lamps and bunting, the station, timber jetties all round the basin with boats moored along them and more at their buoys, the town on the hill",
     "file": "v-home.jpg"
    },
    {
@@ -58,7 +58,7 @@
    {
     "name": "racing",
     "title": "Along the coast",
-    "caption": "the first calls are just outside the harbour; everyone rescued so far (of everyone whose call has come in), your own crew’s count, the time with the weather as it is now; the map, a little boat another crew is going for ringed in their colour; the five crews’ counts under it",
+    "caption": "your first calls are just outside the harbour; everyone rescued so far (of everyone whose call has come in), your own crew’s count, the time with the weather as it is now; the map, a little boat another crew is going for ringed in their colour; the three crews’ counts under it",
     "file": "v-racing.jpg"
    }
   ]
@@ -81,6 +81,23 @@
   ]
  },
  {
+  "group": "Down the coast",
+  "views": [
+   {
+    "name": "north",
+    "title": "The neighbours: North Head",
+    "caption": "a little harbour down the coast, its breakwaters round the water in front of it, a light on the end of one; the station and its slipway at the head of the basin, a jetty, boats moored along the quays; their inshore boat at its berth",
+    "file": "v-north.jpg"
+   },
+   {
+    "name": "south",
+    "title": "The neighbours: South Sound",
+    "caption": "further down, where the coast turns away west: another little harbour, their harbour launch at its berth",
+    "file": "v-south.jpg"
+   }
+  ]
+ },
+ {
   "group": "Coming alongside",
   "views": [
    {
@@ -98,7 +115,7 @@
    {
     "name": "paddle",
     "title": "A paddleboarder",
-    "caption": "near the harbour the first calls are the little ones: a kayaker, a paddleboarder blown out past the headland",
+    "caption": "near each harbour the first calls are the little ones: a kayaker, a paddleboarder blown out from the shore; here the neighbours from North Head, in their inshore boat",
     "file": "v-paddle.jpg"
    }
   ]
@@ -109,25 +126,25 @@
    {
     "name": "open-sea",
     "title": "The open sea",
-    "caption": "past the harbour’s headland the far shore falls away: islets and reefs out over the water, the swell bigger out here; the sun going down",
+    "caption": "past the harbour’s headland the far shore falls away: islets and reefs out over the water, the swell bigger out here; the sun going down; the neighbours’ inshore boat on its way to its next call",
     "file": "v-open-sea.jpg"
    },
    {
     "name": "rough",
     "title": "Rough water",
-    "caption": "out at sea, beam-on in a bigger swell: they climb across more slowly, and the bar goes amber",
+    "caption": "out at sea, beam-on in a bigger swell: they climb across more slowly, and the bar goes amber; the harbour launch, broad and steady, has them across quicker than most",
     "file": "v-rough.jpg"
    },
    {
     "name": "yacht",
     "title": "A yacht that’s lost its mast",
-    "caption": "further out, the bigger calls: a yacht dismasted, five aboard, the mast lying along her deck",
+    "caption": "further out, the bigger calls: a yacht dismasted, four aboard, the mast lying along her deck",
     "file": "v-yacht.jpg"
    },
    {
     "name": "deck",
     "title": "A full deck",
-    "caption": "everyone found out there, and no one left waiting: home with all six of them",
+    "caption": "everyone found out there, and no one left waiting: home with all ten of them",
     "file": "v-deck.jpg"
    }
   ]
@@ -142,9 +159,15 @@
     "file": "v-landing.jpg"
    },
    {
+    "name": "their-landing",
+    "title": "The neighbours home",
+    "caption": "down the coast, the North Head crew come in through their breakwaters in the dusk, and land theirs on their own quay",
+    "file": "v-their-landing.jpg"
+   },
+   {
     "name": "podium",
     "title": "Everyone home",
-    "caption": "everyone rescued, every crew in at the quay; then the crews’ honours, 1st to 5th by Lily’s rule",
+    "caption": "everyone rescued, every crew in at its own harbour, yours at the pier; then the crews’ honours, 1st to 3rd by Lily’s rule",
     "file": "v-podium.jpg"
    }
   ]
@@ -180,6 +203,18 @@
     "title": "On a bigger screen",
     "caption": "granite cliffs, sheltered water calmer and greener in the lee of the headlands, the wake churning white",
     "file": "v-wide.jpg"
+   },
+   {
+    "name": "study-inshore",
+    "title": "The inshore boat",
+    "caption": "a rigid inflatable: its tube in the crew’s colour, RNLI along it; the console amidships, the A-frame aft with its beacon, twin outboards",
+    "file": "v-study-inshore.jpg"
+   },
+   {
+    "name": "study-launch",
+    "title": "The harbour launch",
+    "caption": "broad and steady: its wheelhouse forward in the crew’s colour, a fat black fender all round, an open working deck aft with a davit to lift people aboard",
+    "file": "v-study-launch.jpg"
    },
    {
     "name": "study",
