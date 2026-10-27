@@ -63,13 +63,13 @@ export function makeWorld(c: Coast): World {
   const pieces = new Map<number, Builder>();
   const at = (z: number) => { const k = Math.floor((z - Z0) / PIECE); return pieces.get(k) ?? pieces.set(k, new Builder()).get(k)!; };
   for (const p of c.props) {
+    if (p.kind === 'post') continue;
     const b = at(p.z);
     b.at(p.x, p.y, p.z, p.yaw, p.s);
     if (p.kind === 'cottage') cottage(b, p.v);
     else if (p.kind === 'lighthouse') lighthouse(b, p.v);
     else if (p.kind === 'station') station(b);
     else if (p.kind === 'gorse') gorse(b, Math.round(p.x * 13 + p.z * 7), p.v === 1);
-    else if (p.kind === 'post') post(b);
     else if (p.kind === 'quay') {
       b.use(0, 0, 4); b.box(-2.9, 2.9, -3.5, 2.75, -0.3, 2.6, [0.66, 0.64, 0.6]);
       b.use(0, 0, 4); b.box(-2.95, 2.95, 2.75, 2.95, -0.45, 1.2, [0.82, 0.8, 0.76]);
@@ -79,9 +79,10 @@ export function makeWorld(c: Coast): World {
   }
   const props: PropPiece[] = [...pieces.entries()].map(([k, b]) => ({ z0: Z0 + k * PIECE - 20, z1: Z0 + (k + 1) * PIECE + 20, mesh: b.done() }));
   {
-    // (the finish banner across the harbour mouth: the Rally's; the Service comes home between the lighthouses)
+    // (the finish across the harbour mouth, posts and banner: the Rally's; the Service comes home between the lighthouses)
     const x0 = c.gateX - GATE_HALF + 2, x1 = c.gateX + GATE_HALF - 2, y = 10.4, b = new Builder();
     banner(b, x0, x1, GATE_Z, y);
+    for (const p of c.props) if (p.kind === 'post') { b.at(p.x, p.y, p.z, p.yaw, p.s); post(b); b.at(); }
     props.push({ z0: GATE_Z - 20, z1: GATE_Z + 20, mesh: b.done(), rally: true });
   }
   const columns = [0, 1, 2, 3].map((k) => column(k + 1));

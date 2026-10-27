@@ -11,13 +11,13 @@
  * far into the race; `?still` time held; `?view=podium`; `?near=n` little boat n and the boat coming for it;
  * `?mode=rally` the Rally; `?at=` the title's clock (seconds round its loop); `?weather=sunny|calm|windy|stormy|foggy|night|sunset`; `?study` a close look at your boat; `?zoom=`; `?hand=left` the joystick on the left (it's on the right unless asked); `?preview` small and quiet.
  */
-import { CLEAR, GATE_HALF, GATE_Z, START_Z, groundAt, makeCoast, seaAt, seaward, shoreAt, type Coast } from './coast';
-import { BOATS, CLIMB, HALF_BEAM, LEVELS, LINE, VMAX, local, newRace, runFor, standings, start, step, world, type Level, type Mode, type Race, type Rescue } from './race';
+import { CLEAR, GATE_HALF, GATE_Z, START_Z, groundAt, makeCoast, seaAt, seaward, shoreAt, type Coast, type CoastKind } from './coast';
+import { BOATS, CAP, CLIMB, HALF_BEAM, INSIDE, LEVELS, LINE, VMAX, everyoneAboard, full, local, newRace, runFor, standings, start, step, world, type Level, type Mode, type Race, type Rescue } from './race';
 import { makeWorld } from './world';
 import { FX, Instances, Renderer, mat4, type Draw, type Frame } from './render';
 import { ROOF, ROOF_Y, SEATS, SHOULDER, WING, buoyMesh, craftMesh, deckAt, gull, lifeboat, person } from './models';
 import { SEA, heightAt } from './waves';
-import { WEATHERS, WEATHER_ORDER, type Weather, type WeatherName } from './weather';
+import { WEATHERS, WEATHER_ORDER, voyage, weatherAt, type Weather, type WeatherName } from './weather';
 import { Marks, Wakes } from './fx';
 import { Sound } from './sound';
 import { Joystick } from './joystick';
@@ -37,6 +37,8 @@ const HAIRS = [[0.2, 0.13, 0.08], [0.45, 0.28, 0.12], [0.85, 0.65, 0.3], [0.1, 0
 const SHIRTS = [[0.9, 0.2, 0.2], [0.2, 0.5, 0.9], [0.95, 0.8, 0.2], [0.3, 0.7, 0.35], [0.9, 0.45, 0.7], [0.55, 0.35, 0.8], [0.2, 0.75, 0.8], [1, 0.55, 0.2]];
 export const CRAFT_COLOURS = [[0.9, 0.15, 0.12], [0.15, 0.4, 0.85], [1, 0.8, 0.12], [0.2, 0.65, 0.3], [0.95, 0.45, 0.7], [0.12, 0.7, 0.75]];
 const CREW = [1, 0.8, 0.08], NONE = [1, 1, 1];
+/** (the Service) a few from the town on the quay, seeing the crews off */
+const TOWNSFOLK = [[1, 0, 5, 1], [3, 3, 1, 0], [0, 2, 7, 2], [4, 1, 2, 1], [2, 5, 0, 0], [5, 0, 3, 2], [0, 4, 6, 1]].map(([skin, hair, shirt, style]) => ({ skin, hair, shirt, style }));
 const css = (c: readonly number[]) => `rgb(${c.map((v) => Math.round(v * 255)).join(',')})`;
 const PERSON = 1.18;
 
@@ -47,13 +49,26 @@ let mine = Math.max(0, Math.min(4, Number(params.get('boat') ?? 0) || 0));
 /** the Rescue Service (all the crews together: everyone home) or the Rally (Lily's race) */
 let mode: Mode = params.get('mode') === 'rally' ? 'rally' : 'service';
 let coast!: Coast, race!: Race;
-let weather: Weather = WEATHERS.sunny;
-/** the weather: the sea's height and steepness (the boats ride the same waves), the light, the air, the sounds */
+let weather: Weather = WEATHERS.sunny, chosen: WeatherName = 'sunny';
+/** the weather: the sea's height and steepness (the boats ride the same waves), the light, the air, the sounds; the one
+ * chosen is the title's, the Rally's, and where the Service's day starts (it changes as the day goes on: the race
+ * keeps the sea to it, the page the rest) */
 function setWeather(name: WeatherName) {
-  weather = WEATHERS[name] ?? WEATHERS.sunny;
+  chosen = WEATHERS[name] ? name : 'sunny';
+  showWeather(WEATHERS[chosen]);
+}
+function showWeather(w: Weather) {
+  weather = w;
   SEA.height = weather.height; SEA.chop = weather.chop;
   sound.weather(weather.wind, weather.rain);
 }
+/** what the coastguard says as the weather turns */
+const SKY_SAY: Record<WeatherName, string> = {
+  sunny: 'It’s clearing up — blue sky on the way', calm: 'The wind’s dropping — a calm sea coming', windy: 'The wind’s getting up — it’ll be bumpier out there',
+  stormy: 'Gale warning! A squall’s coming through — hold on tight', foggy: 'Fog rolling in — watch for the lighthouses', night: 'Night’s falling — searchlights on',
+  sunset: 'The light’s changing — sun low on the water',
+};
+let skyLeg = 0, skySound = 0;
 let ui: 'title' | 'race' | 'podium' = 'title';
 let paused = false, hornAt = -9;
 const marks = new Marks(), wakes = new Wakes(), sound = new Sound();
@@ -73,15 +88,19 @@ const draws: Draw[] = Object.entries(lists).map(([kind, list]) => ({ kind, list 
 const stick = new Joystick($('stick'));
 const minimap = new MiniMap($('map') as HTMLCanvasElement);
 
+/** each way to play has its own coast: the Rally's channel to the harbour; the Service's harbour and the open sea beyond
+ * (the reference scenes are composed on the Rally's) */
+const kindFor = (m: Mode): CoastKind => (m === 'rally' || refArg ? 'rally' : 'service');
 function newCoast(s: number) {
-  seed = s; coast = makeCoast(seed);
+  seed = s; coast = makeCoast(seed, kindFor(mode));
   renderer.setCoast(coast, makeWorld(coast));
   minimap.paint(coast);
   showPath = makeShowPath(); titleCam = null;
   $('seedname').textContent = coast.name;
 }
 function newGame() {
-  race = newRace(coast, { mode, level, mine, auto });
+  race = newRace(coast, { mode, level, mine, auto, sky: mode === 'service' ? voyage(seed, chosen) : undefined });
+  skyLeg = 0; if (weather !== WEATHERS[chosen]) showWeather(WEATHERS[chosen]);
   marks.clear(); wakes.clear(); stick.reset();
   poses.length = 0; camYaw = 0; camCut = 0; cutTo = null; told.clear();
 }
@@ -152,6 +171,11 @@ function camera(dt: number, t: number, w: number, h: number) {
     target = titleCam.target.slice(); from = titleCam.from.slice();
     shift = portrait ? -0.18 : 0;
     fov = portrait ? 1.05 : 0.8;
+  } else if (ui === 'podium' && coast.pier) {
+    // (the Service: over the pier, everyone brought home on it, at the crews moored along it)
+    const bx = coast.berths[2].x, bz = coast.berths[2].z;
+    target = [bx + 4, 3.4, bz - 6]; from = [bx + (portrait ? 34 : 28) * zoom, 12 * zoom, bz - (portrait ? 44 : 34) * zoom];
+    shift = portrait ? 0.3 : 0.18;
   } else if (ui === 'podium') {
     const bx = coast.berths[2].x, bz = coast.berths[2].z;
     target = [bx, 3.2, bz - 1]; from = [bx - 7, 11 * zoom, bz - (portrait ? 46 : 34) * zoom];
@@ -212,6 +236,15 @@ function camera(dt: number, t: number, w: number, h: number) {
       const rt = [tg[0], cp + 1.7, tg[1]], e = camCut * camCut * (3 - 2 * camCut);
       from = from.map((v, i) => v + (rf[i] - v) * e); target = target.map((v, i) => v + (rt[i] - v) * e);
       fov += ((portrait ? 0.95 : 0.78) - fov) * e; shift *= 1 - e;
+    }
+    // (the Service: while the count goes down, a look at the harbour — over the pier, the town come down on it to see the
+    // crews off, at the lifeboats moored along it and the hill behind; then round behind your boat as it sets out)
+    const intro = mode === 'service' && !auto && !nearK ? (race.phase === 'countdown' ? 1 : race.phase === 'racing' ? Math.max(0, 1 - race.t / 1.8) : 0) : 0;
+    if (intro > 0) {
+      const me = race.boats[mine], e = intro * intro * (3 - 2 * intro);
+      const iF = [me.x + (portrait ? 26 : 30), portrait ? 9 : 8, me.z - (portrait ? 40 : 32)], iT = [me.x - 12, 3.6, me.z - 3];
+      from = from.map((v, i) => v + (iF[i] - v) * e); target = target.map((v, i) => v + (iT[i] - v) * e);
+      shift *= 1 - e;
     }
   }
   eye = from;
@@ -280,8 +313,10 @@ function people(t: number, dt: number) {
   // (the little boats, and whoever's still in them; the one climbing aboard)
   let hc = 0;
   const me = race.boats[mine], fz = followed();
-  const nearHoles = race.crafts.map((k, i) => [i, Math.hypot(k.x - fz.x, k.z - fz.z)] as const).filter(([i]) => race.crafts[i].craft.kind !== 'kayak').sort((a, b) => a[1] - b[1]).slice(0, 12);
+  const nearHoles = race.crafts.map((k, i) => [i, Math.hypot(k.x - fz.x, k.z - fz.z)] as const).filter(([i]) => race.crafts[i].craft.kind !== 'kayak' && race.crafts[i].called).sort((a, b) => a[1] - b[1]).slice(0, 12);
   race.crafts.forEach((k, i) => {
+    // (the Service: not there until its call comes in)
+    if (!k.called) return;
     const kind = k.craft.kind, c = CRAFT_COLOURS[k.craft.colour];
     const s = seaAt(coast, k.x, k.z), sh = Math.sin(k.yaw), ch = Math.cos(k.yaw);
     const hb = heightAt(k.x + sh * 1.4, k.z + ch * 1.4, t, s), hs = heightAt(k.x - sh * 1.4, k.z - ch * 1.4, t, s), hp = heightAt(k.x - ch * 0.7, k.z + sh * 0.7, t, s), hq = heightAt(k.x + ch * 0.7, k.z - sh * 0.7, t, s);
@@ -333,7 +368,7 @@ function people(t: number, dt: number) {
       lists['kid' + who.style].push(sx, sy, sz, face, pitch * 0.5, roll * 0.5, PERSON * 0.88, arm, SHIRTS[who.shirt], waving ? 2.5 + Math.sin(t * 9 + j * 2 + Math.PI) * 0.45 : arm, SKINS[who.skin], 0, HAIRS[who.hair], 0);
     }
     // (the ring that says come alongside: round the little boats near you, in your colour)
-    if (ui === 'race' && !auto && k.stage === 'wait' && k.left > 0 && race.boats[mine].finished === null) {
+    if (ui === 'race' && !auto && k.stage === 'wait' && k.left > 0 && race.boats[mine].finished === null && !full(race, race.boats[mine])) {
       const d = Math.hypot(k.x - me.x, k.z - me.z);
       if (d < 55) { const col = BOATS[mine].colour; marks.put(FX.RING, k.x, 0, k.z, 4.4, 0, 0, 0, col[0], col[1], col[2], Math.min(1, (55 - d) / 20) * 0.85); }
     }
@@ -341,6 +376,17 @@ function people(t: number, dt: number) {
   for (const [i] of nearHoles) {
     const k = race.crafts[i];
     holes.set([k.x, k.z, k.yaw, k.craft.kind === 'sail' ? 1.7 : 1.52], hc * 4); hc++;
+  }
+  // (the Service: out on the pier by the mouth, a few from the town to wave the crews off; and everyone landed joins
+  // them, waving the lifeboats in)
+  const pier = coast.pier;
+  if (mode === 'service' && pier) {
+    const folk = [...TOWNSFOLK, ...race.ashore.map((a) => race.crafts[a.craft].craft.people[a.person])].slice(0, 75);
+    folk.forEach((who, n) => {
+      const row = n % 3, x = pier.x1 - 3 - Math.floor(n / 3) * 1.6 + (row - 1) * 0.5, z = pier.z0 + 1.6 + row * 1.9, y = Math.max(2.95, groundAt(coast, x, z));
+      const waving = (t * 0.6 + n * 0.31) % 3 < 1.2, arm = waving ? 2.5 + Math.sin(t * 10 + n) * 0.4 : 0.2;
+      lists['kid' + who.style].push(x, y, z, Math.atan2(coast.gateX - x, GATE_Z - z) + Math.sin(n * 2.1) * 0.5, 0, 0, PERSON * 0.92, arm, SHIRTS[who.shirt], waving ? 2.5 + Math.sin(t * 10 + n + 2) * 0.4 : 0.2, SKINS[who.skin], 0, HAIRS[who.hair], 0);
+    });
   }
   // (the buoys, bobbing)
   for (const y of coast.buoys) {
@@ -506,7 +552,7 @@ function showcase(t: number) {
 
 // ─── what's said on the screen ───
 const $count = $('count'), bar = $('bar'), bubbleEl = $('bubble'), arrows = $('arrows');
-let shownCount = -1, hudAt = 0, note = { text: '', until: 0 };
+let shownCount = -1, hudAt = -1, note = { text: '', until: 0 };
 const ORD = ['1st', '2nd', '3rd', '4th', '5th'];
 /** say something in the bubble for a while (it gives way to nothing more pressing) */
 function bubble(text: string, secs = 2.6) { note = { text, until: performance.now() / 1000 + secs }; }
@@ -514,19 +560,21 @@ function hud(t: number) {
   if (ui !== 'race') return;
   const service = mode === 'service', st = standings(race), me = race.boats[mine], place = st.findIndex((b) => b.id === mine);
   // (the map: every frame, it turns with you; in the Service a little boat another crew is going for has their colour round it)
-  const dots: [number, number, string, number, string?][] = race.crafts.filter((c) => c.stage === 'wait' && c.left > 0).map((c) => [c.x, c.z, css(CRAFT_COLOURS[c.craft.colour]), c.left, service && c.claim >= 0 && c.claim !== mine ? css(BOATS[c.claim].colour) : undefined]);
+  const dots: [number, number, string, number, string?][] = race.crafts.filter((c) => c.stage === 'wait' && c.left > 0 && c.called).map((c) => [c.x, c.z, css(CRAFT_COLOURS[c.craft.colour]), c.left, service && c.claim >= 0 && c.claim !== mine ? css(BOATS[c.claim].colour) : undefined]);
   const fb = auto ? followed() : me;
   minimap.draw(fb.x, fb.z, camYaw, dots, race.boats.map((b) => [b.x, b.z, b.h, css(BOATS[b.id].colour), b.id === fb.id]), coast.gateX);
   if (t - hudAt < 0.1) return;
   hudAt = t;
-  const folk = race.crafts.reduce((n, k) => n + k.craft.people.length, 0), fleet = race.boats.reduce((n, b) => n + b.rescued, 0);
-  const shown = service ? fleet : fb.rescued;
+  // (the Service counts everyone rescued so far against everyone whose call has come in)
+  const folk = race.crafts.reduce((n, k) => n + (k.called ? k.craft.people.length : 0), 0), fleet = race.boats.reduce((n, b) => n + b.rescued, 0);
+  const shown = service ? fleet * 1000 + folk : fb.rescued;
   if (shown !== shownCount) { if (shownCount >= 0) { $('stat-count').classList.add('bump'); setTimeout(() => $('stat-count').classList.remove('bump'), 160); } shownCount = shown; $count.textContent = service ? `${fleet}/${folk}` : String(fb.rescued); }
-  // (the second pill: your place in the Rally; in the Service, your own crew's count, in your colour)
-  if (service) { $('place').textContent = String(fb.rescued); $('place-ic').innerHTML = `<i class="dot" style="background:${css(BOATS[fb.id].colour)}"></i>`; $('place-sub').textContent = 'your crew'; }
-  else { $('place').textContent = ORD[auto ? 0 : place]; $('place-ic').textContent = '🏆'; $('place-sub').textContent = ''; }
-  // (the clock: the time out; in the Rally's last call, the time left, in red)
+  // (the second pill: your place in the Rally; in the Service, who's aboard your boat now, of how many it holds, in your colour)
+  if (service) { $('place').textContent = `${fb.aboard.length}/${CAP}`; $('place-ic').innerHTML = `<i class="dot" style="background:${css(BOATS[fb.id].colour)}"></i>`; $('place-sub').textContent = 'aboard'; $('stat-place').classList.toggle('full', full(race, fb)); }
+  else { $('place').textContent = ORD[auto ? 0 : place]; $('place-ic').textContent = '🏆'; $('place-sub').textContent = ''; $('stat-place').classList.remove('full'); }
+  // (the clock: the time out (the Service's with the weather as it is now); in the Rally's last call, the time left, in red)
   const timeEl = $('stat-time');
+  $('time-ic').textContent = service ? weather.icon : '⏱️';
   if (!service && race.lastCall && me.finished === null) { const left = race.lastCall.start + race.lastCall.length - race.t; $('clock').textContent = clock(left); timeEl.classList.add('hurry'); }
   else { $('clock').textContent = clock(race.t); timeEl.classList.remove('hurry'); }
   // (under the map: the Rally's places; the Service's crews, each with its count, in their own order)
@@ -540,7 +588,8 @@ function hud(t: number) {
   } else bar.classList.remove('on', 'rough');
   // (the bubble: what's happening now, else what to do next)
   let text = '';
-  const now = performance.now() / 1000, everyone = race.crafts.every((c) => c.left <= 0);
+  const now = performance.now() / 1000, everyone = service ? everyoneAboard(race) : race.crafts.every((c) => c.left <= 0);
+  const waitingAny = race.crafts.some((c) => c.called && c.stage === 'wait' && c.left > 0), inside = me.z > INSIDE;
   if (now < note.until) text = note.text;
   else if (!auto && me.finished === null) {
     const slow = LEVELS[race.level].slow;
@@ -549,9 +598,15 @@ function hud(t: number) {
     else if (k && k.stage === 'line') text = 'Line away!';
     else if (k && !service) text = 'Climbing aboard — hold still!';
     else if (k) text = Math.abs(me.v) > slow * 0.6 || Math.abs(me.turn) > 0.25 ? 'Ease off — hold her steady' : k.steady > 0.75 ? 'Nice and steady — climbing aboard!' : k.lee < 0.35 ? 'Bumpy here! Turn side-on to the waves to shelter them' : 'Hold her steady…';
-    else if (race.crafts.some((c) => c.stage === 'wait' && c.left > 0 && Math.hypot(c.x - me.x, c.z - me.z) < 11 && Math.abs(me.v) > slow)) text = 'Slow down — let go of the stick!';
+    else if (service && inside && me.aboard.length && Math.abs(me.v) >= 7) text = 'Slow down so they can step ashore';
+    else if (service && inside && me.aboard.length) text = 'Home! Stepping ashore…';
+    else if (service && full(race, me)) text = 'Full up! Take them home to the harbour';
+    else if (race.crafts.some((c) => c.called && c.stage === 'wait' && c.left > 0 && Math.hypot(c.x - me.x, c.z - me.z) < 11 && Math.abs(me.v) > slow)) text = 'Slow down — let go of the stick!';
     else if (!service && race.lastCall) text = 'Last call! Head for the harbour!';
-    else if (service && everyone) text = 'Everyone’s aboard! Bring them home to the harbour';
+    else if (service && everyone && me.aboard.length) text = 'Everyone’s aboard! Bring them home to the harbour';
+    else if (service && everyone) text = 'Everyone’s safe! Back to the harbour';
+    else if (service && !waitingAny && me.aboard.length) text = 'No one else waiting — take them home';
+    else if (service && !waitingAny) text = 'Listening for the next call…';
     else if (race.t < 14) text = service ? 'Find someone who needs help!' : 'Find the little boats!';
   } else if (!auto && service && race.phase === 'racing') text = 'Home safe! The other crews are bringing the last ones in';
   if (text) bubbleEl.textContent = text;
@@ -560,9 +615,13 @@ function hud(t: number) {
   // (arrows at the edge to the nearest little boats out of sight — in the Service, the ones no other crew has — and to the harbour when it's time)
   const W = innerWidth, H = innerHeight, want: { x: number; z: number; n: number; fin?: boolean; col: number[] }[] = [];
   if (me.finished === null && !auto) {
-    const waiting = race.crafts.filter((c) => c.stage === 'wait' && c.left > 0 && (!service || c.claim < 0 || c.claim === mine)).map((c) => ({ c, d: Math.hypot(c.x - me.x, c.z - me.z) })).sort((a, b) => a.d - b.d).slice(0, 3);
+    const room = !full(race, me);
+    const waiting = race.crafts.filter((c) => room && c.called && c.stage === 'wait' && c.left > 0 && (!service || c.claim < 0 || c.claim === mine)).map((c) => ({ c, d: Math.hypot(c.x - me.x, c.z - me.z) })).sort((a, b) => a.d - b.d).slice(0, 3);
     for (const { c } of waiting) want.push({ x: c.x, z: c.z, n: c.left, col: CRAFT_COLOURS[c.craft.colour] });
-    if ((!service && race.lastCall) || !waiting.length) want.push({ x: coast.gateX, z: GATE_Z, n: 0, fin: true, col: [1, 1, 1] });
+    // (the way home: in the Rally's last call, or with no one to go for; in the Service, when you're full, or have people
+    // aboard and no one's waiting, and not once you're in)
+    const homeward = service ? !inside && (!room || (!waiting.length && (me.aboard.length > 0 || everyone))) : race.lastCall || !waiting.length;
+    if (homeward) want.push({ x: coast.gateX, z: GATE_Z, n: 0, fin: true, col: [1, 1, 1] });
   }
   const html: string[] = [];
   for (const w of want) {
@@ -593,7 +652,9 @@ function panel(name: '' | 'boats' | 'weather' | 'settings') {
 }
 function refreshTitle() {
   const B = BOATS[mine], best = bests()[mine] ?? 0;
-  $('chosen').innerHTML = `<span class="tag"><span class="dot" style="background:${css(B.colour)}"></span><b>${B.name}</b></span><span class="tag">${weather.icon} ${weather.label} · ${level}</span><span class="tag">${coast.name}</span>`;
+  // (the Service's forecast: the day's weather, as it'll go)
+  const forecast = voyage(seed, chosen).map((l) => WEATHERS[l.w].icon).join(' → ');
+  $('chosen').innerHTML = `<span class="tag"><span class="dot" style="background:${css(B.colour)}"></span><b>${B.name}</b></span><span class="tag">${forecast} · ${level}</span><span class="tag">${coast.name}</span>`;
   $('weather-icon').textContent = weather.icon;
   $('boat-show').innerHTML = `${boatSvg(B.colour)}<b>${B.name}</b><small>all-weather lifeboat · ${best ? `your best: ${best} rescued` : 'not raced yet'}</small>`;
   $('boats-list').innerHTML = BOATS.map((b, i) => `<button data-boat="${i}" class="${i === mine ? 'on' : ''}">${boatSvg(b.colour)}${b.name}</button>`).join('');
@@ -616,6 +677,7 @@ function title() {
 function go(m: Mode = mode) {
   if (ui !== 'title' && ui !== 'podium') return;
   mode = m; watching = -1;
+  if (coast.kind !== kindFor(mode)) newCoast(seed);
   sound.wake(); sound.horn();
   ui = 'race'; paused = false; snapUrl = '';
   document.body.classList.remove('title', 'podium', 'paused', 'panel-boats', 'panel-weather', 'panel-settings'); document.body.classList.add('racing');
@@ -636,9 +698,10 @@ function podium() {
   let stars: number;
   if (service) {
     // (the Service: everyone home first of all; then the crews' honours, by Lily's rule, as the postscript)
-    stars = all ? (who.rescued >= folk / 7 ? 3 : 2) : 1;
-    $('result').textContent = all ? 'Everyone home!' : 'Home safe';
-    $('fleet').textContent = `${fleet} of ${folk} rescued · five crews · ${auto ? '' : `your crew brought ${me.rescued} home · `}crew honours:`;
+    const ashore = race.ashore.length, home = ashore === folk;
+    stars = home ? (who.rescued >= folk / 7 ? 3 : 2) : 1;
+    $('result').textContent = home ? 'Everyone home!' : 'Home safe';
+    $('fleet').textContent = `${ashore} of ${folk} safe ashore · five crews · ${auto ? '' : `your crew brought ${me.rescued} home · `}crew honours:`;
   } else {
     stars = auto ? 3 : place === 0 ? 3 : place < 3 ? 2 : 1;
     $('result').textContent = auto ? `${BOATS[st[0].id].name} wins!` : place === 0 ? 'You won!' : `You came ${ORD[place]}!`;
@@ -681,21 +744,44 @@ $('quit').onclick = () => title();
 $('horn').onclick = () => { sound.wake(); sound.horn(); hornAt = vt; };
 
 // ─── events from the race: sounds, words, marks ───
-let lastCount = 4, snapWanted = false, snapUrl = '';
+let lastCount = 4, snapWanted = false, snapUrl = '', landed = { n: 0, at: -9 };
+const CRAFT_SAY = { row: 'a rowing boat', kayak: 'a kayaker', sail: 'a sailing dinghy' } as const;
+const WHERE = ['just outside the harbour', 'along the coast', 'out at sea'];
+/** the coastguard's call on the radio: who, how many, where */
+function callText(k: Rescue) {
+  const n = k.craft.people.length, who = k.craft.kind === 'kayak' ? 'A kayaker' : `${CRAFT_SAY[k.craft.kind][0].toUpperCase()}${CRAFT_SAY[k.craft.kind].slice(1)} with ${n === 1 ? 'one' : n === 2 ? 'two' : n === 3 ? 'three' : n} aboard`;
+  return `📻 Coastguard: ${who}, in trouble ${WHERE[k.craft.zone] ?? 'nearby'}!`;
+}
 function events() {
   for (const e of race.events.splice(0)) {
-    if (e.kind === 'go') { say('Go!'); sound.horn(); }
+    if (e.kind === 'go') { say('Go!'); sound.horn(); if (mode === 'service' && !auto) bubble('📻 Coastguard: Launch! People need help outside the harbour — push the stick to go!', 4.5); }
+    else if (e.kind === 'call') { sound.radio(); if (!auto && race.boats[mine].finished === null) bubble(callText(race.crafts[e.craft]), 3.6); }
+    else if (e.kind === 'full') { if (e.boat === mine && !auto) { say('Full up!'); bubble('Full up! Take them home to the harbour', 3.2); } }
+    else if (e.kind === 'edge') { if (e.boat === mine && !auto) bubble('📻 Coastguard: That’s the edge of the search area — turn back!', 3); }
+    else if (e.kind === 'ashore') {
+      if (e.boat === mine && !auto) { landed = { n: race.t - landed.at < 3 ? landed.n + 1 : 1, at: race.t }; sound.aboard(landed.n + 2); bubble(`${landed.n} safe ashore!`, 2); }
+    }
     else if (e.kind === 'line') { if (e.boat === mine) sound.splash(); const k = race.crafts[e.craft]; for (let q = 0; q < 6; q++) marks.spray(k.x, 0.4, k.z, (Math.random() - 0.5) * 3, 2 + Math.random() * 2, (Math.random() - 0.5) * 3, 0.3); }
     else if (e.kind === 'aboard') { if (e.boat === mine) sound.aboard(race.boats[mine].rescued); }
     else if (e.kind === 'clear') { if (e.boat === mine && !auto) bubble(`All aboard! ${race.crafts[e.craft].craft.people.length} rescued`); }
-    else if (e.kind === 'letgo') { if (e.boat === mine && !auto) bubble('Come back — they’re still waiting!'); }
+    else if (e.kind === 'letgo') { if (e.boat === mine && !auto && !full(race, race.boats[mine])) bubble('Come back — they’re still waiting!'); }
     else if (e.kind === 'bump') { if (e.boat === mine) sound.bump(); }
-    else if (e.kind === 'finish') { if (e.boat === mine && !auto) { const f = $('finishflag'); f.textContent = mode === 'service' ? 'HOME' : 'FINISH'; f.classList.remove('on'); void f.offsetWidth; f.classList.add('on'); snapWanted = true; bubble(mode === 'service' ? `Home safe — ${race.boats[mine].rescued} aboard!` : `${ORD[e.place - 1]} home!`, 3); } }
+    else if (e.kind === 'finish') { if (e.boat === mine && !auto) { const f = $('finishflag'); f.textContent = mode === 'service' ? 'HOME' : 'FINISH'; f.classList.remove('on'); void f.offsetWidth; f.classList.add('on'); snapWanted = true; bubble(mode === 'service' ? `All in! Your crew rescued ${race.boats[mine].rescued}` : `${ORD[e.place - 1]} home!`, 3); } }
     else if (e.kind === 'yield') { if (e.to === mine && !auto) bubble(`${BOATS[e.boat].name}: All yours, ${BOATS[mine].name} — we’ll find someone else!`, 3.2); }
     else if (e.kind === 'allaboard') { sound.bell(); if (!auto) say('Everyone’s aboard!', true); }
     else if (e.kind === 'lastcall') { sound.bell(); if (!auto && race.boats[mine].finished === null) { say('Last call!', true); bubble('Last call! Head for the harbour!', 4); } }
     else if (e.kind === 'over') setTimeout(() => { if (ui === 'race') podium(); }, 2500);
   }
+}
+
+/** the Service's weather, as the day goes on: drawn as the race has it, the sound following, the coastguard warning of
+ * each change a little before it starts */
+function sky() {
+  if (!race.sky) return;
+  weather = weatherAt(race.sky, race.t);
+  if (Math.floor(race.t) !== skySound) { skySound = Math.floor(race.t); sound.weather(weather.wind, weather.rain); }
+  const next = race.sky[skyLeg + 1];
+  if (next && race.t > next.at - 6) { skyLeg++; if (!auto && race.boats[mine].finished === null && race.phase === 'racing') { sound.radio(); bubble(`📻 Coastguard: ${SKY_SAY[next.w]}`, 4); } }
 }
 
 // ─── the loop ───
@@ -724,6 +810,7 @@ function frame(now: number) {
     if (race.phase === 'countdown' && Math.ceil(race.count) < lastCount && race.count > 0) { lastCount = Math.ceil(race.count); say(String(lastCount)); sound.beep(); }
     const inp = stick.read();
     step(race, dt, inp);
+    sky();
     if (!auto && race.boats[mine].finished === null) sound.throttle(Math.max(0, inp.throttle));
     events();
     marks.step(dt);
@@ -750,7 +837,7 @@ function frame(now: number) {
   // (a picture for the end: taken the moment you cross the line, while the frame's still there to read)
   if (snapWanted) { snapWanted = false; try { snapUrl = canvas.toDataURL('image/jpeg', 0.82); ($('snap') as HTMLImageElement).src = snapUrl; } catch { /* (no picture, then) */ } }
   (window as unknown as { __rescue: unknown }).__rescue = {
-    variant: 'coast', mode, ui, paused, phase: race.phase, seed, fleet: race.boats.reduce((n, b) => n + b.rescued, 0), weather: weather.name, name: coast.name, mine, level, t: race.t, auto, dpr, frameMs: ema,
+    variant: 'coast', mode, coast: coast.kind, ui, paused, phase: race.phase, seed, fleet: race.boats.reduce((n, b) => n + b.rescued, 0), ashore: race.ashore.length, called: race.crafts.filter((k) => k.called).length, weather: weather.name, name: coast.name, mine, level, t: race.t, auto, dpr, frameMs: ema,
     stick: { x: stick.x, y: stick.y, held: stick.held },
     boats: race.boats.map((b) => ({ x: b.x, z: b.z, h: b.h, v: b.v, rescued: b.rescued, finished: b.finished, home: b.home })),
     boarding: race.crafts.filter((k) => k.stage === 'line' || k.stage === 'climb').map((k) => ({ craft: k.craft.id, by: k.by, stage: k.stage })),
@@ -827,7 +914,7 @@ if (!refArg && (auto || params.has('t') || params.get('view') === 'podium' || st
       if (s > T + 3 - 1.2) { people(s, 1 / 30); splashes(s, 1 / 30); marks.step(1 / 30); }
     }
     vt = T + 3;
-    race.events.length = 0;
+    race.events.length = 0; sky();
     camYaw = followed().h; camAt.x = followed().x + Math.sin(camYaw) * 9; camAt.z = followed().z + Math.cos(camYaw) * 9;
     if (race.phase === 'over' || params.get('view') === 'podium') { runFor(race, 400); podium(); }
   } else { camYaw = 0; camAt.x = race.boats[mine].x; camAt.z = race.boats[mine].z + 9; }

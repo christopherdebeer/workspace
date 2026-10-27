@@ -4,13 +4,15 @@
  * - **The Rally** is the race as Lily wrote it: five lifeboats; little people in little boats; go near enough and they
  *   come on to your boat; get as many as you can and reach the finish; the winner rescued the most, 1st to 5th. (A
  *   training day, so racing is fair.)
- * - **The Rescue Service** is the same five crews out on a real call, working together: everyone home safe. A crew
- *   going for a little boat claims it, and the others leave it to them (you can take it over if you're plainly
- *   nearer: they'll say so); there's no last call; each crew comes home when there's no one left for it, and it's over
- *   when everyone is aboard a lifeboat and every lifeboat is in the harbour. Lily's 1st to 5th is still there at the
- *   end, as the crews' honours. And the sea matters here: holding steady alongside in open water is harder than in
- *   the lee of a headland, or with the little boat in the lee of your own hull, so people climb across more slowly
- *   (never failing, just slower); a stopped lifeboat drifts a little the way the swell runs.
+ * - **The Rescue Service** is the same five crews on a real shout, working together: everyone home safe. They set out
+ *   from the harbour; the calls come in as the day goes on (near the harbour first, then along the coast, then out at
+ *   sea). A crew going for a little boat claims it, and the others leave it to them (you can take it over if you're
+ *   plainly nearer: they'll say so). A lifeboat holds `CAP`: full, it takes them home, and they step ashore in the
+ *   harbour (safe ashore), and it goes back out; there's no last call; it's over when every call's been answered,
+ *   everyone is ashore and every lifeboat is in. Lily's 1st to 5th is still there at the end, as the crews' honours.
+ *   And the sea matters here: holding steady alongside in open water is harder than in the lee of a headland, or with
+ *   the little boat in the lee of your own hull, so people climb across more slowly (never failing, just slower); a
+ *   stopped lifeboat drifts a little the way the swell runs. The search area ends a little inside the chart's edge.
  *
  * How "near enough" works here: come alongside and ease off. When a little boat is close by your side and you're
  * going slowly, your crew throws a line, the little boat is pulled in against your hull, and its people climb
@@ -19,8 +21,9 @@
  * Pure: no page, no drawing. Everything from the seed and the inputs, so a race can be run and tested headless.
  */
 import { seeded, hash, type Rand } from '../kit/rng';
-import { CLEAR, GATE_HALF, GATE_Z, NAV, NNX, NNZ, X0, Z0, navIndex, seaAt, seaward, shoreAt, type Coast, type Craft } from './coast';
+import { CLEAR, EDGE, GATE_HALF, GATE_Z, NAV, NNX, NNZ, X0, X1, Z0, navIndex, seaAt, seaward, shoreAt, type Coast, type Craft } from './coast';
 import { SEA, SWELL } from './waves';
+import { seaOf, type Leg } from './weather';
 
 export const BOATS = [
   // (Lily's boats, as she named them)
@@ -41,11 +44,16 @@ export const LEVELS: Record<Level, { ai: number; slow: number; assist: number; c
 export const VMAX = 12, HALF_LEN = 5.4, HALF_BEAM = 2.1;
 /** alongside: the little boat within this of your side; the line's throw; each climb */
 export const GAP = 3.4, LINE = 0.6, CLIMB = 0.95;
+/** (the Service) how many a lifeboat takes aboard before it must take them home; each one stepping ashore; inside the
+ * harbour (past the mouth by this much) */
+export const CAP = 6, LAND = 0.45, INSIDE = GATE_Z + 30;
 
 export interface Input { steer?: number; throttle?: number }
 export interface Boat {
   id: number; x: number; z: number; h: number; v: number; turn: number;
-  rescued: number; aboard: { craft: number; person: number }[];
+  /** how many it's taken aboard (all day); who's aboard now; (the Service) how many it's landed safe ashore */
+  rescued: number; aboard: { craft: number; person: number }[]; safe: number; landT: number;
+  /** (the Service) in for the day: when everyone's been rescued, and it's in the harbour with no one aboard */
   finished: number | null; home: boolean; bump: number; stuck: number; backing: number;
   /** how fast it's really getting anywhere (smoothed): pinned against something, this falls though the engine's going */
   real: number;
@@ -55,31 +63,36 @@ export interface Rescue {
   craft: Craft; x: number; z: number; yaw: number;
   left: number; by: number; stage: 'wait' | 'line' | 'climb' | 'done'; t: number; away: number; side: number;
   /** (the Service) the crew going for it, or -1; how steady the lifeboat alongside is (0..1), and how far the little boat
-   * lies in its lee (0..1) */
-  claim: number; steady: number; lee: number;
+   * lies in its lee (0..1); whether its call has come in (until then it isn't there) */
+  claim: number; steady: number; lee: number; called: boolean;
 }
 export type Ev =
   | { kind: 'go' } | { kind: 'line' | 'clear' | 'letgo'; boat: number; craft: number }
   | { kind: 'aboard'; boat: number; craft: number; person: number }
   | { kind: 'bump'; boat: number; hard: number } | { kind: 'finish'; boat: number; place: number }
   | { kind: 'lastcall'; length: number } | { kind: 'over' }
-  | { kind: 'yield'; boat: number; craft: number; to: number } | { kind: 'allaboard' };
+  | { kind: 'yield'; boat: number; craft: number; to: number } | { kind: 'allaboard' }
+  | { kind: 'call'; craft: number } | { kind: 'full' | 'edge'; boat: number } | { kind: 'ashore'; boat: number; craft: number; person: number };
 export interface Race {
   coast: Coast; mode: Mode; level: Level; mine: number; auto: boolean;
   boats: Boat[]; crafts: Rescue[];
   t: number; phase: 'ready' | 'countdown' | 'racing' | 'over'; count: number;
   lastCall: { start: number; length: number } | null;
   events: Ev[]; rand: Rand; flows: Map<string, Float32Array>; finishers: number;
+  /** (the Service) who's stepped ashore in the harbour, in order */
+  ashore: { boat: number; craft: number; person: number }[];
+  /** (the Service) the day's weather, if it changes: the sea follows it */
+  sky: Leg[] | null;
 }
 
-export function newRace(coast: Coast, opts: { mode?: Mode; level?: Level; mine?: number; auto?: boolean } = {}): Race {
+export function newRace(coast: Coast, opts: { mode?: Mode; level?: Level; mine?: number; auto?: boolean; sky?: Leg[] } = {}): Race {
   const mode = opts.mode ?? 'rally', level = opts.level ?? 'easy', mine = opts.mine ?? 0, auto = !!opts.auto;
   const boats: Boat[] = coast.starts.map((s, id) => ({
-    id, x: s.x, z: s.z, h: s.h, v: 0, turn: 0, rescued: 0, aboard: [], finished: null, home: false, bump: 0, stuck: 0, backing: 0, real: 0,
+    id, x: s.x, z: s.z, h: s.h, v: 0, turn: 0, rescued: 0, aboard: [], safe: 0, landT: 0, finished: null, home: false, bump: 0, stuck: 0, backing: 0, real: 0,
     ai: id === mine && !auto ? null : { target: -2, side: 1, think: 0, lane: (id - 2) * 0.45 },
   }));
-  const crafts: Rescue[] = coast.crafts.map((c) => ({ craft: c, x: c.x, z: c.z, yaw: c.yaw, left: c.people.length, by: -1, stage: 'wait', t: 0, away: 0, side: 1, claim: -1, steady: 1, lee: 0 }));
-  return { coast, mode, level, mine, auto, boats, crafts, t: 0, phase: 'ready', count: 0, lastCall: null, events: [], rand: seeded(hash(coast.seed, 77)), flows: new Map(), finishers: 0 };
+  const crafts: Rescue[] = coast.crafts.map((c) => ({ craft: c, x: c.x, z: c.z, yaw: c.yaw, left: c.people.length, by: -1, stage: 'wait', t: 0, away: 0, side: 1, claim: -1, steady: 1, lee: 0, called: mode === 'rally' || c.at <= 0 }));
+  return { coast, mode, level, mine, auto, boats, crafts, t: 0, phase: 'ready', count: 0, lastCall: null, events: [], rand: seeded(hash(coast.seed, 77)), flows: new Map(), finishers: 0, ashore: [], sky: opts.sky ?? null };
 }
 export function start(r: Race) { r.phase = 'countdown'; r.count = 3; }
 
@@ -114,22 +127,20 @@ function tick(r: Race, dt: number, input: Input) {
   }
   if (r.phase !== 'racing') return;
   r.t += dt;
-  const L = LEVELS[r.level], was = r.boats.map((b) => [b.x, b.z]);
+  const L = LEVELS[r.level], was = r.boats.map((b) => [b.x, b.z]), service = r.mode === 'service';
+  if (r.sky) [SEA.height, SEA.chop] = seaOf(r.sky, r.t);
+  if (service) callIn(r);
   for (const b of r.boats) {
     let ctl: Required<Input>;
-    // (the Service: a crew home while someone's still waiting with no one going for them goes back out)
-    if (r.mode === 'service' && b.ai && b.finished !== null && r.crafts.some((k) => k.left > 0 && k.stage === 'wait' && k.claim === -1)) {
-      b.finished = null; b.home = false; b.ai.target = -2; b.ai.think = 0;
-    }
     if (b.finished !== null) ctl = homeward(r, b);
     else if (b.ai) ctl = think(r, b, dt);
     else ctl = { steer: clamp(input.steer ?? 0, -1, 1), throttle: clamp(input.throttle ?? 0, -1, 1) };
     // (how fast it may go: the level's pace for the game's boats; a gentle hand on the throttle near a little boat for yours)
     let vmax = VMAX;
     if (b.ai && b.finished === null) vmax *= L.ai * keepWith(r, b);
-    if (!b.ai && L.assist > 0 && b.finished === null) {
+    if (!b.ai && L.assist > 0 && b.finished === null && !(service && b.aboard.length >= CAP)) {
       let near = 1e9;
-      for (const c of r.crafts) if (c.stage === 'wait' && c.left > 0) {
+      for (const c of r.crafts) if (c.stage === 'wait' && c.left > 0 && c.called) {
         const [, along] = local(b, c.x, c.z), d = Math.hypot(c.x - b.x, c.z - b.z);
         if (along > -4 && d < near) near = d;
       }
@@ -146,9 +157,10 @@ function tick(r: Race, dt: number, input: Input) {
       const drift = 0.45 * seaAt(r.coast, b.x, b.z) * SEA.height * (1 - Math.abs(b.v) / 3);
       b.x += SWELL[0] * drift * dt; b.z += SWELL[1] * drift * dt;
     }
-    if (r.mode === 'service' && !b.ai && b.finished === null) claimFor(r, b);
+    if (service && !b.ai && b.finished === null) claimFor(r, b);
     b.bump = Math.max(0, b.bump - dt);
-    if (b.finished === null && b.z >= GATE_Z && b.z - Math.cos(b.h) * b.v * dt < GATE_Z && Math.abs(b.x - r.coast.gateX) < GATE_HALF + 2) {
+    if (service) land(r, b, dt);
+    else if (b.finished === null && b.z >= GATE_Z && b.z - Math.cos(b.h) * b.v * dt < GATE_Z && Math.abs(b.x - r.coast.gateX) < GATE_HALF + 2) {
       b.finished = r.t; r.finishers++;
       r.events.push({ kind: 'finish', boat: b.id, place: r.finishers });
       for (const k of r.crafts) if (k.claim === b.id) k.claim = -1;
@@ -164,15 +176,47 @@ function tick(r: Race, dt: number, input: Input) {
   collide(r, dt);
   board(r, dt);
   for (const b of r.boats) b.real += (Math.hypot(b.x - was[b.id][0], b.z - was[b.id][1]) / dt - b.real) * Math.min(1, dt * 3);
-  if (r.mode === 'service') {
-    // (over when everyone's aboard a lifeboat and every lifeboat's in: home at its berth, or well inside the mouth)
-    const everyone = r.crafts.every((k) => k.left <= 0);
+  if (service) {
+    // (over when every call's come in and everyone's been taken aboard, and every lifeboat's in with them all landed: home
+    // at its berth, or well inside the mouth)
+    const everyone = everyoneAboard(r);
     if (everyone && !r.lastCall) { r.lastCall = { start: r.t, length: 0 }; r.events.push({ kind: 'allaboard' }); }
     if ((everyone && r.boats.every((b) => b.finished !== null && (b.home || r.t > b.finished + 12))) || r.t > 1500) { r.phase = 'over'; r.events.push({ kind: 'over' }); }
     return;
   }
   if (r.lastCall && (r.t > r.lastCall.start + r.lastCall.length || r.boats.every((b) => b.finished !== null && (b.home || r.t > b.finished + 12)))) {
     r.phase = 'over'; r.events.push({ kind: 'over' });
+  }
+}
+
+/** (the Service) every call's come in, and everyone's aboard a lifeboat (or ashore) */
+export const everyoneAboard = (r: Race) => r.crafts.every((k) => k.called && k.left <= 0);
+/** (the Service) the calls coming in: each at its time, unless a lifeboat's close by just then (they're not seen to
+ * appear out of nowhere: the call waits a little for that) */
+function callIn(r: Race) {
+  for (const k of r.crafts) {
+    if (k.called || r.t < k.craft.at) continue;
+    if (r.t < k.craft.at + 25 && r.boats.some((b) => Math.hypot(b.x - k.x, b.z - k.z) < 90)) continue;
+    k.called = true; r.events.push({ kind: 'call', craft: k.craft.id });
+  }
+}
+/** (the Service) home: inside the harbour and not rushing, those aboard step ashore one by one; in for the day when
+ * everyone's been rescued and its own are all landed */
+function land(r: Race, b: Boat, dt: number) {
+  const inside = b.z > INSIDE;
+  if (inside && b.aboard.length && Math.abs(b.v) < 7) {
+    b.landT += dt;
+    if (b.landT >= LAND) {
+      b.landT = 0;
+      const a = b.aboard.pop()!;
+      b.safe++; r.ashore.push({ boat: b.id, ...a });
+      r.events.push({ kind: 'ashore', boat: b.id, craft: a.craft, person: a.person });
+    }
+  } else b.landT = 0;
+  if (b.finished === null && inside && !b.aboard.length && everyoneAboard(r)) {
+    b.finished = r.t; r.finishers++;
+    r.events.push({ kind: 'finish', boat: b.id, place: r.finishers });
+    for (const k of r.crafts) if (k.claim === b.id) k.claim = -1;
   }
 }
 
@@ -188,6 +232,15 @@ function collide(r: Race, dt: number) {
       const into = -(Math.sin(b.h) * nx + Math.cos(b.h) * nz) * Math.sign(b.v || 1);
       if (into > 0.2 && Math.abs(b.v) > 1.5 && b.bump <= 0) { r.events.push({ kind: 'bump', boat: b.id, hard: Math.min(1, Math.abs(b.v) / VMAX) }); b.bump = 0.6; }
       b.v *= 1 - Math.max(0, into) * 0.5 * Math.min(1, dt * 30);
+    }
+    // (the Service: the edge of the search area turns you back, gently)
+    if (c.kind === 'service') {
+      const ins = [[b.x - (X0 + EDGE), 1, 0], [X1 - EDGE - b.x, -1, 0], [b.z - (Z0 + EDGE), 0, 1]] as const;
+      for (const [d, nx, nz] of ins) if (d < 0) {
+        b.x += nx * -d * Math.min(1, dt * 8); b.z += nz * -d * Math.min(1, dt * 8);
+        if (-(Math.sin(b.h) * nx + Math.cos(b.h) * nz) * Math.sign(b.v || 1) > 0.2) b.v *= 1 - Math.min(1, dt * 2);
+        if (b.bump <= 0) { r.events.push({ kind: 'edge', boat: b.id }); b.bump = 3; }
+      }
     }
   }
   // (boat against boat: two circles each, pushed apart; a fresh knock costs a little speed)
@@ -205,7 +258,7 @@ function collide(r: Race, dt: number) {
   }
   // (a waiting little boat is nudged aside; a buoy holds its place and the hull slides round it)
   for (const k of r.crafts) {
-    if (k.stage === 'line' || k.stage === 'climb') continue;
+    if (k.stage === 'line' || k.stage === 'climb' || !k.called || k.stage === 'done') continue;
     for (const b of r.boats) for (const p of circles(b)) {
       const dx = k.x - p[0], dz = k.z - p[1], d = Math.hypot(dx, dz), m = 2.3 + 1.6;
       if (d < m && d > 1e-4) { k.x += (dx / d) * (m - d) * 0.7; k.z += (dz / d) * (m - d) * 0.7; b.x -= (dx / d) * (m - d) * 0.3; b.z -= (dz / d) * (m - d) * 0.3; }
@@ -227,10 +280,10 @@ function board(r: Race, dt: number) {
   for (const k of r.crafts) {
     if (k.stage === 'done') continue;
     if (k.stage === 'wait') {
-      if (k.left <= 0) continue;
+      if (k.left <= 0 || !k.called) continue;
       let best: Boat | null = null, bestGap = GAP;
       for (const b of r.boats) {
-        if (b.finished !== null || Math.abs(b.v) > slow) continue;
+        if (b.finished !== null || Math.abs(b.v) > slow || full(r, b)) continue;
         const [across, along] = local(b, k.x, k.z), gap = Math.abs(across) - HALF_BEAM;
         if (Math.abs(along) < HALF_LEN && gap < bestGap) { best = b; bestGap = gap; k.side = Math.sign(across) || 1; }
       }
@@ -254,6 +307,12 @@ function board(r: Race, dt: number) {
         k.left--; k.t = 0; b.rescued++; b.aboard.push({ craft: k.craft.id, person });
         r.events.push({ kind: 'aboard', boat: b.id, craft: k.craft.id, person });
         if (k.left <= 0) { k.stage = 'done'; r.events.push({ kind: 'clear', boat: b.id, craft: k.craft.id }); }
+        else if (full(r, b)) {
+          // (the Service: no more room; the rest wait for the next lifeboat, and this one takes its people home)
+          k.by = -1; k.stage = 'wait'; k.t = 0; if (k.claim === b.id) k.claim = -1;
+          r.events.push({ kind: 'full', boat: b.id }, { kind: 'letgo', boat: b.id, craft: k.craft.id });
+        }
+        if (k.left <= 0 && full(r, b)) r.events.push({ kind: 'full', boat: b.id });
       }
     } else {
       k.away += dt; k.t = Math.max(0, k.t - dt * 2);
@@ -275,12 +334,14 @@ export function steadiness(r: Race, b: Boat, k: Rescue) {
   const moving = clamp(Math.abs(b.v) / (LEVELS[r.level].slow + 1.2), 0, 1), turning = clamp(Math.abs(b.turn) / 0.6, 0, 1);
   return clamp(1 - 0.6 * rough - 0.45 * moving - 0.25 * turning, 0, 1);
 }
+/** (the Service) a lifeboat with no more room */
+export const full = (r: Race, b: Boat) => r.mode === 'service' && b.aboard.length >= CAP;
 /** (the Service) the little boat you're plainly going for: the nearest one waiting within 45 m, ahead or close by; the
  * crew that had it leaves it to you if you're well nearer than they are */
 function claimFor(r: Race, b: Boat) {
-  let best: Rescue | null = null, bd = 45;
+  let best: Rescue | null = null, bd = full(r, b) ? 0 : 45;
   for (const k of r.crafts) {
-    if (k.stage !== 'wait' || k.left <= 0) continue;
+    if (k.stage !== 'wait' || k.left <= 0 || !k.called) continue;
     const d = Math.hypot(k.x - b.x, k.z - b.z);
     if (d < bd && (local(b, k.x, k.z)[1] > -3 || d < 12)) { best = k; bd = d; }
   }
@@ -387,6 +448,11 @@ function think(r: Race, b: Boat, dt: number): Required<Input> {
   const ai = b.ai!, L = LEVELS[r.level];
   const mineK = r.crafts.find((k) => k.by === b.id && (k.stage === 'line' || k.stage === 'climb'));
   if (mineK) return { steer: 0, throttle: 0 };
+  // (the Service: at its berth with nothing to do, waiting for a call)
+  if (r.mode === 'service' && b.home && ai.target === -1) {
+    b.stuck = 0; ai.think -= dt;
+    if (ai.think > 0) return { steer: 0, throttle: 0 };
+  }
   // (stuck against something: back off a moment)
   b.stuck = b.real < 0.7 && ai.target !== -3 ? b.stuck + dt : 0;
   if (b.stuck > 2.5) { b.backing = 1.3; b.stuck = 0; }
@@ -400,9 +466,11 @@ function think(r: Race, b: Boat, dt: number): Required<Input> {
     // (the Service: say which you're going for; let go of the one you were)
     if (r.mode === 'service' && was !== ai.target) {
       if (was >= 0 && r.crafts[was].claim === b.id) r.crafts[was].claim = -1;
-      if (ai.target >= 0) r.crafts[ai.target].claim = b.id;
+      if (ai.target >= 0) { r.crafts[ai.target].claim = b.id; b.home = false; }
     }
   }
+  if (ai.target === -1 && r.mode === 'service') return homeFrom(r, b);
+  if (ai.target === -3) { b.stuck = 0; return { steer: 0, throttle: 0 }; }
   if (ai.target === -1) {
     const f = flowTo(r, 'finish'), want = heading(r, b, f, r.coast.gateX, GATE_Z + 30);
     return avoid(r, b, { steer: steerTo(b, want), throttle: Math.abs(wrap(want - b.h)) > 1.4 ? 0.45 : 1 }, want);
@@ -435,7 +503,7 @@ function avoid(r: Race, b: Boat, ctl: Required<Input>, want?: number): Required<
   if (want !== undefined) {
     const tgt = b.ai?.target ?? -9, w0 = { x: b.x, z: b.z, h: want };
     let bend = 0;
-    for (const [x, z, w] of [...r.coast.buoys.map((y) => [y.x, y.z, 3.6]), ...r.crafts.filter((k) => k.craft.id !== tgt && k.stage === 'wait').map((k) => [k.x, k.z, 4.2])]) {
+    for (const [x, z, w] of [...r.coast.buoys.map((y) => [y.x, y.z, 3.6]), ...r.crafts.filter((k) => k.craft.id !== tgt && k.stage === 'wait' && k.called).map((k) => [k.x, k.z, 4.2])]) {
       const [across, along] = local(w0, x, z);
       if (along > 0 && along < 15 && Math.abs(across) < w) bend += (across >= 0 ? 1 : -1) * (1 - along / 15) * 0.8;
     }
@@ -456,9 +524,10 @@ function avoid(r: Race, b: Boat, ctl: Required<Input>, want?: number): Required<
   }
   return ctl;
 }
-/** which little boat is worth most to go for: its people, over the time to get there and take them aboard */
+/** (the Rally) which little boat is worth most to go for: its people, over the time to get there and take them aboard */
 function choose(r: Race, b: Boat): number {
   const L = LEVELS[r.level], ai = b.ai!;
+  if (r.mode === 'service') return chooseCall(r, b);
   const c = r.coast, laneX = (z: number) => c.centre(z) + ai.lane * 90;
   const fin = flowTo(r, 'finish'), toFinish = eta(r, b, fin);
   if (r.lastCall) {
@@ -468,29 +537,62 @@ function choose(r: Race, b: Boat): number {
   const scored: [number, number][] = [];
   for (const k of r.crafts) {
     if (k.stage === 'done' || k.left <= 0 || (k.by !== -1 && k.by !== b.id)) continue;
-    if (r.mode === 'service' && k.claim !== -1 && k.claim !== b.id) continue;
     const d = Math.hypot(k.x - b.x, k.z - b.z);
     const [, along] = local(b, k.x, k.z);
     const turn = along < 0 ? 2.5 : 0;
     const t = (d * 1.15) / (VMAX * L.ai) + turn + LINE + k.left * CLIMB + 2;
     let v = k.left / t;
     v *= 0.55 + 0.45 * Math.exp(-(((k.x - laneX(k.z)) / 70) ** 2));
-    if (k.z < b.z - 20) v *= r.mode === 'service' ? 0.6 : 0.3;
+    if (k.z < b.z - 20) v *= 0.3;
     // (another of the game's boats plainly nearer: leave it to them)
     if (r.boats.some((o) => o !== b && o.ai && o.ai.target === k.craft.id && Math.hypot(k.x - o.x, k.z - o.z) < d * 0.8)) v *= 0.25;
     if (ai.target === k.craft.id) v *= 1.3;
     scored.push([v, k.craft.id]);
   }
   scored.sort((p, q) => q[0] - p[0]);
-  // (the Race leaves the ones not worth the trip; the Service leaves no one)
-  if (!scored.length || (r.mode === 'rally' && scored[0][0] < 0.02)) return -1;
+  // (the Race leaves the ones not worth the trip)
+  if (!scored.length || scored[0][0] < 0.02) return -1;
   if (scored.length > 1 && r.rand() < L.dither * 0.5) return scored[1][1];
   return scored[0][1];
 }
-/** across the line: on into the harbour, to its berth */
+/**
+ * (the Service) which call to answer: those waiting, by how many it can take (its room left), over the time to get
+ * there and take them aboard; none taken by another crew, none another of the game's boats is plainly nearer. It keeps
+ * to the one it's going for unless another's much better (they're all over the sea: changing its mind costs the trip).
+ * Nearly full with the nearest a long way off, it takes its people home first. -1: home (or, with room aboard and more
+ * calls to come, wait where it is: -3).
+ */
+function chooseCall(r: Race, b: Boat): number {
+  const L = LEVELS[r.level], ai = b.ai!, room = CAP - b.aboard.length;
+  if (room <= 0) return -1;
+  const scored: [number, number, number][] = [];
+  for (const k of r.crafts) {
+    if (!k.called || k.stage === 'done' || k.left <= 0 || (k.by !== -1 && k.by !== b.id) || (k.claim !== -1 && k.claim !== b.id)) continue;
+    const d = Math.hypot(k.x - b.x, k.z - b.z), [, along] = local(b, k.x, k.z), take = Math.min(k.left, room);
+    const t = (d * 1.15) / (VMAX * L.ai) + (along < 0 ? 2.5 : 0) + LINE + take * CLIMB + 2;
+    let v = take / t;
+    if (r.boats.some((o) => o !== b && o.ai && o.ai.target === k.craft.id && Math.hypot(k.x - o.x, k.z - o.z) < d * 0.8)) v *= 0.25;
+    if (ai.target === k.craft.id) v *= 1.3;
+    scored.push([v, k.craft.id, d]);
+  }
+  scored.sort((p, q) => q[0] - p[0]);
+  const more = r.crafts.some((k) => !k.called);
+  if (!scored.length) return more && b.aboard.length < CAP - 2 && b.z < GATE_Z ? -3 : -1;
+  const now = scored.find((q) => q[1] === ai.target);
+  const pick = now && scored[0][0] < now[0] * 1.5 ? now : !now && scored.length > 1 && r.rand() < L.dither * 0.5 ? scored[1] : scored[0];
+  if (b.aboard.length >= CAP - 2 && pick[2] > 220) return -1;
+  return pick[1];
+}
+/** (the Service) home: out on the water, for the harbour mouth; inside, on to its berth (landing them on the way) */
+function homeFrom(r: Race, b: Boat): Required<Input> {
+  if (b.z > GATE_Z + 8) return homeward(r, b);
+  const want = heading(r, b, flowTo(r, 'finish'), r.coast.gateX, GATE_Z + 30);
+  return avoid(r, b, { steer: steerTo(b, want), throttle: Math.abs(wrap(want - b.h)) > 1.4 ? 0.45 : 1 }, want);
+}
+/** across the line: on into the harbour, to its berth (the Service: each crew to its own) */
 function homeward(r: Race, b: Boat): Required<Input> {
   if (b.home) return { steer: 0, throttle: 0 };
-  const place = r.boats.filter((o) => o.finished !== null && o.finished < b.finished!).length;
+  const place = r.mode === 'service' ? b.id : r.boats.filter((o) => o.finished !== null && o.finished < b.finished!).length;
   const berth = r.coast.berths[place % r.coast.berths.length];
   const d = Math.hypot(berth.x - b.x, berth.z - b.z);
   if (d < 3 && Math.abs(b.v) < 1.2) { b.home = true; return { steer: 0, throttle: 0 }; }

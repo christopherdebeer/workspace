@@ -39,14 +39,20 @@
   "views": [
    {
     "name": "start",
-    "title": "Off we go",
-    "caption": "the bubble says what to do; the stick waits in its corner",
+    "title": "Moored in the harbour",
+    "caption": "as the count goes down, a look round the harbour: the five crews moored, bows to the mouth, the town on its hill behind; a few from the town on the quay to see them off",
     "file": "v-start.jpg"
    },
    {
+    "name": "harbour",
+    "title": "Setting out",
+    "caption": "out through the harbour, the town on its hill, the lighthouses either side of the mouth",
+    "file": "v-harbour.jpg"
+   },
+   {
     "name": "racing",
-    "title": "Out on the coast",
-    "caption": "low behind your boat, the coast ahead; everyone rescued so far (of everyone out there), your own crew’s count and the time top-left; the map top-right, a little boat another crew is going for ringed in their colour; the five crews’ counts under it",
+    "title": "Along the coast",
+    "caption": "the first calls are just outside the harbour; everyone rescued so far (of everyone whose call has come in), how many are aboard your boat of the six it holds, the time with the weather as it is now; the map, a little boat another crew is going for ringed in their colour; the five crews’ counts under it",
     "file": "v-racing.jpg"
    }
   ]
@@ -65,17 +71,28 @@
     "title": "Climbing aboard",
     "caption": "held steady, the water calm in the lifeboat’s lee: a crew member leans over the rail to take a hand, and up they come",
     "file": "v-climb.jpg"
+   }
+  ]
+ },
+ {
+  "group": "Out at sea",
+  "views": [
+   {
+    "name": "open-sea",
+    "title": "The open sea",
+    "caption": "past the harbour’s headland the far shore falls away: islets and reefs out over the water, the swell bigger out here; the sun going down",
+    "file": "v-open-sea.jpg"
    },
    {
     "name": "rough",
     "title": "Rough water",
-    "caption": "with the little boat on the side the swell comes from, it’s bumpy alongside: they climb across more slowly, and the bar goes amber",
+    "caption": "out at sea, beam-on in a bigger swell: they climb across more slowly, and the bar goes amber",
     "file": "v-rough.jpg"
    },
    {
     "name": "deck",
-    "title": "A full deck",
-    "caption": "the rescued fill the aft deck, then the foredeck, the side decks and the roof",
+    "title": "Full up",
+    "caption": "six aboard and no more room: the deck full, the pill amber; time to take them home",
     "file": "v-deck.jpg"
    }
   ]
@@ -84,10 +101,10 @@
   "group": "Home",
   "views": [
    {
-    "name": "finish",
-    "title": "The harbour mouth",
-    "caption": "home: through the gap between the lighthouses, under the banner",
-    "file": "v-finish.jpg"
+    "name": "landing",
+    "title": "Safe ashore",
+    "caption": "in through the mouth as night comes down: they step ashore one by one, to the crowd waving on the quay by the station; then back out, if anyone’s still waiting",
+    "file": "v-landing.jpg"
    },
    {
     "name": "podium",

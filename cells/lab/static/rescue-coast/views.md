@@ -12,19 +12,24 @@ Made by `node cells/lab/views.mjs rescue-coast` from `client/rescue-coast/views.
 
 ## The Rescue Service
 
-![Off we go: the bubble says what to do; the stick waits in its corner](v-start.jpg)
-![Out on the coast: low behind your boat, the coast ahead; everyone rescued so far (of everyone out there), your own crew’s count and the time top-left; the map top-right, a little boat another crew is going for ringed in their colour; the five crews’ counts under it](v-racing.jpg)
+![Moored in the harbour: as the count goes down, a look round the harbour: the five crews moored, bows to the mouth, the town on its hill behind; a few from the town on the quay to see them off](v-start.jpg)
+![Setting out: out through the harbour, the town on its hill, the lighthouses either side of the mouth](v-harbour.jpg)
+![Along the coast: the first calls are just outside the harbour; everyone rescued so far (of everyone whose call has come in), how many are aboard your boat of the six it holds, the time with the weather as it is now; the map, a little boat another crew is going for ringed in their colour; the five crews’ counts under it](v-racing.jpg)
 
 ## Coming alongside
 
 ![The line goes over: alongside and slowed right down, the little boat in the lee of the hull: the crew throws a line; the camera cuts in](v-line.jpg)
 ![Climbing aboard: held steady, the water calm in the lifeboat’s lee: a crew member leans over the rail to take a hand, and up they come](v-climb.jpg)
-![Rough water: with the little boat on the side the swell comes from, it’s bumpy alongside: they climb across more slowly, and the bar goes amber](v-rough.jpg)
-![A full deck: the rescued fill the aft deck, then the foredeck, the side decks and the roof](v-deck.jpg)
+
+## Out at sea
+
+![The open sea: past the harbour’s headland the far shore falls away: islets and reefs out over the water, the swell bigger out here; the sun going down](v-open-sea.jpg)
+![Rough water: out at sea, beam-on in a bigger swell: they climb across more slowly, and the bar goes amber](v-rough.jpg)
+![Full up: six aboard and no more room: the deck full, the pill amber; time to take them home](v-deck.jpg)
 
 ## Home
 
-![The harbour mouth: home: through the gap between the lighthouses, under the banner](v-finish.jpg)
+![Safe ashore: in through the mouth as night comes down: they step ashore one by one, to the crowd waving on the quay by the station; then back out, if anyone’s still waiting](v-landing.jpg)
 ![Everyone home: everyone rescued, every crew in at the quay; then the crews’ honours, 1st to 5th by Lily’s rule](v-podium.jpg)
 
 ## The Rally

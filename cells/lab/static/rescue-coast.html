@@ -90,6 +90,7 @@
     .stat.bump { transform: scale(1.15); }
     .stat .ic .dot { width: 14px; height: 14px; border-radius: 50%; box-shadow: 0 0 0 2px #fff; }
     .stat.hurry { background: rgba(200, 40, 20, .75); animation: throb .6s ease-in-out infinite alternate; }
+    .stat.full { background: rgba(230, 140, 10, .85); }
     @keyframes throb { to { transform: scale(1.07); } }
     .lifebuoy { width: 22px; height: 22px; border-radius: 50%; background: repeating-conic-gradient(#f4561c 0 45deg, #fff 0 90deg); -webkit-mask: radial-gradient(circle, transparent 5px, #000 6px); mask: radial-gradient(circle, transparent 5px, #000 6px); }
     #mapbox { position: fixed; right: max(10px, env(safe-area-inset-right)); top: max(10px, env(safe-area-inset-top)); flex-direction: column; align-items: flex-end; gap: 6px; z-index: 3; pointer-events: none; }
@@ -229,7 +230,7 @@
     <button id="pause" class="glass" aria-label="pause"><svg viewBox="0 0 18 18"><rect x="3" y="2" width="4" height="14" rx="1.5" fill="#fff"/><rect x="11" y="2" width="4" height="14" rx="1.5" fill="#fff"/></svg></button>
     <div class="stat glass" id="stat-count"><span class="ic"><span class="lifebuoy"></span></span><b id="count">0</b><small>rescued</small></div>
     <div class="stat glass" id="stat-place"><span class="ic" id="place-ic">🏆</span><b id="place">1st</b><small id="place-sub"></small></div>
-    <div class="stat glass" id="stat-time"><span class="ic">⏱️</span><b id="clock">0:00</b></div>
+    <div class="stat glass" id="stat-time"><span class="ic" id="time-ic">⏱️</span><b id="clock">0:00</b></div>
   </div>
   <div id="mapbox" class="race-only"><canvas id="map" width="224" height="224"></canvas><div id="ladder"></div></div>
   <div id="bubble"></div>

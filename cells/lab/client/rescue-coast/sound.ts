@@ -1,7 +1,7 @@
 /**
  * The sounds, made in the page (WebAudio, nothing to load): an engine that rises with the throttle, the sea's hiss,
  * the start horn and the count, a splash when the line goes over, a rising "pop" for each person aboard, a thud on the
- * rocks, the last-call bell, and a tune at the end.
+ * rocks, the last-call bell, the radio's chirp when a call comes in, and a tune at the end.
  */
 export class Sound {
   ctx: AudioContext | null = null; on = true;
@@ -72,6 +72,8 @@ export class Sound {
   splash() { this.noise(0.4, 1800, 0.3); }
   aboard(k: number) { this.tone(520 * Math.pow(1.122, Math.min(k, 14)), 0.16, 'triangle', 0.2); this.tone(1040 * Math.pow(1.122, Math.min(k, 14)), 0.12, 'sine', 0.06, 0.04); }
   bump() { this.noise(0.25, 300, 0.6); this.tone(70, 0.25, 'sine', 0.3); }
+  /** the radio: two chirps, a call coming in */
+  radio() { this.tone(1250, 0.07, 'square', 0.05); this.tone(1650, 0.09, 'square', 0.05, 0.11); }
   bell() { for (let i = 0; i < 3; i++) { this.tone(1320, 0.9, 'sine', 0.12, i * 0.45); this.tone(1980, 0.6, 'sine', 0.04, i * 0.45); } }
   tune(place: number) {
     const notes = place === 0 ? [523, 659, 784, 1047, 784, 1047] : place < 3 ? [523, 659, 784, 659] : [440, 523, 440];

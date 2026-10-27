@@ -25,6 +25,8 @@ export interface Weather {
   gulls: boolean;
 }
 
+import { hash } from '../kit/rng';
+
 const norm = (v: [number, number, number]): [number, number, number] => { const l = Math.hypot(...v); return [v[0] / l, v[1] / l, v[2] / l]; };
 const base: Weather = {
   name: 'sunny', label: 'sunny', icon: '☀️',
@@ -81,3 +83,55 @@ export const WEATHERS: Record<WeatherName, Weather> = {
   },
 };
 export const WEATHER_ORDER: WeatherName[] = ['sunny', 'calm', 'windy', 'stormy', 'foggy', 'night', 'sunset'];
+
+/** between two weathers, `f` of the way (0..1): the numbers and colours in between, the rest (names, rain's lightning,
+ * stars, gulls) from whichever it's nearer */
+export function blend(a: Weather, b: Weather, f: number): Weather {
+  if (f <= 0) return a;
+  if (f >= 1) return b;
+  const o: Record<string, unknown> = {};
+  for (const k of Object.keys(a) as (keyof Weather)[]) {
+    const x = a[k], y = b[k];
+    o[k] = typeof x === 'number' ? x + ((y as number) - x) * f : Array.isArray(x) ? x.map((v, i) => v + ((y as number[])[i] - v) * f) : f < 0.5 ? x : y;
+  }
+  const w = o as unknown as Weather;
+  w.sun = norm(w.sun);
+  return w;
+}
+
+/**
+ * The Service's weather: it changes as the day goes on. A voyage is a list of legs: from `at` seconds out, over the
+ * next `TURN` seconds, it becomes `w`. Which story, from the seed; where it starts, the weather chosen on the title:
+ * fair weather may bring a squall through, or a fog bank, or freshen to a gale, or go on into the evening and the
+ * night; a storm clears; fog lifts (or the night comes down on it); the night ends in a dawn.
+ */
+export interface Leg { at: number; w: WeatherName }
+export const TURN = 30;
+const STORIES: Record<WeatherName, [number, WeatherName][][]> = {
+  sunny: [[[60, 'windy'], [110, 'stormy'], [160, 'windy'], [210, 'sunny']], [[70, 'foggy'], [170, 'sunny']], [[100, 'sunset'], [200, 'night']], [[80, 'windy'], [170, 'stormy']], [[120, 'calm']]],
+  calm: [[[70, 'windy'], [120, 'stormy'], [180, 'sunny']], [[80, 'foggy'], [180, 'calm']], [[100, 'sunset'], [200, 'night']], [[90, 'sunny'], [180, 'windy']]],
+  windy: [[[80, 'stormy'], [140, 'windy'], [200, 'sunny']], [[100, 'sunny'], [190, 'calm']], [[110, 'stormy']]],
+  stormy: [[[80, 'windy'], [160, 'sunny']], [[100, 'foggy'], [190, 'calm']], [[130, 'windy']]],
+  foggy: [[[100, 'sunny'], [190, 'windy']], [[130, 'calm']], [[160, 'night']]],
+  night: [[[120, 'sunset'], [210, 'sunny']], [[160, 'sunset']], [[100, 'sunset'], [190, 'calm']]],
+  sunset: [[[100, 'night']], [[90, 'stormy'], [180, 'night']], [[140, 'night']]],
+};
+export function voyage(seed: number, start: WeatherName): Leg[] {
+  const all = STORIES[start] ?? STORIES.sunny, story = all[hash(seed, 31) % all.length];
+  return [{ at: 0, w: start }, ...story.map(([at, w]) => ({ at, w }))];
+}
+/** the weather at `t` seconds out on a voyage */
+export function weatherAt(legs: Leg[], t: number): Weather {
+  let w = WEATHERS[legs[0].w];
+  for (let i = 1; i < legs.length && t > legs[i].at; i++) w = blend(w, WEATHERS[legs[i].w], (t - legs[i].at) / TURN);
+  return w;
+}
+/** just the sea's height and steepness at `t` (the race reads it every step) */
+export function seaOf(legs: Leg[], t: number): [number, number] {
+  let h = WEATHERS[legs[0].w].height, c = WEATHERS[legs[0].w].chop;
+  for (let i = 1; i < legs.length && t > legs[i].at; i++) {
+    const f = Math.min(1, (t - legs[i].at) / TURN), n = WEATHERS[legs[i].w];
+    h += (n.height - h) * f; c += (n.chop - c) * f;
+  }
+  return [h, c];
+}
