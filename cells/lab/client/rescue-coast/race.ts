@@ -260,7 +260,7 @@ function collide(r: Race, dt: number) {
   for (const k of r.crafts) {
     if (k.stage === 'line' || k.stage === 'climb' || !k.called) continue;
     for (const b of r.boats) for (const p of circles(b)) {
-      const dx = k.x - p[0], dz = k.z - p[1], d = Math.hypot(dx, dz), m = 2.3 + 1.6;
+      const dx = k.x - p[0], dz = k.z - p[1], d = Math.hypot(dx, dz), m = 2.3 + (k.craft.kind === 'yacht' ? 2.0 : 1.6);
       if (d < m && d > 1e-4) { k.x += (dx / d) * (m - d) * 0.7; k.z += (dz / d) * (m - d) * 0.7; b.x -= (dx / d) * (m - d) * 0.3; b.z -= (dz / d) * (m - d) * 0.3; }
     }
   }
@@ -294,7 +294,7 @@ function board(r: Race, dt: number) {
     const close = Math.abs(across) - HALF_BEAM < GAP + 2.5 && Math.abs(along) < HALF_LEN + 1.5 && Math.abs(b.v) < slow + 1.2 && b.finished === null;
     if (close) {
       // (pulled in by the line, to lie against the hull, bow to bow)
-      const [tx, tz] = world(b, k.side * (HALF_BEAM + 1.25), clamp(along, -3, 1.5));
+      const [tx, tz] = world(b, k.side * (HALF_BEAM + (k.craft.kind === 'yacht' ? 1.55 : 1.25)), clamp(along, -3, 1.5));
       const dx = tx - k.x, dz = tz - k.z, d = Math.hypot(dx, dz), pull = Math.min(d, 3 * dt);
       if (d > 1e-4) { k.x += (dx / d) * pull; k.z += (dz / d) * pull; }
       k.yaw += wrap(b.h - k.yaw) * Math.min(1, dt * 2);
@@ -489,7 +489,8 @@ function think(r: Race, b: Boat, dt: number): Required<Input> {
     } else if (r.mode === 'service') side = ai.side;
     ai.side = side;
     const ux = (k.x - b.x) / d, uz = (k.z - b.z) / d;
-    gx = k.x + side * uz * (HALF_BEAM + 1.4) * Math.min(1, d / 8); gz = k.z - side * ux * (HALF_BEAM + 1.4) * Math.min(1, d / 8);
+    const off = HALF_BEAM + (k.craft.kind === 'yacht' ? 1.9 : 1.4);
+    gx = k.x + side * uz * off * Math.min(1, d / 8); gz = k.z - side * ux * off * Math.min(1, d / 8);
   }
   const want = heading(r, b, flowTo(r, String(ai.target)), gx, gz);
   const err = Math.abs(wrap(want - b.h));

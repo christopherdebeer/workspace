@@ -71,6 +71,12 @@
     "title": "Climbing aboard",
     "caption": "held steady, the water calm in the lifeboat’s lee: a crew member leans over the rail to take a hand, and up they come",
     "file": "v-climb.jpg"
+   },
+   {
+    "name": "paddle",
+    "title": "A paddleboarder",
+    "caption": "near the harbour the first calls are the little ones: a kayaker, a paddleboarder blown out past the headland",
+    "file": "v-paddle.jpg"
    }
   ]
  },
@@ -90,6 +96,12 @@
     "file": "v-rough.jpg"
    },
    {
+    "name": "yacht",
+    "title": "A yacht that’s lost its mast",
+    "caption": "further out, the bigger calls: a yacht dismasted, four aboard, the mast lying along her deck",
+    "file": "v-yacht.jpg"
+   },
+   {
     "name": "deck",
     "title": "Full up",
     "caption": "six aboard and no more room: the deck full, the pill amber; time to take them home",
@@ -103,7 +115,7 @@
    {
     "name": "landing",
     "title": "Safe ashore",
-    "caption": "in through the mouth as night comes down: they step ashore one by one, to the crowd waving on the quay by the station; then back out, if anyone’s still waiting",
+    "caption": "in through the mouth in the last of the light: they step ashore one by one, to the crowd waving on the pier by the station; then back out, if anyone’s still waiting",
     "file": "v-landing.jpg"
    },
    {

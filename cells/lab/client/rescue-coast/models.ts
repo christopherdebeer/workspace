@@ -257,8 +257,37 @@ function smallHull(len: number, beam: number, depth: number, pointy: boolean): V
   }
   return rows;
 }
-export function craftMesh(kind: 'row' | 'kayak' | 'sail'): Mesh {
+export function craftMesh(kind: 'row' | 'kayak' | 'sail' | 'paddle' | 'yacht'): Mesh {
   const b = new Builder();
+  if (kind === 'paddle') {
+    // (a paddleboard: a long flat board in its own colour, a white stripe down it, the paddle lying across)
+    b.use(0, SRC.A, M.PAINT); b.roundBox([0, 0.02, 0], [0.38, 0.06, 1.55], 0.06, WHITE, 3);
+    b.use(0, SRC.OWN, M.PAINT); b.box(-0.07, 0.07, 0.075, 0.085, -1.35, 1.35, WHITE);
+    b.tube([-0.85, 0.11, 0.55], [0.75, 0.11, -0.05], 0.022, BLACK, 5);
+    b.at(-0.95, 0.11, 0.6, 0.35, [1, 1, 1]); b.roundBox([0, 0, 0], [0.1, 0.012, 0.2], 0.01, [1, 0.85, 0.1], 2); b.at();
+    return smooth(b.done(), 0.7);
+  }
+  if (kind === 'yacht') {
+    // (a little yacht that's lost its mast: a longer white hull with a stripe in its own colour, a cabin with windows, the
+    // mast broken off short and the rest of it lying along the deck, the sail in a heap)
+    const len = 6.2, rows = smallHull(len, 2.3, 0.95, false);
+    b.use(0, SRC.OWN, M.PAINT); b.loft(rows, () => WHITE);
+    const rimL = rows.map((r) => r[r.length - 1]), rimR = rows.map((r) => r[0]);
+    b.loft(rows.map((r) => { const p = r[r.length - 1], q = r[0]; return [[p[0], p[1], p[2]], [0, p[1] + 0.06, p[2]], [q[0], q[1], q[2]]] as V3[]; }), () => [0.93, 0.92, 0.88]);
+    const transom = rows[0];
+    for (let i = 0; i < transom.length - 1; i++) b.tri([0, 0.1, transom[0][2]], transom[i + 1], transom[i], WHITE);
+    b.use(0, SRC.A, M.PAINT);
+    for (const rim of [rimL, rimR]) for (let i = 0; i < rim.length - 1; i++) b.tube([rim[i][0] * 1.01, rim[i][1] - 0.16, rim[i][2]], [rim[i + 1][0] * 1.01, rim[i + 1][1] - 0.16, rim[i + 1][2]], 0.06, WHITE, 5);
+    b.use(0, SRC.OWN, M.PAINT);
+    for (const rim of [rimL, rimR]) for (let i = 1; i < rim.length - 2; i++) b.tube([rim[i][0] * 0.94, rim[i][1] + 0.38, rim[i][2]], [rim[i + 1][0] * 0.94, rim[i + 1][1] + 0.38, rim[i + 1][2]], 0.025, [0.8, 0.8, 0.82], 4);
+    b.roundBox([0, 0.78, 0.3], [0.62, 0.26, 0.85], 0.12, WHITE, 3);
+    b.use(0, SRC.OWN, M.WINDOW); for (const s of [-1, 1]) b.box(s * 0.63 - 0.01, s * 0.63 + 0.01, 0.72, 0.86, -0.15, 0.75, [0.12, 0.18, 0.24]);
+    b.use(0, SRC.OWN, M.PAINT);
+    b.tube([0, 1.0, 0.9], [0.04, 2.0, 0.9], 0.07, [0.8, 0.8, 0.82], 6, 0.06);
+    b.tube([0.15, 1.05, 1.0], [0.75, 0.62, -2.7], 0.06, [0.8, 0.8, 0.82], 6);
+    b.use(3, SRC.OWN, M.SAIL); b.roundBox([0.35, 0.72, -1.4], [0.45, 0.16, 0.9], 0.14, [0.97, 0.97, 0.95], 3); b.roundBox([0.55, 0.62, -0.4], [0.3, 0.12, 0.5], 0.1, [0.97, 0.97, 0.95], 3);
+    return smooth(b.done(), 0.7);
+  }
   if (kind === 'kayak') {
     const rows = smallHull(3.6, 0.72, 0.42, true);
     b.use(0, SRC.A, M.PAINT); b.loft(rows, () => WHITE);

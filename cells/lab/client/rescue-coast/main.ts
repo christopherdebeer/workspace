@@ -6,6 +6,11 @@
  * The camera: low and close behind your boat, the coast ahead on the horizon, turning with it (smoothed, so a quick
  * turn doesn't swing the world about); easing down and round as you slow for someone waiting; cutting in low beside the
  * hull while a little boat is alongside, to watch them climb aboard; rising over a cliff rather than look through it.
+ * (The Service: while the count goes down, a look over the pier at the crews moored in the harbour first.)
+ *
+ * The Service's day on the page: its own coast (rebuilt when you switch to the Rally and back), the calls on the radio,
+ * room aboard, the weather as the race has it (blended, the coastguard warning of each change), and the town on the
+ * pier: a few to see the crews off, joined by everyone they land.
  *
  * Addresses: `?seed=` a coast; `?level=easy|medium|hard`; `?boat=0..4`; `?auto` (every boat the game's); `?t=40` that
  * far into the race; `?still` time held; `?view=podium`; `?near=n` little boat n and the boat coming for it;
@@ -79,11 +84,11 @@ const renderer = new Renderer(gl);
 renderer.addKind('boat', lifeboat());
 renderer.addKind('crew', person('crew'), SHOULDER);
 for (let s = 0; s < 3; s++) renderer.addKind('kid' + s, person('kid', s), SHOULDER);
-for (const k of ['row', 'kayak', 'sail'] as const) renderer.addKind(k, craftMesh(k));
+for (const k of ['row', 'kayak', 'sail', 'paddle', 'yacht'] as const) renderer.addKind(k, craftMesh(k));
 for (const k of ['red', 'green', 'yellow'] as const) renderer.addKind('buoy-' + k, buoyMesh(k));
 renderer.addKind('gull', gull(), WING);
 const lists: Record<string, Instances> = {};
-for (const k of ['boat', 'crew', 'kid0', 'kid1', 'kid2', 'row', 'kayak', 'sail', 'buoy-red', 'buoy-green', 'buoy-yellow', 'gull']) lists[k] = new Instances(64);
+for (const k of ['boat', 'crew', 'kid0', 'kid1', 'kid2', 'row', 'kayak', 'sail', 'paddle', 'yacht', 'buoy-red', 'buoy-green', 'buoy-yellow', 'gull']) lists[k] = new Instances(64);
 const draws: Draw[] = Object.entries(lists).map(([kind, list]) => ({ kind, list }));
 const stick = new Joystick($('stick'));
 const minimap = new MiniMap($('map') as HTMLCanvasElement);
@@ -313,7 +318,7 @@ function people(t: number, dt: number) {
   // (the little boats, and whoever's still in them; the one climbing aboard)
   let hc = 0;
   const me = race.boats[mine], fz = followed();
-  const nearHoles = race.crafts.map((k, i) => [i, Math.hypot(k.x - fz.x, k.z - fz.z)] as const).filter(([i]) => race.crafts[i].craft.kind !== 'kayak' && race.crafts[i].called).sort((a, b) => a[1] - b[1]).slice(0, 12);
+  const nearHoles = race.crafts.map((k, i) => [i, Math.hypot(k.x - fz.x, k.z - fz.z)] as const).filter(([i]) => (race.crafts[i].craft.kind === 'row' || race.crafts[i].craft.kind === 'sail') && race.crafts[i].called).sort((a, b) => a[1] - b[1]).slice(0, 12);
   race.crafts.forEach((k, i) => {
     // (the Service: not there until its call comes in)
     if (!k.called) return;
@@ -321,18 +326,19 @@ function people(t: number, dt: number) {
     const s = seaAt(coast, k.x, k.z), sh = Math.sin(k.yaw), ch = Math.cos(k.yaw);
     const hb = heightAt(k.x + sh * 1.4, k.z + ch * 1.4, t, s), hs = heightAt(k.x - sh * 1.4, k.z - ch * 1.4, t, s), hp = heightAt(k.x - ch * 0.7, k.z + sh * 0.7, t, s), hq = heightAt(k.x + ch * 0.7, k.z - sh * 0.7, t, s);
     const held = (k.stage === 'line' || k.stage === 'climb') ? 1 - 0.6 * k.lee : 1;
-    const y = (hb + hs + hp + hq) / 4 + (kind === 'kayak' ? 0.12 : 0.24), pitch = Math.atan2(hb - hs, 2.8) * 0.8 * held, roll = Math.atan2(hp - hq, 1.4) * 0.5 * held;
+    const y = (hb + hs + hp + hq) / 4 + (kind === 'kayak' ? 0.12 : kind === 'paddle' ? 0.05 : kind === 'yacht' ? 0.3 : 0.24), pitch = Math.atan2(hb - hs, 2.8) * 0.8 * held, roll = Math.atan2(hp - hq, 1.4) * 0.5 * held;
     const pose = (poses[100 + i] = { x: k.x, z: k.z, h: k.yaw, y, pitch, roll });
     lists[kind].push(k.x, y, k.z, k.yaw, pitch, roll, 1, 0, c, 0, NONE, 0, NONE, i * 1.3);
     // (who's waiting: facing the nearest lifeboat; waving both arms when one's close)
-    const seats = kind === 'row' ? [0.55, -0.35, -1.1] : kind === 'sail' ? [0.05, -0.95] : [-0.05];
+    const seats = kind === 'row' ? [0.55, -0.35, -1.1] : kind === 'sail' ? [0.05, -0.95] : kind === 'yacht' ? [-1.0, -1.7, -2.4, 1.6, 2.2] : [-0.05];
+    const seatY = kind === 'kayak' ? -0.3 : kind === 'paddle' ? 0.1 : kind === 'yacht' ? 0.5 : -0.12;
     const ppl = k.craft.people, first = ppl.length - k.left;
     let nearB = race.boats[0], nd = 1e9;
     for (const b of race.boats) { const d = Math.hypot(b.x - k.x, b.z - k.z); if (d < nd) { nd = d; nearB = b; } }
     const face = Math.atan2(nearB.x - k.x, nearB.z - k.z);
     for (let j = first; j < ppl.length; j++) {
       const who = ppl[j], climbing = j === first && k.stage === 'climb', seatZ = seats[j % seats.length];
-      const [sx, sy, sz] = onBoat(pose, 0, kind === 'kayak' ? -0.3 : -0.12, seatZ);
+      const [sx, sy, sz] = onBoat(pose, 0, seatY, seatZ);
       if (climbing) {
         // (across to the hull, up its side, over the gunwale, to a place on deck)
         const b = race.boats[k.by], bp = poses[b.id], u = Math.min(1, k.t / CLIMB), slot = b.aboard.length;
@@ -745,11 +751,11 @@ $('horn').onclick = () => { sound.wake(); sound.horn(); hornAt = vt; };
 
 // ─── events from the race: sounds, words, marks ───
 let lastCount = 4, snapWanted = false, snapUrl = '', landed = { n: 0, at: -9 };
-const CRAFT_SAY = { row: 'a rowing boat', kayak: 'a kayaker', sail: 'a sailing dinghy' } as const;
+const CRAFT_SAY = { row: 'a rowing boat', kayak: 'a kayaker', sail: 'a sailing dinghy', paddle: 'a paddleboarder', yacht: 'a yacht that’s lost its mast' } as const;
 const WHERE = ['just outside the harbour', 'along the coast', 'out at sea'];
 /** the coastguard's call on the radio: who, how many, where */
 function callText(k: Rescue) {
-  const n = k.craft.people.length, who = k.craft.kind === 'kayak' ? 'A kayaker' : `${CRAFT_SAY[k.craft.kind][0].toUpperCase()}${CRAFT_SAY[k.craft.kind].slice(1)} with ${n === 1 ? 'one' : n === 2 ? 'two' : n === 3 ? 'three' : n} aboard`;
+  const n = k.craft.people.length, say = CRAFT_SAY[k.craft.kind], who = n === 1 && (k.craft.kind === 'kayak' || k.craft.kind === 'paddle') ? `A${say.slice(1)}` : `${say[0].toUpperCase()}${say.slice(1)}, ${['', 'one', 'two', 'three', 'four', 'five'][n] ?? n} aboard`;
   return `📻 Coastguard: ${who}, in trouble ${WHERE[k.craft.zone] ?? 'nearby'}!`;
 }
 function events() {

@@ -30,7 +30,8 @@ export const CLEAR = 2.6;
 /** the navigation grid (the game's boats find their way on it) */
 export const NAV = 4, NNX = Math.floor((X1 - X0) / NAV), NNZ = Math.floor((Z1 - Z0) / NAV);
 
-export type CraftKind = 'row' | 'kayak' | 'sail';
+/** rowing boats, kayaks and dinghies everywhere; (the Service) paddleboards near the harbour, a yacht that's lost its mast out at sea */
+export type CraftKind = 'row' | 'kayak' | 'sail' | 'paddle' | 'yacht';
 export type CoastKind = 'rally' | 'service';
 export interface Person { skin: number; hair: number; shirt: number; style: number }
 /** a little boat in trouble; in the Service, when its call comes in (seconds out) and how far out it is (0 near the
@@ -339,8 +340,9 @@ function callOut(c: Coast, rand: Rand, reach: Uint8Array, west: (z: number) => n
       if (s < (tries < 60 ? Z.min : Math.min(Z.min, 60)) || cell < 0 || !reach[cell]) continue;
       if (c.crafts.some((o) => Math.hypot(o.x - x, o.z - z) < 30)) continue;
       if (c.buoys.some((b) => Math.hypot(b.x - x, b.z - z) < 14)) continue;
-      const kind: CraftKind = zone === 0 ? (rand() < 0.5 ? 'kayak' : 'row') : zone === 1 ? (rand() < 0.6 ? 'row' : rand() < 0.5 ? 'sail' : 'kayak') : rand() < 0.5 ? 'sail' : 'row';
-      const count = kind === 'kayak' ? 1 : kind === 'sail' ? 2 : zone === 0 ? 1 + Math.floor(rand() * 2) : 2 + Math.floor(rand() * 2);
+      const u = rand();
+      const kind: CraftKind = zone === 0 ? (u < 0.35 ? 'kayak' : u < 0.6 ? 'paddle' : 'row') : zone === 1 ? (u < 0.55 ? 'row' : u < 0.8 ? 'sail' : 'kayak') : u < 0.45 ? 'yacht' : u < 0.7 ? 'sail' : 'row';
+      const count = kind === 'kayak' || kind === 'paddle' ? 1 : kind === 'sail' ? 2 : kind === 'yacht' ? 3 + Math.floor(rand() * 3) : zone === 0 ? 1 + Math.floor(rand() * 2) : 2 + Math.floor(rand() * 2);
       // (the first three near the harbour are waiting as the crews set out)
       const at = zone === 0 && k < 3 ? 0 : Z.t0 + rand() * (Z.t1 - Z.t0);
       c.crafts.push({ id: c.crafts.length, x, z, yaw: rand() * 6.283, kind, colour: Math.floor(rand() * 6), people: Array.from({ length: count }, person), at, zone });

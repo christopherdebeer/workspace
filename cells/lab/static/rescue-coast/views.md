@@ -20,16 +20,18 @@ Made by `node cells/lab/views.mjs rescue-coast` from `client/rescue-coast/views.
 
 ![The line goes over: alongside and slowed right down, the little boat in the lee of the hull: the crew throws a line; the camera cuts in](v-line.jpg)
 ![Climbing aboard: held steady, the water calm in the lifeboat’s lee: a crew member leans over the rail to take a hand, and up they come](v-climb.jpg)
+![A paddleboarder: near the harbour the first calls are the little ones: a kayaker, a paddleboarder blown out past the headland](v-paddle.jpg)
 
 ## Out at sea
 
 ![The open sea: past the harbour’s headland the far shore falls away: islets and reefs out over the water, the swell bigger out here; the sun going down](v-open-sea.jpg)
 ![Rough water: out at sea, beam-on in a bigger swell: they climb across more slowly, and the bar goes amber](v-rough.jpg)
+![A yacht that’s lost its mast: further out, the bigger calls: a yacht dismasted, four aboard, the mast lying along her deck](v-yacht.jpg)
 ![Full up: six aboard and no more room: the deck full, the pill amber; time to take them home](v-deck.jpg)
 
 ## Home
 
-![Safe ashore: in through the mouth as night comes down: they step ashore one by one, to the crowd waving on the quay by the station; then back out, if anyone’s still waiting](v-landing.jpg)
+![Safe ashore: in through the mouth in the last of the light: they step ashore one by one, to the crowd waving on the pier by the station; then back out, if anyone’s still waiting](v-landing.jpg)
 ![Everyone home: everyone rescued, every crew in at the quay; then the crews’ honours, 1st to 5th by Lily’s rule](v-podium.jpg)
 
 ## The Rally
