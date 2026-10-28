@@ -281,7 +281,7 @@ export class World {
         if (sl > 1.05) continue; // (none on the rock)
         let keep = 1 - ss(0.6, 1.05, sl) * 0.6;
         // (below a trail, where the hill falls away, thinner: the way looks out between them; above it, the bank's thick)
-        if (q.trail && q.d < 11 && g(x, z) < q.trail.y[q.i] - 0.5) keep *= 0.3 + 0.5 * (q.d / 11);
+        if (q.trail && q.d < 16 && g(x, z) < q.trail.y[q.i] - 0.4) keep *= 0.12 + 0.6 * (q.d / 16) ** 1.5;
         // (over a cliff's rim, sparser: you see out)
         keep *= 1 - 0.6 * c.up * (1 - ss(0.618, 0.64, fbm(x / 150, z / 150, s + 50)));
         if (u01(s, gi, gj, 4) > keep) continue;

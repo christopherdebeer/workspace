@@ -88,7 +88,8 @@ float bandAt(vec3 p) {
   // (from the focus out: the picture, then linework, then sparse marks, then the bare page just inside every edge,
   // whatever's there)
   float bf = max(0., .6 + (sc - uFrame.x) * 2.35 / max(.08, .95 - uFrame.x));
-  return max(bw, bf) + smoothstep(8., 45., uEye.y - p.y) * 1.5;
+  // (the valley below is kept in colour, under its mist, a little longer than it would be: the view out is the point)
+  return max(bw, bf) + smoothstep(25., 70., uEye.y - p.y) * .6;
 }
 // (the stages: the light first, then the colour, then the ink)
 float lightOf(float b) { return 1. - smoothstep(.52, .68, b); }
@@ -168,6 +169,9 @@ void emit(vec3 lit, vec3 own, float b, float kind, float allow, float mark, vec3
   vec3 c = mix(own, lit, lightOf(b));
   // (a little air between, warm and pale)
   c = mix(c, vec3(.93, .9, .8), (1. - exp(-max(0., d - 3.) / 40.)) * .55);
+  // (and the valley's mist: down below the eye and far off, a cool blue-grey veil that lies in the hollows)
+  float below = uEye.y - p.y, veil = smoothstep(3., 30., below) * smoothstep(12., 70., d) * (.55 + .35 * vn(p.xz * .02 + uTime * .01));
+  c = mix(c, vec3(.78, .82, .86), clamp(veil, 0., .85));
   oC = vec4(c, colour);
   // (as the colour goes, the marks come up to carry the thing)
   oA = vec4(kind, allow, inkOf(b), clamp(mark * (1. + .6 * (1. - colour)), 0., 1.));
@@ -424,7 +428,8 @@ void main() {
   float below = vT.x, layer = vT.y;
   float a = exp(-below / (10. + layer * 6.)) * (.62 - layer * .1);
   a *= .75 + .25 * vn(vW.zy * .05);
-  oC = vec4(vec3(.5, .56, .58) - layer * .02, a);
+  // (a cool blue-grey, warmer toward the light: the far side of the valley in the morning's mist)
+  oC = vec4(mix(vec3(.46, .54, .62), vec3(.62, .66, .7), layer * .35), min(1., a * 1.25));
   oA = vec4(.1, 0., 0., 0.);
 }`;
 
