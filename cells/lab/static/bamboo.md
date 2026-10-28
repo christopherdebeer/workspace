@@ -8,7 +8,7 @@ A run through a wild moso bamboo grove on an endless mountainside, drawn as a li
 
 - **Hold anywhere and you run**: a fast lope of about 7 m/s, gathering speed in a second or so. Let go and you ease to a stop.
 - **Drag left and right to turn**, up and down to look. Arrow keys work too.
-- **You never have to pick your way.** Each moment the run takes the clearest way near where you're heading: no culm in its path for five metres, no rock face to climb, no drop too far to take. It weaves you between the culms. The grove has its own runs, winding lanes where it's thinner (the ways a deer would take), and the run finds them.
+- **You never have to pick your way.** Each moment the run takes the clearest way near where you're heading: no culm in its path for nine metres (a stand seen coming and gone round, not met), no rock face to climb, no drop too far to take. It weaves you between the stands. The grove has its own runs, winding lanes where it's thinner (the ways a deer would take), and the run finds them.
 - **The ground sets the pace**: uphill slows you, downhill quickens you.
 - **It feels its speed**: the head rises and falls with each stride and sways a little; you lean into a turn; the view widens the faster you go.
 - **The sound comes with your first touch**: your footfalls (litter and earth; stone on a stair; a thud when you land), the air past your ears rising with your speed, and the wind in the leaves when a gust comes through.
@@ -18,11 +18,11 @@ A run through a wild moso bamboo grove on an endless mountainside, drawn as a li
 Mostly the grove. But now and then:
 
 - **a trail**: a sparse network of them crosses the mountain, running on from one stretch of it into the next and meeting here and there. Run onto one more or less along it and it carries you, turning with it, a little quicker, until you turn off it. Each is cut into the slope as a bench, the bank rising on its uphill side.
-- **a flight of steps**: where a trail climbs steeply (a cliff band, mostly), it's a flight of stones laid by hand, each a little off line. Your stride shortens to the treads.
+- **a flight of steps**: where a trail climbs steeply (a cliff band, mostly), it's a flight of stones laid by hand, each its own width and a little off line and askew, boulders left standing beside it here and there as it was cut through them. Your stride shortens to the treads.
 - **a cliff band**: here and there the rock breaks through and the land steps up five to nine metres along a winding rim. A rock face you can't climb (the run turns you along it, unless a trail's stair takes you up). Off its top, a drop of up to three metres you leap: you're in the air, and land with a dip. A bigger one stops you at the rim, with the valley beyond.
 - **a gust**: every so often one comes through the grove, and you see the tops bend over before it reaches you.
 
-In three minutes of running the run covers about 1.15 km at a mean of about 6.5 m/s, on a trail for a few per cent of it (`node cells/lab/devtools/bamboo-run.mjs [seconds] [seed]` checks that it never runs through a culm, never stalls for long, and keeps up its pace).
+In three minutes of running the run covers about a kilometre at a mean of 5.6 to 6.3 m/s, on a trail for a few per cent of it (`node cells/lab/devtools/bamboo-run.mjs [seconds] [seed]` checks that it never runs through a culm, never stalls for long, and keeps up its pace).
 
 ## The mountain
 
@@ -30,7 +30,7 @@ Long slopes and ridges and the valleys between, endless (where a rim or a rock f
 
 ## The grove
 
-- **Culms:** moso, thick and pale, close but not a wall. Each has its own girth and height (the stoutest are the tallest) and its own lean, downhill toward the light and out over a way beside it. Its internodes lengthen up the culm. Young culms are pale celadon with fresh white powder under each node; old ones are duller and olive, patched with lichen. Below a way, on the side where the slope falls away, the grove is sparser, so the walk looks out between them.
+- **Culms:** moso, thick and pale, in **stands**, as a grove grows from its runners: clumps of a few to a dozen or more, with open floor between them, each stand of an age (young and pale, or old and dull), stoutest toward its middle. Now and then one old giant stands beside a trail, the one the eye goes to. Each culm has its own girth and height (the stoutest are the tallest) and its own lean, downhill toward the light and out over a way beside it. Its internodes lengthen up the culm. Young culms are pale celadon with fresh white powder under each node; old ones are duller and olive, patched with lichen. Below a way, on the side where the slope falls away, the grove is sparser, so the walk looks out between them.
 - **Sprays:** the leaves come in sprays of three to five blades (个 and 介) along the upper part of every culm, so the ceiling is high. Small sprays at shin and knee height are scattered through the grove, thicker along a trail's edges.
 - **Litter:** a carpet of fallen leaves everywhere, drawn leaf by leaf near the eye, thinner in the worn middle of a trail, lying on a stair's treads.
 - **Stones:** boulders fallen under the cliffs and at the foot of a trail's bank, mossy on top.
@@ -39,7 +39,7 @@ Long slopes and ridges and the valleys between, endless (where a rim or a rock f
 
 ## How it's drawn
 
-Three passes, after Labyrinth's:
+Three passes, after Labyrinth's, and the land's own strokes laid in the world:
 
 - **The shadows**: the culms near you seen from the sun, so their shadows stripe the litter, the steps and each other. The canopy's own shade is its dapple, cast down the sun from the gaps overhead. The sun is low and warm, so the shadows run long, and shafts of light come through when you run toward it.
 - **The picture**: each surface lit in its own colour.
@@ -55,6 +55,7 @@ Three passes, after Labyrinth's:
   - a trail's edges;
   - the strokes down a rock face;
   - a crack across a step.
+- **The land's strokes** (`strokes.ts`): marks the mountain's features call for, laid as ribbons on it, so each stays where it is as you run and the mountain still reads when its colour's gone: a trail's **edges**, broken, firmer where the bank's cut deep; a **rim** along the top of a bank's cut and **hachures** down it in small groups; a flight's **strings** along its sides and a stone's front edge now and then; a cliff's **rim** and **strokes down its face**; a few **contours** along the hillside and short **strokes down the fall** where it's steep enough to show; where a **stone** meets the ground. Each is turned to the eye, held to a least width on the screen by its kind (a rim most), lighter with distance, and left out whole by its pick where the drawing thins, never faded. A rim holds over the colour; a contour's only for the paper.
 - **The page**: the outlines, found where the depth jumps or one thing meets another, inked on the side that's in front; a culm's breaks just under each node, as a brush lifts there. They lighten with distance, so a far culm is a fine grey line.
 
 ### How far it's drawn
@@ -69,9 +70,9 @@ It isn't a mask laid over the picture: it's how each thing is drawn. Each thing 
 How far drawn a thing is, is the further of two things:
 
 - **in the world**: how far it is from the eye, `colour` (lit to), `wash` (flat to) and `ink` (marks to) metres;
-- **in the frame**: how far it is from the **focus**, the thing straight ahead the eye meets (the first culm across your line, or the ground), at its distance. Across the frame, out to every edge of it (top and bottom as well as the sides), and in depth: things much nearer than the focus (the ground at your feet) or much farther go sooner. The frame takes a thing as far as its ink; only out toward the frame's corners is it the bare page. `frame` sets how far round the focus the colour holds (0 tight … 1 wide), `depth` how much sooner things nearer or farther than the focus go.
+- **in the frame**: how far it is from the **focus**, where you're going and looking: the ground the eye's line meets, looked past the culms crossing it (they're passed in a moment), kept between 7 and 30 m, and moved to slowly, so the drawing doesn't lurch with each culm that crosses. Across the frame, out to every edge of it (top and bottom as well as the sides), and in depth: things much nearer than the focus (the ground at your feet) or much farther go sooner. The frame takes a thing as far as its ink; only out toward the frame's corners is it the bare page. `frame` sets how far round the focus the colour holds (0 tight … 1 wide), `depth` how much sooner things nearer or farther than the focus go.
 
-So a spray or a stone changes whole, never cut by a line across it; a culm changes an internode at a time, each where it stands, its top going before its foot; a spray going out stays as its blades in ink. The ground goes leaf by fallen leaf, the bare earth between them first, its edge dragged dry across the slope as a brush leaves it.
+A thing gone to the page is gone: it hides nothing behind it. One drawn as its ink alone still stands in front of what's behind it, its paper its own. So a spray or a stone changes whole, never cut by a line across it; a culm changes an internode at a time, each where it stands, its top going before its foot; a spray going out stays as its blades in ink. The ground goes leaf by fallen leaf, the bare earth between them first, its edge dragged dry across the slope as a brush leaves it.
 
 The 墨 button (bottom right) sets them: four presets, and a slider for each. The bands stay in order, and the address keeps what you set, so a drawing can be passed on.
 
@@ -101,4 +102,5 @@ The look was found by image generation first (`devtools/bamboo/explore.md`: thre
 - `fov=<degrees>`.
 - `clean`: without the shafts and the paper's grain.
 - `marks=0`: the picture without its ink.
+- `strokes=all`: every stroke the land has, at full weight, none left out (to see what's laid).
 - `mute`: no sound.

@@ -10,7 +10,8 @@
  *   kind), whether an outline may run along its edge here (a culm's breaks just under each node, as a brush lifts
  *   there), how far it's drawn (its ink's reach), and its own **marks**: the ink the things call for, drawn on them (a
  *   culm's node ticks and dry-brush streaks down its shaded side, ink pooled at its foot; a spray's blades, filled in
- *   ink where the colour's given out; a fallen leaf's edge; the trail's edges; the strokes down a rock face);
+ *   ink where the colour's given out; a fallen leaf's edge); and on the land, laid in the same pass, its own strokes
+ *   (strokes.ts: a trail's edges, a bank's rim and hachures, a face's fall, the hillside's contours), inked into the marks;
  * - **the page** (post): the outlines found from the depth and the kinds, inked on the side that's in front.
  *
  * **The reach** (`Renderer.reach`, set by `?colour=&wash=&ink=&frame=&depth=` or the page's own control): not a mask over
@@ -24,6 +25,7 @@
  * `?clean`: no shafts or paper grain. `?marks=0`: the picture without its ink.
  */
 import { type Chunk, CHUNK, CN, CELL, HALF } from './world';
+import { STROKE_STRIDE } from './strokes';
 
 export interface Frame {
   eye: [number, number, number]; look: [number, number, number]; fov: number; t: number;
@@ -153,6 +155,9 @@ layout(location = 0) out vec4 oC; layout(location = 1) out vec4 oA;
 // (\`lit\`: as the light has it; \`own\`: its own colour, flat, as a painter lays it once the light's gone; \`b\`: how
 // far along it is (bandAt, at a point of the thing's own))
 void emit(vec3 lit, vec3 own, float b, float kind, float allow, float mark, vec3 p) {
+  // (a thing gone to the page is gone: it hides nothing behind it. One drawn as its ink alone still stands in front of
+  // what's behind it, as a drawn culm does, its paper its own. The ground goes as its leaves do, never as a hole)
+  if (kind > .3 && inkOf(b) < .04) discard;
   float d = distance(p, uEye), colour = colourOf(b);
   vec3 c = mix(own, lit, lightOf(b));
   // (a little air between, warm and pale)
@@ -219,12 +224,14 @@ void main() {
   // (the marks: a tick at each node, curving with the ring, darkest toward the culm's edges as the eye sees it; on the
   // side away from the sun, dry-brush strokes down it; ink pooled at its foot)
   float edge = 1. - abs(dot(N, V)), shade = smoothstep(.1, -.4, dot(N, uSun));
-  float tick = ring * (.35 + .65 * smoothstep(.1, .6, edge)) * (1. - smoothstep(30., 70., dist) * .75);
+  // (far off, only some nodes are ticked, by their own picks: a far culm is a few marks, not a chain of rings)
+  float chosen = step(h21(vec2(floor(vQ + .5), vI.y * 31.)), 1. - smoothstep(10., 40., dist) * .75);
+  float tick = ring * chosen * (.35 + .65 * smoothstep(.1, .6, edge)) * (1. - smoothstep(30., 70., dist) * .75);
   float dry = smoothstep(.62, .82, vn(vec2(vU * 40. + 3., vY * .35))) * shade * edge * (1. - far) * .6;
   float foot = (1. - smoothstep(.0, .14, vY)) * .5 * (1. - smoothstep(15., 40., dist));
   float mark = max(max(tick, dry), foot) * uMarks;
   // (the outline breaks just under each node, as a brush lifts there)
-  float allow = 1. - smoothstep(.72, .8, f) * (1. - smoothstep(.97, .99, f));
+  float allow = 1. - smoothstep(.72, .8, f) * (1. - smoothstep(.97, .99, f)) * chosen;
   emit(c, own(alb), drawn, .4, allow, mark, vW);
 }`;
 const DEPTH_FS = `#version 300 es
@@ -316,12 +323,9 @@ void main() {
   stone = mix(stone, vec3(.42, .5, .26), smoothstep(.55, .75, N.y + (vn(vW.xz * 1.3) - .5) * .4) * .6);
   alb = mix(alb, stone, vRock);
   vec3 c = show(lit(alb, N, vW, .2, .9));
-  // (the marks: on the rock, strokes down its fall, broken; the trail's edges, broken; each near fallen leaf's edge)
-  float hk = abs(fract(across * 1.3) - .5), hw = max(.03, fwidth(across * 1.3) * .8);
-  float hatch = (1. - smoothstep(hw, hw * 2., hk)) * step(.45, vn(vec2(floor(across * 1.3) * 3.1, vW.y * .7))) * smoothstep(.5, .9, vRock) * .8 * (1. - smoothstep(.12, .3, fwidth(across * 1.3)));
-  float e = abs(vD - ${(HALF * 1.02).toFixed(2)}), fw = max(.012, fwidth(vD) * .8);
-  float edge = (1. - smoothstep(fw * .6, fw * 1.4, e)) * step(.5, vn(vW.xz * 1.3 + 3.)) * .75 * smoothstep(1.5, 4., dist);
-  float mark = max(max(hatch, edge), leafMark * .55) * uMarks;
+  // (the marks: each near fallen leaf's edge; the land's own (a trail's edges, a bank's rim, a face's fall, the lie of
+  // the hillside) are strokes laid on it, strokes.ts)
+  float mark = leafMark * .55 * uMarks;
   // (how far it's drawn: the bare ground between the leaves goes first; each fallen leaf holds its colour by its own
   // pick, so the litter thins to a few painted leaves and then their outlines on the paper)
   // (the edge is a brush's: strokes laid across the fall of the slope, dragged dry, so it breaks into them in the world
@@ -453,6 +457,51 @@ void main() {
   o = vec4(col, 1.);
 }`;
 
+// ─── the land's strokes (strokes.ts): ribbons laid on it, widened to a least width on the screen by their family so
+// the structure holds at any distance; each asks once, at its anchor, how far it's drawn, and is left out whole by its
+// pick, never faded; inked into the marks the page draws (max), so a stroke shows on the paper where the ground's colour
+// has gone, and over the colour as much as its family holds there ───
+const STROKE_VS = COMMON + `
+layout(location = 0) in vec3 aP; layout(location = 1) in vec3 aS; layout(location = 2) in vec2 aW; layout(location = 3) in vec2 aT;
+layout(location = 4) in vec3 aF; layout(location = 5) in vec3 aAnchor;
+uniform vec2 uRes;
+out float vAcross; out vec3 vW; flat out vec3 vF; flat out float vBand; flat out float vKeep;
+// (the least a mark of each family is on the screen, in pixels: a rim most, then a string, a contact, an edge; detail less)
+float least(float f) { return f < .5 ? 2.1 : f < 1.5 ? 3. : f < 2.5 ? 1.6 : f < 3.5 ? 1.8 : f < 4.5 ? 1.8 : f < 5.5 ? 2.4 : f < 6.5 ? 1.7 : 2.3; }
+void main() {
+  float fam = floor(aF.x + .001);
+  // (across the way it runs, turned to the eye; lifted a little toward the eye, off what it lies on)
+  vec3 toEye = normalize(uEye - aP), side = normalize(cross(aS, toEye) + vec3(1e-5));
+  vec4 c0 = uVP * vec4(aP, 1.), c1 = uVP * vec4(aP + side * aW.x, 1.);
+  float px = c0.w > .01 && c1.w > .01 ? length((c1.xy / c1.w - c0.xy / c0.w) * .5 * uRes) : 1.;
+  float k = min(5., max(1., least(fam) / max(px, 1e-3)));
+  vec3 p = aP + side * aW.x * aW.y * aT.x * k + toEye * min(.08, distance(uEye, aP) * .004);
+  vAcross = aT.x; vW = p; vF = aF;
+  float d = distance(aAnchor, uEye);
+  vBand = bandAt(aAnchor) + (aF.z - .5) * .6;
+  // (the detail (hachures, a face's strokes, contours, nosings) thinned with distance, so far off the structure's kept)
+  bool detail = (fam > 1.5 && fam < 4.5) || (fam > 5.5 && fam < 6.5);
+  vKeep = detail ? 1. - smoothstep(12., 60., d) * .85 : 1. - smoothstep(60., 140., d) * .7;
+  gl_Position = uVP * vec4(p, 1.);
+}`;
+const STROKE_FS = COMMON + `
+in float vAcross; in vec3 vW; flat in vec3 vF; flat in float vBand; flat in float vKeep;
+layout(location = 0) out vec4 oC; layout(location = 1) out vec4 oA;
+uniform float uMarks; uniform float uAll;
+void main() {
+  float fam = floor(vF.x + .001), weight = fract(vF.x + .001), persist = vF.y, pick = vF.z;
+  if (uAll < .5 && (pick > vKeep || vBand + pick * .4 > 2.9)) discard;
+  float aa = max(fwidth(vAcross), 1e-4);
+  float cov = 1. - smoothstep(1. - aa, 1. + aa * .5, abs(vAcross));
+  float dry = smoothstep(.18, .42, vn(vW.xz * 6. + vW.y * 2. + fam * 3.1));
+  // (lighter with distance, as the outlines are: a far trail's edge, seen along, is a fine grey line, not a rule; a rim
+  // holds most)
+  float far = smoothstep(8., 45., distance(vW, uEye)) * (fam > .5 && fam < 1.5 ? .4 : .7);
+  float a = uAll > .5 ? cov : cov * min(1., .4 + weight) * mix(.6, 1., dry) * mix(persist, 1., 1. - colourOf(vBand)) * (1. - far) * uMarks;
+  if (a < .02) discard;
+  oC = vec4(0.); oA = vec4(0., 0., 1., min(1., a * 1.15));
+}`;
+
 // ─── meshes ───
 function culmMesh(sides: number, rings: number) {
   const v: number[] = [];
@@ -509,7 +558,7 @@ const cross = (a: number[], b: number[]) => [a[1] * b[2] - a[2] * b[1], a[2] * b
 const norm = (a: number[]) => { const l = Math.hypot(a[0], a[1], a[2]) || 1; return [a[0] / l, a[1] / l, a[2] / l]; };
 
 /** what's on the GPU for one chunk */
-interface Held { key: string; x: number; z: number; ground: WebGLBuffer; culms: WebGLBuffer; nCulms: number; sprays: WebGLBuffer; nSprays: number; stones: WebGLBuffer; nStones: number; steps: WebGLBuffer; nSteps: number }
+interface Held { key: string; x: number; z: number; strokes: WebGLBuffer | null; nStrokes: number; ground: WebGLBuffer; culms: WebGLBuffer; nCulms: number; sprays: WebGLBuffer; nSprays: number; stones: WebGLBuffer; nStones: number; steps: WebGLBuffer; nSteps: number }
 
 export class Renderer {
   private gl: WebGL2RenderingContext;
@@ -521,6 +570,8 @@ export class Renderer {
   private ridge!: { buf: WebGLBuffer; count: number };
   private vao: WebGLVertexArrayObject;
   readonly clean: boolean; readonly marks: number;
+  /** `?strokes=all`: every stroke the land has, at full weight, none left out (to see what's laid) */
+  allStrokes = false;
   /** how far the drawing reaches (see the head of this file) */
   /** the focus's distance, this frame */
   focus = 15;
@@ -538,7 +589,7 @@ export class Renderer {
     const P = (n: string, vs: string, fs: string) => { this.progs[n] = this.program(vs, fs); };
     P('culm', CULM_VS, CULM_FS); P('spray', SPRAY_VS, SPRAY_FS); P('ground', GROUND_VS, GROUND_FS);
     P('solid', SOLID_VS, SOLID_FS); P('ridge', RIDGE_VS, RIDGE_FS); P('post', POST_VS, POST_FS);
-    P('culmDepth', CULM_VS, DEPTH_FS); P('solidDepth', SOLID_VS, DEPTH_FS);
+    P('stroke', STROKE_VS, STROKE_FS); P('culmDepth', CULM_VS, DEPTH_FS); P('solidDepth', SOLID_VS, DEPTH_FS);
     // (the sun's view of the culms near you: their shadows)
     this.shadows = opts.shadows !== false;
     {
@@ -578,7 +629,7 @@ export class Renderer {
   get held() { return this.chunks.size; }
   has(key: string) { return this.chunks.has(key); }
   /** hand a chunk to the GPU */
-  add(key: string, c: Chunk) {
+  add(key: string, c: Chunk, marks?: Float32Array) {
     const G = c.ground, v = new Float32Array(CN * CN * 8);
     for (let j = 0; j < CN; j++) for (let i = 0; i < CN; i++) {
       const k = i + j * CN, hx = G[Math.min(CN - 1, i + 1) + j * CN] - G[Math.max(0, i - 1) + j * CN], hz = G[i + Math.min(CN - 1, j + 1) * CN] - G[i + Math.max(0, j - 1) * CN];
@@ -593,12 +644,12 @@ export class Renderer {
     c.stones.forEach((s, k) => st.set([s.x, s.y, s.z, s.yaw, s.r, s.flat, s.moss, 0], k * 8));
     const sx = new Float32Array(c.steps.length * 8);
     c.steps.forEach((s, k) => sx.set([s.x, s.y, s.z, Math.atan2(s.dx, s.dz), s.depth, s.width, s.drop, s.seed], k * 8));
-    this.chunks.set(key, { key, x: c.x0 + CHUNK / 2, z: c.z0 + CHUNK / 2, ground: this.buffer(v), culms: this.buffer(cu), nCulms: c.tall, sprays: this.buffer(sp), nSprays: c.sprays.length, stones: this.buffer(st), nStones: c.stones.length, steps: this.buffer(sx), nSteps: c.steps.length });
+    this.chunks.set(key, { key, x: c.x0 + CHUNK / 2, z: c.z0 + CHUNK / 2, strokes: marks?.length ? this.buffer(marks) : null, nStrokes: marks ? marks.length / STROKE_STRIDE : 0, ground: this.buffer(v), culms: this.buffer(cu), nCulms: c.tall, sprays: this.buffer(sp), nSprays: c.sprays.length, stones: this.buffer(st), nStones: c.stones.length, steps: this.buffer(sx), nSteps: c.steps.length });
   }
   /** let a chunk go */
   drop(key: string) {
     const h = this.chunks.get(key); if (!h) return;
-    for (const b of [h.ground, h.culms, h.sprays, h.stones, h.steps]) this.gl.deleteBuffer(b);
+    for (const b of [h.ground, h.culms, h.sprays, h.stones, h.steps, h.strokes]) if (b) this.gl.deleteBuffer(b);
     this.chunks.delete(key);
   }
   keys() { return [...this.chunks.keys()]; }
@@ -684,6 +735,18 @@ export class Renderer {
         this.attr(0, c.ground, 3, 8, 0); this.attr(1, c.ground, 3, 8, 3); this.attr(2, c.ground, 2, 8, 6);
         gl.drawElements(gl.TRIANGLES, this.idx.count, gl.UNSIGNED_SHORT, 0);
       }
+    }
+    // ─── the land's strokes, on it (not over what stands in front of it) ───
+    if (this.marks) {
+      const p = use('stroke');
+      gl.uniform2fv(gl.getUniformLocation(p, 'uRes'), [w, h]); gl.uniform1f(gl.getUniformLocation(p, 'uAll'), this.allStrokes ? 1 : 0);
+      gl.enable(gl.BLEND); gl.blendEquation(gl.MAX); gl.depthMask(false); gl.enable(gl.POLYGON_OFFSET_FILL); gl.polygonOffset(-2, -4);
+      for (const { c } of inRange(this.reach.ink)) if (c.nStrokes && c.strokes) {
+        const S = STROKE_STRIDE;
+        this.attr(0, c.strokes, 3, S, 0); this.attr(1, c.strokes, 3, S, 3); this.attr(2, c.strokes, 2, S, 6); this.attr(3, c.strokes, 2, S, 8); this.attr(4, c.strokes, 3, S, 10); this.attr(5, c.strokes, 3, S, 13);
+        gl.drawArrays(gl.TRIANGLES, 0, c.nStrokes);
+      }
+      gl.disable(gl.BLEND); gl.blendEquation(gl.FUNC_ADD); gl.depthMask(true); gl.disable(gl.POLYGON_OFFSET_FILL);
     }
     // ─── steps and stones ───
     {

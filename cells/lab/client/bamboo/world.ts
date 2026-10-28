@@ -123,8 +123,8 @@ export class World {
       for (let k = 0; k < count; k++) {
         const sa = s0 + ((s1 - s0) * k) / count, sb = s0 + ((s1 - s0) * (k + 1)) / count;
         const lo = lerp(up > 0 ? sa : sb), hi = lerp(up > 0 ? sb : sa), dx = hi[0] - lo[0], dz = hi[1] - lo[1], l = Math.hypot(dx, dz) || 1;
-        const jx = (u01(s, k, i, 78) - 0.5) * 0.12, ja = (u01(s, k, i, 79) - 0.5) * 0.12, ca = Math.cos(ja), sa2 = Math.sin(ja), ux = dx / l, uz = dz / l;
-        steps.push({ sa, sb, x: lo[0] - uz * jx, z: lo[1] + ux * jx, dx: ux * ca + uz * sa2, dz: uz * ca - ux * sa2, y: hi[2] + (u01(s, k, i, 80) - 0.5) * 0.03, depth: (sb - sa) * 1.08, width: HALF * 1.7 * (0.9 + u01(s, k, i, 77) * 0.2), drop: Math.abs(hi[2] - lo[2]) + 0.9, seed: u01(s, k, i, 81) });
+        const jx = (u01(s, k, i, 78) - 0.5) * 0.3, ja = (u01(s, k, i, 79) - 0.5) * 0.28, ca = Math.cos(ja), sa2 = Math.sin(ja), ux = dx / l, uz = dz / l;
+        steps.push({ sa, sb, x: lo[0] - uz * jx, z: lo[1] + ux * jx, dx: ux * ca + uz * sa2, dz: uz * ca - ux * sa2, y: hi[2] + (u01(s, k, i, 80) - 0.5) * 0.06, depth: (sb - sa) * (1.02 + u01(s, k, i, 82) * 0.2), width: HALF * 1.7 * (0.72 + u01(s, k, i, 77) * 0.45), drop: Math.abs(hi[2] - lo[2]) + 0.9, seed: u01(s, k, i, 81) });
       }
       i = j + 1;
     }
@@ -145,6 +145,17 @@ export class World {
       for (let m = 0; m < L.length; m += 2) { const t = this.trailList[L[m]], i = L[m + 1], d = (t.x[i] - x) ** 2 + (t.z[i] - z) ** 2; if (d < best) { best = d; bt = t; bi = i; } }
     }
     return { d: bt ? Math.sqrt(best) : 99, trail: bt, i: bi };
+  }
+  /** the land at (x, z) before any trail's cut into it */
+  base(x: number, z: number): number { return base(x, z, this.seed); }
+  /** the trails that could cross the chunk at (x0, z0) */
+  trailsAround(x0: number, z0: number): Trail[] {
+    const out: Trail[] = [], seen = new Set<string>();
+    for (let a = 0; a <= 1; a++) for (let b = 0; b <= 1; b++) {
+      const ri = Math.floor((x0 + a * CHUNK) / REGION), rj = Math.floor((z0 + b * CHUNK) / REGION);
+      for (let da = -1; da <= 1; da++) for (let db = -1; db <= 1; db++) for (const t of this.trails(ri + da, rj + db)) if (!seen.has(t.id)) { seen.add(t.id); out.push(t); }
+    }
+    return out;
   }
   /** the ground at (x, z): the land, with any trail's bench cut into it */
   ground(x: number, z: number): number {
@@ -180,29 +191,45 @@ export class World {
       return (ground[k] * (1 - u) + ground[k + 1] * u) * (1 - v) + (ground[k + CN] * (1 - u) + ground[k + CN + 1] * u) * v;
     };
     const slope = (x: number, z: number) => Math.hypot(g(x + 0.7, z) - g(x - 0.7, z), g(x, z + 0.7) - g(x, z - 0.7)) / 1.4;
-    // ─── culms ───
-    const culms: Culm[] = [], SP = 1.6;
-    for (let a = 0; a < CHUNK / SP; a++) for (let b = 0; b < CHUNK / SP; b++) {
-      const gi = ci * 1000 + a, gj = cj * 1000 + b;
-      const x = x0 + (a + 0.5 + (u01(s, gi, gj, 1) - 0.5) * 0.9) * SP, z = z0 + (b + 0.5 + (u01(s, gi, gj, 2) - 0.5) * 0.9) * SP;
-      const q = this.trailNear(x, z);
-      if (q.d < HALF + 0.3 + u01(s, gi, gj, 3) * 0.4) continue;
-      let keep = 0.62 + 0.45 * vnoise(x / 14, z / 14, s + 40);
-      // (the grove's own runs: winding lanes where it's thin, the way through it)
-      const lane = Math.abs(vnoise(x / 46, z / 46, s + 60) - 0.5), lane2 = Math.abs(vnoise(x / 31 + 7, z / 31, s + 61) - 0.5);
-      keep *= 1 - 0.85 * (1 - ss(0.025, 0.06, Math.min(lane, lane2)));
-      const sl = slope(x, z), c = cliff(x, z, s);
-      if (sl > 0.9) continue; // (none on the rock)
-      keep *= 1 - ss(0.45, 0.9, sl) * 0.7;
-      // (over a cliff's rim, sparser: you see out)
-      keep *= 1 - 0.6 * c.up * (1 - ss(0.618, 0.64, fbm(x / 150, z / 150, s + 50)));
-      if (u01(s, gi, gj, 4) > keep) continue;
-      const y = g(x, z), girth = u01(s, gi, gj, 5), r = 0.055 + girth * 0.04, h = 11 + girth * 8 + u01(s, gi, gj, 6) * 3;
-      // (lean: down the fall of the ground a little, and out over a trail beside it)
-      const fx = g(x + 1, z) - g(x - 1, z), fz = g(x, z + 1) - g(x, z - 1);
-      let lx = -fx * 0.6 + (u01(s, gi, gj, 8) - 0.5) * 0.9, lz = -fz * 0.6 + (u01(s, gi, gj, 9) - 0.5) * 0.9;
-      if (q.trail && q.d < 6) { const tx = q.trail.x[q.i] - x, tz = q.trail.z[q.i] - z, l = Math.hypot(tx, tz) || 1, k = (1 - q.d / 6) * (0.8 + u01(s, gi, gj, 10) * 1.4); lx += (tx / l) * k; lz += (tz / l) * k; }
-      culms.push({ x, y, z, r, h, lx, lz, node: 0.26 + u01(s, gi, gj, 11) * 0.12, age: u01(s, gi, gj, 12), phase: u01(s, gi, gj, 13) * 6.283, pick: u01(s, gi, gj, 14), crown: 0.42 + u01(s, gi, gj, 15) * 0.18 });
+    // ─── culms: in stands, as a grove grows from its runners: clumps of a few to a dozen or more, each of an age, with
+    // open floor between them; thicker toward the middle of a stand; now and then one old giant standing over a trail ───
+    const culms: Culm[] = [], CELLS = 4.6;
+    const sa0 = Math.floor(x0 / CELLS) - 1, sa1 = Math.floor((x0 + CHUNK) / CELLS) + 1, sb0 = Math.floor(z0 / CELLS) - 1, sb1 = Math.floor((z0 + CHUNK) / CELLS) + 1;
+    for (let sa = sa0; sa <= sa1; sa++) for (let sb = sb0; sb <= sb1; sb++) {
+      const cx = (sa + 0.2 + u01(s, sa, sb, 1) * 0.6) * CELLS, cz = (sb + 0.2 + u01(s, sa, sb, 2) * 0.6) * CELLS;
+      // (how thick the grove is here: in drifts across the mountain, thinning in its own runs)
+      let dense = 0.62 + 0.6 * vnoise(cx / 22, cz / 22, s + 40);
+      const lane = Math.abs(vnoise(cx / 46, cz / 46, s + 60) - 0.5), lane2 = Math.abs(vnoise(cx / 31 + 7, cz / 31, s + 61) - 0.5);
+      dense *= 1 - 0.8 * (1 - ss(0.03, 0.07, Math.min(lane, lane2)));
+      if (u01(s, sa, sb, 3) > dense) continue;
+      const R = 1.4 + u01(s, sa, sb, 4) * 1.9, n = 5 + Math.floor(u01(s, sa, sb, 5) * 12 * dense), standAge = u01(s, sa, sb, 6);
+      const placed: [number, number][] = [];
+      for (let m = 0; m < n * 3 && placed.length < n; m++) {
+        const ang = u01(s, sa, sb, m, 7) * 6.283, rr = R * Math.sqrt(u01(s, sa, sb, m, 8));
+        const x = cx + Math.cos(ang) * rr, z = cz + Math.sin(ang) * rr;
+        if (placed.some(([px, pz]) => (px - x) ** 2 + (pz - z) ** 2 < 0.55 * 0.55)) continue;
+        placed.push([x, z]);
+        if (x < x0 || x >= x0 + CHUNK || z < z0 || z >= z0 + CHUNK) continue;
+        const gi = sa * 977 + m, gj = sb * 991 + m;
+        const q = this.trailNear(x, z);
+        if (q.d < HALF + 0.3 + u01(s, gi, gj, 3) * 0.4) continue;
+        const sl = slope(x, z), c = cliff(x, z, s);
+        if (sl > 0.9) continue; // (none on the rock)
+        let keep = 1 - ss(0.45, 0.9, sl) * 0.7;
+        // (over a cliff's rim, sparser: you see out)
+        keep *= 1 - 0.6 * c.up * (1 - ss(0.618, 0.64, fbm(x / 150, z / 150, s + 50)));
+        if (u01(s, gi, gj, 4) > keep) continue;
+        // (girth: a stand's middle stoutest; and now and then a giant beside a trail, the one the eye goes to)
+        const mid = 1 - rr / R, hero = q.d < 5 && u01(s, gi, gj, 16) < 0.12;
+        const girth = hero ? 1 : Math.min(1, u01(s, gi, gj, 5) * 0.7 + mid * 0.4);
+        const y = g(x, z), r = hero ? 0.1 + u01(s, gi, gj, 17) * 0.015 : 0.05 + girth * 0.04, h = hero ? 20 + u01(s, gi, gj, 6) * 4 : 10 + girth * 9 + u01(s, gi, gj, 6) * 3;
+        // (lean: down the fall of the ground a little, out from the stand's middle, and out over a trail beside it)
+        const fx = g(x + 1, z) - g(x - 1, z), fz = g(x, z + 1) - g(x, z - 1), ox = x - cx, oz = z - cz, ol = Math.hypot(ox, oz) || 1;
+        let lx = -fx * 0.6 + (ox / ol) * 0.5 * (1 - mid) + (u01(s, gi, gj, 8) - 0.5) * 0.7, lz = -fz * 0.6 + (oz / ol) * 0.5 * (1 - mid) + (u01(s, gi, gj, 9) - 0.5) * 0.7;
+        if (q.trail && q.d < 6) { const tx = q.trail.x[q.i] - x, tz = q.trail.z[q.i] - z, l = Math.hypot(tx, tz) || 1, k = (1 - q.d / 6) * (0.8 + u01(s, gi, gj, 10) * 1.4); lx += (tx / l) * k; lz += (tz / l) * k; }
+        const age = Math.min(1, Math.max(0, standAge + (u01(s, gi, gj, 12) - 0.5) * 0.5));
+        culms.push({ x, y, z, r, h, lx, lz, node: 0.26 + u01(s, gi, gj, 11) * 0.12 + (hero ? 0.06 : 0), age, phase: u01(s, gi, gj, 13) * 6.283, pick: hero ? u01(s, gi, gj, 14) * 0.3 : u01(s, gi, gj, 14), crown: 0.42 + u01(s, gi, gj, 15) * 0.18 });
+      }
     }
     const tall = culms.length;
     // ─── sprays: along the upper part of each culm ───
@@ -214,9 +241,9 @@ export class World {
       }
     });
     // ─── low greens: scattered through the grove, thicker along a trail's edges (each held by a hidden stub) ───
-    for (let n = 0; n < 130; n++) {
+    for (let n = 0; n < 45; n++) {
       const x = x0 + u01(s, ci, cj, n, 60) * CHUNK, z = z0 + u01(s, ci, cj, n, 61) * CHUNK, q = this.trailNear(x, z);
-      const p = q.d < HALF + 0.2 ? 0 : q.d < 4.5 ? 0.95 : 0.3;
+      const p = q.d < HALF + 0.2 ? 0 : q.d < 4.5 ? 0.6 : 0.2;
       if (u01(s, ci, cj, n, 62) > p || slope(x, z) > 0.9) continue;
       const gy = g(x, z), a = u01(s, ci, cj, n, 64) * 6.283;
       culms.push({ x, y: gy - 3, z, r: 0, h: 3.2, lx: 0, lz: 0, node: 1, age: 0, phase: u01(s, ci, cj, n, 63) * 6.28, pick: 0, crown: 1 });
@@ -232,15 +259,14 @@ export class World {
       const r = 0.25 + u01(s, ci, cj, n, 43) ** 2 * 1.4;
       stones.push({ x, y: g(x, z) - r * 0.35, z, r, yaw: u01(s, ci, cj, n, 44) * 6.283, flat: 0.55 + u01(s, ci, cj, n, 45) * 0.35, kind: Math.floor(u01(s, ci, cj, n, 46) * 4), moss: u01(s, ci, cj, n, 47) });
     }
-    // ─── the steps of any trail whose stair is in this chunk ───
+    // ─── the steps of any trail whose stair is in this chunk; and boulders along a flight, as one's cut through them ───
     const steps: Step[] = [];
-    const seen = new Set<string>();
-    for (let a = 0; a <= 1; a++) for (let b = 0; b <= 1; b++) {
-      const ri = Math.floor((x0 + a * CHUNK) / REGION), rj = Math.floor((z0 + b * CHUNK) / REGION);
-      for (let da = -1; da <= 1; da++) for (let db = -1; db <= 1; db++) for (const t of this.trails(ri + da, rj + db)) {
-        if (seen.has(t.id)) continue; seen.add(t.id);
-        for (const st of t.steps) if (st.x >= x0 && st.x < x0 + CHUNK && st.z >= z0 && st.z < z0 + CHUNK) steps.push(st);
-      }
+    for (const t of this.trailsAround(x0, z0)) for (const st of t.steps) if (st.x >= x0 && st.x < x0 + CHUNK && st.z >= z0 && st.z < z0 + CHUNK) {
+      steps.push(st);
+      if (st.seed > 0.3) continue;
+      const side = st.seed < 0.15 ? 1 : -1, lx = -st.dz * side, lz = st.dx * side, off = st.width / 2 + 0.35 + st.seed * 3, r = 0.45 + st.seed * 3.5;
+      const x = st.x + lx * (off + r * 0.6), z = st.z + lz * (off + r * 0.6);
+      stones.push({ x, y: Math.max(g(x, z), st.y) - r * 0.3, z, r, yaw: st.seed * 40, flat: 0.6 + st.seed, kind: 1, moss: 0.4 + st.seed });
     }
     return { ci, cj, x0, z0, ground, near, rock, culms, tall, sprays, stones, steps };
   }

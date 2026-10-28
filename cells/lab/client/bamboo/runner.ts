@@ -3,7 +3,7 @@
  *
  * - **the lope**: about 7 m/s, gathering and easing off smoothly; slower uphill, quicker down, a little quicker on a trail;
  * - **the weave**: each moment, of the ways within thirty degrees or so of where you're heading, the one that's clearest
- *   (no culm in its path for five metres; no rock face to climb; no drop too far to take) and nearest your heading;
+ *   (no culm in its path for nine metres, a stand seen coming and gone round; no rock face to climb; no drop too far to take) and nearest your heading;
  * - **the trail**: running more or less along one, it turns you with it, until you turn off it;
  * - **the drop**: off an edge (half a metre or more, at a run) you're in the air, and land with a dip; one of over three
  *   metres the run won't take: you stop at the rim;
@@ -65,7 +65,7 @@ export class Runner {
       if (Math.abs(off) < 0.6) { this.onTrail = true; this.heading += off * Math.min(1, dt * 2.2); }
     }
     // (the weave: the clearest way near your heading)
-    const near = this.culmsNear(this.x, this.z, 7), here = this.groundAt(this.x, this.z);
+    const near = this.culmsNear(this.x, this.z, 10), here = this.groundAt(this.x, this.z);
     let best = this.heading, bestCost = 1e9;
     // (looking wider when the way ahead's barred: a rim or a face turns you along it)
     for (let a = -5; a <= 5 || (bestCost >= 60 && a <= 14); a++) {
@@ -74,7 +74,7 @@ export class Runner {
       let cost = Math.abs(k) * 0.5;
       for (const c of near) {
         const rx = c.x - this.x, rz = c.z - this.z, al = rx * dx + rz * dz, lat = Math.abs(-rx * dz + rz * dx);
-        if (al > 0 && al < 5.5 && lat < 0.42 + c.r) cost += (5.5 - al) * 1.4;
+        if (al > 0 && al < 9 && lat < 0.42 + c.r) cost += (9 - al) * (al < 4 ? 1.4 : 0.6);
       }
       const rise = this.groundAt(this.x + dx * 1.4, this.z + dz * 1.4) - here;
       if (rise > 0.9 && !this.onTrail) cost += 60; // (a rock face)
@@ -89,11 +89,13 @@ export class Runner {
     let target = input.go ? LOPE * (1 - Math.min(0.6, Math.max(0, grade)) * 0.9) * (1 + Math.min(0.35, Math.max(0, -grade)) * 0.5) * (this.onTrail ? 1.08 : 1) : 0;
     this.stopped = bestCost >= 60;
     if (this.stopped) target = 0;
-    else if (bestCost > 8) target *= 0.7;
+    else if (bestCost > 14) target *= 0.75;
     this.v += (target - this.v) * Math.min(1, dt * (target > this.v ? 2.2 : 3));
     // (never through a culm: if one's right there, slip past it)
     let nx = this.x + dx * this.v * dt, nz = this.z + dz * this.v * dt;
-    for (const c of near) { const ox = nx - c.x, oz = nz - c.z, d = Math.hypot(ox, oz), m = 0.32 + c.r; if (d < m && d > 1e-4) { nx = c.x + (ox / d) * m; nz = c.z + (oz / d) * m; } }
+    for (let pass = 0; pass < 3; pass++) for (const c of near) { const ox = nx - c.x, oz = nz - c.z, d = Math.hypot(ox, oz), m = 0.32 + c.r; if (d < m && d > 1e-4) { nx = c.x + (ox / d) * m; nz = c.z + (oz / d) * m; } }
+    // (squeezed between two in a stand, too close to pass: don't go on into it; the weave finds another way)
+    if (near.some((c) => Math.hypot(nx - c.x, nz - c.z) < 0.27 + c.r)) { nx = this.x; nz = this.z; this.v *= 0.5; }
     this.x = nx; this.z = nz;
     this.turn = this.turn * 0.9 + wrap(best - this.move) * 0.1;
     // (the ground: follow it; over a drop, off it, and down)

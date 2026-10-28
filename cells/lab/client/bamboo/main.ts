@@ -12,8 +12,9 @@
  * URL: `seed`, `ref=a|b|c|cliff|run|up|gust` (a fixed frame), `auto` (run on by itself), `t=<seconds>` and `still` (time
  * held), `clean`, `marks=0`, `fov=<degrees>`, `mute`.
  */
-import { World, ridges, type Trail } from './world';
+import { World, ridges, CHUNK, type Trail, type Chunk } from './world';
 import { Runner, LOPE } from './runner';
+import { strokes } from './strokes';
 import { Renderer, type Frame, type Reach } from './render';
 
 const params = new URLSearchParams(location.search);
@@ -64,7 +65,8 @@ const me = new Runner(world);
 const EYE = 1.62;
 let held = false, pitch = -0.06, roll = 0;
 const keys = new Set<string>();
-const stream = (budget: number) => me.stream(me.x, me.z, budget, (k, c) => renderer.add(k, c), (k) => renderer.drop(k));
+renderer.allStrokes = params.get('strokes') === 'all';
+const stream = (budget: number) => me.stream(me.x, me.z, budget, (k, c) => renderer.add(k, c, strokes(world, c)), (k) => renderer.drop(k));
 
 /** a trail near the origin to start on, facing along it */
 function startOnTrail() {
@@ -105,20 +107,14 @@ const sound = (() => {
   };
 })();
 
-/** how far straight ahead the eye meets something: the first culm across its line, or the ground; the sky's far off */
+/** where you're going and looking: the ground the eye's line meets, looked past the culms (a culm crossing your line is
+ * passed in a moment; the way on is what the drawing holds), kept between near and far, and moved to slowly (`focus`
+ * eases toward it), so the drawing doesn't lurch with every culm that crosses */
 let focus = 0;
 function focusAt(eye: [number, number, number], yaw: number, pitch: number) {
-  const dx = Math.sin(yaw), dz = Math.cos(yaw), cp = Math.max(0.05, Math.cos(pitch)), sp = Math.sin(pitch), FAR = 45;
-  let best = FAR;
-  for (const c of me.culmsNear(eye[0], eye[2], FAR)) {
-    const rx = c.x - eye[0], rz = c.z - eye[2], along = rx * dx + rz * dz;
-    if (along > 0.3 && Math.abs(rx * dz - rz * dx) < c.r + 0.04) best = Math.min(best, along / cp);
-  }
-  for (let d = 0.5; d < best; d += 0.5) {
-    const x = eye[0] + dx * cp * d, z = eye[2] + dz * cp * d;
-    if (eye[1] + sp * d < me.groundAt(x, z)) return d;
-  }
-  return best;
+  const dx = Math.sin(yaw), dz = Math.cos(yaw), cp = Math.max(0.05, Math.cos(pitch)), sp = Math.sin(pitch), NEAR = 7, FAR = 30;
+  for (let d = NEAR; d < FAR; d += 0.75) if (eye[1] + sp * d < me.groundAt(eye[0] + dx * cp * d, eye[2] + dz * cp * d)) return d;
+  return FAR;
 }
 
 // ─── input: hold to run; drag across to turn, up and down to look ───
@@ -160,24 +156,50 @@ function stepGust(dt: number, eye: number[]) {
 
 // ─── reference frames ───
 interface Spot { x: number; z: number; heading: number; pitch: number; v?: number }
+/** how well a frame from (x, z) looking along `heading` is composed, as the board's are: a stout culm or two near at
+ * each side, framing it; the way ahead open; something standing in the middle distance */
+const built = new Map<string, Chunk>();
+function framing(x: number, z: number, heading: number) {
+  let L = 0, R = 0, block = 0, mid = 0;
+  for (let a = -1; a <= 1; a++) for (let b = -1; b <= 1; b++) {
+    const ci = Math.floor(x / CHUNK) + a, cj = Math.floor(z / CHUNK) + b, k = `${ci},${cj}`;
+    const c = built.get(k) ?? built.set(k, world.chunk(ci, cj)).get(k)!;
+    for (let n = 0; n < c.tall; n++) {
+      const q = c.culms[n], dx = q.x - x, dz = q.z - z, d = Math.hypot(dx, dz);
+      if (d > 14) continue;
+      let ang = Math.atan2(dx, dz) - heading; while (ang > Math.PI) ang -= 2 * Math.PI; while (ang < -Math.PI) ang += 2 * Math.PI;
+      if (Math.abs(ang) > 0.62) continue;
+      if (d < 7 && Math.abs(ang) < 0.14) block++;
+      else if (d > 1.2 && d < 5 && q.r >= 0.07 && Math.abs(ang) > 0.2) { if (ang < 0) L++; else R++; }
+      else if (d > 7 && d < 14 && Math.abs(ang) < 0.3) mid++;
+    }
+  }
+  return Math.min(L, 2) + Math.min(R, 2) + (L && R ? 1.5 : 0) + Math.min(mid, 3) * 0.3 - block * 2;
+}
 function findSpots(): Record<string, Spot> {
   const out: Record<string, Spot> = {};
   const all: Trail[] = [];
   for (let a = -2; a <= 1; a++) for (let b = -2; b <= 1; b++) all.push(...world.trails(a, b));
   // (a: at the foot of a flight of steps, looking up it)
+  let best = -1e9;
   for (const tr of all) {
-    for (let i = 8; i < tr.x.length - 12 && !out.a; i++) if (!tr.stair[i] && tr.stair[i + 4] && tr.stair[i + 9] && tr.y[i + 9] > tr.y[i] + 1) out.a = { x: tr.x[i], z: tr.z[i], heading: Math.atan2(tr.x[i + 6] - tr.x[i], tr.z[i + 6] - tr.z[i]), pitch: 0.12 };
-    if (out.a) break;
+    for (let i = 8; i < tr.x.length - 12; i++) if (!tr.stair[i] && tr.stair[i + 4] && tr.stair[i + 9] && tr.y[i + 9] > tr.y[i] + 1) {
+      const heading = Math.atan2(tr.x[i + 6] - tr.x[i], tr.z[i + 6] - tr.z[i]), f = framing(tr.x[i], tr.z[i], heading);
+      if (f > best) { best = f; out.a = { x: tr.x[i], z: tr.z[i], heading, pitch: 0.12 }; }
+    }
   }
   // (b: along a trail with the ground falling away beside it)
+  best = -1e9;
   for (const tr of all) {
-    for (let i = 10; i < tr.x.length - 10 && !out.b; i += 3) {
+    for (let i = 10; i < tr.x.length - 10; i += 3) {
       if (tr.stair[i]) continue;
       const dx = tr.x[i + 1] - tr.x[i], dz = tr.z[i + 1] - tr.z[i], l = Math.hypot(dx, dz), sx = -dz / l, sz = dx / l;
       const left = world.ground(tr.x[i] + sx * 8, tr.z[i] + sz * 8) - tr.y[i], right = world.ground(tr.x[i] - sx * 8, tr.z[i] - sz * 8) - tr.y[i];
-      if (Math.min(left, right) < -5 && Math.max(left, right) > 2) out.b = { x: tr.x[i], z: tr.z[i], heading: Math.atan2(dx, dz) + (left < right ? 0.15 : -0.15), pitch: -0.02 };
+      if (Math.min(left, right) < -5 && Math.max(left, right) > 2) {
+        const heading = Math.atan2(dx, dz) + (left < right ? 0.15 : -0.15), f = framing(tr.x[i], tr.z[i], heading);
+        if (f > best) { best = f; out.b = { x: tr.x[i], z: tr.z[i], heading, pitch: -0.02 }; }
+      }
     }
-    if (out.b) break;
   }
   // (cliff: at a rim, looking out over the drop)
   for (let r = 10; r < 300 && !out.cliff; r += 6) for (let a = 0; a < 6.28 && !out.cliff; a += 0.2) {
@@ -185,7 +207,15 @@ function findSpots(): Record<string, Spot> {
     for (let k = 0; k < 8; k++) { const b = (k / 8) * 6.28, d = world.ground(x + Math.sin(b) * 3, z + Math.cos(b) * 3); if (h - d > 4 && world.trailNear(x, z).d > 4) { out.cliff = { x, z, heading: b, pitch: -0.12 }; break; } }
   }
   // (c, run: in the grove, off the trails)
-  out.c = { x: me.x + Math.sin(me.heading + 1.4) * 22, z: me.z + Math.cos(me.heading + 1.4) * 22, heading: me.heading, pitch: 0.02 };
+  // (the best framed of a ring of places round about, off the trails)
+  best = -1e9;
+  for (let r = 14; r <= 50; r += 9) for (let a = 0; a < 6.28; a += 0.5) for (let hd = 0; hd < 6.28; hd += 0.785) {
+    const x = me.x + Math.sin(a) * r, z = me.z + Math.cos(a) * r;
+    if (world.trailNear(x, z).d < 6) continue;
+    const f = framing(x, z, hd);
+    if (f > best) { best = f; out.c = { x, z, heading: hd, pitch: 0.02 }; }
+  }
+  out.c ??= { x: me.x, z: me.z, heading: me.heading, pitch: 0.02 };
   out.run = { ...out.c, v: LOPE, pitch: -0.04 };
   out.up = { ...out.c, pitch: 1.35 };
   out.gust = { ...out.c, pitch: 0.18 };
@@ -221,9 +251,9 @@ function frame(now: number) {
   roll = roll * 0.9 + (-me.turn * 0.5 * s + Math.sin(me.phase * Math.PI) * 0.012 * s) * 0.1;
   const portrait = innerHeight > innerWidth, base = Number(params.get('fov')) || (portrait ? 74 : 60);
   const fov = (base + 12 * s) * Math.PI / 180;
-  // (the focus: what's straight ahead, the first culm or the ground the eye meets; the page comes in round it)
+  // (the focus: where you're going and looking, the page coming in round it)
   const target = focusAt(eye, yaw, p);
-  focus = still || focus === 0 ? target : focus + (target - focus) * Math.min(1, dt * 3);
+  focus = still || focus === 0 ? target : focus + (target - focus) * Math.min(1, dt * 0.8);
   const f: Frame = { eye, look, fov, t, gust: [gust.dir[0], gust.dir[1], gust.front, gust.strength], speed: me.v, roll, focus };
   renderer.draw(f, canvas.width, canvas.height);
   const ms = performance.now() - now;
