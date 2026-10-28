@@ -10,9 +10,9 @@ const { withWood, CELL } = await import('./harness.mjs');
 const out = process.argv.slice(2).find((a) => !a.startsWith('--')) ?? join(CELL, 'devtools/bamboo/fidelity');
 mkdirSync(out, { recursive: true });
 const SCENES = [
-  { name: 'a', target: 'r3-8-lit-stairs.png', title: 'A · the near frame' },
-  { name: 'b', target: 'r3-5-ink-path.png', title: 'B · how it thins' },
-  { name: 'c', target: 'r3-6-contour-valley.png', title: 'C · the walk' },
+  { name: 'a', target: 'r3-8-lit-stairs.jpg', title: 'A · the near frame' },
+  { name: 'b', target: 'r3-5-ink-path.jpg', title: 'B · how it thins' },
+  { name: 'c', target: 'r3-6-contour-valley.jpg', title: 'C · the walk' },
 ];
 const clean = process.argv.includes('--clean'), suffix = clean ? '-clean' : '';
 await withWood(async (lab) => {
@@ -27,7 +27,7 @@ await withWood(async (lab) => {
     await p.close();
   }
   const page = await lab.browser.newPage({ viewport: { width: 2400, height: 1100 } });
-  const img = (f) => `data:image/png;base64,${readFileSync(f).toString('base64')}`;
+  const img = (f) => `data:image/${f.endsWith('png') ? 'png' : 'jpeg'};base64,${readFileSync(f).toString('base64')}`;
   await page.setContent(`<style>body{margin:0;background:#efe6d2;font:600 15px Georgia,serif;color:#2a251e;display:flex;gap:26px;padding:14px}.pair{display:flex;gap:6px;flex-direction:column}.imgs{display:flex;gap:6px}img{height:700px;display:block}</style>${shots.map(([t, r, n]) => `<div class="pair"><div class="imgs"><img src="${img(t)}"><img src="${img(r)}"></div><div>${n} · board | drawing</div></div>`).join('')}`);
   await page.waitForTimeout(300);
   await page.locator('body').screenshot({ path: join(out, `fidelity${suffix}.jpg`), type: 'jpeg', quality: 84 });

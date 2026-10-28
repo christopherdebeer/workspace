@@ -194,7 +194,7 @@ On the winning style, test what the marks should do:
 
 ## Round 1: what came back
 
-![Round 1 sheet](round1.png)
+![Round 1 sheet](round1.jpg)
 
 The generator answered with **one composed sheet**, not separate images. That flattened everything toward one house
 style: 2, 3 and 4 are nearly the same picture, and the moments row and the light row repeat it. So the sheet shows us
@@ -274,7 +274,7 @@ That picture becomes the target we judge the renders against, like the coast's b
 
 | a. ledge, sun over a sea of cloud | b. after rain, stream | c. ledge, mist valley | d. the grove |
 |---|---|---|---|
-| ![](r2-a-ledge-sun.png) | ![](r2-b-rain-stream.png) | ![](r2-c-ledge-mist.png) | ![](r2-d-grove.png) |
+| ![](r2-a-ledge-sun.jpg) | ![](r2-b-rain-stream.jpg) | ![](r2-c-ledge-mist.jpg) | ![](r2-d-grove.jpg) |
 
 A big step. All four are off-centre, wild, mountain, and end in paper. **c is the provisional target**, with **d as the
 reference for the grove itself**.
@@ -340,29 +340,29 @@ test for marks laid in the world.
 
 The ink came inside the picture. Three of the eight are targets, and three more are references for one thing each.
 
-- **Target A, the near frame** (`r3-8-lit-stairs.png`). Real light, with ink drawn on it:
+- **Target A, the near frame** (`r3-8-lit-stairs.jpg`). Real light, with ink drawn on it:
   - culm contours, a dark tick at each node;
   - stone steps and the boulder outlined;
   - litter as warm strokes;
   - paper coming in at the top corners.
 
   This is Labyrinth's register exactly, a lit picture plus marks, and the frame most of the walk should look like.
-- **Target B, how it thins** (`r3-5-ink-path.png`). The near culms are fully drawn: dry-brush body, black at the nodes,
+- **Target B, how it thins** (`r3-5-ink-path.jpg`). The near culms are fully drawn: dry-brush body, black at the nodes,
   broken contours. The colour is held to the path's litter. The far side goes to a few verticals, then pale ridges, then
   the page. That's our *reach*, and the thinning has to look like this, not like fog.
-- **Target C, the walk** (`r3-6-contour-valley.png`). The contour path, dense moso climbing the bank on one side, and the
+- **Target C, the walk** (`r3-6-contour-valley.jpg`). The contour path, dense moso climbing the bank on one side, and the
   valley opening between sparser culms on the other. This density and this rhythm of verticals is the grove we build. The
   ink is lighter here: the node rings are white bands rather than ticks.
-- **Ref, the culm** (`r3-4-looking-up.png`). How one culm is drawn up close: the dry-brush streak down its body, darkest
+- **Ref, the culm** (`r3-4-looking-up.jpg`). How one culm is drawn up close: the dry-brush streak down its body, darkest
   just under a node, a crisp curved ring, ink pooling at the foot.
-- **Ref, the gust** (`r3-3-gust.png`). The upper grove bent over, leaves streaming across the light, the near culms still.
-- **Ref, an alternative palette** (`r3-2-teal-stairs.png`). Teal, ochre and cream, flat-layered. Kept for a weather or
+- **Ref, the gust** (`r3-3-gust.jpg`). The upper grove bent over, leaves streaming across the light, the near culms still.
+- **Ref, an alternative palette** (`r3-2-teal-stairs.jpg`). Teal, ochre and cream, flat-layered. Kept for a weather or
   time preset, not the default.
 
 Left aside:
-- `r3-1-rain-stairs.png`: busy, and the carved calligraphy is the generator's invention. Carved characters on old culms
+- `r3-1-rain-stairs.jpg`: busy, and the carved calligraphy is the generator's invention. Carved characters on old culms
   are real, though; a later detail.
-- `r3-7-ledge-roots.png`: round 2's photograph with a brushed border again.
+- `r3-7-ledge-roots.jpg`: round 2's photograph with a brushed border again.
 
 ### The drawing, read off the board
 
