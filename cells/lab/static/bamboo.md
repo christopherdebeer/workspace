@@ -78,7 +78,7 @@ The 墨 button (bottom right) sets them: four presets, and a slider for each. Th
 | preset | colour | wash | ink | frame | depth |
 |---|---|---|---|---|---|
 | picture | 85 m | 110 m | 130 m | 1 | .25 |
-| board (the default) | 22 m | 48 m | 85 m | .42 | .45 |
+| board (the default: lit, then straight to ink, carried far) | 29 m | 29 m | 160 m | .51 | 1 |
 | drawing | 8 m | 28 m | 85 m | .25 | .5 |
 | marks | — | — | 90 m | .4 | .4 |
 
@@ -94,7 +94,7 @@ The look was found by image generation first (`devtools/bamboo/explore.md`: thre
 
 - `seed=<n>`: the mountain.
 - `ref=a|b|c|cliff|run|up|gust`: a fixed frame.
-- `reach=picture|board|drawing|marks`, or `colour=`, `wash=`, `ink=` and `soft=` (metres), `frame=` and `depth=` (0–1): how far it's drawn (above).
+- `reach=picture|board|drawing|marks`, or `colour=`, `wash=`, `ink=` and `soft=` (metres), `frame=` (0–1) and `depth=` (0–1.5): how far it's drawn (above).
 - `shadows=0`: no culm shadows (cheaper).
 - `auto`: run on by itself, wandering.
 - `t=<seconds>` and `still`: time held.
