@@ -32,6 +32,7 @@ const experiments: Record<string, () => Promise<unknown>> = {
   imperecept: () => import('./imperecept/main'),
   rescue: () => import('./rescue/main'),
   'rescue-coast': () => import('./rescue-coast/main'),
+  bamboo: () => import('./bamboo/main'),
 };
 
 // (loaded as a worker by an experiment that shapes off the page's thread: serve it)

@@ -97,6 +97,12 @@ export const EXPERIMENTS: Experiment[] = [
     presets: [{ label: 'a specimen', query: '' }, { label: 'amethyst', query: 'mineral=amethyst&seed=12' }, { label: 'fluorite', query: 'mineral=fluorite&seed=5' }, { label: 'zircon', query: 'mineral=zircon&seed=8' }, { label: 'emerald', query: 'mineral=emerald&seed=3' }, { label: 'rhodochrosite', query: 'mineral=rhodochrosite&seed=4' }],
   },
   {
+    id: 'bamboo', title: 'Bamboo · 竹径', group: 'Woods',
+    blurb: 'A walk up through a wild moso bamboo grove on a mountainside, drawn as a lit picture with ink on it, held close to the eye and giving out to the page. Hold anywhere to walk, drag to look; the way sets the pace (brisk along the contour, slower up a stone stair), and where it forks you take the branch you are looking along. The lower track runs along the slope with the valley falling away into mist beside it; a stair climbs to a fork; straight up more stairs or round by the gully; the upper track deep in the grove; the long stair down. Gusts come down the slope through the culms.',
+    page: 'static/bamboo.html', preview: 'preview&ref=c&t=8', readme: 'static/bamboo.md',
+    presets: [{ label: 'walk', query: '' }, { label: 'walking on its own', query: 'auto' }, { label: 'up the stair', query: 'ref=a&t=8' }, { label: 'how it thins', query: 'ref=b&t=8' }, { label: 'along the contour', query: 'ref=c&t=8' }, { label: 'looking up', query: 'ref=up&t=8' }, { label: 'a gust', query: 'ref=gust&t=8' }, { label: 'without the ink', query: 'ref=c&t=8&marks=0' }],
+  },
+  {
     id: 'taohua', title: 'Taohua · 桃花', group: 'Woods',
     blurb: 'A climb through peach blossom to the mountain temples, on forever. After a print: crowns of flat pink, black standing stones, stone steps and trails that wander between them, temples of teal tiles and red columns, a walker in a straw hat with a staff, arriving by boat as 桃花源记 has it, casts from Changes written on the hillside. Tap the path to walk.',
     page: 'static/taohua.html', preview: 'preview&seed=7', readme: 'static/taohua.md',

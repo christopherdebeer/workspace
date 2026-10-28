@@ -1,0 +1,48 @@
+[
+ {
+  "group": "Against the board",
+  "views": [
+   {
+    "name": "a",
+    "title": "The near frame",
+    "caption": "up the stone stair toward the turn at its top: culms crowding the bank, their nodes ticked in ink, the treads outlined, the litter warm on every step (target A)",
+    "file": "v-a.jpg"
+   },
+   {
+    "name": "b",
+    "title": "How it thins",
+    "caption": "along the lower track: the near culms drawn whole, the colour held to the path, the far side going to a few verticals and then the page (target B)",
+    "file": "v-b.jpg"
+   },
+   {
+    "name": "c",
+    "title": "The walk",
+    "caption": "along the contour, the grove dense up the bank, the valley opening on the other side (target C)",
+    "file": "v-c.jpg"
+   }
+  ]
+ },
+ {
+  "group": "Looks",
+  "views": [
+   {
+    "name": "up",
+    "title": "Looking up",
+    "caption": "the culms converging, the sprays against the sky",
+    "file": "v-up.jpg"
+   },
+   {
+    "name": "gust",
+    "title": "A gust",
+    "caption": "a gust coming down through the grove: the tops bent over, the sprays streaming",
+    "file": "v-gust.jpg"
+   },
+   {
+    "name": "wide",
+    "title": "On a bigger screen",
+    "caption": "the lower track, the valley open to the left",
+    "file": "v-wide.jpg"
+   }
+  ]
+ }
+]
