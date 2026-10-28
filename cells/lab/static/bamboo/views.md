@@ -15,10 +15,10 @@ Made by `node cells/lab/views.mjs bamboo` from `client/bamboo/views.mjs`. The RE
 
 ## How far it’s drawn
 
-![Drawing: the colour held close (8 m), a wash of its tones in ink to 28 m, then the marks alone on the paper](v-drawing.jpg)
+![Drawing: lit close (8 m), laid flat in its own colours to 28 m, then the marks alone on the paper](v-drawing.jpg)
 ![Marks only: no colour at all: the culms as paper, their outlines and node ticks; the sprays as brush strokes; the litter as fine leaf marks](v-marks.jpg)
-![Picture: the colour carried far, the wash and ink beyond it](v-picture.jpg)
-![The frame drawn out: the page closing in tight from the frame’s edges (`frame=0.1`), nearer things holding on to it: the ground at your feet and the culm beside you in colour, the grove beyond them going to the paper first](v-frame.jpg)
+![Picture: lit far, flat colour and ink beyond it](v-picture.jpg)
+![The frame drawn out: the page closing in tight from the frame’s edges (`frame=0.1`): each thing there goes to its ink whole, far ones first, the ground leaf by leaf, the culm beside you holding on](v-frame.jpg)
 
 ## Looks
 

@@ -45,7 +45,7 @@
    {
     "name": "drawing",
     "title": "Drawing",
-    "caption": "the colour held close (8 m), a wash of its tones in ink to 28 m, then the marks alone on the paper",
+    "caption": "lit close (8 m), laid flat in its own colours to 28 m, then the marks alone on the paper",
     "file": "v-drawing.jpg"
    },
    {
@@ -57,13 +57,13 @@
    {
     "name": "picture",
     "title": "Picture",
-    "caption": "the colour carried far, the wash and ink beyond it",
+    "caption": "lit far, flat colour and ink beyond it",
     "file": "v-picture.jpg"
    },
    {
     "name": "frame",
     "title": "The frame drawn out",
-    "caption": "the page closing in tight from the frame’s edges (`frame=0.1`), nearer things holding on to it: the ground at your feet and the culm beside you in colour, the grove beyond them going to the paper first",
+    "caption": "the page closing in tight from the frame’s edges (`frame=0.1`): each thing there goes to its ink whole, far ones first, the ground leaf by leaf, the culm beside you holding on",
     "file": "v-frame.jpg"
    }
   ]

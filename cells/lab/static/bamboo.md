@@ -59,20 +59,21 @@ Three passes, after Labyrinth's:
 
 ### How far it's drawn
 
-**In the frame**: the page closes in from the frame's edges, as a sheet is left bare round its picture: colour, then a wash, then the marks alone, then the paper. It isn't one shape. Near things hold on toward the edge (the ground at your feet, the culm beside you); far things and the sky go sooner, so the page comes in round what's near the eye. Its edge is frayed as a dry brush frays it, and a spray there goes on as a stroke of ink after its colour has gone. `frame` sets how far in it closes (0 tight … 1 not at all), `depth` how much sooner far things go than near ones.
+It isn't a mask laid over the picture: it's how each thing is drawn. Each thing asks how far drawn it is, once for the whole of it (give or take a pick of its own, so neighbours differ), and is drawn in three stages:
 
-**In the world**:
-
-The picture gives out in clear bands, not a long fade:
-
-- **colour**, out to its reach;
-- then a **wash**: the picture's tones laid in ink on the paper, no colours;
-- then the **marks** alone: outlines, ticks, leaves on bare paper;
+- **lit**: in the sun and shade, in its own colour;
+- **flat**: the light gone, laid in its own colour as a wash, no shading;
+- **ink**: its marks and outlines alone on bare paper, heavier where the colour's gone, as a drawing's line carries what the colour did;
 - then the **page**: the sky, the mist and the far side of the valley are the paper itself, the far ranges laid in as washes darkest at their crests.
 
-Far off, a culm isn't faded: it's in or out whole, by its pick against how far drawn it would be.
+How far drawn a thing is, is the further of two things:
 
-Each pixel takes whichever of the frame and the world has drawn it out further. The 墨 button (bottom right) sets both: four presets, and a slider for each band and for the frame and its depth. The bands stay in order (colour inside the wash, the wash inside the ink), and the address keeps what you set, so a drawing can be passed on.
+- **in the world**: how far it is from the eye, `colour` (lit to), `wash` (flat to) and `ink` (marks to) metres;
+- **in the frame**: how near the frame's edge it stands, so the outer edges are paper as a sheet is left bare round its picture. Far things go sooner there than near ones (`depth`), so the page comes in round what's near the eye, and never as one shape. `frame` sets how far in it closes (0 tight … 1 not at all).
+
+So a culm, a spray or a stone changes whole, never cut by a line across it; a culm's top goes before its foot; a spray going out stays as its blades in ink. The ground goes leaf by fallen leaf, the bare earth between them first, its edge dragged dry across the slope as a brush leaves it.
+
+The 墨 button (bottom right) sets them: four presets, and a slider for each. The bands stay in order, and the address keeps what you set, so a drawing can be passed on.
 
 | preset | colour | wash | ink | frame | depth |
 |---|---|---|---|---|---|
@@ -81,7 +82,7 @@ Each pixel takes whichever of the frame and the world has drawn it out further. 
 | drawing | 8 m | 28 m | 85 m | .25 | .5 |
 | marks | — | — | 90 m | .4 | .4 |
 
-![Marks only: no colour, the drawing alone](bamboo/v-marks.jpg)
+![Marks: the drawing, with a few things near the eye keeping a touch of their colour by their own picks](bamboo/v-marks.jpg)
 
 ## Judged against the board
 
