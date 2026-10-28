@@ -214,7 +214,7 @@ void main() {
   // comes in on a culm wherever it crosses the frame; its top a little sooner, as a long stroke runs out; never fading
   // along an internode)
   float yNode = vY - f * fwidth(vY) / max(fwidth(vQ), 1e-4);
-  float drawn = bandAt(vW + vec3(0., yNode - vY, 0.)) + vJit + smoothstep(4., vI.z, yNode) * .35 + (h21(vec2(floor(vQ), vI.y * 17.)) - .5) * .25;
+  float drawn = bandAt(vW + vec3(0., yNode - vY, 0.)) + vJit + smoothstep(4., vI.z, yNode) * .35;
   // (the culm's own green: olive-celadon when young, duller and greyer with age, darker low down)
   vec3 young = vec3(.56, .63, .4), old = vec3(.58, .58, .44);
   vec3 alb = mix(young, old, age) * mix(.78, 1., smoothstep(0., 2.5, vY));
@@ -248,7 +248,10 @@ void main() {
   // (past its colour, left out more and more, a culm at a time by its own pick (and its top first), so the drawing
   // thins by omission, toward the paper, rather than fading or standing as a fence of outlines)
   float whole = min(vBand, drawn);
-  if (whole > 1.8 && h21(vec2(vI.y * 3.7, 5.3)) > (2.9 - whole) / 1.1) discard;
+  // (drawn in ink, a culm's kept by how near it is: near ones held; mid ones fewer; far ones, most
+  // gone, so the drawing is a few verticals and the space between them, not a fence)
+  float worth = (1. - smoothstep(6., 28., dist)) * .8 + .12;
+  if (whole > 1.7 && h21(vec2(vI.y * 3.7, 5.3)) > worth * (2.9 - whole) / 1.1 * 1.6) discard;
   emit(c, own(alb), drawn, .4, allow, mark, vW);
 }`;
 const DEPTH_FS = `#version 300 es
@@ -501,6 +504,10 @@ void main() {
     col = mix(col, vec3(1., .95, .8), clamp(shaft * .5 * C.a, 0., .6));
   }
   col = mix(col, uInk, clamp(ink, 0., 1.) * .9);
+  // (the last few pixels at every edge are the paper, whatever's drawn: its edge torn a little, not a ruled line)
+  vec2 pxp = vUV * uRes; float edgePx = min(min(pxp.x, uRes.x - pxp.x), min(pxp.y, uRes.y - pxp.y));
+  float keepOut = 10. * uPx * (.7 + .6 * vn(vec2(pxp.x + pxp.y, pxp.x - pxp.y) * .03));
+  col = mix(col, paper, 1. - smoothstep(keepOut * .6, keepOut, edgePx));
   o = vec4(col, 1.);
 }`;
 
@@ -514,7 +521,9 @@ layout(location = 4) in vec3 aF; layout(location = 5) in vec3 aAnchor;
 uniform vec2 uRes;
 out float vAcross; out vec3 vW; flat out vec3 vF; flat out float vBand; flat out float vKeep;
 // (the least a mark of each family is on the screen, in pixels: a rim most, then a string, a contact, an edge; detail less)
-float least(float f) { return f < .5 ? 2.1 : f < 1.5 ? 3. : f < 2.5 ? 1.6 : f < 3.5 ? 1.8 : f < 4.5 ? 1.8 : f < 5.5 ? 2.4 : f < 6.5 ? 1.7 : 2.3; }
+// (primary structure (a rim, a trail's edge, a flight's string and nosings, a stone's contact) about a pixel; the secondary
+// (hachures, a face's strokes, contours, roots) finer, under a pixel, so they texture rather than rule)
+float least(float f) { return f < .5 ? 1.1 : f < 1.5 ? 1.4 : f < 2.5 ? .65 : f < 3.5 ? .7 : f < 4.5 ? .6 : f < 5.5 ? 1.1 : f < 6.5 ? 1. : f < 7.5 ? 1. : .75; }
 void main() {
   float fam = floor(aF.x + .001);
   // (across the way it runs, turned to the eye; lifted a little toward the eye, off what it lies on)

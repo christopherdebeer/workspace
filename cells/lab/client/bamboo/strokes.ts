@@ -212,13 +212,16 @@ export function strokes(world: World, c: Chunk): Float32Array {
     for (let lv = Math.ceil(lo / H) * H; lv < hi; lv += H) {
       for (const line of iso(G, at, lv)) {
         // (along the hillside only: off the trails, off the faces)
-        const keep = line.filter((p) => { const fi = Math.round((p[0] - x0) / CELL), fj = Math.round((p[2] - z0) / CELL), k = Math.min(CN - 1, Math.max(0, fi)) + Math.min(CN - 1, Math.max(0, fj)) * CN; return c.near[k] > HALF + 0.6 && c.rock[k] < 0.5; });
-        if (keep.length < 4) continue;
-        broken(out, line.map((p) => [p[0], p[1] + 0.02, p[2]] as V3), r, [2, 7], [1, 4], 0.06, FAM.contour, () => 0.5 + r() * 0.2, 0);
+        const ok = (p: V3) => { const fi = Math.round((p[0] - x0) / CELL), fj = Math.round((p[2] - z0) / CELL), k = Math.min(CN - 1, Math.max(0, fi)) + Math.min(CN - 1, Math.max(0, fj)) * CN; return c.near[k] > HALF + 0.6 && c.rock[k] < 0.5; };
+        // (only the stretches that qualify are drawn: a contour stops where it meets a trail or a face)
+        let run: V3[] = [];
+        const flush = () => { if (run.length >= 4 && r() < 0.6) broken(out, run.map((p) => [p[0], p[1] + 0.02, p[2]] as V3), r, [2, 7], [1.5, 5], 0.05, FAM.contour, () => 0.4 + r() * 0.2, 0); run = []; };
+        for (const p of line) { if (ok(p)) run.push(p); else flush(); }
+        flush();
       }
     }
     // (and down the fall where it's steep enough to show it: short strokes in small groups, as a brush textures a slope)
-    for (let n = 0; n < 110; n++) {
+    for (let n = 0; n < 60; n++) {
       const fi = 1 + r() * (CN - 3), fj = 1 + r() * (CN - 3), k = Math.round(fi) + Math.round(fj) * CN;
       const gx = gAt(fi + 0.5, fj) - gAt(fi - 0.5, fj), gz = gAt(fi, fj + 0.5) - gAt(fi, fj - 0.5), sl = Math.hypot(gx, gz);
       if (sl < 0.25 || sl > 1.1 || c.near[k] < HALF + 0.6 || r() > (sl - 0.15) * 1.6) continue;
