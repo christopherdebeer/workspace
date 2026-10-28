@@ -192,6 +192,84 @@ On the winning style, test what the marks should do:
 - **Wildness:** does it read as a mountain, not a garden?
 - **Drawability:** could we make it with instanced culms, wind, dapple, marks and a post pass?
 
+## Round 1: what came back
+
+![Round 1 sheet](round1.png)
+
+The generator answered with **one composed sheet**, not separate images. That flattened everything toward one house
+style: 2, 3 and 4 are nearly the same picture, and the moments row and the light row repeat it. So the sheet shows us
+less than it looks like it does. Next round, make **one image per prompt**.
+
+**What's worth keeping:**
+- **The bottom strip** (render → inked edges → reduced marks → mid → far → into the page). It is our drawing model as a
+  picture, and the most useful thing on the sheet. Its third and fourth panels, colour giving way to marks, are closest to
+  a golden target.
+- **1, ink and wash:** the page, the ink tone falling off with depth, the mist as empty paper. Right for the far field.
+- **5, woodblock:** the only style with its own palette (teal, ochre, cream). Worth one more look as a colour key.
+- **Moments:** E (cliff ledge with rail), G (ridge view), I (fallen culm), J (young shoots), Dawn, After rain, Snow.
+
+**What's wrong across all of it:**
+- **Not moso.** The culms are thin, few and grassy, with leafy undergrowth at eye level, so it reads as a generic leafy
+  forest. A moso grove is thick, smooth, pale culms (powder-white just below each node), close and countless, branching
+  only high up, with a fairly *open* floor of litter between them. The verticals should be the subject.
+- **One composition.** Centred stairs vanishing up the middle, symmetric walls, in every panel. We asked for a turn out of
+  sight and never got it.
+- **No visible ink** in "ink over lit" (2). It's a painting; nothing is drawn. The target needs lines you can see: node
+  rings, culm contours, stair nosings, the path's edge.
+- **Wind** doesn't read (static). **Golden hour** is an orange filter. **D's** waterfall is a cliché, and its bridge is
+  planks, not a slab.
+
+## Round 2: aim at the strip, fix the grove
+
+One image per prompt, 9:16 portrait unless noted, four or more variations each. The style line in all of them is the
+strip's middle panels:
+
+```
+STYLE: hand-inked illustration over soft realistic light: crisp dark ink lines on the near bamboo (both contours, broken
+at every node, a short dark tick at each node ring) and on the stair nosings and the path's edge; restrained colour
+(jade, pale celadon, ochre litter, grey stone) held near the path; further away the colour drains, the bamboo becomes a
+few grey ink verticals, then bare cream rice paper and mist at the edges of the frame
+GROVE: a dense wild moso bamboo forest on a steep mountain slope: thick smooth pale-green culms 10 to 15 cm across,
+a band of white powder just below each node, hundreds of them close together and receding, no branches below 6 m,
+an open floor of dry fallen bamboo leaves between them, almost no undergrowth
+AVOID: thin bamboo, leafy shrubs at eye level, ferns, centred symmetric corridor, path vanishing up the middle, people,
+buildings, lanterns, fences, text, Japanese garden
+```
+
+**2A, the golden-target attempt.** "[GROVE]. Eye height on worn stone stairs that climb steeply and turn right behind a
+mossy boulder, the top of the flight out of sight; the culms on the left lean slightly over the path. Late-morning sun in
+narrow shafts, dapple on the steps. [STYLE]."
+
+**2B, asymmetric contour track.** "[GROVE]. A packed earth path running across the slope along the contour, the hillside
+rising steeply on the left, falling away on the right into mist between the culms, roots crossing the path. [STYLE]."
+
+**2C, density test (three images).** 2A with the grove at three densities: "culms 1 m apart, a fence of verticals you see
+far between" / "culms 40 cm apart, a wall" / "a clear gap of 3 m either side of the path, then dense".
+
+**2D, the ink's reach (landscape 3:2).** "[GROVE], [STYLE]. The colour and the full ink only within a few metres of the
+path in the centre of the image, the drawing becoming fewer marks toward the left and right edges and ending in bare
+paper; whole bamboo left out at the edges, not faded."
+
+**2E, looking up.** "[GROVE], [STYLE]. Straight up from the path: culms converging, nodes inked, a ring of feathery leaf
+clusters (个-shaped brush strokes) against a bright pale sky."
+
+**2F, the gust.** "[GROVE], [STYLE]. A gust coming down the slope: the culms on the upper left bent hard over, those near
+still upright, leaves streaming in brush strokes, a wave of motion travelling through the grove toward the viewer."
+
+**2G, colour key (woodblock palette).** 2A with "palette of deep teal, jade, ochre and cream, flat layered colour with
+gradated mist bands" in place of restrained colour.
+
+**2H, after rain.** 2A with "overcast after rain, culms wet and darker, stone glossy, mist rising off the ground, no
+sun".
+
+What we're looking for:
+- a single picture where bamboo reads as moso at a glance;
+- ink you can see on the near things;
+- the path turning off-centre;
+- the frame ending in page.
+
+That picture becomes the target we judge the renders against, like the coast's boards.
+
 ## Open questions after the image rounds
 
 - How much colour against how much page.
