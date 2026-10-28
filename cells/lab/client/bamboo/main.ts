@@ -20,6 +20,7 @@ import { Renderer, type Frame, type Reach } from './render';
 const params = new URLSearchParams(location.search);
 const canvas = document.getElementById('view') as HTMLCanvasElement;
 const hint = document.getElementById('hint') as HTMLDivElement | null;
+if (hint && params.has('still')) hint.classList.add('gone');
 const seed = Number(params.get('seed') ?? 1) || 1;
 const world = new World(seed);
 const renderer = new Renderer(canvas, ridges(seed), { clean: params.has('clean'), marks: params.get('marks') !== '0', shadows: params.get('shadows') !== '0' });

@@ -51,3 +51,17 @@ hidden-surface rules; a stable route-informed focus; long-horizon runner guidanc
 Pin explicit seed, camera position, heading, pitch, time and reach (`?cam=x,z,heading,pitch`), not `ref=` found by the
 first matching terrain. Capture picture / ink only / board at 390 × 844; add a 5–10 s fixed-trajectory clip for parallax,
 mark attachment and gust. Don't advance a gate until it passes in the less forgiving modes.
+
+## The transition (`06-transition.jpg`)
+
+A compositional study, not an ink-quality target (its linework was derived from image contours; Bamboo makes selected,
+world-anchored marks instead). Paper | sparse marks | linework | full render | linework | sparse marks | paper. Four
+invariants:
+
+1. **Every viewport edge is clear paper**, top and bottom too, whatever the camera faces and however near the geometry.
+2. **No visible transition boundary**: each culm, terrain feature and stroke gives up its representation at its own reach.
+3. **Drawing replaces rendering**: selected node ticks, culm contours, bank hachures and path edges remain after their
+   surfaces go; whole marks are left out, progressively.
+4. **Focus follows the run**: the detailed region stays round the anticipated path, steady as the camera moves.
+
+And the paper isn't a feathered transparency mask: its emptiness comes from deliberate omission of features.

@@ -79,16 +79,22 @@ float bandAt(vec3 p) {
   float bw = d <= C ? .6 * d / C : d <= W ? .6 + 1.2 * (d - C) / (W - C) : 1.8 + 1.1 * (d - W) / (I - W);
   vec4 cp = uVP * vec4(p, 1.);
   if (cp.w < .05) return bw;
-  vec2 n = cp.xy / cp.w;
-  float sc = length(n) + uFrame.w * .4 * abs(log2(max(d, .3) / max(uFrame.y, 1.))) * .8;
-  // (the frame takes a thing to its ink; only out toward the frame's corners to the bare page)
-  float bf = min(max(0., .6 + (sc - uFrame.x) * 2.8), 2.4 + max(0., length(n) - 1.) * 3.);
+  vec2 n = abs(cp.xy / cp.w);
+  // (how far out in the frame: near-square, so every edge (top and bottom as much as the sides) is as far out as any;
+  // and further for being far beyond the focus; a little for being much nearer, so the ground at your feet holds)
+  float m = pow(pow(n.x, 3.) + pow(n.y, 3.), 1. / 3.);
+  float dl = log2(max(d, .3) / max(uFrame.y, 1.));
+  float sc = m + uFrame.w * .32 * (dl > 0. ? dl : -dl * .25);
+  // (from the focus out: the picture, then linework, then sparse marks, then the bare page just inside every edge,
+  // whatever's there)
+  float bf = max(0., .6 + (sc - uFrame.x) * 2.35 / max(.08, .95 - uFrame.x));
   return max(bw, bf) + smoothstep(8., 45., uEye.y - p.y) * 1.5;
 }
 // (the stages: the light first, then the colour, then the ink)
 float lightOf(float b) { return 1. - smoothstep(.52, .68, b); }
 float colourOf(float b) { return 1. - smoothstep(1.64, 1.76, b); }
-float inkOf(float b) { return 1. - smoothstep(2.75, 2.9, b); }
+// (the ink: full through the linework, lighter through the sparse marks, then gone, a thing at a time)
+float inkOf(float b) { return (1. - smoothstep(2.82, 2.9, b)) * mix(1., .4, smoothstep(1.9, 2.8, b)); }
 `;
 // (the light: the sun through the canopy's gaps and past the culms' shadows, shared by every surface, so a patch of
 // sun lies across the path, the litter and a culm alike)
@@ -190,7 +196,7 @@ void main() {
   vec3 n = vec3(cos(a), 0., sin(a));
   vW = c + n * rr; vN = n; vY = y; vQ = q; vU = a * r; vI = vec3(iC.x, phase, h);
   // (how far it's drawn: asked once, at eye height on it, each culm a little its own way)
-  vJit = (fract(pick * 7.31) - .5) * .8;
+  vJit = (fract(pick * 7.31) - .5) * 1.1;
   vBand = uDepth == 1 ? 0. : bandAt(culmAt(b, h, lean, phase, min(1.6, h))) + vJit;
   gl_Position = (uDepth == 1 ? uLightVP : uVP) * vec4(vW, 1.);
 }`;
@@ -229,9 +235,14 @@ void main() {
   float tick = ring * chosen * (.35 + .65 * smoothstep(.1, .6, edge)) * (1. - smoothstep(30., 70., dist) * .75);
   float dry = smoothstep(.62, .82, vn(vec2(vU * 40. + 3., vY * .35))) * shade * edge * (1. - far) * .6;
   float foot = (1. - smoothstep(.0, .14, vY)) * .5 * (1. - smoothstep(15., 40., dist));
-  float mark = max(max(tick, dry), foot) * uMarks;
+  // (the dry brush is the picture's shading: it goes with the colour; the ticks and the foot carry on in the drawing)
+  float mark = max(max(tick, dry * colourOf(drawn)), foot) * uMarks;
   // (the outline breaks just under each node, as a brush lifts there)
   float allow = 1. - smoothstep(.72, .8, f) * (1. - smoothstep(.97, .99, f)) * chosen;
+  // (past its colour, left out more and more, a culm at a time by its own pick (and its top first), so the drawing
+  // thins by omission, toward the paper, rather than fading or standing as a fence of outlines)
+  float whole = min(vBand, drawn);
+  if (whole > 1.8 && h21(vec2(vI.y * 3.7, 5.3)) > (2.9 - whole) / 1.1) discard;
   emit(c, own(alb), drawn, .4, allow, mark, vW);
 }`;
 const DEPTH_FS = `#version 300 es
@@ -288,6 +299,7 @@ void main() {
   // (the marks: each blade's edge near; where the colour's given out, the blade filled in ink, as a brush lays it)
   float near = 1. - smoothstep(8., 26., distance(vW, uEye));
   float mark = max((1. - smoothstep(.0, .3, rim)) * near * .85, (1. - colourOf(vBand)) * (.22 + .16 * best)) * uMarks;
+  if (vBand > 1.8 && fract(vSeed * 17.3) > (2.9 - vBand) / 1.1) discard;
   emit(c, own(alb), vBand, .6, near, mark, vW);
 }`;
 
@@ -490,7 +502,8 @@ void main() {
   vec3 p = aP + side * aW.x * aW.y * aT.x * k + toEye * min(.08, distance(uEye, aP) * .004);
   vAcross = aT.x; vW = p; vF = aF;
   float d = distance(aAnchor, uEye);
-  vBand = bandAt(aAnchor) + (aF.z - .5) * .6;
+  // (asked here, a stretch of it at a time, so a long stroke lifts off before the paper rather than running into it)
+  vBand = max(bandAt(aAnchor), bandAt(aP)) + (aF.z - .5) * .6;
   // (the detail (hachures, a face's strokes, contours, nosings) thinned with distance, so far off the structure's kept)
   bool detail = (fam > 1.5 && fam < 4.5) || (fam > 5.5 && fam < 6.5);
   vKeep = detail ? 1. - smoothstep(12., 60., d) * .85 : 1. - smoothstep(60., 140., d) * .7;
@@ -502,7 +515,8 @@ layout(location = 0) out vec4 oC; layout(location = 1) out vec4 oA;
 uniform float uMarks; uniform float uAll;
 void main() {
   float fam = floor(vF.x + .001), weight = fract(vF.x + .001), persist = vF.y, pick = vF.z;
-  if (uAll < .5 && (pick > vKeep || vBand + pick * .4 > 2.9)) discard;
+  // (left out whole: through the sparse marks fewer and fewer, by each stroke's own pick, none at the page)
+  if (uAll < .5 && (pick > vKeep || pick > (2.9 - vBand) / 1.1)) discard;
   float aa = max(fwidth(vAcross), 1e-4);
   float cov = 1. - smoothstep(1. - aa, 1. + aa * .5, abs(vAcross));
   float dry = smoothstep(.18, .42, vn(vW.xz * 6. + vW.y * 2. + fam * 3.1));
