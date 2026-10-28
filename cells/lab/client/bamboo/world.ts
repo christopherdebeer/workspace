@@ -318,11 +318,12 @@ export class World {
     }
     // ─── stones: under cliffs (fallen), at the foot of a trail's bank, now and then anywhere ───
     const stones: Stone[] = [];
-    for (let n = 0; n < 26; n++) {
+    for (let n = 0; n < 48; n++) {
       const x = x0 + u01(s, ci, cj, n, 40) * CHUNK, z = z0 + u01(s, ci, cj, n, 41) * CHUNK, q = this.trailNear(x, z), sl = slope(x, z);
-      const p = sl > 0.5 ? 0.5 : q.d > HALF + 0.4 && q.d < 4 ? 0.45 : 0.06;
-      if (u01(s, ci, cj, n, 42) > p || q.d < HALF + 0.5) continue;
-      const r = 0.25 + u01(s, ci, cj, n, 43) ** 2 * 1.4;
+      // (a trail's sides are stony: its bank breaks out in rock, stones lie along its edge)
+      const p = sl > 0.5 ? 0.45 : q.d > HALF + 0.3 && q.d < 4.5 ? 0.7 : 0.05;
+      if (u01(s, ci, cj, n, 42) > p || q.d < HALF + 0.35) continue;
+      const r = 0.22 + u01(s, ci, cj, n, 43) ** 2 * (q.d < 4.5 ? 1.2 : 1.4);
       stones.push({ x, y: g(x, z) - r * 0.35, z, r, yaw: u01(s, ci, cj, n, 44) * 6.283, flat: 0.55 + u01(s, ci, cj, n, 45) * 0.35, kind: Math.floor(u01(s, ci, cj, n, 46) * 4), moss: u01(s, ci, cj, n, 47) });
     }
     // ─── the steps of any trail whose stair is in this chunk; and boulders along a flight, as one's cut through them ───

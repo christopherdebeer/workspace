@@ -84,7 +84,7 @@ float bandAt(vec3 p) {
   // and further for being far beyond the focus; a little for being much nearer, so the ground at your feet holds)
   float m = pow(pow(n.x, 3.) + pow(n.y, 3.), 1. / 3.);
   float dl = log2(max(d, .3) / max(uFrame.y, 1.));
-  float sc = m + uFrame.w * .32 * (dl > 0. ? dl : -dl * .25);
+  float sc = m + uFrame.w * .2 * (dl > 0. ? dl : -dl * .25);
   // (from the focus out: the picture, then linework, then sparse marks, then the bare page just inside every edge,
   // whatever's there)
   float bf = max(0., .6 + (sc - uFrame.x) * 2.35 / max(.08, .95 - uFrame.x));
@@ -231,14 +231,16 @@ void main() {
   // side away from the sun, dry-brush strokes down it; ink pooled at its foot)
   float edge = 1. - abs(dot(N, V)), shade = smoothstep(.1, -.4, dot(N, uSun));
   // (far off, only some nodes are ticked, by their own picks: a far culm is a few marks, not a chain of rings)
-  float chosen = step(h21(vec2(floor(vQ + .5), vI.y * 31.)), 1. - smoothstep(10., 40., dist) * .75);
+  float chosen = step(h21(vec2(floor(vQ + .5), vI.y * 31.)), (1. - smoothstep(10., 40., dist) * .75) * mix(.45, 1., colourOf(drawn)));
   float tick = ring * chosen * (.35 + .65 * smoothstep(.1, .6, edge)) * (1. - smoothstep(30., 70., dist) * .75);
   float dry = smoothstep(.62, .82, vn(vec2(vU * 40. + 3., vY * .35))) * shade * edge * (1. - far) * .6;
   float foot = (1. - smoothstep(.0, .14, vY)) * .5 * (1. - smoothstep(15., 40., dist));
   // (the dry brush is the picture's shading: it goes with the colour; the ticks and the foot carry on in the drawing)
   float mark = max(max(tick, dry * colourOf(drawn)), foot) * uMarks;
   // (the outline breaks just under each node, as a brush lifts there)
-  float allow = 1. - smoothstep(.72, .8, f) * (1. - smoothstep(.97, .99, f)) * chosen;
+  // (in colour the outline lifts under each node, as a brush does; drawn in ink alone, a culm's edges run on whole,
+  // two long lines, and a few nodes ticked: never a chain of dashes)
+  float allow = 1. - smoothstep(.72, .8, f) * (1. - smoothstep(.97, .99, f)) * chosen * colourOf(drawn);
   // (past its colour, left out more and more, a culm at a time by its own pick (and its top first), so the drawing
   // thins by omission, toward the paper, rather than fading or standing as a fence of outlines)
   float whole = min(vBand, drawn);
@@ -382,7 +384,7 @@ void main() {
   float n1 = fbm2(vW.xz * 1.7 + vW.y * 1.3), n2 = vn(vW.xy * 5. + vW.z * 3.);
   vec3 stone = mix(vec3(.76, .72, .63), vec3(.62, .6, .54), n1) * (.88 + .24 * n2);
   float moss = smoothstep(.2, .8, N.y) * smoothstep(.45, .7, n1 + vMoss * .3);
-  vec3 alb = mix(stone, vec3(.4, .5, .22), moss * (uKind == 1 ? .4 : .85));
+  vec3 alb = mix(stone, vec3(.4, .5, .22), moss * (uKind == 1 ? .2 : .7));
   float mark = 0.;
   if (uKind == 3) {
     // (a root: grey-brown bark, worn pale and smooth on top where it's trodden, moss low along it)
@@ -549,6 +551,26 @@ function boxMesh() {
   f([x1, y0, z0], [x1, y0, z1], [x1, y1, z1], [x1, y1, z0], [1, 0, 0]);
   return new Float32Array(P);
 }
+/** a step's stone: the unit box (x -0.5..0.5, y 0..1, z -0.5..0.5) as a worn slab, its edges rounded off and its faces
+ * a little uneven, so a flight is laid stones and not boxes */
+function slabMesh() {
+  const P: number[] = [], NU = 16, NV = 10, e = 0.3, f = (v: number) => Math.sign(v) * Math.pow(Math.abs(v), e);
+  // (a sphere pushed out toward the box: flat faces, the corners left round; the faces a little uneven)
+  const at = (i: number, j: number) => {
+    const u = (i / NU) * 2 * Math.PI, v = (j / NV) * Math.PI - Math.PI / 2, x = Math.cos(v) * Math.cos(u), y = Math.sin(v), z = Math.cos(v) * Math.sin(u);
+    const bx = f(x), by = f(y), bz = f(z), wob = 1 + 0.05 * Math.sin(x * 9 + z * 7) + 0.04 * Math.sin(z * 13 - x * 5);
+    return [bx * 0.5 * wob, 0.5 + by * 0.5 - (by > 0.9 ? 0.04 * Math.sin(x * 11 + z * 9) ** 2 : 0), bz * 0.5 * wob];
+  };
+  for (let j = 0; j < NV; j++) for (let i = 0; i < NU; i++) {
+    const a = at(i, j), b = at(i + 1, j), c = at(i + 1, j + 1), d = at(i, j + 1);
+    for (const T of [[a, c, b], [a, d, c]]) {
+      const u = T[1].map((q, k) => q - T[0][k]), w = T[2].map((q, k) => q - T[0][k]);
+      const n = [u[1] * w[2] - u[2] * w[1], u[2] * w[0] - u[0] * w[2], u[0] * w[1] - u[1] * w[0]], l = Math.hypot(...n) || 1;
+      for (const q of T) P.push(...q, n[0] / l, n[1] / l, n[2] / l);
+    }
+  }
+  return new Float32Array(P);
+}
 function lumpMesh(seed: number) {
   // (an icosphere, two subdivisions, pushed in and out: a boulder)
   const t = (1 + Math.sqrt(5)) / 2;
@@ -566,7 +588,8 @@ function lumpMesh(seed: number) {
   for (const [a, b, c] of F) {
     const A = V[a], B = V[b], C = V[c], u = B.map((q, i) => q - A[i]), w = C.map((q, i) => q - A[i]);
     const n = [u[1] * w[2] - u[2] * w[1], u[2] * w[0] - u[0] * w[2], u[0] * w[1] - u[1] * w[0]], l = Math.hypot(...n) || 1;
-    for (const p of [A, B, C]) P.push(...p, n[0] / l, n[1] / l, n[2] / l);
+    // (shaded round, not faceted: each corner's own way out, leaned a little to the face's)
+    for (const p of [A, B, C]) { const r = Math.hypot(...p) || 1, m = [p[0] / r * 0.7 + n[0] / l * 0.3, p[1] / r * 0.7 + n[1] / l * 0.3, p[2] / r * 0.7 + n[2] / l * 0.3], k = Math.hypot(...m) || 1; P.push(...p, m[0] / k, m[1] / k, m[2] / k); }
   }
   return new Float32Array(P);
 }
@@ -629,6 +652,7 @@ export class Renderer {
     for (const [k, m] of [['culmNear', culmMesh(8, 20)], ['culmFar', culmMesh(5, 10)], ['quad', QUAD]] as const) this.vbo[k] = { buf: this.buffer(m), count: m.length / 2 };
     const box = boxMesh(); this.vbo.box = { buf: this.buffer(box), count: box.length / 6 };
     const lump = lumpMesh(1.7); this.vbo.lump = { buf: this.buffer(lump), count: lump.length / 6 };
+    const slab = slabMesh(); this.vbo.slab = { buf: this.buffer(slab), count: slab.length / 6 };
     this.vbo.screen = { buf: this.buffer(new Float32Array([-1, -1, 3, -1, -1, 3])), count: 3 };
     // (one index buffer serves every chunk's ground: the same grid)
     {
@@ -742,8 +766,8 @@ export class Renderer {
       this.attr(0, this.vbo.culmFar.buf, 2, 2, 0);
       for (const { c } of near2) if (c.nCulms) { for (let a = 0; a < 3; a++) this.attr(1 + a, c.culms, 4, 12, a * 4, 1); gl.drawArraysInstanced(gl.TRIANGLES, 0, this.vbo.culmFar.count, c.nCulms); }
       p = use('solidDepth'); gl.uniform1i(gl.getUniformLocation(p, 'uDepth'), 1); gl.uniform1i(gl.getUniformLocation(p, 'uKind'), 1);
-      this.attr(0, this.vbo.box.buf, 3, 6, 0); this.attr(1, this.vbo.box.buf, 3, 6, 3);
-      for (const { c } of near2) if (c.nSteps) { this.attr(2, c.steps, 4, 8, 0, 1); this.attr(3, c.steps, 4, 8, 4, 1); gl.drawArraysInstanced(gl.TRIANGLES, 0, this.vbo.box.count, c.nSteps); }
+      this.attr(0, this.vbo.slab.buf, 3, 6, 0); this.attr(1, this.vbo.slab.buf, 3, 6, 3);
+      for (const { c } of near2) if (c.nSteps) { this.attr(2, c.steps, 4, 8, 0, 1); this.attr(3, c.steps, 4, 8, 4, 1); gl.drawArraysInstanced(gl.TRIANGLES, 0, this.vbo.slab.count, c.nSteps); }
     }
     gl.activeTexture(gl.TEXTURE3); gl.bindTexture(gl.TEXTURE_2D, this.shadowTex); gl.activeTexture(gl.TEXTURE0);
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.fbo); gl.viewport(0, 0, w, h);
@@ -768,8 +792,8 @@ export class Renderer {
     {
       const p = use('solid');
       gl.uniform1i(gl.getUniformLocation(p, 'uKind'), 1);
-      this.attr(0, this.vbo.box.buf, 3, 6, 0); this.attr(1, this.vbo.box.buf, 3, 6, 3);
-      for (const { c } of inRange(this.reach.ink)) if (c.nSteps) { this.attr(2, c.steps, 4, 8, 0, 1); this.attr(3, c.steps, 4, 8, 4, 1); gl.drawArraysInstanced(gl.TRIANGLES, 0, this.vbo.box.count, c.nSteps); }
+      this.attr(0, this.vbo.slab.buf, 3, 6, 0); this.attr(1, this.vbo.slab.buf, 3, 6, 3);
+      for (const { c } of inRange(this.reach.ink)) if (c.nSteps) { this.attr(2, c.steps, 4, 8, 0, 1); this.attr(3, c.steps, 4, 8, 4, 1); gl.drawArraysInstanced(gl.TRIANGLES, 0, this.vbo.slab.count, c.nSteps); }
       gl.uniform1i(gl.getUniformLocation(p, 'uKind'), 2);
       this.attr(0, this.vbo.lump.buf, 3, 6, 0); this.attr(1, this.vbo.lump.buf, 3, 6, 3);
       for (const { c } of inRange(this.reach.ink)) if (c.nStones) { this.attr(2, c.stones, 4, 8, 0, 1); this.attr(3, c.stones, 4, 8, 4, 1); gl.drawArraysInstanced(gl.TRIANGLES, 0, this.vbo.lump.count, c.nStones); }
