@@ -78,7 +78,7 @@ The 墨 button (bottom right) sets them: four presets, and a slider for each. Th
 | preset | colour | wash | ink | frame | depth |
 |---|---|---|---|---|---|
 | picture | 85 m | 110 m | 130 m | 1 | .25 |
-| board (the default: lit, then straight to ink, carried far) | 29 m | 29 m | 160 m | .51 | 1 |
+| board (the default: lit, then straight to ink, carried far) | 29 m | 29 m | 160 m | .14 | .98 |
 | drawing | 8 m | 28 m | 85 m | .25 | .5 |
 | marks | — | — | 90 m | .4 | .4 |
 

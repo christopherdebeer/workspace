@@ -27,7 +27,7 @@ const auto = params.has('auto'), still = params.has('still');
 // ─── how far it's drawn: colour, then a wash of its tones in ink, then the marks alone on the paper, then the page ───
 const PRESETS: Record<string, Reach> = {
   picture: { colour: 85, wash: 110, ink: 130, soft: 4, frame: 1, depth: 0.25 },
-  board: { colour: 29, wash: 29, ink: 160, soft: 3, frame: 0.51, depth: 1 },
+  board: { colour: 29, wash: 29, ink: 160, soft: 3, frame: 0.14, depth: 0.98 },
   drawing: { colour: 8, wash: 28, ink: 85, soft: 2.5, frame: 0.25, depth: 0.5 },
   marks: { colour: 0, wash: 0, ink: 90, soft: 2, frame: 0.4, depth: 0.4 },
 };

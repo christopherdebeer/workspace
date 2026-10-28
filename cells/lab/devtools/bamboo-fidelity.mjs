@@ -26,7 +26,7 @@ await withWood(async (lab) => {
     shots.push([join(CELL, 'devtools/bamboo', s.target), file, s.title]);
     await p.close();
   }
-  const page = await lab.browser.newPage({ viewport: { width: 2400, height: 1100 } });
+  const page = await lab.browser.newPage({ viewport: { width: 2400, height: 760 } });
   const img = (f) => `data:image/${f.endsWith('png') ? 'png' : 'jpeg'};base64,${readFileSync(f).toString('base64')}`;
   await page.setContent(`<style>body{margin:0;background:#efe6d2;font:600 15px Georgia,serif;color:#2a251e;display:flex;gap:26px;padding:14px}.pair{display:flex;gap:6px;flex-direction:column}.imgs{display:flex;gap:6px}img{height:700px;display:block}</style>${shots.map(([t, r, n]) => `<div class="pair"><div class="imgs"><img src="${img(t)}"><img src="${img(r)}"></div><div>${n} · board | drawing</div></div>`).join('')}`);
   await page.waitForTimeout(300);

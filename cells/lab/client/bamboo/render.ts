@@ -515,7 +515,7 @@ export class Renderer {
   private vao: WebGLVertexArrayObject;
   readonly clean: boolean; readonly marks: number;
   /** how far the drawing reaches (see the head of this file) */
-  reach: Reach = { colour: 29, wash: 29, ink: 160, soft: 3, frame: 0.51, depth: 1 };
+  reach: Reach = { colour: 29, wash: 29, ink: 160, soft: 3, frame: 0.14, depth: 0.98 };
   /** culms in whole up to / gone by: through the ink's band */
   private get pick() { return [this.reach.ink * 0.35, this.reach.ink * 0.85]; }
   private shadowTex: WebGLTexture | null = null; private shadowFbo: WebGLFramebuffer | null = null; private lightVP: number[] = new Array(16).fill(0); readonly shadows: boolean;
