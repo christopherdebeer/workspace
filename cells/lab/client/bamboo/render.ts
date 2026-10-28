@@ -21,7 +21,7 @@
  * its foot; the ground goes leaf by fallen leaf, the bare earth between them first, its edge dragged dry across the
  * slope. Where a thing's colour has gone its ink is heavier, as a drawing's line carries what the colour did.
  *
- * `?clean`: no shafts, paper grain or strokes at speed. `?marks=0`: the picture without its ink.
+ * `?clean`: no shafts or paper grain. `?marks=0`: the picture without its ink.
  */
 import { type Chunk, CHUNK, CN, CELL, HALF } from './world';
 
@@ -29,7 +29,7 @@ export interface Frame {
   eye: [number, number, number]; look: [number, number, number]; fov: number; t: number;
   /** a gust: its direction (x, z), where its front is along that direction, how strong (0..1) */
   gust: [number, number, number, number];
-  /** how fast you're going (m/s), for the strokes at the frame's edges */
+  /** how fast you're going (m/s): the view widens with it */
   speed?: number;
   /** the head's roll (radians): leaning into a turn, swaying with the stride */
   roll?: number;
@@ -75,7 +75,7 @@ float bandAt(vec3 p) {
   vec4 cp = uVP * vec4(p, 1.);
   if (cp.w < .05) return bw;
   vec2 n = cp.xy / cp.w; n.y += .06;
-  float sc = length(n * vec2(1., .86)) + uFrame.w * smoothstep(4., 45., d) - .38 * (1. - smoothstep(1.5, 9., d));
+  float sc = length(n * vec2(1., .86)) + uFrame.w * smoothstep(4., 45., d) - 1.1 * (1. - smoothstep(2., 11., d));
   float bf = max(0., .6 + (sc - uFrame.x) * 4.6);
   return max(bw, bf) + smoothstep(8., 45., uEye.y - p.y) * 1.5;
 }
@@ -189,9 +189,11 @@ in vec3 vW; in vec3 vN; in float vY; in float vQ; in float vU; in vec3 vI; flat 
 uniform float uMarks;
 void main() {
   vec3 N = normalize(vN), V = normalize(uEye - vW);
-  // (its top goes first, up into the paper, as a long stroke runs out)
-  float drawn = vBand + smoothstep(4., vI.z, vY) * .9;
   float age = vI.x, f = fract(vQ), dist = distance(vW, uEye);
+  // (its top goes first, up into the paper, an internode at a time (each whole, from the node below it), as a brush
+  // lifts at a node; never fading along one)
+  float yNode = vY - f * fwidth(vY) / max(fwidth(vQ), 1e-4);
+  float drawn = vBand + smoothstep(4., vI.z, yNode) * .9 + (h21(vec2(floor(vQ), vI.y * 17.)) - .5) * .25;
   // (the culm's own green: olive-celadon when young, duller and greyer with age, darker low down)
   vec3 young = vec3(.56, .63, .4), old = vec3(.58, .58, .44);
   vec3 alb = mix(young, old, age) * mix(.78, 1., smoothstep(0., 2.5, vY));
@@ -309,7 +311,7 @@ void main() {
   vec3 c = show(lit(alb, N, vW, .2, .9));
   // (the marks: on the rock, strokes down its fall, broken; the trail's edges, broken; each near fallen leaf's edge)
   float hk = abs(fract(across * 1.3) - .5), hw = max(.03, fwidth(across * 1.3) * .8);
-  float hatch = (1. - smoothstep(hw, hw * 2., hk)) * step(.45, vn(vec2(floor(across * 1.3) * 3.1, vW.y * .7))) * smoothstep(.5, .9, vRock) * .8;
+  float hatch = (1. - smoothstep(hw, hw * 2., hk)) * step(.45, vn(vec2(floor(across * 1.3) * 3.1, vW.y * .7))) * smoothstep(.5, .9, vRock) * .8 * (1. - smoothstep(.12, .3, fwidth(across * 1.3)));
   float e = abs(vD - ${(HALF * 1.02).toFixed(2)}), fw = max(.012, fwidth(vD) * .8);
   float edge = (1. - smoothstep(fw * .6, fw * 1.4, e)) * step(.5, vn(vW.xz * 1.3 + 3.)) * .75 * smoothstep(1.5, 4., dist);
   float mark = max(max(hatch, edge), leafMark * .55) * uMarks;
@@ -398,7 +400,7 @@ precision highp float;
 in vec2 vUV; out vec4 o;
 uniform sampler2D uC; uniform sampler2D uA; uniform sampler2D uZ;
 uniform vec2 uRes; uniform float uNear; uniform float uFar; uniform float uPx;
-uniform vec3 uPaper; uniform vec3 uInk; uniform vec3 uSunUV; uniform float uClean; uniform float uMarks; uniform float uSpeed;
+uniform vec3 uPaper; uniform vec3 uInk; uniform vec3 uSunUV; uniform float uClean; uniform float uMarks;
 uniform vec4 uReach;
 ${NOISE}
 float lz(vec2 p) { float d = texture(uZ, p).r; return uNear * uFar / (uFar - d * (uFar - uNear)); }
@@ -412,9 +414,12 @@ void main() {
     vec2 px = uPx / uRes;
     for (int k = 0; k < 8; k++) {
       float ang = float(k) * .7854; vec2 o2 = vec2(cos(ang), sin(ang)) * px * (k % 2 == 0 ? 1. : 1.41);
-      vec2 q = vUV + o2; float zq = lz(q); vec4 Aq = texture(uA, q);
+      vec2 q = vUV + o2; float zq = lz(q), zo = lz(vUV - o2); vec4 Aq = texture(uA, q);
       vec4 F = z < zq ? A : Aq;
-      float rel = abs(zq - z) / min(z, zq);
+      // (against where the surface here would run on to: 1/z is straight across a plane, so a slope seen edge-on isn't
+      // a jump)
+      float zp = 1. / max(2. / z - 1. / zo, 1e-5);
+      float rel = min(abs(zq - z), abs(zq - zp)) / min(z, zq);
       float dj = smoothstep(.05, .14, rel);
       float kj = abs(Aq.x - A.x) > .05 && min(Aq.x, A.x) > .15 && !(min(Aq.x, A.x) < .22 && max(Aq.x, A.x) < .22) ? .8 : 0.;
       if (F.x < .15) continue;
@@ -438,12 +443,6 @@ void main() {
     col = mix(col, vec3(1., .95, .8), clamp(shaft * .5 * C.a, 0., .6));
   }
   col = mix(col, uInk, clamp(ink, 0., 1.) * .9);
-  // (going fast: dry strokes at the frame's edges, a brush dragged along the way the world streams past)
-  if (uSpeed > 3. && uClean < .5) {
-    vec2 q = (vUV - vec2(.5, .48)) * vec2(uRes.x / uRes.y, 1.); float r = length(q), a = atan(q.y, q.x);
-    float st = smoothstep(.6, .82, vn(vec2(a * 60., r * 3.))) * smoothstep(.4, .64, r);
-    col = mix(col, paper, st * smoothstep(3., 9., uSpeed) * .55);
-  }
   o = vec4(col, 1.);
 }`;
 
@@ -721,7 +720,7 @@ export class Renderer {
     gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, this.texZ); gl.uniform1i(u('uZ'), 2);
     gl.uniform2fv(u('uRes'), [w, h]); gl.uniform1f(u('uNear'), near); gl.uniform1f(u('uFar'), far); gl.uniform1f(u('uPx'), Math.max(1, h / 900));
     gl.uniform3fv(u('uPaper'), [0.937, 0.902, 0.824]); gl.uniform3fv(u('uInk'), [0.13, 0.12, 0.105]); gl.uniform3fv(u('uSunUV'), this.sunUV);
-    gl.uniform1f(u('uClean'), this.clean ? 1 : 0); gl.uniform1f(u('uMarks'), this.marks); gl.uniform1f(u('uSpeed'), f.speed ?? 0);
+    gl.uniform1f(u('uClean'), this.clean ? 1 : 0); gl.uniform1f(u('uMarks'), this.marks);
     gl.uniform4fv(u('uReach'), [this.reach.colour, this.reach.wash, this.reach.ink, this.reach.soft]);
     this.attr(0, this.vbo.screen.buf, 2, 2, 0);
     gl.drawArrays(gl.TRIANGLES, 0, 3);

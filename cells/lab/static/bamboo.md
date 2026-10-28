@@ -10,7 +10,7 @@ A run through a wild moso bamboo grove on an endless mountainside, drawn as a li
 - **Drag left and right to turn**, up and down to look. Arrow keys work too.
 - **You never have to pick your way.** Each moment the run takes the clearest way near where you're heading: no culm in its path for five metres, no rock face to climb, no drop too far to take. It weaves you between the culms. The grove has its own runs, winding lanes where it's thinner (the ways a deer would take), and the run finds them.
 - **The ground sets the pace**: uphill slows you, downhill quickens you.
-- **It feels its speed**: the head rises and falls with each stride and sways a little; you lean into a turn; the view widens as you go; and at a run, dry strokes drag at the frame's edges.
+- **It feels its speed**: the head rises and falls with each stride and sways a little; you lean into a turn; the view widens the faster you go.
 - **The sound comes with your first touch**: your footfalls (litter and earth; stone on a stair; a thud when you land), the air past your ears rising with your speed, and the wind in the leaves when a gust comes through.
 
 ## What you meet
@@ -99,6 +99,6 @@ The look was found by image generation first (`devtools/bamboo/explore.md`: thre
 - `auto`: run on by itself, wandering.
 - `t=<seconds>` and `still`: time held.
 - `fov=<degrees>`.
-- `clean`: without the shafts, the paper's grain and the strokes at speed.
+- `clean`: without the shafts and the paper's grain.
 - `marks=0`: the picture without its ink.
 - `mute`: no sound.
