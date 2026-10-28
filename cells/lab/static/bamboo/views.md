@@ -18,7 +18,7 @@ Made by `node cells/lab/views.mjs bamboo` from `client/bamboo/views.mjs`. The RE
 ![Drawing: lit close (8 m), laid flat in its own colours to 28 m, then the marks alone on the paper](v-drawing.jpg)
 ![Marks only: no colour at all: the culms as paper, their outlines and node ticks; the sprays as brush strokes; the litter as fine leaf marks](v-marks.jpg)
 ![Picture: lit far, flat colour and ink beyond it](v-picture.jpg)
-![The frame drawn out: the page closing in tight from the frame’s edges (`frame=0.1`): each thing there goes to its ink whole, far ones first, the ground leaf by leaf, the culm beside you holding on](v-frame.jpg)
+![The frame drawn out: the page closing in tight round the focus (`frame=0.1`): out to every edge, each thing goes to its ink whole, the ground at your feet leaf by leaf, the canopy overhead spray by spray](v-frame.jpg)
 
 ## Looks
 

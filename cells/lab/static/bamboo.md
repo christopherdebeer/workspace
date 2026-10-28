@@ -69,9 +69,9 @@ It isn't a mask laid over the picture: it's how each thing is drawn. Each thing 
 How far drawn a thing is, is the further of two things:
 
 - **in the world**: how far it is from the eye, `colour` (lit to), `wash` (flat to) and `ink` (marks to) metres;
-- **in the frame**: how near the frame's edge it stands, so the outer edges are paper as a sheet is left bare round its picture. Far things go sooner there than near ones (`depth`), so the page comes in round what's near the eye, and never as one shape. `frame` sets how far in it closes (0 tight … 1 not at all).
+- **in the frame**: how far it is from the **focus**, the thing straight ahead the eye meets (the first culm across your line, or the ground), at its distance. Across the frame, out to every edge of it (top and bottom as well as the sides), and in depth: things much nearer than the focus (the ground at your feet) or much farther go sooner. The frame takes a thing as far as its ink; only out toward the frame's corners is it the bare page. `frame` sets how far round the focus the colour holds (0 tight … 1 wide), `depth` how much sooner things nearer or farther than the focus go.
 
-So a culm, a spray or a stone changes whole, never cut by a line across it; a culm's top goes before its foot; a spray going out stays as its blades in ink. The ground goes leaf by fallen leaf, the bare earth between them first, its edge dragged dry across the slope as a brush leaves it.
+So a spray or a stone changes whole, never cut by a line across it; a culm changes an internode at a time, each where it stands, its top going before its foot; a spray going out stays as its blades in ink. The ground goes leaf by fallen leaf, the bare earth between them first, its edge dragged dry across the slope as a brush leaves it.
 
 The 墨 button (bottom right) sets them: four presets, and a slider for each. The bands stay in order, and the address keeps what you set, so a drawing can be passed on.
 

@@ -105,6 +105,22 @@ const sound = (() => {
   };
 })();
 
+/** how far straight ahead the eye meets something: the first culm across its line, or the ground; the sky's far off */
+let focus = 0;
+function focusAt(eye: [number, number, number], yaw: number, pitch: number) {
+  const dx = Math.sin(yaw), dz = Math.cos(yaw), cp = Math.max(0.05, Math.cos(pitch)), sp = Math.sin(pitch), FAR = 45;
+  let best = FAR;
+  for (const c of me.culmsNear(eye[0], eye[2], FAR)) {
+    const rx = c.x - eye[0], rz = c.z - eye[2], along = rx * dx + rz * dz;
+    if (along > 0.3 && Math.abs(rx * dz - rz * dx) < c.r + 0.04) best = Math.min(best, along / cp);
+  }
+  for (let d = 0.5; d < best; d += 0.5) {
+    const x = eye[0] + dx * cp * d, z = eye[2] + dz * cp * d;
+    if (eye[1] + sp * d < me.groundAt(x, z)) return d;
+  }
+  return best;
+}
+
 // ─── input: hold to run; drag across to turn, up and down to look ───
 let drag: { x: number; y: number; id: number } | null = null, dragTurn = 0;
 canvas.addEventListener('pointerdown', (e) => { canvas.setPointerCapture(e.pointerId); drag = { x: e.clientX, y: e.clientY, id: e.pointerId }; held = true; sound.start(); if (hint) hint.classList.add('gone'); });
@@ -205,7 +221,10 @@ function frame(now: number) {
   roll = roll * 0.9 + (-me.turn * 0.5 * s + Math.sin(me.phase * Math.PI) * 0.012 * s) * 0.1;
   const portrait = innerHeight > innerWidth, base = Number(params.get('fov')) || (portrait ? 74 : 60);
   const fov = (base + 12 * s) * Math.PI / 180;
-  const f: Frame = { eye, look, fov, t, gust: [gust.dir[0], gust.dir[1], gust.front, gust.strength], speed: me.v, roll };
+  // (the focus: what's straight ahead, the first culm or the ground the eye meets; the page comes in round it)
+  const target = focusAt(eye, yaw, p);
+  focus = still || focus === 0 ? target : focus + (target - focus) * Math.min(1, dt * 3);
+  const f: Frame = { eye, look, fov, t, gust: [gust.dir[0], gust.dir[1], gust.front, gust.strength], speed: me.v, roll, focus };
   renderer.draw(f, canvas.width, canvas.height);
   const ms = performance.now() - now;
   if (!still && !spot) { if (ms > 28 && scale > 0.6) scale -= 0.05; else if (ms < 12 && scale < 1) scale += 0.02; }

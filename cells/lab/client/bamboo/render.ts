@@ -15,7 +15,7 @@
  *
  * **The reach** (`Renderer.reach`, set by `?colour=&wash=&ink=&frame=&depth=` or the page's own control): not a mask over
  * the picture but a quality of each thing in it. Each thing asks how far drawn it is (`bandAt`: by how far it is from
- * the eye, and by how near the frame's edge it stands, far things sooner than near ones, whichever is further), once for
+ * the eye, and by how far it stands from the focus, across the frame and in depth, whichever is further), once for
  * the whole of it, give or take its own pick; and is drawn in three stages: **lit**, then laid **flat** in its own colour
  * (the light gone), then its **ink** alone on the paper. A culm, a spray, a stone changes whole; a culm's top goes before
  * its foot; the ground goes leaf by fallen leaf, the bare earth between them first, its edge dragged dry across the
@@ -33,10 +33,12 @@ export interface Frame {
   speed?: number;
   /** the head's roll (radians): leaning into a turn, swaying with the stride */
   roll?: number;
+  /** how far off the focus is (metres): what's straight ahead, that the page comes in round */
+  focus?: number;
 }
 /** how far the drawing reaches: in the world (metres: colour to, wash to, ink to, how soft each band is), and in the
- * frame (`frame`: 0 the page closing in tight from the frame's edges … 1 not at all; `depth`: how much sooner far things
- * go to the page there than near ones) */
+ * frame (`frame`: 0 the page closing in tight round the focus … 1 hardly at all; `depth`: how much sooner things nearer or farther than the focus
+ * go there) */
 export interface Reach { colour: number; wash: number; ink: number; soft: number; frame: number; depth: number }
 
 const NOISE = `
@@ -49,7 +51,7 @@ const COMMON = `#version 300 es
 precision highp float; precision highp int; precision highp sampler2DShadow;
 uniform mat4 uVP; uniform vec3 uEye; uniform float uTime; uniform vec3 uSun; uniform vec4 uGust;
 uniform vec4 uReach; // colour to, wash to, ink to, softness (metres)
-uniform vec4 uFrame; // where the frame starts drawing out (from the middle, 0…~1.6), -, -, how much sooner far things go
+uniform vec4 uFrame; // where the frame starts drawing out (from the focus, 0…~1.6), the focus's distance, -, how much sooner things nearer or farther than it go
 ${NOISE}
 // (how far a culm's top is blown, per metre of its height: a slow sway of its own, and the gust's front passing)
 vec2 windAt(vec2 p, float phase) {
@@ -66,7 +68,8 @@ vec3 culmAt(vec3 b, float h, vec2 lean, float phase, float y) {
 }
 // (how far along from the picture to the page a point is: 0 the picture whole, .6 its light gone (its own colour left),
 // 1.8 its colour gone (its ink left), 2.9 its ink gone (the page). By its distance in the world, and by where it falls in
-// the frame (nearer things holding on toward the frame's edge, far things going sooner), whichever is further along. A
+// the frame: how far it is from the focus (what's straight ahead, at its distance) across the frame, out to every edge
+// of it, and in depth, nearer or farther than the focus, whichever is further along. A
 // thing asks this once, at a point of its own, so it's drawn one way whole; never cut across by a line on the screen)
 float bandAt(vec3 p) {
   float d = distance(p, uEye);
@@ -74,9 +77,10 @@ float bandAt(vec3 p) {
   float bw = d <= C ? .6 * d / C : d <= W ? .6 + 1.2 * (d - C) / (W - C) : 1.8 + 1.1 * (d - W) / (I - W);
   vec4 cp = uVP * vec4(p, 1.);
   if (cp.w < .05) return bw;
-  vec2 n = cp.xy / cp.w; n.y += .06;
-  float sc = length(n * vec2(1., .86)) + uFrame.w * smoothstep(4., 45., d) - 1.1 * (1. - smoothstep(2., 11., d));
-  float bf = max(0., .6 + (sc - uFrame.x) * 4.6);
+  vec2 n = cp.xy / cp.w;
+  float sc = length(n) + uFrame.w * .4 * abs(log2(max(d, .3) / max(uFrame.y, 1.))) * .8;
+  // (the frame takes a thing to its ink; only out toward the frame's corners to the bare page)
+  float bf = min(max(0., .6 + (sc - uFrame.x) * 2.8), 2.4 + max(0., length(n) - 1.) * 3.);
   return max(bw, bf) + smoothstep(8., 45., uEye.y - p.y) * 1.5;
 }
 // (the stages: the light first, then the colour, then the ink)
@@ -164,7 +168,7 @@ vec3 own(vec3 alb) { return show(lin(alb) * vec3(1.25, 1.2, 1.1)); }
 const CULM_VS = COMMON + `
 layout(location = 0) in vec2 aUV;
 layout(location = 1) in vec4 iA; layout(location = 2) in vec4 iB; layout(location = 3) in vec4 iC;
-out vec3 vW; out vec3 vN; out float vY; out float vQ; out float vU; out vec3 vI; flat out float vBand;
+out vec3 vW; out vec3 vN; out float vY; out float vQ; out float vU; out vec3 vI; flat out float vBand; flat out float vJit;
 uniform vec2 uPick; // drawn whole up to, gone by (metres)
 uniform mat4 uLightVP; uniform int uDepth;
 void main() {
@@ -181,11 +185,12 @@ void main() {
   vec3 n = vec3(cos(a), 0., sin(a));
   vW = c + n * rr; vN = n; vY = y; vQ = q; vU = a * r; vI = vec3(iC.x, phase, h);
   // (how far it's drawn: asked once, at eye height on it, each culm a little its own way)
-  vBand = uDepth == 1 ? 0. : bandAt(culmAt(b, h, lean, phase, min(1.6, h))) + (fract(pick * 7.31) - .5) * .8;
+  vJit = (fract(pick * 7.31) - .5) * .8;
+  vBand = uDepth == 1 ? 0. : bandAt(culmAt(b, h, lean, phase, min(1.6, h))) + vJit;
   gl_Position = (uDepth == 1 ? uLightVP : uVP) * vec4(vW, 1.);
 }`;
 const CULM_FS = COMMON + LIGHT + OUT + `
-in vec3 vW; in vec3 vN; in float vY; in float vQ; in float vU; in vec3 vI; flat in float vBand;
+in vec3 vW; in vec3 vN; in float vY; in float vQ; in float vU; in vec3 vI; flat in float vBand; flat in float vJit;
 uniform float uMarks;
 void main() {
   vec3 N = normalize(vN), V = normalize(uEye - vW);
@@ -193,7 +198,8 @@ void main() {
   // (its top goes first, up into the paper, an internode at a time (each whole, from the node below it), as a brush
   // lifts at a node; never fading along one)
   float yNode = vY - f * fwidth(vY) / max(fwidth(vQ), 1e-4);
-  float drawn = vBand + smoothstep(4., vI.z, yNode) * .9 + (h21(vec2(floor(vQ), vI.y * 17.)) - .5) * .25;
+  // (and each internode where it stands in the frame, so the page comes in on a culm from the top of the frame too)
+  float drawn = max(vBand + smoothstep(4., vI.z, yNode) * .9, bandAt(vW + vec3(0., yNode - vY, 0.)) + vJit) + (h21(vec2(floor(vQ), vI.y * 17.)) - .5) * .25;
   // (the culm's own green: olive-celadon when young, duller and greyer with age, darker low down)
   vec3 young = vec3(.56, .63, .4), old = vec3(.58, .58, .44);
   vec3 alb = mix(young, old, age) * mix(.78, 1., smoothstep(0., 2.5, vY));
@@ -244,7 +250,8 @@ void main() {
   vW = anchor + right * aUV.x * size + up * (aUV.y - .75) * size;
   vUV = aUV + .5; vSeed = iD.z; vN = normalize(cross(right, up));
   // (a spray's drawn as its culm is at eye height, a little further along for being high, and each its own way)
-  vBand = bandAt(culmAt(b, h, lean, phase, min(1.6, h))) + (fract(pick * 7.31) - .5) * .8 + smoothstep(4., h, sy) * .6 + (iD.z - .5) * .4;
+  // (and where it stands in the frame itself, so the canopy at the top of the frame goes to the page too)
+  vBand = max(bandAt(culmAt(b, h, lean, phase, min(1.6, h))) + (fract(pick * 7.31) - .5) * .8 + smoothstep(4., h, sy) * .6, bandAt(anchor)) + (iD.z - .5) * .4;
   gl_Position = uVP * vec4(vW, 1.);
 }`;
 const SPRAY_FS = COMMON + LIGHT + OUT + `
@@ -273,7 +280,7 @@ void main() {
   vec3 c = show(lit(alb, N, vW, .6, .9) + lin(vec3(.9, .92, .42)) * back * 1.2 * uSunC);
   // (the marks: each blade's edge near; where the colour's given out, the blade filled in ink, as a brush lays it)
   float near = 1. - smoothstep(8., 26., distance(vW, uEye));
-  float mark = max((1. - smoothstep(.0, .3, rim)) * near * .85, (1. - colourOf(vBand)) * (.32 + .22 * best)) * uMarks;
+  float mark = max((1. - smoothstep(.0, .3, rim)) * near * .85, (1. - colourOf(vBand)) * (.22 + .16 * best)) * uMarks;
   emit(c, own(alb), vBand, .6, near, mark, vW);
 }`;
 
@@ -515,6 +522,8 @@ export class Renderer {
   private vao: WebGLVertexArrayObject;
   readonly clean: boolean; readonly marks: number;
   /** how far the drawing reaches (see the head of this file) */
+  /** the focus's distance, this frame */
+  focus = 15;
   reach: Reach = { colour: 29, wash: 29, ink: 160, soft: 3, frame: 0.14, depth: 0.98 };
   /** culms in whole up to / gone by: through the ink's band */
   private get pick() { return [this.reach.ink * 0.35, this.reach.ink * 0.85]; }
@@ -622,7 +631,7 @@ export class Renderer {
     gl.uniformMatrix4fv(u('uVP'), false, vp); gl.uniform3fv(u('uEye'), f.eye); gl.uniform1f(u('uTime'), f.t); gl.uniform3fv(u('uSun'), this.sunDir);
     gl.uniform4fv(u('uGust'), f.gust); gl.uniform3fv(u('uSunC'), [3.0, 2.45, 1.6]); gl.uniform3fv(u('uSky'), [0.62, 0.68, 0.72]); gl.uniform1f(u('uOpen'), 0);
     gl.uniform4fv(u('uReach'), [this.reach.colour, this.reach.wash, this.reach.ink, this.reach.soft]); gl.uniform2fv(u('uPick'), this.pick); gl.uniform1f(u('uMarks'), this.marks); gl.uniform3fv(u('uRight'), right);
-    { const c0 = 0.3 + this.reach.frame * 1.3; gl.uniform4fv(u('uFrame'), [c0, 0, 0, this.reach.depth]); }
+    { const c0 = 0.3 + this.reach.frame * 1.3; gl.uniform4fv(u('uFrame'), [c0, this.focus, 0, this.reach.depth]); }
     gl.uniformMatrix4fv(u('uLightVP'), false, this.lightVP); gl.uniform1i(u('uShadow'), 3); gl.uniform1f(u('uShadowOn'), this.shadows ? 1 : 0); gl.uniform1i(u('uDepth'), 0);
   }
   private attr(loc: number, buf: WebGLBuffer, size: number, stride: number, off: number, div = 0) {
@@ -631,6 +640,7 @@ export class Renderer {
   private clearAttrs() { const gl = this.gl; for (let i = 0; i < 6; i++) { gl.disableVertexAttribArray(i); gl.vertexAttribDivisor(i, 0); } }
 
   draw(f: Frame, w: number, h: number) {
+    this.focus = f.focus ?? 15;
     const gl = this.gl;
     this.targets(w, h);
     const fw = norm([f.look[0] - f.eye[0], f.look[1] - f.eye[1], f.look[2] - f.eye[2]]), side = norm(cross(fw, [0, 1, 0])), r = f.roll ?? 0;
