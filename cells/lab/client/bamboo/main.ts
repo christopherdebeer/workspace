@@ -67,6 +67,7 @@ const EYE = 1.62;
 let held = false, pitch = -0.06, roll = 0;
 const keys = new Set<string>();
 renderer.allStrokes = params.get('strokes') === 'all';
+renderer.bare = params.get('culms') === '0';
 const stream = (budget: number) => me.stream(me.x, me.z, budget, (k, c) => renderer.add(k, c, strokes(world, c)), (k) => renderer.drop(k));
 
 /** a trail near the origin to start on, facing along it */

@@ -201,7 +201,11 @@ void main() {
   vW = c + n * rr; vN = n; vY = y; vQ = q; vU = a * r; vI = vec3(iC.x, phase, h);
   // (how far it's drawn: asked once, at eye height on it, each culm a little its own way)
   vJit = (fract(pick * 7.31) - .5) * 1.1;
-  vBand = uDepth == 1 ? 0. : bandAt(culmAt(b, h, lean, phase, min(1.6, h))) + vJit;
+  // (how far drawn the culm is, whole: its most-drawn point along its length, so one seen from its foot looking up, or
+  // only its top in the frame, is still drawn)
+  float bb = 9.;
+  for (int k = 0; k < 5; k++) bb = min(bb, bandAt(culmAt(b, h, lean, phase, min(1.6, h) + (h - min(1.6, h)) * float(k) / 4.)));
+  vBand = uDepth == 1 ? 0. : bb + vJit;
   gl_Position = (uDepth == 1 ? uLightVP : uVP) * vec4(vW, 1.);
 }`;
 const CULM_FS = COMMON + LIGHT + OUT + `
@@ -252,7 +256,10 @@ void main() {
   // gone, so the drawing is a few verticals and the space between them, not a fence)
   float worth = (1. - smoothstep(6., 28., dist)) * .8 + .12;
   if (whole > 1.7 && h21(vec2(vI.y * 3.7, 5.3)) > worth * (2.9 - whole) / 1.1 * 1.6) discard;
-  emit(c, own(alb), drawn, .4, allow, mark, vW);
+  // (a culm goes from the page whole, by its own reach; along it, as its internodes go further out, its colour gives
+  // way and its ink thins, a brush lifting, never a cylinder cut off where an internode stops)
+  if (inkOf(vBand) < .04) discard;
+  emit(c, own(alb), min(drawn, 2.84), .4, allow, mark, vW);
 }`;
 const DEPTH_FS = `#version 300 es
 precision highp float;
@@ -652,6 +659,8 @@ export class Renderer {
   readonly clean: boolean; readonly marks: number;
   /** `?strokes=all`: every stroke the land has, at full weight, none left out (to see what's laid) */
   allStrokes = false;
+  /** `?culms=0`: the land alone, no culms or sprays (the gates' hard test: does the mountain and its path read?) */
+  bare = false;
   /** how far the drawing reaches (see the head of this file) */
   /** the focus's distance, this frame */
   focus = 15;
@@ -844,7 +853,7 @@ export class Renderer {
       gl.disable(gl.BLEND); gl.blendEquation(gl.FUNC_ADD); gl.depthMask(true); gl.disable(gl.POLYGON_OFFSET_FILL);
     }
     // ─── the culms: finer near, coarser further ───
-    {
+    if (!this.bare) {
       use('culm');
       for (const { c, d } of inRange(this.pick[1])) {
         if (!c.nCulms) continue;
@@ -855,7 +864,7 @@ export class Renderer {
       }
     }
     // ─── the sprays ───
-    {
+    if (!this.bare) {
       use('spray');
       this.attr(0, this.vbo.quad.buf, 2, 2, 0);
       for (const { c } of inRange(this.pick[1] - 8)) {

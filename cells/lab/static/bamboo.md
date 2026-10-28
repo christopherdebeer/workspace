@@ -109,4 +109,5 @@ The look is now hill-climbed against five target studies (`devtools/bamboo/targe
 - `clean`: without the shafts and the paper's grain.
 - `marks=0`: the picture without its ink.
 - `strokes=all`: every stroke the land has, at full weight, none left out (to see what's laid).
+- `culms=0`: the land alone, no bamboo (the gates' hard test: does the mountain and its path still read?).
 - `mute`: no sound.
