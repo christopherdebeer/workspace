@@ -10,7 +10,8 @@
  *   **hachure**s down the cut, in small groups;
  * - **cliff** (where the land breaks steep): its **rim** along the top, and **face** strokes down its fall, broken;
  * - **slope**: a few **contour**s along the hillside, broken, so the lie of the land holds on the paper;
- * - **stone**: its **contact** with the ground, on its downhill side.
+ * - **stone**: its **contact** with the ground, on its downhill side;
+ * - **root** (across a trail): its line, along its far side as the eye sees it, thinning to its ends.
  *
  * Each mark carries its family and weight, how much of it holds over the picture while the picture's in colour (a rim
  * does; a contour's only for the paper), its pick (so where the drawing thins, whole marks are left out, never faded)
@@ -19,7 +20,7 @@
 import { hash } from '../kit/rng';
 import { type Chunk, type World, CHUNK, CN, CELL, HALF, BANK } from './world';
 
-export const FAM = { edge: 0, rim: 1, hachure: 2, face: 3, contour: 4, string: 5, nosing: 6, contact: 7 } as const;
+export const FAM = { edge: 0, rim: 1, hachure: 2, face: 3, contour: 4, string: 5, nosing: 6, contact: 7, root: 8 } as const;
 /** a mark's vertex: point (3), the way it runs (3), half-width and taper, side (-1, 1) and along (0..1), family + weight, how
  * much it holds over colour, pick, anchor (3) */
 export const STROKE_STRIDE = 16;
@@ -237,6 +238,16 @@ export function strokes(world: World, c: Chunk): Float32Array {
     const pts: V3[] = [], R = st.r * 0.95, span = 1.6 + r() * 1.2;
     for (let q = 0; q <= 8; q++) { const a = a0 - span / 2 + (span * q) / 8, x = st.x + Math.cos(a) * R, z = st.z + Math.sin(a) * R * st.flat * 1.2; pts.push([x, yAt(x, z) + 0.04, z]); }
     ribbon(out, pts, 0.07, FAM.contact, 0.6 + r() * 0.3, 0.7, r() * 0.6);
+  }
+  // ─── roots: a line along each, at its top, thinning into the earth at its ends ───
+  for (const q of c.roots) {
+    const r = rng(s, Math.round(q.x * 10), Math.round(q.z * 10), 81), ca = Math.cos(q.yaw), sa = Math.sin(q.yaw), pts: V3[] = [];
+    for (let k = 0; k <= 6; k++) {
+      const u = k / 6 * 2 - 1, along = u * q.len * 0.5, bow = Math.sin(u * 2.4 + q.moss * 0.37 * 9) * 0.12;
+      const lx = along, lz = bow, x = q.x + ca * lx + sa * lz, z = q.z - sa * lx + ca * lz;
+      pts.push([x, q.y + q.r * (0.75 * (1 - u * u * 0.6) + (1 - u * u) * 0.4), z]);
+    }
+    ribbon(out, pts, 0.05, FAM.root, 0.6 + r() * 0.2, 0.55, r() * 0.5);
   }
   return new Float32Array(out);
 }

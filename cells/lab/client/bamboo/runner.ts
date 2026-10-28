@@ -4,7 +4,8 @@
  * - **the lope**: about 7 m/s, gathering and easing off smoothly; slower uphill, quicker down, a little quicker on a trail;
  * - **the weave**: each moment, of the ways within thirty degrees or so of where you're heading, the one that's clearest
  *   (no culm in its path for nine metres, a stand seen coming and gone round; no rock face to climb; no drop too far to take) and nearest your heading;
- * - **the trail**: running more or less along one, it turns you with it, until you turn off it;
+ * - **the trail**: one near draws you onto it, and running more or less along one, it turns you with it, until you turn
+ *   off it;
  * - **the drop**: off an edge (half a metre or more, at a run) you're in the air, and land with a dip; one of over three
  *   metres the run won't take: you stop at the rim;
  * - **the stride**: a footfall each half stride (shorter on a stair), handed out to be heard.
@@ -50,6 +51,8 @@ export class Runner {
     for (let a = -1; a <= 1; a++) for (let b = -1; b <= 1; b++) {
       const c = this.chunks.get(key(Math.floor(x / CHUNK) + a, Math.floor(z / CHUNK) + b)); if (!c) continue;
       for (let k = 0; k < c.tall; k++) { const q = c.culms[k]; if (Math.abs(q.x - x) < r && Math.abs(q.z - z) < r) out.push({ x: q.x, z: q.z, r: q.r }); }
+      // (and the bigger stones: gone round, as a culm is)
+      for (const q of c.stones) if (q.r > 0.5 && Math.abs(q.x - x) < r && Math.abs(q.z - z) < r) out.push({ x: q.x, z: q.z, r: q.r * 0.8 });
     }
     return out;
   }
@@ -67,11 +70,14 @@ export class Runner {
     // (the weave: the clearest way near your heading)
     const near = this.culmsNear(this.x, this.z, 10), here = this.groundAt(this.x, this.z);
     let best = this.heading, bestCost = 1e9;
+    // (a trail near enough draws you to it and along it: the way through's the way the eye wants to go)
+    const pull = q.trail && q.d < 16 && Math.abs(input.turn) < 1e-3;
     // (looking wider when the way ahead's barred: a rim or a face turns you along it)
     for (let a = -5; a <= 5 || (bestCost >= 60 && a <= 14); a++) {
       const k = a <= 5 ? a : (a % 2 ? 1 : -1) * (6 + Math.floor((a - 6) / 2)) ;
       const ang = this.heading + k * 0.11, dx = Math.sin(ang), dz = Math.cos(ang);
       let cost = Math.abs(k) * 0.5;
+      if (pull) cost += Math.min(6, this.world.trailNear(this.x + dx * 6, this.z + dz * 6).d) * 0.45;
       for (const c of near) {
         const rx = c.x - this.x, rz = c.z - this.z, al = rx * dx + rz * dz, lat = Math.abs(-rx * dz + rz * dx);
         if (al > 0 && al < 9 && lat < 0.42 + c.r) cost += (9 - al) * (al < 4 ? 1.4 : 0.6);

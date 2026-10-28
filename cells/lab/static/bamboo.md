@@ -17,16 +17,16 @@ A run through a wild moso bamboo grove on an endless mountainside, drawn as a li
 
 Mostly the grove. But now and then:
 
-- **a trail**: a sparse network of them crosses the mountain, running on from one stretch of it into the next and meeting here and there. Run onto one more or less along it and it carries you, turning with it, a little quicker, until you turn off it. Each is cut into the slope as a bench, the bank rising on its uphill side.
-- **a flight of steps**: where a trail climbs steeply (a cliff band, mostly), it's a flight of stones laid by hand, each its own width and a little off line and askew, boulders left standing beside it here and there as it was cut through them. Your stride shortens to the treads.
+- **a trail**: a sparse network of them crosses the mountain, each worn the way feet would rather go: routed over the land so it keeps to the contour and bends where the hill does, taking a slope on only where it must. Roots cross it here and there, from the bank side, half in the earth. Giants stand right at its edge; below it, where the hill falls away, the grove thins, so the way looks out. The trails run on from one stretch of the mountain into the next and meet here and there. A trail near draws you onto it; run along one and it carries you, turning with it, a little quicker, until you turn off it. Each is cut into the slope as a bench, the bank rising on its uphill side.
+- **a flight of steps**: where a trail climbs steeply (a cliff band, mostly), it's a flight of stones laid by hand, each its own width and a little off line and askew, boulders left standing beside it here and there as it was cut through them; where a flight turns, it turns round a great boulder on the inside of its bend. Your stride shortens to the treads.
 - **a cliff band**: here and there the rock breaks through and the land steps up five to nine metres along a winding rim. A rock face you can't climb (the run turns you along it, unless a trail's stair takes you up). Off its top, a drop of up to three metres you leap: you're in the air, and land with a dip. A bigger one stops you at the rim, with the valley beyond.
 - **a gust**: every so often one comes through the grove, and you see the tops bend over before it reaches you.
 
-In three minutes of running the run covers about a kilometre at a mean of 5.6 to 6.3 m/s, on a trail for a few per cent of it (`node cells/lab/devtools/bamboo-run.mjs [seconds] [seed]` checks that it never runs through a culm, never stalls for long, and keeps up its pace).
+In three minutes of running the run covers about a kilometre at a mean of 4.8 to 6 m/s (the mountain's steep), on a trail for a few per cent of it (`node cells/lab/devtools/bamboo-run.mjs [seconds] [seed]` checks that it never runs through a culm, never stalls for long, and keeps up its pace).
 
 ## The mountain
 
-Long slopes and ridges and the valleys between, endless (where a rim or a rock face bars the way ahead, the run looks wider and turns you along it): built where you are and a little way round, 32 m at a time, as you run, and let go behind you. The same seed is the same mountain wherever you go.
+Long steep-sided ridges and the valleys between (half the hillside steeper than one in three), endless (where a rim or a rock face bars the way ahead, the run looks wider and turns you along it): built where you are and a little way round, 32 m at a time, as you run, and let go behind you. The same seed is the same mountain wherever you go.
 
 ## The grove
 
@@ -91,10 +91,14 @@ The 墨 button (bottom right) sets them: four presets, and a slider for each. Th
 
 The look was found by image generation first (`devtools/bamboo/explore.md`: three rounds of prompts and what each taught). The reference frames are found on the mountain by what they need (`?ref=a`, the foot of a stair; `?ref=b`, a trail with a fall beside it; `?ref=c`, in the grove off the trails; `?ref=cliff`, a rim; `?ref=run`, mid-stride), and `node cells/lab/devtools/bamboo-fidelity.mjs` draws a, b and c and puts each beside its target. The views are made with `node cells/lab/views.mjs bamboo`.
 
+## The gates
+
+The look is now hill-climbed against five target studies (`devtools/bamboo/targets/`, and `gates.md` there for what each is judged by: the contour run, culm scale, ink reach, the stair, a gust), in gates: **0**, geometry and composition in plain colour with no marks; **1**, the drawing alone, which must still carry the route and the bank; **2**, the board as it's shown; **3**, motion and finish. `node cells/lab/devtools/bamboo-gates.mjs [gate…]` draws each target beside its pinned scene (`?cam=`, never found afresh) three ways: picture, ink only, board.
+
 ## Addresses
 
 - `seed=<n>`: the mountain.
-- `ref=a|b|c|cliff|run|up|gust`: a fixed frame.
+- `ref=a|b|c|cliff|run|up|gust`: a frame found on the mountain by what it needs; `cam=x,z,heading,pitch[,speed]`: one pinned exactly.
 - `reach=picture|board|drawing|marks`, or `colour=`, `wash=`, `ink=` and `soft=` (metres), `frame=` (0–1) and `depth=` (0–1.5): how far it's drawn (above).
 - `shadows=0`: no culm shadows (cheaper).
 - `auto`: run on by itself, wandering.

@@ -200,11 +200,11 @@ uniform float uMarks;
 void main() {
   vec3 N = normalize(vN), V = normalize(uEye - vW);
   float age = vI.x, f = fract(vQ), dist = distance(vW, uEye);
-  // (its top goes first, up into the paper, an internode at a time (each whole, from the node below it), as a brush
-  // lifts at a node; never fading along one)
+  // (how far drawn: an internode at a time, each whole, asked where it stands (from the node below it), so the page
+  // comes in on a culm wherever it crosses the frame; its top a little sooner, as a long stroke runs out; never fading
+  // along an internode)
   float yNode = vY - f * fwidth(vY) / max(fwidth(vQ), 1e-4);
-  // (and each internode where it stands in the frame, so the page comes in on a culm from the top of the frame too)
-  float drawn = max(vBand + smoothstep(4., vI.z, yNode) * .9, bandAt(vW + vec3(0., yNode - vY, 0.)) + vJit) + (h21(vec2(floor(vQ), vI.y * 17.)) - .5) * .25;
+  float drawn = bandAt(vW + vec3(0., yNode - vY, 0.)) + vJit + smoothstep(4., vI.z, yNode) * .35 + (h21(vec2(floor(vQ), vI.y * 17.)) - .5) * .25;
   // (the culm's own green: olive-celadon when young, duller and greyer with age, darker low down)
   vec3 young = vec3(.56, .63, .4), old = vec3(.58, .58, .44);
   vec3 alb = mix(young, old, age) * mix(.78, 1., smoothstep(0., 2.5, vY));
@@ -258,7 +258,7 @@ void main() {
   vUV = aUV + .5; vSeed = iD.z; vN = normalize(cross(right, up));
   // (a spray's drawn as its culm is at eye height, a little further along for being high, and each its own way)
   // (and where it stands in the frame itself, so the canopy at the top of the frame goes to the page too)
-  vBand = max(bandAt(culmAt(b, h, lean, phase, min(1.6, h))) + (fract(pick * 7.31) - .5) * .8 + smoothstep(4., h, sy) * .6, bandAt(anchor)) + (iD.z - .5) * .4;
+  vBand = bandAt(anchor) + (fract(pick * 7.31) - .5) * .6 + smoothstep(4., h, sy) * .3 + (iD.z - .5) * .4;
   gl_Position = uVP * vec4(vW, 1.);
 }`;
 const SPRAY_FS = COMMON + LIGHT + OUT + `
@@ -348,6 +348,11 @@ void main() {
   if (uKind == 1) {
     // (a step: the unit box set to its depth, width and drop, its front edge at the origin)
     p = vec3(p.x * iB.y, p.y * iB.z - iB.z, (p.z + .5) * iB.x);
+  } else if (uKind == 3) {
+    // (a root: the lump drawn out long and thin along x, bowed a little, its ends thinning into the earth)
+    float u = clamp(p.x / 1.7, -1., 1.), thin = 1. - u * u * .6;
+    p = vec3(p.x / 1.7 * iB.y * .5, p.y * iB.x * .75 * thin + (1. - u * u) * iB.x * .4, p.z * iB.x * thin + sin(u * 2.4 + iB.w * 9.) * .12);
+    n = normalize(vec3(n.x * .2, n.y, n.z));
   } else {
     p = vec3(p.x, p.y * iB.y, p.z) * iB.x; n = normalize(vec3(n.x, n.y / max(iB.y, .2), n.z));
   }
@@ -367,6 +372,12 @@ void main() {
   float moss = smoothstep(.2, .8, N.y) * smoothstep(.45, .7, n1 + vMoss * .3);
   vec3 alb = mix(stone, vec3(.4, .5, .22), moss * (uKind == 1 ? .4 : .85));
   float mark = 0.;
+  if (uKind == 3) {
+    // (a root: grey-brown bark, worn pale and smooth on top where it's trodden, moss low along it)
+    alb = mix(vec3(.45, .36, .27), vec3(.36, .3, .24), n1) * (.85 + .3 * n2);
+    alb = mix(alb, vec3(.66, .57, .45), smoothstep(.6, .95, N.y) * .5);
+    alb = mix(alb, vec3(.38, .47, .2), smoothstep(.3, .1, N.y) * smoothstep(.4, .7, n1 + vMoss * .4) * .6);
+  }
   if (uKind == 1) {
     // (a step: warm worn stone, each its own tone; the tread worn paler toward its middle and its front edge rounded
     // and lit; leaves lying on it toward its ends; moss in the joint at its back; the riser in its own shade)
@@ -474,7 +485,8 @@ void main() {
   vec3 toEye = normalize(uEye - aP), side = normalize(cross(aS, toEye) + vec3(1e-5));
   vec4 c0 = uVP * vec4(aP, 1.), c1 = uVP * vec4(aP + side * aW.x, 1.);
   float px = c0.w > .01 && c1.w > .01 ? length((c1.xy / c1.w - c0.xy / c0.w) * .5 * uRes) : 1.;
-  float k = min(5., max(1., least(fam) / max(px, 1e-3)));
+  // (and no wider than a brush lays it, however near: a stroke at your feet isn't a wedge)
+  float k = px < least(fam) ? min(5., least(fam) / max(px, 1e-3)) : min(1., least(fam) * 2.4 / px);
   vec3 p = aP + side * aW.x * aW.y * aT.x * k + toEye * min(.08, distance(uEye, aP) * .004);
   vAcross = aT.x; vW = p; vF = aF;
   float d = distance(aAnchor, uEye);
@@ -558,7 +570,7 @@ const cross = (a: number[], b: number[]) => [a[1] * b[2] - a[2] * b[1], a[2] * b
 const norm = (a: number[]) => { const l = Math.hypot(a[0], a[1], a[2]) || 1; return [a[0] / l, a[1] / l, a[2] / l]; };
 
 /** what's on the GPU for one chunk */
-interface Held { key: string; x: number; z: number; strokes: WebGLBuffer | null; nStrokes: number; ground: WebGLBuffer; culms: WebGLBuffer; nCulms: number; sprays: WebGLBuffer; nSprays: number; stones: WebGLBuffer; nStones: number; steps: WebGLBuffer; nSteps: number }
+interface Held { key: string; x: number; z: number; roots: WebGLBuffer; nRoots: number; strokes: WebGLBuffer | null; nStrokes: number; ground: WebGLBuffer; culms: WebGLBuffer; nCulms: number; sprays: WebGLBuffer; nSprays: number; stones: WebGLBuffer; nStones: number; steps: WebGLBuffer; nSteps: number }
 
 export class Renderer {
   private gl: WebGL2RenderingContext;
@@ -642,14 +654,16 @@ export class Renderer {
     c.sprays.forEach((s, k) => { const q = c.culms[s.c]; sp.set([q.x, q.y, q.z, q.h, q.lx, q.lz, q.phase, q.pick, s.y, s.ox, s.oz, s.size, s.yaw, s.tilt, s.seed, 0], k * 16); });
     const st = new Float32Array(c.stones.length * 8);
     c.stones.forEach((s, k) => st.set([s.x, s.y, s.z, s.yaw, s.r, s.flat, s.moss, 0], k * 8));
+    const rt = new Float32Array(c.roots.length * 8);
+    c.roots.forEach((q, k) => rt.set([q.x, q.y, q.z, q.yaw, q.r, q.len, q.moss, q.moss * 0.37], k * 8));
     const sx = new Float32Array(c.steps.length * 8);
     c.steps.forEach((s, k) => sx.set([s.x, s.y, s.z, Math.atan2(s.dx, s.dz), s.depth, s.width, s.drop, s.seed], k * 8));
-    this.chunks.set(key, { key, x: c.x0 + CHUNK / 2, z: c.z0 + CHUNK / 2, strokes: marks?.length ? this.buffer(marks) : null, nStrokes: marks ? marks.length / STROKE_STRIDE : 0, ground: this.buffer(v), culms: this.buffer(cu), nCulms: c.tall, sprays: this.buffer(sp), nSprays: c.sprays.length, stones: this.buffer(st), nStones: c.stones.length, steps: this.buffer(sx), nSteps: c.steps.length });
+    this.chunks.set(key, { key, x: c.x0 + CHUNK / 2, z: c.z0 + CHUNK / 2, roots: this.buffer(rt), nRoots: c.roots.length, strokes: marks?.length ? this.buffer(marks) : null, nStrokes: marks ? marks.length / STROKE_STRIDE : 0, ground: this.buffer(v), culms: this.buffer(cu), nCulms: c.tall, sprays: this.buffer(sp), nSprays: c.sprays.length, stones: this.buffer(st), nStones: c.stones.length, steps: this.buffer(sx), nSteps: c.steps.length });
   }
   /** let a chunk go */
   drop(key: string) {
     const h = this.chunks.get(key); if (!h) return;
-    for (const b of [h.ground, h.culms, h.sprays, h.stones, h.steps, h.strokes]) if (b) this.gl.deleteBuffer(b);
+    for (const b of [h.ground, h.culms, h.sprays, h.stones, h.steps, h.strokes, h.roots]) if (b) this.gl.deleteBuffer(b);
     this.chunks.delete(key);
   }
   keys() { return [...this.chunks.keys()]; }
@@ -736,7 +750,19 @@ export class Renderer {
         gl.drawElements(gl.TRIANGLES, this.idx.count, gl.UNSIGNED_SHORT, 0);
       }
     }
-    // ─── the land's strokes, on it (not over what stands in front of it) ───
+    // ─── steps and stones ───
+    {
+      const p = use('solid');
+      gl.uniform1i(gl.getUniformLocation(p, 'uKind'), 1);
+      this.attr(0, this.vbo.box.buf, 3, 6, 0); this.attr(1, this.vbo.box.buf, 3, 6, 3);
+      for (const { c } of inRange(this.reach.ink)) if (c.nSteps) { this.attr(2, c.steps, 4, 8, 0, 1); this.attr(3, c.steps, 4, 8, 4, 1); gl.drawArraysInstanced(gl.TRIANGLES, 0, this.vbo.box.count, c.nSteps); }
+      gl.uniform1i(gl.getUniformLocation(p, 'uKind'), 2);
+      this.attr(0, this.vbo.lump.buf, 3, 6, 0); this.attr(1, this.vbo.lump.buf, 3, 6, 3);
+      for (const { c } of inRange(this.reach.ink)) if (c.nStones) { this.attr(2, c.stones, 4, 8, 0, 1); this.attr(3, c.stones, 4, 8, 4, 1); gl.drawArraysInstanced(gl.TRIANGLES, 0, this.vbo.lump.count, c.nStones); }
+      gl.uniform1i(gl.getUniformLocation(p, 'uKind'), 3);
+      for (const { c } of inRange(60)) if (c.nRoots) { this.attr(2, c.roots, 4, 8, 0, 1); this.attr(3, c.roots, 4, 8, 4, 1); gl.drawArraysInstanced(gl.TRIANGLES, 0, this.vbo.lump.count, c.nRoots); }
+    }
+    // ─── the land's strokes, on it and on its steps, stones and roots (not over what stands in front of them) ───
     if (this.marks) {
       const p = use('stroke');
       gl.uniform2fv(gl.getUniformLocation(p, 'uRes'), [w, h]); gl.uniform1f(gl.getUniformLocation(p, 'uAll'), this.allStrokes ? 1 : 0);
@@ -747,16 +773,6 @@ export class Renderer {
         gl.drawArrays(gl.TRIANGLES, 0, c.nStrokes);
       }
       gl.disable(gl.BLEND); gl.blendEquation(gl.FUNC_ADD); gl.depthMask(true); gl.disable(gl.POLYGON_OFFSET_FILL);
-    }
-    // ─── steps and stones ───
-    {
-      const p = use('solid');
-      gl.uniform1i(gl.getUniformLocation(p, 'uKind'), 1);
-      this.attr(0, this.vbo.box.buf, 3, 6, 0); this.attr(1, this.vbo.box.buf, 3, 6, 3);
-      for (const { c } of inRange(this.reach.ink)) if (c.nSteps) { this.attr(2, c.steps, 4, 8, 0, 1); this.attr(3, c.steps, 4, 8, 4, 1); gl.drawArraysInstanced(gl.TRIANGLES, 0, this.vbo.box.count, c.nSteps); }
-      gl.uniform1i(gl.getUniformLocation(p, 'uKind'), 2);
-      this.attr(0, this.vbo.lump.buf, 3, 6, 0); this.attr(1, this.vbo.lump.buf, 3, 6, 3);
-      for (const { c } of inRange(this.reach.ink)) if (c.nStones) { this.attr(2, c.stones, 4, 8, 0, 1); this.attr(3, c.stones, 4, 8, 4, 1); gl.drawArraysInstanced(gl.TRIANGLES, 0, this.vbo.lump.count, c.nStones); }
     }
     // ─── the culms: finer near, coarser further ───
     {

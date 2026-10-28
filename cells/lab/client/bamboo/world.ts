@@ -37,7 +37,8 @@ export function cliff(x: number, z: number, seed: number): { up: number; h: numb
 }
 /** the land as it lies, before any trail is cut into it */
 export function base(x: number, z: number, seed: number): number {
-  let y = (fbm(x / 420, z / 420, seed) - 0.5) * 110 + (fbm(x / 95, z / 95, seed + 3) - 0.5) * 26 + (fbm(x / 22, z / 22, seed + 5) - 0.5) * 2.4;
+  // (long ridges and the valleys between, steep-sided: a wild mountain's, not a downland's)
+  let y = (fbm(x / 420, z / 420, seed) - 0.5) * 150 + (fbm(x / 95, z / 95, seed + 3) - 0.5) * 60 + (fbm(x / 22, z / 22, seed + 5) - 0.5) * 3.2;
   const c = cliff(x, z, seed);
   return y + c.up * c.h;
 }
@@ -45,8 +46,58 @@ export function base(x: number, z: number, seed: number): number {
 // ─── the trails ───
 /** a stone step: its range along its trail, its front edge, which way it faces (up), its top, how deep, wide, tall */
 export interface Step { sa: number; sb: number; x: number; z: number; dx: number; dz: number; y: number; depth: number; width: number; drop: number; seed: number }
-export interface Trail { id: string; x: Float32Array; z: Float32Array; y: Float32Array; stair: Uint8Array; length: number; steps: Step[] }
+export interface Trail { id: string; x: Float32Array; z: Float32Array; y: Float32Array; stair: Uint8Array; length: number; steps: Step[]; boulders: { x: number; z: number; r: number }[] }
 const DS = 1;
+
+/**
+ * The way a trail goes from a to b over the land, as one's worn by feet that would rather not climb: the cheapest way
+ * over a 4 m grid, where each step costs its length and much more for its grade, so it keeps to the contour, bends
+ * where the land does, and takes a slope on only where it must (a flight of steps, then). Smoothed, so it isn't the
+ * grid's.
+ */
+function route(a: V2, b: V2, seed: number, box: [number, number, number, number]): V2[] {
+  const G = 4, [x0, z0, x1, z1] = box, nx = Math.ceil((x1 - x0) / G) + 1, nz = Math.ceil((z1 - z0) / G) + 1, N = nx * nz;
+  const H = new Float32Array(N);
+  for (let j = 0; j < nz; j++) for (let i = 0; i < nx; i++) {
+    const x = x0 + i * G, z = z0 + j * G;
+    // (a little wander of its own, so two trails over the same slope don't run as one)
+    H[i + j * nx] = base(x, z, seed) + (vnoise(x / 9, z / 9, seed + 90) - 0.5) * 0.6;
+  }
+  const idx = (p: V2) => Math.min(nx - 1, Math.max(0, Math.round((p[0] - x0) / G))) + Math.min(nz - 1, Math.max(0, Math.round((p[1] - z0) / G))) * nx;
+  const start = idx(a), goal = idx(b), gx = goal % nx, gz = Math.floor(goal / nx);
+  const cost = new Float32Array(N).fill(Infinity), from = new Int32Array(N).fill(-1), done = new Uint8Array(N);
+  const heap: number[] = [], key: number[] = [];
+  const push = (n: number, k: number) => { heap.push(n); key.push(k); let c = heap.length - 1; while (c > 0) { const p = (c - 1) >> 1; if (key[p] <= key[c]) break; [heap[p], heap[c]] = [heap[c], heap[p]]; [key[p], key[c]] = [key[c], key[p]]; c = p; } };
+  const pop = () => { const n = heap[0], last = heap.pop()!, lk = key.pop()!; if (heap.length) { heap[0] = last; key[0] = lk; let c = 0; for (;;) { const l = 2 * c + 1, r = l + 1; let m = c; if (l < heap.length && key[l] < key[m]) m = l; if (r < heap.length && key[r] < key[m]) m = r; if (m === c) break; [heap[m], heap[c]] = [heap[c], heap[m]]; [key[m], key[c]] = [key[c], key[m]]; c = m; } } return n; };
+  const D = [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1], [2, 1], [2, -1], [-2, 1], [-2, -1], [1, 2], [1, -2], [-1, 2], [-1, -2]];
+  cost[start] = 0; push(start, 0);
+  while (heap.length) {
+    const n = pop(); if (done[n]) continue; done[n] = 1;
+    if (n === goal) break;
+    const ci = n % nx, cj = Math.floor(n / nx);
+    for (const [di, dj] of D) {
+      const i = ci + di, j = cj + dj; if (i < 0 || j < 0 || i >= nx || j >= nz) continue;
+      const m = i + j * nx, len = Math.hypot(di, dj) * G, grade = Math.abs(H[m] - H[n]) / len;
+      const c = cost[n] + len * (1 + 140 * grade * grade + (grade > 0.25 ? 60 * (grade - 0.25) : 0));
+      if (c < cost[m]) { cost[m] = c; from[m] = n; push(m, c + Math.hypot(i - gx, j - gz) * G); }
+    }
+  }
+  let path: V2[] = [];
+  for (let n = goal; n >= 0; n = from[n]) path.push([x0 + (n % nx) * G, z0 + Math.floor(n / nx) * G]);
+  path.reverse();
+  path[0] = a; path[path.length - 1] = b;
+  // (smoothed: corners cut a few times over, the ends kept)
+  for (let it = 0; it < 3; it++) {
+    const q: V2[] = [path[0]];
+    for (let k = 0; k < path.length - 1; k++) { const [p0, p1] = [path[k], path[k + 1]]; q.push([p0[0] * 0.75 + p1[0] * 0.25, p0[1] * 0.75 + p1[1] * 0.25], [p0[0] * 0.25 + p1[0] * 0.75, p0[1] * 0.25 + p1[1] * 0.75]); }
+    q.push(path[path.length - 1]); path = q;
+  }
+  // (thinned to every few metres, for laying)
+  const out: V2[] = [path[0]];
+  for (const p of path) if (Math.hypot(p[0] - out[out.length - 1][0], p[1] - out[out.length - 1][1]) > 3) out.push(p);
+  out.push(path[path.length - 1]);
+  return out;
+}
 
 function lay(pts: V2[], ds: number): V2[] {
   const P = [pts[0], ...pts, pts[pts.length - 1]], dense: V2[] = [];
@@ -91,11 +142,10 @@ export class World {
     const ends = [this.crossing('v', i, j), this.crossing('v', i + 1, j), this.crossing('h', i, j), this.crossing('h', i, j + 1)].filter((p): p is V2 => !!p);
     const C: V2 = [(i + 0.3 + 0.4 * u01(s, i, j, 20)) * REGION, (j + 0.3 + 0.4 * u01(s, i, j, 21)) * REGION];
     const out: Trail[] = [];
+    const box: [number, number, number, number] = [i * REGION - 24, j * REGION - 24, (i + 1) * REGION + 24, (j + 1) * REGION + 24];
     if (ends.length >= 1) ends.forEach((e, k) => {
-      // (from the edge to the meeting place, by a wandering line)
-      const m1: V2 = [e[0] + (C[0] - e[0]) * 0.35 + (u01(s, i, j, k, 30) - 0.5) * 40, e[1] + (C[1] - e[1]) * 0.35 + (u01(s, i, j, k, 31) - 0.5) * 40];
-      const m2: V2 = [e[0] + (C[0] - e[0]) * 0.7 + (u01(s, i, j, k, 32) - 0.5) * 30, e[1] + (C[1] - e[1]) * 0.7 + (u01(s, i, j, k, 33) - 0.5) * 30];
-      out.push(this.make(`${key}:${k}`, lay([e, m1, m2, C], DS)));
+      // (from the edge to the meeting place, the way feet would go)
+      out.push(this.make(`${key}:${k}`, lay(route(e, C, s, box), DS)));
     });
     this.regions.set(key, out);
     for (const t of out) {
@@ -114,11 +164,24 @@ export class World {
     for (let k = 0; k < n; k++) { const t = k / (n - 1); y[k] += ya * (1 - t) + yb * t; }
     const stair = new Uint8Array(n);
     for (let k = 0; k < n; k++) { const a = Math.max(0, k - 2), b = Math.min(n - 1, k + 2); if (Math.abs(y[b] - y[a]) / ((b - a) * DS) > 0.16) stair[k] = 1; }
-    const steps: Step[] = [];
+    const steps: Step[] = [], boulders: { x: number; z: number; r: number }[] = [];
     const lerp = (q: number) => { const f = Math.min(n - 1.001, Math.max(0, q / DS)), i = Math.floor(f), t = f - i; return [pts[i][0] + (pts[i + 1][0] - pts[i][0]) * t, pts[i][1] + (pts[i + 1][1] - pts[i][1]) * t, y[i] + (y[i + 1] - y[i]) * t]; };
     for (let i = 0; i < n; ) {
       if (!stair[i]) { i++; continue; }
       let j = i; while (j < n - 1 && stair[j + 1]) j++;
+      // (a flight that turns, turns round something: a boulder on the inside of its bend, the reason it bends)
+      let most = 0, at = -1, side = 0;
+      for (let k = Math.max(1, i); k <= Math.min(n - 2, j); k++) {
+        const ax = pts[k][0] - pts[k - 1][0], az = pts[k][1] - pts[k - 1][1], bx = pts[Math.min(n - 1, k + 3)][0] - pts[k][0], bz = pts[Math.min(n - 1, k + 3)][1] - pts[k][1];
+        const cr = (ax * bz - az * bx) / ((Math.hypot(ax, az) || 1) * (Math.hypot(bx, bz) || 1));
+        if (Math.abs(cr) > most) { most = Math.abs(cr); at = k; side = Math.sign(cr); }
+      }
+      if (at >= 0 && most > 0.12) {
+        const dx = pts[at + 1][0] - pts[at - 1][0], dz = pts[at + 1][1] - pts[at - 1][1], l = Math.hypot(dx, dz) || 1, r = 1.3 + u01(s, i, 83) * 0.9;
+        // (the inside of the bend: the side the way turns toward)
+        const lx = (dz / l) * side, lz = (-dx / l) * side, off = HALF * 0.9 + r * 0.75;
+        boulders.push({ x: pts[at][0] - lx * off, z: pts[at][1] - lz * off, r });
+      }
       const s0 = i * DS, s1 = j * DS, count = Math.max(1, Math.round((s1 - s0) / TREAD)), up = y[j] > y[i] ? 1 : -1;
       for (let k = 0; k < count; k++) {
         const sa = s0 + ((s1 - s0) * k) / count, sb = s0 + ((s1 - s0) * (k + 1)) / count;
@@ -128,7 +191,7 @@ export class World {
       }
       i = j + 1;
     }
-    return { id, x: Float32Array.from(pts.map((p) => p[0])), z: Float32Array.from(pts.map((p) => p[1])), y, stair, length: (n - 1) * DS, steps };
+    return { id, x: Float32Array.from(pts.map((p) => p[0])), z: Float32Array.from(pts.map((p) => p[1])), y, stair, length: (n - 1) * DS, steps, boulders };
   }
   /** make sure the trails that could reach (x, z) are laid */
   private around(x: number, z: number) {
@@ -212,15 +275,18 @@ export class World {
         if (x < x0 || x >= x0 + CHUNK || z < z0 || z >= z0 + CHUNK) continue;
         const gi = sa * 977 + m, gj = sb * 991 + m;
         const q = this.trailNear(x, z);
-        if (q.d < HALF + 0.3 + u01(s, gi, gj, 3) * 0.4) continue;
-        const sl = slope(x, z), c = cliff(x, z, s);
-        if (sl > 0.9) continue; // (none on the rock)
-        let keep = 1 - ss(0.45, 0.9, sl) * 0.7;
+        if (q.d < HALF + 0.2 + u01(s, gi, gj, 3) * 0.3) continue;
+        // (by a trail, the hillside's own slope, not its cut bank's: culms stand on the bank, right at the path's edge)
+        const sl = q.d < 6 ? Math.hypot(this.base(x + 0.7, z) - this.base(x - 0.7, z), this.base(x, z + 0.7) - this.base(x, z - 0.7)) / 1.4 : slope(x, z), c = cliff(x, z, s);
+        if (sl > 1.05) continue; // (none on the rock)
+        let keep = 1 - ss(0.6, 1.05, sl) * 0.6;
+        // (below a trail, where the hill falls away, thinner: the way looks out between them; above it, the bank's thick)
+        if (q.trail && q.d < 11 && g(x, z) < q.trail.y[q.i] - 0.5) keep *= 0.3 + 0.5 * (q.d / 11);
         // (over a cliff's rim, sparser: you see out)
         keep *= 1 - 0.6 * c.up * (1 - ss(0.618, 0.64, fbm(x / 150, z / 150, s + 50)));
         if (u01(s, gi, gj, 4) > keep) continue;
         // (girth: a stand's middle stoutest; and now and then a giant beside a trail, the one the eye goes to)
-        const mid = 1 - rr / R, hero = q.d < 5 && u01(s, gi, gj, 16) < 0.12;
+        const mid = 1 - rr / R, hero = q.d < 5 && u01(s, gi, gj, 16) < 0.3;
         const girth = hero ? 1 : Math.min(1, u01(s, gi, gj, 5) * 0.7 + mid * 0.4);
         const y = g(x, z), r = hero ? 0.1 + u01(s, gi, gj, 17) * 0.015 : 0.05 + girth * 0.04, h = hero ? 20 + u01(s, gi, gj, 6) * 4 : 10 + girth * 9 + u01(s, gi, gj, 6) * 3;
         // (lean: down the fall of the ground a little, out from the stand's middle, and out over a trail beside it)
@@ -261,6 +327,9 @@ export class World {
     }
     // ─── the steps of any trail whose stair is in this chunk; and boulders along a flight, as one's cut through them ───
     const steps: Step[] = [];
+    for (const t of this.trailsAround(x0, z0)) for (const b of t.boulders) if (b.x >= x0 && b.x < x0 + CHUNK && b.z >= z0 && b.z < z0 + CHUNK) {
+      stones.push({ x: b.x, y: g(b.x, b.z) - b.r * 0.25, z: b.z, r: b.r, yaw: b.x * 0.7, flat: 0.85, kind: 1, moss: 0.8 });
+    }
     for (const t of this.trailsAround(x0, z0)) for (const st of t.steps) if (st.x >= x0 && st.x < x0 + CHUNK && st.z >= z0 && st.z < z0 + CHUNK) {
       steps.push(st);
       if (st.seed > 0.3) continue;
@@ -268,19 +337,36 @@ export class World {
       const x = st.x + lx * (off + r * 0.6), z = st.z + lz * (off + r * 0.6);
       stones.push({ x, y: Math.max(g(x, z), st.y) - r * 0.3, z, r, yaw: st.seed * 40, flat: 0.6 + st.seed, kind: 1, moss: 0.4 + st.seed });
     }
-    return { ci, cj, x0, z0, ground, near, rock, culms, tall, sprays, stones, steps };
+    // ─── roots across a trail now and then, from the bank side, half in the earth, worn on top ───
+    const roots: Root[] = [];
+    for (const t of this.trailsAround(x0, z0)) {
+      for (let k = 2; k < t.x.length - 2; k++) {
+        if (t.stair[k] || t.x[k] < x0 || t.x[k] >= x0 + CHUNK || t.z[k] < z0 || t.z[k] >= z0 + CHUNK) continue;
+        if (u01(s, Math.round(t.x[k] * 3), Math.round(t.z[k] * 3), 90) > 0.075) continue;
+        const dx = t.x[k + 1] - t.x[k - 1], dz = t.z[k + 1] - t.z[k - 1], l = Math.hypot(dx, dz) || 1, ux = dx / l, uz = dz / l;
+        // (which side's uphill: it comes from there)
+        const up = this.base(t.x[k] - uz * 3, t.z[k] + ux * 3) > this.base(t.x[k] + uz * 3, t.z[k] - ux * 3) ? 1 : -1;
+        const a = u01(s, k, Math.round(t.x[k]), 91), len = 1.5 + a * 1.6, r = 0.045 + u01(s, k, Math.round(t.z[k]), 92) * 0.05;
+        const ang = Math.atan2(-uz * up, ux * up) + (a - 0.5) * 0.9, off = (u01(s, k, 93) - 0.5) * 0.5;
+        const x = t.x[k] - uz * up * off, z = t.z[k] + ux * up * off;
+        roots.push({ x, y: g(x, z) - r * 0.35, z, yaw: ang, r, len, moss: u01(s, k, 94) });
+      }
+    }
+    return { ci, cj, x0, z0, ground, near, rock, culms, tall, sprays, stones, steps, roots };
   }
 }
 
 export interface Culm { x: number; y: number; z: number; r: number; h: number; lx: number; lz: number; node: number; age: number; phase: number; pick: number; crown: number }
 export interface Spray { c: number; y: number; ox: number; oz: number; size: number; yaw: number; tilt: number; seed: number }
 export interface Stone { x: number; y: number; z: number; r: number; yaw: number; flat: number; kind: number; moss: number }
+/** a root across a trail: its middle, which way it runs, how thick, how long */
+export interface Root { x: number; y: number; z: number; yaw: number; r: number; len: number; moss: number }
 export interface Chunk {
   ci: number; cj: number; x0: number; z0: number;
   /** the ground's heights, how far each point is from a trail, how much it's rock */
   ground: Float32Array; near: Float32Array; rock: Float32Array;
   /** the culms (the first `tall` of them real; the rest hidden stubs holding low greens), their sprays, stones, steps */
-  culms: Culm[]; tall: number; sprays: Spray[]; stones: Stone[]; steps: Step[];
+  culms: Culm[]; tall: number; sprays: Spray[]; stones: Stone[]; steps: Step[]; roots: Root[];
 }
 
 /** the far ranges, all round about (drawn as a backdrop that keeps its distance): each a jagged line, one behind another */

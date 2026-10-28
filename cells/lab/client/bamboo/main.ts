@@ -222,7 +222,9 @@ function findSpots(): Record<string, Spot> {
   return out;
 }
 const refName = params.get('ref');
-const spot = refName ? findSpots()[refName] ?? null : null;
+// (`?cam=x,z,heading,pitch[,speed]`: a camera pinned exactly, for the gates (devtools/bamboo-gates.mjs))
+const cam = params.get('cam')?.split(',').map(Number);
+const spot: Spot | null = cam && cam.length >= 4 && cam.every(Number.isFinite) ? { x: cam[0], z: cam[1], heading: cam[2], pitch: cam[3], v: cam[4] } : refName ? findSpots()[refName] ?? null : null;
 if (spot) { me.x = spot.x; me.z = spot.z; me.heading = me.move = spot.heading; pitch = spot.pitch; me.v = spot.v ?? 0; me.phase = 0.35; }
 stream(400);
 me.onStep = (stone, hard) => sound.step(stone, hard);
@@ -258,7 +260,7 @@ function frame(now: number) {
   renderer.draw(f, canvas.width, canvas.height);
   const ms = performance.now() - now;
   if (!still && !spot) { if (ms > 28 && scale > 0.6) scale -= 0.05; else if (ms < 12 && scale < 1) scale += 0.02; }
-  (window as unknown as { __bamboo: unknown }).__bamboo = { seed, x: me.x, z: me.z, y: me.y, v: me.v, onTrail: me.onTrail, air: me.air, t, chunks: me.chunks.size, frameMs: ms, scale };
+  (window as unknown as { __bamboo: unknown }).__bamboo = { seed, x: me.x, z: me.z, y: me.y, heading: me.heading, pitch, v: me.v, onTrail: me.onTrail, air: me.air, t, chunks: me.chunks.size, frameMs: ms, scale };
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);
