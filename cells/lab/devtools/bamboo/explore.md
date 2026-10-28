@@ -334,6 +334,51 @@ the margins
 **Pick:** the one whose ink you'd want to see *move* (the lines staying on the culms as you walk past them). That's the
 test for marks laid in the world.
 
+## Round 3: the target board
+
+![The board](board.jpg)
+
+The ink came inside the picture. Three of the eight are targets, and three more are references for one thing each.
+
+- **Target A, the near frame** (`r3-8-lit-stairs.png`). Real light, with ink drawn on it:
+  - culm contours, a dark tick at each node;
+  - stone steps and the boulder outlined;
+  - litter as warm strokes;
+  - paper coming in at the top corners.
+
+  This is Labyrinth's register exactly, a lit picture plus marks, and the frame most of the walk should look like.
+- **Target B, how it thins** (`r3-5-ink-path.png`). The near culms are fully drawn: dry-brush body, black at the nodes,
+  broken contours. The colour is held to the path's litter. The far side goes to a few verticals, then pale ridges, then
+  the page. That's our *reach*, and the thinning has to look like this, not like fog.
+- **Target C, the walk** (`r3-6-contour-valley.png`). The contour path, dense moso climbing the bank on one side, and the
+  valley opening between sparser culms on the other. This density and this rhythm of verticals is the grove we build. The
+  ink is lighter here: the node rings are white bands rather than ticks.
+- **Ref, the culm** (`r3-4-looking-up.png`). How one culm is drawn up close: the dry-brush streak down its body, darkest
+  just under a node, a crisp curved ring, ink pooling at the foot.
+- **Ref, the gust** (`r3-3-gust.png`). The upper grove bent over, leaves streaming across the light, the near culms still.
+- **Ref, an alternative palette** (`r3-2-teal-stairs.png`). Teal, ochre and cream, flat-layered. Kept for a weather or
+  time preset, not the default.
+
+Left aside:
+- `r3-1-rain-stairs.png`: busy, and the carved calligraphy is the generator's invention. Carved characters on old culms
+  are real, though; a later detail.
+- `r3-7-ledge-roots.png`: round 2's photograph with a brushed border again.
+
+### The drawing, read off the board
+
+| thing | picture (lit) | marks (ink) |
+|---|---|---|
+| **culm** | pale celadon to olive, lighter where lit, with long dry-brush streaks down it; a pale powder band just under each node; darker and greener low down | its two contours, broken just under each node; a short dark tick (curved, following the ring) at every node, heaviest near the eye; ink pooled at the foot where it meets litter |
+| **canopy** | a high ceiling of leaf mass, lit yellow-green against the light; dapple on everything below | 个/介 leaf clusters in dark ink where sprays hang into view, only near |
+| **litter** | warm ochre and tan, the brightest colour in the frame, deepest along the path | single tapered leaf strokes scattered over it, thicker against steps, roots and stones |
+| **path** | packed earth, paler in its worn middle; stone steps grey-green with moss in the joints | the path's edge where it's open; step nosings; roots across it |
+| **stone** | grey with olive moss, a cool shadow side | contour, heavier on the shadow side; a crack or two |
+| **far** | colour drains to grey-green, then the mist is the paper itself | fewer and fewer verticals, each still dark at its nodes; whole culms left out, never faded |
+| **page** | cream (about #EFE6D2), slightly toothy | where the reach ends: the top of the frame (the sky is page), and the open side of the slope |
+
+The page comes in where nothing's there (sky, mist, the open side), not as a brushed border all round. That's the one
+thing to take from B and A rather than from the round-2 vignettes.
+
 ## Open questions after the image rounds
 
 - How much colour against how much page.
