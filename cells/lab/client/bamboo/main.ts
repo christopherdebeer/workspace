@@ -26,20 +26,20 @@ const auto = params.has('auto'), still = params.has('still');
 
 // ─── how far it's drawn: colour, then a wash of its tones in ink, then the marks alone on the paper, then the page ───
 const PRESETS: Record<string, Reach> = {
-  picture: { colour: 85, wash: 110, ink: 130, soft: 4 },
-  board: { colour: 22, wash: 48, ink: 85, soft: 3 },
-  drawing: { colour: 8, wash: 28, ink: 85, soft: 2.5 },
-  marks: { colour: 0, wash: 0, ink: 90, soft: 2 },
+  picture: { colour: 85, wash: 110, ink: 130, soft: 4, frame: 1, depth: 0.25 },
+  board: { colour: 22, wash: 48, ink: 85, soft: 3, frame: 0.42, depth: 0.45 },
+  drawing: { colour: 8, wash: 28, ink: 85, soft: 2.5, frame: 0.25, depth: 0.5 },
+  marks: { colour: 0, wash: 0, ink: 90, soft: 2, frame: 0.4, depth: 0.4 },
 };
 {
   const p = PRESETS[params.get('reach') ?? 'board'] ?? PRESETS.board, num = (k: string, d: number) => (params.has(k) ? Number(params.get(k)) : d);
-  renderer.reach = { colour: num('colour', p.colour), wash: num('wash', p.wash), ink: num('ink', p.ink), soft: num('soft', p.soft) };
+  renderer.reach = { colour: num('colour', p.colour), wash: num('wash', p.wash), ink: num('ink', p.ink), soft: num('soft', p.soft), frame: num('frame', p.frame), depth: num('depth', p.depth) };
 }
 {
   const panel = document.getElementById('reach'), btn = document.getElementById('inkbtn');
-  const sliders = ['colour', 'wash', 'ink'] as const;
+  const sliders = ['colour', 'wash', 'ink', 'frame', 'depth'] as const;
   const show = () => {
-    for (const k of sliders) { (document.getElementById(`r-${k}`) as HTMLInputElement).value = String(renderer.reach[k]); document.getElementById(`v-${k}`)!.textContent = `${Math.round(renderer.reach[k])} m`; }
+    for (const k of sliders) { (document.getElementById(`r-${k}`) as HTMLInputElement).value = String(renderer.reach[k]); document.getElementById(`v-${k}`)!.textContent = k === 'frame' || k === 'depth' ? renderer.reach[k].toFixed(2) : `${Math.round(renderer.reach[k])} m`; }
     for (const b of panel?.querySelectorAll('[data-p]') ?? []) { const q = PRESETS[(b as HTMLElement).dataset.p!]; b.classList.toggle('on', sliders.every((k) => q[k] === renderer.reach[k])); }
   };
   // (keep the address in step, so a reach can be passed on)

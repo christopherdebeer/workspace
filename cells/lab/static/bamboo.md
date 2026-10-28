@@ -59,6 +59,10 @@ Three passes, after Labyrinth's:
 
 ### How far it's drawn
 
+**In the frame**: the page closes in from the frame's edges, as a sheet is left bare round its picture: colour, then a wash, then the marks alone, then the paper. It isn't one shape. Near things hold on toward the edge (the ground at your feet, the culm beside you); far things and the sky go sooner, so the page comes in round what's near the eye. Its edge is frayed as a dry brush frays it, and a spray there goes on as a stroke of ink after its colour has gone. `frame` sets how far in it closes (0 tight … 1 not at all), `depth` how much sooner far things go than near ones.
+
+**In the world**:
+
 The picture gives out in clear bands, not a long fade:
 
 - **colour**, out to its reach;
@@ -68,14 +72,14 @@ The picture gives out in clear bands, not a long fade:
 
 Far off, a culm isn't faded: it's in or out whole, by its pick against how far drawn it would be.
 
-The 墨 button (bottom right) sets it: four presets and a slider for each band. The bands stay in order (colour inside the wash, the wash inside the ink), and the address keeps what you set, so a drawing can be passed on.
+Each pixel takes whichever of the frame and the world has drawn it out further. The 墨 button (bottom right) sets both: four presets, and a slider for each band and for the frame and its depth. The bands stay in order (colour inside the wash, the wash inside the ink), and the address keeps what you set, so a drawing can be passed on.
 
-| preset | colour | wash | ink |
-|---|---|---|---|
-| picture | 85 m | 110 m | 130 m |
-| board (the default) | 22 m | 48 m | 85 m |
-| drawing | 8 m | 28 m | 85 m |
-| marks | — | — | 90 m |
+| preset | colour | wash | ink | frame | depth |
+|---|---|---|---|---|---|
+| picture | 85 m | 110 m | 130 m | 1 | .25 |
+| board (the default) | 22 m | 48 m | 85 m | .42 | .45 |
+| drawing | 8 m | 28 m | 85 m | .25 | .5 |
+| marks | — | — | 90 m | .4 | .4 |
 
 ![Marks only: no colour, the drawing alone](bamboo/v-marks.jpg)
 
@@ -89,7 +93,7 @@ The look was found by image generation first (`devtools/bamboo/explore.md`: thre
 
 - `seed=<n>`: the mountain.
 - `ref=a|b|c|cliff|run|up|gust`: a fixed frame.
-- `reach=picture|board|drawing|marks`, or `colour=`, `wash=`, `ink=` and `soft=` (metres): how far it's drawn (above).
+- `reach=picture|board|drawing|marks`, or `colour=`, `wash=`, `ink=` and `soft=` (metres), `frame=` and `depth=` (0–1): how far it's drawn (above).
 - `shadows=0`: no culm shadows (cheaper).
 - `auto`: run on by itself, wandering.
 - `t=<seconds>` and `still`: time held.

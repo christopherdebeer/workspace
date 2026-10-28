@@ -31,8 +31,10 @@ export interface Frame {
   /** the head's roll (radians): leaning into a turn, swaying with the stride */
   roll?: number;
 }
-/** how far the drawing reaches (metres): colour to, wash to, ink to; how soft each band is */
-export interface Reach { colour: number; wash: number; ink: number; soft: number }
+/** how far the drawing reaches: in the world (metres: colour to, wash to, ink to, how soft each band is), and in the
+ * frame (`frame`: 0 the page closing in tight from the frame's edges … 1 not at all; `depth`: how much sooner far things
+ * go to the page there than near ones) */
+export interface Reach { colour: number; wash: number; ink: number; soft: number; frame: number; depth: number }
 
 const NOISE = `
 float h21(vec2 p) { p = fract(p * vec2(123.34, 456.21)); p += dot(p, p + 45.32); return fract(p.x * p.y); }
@@ -356,7 +358,7 @@ in vec2 vUV; out vec4 o;
 uniform sampler2D uC; uniform sampler2D uA; uniform sampler2D uZ;
 uniform vec2 uRes; uniform float uNear; uniform float uFar; uniform float uPx;
 uniform vec3 uPaper; uniform vec3 uInk; uniform vec3 uSunUV; uniform float uClean; uniform float uMarks; uniform float uSpeed;
-uniform vec4 uReach;
+uniform vec4 uReach; uniform vec4 uFrame;
 ${NOISE}
 float lz(vec2 p) { float d = texture(uZ, p).r; return uNear * uFar / (uFar - d * (uFar - uNear)); }
 void main() {
@@ -382,12 +384,29 @@ void main() {
     // (and the things' own marks, as far as their ink reaches)
     ink = max(ink, A.w * A.z);
   }
+  // ─── the frame: the page closing in from the frame's edges, as a sheet is left bare round its picture. Not one
+  // shape: near things hold on toward the edge, far things (and the sky) go sooner, so the page comes in round what's
+  // near the eye; its edge broken as a dry brush breaks ───
+  float there = A.x > .05 ? 1. : 0.;
+  vec2 q = (vUV - vec2(.5, .47)) * 2.;
+  float rr = length(q * vec2(1., .86));
+  float zf = there > .5 ? z : 1e4;
+  rr += uFrame.w * smoothstep(4., 45., zf) - .38 * (1. - smoothstep(1.5, 9., zf));
+  float ang = atan(q.y, q.x);
+  rr += (fbm2(q * 3.2 + 11.) - .5) * .26 + (fbm2(q * 9. + 3.) - .5) * .07 + (vn(vec2(ang * 30., rr * 2.)) - .5) * .03;
+  // (the bristles of the brush that laid it: long strokes, so the edge frays rather than cuts)
+  rr += (vn(vec2(vUV.x * uRes.x * .09, vUV.y * uRes.y * .006 + vUV.x * 30.)) - .5) * .1;
+  float fs = .035;
+  float fCol = 1. - smoothstep(uFrame.x - fs, uFrame.x + fs, rr), fWash = 1. - smoothstep(uFrame.y - fs, uFrame.y + fs, rr), fInk = 1. - smoothstep(uFrame.z - fs, uFrame.z + fs, rr);
+  C.a = min(C.a, fCol);
+  // (the sprays, their colour gone, go on as strokes of ink, as a brush lays them)
+  if (abs(A.x - .6) < .05) ink = max(ink, (1. - C.a) * .45 * A.z * fInk * there * (uMarks > .5 ? 1. : 0.));
+  ink *= fInk;
   // ─── the page: the colour laid on it as far as it reaches; then a wash of its tones, in ink; then the marks only;
   // then the paper ───
   float grain = uClean > .5 ? 0. : (vn(vUV * uRes * .35) - .5) * .05 + (vn(vUV * uRes * .04) - .5) * .04;
   vec3 paper = uPaper * (1. + grain);
-  float there = A.x > .05 ? 1. : 0.;
-  float wash = there * (1. - smoothstep(uReach.y - uReach.w, uReach.y + uReach.w, z));
+  float wash = there * min(1. - smoothstep(uReach.y - uReach.w, uReach.y + uReach.w, z), fWash);
   float tone = 1. - dot(C.rgb, vec3(.3, .55, .15));
   vec3 washed = paper * (1. - clamp(tone * 1.1 - .1, 0., .8) * .42 * vec3(1., .98, .94));
   vec3 col = mix(paper, washed, wash);
@@ -478,7 +497,7 @@ export class Renderer {
   private vao: WebGLVertexArrayObject;
   readonly clean: boolean; readonly marks: number;
   /** how far the drawing reaches (see the head of this file) */
-  reach: Reach = { colour: 22, wash: 48, ink: 85, soft: 3 };
+  reach: Reach = { colour: 22, wash: 48, ink: 85, soft: 3, frame: 0.42, depth: 0.45 };
   /** culms in whole up to / gone by: through the ink's band */
   private get pick() { return [this.reach.ink * 0.35, this.reach.ink * 0.85]; }
   private shadowTex: WebGLTexture | null = null; private shadowFbo: WebGLFramebuffer | null = null; private lightVP: number[] = new Array(16).fill(0); readonly shadows: boolean;
@@ -684,6 +703,7 @@ export class Renderer {
     gl.uniform3fv(u('uPaper'), [0.937, 0.902, 0.824]); gl.uniform3fv(u('uInk'), [0.13, 0.12, 0.105]); gl.uniform3fv(u('uSunUV'), this.sunUV);
     gl.uniform1f(u('uClean'), this.clean ? 1 : 0); gl.uniform1f(u('uMarks'), this.marks); gl.uniform1f(u('uSpeed'), f.speed ?? 0);
     gl.uniform4fv(u('uReach'), [this.reach.colour, this.reach.wash, this.reach.ink, this.reach.soft]);
+    { const fr = this.reach.frame, c0 = 0.3 + fr * 1.3; gl.uniform4fv(u('uFrame'), [c0, c0 + 0.22, c0 + 0.42, this.reach.depth]); }
     this.attr(0, this.vbo.screen.buf, 2, 2, 0);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
   }

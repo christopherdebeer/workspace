@@ -59,6 +59,12 @@
     "title": "Picture",
     "caption": "the colour carried far, the wash and ink beyond it",
     "file": "v-picture.jpg"
+   },
+   {
+    "name": "frame",
+    "title": "The frame drawn out",
+    "caption": "the page closing in tight from the frame’s edges (`frame=0.1`), nearer things holding on to it: the ground at your feet and the culm beside you in colour, the grove beyond them going to the paper first",
+    "file": "v-frame.jpg"
    }
   ]
  },
