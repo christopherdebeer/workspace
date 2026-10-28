@@ -13,9 +13,9 @@ mkdirSync(out, { recursive: true });
 
 /** each gate: its target, and the scene it's judged on (pinned) */
 export const GATES = [
-  { name: '01-contour-run', title: '01 · the contour run', scene: 'seed=1&cam=376.5,158.07,-2.96,-0.06&t=8' },
+  { name: '01-contour-run', title: '01 · the contour run', scene: 'seed=1&cam=376.5,158.07,-2.63,-0.1&t=8' },
   { name: '02-culm-scale', title: '02 · culm scale', scene: 'seed=1&cam=44.7,87.88,1.57,1.05&t=8' },
-  { name: '03-ink-reach', title: '03 · ink reach', scene: 'seed=1&cam=331.47,172.27,-1.56,-0.05&t=8' },
+  { name: '03-ink-reach', title: '03 · ink reach', scene: 'seed=1&cam=327.89,174.06,-1.23,-0.07&t=8' },
   { name: '04-stair-event', title: '04 · the stair', scene: 'seed=1&cam=-247.89,312.03,2.7,0.15&t=8' },
   { name: '05-gust-motion', title: '05 · a gust', scene: 'seed=1&cam=248.02,-179.13,-2.99,0.3&t=8&ref=gust' },
 ];

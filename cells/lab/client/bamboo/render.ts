@@ -24,7 +24,7 @@
  *
  * `?clean`: no shafts or paper grain. `?marks=0`: the picture without its ink.
  */
-import { type Chunk, CHUNK, CN, CELL, HALF } from './world';
+import { type Chunk, CHUNK, CN, CELL, HALF, BANK } from './world';
 import { STROKE_STRIDE } from './strokes';
 
 export interface Frame {
@@ -329,8 +329,25 @@ void main() {
   float worn = 1. - smoothstep(${(HALF * 0.35).toFixed(2)}, ${(HALF * 0.85).toFixed(2)}, vD + (n2 - .5) * .3);
   float px = length(fwidth(vW.xz)), leafMark, leaf;
   vec3 carp = carpet(litter * .8, vW.xz, px, leafMark, leaf);
-  vec3 alb = mix(carp, mix(earth, carp, .25 + .25 * step(.6, vn(vW.xz * 2.2))), worn * .85);
+  vec3 alb = mix(carp, mix(earth, carp, .1 + .2 * step(.62, vn(vW.xz * 2.2))), worn * .95);
   alb = mix(alb, soil, smoothstep(.35, .7, 1. - N.y) * .7);
+  // (a trail's cut bank: bare red-brown earth where it's steep, streaked down its fall, with roots run across it and
+  // small stones in it; the litter only lies on its ledges)
+  float cutBank = smoothstep(${(HALF + 0.15).toFixed(2)}, ${(HALF + 0.5).toFixed(2)}, vD) * (1. - smoothstep(${(HALF + BANK).toFixed(2)}, ${(HALF + BANK + 2.5).toFixed(2)}, vD)) * smoothstep(.04, .2, 1. - N.y);
+  if (cutBank > .01) {
+    vec2 fl = normalize(N.xz + 1e-4), ac = vec2(-fl.y, fl.x);
+    float u = dot(vW.xz, ac), v = vW.y;
+    vec3 earth2 = mix(vec3(.55, .38, .25), vec3(.42, .3, .2), vn(vec2(u * 1.3, v * 4.)));
+    earth2 *= .85 + .3 * vn(vec2(u * 6., v * .8));
+    // (roots: dark wavering lines across the cut)
+    float rl = abs(fract(v * 1.4 + vn(vec2(u * .7, 3.)) * 1.2) - .5);
+    float root = (1. - smoothstep(.02, .05, rl)) * step(.55, vn(vec2(u * .5, floor(v * 1.4) * 3.7)));
+    earth2 = mix(earth2, vec3(.3, .22, .16), root * .8);
+    // (stones in it, pale and mossed on top)
+    float st = smoothstep(.62, .7, vn(vec2(u, v * 1.6) * 2.2 + 11.));
+    earth2 = mix(earth2, mix(vec3(.64, .62, .56), vec3(.4, .5, .24), smoothstep(.5, .9, N.y + .3)), st);
+    alb = mix(alb, earth2, cutBank * (1. - smoothstep(.93, .99, N.y)) * .9);
+  }
   // (green: moss and low growth in patches, more along a trail's banks)
   float green = smoothstep(.58, .74, fbm2(vW.xz * .3 + 9.)) * .45 + smoothstep(${(HALF + 0.2).toFixed(2)}, ${(HALF + 1.2).toFixed(2)}, vD) * (1. - smoothstep(3., 6., vD)) * smoothstep(.4, .7, vn(vW.xz * .9)) * .5;
   alb = mix(alb, vec3(.36, .45, .2), green * (1. - worn));

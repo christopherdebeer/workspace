@@ -19,7 +19,7 @@ export type V2 = [number, number];
 export const CHUNK = 32, CELL = 1, CN = CHUNK / CELL + 1;
 export const REGION = 160;
 /** a trail's half width; how far its banks run before the slope takes over; a stair's tread */
-export const HALF = 0.9, BANK = 2.4, TREAD = 0.4;
+export const HALF = 0.65, BANK = 1.7, TREAD = 0.4;
 
 const u01 = (...n: number[]) => hash(...n) / 4294967296;
 export function vnoise(x: number, z: number, s = 1): number {
@@ -315,6 +315,15 @@ export class World {
       culms.push({ x, y: gy - 3, z, r: 0, h: 3.2, lx: 0, lz: 0, node: 1, age: 0, phase: u01(s, ci, cj, n, 63) * 6.28, pick: 0, crown: 1 });
       const k = culms.length - 1;
       for (let m = 0; m < 2; m++) sprays.push({ c: k, y: 3.15 + u01(s, ci, cj, n, 65 + m) * 0.7, ox: Math.sin(a + m * 2) * 0.25, oz: Math.cos(a + m * 2) * 0.25, size: 0.4 + u01(s, ci, cj, n, 67 + m) * 0.5, yaw: a + m * 1.7, tilt: (u01(s, ci, cj, n, 69 + m) - 0.5) * 1.2, seed: u01(s, ci, cj, n, 71 + m) });
+    }
+    // ─── ferns and low growth on a trail's uphill bank, where the eye runs along it ───
+    for (let n = 0; n < 40; n++) {
+      const x = x0 + u01(s, ci, cj, n, 160) * CHUNK, z = z0 + u01(s, ci, cj, n, 161) * CHUNK, q = this.trailNear(x, z);
+      if (!q.trail || q.d < HALF + 0.35 || q.d > HALF + BANK + 1.5 || this.base(x, z) < q.trail.y[q.i] + 0.3) continue;
+      const gy = g(x, z), a = u01(s, ci, cj, n, 164) * 6.283;
+      culms.push({ x, y: gy - 3, z, r: 0, h: 3.2, lx: 0, lz: 0, node: 1, age: 0, phase: u01(s, ci, cj, n, 163) * 6.28, pick: 0, crown: 1 });
+      const k = culms.length - 1;
+      for (let m = 0; m < 3; m++) sprays.push({ c: k, y: 3.05 + u01(s, ci, cj, n, 165 + m) * 0.45, ox: Math.sin(a + m * 2.1) * 0.3, oz: Math.cos(a + m * 2.1) * 0.3, size: 0.35 + u01(s, ci, cj, n, 168 + m) * 0.45, yaw: a + m * 2.1, tilt: (u01(s, ci, cj, n, 171 + m) - 0.5) * 1.4, seed: u01(s, ci, cj, n, 174 + m) });
     }
     // ─── stones: under cliffs (fallen), at the foot of a trail's bank, now and then anywhere ───
     const stones: Stone[] = [];
