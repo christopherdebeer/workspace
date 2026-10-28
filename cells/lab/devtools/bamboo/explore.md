@@ -270,6 +270,70 @@ What we're looking for:
 
 That picture becomes the target we judge the renders against, like the coast's boards.
 
+## Round 2: what came back
+
+| a. ledge, sun over a sea of cloud | b. after rain, stream | c. ledge, mist valley | d. the grove |
+|---|---|---|---|
+| ![](r2-a-ledge-sun.png) | ![](r2-b-rain-stream.png) | ![](r2-c-ledge-mist.png) | ![](r2-d-grove.png) |
+
+A big step. All four are off-centre, wild, mountain, and end in paper. **c is the provisional target**, with **d as the
+reference for the grove itself**.
+
+- **c:** the best balance.
+  - The path runs along the contour with the bank rising on the left and the valley falling away to mist on the right:
+    the walk's own shape, compress and release in one frame.
+  - The dapple and litter are right, and the page comes in at the frame's edge with dry brush.
+  - The culms are still on the thin side.
+- **d:** the closest to moso.
+  - Thick culms, node rings you can read at a glance, a rock bank, an open-ish floor, real height.
+  - But it's enclosed: no view, nothing to walk toward except more grove. That's the "deep in" stretch between releases.
+- **a:** the light and the reward.
+  - Low sun through the culms and a sea of cloud with karst peaks.
+  - It's the moment a ridge path opens out, not the everyday frame.
+  - The paper fills the sky, but nothing is inked.
+- **b:** the weather and the water.
+  - The wet stone, the puddle reflecting, and the stream beside the path are all good.
+  - It's the busiest; too much detail everywhere for us to draw well.
+
+**The gap all four share:**
+- **The ink is a border, not marks.** The paper and brush come in as a vignette round a photograph. Inside the picture
+  nothing is drawn: no node ticks, no culm contours, no edge to the path. The only inking is a few decorative bamboo
+  sprays painted on the paper margin.
+  - Our drawing does both. The frame's edge going to page (cheap, and right) is one half.
+  - Marks that belong to things, getting fewer with distance, are the other half.
+- **The motion-blur smear** at the bottom of b, c and d is the generator imitating a brush. Not something to copy: our
+  near ground should be the sharpest, most drawn thing in the frame.
+- **The culms are still too thin** except in d.
+
+## Round 3: put the ink inside c
+
+Same image each time, c's composition, with the ink stated as marks. 9:16, one per prompt:
+
+```
+BASE: eye height on a narrow earth path along the contour of a steep mountain slope in a wild moso bamboo forest; the
+bank rising on the left with thick pale-green culms (12 cm across, white powder band below each node) crowding up it
+and leaning slightly over the path; on the right the slope falls away between sparser culms to a valley filled with
+mist, distant forested ridges; dry bamboo leaves and roots across the path; late-morning sun in dapple
+INK: drawn as a hand-inked illustration over soft light: every near culm outlined in fine dark ink, its contour broken
+at each node with a short dark brush tick at the node ring; the path's edges and the roots drawn in ink; mid-distance
+culms only as a few ink lines; far ridges as pale ink wash; the image ends in bare cream paper with dry-brush edges at
+the frame; the nearest ground is the sharpest, most detailed part
+AVOID: motion blur, smeared foreground, thin bamboo, leafy shrubs, people, buildings, text, decorative bamboo painted in
+the margins
+```
+
+- **3A** = BASE + INK.
+- **3B** = 3A, with "the ink heavier: like a pen-and-wash architectural sketch, colour only on the path and the near
+  culms".
+- **3C** = 3A, with "the ink lighter: only node ticks and the path's edge are drawn, everything else painted".
+- **3D** = 3A at dusk: "low warm sun from behind the bank, the mist below lit gold, long shadows of culms across the
+  path".
+- **3E** = d's grove in the same INK, as the "deep in" frame: "BASE without the valley: the slope rising on both
+  sides, the path climbing into dense culms, a single shaft of light ahead".
+
+**Pick:** the one whose ink you'd want to see *move* (the lines staying on the culms as you walk past them). That's the
+test for marks laid in the world.
+
 ## Open questions after the image rounds
 
 - How much colour against how much page.
