@@ -2,14 +2,19 @@
 
 Made by `node cells/lab/views.mjs bamboo` from `client/bamboo/views.mjs`. The README is `../bamboo.md`.
 
-## Against the board
+## The run
 
-![The near frame: up the stone stair toward the turn at its top: culms crowding the bank, their nodes ticked in ink, the treads outlined, the litter warm on every step (target A)](v-a.jpg)
-![How it thins: along the lower track: the near culms drawn whole, the colour held to the path, the far side going to a few verticals and then the page (target B)](v-b.jpg)
-![The walk: along the contour, the grove dense up the bank, the valley opening on the other side (target C)](v-c.jpg)
+![Running: loping through the grove, off the trails: the culms streaming past, the head rising and falling with the stride](v-run.jpg)
+![In the grove: standing in the grove, off the trails, the culms close, the light coming down through them (target C)](v-c.jpg)
+
+## Things you meet
+
+![A stair: where a trail climbs a cliff band: a flight of stone steps (target A)](v-a.jpg)
+![A trail along a fall: a trail with the ground falling away beside it: the near culms drawn whole, the far side going to the page (target B)](v-b.jpg)
+![A cliff’s rim: too big a drop to take: the run stops at the edge, the valley beyond](v-cliff.jpg)
 
 ## Looks
 
 ![Looking up: the culms converging, the sprays against the sky](v-up.jpg)
-![A gust: a gust coming down through the grove: the tops bent over, the sprays streaming](v-gust.jpg)
-![On a bigger screen: the lower track, the valley open to the left](v-wide.jpg)
+![A gust: a gust coming through the grove: the tops bent over, the sprays streaming](v-gust.jpg)
+![On a bigger screen: running, in landscape](v-wide.jpg)

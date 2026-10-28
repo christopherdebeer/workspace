@@ -1,209 +1,181 @@
 /**
- * Bamboo · 竹径: a walk up through a wild moso grove on a mountainside, drawn as the board has it.
+ * Bamboo · 竹径: a run through a wild moso grove on an endless mountainside, drawn as the board has it.
  *
- * Hold anywhere and you walk; let go and you slow to a stop. Drag while you hold (or without) to look round; let it be
- * and the eye comes back to the way ahead. The way sets the pace: a brisk walk along the contour, slower up a stair,
- * quicker down. Where a way forks you take the branch you're looking along. Gusts come down the slope through the
- * grove; you see them coming before they reach you.
+ * Hold anywhere and you run, a long easy lope; let go and you ease to a stop. Drag left and right to turn, up and down
+ * to look. You don't have to pick your way: the run weaves you between the culms, and the grove has its own runs, the
+ * lanes a deer would take, that it carries you into. Uphill slows you, downhill quickens you.
  *
- * URL: `seed`, `ref=a|b|c|up|gust` (a fixed frame laid out like the board's), `at=<way>:<metres>` (where to start),
- * `auto` (walk on by itself), `t=<seconds>` and `still` (time held), `clean`, `marks=0`, `fov=<degrees>`.
+ * Now and then you meet something: a trail (join it, running along it, and it carries you on until you turn off), a
+ * flight of stone steps where a trail climbs a cliff band, a cliff's rim (a small drop you leap down; a big one stops you
+ * at its edge, with the valley beyond). Gusts come down through the grove.
+ *
+ * URL: `seed`, `ref=a|b|c|cliff|run|up|gust` (a fixed frame), `auto` (run on by itself), `t=<seconds>` and `still` (time
+ * held), `clean`, `marks=0`, `fov=<degrees>`, `mute`.
  */
-import { makeLand, along, NODES, type Land, type Way } from './land';
-import { makeGrove } from './grove';
+import { World, ridges, type Trail } from './world';
+import { Runner, LOPE } from './runner';
 import { Renderer, type Frame } from './render';
 
 const params = new URLSearchParams(location.search);
 const canvas = document.getElementById('view') as HTMLCanvasElement;
-const caption = document.getElementById('caption') as HTMLDivElement | null;
 const hint = document.getElementById('hint') as HTMLDivElement | null;
 const seed = Number(params.get('seed') ?? 1) || 1;
-const land: Land = makeLand(seed);
-const grove = makeGrove(land);
-const renderer = new Renderer(canvas, land, grove, { clean: params.has('clean'), marks: params.get('marks') !== '0' });
-
-// ─── where you are: on a way, so far along it, facing along it or back ───
-const walker = { way: 0, s: 2, dir: 1, v: 0, yaw: 0, pitch: 0, lookYaw: 0, lookPitch: 0, camY: 0, stepPhase: 0, idle: 0 };
-{
-  const at = params.get('at');
-  if (at) { const [w, s] = at.split(':').map(Number); walker.way = Math.max(0, Math.min(land.ways.length - 1, w | 0)); walker.s = s || 0; }
-  if (params.get('back') !== null) walker.dir = -1;
-}
-const PACE = 1.4, EYE = 1.62;
+const world = new World(seed);
+const renderer = new Renderer(canvas, ridges(seed), { clean: params.has('clean'), marks: params.get('marks') !== '0' });
 const auto = params.has('auto'), still = params.has('still');
-let t = Number(params.get('t') ?? 0), held = false;
+let t = Number(params.get('t') ?? 0);
 
-/** the ways that meet at a node, each as you'd set off along it from there */
-function leaving(node: string, except: Way | null) {
-  const out: { way: Way; dir: number; s: number; dx: number; dz: number }[] = [];
-  for (const w of land.ways) {
-    if (w === except && w.a !== w.b) continue;
-    if (w.a === node) { const p = along(w, 0.5); out.push({ way: w, dir: 1, s: 0, dx: p.dx, dz: p.dz }); }
-    if (w.b === node) { const p = along(w, w.length - 0.5); out.push({ way: w, dir: -1, s: w.length, dx: -p.dx, dz: -p.dz }); }
+// ─── you, and the land round you, built a chunk at a time as you go ───
+const me = new Runner(world);
+const EYE = 1.62;
+let held = false, pitch = -0.06, roll = 0;
+const keys = new Set<string>();
+const stream = (budget: number) => me.stream(me.x, me.z, budget, (k, c) => renderer.add(k, c), (k) => renderer.drop(k));
+
+/** a trail near the origin to start on, facing along it */
+function startOnTrail() {
+  let best: { t: Trail; i: number; d: number } | null = null;
+  for (let a = -1; a <= 0; a++) for (let b = -1; b <= 0; b++) for (const tr of world.trails(a, b)) for (let i = 10; i < tr.x.length - 10; i += 5) {
+    if (tr.stair[i]) continue;
+    const d = Math.hypot(tr.x[i], tr.z[i]); if (!best || d < best.d) best = { t: tr, i, d };
   }
-  return out;
+  if (!best) return;
+  const { t: tr, i } = best;
+  me.x = tr.x[i]; me.z = tr.z[i]; me.heading = me.move = Math.atan2(tr.x[i + 3] - tr.x[i], tr.z[i + 3] - tr.z[i]);
 }
-/** the way you'd take at the next node, given where you're looking */
-let forkChoice = 0;
-function choose(node: string, from: Way, commit = true) {
-  const opts = leaving(node, from);
-  if (!opts.length) return null;
-  const ly = walker.yaw + walker.lookYaw, lx = Math.sin(ly), lz = Math.cos(ly);
-  if (auto) return opts[(commit ? forkChoice++ : forkChoice) % opts.length];
-  return opts.reduce((a, b) => (a.dx * lx + a.dz * lz >= b.dx * lx + b.dz * lz ? a : b));
-}
-const nodeAhead = () => (walker.dir > 0 ? land.ways[walker.way].b : land.ways[walker.way].a);
-const toNodeAhead = () => (walker.dir > 0 ? land.ways[walker.way].length - walker.s : walker.s);
+startOnTrail();
 
-// ─── gusts: every so often a front comes down the slope, through the grove, past you and on ───
-const gust = { dir: norm2(-0.9, -0.43), front: -1e4, strength: 0, next: 6 + (seed % 5) };
-function norm2(x: number, z: number): [number, number] { const l = Math.hypot(x, z) || 1; return [x / l, z / l]; }
-function stepGust(dt: number, eye: number[]) {
-  gust.next -= dt;
-  if (gust.next <= 0) { gust.front = eye[0] * gust.dir[0] + eye[2] * gust.dir[1] - 110; gust.next = 18 + Math.random() * 14; }
-  gust.front += dt * 9;
-  const along = eye[0] * gust.dir[0] + eye[2] * gust.dir[1] - gust.front;
-  gust.strength = along > -160 && along < 160 ? 1 : 0;
-  sound.wind(Math.exp(-(along * along) / 900) * gust.strength);
-}
-
-// ─── sound: the wind in the leaves, louder in a gust; footsteps by what's underfoot (starts on the first touch) ───
+// ─── sound: the wind in the leaves (and past your ears, faster); your feet, by what they land on ───
 const sound = (() => {
-  let ac: AudioContext | null = null, hiss: GainNode | null = null, noise: AudioBuffer | null = null;
+  let ac: AudioContext | null = null, hiss: GainNode | null = null, rush: GainNode | null = null, noise: AudioBuffer | null = null;
   const start = () => {
     if (ac || params.has('mute')) return;
     try {
       ac = new AudioContext();
       noise = ac.createBuffer(1, ac.sampleRate * 2, ac.sampleRate);
       const d = noise.getChannelData(0); for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
-      const src = ac.createBufferSource(); src.buffer = noise; src.loop = true;
-      const bp = ac.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 2600; bp.Q.value = 0.5;
-      hiss = ac.createGain(); hiss.gain.value = 0.02;
-      src.connect(bp).connect(hiss).connect(ac.destination); src.start();
+      const chain = (freq: number, q: number) => { const src = ac!.createBufferSource(); src.buffer = noise; src.loop = true; const f = ac!.createBiquadFilter(); f.type = 'bandpass'; f.frequency.value = freq; f.Q.value = q; const g = ac!.createGain(); g.gain.value = 0; src.connect(f).connect(g).connect(ac!.destination); src.start(); return g; };
+      hiss = chain(2600, 0.5); rush = chain(500, 0.4);
     } catch { ac = null; }
   };
   return {
     start,
-    wind(g: number) { if (ac && hiss) hiss.gain.setTargetAtTime(0.02 + g * 0.11, ac.currentTime, 0.4); },
-    step(stone: boolean) {
+    air(gust: number, speed: number) { if (ac && hiss && rush) { hiss.gain.setTargetAtTime(0.018 + gust * 0.1, ac.currentTime, 0.4); rush.gain.setTargetAtTime(speed * 0.012, ac.currentTime, 0.3); } },
+    step(stone: boolean, hard: number) {
       if (!ac || !noise) return;
       const src = ac.createBufferSource(); src.buffer = noise;
-      const f = ac.createBiquadFilter(); f.type = stone ? 'bandpass' : 'lowpass'; f.frequency.value = stone ? 1800 + Math.random() * 600 : 520 + Math.random() * 200; f.Q.value = stone ? 2 : 0.7;
-      const g = ac.createGain(), now = ac.currentTime; g.gain.setValueAtTime(0, now); g.gain.linearRampToValueAtTime(stone ? 0.09 : 0.16, now + 0.008); g.gain.exponentialRampToValueAtTime(0.001, now + (stone ? 0.07 : 0.16));
-      src.connect(f).connect(g).connect(ac.destination); src.start(now, Math.random()); src.stop(now + 0.2);
+      const f = ac.createBiquadFilter(); f.type = 'bandpass'; f.frequency.value = stone ? 1900 + Math.random() * 500 : 900 + Math.random() * 500; f.Q.value = stone ? 2.2 : 0.9;
+      const g = ac.createGain(), now = ac.currentTime; g.gain.setValueAtTime(0, now); g.gain.linearRampToValueAtTime((stone ? 0.08 : 0.1) * hard, now + 0.006); g.gain.exponentialRampToValueAtTime(0.001, now + (stone ? 0.06 : 0.11));
+      src.connect(f).connect(g).connect(ac.destination); src.start(now, Math.random()); src.stop(now + 0.15);
     },
   };
 })();
 
-// ─── input: hold to walk, drag to look ───
-let drag: { x: number; y: number; id: number } | null = null;
+// ─── input: hold to run; drag across to turn, up and down to look ───
+let drag: { x: number; y: number; id: number } | null = null, dragTurn = 0;
 canvas.addEventListener('pointerdown', (e) => { canvas.setPointerCapture(e.pointerId); drag = { x: e.clientX, y: e.clientY, id: e.pointerId }; held = true; sound.start(); if (hint) hint.classList.add('gone'); });
 canvas.addEventListener('pointermove', (e) => {
   if (!drag || e.pointerId !== drag.id) return;
-  const k = 2.4 / Math.max(innerWidth, innerHeight);
-  walker.lookYaw -= (e.clientX - drag.x) * k; walker.lookPitch = Math.max(-0.9, Math.min(1.1, walker.lookPitch - (e.clientY - drag.y) * k));
-  walker.lookYaw = Math.max(-2.6, Math.min(2.6, walker.lookYaw));
-  drag.x = e.clientX; drag.y = e.clientY; walker.idle = 0;
+  const k = 2.6 / Math.max(innerWidth, innerHeight);
+  dragTurn -= (e.clientX - drag.x) * k * 1.3;
+  pitch = Math.max(-0.7, Math.min(0.9, pitch - (e.clientY - drag.y) * k));
+  drag.x = e.clientX; drag.y = e.clientY;
 });
 const up = (e: PointerEvent) => { if (drag && e.pointerId === drag.id) { drag = null; held = false; } };
 canvas.addEventListener('pointerup', up); canvas.addEventListener('pointercancel', up);
-const keys = new Set<string>();
 addEventListener('keydown', (e) => { keys.add(e.key); sound.start(); });
 addEventListener('keyup', (e) => keys.delete(e.key));
 
-// ─── the walk ───
-function stepWalk(dt: number) {
-  let w = land.ways[walker.way];
+// ─── the run ───
+function run(dt: number) {
   const go = held || keys.has('ArrowUp') || keys.has('w') || auto;
-  if (keys.has('ArrowLeft')) walker.lookYaw += dt * 1.2;
-  if (keys.has('ArrowRight')) walker.lookYaw -= dt * 1.2;
-  // (the pace the way sets: up a stair slower, down it a little quicker)
-  const here = along(w, walker.s), ahead = along(w, walker.s + walker.dir * 1.2);
-  const climb = (ahead.y - here.y) / 1.2;
-  const pace = here.stair || ahead.stair ? (climb > 0 ? 0.78 : 1.05) : PACE * (1 - Math.max(0, climb) * 1.2);
-  const target = go ? pace : 0;
-  walker.v += (target - walker.v) * Math.min(1, dt * (go ? 2.2 : 3.2));
-  walker.s += walker.v * dt * walker.dir;
-  // (at the end of a way, on along the one you're looking toward)
-  const end = walker.dir > 0 ? walker.s - w.length : -walker.s;
-  if (end > 0) {
-    const node = nodeAhead(), next = choose(node, w);
-    if (next) { walker.way = next.way.id; walker.dir = next.dir; walker.s = next.s + next.dir * end; w = next.way; }
-    else { walker.dir = -walker.dir; walker.s = walker.dir > 0 ? 0 : w.length; }
-  }
-  const p = along(w, walker.s);
-  // (heading: along the way, looking a little ahead round its bends)
-  const la = along(w, walker.s + walker.dir * 5), hx = la.x - p.x, hz = la.z - p.z;
-  const want = Math.atan2(hx, hz);
-  let dy = want - walker.yaw; while (dy > Math.PI) dy -= 2 * Math.PI; while (dy < -Math.PI) dy += 2 * Math.PI;
-  walker.yaw += dy * Math.min(1, dt * 2.5);
-  // (left be, the eye comes back to the way ahead, and up the stair or down it)
-  walker.idle += dt;
-  if (!drag && walker.idle > 2.2) { walker.lookYaw *= 1 - Math.min(1, dt * 0.9); walker.lookPitch *= 1 - Math.min(1, dt * 0.9); }
-  const slopeLook = Math.atan2(la.y - p.y, 5) * 0.6;
-  walker.pitch += (slopeLook - walker.pitch) * Math.min(1, dt * 2);
-  // (the eye's height: the tread underfoot, eased, so a stair comes step by step; a little rise and fall with each step)
-  walker.camY += (p.y + EYE - walker.camY) * Math.min(1, dt * (p.stair ? 9 : 5));
-  const stride = p.stair ? 0.42 : 0.72, before = walker.stepPhase;
-  walker.stepPhase += (walker.v * dt) / stride;
-  if (Math.floor(walker.stepPhase) !== Math.floor(before)) sound.step(w.kind === 'stone' && p.stair);
-  const bob = Math.abs(Math.sin(walker.stepPhase * Math.PI)) * 0.025 * Math.min(1, walker.v / PACE);
-  return { x: p.x, y: walker.camY + bob, z: p.z };
+  let turn = 0;
+  if (keys.has('ArrowLeft')) turn += dt * 1.6;
+  if (keys.has('ArrowRight')) turn -= dt * 1.6;
+  if (auto) turn += (Math.sin(t * 0.13 + 1.3) * 0.25 + Math.sin(t * 0.051) * 0.2) * dt;
+  turn += dragTurn; dragTurn = 0;
+  me.step(dt, { go, turn });
 }
 
-// ─── reference frames, laid out like the board's ───
-interface Ref { way: number; s: number; dir: number; lookYaw?: number; pitch?: number; fov?: number; t?: number; gust?: boolean }
-const REFS: Record<string, Ref> = {
-  // (A: up the stone stair toward the turn at its top, the boulder to the right)
-  a: { way: 1, s: 30, dir: 1, pitch: 0.16, lookYaw: 0.05 },
-  // (B: along the lower track, the grove on one side, the valley's mist on the other)
-  b: { way: 0, s: 104, dir: -1, pitch: 0.02, lookYaw: 0.12 },
-  // (C: along the contour, the dense bank on the right, the valley opening on the left)
-  c: { way: 0, s: 44, dir: 1, pitch: 0.05, lookYaw: 0.18 },
-  up: { way: 4, s: 60, dir: 1, pitch: 1.35 },
-  gust: { way: 4, s: 80, dir: 1, pitch: 0.12, gust: true },
-};
-const ref = REFS[params.get('ref') ?? ''];
-if (ref) {
-  walker.way = ref.way; walker.s = ref.s; walker.dir = ref.dir; walker.lookYaw = ref.lookYaw ?? 0;
-  if (ref.gust) { gust.next = 1e9; }
+// ─── gusts ───
+const gust = { dir: [-0.9, -0.43] as [number, number], front: -1e4, strength: 0, next: 5 };
+function stepGust(dt: number, eye: number[]) {
+  gust.next -= dt;
+  if (gust.next <= 0) { const a = Math.random() * 6.28; gust.dir = [Math.cos(a), Math.sin(a)]; gust.front = eye[0] * gust.dir[0] + eye[2] * gust.dir[1] - 110; gust.next = 14 + Math.random() * 14; }
+  gust.front += dt * 10;
+  const along = eye[0] * gust.dir[0] + eye[2] * gust.dir[1] - gust.front;
+  gust.strength = along > -160 && along < 160 ? 1 : 0;
+  sound.air(Math.exp(-(along * along) / 900) * gust.strength, me.v);
 }
-{
-  const w = land.ways[walker.way], p = along(w, walker.s), la = along(w, walker.s + walker.dir * 5);
-  walker.yaw = Math.atan2(la.x - p.x, la.z - p.z); walker.camY = p.y + EYE;
+
+// ─── reference frames ───
+interface Spot { x: number; z: number; heading: number; pitch: number; v?: number }
+function findSpots(): Record<string, Spot> {
+  const out: Record<string, Spot> = {};
+  const all: Trail[] = [];
+  for (let a = -2; a <= 1; a++) for (let b = -2; b <= 1; b++) all.push(...world.trails(a, b));
+  // (a: at the foot of a flight of steps, looking up it)
+  for (const tr of all) {
+    for (let i = 8; i < tr.x.length - 12 && !out.a; i++) if (!tr.stair[i] && tr.stair[i + 4] && tr.stair[i + 9] && tr.y[i + 9] > tr.y[i] + 1) out.a = { x: tr.x[i], z: tr.z[i], heading: Math.atan2(tr.x[i + 6] - tr.x[i], tr.z[i + 6] - tr.z[i]), pitch: 0.12 };
+    if (out.a) break;
+  }
+  // (b: along a trail with the ground falling away beside it)
+  for (const tr of all) {
+    for (let i = 10; i < tr.x.length - 10 && !out.b; i += 3) {
+      if (tr.stair[i]) continue;
+      const dx = tr.x[i + 1] - tr.x[i], dz = tr.z[i + 1] - tr.z[i], l = Math.hypot(dx, dz), sx = -dz / l, sz = dx / l;
+      const left = world.ground(tr.x[i] + sx * 8, tr.z[i] + sz * 8) - tr.y[i], right = world.ground(tr.x[i] - sx * 8, tr.z[i] - sz * 8) - tr.y[i];
+      if (Math.min(left, right) < -5 && Math.max(left, right) > 2) out.b = { x: tr.x[i], z: tr.z[i], heading: Math.atan2(dx, dz) + (left < right ? 0.15 : -0.15), pitch: -0.02 };
+    }
+    if (out.b) break;
+  }
+  // (cliff: at a rim, looking out over the drop)
+  for (let r = 10; r < 300 && !out.cliff; r += 6) for (let a = 0; a < 6.28 && !out.cliff; a += 0.2) {
+    const x = Math.cos(a) * r, z = Math.sin(a) * r, h = world.ground(x, z);
+    for (let k = 0; k < 8; k++) { const b = (k / 8) * 6.28, d = world.ground(x + Math.sin(b) * 3, z + Math.cos(b) * 3); if (h - d > 4 && world.trailNear(x, z).d > 4) { out.cliff = { x, z, heading: b, pitch: -0.12 }; break; } }
+  }
+  // (c, run: in the grove, off the trails)
+  out.c = { x: me.x + Math.sin(me.heading + 1.4) * 22, z: me.z + Math.cos(me.heading + 1.4) * 22, heading: me.heading, pitch: 0.02 };
+  out.run = { ...out.c, v: LOPE, pitch: -0.04 };
+  out.up = { ...out.c, pitch: 1.35 };
+  out.gust = { ...out.c, pitch: 0.18 };
+  return out;
 }
+const refName = params.get('ref');
+const spot = refName ? findSpots()[refName] ?? null : null;
+if (spot) { me.x = spot.x; me.z = spot.z; me.heading = me.move = spot.heading; pitch = spot.pitch; me.v = spot.v ?? 0; me.phase = 0.35; }
+stream(400);
+me.onStep = (stone, hard) => sound.step(stone, hard);
+me.y = me.groundAt(me.x, me.z);
 
 // ─── the frame ───
 let last = performance.now(), scale = 1;
 function resize() {
-  const dpr = Math.min(devicePixelRatio || 1, 2) * scale;
-  const w = Math.round(innerWidth * dpr), h = Math.round(innerHeight * dpr);
+  const dpr = Math.min(devicePixelRatio || 1, 2) * scale, w = Math.round(innerWidth * dpr), h = Math.round(innerHeight * dpr);
   if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
 }
 function frame(now: number) {
   const dt = Math.min(0.05, (now - last) / 1000); last = now;
   if (!still) t += dt;
   resize();
-  const pos = ref ? (() => { const w = land.ways[walker.way], p = along(w, walker.s); return { x: p.x, y: p.y + EYE, z: p.z }; })() : stepWalk(still ? 0 : dt);
-  const eye: [number, number, number] = [pos.x, pos.y, pos.z];
-  if (ref?.gust) { gust.front = eye[0] * gust.dir[0] + eye[2] * gust.dir[1] + 6; gust.strength = 1; }
+  if (!spot && !still) run(dt);
+  stream(1);
+  const s = Math.min(1, me.v / LOPE), bob = Math.abs(Math.sin(me.phase * Math.PI)) * 0.065 * s, sway = Math.sin(me.phase * Math.PI) * 0.035 * s;
+  const side = [Math.cos(me.move), -Math.sin(me.move)];
+  const eye: [number, number, number] = [me.x + side[0] * sway, me.y + EYE + bob - me.dip, me.z + side[1] * sway];
+  if (refName === 'gust') { gust.dir = [-0.9, -0.43]; gust.front = eye[0] * gust.dir[0] + eye[2] * gust.dir[1] + 6; gust.strength = 1; }
   else if (!still) stepGust(dt, eye);
-  const yaw = walker.yaw + walker.lookYaw, pitch = ref ? ref.pitch ?? 0 : walker.pitch + walker.lookPitch;
-  const look: [number, number, number] = [eye[0] + Math.sin(yaw) * Math.cos(pitch), eye[1] + Math.sin(pitch), eye[2] + Math.cos(yaw) * Math.cos(pitch)];
-  const portrait = innerHeight > innerWidth;
-  const fov = (Number(params.get('fov')) || ref?.fov || (portrait ? 74 : 58)) * Math.PI / 180;
-  const f: Frame = { eye, look, fov, t, gust: [gust.dir[0], gust.dir[1], gust.front, gust.strength] };
+  // (looking: where you're heading; tipped a little with the ground ahead)
+  const yaw = me.heading, gAhead = me.groundAt(me.x + Math.sin(yaw) * 6, me.z + Math.cos(yaw) * 6) - me.y, p = pitch + Math.atan2(gAhead, 6) * 0.5;
+  const look: [number, number, number] = [eye[0] + Math.sin(yaw) * Math.cos(p), eye[1] + Math.sin(p), eye[2] + Math.cos(yaw) * Math.cos(p)];
+  roll = roll * 0.9 + (-me.turn * 0.5 * s + Math.sin(me.phase * Math.PI) * 0.012 * s) * 0.1;
+  const portrait = innerHeight > innerWidth, base = Number(params.get('fov')) || (portrait ? 74 : 60);
+  const fov = (base + 9 * s) * Math.PI / 180;
+  const f: Frame = { eye, look, fov, t, gust: [gust.dir[0], gust.dir[1], gust.front, gust.strength], speed: me.v, roll };
   renderer.draw(f, canvas.width, canvas.height);
-  // (near a fork, the branch you'd take, named)
-  if (caption) {
-    const node = nodeAhead(), forks = leaving(node, land.ways[walker.way]).length > 1, near = toNodeAhead() < 14;
-    if (forks && near && !ref) { const c = choose(node, land.ways[walker.way], false); caption.textContent = c?.way.name ?? ''; caption.classList.add('on'); }
-    else caption.classList.remove('on');
-  }
-  // (if the frame's slow, draw fewer pixels)
   const ms = performance.now() - now;
-  if (!still && !ref) { if (ms > 28 && scale > 0.6) scale -= 0.05; else if (ms < 12 && scale < 1) scale += 0.02; }
-  (window as unknown as { __bamboo: unknown }).__bamboo = { seed, way: walker.way, name: land.ways[walker.way].name, s: walker.s, dir: walker.dir, v: walker.v, t, culms: grove.culms.length, sprays: grove.sprays.length, frameMs: ms, scale, nodes: Object.keys(NODES) };
+  if (!still && !spot) { if (ms > 28 && scale > 0.6) scale -= 0.05; else if (ms < 12 && scale < 1) scale += 0.02; }
+  (window as unknown as { __bamboo: unknown }).__bamboo = { seed, x: me.x, z: me.z, y: me.y, v: me.v, onTrail: me.onTrail, air: me.air, t, chunks: me.chunks.size, frameMs: ms, scale };
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);

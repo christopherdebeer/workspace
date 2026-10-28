@@ -98,9 +98,9 @@ export const EXPERIMENTS: Experiment[] = [
   },
   {
     id: 'bamboo', title: 'Bamboo · 竹径', group: 'Woods',
-    blurb: 'A walk up through a wild moso bamboo grove on a mountainside, drawn as a lit picture with ink on it, held close to the eye and giving out to the page. Hold anywhere to walk, drag to look; the way sets the pace (brisk along the contour, slower up a stone stair), and where it forks you take the branch you are looking along. The lower track runs along the slope with the valley falling away into mist beside it; a stair climbs to a fork; straight up more stairs or round by the gully; the upper track deep in the grove; the long stair down. Gusts come down the slope through the culms.',
-    page: 'static/bamboo.html', preview: 'preview&ref=c&t=8', readme: 'static/bamboo.md',
-    presets: [{ label: 'walk', query: '' }, { label: 'walking on its own', query: 'auto' }, { label: 'up the stair', query: 'ref=a&t=8' }, { label: 'how it thins', query: 'ref=b&t=8' }, { label: 'along the contour', query: 'ref=c&t=8' }, { label: 'looking up', query: 'ref=up&t=8' }, { label: 'a gust', query: 'ref=gust&t=8' }, { label: 'without the ink', query: 'ref=c&t=8&marks=0' }],
+    blurb: 'A run through a wild moso bamboo grove on an endless mountainside, drawn as a lit picture with ink on it, held close to the eye and giving out to the page. Hold anywhere and you run, a long easy lope; drag to turn. You never have to pick your way: the run weaves you between the culms and into the grove’s own runs; uphill slows you, downhill quickens you. Now and then you meet something: a trail that carries you along until you turn off it, a flight of stone steps where it climbs a cliff band, a cliff’s rim (a small drop you leap, a big one stops you at the edge). Gusts come through the grove.',
+    page: 'static/bamboo.html', preview: 'preview&ref=run&t=8', readme: 'static/bamboo.md',
+    presets: [{ label: 'run', query: '' }, { label: 'running on its own', query: 'auto' }, { label: 'mid-stride', query: 'ref=run&t=8' }, { label: 'a stair', query: 'ref=a&t=8' }, { label: 'a trail along a fall', query: 'ref=b&t=8' }, { label: 'a cliff’s rim', query: 'ref=cliff&t=8' }, { label: 'looking up', query: 'ref=up&t=8' }, { label: 'a gust', query: 'ref=gust&t=8' }, { label: 'without the ink', query: 'ref=run&t=8&marks=0' }, { label: 'another mountain', query: 'seed=7' }],
   },
   {
     id: 'taohua', title: 'Taohua · 桃花', group: 'Woods',

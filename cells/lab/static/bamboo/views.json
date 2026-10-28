@@ -1,24 +1,41 @@
 [
  {
-  "group": "Against the board",
+  "group": "The run",
+  "views": [
+   {
+    "name": "run",
+    "title": "Running",
+    "caption": "loping through the grove, off the trails: the culms streaming past, the head rising and falling with the stride",
+    "file": "v-run.jpg"
+   },
+   {
+    "name": "c",
+    "title": "In the grove",
+    "caption": "standing in the grove, off the trails, the culms close, the light coming down through them (target C)",
+    "file": "v-c.jpg"
+   }
+  ]
+ },
+ {
+  "group": "Things you meet",
   "views": [
    {
     "name": "a",
-    "title": "The near frame",
-    "caption": "up the stone stair toward the turn at its top: culms crowding the bank, their nodes ticked in ink, the treads outlined, the litter warm on every step (target A)",
+    "title": "A stair",
+    "caption": "where a trail climbs a cliff band: a flight of stone steps (target A)",
     "file": "v-a.jpg"
    },
    {
     "name": "b",
-    "title": "How it thins",
-    "caption": "along the lower track: the near culms drawn whole, the colour held to the path, the far side going to a few verticals and then the page (target B)",
+    "title": "A trail along a fall",
+    "caption": "a trail with the ground falling away beside it: the near culms drawn whole, the far side going to the page (target B)",
     "file": "v-b.jpg"
    },
    {
-    "name": "c",
-    "title": "The walk",
-    "caption": "along the contour, the grove dense up the bank, the valley opening on the other side (target C)",
-    "file": "v-c.jpg"
+    "name": "cliff",
+    "title": "A cliff’s rim",
+    "caption": "too big a drop to take: the run stops at the edge, the valley beyond",
+    "file": "v-cliff.jpg"
    }
   ]
  },
@@ -34,13 +51,13 @@
    {
     "name": "gust",
     "title": "A gust",
-    "caption": "a gust coming down through the grove: the tops bent over, the sprays streaming",
+    "caption": "a gust coming through the grove: the tops bent over, the sprays streaming",
     "file": "v-gust.jpg"
    },
    {
     "name": "wide",
     "title": "On a bigger screen",
-    "caption": "the lower track, the valley open to the left",
+    "caption": "running, in landscape",
     "file": "v-wide.jpg"
    }
   ]

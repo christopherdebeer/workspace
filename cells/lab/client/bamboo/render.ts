@@ -17,13 +17,16 @@
  *
  * `?clean`: no shafts or paper grain, to judge the drawing itself. `?marks=0`: the picture without its ink.
  */
-import { type Land, X0, Z0, NX, NZ, CELL, HALF } from './land';
-import { type Grove } from './grove';
+import { type Chunk, CHUNK, CN, CELL, HALF } from './world';
 
 export interface Frame {
   eye: [number, number, number]; look: [number, number, number]; fov: number; t: number;
   /** a gust: its direction (x, z), where its front is along that direction, how strong (0..1) */
   gust: [number, number, number, number];
+  /** how fast you're going (m/s), for the strokes at the frame's edges */
+  speed?: number;
+  /** the head's roll (radians): leaning into a turn, swaying with the stride */
+  roll?: number;
 }
 
 const NOISE = `
@@ -219,12 +222,12 @@ void main() {
 }`;
 
 const GROUND_VS = COMMON + `
-layout(location = 0) in vec3 aP; layout(location = 1) in vec3 aN; layout(location = 2) in float aD;
-out vec3 vW; out vec3 vN; out float vD;
-void main() { vW = aP; vN = aN; vD = aD; gl_Position = uVP * vec4(aP, 1.); }`;
+layout(location = 0) in vec3 aP; layout(location = 1) in vec3 aN; layout(location = 2) in vec2 aD;
+out vec3 vW; out vec3 vN; out float vD; out float vRock;
+void main() { vW = aP; vN = aN; vD = aD.x; vRock = aD.y; gl_Position = uVP * vec4(aP, 1.); }`;
 const GROUND_FS = COMMON + LIGHT + OUT + `
-in vec3 vW; in vec3 vN; in float vD;
-uniform float uMarks; uniform vec4 uBounds;
+in vec3 vW; in vec3 vN; in float vD; in float vRock;
+uniform float uMarks;
 void main() {
   vec3 N = normalize(vN);
   // (the litter's warm ochre everywhere under the grove, deepest along the way; the worn middle paler earth; banks
@@ -243,39 +246,22 @@ void main() {
   // (away from the way, under the grove: darker, the litter older)
   alb *= mix(1., .78, smoothstep(2.5, 9., vD));
   alb = mix(alb, vec3(.42, .48, .26), smoothstep(.62, .78, fbm2(vW.xz * .3 + 9.)) * .35 * (1. - worn));
+  // (rock where the ground's steep: grey stone, streaked down its fall, mossy where it's ledged)
+  vec2 fall = normalize(N.xz + 1e-4);
+  float across = dot(vW.xz, vec2(-fall.y, fall.x)) + (vn(vW.xz * .3 + vW.y * .2) - .5) * 1.4;
+  vec3 stone = mix(vec3(.62, .61, .56), vec3(.5, .5, .47), fbm2(vec2(across * .8, vW.y * .5)));
+  stone = mix(stone, vec3(.45, .5, .3), smoothstep(.55, .75, N.y + (vn(vW.xz * 1.3) - .5) * .4) * .6);
+  alb = mix(alb, stone, vRock);
   vec3 c = show(lit(alb, N, vW, .2, .9));
+  // (on the rock, ink: strokes down its fall, broken, fewer further off)
+  float hk = abs(fract(across * 1.3) - .5), hw = max(.03, fwidth(across * 1.3) * .8);
+  float hatch = (1. - smoothstep(hw, hw * 2., hk)) * step(.45, vn(vec2(floor(across * 1.3) * 3.1, vW.y * .7))) * smoothstep(.5, .9, vRock);
+  c = mix(c, vec3(.16, .15, .13), hatch * .75 * uMarks * (1. - smoothstep(12., 45., distance(vW, uEye))));
   // (the way's edges, in ink, broken: where its bed meets the bank or the fall)
   float e = abs(vD - ${(HALF * 1.02).toFixed(2)}), fw = max(.012, fwidth(vD) * .8);
   float edge = (1. - smoothstep(fw * .6, fw * 1.4, e)) * step(.5, vn(vW.xz * 1.3 + 3.)) * uMarks;
   c = mix(c, vec3(.15, .13, .1), edge * .7 * smoothstep(1.5, 4., distance(vW, uEye)) * (1. - smoothstep(10., 34., distance(vW, uEye))));
-  // (the land given out to the page toward its own edges, so there's never a rim to it)
-  float rim = min(min(vW.x - uBounds.x, uBounds.z - vW.x), min(vW.z - uBounds.y, uBounds.w - vW.z));
   emit(c, .2, 1., vW);
-  oC.a *= smoothstep(0., 40., rim);
-}`;
-
-const LITTER_VS = COMMON + `
-layout(location = 0) in vec2 aUV; layout(location = 1) in vec4 iA; layout(location = 2) in vec4 iB;
-out vec3 vW; out vec2 vUV; out float vTone;
-void main() {
-  float yaw = iA.w, len = iB.x;
-  vec2 d = vec2(cos(yaw), sin(yaw)), s = vec2(-d.y, d.x);
-  vec2 xz = iA.xz + d * aUV.x * len + s * aUV.y * len * .22;
-  vW = vec3(xz.x, iA.y + .004 * aUV.x, xz.y); vUV = aUV + .5; vTone = iB.y;
-  gl_Position = uVP * vec4(vW, 1.);
-}`;
-const LITTER_FS = COMMON + LIGHT + OUT + `
-in vec3 vW; in vec2 vUV; in float vTone;
-uniform float uMarks;
-void main() {
-  // (a fallen leaf: tapered at both ends, sharp at the tip)
-  float a = vUV.x, w = .5 * pow(max(0., sin(3.1416 * pow(a, .8))), .7), e = w - abs(vUV.y - .5);
-  if (e < 0.) discard;
-  vec3 alb = mix(vec3(.88, .75, .48), vec3(.55, .36, .2), vTone);
-  vec3 c = show(lit(alb, vec3(0., 1., 0.), vW, .2, 1.));
-  float near = 1. - smoothstep(4., 14., distance(vW, uEye));
-  c = mix(c, vec3(.2, .14, .08), (1. - smoothstep(.0, .12, e)) * near * .7 * uMarks);
-  emit(c, .21, 0., vW);
 }`;
 
 const SOLID_VS = COMMON + `
@@ -325,7 +311,7 @@ void main() {
 const RIDGE_VS = COMMON + `
 layout(location = 0) in vec3 aP; layout(location = 1) in vec2 aT;
 out vec3 vW; out vec2 vT;
-void main() { vW = aP; vT = aT; gl_Position = uVP * vec4(aP, 1.); }`;
+void main() { vW = aP + vec3(uEye.x, uEye.y * .85, uEye.z); vT = aT; gl_Position = uVP * vec4(vW, 1.); }`;
 const RIDGE_FS = `#version 300 es
 precision highp float;
 in vec3 vW; in vec2 vT;
@@ -348,7 +334,7 @@ precision highp float;
 in vec2 vUV; out vec4 o;
 uniform sampler2D uC; uniform sampler2D uA; uniform sampler2D uZ;
 uniform vec2 uRes; uniform float uNear; uniform float uFar; uniform float uPx;
-uniform vec3 uPaper; uniform vec3 uInk; uniform vec3 uSunUV; uniform float uClean; uniform float uMarks;
+uniform vec3 uPaper; uniform vec3 uInk; uniform vec3 uSunUV; uniform float uClean; uniform float uMarks; uniform float uSpeed;
 ${NOISE}
 float lz(vec2 p) { float d = texture(uZ, p).r; return uNear * uFar / (uFar - d * (uFar - uNear)); }
 void main() {
@@ -384,6 +370,12 @@ void main() {
     col = mix(col, vec3(1., .97, .86), clamp(shaft * .32 * C.a, 0., .55));
   }
   col = mix(col, uInk, clamp(ink, 0., 1.) * .88);
+  // (going fast: dry strokes at the frame's edges, along the way the world streams past, a brush dragged)
+  if (uSpeed > 2.5 && uClean < .5) {
+    vec2 q = (vUV - vec2(.5, .48)) * vec2(uRes.x / uRes.y, 1.); float r = length(q), a = atan(q.y, q.x);
+    float st = smoothstep(.62, .85, vn(vec2(a * 70., r * 2.5 - uSpeed * .0)) ) * smoothstep(.42, .62, r);
+    col = mix(col, paper, st * smoothstep(2.5, 7., uSpeed) * .5);
+  }
   o = vec4(col, 1.);
 }`;
 
@@ -432,8 +424,8 @@ function lumpMesh(seed: number) {
 
 // ─── a little matrix arithmetic (column-major) ───
 function perspective(fov: number, asp: number, n: number, f: number) { const t = 1 / Math.tan(fov / 2); return [t / asp, 0, 0, 0, 0, t, 0, 0, 0, 0, (f + n) / (n - f), -1, 0, 0, (2 * f * n) / (n - f), 0]; }
-function lookAt(e: number[], c: number[]) {
-  const z = norm([e[0] - c[0], e[1] - c[1], e[2] - c[2]]), x = norm(cross([0, 1, 0], z)), y = cross(z, x);
+function lookAt(e: number[], c: number[], up = [0, 1, 0]) {
+  const z = norm([e[0] - c[0], e[1] - c[1], e[2] - c[2]]), x = norm(cross(up, z)), y = cross(z, x);
   return [x[0], y[0], z[0], 0, x[1], y[1], z[1], 0, x[2], y[2], z[2], 0, -dot(x, e), -dot(y, e), -dot(z, e), 1];
 }
 function mul(a: number[], b: number[]) { const o = new Array(16).fill(0); for (let i = 0; i < 4; i++) for (let j = 0; j < 4; j++) for (let k = 0; k < 4; k++) o[j * 4 + i] += a[k * 4 + i] * b[j * 4 + k]; return o; }
@@ -441,18 +433,16 @@ const dot = (a: number[], b: number[]) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2
 const cross = (a: number[], b: number[]) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
 const norm = (a: number[]) => { const l = Math.hypot(a[0], a[1], a[2]) || 1; return [a[0] / l, a[1] / l, a[2] / l]; };
 
-/** instances bucketed in tiles, so only those near enough are drawn */
-interface Tiled { buf: WebGLBuffer; stride: number; tiles: { x: number; z: number; start: number; count: number }[] }
-const TILE = 16;
+/** what's on the GPU for one chunk */
+interface Held { key: string; x: number; z: number; ground: WebGLBuffer; culms: WebGLBuffer; nCulms: number; sprays: WebGLBuffer; nSprays: number; stones: WebGLBuffer; nStones: number; steps: WebGLBuffer; nSteps: number }
 
 export class Renderer {
   private gl: WebGL2RenderingContext;
   private progs: Record<string, WebGLProgram> = {};
   private fbo: WebGLFramebuffer | null = null; private texC: WebGLTexture | null = null; private texA: WebGLTexture | null = null; private texZ: WebGLTexture | null = null; private size = [0, 0];
   private vbo: Record<string, { buf: WebGLBuffer; count: number }> = {};
-  private culms!: Tiled; private sprays!: Tiled; private litter!: { buf: WebGLBuffer; count: number }; private steps!: { buf: WebGLBuffer; count: number };
-  private stones: { buf: WebGLBuffer; count: number }[] = [];
-  private ground!: { buf: WebGLBuffer; idx: WebGLBuffer; count: number };
+  private idx!: { buf: WebGLBuffer; count: number };
+  private chunks = new Map<string, Held>();
   private ridge!: { buf: WebGLBuffer; count: number };
   private vao: WebGLVertexArrayObject;
   readonly clean: boolean; readonly marks: number;
@@ -460,66 +450,67 @@ export class Renderer {
   reach = [10, 40, 30, 75]; pick = [26, 72];
   sunDir = norm([-0.55, 0.62, 0.42]);
 
-  constructor(private canvas: HTMLCanvasElement, land: Land, grove: Grove, opts: { clean?: boolean; marks?: boolean } = {}) {
+  constructor(private canvas: HTMLCanvasElement, ridges: { x: number; z: number; y: number }[][], opts: { clean?: boolean; marks?: boolean } = {}) {
     const gl = canvas.getContext('webgl2', { antialias: false, preserveDrawingBuffer: true });
     if (!gl) throw new Error('WebGL2 is needed');
     this.gl = gl; this.clean = !!opts.clean; this.marks = opts.marks === false ? 0 : 1;
     this.vao = gl.createVertexArray()!;
     const P = (n: string, vs: string, fs: string) => { this.progs[n] = this.program(vs, fs); };
-    P('culm', CULM_VS, CULM_FS); P('spray', SPRAY_VS, SPRAY_FS); P('ground', GROUND_VS, GROUND_FS); P('litter', LITTER_VS, LITTER_FS);
+    P('culm', CULM_VS, CULM_FS); P('spray', SPRAY_VS, SPRAY_FS); P('ground', GROUND_VS, GROUND_FS);
     P('solid', SOLID_VS, SOLID_FS); P('ridge', RIDGE_VS, RIDGE_FS); P('post', POST_VS, POST_FS);
-    const B = (data: Float32Array) => { const b = gl.createBuffer()!; gl.bindBuffer(gl.ARRAY_BUFFER, b); gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW); return b; };
-    for (const [k, m] of [['culmNear', culmMesh(8, 20)], ['culmFar', culmMesh(5, 10)], ['quad', QUAD]] as const) this.vbo[k] = { buf: B(m), count: m.length / 2 };
-    const box = boxMesh(); this.vbo.box = { buf: B(box), count: box.length / 6 };
-    for (let k = 0; k < 4; k++) { const m = lumpMesh(k * 1.7 + 0.3); this.vbo[`lump${k}`] = { buf: B(m), count: m.length / 6 }; }
-    this.vbo.screen = { buf: B(new Float32Array([-1, -1, 3, -1, -1, 3])), count: 3 };
-    // (the culms and their sprays, by tile)
-    const tiled = <T,>(items: T[], at: (t: T) => [number, number], pack: (t: T, o: Float32Array, k: number) => void, stride: number): Tiled => {
-      const key = (x: number, z: number) => `${Math.floor(x / TILE)},${Math.floor(z / TILE)}`, groups = new Map<string, T[]>();
-      for (const it of items) { const [x, z] = at(it), k = key(x, z); (groups.get(k) ?? groups.set(k, []).get(k)!).push(it); }
-      const data = new Float32Array(items.length * stride), tiles: Tiled['tiles'] = [];
-      let n = 0;
-      for (const [k, list] of groups) { const [tx, tz] = k.split(',').map(Number); tiles.push({ x: (tx + 0.5) * TILE, z: (tz + 0.5) * TILE, start: n, count: list.length }); for (const it of list) pack(it, data, n++ * stride); }
-      return { buf: B(data), stride, tiles };
-    };
-    this.culms = tiled(grove.culms, (c) => [c.x, c.z], (c, o, k) => { o.set([c.x, c.y, c.z, c.r, c.h, c.lx, c.lz, c.node, c.age, c.phase, c.pick, c.d], k); }, 12);
-    this.sprays = tiled(grove.sprays, (s) => [grove.culms[s.c].x, grove.culms[s.c].z], (s, o, k) => {
-      const c = grove.culms[s.c]; o.set([c.x, c.y, c.z, c.h, c.lx, c.lz, c.phase, c.pick, s.y, s.ox, s.oz, s.size, s.yaw, s.tilt, s.seed, 0], k);
-    }, 16);
-    { const d = new Float32Array(grove.litter.length * 8); grove.litter.forEach((l, i) => d.set([l.x, l.y, l.z, l.yaw, l.len, l.tone, 0, 0], i * 8)); this.litter = { buf: B(d), count: grove.litter.length }; }
+    for (const [k, m] of [['culmNear', culmMesh(8, 20)], ['culmFar', culmMesh(5, 10)], ['quad', QUAD]] as const) this.vbo[k] = { buf: this.buffer(m), count: m.length / 2 };
+    const box = boxMesh(); this.vbo.box = { buf: this.buffer(box), count: box.length / 6 };
+    const lump = lumpMesh(1.7); this.vbo.lump = { buf: this.buffer(lump), count: lump.length / 6 };
+    this.vbo.screen = { buf: this.buffer(new Float32Array([-1, -1, 3, -1, -1, 3])), count: 3 };
+    // (one index buffer serves every chunk's ground: the same grid)
     {
-      const steps = land.ways.flatMap((w) => w.steps), d = new Float32Array(steps.length * 8);
-      steps.forEach((s, i) => d.set([s.x, s.y, s.z, Math.atan2(s.dx, s.dz), s.depth, s.width, s.drop, (i * 0.618) % 1], i * 8));
-      this.steps = { buf: B(d), count: steps.length };
+      const idx = new Uint16Array((CN - 1) * (CN - 1) * 6); let m = 0;
+      for (let j = 0; j < CN - 1; j++) for (let i = 0; i < CN - 1; i++) { const a = i + j * CN; idx.set([a, a + CN, a + 1, a + 1, a + CN, a + CN + 1], m); m += 6; }
+      const b = gl.createBuffer()!; gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, b); gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, idx, gl.STATIC_DRAW);
+      this.idx = { buf: b, count: idx.length };
     }
-    for (let k = 0; k < 4; k++) { const list = grove.stones.filter((s) => s.kind === k), d = new Float32Array(list.length * 8); list.forEach((s, i) => d.set([s.x, s.y, s.z, s.yaw, s.r, s.flat, s.moss, 0], i * 8)); this.stones.push({ buf: B(d), count: list.length }); }
-    // (the ground: the grid, its normals, how far each point is from a way)
-    {
-      const v = new Float32Array(NX * NZ * 7), H = land.ground;
-      for (let j = 0; j < NZ; j++) for (let i = 0; i < NX; i++) {
-        const k = i + j * NX, x = X0 + i * CELL, z = Z0 + j * CELL;
-        const hx = H[Math.min(NX - 1, i + 1) + j * NX] - H[Math.max(0, i - 1) + j * NX], hz = H[i + Math.min(NZ - 1, j + 1) * NX] - H[i + Math.max(0, j - 1) * NX];
-        const n = norm([-hx, 2 * CELL, -hz]);
-        v.set([x, H[k], z, n[0], n[1], n[2], Math.min(30, land.near[k])], k * 7);
-      }
-      const idx = new Uint32Array((NX - 1) * (NZ - 1) * 6); let m = 0;
-      for (let j = 0; j < NZ - 1; j++) for (let i = 0; i < NX - 1; i++) { const a = i + j * NX; idx.set([a, a + NX, a + 1, a + 1, a + NX, a + NX + 1], m); m += 6; }
-      const ib = gl.createBuffer()!; gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ib); gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, idx, gl.STATIC_DRAW);
-      this.ground = { buf: B(v), idx: ib, count: idx.length };
-    }
-    // (the far ranges: each a band from its crest down out of sight)
+    // (the far ranges, round about: each a band from its crest down out of sight)
     {
       const d: number[] = [];
-      grove.ridges.forEach((line, layer) => {
+      ridges.forEach((line, layer) => {
         for (let i = 0; i + 1 < line.length; i++) {
-          const a = line[i], b = line[i + 1], lo = -400;
+          const a = line[i], b = line[i + 1], lo = -500;
           const A = [a.x, a.y, a.z, 0, layer], Bq = [b.x, b.y, b.z, 0, layer], C = [b.x, lo, b.z, b.y - lo, layer], D = [a.x, lo, a.z, a.y - lo, layer];
           d.push(...A, ...Bq, ...C, ...A, ...C, ...D);
         }
       });
-      this.ridge = { buf: B(new Float32Array(d)), count: d.length / 5 };
+      this.ridge = { buf: this.buffer(new Float32Array(d)), count: d.length / 5 };
     }
   }
+  private buffer(data: Float32Array) { const gl = this.gl, b = gl.createBuffer()!; gl.bindBuffer(gl.ARRAY_BUFFER, b); gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW); return b; }
+
+  get held() { return this.chunks.size; }
+  has(key: string) { return this.chunks.has(key); }
+  /** hand a chunk to the GPU */
+  add(key: string, c: Chunk) {
+    const G = c.ground, v = new Float32Array(CN * CN * 8);
+    for (let j = 0; j < CN; j++) for (let i = 0; i < CN; i++) {
+      const k = i + j * CN, hx = G[Math.min(CN - 1, i + 1) + j * CN] - G[Math.max(0, i - 1) + j * CN], hz = G[i + Math.min(CN - 1, j + 1) * CN] - G[i + Math.max(0, j - 1) * CN];
+      const n = norm([-hx * ((i === 0 || i === CN - 1) ? 2 : 1), 2 * CELL, -hz * ((j === 0 || j === CN - 1) ? 2 : 1)]);
+      v.set([c.x0 + i * CELL, G[k], c.z0 + j * CELL, n[0], n[1], n[2], c.near[k], c.rock[k]], k * 8);
+    }
+    const cu = new Float32Array(c.tall * 12);
+    for (let k = 0; k < c.tall; k++) { const q = c.culms[k]; cu.set([q.x, q.y, q.z, q.r, q.h, q.lx, q.lz, q.node, q.age, q.phase, q.pick, 0], k * 12); }
+    const sp = new Float32Array(c.sprays.length * 16);
+    c.sprays.forEach((s, k) => { const q = c.culms[s.c]; sp.set([q.x, q.y, q.z, q.h, q.lx, q.lz, q.phase, q.pick, s.y, s.ox, s.oz, s.size, s.yaw, s.tilt, s.seed, 0], k * 16); });
+    const st = new Float32Array(c.stones.length * 8);
+    c.stones.forEach((s, k) => st.set([s.x, s.y, s.z, s.yaw, s.r, s.flat, s.moss, 0], k * 8));
+    const sx = new Float32Array(c.steps.length * 8);
+    c.steps.forEach((s, k) => sx.set([s.x, s.y, s.z, Math.atan2(s.dx, s.dz), s.depth, s.width, s.drop, s.seed], k * 8));
+    this.chunks.set(key, { key, x: c.x0 + CHUNK / 2, z: c.z0 + CHUNK / 2, ground: this.buffer(v), culms: this.buffer(cu), nCulms: c.tall, sprays: this.buffer(sp), nSprays: c.sprays.length, stones: this.buffer(st), nStones: c.stones.length, steps: this.buffer(sx), nSteps: c.steps.length });
+  }
+  /** let a chunk go */
+  drop(key: string) {
+    const h = this.chunks.get(key); if (!h) return;
+    for (const b of [h.ground, h.culms, h.sprays, h.stones, h.steps]) this.gl.deleteBuffer(b);
+    this.chunks.delete(key);
+  }
+  keys() { return [...this.chunks.keys()]; }
 
   private program(vs: string, fs: string) {
     const gl = this.gl, mk = (t: number, s: string) => { const sh = gl.createShader(t)!; gl.shaderSource(sh, s); gl.compileShader(sh); if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) throw new Error(`${t === gl.VERTEX_SHADER ? 'vertex' : 'fragment'}: ${gl.getShaderInfoLog(sh)}`); return sh; };
@@ -543,14 +534,12 @@ export class Renderer {
     this.size = [w, h];
   }
 
-  /** the sun's place on the screen (x, y in 0..1; z how much it's in front), given the last frame's matrix */
   private sunUV = [0.5, 0.9, 0];
   private uni(p: WebGLProgram, f: Frame, vp: number[], right: number[]) {
     const gl = this.gl, u = (n: string) => gl.getUniformLocation(p, n);
     gl.uniformMatrix4fv(u('uVP'), false, vp); gl.uniform3fv(u('uEye'), f.eye); gl.uniform1f(u('uTime'), f.t); gl.uniform3fv(u('uSun'), this.sunDir);
     gl.uniform4fv(u('uGust'), f.gust); gl.uniform3fv(u('uSunC'), [2.4, 2.15, 1.7]); gl.uniform3fv(u('uSky'), [0.78, 0.84, 0.86]); gl.uniform1f(u('uOpen'), 0);
     gl.uniform4fv(u('uReach'), this.reach); gl.uniform2fv(u('uPick'), this.pick); gl.uniform1f(u('uMarks'), this.marks); gl.uniform3fv(u('uRight'), right);
-    gl.uniform4fv(u('uBounds'), [X0, Z0, X0 + (NX - 1) * CELL, Z0 + (NZ - 1) * CELL]);
   }
   private attr(loc: number, buf: WebGLBuffer, size: number, stride: number, off: number, div = 0) {
     const gl = this.gl; gl.bindBuffer(gl.ARRAY_BUFFER, buf); gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, size, gl.FLOAT, false, stride * 4, off * 4); gl.vertexAttribDivisor(loc, div);
@@ -560,75 +549,62 @@ export class Renderer {
   draw(f: Frame, w: number, h: number) {
     const gl = this.gl;
     this.targets(w, h);
-    const near = 0.1, far = 2400, proj = perspective(f.fov, w / h, near, far), view = lookAt(f.eye, f.look), vp = mul(proj, view);
+    const fw = norm([f.look[0] - f.eye[0], f.look[1] - f.eye[1], f.look[2] - f.eye[2]]), side = norm(cross(fw, [0, 1, 0])), r = f.roll ?? 0;
+    const upv = [Math.sin(r) * side[0], Math.cos(r) + Math.sin(r) * side[1], Math.sin(r) * side[2]];
+    const near = 0.1, far = 3000, proj = perspective(f.fov, w / h, near, far), view = lookAt(f.eye, f.look, upv), vp = mul(proj, view);
     const right = [view[0], view[4], view[8]], fwd = norm([f.look[0] - f.eye[0], 0, f.look[2] - f.eye[2]]);
     gl.bindVertexArray(this.vao);
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.fbo); gl.viewport(0, 0, w, h);
     gl.clearBufferfv(gl.COLOR, 0, [0, 0, 0, 0]); gl.clearBufferfv(gl.COLOR, 1, [0, 0, 0, 1]); gl.clearBufferfv(gl.DEPTH, 0, [1]);
     gl.enable(gl.DEPTH_TEST); gl.depthFunc(gl.LEQUAL); gl.disable(gl.BLEND); gl.disable(gl.CULL_FACE);
     const use = (n: string) => { const p = this.progs[n]; gl.useProgram(p); this.uni(p, f, vp, right); this.clearAttrs(); return p; };
-    // (which tiles are worth drawing: near enough, and not behind)
-    const visible = (t: { x: number; z: number }, range: number) => {
-      const dx = t.x - f.eye[0], dz = t.z - f.eye[2], d = Math.hypot(dx, dz);
-      return d < range && (d < TILE * 1.5 || (dx * fwd[0] + dz * fwd[2]) / d > -0.35);
-    };
-    // ─── the far ranges first, under everything (blended onto the page's clear) ───
+    // (which chunks are worth drawing: near enough, and not behind)
+    const all = [...this.chunks.values()].map((c) => { const dx = c.x - f.eye[0], dz = c.z - f.eye[2], d = Math.hypot(dx, dz); return { c, d, ok: d < CHUNK * 1.2 || (dx * fwd[0] + dz * fwd[2]) / d > -0.4 }; }).filter((q) => q.ok);
+    const inRange = (r: number) => all.filter((q) => q.d < r + CHUNK * 0.71);
+    // ─── the far ranges, under everything ───
     {
-      use('ridge'); gl.depthMask(false);
+      use('ridge');
       this.attr(0, this.ridge.buf, 3, 5, 0); this.attr(1, this.ridge.buf, 2, 5, 3);
-      gl.enable(gl.BLEND); gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
       gl.drawArrays(gl.TRIANGLES, 0, this.ridge.count);
-      gl.disable(gl.BLEND); gl.depthMask(true);
     }
     // ─── the ground ───
     {
       use('ground');
-      this.attr(0, this.ground.buf, 3, 7, 0); this.attr(1, this.ground.buf, 3, 7, 3); this.attr(2, this.ground.buf, 1, 7, 6);
-      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.ground.idx); gl.drawElements(gl.TRIANGLES, this.ground.count, gl.UNSIGNED_INT, 0);
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.idx.buf);
+      for (const { c } of all) {
+        this.attr(0, c.ground, 3, 8, 0); this.attr(1, c.ground, 3, 8, 3); this.attr(2, c.ground, 2, 8, 6);
+        gl.drawElements(gl.TRIANGLES, this.idx.count, gl.UNSIGNED_SHORT, 0);
+      }
     }
     // ─── steps and stones ───
     {
       const p = use('solid');
       gl.uniform1i(gl.getUniformLocation(p, 'uKind'), 1);
       this.attr(0, this.vbo.box.buf, 3, 6, 0); this.attr(1, this.vbo.box.buf, 3, 6, 3);
-      this.attr(2, this.steps.buf, 4, 8, 0, 1); this.attr(3, this.steps.buf, 4, 8, 4, 1);
-      gl.drawArraysInstanced(gl.TRIANGLES, 0, this.vbo.box.count, this.steps.count);
+      for (const { c } of inRange(this.reach[3])) if (c.nSteps) { this.attr(2, c.steps, 4, 8, 0, 1); this.attr(3, c.steps, 4, 8, 4, 1); gl.drawArraysInstanced(gl.TRIANGLES, 0, this.vbo.box.count, c.nSteps); }
       gl.uniform1i(gl.getUniformLocation(p, 'uKind'), 2);
-      for (let k = 0; k < 4; k++) {
-        if (!this.stones[k].count) continue;
-        const m = this.vbo[`lump${k}`];
-        this.attr(0, m.buf, 3, 6, 0); this.attr(1, m.buf, 3, 6, 3);
-        this.attr(2, this.stones[k].buf, 4, 8, 0, 1); this.attr(3, this.stones[k].buf, 4, 8, 4, 1);
-        gl.drawArraysInstanced(gl.TRIANGLES, 0, m.count, this.stones[k].count);
-      }
-    }
-    // ─── the litter ───
-    {
-      use('litter');
-      this.attr(0, this.vbo.quad.buf, 2, 2, 0); this.attr(1, this.litter.buf, 4, 8, 0, 1); this.attr(2, this.litter.buf, 4, 8, 4, 1);
-      gl.enable(gl.POLYGON_OFFSET_FILL); gl.polygonOffset(-1, -2);
-      gl.drawArraysInstanced(gl.TRIANGLES, 0, 6, this.litter.count);
-      gl.disable(gl.POLYGON_OFFSET_FILL);
+      this.attr(0, this.vbo.lump.buf, 3, 6, 0); this.attr(1, this.vbo.lump.buf, 3, 6, 3);
+      for (const { c } of inRange(this.reach[3])) if (c.nStones) { this.attr(2, c.stones, 4, 8, 0, 1); this.attr(3, c.stones, 4, 8, 4, 1); gl.drawArraysInstanced(gl.TRIANGLES, 0, this.vbo.lump.count, c.nStones); }
     }
     // ─── the culms: finer near, coarser further ───
     {
       use('culm');
-      for (const t of this.culms.tiles) {
-        if (!visible(t, this.pick[1] + 20)) continue;
-        const d = Math.hypot(t.x - f.eye[0], t.z - f.eye[2]), m = d < 26 ? this.vbo.culmNear : this.vbo.culmFar;
+      for (const { c, d } of inRange(this.pick[1])) {
+        if (!c.nCulms) continue;
+        const m = d < 30 ? this.vbo.culmNear : this.vbo.culmFar;
         this.attr(0, m.buf, 2, 2, 0);
-        for (let a = 0; a < 3; a++) this.attr(1 + a, this.culms.buf, 4, 12, t.start * 12 + a * 4, 1);
-        gl.drawArraysInstanced(gl.TRIANGLES, 0, m.count, t.count);
+        for (let a = 0; a < 3; a++) this.attr(1 + a, c.culms, 4, 12, a * 4, 1);
+        gl.drawArraysInstanced(gl.TRIANGLES, 0, m.count, c.nCulms);
       }
     }
     // ─── the sprays ───
     {
       use('spray');
       this.attr(0, this.vbo.quad.buf, 2, 2, 0);
-      for (const t of this.sprays.tiles) {
-        if (!visible(t, this.pick[1])) continue;
-        for (let a = 0; a < 4; a++) this.attr(1 + a, this.sprays.buf, 4, 16, t.start * 16 + a * 4, 1);
-        gl.drawArraysInstanced(gl.TRIANGLES, 0, 6, t.count);
+      for (const { c } of inRange(this.pick[1] - 8)) {
+        if (!c.nSprays) continue;
+        for (let a = 0; a < 4; a++) this.attr(1 + a, c.sprays, 4, 16, a * 4, 1);
+        gl.drawArraysInstanced(gl.TRIANGLES, 0, 6, c.nSprays);
       }
     }
     // ─── the page ───
@@ -645,7 +621,7 @@ export class Renderer {
     gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, this.texZ); gl.uniform1i(u('uZ'), 2);
     gl.uniform2fv(u('uRes'), [w, h]); gl.uniform1f(u('uNear'), near); gl.uniform1f(u('uFar'), far); gl.uniform1f(u('uPx'), Math.max(1, h / 900));
     gl.uniform3fv(u('uPaper'), [0.937, 0.902, 0.824]); gl.uniform3fv(u('uInk'), [0.13, 0.12, 0.105]); gl.uniform3fv(u('uSunUV'), this.sunUV);
-    gl.uniform1f(u('uClean'), this.clean ? 1 : 0); gl.uniform1f(u('uMarks'), this.marks);
+    gl.uniform1f(u('uClean'), this.clean ? 1 : 0); gl.uniform1f(u('uMarks'), this.marks); gl.uniform1f(u('uSpeed'), f.speed ?? 0);
     this.attr(0, this.vbo.screen.buf, 2, 2, 0);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
   }
