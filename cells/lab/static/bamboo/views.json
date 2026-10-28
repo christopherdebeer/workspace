@@ -40,6 +40,29 @@
   ]
  },
  {
+  "group": "How far it’s drawn",
+  "views": [
+   {
+    "name": "drawing",
+    "title": "Drawing",
+    "caption": "the colour held close (8 m), a wash of its tones in ink to 28 m, then the marks alone on the paper",
+    "file": "v-drawing.jpg"
+   },
+   {
+    "name": "marks",
+    "title": "Marks only",
+    "caption": "no colour at all: the culms as paper, their outlines and node ticks; the sprays as brush strokes; the litter as fine leaf marks",
+    "file": "v-marks.jpg"
+   },
+   {
+    "name": "picture",
+    "title": "Picture",
+    "caption": "the colour carried far, the wash and ink beyond it",
+    "file": "v-picture.jpg"
+   }
+  ]
+ },
+ {
   "group": "Looks",
   "views": [
    {

@@ -14,15 +14,49 @@
  */
 import { World, ridges, type Trail } from './world';
 import { Runner, LOPE } from './runner';
-import { Renderer, type Frame } from './render';
+import { Renderer, type Frame, type Reach } from './render';
 
 const params = new URLSearchParams(location.search);
 const canvas = document.getElementById('view') as HTMLCanvasElement;
 const hint = document.getElementById('hint') as HTMLDivElement | null;
 const seed = Number(params.get('seed') ?? 1) || 1;
 const world = new World(seed);
-const renderer = new Renderer(canvas, ridges(seed), { clean: params.has('clean'), marks: params.get('marks') !== '0' });
+const renderer = new Renderer(canvas, ridges(seed), { clean: params.has('clean'), marks: params.get('marks') !== '0', shadows: params.get('shadows') !== '0' });
 const auto = params.has('auto'), still = params.has('still');
+
+// ─── how far it's drawn: colour, then a wash of its tones in ink, then the marks alone on the paper, then the page ───
+const PRESETS: Record<string, Reach> = {
+  picture: { colour: 85, wash: 110, ink: 130, soft: 4 },
+  board: { colour: 22, wash: 48, ink: 85, soft: 3 },
+  drawing: { colour: 8, wash: 28, ink: 85, soft: 2.5 },
+  marks: { colour: 0, wash: 0, ink: 90, soft: 2 },
+};
+{
+  const p = PRESETS[params.get('reach') ?? 'board'] ?? PRESETS.board, num = (k: string, d: number) => (params.has(k) ? Number(params.get(k)) : d);
+  renderer.reach = { colour: num('colour', p.colour), wash: num('wash', p.wash), ink: num('ink', p.ink), soft: num('soft', p.soft) };
+}
+{
+  const panel = document.getElementById('reach'), btn = document.getElementById('inkbtn');
+  const sliders = ['colour', 'wash', 'ink'] as const;
+  const show = () => {
+    for (const k of sliders) { (document.getElementById(`r-${k}`) as HTMLInputElement).value = String(renderer.reach[k]); document.getElementById(`v-${k}`)!.textContent = `${Math.round(renderer.reach[k])} m`; }
+    for (const b of panel?.querySelectorAll('[data-p]') ?? []) { const q = PRESETS[(b as HTMLElement).dataset.p!]; b.classList.toggle('on', sliders.every((k) => q[k] === renderer.reach[k])); }
+  };
+  // (keep the address in step, so a reach can be passed on)
+  const remember = () => { const u = new URL(location.href); for (const k of sliders) u.searchParams.set(k, String(renderer.reach[k])); u.searchParams.delete('reach'); history.replaceState(null, '', u); };
+  btn?.addEventListener('click', () => { panel?.classList.toggle('open'); show(); });
+  for (const k of sliders) document.getElementById(`r-${k}`)?.addEventListener('input', (e) => {
+    const v = Number((e.target as HTMLInputElement).value), r = renderer.reach;
+    r[k] = v;
+    // (the bands stay in order: colour inside the wash, the wash inside the ink)
+    if (k === 'colour') { r.wash = Math.max(r.wash, v); r.ink = Math.max(r.ink, r.wash + 5); }
+    if (k === 'wash') { r.colour = Math.min(r.colour, v); r.ink = Math.max(r.ink, v + 5); }
+    if (k === 'ink') { r.wash = Math.min(r.wash, v - 5); r.colour = Math.min(r.colour, r.wash); }
+    show(); remember();
+  });
+  for (const b of panel?.querySelectorAll('[data-p]') ?? []) b.addEventListener('click', () => { renderer.reach = { ...PRESETS[(b as HTMLElement).dataset.p!] }; show(); remember(); });
+  for (const el of [panel, btn]) el?.addEventListener('pointerdown', (e) => e.stopPropagation());
+}
 let t = Number(params.get('t') ?? 0);
 
 // ─── you, and the land round you, built a chunk at a time as you go ───
@@ -170,7 +204,7 @@ function frame(now: number) {
   const look: [number, number, number] = [eye[0] + Math.sin(yaw) * Math.cos(p), eye[1] + Math.sin(p), eye[2] + Math.cos(yaw) * Math.cos(p)];
   roll = roll * 0.9 + (-me.turn * 0.5 * s + Math.sin(me.phase * Math.PI) * 0.012 * s) * 0.1;
   const portrait = innerHeight > innerWidth, base = Number(params.get('fov')) || (portrait ? 74 : 60);
-  const fov = (base + 9 * s) * Math.PI / 180;
+  const fov = (base + 12 * s) * Math.PI / 180;
   const f: Frame = { eye, look, fov, t, gust: [gust.dir[0], gust.dir[1], gust.front, gust.strength], speed: me.v, roll };
   renderer.draw(f, canvas.width, canvas.height);
   const ms = performance.now() - now;

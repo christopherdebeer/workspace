@@ -1,7 +1,7 @@
 /**
  * You, running (no drawing or input here, so it can be run on its own: devtools/bamboo-run.mjs).
  *
- * - **the lope**: about 5 m/s, gathering and easing off smoothly; slower uphill, quicker down, a little quicker on a trail;
+ * - **the lope**: about 7 m/s, gathering and easing off smoothly; slower uphill, quicker down, a little quicker on a trail;
  * - **the weave**: each moment, of the ways within thirty degrees or so of where you're heading, the one that's clearest
  *   (no culm in its path for five metres; no rock face to climb; no drop too far to take) and nearest your heading;
  * - **the trail**: running more or less along one, it turns you with it, until you turn off it;
@@ -13,7 +13,7 @@
  */
 import { World, CHUNK, HALF, type Chunk } from './world';
 
-export const LOPE = 5.2;
+export const LOPE = 7;
 export interface Input { go: boolean; turn: number }
 const wrap = (a: number) => { while (a > Math.PI) a -= 2 * Math.PI; while (a < -Math.PI) a += 2 * Math.PI; return a; };
 const key = (i: number, j: number) => `${i},${j}`;
@@ -67,9 +67,11 @@ export class Runner {
     // (the weave: the clearest way near your heading)
     const near = this.culmsNear(this.x, this.z, 7), here = this.groundAt(this.x, this.z);
     let best = this.heading, bestCost = 1e9;
-    for (let a = -5; a <= 5; a++) {
-      const ang = this.heading + a * 0.11, dx = Math.sin(ang), dz = Math.cos(ang);
-      let cost = Math.abs(a) * 0.5;
+    // (looking wider when the way ahead's barred: a rim or a face turns you along it)
+    for (let a = -5; a <= 5 || (bestCost >= 60 && a <= 14); a++) {
+      const k = a <= 5 ? a : (a % 2 ? 1 : -1) * (6 + Math.floor((a - 6) / 2)) ;
+      const ang = this.heading + k * 0.11, dx = Math.sin(ang), dz = Math.cos(ang);
+      let cost = Math.abs(k) * 0.5;
       for (const c of near) {
         const rx = c.x - this.x, rz = c.z - this.z, al = rx * dx + rz * dz, lat = Math.abs(-rx * dz + rz * dx);
         if (al > 0 && al < 5.5 && lat < 0.42 + c.r) cost += (5.5 - al) * 1.4;
@@ -80,13 +82,15 @@ export class Runner {
       if (cost < bestCost) { bestCost = cost; best = ang; }
     }
     this.move += wrap(best - this.move) * Math.min(1, dt * 6);
+    // (turned aside by a rim, you go on that way: the heading follows)
+    if (Math.abs(wrap(best - this.heading)) > 0.6 && bestCost < 60) this.heading += wrap(best - this.heading) * Math.min(1, dt * 1.5);
     // (the pace)
     const dx = Math.sin(this.move), dz = Math.cos(this.move), grade = (this.groundAt(this.x + dx * 2, this.z + dz * 2) - here) / 2;
     let target = input.go ? LOPE * (1 - Math.min(0.6, Math.max(0, grade)) * 0.9) * (1 + Math.min(0.35, Math.max(0, -grade)) * 0.5) * (this.onTrail ? 1.08 : 1) : 0;
     this.stopped = bestCost >= 60;
     if (this.stopped) target = 0;
     else if (bestCost > 8) target *= 0.7;
-    this.v += (target - this.v) * Math.min(1, dt * (target > this.v ? 1.6 : 2.8));
+    this.v += (target - this.v) * Math.min(1, dt * (target > this.v ? 2.2 : 3));
     // (never through a culm: if one's right there, slip past it)
     let nx = this.x + dx * this.v * dt, nz = this.z + dz * this.v * dt;
     for (const c of near) { const ox = nx - c.x, oz = nz - c.z, d = Math.hypot(ox, oz), m = 0.32 + c.r; if (d < m && d > 1e-4) { nx = c.x + (ox / d) * m; nz = c.z + (oz / d) * m; } }
@@ -101,7 +105,7 @@ export class Runner {
     else this.y += (g - this.y) * Math.min(1, dt * (onStair ? 14 : 10));
     this.dip *= 1 - Math.min(1, dt * 5);
     // (the stride)
-    const stride = onStair ? 0.8 : 1.7, before = this.phase;
+    const stride = onStair ? 0.8 : 2.2, before = this.phase;
     if (!this.air) this.phase += (this.v * dt) / stride;
     if (Math.floor(this.phase) !== Math.floor(before)) this.onStep(onStair, 0.5 + this.v / LOPE);
   }

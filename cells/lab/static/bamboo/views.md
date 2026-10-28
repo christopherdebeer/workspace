@@ -13,6 +13,12 @@ Made by `node cells/lab/views.mjs bamboo` from `client/bamboo/views.mjs`. The RE
 ![A trail along a fall: a trail with the ground falling away beside it: the near culms drawn whole, the far side going to the page (target B)](v-b.jpg)
 ![A cliff’s rim: too big a drop to take: the run stops at the edge, the valley beyond](v-cliff.jpg)
 
+## How far it’s drawn
+
+![Drawing: the colour held close (8 m), a wash of its tones in ink to 28 m, then the marks alone on the paper](v-drawing.jpg)
+![Marks only: no colour at all: the culms as paper, their outlines and node ticks; the sprays as brush strokes; the litter as fine leaf marks](v-marks.jpg)
+![Picture: the colour carried far, the wash and ink beyond it](v-picture.jpg)
+
 ## Looks
 
 ![Looking up: the culms converging, the sprays against the sky](v-up.jpg)

@@ -208,20 +208,20 @@ export class World {
     // ─── sprays: along the upper part of each culm ───
     const sprays: Spray[] = [];
     culms.forEach((c, k) => {
-      for (let m = 0; m < 9; m++) {
-        const f = c.crown + (1 - c.crown) * ((m + u01(s, ci, cj, k, m, 21)) / 9), a = u01(s, ci, cj, k, m, 22) * 6.283, out = 0.4 + u01(s, ci, cj, k, m, 23) * 1.3;
-        sprays.push({ c: k, y: c.h * f, ox: Math.sin(a) * out, oz: Math.cos(a) * out, size: 0.7 + u01(s, ci, cj, k, m, 24) * 0.6, yaw: a + (u01(s, ci, cj, k, m, 25) - 0.5) * 1.2, tilt: (u01(s, ci, cj, k, m, 26) - 0.5) * 0.9, seed: u01(s, ci, cj, k, m, 27) });
+      for (let m = 0; m < 12; m++) {
+        const f = c.crown + (1 - c.crown) * Math.sqrt((m + u01(s, ci, cj, k, m, 21)) / 12), a = u01(s, ci, cj, k, m, 22) * 6.283, out = 0.4 + u01(s, ci, cj, k, m, 23) * 1.3;
+        sprays.push({ c: k, y: c.h * f, ox: Math.sin(a) * out, oz: Math.cos(a) * out, size: 0.75 + u01(s, ci, cj, k, m, 24) * 0.75, yaw: a + (u01(s, ci, cj, k, m, 25) - 0.5) * 1.2, tilt: (u01(s, ci, cj, k, m, 26) - 0.5) * 0.9, seed: u01(s, ci, cj, k, m, 27) });
       }
     });
     // ─── low greens: scattered through the grove, thicker along a trail's edges (each held by a hidden stub) ───
-    for (let n = 0; n < 70; n++) {
+    for (let n = 0; n < 130; n++) {
       const x = x0 + u01(s, ci, cj, n, 60) * CHUNK, z = z0 + u01(s, ci, cj, n, 61) * CHUNK, q = this.trailNear(x, z);
-      const p = q.d < HALF + 0.2 ? 0 : q.d < 4.5 ? 0.9 : 0.22;
+      const p = q.d < HALF + 0.2 ? 0 : q.d < 4.5 ? 0.95 : 0.3;
       if (u01(s, ci, cj, n, 62) > p || slope(x, z) > 0.9) continue;
       const gy = g(x, z), a = u01(s, ci, cj, n, 64) * 6.283;
       culms.push({ x, y: gy - 3, z, r: 0, h: 3.2, lx: 0, lz: 0, node: 1, age: 0, phase: u01(s, ci, cj, n, 63) * 6.28, pick: 0, crown: 1 });
       const k = culms.length - 1;
-      for (let m = 0; m < 2; m++) sprays.push({ c: k, y: 3.15 + u01(s, ci, cj, n, 65 + m) * 0.7, ox: Math.sin(a + m * 2) * 0.25, oz: Math.cos(a + m * 2) * 0.25, size: 0.35 + u01(s, ci, cj, n, 67 + m) * 0.3, yaw: a + m * 1.7, tilt: (u01(s, ci, cj, n, 69 + m) - 0.5) * 1.2, seed: u01(s, ci, cj, n, 71 + m) });
+      for (let m = 0; m < 2; m++) sprays.push({ c: k, y: 3.15 + u01(s, ci, cj, n, 65 + m) * 0.7, ox: Math.sin(a + m * 2) * 0.25, oz: Math.cos(a + m * 2) * 0.25, size: 0.4 + u01(s, ci, cj, n, 67 + m) * 0.5, yaw: a + m * 1.7, tilt: (u01(s, ci, cj, n, 69 + m) - 0.5) * 1.2, seed: u01(s, ci, cj, n, 71 + m) });
     }
     // ─── stones: under cliffs (fallen), at the foot of a trail's bank, now and then anywhere ───
     const stones: Stone[] = [];
