@@ -51,6 +51,7 @@ float fbm2(vec2 p) { return vn(p) * .55 + vn(p * 2.03 + 7.1) * .3 + vn(p * 4.1 -
 `;
 const COMMON = `#version 300 es
 precision highp float; precision highp int; precision highp sampler2DShadow;
+uniform float uClay;
 uniform mat4 uVP; uniform vec3 uEye; uniform float uTime; uniform vec3 uSun; uniform vec4 uGust;
 uniform vec4 uReach; // colour to, wash to, ink to, softness (metres)
 uniform vec4 uFrame; // where the frame starts drawing out (from the focus, 0…~1.6), the focus's distance, -, how much sooner things nearer or farther than it go
@@ -149,7 +150,8 @@ vec3 carpet(vec3 base, vec2 p, float px, out float mark, out float leaf) {
 }
 vec3 lit(vec3 alb, vec3 N, vec3 p, float wrap, float ao) {
   float sun = dapple(p) * culmShade(p), ndl = max(0., (dot(N, uSun) + wrap) / (1. + wrap));
-  vec3 a = lin(alb);
+  // (\`?clay\`: every surface one clay, its light kept (the sun on it, the shadows cast, the sky): the forms alone)
+  vec3 a = lin(uClay > .5 ? vec3(.8, .78, .74) : alb);
   return a * (uSunC * ndl * sun + uSky * (.5 + .5 * N.y) * ao + vec3(.2, .15, .08) * (1. - N.y) * .3 * ao);
 }
 // (the display: a soft shoulder, then back to the eye's curve)
@@ -162,6 +164,7 @@ layout(location = 0) out vec4 oC; layout(location = 1) out vec4 oA;
 // (\`lit\`: as the light has it; \`own\`: its own colour, flat, as a painter lays it once the light's gone; \`b\`: how
 // far along it is (bandAt, at a point of the thing's own))
 void emit(vec3 lit, vec3 own, float b, float kind, float allow, float mark, vec3 p) {
+  if (uClay > .5) { oC = vec4(lit, 1.); oA = vec4(kind, allow, 1., 0.); return; }
   // (a thing gone to the page is gone: it hides nothing behind it. One drawn as its ink alone still stands in front of
   // what's behind it, as a drawn culm does, its paper its own. The ground goes as its leaves do, never as a hole)
   if (kind > .3 && inkOf(b) < .04) discard;
@@ -255,10 +258,10 @@ void main() {
   // (drawn in ink, a culm's kept by how near it is: near ones held; mid ones fewer; far ones, most
   // gone, so the drawing is a few verticals and the space between them, not a fence)
   float worth = (1. - smoothstep(6., 28., dist)) * .8 + .12;
-  if (whole > 1.7 && h21(vec2(vI.y * 3.7, 5.3)) > worth * (2.9 - whole) / 1.1 * 1.6) discard;
+  if (uClay < .5 && whole > 1.7 && h21(vec2(vI.y * 3.7, 5.3)) > worth * (2.9 - whole) / 1.1 * 1.6) discard;
   // (a culm goes from the page whole, by its own reach; along it, as its internodes go further out, its colour gives
   // way and its ink thins, a brush lifting, never a cylinder cut off where an internode stops)
-  if (inkOf(vBand) < .04) discard;
+  if (uClay < .5 && inkOf(vBand) < .04) discard;
   emit(c, own(alb), min(drawn, 2.84), .4, allow, mark, vW);
 }`;
 const DEPTH_FS = `#version 300 es
@@ -315,7 +318,7 @@ void main() {
   // (the marks: each blade's edge near; where the colour's given out, the blade filled in ink, as a brush lays it)
   float near = 1. - smoothstep(8., 26., distance(vW, uEye));
   float mark = max((1. - smoothstep(.0, .3, rim)) * near * .85, (1. - colourOf(vBand)) * (.22 + .16 * best)) * uMarks;
-  if (vBand > 1.8 && fract(vSeed * 17.3) > (2.9 - vBand) / 1.1) discard;
+  if (uClay < .5 && vBand > 1.8 && fract(vSeed * 17.3) > (2.9 - vBand) / 1.1) discard;
   emit(c, own(alb), vBand, .6, near, mark, vW);
 }`;
 
@@ -470,12 +473,14 @@ precision highp float;
 in vec2 vUV; out vec4 o;
 uniform sampler2D uC; uniform sampler2D uA; uniform sampler2D uZ;
 uniform vec2 uRes; uniform float uNear; uniform float uFar; uniform float uPx;
-uniform vec3 uPaper; uniform vec3 uInk; uniform vec3 uSunUV; uniform float uClean; uniform float uMarks;
+uniform vec3 uPaper; uniform vec3 uInk; uniform vec3 uSunUV; uniform float uClean; uniform float uMarks; uniform float uClay;
 uniform vec4 uReach;
 ${NOISE}
 float lz(vec2 p) { float d = texture(uZ, p).r; return uNear * uFar / (uFar - d * (uFar - uNear)); }
 void main() {
   vec4 C = texture(uC, vUV), A = texture(uA, vUV);
+  // (\`?clay\`: the forms as they're lit, over a plain sky: no paper, no ink)
+  if (uClay > .5) { o = vec4(C.a > .01 ? C.rgb : vec3(.86, .87, .88), 1.); return; }
   float z = lz(vUV);
   // ─── the outlines: where the depth jumps or one kind meets another, inked on the side that's in front, as far as
   // its reach and its allowance there let it ───
@@ -663,6 +668,8 @@ export class Renderer {
   allStrokes = false;
   /** `?culms=0`: the land alone, no culms or sprays (the gates' hard test: does the mountain and its path read?) */
   bare = false;
+  /** `?clay`: every surface one clay, its light (sun, cast shadows, sky) kept; no paper, no ink: the forms alone */
+  clay = false;
   /** how far the drawing reaches (see the head of this file) */
   /** the focus's distance, this frame */
   focus = 15;
@@ -774,7 +781,7 @@ export class Renderer {
   private uni(p: WebGLProgram, f: Frame, vp: number[], right: number[]) {
     const gl = this.gl, u = (n: string) => gl.getUniformLocation(p, n);
     gl.uniformMatrix4fv(u('uVP'), false, vp); gl.uniform3fv(u('uEye'), f.eye); gl.uniform1f(u('uTime'), f.t); gl.uniform3fv(u('uSun'), this.sunDir);
-    gl.uniform4fv(u('uGust'), f.gust); gl.uniform3fv(u('uSunC'), [3.0, 2.45, 1.6]); gl.uniform3fv(u('uSky'), [0.62, 0.68, 0.72]); gl.uniform1f(u('uOpen'), 0);
+    gl.uniform4fv(u('uGust'), f.gust); gl.uniform1f(u('uClay'), this.clay ? 1 : 0); gl.uniform3fv(u('uSunC'), [3.0, 2.45, 1.6]); gl.uniform3fv(u('uSky'), [0.62, 0.68, 0.72]); gl.uniform1f(u('uOpen'), 0);
     gl.uniform4fv(u('uReach'), [this.reach.colour, this.reach.wash, this.reach.ink, this.reach.soft]); gl.uniform2fv(u('uPick'), this.pick); gl.uniform1f(u('uMarks'), this.marks); gl.uniform3fv(u('uRight'), right);
     { const c0 = 0.3 + this.reach.frame * 1.3; gl.uniform4fv(u('uFrame'), [c0, this.focus, 0, this.reach.depth]); }
     gl.uniformMatrix4fv(u('uLightVP'), false, this.lightVP); gl.uniform1i(u('uShadow'), 3); gl.uniform1f(u('uShadowOn'), this.shadows ? 1 : 0); gl.uniform1i(u('uDepth'), 0);
@@ -816,7 +823,7 @@ export class Renderer {
     gl.clearBufferfv(gl.COLOR, 0, [0, 0, 0, 0]); gl.clearBufferfv(gl.COLOR, 1, [0, 0, 0, 1]); gl.clearBufferfv(gl.DEPTH, 0, [1]);
     gl.enable(gl.DEPTH_TEST); gl.depthFunc(gl.LEQUAL); gl.disable(gl.BLEND); gl.disable(gl.CULL_FACE);
     // ─── the far ranges, under everything ───
-    {
+    if (!this.clay) {
       use('ridge');
       this.attr(0, this.ridge.buf, 3, 5, 0); this.attr(1, this.ridge.buf, 2, 5, 3);
       gl.drawArrays(gl.TRIANGLES, 0, this.ridge.count);
@@ -843,7 +850,7 @@ export class Renderer {
       for (const { c } of inRange(60)) if (c.nRoots) { this.attr(2, c.roots, 4, 8, 0, 1); this.attr(3, c.roots, 4, 8, 4, 1); gl.drawArraysInstanced(gl.TRIANGLES, 0, this.vbo.lump.count, c.nRoots); }
     }
     // ─── the land's strokes, on it and on its steps, stones and roots (not over what stands in front of them) ───
-    if (this.marks) {
+    if (this.marks && !this.clay) {
       const p = use('stroke');
       gl.uniform2fv(gl.getUniformLocation(p, 'uRes'), [w, h]); gl.uniform1f(gl.getUniformLocation(p, 'uAll'), this.allStrokes ? 1 : 0);
       gl.enable(gl.BLEND); gl.blendEquation(gl.MAX); gl.depthMask(false); gl.enable(gl.POLYGON_OFFSET_FILL); gl.polygonOffset(-2, -4);
@@ -889,7 +896,7 @@ export class Renderer {
     gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, this.texZ); gl.uniform1i(u('uZ'), 2);
     gl.uniform2fv(u('uRes'), [w, h]); gl.uniform1f(u('uNear'), near); gl.uniform1f(u('uFar'), far); gl.uniform1f(u('uPx'), Math.max(1, h / 900));
     gl.uniform3fv(u('uPaper'), [0.937, 0.902, 0.824]); gl.uniform3fv(u('uInk'), [0.13, 0.12, 0.105]); gl.uniform3fv(u('uSunUV'), this.sunUV);
-    gl.uniform1f(u('uClean'), this.clean ? 1 : 0); gl.uniform1f(u('uMarks'), this.marks);
+    gl.uniform1f(u('uClean'), this.clean ? 1 : 0); gl.uniform1f(u('uMarks'), this.marks); gl.uniform1f(u('uClay'), this.clay ? 1 : 0);
     gl.uniform4fv(u('uReach'), [this.reach.colour, this.reach.wash, this.reach.ink, this.reach.soft]);
     this.attr(0, this.vbo.screen.buf, 2, 2, 0);
     gl.drawArrays(gl.TRIANGLES, 0, 3);

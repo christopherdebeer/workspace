@@ -20,6 +20,8 @@ export const GATES = [
   { name: '05-gust-motion', title: '05 · a gust', scene: 'seed=1&cam=248.02,-179.13,-2.99,0.3&t=8&ref=gust' },
 ];
 const MODES = [
+  // (the forms alone: one clay, lit, shadows cast; no paper, no ink)
+  { name: 'clay', query: 'clay&reach=picture' },
   { name: 'picture', query: 'reach=picture&marks=0&clean' },
   { name: 'ink', query: 'colour=0&wash=0&ink=200&frame=1&depth=0' },
   { name: 'board', query: '' },
@@ -43,7 +45,7 @@ await withWood(async (lab) => {
       shots.push([file, m.name]);
       await p.close();
     }
-    const page = await lab.browser.newPage({ viewport: { width: 2050, height: 780 } });
+    const page = await lab.browser.newPage({ viewport: { width: 2400, height: 780 } });
     const cells = [[join(CELL, 'devtools/bamboo/targets', `${g.name}.jpg`), 'target'], ...shots];
     await page.setContent(`<style>body{margin:0;background:#efe6d2;font:600 15px Georgia,serif;color:#2a251e;padding:12px}.row{display:flex;gap:8px}.c{display:flex;flex-direction:column;gap:4px}img{height:700px;display:block}</style><div>${g.title}</div><div class="row">${cells.map(([f, n]) => `<div class="c"><img src="${img(f)}"><div>${n}</div></div>`).join('')}</div>`);
     await page.waitForTimeout(300);
