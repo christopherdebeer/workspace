@@ -1,13 +1,13 @@
 {
   "cell": "c15r/lab",
   "cellId": "lab-8928acf3",
-  "treeVersion": "tree:612983d1fefb8c8bcb36a66456d717350dd39ee953d1d7ab00c221db5ac35084",
-  "syncedAt": "2026-10-29T14:48:20.558Z",
+  "treeVersion": "tree:2e268aa09b4b5dda57ba35b94b205678a29fe3e2ea48910bbc165070b67c44f2",
+  "syncedAt": "2026-10-29T14:52:00.655Z",
   "files": {
     "README.md": "sha256:665df4179140457c44ea9e0f6f5820bd6e9b557fb196a37cf1245a07cb11f7c6",
     "client/bamboo/layers.ts": "sha256:9255a88477a10716eb350ea8ef833bcbf6f4667436abdf7eb2bec03fcb76b620",
-    "client/bamboo/main.ts": "sha256:42b8191e51e4705e7645e6344f2df0598fddd93d393221cdcd2cf9eaf58f5593",
-    "client/bamboo/render.ts": "sha256:1f6a12c6fa56d4d7613afb513d72bbf46e8e696a261333088042d4c2cbbe61af",
+    "client/bamboo/main.ts": "sha256:1c8aaa6cd32919ce41c9a80dbc63b30fa329364b97108851a49326f0635f2025",
+    "client/bamboo/render.ts": "sha256:a1e4d42f82f434f7d72bce57cd8894e130256d166f62a590f30b61382347ddca",
     "client/bamboo/runner.ts": "sha256:b31b12d653e020f1b4b2d5bf9daa4241f641cd55caf2ac8c8e93b2603e475a97",
     "client/bamboo/strokes.ts": "sha256:a53de20bd73942209c60e25bd6317bf2cf2b0066eaaa866c22d1f0f4c5798d24",
     "client/bamboo/views.mjs": "sha256:509970054604932cf9c3a76d9fbc9564a2543d912150253242a63800f9be388b",
