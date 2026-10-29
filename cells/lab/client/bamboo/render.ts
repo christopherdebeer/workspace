@@ -161,13 +161,16 @@ vec3 show(vec3 c) { c = 1. - exp(-c * 1.4); return sqrt(c); }
 // light's factored out of what the sun and sky give, so each part can be laid again at its own strength: their product
 // is the light as it is. \`glow\`: light it gives back of its own (a leaf with the sun behind it). \`land\`: the land's (it
 // keeps \`landlight\` of its shade and hollows, and its colour gives out over a broader, broken edge))
+// (whether the colour layer reaches here at all, whatever its kind's strength: what \`under\` asks)
+float gColHere = 0.;
 vec3 layered(vec3 alb, vec3 N, vec3 p, float wrap, float ao, vec3 glow, float colK, float land, float o, out float colR, out float litR) {
   float sunV = dapple(p) * culmShade(p), ndl = max(0., (dot(N, uSun) + wrap) / (1. + wrap));
   vec3 skyT = uSky * (.5 + .5 * N.y), bnc = vec3(.2, .15, .08) * (1. - N.y) * .3;
   vec3 L0 = uSunC + skyT + bnc, Ls = uSunC * ndl + skyT + bnc, Lc = uSunC * ndl * sunV + skyT + bnc, Lh = uSunC * ndl * sunV + (skyT + bnc) * ao;
   litR = has(o, uRch.y);
-  colR = clamp(colK, 0., 1.) * hasS(o, uRch.x, uRch.w * (land > .5 ? 2.2 : 1.));
-  if (uClay > .5) { colR = 1.; litR = 1.; return show(lin(vec3(.8, .78, .74)) * Lh); }
+  gColHere = hasS(o, uRch.x, uRch.w * (land > .5 ? 2.2 : 1.));
+  colR = clamp(colK, 0., 1.) * gColHere;
+  if (uClay > .5) { colR = 1.; litR = 1.; gColHere = 1.; return show(lin(vec3(.8, .78, .74)) * Lh); }
   float ll = mix(1., uLitK.w, land);
   vec3 Lk = pow(Ls / L0, vec3(uLitK.x * ll * litR)) * pow(Lc / max(Ls, vec3(1e-4)), vec3(uLitK.y * litR)) * pow(Lh / max(Lc, vec3(1e-4)), vec3(uLitK.z * ll * litR));
   vec3 c = show(lin(alb) * L0 * Lk + glow * litR);
@@ -194,10 +197,12 @@ float gContour = 0.;
 void emit(vec3 c, float colR, float inkA, float kind, float allow, float mark) {
   if (uClay > .5) { oC = vec4(c, 1.); oA = vec4(kind, allow, 0., 0.); return; }
   // (under the picture, as much of the drawing as \`under\` lays there; on the paper, all of it)
-  float underF = 1. - colR * (1. - uUnder);
+  // (\`under\` asks whether the colour layer reaches here, not how strong a kind's colour is, so a paler kind isn't
+  // also an inkier one)
+  float underF = 1. - gColHere * (1. - uUnder), bare = 1. + .6 * (1. - gColHere);
   oC = vec4(c, colR);
   // (as the colour goes, the marks come up to carry the thing)
-  oA = vec4(kind, allow, uInkK.z * inkA * underF, max(clamp(mark * uInkK.x * inkA * underF * (1. + .6 * (1. - colR)) * (1. + .5 * uHand.y), 0., 1.), clamp(gContour * uInkK.z * inkA * underF, 0., 1.)));
+  oA = vec4(kind, allow, uInkK.z * inkA * underF, max(clamp(mark * uInkK.x * inkA * underF * bare * (1. + .5 * uHand.y), 0., 1.), clamp(gContour * uInkK.z * inkA * underF * bare, 0., 1.)));
 }
 `;
 
@@ -314,7 +319,7 @@ void main() {}`;
 const SPRAY_VS = COMMON + `
 layout(location = 0) in vec2 aUV;
 layout(location = 1) in vec4 iA; layout(location = 2) in vec4 iB; layout(location = 3) in vec4 iC; layout(location = 4) in vec4 iD;
-out vec3 vW; out vec2 vUV; out float vSeed; out vec3 vN; out float vSize; flat out float vOut;
+out vec3 vW; out vec2 vUV; out float vSeed; out vec3 vN; out float vSize; flat out float vOut; flat out float vCulmInk;
 uniform vec2 uPick; uniform vec3 uRight;
 void main() {
   vec3 b = iA.xyz; float h = iA.w; vec2 lean = iB.xy; float phase = iB.z, pick = iB.w;
@@ -332,10 +337,17 @@ void main() {
   // (a spray's drawn as its culm is at eye height, a little further along for being high, and each its own way)
   // (and where it stands in the frame itself, so the canopy at the top of the frame goes to the page too)
   vOut = outAt(anchor) + (fract(pick * 7.31) - .5) * .14 + smoothstep(4., h, sy) * .1 + (iD.z - .5) * .1 + (vn(b.xz * .045) - .5) * .7;
+  // (its culm's ink, where it hangs: the culm's amount (as the culm asks it: its least-out point, its pick), laid up from
+  // its foot to here, lifting as the culm's does toward the frame's edge; so a spray's blades come in with its culm's
+  // line, never before it)
+  float jit = (fract(pick * 7.31) - .5) * .24 + (vn(b.xz * .045) - .5) * .7, bb = 99.;
+  for (int k = 0; k < 5; k++) bb = min(bb, outAt(culmAt(b, h, lean, phase, min(1.6, h) + (h - min(1.6, h)) * float(k) / 4.)));
+  float cq = h21(vec2(phase * 3.7, 5.3)) * mix(.45, 1., smoothstep(6., 28., dist)), aw = inkAt(bb + jit, cq);
+  vCulmInk = laidLen(aw, sy / max(h, .1)) * aw * smoothstep(0., .6, has(outAt(anchor) + jit, uRch.z));
   gl_Position = uVP * vec4(vW, 1.);
 }`;
 const SPRAY_FS = COMMON + LIGHT + OUT + `
-in vec3 vW; in vec2 vUV; in float vSeed; in vec3 vN; in float vSize; flat in float vOut;
+in vec3 vW; in vec2 vUV; in float vSeed; in vec3 vN; in float vSize; flat in float vOut; flat in float vCulmInk;
 uniform float uMarks;
 void main() {
   // (the blades: three to five from a twig near the top, drooping: 个 and 介)
@@ -364,10 +376,12 @@ void main() {
   // not a blot; a little ink in the blade where its colour's gone)
   float dd = distance(vW, uEye), near = 1. - smoothstep(8., 26., dd), halfpx = ww * vSize / max(dd * uPxW, 1e-5);
   float rimL = (1. - smoothstep(.55, 1.3, rim * halfpx)) * mix(.35, 1., smoothstep(.6, 2.5, halfpx)) * mix(1., .35, smoothstep(10., 40., dd));
-  float mark = max(rimL * .85, (1. - colR) * (.1 + .1 * best) * (1. - smoothstep(15., 40., dd) * .7)) * uMarks;
+  // (its edge is its outline, on the outlines' dial with the culms' contours; only the fill is its own mark)
+  gContour = rimL * .85 * uMarks;
+  float mark = (1. - colR) * (.1 + .1 * best) * (1. - smoothstep(15., 40., dd) * .7) * uMarks;
   // (left out whole, a spray at a time by its own pick, where no layer reaches it)
   // (its ink laid out each blade from the stem, then to its weight)
-  float sa = inkAt(vOut, fract(vSeed * 17.3)), inkA = laid(sa, along);
+  float sa = min(inkAt(vOut, fract(vSeed * 17.3)), vCulmInk), inkA = laid(sa, along);
   if (uClay < .5 && colR < .02 && litR * dot(uLitK.xyz, vec3(1.)) < .02 && sa < .002) discard;
   emit(c, colR, inkA, .6, 0., mark);
 }`;
@@ -686,7 +700,7 @@ void main() {
   // (lighter with distance, as the outlines are: a far trail's edge, seen along, is a fine grey line, not a rule; a rim
   // holds most)
   float far = smoothstep(8., 45., distance(vW, uEye)) * (fam > .5 && fam < 1.5 ? .4 : .7);
-  float a = uAll > .5 ? cov : cov * mix(min(1., .4 + weight), clamp(pow(weight, 1.6) * 1.9, 0., 1.), uHand.x) * mix(.6, 1., dry) * mix(persist * uUnder, 1., 1. - uColK.z * hasS(vOut, uRch.x, uRch.w * 2.2)) * (1. - far) * uMarks * uInkK.y * lay;
+  float a = uAll > .5 ? cov : cov * mix(min(1., .4 + weight), clamp(pow(weight, 1.6) * 1.9, 0., 1.), uHand.x) * mix(.6, 1., dry) * mix(persist * uUnder, 1., 1. - hasS(vOut, uRch.x, uRch.w * 2.2)) * (1. - far) * uMarks * uInkK.y * lay;
   if (a < .02) discard;
   oC = vec4(0.); oA = vec4(0., 0., 1., min(1., a * 1.15));
 }`;
