@@ -269,12 +269,21 @@ void main() {
   alb = mix(alb, vec3(.94, .93, .86), band * (.85 - age * .4) * (1. - far));
   float ring = 1. - smoothstep(.0, .025 + fwidth(vQ) * .8, min(f, 1. - f) - .003);
   alb = mix(alb, alb * .4, ring * (1. - far * .6));
+  // (its foot in the soil: earth risen against it, dark, so it stands in the ground, not on it)
+  alb = mix(alb, vec3(.26, .22, .16), (1. - smoothstep(.0, .4, vY)) * .75);
   float colR, litR;
-  vec3 c = layered(alb, N, vW, .25, 1., vec3(0.), uColK.x, 0., drawn, colR, litR);
+  // (its colour and light asked point by point along it, so they give way smoothly up it, never in bands an internode
+  // long; its ink still an internode at a time)
+  vec3 c = layered(alb, N, vW, .25, 1., vec3(0.), uColK.x, 0., outAt(vW) + vJit + smoothstep(4., vI.z, vY) * .12, colR, litR);
   // (near and out of focus, a culm goes wet: no contour, a dark wash in its place, streaked as the brush drags; the page
   // softens it)
   float wetK = uFocus.y * smoothstep(.25, 1.1, -cocAt(dist));
-  vec3 wetC = mix(vec3(.15, .16, .12), vec3(.33, .35, .25), streak);
+  // (wet, it keeps its form: its light (the shaded side darker), the dry brush down it, its nodes dark and the powder
+  // band under them pale)
+  float lum = clamp(dot(c, vec3(.3, .55, .15)) * 1.15, 0., 1.);
+  vec3 wetC = mix(vec3(.12, .13, .1), vec3(.42, .44, .33), lum) * (.78 + .38 * streak);
+  wetC = mix(wetC, wetC * .45, ring * .8);
+  wetC = mix(wetC, wetC * 1.45 + .04, band * .45);
   c = mix(c, wetC, wetK * .85); colR = max(colR, wetK); gColHere = max(gColHere, wetK);
   // (the marks: a tick at each node, curving with the ring, darkest toward the culm's edges as the eye sees it; on the
   // side away from the sun, dry-brush strokes down it; ink pooled at its foot)
@@ -595,6 +604,8 @@ ${NOISE}
 float lz(vec2 p) { float d = texture(uZ, p).r; return uNear * uFar / (uFar - d * (uFar - uNear)); }
 // (focus, as the vertex stages have it: signed, how far out of focus at this depth)
 float cocP(float z) { return uFocA.x * clamp(1. - uFocD / max(z, .1), -2.5, 1.); }
+// (how much a thing of this kind at this depth softens: the land (ground .2, stones and steps .7+) not when near)
+float rOf(float z, float kind) { float c = cocP(z); bool land = (kind > .15 && kind < .3) || kind > .65; return c < 0. && land ? 0. : abs(c); }
 // (what's laid on the paper at a point, colour and light, before the ink: a thing's own, or the sky and far ranges over
 // the paper)
 vec3 laidAt(vec2 q) { vec4 Cs = texture(uC, q), As = texture(uA, q); return As.x > .15 ? Cs.rgb : mix(uPaper, Cs.rgb * mix(vec3(1.), uPaper / .94, .3), Cs.a); }
@@ -655,16 +666,20 @@ void main() {
   // ─── focus: what's laid (colour, light) softened by how far out of focus it is, never the ink; gathered so a nearer
   // thing's blur spreads over what's behind it, and a farther one's stops at what's in front of it ───
   if (uFocA.x > .001 && uFocA.w > .001) {
-    float K = 6. * uPx * uFocA.w, rC = abs(cocP(z)) * K, rS = max(rC, K * uFocA.x * 1.2);
+    // (by kind, as the board has it: what stands (culms, sprays) and what's far go soft; the land near the eye (its
+    // ground, its stones, its steps) stays sharp, the most detailed thing in the picture)
+    float K = 6. * uPx * uFocA.w, rC = rOf(z, A.x) * K, rS = max(rC, K * uFocA.x * 1.2);
     vec3 acc = col; float ws = 1.;
     for (int i = 0; i < 16; i++) {
       float fi = float(i) + .5, rr = sqrt(fi / 16.), an = fi * 2.39996;
       vec2 q = vUV + vec2(cos(an), sin(an)) * rr * rS / uRes;
-      float zs = lz(q), rs = abs(cocP(zs)) * K, dpx = rr * rS;
+      float zs = lz(q), rs = rOf(zs, texture(uA, q).x) * K, dpx = rr * rS;
       float w = clamp((zs < z ? rs : min(rs, rC)) - dpx + 1., 0., 1.);
       acc += laidAt(q) * w; ws += w;
     }
     col = acc / ws;
+    // (where the colour's given out, softened light goes paler toward the paper, not greyer)
+    col = mix(col, uPaper, .4 * smoothstep(1., 6., rC) * (1. - C.a) * step(.15, A.x));
   }
   col *= 1. + grain;
   // (grain: tone off the colour laid as stippled clusters, the darker the denser, the paper between)

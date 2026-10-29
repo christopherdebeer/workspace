@@ -40,6 +40,8 @@ export const PRESETS: Record<string, Dials> = {
   // (the ink alone, no colour, no light, out to the frame: the drawing as it stands; the gates' ink)
   ink: { ...HOUSE, culms: 0, leaves: 0, terrain: 0, shade: 0, cast: 0, hollow: 0, lightreach: 0.25, inkreach: 4, inkfade: 0, under: 1, distance: 400, depth: 0 },
   page: { ...HOUSE, toward: 1 },
+  // (focus as the board has it: what stands near goes wet, the land near stays sharp, every edge still the paper)
+  wet: { ...HOUSE, inkfade: 0.2, distance: 400, depth: 0, aperture: 1.29, wet: 0.83, soften: 0.46 },
   // (the hands: the same ink, drawn four ways (the grammar of its marks), at a reach that carries the grove)
   contour: { ...HOUSE, culms: 0, leaves: 0, terrain: 0, shade: 0, cast: 0, hollow: 0, inkreach: 0.9, inkfade: 0, open: 0.35, swell: 0, grain: 0 },
   brush: { ...HOUSE, culms: 0, leaves: 0, terrain: 0, shade: 0, cast: 0, hollow: 0, inkreach: 0.9, inkfade: 0, open: 0.75, swell: 0.85, grain: 0 },
