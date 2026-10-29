@@ -67,6 +67,8 @@ uniform vec4 uHand;
 uniform float uPxW;
 // (focus: aperture, how wet the near goes, how dry the far, how much the colour and light soften)
 uniform vec4 uFocus;
+// (how strong each surface's relief is, and the dark of its creases)
+uniform float uRelief;
 ${NOISE}
 // (how far a culm's top is blown, per metre of its height: a slow sway of its own, and the gust's front passing)
 vec2 windAt(vec2 p, float phase) {
@@ -151,11 +153,17 @@ vec4 leaves(vec2 p, float cell, out float rim, out float id) {
   id = best;
   return vec4(col, best > 0. ? 1. : 0.);
 }
-vec3 carpet(vec3 base, vec2 p, float px, out float mark, out float leaf) {
+vec3 carpet(vec3 base, vec2 p, float px, out float mark, out float leaf, out float hgt, out float cav) {
   float r1, r2, i1, i2;
   vec4 a = leaves(p, .16, r1, i1), b = leaves(p + 7.3, .26, r2, i2);
   // (which leaf is on top here, if any: its own pick, for how long its colour holds)
   leaf = px > .05 ? -1. : a.a > .5 ? i1 : b.a > .5 ? i2 : -1.;
+  // (its relief: each leaf a thin blade lying on the one under it, rising from its edge; the soil showing between them
+  // lower, and darker, in the shade of the leaves round it)
+  // (each rising over at least a few pixels, wherever it's seen from, so its edge never flickers)
+  float ra = max(.3, 2.5 * px / .023), rb = max(.3, 2.5 * px / .037);
+  hgt = b.a * .009 * smoothstep(0., rb, r2) + a.a * .011 * smoothstep(0., ra, r1);
+  cav = mix(.76, 1., max(a.a * smoothstep(0., ra * .5, r1), b.a * smoothstep(0., rb * .5, r2) * .9));
   vec3 c = mix(base, b.rgb, b.a * .9);
   c = mix(c, a.rgb, a.a * .85);
   float far = smoothstep(.02, .06, px);
@@ -184,6 +192,16 @@ vec3 bumpN(vec3 N, vec3 p, float h) {
   vec3 r1 = cross(dpy, N), r2 = cross(N, dpx); float det = dot(dpx, r1);
   vec3 g = sign(det) * (dhx * r1 + dhy * r2);
   return normalize(abs(det) * N - g);
+}
+// (cells: the distance to the nearest of a scatter of points, and how far the next is beyond it; the second is 0 along
+// the cracks between cells: clods, fracture creases, pitting)
+vec2 vor(vec2 p) {
+  vec2 i = floor(p), f = fract(p); float d1 = 9., d2 = 9.;
+  for (int y = -1; y <= 1; y++) for (int x = -1; x <= 1; x++) {
+    vec2 gg = vec2(x, y), o = vec2(h21(i + gg), h21(i + gg + 31.7)); float d = length(gg + o - f);
+    if (d < d1) { d2 = d1; d1 = d; } else if (d < d2) d2 = d;
+  }
+  return vec2(d1, d2 - d1);
 }
 vec3 layered(vec3 alb, vec3 N, vec3 p, float wrap, float ao, vec3 glow, float colK, float land, float o, out float colR, out float litR) {
   float sunV = dapple(p) * culmShade(p) * gSunVis, ndl = max(0., (dot(N, uSun) + wrap) / (1. + wrap));
@@ -305,7 +323,12 @@ void main() {
   float colR, litR;
   // (its colour and light asked point by point along it, so they give way smoothly up it, never in bands an internode
   // long; its ink still an internode at a time)
-  vec3 c = layered(alb, N, vW, .25, 1., vec3(0.), uColK.x, 0., outAt(vW) + vJit + smoothstep(4., vI.z, vY) * .12, colR, litR);
+  // (its relief, close to: the node's ridge, a groove just above it; fine grooves down its length)
+  float rK = uRelief * (1. - smoothstep(3., 12., dist));
+  float grv = exp(-pow((f - .075) / .014, 2.));
+  float hC = (exp(-pow((f - .035) / .014, 2.)) * .004 - grv * .0015 + sin(vU * 260. + vn(vec2(vU * 20., vY)) * 3.) * .00035) * rK;
+  vec3 Nc = bumpN(N, vW, hC);
+  vec3 c = layered(alb, Nc, vW, .25, 1. - .35 * grv * rK, vec3(0.), uColK.x, 0., outAt(vW) + vJit + smoothstep(4., vI.z, vY) * .12, colR, litR);
   // (near and out of focus, a culm goes wet: no contour, a dark wash in its place, streaked as the brush drags; the page
   // softens it)
   float wetK = uFocus.y * smoothstep(.25, 1.1, -cocAt(dist));
@@ -404,7 +427,7 @@ void main() {
   // (the blades: three to five from a twig near the top, drooping: 个 and 介)
   vec2 stem = vec2(.5 + (vSeed - .5) * .2, .82);
   int n = 3 + int(vSeed * 2.99);
-  float inside = 0., rim = 1., best = 0., along = 0., ww = .1;
+  float inside = 0., rim = 1., best = 0., along = 0., ww = .1, acr = 1.;
   for (int i = 0; i < 5; i++) {
     if (i >= n) break;
     float fi = float(i), s = fract(vSeed * 13.7 + fi * .618);
@@ -413,13 +436,15 @@ void main() {
     float len = .55 + s * .25, a = dot(pp, d) / len, bb = dot(pp, vec2(-d.y, d.x)) / len;
     float w = .12 * pow(max(0., sin(3.1416 * pow(clamp(a, 0., 1.), .75))), .8) * (1. - .25 * a);
     float e = w - abs(bb + a * a * .06 * (s - .5));
-    if (a > 0. && a < 1. && e > 0.) { inside = 1.; rim = min(rim, e / max(w, 1e-3)); best = max(best, s); along = a; ww = w * len; }
+    if (a > 0. && a < 1. && e > 0.) { inside = 1.; rim = min(rim, e / max(w, 1e-3)); best = max(best, s); along = a; ww = w * len; acr = 1. - e / max(w, 1e-3); }
   }
   if (inside < .5) discard;
   vec3 V = normalize(uEye - vW), N = faceforward(vN, -V, vN);
   // (lit: dark ink-green in shade, yellow-green in the sun, glowing gold-green where the sun's behind it)
   float sun = dapple(vW), back = pow(max(0., dot(-V, uSun)), 2.5) * sun;
   vec3 alb = mix(vec3(.18, .26, .12), vec3(.5, .6, .24), .35 + .65 * best);
+  // (close to, each blade's midrib, a fine darker line down its middle)
+  alb *= 1. - .28 * (1. - smoothstep(.0, .14, acr)) * (1. - smoothstep(4., 14., distance(vW, uEye))) * min(1., uRelief);
   float colR, litR;
   vec3 c = layered(alb, N, vW, .6, .9, lin(vec3(.9, .92, .42)) * back * 1.2 * uSunC, uColK.y, 0., vOut, colR, litR);
   // (the marks: each blade's edge near; where the colour's given out, the blade filled in ink, as a brush lays it)
@@ -505,7 +530,8 @@ void main() {
   vec3 soil = vec3(.5, .43, .33);
   float worn = 1. - smoothstep(${(HALF * 0.35).toFixed(2)}, ${(HALF * 0.85).toFixed(2)}, vD + (n2 - .5) * .3);
   float px = length(fwidth(vW.xz)), leafMark, leaf;
-  vec3 carp = carpet(litter * .8, vW.xz, px, leafMark, leaf);
+  float lH, lCav;
+  vec3 carp = carpet(litter * .8, vW.xz, px, leafMark, leaf, lH, lCav);
   vec3 alb = mix(carp, mix(earth, carp, .1 + .2 * step(.62, vn(vW.xz * 2.2))), worn * .95);
   alb = mix(alb, soil, smoothstep(.35, .7, 1. - N.y) * .7);
   // (a trail's cut bank: bare red-brown earth where it's steep, streaked down its fall, with roots run across it and
@@ -548,14 +574,27 @@ void main() {
   float colR, litR;
   // (the land's relief, as the light finds it: the litter's small lumps on the level; grooves down a bank, as rain cuts
   // it; on rock its bedding, layer over layer, and its fractures; fading out far off, where it's below a pixel)
-  float hL = (vn(vW.xz * 2.3) - .5) * .035 + (vn(vW.xz * 7.) - .5) * .012;
-  float hB = (vn(vec2((vW.x - vW.z) * .707 * 3.5, vW.y * .7)) - .5) * .07 + (vn(vec2((vW.x - vW.z) * 9., vW.y * 2.)) - .5) * .02;
-  float hR = .06 * smoothstep(-.35, .35, sin(vW.y * 2.4 + fbm2(vW.xz * .25) * 4.)) + (fbm2(vec2((vW.x + vW.z) * 1.3, vW.y * 1.6)) - .5) * .08;
-  float hh = mix(mix(hL, hB, smoothstep(.25, .55, 1. - N.y)), hR, vRock) * (1. - smoothstep(18., 40., dist));
+  // (the land's relief, each kind its own, in its own lie, with the dark of its creases; fine detail fading first, as
+  // it gets smaller than a pixel)
+  float fineK = 1. - smoothstep(.012, .035, px), midK = 1. - smoothstep(.05, .16, px), steepK = smoothstep(.25, .55, 1. - N.y);
+  // (the floor: the litter's leaves, and the gentle swell of the soil under them)
+  float hF = lH * fineK + (vn(vW.xz * 2.3) - .5) * .03 * midK, cF = mix(1., lCav, fineK);
+  // (a bank: clods of earth with cracks between, and grooves down it where the rain runs)
+  vec2 cl = vor(vec2((vW.x - vW.z) * .707, vW.y * 1.2) * 3.4);
+  float crack = 1. - smoothstep(.0, .09 + px * 9., cl.y);
+  float hB = ((1. - cl.x) * .035 - crack * .015) * midK + (vn(vec2((vW.x - vW.z) * .707 * 3.5, vW.y * .7)) - .5) * .08;
+  float cB = 1. - .45 * crack * midK;
+  // (rock: its bedding, ledge over ledge, each undercut dark; fractures across it)
+  float bt = vW.y * 1.7 + fbm2(vW.xz * .25) * 2.5, bf = fract(bt);
+  vec2 fr = vor(vec2((vW.x + vW.z) * .9, vW.y * 1.2));
+  float frc = (1. - smoothstep(.0, .06 + px * 3., fr.y)) * step(.45, h21(floor(vec2((vW.x + vW.z) * .9, vW.y * 1.2))));
+  float hR = .1 * (smoothstep(0., .8, bf) - smoothstep(.82, .98, bf)) - .03 * frc * midK;
+  float cR = (1. - .5 * smoothstep(.83, .95, bf) * (1. - smoothstep(.97, 1., bf))) * (1. - .4 * frc * midK);
+  float hh = mix(mix(hF, hB, steepK), hR, vRock) * uRelief, cav = mix(1., mix(mix(cF, cB, steepK), cR, vRock), min(1., uRelief));
   vec3 Nb = bumpN(N, vW, hh);
-  // (and the land's own shadow and openness, baked with it)
-  gSunVis = vSunVis;
-  vec3 c = layered(alb, Nb, vW, .2, .95 * vAO, vec3(0.), uColK.z, 1., o, colR, litR);
+  // (and the land's own shadow and openness, baked with it; its creases shut out the sky, and a little of the sun)
+  gSunVis = vSunVis * mix(1., cav, .5);
+  vec3 c = layered(alb, Nb, vW, .2, .95 * vAO * cav, vec3(0.), uColK.z, 1., o, colR, litR);
   // (the marks: each near fallen leaf's edge; the land's own (a trail's edges, a bank's rim, a face's fall, the lie of
   // the hillside) are strokes laid on it, strokes.ts)
   // (a fallen leaf's edge is the picture's detail: it goes with the colour, a few left, so in the drawing the land's own
@@ -649,9 +688,14 @@ void main() {
   // in the land's wash; its ink is its own, whole)
   float colR, litR;
   // (a stone's surface as the light finds it: weathered, pitted; a step's tooled)
-  float hRel = uKind == 1 ? (vn(vW.xz * vec2(14., 3.)) - .5) * .008 + (vn(vW.xz * 4.) - .5) * .01 : (fbm2(vW.xz * 3. + vW.y * 2.) - .5) * .035 - .02 * smoothstep(.7, .82, vn(vW.xz * 9. + vW.y * 5.));
-  N = bumpN(N, vW, hRel * (1. - smoothstep(10., 30., distance(vW, uEye))));
-  vec3 c = layered(alb, N, vW, .2, .85, vec3(0.), uColK.z, 1., outAt(vW) + (fract(vSeed * 3.1) - .5) * .06, colR, litR);
+  vec2 sv = vor(vW.xz * 4. + vW.y * 2.3);
+  // (a fracture here and there, not a net: only some of its cells part)
+  float spx = length(fwidth(vW)) * 4.;
+  float scr = (1. - smoothstep(.0, .05 + spx, sv.y)) * step(.6, h21(floor(vW.xz * 4. + vW.y * 2.3) + 3.1)), sK = (1. - smoothstep(10., 30., distance(vW, uEye))) * uRelief;
+  float hRel = uKind == 1 ? (vn(vW.xz * vec2(14., 3.)) - .5) * .01 + (vn(vW.xz * 4.) - .5) * .012 - scr * .006 : (fbm2(vW.xz * 3. + vW.y * 2.) - .5) * .04 - .02 * smoothstep(.7, .82, vn(vW.xz * 9. + vW.y * 5.)) - scr * .012;
+  N = bumpN(N, vW, hRel * sK);
+  float sCav = 1. - (uKind == 1 ? .25 : .35) * scr * min(1., sK);
+  vec3 c = layered(alb, N, vW, .2, .85 * sCav, vec3(0.), uColK.z, 1., outAt(vW) + (fract(vSeed * 3.1) - .5) * .06, colR, litR);
   // (its ink laid from its middle out to its sides, then to its weight; a step's by weight alone, as one of a flight, so
   // the flight's edge thins as one line, never a row of dashes, a stone each)
   float sa = inkAt(vOut, fract(vSeed * 5.13 + .3)), inkA = laid(sa, uKind == 1 ? 0. : clamp(abs(vL.x), 0., 1.));
@@ -1078,7 +1122,7 @@ export class Renderer {
     const d = this.dials;
     gl.uniform4fv(u('uRch'), [...this.reaches, 0.12]); gl.uniform4fv(u('uFoc'), [this.focus, d.depth, d.distance, 0]);
     gl.uniform4fv(u('uColK'), [d.culms, d.leaves, d.terrain, 0]); gl.uniform4fv(u('uLitK'), [d.shade, d.cast, d.hollow, d.landlight]);
-    gl.uniform4fv(u('uInkK'), [d.lines, d.strokes, d.edges, d.inkfade]); gl.uniform4fv(u('uHand'), [d.open, d.swell, d.grain, 0]); gl.uniform1f(u('uPxW'), this.pxW); gl.uniform4fv(u('uFocus'), [d.aperture, d.wet, d.dry, d.soften]); gl.uniform1f(u('uUnder'), d.under); gl.uniform3fv(u('uPaperC'), PAPER);
+    gl.uniform4fv(u('uInkK'), [d.lines, d.strokes, d.edges, d.inkfade]); gl.uniform4fv(u('uHand'), [d.open, d.swell, d.grain, 0]); gl.uniform1f(u('uPxW'), this.pxW); gl.uniform4fv(u('uFocus'), [d.aperture, d.wet, d.dry, d.soften]); gl.uniform1f(u('uRelief'), d.relief); gl.uniform1f(u('uUnder'), d.under); gl.uniform3fv(u('uPaperC'), PAPER);
     gl.uniform1f(u('uAway'), (1 - Math.min(1, d.toward)) * Math.min(1, d.terrain));
     gl.uniformMatrix4fv(u('uLightVP'), false, this.lightVP); gl.uniform1i(u('uShadow'), 3); gl.uniform1f(u('uShadowOn'), this.shadows ? 1 : 0); gl.uniform1i(u('uDepth'), 0);
   }
