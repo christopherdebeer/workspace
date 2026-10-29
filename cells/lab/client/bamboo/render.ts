@@ -370,7 +370,9 @@ void main() {
   vec3 c = show(lit(alb, N, vW, .2, .9));
   // (the marks: each near fallen leaf's edge; the land's own (a trail's edges, a bank's rim, a face's fall, the lie of
   // the hillside) are strokes laid on it, strokes.ts)
-  float mark = leafMark * .55 * uMarks;
+  // (a fallen leaf's edge is the picture's detail: it goes with the colour, a few left, so in the drawing the land's own
+  // structure (edges, rims, contours) carries it, not the litter)
+  float mark = leafMark * .55 * uMarks * (.25 + .75 * smoothstep(1.3, .8, bandAt(vW) + (fbm2(vW.xz * .5 + 3.) - .5) * .5));
   // (how far it's drawn: the bare ground between the leaves goes first; each fallen leaf holds its colour by its own
   // pick, so the litter thins to a few painted leaves and then their outlines on the paper)
   // (the edge is a brush's: strokes laid across the fall of the slope, dragged dry, so it breaks into them in the world
@@ -378,7 +380,7 @@ void main() {
   vec2 down2 = N.xz / max(length(N.xz), .05), across2 = vec2(-down2.y, down2.x);
   float stroke = vn(vec2(dot(vW.xz, across2) * .35, dot(vW.xz, down2) * 3.2)) * .6 + vn(vec2(dot(vW.xz, across2) * 1.1, dot(vW.xz, down2) * 9.)) * .4;
   float band = bandAt(vW) + (fbm2(vW.xz * .5 + 3.) - .5) * .5 + (stroke - .5) * 1.4;
-  band = leaf >= 0. ? band + (leaf - .5) * 1.2 : band + .25 + (vRock > .5 ? -.3 : 0.);
+  band = leaf >= 0. ? band + (leaf - .5) * .8 : band + .25 + (vRock > .5 ? -.3 : 0.);
   emit(c, own(alb), band, .2, 1., mark, vW);
 }`;
 

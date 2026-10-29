@@ -15,7 +15,7 @@ mkdirSync(out, { recursive: true });
 export const GATES = [
   { name: '01-contour-run', title: '01 · the contour run', scene: 'seed=1&cam=380.62,149.24,0.58,-0.16&t=8' },
   { name: '02-culm-scale', title: '02 · culm scale', scene: 'seed=1&cam=44.7,87.88,1.57,1.05&t=8' },
-  { name: '03-ink-reach', title: '03 · ink reach', scene: 'seed=1&cam=327.89,174.06,-1.23,-0.07&t=8' },
+  { name: '03-ink-reach', title: '03 · ink reach', scene: 'seed=1&cam=414.87,-22.89,2.48,-0.14&t=8' },
   { name: '04-stair-event', title: '04 · the stair', scene: 'seed=1&cam=-247.89,312.03,2.7,0.15&t=8' },
   { name: '05-gust-motion', title: '05 · a gust', scene: 'seed=1&cam=248.02,-179.13,-2.99,0.3&t=8&ref=gust' },
 ];
