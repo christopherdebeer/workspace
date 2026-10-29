@@ -62,6 +62,10 @@ Three passes, after Labyrinth's, and the land's own strokes laid in the world:
 
 Moso is a running bamboo: its culms come up one by one along rhizomes under the floor, so a stand is a few crooked lines of them, a culm every half metre to two, now and then two close together, the parent stoutest and its offspring along the run less so, with open floor between the runs. Young shoots of the last year or two stand thin and short among the rest (with the papery sheaths they grew in still on their low nodes); a culm's height goes with its girth; now and then a giant stands beside a trail. Most stand near straight, some lean, a few lean hard, mostly down the hill or out into a gap, and a stand leans a little together; every culm's top bows over under its leaves, the leaners most. Its branches come off the nodes of its crown side to side, rising and arching out, the lower ones longer and flatter, and its leaves hang at their middles and ends, with a tuft at the tip. Close to, a node is two rings (the sheath's scar, the branch ridge above it) with the pale powder band under it, a dark scar where a branch was below the crown, fine lines down the culm, moss and soil at its foot.
 
+### The light
+
+The sun's light is real where it can be: the culms', stones' and steps' shadows from a shadow map near you; the land's own shadows (a cliff, a ridge, a bank shading the slope under it) and how much of the sky each point of the ground sees (its hollows, the foot of a bank) baked with each piece of the land as it's laid, by marching toward the sun and round the horizon over its heights, and darker again where it meets a stone, a step or a culm's foot. The canopy's shade is a dapple that stays where the canopy puts it, its small patches flickering. The surfaces' relief is drawn from heights over the world rather than maps: the litter's small lumps, grooves down a bank, a rock's bedding and fractures, a stone's pitting, a step's tooling, fading out where they'd be below a pixel.
+
 ### The layers
 
 How it's drawn is a stack of layers laid from the paper up, after Labyrinth's print, each with its own dials, and none moving another (`client/bamboo/layers.ts`):
@@ -94,6 +98,7 @@ The look is now hill-climbed against five target studies (`devtools/bamboo/targe
 
 - `seed=<n>`: the mountain.
 - `ref=a|b|c|cliff|run|up|gust`: a frame found on the mountain by what it needs; `cam=x,z,heading,pitch[,speed]`: one pinned exactly.
+- `at=x,z,heading,pitch` and `t`: start just there, at that time, and run on. The address keeps it up to date: when you come to rest, finish looking round, change a dial or leave the page (never while you run), it's rewritten with where you stand and what's set, so a link opens on just what you saw.
 - `look=house|picture|drawing|ink|page`, and any dial by its own name (`colourreach=0.3`, `cast=1.6`, `inkfade=1`…): the layers (above).
 - `shadows=0`: no culm shadows (cheaper).
 - `auto`: run on by itself, wandering.

@@ -34,7 +34,7 @@ renderer.dials = readDials(params);
   const el = document.getElementById('layers'), btn = document.getElementById('inkbtn');
   if (el) {
     // (keep the address in step, so a setting can be passed on)
-    const pal = layersPalette(el, () => renderer.dials, (d) => { renderer.dials = d; history.replaceState(null, '', address(d)); });
+    const pal = layersPalette(el, () => renderer.dials, (d) => { renderer.dials = d; remember(true); });
     btn?.addEventListener('click', () => { el.classList.toggle('shown'); pal.refresh(); });
     for (const x of [el, btn]) x?.addEventListener('pointerdown', (e) => e.stopPropagation());
   }
@@ -63,6 +63,11 @@ function startOnTrail() {
   me.x = tr.x[i]; me.z = tr.z[i]; me.heading = me.move = Math.atan2(tr.x[i + 3] - tr.x[i], tr.z[i + 3] - tr.z[i]);
 }
 startOnTrail();
+// (`at=x,z,heading,pitch`: start just there, as the address was left (and `t`, the time), and run on from it)
+{
+  const at = params.get('at')?.split(',').map(Number);
+  if (at && at.length >= 4 && at.every(Number.isFinite)) { me.x = at[0]; me.z = at[1]; me.heading = me.move = at[2]; pitch = at[3]; }
+}
 
 // ─── sound: the wind in the leaves (and past your ears, faster); your feet, by what they land on ───
 const sound = (() => {
@@ -110,7 +115,7 @@ canvas.addEventListener('pointermove', (e) => {
   pitch = Math.max(-0.7, Math.min(0.9, pitch - (e.clientY - drag.y) * k));
   drag.x = e.clientX; drag.y = e.clientY;
 });
-const up = (e: PointerEvent) => { if (drag && e.pointerId === drag.id) { drag = null; held = false; } };
+const up = (e: PointerEvent) => { if (drag && e.pointerId === drag.id) { drag = null; held = false; remember(true); } };
 canvas.addEventListener('pointerup', up); canvas.addEventListener('pointercancel', up);
 addEventListener('keydown', (e) => { keys.add(e.key); sound.start(); });
 addEventListener('keyup', (e) => keys.delete(e.key));
@@ -213,6 +218,22 @@ stream(400);
 me.onStep = (stone, hard) => sound.step(stone, hard);
 me.y = me.groundAt(me.x, me.z);
 
+// ─── the address keeps where you are: how it's drawn (the dials that differ from the house), and where you stand, which
+// way you look and when (`at`, `t`), so a link opens on just this; written when you come to rest, finish looking round,
+// change a dial, or leave the page; never while you run ───
+let wrote = 0, wroteAt = '';
+function remember(now = false) {
+  if (spot) return;
+  const at = [me.x, me.z, me.heading, pitch].map((v) => Math.round(v * 100) / 100).join(',');
+  const stamp = performance.now();
+  if (!now && ((at === wroteAt && stamp - wrote < 2000) || stamp - wrote < 600)) return;
+  const u = new URL(address(renderer.dials), location.origin);
+  for (const k of ['at', 't', 'seed']) u.searchParams.delete(k);
+  const rest = u.searchParams.toString();
+  history.replaceState(null, '', `${u.pathname}?seed=${seed}${rest ? '&' + rest : ''}&at=${at}&t=${Math.round(t * 10) / 10}${u.hash}`);
+  wrote = stamp; wroteAt = at;
+}
+addEventListener('visibilitychange', () => { if (document.hidden) remember(true); });
 // ─── the frame ───
 let last = performance.now(), scale = 1, avgMs = 16, lastScale = 0;
 function resize() {
@@ -252,6 +273,8 @@ function frame(now: number) {
       if (next !== scale) { scale = next; lastScale = now; }
     }
   }
+  // (at rest, the address catches up)
+  if (me.v < 0.05 && !drag && !held) remember();
   (window as unknown as { __bamboo: unknown }).__bamboo = { seed, x: me.x, z: me.z, y: me.y, heading: me.heading, pitch, v: me.v, onTrail: me.onTrail, air: me.air, t, chunks: me.chunks.size, frameMs: ms, scale };
   requestAnimationFrame(frame);
 }

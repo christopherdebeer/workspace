@@ -26,7 +26,7 @@
  *
  * `?clean`: no shafts or paper grain. `?marks=0`: the picture without its ink.
  */
-import { type Chunk, CHUNK, CN, CELL, HALF, BANK } from './world';
+import { type Chunk, CHUNK, CN, CELL, HALF, BANK, SUN } from './world';
 import { STROKE_STRIDE } from './strokes';
 import { type Dials, HOUSE } from './layers';
 
@@ -174,8 +174,19 @@ vec3 show(vec3 c) { c = 1. - exp(-c * 1.4); return sqrt(c); }
 // keeps \`landlight\` of its shade and hollows, and its colour gives out over a broader, broken edge))
 // (whether the colour layer reaches here at all, whatever its kind's strength: what \`under\` asks)
 float gColHere = 0.;
+// (how much of the sun reaches here past the land itself (baked with the land: a cliff's, a ridge's shadow), for a
+// surface that knows it; 1 for one that doesn't)
+float gSunVis = 1.;
+// (relief: a surface's normal tipped by a height \`h\` given over the world, read from how it changes across the
+// screen, so any surface (a level floor, a cliff's face) takes its own bumps without a map)
+vec3 bumpN(vec3 N, vec3 p, float h) {
+  vec3 dpx = dFdx(p), dpy = dFdy(p); float dhx = dFdx(h), dhy = dFdy(h);
+  vec3 r1 = cross(dpy, N), r2 = cross(N, dpx); float det = dot(dpx, r1);
+  vec3 g = sign(det) * (dhx * r1 + dhy * r2);
+  return normalize(abs(det) * N - g);
+}
 vec3 layered(vec3 alb, vec3 N, vec3 p, float wrap, float ao, vec3 glow, float colK, float land, float o, out float colR, out float litR) {
-  float sunV = dapple(p) * culmShade(p), ndl = max(0., (dot(N, uSun) + wrap) / (1. + wrap));
+  float sunV = dapple(p) * culmShade(p) * gSunVis, ndl = max(0., (dot(N, uSun) + wrap) / (1. + wrap));
   vec3 skyT = uSky * (.5 + .5 * N.y), bnc = vec3(.2, .15, .08) * (1. - N.y) * .3;
   vec3 L0 = uSunC + skyT + bnc, Ls = uSunC * ndl + skyT + bnc, Lc = uSunC * ndl * sunV + skyT + bnc, Lh = uSunC * ndl * sunV + (skyT + bnc) * ao;
   litR = has(o, uRch.y);
@@ -187,7 +198,7 @@ vec3 layered(vec3 alb, vec3 N, vec3 p, float wrap, float ao, vec3 glow, float co
   vec3 c = show(lin(alb) * L0 * Lk + glow * litR);
   // (a little air between, warm and pale; and the valley's mist, a cool blue-grey veil in the hollows below the eye)
   float d = distance(p, uEye);
-  c = mix(c, vec3(.93, .9, .8), (1. - exp(-max(0., d - 3.) / 40.)) * .55);
+  c = mix(c, vec3(.93, .9, .8), (1. - exp(-max(0., d - 6.) / 55.)) * .55);
   float below = uEye.y - p.y, veil = smoothstep(3., 30., below) * smoothstep(12., 70., d) * (.55 + .35 * vn(p.xz * .02 + uTime * .01));
   c = mix(c, vec3(.78, .82, .86), clamp(veil, 0., .85));
   // (a little of the paper's warmth in it, as a wash takes the sheet's tone)
@@ -476,11 +487,11 @@ void main() {
 }`;
 
 const GROUND_VS = COMMON + `
-layout(location = 0) in vec3 aP; layout(location = 1) in vec3 aN; layout(location = 2) in vec2 aD;
-out vec3 vW; out vec3 vN; out float vD; out float vRock;
-void main() { vW = aP; vN = aN; vD = aD.x; vRock = aD.y; gl_Position = uVP * vec4(aP, 1.); }`;
+layout(location = 0) in vec3 aP; layout(location = 1) in vec3 aN; layout(location = 2) in vec2 aD; layout(location = 3) in vec2 aL;
+out vec3 vW; out vec3 vN; out float vD; out float vRock; out float vSunVis; out float vAO;
+void main() { vW = aP; vN = aN; vD = aD.x; vRock = aD.y; vSunVis = aL.x; vAO = aL.y; gl_Position = uVP * vec4(aP, 1.); }`;
 const GROUND_FS = COMMON + LIGHT + OUT + `
-in vec3 vW; in vec3 vN; in float vD; in float vRock;
+in vec3 vW; in vec3 vN; in float vD; in float vRock; in float vSunVis; in float vAO;
 uniform float uMarks;
 void main() {
   vec3 N = normalize(vN);
@@ -535,7 +546,16 @@ void main() {
   float o = outAt(vW) + ((fbm2(vW.xz * .5 + 3.) - .5) * .5 + (stroke - .5) * 1.4 + (fbm2(vW.xz * .09 + 7.) - .5) * 1.6 * smoothstep(10., 40., dist)) / 3.;
   o += leaf >= 0. ? (leaf - .5) * .27 : .08 + (vRock > .5 ? -.1 : 0.);
   float colR, litR;
-  vec3 c = layered(alb, N, vW, .2, .9, vec3(0.), uColK.z, 1., o, colR, litR);
+  // (the land's relief, as the light finds it: the litter's small lumps on the level; grooves down a bank, as rain cuts
+  // it; on rock its bedding, layer over layer, and its fractures; fading out far off, where it's below a pixel)
+  float hL = (vn(vW.xz * 2.3) - .5) * .035 + (vn(vW.xz * 7.) - .5) * .012;
+  float hB = (vn(vec2((vW.x - vW.z) * .707 * 3.5, vW.y * .7)) - .5) * .07 + (vn(vec2((vW.x - vW.z) * 9., vW.y * 2.)) - .5) * .02;
+  float hR = .06 * smoothstep(-.35, .35, sin(vW.y * 2.4 + fbm2(vW.xz * .25) * 4.)) + (fbm2(vec2((vW.x + vW.z) * 1.3, vW.y * 1.6)) - .5) * .08;
+  float hh = mix(mix(hL, hB, smoothstep(.25, .55, 1. - N.y)), hR, vRock) * (1. - smoothstep(18., 40., dist));
+  vec3 Nb = bumpN(N, vW, hh);
+  // (and the land's own shadow and openness, baked with it)
+  gSunVis = vSunVis;
+  vec3 c = layered(alb, Nb, vW, .2, .95 * vAO, vec3(0.), uColK.z, 1., o, colR, litR);
   // (the marks: each near fallen leaf's edge; the land's own (a trail's edges, a bank's rim, a face's fall, the lie of
   // the hillside) are strokes laid on it, strokes.ts)
   // (a fallen leaf's edge is the picture's detail: it goes with the colour, a few left, so in the drawing the land's own
@@ -628,6 +648,9 @@ void main() {
   // (its colour and light are the land's, asked where they are, as the ground's are, so a stone never stands as a hole
   // in the land's wash; its ink is its own, whole)
   float colR, litR;
+  // (a stone's surface as the light finds it: weathered, pitted; a step's tooled)
+  float hRel = uKind == 1 ? (vn(vW.xz * vec2(14., 3.)) - .5) * .008 + (vn(vW.xz * 4.) - .5) * .01 : (fbm2(vW.xz * 3. + vW.y * 2.) - .5) * .035 - .02 * smoothstep(.7, .82, vn(vW.xz * 9. + vW.y * 5.));
+  N = bumpN(N, vW, hRel * (1. - smoothstep(10., 30., distance(vW, uEye))));
   vec3 c = layered(alb, N, vW, .2, .85, vec3(0.), uColK.z, 1., outAt(vW) + (fract(vSeed * 3.1) - .5) * .06, colR, litR);
   // (its ink laid from its middle out to its sides, then to its weight; a step's by weight alone, as one of a flight, so
   // the flight's edge thins as one line, never a row of dashes, a stone each)
@@ -944,7 +967,7 @@ export class Renderer {
   /** culms in whole up to / gone by (metres): past every layer's reach, so their leaving is never seen */
   private get pick() { return [this.farthest, this.farthest * 1.3]; }
   private shadowTex: WebGLTexture | null = null; private shadowFbo: WebGLFramebuffer | null = null; private lightVP: number[] = new Array(16).fill(0); readonly shadows: boolean;
-  sunDir = norm([-0.6, 0.44, 0.55]);
+  sunDir = [...SUN];
 
   constructor(private canvas: HTMLCanvasElement, ridges: { x: number; z: number; y: number }[][], opts: { clean?: boolean; marks?: boolean; shadows?: boolean } = {}) {
     const gl = canvas.getContext('webgl2', { antialias: false, preserveDrawingBuffer: true });
@@ -996,11 +1019,11 @@ export class Renderer {
   has(key: string) { return this.chunks.has(key); }
   /** hand a chunk to the GPU */
   add(key: string, c: Chunk, marks?: Float32Array) {
-    const G = c.ground, v = new Float32Array(CN * CN * 8);
+    const G = c.ground, v = new Float32Array(CN * CN * 10);
     for (let j = 0; j < CN; j++) for (let i = 0; i < CN; i++) {
       const k = i + j * CN, hx = G[Math.min(CN - 1, i + 1) + j * CN] - G[Math.max(0, i - 1) + j * CN], hz = G[i + Math.min(CN - 1, j + 1) * CN] - G[i + Math.max(0, j - 1) * CN];
       const n = norm([-hx * ((i === 0 || i === CN - 1) ? 2 : 1), 2 * CELL, -hz * ((j === 0 || j === CN - 1) ? 2 : 1)]);
-      v.set([c.x0 + i * CELL, G[k], c.z0 + j * CELL, n[0], n[1], n[2], c.near[k], c.rock[k]], k * 8);
+      v.set([c.x0 + i * CELL, G[k], c.z0 + j * CELL, n[0], n[1], n[2], c.near[k], c.rock[k], c.sunVis[k], c.ao[k]], k * 10);
     }
     const cu = new Float32Array(c.tall * 12);
     for (let k = 0; k < c.tall; k++) { const q = c.culms[k]; cu.set([q.x, q.y, q.z, q.r, q.h, q.lx, q.lz, q.node, q.age, q.phase, q.pick, q.bend], k * 12); }
@@ -1050,7 +1073,7 @@ export class Renderer {
   private uni(p: WebGLProgram, f: Frame, vp: number[], right: number[]) {
     const gl = this.gl, u = (n: string) => gl.getUniformLocation(p, n);
     gl.uniformMatrix4fv(u('uVP'), false, vp); gl.uniform3fv(u('uEye'), f.eye); gl.uniform1f(u('uTime'), f.t); gl.uniform3fv(u('uSun'), this.sunDir);
-    gl.uniform4fv(u('uGust'), f.gust); gl.uniform1f(u('uClay'), this.clay ? 1 : 0); gl.uniform3fv(u('uSunC'), [3.0, 2.45, 1.6]); gl.uniform3fv(u('uSky'), [0.62, 0.68, 0.72]); gl.uniform1f(u('uOpen'), 0);
+    gl.uniform4fv(u('uGust'), f.gust); gl.uniform1f(u('uClay'), this.clay ? 1 : 0); gl.uniform3fv(u('uSunC'), [3.0, 2.45, 1.6]); gl.uniform3fv(u('uSky'), [0.5, 0.55, 0.6]); gl.uniform1f(u('uOpen'), 0);
     gl.uniform2fv(u('uPick'), this.pick); gl.uniform1f(u('uMarks'), this.marks); gl.uniform3fv(u('uRight'), right);
     const d = this.dials;
     gl.uniform4fv(u('uRch'), [...this.reaches, 0.12]); gl.uniform4fv(u('uFoc'), [this.focus, d.depth, d.distance, 0]);
@@ -1108,7 +1131,7 @@ export class Renderer {
       use('ground');
       gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.idx.buf);
       for (const { c } of all) {
-        this.attr(0, c.ground, 3, 8, 0); this.attr(1, c.ground, 3, 8, 3); this.attr(2, c.ground, 2, 8, 6);
+        this.attr(0, c.ground, 3, 10, 0); this.attr(1, c.ground, 3, 10, 3); this.attr(2, c.ground, 2, 10, 6); this.attr(3, c.ground, 2, 10, 8);
         gl.drawElements(gl.TRIANGLES, this.idx.count, gl.UNSIGNED_SHORT, 0);
       }
     }

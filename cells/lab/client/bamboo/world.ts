@@ -17,6 +17,8 @@ import { hash } from '../kit/rng';
 
 export type V2 = [number, number];
 export const CHUNK = 32, CELL = 1, CN = CHUNK / CELL + 1;
+/** the sun's direction (toward it): the renderer lights by it, and the land's shadows and openness are baked by it */
+export const SUN: [number, number, number] = (() => { const v = [-0.6, 0.44, 0.55], l = Math.hypot(...v); return v.map((q) => q / l) as [number, number, number]; })();
 export const REGION = 160;
 /** a trail's half width; how far its banks run before the slope takes over; a stair's tread */
 export const HALF = 0.65, BANK = 1.7, TREAD = 0.4;
@@ -408,7 +410,35 @@ export class World {
         roots.push({ x, y: g(x, z) - r * 0.35, z, yaw: ang, r, len, moss: u01(s, k, 94) });
       }
     }
-    return { ci, cj, x0, z0, ground, near, rock, culms, tall, sprays, twigs, stones, steps, roots };
+    // ─── the land's light, baked once: whether the sun reaches each point of the ground past the land itself (a cliff,
+    // a ridge, a bank shading the slope under it), how much of the sky it sees (its hollows, the foot of a bank darker),
+    // and darker again where it meets a stone, a step, a culm's foot ───
+    const sunVis = new Float32Array(CN * CN), ao = new Float32Array(CN * CN);
+    const hAt = (x: number, z: number) => (x >= x0 && x <= x0 + CHUNK && z >= z0 && z <= z0 + CHUNK ? g(x, z) : this.base(x, z));
+    const sl = Math.hypot(SUN[0], SUN[2]), sx = SUN[0] / sl, sz = SUN[2] / sl, sunTan = SUN[1] / sl;
+    const SUNSTEP = [1, 2, 3, 4.5, 6.5, 9, 12, 16, 21, 28], SKYSTEP = [1, 2.5, 5, 9];
+    for (let j = 0; j < CN; j++) for (let i = 0; i < CN; i++) {
+      const k = i + j * CN, x = x0 + i * CELL, z = z0 + j * CELL, y = ground[k] + 0.05;
+      let most = -9;
+      for (const d of SUNSTEP) most = Math.max(most, (hAt(x + sx * d, z + sz * d) - y) / d);
+      sunVis[k] = Math.min(1, Math.max(0, (sunTan - most) / 0.12 + 0.5));
+      let open = 0;
+      for (let a = 0; a < 8; a++) {
+        const dx = Math.cos(a * 0.7854), dz = Math.sin(a * 0.7854);
+        let hz = 0;
+        for (const d of SKYSTEP) hz = Math.max(hz, (hAt(x + dx * d, z + dz * d) - y) / d);
+        open += 1 - Math.sin(Math.atan(hz));
+      }
+      ao[k] = open / 8;
+    }
+    const touch = (px: number, pz: number, r0: number, r1: number, least: number) => {
+      const i0 = Math.max(0, Math.floor((px - r1 - x0) / CELL)), i1 = Math.min(CN - 1, Math.ceil((px + r1 - x0) / CELL)), j0 = Math.max(0, Math.floor((pz - r1 - z0) / CELL)), j1 = Math.min(CN - 1, Math.ceil((pz + r1 - z0) / CELL));
+      for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) { const d = Math.hypot(x0 + i * CELL - px, z0 + j * CELL - pz); ao[i + j * CN] *= least + (1 - least) * ss(r0, r1, d); }
+    };
+    for (const st of stones) touch(st.x, st.z, st.r * 0.7, st.r * 1.7, 0.55);
+    for (const st of steps) touch(st.x + st.dx * st.depth * 0.5, st.z + st.dz * st.depth * 0.5, st.width * 0.3, st.width * 0.8, 0.75);
+    for (let k = 0; k < tall; k++) { const q = culms[k]; touch(q.x, q.z, q.r, q.r + 0.6, 0.72); }
+    return { ci, cj, x0, z0, ground, near, rock, culms, tall, sprays, twigs, stones, steps, roots, sunVis, ao };
   }
 }
 
@@ -425,6 +455,8 @@ export interface Chunk {
   ground: Float32Array; near: Float32Array; rock: Float32Array;
   /** the culms (the first `tall` of them real; the rest hidden stubs holding low greens), their sprays, stones, steps */
   culms: Culm[]; tall: number; sprays: Spray[]; twigs: Twig[]; stones: Stone[]; steps: Step[]; roots: Root[];
+  /** per ground point: how much the sun reaches it past the land (0–1), how much of the sky it sees (0–1) */
+  sunVis: Float32Array; ao: Float32Array;
 }
 
 /** the far ranges, all round about (drawn as a backdrop that keeps its distance): each a jagged line, one behind another */
