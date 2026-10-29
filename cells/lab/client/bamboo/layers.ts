@@ -28,7 +28,7 @@ export type Dials = {
 export type DialKey = keyof Dials;
 
 /** the picture as it's lit: every layer whole, out to the frame and past it */
-export const PLAIN: Dials = { culms: 1, leaves: 1, terrain: 1, colourreach: 4, shade: 1, cast: 1, hollow: 1, landlight: 1, lightreach: 4, relief: 1, lines: 1, strokes: 1, edges: 1, inkreach: 4, inkfade: 0, open: 0, swell: 0, grain: 0, under: 1, toward: 0, distance: 400, depth: 0, aperture: 0, wet: 0.8, dry: 0.6, soften: 1 };
+export const PLAIN: Dials = { culms: 1, leaves: 1, terrain: 1, colourreach: 4, shade: 1, cast: 1, hollow: 1, landlight: 1, lightreach: 4, relief: 3, lines: 1, strokes: 1, edges: 1, inkreach: 4, inkfade: 0, open: 0, swell: 0, grain: 0, under: 1, toward: 0, distance: 400, depth: 0, aperture: 0, wet: 0.8, dry: 0.6, soften: 1 };
 /** where it starts: the colour held round the focus, the light out past it onto the paper, the ink further still and
  * thinning, every edge left to the paper */
 export const HOUSE: Dials = { ...PLAIN, colourreach: 0.65, lightreach: 0.8, inkreach: 0.9, inkfade: 0.25, under: 0.7, distance: 70, depth: 1, cast: 0.7, hollow: 1.1, open: 0.7, swell: 0 };
@@ -72,7 +72,7 @@ export const LAYERS: Layer[] = [
     { key: 'cast', name: 'cast', lo: 0, hi: 2 },
     { key: 'hollow', name: 'hollows', lo: 0, hi: 2 },
     { key: 'landlight', name: 'on the land', lo: 0, hi: 2 },
-    { key: 'relief', name: 'relief', lo: 0, hi: 2 },
+    { key: 'relief', name: 'relief', lo: 0, hi: 8 },
     REACH('lightreach'),
   ] },
   { id: 'focus', name: 'focus', icon: '<circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="2.5"/><path d="M12 3v2M12 19v2M3 12h2M19 12h2"/>', ranges: [

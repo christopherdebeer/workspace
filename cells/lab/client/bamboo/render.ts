@@ -578,7 +578,14 @@ void main() {
   // it gets smaller than a pixel)
   float fineK = 1. - smoothstep(.012, .035, px), midK = 1. - smoothstep(.05, .16, px), steepK = smoothstep(.25, .55, 1. - N.y);
   // (the floor: the litter's leaves, and the gentle swell of the soil under them)
-  float hF = lH * fineK + (vn(vW.xz * 2.3) - .5) * .03 * midK, cF = mix(1., lCav, fineK);
+  // (and the floor itself, never flat: a broad swell, lumps of earth, pebbles proud of it, and down a trail the ruts
+  // feet have worn; most where it's bare, under the litter only its swell)
+  vec2 pb = vor(vW.xz * 5.5);
+  float pebble = smoothstep(.32, .12, pb.x) * step(.55, h21(floor(vW.xz * 5.5) + 7.7));
+  float rut = exp(-pow((vD - ${(HALF * 0.35).toFixed(2)}) / .18, 2.)) + exp(-pow((vD + ${(HALF * 0.35).toFixed(2)}) / .18, 2.));
+  float bare = 1. - (leaf >= 0. ? .8 : 0.);
+  float hSoil = (fbm2(vW.xz * .7) - .5) * .12 + ((vn(vW.xz * 3.1) - .5) * .05 + pebble * .03) * midK * bare - rut * worn * .04;
+  float hF = lH * fineK + hSoil, cF = mix(1., lCav, fineK) * (1. - .3 * smoothstep(.12, .3, pb.x) * pebble * midK);
   // (a bank: clods of earth with cracks between, and grooves down it where the rain runs)
   vec2 cl = vor(vec2((vW.x - vW.z) * .707, vW.y * 1.2) * 3.4);
   float crack = 1. - smoothstep(.0, .09 + px * 9., cl.y);
@@ -588,10 +595,13 @@ void main() {
   float bt = vW.y * 1.7 + fbm2(vW.xz * .25) * 2.5, bf = fract(bt);
   vec2 fr = vor(vec2((vW.x + vW.z) * .9, vW.y * 1.2));
   float frc = (1. - smoothstep(.0, .06 + px * 3., fr.y)) * step(.45, h21(floor(vec2((vW.x + vW.z) * .9, vW.y * 1.2))));
-  float hR = .1 * (smoothstep(0., .8, bf) - smoothstep(.82, .98, bf)) - .03 * frc * midK;
+  vec2 rch = vor(vec2((vW.x - vW.z) * 2.2, vW.y * 2.6));
+  float hR = .1 * (smoothstep(0., .8, bf) - smoothstep(.82, .98, bf)) - .03 * frc * midK + (fbm2(vec2((vW.x - vW.z) * .8, vW.y * .9)) - .5) * .16 + (1. - rch.x) * .04 * midK;
   float cR = (1. - .5 * smoothstep(.83, .95, bf) * (1. - smoothstep(.97, 1., bf))) * (1. - .4 * frc * midK);
-  float hh = mix(mix(hF, hB, steepK), hR, vRock) * uRelief, cav = mix(1., mix(mix(cF, cB, steepK), cR, vRock), min(1., uRelief));
+  float hh = mix(mix(hF, hB, steepK), hR, vRock) * uRelief, cav = mix(1., mix(mix(cF, cB, steepK), cR, vRock), clamp(uRelief * .45, 0., .95));
   vec3 Nb = bumpN(N, vW, hh);
+  // (and in the shade, where no sun finds the bump, the hollows still hold the dark and the crowns the light)
+  cav *= clamp(1. + hh * 2.8, .4, 1.3);
   // (and the land's own shadow and openness, baked with it; its creases shut out the sky, and a little of the sun)
   gSunVis = vSunVis * mix(1., cav, .5);
   vec3 c = layered(alb, Nb, vW, .2, .95 * vAO * cav, vec3(0.), uColK.z, 1., o, colR, litR);
@@ -692,9 +702,14 @@ void main() {
   // (a fracture here and there, not a net: only some of its cells part)
   float spx = length(fwidth(vW)) * 4.;
   float scr = (1. - smoothstep(.0, .05 + spx, sv.y)) * step(.6, h21(floor(vW.xz * 4. + vW.y * 2.3) + 3.1)), sK = (1. - smoothstep(10., 30., distance(vW, uEye))) * uRelief;
-  float hRel = uKind == 1 ? (vn(vW.xz * vec2(14., 3.)) - .5) * .01 + (vn(vW.xz * 4.) - .5) * .012 - scr * .006 : (fbm2(vW.xz * 3. + vW.y * 2.) - .5) * .04 - .02 * smoothstep(.7, .82, vn(vW.xz * 9. + vW.y * 5.)) - scr * .012;
+  // (a boulder: broad weathered facets, chips off it, pits, a crack or two; a step: tooling and wear)
+  vec2 chip = vor(vW.xz * 2.2 + vW.y * 1.7);
+  float hRel = uKind == 1 ? (vn(vW.xz * vec2(14., 3.)) - .5) * .01 + (vn(vW.xz * 4.) - .5) * .015 - scr * .008
+    : (fbm2(vW.xz * 1.1 + vW.y * .9) - .5) * .12 + (1. - chip.x) * .05 + (fbm2(vW.xz * 3. + vW.y * 2.) - .5) * .04 - .02 * smoothstep(.7, .82, vn(vW.xz * 9. + vW.y * 5.)) - scr * .015;
   N = bumpN(N, vW, hRel * sK);
-  float sCav = 1. - (uKind == 1 ? .25 : .35) * scr * min(1., sK);
+  float sHo = clamp(1. + hRel * sK * 4.5, .35, 1.3);
+  gSunVis = mix(1., sHo * (1. - (uKind == 1 ? .25 : .45) * scr * min(1., sK)), .75);
+  float sCav = (1. - (uKind == 1 ? .25 : .35) * scr * min(1., sK)) * (uKind == 1 ? 1. : 1. - clamp(sK * .4, 0., .8) * smoothstep(.05, .0, chip.y) * .5) * sHo;
   vec3 c = layered(alb, N, vW, .2, .85 * sCav, vec3(0.), uColK.z, 1., outAt(vW) + (fract(vSeed * 3.1) - .5) * .06, colR, litR);
   // (its ink laid from its middle out to its sides, then to its weight; a step's by weight alone, as one of a flight, so
   // the flight's edge thins as one line, never a row of dashes, a stone each)
