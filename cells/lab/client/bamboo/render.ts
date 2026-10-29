@@ -40,6 +40,8 @@ export interface Frame {
   roll?: number;
   /** how far off the focus is (metres): what's straight ahead, that the page comes in round */
   focus?: number;
+  /** the sheet's own size in pixels (the screen's), so the paper's grain holds still when the picture's drawn smaller */
+  paper?: [number, number];
 }
 
 /** the paper's own colour */
@@ -667,6 +669,9 @@ uniform sampler2D uC; uniform sampler2D uA; uniform sampler2D uZ;
 uniform vec2 uRes; uniform float uNear; uniform float uFar; uniform float uPx;
 uniform vec3 uPaper; uniform vec3 uInk; uniform vec3 uSunUV; uniform float uClean; uniform float uMarks; uniform float uClay; uniform vec4 uHand;
 uniform vec4 uFocA; uniform float uFocD;
+// (the paper's own size in pixels: its grain, its torn edge, its stipple are the sheet's, fixed, whatever size the
+// picture's drawn at this frame)
+uniform vec2 uPaperRes;
 ${NOISE}
 float lz(vec2 p) { float d = texture(uZ, p).r; return uNear * uFar / (uFar - d * (uFar - uNear)); }
 // (focus, as the vertex stages have it: signed, how far out of focus at this depth)
@@ -719,13 +724,13 @@ void main() {
     ink = max(ink, A.w);
     // (far and out of focus, the ink dries: paler, and broken into stretches)
     float dryK = uFocA.z * smoothstep(.3, .85, cocP(z));
-    ink *= 1. - dryK * (.45 + .5 * smoothstep(.45, .6, vn(vUV * uRes * .08)));
+    ink *= 1. - dryK * (.45 + .5 * smoothstep(.45, .6, vn(vUV * uPaperRes * .08)));
     // (grain: the line broken granular, as a crayon on a stone takes it)
-    float gn = vn(vUV * uRes * .3) * .6 + vn(vUV * uRes * .1) * .4;
+    float gn = vn(vUV * uPaperRes * .3) * .6 + vn(vUV * uPaperRes * .1) * .4;
     ink *= mix(1., smoothstep(.32, .58, gn + ink * .25), uHand.z);
   }
   // ─── the page: each thing laid on it as it's drawn (its colour as far as that goes), its ink over that ───
-  float grain = uClean > .5 ? 0. : (vn(vUV * uRes * .35) - .5) * .05 + (vn(vUV * uRes * .04) - .5) * .04;
+  float grain = uClean > .5 ? 0. : (vn(vUV * uPaperRes * .35) - .5) * .05 + (vn(vUV * uPaperRes * .04) - .5) * .04;
   vec3 paper = uPaper * (1. + grain);
   // (a thing's laid already, its colour and its light on the paper as the layers have them; the sky and the far ranges
   // washed over the paper as far as they go)
@@ -752,7 +757,7 @@ void main() {
   // (grain: tone off the colour laid as stippled clusters, the darker the denser, the paper between)
   {
     float tone = clamp(1. - dot(col, vec3(.3, .55, .15)) / dot(paper, vec3(.3, .55, .15)), 0., 1.);
-    float st = step(vn(vUV * uRes * .3) * .7 + vn(vUV * uRes * .09) * .3, tone * 2.2 + .04);
+    float st = step(vn(vUV * uPaperRes * .3) * .7 + vn(vUV * uPaperRes * .09) * .3, tone * 2.2 + .04);
     col = mix(col, mix(paper, mix(col, uInk, tone * .6), st), uHand.z * (1. - C.a));
   }
   // (shafts of light where the canopy opens toward the sun)
@@ -764,8 +769,8 @@ void main() {
   }
   col = mix(col, uInk, clamp(ink, 0., 1.) * .9);
   // (the last few pixels at every edge are the paper, whatever's drawn: its edge torn a little, not a ruled line)
-  vec2 pxp = vUV * uRes; float edgePx = min(min(pxp.x, uRes.x - pxp.x), min(pxp.y, uRes.y - pxp.y));
-  float keepOut = 10. * uPx * (.7 + .6 * vn(vec2(pxp.x + pxp.y, pxp.x - pxp.y) * .03));
+  vec2 pxp = vUV * uPaperRes; float edgePx = min(min(pxp.x, uPaperRes.x - pxp.x), min(pxp.y, uPaperRes.y - pxp.y));
+  float keepOut = 10. * max(1., uPaperRes.y / 900.) * (.7 + .6 * vn(vec2(pxp.x + pxp.y, pxp.x - pxp.y) * .03));
   col = mix(col, paper, 1. - smoothstep(keepOut * .6, keepOut, edgePx));
   o = vec4(col, 1.);
 }`;
@@ -1174,7 +1179,7 @@ export class Renderer {
     gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, this.texC); gl.uniform1i(u('uC'), 0);
     gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, this.texA); gl.uniform1i(u('uA'), 1);
     gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, this.texZ); gl.uniform1i(u('uZ'), 2);
-    gl.uniform2fv(u('uRes'), [w, h]); gl.uniform1f(u('uNear'), near); gl.uniform1f(u('uFar'), far); gl.uniform1f(u('uPx'), Math.max(1, h / 900));
+    gl.uniform2fv(u('uRes'), [w, h]); gl.uniform2fv(u('uPaperRes'), f.paper ?? [w, h]); gl.uniform1f(u('uNear'), near); gl.uniform1f(u('uFar'), far); gl.uniform1f(u('uPx'), Math.max(1, h / 900));
     gl.uniform3fv(u('uPaper'), PAPER); gl.uniform4fv(u('uHand'), [this.dials.open, this.dials.swell, this.dials.grain, 0]); gl.uniform4fv(u('uFocA'), [this.dials.aperture, this.dials.wet, this.dials.dry, this.dials.soften]); gl.uniform1f(u('uFocD'), this.focus); gl.uniform3fv(u('uInk'), [0.13, 0.12, 0.105]); gl.uniform3fv(u('uSunUV'), this.sunUV);
     gl.uniform1f(u('uClean'), this.clean ? 1 : 0); gl.uniform1f(u('uMarks'), this.marks); gl.uniform1f(u('uClay'), this.clay ? 1 : 0);
     this.attr(0, this.vbo.screen.buf, 2, 2, 0);

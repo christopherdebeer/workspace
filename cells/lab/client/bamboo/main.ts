@@ -214,7 +214,7 @@ me.onStep = (stone, hard) => sound.step(stone, hard);
 me.y = me.groundAt(me.x, me.z);
 
 // ─── the frame ───
-let last = performance.now(), scale = 1;
+let last = performance.now(), scale = 1, avgMs = 16, lastScale = 0;
 function resize() {
   const dpr = Math.min(devicePixelRatio || 1, 2) * scale, w = Math.round(innerWidth * dpr), h = Math.round(innerHeight * dpr);
   if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
@@ -239,10 +239,19 @@ function frame(now: number) {
   // (the focus: where you're going and looking, the page coming in round it)
   const target = focusAt(eye, yaw, p);
   focus = still || focus === 0 ? target : focus + (target - focus) * Math.min(1, dt * 0.8);
-  const f: Frame = { eye, look, fov, t, gust: [gust.dir[0], gust.dir[1], gust.front, gust.strength], speed: me.v, roll, focus };
+  const sheet = Math.min(devicePixelRatio || 1, 2);
+  const f: Frame = { eye, look, fov, t, gust: [gust.dir[0], gust.dir[1], gust.front, gust.strength], speed: me.v, roll, focus, paper: [Math.round(innerWidth * sheet), Math.round(innerHeight * sheet)] };
   renderer.draw(f, canvas.width, canvas.height);
   const ms = performance.now() - now;
-  if (!still && !spot) { if (ms > 28 && scale > 0.6) scale -= 0.05; else if (ms < 12 && scale < 1) scale += 0.02; }
+  // (how finely it's drawn follows how long frames take, over a second or so, in steps, never frame to frame: a canvas
+  // resized every frame makes everything tied to its pixels shimmer)
+  if (!still && !spot) {
+    avgMs = avgMs * 0.96 + ms * 0.04;
+    if (now - lastScale > 1200) {
+      const next = avgMs > 28 ? Math.max(0.6, scale - 0.1) : avgMs < 12 ? Math.min(1, scale + 0.1) : scale;
+      if (next !== scale) { scale = next; lastScale = now; }
+    }
+  }
   (window as unknown as { __bamboo: unknown }).__bamboo = { seed, x: me.x, z: me.z, y: me.y, heading: me.heading, pitch, v: me.v, onTrail: me.onTrail, air: me.air, t, chunks: me.chunks.size, frameMs: ms, scale };
   requestAnimationFrame(frame);
 }
