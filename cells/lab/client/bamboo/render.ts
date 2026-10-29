@@ -63,6 +63,8 @@ uniform vec4 uRch; uniform vec4 uFoc; uniform vec4 uColK; uniform vec4 uInkK; un
 uniform vec4 uHand;
 // (how big a pixel is, in metres, a metre from the eye: so a thing can draw its own lines a set number of pixels wide)
 uniform float uPxW;
+// (focus: aperture, how wet the near goes, how dry the far, how much the colour and light soften)
+uniform vec4 uFocus;
 ${NOISE}
 // (how far a culm's top is blown, per metre of its height: a slow sway of its own, and the gust's front passing)
 vec2 windAt(vec2 p, float phase) {
@@ -89,6 +91,9 @@ float outAt(vec3 p) {
   float m = pow(pow(n.x, 3.) + pow(n.y, 3.), 1. / 3.), dl = log2(max(d, .3) / max(uFoc.x, 1.));
   return max(world, m + uFoc.y * .2 * (dl > 0. ? dl : -dl * .25));
 }
+// (how far out of focus a point at this distance is, signed: below 0 nearer than the focus (growing fast as it nears the
+// eye), above it beyond (to 1 far off), as a lens has it; one measure every layer reads its own way)
+float cocAt(float d) { return uFocus.x * clamp(1. - uFoc.x / max(d, .1), -2.5, 1.); }
 // (whether a layer's here, at so far out, given its reach: whole inside it, gone past it, over a soft edge)
 float hasS(float o, float r, float soft) { return 1. - smoothstep(r * (1. - soft), r * (1. + soft), o); }
 float has(float o, float r) { return hasS(o, r, uRch.w); }
@@ -266,6 +271,11 @@ void main() {
   alb = mix(alb, alb * .4, ring * (1. - far * .6));
   float colR, litR;
   vec3 c = layered(alb, N, vW, .25, 1., vec3(0.), uColK.x, 0., drawn, colR, litR);
+  // (near and out of focus, a culm goes wet: no contour, a dark wash in its place, streaked as the brush drags; the page
+  // softens it)
+  float wetK = uFocus.y * smoothstep(.25, 1.1, -cocAt(dist));
+  vec3 wetC = mix(vec3(.15, .16, .12), vec3(.33, .35, .25), streak);
+  c = mix(c, wetC, wetK * .85); colR = max(colR, wetK); gColHere = max(gColHere, wetK);
   // (the marks: a tick at each node, curving with the ring, darkest toward the culm's edges as the eye sees it; on the
   // side away from the sun, dry-brush strokes down it; ink pooled at its foot)
   float edge = 1. - abs(dot(N, V)), shade = smoothstep(.1, -.4, dot(N, uSun));
@@ -303,13 +313,14 @@ void main() {
   inkA *= mix(1., .42, smoothstep(.4, .6, prom) * smoothstep(10., 16., dist)) * mix(1., .5, smoothstep(22., 50., dist)) * (1. + .35 * (1. - smoothstep(6., 16., dist)));
   // (a culm goes from the page whole, where none of its layers reach it (asked at its least-out point); along it, an
   // internode at a time, its colour gives way, then its light: never a cylinder cut off mid-internode)
-  if (uClay < .5 && uColK.x * hasS(vOut, uRch.x, uRch.w) < .02 && has(vOut, uRch.y) * dot(uLitK.xyz, vec3(1.)) < .02 && aw < .002) discard;
+  if (uClay < .5 && uColK.x * hasS(vOut, uRch.x, uRch.w) < .02 && has(vOut, uRch.y) * dot(uLitK.xyz, vec3(1.)) < .02 && aw < .002 && wetK < .02) discard;
   // (its contour, drawn by itself from its own shape, so many culms side by side never run together into a mass: a line
   // a set number of pixels in from its silhouette, its shaded side the firm one (and with \`swell\`, heavier, near), its
   // lit side the hairline, lifting along its length as \`allow\` has it; too thin for two lines, one fine line)
   float ndv = abs(dot(N, V)), rpx = vR / max(dist * uPxW, 1e-5), dpx = rpx * (1. - sqrt(max(0., 1. - ndv * ndv)));
   float wpx = (.8 + uHand.y * 1.6 * (1. - lit) * (1. - smoothstep(6., 14., dist))) * (.75 + .5 * vn(vec2(vY * .35, vI.y * 9.)));
   gContour = (1. - smoothstep(wpx * .55, wpx + .6, dpx)) * allow * mix(.4, 1., smoothstep(1., 3., rpx)) * mix(1., .3, smoothstep(10., 40., dist));
+  gContour *= 1. - wetK; mark *= 1. - wetK * .8;
   emit(c, colR, inkA, .4, 0., mark);
 }`;
 const DEPTH_FS = `#version 300 es
@@ -381,6 +392,9 @@ void main() {
   float mark = (1. - colR) * (.1 + .1 * best) * (1. - smoothstep(15., 40., dd) * .7) * uMarks;
   // (left out whole, a spray at a time by its own pick, where no layer reaches it)
   // (its ink laid out each blade from the stem, then to its weight)
+  // (near and out of focus, wet: its blades a dark wash, no edges)
+  float wetK = uFocus.y * smoothstep(.25, 1.1, -cocAt(dd));
+  c = mix(c, vec3(.15, .17, .12), wetK * .85); colR = max(colR, wetK); gColHere = max(gColHere, wetK); gContour *= 1. - wetK;
   float sa = min(inkAt(vOut, fract(vSeed * 17.3)), vCulmInk), inkA = laid(sa, along);
   if (uClay < .5 && colR < .02 && litR * dot(uLitK.xyz, vec3(1.)) < .02 && sa < .002) discard;
   emit(c, colR, inkA, .6, 0., mark);
@@ -576,8 +590,14 @@ in vec2 vUV; out vec4 o;
 uniform sampler2D uC; uniform sampler2D uA; uniform sampler2D uZ;
 uniform vec2 uRes; uniform float uNear; uniform float uFar; uniform float uPx;
 uniform vec3 uPaper; uniform vec3 uInk; uniform vec3 uSunUV; uniform float uClean; uniform float uMarks; uniform float uClay; uniform vec4 uHand;
+uniform vec4 uFocA; uniform float uFocD;
 ${NOISE}
 float lz(vec2 p) { float d = texture(uZ, p).r; return uNear * uFar / (uFar - d * (uFar - uNear)); }
+// (focus, as the vertex stages have it: signed, how far out of focus at this depth)
+float cocP(float z) { return uFocA.x * clamp(1. - uFocD / max(z, .1), -2.5, 1.); }
+// (what's laid on the paper at a point, colour and light, before the ink: a thing's own, or the sky and far ranges over
+// the paper)
+vec3 laidAt(vec2 q) { vec4 Cs = texture(uC, q), As = texture(uA, q); return As.x > .15 ? Cs.rgb : mix(uPaper, Cs.rgb * mix(vec3(1.), uPaper / .94, .3), Cs.a); }
 void main() {
   vec4 C = texture(uC, vUV), A = texture(uA, vUV);
   // (\`?clay\`: the forms as they're lit, over a plain sky: no paper, no ink)
@@ -619,6 +639,9 @@ void main() {
     ink = max(ink, ink2 * uHand.y);
     // (and the things' own marks, as far as their ink reaches)
     ink = max(ink, A.w);
+    // (far and out of focus, the ink dries: paler, and broken into stretches)
+    float dryK = uFocA.z * smoothstep(.3, .85, cocP(z));
+    ink *= 1. - dryK * (.45 + .5 * smoothstep(.45, .6, vn(vUV * uRes * .08)));
     // (grain: the line broken granular, as a crayon on a stone takes it)
     float gn = vn(vUV * uRes * .3) * .6 + vn(vUV * uRes * .1) * .4;
     ink *= mix(1., smoothstep(.32, .58, gn + ink * .25), uHand.z);
@@ -628,7 +651,22 @@ void main() {
   vec3 paper = uPaper * (1. + grain);
   // (a thing's laid already, its colour and its light on the paper as the layers have them; the sky and the far ranges
   // washed over the paper as far as they go)
-  vec3 col = A.x > .15 ? C.rgb * (1. + grain) : mix(paper, C.rgb * mix(vec3(1.), paper / .94, .3), C.a);
+  vec3 col = laidAt(vUV);
+  // ─── focus: what's laid (colour, light) softened by how far out of focus it is, never the ink; gathered so a nearer
+  // thing's blur spreads over what's behind it, and a farther one's stops at what's in front of it ───
+  if (uFocA.x > .001 && uFocA.w > .001) {
+    float K = 6. * uPx * uFocA.w, rC = abs(cocP(z)) * K, rS = max(rC, K * uFocA.x * 1.2);
+    vec3 acc = col; float ws = 1.;
+    for (int i = 0; i < 16; i++) {
+      float fi = float(i) + .5, rr = sqrt(fi / 16.), an = fi * 2.39996;
+      vec2 q = vUV + vec2(cos(an), sin(an)) * rr * rS / uRes;
+      float zs = lz(q), rs = abs(cocP(zs)) * K, dpx = rr * rS;
+      float w = clamp((zs < z ? rs : min(rs, rC)) - dpx + 1., 0., 1.);
+      acc += laidAt(q) * w; ws += w;
+    }
+    col = acc / ws;
+  }
+  col *= 1. + grain;
   // (grain: tone off the colour laid as stippled clusters, the darker the denser, the paper between)
   {
     float tone = clamp(1. - dot(col, vec3(.3, .55, .15)) / dot(paper, vec3(.3, .55, .15)), 0., 1.);
@@ -928,7 +966,7 @@ export class Renderer {
     const d = this.dials;
     gl.uniform4fv(u('uRch'), [...this.reaches, 0.12]); gl.uniform4fv(u('uFoc'), [this.focus, d.depth, d.distance, 0]);
     gl.uniform4fv(u('uColK'), [d.culms, d.leaves, d.terrain, 0]); gl.uniform4fv(u('uLitK'), [d.shade, d.cast, d.hollow, d.landlight]);
-    gl.uniform4fv(u('uInkK'), [d.lines, d.strokes, d.edges, d.inkfade]); gl.uniform4fv(u('uHand'), [d.open, d.swell, d.grain, 0]); gl.uniform1f(u('uPxW'), this.pxW); gl.uniform1f(u('uUnder'), d.under); gl.uniform3fv(u('uPaperC'), PAPER);
+    gl.uniform4fv(u('uInkK'), [d.lines, d.strokes, d.edges, d.inkfade]); gl.uniform4fv(u('uHand'), [d.open, d.swell, d.grain, 0]); gl.uniform1f(u('uPxW'), this.pxW); gl.uniform4fv(u('uFocus'), [d.aperture, d.wet, d.dry, d.soften]); gl.uniform1f(u('uUnder'), d.under); gl.uniform3fv(u('uPaperC'), PAPER);
     gl.uniform1f(u('uAway'), (1 - Math.min(1, d.toward)) * Math.min(1, d.terrain));
     gl.uniformMatrix4fv(u('uLightVP'), false, this.lightVP); gl.uniform1i(u('uShadow'), 3); gl.uniform1f(u('uShadowOn'), this.shadows ? 1 : 0); gl.uniform1i(u('uDepth'), 0);
   }
@@ -1043,7 +1081,7 @@ export class Renderer {
     gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, this.texA); gl.uniform1i(u('uA'), 1);
     gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, this.texZ); gl.uniform1i(u('uZ'), 2);
     gl.uniform2fv(u('uRes'), [w, h]); gl.uniform1f(u('uNear'), near); gl.uniform1f(u('uFar'), far); gl.uniform1f(u('uPx'), Math.max(1, h / 900));
-    gl.uniform3fv(u('uPaper'), PAPER); gl.uniform4fv(u('uHand'), [this.dials.open, this.dials.swell, this.dials.grain, 0]); gl.uniform3fv(u('uInk'), [0.13, 0.12, 0.105]); gl.uniform3fv(u('uSunUV'), this.sunUV);
+    gl.uniform3fv(u('uPaper'), PAPER); gl.uniform4fv(u('uHand'), [this.dials.open, this.dials.swell, this.dials.grain, 0]); gl.uniform4fv(u('uFocA'), [this.dials.aperture, this.dials.wet, this.dials.dry, this.dials.soften]); gl.uniform1f(u('uFocD'), this.focus); gl.uniform3fv(u('uInk'), [0.13, 0.12, 0.105]); gl.uniform3fv(u('uSunUV'), this.sunUV);
     gl.uniform1f(u('uClean'), this.clean ? 1 : 0); gl.uniform1f(u('uMarks'), this.marks); gl.uniform1f(u('uClay'), this.clay ? 1 : 0);
     this.attr(0, this.vbo.screen.buf, 2, 2, 0);
     gl.drawArrays(gl.TRIANGLES, 0, 3);

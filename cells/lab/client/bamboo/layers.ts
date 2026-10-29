@@ -7,7 +7,9 @@
  * onto the paper itself), **ink** (things' own marks, the land's strokes, the outlines, how far they reach, and how they
  * end: thinning out, fewer of them, or fading, all paler), and its hand: how **open** its contours are (their weight
  * going to where a thing meets the land, the rest left to the paper), how much it **swell**s (strong lines heavier, weak
- * ones hairlines), how much **grain** breaks it (granular, tone in stippled clusters).
+ * ones hairlines), how much **grain** breaks it (granular, tone in stippled clusters); **focus** (one measure of how far out of focus a thing is, read
+ * by each layer its own way: the colour and light softened, never the ink; near, a culm or spray gone wet, a dark wash in
+ * place of its contour; far, the ink dried, paler and broken).
  *
  * Each layer is its own: its strengths and its reach move nothing else. A reach is a multiple of one measure of how far
  * out a point is: from the focus (where you're going and looking) across the frame (1 at every edge of it) and in depth
@@ -21,11 +23,12 @@ export type Dials = {
   shade: number; cast: number; hollow: number; landlight: number; lightreach: number;
   lines: number; strokes: number; edges: number; inkreach: number; inkfade: number; open: number; swell: number; grain: number;
   under: number; toward: number; distance: number; depth: number;
+  aperture: number; wet: number; dry: number; soften: number;
 };
 export type DialKey = keyof Dials;
 
 /** the picture as it's lit: every layer whole, out to the frame and past it */
-export const PLAIN: Dials = { culms: 1, leaves: 1, terrain: 1, colourreach: 4, shade: 1, cast: 1, hollow: 1, landlight: 1, lightreach: 4, lines: 1, strokes: 1, edges: 1, inkreach: 4, inkfade: 0, open: 0, swell: 0, grain: 0, under: 1, toward: 0, distance: 400, depth: 0 };
+export const PLAIN: Dials = { culms: 1, leaves: 1, terrain: 1, colourreach: 4, shade: 1, cast: 1, hollow: 1, landlight: 1, lightreach: 4, lines: 1, strokes: 1, edges: 1, inkreach: 4, inkfade: 0, open: 0, swell: 0, grain: 0, under: 1, toward: 0, distance: 400, depth: 0, aperture: 0, wet: 0.8, dry: 0.6, soften: 1 };
 /** where it starts: the colour held round the focus, the light out past it onto the paper, the ink further still and
  * thinning, every edge left to the paper */
 export const HOUSE: Dials = { ...PLAIN, colourreach: 0.65, lightreach: 0.8, inkreach: 0.9, inkfade: 0.25, under: 0.7, distance: 70, depth: 1, cast: 0.7, hollow: 1.1, open: 0.7, swell: 0 };
@@ -68,6 +71,12 @@ export const LAYERS: Layer[] = [
     { key: 'hollow', name: 'hollows', lo: 0, hi: 2 },
     { key: 'landlight', name: 'on the land', lo: 0, hi: 2 },
     REACH('lightreach'),
+  ] },
+  { id: 'focus', name: 'focus', icon: '<circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="2.5"/><path d="M12 3v2M12 19v2M3 12h2M19 12h2"/>', ranges: [
+    { key: 'aperture', name: 'aperture', lo: 0, hi: 2 },
+    { key: 'wet', name: 'near wet', lo: 0, hi: 1 },
+    { key: 'dry', name: 'far dry', lo: 0, hi: 1 },
+    { key: 'soften', name: 'soften', lo: 0, hi: 1 },
   ] },
   { id: 'ink', name: 'ink', icon: '<path d="M5 19c4-1 6-4 8-8l4-5 1 1-5 4c-4 2-7 4-8 8z"/>', ranges: [
     { key: 'lines', name: 'marks', lo: 0, hi: 1 },
