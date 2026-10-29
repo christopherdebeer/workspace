@@ -10,12 +10,14 @@
  * at its edge, with the valley beyond). Gusts come down through the grove.
  *
  * URL: `seed`, `ref=a|b|c|cliff|run|up|gust` (a fixed frame), `auto` (run on by itself), `t=<seconds>` and `still` (time
- * held), `clean`, `marks=0`, `fov=<degrees>`, `mute`.
+ * held), `clean`, `marks=0`, `fov=<degrees>`, `mute`; `look=house|picture|drawing|ink|page` and each layer's dial by its name
+ * (layers.ts); `grove=0` (the land alone), `clay` (the forms alone), `strokes=all`.
  */
 import { World, ridges, CHUNK, type Trail, type Chunk } from './world';
 import { Runner, LOPE } from './runner';
 import { strokes } from './strokes';
-import { Renderer, type Frame, type Reach } from './render';
+import { Renderer, type Frame } from './render';
+import { readDials, address, layersPalette } from './layers';
 
 const params = new URLSearchParams(location.search);
 const canvas = document.getElementById('view') as HTMLCanvasElement;
@@ -26,38 +28,16 @@ const world = new World(seed);
 const renderer = new Renderer(canvas, ridges(seed), { clean: params.has('clean'), marks: params.get('marks') !== '0', shadows: params.get('shadows') !== '0' });
 const auto = params.has('auto'), still = params.has('still');
 
-// ─── how far it's drawn: colour, then a wash of its tones in ink, then the marks alone on the paper, then the page ───
-const PRESETS: Record<string, Reach> = {
-  picture: { colour: 85, wash: 110, ink: 130, soft: 4, frame: 1, depth: 0.25 },
-  board: { colour: 29, wash: 29, ink: 160, soft: 3, frame: 0.14, depth: 0.98 },
-  drawing: { colour: 8, wash: 28, ink: 85, soft: 2.5, frame: 0.25, depth: 0.5 },
-  marks: { colour: 0, wash: 0, ink: 90, soft: 2, frame: 0.4, depth: 0.4 },
-};
+// ─── how it's drawn: the layers, each its own (layers.ts), from the address, and the palette under 墨 ───
+renderer.dials = readDials(params);
 {
-  const p = PRESETS[params.get('reach') ?? 'board'] ?? PRESETS.board, num = (k: string, d: number) => (params.has(k) ? Number(params.get(k)) : d);
-  renderer.reach = { colour: num('colour', p.colour), wash: num('wash', p.wash), ink: num('ink', p.ink), soft: num('soft', p.soft), frame: num('frame', p.frame), depth: num('depth', p.depth) };
-}
-{
-  const panel = document.getElementById('reach'), btn = document.getElementById('inkbtn');
-  const sliders = ['colour', 'wash', 'ink', 'frame', 'depth'] as const;
-  const show = () => {
-    for (const k of sliders) { (document.getElementById(`r-${k}`) as HTMLInputElement).value = String(renderer.reach[k]); document.getElementById(`v-${k}`)!.textContent = k === 'frame' || k === 'depth' ? renderer.reach[k].toFixed(2) : `${Math.round(renderer.reach[k])} m`; }
-    for (const b of panel?.querySelectorAll('[data-p]') ?? []) { const q = PRESETS[(b as HTMLElement).dataset.p!]; b.classList.toggle('on', sliders.every((k) => q[k] === renderer.reach[k])); }
-  };
-  // (keep the address in step, so a reach can be passed on)
-  const remember = () => { const u = new URL(location.href); for (const k of sliders) u.searchParams.set(k, String(renderer.reach[k])); u.searchParams.delete('reach'); history.replaceState(null, '', u); };
-  btn?.addEventListener('click', () => { panel?.classList.toggle('open'); show(); });
-  for (const k of sliders) document.getElementById(`r-${k}`)?.addEventListener('input', (e) => {
-    const v = Number((e.target as HTMLInputElement).value), r = renderer.reach;
-    r[k] = v;
-    // (the bands stay in order: colour inside the wash, the wash inside the ink)
-    if (k === 'colour') { r.wash = Math.max(r.wash, v); r.ink = Math.max(r.ink, r.wash + 5); }
-    if (k === 'wash') { r.colour = Math.min(r.colour, v); r.ink = Math.max(r.ink, v + 5); }
-    if (k === 'ink') { r.wash = Math.min(r.wash, v - 5); r.colour = Math.min(r.colour, r.wash); }
-    show(); remember();
-  });
-  for (const b of panel?.querySelectorAll('[data-p]') ?? []) b.addEventListener('click', () => { renderer.reach = { ...PRESETS[(b as HTMLElement).dataset.p!] }; show(); remember(); });
-  for (const el of [panel, btn]) el?.addEventListener('pointerdown', (e) => e.stopPropagation());
+  const el = document.getElementById('layers'), btn = document.getElementById('inkbtn');
+  if (el) {
+    // (keep the address in step, so a setting can be passed on)
+    const pal = layersPalette(el, () => renderer.dials, (d) => { renderer.dials = d; history.replaceState(null, '', address(d)); });
+    btn?.addEventListener('click', () => { el.classList.toggle('shown'); pal.refresh(); });
+    for (const x of [el, btn]) x?.addEventListener('pointerdown', (e) => e.stopPropagation());
+  }
 }
 let t = Number(params.get('t') ?? 0);
 
@@ -67,7 +47,7 @@ const EYE = 1.62;
 let held = false, pitch = -0.06, roll = 0;
 const keys = new Set<string>();
 renderer.allStrokes = params.get('strokes') === 'all';
-renderer.bare = params.get('culms') === '0';
+renderer.bare = params.get('grove') === '0';
 renderer.clay = params.has('clay');
 const stream = (budget: number) => me.stream(me.x, me.z, budget, (k, c) => renderer.add(k, c, strokes(world, c)), (k) => renderer.drop(k));
 

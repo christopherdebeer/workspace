@@ -21,12 +21,12 @@ export const GATES = [
 ];
 const MODES = [
   // (the forms alone: one clay, lit, shadows cast; no paper, no ink)
-  { name: 'clay', query: 'clay&reach=picture' },
-  { name: 'picture', query: 'reach=picture&marks=0&clean' },
-  { name: 'ink', query: 'colour=0&wash=0&ink=200&frame=1&depth=0' },
+  { name: 'clay', query: 'clay&look=picture' },
+  { name: 'picture', query: 'look=picture&marks=0&clean' },
+  { name: 'ink', query: 'look=ink' },
   { name: 'board', query: '' },
   // (the hard test: no bamboo, no colour; the mountain and its path must still read)
-  { name: 'land', query: 'culms=0&colour=0&wash=0&ink=200&frame=1&depth=0' },
+  { name: 'land', query: 'grove=0&look=ink' },
 ];
 const only = process.argv.slice(2).filter((a) => !a.startsWith('--'));
 const gates = only.length ? GATES.filter((g) => only.some((o) => g.name.startsWith(o))) : GATES;

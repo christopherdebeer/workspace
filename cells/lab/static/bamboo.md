@@ -58,32 +58,19 @@ Three passes, after Labyrinth's, and the land's own strokes laid in the world:
 - **The land's strokes** (`strokes.ts`): marks the mountain's features call for, laid as ribbons on it, so each stays where it is as you run and the mountain still reads when its colour's gone: a trail's **edges**, broken, firmer where the bank's cut deep; a **rim** along the top of a bank's cut and **hachures** down it in small groups; a flight's **strings** along its sides and a stone's front edge now and then; a cliff's **rim** and **strokes down its face**; a few **contours** along the hillside and short **strokes down the fall** where it's steep enough to show; where a **stone** meets the ground. Each is turned to the eye, held to a least width on the screen by its kind (a rim most), lighter with distance, and left out whole by its pick where the drawing thins, never faded. A rim holds over the colour; a contour's only for the paper.
 - **The page**: the outlines, found where the depth jumps or one thing meets another, inked on the side that's in front; a culm's breaks just under each node, as a brush lifts there. They lighten with distance, so a far culm is a fine grey line.
 
-### How far it's drawn
+### The layers
 
-It isn't a mask laid over the picture: it's how each thing is drawn. Each thing asks how far drawn it is, once for the whole of it (give or take a pick of its own, so neighbours differ), and is drawn in three stages:
+How it's drawn is a stack of layers laid from the paper up, after Labyrinth's print, each with its own dials, and none moving another (`client/bamboo/layers.ts`):
 
-- **lit**: in the sun and shade, in its own colour;
-- **flat**: the light gone, laid in its own colour as a wash, no shading;
-- **ink**: its marks and outlines alone on bare paper, heavier where the colour's gone, as a drawing's line carries what the colour did;
-- then the **page**: the sky, the mist and the far side of the valley are the paper itself, the far ranges laid in as washes darkest at their crests.
+- **page**: where every layer is measured from. Each thing asks one measure, how far **out** it is: from the **focus** (where you're going and looking: the ground the eye's line meets past the culms crossing it, kept between 7 and 30 m, moved to slowly) across the frame, 1 at **every edge** (top and bottom as much as the sides: it's measured near-square), and in depth (`depth`: sooner for things far beyond the focus, a little for things much nearer); or in the world, 1 at `distance` metres; whichever is further. `toward` pulls every layer in toward the paper at once.
+- **under**: how much of the drawing (marks, outlines, the land's strokes) lies beneath the colour; on bare paper it's always all of it.
+- **colour**: each kind its own strength (`culms`, `leaves`, `terrain`), and its `colourreach`. Past it, a thing gives way to the paper.
+- **light**: factored out of what the sun and sky give, so each part can be laid again at its own strength: `shade` (a surface's turn from the sun), `cast` (the culms' shadows and the canopy's dapple), `hollow` (the sky shut out), `landlight` (how much of them the land keeps), and `lightreach`. Past the colour, the light lies on the paper itself, in sepia.
+- **ink**: `lines` (things' own marks: node ticks, a spray's blades, a leaf's edge), `strokes` (the land's: trail edges, rims, hachures, contours), `edges` (the outlines found from depth and kind), `inkreach`, and `inkfade`: how it ends, thinning (fewer things inked, each by its own pick) or fading (all of them paler).
 
-How far drawn a thing is, is the further of two things:
+A reach is a multiple of that measure, on a log scale from ×0.25 to ×4: under 1 leaves every edge of the frame to the paper; over 1 lets that layer run out to the frame. The paper isn't a mask feathered over the picture: a culm, a spray, a stone, a stroke is left out **whole**, by its own pick, only where none of its layers reach it, and what's gone hides nothing behind it. Along a culm, an internode at a time, its colour gives way, then its light, then its ink; the ground goes leaf by fallen leaf, its edge dragged dry across the slope as a brush leaves it, and is never left out: past its layers it's the paper.
 
-- **in the world**: how far it is from the eye, `colour` (lit to), `wash` (flat to) and `ink` (marks to) metres;
-- **in the frame**: how far it is from the **focus** (where you're going and looking: the ground the eye's line meets past the culms crossing it, kept between 7 and 30 m, and moved to slowly). Out from it the frame goes: the picture, then linework, then sparse marks, then clear paper just inside **every edge**, top and bottom as much as the sides (the frame's measured near-square), whatever's there and however near. Things far beyond the focus go sooner; things much nearer a little, so the ground at your feet holds. `frame` sets how far round the focus the picture holds (0 tight … 1 wide), `depth` how much sooner far things go.
-
-The paper isn't a mask feathered over the picture: it's made by **leaving things out**. Past its colour, a culm, a spray, a stroke is kept or left out **whole**, by its own pick, fewer and fewer toward the paper; the ink lightens through the sparse marks. A culm's dry-brush shading goes with its colour; its node ticks and its foot carry on in the drawing. A long stroke lifts off, a stretch at a time, before it reaches the paper.
-
-A thing gone to the page is gone: it hides nothing behind it. One drawn as its ink alone still stands in front of what's behind it, its paper its own. So a spray or a stone changes whole, never cut by a line across it; a culm changes an internode at a time, each where it stands, its top going before its foot; a spray going out stays as its blades in ink. The ground goes leaf by fallen leaf, the bare earth between them first, its edge dragged dry across the slope as a brush leaves it.
-
-The 墨 button (bottom right) sets them: four presets, and a slider for each. The bands stay in order, and the address keeps what you set, so a drawing can be passed on.
-
-| preset | colour | wash | ink | frame | depth |
-|---|---|---|---|---|---|
-| picture | 85 m | 110 m | 130 m | 1 | .25 |
-| board (the default: lit, then straight to ink, carried far) | 29 m | 29 m | 160 m | .14 | .98 |
-| drawing | 8 m | 28 m | 85 m | .25 | .5 |
-| marks | — | — | 90 m | .4 | .4 |
+The 墨 button (bottom right) opens the palette: a slot for each layer, the one touched open with its sliders (a mark where the house setting has it; double-tap a name to put it back), and under **page**, the starts: `house` (the default), `picture` (every layer whole, out to the frame), `drawing` (no colour; the light on the paper; the ink), `ink` (the ink alone, out to the frame), `page` (all of it taken to the paper). The address keeps every dial that differs from the house, so a setting can be passed on.
 
 ![Marks: the drawing, with a few things near the eye keeping a touch of their colour by their own picks](bamboo/v-marks.jpg)
 
@@ -101,7 +88,7 @@ The look is now hill-climbed against five target studies (`devtools/bamboo/targe
 
 - `seed=<n>`: the mountain.
 - `ref=a|b|c|cliff|run|up|gust`: a frame found on the mountain by what it needs; `cam=x,z,heading,pitch[,speed]`: one pinned exactly.
-- `reach=picture|board|drawing|marks`, or `colour=`, `wash=`, `ink=` and `soft=` (metres), `frame=` (0–1) and `depth=` (0–1.5): how far it's drawn (above).
+- `look=house|picture|drawing|ink|page`, and any dial by its own name (`colourreach=0.3`, `cast=1.6`, `inkfade=1`…): the layers (above).
 - `shadows=0`: no culm shadows (cheaper).
 - `auto`: run on by itself, wandering.
 - `t=<seconds>` and `still`: time held.
@@ -110,5 +97,5 @@ The look is now hill-climbed against five target studies (`devtools/bamboo/targe
 - `marks=0`: the picture without its ink.
 - `strokes=all`: every stroke the land has, at full weight, none left out (to see what's laid).
 - `clay`: every surface one clay, its light kept (the sun on it, the culms' cast shadows, the sky), no paper, no ink: the forms alone.
-- `culms=0`: the land alone, no bamboo (the gates' hard test: does the mountain and its path still read?).
+- `grove=0`: the land alone, no bamboo (the gates' hard test: does the mountain and its path still read?).
 - `mute`: no sound.

@@ -14,18 +14,21 @@
  *   (strokes.ts: a trail's edges, a bank's rim and hachures, a face's fall, the hillside's contours), inked into the marks;
  * - **the page** (post): the outlines found from the depth and the kinds, inked on the side that's in front.
  *
- * **The reach** (`Renderer.reach`, set by `?colour=&wash=&ink=&frame=&depth=` or the page's own control): not a mask over
- * the picture but a quality of each thing in it. Each thing asks how far drawn it is (`bandAt`: by how far it is from
- * the eye, and by how far it stands from the focus, across the frame and in depth, whichever is further), once for
- * the whole of it, give or take its own pick; and is drawn in three stages: **lit**, then laid **flat** in its own colour
- * (the light gone), then its **ink** alone on the paper. A culm, a spray, a stone changes whole; a culm's top goes before
- * its foot; the ground goes leaf by fallen leaf, the bare earth between them first, its edge dragged dry across the
- * slope. Where a thing's colour has gone its ink is heavier, as a drawing's line carries what the colour did.
+ * **The layers** (`Renderer.dials`, layers.ts; set by `?look=` and each dial by its name, or the page's palette): laid
+ * from the paper up, after Labyrinth, each its own. Every thing asks one measure, how far **out** it is (`outAt`: from
+ * the focus across the frame, 1 at every edge, and in depth; or in the world, 1 at `distance` metres; whichever is
+ * further), once for the whole of it, give or take its own pick; and each layer has its own reach in that measure.
+ * **Colour**, by kind (culms, leaves, land), gives way to the paper; the **light** (shade, cast shadows, hollows, each
+ * its own strength, factored out of the sun and sky so each can be laid again) reaches further, onto the paper itself,
+ * there in sepia; the **ink** (things' own marks, the land's strokes, the outlines) further again, ending by thinning
+ * (fewer things inked, by their picks) or fading (all paler); and **under** says how much of the drawing lies beneath
+ * the colour. A culm, a spray, a stone is left out whole only where none of its layers reach it; the ground never is.
  *
  * `?clean`: no shafts or paper grain. `?marks=0`: the picture without its ink.
  */
 import { type Chunk, CHUNK, CN, CELL, HALF, BANK } from './world';
 import { STROKE_STRIDE } from './strokes';
+import { type Dials, HOUSE } from './layers';
 
 export interface Frame {
   eye: [number, number, number]; look: [number, number, number]; fov: number; t: number;
@@ -38,10 +41,9 @@ export interface Frame {
   /** how far off the focus is (metres): what's straight ahead, that the page comes in round */
   focus?: number;
 }
-/** how far the drawing reaches: in the world (metres: colour to, wash to, ink to, how soft each band is), and in the
- * frame (`frame`: 0 the page closing in tight round the focus … 1 hardly at all; `depth`: how much sooner things nearer or farther than the focus
- * go there) */
-export interface Reach { colour: number; wash: number; ink: number; soft: number; frame: number; depth: number }
+
+/** the paper's own colour */
+const PAPER = [0.937, 0.902, 0.824];
 
 const NOISE = `
 float h21(vec2 p) { p = fract(p * vec2(123.34, 456.21)); p += dot(p, p + 45.32); return fract(p.x * p.y); }
@@ -53,8 +55,10 @@ const COMMON = `#version 300 es
 precision highp float; precision highp int; precision highp sampler2DShadow;
 uniform float uClay;
 uniform mat4 uVP; uniform vec3 uEye; uniform float uTime; uniform vec3 uSun; uniform vec4 uGust;
-uniform vec4 uReach; // colour to, wash to, ink to, softness (metres)
-uniform vec4 uFrame; // where the frame starts drawing out (from the focus, 0…~1.6), the focus's distance, -, how much sooner things nearer or farther than it go
+// (the layers (layers.ts): each one's reach (the page's pull taken in) and how soft its edge; the measure (the focus's
+// distance, how much sooner things far beyond it go, how far out in the world a reach of one is); the colour by kind,
+// the ink by kind and how it ends, how much of it lies under the picture)
+uniform vec4 uRch; uniform vec4 uFoc; uniform vec4 uColK; uniform vec4 uInkK; uniform float uUnder;
 ${NOISE}
 // (how far a culm's top is blown, per metre of its height: a slow sway of its own, and the gust's front passing)
 vec2 windAt(vec2 p, float phase) {
@@ -69,39 +73,28 @@ vec3 culmAt(vec3 b, float h, vec2 lean, float phase, float y) {
   vec2 off = lean * pow(v, 1.6) + windAt(b.xz, phase) * v * v * h;
   return b + vec3(off.x, y, off.y);
 }
-// (how far along from the picture to the page a point is: 0 the picture whole, .6 its light gone (its own colour left),
-// 1.8 its colour gone (its ink left), 2.9 its ink gone (the page). By its distance in the world, and by where it falls in
-// the frame: how far it is from the focus (what's straight ahead, at its distance) across the frame, out to every edge
-// of it, and in depth, nearer or farther than the focus, whichever is further along. A
-// thing asks this once, at a point of its own, so it's drawn one way whole; never cut across by a line on the screen)
-float bandAt(vec3 p) {
-  float d = distance(p, uEye);
-  float C = max(uReach.x, .01), W = max(uReach.y, C + .01), I = max(uReach.z, W + .01);
-  float bw = d <= C ? .6 * d / C : d <= W ? .6 + 1.2 * (d - C) / (W - C) : 1.8 + 1.1 * (d - W) / (I - W);
+// (how far out a point is, for every layer alike: from the focus (where you're going and looking) across the frame, 1
+// at every edge of it (measured near-square, so top and bottom as much as the sides), and in depth (further for being
+// far beyond the focus, a little for being much nearer); or in the world, 1 at \`distance\` metres; whichever is further.
+// A thing asks it at a point of its own, so it's drawn one way whole, never cut by a line on the screen)
+float outAt(vec3 p) {
+  float d = distance(p, uEye), world = d / max(uFoc.z, 1.);
   vec4 cp = uVP * vec4(p, 1.);
-  if (cp.w < .05) return bw;
+  if (cp.w < .05) return world;
   vec2 n = abs(cp.xy / cp.w);
-  // (how far out in the frame: near-square, so every edge (top and bottom as much as the sides) is as far out as any;
-  // and further for being far beyond the focus; a little for being much nearer, so the ground at your feet holds)
-  float m = pow(pow(n.x, 3.) + pow(n.y, 3.), 1. / 3.);
-  float dl = log2(max(d, .3) / max(uFrame.y, 1.));
-  float sc = m + uFrame.w * .2 * (dl > 0. ? dl : -dl * .25);
-  // (from the focus out: the picture, then linework, then sparse marks, then the bare page just inside every edge,
-  // whatever's there)
-  float bf = max(0., .6 + (sc - uFrame.x) * 2.35 / max(.08, .95 - uFrame.x));
-  // (the valley below is kept in colour, under its mist, a little longer than it would be: the view out is the point)
-  return max(bw, bf) + smoothstep(25., 70., uEye.y - p.y) * .6;
+  float m = pow(pow(n.x, 3.) + pow(n.y, 3.), 1. / 3.), dl = log2(max(d, .3) / max(uFoc.x, 1.));
+  return max(world, m + uFoc.y * .2 * (dl > 0. ? dl : -dl * .25));
 }
-// (the stages: the light first, then the colour, then the ink)
-float lightOf(float b) { return 1. - smoothstep(.52, .68, b); }
-float colourOf(float b) { return 1. - smoothstep(1.64, 1.76, b); }
-// (the ink: full through the linework, lighter through the sparse marks, then gone, a thing at a time)
-float inkOf(float b) { return (1. - smoothstep(2.82, 2.9, b)) * mix(1., .4, smoothstep(1.9, 2.8, b)); }
+// (whether a layer's here, at so far out, given its reach: whole inside it, gone past it, over a soft edge)
+float hasS(float o, float r, float soft) { return 1. - smoothstep(r * (1. - soft), r * (1. + soft), o); }
+float has(float o, float r) { return hasS(o, r, uRch.w); }
+// (the ink here, for a thing of pick \`q\`: as it thins, fewer things inked, each as dark; as it fades, all of them paler)
+float inkAt(float o, float q) { float r = has(o, uRch.z); return mix(q < r ? 1. : 0., r, uInkK.w); }
 `;
 // (the light: the sun through the canopy's gaps and past the culms' shadows, shared by every surface, so a patch of
 // sun lies across the path, the litter and a culm alike)
 const LIGHT = `
-uniform vec3 uSunC; uniform vec3 uSky; uniform float uOpen;
+uniform vec3 uSunC; uniform vec3 uSky; uniform float uOpen; uniform vec4 uLitK; uniform vec3 uPaperC;
 uniform sampler2DShadow uShadow; uniform mat4 uLightVP; uniform float uShadowOn;
 float dapple(vec3 p) {
   vec2 q = p.xz - uSun.xz / max(uSun.y, .2) * (16. - p.y * .5);
@@ -148,46 +141,57 @@ vec3 carpet(vec3 base, vec2 p, float px, out float mark, out float leaf) {
   mark = (1. - far) * max(a.a * (1. - smoothstep(0., .18, r1)), b.a * (1. - smoothstep(0., .14, r2)) * .7) * (1. - smoothstep(.01, .03, px));
   return mix(c, mix(base, vec3(.76, .58, .36), .55), far);
 }
-vec3 lit(vec3 alb, vec3 N, vec3 p, float wrap, float ao) {
-  float sun = dapple(p) * culmShade(p), ndl = max(0., (dot(N, uSun) + wrap) / (1. + wrap));
-  // (\`?clay\`: every surface one clay, its light kept (the sun on it, the shadows cast, the sky): the forms alone)
-  vec3 a = lin(uClay > .5 ? vec3(.8, .78, .74) : alb);
-  return a * (uSunC * ndl * sun + uSky * (.5 + .5 * N.y) * ao + vec3(.2, .15, .08) * (1. - N.y) * .3 * ao);
-}
 // (the display: a soft shoulder, then back to the eye's curve)
 vec3 show(vec3 c) { c = 1. - exp(-c * 1.4); return sqrt(c); }
-`;
-// (what a fragment hands the page: its colour and how much of it's laid (a); its kind, whether an outline may run here,
-// how far its ink reaches, and its own marks)
-const OUT = `
-layout(location = 0) out vec4 oC; layout(location = 1) out vec4 oA;
-// (\`lit\`: as the light has it; \`own\`: its own colour, flat, as a painter lays it once the light's gone; \`b\`: how
-// far along it is (bandAt, at a point of the thing's own))
-void emit(vec3 lit, vec3 own, float b, float kind, float allow, float mark, vec3 p) {
-  if (uClay > .5) { oC = vec4(lit, 1.); oA = vec4(kind, allow, 1., 0.); return; }
-  // (a thing gone to the page is gone: it hides nothing behind it. One drawn as its ink alone still stands in front of
-  // what's behind it, as a drawn culm does, its paper its own. The ground goes as its leaves do, never as a hole)
-  if (kind > .3 && inkOf(b) < .04) discard;
-  // (the land's colour gives out over a broad, broken fade, never a line drawn along the hill)
-  float d = distance(p, uEye), colour = kind > .15 && kind < .25 ? 1. - smoothstep(1.2, 2.2, b) : colourOf(b);
-  vec3 c = mix(own, lit, lightOf(b));
-  // (a little air between, warm and pale)
+// (a surface as the layers lay it, the paper up: its colour as the sun shows it, going to the paper as far as the
+// colour's reach (and as strong as its kind's dial: \`colK\`); over it, the light, by kind, each its own strength (the
+// sun's shade on it, by its turn from the sun; what's cast across it, the culms' shadows and the canopy's dapple; the
+// hollows, the sky shut out), as far as the light's reach, past the colour onto the paper itself, there in sepia. The
+// light's factored out of what the sun and sky give, so each part can be laid again at its own strength: their product
+// is the light as it is. \`glow\`: light it gives back of its own (a leaf with the sun behind it). \`land\`: the land's (it
+// keeps \`landlight\` of its shade and hollows, and its colour gives out over a broader, broken edge))
+vec3 layered(vec3 alb, vec3 N, vec3 p, float wrap, float ao, vec3 glow, float colK, float land, float o, out float colR, out float litR) {
+  float sunV = dapple(p) * culmShade(p), ndl = max(0., (dot(N, uSun) + wrap) / (1. + wrap));
+  vec3 skyT = uSky * (.5 + .5 * N.y), bnc = vec3(.2, .15, .08) * (1. - N.y) * .3;
+  vec3 L0 = uSunC + skyT + bnc, Ls = uSunC * ndl + skyT + bnc, Lc = uSunC * ndl * sunV + skyT + bnc, Lh = uSunC * ndl * sunV + (skyT + bnc) * ao;
+  litR = has(o, uRch.y);
+  colR = clamp(colK, 0., 1.) * hasS(o, uRch.x, uRch.w * (land > .5 ? 2.2 : 1.));
+  if (uClay > .5) { colR = 1.; litR = 1.; return show(lin(vec3(.8, .78, .74)) * Lh); }
+  float ll = mix(1., uLitK.w, land);
+  vec3 Lk = pow(Ls / L0, vec3(uLitK.x * ll * litR)) * pow(Lc / max(Ls, vec3(1e-4)), vec3(uLitK.y * litR)) * pow(Lh / max(Lc, vec3(1e-4)), vec3(uLitK.z * ll * litR));
+  vec3 c = show(lin(alb) * L0 * Lk + glow * litR);
+  // (a little air between, warm and pale; and the valley's mist, a cool blue-grey veil in the hollows below the eye)
+  float d = distance(p, uEye);
   c = mix(c, vec3(.93, .9, .8), (1. - exp(-max(0., d - 3.) / 40.)) * .55);
-  // (and the valley's mist: down below the eye and far off, a cool blue-grey veil that lies in the hollows)
   float below = uEye.y - p.y, veil = smoothstep(3., 30., below) * smoothstep(12., 70., d) * (.55 + .35 * vn(p.xz * .02 + uTime * .01));
   c = mix(c, vec3(.78, .82, .86), clamp(veil, 0., .85));
-  oC = vec4(c, colour);
-  // (as the colour goes, the marks come up to carry the thing)
-  oA = vec4(kind, allow, inkOf(b), clamp(mark * (1. + .6 * (1. - colour)), 0., 1.));
+  // (a little of the paper's warmth in it, as a wash takes the sheet's tone)
+  c *= mix(vec3(1.), uPaperC / .94, .3);
+  // (the light on the paper, where the colour's gone: its shade in sepia, not the sky's grey)
+  float lm = clamp(dot(Lk, vec3(.3, .55, .15)), 0., 1.);
+  vec3 onPaper = uPaperC * mix(vec3(1.), pow(vec3(lm), vec3(.82, 1., 1.3)), .55);
+  return mix(onPaper, c, colR);
 }
-// (a thing's own colour, flat: about as it shows in a soft light)
-vec3 own(vec3 alb) { return show(lin(alb) * vec3(1.25, 1.2, 1.1)); }
+`;
+// (what a fragment hands the page: its colour as the layers laid it, and how much of that is colour (a); its kind,
+// whether an outline may run here, how much outline ink it carries, and its own marks, both as the ink's dials, its
+// reach and the drawing under the picture have them)
+const OUT = `
+layout(location = 0) out vec4 oC; layout(location = 1) out vec4 oA;
+void emit(vec3 c, float colR, float inkA, float kind, float allow, float mark) {
+  if (uClay > .5) { oC = vec4(c, 1.); oA = vec4(kind, allow, 0., 0.); return; }
+  // (under the picture, as much of the drawing as \`under\` lays there; on the paper, all of it)
+  float underF = 1. - colR * (1. - uUnder);
+  oC = vec4(c, colR);
+  // (as the colour goes, the marks come up to carry the thing)
+  oA = vec4(kind, allow, uInkK.z * inkA * underF, clamp(mark * uInkK.x * inkA * underF * (1. + .6 * (1. - colR)), 0., 1.));
+}
 `;
 
 const CULM_VS = COMMON + `
 layout(location = 0) in vec2 aUV;
 layout(location = 1) in vec4 iA; layout(location = 2) in vec4 iB; layout(location = 3) in vec4 iC;
-out vec3 vW; out vec3 vN; out float vY; out float vQ; out float vU; out vec3 vI; flat out float vBand; flat out float vJit;
+out vec3 vW; out vec3 vN; out float vY; out float vQ; out float vU; out vec3 vI; flat out float vOut; flat out float vJit;
 uniform vec2 uPick; // drawn whole up to, gone by (metres)
 uniform mat4 uLightVP; uniform int uDepth;
 void main() {
@@ -204,17 +208,17 @@ void main() {
   vec3 c = culmAt(b, h, lean, phase, y);
   vec3 n = vec3(cos(a), 0., sin(a));
   vW = c + n * rr; vN = n; vY = y; vQ = q; vU = a * r; vI = vec3(iC.x, phase, h);
-  // (how far it's drawn: asked once, at eye height on it, each culm a little its own way)
-  vJit = (fract(pick * 7.31) - .5) * 1.1;
-  // (how far drawn the culm is, whole: its most-drawn point along its length, so one seen from its foot looking up, or
+  // (how far out it is, each culm a little its own way)
+  vJit = (fract(pick * 7.31) - .5) * .24;
+  // (how far out the culm is, whole: its least-out point along its length, so one seen from its foot looking up, or
   // only its top in the frame, is still drawn)
-  float bb = 9.;
-  for (int k = 0; k < 5; k++) bb = min(bb, bandAt(culmAt(b, h, lean, phase, min(1.6, h) + (h - min(1.6, h)) * float(k) / 4.)));
-  vBand = uDepth == 1 ? 0. : bb + vJit;
+  float bb = 99.;
+  for (int k = 0; k < 5; k++) bb = min(bb, outAt(culmAt(b, h, lean, phase, min(1.6, h) + (h - min(1.6, h)) * float(k) / 4.)));
+  vOut = uDepth == 1 ? 0. : bb + vJit;
   gl_Position = (uDepth == 1 ? uLightVP : uVP) * vec4(vW, 1.);
 }`;
 const CULM_FS = COMMON + LIGHT + OUT + `
-in vec3 vW; in vec3 vN; in float vY; in float vQ; in float vU; in vec3 vI; flat in float vBand; flat in float vJit;
+in vec3 vW; in vec3 vN; in float vY; in float vQ; in float vU; in vec3 vI; flat in float vOut; flat in float vJit;
 uniform float uMarks;
 void main() {
   vec3 N = normalize(vN), V = normalize(uEye - vW);
@@ -223,7 +227,7 @@ void main() {
   // comes in on a culm wherever it crosses the frame; its top a little sooner, as a long stroke runs out; never fading
   // along an internode)
   float yNode = vY - f * fwidth(vY) / max(fwidth(vQ), 1e-4);
-  float drawn = bandAt(vW + vec3(0., yNode - vY, 0.)) + vJit + smoothstep(4., vI.z, yNode) * .35;
+  float drawn = outAt(vW + vec3(0., yNode - vY, 0.)) + vJit + smoothstep(4., vI.z, yNode) * .12;
   // (the culm's own green: olive-celadon when young, duller and greyer with age, darker low down)
   vec3 young = vec3(.56, .63, .4), old = vec3(.58, .58, .44);
   vec3 alb = mix(young, old, age) * mix(.78, 1., smoothstep(0., 2.5, vY));
@@ -239,32 +243,30 @@ void main() {
   alb = mix(alb, vec3(.94, .93, .86), band * (.85 - age * .4) * (1. - far));
   float ring = 1. - smoothstep(.0, .025 + fwidth(vQ) * .8, min(f, 1. - f) - .003);
   alb = mix(alb, alb * .4, ring * (1. - far * .6));
-  vec3 c = show(lit(alb, N, vW, .25, 1.));
+  float colR, litR;
+  vec3 c = layered(alb, N, vW, .25, 1., vec3(0.), uColK.x, 0., drawn, colR, litR);
   // (the marks: a tick at each node, curving with the ring, darkest toward the culm's edges as the eye sees it; on the
   // side away from the sun, dry-brush strokes down it; ink pooled at its foot)
   float edge = 1. - abs(dot(N, V)), shade = smoothstep(.1, -.4, dot(N, uSun));
   // (far off, only some nodes are ticked, by their own picks: a far culm is a few marks, not a chain of rings)
-  float chosen = step(h21(vec2(floor(vQ + .5), vI.y * 31.)), (1. - smoothstep(10., 40., dist) * .75) * mix(.45, 1., colourOf(drawn)));
+  float chosen = step(h21(vec2(floor(vQ + .5), vI.y * 31.)), (1. - smoothstep(10., 40., dist) * .75) * mix(.45, 1., colR));
   float tick = ring * chosen * (.35 + .65 * smoothstep(.1, .6, edge)) * (1. - smoothstep(30., 70., dist) * .75);
   float dry = smoothstep(.62, .82, vn(vec2(vU * 40. + 3., vY * .35))) * shade * edge * (1. - far) * .6;
   float foot = (1. - smoothstep(.0, .14, vY)) * .5 * (1. - smoothstep(15., 40., dist));
   // (the dry brush is the picture's shading: it goes with the colour; the ticks and the foot carry on in the drawing)
-  float mark = max(max(tick, dry * colourOf(drawn)), foot) * uMarks;
+  float mark = max(max(tick, dry * colR), foot) * uMarks;
   // (the outline breaks just under each node, as a brush lifts there)
   // (in colour the outline lifts under each node, as a brush does; drawn in ink alone, a culm's edges run on whole,
   // two long lines, and a few nodes ticked: never a chain of dashes)
-  float allow = 1. - smoothstep(.72, .8, f) * (1. - smoothstep(.97, .99, f)) * chosen * colourOf(drawn);
-  // (past its colour, left out more and more, a culm at a time by its own pick (and its top first), so the drawing
-  // thins by omission, toward the paper, rather than fading or standing as a fence of outlines)
-  float whole = min(vBand, drawn);
-  // (drawn in ink, a culm's kept by how near it is: near ones held; mid ones fewer; far ones, most
-  // gone, so the drawing is a few verticals and the space between them, not a fence)
-  float worth = (1. - smoothstep(6., 28., dist)) * .8 + .12;
-  if (uClay < .5 && whole > 1.7 && h21(vec2(vI.y * 3.7, 5.3)) > worth * (2.9 - whole) / 1.1 * 1.6) discard;
-  // (a culm goes from the page whole, by its own reach; along it, as its internodes go further out, its colour gives
-  // way and its ink thins, a brush lifting, never a cylinder cut off where an internode stops)
-  if (uClay < .5 && inkOf(vBand) < .04) discard;
-  emit(c, own(alb), min(drawn, 2.84), .4, allow, mark, vW);
+  float allow = 1. - smoothstep(.72, .8, f) * (1. - smoothstep(.97, .99, f)) * chosen * colR;
+  // (its ink: as the ink thins, left out a culm at a time by its own pick (a near one held longest), so the drawing
+  // thins by omission, toward the paper, rather than standing as a fence of outlines)
+  float q = h21(vec2(vI.y * 3.7, 5.3)) * mix(.45, 1., smoothstep(6., 28., dist));
+  float inkA = inkAt(drawn, q);
+  // (a culm goes from the page whole, where none of its layers reach it (asked at its least-out point); along it, an
+  // internode at a time, its colour gives way, then its light, then its ink: never a cylinder cut off mid-internode)
+  if (uClay < .5 && uColK.x * hasS(vOut, uRch.x, uRch.w) < .02 && has(vOut, uRch.y) * dot(uLitK.xyz, vec3(1.)) < .02 && inkAt(vOut, q) < .04) discard;
+  emit(c, colR, inkA, .4, allow, mark);
 }`;
 const DEPTH_FS = `#version 300 es
 precision highp float;
@@ -273,7 +275,7 @@ void main() {}`;
 const SPRAY_VS = COMMON + `
 layout(location = 0) in vec2 aUV;
 layout(location = 1) in vec4 iA; layout(location = 2) in vec4 iB; layout(location = 3) in vec4 iC; layout(location = 4) in vec4 iD;
-out vec3 vW; out vec2 vUV; out float vSeed; out vec3 vN; flat out float vBand;
+out vec3 vW; out vec2 vUV; out float vSeed; out vec3 vN; flat out float vOut;
 uniform vec2 uPick; uniform vec3 uRight;
 void main() {
   vec3 b = iA.xyz; float h = iA.w; vec2 lean = iB.xy; float phase = iB.z, pick = iB.w;
@@ -290,11 +292,11 @@ void main() {
   vUV = aUV + .5; vSeed = iD.z; vN = normalize(cross(right, up));
   // (a spray's drawn as its culm is at eye height, a little further along for being high, and each its own way)
   // (and where it stands in the frame itself, so the canopy at the top of the frame goes to the page too)
-  vBand = bandAt(anchor) + (fract(pick * 7.31) - .5) * .6 + smoothstep(4., h, sy) * .3 + (iD.z - .5) * .4;
+  vOut = outAt(anchor) + (fract(pick * 7.31) - .5) * .14 + smoothstep(4., h, sy) * .1 + (iD.z - .5) * .1;
   gl_Position = uVP * vec4(vW, 1.);
 }`;
 const SPRAY_FS = COMMON + LIGHT + OUT + `
-in vec3 vW; in vec2 vUV; in float vSeed; in vec3 vN; flat in float vBand;
+in vec3 vW; in vec2 vUV; in float vSeed; in vec3 vN; flat in float vOut;
 uniform float uMarks;
 void main() {
   // (the blades: three to five from a twig near the top, drooping: 个 and 介)
@@ -316,12 +318,15 @@ void main() {
   // (lit: dark ink-green in shade, yellow-green in the sun, glowing gold-green where the sun's behind it)
   float sun = dapple(vW), back = pow(max(0., dot(-V, uSun)), 2.5) * sun;
   vec3 alb = mix(vec3(.18, .26, .12), vec3(.5, .6, .24), .35 + .65 * best);
-  vec3 c = show(lit(alb, N, vW, .6, .9) + lin(vec3(.9, .92, .42)) * back * 1.2 * uSunC);
+  float colR, litR;
+  vec3 c = layered(alb, N, vW, .6, .9, lin(vec3(.9, .92, .42)) * back * 1.2 * uSunC, uColK.y, 0., vOut, colR, litR);
   // (the marks: each blade's edge near; where the colour's given out, the blade filled in ink, as a brush lays it)
   float near = 1. - smoothstep(8., 26., distance(vW, uEye));
-  float mark = max((1. - smoothstep(.0, .3, rim)) * near * .85, (1. - colourOf(vBand)) * (.22 + .16 * best)) * uMarks;
-  if (uClay < .5 && vBand > 1.8 && fract(vSeed * 17.3) > (2.9 - vBand) / 1.1) discard;
-  emit(c, own(alb), vBand, .6, near, mark, vW);
+  float mark = max((1. - smoothstep(.0, .3, rim)) * near * .85, (1. - colR) * (.22 + .16 * best)) * uMarks;
+  // (left out whole, a spray at a time by its own pick, where no layer reaches it)
+  float inkA = inkAt(vOut, fract(vSeed * 17.3));
+  if (uClay < .5 && colR < .02 && litR * dot(uLitK.xyz, vec3(1.)) < .02 && inkA < .04) discard;
+  emit(c, colR, inkA, .6, near, mark);
 }`;
 
 const GROUND_VS = COMMON + `
@@ -372,28 +377,29 @@ void main() {
   vec3 stone = mix(vec3(.66, .63, .56), vec3(.5, .49, .45), fbm2(vec2(across * .8, vW.y * .5)));
   stone = mix(stone, vec3(.42, .5, .26), smoothstep(.55, .75, N.y + (vn(vW.xz * 1.3) - .5) * .4) * .6);
   alb = mix(alb, stone, vRock);
-  vec3 c = show(lit(alb, N, vW, .2, .9));
+  // (how far out: broken, as a brush's edge is, by strokes laid across the fall of the slope, dragged dry, so where a
+  // layer gives out it breaks into them in the world rather than following any line of the frame; further off, in
+  // bigger patches, so across a far slope it's ragged, not ruled; each fallen leaf by its own pick, so the litter thins
+  // to a few painted leaves and then their outlines on the paper; the bare ground between them first)
+  vec2 down2 = N.xz / max(length(N.xz), .05), across2 = vec2(-down2.y, down2.x);
+  float stroke = vn(vec2(dot(vW.xz, across2) * .35, dot(vW.xz, down2) * 3.2)) * .6 + vn(vec2(dot(vW.xz, across2) * 1.1, dot(vW.xz, down2) * 9.)) * .4;
+  float o = outAt(vW) + ((fbm2(vW.xz * .5 + 3.) - .5) * .5 + (stroke - .5) * 1.4 + (fbm2(vW.xz * .09 + 7.) - .5) * 1.6 * smoothstep(10., 40., dist)) / 3.;
+  o += leaf >= 0. ? (leaf - .5) * .27 : .08 + (vRock > .5 ? -.1 : 0.);
+  float colR, litR;
+  vec3 c = layered(alb, N, vW, .2, .9, vec3(0.), uColK.z, 1., o, colR, litR);
   // (the marks: each near fallen leaf's edge; the land's own (a trail's edges, a bank's rim, a face's fall, the lie of
   // the hillside) are strokes laid on it, strokes.ts)
   // (a fallen leaf's edge is the picture's detail: it goes with the colour, a few left, so in the drawing the land's own
   // structure (edges, rims, contours) carries it, not the litter)
-  float mark = leafMark * .55 * uMarks * (.25 + .75 * smoothstep(1.3, .8, bandAt(vW) + (fbm2(vW.xz * .5 + 3.) - .5) * .5));
-  // (how far it's drawn: the bare ground between the leaves goes first; each fallen leaf holds its colour by its own
-  // pick, so the litter thins to a few painted leaves and then their outlines on the paper)
-  // (the edge is a brush's: strokes laid across the fall of the slope, dragged dry, so it breaks into them in the world
-  // rather than following any line of the frame)
-  vec2 down2 = N.xz / max(length(N.xz), .05), across2 = vec2(-down2.y, down2.x);
-  float stroke = vn(vec2(dot(vW.xz, across2) * .35, dot(vW.xz, down2) * 3.2)) * .6 + vn(vec2(dot(vW.xz, across2) * 1.1, dot(vW.xz, down2) * 9.)) * .4;
-  // (further off, broken in bigger patches, so where it gives out across a far slope it's ragged, not ruled)
-  float band = bandAt(vW) + (fbm2(vW.xz * .5 + 3.) - .5) * .5 + (stroke - .5) * 1.4 + (fbm2(vW.xz * .09 + 7.) - .5) * 1.6 * smoothstep(10., 40., dist);
-  band = leaf >= 0. ? band + (leaf - .5) * .8 : band + .25 + (vRock > .5 ? -.3 : 0.);
-  emit(c, own(alb), band, .2, 1., mark, vW);
+  float mark = leafMark * .55 * uMarks * (.25 + .75 * colR);
+  // (the land's never left out: past its layers it's the paper, which it gives its own place in the light to)
+  emit(c, colR, has(o, uRch.z), .2, 1., mark);
 }`;
 
 const SOLID_VS = COMMON + `
 layout(location = 0) in vec3 aP; layout(location = 1) in vec3 aN;
 layout(location = 2) in vec4 iA; layout(location = 3) in vec4 iB;
-out vec3 vW; out vec3 vN; out vec3 vL; out float vMoss; out float vSeed; flat out float vBand;
+out vec3 vW; out vec3 vN; out vec3 vL; out float vMoss; out float vSeed; flat out float vOut;
 uniform int uKind; uniform mat4 uLightVP; uniform int uDepth;
 void main() {
   vec3 p = aP, n = aN;
@@ -412,11 +418,11 @@ void main() {
   float c = cos(yaw), s = sin(yaw);
   p = vec3(c * p.x + s * p.z, p.y, -s * p.x + c * p.z); n = vec3(c * n.x + s * n.z, n.y, -s * n.x + c * n.z);
   vW = iA.xyz + p; vN = n; vL = aP; vMoss = iB.z; vSeed = iB.w;
-  vBand = uDepth == 1 ? 0. : bandAt(iA.xyz + vec3(0., .2, 0.)) + (fract(iA.x * .37 + iA.z * .71) - .5) * .6;
+  vOut = uDepth == 1 ? 0. : outAt(iA.xyz + vec3(0., .2, 0.)) + (fract(iA.x * .37 + iA.z * .71) - .5) * .14;
   gl_Position = (uDepth == 1 ? uLightVP : uVP) * vec4(vW, 1.);
 }`;
 const SOLID_FS = COMMON + LIGHT + OUT + `
-in vec3 vW; in vec3 vN; in vec3 vL; in float vMoss; in float vSeed; flat in float vBand;
+in vec3 vW; in vec3 vN; in vec3 vL; in float vMoss; in float vSeed; flat in float vOut;
 uniform int uKind; uniform float uMarks;
 void main() {
   vec3 N = normalize(vN);
@@ -445,8 +451,12 @@ void main() {
     // (the marks: the crack or two across a stone, now and then)
     mark = step(.8, fract(vSeed * 3.7)) * (1. - smoothstep(.0, .015, abs(vL.x - (fract(vSeed * 11.) - .5) * .6 + (vn(vW.xz * 7.) - .5) * .08))) * onTop * .7;
   }
-  vec3 c = show(lit(alb, N, vW, .2, .85));
-  emit(c, own(alb), vBand, uKind == 1 ? .8 : .7, 1., mark * uMarks, vW);
+  // (a stone, a step, a root: the land's colour; left out whole, by its own pick, where no layer reaches it)
+  float colR, litR;
+  vec3 c = layered(alb, N, vW, .2, .85, vec3(0.), uColK.z, 0., vOut, colR, litR);
+  float inkA = inkAt(vOut, fract(vSeed * 5.13 + .3));
+  if (uClay < .5 && colR < .02 && litR * dot(uLitK.xyz, vec3(1.)) < .02 && inkA < .04) discard;
+  emit(c, colR, inkA, uKind == 1 ? .8 : .7, 1., mark * uMarks);
 }`;
 
 const RIDGE_VS = COMMON + `
@@ -457,12 +467,13 @@ const RIDGE_FS = `#version 300 es
 precision highp float;
 in vec3 vW; in vec2 vT;
 layout(location = 0) out vec4 oC; layout(location = 1) out vec4 oA;
+uniform float uAway;
 ${NOISE}
 void main() {
   // (a range as the ink lays it: darkest at its crest, washing out below into the mist)
   float below = vT.x, layer = vT.y;
   float a = exp(-below / (10. + layer * 6.)) * (.62 - layer * .1);
-  a *= .75 + .25 * vn(vW.zy * .05);
+  a *= (.75 + .25 * vn(vW.zy * .05)) * uAway;
   // (a cool blue-grey, warmer toward the light: the far side of the valley in the morning's mist)
   oC = vec4(mix(vec3(.46, .54, .62), vec3(.62, .66, .7), layer * .35), min(1., a * 1.25));
   oA = vec4(.1, 0., 0., 0.);
@@ -477,7 +488,6 @@ in vec2 vUV; out vec4 o;
 uniform sampler2D uC; uniform sampler2D uA; uniform sampler2D uZ;
 uniform vec2 uRes; uniform float uNear; uniform float uFar; uniform float uPx;
 uniform vec3 uPaper; uniform vec3 uInk; uniform vec3 uSunUV; uniform float uClean; uniform float uMarks; uniform float uClay;
-uniform vec4 uReach;
 ${NOISE}
 float lz(vec2 p) { float d = texture(uZ, p).r; return uNear * uFar / (uFar - d * (uFar - uNear)); }
 void main() {
@@ -506,13 +516,14 @@ void main() {
       ink = max(ink, max(dj, kj) * F.y * F.z * mix(1., .28, smoothstep(10., 40., zf)) * (1.15 - .35 * C.a));
     }
     // (and the things' own marks, as far as their ink reaches)
-    ink = max(ink, A.w * A.z);
+    ink = max(ink, A.w);
   }
   // ─── the page: each thing laid on it as it's drawn (its colour as far as that goes), its ink over that ───
   float grain = uClean > .5 ? 0. : (vn(vUV * uRes * .35) - .5) * .05 + (vn(vUV * uRes * .04) - .5) * .04;
   vec3 paper = uPaper * (1. + grain);
-  vec3 col = paper;
-  col = mix(col, C.rgb * mix(vec3(1.), paper / .94, .3), C.a);
+  // (a thing's laid already, its colour and its light on the paper as the layers have them; the sky and the far ranges
+  // washed over the paper as far as they go)
+  vec3 col = A.x > .15 ? C.rgb * (1. + grain) : mix(paper, C.rgb * mix(vec3(1.), paper / .94, .3), C.a);
   // (shafts of light where the canopy opens toward the sun)
   if (uClean < .5 && uSunUV.z > 0.) {
     vec2 d = (uSunUV.xy - vUV) / 32.; vec2 p = vUV; float acc = 0., w = 1.;
@@ -536,7 +547,7 @@ const STROKE_VS = COMMON + `
 layout(location = 0) in vec3 aP; layout(location = 1) in vec3 aS; layout(location = 2) in vec2 aW; layout(location = 3) in vec2 aT;
 layout(location = 4) in vec3 aF; layout(location = 5) in vec3 aAnchor;
 uniform vec2 uRes;
-out float vAcross; out vec3 vW; flat out vec3 vF; flat out float vBand; flat out float vKeep;
+out float vAcross; out vec3 vW; flat out vec3 vF; flat out float vOut; flat out float vKeep;
 // (the least a mark of each family is on the screen, in pixels: a rim most, then a string, a contact, an edge; detail less)
 // (primary structure (a rim, a trail's edge, a flight's string and nosings, a stone's contact) about a pixel; the secondary
 // (hachures, a face's strokes, contours, roots) finer, under a pixel, so they texture rather than rule)
@@ -553,27 +564,28 @@ void main() {
   vAcross = aT.x; vW = p; vF = aF;
   float d = distance(aAnchor, uEye);
   // (asked here, a stretch of it at a time, so a long stroke lifts off before the paper rather than running into it)
-  vBand = max(bandAt(aAnchor), bandAt(aP)) + (aF.z - .5) * .6;
+  vOut = max(outAt(aAnchor), outAt(aP)) + (aF.z - .5) * .14;
   // (the detail (hachures, a face's strokes, contours, nosings) thinned with distance, so far off the structure's kept)
   bool detail = (fam > 1.5 && fam < 4.5) || (fam > 5.5 && fam < 6.5);
   vKeep = detail ? 1. - smoothstep(12., 60., d) * .85 : 1. - smoothstep(60., 140., d) * .7;
   gl_Position = uVP * vec4(p, 1.);
 }`;
 const STROKE_FS = COMMON + `
-in float vAcross; in vec3 vW; flat in vec3 vF; flat in float vBand; flat in float vKeep;
+in float vAcross; in vec3 vW; flat in vec3 vF; flat in float vOut; flat in float vKeep;
 layout(location = 0) out vec4 oC; layout(location = 1) out vec4 oA;
 uniform float uMarks; uniform float uAll;
 void main() {
   float fam = floor(vF.x + .001), weight = fract(vF.x + .001), persist = vF.y, pick = vF.z;
   // (left out whole: through the sparse marks fewer and fewer, by each stroke's own pick, none at the page)
-  if (uAll < .5 && (pick > vKeep || pick > (2.9 - vBand) / 1.1)) discard;
+  float inkA = inkAt(vOut, pick);
+  if (uAll < .5 && (pick > vKeep || inkA < .04)) discard;
   float aa = max(fwidth(vAcross), 1e-4);
   float cov = 1. - smoothstep(1. - aa, 1. + aa * .5, abs(vAcross));
   float dry = smoothstep(.18, .42, vn(vW.xz * 6. + vW.y * 2. + fam * 3.1));
   // (lighter with distance, as the outlines are: a far trail's edge, seen along, is a fine grey line, not a rule; a rim
   // holds most)
   float far = smoothstep(8., 45., distance(vW, uEye)) * (fam > .5 && fam < 1.5 ? .4 : .7);
-  float a = uAll > .5 ? cov : cov * min(1., .4 + weight) * mix(.6, 1., dry) * mix(persist, 1., 1. - colourOf(vBand)) * (1. - far) * uMarks;
+  float a = uAll > .5 ? cov : cov * min(1., .4 + weight) * mix(.6, 1., dry) * mix(persist * uUnder, 1., 1. - uColK.z * hasS(vOut, uRch.x, uRch.w * 2.2)) * (1. - far) * uMarks * uInkK.y * inkA;
   if (a < .02) discard;
   oC = vec4(0.); oA = vec4(0., 0., 1., min(1., a * 1.15));
 }`;
@@ -673,12 +685,16 @@ export class Renderer {
   bare = false;
   /** `?clay`: every surface one clay, its light (sun, cast shadows, sky) kept; no paper, no ink: the forms alone */
   clay = false;
-  /** how far the drawing reaches (see the head of this file) */
   /** the focus's distance, this frame */
   focus = 15;
-  reach: Reach = { colour: 29, wash: 29, ink: 160, soft: 3, frame: 0.14, depth: 0.98 };
-  /** culms in whole up to / gone by: through the ink's band */
-  private get pick() { return [this.reach.ink * 0.35, this.reach.ink * 0.85]; }
+  /** the layers' dials (see the head of this file, and layers.ts) */
+  dials: Dials = { ...HOUSE };
+  /** each layer's reach, the page's pull taken in */
+  private get reaches() { const k = 1 - Math.min(1, Math.max(0, this.dials.toward)), d = this.dials; return [d.colourreach * k, d.lightreach * k, d.inkreach * k]; }
+  /** how far out in the world anything's drawn at all (metres) */
+  private get farthest() { return Math.min(320, Math.max(...this.reaches) * this.dials.distance * 1.15); }
+  /** culms in whole up to / gone by (metres) */
+  private get pick() { return [this.farthest * 0.35, this.farthest * 0.85]; }
   private shadowTex: WebGLTexture | null = null; private shadowFbo: WebGLFramebuffer | null = null; private lightVP: number[] = new Array(16).fill(0); readonly shadows: boolean;
   sunDir = norm([-0.6, 0.44, 0.55]);
 
@@ -785,8 +801,12 @@ export class Renderer {
     const gl = this.gl, u = (n: string) => gl.getUniformLocation(p, n);
     gl.uniformMatrix4fv(u('uVP'), false, vp); gl.uniform3fv(u('uEye'), f.eye); gl.uniform1f(u('uTime'), f.t); gl.uniform3fv(u('uSun'), this.sunDir);
     gl.uniform4fv(u('uGust'), f.gust); gl.uniform1f(u('uClay'), this.clay ? 1 : 0); gl.uniform3fv(u('uSunC'), [3.0, 2.45, 1.6]); gl.uniform3fv(u('uSky'), [0.62, 0.68, 0.72]); gl.uniform1f(u('uOpen'), 0);
-    gl.uniform4fv(u('uReach'), [this.reach.colour, this.reach.wash, this.reach.ink, this.reach.soft]); gl.uniform2fv(u('uPick'), this.pick); gl.uniform1f(u('uMarks'), this.marks); gl.uniform3fv(u('uRight'), right);
-    { const c0 = 0.3 + this.reach.frame * 1.3; gl.uniform4fv(u('uFrame'), [c0, this.focus, 0, this.reach.depth]); }
+    gl.uniform2fv(u('uPick'), this.pick); gl.uniform1f(u('uMarks'), this.marks); gl.uniform3fv(u('uRight'), right);
+    const d = this.dials;
+    gl.uniform4fv(u('uRch'), [...this.reaches, 0.12]); gl.uniform4fv(u('uFoc'), [this.focus, d.depth, d.distance, 0]);
+    gl.uniform4fv(u('uColK'), [d.culms, d.leaves, d.terrain, 0]); gl.uniform4fv(u('uLitK'), [d.shade, d.cast, d.hollow, d.landlight]);
+    gl.uniform4fv(u('uInkK'), [d.lines, d.strokes, d.edges, d.inkfade]); gl.uniform1f(u('uUnder'), d.under); gl.uniform3fv(u('uPaperC'), PAPER);
+    gl.uniform1f(u('uAway'), (1 - Math.min(1, d.toward)) * Math.min(1, d.terrain));
     gl.uniformMatrix4fv(u('uLightVP'), false, this.lightVP); gl.uniform1i(u('uShadow'), 3); gl.uniform1f(u('uShadowOn'), this.shadows ? 1 : 0); gl.uniform1i(u('uDepth'), 0);
   }
   private attr(loc: number, buf: WebGLBuffer, size: number, stride: number, off: number, div = 0) {
@@ -823,7 +843,7 @@ export class Renderer {
     }
     gl.activeTexture(gl.TEXTURE3); gl.bindTexture(gl.TEXTURE_2D, this.shadowTex); gl.activeTexture(gl.TEXTURE0);
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.fbo); gl.viewport(0, 0, w, h);
-    gl.clearBufferfv(gl.COLOR, 0, [0, 0, 0, 0]); gl.clearBufferfv(gl.COLOR, 1, [0, 0, 0, 1]); gl.clearBufferfv(gl.DEPTH, 0, [1]);
+    gl.clearBufferfv(gl.COLOR, 0, [0, 0, 0, 0]); gl.clearBufferfv(gl.COLOR, 1, [0, 0, 0, 0]); gl.clearBufferfv(gl.DEPTH, 0, [1]);
     gl.enable(gl.DEPTH_TEST); gl.depthFunc(gl.LEQUAL); gl.disable(gl.BLEND); gl.disable(gl.CULL_FACE);
     // ─── the far ranges, under everything ───
     if (!this.clay) {
@@ -845,10 +865,10 @@ export class Renderer {
       const p = use('solid');
       gl.uniform1i(gl.getUniformLocation(p, 'uKind'), 1);
       this.attr(0, this.vbo.slab.buf, 3, 6, 0); this.attr(1, this.vbo.slab.buf, 3, 6, 3);
-      for (const { c } of inRange(this.reach.ink)) if (c.nSteps) { this.attr(2, c.steps, 4, 8, 0, 1); this.attr(3, c.steps, 4, 8, 4, 1); gl.drawArraysInstanced(gl.TRIANGLES, 0, this.vbo.slab.count, c.nSteps); }
+      for (const { c } of inRange(this.farthest)) if (c.nSteps) { this.attr(2, c.steps, 4, 8, 0, 1); this.attr(3, c.steps, 4, 8, 4, 1); gl.drawArraysInstanced(gl.TRIANGLES, 0, this.vbo.slab.count, c.nSteps); }
       gl.uniform1i(gl.getUniformLocation(p, 'uKind'), 2);
       this.attr(0, this.vbo.lump.buf, 3, 6, 0); this.attr(1, this.vbo.lump.buf, 3, 6, 3);
-      for (const { c } of inRange(this.reach.ink)) if (c.nStones) { this.attr(2, c.stones, 4, 8, 0, 1); this.attr(3, c.stones, 4, 8, 4, 1); gl.drawArraysInstanced(gl.TRIANGLES, 0, this.vbo.lump.count, c.nStones); }
+      for (const { c } of inRange(this.farthest)) if (c.nStones) { this.attr(2, c.stones, 4, 8, 0, 1); this.attr(3, c.stones, 4, 8, 4, 1); gl.drawArraysInstanced(gl.TRIANGLES, 0, this.vbo.lump.count, c.nStones); }
       gl.uniform1i(gl.getUniformLocation(p, 'uKind'), 3);
       for (const { c } of inRange(60)) if (c.nRoots) { this.attr(2, c.roots, 4, 8, 0, 1); this.attr(3, c.roots, 4, 8, 4, 1); gl.drawArraysInstanced(gl.TRIANGLES, 0, this.vbo.lump.count, c.nRoots); }
     }
@@ -857,7 +877,7 @@ export class Renderer {
       const p = use('stroke');
       gl.uniform2fv(gl.getUniformLocation(p, 'uRes'), [w, h]); gl.uniform1f(gl.getUniformLocation(p, 'uAll'), this.allStrokes ? 1 : 0);
       gl.enable(gl.BLEND); gl.blendEquation(gl.MAX); gl.depthMask(false); gl.enable(gl.POLYGON_OFFSET_FILL); gl.polygonOffset(-2, -4);
-      for (const { c } of inRange(this.reach.ink)) if (c.nStrokes && c.strokes) {
+      for (const { c } of inRange(this.farthest)) if (c.nStrokes && c.strokes) {
         const S = STROKE_STRIDE;
         this.attr(0, c.strokes, 3, S, 0); this.attr(1, c.strokes, 3, S, 3); this.attr(2, c.strokes, 2, S, 6); this.attr(3, c.strokes, 2, S, 8); this.attr(4, c.strokes, 3, S, 10); this.attr(5, c.strokes, 3, S, 13);
         gl.drawArrays(gl.TRIANGLES, 0, c.nStrokes);
@@ -898,9 +918,8 @@ export class Renderer {
     gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, this.texA); gl.uniform1i(u('uA'), 1);
     gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, this.texZ); gl.uniform1i(u('uZ'), 2);
     gl.uniform2fv(u('uRes'), [w, h]); gl.uniform1f(u('uNear'), near); gl.uniform1f(u('uFar'), far); gl.uniform1f(u('uPx'), Math.max(1, h / 900));
-    gl.uniform3fv(u('uPaper'), [0.937, 0.902, 0.824]); gl.uniform3fv(u('uInk'), [0.13, 0.12, 0.105]); gl.uniform3fv(u('uSunUV'), this.sunUV);
+    gl.uniform3fv(u('uPaper'), PAPER); gl.uniform3fv(u('uInk'), [0.13, 0.12, 0.105]); gl.uniform3fv(u('uSunUV'), this.sunUV);
     gl.uniform1f(u('uClean'), this.clean ? 1 : 0); gl.uniform1f(u('uMarks'), this.marks); gl.uniform1f(u('uClay'), this.clay ? 1 : 0);
-    gl.uniform4fv(u('uReach'), [this.reach.colour, this.reach.wash, this.reach.ink, this.reach.soft]);
     this.attr(0, this.vbo.screen.buf, 2, 2, 0);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
   }
