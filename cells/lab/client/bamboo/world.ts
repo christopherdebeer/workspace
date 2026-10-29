@@ -286,9 +286,9 @@ export class World {
         keep *= 1 - 0.6 * c.up * (1 - ss(0.618, 0.64, fbm(x / 150, z / 150, s + 50)));
         if (u01(s, gi, gj, 4) > keep) continue;
         // (girth: a stand's middle stoutest; and now and then a giant beside a trail, the one the eye goes to)
-        const mid = 1 - rr / R, hero = q.d < 5 && u01(s, gi, gj, 16) < 0.3;
+        const mid = 1 - rr / R, hero = (q.d < 4 && u01(s, gi, gj, 16) < 0.45) || (q.d < 7 && u01(s, gi, gj, 16) < 0.12);
         const girth = hero ? 1 : Math.min(1, u01(s, gi, gj, 5) * 0.7 + mid * 0.4);
-        const y = g(x, z), r = hero ? 0.1 + u01(s, gi, gj, 17) * 0.015 : 0.05 + girth * 0.04, h = hero ? 20 + u01(s, gi, gj, 6) * 4 : 10 + girth * 9 + u01(s, gi, gj, 6) * 3;
+        const y = g(x, z), r = hero ? 0.115 + u01(s, gi, gj, 17) * 0.035 : 0.05 + girth * 0.04, h = hero ? 20 + u01(s, gi, gj, 6) * 4 : 10 + girth * 9 + u01(s, gi, gj, 6) * 3;
         // (lean: down the fall of the ground a little, out from the stand's middle, and out over a trail beside it)
         const fx = g(x + 1, z) - g(x - 1, z), fz = g(x, z + 1) - g(x, z - 1), ox = x - cx, oz = z - cz, ol = Math.hypot(ox, oz) || 1;
         let lx = -fx * 0.6 + (ox / ol) * 0.5 * (1 - mid) + (u01(s, gi, gj, 8) - 0.5) * 0.7, lz = -fz * 0.6 + (oz / ol) * 0.5 * (1 - mid) + (u01(s, gi, gj, 9) - 0.5) * 0.7;

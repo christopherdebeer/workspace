@@ -20,7 +20,7 @@
 import { hash } from '../kit/rng';
 import { type Chunk, type World, CHUNK, CN, CELL, HALF, BANK } from './world';
 
-export const FAM = { edge: 0, rim: 1, hachure: 2, face: 3, contour: 4, string: 5, nosing: 6, contact: 7, root: 8 } as const;
+export const FAM = { edge: 0, rim: 1, hachure: 2, face: 3, contour: 4, string: 5, nosing: 6, contact: 7, root: 8, debris: 9, tread: 10 } as const;
 /** a mark's vertex: point (3), the way it runs (3), half-width and taper, side (-1, 1) and along (0..1), family + weight, how
  * much it holds over colour, pick, anchor (3) */
 export const STROKE_STRIDE = 16;
@@ -164,6 +164,35 @@ export function strokes(world: World, c: Chunk): Float32Array {
             }
           }
         }
+      }
+      // (the bed itself, where it's not a flight: worn lines where feet have gone, broken and faint; and what lies on it, a
+      // twig now and then, fallen leaves as small curved commas, thicker toward the edges where they're not trodden)
+      {
+        const tread: V3[][] = [[], []];
+        for (let k = a; k <= b; k++) {
+          const k0 = Math.max(0, k - 1), k1 = Math.min(n - 1, k + 1), dx = t.x[k1] - t.x[k0], dz = t.z[k1] - t.z[k0], l = Math.hypot(dx, dz) || 1;
+          const tx = dx / l, tz = dz / l, nx = -tz, nz = tx;
+          for (const [w, side] of [[0, -1], [1, 1]] as const) {
+            const off = side * HALF * 0.38, x = t.x[k] + nx * off, z = t.z[k] + nz * off;
+            if (t.stair[k]) { if (tread[w].length >= 2) broken(out, tread[w], r, [0.8, 2.4], [1.2, 3.5], 0.035, FAM.tread, () => 0.3, 0.2); tread[w] = []; }
+            else tread[w].push([x, yAt(x, z) + 0.03, z]);
+          }
+          if (t.stair[k] || !inside(t.x[k], t.z[k])) continue;
+          // (the samples are about half a metre apart: a few marks each)
+          for (let m = 0; m < 3; m++) {
+            const u = (r() * 2 - 1), edgeward = Math.abs(u), off = u * HALF * 0.9;
+            if (r() > 0.25 + 0.55 * edgeward) continue;
+            const along = (r() - 0.5) * 0.5, x = t.x[k] + nx * off + tx * along, z = t.z[k] + nz * off + tz * along;
+            const twig = r() < 0.18, len = twig ? 0.25 + r() * 0.4 : 0.09 + r() * 0.1, ang = r() * Math.PI * 2, bend = (r() - 0.5) * (twig ? 0.25 : 0.9);
+            const pts: V3[] = [];
+            for (let q = 0; q <= (twig ? 3 : 2); q++) {
+              const f = q / (twig ? 3 : 2) - 0.5, an = ang + bend * f * 2, px = x + Math.cos(an) * len * f, pz = z + Math.sin(an) * len * f;
+              pts.push([px, yAt(px, pz) + 0.035, pz]);
+            }
+            ribbon(out, pts, twig ? 0.035 : 0.045, FAM.debris, twig ? 0.55 : 0.3 + r() * 0.2, 0.35, r());
+          }
+        }
+        for (const line of tread) if (line.length >= 2) broken(out, line, r, [0.8, 2.4], [1.2, 3.5], 0.035, FAM.tread, () => 0.3, 0.2);
       }
       // (now and then a stone's front edge on a flight, most at its foot and head)
       i = b + 1;

@@ -200,7 +200,7 @@ void emit(vec3 c, float colR, float inkA, float kind, float allow, float mark) {
 const CULM_VS = COMMON + `
 layout(location = 0) in vec2 aUV;
 layout(location = 1) in vec4 iA; layout(location = 2) in vec4 iB; layout(location = 3) in vec4 iC;
-out vec3 vW; out vec3 vN; out float vY; out float vQ; out float vU; out vec3 vI; flat out float vOut; flat out float vJit;
+out vec3 vW; out vec3 vN; out float vY; out float vQ; out float vU; out vec3 vI; flat out float vOut; flat out float vJit; flat out float vHero;
 uniform vec2 uPick; // drawn whole up to, gone by (metres)
 uniform mat4 uLightVP; uniform int uDepth;
 void main() {
@@ -220,6 +220,7 @@ void main() {
   // (how far out it is, each culm a little its own way)
   // (and each stand its own way, so the grove's limit is ragged by whole stands: some run on past the rest, some give
   // way early)
+  vHero = r > .105 ? 1. : 0.;
   vJit = (fract(pick * 7.31) - .5) * .24 + (vn(b.xz * .045) - .5) * .7;
   // (how far out the culm is, whole: its least-out point along its length, so one seen from its foot looking up, or
   // only its top in the frame, is still drawn)
@@ -229,7 +230,7 @@ void main() {
   gl_Position = (uDepth == 1 ? uLightVP : uVP) * vec4(vW, 1.);
 }`;
 const CULM_FS = COMMON + LIGHT + OUT + `
-in vec3 vW; in vec3 vN; in float vY; in float vQ; in float vU; in vec3 vI; flat in float vOut; flat in float vJit;
+in vec3 vW; in vec3 vN; in float vY; in float vQ; in float vU; in vec3 vI; flat in float vOut; flat in float vJit; flat in float vHero;
 uniform float uMarks;
 void main() {
   vec3 N = normalize(vN), V = normalize(uEye - vW);
@@ -274,7 +275,7 @@ void main() {
   // fainter counter-line; each lifting here and there along its length (the lit side often), so the eye completes it)
   float lit = smoothstep(-.15, .15, dot(N.xz, normalize(uSun.xz + 1e-4)));
   float lift = smoothstep(.48, .7, vn(vec2(vY * .2 + vI.y * 7., 1.7 + lit * 3.6)));
-  allow *= mix(1., mix(.36, .08, uHand.x), lit) * (1. - lift * mix(.45, .95, lit) * (.6 + .6 * uHand.x));
+  allow *= mix(1., mix(.36, .08, uHand.x), lit) * (1. - lift * mix(.45, .95, lit) * (.6 + .6 * uHand.x) * (1. - vHero * (1. - lit) * .8));
   // (its ink: as the ink thins, left out a culm at a time by its own pick (a near one held longest), so the drawing
   // thins by omission, toward the paper, rather than standing as a fence of outlines)
   float q = h21(vec2(vI.y * 3.7, 5.3)) * mix(.45, 1., smoothstep(6., 28., dist));
@@ -287,6 +288,9 @@ void main() {
   // (a few culms carry the drawing: past arm's length, half are quieter, secondary; and far ones lighter still, a
   // register of tone rather than of lines)
   float prom = h21(vec2(vI.y * 9.1, 2.7));
+  // (a giant by the way is the drawing's anchor: never secondary, its firm side heavier)
+  prom *= 1. - vHero;
+  inkA *= 1. + vHero * .3;
   inkA *= mix(1., .42, smoothstep(.4, .6, prom) * smoothstep(10., 16., dist)) * mix(1., .5, smoothstep(22., 50., dist)) * (1. + .35 * (1. - smoothstep(6., 16., dist)));
   // (a culm goes from the page whole, where none of its layers reach it (asked at its least-out point); along it, an
   // internode at a time, its colour gives way, then its light: never a cylinder cut off mid-internode)
@@ -466,7 +470,7 @@ void main() {
   // (a stone's shade drawn as a brush does: a few broken strokes across its turned-away side, not filled)
   float hs = abs(fract(dot(vW.xz, vec2(.8, .6)) * 5. + vW.y * 3.5) - .5);
   float hw = .07 + fwidth(dot(vW.xz, vec2(.8, .6)) * 5. + vW.y * 3.5) * .9;
-  float hatch = (1. - smoothstep(hw, hw + .06, hs)) * smoothstep(.3, -.3, dot(N, uSun)) * step(.38, vn(vW.xz * 2.3 + vW.y)) * .8;
+  float hatch = (1. - smoothstep(hw * .7, hw * .7 + .05, hs)) * smoothstep(.3, -.3, dot(N, uSun)) * step(.45, vn(vW.xz * 2.3 + vW.y)) * .42;
   if (uKind == 2) {
     // (a boulder: its underside dark, the ground's shade gathering under it; now and then a fracture across it)
     float under = smoothstep(-.05, -.6, N.y) * .5;
@@ -496,8 +500,10 @@ void main() {
     mark = max(mark, step(.8, fract(vSeed * 3.7)) * (1. - smoothstep(.0, .015, abs(vL.x - (fract(vSeed * 11.) - .5) * .6 + (vn(vW.xz * 7.) - .5) * .08))) * onTop * .7);
   }
   // (a stone, a step, a root: the land's colour; left out whole, by its own pick, where no layer reaches it)
+  // (its colour and light are the land's, asked where they are, as the ground's are, so a stone never stands as a hole
+  // in the land's wash; its ink is its own, whole)
   float colR, litR;
-  vec3 c = layered(alb, N, vW, .2, .85, vec3(0.), uColK.z, 0., vOut, colR, litR);
+  vec3 c = layered(alb, N, vW, .2, .85, vec3(0.), uColK.z, 1., outAt(vW) + (fract(vSeed * 3.1) - .5) * .06, colR, litR);
   // (its ink laid from its middle out to its sides, then to its weight; a step's by weight alone, as one of a flight, so
   // the flight's edge thins as one line, never a row of dashes, a stone each)
   float sa = inkAt(vOut, fract(vSeed * 5.13 + .3)), inkA = laid(sa, uKind == 1 ? 0. : clamp(abs(vL.x), 0., 1.));
@@ -634,7 +640,7 @@ void main() {
   // switched; laid out from its middle, its length first and then its weight (its width))
   float pick = aF.z, d0 = distance(aAnchor, uEye);
   vOut = max(outAt(aAnchor), outAt(aP)) + (pick - .5) * .14;
-  bool detail0 = (fam > 1.5 && fam < 4.5) || (fam > 5.5 && fam < 6.5);
+  bool detail0 = (fam > 1.5 && fam < 4.5) || (fam > 5.5 && fam < 6.5) || fam > 8.5;
   float keep = detail0 ? 1. - smoothstep(12., 60., d0) * .85 : 1. - smoothstep(60., 140., d0) * .7;
   vAmt = uAll > .5 ? 1. : min(inkAt(vOut, pick), clamp((keep - pick) / .2 + .5, 0., 1.));
   vAlong = abs(aT.y - .5) * 2.;
