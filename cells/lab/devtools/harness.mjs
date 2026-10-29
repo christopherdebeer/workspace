@@ -90,8 +90,16 @@ export async function withWood(fn, { width = 390, height = 844 } = {}) {
       page.on('pageerror', (e) => page.errors.push(String(e)));
       page.on('console', (m) => m.type() === 'error' && !m.text().includes('404') && page.errors.push(m.text()));
       await page.goto(base + (query ? `?${query}` : ''), { timeout: 600000 });
-      // (what the experiment reports: `__mistwood`, or READY=__<id> for another)
-      await page.waitForFunction((k) => window[k], ready, { timeout: 600000 });
+      // (what the experiment reports: `__mistwood`, or READY=__<id> for another; but a page that has thrown (a shader
+      // that won't compile, a script error) never will, so give up on it at once, saying why)
+      const t0 = Date.now();
+      for (;;) {
+        const fatal = page.errors.find((e) => !/Failed to load resource/.test(e));
+        if (fatal) { await page.close(); throw new Error(`page failed (${query}): ${fatal.slice(0, 1200)}`); }
+        if (await page.evaluate((k) => !!window[k], ready)) break;
+        if (Date.now() - t0 > 600000) { await page.close(); throw new Error(`page never ready (${query})`); }
+        await page.waitForTimeout(250);
+      }
       return page;
     },
     state: (page) => page.evaluate((k) => window[k], ready),

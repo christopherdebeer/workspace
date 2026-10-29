@@ -39,7 +39,8 @@ function ribbon(out: number[], pts: V3[], w: number, fam: number, weight: number
     const t = L[i] / total, a = pts[Math.max(0, i - 1)], b = pts[Math.min(pts.length - 1, i + 1)];
     // (the way it runs here: the renderer turns it across that, to the eye, so it's never lost lying flat on the ground)
     const dx = b[0] - a[0], dy = b[1] - a[1], dz = b[2] - a[2], l = Math.hypot(dx, dy, dz) || 1;
-    const taper = Math.max(0.12, Math.pow(Math.sin(Math.PI * Math.pow(t, 0.85)), 0.7)), p = pts[i];
+    // (and its pressure varying along it, as a brush's does: swelling and thinning a little, never a ruled line)
+    const taper = Math.max(0.12, Math.pow(Math.sin(Math.PI * Math.pow(t, 0.85)), 0.7)) * (0.72 + 0.28 * Math.sin(L[i] * 1.7 + pick * 40) + 0.12 * Math.sin(L[i] * 4.3 + pick * 17)), p = pts[i];
     const along = span ? span.t0 + (span.t1 - span.t0) * t : t;
     return [p[0], p[1], p[2], dx / l, dy / l, dz / l, w / 2, taper, s, along, fam + Math.min(0.99, weight), persist, pick, m[0], m[1], m[2]];
   };

@@ -266,12 +266,24 @@ void main() {
   // (in colour the outline lifts under each node, as a brush does; drawn in ink alone, a culm's edges run on whole,
   // two long lines, and a few nodes ticked: never a chain of dashes)
   float allow = 1. - smoothstep(.72, .8, f) * (1. - smoothstep(.97, .99, f)) * chosen * colR;
+  // (its two edges aren't alike, as a brush draws a culm: the side away from the sun the one firm contour, the lit side a
+  // fainter counter-line; each lifting here and there along its length (the lit side often), so the eye completes it)
+  float lit = smoothstep(-.15, .15, dot(N.xz, normalize(uSun.xz + 1e-4)));
+  float lift = smoothstep(.48, .7, vn(vec2(vY * .2 + vI.y * 7., 1.7 + lit * 3.6)));
+  allow *= mix(1., .36, lit) * (1. - lift * mix(.45, .95, lit));
   // (its ink: as the ink thins, left out a culm at a time by its own pick (a near one held longest), so the drawing
   // thins by omission, toward the paper, rather than standing as a fence of outlines)
   float q = h21(vec2(vI.y * 3.7, 5.3)) * mix(.45, 1., smoothstep(6., 28., dist));
   // (its ink laid up it from the foot, as one long stroke, by the culm's amount; lighter where its internodes are
   // further out)
   float aw = inkAt(vOut, q), inkA = laidLen(aw, vY / max(vI.z, .1)) * laidW(min(aw, inkAt(drawn, q))) * fadeOf(aw);
+  // (along it toward the frame's edge, its ink lifts off, as a long stroke runs out: so a culm whose foot is held still
+  // leaves the top of the page to the paper)
+  inkA *= smoothstep(0., .6, has(outAt(vW) + vJit, uRch.z));
+  // (a few culms carry the drawing: past arm's length, half are quieter, secondary; and far ones lighter still, a
+  // register of tone rather than of lines)
+  float prom = h21(vec2(vI.y * 9.1, 2.7));
+  inkA *= mix(1., .42, smoothstep(.4, .6, prom) * smoothstep(10., 16., dist)) * mix(1., .5, smoothstep(22., 50., dist)) * (1. + .35 * (1. - smoothstep(6., 16., dist)));
   // (a culm goes from the page whole, where none of its layers reach it (asked at its least-out point); along it, an
   // internode at a time, its colour gives way, then its light: never a cylinder cut off mid-internode)
   if (uClay < .5 && uColK.x * hasS(vOut, uRch.x, uRch.w) < .02 && has(vOut, uRch.y) * dot(uLitK.xyz, vec3(1.)) < .02 && aw < .002) discard;
@@ -331,7 +343,7 @@ void main() {
   vec3 c = layered(alb, N, vW, .6, .9, lin(vec3(.9, .92, .42)) * back * 1.2 * uSunC, uColK.y, 0., vOut, colR, litR);
   // (the marks: each blade's edge near; where the colour's given out, the blade filled in ink, as a brush lays it)
   float near = 1. - smoothstep(8., 26., distance(vW, uEye));
-  float mark = max((1. - smoothstep(.0, .3, rim)) * near * .85, (1. - colR) * (.22 + .16 * best)) * uMarks;
+  float mark = max((1. - smoothstep(.0, .3, rim)) * near * .85, (1. - colR) * (.22 + .16 * best) * (1. - smoothstep(15., 40., distance(vW, uEye)) * .7)) * uMarks;
   // (left out whole, a spray at a time by its own pick, where no layer reaches it)
   // (its ink laid out each blade from the stem, then to its weight)
   float sa = inkAt(vOut, fract(vSeed * 17.3)), inkA = laid(sa, along);
@@ -401,7 +413,10 @@ void main() {
   // the hillside) are strokes laid on it, strokes.ts)
   // (a fallen leaf's edge is the picture's detail: it goes with the colour, a few left, so in the drawing the land's own
   // structure (edges, rims, contours) carries it, not the litter)
-  float mark = leafMark * .55 * uMarks * (.25 + .75 * colR);
+  // (along a trail, near, the fallen leaves keep their marks in the ink, overlapping, broken: the path is where the eye
+  // goes, so it's drawn as a material, not left as an outlined patch)
+  float trailNear = (1. - smoothstep(${(HALF * 0.6).toFixed(2)}, ${(HALF * 1.9).toFixed(2)}, vD)) * (1. - smoothstep(8., 22., dist));
+  float mark = leafMark * .55 * uMarks * mix(.25 + .75 * colR, 1.1, trailNear * (1. - colR));
   // (the land's never left out: past its layers it's the paper, which it gives its own place in the light to)
   // (its ink by the smooth measure, not the broken one its colour gives out by: an outline along it thins, never dots)
   emit(c, colR, laidW(has(outAt(vW), uRch.z)) * has(outAt(vW), uRch.z), .2, 1., mark);
@@ -442,6 +457,11 @@ void main() {
   float moss = smoothstep(.2, .8, N.y) * smoothstep(.45, .7, n1 + vMoss * .3);
   vec3 alb = mix(stone, vec3(.4, .5, .22), moss * (uKind == 1 ? .2 : .7));
   float mark = 0.;
+  // (a stone's shade drawn as a brush does: a few broken strokes across its turned-away side, not filled)
+  float hs = abs(fract(dot(vW.xz, vec2(.8, .6)) * 5. + vW.y * 3.5) - .5);
+  float hw = .07 + fwidth(dot(vW.xz, vec2(.8, .6)) * 5. + vW.y * 3.5) * .9;
+  float hatch = (1. - smoothstep(hw, hw + .06, hs)) * smoothstep(.3, -.3, dot(N, uSun)) * step(.38, vn(vW.xz * 2.3 + vW.y)) * .8;
+  if (uKind == 2) mark = hatch;
   if (uKind == 3) {
     // (a root: grey-brown bark, worn pale and smooth on top where it's trodden, moss low along it)
     alb = mix(vec3(.45, .36, .27), vec3(.36, .3, .24), n1) * (.85 + .3 * n2);
@@ -460,7 +480,8 @@ void main() {
     alb = mix(alb, vec3(.38, .48, .2), onTop * smoothstep(.36, .5, vL.z) * smoothstep(.4, .7, vn(vW.xz * 6.)) * .7);
     alb *= mix(1., .74, 1. - smoothstep(.2, .6, N.y));
     // (the marks: the crack or two across a stone, now and then)
-    mark = step(.8, fract(vSeed * 3.7)) * (1. - smoothstep(.0, .015, abs(vL.x - (fract(vSeed * 11.) - .5) * .6 + (vn(vW.xz * 7.) - .5) * .08))) * onTop * .7;
+    mark = hatch * (1. - smoothstep(.2, .6, N.y)) * .8;
+    mark = max(mark, step(.8, fract(vSeed * 3.7)) * (1. - smoothstep(.0, .015, abs(vL.x - (fract(vSeed * 11.) - .5) * .6 + (vn(vW.xz * 7.) - .5) * .08))) * onTop * .7);
   }
   // (a stone, a step, a root: the land's colour; left out whole, by its own pick, where no layer reaches it)
   float colR, litR;
