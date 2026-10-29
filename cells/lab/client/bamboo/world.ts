@@ -265,45 +265,76 @@ export class World {
       const lane = Math.abs(vnoise(cx / 46, cz / 46, s + 60) - 0.5), lane2 = Math.abs(vnoise(cx / 31 + 7, cz / 31, s + 61) - 0.5);
       dense *= 1 - 0.8 * (1 - ss(0.03, 0.07, Math.min(lane, lane2)));
       if (u01(s, sa, sb, 3) > dense) continue;
-      const R = 1.4 + u01(s, sa, sb, 4) * 1.9, n = 5 + Math.floor(u01(s, sa, sb, 5) * 12 * dense), standAge = u01(s, sa, sb, 6);
+      // (moso runs: its culms come up one by one along rhizomes wandering under the floor, so a stand is a few lines of
+      // them, crooked, a culm every half metre to two, now and then two close together, the parent stoutest and its
+      // offspring along the run less so; gaps between the runs)
+      const runs = 1 + Math.floor(u01(s, sa, sb, 5) * (0.6 + 1.8 * dense)), standAge = u01(s, sa, sb, 6), stout = 0.55 + 0.45 * u01(s, sa, sb, 4);
+      const standDir = u01(s, sa, sb, 9) * 6.283;
       const placed: [number, number][] = [];
-      for (let m = 0; m < n * 3 && placed.length < n; m++) {
-        const ang = u01(s, sa, sb, m, 7) * 6.283, rr = R * Math.sqrt(u01(s, sa, sb, m, 8));
-        const x = cx + Math.cos(ang) * rr, z = cz + Math.sin(ang) * rr;
-        if (placed.some(([px, pz]) => (px - x) ** 2 + (pz - z) ** 2 < 0.55 * 0.55)) continue;
-        placed.push([x, z]);
-        if (x < x0 || x >= x0 + CHUNK || z < z0 || z >= z0 + CHUNK) continue;
-        const gi = sa * 977 + m, gj = sb * 991 + m;
-        const q = this.trailNear(x, z);
-        if (q.d < HALF + 0.2 + u01(s, gi, gj, 3) * 0.3) continue;
-        // (by a trail, the hillside's own slope, not its cut bank's: culms stand on the bank, right at the path's edge)
-        const sl = q.d < 6 ? Math.hypot(this.base(x + 0.7, z) - this.base(x - 0.7, z), this.base(x, z + 0.7) - this.base(x, z - 0.7)) / 1.4 : slope(x, z), c = cliff(x, z, s);
-        if (sl > 1.05) continue; // (none on the rock)
-        let keep = 1 - ss(0.6, 1.05, sl) * 0.6;
-        // (below a trail, where the hill falls away, thinner: the way looks out between them; above it, the bank's thick)
-        if (q.trail && q.d < 16 && g(x, z) < q.trail.y[q.i] - 0.4) keep *= 0.12 + 0.6 * (q.d / 16) ** 1.5;
-        // (over a cliff's rim, sparser: you see out)
-        keep *= 1 - 0.6 * c.up * (1 - ss(0.618, 0.64, fbm(x / 150, z / 150, s + 50)));
-        if (u01(s, gi, gj, 4) > keep) continue;
-        // (girth: a stand's middle stoutest; and now and then a giant beside a trail, the one the eye goes to)
-        const mid = 1 - rr / R, hero = (q.d < 4 && u01(s, gi, gj, 16) < 0.45) || (q.d < 7 && u01(s, gi, gj, 16) < 0.12);
-        const girth = hero ? 1 : Math.min(1, u01(s, gi, gj, 5) * 0.7 + mid * 0.4);
-        const y = g(x, z), r = hero ? 0.115 + u01(s, gi, gj, 17) * 0.035 : 0.05 + girth * 0.04, h = hero ? 20 + u01(s, gi, gj, 6) * 4 : 10 + girth * 9 + u01(s, gi, gj, 6) * 3;
-        // (lean: down the fall of the ground a little, out from the stand's middle, and out over a trail beside it)
-        const fx = g(x + 1, z) - g(x - 1, z), fz = g(x, z + 1) - g(x, z - 1), ox = x - cx, oz = z - cz, ol = Math.hypot(ox, oz) || 1;
-        let lx = -fx * 0.6 + (ox / ol) * 0.5 * (1 - mid) + (u01(s, gi, gj, 8) - 0.5) * 0.7, lz = -fz * 0.6 + (oz / ol) * 0.5 * (1 - mid) + (u01(s, gi, gj, 9) - 0.5) * 0.7;
-        if (q.trail && q.d < 6) { const tx = q.trail.x[q.i] - x, tz = q.trail.z[q.i] - z, l = Math.hypot(tx, tz) || 1, k = (1 - q.d / 6) * (0.8 + u01(s, gi, gj, 10) * 1.4); lx += (tx / l) * k; lz += (tz / l) * k; }
-        const age = Math.min(1, Math.max(0, standAge + (u01(s, gi, gj, 12) - 0.5) * 0.5));
-        culms.push({ x, y, z, r, h, lx, lz, node: 0.26 + u01(s, gi, gj, 11) * 0.12 + (hero ? 0.06 : 0), age, phase: u01(s, gi, gj, 13) * 6.283, pick: hero ? u01(s, gi, gj, 14) * 0.3 : u01(s, gi, gj, 14), crown: 0.42 + u01(s, gi, gj, 15) * 0.18 });
+      for (let ru = 0; ru < runs; ru++) {
+        let x = cx + (u01(s, sa, sb, ru, 30) - 0.5) * 2.6, z = cz + (u01(s, sa, sb, ru, 31) - 0.5) * 2.6, head = u01(s, sa, sb, ru, 32) * 6.283;
+        const len = 2 + Math.floor(u01(s, sa, sb, ru, 33) * 6.5 * dense);
+        for (let m = 0; m < len; m++) {
+          const mm = ru * 40 + m;
+          head += (u01(s, sa, sb, mm, 34) - 0.5) * 0.9;
+          const st = u01(s, sa, sb, mm, 35) < 0.15 ? 0.28 + u01(s, sa, sb, mm, 36) * 0.15 : 0.55 + u01(s, sa, sb, mm, 36) * 1.3;
+          x += Math.cos(head) * st; z += Math.sin(head) * st;
+          if (placed.some(([px, pz]) => (px - x) ** 2 + (pz - z) ** 2 < 0.25 * 0.25)) continue;
+          placed.push([x, z]);
+          if (x < x0 || x >= x0 + CHUNK || z < z0 || z >= z0 + CHUNK) continue;
+          const gi = sa * 977 + mm, gj = sb * 991 + mm;
+          const q = this.trailNear(x, z);
+          if (q.d < HALF + 0.2 + u01(s, gi, gj, 3) * 0.3) continue;
+          // (by a trail, the hillside's own slope, not its cut bank's: culms stand on the bank, right at the path's edge)
+          const sl = q.d < 6 ? Math.hypot(this.base(x + 0.7, z) - this.base(x - 0.7, z), this.base(x, z + 0.7) - this.base(x, z - 0.7)) / 1.4 : slope(x, z), c = cliff(x, z, s);
+          if (sl > 1.05) continue; // (none on the rock)
+          let keep = 1 - ss(0.6, 1.05, sl) * 0.6;
+          // (below a trail, where the hill falls away, thinner: the way looks out between them; above it, the bank's thick)
+          if (q.trail && q.d < 16 && g(x, z) < q.trail.y[q.i] - 0.4) keep *= 0.12 + 0.6 * (q.d / 16) ** 1.5;
+          // (over a cliff's rim, sparser: you see out)
+          keep *= 1 - 0.6 * c.up * (1 - ss(0.618, 0.64, fbm(x / 150, z / 150, s + 50)));
+          if (u01(s, gi, gj, 4) > keep) continue;
+          // (girth: young shoots of the last year or two thin and short, under the rest; the grown ones as their runs
+          // make them, the parent stoutest; and now and then a giant beside a trail, the one the eye goes to; a culm's
+          // height goes with its girth)
+          const hero = (q.d < 4 && u01(s, gi, gj, 16) < 0.45) || (q.d < 7 && u01(s, gi, gj, 16) < 0.12);
+          const young = !hero && u01(s, gi, gj, 31) < 0.14, mother = 1 - (m / len) * 0.4;
+          const r = hero ? 0.115 + u01(s, gi, gj, 17) * 0.035 : young ? 0.02 + u01(s, gi, gj, 5) * 0.015 : 0.035 + stout * mother * (0.03 + u01(s, gi, gj, 5) * 0.03);
+          const y = g(x, z), h = hero ? 20 + u01(s, gi, gj, 6) * 4 : young ? 4.5 + u01(s, gi, gj, 6) * 4.5 : 8 + r * 120 + (u01(s, gi, gj, 6) - 0.5) * 3;
+          // (lean: most stand near straight; some lean; a few lean hard, mostly down the hill or out into a gap; a stand
+          // leans a little together; out over a trail beside it)
+          const fx = g(x + 1, z) - g(x - 1, z), fz = g(x, z + 1) - g(x, z - 1), lu = u01(s, gi, gj, 30);
+          const mag = (lu < 0.06 ? 0.18 + 0.14 * u01(s, gi, gj, 29) : lu < 0.3 ? 0.05 + 0.07 * u01(s, gi, gj, 29) : 0.01 + 0.03 * u01(s, gi, gj, 29)) * h;
+          const la = lu < 0.06 ? Math.atan2(-fz, -fx) + (u01(s, gi, gj, 28) - 0.5) * 1.2 : u01(s, gi, gj, 8) * 6.283;
+          let lx = Math.cos(la) * mag + Math.cos(standDir) * 0.025 * h, lz = Math.sin(la) * mag + Math.sin(standDir) * 0.025 * h;
+          if (q.trail && q.d < 6) { const tx = q.trail.x[q.i] - x, tz = q.trail.z[q.i] - z, l = Math.hypot(tx, tz) || 1, k = (1 - q.d / 6) * (0.8 + u01(s, gi, gj, 10) * 1.4); lx += (tx / l) * k; lz += (tz / l) * k; }
+          // (and its top bows over, under its leaves, the way it leans: some hardly, the leaners most)
+          const bend = lu < 0.06 ? 0.6 + 0.4 * u01(s, gi, gj, 27) : 0.15 + 0.6 * u01(s, gi, gj, 27);
+          const age = young ? 0 : Math.min(1, Math.max(0, standAge + (u01(s, gi, gj, 12) - 0.5) * 0.5));
+          culms.push({ x, y, z, r, h, lx, lz, node: (young ? 0.2 : 0.26) + u01(s, gi, gj, 11) * 0.12 + (hero ? 0.06 : 0), age, phase: u01(s, gi, gj, 13) * 6.283, pick: hero ? u01(s, gi, gj, 14) * 0.3 : u01(s, gi, gj, 14), crown: (young ? 0.35 : 0.42) + u01(s, gi, gj, 15) * 0.18, bend });
+        }
       }
     }
     const tall = culms.length;
-    // ─── sprays: along the upper part of each culm ───
-    const sprays: Spray[] = [];
+    // ─── branches and their leaves: a branch at the nodes of the crown, side to side up the culm, rising off it and
+    // arching out, the lower ones longer and flatter; its leaves at its middle and its end; and a tuft at the culm's tip ───
+    const sprays: Spray[] = [], twigs: Twig[] = [];
     culms.forEach((c, k) => {
-      for (let m = 0; m < 12; m++) {
-        const f = c.crown + (1 - c.crown) * Math.sqrt((m + u01(s, ci, cj, k, m, 21)) / 12), a = u01(s, ci, cj, k, m, 22) * 6.283, out = 0.4 + u01(s, ci, cj, k, m, 23) * 1.3;
-        sprays.push({ c: k, y: c.h * f, ox: Math.sin(a) * out, oz: Math.cos(a) * out, size: 0.75 + u01(s, ci, cj, k, m, 24) * 0.75, yaw: a + (u01(s, ci, cj, k, m, 25) - 0.5) * 1.2, tilt: (u01(s, ci, cj, k, m, 26) - 0.5) * 0.9, seed: u01(s, ci, cj, k, m, 27) });
+      const young = c.r < 0.036, nb = young ? 3 + Math.floor(u01(s, ci, cj, k, 20) * 2) : 4 + Math.floor(u01(s, ci, cj, k, 20) * 4);
+      const a0 = u01(s, ci, cj, k, 19) * 6.283, reach = Math.min(1.4, (c.r / 0.07) ** 0.6);
+      for (let m = 0; m < nb; m++) {
+        const f = c.crown + (0.93 - c.crown) * ((m + 0.2 + 0.6 * u01(s, ci, cj, k, m, 21)) / nb), ff = (f - c.crown) / (1 - c.crown);
+        const ang = a0 + m * Math.PI + m * 0.35 + (u01(s, ci, cj, k, m, 22) - 0.5) * 0.9;
+        const L = (0.5 + 1.5 * (1 - ff) ** 0.8) * (0.75 + 0.5 * u01(s, ci, cj, k, m, 23)) * reach, el = 0.3 + 0.55 * ff + (u01(s, ci, cj, k, m, 24) - 0.5) * 0.3;
+        const hor = L * Math.cos(el), rise = L * Math.sin(el), y = c.h * f;
+        twigs.push({ c: k, y, rise, hor, ang, rad: Math.min(0.022, 0.22 * c.r), seed: u01(s, ci, cj, k, m, 25) });
+        for (const [t, sz] of [[0.6, 0.5 + 0.3 * u01(s, ci, cj, k, m, 26)], [1, 0.7 + 0.4 * u01(s, ci, cj, k, m, 27)]]) {
+          sprays.push({ c: k, y: y + rise * t, ox: Math.cos(ang) * hor * t, oz: Math.sin(ang) * hor * t, size: sz * (young ? 0.7 : 1), yaw: ang + (u01(s, ci, cj, k, m, t, 28) - 0.5) * 1.2, tilt: (u01(s, ci, cj, k, m, t, 29) - 0.5) * 0.9, seed: u01(s, ci, cj, k, m, t, 30) });
+        }
+      }
+      for (let m = 0; m < 2; m++) {
+        const a = a0 + m * 2.4;
+        sprays.push({ c: k, y: c.h * (0.95 + m * 0.03), ox: Math.cos(a) * 0.15, oz: Math.sin(a) * 0.15, size: (0.55 + 0.3 * u01(s, ci, cj, k, m, 31)) * (young ? 0.7 : 1), yaw: a, tilt: (u01(s, ci, cj, k, m, 32) - 0.5) * 0.9, seed: u01(s, ci, cj, k, m, 33) });
       }
     });
     // ─── low greens: scattered through the grove, thicker along a trail's edges (each held by a hidden stub) ───
@@ -312,7 +343,7 @@ export class World {
       const p = q.d < HALF + 0.2 ? 0 : q.d < 4.5 ? 0.6 : 0.2;
       if (u01(s, ci, cj, n, 62) > p || slope(x, z) > 0.9) continue;
       const gy = g(x, z), a = u01(s, ci, cj, n, 64) * 6.283;
-      culms.push({ x, y: gy - 3, z, r: 0, h: 3.2, lx: 0, lz: 0, node: 1, age: 0, phase: u01(s, ci, cj, n, 63) * 6.28, pick: 0, crown: 1 });
+      culms.push({ x, y: gy - 3, z, r: 0, h: 3.2, lx: 0, lz: 0, node: 1, age: 0, phase: u01(s, ci, cj, n, 63) * 6.28, pick: 0, crown: 1, bend: 0 });
       const k = culms.length - 1;
       for (let m = 0; m < 2; m++) sprays.push({ c: k, y: 3.15 + u01(s, ci, cj, n, 65 + m) * 0.7, ox: Math.sin(a + m * 2) * 0.25, oz: Math.cos(a + m * 2) * 0.25, size: 0.4 + u01(s, ci, cj, n, 67 + m) * 0.5, yaw: a + m * 1.7, tilt: (u01(s, ci, cj, n, 69 + m) - 0.5) * 1.2, seed: u01(s, ci, cj, n, 71 + m) });
     }
@@ -321,7 +352,7 @@ export class World {
       const x = x0 + u01(s, ci, cj, n, 160) * CHUNK, z = z0 + u01(s, ci, cj, n, 161) * CHUNK, q = this.trailNear(x, z);
       if (!q.trail || q.d < HALF + 0.35 || q.d > HALF + BANK + 1.5 || this.base(x, z) < q.trail.y[q.i] + 0.3) continue;
       const gy = g(x, z), a = u01(s, ci, cj, n, 164) * 6.283;
-      culms.push({ x, y: gy - 3, z, r: 0, h: 3.2, lx: 0, lz: 0, node: 1, age: 0, phase: u01(s, ci, cj, n, 163) * 6.28, pick: 0, crown: 1 });
+      culms.push({ x, y: gy - 3, z, r: 0, h: 3.2, lx: 0, lz: 0, node: 1, age: 0, phase: u01(s, ci, cj, n, 163) * 6.28, pick: 0, crown: 1, bend: 0 });
       const k = culms.length - 1;
       for (let m = 0; m < 3; m++) sprays.push({ c: k, y: 3.05 + u01(s, ci, cj, n, 165 + m) * 0.45, ox: Math.sin(a + m * 2.1) * 0.3, oz: Math.cos(a + m * 2.1) * 0.3, size: 0.35 + u01(s, ci, cj, n, 168 + m) * 0.45, yaw: a + m * 2.1, tilt: (u01(s, ci, cj, n, 171 + m) - 0.5) * 1.4, seed: u01(s, ci, cj, n, 174 + m) });
     }
@@ -377,11 +408,13 @@ export class World {
         roots.push({ x, y: g(x, z) - r * 0.35, z, yaw: ang, r, len, moss: u01(s, k, 94) });
       }
     }
-    return { ci, cj, x0, z0, ground, near, rock, culms, tall, sprays, stones, steps, roots };
+    return { ci, cj, x0, z0, ground, near, rock, culms, tall, sprays, twigs, stones, steps, roots };
   }
 }
 
-export interface Culm { x: number; y: number; z: number; r: number; h: number; lx: number; lz: number; node: number; age: number; phase: number; pick: number; crown: number }
+export interface Culm { x: number; y: number; z: number; r: number; h: number; lx: number; lz: number; node: number; age: number; phase: number; pick: number; crown: number; bend: number }
+/** a branch: off its culm at height `y`, rising `rise` and reaching `hor` out at angle `ang` (x, z), so thick at its base */
+export interface Twig { c: number; y: number; rise: number; hor: number; ang: number; rad: number; seed: number }
 export interface Spray { c: number; y: number; ox: number; oz: number; size: number; yaw: number; tilt: number; seed: number }
 export interface Stone { x: number; y: number; z: number; r: number; yaw: number; flat: number; kind: number; moss: number }
 /** a root across a trail: its middle, which way it runs, how thick, how long */
@@ -391,7 +424,7 @@ export interface Chunk {
   /** the ground's heights, how far each point is from a trail, how much it's rock */
   ground: Float32Array; near: Float32Array; rock: Float32Array;
   /** the culms (the first `tall` of them real; the rest hidden stubs holding low greens), their sprays, stones, steps */
-  culms: Culm[]; tall: number; sprays: Spray[]; stones: Stone[]; steps: Step[]; roots: Root[];
+  culms: Culm[]; tall: number; sprays: Spray[]; twigs: Twig[]; stones: Stone[]; steps: Step[]; roots: Root[];
 }
 
 /** the far ranges, all round about (drawn as a backdrop that keeps its distance): each a jagged line, one behind another */

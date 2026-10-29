@@ -20,7 +20,7 @@ export const GATES = [
   { name: '05-gust-motion', title: '05 · a gust', scene: 'seed=1&cam=248.02,-179.13,-2.99,0.3&t=8&ref=gust' },
   // (no target: a close material study, a giant culm by the path, a stone bedded in the bank beside it, leaves caught
   // round their feet; it asks the contact between things that the wide frames hide)
-  { name: '06-material', title: '06 · material study (a giant culm, a bedded stone)', scene: 'seed=1&cam=347.54,244,-2.27,-0.22&t=8' },
+  { name: '06-material', title: '06 · material study (a giant culm, a bedded stone)', scene: 'seed=1&cam=-250.72,-298.42,0.36,-0.22&t=8' },
 ];
 const MODES = [
   // (the forms alone: one clay, lit, shadows cast; no paper, no ink)

@@ -74,9 +74,11 @@ vec2 windAt(vec2 p, float phase) {
   return d * sway + uGust.xy * front * (.05 + .012 * sin(uTime * 5. + phase));
 }
 // (where a culm's centre is, y metres up it)
-vec3 culmAt(vec3 b, float h, vec2 lean, float phase, float y) {
+vec3 culmAt(vec3 b, float h, vec2 lean, float phase, float y, float bend) {
   float v = clamp(y / h, 0., 1.);
-  vec2 off = lean * pow(v, 1.6) + windAt(b.xz, phase) * v * v * h;
+  // (its lean, growing up it; and its top bowed over under its leaves, the way it leans, straight below)
+  vec2 dir = length(lean) > .05 ? normalize(lean) : vec2(cos(phase), sin(phase));
+  vec2 off = lean * pow(v, 1.6) + dir * bend * h * .14 * pow(v, 3.) + windAt(b.xz, phase) * v * v * h;
   return b + vec3(off.x, y, off.y);
 }
 // (how far out a point is, for every layer alike: from the focus (where you're going and looking) across the frame, 1
@@ -214,11 +216,11 @@ void emit(vec3 c, float colR, float inkA, float kind, float allow, float mark) {
 const CULM_VS = COMMON + `
 layout(location = 0) in vec2 aUV;
 layout(location = 1) in vec4 iA; layout(location = 2) in vec4 iB; layout(location = 3) in vec4 iC;
-out vec3 vW; out vec3 vN; out float vY; out float vQ; out float vU; out vec3 vI; out float vR; flat out float vOut; flat out float vJit; flat out float vHero;
+out vec3 vW; out vec3 vN; out float vY; out float vQ; out float vU; out vec3 vI; out float vR; out float vA; flat out float vOut; flat out float vJit; flat out float vHero;
 uniform vec2 uPick; // drawn whole up to, gone by (metres)
 uniform mat4 uLightVP; uniform int uDepth;
 void main() {
-  vec3 b = iA.xyz; float r = iA.w, h = iB.x; vec2 lean = iB.yz; float node = iB.w, phase = iC.y, pick = iC.z;
+  vec3 b = iA.xyz; float r = iA.w, h = iB.x; vec2 lean = iB.yz; float node = iB.w, phase = iC.y, pick = iC.z, bend = iC.w;
   float dist = distance(b.xz, uEye.xz);
   // (left out whole where the drawing has thinned past its pick)
   if (pick > 1. - smoothstep(uPick.x, uPick.y, dist)) { gl_Position = vec4(2., 2., 2., 1.); return; }
@@ -228,9 +230,9 @@ void main() {
   float swell = 1. + .06 * exp(-pow(fract(q) * 14., 2.)) + .06 * exp(-pow((fract(q) - 1.) * 14., 2.));
   // (and its last few metres drawn out to a whip, so its top is a fine point lost in the canopy, never a flat end)
   float rr = r * (1. - .62 * pow(aUV.y, 1.3)) * swell * (1. - .96 * smoothstep(.72, 1., aUV.y));
-  vec3 c = culmAt(b, h, lean, phase, y);
+  vec3 c = culmAt(b, h, lean, phase, y, bend);
   vec3 n = vec3(cos(a), 0., sin(a));
-  vW = c + n * rr; vR = rr; vN = n; vY = y; vQ = q; vU = a * r; vI = vec3(iC.x, phase, h);
+  vW = c + n * rr; vR = rr; vA = a; vN = n; vY = y; vQ = q; vU = a * r; vI = vec3(iC.x, phase, h);
   // (how far out it is, each culm a little its own way)
   // (and each stand its own way, so the grove's limit is ragged by whole stands: some run on past the rest, some give
   // way early)
@@ -239,12 +241,12 @@ void main() {
   // (how far out the culm is, whole: its least-out point along its length, so one seen from its foot looking up, or
   // only its top in the frame, is still drawn)
   float bb = 99.;
-  for (int k = 0; k < 5; k++) bb = min(bb, outAt(culmAt(b, h, lean, phase, min(1.6, h) + (h - min(1.6, h)) * float(k) / 4.)));
+  for (int k = 0; k < 5; k++) bb = min(bb, outAt(culmAt(b, h, lean, phase, min(1.6, h) + (h - min(1.6, h)) * float(k) / 4., bend)));
   vOut = uDepth == 1 ? 0. : bb + vJit;
   gl_Position = (uDepth == 1 ? uLightVP : uVP) * vec4(vW, 1.);
 }`;
 const CULM_FS = COMMON + LIGHT + OUT + `
-in vec3 vW; in vec3 vN; in float vY; in float vQ; in float vU; in vec3 vI; in float vR; flat in float vOut; flat in float vJit; flat in float vHero;
+in vec3 vW; in vec3 vN; in float vY; in float vQ; in float vU; in vec3 vI; in float vR; in float vA; flat in float vOut; flat in float vJit; flat in float vHero;
 uniform float uMarks;
 void main() {
   vec3 N = normalize(vN), V = normalize(uEye - vW);
@@ -269,6 +271,20 @@ void main() {
   alb = mix(alb, vec3(.94, .93, .86), band * (.85 - age * .4) * (1. - far));
   float ring = 1. - smoothstep(.0, .025 + fwidth(vQ) * .8, min(f, 1. - f) - .003);
   alb = mix(alb, alb * .4, ring * (1. - far * .6));
+  // (close to: the node's second ring, the branch ridge just above the sheath's scar; fine lines down its length; a dark
+  // scar or bud where a branch was, side to side, below the crown; on a young culm's low nodes the papery sheath it grew
+  // in, straw-brown, torn at its top, wrapping one side; moss low on it)
+  float nearK = 1. - smoothstep(4., 14., dist), nodeI = floor(vQ);
+  float ring2 = 1. - smoothstep(.0, .012 + fwidth(vQ) * .8, abs(f - .035));
+  alb = mix(alb, alb * .62, ring2 * .7 * nearK);
+  alb *= .94 + .1 * vn(vec2(vA * 90., vY * .6));
+  float dA = abs(mod(vA - nodeI * 3.14159 + 3.14159, 6.2832) - 3.14159);
+  float bud = (1. - smoothstep(.12, .3, dA)) * (1. - smoothstep(.0, .07, f)) * step(vY, vI.z * .45) * step(.8, vY);
+  alb = mix(alb, alb * .35, bud * nearK * .8);
+  float sheath = step(h21(vec2(nodeI, vI.y * 17.)), (1. - age) * .9) * (1. - smoothstep(1.5, 4.5, vY)) * step(-.2, cos(vA - nodeI * 2.4));
+  sheath *= 1. - smoothstep(.18, .24, f - (vn(vec2(vA * 6., nodeI)) - .5) * .12);
+  alb = mix(alb, vec3(.6, .5, .36) * (.8 + .4 * vn(vec2(vA * 40., vY * 3.))), sheath * .9 * (1. - far * .7));
+  alb = mix(alb, vec3(.33, .42, .18), (1. - smoothstep(.1, .8, vY)) * smoothstep(.45, .7, vn(vec2(vA * 3., vY * 4.))) * .6);
   // (its foot in the soil: earth risen against it, dark, so it stands in the ground, not on it)
   alb = mix(alb, vec3(.26, .22, .16), (1. - smoothstep(.0, .4, vY)) * .75);
   float colR, litR;
@@ -345,8 +361,8 @@ void main() {
   vec3 b = iA.xyz; float h = iA.w; vec2 lean = iB.xy; float phase = iB.z, pick = iB.w;
   float dist = distance(b.xz, uEye.xz);
   if (pick > 1. - smoothstep(uPick.x, uPick.y, dist)) { gl_Position = vec4(2., 2., 2., 1.); return; }
-  float sy = iC.x, size = iC.w, yaw = iD.x, tilt = iD.y;
-  vec3 anchor = culmAt(b, h, lean, phase, sy) + vec3(iC.y, 0., iC.z);
+  float sy = iC.x, size = iC.w, yaw = iD.x, tilt = iD.y, bend = iD.w;
+  vec3 anchor = culmAt(b, h, lean, phase, sy, bend) + vec3(iC.y, 0., iC.z);
   // (a flutter of its own; streaming in a gust)
   anchor.xz += vec2(sin(uTime * 2.7 + iD.z * 40.), cos(uTime * 2.2 + iD.z * 30.)) * .05 * (1. + uGust.w * 2.);
   // (half turned to the eye, so a spray is never lost edge-on; hanging below its twig)
@@ -361,7 +377,7 @@ void main() {
   // its foot to here, lifting as the culm's does toward the frame's edge; so a spray's blades come in with its culm's
   // line, never before it)
   float jit = (fract(pick * 7.31) - .5) * .24 + (vn(b.xz * .045) - .5) * .7, bb = 99.;
-  for (int k = 0; k < 5; k++) bb = min(bb, outAt(culmAt(b, h, lean, phase, min(1.6, h) + (h - min(1.6, h)) * float(k) / 4.)));
+  for (int k = 0; k < 5; k++) bb = min(bb, outAt(culmAt(b, h, lean, phase, min(1.6, h) + (h - min(1.6, h)) * float(k) / 4., bend)));
   float cq = h21(vec2(phase * 3.7, 5.3)) * mix(.45, 1., smoothstep(6., 28., dist)), aw = inkAt(bb + jit, cq);
   vCulmInk = laidLen(aw, sy / max(h, .1)) * aw * smoothstep(0., .6, has(outAt(anchor) + jit, uRch.z));
   gl_Position = uVP * vec4(vW, 1.);
@@ -409,6 +425,52 @@ void main() {
   emit(c, colR, inkA, .6, 0., mark);
 }`;
 
+// ─── the branches: off the culm at a node of its crown, rising and arching out, thinning to their ends, where the
+// leaves hang; drawn as the culm is (its green, its own fine line), their ink its culm's at the node ───
+const TWIG_VS = COMMON + `
+layout(location = 0) in vec2 aUV;
+layout(location = 1) in vec4 iA; layout(location = 2) in vec4 iB; layout(location = 3) in vec4 iC; layout(location = 4) in vec4 iD;
+out vec3 vW; out vec3 vN; out float vT; out float vRad; flat out float vCulmInk; flat out float vSeed;
+uniform vec2 uPick;
+void main() {
+  vec3 b = iA.xyz; float h = iA.w; vec2 lean = iB.xy; float phase = iB.z, bend = iB.w;
+  float y = iC.x, rise = iC.y, hor = iC.z, ang = iC.w, rad = iD.x, seed = iD.y, pick = iD.z;
+  float dist = distance(b.xz, uEye.xz);
+  if (pick > 1. - smoothstep(uPick.x, uPick.y, dist)) { gl_Position = vec4(2., 2., 2., 1.); return; }
+  vec3 p0 = culmAt(b, h, lean, phase, y, bend), p1 = culmAt(b, h, lean, phase, y + rise, bend) + vec3(cos(ang) * hor, 0., sin(ang) * hor);
+  // (rising off its node, then out, its end bowed by its leaves)
+  vec3 m = mix(p0, p1, .4) + vec3(0., rise * .3 + hor * .08, 0.);
+  float t = aUV.y;
+  vec3 p = mix(mix(p0, m, t), mix(m, p1, t), t), T = normalize(2. * (1. - t) * (m - p0) + 2. * t * (p1 - m) + 1e-4);
+  vec3 n1 = normalize(cross(T, vec3(0., 1., 0.)) + vec3(1e-4, 0., 0.)), n2 = cross(n1, T);
+  float a = aUV.x * 6.2832; vec3 n = n1 * cos(a) + n2 * sin(a);
+  vRad = rad * (1. - .7 * t);
+  vW = p + n * vRad; vN = n; vT = t; vSeed = seed;
+  // (its ink, its culm's where it leaves it)
+  float jit = (fract(pick * 7.31) - .5) * .24 + (vn(b.xz * .045) - .5) * .7, bb = 99.;
+  for (int k = 0; k < 5; k++) bb = min(bb, outAt(culmAt(b, h, lean, phase, min(1.6, h) + (h - min(1.6, h)) * float(k) / 4., bend)));
+  float cq = h21(vec2(phase * 3.7, 5.3)) * mix(.45, 1., smoothstep(6., 28., dist)), aw = inkAt(bb + jit, cq);
+  vCulmInk = laidLen(aw, y / max(h, .1)) * aw * smoothstep(0., .6, has(outAt(p0) + jit, uRch.z));
+  gl_Position = uVP * vec4(vW, 1.);
+}`;
+const TWIG_FS = COMMON + LIGHT + OUT + `
+in vec3 vW; in vec3 vN; in float vT; in float vRad; flat in float vCulmInk; flat in float vSeed;
+void main() {
+  vec3 N = normalize(vN), V = normalize(uEye - vW);
+  float dist = distance(vW, uEye);
+  vec3 alb = mix(vec3(.52, .56, .36), vec3(.46, .44, .32), vSeed) * (.85 + .3 * vn(vec2(vT * 24., vSeed * 31.)));
+  float colR, litR;
+  vec3 c = layered(alb, N, vW, .3, 1., vec3(0.), uColK.x, 0., outAt(vW), colR, litR);
+  float wetK = uFocus.y * smoothstep(.25, 1.1, -cocAt(dist));
+  c = mix(c, vec3(.15, .16, .12), wetK * .8); colR = max(colR, wetK); gColHere = max(gColHere, wetK);
+  // (its own line, as a culm draws its: in from its silhouette, or, thinner than that, one fine line as light as it's thin)
+  float ndv = abs(dot(N, V)), rpx = vRad / max(dist * uPxW, 1e-5), dpx = rpx * (1. - sqrt(max(0., 1. - ndv * ndv)));
+  gContour = (1. - smoothstep(.45, 1.2, dpx)) * mix(.35, .9, smoothstep(.5, 2.5, rpx)) * (1. - wetK) * mix(1., .3, smoothstep(10., 40., dist));
+  float inkA = vCulmInk;
+  if (uClay < .5 && colR < .02 && litR * dot(uLitK.xyz, vec3(1.)) < .02 && inkA < .002) discard;
+  emit(c, colR, inkA, .4, 0., 0.);
+}`;
+
 const GROUND_VS = COMMON + `
 layout(location = 0) in vec3 aP; layout(location = 1) in vec3 aN; layout(location = 2) in vec2 aD;
 out vec3 vW; out vec3 vN; out float vD; out float vRock;
@@ -436,7 +498,9 @@ void main() {
   float cutBank = smoothstep(${(HALF + 0.15).toFixed(2)}, ${(HALF + 0.5).toFixed(2)}, vD) * (1. - smoothstep(${(HALF + BANK).toFixed(2)}, ${(HALF + BANK + 2.5).toFixed(2)}, vD)) * smoothstep(.04, .2, 1. - N.y);
   if (cutBank > .01) {
     vec2 fl = normalize(N.xz + 1e-4), ac = vec2(-fl.y, fl.x);
-    float u = dot(vW.xz, ac), v = vW.y;
+    // (across the cut, a fixed direction, and down it by height: never along a direction that turns with the facets,
+    // which shears the pattern into chevrons)
+    float u = (vW.x - vW.z) * .707, v = vW.y;
     vec3 earth2 = mix(vec3(.55, .38, .25), vec3(.42, .3, .2), vn(vec2(u * 1.3, v * 4.)));
     earth2 *= .85 + .3 * vn(vec2(u * 6., v * .8));
     // (roots: dark wavering lines across the cut)
@@ -453,7 +517,7 @@ void main() {
   alb = mix(alb, vec3(.36, .45, .2), green * (1. - worn));
   // (rock where the ground's steep: grey stone, streaked down its fall, mossy where it's ledged)
   vec2 fall = normalize(N.xz + 1e-4);
-  float across = dot(vW.xz, vec2(-fall.y, fall.x)) + (vn(vW.xz * .3 + vW.y * .2) - .5) * 1.4;
+  float across = (vW.x + vW.z) * .707 + (vn(vW.xz * .3 + vW.y * .2) - .5) * 1.4;
   vec3 stone = mix(vec3(.66, .63, .56), vec3(.5, .49, .45), fbm2(vec2(across * .8, vW.y * .5)));
   stone = mix(stone, vec3(.42, .5, .26), smoothstep(.55, .75, N.y + (vn(vW.xz * 1.3) - .5) * .4) * .6);
   alb = mix(alb, stone, vRock);
@@ -462,7 +526,8 @@ void main() {
   // bigger patches, so across a far slope it's ragged, not ruled; each fallen leaf by its own pick, so the litter thins
   // to a few painted leaves and then their outlines on the paper; the bare ground between them first)
   vec2 down2 = N.xz / max(length(N.xz), .05), across2 = vec2(-down2.y, down2.x);
-  float stroke = vn(vec2(dot(vW.xz, across2) * .35, dot(vW.xz, down2) * 3.2)) * .6 + vn(vec2(dot(vW.xz, across2) * 1.1, dot(vW.xz, down2) * 9.)) * .4;
+  float ac2 = (vW.x - vW.z) * .707, dn2 = vW.y * 2.2 + (vW.x + vW.z) * .25;
+  float stroke = vn(vec2(ac2 * .35, dn2 * 3.2)) * .6 + vn(vec2(ac2 * 1.1, dn2 * 9.)) * .4;
   float o = outAt(vW) + ((fbm2(vW.xz * .5 + 3.) - .5) * .5 + (stroke - .5) * 1.4 + (fbm2(vW.xz * .09 + 7.) - .5) * 1.6 * smoothstep(10., 40., dist)) / 3.;
   o += leaf >= 0. ? (leaf - .5) * .27 : .08 + (vRock > .5 ? -.1 : 0.);
   float colR, litR;
@@ -843,7 +908,7 @@ const cross = (a: number[], b: number[]) => [a[1] * b[2] - a[2] * b[1], a[2] * b
 const norm = (a: number[]) => { const l = Math.hypot(a[0], a[1], a[2]) || 1; return [a[0] / l, a[1] / l, a[2] / l]; };
 
 /** what's on the GPU for one chunk */
-interface Held { key: string; x: number; z: number; roots: WebGLBuffer; nRoots: number; strokes: WebGLBuffer | null; nStrokes: number; ground: WebGLBuffer; culms: WebGLBuffer; nCulms: number; sprays: WebGLBuffer; nSprays: number; stones: WebGLBuffer; nStones: number; steps: WebGLBuffer; nSteps: number }
+interface Held { key: string; x: number; z: number; roots: WebGLBuffer; nRoots: number; strokes: WebGLBuffer | null; nStrokes: number; ground: WebGLBuffer; culms: WebGLBuffer; nCulms: number; sprays: WebGLBuffer; nSprays: number; twigs: WebGLBuffer; nTwigs: number; stones: WebGLBuffer; nStones: number; steps: WebGLBuffer; nSteps: number }
 
 export class Renderer {
   private gl: WebGL2RenderingContext;
@@ -880,7 +945,7 @@ export class Renderer {
     this.gl = gl; this.clean = !!opts.clean; this.marks = opts.marks === false ? 0 : 1;
     this.vao = gl.createVertexArray()!;
     const P = (n: string, vs: string, fs: string) => { this.progs[n] = this.program(vs, fs); };
-    P('culm', CULM_VS, CULM_FS); P('spray', SPRAY_VS, SPRAY_FS); P('ground', GROUND_VS, GROUND_FS);
+    P('culm', CULM_VS, CULM_FS); P('spray', SPRAY_VS, SPRAY_FS); P('twig', TWIG_VS, TWIG_FS); P('ground', GROUND_VS, GROUND_FS);
     P('solid', SOLID_VS, SOLID_FS); P('ridge', RIDGE_VS, RIDGE_FS); P('post', POST_VS, POST_FS);
     P('stroke', STROKE_VS, STROKE_FS); P('culmDepth', CULM_VS, DEPTH_FS); P('solidDepth', SOLID_VS, DEPTH_FS);
     // (the sun's view of the culms near you: their shadows)
@@ -893,7 +958,7 @@ export class Renderer {
       gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.TEXTURE_2D, t, 0); gl.drawBuffers([gl.NONE]); gl.readBuffer(gl.NONE);
       gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     }
-    for (const [k, m] of [['culmNear', culmMesh(8, 20)], ['culmFar', culmMesh(5, 10)], ['quad', QUAD]] as const) this.vbo[k] = { buf: this.buffer(m), count: m.length / 2 };
+    for (const [k, m] of [['culmNear', culmMesh(8, 20)], ['culmFar', culmMesh(5, 10)], ['twig', culmMesh(4, 6)], ['quad', QUAD]] as const) this.vbo[k] = { buf: this.buffer(m), count: m.length / 2 };
     const box = boxMesh(); this.vbo.box = { buf: this.buffer(box), count: box.length / 6 };
     const lump = lumpMesh(1.7); this.vbo.lump = { buf: this.buffer(lump), count: lump.length / 6 };
     const slab = slabMesh(); this.vbo.slab = { buf: this.buffer(slab), count: slab.length / 6 };
@@ -931,21 +996,23 @@ export class Renderer {
       v.set([c.x0 + i * CELL, G[k], c.z0 + j * CELL, n[0], n[1], n[2], c.near[k], c.rock[k]], k * 8);
     }
     const cu = new Float32Array(c.tall * 12);
-    for (let k = 0; k < c.tall; k++) { const q = c.culms[k]; cu.set([q.x, q.y, q.z, q.r, q.h, q.lx, q.lz, q.node, q.age, q.phase, q.pick, 0], k * 12); }
+    for (let k = 0; k < c.tall; k++) { const q = c.culms[k]; cu.set([q.x, q.y, q.z, q.r, q.h, q.lx, q.lz, q.node, q.age, q.phase, q.pick, q.bend], k * 12); }
+    const tw = new Float32Array(c.twigs.length * 16);
+    c.twigs.forEach((t, k) => { const q = c.culms[t.c]; tw.set([q.x, q.y, q.z, q.h, q.lx, q.lz, q.phase, q.bend, t.y, t.rise, t.hor, t.ang, t.rad, t.seed, q.pick, 0], k * 16); });
     const sp = new Float32Array(c.sprays.length * 16);
-    c.sprays.forEach((s, k) => { const q = c.culms[s.c]; sp.set([q.x, q.y, q.z, q.h, q.lx, q.lz, q.phase, q.pick, s.y, s.ox, s.oz, s.size, s.yaw, s.tilt, s.seed, 0], k * 16); });
+    c.sprays.forEach((s, k) => { const q = c.culms[s.c]; sp.set([q.x, q.y, q.z, q.h, q.lx, q.lz, q.phase, q.pick, s.y, s.ox, s.oz, s.size, s.yaw, s.tilt, s.seed, q.bend], k * 16); });
     const st = new Float32Array(c.stones.length * 8);
     c.stones.forEach((s, k) => st.set([s.x, s.y, s.z, s.yaw, s.r, s.flat, s.moss, 0], k * 8));
     const rt = new Float32Array(c.roots.length * 8);
     c.roots.forEach((q, k) => rt.set([q.x, q.y, q.z, q.yaw, q.r, q.len, q.moss, q.moss * 0.37], k * 8));
     const sx = new Float32Array(c.steps.length * 8);
     c.steps.forEach((s, k) => sx.set([s.x, s.y, s.z, Math.atan2(s.dx, s.dz), s.depth, s.width, s.drop, s.seed], k * 8));
-    this.chunks.set(key, { key, x: c.x0 + CHUNK / 2, z: c.z0 + CHUNK / 2, roots: this.buffer(rt), nRoots: c.roots.length, strokes: marks?.length ? this.buffer(marks) : null, nStrokes: marks ? marks.length / STROKE_STRIDE : 0, ground: this.buffer(v), culms: this.buffer(cu), nCulms: c.tall, sprays: this.buffer(sp), nSprays: c.sprays.length, stones: this.buffer(st), nStones: c.stones.length, steps: this.buffer(sx), nSteps: c.steps.length });
+    this.chunks.set(key, { key, x: c.x0 + CHUNK / 2, z: c.z0 + CHUNK / 2, roots: this.buffer(rt), nRoots: c.roots.length, strokes: marks?.length ? this.buffer(marks) : null, nStrokes: marks ? marks.length / STROKE_STRIDE : 0, ground: this.buffer(v), culms: this.buffer(cu), nCulms: c.tall, sprays: this.buffer(sp), nSprays: c.sprays.length, twigs: this.buffer(tw), nTwigs: c.twigs.length, stones: this.buffer(st), nStones: c.stones.length, steps: this.buffer(sx), nSteps: c.steps.length });
   }
   /** let a chunk go */
   drop(key: string) {
     const h = this.chunks.get(key); if (!h) return;
-    for (const b of [h.ground, h.culms, h.sprays, h.stones, h.steps, h.strokes, h.roots]) if (b) this.gl.deleteBuffer(b);
+    for (const b of [h.ground, h.culms, h.sprays, h.twigs, h.stones, h.steps, h.strokes, h.roots]) if (b) this.gl.deleteBuffer(b);
     this.chunks.delete(key);
   }
   keys() { return [...this.chunks.keys()]; }
@@ -1071,6 +1138,16 @@ export class Renderer {
         this.attr(0, m.buf, 2, 2, 0);
         for (let a = 0; a < 3; a++) this.attr(1 + a, c.culms, 4, 12, a * 4, 1);
         gl.drawArraysInstanced(gl.TRIANGLES, 0, m.count, c.nCulms);
+      }
+    }
+    // ─── the branches (near enough to be seen as more than a line) ───
+    if (!this.bare) {
+      use('twig');
+      this.attr(0, this.vbo.twig.buf, 2, 2, 0);
+      for (const { c } of inRange(Math.min(this.pick[1], 70))) {
+        if (!c.nTwigs) continue;
+        for (let a = 0; a < 4; a++) this.attr(1 + a, c.twigs, 4, 16, a * 4, 1);
+        gl.drawArraysInstanced(gl.TRIANGLES, 0, this.vbo.twig.count, c.nTwigs);
       }
     }
     // ─── the sprays ───
