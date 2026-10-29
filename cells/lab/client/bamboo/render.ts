@@ -168,7 +168,8 @@ void emit(vec3 lit, vec3 own, float b, float kind, float allow, float mark, vec3
   // (a thing gone to the page is gone: it hides nothing behind it. One drawn as its ink alone still stands in front of
   // what's behind it, as a drawn culm does, its paper its own. The ground goes as its leaves do, never as a hole)
   if (kind > .3 && inkOf(b) < .04) discard;
-  float d = distance(p, uEye), colour = colourOf(b);
+  // (the land's colour gives out over a broad, broken fade, never a line drawn along the hill)
+  float d = distance(p, uEye), colour = kind > .15 && kind < .25 ? 1. - smoothstep(1.2, 2.2, b) : colourOf(b);
   vec3 c = mix(own, lit, lightOf(b));
   // (a little air between, warm and pale)
   c = mix(c, vec3(.93, .9, .8), (1. - exp(-max(0., d - 3.) / 40.)) * .55);
@@ -198,7 +199,8 @@ void main() {
   // (internodes lengthen up the culm; a slight swelling at each node)
   float q = y / (node * (1. + .9 * smoothstep(0., .45 * h, y)));
   float swell = 1. + .06 * exp(-pow(fract(q) * 14., 2.)) + .06 * exp(-pow((fract(q) - 1.) * 14., 2.));
-  float rr = r * (1. - .62 * pow(aUV.y, 1.3)) * swell;
+  // (and its last few metres drawn out to a whip, so its top is a fine point lost in the canopy, never a flat end)
+  float rr = r * (1. - .62 * pow(aUV.y, 1.3)) * swell * (1. - .96 * smoothstep(.72, 1., aUV.y));
   vec3 c = culmAt(b, h, lean, phase, y);
   vec3 n = vec3(cos(a), 0., sin(a));
   vW = c + n * rr; vN = n; vY = y; vQ = q; vU = a * r; vI = vec3(iC.x, phase, h);
@@ -382,7 +384,8 @@ void main() {
   // rather than following any line of the frame)
   vec2 down2 = N.xz / max(length(N.xz), .05), across2 = vec2(-down2.y, down2.x);
   float stroke = vn(vec2(dot(vW.xz, across2) * .35, dot(vW.xz, down2) * 3.2)) * .6 + vn(vec2(dot(vW.xz, across2) * 1.1, dot(vW.xz, down2) * 9.)) * .4;
-  float band = bandAt(vW) + (fbm2(vW.xz * .5 + 3.) - .5) * .5 + (stroke - .5) * 1.4;
+  // (further off, broken in bigger patches, so where it gives out across a far slope it's ragged, not ruled)
+  float band = bandAt(vW) + (fbm2(vW.xz * .5 + 3.) - .5) * .5 + (stroke - .5) * 1.4 + (fbm2(vW.xz * .09 + 7.) - .5) * 1.6 * smoothstep(10., 40., dist);
   band = leaf >= 0. ? band + (leaf - .5) * .8 : band + .25 + (vRock > .5 ? -.3 : 0.);
   emit(c, own(alb), band, .2, 1., mark, vW);
 }`;
