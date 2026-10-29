@@ -206,6 +206,29 @@ export function strokes(world: World, c: Chunk): Float32Array {
     }
   }
 
+  // ─── what gathers where things meet the ground: fallen leaves caught round a stone's foot (most below it) and round a
+  // giant culm's, as small curved commas ───
+  {
+    const r = rng(s, c.ci, c.cj, 97);
+    const comma = (x: number, z: number) => {
+      const len = 0.08 + r() * 0.1, ang = r() * Math.PI * 2, bend = (r() - 0.5) * 0.9, pts: V3[] = [];
+      for (let q = 0; q <= 2; q++) { const f = q / 2 - 0.5, an = ang + bend * f * 2, px = x + Math.cos(an) * len * f, pz = z + Math.sin(an) * len * f; pts.push([px, yAt(px, pz) + 0.035, pz]); }
+      ribbon(out, pts, 0.045, FAM.debris, 0.35 + r() * 0.2, 0.4, r());
+    };
+    for (const st of c.stones) {
+      if (st.r < 0.3 || !inside(st.x, st.z)) continue;
+      const fx = yAt(st.x + 0.5, st.z) - yAt(st.x - 0.5, st.z), fz = yAt(st.x, st.z + 0.5) - yAt(st.x, st.z - 0.5), fl = Math.hypot(fx, fz) || 1;
+      for (let m = 0, n = 4 + Math.floor(st.r * 6); m < n; m++) {
+        const a = r() * Math.PI * 2, d = st.r * (0.95 + r() * 0.45), down = r() < 0.6 ? 0.5 : 0;
+        comma(st.x + Math.cos(a) * d - (fx / fl) * st.r * down, st.z + Math.sin(a) * d - (fz / fl) * st.r * down);
+      }
+    }
+    for (let k = 0; k < c.tall; k++) {
+      const q = c.culms[k];
+      if (q.r < 0.105 || !inside(q.x, q.z)) continue;
+      for (let m = 0; m < 6; m++) { const a = r() * Math.PI * 2, d = q.r + 0.12 + r() * 0.45; comma(q.x + Math.cos(a) * d, q.z + Math.sin(a) * d); }
+    }
+  }
   // ─── cliffs: where the land breaks steep, its rim along the top, strokes down its face ───
   {
     const S = new Float32Array(CN * CN);

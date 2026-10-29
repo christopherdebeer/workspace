@@ -187,7 +187,7 @@ export class World {
         const sa = s0 + ((s1 - s0) * k) / count, sb = s0 + ((s1 - s0) * (k + 1)) / count;
         const lo = lerp(up > 0 ? sa : sb), hi = lerp(up > 0 ? sb : sa), dx = hi[0] - lo[0], dz = hi[1] - lo[1], l = Math.hypot(dx, dz) || 1;
         const jx = (u01(s, k, i, 78) - 0.5) * 0.3, ja = (u01(s, k, i, 79) - 0.5) * 0.28, ca = Math.cos(ja), sa2 = Math.sin(ja), ux = dx / l, uz = dz / l;
-        steps.push({ sa, sb, x: lo[0] - uz * jx, z: lo[1] + ux * jx, dx: ux * ca + uz * sa2, dz: uz * ca - ux * sa2, y: hi[2] + (u01(s, k, i, 80) - 0.5) * 0.06, depth: (sb - sa) * (1.02 + u01(s, k, i, 82) * 0.2), width: HALF * 1.7 * (0.72 + u01(s, k, i, 77) * 0.45), drop: Math.abs(hi[2] - lo[2]) + 0.9, seed: u01(s, k, i, 81) });
+        steps.push({ sa, sb, x: lo[0] - uz * jx, z: lo[1] + ux * jx, dx: ux * ca + uz * sa2, dz: uz * ca - ux * sa2, y: hi[2] + (u01(s, k, i, 80) - 0.5) * 0.06, depth: (sb - sa) * (0.9 + u01(s, k, i, 82) * 0.45), width: HALF * 1.7 * (0.6 + u01(s, k, i, 77) * 0.62), drop: Math.abs(hi[2] - lo[2]) + 0.9, seed: u01(s, k, i, 81) });
       }
       i = j + 1;
     }
@@ -327,25 +327,40 @@ export class World {
     }
     // ─── stones: under cliffs (fallen), at the foot of a trail's bank, now and then anywhere ───
     const stones: Stone[] = [];
+    // (between the ground at a stone's middle and the lowest under it: where it's bedded, so its downhill side is in the
+    // earth and its uphill side still stands out of it)
+    const lowUnder = (x: number, z: number, r: number) => (g(x, z) + Math.min(g(x, z), g(x + r * 0.8, z), g(x - r * 0.8, z), g(x, z + r * 0.8), g(x, z - r * 0.8))) / 2;
     for (let n = 0; n < 48; n++) {
       const x = x0 + u01(s, ci, cj, n, 40) * CHUNK, z = z0 + u01(s, ci, cj, n, 41) * CHUNK, q = this.trailNear(x, z), sl = slope(x, z);
       // (a trail's sides are stony: its bank breaks out in rock, stones lie along its edge)
       const p = sl > 0.5 ? 0.45 : q.d > HALF + 0.3 && q.d < 4.5 ? 0.7 : 0.05;
       if (u01(s, ci, cj, n, 42) > p || q.d < HALF + 0.35) continue;
       const r = 0.22 + u01(s, ci, cj, n, 43) ** 2 * (q.d < 4.5 ? 1.2 : 1.4);
-      stones.push({ x, y: g(x, z) - r * 0.35, z, r, yaw: u01(s, ci, cj, n, 44) * 6.283, flat: 0.55 + u01(s, ci, cj, n, 45) * 0.35, kind: Math.floor(u01(s, ci, cj, n, 46) * 4), moss: u01(s, ci, cj, n, 47) });
+      // (bedded in the hill, not set on it: on a slope, half under, turned along the fall, flatter)
+      const fx = g(x + 0.5, z) - g(x - 0.5, z), fz = g(x, z + 0.5) - g(x, z - 0.5), bed = sl > 0.35 ? 0.5 : 0.38;
+      // (set between the ground at its middle and the lowest under it, so on a slope its downhill side is in the earth too)
+      const low = Math.min(g(x, z), g(x + r * 0.8, z), g(x - r * 0.8, z), g(x, z + r * 0.8), g(x, z - r * 0.8));
+      stones.push({ x, y: (low + g(x, z)) / 2 - r * bed * 0.75, z, r, yaw: sl > 0.35 ? Math.atan2(fz, fx) : u01(s, ci, cj, n, 44) * 6.283, flat: (0.55 + u01(s, ci, cj, n, 45) * 0.35) * (sl > 0.35 ? 0.8 : 1), kind: Math.floor(u01(s, ci, cj, n, 46) * 4), moss: u01(s, ci, cj, n, 47) });
+      // (and a big one's broken pieces round it, mostly below it, down the fall: small, flat, fractured)
+      if (r > 0.55) for (let m = 0; m < 2 + Math.floor(u01(s, ci, cj, n, 48) * 3); m++) {
+        const a = u01(s, ci, cj, n, 50 + m) * 6.283, d = r * (0.9 + u01(s, ci, cj, n, 55 + m) * 0.9), dn = Math.hypot(fx, fz) || 1;
+        const px = x + Math.cos(a) * d - (fx / dn) * r * 0.5, pz = z + Math.sin(a) * d - (fz / dn) * r * 0.5;
+        if (this.trailNear(px, pz).d < HALF + 0.2) continue;
+        const pr = 0.08 + u01(s, ci, cj, n, 60 + m) * 0.17;
+        stones.push({ x: px, y: g(px, pz) - pr * 0.4, z: pz, r: pr, yaw: u01(s, ci, cj, n, 65 + m) * 6.283, flat: 0.35 + u01(s, ci, cj, n, 70 + m) * 0.3, kind: Math.floor(u01(s, ci, cj, n, 75 + m) * 4), moss: u01(s, ci, cj, n, 80 + m) * 0.6 });
+      }
     }
     // ─── the steps of any trail whose stair is in this chunk; and boulders along a flight, as one's cut through them ───
     const steps: Step[] = [];
     for (const t of this.trailsAround(x0, z0)) for (const b of t.boulders) if (b.x >= x0 && b.x < x0 + CHUNK && b.z >= z0 && b.z < z0 + CHUNK) {
-      stones.push({ x: b.x, y: g(b.x, b.z) - b.r * 0.25, z: b.z, r: b.r, yaw: b.x * 0.7, flat: 0.85, kind: 1, moss: 0.8 });
+      stones.push({ x: b.x, y: lowUnder(b.x, b.z, b.r) - b.r * 0.2, z: b.z, r: b.r, yaw: b.x * 0.7, flat: 0.85, kind: 1, moss: 0.8 });
     }
     for (const t of this.trailsAround(x0, z0)) for (const st of t.steps) if (st.x >= x0 && st.x < x0 + CHUNK && st.z >= z0 && st.z < z0 + CHUNK) {
       steps.push(st);
       if (st.seed > 0.3) continue;
       const side = st.seed < 0.15 ? 1 : -1, lx = -st.dz * side, lz = st.dx * side, off = st.width / 2 + 0.35 + st.seed * 3, r = 0.45 + st.seed * 3.5;
       const x = st.x + lx * (off + r * 0.6), z = st.z + lz * (off + r * 0.6);
-      stones.push({ x, y: Math.max(g(x, z), st.y) - r * 0.3, z, r, yaw: st.seed * 40, flat: 0.6 + st.seed, kind: 1, moss: 0.4 + st.seed });
+      stones.push({ x, y: Math.min(lowUnder(x, z, r), st.y) - r * 0.25, z, r, yaw: st.seed * 40, flat: 0.6 + st.seed, kind: 1, moss: 0.4 + st.seed });
     }
     // ─── roots across a trail now and then, from the bank side, half in the earth, worn on top ───
     const roots: Root[] = [];

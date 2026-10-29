@@ -443,6 +443,10 @@ void main() {
   if (uKind == 1) {
     // (a step: the unit box set to its depth, width and drop, its front edge at the origin)
     p = vec3(p.x * iB.y, p.y * iB.z - iB.z, (p.z + .5) * iB.x);
+    // (laid by hand and settled since: each a little tilted across and along, one end sunk)
+    float roll = (fract(iB.w * 13.7) - .5) * .14, pitch = (fract(iB.w * 7.9) - .5) * .08;
+    p.y += p.x * roll + (p.z - iB.x * .5) * pitch;
+    n = normalize(vec3(n.x - roll * n.y, n.y, n.z - pitch * n.y));
   } else if (uKind == 3) {
     // (a root: the lump drawn out long and thin along x, bowed a little, its ends thinning into the earth)
     float u = clamp(p.x / 1.7, -1., 1.), thin = 1. - u * u * .6;
@@ -495,6 +499,8 @@ void main() {
     alb = mix(alb, lv.rgb, lv.a * onTop * (.3 + .6 * smoothstep(.15, .45, abs(vL.x))));
     alb = mix(alb, vec3(.38, .48, .2), onTop * smoothstep(.36, .5, vL.z) * smoothstep(.4, .7, vn(vW.xz * 6.)) * .7);
     alb *= mix(1., .74, 1. - smoothstep(.2, .6, N.y));
+    // (its foot in the soil: the joint dark, earth risen against it)
+    alb = mix(alb, vec3(.32, .26, .19), (1. - smoothstep(.0, .3, vL.y)) * (1. - onTop) * .7);
     // (the marks: the crack or two across a stone, now and then)
     mark = hatch * (1. - smoothstep(.2, .6, N.y)) * .8;
     mark = max(mark, step(.8, fract(vSeed * 3.7)) * (1. - smoothstep(.0, .015, abs(vL.x - (fract(vSeed * 11.) - .5) * .6 + (vn(vW.xz * 7.) - .5) * .08))) * onTop * .7);
@@ -712,25 +718,33 @@ function slabMesh() {
   return new Float32Array(P);
 }
 function lumpMesh(seed: number) {
-  // (an icosphere, two subdivisions, pushed in and out: a boulder)
+  // (an icosphere, three subdivisions, pushed in and out, and broken: a boulder)
   const t = (1 + Math.sqrt(5)) / 2;
   let V: number[][] = [[-1, t, 0], [1, t, 0], [-1, -t, 0], [1, -t, 0], [0, -1, t], [0, 1, t], [0, -1, -t], [0, 1, -t], [t, 0, -1], [t, 0, 1], [-t, 0, -1], [-t, 0, 1]].map((p) => { const l = Math.hypot(...p); return p.map((q) => q / l); });
   let F = [[0, 11, 5], [0, 5, 1], [0, 1, 7], [0, 7, 10], [0, 10, 11], [1, 5, 9], [5, 11, 4], [11, 10, 2], [10, 7, 6], [7, 1, 8], [3, 9, 4], [3, 4, 2], [3, 2, 6], [3, 6, 8], [3, 8, 9], [4, 9, 5], [2, 4, 11], [6, 2, 10], [8, 6, 7], [9, 8, 1]];
-  for (let s = 0; s < 2; s++) {
+  for (let s = 0; s < 3; s++) {
     const mid = new Map<string, number>(), m = (a: number, b: number) => { const k = a < b ? `${a},${b}` : `${b},${a}`; if (!mid.has(k)) { const p = V[a].map((q, i) => (q + V[b][i]) / 2), l = Math.hypot(...p); V.push(p.map((q) => q / l)); mid.set(k, V.length - 1); } return mid.get(k)!; };
     const G: number[][] = [];
     for (const [a, b, c] of F) { const ab = m(a, b), bc = m(b, c), ca = m(c, a); G.push([a, ab, ca], [b, bc, ab], [c, ca, bc], [ab, bc, ca]); }
     F = G;
   }
   const h = (p: number[]) => { const s = Math.sin(p[0] * 3.1 + seed) * Math.sin(p[1] * 2.7 + seed * 2) * Math.sin(p[2] * 3.3 + seed * 3); return 1 + 0.16 * s + 0.08 * Math.sin(p[0] * 7 + p[2] * 5 + seed); };
-  V = V.map((p) => { const k = h(p); return [p[0] * k, Math.max(-0.3, p[1]) * k, p[2] * k]; });
-  const P: number[] = [];
-  for (const [a, b, c] of F) {
-    const A = V[a], B = V[b], C = V[c], u = B.map((q, i) => q - A[i]), w = C.map((q, i) => q - A[i]);
-    const n = [u[1] * w[2] - u[2] * w[1], u[2] * w[0] - u[0] * w[2], u[0] * w[1] - u[1] * w[0]], l = Math.hypot(...n) || 1;
-    // (shaded round, not faceted: each corner's own way out, leaned a little to the face's)
-    for (const p of [A, B, C]) { const r = Math.hypot(...p) || 1, m = [p[0] / r * 0.7 + n[0] / l * 0.3, p[1] / r * 0.7 + n[1] / l * 0.3, p[2] / r * 0.7 + n[2] / l * 0.3], k = Math.hypot(...m) || 1; P.push(...p, m[0] / k, m[1] / k, m[2] / k); }
+  // (weathered: a finer roughness over the swell)
+  const rough = (p: number[]) => 0.035 * Math.sin(p[0] * 13 + seed * 5) * Math.sin(p[1] * 11 - seed) * Math.sin(p[2] * 12 + seed * 2);
+  V = V.map((p) => { const k = h(p) + rough(p); return [p[0] * k, Math.max(-0.3, p[1]) * k, p[2] * k]; });
+  // (and broken: a few planes cleave it, so it has flat fractured faces and edges, not only swells)
+  for (let c = 0; c < 3; c++) {
+    const a = seed * 2.3 + c * 2.1, e = 0.5 - 0.35 * Math.sin(seed * 1.7 + c * 4.1), nx = Math.cos(a) * Math.cos(e), ny = Math.sin(e) * 0.8, nz = Math.sin(a) * Math.cos(e), nl = Math.hypot(nx, ny, nz);
+    const d = 0.68 + 0.12 * Math.sin(seed * 3.3 + c);
+    V = V.map((p) => { const t = (p[0] * nx + p[1] * ny + p[2] * nz) / nl - d; return t > 0 ? [p[0] - (nx / nl) * t, p[1] - (ny / nl) * t, p[2] - (nz / nl) * t] : p; });
   }
+  // (shaded by its shape: each corner's normal the faces' round it, area-weighted, so swells are round and the cleaved
+  // faces flat)
+  const VN = V.map(() => [0, 0, 0]);
+  const fn = F.map(([a, b, c]) => { const A = V[a], u = V[b].map((q, i) => q - A[i]), w = V[c].map((q, i) => q - A[i]); return [u[1] * w[2] - u[2] * w[1], u[2] * w[0] - u[0] * w[2], u[0] * w[1] - u[1] * w[0]]; });
+  F.forEach((f, k) => { for (const v of f) for (let i = 0; i < 3; i++) VN[v][i] += fn[k][i]; });
+  const P: number[] = [];
+  for (const f of F) for (const v of f) { const n = VN[v], l = Math.hypot(...n) || 1; P.push(...V[v], n[0] / l, n[1] / l, n[2] / l); }
   return new Float32Array(P);
 }
 
