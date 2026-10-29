@@ -311,7 +311,17 @@ export class World {
           let lx = Math.cos(la) * mag + Math.cos(standDir) * 0.025 * h, lz = Math.sin(la) * mag + Math.sin(standDir) * 0.025 * h;
           if (q.trail && q.d < 6) { const tx = q.trail.x[q.i] - x, tz = q.trail.z[q.i] - z, l = Math.hypot(tx, tz) || 1, k = (1 - q.d / 6) * (0.8 + u01(s, gi, gj, 10) * 1.4); lx += (tx / l) * k; lz += (tz / l) * k; }
           // (and its top bows over, under its leaves, the way it leans: some hardly, the leaners most)
-          const bend = lu < 0.06 ? 0.6 + 0.4 * u01(s, gi, gj, 27) : 0.15 + 0.6 * u01(s, gi, gj, 27);
+          let bend = lu < 0.06 ? 0.6 + 0.4 * u01(s, gi, gj, 27) : 0.15 + 0.6 * u01(s, gi, gj, 27);
+          // (and now and then a young one bowed right over, snow-bent, its top arching back down toward the ground:
+          // beside a trail mostly, reaching across it, so the way goes under its fall; its bow is `bend` past 1.5, the
+          // angle its tip has turned through)
+          const bowP = young ? (q.trail && q.d < 5 ? 0.3 : 0.05) : r < 0.05 ? 0.015 : 0;
+          if (u01(s, gi, gj, 41) < bowP) {
+            let bx = -fx, bz = -fz;
+            if (q.trail && q.d < 5) { bx = q.trail.x[q.i] - x; bz = q.trail.z[q.i] - z; }
+            const bl = Math.hypot(bx, bz), ba = bl > 1e-3 ? Math.atan2(bz, bx) + (u01(s, gi, gj, 43) - 0.5) * 0.6 : u01(s, gi, gj, 43) * 6.283;
+            lx = Math.cos(ba) * 0.3; lz = Math.sin(ba) * 0.3; bend = 1.5 + 2.35 + 0.55 * u01(s, gi, gj, 42);
+          }
           const age = young ? 0 : Math.min(1, Math.max(0, standAge + (u01(s, gi, gj, 12) - 0.5) * 0.5));
           culms.push({ x, y, z, r, h, lx, lz, node: (young ? 0.2 : 0.26) + u01(s, gi, gj, 11) * 0.12 + (hero ? 0.06 : 0), age, phase: u01(s, gi, gj, 13) * 6.283, pick: hero ? u01(s, gi, gj, 14) * 0.3 : u01(s, gi, gj, 14), crown: (young ? 0.35 : 0.42) + u01(s, gi, gj, 15) * 0.18, bend });
         }
@@ -442,7 +452,25 @@ export class World {
   }
 }
 
+/** a culm: its foot, girth, height (along it), lean (how far its top stands off), and `bend`: up to 1 its top bowed
+ * over under its leaves; past 1.5, bowed right over in an arc, its tip turned through `bend - 1.5` radians */
 export interface Culm { x: number; y: number; z: number; r: number; h: number; lx: number; lz: number; node: number; age: number; phase: number; pick: number; crown: number; bend: number }
+/** where a culm is `y` along it (no wind): as render.ts's culmAt draws it, so what you duck under is what's drawn */
+export function culmPoint(c: Culm, y: number): [number, number, number] {
+  const v = Math.min(1, Math.max(0, y / c.h)), L = Math.hypot(c.lx, c.lz);
+  const dx = L > 0.05 ? c.lx / L : Math.cos(c.phase), dz = L > 0.05 ? c.lz / L : Math.sin(c.phase);
+  const bow = Math.max(0, c.bend - 1.5), b = bow > 0 ? 0 : c.bend, lv = v ** 1.6, tv = b * c.h * 0.14 * v ** 3;
+  let ox = c.lx * lv + dx * tv, oz = c.lz * lv + dz * tv, yy = y;
+  if (bow > 0) { const th = bow * v; ox += (dx * c.h * (1 - Math.cos(th))) / bow; oz += (dz * c.h * (1 - Math.cos(th))) / bow; yy = (c.h * Math.sin(th)) / bow; }
+  return [c.x + ox, c.y + yy, c.z + oz];
+}
+/** what the run needs of the land (the World, or a course laid by hand for a test) */
+export interface Land {
+  chunk(ci: number, cj: number): Chunk;
+  ground(x: number, z: number): number;
+  tread(x: number, z: number): number | null;
+  trailNear(x: number, z: number): { d: number; trail: Trail | null; i: number };
+}
 /** a branch: off its culm at height `y`, rising `rise` and reaching `hor` out at angle `ang` (x, z), so thick at its base */
 export interface Twig { c: number; y: number; rise: number; hor: number; ang: number; rad: number; seed: number }
 export interface Spray { c: number; y: number; ox: number; oz: number; size: number; yaw: number; tilt: number; seed: number }

@@ -14,7 +14,8 @@
  * (layers.ts); `grove=0` (the land alone), `clay` (the forms alone), `strokes=all`.
  */
 import { World, ridges, CHUNK, type Trail, type Chunk } from './world';
-import { Runner, LOPE } from './runner';
+import { Runner, LOPE, EYE } from './runner';
+import type { Footing } from './footing';
 import { strokes } from './strokes';
 import { Renderer, type Frame } from './render';
 import { readDials, address, layersPalette } from './layers';
@@ -43,8 +44,7 @@ let t = Number(params.get('t') ?? 0);
 
 // ─── you, and the land round you, built a chunk at a time as you go ───
 const me = new Runner(world);
-const EYE = 1.62;
-let held = false, pitch = -0.06, roll = 0;
+let held = false, pitch = -0.06, roll = 0, airK = 0, aimK = 0;
 const keys = new Set<string>();
 renderer.allStrokes = params.get('strokes') === 'all';
 renderer.bare = params.get('grove') === '0';
@@ -85,13 +85,27 @@ const sound = (() => {
   return {
     start,
     air(gust: number, speed: number) { if (ac && hiss && rush) { hiss.gain.setTargetAtTime(0.018 + gust * 0.1, ac.currentTime, 0.4); rush.gain.setTargetAtTime(speed * 0.012, ac.currentTime, 0.3); } },
-    step(stone: boolean, hard: number) {
+    /** a burst of the noise through a band, rising in `att` and gone by `len` */
+    burst(freq: number, q: number, gain: number, att: number, len: number, type: BiquadFilterType = 'bandpass') {
       if (!ac || !noise) return;
       const src = ac.createBufferSource(); src.buffer = noise;
-      const f = ac.createBiquadFilter(); f.type = 'bandpass'; f.frequency.value = stone ? 1900 + Math.random() * 500 : 900 + Math.random() * 500; f.Q.value = stone ? 2.2 : 0.9;
-      const g = ac.createGain(), now = ac.currentTime; g.gain.setValueAtTime(0, now); g.gain.linearRampToValueAtTime((stone ? 0.08 : 0.1) * hard, now + 0.006); g.gain.exponentialRampToValueAtTime(0.001, now + (stone ? 0.06 : 0.11));
-      src.connect(f).connect(g).connect(ac.destination); src.start(now, Math.random()); src.stop(now + 0.15);
+      const f = ac.createBiquadFilter(); f.type = type; f.frequency.value = freq; f.Q.value = q;
+      const g = ac.createGain(), now = ac.currentTime; g.gain.setValueAtTime(0, now); g.gain.linearRampToValueAtTime(gain, now + att); g.gain.exponentialRampToValueAtTime(0.001, now + len);
+      src.connect(f).connect(g).connect(ac.destination); src.start(now, Math.random()); src.stop(now + len + 0.05);
     },
+    /** a footfall: crisp on stone and steps, a knock on a root, soft in the litter */
+    step(on: Footing, hard: number) {
+      const hardOn = on === 'stone' || on === 'step';
+      this.burst(hardOn ? 1900 + Math.random() * 500 : on === 'root' ? 1200 + Math.random() * 200 : 900 + Math.random() * 500, hardOn ? 2.2 : on === 'root' ? 3 : 0.9, (hardOn ? 0.08 : 0.1) * hard, 0.006, hardOn ? 0.06 : 0.11);
+    },
+    /** a landing: the body's weight coming down (a low thud, heavier the harder), and the footing's own sound over it */
+    land(on: Footing, impact: number) {
+      const k = Math.min(1, impact / 6);
+      this.burst(110 + Math.random() * 30, 0.7, 0.12 + 0.3 * k, 0.008, 0.16 + 0.2 * k, 'lowpass');
+      this.step(on, 1 + k * 1.5);
+    },
+    /** a culm brushed past: a rustle of its leaves */
+    brush(k: number) { this.burst(3800 + Math.random() * 1500, 0.6, 0.02 + 0.05 * k, 0.03, 0.3); },
   };
 })();
 
@@ -128,7 +142,7 @@ function run(dt: number) {
   if (keys.has('ArrowRight')) turn -= dt * 1.6;
   if (auto) turn += (Math.sin(t * 0.13 + 1.3) * 0.25 + Math.sin(t * 0.051) * 0.2) * dt;
   turn += dragTurn; dragTurn = 0;
-  me.step(dt, { go, turn });
+  me.update(dt, { go, turn });
 }
 
 // ─── gusts ───
@@ -215,7 +229,9 @@ const cam = params.get('cam')?.split(',').map(Number);
 const spot: Spot | null = cam && cam.length >= 4 && cam.every(Number.isFinite) ? { x: cam[0], z: cam[1], heading: cam[2], pitch: cam[3], v: cam[4] } : refName ? findSpots()[refName] ?? null : null;
 if (spot) { me.x = spot.x; me.z = spot.z; me.heading = me.move = spot.heading; pitch = spot.pitch; me.v = spot.v ?? 0; me.phase = 0.35; }
 stream(400);
-me.onStep = (stone, hard) => sound.step(stone, hard);
+me.onStep = (on, hard) => sound.step(on, hard);
+me.onLand = (on, impact) => sound.land(on, impact);
+me.onBrush = (_side, k) => sound.brush(k);
 me.y = me.groundAt(me.x, me.z);
 
 // ─── the address keeps where you are: how it's drawn (the dials that differ from the house), and where you stand, which
@@ -241,20 +257,28 @@ function resize() {
   if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
 }
 function frame(now: number) {
-  const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  // (the run keeps real time in its own fixed steps, however the frames come; held to a quarter second after a stall)
+  const dt = Math.min(0.25, (now - last) / 1000); last = now;
   if (!still) t += dt;
   resize();
   if (!spot && !still) run(dt);
   stream(1);
-  const s = Math.min(1, me.v / LOPE), bob = Math.abs(Math.sin(me.phase * Math.PI)) * 0.065 * s, sway = Math.sin(me.phase * Math.PI) * 0.035 * s;
-  const side = [Math.cos(me.move), -Math.sin(me.move)];
-  const eye: [number, number, number] = [me.x + side[0] * sway, me.y + EYE + bob - me.dip, me.z + side[1] * sway];
+  // (the body, as the eye has it: the stride's bob and sway, let go of in the air and settling; sunk as it gathers, lands,
+  // ducks, rolls; pushed aside by a brush; leaning into a gap shoulder first)
+  airK += ((me.air ? 1 : 0) - airK) * (1 - Math.exp(-dt * (me.air ? 8 : 5)));
+  const s = Math.min(1, me.v / LOPE) * (1 - airK), bob = Math.abs(Math.sin(me.phase * Math.PI)) * 0.065 * s, sway = Math.sin(me.phase * Math.PI) * 0.035 * s;
+  const side = [Math.cos(me.move), -Math.sin(me.move)], lat = sway + me.nudge + me.shoulder * 0.06;
+  const eye: [number, number, number] = [me.x + side[0] * lat, me.y + EYE + bob - me.low, me.z + side[1] * lat];
   if (refName === 'gust') { gust.dir = [-0.9, -0.43]; gust.front = eye[0] * gust.dir[0] + eye[2] * gust.dir[1] + 6; gust.strength = 1; }
   else if (!still) stepGust(dt, eye);
   // (looking: where you're heading; tipped a little with the ground ahead)
-  const yaw = me.heading, gAhead = me.groundAt(me.x + Math.sin(yaw) * 6, me.z + Math.cos(yaw) * 6) - me.y, p = pitch + Math.atan2(gAhead, 6) * 0.5;
+  const yaw = me.heading + me.shoulder * 0.2, gAhead = me.groundAt(me.x + Math.sin(yaw) * 6, me.z + Math.cos(yaw) * 6) - me.y;
+  let p = pitch + Math.atan2(gAhead, 6) * 0.5 - me.pitchDown;
+  // (in the air, the eye goes a little toward where you'll come down)
+  if (me.aim) { const ad = Math.max(0.5, Math.hypot(me.aim[0] - eye[0], me.aim[2] - eye[2])); aimK += (Math.atan2(me.aim[1] + 0.3 - eye[1], ad) - aimK) * Math.min(1, dt * 6); }
+  p += (aimK - p) * 0.4 * airK;
   const look: [number, number, number] = [eye[0] + Math.sin(yaw) * Math.cos(p), eye[1] + Math.sin(p), eye[2] + Math.cos(yaw) * Math.cos(p)];
-  roll = roll * 0.9 + (-me.turn * 0.5 * s + Math.sin(me.phase * Math.PI) * 0.012 * s) * 0.1;
+  roll += (-me.turn * 0.5 * s + Math.sin(me.phase * Math.PI) * 0.012 * s + me.shoulder * 0.06 + (me.rollT >= 0 ? 0.07 * Math.sin(2 * Math.PI * me.rollT) : 0) - roll) * (1 - Math.exp(-dt * 6));
   const portrait = innerHeight > innerWidth, base = Number(params.get('fov')) || (portrait ? 74 : 60);
   const fov = (base + 12 * s) * Math.PI / 180;
   // (the focus: where you're going and looking, the page coming in round it)
@@ -275,7 +299,7 @@ function frame(now: number) {
   }
   // (at rest, the address catches up)
   if (me.v < 0.05 && !drag && !held) remember();
-  (window as unknown as { __bamboo: unknown }).__bamboo = { seed, x: me.x, z: me.z, y: me.y, heading: me.heading, pitch, v: me.v, onTrail: me.onTrail, air: me.air, t, chunks: me.chunks.size, frameMs: ms, scale };
+  (window as unknown as { __bamboo: unknown }).__bamboo = { seed, x: me.x, z: me.z, y: me.y, heading: me.heading, pitch, v: me.v, onTrail: me.onTrail, air: me.air, act: me.act, low: me.low, landedAs: me.landedAs, t, chunks: me.chunks.size, frameMs: ms, scale };
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);

@@ -29,6 +29,7 @@
 import { type Chunk, CHUNK, CN, CELL, HALF, BANK, SUN } from './world';
 import { STROKE_STRIDE } from './strokes';
 import { type Dials, HOUSE } from './layers';
+import { lumpMesh, LUMP_SEED } from './lump';
 
 export interface Frame {
   eye: [number, number, number]; look: [number, number, number]; fov: number; t: number;
@@ -82,8 +83,11 @@ vec3 culmAt(vec3 b, float h, vec2 lean, float phase, float y, float bend) {
   float v = clamp(y / h, 0., 1.);
   // (its lean, growing up it; and its top bowed over under its leaves, the way it leans, straight below)
   vec2 dir = length(lean) > .05 ? normalize(lean) : vec2(cos(phase), sin(phase));
-  vec2 off = lean * pow(v, 1.6) + dir * bend * h * .14 * pow(v, 3.) + windAt(b.xz, phase) * v * v * h;
-  return b + vec3(off.x, y, off.y);
+  // (\`bend\` past 1.5: bowed right over in an arc, its tip turned through bend - 1.5 radians, as world.ts's culmPoint)
+  float bow = max(0., bend - 1.5), yy = y;
+  vec2 off = lean * pow(v, 1.6) + dir * (bow > 0. ? 0. : bend) * h * .14 * pow(v, 3.) + windAt(b.xz, phase) * v * v * h;
+  if (bow > 0.) { float th = bow * v; off += dir * h * (1. - cos(th)) / bow; yy = h * sin(th) / bow; }
+  return b + vec3(off.x, yy, off.y);
 }
 // (how far out a point is, for every layer alike: from the focus (where you're going and looking) across the frame, 1
 // at every edge of it (measured near-square, so top and bottom as much as the sides), and in depth (further for being
@@ -264,7 +268,10 @@ void main() {
   // (and its last few metres drawn out to a whip, so its top is a fine point lost in the canopy, never a flat end)
   float rr = r * (1. - .62 * pow(aUV.y, 1.3)) * swell * (1. - .96 * smoothstep(.72, 1., aUV.y));
   vec3 c = culmAt(b, h, lean, phase, y, bend);
-  vec3 n = vec3(cos(a), 0., sin(a));
+  // (its ring square across it, wherever it's going: up, or over in a bow)
+  vec3 T = normalize(culmAt(b, h, lean, phase, min(h, y + .05), bend) - culmAt(b, h, lean, phase, max(0., y - .05), bend) + vec3(0., 1e-4, 0.));
+  vec3 S = normalize(cross(T, abs(T.x) < .9 ? vec3(1., 0., 0.) : vec3(0., 0., 1.))), Q = cross(S, T);
+  vec3 n = normalize(Q * cos(a) - S * sin(a));
   vW = c + n * rr; vR = rr; vA = a; vN = n; vY = y; vQ = q; vU = a * r; vI = vec3(iC.x, phase, h);
   // (how far out it is, each culm a little its own way)
   // (and each stand its own way, so the grove's limit is ragged by whole stands: some run on past the rest, some give
@@ -326,7 +333,8 @@ void main() {
   // (its relief, close to: the node's ridge, a groove just above it; fine grooves down its length)
   float rK = uRelief * (1. - smoothstep(3., 12., dist));
   float grv = exp(-pow((f - .075) / .014, 2.));
-  float hC = (exp(-pow((f - .035) / .014, 2.)) * .004 - grv * .0015 + sin(vU * 260. + vn(vec2(vU * 20., vY)) * 3.) * .00035) * rK;
+  float gq = vU * 260. + vn(vec2(vU * 20., vY)) * 3., gK = 1. - smoothstep(.8, 2.2, fwidth(gq));
+  float hC = (exp(-pow((f - .035) / .014, 2.)) * .004 - grv * .0015 + sin(gq) * .00035 * gK) * rK;
   vec3 Nc = bumpN(N, vW, hC);
   vec3 c = layered(alb, Nc, vW, .25, 1. - .35 * grv * rK, vec3(0.), uColK.x, 0., outAt(vW) + vJit + smoothstep(4., vI.z, vY) * .12, colR, litR);
   // (near and out of focus, a culm goes wet: no contour, a dark wash in its place, streaked as the brush drags; the page
@@ -532,7 +540,11 @@ void main() {
   float px = length(fwidth(vW.xz)), leafMark, leaf;
   float lH, lCav;
   vec3 carp = carpet(litter * .8, vW.xz, px, leafMark, leaf, lH, lCav);
-  vec3 alb = mix(carp, mix(earth, carp, .1 + .2 * step(.62, vn(vW.xz * 2.2))), worn * .95);
+  // (how much the litter covers: all of it off a trail, a few leaves left down its worn middle, none on a cut bank's bare
+  // face; one amount, so its colour, its relief and its creases go together and a cleared path is flat earth to the light
+  // as well as to the eye)
+  float cover = 1. - worn * .95 * (1. - (.1 + .2 * step(.62, vn(vW.xz * 2.2))));
+  vec3 alb = mix(earth, carp, cover);
   alb = mix(alb, soil, smoothstep(.35, .7, 1. - N.y) * .7);
   // (a trail's cut bank: bare red-brown earth where it's steep, streaked down its fall, with roots run across it and
   // small stones in it; the litter only lies on its ledges)
@@ -551,7 +563,8 @@ void main() {
     // (stones in it, pale and mossed on top)
     float st = smoothstep(.62, .7, vn(vec2(u, v * 1.6) * 2.2 + 11.));
     earth2 = mix(earth2, mix(vec3(.64, .62, .56), vec3(.4, .5, .24), smoothstep(.5, .9, N.y + .3)), st);
-    alb = mix(alb, earth2, cutBank * (1. - smoothstep(.93, .99, N.y)) * .9);
+    float bareCut = cutBank * (1. - smoothstep(.93, .99, N.y)) * .9;
+    alb = mix(alb, earth2, bareCut); cover *= 1. - bareCut;
   }
   // (green: moss and low growth in patches, more along a trail's banks)
   float green = smoothstep(.58, .74, fbm2(vW.xz * .3 + 9.)) * .45 + smoothstep(${(HALF + 0.2).toFixed(2)}, ${(HALF + 1.2).toFixed(2)}, vD) * (1. - smoothstep(3., 6., vD)) * smoothstep(.4, .7, vn(vW.xz * .9)) * .5;
@@ -583,21 +596,26 @@ void main() {
   vec2 pb = vor(vW.xz * 5.5);
   float pebble = smoothstep(.32, .12, pb.x) * step(.55, h21(floor(vW.xz * 5.5) + 7.7));
   float rut = exp(-pow((vD - ${(HALF * 0.35).toFixed(2)}) / .18, 2.)) + exp(-pow((vD + ${(HALF * 0.35).toFixed(2)}) / .18, 2.));
-  float bare = 1. - (leaf >= 0. ? .8 : 0.);
+  float bare = 1. - .8 * cover * (leaf >= 0. ? 1. : .4);
   float hSoil = (fbm2(vW.xz * .7) - .5) * .12 + ((vn(vW.xz * 3.1) - .5) * .05 + pebble * .03) * midK * bare - rut * worn * .04;
-  float hF = lH * fineK + hSoil, cF = mix(1., lCav, fineK) * (1. - .3 * smoothstep(.12, .3, pb.x) * pebble * midK);
+  float hF = lH * fineK * cover + hSoil, cF = mix(1., lCav, fineK * cover) * (1. - .3 * smoothstep(.12, .3, pb.x) * pebble * midK * bare);
   // (a bank: clods of earth with cracks between, and grooves down it where the rain runs)
-  vec2 cl = vor(vec2((vW.x - vW.z) * .707, vW.y * 1.2) * 3.4);
-  float crack = 1. - smoothstep(.0, .09 + px * 9., cl.y);
-  float hB = ((1. - cl.x) * .035 - crack * .015) * midK + (vn(vec2((vW.x - vW.z) * .707 * 3.5, vW.y * .7)) - .5) * .08;
-  float cB = 1. - .45 * crack * midK;
+  // (each feature fading by the footprint of its own coordinates, so a steep face, where height changes fast across a
+  // pixel though x and z hardly do, loses its detail as soon as the level ground does)
+  vec2 bc = vec2((vW.x - vW.z) * .707, vW.y * 1.2) * 3.4;
+  float bpx = length(fwidth(bc)), bK = 1. - smoothstep(.2, .6, bpx);
+  vec2 cl = vor(bc);
+  float crack = 1. - smoothstep(.0, .09 + bpx * .5, cl.y);
+  float hB = ((1. - cl.x) * .035 - crack * .015) * bK + (vn(vec2((vW.x - vW.z) * .707 * 3.5, vW.y * .7)) - .5) * .08;
+  float cB = 1. - .45 * crack * bK;
   // (rock: its bedding, ledge over ledge, each undercut dark; fractures across it)
-  float bt = vW.y * 1.7 + fbm2(vW.xz * .25) * 2.5, bf = fract(bt);
-  vec2 fr = vor(vec2((vW.x + vW.z) * .9, vW.y * 1.2));
-  float frc = (1. - smoothstep(.0, .06 + px * 3., fr.y)) * step(.45, h21(floor(vec2((vW.x + vW.z) * .9, vW.y * 1.2))));
-  vec2 rch = vor(vec2((vW.x - vW.z) * 2.2, vW.y * 2.6));
-  float hR = .1 * (smoothstep(0., .8, bf) - smoothstep(.82, .98, bf)) - .03 * frc * midK + (fbm2(vec2((vW.x - vW.z) * .8, vW.y * .9)) - .5) * .16 + (1. - rch.x) * .04 * midK;
-  float cR = (1. - .5 * smoothstep(.83, .95, bf) * (1. - smoothstep(.97, 1., bf))) * (1. - .4 * frc * midK);
+  float bt = vW.y * 1.7 + fbm2(vW.xz * .25) * 2.5, bf = fract(bt), tK = 1. - smoothstep(.12, .4, fwidth(bt));
+  vec2 frq = vec2((vW.x + vW.z) * .9, vW.y * 1.2), fr = vor(frq);
+  float fpx = length(fwidth(frq)), fK = 1. - smoothstep(.15, .5, fpx);
+  float frc = (1. - smoothstep(.0, .06 + fpx * .6, fr.y)) * step(.45, h21(floor(frq)));
+  vec2 rcq = vec2((vW.x - vW.z) * 2.2, vW.y * 2.6), rch = vor(rcq);
+  float hR = .1 * mix(.5, smoothstep(0., .8, bf) - smoothstep(.82, .98, bf), tK) - .03 * frc * fK + (fbm2(vec2((vW.x - vW.z) * .8, vW.y * .9)) - .5) * .16 + (1. - rch.x) * .04 * (1. - smoothstep(.2, .6, length(fwidth(rcq))));
+  float cR = (1. - .5 * tK * smoothstep(.83, .95, bf) * (1. - smoothstep(.97, 1., bf))) * (1. - .4 * frc * fK);
   float hh = mix(mix(hF, hB, steepK), hR, vRock) * uRelief, cav = mix(1., mix(mix(cF, cB, steepK), cR, vRock), clamp(uRelief * .45, 0., .95));
   vec3 Nb = bumpN(N, vW, hh);
   // (and in the shade, where no sun finds the bump, the hollows still hold the dark and the crowns the light)
@@ -658,7 +676,7 @@ void main() {
   vec3 stone = mix(vec3(.76, .72, .63), vec3(.62, .6, .54), n1) * (.88 + .24 * n2);
   float moss = smoothstep(.2, .8, N.y) * smoothstep(.45, .7, n1 + vMoss * .3);
   vec3 alb = mix(stone, vec3(.4, .5, .22), moss * (uKind == 1 ? .2 : .7));
-  float mark = 0.;
+  float mark = 0., frK = 0., frW = 0.;
   // (a stone's shade drawn as a brush does: a few broken strokes across its turned-away side, not filled)
   float hs = abs(fract(dot(vW.xz, vec2(.8, .6)) * 5. + vW.y * 3.5) - .5);
   float hw = .07 + fwidth(dot(vW.xz, vec2(.8, .6)) * 5. + vW.y * 3.5) * .9;
@@ -666,9 +684,13 @@ void main() {
   if (uKind == 2) {
     // (a boulder: its underside dark, the ground's shade gathering under it; now and then a fracture across it)
     float under = smoothstep(-.05, -.6, N.y) * .5;
+    // (its fracture: one field, in the stone's own body, that the ink draws, the light finds as a crease and its dark
+    // gathers in, so the drawn crack and the lit one are the same crack)
     float cr = abs(dot(vL, normalize(vec3(.8, .15, .5) + vec3(vSeed - .5, 0., fract(vSeed * 7.1) - .5))) + (vn(vL.xy * 5. + vSeed * 7.) - .5) * .18 - (fract(vSeed * 3.3) - .5) * .5);
-    float crack = (1. - smoothstep(.015, .04 + fwidth(cr), cr)) * step(.35, fract(vSeed * 5.7)) * .8;
-    mark = max(max(hatch, under), crack);
+    float has = step(.35, fract(vSeed * 5.7)), fw = fwidth(cr);
+    frK = (1. - smoothstep(.015, .04 + fw, cr)) * has;
+    frW = (1. - smoothstep(.0, .09 + fw * 2., cr)) * has;
+    mark = max(max(hatch, under), frK * .8);
   }
   if (uKind == 3) {
     // (a root: grey-brown bark, worn pale and smooth on top where it's trodden, moss low along it)
@@ -701,11 +723,13 @@ void main() {
   vec2 sv = vor(vW.xz * 4. + vW.y * 2.3);
   // (a fracture here and there, not a net: only some of its cells part)
   float spx = length(fwidth(vW)) * 4.;
-  float scr = (1. - smoothstep(.0, .05 + spx, sv.y)) * step(.6, h21(floor(vW.xz * 4. + vW.y * 2.3) + 3.1)), sK = (1. - smoothstep(10., 30., distance(vW, uEye))) * uRelief;
+  float scr = uKind == 2 ? frW : (1. - smoothstep(.0, .05 + spx, sv.y)) * step(.6, h21(floor(vW.xz * 4. + vW.y * 2.3) + 3.1)), sK = (1. - smoothstep(10., 30., distance(vW, uEye))) * uRelief;
+  // (the finest of it (pits, tooling) gone where a pixel covers it)
+  float sFine = 1. - smoothstep(.04, .12, spx * 2.25);
   // (a boulder: broad weathered facets, chips off it, pits, a crack or two; a step: tooling and wear)
   vec2 chip = vor(vW.xz * 2.2 + vW.y * 1.7);
-  float hRel = uKind == 1 ? (vn(vW.xz * vec2(14., 3.)) - .5) * .01 + (vn(vW.xz * 4.) - .5) * .015 - scr * .008
-    : (fbm2(vW.xz * 1.1 + vW.y * .9) - .5) * .12 + (1. - chip.x) * .05 + (fbm2(vW.xz * 3. + vW.y * 2.) - .5) * .04 - .02 * smoothstep(.7, .82, vn(vW.xz * 9. + vW.y * 5.)) - scr * .015;
+  float hRel = uKind == 1 ? (vn(vW.xz * vec2(14., 3.)) - .5) * .01 * sFine + (vn(vW.xz * 4.) - .5) * .015 - scr * .008
+    : (fbm2(vW.xz * 1.1 + vW.y * .9) - .5) * .12 + (1. - chip.x) * .05 + ((fbm2(vW.xz * 3. + vW.y * 2.) - .5) * .04 - .02 * smoothstep(.7, .82, vn(vW.xz * 9. + vW.y * 5.))) * sFine - scr * .025;
   N = bumpN(N, vW, hRel * sK);
   float sHo = clamp(1. + hRel * sK * 4.5, .35, 1.3);
   gSunVis = mix(1., sHo * (1. - (uKind == 1 ? .25 : .45) * scr * min(1., sK)), .75);
@@ -953,37 +977,6 @@ function slabMesh() {
   }
   return new Float32Array(P);
 }
-function lumpMesh(seed: number) {
-  // (an icosphere, three subdivisions, pushed in and out, and broken: a boulder)
-  const t = (1 + Math.sqrt(5)) / 2;
-  let V: number[][] = [[-1, t, 0], [1, t, 0], [-1, -t, 0], [1, -t, 0], [0, -1, t], [0, 1, t], [0, -1, -t], [0, 1, -t], [t, 0, -1], [t, 0, 1], [-t, 0, -1], [-t, 0, 1]].map((p) => { const l = Math.hypot(...p); return p.map((q) => q / l); });
-  let F = [[0, 11, 5], [0, 5, 1], [0, 1, 7], [0, 7, 10], [0, 10, 11], [1, 5, 9], [5, 11, 4], [11, 10, 2], [10, 7, 6], [7, 1, 8], [3, 9, 4], [3, 4, 2], [3, 2, 6], [3, 6, 8], [3, 8, 9], [4, 9, 5], [2, 4, 11], [6, 2, 10], [8, 6, 7], [9, 8, 1]];
-  for (let s = 0; s < 3; s++) {
-    const mid = new Map<string, number>(), m = (a: number, b: number) => { const k = a < b ? `${a},${b}` : `${b},${a}`; if (!mid.has(k)) { const p = V[a].map((q, i) => (q + V[b][i]) / 2), l = Math.hypot(...p); V.push(p.map((q) => q / l)); mid.set(k, V.length - 1); } return mid.get(k)!; };
-    const G: number[][] = [];
-    for (const [a, b, c] of F) { const ab = m(a, b), bc = m(b, c), ca = m(c, a); G.push([a, ab, ca], [b, bc, ab], [c, ca, bc], [ab, bc, ca]); }
-    F = G;
-  }
-  const h = (p: number[]) => { const s = Math.sin(p[0] * 3.1 + seed) * Math.sin(p[1] * 2.7 + seed * 2) * Math.sin(p[2] * 3.3 + seed * 3); return 1 + 0.16 * s + 0.08 * Math.sin(p[0] * 7 + p[2] * 5 + seed); };
-  // (weathered: a finer roughness over the swell)
-  const rough = (p: number[]) => 0.035 * Math.sin(p[0] * 13 + seed * 5) * Math.sin(p[1] * 11 - seed) * Math.sin(p[2] * 12 + seed * 2);
-  V = V.map((p) => { const k = h(p) + rough(p); return [p[0] * k, Math.max(-0.3, p[1]) * k, p[2] * k]; });
-  // (and broken: a few planes cleave it, so it has flat fractured faces and edges, not only swells)
-  for (let c = 0; c < 3; c++) {
-    const a = seed * 2.3 + c * 2.1, e = 0.5 - 0.35 * Math.sin(seed * 1.7 + c * 4.1), nx = Math.cos(a) * Math.cos(e), ny = Math.sin(e) * 0.8, nz = Math.sin(a) * Math.cos(e), nl = Math.hypot(nx, ny, nz);
-    const d = 0.68 + 0.12 * Math.sin(seed * 3.3 + c);
-    V = V.map((p) => { const t = (p[0] * nx + p[1] * ny + p[2] * nz) / nl - d; return t > 0 ? [p[0] - (nx / nl) * t, p[1] - (ny / nl) * t, p[2] - (nz / nl) * t] : p; });
-  }
-  // (shaded by its shape: each corner's normal the faces' round it, area-weighted, so swells are round and the cleaved
-  // faces flat)
-  const VN = V.map(() => [0, 0, 0]);
-  const fn = F.map(([a, b, c]) => { const A = V[a], u = V[b].map((q, i) => q - A[i]), w = V[c].map((q, i) => q - A[i]); return [u[1] * w[2] - u[2] * w[1], u[2] * w[0] - u[0] * w[2], u[0] * w[1] - u[1] * w[0]]; });
-  F.forEach((f, k) => { for (const v of f) for (let i = 0; i < 3; i++) VN[v][i] += fn[k][i]; });
-  const P: number[] = [];
-  for (const f of F) for (const v of f) { const n = VN[v], l = Math.hypot(...n) || 1; P.push(...V[v], n[0] / l, n[1] / l, n[2] / l); }
-  return new Float32Array(P);
-}
-
 // ─── a little matrix arithmetic (column-major) ───
 function ortho(s: number, n: number, f: number) { return [1 / s, 0, 0, 0, 0, 1 / s, 0, 0, 0, 0, -2 / (f - n), 0, 0, 0, -(f + n) / (f - n), 1]; }
 function perspective(fov: number, asp: number, n: number, f: number) { const t = 1 / Math.tan(fov / 2); return [t / asp, 0, 0, 0, 0, t, 0, 0, 0, 0, (f + n) / (n - f), -1, 0, 0, (2 * f * n) / (n - f), 0]; }
@@ -1049,7 +1042,7 @@ export class Renderer {
     }
     for (const [k, m] of [['culmNear', culmMesh(8, 20)], ['culmFar', culmMesh(5, 10)], ['twig', culmMesh(4, 6)], ['quad', QUAD]] as const) this.vbo[k] = { buf: this.buffer(m), count: m.length / 2 };
     const box = boxMesh(); this.vbo.box = { buf: this.buffer(box), count: box.length / 6 };
-    const lump = lumpMesh(1.7); this.vbo.lump = { buf: this.buffer(lump), count: lump.length / 6 };
+    const lump = lumpMesh(LUMP_SEED); this.vbo.lump = { buf: this.buffer(lump), count: lump.length / 6 };
     const slab = slabMesh(); this.vbo.slab = { buf: this.buffer(slab), count: slab.length / 6 };
     this.vbo.screen = { buf: this.buffer(new Float32Array([-1, -1, 3, -1, -1, 3])), count: 3 };
     // (one index buffer serves every chunk's ground: the same grid)
