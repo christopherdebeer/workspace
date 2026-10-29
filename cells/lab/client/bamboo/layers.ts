@@ -28,7 +28,7 @@ export type DialKey = keyof Dials;
 export const PLAIN: Dials = { culms: 1, leaves: 1, terrain: 1, colourreach: 4, shade: 1, cast: 1, hollow: 1, landlight: 1, lightreach: 4, lines: 1, strokes: 1, edges: 1, inkreach: 4, inkfade: 0, open: 0, swell: 0, grain: 0, under: 1, toward: 0, distance: 400, depth: 0 };
 /** where it starts: the colour held round the focus, the light out past it onto the paper, the ink further still and
  * thinning, every edge left to the paper */
-export const HOUSE: Dials = { ...PLAIN, colourreach: 0.65, lightreach: 0.8, inkreach: 0.9, inkfade: 0.25, under: 0.7, distance: 70, depth: 1, cast: 0.7, hollow: 1.1, open: 0.7, swell: 0.75 };
+export const HOUSE: Dials = { ...PLAIN, colourreach: 0.65, lightreach: 0.8, inkreach: 0.9, inkfade: 0.25, under: 0.7, distance: 70, depth: 1, cast: 0.7, hollow: 1.1, open: 0.7, swell: 0 };
 export const PRESETS: Record<string, Dials> = {
   house: HOUSE,
   picture: PLAIN,

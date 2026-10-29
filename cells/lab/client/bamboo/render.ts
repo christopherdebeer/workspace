@@ -61,6 +61,8 @@ uniform mat4 uVP; uniform vec3 uEye; uniform float uTime; uniform vec3 uSun; uni
 uniform vec4 uRch; uniform vec4 uFoc; uniform vec4 uColK; uniform vec4 uInkK; uniform float uUnder;
 // (the ink's hand: how open its contours, how much it swells, how much grain breaks it)
 uniform vec4 uHand;
+// (how big a pixel is, in metres, a metre from the eye: so a thing can draw its own lines a set number of pixels wide)
+uniform float uPxW;
 ${NOISE}
 // (how far a culm's top is blown, per metre of its height: a slow sway of its own, and the gust's front passing)
 vec2 windAt(vec2 p, float phase) {
@@ -187,20 +189,22 @@ vec3 layered(vec3 alb, vec3 N, vec3 p, float wrap, float ao, vec3 glow, float co
 // reach and the drawing under the picture have them)
 const OUT = `
 layout(location = 0) out vec4 oC; layout(location = 1) out vec4 oA;
+// (a thing that draws its own contour (a culm, a spray) sets it here; the page's outline pass leaves it alone)
+float gContour = 0.;
 void emit(vec3 c, float colR, float inkA, float kind, float allow, float mark) {
   if (uClay > .5) { oC = vec4(c, 1.); oA = vec4(kind, allow, 0., 0.); return; }
   // (under the picture, as much of the drawing as \`under\` lays there; on the paper, all of it)
   float underF = 1. - colR * (1. - uUnder);
   oC = vec4(c, colR);
   // (as the colour goes, the marks come up to carry the thing)
-  oA = vec4(kind, allow, uInkK.z * inkA * underF, clamp(mark * uInkK.x * inkA * underF * (1. + .6 * (1. - colR)) * (1. + .5 * uHand.y), 0., 1.));
+  oA = vec4(kind, allow, uInkK.z * inkA * underF, max(clamp(mark * uInkK.x * inkA * underF * (1. + .6 * (1. - colR)) * (1. + .5 * uHand.y), 0., 1.), clamp(gContour * uInkK.z * inkA * underF, 0., 1.)));
 }
 `;
 
 const CULM_VS = COMMON + `
 layout(location = 0) in vec2 aUV;
 layout(location = 1) in vec4 iA; layout(location = 2) in vec4 iB; layout(location = 3) in vec4 iC;
-out vec3 vW; out vec3 vN; out float vY; out float vQ; out float vU; out vec3 vI; flat out float vOut; flat out float vJit; flat out float vHero;
+out vec3 vW; out vec3 vN; out float vY; out float vQ; out float vU; out vec3 vI; out float vR; flat out float vOut; flat out float vJit; flat out float vHero;
 uniform vec2 uPick; // drawn whole up to, gone by (metres)
 uniform mat4 uLightVP; uniform int uDepth;
 void main() {
@@ -216,7 +220,7 @@ void main() {
   float rr = r * (1. - .62 * pow(aUV.y, 1.3)) * swell * (1. - .96 * smoothstep(.72, 1., aUV.y));
   vec3 c = culmAt(b, h, lean, phase, y);
   vec3 n = vec3(cos(a), 0., sin(a));
-  vW = c + n * rr; vN = n; vY = y; vQ = q; vU = a * r; vI = vec3(iC.x, phase, h);
+  vW = c + n * rr; vR = rr; vN = n; vY = y; vQ = q; vU = a * r; vI = vec3(iC.x, phase, h);
   // (how far out it is, each culm a little its own way)
   // (and each stand its own way, so the grove's limit is ragged by whole stands: some run on past the rest, some give
   // way early)
@@ -230,7 +234,7 @@ void main() {
   gl_Position = (uDepth == 1 ? uLightVP : uVP) * vec4(vW, 1.);
 }`;
 const CULM_FS = COMMON + LIGHT + OUT + `
-in vec3 vW; in vec3 vN; in float vY; in float vQ; in float vU; in vec3 vI; flat in float vOut; flat in float vJit; flat in float vHero;
+in vec3 vW; in vec3 vN; in float vY; in float vQ; in float vU; in vec3 vI; in float vR; flat in float vOut; flat in float vJit; flat in float vHero;
 uniform float uMarks;
 void main() {
   vec3 N = normalize(vN), V = normalize(uEye - vW);
@@ -295,7 +299,13 @@ void main() {
   // (a culm goes from the page whole, where none of its layers reach it (asked at its least-out point); along it, an
   // internode at a time, its colour gives way, then its light: never a cylinder cut off mid-internode)
   if (uClay < .5 && uColK.x * hasS(vOut, uRch.x, uRch.w) < .02 && has(vOut, uRch.y) * dot(uLitK.xyz, vec3(1.)) < .02 && aw < .002) discard;
-  emit(c, colR, inkA, .4, allow, mark);
+  // (its contour, drawn by itself from its own shape, so many culms side by side never run together into a mass: a line
+  // a set number of pixels in from its silhouette, its shaded side the firm one (and with \`swell\`, heavier, near), its
+  // lit side the hairline, lifting along its length as \`allow\` has it; too thin for two lines, one fine line)
+  float ndv = abs(dot(N, V)), rpx = vR / max(dist * uPxW, 1e-5), dpx = rpx * (1. - sqrt(max(0., 1. - ndv * ndv)));
+  float wpx = (.8 + uHand.y * 1.6 * (1. - lit) * (1. - smoothstep(6., 14., dist))) * (.75 + .5 * vn(vec2(vY * .35, vI.y * 9.)));
+  gContour = (1. - smoothstep(wpx * .55, wpx + .6, dpx)) * allow * mix(.4, 1., smoothstep(1., 3., rpx)) * mix(1., .3, smoothstep(10., 40., dist));
+  emit(c, colR, inkA, .4, 0., mark);
 }`;
 const DEPTH_FS = `#version 300 es
 precision highp float;
@@ -304,7 +314,7 @@ void main() {}`;
 const SPRAY_VS = COMMON + `
 layout(location = 0) in vec2 aUV;
 layout(location = 1) in vec4 iA; layout(location = 2) in vec4 iB; layout(location = 3) in vec4 iC; layout(location = 4) in vec4 iD;
-out vec3 vW; out vec2 vUV; out float vSeed; out vec3 vN; flat out float vOut;
+out vec3 vW; out vec2 vUV; out float vSeed; out vec3 vN; out float vSize; flat out float vOut;
 uniform vec2 uPick; uniform vec3 uRight;
 void main() {
   vec3 b = iA.xyz; float h = iA.w; vec2 lean = iB.xy; float phase = iB.z, pick = iB.w;
@@ -318,20 +328,20 @@ void main() {
   vec3 r0 = vec3(cos(yaw), 0., -sin(yaw)), right = normalize(mix(r0, uRight, .55));
   vec3 up = normalize(vec3(0., 1., 0.) + cross(right, vec3(0., 1., 0.)) * tilt);
   vW = anchor + right * aUV.x * size + up * (aUV.y - .75) * size;
-  vUV = aUV + .5; vSeed = iD.z; vN = normalize(cross(right, up));
+  vUV = aUV + .5; vSeed = iD.z; vSize = size; vN = normalize(cross(right, up));
   // (a spray's drawn as its culm is at eye height, a little further along for being high, and each its own way)
   // (and where it stands in the frame itself, so the canopy at the top of the frame goes to the page too)
   vOut = outAt(anchor) + (fract(pick * 7.31) - .5) * .14 + smoothstep(4., h, sy) * .1 + (iD.z - .5) * .1 + (vn(b.xz * .045) - .5) * .7;
   gl_Position = uVP * vec4(vW, 1.);
 }`;
 const SPRAY_FS = COMMON + LIGHT + OUT + `
-in vec3 vW; in vec2 vUV; in float vSeed; in vec3 vN; flat in float vOut;
+in vec3 vW; in vec2 vUV; in float vSeed; in vec3 vN; in float vSize; flat in float vOut;
 uniform float uMarks;
 void main() {
   // (the blades: three to five from a twig near the top, drooping: 个 and 介)
   vec2 stem = vec2(.5 + (vSeed - .5) * .2, .82);
   int n = 3 + int(vSeed * 2.99);
-  float inside = 0., rim = 1., best = 0., along = 0.;
+  float inside = 0., rim = 1., best = 0., along = 0., ww = .1;
   for (int i = 0; i < 5; i++) {
     if (i >= n) break;
     float fi = float(i), s = fract(vSeed * 13.7 + fi * .618);
@@ -340,7 +350,7 @@ void main() {
     float len = .55 + s * .25, a = dot(pp, d) / len, bb = dot(pp, vec2(-d.y, d.x)) / len;
     float w = .12 * pow(max(0., sin(3.1416 * pow(clamp(a, 0., 1.), .75))), .8) * (1. - .25 * a);
     float e = w - abs(bb + a * a * .06 * (s - .5));
-    if (a > 0. && a < 1. && e > 0.) { inside = 1.; rim = min(rim, e / max(w, 1e-3)); best = max(best, s); along = a; }
+    if (a > 0. && a < 1. && e > 0.) { inside = 1.; rim = min(rim, e / max(w, 1e-3)); best = max(best, s); along = a; ww = w * len; }
   }
   if (inside < .5) discard;
   vec3 V = normalize(uEye - vW), N = faceforward(vN, -V, vN);
@@ -350,13 +360,16 @@ void main() {
   float colR, litR;
   vec3 c = layered(alb, N, vW, .6, .9, lin(vec3(.9, .92, .42)) * back * 1.2 * uSunC, uColK.y, 0., vOut, colR, litR);
   // (the marks: each blade's edge near; where the colour's given out, the blade filled in ink, as a brush lays it)
-  float near = 1. - smoothstep(8., 26., distance(vW, uEye));
-  float mark = max((1. - smoothstep(.0, .3, rim)) * near * .85, (1. - colR) * (.22 + .16 * best) * (1. - smoothstep(15., 40., distance(vW, uEye)) * .7)) * uMarks;
+  // (its own edge, drawn by itself a set number of pixels in from the blade's rim, so a far spray is a few fine blades,
+  // not a blot; a little ink in the blade where its colour's gone)
+  float dd = distance(vW, uEye), near = 1. - smoothstep(8., 26., dd), halfpx = ww * vSize / max(dd * uPxW, 1e-5);
+  float rimL = (1. - smoothstep(.55, 1.3, rim * halfpx)) * mix(.35, 1., smoothstep(.6, 2.5, halfpx)) * mix(1., .35, smoothstep(10., 40., dd));
+  float mark = max(rimL * .85, (1. - colR) * (.1 + .1 * best) * (1. - smoothstep(15., 40., dd) * .7)) * uMarks;
   // (left out whole, a spray at a time by its own pick, where no layer reaches it)
   // (its ink laid out each blade from the stem, then to its weight)
   float sa = inkAt(vOut, fract(vSeed * 17.3)), inkA = laid(sa, along);
   if (uClay < .5 && colR < .02 && litR * dot(uLitK.xyz, vec3(1.)) < .02 && sa < .002) discard;
-  emit(c, colR, inkA, .6, near, mark);
+  emit(c, colR, inkA, .6, 0., mark);
 }`;
 
 const GROUND_VS = COMMON + `
@@ -576,7 +589,9 @@ void main() {
         float rel = min(abs(zq - z), abs(zq - zp)) / min(z, zq);
         float dj = smoothstep(.05, .14, rel);
         float kj = abs(Aq.x - A.x) > .05 && min(Aq.x, A.x) > .15 && !(min(Aq.x, A.x) < .22 && max(Aq.x, A.x) < .22) ? .8 : 0.;
-        if (F.x < .15) continue;
+        // (a culm or a spray draws its own lines: here, only the land and what's set in it)
+        bool own = (A.x > .35 && A.x < .65) || (Aq.x > .35 && Aq.x < .65);
+        if (F.x < .15 || own) continue;
         // (lighter with distance: a far culm is a fine grey line, not a dark one)
         float zf = min(z, zq);
         // (the edge found first, whole, then given its weight: so a light line is a light line, not the finding's flicker)
@@ -899,7 +914,7 @@ export class Renderer {
     const d = this.dials;
     gl.uniform4fv(u('uRch'), [...this.reaches, 0.12]); gl.uniform4fv(u('uFoc'), [this.focus, d.depth, d.distance, 0]);
     gl.uniform4fv(u('uColK'), [d.culms, d.leaves, d.terrain, 0]); gl.uniform4fv(u('uLitK'), [d.shade, d.cast, d.hollow, d.landlight]);
-    gl.uniform4fv(u('uInkK'), [d.lines, d.strokes, d.edges, d.inkfade]); gl.uniform4fv(u('uHand'), [d.open, d.swell, d.grain, 0]); gl.uniform1f(u('uUnder'), d.under); gl.uniform3fv(u('uPaperC'), PAPER);
+    gl.uniform4fv(u('uInkK'), [d.lines, d.strokes, d.edges, d.inkfade]); gl.uniform4fv(u('uHand'), [d.open, d.swell, d.grain, 0]); gl.uniform1f(u('uPxW'), this.pxW); gl.uniform1f(u('uUnder'), d.under); gl.uniform3fv(u('uPaperC'), PAPER);
     gl.uniform1f(u('uAway'), (1 - Math.min(1, d.toward)) * Math.min(1, d.terrain));
     gl.uniformMatrix4fv(u('uLightVP'), false, this.lightVP); gl.uniform1i(u('uShadow'), 3); gl.uniform1f(u('uShadowOn'), this.shadows ? 1 : 0); gl.uniform1i(u('uDepth'), 0);
   }
@@ -908,8 +923,10 @@ export class Renderer {
   }
   private clearAttrs() { const gl = this.gl; for (let i = 0; i < 6; i++) { gl.disableVertexAttribArray(i); gl.vertexAttribDivisor(i, 0); } }
 
+  private pxW = 0.001;
   draw(f: Frame, w: number, h: number) {
     this.focus = f.focus ?? 15;
+    this.pxW = (2 * Math.tan(f.fov / 2)) / h;
     const gl = this.gl;
     this.targets(w, h);
     const fw = norm([f.look[0] - f.eye[0], f.look[1] - f.eye[1], f.look[2] - f.eye[2]]), side = norm(cross(fw, [0, 1, 0])), r = f.roll ?? 0;
