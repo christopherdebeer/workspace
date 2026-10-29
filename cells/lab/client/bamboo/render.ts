@@ -88,8 +88,15 @@ float outAt(vec3 p) {
 // (whether a layer's here, at so far out, given its reach: whole inside it, gone past it, over a soft edge)
 float hasS(float o, float r, float soft) { return 1. - smoothstep(r * (1. - soft), r * (1. + soft), o); }
 float has(float o, float r) { return hasS(o, r, uRch.w); }
-// (the ink here, for a thing of pick \`q\`: as it thins, fewer things inked, each as dark; as it fades, all of them paler)
-float inkAt(float o, float q) { float r = has(o, uRch.z); return mix(q < r ? 1. : 0., r, uInkK.w); }
+// (how much ink a thing of pick \`q\` has here, 0–1, never switched: as the ink thins, each thing gives out over its own
+// short stretch of the reach (one of low pick last), so fewer are inked; as it fades, all of them alike)
+float inkAt(float o, float q) { float r = has(o, uRch.z); return mix(clamp((r - q * .75) / .25, 0., 1.), r, uInkK.w); }
+// (a mark is laid by its amount as a brush lays it: its length first, from where it starts (u = 0) out to its end, its
+// tip lifting; then its weight; a mark never comes or goes at once. Fading, it goes paler as well)
+float laidLen(float a, float u) { float L = clamp(a * 1.7, 0., 1.12); return a < .001 ? 0. : 1. - smoothstep(L - .1, L, u); }
+float laidW(float a) { return mix(.3, 1., clamp((a - .3) / .7, 0., 1.)); }
+float fadeOf(float a) { return mix(1., a, uInkK.w); }
+float laid(float a, float u) { return laidLen(a, u) * laidW(a) * fadeOf(a); }
 `;
 // (the light: the sun through the canopy's gaps and past the culms' shadows, shared by every surface, so a patch of
 // sun lies across the path, the litter and a culm alike)
@@ -249,7 +256,7 @@ void main() {
   // side away from the sun, dry-brush strokes down it; ink pooled at its foot)
   float edge = 1. - abs(dot(N, V)), shade = smoothstep(.1, -.4, dot(N, uSun));
   // (far off, only some nodes are ticked, by their own picks: a far culm is a few marks, not a chain of rings)
-  float chosen = step(h21(vec2(floor(vQ + .5), vI.y * 31.)), (1. - smoothstep(10., 40., dist) * .75) * mix(.45, 1., colR));
+  float chosen = clamp(((1. - smoothstep(10., 40., dist) * .75) * mix(.45, 1., colR) - h21(vec2(floor(vQ + .5), vI.y * 31.))) / .15, 0., 1.);
   float tick = ring * chosen * (.35 + .65 * smoothstep(.1, .6, edge)) * (1. - smoothstep(30., 70., dist) * .75);
   float dry = smoothstep(.62, .82, vn(vec2(vU * 40. + 3., vY * .35))) * shade * edge * (1. - far) * .6;
   float foot = (1. - smoothstep(.0, .14, vY)) * .5 * (1. - smoothstep(15., 40., dist));
@@ -262,10 +269,12 @@ void main() {
   // (its ink: as the ink thins, left out a culm at a time by its own pick (a near one held longest), so the drawing
   // thins by omission, toward the paper, rather than standing as a fence of outlines)
   float q = h21(vec2(vI.y * 3.7, 5.3)) * mix(.45, 1., smoothstep(6., 28., dist));
-  float inkA = inkAt(drawn, q);
+  // (its ink laid up it from the foot, as one long stroke, by the culm's amount; lighter where its internodes are
+  // further out)
+  float aw = inkAt(vOut, q), inkA = laidLen(aw, vY / max(vI.z, .1)) * laidW(min(aw, inkAt(drawn, q))) * fadeOf(aw);
   // (a culm goes from the page whole, where none of its layers reach it (asked at its least-out point); along it, an
-  // internode at a time, its colour gives way, then its light, then its ink: never a cylinder cut off mid-internode)
-  if (uClay < .5 && uColK.x * hasS(vOut, uRch.x, uRch.w) < .02 && has(vOut, uRch.y) * dot(uLitK.xyz, vec3(1.)) < .02 && inkAt(vOut, q) < .04) discard;
+  // internode at a time, its colour gives way, then its light: never a cylinder cut off mid-internode)
+  if (uClay < .5 && uColK.x * hasS(vOut, uRch.x, uRch.w) < .02 && has(vOut, uRch.y) * dot(uLitK.xyz, vec3(1.)) < .02 && aw < .002) discard;
   emit(c, colR, inkA, .4, allow, mark);
 }`;
 const DEPTH_FS = `#version 300 es
@@ -302,7 +311,7 @@ void main() {
   // (the blades: three to five from a twig near the top, drooping: 个 and 介)
   vec2 stem = vec2(.5 + (vSeed - .5) * .2, .82);
   int n = 3 + int(vSeed * 2.99);
-  float inside = 0., rim = 1., best = 0.;
+  float inside = 0., rim = 1., best = 0., along = 0.;
   for (int i = 0; i < 5; i++) {
     if (i >= n) break;
     float fi = float(i), s = fract(vSeed * 13.7 + fi * .618);
@@ -311,7 +320,7 @@ void main() {
     float len = .55 + s * .25, a = dot(pp, d) / len, bb = dot(pp, vec2(-d.y, d.x)) / len;
     float w = .12 * pow(max(0., sin(3.1416 * pow(clamp(a, 0., 1.), .75))), .8) * (1. - .25 * a);
     float e = w - abs(bb + a * a * .06 * (s - .5));
-    if (a > 0. && a < 1. && e > 0.) { inside = 1.; rim = min(rim, e / max(w, 1e-3)); best = max(best, s); }
+    if (a > 0. && a < 1. && e > 0.) { inside = 1.; rim = min(rim, e / max(w, 1e-3)); best = max(best, s); along = a; }
   }
   if (inside < .5) discard;
   vec3 V = normalize(uEye - vW), N = faceforward(vN, -V, vN);
@@ -324,8 +333,9 @@ void main() {
   float near = 1. - smoothstep(8., 26., distance(vW, uEye));
   float mark = max((1. - smoothstep(.0, .3, rim)) * near * .85, (1. - colR) * (.22 + .16 * best)) * uMarks;
   // (left out whole, a spray at a time by its own pick, where no layer reaches it)
-  float inkA = inkAt(vOut, fract(vSeed * 17.3));
-  if (uClay < .5 && colR < .02 && litR * dot(uLitK.xyz, vec3(1.)) < .02 && inkA < .04) discard;
+  // (its ink laid out each blade from the stem, then to its weight)
+  float sa = inkAt(vOut, fract(vSeed * 17.3)), inkA = laid(sa, along);
+  if (uClay < .5 && colR < .02 && litR * dot(uLitK.xyz, vec3(1.)) < .02 && sa < .002) discard;
   emit(c, colR, inkA, .6, near, mark);
 }`;
 
@@ -393,7 +403,8 @@ void main() {
   // structure (edges, rims, contours) carries it, not the litter)
   float mark = leafMark * .55 * uMarks * (.25 + .75 * colR);
   // (the land's never left out: past its layers it's the paper, which it gives its own place in the light to)
-  emit(c, colR, has(o, uRch.z), .2, 1., mark);
+  // (its ink by the smooth measure, not the broken one its colour gives out by: an outline along it thins, never dots)
+  emit(c, colR, laidW(has(outAt(vW), uRch.z)) * has(outAt(vW), uRch.z), .2, 1., mark);
 }`;
 
 const SOLID_VS = COMMON + `
@@ -454,8 +465,10 @@ void main() {
   // (a stone, a step, a root: the land's colour; left out whole, by its own pick, where no layer reaches it)
   float colR, litR;
   vec3 c = layered(alb, N, vW, .2, .85, vec3(0.), uColK.z, 0., vOut, colR, litR);
-  float inkA = inkAt(vOut, fract(vSeed * 5.13 + .3));
-  if (uClay < .5 && colR < .02 && litR * dot(uLitK.xyz, vec3(1.)) < .02 && inkA < .04) discard;
+  // (its ink laid from its middle out to its sides, then to its weight; a step's by weight alone, as one of a flight, so
+  // the flight's edge thins as one line, never a row of dashes, a stone each)
+  float sa = inkAt(vOut, fract(vSeed * 5.13 + .3)), inkA = laid(sa, uKind == 1 ? 0. : clamp(abs(vL.x), 0., 1.));
+  if (uClay < .5 && colR < .02 && litR * dot(uLitK.xyz, vec3(1.)) < .02 && sa < .002) discard;
   emit(c, colR, inkA, uKind == 1 ? .8 : .7, 1., mark * uMarks);
 }`;
 
@@ -513,7 +526,11 @@ void main() {
       if (F.x < .15) continue;
       // (lighter with distance: a far culm is a fine grey line, not a dark one)
       float zf = min(z, zq);
-      ink = max(ink, max(dj, kj) * F.y * F.z * mix(1., .28, smoothstep(10., 40., zf)) * (1.15 - .35 * C.a));
+      // (the edge found first, whole, then given its weight: so a light line is a light line, not the finding's flicker)
+      // (where two kinds meet with no step in depth (a stone sat in the ground), the line is either's, the stronger: never
+      // flickering, pixel by pixel, between the one side's weight and the other's)
+      float jw = max(clamp(dj * 2.5, 0., 1.) * F.y * F.z, kj * max(A.y * A.z, Aq.y * Aq.z));
+      ink = max(ink, jw * mix(1., .28, smoothstep(10., 40., zf)) * (1.15 - .35 * C.a));
     }
     // (and the things' own marks, as far as their ink reaches)
     ink = max(ink, A.w);
@@ -546,8 +563,8 @@ void main() {
 const STROKE_VS = COMMON + `
 layout(location = 0) in vec3 aP; layout(location = 1) in vec3 aS; layout(location = 2) in vec2 aW; layout(location = 3) in vec2 aT;
 layout(location = 4) in vec3 aF; layout(location = 5) in vec3 aAnchor;
-uniform vec2 uRes;
-out float vAcross; out vec3 vW; flat out vec3 vF; flat out float vOut; flat out float vKeep;
+uniform vec2 uRes; uniform float uAll;
+out float vAcross; out vec3 vW; flat out vec3 vF; flat out float vOut; flat out float vAmt; out float vAlong;
 // (the least a mark of each family is on the screen, in pixels: a rim most, then a string, a contact, an edge; detail less)
 // (primary structure (a rim, a trail's edge, a flight's string and nosings, a stone's contact) about a pixel; the secondary
 // (hachures, a face's strokes, contours, roots) finer, under a pixel, so they texture rather than rule)
@@ -560,32 +577,34 @@ void main() {
   float px = c0.w > .01 && c1.w > .01 ? length((c1.xy / c1.w - c0.xy / c0.w) * .5 * uRes) : 1.;
   // (and no wider than a brush lays it, however near: a stroke at your feet isn't a wedge)
   float k = px < least(fam) ? min(5., least(fam) / max(px, 1e-3)) : min(1., least(fam) * 2.4 / px);
-  vec3 p = aP + side * aW.x * aW.y * aT.x * k + toEye * min(.08, distance(uEye, aP) * .004);
+  // (how much of it's laid: its ink here, and thinned with distance (the detail sooner), each by its own pick, never
+  // switched; laid out from its middle, its length first and then its weight (its width))
+  float pick = aF.z, d0 = distance(aAnchor, uEye);
+  vOut = max(outAt(aAnchor), outAt(aP)) + (pick - .5) * .14;
+  bool detail0 = (fam > 1.5 && fam < 4.5) || (fam > 5.5 && fam < 6.5);
+  float keep = detail0 ? 1. - smoothstep(12., 60., d0) * .85 : 1. - smoothstep(60., 140., d0) * .7;
+  vAmt = uAll > .5 ? 1. : min(inkAt(vOut, pick), clamp((keep - pick) / .2 + .5, 0., 1.));
+  vAlong = abs(aT.y - .5) * 2.;
+  vec3 p = aP + side * aW.x * aW.y * aT.x * k * laidW(vAmt) + toEye * min(.08, distance(uEye, aP) * .004);
   vAcross = aT.x; vW = p; vF = aF;
-  float d = distance(aAnchor, uEye);
-  // (asked here, a stretch of it at a time, so a long stroke lifts off before the paper rather than running into it)
-  vOut = max(outAt(aAnchor), outAt(aP)) + (aF.z - .5) * .14;
-  // (the detail (hachures, a face's strokes, contours, nosings) thinned with distance, so far off the structure's kept)
-  bool detail = (fam > 1.5 && fam < 4.5) || (fam > 5.5 && fam < 6.5);
-  vKeep = detail ? 1. - smoothstep(12., 60., d) * .85 : 1. - smoothstep(60., 140., d) * .7;
   gl_Position = uVP * vec4(p, 1.);
 }`;
 const STROKE_FS = COMMON + `
-in float vAcross; in vec3 vW; flat in vec3 vF; flat in float vOut; flat in float vKeep;
+in float vAcross; in vec3 vW; flat in vec3 vF; flat in float vOut; flat in float vAmt; in float vAlong;
 layout(location = 0) out vec4 oC; layout(location = 1) out vec4 oA;
 uniform float uMarks; uniform float uAll;
 void main() {
   float fam = floor(vF.x + .001), weight = fract(vF.x + .001), persist = vF.y, pick = vF.z;
   // (left out whole: through the sparse marks fewer and fewer, by each stroke's own pick, none at the page)
-  float inkA = inkAt(vOut, pick);
-  if (uAll < .5 && (pick > vKeep || inkA < .04)) discard;
+  float lay = uAll > .5 ? 1. : laidLen(vAmt, vAlong) * fadeOf(vAmt);
+  if (lay < .01) discard;
   float aa = max(fwidth(vAcross), 1e-4);
   float cov = 1. - smoothstep(1. - aa, 1. + aa * .5, abs(vAcross));
   float dry = smoothstep(.18, .42, vn(vW.xz * 6. + vW.y * 2. + fam * 3.1));
   // (lighter with distance, as the outlines are: a far trail's edge, seen along, is a fine grey line, not a rule; a rim
   // holds most)
   float far = smoothstep(8., 45., distance(vW, uEye)) * (fam > .5 && fam < 1.5 ? .4 : .7);
-  float a = uAll > .5 ? cov : cov * min(1., .4 + weight) * mix(.6, 1., dry) * mix(persist * uUnder, 1., 1. - uColK.z * hasS(vOut, uRch.x, uRch.w * 2.2)) * (1. - far) * uMarks * uInkK.y * inkA;
+  float a = uAll > .5 ? cov : cov * min(1., .4 + weight) * mix(.6, 1., dry) * mix(persist * uUnder, 1., 1. - uColK.z * hasS(vOut, uRch.x, uRch.w * 2.2)) * (1. - far) * uMarks * uInkK.y * lay;
   if (a < .02) discard;
   oC = vec4(0.); oA = vec4(0., 0., 1., min(1., a * 1.15));
 }`;
@@ -693,8 +712,8 @@ export class Renderer {
   private get reaches() { const k = 1 - Math.min(1, Math.max(0, this.dials.toward)), d = this.dials; return [d.colourreach * k, d.lightreach * k, d.inkreach * k]; }
   /** how far out in the world anything's drawn at all (metres) */
   private get farthest() { return Math.min(320, Math.max(...this.reaches) * this.dials.distance * 1.15); }
-  /** culms in whole up to / gone by (metres) */
-  private get pick() { return [this.farthest * 0.35, this.farthest * 0.85]; }
+  /** culms in whole up to / gone by (metres): past every layer's reach, so their leaving is never seen */
+  private get pick() { return [this.farthest, this.farthest * 1.3]; }
   private shadowTex: WebGLTexture | null = null; private shadowFbo: WebGLFramebuffer | null = null; private lightVP: number[] = new Array(16).fill(0); readonly shadows: boolean;
   sunDir = norm([-0.6, 0.44, 0.55]);
 

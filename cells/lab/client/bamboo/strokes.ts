@@ -28,31 +28,38 @@ type V3 = [number, number, number];
 
 const rng = (...n: number[]) => { let s = hash(...n) >>> 0; return () => { s = hash(s, 0x51ed) >>> 0; return s / 4294967296; }; };
 
-/** a ribbon through the points, tapering to a hair at both ends, swelling a little past its middle */
-function ribbon(out: number[], pts: V3[], w: number, fam: number, weight: number, persist: number, pick: number) {
+/** a ribbon through the points, tapering to a hair at both ends, swelling a little past its middle; \`span\`: where it lies
+ * along the whole line it's a run of (its along, which the renderer lays it in by), and that line's middle */
+function ribbon(out: number[], pts: V3[], w: number, fam: number, weight: number, persist: number, pick: number, span?: { t0: number; t1: number; mid: V3 }) {
   if (pts.length < 2) return;
   const L: number[] = [0];
   for (let i = 1; i < pts.length; i++) L.push(L[i - 1] + Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1], pts[i][2] - pts[i - 1][2]));
-  const total = L[L.length - 1] || 1, m = pts[Math.floor(pts.length / 2)];
+  const total = L[L.length - 1] || 1, m = span?.mid ?? pts[Math.floor(pts.length / 2)];
   const V = (i: number, s: number) => {
     const t = L[i] / total, a = pts[Math.max(0, i - 1)], b = pts[Math.min(pts.length - 1, i + 1)];
     // (the way it runs here: the renderer turns it across that, to the eye, so it's never lost lying flat on the ground)
     const dx = b[0] - a[0], dy = b[1] - a[1], dz = b[2] - a[2], l = Math.hypot(dx, dy, dz) || 1;
     const taper = Math.max(0.12, Math.pow(Math.sin(Math.PI * Math.pow(t, 0.85)), 0.7)), p = pts[i];
-    return [p[0], p[1], p[2], dx / l, dy / l, dz / l, w / 2, taper, s, t, fam + Math.min(0.99, weight), persist, pick, m[0], m[1], m[2]];
+    const along = span ? span.t0 + (span.t1 - span.t0) * t : t;
+    return [p[0], p[1], p[2], dx / l, dy / l, dz / l, w / 2, taper, s, along, fam + Math.min(0.99, weight), persist, pick, m[0], m[1], m[2]];
   };
   for (let i = 0; i < pts.length - 1; i++) {
     const a = V(i, -1), b = V(i, 1), c = V(i + 1, 1), d = V(i + 1, -1);
     out.push(...a, ...b, ...c, ...a, ...c, ...d);
   }
 }
-/** a line broken into strokes: runs of `on` metres (give or take), gaps of `off`, each run its own pick */
+/** a line broken into strokes: runs of `on` metres (give or take), gaps of `off`; one line still, its one pick, its runs
+ * laid in order along it (from its middle out), so as its ink comes and goes it's one stroke with breaks in it, never a
+ * scatter of dashes */
 function broken(out: number[], pts: V3[], r: () => number, on: [number, number], off: [number, number], w: number, fam: number, weight: (i: number) => number, persist: number) {
+  const L: number[] = [0];
+  for (let k = 1; k < pts.length; k++) L.push(L[k - 1] + Math.hypot(pts[k][0] - pts[k - 1][0], pts[k][2] - pts[k - 1][2]));
+  const total = L[L.length - 1] || 1, mid = pts[Math.floor(pts.length / 2)], pick = r();
   let i = 0;
   while (i < pts.length - 1) {
-    const run: V3[] = [pts[i]]; let len = 0, want = on[0] + r() * (on[1] - on[0]);
+    const i0 = i, run: V3[] = [pts[i]]; let len = 0, want = on[0] + r() * (on[1] - on[0]);
     while (i < pts.length - 1 && len < want) { i++; len += Math.hypot(pts[i][0] - run[run.length - 1][0], pts[i][2] - run[run.length - 1][2]); run.push(pts[i]); }
-    if (run.length >= 2) ribbon(out, run, w * (0.8 + r() * 0.4), fam, weight(i), persist, r());
+    if (run.length >= 2) ribbon(out, run, w * (0.8 + r() * 0.4), fam, weight(i), persist, pick, { t0: L[i0] / total, t1: L[i] / total, mid });
     let gap = 0; want = off[0] + r() * (off[1] - off[0]);
     while (i < pts.length - 1 && gap < want) { i++; gap += Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][2] - pts[i - 1][2]); }
   }
