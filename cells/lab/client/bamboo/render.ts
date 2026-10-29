@@ -116,8 +116,10 @@ uniform vec3 uSunC; uniform vec3 uSky; uniform float uOpen; uniform vec4 uLitK; 
 uniform sampler2DShadow uShadow; uniform mat4 uLightVP; uniform float uShadowOn;
 float dapple(vec3 p) {
   vec2 q = p.xz - uSun.xz / max(uSun.y, .2) * (16. - p.y * .5);
-  q += vec2(sin(uTime * .7), cos(uTime * .53)) * .25;
-  float g = fbm2(q * .55) * .55 + vn(q * 2.4) * .45;
+  // (the pattern stays where the canopy puts it: only its small patches flicker as the leaves move, each its own way,
+  // more in a gust; never the whole of it sliding, which reads as the ground swimming)
+  vec2 fl = vec2(sin(uTime * 1.3 + q.y * 1.7), cos(uTime * 1.1 + q.x * 1.9)) * (.06 + .1 * uGust.w);
+  float g = fbm2(q * .55) * .55 + vn(q * 2.4 + fl) * .45;
   return smoothstep(.5 - uOpen * .1, .57 - uOpen * .1, g);
 }
 float culmShade(vec3 p) {
