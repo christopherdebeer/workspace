@@ -102,8 +102,8 @@ float outAt(vec3 p) {
   return max(world, m + uFoc.y * .2 * (dl > 0. ? dl : -dl * .25));
 }
 // (how far out of focus a point at this distance is, signed: below 0 nearer than the focus (growing fast as it nears the
-// eye), above it beyond (to 1 far off), as a lens has it; one measure every layer reads its own way)
-float cocAt(float d) { return uFocus.x * clamp(1. - uFoc.x / max(d, .1), -2.5, 1.); }
+// eye, as much as \`near\` lets it), above it beyond (to 1 far off), as a lens has it; one measure every layer reads its own way)
+float cocAt(float d) { float c = clamp(1. - uFoc.x / max(d, .1), -2.5, 1.); return uFocus.x * (c < 0. ? c * uFoc.w : c); }
 // (whether a layer's here, at so far out, given its reach: whole inside it, gone past it, over a soft edge)
 float hasS(float o, float r, float soft) { return 1. - smoothstep(r * (1. - soft), r * (1. + soft), o); }
 float has(float o, float r) { return hasS(o, r, uRch.w); }
@@ -781,7 +781,8 @@ uniform vec2 uPaperRes;
 ${NOISE}
 float lz(vec2 p) { float d = texture(uZ, p).r; return uNear * uFar / (uFar - d * (uFar - uNear)); }
 // (focus, as the vertex stages have it: signed, how far out of focus at this depth)
-float cocP(float z) { return uFocA.x * clamp(1. - uFocD / max(z, .1), -2.5, 1.); }
+uniform float uNearBlur;
+float cocP(float z) { float c = clamp(1. - uFocD / max(z, .1), -2.5, 1.); return uFocA.x * (c < 0. ? c * uNearBlur : c); }
 // (how much a thing of this kind at this depth softens: the land (ground .2, stones and steps .7+) not when near)
 float rOf(float z, float kind) { float c = cocP(z); bool land = (kind > .15 && kind < .3) || kind > .65; return c < 0. && land ? 0. : abs(c); }
 // (what's laid on the paper at a point, colour and light, before the ink: a thing's own, or the sky and far ranges over
@@ -1128,7 +1129,7 @@ export class Renderer {
     gl.uniform4fv(u('uGust'), f.gust); gl.uniform1f(u('uClay'), this.clay ? 1 : 0); gl.uniform3fv(u('uSunC'), [3.0, 2.45, 1.6]); gl.uniform3fv(u('uSky'), [0.5, 0.55, 0.6]); gl.uniform1f(u('uOpen'), 0);
     gl.uniform2fv(u('uPick'), this.pick); gl.uniform1f(u('uMarks'), this.marks); gl.uniform3fv(u('uRight'), right);
     const d = this.dials;
-    gl.uniform4fv(u('uRch'), [...this.reaches, 0.12]); gl.uniform4fv(u('uFoc'), [this.focus, d.depth, d.distance, 0]);
+    gl.uniform4fv(u('uRch'), [...this.reaches, 0.12]); gl.uniform4fv(u('uFoc'), [this.focus, d.depth, d.distance, d.near]);
     gl.uniform4fv(u('uColK'), [d.culms, d.leaves, d.terrain, 0]); gl.uniform4fv(u('uLitK'), [d.shade, d.cast, d.hollow, d.landlight]);
     gl.uniform4fv(u('uInkK'), [d.lines, d.strokes, d.edges, d.inkfade]); gl.uniform4fv(u('uHand'), [d.open, d.swell, d.grain, 0]); gl.uniform1f(u('uPxW'), this.pxW); gl.uniform4fv(u('uFocus'), [d.aperture, d.wet, d.dry, d.soften]); gl.uniform1f(u('uRelief'), d.relief); gl.uniform1f(u('uUnder'), d.under); gl.uniform3fv(u('uPaperC'), PAPER);
     gl.uniform1f(u('uAway'), (1 - Math.min(1, d.toward)) * Math.min(1, d.terrain));
@@ -1255,7 +1256,7 @@ export class Renderer {
     gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, this.texA); gl.uniform1i(u('uA'), 1);
     gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, this.texZ); gl.uniform1i(u('uZ'), 2);
     gl.uniform2fv(u('uRes'), [w, h]); gl.uniform2fv(u('uPaperRes'), f.paper ?? [w, h]); gl.uniform1f(u('uNear'), near); gl.uniform1f(u('uFar'), far); gl.uniform1f(u('uPx'), Math.max(1, h / 900));
-    gl.uniform3fv(u('uPaper'), PAPER); gl.uniform4fv(u('uHand'), [this.dials.open, this.dials.swell, this.dials.grain, 0]); gl.uniform4fv(u('uFocA'), [this.dials.aperture, this.dials.wet, this.dials.dry, this.dials.soften]); gl.uniform1f(u('uFocD'), this.focus); gl.uniform3fv(u('uInk'), [0.13, 0.12, 0.105]); gl.uniform3fv(u('uSunUV'), this.sunUV);
+    gl.uniform3fv(u('uPaper'), PAPER); gl.uniform4fv(u('uHand'), [this.dials.open, this.dials.swell, this.dials.grain, 0]); gl.uniform4fv(u('uFocA'), [this.dials.aperture, this.dials.wet, this.dials.dry, this.dials.soften]); gl.uniform1f(u('uFocD'), this.focus); gl.uniform1f(u('uNearBlur'), this.dials.near); gl.uniform3fv(u('uInk'), [0.13, 0.12, 0.105]); gl.uniform3fv(u('uSunUV'), this.sunUV);
     gl.uniform1f(u('uClean'), this.clean ? 1 : 0); gl.uniform1f(u('uMarks'), this.marks); gl.uniform1f(u('uClay'), this.clay ? 1 : 0);
     this.attr(0, this.vbo.screen.buf, 2, 2, 0);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
