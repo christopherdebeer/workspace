@@ -403,7 +403,7 @@ void main() {}`;
 const SPRAY_VS = COMMON + `
 layout(location = 0) in vec2 aUV;
 layout(location = 1) in vec4 iA; layout(location = 2) in vec4 iB; layout(location = 3) in vec4 iC; layout(location = 4) in vec4 iD;
-out vec3 vW; out vec2 vUV; out float vSeed; out vec3 vN; out float vSize; flat out float vOut; flat out float vCulmInk;
+out vec3 vW; out vec2 vUV; out float vSeed; out vec3 vN; out vec3 vRt; out vec3 vUp; out float vSize; flat out float vOut; flat out float vCulmInk;
 uniform vec2 uPick; uniform vec3 uRight;
 void main() {
   vec3 b = iA.xyz; float h = iA.w; vec2 lean = iB.xy; float phase = iB.z, pick = iB.w;
@@ -417,7 +417,7 @@ void main() {
   vec3 r0 = vec3(cos(yaw), 0., -sin(yaw)), right = normalize(mix(r0, uRight, .55));
   vec3 up = normalize(vec3(0., 1., 0.) + cross(right, vec3(0., 1., 0.)) * tilt);
   vW = anchor + right * aUV.x * size + up * (aUV.y - .75) * size;
-  vUV = aUV + .5; vSeed = iD.z; vSize = size; vN = normalize(cross(right, up));
+  vUV = aUV + .5; vSeed = iD.z; vSize = size; vN = normalize(cross(right, up)); vRt = right; vUp = up;
   // (a spray's drawn as its culm is at eye height, a little further along for being high, and each its own way)
   // (and where it stands in the frame itself, so the canopy at the top of the frame goes to the page too)
   vOut = outAt(anchor) + (fract(pick * 7.31) - .5) * .14 + smoothstep(4., h, sy) * .1 + (iD.z - .5) * .1 + (vn(b.xz * .045) - .5) * .7;
@@ -431,25 +431,38 @@ void main() {
   gl_Position = uVP * vec4(vW, 1.);
 }`;
 const SPRAY_FS = COMMON + LIGHT + OUT + `
-in vec3 vW; in vec2 vUV; in float vSeed; in vec3 vN; in float vSize; flat in float vOut; flat in float vCulmInk;
+in vec3 vW; in vec2 vUV; in float vSeed; in vec3 vN; in vec3 vRt; in vec3 vUp; in float vSize; flat in float vOut; flat in float vCulmInk;
 uniform float uMarks;
 void main() {
-  // (the blades: three to five from a twig near the top, drooping: 个 and 介)
+  // (the blades: three to seven from a twig near the top, drooping, 个 and 介, each its own: its own angle off the twig,
+  // its own length, curl and droop, and turned on its own length, so one shows its face to the light and the next its
+  // edge, narrowing as it turns; the one in front wins)
   vec2 stem = vec2(.5 + (vSeed - .5) * .2, .82);
-  int n = 3 + int(vSeed * 2.99);
-  float inside = 0., rim = 1., best = 0., along = 0., ww = .1, acr = 1.;
-  for (int i = 0; i < 5; i++) {
+  int n = 3 + int(vSeed * 4.99);
+  float inside = 0., rim = 1., best = 0., along = 0., ww = .1, acr = 1., front = -1., roll = 0., side = 0., edged = 0.; vec2 bd = vec2(0., -1.);
+  for (int i = 0; i < 7; i++) {
     if (i >= n) break;
-    float fi = float(i), s = fract(vSeed * 13.7 + fi * .618);
-    float ang = -1.5708 + (fi - float(n - 1) * .5) * (.62 + s * .2) + (s - .5) * .3;
+    float fi = float(i), s = fract(vSeed * 13.7 + fi * .618), s2 = fract(vSeed * 7.31 + fi * .377);
+    float ang = -1.5708 + (fi - float(n - 1) * .5) * (.5 + s * .25) + (s2 - .5) * .75;
     vec2 d = vec2(cos(ang), sin(ang)); vec2 pp = vUV - stem;
-    float len = .55 + s * .25, a = dot(pp, d) / len, bb = dot(pp, vec2(-d.y, d.x)) / len;
-    float w = .12 * pow(max(0., sin(3.1416 * pow(clamp(a, 0., 1.), .75))), .8) * (1. - .25 * a);
-    float e = w - abs(bb + a * a * .06 * (s - .5));
-    if (a > 0. && a < 1. && e > 0.) { inside = 1.; rim = min(rim, e / max(w, 1e-3)); best = max(best, s); along = a; ww = w * len; acr = 1. - e / max(w, 1e-3); }
+    float len = .4 + s * .42, a = dot(pp, d) / len;
+    // (its curl: the midline bowing one way or the other, more toward the tip)
+    float bb = dot(pp, vec2(-d.y, d.x)) / len + a * a * (.05 + .14 * (s2 - .5));
+    // (its turn on its own length: seen across its face it's full width, turned to its edge a sliver)
+    float rl = (s2 - .5) * 2.6 + a * (s - .5) * 2.4, f = mix(.22, 1., abs(cos(rl)));
+    float w = .12 * f * pow(max(0., sin(3.1416 * pow(clamp(a, 0., 1.), .75))), .8) * (1. - .25 * a);
+    float e = w - abs(bb);
+    if (a > 0. && a < 1. && e > 0. && s2 > front) {
+      front = s2; inside = 1.; rim = e / max(w, 1e-3); best = s; along = a; ww = w * len; acr = 1. - e / max(w, 1e-3);
+      roll = rl; side = sign(bb) * sign(s - .5); bd = d;
+      // (an edge inked only on some blades, and on one side of each: a few chosen strokes, not every blade outlined)
+      edged = step(.5, fract(s * 7.13 + vSeed * 3.1));
+    }
   }
   if (inside < .5) discard;
-  vec3 V = normalize(uEye - vW), N = faceforward(vN, -V, vN);
+  vec3 V = normalize(uEye - vW), d3 = normalize(vRt * bd.x + vUp * bd.y);
+  // (the blade's own face, turned on its length)
+  vec3 Nb = normalize(vN * cos(roll) + cross(d3, vN) * sin(roll)), N = faceforward(Nb, -V, Nb);
   // (lit: dark ink-green in shade, yellow-green in the sun, glowing gold-green where the sun's behind it)
   float sun = dapple(vW), back = pow(max(0., dot(-V, uSun)), 2.5) * sun;
   vec3 alb = mix(vec3(.18, .26, .12), vec3(.5, .6, .24), .35 + .65 * best);
@@ -463,7 +476,7 @@ void main() {
   float dd = distance(vW, uEye), near = 1. - smoothstep(8., 26., dd), halfpx = ww * vSize / max(dd * uPxW, 1e-5);
   float rimL = (1. - smoothstep(.55, 1.3, rim * halfpx)) * mix(.35, 1., smoothstep(.6, 2.5, halfpx)) * mix(1., .35, smoothstep(10., 40., dd));
   // (its edge is its outline, on the outlines' dial with the culms' contours; only the fill is its own mark)
-  gContour = rimL * .85 * uMarks;
+  gContour = rimL * .85 * uMarks * edged * mix(.15, 1., step(0., side)) * (1. - .5 * smoothstep(.75, 1., along));
   float mark = (1. - colR) * (.1 + .1 * best) * (1. - smoothstep(15., 40., dd) * .7) * uMarks;
   // (left out whole, a spray at a time by its own pick, where no layer reaches it)
   // (its ink laid out each blade from the stem, then to its weight)
@@ -887,10 +900,6 @@ void main() {
     col = mix(col, uSheet * 1.02, clamp((disc + halo * (1. - disc)) * uNight * open, 0., 1.));
   }
   col = mix(col, uInk, clamp(ink, 0., 1.) * .9);
-  // (the last few pixels at every edge are the paper, whatever's drawn: its edge torn a little, not a ruled line)
-  vec2 pxp = vUV * uPaperRes; float edgePx = min(min(pxp.x, uPaperRes.x - pxp.x), min(pxp.y, uPaperRes.y - pxp.y));
-  float keepOut = 10. * max(1., uPaperRes.y / 900.) * (.7 + .6 * vn(vec2(pxp.x + pxp.y, pxp.x - pxp.y) * .03));
-  col = mix(col, uSheet * (1. + grain), 1. - smoothstep(keepOut * .6, keepOut, edgePx));
   o = vec4(col, 1.);
 }`;
 

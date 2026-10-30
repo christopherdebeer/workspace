@@ -353,7 +353,7 @@ export class World {
     }
     const tall = culms.length;
     // ─── branches and their leaves: a branch at the nodes of the crown, side to side up the culm, rising off it and
-    // arching out, the lower ones longer and flatter; its leaves at its middle and its end; and a tuft at the culm's tip ───
+    // arching out, the lower ones longer and flatter; its leaves in bunches along its outer half and at its end; and a tuft at the culm's tip ───
     const sprays: Spray[] = [], twigs: Twig[] = [];
     culms.forEach((c, k) => {
       const young = c.r < 0.036, nb = young ? 3 + Math.floor(u01(s, ci, cj, k, 20) * 2) : 4 + Math.floor(u01(s, ci, cj, k, 20) * 4);
@@ -364,7 +364,7 @@ export class World {
         const L = (0.5 + 1.5 * (1 - ff) ** 0.8) * (0.75 + 0.5 * u01(s, ci, cj, k, m, 23)) * reach, el = 0.3 + 0.55 * ff + (u01(s, ci, cj, k, m, 24) - 0.5) * 0.3;
         const hor = L * Math.cos(el), rise = L * Math.sin(el), y = c.h * f;
         twigs.push({ c: k, y, rise, hor, ang, rad: Math.min(0.022, 0.22 * c.r), seed: u01(s, ci, cj, k, m, 25) });
-        for (const [t, sz] of [[0.6, 0.5 + 0.3 * u01(s, ci, cj, k, m, 26)], [1, 0.7 + 0.4 * u01(s, ci, cj, k, m, 27)]]) {
+        for (const [t, sz] of [[0.45, 0.45 + 0.3 * u01(s, ci, cj, k, m, 34)], [0.72, 0.55 + 0.3 * u01(s, ci, cj, k, m, 26)], [1, 0.7 + 0.4 * u01(s, ci, cj, k, m, 27)]]) {
           sprays.push({ c: k, y: y + rise * t, ox: Math.cos(ang) * hor * t, oz: Math.sin(ang) * hor * t, size: sz * (young ? 0.7 : 1), yaw: ang + (u01(s, ci, cj, k, m, t, 28) - 0.5) * 1.2, tilt: (u01(s, ci, cj, k, m, t, 29) - 0.5) * 0.9, seed: u01(s, ci, cj, k, m, t, 30) });
         }
       }
