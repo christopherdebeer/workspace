@@ -97,13 +97,25 @@ vec3 culmRest(vec3 b, float h, vec2 lean, float phase, float y, float bend) { gW
 // at every edge of it (measured near-square, so top and bottom as much as the sides), and in depth (further for being
 // far beyond the focus, a little for being much nearer); or in the world, 1 at \`distance\` metres; whichever is further.
 // A thing asks it at a point of its own, so it's drawn one way whole, never cut by a line on the screen)
+uniform float uHeld;
 float outAt(vec3 p) {
   float d = distance(p, uEye), world = d / max(uFoc.z, 1.);
   vec4 cp = uVP * vec4(p, 1.);
   if (cp.w < .05) return world;
   vec2 n = abs(cp.xy / cp.w);
+  // (the bottom of the frame, the ground at your feet, held as much as \`held\` asks: the page comes in from the sides
+  // and the top first, as a painting keeps its foreground)
+  if (cp.y < 0.) n.y *= 1. - .75 * uHeld;
   float m = pow(pow(n.x, 3.) + pow(n.y, 3.), 1. / 3.), dl = log2(max(d, .3) / max(uFoc.x, 1.));
   return max(world, m + uFoc.y * .2 * (dl > 0. ? dl : -dl * .25));
+}
+// (the land as a column: a point of the ground, a stone, a step, a stroke on it, as far out as the least of it and the
+// air above it (3 and 8 m up, where what stands on it is seen), so the ground is never gone from under a culm that's
+// still drawn; a point above that's behind the eye doesn't count)
+float outCol(vec3 p) {
+  float o = outAt(p);
+  for (int k = 0; k < 2; k++) { vec3 q = p + vec3(0., k == 0 ? 3. : 8., 0.); if ((uVP * vec4(q, 1.)).w > .05) o = min(o, outAt(q) + .03); }
+  return o;
 }
 // (how far out of focus a point at this distance is, signed: below 0 nearer than the focus (growing fast as it nears the
 // eye, as much as \`near\` lets it), above it beyond (to 1 far off), as a lens has it; one measure every layer reads its own way)
@@ -636,7 +648,7 @@ void main() {
   vec2 down2 = N.xz / max(length(N.xz), .05), across2 = vec2(-down2.y, down2.x);
   float ac2 = (vW.x - vW.z) * .707, dn2 = vW.y * 2.2 + (vW.x + vW.z) * .25;
   float stroke = vn(vec2(ac2 * .35, dn2 * 3.2)) * .6 + vn(vec2(ac2 * 1.1, dn2 * 9.)) * .4;
-  float o = outAt(vW) + ((fbm2(vW.xz * .5 + 3.) - .5) * .5 + (stroke - .5) * 1.4 + (fbm2(vW.xz * .09 + 7.) - .5) * 1.6 * smoothstep(10., 40., dist)) / 3.;
+  float o = outCol(vW) + ((fbm2(vW.xz * .5 + 3.) - .5) * .5 + (stroke - .5) * 1.4 + (fbm2(vW.xz * .09 + 7.) - .5) * 1.6 * smoothstep(10., 40., dist)) / 3.;
   o += leaf >= 0. ? (leaf - .5) * .27 : .08 + (vRock > .5 ? -.1 : 0.);
   float colR, litR;
   // (the land's relief, as the light finds it: the litter's small lumps on the level; grooves down a bank, as rain cuts
@@ -689,7 +701,8 @@ void main() {
   // (its ink by the smooth measure, not the broken one its colour gives out by: an outline along it thins, never dots)
   // (open: the land's own silhouettes left to the paper in long stretches, as the eye completes a hill)
   float gOpen = mix(1., .3 + .7 * smoothstep(.42, .62, vn(vW.xz * .12 + 4.)), uHand.x);
-  emit(c, colR, laidW(has(outAt(vW), uRch.z)) * has(outAt(vW), uRch.z), .2, gOpen, mark);
+  float oc = outCol(vW);
+  emit(c, colR, laidW(has(oc, uRch.z)) * has(oc, uRch.z), .2, gOpen, mark);
 }`;
 
 const SOLID_VS = COMMON + `
@@ -718,7 +731,7 @@ void main() {
   float c = cos(yaw), s = sin(yaw);
   p = vec3(c * p.x + s * p.z, p.y, -s * p.x + c * p.z); n = vec3(c * n.x + s * n.z, n.y, -s * n.x + c * n.z);
   vW = iA.xyz + p; vN = n; vL = aP; vMoss = iB.z; vSeed = iB.w;
-  vOut = uDepth == 1 ? 0. : outAt(iA.xyz + vec3(0., .2, 0.)) + (fract(iA.x * .37 + iA.z * .71) - .5) * .14;
+  vOut = uDepth == 1 ? 0. : outCol(iA.xyz + vec3(0., .2, 0.)) + (fract(iA.x * .37 + iA.z * .71) - .5) * .14;
   gl_Position = (uDepth == 1 ? uLightVP : uVP) * vec4(vW, 1.);
 }`;
 const SOLID_FS = COMMON + LIGHT + OUT + `
@@ -788,7 +801,7 @@ void main() {
   float sHo = clamp(1. + hRel * sK * 4.5, .35, 1.3);
   gSunVis = mix(1., sHo * (1. - (uKind == 1 ? .25 : .45) * scr * min(1., sK)), .75);
   float sCav = (1. - (uKind == 1 ? .25 : .35) * scr * min(1., sK)) * (uKind == 1 ? 1. : 1. - clamp(sK * .4, 0., .8) * smoothstep(.05, .0, chip.y) * .5) * sHo;
-  vec3 c = layered(alb, N, vW, .2, .85 * sCav, vec3(0.), uColK.z, 1., outAt(vW) + (fract(vSeed * 3.1) - .5) * .06, colR, litR);
+  vec3 c = layered(alb, N, vW, .2, .85 * sCav, vec3(0.), uColK.z, 1., outCol(vW) + (fract(vSeed * 3.1) - .5) * .06, colR, litR);
   // (its ink laid from its middle out to its sides, then to its weight; a step's by weight alone, as one of a flight, so
   // the flight's edge thins as one line, never a row of dashes, a stone each)
   float sa = inkAt(vOut, fract(vSeed * 5.13 + .3)), inkA = laid(sa, uKind == 1 ? 0. : clamp(abs(vL.x), 0., 1.));
@@ -966,7 +979,7 @@ void main() {
   // (how much of it's laid: its ink here, and thinned with distance (the detail sooner), each by its own pick, never
   // switched; laid out from its middle, its length first and then its weight (its width))
   float pick = aF.z, d0 = distance(aAnchor, uEye);
-  vOut = max(outAt(aAnchor), outAt(aP)) + (pick - .5) * .14;
+  vOut = max(outCol(aAnchor), outCol(aP)) + (pick - .5) * .14;
   bool detail0 = (fam > 1.5 && fam < 4.5) || (fam > 5.5 && fam < 6.5) || fam > 8.5;
   float keep = detail0 ? 1. - smoothstep(12., 60., d0) * .85 : 1. - smoothstep(60., 140., d0) * .7;
   vAmt = uAll > .5 ? 1. : min(inkAt(vOut, pick), clamp((keep - pick) / .2 + .5, 0., 1.));
@@ -1225,7 +1238,7 @@ export class Renderer {
     const d = this.dials;
     gl.uniform4fv(u('uRch'), [...this.reaches, 0.12]); gl.uniform4fv(u('uFoc'), [this.focus, d.depth, d.distance, d.near]);
     gl.uniform4fv(u('uColK'), [d.culms, d.leaves, d.terrain, 0]); gl.uniform4fv(u('uLitK'), [d.shade, d.cast, d.hollow, d.landlight]);
-    gl.uniform4fv(u('uInkK'), [d.lines, d.strokes, d.edges, d.inkfade]); gl.uniform4fv(u('uHand'), [d.open, d.swell, d.grain, 0]); gl.uniform1f(u('uPxW'), this.pxW); gl.uniform4fv(u('uFocus'), [d.aperture, d.wet, d.dry, d.soften]); gl.uniform1f(u('uRelief'), d.relief); gl.uniform1f(u('uUnder'), d.under); gl.uniform3fv(u('uPaperC'), this.sky.paper);
+    gl.uniform4fv(u('uInkK'), [d.lines, d.strokes, d.edges, d.inkfade]); gl.uniform4fv(u('uHand'), [d.open, d.swell, d.grain, 0]); gl.uniform1f(u('uPxW'), this.pxW); gl.uniform4fv(u('uFocus'), [d.aperture, d.wet, d.dry, d.soften]); gl.uniform1f(u('uRelief'), d.relief); gl.uniform1f(u('uHeld'), d.held); gl.uniform1f(u('uUnder'), d.under); gl.uniform3fv(u('uPaperC'), this.sky.paper);
     gl.uniform1f(u('uAway'), (1 - Math.min(1, d.toward)) * Math.min(1, d.terrain));
     gl.uniformMatrix4fv(u('uLightVP'), false, this.lightVP); gl.uniform1i(u('uShadow'), 3); gl.uniform1i(u('uCanopy'), 4); gl.uniform3fv(u('uCanO'), [this.canO[0], this.canO[1], CAN]); gl.uniform1f(u('uShadowOn'), this.shadows ? 1 : 0); gl.uniform1i(u('uDepth'), 0);
   }

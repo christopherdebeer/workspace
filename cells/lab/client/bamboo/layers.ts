@@ -25,14 +25,14 @@ export type Dials = {
   culms: number; leaves: number; terrain: number; colourreach: number;
   shade: number; cast: number; hollow: number; landlight: number; lightreach: number; relief: number;
   lines: number; strokes: number; edges: number; inkreach: number; inkfade: number; open: number; swell: number; grain: number;
-  under: number; toward: number; distance: number; depth: number;
+  under: number; toward: number; distance: number; depth: number; held: number;
   hour: number; mist: number;
   aperture: number; near: number; wet: number; dry: number; soften: number;
 };
 export type DialKey = keyof Dials;
 
 /** the picture as it's lit: every layer whole, out to the frame and past it */
-export const PLAIN: Dials = { culms: 1, leaves: 1, terrain: 1, colourreach: 4, shade: 1, cast: 1, hollow: 1, landlight: 1, lightreach: 4, relief: 3, lines: 1, strokes: 1, edges: 1, inkreach: 4, inkfade: 0, open: 0, swell: 0, grain: 0, under: 1, toward: 0, distance: 400, depth: 0, hour: 8, mist: 0.5, aperture: 0, near: 1, wet: 0.8, dry: 0.6, soften: 1 };
+export const PLAIN: Dials = { culms: 1, leaves: 1, terrain: 1, colourreach: 4, shade: 1, cast: 1, hollow: 1, landlight: 1, lightreach: 4, relief: 3, lines: 1, strokes: 1, edges: 1, inkreach: 4, inkfade: 0, open: 0, swell: 0, grain: 0, under: 1, toward: 0, distance: 400, depth: 0, held: 0, hour: 8, mist: 0.5, aperture: 0, near: 1, wet: 0.8, dry: 0.6, soften: 1 };
 /** where it starts: the colour held round the focus, the light out past it onto the paper, the ink further still and
  * thinning, every edge left to the paper */
 export const HOUSE: Dials = { ...PLAIN, colourreach: 0.65, lightreach: 0.8, inkreach: 0.9, inkfade: 0.25, under: 0.7, distance: 70, depth: 1, cast: 0.7, hollow: 1.1, open: 0.7, swell: 0 };
@@ -65,6 +65,7 @@ export const LAYERS: Layer[] = [
     { key: 'toward', name: 'to the page', lo: 0, hi: 1 },
     { key: 'distance', name: 'distance', lo: 10, hi: 400, log: true, unit: 'm' },
     { key: 'depth', name: 'depth', lo: 0, hi: 2 },
+    { key: 'held', name: 'foreground held', lo: 0, hi: 1 },
   ] },
   { id: 'air', name: 'air', icon: '<path d="M15.5 4.5a7.5 7.5 0 1 0 4 13.5 6 6 0 0 1-4-13.5z"/><path d="M3 20h8M6 17h9"/>', ranges: [
     { key: 'hour', name: 'hour', lo: 0, hi: 24, unit: 'h' },
