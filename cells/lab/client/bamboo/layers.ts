@@ -11,7 +11,8 @@
  * nearer side as much as `near` lets it: at 1 a lens's, going out of focus fast as things near you; at 0 sharp from you to
  * the focus, only the far softening), read
  * by each layer its own way: the colour and light softened, never the ink; near, a culm or spray gone wet, a dark wash in
- * place of its contour; far, the ink dried, paler and broken).
+ * place of its contour; far, the ink dried, paler and broken); and the **air** the page is laid in: the `hour` (the
+ * sun's path, its colour, dusk, and by night the full moon, the sheet washed dark: sky.ts) and how thick the `mist` is.
  *
  * Each layer is its own: its strengths and its reach move nothing else. A reach is a multiple of one measure of how far
  * out a point is: from the focus (where you're going and looking) across the frame (1 at every edge of it) and in depth
@@ -25,12 +26,13 @@ export type Dials = {
   shade: number; cast: number; hollow: number; landlight: number; lightreach: number; relief: number;
   lines: number; strokes: number; edges: number; inkreach: number; inkfade: number; open: number; swell: number; grain: number;
   under: number; toward: number; distance: number; depth: number;
+  hour: number; mist: number;
   aperture: number; near: number; wet: number; dry: number; soften: number;
 };
 export type DialKey = keyof Dials;
 
 /** the picture as it's lit: every layer whole, out to the frame and past it */
-export const PLAIN: Dials = { culms: 1, leaves: 1, terrain: 1, colourreach: 4, shade: 1, cast: 1, hollow: 1, landlight: 1, lightreach: 4, relief: 3, lines: 1, strokes: 1, edges: 1, inkreach: 4, inkfade: 0, open: 0, swell: 0, grain: 0, under: 1, toward: 0, distance: 400, depth: 0, aperture: 0, near: 1, wet: 0.8, dry: 0.6, soften: 1 };
+export const PLAIN: Dials = { culms: 1, leaves: 1, terrain: 1, colourreach: 4, shade: 1, cast: 1, hollow: 1, landlight: 1, lightreach: 4, relief: 3, lines: 1, strokes: 1, edges: 1, inkreach: 4, inkfade: 0, open: 0, swell: 0, grain: 0, under: 1, toward: 0, distance: 400, depth: 0, hour: 8, mist: 0.5, aperture: 0, near: 1, wet: 0.8, dry: 0.6, soften: 1 };
 /** where it starts: the colour held round the focus, the light out past it onto the paper, the ink further still and
  * thinning, every edge left to the paper */
 export const HOUSE: Dials = { ...PLAIN, colourreach: 0.65, lightreach: 0.8, inkreach: 0.9, inkfade: 0.25, under: 0.7, distance: 70, depth: 1, cast: 0.7, hollow: 1.1, open: 0.7, swell: 0 };
@@ -44,6 +46,10 @@ export const PRESETS: Record<string, Dials> = {
   page: { ...HOUSE, toward: 1 },
   // (focus as the board has it: what stands near goes wet, the land near stays sharp, every edge still the paper)
   wet: { ...HOUSE, inkfade: 0.2, distance: 400, depth: 0, aperture: 1.29, wet: 0.83, soften: 0.46 },
+  // (the hours: the sun low in the west, the light gone gold and the air peach; and the full moon high, the sheet washed
+  // dark, the moon left as the paper)
+  dusk: { ...HOUSE, hour: 17.6, mist: 0.7 },
+  night: { ...HOUSE, hour: 23.5, mist: 0.6 },
   // (the hands: the same ink, drawn four ways (the grammar of its marks), at a reach that carries the grove)
   contour: { ...HOUSE, culms: 0, leaves: 0, terrain: 0, shade: 0, cast: 0, hollow: 0, inkreach: 0.9, inkfade: 0, open: 0.35, swell: 0, grain: 0 },
   brush: { ...HOUSE, culms: 0, leaves: 0, terrain: 0, shade: 0, cast: 0, hollow: 0, inkreach: 0.9, inkfade: 0, open: 0.75, swell: 0.85, grain: 0 },
@@ -59,6 +65,10 @@ export const LAYERS: Layer[] = [
     { key: 'toward', name: 'to the page', lo: 0, hi: 1 },
     { key: 'distance', name: 'distance', lo: 10, hi: 400, log: true, unit: 'm' },
     { key: 'depth', name: 'depth', lo: 0, hi: 2 },
+  ] },
+  { id: 'air', name: 'air', icon: '<path d="M15.5 4.5a7.5 7.5 0 1 0 4 13.5 6 6 0 0 1-4-13.5z"/><path d="M3 20h8M6 17h9"/>', ranges: [
+    { key: 'hour', name: 'hour', lo: 0, hi: 24, unit: 'h' },
+    { key: 'mist', name: 'mist', lo: 0, hi: 1 },
   ] },
   { id: 'under', name: 'under', icon: '<path d="M4 16c3-2 5-2 8 0s5 2 8 0M4 11c3-2 5-2 8 0s5 2 8 0"/><path d="M4 6h16" opacity=".45"/>', ranges: [
     { key: 'under', name: 'drawing under', lo: 0, hi: 1 },

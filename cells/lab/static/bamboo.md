@@ -84,6 +84,11 @@ The sun's light is real where it can be: the culms', stones' and steps' shadows 
 How it's drawn is a stack of layers laid from the paper up, after Labyrinth's print, each with its own dials, and none moving another (`client/bamboo/layers.ts`):
 
 - **page**: where every layer is measured from. Each thing asks one measure, how far **out** it is: from the **focus** (where you're going and looking: the ground the eye's line meets past the culms crossing it, kept between 7 and 30 m, moved to slowly) across the frame, 1 at **every edge** (top and bottom as much as the sides: it's measured near-square), and in depth (`depth`: sooner for things far beyond the focus, a little for things much nearer); or in the world, 1 at `distance` metres; whichever is further. `toward` pulls every layer in toward the paper at once, by the same factor (each reach times 1 − `toward`), so it never lets one layer outrun another. For ink that runs on past the colour, leave `toward` at 0 and set the reaches apart: colour short, light a little further, ink out to the frame.
+- **air**: the time of day and the weather (`client/bamboo/sky.ts`).
+  - `hour` (0–24) sets where the sun is: up at six, highest at noon (57°), down at eighteen, crossing from the east of the slope to the west. At eight it lights the grove exactly as the house always has. The sun goes white at noon, warm in the morning, and gold and low near the horizon; the sky goes rose at dusk and indigo at night.
+  - By night the full moon, opposite the sun, takes over, cool and dim. The eye adjusts, so a night is dim but not black. The sheet takes a dark wash, heavier toward its top, with its torn edge left bare. The moon is left as bare paper with a soft ring of light, seen between the culms.
+  - The land's own shadows are baked again whenever the light moves, the nearest pieces first.
+  - `mist` (0–1, 0.5 by default) sets how thick the far haze and the valley's mist are. Both take the hour's colour: warm paper by day, peach at dusk, blue-grey at night.
 - **under**: how much of the drawing (marks, outlines, the land's strokes) lies beneath the colour; on bare paper it's always all of it.
 - **colour**: each kind its own strength (`culms`, `leaves`, `terrain`), and its `colourreach`. Past it, a thing gives way to the paper.
 - **light**: factored out of what the sun and sky give, so each part can be laid again at its own strength: `shade` (a surface's turn from the sun), `cast` (the culms' shadows and the canopy's dapple), `hollow` (the sky shut out), `landlight` (how much of them the land keeps), and `lightreach`. Past the colour, the light lies on the paper itself, in sepia.
@@ -113,7 +118,7 @@ The look is now hill-climbed against five target studies (`devtools/bamboo/targe
 - `seed=<n>`: the mountain.
 - `ref=a|b|c|cliff|run|up|gust`: a frame found on the mountain by what it needs; `cam=x,z,heading,pitch[,speed]`: one pinned exactly.
 - `at=x,z,heading,pitch` and `t`: start just there, at that time, and run on. The address keeps it up to date: when you come to rest, finish looking round, change a dial or leave the page (never while you run), it's rewritten with where you stand and what's set, so a link opens on just what you saw.
-- `look=house|picture|drawing|ink|page`, and any dial by its own name (`colourreach=0.3`, `cast=1.6`, `inkfade=1`…): the layers (above).
+- `look=house|picture|drawing|ink|page|dusk|night`, and any dial by its own name (`colourreach=0.3`, `cast=1.6`, `inkfade=1`…): the layers (above).
 - `shadows=0`: no culm shadows (cheaper).
 - `auto`: run on by itself, wandering.
 - `t=<seconds>` and `still`: time held.

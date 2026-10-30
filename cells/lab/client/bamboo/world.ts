@@ -238,6 +238,30 @@ export class World {
     return null;
   }
 
+  /** where the land's light comes from (the sun, or by night the moon: sky.ts); the land's shadows are baked by it */
+  light: [number, number, number] = [...SUN];
+  /** whether the light reaches each point of a chunk's ground past the land itself, marching toward it over the heights */
+  private bakeSun(x0: number, z0: number, ground: Float32Array, hAt: (x: number, z: number) => number, out: Float32Array) {
+    const L = this.light, sl = Math.max(1e-3, Math.hypot(L[0], L[2])), sx = L[0] / sl, sz = L[2] / sl, tan = L[1] / sl;
+    const STEP = [1, 2, 3, 4.5, 6.5, 9, 12, 16, 21, 28];
+    for (let j = 0; j < CN; j++) for (let i = 0; i < CN; i++) {
+      const k = i + j * CN, x = x0 + i * CELL, z = z0 + j * CELL, y = ground[k] + 0.05;
+      let most = -9;
+      for (const d of STEP) most = Math.max(most, (hAt(x + sx * d, z + sz * d) - y) / d);
+      out[k] = Math.min(1, Math.max(0, (tan - most) / 0.12 + 0.5));
+    }
+  }
+  /** the land's shadows baked again, for where the light is now (when the hour's changed) */
+  relight(c: Chunk) {
+    const G = c.ground, hAt = (x: number, z: number) => {
+      const fx = x - c.x0, fz = z - c.z0;
+      if (fx < 0 || fz < 0 || fx > CHUNK || fz > CHUNK) return this.base(x, z);
+      const i = Math.min(CN - 2, Math.floor(fx / CELL)), j = Math.min(CN - 2, Math.floor(fz / CELL)), u = fx / CELL - i, v = fz / CELL - j, k = i + j * CN;
+      return (G[k] * (1 - u) + G[k + 1] * u) * (1 - v) + (G[k + CN] * (1 - u) + G[k + CN + 1] * u) * v;
+    };
+    this.bakeSun(c.x0, c.z0, G, hAt, c.sunVis);
+  }
+
   // ─── a chunk ───
   chunk(ci: number, cj: number): Chunk {
     const s = this.seed, x0 = ci * CHUNK, z0 = cj * CHUNK;
@@ -425,13 +449,10 @@ export class World {
     // and darker again where it meets a stone, a step, a culm's foot ───
     const sunVis = new Float32Array(CN * CN), ao = new Float32Array(CN * CN);
     const hAt = (x: number, z: number) => (x >= x0 && x <= x0 + CHUNK && z >= z0 && z <= z0 + CHUNK ? g(x, z) : this.base(x, z));
-    const sl = Math.hypot(SUN[0], SUN[2]), sx = SUN[0] / sl, sz = SUN[2] / sl, sunTan = SUN[1] / sl;
-    const SUNSTEP = [1, 2, 3, 4.5, 6.5, 9, 12, 16, 21, 28], SKYSTEP = [1, 2.5, 5, 9];
+    this.bakeSun(x0, z0, ground, hAt, sunVis);
+    const SKYSTEP = [1, 2.5, 5, 9];
     for (let j = 0; j < CN; j++) for (let i = 0; i < CN; i++) {
       const k = i + j * CN, x = x0 + i * CELL, z = z0 + j * CELL, y = ground[k] + 0.05;
-      let most = -9;
-      for (const d of SUNSTEP) most = Math.max(most, (hAt(x + sx * d, z + sz * d) - y) / d);
-      sunVis[k] = Math.min(1, Math.max(0, (sunTan - most) / 0.12 + 0.5));
       let open = 0;
       for (let a = 0; a < 8; a++) {
         const dx = Math.cos(a * 0.7854), dz = Math.sin(a * 0.7854);

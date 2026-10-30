@@ -10,7 +10,7 @@
  * at its edge, with the valley beyond). Gusts come down through the grove.
  *
  * URL: `seed`, `ref=a|b|c|cliff|run|up|gust` (a fixed frame), `auto` (run on by itself), `t=<seconds>` and `still` (time
- * held), `clean`, `marks=0`, `fov=<degrees>`, `mute`; `look=house|picture|drawing|ink|page` and each layer's dial by its name
+ * held), `clean`, `marks=0`, `fov=<degrees>`, `mute`; `look=house|picture|drawing|ink|page|dusk|night` and each layer's dial by its name
  * (layers.ts); `grove=0` (the land alone), `clay` (the forms alone), `strokes=all`.
  */
 import { World, ridges, CHUNK, type Trail, type Chunk } from './world';
@@ -19,6 +19,7 @@ import type { Footing } from './footing';
 import { strokes } from './strokes';
 import { Renderer, type Frame } from './render';
 import { readDials, address, layersPalette } from './layers';
+import { skyAt } from './sky';
 
 const params = new URLSearchParams(location.search);
 const canvas = document.getElementById('view') as HTMLCanvasElement;
@@ -31,6 +32,8 @@ const auto = params.has('auto'), still = params.has('still');
 
 // ─── how it's drawn: the layers, each its own (layers.ts), from the address, and the palette under 墨 ───
 renderer.dials = readDials(params);
+// (the land's shadows baked for the hour asked, from the first piece of it built)
+world.light = [...skyAt(renderer.dials.hour, renderer.dials.mist).lightDir];
 {
   const el = document.getElementById('layers'), btn = document.getElementById('inkbtn');
   if (el) {
@@ -256,11 +259,24 @@ function resize() {
   const dpr = Math.min(devicePixelRatio || 1, 2) * scale, w = Math.round(innerWidth * dpr), h = Math.round(innerHeight * dpr);
   if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
 }
+// ─── the hour: the sky from the dials; when its light has moved, the land's shadows baked again, a few pieces a frame,
+// nearest first ───
+let relit: string[] = [];
+function air() {
+  const sky = skyAt(renderer.dials.hour, renderer.dials.mist), L = sky.lightDir, W = world.light;
+  renderer.sky = sky;
+  if (L[0] * W[0] + L[1] * W[1] + L[2] * W[2] < Math.cos(0.025)) {
+    world.light = [...L];
+    relit = [...me.chunks.entries()].sort(([, a], [, b]) => Math.hypot(a.x0 - me.x, a.z0 - me.z) - Math.hypot(b.x0 - me.x, b.z0 - me.z)).map(([k]) => k);
+  }
+  for (let n = 0; n < 4 && relit.length; n++) { const k = relit.shift()!, c = me.chunks.get(k); if (c) { world.relight(c); renderer.relight(k, c); } }
+}
 function frame(now: number) {
   // (the run keeps real time in its own fixed steps, however the frames come; held to a quarter second after a stall)
   const dt = Math.min(0.25, (now - last) / 1000); last = now;
   if (!still) t += dt;
   resize();
+  air();
   if (!spot && !still) run(dt);
   stream(1);
   // (the body, as the eye has it: the stride's bob and sway, let go of in the air and settling; sunk as it gathers, lands,

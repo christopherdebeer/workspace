@@ -26,10 +26,11 @@
  *
  * `?clean`: no shafts or paper grain. `?marks=0`: the picture without its ink.
  */
-import { type Chunk, CHUNK, CN, CELL, HALF, BANK, SUN } from './world';
+import { type Chunk, CHUNK, CN, CELL, HALF, BANK } from './world';
 import { STROKE_STRIDE } from './strokes';
 import { type Dials, HOUSE } from './layers';
 import { lumpMesh, LUMP_SEED } from './lump';
+import { skyAt, type Sky } from './sky';
 
 export interface Frame {
   eye: [number, number, number]; look: [number, number, number]; fov: number; t: number;
@@ -46,7 +47,6 @@ export interface Frame {
 }
 
 /** the paper's own colour */
-const PAPER = [0.937, 0.902, 0.824];
 
 const NOISE = `
 float h21(vec2 p) { p = fract(p * vec2(123.34, 456.21)); p += dot(p, p + 45.32); return fract(p.x * p.y); }
@@ -120,7 +120,7 @@ float laid(float a, float u) { return laidLen(a, u) * laidW(a) * fadeOf(a); }
 // (the light: the sun through the canopy's gaps and past the culms' shadows, shared by every surface, so a patch of
 // sun lies across the path, the litter and a culm alike)
 const LIGHT = `
-uniform vec3 uSunC; uniform vec3 uSky; uniform float uOpen; uniform vec4 uLitK; uniform vec3 uPaperC;
+uniform vec3 uSunC; uniform vec3 uSky; uniform float uExpo; uniform vec3 uHaze; uniform vec3 uVeil; uniform float uMist; uniform float uOpen; uniform vec4 uLitK; uniform vec3 uPaperC;
 uniform sampler2DShadow uShadow; uniform mat4 uLightVP; uniform float uShadowOn;
 float dapple(vec3 p) {
   vec2 q = p.xz - uSun.xz / max(uSun.y, .2) * (16. - p.y * .5);
@@ -209,7 +209,7 @@ vec2 vor(vec2 p) {
 }
 vec3 layered(vec3 alb, vec3 N, vec3 p, float wrap, float ao, vec3 glow, float colK, float land, float o, out float colR, out float litR) {
   float sunV = dapple(p) * culmShade(p) * gSunVis, ndl = max(0., (dot(N, uSun) + wrap) / (1. + wrap));
-  vec3 skyT = uSky * (.5 + .5 * N.y), bnc = vec3(.2, .15, .08) * (1. - N.y) * .3;
+  vec3 skyT = uSky * (.5 + .5 * N.y), bnc = vec3(.2, .15, .08) * (1. - N.y) * .3 * (dot(uSunC, vec3(.3, .55, .15)) / 2.4875);
   vec3 L0 = uSunC + skyT + bnc, Ls = uSunC * ndl + skyT + bnc, Lc = uSunC * ndl * sunV + skyT + bnc, Lh = uSunC * ndl * sunV + (skyT + bnc) * ao;
   litR = has(o, uRch.y);
   gColHere = hasS(o, uRch.x, uRch.w * (land > .5 ? 2.2 : 1.));
@@ -217,12 +217,14 @@ vec3 layered(vec3 alb, vec3 N, vec3 p, float wrap, float ao, vec3 glow, float co
   if (uClay > .5) { colR = 1.; litR = 1.; gColHere = 1.; return show(lin(vec3(.8, .78, .74)) * Lh); }
   float ll = mix(1., uLitK.w, land);
   vec3 Lk = pow(Ls / L0, vec3(uLitK.x * ll * litR)) * pow(Lc / max(Ls, vec3(1e-4)), vec3(uLitK.y * litR)) * pow(Lh / max(Lc, vec3(1e-4)), vec3(uLitK.z * ll * litR));
-  vec3 c = show(lin(alb) * L0 * Lk + glow * litR);
-  // (a little air between, warm and pale; and the valley's mist, a cool blue-grey veil in the hollows below the eye)
+  // (as the eye has it: by night, adjusted to the little light there is)
+  vec3 c = show((lin(alb) * L0 * Lk + glow * litR) * uExpo);
+  // (a little air between, warm and pale; and the valley's mist, a cool blue-grey veil in the hollows below the eye: each
+  // the colour of the hour, as thick as \`mist\` has it)
   float d = distance(p, uEye);
-  c = mix(c, vec3(.93, .9, .8), (1. - exp(-max(0., d - 6.) / 55.)) * .55);
-  float below = uEye.y - p.y, veil = smoothstep(3., 30., below) * smoothstep(12., 70., d) * (.55 + .35 * vn(p.xz * .02 + uTime * .01));
-  c = mix(c, vec3(.78, .82, .86), clamp(veil, 0., .85));
+  c = mix(c, uHaze, (1. - exp(-max(0., d - 6.) * pow(uMist, 1.3) / 55.)) * min(.92, .55 * sqrt(uMist)));
+  float below = uEye.y - p.y, veil = smoothstep(3., 30., below / max(uMist, .2)) * smoothstep(12., 70., d / max(uMist, .2)) * (.55 + .35 * vn(p.xz * .02 + uTime * .01)) * min(1.5, uMist);
+  c = mix(c, uVeil, clamp(veil, 0., .85 + .1 * min(1., uMist - 1.)));
   // (a little of the paper's warmth in it, as a wash takes the sheet's tone)
   c *= mix(vec3(1.), uPaperC / .94, .3);
   // (the light on the paper, where the colour's gone: its shade in sepia, not the sky's grey)
@@ -753,7 +755,7 @@ const RIDGE_FS = `#version 300 es
 precision highp float;
 in vec3 vW; in vec2 vT;
 layout(location = 0) out vec4 oC; layout(location = 1) out vec4 oA;
-uniform float uAway;
+uniform float uAway; uniform vec3 uTone;
 ${NOISE}
 void main() {
   // (a range as the ink lays it: darkest at its crest, washing out below into the mist)
@@ -761,7 +763,7 @@ void main() {
   float a = exp(-below / (10. + layer * 6.)) * (.62 - layer * .1);
   a *= (.75 + .25 * vn(vW.zy * .05)) * uAway;
   // (a cool blue-grey, warmer toward the light: the far side of the valley in the morning's mist)
-  oC = vec4(mix(vec3(.46, .54, .62), vec3(.62, .66, .7), layer * .35), min(1., a * 1.25));
+  oC = vec4(mix(vec3(.46, .54, .62), vec3(.62, .66, .7), layer * .35) * uTone, min(1., a * 1.25));
   oA = vec4(.1, 0., 0., 0.);
 }`;
 
@@ -775,6 +777,8 @@ uniform sampler2D uC; uniform sampler2D uA; uniform sampler2D uZ;
 uniform vec2 uRes; uniform float uNear; uniform float uFar; uniform float uPx;
 uniform vec3 uPaper; uniform vec3 uInk; uniform vec3 uSunUV; uniform float uClean; uniform float uMarks; uniform float uClay; uniform vec4 uHand;
 uniform vec4 uFocA; uniform float uFocD;
+// (the hour: the sheet's own colour (its torn edge), the colour of a shaft of light, how much it's night, where the moon is)
+uniform vec3 uSheet; uniform vec3 uShaftC; uniform float uNight; uniform vec3 uMoonUV;
 // (the paper's own size in pixels: its grain, its torn edge, its stipple are the sheet's, fixed, whatever size the
 // picture's drawn at this frame)
 uniform vec2 uPaperRes;
@@ -838,7 +842,8 @@ void main() {
   }
   // ─── the page: each thing laid on it as it's drawn (its colour as far as that goes), its ink over that ───
   float grain = uClean > .5 ? 0. : (vn(vUV * uPaperRes * .35) - .5) * .05 + (vn(vUV * uPaperRes * .04) - .5) * .04;
-  vec3 paper = uPaper * (1. + grain);
+  // (by night the sheet takes a wash, darker toward its top, a little uneven as a wash dries)
+  vec3 paper = uPaper * (1. + grain) * (1. - uNight * (.22 * vUV.y + .06 * (vn(vUV * uPaperRes * .006) - .5)));
   // (a thing's laid already, its colour and its light on the paper as the layers have them; the sky and the far ranges
   // washed over the paper as far as they go)
   vec3 col = laidAt(vUV);
@@ -872,13 +877,20 @@ void main() {
     vec2 d = (uSunUV.xy - vUV) / 32.; vec2 p = vUV; float acc = 0., w = 1.;
     for (int i = 0; i < 32; i++) { p += d; vec4 Ap = texture(uA, p); acc += (Ap.x < .05 ? 1. : 0.) * w; w *= .95; }
     float shaft = acc / 14. * uSunUV.z * (.5 + .5 * vn(vec2(atan(vUV.y - uSunUV.y, vUV.x - uSunUV.x) * 11., 1.)));
-    col = mix(col, vec3(1., .95, .8), clamp(shaft * .5 * C.a, 0., .6));
+    col = mix(col, uShaftC, clamp(shaft * .5 * C.a * (1. - .5 * uNight), 0., .6));
+  }
+  // (the moon: left as the bare sheet in the night's wash, a soft ring of light round it; only where nothing's in front)
+  if (uNight > .01 && uMoonUV.z > 0.) {
+    vec2 dm = (vUV - uMoonUV.xy) * uPaperRes; float rm = uPaperRes.y * .028, dd = length(dm);
+    float open = step(texture(uA, vUV).x, .05), disc = 1. - smoothstep(rm - 1.2, rm + 1.2, dd);
+    float halo = exp(-max(0., dd - rm) / (rm * 1.6)) * .3;
+    col = mix(col, uSheet * 1.02, clamp((disc + halo * (1. - disc)) * uNight * open, 0., 1.));
   }
   col = mix(col, uInk, clamp(ink, 0., 1.) * .9);
   // (the last few pixels at every edge are the paper, whatever's drawn: its edge torn a little, not a ruled line)
   vec2 pxp = vUV * uPaperRes; float edgePx = min(min(pxp.x, uPaperRes.x - pxp.x), min(pxp.y, uPaperRes.y - pxp.y));
   float keepOut = 10. * max(1., uPaperRes.y / 900.) * (.7 + .6 * vn(vec2(pxp.x + pxp.y, pxp.x - pxp.y) * .03));
-  col = mix(col, paper, 1. - smoothstep(keepOut * .6, keepOut, edgePx));
+  col = mix(col, uSheet * (1. + grain), 1. - smoothstep(keepOut * .6, keepOut, edgePx));
   o = vec4(col, 1.);
 }`;
 
@@ -1020,7 +1032,9 @@ export class Renderer {
   /** culms in whole up to / gone by (metres): past every layer's reach, so their leaving is never seen */
   private get pick() { return [this.farthest, this.farthest * 1.3]; }
   private shadowTex: WebGLTexture | null = null; private shadowFbo: WebGLFramebuffer | null = null; private lightVP: number[] = new Array(16).fill(0); readonly shadows: boolean;
-  sunDir = [...SUN];
+  /** the hour and the air (sky.ts): where the light comes from, its colour, the sky's, the haze, the page's wash */
+  sky: Sky = skyAt(8, 0.5);
+  get sunDir() { return this.sky.lightDir; }
 
   constructor(private canvas: HTMLCanvasElement, ridges: { x: number; z: number; y: number }[][], opts: { clean?: boolean; marks?: boolean; shadows?: boolean } = {}) {
     const gl = canvas.getContext('webgl2', { antialias: false, preserveDrawingBuffer: true });
@@ -1071,13 +1085,24 @@ export class Renderer {
   get held() { return this.chunks.size; }
   has(key: string) { return this.chunks.has(key); }
   /** hand a chunk to the GPU */
-  add(key: string, c: Chunk, marks?: Float32Array) {
+  /** a chunk's ground as it's drawn: each point, its normal, how near a trail, how much rock, its light and openness */
+  private groundVerts(c: Chunk) {
     const G = c.ground, v = new Float32Array(CN * CN * 10);
     for (let j = 0; j < CN; j++) for (let i = 0; i < CN; i++) {
       const k = i + j * CN, hx = G[Math.min(CN - 1, i + 1) + j * CN] - G[Math.max(0, i - 1) + j * CN], hz = G[i + Math.min(CN - 1, j + 1) * CN] - G[i + Math.max(0, j - 1) * CN];
       const n = norm([-hx * ((i === 0 || i === CN - 1) ? 2 : 1), 2 * CELL, -hz * ((j === 0 || j === CN - 1) ? 2 : 1)]);
       v.set([c.x0 + i * CELL, G[k], c.z0 + j * CELL, n[0], n[1], n[2], c.near[k], c.rock[k], c.sunVis[k], c.ao[k]], k * 10);
     }
+    return v;
+  }
+  /** a chunk's ground light again (its land's shadows baked anew for where the light is now) */
+  relight(key: string, c: Chunk) {
+    const h = this.chunks.get(key), gl = this.gl;
+    if (!h) return;
+    gl.bindBuffer(gl.ARRAY_BUFFER, h.ground); gl.bufferData(gl.ARRAY_BUFFER, this.groundVerts(c), gl.STATIC_DRAW);
+  }
+  add(key: string, c: Chunk, marks?: Float32Array) {
+    const v = this.groundVerts(c);
     const cu = new Float32Array(c.tall * 12);
     for (let k = 0; k < c.tall; k++) { const q = c.culms[k]; cu.set([q.x, q.y, q.z, q.r, q.h, q.lx, q.lz, q.node, q.age, q.phase, q.pick, q.bend], k * 12); }
     const tw = new Float32Array(c.twigs.length * 16);
@@ -1122,16 +1147,16 @@ export class Renderer {
     this.size = [w, h];
   }
 
-  private sunUV = [0.5, 0.9, 0];
+  private sunUV = [0.5, 0.9, 0]; private moonUV = [0.5, 0.9, 0];
   private uni(p: WebGLProgram, f: Frame, vp: number[], right: number[]) {
     const gl = this.gl, u = (n: string) => gl.getUniformLocation(p, n);
     gl.uniformMatrix4fv(u('uVP'), false, vp); gl.uniform3fv(u('uEye'), f.eye); gl.uniform1f(u('uTime'), f.t); gl.uniform3fv(u('uSun'), this.sunDir);
-    gl.uniform4fv(u('uGust'), f.gust); gl.uniform1f(u('uClay'), this.clay ? 1 : 0); gl.uniform3fv(u('uSunC'), [3.0, 2.45, 1.6]); gl.uniform3fv(u('uSky'), [0.5, 0.55, 0.6]); gl.uniform1f(u('uOpen'), 0);
+    gl.uniform4fv(u('uGust'), f.gust); gl.uniform1f(u('uClay'), this.clay ? 1 : 0); gl.uniform3fv(u('uSunC'), this.sky.lightC); gl.uniform3fv(u('uSky'), this.sky.skyC); gl.uniform1f(u('uExpo'), this.sky.expo); gl.uniform3fv(u('uHaze'), this.sky.haze); gl.uniform3fv(u('uVeil'), this.sky.veil); gl.uniform1f(u('uMist'), this.sky.mist); gl.uniform3fv(u('uTone'), this.sky.ridge); gl.uniform1f(u('uOpen'), 0);
     gl.uniform2fv(u('uPick'), this.pick); gl.uniform1f(u('uMarks'), this.marks); gl.uniform3fv(u('uRight'), right);
     const d = this.dials;
     gl.uniform4fv(u('uRch'), [...this.reaches, 0.12]); gl.uniform4fv(u('uFoc'), [this.focus, d.depth, d.distance, d.near]);
     gl.uniform4fv(u('uColK'), [d.culms, d.leaves, d.terrain, 0]); gl.uniform4fv(u('uLitK'), [d.shade, d.cast, d.hollow, d.landlight]);
-    gl.uniform4fv(u('uInkK'), [d.lines, d.strokes, d.edges, d.inkfade]); gl.uniform4fv(u('uHand'), [d.open, d.swell, d.grain, 0]); gl.uniform1f(u('uPxW'), this.pxW); gl.uniform4fv(u('uFocus'), [d.aperture, d.wet, d.dry, d.soften]); gl.uniform1f(u('uRelief'), d.relief); gl.uniform1f(u('uUnder'), d.under); gl.uniform3fv(u('uPaperC'), PAPER);
+    gl.uniform4fv(u('uInkK'), [d.lines, d.strokes, d.edges, d.inkfade]); gl.uniform4fv(u('uHand'), [d.open, d.swell, d.grain, 0]); gl.uniform1f(u('uPxW'), this.pxW); gl.uniform4fv(u('uFocus'), [d.aperture, d.wet, d.dry, d.soften]); gl.uniform1f(u('uRelief'), d.relief); gl.uniform1f(u('uUnder'), d.under); gl.uniform3fv(u('uPaperC'), this.sky.paper);
     gl.uniform1f(u('uAway'), (1 - Math.min(1, d.toward)) * Math.min(1, d.terrain));
     gl.uniformMatrix4fv(u('uLightVP'), false, this.lightVP); gl.uniform1i(u('uShadow'), 3); gl.uniform1f(u('uShadowOn'), this.shadows ? 1 : 0); gl.uniform1i(u('uDepth'), 0);
   }
@@ -1248,6 +1273,9 @@ export class Renderer {
       const s = this.sunDir, sp = [f.eye[0] + s[0] * 1000, f.eye[1] + s[1] * 1000, f.eye[2] + s[2] * 1000, 1];
       const c = [0, 1, 2, 3].map((i) => vp[i] * sp[0] + vp[4 + i] * sp[1] + vp[8 + i] * sp[2] + vp[12 + i] * sp[3]);
       this.sunUV = c[3] > 0 ? [c[0] / c[3] * 0.5 + 0.5, c[1] / c[3] * 0.5 + 0.5, Math.min(1, c[3] / 1000)] : [0.5, 0.9, 0];
+      const m = this.sky.moonDir, mp = [f.eye[0] + m[0] * 1000, f.eye[1] + m[1] * 1000, f.eye[2] + m[2] * 1000, 1];
+      const mc = [0, 1, 2, 3].map((i) => vp[i] * mp[0] + vp[4 + i] * mp[1] + vp[8 + i] * mp[2] + vp[12 + i] * mp[3]);
+      this.moonUV = mc[3] > 0 && m[1] > 0 ? [mc[0] / mc[3] * 0.5 + 0.5, mc[1] / mc[3] * 0.5 + 0.5, 1] : [0.5, 0.9, 0];
     }
     gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.viewport(0, 0, w, h); gl.disable(gl.DEPTH_TEST);
     const p = this.progs.post; gl.useProgram(p); this.clearAttrs();
@@ -1256,7 +1284,7 @@ export class Renderer {
     gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, this.texA); gl.uniform1i(u('uA'), 1);
     gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, this.texZ); gl.uniform1i(u('uZ'), 2);
     gl.uniform2fv(u('uRes'), [w, h]); gl.uniform2fv(u('uPaperRes'), f.paper ?? [w, h]); gl.uniform1f(u('uNear'), near); gl.uniform1f(u('uFar'), far); gl.uniform1f(u('uPx'), Math.max(1, h / 900));
-    gl.uniform3fv(u('uPaper'), PAPER); gl.uniform4fv(u('uHand'), [this.dials.open, this.dials.swell, this.dials.grain, 0]); gl.uniform4fv(u('uFocA'), [this.dials.aperture, this.dials.wet, this.dials.dry, this.dials.soften]); gl.uniform1f(u('uFocD'), this.focus); gl.uniform1f(u('uNearBlur'), this.dials.near); gl.uniform3fv(u('uInk'), [0.13, 0.12, 0.105]); gl.uniform3fv(u('uSunUV'), this.sunUV);
+    gl.uniform3fv(u('uPaper'), this.sky.paper); gl.uniform3fv(u('uSheet'), this.sky.sheet); gl.uniform3fv(u('uShaftC'), this.sky.shaft); gl.uniform1f(u('uNight'), this.sky.night); gl.uniform3fv(u('uMoonUV'), this.moonUV); gl.uniform4fv(u('uHand'), [this.dials.open, this.dials.swell, this.dials.grain, 0]); gl.uniform4fv(u('uFocA'), [this.dials.aperture, this.dials.wet, this.dials.dry, this.dials.soften]); gl.uniform1f(u('uFocD'), this.focus); gl.uniform1f(u('uNearBlur'), this.dials.near); gl.uniform3fv(u('uInk'), [0.13, 0.12, 0.105]); gl.uniform3fv(u('uSunUV'), this.sunUV);
     gl.uniform1f(u('uClean'), this.clean ? 1 : 0); gl.uniform1f(u('uMarks'), this.marks); gl.uniform1f(u('uClay'), this.clay ? 1 : 0);
     this.attr(0, this.vbo.screen.buf, 2, 2, 0);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
