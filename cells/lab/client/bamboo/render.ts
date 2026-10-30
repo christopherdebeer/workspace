@@ -143,7 +143,7 @@ float culmShade(vec3 p) {
   if (q.x < 0. || q.x > 1. || q.y < 0. || q.y > 1.) return 1.;
   gInMap = smoothstep(0., .06, min(min(q.x, 1. - q.x), min(q.y, 1. - q.y)));
   float s = 0., o = 1. / 2048.;
-  for (int i = -1; i <= 1; i++) for (int j = -1; j <= 1; j++) s += texture(uShadow, vec3(q.xy + vec2(i, j) * o, q.z - .0015));
+  for (int i = -1; i <= 1; i++) for (int j = -1; j <= 1; j++) s += texture(uShadow, vec3(q.xy + vec2(i, j) * o, q.z - .0005));
   return mix(1., s / 9., gInMap);
 }
 // (beyond the light's map, the canopy's own cover over the point, looked for up toward the light, broken into flecks
@@ -1252,7 +1252,7 @@ export class Renderer {
     if (this.shadows) {
       const S = 46, cx = f.eye[0] + fwd[0] * S * 0.6, cz = f.eye[2] + fwd[2] * S * 0.6, cy = f.eye[1], s = this.sunDir;
       const lv = lookAt([cx + s[0] * 200, cy + s[1] * 200, cz + s[2] * 200], [cx, cy, cz], [0, 0, 1]);
-      this.lightVP = mul(ortho(S, 1, 420), lv);
+      this.lightVP = mul(ortho(S, 60, 340), lv);
       gl.bindFramebuffer(gl.FRAMEBUFFER, this.shadowFbo); gl.viewport(0, 0, 2048, 2048);
       gl.clearBufferfv(gl.DEPTH, 0, [1]); gl.enable(gl.DEPTH_TEST); gl.depthFunc(gl.LEQUAL); gl.disable(gl.BLEND);
       const near2 = all.filter((q) => Math.hypot(q.c.x - cx, q.c.z - cz) < S * 1.42 + CHUNK);
