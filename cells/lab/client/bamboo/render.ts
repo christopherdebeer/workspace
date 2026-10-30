@@ -78,6 +78,9 @@ vec2 windAt(vec2 p, float phase) {
   float along = dot(p, uGust.xy) - uGust.z, front = exp(-along * along / 300.) * uGust.w;
   return d * sway + uGust.xy * front * (.05 + .012 * sin(uTime * 5. + phase));
 }
+// (how much of the wind a culm's put in: 1 as it's drawn; 0 where it stands at rest, which is where it's asked how far
+// out it is, so a culm, a branch, a spray is drawn by where it stands, never flickering in and out as it sways)
+float gWind = 1.;
 // (where a culm's centre is, y metres up it)
 vec3 culmAt(vec3 b, float h, vec2 lean, float phase, float y, float bend) {
   float v = clamp(y / h, 0., 1.);
@@ -85,10 +88,11 @@ vec3 culmAt(vec3 b, float h, vec2 lean, float phase, float y, float bend) {
   vec2 dir = length(lean) > .05 ? normalize(lean) : vec2(cos(phase), sin(phase));
   // (\`bend\` past 1.5: bowed right over in an arc, its tip turned through bend - 1.5 radians, as world.ts's culmPoint)
   float bow = max(0., bend - 1.5), yy = y;
-  vec2 off = lean * pow(v, 1.6) + dir * (bow > 0. ? 0. : bend) * h * .14 * pow(v, 3.) + windAt(b.xz, phase) * v * v * h;
+  vec2 off = lean * pow(v, 1.6) + dir * (bow > 0. ? 0. : bend) * h * .14 * pow(v, 3.) + windAt(b.xz, phase) * v * v * h * gWind;
   if (bow > 0.) { float th = bow * v; off += dir * h * (1. - cos(th)) / bow; yy = h * sin(th) / bow; }
   return b + vec3(off.x, yy, off.y);
 }
+vec3 culmRest(vec3 b, float h, vec2 lean, float phase, float y, float bend) { gWind = 0.; vec3 r = culmAt(b, h, lean, phase, y, bend); gWind = 1.; return r; }
 // (how far out a point is, for every layer alike: from the focus (where you're going and looking) across the frame, 1
 // at every edge of it (measured near-square, so top and bottom as much as the sides), and in depth (further for being
 // far beyond the focus, a little for being much nearer); or in the world, 1 at \`distance\` metres; whichever is further.
@@ -122,22 +126,37 @@ float laid(float a, float u) { return laidLen(a, u) * laidW(a) * fadeOf(a); }
 const LIGHT = `
 uniform vec3 uSunC; uniform vec3 uSky; uniform float uExpo; uniform vec3 uHaze; uniform vec3 uVeil; uniform float uMist; uniform float uOpen; uniform vec4 uLitK; uniform vec3 uPaperC;
 uniform sampler2DShadow uShadow; uniform mat4 uLightVP; uniform float uShadowOn;
-float dapple(vec3 p) {
-  vec2 q = p.xz - uSun.xz / max(uSun.y, .2) * (16. - p.y * .5);
-  // (the pattern stays where the canopy puts it: only its small patches flicker as the leaves move, each its own way,
-  // more in a gust; never the whole of it sliding, which reads as the ground swimming)
-  vec2 fl = vec2(sin(uTime * 1.3 + q.y * 1.7), cos(uTime * 1.1 + q.x * 1.9)) * (.06 + .1 * uGust.w);
-  float g = fbm2(q * .55) * .55 + vn(q * 2.4 + fl) * .45;
-  return smoothstep(.5 - uOpen * .1, .57 - uOpen * .1, g);
-}
+// (the canopy over the ground round you, from where the sprays really hang (world.ts): 0 open sky … 1 closed)
+uniform sampler2D uCanopy; uniform vec3 uCanO;
+float coverAt(vec2 xz) { vec2 q = (xz - uCanO.xy) / uCanO.z; return q.x < 0. || q.y < 0. || q.x > 1. || q.y > 1. ? .5 : texture(uCanopy, q).r; }
+// (how far in under the canopy a surface is: the ground and what's on it all the way, a culm less up its length, its
+// leaves least; set by each surface before it's lit)
+float gUnder = 1.;
+// (how far inside the light's map of what casts a point is: where it is, the shade is real)
+float gInMap = 0.;
+// (the shade of everything near that stands in the light's way, culms, their leaves, the boulders, the steps, as the light
+// sees them: real shadow, the leaves' moving as they move)
 float culmShade(vec3 p) {
+  gInMap = 0.;
   if (uShadowOn < .5) return 1.;
   vec4 l = uLightVP * vec4(p, 1.); vec3 q = l.xyz / l.w * .5 + .5;
   if (q.x < 0. || q.x > 1. || q.y < 0. || q.y > 1.) return 1.;
+  gInMap = smoothstep(0., .06, min(min(q.x, 1. - q.x), min(q.y, 1. - q.y)));
   float s = 0., o = 1. / 2048.;
   for (int i = -1; i <= 1; i++) for (int j = -1; j <= 1; j++) s += texture(uShadow, vec3(q.xy + vec2(i, j) * o, q.z - .0015));
-  return s / 9.;
+  return mix(1., s / 9., gInMap);
 }
+// (beyond the light's map, the canopy's own cover over the point, looked for up toward the light, broken into flecks
+// where the leaves part; where it's open, the sun; under a closed stand, shade with a fleck or two. Never the near
+// shade: that's real)
+float dapple(vec3 p) {
+  vec2 up = uSun.xz / max(uSun.y, .25) * 8.;
+  float cov = coverAt(p.xz + up);
+  vec2 q = p.xz + up;
+  float g = fbm2(q * .55) * .55 + vn(q * 2.4) * .45, fl = smoothstep(.5 - uOpen * .1, .57 - uOpen * .1, g);
+  return 1. - cov * (1. - fl);
+}
+float sunThrough(vec3 p) { float c = culmShade(p); return c * mix(dapple(p), 1., gInMap); }
 vec3 lin(vec3 c) { return c * c; }
 // (the carpet of fallen leaves: one leaf to a cell, in two sizes, each turned its own way and its own colour, read
 // from the cells round it; given out to its average tone where a cell is smaller than a few pixels. .a: on a leaf;
@@ -208,7 +227,9 @@ vec2 vor(vec2 p) {
   return vec2(d1, d2 - d1);
 }
 vec3 layered(vec3 alb, vec3 N, vec3 p, float wrap, float ao, vec3 glow, float colK, float land, float o, out float colR, out float litR) {
-  float sunV = dapple(p) * culmShade(p) * gSunVis, ndl = max(0., (dot(N, uSun) + wrap) / (1. + wrap));
+  // (and under the canopy less of the sky's light, the more the leaves close over)
+  ao *= 1. - .45 * coverAt(p.xz) * gUnder;
+  float sunV = sunThrough(p) * gSunVis, ndl = max(0., (dot(N, uSun) + wrap) / (1. + wrap));
   vec3 skyT = uSky * (.5 + .5 * N.y), bnc = vec3(.2, .15, .08) * (1. - N.y) * .3 * (dot(uSunC, vec3(.3, .55, .15)) / 2.4875);
   vec3 L0 = uSunC + skyT + bnc, Ls = uSunC * ndl + skyT + bnc, Lc = uSunC * ndl * sunV + skyT + bnc, Lh = uSunC * ndl * sunV + (skyT + bnc) * ao;
   litR = has(o, uRch.y);
@@ -255,7 +276,7 @@ void emit(vec3 c, float colR, float inkA, float kind, float allow, float mark) {
 const CULM_VS = COMMON + `
 layout(location = 0) in vec2 aUV;
 layout(location = 1) in vec4 iA; layout(location = 2) in vec4 iB; layout(location = 3) in vec4 iC;
-out vec3 vW; out vec3 vN; out float vY; out float vQ; out float vU; out vec3 vI; out float vR; out float vA; flat out float vOut; flat out float vJit; flat out float vHero;
+out vec3 vW; out vec3 vR0; out vec3 vN; out float vY; out float vQ; out float vU; out vec3 vI; out float vR; out float vA; flat out float vOut; flat out float vJit; flat out float vHero;
 uniform vec2 uPick; // drawn whole up to, gone by (metres)
 uniform mat4 uLightVP; uniform int uDepth;
 void main() {
@@ -274,7 +295,7 @@ void main() {
   vec3 T = normalize(culmAt(b, h, lean, phase, min(h, y + .05), bend) - culmAt(b, h, lean, phase, max(0., y - .05), bend) + vec3(0., 1e-4, 0.));
   vec3 S = normalize(cross(T, abs(T.x) < .9 ? vec3(1., 0., 0.) : vec3(0., 0., 1.))), Q = cross(S, T);
   vec3 n = normalize(Q * cos(a) - S * sin(a));
-  vW = c + n * rr; vR = rr; vA = a; vN = n; vY = y; vQ = q; vU = a * r; vI = vec3(iC.x, phase, h);
+  vW = c + n * rr; vR0 = culmRest(b, h, lean, phase, y, bend) + n * rr; vR = rr; vA = a; vN = n; vY = y; vQ = q; vU = a * r; vI = vec3(iC.x, phase, h);
   // (how far out it is, each culm a little its own way)
   // (and each stand its own way, so the grove's limit is ragged by whole stands: some run on past the rest, some give
   // way early)
@@ -283,12 +304,12 @@ void main() {
   // (how far out the culm is, whole: its least-out point along its length, so one seen from its foot looking up, or
   // only its top in the frame, is still drawn)
   float bb = 99.;
-  for (int k = 0; k < 5; k++) bb = min(bb, outAt(culmAt(b, h, lean, phase, min(1.6, h) + (h - min(1.6, h)) * float(k) / 4., bend)));
+  for (int k = 0; k < 5; k++) bb = min(bb, outAt(culmRest(b, h, lean, phase, min(1.6, h) + (h - min(1.6, h)) * float(k) / 4., bend)));
   vOut = uDepth == 1 ? 0. : bb + vJit;
   gl_Position = (uDepth == 1 ? uLightVP : uVP) * vec4(vW, 1.);
 }`;
 const CULM_FS = COMMON + LIGHT + OUT + `
-in vec3 vW; in vec3 vN; in float vY; in float vQ; in float vU; in vec3 vI; in float vR; in float vA; flat in float vOut; flat in float vJit; flat in float vHero;
+in vec3 vW; in vec3 vR0; in vec3 vN; in float vY; in float vQ; in float vU; in vec3 vI; in float vR; in float vA; flat in float vOut; flat in float vJit; flat in float vHero;
 uniform float uMarks;
 void main() {
   vec3 N = normalize(vN), V = normalize(uEye - vW);
@@ -297,7 +318,7 @@ void main() {
   // comes in on a culm wherever it crosses the frame; its top a little sooner, as a long stroke runs out; never fading
   // along an internode)
   float yNode = vY - f * fwidth(vY) / max(fwidth(vQ), 1e-4);
-  float drawn = outAt(vW + vec3(0., yNode - vY, 0.)) + vJit + smoothstep(4., vI.z, yNode) * .12;
+  float drawn = outAt(vR0 + vec3(0., yNode - vY, 0.)) + vJit + smoothstep(4., vI.z, yNode) * .12;
   // (the culm's own green: olive-celadon when young, duller and greyer with age, darker low down)
   vec3 young = vec3(.56, .63, .4), old = vec3(.58, .58, .44);
   vec3 alb = mix(young, old, age) * mix(.78, 1., smoothstep(0., 2.5, vY));
@@ -338,7 +359,8 @@ void main() {
   float gq = vU * 260. + vn(vec2(vU * 20., vY)) * 3., gK = 1. - smoothstep(.8, 2.2, fwidth(gq));
   float hC = (exp(-pow((f - .035) / .014, 2.)) * .004 - grv * .0015 + sin(gq) * .00035 * gK) * rK;
   vec3 Nc = bumpN(N, vW, hC);
-  vec3 c = layered(alb, Nc, vW, .25, 1. - .35 * grv * rK, vec3(0.), uColK.x, 0., outAt(vW) + vJit + smoothstep(4., vI.z, vY) * .12, colR, litR);
+  gUnder = 1. - smoothstep(.45, .95, vY / max(vI.z, 1.));
+  vec3 c = layered(alb, Nc, vW, .25, 1. - .35 * grv * rK, vec3(0.), uColK.x, 0., outAt(vR0) + vJit + smoothstep(4., vI.z, vY) * .12, colR, litR);
   // (near and out of focus, a culm goes wet: no contour, a dark wash in its place, streaked as the brush drags; the page
   // softens it)
   float wetK = uFocus.y * smoothstep(.25, 1.1, -cocAt(dist));
@@ -376,7 +398,7 @@ void main() {
   float aw = inkAt(vOut, q), inkA = laidLen(aw, vY / max(vI.z, .1)) * laidW(min(aw, inkAt(drawn, q))) * fadeOf(aw);
   // (along it toward the frame's edge, its ink lifts off, as a long stroke runs out: so a culm whose foot is held still
   // leaves the top of the page to the paper)
-  inkA *= smoothstep(0., .6, has(outAt(vW) + vJit, uRch.z));
+  inkA *= smoothstep(0., .6, has(outAt(vR0) + vJit, uRch.z));
   // (a few culms carry the drawing: past arm's length, half are quieter, secondary; and far ones lighter still, a
   // register of tone rather than of lines)
   float prom = h21(vec2(vI.y * 9.1, 2.7));
@@ -404,13 +426,13 @@ const SPRAY_VS = COMMON + `
 layout(location = 0) in vec2 aUV;
 layout(location = 1) in vec4 iA; layout(location = 2) in vec4 iB; layout(location = 3) in vec4 iC; layout(location = 4) in vec4 iD;
 out vec3 vW; out vec2 vUV; out float vSeed; out vec3 vN; out vec3 vRt; out vec3 vUp; out float vSize; flat out float vOut; flat out float vCulmInk;
-uniform vec2 uPick; uniform vec3 uRight;
+uniform vec2 uPick; uniform vec3 uRight; uniform mat4 uLightVP; uniform int uDepth;
 void main() {
   vec3 b = iA.xyz; float h = iA.w; vec2 lean = iB.xy; float phase = iB.z, pick = iB.w;
   float dist = distance(b.xz, uEye.xz);
   if (pick > 1. - smoothstep(uPick.x, uPick.y, dist)) { gl_Position = vec4(2., 2., 2., 1.); return; }
   float sy = iC.x, size = iC.w, yaw = iD.x, tilt = iD.y, bend = iD.w;
-  vec3 anchor = culmAt(b, h, lean, phase, sy, bend) + vec3(iC.y, 0., iC.z);
+  vec3 anchor = culmAt(b, h, lean, phase, sy, bend) + vec3(iC.y, 0., iC.z), rest = culmRest(b, h, lean, phase, sy, bend) + vec3(iC.y, 0., iC.z);
   // (a flutter of its own; streaming in a gust)
   anchor.xz += vec2(sin(uTime * 2.7 + iD.z * 40.), cos(uTime * 2.2 + iD.z * 30.)) * .05 * (1. + uGust.w * 2.);
   // (half turned to the eye, so a spray is never lost edge-on; hanging below its twig)
@@ -420,31 +442,30 @@ void main() {
   vUV = aUV + .5; vSeed = iD.z; vSize = size; vN = normalize(cross(right, up)); vRt = right; vUp = up;
   // (a spray's drawn as its culm is at eye height, a little further along for being high, and each its own way)
   // (and where it stands in the frame itself, so the canopy at the top of the frame goes to the page too)
-  vOut = outAt(anchor) + (fract(pick * 7.31) - .5) * .14 + smoothstep(4., h, sy) * .1 + (iD.z - .5) * .1 + (vn(b.xz * .045) - .5) * .7;
+  vOut = outAt(rest) + (fract(pick * 7.31) - .5) * .14 + smoothstep(4., h, sy) * .1 + (iD.z - .5) * .1 + (vn(b.xz * .045) - .5) * .7;
   // (its culm's ink, where it hangs: the culm's amount (as the culm asks it: its least-out point, its pick), laid up from
   // its foot to here, lifting as the culm's does toward the frame's edge; so a spray's blades come in with its culm's
   // line, never before it)
   float jit = (fract(pick * 7.31) - .5) * .24 + (vn(b.xz * .045) - .5) * .7, bb = 99.;
-  for (int k = 0; k < 5; k++) bb = min(bb, outAt(culmAt(b, h, lean, phase, min(1.6, h) + (h - min(1.6, h)) * float(k) / 4., bend)));
+  for (int k = 0; k < 5; k++) bb = min(bb, outAt(culmRest(b, h, lean, phase, min(1.6, h) + (h - min(1.6, h)) * float(k) / 4., bend)));
   float cq = h21(vec2(phase * 3.7, 5.3)) * mix(.45, 1., smoothstep(6., 28., dist)), aw = inkAt(bb + jit, cq);
-  vCulmInk = laidLen(aw, sy / max(h, .1)) * aw * smoothstep(0., .6, has(outAt(anchor) + jit, uRch.z));
-  gl_Position = uVP * vec4(vW, 1.);
+  vCulmInk = laidLen(aw, sy / max(h, .1)) * aw * smoothstep(0., .6, has(outAt(rest) + jit, uRch.z));
+  gl_Position = (uDepth == 1 ? uLightVP : uVP) * vec4(vW, 1.);
 }`;
-const SPRAY_FS = COMMON + LIGHT + OUT + `
-in vec3 vW; in vec2 vUV; in float vSeed; in vec3 vN; in vec3 vRt; in vec3 vUp; in float vSize; flat in float vOut; flat in float vCulmInk;
-uniform float uMarks;
-void main() {
+// ─── a spray's blades, drawn in its quad: whether a point is on one, and which, and how it lies ───
+const BLADES = `
+float blades(vec2 uv, float seed, out float rim, out float best, out float along, out float ww, out float acr, out float roll, out float side, out float edged, out vec2 bd) {
   // (the blades: three to seven from a twig near the top, drooping, 个 and 介, each its own: its own angle off the twig,
   // its own length, curl and droop, and turned on its own length, so one shows its face to the light and the next its
   // edge, narrowing as it turns; the one in front wins)
-  vec2 stem = vec2(.5 + (vSeed - .5) * .2, .82);
-  int n = 3 + int(vSeed * 4.99);
-  float inside = 0., rim = 1., best = 0., along = 0., ww = .1, acr = 1., front = -1., roll = 0., side = 0., edged = 0.; vec2 bd = vec2(0., -1.);
+  vec2 stem = vec2(.5 + (seed - .5) * .2, .82);
+  int n = 3 + int(seed * 4.99);
+  float inside = 0., front = -1.; rim = 1.; best = 0.; along = 0.; ww = .1; acr = 1.; roll = 0.; side = 0.; edged = 0.; bd = vec2(0., -1.);
   for (int i = 0; i < 7; i++) {
     if (i >= n) break;
-    float fi = float(i), s = fract(vSeed * 13.7 + fi * .618), s2 = fract(vSeed * 7.31 + fi * .377);
+    float fi = float(i), s = fract(seed * 13.7 + fi * .618), s2 = fract(seed * 7.31 + fi * .377);
     float ang = -1.5708 + (fi - float(n - 1) * .5) * (.5 + s * .25) + (s2 - .5) * .75;
-    vec2 d = vec2(cos(ang), sin(ang)); vec2 pp = vUV - stem;
+    vec2 d = vec2(cos(ang), sin(ang)); vec2 pp = uv - stem;
     float len = .4 + s * .42, a = dot(pp, d) / len;
     // (its curl: the midline bowing one way or the other, more toward the tip)
     float bb = dot(pp, vec2(-d.y, d.x)) / len + a * a * (.05 + .14 * (s2 - .5));
@@ -456,15 +477,31 @@ void main() {
       front = s2; inside = 1.; rim = e / max(w, 1e-3); best = s; along = a; ww = w * len; acr = 1. - e / max(w, 1e-3);
       roll = rl; side = sign(bb) * sign(s - .5); bd = d;
       // (an edge inked only on some blades, and on one side of each: a few chosen strokes, not every blade outlined)
-      edged = step(.5, fract(s * 7.13 + vSeed * 3.1));
+      edged = step(.5, fract(s * 7.13 + seed * 3.1));
     }
   }
+  return inside;
+}
+`;
+// (a spray as the light sees it: its blades, not its quad, so its shadow is leaves)
+const SPRAY_DEPTH_FS = `#version 300 es
+precision highp float;
+in vec2 vUV; in float vSeed;
+${BLADES}
+void main() { float rim, best, along, ww, acr, roll, side, edged; vec2 bd; if (blades(vUV, vSeed, rim, best, along, ww, acr, roll, side, edged, bd) < .5) discard; }`;
+const SPRAY_FS = COMMON + LIGHT + OUT + BLADES + `
+in vec3 vW; in vec2 vUV; in float vSeed; in vec3 vN; in vec3 vRt; in vec3 vUp; in float vSize; flat in float vOut; flat in float vCulmInk;
+uniform float uMarks;
+void main() {
+  float rim, best, along, ww, acr, roll, side, edged; vec2 bd;
+  float inside = blades(vUV, vSeed, rim, best, along, ww, acr, roll, side, edged, bd);
   if (inside < .5) discard;
   vec3 V = normalize(uEye - vW), d3 = normalize(vRt * bd.x + vUp * bd.y);
   // (the blade's own face, turned on its length)
   vec3 Nb = normalize(vN * cos(roll) + cross(d3, vN) * sin(roll)), N = faceforward(Nb, -V, Nb);
   // (lit: dark ink-green in shade, yellow-green in the sun, glowing gold-green where the sun's behind it)
-  float sun = dapple(vW), back = pow(max(0., dot(-V, uSun)), 2.5) * sun;
+  gUnder = .35;
+  float sun = sunThrough(vW), back = pow(max(0., dot(-V, uSun)), 2.5) * sun;
   vec3 alb = mix(vec3(.18, .26, .12), vec3(.5, .6, .24), .35 + .65 * best);
   // (close to, each blade's midrib, a fine darker line down its middle)
   alb *= 1. - .28 * (1. - smoothstep(.0, .14, acr)) * (1. - smoothstep(4., 14., distance(vW, uEye))) * min(1., uRelief);
@@ -493,7 +530,7 @@ void main() {
 const TWIG_VS = COMMON + `
 layout(location = 0) in vec2 aUV;
 layout(location = 1) in vec4 iA; layout(location = 2) in vec4 iB; layout(location = 3) in vec4 iC; layout(location = 4) in vec4 iD;
-out vec3 vW; out vec3 vN; out float vT; out float vRad; flat out float vCulmInk; flat out float vSeed;
+out vec3 vW; out vec3 vR0; out vec3 vN; out float vT; out float vRad; flat out float vCulmInk; flat out float vSeed;
 uniform vec2 uPick;
 void main() {
   vec3 b = iA.xyz; float h = iA.w; vec2 lean = iB.xy; float phase = iB.z, bend = iB.w;
@@ -509,21 +546,23 @@ void main() {
   float a = aUV.x * 6.2832; vec3 n = n1 * cos(a) + n2 * sin(a);
   vRad = rad * (1. - .7 * t);
   vW = p + n * vRad; vN = n; vT = t; vSeed = seed;
+  vec3 p0r = culmRest(b, h, lean, phase, y, bend); vR0 = vW - (p0 - p0r);
   // (its ink, its culm's where it leaves it)
   float jit = (fract(pick * 7.31) - .5) * .24 + (vn(b.xz * .045) - .5) * .7, bb = 99.;
-  for (int k = 0; k < 5; k++) bb = min(bb, outAt(culmAt(b, h, lean, phase, min(1.6, h) + (h - min(1.6, h)) * float(k) / 4., bend)));
+  for (int k = 0; k < 5; k++) bb = min(bb, outAt(culmRest(b, h, lean, phase, min(1.6, h) + (h - min(1.6, h)) * float(k) / 4., bend)));
   float cq = h21(vec2(phase * 3.7, 5.3)) * mix(.45, 1., smoothstep(6., 28., dist)), aw = inkAt(bb + jit, cq);
-  vCulmInk = laidLen(aw, y / max(h, .1)) * aw * smoothstep(0., .6, has(outAt(p0) + jit, uRch.z));
+  vCulmInk = laidLen(aw, y / max(h, .1)) * aw * smoothstep(0., .6, has(outAt(p0r) + jit, uRch.z));
   gl_Position = uVP * vec4(vW, 1.);
 }`;
 const TWIG_FS = COMMON + LIGHT + OUT + `
-in vec3 vW; in vec3 vN; in float vT; in float vRad; flat in float vCulmInk; flat in float vSeed;
+in vec3 vW; in vec3 vR0; in vec3 vN; in float vT; in float vRad; flat in float vCulmInk; flat in float vSeed;
 void main() {
   vec3 N = normalize(vN), V = normalize(uEye - vW);
   float dist = distance(vW, uEye);
   vec3 alb = mix(vec3(.52, .56, .36), vec3(.46, .44, .32), vSeed) * (.85 + .3 * vn(vec2(vT * 24., vSeed * 31.)));
   float colR, litR;
-  vec3 c = layered(alb, N, vW, .3, 1., vec3(0.), uColK.x, 0., outAt(vW), colR, litR);
+  gUnder = .5;
+  vec3 c = layered(alb, N, vW, .3, 1., vec3(0.), uColK.x, 0., outAt(vR0), colR, litR);
   float wetK = uFocus.y * smoothstep(.25, 1.1, -cocAt(dist));
   c = mix(c, vec3(.15, .16, .12), wetK * .8); colR = max(colR, wetK); gColHere = max(gColHere, wetK);
   // (its own line, as a culm draws its: in from its silhouette, or, thinner than that, one fine line as light as it's thin)
@@ -967,6 +1006,8 @@ function culmMesh(sides: number, rings: number) {
   }
   return new Float32Array(v);
 }
+/** the canopy texture round you: metres (a metre a texel) */
+const CAN = 256;
 const QUAD = new Float32Array([-0.5, -0.5, 0.5, -0.5, 0.5, 0.5, -0.5, -0.5, 0.5, 0.5, -0.5, 0.5]);
 function boxMesh() {
   // (unit box: x -0.5..0.5, y 0..1, z -0.5..0.5; positions and normals)
@@ -1012,7 +1053,7 @@ const cross = (a: number[], b: number[]) => [a[1] * b[2] - a[2] * b[1], a[2] * b
 const norm = (a: number[]) => { const l = Math.hypot(a[0], a[1], a[2]) || 1; return [a[0] / l, a[1] / l, a[2] / l]; };
 
 /** what's on the GPU for one chunk */
-interface Held { key: string; x: number; z: number; roots: WebGLBuffer; nRoots: number; strokes: WebGLBuffer | null; nStrokes: number; ground: WebGLBuffer; culms: WebGLBuffer; nCulms: number; sprays: WebGLBuffer; nSprays: number; twigs: WebGLBuffer; nTwigs: number; stones: WebGLBuffer; nStones: number; steps: WebGLBuffer; nSteps: number }
+interface Held { key: string; x: number; z: number; x0: number; z0: number; canopy: Float32Array; roots: WebGLBuffer; nRoots: number; strokes: WebGLBuffer | null; nStrokes: number; ground: WebGLBuffer; culms: WebGLBuffer; nCulms: number; sprays: WebGLBuffer; nSprays: number; twigs: WebGLBuffer; nTwigs: number; stones: WebGLBuffer; nStones: number; steps: WebGLBuffer; nSteps: number }
 
 export class Renderer {
   private gl: WebGL2RenderingContext;
@@ -1043,6 +1084,23 @@ export class Renderer {
   private shadowTex: WebGLTexture | null = null; private shadowFbo: WebGLFramebuffer | null = null; private lightVP: number[] = new Array(16).fill(0); readonly shadows: boolean;
   /** the hour and the air (sky.ts): where the light comes from, its colour, the sky's, the haze, the page's wash */
   sky: Sky = skyAt(8, 0.5);
+  /** the canopy round you, a metre a texel (from each chunk's `canopy`), for the shade beyond the light's map and the
+   * sky's light under the leaves */
+  private canTex: WebGLTexture | null = null; private canO = [1e9, 1e9]; private canDirty = true;
+  private canopyUpdate(eye: number[]) {
+    const gl = this.gl, ox = Math.floor((eye[0] - CAN / 2) / CHUNK) * CHUNK, oz = Math.floor((eye[2] - CAN / 2) / CHUNK) * CHUNK;
+    if (!this.canDirty && ox === this.canO[0] && oz === this.canO[1]) return;
+    this.canDirty = false; this.canO = [ox, oz];
+    const T = new Uint8Array(CAN * CAN).fill(128);
+    for (const h of this.chunks.values()) {
+      const bx = h.x0 - ox, bz = h.z0 - oz;
+      if (bx < 0 || bz < 0 || bx >= CAN || bz >= CAN) continue;
+      for (let j = 0; j < CHUNK; j++) for (let i = 0; i < CHUNK; i++) T[bx + i + (bz + j) * CAN] = Math.round(h.canopy[i + j * CN] * 255);
+    }
+    if (!this.canTex) { this.canTex = gl.createTexture()!; gl.bindTexture(gl.TEXTURE_2D, this.canTex); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE); }
+    gl.activeTexture(gl.TEXTURE4); gl.bindTexture(gl.TEXTURE_2D, this.canTex); gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, CAN, CAN, 0, gl.RED, gl.UNSIGNED_BYTE, T);
+  }
   get sunDir() { return this.sky.lightDir; }
 
   constructor(private canvas: HTMLCanvasElement, ridges: { x: number; z: number; y: number }[][], opts: { clean?: boolean; marks?: boolean; shadows?: boolean } = {}) {
@@ -1053,7 +1111,7 @@ export class Renderer {
     const P = (n: string, vs: string, fs: string) => { this.progs[n] = this.program(vs, fs); };
     P('culm', CULM_VS, CULM_FS); P('spray', SPRAY_VS, SPRAY_FS); P('twig', TWIG_VS, TWIG_FS); P('ground', GROUND_VS, GROUND_FS);
     P('solid', SOLID_VS, SOLID_FS); P('ridge', RIDGE_VS, RIDGE_FS); P('post', POST_VS, POST_FS);
-    P('stroke', STROKE_VS, STROKE_FS); P('culmDepth', CULM_VS, DEPTH_FS); P('solidDepth', SOLID_VS, DEPTH_FS);
+    P('stroke', STROKE_VS, STROKE_FS); P('culmDepth', CULM_VS, DEPTH_FS); P('solidDepth', SOLID_VS, DEPTH_FS); P('sprayDepth', SPRAY_VS, SPRAY_DEPTH_FS);
     // (the sun's view of the culms near you: their shadows)
     this.shadows = opts.shadows !== false;
     {
@@ -1124,10 +1182,12 @@ export class Renderer {
     c.roots.forEach((q, k) => rt.set([q.x, q.y, q.z, q.yaw, q.r, q.len, q.moss, q.moss * 0.37], k * 8));
     const sx = new Float32Array(c.steps.length * 8);
     c.steps.forEach((s, k) => sx.set([s.x, s.y, s.z, Math.atan2(s.dx, s.dz), s.depth, s.width, s.drop, s.seed], k * 8));
-    this.chunks.set(key, { key, x: c.x0 + CHUNK / 2, z: c.z0 + CHUNK / 2, roots: this.buffer(rt), nRoots: c.roots.length, strokes: marks?.length ? this.buffer(marks) : null, nStrokes: marks ? marks.length / STROKE_STRIDE : 0, ground: this.buffer(v), culms: this.buffer(cu), nCulms: c.tall, sprays: this.buffer(sp), nSprays: c.sprays.length, twigs: this.buffer(tw), nTwigs: c.twigs.length, stones: this.buffer(st), nStones: c.stones.length, steps: this.buffer(sx), nSteps: c.steps.length });
+    this.canDirty = true;
+    this.chunks.set(key, { key, x: c.x0 + CHUNK / 2, z: c.z0 + CHUNK / 2, x0: c.x0, z0: c.z0, canopy: c.canopy, roots: this.buffer(rt), nRoots: c.roots.length, strokes: marks?.length ? this.buffer(marks) : null, nStrokes: marks ? marks.length / STROKE_STRIDE : 0, ground: this.buffer(v), culms: this.buffer(cu), nCulms: c.tall, sprays: this.buffer(sp), nSprays: c.sprays.length, twigs: this.buffer(tw), nTwigs: c.twigs.length, stones: this.buffer(st), nStones: c.stones.length, steps: this.buffer(sx), nSteps: c.steps.length });
   }
   /** let a chunk go */
   drop(key: string) {
+    this.canDirty = true;
     const h = this.chunks.get(key); if (!h) return;
     for (const b of [h.ground, h.culms, h.sprays, h.twigs, h.stones, h.steps, h.strokes, h.roots]) if (b) this.gl.deleteBuffer(b);
     this.chunks.delete(key);
@@ -1167,7 +1227,7 @@ export class Renderer {
     gl.uniform4fv(u('uColK'), [d.culms, d.leaves, d.terrain, 0]); gl.uniform4fv(u('uLitK'), [d.shade, d.cast, d.hollow, d.landlight]);
     gl.uniform4fv(u('uInkK'), [d.lines, d.strokes, d.edges, d.inkfade]); gl.uniform4fv(u('uHand'), [d.open, d.swell, d.grain, 0]); gl.uniform1f(u('uPxW'), this.pxW); gl.uniform4fv(u('uFocus'), [d.aperture, d.wet, d.dry, d.soften]); gl.uniform1f(u('uRelief'), d.relief); gl.uniform1f(u('uUnder'), d.under); gl.uniform3fv(u('uPaperC'), this.sky.paper);
     gl.uniform1f(u('uAway'), (1 - Math.min(1, d.toward)) * Math.min(1, d.terrain));
-    gl.uniformMatrix4fv(u('uLightVP'), false, this.lightVP); gl.uniform1i(u('uShadow'), 3); gl.uniform1f(u('uShadowOn'), this.shadows ? 1 : 0); gl.uniform1i(u('uDepth'), 0);
+    gl.uniformMatrix4fv(u('uLightVP'), false, this.lightVP); gl.uniform1i(u('uShadow'), 3); gl.uniform1i(u('uCanopy'), 4); gl.uniform3fv(u('uCanO'), [this.canO[0], this.canO[1], CAN]); gl.uniform1f(u('uShadowOn'), this.shadows ? 1 : 0); gl.uniform1i(u('uDepth'), 0);
   }
   private attr(loc: number, buf: WebGLBuffer, size: number, stride: number, off: number, div = 0) {
     const gl = this.gl; gl.bindBuffer(gl.ARRAY_BUFFER, buf); gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, size, gl.FLOAT, false, stride * 4, off * 4); gl.vertexAttribDivisor(loc, div);
@@ -1202,8 +1262,19 @@ export class Renderer {
       p = use('solidDepth'); gl.uniform1i(gl.getUniformLocation(p, 'uDepth'), 1); gl.uniform1i(gl.getUniformLocation(p, 'uKind'), 1);
       this.attr(0, this.vbo.slab.buf, 3, 6, 0); this.attr(1, this.vbo.slab.buf, 3, 6, 3);
       for (const { c } of near2) if (c.nSteps) { this.attr(2, c.steps, 4, 8, 0, 1); this.attr(3, c.steps, 4, 8, 4, 1); gl.drawArraysInstanced(gl.TRIANGLES, 0, this.vbo.slab.count, c.nSteps); }
+      // (the boulders, and the leaves: each spray's blades as they hang and move, so the shade under the canopy is the
+      // canopy's)
+      gl.uniform1i(gl.getUniformLocation(p, 'uKind'), 2);
+      this.attr(0, this.vbo.lump.buf, 3, 6, 0); this.attr(1, this.vbo.lump.buf, 3, 6, 3);
+      for (const { c } of near2) if (c.nStones) { this.attr(2, c.stones, 4, 8, 0, 1); this.attr(3, c.stones, 4, 8, 4, 1); gl.drawArraysInstanced(gl.TRIANGLES, 0, this.vbo.lump.count, c.nStones); }
+      if (!this.bare) {
+        p = use('sprayDepth'); gl.uniform1i(gl.getUniformLocation(p, 'uDepth'), 1);
+        this.attr(0, this.vbo.quad.buf, 2, 2, 0);
+        for (const { c } of near2) if (c.nSprays) { for (let a = 0; a < 4; a++) this.attr(1 + a, c.sprays, 4, 16, a * 4, 1); gl.drawArraysInstanced(gl.TRIANGLES, 0, 6, c.nSprays); }
+      }
     }
-    gl.activeTexture(gl.TEXTURE3); gl.bindTexture(gl.TEXTURE_2D, this.shadowTex); gl.activeTexture(gl.TEXTURE0);
+    gl.activeTexture(gl.TEXTURE3); gl.bindTexture(gl.TEXTURE_2D, this.shadowTex);
+    this.canopyUpdate(f.eye); gl.activeTexture(gl.TEXTURE4); gl.bindTexture(gl.TEXTURE_2D, this.canTex); gl.activeTexture(gl.TEXTURE0);
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.fbo); gl.viewport(0, 0, w, h);
     gl.clearBufferfv(gl.COLOR, 0, [0, 0, 0, 0]); gl.clearBufferfv(gl.COLOR, 1, [0, 0, 0, 0]); gl.clearBufferfv(gl.DEPTH, 0, [1]);
     gl.enable(gl.DEPTH_TEST); gl.depthFunc(gl.LEQUAL); gl.disable(gl.BLEND); gl.disable(gl.CULL_FACE);

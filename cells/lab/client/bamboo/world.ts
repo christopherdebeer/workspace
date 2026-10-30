@@ -469,7 +469,19 @@ export class World {
     for (const st of stones) touch(st.x, st.z, st.r * 0.7, st.r * 1.7, 0.55);
     for (const st of steps) touch(st.x + st.dx * st.depth * 0.5, st.z + st.dz * st.depth * 0.5, st.width * 0.3, st.width * 0.8, 0.75);
     for (let k = 0; k < tall; k++) { const q = culms[k]; touch(q.x, q.z, q.r, q.r + 0.6, 0.72); }
-    return { ci, cj, x0, z0, ground, near, rock, culms, tall, sprays, twigs, stones, steps, roots, sunVis, ao };
+    // ─── the canopy over each point of the ground: how much leaf there is overhead (0 open sky … 1 closed), from where
+    // the sprays really hang (and a little of a neighbour's, for those hanging over the edge) ───
+    const canopy = new Float32Array(CN * CN);
+    for (const sp of sprays) {
+      if (sp.c >= tall) continue;
+      const p = culmPoint(culms[sp.c], sp.y), x = p[0] + sp.ox - x0, z = p[2] + sp.oz - z0, r = 0.6 + sp.size * 0.9, a = sp.size * sp.size * 0.55;
+      for (let j = Math.max(0, Math.floor(z - r)); j <= Math.min(CN - 1, Math.ceil(z + r)); j++) for (let i = Math.max(0, Math.floor(x - r)); i <= Math.min(CN - 1, Math.ceil(x + r)); i++) {
+        const d2 = ((i - x) ** 2 + (j - z) ** 2) / (r * r);
+        if (d2 < 1) canopy[i + j * CN] += a * (1 - d2) * (1 - d2);
+      }
+    }
+    for (let k = 0; k < canopy.length; k++) canopy[k] = 1 - Math.exp(-canopy[k] * 0.9);
+    return { ci, cj, x0, z0, ground, near, rock, culms, tall, sprays, twigs, stones, steps, roots, sunVis, ao, canopy };
   }
 }
 
@@ -506,6 +518,8 @@ export interface Chunk {
   culms: Culm[]; tall: number; sprays: Spray[]; twigs: Twig[]; stones: Stone[]; steps: Step[]; roots: Root[];
   /** per ground point: how much the sun reaches it past the land (0–1), how much of the sky it sees (0–1) */
   sunVis: Float32Array; ao: Float32Array;
+  /** per ground point: how much leaf is overhead (0 open sky … 1 closed canopy) */
+  canopy: Float32Array;
 }
 
 /** the far ranges, all round about (drawn as a backdrop that keeps its distance): each a jagged line, one behind another */
