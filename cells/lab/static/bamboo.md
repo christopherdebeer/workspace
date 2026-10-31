@@ -119,7 +119,7 @@ Every block takes its up from the bedding and its tier heights from the planes t
 - **a rooted outcrop**: a big slab tipped back into the hill, its neighbours along the same joints, a wedge broken off below, fragments;
 - **running crowns**: low flat tops stepping along the contour, a way a fox could take.
 
-**A block** is a box with chamfered edges and corners. Its corners are nudged (each its own: no two the same), its top drawn in and broken down toward a face. Now and then a vertical corner is sheared off, so a face is cut obliquely through. Its faces are flat with their own normals; the chamfers are its worn edges. Nothing grows under rock.
+**A block** is a prism stood on its bedding over its own outline: a rectangle with some of its corners broken off, so four to eight sides, its faces cut obliquely where a corner went. Its top is drawn in and dropped toward the faces it's broken to, so it's a top in facets, not one plane. It's chamfered round its top edge (the worn edge). Its faces are flat with their own normals. The ground's cut follows its own outline, and its ink is its own edges, each known for what it is: crest, side, joint, foot. Nothing grows under rock, and a cleft's floor is scree, not moss.
 
 Everything agrees on the same faces:
 - **Footing** (`footing.ts`) stands on the blocks' own upward faces. A crack between two blocks narrower than a foot is stepped over.
@@ -131,7 +131,7 @@ Everything agrees on the same faces:
   - the bedding is a thin dark line where each plane meets a side face, broken here and there;
   - the worn edges are lighter;
   - moss is held on a ledge's top and in a cleft;
-  - the hatching goes with each block's own frame.
+  - in a block's shade, a few fine strokes in its own frame, broken along their length (not a ruled field).
 - **Ink** (`strokes.ts`) comes from the blocks' own edges, and where rock stands the land's slope-made cliff marks give way to these:
   - a column's crest, firmest;
   - a ledge's lip;
