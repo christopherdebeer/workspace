@@ -735,7 +735,9 @@ void main() {
   } else if (uKind == 4) {
     // (a part of a body going through the grove (presence.ts): the lump stretched to its size)
     // (and pitched, so a limb's segment lies along it)
-    p = p * iB.xyz; n = normalize(n / iB.xyz);
+    // (tapered toward its far end, or with iC.y < 0 its near one: a snout, an ear, a tail's root and its tip)
+    float tq = iC.y > 0. ? (p.z + 1.) * .5 : (1. - p.z) * .5, tk = 1. - abs(iC.y) * tq * tq;
+    p = vec3(p.xy * tk * (1. + iC.z * .28), p.z * (1. + iC.z * .08)) * iB.xyz; n = normalize(vec3(n.xy / tk, n.z + abs(iC.y) * tq * sign(iC.y) * .8) / iB.xyz);
     float cp = cos(iC.x), sp = sin(iC.x);
     p = vec3(p.x, p.y * cp - p.z * sp, p.y * sp + p.z * cp); n = vec3(n.x, n.y * cp - n.z * sp, n.y * sp + n.z * cp);
   } else {
@@ -743,7 +745,7 @@ void main() {
   }
   float c = cos(yaw), s = sin(yaw);
   p = vec3(c * p.x + s * p.z, p.y, -s * p.x + c * p.z); n = vec3(c * n.x + s * n.z, n.y, -s * n.x + c * n.z);
-  vW = iA.xyz + p; vN = n; vL = aP; vMoss = uKind == 4 ? 0. : iB.z; vSeed = iB.w;
+  vW = iA.xyz + p; vN = n; vL = aP; vMoss = uKind == 4 ? iC.z : iB.z; vSeed = iB.w;
   vOut = uDepth == 1 ? 0. : outCol(iA.xyz + vec3(0., .2, 0.)) + (fract(iA.x * .37 + iA.z * .71) - .5) * .14;
   gl_Position = (uDepth == 1 ? uLightVP : uVP) * vec4(vW, 1.);
 }`;
@@ -774,9 +776,36 @@ void main() {
   }
   if (uKind == 4) {
     // (a fox: russet, its underside and its tail's tip white; someone running: a dark coat, a pale sleeve, dark hair)
+    // (a fox's coat as a brush lays it: strokes along each part, the way its fur lies, a darker stroke now and then down
+    // the back and a pale one catching the light; at its edge the strokes break off dry, so its outline's fur, not a
+    // shell. vMoss is how furred the part is; vL its own place, z along it)
     int part = int(vSeed + .5);
-    alb = part == 3 ? vec3(.93, .9, .84) : part <= 2 ? mix(vec3(.66, .33, .13), vec3(.9, .85, .76), smoothstep(-.2, -.6, N.y) * (part == 0 ? .8 : .4)) : part == 4 ? vec3(.3, .33, .4) : part == 5 ? vec3(.16, .13, .12) : part == 7 ? vec3(.14, .1, .08) : part == 8 ? vec3(.72, .56, .44) : vec3(.88, .86, .8);
-    alb *= .9 + .2 * n2;
+    float ang = atan(vL.y, vL.x), fur = vMoss;
+    float strand = vn(vec2(ang * 2.6 + vSeed * 3.1, vL.z * 1.1 + ang * .4)), fine = vn(vec2(ang * 9. + vSeed, vL.z * 1.6));
+    // (tufts along its outline: fine along the part, so the edge breaks into strokes as it runs)
+    float tuft = vn(vec2(ang * 4. + vSeed * 3., vL.z * 11.)) * .7 + vn(vec2(ang * 9., vL.z * 23.)) * .3;
+    if (fur > 0.) {
+      vec3 V = normalize(uEye - vW);
+      // (the part's swollen by its fur; its outer half is tufts, kept where the brush laid them)
+      float ndv = abs(dot(N, V));
+      if (ndv < fur * (.15 + .8 * smoothstep(.35, .75, tuft))) discard;
+    }
+    vec3 rus = mix(vec3(.7, .37, .16), vec3(.88, .6, .36), strand * .7 + fine * .3), pale = vec3(.93, .9, .84), dark = vec3(.12, .085, .07);
+    // (the brush's strokes, along the fur: a dark one, a pale one)
+    rus = mix(rus, rus * .55, smoothstep(.72, .86, fine) * fur);
+    rus = mix(rus, mix(rus, pale, .45), smoothstep(.78, .9, vn(vec2(ang * 9. + 5., vL.z * 1.6))) * fur);
+    float belly = smoothstep(-.15, -.6, N.y);
+    // (its form said softly, as a wash does, not modelled hard: the fur turned toward the sky)
+    N = normalize(N + vec3(0., .55, 0.) * fur);
+    alb = part == 0 ? mix(mix(rus, rus * .62, smoothstep(.55, .9, N.y) * step(.55, fine) * .8), pale, belly * .5)
+        : part == 1 ? mix(rus, pale, smoothstep(-.05, -.45, N.y))
+        : part == 2 ? mix(mix(rus, rus * .55, step(.6, strand) * .7), pale * .9, belly * .35)
+        : part == 3 ? pale * (.92 + .1 * strand)
+        : part == 9 ? mix(rus, dark, smoothstep(-.2, .7, vL.z))
+        : part == 10 ? mix(rus * 1.05, dark, smoothstep(-.1, .6, vL.z) * .8 + .2)
+        : part == 11 ? mix(rus * .9, mix(dark, rus * .5, .3), smoothstep(.3, -.3, vL.z) * smoothstep(.05, .5, abs(vL.x) + strand * .3))
+        : part == 4 ? vec3(.3, .33, .4) : part == 5 ? vec3(.16, .13, .12) : part == 7 ? dark : part == 8 ? vec3(.72, .56, .44) : vec3(.88, .86, .8);
+    alb *= .9 + .2 * (fur > 0. ? fine : n2);
   }
   if (uKind == 3) {
     // (a root: grey-brown bark, worn pale and smooth on top where it's trodden, moss low along it)
@@ -823,7 +852,7 @@ void main() {
   vec3 c = layered(alb, N, vW, .2, .85 * sCav, vec3(0.), uColK.z, 1., outCol(vW) + (fract(vSeed * 3.1) - .5) * .06, colR, litR);
   // (its ink laid from its middle out to its sides, then to its weight; a step's by weight alone, as one of a flight, so
   // the flight's edge thins as one line, never a row of dashes, a stone each)
-  float sa = inkAt(vOut, fract(vSeed * 5.13 + .3)), inkA = laid(sa, uKind == 1 ? 0. : clamp(abs(vL.x), 0., 1.));
+  float sa = inkAt(vOut, fract(vSeed * 5.13 + .3)), inkA = laid(sa, uKind == 1 ? 0. : clamp(abs(vL.x), 0., 1.)) * (uKind == 4 ? .45 : 1.);
   if (uClay < .5 && colR < .02 && litR * dot(uLitK.xyz, vec3(1.)) < .02 && sa < .002) discard;
   // (open: a stone's contour carried by where it meets the land (its underside, its contact, a step's front), its top
   // and its far side barely said, lifting here and there)
@@ -1118,7 +1147,7 @@ export class Renderer {
   sky: Sky = skyAt(8, 0.5);
   /** something going through the grove (presence.ts): its body's parts, and where it stirs the culms (x, z, how hard, how
    * far) */
-  presence: { x: number; y: number; z: number; yaw: number; pitch: number; sx: number; sy: number; sz: number; part: number }[] = [];
+  presence: { x: number; y: number; z: number; yaw: number; pitch: number; sx: number; sy: number; sz: number; part: number; tp?: number; fur?: number }[] = [];
   stir = [0, 0, 0, 1];
   /** where it's passed: up to eight places still moving, settling (x, z, how hard now, how far) */
   stirs: number[][] = [];
@@ -1140,7 +1169,7 @@ export class Renderer {
   private presBuf: WebGLBuffer | null = null; private presN = 0;
   private presUpload() {
     const gl = this.gl, P = this.presence, a = new Float32Array(P.length * 12);
-    P.forEach((q, k) => a.set([q.x, q.y, q.z, q.yaw, q.sx, q.sy, q.sz, q.part, q.pitch, 0, 0, 0], k * 12));
+    P.forEach((q, k) => a.set([q.x, q.y, q.z, q.yaw, q.sx, q.sy, q.sz, q.part, q.pitch, q.tp ?? 0, q.fur ?? 0, 0], k * 12));
     this.presBuf ??= gl.createBuffer()!;
     gl.bindBuffer(gl.ARRAY_BUFFER, this.presBuf); gl.bufferData(gl.ARRAY_BUFFER, a, gl.DYNAMIC_DRAW); this.presN = P.length;
   }

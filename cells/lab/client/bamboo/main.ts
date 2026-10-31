@@ -173,12 +173,17 @@ function begin() {
   }
   it = new Presence(chaseKind, me.feet, world, x, z, runner ? me.heading : me.heading + (Math.PI / 2) * side, chaseSeed++);
   chase = new Chase(it, me.feet); note.classList.remove('shown'); lastMe = [me.x, me.z]; settle = 0;
-  // (`pose=walk|trot|gallop|bound|lie`, with `still`: the body held just ahead, side on, mid-stride, to see how it's made)
+  // (`pose=walk|trot|gallop|gather|bound|contact|absorb|listen|lie`, with `still`: the body held just ahead, side on, to
+  // see how it's made; a bound's phases as the fox sheet has them)
   const pose = params.get('pose');
   if (pose) {
-    it.x = me.x + fx * 5; it.z = me.z + fz * 5; it.heading = me.heading + Math.PI / 2; it.y = me.feet.at(it.x, it.z).y;
-    it.v = pose === 'walk' ? 1.2 : pose === 'trot' ? 3.2 : pose === 'lie' ? 0 : 9; it.mode = pose === 'lie' ? 'rest' : 'go';
-    if (pose === 'bound') { it.air = true; it.vy = 1.5; it.y += 0.5; }
+    const pd = +(params.get('posed') ?? 5); it.x = me.x + fx * pd; it.z = me.z + fz * pd; it.heading = me.heading + Math.PI / 2; it.y = me.feet.at(it.x, it.z).y;
+    it.v = pose === 'walk' ? 1.2 : pose === 'trot' ? 3.2 : pose === 'lie' || pose === 'listen' ? 0 : pose === 'gallop' ? 9 : 6;
+    it.mode = pose === 'lie' ? 'rest' : pose === 'listen' ? 'pause' : 'go';
+    if (pose === 'listen') it.look = -1.2;
+    if (pose === 'gather') it.gather = 0.01;
+    if (pose === 'absorb') { it.landT = 0.05; it.comp = 0.03; }
+    if (pose === 'bound' || pose === 'contact') { it.air = true; it.flightT = 0.5; it.airT = pose === 'bound' ? 0.16 : 0.44; it.vx = Math.sin(it.heading) * 6; it.vz = Math.cos(it.heading) * 6; it.vy = pose === 'bound' ? 1.6 : -2; it.y += pose === 'bound' ? 0.45 : 0.22; }
     for (let k = 0; k < 40; k++) it.swing(0.05);
   }
 }

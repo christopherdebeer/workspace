@@ -23,7 +23,9 @@ import { meets, type Footings, type Post } from './footing';
 export type Kind = 'fox' | 'runner' | 'stir';
 export interface Cue { kind: 'step' | 'land' | 'rustle' | 'stir'; x: number; y: number; z: number; loud: number; t: number }
 /** a part of its body, for the renderer: a stretched sphere, where, turned how (yaw about up, then pitched), which part */
-export interface Part { x: number; y: number; z: number; yaw: number; pitch: number; sx: number; sy: number; sz: number; part: number }
+export interface Part { x: number; y: number; z: number; yaw: number; pitch: number; sx: number; sy: number; sz: number; part: number;
+  /** tapered toward its far end (or, < 0, its near one), 0 … 1; how furred its edge is, 0 … 1 */
+  tp?: number; fur?: number }
 /** what it can tell of you: where your eye is, how fast you're going, how loud you've just been (a landing) */
 export interface You { x: number; z: number; y: number; v: number; loud: number }
 
@@ -38,6 +40,7 @@ const ease = (dt: number, rate: number) => 1 - Math.exp(-dt * rate);
 type V3 = [number, number, number];
 const add = (a: V3, b: V3, k = 1): V3 => [a[0] + b[0] * k, a[1] + b[1] * k, a[2] + b[2] * k];
 const sub = (a: V3, b: V3): V3 => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+const mul = (a: V3, k: number): V3 => [a[0] * k, a[1] * k, a[2] * k];
 const len = (a: V3) => Math.hypot(a[0], a[1], a[2]);
 const nrm = (a: V3): V3 => { const l = len(a) || 1; return [a[0] / l, a[1] / l, a[2] / l]; };
 const cross = (a: V3, b: V3): V3 => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
@@ -55,11 +58,22 @@ function limb(j: V3, f: V3, a: number, b: number, bend: V3): V3 {
   const side = nrm(cross(d, bend)), perp = nrm(cross(side, d)), p = dot(perp, bend) < 0 ? -1 : 1;
   return add(add(j, d, along), perp, h * p);
 }
+/** a rounded mass at c, lying along `dir` */
+function blob(c: V3, dir: V3, sx: number, sy: number, sz: number, part: number, fur = 0): Part {
+  return { ...seg(add(c, dir, -0.01), add(c, dir, 0.01), 0.01, part), sx, sy, sz, fur };
+}
+const mix3 = (a: V3, b: V3, t: number): V3 => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
+/** through a, b, c as s goes 0 … 1 */
+const via = (a: V3, b: V3, c: V3, s: number) => (s < 0.5 ? mix3(a, b, s * 2) : mix3(b, c, s * 2 - 1));
 
 export class Presence {
   x: number; z: number; y = 0; heading: number; v = 0; t = 0;
   /** in the air: carried (vx, vz), rising or falling (vy) */
   air = false; vx = 0; vz = 0; vy = 0;
+  /** a bound's phases: gathering for it (seconds left), how long it's been in the air of how long it'll be, since it
+   * came down */
+  gather = 0; airT = 0; flightT = 1; landT = 9;
+  private springAt = 0; private springDir: [number, number] = [0, 1];
   /** what it's doing: going, stopped to listen (looking back toward you), lying up */
   mode: 'go' | 'pause' | 'rest' = 'go';
   /** how alarmed it is at you, 0 … 1; and whether it can see you just now */
@@ -71,7 +85,8 @@ export class Presence {
   readonly spec: (typeof KIND)[Kind];
   private wander: number; private pauseT = 0; private nextPause: number; private posts: Post[] = []; private think = 0; private best: number; private bestCost = 0;
   private rnd: () => number; private trailDir = 0; private shook = new Set<object>(); private goal: number;
-  private gait = 0; private comp = 0; private compV = 0; private look = 0; private wasAlarmed = false; private calm = 0; private sight = 0; private youNoise = 0;
+  comp = 0; look = 0;
+  private gait = 0; private compV = 0; private wasAlarmed = false; private calm = 0; private sight = 0; private youNoise = 0;
   private tail: V3[] = [];
   constructor(readonly kind: Kind, readonly feet: Footings, readonly land: Land, x: number, z: number, heading: number, seed = 1) {
     this.x = x; this.z = z; this.heading = this.best = this.wander = heading; this.spec = KIND[kind];
@@ -125,6 +140,15 @@ export class Presence {
     this.compV += (-160 * this.comp - 18 * this.compV) * dt; this.comp += this.compV * dt;
 
     if (this.air) { this.fly(dt); this.swing(dt); return; }
+    this.landT += dt;
+    // (gathering: the hind feet come under, the body sinks, still going on a little; then it springs from there)
+    if (this.gather > 0) {
+      const [dx, dz] = this.springDir, s = this.v * 0.45 * dt, nx = this.x + dx * s, nz = this.z + dz * s;
+      if (Math.abs(F.at(nx, nz).y - this.y) < 0.06) { this.x = nx; this.z = nz; this.springAt -= s; this.travelled += s; }
+      this.gather -= dt; this.swing(dt);
+      if (this.gather <= 0) this.spring();
+      return;
+    }
 
     // ─── lying up: it lets you come, slowly; come fast or loud and it's gone ───
     if (this.mode === 'rest') {
@@ -136,7 +160,12 @@ export class Presence {
     // to wait for you: hearing you close, a fox goes at once ───
     if (this.mode === 'pause') {
       this.pauseT -= dt; this.v += (0 - this.v) * ease(dt, 8);
-      if (this.kind === 'fox') this.look += (wrap(away + Math.PI - this.heading) - this.look) * ease(dt, 4);
+      if (this.kind === 'fox') {
+        // (it looks back over its shoulder; further round than its neck goes, and it turns its body to you)
+        const to = wrap(away + Math.PI - this.heading), over = Math.abs(to) - 1.4;
+        if (over > 0) this.heading += Math.sign(to) * over * ease(dt, 2.5);
+        this.look += (Math.max(-1.4, Math.min(1.4, to)) - this.look) * ease(dt, 4);
+      }
       this.swing(dt);
       if (this.pauseT <= 0 || (this.kind === 'fox' && this.alarm > 0.55)) { this.mode = 'go'; this.nextPause = (this.kind === 'runner' ? 18 : 6) + this.rnd() * (this.kind === 'runner' ? 18 : 8); }
       return;
@@ -254,9 +283,9 @@ export class Presence {
     }
     return null;
   }
-  /** something just ahead it can't step: it gathers and springs, committed to where it'll come down */
+  /** something just ahead it can't step: it gathers for it, then springs (`spring`); nowhere to come down, and it doesn't */
   private bound(dx: number, dz: number) {
-    const F = this.feet, ahead = Math.max(0.35, this.v * 0.12);
+    const F = this.feet, ahead = Math.max(0.35, this.v * 0.16);
     let edge = -1;
     for (let s = 0.15; s <= ahead + 0.3; s += 0.15) { const u = F.at(this.x + dx * s, this.z + dz * s).y; if (this.edge(u, s)) { edge = s; break; } }
     // (a culm bowed low across its way: over it)
@@ -266,42 +295,50 @@ export class Presence {
       if (al > 0.2 && al < ahead + 0.3 && Math.abs(-rx * dz + rz * dx) < 0.3) { edge = al; break; }
     }
     if (edge < 0) return false;
-    const L = this.landing(dx, dz, edge);
-    if (!L) { this.think = 0; this.v *= 0.3; return true; }
+    if (!this.landing(dx, dz, edge)) { this.think = 0; this.v *= 0.3; return true; }
+    this.gather = this.kind === 'fox' ? 0.12 : 0.09; this.springAt = edge; this.springDir = [dx, dz];
+    return true;
+  }
+  /** off: the flight worked out from where it's gathered, committed to where it'll come down */
+  private spring() {
+    const [dx, dz] = this.springDir, L = this.landing(dx, dz, Math.max(0.1, this.springAt));
+    if (!L) { this.think = 0; this.v *= 0.3; return; }
     const vh = Math.max(this.v, 3.5), T0 = Math.max(0.22, L.d / vh);
     let vy = (L.y - this.y + 0.5 * G * T0 * T0) / T0, T = T0;
     const need = Math.sqrt(Math.max(0, 2 * G * (L.crest + 0.18 - this.y)));
     if (vy < need) { vy = need; T = (vy + Math.sqrt(Math.max(0, vy * vy - 2 * G * (L.y - this.y)))) / G; }
-    this.vx = (dx * L.d) / T; this.vz = (dz * L.d) / T; this.vy = vy; this.air = true;
+    this.vx = (dx * L.d) / T; this.vz = (dz * L.d) / T; this.vy = vy; this.air = true; this.airT = 0; this.flightT = T;
     this.compV -= 1.2;
     this.cue('step', this.spec.loud * 0.8);
-    return true;
   }
   private fly(dt: number) {
-    this.x += this.vx * dt; this.z += this.vz * dt; this.vy -= G * dt; this.y += this.vy * dt;
+    this.x += this.vx * dt; this.z += this.vz * dt; this.vy -= G * dt; this.y += this.vy * dt; this.airT += dt;
     this.travelled += Math.hypot(this.vx, this.vz) * dt;
     const g = this.ground();
     if (this.y <= g && this.vy < 0) {
       const imp = -this.vy;
-      this.y = g; this.air = false; this.vy = 0; this.v = Math.hypot(this.vx, this.vz);
+      this.y = g; this.air = false; this.vy = 0; this.v = Math.hypot(this.vx, this.vz); this.landT = 0;
       this.compV += 0.4 + imp * 0.22;
       this.cue('land', (0.7 + imp * 0.25) * this.spec.loud * (this.feet.at(this.x, this.z).kind === 'stone' ? 1.5 : 1));
       this.shakes.push({ x: this.x, z: this.z, t: this.t, k: 0.35 });
     }
   }
-  /** the tail, swinging after the body, streaming in a gallop, hanging when it's still */
+  /** the tail, swinging after the body: streaming straight out in a bound or a gallop, low and swaying when it trots,
+   * hanging when it stops to listen */
   swing(dt: number) {
     if (this.kind !== 'fox') return;
-    const h = this.heading, f: V3 = [Math.sin(h), 0, Math.cos(h)], run = Math.min(1, this.v / this.spec.run);
-    let p: V3 = [this.x - f[0] * 0.26, this.y + 0.36, this.z - f[2] * 0.26];
-    const dir = nrm([-f[0], -0.55 + 0.6 * run + (this.mode === 'pause' ? 0.2 : 0), -f[2]]), side: V3 = [f[2], 0, -f[0]];
-    if (this.tail.length !== 4) this.tail = [0, 1, 2, 3].map((k) => add(p, dir, 0.14 * k));
+    const h = this.heading, f: V3 = [Math.sin(h), 0, Math.cos(h)], run = this.air ? 1 : Math.min(1, this.v / this.spec.run), n = 5, L = 0.12;
+    let p: V3 = [this.x - f[0] * 0.27, this.y + 0.33 - this.comp, this.z - f[2] * 0.27];
+    const dir = nrm([-f[0], -0.45 + 0.5 * run - (this.mode === 'pause' ? 0.3 : 0), -f[2]]), side: V3 = [f[2], 0, -f[0]];
+    if (this.tail.length !== n) this.tail = Array.from({ length: n }, (_, k) => add(p, dir, L * k));
     this.tail[0] = p;
-    for (let k = 1; k < 4; k++) {
-      const sway = Math.sin(this.t * 2.2 - k * 0.8) * 0.05 * k * (1 - run * 0.6);
-      const want = add(add(this.tail[k - 1], dir, 0.14), side, sway), q = this.tail[k];
-      const nq = add(q, sub(want, q), ease(dt, 14 - k * 2.5));
-      this.tail[k] = add(this.tail[k - 1], nrm(sub(nq, this.tail[k - 1])), 0.14);
+    for (let k = 1; k < n; k++) {
+      const sway = Math.sin(this.t * 2.2 - k * 0.8) * 0.04 * k * (1 - run * 0.7);
+      // (it curves: the root rising from the hips, the brush drooping, the tip lifting a little)
+      const bend: V3 = [0, k === 1 ? 0.03 : k === n - 1 ? 0.015 : -0.01, 0];
+      const want = add(add(add(this.tail[k - 1], dir, L), side, sway), bend), q = this.tail[k];
+      const nq = add(q, sub(want, q), ease(dt, 15 - k * 2.2));
+      this.tail[k] = add(this.tail[k - 1], nrm(sub(nq, this.tail[k - 1])), L);
       p = this.tail[k];
     }
   }
@@ -331,34 +368,59 @@ export class Presence {
     const run = Math.min(1, this.v / this.spec.run), gaitW = Math.sin(this.gait * Math.PI * 2), F = this.feet;
     const out: Part[] = [];
     if (this.kind === 'fox') {
-      const lie = this.mode === 'rest' ? 0.2 : 0;
+      const lie = this.mode === 'rest' ? 0.17 : 0, listen = this.mode === 'pause' ? 1 : 0;
+      // (where it is in a bound: gathering (the hind feet coming under, the hips sinking), in the air (s: 0 the push off,
+      // ½ stretched out, 1 the forefeet reaching down for the ground), and coming down (the shoulders taking it, sinking))
+      const gk = this.gather > 0 ? Math.min(1, 1 - this.gather / 0.12) : 0, s = this.air ? Math.min(1, this.airT / this.flightT) : 0;
+      const ak = !this.air && this.landT < 0.32 ? Math.sin(Math.PI * Math.min(1, 0.25 + this.landT / 0.32 * 0.75)) : 0, stretch = this.air ? Math.sin(Math.PI * Math.min(1, s * 1.3)) : 0;
+      const vh = Math.hypot(this.vx, this.vz), pa = this.air ? Math.max(-0.55, Math.min(0.5, Math.atan2(this.vy, Math.max(1, vh)) * 1.3 + 0.12 * (1 - s * 2))) : -0.12 * ak + 0.06 * gk;
       // (the spine from the hips to the shoulders, each over the ground under it, so it follows the slope and its stones)
       const gF = this.air ? this.y : F.at(this.x + f[0] * 0.2, this.z + f[2] * 0.2).y, gH = this.air ? this.y : F.at(this.x - f[0] * 0.2, this.z - f[2] * 0.2).y;
-      const flex = this.v > 5 && !this.air ? gaitW * 0.035 : 0;
-      const sh: V3 = [this.x + f[0] * 0.2, gF + 0.32 - this.comp - lie + flex, this.z + f[2] * 0.2], hp: V3 = [this.x - f[0] * 0.2, gH + 0.34 - this.comp - lie - flex, this.z - f[2] * 0.2];
-      out.push(seg(hp, sh, 0.1, 0), { ...seg(hp, sh, 0.06, 3), y: (hp[1] + sh[1]) / 2 - 0.05 });
-      out.push({ ...seg(sh, sh, 0.115, 0), sz: 0.12 }, { ...seg(hp, hp, 0.105, 0), sz: 0.11 });
-      // (the neck and head: up and alert when it pauses, turned to look back at you; low and reaching when it runs)
+      const flex = this.v > 5 && !this.air ? gaitW * 0.03 : 0, half = 0.16 + 0.05 * stretch - 0.04 * gk - 0.02 * ak;
+      const sh: V3 = [this.x + f[0] * half, gF + 0.35 - this.comp - lie + flex + Math.sin(pa) * half - 0.06 * gk - 0.1 * ak + 0.02 * listen, this.z + f[2] * half];
+      const hp: V3 = [this.x - f[0] * half, gH + 0.36 - this.comp - lie - flex - Math.sin(pa) * half - 0.13 * gk - 0.03 * ak, this.z - f[2] * half];
+      const spine = nrm(sub(sh, hp)), belly = nrm(cross(spine, r));
+      // (the deep chest, the slighter waist, the hips; the white bib at the throat)
+      // (one trunk from the haunch to the shoulder, fuller at the shoulder; the deep chest hung under its front)
+      out.push({ ...seg(add(hp, spine, -0.06), add(sh, spine, 0.04), 0.078, 0), sy: 0.09, tp: -0.25, fur: 0.9 });
+      out.push(blob(add(add(sh, spine, -0.03), belly, 0.045), spine, 0.066, 0.082, 0.1, 0, 1));
+      // (the neck and head: up and alert when it stops, turned over its shoulder to look back at you; low and reaching
+      // as it runs; level and forward in a bound)
       const hy = h + this.look, hf: V3 = [Math.sin(hy), 0, Math.cos(hy)], hr: V3 = [Math.cos(hy), 0, -Math.sin(hy)];
-      const head = add(add(sh, hf, 0.17 + 0.04 * run), up, 0.13 - 0.07 * run + (this.mode === 'pause' ? 0.05 : 0) - lie * 0.5);
-      out.push(seg(add(sh, up, 0.03), head, 0.055, 0), { ...seg(head, add(head, hf, 0.01), 0.07, 1), sz: 0.08 });
-      out.push(seg(add(head, hf, 0.04), add(add(head, hf, 0.15), up, -0.03), 0.032, 1));
-      for (const k of [-1, 1]) out.push(seg(add(add(head, hr, 0.035 * k), up, 0.04), add(add(add(head, hr, 0.05 * k), up, 0.12), hf, -0.01), 0.018, 7));
-      // (the legs: the fore with the elbow behind, the hind with the knee before and the hock behind; each foot on the
-      // ground under it, or, in a bound, the fore reaching out and the hind trailing)
-      const legs: [V3, number, number, number, number][] = [[sh, -1, 0, 0.17, 0.19], [sh, 1, 1, 0.17, 0.19], [hp, -1, 2, 0.19, 0.21], [hp, 1, 3, 0.19, 0.21]];
+      const lift = 0.13 - 0.07 * run + 0.06 * listen - lie * 0.6 - 0.03 * stretch + Math.sin(pa) * 0.08 - 0.06 * gk - 0.07 * ak;
+      const neck0 = add(add(sh, spine, 0.05), belly, -0.03), head = add(add(neck0, hf, 0.13 + 0.05 * run + 0.03 * stretch), up, lift);
+      out.push(blob(add(add(sh, spine, 0.075), belly, 0.06), sub(head, neck0), 0.045, 0.06, 0.045, 3, 1));
+      out.push({ ...seg(neck0, head, 0.06, 0), tp: 0.25, fur: 0.9 });
+      out.push(blob(head, hf, 0.058, 0.055, 0.065, 1, 0.3), blob(add(add(head, hf, -0.025), up, -0.02), hf, 0.075, 0.05, 0.045, 1, 1));
+      const nose = add(add(head, hf, 0.155), up, -0.035);
+      out.push({ ...seg(add(add(head, hf, 0.03), up, -0.012), nose, 0.033, 1), tp: 0.8 }, blob(nose, hf, 0.011, 0.011, 0.013, 7));
+      // (the ears, tall, dark-backed, pricked toward you when it listens)
+      for (const k of [-1, 1]) out.push({ ...seg(add(add(add(head, hr, 0.03 * k), up, 0.03), hf, -0.01), add(add(add(head, hr, 0.05 * k), up, 0.125 + 0.01 * listen), hf, -0.03 + 0.015 * listen), 0.03, 10), tp: 0.95 });
+      // (the legs: the fore with its elbow behind, the hind with the thigh's mass, its stifle forward and hock behind; each
+      // foot on the ground under it, or in a bound pushing off, folded and stretched, then reaching for the ground)
       const offs = this.offsets();
-      for (const [j0, k, i, a, b] of legs) {
-        const j = add(j0, r, 0.065 * k), fore = i < 2;
+      for (let i = 0; i < 4; i++) {
+        const fore = i < 2, k = i % 2 ? 1 : -1, j = add(add(fore ? sh : hp, r, (fore ? 0.05 : 0.06) * k), up, fore ? -0.02 : 0);
         let foot: V3;
-        if (this.air) foot = add(add(j, f, fore ? 0.2 : -0.24), up, fore ? -0.27 + 0.1 * Math.max(0, this.vy / 4) : -0.25);
-        else if (lie) foot = add(add(j, f, fore ? 0.16 : -0.05), up, -0.12);
-        else foot = this.foot(j, offs[i], f, 0);
-        const knee = limb(j, foot, a, b, fore ? sub([0, 0, 0], f) : f);
-        out.push(seg(j, knee, 0.042, 0), seg(knee, foot, 0.026, 7));
+        if (this.air) foot = fore
+          ? add(j, via(add(mul(f, 0.22), up, -0.2), add(mul(f, 0.06), up, -0.13), add(mul(f, 0.26), up, -0.33), s), 1)
+          : add(j, via(add(mul(f, -0.34), up, -0.12), add(mul(f, -0.33), up, -0.1), add(mul(f, -0.12), up, -0.2), s), 1);
+        else if (lie) foot = add(add(j, f, fore ? 0.17 : -0.02), up, -0.12);
+        else {
+          foot = this.foot(j, offs[i], f, fore ? 0.06 * ak - 0.04 * gk : 0.24 * gk + 0.08 * ak);
+        }
+        if (fore) {
+          const pastern = add(add(foot, up, 0.05), f, -0.012), elbow = limb(j, pastern, 0.16, 0.17, sub([0, 0, 0], f));
+          out.push({ ...seg(j, elbow, 0.036, 9), tp: 0.2, fur: 0.4 }, seg(elbow, pastern, 0.02, 7), seg(pastern, foot, 0.019, 7));
+        } else {
+          const hock = add(add(foot, up, 0.11), f, -0.035), stifle = limb(j, hock, 0.16, 0.17, f);
+          out.push({ ...seg(add(j, f, -0.01), stifle, 0.055, 0), tp: 0.45, fur: 0.7 }, { ...seg(stifle, hock, 0.026, 9), tp: 0.2 }, seg(hock, foot, 0.019, 7));
+        }
+        out.push({ ...blob(add(foot, f, 0.012), f, 0.022, 0.016, 0.032, 7) });
       }
-      // (the tail, white at its tip)
-      if (this.tail.length === 4) for (let k = 0; k < 3; k++) out.push(seg(this.tail[k], this.tail[k + 1], k === 2 ? 0.055 : 0.06 + 0.012 * k, k === 2 ? 3 : 2));
+      // (the brush: thick, as long as its body nearly, smoky above, white at its tip)
+      const T = this.tail, TR = [0.05, 0.075, 0.085, 0.07];
+      if (T.length === 5) for (let k = 0; k < 4; k++) out.push({ ...seg(T[k], T[k + 1], TR[k], k === 3 ? 3 : 2), tp: k === 0 ? -0.5 : k === 3 ? 0.85 : 0, fur: 1 });
       return out;
     }
     // ─── a runner ───
