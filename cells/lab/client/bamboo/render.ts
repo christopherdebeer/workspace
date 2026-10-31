@@ -686,7 +686,8 @@ void main() {
   float hB = ((1. - cl.x) * .035 - crack * .015) * bK + (vn(vec2((vW.x - vW.z) * .707 * 3.5, vW.y * .7)) - .5) * .08;
   float cB = 1. - .45 * crack * bK;
   // (rock: its bedding, ledge over ledge, each undercut dark; fractures across it)
-  float bt = vW.y * 1.7 + fbm2(vW.xz * .25) * 2.5, bf = fract(bt), tK = 1. - smoothstep(.12, .4, fwidth(bt));
+  // (at the spacing the rock's own formations have (rock.ts: about two and a half metres), not a finer one of its own)
+  float bt = vW.y / 2.4 + fbm2(vW.xz * .12) * .8, bf = fract(bt), tK = 1. - smoothstep(.12, .4, fwidth(bt));
   vec2 frq = vec2((vW.x + vW.z) * .9, vW.y * 1.2), fr = vor(frq);
   float fpx = length(fwidth(frq)), fK = 1. - smoothstep(.15, .5, fpx);
   float frc = (1. - smoothstep(.0, .06 + fpx * .6, fr.y)) * step(.45, h21(floor(frq)));
@@ -773,6 +774,7 @@ void main() {
   float moss = smoothstep(.2, .8, N.y) * smoothstep(.45, .7, n1 + vMoss * .3);
   vec3 alb = mix(stone, vec3(.4, .5, .22), moss * (uKind == 1 ? .2 : .7));
   float mark = 0., frK = 0., frW = 0.;
+  vec2 fuv = vec2(0.);
   // (a stone's shade drawn as a brush does: a few broken strokes across its turned-away side, not filled)
   // (on the rock's blocks, in the block's own frame, so a face's strokes go with the face)
   float hq = uMesh == 1 ? dot(vL.xz, vec2(.8, .6)) * 5. + vL.y * 3.5 : dot(vW.xz, vec2(.8, .6)) * 5. + vW.y * 3.5;
@@ -792,15 +794,26 @@ void main() {
     frW = (1. - smoothstep(.0, .09 + fw * 2., cr)) * has;
     mark = max(max(hatch, under), frK * .8);
     if (uMesh == 1) {
-      // (the bedding, one field across the formation: a thin dark line where each plane meets a side face, broken here and
-      // there; the worn edges lighter, weathered back)
-      vec3 bn = vec3(vBed.x, sqrt(max(0., 1. - dot(vBed.xy, vBed.xy))), vBed.y);
-      float bd = dot(vW, bn) / max(.5, vBed.z), bdist = abs(fract(bd + .5) - .5), bw = .005 + fwidth(bd) * .6;
-      float onSide = 1. - smoothstep(.45, .8, abs(dot(N, bn)));
-      float bedL = (1. - smoothstep(bw, bw * 2.2, bdist)) * onSide * step(.32, vn(vec2(dot(vW.xz, vec2(.7, -.7)) * .9, bd)));
-      alb *= 1. - .3 * bedL;
-      alb = mix(alb, alb * 1.12 + .025, vWorn * .7);
-      mark = max(mark, bedL * .42);
+      // (the rock's blocks (rock.ts): a broad face says its plane and little else. Its seams are the geometry's own (a
+      // tier's joint, a cleft, a recess), never painted on. Its colour by what the stone is: a quiet grey, varying slowly
+      // over the face in the face's own frame; a fresh break (a fallen piece) paler; the back of a cleft damp and dark;
+      // water stains run down from the ledges on the steep faces; worn edges lighter; moss in patches where a top holds
+      // it, never on a worn edge, now and then spilling down a damp run. Ink: its underside only; its edges are strokes.ts')
+      vec3 up = abs(N.y) > .9 ? vec3(1., 0., 0.) : vec3(0., 1., 0.), t1 = normalize(cross(up, N)), t2 = cross(N, t1);
+      fuv = vec2(dot(vW, t1), dot(vW, t2));
+      float role = vBed.z, g1 = vn(fuv * .3 + vSeed * 7.);
+      vec3 base = mix(vec3(.71, .68, .61), vec3(.6, .58, .53), g1) * (.95 + .08 * vn(fuv * 2.1 + 3.));
+      if (role > 3.5) base = mix(base, vec3(.8, .77, .7), .45);
+      if (role > 1.5 && role < 2.5) base *= .8;
+      float steep = 1. - smoothstep(.3, .6, abs(N.y));
+      float streak = smoothstep(.6, .8, vn(vec2(dot(vW.xz, vec2(-N.z, N.x)) * 2.2 + vSeed * 5., vW.y * .12)));
+      base = mix(base, base * vec3(.64, .65, .63), streak * steep * .55);
+      base = mix(base, base * 1.1 + .03, vWorn * .7);
+      float pk = fbm2(vW.xz * .55 + vSeed * 3.);
+      float mossM = smoothstep(.55, .8, N.y) * smoothstep(.52, .74, pk + vMoss * .25) * (1. - vWorn);
+      mossM = max(mossM, steep * streak * smoothstep(.62, .82, pk + vMoss * .2) * .5);
+      alb = mix(base, vec3(.38, .47, .22) * (.85 + .3 * vn(fuv * 4.)), mossM * .85);
+      mark = under * .9;
     }
   }
   if (uKind == 4) {
@@ -875,10 +888,19 @@ void main() {
   vec2 chip = uMesh == 1 ? vor(vL.xz * 2.5 + vL.y * 1.9 + vSeed * 9.) : vor(vW.xz * 2.2 + vW.y * 1.7);
   float hRel = uKind == 4 ? 0. : uKind == 1 ? (vn(vW.xz * vec2(14., 3.)) - .5) * .01 * sFine + (vn(vW.xz * 4.) - .5) * .015 - scr * .008
     : (fbm2(vW.xz * 1.1 + vW.y * .9) - .5) * (uMesh == 1 ? .05 : .12) + (1. - chip.x) * (uMesh == 1 ? .015 : .05) + ((fbm2(vW.xz * 3. + vW.y * 2.) - .5) * .04 - .02 * smoothstep(.7, .82, vn(vW.xz * 9. + vW.y * 5.))) * sFine - scr * .025;
+  // (the rock's blocks: only a fine grain in the face's own frame, nothing between, so a broad face stays one plane (its
+  // breaks are the geometry's: a tier's joint, a cleft, a recess, a shoulder); and in clay, none at all: clay's the forms
+  // alone)
+  float flake = 0.;
+  if (uMesh == 1) {
+    hRel = (vn(fuv * 9.) - .5) * .006 * sFine - flake * .012;
+    scr = 0.;
+    if (uClay > .5) sK = 0.;
+  }
   N = bumpN(N, vW, hRel * sK);
-  float sHo = clamp(1. + hRel * sK * 4.5, .35, 1.3);
+  float sHo = uMesh == 1 ? 1. : clamp(1. + hRel * sK * 4.5, .35, 1.3);
   gSunVis = mix(1., sHo * (1. - (uKind == 1 ? .25 : .45) * scr * min(1., sK)), .75);
-  float sCav = (1. - (uKind == 1 ? .25 : .35) * scr * min(1., sK)) * (uKind == 1 ? 1. : 1. - clamp(sK * .4, 0., .8) * smoothstep(.05, .0, chip.y) * .5) * sHo;
+  float sCav = uMesh == 1 ? 1. - flake * .25 : (1. - (uKind == 1 ? .25 : .35) * scr * min(1., sK)) * (uKind == 1 ? 1. : 1. - clamp(sK * .4, 0., .8) * smoothstep(.05, .0, chip.y) * .5) * sHo;
   vec3 c = layered(alb, N, vW, .2, .85 * sCav, vec3(0.), uColK.z, 1., outCol(vW) + (fract(vSeed * 3.1) - .5) * .06, colR, litR);
   // (its ink laid from its middle out to its sides, then to its weight; a step's by weight alone, as one of a flight, so
   // the flight's edge thins as one line, never a row of dashes, a stone each)

@@ -122,7 +122,7 @@ Every block takes its up from the bedding and its tier heights from the planes t
 - **a rooted outcrop**: a big slab tipped back into the hill, its neighbours along the same joints, a wedge broken off below, fragments;
 - **running crowns**: low flat tops stepping along the contour, a way a fox could take.
 
-**A block** is a prism stood on its bedding over its own outline: a rectangle with some of its corners broken off, so four to eight sides, its faces cut obliquely where a corner went. Its top is drawn in and dropped toward the faces it's broken to, so it's a top in facets, not one plane. It's chamfered round its top edge (the worn edge). Its faces are flat with their own normals. The ground's cut follows its own outline, and its ink is its own edges, each known for what it is: crest, side, joint, foot. Nothing grows under rock, and a cleft's floor is scree, not moss.
+**A block** is a prism stood on its bedding over its own outline: a rectangle with some of its corners broken off, so four to eight sides, its faces cut obliquely where a corner went. Its top is drawn in and dropped toward the faces it's broken to, so it's a top in facets, not one plane. It's chamfered round its top edge (the worn edge). Its faces are flat, each lit as one plane: a face's normal is the face's own (a quad's, from its diagonals), never its triangles', so a face whose corners are nudged off one plane doesn't light as two facets. Some top tiers have a shoulder: a lower front block before the higher back one, so the crest steps down to the face in a broad shelf rather than standing as one blade. The ground's cut follows its own outline, and its ink is its own edges, each known for what it is: crest, side, joint, foot. Nothing grows under rock, and a cleft's floor is scree, not moss.
 
 Everything agrees on the same faces:
 - **Footing** (`footing.ts`) stands on the blocks' own upward faces. A crack between two blocks narrower than a foot is stepped over.
@@ -131,12 +131,12 @@ Everything agrees on the same faces:
 - **Light:** the land's light is baked with the rock's tops, so the columns shade the foot and close a cleft's sky.
 - **Drawing:** each block asks one place (its anchor) how far it's drawn, so it's drawn whole, never triangle by triangle.
 - **Colour:**
-  - the bedding is a thin dark line where each plane meets a side face, broken here and there;
-  - the worn edges are lighter;
-  - moss is held on a ledge's top and in a cleft;
-  - in a block's shade, a few fine strokes in its own frame, broken along their length (not a ruled field).
+  - a broad face says its plane and little else: a quiet grey varying slowly over it in the face's own frame, and a fine grain. Nothing between: no medium bumps, no cellular chips, and no height standing in for shade. Its seams are the geometry's own (a tier's joint, a cleft, a recess, a shoulder), never painted on;
+  - its colour is by what the stone is: a fallen piece a paler, fresh break; the back of a cleft damp and dark; water stains running down the steep faces from the ledges; the worn edges lighter;
+  - moss grows in patches where a top holds it (more on a ledge, in a cleft), sometimes spilling down a damp run, never on a worn edge;
+  - its ink in colour is its underside only; its edges are drawn as strokes. In clay there's no relief at all on the rock, so clay is a clean check of the forms.
 - **Ink** (`strokes.ts`) comes from the blocks' own edges, and where rock stands the land's slope-made cliff marks give way to these:
-  - a column's crest, firmest;
+  - a column's crest, firmest (most of a block's other edges are left quiet: a few side edges and joints, where the drawing wants them);
   - a ledge's lip;
   - the top's sides, lighter;
   - the joints, up from the ground;

@@ -284,10 +284,11 @@ export function strokes(world: World, c: Chunk): Float32Array {
           // (the top's front edge: a crest firm and held over the colour; a ledge's lip a little less; a fragment's light)
           broken(out, along(e.a, e.b, 6).map((p) => lift(p, b)), r, crest ? [2.5, 6] : [1.5, 4], [0.15, 0.5], frag ? 0.05 : crest ? 0.1 : 0.085, FAM.rim, () => (frag ? 0.45 : crest ? 0.88 : 0.75), frag ? 0.5 : crest ? 0.95 : 0.85);
         } else if (e.kind === 'side') {
-          if (!frag) broken(out, along(e.a, e.b, 5).map((p) => lift(p, b, 0)), r, [1, 2.5], [0.3, 0.9], 0.055, FAM.rim, () => 0.45, 0.45);
+          // (most of a block's other edges left quiet: a few, where the drawing wants them)
+          if (!frag && r() < 0.3) broken(out, along(e.a, e.b, 5).map((p) => lift(p, b, 0)), r, [1, 2.5], [0.3, 0.9], 0.055, FAM.rim, () => 0.45, 0.45);
         } else if (e.kind === 'joint') {
           // (from where the ground meets it up to the top)
-          if (frag) continue;
+          if (frag || r() > 0.35) continue;
           const g = world.ground(e.a[0], e.a[2]), y0 = Math.max(e.a[1], g + 0.03);
           if (e.b[1] - y0 < 0.3) continue;
           ribbon(out, along([e.a[0], y0, e.a[2]], e.b, 5).map((p) => lift(p, b)), 0.055, FAM.face, 0.55 + r() * 0.2, 0.6, r());

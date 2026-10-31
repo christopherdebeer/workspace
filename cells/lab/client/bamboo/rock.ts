@@ -39,7 +39,7 @@ export interface Block {
   /** a circle round it on the ground (for finding it), and its highest point */
   r: number; top: number;
   /** its faces as triangles, world space (x, y, z ×3 each); which are worn edges (chamfers); those facing up (stood on) */
-  tris: Float32Array; worn: Uint8Array; ups: Uint16Array;
+  tris: Float32Array; tn: Float32Array; worn: Uint8Array; ups: Uint16Array;
   /** its edges, for the ink; its outline on the ground (world x, z) */
   E: Edge[]; foot: [number, number][];
   /** the one place it's asked how far it's drawn; its bedding (the plane's normal (x, z) and spacing) */
@@ -131,7 +131,7 @@ function make(c: V3, ax: [V3, V3, V3], h: V3, kind: BlockKind, role: Role, seed:
     } else P.push([x, z]);
   });
   const n = P.length, H = h[1];
-  const drop = (x: number, z: number) => Math.min(0.88, (z > 0 ? cut.f ?? 0 : cut.b ?? 0) * Math.abs(z) / h[2] + (x > 0 ? cut.r ?? 0 : cut.l ?? 0) * Math.abs(x) / h[0]) * 2 * H;
+  const drop = (x: number, z: number) => Math.min(0.55, (z > 0 ? cut.f ?? 0 : cut.b ?? 0) * Math.abs(z) / h[2] + (x > 0 ? cut.r ?? 0 : cut.l ?? 0) * Math.abs(x) / h[0]) * 2 * H;
   const Bt: V3[] = [], St: V3[] = [], Ct: V3[] = [];
   P.forEach(([x, z], i) => {
     const yt = H * (1 + (u01(seed, i, 6) - 0.5) * 0.12) - drop(x, z), tp = 1 - taper, l = Math.hypot(x, z) || 1;
@@ -140,19 +140,27 @@ function make(c: V3, ax: [V3, V3, V3], h: V3, kind: BlockKind, role: Role, seed:
     Ct.push([x * tp - (x / l) * bev, yt, z * tp - (z / l) * bev]);
   });
   const world = (p: V3): V3 => add(add(add(c, ax[0], p[0]), ax[1], p[1]), ax[2], p[2]);
-  const T: number[] = [], W: number[] = [], ups: number[] = [];
-  const tri = (a: V3, b: V3, d: V3, w: number) => {
+  const T: number[] = [], W: number[] = [], ups: number[] = [], TN: number[] = [];
+  // (a face's one normal: given (a quad's, from its diagonals, so a face whose corners are nudged off one plane still
+  // lights as one plane, never as two facets along its triangles), or the triangle's own)
+  const tri = (a: V3, b: V3, d: V3, w: number, face?: V3) => {
     const A = world(a), B = world(b), D = world(d);
     let nn = cross(sub(B, A), sub(D, A));
     if (Math.hypot(nn[0], nn[1], nn[2]) < 1e-9) return;
     const m: V3 = [(A[0] + B[0] + D[0]) / 3 - c[0], (A[1] + B[1] + D[1]) / 3 - c[1], (A[2] + B[2] + D[2]) / 3 - c[2]];
     let o = [A, B, D];
     if (dot(nn, m) < 0) { o = [A, D, B]; nn = [-nn[0], -nn[1], -nn[2]]; }
+    let fn = face ? nrm(face) : nrm(nn);
+    if (dot(fn, nn) < 0) fn = [-fn[0], -fn[1], -fn[2]];
     if (nrm(nn)[1] > 0.3) ups.push(T.length / 9);
     for (const p of o) T.push(p[0], p[1], p[2]);
+    TN.push(fn[0], fn[1], fn[2]);
     W.push(w);
   };
-  const quad = (a: V3, b: V3, d: V3, e: V3, w: number) => { tri(a, b, d, w); tri(a, d, e, w); };
+  const quad = (a: V3, b: V3, d: V3, e: V3, w: number) => {
+    const A = world(a), B = world(b), D = world(d), E = world(e), f = cross(sub(D, A), sub(E, B));
+    tri(a, b, d, w, f); tri(a, d, e, w, f);
+  };
   for (let i = 0; i < n; i++) {
     const j = (i + 1) % n;
     quad(Bt[i], Bt[j], St[j], St[i], 0);
@@ -174,7 +182,7 @@ function make(c: V3, ax: [V3, V3, V3], h: V3, kind: BlockKind, role: Role, seed:
     if (facing > 0.35) E.push({ a: world(Bt[i]), b: world(Bt[j]), kind: 'foot' }, { a: world(Bt[i]), b: world(St[i]), kind: 'joint' }, { a: world(Bt[j]), b: world(St[j]), kind: 'joint' });
   }
   const foot = Bt.map((p) => { const w = world(p); return [w[0], w[2]] as [number, number]; });
-  const b: Block = { c, ax, h, kind, role, seed, moss, r: Math.hypot(h[0], h[1], h[2]) * 1.15, top, tris, worn: Uint8Array.from(W), ups: Uint16Array.from(ups), E, foot, anchor: [c[0], top, c[2]], bed: [g.bedN[0], g.bedN[2], g.S], pads: [] };
+  const b: Block = { c, ax, h, kind, role, seed, moss, r: Math.hypot(h[0], h[1], h[2]) * 1.15, top, tris, tn: new Float32Array(TN), worn: Uint8Array.from(W), ups: Uint16Array.from(ups), E, foot, anchor: [c[0], top, c[2]], bed: [g.bedN[0], g.bedN[2], g.S], pads: [] };
   b.pads = padsOf(b);
   return b;
 }
@@ -348,6 +356,16 @@ export function escarpIn(L: RockLand, ci: number, cj: number): { blocks: Block[]
       const sideCut = r(22) < 0.4 ? r(23) * 0.22 : 0;
       const cut: Cut = isTop ? { f: r(20) < 0.5 ? 0.06 + r(21) * 0.24 : 0, l: r(24) < 0.5 ? sideCut : 0, r: r(24) >= 0.5 ? sideCut : 0, worn: 0.3 + r(26) * 0.5 } : { f: r(20) * 0.06, l: r(22) * 0.05, worn: 0.15 + r(26) * 0.4 };
       if (r(27) < 0.3) cut.notch = [r(28) < 0.5 ? -1 : 1, 1, 0.2 + r(29) * 0.3];
+      // (a shoulder now and then: the top tier's front a lower block before its back, so the crest steps down to the face
+      // in a broad shelf, not one upright blade)
+      if (isTop && r(40) < 0.35 && dep > 1.1 && hy > 0.7) {
+        const fd = dep * (0.3 + r(41) * 0.2), bd = dep - fd, low = hy * 2 * (0.3 + r(42) * 0.25);
+        const fb = make(add(add(c, ax[2], dep - fd), ax[1], -low / 2), ax, [ww, hy - low / 2, fd], 'column', 'crest', r(43), 0.6 + 0.4 * r(4), g, { ...cut, b: 0 });
+        const bb = make(add(c, ax[2], -fd), ax, [ww * (0.92 + r(44) * 0.08), hy, bd], 'column', 'crest', r(45), 0.5 + 0.4 * r(4), g, { ...cut, f: (cut.f ?? 0) * 0.5 });
+        blocks.push(fb, bb);
+        top = bb;
+        continue;
+      }
       const b = make(c, ax, [ww, hy, dep], 'column', isTop ? 'crest' : 'lip', r(3), isTop ? 0.6 + 0.4 * r(4) : 0.35 + 0.5 * r(4), g, cut);
       blocks.push(b);
       if (isTop) top = b;
@@ -431,8 +449,11 @@ export function outcropsIn(L: RockLand, ci: number, cj: number): Block[] {
 
 /** a chunk's blocks as one mesh for the renderer, per corner: its place, its face's normal, its place in its block's own
  * frame (in metres, so its strokes are one scale on any block) [0–8]; its bedding's normal (x, z), its moss (by what the block is and where the face looks), its seed [9–12]; its
- * block's anchor [13–15]; whether it's a worn edge, and the bedding's spacing [16–17] */
+ * block's anchor [13–15]; whether it's a worn edge, and what the block is (`ROLE`) [16–17]. Its normal is its face's
+ * (a quad's one), so a face lights as one plane */
 export const ROCK_STRIDE = 18;
+/** what a block is, for the shader's colour: 0 a crest, 1 a lip, 2 a cleft's back, 3 out on the slope, 4 fallen (a fresh break) */
+const ROLE: Record<Role, number> = { crest: 0, lip: 1, back: 2, outcrop: 3, fallen: 4 };
 export function rockMesh(blocks: Block[]): Float32Array {
   let n = 0;
   for (const b of blocks) n += b.tris.length / 3;
@@ -442,12 +463,12 @@ export function rockMesh(blocks: Block[]): Float32Array {
     const T = b.tris;
     for (let f = 0, ti = 0; f < T.length; f += 9, ti++) {
       const A: V3 = [T[f], T[f + 1], T[f + 2]], B: V3 = [T[f + 3], T[f + 4], T[f + 5]], C: V3 = [T[f + 6], T[f + 7], T[f + 8]];
-      const N = nrm(cross(sub(B, A), sub(C, A)));
+      const N: V3 = [b.tn[ti * 3], b.tn[ti * 3 + 1], b.tn[ti * 3 + 2]];
       // (moss where it's held: a ledge's top (under the lip above), a cleft's back block; little on faces, none beneath)
       const moss = b.moss * (N[1] > 0.6 ? (b.role === 'lip' || b.role === 'back' ? 1.3 : 1) : N[1] < -0.2 ? 0 : b.role === 'lip' ? 0.5 : 0.25);
       for (const p of [A, B, C]) {
         const d = sub(p, b.c);
-        out.set([p[0], p[1], p[2], N[0], N[1], N[2], dot(d, b.ax[0]), dot(d, b.ax[1]), dot(d, b.ax[2]), b.bed[0], b.bed[1], moss, b.seed, b.anchor[0], b.anchor[1], b.anchor[2], b.worn[ti], b.bed[2]], o);
+        out.set([p[0], p[1], p[2], N[0], N[1], N[2], dot(d, b.ax[0]), dot(d, b.ax[1]), dot(d, b.ax[2]), b.bed[0], b.bed[1], moss, b.seed, b.anchor[0], b.anchor[1], b.anchor[2], b.worn[ti], ROLE[b.role]], o);
         o += ROCK_STRIDE;
       }
     }
