@@ -14,6 +14,7 @@
  * Everything is in metres; y is up. The same seed is the same mountain wherever you go.
  */
 import { hash } from '../kit/rng';
+import { BAND_HI, BAND_LO, blockTop, rocksIn, type Block, type RockLand } from './rock';
 
 export type V2 = [number, number];
 export const CHUNK = 32, CELL = 1, CN = CHUNK / CELL + 1;
@@ -33,16 +34,20 @@ const fbm = (x: number, z: number, s: number) => vnoise(x, z, s) * 0.55 + vnoise
 const ss = (a: number, b: number, x: number) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
 
 /** how far up a cliff band (x, z) is, 0 below its rim … 1 on top, and the band's height there */
+export function cliffN(x: number, z: number, seed: number) { return fbm(x / 150, z / 150, seed + 50); }
 export function cliff(x: number, z: number, seed: number): { up: number; h: number } {
-  const n = fbm(x / 150, z / 150, seed + 50);
+  const n = cliffN(x, z, seed);
   return { up: ss(0.6, 0.618, n), h: 5 + vnoise(x / 60, z / 60, seed + 51) * 4 };
 }
-/** the land as it lies, before any trail is cut into it */
+/** the land without any cliff band's rise: long ridges and the valleys between, steep-sided (a wild mountain's, not a
+ * downland's) */
+export function under(x: number, z: number, seed: number): number {
+  return (fbm(x / 420, z / 420, seed) - 0.5) * 150 + (fbm(x / 95, z / 95, seed + 3) - 0.5) * 60 + (fbm(x / 22, z / 22, seed + 5) - 0.5) * 3.2;
+}
+/** the land as it lies, before any trail is cut into it (its cliff bands a smooth rise; where the rock's built, rock.ts) */
 export function base(x: number, z: number, seed: number): number {
-  // (long ridges and the valleys between, steep-sided: a wild mountain's, not a downland's)
-  let y = (fbm(x / 420, z / 420, seed) - 0.5) * 150 + (fbm(x / 95, z / 95, seed + 3) - 0.5) * 60 + (fbm(x / 22, z / 22, seed + 5) - 0.5) * 3.2;
   const c = cliff(x, z, seed);
-  return y + c.up * c.h;
+  return under(x, z, seed) + c.up * c.h;
 }
 
 // ─── the trails ───
@@ -124,7 +129,7 @@ function lay(pts: V2[], ds: number): V2[] {
   return out;
 }
 
-export class World {
+export class World implements RockLand {
   private regions = new Map<string, Trail[]>();
   private buckets = new Map<string, number[]>(); // (8 m cells: the trail samples in each, as trail index pairs)
   private trailList: Trail[] = [];
@@ -222,9 +227,17 @@ export class World {
     }
     return out;
   }
-  /** the ground at (x, z): the land, with any trail's bench cut into it */
+  /** for rock.ts: the cliff field, a band's height, the land without its cliffs */
+  cliffN(x: number, z: number) { return cliffN(x, z, this.seed); }
+  cliffH(x: number, z: number) { return cliff(x, z, this.seed).h; }
+  under(x: number, z: number) { return under(x, z, this.seed); }
+  /** the ground at (x, z): the land, with any trail's bench cut into it; and where a cliff band's rock is built
+   * (rock.ts), its smooth rise taken out down to the foot, so the blocks are the cliff and the gaps between them clefts
+   * (not near a trail: a stair's cut through it there) */
   ground(x: number, z: number): number {
-    const b = base(x, z, this.seed), q = this.trailNear(x, z);
+    let b = base(x, z, this.seed);
+    const q = this.trailNear(x, z), n = cliffN(x, z, this.seed);
+    if (n > BAND_LO && n < BAND_HI) b += (under(x, z, this.seed) - 0.3 - b) * (q.trail ? ss(HALF + BANK + 1, HALF + BANK + 3.2, q.d) : 1);
     if (!q.trail) return b;
     const yp = q.trail.y[q.i] - 0.06, t = ss(HALF, HALF + BANK + Math.abs(b - yp) * 0.25, q.d);
     return yp + (b - yp) * t;
@@ -262,10 +275,26 @@ export class World {
     this.bakeSun(c.x0, c.z0, G, hAt, c.sunVis);
   }
 
+  /** the rock formations anchored in a chunk (rock.ts), made once */
+  private rockMemo = new Map<string, Block[]>();
+  rocks(ci: number, cj: number): Block[] {
+    const k = `${ci},${cj}`;
+    let r = this.rockMemo.get(k);
+    if (!r) { r = rocksIn(this, ci, cj); this.rockMemo.set(k, r); }
+    return r;
+  }
+  /** whether (x, z) is under rock (a block's top over it, above the ground): nothing grows there */
+  private underRock(near: Block[], x: number, z: number, gy: number) {
+    for (const b of near) { const t = blockTop(b, x, z); if (t > gy - 0.2) return true; }
+    return false;
+  }
+
   // ─── a chunk ───
   chunk(ci: number, cj: number): Chunk {
     const s = this.seed, x0 = ci * CHUNK, z0 = cj * CHUNK;
     const ground = new Float32Array(CN * CN), near = new Float32Array(CN * CN), rock = new Float32Array(CN * CN);
+    const rocks = this.rocks(ci, cj), rocksNear: Block[] = [];
+    for (let a = -1; a <= 1; a++) for (let b = -1; b <= 1; b++) rocksNear.push(...(a || b ? this.rocks(ci + a, cj + b) : rocks));
     for (let j = 0; j < CN; j++) for (let i = 0; i < CN; i++) {
       const x = x0 + i * CELL, z = z0 + j * CELL, k = i + j * CN;
       ground[k] = this.ground(x, z); near[k] = Math.min(30, this.trailNear(x, z).d);
@@ -313,7 +342,7 @@ export class World {
           if (q.d < HALF + 0.2 + u01(s, gi, gj, 3) * 0.3) continue;
           // (by a trail, the hillside's own slope, not its cut bank's: culms stand on the bank, right at the path's edge)
           const sl = q.d < 6 ? Math.hypot(this.base(x + 0.7, z) - this.base(x - 0.7, z), this.base(x, z + 0.7) - this.base(x, z - 0.7)) / 1.4 : slope(x, z), c = cliff(x, z, s);
-          if (sl > 1.05) continue; // (none on the rock)
+          if (sl > 1.05 || this.underRock(rocksNear, x, z, g(x, z))) continue; // (none on the rock)
           let keep = 1 - ss(0.6, 1.05, sl) * 0.6;
           // (below a trail, where the hill falls away, thinner: the way looks out between them; above it, the bank's thick)
           if (q.trail && q.d < 16 && g(x, z) < q.trail.y[q.i] - 0.4) keep *= 0.12 + 0.6 * (q.d / 16) ** 1.5;
@@ -377,7 +406,7 @@ export class World {
     for (let n = 0; n < 45; n++) {
       const x = x0 + u01(s, ci, cj, n, 60) * CHUNK, z = z0 + u01(s, ci, cj, n, 61) * CHUNK, q = this.trailNear(x, z);
       const p = q.d < HALF + 0.2 ? 0 : q.d < 4.5 ? 0.6 : 0.2;
-      if (u01(s, ci, cj, n, 62) > p || slope(x, z) > 0.9) continue;
+      if (u01(s, ci, cj, n, 62) > p || slope(x, z) > 0.9 || this.underRock(rocksNear, x, z, g(x, z))) continue;
       const gy = g(x, z), a = u01(s, ci, cj, n, 64) * 6.283;
       culms.push({ x, y: gy - 3, z, r: 0, h: 3.2, lx: 0, lz: 0, node: 1, age: 0, phase: u01(s, ci, cj, n, 63) * 6.28, pick: 0, crown: 1, bend: 0 });
       const k = culms.length - 1;
@@ -386,7 +415,7 @@ export class World {
     // ─── ferns and low growth on a trail's uphill bank, where the eye runs along it ───
     for (let n = 0; n < 40; n++) {
       const x = x0 + u01(s, ci, cj, n, 160) * CHUNK, z = z0 + u01(s, ci, cj, n, 161) * CHUNK, q = this.trailNear(x, z);
-      if (!q.trail || q.d < HALF + 0.35 || q.d > HALF + BANK + 1.5 || this.base(x, z) < q.trail.y[q.i] + 0.3) continue;
+      if (!q.trail || q.d < HALF + 0.35 || q.d > HALF + BANK + 1.5 || this.base(x, z) < q.trail.y[q.i] + 0.3 || this.underRock(rocksNear, x, z, g(x, z))) continue;
       const gy = g(x, z), a = u01(s, ci, cj, n, 164) * 6.283;
       culms.push({ x, y: gy - 3, z, r: 0, h: 3.2, lx: 0, lz: 0, node: 1, age: 0, phase: u01(s, ci, cj, n, 163) * 6.28, pick: 0, crown: 1, bend: 0 });
       const k = culms.length - 1;
@@ -401,7 +430,7 @@ export class World {
       const x = x0 + u01(s, ci, cj, n, 40) * CHUNK, z = z0 + u01(s, ci, cj, n, 41) * CHUNK, q = this.trailNear(x, z), sl = slope(x, z);
       // (a trail's sides are stony: its bank breaks out in rock, stones lie along its edge)
       const p = sl > 0.5 ? 0.45 : q.d > HALF + 0.3 && q.d < 4.5 ? 0.7 : 0.05;
-      if (u01(s, ci, cj, n, 42) > p || q.d < HALF + 0.35) continue;
+      if (u01(s, ci, cj, n, 42) > p || q.d < HALF + 0.35 || this.underRock(rocksNear, x, z, g(x, z))) continue;
       const r = 0.22 + u01(s, ci, cj, n, 43) ** 2 * (q.d < 4.5 ? 1.2 : 1.4);
       // (bedded in the hill, not set on it: on a slope, half under, turned along the fall, flatter)
       const fx = g(x + 0.5, z) - g(x - 0.5, z), fz = g(x, z + 0.5) - g(x, z - 0.5), bed = sl > 0.35 ? 0.5 : 0.38;
@@ -467,6 +496,8 @@ export class World {
       for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) { const d = Math.hypot(x0 + i * CELL - px, z0 + j * CELL - pz); ao[i + j * CN] *= least + (1 - least) * ss(r0, r1, d); }
     };
     for (const st of stones) touch(st.x, st.z, st.r * 0.7, st.r * 1.7, 0.55);
+    // (and darker at the foot of the rock, where it meets the ground)
+    for (const b of rocksNear) if (b.kind !== 'fragment') touch(b.c[0], b.c[2], Math.max(b.h[0], b.h[2]) * 0.9, Math.max(b.h[0], b.h[2]) * 1.6, 0.6);
     for (const st of steps) touch(st.x + st.dx * st.depth * 0.5, st.z + st.dz * st.depth * 0.5, st.width * 0.3, st.width * 0.8, 0.75);
     for (let k = 0; k < tall; k++) { const q = culms[k]; touch(q.x, q.z, q.r, q.r + 0.6, 0.72); }
     // ─── the canopy over each point of the ground: how much leaf there is overhead (0 open sky … 1 closed), from where
@@ -481,7 +512,7 @@ export class World {
       }
     }
     for (let k = 0; k < canopy.length; k++) canopy[k] = 1 - Math.exp(-canopy[k] * 0.9);
-    return { ci, cj, x0, z0, ground, near, rock, culms, tall, sprays, twigs, stones, steps, roots, sunVis, ao, canopy };
+    return { ci, cj, x0, z0, ground, near, rock, culms, tall, sprays, twigs, stones, steps, roots, sunVis, ao, canopy, rocks };
   }
 }
 
@@ -520,6 +551,8 @@ export interface Chunk {
   sunVis: Float32Array; ao: Float32Array;
   /** per ground point: how much leaf is overhead (0 open sky … 1 closed canopy) */
   canopy: Float32Array;
+  /** the rock anchored here (rock.ts): its blocks, meshed */
+  rocks?: Block[];
 }
 
 /** the far ranges, all round about (drawn as a backdrop that keeps its distance): each a jagged line, one behind another */

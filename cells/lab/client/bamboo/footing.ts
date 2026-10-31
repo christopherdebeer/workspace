@@ -1,14 +1,17 @@
 /**
  * What the body meets (nothing decided here: runner.ts asks).
  *
- * - **underfoot**: anywhere near, the highest of the ground, a stair's tread, a stone's top and a root's, each as the
- *   renderer draws it (a stone's top is the lump's own, turned and scaled as it's drawn), and which it is;
+ * - **underfoot**: anywhere near, the highest of the ground, a stair's tread, a stone's top, a root's and the rock's (a
+ *   block's own upward faces, rock.ts), each as the renderer draws it (a stone's top is the lump's own, turned and scaled
+ *   as it's drawn), and which it is; a cliff's face is the rock's rise, so what's in the way and what's seen past is the
+ *   same rock that's drawn;
  * - **in the way**: the culms as they really go, leaning and bowed, cut into posts: an upright culm one post rising from
  *   the ground, a bowed one a run of short ones along its arc, each knowing how high off the ground it passes. A post
  *   low enough is stepped over, one at head height ducked under, the rest gone round or squeezed past.
  */
 import { CHUNK, culmPoint, type Chunk, type Culm, type Land, type Stone } from './world';
 import { lumpTopAt, LUMP_R } from './lump';
+import { blockTop } from './rock';
 
 export type Footing = 'ground' | 'step' | 'stone' | 'root';
 export interface Under { y: number; kind: Footing; stone: Stone | null }
@@ -63,6 +66,10 @@ export class Footings {
         if (Number.isNaN(t)) continue;
         const ys = s.y + t * s.flat * s.r;
         if (ys > y) { y = ys; kind = 'stone'; stone = s; }
+      }
+      if (c.rocks) for (const b of c.rocks) {
+        const yb = blockTop(b, x, z);
+        if (yb > y) { y = yb; kind = 'stone'; stone = null; }
       }
       for (const q of c.roots) {
         const dx = x - q.x, dz = z - q.z;

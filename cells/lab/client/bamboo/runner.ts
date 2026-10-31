@@ -59,7 +59,7 @@ export class Runner {
   onBrush: (side: number, k: number) => void = () => {};
   /** a move begun */
   onAct: (act: Act) => void = () => {};
-  private acc = 0; private foot = 0; private think = 0; private best = 0; private bestCost = 0; private stride = 2.2; private posts: Post[] = []; private brushed = new Set<object>();
+  private barred = 0; private held = false; private acc = 0; private foot = 0; private think = 0; private best = 0; private bestCost = 0; private stride = 2.2; private posts: Post[] = []; private brushed = new Set<object>();
   constructor(readonly world: Land, readonly range = 104) { this.feet = new Footings(world, this.chunks); }
 
   /** build the chunks within range of (x, z) that aren't built (at most `budget` of them), and let go of those well out */
@@ -110,7 +110,7 @@ export class Runner {
       this.weave(q, go);
       // (a move you've committed to is given up only if you turn well off its way before the takeoff)
       if (this.plan && Math.abs(wrap(this.heading - this.plan.dir)) > 0.95) this.plan = null;
-      if (!this.plan && !onStair && this.v > 1.2) {
+      if (!this.plan && !onStair && (this.v > 1.2 || this.held)) {
         const p = this.pick(this.best);
         this.plan = p && this.clearWay(this.x, this.z, p.lx, p.lz) && (!p.next || this.clearWay(p.lx, p.lz, p.next.lx, p.next.lz)) ? p : null;
         if (this.plan?.next && !this.clearWay(this.plan.lx, this.plan.lz, this.plan.next.lx, this.plan.next.lz)) this.plan.next = null;
@@ -148,6 +148,7 @@ export class Runner {
     const grade = this.air ? 0 : (F.groundAt(this.x + dx * 2, this.z + dz * 2) - F.groundAt(this.x, this.z)) / 2;
     let target = go ? LOPE * (1 - Math.min(0.6, Math.max(0, grade)) * 0.9) * (1 + Math.min(0.35, Math.max(0, -grade)) * 0.5) * (this.onTrail ? 1.08 : 1) : 0;
     this.stopped = this.bestCost >= 60 && !plan;
+    this.barred = this.stopped ? this.barred + dt : 0;
     if (this.stopped) target = 0;
     else if (this.bestCost > 14) target *= 0.75;
     target *= 1 - this.duck * 0.45 - Math.abs(this.shoulder) * 0.2 - (this.recover > 0 ? 0.25 : 0);
@@ -167,8 +168,10 @@ export class Runner {
         if (toGo <= this.v * dt + 0.02 && plan.wait <= 0) { this.takeoff(plan); return; }
       }
       const [sx, sz] = this.slip(this.x + dx * this.v * dt, this.z + dz * this.v * dt);
-      // (and never over a drop too far to take: held at the rim)
-      if (F.at(sx + dx * 0.3, sz + dz * 0.3).y < here - 3.2) this.v = 0;
+      // (and never over a drop too far to take: held at the rim, unless it's where a leap's to be taken from)
+      // (held there, you look for a way from where you stand: across, or down another way)
+      this.held = F.at(sx + dx * 0.3, sz + dz * 0.3).y < here - 3.2 && !(plan && plan.kind === 'leap' && Math.hypot(plan.ox - sx, plan.oz - sz) < 0.5);
+      if (this.held) this.v = 0;
       else { this.x = sx; this.z = sz; }
       // (the footing: follow it; over an edge with nothing planned, off it, and down)
       const u = F.at(this.x, this.z);
@@ -208,8 +211,9 @@ export class Runner {
     const crowns: { x: number; z: number; rise: number }[] = [];
     for (const s of F.stonesNear(this.x, this.z, 8)) { const top = F.at(s.x, s.z); if (top.kind === 'stone') { const rise = top.y - F.groundAt(s.x, s.z); if (rise > 0.25 && top.y - here < 1.3) crowns.push({ x: s.x, z: s.z, rise }); } }
     let best = this.heading, bestCost = 1e9;
-    // (looking wider when the way ahead's barred: a rim or a face turns you along it)
-    for (let a = -5; a <= 5 || (bestCost >= 60 && a <= 14); a++) {
+    // (looking wider when the way ahead's barred: a rim or a face turns you along it; a dead end (a crown of rock with
+    // a drop all round in front) turns you back the way you came)
+    for (let a = -5; a <= 5 || (bestCost >= 60 && a <= 54); a++) {
       const k = a <= 5 ? a : (a % 2 ? 1 : -1) * (6 + Math.floor((a - 6) / 2));
       const ang = this.heading + k * 0.11, dx = Math.sin(ang), dz = Math.cos(ang);
       let cost = Math.abs(k) * 0.5;
@@ -225,11 +229,12 @@ export class Runner {
         } else if (m === 'duck' && lat < 0.35 + p.r) cost += 0.12;
       }
       // (the footing along it: a face too high to get up (a stone's too, unless it's low enough to stand on), a drop too far)
-      for (const d of [1.4, 2.6, 3.8]) {
+      for (const d of [0.6, 1.4, 2.6, 3.8]) {
         const u = F.at(this.x + dx * d, this.z + dz * d), rise = u.y - here;
-        if (u.kind === 'stone') { if (rise > 1.35) cost += 22 * (1 - d / 5); }
+        if (u.kind === 'stone' && d > 1) { if (rise > 1.35) cost += 22 * (1 - d / 5); }
         else if (d === 1.4 && rise > 0.9 && !this.onTrail) cost += 60;
-        if (d === 1.4 && rise < -3.2) cost += 60;
+        // (a drop too far, close in: a rim, or a cleft, unless there's a top across it to leap to)
+        if (d <= 1.4 && rise < (this.barred > 2 ? -7 : -3.2) && this.across(this.x + dx * d, this.z + dz * d, dx, dz, here) < 0) { cost += 60; break; }
       }
       for (const c of crowns) {
         const rx = c.x - this.x, rz = c.z - this.z, al = rx * dx + rz * dz, lat = Math.abs(-rx * dz + rz * dx);
@@ -286,12 +291,20 @@ export class Runner {
         if (from.kind === 'stone') { const c = this.chainFrom(o[0], o[1], from.y, dir, from.stone); if (c) return c; }
         let low = prof[i].y; for (let j = i; j <= Math.min(n + 8, i + 5); j++) low = Math.min(low, prof[j].y);
         const D = from.y - low;
-        if (D < 0.4 || D > 3.2) return null;
+        // (a cleft too deep to go down into, with a top across it: leapt)
+        if (D > 3.2) {
+          const g = this.across(o[0], o[1], dx, dz, from.y);
+          if (g > 0) { const l = at((i - 1) * S + g + 0.3), ly = F.at(l[0], l[1]).y; return { kind: 'leap', dir, ox: o[0], oz: o[1], lx: l[0], lz: l[1], ly, clear: Math.max(ly, from.y) + 0.1, next: null, wait: 0 }; }
+        }
+        // (no further than you'd jump; or, held up a while with no other way, lowering yourself down a face as far as
+        // you'd dare)
+        const most = this.barred > 2 ? 7 : 3.2;
+        if (D < 0.4 || D > most) return null;
         // (where each would come down: the one with the clearest, flattest landing, the quicker the more of a leap)
         let bestP: Plan | null = null, bestS = -1e9;
         for (const vy of [0.5, 1.5, 2.5]) {
           const vh = Math.max(2, this.v), land = this.arc(o[0], o[1], from.y, dx * vh, dz * vh, vy);
-          if (!land || from.y - land[1] > 3.4) continue;
+          if (!land || from.y - land[1] > most + 0.2 || (most < 4 && this.trapped(land[0], land[2], land[1]))) continue;
           const nrm = F.normalAt(land[0], land[2]), cramp = this.cramped(land[0], land[2], dir);
           const score = nrm[1] * 3 - (cramp ? 2 : 0) - Math.abs(vy - (this.v < 3.5 || D < 0.8 ? 0.5 : 1.5 + this.v * 0.1)) * 0.8;
           if (score > bestS) { bestS = score; bestP = { kind: vy < 1 ? 'drop' : 'leap', dir, ox: o[0], oz: o[1], lx: land[0], lz: land[2], ly: land[1], clear: 0, next: null, wait: 0 }; }
@@ -300,6 +313,30 @@ export class Runner {
       }
     }
     return null;
+  }
+  /** how far across a cleft from (x, z) going (dx, dz) there's a top about as high as `y` to land on (within a long
+   * leap), or -1 */
+  private across(x: number, z: number, dx: number, dz: number, y: number) {
+    const F = this.feet;
+    for (let d = 0.3; d <= 2.4; d += 0.15) {
+      const u = F.at(x + dx * d, z + dz * d);
+      if (u.y > y + 0.6) return -1;
+      if (u.y > y - 0.7) { const v = F.at(x + dx * (d + 0.5), z + dz * (d + 0.5)); return v.y > y - 0.8 ? d : -1; }
+    }
+    return -1;
+  }
+  /** whether a place is a trap: a ledge or a crown of rock with no way on from it (every way a face too high or a drop
+   * too far), so it isn't one to drop onto */
+  private trapped(x: number, z: number, y: number) {
+    const F = this.feet;
+    if (F.at(x, z).kind !== 'stone') return false;
+    for (let a = 0; a < 8; a++) {
+      const dx = Math.sin(a * 0.785), dz = Math.cos(a * 0.785);
+      let ok = true;
+      for (const d of [0.8, 1.6, 2.6]) { const dy = F.at(x + dx * d, z + dz * d).y - y; if (dy > 1.35 || dy < -3.2) { ok = false; break; } }
+      if (ok) return false;
+    }
+    return true;
   }
   /** the next stone on from a crown at (x, z): within a long stride or two, near your way, about as high */
   private chainFrom(x: number, z: number, y: number, dir: number, not: Stone | null, ahead = 1): Plan | null {

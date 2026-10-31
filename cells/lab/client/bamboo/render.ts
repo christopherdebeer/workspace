@@ -30,6 +30,7 @@ import { type Chunk, CHUNK, CN, CELL, HALF, BANK } from './world';
 import { STROKE_STRIDE } from './strokes';
 import { type Dials, HOUSE } from './layers';
 import { lumpMesh, LUMP_SEED } from './lump';
+import { rockMesh, ROCK_STRIDE } from './rock';
 import { skyAt, type Sky } from './sky';
 
 export interface Frame {
@@ -716,8 +717,16 @@ const SOLID_VS = COMMON + `
 layout(location = 0) in vec3 aP; layout(location = 1) in vec3 aN;
 layout(location = 2) in vec4 iA; layout(location = 3) in vec4 iB; layout(location = 4) in vec4 iC;
 out vec3 vW; out vec3 vN; out vec3 vL; out float vMoss; out float vSeed; flat out float vOut;
-uniform int uKind; uniform mat4 uLightVP; uniform int uDepth;
+uniform int uKind; uniform mat4 uLightVP; uniform int uDepth; uniform int uMesh;
 void main() {
+  if (uMesh == 1) {
+    // (the rock's blocks, meshed in the world already (rock.ts): each corner its place, its face's normal, its place in
+    // its block, its moss and seed)
+    vW = aP; vN = aN; vL = iA.xyz; vMoss = iB.z; vSeed = iB.w;
+    vOut = uDepth == 1 ? 0. : outCol(aP + vec3(0., .2, 0.)) + (fract(iB.w * 7.7) - .5) * .1;
+    gl_Position = (uDepth == 1 ? uLightVP : uVP) * vec4(vW, 1.);
+    return;
+  }
   vec3 p = aP, n = aN;
   float yaw = iA.w;
   if (uKind == 1) {
@@ -751,7 +760,7 @@ void main() {
 }`;
 const SOLID_FS = COMMON + LIGHT + OUT + `
 in vec3 vW; in vec3 vN; in vec3 vL; in float vMoss; in float vSeed; flat in float vOut;
-uniform int uKind; uniform float uMarks;
+uniform int uKind; uniform float uMarks; uniform int uMesh;
 void main() {
   vec3 N = normalize(vN);
   float n1 = fbm2(vW.xz * 1.7 + vW.y * 1.3), n2 = vn(vW.xy * 5. + vW.z * 3.);
@@ -842,9 +851,10 @@ void main() {
   // (the finest of it (pits, tooling) gone where a pixel covers it)
   float sFine = 1. - smoothstep(.04, .12, spx * 2.25);
   // (a boulder: broad weathered facets, chips off it, pits, a crack or two; a step: tooling and wear)
-  vec2 chip = vor(vW.xz * 2.2 + vW.y * 1.7);
+  // (the rock's blocks: chips in their own frame, few and quiet, so a broad face stays broad)
+  vec2 chip = uMesh == 1 ? vor(vL.xz * 2.5 + vL.y * 1.9 + vSeed * 9.) : vor(vW.xz * 2.2 + vW.y * 1.7);
   float hRel = uKind == 4 ? 0. : uKind == 1 ? (vn(vW.xz * vec2(14., 3.)) - .5) * .01 * sFine + (vn(vW.xz * 4.) - .5) * .015 - scr * .008
-    : (fbm2(vW.xz * 1.1 + vW.y * .9) - .5) * .12 + (1. - chip.x) * .05 + ((fbm2(vW.xz * 3. + vW.y * 2.) - .5) * .04 - .02 * smoothstep(.7, .82, vn(vW.xz * 9. + vW.y * 5.))) * sFine - scr * .025;
+    : (fbm2(vW.xz * 1.1 + vW.y * .9) - .5) * (uMesh == 1 ? .05 : .12) + (1. - chip.x) * (uMesh == 1 ? .015 : .05) + ((fbm2(vW.xz * 3. + vW.y * 2.) - .5) * .04 - .02 * smoothstep(.7, .82, vn(vW.xz * 9. + vW.y * 5.))) * sFine - scr * .025;
   N = bumpN(N, vW, hRel * sK);
   float sHo = clamp(1. + hRel * sK * 4.5, .35, 1.3);
   gSunVis = mix(1., sHo * (1. - (uKind == 1 ? .25 : .45) * scr * min(1., sK)), .75);
@@ -1114,7 +1124,7 @@ const cross = (a: number[], b: number[]) => [a[1] * b[2] - a[2] * b[1], a[2] * b
 const norm = (a: number[]) => { const l = Math.hypot(a[0], a[1], a[2]) || 1; return [a[0] / l, a[1] / l, a[2] / l]; };
 
 /** what's on the GPU for one chunk */
-interface Held { key: string; x: number; z: number; x0: number; z0: number; canopy: Float32Array; roots: WebGLBuffer; nRoots: number; strokes: WebGLBuffer | null; nStrokes: number; ground: WebGLBuffer; culms: WebGLBuffer; nCulms: number; sprays: WebGLBuffer; nSprays: number; twigs: WebGLBuffer; nTwigs: number; stones: WebGLBuffer; nStones: number; steps: WebGLBuffer; nSteps: number }
+interface Held { key: string; x: number; z: number; x0: number; z0: number; canopy: Float32Array; roots: WebGLBuffer; nRoots: number; strokes: WebGLBuffer | null; nStrokes: number; ground: WebGLBuffer; culms: WebGLBuffer; nCulms: number; sprays: WebGLBuffer; nSprays: number; twigs: WebGLBuffer; nTwigs: number; stones: WebGLBuffer; nStones: number; steps: WebGLBuffer; nSteps: number; rocks: WebGLBuffer | null; nRocks: number }
 
 export class Renderer {
   private gl: WebGL2RenderingContext;
@@ -1275,8 +1285,9 @@ export class Renderer {
     c.roots.forEach((q, k) => rt.set([q.x, q.y, q.z, q.yaw, q.r, q.len, q.moss, q.moss * 0.37], k * 8));
     const sx = new Float32Array(c.steps.length * 8);
     c.steps.forEach((s, k) => sx.set([s.x, s.y, s.z, Math.atan2(s.dx, s.dz), s.depth, s.width, s.drop, s.seed], k * 8));
+    const rk = c.rocks?.length ? rockMesh(c.rocks) : null;
     this.canDirty = true;
-    this.chunks.set(key, { key, x: c.x0 + CHUNK / 2, z: c.z0 + CHUNK / 2, x0: c.x0, z0: c.z0, canopy: c.canopy, roots: this.buffer(rt), nRoots: c.roots.length, strokes: marks?.length ? this.buffer(marks) : null, nStrokes: marks ? marks.length / STROKE_STRIDE : 0, ground: this.buffer(v), culms: this.buffer(cu), nCulms: c.tall, sprays: this.buffer(sp), nSprays: c.sprays.length, twigs: this.buffer(tw), nTwigs: c.twigs.length, stones: this.buffer(st), nStones: c.stones.length, steps: this.buffer(sx), nSteps: c.steps.length });
+    this.chunks.set(key, { key, x: c.x0 + CHUNK / 2, z: c.z0 + CHUNK / 2, x0: c.x0, z0: c.z0, canopy: c.canopy, roots: this.buffer(rt), nRoots: c.roots.length, strokes: marks?.length ? this.buffer(marks) : null, nStrokes: marks ? marks.length / STROKE_STRIDE : 0, ground: this.buffer(v), culms: this.buffer(cu), nCulms: c.tall, sprays: this.buffer(sp), nSprays: c.sprays.length, twigs: this.buffer(tw), nTwigs: c.twigs.length, stones: this.buffer(st), nStones: c.stones.length, steps: this.buffer(sx), nSteps: c.steps.length, rocks: rk ? this.buffer(rk) : null, nRocks: rk ? rk.length / ROCK_STRIDE : 0 });
   }
   /** let a chunk go */
   drop(key: string) {
@@ -1325,6 +1336,16 @@ export class Renderer {
   private attr(loc: number, buf: WebGLBuffer, size: number, stride: number, off: number, div = 0) {
     const gl = this.gl; gl.bindBuffer(gl.ARRAY_BUFFER, buf); gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, size, gl.FLOAT, false, stride * 4, off * 4); gl.vertexAttribDivisor(loc, div);
   }
+  /** the rock's blocks (rock.ts), drawn as the boulders are, from the chunks' meshes */
+  private drawRocks(p: WebGLProgram, list: { c: Held }[]) {
+    const gl = this.gl, um = gl.getUniformLocation(p, 'uMesh');
+    gl.uniform1i(gl.getUniformLocation(p, 'uKind'), 2); gl.uniform1i(um, 1);
+    for (const { c } of list) if (c.rocks) {
+      this.attr(0, c.rocks, 3, ROCK_STRIDE, 0); this.attr(1, c.rocks, 3, ROCK_STRIDE, 3); this.attr(2, c.rocks, 3, ROCK_STRIDE, 6); this.attr(3, c.rocks, 4, ROCK_STRIDE, 9);
+      gl.drawArrays(gl.TRIANGLES, 0, c.nRocks);
+    }
+    gl.uniform1i(um, 0);
+  }
   private clearAttrs() { const gl = this.gl; for (let i = 0; i < 6; i++) { gl.disableVertexAttribArray(i); gl.vertexAttribDivisor(i, 0); } }
 
   private pxW = 0.001;
@@ -1361,6 +1382,8 @@ export class Renderer {
       gl.uniform1i(gl.getUniformLocation(p, 'uKind'), 2);
       this.attr(0, this.vbo.lump.buf, 3, 6, 0); this.attr(1, this.vbo.lump.buf, 3, 6, 3);
       for (const { c } of near2) if (c.nStones) { this.attr(2, c.stones, 4, 8, 0, 1); this.attr(3, c.stones, 4, 8, 4, 1); gl.drawArraysInstanced(gl.TRIANGLES, 0, this.vbo.lump.count, c.nStones); }
+      this.drawRocks(p, near2);
+      gl.uniform1i(gl.getUniformLocation(p, 'uKind'), 2);
       this.presUpload();
       if (this.presN) { gl.uniform1i(gl.getUniformLocation(p, 'uKind'), 4); this.attr(0, this.vbo.orb.buf, 3, 6, 0); this.attr(1, this.vbo.orb.buf, 3, 6, 3); this.attr(2, this.presBuf!, 4, 12, 0, 1); this.attr(3, this.presBuf!, 4, 12, 4, 1); this.attr(4, this.presBuf!, 4, 12, 8, 1); gl.drawArraysInstanced(gl.TRIANGLES, 0, this.vbo.orb.count, this.presN); }
       if (!this.bare) {
@@ -1398,6 +1421,8 @@ export class Renderer {
       gl.uniform1i(gl.getUniformLocation(p, 'uKind'), 2);
       this.attr(0, this.vbo.lump.buf, 3, 6, 0); this.attr(1, this.vbo.lump.buf, 3, 6, 3);
       for (const { c } of inRange(this.farthest)) if (c.nStones) { this.attr(2, c.stones, 4, 8, 0, 1); this.attr(3, c.stones, 4, 8, 4, 1); gl.drawArraysInstanced(gl.TRIANGLES, 0, this.vbo.lump.count, c.nStones); }
+      this.drawRocks(p, inRange(this.farthest));
+      this.attr(0, this.vbo.lump.buf, 3, 6, 0); this.attr(1, this.vbo.lump.buf, 3, 6, 3);
       gl.uniform1i(gl.getUniformLocation(p, 'uKind'), 3);
       for (const { c } of inRange(60)) if (c.nRoots) { this.attr(2, c.roots, 4, 8, 0, 1); this.attr(3, c.roots, 4, 8, 4, 1); gl.drawArraysInstanced(gl.TRIANGLES, 0, this.vbo.lump.count, c.nRoots); }
       // (and whatever's going through the grove)

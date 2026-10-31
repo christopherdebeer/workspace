@@ -69,6 +69,23 @@ In three minutes of running the run covers about a kilometre at a mean of 4.8 to
 
 Long steep-sided ridges and the valleys between (half the hillside steeper than one in three), endless (where a rim or a rock face bars the way ahead, the run looks wider and turns you along it): built where you are and a little way round, 32 m at a time, as you run, and let go behind you. The same seed is the same mountain wherever you go.
 
+## The rock
+
+Where the rock breaks through, it's built as rock (`rock.ts`), not drawn onto a slope. A formation has one way it's made: a bedding plane (its dip and roll) and its joints (one yaw, the fractures across it). Its blocks are cut along those, so a ledge belongs to the face behind it and a fallen slab is the shape of what's missing above.
+- **An escarpment**, where a cliff band breaks through. The ground's smooth rise is taken out down to the foot (`world.ts`), so the blocks are the cliff and the gaps between them are clefts going back to the foot. It's built as columns along the rim:
+  - most are one tall slab, or two or three tiers, each column's joints its own (so they don't run on as courses);
+  - the lower tiers stand out as ledges, and now and then a middle one is set back under the lip of the one above;
+  - columns lean a little out or back, and their crests are broken, stepping down toward the face or to a side, a broad top sometimes split along a joint;
+  - narrow columns leave clefts, and a slab now and then lies fallen at the foot.
+  
+  A trail's stair still cuts through it, between the columns.
+- **A rooted outcrop** out on the slope: a big slab tipped back into the hill, its neighbours along the same joints, a wedge broken off below, fragments.
+- **Running crowns**: low flat tops stepping along the contour, a little apart, a way a fox could take.
+
+A block is a box with chamfered edges and corners. Its corners are nudged and its top drawn in, then broken down toward a face. Its faces are flat, each with its own normal: a fracture is an edge, not a swell. Fresh fractures have crisp edges and old ones are rounded. Nothing grows under rock.
+
+The run and the fox stand on the blocks' own upward faces (`footing.ts`), and sight stops at them. On the rock, the run leaps a cleft to the top across it. It won't drop onto a ledge it couldn't leave. Held at a rim, it looks for a way from where it stands, turning right round at a dead end, and if held a while it lowers itself down a face. `?clay&grove=0` shows the forms alone. The rock's own material and ink (a face's planes, its joints, its crest in the drawing) come next. Until then it wears the boulders'.
+
 ## The grove
 
 - **Culms:** moso, thick and pale, in **stands**, as a grove grows from its runners: clumps of a few to a dozen or more, with open floor between them, each stand of an age (young and pale, or old and dull), stoutest toward its middle. Now and then one old giant stands beside a trail, the one the eye goes to. Each culm has its own girth and height (the stoutest are the tallest) and its own lean, downhill toward the light and out over a way beside it. Its internodes lengthen up the culm. Young culms are pale celadon with fresh white powder under each node; old ones are duller and olive, patched with lichen. Below a way, on the side where the slope falls away, the grove is sparser, so the walk looks out between them.
