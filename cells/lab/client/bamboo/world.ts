@@ -14,7 +14,7 @@
  * Everything is in metres; y is up. The same seed is the same mountain wherever you go.
  */
 import { hash } from '../kit/rng';
-import { BAND_HI, BAND_LO, blockTop, rocksIn, type Block, type RockLand } from './rock';
+import { BAND_HI, BAND_LO, blockTop, covers, escarpIn, floorAt, outcropsIn, type Block, type Floor, type RockLand } from './rock';
 
 export type V2 = [number, number];
 export const CHUNK = 32, CELL = 1, CN = CHUNK / CELL + 1;
@@ -231,13 +231,14 @@ export class World implements RockLand {
   cliffN(x: number, z: number) { return cliffN(x, z, this.seed); }
   cliffH(x: number, z: number) { return cliff(x, z, this.seed).h; }
   under(x: number, z: number) { return under(x, z, this.seed); }
-  /** the ground at (x, z): the land, with any trail's bench cut into it; and where a cliff band's rock is built
-   * (rock.ts), its smooth rise taken out down to the foot, so the blocks are the cliff and the gaps between them clefts
-   * (not near a trail: a stair's cut through it there) */
+  /** the ground at (x, z): the land, with any trail's bench cut into it; and in a cliff band, where its rock is built
+   * (rock.ts), the smooth rise cut away only where the rock stands (under a block, down to the foot) or where it leaves
+   * a cleft (its floor, ramping up to the block at its back): elsewhere the land's own rise, so nothing's cut that
+   * isn't covered */
   ground(x: number, z: number): number {
     let b = base(x, z, this.seed);
     const q = this.trailNear(x, z), n = cliffN(x, z, this.seed);
-    if (n > BAND_LO && n < BAND_HI) b += (under(x, z, this.seed) - 0.3 - b) * (q.trail ? ss(HALF + BANK + 1, HALF + BANK + 3.2, q.d) : 1);
+    if (n > BAND_LO - 0.001 && n < BAND_HI + 0.001) { const c = this.cut(x, z); if (!Number.isNaN(c)) b = c; }
     if (!q.trail) return b;
     const yp = q.trail.y[q.i] - 0.06, t = ss(HALF, HALF + BANK + Math.abs(b - yp) * 0.25, q.d);
     return yp + (b - yp) * t;
@@ -270,18 +271,44 @@ export class World implements RockLand {
       const fx = x - c.x0, fz = z - c.z0;
       if (fx < 0 || fz < 0 || fx > CHUNK || fz > CHUNK) return this.base(x, z);
       const i = Math.min(CN - 2, Math.floor(fx / CELL)), j = Math.min(CN - 2, Math.floor(fz / CELL)), u = fx / CELL - i, v = fz / CELL - j, k = i + j * CN;
-      return (G[k] * (1 - u) + G[k + 1] * u) * (1 - v) + (G[k + CN] * (1 - u) + G[k + CN + 1] * u) * v;
+      const y = (G[k] * (1 - u) + G[k + 1] * u) * (1 - v) + (G[k + CN] * (1 - u) + G[k + CN + 1] * u) * v;
+      return c.rockTop ? Math.max(y, c.rockTop[Math.round(fx / CELL) + Math.round(fz / CELL) * CN]) : y;
     };
     this.bakeSun(c.x0, c.z0, G, hAt, c.sunVis);
   }
 
-  /** the rock formations anchored in a chunk (rock.ts), made once */
+  /** the rock anchored in a chunk (rock.ts), made once: the escarpment's (it asks nothing of the ground, so the ground
+   * can ask it) and the outcrops' */
+  private escMemo = new Map<string, { blocks: Block[]; floors: Floor[] }>();
   private rockMemo = new Map<string, Block[]>();
+  escarp(ci: number, cj: number) {
+    const k = `${ci},${cj}`;
+    let r = this.escMemo.get(k);
+    if (!r) { r = escarpIn(this, ci, cj); this.escMemo.set(k, r); }
+    return r;
+  }
   rocks(ci: number, cj: number): Block[] {
     const k = `${ci},${cj}`;
     let r = this.rockMemo.get(k);
-    if (!r) { r = rocksIn(this, ci, cj); this.rockMemo.set(k, r); }
+    if (!r) { r = [...this.escarp(ci, cj).blocks, ...outcropsIn(this, ci, cj)]; this.rockMemo.set(k, r); }
     return r;
+  }
+  /** where a cliff band's rock cuts the ground at (x, z): under a block, its foot; in a cleft, its floor; NaN if neither */
+  private cut(x: number, z: number) {
+    const ci = Math.floor(x / CHUNK), cj = Math.floor(z / CHUNK);
+    let fl = NaN;
+    for (let a = -1; a <= 1; a++) for (let b = -1; b <= 1; b++) {
+      const e = this.escarp(ci + a, cj + b);
+      for (const bl of e.blocks) if (bl.kind === 'column' && Math.abs(x - bl.c[0]) < bl.r && Math.abs(z - bl.c[2]) < bl.r && covers(bl, x, z)) return this.under(x, z) - 0.3;
+      for (const f of e.floors) { const y = floorAt(f, this, x, z); if (!Number.isNaN(y)) fl = y; }
+    }
+    return fl;
+  }
+  /** whether (x, z) is under any rock (for the ink: the land's own cliff marks give way to the rock's) */
+  underRockAt(x: number, z: number) {
+    const ci = Math.floor(x / CHUNK), cj = Math.floor(z / CHUNK);
+    for (let a = -1; a <= 1; a++) for (let b = -1; b <= 1; b++) for (const bl of this.rocks(ci + a, cj + b)) if (Math.abs(x - bl.c[0]) < bl.r && Math.abs(z - bl.c[2]) < bl.r && covers(bl, x, z, -0.3)) return true;
+    return false;
   }
   /** whether (x, z) is under rock (a block's top over it, above the ground): nothing grows there */
   private underRock(near: Block[], x: number, z: number, gy: number) {
@@ -477,7 +504,14 @@ export class World implements RockLand {
     // a ridge, a bank shading the slope under it), how much of the sky it sees (its hollows, the foot of a bank darker),
     // and darker again where it meets a stone, a step, a culm's foot ───
     const sunVis = new Float32Array(CN * CN), ao = new Float32Array(CN * CN);
-    const hAt = (x: number, z: number) => (x >= x0 && x <= x0 + CHUNK && z >= z0 && z <= z0 + CHUNK ? g(x, z) : this.base(x, z));
+    // (the rock's tops over the ground, so a cliff's columns shade the foot and close its sky, a cleft's floor darker)
+    const RT = new Float32Array(CN * CN).fill(-1e9);
+    for (const b of rocksNear) {
+      const i0 = Math.max(0, Math.floor((b.c[0] - b.r - x0) / CELL)), i1 = Math.min(CN - 1, Math.ceil((b.c[0] + b.r - x0) / CELL)), j0 = Math.max(0, Math.floor((b.c[2] - b.r - z0) / CELL)), j1 = Math.min(CN - 1, Math.ceil((b.c[2] + b.r - z0) / CELL));
+      for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) { const y = blockTop(b, x0 + i * CELL, z0 + j * CELL); if (y > RT[i + j * CN]) RT[i + j * CN] = y; }
+    }
+    const rt = (x: number, z: number) => RT[Math.min(CN - 1, Math.max(0, Math.round((x - x0) / CELL))) + Math.min(CN - 1, Math.max(0, Math.round((z - z0) / CELL))) * CN];
+    const hAt = (x: number, z: number) => (x >= x0 && x <= x0 + CHUNK && z >= z0 && z <= z0 + CHUNK ? Math.max(g(x, z), rt(x, z)) : this.base(x, z));
     this.bakeSun(x0, z0, ground, hAt, sunVis);
     const SKYSTEP = [1, 2.5, 5, 9];
     for (let j = 0; j < CN; j++) for (let i = 0; i < CN; i++) {
@@ -496,8 +530,8 @@ export class World implements RockLand {
       for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) { const d = Math.hypot(x0 + i * CELL - px, z0 + j * CELL - pz); ao[i + j * CN] *= least + (1 - least) * ss(r0, r1, d); }
     };
     for (const st of stones) touch(st.x, st.z, st.r * 0.7, st.r * 1.7, 0.55);
-    // (and darker at the foot of the rock, where it meets the ground)
-    for (const b of rocksNear) if (b.kind !== 'fragment') touch(b.c[0], b.c[2], Math.max(b.h[0], b.h[2]) * 0.9, Math.max(b.h[0], b.h[2]) * 1.6, 0.6);
+    // (and a little darker right at a fragment's foot)
+    for (const b of rocksNear) if (b.kind === 'fragment') touch(b.c[0], b.c[2], b.h[0] * 0.7, b.h[0] * 1.6, 0.65);
     for (const st of steps) touch(st.x + st.dx * st.depth * 0.5, st.z + st.dz * st.depth * 0.5, st.width * 0.3, st.width * 0.8, 0.75);
     for (let k = 0; k < tall; k++) { const q = culms[k]; touch(q.x, q.z, q.r, q.r + 0.6, 0.72); }
     // ─── the canopy over each point of the ground: how much leaf there is overhead (0 open sky … 1 closed), from where
@@ -512,7 +546,7 @@ export class World implements RockLand {
       }
     }
     for (let k = 0; k < canopy.length; k++) canopy[k] = 1 - Math.exp(-canopy[k] * 0.9);
-    return { ci, cj, x0, z0, ground, near, rock, culms, tall, sprays, twigs, stones, steps, roots, sunVis, ao, canopy, rocks };
+    return { ci, cj, x0, z0, ground, near, rock, culms, tall, sprays, twigs, stones, steps, roots, sunVis, ao, canopy, rocks, rockTop: RT };
   }
 }
 
@@ -553,6 +587,8 @@ export interface Chunk {
   canopy: Float32Array;
   /** the rock anchored here (rock.ts): its blocks, meshed */
   rocks?: Block[];
+  /** the highest of the rock over each ground point (or far below where there's none): for the land's light */
+  rockTop?: Float32Array;
 }
 
 /** the far ranges, all round about (drawn as a backdrop that keeps its distance): each a jagged line, one behind another */

@@ -103,11 +103,14 @@ export class Presence {
     for (let h = Math.min(dt, 0.25); h > 1e-6; h -= 1 / 60) this.tick(Math.min(h, 1 / 60), you);
   }
 
-  /** whether a line from `a` to `b` is clear of the land, the stones and the culms (a fox's eye to yours, or yours to it) */
+  /** whether a line from `a` to `b` is clear of the land, the stones, the rock and the culms (a fox's eye to yours, or yours to it) */
   clear(a: V3, b: V3) {
     const F = this.feet, d = sub(b, a), L = Math.hypot(d[0], d[2]);
     if (L < 0.5) return true;
-    for (let s = 0.6; s < L - 0.3; s += 0.6) { const f = s / L; if (F.at(a[0] + d[0] * f, a[2] + d[2] * f).y > a[1] + d[1] * f) return false; }
+    // (the land and the stones under the line; then the rock's own faces, so what's under an overhang or across a cleft is
+    // seen past it as it is)
+    for (let s = 0.6; s < L - 0.3; s += 0.6) { const f = s / L; if (F.at(a[0] + d[0] * f, a[2] + d[2] * f, false).y > a[1] + d[1] * f) return false; }
+    if (F.rockBetween(a, b)) return false;
     const ux = d[0] / L, uz = d[2] / L;
     for (const q of F.posts((a[0] + b[0]) / 2, (a[2] + b[2]) / 2, L / 2 + 1)) {
       const rx = q.x - a[0], rz = q.z - a[2], al = rx * ux + rz * uz;

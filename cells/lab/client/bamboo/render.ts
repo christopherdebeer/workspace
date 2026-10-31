@@ -715,15 +715,17 @@ void main() {
 
 const SOLID_VS = COMMON + `
 layout(location = 0) in vec3 aP; layout(location = 1) in vec3 aN;
-layout(location = 2) in vec4 iA; layout(location = 3) in vec4 iB; layout(location = 4) in vec4 iC;
-out vec3 vW; out vec3 vN; out vec3 vL; out float vMoss; out float vSeed; flat out float vOut;
+layout(location = 2) in vec4 iA; layout(location = 3) in vec4 iB; layout(location = 4) in vec4 iC; layout(location = 5) in vec2 iD;
+out vec3 vW; out vec3 vN; out vec3 vL; out float vMoss; out float vSeed; flat out float vOut; out vec3 vBed; out float vWorn;
 uniform int uKind; uniform mat4 uLightVP; uniform int uDepth; uniform int uMesh;
 void main() {
+  vBed = vec3(0.); vWorn = 0.;
   if (uMesh == 1) {
     // (the rock's blocks, meshed in the world already (rock.ts): each corner its place, its face's normal, its place in
-    // its block, its moss and seed)
-    vW = aP; vN = aN; vL = iA.xyz; vMoss = iB.z; vSeed = iB.w;
-    vOut = uDepth == 1 ? 0. : outCol(aP + vec3(0., .2, 0.)) + (fract(iB.w * 7.7) - .5) * .1;
+    // its block, its bedding, moss and seed; its block's anchor, asked how far it's drawn, so a block's drawn whole, one
+    // way, never triangle by triangle; whether it's a worn edge)
+    vW = aP; vN = aN; vL = iA.xyz; vMoss = iB.z; vSeed = iB.w; vBed = vec3(iB.xy, iD.y); vWorn = iD.x;
+    vOut = uDepth == 1 ? 0. : outCol(iC.xyz + vec3(0., .2, 0.)) + (fract(iB.w * 7.7) - .5) * .1;
     gl_Position = (uDepth == 1 ? uLightVP : uVP) * vec4(vW, 1.);
     return;
   }
@@ -759,7 +761,7 @@ void main() {
   gl_Position = (uDepth == 1 ? uLightVP : uVP) * vec4(vW, 1.);
 }`;
 const SOLID_FS = COMMON + LIGHT + OUT + `
-in vec3 vW; in vec3 vN; in vec3 vL; in float vMoss; in float vSeed; flat in float vOut;
+in vec3 vW; in vec3 vN; in vec3 vL; in float vMoss; in float vSeed; flat in float vOut; in vec3 vBed; in float vWorn;
 uniform int uKind; uniform float uMarks; uniform int uMesh;
 void main() {
   vec3 N = normalize(vN);
@@ -769,8 +771,10 @@ void main() {
   vec3 alb = mix(stone, vec3(.4, .5, .22), moss * (uKind == 1 ? .2 : .7));
   float mark = 0., frK = 0., frW = 0.;
   // (a stone's shade drawn as a brush does: a few broken strokes across its turned-away side, not filled)
-  float hs = abs(fract(dot(vW.xz, vec2(.8, .6)) * 5. + vW.y * 3.5) - .5);
-  float hw = .07 + fwidth(dot(vW.xz, vec2(.8, .6)) * 5. + vW.y * 3.5) * .9;
+  // (on the rock's blocks, in the block's own frame, so a face's strokes go with the face)
+  float hq = uMesh == 1 ? dot(vL.xz, vec2(.8, .6)) * 9. + vL.y * 6. : dot(vW.xz, vec2(.8, .6)) * 5. + vW.y * 3.5;
+  float hs = abs(fract(hq) - .5);
+  float hw = .07 + fwidth(hq) * .9;
   float hatch = (1. - smoothstep(hw * .7, hw * .7 + .05, hs)) * smoothstep(.3, -.3, dot(N, uSun)) * step(.45, vn(vW.xz * 2.3 + vW.y)) * .42;
   if (uKind == 2) {
     // (a boulder: its underside dark, the ground's shade gathering under it; now and then a fracture across it)
@@ -782,6 +786,17 @@ void main() {
     frK = (1. - smoothstep(.015, .04 + fw, cr)) * has;
     frW = (1. - smoothstep(.0, .09 + fw * 2., cr)) * has;
     mark = max(max(hatch, under), frK * .8);
+    if (uMesh == 1) {
+      // (the bedding, one field across the formation: a thin dark line where each plane meets a side face, broken here and
+      // there; the worn edges lighter, weathered back)
+      vec3 bn = vec3(vBed.x, sqrt(max(0., 1. - dot(vBed.xy, vBed.xy))), vBed.y);
+      float bd = dot(vW, bn) / max(.5, vBed.z), bdist = abs(fract(bd + .5) - .5), bw = .012 + fwidth(bd) * .8;
+      float onSide = 1. - smoothstep(.45, .8, abs(dot(N, bn)));
+      float bedL = (1. - smoothstep(bw, bw * 2.2, bdist)) * onSide * step(.32, vn(vec2(dot(vW.xz, vec2(.7, -.7)) * .9, bd)));
+      alb *= 1. - .3 * bedL;
+      alb = mix(alb, alb * 1.12 + .025, vWorn * .7);
+      mark = max(mark, bedL * .6);
+    }
   }
   if (uKind == 4) {
     // (a fox: russet, its underside and its tail's tip white; someone running: a dark coat, a pale sleeve, dark hair)
@@ -1341,10 +1356,10 @@ export class Renderer {
     const gl = this.gl, um = gl.getUniformLocation(p, 'uMesh');
     gl.uniform1i(gl.getUniformLocation(p, 'uKind'), 2); gl.uniform1i(um, 1);
     for (const { c } of list) if (c.rocks) {
-      this.attr(0, c.rocks, 3, ROCK_STRIDE, 0); this.attr(1, c.rocks, 3, ROCK_STRIDE, 3); this.attr(2, c.rocks, 3, ROCK_STRIDE, 6); this.attr(3, c.rocks, 4, ROCK_STRIDE, 9);
+      this.attr(0, c.rocks, 3, ROCK_STRIDE, 0); this.attr(1, c.rocks, 3, ROCK_STRIDE, 3); this.attr(2, c.rocks, 3, ROCK_STRIDE, 6); this.attr(3, c.rocks, 4, ROCK_STRIDE, 9); this.attr(4, c.rocks, 3, ROCK_STRIDE, 13); this.attr(5, c.rocks, 2, ROCK_STRIDE, 16);
       gl.drawArrays(gl.TRIANGLES, 0, c.nRocks);
     }
-    gl.uniform1i(um, 0);
+    gl.uniform1i(um, 0); gl.disableVertexAttribArray(4); gl.disableVertexAttribArray(5);
   }
   private clearAttrs() { const gl = this.gl; for (let i = 0; i < 6; i++) { gl.disableVertexAttribArray(i); gl.vertexAttribDivisor(i, 0); } }
 

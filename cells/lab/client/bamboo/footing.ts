@@ -11,7 +11,7 @@
  */
 import { CHUNK, culmPoint, type Chunk, type Culm, type Land, type Stone } from './world';
 import { lumpTopAt, LUMP_R } from './lump';
-import { blockTop } from './rock';
+import { blockTop, blocksSegment, type Pad } from './rock';
 
 export type Footing = 'ground' | 'step' | 'stone' | 'root';
 export interface Under { y: number; kind: Footing; stone: Stone | null }
@@ -53,8 +53,8 @@ export class Footings {
     const i = Math.min(CHUNK, Math.max(0, Math.round(x - c.x0))), j = Math.min(CHUNK, Math.max(0, Math.round(z - c.z0)));
     return c.canopy[i + j * (CHUNK + 1)];
   }
-  /** what you'd stand on at (x, z) */
-  at(x: number, z: number): Under {
+  /** what you'd stand on at (x, z) (with the rock, or without it: for sight, which asks the rock itself) */
+  at(x: number, z: number, rock = true): Under {
     const tr = this.land.tread(x, z);
     if (tr !== null) return { y: tr, kind: 'step', stone: null };
     let y = this.groundAt(x, z), kind: Footing = 'ground', stone: Stone | null = null;
@@ -67,8 +67,11 @@ export class Footings {
         const ys = s.y + t * s.flat * s.r;
         if (ys > y) { y = ys; kind = 'stone'; stone = s; }
       }
-      if (c.rocks) for (const b of c.rocks) {
-        const yb = blockTop(b, x, z);
+      if (rock && c.rocks) for (const b of c.rocks) {
+        // (a block's top, or just past its edge, its top there: a crack between two blocks narrower than a foot is stepped
+        // over, not fallen into)
+        let yb = blockTop(b, x, z);
+        if (Number.isNaN(yb)) { const dx = b.c[0] - x, dz = b.c[2] - z, l = Math.hypot(dx, dz); if (l > 0.2) yb = blockTop(b, x + (dx / l) * 0.16, z + (dz / l) * 0.16); }
         if (yb > y) { y = yb; kind = 'stone'; stone = null; }
       }
       for (const q of c.roots) {
@@ -84,15 +87,32 @@ export class Footings {
     }
     return { y, kind, stone };
   }
-  /** what could be stood on near (x, z), above the ground: the stones' crowns and the rock's tops, each its middle and
-   * about how far its top reaches (for runner.ts to look for footholds on) */
+  /** the stones' crowns near (x, z) that could be stood on, each its middle and about how far its top reaches */
   perchesNear(x: number, z: number, r: number): { x: number; z: number; r: number }[] {
     const out: { x: number; z: number; r: number }[] = [];
-    for (const c of this.near(x, z)) {
-      for (const s of c.stones) if (Math.abs(s.x - x) < r + s.r && Math.abs(s.z - z) < r + s.r && s.r > 0.3) out.push({ x: s.x, z: s.z, r: s.r * 0.9 });
-      if (c.rocks) for (const b of c.rocks) if (b.kind !== 'fragment' && Math.abs(b.c[0] - x) < r + b.r && Math.abs(b.c[2] - z) < r + b.r) out.push({ x: b.c[0], z: b.c[2], r: Math.min(b.h[0], b.h[2]) * 0.9 });
+    for (const c of this.near(x, z)) for (const s of c.stones) if (Math.abs(s.x - x) < r + s.r && Math.abs(s.z - z) < r + s.r && s.r > 0.3) out.push({ x: s.x, z: s.z, r: s.r * 0.9 });
+    return out;
+  }
+  /** the rock's pads near (x, z) (rock.ts): footholds with their block, the slope, the room; the ones still on top (not
+   * under another block) */
+  padsNear(x: number, z: number, r: number): Pad[] {
+    const out: Pad[] = [];
+    for (const c of this.near(x, z)) if (c.rocks) for (const b of c.rocks) {
+      if (Math.abs(b.c[0] - x) > r + b.r || Math.abs(b.c[2] - z) > r + b.r) continue;
+      for (const p of b.pads) if (Math.abs(p.x - x) < r && Math.abs(p.z - z) < r && Math.abs(this.at(p.x, p.z).y - p.y) < 0.05) out.push(p);
     }
     return out;
+  }
+  /** whether the rock stands between a and b (its faces, so the space under an overhang is open) */
+  rockBetween(a: [number, number, number], b: [number, number, number]) {
+    const seen = new Set<Chunk>();
+    const L = Math.hypot(b[0] - a[0], b[2] - a[2]), n = Math.max(1, Math.ceil(L / 24));
+    for (let k = 0; k <= n; k++) for (const c of this.near(a[0] + ((b[0] - a[0]) * k) / n, a[2] + ((b[2] - a[2]) * k) / n)) {
+      if (seen.has(c) || !c.rocks) continue;
+      seen.add(c);
+      for (const bl of c.rocks) if (blocksSegment(bl, a, b)) return true;
+    }
+    return false;
   }
   /** the slope underfoot, as a normal (from what you'd stand on round about) */
   normalAt(x: number, z: number, e = 0.15): [number, number, number] {

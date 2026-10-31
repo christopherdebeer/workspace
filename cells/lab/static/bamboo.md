@@ -97,20 +97,58 @@ Long steep-sided ridges and the valleys between (half the hillside steeper than 
 
 ## The rock
 
-Where the rock breaks through, it's built as rock (`rock.ts`), not drawn onto a slope. A formation has one way it's made: a bedding plane (its dip and roll) and its joints (one yaw, the fractures across it). Its blocks are cut along those, so a ledge belongs to the face behind it and a fallen slab is the shape of what's missing above.
-- **An escarpment**, where a cliff band breaks through. The ground's smooth rise is taken out down to the foot (`world.ts`), so the blocks are the cliff and the gaps between them are clefts going back to the foot. It's built as columns along the rim:
-  - most are one tall slab, or two or three tiers, each column's joints its own (so they don't run on as courses);
-  - the lower tiers stand out as ledges, and now and then a middle one is set back under the lip of the one above;
-  - columns lean a little out or back, and their crests are broken, stepping down toward the face or to a side, a broad top sometimes split along a joint;
-  - narrow columns leave clefts, and a slab now and then lies fallen at the foot.
-  
-  A trail's stair still cuts through it, between the columns.
-- **A rooted outcrop** out on the slope: a big slab tipped back into the hill, its neighbours along the same joints, a wedge broken off below, fragments.
-- **Running crowns**: low flat tops stepping along the contour, a little apart, a way a fox could take.
+Where the rock breaks through, it's built as rock (`rock.ts`), not drawn onto a slope.
 
-A block is a box with chamfered edges and corners. Its corners are nudged and its top drawn in, then broken down toward a face. Its faces are flat, each with its own normal: a fracture is an edge, not a swell. Fresh fractures have crisp edges and old ones are rounded. Nothing grows under rock.
+**The geology** is one field across the mountain, varying smoothly (never by cells):
+- a bedding plane: its tilt, its spacing, where its planes fall;
+- a grain: the yaw of its joints.
 
-The run and the fox stand on the blocks' own upward faces (`footing.ts`), and sight stops at them. On the rock, the run leaps a cleft to the top across it. It won't drop onto a ledge it couldn't leave. Held at a rim, it looks for a way from where it stands, turning right round at a dead end, and if held a while it lowers itself down a face. `?clay&grove=0` shows the forms alone. The rock's own material and ink (a face's planes, its joints, its crest in the drawing) come next. Until then it wears the boulders'.
+Every block takes its up from the bedding and its tier heights from the planes that cross it. So bedding runs on from one mass to the next, offset a little where a column has slumped. A fallen fragment is a piece of the tier it came from, with the same proportions and bedding, toppled.
+
+**An escarpment** stands where a cliff band breaks through.
+- **Columns** stand on anchors along the rim. An anchor is chosen the same way whichever chunk asks: a rim point is kept if it outranks every other within 2.6 m. So a chunk's edge doesn't crowd or gap them.
+- **Coverage:** each column reaches halfway to its neighbours, so together they cover the band.
+- **Neighbours:** each pair decides between them, so both sides agree:
+  - most meet;
+  - some leave a **cleft**, with a floor ramping up to a block set at its back;
+  - some are **one mass** across both, with no joint between their tops.
+- **Tiers:** the lower stand out as ledges, a middle one is now and then set back under the lip above, and crests are broken.
+- **The ground** is cut only where the rock stands (under a block, down to the foot) or in a cleft's floor. Elsewhere the land keeps its own rise, so nothing's cut that isn't covered. A trail's stair still cuts through between columns.
+
+**Out on the slope** there are two kinds:
+- **a rooted outcrop**: a big slab tipped back into the hill, its neighbours along the same joints, a wedge broken off below, fragments;
+- **running crowns**: low flat tops stepping along the contour, a way a fox could take.
+
+**A block** is a box with chamfered edges and corners. Its corners are nudged (each its own: no two the same), its top drawn in and broken down toward a face. Now and then a vertical corner is sheared off, so a face is cut obliquely through. Its faces are flat with their own normals; the chamfers are its worn edges. Nothing grows under rock.
+
+Everything agrees on the same faces:
+- **Footing** (`footing.ts`) stands on the blocks' own upward faces. A crack between two blocks narrower than a foot is stepped over.
+- **Pads:** each block offers footholds, with the block, the slope and the room round each. The run plans its leaps across them, with the stones' crowns.
+- **Sight** asks the rock's faces (`rockBetween`), so what's under an overhang or across a cleft is seen past as it is.
+- **Light:** the land's light is baked with the rock's tops, so the columns shade the foot and close a cleft's sky.
+- **Drawing:** each block asks one place (its anchor) how far it's drawn, so it's drawn whole, never triangle by triangle.
+- **Colour:**
+  - the bedding is a thin dark line where each plane meets a side face, broken here and there;
+  - the worn edges are lighter;
+  - moss is held on a ledge's top and in a cleft;
+  - the hatching goes with each block's own frame.
+- **Ink** (`strokes.ts`) comes from the blocks' own edges, and where rock stands the land's slope-made cliff marks give way to these:
+  - a column's crest, firmest;
+  - a ledge's lip;
+  - the top's sides, lighter;
+  - the joints, up from the ground;
+  - its contact with the soil.
+
+**The checks:** `node cells/lab/devtools/bamboo-rock.mjs [seed] [chunks]` checks that every system agrees:
+- shapes are all different;
+- anchors are the same whichever chunk asks;
+- nothing is cut that isn't covered;
+- every cleft has its floor and back;
+- tops offer pads with their block;
+- a line through a column is stopped and one over it isn't;
+- the rock's edges are inked.
+
+Under it, the run leaps a cleft to the top across it, won't drop onto a ledge it couldn't leave, turns right round at a dead end, and if held a while lowers itself down a face. `?clay&grove=0` shows the forms alone.
 
 ## The grove
 

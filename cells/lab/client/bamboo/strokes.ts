@@ -8,7 +8,12 @@
  *   along each side, and a stone's front edge (**nosing**) now and then;
  * - **bank** (where the trail's bench is cut into the hill): its **rim** along the top of the cut, firmer the deeper;
  *   **hachure**s down the cut, in small groups;
- * - **cliff** (where the land breaks steep): its **rim** along the top, and **face** strokes down its fall, broken;
+ * - **cliff** (where the land breaks steep and no rock's built): its **rim** along the top, and **face** strokes down its
+ *   fall, broken;
+ * - **rock** (rock.ts's blocks, from their own corners): a column's **crest** (its top front edge, the firmest), a lower
+ *   tier's **lip** (a ledge's edge), its top's sides lighter, its **joints** (the front's vertical edges, from the ground
+ *   up), and its **contact** with the soil along its foot. The same edges the eye reads in colour, so the paper keeps the
+ *   same rock;
  * - **slope**: a few **contour**s along the hillside, broken, so the lie of the land holds on the paper;
  * - **stone**: its **contact** with the ground, on its downhill side;
  * - **root** (across a trail): its line, along its far side as the eye sees it, thinning to its ends.
@@ -19,6 +24,7 @@
  */
 import { hash } from '../kit/rng';
 import { type Chunk, type World, CHUNK, CN, CELL, HALF, BANK } from './world';
+import type { Block } from './rock';
 
 export const FAM = { edge: 0, rim: 1, hachure: 2, face: 3, contour: 4, string: 5, nosing: 6, contact: 7, root: 8, debris: 9, tread: 10 } as const;
 /** a mark's vertex: point (3), the way it runs (3), half-width and taper, side (-1, 1) and along (0..1), family + weight, how
@@ -240,8 +246,9 @@ export function strokes(world: World, c: Chunk): Float32Array {
     }
     const r = rng(s, c.ci, c.cj, 75);
     for (const line of iso(S, at, 0.95)) {
-      // (the top of it, not its foot: the steep side's below)
+      // (the top of it, not its foot: the steep side's below; where rock's built, its own edges say it instead)
       const m = line[Math.floor(line.length / 2)], fi = (m[0] - x0) / CELL, fj = (m[2] - z0) / CELL;
+      if (world.underRockAt(m[0], m[2])) continue;
       const gx = gAt(fi + 0.5, fj) - gAt(fi - 0.5, fj), gz = gAt(fi, fj + 0.5) - gAt(fi, fj - 0.5), gl = Math.hypot(gx, gz) || 1;
       const down = [-gx / gl, -gz / gl], below = S[Math.round(Math.min(CN - 1, Math.max(0, fi + down[0] * 1.5))) + Math.round(Math.min(CN - 1, Math.max(0, fj + down[1] * 1.5))) * CN];
       const top = below > 0.95;
@@ -252,6 +259,7 @@ export function strokes(world: World, c: Chunk): Float32Array {
     for (let j = 1; j < CN - 1; j++) for (let i = 1; i < CN - 1; i++) {
       if (S[i + j * CN] < 1.0 || r() > 0.4) continue;
       let fi = i + (r() - 0.5), fj = j + (r() - 0.5);
+      if (world.underRockAt(x0 + fi * CELL, z0 + fj * CELL)) continue;
       const pts: V3[] = [], len = 3 + Math.floor(r() * 4);
       for (let q = 0; q < len; q++) {
         pts.push(at(fi, fj));
@@ -261,6 +269,32 @@ export function strokes(world: World, c: Chunk): Float32Array {
       }
       // (lifted off the face a little, toward the eye's side of it being unknown: up)
       ribbon(out, pts.map((p) => [p[0], p[1] + 0.05, p[2]] as V3), 0.05, FAM.face, 0.55 + r() * 0.3, 0.35, r());
+    }
+  }
+
+  // ─── rock: each block's own edges ───
+  if (c.rocks) {
+    const r = rng(s, c.ci, c.cj, 79);
+    const lift = (p: number[], b: Block, out_ = 0.03): V3 => [p[0] + b.ax[2][0] * out_, p[1] + 0.025, p[2] + b.ax[2][2] * out_];
+    const along = (a: number[], b: number[], n: number): V3[] => Array.from({ length: n + 1 }, (_, k) => [a[0] + ((b[0] - a[0]) * k) / n, a[1] + ((b[1] - a[1]) * k) / n, a[2] + ((b[2] - a[2]) * k) / n] as V3);
+    for (const b of c.rocks) {
+      const K = b.K, crest = b.role === 'crest' || b.role === 'outcrop' || b.role === 'back', frag = b.kind === 'fragment';
+      // (the top's front edge: a crest firm and held over the colour; a ledge's lip a little less; a fragment's light)
+      const tf = along(K[6], K[7], 6).map((p) => lift(p, b));
+      broken(out, tf, r, crest ? [2.5, 6] : [1.5, 4], [0.15, 0.5], frag ? 0.05 : crest ? 0.1 : 0.085, FAM.rim, () => (frag ? 0.45 : crest ? 0.88 : 0.75), frag ? 0.5 : crest ? 0.95 : 0.85);
+      if (frag) { const fb = along(K[4], K[5], 5).map((p) => [p[0], Math.max(p[1], world.ground(p[0], p[2])) + 0.02, p[2]] as V3); broken(out, fb, r, [0.6, 1.6], [0.2, 0.6], 0.05, FAM.contact, () => 0.55, 0.6); continue; }
+      // (the top's sides, lighter)
+      for (const [a, z] of [[2, 6], [3, 7]]) broken(out, along(K[a], K[z], 5).map((p) => lift(p, b, 0)), r, [1, 2.5], [0.3, 0.9], 0.055, FAM.rim, () => 0.45, 0.45);
+      // (the joints: the front's vertical edges, from where the ground meets them up to the top)
+      for (const [lo, hi] of [[4, 6], [5, 7]]) {
+        const g = world.ground(K[lo][0], K[lo][2]), y0 = Math.max(K[lo][1], g + 0.03);
+        if (K[hi][1] - y0 < 0.3) continue;
+        const pts = along([K[lo][0], y0, K[lo][2]], K[hi], 5).map((p) => lift(p, b));
+        ribbon(out, pts, 0.055, FAM.face, 0.55 + r() * 0.2, 0.6, r());
+      }
+      // (its foot: where its front meets the soil)
+      const foot = along(K[4], K[5], 7).map((p) => { const g = world.ground(p[0], p[2]); return [p[0] + b.ax[2][0] * 0.04, Math.min(Math.max(p[1], g), b.top) + 0.03, p[2] + b.ax[2][2] * 0.04] as V3; });
+      broken(out, foot, r, [1.2, 3], [0.3, 0.8], 0.07, FAM.contact, () => 0.65, 0.7);
     }
   }
 

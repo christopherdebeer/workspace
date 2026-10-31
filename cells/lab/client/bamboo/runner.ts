@@ -272,7 +272,7 @@ export class Runner {
         } else if (m === 'duck' && lat < 0.35 + p.r) cost += 0.12;
       }
       // (the footing along it: a face too high to get up (a stone's too, unless it's low enough to stand on), a drop too far)
-      for (const d of [0.6, 1.4, 2.6, 3.8]) {
+      for (const d of [0.3, 0.6, 1.4, 2.6, 3.8]) {
         const u = F.at(this.x + dx * d, this.z + dz * d), rise = u.y - here;
         if (u.kind === 'stone' && d > 1) { if (rise > 1.35) cost += 22 * (1 - d / 5); }
         else if (d === 1.4 && rise > 0.9 && !this.onTrail) cost += 60;
@@ -448,6 +448,8 @@ export class Runner {
    * it's a crown (above the ground), level enough, with room to stand: how much room (0 … 4) */
   private patches(x: number, z: number, r: number) {
     const F = this.feet, out: { x: number; z: number; y: number; room: number }[] = [];
+    // (the rock's pads as they are, with their room; not the one underfoot)
+    for (const p of F.padsNear(x, z, r)) if (Math.hypot(p.x - x, p.z - z) > 0.6 && p.y - F.groundAt(p.x, p.z) > 0.2) out.push({ x: p.x, z: p.z, y: p.y, room: p.room });
     for (const c of F.perchesNear(x, z, r)) {
       if (Math.hypot(c.x - x, c.z - z) < c.r * 0.9) continue; // (not the one you're on)
       const pts: [number, number][] = [[c.x, c.z]];
