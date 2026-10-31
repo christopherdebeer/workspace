@@ -26,7 +26,7 @@ console.log(`     ${blocks.length} blocks ${JSON.stringify(kinds)}, ${floors.len
 
 // (variety: each block's corners in its own frame, as fractions of its size)
 const sig = new Set();
-for (const b of blocks) sig.add(b.K.map((p) => [0, 1, 2].map((a) => ((p[0] - b.c[0]) * b.ax[a][0] + (p[1] - b.c[1]) * b.ax[a][1] + (p[2] - b.c[2]) * b.ax[a][2]) / b.h[a]).map((v) => v.toFixed(3)).join(',')).join(';'));
+for (const b of blocks) sig.add(b.E.flatMap((e) => [e.a, e.b]).map((p) => [0, 1, 2].map((a) => ((p[0] - b.c[0]) * b.ax[a][0] + (p[1] - b.c[1]) * b.ax[a][1] + (p[2] - b.c[2]) * b.ax[a][2]) / b.h[a]).map((v) => v.toFixed(3)).join(',')).join(';'));
 check('variety', sig.size >= blocks.length * 0.97, `${sig.size} distinct shapes of ${blocks.length}`);
 
 // (anchors: the whole stretch at once, and chunk by chunk, the same)

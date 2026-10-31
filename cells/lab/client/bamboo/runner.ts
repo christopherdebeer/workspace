@@ -79,7 +79,7 @@ export class Runner {
   onAct: (act: Act) => void = () => {};
   /** a foot set down (every one: plain steps, the plant before a takeoff, a landing) */
   onContact: (c: Contact) => void = () => {};
-  private loading = false; private stanceLeft = 0; private stanceEnd = 0; private aerialT = 0.2; private nextY = 0; private barred = 0; private held = false; private acc = 0; private foot = 0; private think = 0; private best = 0; private bestCost = 0; private stride = 2.2; private posts: Post[] = []; private brushed = new Set<object>();
+  private loading = false; private stanceLeft = 0; private stanceEnd = 0; private aerialT = 0.2; private nextY = 0; private barred = 0; private held = false; private heldT = 0; private heldDir = 0; private barUntil = -1; private acc = 0; private foot = 0; private think = 0; private best = 0; private bestCost = 0; private stride = 2.2; private posts: Post[] = []; private brushed = new Set<object>();
   constructor(readonly world: Land, readonly range = 104) { this.feet = new Footings(world, this.chunks); }
 
   /** build the chunks within range of (x, z) that aren't built (at most `budget` of them), and let go of those well out */
@@ -204,6 +204,9 @@ export class Runner {
       // (and never over a drop too far to take: held at the rim, unless it's where a leap's to be taken from)
       // (held there, you look for a way from where you stand: across, or down another way)
       this.held = F.at(sx + dx * 0.3, sz + dz * 0.3).y < here - 3.2 && !(plan && plan.kind === 'leap' && Math.hypot(plan.ox - sx, plan.oz - sz) < 0.5);
+      if (this.held && this.heldT === 0) this.heldDir = this.move;
+      this.heldT = this.held ? this.heldT + dt : 0;
+      if (this.heldT > 0.6) this.barUntil = this.clock + 2.5;
       if (this.held) this.v = 0;
       else { this.x = sx; this.z = sz; }
       // (the footing: follow it; over an edge with nothing planned, off it, and down)
@@ -260,6 +263,8 @@ export class Runner {
       const k = a <= 5 ? a : (a % 2 ? 1 : -1) * (6 + Math.floor((a - 6) / 2));
       const ang = this.heading + k * 0.11, dx = Math.sin(ang), dz = Math.cos(ang);
       let cost = Math.abs(k) * 0.5;
+      // (held at a rim a while with nothing to take there, that way's barred: look elsewhere)
+      if (this.clock < this.barUntil && Math.abs(wrap(ang - this.heldDir)) < 0.5) cost += 60;
       if (pull) cost += Math.min(6, this.world.trailNear(this.x + dx * 6, this.z + dz * 6).d) * 0.45;
       for (const p of posts) {
         const rx = p.x - this.x, rz = p.z - this.z, al = rx * dx + rz * dz;
@@ -337,7 +342,11 @@ export class Runner {
         // (a cleft too deep to go down into, with a top across it: leapt)
         if (D > 3.2) {
           const g = this.across(o[0], o[1], dx, dz, from.y);
-          if (g > 0) { const l = at((i - 1) * S + g + 0.3), ly = F.at(l[0], l[1]).y; return { kind: 'leap', dir, ox: o[0], oz: o[1], lx: l[0], lz: l[1], ly, clear: Math.max(ly, from.y) + 0.1, next: null, wait: 0 }; }
+          if (g > 0) {
+            // (onto the top it found, a little in from its edge, if that's still the same top)
+            const l = at((i - 1) * S + g + 0.3), ly = F.at(l[0], l[1]).y;
+            if (Math.abs(ly - from.y) < 0.7) return { kind: 'leap', dir, ox: o[0], oz: o[1], lx: l[0], lz: l[1], ly, clear: Math.max(ly, from.y) + 0.1, next: null, wait: 0 };
+          }
         }
         // (no further than you'd jump; or, held up a while with no other way, lowering yourself down a face as far as
         // you'd dare)
@@ -528,6 +537,8 @@ export class Runner {
         if (p.kind === 'skip') { const k = (vh * T) / Math.max(1e-3, L); p.lx = this.x + (p.lx - this.x) * k; p.lz = this.z + (p.lz - this.z) * k; p.ly = this.feet.at(p.lx, p.lz).y; }
       }
     }
+    // (nothing asks more than a body can spring: a move that would is given up where you stand)
+    if (vy > 6.5) { this.plan = null; this.loading = false; this.v = Math.min(this.v, 2); return; }
     this.vx = (p.lx - this.x) / T; this.vz = (p.lz - this.z) / T; this.vy = vy; this.loading = false;
     this.move = Math.atan2(this.vx, this.vz);
     this.air = true; this.act = p.kind; this.aim = [p.lx, p.ly, p.lz];

@@ -278,23 +278,25 @@ export function strokes(world: World, c: Chunk): Float32Array {
     const lift = (p: number[], b: Block, out_ = 0.03): V3 => [p[0] + b.ax[2][0] * out_, p[1] + 0.025, p[2] + b.ax[2][2] * out_];
     const along = (a: number[], b: number[], n: number): V3[] => Array.from({ length: n + 1 }, (_, k) => [a[0] + ((b[0] - a[0]) * k) / n, a[1] + ((b[1] - a[1]) * k) / n, a[2] + ((b[2] - a[2]) * k) / n] as V3);
     for (const b of c.rocks) {
-      const K = b.K, crest = b.role === 'crest' || b.role === 'outcrop' || b.role === 'back', frag = b.kind === 'fragment';
-      // (the top's front edge: a crest firm and held over the colour; a ledge's lip a little less; a fragment's light)
-      const tf = along(K[6], K[7], 6).map((p) => lift(p, b));
-      broken(out, tf, r, crest ? [2.5, 6] : [1.5, 4], [0.15, 0.5], frag ? 0.05 : crest ? 0.1 : 0.085, FAM.rim, () => (frag ? 0.45 : crest ? 0.88 : 0.75), frag ? 0.5 : crest ? 0.95 : 0.85);
-      if (frag) { const fb = along(K[4], K[5], 5).map((p) => [p[0], Math.max(p[1], world.ground(p[0], p[2])) + 0.02, p[2]] as V3); broken(out, fb, r, [0.6, 1.6], [0.2, 0.6], 0.05, FAM.contact, () => 0.55, 0.6); continue; }
-      // (the top's sides, lighter)
-      for (const [a, z] of [[2, 6], [3, 7]]) broken(out, along(K[a], K[z], 5).map((p) => lift(p, b, 0)), r, [1, 2.5], [0.3, 0.9], 0.055, FAM.rim, () => 0.45, 0.45);
-      // (the joints: the front's vertical edges, from where the ground meets them up to the top)
-      for (const [lo, hi] of [[4, 6], [5, 7]]) {
-        const g = world.ground(K[lo][0], K[lo][2]), y0 = Math.max(K[lo][1], g + 0.03);
-        if (K[hi][1] - y0 < 0.3) continue;
-        const pts = along([K[lo][0], y0, K[lo][2]], K[hi], 5).map((p) => lift(p, b));
-        ribbon(out, pts, 0.055, FAM.face, 0.55 + r() * 0.2, 0.6, r());
+      const crest = b.role === 'crest' || b.role === 'outcrop' || b.role === 'back', frag = b.kind === 'fragment';
+      for (const e of b.E) {
+        if (e.kind === 'crest') {
+          // (the top's front edge: a crest firm and held over the colour; a ledge's lip a little less; a fragment's light)
+          broken(out, along(e.a, e.b, 6).map((p) => lift(p, b)), r, crest ? [2.5, 6] : [1.5, 4], [0.15, 0.5], frag ? 0.05 : crest ? 0.1 : 0.085, FAM.rim, () => (frag ? 0.45 : crest ? 0.88 : 0.75), frag ? 0.5 : crest ? 0.95 : 0.85);
+        } else if (e.kind === 'side') {
+          if (!frag) broken(out, along(e.a, e.b, 5).map((p) => lift(p, b, 0)), r, [1, 2.5], [0.3, 0.9], 0.055, FAM.rim, () => 0.45, 0.45);
+        } else if (e.kind === 'joint') {
+          // (from where the ground meets it up to the top)
+          if (frag) continue;
+          const g = world.ground(e.a[0], e.a[2]), y0 = Math.max(e.a[1], g + 0.03);
+          if (e.b[1] - y0 < 0.3) continue;
+          ribbon(out, along([e.a[0], y0, e.a[2]], e.b, 5).map((p) => lift(p, b)), 0.055, FAM.face, 0.55 + r() * 0.2, 0.6, r());
+        } else {
+          // (its foot: where its front meets the soil)
+          const pts = along(e.a, e.b, 7).map((p) => { const g = world.ground(p[0], p[2]); return [p[0] + b.ax[2][0] * 0.04, Math.min(Math.max(p[1], g), b.top) + 0.03, p[2] + b.ax[2][2] * 0.04] as V3; });
+          broken(out, pts, r, frag ? [0.6, 1.6] : [1.2, 3], [0.3, 0.8], frag ? 0.05 : 0.07, FAM.contact, () => (frag ? 0.55 : 0.65), frag ? 0.6 : 0.7);
+        }
       }
-      // (its foot: where its front meets the soil)
-      const foot = along(K[4], K[5], 7).map((p) => { const g = world.ground(p[0], p[2]); return [p[0] + b.ax[2][0] * 0.04, Math.min(Math.max(p[1], g), b.top) + 0.03, p[2] + b.ax[2][2] * 0.04] as V3; });
-      broken(out, foot, r, [1.2, 3], [0.3, 0.8], 0.07, FAM.contact, () => 0.65, 0.7);
     }
   }
 

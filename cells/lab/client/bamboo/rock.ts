@@ -40,8 +40,8 @@ export interface Block {
   r: number; top: number;
   /** its faces as triangles, world space (x, y, z ×3 each); which are worn edges (chamfers); those facing up (stood on) */
   tris: Float32Array; worn: Uint8Array; ups: Uint16Array;
-  /** its eight corners, world space, index (sx > 0) + 2 (sy > 0) + 4 (sz > 0): its edges, for the ink */
-  K: V3[];
+  /** its edges, for the ink; its outline on the ground (world x, z) */
+  E: Edge[]; foot: [number, number][];
   /** the one place it's asked how far it's drawn; its bedding (the plane's normal (x, z) and spacing) */
   anchor: V3; bed: [number, number, number];
   pads: Pad[];
@@ -103,58 +103,78 @@ function axes(t: V3, g: Geo, s: number, jit = 1, tip = 0): [V3, V3, V3] {
 }
 
 /** how a block's broken: its top dropped toward a face (front, back, left, right), as a fraction of its height; a vertical
- * corner sheared off (which: sx, sz; how far in, as a fraction); how worn its edges are (0 a fresh fracture … 1 old) */
+ * corner broken off (which: sx, sz; how far in); how worn its edges are (0 a fresh fracture … 1 old) */
 interface Cut { f?: number; b?: number; l?: number; r?: number; worn?: number; notch?: [number, number, number] }
-/** a block, meshed */
+/** an edge of a block for the ink: the top's front edge (its crest or lip), the top's other edges, a front vertical edge
+ * (a joint), the front's foot */
+export interface Edge { a: V3; b: V3; kind: 'crest' | 'side' | 'joint' | 'foot' }
+/**
+ * A block, meshed: a prism stood on its bedding over its own outline (a rectangle with some of its corners broken off,
+ * so four to eight sides, its faces cut obliquely where a corner went), its top drawn in, dropped toward the faces it's
+ * broken to (a top in facets, not one plane), and chamfered round its top edge (the worn edge). Faces flat, each its
+ * own normal.
+ */
 function make(c: V3, ax: [V3, V3, V3], h: V3, kind: BlockKind, role: Role, seed: number, moss: number, g: Geo, cut: Cut = {}): Block {
   const worn = cut.worn ?? 0.5, bev = Math.min(0.03 + 0.14 * worn, Math.min(h[0], h[1], h[2]) * (0.06 + 0.2 * worn)), taper = 0.03 + 0.08 * u01(seed, 10);
-  const corner = (sx: number, sy: number, sz: number): V3 => {
-    const k = (sx + 1) * 2 + (sy + 1) + (sz + 1) / 2, j = (q: number) => 1 + (u01(seed, k, q) - 0.5) * 0.16;
-    const tp = sy > 0 ? 1 - taper : 1;
-    const drop = sy > 0 ? Math.min(0.88, (sz > 0 ? cut.f ?? 0 : cut.b ?? 0) + (sx > 0 ? cut.r ?? 0 : cut.l ?? 0)) * 2 * h[1] : 0;
-    // (a vertical corner sheared off: both its ends drawn in across and out, so that face is cut obliquely)
-    const n = cut.notch && cut.notch[0] === sx && cut.notch[1] === sz ? cut.notch[2] : 0;
-    return [sx * h[0] * j(1) * tp * (1 - n), sy * h[1] * j(2) - drop, sz * h[2] * j(3) * tp * (1 - n)];
-  };
-  const C = new Map<string, V3>();
-  for (const sx of [-1, 1]) for (const sy of [-1, 1]) for (const sz of [-1, 1]) C.set(`${sx}${sy}${sz}`, corner(sx, sy, sz));
-  const Q = (sx: number, sy: number, sz: number, a: number): V3 => {
-    const p = C.get(`${sx}${sy}${sz}`)!, s = [sx, sy, sz];
-    return p.map((v, i) => (i === a ? v : v - s[i] * bev)) as V3;
-  };
+  // (the outline: the rectangle's corners, each nudged, some broken off into two points along its edges)
+  const sq: [number, number][] = [[-1, -1], [1, -1], [1, 1], [-1, 1]], P: [number, number][] = [];
+  const brokeP = kind === 'fragment' ? 0.55 : 0.35;
+  sq.forEach(([sx, sz], i) => {
+    const x = sx * h[0] * (1 + (u01(seed, i, 1) - 0.5) * 0.16), z = sz * h[2] * (1 + (u01(seed, i, 2) - 0.5) * 0.16);
+    const notch = cut.notch && cut.notch[0] === sx && cut.notch[1] === sz ? cut.notch[2] : 0;
+    if (notch || u01(seed, i, 3) < brokeP) {
+      const k = notch || 0.15 + u01(seed, i, 4) * 0.3, k2 = notch || 0.15 + u01(seed, i, 5) * 0.3;
+      // (along the edge to the previous corner, then along the edge to the next: the corner gone between them)
+      const [px, pz] = sq[(i + 3) % 4], [nx, nz] = sq[(i + 1) % 4];
+      P.push([x + (px * h[0] - x) * k * (px !== sx ? 1 : 0), z + (pz * h[2] - z) * k * (pz !== sz ? 1 : 0)]);
+      P.push([x + (nx * h[0] - x) * k2 * (nx !== sx ? 1 : 0), z + (nz * h[2] - z) * k2 * (nz !== sz ? 1 : 0)]);
+    } else P.push([x, z]);
+  });
+  const n = P.length, H = h[1];
+  const drop = (x: number, z: number) => Math.min(0.88, (z > 0 ? cut.f ?? 0 : cut.b ?? 0) * Math.abs(z) / h[2] + (x > 0 ? cut.r ?? 0 : cut.l ?? 0) * Math.abs(x) / h[0]) * 2 * H;
+  const Bt: V3[] = [], St: V3[] = [], Ct: V3[] = [];
+  P.forEach(([x, z], i) => {
+    const yt = H * (1 + (u01(seed, i, 6) - 0.5) * 0.12) - drop(x, z), tp = 1 - taper, l = Math.hypot(x, z) || 1;
+    Bt.push([x, -H * (1 + (u01(seed, i, 7) - 0.5) * 0.1), z]);
+    St.push([x * tp, yt - bev, z * tp]);
+    Ct.push([x * tp - (x / l) * bev, yt, z * tp - (z / l) * bev]);
+  });
   const world = (p: V3): V3 => add(add(add(c, ax[0], p[0]), ax[1], p[1]), ax[2], p[2]);
   const T: number[] = [], W: number[] = [], ups: number[] = [];
   const tri = (a: V3, b: V3, d: V3, w: number) => {
     const A = world(a), B = world(b), D = world(d);
-    let n = cross(sub(B, A), sub(D, A));
+    let nn = cross(sub(B, A), sub(D, A));
+    if (Math.hypot(nn[0], nn[1], nn[2]) < 1e-9) return;
     const m: V3 = [(A[0] + B[0] + D[0]) / 3 - c[0], (A[1] + B[1] + D[1]) / 3 - c[1], (A[2] + B[2] + D[2]) / 3 - c[2]];
     let o = [A, B, D];
-    if (dot(n, m) < 0) { o = [A, D, B]; n = [-n[0], -n[1], -n[2]]; }
-    if (nrm(n)[1] > 0.3) ups.push(T.length / 9);
+    if (dot(nn, m) < 0) { o = [A, D, B]; nn = [-nn[0], -nn[1], -nn[2]]; }
+    if (nrm(nn)[1] > 0.3) ups.push(T.length / 9);
     for (const p of o) T.push(p[0], p[1], p[2]);
     W.push(w);
   };
   const quad = (a: V3, b: V3, d: V3, e: V3, w: number) => { tri(a, b, d, w); tri(a, d, e, w); };
-  const S = [-1, 1];
-  for (let a = 0; a < 3; a++) for (const s of S) {
-    const [b, d] = [0, 1, 2].filter((q) => q !== a), pts: V3[] = [];
-    for (const [u, v] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) { const k = [0, 0, 0]; k[a] = s; k[b] = u; k[d] = v; pts.push(Q(k[0], k[1], k[2], a)); }
-    quad(pts[0], pts[1], pts[2], pts[3], 0);
+  for (let i = 0; i < n; i++) {
+    const j = (i + 1) % n;
+    quad(Bt[i], Bt[j], St[j], St[i], 0);
+    quad(St[i], St[j], Ct[j], Ct[i], 1);
   }
-  for (let a = 0; a < 3; a++) {
-    const [b, d] = [0, 1, 2].filter((q) => q !== a);
-    for (const sb of S) for (const sd of S) {
-      const k0 = [0, 0, 0], k1 = [0, 0, 0]; k0[a] = -1; k1[a] = 1; k0[b] = k1[b] = sb; k0[d] = k1[d] = sd;
-      quad(Q(k0[0], k0[1], k0[2], b), Q(k1[0], k1[1], k1[2], b), Q(k1[0], k1[1], k1[2], d), Q(k0[0], k0[1], k0[2], d), 1);
-    }
-  }
-  for (const sx of S) for (const sy of S) for (const sz of S) tri(Q(sx, sy, sz, 0), Q(sx, sy, sz, 1), Q(sx, sy, sz, 2), 1);
+  for (let i = 1; i < n - 1; i++) { tri(Ct[0], Ct[i], Ct[i + 1], 0); tri(Bt[0], Bt[i], Bt[i + 1], 0); }
   const tris = new Float32Array(T);
   let top = -1e9;
   for (let k = 1; k < tris.length; k += 3) top = Math.max(top, tris[k]);
-  const K: V3[] = [];
-  for (let i = 0; i < 8; i++) K.push(world(C.get(`${i & 1 ? 1 : -1}${i & 2 ? 1 : -1}${i & 4 ? 1 : -1}`)!));
-  const b: Block = { c, ax, h, kind, role, seed, moss, r: Math.hypot(h[0], h[1], h[2]) * 1.1, top, tris, worn: Uint8Array.from(W), ups: Uint16Array.from(ups), K, anchor: [c[0], top, c[2]], bed: [g.bedN[0], g.bedN[2], g.S], pads: [] };
+  // (its edges for the ink, by which way each side faces: out (its front) or not; none from its back)
+  const E: Edge[] = [];
+  for (let i = 0; i < n; i++) {
+    const j = (i + 1) % n, [x0, z0] = P[i], [x1, z1] = P[j];
+    let nx = z1 - z0, nz = -(x1 - x0);
+    if (nx * (x0 + x1) + nz * (z0 + z1) < 0) { nx = -nx; nz = -nz; }
+    const facing = nz / (Math.hypot(nx, nz) || 1);
+    if (facing < -0.5) continue;
+    E.push({ a: world(St[i]), b: world(St[j]), kind: facing > 0.35 ? 'crest' : 'side' });
+    if (facing > 0.35) E.push({ a: world(Bt[i]), b: world(Bt[j]), kind: 'foot' }, { a: world(Bt[i]), b: world(St[i]), kind: 'joint' }, { a: world(Bt[j]), b: world(St[j]), kind: 'joint' });
+  }
+  const foot = Bt.map((p) => { const w = world(p); return [w[0], w[2]] as [number, number]; });
+  const b: Block = { c, ax, h, kind, role, seed, moss, r: Math.hypot(h[0], h[1], h[2]) * 1.15, top, tris, worn: Uint8Array.from(W), ups: Uint16Array.from(ups), E, foot, anchor: [c[0], top, c[2]], bed: [g.bedN[0], g.bedN[2], g.S], pads: [] };
   b.pads = padsOf(b);
   return b;
 }
@@ -210,9 +230,16 @@ export function blocksSegment(bl: Block, a: V3, b: V3): boolean {
 }
 /** whether (x, z) is inside a block's footprint, drawn in by `inset` */
 export function covers(b: Block, x: number, z: number, inset = 0.2) {
-  const dx = x - b.c[0], dz = z - b.c[2];
-  const ux = b.ax[0][0], uz = b.ax[0][2], ul = Math.hypot(ux, uz) || 1, vx = b.ax[2][0], vz = b.ax[2][2], vl = Math.hypot(vx, vz) || 1;
-  return Math.abs((dx * ux + dz * uz) / ul) < b.h[0] - inset && Math.abs((dx * vx + dz * vz) / vl) < b.h[2] - inset;
+  // (its own outline, broken corners and all: inside every side, by `inset`)
+  const F = b.foot, n = F.length;
+  let cx = 0, cz = 0; for (const [px, pz] of F) { cx += px / n; cz += pz / n; }
+  for (let i = 0; i < n; i++) {
+    const [x0, z0] = F[i], [x1, z1] = F[(i + 1) % n], l = Math.hypot(x1 - x0, z1 - z0) || 1;
+    let nx = (z1 - z0) / l, nz = -(x1 - x0) / l;
+    if (nx * (x0 - cx) + nz * (z0 - cz) < 0) { nx = -nx; nz = -nz; }
+    if ((x - x0) * nx + (z - z0) * nz > -inset) return false;
+  }
+  return true;
 }
 /** the floor of a cleft at (x, z), or NaN if it isn't one: ramping up from its front to its back */
 export function floorAt(f: Floor, L: RockLand, x: number, z: number) {
@@ -402,8 +429,8 @@ export function outcropsIn(L: RockLand, ci: number, cj: number): Block[] {
   return out;
 }
 
-/** a chunk's blocks as one mesh for the renderer, per corner: its place, its face's normal, its place in its block (about
- * ±1) [0–8]; its bedding's normal (x, z), its moss (by what the block is and where the face looks), its seed [9–12]; its
+/** a chunk's blocks as one mesh for the renderer, per corner: its place, its face's normal, its place in its block's own
+ * frame (in metres, so its strokes are one scale on any block) [0–8]; its bedding's normal (x, z), its moss (by what the block is and where the face looks), its seed [9–12]; its
  * block's anchor [13–15]; whether it's a worn edge, and the bedding's spacing [16–17] */
 export const ROCK_STRIDE = 18;
 export function rockMesh(blocks: Block[]): Float32Array {
@@ -412,7 +439,7 @@ export function rockMesh(blocks: Block[]): Float32Array {
   const out = new Float32Array(n * ROCK_STRIDE);
   let o = 0;
   for (const b of blocks) {
-    const T = b.tris, sc = Math.max(b.h[0], b.h[1], b.h[2]);
+    const T = b.tris;
     for (let f = 0, ti = 0; f < T.length; f += 9, ti++) {
       const A: V3 = [T[f], T[f + 1], T[f + 2]], B: V3 = [T[f + 3], T[f + 4], T[f + 5]], C: V3 = [T[f + 6], T[f + 7], T[f + 8]];
       const N = nrm(cross(sub(B, A), sub(C, A)));
@@ -420,7 +447,7 @@ export function rockMesh(blocks: Block[]): Float32Array {
       const moss = b.moss * (N[1] > 0.6 ? (b.role === 'lip' || b.role === 'back' ? 1.3 : 1) : N[1] < -0.2 ? 0 : b.role === 'lip' ? 0.5 : 0.25);
       for (const p of [A, B, C]) {
         const d = sub(p, b.c);
-        out.set([p[0], p[1], p[2], N[0], N[1], N[2], dot(d, b.ax[0]) / sc, dot(d, b.ax[1]) / sc, dot(d, b.ax[2]) / sc, b.bed[0], b.bed[1], moss, b.seed, b.anchor[0], b.anchor[1], b.anchor[2], b.worn[ti], b.bed[2]], o);
+        out.set([p[0], p[1], p[2], N[0], N[1], N[2], dot(d, b.ax[0]), dot(d, b.ax[1]), dot(d, b.ax[2]), b.bed[0], b.bed[1], moss, b.seed, b.anchor[0], b.anchor[1], b.anchor[2], b.worn[ti], b.bed[2]], o);
         o += ROCK_STRIDE;
       }
     }

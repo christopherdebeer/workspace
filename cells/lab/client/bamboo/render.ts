@@ -647,7 +647,10 @@ void main() {
   vec2 fall = normalize(N.xz + 1e-4);
   float across = (vW.x + vW.z) * .707 + (vn(vW.xz * .3 + vW.y * .2) - .5) * 1.4;
   vec3 stone = mix(vec3(.66, .63, .56), vec3(.5, .49, .45), fbm2(vec2(across * .8, vW.y * .5)));
-  stone = mix(stone, vec3(.42, .5, .26), smoothstep(.55, .75, N.y + (vn(vW.xz * 1.3) - .5) * .4) * .6);
+  // (a cleft's floor (rock full): scree, broken stone and grit, not moss)
+  float scree = smoothstep(.97, 1., vRock);
+  stone = mix(stone, vec3(.42, .5, .26), smoothstep(.55, .75, N.y + (vn(vW.xz * 1.3) - .5) * .4) * .6 * (1. - scree));
+  stone = mix(stone, stone * (.78 + .34 * vn(vW.xz * 7.)) * vec3(1., .97, .92), scree);
   alb = mix(alb, stone, vRock);
   // (how far out: broken, as a brush's edge is, by strokes laid across the fall of the slope, dragged dry, so where a
   // layer gives out it breaks into them in the world rather than following any line of the frame; further off, in
@@ -772,10 +775,12 @@ void main() {
   float mark = 0., frK = 0., frW = 0.;
   // (a stone's shade drawn as a brush does: a few broken strokes across its turned-away side, not filled)
   // (on the rock's blocks, in the block's own frame, so a face's strokes go with the face)
-  float hq = uMesh == 1 ? dot(vL.xz, vec2(.8, .6)) * 9. + vL.y * 6. : dot(vW.xz, vec2(.8, .6)) * 5. + vW.y * 3.5;
+  float hq = uMesh == 1 ? dot(vL.xz, vec2(.8, .6)) * 5. + vL.y * 3.5 : dot(vW.xz, vec2(.8, .6)) * 5. + vW.y * 3.5;
   float hs = abs(fract(hq) - .5);
   float hw = .07 + fwidth(hq) * .9;
   float hatch = (1. - smoothstep(hw * .7, hw * .7 + .05, hs)) * smoothstep(.3, -.3, dot(N, uSun)) * step(.45, vn(vW.xz * 2.3 + vW.y)) * .42;
+  // (on the rock's broad faces: fewer, finer, broken into strokes along their length, a few to a face, not a ruled field)
+  if (uMesh == 1) hatch = (1. - smoothstep(.02, .02 + fwidth(hq) * 1.2, hs)) * smoothstep(.2, -.4, dot(N, uSun)) * step(.62, vn(vec2(floor(hq) * 1.7 + vSeed * 9., dot(vL.xz, vec2(-.6, .8)) * 1.6))) * .32;
   if (uKind == 2) {
     // (a boulder: its underside dark, the ground's shade gathering under it; now and then a fracture across it)
     float under = smoothstep(-.05, -.6, N.y) * .5;
@@ -790,12 +795,12 @@ void main() {
       // (the bedding, one field across the formation: a thin dark line where each plane meets a side face, broken here and
       // there; the worn edges lighter, weathered back)
       vec3 bn = vec3(vBed.x, sqrt(max(0., 1. - dot(vBed.xy, vBed.xy))), vBed.y);
-      float bd = dot(vW, bn) / max(.5, vBed.z), bdist = abs(fract(bd + .5) - .5), bw = .012 + fwidth(bd) * .8;
+      float bd = dot(vW, bn) / max(.5, vBed.z), bdist = abs(fract(bd + .5) - .5), bw = .005 + fwidth(bd) * .6;
       float onSide = 1. - smoothstep(.45, .8, abs(dot(N, bn)));
       float bedL = (1. - smoothstep(bw, bw * 2.2, bdist)) * onSide * step(.32, vn(vec2(dot(vW.xz, vec2(.7, -.7)) * .9, bd)));
       alb *= 1. - .3 * bedL;
       alb = mix(alb, alb * 1.12 + .025, vWorn * .7);
-      mark = max(mark, bedL * .6);
+      mark = max(mark, bedL * .42);
     }
   }
   if (uKind == 4) {

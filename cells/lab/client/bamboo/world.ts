@@ -304,6 +304,12 @@ export class World implements RockLand {
     }
     return fl;
   }
+  /** whether (x, z) is on a cleft's floor (it's scree there: stony, not the slope's litter) */
+  onFloor(x: number, z: number) {
+    const ci = Math.floor(x / CHUNK), cj = Math.floor(z / CHUNK);
+    for (let a = -1; a <= 1; a++) for (let b = -1; b <= 1; b++) for (const f of this.escarp(ci + a, cj + b).floors) if (!Number.isNaN(floorAt(f, this, x, z))) return true;
+    return false;
+  }
   /** whether (x, z) is under any rock (for the ink: the land's own cliff marks give way to the rock's) */
   underRockAt(x: number, z: number) {
     const ci = Math.floor(x / CHUNK), cj = Math.floor(z / CHUNK);
@@ -329,7 +335,8 @@ export class World implements RockLand {
     // (rock where the ground's steep: a cliff's face, a bank cut deep)
     for (let j = 0; j < CN; j++) for (let i = 0; i < CN; i++) {
       const k = i + j * CN, gx = (ground[Math.min(CN - 1, i + 1) + j * CN] - ground[Math.max(0, i - 1) + j * CN]) / 2, gz = (ground[i + Math.min(CN - 1, j + 1) * CN] - ground[i + Math.max(0, j - 1) * CN]) / 2;
-      rock[k] = ss(0.9, 1.4, Math.hypot(gx, gz));
+      rock[k] = Math.min(0.96, ss(0.9, 1.4, Math.hypot(gx, gz)));
+      if (this.onFloor(x0 + i * CELL, z0 + j * CELL)) rock[k] = 1;
     }
     const g = (x: number, z: number) => {
       const fx = Math.min(CN - 1.001, Math.max(0, (x - x0) / CELL)), fz = Math.min(CN - 1.001, Math.max(0, (z - z0) / CELL)), i = Math.floor(fx), j = Math.floor(fz), u = fx - i, v = fz - j, k = i + j * CN;
