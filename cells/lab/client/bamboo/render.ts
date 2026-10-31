@@ -57,7 +57,7 @@ float fbm2(vec2 p) { return vn(p) * .55 + vn(p * 2.03 + 7.1) * .3 + vn(p * 4.1 -
 const COMMON = `#version 300 es
 precision highp float; precision highp int; precision highp sampler2DShadow;
 uniform float uClay;
-uniform mat4 uVP; uniform vec3 uEye; uniform float uTime; uniform vec3 uSun; uniform vec4 uGust; uniform vec4 uStir;
+uniform mat4 uVP; uniform vec3 uEye; uniform float uTime; uniform vec3 uSun; uniform vec4 uGust; uniform vec4 uStir; uniform vec4 uStirs[8];
 // (the layers (layers.ts): each one's reach (the page's pull taken in) and how soft its edge; the measure (the focus's
 // distance, how much sooner things far beyond it go, how far out in the world a reach of one is); the colour by kind,
 // the ink by kind and how it ends, how much of it lies under the picture)
@@ -79,7 +79,10 @@ vec2 windAt(vec2 p, float phase) {
   // (and where something's passing through (presence.ts): a stir high in the canopy bending the culms away from it, a fox
   // or a runner brushing past the ones beside it)
   vec2 sp = p - uStir.xy; float sk = uStir.z * exp(-dot(sp, sp) / (uStir.w * uStir.w));
-  return d * sway + uGust.xy * front * (.05 + .012 * sin(uTime * 5. + phase)) + normalize(sp + 1e-3) * sk * (.06 + .03 * sin(uTime * 6. + phase * 3.));
+  vec2 w = d * sway + uGust.xy * front * (.05 + .012 * sin(uTime * 5. + phase)) + normalize(sp + 1e-3) * sk * (.06 + .03 * sin(uTime * 6. + phase * 3.));
+  // (and where it's just passed: stems still swaying back and forth, less and less, settling)
+  for (int i = 0; i < 8; i++) { vec4 q = uStirs[i]; vec2 qp = p - q.xy; float k = q.z * exp(-dot(qp, qp) / (q.w * q.w)); w += normalize(qp + 1e-3) * k * .07 * sin(uTime * 7. + phase * 2.); }
+  return w;
 }
 // (how much of the wind a culm's put in: 1 as it's drawn; 0 where it stands at rest, which is where it's asked how far
 // out it is, so a culm, a branch, a spray is drawn by where it stands, never flickering in and out as it sways)
@@ -711,7 +714,7 @@ void main() {
 
 const SOLID_VS = COMMON + `
 layout(location = 0) in vec3 aP; layout(location = 1) in vec3 aN;
-layout(location = 2) in vec4 iA; layout(location = 3) in vec4 iB;
+layout(location = 2) in vec4 iA; layout(location = 3) in vec4 iB; layout(location = 4) in vec4 iC;
 out vec3 vW; out vec3 vN; out vec3 vL; out float vMoss; out float vSeed; flat out float vOut;
 uniform int uKind; uniform mat4 uLightVP; uniform int uDepth;
 void main() {
@@ -731,7 +734,10 @@ void main() {
     n = normalize(vec3(n.x * .2, n.y, n.z));
   } else if (uKind == 4) {
     // (a part of a body going through the grove (presence.ts): the lump stretched to its size)
+    // (and pitched, so a limb's segment lies along it)
     p = p * iB.xyz; n = normalize(n / iB.xyz);
+    float cp = cos(iC.x), sp = sin(iC.x);
+    p = vec3(p.x, p.y * cp - p.z * sp, p.y * sp + p.z * cp); n = vec3(n.x, n.y * cp - n.z * sp, n.y * sp + n.z * cp);
   } else {
     p = vec3(p.x, p.y * iB.y, p.z) * iB.x; n = normalize(vec3(n.x, n.y / max(iB.y, .2), n.z));
   }
@@ -769,7 +775,7 @@ void main() {
   if (uKind == 4) {
     // (a fox: russet, its underside and its tail's tip white; someone running: a dark coat, a pale sleeve, dark hair)
     int part = int(vSeed + .5);
-    alb = part == 3 ? vec3(.93, .9, .84) : part <= 2 ? mix(vec3(.66, .33, .13), vec3(.9, .85, .76), smoothstep(-.2, -.6, N.y) * (part == 0 ? .8 : .4)) : part == 4 ? vec3(.3, .33, .4) : part == 5 ? vec3(.16, .13, .12) : vec3(.88, .86, .8);
+    alb = part == 3 ? vec3(.93, .9, .84) : part <= 2 ? mix(vec3(.66, .33, .13), vec3(.9, .85, .76), smoothstep(-.2, -.6, N.y) * (part == 0 ? .8 : .4)) : part == 4 ? vec3(.3, .33, .4) : part == 5 ? vec3(.16, .13, .12) : part == 7 ? vec3(.14, .1, .08) : part == 8 ? vec3(.72, .56, .44) : vec3(.88, .86, .8);
     alb *= .9 + .2 * n2;
   }
   if (uKind == 3) {
@@ -1112,12 +1118,29 @@ export class Renderer {
   sky: Sky = skyAt(8, 0.5);
   /** something going through the grove (presence.ts): its body's parts, and where it stirs the culms (x, z, how hard, how
    * far) */
-  presence: { x: number; y: number; z: number; yaw: number; sx: number; sy: number; sz: number; part: number }[] = [];
+  presence: { x: number; y: number; z: number; yaw: number; pitch: number; sx: number; sy: number; sz: number; part: number }[] = [];
   stir = [0, 0, 0, 1];
+  /** where it's passed: up to eight places still moving, settling (x, z, how hard now, how far) */
+  stirs: number[][] = [];
+  private vpLast: number[] = new Array(16).fill(0); private eyeLast = [0, 0, 0];
+  /** whether the drawing describes a point now (0 … 1): in the frame, and as far out as the colour or the ink reaches
+   * (as the shaders' `outAt` has it, without its jitter) */
+  legible(x: number, y: number, z: number): number {
+    const v = this.vpLast, d = this.dials, c = [0, 1, 2, 3].map((i) => v[i] * x + v[4 + i] * y + v[8 + i] * z + v[12 + i]);
+    if (c[3] < 0.05) return 0;
+    const nx = Math.abs(c[0] / c[3]); let ny = Math.abs(c[1] / c[3]);
+    if (nx > 1 || ny > 1) return 0;
+    if (c[1] < 0) ny *= 1 - 0.75 * d.held;
+    const dist = Math.hypot(x - this.eyeLast[0], y - this.eyeLast[1], z - this.eyeLast[2]), world = dist / Math.max(d.distance, 1);
+    const dl = Math.log2(Math.max(dist, 0.3) / Math.max(this.focus, 1)), o = Math.max(world, Math.cbrt(nx ** 3 + ny ** 3) + d.depth * 0.2 * (dl > 0 ? dl : -dl * 0.25));
+    const has = (r: number) => 1 - Math.min(1, Math.max(0, (o - r * 0.88) / (r * 0.24)));
+    const [rc, , ri] = this.reaches;
+    return Math.max(has(rc) * Math.min(1, d.culms + d.terrain), has(ri) * Math.max(d.edges, d.lines));
+  }
   private presBuf: WebGLBuffer | null = null; private presN = 0;
   private presUpload() {
-    const gl = this.gl, P = this.presence, a = new Float32Array(P.length * 8);
-    P.forEach((q, k) => a.set([q.x, q.y, q.z, q.yaw, q.sx, q.sy, q.sz, q.part], k * 8));
+    const gl = this.gl, P = this.presence, a = new Float32Array(P.length * 12);
+    P.forEach((q, k) => a.set([q.x, q.y, q.z, q.yaw, q.sx, q.sy, q.sz, q.part, q.pitch, 0, 0, 0], k * 12));
     this.presBuf ??= gl.createBuffer()!;
     gl.bindBuffer(gl.ARRAY_BUFFER, this.presBuf); gl.bufferData(gl.ARRAY_BUFFER, a, gl.DYNAMIC_DRAW); this.presN = P.length;
   }
@@ -1261,7 +1284,7 @@ export class Renderer {
   private uni(p: WebGLProgram, f: Frame, vp: number[], right: number[]) {
     const gl = this.gl, u = (n: string) => gl.getUniformLocation(p, n);
     gl.uniformMatrix4fv(u('uVP'), false, vp); gl.uniform3fv(u('uEye'), f.eye); gl.uniform1f(u('uTime'), f.t); gl.uniform3fv(u('uSun'), this.sunDir);
-    gl.uniform4fv(u('uGust'), f.gust); gl.uniform4fv(u('uStir'), this.stir); gl.uniform1f(u('uClay'), this.clay ? 1 : 0); gl.uniform3fv(u('uSunC'), this.sky.lightC); gl.uniform3fv(u('uSky'), this.sky.skyC); gl.uniform1f(u('uExpo'), this.sky.expo); gl.uniform3fv(u('uHaze'), this.sky.haze); gl.uniform3fv(u('uVeil'), this.sky.veil); gl.uniform1f(u('uMist'), this.sky.mist); gl.uniform3fv(u('uTone'), this.sky.ridge); gl.uniform1f(u('uOpen'), 0);
+    gl.uniform4fv(u('uGust'), f.gust); gl.uniform4fv(u('uStir'), this.stir); { const a = new Float32Array(32); this.stirs.slice(0, 8).forEach((q, k) => a.set(q, k * 4)); for (let k = this.stirs.length; k < 8; k++) a.set([0, 0, 0, 1], k * 4); gl.uniform4fv(u('uStirs'), a); } gl.uniform1f(u('uClay'), this.clay ? 1 : 0); gl.uniform3fv(u('uSunC'), this.sky.lightC); gl.uniform3fv(u('uSky'), this.sky.skyC); gl.uniform1f(u('uExpo'), this.sky.expo); gl.uniform3fv(u('uHaze'), this.sky.haze); gl.uniform3fv(u('uVeil'), this.sky.veil); gl.uniform1f(u('uMist'), this.sky.mist); gl.uniform3fv(u('uTone'), this.sky.ridge); gl.uniform1f(u('uOpen'), 0);
     gl.uniform2fv(u('uPick'), this.pick); gl.uniform1f(u('uMarks'), this.marks); gl.uniform3fv(u('uRight'), right);
     const d = this.dials;
     gl.uniform4fv(u('uRch'), [...this.reaches, 0.12]); gl.uniform4fv(u('uFoc'), [this.focus, d.depth, d.distance, d.near]);
@@ -1284,6 +1307,7 @@ export class Renderer {
     const fw = norm([f.look[0] - f.eye[0], f.look[1] - f.eye[1], f.look[2] - f.eye[2]]), side = norm(cross(fw, [0, 1, 0])), r = f.roll ?? 0;
     const upv = [Math.sin(r) * side[0], Math.cos(r) + Math.sin(r) * side[1], Math.sin(r) * side[2]];
     const near = 0.1, far = 3000, proj = perspective(f.fov, w / h, near, far), view = lookAt(f.eye, f.look, upv), vp = mul(proj, view);
+    this.vpLast = vp; this.eyeLast = f.eye;
     const right = [view[0], view[4], view[8]], fwd = norm([f.look[0] - f.eye[0], 0, f.look[2] - f.eye[2]]);
     gl.bindVertexArray(this.vao);
     const use = (n: string) => { const p = this.progs[n]; gl.useProgram(p); this.uni(p, f, vp, right); this.clearAttrs(); return p; };
@@ -1309,7 +1333,7 @@ export class Renderer {
       this.attr(0, this.vbo.lump.buf, 3, 6, 0); this.attr(1, this.vbo.lump.buf, 3, 6, 3);
       for (const { c } of near2) if (c.nStones) { this.attr(2, c.stones, 4, 8, 0, 1); this.attr(3, c.stones, 4, 8, 4, 1); gl.drawArraysInstanced(gl.TRIANGLES, 0, this.vbo.lump.count, c.nStones); }
       this.presUpload();
-      if (this.presN) { gl.uniform1i(gl.getUniformLocation(p, 'uKind'), 4); this.attr(0, this.vbo.orb.buf, 3, 6, 0); this.attr(1, this.vbo.orb.buf, 3, 6, 3); this.attr(2, this.presBuf!, 4, 8, 0, 1); this.attr(3, this.presBuf!, 4, 8, 4, 1); gl.drawArraysInstanced(gl.TRIANGLES, 0, this.vbo.orb.count, this.presN); }
+      if (this.presN) { gl.uniform1i(gl.getUniformLocation(p, 'uKind'), 4); this.attr(0, this.vbo.orb.buf, 3, 6, 0); this.attr(1, this.vbo.orb.buf, 3, 6, 3); this.attr(2, this.presBuf!, 4, 12, 0, 1); this.attr(3, this.presBuf!, 4, 12, 4, 1); this.attr(4, this.presBuf!, 4, 12, 8, 1); gl.drawArraysInstanced(gl.TRIANGLES, 0, this.vbo.orb.count, this.presN); }
       if (!this.bare) {
         p = use('sprayDepth'); gl.uniform1i(gl.getUniformLocation(p, 'uDepth'), 1);
         this.attr(0, this.vbo.quad.buf, 2, 2, 0);
@@ -1348,7 +1372,7 @@ export class Renderer {
       gl.uniform1i(gl.getUniformLocation(p, 'uKind'), 3);
       for (const { c } of inRange(60)) if (c.nRoots) { this.attr(2, c.roots, 4, 8, 0, 1); this.attr(3, c.roots, 4, 8, 4, 1); gl.drawArraysInstanced(gl.TRIANGLES, 0, this.vbo.lump.count, c.nRoots); }
       // (and whatever's going through the grove)
-      if (this.presence.length) { if (!this.shadows) this.presUpload(); gl.uniform1i(gl.getUniformLocation(p, 'uKind'), 4); this.attr(0, this.vbo.orb.buf, 3, 6, 0); this.attr(1, this.vbo.orb.buf, 3, 6, 3); this.attr(2, this.presBuf!, 4, 8, 0, 1); this.attr(3, this.presBuf!, 4, 8, 4, 1); gl.drawArraysInstanced(gl.TRIANGLES, 0, this.vbo.orb.count, this.presN); }
+      if (this.presence.length) { if (!this.shadows) this.presUpload(); gl.uniform1i(gl.getUniformLocation(p, 'uKind'), 4); this.attr(0, this.vbo.orb.buf, 3, 6, 0); this.attr(1, this.vbo.orb.buf, 3, 6, 3); this.attr(2, this.presBuf!, 4, 12, 0, 1); this.attr(3, this.presBuf!, 4, 12, 4, 1); this.attr(4, this.presBuf!, 4, 12, 8, 1); gl.drawArraysInstanced(gl.TRIANGLES, 0, this.vbo.orb.count, this.presN); }
     }
     // ─── the land's strokes, on it and on its steps, stones and roots (not over what stands in front of them) ───
     if (this.marks && !this.clay) {

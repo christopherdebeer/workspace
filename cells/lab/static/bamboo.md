@@ -30,18 +30,29 @@ A run through a wild moso bamboo grove on an endless mountainside, drawn as a li
 
 `chase=fox`, `chase=runner` or `chase=stir`: something crosses your way, a little ahead. Stay with it as long as you can. Catching it isn't promised.
 
-- **A fox** (`presence.ts`): low and quick, russet with a white-tipped tail. It trots when you're far, runs when you're near and bolts when you're close. It stops now and then to listen and look back, hops onto stones and off them, and takes the low gaps.
-- **A runner**: someone with their own way to go, along the trails, at about your pace. They don't wait for you. Now and then they pause to check the way, and somewhere a kilometre or so on they reach where they were going and stop there.
+- **A fox** (`presence.ts`): a body on four legs: chest, hips, neck, head with its ears, each leg two segments bent at the knee, and a tail that swings after it, white at its tip. It walks, trots (diagonal pairs) and gallops (the hind pair, then the fore) by its speed. Each foot is set down on the ground under it (the slope, a stone's top, a root), drawn back while it bears weight, then lifted and swung forward. Over what it can't step (a rise, a stone, a culm bowed low across its way, an edge) it **bounds**: a takeoff, a flight it's committed to, a landing you can hear. On the ground it never rises or falls more steeply than it steps; where there's no way it can take, it stops and turns, never slipping through.
+  - **It's wary of you by what it can tell of you.** It sees you coming (the more the faster you come, the nearer, the less there is between you) and hears you (your running, your landings). It goes from a trot to a run to flight. Once it has got away (or climbed a stone, calm enough to look) it stops to listen and looks back. Quiet a long while somewhere open, it lies up, and if you come slowly it lets you come close; run at it and it's gone. So staying with it is restraint as much as speed: near enough to read it, far enough not to drive it off.
+- **A runner**: someone with their own way to go, along the trails, at about your pace, legs and arms as a runner's go. They don't wait for you. Now and then they pause to check the way, and a kilometre or so on they reach where they were going and stop there.
 - **A stir**: nothing to see. The grove moves where it passes high in the canopy: the stems bend away and the leaves hiss.
 
-Its movement is honest. It's a body on the same ground as you, with the same culms in its way, and it never moves further in a moment than its own speed takes it. It brushes culms (they rustle and sway), its footfalls are louder on stone, and its landings thud.
+Where it has passed, the grove keeps moving a moment: the culms it brushed, the canopy it went through, still swaying and settling. You can follow it by that even with the sound off. Its footfalls are louder on stone, and its landings thud.
 
-Contact has some give (`chase.ts`). It's one of three:
-- **seen**: some of its body in view, not hidden behind the land or the culms;
-- **traced**: hidden, but you heard it or saw the canopy shake where it passed, so you can still follow its route. Hearing it to your left counts; you needn't be looking at it. Its sounds come from where it is, panned left and right;
-- **lost**: the cues stopped long enough, or it got too far away, that you no longer have a credible direction.
+Contact has some give (`chase.ts`), and it's what you can actually perceive:
+- **seen**: some of its body in view and readable. It's not behind the land, a stone or the culms between you; it's big enough on the screen to make out; and the drawing still describes it there (its colour or its ink reaches that far, as the renderer judges it);
+- **traced**: hidden, but you can follow its route. You heard it (only with the sound on, and less through a gust or over your own running), or you saw the grove move where it passed, in view and not behind anything. You believe it's where the last of these came from, carried on the way you've seen it going, never the way it's really going unseen;
+- **searching**: the cues have stopped, and the last of them is fading. There's still time to find it again;
+- **lost**: you no longer have a credible direction. While it's still near, see it or hear it again and the chase is on again.
 
-Losing it isn't a failure. You stop, a line at the foot of the page says where it brought you (how far, how long), the grove settles, and a while later something else crosses your way. Sometimes it stops somewhere (a fox lying up, a runner come where they were going) and lets you come up to it: that's the other ending. With `auto`, the run chases it by itself, steering for where it believes it is. `node cells/lab/devtools/bamboo-chase.mjs [kinds] [seeds]` runs chases without drawing, against a pursuer that steers for its belief. It checks that each presence's movement is honest over every second, and reports how each chase went and ended.
+The end comes once it's well away (or long gone), or when it has let you come up to it. You slow, the grove settles, and a quiet line says so ("the fox has gone", "the fox let you come close"); no score. A while later, something else crosses your way.
+
+With `auto`, the run chases it by itself, steering only by what it has perceived. `pose=walk|trot|gallop|bound|lie` with `still` holds the body just ahead, side on, to see how it's made. `node cells/lab/devtools/bamboo-chase.mjs [seeds]` runs situations on land laid by hand:
+- a fox behind a boulder isn't seen, and stepping out it is;
+- heard behind you, it's traced, while with the sound off it goes to searching and then lost;
+- coming fast in the open alarms it, coming slowly or behind a rock keeps it calmer, and stopping calms it;
+- lying up, it lets you walk up to it but not run;
+- across a row of stones it bounds and lands, with no pops in height.
+
+It then runs chases on the mountain against a pursuer that knows only what it has perceived, checking every presence's movement is honest over every second and every step.
 
 ## What you meet
 
