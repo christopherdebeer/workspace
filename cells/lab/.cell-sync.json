@@ -1,8 +1,8 @@
 {
   "cell": "c15r/lab",
   "cellId": "lab-8928acf3",
-  "treeVersion": "tree:7dc9e0f09a3450ab56592fcb713232cc7f799a19202aef38f62924f7a32a2e6f",
-  "syncedAt": "2026-10-31T15:32:45.491Z",
+  "treeVersion": "tree:87f470a6aa1e4636f420c69fbe45eff448ae1ed0ebc444bef09ddc184f1600f6",
+  "syncedAt": "2026-10-31T15:34:01.362Z",
   "files": {
     "README.md": "sha256:665df4179140457c44ea9e0f6f5820bd6e9b557fb196a37cf1245a07cb11f7c6",
     "client/bamboo/chase.ts": "sha256:be2476bcf98fa48ff21f9e1743d7b8a923f18b326124f6f8b8facb4cbf922268",
@@ -467,7 +467,7 @@
     "index.ts": "sha256:ab6a93902d80b27d1bbf963fd813fd956ca79dc4a813d9b7db10490f29a67ca9",
     "md.ts": "sha256:789ba0fa8bc21f0206f2c2d7baf24c64613e6ea5606b8fb398bb24f49158b99e",
     "static/bamboo.html": "sha256:77ee5c18cc6d187447a8fca6f826f86b2a9cc67d59d119e061cea166b717e398",
-    "static/bamboo.md": "sha256:52de6ed325d8bf67228fa86c48a743ca1e39d7d665fc86d0c25a5db3fb31992e",
+    "static/bamboo.md": "sha256:72c61e714ecc923b9d6a5d8da068f0a63d13d948edff9271f989705ffa27f083",
     "static/bamboo/board.jpg": "sha256:d7d2e4459368399fed6771e780cedcc2ecac918d6534da57082096559c7ee849",
     "static/bamboo/v-a.jpg": "sha256:26f74671b448fc3a9fb27f78388bfec3d39bd461f141b491e8e48ff7c80e67eb",
     "static/bamboo/v-b.jpg": "sha256:c59abee26a8a06e29197f6efdcb4370550f1d2f4a8c5a3947da8f44f816bfa5f",
