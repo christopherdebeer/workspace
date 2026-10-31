@@ -43,6 +43,13 @@ export class Footings {
     const fx = x - c.x0, fz = z - c.z0, i = Math.min(CHUNK - 1, Math.floor(fx)), j = Math.min(CHUNK - 1, Math.floor(fz)), u = fx - i, v = fz - j, N = CHUNK + 1, G = c.ground, k = i + j * N;
     return (G[k] * (1 - u) + G[k + 1] * u) * (1 - v) + (G[k + N] * (1 - u) + G[k + N + 1] * u) * v;
   }
+  /** how much leaf is over (x, z), 0 … 1 (the chunk's `canopy`) */
+  coverNear(x: number, z: number) {
+    const c = this.chunks.get(key(Math.floor(x / CHUNK), Math.floor(z / CHUNK)));
+    if (!c) return 0.5;
+    const i = Math.min(CHUNK, Math.max(0, Math.round(x - c.x0))), j = Math.min(CHUNK, Math.max(0, Math.round(z - c.z0)));
+    return c.canopy[i + j * (CHUNK + 1)];
+  }
   /** what you'd stand on at (x, z) */
   at(x: number, z: number): Under {
     const tr = this.land.tread(x, z);

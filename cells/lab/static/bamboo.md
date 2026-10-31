@@ -26,6 +26,23 @@ A run through a wild moso bamboo grove on an endless mountainside, drawn as a li
 - **It feels its speed**: the head rises and falls with each stride and sways a little; you lean into a turn; the view widens the faster you go.
 - **The sound comes with your first touch**: your footfalls (litter and earth; stone on a stair or a boulder; a knock on a root), a landing's thud (heavier the harder) with its footing's sound over it, a rustle as you brush a culm, the air past your ears rising with your speed, and the wind in the leaves when a gust comes through.
 
+## The chase
+
+`chase=fox`, `chase=runner` or `chase=stir`: something crosses your way, a little ahead. Stay with it as long as you can. Catching it isn't promised.
+
+- **A fox** (`presence.ts`): low and quick, russet with a white-tipped tail. It trots when you're far, runs when you're near and bolts when you're close. It stops now and then to listen and look back, hops onto stones and off them, and takes the low gaps.
+- **A runner**: someone with their own way to go, along the trails, at about your pace. They don't wait for you. Now and then they pause to check the way, and somewhere a kilometre or so on they reach where they were going and stop there.
+- **A stir**: nothing to see. The grove moves where it passes high in the canopy: the stems bend away and the leaves hiss.
+
+Its movement is honest. It's a body on the same ground as you, with the same culms in its way, and it never moves further in a moment than its own speed takes it. It brushes culms (they rustle and sway), its footfalls are louder on stone, and its landings thud.
+
+Contact has some give (`chase.ts`). It's one of three:
+- **seen**: some of its body in view, not hidden behind the land or the culms;
+- **traced**: hidden, but you heard it or saw the canopy shake where it passed, so you can still follow its route. Hearing it to your left counts; you needn't be looking at it. Its sounds come from where it is, panned left and right;
+- **lost**: the cues stopped long enough, or it got too far away, that you no longer have a credible direction.
+
+Losing it isn't a failure. You stop, a line at the foot of the page says where it brought you (how far, how long), the grove settles, and a while later something else crosses your way. Sometimes it stops somewhere (a fox lying up, a runner come where they were going) and lets you come up to it: that's the other ending. With `auto`, the run chases it by itself, steering for where it believes it is. `node cells/lab/devtools/bamboo-chase.mjs [kinds] [seeds]` runs chases without drawing, against a pursuer that steers for its belief. It checks that each presence's movement is honest over every second, and reports how each chase went and ended.
+
 ## What you meet
 
 Mostly the grove. But now and then:

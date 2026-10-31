@@ -9,6 +9,9 @@
     html, body { margin: 0; height: 100%; background: #efe6d2; overflow: hidden; touch-action: none; }
     body { color: #23201b; font-family: "Iowan Old Style", "Palatino Linotype", Palatino, "Songti SC", "Noto Serif SC", Georgia, serif; -webkit-user-select: none; user-select: none; -webkit-tap-highlight-color: transparent; }
     #view { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
+    /* (the chase's last line: where it brought you, quiet, at the foot of the page) */
+    #chasenote { position: fixed; left: 0; right: 0; bottom: 14%; text-align: center; font: italic 15px Georgia, serif; color: rgba(40, 32, 22, .78); letter-spacing: .04em; opacity: 0; transition: opacity 2.5s ease; pointer-events: none; }
+    #chasenote.shown { opacity: 1; }
     #labnav { position: fixed; left: 12px; top: max(8px, env(safe-area-inset-top)); z-index: 5; font-size: 13px; color: #23201b; text-decoration: none; opacity: .55; letter-spacing: .04em; }
     #title { position: fixed; right: 14px; top: max(10px, env(safe-area-inset-top)); font-size: 15px; letter-spacing: .08em; opacity: .7; writing-mode: vertical-rl; pointer-events: none; }
     #hint { position: fixed; left: 0; right: 0; bottom: calc(max(18px, env(safe-area-inset-bottom)) + 10px); text-align: center; font-size: 15px; font-style: italic; opacity: .75; transition: opacity 1.6s; pointer-events: none; text-shadow: 0 0 6px #efe6d2, 0 0 2px #efe6d2; }

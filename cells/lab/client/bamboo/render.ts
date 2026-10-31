@@ -57,7 +57,7 @@ float fbm2(vec2 p) { return vn(p) * .55 + vn(p * 2.03 + 7.1) * .3 + vn(p * 4.1 -
 const COMMON = `#version 300 es
 precision highp float; precision highp int; precision highp sampler2DShadow;
 uniform float uClay;
-uniform mat4 uVP; uniform vec3 uEye; uniform float uTime; uniform vec3 uSun; uniform vec4 uGust;
+uniform mat4 uVP; uniform vec3 uEye; uniform float uTime; uniform vec3 uSun; uniform vec4 uGust; uniform vec4 uStir;
 // (the layers (layers.ts): each one's reach (the page's pull taken in) and how soft its edge; the measure (the focus's
 // distance, how much sooner things far beyond it go, how far out in the world a reach of one is); the colour by kind,
 // the ink by kind and how it ends, how much of it lies under the picture)
@@ -76,7 +76,10 @@ vec2 windAt(vec2 p, float phase) {
   vec2 d = vec2(-.92, -.38);
   float sway = .010 * sin(uTime * .8 + phase + dot(p, vec2(.05, .03))) + .004 * sin(uTime * 2.1 + phase * 1.7);
   float along = dot(p, uGust.xy) - uGust.z, front = exp(-along * along / 300.) * uGust.w;
-  return d * sway + uGust.xy * front * (.05 + .012 * sin(uTime * 5. + phase));
+  // (and where something's passing through (presence.ts): a stir high in the canopy bending the culms away from it, a fox
+  // or a runner brushing past the ones beside it)
+  vec2 sp = p - uStir.xy; float sk = uStir.z * exp(-dot(sp, sp) / (uStir.w * uStir.w));
+  return d * sway + uGust.xy * front * (.05 + .012 * sin(uTime * 5. + phase)) + normalize(sp + 1e-3) * sk * (.06 + .03 * sin(uTime * 6. + phase * 3.));
 }
 // (how much of the wind a culm's put in: 1 as it's drawn; 0 where it stands at rest, which is where it's asked how far
 // out it is, so a culm, a branch, a spray is drawn by where it stands, never flickering in and out as it sways)
@@ -446,7 +449,8 @@ void main() {
   float sy = iC.x, size = iC.w, yaw = iD.x, tilt = iD.y, bend = iD.w;
   vec3 anchor = culmAt(b, h, lean, phase, sy, bend) + vec3(iC.y, 0., iC.z), rest = culmRest(b, h, lean, phase, sy, bend) + vec3(iC.y, 0., iC.z);
   // (a flutter of its own; streaming in a gust)
-  anchor.xz += vec2(sin(uTime * 2.7 + iD.z * 40.), cos(uTime * 2.2 + iD.z * 30.)) * .05 * (1. + uGust.w * 2.);
+  vec2 sq = b.xz - uStir.xy;
+  anchor.xz += vec2(sin(uTime * 2.7 + iD.z * 40.), cos(uTime * 2.2 + iD.z * 30.)) * .05 * (1. + uGust.w * 2. + 4. * uStir.z * exp(-dot(sq, sq) / (uStir.w * uStir.w)));
   // (half turned to the eye, so a spray is never lost edge-on; hanging below its twig)
   vec3 r0 = vec3(cos(yaw), 0., -sin(yaw)), right = normalize(mix(r0, uRight, .55));
   vec3 up = normalize(vec3(0., 1., 0.) + cross(right, vec3(0., 1., 0.)) * tilt);
@@ -725,12 +729,15 @@ void main() {
     float u = clamp(p.x / 1.7, -1., 1.), thin = 1. - u * u * .6;
     p = vec3(p.x / 1.7 * iB.y * .5, p.y * iB.x * .75 * thin + (1. - u * u) * iB.x * .4, p.z * iB.x * thin + sin(u * 2.4 + iB.w * 9.) * .12);
     n = normalize(vec3(n.x * .2, n.y, n.z));
+  } else if (uKind == 4) {
+    // (a part of a body going through the grove (presence.ts): the lump stretched to its size)
+    p = p * iB.xyz; n = normalize(n / iB.xyz);
   } else {
     p = vec3(p.x, p.y * iB.y, p.z) * iB.x; n = normalize(vec3(n.x, n.y / max(iB.y, .2), n.z));
   }
   float c = cos(yaw), s = sin(yaw);
   p = vec3(c * p.x + s * p.z, p.y, -s * p.x + c * p.z); n = vec3(c * n.x + s * n.z, n.y, -s * n.x + c * n.z);
-  vW = iA.xyz + p; vN = n; vL = aP; vMoss = iB.z; vSeed = iB.w;
+  vW = iA.xyz + p; vN = n; vL = aP; vMoss = uKind == 4 ? 0. : iB.z; vSeed = iB.w;
   vOut = uDepth == 1 ? 0. : outCol(iA.xyz + vec3(0., .2, 0.)) + (fract(iA.x * .37 + iA.z * .71) - .5) * .14;
   gl_Position = (uDepth == 1 ? uLightVP : uVP) * vec4(vW, 1.);
 }`;
@@ -758,6 +765,12 @@ void main() {
     frK = (1. - smoothstep(.015, .04 + fw, cr)) * has;
     frW = (1. - smoothstep(.0, .09 + fw * 2., cr)) * has;
     mark = max(max(hatch, under), frK * .8);
+  }
+  if (uKind == 4) {
+    // (a fox: russet, its underside and its tail's tip white; someone running: a dark coat, a pale sleeve, dark hair)
+    int part = int(vSeed + .5);
+    alb = part == 3 ? vec3(.93, .9, .84) : part <= 2 ? mix(vec3(.66, .33, .13), vec3(.9, .85, .76), smoothstep(-.2, -.6, N.y) * (part == 0 ? .8 : .4)) : part == 4 ? vec3(.3, .33, .4) : part == 5 ? vec3(.16, .13, .12) : vec3(.88, .86, .8);
+    alb *= .9 + .2 * n2;
   }
   if (uKind == 3) {
     // (a root: grey-brown bark, worn pale and smooth on top where it's trodden, moss low along it)
@@ -795,7 +808,7 @@ void main() {
   float sFine = 1. - smoothstep(.04, .12, spx * 2.25);
   // (a boulder: broad weathered facets, chips off it, pits, a crack or two; a step: tooling and wear)
   vec2 chip = vor(vW.xz * 2.2 + vW.y * 1.7);
-  float hRel = uKind == 1 ? (vn(vW.xz * vec2(14., 3.)) - .5) * .01 * sFine + (vn(vW.xz * 4.) - .5) * .015 - scr * .008
+  float hRel = uKind == 4 ? 0. : uKind == 1 ? (vn(vW.xz * vec2(14., 3.)) - .5) * .01 * sFine + (vn(vW.xz * 4.) - .5) * .015 - scr * .008
     : (fbm2(vW.xz * 1.1 + vW.y * .9) - .5) * .12 + (1. - chip.x) * .05 + ((fbm2(vW.xz * 3. + vW.y * 2.) - .5) * .04 - .02 * smoothstep(.7, .82, vn(vW.xz * 9. + vW.y * 5.))) * sFine - scr * .025;
   N = bumpN(N, vW, hRel * sK);
   float sHo = clamp(1. + hRel * sK * 4.5, .35, 1.3);
@@ -1097,6 +1110,17 @@ export class Renderer {
   private shadowTex: WebGLTexture | null = null; private shadowFbo: WebGLFramebuffer | null = null; private lightVP: number[] = new Array(16).fill(0); readonly shadows: boolean;
   /** the hour and the air (sky.ts): where the light comes from, its colour, the sky's, the haze, the page's wash */
   sky: Sky = skyAt(8, 0.5);
+  /** something going through the grove (presence.ts): its body's parts, and where it stirs the culms (x, z, how hard, how
+   * far) */
+  presence: { x: number; y: number; z: number; yaw: number; sx: number; sy: number; sz: number; part: number }[] = [];
+  stir = [0, 0, 0, 1];
+  private presBuf: WebGLBuffer | null = null; private presN = 0;
+  private presUpload() {
+    const gl = this.gl, P = this.presence, a = new Float32Array(P.length * 8);
+    P.forEach((q, k) => a.set([q.x, q.y, q.z, q.yaw, q.sx, q.sy, q.sz, q.part], k * 8));
+    this.presBuf ??= gl.createBuffer()!;
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.presBuf); gl.bufferData(gl.ARRAY_BUFFER, a, gl.DYNAMIC_DRAW); this.presN = P.length;
+  }
   /** the canopy round you, a metre a texel (from each chunk's `canopy`), for the shade beyond the light's map and the
    * sky's light under the leaves */
   private canTex: WebGLTexture | null = null; private canO = [1e9, 1e9]; private canDirty = true;
@@ -1138,6 +1162,10 @@ export class Renderer {
     for (const [k, m] of [['culmNear', culmMesh(8, 20)], ['culmFar', culmMesh(5, 10)], ['twig', culmMesh(4, 6)], ['quad', QUAD]] as const) this.vbo[k] = { buf: this.buffer(m), count: m.length / 2 };
     const box = boxMesh(); this.vbo.box = { buf: this.buffer(box), count: box.length / 6 };
     const lump = lumpMesh(LUMP_SEED); this.vbo.lump = { buf: this.buffer(lump), count: lump.length / 6 };
+    // (a smooth unit sphere, for a body's parts: never the boulder's cleaved faces)
+    const orb: number[] = [], U = 16, V = 10, sp = (i: number, j: number) => { const u = (i / U) * 2 * Math.PI, v = (j / V) * Math.PI - Math.PI / 2; return [Math.cos(v) * Math.sin(u), Math.sin(v), Math.cos(v) * Math.cos(u)]; };
+    for (let j = 0; j < V; j++) for (let i = 0; i < U; i++) for (const [a, b] of [[i, j], [i + 1, j], [i + 1, j + 1], [i, j], [i + 1, j + 1], [i, j + 1]]) { const q = sp(a, b); orb.push(...q, ...q); }
+    this.vbo.orb = { buf: this.buffer(new Float32Array(orb)), count: orb.length / 6 };
     const slab = slabMesh(); this.vbo.slab = { buf: this.buffer(slab), count: slab.length / 6 };
     this.vbo.screen = { buf: this.buffer(new Float32Array([-1, -1, 3, -1, -1, 3])), count: 3 };
     // (one index buffer serves every chunk's ground: the same grid)
@@ -1233,7 +1261,7 @@ export class Renderer {
   private uni(p: WebGLProgram, f: Frame, vp: number[], right: number[]) {
     const gl = this.gl, u = (n: string) => gl.getUniformLocation(p, n);
     gl.uniformMatrix4fv(u('uVP'), false, vp); gl.uniform3fv(u('uEye'), f.eye); gl.uniform1f(u('uTime'), f.t); gl.uniform3fv(u('uSun'), this.sunDir);
-    gl.uniform4fv(u('uGust'), f.gust); gl.uniform1f(u('uClay'), this.clay ? 1 : 0); gl.uniform3fv(u('uSunC'), this.sky.lightC); gl.uniform3fv(u('uSky'), this.sky.skyC); gl.uniform1f(u('uExpo'), this.sky.expo); gl.uniform3fv(u('uHaze'), this.sky.haze); gl.uniform3fv(u('uVeil'), this.sky.veil); gl.uniform1f(u('uMist'), this.sky.mist); gl.uniform3fv(u('uTone'), this.sky.ridge); gl.uniform1f(u('uOpen'), 0);
+    gl.uniform4fv(u('uGust'), f.gust); gl.uniform4fv(u('uStir'), this.stir); gl.uniform1f(u('uClay'), this.clay ? 1 : 0); gl.uniform3fv(u('uSunC'), this.sky.lightC); gl.uniform3fv(u('uSky'), this.sky.skyC); gl.uniform1f(u('uExpo'), this.sky.expo); gl.uniform3fv(u('uHaze'), this.sky.haze); gl.uniform3fv(u('uVeil'), this.sky.veil); gl.uniform1f(u('uMist'), this.sky.mist); gl.uniform3fv(u('uTone'), this.sky.ridge); gl.uniform1f(u('uOpen'), 0);
     gl.uniform2fv(u('uPick'), this.pick); gl.uniform1f(u('uMarks'), this.marks); gl.uniform3fv(u('uRight'), right);
     const d = this.dials;
     gl.uniform4fv(u('uRch'), [...this.reaches, 0.12]); gl.uniform4fv(u('uFoc'), [this.focus, d.depth, d.distance, d.near]);
@@ -1280,6 +1308,8 @@ export class Renderer {
       gl.uniform1i(gl.getUniformLocation(p, 'uKind'), 2);
       this.attr(0, this.vbo.lump.buf, 3, 6, 0); this.attr(1, this.vbo.lump.buf, 3, 6, 3);
       for (const { c } of near2) if (c.nStones) { this.attr(2, c.stones, 4, 8, 0, 1); this.attr(3, c.stones, 4, 8, 4, 1); gl.drawArraysInstanced(gl.TRIANGLES, 0, this.vbo.lump.count, c.nStones); }
+      this.presUpload();
+      if (this.presN) { gl.uniform1i(gl.getUniformLocation(p, 'uKind'), 4); this.attr(0, this.vbo.orb.buf, 3, 6, 0); this.attr(1, this.vbo.orb.buf, 3, 6, 3); this.attr(2, this.presBuf!, 4, 8, 0, 1); this.attr(3, this.presBuf!, 4, 8, 4, 1); gl.drawArraysInstanced(gl.TRIANGLES, 0, this.vbo.orb.count, this.presN); }
       if (!this.bare) {
         p = use('sprayDepth'); gl.uniform1i(gl.getUniformLocation(p, 'uDepth'), 1);
         this.attr(0, this.vbo.quad.buf, 2, 2, 0);
@@ -1317,6 +1347,8 @@ export class Renderer {
       for (const { c } of inRange(this.farthest)) if (c.nStones) { this.attr(2, c.stones, 4, 8, 0, 1); this.attr(3, c.stones, 4, 8, 4, 1); gl.drawArraysInstanced(gl.TRIANGLES, 0, this.vbo.lump.count, c.nStones); }
       gl.uniform1i(gl.getUniformLocation(p, 'uKind'), 3);
       for (const { c } of inRange(60)) if (c.nRoots) { this.attr(2, c.roots, 4, 8, 0, 1); this.attr(3, c.roots, 4, 8, 4, 1); gl.drawArraysInstanced(gl.TRIANGLES, 0, this.vbo.lump.count, c.nRoots); }
+      // (and whatever's going through the grove)
+      if (this.presence.length) { if (!this.shadows) this.presUpload(); gl.uniform1i(gl.getUniformLocation(p, 'uKind'), 4); this.attr(0, this.vbo.orb.buf, 3, 6, 0); this.attr(1, this.vbo.orb.buf, 3, 6, 3); this.attr(2, this.presBuf!, 4, 8, 0, 1); this.attr(3, this.presBuf!, 4, 8, 4, 1); gl.drawArraysInstanced(gl.TRIANGLES, 0, this.vbo.orb.count, this.presN); }
     }
     // ─── the land's strokes, on it and on its steps, stones and roots (not over what stands in front of them) ───
     if (this.marks && !this.clay) {

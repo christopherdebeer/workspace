@@ -20,6 +20,8 @@ import { strokes } from './strokes';
 import { Renderer, type Frame } from './render';
 import { readDials, address, layersPalette } from './layers';
 import { skyAt } from './sky';
+import { Presence, type Kind, type Cue } from './presence';
+import { Chase } from './chase';
 
 const params = new URLSearchParams(location.search);
 const canvas = document.getElementById('view') as HTMLCanvasElement;
@@ -109,6 +111,19 @@ const sound = (() => {
     },
     /** a culm brushed past: a rustle of its leaves */
     brush(k: number) { this.burst(3800 + Math.random() * 1500, 0.6, 0.02 + 0.05 * k, 0.03, 0.3); },
+    /** something else's sound (presence.ts), from where it was: to your left or right, fainter the further */
+    cue(c: Cue, kind: Kind, eye: number[], yaw: number) {
+      if (!ac || !noise) return;
+      const dx = c.x - eye[0], dz = c.z - eye[2], d = Math.hypot(dx, dz);
+      let a = Math.atan2(dx, dz) - yaw; while (a > Math.PI) a -= 2 * Math.PI; while (a < -Math.PI) a += 2 * Math.PI;
+      const g = Math.min(1, (c.loud * 6) / Math.max(6, d)) * 0.9, pan = Math.max(-1, Math.min(1, -Math.sin(a)));
+      const spec = c.kind === 'step' ? (kind === 'fox' ? [2200, 2.5, 0.05, 0.004, 0.05] : [800, 1.2, 0.08, 0.006, 0.1]) : c.kind === 'land' ? [260, 0.8, 0.12, 0.008, 0.18] : c.kind === 'rustle' ? [4200, 0.7, 0.05, 0.03, 0.32] : [3000, 0.4, 0.05, 0.12, 0.6];
+      const src = ac.createBufferSource(); src.buffer = noise;
+      const f = ac.createBiquadFilter(); f.type = 'bandpass'; f.frequency.value = spec[0] * (0.85 + Math.random() * 0.3); f.Q.value = spec[1];
+      const gn = ac.createGain(), p = ac.createStereoPanner(), now = ac.currentTime; p.pan.value = pan;
+      gn.gain.setValueAtTime(0, now); gn.gain.linearRampToValueAtTime(spec[2] * g * 2.2, now + spec[3]); gn.gain.exponentialRampToValueAtTime(0.0005, now + spec[4]);
+      src.connect(f).connect(gn).connect(p).connect(ac.destination); src.start(now, Math.random()); src.stop(now + spec[4] + 0.05);
+    },
   };
 })();
 
@@ -138,12 +153,59 @@ addEventListener('keydown', (e) => { keys.add(e.key); sound.start(); });
 addEventListener('keyup', (e) => keys.delete(e.key));
 
 // ─── the run ───
+// ─── the chase (`chase=fox|runner|stir`): something crosses your way; stay with it as long as you can (presence.ts,
+// chase.ts). When it's lost, or met, a line says where it brought you, the grove settles, and a while later another ───
+const chaseKind = params.get('chase') as Kind | null;
+let it: Presence | null = null, chase: Chase | null = null, again = 0, chaseSeed = seed * 31;
+const note = document.createElement('div'); note.id = 'chasenote'; document.body.appendChild(note);
+function begin() {
+  if (!chaseKind) return;
+  const fx = Math.sin(me.heading), fz = Math.cos(me.heading), side = (chaseSeed % 2 ? 1 : -1);
+  // (it crosses your way a little ahead; someone running, along the trail ahead of you, going your way)
+  let x = me.x + fx * 13 - fz * 2 * side, z = me.z + fz * 13 + fx * 2 * side;
+  const runner = chaseKind === 'runner', q = runner ? world.trailNear(me.x, me.z) : null;
+  if (q?.trail && q.d < 12) {
+    // (along your own trail, the way you're facing, sixteen metres on)
+    const tr = q.trail, j = Math.min(tr.x.length - 2, q.i + 1), fwd = (tr.x[j] - tr.x[q.i]) * fx + (tr.z[j] - tr.z[q.i]) * fz >= 0 ? 1 : -1, k = Math.max(0, Math.min(tr.x.length - 1, q.i + fwd * 16));
+    x = tr.x[k]; z = tr.z[k];
+  }
+  it = new Presence(chaseKind, me.feet, world, x, z, runner ? me.heading : me.heading + (Math.PI / 2) * side, chaseSeed++);
+  chase = new Chase(it, me.feet); note.classList.remove('shown'); lastMe = [me.x, me.z];
+}
+function chaseStep(dt: number, eye: [number, number, number], yaw: number, p: number, fov: number) {
+  if (!chaseKind) return;
+  const ran = Math.hypot(me.x - lastMe[0], me.z - lastMe[1]); lastMe = [me.x, me.z];
+  // (between chases: the last one goes on its way (or lies where you came up to it) until it's well out of reach; never
+  // gone where you might see it go; then, a while later, another)
+  if (!chase) {
+    if (it) { it.step(dt, { x: me.x, z: me.z }); if (Math.hypot(it.x - me.x, it.z - me.z) > 90) it = null; }
+    renderer.presence = it ? it.parts() : []; renderer.stir = it ? (it.kind === 'stir' ? [it.x, it.z, 1, 7] : [it.x, it.z, 0.35, 1.6]) : [0, 0, 0, 1];
+    if (!it) { again -= dt; if (again <= 0) begin(); }
+    return;
+  }
+  if (!it) return;
+  it.step(dt, { x: me.x, z: me.z });
+  const hy = fov / 2, hx = Math.atan(Math.tan(hy) * innerWidth / innerHeight);
+  chase.update(dt, eye, yaw, p, hx, hy, ran);
+  for (const c of chase.heard) sound.cue(c, it.kind, eye, yaw);
+  renderer.presence = it.parts();
+  renderer.stir = it.kind === 'stir' ? [it.x, it.z, 1, 7] : [it.x, it.z, 0.35, 1.6];
+  if (chase.over) {
+    const m = Math.round(chase.run), s = Math.round(chase.time), what = it.kind === 'fox' ? 'the fox' : it.kind === 'runner' ? 'the runner' : 'it';
+    note.textContent = chase.state === 'met' ? `you came up to ${what} · ${m} m · ${Math.floor(s / 60)}′${String(s % 60).padStart(2, '0')}″` : `lost ${what} · ${m} m · ${Math.floor(s / 60)}′${String(s % 60).padStart(2, '0')}″`;
+    note.classList.add('shown');
+    chase = null; again = 25;
+  }
+}
+let lastMe = [0, 0];
 function run(dt: number) {
   const go = held || keys.has('ArrowUp') || keys.has('w') || auto;
   let turn = 0;
   if (keys.has('ArrowLeft')) turn += dt * 1.6;
   if (keys.has('ArrowRight')) turn -= dt * 1.6;
-  if (auto) turn += (Math.sin(t * 0.13 + 1.3) * 0.25 + Math.sin(t * 0.051) * 0.2) * dt;
+  // (on its own, after whatever it's chasing, as near as it can tell where; else wandering)
+  if (auto && chase && !chase.over) { const [gx, gz] = chase.guess(); let a = Math.atan2(gx - me.x, gz - me.z) - me.heading; while (a > Math.PI) a -= 2 * Math.PI; while (a < -Math.PI) a += 2 * Math.PI; turn += Math.max(-1.8 * dt, Math.min(1.8 * dt, a)); }
+  else if (auto) turn += (Math.sin(t * 0.13 + 1.3) * 0.25 + Math.sin(t * 0.051) * 0.2) * dt;
   turn += dragTurn; dragTurn = 0;
   me.update(dt, { go, turn });
 }
@@ -302,6 +364,7 @@ function frame(now: number) {
   focus = still || focus === 0 ? target : focus + (target - focus) * Math.min(1, dt * 0.8);
   const sheet = Math.min(devicePixelRatio || 1, 2);
   const f: Frame = { eye, look, fov, t, gust: [gust.dir[0], gust.dir[1], gust.front, gust.strength], speed: me.v, roll, focus, paper: [Math.round(innerWidth * sheet), Math.round(innerHeight * sheet)] };
+  if (!still || chaseKind) chaseStep(still ? 0 : dt, eye, yaw, p, fov);
   renderer.draw(f, canvas.width, canvas.height);
   const ms = performance.now() - now;
   // (how finely it's drawn follows how long frames take, over a second or so, in steps, never frame to frame: a canvas
@@ -315,7 +378,7 @@ function frame(now: number) {
   }
   // (at rest, the address catches up)
   if (me.v < 0.05 && !drag && !held) remember();
-  (window as unknown as { __bamboo: unknown }).__bamboo = { seed, x: me.x, z: me.z, y: me.y, heading: me.heading, pitch, v: me.v, onTrail: me.onTrail, air: me.air, act: me.act, low: me.low, landedAs: me.landedAs, t, chunks: me.chunks.size, frameMs: ms, scale };
+  (window as unknown as { __bamboo: unknown }).__bamboo = { seed, x: me.x, z: me.z, y: me.y, heading: me.heading, pitch, v: me.v, onTrail: me.onTrail, air: me.air, act: me.act, low: me.low, landedAs: me.landedAs, chase: chase && it ? { kind: it.kind, state: chase.state, time: chase.time, d: Math.hypot(it.x - me.x, it.z - me.z), x: it.x, y: it.y, z: it.z, parts: renderer.presence.length } : null, t, chunks: me.chunks.size, frameMs: ms, scale };
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);
