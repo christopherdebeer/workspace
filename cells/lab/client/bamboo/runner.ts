@@ -39,6 +39,8 @@ interface Plan {
   /** read when (the landing seen while still approaching); how much it asks (0 a skip … 1.5 a long rising leap); how far
    * the last plant sinks for it; the speed it wants at takeoff (the approach slows or presses on to meet it) */
   read?: number; demand?: number; load?: number; vh?: number;
+  /** when the foot it springs from was planted (the last plant of its approach, or the landing it's chained from) */
+  planted?: number;
 }
 /** how a foot meets the ground: a plain plant; soft earth; a step up onto something higher; a check, braking (down, or
  * slowing); a quick touch on a stone in passing; the push of the last plant before a takeoff; a landing */
@@ -79,7 +81,7 @@ export class Runner {
   onAct: (act: Act) => void = () => {};
   /** a foot set down (every one: plain steps, the plant before a takeoff, a landing) */
   onContact: (c: Contact) => void = () => {};
-  private loading = false; private stanceLeft = 0; private stanceEnd = 0; private aerialT = 0.2; private nextY = 0; private barred = 0; private held = false; private heldT = 0; private heldDir = 0; private barUntil = -1; private acc = 0; private foot = 0; private think = 0; private best = 0; private bestCost = 0; private stride = 2.2; private posts: Post[] = []; private brushed = new Set<object>();
+  private loading = false; private stanceFrom = 0; private stanceLeft = 0; private stanceEnd = 0; private aerialT = 0.2; private nextY = 0; private barred = 0; private held = false; private heldT = 0; private heldDir = 0; private barUntil = -1; private acc = 0; private foot = 0; private think = 0; private best = 0; private bestCost = 0; private stride = 2.2; private posts: Post[] = []; private brushed = new Set<object>();
   constructor(readonly world: Land, readonly range = 104) { this.feet = new Footings(world, this.chunks); }
 
   /** build the chunks within range of (x, z) that aren't built (at most `budget` of them), and let go of those well out */
@@ -193,17 +195,25 @@ export class Runner {
         // body loaded onto it, as deep and as long as the move asks: the spring held off while it loads)
         const reach = Math.max(0.5, this.stride * 2.2);
         this.prep = Math.max(this.prep, Math.min(1, 1 - Math.max(0, toGo) / reach));
-        const loadFrom = Math.max(0.35, this.v * (0.12 + 0.1 * (plan.demand ?? 0.5)));
-        this.loading = plan.kind !== 'drop' && (toGo < loadFrom || plan.wait > 0);
-        if (this.loading) { this.crouch += ((plan.load ?? 0.1) - this.crouch) * ease(dt, 16); this.crouchV = 0; }
-        if (toGo <= this.v * dt + 0.02 && plan.wait <= 0) { this.takeoff(plan); return; }
+        if (plan.kind === 'drop') {
+          this.loading = false;
+          if (toGo <= this.v * dt + 0.02 && plan.wait <= 0) { this.takeoff(plan); return; }
+        } else {
+          // (the last foot: planted short of the takeoff by as far as the body travels while it bears it, so its stance ends
+          // where the move begins; the body loads onto that foot through its stance, turns on it, and the takeoff is its
+          // release, when its stance is done, not a foot of its own)
+          const loadT = 0.07 + 0.1 * Math.min(1.5, plan.demand ?? 0.5);
+          if (plan.planted === undefined && toGo <= Math.max(0.12, this.v * loadT)) { this.pushPlant(plan, dx, dz, loadT); plan.planted = this.clock; }
+          this.loading = plan.planted !== undefined || toGo < Math.max(0.35, this.v * (0.2 + 0.1 * (plan.demand ?? 0.5)));
+          if (this.loading) { this.crouch += ((plan.load ?? 0.1) - this.crouch) * ease(dt, plan.planted !== undefined ? 22 : 10); this.crouchV = 0; }
+          if (plan.planted !== undefined && this.stanceLeft > 0) this.move += wrap(plan.dir - this.move) * ease(dt, 12);
+          if (plan.planted !== undefined && this.stanceLeft <= 0 && plan.wait <= 0) { this.takeoff(plan); return; }
+        }
       } else { this.prep = Math.max(0, this.prep - dt * 4); this.loading = false; }
-      // (planted on a crown before going on from it: the body pivots over the foot, hardly carried on)
-      const carry = plan && plan.wait > 0 && Math.hypot(plan.ox - this.x, plan.oz - this.z) < 0.7 ? 0.35 : 1;
-      const [sx, sz] = this.slip(this.x + dx * this.v * dt * carry, this.z + dz * this.v * dt * carry);
+      const [sx, sz] = this.slip(this.x + dx * this.v * dt, this.z + dz * this.v * dt);
       // (and never over a drop too far to take: held at the rim, unless it's where a leap's to be taken from)
       // (held there, you look for a way from where you stand: across, or down another way)
-      this.held = F.at(sx + dx * 0.3, sz + dz * 0.3).y < here - 3.2 && !(plan && plan.kind === 'leap' && Math.hypot(plan.ox - sx, plan.oz - sz) < 0.5);
+      this.held = F.at(sx + dx * 0.3, sz + dz * 0.3).y < here - 3.2 && !(plan && (plan.kind === 'leap' || plan.kind === 'drop') && Math.hypot(plan.ox - sx, plan.oz - sz) < 0.5);
       if (this.held && this.heldT === 0) this.heldDir = this.move;
       this.heldT = this.held ? this.heldT + dt : 0;
       if (this.heldT > 0.6) this.barUntil = this.clock + 2.5;
@@ -220,12 +230,19 @@ export class Runner {
         this.air = true; this.act = 'fall'; this.vy = 0.3; this.vx = dx * Math.min(this.v, 2.8); this.vz = dz * Math.min(this.v, 2.8); this.aim = null; this.onAct('fall');
       } else if (onStair || this.v < 1.5 || !this.contact || this.rollT >= 0) this.y += (u.y - this.y) * ease(dt, onStair ? 14 : u.y < this.y ? 30 : u.kind === 'stone' ? 18 : 12);
       else {
-        // (the body's height goes from foot to foot: held at the one bearing it, then carried over to where the next will
-        // come down, so a raised stone lifts you at the step onto it, not before; never into the ground)
+        // (a higher footing just ahead between strides: a foot's put up onto it, rather than the body lifted by it)
+        if (!plan && this.stanceLeft <= 0 && this.clock - this.contact.t > 0.08) {
+          const a = F.at(this.x + dx * 0.35, this.z + dz * 0.35);
+          if (a.y > this.contact.y + 0.1 && a.y - this.contact.y < 0.9) { this.plant(dx, dz, plan, target, 0.35); this.phase = Math.floor(this.phase) + 0.02; }
+        }
+        // (the body's height goes from foot to foot: onto a lower one it drops at once; onto a higher one it takes the
+        // weight where it was and drives up over the foot's stance; then it's carried over to where the next will come
+        // down. So a raised stone lifts you at the step onto it, by the step, not before; never far into the ground)
         const c = this.contact;
         let want = c.y;
-        if (this.stanceLeft <= 0) { const k = Math.min(1, (this.clock - this.stanceEnd) / Math.max(0.05, this.aerialT)); want = c.y + (this.nextY - c.y) * k * k * (3 - 2 * k); }
-        want = Math.max(want, u.y - 0.03);
+        if (this.stanceLeft > 0) { if (c.y > this.stanceFrom) { const k = Math.min(1, 1 - this.stanceLeft / Math.max(0.03, c.dur)); want = this.stanceFrom + (c.y - this.stanceFrom) * k * k * (3 - 2 * k); } }
+        else { const k = Math.min(1, (this.clock - this.stanceEnd) / Math.max(0.05, this.aerialT)), d = this.nextY - c.y; want = c.y + d * (d > 0 ? 0.25 : 1) * k * k * (3 - 2 * k); }
+        want = Math.max(want, u.y - 0.18);
         this.y += (want - this.y) * ease(dt, 40);
       }
       // (the stride: shortened to meet a takeoff with a footfall, shorter on a stair, short just after a hard landing)
@@ -238,7 +255,10 @@ export class Runner {
       }
       this.stride = stride;
       if (this.rollT < 0) this.phase += (this.v * dt) / stride;
-      if (Math.floor(this.phase) !== Math.floor(before) && this.v > 0.6) this.plant(dx, dz, plan, target);
+      // (a footfall when the stride comes round, unless a foot's still bearing the weight, or the move's own last foot is
+      // about to be set down)
+      const lastFoot = plan && plan.kind !== 'drop' && plan.planted === undefined && (plan.ox - this.x) * Math.sin(plan.dir) + (plan.oz - this.z) * Math.cos(plan.dir) < this.stride * 0.6;
+      if (Math.floor(this.phase) !== Math.floor(before) && this.v > 0.6 && this.stanceLeft <= 0 && !lastFoot) this.plant(dx, dz, plan, target);
     }
     this.stride_(dt);
     this.turn += (wrap(this.best - this.move) - this.turn) * ease(dt, 3);
@@ -401,15 +421,13 @@ export class Runner {
   }
   /** a footfall in the stride: the foot set down a little ahead and to its side, on whatever's there; how it meets it by
    * how the ground goes from the last, the pace, what's coming; the body sinking onto it */
-  private plant(dx: number, dz: number, plan: Plan | null, target: number) {
+  private plant(dx: number, dz: number, _plan: Plan | null, target: number, reach = 0.12) {
     const F = this.feet, side = this.contact ? -this.contact.side : 1;
-    const fx = this.x + dx * 0.12 + dz * side * 0.1, fz = this.z + dz * 0.12 - dx * side * 0.1, u = F.at(fx, fz);
+    const fx = this.x + dx * reach + dz * side * 0.1, fz = this.z + dz * reach - dx * side * 0.1, u = F.at(fx, fz);
     const rise = this.contact ? u.y - this.contact.y : 0, period = this.stride / Math.max(1, this.v);
-    const toGo = plan ? (plan.ox - this.x) * Math.sin(plan.dir) + (plan.oz - this.z) * Math.cos(plan.dir) : 1e9;
     const grade = (F.groundAt(this.x + dx * 1.5, this.z + dz * 1.5) - F.groundAt(this.x, this.z)) / 1.5;
     let effort: Effort;
-    if (plan && plan.kind !== 'drop' && toGo < this.stride * 1.05) effort = 'push';
-    else if (rise > 0.1 || grade > 0.3) effort = 'up';
+    if (rise > 0.1 || grade > 0.3) effort = 'up';
     else if (rise < -0.12 || grade < -0.3 || this.v - target > 0.8) effort = 'check';
     else if (u.kind === 'stone' && this.v > 3) effort = 'touch';
     else if (u.kind === 'ground' && !this.onTrail) effort = 'soft';
@@ -417,13 +435,26 @@ export class Runner {
     const K = { plant: [1, 1], soft: [1.15, 1.1], up: [1.35, 1.25], check: [1.25, 1.4], touch: [0.7, 0.7], push: [1.5, 1.3], land: [1, 1] }[effort];
     const dur = period * 0.36 * K[0], load = (0.6 + 0.4 * this.v / LOPE) * K[1] + Math.max(0, -rise) * 1.5 + Math.max(0, rise) * 0.8;
     this.contact = this.place(fx, fz, side, effort, dur, load);
-    this.stanceLeft = dur; this.aerialT = Math.max(0.05, period - dur);
-    // (where the next foot will come down, so the body's carried over to it)
-    const ahead = this.v * period;
-    this.nextY = F.at(this.x + dx * (ahead + 0.12), this.z + dz * (ahead + 0.12)).y;
+    this.support(this.contact, dx, dz);
     // (sinking onto it: harder the harder it's met)
     this.bodyV = Math.min(this.bodyV, 0) - 0.12 * load;
     this.onStep(u.kind, 0.5 + this.v / LOPE);
+  }
+  /** a foot now bearing the weight: for its stance (the body sinking onto it, carried over it, rising off it), then the
+   * stride's flight to where the next will come down */
+  private support(c: Contact, dx: number, dz: number) {
+    const period = this.stride / Math.max(1, this.v), ahead = this.v * period;
+    this.stanceLeft = c.dur; this.stanceFrom = this.y; this.aerialT = Math.max(0.05, period - c.dur);
+    this.nextY = this.feet.at(this.x + dx * (ahead + 0.12), this.z + dz * (ahead + 0.12)).y;
+  }
+  /** the move's last foot: set down where the body will be carried over it into the takeoff, met by the move's demand,
+   * held for as long as it loads */
+  private pushPlant(p: Plan, dx: number, dz: number, loadT: number) {
+    const side = this.contact ? -this.contact.side : 1, fx = this.x + dx * 0.15 + dz * side * 0.08, fz = this.z + dz * 0.15 - dx * side * 0.08;
+    this.contact = this.place(fx, fz, side, 'push', loadT, 0.9 + Math.min(1, p.demand ?? 0.5));
+    this.support(this.contact, dx, dz);
+    this.bodyV = Math.min(this.bodyV, 0) - 0.1 * this.contact.load;
+    this.onStep(this.contact.on, 0.8 + (p.demand ?? 0.5) * 0.3);
   }
   /** the body over the stride: while a foot bears it, a stiff spring sunk by how hard it was met; at the push, up off it
    * as far as the stride's flight needs (more for a step up); in the stride's flight, falling toward the next; in a
@@ -525,7 +556,9 @@ export class Runner {
 
   private takeoff(p: Plan) {
     this.y = Math.max(this.y, this.feet.at(this.x, this.z).y - 0.05);
-    const L = Math.hypot(p.lx - this.x, p.lz - this.z), vh = Math.max(p.kind === 'drop' ? 1.8 : 3.2, Math.min(LOPE * 1.1, this.v));
+    // (the pace it goes at: what you're carrying, or what the move was read wanting (a chained one's, taken back up as
+    // the foot it's planted on pushes))
+    const L = Math.hypot(p.lx - this.x, p.lz - this.z), vh = Math.max(p.kind === 'drop' ? 1.8 : 3.2, Math.min(LOPE * 1.1, Math.max(this.v, p.vh ?? 0)));
     let T = Math.max(p.kind === 'skip' ? 0.3 : 0.26, L / vh), vy = (p.ly - this.y + 0.5 * G * T * T) / T;
     // (high enough to clear what's skipped or hopped onto)
     // (the feet tuck up a little over what's skipped)
@@ -544,9 +577,9 @@ export class Runner {
     this.air = true; this.act = p.kind; this.aim = [p.lx, p.ly, p.lz];
     // (the release: the loaded crouch thrown off, as hard as it was loaded)
     this.crouchV -= 0.8 + 6 * Math.max(this.crouch, 0) + Math.min(1, vy * 0.2);
+    // (the planted foot let go: the release of its push, not a foot of its own)
     this.bodyV = Math.max(this.bodyV, 0.4 + vy * 0.12); this.stanceLeft = 0;
-    this.contact = this.place(this.x, this.z, this.contact ? -this.contact.side : 1, 'push', 0.08, 0.9 + Math.min(1, (p.demand ?? 0.5)));
-    this.onStep(this.under, 0.8 + vy * 0.15); this.onAct(p.kind);
+    this.onAct(p.kind);
     this.prep = 1;
   }
   /** never through a culm: if one's right there, slip past it (on the ground or in the air) */
@@ -572,7 +605,10 @@ export class Runner {
   private fly(dt: number) {
     [this.x, this.z] = this.slip(this.x + this.vx * dt, this.z + this.vz * dt); this.y += this.vy * dt; this.vy -= G * dt;
     const u = this.feet.at(this.x, this.z);
-    if (this.y <= u.y && this.vy < 0) this.land(u.y, u.kind);
+    // (down onto the surface; or, past where you were aiming and a hand's breadth over it, a foot reached down onto it: a
+    // crown's falling side isn't skimmed over)
+    const past = this.aim && (this.x - this.aim[0]) * this.vx + (this.z - this.aim[2]) * this.vz >= 0;
+    if (this.vy < 0 && (this.y <= u.y || (past && this.y - u.y < 0.12))) this.land(u.y, u.kind);
   }
   private land(gy: number, on: Footing) {
     const F = this.feet, n = F.normalAt(this.x, this.z), vh = Math.hypot(this.vx, this.vz);
@@ -589,8 +625,10 @@ export class Runner {
       const turnBy = Math.abs(wrap(next.dir - this.move)), up = Math.max(0, next.ly - gy);
       next.wait = Math.min(0.3, 0.05 + 0.16 * turnBy + 0.06 * up + 0.012 * imp);
       next.ox = this.x; next.oz = this.z;
-      this.v *= 1 - 0.25 * Math.min(1, turnBy);
+      // (read at the pace you came in at; then braked for real as the foot takes the weight and turns it (the stride and
+      // the eye going by what you're really doing), and taken back up by the push)
       this.read(next, this.x, this.z, gy, this.v);
+      this.v *= 0.25 + 0.3 * (1 - Math.min(1, turnBy));
     } else if (imp < 3.3) {
       as = 'light'; this.crouchV += 0.4 + imp * 0.3; this.v *= 0.97;
     } else if (cramped) {
@@ -605,7 +643,12 @@ export class Runner {
     if (this.plan) this.aim = [this.plan.lx, this.plan.ly, this.plan.lz];
     this.prep = this.plan ? 0.6 : 0;
     // (the landing's a foot set down, the hardest: the body sinks onto it and the stride starts again from it)
-    this.contact = this.place(this.x, this.z, this.contact ? -this.contact.side : 1, 'land', 0.08 + 0.03 * Math.min(4, imp), 0.8 + imp * 0.25);
+    // (its stance: a chained one bears the weight until the push off it; the rest by how hard it came down)
+    const dur = this.plan ? Math.max(0.05, this.plan.wait) : 0.08 + 0.03 * Math.min(4, imp);
+    this.contact = this.place(this.x, this.z, this.contact ? -this.contact.side : 1, 'land', dur, 0.8 + imp * 0.25);
+    this.stride = Math.max(1.5, this.stride);
+    this.support(this.contact, Math.sin(this.move), Math.cos(this.move));
+    if (this.plan) this.plan.planted = this.clock;
     this.bodyV = Math.min(this.bodyV, 0) - 0.05 * Math.min(6, imp);
     this.onLand(on, imp, as);
     this.phase = Math.floor(this.phase) + 0.02;

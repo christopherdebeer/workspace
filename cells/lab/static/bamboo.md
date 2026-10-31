@@ -13,8 +13,8 @@ A run through a wild moso bamboo grove on an endless mountainside, drawn as a li
   - **a root or a small stone** is skipped. The steps before it shorten to meet it, and you keep your pace.
   - **a broad low stone**: you gather and hop up onto its crown.
   - **from a crown**, you leap to a foothold on the next if one's in reach: a stone's crown, or a top of the rock. Footholds are found among patches on each crown (its middle and round it, each with room to stand). Each is rated by how far it turns you, how near an easy bound it is, how much room it gives, how much it asks to rise or brake, and how well it sets up what comes after it. So a route goes across and up and down, not only straight on.
-  - **The approach is part of the move.** The landing is read when the move is chosen, often a second or more before the takeoff, and the eye goes toward it as you come. Over the last two strides your steps adjust to meet the takeoff with a footfall, and your pace eases toward what the jump wants: slowing for a short high one, pressing on for a long one. The last foot is planted and the body loads onto it, as deep and as long as the jump asks: a skip's barely, a long rising leap's deep. Then it releases, as hard as it loaded.
-  - **A chained landing** is a real support: the foot bears the weight and turns it toward the next. Running straight on, it's a crisp touch; turning, or rising, it's a longer, deeper load before the next push.
+  - **The approach is part of the move.** The landing is read when the move is chosen, often a second or more before the takeoff. As you come, the eye goes toward it: down to it, and a little to the side if it's a leap to the side. Over the last two strides your steps adjust and your pace eases toward what the jump wants: slowing for a short high one, pressing on for a long one. Then the move's own last foot is planted, short of the takeoff by as far as you're carried over it. The body loads onto that foot and turns on it, through its stance, as deep and as long as the jump asks: a skip's barely, a long rising leap's deep. The takeoff is that same foot's release, when its stance is done; no foot of its own.
+  - **A chained landing** is a real support: the landing foot bears the weight and turns it toward the next, and the next leap is its release. You really slow on it, more for a turn, so the stride and the view go by what you're doing, not a pace you've left behind. The push takes the speed back up. Running straight on, it's a crisp touch; turning, or rising, it's a longer, deeper load. A crown's falling side isn't skimmed over: past where you were aiming and a hand's breadth over it, a foot reaches down onto it.
   - **off an edge**, you step down or leap. That depends on your speed and where you'd come down: the clearest, flattest landing.
   - Turn well off the move's way before its takeoff and it's given up. Your direction wins.
 - **What's underfoot and what's in the way are what's drawn** (`footing.ts`). You stand on a stone's own top, the same lump the renderer draws, turned and scaled as it is. The culms are taken as they really go: leaning, or now and then a young one **bowed right over** by snow, its arc reaching across a trail. You **duck** under one passing at head height. You step over one at your shins. You go round, or squeeze past, one at your hips. Through a gap narrower than your shoulders you **turn them** and lean through. A culm close by brushes you aside with a rustle.
@@ -31,7 +31,7 @@ A run through a wild moso bamboo grove on an endless mountainside, drawn as a li
   - the push before a takeoff;
   - a landing.
   
-  The feet carry the body. It sinks onto each foot as hard as it's met, is pushed up off it (more for a step up), and falls toward the next. Its height goes from foot to foot, so a raised stone lifts you at the step onto it, not before. The weight shifts over the foot that's bearing it. The eye shows all this rather than a set rhythm, and the gaze stays steady.
+  Every landing is a foot set down too, starting its stance as a step's does. The feet carry the body. It sinks onto each foot as hard as it's met, is pushed up off it (more for a step up), and falls toward the next. Its height goes from foot to foot. Down, it drops onto the next foot at once; up, it waits for it, takes the weight where it was and drives up over that foot's stance. A higher footing just ahead gets a foot put up onto it, so a raised stone lifts you by the step onto it, not before. The weight shifts over the foot that's bearing it. The eye shows all this rather than a set rhythm, and the gaze stays steady.
 - **In the air** the stride's rise and fall is gone, but not the speed: the view stays as wide as your pace through the air. The landing is a foot set down, the hardest, and the stride starts again from it.
 - **The ground sets the pace**: uphill slows you, downhill quickens you.
 - **It feels its speed**: the view widens the faster you go, on the ground or through the air; you lean into a turn.
@@ -86,6 +86,9 @@ In three minutes of running the run covers about a kilometre at a mean of 4.8 to
 - every move's landing is read a quarter second or more before its takeoff;
 - the last plant loads as deep as the move asks (a skip's shallow, a hop's or leap's deeper);
 - a chained landing is a real, short support before the next push;
+- every landing starts a stance;
+- every takeoff but a drop is the release of the foot planted for it, after it's loaded (one push foot per move, never one of its own at the takeoff);
+- up a step the body rises with the foot set on it, not before;
 - terraces are met as steps up;
 - on open ground the body rises and falls over each foot.
 

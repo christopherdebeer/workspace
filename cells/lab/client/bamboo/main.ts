@@ -49,7 +49,7 @@ let t = Number(params.get('t') ?? 0);
 
 // ─── you, and the land round you, built a chunk at a time as you go ───
 const me = new Runner(world);
-let held = false, pitch = -0.06, roll = 0, airK = 0, aimK = 0;
+let held = false, pitch = -0.06, roll = 0, airK = 0, aimK = 0, leadK = 0;
 const keys = new Set<string>();
 renderer.allStrokes = params.get('strokes') === 'all';
 renderer.bare = params.get('grove') === '0';
@@ -400,7 +400,12 @@ function frame(now: number) {
   if (refName === 'gust') { gust.dir = [-0.9, -0.43]; gust.front = eye[0] * gust.dir[0] + eye[2] * gust.dir[1] + 6; gust.strength = 1; }
   else if (!still) stepGust(dt, eye);
   // (looking: where you're heading; tipped a little with the ground ahead)
-  const yaw = me.heading + me.shoulder * 0.2, gAhead = me.groundAt(me.x + Math.sin(yaw) * 6, me.z + Math.cos(yaw) * 6) - me.y;
+  // (and as you come to a move, a restrained turn of the eye toward where it lands, more as the takeoff comes, and in the
+  // air: a leap to the side is seen coming, not only felt)
+  let lead = 0;
+  if (me.aim) { lead = Math.atan2(me.aim[0] - me.x, me.aim[2] - me.z) - me.heading; while (lead > Math.PI) lead -= 2 * Math.PI; while (lead < -Math.PI) lead += 2 * Math.PI; lead = Math.max(-0.6, Math.min(0.6, lead)) * 0.4 * Math.max(me.prep, airK); }
+  leadK += (lead - leadK) * (1 - Math.exp(-dt * 6));
+  const yaw = me.heading + me.shoulder * 0.2 + leadK, gAhead = me.groundAt(me.x + Math.sin(yaw) * 6, me.z + Math.cos(yaw) * 6) - me.y;
   let p = pitch + Math.atan2(gAhead, 6) * 0.5 - me.pitchDown;
   // (in the air, the eye goes a little toward where you'll come down)
   if (me.aim) { const ad = Math.max(0.5, Math.hypot(me.aim[0] - eye[0], me.aim[2] - eye[2])); aimK += (Math.atan2(me.aim[1] + 0.3 - eye[1], ad) - aimK) * Math.min(1, dt * 6); }
