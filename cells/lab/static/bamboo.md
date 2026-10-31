@@ -12,7 +12,9 @@ A run through a wild moso bamboo grove on an endless mountainside, drawn as a li
 - **It sees what's coming and commits to a move**, a second or two ahead, takeoff to landing (`runner.ts`):
   - **a root or a small stone** is skipped. The steps before it shorten to meet it, and you keep your pace.
   - **a broad low stone**: you gather and hop up onto its crown.
-  - **from a crown**, you leap to the next stone if one's in reach. Its takeoff is already in mind as you land, so it's a quick plant and away.
+  - **from a crown**, you leap to a foothold on the next if one's in reach: a stone's crown, or a top of the rock. Footholds are found among patches on each crown (its middle and round it, each with room to stand). Each is rated by how far it turns you, how near an easy bound it is, how much room it gives, how much it asks to rise or brake, and how well it sets up what comes after it. So a route goes across and up and down, not only straight on.
+  - **The approach is part of the move.** The landing is read when the move is chosen, often a second or more before the takeoff, and the eye goes toward it as you come. Over the last two strides your steps adjust to meet the takeoff with a footfall, and your pace eases toward what the jump wants: slowing for a short high one, pressing on for a long one. The last foot is planted and the body loads onto it, as deep and as long as the jump asks: a skip's barely, a long rising leap's deep. Then it releases, as hard as it loaded.
+  - **A chained landing** is a real support: the foot bears the weight and turns it toward the next. Running straight on, it's a crisp touch; turning, or rising, it's a longer, deeper load before the next push.
   - **off an edge**, you step down or leap. That depends on your speed and where you'd come down: the clearest, flattest landing.
   - Turn well off the move's way before its takeoff and it's given up. Your direction wins.
 - **What's underfoot and what's in the way are what's drawn** (`footing.ts`). You stand on a stone's own top, the same lump the renderer draws, turned and scaled as it is. The culms are taken as they really go: leaning, or now and then a young one **bowed right over** by snow, its arc reaching across a trail. You **duck** under one passing at head height. You step over one at your shins. You go round, or squeeze past, one at your hips. Through a gap narrower than your shoulders you **turn them** and lean through. A culm close by brushes you aside with a rustle.
@@ -21,10 +23,27 @@ A run through a wild moso bamboo grove on an endless mountainside, drawn as a li
   - **A heavy one** sinks, pitches you forward and costs speed, then a few short steps.
   - **Onto a stone, or into a tight place**, you brace and stagger.
   - **Hard and fast onto a clear run down**, you go down into a low roll, the horizon held, and come up running.
-- **In the air** the stride's bob lets go and the view settles, drifting a little toward where you'll come down.
+- **Every step is a foot set down** (`runner.ts` `Contact`). It has a place a little ahead and to its side, the height and slope there, what it's on, how long it bears the weight and how hard it's met. Each is met in its own way:
+  - a plain plant, or soft earth;
+  - a step up onto something higher;
+  - a check, braking downhill or slowing;
+  - a quick touch on a stone;
+  - the push before a takeoff;
+  - a landing.
+  
+  The feet carry the body. It sinks onto each foot as hard as it's met, is pushed up off it (more for a step up), and falls toward the next. Its height goes from foot to foot, so a raised stone lifts you at the step onto it, not before. The weight shifts over the foot that's bearing it. The eye shows all this rather than a set rhythm, and the gaze stays steady.
+- **In the air** the stride's rise and fall is gone, but not the speed: the view stays as wide as your pace through the air. The landing is a foot set down, the hardest, and the stride starts again from it.
 - **The ground sets the pace**: uphill slows you, downhill quickens you.
-- **It feels its speed**: the head rises and falls with each stride and sways a little; you lean into a turn; the view widens the faster you go.
-- **The sound comes with your first touch**: your footfalls (litter and earth; stone on a stair or a boulder; a knock on a root), a landing's thud (heavier the harder) with its footing's sound over it, a rustle as you brush a culm, the air past your ears rising with your speed, and the wind in the leaves when a gust comes through.
+- **It feels its speed**: the view widens the faster you go, on the ground or through the air; you lean into a turn.
+- **The sound comes with your first touch**. Your footfalls are the same contacts, heard as they're met:
+  - soft earth is a low knock and the litter shifting;
+  - a step up is firm, with a scuff held as the weight goes up onto it;
+  - a check is a heavier attack and a short scrape;
+  - a quick stone touch is dry, gone at once;
+  - the push before a takeoff is firm, with a scuff as it leaves;
+  - stone on a stair or boulder is crisp, and a root a knock.
+  
+  Over these you hear a landing's thud (heavier the harder) with its footing's sound over it, a rustle as you brush a culm, the air past your ears rising with your speed, and the wind in the leaves when a gust comes through.
 
 ## The chase
 
@@ -63,7 +82,14 @@ Mostly the grove. But now and then:
 - **a cliff band**: here and there the rock breaks through and the land steps up five to nine metres along a winding rim. A rock face you can't climb (the run turns you along it, unless a trail's stair takes you up). Off its top, a drop of up to three metres you step or leap down, and land as hard as it was. A bigger one stops you at the rim, with the valley beyond.
 - **a gust**: every so often one comes through the grove, and you see the tops bend over before it reaches you.
 
-In three minutes of running the run covers about a kilometre at a mean of 4.8 to 6 m/s (the mountain's steep), on a trail for a few per cent of it (`node cells/lab/devtools/bamboo-run.mjs [seconds] [seed]` checks that it never runs through a culm, never stalls for long, and keeps up its pace, and counts its moves and landings). It runs in fixed steps of 1/120 s, so the pace and the landings are the same however fast the frames come. `node cells/lab/devtools/bamboo-course.mjs` runs it straight at things laid by hand: a root and a stone, a broad boulder, a chain of stones, three drops (a moderate one, a big one onto open ground, a big one into culms), a bowed culm and a narrow gap. It checks that each one changes the body, as the list above says, and that your way is still yours at the end.
+In three minutes of running the run covers about a kilometre at a mean of 4.8 to 6 m/s (the mountain's steep), on a trail for a few per cent of it (`node cells/lab/devtools/bamboo-run.mjs [seconds] [seed]` checks that it never runs through a culm, never stalls for long, and keeps up its pace, and counts its moves and landings). It runs in fixed steps of 1/120 s, so the pace and the landings are the same however fast the frames come. `node cells/lab/devtools/bamboo-course.mjs` runs it straight at things laid by hand: a root and a stone, a broad boulder, a chain of stones, three drops (a moderate one, a big one onto open ground, a big one into culms), a bowed culm, a narrow gap, terraces stepping up and a diagonal chain of offset stones. It checks that each one changes the body, as the list above says, and that your way is still yours at the end. It checks the feet too:
+- every move's landing is read a quarter second or more before its takeoff;
+- the last plant loads as deep as the move asks (a skip's shallow, a hop's or leap's deeper);
+- a chained landing is a real, short support before the next push;
+- terraces are met as steps up;
+- on open ground the body rises and falls over each foot.
+
+It prints, for each course, how early each landing was read, each load against its demand, each support, the body's travel and the efforts its feet were met with.
 
 ## The mountain
 

@@ -9,7 +9,12 @@
 //   drop, tight      hard into culms close beyond: a brace, never a roll
 //   bowed culm       ducked under
 //   narrow gap       shoulders turned through it
-// and in every one, the way you were going still yours at the end (within a few metres, a few degrees).
+//   steps up         terraces underfoot: met as steps up, each a foot planted higher
+//   diagonal chain   stones offset to the side: footholds found across, not only straight on
+// and in every one, the way you were going still yours at the end (within a few metres, a few degrees). And of the feet:
+// every move's landing read well before its takeoff (a quarter second or more), the last plant loaded as deep as the move
+// asks (a skip's shallow, a hop's deeper), a chained landing a real if short support before the next push, and on open
+// ground the body rising and falling over each foot.
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -46,17 +51,25 @@ const COURSES = {
   'drop, tight': { land: { ground: cliff(15, 2.6), culms: [...row(21.5, 0.9), ...row(23.5, 0.9)] }, want: (m) => m.landings.some((l) => l.as === 'brace') && !m.landings.some((l) => l.as === 'roll') },
   'bowed culm': { land: { culms: [{ x: -5.2, z: 14, r: 0.035, h: 7, lx: 0.3, lz: 0, bend: 1.5 + 2.6 }] }, want: (m) => m.maxDuck > 0.2 },
   'narrow gap': { land: { culms: row(14, 0.86) }, want: (m) => m.maxShoulder > 0.5 && m.through },
+  'steps up': { land: { ground: (x, z) => (z < 10 ? 0 : Math.min(8, Math.floor((z - 10) / 1.6)) * 0.14) }, want: (m) => (m.efforts.up ?? 0) >= 3 },
+  'diagonal chain': { land: { stones: [[0, 12], [1.1, 14.4], [0.1, 16.8], [1.2, 19.2]].map(([x, z]) => ({ x, z, r: 0.8, flat: 0.8, y: -0.2 })) }, want: (m) => m.stoneLandings >= 2 },
 };
 
 let fails = 0;
 for (const [name, c] of Object.entries(COURSES)) {
   const land = course(c.land), me = new B.Runner(land, 40);
   me.stream(0, 0, 50); me.y = me.standAt(0, 0); me.v = B.LOPE;
-  const m = { acts: {}, landings: [], minV: 99, minVAfter: 99, vBefore: 0, onStone: 0, stoneLandings: 0, anticipated: 0, maxDuck: 0, maxShoulder: 0, through: false, shortened: false, closest: 9 };
+  const m = { efforts: {}, leads: [], loads: [], supports: [], bob: [9, -9], lastLand: -1, acts: {}, landings: [], minV: 99, minVAfter: 99, vBefore: 0, onStone: 0, stoneLandings: 0, anticipated: 0, maxDuck: 0, maxShoulder: 0, through: false, shortened: false, closest: 9 };
   const falls = [];
   me.onStep = () => falls.push(me.z);
-  me.onAct = (a) => { m.acts[a] = (m.acts[a] ?? 0) + 1; if (!m.vBefore) m.vBefore = me.v; const f = falls.slice(-3); if (f.length === 3 && (a === 'skip' || a === 'hop') && f[2] - f[1] < 2.2 * 0.95) m.shortened = true; };
-  me.onLand = (on, imp, as) => { m.landings.push({ on, imp: +imp.toFixed(1), as }); if (on === 'stone') { m.stoneLandings++; if (me.plan) m.anticipated++; } };
+  me.onContact = (c) => { m.efforts[c.effort] = (m.efforts[c.effort] ?? 0) + 1; };
+  me.onAct = (a) => {
+    // (how early its landing was read, how deep the last plant loaded for how much it asked; after a chained landing, how
+    // long the foot bore the weight before this push)
+    const p = me.plan; if (p) { m.leads.push(me.clock - (p.read ?? me.clock)); m.loads.push({ a, demand: p.demand ?? 0, crouch: me.crouch }); }
+    if (m.lastLand >= 0) { m.supports.push(me.clock - m.lastLand); m.lastLand = -1; }
+    m.acts[a] = (m.acts[a] ?? 0) + 1; if (!m.vBefore) m.vBefore = me.v; const f = falls.slice(-3); if (f.length === 3 && (a === 'skip' || a === 'hop') && f[2] - f[1] < 2.2 * 0.95) m.shortened = true; };
+  me.onLand = (on, imp, as) => { if (me.plan) m.lastLand = me.clock; m.landings.push({ on, imp: +imp.toFixed(1), as }); if (on === 'stone') { m.stoneLandings++; if (me.plan) m.anticipated++; } };
   const dt = 1 / 60;
   let landed = false, t = 0;
   for (; t < 9 && me.z < 40; t += dt) {
@@ -65,15 +78,23 @@ for (const [name, c] of Object.entries(COURSES)) {
     if (m.landings.length) landed = true;
     if (landed && !me.air) m.minVAfter = Math.min(m.minVAfter, me.v);
     if (!me.air && me.under === 'stone') m.onStone += dt;
+    if (!me.air && !me.plan && me.v > 5 && t > 1) { m.bob[0] = Math.min(m.bob[0], me.bodyY); m.bob[1] = Math.max(m.bob[1], me.bodyY); }
     m.maxDuck = Math.max(m.maxDuck, me.duck); m.maxShoulder = Math.max(m.maxShoulder, Math.abs(me.shoulder));
     if (me.z > 14.5 && Math.abs(me.x) < 1) m.through = true;
     for (const p of me.feet.posts(me.x, me.z, 1.2)) if (B.meets(p, B.EYE + 0.16 - me.duck) === 'block' && !me.air) m.closest = Math.min(m.closest, Math.hypot(p.x - me.x, p.z - me.z) - p.r);
   }
   // (the way kept: still going on the way you set out, not turned off it or stopped)
   const kept = Math.abs(me.x) < 3 && Math.abs(me.heading) < 0.35 && me.z > 25 && m.closest > 0.15;
-  const ok = c.want(m) && kept;
+  // (the feet: landings read early; loads by what's asked; chained supports real but short; the body moving over the feet)
+  const early = m.leads.every((l) => l >= 0.25);
+  const skipLoad = Math.max(0, ...m.loads.filter((l) => l.a === 'skip').map((l) => l.crouch)), bigLoad = Math.max(0, ...m.loads.filter((l) => l.a !== 'skip' && l.a !== 'drop').map((l) => l.crouch));
+  const loaded = skipLoad < 0.09 && (!m.loads.some((l) => l.a === 'hop' || l.a === 'leap') || bigLoad > skipLoad + 0.02);
+  const supported = m.supports.every((d) => d >= 0.04 && d <= 0.4);
+  const bobbed = m.bob[1] - m.bob[0] > 0.015 && m.bob[1] - m.bob[0] < 0.15;
+  const ok = c.want(m) && kept && early && loaded && supported && (m.bob[0] === 9 || bobbed);
   if (!ok) fails++;
-  console.log(`${ok ? 'ok  ' : 'FAIL'} ${name.padEnd(12)} moves ${JSON.stringify(m.acts)} landings ${JSON.stringify(m.landings.map((l) => `${l.as}@${l.on}:${l.imp}`))} duck ${m.maxDuck.toFixed(2)} shoulder ${m.maxShoulder.toFixed(2)} minV ${m.minV === 99 ? '-' : m.minV.toFixed(1)} end x ${me.x.toFixed(1)} z ${me.z.toFixed(1)} closest ${m.closest.toFixed(2)}`);
+  console.log(`${ok ? 'ok  ' : 'FAIL'} ${name.padEnd(14)} read ${m.leads.map((l) => l.toFixed(2)).join(',') || '-'} s · load ${m.loads.map((l) => `${l.a}:${l.crouch.toFixed(2)}/${l.demand.toFixed(1)}`).join(',') || '-'} · support ${m.supports.map((d) => d.toFixed(2)).join(',') || '-'} · bob ${m.bob[0] === 9 ? '-' : (m.bob[1] - m.bob[0]).toFixed(3)} · feet ${JSON.stringify(m.efforts)}`);
+  console.log(`     ${''.padEnd(14)} moves ${JSON.stringify(m.acts)} landings ${JSON.stringify(m.landings.map((l) => `${l.as}@${l.on}:${l.imp}`))} duck ${m.maxDuck.toFixed(2)} shoulder ${m.maxShoulder.toFixed(2)} minV ${m.minV === 99 ? '-' : m.minV.toFixed(1)} end x ${me.x.toFixed(1)} z ${me.z.toFixed(1)} closest ${m.closest.toFixed(2)}`);
 }
 console.log(fails ? `FAIL ${fails}` : 'ok');
 process.exit(fails ? 1 : 0);

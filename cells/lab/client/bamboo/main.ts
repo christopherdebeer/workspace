@@ -14,7 +14,7 @@
  * (layers.ts); `grove=0` (the land alone), `clay` (the forms alone), `strokes=all`.
  */
 import { World, ridges, CHUNK, type Trail, type Chunk } from './world';
-import { Runner, LOPE, EYE } from './runner';
+import { Runner, LOPE, EYE, type Contact } from './runner';
 import type { Footing } from './footing';
 import { strokes } from './strokes';
 import { Renderer, type Frame } from './render';
@@ -110,6 +110,20 @@ const sound = (() => {
       const k = Math.min(1, impact / 6);
       this.burst(110 + Math.random() * 30, 0.7, 0.12 + 0.3 * k, 0.008, 0.16 + 0.2 * k, 'lowpass');
       this.step(on, 1 + k * 1.5);
+    },
+    /** a foot set down (runner.ts), heard as it's met: what it's on, and how: a plain plant; soft earth (a lower knock
+     * and the litter shifting); a step up (firm, and a scuff held as the weight goes up onto it); a check (a heavier
+     * attack and a short scrape); a quick touch on a stone (dry, gone at once); the push before a takeoff (firm, and a
+     * scuff as it leaves) */
+    contact(c: Contact) {
+      if (c.effort === 'land') return;
+      const hardOn = c.on === 'stone' || c.on === 'step', k = Math.min(1.6, c.load);
+      const r = () => Math.random();
+      if (c.effort === 'touch') { this.burst(2300 + r() * 500, 2.6, 0.07 * k, 0.003, 0.035); return; }
+      if (c.effort === 'soft') { this.burst(620 + r() * 260, 0.8, 0.09 * k, 0.008, 0.12); this.burst(3000 + r() * 900, 0.5, 0.025 * k, 0.02, 0.13); return; }
+      this.step(c.on, 0.5 + 0.5 * k * (c.effort === 'check' ? 1.3 : 1));
+      if (c.effort === 'check') { this.burst(140 + r() * 30, 0.7, 0.05 * k, 0.006, 0.09, 'lowpass'); this.burst(hardOn ? 2600 : 1800, 1.2, 0.03 * k, 0.01, 0.08); }
+      if (c.effort === 'up' || c.effort === 'push') this.burst(hardOn ? 2400 + r() * 300 : 1500 + r() * 300, 0.9, 0.035 * k, 0.03, c.effort === 'push' ? 0.12 : 0.18);
     },
     /** a culm brushed past: a rustle of its leaves */
     brush(k: number) { this.burst(3800 + Math.random() * 1500, 0.6, 0.02 + 0.05 * k, 0.03, 0.3); },
@@ -327,7 +341,7 @@ const cam = params.get('cam')?.split(',').map(Number);
 const spot: Spot | null = cam && cam.length >= 4 && cam.every(Number.isFinite) ? { x: cam[0], z: cam[1], heading: cam[2], pitch: cam[3], v: cam[4] } : refName ? findSpots()[refName] ?? null : null;
 if (spot) { me.x = spot.x; me.z = spot.z; me.heading = me.move = spot.heading; pitch = spot.pitch; me.v = spot.v ?? 0; me.phase = 0.35; }
 stream(400);
-me.onStep = (on, hard) => sound.step(on, hard);
+me.onContact = (c) => sound.contact(c);
 me.onLand = (on, impact) => { sound.land(on, impact); yourNoise = Math.max(yourNoise, Math.min(1, impact / 5)); };
 me.onBrush = (_side, k) => sound.brush(k);
 me.y = me.groundAt(me.x, me.z);
@@ -378,9 +392,11 @@ function frame(now: number) {
   // (the body, as the eye has it: the stride's bob and sway, let go of in the air and settling; sunk as it gathers, lands,
   // ducks, rolls; pushed aside by a brush; leaning into a gap shoulder first)
   airK += ((me.air ? 1 : 0) - airK) * (1 - Math.exp(-dt * (me.air ? 8 : 5)));
-  const s = Math.min(1, me.v / LOPE) * (1 - airK), bob = Math.abs(Math.sin(me.phase * Math.PI)) * 0.065 * s, sway = Math.sin(me.phase * Math.PI) * 0.035 * s;
-  const side = [Math.cos(me.move), -Math.sin(me.move)], lat = sway + me.nudge + me.shoulder * 0.06;
-  const eye: [number, number, number] = [me.x + side[0] * lat, me.y + EYE + bob - me.low, me.z + side[1] * lat];
+  // (the pace you're travelling at (on the ground or carried through the air) is what the eye's width says; the stride's
+  // rise and fall and the weight's shift over each foot are the feet's own (runner.ts), gone in the air with them)
+  const travel = Math.min(1, (me.air ? Math.hypot(me.vx, me.vz) : me.v) / LOPE), s = travel * (1 - airK);
+  const side = [Math.cos(me.move), -Math.sin(me.move)], lat = me.weight * 0.028 * s + me.nudge + me.shoulder * 0.06;
+  const eye: [number, number, number] = [me.x + side[0] * lat, me.y + EYE + me.bodyY - me.low, me.z + side[1] * lat];
   if (refName === 'gust') { gust.dir = [-0.9, -0.43]; gust.front = eye[0] * gust.dir[0] + eye[2] * gust.dir[1] + 6; gust.strength = 1; }
   else if (!still) stepGust(dt, eye);
   // (looking: where you're heading; tipped a little with the ground ahead)
@@ -388,11 +404,12 @@ function frame(now: number) {
   let p = pitch + Math.atan2(gAhead, 6) * 0.5 - me.pitchDown;
   // (in the air, the eye goes a little toward where you'll come down)
   if (me.aim) { const ad = Math.max(0.5, Math.hypot(me.aim[0] - eye[0], me.aim[2] - eye[2])); aimK += (Math.atan2(me.aim[1] + 0.3 - eye[1], ad) - aimK) * Math.min(1, dt * 6); }
-  p += (aimK - p) * 0.4 * airK;
+  // (and while you approach a move, read from afar, toward where you'll come down, more as the takeoff comes)
+  p += (aimK - p) * 0.4 * Math.max(airK, me.prep * 0.75);
   const look: [number, number, number] = [eye[0] + Math.sin(yaw) * Math.cos(p), eye[1] + Math.sin(p), eye[2] + Math.cos(yaw) * Math.cos(p)];
-  roll += (-me.turn * 0.5 * s + Math.sin(me.phase * Math.PI) * 0.012 * s + me.shoulder * 0.06 + (me.rollT >= 0 ? 0.07 * Math.sin(2 * Math.PI * me.rollT) : 0) - roll) * (1 - Math.exp(-dt * 6));
+  roll += (-me.turn * 0.5 * s + me.weight * 0.01 * s + me.shoulder * 0.06 + (me.rollT >= 0 ? 0.07 * Math.sin(2 * Math.PI * me.rollT) : 0) - roll) * (1 - Math.exp(-dt * 6));
   const portrait = innerHeight > innerWidth, base = Number(params.get('fov')) || (portrait ? 74 : 60);
-  const fov = (base + 12 * s) * Math.PI / 180;
+  const fov = (base + 12 * travel) * Math.PI / 180;
   // (the focus: where you're going and looking, the page coming in round it)
   const target = focusAt(eye, yaw, p);
   focus = still || focus === 0 ? target : focus + (target - focus) * Math.min(1, dt * 0.8);

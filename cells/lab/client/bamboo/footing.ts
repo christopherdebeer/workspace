@@ -84,6 +84,16 @@ export class Footings {
     }
     return { y, kind, stone };
   }
+  /** what could be stood on near (x, z), above the ground: the stones' crowns and the rock's tops, each its middle and
+   * about how far its top reaches (for runner.ts to look for footholds on) */
+  perchesNear(x: number, z: number, r: number): { x: number; z: number; r: number }[] {
+    const out: { x: number; z: number; r: number }[] = [];
+    for (const c of this.near(x, z)) {
+      for (const s of c.stones) if (Math.abs(s.x - x) < r + s.r && Math.abs(s.z - z) < r + s.r && s.r > 0.3) out.push({ x: s.x, z: s.z, r: s.r * 0.9 });
+      if (c.rocks) for (const b of c.rocks) if (b.kind !== 'fragment' && Math.abs(b.c[0] - x) < r + b.r && Math.abs(b.c[2] - z) < r + b.r) out.push({ x: b.c[0], z: b.c[2], r: Math.min(b.h[0], b.h[2]) * 0.9 });
+    }
+    return out;
+  }
   /** the slope underfoot, as a normal (from what you'd stand on round about) */
   normalAt(x: number, z: number, e = 0.15): [number, number, number] {
     const gx = (this.at(x + e, z).y - this.at(x - e, z).y) / (2 * e), gz = (this.at(x, z + e).y - this.at(x, z - e).y) / (2 * e), l = Math.hypot(gx, 1, gz);
