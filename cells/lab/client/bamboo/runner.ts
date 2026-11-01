@@ -168,7 +168,7 @@ export class Runner {
         const p = along ?? this.pick(this.best);
         // (the move you asked for is taken if its own way's clear; a blocked continuation is dropped, to be looked for again
         // from where it lands, never a reason to refuse the first)
-        this.plan = p && this.clearWay(this.x, this.z, p.lx, p.lz) ? p : null;
+        this.plan = p && this.clearWay(this.x, this.z, p.lx, p.lz) && (p.kind === 'climb' || this.flightClear(p.ox, this.feet.at(p.ox, p.oz).y, p.oz, p.lx, p.ly, p.lz, p.clear)) ? p : null;
         if (this.plan?.next && !this.clearWay(this.plan.lx, this.plan.lz, this.plan.next.lx, this.plan.next.lz)) this.plan.next = null;
         if (this.plan) this.read(this.plan, this.plan.ox, this.plan.oz, this.y, this.v);
       }
@@ -609,11 +609,39 @@ export class Runner {
   /** the next foothold on from a crown at (x, z): of the patches on the crowns round, the one that's best reached and
    * best left (the best departure from it on to another, or onto open ground ahead) */
   private chainFrom(x: number, z: number, y: number, dir: number, _not: unknown = null, ahead = 1): Plan | null {
-    const F = this.feet, v = Math.max(3.5, this.v), cands = this.patches(x, z, 4.6);
-    // (and what's there to land on along the way you're going (and a little either side), looked for, not only the pads
-    // set out on each block: a level spot within a bound's reach, with room to stand)
+    const F = this.feet, v = Math.max(3.5, this.v), cands = this.contactsFrom(x, z, y, dir, v);
+    // (each rated by how it's reached and how it's left: the best departure from it on to another, or onto open ground ahead)
+    const scored: { f: (typeof cands)[number]; s: number; d2: number }[] = [];
+    for (const f of cands) {
+      const s1 = this.rate(x, z, y, dir, v, f);
+      if (s1 === null) continue;
+      const d2 = Math.atan2(f.x - x, f.z - z);
+      let s2 = 9;
+      for (const g of this.patches(f.x, f.z, 4.6)) { const r = this.rate(f.x, f.z, f.y, d2, v, g); if (r !== null) s2 = Math.min(s2, r); }
+      const gx = f.x + Math.sin(d2) * 1.6, gz = f.z + Math.cos(d2) * 1.6, gd = f.y - F.at(gx, gz).y;
+      if (gd > -0.3 && gd < 1.8) s2 = Math.min(s2, 1.2 + gd * 0.4);
+      // (and what it gives the landing: room to run on along the way, width across it)
+      const sp = this.supportAt(f.x, f.z, f.y, d2), held = -Math.min(1.5, sp.runout) * 0.25 - Math.min(0.9, sp.width) * 0.3;
+      scored.push({ f, s: s1 + 0.5 * s2 + held, d2 });
+    }
+    scored.sort((a, b) => a.s - b.s);
+    // (the best whose flight a body clears: not through a culm, nor through a lip or an overhang on the way)
+    let best: Plan | null = null;
+    for (const { f, d2 } of scored.slice(0, 6)) {
+      if (!this.clearWay(x, z, f.x, f.z) || !this.flightClear(x, y, z, f.x, f.y, f.z, 0)) continue;
+      best = { kind: f.y - y > 0.45 ? 'hop' : 'leap', dir: d2, ox: x, oz: z, lx: f.x, lz: f.z, ly: f.y, clear: 0, next: null, wait: 0.06 };
+      break;
+    }
+    // (and the one after it, already in mind as you land)
+    if (best && ahead > 0) best.next = this.chainFrom(best.lx, best.lz, best.ly, best.dir, null, ahead - 1);
+    return best;
+  }
+  /** the contacts within a bound's reach from (x, y, z) going `dir`: the pads and crowns round, and what's found to land on
+   * in a cone about your way (a level spot with room to stand), all as one list of surfaces to choose among */
+  private contactsFrom(x: number, z: number, y: number, dir: number, v: number) {
+    const F = this.feet, cands = this.patches(x, z, 4.6), reach = Math.min(4.4, 2.3 + 0.3 * v);
     for (const a of [0, -0.3, 0.3]) {
-      const ex = Math.sin(dir + a), ez = Math.cos(dir + a), reach = Math.min(4.4, 2.3 + 0.3 * v);
+      const ex = Math.sin(dir + a), ez = Math.cos(dir + a);
       for (let d = 1; d <= reach; d += 0.3) {
         const px = x + ex * d, pz = z + ez * d, u = F.at(px, pz);
         if (u.kind !== 'stone' || u.y - y > 1.1 || u.y - y < -1.6 || F.normalAt(px, pz, 0.2)[1] < 0.8) continue;
@@ -622,22 +650,18 @@ export class Runner {
         if (room >= 3) cands.push({ x: px, z: pz, y: u.y, room });
       }
     }
-    let best: Plan | null = null, bestS = 1e9;
-    for (const f of cands) {
-      const s1 = this.rate(x, z, y, dir, v, f);
-      if (s1 === null) continue;
-      const d2 = Math.atan2(f.x - x, f.z - z);
-      // (and how it sets up what's after: the best foothold on from it, or the ground ahead clear and not far below)
-      let s2 = 9;
-      for (const g of this.patches(f.x, f.z, 4.6)) { const r = this.rate(f.x, f.z, f.y, d2, v, g); if (r !== null) s2 = Math.min(s2, r); }
-      const gx = f.x + Math.sin(d2) * 1.6, gz = f.z + Math.cos(d2) * 1.6, gd = f.y - F.at(gx, gz).y;
-      if (gd > -0.3 && gd < 1.8) s2 = Math.min(s2, 1.2 + gd * 0.4);
-      const sc = s1 + 0.5 * s2;
-      if (sc < bestS) { bestS = sc; best = { kind: f.y - y > 0.45 ? 'hop' : 'leap', dir: d2, ox: x, oz: z, lx: f.x, lz: f.z, ly: f.y, clear: 0, next: null, wait: 0.06 }; }
+    return cands;
+  }
+  /** whether a body's flight from a to b (rising to `top` if it must) clears the rock: the arc sampled, its line at the
+   * shins and at the chest tested against the rock's faces (so a lip in the way, or an overhang over it, refuses it) */
+  private flightClear(ax: number, ay: number, az: number, bx: number, by: number, bz: number, top: number) {
+    const L = Math.hypot(bx - ax, bz - az), n = Math.max(3, Math.ceil(L / 0.6)), h = Math.max(0.2 + L * 0.06, Math.max(ay, by, top) + 0.2 - (ay + by) / 2);
+    const pt = (t: number, up: number): [number, number, number] => [ax + (bx - ax) * t, ay + (by - ay) * t + 4 * t * (1 - t) * h + up, az + (bz - az) * t];
+    for (let k = 0; k < n; k++) {
+      const t0 = k / n, t1 = (k + 1) / n;
+      for (const up of [0.35, 1.25]) if (this.feet.rockBetween(pt(t0, up), pt(t1, up))) return false;
     }
-    // (and the one after it, already in mind as you land)
-    if (best && ahead > 0) best.next = this.chainFrom(best.lx, best.lz, best.ly, best.dir, null, ahead - 1);
-    return best;
+    return true;
   }
   /** where a leap from (x, y, z) moving (vx, vy, vz) comes down */
   private arc(x: number, z: number, y: number, vx: number, vz: number, vy: number): [number, number, number] | null {
@@ -790,7 +814,7 @@ export class Runner {
       next.dir = Math.atan2(next.lx - this.x, next.lz - this.z);
       // (a chain may zig either side of your line; it's yours to change your mind in the air, not its to wander off it)
       const turned = Math.abs(wrap(this.heading - this.headTake)) > 0.35;
-      if (turned || d < 0.6 || d > 4.6 || Math.abs(wrap(this.heading - next.dir)) > 1.05 || Math.abs(next.ly - gy) > 1.6 || !this.clearWay(this.x, this.z, next.lx, next.lz)) next = null;
+      if (turned || d < 0.6 || d > 4.6 || Math.abs(wrap(this.heading - next.dir)) > 1.05 || Math.abs(next.ly - gy) > 1.6 || !this.clearWay(this.x, this.z, next.lx, next.lz) || !this.flightClear(this.x, gy, this.z, next.lx, next.ly, next.lz, 0)) next = null;
       else { next.chained = true; next.intent = this.headTake; }
     }
     // (let go: no next, whatever was in mind; settle onto this one. Still going, but turned off the next: what's on along
