@@ -277,6 +277,12 @@ export function strokes(world: World, c: Chunk): Float32Array {
     const r = rng(s, c.ci, c.cj, 79);
     const lift = (p: number[], b: Block, out_ = 0.03): V3 => [p[0] + b.ax[2][0] * out_, p[1] + 0.025, p[2] + b.ax[2][2] * out_];
     const along = (a: number[], b: number[], n: number): V3[] => Array.from({ length: n + 1 }, (_, k) => [a[0] + ((b[0] - a[0]) * k) / n, a[1] + ((b[1] - a[1]) * k) / n, a[2] + ((b[2] - a[2]) * k) / n] as V3);
+    // (which lines are drawn is decided by the structure, never by chance: what a line explains about the mass. Chance
+    // only varies how each is laid, its breaks, its length and its weight)
+    const around: Block[] = [];
+    for (let a = -1; a <= 1; a++) for (let d = -1; d <= 1; d++) around.push(...(a || d ? world.rocks(c.ci + a, c.cj + d) : c.rocks));
+    const beside = (b: Block, x: number, z: number, m: number) => around.find((o) => o !== b && Math.abs(o.c[0] - x) < o.r + 1 && Math.abs(o.c[2] - z) < o.r + 1 && covers(o, x, z, m));
+    const outward = (b: Block, x: number, z: number): [number, number] => { const dx = x - b.c[0], dz = z - b.c[2], l = Math.hypot(dx, dz) || 1; return [dx / l, dz / l]; };
     for (const b of c.rocks) {
       const crest = b.role === 'crest' || b.role === 'outcrop' || b.role === 'back', frag = b.kind === 'fragment';
       for (const e of b.E) {
@@ -284,8 +290,14 @@ export function strokes(world: World, c: Chunk): Float32Array {
           // (the top's front edge: a crest firm and held over the colour; a ledge's lip a little less; a fragment's light)
           broken(out, along(e.a, e.b, 6).map((p) => lift(p, b)), r, crest ? [2.5, 6] : [1.5, 4], [0.15, 0.5], frag ? 0.05 : crest ? 0.1 : 0.085, FAM.rim, () => (frag ? 0.45 : crest ? 0.88 : 0.75), frag ? 0.5 : crest ? 0.95 : 0.85);
         } else if (e.kind === 'side') {
-          // (most of a block's other edges left quiet: a few, where the drawing wants them)
-          if (!frag && r() < 0.3) broken(out, along(e.a, e.b, 5).map((p) => lift(p, b, 0)), r, [1, 2.5], [0.3, 0.9], 0.055, FAM.rim, () => 0.45, 0.45);
+          // (a top's side: drawn where it says something about the mass: where the mass ends (nothing beside it: its
+          // silhouette), or where its top steps up or down from the one beside it; never between two level tops,
+          // which is only how it was built)
+          if (frag) continue;
+          const mx = (e.a[0] + e.b[0]) / 2, mz = (e.a[2] + e.b[2]) / 2, [ox, oz] = outward(b, mx, mz), nb = beside(b, mx + ox * 0.35, mz + oz * 0.35, 0);
+          const step = nb ? Math.abs(b.top - nb.top) : b.top - world.ground(mx + ox * 0.6, mz + oz * 0.6);
+          if (step < 0.45) continue;
+          broken(out, along(e.a, e.b, 5).map((p) => lift(p, b, 0)), r, [1, 2.5], [0.25, 0.8], 0.055, FAM.rim, () => 0.4 + Math.min(0.3, step * 0.12) + r() * 0.08, nb ? 0.5 : 0.6);
         } else if (e.kind === 'joint') {
           // (from where the ground meets it up to the top)
           // (a deep joint, where this block meets another mass, is a shadow the drawing keeps: contracted to a weighted,
@@ -293,7 +305,8 @@ export function strokes(world: World, c: Chunk): Float32Array {
           if (frag) continue;
           const mx = (e.a[0] + e.b[0]) / 2, mz = (e.a[2] + e.b[2]) / 2;
           const deep = c.rocks.some((o) => o !== b && Math.abs(o.c[0] - mx) < o.r + 1 && Math.abs(o.c[2] - mz) < o.r + 1 && covers(o, mx, mz, 0.45));
-          if (!deep && r() > 0.35) continue;
+          // (otherwise only where the mass turns against the air: a free end, nothing beside the corner)
+          if (!deep) { const [ox, oz] = outward(b, mx, mz); if (beside(b, mx + ox * 0.6, mz + oz * 0.6, 0.2)) continue; }
           const g = world.ground(e.a[0], e.a[2]), y0 = Math.max(e.a[1], g + 0.03);
           if (e.b[1] - y0 < 0.3) continue;
           const pts = along([e.a[0], y0, e.a[2]], e.b, 6).map((p) => lift(p, b));

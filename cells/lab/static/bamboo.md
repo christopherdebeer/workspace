@@ -122,7 +122,7 @@ Every block takes its up from the bedding and its tier heights from the planes t
   - most meet;
   - some leave a **cleft**, with a floor ramping up to a block set at its back;
   - some are **one mass** across both, with no joint between their tops.
-- **Tiers:** the lower stand out as ledges, a middle one is now and then set back under the lip above, and crests are broken.
+- **Tiers:** a few meaningful breaks through the whole height of a formation, as many as its height carries (one to three), each at the bedding plane nearest an aim at deliberately unequal heights, never just the lowest planes found (which left the upper part one tall slab). The lower stand out as ledges, a middle one is now and then set back under the lip above, and crests are broken.
 - **The ground** is cut only where the rock stands (under a block, down to the foot) or in a cleft's floor. Elsewhere the land keeps its own rise, so nothing's cut that isn't covered. A trail's stair still cuts through between columns.
 
 **Out on the slope** there are two kinds:
@@ -145,7 +145,9 @@ Some faces are left whole, so the breaks read against them. The crest breaks int
 - **the culms' shadows** across a lit face linger pale on the paper after its colour's gone;
 - **here and there a lit patch** is left far out on its own, so there's no single frontier.
 
-Where the land's own cut is rock, it breaks the same way, in patches, never in level bars. The ground's cut follows its own outline, and its ink is its own edges, each known for what it is: crest, side, joint, foot. Nothing grows under rock, and a cleft's floor is scree, not moss.
+Where the land's own cut is rock, it breaks the same way, in patches, never in level bars.
+
+**Which lines are drawn is decided by the structure, never by chance**; chance only varies how each is laid (its breaks, length, weight). A crest or lip, a foot and a deep joint are always drawn. A top's side is drawn where the mass ends against nothing (its silhouette) or steps up or down more than 0.45 m from the one beside it, never between two level tops. A block's front corner is drawn only where the mass turns against the air. The hatching on a side turned from the sun is only on a side plane seen edge-on (a recess's side, a flank), never ruled across a broad face. The ground's cut follows its own outline, and its ink is its own edges, each known for what it is: crest, side, joint, foot. Nothing grows under rock, and a cleft's floor is scree, not moss.
 
 Everything agrees on the same faces:
 - **Footing** (`footing.ts`) stands on the blocks' own upward faces. A crack between two blocks narrower than a foot is stepped over.

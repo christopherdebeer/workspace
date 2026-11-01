@@ -376,10 +376,22 @@ export function escarpIn(L: RockLand, ci: number, cj: number): { blocks: Block[]
     const foot = Math.min(L.under(fx, fz), L.under(px, pz)) - 0.6, crest = L.under(bx, bz) + L.cliffH(bx, bz);
     // (tiers cut by the bedding's planes where they cross it, some of them; each column slumped a little its own way)
     const slump = (u01(s, k, 709) - 0.5) * 0.35, cuts: number[] = [];
-    for (let m = -60; m <= 60 && cuts.length < 2; m++) {
-      const y = planeY(g, px, pz, m) + slump;
-      if (y > foot + 1 && y < crest - 0.8 && u01(s, k, m + 70, 710) < 0.7) cuts.push(y);
+    // (a few meaningful breaks through the whole height, never just the lowest planes found: as many as the height
+    // carries (one to three), aimed at unequal heights so the tiers differ, each taken at the bedding plane nearest its
+    // aim, none closer than a metre to another or to the foot or crest)
+    const planes: number[] = [];
+    for (let m = -60; m <= 60; m++) { const y = planeY(g, px, pz, m) + slump; if (y > foot + 1 && y < crest - 0.8) planes.push(y); }
+    const H = crest - foot, nb = Math.min(planes.length, H < 3.2 ? 1 : H < 6.5 ? 2 : 3);
+    const wts = Array.from({ length: nb + 1 }, (_, i) => 0.45 + 1.1 * u01(s, k, 711 + i)), wsum = wts.reduce((a, b) => a + b, 0);
+    let acc = 0;
+    for (let i = 0; i < nb; i++) {
+      acc += wts[i];
+      const aim = foot + (H * acc) / wsum;
+      let best = NaN;
+      for (const y of planes) if (cuts.every((c) => Math.abs(c - y) > 1.1) && (Number.isNaN(best) || Math.abs(y - aim) < Math.abs(best - aim))) best = y;
+      if (!Number.isNaN(best) && Math.abs(best - aim) < H * 0.3) cuts.push(best);
     }
+    cuts.sort((a, b) => a - b);
     const ys = [foot, ...cuts, crest + (u01(s, k, 720) - 0.35) * 2];
     const lean = (u01(s, k, 719) - 0.4) * 0.14, back = hw + 1.2;
     // (one mass with its right neighbour across their tops: this top reaches over both, and that one has none of its own)
@@ -392,7 +404,7 @@ export function escarpIn(L: RockLand, ci: number, cj: number): { blocks: Block[]
       const lo = ys[m], hi = ys[m + 1], hy = (hi - lo) / 2;
       if (hy < 0.15) continue;
       const recess = m > 0 && !isTop && u01(s, k, 730 + m) < 0.3;
-      const front = m === 0 ? hw + 0.2 + u01(s, k, 721) * 1.1 : recess ? hw - 0.9 : hw - m * 0.45 + (u01(s, k, 722 + m) - 0.4) * 0.9;
+      const front = m === 0 ? hw + 0.2 + u01(s, k, 721) * 1.1 : recess ? hw - 0.9 : hw - Math.min(m, 2) * 0.45 + (u01(s, k, 722 + m) - 0.4) * 0.9;
       const dep = (front + back) / 2, mid = (front - back) / 2;
       const ww = (w + (isTop && merged ? Math.abs(sR) / 2 : 0)) * (1 - 0.06 * m), sh = shift + (isTop && merged ? Math.abs(sR) / 2 : 0);
       const sd = s * 977 + k * 13 + m, r = (q: number) => u01(sd, q);

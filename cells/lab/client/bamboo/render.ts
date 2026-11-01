@@ -949,7 +949,9 @@ void main() {
     oR += (fid - .5) * .14 + .1 * litF - .07 * (1. - litF) + (fbm2(fuv * .35 + vSeed * 5.) - .5) * .34 - .16 * (1. - smoothstep(.0, .3, foot));
     oR -= .24 * smoothstep(.7, .78, vn(fuv * .2 + vSeed * 3.)) * litF;
     gColSharp = 4.; gLitO = -.12 * litF;
-    hatchR = hatch * (1. - litF);
+    // (and only on a side plane, turned edge-on to the eye (a recess's side, a block's flank); a broad face seen square
+    // says its plane by its edges alone, never ruled across)
+    hatchR = hatch * (1. - litF) * (1. - smoothstep(.3, .6, abs(dot(Nf, normalize(uEye - vW)))));
   }
   vec3 c = layered(alb, N, vW, .2, .85 * sCav, vec3(0.), uColK.z, 1., oR, colR, litR);
   // (where its colour's gone, a side turned from the sun keeps a few strokes across it, in its own frame)
