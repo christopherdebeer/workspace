@@ -993,6 +993,23 @@ void main() {
   oA = vec4(.1, 0., 0., 0.);
 }`;
 
+// ─── the run's working, drawn into the scene (debug.ts): ribbons in the world, a given width, turned to the eye; where
+// something's in front of them, still seen, faint and hatched ───
+const DBG_VS = `#version 300 es
+layout(location = 0) in vec3 aP; layout(location = 1) in vec4 aC;
+uniform mat4 uVP; out vec4 vC; out float vZ;
+void main() { vC = aC; vec4 c = uVP * vec4(aP, 1.); vZ = c.w; gl_Position = c; }`;
+const DBG_FS = `#version 300 es
+precision highp float;
+in vec4 vC; in float vZ; out vec4 o;
+uniform sampler2D uZ; uniform vec2 uRes; uniform float uNear; uniform float uFar;
+void main() {
+  float d = texture(uZ, gl_FragCoord.xy / uRes).r, z = uNear * uFar / (uFar - d * (uFar - uNear));
+  bool hid = vZ > z * 1.02 + 0.08;
+  float hatch = step(.5, fract((gl_FragCoord.x + gl_FragCoord.y) / 7.));
+  o = hid ? vec4(vC.rgb, vC.a * .38 * hatch) : vC;
+  if (o.a < .01) discard;
+}`;
 const POST_VS = `#version 300 es
 layout(location = 0) in vec2 aP; out vec2 vUV;
 void main() { vUV = aP * .5 + .5; gl_Position = vec4(aP, 0., 1.); }`;
@@ -1265,6 +1282,9 @@ export class Renderer {
   /** where it's passed: up to eight places still moving, settling (x, z, how hard now, how far) */
   stirs: number[][] = [];
   private vpLast: number[] = new Array(16).fill(0); private eyeLast = [0, 0, 0];
+  /** lines to draw into the scene this frame (debug.ts): each a polyline in the world, its colour and width (metres) */
+  debugLines: { pts: [number, number, number][]; col: [number, number, number, number]; w: number }[] = [];
+  private dbgBuf: WebGLBuffer | null = null;
   /** where a point of the world is on the page, in CSS pixels, or null behind the eye (for overlays: debug.ts) */
   project(p: [number, number, number]): [number, number] | null {
     const v = this.vpLast, c = [0, 1, 3].map((i) => v[i] * p[0] + v[4 + i] * p[1] + v[8 + i] * p[2] + v[12 + i]);
@@ -1317,6 +1337,7 @@ export class Renderer {
     this.gl = gl; this.clean = !!opts.clean; this.marks = opts.marks === false ? 0 : 1;
     this.vao = gl.createVertexArray()!;
     const P = (n: string, vs: string, fs: string) => { this.progs[n] = this.program(vs, fs); };
+    P('dbg', DBG_VS, DBG_FS);
     P('culm', CULM_VS, CULM_FS); P('spray', SPRAY_VS, SPRAY_FS); P('twig', TWIG_VS, TWIG_FS); P('ground', GROUND_VS, GROUND_FS);
     P('solid', SOLID_VS, SOLID_FS); P('ridge', RIDGE_VS, RIDGE_FS); P('post', POST_VS, POST_FS);
     P('stroke', STROKE_VS, STROKE_FS); P('culmDepth', CULM_VS, DEPTH_FS); P('solidDepth', SOLID_VS, DEPTH_FS); P('sprayDepth', SPRAY_VS, SPRAY_DEPTH_FS);
@@ -1600,5 +1621,36 @@ export class Renderer {
     gl.uniform1f(u('uClean'), this.clean ? 1 : 0); gl.uniform1f(u('uMarks'), this.marks); gl.uniform1f(u('uClay'), this.clay ? 1 : 0);
     this.attr(0, this.vbo.screen.buf, 2, 2, 0);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
+    if (this.debugLines.length) this.drawDebug(vp, f.eye, w, h, near, far);
+  }
+  /** the debug lines as ribbons a given width in the world, each segment turned to the eye */
+  private drawDebug(vp: number[], eye: number[], w: number, h: number, near: number, far: number) {
+    const gl = this.gl, v: number[] = [];
+    for (const L of this.debugLines) {
+      const [r, g, b, a] = L.col;
+      for (let i = 0; i + 1 < L.pts.length; i++) {
+        const p = L.pts[i], q = L.pts[i + 1], d = [q[0] - p[0], q[1] - p[1], q[2] - p[2]];
+        const m = [(p[0] + q[0]) / 2 - eye[0], (p[1] + q[1]) / 2 - eye[1], (p[2] + q[2]) / 2 - eye[2]];
+        let sx = d[1] * m[2] - d[2] * m[1], sy = d[2] * m[0] - d[0] * m[2], sz = d[0] * m[1] - d[1] * m[0];
+        const sl = Math.hypot(sx, sy, sz), md = Math.hypot(m[0], m[1], m[2]); if (sl < 1e-9 || md < 0.7) continue;
+        // (its width the given one far off, thinner near, so a line passing close to the eye stays a line)
+        const wd = Math.min(L.w, Math.max(0.006, md * 0.009));
+        sx *= wd / 2 / sl; sy *= wd / 2 / sl; sz *= wd / 2 / sl;
+        const A = [p[0] - sx, p[1] - sy, p[2] - sz], B = [p[0] + sx, p[1] + sy, p[2] + sz], C = [q[0] + sx, q[1] + sy, q[2] + sz], D = [q[0] - sx, q[1] - sy, q[2] - sz];
+        for (const P of [A, B, C, A, C, D]) v.push(P[0], P[1], P[2], r, g, b, a);
+      }
+    }
+    if (!v.length) return;
+    this.dbgBuf ??= gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.dbgBuf); gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(v), gl.DYNAMIC_DRAW);
+    const p = this.progs.dbg; gl.useProgram(p); this.clearAttrs();
+    const u = (n: string) => gl.getUniformLocation(p, n);
+    gl.uniformMatrix4fv(u('uVP'), false, vp);
+    gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, this.texZ); gl.uniform1i(u('uZ'), 2);
+    gl.uniform2fv(u('uRes'), [w, h]); gl.uniform1f(u('uNear'), near); gl.uniform1f(u('uFar'), far);
+    gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA); gl.disable(gl.CULL_FACE);
+    this.attr(0, this.dbgBuf!, 3, 7, 0); this.attr(1, this.dbgBuf!, 4, 7, 3);
+    gl.drawArrays(gl.TRIANGLES, 0, v.length / 7);
+    gl.disable(gl.BLEND);
   }
 }

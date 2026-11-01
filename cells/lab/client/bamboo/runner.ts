@@ -32,7 +32,7 @@ import { Footings, meets, type Footing, type Post } from './footing';
 export const LOPE = 7, EYE = 1.62;
 const G = 9.8, H = 1 / 120;
 export interface Input { go: boolean; turn: number }
-export type Act = 'run' | 'skip' | 'hop' | 'leap' | 'drop' | 'fall';
+export type Act = 'run' | 'skip' | 'hop' | 'leap' | 'drop' | 'fall' | 'climb';
 export type Landing = 'light' | 'heavy' | 'brace' | 'roll';
 export interface Plan {
   kind: Exclude<Act, 'run' | 'fall'>; dir: number; ox: number; oz: number; lx: number; lz: number; ly: number; clear: number; next: Plan | null; wait: number;
@@ -247,7 +247,7 @@ export class Runner {
       const [sx, sz] = this.slip(this.x + dx * this.v * dt, this.z + dz * this.v * dt);
       // (and never over a drop too far to take: held at the rim, unless it's where a leap's to be taken from)
       // (held there, you look for a way from where you stand: across, or down another way)
-      this.held = F.at(sx + dx * 0.3, sz + dz * 0.3).y < here - 3.2 && !(plan && (plan.planted !== undefined || Math.hypot(plan.ox - sx, plan.oz - sz) < 0.5));
+      this.held = F.at(sx + dx * 0.3, sz + dz * 0.3).y < here - 12 && !(plan && (plan.planted !== undefined || Math.hypot(plan.ox - sx, plan.oz - sz) < 0.5));
       this.heldT = this.held ? this.heldT + dt : 0;
       // (a face higher than a step is a wall: you meet it and stop there, braced, never lifted onto its top)
       const wall = !onStair && F.at(sx, sz).y > here + 0.95;
@@ -341,7 +341,7 @@ export class Runner {
         if (u.kind === 'stone' && d > 1) { if (rise > 1.35) cost += 22 * (1 - d / 5); }
         else if ((d === 0.6 || d === 1.4) && rise > 0.9 && !this.onTrail) cost += 60;
         // (a drop too far, close in: a rim, or a cleft, unless there's a top across it to leap to)
-        if (d <= 1.4 && rise < (this.barred > 2 ? -7 : -3.2) && this.across(this.x + dx * d, this.z + dz * d, dx, dz, here) < 0) { cost += 60; break; }
+        if (d <= 1.4 && rise < -12 && this.across(this.x + dx * d, this.z + dz * d, dx, dz, here) < 0) { cost += 60; break; }
       }
       for (const c of crowns) {
         const rx = c.x - this.x, rz = c.z - this.z, al = rx * dx + rz * dz, lat = Math.abs(-rx * dz + rz * dx);
@@ -394,6 +394,12 @@ export class Runner {
           p.next = this.chainFrom(l[0], l[1], lu.y, dir, lu.stone);
           return p;
         }
+        // (a face beyond a hop, up to two and a half times your height: run at it and up it, a foot or two kicked off the
+        // stone, and over its top: superhuman, but a body's way of doing it, not a lift)
+        if (riseTot <= 4.6 && crown >= 0.45 && prof[c0].kind === 'stone' && this.v > 2) {
+          const o = at(Math.max(0.1, d - 0.5 - this.v * 0.1)), ld = (c0 + Math.min(c1 - c0, Math.round(0.5 / S))) * S, l = at(ld), lu = F.at(l[0], l[1]);
+          return { kind: 'climb', dir, ox: o[0], oz: o[1], lx: l[0], lz: l[1], ly: lu.y, clear: top + 0.35, next: null, wait: 0 };
+        }
         return null;
       }
       if (rise < -0.22) {
@@ -411,18 +417,19 @@ export class Runner {
             if (ly > from.y - 2.6 && ly < from.y + 0.7 && Math.abs(ly - F.at(o[0] + dx * g, o[1] + dz * g).y) < 0.35) return { kind: 'leap', dir, ox: o[0], oz: o[1], lx: l[0], lz: l[1], ly, clear: Math.max(ly, from.y) + 0.1, next: null, wait: 0 };
           }
         }
-        // (no further than you'd jump; or, held up a while with no other way, lowering yourself down a face as far as
-        // you'd dare)
-        const most = this.barred > 2 ? 7 : 3.2;
+        // (off the edge: never stopped there and lowered down a face; a drop to a dozen metres is leapt, out from the face
+        // with your pace, into a roll if it's big; only if there's nowhere to come down is it no way)
+        const most = 12;
         if (D < 0.4 || D > most) return null;
         // (where each would come down: the one with the clearest, flattest landing, the quicker the more of a leap)
         let bestP: Plan | null = null, bestS = -1e9;
         for (const vy of [0.5, 1.5, 2.5]) {
-          const vh = Math.max(2, this.v), land = this.arc(o[0], o[1], from.y, dx * vh, dz * vh, vy);
-          if (!land || from.y - land[1] > most + 0.2 || (most < 4 && this.trapped(land[0], land[2], land[1]))) continue;
+          const vh = D > 3.2 ? Math.max(5, this.v) : Math.max(2, this.v), land = this.arc(o[0], o[1], from.y, dx * vh, dz * vh, vy);
+          if (!land || from.y - land[1] > most + 0.2 || (D < 4 && this.trapped(land[0], land[2], land[1]))) continue;
+          if (D > 3.2 && (F.normalAt(land[0], land[2])[1] < 0.8 || this.cramped(land[0], land[2], dir))) continue;
           const nrm = F.normalAt(land[0], land[2]), cramp = this.cramped(land[0], land[2], dir);
           const score = nrm[1] * 3 - (cramp ? 2 : 0) - Math.abs(vy - (this.v < 3.5 || D < 0.8 ? 0.5 : 1.5 + this.v * 0.1)) * 0.8;
-          if (score > bestS) { bestS = score; bestP = { kind: vy < 1 ? 'drop' : 'leap', dir, ox: o[0], oz: o[1], lx: land[0], lz: land[2], ly: land[1], clear: 0, next: null, wait: 0 }; }
+          if (score > bestS) { bestS = score; bestP = { kind: vy < 1 && D <= 3.2 ? 'drop' : 'leap', dir, ox: o[0], oz: o[1], lx: land[0], lz: land[2], ly: land[1], clear: 0, next: null, wait: 0 }; }
         }
         return bestP;
       }
@@ -602,6 +609,16 @@ export class Runner {
     return null;
   }
   /** no room to come out of a landing: a culm close ahead, the footing ahead rising or falling away, or on a stone */
+  /** room to roll on into: nothing standing in the way for a couple of metres, the footing ahead near level */
+  private rollRoom(x: number, z: number, dir: number) {
+    const F = this.feet, dx = Math.sin(dir), dz = Math.cos(dir), y = F.at(x, z).y;
+    for (const p of F.posts(x, z, 2.5)) {
+      const rx = p.x - x, rz = p.z - z, al = rx * dx + rz * dz;
+      if (al > -0.2 && al < 1.8 && Math.abs(-rx * dz + rz * dx) < 0.45 + p.r && meets(p) === 'block') return false;
+    }
+    for (const d of [0.6, 1.2, 1.8]) { const u = F.at(x + dx * d, z + dz * d); if (Math.abs(u.y - y) > 0.4) return false; }
+    return true;
+  }
   private cramped(x: number, z: number, dir: number) {
     const F = this.feet, dx = Math.sin(dir), dz = Math.cos(dir), y = F.at(x, z).y;
     for (const p of F.posts(x, z, 2.5)) {
@@ -645,7 +662,7 @@ export class Runner {
       }
     }
     // (nothing asks more than a body can spring: a move that would is given up where you stand)
-    if (vy > 6.5) { this.plan = null; this.loading = false; this.v = Math.min(this.v, 2); return; }
+    if (vy > (p.kind === 'climb' ? 10.5 : 6.5)) { this.plan = null; this.loading = false; this.v = Math.min(this.v, 2); return; }
     this.vx = (p.lx - this.x) / T; this.vz = (p.lz - this.z) / T; this.vy = vy; this.loading = false; this.airTurn = 0;
     this.move = Math.atan2(this.vx, this.vz);
     this.air = true; this.act = p.kind; this.aim = [p.lx, p.ly, p.lz]; this.headTake = this.heading;
@@ -692,7 +709,8 @@ export class Runner {
     const [nx, nz] = this.slip(this.x + this.vx * dt, this.z + this.vz * dt);
     // (flying into a face well above your feet, you're stopped against it and slide down it: a top past its edge isn't
     // where you are)
-    if (this.feet.at(nx, nz).y > this.y + 0.35) { this.vx *= 0.1; this.vz *= 0.1; } else { this.x = nx; this.z = nz; }
+    // (climbing, the face is run up: held at it, your way on kept, until you're over its top)
+    if (this.feet.at(nx, nz).y > this.y + 0.35) { if (this.act !== 'climb') { this.vx *= 0.1; this.vz *= 0.1; } } else { this.x = nx; this.z = nz; }
     this.y += this.vy * dt; this.vy -= G * dt;
     const u = this.feet.at(this.x, this.z);
     // (down onto the surface; or, past where you were aiming and a hand's breadth over it, a foot reached down onto it: a
@@ -732,6 +750,9 @@ export class Runner {
       this.v *= 1 - 0.65 * Math.min(1, turnBy / 1.1);
     } else if (imp < 3.3) {
       as = 'light'; this.crouchV += 0.4 + imp * 0.3; this.v *= 0.97;
+    } else if (imp > 6.5 && vh > 3.5 && this.rollRoom(this.x, this.z, this.move)) {
+      // (come down hard with way on and room to go on into (on rock or earth): into a roll, not a stop)
+      as = 'roll'; this.rollT = 0; this.v *= 0.9; this.crouchV += 0.6;
     } else if (cramped) {
       as = 'brace'; this.crouchV += 1.2 + imp * 0.42; this.leanV += 0.8 + imp * 0.2; this.v *= Math.max(0.4, 1 - imp * 0.09); this.recover = 0.7; this.nudge += (Math.random() < 0.5 ? -1 : 1) * 0.06;
     } else if (imp > 6.5 && vh > 4.5) {

@@ -425,9 +425,9 @@ function frame(now: number) {
   const sheet = Math.min(devicePixelRatio || 1, 2);
   const f: Frame = { eye, look, fov, t, gust: [gust.dir[0], gust.dir[1], gust.front, gust.strength], speed: me.v, roll, focus, paper: [Math.round(innerWidth * sheet), Math.round(innerHeight * sheet)] };
   if (!still || chaseKind) chaseStep(still ? 0 : dt, eye, yaw, p, fov);
+  // (`?debug=plan`: the run's own working drawn into the scene)
+  planDebug?.draw(me, yaw, renderer.debugLines);
   renderer.draw(f, canvas.width, canvas.height);
-  // (`?debug=plan`: the run's own working drawn over the picture)
-  planDebug?.draw(me, (q) => renderer.project(q), yaw);
   const ms = performance.now() - now;
   // (how finely it's drawn follows how long frames take, over a second or so, in steps, never frame to frame: a canvas
   // resized every frame makes everything tied to its pixels shimmer)

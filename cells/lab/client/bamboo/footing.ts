@@ -11,7 +11,7 @@
  */
 import { CHUNK, culmPoint, type Chunk, type Culm, type Land, type Stone } from './world';
 import { lumpTopAt, LUMP_R } from './lump';
-import { blockTop, blocksSegment, type Pad } from './rock';
+import { blockTop, blocksSegment, type Pad, type Block } from './rock';
 
 export type Footing = 'ground' | 'step' | 'stone' | 'root';
 export interface Under { y: number; kind: Footing; stone: Stone | null }
@@ -54,6 +54,11 @@ export class Footings {
     return c.canopy[i + j * (CHUNK + 1)];
   }
   /** what you'd stand on at (x, z) (with the rock, or without it: for sight, which asks the rock itself) */
+  /** whether there's a block top about as high as y at (x, z), other than b (the far side of a crack) */
+  private topAcross(x: number, z: number, y: number, not: Block) {
+    for (const c of this.near(x, z)) if (c.rocks) for (const o of c.rocks) { if (o === not) continue; const t = blockTop(o, x, z); if (!Number.isNaN(t) && Math.abs(t - y) < 0.5) return true; }
+    return false;
+  }
   at(x: number, z: number, rock = true): Under {
     const tr = this.land.tread(x, z);
     if (tr !== null) return { y: tr, kind: 'step', stone: null };
@@ -71,7 +76,15 @@ export class Footings {
         // (a block's top, or just past its edge, its top there: a crack between two blocks narrower than a foot is stepped
         // over, not fallen into)
         let yb = blockTop(b, x, z);
-        if (Number.isNaN(yb)) { const dx = b.c[0] - x, dz = b.c[2] - z, l = Math.hypot(dx, dz); if (l > 0.2) yb = blockTop(b, x + (dx / l) * 0.16, z + (dz / l) * 0.16); }
+        // (only a crack: a top as high on the other side too; just past the edge of a block with nothing across, it's the
+        // ground there, not the block's top: a face isn't stood on from its foot)
+        if (Number.isNaN(yb)) {
+          const dx = b.c[0] - x, dz = b.c[2] - z, l = Math.hypot(dx, dz);
+          if (l > 0.2) {
+            const yt = blockTop(b, x + (dx / l) * 0.16, z + (dz / l) * 0.16);
+            if (!Number.isNaN(yt) && this.topAcross(x - (dx / l) * 0.16, z - (dz / l) * 0.16, yt, b)) yb = yt;
+          }
+        }
         if (yb > y) { y = yb; kind = 'stone'; stone = null; }
       }
       for (const q of c.roots) {
