@@ -16,13 +16,25 @@ The anchor letter is determined approximately by word length: first for 1-charac
 
 The context reads as prose flowing through the word: the previous words sit just above it, set right, their last line ending where the word begins; the next words sit just below, their first line starting where the word ends and running on from the margin (when the word leaves under 30% of the width beside it, the line is a whole one of its own). The passage starts at a sentence, never mid-sentence at the top edge, and a blank line in the text is a paragraph break there, as on the page.
 
+## Writing
+
+At the end of the text the reader becomes a pen. Step past the last word, or let playback reach it, and the current word is what you type: it stands where every word stands, its anchor letter marked, a caret after it, and the text so far runs into it from above as the previous words always do. A space sets the word down and the next begins; Return sets it down and starts a paragraph (a ¶ shows it's coming); deleting past a word's start takes the last word back up to edit. The tap zones still work: the middle brings up the keyboard, the right sets the word down, the left (or ←, or Escape) steps back into reading. What you write goes into the text, and so into the link.
+
+## Comprehension check
+
+Check (in the player) runs a small test. Passages are made from templates whose facts are known, five sentences each: who gave whom how many of what, what colour thing is on what, who arrived after whom and before whom, who works as what and where, who did not take one thing but took another, who met whom on what day and where. Each sentence gets one question with four answers, the wrong ones of the same kind (names from the same passage among them), so none can be ruled out by type and chance is 1 in 4. Pick the speeds (200 to 800 bpm) and how many passages at each; the passages come in a shuffled order so practice favours no speed. Each plays once at its speed with your context and sound settings, untouchable (no stepping or pausing, so the speed is the speed), then its five questions, with no word on right or wrong until the end. Then a score at each speed, the passages with your answers, and the last few runs on this device (kept in this browser only). Your own text, place and tempo come back afterwards.
+
+## Light and dark
+
+Auto (as the device is), Light or Dark, from the player; kept in the link as `theme`. Dark is warm ink on slate, the anchor's accent lifted to read on it.
+
 ## Audio
 
 Click marks every word onset. Bass is a soft synthesized falling sine pulse on the words that start a clause, or a sentence, or (as a comparison) every 2, 3, 4, 6 or 8 words. Both combines them. The sounds follow actual word onsets, including punctuation delays; they are not independent beats that drift away from the text. User-gesture play is required to enable Web Audio. No external assets.
 
 ## Shareable state
 
-Everything is held in the URL fragment: \`#text=…&i=…&bpm=…&mode=…&span=…&opacity=…&pause=…&font=…&sound=…&volume=…&group=…&warm=…&ui=…\` (an older link's \`wpm\` is read as the bpm). The address is rewritten when you pause, seek or change a setting, not on every word as it plays. The position and settings travel with the source text, and no localStorage/server data is needed. The URL itself contains the source text: do not publicly share private text. Long passages make long URLs. Playback does not auto-start on reload due to mobile audio restrictions.
+Everything is held in the URL fragment: \`#text=…&i=…&bpm=…&mode=…&span=…&opacity=…&pause=…&font=…&sound=…&volume=…&group=…&warm=…&ui=…&theme=…\` (an older link's \`wpm\` is read as the bpm). The address is rewritten when you pause, seek or change a setting, not on every word as it plays. The position and settings travel with the source text, and no localStorage/server data is needed. The URL itself contains the source text: do not publicly share private text. Long passages make long URLs. Playback does not auto-start on reload due to mobile audio restrictions.
 
 ## Research questions
 

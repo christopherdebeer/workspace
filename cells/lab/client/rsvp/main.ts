@@ -2,11 +2,16 @@
  * - every word lands on a beat; punctuation and paragraph ends add rests in half-beats, so the pulse never wavers;
  * - the tempo is set by stepping: tap forward through words and their rhythm becomes the BPM (shown top right), held
  *   until you step again or move the slider; each start eases in over a few words (a warm-up) up to it;
- * - previous words end where the current word begins, upcoming words begin where it ends, just above and below it. */
+ * - previous words end where the current word begins, upcoming words begin where it ends, just above and below it;
+ * - at the end of the text the reader is a pen: the current word is what you type, the text before it flows into it;
+ * - a comprehension check: made passages with known answers, read at the speeds you choose, then questions;
+ * - light, dark, or as the device is. */
+import { makePassage, type Passage } from './quiz';
 type Mode = 'off' | 'rail' | 'passage';
 type Sound = 'off' | 'click' | 'bass' | 'both';
 type Group = 'clause' | 'sentence' | '2' | '3' | '4' | '6' | '8';
-type State = { text: string; i: number; bpm: number; mode: Mode; span: number; opacity: number; pause: number; font: number; sound: Sound; volume: number; group: Group; warm: number; ui: 'full' | 'min'; run: boolean };
+type State = { text: string; i: number; bpm: number; mode: Mode; span: number; opacity: number; pause: number; font: number; sound: Sound; volume: number; group: Group; warm: number; ui: 'full' | 'min'; theme: Theme; run: boolean };
+type Theme = 'auto' | 'light' | 'dark';
 type Word = { w: string; par: boolean; sent: boolean; clause: boolean };
 const SAMPLE = "Reading is not a race between the eye and the page. The mind gathers meaning in phrases, anticipates what might come next, and sometimes moves backward to repair an incomplete thought.\n\nWhat changes when the next few words remain visible, but subdued? Perhaps a small preview restores anticipation without demanding a saccade. Perhaps a trace of previous words makes regression possible without losing the reading point.\n\nThis is an experiment, not a promise of faster comprehension. Find a pace that lets the sentence form. Then touch the surface: left to step back, right to step forward, swipe to scan, or use the timeline to seek.";
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -22,7 +27,8 @@ function decode(): State {
     span: Math.round(num(p.get('span'), 7, 1, 24)), opacity: Math.round(num(p.get('opacity'), 42, 0, 100)),
     pause: num(p.get('pause'), 1, 0, 3), font: Math.round(num(p.get('font'), 46, 28, 72)),
     sound: s === 'click' || s === 'bass' || s === 'both' ? s : 'off', volume: num(p.get('volume'), 38, 0, 100),
-    group: g && GROUPS.includes(g) ? g : 'clause', warm: Math.round(num(p.get('warm'), 4, 0, 12)), ui: p.get('ui') === 'min' ? 'min' : 'full', run: false,
+    group: g && GROUPS.includes(g) ? g : 'clause', warm: Math.round(num(p.get('warm'), 4, 0, 12)), ui: p.get('ui') === 'min' ? 'min' : 'full',
+    theme: p.get('theme') === 'light' || p.get('theme') === 'dark' ? (p.get('theme') as Theme) : 'auto', run: false,
   };
 }
 const preview = new URLSearchParams(location.search).has('preview');
@@ -31,6 +37,12 @@ let state = decode(), words: Word[] = [], timer: ReturnType<typeof setTimeout> |
 let onset = 0, warmed = 0;
 let gesture: { id: number; x: number; y: number; initial: number; moved: boolean } | null = null;
 const taps: { t: number; beats: number }[] = [];
+// (writing: past the last word, the word in hand (typed, not yet set down), and whether the next starts a paragraph)
+let writing = false, draft = '', parNext = false;
+// (a check under way: its passages, which one, which question, the answers given, and your own text to go back to)
+type Trial = { bpm: number; passage: Passage; picks: number[] };
+let quiz: { trials: Trial[]; k: number; q: number; saved: { text: string; i: number; bpm: number } } | null = null;
+const writeEl = document.getElementById('write') as HTMLInputElement;
 const stage = $('stage'), before = $('before'), after = $('after'), progress = $<HTMLInputElement>('progress'), wordEl = $('word');
 const controlIds = ['bpm', 'mode', 'span', 'opacity', 'pause', 'font', 'sound', 'volume', 'group', 'warm'] as const;
 
@@ -52,7 +64,7 @@ function fragment() {
   return '#' + p.toString();
 }
 /** the address rewritten only when you stop, seek or change a setting (never on every word while it plays) */
-function save() { if (!preview) history.replaceState(null, '', location.pathname + location.search + fragment()); }
+function save() { if (!preview && !quiz) history.replaceState(null, '', location.pathname + location.search + fragment()); }
 function rebuild() { words = split(state.text); if (!words.length) words = [{ w: '—', par: true, sent: true, clause: true }]; state.i = clamp(Math.floor(state.i), 0, words.length - 1); progress.max = String(words.length - 1); }
 function orp(w: string) {
   const chars = Array.from(w), letters: number[] = [];
@@ -80,6 +92,8 @@ function ghost(el: HTMLElement, a: number, b: number, prior: boolean) {
     else box.appendChild(s);
     // (a paragraph's end is a break in the passage, as on the page)
     if (state.mode === 'passage' && words[k].par && k < b - 1) box.appendChild(Object.assign(document.createElement('span'), { className: 'par-gap' }));
+    // (nearby words, on a line or two, mark it instead)
+    else if (words[k].par && k < b - 1) box.appendChild(Object.assign(document.createElement('span'), { className: 'pil', textContent: ' ¶ ' }));
     else if (k < b - 1) box.appendChild(document.createTextNode(' '));
   }
 }
@@ -107,23 +121,26 @@ function fit() {
 }
 function paint() {
   state.i = clamp(state.i, 0, words.length - 1);
-  const w = words[state.i].w, chars = Array.from(w), p = orp(w);
+  const w = writing ? draft : words[state.i].w, chars = Array.from(w), p = orp(w);
   $('word-before').textContent = chars.slice(0, p).join('');
   $('word-anchor').textContent = chars[p] || ' ';
   $('word-after').textContent = chars.slice(p + 1).join('');
-  $('readout').textContent = String(state.i + 1) + ' / ' + words.length;
+  $('readout').textContent = writing ? 'writing · ' + words.length : quiz ? 'check ' + (quiz.k + 1) + ' / ' + quiz.trials.length : String(state.i + 1) + ' / ' + words.length;
   $('percentage').textContent = Math.round((100 * (state.i + 1)) / words.length) + '%';
   progress.value = String(state.i);
   $('mini-fill').style.width = (100 * state.i) / Math.max(1, words.length - 1) + '%';
   stage.style.setProperty('--ghost-opacity', String(state.mode === 'off' ? 0 : state.opacity / 100));
   stage.classList.toggle('no-context', state.mode === 'off');
   const n = state.mode === 'passage' ? state.span * 5 : state.span;
-  ghost(before, from(state.i, n), state.i, true);
-  ghost(after, state.i + 1, Math.min(words.length, state.i + 1 + n), false);
+  // (writing, everything so far runs into the word in hand, and nothing follows it yet)
+  const at = writing ? words.length : state.i;
+  ghost(before, from(at, n), at, true);
+  ghost(after, at + 1, writing ? at + 1 : Math.min(words.length, at + 1 + n), false);
+  stage.classList.toggle('par-next', writing && parNext);
   fit(); place();
   stage.setAttribute('aria-label', 'Current word ' + w + '. Tap left to step back, right to step on, centre to play or pause. Drag to scan.');
 }
-function seek(i: number) { state.i = clamp(Math.round(i), 0, words.length - 1); paint(); }
+function seek(i: number) { if (writing) setWriting(false); state.i = clamp(Math.round(i), 0, words.length - 1); paint(); }
 function move(d: number) { seek(state.i + d); save(); }
 /** how many beats a word holds: one, half again for a long word, and a rest after it for its punctuation (a comma half a
  * beat, a clause or sentence one, a paragraph two), the rests scaled by the pause setting in whole half-beats */
@@ -184,7 +201,7 @@ function schedule() {
 }
 function next() {
   timer = null; if (!state.run) return;
-  if (state.i >= words.length - 1) { stop(); return; }
+  if (state.i >= words.length - 1) { stop(); if (quiz) ask(); else setWriting(true); return; }
   onset += hold(); warmed++;
   // (fallen far behind (a hidden tab, a stall): the beat picks up from now, not in a rush to catch up)
   if (performance.now() - onset > period()) onset = performance.now();
@@ -192,6 +209,7 @@ function next() {
 }
 function start() {
   if (state.run) return;
+  if (writing) setWriting(false);
   if (state.i === words.length - 1) state.i = 0;
   state.run = true; enableAudio(); paint();
   $('play').textContent = 'Ⅱ'; $('mini-play').textContent = 'Ⅱ'; $('play').setAttribute('aria-label', 'Pause reading');
@@ -216,11 +234,133 @@ function stepOn() {
     state.bpm = clamp(Math.round((60000 * bs) / ms / 5) * 5, 40, 1200);
     refresh();
   }
+  if (quiz) return;
+  if (writing) { if (draft) setDown(); return; }
+  if (state.i >= words.length - 1) { setWriting(true); return; }
   if (state.run) {
-    if (state.i >= words.length - 1) { stop(); return; }
     // (your step is the beat: no warm-up left to run, the next word timed from this one)
     state.i++; paint(); beat(); onset = t; warmed = state.warm; schedule();
   } else { move(1); pulse(); }
+}
+/** past the last word the reader is a pen: the word you type stands where the current word stands (its anchor letter
+ * and all), the text before it running into it; a space sets it down and the next begins, Return sets it down and starts
+ * a paragraph, deleting past its start takes the last word back up to edit. Step back (or ←) to read again */
+function setWriting(on: boolean) {
+  if (on === writing) { if (on) writeEl.focus({ preventScroll: true }); return; }
+  writing = on; stage.classList.toggle('writing', on);
+  if (on) { stop(); draft = ''; writeEl.value = ''; parNext = false; state.i = words.length - 1; paint(); writeEl.focus({ preventScroll: true }); }
+  else { if (draft) setDown(); writeEl.blur(); state.i = words.length - 1; paint(); save(); }
+}
+/** the word in hand set down at the end of the text */
+function setDown() {
+  const w = draft.trim(); draft = ''; writeEl.value = '';
+  if (!w) return;
+  const t = state.text.replace(/\s+$/, '');
+  state.text = t ? t + (parNext ? '\n\n' : ' ') + w : w;
+  parNext = false; rebuild(); state.i = words.length - 1; paint(); save();
+}
+/** the last word taken back up into your hand */
+function takeUp() {
+  if (parNext) { parNext = false; paint(); return; }
+  const t = state.text.replace(/\s+$/, ''), m = t.match(/(\s*)(\S+)$/u);
+  if (!m) return;
+  state.text = t.slice(0, t.length - m[0].length); parNext = /\n\s*\n/.test(m[1]);
+  draft = m[2]; writeEl.value = draft; rebuild(); paint(); save();
+}
+function bindWriting() {
+  writeEl.addEventListener('input', () => {
+    const v = writeEl.value, parts = v.split(/\s+/);
+    if (parts.length > 1) { for (const w of parts.slice(0, -1)) if (w) { draft = w; setDown(); } draft = parts[parts.length - 1]; writeEl.value = draft; }
+    else draft = v;
+    paint();
+  });
+  writeEl.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); if (draft) setDown(); parNext = true; paint(); }
+    else if (e.key === 'Backspace' && writeEl.value === '') { e.preventDefault(); takeUp(); }
+    else if (e.key === 'Escape' || (e.key === 'ArrowLeft' && writeEl.value === '')) { e.preventDefault(); setWriting(false); }
+  });
+}
+
+/** the check: pick speeds; each passage is read once at its speed with your context settings, untouchable (no stepping, no
+ * seeking, so the speed is the speed), then five questions with no word on right or wrong until the end; the passages
+ * come in a shuffled order so practice favours no speed; at the end, how many you had right at each speed (kept on this
+ * device, the last few runs shown beside it) */
+const SPEEDS = [200, 300, 400, 500, 650, 800];
+function quizShow(html: string) { const b = $('quiz-body'); b.innerHTML = html; $('quiz').hidden = false; return b; }
+function openQuiz() {
+  stop(); if (writing) setWriting(false);
+  const chosen = new Set([300, 500, 650]);
+  const b = quizShow(`<h2>Comprehension check</h2><p>Short made-up passages, five sentences each, read once at the speed shown, with your context and sound settings (now: ${state.mode === 'off' ? 'no context' : state.mode === 'rail' ? 'nearby words' : 'extended passage'}). No stepping or pausing while one plays. Then five questions on it. Each passage is new; the speeds come in a shuffled order.</p>
+    <div class="chips">${SPEEDS.map((v) => `<button class="chip" data-v="${v}" aria-pressed="${chosen.has(v)}">${v}</button>`).join('')}</div>
+    <label class="control"><span class="heads"><span>Passages at each speed</span></span><select id="quiz-n"><option value="1">1</option><option value="2" selected>2</option><option value="3">3</option></select></label>
+    <div class="edit-actions"><button class="primary" id="quiz-go">Begin</button><button id="quiz-close">Cancel</button></div>${pastRuns()}`);
+  b.querySelectorAll<HTMLButtonElement>('.chip').forEach((c) => c.addEventListener('click', () => { const v = +c.dataset.v!; if (chosen.has(v)) chosen.delete(v); else chosen.add(v); c.setAttribute('aria-pressed', String(chosen.has(v))); }));
+  $('quiz-close').addEventListener('click', closeQuiz);
+  $('quiz-go').addEventListener('click', () => {
+    if (!chosen.size) return;
+    const n = +$<HTMLSelectElement>('quiz-n').value, trials: Trial[] = [];
+    for (const v of chosen) for (let k = 0; k < n; k++) trials.push({ bpm: v, passage: makePassage((Math.random() * 2 ** 31) | 0), picks: [] });
+    for (let i = trials.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [trials[i], trials[j]] = [trials[j], trials[i]]; }
+    quiz = { trials, k: 0, q: 0, saved: { text: state.text, i: state.i, bpm: state.bpm } };
+    document.documentElement.classList.add('checking');
+    ready();
+  });
+}
+/** before each passage: which, how fast, and a Read button (a tap, so sound may start) */
+function ready() {
+  const t = quiz!.trials[quiz!.k];
+  quizShow(`<h2>Passage ${quiz!.k + 1} of ${quiz!.trials.length}</h2><p class="big">${t.bpm} bpm</p><p>Read it through; the questions follow.</p><div class="edit-actions"><button class="primary" id="quiz-read">Read</button><button id="quiz-close">Stop the check</button></div>`);
+  $('quiz-close').addEventListener('click', closeQuiz);
+  $('quiz-read').addEventListener('click', () => {
+    $('quiz').hidden = true;
+    state.text = t.passage.text; state.i = 0; state.bpm = t.bpm; rebuild(); refresh(); paint();
+    setTimeout(start, 700);
+  });
+}
+function ask() {
+  const z = quiz!, t = z.trials[z.k], qn = t.passage.questions[z.q];
+  const b = quizShow(`<p class="small">Passage ${z.k + 1} of ${z.trials.length} · question ${z.q + 1} of ${t.passage.questions.length}</p><h2>${qn.q}</h2><div class="answers">${qn.options.map((o, i) => `<button data-i="${i}">${o}</button>`).join('')}</div>`);
+  b.querySelectorAll<HTMLButtonElement>('.answers button').forEach((btn) => btn.addEventListener('click', () => {
+    t.picks.push(+btn.dataset.i!); z.q++;
+    if (z.q < t.passage.questions.length) return ask();
+    z.q = 0; z.k++;
+    if (z.k < z.trials.length) ready(); else results();
+  }));
+}
+function results() {
+  const z = quiz!, by = new Map<number, { right: number; all: number }>();
+  for (const t of z.trials) { const e = by.get(t.bpm) ?? { right: 0, all: 0 }; t.passage.questions.forEach((q, i) => { e.all++; if (t.picks[i] === q.answer) e.right++; }); by.set(t.bpm, e); }
+  const rows = [...by.entries()].sort((a, b) => a[0] - b[0]);
+  const run = { at: new Date().toISOString().slice(0, 16).replace('T', ' '), mode: state.mode, rows: rows.map(([v, e]) => [v, e.right, e.all]) };
+  try { const h = JSON.parse(localStorage.getItem('afterword-checks') || '[]'); h.unshift(run); localStorage.setItem('afterword-checks', JSON.stringify(h.slice(0, 12))); } catch { /* (kept only if the browser keeps it) */ }
+  const b = quizShow(`<h2>How it went</h2><table class="scores"><tr><th>bpm</th><th>right</th><th></th></tr>${rows.map(([v, e]) => `<tr><td>${v}</td><td>${e.right} / ${e.all}</td><td><span class="bar" style="width:${Math.round((100 * e.right) / e.all)}%"></span></td></tr>`).join('')}</table>
+    <p>Chance is 1 in 4. Context: ${state.mode === 'off' ? 'none' : state.mode === 'rail' ? 'nearby words' : 'extended passage'}.</p>
+    <details class="review"><summary>The passages and your answers</summary>${z.trials.map((t, k) => `<p class="small">${k + 1} · ${t.bpm} bpm</p><p>${t.passage.text}</p><ul>${t.passage.questions.map((q, i) => `<li class="${t.picks[i] === q.answer ? 'right' : 'wrong'}">${q.q} <b>${q.options[q.answer]}</b>${t.picks[i] === q.answer ? '' : ` (you: ${q.options[t.picks[i]]})`}</li>`).join('')}</ul>`).join('')}</details>
+    <div class="edit-actions"><button class="primary" id="quiz-again">Another check</button><button id="quiz-close">Back to reading</button></div>${pastRuns(1)}`);
+  void b;
+  $('quiz-again').addEventListener('click', () => { closeQuiz(); openQuiz(); });
+  $('quiz-close').addEventListener('click', closeQuiz);
+}
+/** earlier runs on this device, a line each */
+function pastRuns(skip = 0) {
+  let h: { at: string; mode: string; rows: [number, number, number][] }[] = [];
+  try { h = JSON.parse(localStorage.getItem('afterword-checks') || '[]').slice(skip, skip + 5); } catch { /* none */ }
+  return h.length ? `<div class="past"><p class="small">Earlier checks here</p>${h.map((r) => `<p class="small">${r.at} · ${r.mode} · ${r.rows.map(([v, a, n]) => `${v}: ${a}/${n}`).join(' · ')}</p>`).join('')}</div>` : '';
+}
+function closeQuiz() {
+  stop(false);
+  if (quiz) { state.text = quiz.saved.text; state.i = quiz.saved.i; state.bpm = quiz.saved.bpm; quiz = null; rebuild(); refresh(); paint(); save(); }
+  document.documentElement.classList.remove('checking');
+  $('quiz').hidden = true;
+}
+
+/** light, dark, or as the device is */
+function theme() {
+  const r = document.documentElement;
+  if (state.theme === 'auto') delete r.dataset.theme; else r.dataset.theme = state.theme;
+  $('theme').textContent = state.theme[0].toUpperCase() + state.theme.slice(1);
+  const meta = document.querySelector('meta[name=theme-color]');
+  if (meta) meta.setAttribute('content', getComputedStyle(r).getPropertyValue('--paper').trim() || '#f5f2eb');
 }
 function refresh() {
   $<HTMLInputElement>('bpm').value = String(state.bpm);
@@ -243,10 +383,11 @@ function refresh() {
   $('sound-options').hidden = state.sound === 'off';
   document.documentElement.classList.toggle('min', state.ui === 'min');
   $('collapse').setAttribute('aria-expanded', String(state.ui === 'full'));
+  theme();
 }
 function bind() {
-  $('play').addEventListener('click', toggle);
-  $('mini-play').addEventListener('click', toggle);
+  $('play').addEventListener('click', () => { if (!quiz) toggle(); });
+  $('mini-play').addEventListener('click', () => { if (!quiz) toggle(); });
   $('back').addEventListener('click', () => { stop(); move(-1); });
   $('forward').addEventListener('click', stepOn);
   $('back-sentence').addEventListener('click', () => { stop(); move(-10); });
@@ -257,7 +398,7 @@ function bind() {
   progress.addEventListener('input', () => seek(+progress.value));
   progress.addEventListener('change', () => save());
   stage.addEventListener('pointerdown', (e: PointerEvent) => {
-    if (e.button !== 0) return;
+    if (e.button !== 0 || quiz) return;
     gesture = { id: e.pointerId, x: e.clientX, y: e.clientY, initial: state.i, moved: false };
     stage.setPointerCapture(e.pointerId);
   });
@@ -276,12 +417,14 @@ function bind() {
     const g = gesture; gesture = null;
     if (!g.moved) {
       const r = stage.getBoundingClientRect(), x = (e.clientX - r.left) / r.width;
-      if (x < 0.34) { stop(); move(-1); taps.length = 0; } else if (x > 0.66) stepOn(); else toggle();
+      // (writing: the left steps back into reading, the middle brings the keyboard, the right sets the word down)
+      if (writing) { if (x < 0.34) setWriting(false); else if (x > 0.66) { if (draft) setDown(); writeEl.focus({ preventScroll: true }); } else writeEl.focus({ preventScroll: true }); return; }
+      if (x < 0.34) { stop(); move(-1); taps.length = 0; } else if (x > 0.66) { stepOn(); if (writing) writeEl.focus({ preventScroll: true }); } else toggle();
     } else save();
   });
   stage.addEventListener('pointercancel', () => { gesture = null; save(); });
   addEventListener('keydown', (e) => {
-    if ((e.target as HTMLElement).closest('input,textarea,select,button,details,[contenteditable]')) return;
+    if (quiz || (e.target as HTMLElement).closest('input,textarea,select,button,details,[contenteditable]')) return;
     if (e.key === 'ArrowLeft') { e.preventDefault(); stop(); move(-1); } else if (e.key === 'ArrowRight') { e.preventDefault(); if (!e.repeat) stepOn(); } else if (e.key === ' ') { e.preventDefault(); toggle(); }
   });
   for (const key of controlIds) {
@@ -317,7 +460,11 @@ function bind() {
     try { await navigator.clipboard.writeText(location.href); $('share-status').textContent = 'Link copied with text, position and settings.'; }
     catch { $('share-status').textContent = 'Copy this page address from your browser to share the reading.'; }
   });
-  document.addEventListener('visibilitychange', () => { if (document.hidden) stop(); });
+  $('check').addEventListener('click', openQuiz);
+  $('theme').addEventListener('click', () => { state.theme = state.theme === 'auto' ? 'light' : state.theme === 'light' ? 'dark' : 'auto'; refresh(); save(); });
+  matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => theme());
+  bindWriting();
+  document.addEventListener('visibilitychange', () => { if (document.hidden && !quiz) stop(); });
   addEventListener('hashchange', () => { if (location.hash === fragment()) return; stop(false); state = decode(); rebuild(); refresh(); paint(); });
   addEventListener('resize', () => paint());
 }
@@ -326,7 +473,7 @@ if (preview) { document.documentElement.classList.add('preview'); state.mode = '
 else bind();
 if (document.fonts) void document.fonts.ready.then(() => paint());
 (window as any).__rsvp = {
-  probe: () => ({ index: state.i, count: words.length, word: words[state.i].w, bpm: state.bpm, mode: state.mode, sound: state.sound, playing: state.run, ui: state.ui, beats: beats(state.i) }),
+  probe: () => ({ index: state.i, count: words.length, word: writing ? draft : words[state.i].w, writing, text: state.text, quiz: quiz ? { k: quiz.k, q: quiz.q, n: quiz.trials.length } : null, theme: state.theme, bpm: state.bpm, mode: state.mode, sound: state.sound, playing: state.run, ui: state.ui, beats: beats(state.i) }),
   seek: (i: number) => { stop(); seek(i); }, step: stepOn,
 };
 export {};

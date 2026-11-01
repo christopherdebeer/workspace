@@ -26,7 +26,7 @@ export interface Experiment {
 export const EXPERIMENTS: Experiment[] = [
   {
     id: 'rsvp', title: 'Afterword · RSVP', group: 'Contemplation',
-    blurb: 'Fixed-recognition-point reading on a steady beat (set by the rhythm of your steps, easing in at each start), the context flowing through the word above and below, tactile regression and seeking, a player that folds away, optional clicks and bass on clause starts. All text, position and settings in the URL fragment.',
+    blurb: 'Fixed-recognition-point reading on a steady beat (set by the rhythm of your steps, easing in at each start), the context flowing through the word above and below, tactile regression and seeking, a player that folds away, optional clicks and bass on clause starts; at the end of the text it becomes a pen for the next word; a comprehension check on made passages at chosen speeds; light and dark. All text, position and settings in the URL fragment.',
     page: 'static/rsvp.html', preview: 'preview', readme: 'static/rsvp.md',
     presets: [{ label: 'read', query: '' }],
   },
