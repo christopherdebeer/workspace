@@ -41,6 +41,9 @@ export interface Plan {
   read?: number; demand?: number; load?: number; vh?: number;
   /** when the foot it springs from was planted (the last plant of its approach, or the landing it's chained from) */
   planted?: number;
+  /** a move onto a small surface with nothing after it: the approach brakes for it (a precision landing), and its landing
+   * isn't taken further to suit the pace */
+  precise?: boolean;
   /** taken on from a landing (the next of a chain): its foot's planted with the landing, but until it springs it's still
    * yours to turn away from */
   chained?: boolean;
@@ -91,6 +94,9 @@ export class Runner {
   /** which side's the more open, held at a limit: where a person would turn (+1 left, -1 right) */
   freer = 1;
   private airTurn = 0; private headTake = 0;
+  /** the player holding on (going) this tick; settling onto a landing (braking to a stop within what's under you); the
+   * way the body was going when the foot it springs from was planted */
+  private going = true; private settle = false; private movePlant = 0;
   /** the working the debug view shows (debug.ts): read only */
   debugState() { return { held: this.held, stopped: this.stopped, limitT: this.limitT, stanceLeft: this.stanceLeft, best: this.best, offLine: Math.abs(wrap(this.move - this.heading)) }; }
   private barred = 0; private held = false; private heldT = 0; private acc = 0; private foot = 0; private think = 0; private best = 0; private bestCost = 0; private stride = 2.2; private posts: Post[] = []; private brushed = new Set<object>();
@@ -126,6 +132,7 @@ export class Runner {
   step(dt: number, input: Input) { this.update(dt, input); }
 
   private tick(dt: number, go: boolean) {
+    this.going = go;
     const F = this.feet;
     this.clock += dt;
     // (a trail you're on, running more or less along it: you're on it (its footing's easier, its pull a little on your
@@ -148,6 +155,8 @@ export class Runner {
       // again along where you're going now; once planted, the foot and the flight are committed)
       // (a chained one too, while the landing's foot still bears you: the flight you were in was committed, the next isn't)
       if (this.plan && this.plan.planted === undefined && Math.abs(wrap(this.heading - this.plan.dir)) > 0.35) this.plan = null;
+      // (let go, and a move not yet sprung is let go too: a flight under way carries on; the next launch is yours to decline)
+      if (this.plan && !go) { this.plan = null; this.loading = false; }
       if (this.plan?.chained && this.stanceLeft > 0 && Math.abs(wrap(this.heading - (this.plan.intent ?? this.heading))) > 0.35) this.plan = null;
       // (a planted foot that can't spring (nothing left to push it on) lets go of the move)
       if (this.plan && this.plan.planted !== undefined && this.clock - this.plan.planted > 0.8) this.plan = null;
@@ -213,10 +222,22 @@ export class Runner {
       // (but never braked below the pace you have: momentum is carried into a move and through it, the landing going
       // further along its top instead (takeoff))
       const want = Math.max(3.4, Math.min(LOPE * 1.12, plan.vh ?? target));
-      target = this.prep > 0.2 ? Math.max(want, Math.min(this.v, target)) : Math.max(target, 3.4);
+      // (a precise one, onto a small surface with nothing after it, brakes to what its flight carries: the place shapes the
+      // pace, not the pace the place)
+      target = this.prep > 0.2 ? (plan.precise ? want : Math.max(want, Math.min(this.v, target))) : Math.max(target, 3.4);
     }
     // (on rock you drive off each foot: the pace comes back quicker between bounds than it builds on the open floor)
     if (!this.air && this.rollT < 0) this.v += (target - this.v) * ease(dt, target > this.v ? (onRock ? 3.6 : 2.2) : 3);
+    // (settling onto a landing you've let go on: braked as hard as stopping within what's under you asks, the weight
+    // contained on it)
+    if (this.settle && !this.air) {
+      if (go && this.v < 0.5) this.settle = false;
+      else {
+        const run = this.supportAt(this.x, this.z, here, this.move).runout, dec = Math.max(5, (this.v * this.v) / (2 * Math.max(0.2, run - 0.25)));
+        this.v = Math.max(0, this.v - dec * dt);
+        if (this.v === 0 && go) this.settle = false;
+      }
+    }
     this.recover = Math.max(0, this.recover - dt);
 
     if (this.air) this.fly(dt);
@@ -237,10 +258,14 @@ export class Runner {
           // where the move begins; the body loads onto that foot through its stance, turns on it, and the takeoff is its
           // release, when its stance is done, not a foot of its own)
           const loadT = 0.07 + 0.1 * Math.min(1.5, plan.demand ?? 0.5);
-          if (plan.planted === undefined && toGo <= Math.max(0.12, this.v * loadT)) { this.pushPlant(plan, dx, dz, loadT); plan.planted = this.clock; }
+          if (plan.planted === undefined && toGo <= Math.max(0.12, this.v * loadT)) { this.pushPlant(plan, dx, dz, loadT); plan.planted = this.clock; this.movePlant = this.move; }
           this.loading = plan.planted !== undefined || toGo < Math.max(0.35, this.v * (0.2 + 0.1 * (plan.demand ?? 0.5)));
           if (this.loading) { this.crouch += ((plan.load ?? 0.1) - this.crouch) * ease(dt, plan.planted !== undefined ? 22 : 10); this.crouchV = 0; }
-          if (plan.planted !== undefined && this.stanceLeft > 0) this.move += wrap(plan.dir - this.move) * ease(dt, 12);
+          // (the turn onto its way goes with the stance: as much of it as the foot's borne the weight, no faster)
+          if (plan.planted !== undefined && this.stanceLeft > 0 && this.contact) {
+            const k = Math.min(1, 1 - this.stanceLeft / Math.max(0.03, this.contact.dur)), e = k * k * (3 - 2 * k);
+            this.move = this.movePlant + wrap(plan.dir - this.movePlant) * e;
+          }
           if (plan.planted !== undefined && this.stanceLeft <= 0 && plan.wait <= 0) { this.takeoff(plan); return; }
         }
       } else { this.prep = Math.max(0, this.prep - dt * 4); this.loading = false; }
@@ -251,7 +276,10 @@ export class Runner {
       this.heldT = this.held ? this.heldT + dt : 0;
       // (a face higher than a step is a wall: you meet it and stop there, braced, never lifted onto its top)
       const wall = !onStair && F.at(sx, sz).y > here + 0.95;
-      if (this.held || wall) this.v = wall ? Math.min(this.v, 0.4) : 0;
+      // (on a planted foot the body goes over it, not on past it: it's the foot that turns it and springs it)
+      const overFoot = !!(plan && plan.planted !== undefined && this.stanceLeft > 0 && this.contact && Math.abs(wrap(plan.dir - this.movePlant)) > 0.35 && Math.hypot(sx - this.contact.x, sz - this.contact.z) > 0.45);
+      if (overFoot) this.v *= 1 - ease(dt, 10);
+      if (this.held || wall || overFoot) { if (!overFoot) this.v = wall ? Math.min(this.v, 0.4) : 0; }
       else { this.x = sx; this.z = sz; }
       // (the footing: follow it; over an edge with nothing planned, off it, and down)
       const u = F.at(this.x, this.z);
@@ -459,6 +487,7 @@ export class Runner {
     p.demand = Math.min(1.5, Math.max(0, vy) / 4 + Math.max(0, p.ly - y) * 0.45 + L * 0.08 + turnBy * 0.3);
     p.load = p.kind === 'drop' ? 0.02 : p.kind === 'skip' ? 0.025 + 0.04 * p.demand : 0.05 + 0.12 * p.demand;
     p.vh = p.kind === 'skip' ? v : L / Math.max(0.2, T);
+    p.precise = !p.next && p.kind !== 'skip' && p.kind !== 'drop' && this.supportAt(p.lx, p.lz, p.ly, p.dir).runout < 1.5;
     this.aim = [p.lx, p.ly, p.lz];
   }
   /** a foot set down at (x, z): what it's on, its slope, which foot; handed out to be heard */
@@ -562,7 +591,15 @@ export class Runner {
     const rx = f.x - x, rz = f.z - z, d = Math.hypot(rx, rz), dy = f.y - y, off = Math.abs(wrap(Math.atan2(rx, rz) - dir));
     if (d < 0.9 || d > Math.min(4.4, 2.3 + 0.3 * v) || dy > 1.1 || dy < -1.6 || off > 1.05) return null;
     // (a dip between: two footholds, not one rock)
-    if (this.feet.at((x + f.x) / 2, (z + f.z) / 2).y > Math.min(y, f.y) - 0.12) return null;
+    // (a dip between, or a step: two footholds; the same level of one rock is run, not leapt)
+    const mid = this.feet.at((x + f.x) / 2, (z + f.z) / 2).y;
+    if (mid > Math.min(y, f.y) - 0.12) {
+      // (one rock: two footholds only across a step in it (a face between), never down a slope you'd run)
+      if (Math.abs(f.y - y) < 0.3 || mid > Math.max(y, f.y) - 0.1) return null;
+      let step = 0, prev = y;
+      for (let k = 1; k <= 6; k++) { const h = this.feet.at(x + (rx * k) / 6, z + (rz * k) / 6).y; step = Math.max(step, Math.abs(h - prev)); prev = h; }
+      if (step < 0.25) return null;
+    }
     // (the faster you're going, the longer the bound that's easy: a short fussy one at pace is a stutter)
     const easy = 1.8 + 0.2 * v, T = Math.max(0.26, d / Math.max(3.2, v)), brake = Math.abs(d / T - v) * 0.12;
     return off * 1.6 + Math.abs(d - easy) * 0.6 - f.room * 0.3 + Math.max(0, dy) * 0.8 + brake + (d < 1.2 && v > 4 ? 1.5 : 0);
@@ -609,6 +646,16 @@ export class Runner {
     return null;
   }
   /** no room to come out of a landing: a culm close ahead, the footing ahead rising or falling away, or on a stone */
+  /** what a surface gives at (x, z) at height y, going dir: how far it runs on level along your way (to 3 m), and how wide
+   * it is across it */
+  supportAt(x: number, z: number, y: number, dir: number) {
+    const F = this.feet, dx = Math.sin(dir), dz = Math.cos(dir);
+    let runout = 0;
+    for (let d = 0.15; d <= 3; d += 0.15) { if (Math.abs(F.at(x + dx * d, z + dz * d).y - y) > 0.15) break; runout = d; }
+    let width = 0;
+    for (const s of [-1, 1]) for (let d = 0.15; d <= 1.2; d += 0.15) { if (Math.abs(F.at(x + dz * d * s, z - dx * d * s).y - y) > 0.15) break; width += 0.15; }
+    return { runout, width };
+  }
   /** room to roll on into: nothing standing in the way for a couple of metres, the footing ahead near level */
   private rollRoom(x: number, z: number, dir: number) {
     const F = this.feet, dx = Math.sin(dir), dz = Math.cos(dir), y = F.at(x, z).y;
@@ -626,14 +673,16 @@ export class Runner {
       if (al > -0.2 && al < 2.2 && Math.abs(-rx * dz + rz * dx) < 0.55 + p.r && meets(p) === 'block') return true;
     }
     for (const d of [0.8, 1.6, 2.6]) { const u = F.at(x + dx * d, z + dz * d); if (u.y - y > 0.25 || u.y - y < -0.7) return true; }
-    return F.at(x, z).kind === 'stone';
+    // (on rock as on earth, by the room it gives: how far you can go on along it, how wide it is)
+    const sp = this.supportAt(x, z, y, dir);
+    return sp.runout < 0.9 || sp.width < 0.5;
   }
 
   private takeoff(p: Plan) {
     this.y = Math.max(this.y, this.feet.at(this.x, this.z).y - 0.05);
     // (a hop or a leap taken with more pace than its flight carries: its landing taken on along the same top, as far as
     // that pace takes it in the flight's own time, so the speed's carried over, not braked off in the air)
-    if ((p.kind === 'hop' || p.kind === 'leap') && this.v > 3.4) {
+    if ((p.kind === 'hop' || p.kind === 'leap') && this.v > 3.4 && !p.precise) {
       const dx = Math.sin(p.dir), dz = Math.cos(p.dir), L0 = Math.hypot(p.lx - this.x, p.lz - this.z);
       const vy0 = Math.max(p.clear > 0 ? Math.sqrt(Math.max(0, 2 * G * (p.clear - this.y))) : 0, ((p.ly - this.y) + 0.5 * G * 0.3 * 0.3) / 0.3);
       const T = (vy0 + Math.sqrt(Math.max(0, vy0 * vy0 - 2 * G * (p.ly - this.y)))) / G, Lw = Math.min(this.v * T, L0 + 2.2);
@@ -701,10 +750,12 @@ export class Runner {
     const want = Math.max(-0.9 * dt, Math.min(0.9 * dt, wrap(this.heading - this.headTake) - this.airTurn));
     const turn = Math.max(-0.3 - this.airTurn, Math.min(0.3 - this.airTurn, want));
     if (Math.abs(turn) > 1e-5) {
-      const c = Math.cos(turn), sn = Math.sin(turn), vx = this.vx; this.vx = vx * c + this.vz * sn; this.vz = -vx * sn + this.vz * c; this.airTurn += turn; this.move = Math.atan2(this.vx, this.vz);
-      // (and where it'll come down, foreseen again from how you're really carried: the eye and the landing go by that)
-      const l = this.arc(this.x, this.z, this.y, this.vx, this.vz, this.vy);
-      if (l) this.aim = l;
+      const c = Math.cos(turn), sn = Math.sin(turn), nvx = this.vx * c + this.vz * sn, nvz = -this.vx * sn + this.vz * c;
+      // (where it'd come down, foreseen from how you'd be carried; but a flight aimed at a surface keeps to it: bent only
+      // as far as it still comes down on what it was aimed at; the next is where your turn goes)
+      const l = this.arc(this.x, this.z, this.y, nvx, nvz, this.vy), p = this.plan;
+      const keeps = !p || (l !== null && Math.hypot(l[0] - p.lx, l[2] - p.lz) < 0.5 && Math.abs(l[1] - p.ly) < 0.2);
+      if (keeps) { this.vx = nvx; this.vz = nvz; this.airTurn += turn; this.move = Math.atan2(this.vx, this.vz); if (l) this.aim = l; }
     }
     const [nx, nz] = this.slip(this.x + this.vx * dt, this.z + this.vz * dt);
     // (flying into a face well above your feet, you're stopped against it and slide down it: a top past its edge isn't
@@ -736,13 +787,24 @@ export class Runner {
       if (turned || d < 0.6 || d > 4.6 || Math.abs(wrap(this.heading - next.dir)) > 1.05 || Math.abs(next.ly - gy) > 1.6 || !this.clearWay(this.x, this.z, next.lx, next.lz)) next = null;
       else { next.chained = true; next.intent = this.headTake; }
     }
+    // (let go: no next, whatever was in mind; settle onto this one. Still going, but turned off the next: what's on along
+    // the way you're going now, from here (a redirect))
+    if (!this.going) next = null;
+    else if (!next && this.plan?.next && Math.abs(wrap(this.heading - this.headTake)) > 0.35) {
+      const c = this.chainFrom(this.x, this.z, gy, this.heading, null, 0);
+      if (c && Math.abs(wrap(this.heading - c.dir)) < 0.6 && this.clearWay(this.x, this.z, c.lx, c.lz)) { next = c; next.chained = true; next.intent = this.heading; }
+    }
+    this.settle = !this.going;
     let as: Landing;
     if (next && imp < 4.5) {
       // (onto a crown with the next already in mind: planted, the weight taken and turned toward it, and away; a straight
       // run on a crisp touch, a turn or a rise a longer, deeper load)
       as = 'light'; this.crouchV += 0.5 + imp * 0.25;
       const turnBy = Math.abs(wrap(next.dir - this.move)), up = Math.max(0, next.ly - gy);
-      next.wait = Math.min(0.3, 0.05 + 0.16 * turnBy + 0.06 * up + 0.012 * imp);
+      // (a bound straight on: a brief touch; a redirect: the foot takes the weight, the turn goes with it, and the push
+      // leaves on the new way)
+      next.wait = Math.min(0.32, (turnBy > 0.35 ? 0.12 : 0.05) + 0.16 * turnBy + 0.06 * up + 0.012 * imp);
+      this.movePlant = this.move;
       next.ox = this.x; next.oz = this.z;
       // (read at the pace you came in at; then braked for real as the foot takes the weight and turns it (the stride and
       // the eye going by what you're really doing), and taken back up by the push)
