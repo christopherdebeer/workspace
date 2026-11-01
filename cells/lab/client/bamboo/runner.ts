@@ -96,7 +96,7 @@ export class Runner {
   private airTurn = 0; private headTake = 0;
   /** the player holding on (going) this tick; settling onto a landing (braking to a stop within what's under you); the
    * way the body was going when the foot it springs from was planted */
-  private going = true; private settle = false; private movePlant = 0; private lastX = 0; private lastZ = 0;
+  private going = true; private settle = false; private movePlant = 0; private lastX = 0; private lastZ = 0; private lastV = 0;
   /** the working the debug view shows (debug.ts): read only */
   debugState() { return { held: this.held, stopped: this.stopped, limitT: this.limitT, stanceLeft: this.stanceLeft, best: this.best, offLine: Math.abs(wrap(this.move - this.heading)) }; }
   private barred = 0; private held = false; private heldT = 0; private acc = 0; private foot = 0; private think = 0; private best = 0; private bestCost = 0; private stride = 2.2; private posts: Post[] = []; private brushed = new Set<object>();
@@ -183,7 +183,10 @@ export class Runner {
     // moving)
     // (by how far you've really come, not how hard you're going: pressed into a stand of culms, going nowhere, is held too)
     const came = Math.hypot(this.x - this.lastX, this.z - this.lastZ) / dt; this.lastX = this.x; this.lastZ = this.z;
-    this.limitT = go && !this.air && (this.v < 0.8 || came < 0.6) ? this.limitT + dt : 0;
+    // (getting going from a stand on open ground isn't being held: slow and not gathering pace counts; gathering it only
+    // pauses the count, real progress ends it)
+    const rising = this.v > this.lastV + 0.4 * dt; this.lastV = this.v;
+    this.limitT = go && !this.air && (this.v < 0.8 || came < 0.6) ? this.limitT + (rising ? 0 : dt) : 0;
     const dx = Math.sin(this.move), dz = Math.cos(this.move);
 
     // ─── the body: ducking what's at head height ahead, shoulders turned through a gap, a brush past a culm ───
@@ -664,8 +667,9 @@ export class Runner {
     for (let k = 0; k < n; k++) {
       const t0 = k / n, t1 = (k + 1) / n;
       for (const up of [0.35, 1.25]) if (F.rockBetween(pt(t0, up), pt(t1, up))) return false;
-      // (the feet over what's underfoot: clear of it between takeoff and landing)
-      if (k > 0 && t0 < 0.9) { const p = pt(t0, 0); if (F.at(p[0], p[2]).y > p[1] + 0.05) return false; }
+      // (the feet over what's underfoot: clear of it between takeoff and landing; a hop up onto something higher springs
+      // up first and over its lip, as a straight throw doesn't, so it's only the faces that judge it)
+      if (by - ay < 0.45 && k > 0 && t0 < 0.9) { const p = pt(t0, 0); if (F.at(p[0], p[2]).y > p[1] + 0.05) return false; }
     }
     return true;
   }
@@ -772,7 +776,12 @@ export class Runner {
       if (d < m && d > 1e-4) { nx = p.x + (ox / d) * m; nz = p.z + (oz / d) * m; }
     }
     // (pressed between two, too close to fit: no step through; you stay where you were)
-    for (const p of this.posts) if (meets(p, EYE + 0.16 - this.duck) === 'block' && Math.hypot(nx - p.x, nz - p.z) < body * 0.7 + p.r) return [this.x, this.z];
+    // (already that close, a step that takes you further from it is still yours: out of a squeeze, never stuck in one)
+    for (const p of this.posts) {
+      if (meets(p, EYE + 0.16 - this.duck) !== 'block') continue;
+      const dn = Math.hypot(nx - p.x, nz - p.z);
+      if (dn < body * 0.7 + p.r && dn <= Math.hypot(this.x - p.x, this.z - p.z)) return [this.x, this.z];
+    }
     return [nx, nz];
   }
   /** whether a straight way from (ax, az) to (bx, bz) keeps clear of the culms */
