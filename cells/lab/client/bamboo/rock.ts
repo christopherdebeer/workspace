@@ -310,7 +310,9 @@ interface Box { u0: number; u1: number; y0: number; y1: number; w0: number; w1: 
  * missing kept, so a fallen piece below can be its shape). Each piece a block in the same frame; the tier's top pieces
  * its crest (if it's the top tier) or ledges.
  */
-function carve(out: Block[], O: V3, ax: [V3, V3, V3], b: Box, sd: number, depth: number, top: boolean, g: Geo, moss: number, lost: V3[]) {
+const COLUMN = { kind: 'column' as BlockKind, top: 'crest' as Role, low: 'lip' as Role };
+// (`as`: what its pieces are: an escarpment's columns (crest on top, lip below) or an outcrop's slabs)
+function carve(out: Block[], O: V3, ax: [V3, V3, V3], b: Box, sd: number, depth: number, top: boolean, g: Geo, moss: number, lost: V3[], as: { kind: BlockKind; top: Role; low: Role } = COLUMN) {
   const r = (q: number) => u01(sd, q), U = b.u1 - b.u0, H = b.y1 - b.y0, D = b.w1 - b.w0;
   const piece = (q: Box, s2: number, topHere: boolean) => {
     const h: V3 = [(q.u1 - q.u0) / 2, (q.y1 - q.y0) / 2, (q.w1 - q.w0) / 2];
@@ -318,7 +320,7 @@ function carve(out: Block[], O: V3, ax: [V3, V3, V3], b: Box, sd: number, depth:
     const c = add(add(add(O, ax[0], (q.u0 + q.u1) / 2), ax[1], (q.y0 + q.y1) / 2), ax[2], (q.w0 + q.w1) / 2), rr = (k: number) => u01(s2, k);
     const crest = topHere && top, side = rr(22) < 0.35 ? rr(23) * 0.18 : 0;
     const cut: Cut = crest ? { f: rr(20) < 0.45 ? 0.05 + rr(21) * 0.2 : 0, l: rr(24) < 0.5 ? side : 0, r: rr(24) >= 0.5 ? side : 0, worn: 0.3 + rr(26) * 0.5 } : { f: rr(20) * 0.06, l: rr(25) * 0.05, worn: 0.15 + rr(26) * 0.4 };
-    out.push(make(c, ax, h, 'column', crest ? 'crest' : 'lip', rr(3), topHere ? (crest ? moss * 0.5 : moss) : moss * 0.6, g, cut));
+    out.push(make(c, ax, h, as.kind, crest ? as.top : as.low, rr(3), topHere ? (crest ? moss * 0.5 : moss) : moss * 0.6, g, cut));
   };
   // (a tall face is always broken once at least; below that, some pieces left whole)
   if (depth <= 0 || (H < 4 && r(1) < 0.3) || (H < 1.2 && U < 1.6)) { piece(b, sd, true); return; }
@@ -326,22 +328,22 @@ function carve(out: Block[], O: V3, ax: [V3, V3, V3], b: Box, sd: number, depth:
   if (op < 0.38 && U > 1.6) {
     // (a joint across it, one side set back and lowered; through the upper part only, now and then)
     const at = b.u0 + U * (0.3 + 0.4 * r(3)), ends = H > 2 && r(4) < 0.45, ys = ends ? b.y0 + H * (0.35 + 0.3 * r(5)) : b.y0;
-    if (ends) carve(out, O, ax, { ...b, y1: ys }, next(1), depth - 1, false, g, moss, lost);
+    if (ends) carve(out, O, ax, { ...b, y1: ys }, next(1), depth - 1, false, g, moss, lost, as);
     const L: Box = { ...b, y0: ys, u1: at }, R: Box = { ...b, y0: ys, u0: at }, back = r(6) < 0.5 ? L : R;
     back.w1 -= 0.3 + 0.8 * r(7); back.y1 -= (b.y1 - ys) * (0.08 + 0.3 * r(8));
-    carve(out, O, ax, L, next(2), depth - 1, top, g, moss, lost);
-    carve(out, O, ax, R, next(3), depth - 1, top, g, moss, lost);
+    carve(out, O, ax, L, next(2), depth - 1, top, g, moss, lost, as);
+    carve(out, O, ax, R, next(3), depth - 1, top, g, moss, lost, as);
   } else if (op < 0.68 && H > 1.6) {
     // (a bed: the lower part a shelf standing out (or set back), the upper going on)
     const ys = b.y0 + H * (0.3 + 0.4 * r(9));
-    carve(out, O, ax, { ...b, y1: ys, w1: b.w1 + (r(10) < 0.6 ? 0.35 + 0.65 * r(11) : -0.5 * r(11)) }, next(4), depth - 1, false, g, moss, lost);
-    carve(out, O, ax, { ...b, y0: ys, w1: b.w1 - (0.25 + 0.6 * r(12)) }, next(5), depth - 1, top, g, moss, lost);
+    carve(out, O, ax, { ...b, y1: ys, w1: b.w1 + (r(10) < 0.6 ? 0.35 + 0.65 * r(11) : -0.5 * r(11)) }, next(4), depth - 1, false, g, moss, lost, as);
+    carve(out, O, ax, { ...b, y0: ys, w1: b.w1 - (0.25 + 0.6 * r(12)) }, next(5), depth - 1, top, g, moss, lost, as);
   } else if (H > 1 && D > 1) {
     // (a wedge gone from its top front: a shoulder down to the face; what's gone kept for what fell)
     const ys = b.y0 + H * (0.35 + 0.3 * r(13)), ws = b.w1 - D * (0.3 + 0.35 * r(14));
     lost.push([U / 2, (b.y1 - ys) / 2, (b.w1 - ws) / 2]);
-    carve(out, O, ax, { ...b, w1: ws }, next(6), depth - 1, top, g, moss, lost);
-    carve(out, O, ax, { ...b, w0: ws, y1: ys }, next(7), depth - 1, false, g, moss, lost);
+    carve(out, O, ax, { ...b, w1: ws }, next(6), depth - 1, top, g, moss, lost, as);
+    carve(out, O, ax, { ...b, w0: ws, y1: ys }, next(7), depth - 1, false, g, moss, lost, as);
   } else piece(b, sd, true);
 }
 
@@ -479,7 +481,11 @@ export function outcropsIn(L: RockLand, ci: number, cj: number): Block[] {
         const gy = lowest(gr, cx, cz, t, o, pt.w, pt.d), rr = (q: number) => u01(sd, q);
         const cut: Cut = pt.kind === 'wedge' ? { f: 0.6 + rr(20) * 0.25, l: rr(21) * 0.2, worn: 0.2 + rr(22) * 0.3 } : pt.kind === 'fragment' ? { f: rr(20) * 0.5, r: rr(21) * 0.4, worn: rr(22) * 0.6 } : { f: 0.12 + rr(20) * 0.35, l: rr(21) < 0.4 ? rr(23) * 0.35 : 0, r: rr(24) < 0.4 ? rr(25) * 0.35 : 0, worn: 0.25 + rr(22) * 0.45 };
         if (pt.kind === 'slab' && rr(27) < 0.35) cut.notch = [rr(28) < 0.5 ? -1 : 1, rr(30) < 0.5 ? -1 : 1, 0.25 + rr(29) * 0.3];
-        out.push(make([cx, gy + pt.hh * (pt.kind === 'fragment' ? 0.3 : 0.25), cz], ax, h, pt.kind, pt.kind === 'fragment' ? 'fallen' : 'outcrop', rr(3), 0.3 + 0.7 * rr(4), g, cut));
+        const C: V3 = [cx, gy + pt.hh * (pt.kind === 'fragment' ? 0.3 : 0.25), cz];
+        // (a big slab is fractured as the escarpment's tiers are: a joint, a bed or a wedge gone, once, or twice when it's
+        // tall; never one bare box standing over you)
+        if (pt.kind === 'slab' && pt.hh * 2 > 2.2) carve(out, C, ax, { u0: -pt.w, u1: pt.w, y0: -pt.hh, y1: pt.hh, w0: -pt.d, w1: pt.d }, sd * 7 + 3, pt.hh * 2 > 3.5 ? 2 : 1, true, g, 0.3 + 0.7 * rr(4), [], { kind: 'slab', top: 'outcrop', low: 'outcrop' });
+        else out.push(make(C, ax, h, pt.kind, pt.kind === 'fragment' ? 'fallen' : 'outcrop', rr(3), 0.3 + 0.7 * rr(4), g, cut));
       });
     } else {
       // (running crowns: a line of low flat tops stepping along the contour, a little apart, a little up and down)

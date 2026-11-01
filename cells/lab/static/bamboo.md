@@ -126,7 +126,7 @@ Every block takes its up from the bedding and its tier heights from the planes t
 - **The ground** is cut only where the rock stands (under a block, down to the foot) or in a cleft's floor. Elsewhere the land keeps its own rise, so nothing's cut that isn't covered. A trail's stair still cuts through between columns.
 
 **Out on the slope** there are two kinds:
-- **a rooted outcrop**: a big slab tipped back into the hill, its neighbours along the same joints, a wedge broken off below, fragments;
+- **a rooted outcrop**: a big slab tipped back into the hill (fractured as the escarpment's tiers are, by a joint, a bed or a wedge gone, once or twice by its height: never one bare box standing over you), its neighbours along the same joints, a wedge broken off below, fragments;
 - **running crowns**: low flat tops stepping along the contour, a way a fox could take.
 
 **A block** is a prism stood on its bedding over its own outline: a rectangle with some of its corners broken off, so four to eight sides, its faces cut obliquely where a corner went. Its top is drawn in and dropped toward the faces it's broken to, so it's a top in facets, not one plane. It's chamfered round its top edge (the worn edge). Its faces are flat, each lit as one plane: a face's normal is the face's own (a quad's, from its diagonals), never its triangles', so a face whose corners are nudged off one plane doesn't light as two facets. **A tier is fractured, not stacked.** Each tier's mass is split by recursion along what rock breaks on (`carve()`):
@@ -137,7 +137,7 @@ Every block takes its up from the bedding and its tier heights from the planes t
 Some faces are left whole, so the breaks read against them. The crest breaks into shoulders and steps, not one blade.
 
 **Into the drawing, feature by feature.** The rock doesn't fade along one line across the frame. The paper is the stone's own bare face, so each part of it gives way in its own manner and at its own place:
-- **a face in the sun** goes to the open paper first, with an edge of its own laid in the face's frame, not a soft fog;
+- **a face in the sun** goes to the open paper first, with an edge of its own running along the block's bedding (its own layers), not a soft fog or a round blot;
 - **a side turned away** keeps its wash (its light, past its colour) and a few strokes across it;
 - **the foot**, where a block meets the ground, holds its colour longest, with its contact stroke;
 - **a crest or a lip** carries on as a fine contour past the colour;

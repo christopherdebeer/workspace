@@ -942,13 +942,13 @@ void main() {
     // paper's the stone's own bare face, so a face gives out with an edge of its own, broken in the face's frame, not
     // a fog. A face the sun's on goes first; a side turned away keeps its wash (its light, past its colour) and a few
     // strokes across it; the foot, where it meets the ground, holds longest; and here and there a lit patch is left far
-    // out on its own. The culms' shadows across it linger pale on the paper after its colour's gone)
+    // out on its own, its edge running along the bedding (the block's own layers), never a round blot. The culms' shadows across it linger pale on the paper after its colour's gone)
     // (each by the face's own normal, never the bumped one, which wavers pixel to pixel: the face is one thing)
     vec3 Nf = normalize(vN);
     float foot = vFoot, litF = smoothstep(.05, .45, dot(Nf, uSun)), fid = vFace;
-    oR += (fid - .5) * .14 + .1 * litF - .07 * (1. - litF) + (fbm2(fuv * .35 + vSeed * 5.) - .5) * .34 - .16 * (1. - smoothstep(.0, .3, foot));
+    oR += (fid - .5) * .14 + .1 * litF - .07 * (1. - litF) + (fbm2(vec2(vL.y * 1.1 + vSeed * 3., (vL.x + vL.z) * .16)) - .5) * .34 - .16 * (1. - smoothstep(.0, .3, foot));
     oR -= .24 * smoothstep(.7, .78, vn(fuv * .2 + vSeed * 3.)) * litF;
-    gColSharp = 4.; gLitO = -.12 * litF;
+    gColSharp = 2.5; gLitO = -.12 * litF;
     // (and only on a side plane, turned edge-on to the eye (a recess's side, a block's flank); a broad face seen square
     // says its plane by its edges alone, never ruled across)
     hatchR = hatch * (1. - litF) * (1. - smoothstep(.3, .6, abs(dot(Nf, normalize(uEye - vW)))));
