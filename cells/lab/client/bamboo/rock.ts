@@ -301,6 +301,50 @@ export function anchors(L: RockLand, x0: number, z0: number, x1: number, z1: num
 /** a pair of neighbours' shared decision: 0 … 1, the same from either side */
 const pairOf = (s: number, p: Anchor, q: Anchor) => (p.pr < q.pr ? u01(s, p.pr * 1e3, q.pr * 1e3, 707) : u01(s, q.pr * 1e3, p.pr * 1e3, 707));
 
+/** a box in a block frame: across (u), up (y), out (w), from the frame's origin */
+interface Box { u0: number; u1: number; y0: number; y1: number; w0: number; w1: number }
+/**
+ * A tier broken by its fractures: recursively, a joint (split across, one side set back a little and lowered; now and
+ * then through the upper part only, so the joint ends inside the rock), a bed (split up, the lower part a shelf standing
+ * out or set back, its front its own), or a wedge gone from the top front (a shoulder, a step down to the face; what's
+ * missing kept, so a fallen piece below can be its shape). Each piece a block in the same frame; the tier's top pieces
+ * its crest (if it's the top tier) or ledges.
+ */
+function carve(out: Block[], O: V3, ax: [V3, V3, V3], b: Box, sd: number, depth: number, top: boolean, g: Geo, moss: number, lost: V3[]) {
+  const r = (q: number) => u01(sd, q), U = b.u1 - b.u0, H = b.y1 - b.y0, D = b.w1 - b.w0;
+  const piece = (q: Box, s2: number, topHere: boolean) => {
+    const h: V3 = [(q.u1 - q.u0) / 2, (q.y1 - q.y0) / 2, (q.w1 - q.w0) / 2];
+    if (h[0] < 0.15 || h[1] < 0.15 || h[2] < 0.15) return;
+    const c = add(add(add(O, ax[0], (q.u0 + q.u1) / 2), ax[1], (q.y0 + q.y1) / 2), ax[2], (q.w0 + q.w1) / 2), rr = (k: number) => u01(s2, k);
+    const crest = topHere && top, side = rr(22) < 0.35 ? rr(23) * 0.18 : 0;
+    const cut: Cut = crest ? { f: rr(20) < 0.45 ? 0.05 + rr(21) * 0.2 : 0, l: rr(24) < 0.5 ? side : 0, r: rr(24) >= 0.5 ? side : 0, worn: 0.3 + rr(26) * 0.5 } : { f: rr(20) * 0.06, l: rr(25) * 0.05, worn: 0.15 + rr(26) * 0.4 };
+    out.push(make(c, ax, h, 'column', crest ? 'crest' : 'lip', rr(3), topHere ? (crest ? moss * 0.5 : moss) : moss * 0.6, g, cut));
+  };
+  // (a tall face is always broken once at least; below that, some pieces left whole)
+  if (depth <= 0 || (H < 4 && r(1) < 0.3) || (H < 1.2 && U < 1.6)) { piece(b, sd, true); return; }
+  const op = r(2), next = (k: number) => sd * 31 + k;
+  if (op < 0.38 && U > 1.6) {
+    // (a joint across it, one side set back and lowered; through the upper part only, now and then)
+    const at = b.u0 + U * (0.3 + 0.4 * r(3)), ends = H > 2 && r(4) < 0.45, ys = ends ? b.y0 + H * (0.35 + 0.3 * r(5)) : b.y0;
+    if (ends) carve(out, O, ax, { ...b, y1: ys }, next(1), depth - 1, false, g, moss, lost);
+    const L: Box = { ...b, y0: ys, u1: at }, R: Box = { ...b, y0: ys, u0: at }, back = r(6) < 0.5 ? L : R;
+    back.w1 -= 0.3 + 0.8 * r(7); back.y1 -= (b.y1 - ys) * (0.08 + 0.3 * r(8));
+    carve(out, O, ax, L, next(2), depth - 1, top, g, moss, lost);
+    carve(out, O, ax, R, next(3), depth - 1, top, g, moss, lost);
+  } else if (op < 0.68 && H > 1.6) {
+    // (a bed: the lower part a shelf standing out (or set back), the upper going on)
+    const ys = b.y0 + H * (0.3 + 0.4 * r(9));
+    carve(out, O, ax, { ...b, y1: ys, w1: b.w1 + (r(10) < 0.6 ? 0.35 + 0.65 * r(11) : -0.5 * r(11)) }, next(4), depth - 1, false, g, moss, lost);
+    carve(out, O, ax, { ...b, y0: ys, w1: b.w1 - (0.25 + 0.6 * r(12)) }, next(5), depth - 1, top, g, moss, lost);
+  } else if (H > 1 && D > 1) {
+    // (a wedge gone from its top front: a shoulder down to the face; what's gone kept for what fell)
+    const ys = b.y0 + H * (0.35 + 0.3 * r(13)), ws = b.w1 - D * (0.3 + 0.35 * r(14));
+    lost.push([U / 2, (b.y1 - ys) / 2, (b.w1 - ws) / 2]);
+    carve(out, O, ax, { ...b, w1: ws }, next(6), depth - 1, top, g, moss, lost);
+    carve(out, O, ax, { ...b, w0: ws, y1: ys }, next(7), depth - 1, false, g, moss, lost);
+  } else piece(b, sd, true);
+}
+
 /** the escarpment anchored in chunk (ci, cj): its blocks, and its clefts' floors (none of it asks the ground, so the
  * ground can ask it where it stands) */
 export function escarpIn(L: RockLand, ci: number, cj: number): { blocks: Block[]; floors: Floor[] } {
@@ -341,6 +385,7 @@ export function escarpIn(L: RockLand, ci: number, cj: number): { blocks: Block[]
     // (one mass with its right neighbour across their tops: this top reaches over both, and that one has none of its own)
     const merged = right.merge && R0 !== null && p.pr > R0.pr, skipTop = left.merge && L0 !== null && L0.pr > p.pr;
     let top: Block | null = null;
+    const lost: V3[] = [];
     for (let m = 0; m < ys.length - 1; m++) {
       const isTop = m === ys.length - 2;
       if (isTop && skipTop) continue;
@@ -353,22 +398,14 @@ export function escarpIn(L: RockLand, ci: number, cj: number): { blocks: Block[]
       const sd = s * 977 + k * 13 + m, r = (q: number) => u01(sd, q);
       const ax = axes(t, g, sd, 2.5, -lean);
       const c: V3 = [px + o[0] * mid + t[0] * sh, (lo + hi) / 2, pz + o[2] * mid + t[2] * sh];
-      const sideCut = r(22) < 0.4 ? r(23) * 0.22 : 0;
-      const cut: Cut = isTop ? { f: r(20) < 0.5 ? 0.06 + r(21) * 0.24 : 0, l: r(24) < 0.5 ? sideCut : 0, r: r(24) >= 0.5 ? sideCut : 0, worn: 0.3 + r(26) * 0.5 } : { f: r(20) * 0.06, l: r(22) * 0.05, worn: 0.15 + r(26) * 0.4 };
-      if (r(27) < 0.3) cut.notch = [r(28) < 0.5 ? -1 : 1, 1, 0.2 + r(29) * 0.3];
-      // (a shoulder now and then: the top tier's front a lower block before its back, so the crest steps down to the face
-      // in a broad shelf, not one upright blade)
-      if (isTop && r(40) < 0.35 && dep > 1.1 && hy > 0.7) {
-        const fd = dep * (0.3 + r(41) * 0.2), bd = dep - fd, low = hy * 2 * (0.3 + r(42) * 0.25);
-        const fb = make(add(add(c, ax[2], dep - fd), ax[1], -low / 2), ax, [ww, hy - low / 2, fd], 'column', 'crest', r(43), 0.6 + 0.4 * r(4), g, { ...cut, b: 0 });
-        const bb = make(add(c, ax[2], -fd), ax, [ww * (0.92 + r(44) * 0.08), hy, bd], 'column', 'crest', r(45), 0.5 + 0.4 * r(4), g, { ...cut, f: (cut.f ?? 0) * 0.5 });
-        blocks.push(fb, bb);
-        top = bb;
-        continue;
-      }
-      const b = make(c, ax, [ww, hy, dep], 'column', isTop ? 'crest' : 'lip', r(3), isTop ? 0.6 + 0.4 * r(4) : 0.35 + 0.5 * r(4), g, cut);
-      blocks.push(b);
-      if (isTop) top = b;
+      // (the tier broken by its own fractures, in its own frame (its bedding, its joints), so its pieces share their planes
+      // and their joints are grooves between solids, never lines on one: a joint with one side set back, now and then
+      // only through its upper part; a bed with a shelf standing out below it or set back; a wedge gone from its top
+      // front. Some tiers left whole, so a broad face stays broad)
+      const O: V3 = [px + t[0] * sh, (lo + hi) / 2, pz + t[2] * sh];
+      const before = blocks.length;
+      carve(blocks, O, ax, { u0: -ww, u1: ww, y0: -hy, y1: hy, w0: -back, w1: front }, sd, (isTop ? 2 : 1) + (hy > 2.5 ? 1 : 0), isTop, g, isTop ? 0.15 + 0.2 * r(4) : 0.45 + 0.5 * r(4), lost);
+      if (isTop) for (let q = before; q < blocks.length; q++) if (blocks[q].role === 'crest') top = blocks[q];
     }
     // (a cleft beside it, if it's the pair's owner (the one that outranks the other): a floor up the gap ramping to a block
     // set at its back)
@@ -381,8 +418,10 @@ export function escarpIn(L: RockLand, ci: number, cj: number): { blocks: Block[]
       blocks.push(make([cx - o[0] * (bk + dep), (lo + hi) / 2, cz - o[2] * (bk + dep)], ax, [gap / 2 + 0.35, (hi - lo) / 2, dep], 'column', 'back', u01(sd, 3), 0.7, g, { f: u01(sd, 20) * 0.1, worn: 0.4 }));
     }
     // (a piece of its top tier fallen at the foot: its proportions and bedding, toppled)
-    if (top && u01(s, k, 760) < 0.3) {
-      const f = 0.3 + u01(s, k, 762) * 0.25, h: V3 = [Math.min(1.2, top.h[0] * f), Math.min(0.7, top.h[1] * f * 0.6), Math.min(1, top.h[2] * f)];
+    if (top && u01(s, k, 760) < (lost.length ? 0.75 : 0.25)) {
+      // (the shape of what's missing above, where a wedge has gone from it; else a piece of its top tier)
+      const f = 0.3 + u01(s, k, 762) * 0.25, gone = lost[0];
+      const h: V3 = gone ? [Math.min(1.4, gone[0] * 0.8), Math.min(0.9, gone[1] * 0.8), Math.min(1.1, gone[2] * 0.9)] : [Math.min(1.2, top.h[0] * f), Math.min(0.7, top.h[1] * f * 0.6), Math.min(1, top.h[2] * f)];
       const d = hw + 1.2 + u01(s, k, 761) * 2, cx = px + o[0] * d + t[0] * (u01(s, k, 763) - 0.5) * 2, cz = pz + o[2] * d + t[2] * (u01(s, k, 763) - 0.5) * 2;
       if (L.trailNear(cx, cz).d > 1.4 + h[0] * 1.5) {
         const topple = (u01(s, k, 764) < 0.5 ? -1 : 1) * (0.6 + u01(s, k, 765) * 0.7), ax: [V3, V3, V3] = [top.ax[0], rot(top.ax[1], top.ax[0], topple), rot(top.ax[2], top.ax[0], topple)];
@@ -465,7 +504,7 @@ export function rockMesh(blocks: Block[]): Float32Array {
       const A: V3 = [T[f], T[f + 1], T[f + 2]], B: V3 = [T[f + 3], T[f + 4], T[f + 5]], C: V3 = [T[f + 6], T[f + 7], T[f + 8]];
       const N: V3 = [b.tn[ti * 3], b.tn[ti * 3 + 1], b.tn[ti * 3 + 2]];
       // (moss where it's held: a ledge's top (under the lip above), a cleft's back block; little on faces, none beneath)
-      const moss = b.moss * (N[1] > 0.6 ? (b.role === 'lip' || b.role === 'back' ? 1.3 : 1) : N[1] < -0.2 ? 0 : b.role === 'lip' ? 0.5 : 0.25);
+      const moss = b.moss * (N[1] > 0.6 ? (b.role === 'lip' || b.role === 'back' ? 1.3 : 0.6) : N[1] < -0.2 ? 0 : b.role === 'lip' ? 0.5 : 0.25);
       for (const p of [A, B, C]) {
         const d = sub(p, b.c);
         out.set([p[0], p[1], p[2], N[0], N[1], N[2], dot(d, b.ax[0]), dot(d, b.ax[1]), dot(d, b.ax[2]), b.bed[0], b.bed[1], moss, b.seed, b.anchor[0], b.anchor[1], b.anchor[2], b.worn[ti], ROLE[b.role]], o);

@@ -116,7 +116,7 @@ for (const kind of ['fox', 'runner', 'stir']) for (const seed of seeds) {
   me.onLand = (_on, imp) => { noise = Math.max(noise, Math.min(1, imp / 5)); };
   for (let t = 0; t < 300 && !chase.over; t += dt) {
     const [gx, gz] = chase.guess();
-    const turn = Math.max(-1.8 * dt, Math.min(1.8 * dt, wrap(Math.atan2(gx - me.x, gz - me.z) - me.heading)));
+    const turn = me.limitT > 0.4 ? me.freer * 1.2 * dt : Math.max(-1.8 * dt, Math.min(1.8 * dt, wrap(Math.atan2(gx - me.x, gz - me.z) - me.heading)));
     const ox = me.x, oz = me.z;
     me.update(dt, { go: true, turn }); me.stream(me.x, me.z, 1);
     noise *= Math.exp(-dt * 2);

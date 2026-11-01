@@ -1,7 +1,7 @@
 // Bamboo's run, without drawing (node cells/lab/devtools/bamboo-run.mjs [seconds] [seed]): the runner loping on, turning
 // as `auto` turns it, for so long; what it met and how it went (its moves and landings too). Checks it never runs through
 // a culm (as it stands at the hips, leaning or bowed; one ducked under isn't in the way), never stalls for long, and keeps
-// up its pace.
+// up its pace, and never turns for the player (where it goes is theirs: its heading is only ever their turns).
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -13,14 +13,16 @@ const T = Number(process.argv[2] ?? 180), seed = Number(process.argv[3] ?? 1), d
 const world = new B.World(seed), me = new B.Runner(world);
 me.stream(0, 0, 400); me.y = me.groundAt(0, 0);
 let topY = 0, bigDrop = 0, longAir = 0, airNow = 0, dist = 0, stopped = 0, trail = 0, air = 0, stairs = 0, steps = 0, closest = 9, longestStall = 0, stall = 0, jumps = 0, wasAir = false, minY = 1e9, maxY = -1e9;
-const acts = {}, lands = {};
+const acts = {}, lands = {}, h0 = me.heading;
+let turned = 0;
 me.onStep = (on) => { steps++; if (on === 'step') stairs++; };
 me.onAct = (a) => { acts[a] = (acts[a] ?? 0) + 1; };
 me.onLand = (_on, _imp, as) => { lands[as] = (lands[as] ?? 0) + 1; };
 for (let t = 0; t < T; t += dt) {
-  const turn = (Math.sin(t * 0.13 + 1.3) * 0.25 + Math.sin(t * 0.051) * 0.2) * dt;
+  // (a person held at a face or a rim turns to look for a way: the runner won't turn for them)
+  const turn = (Math.sin(t * 0.13 + 1.3) * 0.25 + Math.sin(t * 0.051) * 0.2) * dt + (me.limitT > 0.4 ? me.freer * 1.2 * dt : 0);
   const px = me.x, pz = me.z;
-  me.update(dt, { go: true, turn });
+  me.update(dt, { go: true, turn }); turned += turn;
   me.stream(me.x, me.z, 1);
   const d = Math.hypot(me.x - px, me.z - pz); dist += d;
   if (me.v < 1) { stopped += dt; stall += dt; longestStall = Math.max(longestStall, stall); } else stall = 0;
@@ -38,6 +40,7 @@ row('slow or stopped', `${stopped.toFixed(1)} s; longest ${longestStall.toFixed(
 row('closest to a culm', `${closest.toFixed(2)} m from its skin`);
 row('moves', JSON.stringify(acts));
 row('landings', JSON.stringify(lands));
+row('heading', `the player's own: off by ${Math.abs(me.heading - h0 - turned).toExponential(1)} rad from their turns`);
 row('height range', `${minY.toFixed(1)} … ${maxY.toFixed(1)} m`);
-const ok = [closest > 0.15, dist / T > 3.5, longestStall < 6];
+const ok = [closest > 0.15, dist / T > 3.5, longestStall < 6, Math.abs(me.heading - h0 - turned) < 1e-6];
 console.log(ok.every(Boolean) ? 'ok' : `FAIL ${JSON.stringify(ok)}`);

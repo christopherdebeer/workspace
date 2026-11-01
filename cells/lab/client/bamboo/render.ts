@@ -810,7 +810,7 @@ void main() {
       base = mix(base, base * vec3(.64, .65, .63), streak * steep * .55);
       base = mix(base, base * 1.1 + .03, vWorn * .7);
       float pk = fbm2(vW.xz * .55 + vSeed * 3.);
-      float mossM = smoothstep(.55, .8, N.y) * smoothstep(.52, .74, pk + vMoss * .25) * (1. - vWorn);
+      float mossM = smoothstep(.55, .8, N.y) * smoothstep(.56, .8, pk + vMoss * .3) * (1. - vWorn);
       mossM = max(mossM, steep * streak * smoothstep(.62, .82, pk + vMoss * .2) * .5);
       alb = mix(base, vec3(.38, .47, .22) * (.85 + .3 * vn(fuv * 4.)), mossM * .85);
       mark = under * .9;

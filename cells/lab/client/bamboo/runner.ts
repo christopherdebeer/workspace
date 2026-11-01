@@ -81,7 +81,12 @@ export class Runner {
   onAct: (act: Act) => void = () => {};
   /** a foot set down (every one: plain steps, the plant before a takeoff, a landing) */
   onContact: (c: Contact) => void = () => {};
-  private loading = false; private stanceFrom = 0; private stanceLeft = 0; private stanceEnd = 0; private aerialT = 0.2; private nextY = 0; private barred = 0; private held = false; private heldT = 0; private heldDir = 0; private barUntil = -1; private acc = 0; private foot = 0; private think = 0; private best = 0; private bestCost = 0; private stride = 2.2; private posts: Post[] = []; private brushed = new Set<object>();
+  private loading = false; private stanceFrom = 0; private stanceLeft = 0; private stanceEnd = 0; private aerialT = 0.2; private nextY = 0; /** how long you've been held at a limit (a face, a rim, nothing to take along your way) */
+  limitT = 0;
+  /** which side's the more open, held at a limit: where a person would turn (+1 left, -1 right) */
+  freer = 1;
+  private airTurn = 0;
+  private barred = 0; private held = false; private heldT = 0; private acc = 0; private foot = 0; private think = 0; private best = 0; private bestCost = 0; private stride = 2.2; private posts: Post[] = []; private brushed = new Set<object>();
   constructor(readonly world: Land, readonly range = 104) { this.feet = new Footings(world, this.chunks); }
 
   /** build the chunks within range of (x, z) that aren't built (at most `budget` of them), and let go of those well out */
@@ -116,13 +121,14 @@ export class Runner {
   private tick(dt: number, go: boolean) {
     const F = this.feet;
     this.clock += dt;
-    // (a trail you're on, running more or less along it, carries you: it turns you with it until you turn off it)
+    // (a trail you're on, running more or less along it: you're on it (its footing's easier, its pull a little on your
+    // line); it never turns you: where you go is yours)
     const q = this.world.trailNear(this.x, this.z);
     this.onTrail = false;
     if (q.trail && q.d < HALF * 1.6) {
       const tr = q.trail, i = Math.min(tr.x.length - 2, q.i), dir = Math.atan2(tr.x[i + 1] - tr.x[i], tr.z[i + 1] - tr.z[i]);
-      const along = Math.abs(wrap(this.heading - dir)) < Math.PI / 2 ? dir : wrap(dir + Math.PI), off = wrap(along - this.heading);
-      if (Math.abs(off) < 0.6) { this.onTrail = true; this.heading += off * ease(dt, 2.2); }
+      const along = Math.abs(wrap(this.heading - dir)) < Math.PI / 2 ? dir : wrap(dir + Math.PI);
+      if (Math.abs(wrap(along - this.heading)) < 0.6) this.onTrail = true;
     }
     const onStair = this.world.tread(this.x, this.z) !== null;
     // (a few times a second: the weave, and a move picked if there's one to make)
@@ -131,10 +137,17 @@ export class Runner {
       this.think = 0.08;
       this.posts = F.posts(this.x, this.z, 10);
       this.weave(q, go);
-      // (a move you've committed to is given up only if you turn well off its way before the takeoff)
-      if (this.plan && Math.abs(wrap(this.heading - this.plan.dir)) > 0.95) this.plan = null;
+      // (the moves ahead are provisional: turn off a move's way before its foot's planted and it's dropped and looked for
+      // again along where you're going now; once planted, the foot and the flight are committed)
+      if (this.plan && this.plan.planted === undefined && Math.abs(wrap(this.heading - this.plan.dir)) > 0.35) this.plan = null;
+      // (a planted foot that can't spring (nothing left to push it on) lets go of the move)
+      if (this.plan && this.plan.planted !== undefined && this.clock - this.plan.planted > 0.8) this.plan = null;
       if (!this.plan && !onStair && (this.v > 1.2 || this.held)) {
-        const p = this.pick(this.best);
+        // (a way across what's in your way, first, along where you're going: an obstacle asks for a move, not a turn; only
+        // if there's none, along the corridor's clearest way)
+        const along = this.pick(this.heading);
+        if (along) this.best = this.heading;
+        const p = along ?? this.pick(this.best);
         this.plan = p && this.clearWay(this.x, this.z, p.lx, p.lz) && (!p.next || this.clearWay(p.lx, p.lz, p.next.lx, p.next.lz)) ? p : null;
         if (this.plan?.next && !this.clearWay(this.plan.lx, this.plan.lz, this.plan.next.lx, this.plan.next.lz)) this.plan.next = null;
         if (this.plan) this.read(this.plan, this.plan.ox, this.plan.oz, this.y, this.v);
@@ -143,8 +156,10 @@ export class Runner {
     const plan = this.plan;
     const dirNow = plan && !this.air ? Math.atan2(plan.ox - this.x, plan.oz - this.z) : this.best;
     if (!this.air) this.move += wrap((plan ? (Math.hypot(plan.ox - this.x, plan.oz - this.z) > 0.25 ? dirNow : plan.dir) : this.best) - this.move) * ease(dt, plan ? 10 : 6);
-    // (turned aside by a rim, you go on that way: the heading follows)
-    if (Math.abs(wrap(this.best - this.heading)) > 0.6 && this.bestCost < 60) this.heading += wrap(this.best - this.heading) * ease(dt, 1.5);
+    // (and your heading's your own: avoiding something, the body turns a little off your line and comes back to it; it
+    // never takes you another way. Barred, it stops there, facing where you meant)
+    // (how long you've been getting nowhere, meaning to: held at a face or a rim, or nothing to take along your way)
+    this.limitT = go && !this.air && this.v < 0.8 ? this.limitT + dt : this.v > 1.5 || this.air ? 0 : this.limitT;
     const dx = Math.sin(this.move), dz = Math.cos(this.move);
 
     // ─── the body: ducking what's at head height ahead, shoulders turned through a gap, a brush past a culm ───
@@ -213,10 +228,8 @@ export class Runner {
       const [sx, sz] = this.slip(this.x + dx * this.v * dt, this.z + dz * this.v * dt);
       // (and never over a drop too far to take: held at the rim, unless it's where a leap's to be taken from)
       // (held there, you look for a way from where you stand: across, or down another way)
-      this.held = F.at(sx + dx * 0.3, sz + dz * 0.3).y < here - 3.2 && !(plan && (plan.kind === 'leap' || plan.kind === 'drop') && Math.hypot(plan.ox - sx, plan.oz - sz) < 0.5);
-      if (this.held && this.heldT === 0) this.heldDir = this.move;
+      this.held = F.at(sx + dx * 0.3, sz + dz * 0.3).y < here - 3.2 && !(plan && (plan.planted !== undefined || Math.hypot(plan.ox - sx, plan.oz - sz) < 0.5));
       this.heldT = this.held ? this.heldT + dt : 0;
-      if (this.heldT > 0.6) this.barUntil = this.clock + 2.5;
       if (this.held) this.v = 0;
       else { this.x = sx; this.z = sz; }
       // (the footing: follow it; over an edge with nothing planned, off it, and down)
@@ -276,16 +289,14 @@ export class Runner {
     // (stones in reach that could be stood on: a way over one is a way the run would rather take)
     const crowns: { x: number; z: number; rise: number }[] = [];
     for (const s of F.stonesNear(this.x, this.z, 8)) { const top = F.at(s.x, s.z); if (top.kind === 'stone') { const rise = top.y - F.groundAt(s.x, s.z); if (rise > 0.25 && top.y - here < 1.3) crowns.push({ x: s.x, z: s.z, rise }); } }
-    let best = this.heading, bestCost = 1e9;
-    // (looking wider when the way ahead's barred: a rim or a face turns you along it; a dead end (a crown of rock with
-    // a drop all round in front) turns you back the way you came)
-    for (let a = -5; a <= 5 || (bestCost >= 60 && a <= 54); a++) {
-      const k = a <= 5 ? a : (a % 2 ? 1 : -1) * (6 + Math.floor((a - 6) / 2));
+    let best = this.heading, bestCost = 1e9, left = 1e9, right = 1e9;
+    // (only within a corridor round where you're going (a stand sidestepped, a gap found), the cost of each way growing
+    // with how far it's off your line, so the body comes back to it; never wider: a way round that isn't yours isn't
+    // taken. A trail along your line draws you a little)
+    for (let k = -5; k <= 5; k++) {
       const ang = this.heading + k * 0.11, dx = Math.sin(ang), dz = Math.cos(ang);
-      let cost = Math.abs(k) * 0.5;
-      // (held at a rim a while with nothing to take there, that way's barred: look elsewhere)
-      if (this.clock < this.barUntil && Math.abs(wrap(ang - this.heldDir)) < 0.5) cost += 60;
-      if (pull) cost += Math.min(6, this.world.trailNear(this.x + dx * 6, this.z + dz * 6).d) * 0.45;
+      let cost = Math.abs(k) * 0.8;
+      if (pull) cost += Math.min(6, this.world.trailNear(this.x + dx * 6, this.z + dz * 6).d) * 0.2;
       for (const p of posts) {
         const rx = p.x - this.x, rz = p.z - this.z, al = rx * dx + rz * dz;
         if (al <= 0 || al >= 9) continue;
@@ -309,8 +320,11 @@ export class Runner {
         if (al > 1.5 && al < 8 && lat < 0.45) cost -= 1.6;
       }
       if (cost < bestCost) { bestCost = cost; best = ang; }
+      if (k > 0) left = Math.min(left, cost); else if (k < 0) right = Math.min(right, cost);
     }
     this.best = best; this.bestCost = bestCost;
+    // (chosen as you come to a limit, and kept while you're held there: one way round, not a dither)
+    if (this.limitT === 0 && Math.abs(left - right) > 1) this.freer = left < right ? 1 : -1;
   }
 
   /** looking ahead along `dir` for something to do: the first edge up or down within a second or two */
@@ -365,7 +379,7 @@ export class Runner {
           if (g > 0) {
             // (onto the top it found, a little in from its edge, if that's still the same top)
             const l = at((i - 1) * S + g + 0.3), ly = F.at(l[0], l[1]).y;
-            if (Math.abs(ly - from.y) < 0.7) return { kind: 'leap', dir, ox: o[0], oz: o[1], lx: l[0], lz: l[1], ly, clear: Math.max(ly, from.y) + 0.1, next: null, wait: 0 };
+            if (ly > from.y - 2.6 && ly < from.y + 0.7 && Math.abs(ly - F.at(o[0] + dx * g, o[1] + dz * g).y) < 0.35) return { kind: 'leap', dir, ox: o[0], oz: o[1], lx: l[0], lz: l[1], ly, clear: Math.max(ly, from.y) + 0.1, next: null, wait: 0 };
           }
         }
         // (no further than you'd jump; or, held up a while with no other way, lowering yourself down a face as far as
@@ -389,16 +403,16 @@ export class Runner {
   /** how far across a cleft from (x, z) going (dx, dz) there's a top about as high as `y` to land on (within a long
    * leap), or -1 */
   private across(x: number, z: number, dx: number, dz: number, y: number) {
-    const F = this.feet;
-    for (let d = 0.3; d <= 2.4; d += 0.15) {
+    // (as far as a bound at this pace reaches; onto a top about as high, or a ledge below (down to a couple of metres), level
+    // enough to come down on: a way on across a cleft, or down a stepped face, not only a crack)
+    const F = this.feet, reach = Math.max(2.4, Math.min(3.8, 1.6 + 0.3 * this.v));
+    for (let d = 0.3; d <= reach; d += 0.15) {
       const u = F.at(x + dx * d, z + dz * d);
       if (u.y > y + 0.6) return -1;
-      if (u.y > y - 0.7) { const v = F.at(x + dx * (d + 0.5), z + dz * (d + 0.5)); return v.y > y - 0.8 ? d : -1; }
+      if (u.y > y - 2.5) { const v = F.at(x + dx * (d + 0.5), z + dz * (d + 0.5)); return Math.abs(v.y - u.y) < 0.35 ? d : -1; }
     }
     return -1;
   }
-  /** a move read as it's chosen: how much it asks, how deep the last plant loads for it, the pace it wants at takeoff
-   * (worked out as the takeoff will: the flight's time from the distance at this pace, longer if it must go higher) */
   private read(p: Plan, x: number, z: number, y: number, v: number) {
     const L = Math.hypot(p.lx - x, p.lz - z), vh0 = Math.max(p.kind === 'drop' ? 1.8 : 3.2, Math.min(LOPE * 1.1, v));
     let T = Math.max(p.kind === 'skip' ? 0.3 : 0.26, L / vh0), vy = (p.ly - y + 0.5 * G * T * T) / T;
@@ -572,7 +586,7 @@ export class Runner {
     }
     // (nothing asks more than a body can spring: a move that would is given up where you stand)
     if (vy > 6.5) { this.plan = null; this.loading = false; this.v = Math.min(this.v, 2); return; }
-    this.vx = (p.lx - this.x) / T; this.vz = (p.lz - this.z) / T; this.vy = vy; this.loading = false;
+    this.vx = (p.lx - this.x) / T; this.vz = (p.lz - this.z) / T; this.vy = vy; this.loading = false; this.airTurn = 0;
     this.move = Math.atan2(this.vx, this.vz);
     this.air = true; this.act = p.kind; this.aim = [p.lx, p.ly, p.lz];
     // (the release: the loaded crouch thrown off, as hard as it was loaded)
@@ -603,6 +617,11 @@ export class Runner {
     return true;
   }
   private fly(dt: number) {
+    // (in the air you can still lean the flight a little toward where you're going now (a bounded turn of how you're
+    // carried), so a turn made in the air shows at once and the landing's met already turning)
+    const cur = Math.atan2(this.vx, this.vz), want = Math.max(-0.9 * dt, Math.min(0.9 * dt, wrap(this.heading - cur)));
+    const turn = Math.max(-0.3 - this.airTurn, Math.min(0.3 - this.airTurn, want));
+    if (turn) { const c = Math.cos(turn), sn = Math.sin(turn), vx = this.vx; this.vx = vx * c + this.vz * sn; this.vz = -vx * sn + this.vz * c; this.airTurn += turn; this.move = Math.atan2(this.vx, this.vz); }
     [this.x, this.z] = this.slip(this.x + this.vx * dt, this.z + this.vz * dt); this.y += this.vy * dt; this.vy -= G * dt;
     const u = this.feet.at(this.x, this.z);
     // (down onto the surface; or, past where you were aiming and a hand's breadth over it, a foot reached down onto it: a
@@ -628,7 +647,7 @@ export class Runner {
       // (read at the pace you came in at; then braked for real as the foot takes the weight and turns it (the stride and
       // the eye going by what you're really doing), and taken back up by the push)
       this.read(next, this.x, this.z, gy, this.v);
-      this.v *= 0.25 + 0.3 * (1 - Math.min(1, turnBy));
+      this.v *= 1 - 0.65 * Math.min(1, turnBy / 1.1);
     } else if (imp < 3.3) {
       as = 'light'; this.crouchV += 0.4 + imp * 0.3; this.v *= 0.97;
     } else if (cramped) {

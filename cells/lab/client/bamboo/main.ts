@@ -251,7 +251,9 @@ function run(dt: number) {
   if (keys.has('ArrowLeft')) turn += dt * 1.6;
   if (keys.has('ArrowRight')) turn -= dt * 1.6;
   // (on its own, after whatever it's chasing, as near as it can tell where; else wandering)
-  if (auto && chase && !chase.over) { const [gx, gz] = chase.guess(); let a = Math.atan2(gx - me.x, gz - me.z) - me.heading; while (a > Math.PI) a -= 2 * Math.PI; while (a < -Math.PI) a += 2 * Math.PI; turn += Math.max(-1.8 * dt, Math.min(1.8 * dt, a)); }
+  // (held at a limit, it turns the way a person would, toward the more open side: the runner never turns for it)
+  if (auto && me.limitT > 0.4) turn += me.freer * 1.2 * dt;
+  else if (auto && chase && !chase.over) { const [gx, gz] = chase.guess(); let a = Math.atan2(gx - me.x, gz - me.z) - me.heading; while (a > Math.PI) a -= 2 * Math.PI; while (a < -Math.PI) a += 2 * Math.PI; turn += Math.max(-1.8 * dt, Math.min(1.8 * dt, a)); }
   else if (auto) turn += (Math.sin(t * 0.13 + 1.3) * 0.25 + Math.sin(t * 0.051) * 0.2) * dt;
   turn += dragTurn; dragTurn = 0;
   me.update(dt, { go, turn });
