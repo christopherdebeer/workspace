@@ -33,6 +33,7 @@ const experiments: Record<string, () => Promise<unknown>> = {
   rescue: () => import('./rescue/main'),
   'rescue-coast': () => import('./rescue-coast/main'),
   bamboo: () => import('./bamboo/main'),
+  rsvp: () => import('./rsvp/main'),
 };
 
 // (loaded as a worker by an experiment that shapes off the page's thread: serve it)

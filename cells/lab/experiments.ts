@@ -25,6 +25,12 @@ export interface Experiment {
 
 export const EXPERIMENTS: Experiment[] = [
   {
+    id: 'rsvp', title: 'Afterword · RSVP', group: 'Contemplation',
+    blurb: 'Fixed-recognition-point reading with subdued context above and below, tactile regression and seeking, and optional metronome clicks and bass accents. All text, position and settings in the URL fragment.',
+    page: 'static/rsvp.html', preview: 'preview', readme: 'static/rsvp.md',
+    presets: [{ label: 'read', query: '' }],
+  },
+  {
     id: 'cloudfold', title: 'Cloudfold', group: 'Contemplation',
     blurb: 'Keep folding space and hiding symmetry until cloud happens. An evolving volumetric KIFS cloud: orbit, gather, reveal the folds, and move the light from day through afterglow to storm.',
     page: 'static/cloudfold.html', preview: 'preview&seed=1947', readme: 'static/cloudfold.md',
