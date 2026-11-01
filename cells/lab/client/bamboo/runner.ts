@@ -96,7 +96,7 @@ export class Runner {
   private airTurn = 0; private headTake = 0;
   /** the player holding on (going) this tick; settling onto a landing (braking to a stop within what's under you); the
    * way the body was going when the foot it springs from was planted */
-  private going = true; private settle = false; private movePlant = 0;
+  private going = true; private settle = false; private movePlant = 0; private lastX = 0; private lastZ = 0;
   /** the working the debug view shows (debug.ts): read only */
   debugState() { return { held: this.held, stopped: this.stopped, limitT: this.limitT, stanceLeft: this.stanceLeft, best: this.best, offLine: Math.abs(wrap(this.move - this.heading)) }; }
   private barred = 0; private held = false; private heldT = 0; private acc = 0; private foot = 0; private think = 0; private best = 0; private bestCost = 0; private stride = 2.2; private posts: Post[] = []; private brushed = new Set<object>();
@@ -181,7 +181,9 @@ export class Runner {
     // (how long you've been getting nowhere, meaning to: held at a face or a rim, or nothing to take along your way)
     // (and as soon as you're getting somewhere again, not held: a person turning to find a way stops turning once they're
     // moving)
-    this.limitT = go && !this.air && this.v < 0.8 ? this.limitT + dt : 0;
+    // (by how far you've really come, not how hard you're going: pressed into a stand of culms, going nowhere, is held too)
+    const came = Math.hypot(this.x - this.lastX, this.z - this.lastZ) / dt; this.lastX = this.x; this.lastZ = this.z;
+    this.limitT = go && !this.air && (this.v < 0.8 || came < 0.6) ? this.limitT + dt : 0;
     const dx = Math.sin(this.move), dz = Math.cos(this.move);
 
     // ─── the body: ducking what's at head height ahead, shoulders turned through a gap, a brush past a culm ───
@@ -730,6 +732,8 @@ export class Runner {
       const ox = nx - p.x, oz = nz - p.z, d = Math.hypot(ox, oz), m = body + p.r;
       if (d < m && d > 1e-4) { nx = p.x + (ox / d) * m; nz = p.z + (oz / d) * m; }
     }
+    // (pressed between two, too close to fit: no step through; you stay where you were)
+    for (const p of this.posts) if (meets(p, EYE + 0.16 - this.duck) === 'block' && Math.hypot(nx - p.x, nz - p.z) < body * 0.7 + p.r) return [this.x, this.z];
     return [nx, nz];
   }
   /** whether a straight way from (ax, az) to (bx, bz) keeps clear of the culms */
@@ -773,6 +777,8 @@ export class Runner {
     const F = this.feet, n = F.normalAt(this.x, this.z), vh = Math.hypot(this.vx, this.vz);
     // (how hard: the speed into the surface, across its slope)
     const imp = Math.max(0, -(this.vx * n[0] + this.vy * n[1] + this.vz * n[2]));
+    // (and never down inside a culm's room: the landing's slipped clear of any beside it, as every step is)
+    [this.x, this.z] = this.slip(this.x, this.z);
     this.y = gy; this.foot = gy; this.air = false; this.vy = 0; this.under = on; this.impact = imp; this.aim = null;
     this.v = vh; this.move = Math.atan2(this.vx, this.vz);
     let next = this.plan?.next ?? null;

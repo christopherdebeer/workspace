@@ -6,6 +6,8 @@
 //   restraint         coming at it fast in the open alarms it into flight; coming slowly keeps it calm; stopping calms it
 //   a meeting         lying up, it lets you walk up to it; run at it and it's gone
 //   a bound           across a row of stones: in the air, then a landing heard; never a pop in height on the ground
+//   comes back        a fox far off and calm comes back to you on its own, and keeps round you at a distance (stalking),
+//                     never right up to you
 // Then chases on the mountain against a pursuer that knows only what it's seen and heard (steering for its belief),
 // reported. Throughout: its movement is honest (never further in a second than its speed; on the ground, never a jump in
 // height; up or down anything bigger, a bound through the air).
@@ -103,6 +105,20 @@ for (const v of [1.3, 7]) {
   check('across stones: bounds, lands, no pops', airs > 0 && landed > 0 && pop < 0.31, `${airs} bounds, ${landed} landings, biggest step on the ground ${pop.toFixed(2)} m, reached z ${fox.z.toFixed(1)}`);
 }
 
+// ─── comes back: you standing still, a calm fox put far off returns and keeps round you, not up to you ───
+{
+  const land = course({}), me = new B.Runner(land, 60); me.stream(0, 0, 60);
+  const fox = new B.Presence('fox', me.feet, land, 0, 80, 0, 5);
+  let closest = 99, cameIn = -1, stalkT = 0;
+  for (let t = 0; t < 90; t += 1 / 30) {
+    fox.step(1 / 30, { x: 0, z: 0, y: 1.62, v: 0, loud: 0 });
+    const d = Math.hypot(fox.x, fox.z);
+    if (cameIn < 0 && d < 32) cameIn = t;
+    if (cameIn >= 0) { closest = Math.min(closest, d); if (fox.regard === 'stalk') stalkT += 1 / 30; }
+  }
+  check('comes back', cameIn >= 0 && cameIn < 60 && closest > 7 && stalkT > 10, `in from 80 m to 32 m in ${cameIn < 0 ? '-' : cameIn.toFixed(0)} s · closest ${closest.toFixed(1)} m · stalking ${stalkT.toFixed(0)} s of the rest`);
+}
+
 // ─── chases on the mountain, against a pursuer that knows only what it's perceived ───
 for (const kind of ['fox', 'runner', 'stir']) for (const seed of seeds) {
   const world = new B.World(seed), me = new B.Runner(world);
@@ -112,6 +128,8 @@ for (const kind of ['fox', 'runner', 'stir']) for (const seed of seeds) {
   const fx = Math.sin(sh), fz = Math.cos(sh);
   const it = new B.Presence(kind, me.feet, world, sx + fx * 13 - fz * 2, sz + fz * 13 + fx * 2, kind === 'runner' ? sh : sh + Math.PI / 2, seed * 7 + 1);
   const chase = new B.Chase(it, me.feet), dt = 1 / 30, trace = [];
+  chase.persistent = kind === 'fox';
+  let farthest = 0, wasLost = false, foundAfterLost = false;
   let top = 0, pop = 0, py = it.y, wasAir = false, bounds = 0, path = '', last = '', noise = 0;
   me.onLand = (_on, imp) => { noise = Math.max(noise, Math.min(1, imp / 5)); };
   for (let t = 0; t < 300 && !chase.over; t += dt) {
@@ -127,9 +145,13 @@ for (const kind of ['fox', 'runner', 'stir']) for (const seed of seeds) {
     wasAir = it.air; py = it.y;
     chase.update(dt, { ...senses([me.x, me.y + 1.62, me.z], me.heading, true), mask: (me.v / B.LOPE) * 0.3 }, Math.hypot(me.x - ox, me.z - oz));
     if (chase.state !== last) { path += chase.state[0]; last = chase.state; }
+    if (t > 20) farthest = Math.max(farthest, Math.hypot(it.x - me.x, it.z - me.z));
+    if (chase.state === 'lost') wasLost = true; else if (wasLost && (chase.state === 'seen' || chase.state === 'traced')) foundAfterLost = true;
   }
   const TOP = { fox: 10.5, runner: 7.6, stir: 7.4 }[kind];
   const honest = top <= TOP * 1.1 && pop < 0.31;
+  // (a fox never leaves: the chase ends only if it lets you come up to it; it's never far; lost, it's found again)
+  if (kind === 'fox') check(`fox seed ${seed}: stays`, (!chase.over || chase.state === 'met') && farthest < 150 && (!wasLost || foundAfterLost || chase.state === 'met'), `farthest ${farthest.toFixed(0)} m · lost ${wasLost ? 'and ' + (foundAfterLost ? 'found again' : 'NOT found again') : 'never'} · ${chase.over ? chase.state : 'still on'}`);
   check(`${kind} seed ${seed}: honest`, honest, `${chase.over ? chase.state : 'still on'} after ${Math.round(chase.time)} s · ran ${Math.round(chase.run)} m · seen ${Math.round((100 * chase.seenTime) / Math.max(1, chase.time))}% traced ${Math.round((100 * chase.tracedTime) / Math.max(1, chase.time))}% searching ${Math.round((100 * chase.searchTime) / Math.max(1, chase.time))}% · found again ${chase.regained} · bounds ${bounds} · fastest ${top.toFixed(1)} m/s · step ${pop.toFixed(2)} m · ${path.slice(0, 30)}`);
 }
 console.log(fails ? `FAIL ${fails}` : 'ok');

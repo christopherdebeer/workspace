@@ -78,6 +78,10 @@ export class Presence {
   mode: 'go' | 'pause' | 'rest' = 'go';
   /** how alarmed it is at you, 0 … 1; and whether it can see you just now */
   alarm = 0; seesYou = false;
+  /** a fox's regard for you, when it isn't running from you: coming back toward you from far off, keeping round you at a
+   * distance (stalking, watching), or edging off when you're too near; fleeing when it's alarmed. It never leaves you */
+  regard: 'return' | 'stalk' | 'edge' | 'flee' = 'stalk';
+  private orbit = 1; private unseen = 0;
   travelled = 0;
   cues: Cue[] = [];
   /** culms it's shaken, and where it's passed through the canopy: where, when, how hard (the renderer lets them settle) */
@@ -92,7 +96,7 @@ export class Presence {
     this.x = x; this.z = z; this.heading = this.best = this.wander = heading; this.spec = KIND[kind];
     let s = (seed * 2654435761) >>> 0;
     this.rnd = () => { s = (s * 1664525 + 1013904223) >>> 0; return s / 4294967296; };
-    this.nextPause = 4 + this.rnd() * 6; this.goal = 700 + this.rnd() * 900;
+    this.nextPause = 4 + this.rnd() * 6; this.goal = 700 + this.rnd() * 900; this.orbit = this.rnd() < 0.5 ? -1 : 1;
     this.y = this.ground();
   }
   private ground(x = this.x, z = this.z) { return this.kind === 'stir' ? this.feet.groundAt(x, z) : this.feet.at(x, z).y; }
@@ -156,7 +160,10 @@ export class Presence {
     // ─── lying up: it lets you come, slowly; come fast or loud and it's gone ───
     if (this.mode === 'rest') {
       this.v = 0; this.swing(dt);
+      // (lying up out of your sight a long while, it gets restless and goes to where it can see you again)
+      if (this.kind === 'fox') this.unseen = this.seesYou ? 0 : this.unseen + dt;
       if (this.alarm > 0.7) { this.mode = 'go'; this.wander = away; }
+      else if (this.kind === 'fox' && this.unseen > 15) { this.mode = 'go'; this.unseen = 9; }
       return;
     }
     // ─── stopping: when it's got away, to listen and look back; on a height, to look; a runner to check the way; never
@@ -189,7 +196,19 @@ export class Presence {
     // their trail, the way they're going ───
     this.wander += (this.rnd() - 0.5) * dt * 1.6;
     let want = this.wander;
-    if (this.kind === 'fox' && this.alarm > 0.3) want = away + wrap(this.wander - away) * 0.45;
+    if (this.kind === 'fox' && this.alarm > 0.3) { want = away + wrap(this.wander - away) * 0.45; this.regard = 'flee'; }
+    else if (this.kind === 'fox') {
+      // (calm, it keeps you in its world: from far off it comes back, arcing in from the side, never straight at you; round
+      // you at a distance it keeps on round, now and then nearer, stopping on heights to watch; too near, it edges off)
+      // (and it means to be seen now and then: out of each other's sight a while, it comes in closer, toward you, until
+      // it has you in view again, and keeps there)
+      this.unseen = this.seesYou ? 0 : this.unseen + dt;
+      const toward = wrap(away + Math.PI), R = this.unseen > 8 ? Math.max(12, 24 - (this.unseen - 8) * 1.5) : 15 + 9 * (0.5 + 0.5 * Math.sin(this.t * 0.07 + this.goal));
+      if (d > R + 8) { this.regard = 'return'; want = toward + this.orbit * (d > 60 ? 0.25 : 0.6); }
+      else if (d < R - 6) { this.regard = 'edge'; want = away + this.orbit * 0.9; }
+      else { this.regard = 'stalk'; want = toward + this.orbit * Math.PI / 2 + wrap(this.wander - toward) * 0.15; if (this.rnd() < dt * 0.03) this.orbit = -this.orbit; }
+      if (this.unseen > 8 && d > 10 && this.regard !== 'edge') want = toward + this.orbit * 0.35;
+    }
     if (this.kind === 'runner') {
       const q = this.land.trailNear(this.x, this.z);
       if (q.trail) {
@@ -225,7 +244,7 @@ export class Presence {
     const blocked = this.bestCost >= 100;
     this.heading += wrap(this.best - this.heading) * ease(dt, blocked ? S.turn * 1.5 : S.turn);
     // ─── its pace (none, turning, where there's no way on) ───
-    const target = blocked ? 0 : this.kind === 'fox' ? (this.alarm > 0.8 ? S.bolt : this.alarm > 0.4 ? S.run : S.trot) : this.kind === 'stir' ? S.run * (0.85 + 0.3 * Math.sin(this.t * 0.31)) : S.run;
+    const target = blocked ? 0 : this.kind === 'fox' ? (this.alarm > 0.8 ? S.bolt : this.alarm > 0.4 ? S.run : this.regard === 'return' ? (d > 60 ? S.run : S.trot) : this.regard === 'stalk' ? 1.3 : S.trot) : this.kind === 'stir' ? S.run * (0.85 + 0.3 * Math.sin(this.t * 0.31)) : S.run;
     this.v += (target - this.v) * ease(dt, target < this.v ? 4 : 2.5);
     const dx = Math.sin(this.heading), dz = Math.cos(this.heading);
     // ─── a bound, if there's something just ahead it can't step ───

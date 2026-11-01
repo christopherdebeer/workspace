@@ -179,8 +179,10 @@ const note = document.createElement('div'); note.id = 'chasenote'; document.body
 function begin() {
   if (!chaseKind) return;
   const fx = Math.sin(me.heading), fz = Math.cos(me.heading), side = (chaseSeed % 2 ? 1 : -1);
-  // (it crosses your way a little ahead; someone running, along the trail ahead of you, going your way)
+  // (it crosses your way a little ahead; someone running, along the trail ahead of you, going your way; a fox is never
+  // put in front of you: it's in the grove already, behind you and off to a side, and comes to you its own way)
   let x = me.x + fx * 13 - fz * 2 * side, z = me.z + fz * 13 + fx * 2 * side;
+  if (chaseKind === 'fox' && !params.get('pose')) { const a = me.heading + Math.PI + side * 0.7; x = me.x + Math.sin(a) * 38; z = me.z + Math.cos(a) * 38; }
   const runner = chaseKind === 'runner', q = runner ? world.trailNear(me.x, me.z) : null;
   if (q?.trail && q.d < 12) {
     // (along your own trail, the way you're facing, sixteen metres on)
@@ -188,7 +190,7 @@ function begin() {
     x = tr.x[k]; z = tr.z[k];
   }
   it = new Presence(chaseKind, me.feet, world, x, z, runner ? me.heading : me.heading + (Math.PI / 2) * side, chaseSeed++);
-  chase = new Chase(it, me.feet); note.classList.remove('shown'); lastMe = [me.x, me.z]; settle = 0;
+  chase = new Chase(it, me.feet); chase.persistent = chaseKind === 'fox'; note.classList.remove('shown'); lastMe = [me.x, me.z]; settle = 0;
   // (`pose=walk|trot|gallop|gather|bound|contact|absorb|listen|lie`, with `still`: the body held just ahead, side on, to
   // see how it's made; a bound's phases as the fox sheet has them)
   const pose = params.get('pose');
@@ -224,7 +226,13 @@ function chaseStep(dt: number, eye: [number, number, number], yaw: number, p: nu
   it.step(dt, you);
   renderer.presence = it.parts(); wake(it);
   const d = Math.hypot(it.x - me.x, it.z - me.z);
-  if (!chase) { if (d > 90) { it = null; again = 25; } return; }
+  // (a fox never leaves: it's met you and lain there, and when it gets up and goes the chase is on again; and if you're
+  // put somewhere far off (an address), it's quietly somewhere behind you, out of sight, never set down in front of you)
+  if (it.kind === 'fox') {
+    if (d > 250) { const a = me.heading + Math.PI + (Math.random() < 0.5 ? -0.7 : 0.7); it.x = me.x + Math.sin(a) * 45; it.z = me.z + Math.cos(a) * 45; it.y = me.feet.at(it.x, it.z).y; it.mode = 'go'; }
+    if (!chase && it.mode !== 'rest' && d > 6) { chase = new Chase(it, me.feet); chase.persistent = true; note.classList.remove('shown'); settle = 0; }
+  }
+  if (!chase) { if (it.kind !== 'fox' && d > 90) { it = null; again = 25; } return; }
   const hy = fov / 2, hx = Math.atan(Math.tan(hy) * innerWidth / innerHeight);
   chase.update(dt, {
     eye, yaw, pitch: p, hx, hy, px: (2 * Math.tan(hy)) / Math.max(1, innerHeight),

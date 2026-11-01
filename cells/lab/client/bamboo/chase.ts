@@ -41,6 +41,9 @@ export class Chase {
   /** ended for good (met, or lost and it's gone well away) */
   ended = false;
   private look = 0; private wasSeen = true; private unseenAt = 0; private lastCue = -1; private lastSeen: { x: number; z: number; t: number } | null = null;
+  /** a chase with something that never leaves (a fox): lost isn't an end, only a state; it ends only when it lets you
+   * come up to it */
+  persistent = false;
   constructor(readonly it: Presence, readonly feet: Footings) { this.belief = { x: it.x, z: it.z, t: 0 }; this.lastCue = it.t; }
   get over() { return this.ended; }
 
@@ -86,7 +89,7 @@ export class Chase {
     else if (this.since < grace + 9 && d < 110) this.state = 'searching';
     else { if (this.state !== 'lost') this.lostAt = this.time; this.state = 'lost'; }
     if (this.state === 'seen') this.seenTime += dt; else if (this.state === 'traced') this.tracedTime += dt; else if (this.state === 'searching') this.searchTime += dt;
-    if (this.state === 'lost' && (d > 110 || this.time - this.lostAt > 20)) this.ended = true;
+    if (!this.persistent && this.state === 'lost' && (d > 110 || this.time - this.lostAt > 20)) this.ended = true;
   }
   /** a cue's where you now believe it is; its way from the last two, if close enough in time */
   private know(x: number, z: number) {
