@@ -553,7 +553,32 @@ export class World implements RockLand {
       }
     }
     for (let k = 0; k < canopy.length; k++) canopy[k] = 1 - Math.exp(-canopy[k] * 0.9);
-    return { ci, cj, x0, z0, ground, near, rock, culms, tall, sprays, twigs, stones, steps, roots, sunVis, ao, canopy, rocks, rockTop: RT };
+    // ─── where fallen leaves gather (0 none … 1 drifted deep): blown and washed down the slope until something stops them,
+    // so against a block's or a stone's foot (its uphill side most), and in the ground's hollows ───
+    const gather = new Float32Array(CN * CN);
+    const stoppers: [number, number, number, number, number, number, number][] = []; // cx, cz, ux, uz, hu, hw, reach
+    for (const b of rocksNear) { const u = [b.ax[0][0], b.ax[0][2]], ul = Math.hypot(u[0], u[1]) || 1; stoppers.push([b.c[0], b.c[2], u[0] / ul, u[1] / ul, b.h[0] * 0.9, b.h[2] * 0.9, b.kind === 'fragment' ? 1.4 : 2.4]); }
+    for (const st of stones) stoppers.push([st.x, st.z, 1, 0, st.r * 0.9, st.r * 0.9, 1.1]);
+    for (let j = 0; j < CN; j++) for (let i = 0; i < CN; i++) {
+      const k = i + j * CN, x = x0 + i * CELL, z = z0 + j * CELL;
+      if (rock[k] >= 1) continue;
+      const gx = (ground[Math.min(CN - 1, i + 1) + j * CN] - ground[Math.max(0, i - 1) + j * CN]) / 2, gz = (ground[i + Math.min(CN - 1, j + 1) * CN] - ground[i + Math.max(0, j - 1) * CN]) / 2, gl = Math.hypot(gx, gz) || 1;
+      let a = 0;
+      for (const [cx, cz, ux, uz, hu, hw, reach] of stoppers) {
+        const rx = x - cx, rz = z - cz;
+        if (Math.abs(rx) > hu + hw + reach || Math.abs(rz) > hu + hw + reach) continue;
+        const lu = rx * ux + rz * uz, lw = -rx * uz + rz * ux, d = Math.hypot(Math.max(0, Math.abs(lu) - hu), Math.max(0, Math.abs(lw) - hw));
+        if (d > reach) continue;
+        // (uphill of it: the side the ground rises toward, where what comes down is caught)
+        const up = ((rx * gx + rz * gz) / (Math.hypot(rx, rz) || 1)) / gl;
+        a = Math.max(a, (1 - d / reach) ** 1.5 * (0.55 + 0.45 * Math.max(0, up)));
+      }
+      // (a hollow: lower than the ground round it)
+      const ring = (ground[Math.max(0, i - 2) + j * CN] + ground[Math.min(CN - 1, i + 2) + j * CN] + ground[i + Math.max(0, j - 2) * CN] + ground[i + Math.min(CN - 1, j + 2) * CN]) / 4;
+      a = Math.max(a, ss(0.04, 0.25, ring - ground[k]) * 0.7);
+      gather[k] = a * (1 - rock[k]);
+    }
+    return { ci, cj, x0, z0, ground, near, rock, culms, tall, sprays, twigs, stones, steps, roots, sunVis, ao, canopy, gather, rocks, rockTop: RT };
   }
 }
 
@@ -592,6 +617,8 @@ export interface Chunk {
   sunVis: Float32Array; ao: Float32Array;
   /** per ground point: how much leaf is overhead (0 open sky … 1 closed canopy) */
   canopy: Float32Array;
+  /** per ground point: how deep the fallen leaves gather (against a foot of rock or stone, in a hollow) */
+  gather?: Float32Array;
   /** the rock anchored here (rock.ts): its blocks, meshed */
   rocks?: Block[];
   /** the highest of the rock over each ground point (or far below where there's none): for the land's light */

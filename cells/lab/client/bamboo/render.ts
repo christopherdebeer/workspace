@@ -233,6 +233,9 @@ vec3 bumpN(vec3 N, vec3 p, float h) {
   vec3 dpx = dFdx(p), dpy = dFdy(p); float dhx = dFdx(h), dhy = dFdy(h);
   vec3 r1 = cross(dpy, N), r2 = cross(N, dpx); float det = dot(dpx, r1);
   vec3 g = sign(det) * (dhx * r1 + dhy * r2);
+  // (fine relief tips a surface a little, never over: a jump in a height across a pixel isn't a cliff)
+  float t = length(g) / max(abs(det), 1e-8);
+  g *= min(1., .7 / max(t, 1e-6));
   return normalize(abs(det) * N - g);
 }
 // (cells: the distance to the nearest of a scatter of points, and how far the next is beyond it; the second is 0 along
@@ -594,32 +597,52 @@ void main() {
 }`;
 
 const GROUND_VS = COMMON + `
-layout(location = 0) in vec3 aP; layout(location = 1) in vec3 aN; layout(location = 2) in vec2 aD; layout(location = 3) in vec2 aL;
-out vec3 vW; out vec3 vN; out float vD; out float vRock; out float vSunVis; out float vAO;
-void main() { vW = aP; vN = aN; vD = aD.x; vRock = aD.y; vSunVis = aL.x; vAO = aL.y; gl_Position = uVP * vec4(aP, 1.); }`;
+layout(location = 0) in vec3 aP; layout(location = 1) in vec3 aN; layout(location = 2) in vec2 aD; layout(location = 3) in vec3 aL;
+out vec3 vW; out vec3 vN; out float vD; out float vRock; out float vSunVis; out float vAO; out float vGather;
+void main() { vW = aP; vN = aN; vD = aD.x; vRock = aD.y; vSunVis = aL.x; vAO = aL.y; vGather = aL.z; gl_Position = uVP * vec4(aP, 1.); }`;
 const GROUND_FS = COMMON + LIGHT + OUT + `
-in vec3 vW; in vec3 vN; in float vD; in float vRock; in float vSunVis; in float vAO;
+in vec3 vW; in vec3 vN; in float vD; in float vRock; in float vSunVis; in float vAO; in float vGather;
 uniform float uMarks;
 void main() {
   vec3 N = normalize(vN);
   float dist = distance(vW, uEye);
-  // (the litter's warm ochre everywhere under the grove; the worn middle of a trail paler earth; banks darker soil,
-  // mossy in the hollows)
-  float n1 = fbm2(vW.xz * .45), n2 = vn(vW.xz * 3.1);
-  vec3 litter = mix(vec3(.82, .68, .48), vec3(.68, .54, .36), n1);
-  litter *= .9 + .2 * vn(vW.xz * vec2(9., 2.5) + n1 * 4.);
-  vec3 earth = mix(vec3(.86, .78, .63), vec3(.77, .68, .54), n2);
-  vec3 soil = vec3(.5, .43, .33);
-  float worn = 1. - smoothstep(${(HALF * 0.35).toFixed(2)}, ${(HALF * 0.85).toFixed(2)}, vD + (n2 - .5) * .3);
+  // (the floor as three grounds in broad patches, not one carpet of equal leaves: so the next few metres read at once,
+  // and the leaves reward a closer look where they've gathered)
+  //   - compressed: a trail's trodden bed, pale earth matted with a few flattened leaves; the way, lightest
+  //   - settled: the floor's most, old litter matted down, its leaves only a quiet grain in one mid tone
+  //   - loose: drifts of fallen leaves, each its own, warm and lit: where they're caught (against rock and stone, in
+  //     hollows, swept to a trail's sides) and in broad patches
+  //   - humus: the dark damp earth showing, in patches and where it's steep
+  float n1 = fbm2(vW.xz * .45), n2 = vn(vW.xz * 3.1), pF = fbm2(vW.xz * .9 + 11.);
+  float worn = 1. - smoothstep(${(HALF * 0.4).toFixed(2)}, ${(HALF * 0.95).toFixed(2)}, vD + (pF - .5) * .45);
+  float swept = smoothstep(${(HALF * 0.75).toFixed(2)}, ${(HALF * 1.05).toFixed(2)}, vD + (pF - .5) * .3) * (1. - smoothstep(${(HALF * 1.3).toFixed(2)}, ${(HALF * 2.2).toFixed(2)}, vD));
+  float loose = clamp(smoothstep(.44, .64, fbm2(vW.xz * .2 + 3.) + (pF - .5) * .35) * .85 + smoothstep(.1, .6, vGather + (pF - .5) * .3) + swept * .55, 0., 1.) * (1. - worn * .85);
+  float humus = smoothstep(.56, .7, fbm2(vW.xz * .3 + 17.) + (pF - .5) * .3) * (1. - loose) * (1. - worn) + smoothstep(.3, .65, 1. - N.y) * .6 * (1. - loose * .5);
+  humus = clamp(humus, 0., 1.);
   float px = length(fwidth(vW.xz)), leafMark, leaf;
   float lH, lCav;
-  vec3 carp = carpet(litter * .8, vW.xz, px, leafMark, leaf, lH, lCav);
-  // (how much the litter covers: all of it off a trail, a few leaves left down its worn middle, none on a cut bank's bare
-  // face; one amount, so its colour, its relief and its creases go together and a cleared path is flat earth to the light
-  // as well as to the eye)
-  float cover = 1. - worn * .95 * (1. - (.1 + .2 * step(.62, vn(vW.xz * 2.2))));
-  vec3 alb = mix(earth, carp, cover);
-  alb = mix(alb, soil, smoothstep(.35, .7, 1. - N.y) * .7);
+  vec3 settled = mix(vec3(.56, .45, .32), vec3(.5, .4, .29), n1) * (.95 + .1 * vn(vW.xz * vec2(9., 2.5) + n1 * 4.));
+  vec3 carp = carpet(vec3(.62, .46, .3), vW.xz, px, leafMark, leaf, lH, lCav);
+  // (the leaves' own tones held close together, grouped in one warm value, a little lighter for the patch's own light)
+  vec3 lAvg = vec3(.84, .64, .4);
+  vec3 drift = mix(lAvg, carp * vec3(1.06, 1., .92), .6) * (1.04 + .1 * (n1 - .5));
+  vec3 matted = mix(settled, mix(settled * 1.1, carp * .8, .4), .25);
+  vec3 earth = mix(vec3(.84, .76, .61), vec3(.77, .68, .54), n2);
+  vec3 dark = mix(vec3(.3, .24, .18), vec3(.37, .29, .21), n2);
+  vec3 alb = mix(matted, drift, loose);
+  alb = mix(alb, dark, humus * (1. - loose));
+  // (down a trail's bed a few leaves left, flattened)
+  float cover = 1. - worn * .95 * (1. - (.1 + .25 * step(.62, vn(vW.xz * 2.2))));
+  alb = mix(earth, alb, cover);
+  // (only a loose leaf is a leaf of its own to the eye and the ink: elsewhere one patch)
+  float own = loose * cover;
+  // (but every leaf of the litter keeps its own pick for where the colour gives out, so the floor breaks into leaves on
+  // the paper, not a smear: a trodden bed or the bare humus has no leaves to break into)
+  leaf = cover * (1. - humus * (1. - loose)) > .4 ? leaf : -1.;
+  // (and of those, inked in groups, not each one: a cluster here, a few there, the rest left to their colour)
+  leafMark *= smoothstep(.45, .8, own) * smoothstep(.3, .45, h21(floor(vW.xz * .8 + 3.1)));
+  lH *= mix(.15, .55, own); lCav = mix(1., lCav, mix(.25, .8, own));
+  vec3 soil = vec3(.5, .43, .33);
   // (a trail's cut bank: bare red-brown earth where it's steep, streaked down its fall, with roots run across it and
   // small stones in it; the litter only lies on its ledges)
   float cutBank = smoothstep(${(HALF + 0.15).toFixed(2)}, ${(HALF + 0.5).toFixed(2)}, vD) * (1. - smoothstep(${(HALF + BANK).toFixed(2)}, ${(HALF + BANK + 2.5).toFixed(2)}, vD)) * smoothstep(.04, .2, 1. - N.y);
@@ -671,7 +694,9 @@ void main() {
   // (and the floor itself, never flat: a broad swell, lumps of earth, pebbles proud of it, and down a trail the ruts
   // feet have worn; most where it's bare, under the litter only its swell)
   vec2 pb = vor(vW.xz * 5.5);
-  float pebble = smoothstep(.32, .12, pb.x) * step(.55, h21(floor(vW.xz * 5.5) + 7.7));
+  // (which are pebbles, by a smooth pick, never a grid cell's: a pick that jumps at a cell's edge where the pebble
+  // doesn't is a step in the height, and its slope a dark dash)
+  float pebble = smoothstep(.32, .12, pb.x) * smoothstep(.55, .65, vn(vW.xz * 1.7 + 7.7));
   float rut = exp(-pow((vD - ${(HALF * 0.35).toFixed(2)}) / .18, 2.)) + exp(-pow((vD + ${(HALF * 0.35).toFixed(2)}) / .18, 2.));
   float bare = 1. - .8 * cover * (leaf >= 0. ? 1. : .4);
   float hSoil = (fbm2(vW.xz * .7) - .5) * .12 + ((vn(vW.xz * 3.1) - .5) * .05 + pebble * .03) * midK * bare - rut * worn * .04;
@@ -1299,11 +1324,11 @@ export class Renderer {
   /** hand a chunk to the GPU */
   /** a chunk's ground as it's drawn: each point, its normal, how near a trail, how much rock, its light and openness */
   private groundVerts(c: Chunk) {
-    const G = c.ground, v = new Float32Array(CN * CN * 10);
+    const G = c.ground, v = new Float32Array(CN * CN * 11);
     for (let j = 0; j < CN; j++) for (let i = 0; i < CN; i++) {
       const k = i + j * CN, hx = G[Math.min(CN - 1, i + 1) + j * CN] - G[Math.max(0, i - 1) + j * CN], hz = G[i + Math.min(CN - 1, j + 1) * CN] - G[i + Math.max(0, j - 1) * CN];
       const n = norm([-hx * ((i === 0 || i === CN - 1) ? 2 : 1), 2 * CELL, -hz * ((j === 0 || j === CN - 1) ? 2 : 1)]);
-      v.set([c.x0 + i * CELL, G[k], c.z0 + j * CELL, n[0], n[1], n[2], c.near[k], c.rock[k], c.sunVis[k], c.ao[k]], k * 10);
+      v.set([c.x0 + i * CELL, G[k], c.z0 + j * CELL, n[0], n[1], n[2], c.near[k], c.rock[k], c.sunVis[k], c.ao[k], c.gather?.[k] ?? 0], k * 11);
     }
     return v;
   }
@@ -1450,7 +1475,7 @@ export class Renderer {
       use('ground');
       gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.idx.buf);
       for (const { c } of all) {
-        this.attr(0, c.ground, 3, 10, 0); this.attr(1, c.ground, 3, 10, 3); this.attr(2, c.ground, 2, 10, 6); this.attr(3, c.ground, 2, 10, 8);
+        this.attr(0, c.ground, 3, 11, 0); this.attr(1, c.ground, 3, 11, 3); this.attr(2, c.ground, 2, 11, 6); this.attr(3, c.ground, 3, 11, 8);
         gl.drawElements(gl.TRIANGLES, this.idx.count, gl.UNSIGNED_SHORT, 0);
       }
     }
