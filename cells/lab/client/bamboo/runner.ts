@@ -423,15 +423,18 @@ export class Runner {
         if (riseTot <= 1.35 + 0.12 * Math.max(0, this.v - 3) && crown >= 0.35 && prof[c0].kind === 'stone') {
           // (a broad low stone: up onto its crown)
           const o = at(Math.max(0.1, d - 0.6 - this.v * 0.2)), ld = (c0 + Math.min(c1 - c0, Math.round((0.4 + this.v * 0.08) / S))) * S, l = at(ld), lu = F.at(l[0], l[1]);
-          const p: Plan = { kind: 'hop', dir, ox: o[0], oz: o[1], lx: l[0], lz: l[1], ly: lu.y, clear: top + 0.05, next: null, wait: 0 };
+          const p: Plan = { kind: 'hop', dir, ox: o[0], oz: o[1], lx: l[0], lz: l[1], ly: lu.y, clear: Math.max(prof[c0].y, lu.y) + 0.05, next: null, wait: 0 };
           p.next = this.chainFrom(l[0], l[1], lu.y, dir, lu.stone);
           return p;
         }
         // (a face beyond a hop, up to two and a half times your height: run at it and up it, a foot or two kicked off the
         // stone, and over its top: superhuman, but a body's way of doing it, not a lift)
-        if (riseTot <= 4.6 && crown >= 0.45 && prof[c0].kind === 'stone' && this.v > 2) {
+        // (onto a top deep enough to stand on (a stance, 0.8 m): never up a fin to sail off its far side)
+        if (riseTot <= 4.6 && crown >= 0.8 && prof[c0].kind === 'stone' && this.v > 2) {
           const o = at(Math.max(0.1, d - 0.5 - this.v * 0.1)), ld = (c0 + Math.min(c1 - c0, Math.round(0.5 / S))) * S, l = at(ld), lu = F.at(l[0], l[1]);
-          return { kind: 'climb', dir, ox: o[0], oz: o[1], lx: l[0], lz: l[1], ly: lu.y, clear: top + 0.35, next: null, wait: 0 };
+          // (clearing the lip it lands over, not whatever higher tier stands behind it: a climb thrown over the highest point
+          // in sight sails past its own landing)
+          return { kind: 'climb', dir, ox: o[0], oz: o[1], lx: l[0], lz: l[1], ly: lu.y, clear: Math.max(prof[c0].y, lu.y) + 0.35, next: null, wait: 0 };
         }
         return null;
       }

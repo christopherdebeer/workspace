@@ -325,9 +325,12 @@ function carve(out: Block[], O: V3, ax: [V3, V3, V3], b: Box, sd: number, depth:
   // (a tall face is always broken once at least; below that, some pieces left whole)
   if (depth <= 0 || (H < 4 && r(1) < 0.3) || (H < 1.2 && U < 1.6)) { piece(b, sd, true); return; }
   const op = r(2), next = (k: number) => sd * 31 + k;
+  // (and every step it leaves is one a body can use: a top at least a stance deep (0.8 m), or none (flush, or under the
+  // face above); never a sliver at a lip)
   if (op < 0.38 && U > 1.6) {
-    // (a joint across it, one side set back and lowered; through the upper part only, now and then)
-    const at = b.u0 + U * (0.3 + 0.4 * r(3)), ends = H > 2 && r(4) < 0.45, ys = ends ? b.y0 + H * (0.35 + 0.3 * r(5)) : b.y0;
+    // (a joint across it, one side set back and lowered; through the upper part only, now and then; each side a stance
+    // wide)
+    const at = U >= 1.6 ? b.u0 + Math.max(0.8, Math.min(U - 0.8, U * (0.3 + 0.4 * r(3)))) : b.u0 + U / 2, ends = H > 2 && r(4) < 0.45, ys = ends ? b.y0 + H * (0.35 + 0.3 * r(5)) : b.y0;
     if (ends) carve(out, O, ax, { ...b, y1: ys }, next(1), depth - 1, false, g, moss, lost, as);
     const L: Box = { ...b, y0: ys, u1: at }, R: Box = { ...b, y0: ys, u0: at }, back = r(6) < 0.5 ? L : R;
     back.w1 -= 0.3 + 0.8 * r(7); back.y1 -= (b.y1 - ys) * (0.08 + 0.3 * r(8));
@@ -335,12 +338,13 @@ function carve(out: Block[], O: V3, ax: [V3, V3, V3], b: Box, sd: number, depth:
     carve(out, O, ax, R, next(3), depth - 1, top, g, moss, lost, as);
   } else if (op < 0.68 && H > 1.6) {
     // (a bed: the lower part a shelf standing out (or set back), the upper going on)
-    const ys = b.y0 + H * (0.3 + 0.4 * r(9));
-    carve(out, O, ax, { ...b, y1: ys, w1: b.w1 + (r(10) < 0.6 ? 0.35 + 0.65 * r(11) : -0.5 * r(11)) }, next(4), depth - 1, false, g, moss, lost, as);
-    carve(out, O, ax, { ...b, y0: ys, w1: b.w1 - (0.25 + 0.6 * r(12)) }, next(5), depth - 1, top, g, moss, lost, as);
-  } else if (H > 1 && D > 1) {
-    // (a wedge gone from its top front: a shoulder down to the face; what's gone kept for what fell)
-    const ys = b.y0 + H * (0.35 + 0.3 * r(13)), ws = b.w1 - D * (0.3 + 0.35 * r(14));
+    // (the shelf a stance deep in front of the face above it, or none: flush with it, or under it)
+    const ys = b.y0 + H * (0.3 + 0.4 * r(9)), back = 0.25 + 0.6 * r(12), shelf = r(10) < 0.6 ? 0.8 + 0.8 * r(11) : -0.4 * r(11);
+    carve(out, O, ax, { ...b, y1: ys, w1: b.w1 - back + shelf }, next(4), depth - 1, false, g, moss, lost, as);
+    carve(out, O, ax, { ...b, y0: ys, w1: b.w1 - back }, next(5), depth - 1, top, g, moss, lost, as);
+  } else if (H > 1 && D > 1.8) {
+    // (a wedge gone from its top front: a shoulder down to the face, a stance deep; what's gone kept for what fell)
+    const ys = b.y0 + H * (0.35 + 0.3 * r(13)), ws = b.w1 - Math.min(D - 0.6, Math.max(0.8, D * (0.3 + 0.35 * r(14))));
     lost.push([U / 2, (b.y1 - ys) / 2, (b.w1 - ws) / 2]);
     carve(out, O, ax, { ...b, w1: ws }, next(6), depth - 1, top, g, moss, lost, as);
     carve(out, O, ax, { ...b, w0: ws, y1: ys }, next(7), depth - 1, false, g, moss, lost, as);
