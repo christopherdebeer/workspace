@@ -4,11 +4,11 @@ A mobile-first experiment in Rapid Serial Visual Presentation (RSVP), with an ap
 
 ## Touch
 
-Tap the left third of the reading surface to go back one word, the right third to advance, the centre to start or pause. Drag horizontally to scan as you'd drag a page (leftward brings on what's next), reversible from the original touch-down position. The timeline seeks anywhere, and ±10 buttons make coarse steps. The whole player folds away (⌄) to a slim bar with play, progress and the way back (⌃), leaving the page to the text. Keyboard arrows and Space work on desktop; T taps the tempo.
+Tap the left third of the reading surface to go back one word, the right third to step on, the centre to start or pause. Stepping on is also how you set the pace (see The beat). Drag horizontally to scan as you'd drag a page (leftward brings on what's next), reversible from the original touch-down position. The timeline seeks anywhere, and ±10 buttons make coarse steps. The whole player folds away (⌄) to a slim bar with play, progress and the way back (⌃), leaving the page to the text. Keyboard arrows and Space work on desktop (→ steps on, and sets the pace, as a tap does).
 
 ## The beat
 
-The reader runs on a steady beat, shown top right in beats per minute with a dot that lands on each word. Every word takes one beat (a long one, eleven letters or more, a beat and a half), and punctuation adds rests in whole half-beats: a comma half a beat, a clause or sentence end one, a paragraph end two, all scaled by the rests setting. So the pulse never wavers: the words, the clicks and the bass all fall on the same grid, and it doesn't drift (each onset is counted from the last, not from a chain of timers). Tap the BPM in time, twice or more, to set the tempo from your taps; it holds until you tap again or move the slider. Stepping, seeking and pausing never change it, and it starts at full tempo (no warm-up).
+The reader runs on a steady beat, shown top right in beats per minute with a dot that lands on each word. Every word takes one beat (a long one, eleven letters or more, a beat and a half), and punctuation adds rests in whole half-beats: a comma half a beat, a clause or sentence end one, a paragraph end two, all scaled by the rests setting. So the pulse never wavers: the words, the clicks and the bass all fall on the same grid, and it doesn't drift (each onset is counted from the last, not from a chain of timers). The tempo is set by stepping: tap forward through the words (the right third, › or →) and, from the third step within two and a half seconds of the last, the rhythm of your steps becomes the BPM, each interval counted against the beats the word it left holds (so stepping off a sentence's end, with its rest, counts as the longer beat it is). Playing, your step lands at once and the beat runs on from it at the new tempo, so you can tap along to speed it up or hold it back; paused, Play goes on at the pace you stepped. It holds until you step again or move the slider; stepping back, seeking and pausing leave it as it is. Each start (Play, after a pause or a seek) eases in: the first few words (the warm-up, 4 by default, 0 to 8) held longer, the first by 1.6×, coming up to the tempo by the last.
 
 ## Reading
 
@@ -22,7 +22,7 @@ Click marks every word onset. Bass is a soft synthesized falling sine pulse on t
 
 ## Shareable state
 
-Everything is held in the URL fragment: \`#text=…&i=…&bpm=…&mode=…&span=…&opacity=…&pause=…&font=…&sound=…&volume=…&group=…&ui=…\` (an older link's \`wpm\` is read as the bpm). The address is rewritten when you pause, seek or change a setting, not on every word as it plays. The position and settings travel with the source text, and no localStorage/server data is needed. The URL itself contains the source text: do not publicly share private text. Long passages make long URLs. Playback does not auto-start on reload due to mobile audio restrictions.
+Everything is held in the URL fragment: \`#text=…&i=…&bpm=…&mode=…&span=…&opacity=…&pause=…&font=…&sound=…&volume=…&group=…&warm=…&ui=…\` (an older link's \`wpm\` is read as the bpm). The address is rewritten when you pause, seek or change a setting, not on every word as it plays. The position and settings travel with the source text, and no localStorage/server data is needed. The URL itself contains the source text: do not publicly share private text. Long passages make long URLs. Playback does not auto-start on reload due to mobile audio restrictions.
 
 ## Research questions
 

@@ -1,11 +1,12 @@
 /** Afterword: RSVP with peripheral context, on a steady beat; the URL fragment is the only state store.
  * - every word lands on a beat; punctuation and paragraph ends add rests in half-beats, so the pulse never wavers;
- * - the BPM (top right) is set by tapping it (tap tempo) or by the slider, and holds until changed;
+ * - the tempo is set by stepping: tap forward through words and their rhythm becomes the BPM (shown top right), held
+ *   until you step again or move the slider; each start eases in over a few words (a warm-up) up to it;
  * - previous words end where the current word begins, upcoming words begin where it ends, just above and below it. */
 type Mode = 'off' | 'rail' | 'passage';
 type Sound = 'off' | 'click' | 'bass' | 'both';
 type Group = 'clause' | 'sentence' | '2' | '3' | '4' | '6' | '8';
-type State = { text: string; i: number; bpm: number; mode: Mode; span: number; opacity: number; pause: number; font: number; sound: Sound; volume: number; group: Group; ui: 'full' | 'min'; run: boolean };
+type State = { text: string; i: number; bpm: number; mode: Mode; span: number; opacity: number; pause: number; font: number; sound: Sound; volume: number; group: Group; warm: number; ui: 'full' | 'min'; run: boolean };
 type Word = { w: string; par: boolean; sent: boolean; clause: boolean };
 const SAMPLE = "Reading is not a race between the eye and the page. The mind gathers meaning in phrases, anticipates what might come next, and sometimes moves backward to repair an incomplete thought.\n\nWhat changes when the next few words remain visible, but subdued? Perhaps a small preview restores anticipation without demanding a saccade. Perhaps a trace of previous words makes regression possible without losing the reading point.\n\nThis is an experiment, not a promise of faster comprehension. Find a pace that lets the sentence form. Then touch the surface: left to step back, right to step forward, swipe to scan, or use the timeline to seek.";
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -21,17 +22,17 @@ function decode(): State {
     span: Math.round(num(p.get('span'), 7, 1, 24)), opacity: Math.round(num(p.get('opacity'), 42, 0, 100)),
     pause: num(p.get('pause'), 1, 0, 3), font: Math.round(num(p.get('font'), 46, 28, 72)),
     sound: s === 'click' || s === 'bass' || s === 'both' ? s : 'off', volume: num(p.get('volume'), 38, 0, 100),
-    group: g && GROUPS.includes(g) ? g : 'clause', ui: p.get('ui') === 'min' ? 'min' : 'full', run: false,
+    group: g && GROUPS.includes(g) ? g : 'clause', warm: Math.round(num(p.get('warm'), 4, 0, 12)), ui: p.get('ui') === 'min' ? 'min' : 'full', run: false,
   };
 }
 const preview = new URLSearchParams(location.search).has('preview');
 let state = decode(), words: Word[] = [], timer: ReturnType<typeof setTimeout> | null = null, audio: AudioContext | null = null;
 // (the beat clock: when the current word's onset was, so the next lands a whole number of half-beats later, without drift)
-let onset = 0;
+let onset = 0, warmed = 0;
 let gesture: { id: number; x: number; y: number; initial: number; moved: boolean } | null = null;
-const taps: number[] = [];
+const taps: { t: number; beats: number }[] = [];
 const stage = $('stage'), before = $('before'), after = $('after'), progress = $<HTMLInputElement>('progress'), wordEl = $('word');
-const controlIds = ['bpm', 'mode', 'span', 'opacity', 'pause', 'font', 'sound', 'volume', 'group'] as const;
+const controlIds = ['bpm', 'mode', 'span', 'opacity', 'pause', 'font', 'sound', 'volume', 'group', 'warm'] as const;
 
 /** words with what ends them: a paragraph (a blank line), a sentence, a clause */
 function split(s: string): Word[] {
@@ -172,15 +173,19 @@ function stop(persist = true) {
   $('play').setAttribute('aria-label', 'Play reading');
   if (was && persist) save();
 }
+/** the warm-up: the first words after a start held longer (up to 1.6× for the first), easing to the tempo by the last */
+function warmth() { return warmed < state.warm ? 1 + 0.6 * (1 - warmed / state.warm) : 1; }
+/** how long the current word holds, now */
+const hold = () => beats(state.i) * period() * warmth();
 function schedule() {
   if (timer !== null) clearTimeout(timer);
-  const at = onset + beats(state.i) * period();
+  const at = onset + hold();
   timer = setTimeout(next, Math.max(0, at - performance.now()));
 }
 function next() {
   timer = null; if (!state.run) return;
   if (state.i >= words.length - 1) { stop(); return; }
-  onset += beats(state.i) * period();
+  onset += hold(); warmed++;
   // (fallen far behind (a hidden tab, a stall): the beat picks up from now, not in a rush to catch up)
   if (performance.now() - onset > period()) onset = performance.now();
   state.i++; paint(); beat(); schedule();
@@ -190,22 +195,32 @@ function start() {
   if (state.i === words.length - 1) state.i = 0;
   state.run = true; enableAudio(); paint();
   $('play').textContent = 'Ⅱ'; $('mini-play').textContent = 'Ⅱ'; $('play').setAttribute('aria-label', 'Pause reading');
-  onset = performance.now(); beat(); schedule();
+  onset = performance.now(); warmed = 0; taps.length = 0; beat(); schedule();
 }
 function toggle() { if (state.run) stop(); else start(); }
-/** tap tempo: two or more taps on the BPM, each within two seconds of the last, set it from their mean interval; it holds
- * until you tap again or move the slider */
-function tap() {
-  const t = performance.now();
-  if (taps.length && t - taps[taps.length - 1] > 2000) taps.length = 0;
-  taps.push(t); if (taps.length > 6) taps.shift();
-  pulse();
-  if (taps.length < 2) { $('bpm-unit').textContent = 'tap'; return; }
-  const mean = (taps[taps.length - 1] - taps[0]) / (taps.length - 1);
-  state.bpm = clamp(Math.round(60000 / mean), 40, 1200);
-  $('bpm-unit').textContent = 'bpm';
-  refresh(); save();
-  if (state.run) schedule();
+/** a step on, by tap or key: the rhythm of your steps is the tempo. Three or more within two and a half seconds of each
+ * other set the BPM from their intervals, each counted against the beats the word it left holds (so a step that leaves a
+ * sentence's end, with its rest, counts as the longer beat it is). Playing, the step lands now, the beat runs on from it
+ * at the new tempo; paused, it steps, and Play goes on at the tempo you stepped */
+function stepOn() {
+  const t = performance.now(), held = beats(state.i);
+  // (a new rhythm: after a gap of more than two and a half seconds, or more than twice the rhythm so far)
+  if (taps.length) {
+    const gapNow = t - taps[taps.length - 1].t, sofar = taps.length > 1 ? (taps[taps.length - 1].t - taps[0].t) / (taps.length - 1) : Infinity;
+    if (gapNow > 2500 || gapNow > 2 * sofar) taps.splice(0, taps.length - (gapNow > 2500 ? 0 : 1));
+  }
+  taps.push({ t, beats: held }); if (taps.length > 6) taps.shift();
+  if (taps.length >= 3) {
+    let ms = 0, bs = 0;
+    for (let k = 1; k < taps.length; k++) { ms += taps[k].t - taps[k - 1].t; bs += taps[k - 1].beats; }
+    state.bpm = clamp(Math.round((60000 * bs) / ms / 5) * 5, 40, 1200);
+    refresh();
+  }
+  if (state.run) {
+    if (state.i >= words.length - 1) { stop(); return; }
+    // (your step is the beat: no warm-up left to run, the next word timed from this one)
+    state.i++; paint(); beat(); onset = t; warmed = state.warm; schedule();
+  } else { move(1); pulse(); }
 }
 function refresh() {
   $<HTMLInputElement>('bpm').value = String(state.bpm);
@@ -217,6 +232,7 @@ function refresh() {
   $<HTMLSelectElement>('sound').value = state.sound;
   $<HTMLInputElement>('volume').value = String(state.volume);
   $<HTMLSelectElement>('group').value = state.group;
+  $<HTMLSelectElement>('warm').value = String(state.warm);
   $('bpm-label').textContent = String(state.bpm);
   $('bpm-value').textContent = String(state.bpm);
   $('span-label').textContent = String(state.span);
@@ -232,10 +248,9 @@ function bind() {
   $('play').addEventListener('click', toggle);
   $('mini-play').addEventListener('click', toggle);
   $('back').addEventListener('click', () => { stop(); move(-1); });
-  $('forward').addEventListener('click', () => { stop(); move(1); });
+  $('forward').addEventListener('click', stepOn);
   $('back-sentence').addEventListener('click', () => { stop(); move(-10); });
   $('forward-sentence').addEventListener('click', () => { stop(); move(10); });
-  $('bpm-tap').addEventListener('click', tap);
   $('collapse').addEventListener('click', () => { state.ui = 'min'; refresh(); save(); requestAnimationFrame(paint); });
   $('expand').addEventListener('click', () => { state.ui = 'full'; refresh(); save(); requestAnimationFrame(paint); });
   progress.addEventListener('pointerdown', () => stop());
@@ -261,13 +276,13 @@ function bind() {
     const g = gesture; gesture = null;
     if (!g.moved) {
       const r = stage.getBoundingClientRect(), x = (e.clientX - r.left) / r.width;
-      if (x < 0.34) { stop(); move(-1); } else if (x > 0.66) { stop(); move(1); } else toggle();
+      if (x < 0.34) { stop(); move(-1); taps.length = 0; } else if (x > 0.66) stepOn(); else toggle();
     } else save();
   });
   stage.addEventListener('pointercancel', () => { gesture = null; save(); });
   addEventListener('keydown', (e) => {
     if ((e.target as HTMLElement).closest('input,textarea,select,button,details,[contenteditable]')) return;
-    if (e.key === 'ArrowLeft') { e.preventDefault(); stop(); move(-1); } else if (e.key === 'ArrowRight') { e.preventDefault(); stop(); move(1); } else if (e.key === ' ') { e.preventDefault(); toggle(); } else if (e.key === 't') tap();
+    if (e.key === 'ArrowLeft') { e.preventDefault(); stop(); move(-1); } else if (e.key === 'ArrowRight') { e.preventDefault(); if (!e.repeat) stepOn(); } else if (e.key === ' ') { e.preventDefault(); toggle(); }
   });
   for (const key of controlIds) {
     const el = $(key) as HTMLInputElement | HTMLSelectElement;
@@ -281,6 +296,7 @@ function bind() {
       else if (key === 'sound') state.sound = el.value as Sound;
       else if (key === 'volume') state.volume = +el.value;
       else if (key === 'group') state.group = el.value as Group;
+      else if (key === 'warm') state.warm = +el.value;
       if (key === 'sound' && state.run) enableAudio();
       if ((key === 'bpm' || key === 'pause') && state.run) schedule();
       refresh(); paint();
@@ -311,6 +327,6 @@ else bind();
 if (document.fonts) void document.fonts.ready.then(() => paint());
 (window as any).__rsvp = {
   probe: () => ({ index: state.i, count: words.length, word: words[state.i].w, bpm: state.bpm, mode: state.mode, sound: state.sound, playing: state.run, ui: state.ui, beats: beats(state.i) }),
-  seek: (i: number) => { stop(); seek(i); }, tap,
+  seek: (i: number) => { stop(); seek(i); }, step: stepOn,
 };
 export {};

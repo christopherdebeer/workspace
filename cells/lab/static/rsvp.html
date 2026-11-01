@@ -7,7 +7,7 @@
 *{box-sizing:border-box}html,body{height:100%;margin:0;-webkit-text-size-adjust:100%}body{overscroll-behavior:none}button,input,select,textarea{font:inherit}button{border:0;background:none;color:inherit;cursor:pointer;-webkit-tap-highlight-color:transparent}button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible,summary:focus-visible{outline:2px solid var(--accent);outline-offset:2px}button{min-height:44px}a{color:inherit;text-decoration:none}input[type=range]{width:100%;accent-color:var(--accent);height:30px;touch-action:pan-x}
 #app{display:flex;flex-direction:column;height:100dvh;min-height:380px;max-width:980px;margin:0 auto;overflow:hidden}
 header{flex-shrink:0;display:flex;align-items:center;justify-content:space-between;padding:max(10px,env(safe-area-inset-top)) 18px 4px 24px;gap:12px}.brand{display:flex;gap:11px;align-items:baseline}.brand strong{font:500 19px/1.2 Georgia,serif;letter-spacing:-.05em}.brand small{font:10px ui-monospace,monospace;text-transform:uppercase;letter-spacing:.16em;color:var(--muted)}
-/* the beat, top right: the number, its unit, a dot that lands on each word; tap it in time to set it */
+/* the beat, top right: the number, its unit, a dot that lands on each word (set by the rhythm of your steps) */
 #bpm-tap{display:flex;align-items:baseline;gap:6px;padding:4px 6px 4px 12px;min-width:44px;font-variant-numeric:tabular-nums;touch-action:manipulation}
 #bpm-value{font:400 26px/1 Georgia,serif;letter-spacing:-.03em}#bpm-unit{font:10px ui-monospace,monospace;letter-spacing:.14em;text-transform:uppercase;color:var(--muted)}
 #bpm-dot{width:7px;height:7px;border-radius:50%;background:var(--accent);opacity:.15;align-self:center}#bpm-dot.on{animation:beat .22s ease-out}
@@ -39,7 +39,7 @@ header{flex-shrink:0;display:flex;align-items:center;justify-content:space-betwe
 </style></head><body>
 <main id="app">
 <header><div class="brand"><strong>Afterword</strong><small>RSVP / context</small></div>
-<button id="bpm-tap" aria-label="Beats per minute; tap in time to set"><span id="bpm-value">300</span><span id="bpm-unit">bpm</span><span id="bpm-dot"></span></button></header>
+<div id="bpm-tap" role="status" aria-label="Beats per minute, set by the rhythm of your steps"><span id="bpm-value">300</span><span id="bpm-unit">bpm</span><span id="bpm-dot"></span></div></header>
 <section id="stage" aria-label="Reader; tap left or right to step, centre to play or pause, drag to scan" tabindex="0"><div class="ghost" id="before"></div>
 <div id="word" aria-live="off"><span id="word-before"></span><span id="word-anchor"></span><span id="word-after"></span></div><div class="ghost" id="after"></div></section>
 <footer id="dock">
@@ -52,6 +52,7 @@ header{flex-shrink:0;display:flex;align-items:center;justify-content:space-betwe
 <label class="control"><span class="heads"><span>Context span</span><b id="span-label">7</b></span><input type="range" id="span" min="1" max="24" step="1"></label>
 <label class="control"><span class="heads"><span>Context strength</span><b id="opacity-label">42%</b></span><input type="range" id="opacity" min="0" max="100" step="2"></label>
 <label class="control"><span class="heads"><span>Punctuation rests</span><b id="pause-label">1.0</b></span><input type="range" id="pause" min="0" max="3" step=".5"></label>
+<label class="control"><span class="heads"><span>Warm-up</span></span><select id="warm"><option value="0">None</option><option value="2">2 words</option><option value="4">4 words</option><option value="8">8 words</option></select></label>
 <label class="control"><span class="heads"><span>Word size</span><b id="font-label">46px</b></span><input type="range" id="font" min="28" max="72" step="2"></label>
 <div class="sound-head">Audio pulse · synthesised, no samples</div>
 <label class="control"><span class="heads"><span>Beat</span></span><select id="sound"><option value="off">Silent</option><option value="click">Click every word</option><option value="bass">Bass accents</option><option value="both">Click + bass</option></select></label>
