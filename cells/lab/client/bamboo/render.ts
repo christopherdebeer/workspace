@@ -958,8 +958,15 @@ void main() {
   if (uMesh == 1) mark = max(mark, hatchR * (1. - colR) * 1.1);
   // (its ink laid from its middle out to its sides, then to its weight; a step's by weight alone, as one of a flight, so
   // the flight's edge thins as one line, never a row of dashes, a stone each)
-  float sa = inkAt(vOut, fract(vSeed * 5.13 + .3)), inkA = laid(sa, uKind == 1 ? 0. : clamp(abs(vL.x), 0., 1.)) * (uKind == 4 ? .45 : 1.);
-  if (uClay < .5 && colR < .02 && litR * dot(uLitK.xyz, vec3(1.)) < .02 && sa < .002) discard;
+  float sa = inkAt(vOut, fract(vSeed * 5.13 + .3));
+  // (a rock block near you is never cut by where its colour gives out on the screen (a cut would be a false edge, inked
+  // as one): past its colour it's the paper, the stone's bare face, still standing in front of what's behind it, its
+  // ink where it is (its own, or as far out as it is here, whichever reaches); one further off goes whole, when its ink,
+  // its colour and its light have all gone)
+  bool nearRock = uMesh == 1 && distance(vW, uEye) < 15.;
+  if (uMesh == 1) sa = max(sa, inkAt(oR, fract(vSeed * 5.13 + .3)));
+  float inkA = laid(sa, uKind == 1 ? 0. : clamp(abs(vL.x), 0., 1.)) * (uKind == 4 ? .45 : 1.);
+  if (uClay < .5 && !nearRock && colR < .02 && litR * dot(uLitK.xyz, vec3(1.)) < .02 && sa < .002) discard;
   // (open: a stone's contour carried by where it meets the land (its underside, its contact, a step's front), its top
   // and its far side barely said, lifting here and there)
   float auth = mix(.18, 1., smoothstep(.35, -.35, N.y)) * (1. - .8 * smoothstep(.45, .7, vn(vW.xz * 1.3 + vW.y * 2.)));
