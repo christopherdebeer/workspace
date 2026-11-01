@@ -22,9 +22,11 @@ import { readDials, address, layersPalette } from './layers';
 import { skyAt } from './sky';
 import { Presence, type Kind, type Cue } from './presence';
 import { Chase } from './chase';
+import { PlanDebug } from './debug';
 
 const params = new URLSearchParams(location.search);
 const canvas = document.getElementById('view') as HTMLCanvasElement;
+const planDebug = new URLSearchParams(location.search).get('debug') === 'plan' ? new PlanDebug() : null;
 const hint = document.getElementById('hint') as HTMLDivElement | null;
 if (hint && params.has('still')) hint.classList.add('gone');
 const seed = Number(params.get('seed') ?? 1) || 1;
@@ -424,6 +426,8 @@ function frame(now: number) {
   const f: Frame = { eye, look, fov, t, gust: [gust.dir[0], gust.dir[1], gust.front, gust.strength], speed: me.v, roll, focus, paper: [Math.round(innerWidth * sheet), Math.round(innerHeight * sheet)] };
   if (!still || chaseKind) chaseStep(still ? 0 : dt, eye, yaw, p, fov);
   renderer.draw(f, canvas.width, canvas.height);
+  // (`?debug=plan`: the run's own working drawn over the picture)
+  planDebug?.draw(me, (q) => renderer.project(q), yaw);
   const ms = performance.now() - now;
   // (how finely it's drawn follows how long frames take, over a second or so, in steps, never frame to frame: a canvas
   // resized every frame makes everything tied to its pixels shimmer)

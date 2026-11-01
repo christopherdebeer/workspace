@@ -34,13 +34,18 @@ const G = 9.8, H = 1 / 120;
 export interface Input { go: boolean; turn: number }
 export type Act = 'run' | 'skip' | 'hop' | 'leap' | 'drop' | 'fall';
 export type Landing = 'light' | 'heavy' | 'brace' | 'roll';
-interface Plan {
+export interface Plan {
   kind: Exclude<Act, 'run' | 'fall'>; dir: number; ox: number; oz: number; lx: number; lz: number; ly: number; clear: number; next: Plan | null; wait: number;
   /** read when (the landing seen while still approaching); how much it asks (0 a skip … 1.5 a long rising leap); how far
    * the last plant sinks for it; the speed it wants at takeoff (the approach slows or presses on to meet it) */
   read?: number; demand?: number; load?: number; vh?: number;
   /** when the foot it springs from was planted (the last plant of its approach, or the landing it's chained from) */
   planted?: number;
+  /** taken on from a landing (the next of a chain): its foot's planted with the landing, but until it springs it's still
+   * yours to turn away from */
+  chained?: boolean;
+  /** where you meant to go when it was chosen (your heading then): it's given up if you've turned off that since */
+  intent?: number;
 }
 /** how a foot meets the ground: a plain plant; soft earth; a step up onto something higher; a check, braking (down, or
  * slowing); a quick touch on a stone in passing; the push of the last plant before a takeoff; a landing */
@@ -85,7 +90,9 @@ export class Runner {
   limitT = 0;
   /** which side's the more open, held at a limit: where a person would turn (+1 left, -1 right) */
   freer = 1;
-  private airTurn = 0;
+  private airTurn = 0; private headTake = 0;
+  /** the working the debug view shows (debug.ts): read only */
+  debugState() { return { held: this.held, stopped: this.stopped, limitT: this.limitT, stanceLeft: this.stanceLeft, best: this.best, offLine: Math.abs(wrap(this.move - this.heading)) }; }
   private barred = 0; private held = false; private heldT = 0; private acc = 0; private foot = 0; private think = 0; private best = 0; private bestCost = 0; private stride = 2.2; private posts: Post[] = []; private brushed = new Set<object>();
   constructor(readonly world: Land, readonly range = 104) { this.feet = new Footings(world, this.chunks); }
 
@@ -139,7 +146,9 @@ export class Runner {
       this.weave(q, go);
       // (the moves ahead are provisional: turn off a move's way before its foot's planted and it's dropped and looked for
       // again along where you're going now; once planted, the foot and the flight are committed)
+      // (a chained one too, while the landing's foot still bears you: the flight you were in was committed, the next isn't)
       if (this.plan && this.plan.planted === undefined && Math.abs(wrap(this.heading - this.plan.dir)) > 0.35) this.plan = null;
+      if (this.plan?.chained && this.stanceLeft > 0 && Math.abs(wrap(this.heading - (this.plan.intent ?? this.heading))) > 0.35) this.plan = null;
       // (a planted foot that can't spring (nothing left to push it on) lets go of the move)
       if (this.plan && this.plan.planted !== undefined && this.clock - this.plan.planted > 0.8) this.plan = null;
       if (!this.plan && !onStair && (this.v > 1.2 || this.held || this.stopped)) {
@@ -148,7 +157,9 @@ export class Runner {
         const along = this.pick(this.heading);
         if (along) this.best = this.heading;
         const p = along ?? this.pick(this.best);
-        this.plan = p && this.clearWay(this.x, this.z, p.lx, p.lz) && (!p.next || this.clearWay(p.lx, p.lz, p.next.lx, p.next.lz)) ? p : null;
+        // (the move you asked for is taken if its own way's clear; a blocked continuation is dropped, to be looked for again
+        // from where it lands, never a reason to refuse the first)
+        this.plan = p && this.clearWay(this.x, this.z, p.lx, p.lz) ? p : null;
         if (this.plan?.next && !this.clearWay(this.plan.lx, this.plan.lz, this.plan.next.lx, this.plan.next.lz)) this.plan.next = null;
         if (this.plan) this.read(this.plan, this.plan.ox, this.plan.oz, this.y, this.v);
       }
@@ -257,7 +268,7 @@ export class Runner {
         this.y = here; this.foot = here; this.takeoff(across);
         return;
       } else if (edge && this.v > 1.5 && u.kind !== 'step' && !onStair) {
-        this.air = true; this.act = 'fall'; this.vy = 0.3; this.vx = dx * Math.min(this.v, 4.5); this.vz = dz * Math.min(this.v, 4.5); this.aim = null; this.onAct('fall');
+        this.air = true; this.act = 'fall'; this.vy = 0.3; this.vx = dx * Math.min(this.v, 4.5); this.vz = dz * Math.min(this.v, 4.5); this.aim = null; this.headTake = this.heading; this.airTurn = 0; this.onAct('fall');
       } else if (onStair || this.v < 1.5 || !this.contact || this.rollT >= 0) this.y += (u.y - this.y) * ease(dt, onStair ? 14 : u.y < this.y ? 30 : u.kind === 'stone' ? 18 : 12);
       else {
         // (a higher footing just ahead between strides: a foot's put up onto it, rather than the body lifted by it)
@@ -493,6 +504,8 @@ export class Runner {
    * jump's air, settling; the weight shifted over the foot it's on */
   private stride_(dt: number) {
     const c = this.contact;
+    // (a stance's time runs whether or not you're moving: a foot loaded standing still still springs when it's done)
+    if (!this.air && c && this.v < 0.6 && this.stanceLeft > 0) this.stanceLeft -= dt;
     if (this.air || !c || this.v < 0.6) { this.bodyV += (-60 * this.bodyY - 12 * this.bodyV) * dt; this.bodyY += this.bodyV * dt; this.weight *= 1 - ease(dt, 6); return; }
     const gE = 4.5;
     if (this.stanceLeft > 0) {
@@ -635,7 +648,7 @@ export class Runner {
     if (vy > 6.5) { this.plan = null; this.loading = false; this.v = Math.min(this.v, 2); return; }
     this.vx = (p.lx - this.x) / T; this.vz = (p.lz - this.z) / T; this.vy = vy; this.loading = false; this.airTurn = 0;
     this.move = Math.atan2(this.vx, this.vz);
-    this.air = true; this.act = p.kind; this.aim = [p.lx, p.ly, p.lz];
+    this.air = true; this.act = p.kind; this.aim = [p.lx, p.ly, p.lz]; this.headTake = this.heading;
     // (the release: the loaded crouch thrown off, as hard as it was loaded)
     this.crouchV -= 0.8 + 6 * Math.max(this.crouch, 0) + Math.min(1, vy * 0.2);
     // (the planted foot let go: the release of its push, not a foot of its own)
@@ -666,9 +679,16 @@ export class Runner {
   private fly(dt: number) {
     // (in the air you can still lean the flight a little toward where you're going now (a bounded turn of how you're
     // carried), so a turn made in the air shows at once and the landing's met already turning)
-    const cur = Math.atan2(this.vx, this.vz), want = Math.max(-0.9 * dt, Math.min(0.9 * dt, wrap(this.heading - cur)));
+    // (by as much as you've turned since you left the ground, no more: a leap off your line (a chain's zig) is the body's
+    // own, and isn't pulled back to it; your turning in the air is)
+    const want = Math.max(-0.9 * dt, Math.min(0.9 * dt, wrap(this.heading - this.headTake) - this.airTurn));
     const turn = Math.max(-0.3 - this.airTurn, Math.min(0.3 - this.airTurn, want));
-    if (turn) { const c = Math.cos(turn), sn = Math.sin(turn), vx = this.vx; this.vx = vx * c + this.vz * sn; this.vz = -vx * sn + this.vz * c; this.airTurn += turn; this.move = Math.atan2(this.vx, this.vz); }
+    if (Math.abs(turn) > 1e-5) {
+      const c = Math.cos(turn), sn = Math.sin(turn), vx = this.vx; this.vx = vx * c + this.vz * sn; this.vz = -vx * sn + this.vz * c; this.airTurn += turn; this.move = Math.atan2(this.vx, this.vz);
+      // (and where it'll come down, foreseen again from how you're really carried: the eye and the landing go by that)
+      const l = this.arc(this.x, this.z, this.y, this.vx, this.vz, this.vy);
+      if (l) this.aim = l;
+    }
     const [nx, nz] = this.slip(this.x + this.vx * dt, this.z + this.vz * dt);
     // (flying into a face well above your feet, you're stopped against it and slide down it: a top past its edge isn't
     // where you are)
@@ -686,7 +706,18 @@ export class Runner {
     const imp = Math.max(0, -(this.vx * n[0] + this.vy * n[1] + this.vz * n[2]));
     this.y = gy; this.foot = gy; this.air = false; this.vy = 0; this.under = on; this.impact = imp; this.aim = null;
     this.v = vh; this.move = Math.atan2(this.vx, this.vz);
-    const next = this.plan?.next ?? null, cramped = this.cramped(this.x, this.z, this.move);
+    let next = this.plan?.next ?? null;
+    const cramped = this.cramped(this.x, this.z, this.move);
+    // (the next of a chain, read again from where you really came down: its way from here, still in reach, still clear,
+    // and still the way you're going now (steered off it in the air, it's let go and looked for again))
+    if (next) {
+      const d = Math.hypot(next.lx - this.x, next.lz - this.z);
+      next.dir = Math.atan2(next.lx - this.x, next.lz - this.z);
+      // (a chain may zig either side of your line; it's yours to change your mind in the air, not its to wander off it)
+      const turned = Math.abs(wrap(this.heading - this.headTake)) > 0.35;
+      if (turned || d < 0.6 || d > 4.6 || Math.abs(wrap(this.heading - next.dir)) > 1.05 || Math.abs(next.ly - gy) > 1.6 || !this.clearWay(this.x, this.z, next.lx, next.lz)) next = null;
+      else { next.chained = true; next.intent = this.headTake; }
+    }
     let as: Landing;
     if (next && imp < 4.5) {
       // (onto a crown with the next already in mind: planted, the weight taken and turned toward it, and away; a straight

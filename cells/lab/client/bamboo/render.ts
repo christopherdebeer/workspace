@@ -1265,6 +1265,12 @@ export class Renderer {
   /** where it's passed: up to eight places still moving, settling (x, z, how hard now, how far) */
   stirs: number[][] = [];
   private vpLast: number[] = new Array(16).fill(0); private eyeLast = [0, 0, 0];
+  /** where a point of the world is on the page, in CSS pixels, or null behind the eye (for overlays: debug.ts) */
+  project(p: [number, number, number]): [number, number] | null {
+    const v = this.vpLast, c = [0, 1, 3].map((i) => v[i] * p[0] + v[4 + i] * p[1] + v[8 + i] * p[2] + v[12 + i]);
+    if (c[2] < 0.05) return null;
+    return [(c[0] / c[2] * 0.5 + 0.5) * innerWidth, (0.5 - c[1] / c[2] * 0.5) * innerHeight];
+  }
   /** whether the drawing describes a point now (0 … 1): in the frame, and as far out as the colour or the ink reaches
    * (as the shaders' `outAt` has it, without its jitter) */
   legible(x: number, y: number, z: number): number {
