@@ -221,12 +221,12 @@ export class Runner {
     // (a move's approach: the pace it wants at the takeoff, eased toward over the last steps, slowing for a short high
     // one, pressing on for a long one; a hop up wants a little way on)
     if (plan && plan.kind !== 'drop' && go) {
-      // (but never braked below the pace you have: momentum is carried into a move and through it, the landing going
-      // further along its top instead (takeoff))
+      // (but never braked: momentum is gathered into a move, pressing on to your lope, and carried through it, the landing
+      // going further along its top instead (takeoff); only a precise one brakes)
       const want = Math.max(3.4, Math.min(LOPE * 1.12, plan.vh ?? target));
       // (a precise one, onto a small surface with nothing after it, brakes to what its flight carries: the place shapes the
       // pace, not the pace the place)
-      target = this.prep > 0.2 ? (plan.precise ? want : Math.max(want, Math.min(this.v, target))) : Math.max(target, 3.4);
+      target = this.prep > 0.2 ? (plan.precise ? want : Math.max(want, target)) : Math.max(target, 3.4);
     }
     // (on rock you drive off each foot: the pace comes back quicker between bounds than it builds on the open floor)
     if (!this.air && this.rollT < 0) this.v += (target - this.v) * ease(dt, target > this.v ? (onRock ? 3.6 : 2.2) : 3);
@@ -652,14 +652,20 @@ export class Runner {
     }
     return cands;
   }
-  /** whether a body's flight from a to b (rising to `top` if it must) clears the rock: the arc sampled, its line at the
-   * shins and at the chest tested against the rock's faces (so a lip in the way, or an overhang over it, refuses it) */
-  private flightClear(ax: number, ay: number, az: number, bx: number, by: number, bz: number, top: number) {
-    const L = Math.hypot(bx - ax, bz - az), n = Math.max(3, Math.ceil(L / 0.6)), h = Math.max(0.2 + L * 0.06, Math.max(ay, by, top) + 0.2 - (ay + by) / 2);
-    const pt = (t: number, up: number): [number, number, number] => [ax + (bx - ax) * t, ay + (by - ay) * t + 4 * t * (1 - t) * h + up, az + (bz - az) * t];
+  /** whether a body's flight from a to b clears what's there, the flight as takeoff throws it (its time from the pace,
+   * raised to `top` if it must clear it): never through the rock's faces (at the shins and the chest, so a lip in the way
+   * or an overhang over it refuses it), and never into a stone or a top standing higher than the feet along the way */
+  private flightClear(ax: number, ay: number, az: number, bx: number, by: number, bz: number, top: number, v = this.v) {
+    const F = this.feet, L = Math.hypot(bx - ax, bz - az), vh = Math.max(3.2, Math.min(LOPE * 1.1, v));
+    let T = Math.max(0.26, L / vh), vy = (by - ay + 0.5 * G * T * T) / T;
+    if (top > 0) { const need = Math.sqrt(Math.max(0, 2 * G * (top - ay))); if (vy < need) { vy = need; T = (vy + Math.sqrt(Math.max(0, vy * vy - 2 * G * (by - ay)))) / G; } }
+    const n = Math.max(4, Math.ceil(L / 0.4));
+    const pt = (t: number, up: number): [number, number, number] => { const s = t * T; return [ax + (bx - ax) * t, ay + vy * s - 0.5 * G * s * s + up, az + (bz - az) * t]; };
     for (let k = 0; k < n; k++) {
       const t0 = k / n, t1 = (k + 1) / n;
-      for (const up of [0.35, 1.25]) if (this.feet.rockBetween(pt(t0, up), pt(t1, up))) return false;
+      for (const up of [0.35, 1.25]) if (F.rockBetween(pt(t0, up), pt(t1, up))) return false;
+      // (the feet over what's underfoot: clear of it between takeoff and landing)
+      if (k > 0 && t0 < 0.9) { const p = pt(t0, 0); if (F.at(p[0], p[2]).y > p[1] + 0.05) return false; }
     }
     return true;
   }
@@ -712,8 +718,14 @@ export class Runner {
       const dx = Math.sin(p.dir), dz = Math.cos(p.dir), L0 = Math.hypot(p.lx - this.x, p.lz - this.z);
       const vy0 = Math.max(p.clear > 0 ? Math.sqrt(Math.max(0, 2 * G * (p.clear - this.y))) : 0, ((p.ly - this.y) + 0.5 * G * 0.3 * 0.3) / 0.3);
       const T = (vy0 + Math.sqrt(Math.max(0, vy0 * vy0 - 2 * G * (p.ly - this.y)))) / G, Lw = Math.min(this.v * T, L0 + 2.2);
-      let ok = L0;
-      for (let d = L0 + 0.15; d <= Lw; d += 0.15) { const u = this.feet.at(this.x + dx * d, this.z + dz * d); if (Math.abs(u.y - p.ly) > 0.15) break; ok = d; }
+      // (along the top as it goes, uneven as rock is: a step of a hand's height either way is still the same top, if it
+      // isn't steep)
+      let ok = L0, prevY = p.ly;
+      for (let d = L0 + 0.15; d <= Lw; d += 0.15) {
+        const qx = this.x + dx * d, qz = this.z + dz * d, u = this.feet.at(qx, qz);
+        if (Math.abs(u.y - prevY) > 0.12 || Math.abs(u.y - p.ly) > 0.35 || this.feet.normalAt(qx, qz)[1] < 0.8) break;
+        ok = d; prevY = u.y;
+      }
       if (ok > L0 + 0.1) { const back = Math.max(L0, ok - 0.35); p.lx = this.x + dx * back; p.lz = this.z + dz * back; p.ly = this.feet.at(p.lx, p.lz).y; }
     }
     // (a drop taken faster than it was read for goes further: re-aimed at the pace you really have, so the speed's
@@ -724,7 +736,10 @@ export class Runner {
     }
     // (the pace it goes at: what you're carrying, or what the move was read wanting (a chained one's, taken back up as
     // the foot it's planted on pushes))
-    const L = Math.hypot(p.lx - this.x, p.lz - this.z), vh = Math.max(p.kind === 'drop' ? 1.8 : 3.2, Math.min(LOPE * 1.1, Math.max(this.v, p.vh ?? 0)));
+    // (a bound pushed off a contact, still going, gives back pace as a running stride does: up to a metre a second a push,
+    // to your lope; so a line of bounds gathers speed, not only spends it)
+    const push = this.going && p.chained && !p.precise && (p.kind === 'leap' || p.kind === 'hop') ? Math.min(LOPE, this.v + 1) : 0;
+    const L = Math.hypot(p.lx - this.x, p.lz - this.z), vh = Math.max(p.kind === 'drop' ? 1.8 : 3.2, Math.min(LOPE * 1.1, Math.max(this.v, p.vh ?? 0, push)));
     let T = Math.max(p.kind === 'skip' ? 0.3 : 0.26, L / vh), vy = (p.ly - this.y + 0.5 * G * T * T) / T;
     // (high enough to clear what's skipped or hopped onto)
     // (the feet tuck up a little over what's skipped)
