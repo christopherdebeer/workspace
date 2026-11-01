@@ -224,6 +224,10 @@ vec3 show(vec3 c) { c = 1. - exp(-c * 1.4); return sqrt(c); }
 // keeps \`landlight\` of its shade and hollows, and its colour gives out over a broader, broken edge))
 // (whether the colour layer reaches here at all, whatever its kind's strength: what \`under\` asks)
 float gColHere = 0.;
+// (how sharp a surface's colour gives out (1 the soft edge every layer has; more, a thing whose paper is its own bare
+// surface, not a fog over it), and how much further its light reaches than its colour (its cast shadows lingering pale
+// on the paper): each surface may set its own)
+float gColSharp = 1., gLitO = 0.;
 // (how much of the sun reaches here past the land itself (baked with the land: a cliff's, a ridge's shadow), for a
 // surface that knows it; 1 for one that doesn't)
 float gSunVis = 1.;
@@ -254,8 +258,8 @@ vec3 layered(vec3 alb, vec3 N, vec3 p, float wrap, float ao, vec3 glow, float co
   float sunV = sunThrough(p) * gSunVis, ndl = max(0., (dot(N, uSun) + wrap) / (1. + wrap));
   vec3 skyT = uSky * (.5 + .5 * N.y), bnc = vec3(.2, .15, .08) * (1. - N.y) * .3 * (dot(uSunC, vec3(.3, .55, .15)) / 2.4875);
   vec3 L0 = uSunC + skyT + bnc, Ls = uSunC * ndl + skyT + bnc, Lc = uSunC * ndl * sunV + skyT + bnc, Lh = uSunC * ndl * sunV + (skyT + bnc) * ao;
-  litR = has(o, uRch.y);
-  gColHere = hasS(o, uRch.x, uRch.w * (land > .5 ? 2.2 : 1.));
+  litR = has(o + gLitO, uRch.y);
+  gColHere = hasS(o, uRch.x, uRch.w * (land > .5 ? 2.2 : 1.) / gColSharp);
   colR = clamp(colK, 0., 1.) * gColHere;
   if (uClay > .5) { colR = 1.; litR = 1.; gColHere = 1.; return show(lin(vec3(.8, .78, .74)) * Lh); }
   float ll = mix(1., uLitK.w, land);
@@ -638,7 +642,7 @@ void main() {
   float own = loose * cover;
   // (but every leaf of the litter keeps its own pick for where the colour gives out, so the floor breaks into leaves on
   // the paper, not a smear: a trodden bed or the bare humus has no leaves to break into)
-  leaf = cover * (1. - humus * (1. - loose)) > .4 ? leaf : -1.;
+  leaf = cover * (1. - humus * (1. - loose)) > .4 && vRock < .3 ? leaf : -1.;
   // (and of those, inked in groups, not each one: a cluster here, a few there, the rest left to their colour)
   leafMark *= smoothstep(.45, .8, own) * smoothstep(.3, .45, h21(floor(vW.xz * .8 + 3.1)));
   lH *= mix(.15, .55, own); lCav = mix(1., lCav, mix(.25, .8, own));
@@ -682,6 +686,9 @@ void main() {
   vec2 down2 = N.xz / max(length(N.xz), .05), across2 = vec2(-down2.y, down2.x);
   float ac2 = (vW.x - vW.z) * .707, dn2 = vW.y * 2.2 + (vW.x + vW.z) * .25;
   float stroke = vn(vec2(ac2 * .35, dn2 * 3.2)) * .6 + vn(vec2(ac2 * 1.1, dn2 * 9.)) * .4;
+  // (but where it's rock, broken as the rock's blocks are, in patches, never in strokes across the face: across a
+  // steep face, "across the fall" is level, and level bars say nothing of a cliff)
+  stroke = mix(stroke, fbm2(vec2(ac2, vW.y) * .4 + 5.), smoothstep(.3, .7, vRock));
   float o = outCol(vW) + ((fbm2(vW.xz * .5 + 3.) - .5) * .5 + (stroke - .5) * 1.4 + (fbm2(vW.xz * .09 + 7.) - .5) * 1.6 * smoothstep(10., 40., dist)) / 3.;
   o += leaf >= 0. ? (leaf - .5) * .27 : .08 + (vRock > .5 ? -.1 : 0.);
   float colR, litR;
@@ -745,15 +752,18 @@ void main() {
 const SOLID_VS = COMMON + `
 layout(location = 0) in vec3 aP; layout(location = 1) in vec3 aN;
 layout(location = 2) in vec4 iA; layout(location = 3) in vec4 iB; layout(location = 4) in vec4 iC; layout(location = 5) in vec2 iD;
-out vec3 vW; out vec3 vN; out vec3 vL; out float vMoss; out float vSeed; flat out float vOut; out vec3 vBed; out float vWorn;
+out vec3 vW; out vec3 vN; out vec3 vL; out float vMoss; out float vSeed; flat out float vOut; out vec3 vBed; out float vWorn; out float vFoot; flat out float vFace;
 uniform int uKind; uniform mat4 uLightVP; uniform int uDepth; uniform int uMesh;
 void main() {
-  vBed = vec3(0.); vWorn = 0.;
+  vBed = vec3(0.); vWorn = 0.; vFoot = 1.; vFace = .5;
   if (uMesh == 1) {
     // (the rock's blocks, meshed in the world already (rock.ts): each corner its place, its face's normal, its place in
     // its block, its bedding, moss and seed; its block's anchor, asked how far it's drawn, so a block's drawn whole, one
     // way, never triangle by triangle; whether it's a worn edge)
-    vW = aP; vN = aN; vL = iA.xyz; vMoss = iB.z; vSeed = iB.w; vBed = vec3(iB.xy, iD.y); vWorn = iD.x;
+    vW = aP; vN = aN; vL = iA.xyz; vMoss = iB.z; vSeed = iB.w; vBed = vec3(iB.xy, floor(iD.y + .01)); vWorn = iD.x;
+    // (how high up its block this corner is (0 at its foot), and which face it's on: read here, at the corner, not
+    // after they're spread across the face, where a value on a boundary would flip pixel by pixel)
+    vFoot = (iD.y - floor(iD.y + .01)) / .45; vFace = h21(floor(aN.xz * 3.7 + aN.y * 2.3 + .5) + iB.w * 17.);
     vOut = uDepth == 1 ? 0. : outCol(iC.xyz + vec3(0., .2, 0.)) + (fract(iB.w * 7.7) - .5) * .1;
     gl_Position = (uDepth == 1 ? uLightVP : uVP) * vec4(vW, 1.);
     return;
@@ -790,7 +800,7 @@ void main() {
   gl_Position = (uDepth == 1 ? uLightVP : uVP) * vec4(vW, 1.);
 }`;
 const SOLID_FS = COMMON + LIGHT + OUT + `
-in vec3 vW; in vec3 vN; in vec3 vL; in float vMoss; in float vSeed; flat in float vOut; in vec3 vBed; in float vWorn;
+in vec3 vW; in vec3 vN; in vec3 vL; in float vMoss; in float vSeed; flat in float vOut; in vec3 vBed; in float vWorn; in float vFoot; flat in float vFace;
 uniform int uKind; uniform float uMarks; uniform int uMesh;
 void main() {
   vec3 N = normalize(vN);
@@ -926,7 +936,24 @@ void main() {
   float sHo = uMesh == 1 ? 1. : clamp(1. + hRel * sK * 4.5, .35, 1.3);
   gSunVis = mix(1., sHo * (1. - (uKind == 1 ? .25 : .45) * scr * min(1., sK)), .75);
   float sCav = uMesh == 1 ? 1. - flake * .25 : (1. - (uKind == 1 ? .25 : .35) * scr * min(1., sK)) * (uKind == 1 ? 1. : 1. - clamp(sK * .4, 0., .8) * smoothstep(.05, .0, chip.y) * .5) * sHo;
-  vec3 c = layered(alb, N, vW, .2, .85 * sCav, vec3(0.), uColK.z, 1., outCol(vW) + (fract(vSeed * 3.1) - .5) * .06, colR, litR);
+  float oR = outCol(vW) + (fract(vSeed * 3.1) - .5) * .06, hatchR = 0.;
+  if (uMesh == 1) {
+    // (the rock goes to the paper feature by feature, each at its own place, never along one line across the frame: the
+    // paper's the stone's own bare face, so a face gives out with an edge of its own, broken in the face's frame, not
+    // a fog. A face the sun's on goes first; a side turned away keeps its wash (its light, past its colour) and a few
+    // strokes across it; the foot, where it meets the ground, holds longest; and here and there a lit patch is left far
+    // out on its own. The culms' shadows across it linger pale on the paper after its colour's gone)
+    // (each by the face's own normal, never the bumped one, which wavers pixel to pixel: the face is one thing)
+    vec3 Nf = normalize(vN);
+    float foot = vFoot, litF = smoothstep(.05, .45, dot(Nf, uSun)), fid = vFace;
+    oR += (fid - .5) * .14 + .1 * litF - .07 * (1. - litF) + (fbm2(fuv * .35 + vSeed * 5.) - .5) * .34 - .16 * (1. - smoothstep(.0, .3, foot));
+    oR -= .24 * smoothstep(.7, .78, vn(fuv * .2 + vSeed * 3.)) * litF;
+    gColSharp = 4.; gLitO = -.12 * litF;
+    hatchR = hatch * (1. - litF);
+  }
+  vec3 c = layered(alb, N, vW, .2, .85 * sCav, vec3(0.), uColK.z, 1., oR, colR, litR);
+  // (where its colour's gone, a side turned from the sun keeps a few strokes across it, in its own frame)
+  if (uMesh == 1) mark = max(mark, hatchR * (1. - colR) * 1.1);
   // (its ink laid from its middle out to its sides, then to its weight; a step's by weight alone, as one of a flight, so
   // the flight's edge thins as one line, never a row of dashes, a stone each)
   float sa = inkAt(vOut, fract(vSeed * 5.13 + .3)), inkA = laid(sa, uKind == 1 ? 0. : clamp(abs(vL.x), 0., 1.)) * (uKind == 4 ? .45 : 1.);

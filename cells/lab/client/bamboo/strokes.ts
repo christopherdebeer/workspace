@@ -24,7 +24,7 @@
  */
 import { hash } from '../kit/rng';
 import { type Chunk, type World, CHUNK, CN, CELL, HALF, BANK } from './world';
-import type { Block } from './rock';
+import { covers, type Block } from './rock';
 
 export const FAM = { edge: 0, rim: 1, hachure: 2, face: 3, contour: 4, string: 5, nosing: 6, contact: 7, root: 8, debris: 9, tread: 10 } as const;
 /** a mark's vertex: point (3), the way it runs (3), half-width and taper, side (-1, 1) and along (0..1), family + weight, how
@@ -288,10 +288,17 @@ export function strokes(world: World, c: Chunk): Float32Array {
           if (!frag && r() < 0.3) broken(out, along(e.a, e.b, 5).map((p) => lift(p, b, 0)), r, [1, 2.5], [0.3, 0.9], 0.055, FAM.rim, () => 0.45, 0.45);
         } else if (e.kind === 'joint') {
           // (from where the ground meets it up to the top)
-          if (frag || r() > 0.35) continue;
+          // (a deep joint, where this block meets another mass, is a shadow the drawing keeps: contracted to a weighted,
+          // broken stroke that lasts past the colour; a block's other corners now and then a light one)
+          if (frag) continue;
+          const mx = (e.a[0] + e.b[0]) / 2, mz = (e.a[2] + e.b[2]) / 2;
+          const deep = c.rocks.some((o) => o !== b && Math.abs(o.c[0] - mx) < o.r + 1 && Math.abs(o.c[2] - mz) < o.r + 1 && covers(o, mx, mz, 0.45));
+          if (!deep && r() > 0.35) continue;
           const g = world.ground(e.a[0], e.a[2]), y0 = Math.max(e.a[1], g + 0.03);
           if (e.b[1] - y0 < 0.3) continue;
-          ribbon(out, along([e.a[0], y0, e.a[2]], e.b, 5).map((p) => lift(p, b)), 0.055, FAM.face, 0.55 + r() * 0.2, 0.6, r());
+          const pts = along([e.a[0], y0, e.a[2]], e.b, 6).map((p) => lift(p, b));
+          if (deep) broken(out, pts, r, [0.7, 2], [0.12, 0.45], 0.075, FAM.face, () => 0.7 + r() * 0.2, 0.9);
+          else ribbon(out, pts, 0.055, FAM.face, 0.55 + r() * 0.2, 0.6, r());
         } else {
           // (its foot: where its front meets the soil)
           const pts = along(e.a, e.b, 7).map((p) => { const g = world.ground(p[0], p[2]); return [p[0] + b.ax[2][0] * 0.04, Math.min(Math.max(p[1], g), b.top) + 0.03, p[2] + b.ax[2][2] * 0.04] as V3; });

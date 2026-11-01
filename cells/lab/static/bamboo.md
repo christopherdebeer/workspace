@@ -134,7 +134,18 @@ Every block takes its up from the bedding and its tier heights from the planes t
 - **a bedding plane**, the part below jutting out as a shelf or tucked in under the one above;
 - **a wedge** gone from its front corner, its size kept: the block fallen at the foot is that missing wedge.
 
-Some faces are left whole, so the breaks read against them. The crest breaks into shoulders and steps, not one blade. The ground's cut follows its own outline, and its ink is its own edges, each known for what it is: crest, side, joint, foot. Nothing grows under rock, and a cleft's floor is scree, not moss.
+Some faces are left whole, so the breaks read against them. The crest breaks into shoulders and steps, not one blade.
+
+**Into the drawing, feature by feature.** The rock doesn't fade along one line across the frame. The paper is the stone's own bare face, so each part of it gives way in its own manner and at its own place:
+- **a face in the sun** goes to the open paper first, with an edge of its own laid in the face's frame, not a soft fog;
+- **a side turned away** keeps its wash (its light, past its colour) and a few strokes across it;
+- **the foot**, where a block meets the ground, holds its colour longest, with its contact stroke;
+- **a crest or a lip** carries on as a fine contour past the colour;
+- **a deep joint**, where one mass meets another, contracts into a weighted, broken stroke that lasts;
+- **the culms' shadows** across a lit face linger pale on the paper after its colour's gone;
+- **here and there a lit patch** is left far out on its own, so there's no single frontier.
+
+Where the land's own cut is rock, it breaks the same way, in patches, never in level bars. The ground's cut follows its own outline, and its ink is its own edges, each known for what it is: crest, side, joint, foot. Nothing grows under rock, and a cleft's floor is scree, not moss.
 
 Everything agrees on the same faces:
 - **Footing** (`footing.ts`) stands on the blocks' own upward faces. A crack between two blocks narrower than a foot is stepped over.

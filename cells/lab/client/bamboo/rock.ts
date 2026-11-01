@@ -505,9 +505,11 @@ export function rockMesh(blocks: Block[]): Float32Array {
       const N: V3 = [b.tn[ti * 3], b.tn[ti * 3 + 1], b.tn[ti * 3 + 2]];
       // (moss where it's held: a ledge's top (under the lip above), a cleft's back block; little on faces, none beneath)
       const moss = b.moss * (N[1] > 0.6 ? (b.role === 'lip' || b.role === 'back' ? 1.3 : 0.6) : N[1] < -0.2 ? 0 : b.role === 'lip' ? 0.5 : 0.25);
+      // (the role's whole part; its fraction how high up the block this corner is, 0 at its foot, so the drawing can hold
+      // a block's contact with the ground longest)
       for (const p of [A, B, C]) {
         const d = sub(p, b.c);
-        out.set([p[0], p[1], p[2], N[0], N[1], N[2], dot(d, b.ax[0]), dot(d, b.ax[1]), dot(d, b.ax[2]), b.bed[0], b.bed[1], moss, b.seed, b.anchor[0], b.anchor[1], b.anchor[2], b.worn[ti], ROLE[b.role]], o);
+        out.set([p[0], p[1], p[2], N[0], N[1], N[2], dot(d, b.ax[0]), dot(d, b.ax[1]), dot(d, b.ax[2]), b.bed[0], b.bed[1], moss, b.seed, b.anchor[0], b.anchor[1], b.anchor[2], b.worn[ti], ROLE[b.role] + 0.45 * Math.min(1, Math.max(0, (dot(d, b.ax[1]) + b.h[1]) / (2 * b.h[1])))], o);
         o += ROCK_STRIDE;
       }
     }
