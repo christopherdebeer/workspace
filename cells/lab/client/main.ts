@@ -34,6 +34,7 @@ const experiments: Record<string, () => Promise<unknown>> = {
   'rescue-coast': () => import('./rescue-coast/main'),
   bamboo: () => import('./bamboo/main'),
   rsvp: () => import('./rsvp/main'),
+  switchback: () => import('./switchback/main'),
 };
 
 // (loaded as a worker by an experiment that shapes off the page's thread: serve it)

@@ -25,6 +25,12 @@ export interface Experiment {
 
 export const EXPERIMENTS: Experiment[] = [
   {
+    id: 'switchback', title: 'Switchback', group: 'Play',
+    blurb: 'A downhill motocross run down a mountain made as you ride it: drawn flat and faceted in a few hard colours (ultramarine sky, pale snow, charcoal rock, orange), its speed drawn as vector shards, smears and flying chunks rather than blur. Drag to steer, drag down to brake; kickers over gaps, whoops, the wall, the drop.',
+    page: 'static/switchback.html', preview: 'preview&seed=1&t=6', readme: 'static/switchback.md',
+    presets: [{ label: 'ride', query: 'seed=1' }, { label: 'another mountain', query: 'seed=7' }, { label: 'watch', query: 'seed=3&auto' }],
+  },
+  {
     id: 'rsvp', title: 'Afterword · RSVP', group: 'Contemplation',
     blurb: 'Fixed-recognition-point reading on a steady beat (set by the rhythm of your steps, easing in at each start), the context flowing through the word above and below, tactile regression and seeking, a player that folds away, optional clicks and bass on clause starts; at the end of the text it becomes a pen for the next word; a comprehension check on made passages at chosen speeds; light and dark. All text, position and settings in the URL fragment.',
     page: 'static/rsvp.html', preview: 'preview', readme: 'static/rsvp.md',

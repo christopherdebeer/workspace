@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en" data-exp="switchback"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#0741eb"><title>Switchback</title>
+<style>
+*{box-sizing:border-box}html,body{margin:0;height:100%;overflow:hidden;background:#0741eb;color:#fff;font-family:"Helvetica Neue",Arial,sans-serif;-webkit-user-select:none;user-select:none}
+canvas{position:fixed;inset:0;width:100%;height:100%;touch-action:none}#speed{pointer-events:none}
+header{position:fixed;top:max(18px,env(safe-area-inset-top));left:18px;right:18px;display:flex;justify-content:space-between;align-items:flex-start;pointer-events:none}
+.title b{display:block;font-weight:900;font-size:22px;line-height:.86;letter-spacing:-.02em}.title small,.pace small{display:block;font-size:9px;letter-spacing:.24em;margin-top:6px;opacity:.85}
+.pace{text-align:right}.pace b{display:block;font-weight:900;font-size:58px;line-height:.8;letter-spacing:-.04em;font-variant-numeric:tabular-nums}.pace span{display:block;font-size:11px;font-weight:700;letter-spacing:.16em;margin-top:6px}
+#air{color:#ff7428}
+#hint{position:fixed;left:0;right:0;bottom:max(30px,env(safe-area-inset-bottom));text-align:center;font-size:10px;font-weight:700;letter-spacing:.3em;transition:opacity .6s}#hint.gone{opacity:0}
+a{position:fixed;left:18px;bottom:max(18px,env(safe-area-inset-bottom));color:#fff;font-size:9px;letter-spacing:.24em;font-weight:700}
+a:focus-visible{outline:2px solid #fff;outline-offset:4px}
+.preview header,.preview #hint,.preview a{display:none}
+</style></head><body>
+<canvas id="world" aria-label="A motocross rider racing down a faceted mountain road. Drag left or right to steer; drag down to brake."></canvas><canvas id="speed"></canvas>
+<header><div class="title"><b>SWITCH<br>BACK</b><small>SEED <span id="seed">1</span></small></div><div class="pace"><b id="kmh">0</b><small>KM/H</small><span id="dist">0 m</span><span id="air"></span></div></header>
+<div id="hint">DRAG TO STEER · DRAG DOWN TO BRAKE</div><a href="{{readme}}">NOTES</a>
+<script type="module" src="{{app}}"></script></body></html>
