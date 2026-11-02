@@ -163,8 +163,8 @@ function focusAt(eye: [number, number, number], yaw: number, pitch: number) {
 // where you are. The drag turns you either way, as directly as ever: a screen's width, portrait, is about half a turn)
 // (and a look whose finger then settles (within 6 px for 350 ms) becomes a run, facing where you looked)
 const DECIDE_MS = 150, DECIDE_PX = 12, SETTLE_MS = 350, SETTLE_PX = 6;
-// (two fingers: a pinch, closer or wider; the zoom stays where you leave it (1× to 4×), and while you pinch you neither
-// run nor turn)
+// (two fingers: a pinch, closer or wider (1× to 4×), easing back out when you let go; while you pinch you neither run
+// nor turn)
 const fingers = new Map<number, { x: number; y: number }>();
 let pinch: { d0: number; z0: number } | null = null, zoom = 1;
 const spread = () => { const [a, b] = [...fingers.values()]; return Math.hypot(a.x - b.x, a.y - b.y) || 1; };
@@ -189,6 +189,7 @@ canvas.addEventListener('pointermove', (e) => {
 });
 const up = (e: PointerEvent) => {
   fingers.delete(e.pointerId); if (fingers.size < 2) pinch = null;
+  // (let go of a pinch: the zoom eases back out (in the frame), not held)
   if (drag && e.pointerId === drag.id) { drag = null; held = false; remember(true); }
 };
 canvas.addEventListener('pointerup', up); canvas.addEventListener('pointercancel', up);
@@ -455,6 +456,7 @@ function frame(now: number) {
   const look: [number, number, number] = [eye[0] + Math.sin(yaw) * Math.cos(p), eye[1] + Math.sin(p), eye[2] + Math.cos(yaw) * Math.cos(p)];
   roll += (-me.turn * 0.5 * s + me.weight * 0.01 * s + me.shoulder * 0.06 + (me.rollT >= 0 ? 0.07 * Math.sin(2 * Math.PI * me.rollT) : 0) - roll) * (1 - Math.exp(-dt * 6));
   const portrait = innerHeight > innerWidth, base = Number(params.get('fov')) || (portrait ? 74 : 60);
+  if (!pinch) zoom += (1 - zoom) * (1 - Math.exp(-dt * 2.5));
   const fov = 2 * Math.atan(Math.tan(((base + 12 * travel) * Math.PI) / 360) / zoom);
   // (the focus: where you're going and looking, the page coming in round it)
   const target = focusAt(eye, yaw, p);

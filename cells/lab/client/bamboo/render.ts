@@ -1028,8 +1028,10 @@ uniform vec2 uPaperRes;
 ${NOISE}
 float lz(vec2 p) { float d = texture(uZ, p).r; return uNear * uFar / (uFar - d * (uFar - uNear)); }
 // (focus, as the vertex stages have it: signed, how far out of focus at this depth)
-uniform float uNearBlur;
-float cocP(float z) { float c = clamp(1. - uFocD / max(z, .1), -2.5, 1.); return uFocA.x * (c < 0. ? c * uNearBlur : c); }
+uniform float uNearBlur, uFarBlur;
+// (how far out of focus, as the lens has it; and as the blur spreads it, the far side as much again as \`far\` asks)
+float cocL(float z) { float c = clamp(1. - uFocD / max(z, .1), -2.5, 1.); return uFocA.x * (c < 0. ? c * uNearBlur : c); }
+float cocP(float z) { float c = cocL(z); return c > 0. ? c * uFarBlur : c; }
 // (how much a thing of this kind at this depth softens: the land (ground .2, stones and steps .7+) not when near)
 float rOf(float z, float kind) { float c = cocP(z); bool land = (kind > .15 && kind < .3) || kind > .65; return c < 0. && land ? 0. : abs(c); }
 // (what's laid on the paper at a point, colour and light, before the ink: a thing's own, or the sky and far ranges over
@@ -1077,7 +1079,7 @@ void main() {
     // (and the things' own marks, as far as their ink reaches)
     ink = max(ink, A.w);
     // (far and out of focus, the ink dries: paler, and broken into stretches)
-    float dryK = uFocA.z * smoothstep(.3, .85, cocP(z));
+    float dryK = uFocA.z * smoothstep(.3, .85, cocL(z));
     ink *= 1. - dryK * (.45 + .5 * smoothstep(.45, .6, vn(vUV * uPaperRes * .08)));
     // (grain: the line broken granular, as a crayon on a stone takes it)
     float gn = vn(vUV * uPaperRes * .3) * .6 + vn(vUV * uPaperRes * .1) * .4;
@@ -1097,8 +1099,10 @@ void main() {
     // ground, its stones, its steps) stays sharp, the most detailed thing in the picture)
     float K = 6. * uPx * uFocA.w, rC = rOf(z, A.x) * K, rS = max(rC, K * uFocA.x * 1.2);
     vec3 acc = col; float ws = 1.;
+    // (each pixel's samples turned its own way, so a wide blur is a soft grain, never a pattern of rings)
+    float spin = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453) * 6.2832;
     for (int i = 0; i < 16; i++) {
-      float fi = float(i) + .5, rr = sqrt(fi / 16.), an = fi * 2.39996;
+      float fi = float(i) + .5, rr = sqrt(fi / 16.), an = fi * 2.39996 + spin;
       vec2 q = vUV + vec2(cos(an), sin(an)) * rr * rS / uRes;
       float zs = lz(q), rs = rOf(zs, texture(uA, q).x) * K, dpx = rr * rS;
       float w = clamp((zs < z ? rs : min(rs, rC)) - dpx + 1., 0., 1.);
@@ -1617,7 +1621,7 @@ export class Renderer {
     gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, this.texA); gl.uniform1i(u('uA'), 1);
     gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, this.texZ); gl.uniform1i(u('uZ'), 2);
     gl.uniform2fv(u('uRes'), [w, h]); gl.uniform2fv(u('uPaperRes'), f.paper ?? [w, h]); gl.uniform1f(u('uNear'), near); gl.uniform1f(u('uFar'), far); gl.uniform1f(u('uPx'), Math.max(1, h / 900));
-    gl.uniform3fv(u('uPaper'), this.sky.paper); gl.uniform3fv(u('uSheet'), this.sky.sheet); gl.uniform3fv(u('uShaftC'), this.sky.shaft); gl.uniform1f(u('uNight'), this.sky.night); gl.uniform3fv(u('uMoonUV'), this.moonUV); gl.uniform4fv(u('uHand'), [this.dials.open, this.dials.swell, this.dials.grain, 0]); gl.uniform4fv(u('uFocA'), [this.dials.aperture, this.dials.wet, this.dials.dry, this.dials.soften]); gl.uniform1f(u('uFocD'), this.focus); gl.uniform1f(u('uNearBlur'), this.dials.near); gl.uniform3fv(u('uInk'), [0.13, 0.12, 0.105]); gl.uniform3fv(u('uSunUV'), this.sunUV);
+    gl.uniform3fv(u('uPaper'), this.sky.paper); gl.uniform3fv(u('uSheet'), this.sky.sheet); gl.uniform3fv(u('uShaftC'), this.sky.shaft); gl.uniform1f(u('uNight'), this.sky.night); gl.uniform3fv(u('uMoonUV'), this.moonUV); gl.uniform4fv(u('uHand'), [this.dials.open, this.dials.swell, this.dials.grain, 0]); gl.uniform4fv(u('uFocA'), [this.dials.aperture, this.dials.wet, this.dials.dry, this.dials.soften]); gl.uniform1f(u('uFocD'), this.focus); gl.uniform1f(u('uNearBlur'), this.dials.near); gl.uniform1f(u('uFarBlur'), this.dials.far ?? 1); gl.uniform3fv(u('uInk'), [0.13, 0.12, 0.105]); gl.uniform3fv(u('uSunUV'), this.sunUV);
     gl.uniform1f(u('uClean'), this.clean ? 1 : 0); gl.uniform1f(u('uMarks'), this.marks); gl.uniform1f(u('uClay'), this.clay ? 1 : 0);
     this.attr(0, this.vbo.screen.buf, 2, 2, 0);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
