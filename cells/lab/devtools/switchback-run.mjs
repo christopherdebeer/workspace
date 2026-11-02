@@ -25,4 +25,11 @@ for (const seed of seeds.length ? seeds : [1, 2, 3]) {
   if (!ok) bad++;
   console.log(`${ok ? 'ok  ' : 'FAIL'}  seed ${seed}: ${r.dist.toFixed(0)} m in ${secs} s, mean ${(mean * 3.6).toFixed(0)} km/h, ${r.crashes} crashes, kickers ${cleared}/${kickers}, ${launches} launches, best air ${r.bestAir.toFixed(2)} s`);
 }
+// (and nothing steers for you: hands off, the bike runs straight on and leaves the line at the first real bend)
+{
+  const r = new Rider(new Course(1)); let t = 0;
+  for (; t < 60 && !r.crashes; t += 1 / 120) r.step(1 / 120, { steer: 0, brake: false });
+  const ok = r.crashes > 0 && t < 30; if (!ok) bad++;
+  console.log(`${ok ? 'ok  ' : 'FAIL'}  hands off: off the line after ${t.toFixed(1)} s (nothing steers for you)`);
+}
 process.exit(bad ? 1 : 0);

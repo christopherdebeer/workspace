@@ -73,6 +73,18 @@ export class Mesh {
     }
     this.box([x, y, z], [1, 0, 0], [0, 1, 0], [0, 0, 1], [0, h * 0.08, 0], [h * 0.03, h * 0.09, h * 0.03], m);
   }
+  /** a crag: a few tall jagged rock towers leaning together */
+  crag(x: number, y: number, z: number, h: number, seed: number) {
+    const n = 2 + Math.floor(hash(seed, 1) * 3);
+    for (let t = 0; t < n; t++) {
+      const a = hash(seed, t, 2) * 6.28, d = t ? h * 0.25 * hash(seed, t, 3) : 0, hh = h * (t ? 0.45 + 0.4 * hash(seed, t, 4) : 1), r = hh * (0.28 + 0.14 * hash(seed, t, 5));
+      const cx = x + Math.cos(a) * d, cz = z + Math.sin(a) * d, sides = 4 + Math.floor(hash(seed, t, 6) * 2), lean = (hash(seed, t, 7) - 0.5) * r;
+      const base = Array.from({ length: sides }, (_, k) => { const b = (k / sides) * 6.28 + hash(seed, t, k, 8); const rr = r * (0.7 + 0.5 * hash(seed, t, k, 9)); return [cx + Math.cos(b) * rr, y - 1, cz + Math.sin(b) * rr]; });
+      const mid = base.map((p, k) => [cx + (p[0] - cx) * 0.55 + lean * 0.5, y + hh * (0.5 + 0.2 * hash(seed, t, k, 10)), cz + (p[2] - cz) * 0.55]);
+      const tip = [cx + lean, y + hh, cz + (hash(seed, t, 11) - 0.5) * r * 0.5];
+      for (let k = 0; k < sides; k++) { const k1 = (k + 1) % sides; this.quad(base[k], base[k1], mid[k1], mid[k], M.ROCK); this.tri(mid[k], mid[k1], tip, M.ROCK); }
+    }
+  }
   /** a faceted rock: a jittered octahedron */
   rock(x: number, y: number, z: number, r: number, seed: number, m: number = M.ROCK) {
     const j = (i: number) => 0.7 + 0.6 * hash(seed, i);
@@ -88,14 +100,30 @@ const DROP: [number, number][] = [[2.6, -0.05], [4.2, -2], [10, -10], [20, -24],
 export const CHUNK = 48, STEP = 4;
 
 /** the ground's height across the section at station i (no track lift; a kicker's gap is a ravine), for placing things */
+/** a smooth value noise along the course (for how the mountain's character changes as you go down it) */
+export function drift(seed: number, x: number, salt: number) {
+  const i = Math.floor(x), f = x - i, s = f * f * (3 - 2 * f);
+  return hash(seed, i, salt) * (1 - s) + hash(seed, i + 1, salt) * s;
+}
+/** the mountain's character at station i: how sheer the wall is (0 a snowy bank, 1 a cliff), how sheer the drop is (0 a
+ * shelf, 1 straight down), and how much of a rock outcrop stands between the route and the drop */
+export function character(c: Course, i: number) {
+  const wall = drift(c.seed, i / 70, 1), drop = drift(c.seed, i / 90, 2), k = drift(c.seed, i / 34, 3);
+  return { wall, drop, knob: Math.max(0, Math.min(1, (k - 0.6) / 0.25)) };
+}
+
 export function section(c: Course, i: number) {
   const st = c.at(i), half = st.width / 2, out: { u: number; y: number; ds: number }[] = [];
   const j = (k: number, amp: number) => (hash(c.seed, i, k) - 0.5) * amp;
-  for (let k = WALL.length - 1; k >= 0; k--) { const [du, dy] = WALL[k]; out.push({ u: -half - du + (k ? j(k, du * 0.3) : 0), y: st.y + dy + (k ? j(k + 20, 0.6 + dy * 0.3) : 0), ds: k > 1 ? j(k + 80, STEP * 0.9) : 0 }); }
+  const ch = character(c, i), wy = 0.25 + 0.95 * ch.wall, wu = 1.9 - 0.9 * ch.wall, dyk = 0.3 + 0.7 * ch.drop, duk = 1.9 - 0.9 * ch.drop;
+  for (let k = WALL.length - 1; k >= 0; k--) { const [du0, dy0] = WALL[k], du = du0 * (k ? wu : 1), dy = dy0 * wy; out.push({ u: -half - du + (k ? j(k, du * 0.3) : 0), y: st.y + dy + (k ? j(k + 20, 0.6 + dy * 0.35) : 0), ds: k > 1 ? j(k + 80, STEP * 0.9) : 0 }); }
   const gap = st.feature === 'gap';
   const under = st.feature === 'none' || st.feature === 'whoop' ? -0.08 : 0;
   out.push({ u: -half, y: st.y + under, ds: 0 }, { u: -half * 0.3, y: st.y - (gap ? 7 : -under), ds: 0 }, { u: half * 0.3, y: st.y - (gap ? 7 : -under), ds: 0 }, { u: half, y: st.y + under, ds: 0 });
-  for (let k = 0; k < DROP.length; k++) { const [du, dy] = DROP[k]; out.push({ u: half + du + (k ? j(k + 40, du * 0.2) : 0), y: st.y + dy + (k > 1 ? j(k + 60, 0.5 - dy * 0.18) : 0), ds: k > 1 ? j(k + 90, STEP * 0.9) : 0 }); }
+  // (the drop: a shelf where it's gentle, straight down where it's sheer; an outcrop of rock rising beside the route where
+  // the knob's up, the valley beyond it)
+  const knob = [0, 4.5, 7, 3, 0, 0, 0, 0];
+  for (let k = 0; k < DROP.length; k++) { const [du0, dy0] = DROP[k], du = du0 * (k ? duk : 1), dy = dy0 * (k ? dyk : 1) + knob[k] * ch.knob; out.push({ u: half + du + (k ? j(k + 40, du * 0.25) : 0), y: st.y + dy + (k > 1 ? j(k + 60, 0.6 - dy * 0.22) : 0), ds: k > 1 ? j(k + 90, STEP * 0.9) : 0 }); }
   return out;
 }
 
@@ -199,6 +227,16 @@ function dress(c: Course, m: Mesh, i: number, sec: { u: number; y: number; ds: n
   if (i % 3 === 0 && r > 0.9) {
     const u = -half - 9 - hash(c.seed, i, 104) * 25, y = groundAt(sec, u), p = c.point(i, u);
     m.pine(p.x, y - 0.3, p.z, 5 + hash(c.seed, i, 105) * 6, c.seed * 7919 + i);
+  }
+  // (crags: rock towers down the drop where it's a shelf, and on the wall where it's only a bank)
+  const chr = character(c, i);
+  if (i % 4 === 0 && hash(c.seed, i, 120) < 0.14 * (1.4 - chr.drop)) {
+    const u = half + 5 + hash(c.seed, i, 121) * 22, p = c.point(i, u);
+    m.crag(p.x, groundAt(sec, u), p.z, 4 + hash(c.seed, i, 122) * 9, c.seed * 131 + i);
+  }
+  if (i % 4 === 2 && hash(c.seed, i, 123) < 0.16 * (1.3 - chr.wall)) {
+    const u = -half - 3 - hash(c.seed, i, 124) * 14, p = c.point(i, u);
+    m.crag(p.x, groundAt(sec, u), p.z, 4 + hash(c.seed, i, 125) * 8, c.seed * 137 + i);
   }
   // (boulders: big jagged ones bedded along both sides of the route, smaller ones down the drop)
   if (r > 0.55 && r < 0.66) {

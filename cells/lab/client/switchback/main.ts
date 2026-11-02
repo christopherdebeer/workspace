@@ -45,10 +45,11 @@ for (let t = 0; t < T0; t += 1 / 120) rider.step(1 / 120, { steer: autoSteer(rid
 rider.events.length = 0;
 
 // (the chase eye: behind and above, a touch to the wall side, swinging round after the bike, never into the ground)
-const cam = { h: rider.heading, eye: [rider.x, rider.y + 4, rider.z - 8], shake: 0, fovKick: 0 };
+const cam = { h: rider.travel, eye: [rider.x, rider.y + 4, rider.z - 8], shake: 0, fovKick: 0 };
 function view(dt: number, t: number): View {
   const k = 1 - Math.exp(-dt * (rider.air ? 1.6 : 3.2));
-  if (rider.crashT <= 0) cam.h += Math.atan2(Math.sin(rider.heading - cam.h), Math.cos(rider.heading - cam.h)) * k;
+  // (after the way you're going, not the way the bike points, so a slide shows as the bike yawed across the frame)
+  if (rider.crashT <= 0) cam.h += Math.atan2(Math.sin(rider.travel - cam.h), Math.cos(rider.travel - cam.h)) * k;
   const fx = Math.sin(cam.h), fz = Math.cos(cam.h), rx = -Math.cos(cam.h), rz = Math.sin(cam.h);
   const pace = Math.min(1, Math.hypot(rider.vx, rider.vz) / VMAX), back = 4.6 + pace * 1.1, high = 3.3 + pace * 0.4, side = 1.5;
   const want = [rider.x - fx * back + rx * side, rider.y + high, rider.z - fz * back + rz * side];

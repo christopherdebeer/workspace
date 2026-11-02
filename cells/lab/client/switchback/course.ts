@@ -35,7 +35,7 @@ export class Course {
   private r: () => number;
   /** what the laying is doing now: the turn it's making (rad/m), for how long, and the feature it's laying */
   private turn = 0; private turnLeft = 0; private grade = 0.22; private gradeTo = 0.22;
-  private width = 7; private widthTo = 7; private roughFrom = 0; private roughTo = 0; private roughLeft = 0; private roughLen = 1;
+  private width = 7; private widthTo = 7; private widthStep = 0; private wideLeft = 0; private roughFrom = 0; private roughTo = 0; private roughLeft = 0; private roughLen = 1;
   private plan: { kind: Feature; at: number }[] = [];
   private sinceKicker = 0;
   constructor(readonly seed: number) {
@@ -53,18 +53,26 @@ export class Course {
       // kink turns back toward the fall line once the route has wandered off it, so it keeps going down the valley)
       if (this.turnLeft <= 0) {
         if (this.turn !== 0 || i < 60) {
-          // (a leg: straight, its own width, for a while)
-          this.turn = 0; this.turnLeft = i < 60 ? 60 - i : 9 + r() * 24; this.widthTo = 5.2 + r() * 4;
+          // (a leg: straight, for a while)
+          this.turn = 0; this.turnLeft = i < 60 ? 60 - i : 12 + r() * 30;
           this.gradeTo = 0.14 + r() * 0.26;
         } else {
+          // (a kink: short and sharp, a few of them hard)
           const side = p.heading > 0.4 ? -1 : p.heading < -0.4 ? 1 : r() < 0.5 ? -1 : 1;
-          const sharp = r() < 0.35, len = 3 + Math.floor(r() * 3), ang = (sharp ? 0.45 + r() * 0.45 : 0.12 + r() * 0.3) * side;
+          const sharp = r() < 0.35, len = 7 + Math.floor(r() * 7), ang = (sharp ? 0.38 + r() * 0.34 : 0.1 + r() * 0.24) * side;
           this.turn = ang / len; this.turnLeft = len;
         }
       }
+      // (the width: never settled, a new one every few metres, joined straight; now and then a pinch between rocks, or
+      // a wide flat)
+      if (--this.wideLeft <= 0) {
+        const q = r();
+        this.widthTo = q < 0.15 ? 3.8 + r() * 0.8 : q > 0.85 ? 10 + r() * 3 : 5 + r() * 4.5;
+        this.wideLeft = 4 + Math.floor(r() * 8); this.widthStep = (this.widthTo - this.width) / this.wideLeft;
+      }
       this.turnLeft--;
       this.grade += (this.gradeTo - this.grade) * 0.08;
-      this.width += (this.widthTo - this.width) * 0.18;
+      this.width += this.widthStep;
       // (the rough: the surface steps up and down over rock, a new height every few metres, joined straight)
       if (--this.roughLeft <= 0) { this.roughFrom = this.roughTo; this.roughTo = r() * 0.22; this.roughLen = this.roughLeft = 5 + Math.floor(r() * 6); }
       const rough = i < 40 ? 0 : this.roughTo + (this.roughFrom - this.roughTo) * (this.roughLeft / this.roughLen);
