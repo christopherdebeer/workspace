@@ -161,24 +161,27 @@ function focusAt(eye: [number, number, number], yaw: number, pitch: number) {
 // ─── input: hold to run; drag across to turn, up and down to look ───
 // (a touch is a run or a look by how it starts: still for its first 150 ms, a run; moved 12 px before that, a look, standing
 // where you are. The drag turns you either way, as directly as ever: a screen's width, portrait, is about half a turn)
-const DECIDE_MS = 150, DECIDE_PX = 12;
+// (and a look whose finger then settles (within 6 px for 350 ms) becomes a run, facing where you looked)
+const DECIDE_MS = 150, DECIDE_PX = 12, SETTLE_MS = 350, SETTLE_PX = 6;
 // (two fingers: a pinch, closer or wider; the zoom stays where you leave it (1× to 4×), and while you pinch you neither
 // run nor turn)
 const fingers = new Map<number, { x: number; y: number }>();
 let pinch: { d0: number; z0: number } | null = null, zoom = 1;
 const spread = () => { const [a, b] = [...fingers.values()]; return Math.hypot(a.x - b.x, a.y - b.y) || 1; };
-let drag: { x: number; y: number; x0: number; y0: number; t0: number; id: number; kind: 'pending' | 'run' | 'look' } | null = null, dragTurn = 0;
+let drag: { x: number; y: number; x0: number; y0: number; t0: number; id: number; kind: 'pending' | 'run' | 'look'; sx: number; sy: number; st: number } | null = null, dragTurn = 0;
 canvas.addEventListener('pointerdown', (e) => {
   canvas.setPointerCapture(e.pointerId); fingers.set(e.pointerId, { x: e.clientX, y: e.clientY });
   if (fingers.size === 2) { pinch = { d0: spread(), z0: zoom }; drag = null; return; }
   if (fingers.size > 2) return;
-  drag = { x: e.clientX, y: e.clientY, x0: e.clientX, y0: e.clientY, t0: performance.now(), id: e.pointerId, kind: 'pending' }; sound.start(); if (hint) hint.classList.add('gone');
+  drag = { x: e.clientX, y: e.clientY, x0: e.clientX, y0: e.clientY, t0: performance.now(), id: e.pointerId, kind: 'pending', sx: e.clientX, sy: e.clientY, st: performance.now() }; sound.start(); if (hint) hint.classList.add('gone');
 });
 canvas.addEventListener('pointermove', (e) => {
   const f = fingers.get(e.pointerId); if (f) { f.x = e.clientX; f.y = e.clientY; }
   if (pinch && fingers.size >= 2) { zoom = Math.max(1, Math.min(4, (pinch.z0 * spread()) / pinch.d0)); return; }
   if (!drag || e.pointerId !== drag.id) return;
   if (drag.kind === 'pending' && Math.hypot(e.clientX - drag.x0, e.clientY - drag.y0) > DECIDE_PX) drag.kind = 'look';
+  // (where the finger last settled, and since when: moving on from it starts the wait again)
+  if (Math.hypot(e.clientX - drag.sx, e.clientY - drag.sy) > SETTLE_PX) { drag.sx = e.clientX; drag.sy = e.clientY; drag.st = performance.now(); }
   const k = 2.6 / Math.max(innerWidth, innerHeight);
   dragTurn -= (e.clientX - drag.x) * k * 2.6;
   pitch = Math.max(-0.7, Math.min(0.9, pitch - (e.clientY - drag.y) * k));
@@ -289,6 +292,7 @@ function run(dt: number) {
   else if (auto) turn += (Math.sin(t * 0.13 + 1.3) * 0.25 + Math.sin(t * 0.051) * 0.2) * dt;
   // (a still touch becomes a run once it's had its moment; a look never does)
   if (drag?.kind === 'pending' && performance.now() - drag.t0 >= DECIDE_MS) drag.kind = 'run';
+  if (drag?.kind === 'look' && performance.now() - drag.st >= SETTLE_MS) drag.kind = 'run';
   held = drag?.kind === 'run';
   turn += dragTurn; dragTurn = 0;
   me.update(dt, { go, turn });

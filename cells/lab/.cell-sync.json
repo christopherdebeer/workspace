@@ -1,8 +1,8 @@
 {
   "cell": "c15r/lab",
   "cellId": "lab-8928acf3",
-  "treeVersion": "tree:de694b58c2dbc8e26a93a034a064b99dacda7d21d90bd8d4f3c73163875f13b0",
-  "syncedAt": "2026-11-02T10:24:16.191Z",
+  "treeVersion": "tree:3d30212ed6324901c49307cfc8b0ca71da5ab30fbed971ae9d7ea9900075c100",
+  "syncedAt": "2026-11-02T10:44:41.733Z",
   "files": {
     "README.md": "sha256:665df4179140457c44ea9e0f6f5820bd6e9b557fb196a37cf1245a07cb11f7c6",
     "client/bamboo/chase.ts": "sha256:86eda509044fedcbee75e3fc296b49af244257f62551251e7a668573424ee06c",
@@ -10,7 +10,7 @@
     "client/bamboo/footing.ts": "sha256:0ec7182b5501707817fdcde28bbe72aff7666ce6207566b3fa8eb118dbb2a8b5",
     "client/bamboo/layers.ts": "sha256:e05c37c2263f5ada0c1c28e2fe8301904551db0c0f8e301df8d920db0c547d5d",
     "client/bamboo/lump.ts": "sha256:e759ec064277d954a0902c1088c4713070c45b37b69661138ff03f916df7c0df",
-    "client/bamboo/main.ts": "sha256:116d27c1956b515f22293e43f8997f20f5fbfbb1f49f843a31e1c118b34b6a63",
+    "client/bamboo/main.ts": "sha256:047bc54fb4467512cc581d449065d0da2fbd5fa046df96f70febc2d136fa9999",
     "client/bamboo/presence.ts": "sha256:ef0827f28dbb05a55cd313737bcf62cb23ad0f53615992b35e70d39439482621",
     "client/bamboo/render.ts": "sha256:7d5eee2190564299ce13bdb0632ac9e8a1e59cfc805a788f08b0d85ae2cc0cbb",
     "client/bamboo/rock.ts": "sha256:7e1b36365626151cb4f342559bae9f3ec635e9b474584a83812a93a4ef0e5e84",
@@ -473,7 +473,7 @@
     "index.ts": "sha256:ab6a93902d80b27d1bbf963fd813fd956ca79dc4a813d9b7db10490f29a67ca9",
     "md.ts": "sha256:789ba0fa8bc21f0206f2c2d7baf24c64613e6ea5606b8fb398bb24f49158b99e",
     "static/bamboo.html": "sha256:fae59db41bc4b0b85a928b761ca2e0b253b15fb553c42c12b12a7ea516a764a9",
-    "static/bamboo.md": "sha256:a8e0f22a5f1da912e20f3aa0a5d38df66b778bfe3b463179ec7943e7b246a2c1",
+    "static/bamboo.md": "sha256:fba98af4b11cf994820cbb6acdefad4cce0cfe04c94a6fa73f02e9c0b50f3f25",
     "static/bamboo/board.jpg": "sha256:d7d2e4459368399fed6771e780cedcc2ecac918d6534da57082096559c7ee849",
     "static/bamboo/v-a.jpg": "sha256:26f74671b448fc3a9fb27f78388bfec3d39bd461f141b491e8e48ff7c80e67eb",
     "static/bamboo/v-b.jpg": "sha256:c59abee26a8a06e29197f6efdcb4370550f1d2f4a8c5a3947da8f44f816bfa5f",
