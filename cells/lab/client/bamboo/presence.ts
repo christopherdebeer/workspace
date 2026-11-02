@@ -31,7 +31,7 @@ export interface You { x: number; z: number; y: number; v: number; loud: number 
 
 const G = 9.8;
 const KIND = {
-  fox: { trot: 3.2, run: 7.2, bolt: 10.5, turn: 6, r: 0.16, hop: 1.25, drop: 2.6, leap: 2.6, loud: 1, h: 0.45 },
+  fox: { trot: 3.2, run: 7.2, bolt: 10.5, turn: 6, r: 0.16, hop: 1.7, drop: 3.6, leap: 3.4, loud: 1, h: 0.45 },
   runner: { trot: 6.2, run: 7.1, bolt: 7.6, turn: 2.6, r: 0.3, hop: 0.6, drop: 1.4, leap: 1.8, loud: 1.6, h: 1.8 },
   stir: { trot: 3.4, run: 6.4, bolt: 7.4, turn: 1.6, r: 0, hop: 99, drop: 99, leap: 0, loud: 1.2, h: 9 },
 };
@@ -82,6 +82,10 @@ export class Presence {
    * distance (stalking, watching), or edging off when you're too near; fleeing when it's alarmed. It never leaves you */
   regard: 'return' | 'stalk' | 'edge' | 'flee' = 'stalk';
   private orbit = 1; private unseen = 0;
+  /** (your way and pace, as it's seen you go; and how long it's had no way on) */
+  private youLast: [number, number] | null = null; private youDir = 0; private youSpeed = 0; private stuckT = 0;
+  /** (a way it found it couldn't bound after all, and for how long it's ruled out) */
+  private avoid = 0; private avoidT = 0;
   travelled = 0;
   cues: Cue[] = [];
   /** culms it's shaken, and where it's passed through the canopy: where, when, how hard (the renderer lets them settle) */
@@ -130,6 +134,9 @@ export class Presence {
     const S = this.spec, F = this.feet;
     this.t += dt;
     const d = Math.hypot(you.x - this.x, you.z - this.z), away = Math.atan2(this.x - you.x, this.z - you.z);
+    if (this.youLast) { const mx = you.x - this.youLast[0], mz = you.z - this.youLast[1], sp = Math.hypot(mx, mz) / Math.max(dt, 1e-3); this.youSpeed += (sp - this.youSpeed) * ease(dt, 3); if (sp > 0.5) this.youDir = Math.atan2(mx, mz); }
+    this.youLast = [you.x, you.z];
+    const youGo = this.youSpeed > 1.5;
     // ─── what it can tell of you ───
     this.youNoise = Math.max(this.youNoise * Math.exp(-dt * 2), you.loud);
     this.sight -= dt;
@@ -185,11 +192,12 @@ export class Presence {
     this.nextPause -= dt;
     if (this.kind === 'fox') {
       // (got away: alarm falling through, after it ran; or come up onto a stone, a rise, calm enough to look)
-      const eased = this.wasAlarmed && this.alarm < 0.32, onHeight = F.at(this.x, this.z).kind === 'stone' && this.alarm < 0.45 && this.nextPause < 0;
+      // (and never while you're on the move: it keeps with you)
+      const eased = this.wasAlarmed && this.alarm < 0.32 && !youGo, onHeight = F.at(this.x, this.z).kind === 'stone' && this.alarm < 0.45 && this.nextPause < 0 && !youGo;
       if (this.alarm > 0.6) this.wasAlarmed = true;
       if (eased || onHeight) { this.wasAlarmed = false; this.mode = 'pause'; this.pauseT = 1 + this.rnd() * 1.8; return; }
       this.calm = this.alarm < 0.12 ? this.calm + dt : 0;
-      if (this.calm > 10 && this.travelled > 120 && F.coverNear(this.x, this.z) < 0.45) { this.mode = 'rest'; this.calm = 0; return; }
+      if (this.calm > 10 && this.travelled > 120 && !youGo && d < 25 && F.coverNear(this.x, this.z) < 0.45) { this.mode = 'rest'; this.calm = 0; return; }
     } else if (this.nextPause <= 0) { this.mode = 'pause'; this.pauseT = this.kind === 'runner' ? 1.2 + this.rnd() * 0.9 : 0.8 + this.rnd() * 1.6; return; }
 
     // ─── where it wants to go: a fox and a stir their own wandering way, turned from you when it's wary; a runner along
@@ -203,11 +211,17 @@ export class Presence {
       // (and it means to be seen now and then: out of each other's sight a while, it comes in closer, toward you, until
       // it has you in view again, and keeps there)
       this.unseen = this.seesYou ? 0 : this.unseen + dt;
-      const toward = wrap(away + Math.PI), R = this.unseen > 8 ? Math.max(12, 24 - (this.unseen - 8) * 1.5) : 15 + 9 * (0.5 + 0.5 * Math.sin(this.t * 0.07 + this.goal));
-      if (d > R + 8) { this.regard = 'return'; want = toward + this.orbit * (d > 60 ? 0.25 : 0.6); }
-      else if (d < R - 6) { this.regard = 'edge'; want = away + this.orbit * 0.9; }
-      else { this.regard = 'stalk'; want = toward + this.orbit * Math.PI / 2 + wrap(this.wander - toward) * 0.15; if (this.rnd() < dt * 0.03) this.orbit = -this.orbit; }
-      if (this.unseen > 8 && d > 10 && this.regard !== 'edge') want = toward + this.orbit * 0.35;
+      // (near enough to stay in sight through the culms and the mist: 8 to 13 m, nearer still when it's lost you)
+      const toward = wrap(away + Math.PI), R = this.unseen > 8 ? Math.max(6, 13 - (this.unseen - 8) * 1.5) : 8 + 5 * (0.5 + 0.5 * Math.sin(this.t * 0.07 + this.goal));
+      if (d > R + 5) { this.regard = 'return'; want = toward + this.orbit * (d > 40 ? 0.15 : 0.5); }
+      else if (d < R - 4) { this.regard = 'edge'; want = away + this.orbit * 0.9; }
+      else if (youGo) {
+        // (you on the move: it runs with you, off to one side and a little ahead, as a fox shadows a walker)
+        this.regard = 'stalk';
+        const sx = you.x + Math.sin(this.youDir) * 4 + Math.cos(this.youDir) * R * this.orbit, sz = you.z + Math.cos(this.youDir) * 4 - Math.sin(this.youDir) * R * this.orbit;
+        want = Math.atan2(sx - this.x, sz - this.z);
+      } else { this.regard = 'stalk'; want = toward + this.orbit * Math.PI / 2 + wrap(this.wander - toward) * 0.15; if (this.rnd() < dt * 0.03) this.orbit = -this.orbit; }
+      if (this.unseen > 8 && d > 6 && this.regard !== 'edge') want = toward + this.orbit * 0.35;
     }
     if (this.kind === 'runner') {
       const q = this.land.trailNear(this.x, this.z);
@@ -226,7 +240,9 @@ export class Presence {
       this.think = 0.1;
       if (this.kind !== 'stir') this.posts = F.posts(this.x, this.z, 6);
       let bestCost = 1e9;
-      for (let k = -9; k <= 9; k++) {
+      // (no way on a while: it looks all round, back the way it came if need be, not only near where it wants)
+      const span = this.stuckT > 0.4 ? 22 : 9;
+      for (let k = -span; k <= span; k++) {
         const a = want + k * 0.14, dx = Math.sin(a), dz = Math.cos(a);
         let cost = Math.abs(k) * 0.35 + Math.abs(wrap(a - this.heading)) * 0.4;
         if (this.kind !== 'stir') {
@@ -236,24 +252,35 @@ export class Presence {
             if (al > 0 && al < 5 && Math.abs(-rx * dz + rz * dx) < S.r + 0.12 + p.r) cost += (5 - al) * 1.3;
           }
           if (!this.passable(a)) cost += 100;
+          if (this.avoidT > 0 && Math.abs(wrap(a - this.avoid)) < 0.35) cost += 100;
         }
         if (cost < bestCost) { bestCost = cost; this.best = a; }
       }
       this.bestCost = bestCost;
     }
+    this.avoidT -= dt;
     const blocked = this.bestCost >= 100;
+    this.stuckT = blocked ? this.stuckT + dt : Math.max(0, this.stuckT - dt * 0.5);
     this.heading += wrap(this.best - this.heading) * ease(dt, blocked ? S.turn * 1.5 : S.turn);
     // ─── its pace (none, turning, where there's no way on) ───
-    const target = blocked ? 0 : this.kind === 'fox' ? (this.alarm > 0.8 ? S.bolt : this.alarm > 0.4 ? S.run : this.regard === 'return' ? (d > 60 ? S.run : S.trot) : this.regard === 'stalk' ? 1.3 : S.trot) : this.kind === 'stir' ? S.run * (0.85 + 0.3 * Math.sin(this.t * 0.31)) : S.run;
+    // (a fox keeps up: back to you at a run, a bolt if it's far behind; with you on the move, at your pace and a little more
+    // to gain its place beside you; round you at rest, a slow prowl)
+    // (startled, it goes as hard as it needs to keep its lead and no harder: a bolt when you're close, a run, then a trot
+    // once it's well ahead, so it stays in sight, a fox you can still follow)
+    const flee = d < 10 ? S.bolt : d < 18 ? S.run : S.trot;
+    const target = blocked ? 0 : this.kind === 'fox' ? (this.alarm > 0.8 ? flee : this.alarm > 0.4 ? Math.min(flee, S.run) : this.regard === 'return' ? (d > 20 ? S.bolt : S.run) : this.regard === 'stalk' ? (youGo ? Math.min(S.bolt, this.youSpeed * 1.15 + 0.5) : 1.3) : S.trot) : this.kind === 'stir' ? S.run * (0.85 + 0.3 * Math.sin(this.t * 0.31)) : S.run;
     this.v += (target - this.v) * ease(dt, target < this.v ? 4 : 2.5);
     const dx = Math.sin(this.heading), dz = Math.cos(this.heading);
     // ─── a bound, if there's something just ahead it can't step ───
-    if (this.kind !== 'stir' && this.v > 1 && this.bound(dx, dz)) return;
+    // (from a near stand too: a fox at the foot of a step springs up it, never stands there unable to step or spring)
+    if (this.kind !== 'stir' && this.v > 0.25 && this.bound(dx, dz)) return;
     let nx = this.x + dx * this.v * dt, nz = this.z + dz * this.v * dt;
     if (this.kind !== 'stir') [nx, nz] = this.slip(nx, nz);
     // (on the ground it rises and falls no more steeply than it steps: anything more is a bound, or it's held, and the way's
     // looked for again)
-    if (this.kind !== 'stir' && Math.abs(F.at(nx, nz).y - this.y) > Math.max(0.06, 1.1 * Math.hypot(nx - this.x, nz - this.z))) { this.v *= 0.5; this.think = 0; return; }
+    // (a step it can't take counts as no way on, so it soon looks all round)
+    // (a step of up to a hand's breadth or so (0.3 m: less than it bounds) it just takes, however slowly it's going)
+    if (this.kind !== 'stir' && Math.abs(F.at(nx, nz).y - this.y) > Math.max(this.kind === 'fox' ? 0.3 : 0.06, 1.1 * Math.hypot(nx - this.x, nz - this.z))) { this.v *= 0.5; this.think = 0; this.stuckT += dt * 2; return; }
     this.travelled += Math.hypot(nx - this.x, nz - this.z);
     this.x = nx; this.z = nz;
     const g = this.ground();
@@ -301,7 +328,7 @@ export class Presence {
       if (s < edge + 0.35) continue;
       const u2 = F.at(this.x + dx * (s + 0.25), this.z + dz * (s + 0.25)).y, u0 = F.at(this.x + dx * (s - 0.25), this.z + dz * (s - 0.25)).y;
       // (somewhere level enough to land, that it can spring up to or drop down to)
-      if (Math.abs(u2 - u) < 0.14 && Math.abs(u - u0) < 0.14 && u - this.y <= S.hop && this.y - u <= S.drop) return { d: s, y: u, crest };
+      if (Math.abs(u2 - u) < 0.2 && Math.abs(u - u0) < 0.2 && u - this.y <= S.hop && this.y - u <= S.drop) return { d: s, y: u, crest };
     }
     return null;
   }
@@ -317,7 +344,8 @@ export class Presence {
       if (al > 0.2 && al < ahead + 0.3 && Math.abs(-rx * dz + rz * dx) < 0.3) { edge = al; break; }
     }
     if (edge < 0) return false;
-    if (!this.landing(dx, dz, edge)) { this.think = 0; this.v *= 0.3; return true; }
+    // (nowhere to come down after all: that way's ruled out a moment, and it looks for another, rather than stand at it)
+    if (!this.landing(dx, dz, edge)) { this.think = 0; this.v *= 0.3; this.avoid = Math.atan2(dx, dz); this.avoidT = 1.2; this.stuckT += 0.2; return true; }
     this.gather = this.kind === 'fox' ? 0.12 : 0.09; this.springAt = edge; this.springDir = [dx, dz];
     return true;
   }
