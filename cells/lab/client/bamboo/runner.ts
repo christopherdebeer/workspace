@@ -96,6 +96,8 @@ export class Runner {
   private airTurn = 0; private headTake = 0;
   /** the player holding on (going) this tick; settling onto a landing (braking to a stop within what's under you); the
    * way the body was going when the foot it springs from was planted */
+  /** (temporary, to watch them: every landing with pace that isn't a chain's goes into a roll) */
+  forceRoll = false;
   private going = true; private settle = false; private movePlant = 0; private lastX = 0; private lastZ = 0; private lastV = 0;
   /** the working the debug view shows (debug.ts): read only */
   debugState() { return { held: this.held, stopped: this.stopped, limitT: this.limitT, stanceLeft: this.stanceLeft, best: this.best, offLine: Math.abs(wrap(this.move - this.heading)) }; }
@@ -867,6 +869,8 @@ export class Runner {
       // the eye going by what you're really doing), and taken back up by the push)
       this.read(next, this.x, this.z, gy, this.v);
       this.v *= 1 - 0.65 * Math.min(1, turnBy / 1.1);
+    } else if (this.forceRoll && this.going && vh > 2.5) {
+      as = 'roll'; this.rollT = 0; this.v *= 0.9; this.crouchV += 0.6;
     } else if (imp < 3.3) {
       as = 'light'; this.crouchV += 0.4 + imp * 0.3; this.v *= 0.97;
     } else if (imp > 6.5 && vh > 3.5 && this.rollRoom(this.x, this.z, this.move)) {

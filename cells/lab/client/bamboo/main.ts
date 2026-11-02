@@ -52,6 +52,8 @@ let t = Number(params.get('t') ?? 0);
 
 // ─── you, and the land round you, built a chunk at a time as you go ───
 const me = new Runner(world);
+// (temporary: every landing with pace that isn't a chain's goes into a roll, so rolls can be watched; `rolls=0` for the run as it is)
+me.forceRoll = params.get('rolls') !== '0';
 let held = false, pitch = -0.06, roll = 0, airK = 0, aimK = 0, leadK = 0;
 const keys = new Set<string>();
 renderer.allStrokes = params.get('strokes') === 'all';
@@ -160,9 +162,21 @@ function focusAt(eye: [number, number, number], yaw: number, pitch: number) {
 // (a touch is a run or a look by how it starts: still for its first 150 ms, a run; moved 12 px before that, a look, standing
 // where you are. The drag turns you either way, as directly as ever: a screen's width, portrait, is about half a turn)
 const DECIDE_MS = 150, DECIDE_PX = 12;
+// (two fingers: a pinch, closer or wider; the zoom stays where you leave it (1× to 4×), and while you pinch you neither
+// run nor turn)
+const fingers = new Map<number, { x: number; y: number }>();
+let pinch: { d0: number; z0: number } | null = null, zoom = 1;
+const spread = () => { const [a, b] = [...fingers.values()]; return Math.hypot(a.x - b.x, a.y - b.y) || 1; };
 let drag: { x: number; y: number; x0: number; y0: number; t0: number; id: number; kind: 'pending' | 'run' | 'look' } | null = null, dragTurn = 0;
-canvas.addEventListener('pointerdown', (e) => { canvas.setPointerCapture(e.pointerId); drag = { x: e.clientX, y: e.clientY, x0: e.clientX, y0: e.clientY, t0: performance.now(), id: e.pointerId, kind: 'pending' }; sound.start(); if (hint) hint.classList.add('gone'); });
+canvas.addEventListener('pointerdown', (e) => {
+  canvas.setPointerCapture(e.pointerId); fingers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (fingers.size === 2) { pinch = { d0: spread(), z0: zoom }; drag = null; return; }
+  if (fingers.size > 2) return;
+  drag = { x: e.clientX, y: e.clientY, x0: e.clientX, y0: e.clientY, t0: performance.now(), id: e.pointerId, kind: 'pending' }; sound.start(); if (hint) hint.classList.add('gone');
+});
 canvas.addEventListener('pointermove', (e) => {
+  const f = fingers.get(e.pointerId); if (f) { f.x = e.clientX; f.y = e.clientY; }
+  if (pinch && fingers.size >= 2) { zoom = Math.max(1, Math.min(4, (pinch.z0 * spread()) / pinch.d0)); return; }
   if (!drag || e.pointerId !== drag.id) return;
   if (drag.kind === 'pending' && Math.hypot(e.clientX - drag.x0, e.clientY - drag.y0) > DECIDE_PX) drag.kind = 'look';
   const k = 2.6 / Math.max(innerWidth, innerHeight);
@@ -170,7 +184,10 @@ canvas.addEventListener('pointermove', (e) => {
   pitch = Math.max(-0.7, Math.min(0.9, pitch - (e.clientY - drag.y) * k));
   drag.x = e.clientX; drag.y = e.clientY;
 });
-const up = (e: PointerEvent) => { if (drag && e.pointerId === drag.id) { drag = null; held = false; remember(true); } };
+const up = (e: PointerEvent) => {
+  fingers.delete(e.pointerId); if (fingers.size < 2) pinch = null;
+  if (drag && e.pointerId === drag.id) { drag = null; held = false; remember(true); }
+};
 canvas.addEventListener('pointerup', up); canvas.addEventListener('pointercancel', up);
 addEventListener('keydown', (e) => { keys.add(e.key); sound.start(); });
 addEventListener('keyup', (e) => keys.delete(e.key));
@@ -434,7 +451,7 @@ function frame(now: number) {
   const look: [number, number, number] = [eye[0] + Math.sin(yaw) * Math.cos(p), eye[1] + Math.sin(p), eye[2] + Math.cos(yaw) * Math.cos(p)];
   roll += (-me.turn * 0.5 * s + me.weight * 0.01 * s + me.shoulder * 0.06 + (me.rollT >= 0 ? 0.07 * Math.sin(2 * Math.PI * me.rollT) : 0) - roll) * (1 - Math.exp(-dt * 6));
   const portrait = innerHeight > innerWidth, base = Number(params.get('fov')) || (portrait ? 74 : 60);
-  const fov = (base + 12 * travel) * Math.PI / 180;
+  const fov = 2 * Math.atan(Math.tan(((base + 12 * travel) * Math.PI) / 360) / zoom);
   // (the focus: where you're going and looking, the page coming in round it)
   const target = focusAt(eye, yaw, p);
   focus = still || focus === 0 ? target : focus + (target - focus) * Math.min(1, dt * 0.8);
