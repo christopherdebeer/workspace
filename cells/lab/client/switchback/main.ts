@@ -50,7 +50,7 @@ function view(dt: number, t: number): View {
   const k = 1 - Math.exp(-dt * (rider.air ? 1.6 : 3.2));
   if (rider.crashT <= 0) cam.h += Math.atan2(Math.sin(rider.heading - cam.h), Math.cos(rider.heading - cam.h)) * k;
   const fx = Math.sin(cam.h), fz = Math.cos(cam.h), rx = -Math.cos(cam.h), rz = Math.sin(cam.h);
-  const pace = Math.min(1, Math.hypot(rider.vx, rider.vz) / VMAX), back = 4.6 + pace * 1.1, high = 3.3 + pace * 0.4, side = -1.4;
+  const pace = Math.min(1, Math.hypot(rider.vx, rider.vz) / VMAX), back = 4.6 + pace * 1.1, high = 3.3 + pace * 0.4, side = 1.5;
   const want = [rider.x - fx * back + rx * side, rider.y + high, rider.z - fz * back + rz * side];
   if (rider.crashT > 0) { want[0] = cam.eye[0]; want[2] = cam.eye[2]; }
   const ke = 1 - Math.exp(-dt * 7);

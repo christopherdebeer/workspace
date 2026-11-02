@@ -35,6 +35,7 @@ export class Course {
   private r: () => number;
   /** what the laying is doing now: the turn it's making (rad/m), for how long, and the feature it's laying */
   private turn = 0; private turnLeft = 0; private grade = 0.22; private gradeTo = 0.22;
+  private width = 7; private widthTo = 7; private roughFrom = 0; private roughTo = 0; private roughLeft = 0; private roughLen = 1;
   private plan: { kind: Feature; at: number }[] = [];
   private sinceKicker = 0;
   constructor(readonly seed: number) {
@@ -48,34 +49,43 @@ export class Course {
     const r = this.r;
     while (this.st.length <= s + 2) {
       const i = this.st.length, p = this.st[i - 1];
-      // (bends: a sweeper or a tight one, never one after another the same way for long; the start straight)
+      // (the route: straight legs broken by sharp kinks, as a track picks its way down rock, not a road's smooth arcs; a
+      // kink turns back toward the fall line once the route has wandered off it, so it keeps going down the valley)
       if (this.turnLeft <= 0) {
-        // (the way it bends: either, but back toward the fall line once it's wandered off it, so the line keeps going down the valley)
-        const side = p.heading > 0.45 ? -1 : p.heading < -0.45 ? 1 : r() < 0.5 ? -1 : 1;
-        const tight = r() < 0.3, len = tight ? 22 + r() * 25 : 40 + r() * 80, ang = (tight ? 0.7 + r() * 0.6 : 0.25 + r() * 0.5) * side;
-        this.turn = i < 80 ? 0 : r() < 0.18 ? 0 : ang / len; this.turnLeft = i < 80 ? 80 - i : len;
-        this.gradeTo = 0.12 + r() * 0.24;
+        if (this.turn !== 0 || i < 60) {
+          // (a leg: straight, its own width, for a while)
+          this.turn = 0; this.turnLeft = i < 60 ? 60 - i : 9 + r() * 24; this.widthTo = 5.2 + r() * 4;
+          this.gradeTo = 0.14 + r() * 0.26;
+        } else {
+          const side = p.heading > 0.4 ? -1 : p.heading < -0.4 ? 1 : r() < 0.5 ? -1 : 1;
+          const sharp = r() < 0.35, len = 3 + Math.floor(r() * 3), ang = (sharp ? 0.45 + r() * 0.45 : 0.12 + r() * 0.3) * side;
+          this.turn = ang / len; this.turnLeft = len;
+        }
       }
       this.turnLeft--;
-      this.grade += (this.gradeTo - this.grade) * 0.02;
+      this.grade += (this.gradeTo - this.grade) * 0.08;
+      this.width += (this.widthTo - this.width) * 0.18;
+      // (the rough: the surface steps up and down over rock, a new height every few metres, joined straight)
+      if (--this.roughLeft <= 0) { this.roughFrom = this.roughTo; this.roughTo = r() * 0.22; this.roughLen = this.roughLeft = 5 + Math.floor(r() * 6); }
+      const rough = i < 40 ? 0 : this.roughTo + (this.roughFrom - this.roughTo) * (this.roughLeft / this.roughLen);
       const heading = p.heading + this.turn;
-      const st: Station = { x: p.x + Math.sin(heading), z: p.z + Math.cos(heading), y: p.y - this.grade, heading, width: 7 + Math.sin(i * 0.013) * 0.8, lift: 0, feature: 'none', flag: false, post: i % 5 === 0 };
+      const st: Station = { x: p.x + Math.sin(heading), z: p.z + Math.cos(heading), y: p.y - this.grade, heading, width: this.width, lift: rough, feature: 'none', flag: false, post: i % 6 === 0 };
       this.st.push(st);
       // (features, laid on straights and gentle bends: a kicker every so often, whoops between)
       this.sinceKicker++;
-      if (!this.plan.length && i > 120 && Math.abs(this.turn) < 0.012) {
-        if (this.sinceKicker > 140 && r() < 0.03) { this.plan.push({ kind: 'ramp', at: i }); this.sinceKicker = 0; }
+      if (!this.plan.length && i > 120 && this.turn === 0 && this.turnLeft > 6) {
+        if (this.sinceKicker > 160 && r() < 0.05) { this.plan.push({ kind: 'ramp', at: i }); this.sinceKicker = 0; }
         else if (r() < 0.006) this.plan.push({ kind: 'whoop', at: i });
       }
       const f = this.plan[0];
       if (f) {
         const k = i - f.at;
         if (f.kind === 'ramp') {
-          // (a kicker: 14 m of ramp rising 2.4 m, a 16 m gap, a 22 m landing deck falling back to the line)
-          this.turn = 0; this.turnLeft = Math.max(this.turnLeft, 4);
+          // (a kicker: 14 m of ramp rising 2.4 m, an 18 m gap, a 36 m landing deck falling back to the line)
+          this.turn = 0; this.turnLeft = Math.max(this.turnLeft, 4); st.width = Math.max(st.width, 7);
           if (k <= 14) { st.feature = 'ramp'; st.lift = 2.4 * Math.pow(k / 14, 1.6); }
-          else if (k < 30) { st.feature = 'gap'; st.lift = 0; st.post = false; }
-          else if (k < 52) { st.feature = 'deck'; st.lift = 1.6 * (1 - (k - 30) / 22); }
+          else if (k < 32) { st.feature = 'gap'; st.lift = 0; st.post = false; }
+          else if (k < 68) { st.feature = 'deck'; st.lift = 1.8 * (1 - (k - 32) / 36); }
           else this.plan.shift();
         } else if (f.kind === 'whoop') {
           this.turn = 0; this.turnLeft = Math.max(this.turnLeft, 4);
@@ -83,7 +93,7 @@ export class Course {
         }
       }
       // (flags: tall pennants on the wall side, at bends and before features)
-      st.flag = st.feature === 'none' && i % 37 === 0 && r() < 0.7;
+      st.flag = st.feature === 'none' && i % 31 === 0 && r() < 0.7;
     }
   }
   /** the station at distance s (clamped), and the one after it, for interpolation */

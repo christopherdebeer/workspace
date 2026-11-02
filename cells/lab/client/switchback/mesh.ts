@@ -83,18 +83,19 @@ export class Mesh {
 }
 
 /** the cross-section, wall side then drop side: how far out from the track's edge, and how far up (or down) */
-const WALL: [number, number][] = [[1.4, 0], [2.2, 2.6], [3.4, 7], [5.2, 13], [7.6, 20], [11, 28], [16, 38], [24, 50], [36, 64], [54, 80]];
-const DROP: [number, number][] = [[2.6, -0.05], [3.6, -1.2], [7, -5.5], [13, -13], [22, -25], [36, -42], [58, -66], [95, -100], [150, -150]];
-export const CHUNK = 48, STEP = 3;
+const WALL: [number, number][] = [[1.4, 0], [2.8, 3.8], [5.5, 12], [10, 24], [18, 39], [31, 58], [52, 84]];
+const DROP: [number, number][] = [[2.6, -0.05], [4.2, -2], [10, -10], [20, -24], [36, -44], [62, -74], [104, -114], [165, -165]];
+export const CHUNK = 48, STEP = 4;
 
 /** the ground's height across the section at station i (no track lift; a kicker's gap is a ravine), for placing things */
 export function section(c: Course, i: number) {
   const st = c.at(i), half = st.width / 2, out: { u: number; y: number; ds: number }[] = [];
   const j = (k: number, amp: number) => (hash(c.seed, i, k) - 0.5) * amp;
-  for (let k = WALL.length - 1; k >= 0; k--) { const [du, dy] = WALL[k]; out.push({ u: -half - du + (k ? j(k, du * 0.3) : 0), y: st.y + dy + (k ? j(k + 20, 0.6 + dy * 0.3) : 0), ds: k > 1 ? j(k + 80, STEP * 0.7) : 0 }); }
+  for (let k = WALL.length - 1; k >= 0; k--) { const [du, dy] = WALL[k]; out.push({ u: -half - du + (k ? j(k, du * 0.3) : 0), y: st.y + dy + (k ? j(k + 20, 0.6 + dy * 0.3) : 0), ds: k > 1 ? j(k + 80, STEP * 0.9) : 0 }); }
   const gap = st.feature === 'gap';
-  out.push({ u: -half, y: st.y, ds: 0 }, { u: -half * 0.3, y: st.y - (gap ? 7 : 0), ds: 0 }, { u: half * 0.3, y: st.y - (gap ? 7 : 0), ds: 0 }, { u: half, y: st.y, ds: 0 });
-  for (let k = 0; k < DROP.length; k++) { const [du, dy] = DROP[k]; out.push({ u: half + du + (k ? j(k + 40, du * 0.2) : 0), y: st.y + dy + (k > 1 ? j(k + 60, 0.5 - dy * 0.18) : 0), ds: k > 1 ? j(k + 90, STEP * 0.7) : 0 }); }
+  const under = st.feature === 'none' || st.feature === 'whoop' ? -0.08 : 0;
+  out.push({ u: -half, y: st.y + under, ds: 0 }, { u: -half * 0.3, y: st.y - (gap ? 7 : -under), ds: 0 }, { u: half * 0.3, y: st.y - (gap ? 7 : -under), ds: 0 }, { u: half, y: st.y + under, ds: 0 });
+  for (let k = 0; k < DROP.length; k++) { const [du, dy] = DROP[k]; out.push({ u: half + du + (k ? j(k + 40, du * 0.2) : 0), y: st.y + dy + (k > 1 ? j(k + 60, 0.5 - dy * 0.18) : 0), ds: k > 1 ? j(k + 90, STEP * 0.9) : 0 }); }
   return out;
 }
 
@@ -108,13 +109,13 @@ export function buildChunk(c: Course, n: number) {
     const A = section(c, s), B = section(c, s + STEP), a = c.at(s), b = c.at(s + STEP);
     const under = a.feature !== 'none' || b.feature !== 'none';
     for (let k = 0; k < A.length - 1; k++) {
-      const trackRow = k >= WALL.length && k < WALL.length + 3;
-      if (trackRow && !under) continue;
+      // (under the track too, a little below it, so a kink's outside never shows a hole)
+      void under;
       const p00 = W(s + A[k].ds, A[k].u, A[k].y), p01 = W(s + A[k + 1].ds, A[k + 1].u, A[k + 1].y), p10 = W(s + STEP + B[k].ds, B[k].u, B[k].y), p11 = W(s + STEP + B[k + 1].ds, B[k + 1].u, B[k + 1].y);
       const flip = hash(c.seed, s, k, 77) < 0.5;
       // (the shoulders, the strips beside the track, stay snow; the wall and the drop go to rock where they're steep)
       const flat = M.SNOW;
-      if (flip) { m.slope(p00, p10, p11, flat); m.slope(p00, p11, p01, flat); } else { m.slope(p00, p10, p01, flat); m.slope(p10, p11, p01, flat); }
+      if (flip) { m.slope(p00, p10, p11, flat, M.ROCK, 0.84); m.slope(p00, p11, p01, flat, M.ROCK, 0.84); } else { m.slope(p00, p10, p01, flat, M.ROCK, 0.84); m.slope(p10, p11, p01, flat, M.ROCK, 0.84); }
     }
     // (things on the ground here)
     for (let t = 0; t < STEP; t++) dress(c, m, s + t, A);
@@ -125,13 +126,13 @@ export function buildChunk(c: Course, n: number) {
     if (a.feature === 'gap') continue;
     const e = c.at(s + 1).feature === 'gap' ? s + 0.999 : s + 1;
     const cols = [-1, -0.35, 0.3, 1];
-    const row = (ss: number) => { const half = a.width / 2, r = Math.round(ss); return cols.map((f, k) => { const p = c.point(ss, f * half); return [p.x, p.y + 0.02 + (k % 3 ? (hash(c.seed, r, k) - 0.5) * 0.12 : 0), p.z]; }); };
+    const row = (ss: number) => { const half = a.width / 2, r = Math.round(ss); return cols.map((f, k) => { const p = c.point(ss, f * half + (k % 3 ? 0 : (hash(c.seed, r, k, 5) - 0.5) * 1.1)); return [p.x, p.y + 0.02 + (k % 3 ? (hash(c.seed, r, k) - 0.5) * 0.12 : 0), p.z]; }); };
     const R0 = row(s), R1 = row(e);
     const deck = a.feature === 'ramp' || a.feature === 'deck';
     for (let k = 0; k < 3; k++) m.quad(R0[k], R0[k + 1], R1[k + 1], R1[k], M.TRACK);
     // (ruts: two worn lines, a shade down, a hair above)
     if (!deck) for (const u of [-1.3, 1.1]) {
-      const q = (ss: number, du: number) => { const p = c.point(ss, u + du + Math.sin(ss * 0.07 + u) * 0.4); return [p.x, p.y + 0.05, p.z]; };
+      const q = (ss: number, du: number) => { const p = c.point(ss, u + du + (hash(c.seed, Math.round(ss / 6), u) - 0.5) * 0.8); return [p.x, p.y + 0.05, p.z]; };
       m.quad(q(s, -0.22), q(s, 0.22), q(e, 0.22), q(e, -0.22), M.RUT);
     }
     if (deck) kickerPiece(c, m, s, e, a.feature === 'ramp');
@@ -190,7 +191,7 @@ function dress(c: Course, m: Mesh, i: number, sec: { u: number; y: number; ds: n
   }
   // (pines down the drop, a few up the wall's top; rocks bedded in the snow)
   const r = hash(c.seed, i, 101);
-  if (i % 2 === 0 && r < 0.42) {
+  if (i % 2 === 0 && r < 0.26) {
     const du = 6 + hash(c.seed, i, 102) * 70, u = half + du, y = groundAt(sec, u);
     const p = c.point(i, u);
     m.pine(p.x, y - 0.3, p.z, 6 + hash(c.seed, i, 103) * 9 * (du > 30 ? 1.4 : 1), c.seed * 9973 + i);
@@ -199,9 +200,10 @@ function dress(c: Course, m: Mesh, i: number, sec: { u: number; y: number; ds: n
     const u = -half - 9 - hash(c.seed, i, 104) * 25, y = groundAt(sec, u), p = c.point(i, u);
     m.pine(p.x, y - 0.3, p.z, 5 + hash(c.seed, i, 105) * 6, c.seed * 7919 + i);
   }
-  if (r > 0.55 && r < 0.62) {
-    const side = hash(c.seed, i, 106) < 0.5 ? -1 : 1, u = side < 0 ? -half - 1.2 - hash(c.seed, i, 107) * 2 : half + 3 + hash(c.seed, i, 108) * 14, p = c.point(i, u);
-    m.rock(p.x, groundAt(sec, u) - 0.1, p.z, 0.4 + hash(c.seed, i, 109) * 1.4, c.seed + i * 31);
+  // (boulders: big jagged ones bedded along both sides of the route, smaller ones down the drop)
+  if (r > 0.55 && r < 0.66) {
+    const side = hash(c.seed, i, 106) < 0.55 ? -1 : 1, u = side < 0 ? -half - 1.6 - hash(c.seed, i, 107) * 3 : half + 2.4 + hash(c.seed, i, 108) * 16, p = c.point(i, u);
+    m.rock(p.x, groundAt(sec, u) - 0.2, p.z, 0.6 + hash(c.seed, i, 109) * (side < 0 ? 2.4 : 1.6), c.seed + i * 31);
   }
 }
 function groundAt(sec: { u: number; y: number }[], u: number) {
@@ -257,50 +259,110 @@ export function buildValley(seed: number) {
   return new Float32Array(m.v);
 }
 
-/** the rider and the bike, at the rider's pose: built fresh each frame (a few hundred triangles) */
-export function buildRider(r: { x: number; y: number; z: number; heading: number; pitch: number; lean: number; squash: number; steerK: number; crashT: number }, t: number) {
+/** the rider and the bike, at the rider's pose: built fresh each frame (a few hundred triangles). A motocross bike in
+ * its real proportions (a 1.48 m wheelbase, a 21-inch front wheel on a fork raked at 27°, a swingarm and shock behind), its
+ * suspension working (the frame sinks on the springs as you land; the fork shortens between the axle and the clamps, the
+ * swingarm swings up), and a rider standing in the attack position: boots on the pegs, knees bent, elbows up, head over
+ * the bars. Measurements in metres in the bike's own frame: x to the right, y up, z forward, from the ground under it. */
+export function buildRider(r: { x: number; y: number; z: number; heading: number; pitch: number; lean: number; squash: number; steerK: number; crashT: number; air?: boolean }, t: number) {
   const m = new Mesh();
   const ch = Math.cos(r.heading), sh = Math.sin(r.heading);
   const fw = [sh, 0, ch], rt = [-ch, 0, sh];
-  // (pitch about the right axis, then lean about the forward axis)
   const rot = (v: number[], ax: number[], a: number) => { const c = Math.cos(a), s = Math.sin(a), d = v[0] * ax[0] + v[1] * ax[1] + v[2] * ax[2]; const cr = [ax[1] * v[2] - ax[2] * v[1], ax[2] * v[0] - ax[0] * v[2], ax[0] * v[1] - ax[1] * v[0]]; return [0, 1, 2].map((i) => v[i] * c + cr[i] * s + ax[i] * d * (1 - c)); };
   const tumble = r.crashT > 0 ? t * 9 : 0;
+  // (pitch about the right axis, then lean about the forward one; + leans right)
   let F = rot(fw, rt, r.pitch + tumble), U = rot([0, 1, 0], rt, r.pitch + tumble), R = rt;
   U = rot(U, F, r.lean); R = rot(R, F, r.lean);
-  const o = [r.x, r.y, r.z], X = R, Y = U, Z = F, sq = r.squash * 0.18;
-  const B = (c: number[], h: number[], mat: number) => m.box(o, X, Y, Z, c, h, mat);
-  // (wheels: knobbly octagons, black; their hubs white)
-  m.prism(o, X, Y, Z, [0, 0.36, 0.74], 0.36, 0.09, 9, M.BLACK);
-  m.prism(o, X, Y, Z, [0, 0.36, -0.7], 0.37, 0.11, 9, M.BLACK);
-  m.prism(o, X, Y, Z, [0, 0.36, 0.74], 0.1, 0.1, 5, M.WHITE);
-  m.prism(o, X, Y, Z, [0, 0.36, -0.7], 0.1, 0.12, 5, M.WHITE);
-  // (the fork, raked; the swingarm)
-  const steer = r.steerK * 0.25;
-  m.box(o, X, Y, Z, [Math.sin(steer) * 0.1, 0.72 - sq * 0.5, 0.6], [0.05, 0.34, 0.05], M.WHITE);
-  B([0, 0.45, -0.32], [0.05, 0.05, 0.38], M.BLACK);
-  // (the body: engine, tank, side plates, fenders: orange, black, white)
-  B([0, 0.58 - sq * 0.3, 0.05], [0.13, 0.17, 0.22], M.ROCK);
-  B([0, 0.86 - sq, 0.26], [0.17, 0.11, 0.26], M.ORANGE);
-  B([0, 0.88 - sq, -0.3], [0.15, 0.06, 0.34], M.BLACK);
-  B([0.16, 0.8 - sq, -0.42], [0.02, 0.1, 0.18], M.WHITE);
-  B([-0.16, 0.8 - sq, -0.42], [0.02, 0.1, 0.18], M.WHITE);
-  B([0, 0.96 - sq, -0.72], [0.1, 0.03, 0.3], M.ORANGE);
-  B([0, 0.82, 0.9], [0.09, 0.025, 0.24], M.ORANGE);
-  B([0, 1.08 - sq, 0.48], [0.32, 0.025, 0.025], M.BLACK); // the bars
-  B([0, 1.0 - sq, 0.56], [0.12, 0.09, 0.03], M.WHITE); // number plate
-  // (the rider: standing, knees bent, weight forward; jersey orange and black, pants black, boots white, helmet orange)
-  const k = 1 - sq * 0.6;
-  for (const side of [-1, 1]) {
-    B([side * 0.2, 0.86 + 0.12 * k, -0.08], [0.07, 0.17 * k, 0.07], M.BLACK); // shin
-    B([side * 0.2, 1.12 + 0.2 * k, 0.0], [0.08, 0.17 * k, 0.09], M.BLACK); // thigh
-    B([side * 0.2, 0.74, -0.06], [0.07, 0.06, 0.13], M.WHITE); // boot
-    B([side * 0.25, 1.62 * k + 0.12, 0.3], [0.06, 0.06, 0.22], M.ORANGE); // forearm
+  const o = [r.x, r.y, r.z], K = 1.08;
+  /** a local point (x right, y up, z forward) into the world */
+  const W = (p: number[]) => [0, 1, 2].map((d) => o[d] + (R[d] * p[0] + U[d] * p[1] + F[d] * p[2]) * K);
+  const L = (a: number[], b: number[], f: number) => a.map((v, i) => v + (b[i] - v) * f);
+  /** a box in local terms: centre, half-sizes, turned `pitch` about x */
+  const box = (c: number[], h: number[], mat: number, pitch = 0) => {
+    const cp = Math.cos(pitch), sp = Math.sin(pitch), Y = [0, cp, sp], Z = [0, -sp, cp];
+    const p = (i: number, j: number, k: number) => W([c[0] + i * h[0], c[1] + Y[1] * j * h[1] + Z[1] * k * h[2], c[2] + Y[2] * j * h[1] + Z[2] * k * h[2]]);
+    const P = [p(-1, -1, -1), p(1, -1, -1), p(1, 1, -1), p(-1, 1, -1), p(-1, -1, 1), p(1, -1, 1), p(1, 1, 1), p(-1, 1, 1)];
+    for (const [a, b, cc, d] of [[0, 1, 2, 3], [5, 4, 7, 6], [4, 0, 3, 7], [1, 5, 6, 2], [3, 2, 6, 7], [4, 5, 1, 0]]) m.quad(P[a], P[b], P[cc], P[d], mat);
+  };
+  /** a limb or a tube from a to b (local), its section hw across and hd deep, square to it */
+  const seg = (a: number[], b: number[], hw: number, hd: number, mat: number) => {
+    const d = [b[0] - a[0], b[1] - a[1], b[2] - a[2]], len = Math.hypot(d[0], d[1], d[2]) || 1, z = d.map((v) => v / len);
+    let x = [z[2], 0, -z[0]]; const xl = Math.hypot(x[0], x[2]); x = xl < 1e-3 ? [1, 0, 0] : [x[0] / xl, 0, x[2] / xl];
+    if (z[2] * 0 + x[0] < 0) x = x.map((v) => -v);
+    const y = [z[1] * x[2] - z[2] * x[1], z[2] * x[0] - z[0] * x[2], z[0] * x[1] - z[1] * x[0]];
+    const p = (i: number, j: number, k: number) => W([0, 1, 2].map((q) => a[q] + d[q] * k + x[q] * i * hw + y[q] * j * hd));
+    const P = [p(-1, -1, 0), p(1, -1, 0), p(1, 1, 0), p(-1, 1, 0), p(-1, -1, 1), p(1, -1, 1), p(1, 1, 1), p(-1, 1, 1)];
+    for (const [i, j, c, e] of [[0, 1, 2, 3], [5, 4, 7, 6], [4, 0, 3, 7], [1, 5, 6, 2], [3, 2, 6, 7], [4, 5, 1, 0]]) m.quad(P[i], P[j], P[c], P[e], mat);
+  };
+  /** a wheel: a knobbly tyre (a ring, its tread stepped), the rim showing inside it, the hub */
+  const wheel = (c: number[], ro: number, ri: number, w: number, spin: number) => {
+    const n = 14, at = (k: number, rr: number, x: number) => { const a = spin + (k / n) * Math.PI * 2; return W([c[0] + x, c[1] + Math.sin(a) * rr, c[2] + Math.cos(a) * rr]); };
+    for (let k = 0; k < n; k++) {
+      const r0 = ro * (k % 2 ? 0.94 : 1);
+      // (the tread, and the tyre's two walls; the rim inside, a shade lighter; open between, so the wheel reads as a wheel)
+      m.quad(at(k, r0, -w), at(k + 1, r0, -w), at(k + 1, r0, w), at(k, r0, w), M.BLACK);
+      for (const x of [-w, w]) { m.quad(at(k, r0, x), at(k + 1, r0, x), at(k + 1, ri, x), at(k, ri, x), M.BLACK); m.quad(at(k, ri, x * 0.7), at(k + 1, ri, x * 0.7), at(k + 1, ri * 0.86, x * 0.7), at(k, ri * 0.86, x * 0.7), M.ROCK); }
+    }
+    for (let k = 0; k < 6; k++) { const a = spin * 0.5 + (k / 6) * Math.PI * 2; seg([c[0], c[1], c[2]], [c[0], c[1] + Math.sin(a) * ri * 0.86, c[2] + Math.cos(a) * ri * 0.86], 0.006, 0.006, M.ROCK); }
+    box(c, [w * 1.3, 0.05, 0.05], M.WHITE);
+  };
+  // (suspension: the frame sinks on its springs, the wheels stay on the ground)
+  const sq = Math.min(1, r.squash) * 0.2, fa = [0, 0.4, 0.76], ra = [0, 0.39, -0.72], spin = -t * 22;
+  const rake = 0.47, fd = [0, Math.cos(rake), -Math.sin(rake)];
+  const clamp = [0, 1.26 - sq, 0.76 - (1.26 - 0.4) * Math.tan(rake)];
+  wheel(fa, 0.4, 0.29, 0.05, spin); wheel(ra, 0.39, 0.27, 0.065, spin);
+  // (the fork: the legs from the axle, the stanchions sliding into them up to the clamps, which turn with the bars)
+  const st = r.steerK * 0.18;
+  for (const x of [-0.075, 0.075]) {
+    const foot = [fa[0] + x, fa[1], fa[2]], top = [clamp[0] + x, clamp[1], clamp[2]];
+    seg(foot, L(foot, top, 0.48), 0.028, 0.032, M.BLACK);
+    seg(L(foot, top, 0.44), top, 0.022, 0.022, M.WHITE);
   }
-  B([0, 1.58 * k + 0.08, 0.06], [0.2, 0.2, 0.14], M.ORANGE); // torso
-  B([0, 1.66 * k + 0.08, 0.0], [0.21, 0.08, 0.15], M.BLACK); // shoulders
-  B([0, 1.36 * k + 0.08, -0.04], [0.18, 0.08, 0.12], M.BLACK); // hips
-  B([0, 1.96 * k + 0.08, 0.2], [0.15, 0.15, 0.17], M.ORANGE); // helmet
-  B([0, 1.94 * k + 0.08, 0.36], [0.11, 0.05, 0.03], M.BLACK); // visor
-  B([0, 2.06 * k + 0.08, 0.4], [0.13, 0.02, 0.07], M.WHITE); // peak
+  void fd;
+  box([0, clamp[1] + 0.02, clamp[2]], [0.11, 0.03, 0.05], M.ROCK);
+  box([Math.sin(st) * 0.02, clamp[1] + 0.15, clamp[2] - 0.04], [0.4, 0.016, 0.016], M.BLACK); // the bars
+  for (const x of [-0.34, 0.34]) box([x, clamp[1] + 0.15, clamp[2] - 0.04], [0.06, 0.024, 0.024], M.WHITE); // the grips
+  box([0, clamp[1] - 0.06, clamp[2] + 0.08], [0.13, 0.11, 0.015], M.WHITE, -0.45); // number plate
+  box([0, fa[1] + 0.46 - sq * 0.4, fa[2] + 0.12], [0.07, 0.016, 0.3], M.ORANGE, 0.18); // front fender, its beak forward
+  // (the frame's mass: engine, tank and shrouds, seat, side plates, the rear fender kicked up; the swingarm and shock)
+  const fr = (y: number) => y - sq;
+  box([0, fr(0.6), 0.04], [0.12, 0.17, 0.2], M.ROCK);
+  box([0, fr(0.8), 0.2], [0.07, 0.1, 0.07], M.ROCK, -0.3); // the cylinder
+  box([0, fr(1.04), 0.14], [0.13, 0.08, 0.2], M.ORANGE, 0.15); // tank
+  for (const x of [-0.17, 0.17]) { box([x, fr(0.96), 0.27], [0.025, 0.13, 0.15], M.ORANGE, 0.35); box([x * 1.05, fr(0.9), 0.32], [0.012, 0.05, 0.08], M.WHITE, 0.35); } // shrouds, their graphics
+  box([0, fr(1.07), -0.3], [0.11, 0.035, 0.36], M.BLACK, -0.05); // seat
+  for (const x of [-0.14, 0.14]) box([x, fr(0.95), -0.44], [0.018, 0.1, 0.17], M.WHITE, -0.1); // side plates
+  box([0, fr(1.05), -0.82], [0.1, 0.018, 0.24], M.ORANGE, -0.32); // rear fender
+  const pivot = [0, fr(0.62), -0.14];
+  for (const x of [-0.09, 0.09]) seg([x, pivot[1], pivot[2]], [x, ra[1], ra[2]], 0.025, 0.045, M.ROCK);
+  seg(L(pivot, ra, 0.35), [0, fr(0.98), -0.18], 0.04, 0.04, M.ORANGE); // the shock's spring
+  seg([0.11, fr(0.78), 0.26], [0.17, fr(0.86), -0.62], 0.03, 0.03, M.ROCK); // the pipe
+  box([0.17, fr(0.9), -0.7], [0.05, 0.055, 0.2], M.WHITE, -0.22); // the silencer
+  // (the rider: boots on the pegs, knees bent (more as the bike sinks), hips back over the seat's front, chest over the
+  // tank, elbows up, head over the bars; orange jersey and helmet, black pants and gloves, white boots)
+  const crouch = Math.min(1, r.squash) * 0.16 + (r.air ? -0.04 : 0);
+  const hip = [0, fr(1.38) - crouch, -0.16], shoulder = [0, fr(1.8) - crouch * 0.8, 0.12];
+  for (const side of [-1, 1]) {
+    const ankle = [side * 0.19, fr(0.78), -0.06], knee = [side * 0.2, fr(1.12) - crouch * 0.6, 0.16], h = [side * 0.12, hip[1], hip[2]];
+    box([side * 0.19, fr(0.71), -0.04], [0.055, 0.1, 0.14], M.WHITE); // boot
+    seg(ankle, knee, 0.06, 0.065, M.BLACK); // shin
+    box([knee[0] * 1.08, knee[1] - 0.07, knee[2] + 0.05], [0.05, 0.09, 0.03], M.ORANGE, 0.3); // knee guard
+    seg(knee, h, 0.075, 0.08, M.BLACK); // thigh
+    const sh2 = [side * 0.21, shoulder[1] - 0.04, shoulder[2]], elbow = [side * 0.36, shoulder[1] - 0.16, shoulder[2] + 0.12], hand = [side * 0.34, clamp[1] + 0.15, clamp[2] - 0.04];
+    seg(sh2, elbow, 0.055, 0.055, M.ORANGE); seg(elbow, hand, 0.045, 0.045, M.ORANGE);
+    box(hand, [0.045, 0.04, 0.04], M.BLACK); // glove
+  }
+  seg(hip, shoulder, 0.2, 0.13, M.ORANGE); // torso
+  for (const x of [-0.19, 0.19]) seg([x, hip[1] + 0.03, hip[2] + 0.01], [x * 1.05, shoulder[1] - 0.03, shoulder[2] + 0.01], 0.03, 0.135, M.BLACK); // the jersey's side panels
+  box([0, hip[1] + 0.02, hip[2] - 0.02], [0.17, 0.07, 0.12], M.BLACK); // hips
+  box([0, shoulder[1] + 0.02, shoulder[2] - 0.12], [0.08, 0.06, 0.012], M.WHITE, 0.6); // number on the back
+  const head = [0, shoulder[1] + 0.2, shoulder[2] + 0.12];
+  box([0, shoulder[1] + 0.05, shoulder[2] + 0.02], [0.12, 0.04, 0.1], M.BLACK); // neck brace
+  box(head, [0.135, 0.14, 0.16], M.ORANGE); // helmet
+  box([0, head[1] - 0.1, head[2] + 0.17], [0.075, 0.055, 0.07], M.ORANGE, 0.5); // chin bar
+  box([0, head[1] + 0.12, head[2] + 0.18], [0.12, 0.012, 0.09], M.BLACK, -0.25); // peak
+  box([0, head[1] + 0.01, head[2] + 0.16], [0.125, 0.035, 0.012], M.BLACK); // goggle lens
+  box([0, head[1] + 0.01, head[2]], [0.142, 0.025, 0.14], M.WHITE); // goggle strap round the helmet
+  box([0, head[1] + 0.06, head[2] - 0.03], [0.02, 0.07, 0.15], M.BLACK); // helmet stripe
   return new Float32Array(m.v);
 }

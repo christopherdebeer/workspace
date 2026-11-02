@@ -118,7 +118,7 @@ export class Renderer {
     gl.uniform1f(this.u.uFog, 1); gl.uniform3f(this.u.uOff, 0, 0, 0);
     for (const b of this.chunks.values()) b.draw();
     // (the rider, and its shadow flattened along the sun onto the ground under it)
-    const body = buildRider(r, t);
+    const body = buildRider({ ...r, lean: r.lean, air: r.air } as Parameters<typeof buildRider>[0], t);
     this.rider.set(body, true); this.rider.draw();
     const g = this.course.point(r.s, r.u).y + 0.06, sh = new Float32Array(body.length);
     for (let i = 0; i < body.length; i += 4) {
@@ -172,7 +172,7 @@ export class Fx {
     this.seen = r.events.length; if (r.events.length > 48) { r.events.splice(0, r.events.length - 16); this.seen = r.events.length; }
     const eye = view.eye, cv = this.eyeWas && dt > 0 ? [(eye[0] - this.eyeWas[0]) / dt, (eye[1] - this.eyeWas[1]) / dt, (eye[2] - this.eyeWas[2]) / dt] : [0, 0, 0];
     this.eyeWas = eye.slice();
-    const speed = Math.hypot(r.vx, r.vz), pace = Math.max(0, Math.min(1, (speed - 12) / 20));
+    const speed = Math.hypot(r.vx, r.vz), pace = Math.max(0, Math.min(1, (speed - 14) / 28));
     /** a wedge: its base across `a` (half-width w, square to the motion), its point at `b` */
     const wedge = (a: number[], b: number[], w: number, col: string) => {
       const dx = b[0] - a[0], dy = b[1] - a[1], L = Math.hypot(dx, dy) || 1, nx = -dy / L * w, ny = dx / L * w;
