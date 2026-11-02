@@ -54,6 +54,8 @@ let t = Number(params.get('t') ?? 0);
 const me = new Runner(world);
 // (temporary: every landing with pace that isn't a chain's goes into a roll, so rolls can be watched; `rolls=0` for the run as it is)
 me.forceRoll = params.get('rolls') !== '0';
+// (a roll seen as a tumble: the view turned over once; `tumble=0` for the old dip)
+const tumble = params.get('tumble') !== '0';
 let held = false, pitch = -0.06, roll = 0, airK = 0, aimK = 0, leadK = 0;
 const keys = new Set<string>();
 renderer.allStrokes = params.get('strokes') === 'all';
@@ -166,18 +168,32 @@ const DECIDE_MS = 150, DECIDE_PX = 12, SETTLE_MS = 350, SETTLE_PX = 6;
 // (two fingers: a pinch, closer or wider (1× to 4×), easing back out when you let go; while you pinch you neither run
 // nor turn)
 const fingers = new Map<number, { x: number; y: number }>();
-let pinch: { d0: number; z0: number } | null = null, zoom = 1;
+let pinch: { d0: number; z0: number; dy: number; dp: number } | null = null, zoom = 1;
+// (where a zoom looks: off your eye's line by this much (yaw, pitch), so the point between your fingers stays where it is as
+// you pinch, and moving both fingers pans; eased back with the zoom when you let go; the focus goes where it looks)
+let zoomYaw = 0, zoomPitch = 0, fovV = 1.2;
+/** the angles (yaw left, pitch up) from the eye's line to the point between the fingers, at zoom z */
+function under(z: number): [number, number] {
+  const [a, b] = [...fingers.values()], mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
+  const sx = (mx / innerWidth) * 2 - 1, sy = 1 - (my / innerHeight) * 2, ty = Math.tan(fovV / 2), tx = ty * (innerWidth / innerHeight);
+  return [-Math.atan((sx * tx) / z), Math.atan((sy * ty) / z)];
+}
 const spread = () => { const [a, b] = [...fingers.values()]; return Math.hypot(a.x - b.x, a.y - b.y) || 1; };
 let drag: { x: number; y: number; x0: number; y0: number; t0: number; id: number; kind: 'pending' | 'run' | 'look'; sx: number; sy: number; st: number } | null = null, dragTurn = 0;
 canvas.addEventListener('pointerdown', (e) => {
   canvas.setPointerCapture(e.pointerId); fingers.set(e.pointerId, { x: e.clientX, y: e.clientY });
-  if (fingers.size === 2) { pinch = { d0: spread(), z0: zoom }; drag = null; return; }
+  if (fingers.size === 2) { const [u, v] = under(zoom); pinch = { d0: spread(), z0: zoom, dy: zoomYaw + u, dp: zoomPitch + v }; drag = null; return; }
   if (fingers.size > 2) return;
   drag = { x: e.clientX, y: e.clientY, x0: e.clientX, y0: e.clientY, t0: performance.now(), id: e.pointerId, kind: 'pending', sx: e.clientX, sy: e.clientY, st: performance.now() }; sound.start(); if (hint) hint.classList.add('gone');
 });
 canvas.addEventListener('pointermove', (e) => {
   const f = fingers.get(e.pointerId); if (f) { f.x = e.clientX; f.y = e.clientY; }
-  if (pinch && fingers.size >= 2) { zoom = Math.max(1, Math.min(4, (pinch.z0 * spread()) / pinch.d0)); return; }
+  if (pinch && fingers.size >= 2) {
+    zoom = Math.max(1, Math.min(4, (pinch.z0 * spread()) / pinch.d0));
+    // (the world's point that was between your fingers, kept between them at the new zoom, wherever they've moved to)
+    const [u, v] = under(zoom); zoomYaw = pinch.dy - u; zoomPitch = Math.max(-1.2, Math.min(1.2, pinch.dp - v));
+    return;
+  }
   if (!drag || e.pointerId !== drag.id) return;
   if (drag.kind === 'pending' && Math.hypot(e.clientX - drag.x0, e.clientY - drag.y0) > DECIDE_PX) drag.kind = 'look';
   // (where the finger last settled, and since when: moving on from it starts the wait again)
@@ -453,16 +469,24 @@ function frame(now: number) {
   if (me.aim) { const ad = Math.max(0.5, Math.hypot(me.aim[0] - eye[0], me.aim[2] - eye[2])); aimK += (Math.atan2(me.aim[1] + 0.3 - eye[1], ad) - aimK) * Math.min(1, dt * 6); }
   // (and while you approach a move, read from afar, toward where you'll come down, more as the takeoff comes)
   p += (aimK - p) * 0.4 * Math.max(airK, me.prep * 0.75);
-  const look: [number, number, number] = [eye[0] + Math.sin(yaw) * Math.cos(p), eye[1] + Math.sin(p), eye[2] + Math.cos(yaw) * Math.cos(p)];
+  // (a zoom's look: off the eye's line toward what's between your fingers)
+  if (!pinch) { const k = 1 - Math.exp(-dt * 2.5); zoomYaw -= zoomYaw * k; zoomPitch -= zoomPitch * k; }
+  const yawV = yaw + zoomYaw, pV = Math.max(-1.45, Math.min(1.45, p + zoomPitch));
+  // (a roll, as a tumble (unless `tumble=0`): the view turned over forward, once round in the roll's time, the eye low; up
+  // turns with it, so the picture goes over the top and comes back right way up)
+  const tumbling = tumble && me.rollT >= 0, tq = tumbling ? Math.min(1, me.rollT) : 0, q = pV - 2 * Math.PI * tq * tq * (3 - 2 * tq);
+  const look: [number, number, number] = [eye[0] + Math.sin(yawV) * Math.cos(q), eye[1] + Math.sin(q), eye[2] + Math.cos(yawV) * Math.cos(q)];
+  const upT: [number, number, number] | undefined = tumbling ? [-Math.sin(yawV) * Math.sin(q), Math.cos(q), -Math.cos(yawV) * Math.sin(q)] : undefined;
   roll += (-me.turn * 0.5 * s + me.weight * 0.01 * s + me.shoulder * 0.06 + (me.rollT >= 0 ? 0.07 * Math.sin(2 * Math.PI * me.rollT) : 0) - roll) * (1 - Math.exp(-dt * 6));
   const portrait = innerHeight > innerWidth, base = Number(params.get('fov')) || (portrait ? 74 : 60);
   if (!pinch) zoom += (1 - zoom) * (1 - Math.exp(-dt * 2.5));
-  const fov = 2 * Math.atan(Math.tan(((base + 12 * travel) * Math.PI) / 360) / zoom);
+  fovV = ((base + 12 * travel) * Math.PI) / 180;
+  const fov = 2 * Math.atan(Math.tan(fovV / 2) / zoom);
   // (the focus: where you're going and looking, the page coming in round it)
-  const target = focusAt(eye, yaw, p);
+  const target = focusAt(eye, yawV, pV);
   focus = still || focus === 0 ? target : focus + (target - focus) * Math.min(1, dt * 0.8);
   const sheet = Math.min(devicePixelRatio || 1, 2);
-  const f: Frame = { eye, look, fov, t, gust: [gust.dir[0], gust.dir[1], gust.front, gust.strength], speed: me.v, roll, focus, paper: [Math.round(innerWidth * sheet), Math.round(innerHeight * sheet)] };
+  const f: Frame = { eye, look, up: upT, fov, t, gust: [gust.dir[0], gust.dir[1], gust.front, gust.strength], speed: me.v, roll, focus, paper: [Math.round(innerWidth * sheet), Math.round(innerHeight * sheet)] };
   if (!still || chaseKind) chaseStep(still ? 0 : dt, eye, yaw, p, fov);
   // (`?debug=plan`: the run's own working drawn into the scene)
   planDebug?.draw(me, yaw, renderer.debugLines);

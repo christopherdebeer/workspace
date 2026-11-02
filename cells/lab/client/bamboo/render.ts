@@ -35,6 +35,8 @@ import { skyAt, type Sky } from './sky';
 
 export interface Frame {
   eye: [number, number, number]; look: [number, number, number]; fov: number; t: number;
+  /** the head's up, when it isn't the world's (a tumble turning the view over); else up is the world's, rolled by `roll` */
+  up?: [number, number, number];
   /** a gust: its direction (x, z), where its front is along that direction, how strong (0..1) */
   gust: [number, number, number, number];
   /** how fast you're going (m/s): the view widens with it */
@@ -1489,7 +1491,7 @@ export class Renderer {
     const gl = this.gl;
     this.targets(w, h);
     const fw = norm([f.look[0] - f.eye[0], f.look[1] - f.eye[1], f.look[2] - f.eye[2]]), side = norm(cross(fw, [0, 1, 0])), r = f.roll ?? 0;
-    const upv = [Math.sin(r) * side[0], Math.cos(r) + Math.sin(r) * side[1], Math.sin(r) * side[2]];
+    const upv = f.up ?? [Math.sin(r) * side[0], Math.cos(r) + Math.sin(r) * side[1], Math.sin(r) * side[2]];
     const near = 0.1, far = 3000, proj = perspective(f.fov, w / h, near, far), view = lookAt(f.eye, f.look, upv), vp = mul(proj, view);
     this.vpLast = vp; this.eyeLast = f.eye;
     const right = [view[0], view[4], view[8]], fwd = norm([f.look[0] - f.eye[0], 0, f.look[2] - f.eye[2]]);
