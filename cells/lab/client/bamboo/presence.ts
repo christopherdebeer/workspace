@@ -287,7 +287,7 @@ export class Presence {
     if (this.kind === 'stir') {
       this.y = g + 8;
       if (Math.floor(this.t / 0.35) !== Math.floor((this.t - dt) / 0.35)) { this.cue('stir', S.loud * (0.25 + 0.85 * F.coverNear(this.x, this.z))); this.shakes.push({ x: this.x, z: this.z, t: this.t, k: 1 }); }
-    } else this.y = g;
+    } else this.y = this.kind === 'fox' && Math.abs(g - this.y) > 0.12 ? this.y + (g - this.y) * ease(dt, 25) : g; // (a step up or down eased over a few frames, not popped)
     // ─── its footfalls, each foot as it's set down; louder on stone ───
     const before = this.gait;
     this.gait += (this.v * dt) / this.strideLen();
