@@ -474,13 +474,19 @@ export class Runner {
         if (D < 0.4 || D > most) return null;
         // (where each would come down: the one with the clearest, flattest landing, the quicker the more of a leap)
         let bestP: Plan | null = null, bestS = -1e9;
-        for (const vy of [0.5, 1.5, 2.5]) {
-          const vh = D > 3.2 ? Math.max(5, this.v) : Math.max(2, this.v), land = this.arc(o[0], o[1], from.y, dx * vh, dz * vh, vy);
+        // (and at pace, off a drop worth it onto open ground: an ambitious one too, pushed out harder and higher, coming
+        // down further out where there's room to roll on: taken when it lands as cleanly, so the bigger leaps (and their
+        // rolls) come where the land invites them, not forced)
+        const bold = D > 1.2 && this.v > 4;
+        const tries: [number, number][] = [[0.5, 1], [1.5, 1], [2.5, 1], ...(bold ? [[2.5, 1.25], [3.5, 1.25]] as [number, number][] : [])];
+        for (const [vy, push] of tries) {
+          const vh = (D > 3.2 ? Math.max(5, this.v) : Math.max(2, this.v)) * push, land = this.arc(o[0], o[1], from.y, dx * vh, dz * vh, vy);
           if (!land || from.y - land[1] > most + 0.2 || (D < 4 && this.trapped(land[0], land[2], land[1]))) continue;
           if (D > 3.2 && (F.normalAt(land[0], land[2])[1] < 0.8 || this.cramped(land[0], land[2], dir))) continue;
           const nrm = F.normalAt(land[0], land[2]), cramp = this.cramped(land[0], land[2], dir);
-          const score = nrm[1] * 3 - (cramp ? 2 : 0) - Math.abs(vy - (this.v < 3.5 || D < 0.8 ? 0.5 : 1.5 + this.v * 0.1)) * 0.8;
-          if (score > bestS) { bestS = score; bestP = { kind: vy < 1 && D <= 3.2 ? 'drop' : 'leap', dir, ox: o[0], oz: o[1], lx: land[0], lz: land[2], ly: land[1], clear: lift, next: null, wait: 0 }; }
+          let score = nrm[1] * 3 - (cramp ? 2 : 0) - Math.abs(vy - (this.v < 3.5 || D < 0.8 ? 0.5 : 1.5 + this.v * 0.1)) * 0.8;
+          if (push > 1) score += nrm[1] > 0.9 && !cramp && this.rollRoom(land[0], land[2], dir) ? 1.2 + 0.08 * Math.hypot(land[0] - o[0], land[2] - o[1]) : -9;
+          if (score > bestS) { bestS = score; bestP = { kind: vy < 1 && D <= 3.2 && push === 1 ? 'drop' : 'leap', dir, ox: o[0], oz: o[1], lx: land[0], lz: land[2], ly: land[1], clear: lift, next: null, wait: 0 }; }
         }
         return bestP;
       }
@@ -717,7 +723,8 @@ export class Runner {
       const rx = p.x - x, rz = p.z - z, al = rx * dx + rz * dz;
       if (al > -0.2 && al < 1.8 && Math.abs(-rx * dz + rz * dx) < 0.45 + p.r && meets(p) === 'block') return false;
     }
-    for (const d of [0.6, 1.2, 1.8]) { const u = F.at(x + dx * d, z + dz * d); if (Math.abs(u.y - y) > 0.4) return false; }
+    // (the footing ahead near level, or falling away downhill (a roll goes on down a slope as well as along the flat))
+    for (const d of [0.6, 1.2, 1.8]) { const u = F.at(x + dx * d, z + dz * d); if (u.y - y > 0.4 || u.y - y < -0.4 - 0.5 * d) return false; }
     return true;
   }
   private cramped(x: number, z: number, dir: number) {
@@ -899,8 +906,9 @@ export class Runner {
       as = 'roll'; this.rollT = 0; this.v *= 0.9; this.crouchV += 0.6;
     } else if (imp < 3.3) {
       as = 'light'; this.crouchV += 0.4 + imp * 0.3; this.v *= 0.97;
-    } else if (imp > 6.5 && vh > 3.5 && this.rollRoom(this.x, this.z, this.move)) {
-      // (come down hard with way on and room to go on into (on rock or earth): into a roll, not a stop)
+    } else if (imp > 5 && vh > 3 && this.rollRoom(this.x, this.z, this.move)) {
+      // (come down hard with way on and room to go on into (on rock or earth): into a roll, not a stop; a drop of a couple of
+      // metres at pace is enough)
       as = 'roll'; this.rollT = 0; this.v *= 0.9; this.crouchV += 0.6;
     } else if (cramped) {
       as = 'brace'; this.crouchV += 1.2 + imp * 0.42; this.leanV += 0.8 + imp * 0.2; this.v *= Math.max(0.4, 1 - imp * 0.09); this.recover = 0.7; this.nudge += (Math.random() < 0.5 ? -1 : 1) * 0.06;

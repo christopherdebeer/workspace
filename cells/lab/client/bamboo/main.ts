@@ -52,8 +52,9 @@ let t = Number(params.get('t') ?? 0);
 
 // ─── you, and the land round you, built a chunk at a time as you go ───
 const me = new Runner(world);
-// (temporary: every landing with pace that isn't a chain's goes into a roll, so rolls can be watched; `rolls=0` for the run as it is)
-me.forceRoll = params.get('rolls') !== '0';
+// (`rolls=1`: every landing with pace that isn't a chain's goes into a roll, to watch them; else a roll comes as it does:
+// after a hard landing with way on and room to go on into)
+me.forceRoll = params.get('rolls') === '1';
 // (a roll seen as a tumble: the view turned over once; `tumble=0` for the old dip)
 const tumble = params.get('tumble') !== '0';
 let held = false, pitch = -0.06, roll = 0, airK = 0, aimK = 0, leadK = 0;
