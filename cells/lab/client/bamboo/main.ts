@@ -2,7 +2,8 @@
  * Bamboo · 竹径: a run through a wild moso grove on an endless mountainside, drawn as the board has it.
  *
  * Hold anywhere and you run, a long easy lope; let go and you ease to a stop. Drag left and right to turn, up and down
- * to look. You don't have to pick your way: the run weaves you between the culms, and the grove has its own runs, the
+ * to look. A touch that starts by dragging (in its first moment) is a look: you stand, and turn and look round without
+ * running; one that starts still runs. You don't have to pick your way: the run weaves you between the culms, and the grove has its own runs, the
  * lanes a deer would take, that it carries you into. Uphill slows you, downhill quickens you.
  *
  * Now and then you meet something: a trail (join it, running along it, and it carries you on until you turn off), a
@@ -156,12 +157,16 @@ function focusAt(eye: [number, number, number], yaw: number, pitch: number) {
 }
 
 // ─── input: hold to run; drag across to turn, up and down to look ───
-let drag: { x: number; y: number; id: number } | null = null, dragTurn = 0;
-canvas.addEventListener('pointerdown', (e) => { canvas.setPointerCapture(e.pointerId); drag = { x: e.clientX, y: e.clientY, id: e.pointerId }; held = true; sound.start(); if (hint) hint.classList.add('gone'); });
+// (a touch is a run or a look by how it starts: still for its first 150 ms, a run; moved 12 px before that, a look, standing
+// where you are. The drag turns you either way, as directly as ever: a screen's width, portrait, is about half a turn)
+const DECIDE_MS = 150, DECIDE_PX = 12;
+let drag: { x: number; y: number; x0: number; y0: number; t0: number; id: number; kind: 'pending' | 'run' | 'look' } | null = null, dragTurn = 0;
+canvas.addEventListener('pointerdown', (e) => { canvas.setPointerCapture(e.pointerId); drag = { x: e.clientX, y: e.clientY, x0: e.clientX, y0: e.clientY, t0: performance.now(), id: e.pointerId, kind: 'pending' }; sound.start(); if (hint) hint.classList.add('gone'); });
 canvas.addEventListener('pointermove', (e) => {
   if (!drag || e.pointerId !== drag.id) return;
+  if (drag.kind === 'pending' && Math.hypot(e.clientX - drag.x0, e.clientY - drag.y0) > DECIDE_PX) drag.kind = 'look';
   const k = 2.6 / Math.max(innerWidth, innerHeight);
-  dragTurn -= (e.clientX - drag.x) * k * 1.3;
+  dragTurn -= (e.clientX - drag.x) * k * 2.6;
   pitch = Math.max(-0.7, Math.min(0.9, pitch - (e.clientY - drag.y) * k));
   drag.x = e.clientX; drag.y = e.clientY;
 });
@@ -265,6 +270,9 @@ function run(dt: number) {
   if (auto && me.limitT > 0.4) turn += me.freer * 1.2 * dt;
   else if (auto && chase && !chase.over) { const [gx, gz] = chase.guess(); let a = Math.atan2(gx - me.x, gz - me.z) - me.heading; while (a > Math.PI) a -= 2 * Math.PI; while (a < -Math.PI) a += 2 * Math.PI; turn += Math.max(-1.8 * dt, Math.min(1.8 * dt, a)); }
   else if (auto) turn += (Math.sin(t * 0.13 + 1.3) * 0.25 + Math.sin(t * 0.051) * 0.2) * dt;
+  // (a still touch becomes a run once it's had its moment; a look never does)
+  if (drag?.kind === 'pending' && performance.now() - drag.t0 >= DECIDE_MS) drag.kind = 'run';
+  held = drag?.kind === 'run';
   turn += dragTurn; dragTurn = 0;
   me.update(dt, { go, turn });
 }

@@ -7,7 +7,8 @@ A run through a wild moso bamboo grove on an endless mountainside, drawn as a li
 ## Running
 
 - **Hold anywhere and you run**: a fast lope of about 7 m/s, gathering speed in a second or so. Let go and you ease to a stop.
-- **Drag left and right to turn**, up and down to look. Arrow keys work too.
+- **Drag left and right to turn**, up and down to look: directly, a screen's width (portrait) about half a turn, so a sharp turn is one swipe. Arrow keys work too.
+- **A touch that starts by dragging is a look, not a run**: moved 12 px within its first 150 ms, you stand where you are and turn and look round (at a rim, say, without stepping off it); a touch that starts still runs.
 - **You own where you're going; the run owns the footwork.** Your heading is only ever what you turn: nothing in the run turns it for you, not a trail, a rim or a face. The body may go a little off your line and comes back to it; gaze goes where the next foot's going. A few times a second the run looks for a way along your heading, in this order:
   1. **a move straight through**: a leap across a cleft, down onto a ledge below (a bound reaches further the faster you're going, up to nearly four metres, and down a couple), a hop up, a chain of crowns;
   2. else **the clearest way within a narrow corridor** round your line (a little over half a radian each side), each way costing more the further it's off: no culm in its path for nine metres (a stand seen coming and gone round, not met), no face to climb, no drop too far to take;
