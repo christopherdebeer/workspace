@@ -6,8 +6,10 @@ A run through a wild moso bamboo grove on an endless mountainside, drawn as a li
 
 ## Running
 
-- **Hold anywhere and you run**: a fast lope of about 7 m/s, gathering speed in a second or so. Let go and you ease to a stop.
-- **Drag left and right to turn**, up and down to look. Arrow keys work too.
+- **A touch is a run or a look, by how it starts** (decided in its first 150 ms, or as soon as it moves 12 px):
+  - **one that starts still is a run**: a fast lope of about 7 m/s, gathering speed in a second or so, until you let go and ease to a stop. You steer it with a **tiller**: hold your finger off to one side of where it landed and you keep turning that way, the further the sharper (a dead zone of 12 px, then up to 3 rad/s, about a U-turn a second, at 40% of the screen's width), eased so a jerk of the finger doesn't snap the eye round. So a long or sharp turn never needs you to lift and grip again (which would let go of the run, and in the air settle you on the landing). Up and down does nothing while you run, so the horizon stays where you left it;
+  - **one that starts moving is a look**: you stand, and the drag turns you on the spot (a screen's width, portrait, is about half a turn) and tips the eye up and down. Then a still touch runs the way you now face. So you can look round at a rim without stepping off it.
+- Arrow keys work too.
 - **You own where you're going; the run owns the footwork.** Your heading is only ever what you turn: nothing in the run turns it for you, not a trail, a rim or a face. The body may go a little off your line and comes back to it; gaze goes where the next foot's going. A few times a second the run looks for a way along your heading, in this order:
   1. **a move straight through**: a leap across a cleft, down onto a ledge below (a bound reaches further the faster you're going, up to nearly four metres, and down a couple), a hop up, a chain of crowns;
   2. else **the clearest way within a narrow corridor** round your line (a little over half a radian each side), each way costing more the further it's off: no culm in its path for nine metres (a stand seen coming and gone round, not met), no face to climb, no drop too far to take;

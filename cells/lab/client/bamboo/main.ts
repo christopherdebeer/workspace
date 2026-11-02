@@ -1,8 +1,10 @@
 /**
  * Bamboo · 竹径: a run through a wild moso grove on an endless mountainside, drawn as the board has it.
  *
- * Hold anywhere and you run, a long easy lope; let go and you ease to a stop. Drag left and right to turn, up and down
- * to look. You don't have to pick your way: the run weaves you between the culms, and the grove has its own runs, the
+ * A touch is one of two things, decided in its first moment: one that starts still is a run (a long easy lope until you
+ * let go), steered by a tiller (hold your finger off to one side of where it landed and you keep turning that way, the
+ * further the sharper); one that starts moving is a look (you stand, and the drag turns you on the spot and tips your
+ * eye up and down), so you can look round at a rim without stepping off it. You don't have to pick your way: the run weaves you between the culms, and the grove has its own runs, the
  * lanes a deer would take, that it carries you into. Uphill slows you, downhill quickens you.
  *
  * Now and then you meet something: a trail (join it, running along it, and it carries you on until you turn off), a
@@ -155,18 +157,46 @@ function focusAt(eye: [number, number, number], yaw: number, pitch: number) {
   return FAR;
 }
 
-// ─── input: hold to run; drag across to turn, up and down to look ───
-let drag: { x: number; y: number; id: number } | null = null, dragTurn = 0;
-canvas.addEventListener('pointerdown', (e) => { canvas.setPointerCapture(e.pointerId); drag = { x: e.clientX, y: e.clientY, id: e.pointerId }; held = true; sound.start(); if (hint) hint.classList.add('gone'); });
-canvas.addEventListener('pointermove', (e) => {
-  if (!drag || e.pointerId !== drag.id) return;
-  const k = 2.6 / Math.max(innerWidth, innerHeight);
-  dragTurn -= (e.clientX - drag.x) * k * 1.3;
-  pitch = Math.max(-0.7, Math.min(0.9, pitch - (e.clientY - drag.y) * k));
-  drag.x = e.clientX; drag.y = e.clientY;
+// ─── input: a touch that starts still is a run, steered by a tiller; one that starts moving is a look ───
+// (decided by 150 ms or 12 px, whichever comes first: a run waits that long to begin, which the lope's own easing in hides)
+const DECIDE_MS = 150, DECIDE_PX = 12, TILLER_DEAD = 12, TILLER_MAX = 3;
+let touch: { id: number; x0: number; y0: number; x: number; y: number; t0: number; kind: 'pending' | 'look' | 'run' } | null = null;
+let dragTurn = 0, tiller = 0;
+canvas.addEventListener('pointerdown', (e) => {
+  if (touch) return;
+  canvas.setPointerCapture(e.pointerId);
+  touch = { id: e.pointerId, x0: e.clientX, y0: e.clientY, x: e.clientX, y: e.clientY, t0: performance.now(), kind: 'pending' };
+  sound.start(); if (hint) hint.classList.add('gone');
 });
-const up = (e: PointerEvent) => { if (drag && e.pointerId === drag.id) { drag = null; held = false; remember(true); } };
+canvas.addEventListener('pointermove', (e) => {
+  if (!touch || e.pointerId !== touch.id) return;
+  const dx = e.clientX - touch.x, dy = e.clientY - touch.y;
+  if (touch.kind === 'pending' && Math.hypot(e.clientX - touch.x0, e.clientY - touch.y0) > DECIDE_PX) touch.kind = 'look';
+  // (looking: the drag turns you where you stand, twice as freely as a run's steering did (a screen's width, portrait, is
+  // about half a turn), and tips the eye)
+  if (touch.kind === 'look') {
+    const k = 2.6 / Math.max(innerWidth, innerHeight);
+    dragTurn -= dx * k * 2.6;
+    pitch = Math.max(-0.7, Math.min(0.9, pitch - dy * k));
+  }
+  touch.x = e.clientX; touch.y = e.clientY;
+});
+const up = (e: PointerEvent) => { if (touch && e.pointerId === touch.id) { touch = null; remember(true); } };
 canvas.addEventListener('pointerup', up); canvas.addEventListener('pointercancel', up);
+/** the touch's part this frame: a still one becomes a run once it's had its moment; a run's finger off to one side of
+ * where it landed is a tiller (a dead zone round it, then the turn's rate growing to its most at 40% of the screen's
+ * width, eased so a jerk of the finger doesn't snap the eye round) */
+function touchStep(dt: number) {
+  if (touch?.kind === 'pending' && performance.now() - touch.t0 >= DECIDE_MS) touch.kind = 'run';
+  held = touch?.kind === 'run';
+  let want = 0;
+  if (held && touch) {
+    const off = touch.x - touch.x0, past = Math.max(0, Math.abs(off) - TILLER_DEAD);
+    want = -Math.sign(off) * TILLER_MAX * Math.min(1, past / (innerWidth * 0.4));
+  }
+  tiller += (want - tiller) * (1 - Math.exp(-dt * 8));
+  return tiller * dt;
+}
 addEventListener('keydown', (e) => { keys.add(e.key); sound.start(); });
 addEventListener('keyup', (e) => keys.delete(e.key));
 
@@ -265,7 +295,7 @@ function run(dt: number) {
   if (auto && me.limitT > 0.4) turn += me.freer * 1.2 * dt;
   else if (auto && chase && !chase.over) { const [gx, gz] = chase.guess(); let a = Math.atan2(gx - me.x, gz - me.z) - me.heading; while (a > Math.PI) a -= 2 * Math.PI; while (a < -Math.PI) a += 2 * Math.PI; turn += Math.max(-1.8 * dt, Math.min(1.8 * dt, a)); }
   else if (auto) turn += (Math.sin(t * 0.13 + 1.3) * 0.25 + Math.sin(t * 0.051) * 0.2) * dt;
-  turn += dragTurn; dragTurn = 0;
+  turn += dragTurn + touchStep(dt); dragTurn = 0;
   me.update(dt, { go, turn });
 }
 
@@ -447,7 +477,7 @@ function frame(now: number) {
     }
   }
   // (at rest, the address catches up)
-  if (me.v < 0.05 && !drag && !held) remember();
+  if (me.v < 0.05 && !touch && !held) remember();
   (window as unknown as { __bamboo: unknown }).__bamboo = { seed, x: me.x, z: me.z, y: me.y, heading: me.heading, pitch, v: me.v, onTrail: me.onTrail, air: me.air, act: me.act, low: me.low, landedAs: me.landedAs, chase: chase && it ? { kind: it.kind, state: chase.state, time: chase.time, d: Math.hypot(it.x - me.x, it.z - me.z), x: it.x, y: it.y, z: it.z, alarm: it.alarm, air: it.air, parts: renderer.presence.length } : null, lastChase, presence: it ? { kind: it.kind, mode: it.mode, d: Math.hypot(it.x - me.x, it.z - me.z) } : null, again, t, chunks: me.chunks.size, frameMs: ms, scale };
   requestAnimationFrame(frame);
 }
