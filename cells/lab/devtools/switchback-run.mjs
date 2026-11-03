@@ -32,4 +32,17 @@ for (const seed of seeds.length ? seeds : [1, 2, 3]) {
   const ok = r.crashes > 0 && t < 30; if (!ok) bad++;
   console.log(`${ok ? 'ok  ' : 'FAIL'}  hands off: off the line after ${t.toFixed(1)} s (nothing steers for you)`);
 }
+// (checkpoints: flags spaced far apart, and a crash puts you back just past the last one passed)
+{
+  const c = new Course(1); c.ensure(5000);
+  const fl = c.st.map((s, i) => (s.flag ? i : -1)).filter((i) => i >= 0), gaps = fl.slice(1).map((v, k) => v - fl[k]);
+  const r = new Rider(new Course(1)); let t = 0;
+  while (r.checkpoints < 2 && t < 120) { r.step(1 / 120, { steer: autoSteer(r), brake: false }); t += 1 / 120; }
+  const cp = r.checkpoint, ahead = r.s + 40;
+  while (r.s < ahead && t < 160) { r.step(1 / 120, { steer: autoSteer(r), brake: false }); t += 1 / 120; }
+  for (let k = 0; k < 1200 && !r.crashes; k++) r.step(1 / 120, { steer: 1, brake: false });
+  for (let k = 0; k < 300 && r.crashT > 0; k++) r.step(1 / 120, { steer: 0, brake: false });
+  const ok = Math.min(...gaps) >= 280 && r.crashes > 0 && r.s > cp && r.s < cp + 12; if (!ok) bad++;
+  console.log(`${ok ? 'ok  ' : 'FAIL'}  checkpoints: ${fl.length} flags in 5 km, ${Math.min(...gaps)}–${Math.max(...gaps)} m apart; crashed past checkpoint ${r.checkpoints} (s ${cp}), back at s ${r.s.toFixed(1)}`);
+}
 process.exit(bad ? 1 : 0);

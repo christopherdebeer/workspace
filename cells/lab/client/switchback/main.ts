@@ -76,6 +76,10 @@ function view(dt: number, t: number): View {
   return { eye: [cam.eye[0] + jx, cam.eye[1] + jy, cam.eye[2]], target, fov: (58 + pace * 16) * Math.PI / 180 + cam.fovKick, roll: rider.lean * 0.15 + Math.sin(t * 53) * sh * 0.02 };
 }
 
+/** a word across the screen for a moment (a checkpoint passed, a return to one) */
+const note = document.getElementById('note')!;
+let noteTimer = 0;
+function say(text: string) { note.textContent = text; note.classList.add('on'); clearTimeout(noteTimer); noteTimer = window.setTimeout(() => note.classList.remove('on'), 1400); }
 const kmh = document.getElementById('kmh')!, dist = document.getElementById('dist')!, air = document.getElementById('air')!;
 let last = performance.now(), acc = 0, t = 0, drawn = 0, frames = 0, fps = 60, fpsT = 0, seen = 0, bigAir = 0;
 function loop(now: number) {
@@ -89,7 +93,14 @@ function loop(now: number) {
       rider.step(1 / 120, { steer, brake: !auto && (inp.brake || keys.has('arrowdown') || keys.has('s')) });
     }
   }
-  for (let i = seen; i < rider.events.length; i++) { const e = rider.events[i]; if (e.kind === 'land') cam.shake += e.k * 0.9; if (e.kind === 'crash' || e.kind === 'wall') cam.shake += 1.2; }
+  for (let i = seen; i < rider.events.length; i++) {
+    const e = rider.events[i];
+    if (e.kind === 'land') cam.shake += e.k * 0.9;
+    if (e.kind === 'crash' || e.kind === 'wall') cam.shake += 1.2;
+    if (e.kind === 'checkpoint') say(`CHECKPOINT ${e.k}`);
+    // (put back at the flag: the eye goes with you at once, not in a long swoop)
+    if (e.kind === 'respawn') { say(e.k ? `BACK TO CHECKPOINT ${e.k}` : 'BACK TO THE START'); cam.h = rider.travel; cam.eye = [rider.x - Math.sin(rider.travel) * 6, rider.y + 3.5, rider.z - Math.cos(rider.travel) * 6]; cam.shake = 0; }
+  }
   seen = rider.events.length;
   rd.frame(view(dt, t), rider, t, still ? 0 : dt, drawn++ < 2 ? 99 : 1);
   seen = rider.events.length;

@@ -11,7 +11,7 @@
 import { Course } from './course';
 
 export const G = 9.8, VMAX = 46;
-export type Event = { kind: 'roost' | 'land' | 'wall' | 'launch' | 'crash'; x: number; y: number; z: number; k: number };
+export type Event = { kind: 'roost' | 'land' | 'wall' | 'launch' | 'crash' | 'checkpoint' | 'respawn'; x: number; y: number; z: number; k: number };
 export interface Input { steer: number; brake: boolean }
 
 export class Rider {
@@ -31,6 +31,10 @@ export class Rider {
   /** the run: metres down, best air, crashes, a score */
   dist = 0; bestAir = 0; crashes = 0; jumps = 0;
   events: Event[] = [];
+  /** the last checkpoint flag passed (its station; the start until the first), and how many have been passed: a crash
+   * puts you back just past it */
+  checkpoint = 2; checkpoints = 0;
+  private sPrev = 2;
   /** the ground's own vertical pace under you last step (NaN: just come down, nothing to compare yet) */
   private vyGround = NaN; private headingWas = 0;
   constructor(readonly course: Course) { this.place(); }
@@ -41,10 +45,11 @@ export class Rider {
     if (this.crashT > 0) {
       this.crashT -= dt;
       if (this.crashT <= 0) {
-        // (back on the line where you left it, on ground, and going again)
-        this.u = 0; this.psi = 0; this.v = 16; this.air = false; this.vy = 0; this.vyGround = NaN; this.s = Math.max(2, this.s);
+        // (back to the last checkpoint flag passed, just past it, on the line, and going again)
+        this.u = 0; this.psi = 0; this.v = 16; this.air = false; this.vy = 0; this.vyGround = NaN; this.s = this.checkpoint + 3;
         while (!this.course.point(this.s, 0).surface || this.course.at(this.s).feature !== 'none') this.s += 1;
-        this.place();
+        this.place(); this.sPrev = this.s; this.headingWas = this.travel; this.lean = 0; this.squash = 0;
+        this.ev('respawn', this.checkpoints);
       }
       else { this.vy -= G * dt; this.x += this.vx * dt; this.y += this.vy * dt; this.z += this.vz * dt; this.pitch += dt * 3; }
       return;
@@ -52,6 +57,9 @@ export class Rider {
     this.steerK += (inp.steer - this.steerK) * (1 - Math.exp(-dt * 10));
     if (this.air) this.fly(dt, inp); else this.ride(dt, inp);
     this.sprung(dt);
+    // (past a flag: that's the checkpoint now)
+    if (this.crashT <= 0 && this.s > this.sPrev) for (let i = Math.floor(this.sPrev) + 1; i <= Math.floor(this.s); i++) if (this.course.at(i).flag && i > this.checkpoint) { this.checkpoint = i; this.checkpoints++; this.ev('checkpoint', this.checkpoints); }
+    this.sPrev = this.s;
   }
   private ride(dt: number, inp: Input) {
     const c = this.course, here = c.point(this.s, this.u), half = here.width / 2;

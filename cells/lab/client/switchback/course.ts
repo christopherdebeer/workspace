@@ -15,7 +15,7 @@ export interface Station {
   x: number; y: number; z: number; heading: number; width: number;
   /** the surface's own rise above the line here (a ramp's, a roller's), and what kind of ground it is */
   lift: number; feature: Feature;
-  /** a flag or a fence post stands here (on the wall side / the drop side) */
+  /** a checkpoint flag (on the wall side) or a fence post (on the drop side) stands here */
   flag: boolean; post: boolean;
 }
 
@@ -38,6 +38,8 @@ export class Course {
   private width = 7; private widthTo = 7; private widthStep = 0; private wideLeft = 0; private roughFrom = 0; private roughTo = 0; private roughLeft = 0; private roughLen = 1;
   private plan: { kind: Feature; at: number }[] = [];
   private sinceKicker = 0;
+  /** where the next checkpoint flag may stand */
+  private nextFlag = 150;
   constructor(readonly seed: number) {
     this.r = rng(seed);
     // (a run-in: a straight, gentle start)
@@ -100,8 +102,11 @@ export class Course {
           if (k < 48) { st.feature = 'whoop'; st.lift = 0.45 * (0.5 - 0.5 * Math.cos((k / 12) * Math.PI * 2)); } else this.plan.shift();
         }
       }
-      // (flags: tall pennants on the wall side, at bends and before features)
-      st.flag = st.feature === 'none' && i % 31 === 0 && r() < 0.7;
+      // (flags: the checkpoints, one every 280 m or more, where the route's plain; the roll that once placed a flag every
+      // 31 m is still made, so the course is laid exactly as before, but only one in many is kept)
+      const roll = st.feature === 'none' && i % 31 === 0 && r() < 0.7;
+      st.flag = roll && i >= this.nextFlag;
+      if (st.flag) this.nextFlag = i + 280 + Math.floor(hash(this.seed, i, 77) * 120);
     }
   }
   /** the station at distance s (clamped), and the one after it, for interpolation */
