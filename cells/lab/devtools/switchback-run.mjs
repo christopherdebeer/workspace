@@ -6,8 +6,8 @@ import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 const here = dirname(fileURLToPath(import.meta.url));
 const outfile = join(tmpdir(), `switchback-${process.pid}.mjs`);
-await build({ stdin: { contents: `export * from './client/switchback/sim'; export * from './client/switchback/course'; export { ground } from './client/switchback/ground'; export { Trickster } from './client/switchback/tricks'; export { Score, keepBest, board, sign } from './client/switchback/score';`, resolveDir: join(here, '..'), loader: 'ts' }, bundle: true, platform: 'node', format: 'esm', outfile, logLevel: 'warning' });
-const { Rider, Course, autoSteer, ground, Trickster, Score, keepBest, board, sign } = await import(outfile);
+await build({ stdin: { contents: `export * from './client/switchback/sim'; export * from './client/switchback/course'; export { ground } from './client/switchback/ground'; export { Trickster } from './client/switchback/tricks'; export { Score, keepBest, board, sign, PAR } from './client/switchback/score'; export { CLAUDE, C15R } from './client/switchback/hand';`, resolveDir: join(here, '..'), loader: 'ts' }, bundle: true, platform: 'node', format: 'esm', outfile, logLevel: 'warning' });
+const { Rider, Course, autoSteer, ground, Trickster, Score, keepBest, board, sign, PAR, CLAUDE, C15R } = await import(outfile);
 const secs = Number(process.argv[2] ?? 180), seeds = process.argv.slice(3).map(Number);
 let bad = 0;
 for (const seed of seeds.length ? seeds : [1, 2, 3]) {
@@ -154,23 +154,34 @@ for (const seed of seeds.length ? seeds : [1, 2, 3]) {
 }
 // (the board, in a stand-in for the browser's storage: the bests kept before it start it, unsigned; a new best goes up
 // where it places and can be signed (and unsigned); a run that isn't a best doesn't; a time trial's go by the clock;
-// ten at most)
+// ten at most. Each has its PAR run on it, signed, never kept with the player's own)
 {
   const store = new Map();
   globalThis.localStorage = { getItem: (k) => store.get(k) ?? null, setItem: (k, v) => store.set(k, String(v)), key: (i) => [...store.keys()][i] ?? null, get length() { return store.size; } };
   store.set('switchback:best:lives:1', JSON.stringify({ score: 5000, time: 90 })); store.set('switchback:best:lives:2', JSON.stringify({ score: 8000, time: 80 }));
-  const seeded = board('lives').map((e) => e.score).join(',');
+  const mine = (m) => board(m).filter((e) => !e.par), seeded = mine('lives').map((e) => e.score).join(',');
+  const pars = ['run', 'lives', 'time', 'endless'].every((m) => board(m).filter((e) => e.par).length === 1 && board(m).find((e) => e.par).sig === CLAUDE);
   const a = keepBest('lives', 1, 9000, 100), b = keepBest('lives', 1, 4000, 70);
   sign('lives', a.at, [[10, 20, 0, 30, 40, 5]]);
   const signed = board('lives').find((e) => e.at === a.at)?.sig?.length === 1;
   sign('lives', a.at, []);
-  const unsigned = !board('lives').find((e) => e.at === a.at)?.sig;
+  const unsigned = !board('lives').find((e) => e.at === a.at)?.sig, parKept = !store.get('switchback:board:lives').includes('"par"');
   keepBest('time', 1, 100, 200); const t = keepBest('time', 2, 50, 150), tSlow = keepBest('time', 3, 900, 300);
   for (let i = 0; i < 14; i++) keepBest('run', 10 + i, 1000 + i * 100, 60);
-  const ok = seeded === '8000,5000' && a.better && a.rank === 0 && board('lives').length === 3 && !b.better && b.rank === -1 && signed && unsigned
-    && t.rank === 0 && tSlow.rank === 2 && board('run').length === 10 && board('run')[0].score === 2300;
+  // (lives PAR 10,000: the 9,000 new best goes up second, under it; time PAR 1:45 ahead of 2:30 and 3:20, behind none)
+  const ok = pars && seeded === '8000,5000' && a.better && a.rank === 1 && mine('lives').length === 3 && !b.better && b.rank === -1 && signed && unsigned && parKept
+    && t.rank === 1 && tSlow.rank === 3 && board('run').length === 10 && board('run')[0].par && mine('run')[0].score === 2300 && PAR.time.time === 105;
   if (!ok) bad++;
   delete globalThis.localStorage;
-  console.log(`${ok ? 'ok  ' : 'FAIL'}  board: started from the old bests (${seeded}); a new best went up ${a.rank + 1}${a.rank === 0 ? 'st' : 'th'}, signed and unsigned; a lesser run left off; time trials by the clock; ten kept of 14`);
+  console.log(`${ok ? 'ok  ' : 'FAIL'}  board: a PAR on each, signed by Claude; started from the old bests (${seeded}); a new best went up under PAR, signed and unsigned; a lesser run left off; time trials by the clock; ten kept of 14`);
+}
+// (the hand's autographs: written in order, each stroke's time going on, no stroke empty, and quick enough to write out)
+{
+  const fine = (sig) => sig.length > 0 && sig.every((s) => s.length >= 3 && s.length % 3 === 0) && sig.flat().every(Number.isInteger)
+    && sig.every((s, i) => s.every((v, j) => j % 3 !== 2 || j < 3 || v >= s[j - 3]) && (i === 0 || s[2] >= sig[i - 1][sig[i - 1].length - 1]));
+  const secs = (sig) => sig[sig.length - 1][sig[sig.length - 1].length - 1] / 100;
+  const ok = fine(CLAUDE) && fine(C15R) && secs(CLAUDE) < 4 && secs(C15R) < 6;
+  if (!ok) bad++;
+  console.log(`${ok ? 'ok  ' : 'FAIL'}  autographs: Claude's in ${CLAUDE.length} stroke${CLAUDE.length > 1 ? 's' : ''}, ${secs(CLAUDE).toFixed(1)} s; c15r's in ${C15R.length}, ${secs(C15R).toFixed(1)} s`);
 }
 process.exit(bad ? 1 : 0);

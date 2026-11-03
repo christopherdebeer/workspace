@@ -50,7 +50,8 @@ function ink(g: CanvasRenderingContext2D, sig: Sig, at: (x: number, y: number) =
 /** a canvas made ready to draw on: its store sized to how big it shows (and the screen's density), cleared. Null while
  * it isn't showing */
 function ready(cv: HTMLCanvasElement) {
-  const r = cv.getBoundingClientRect(), dpr = Math.min(3, devicePixelRatio || 1);
+  // (its own layout size, not its box on screen: a canvas turned on the page is still its own shape)
+  const r = { width: cv.clientWidth, height: cv.clientHeight }, dpr = Math.min(3, devicePixelRatio || 1);
   if (!r.width || !r.height) return null;
   const w = Math.round(r.width * dpr), h = Math.round(r.height * dpr);
   if (cv.width !== w || cv.height !== h) { cv.width = w; cv.height = h; }
@@ -62,8 +63,9 @@ function ready(cv: HTMLCanvasElement) {
 /** when the signature's writing ended */
 export const written = (sig: Sig) => sig.reduce((t, s) => Math.max(t, s[s.length - 1] ?? 0), 0);
 
-/** the signature drawn into a canvas, fitted to it (all of it, kept in proportion, centred), as far as `upTo` */
-export function show(cv: HTMLCanvasElement, sig: Sig, colour = '#fff', upTo = Infinity) {
+/** the signature drawn into a canvas, fitted to it (all of it, kept in proportion, centred), as far as `upTo`, the pen
+ * `weight` times its usual */
+export function show(cv: HTMLCanvasElement, sig: Sig, colour = '#fff', upTo = Infinity, weight = 1) {
   const c = ready(cv);
   if (!c || !sig.length) return;
   let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
@@ -71,16 +73,16 @@ export function show(cv: HTMLCanvasElement, sig: Sig, colour = '#fff', upTo = In
   const edge = Math.max(3, c.h * 0.1), k = Math.min((c.w - edge * 2) / Math.max(1, x1 - x0), (c.h - edge * 2) / Math.max(1, y1 - y0), (c.h * 1.4) / U);
   const ox = (c.w - (x1 - x0) * k) / 2 - x0 * k, oy = (c.h - (y1 - y0) * k) / 2 - y0 * k;
   c.g.fillStyle = c.g.strokeStyle = colour;
-  ink(c.g, sig, (x, y) => [ox + x * k, oy + y * k], Math.max(1.1, PEN * k), upTo);
+  ink(c.g, sig, (x, y) => [ox + x * k, oy + y * k], Math.max(1.1, PEN * k) * weight, upTo);
 }
 
-/** the signature written again as it was, at a lick (never much over a second and a half), after `delay` ms */
-export function replay(cv: HTMLCanvasElement, sig: Sig, colour = '#fff', delay = 0) {
-  const end = written(sig), rate = Math.max(1.6, end / 150), t0 = performance.now() + delay;
+/** the signature written again as it was, at a lick (never much over `span` hundredths of a second), after `delay` ms */
+export function replay(cv: HTMLCanvasElement, sig: Sig, colour = '#fff', delay = 0, span = 150, weight = 1) {
+  const end = written(sig), rate = Math.max(1.6, end / span), t0 = performance.now() + delay;
   const frame = (now: number) => {
     if (!cv.isConnected) return;
     const t = ((now - t0) / 10) * rate;
-    if (t >= 0) show(cv, sig, colour, t);
+    if (t >= 0) show(cv, sig, colour, t, weight);
     if (t < end) requestAnimationFrame(frame);
   };
   requestAnimationFrame(frame);

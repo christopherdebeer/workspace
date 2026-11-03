@@ -17,6 +17,7 @@
 import type { Event, Rider } from './sim';
 import { VMAX } from './sim';
 import type { Sig } from './sign';
+import { CLAUDE } from './hand';
 
 export type Mode = 'run' | 'lives' | 'time' | 'endless';
 export const MODES: Record<Mode, { name: string; short: string; length?: number; lives?: number; about: string }> = {
@@ -131,13 +132,25 @@ export function keepBest(mode: Mode, seed: number, score: number, time: number) 
 
 /**
  * The board: a mode's best runs, in this browser. Each new best (on any mountain) goes up, and the top ten stay, each
- * signed or not. A time trial's go by the clock, the rest by the score.
+ * signed or not. A time trial's go by the clock, the rest by the score. Every board has a PAR run on it, signed by
+ * Claude, for something to beat.
  */
-export type Entry = { score: number; time: number; seed: number; at: number; sig?: Sig };
+export type Entry = { score: number; time: number; seed: number; at: number; sig?: Sig; par?: boolean };
+/** the PAR runs: a tidy ride with a few tricks in it. The showing-off rider scores 12–18k over the 3 km in about 90 s,
+ * and around 40k in five minutes on and on; these are well inside that, for the humans */
+export const PAR: Record<Mode, { score: number; time: number }> = {
+  run: { score: 8000, time: 0 }, lives: { score: 10000, time: 0 }, time: { score: 0, time: 105 }, endless: { score: 20000, time: 0 },
+};
+/** whether a run beats its mode's PAR */
+export const overPar = (mode: Mode, score: number, time: number) => (mode === 'time' ? time < PAR.time.time : score > PAR[mode].score);
 const BOARD = (mode: Mode) => `switchback:board:${mode}`;
 const TOP = 10;
 const order = (mode: Mode) => (a: Entry, b: Entry) => (mode === 'time' ? a.time - b.time : b.score - a.score) || a.at - b.at;
 export function board(mode: Mode): Entry[] {
+  return [...kept(mode), { ...PAR[mode], seed: 0, at: 0, sig: CLAUDE, par: true }].sort(order(mode)).slice(0, TOP);
+}
+/** the runs kept on a mode's board (not its PAR) */
+function kept(mode: Mode): Entry[] {
   try {
     const v = localStorage.getItem(BOARD(mode));
     if (v) return JSON.parse(v);
@@ -150,7 +163,7 @@ export function board(mode: Mode): Entry[] {
     return list.sort(order(mode)).slice(0, TOP);
   } catch { return []; }
 }
-function keepBoard(mode: Mode, list: Entry[]) { try { localStorage.setItem(BOARD(mode), JSON.stringify(list)); } catch { /* (no matter) */ } }
+function keepBoard(mode: Mode, list: Entry[]) { try { localStorage.setItem(BOARD(mode), JSON.stringify(list.filter((e) => !e.par))); } catch { /* (no matter) */ } }
 /** a run onto the board: where it went (0 the top), or -1 if it didn't make it */
 function enter(mode: Mode, list: Entry[], e: Entry) {
   const top = [...list, e].sort(order(mode)).slice(0, TOP);

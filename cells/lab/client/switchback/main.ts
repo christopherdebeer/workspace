@@ -18,8 +18,9 @@ import { Trickster } from './tricks';
 import { Renderer, View } from './render';
 import { M, PALETTE, RUT_LIGHT } from './mesh';
 import { Sound } from './audio';
-import { MODES, Mode, Score, bestOf, board, keepBest, sign } from './score';
-import { Pad, replay } from './sign';
+import { MODES, Mode, PAR, Score, bestOf, board, keepBest, overPar, sign } from './score';
+import { Pad, replay, show as ink } from './sign';
+import { C15R } from './hand';
 
 const q = new URLSearchParams(location.search);
 const seed = Number(q.get('seed') ?? 1) | 0 || 1, preview = q.has('preview'), still = q.has('still');
@@ -156,8 +157,8 @@ function showSettings() {
   vol.value = String(Math.round(settings.volume * 100)); vol.disabled = !settings.sound;
   for (const b of camBtns) b.setAttribute('aria-pressed', String(b.dataset.cam === settings.camera));
   for (const b of modeBtns) b.setAttribute('aria-pressed', String(b.dataset.mode === settings.mode));
-  const best = bestOf(settings.mode, seed);
-  $('about').textContent = `${MODES[settings.mode].about}${best ? ` · BEST ${settings.mode === 'time' ? clock(best.time) : fmt(best.score)}` : ''}`;
+  const best = bestOf(settings.mode, seed), m = settings.mode, mark = (b: { score: number; time: number }) => (m === 'time' ? clock(b.time) : fmt(b.score));
+  $('about').textContent = `${MODES[m].about} · PAR ${mark(PAR[m])}${best ? ` · BEST ${mark(best)}` : ''}`;
   sound.on = settings.sound; sound.volume = settings.volume;
 }
 function open() {
@@ -174,11 +175,15 @@ function begin() {
   sound.reset(); seen = 0; snapEye(); rd.trail.clear();
   hinted = false; hintEl.classList.remove('gone');
 }
-/** back to the title: the sim's own rider showing off again behind it */
+/** back to the title: the sim's own rider showing off again behind it, and the title signed again */
 function toTitle() {
   running = false; finished = false; rider = new Rider(course); auto = true; trickster = new Trickster(); seen = 0; sound.reset(); snapEye(); rd.trail.clear();
-  showSettings(); open();
+  showSettings(); open(); autograph(400);
 }
+/** the title's autograph, c15r's, written across the logo (the ink a marker's on a poster, a little heavier) */
+const autoCv = $<HTMLCanvasElement>('autograph'), AUTOGRAPH_INK = '#111';
+const autograph = (delay: number) => replay(autoCv, C15R, AUTOGRAPH_INK, delay, 230, 1.3);
+addEventListener('resize', () => ink(autoCv, C15R, AUTOGRAPH_INK, Infinity, 1.3));
 /** the leaderboard for a mode: its best runs in this browser, each signature written out again as it was, one after
  * another down the board; the run just signed in orange */
 let lastAt = 0;
@@ -187,17 +192,18 @@ function showBoard(m: Mode) {
   for (const b of boardBtns) b.setAttribute('aria-pressed', String(b.dataset.board === m));
   const list = board(m), ol = $('boardList');
   ol.textContent = '';
-  if (!list.length) { ol.innerHTML = `<li class="none">NO ${MODES[m].name} RUNS YET<br>A NEW BEST GOES UP HERE, SIGNED</li>`; return; }
   list.forEach((e, i) => {
     const li = document.createElement('li'), now = !!e.at && e.at === lastAt;
     const day = e.at ? new Date(e.at).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }).toUpperCase() : '';
-    const what = m === 'time' ? clock(e.time) : fmt(e.score);
-    li.className = now ? 'now' : '';
-    li.innerHTML = `<b class="n">${i + 1}</b><canvas aria-hidden="true"></canvas><span class="pts">${what}<small>MOUNTAIN ${e.seed}${day ? ` · ${day}` : ''}</small></span>`;
-    li.setAttribute('aria-label', `${ordinal(i + 1)}: ${what}, mountain ${e.seed}${e.sig ? ', signed' : ''}`);
+    const what = m === 'time' ? clock(e.time) : fmt(e.score), where = e.par ? 'PAR · ANY MOUNTAIN' : `MOUNTAIN ${e.seed}${day ? ` · ${day}` : ''}`;
+    li.className = now ? 'now' : e.par ? 'par' : '';
+    li.innerHTML = `<b class="n">${i + 1}</b><canvas aria-hidden="true"></canvas><span class="pts">${what}<small>${where}</small></span>`;
+    li.setAttribute('aria-label', `${ordinal(i + 1)}: ${what}, ${e.par ? 'par, signed Claude' : `mountain ${e.seed}${e.sig ? ', signed' : ''}`}`);
     ol.append(li);
     if (e.sig?.length) replay(li.querySelector('canvas')!, e.sig, now ? '#ff7428' : '#fff', 150 + i * 180);
   });
+  // (only the PAR on it: an invitation)
+  if (list.every((e) => e.par)) ol.insertAdjacentHTML('beforeend', `<li class="none">NO ${MODES[m].name} RUNS OF YOURS YET<br>BEAT PAR, SIGN THE BOARD</li>`);
 }
 /** the pad on a new best's card: each stroke put to the run on the board as it's made (so there's nothing to confirm:
  * leave it blank and the run stays unsigned) */
@@ -217,7 +223,8 @@ function finish() {
   const { better, was, rank, at } = keepBest(mode, seed, score.shown, score.time), card = $('card');
   $('cardMode').textContent = `${MODES[mode].name} · MOUNTAIN ${seed}`;
   $('cardBig').textContent = mode === 'time' ? clock(score.time) : fmt(score.shown);
-  $('cardNew').textContent = (!was ? 'FIRST RUN' : better ? 'A NEW BEST' : `BEST ${mode === 'time' ? clock(was.time) : fmt(was.score)}`) + (rank >= 0 ? ` · ${ordinal(rank + 1)} ON THE BOARD` : '');
+  $('cardNew').textContent = (!was ? 'FIRST RUN' : better ? 'A NEW BEST' : `BEST ${mode === 'time' ? clock(was.time) : fmt(was.score)}`) + (rank >= 0 ? ` · ${ordinal(rank + 1)} ON THE BOARD` : '')
+    + (overPar(mode, score.shown, score.time) ? ' · PAR BEATEN' : '');
   card.classList.toggle('best', better && !!was);
   const row = (k: string, v: string) => `<div class="row"><span>${k}</span><span>${v}</span></div>`;
   $('cardRows').innerHTML = row('DISTANCE', `${(Math.max(0, rider.s - 2) / 1000).toFixed(1)} KM`) + row('TIME', clock(score.time)) + (mode === 'time' ? row('SCORE', fmt(score.shown)) : '')
@@ -247,7 +254,7 @@ for (const b of modeBtns) b.addEventListener('click', () => { settings.mode = b.
 another.addEventListener('click', () => { const u = new URL(location.href); u.searchParams.set('seed', String(1 + Math.floor(Math.random() * 9999))); location.href = u.toString(); });
 $('menuBtn').addEventListener('click', () => open());
 showSettings();
-if (direct) { menu.classList.remove('on'); menu.setAttribute('inert', ''); document.body.classList.add('direct'); } else document.body.classList.add('titled');
+if (direct) { menu.classList.remove('on'); menu.setAttribute('inert', ''); document.body.classList.add('direct'); } else { document.body.classList.add('titled'); autograph(900); }
 
 /** a word across the screen for a moment (a checkpoint passed, a return to one) */
 const note = document.getElementById('note')!;

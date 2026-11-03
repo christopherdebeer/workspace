@@ -21,6 +21,7 @@ a:focus-visible,button:focus-visible,input:focus-visible{outline:2px solid #fff;
 #menu h1{margin:0;font-weight:900;font-size:clamp(48px,min(22vw,17vh),148px);line-height:.8;letter-spacing:-.05em}
 @media (min-aspect-ratio:4/3){#menu{flex-direction:row;align-items:flex-end;gap:5vw}#menu>div:last-child{flex:0 1 420px;max-height:100%;overflow-y:auto;scrollbar-width:thin}}
 @media (max-height:520px){#menu .row{padding:7px 0}#menu .acts button{padding:12px 18px;font-size:18px}#menu .how{margin-top:8px}}#menu h1 span{color:#e85a0d;display:block}
+#menu h1{position:relative}#autograph{position:absolute;inset:auto;left:1.25em;bottom:-.3em;width:3.3em;height:.85em;transform:rotate(-7deg);transform-origin:left bottom;pointer-events:none}
 #menu .tag{margin:14px 0 0;font-size:11px;font-weight:700;letter-spacing:.3em;max-width:30em;line-height:1.7}
 #menu .acts{display:flex;flex-direction:column;gap:10px;max-width:420px}
 #menu .acts button{font:900 22px/1 "Helvetica Neue",Arial,sans-serif;letter-spacing:.08em;padding:18px 20px;border:0;cursor:pointer;text-align:left;clip-path:polygon(0 0,100% 0,calc(100% - 18px) 100%,0 100%)}
@@ -59,7 +60,7 @@ a:focus-visible,button:focus-visible,input:focus-visible{outline:2px solid #fff;
 #boardList canvas{position:static;display:block;width:100%;height:46px}
 #boardList .pts{text-align:right;font-weight:900;font-size:22px;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
 #boardList .pts small{display:block;font-size:9px;font-weight:700;letter-spacing:.2em;margin-top:5px;opacity:.85}
-#boardList li.now{color:#ff7428}
+#boardList li.now{color:#ff7428}#boardList li.par .pts small{opacity:1;color:#ffd9c2}
 #boardList li.none{display:block;padding:16px 0;font-size:10px;font-weight:700;letter-spacing:.24em;line-height:1.7;opacity:.85}
 .titled header,.titled #hint{transition:opacity .35s}
 body:has(#menu.on) header,body:has(#menu.on) #hint,body:has(#menu.on) #notes{opacity:0}
@@ -70,7 +71,7 @@ body:has(#menu.on) header,body:has(#menu.on) #hint,body:has(#menu.on) #notes{opa
 <header><div class="title"><button id="menuBtn" aria-label="Menu and settings (pauses)"><i></i></button><div><b>SWITCH<br>BACK</b><small>SEED <span id="seed">1</span></small></div></div><div class="pace"><b id="score">0</b><span id="status"></span><span id="combo"></span></div></header>
 <div id="note" role="status" aria-live="polite"></div><div id="hint">DRAG ← → STEER · ↑ GAS · ↓ BRAKE<br>IN THE AIR ↓ ↑ TIPS THE NOSE</div><a id="notes" href="{{readme}}">NOTES</a>
 <div id="menu" class="on" role="dialog" aria-modal="true" aria-label="Switchback">
-  <div><h1>SWITCH<span>BACK</span></h1><p class="tag">A RUN DOWN A MOUNTAIN MADE AS YOU RIDE IT</p></div>
+  <div><h1>SWITCH<span>BACK</span><canvas id="autograph" aria-hidden="true"></canvas></h1><p class="tag">A RUN DOWN A MOUNTAIN MADE AS YOU RIDE IT</p></div>
   <div>
     <div id="main">
       <div class="acts"><button id="go">RIDE</button><button id="toBoard">LEADERBOARD</button><button id="again" hidden>START AGAIN</button><button id="finish" hidden>FINISH</button><button id="quit" hidden>QUIT</button></div>
