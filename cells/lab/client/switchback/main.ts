@@ -122,7 +122,7 @@ function view(dt: number, t: number): View {
   const ah = 12 * d.ahead * (1 - cam.air * 0.75), dr = 3 * d.drop * (1 - cam.air * 0.8);
   const target = rider.crashT > 0 ? [rider.x, rider.y + 0.5, rider.z] : [rider.x + fx * ah, rider.y - dr, rider.z + fz * ah];
   cam.fovKick += ((rider.air ? 0.06 : 0) - cam.fovKick) * (1 - Math.exp(-dt * 3));
-  return { eye: [cam.eye[0] + jx, cam.eye[1] + jy, cam.eye[2]], target, fov: (58 + pace * 16) * d.fov * Math.PI / 180 + cam.fovKick, roll: rider.lean * 0.15 + Math.sin(t * 53) * sh * 0.02 };
+  return { eye: [cam.eye[0] + jx, cam.eye[1] + jy, cam.eye[2]], target, fov: (58 + pace * 16) * d.fov * Math.PI / 180 + cam.fovKick + rd.fx.push * 0.035 - rd.fx.brake * 0.05 + rd.fx.shift * 0.015, roll: rider.lean * 0.15 + Math.sin(t * 53) * sh * 0.02 };
 }
 
 // (the title and the menu: one panel. On the title the sim's rider rides behind it; RIDE starts your run. In a run, the

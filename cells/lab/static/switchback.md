@@ -74,12 +74,13 @@ The world is built in 48-metre chunks: a cross-section every four metres, a few 
 
 ## Speed, drawn
 
-Motion is drawn as vector shapes on a canvas over the world, never as blurred pixels:
+Motion is drawn as vector shapes on a canvas over the world, never as blurred pixels, and each colour has one job, so the layer reads like a gauge (and the sound says the same):
 
-- **Shards**: thin wedges (white, pale, charcoal, orange; a few big ones) streaming out from the point you're riding at, to the sides and below, more and longer the faster you go.
+- **White and pale: the air.** Shards streaming out from the point you're riding at, to the sides and below, more and longer the faster you go, as the wind's roar rises with it; in the air they're all there is.
+- **Orange: the engine pushing.** Streaks streaming back from behind the rider and out past the eye, only while you're actually speeding up (the throttle, or the hill pulling you on), more and longer the harder; at each change up the gearbox, as the engine's note drops, a burst of them and the white ones stretched for a moment. The rider's tail trails an orange wedge only under real push.
+- **Charcoal: the ground taking it.** Low, fast fragments off the wheels as you brake or slide, as the gravel's crunch does; and the debris: faceted chunks of snow and rock thrown off the rear wheel, a burst on every landing, a spray on a crash, chips off the wall, each spun and smeared along its own motion.
+- **Braking** draws it all in: the white shards shorten and slow, the wake shortens, the eye's field of view tightens a little (it widens a little under push). **A landing's** jolt does the same for a moment, with its thump, its burst and the eye's shake, all from the same impact.
 - **Smears**: each fence post near you is dragged back as a wedge from where it is to where it was a moment ago, against the eye.
-- **Wake**: thin wedges trailing back from the helmet, the tail and the bars.
-- **Debris**: faceted chunks of snow and rock thrown off the rear wheel as you ride, a burst on every landing, a spray on a crash, charcoal chips off the wall, each spun and smeared along its own motion.
 
 ## Title, menu, settings
 

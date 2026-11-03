@@ -14,6 +14,7 @@
 import { Course } from './course';
 import { CHUNK, PALETTE, buildChunk, buildFlags, buildRanges, buildRider, buildValley } from './mesh';
 import type { Rider, Event } from './sim';
+import { GEARS } from './audio';
 import { buildRuts, Trail } from './ruts';
 
 const VS = `#version 300 es
@@ -167,14 +168,23 @@ export class Renderer {
 
 type Chunk = { x: number; y: number; z: number; vx: number; vy: number; vz: number; r: number; a: number; spin: number; life: number; col: string; pts: number[] };
 type Shard = { a: number; r: number; w: number; len: number; col: string; sp: number };
-const SHARD_COLS = ['#ffffff', '#ffffff', '#f1ece8', '#d9d0ca', '#24262e', '#2c2d32', '#e85a0d', '#ff7428'];
+/** each colour has one job: white and pale, the air (how fast); orange, the engine pushing (how hard you're speeding up);
+ * charcoal, the ground taking it (braking, sliding) */
+const AIR_COLS = ['#ffffff', '#ffffff', '#f1ece8', '#d9d0ca'], PUSH_COLS = ['#e85a0d', '#ff7428', '#e85a0d'], GRIT_COLS = ['#24262e', '#2c2d32', '#3a3b44'];
+type Streak = { a: number; r: number; w: number; len: number; col: string; sp: number };
 
 /** the speed layer: shards, smears, wake and debris, all flat vector shapes */
 export class Fx {
-  debris: Chunk[] = []; shards: Shard[] = [];
+  debris: Chunk[] = []; shards: Shard[] = []; pushes: Streak[] = []; grit: Streak[] = [];
+  /** what the ride's doing, as the speed layer (and the eye's field of view) read it: the push (0…1, speeding up on the
+   * ground), the brake (0…1, slowing), a shift's pulse (at each change up the engine's gears, as the sound has them) and a
+   * landing's jolt */
+  push = 0; brake = 0; shift = 0; jolt = 0;
+  private vWas = -1; private acc = 0; private gear = 0;
   private eyeWas: number[] | null = null; private seen = 0; private rand = mulberry(7);
   spawn(e: Event, r: Rider) {
     const R = this.rand, fx = Math.sin(r.heading), fz = Math.cos(r.heading);
+    if (e.kind === 'land') this.jolt = Math.max(this.jolt, 0.4 + e.k * 0.6);
     const n = e.kind === 'roost' ? 1 + (R() < e.k ? 1 : 0) : e.kind === 'land' ? Math.round(6 + e.k * 16) : e.kind === 'crash' ? 34 : e.kind === 'wall' ? 12 : 0;
     for (let i = 0; i < n; i++) {
       const rear = e.kind === 'roost', side = (R() - 0.5) * 2;
@@ -199,6 +209,20 @@ export class Fx {
     const eye = view.eye, cv = this.eyeWas && dt > 0 ? [(eye[0] - this.eyeWas[0]) / dt, (eye[1] - this.eyeWas[1]) / dt, (eye[2] - this.eyeWas[2]) / dt] : [0, 0, 0];
     this.eyeWas = eye.slice();
     const speed = Math.hypot(r.vx, r.vz), pace = Math.max(0, Math.min(1, (speed - 14) / 28));
+    // (the ride, read: how hard it's speeding up or slowing (on the ground; in the air nothing drives you), a slide's scrub,
+    // the engine's gear (its change up a pulse), a landing's jolt, each easing off)
+    if (dt > 0) {
+      const a = this.vWas < 0 || r.air || r.crashT > 0 ? 0 : (speed - this.vWas) / dt;
+      this.acc += (Math.max(-30, Math.min(30, a)) - this.acc) * (1 - Math.exp(-dt * 5));
+      const g = GEARS.findIndex((x) => speed < x), gear = g < 0 ? GEARS.length - 1 : g;
+      if (gear > this.gear && !r.air && this.acc > 0.5) this.shift = 1;
+      this.gear = gear;
+      this.shift *= Math.exp(-dt * 6); this.jolt *= Math.exp(-dt * 5);
+    }
+    this.vWas = speed;
+    const ground = !r.air && r.crashT <= 0, push = ground ? Math.max(0, Math.min(1, this.acc / 4)) : 0, brake = ground ? Math.max(0, Math.min(1, -this.acc / 7)) : 0;
+    this.push += (push - this.push) * (1 - Math.exp(-dt * 6)); this.brake += (brake - this.brake) * (1 - Math.exp(-dt * 6));
+    const scrub = ground ? Math.min(1, Math.abs(r.slip) * 3) : 0;
     /** a wedge: its base across `a` (half-width w, square to the motion), its point at `b` */
     const wedge = (a: number[], b: number[], w: number, col: string) => {
       const dx = b[0] - a[0], dy = b[1] - a[1], L = Math.hypot(dx, dy) || 1, nx = -dy / L * w, ny = dx / L * w;
@@ -224,10 +248,12 @@ export class Fx {
     // (the rider's wake: a few thin wedges trailing from the helmet, the tail and the bars, back along its way)
     if (pace > 0.15 && r.crashT <= 0) {
       const fx = Math.sin(r.heading), fz = Math.cos(r.heading), rx = -Math.cos(r.heading), rz = Math.sin(r.heading);
-      const anchors: [number, number, number, string, number][] = [[0, 2.05, 0.15, '#ffffff', 0.05], [0.2, 0.98, -1.0, '#e85a0d', 0.05], [-0.34, 1.1, 0.48, '#ffffff', 0.025], [0.34, 1.1, 0.48, '#24262e', 0.025], [0, 0.4, -1.05, '#d9d0ca', 0.05]];
-      for (const [u, h, f, col, w] of anchors) {
+      // (the air off the helmet and the bars, as fast as you're going; the orange off the tail only as the engine pushes)
+      const anchors: [number, number, number, string, number, number][] = [[0, 2.05, 0.15, '#ffffff', 0.04, 1], [-0.34, 1.1, 0.48, '#ffffff', 0.02, 1], [0.34, 1.1, 0.48, '#d9d0ca', 0.02, 1], [0.2, 0.98, -1.0, '#e85a0d', 0.04, this.push]];
+      for (const [u, h, f, col, w, k] of anchors) {
+        if (k < 0.2) continue;
         const P = [r.x + rx * u + fx * f, r.y + h, r.z + rz * u + fz * f];
-        const back = 0.08 + pace * 0.22;
+        const back = (0.05 + pace * 0.16) * k * (1 - this.brake * 0.6);
         const a = rd.project(P), b = rd.project([P[0] - r.vx * back * 0.5, P[1] - r.vy * back * 0.5, P[2] - r.vz * back * 0.5]);
         if (a && b) wedge(a, b, Math.max(1, (w * rd.H) / a[2]), col);
       }
@@ -253,12 +279,33 @@ export class Fx {
     const D = Math.hypot(W, H) / 2;
     for (let i = 0; i < this.shards.length; i++) {
       const s = this.shards[i];
-      s.r += dt * s.sp * (0.5 + pace * 1.6) * (0.3 + s.r);
+      s.r += dt * s.sp * (0.5 + pace * 1.6) * (0.3 + s.r) * (1 - this.brake * 0.45);
       if (s.r > 1.25) { this.shards[i] = this.newShard(R, false); continue; }
-      const len = s.len * (0.4 + pace * 1.1) * (0.4 + s.r), ca = Math.cos(s.a), sa = Math.sin(s.a);
+      // (braking and a landing's jolt draw them in; a shift up stretches them for a moment)
+      const len = s.len * (0.4 + pace * 1.1) * (0.4 + s.r) * (1 - this.brake * 0.55) * (1 - this.jolt * 0.5) * (1 + this.shift * 0.4), ca = Math.cos(s.a), sa = Math.sin(s.a);
       const out = [vp[0] + ca * s.r * D, vp[1] + sa * s.r * D], inn = [vp[0] + ca * Math.max(0.05, s.r - len) * D, vp[1] + sa * Math.max(0.05, s.r - len) * D];
       wedge(out, inn, s.w * (0.5 + s.r * 1.6), s.col);
     }
+    // (orange: the push, streaming back from behind the rider and out past the eye, more and longer the harder the engine
+    // is speeding you up, a burst at each change up; charcoal: the ground taking it, low and fast off the wheels, as you
+    // brake or slide)
+    const rear = rd.project([r.x - Math.sin(r.heading) * 0.9, r.y + 0.5, r.z - Math.cos(r.heading) * 0.9]);
+    if (rear) {
+      const base = Math.atan2(rear[1] - vp[1], rear[0] - vp[0]);
+      const run = (list: Streak[], want: number, cols: string[], spread: number, down: number, w0: number, len0: number) => {
+        while (list.length < want) list.push({ a: base + down + (R() - 0.5) * spread, r: R() * 0.2, w: w0 * (0.6 + R()), len: len0 * (0.5 + R()), col: cols[Math.floor(R() * cols.length)], sp: 0.8 + R() * 0.8 });
+        if (list.length > want) list.length = want;
+        for (let i = 0; i < list.length; i++) {
+          const k = list[i];
+          k.r += dt * k.sp * (1.2 + pace * 1.4);
+          if (k.r > 1) { list[i] = { ...k, a: base + down + (R() - 0.5) * spread, r: 0, col: cols[Math.floor(R() * cols.length)] }; continue; }
+          const ca = Math.cos(k.a), sa = Math.sin(k.a), out = [rear[0] + ca * k.r * D * 0.9, rear[1] + sa * k.r * D * 0.9], inn = [rear[0] + ca * Math.max(0, k.r - k.len) * D * 0.9, rear[1] + sa * Math.max(0, k.r - k.len) * D * 0.9];
+          wedge(out, inn, k.w * (0.4 + k.r * 1.8), k.col);
+        }
+      };
+      run(this.pushes, Math.round(ground ? this.push * 10 + this.shift * 8 : 0), PUSH_COLS, 0.9, 0, 2.2, 0.16 + this.push * 0.12);
+      run(this.grit, Math.round(ground ? this.brake * 9 + scrub * 8 : 0), GRIT_COLS, 1.4, 0.35, 1.6, 0.08);
+    } else { this.pushes.length = 0; this.grit.length = 0; }
   }
   private newShard(R: () => number, anywhere: boolean): Shard {
     // (kept off the middle band, where the rider is, mostly to the sides and the top)
@@ -266,7 +313,7 @@ export class Fx {
     let a = R() * Math.PI * 2;
     if (Math.sin(a) < -0.3) a = Math.PI * 2 - a;
     const big = R() < 0.2;
-    return { a, r: anywhere ? 0.35 + R() * 0.8 : 0.3 + R() * 0.2, w: big ? 5 + R() * 9 : 0.8 + R() * 3, len: big ? 0.2 + R() * 0.25 : 0.06 + R() * 0.2, col: SHARD_COLS[Math.floor(R() * SHARD_COLS.length)], sp: 0.6 + R() * 0.8 };
+    return { a, r: anywhere ? 0.35 + R() * 0.8 : 0.3 + R() * 0.2, w: big ? 5 + R() * 9 : 0.8 + R() * 3, len: big ? 0.2 + R() * 0.25 : 0.06 + R() * 0.2, col: AIR_COLS[Math.floor(R() * AIR_COLS.length)], sp: 0.6 + R() * 0.8 };
   }
 }
 function mulberry(seed: number) { let a = seed >>> 0; return () => { a = (a + 0x6d2b79f5) >>> 0; let t = a; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }

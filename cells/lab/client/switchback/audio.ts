@@ -15,6 +15,10 @@
 import type { Event, Rider } from './sim';
 import { VMAX } from './sim';
 
+/** the gearbox's tops (m/s): the engine's note climbs through each and drops at the change; the speed layer pulses there
+ * too */
+export const GEARS = [9, 16, 23, 30, 38, 46];
+
 export class Sound {
   private ctx: AudioContext | null = null;
   private master!: GainNode; private engineGain!: GainNode; private windGain!: GainNode; private gravelGain!: GainNode;
@@ -61,7 +65,7 @@ export class Sound {
     this.master.gain.setTargetAtTime((this.on ? this.volume : 0) * this.quiet, now, 0.08);
     const v = Math.hypot(r.vx, r.vz), pace = Math.min(1, v / VMAX), down = r.crashT > 0;
     // (the gearbox: six gears; the revs within the gear the pace is in; free-revving in the air; braking, it falls)
-    const tops = [9, 16, 23, 30, 38, 46];
+    const tops = GEARS;
     let g = tops.findIndex((x) => v < x); if (g < 0) g = tops.length - 1;
     const lo = g ? tops[g - 1] : 0, within = Math.max(0, Math.min(1, (v - lo) / (tops[g] - lo)));
     const want = down ? 0.15 : r.air ? 1.05 : braking ? 0.3 : 0.32 + within * 0.68;
