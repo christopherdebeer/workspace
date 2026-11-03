@@ -10,7 +10,8 @@
  *
  * Flags: `seed=` the mountain; `auto` the sim's own rider rides a run, scored and ended in the page's mode like yours but
  * never kept on your board (`auto=tricks` showing off; the preview rides too); `t=` start that many seconds
- * down (ridden by it, for pinned frames); `still` hold the frame there; `preview` no HUD; `look=side|front|rear|quarter`
+ * down (ridden by it, for pinned frames); `still` hold the frame there; `preview` nothing over the picture (with `auto`, as
+ * the lab's listing shows it, the sim's run with its score and calls, riding again when it ends); `look=side|front|rear|quarter`
  * a close look at the bike. Any of these skips the title. `ruts=bolts` the ruts as they were before they were carved
  * (`ruts=light`, with them, paler than the road). `wake=fixed` the air on the rider as it was
  * (three streaks set at the helmet and the bars); `wake=0` none on the rider at all.
@@ -40,7 +41,9 @@ let trickster = new Trickster();
 const autoInput = () => (showing ? trickster.input(rider) : { steer: autoSteer(rider), brake: false });
 
 document.getElementById('seed')!.textContent = String(seed);
-if (preview) document.body.classList.add('preview');
+// (the preview, as the lab's listing shows it: the sim's run with its score and calls, `preview&auto=tricks`, or held
+// frames with nothing over them)
+if (preview) document.body.classList.add(demo ? 'demo' : 'preview');
 const world = document.getElementById('world') as HTMLCanvasElement, speed = document.getElementById('speed') as HTMLCanvasElement;
 const course = new Course(seed);
 let rider = new Rider(course);
@@ -233,6 +236,8 @@ addEventListener('resize', () => pad.paint());
 
 /** the run's over (its finish reached, its lives gone, or called a day): scored, kept if it's the best, and shown */
 function finish() {
+  // (the listing's preview has no card: it just rides again)
+  if (preview && simRun) { begin(); return; }
   score.close(); finished = true; running = false;
   // (the sim's own run: shown like yours, but not kept, so it's never on your board)
   const sims = simRun, { better, was, rank, at } = sims ? { better: false, was: bestOf(mode, seed), rank: -1, at: 0 } : keepBest(mode, seed, score.shown, score.time), card = $('card');
