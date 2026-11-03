@@ -29,11 +29,11 @@ export function section(c: Course, i: number) {
   const j = (k: number, amp: number) => (hash(c.seed, i, k) - 0.5) * amp;
   const ch = character(c, i), wy = 0.25 + 0.95 * ch.wall, wu = 1.9 - 0.9 * ch.wall, dyk = 0.3 + 0.7 * ch.drop, duk = 1.9 - 0.9 * ch.drop;
   for (let k = WALL.length - 1; k >= 0; k--) { const [du0, dy0] = WALL[k], du = du0 * (k ? wu : 1), dy = dy0 * wy; out.push({ u: -half - du + (k ? j(k, du * 0.3) : 0), y: st.y + dy + (k ? j(k + 20, 0.6 + dy * 0.35) : 0), ds: k > 1 ? j(k + 80, STEP * 0.9) : 0 }); }
-  const gap = st.feature === 'gap', natural = st.site && st.site !== 'built';
+  const natural = st.site && st.site !== 'built';
   const under = st.feature === 'none' || st.feature === 'whoop' ? -0.08 : 0;
   // (a natural take-off: the ground itself rises under the ramp, a mound of snow and rock, not a trestle)
   const mound = st.feature === 'ramp' && natural ? st.lift : 0;
-  out.push({ u: -half, y: st.y + under + mound * 0.9, ds: 0 }, { u: -half * 0.3, y: st.y - (gap && !natural ? 7 : -under) + mound - 0.15 * Math.sign(mound), ds: 0 }, { u: half * 0.3, y: st.y - (gap && !natural ? 7 : -under) + mound - 0.15 * Math.sign(mound), ds: 0 }, { u: half, y: st.y + under + mound * 0.9, ds: 0 });
+  out.push({ u: -half, y: st.y + under + mound * 0.9, ds: 0 }, { u: -half * 0.3, y: st.y + under + mound - 0.15 * Math.sign(mound), ds: 0 }, { u: half * 0.3, y: st.y + under + mound - 0.15 * Math.sign(mound), ds: 0 }, { u: half, y: st.y + under + mound * 0.9, ds: 0 });
   // (the drop: a shelf where it's gentle, straight down where it's sheer; an outcrop of rock rising beside the route where
   // the knob's up, the valley beyond it)
   const knob = [0, 4.5, 7, 3, 0, 0, 0, 0];
@@ -47,11 +47,15 @@ export function section(c: Course, i: number) {
  * running up the wall as a gully (shallower the higher) and on down the drop as a channel */
 export function notch(c: Course, i: number, u: number) {
   const st = c.at(i);
-  if (st.feature !== 'gap' || !st.site || st.site === 'built') return 0;
+  if (st.feature !== 'gap') return 0;
+  // (no flat floor: the sides fall steeply from the lips and meet in a V, a stream's channel cut down its middle; the bed
+  // falls away down the mountain (deeper toward the drop, as water runs), and it's rough with rock)
   const t = Math.max(0, Math.min(1, st.gapT ?? 0.5)), deep = st.site === 'gorge' ? 18 + (st.size === 4 ? 8 : 0) : 7;
-  const D = deep * Math.min(1, 2.6 * Math.sin(Math.PI * t) ** 0.7), half = st.width / 2;
-  const f = u < -half ? Math.max(0.35, 1 - (0.65 * (-half - u)) / 50) : u <= half ? 1 : Math.max(0.45, 1 - (0.55 * (u - half)) / 120);
-  return D * f;
+  const v = Math.sin(Math.PI * t), channel = Math.max(0, 1 - Math.abs(t - 0.5) / 0.09);
+  const D = deep * (0.25 * Math.min(1, v * 4) + 0.75 * v ** 1.6) + channel * (st.site === 'gorge' ? 2.2 : 1), half = st.width / 2;
+  const f = u < -half ? Math.max(0.35, 0.85 - (0.5 * (-half - u)) / 50) : u <= half ? 0.85 + 0.15 * (u / half) : Math.max(0.45, 1 - (0.55 * (u - half)) / 120);
+  const rough = 1 + 0.16 * (hash(c.seed, i, Math.round(u / 1.5), 41) - 0.5);
+  return D * f * rough;
 }
 
 /** the height of a section at u across it */

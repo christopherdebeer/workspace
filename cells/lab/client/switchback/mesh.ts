@@ -9,7 +9,7 @@
  * that keeps its distance from the eye.
  */
 import { Course, JUMPS, hash } from './course';
-import { STEP, section, character, groundAt, notch } from './ground';
+import { STEP, WALL, section, character, groundAt, notch } from './ground';
 
 export const M = { SNOW: 0, TRACK: 1, ROCK: 2, ORANGE: 3, BLACK: 4, WHITE: 5, MTN: 6, MTNSNOW: 7, UMBER: 8, SHADOW: 9, RUT: 10, NAVY: 11, FAR: 12, FARSNOW: 13, RIDGE: 14, FOREST: 15, VALLEY: 16, CUT_ORANGE: 17, CUT_BLACK: 18, CREAM: 19 } as const;
 /** each material's four bands, lit to unlit (the reference's own colours) */
@@ -128,7 +128,8 @@ export function buildChunk(c: Course, n: number) {
   c.ensure(s1 + 8);
   const W = (s: number, u: number, y: number) => { const p = c.point(s, u); return [p.x, y, p.z]; };
   // (the ground: section beside section, each face its own plane; the rows under the track only where it's lifted off them)
-  const natGap = (i: number) => { const st = c.at(i); return st.feature === 'gap' && !!st.site && st.site !== 'built'; };
+  // (every gap is cut into the mountain now, built kickers' too: their trestles stand over a cleft, not a trench)
+  const natGap = (i: number) => c.at(i).feature === 'gap';
   for (let s = s0; s < s1; s += STEP) {
     const A = section(c, s), B = section(c, s + STEP), a = c.at(s), b = c.at(s + STEP);
     const under = a.feature !== 'none' || b.feature !== 'none';
@@ -180,14 +181,54 @@ function cutBlock(c: Course, m: Mesh, s: number, A: { u: number; y: number; ds: 
     const st = c.at(s + i), nx = c.at(s + i + 1);
     if (st.site !== 'gorge' || st.feature !== 'gap' || (st.gapT ?? 0) > 0.5 || (nx.feature === 'gap' && (nx.gapT ?? 1) <= 0.5)) continue;
     // (the stream: from the gully's top if it falls down the wall, else from the wall's foot; on down to the drop's end)
-    const h = st.heading, fx = Math.sin(h) * 0.9, fz = Math.cos(h) * 0.9, row = rows[i], start = st.fall ? 0 : A.length - 1 - 4 - 8 - 2;
-    for (let k = Math.max(0, start); k < row.length - 1; k++) {
+    // (where it falls, the stream runs down the gully to the lip and picks up again at the foot; the fall itself is thrown
+    // clear of the rock, drawn each frame: buildFalls)
+    const h = st.heading, fx = Math.sin(h) * 0.9, fz = Math.cos(h) * 0.9, row = rows[i], W0 = WALL.length;
+    for (let k = st.fall ? 0 : W0 - 3; k < row.length - 1; k++) {
+      if (st.fall && k >= W0 - 3 && k < W0) continue;
       // (held a little off the rock toward the open side, so it reads as falling water, not a stripe painted on)
       const p = row[k], q = row[k + 1], rx = -Math.cos(h), rz = Math.sin(h), out = k < A.length - 12 ? 1.2 : 0;
       const up = (v: number[], d: number) => [v[0] + fx * d + rx * out, v[1] + 0.8, v[2] + fz * d + rz * out];
       m.quad(up(p, -1.6), up(p, 1.6), up(q, 1.6), up(q, -1.6), M.WHITE, 0.5);
     }
   }
+}
+
+/** a point of the cut ground at station i, index k across the section: as the cut block draws it */
+function cutPoint(c: Course, i: number, k: number, cut = true) {
+  const s4 = Math.floor(i / STEP) * STEP, A = section(c, s4)[k], B = section(c, s4 + STEP)[k], f = (i - s4) / STEP;
+  const u = A.u + (B.u - A.u) * f;
+  return { s: i + A.ds + (B.ds - A.ds) * f, u, y: A.y + (B.y - A.y) * f - (cut ? notch(c, i, u) : 0) };
+}
+
+/** the waterfalls near the rider, built each frame so their water moves: where a gorge has one, at its middle, from a lip
+ * partway up the wall's gully the water is thrown clear of the rock and falls in an arc to the gorge's floor, widening as
+ * it goes, bands of it sliding down; spray tumbling at its foot */
+export function buildFalls(c: Course, s0: number, s1: number, t: number) {
+  const m = new Mesh(true, true);
+  for (let i = Math.max(1, Math.floor(s0)); i < s1; i++) {
+    const st = c.at(i), nx = c.at(i + 1);
+    if (st.feature !== 'gap' || !st.fall || (st.gapT ?? 1) > 0.5 || (nx.feature === 'gap' && (nx.gapT ?? 1) <= 0.5)) continue;
+    // (the lip at the gorge's rim on the wall side, where the stream comes off the mountain's face; below it the gorge has
+    // been cut away, so the water falls clear)
+    const lip = cutPoint(c, i, WALL.length - 3, false), foot = cutPoint(c, i, WALL.length), drop = Math.max(4, lip.y - foot.y);
+    const T = Math.sqrt(drop / 4.9), N = 14, P = (tau: number, side: number) => {
+      const a = (2.2 + tau * 1.1) * side, u = lip.u + 0.9 + 3.4 * tau, p = c.point(lip.s + a, u);
+      return [p.x, lip.y + 0.4 - 4.9 * tau * tau, p.z];
+    };
+    for (let n = 0; n < N; n++) {
+      const t0 = (n / N) * T, t1 = ((n + 1) / N) * T, ph = (((t0 + t1) / 2) * 2.4 - t * 1.7) % 1, band = (ph + 1) % 1 < 0.28;
+      m.quad(P(t0, -1), P(t0, 1), P(t1, 1), P(t1, -1), band ? M.SNOW : M.WHITE);
+    }
+    // (spray: a few white shards tumbling where it lands)
+    const fu = lip.u + 0.9 + 3.4 * T;
+    for (let j = 0; j < 9; j++) {
+      const a = t * (2 + hash(i, j) * 3) + j, r = 1.2 + 2.2 * hash(i, j, 2), q = c.point(lip.s + Math.cos(a + j) * r, fu + Math.sin(a * 0.7 + j) * r * 0.6);
+      const y = foot.y + 0.6 + ((t * 1.3 + hash(i, j, 3)) % 1) * 3.5, sz = 0.5 + hash(i, j, 4) * 0.6;
+      m.tri([q.x, y, q.z], [q.x + Math.cos(a) * sz, y + sz, q.z + Math.sin(a) * sz], [q.x - Math.sin(a) * sz, y + sz * 0.4, q.z + Math.cos(a) * sz], M.WHITE);
+    }
+  }
+  return new Float32Array(m.v);
 }
 
 /** a kicker's ramp or deck, from s to s+2: its sides, its trestle, and on the ramp the painted arrow */

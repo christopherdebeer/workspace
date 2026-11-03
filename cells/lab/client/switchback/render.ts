@@ -12,7 +12,7 @@
  *   a spray on a crash), each smeared along its own motion.
  */
 import { Course } from './course';
-import { CHUNK, PALETTE, buildChunk, buildFlags, buildRanges, buildRider, buildValley } from './mesh';
+import { CHUNK, PALETTE, buildChunk, buildFalls, buildFlags, buildRanges, buildRider, buildValley } from './mesh';
 import type { Rider, Event } from './sim';
 import { GEARS } from './audio';
 import { buildRuts, Trail } from './ruts';
@@ -75,7 +75,7 @@ class Buf {
 export class Renderer {
   gl: WebGL2RenderingContext; ctx: CanvasRenderingContext2D;
   private prog: WebGLProgram; private u: Record<string, WebGLUniformLocation | null> = {};
-  private chunks = new Map<number, Buf>(); private ranges: Buf; private valley: Buf; private rider: Buf; private shadow: Buf; private flags: Buf; private ruts: Buf; private track: Buf;
+  private chunks = new Map<number, Buf>(); private ranges: Buf; private valley: Buf; private rider: Buf; private shadow: Buf; private flags: Buf; private ruts: Buf; private track: Buf; private falls: Buf;
   /** how the rider's drawn ('cut': flat masses, lit for the picture), a whip held for a pinned frame (rad), and whether
    * the world's drawn at all (`world=0`: the rider alone on the sky, for judging its shapes) */
   style: 'facets' | 'cut' | 'sil' = 'cut'; whip = 0; world = true;
@@ -97,7 +97,7 @@ export class Renderer {
     gl.useProgram(p);
     gl.uniform3fv(this.u.uPal, new Float32Array(PALETTE.flat().map(hex).flat()));
     gl.uniform3fv(this.u.uSun, new Float32Array(SUN));
-    this.ranges = new Buf(gl, buildRanges(course.seed)); this.valley = new Buf(gl, buildValley(course.seed)); this.rider = new Buf(gl, null); this.shadow = new Buf(gl, null); this.flags = new Buf(gl, null); this.ruts = new Buf(gl, null); this.track = new Buf(gl, null); this.trail = new Trail(course);
+    this.ranges = new Buf(gl, buildRanges(course.seed)); this.valley = new Buf(gl, buildValley(course.seed)); this.rider = new Buf(gl, null); this.shadow = new Buf(gl, null); this.flags = new Buf(gl, null); this.ruts = new Buf(gl, null); this.track = new Buf(gl, null); this.falls = new Buf(gl, null); this.trail = new Trail(course);
   }
   resize() {
     this.dpr = Math.min(2, devicePixelRatio || 1);
@@ -147,6 +147,8 @@ export class Renderer {
     drawRider();
     // (the flags near enough to see, flying)
     this.flags.set(buildFlags(this.course, r.s - 40, r.s + 320, t), true); this.flags.draw();
+    // (the waterfalls near enough to see, falling)
+    this.falls.set(buildFalls(this.course, r.s - 30, r.s + 420, t), true); this.falls.draw();
     const g = this.course.point(r.s, r.u).y + 0.06, sh = new Float32Array(body.length);
     for (let i = 0; i < body.length; i += 4) {
       const h = body[i + 1] - g, k = Math.max(0, h) / SUN[1];
@@ -171,11 +173,13 @@ type Shard = { a: number; r: number; w: number; len: number; col: string; sp: nu
 /** each colour has one job: white and pale, the air (how fast); orange, the engine pushing (how hard you're speeding up);
  * charcoal, the ground taking it (braking, sliding) */
 const AIR_COLS = ['#ffffff', '#ffffff', '#f1ece8', '#d9d0ca'], PUSH_COLS = ['#e85a0d', '#ff7428', '#e85a0d'], GRIT_COLS = ['#24262e', '#2c2d32', '#3a3b44'];
-type Streak = { a: number; r: number; w: number; len: number; col: string; sp: number };
+/** a spark shed into the world from the rear wheel: where it is, how it's moving, its life, width and colour, and how
+ * hard gravity pulls it (light for the engine's orange, full for the ground's grit) */
+type Spark = { x: number; y: number; z: number; vx: number; vy: number; vz: number; life: number; max: number; w: number; col: string; g: number };
 
 /** the speed layer: shards, smears, wake and debris, all flat vector shapes */
 export class Fx {
-  debris: Chunk[] = []; shards: Shard[] = []; pushes: Streak[] = []; grit: Streak[] = [];
+  debris: Chunk[] = []; shards: Shard[] = []; sparks: Spark[] = []; private owed = [0, 0];
   /** what the ride's doing, as the speed layer (and the eye's field of view) read it: the push (0…1, speeding up on the
    * ground), the brake (0…1, slowing), a shift's pulse (at each change up the engine's gears, as the sound has them) and a
    * landing's jolt */
@@ -215,7 +219,7 @@ export class Fx {
       const a = this.vWas < 0 || r.air || r.crashT > 0 ? 0 : (speed - this.vWas) / dt;
       this.acc += (Math.max(-30, Math.min(30, a)) - this.acc) * (1 - Math.exp(-dt * 5));
       const g = GEARS.findIndex((x) => speed < x), gear = g < 0 ? GEARS.length - 1 : g;
-      if (gear > this.gear && !r.air && this.acc > 0.5) this.shift = 1;
+      if (gear > this.gear && !r.air && this.acc > 0.5) { this.shift = 1; this.owed[0] += 9; }
       this.gear = gear;
       this.shift *= Math.exp(-dt * 6); this.jolt *= Math.exp(-dt * 5);
     }
@@ -286,26 +290,34 @@ export class Fx {
       const out = [vp[0] + ca * s.r * D, vp[1] + sa * s.r * D], inn = [vp[0] + ca * Math.max(0.05, s.r - len) * D, vp[1] + sa * Math.max(0.05, s.r - len) * D];
       wedge(out, inn, s.w * (0.5 + s.r * 1.6), s.col);
     }
-    // (orange: the push, streaming back from behind the rider and out past the eye, more and longer the harder the engine
-    // is speeding you up, a burst at each change up; charcoal: the ground taking it, low and fast off the wheels, as you
-    // brake or slide)
-    const rear = rd.project([r.x - Math.sin(r.heading) * 0.9, r.y + 0.5, r.z - Math.cos(r.heading) * 0.9]);
-    if (rear) {
-      const base = Math.atan2(rear[1] - vp[1], rear[0] - vp[0]);
-      const run = (list: Streak[], want: number, cols: string[], spread: number, down: number, w0: number, len0: number) => {
-        while (list.length < want) list.push({ a: base + down + (R() - 0.5) * spread, r: R() * 0.2, w: w0 * (0.6 + R()), len: len0 * (0.5 + R()), col: cols[Math.floor(R() * cols.length)], sp: 0.8 + R() * 0.8 });
-        if (list.length > want) list.length = want;
-        for (let i = 0; i < list.length; i++) {
-          const k = list[i];
-          k.r += dt * k.sp * (1.2 + pace * 1.4);
-          if (k.r > 1) { list[i] = { ...k, a: base + down + (R() - 0.5) * spread, r: 0, col: cols[Math.floor(R() * cols.length)] }; continue; }
-          const ca = Math.cos(k.a), sa = Math.sin(k.a), out = [rear[0] + ca * k.r * D * 0.9, rear[1] + sa * k.r * D * 0.9], inn = [rear[0] + ca * Math.max(0, k.r - k.len) * D * 0.9, rear[1] + sa * Math.max(0, k.r - k.len) * D * 0.9];
-          wedge(out, inn, k.w * (0.4 + k.r * 1.8), k.col);
-        }
-      };
-      run(this.pushes, Math.round(ground ? this.push * 10 + this.shift * 8 : 0), PUSH_COLS, 0.9, 0, 2.2, 0.16 + this.push * 0.12);
-      run(this.grit, Math.round(ground ? this.brake * 9 + scrub * 8 : 0), GRIT_COLS, 1.4, 0.35, 1.6, 0.08);
-    } else { this.pushes.length = 0; this.grit.length = 0; }
+    // (orange: the push; charcoal: the ground taking it. Each a spark shed into the world from the rear wheel, flung back and
+    // out and left behind as the bike goes on, so it streams back past the eye, smeared along its own way against the
+    // eye's: as many as the push (a burst at each change up), or as the braking and the slide)
+    if (ground && dt > 0) {
+      this.owed[0] += this.push * 75 * dt; this.owed[1] += (this.brake * 60 + scrub * 55) * dt;
+      const fx = Math.sin(r.heading), fz = Math.cos(r.heading), rx = -Math.cos(r.heading), rz = Math.sin(r.heading);
+      for (let kind = 0; kind < 2; kind++) while (this.owed[kind] >= 1) {
+        this.owed[kind]--;
+        const side = (R() - 0.5) * 2, keep = kind ? 0.3 : 0.08 + R() * 0.2, back = kind ? 1 + R() * 2 : 2 + R() * 4, out = kind ? 3.5 : 1.6;
+        this.sparks.push({
+          x: r.x - fx * 0.85 + rx * side * 0.25, y: r.y + (kind ? 0.06 : 0.3 + R() * 0.35), z: r.z - fz * 0.85 + rz * side * 0.25,
+          vx: r.vx * keep - fx * back + rx * side * out, vy: kind ? 0.6 + R() * 2 : 0.4 + R() * 1.6, vz: r.vz * keep - fz * back + rz * side * out,
+          life: 0, max: kind ? 0.3 + R() * 0.25 : 0.35 + R() * 0.3, w: kind ? 0.05 + R() * 0.05 : 0.07 + R() * 0.06,
+          col: (kind ? GRIT_COLS : PUSH_COLS)[Math.floor(R() * 3)], g: kind ? 9.8 : 2.5,
+        });
+      }
+    } else this.owed = [0, 0];
+    if (this.sparks.length > 200) this.sparks.splice(0, this.sparks.length - 200);
+    const tail = 0.06 + pace * 0.05;
+    for (const k of this.sparks) {
+      k.life += dt; k.vy -= k.g * dt; k.vx *= 1 - dt * 0.8; k.vz *= 1 - dt * 0.8; k.x += k.vx * dt; k.y += k.vy * dt; k.z += k.vz * dt;
+      const p = rd.project([k.x, k.y, k.z]); if (!p) continue;
+      const q = rd.project([k.x - (k.vx - cv[0]) * tail, k.y - (k.vy - cv[1]) * tail, k.z - (k.vz - cv[2]) * tail]); if (!q) continue;
+      const fade = Math.max(0, 1 - k.life / k.max), px = (k.w * rd.H) / p[2];
+      // (thin, whatever their nearness: strokes, not slabs; gone before they reach the eye)
+      if (p[2] > 2.5 && px * fade > 0.4) wedge(p, q, Math.max(0.6, Math.min(5, px * fade)), k.col);
+    }
+    this.sparks = this.sparks.filter((k) => k.life < k.max);
   }
   private newShard(R: () => number, anywhere: boolean): Shard {
     // (kept off the middle band, where the rider is, mostly to the sides and the top)
