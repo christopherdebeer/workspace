@@ -18,6 +18,7 @@ import { Trickster } from './tricks';
 import { Renderer, View } from './render';
 import { M, PALETTE, RUT_LIGHT } from './mesh';
 import { Sound } from './audio';
+import { MODES, Mode, Score, bestOf, keepBest } from './score';
 
 const q = new URLSearchParams(location.search);
 const seed = Number(q.get('seed') ?? 1) | 0 || 1, preview = q.has('preview'), still = q.has('still');
@@ -26,7 +27,8 @@ const look = q.get('look');
 const direct = preview || still || q.has('auto') || q.has('t') || !!look;
 let auto = q.has('auto') || preview || !direct;
 // (the sim's own rider shows off on the title, and with `auto=tricks`: slides, whips, flips, whatever the jump allows)
-const showing = q.get('auto') === 'tricks' || !direct, trickster = new Trickster();
+const showing = q.get('auto') === 'tricks' || !direct;
+let trickster = new Trickster();
 const autoInput = () => (showing ? trickster.input(rider) : { steer: autoSteer(rider), brake: false });
 
 document.getElementById('seed')!.textContent = String(seed);
@@ -42,10 +44,14 @@ rd.style = q.get('rider') === 'facets' ? 'facets' : q.get('rider') === 'sil' ? '
 const sound = new Sound();
 
 // (settings, kept in this browser where it can)
-type Settings = { sound: boolean; volume: number; camera: 'close' | 'mid' | 'far' };
-const settings: Settings = { sound: true, volume: 0.7, camera: 'mid' };
+type Settings = { sound: boolean; volume: number; camera: 'close' | 'mid' | 'far'; mode: Mode };
+const settings: Settings = { sound: true, volume: 0.7, camera: 'mid', mode: 'run' };
 try { Object.assign(settings, JSON.parse(localStorage.getItem('switchback') ?? '{}')); } catch { /* (private, or blocked: defaults) */ }
+if (!MODES[settings.mode]) settings.mode = 'run';
 const keep = () => { try { localStorage.setItem('switchback', JSON.stringify(settings)); } catch { /* (no matter) */ } };
+/** `mode=run|lives|time|endless` for this page only */
+const modeFlag = q.get('mode') as Mode | null;
+if (modeFlag && MODES[modeFlag]) settings.mode = modeFlag;
 /** the eye's three distances: MID as it always was; CLOSE tight behind the rider and low; FAR high and well back, an
  * overview of the road ahead (each a scale on how far back, how high, how far to the side, how far ahead it looks, how
  * far down, and its field) */
@@ -127,34 +133,73 @@ function view(dt: number, t: number): View {
 
 // (the title and the menu: one panel. On the title the sim's rider rides behind it; RIDE starts your run. In a run, the
 // menu pauses it: CARRY ON, START AGAIN)
-const menu = document.getElementById('menu')!, go = document.getElementById('go') as HTMLButtonElement, again = document.getElementById('again') as HTMLButtonElement;
-const sndBtn = document.getElementById('snd') as HTMLButtonElement, vol = document.getElementById('vol') as HTMLInputElement, another = document.getElementById('another') as HTMLButtonElement;
-const camBtns = [...document.querySelectorAll<HTMLButtonElement>('[data-cam]')];
-document.getElementById('mseed')!.textContent = String(seed);
-let menuOpen = !direct, running = false, paused = false;
+const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
+const menu = $('menu'), go = $<HTMLButtonElement>('go'), again = $<HTMLButtonElement>('again'), finishBtn = $<HTMLButtonElement>('finish'), quit = $<HTMLButtonElement>('quit');
+const sndBtn = $<HTMLButtonElement>('snd'), vol = $<HTMLInputElement>('vol'), another = $<HTMLButtonElement>('another');
+const camBtns = [...document.querySelectorAll<HTMLButtonElement>('[data-cam]')], modeBtns = [...document.querySelectorAll<HTMLButtonElement>('[data-mode]')];
+const panels = { main: $('main'), prefs: $('prefs'), card: $('card') };
+/** which of the menu's panels shows: the main one (ride, the mode), the settings, a finished run's card */
+const show = (k: keyof typeof panels) => { for (const [n, el] of Object.entries(panels)) el.hidden = n !== k; };
+$('mseed').textContent = String(seed);
+let menuOpen = !direct, running = false, paused = false, finished = false, mode: Mode = settings.mode, score = new Score();
+const fmt = (n: number) => String(Math.round(n)).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+const clock = (t: number) => `${Math.floor(t / 60)}:${(t % 60).toFixed(1).padStart(4, '0')}`;
 function showSettings() {
   sndBtn.textContent = settings.sound ? 'ON' : 'OFF'; sndBtn.setAttribute('aria-pressed', String(settings.sound));
   vol.value = String(Math.round(settings.volume * 100)); vol.disabled = !settings.sound;
   for (const b of camBtns) b.setAttribute('aria-pressed', String(b.dataset.cam === settings.camera));
+  for (const b of modeBtns) b.setAttribute('aria-pressed', String(b.dataset.mode === settings.mode));
+  const best = bestOf(settings.mode, seed);
+  $('about').textContent = `${MODES[settings.mode].about}${best ? ` · BEST ${settings.mode === 'time' ? clock(best.time) : fmt(best.score)}` : ''}`;
   sound.on = settings.sound; sound.volume = settings.volume;
 }
 function open() {
-  menuOpen = true; paused = running; menu.classList.add('on'); menu.removeAttribute('inert');
-  go.textContent = running ? 'CARRY ON' : 'RIDE'; again.hidden = !running; sound.hush(true); go.focus();
+  menuOpen = true; paused = running; menu.classList.add('on'); menu.removeAttribute('inert'); show('main');
+  go.textContent = running ? 'CARRY ON' : 'RIDE'; again.hidden = !running; quit.hidden = !running;
+  // (an endless run is finished by hand: that's when it's scored)
+  finishBtn.hidden = !(running && mode === 'endless'); $('modeSet').hidden = running;
+  sound.hush(true); go.focus();
 }
 function close() { menuOpen = false; paused = false; menu.classList.remove('on'); menu.setAttribute('inert', ''); sound.hush(false); }
 function begin() {
-  // (a fresh run: a new rider at the top, the eye with it, yours to ride)
-  rider = new Rider(course); auto = false; running = true; sound.reset(); seen = 0; snapEye(); rd.trail.clear();
+  // (a fresh run in the mode chosen: a new rider at the top, the eye with it, yours to ride, the score at nothing)
+  rider = new Rider(course); auto = false; running = true; finished = false; mode = settings.mode; score = new Score();
+  sound.reset(); seen = 0; snapEye(); rd.trail.clear();
   hinted = false; hintEl.classList.remove('gone');
+}
+/** back to the title: the sim's own rider showing off again behind it */
+function toTitle() {
+  running = false; finished = false; rider = new Rider(course); auto = true; trickster = new Trickster(); seen = 0; sound.reset(); snapEye(); rd.trail.clear();
+  showSettings(); open();
+}
+/** the run's over (its finish reached, its lives gone, or called a day): scored, kept if it's the best, and shown */
+function finish() {
+  score.close(); finished = true; running = false;
+  const { better, was } = keepBest(mode, seed, score.shown, score.time), card = $('card');
+  $('cardMode').textContent = `${MODES[mode].name} · MOUNTAIN ${seed}`;
+  $('cardBig').textContent = mode === 'time' ? clock(score.time) : fmt(score.shown);
+  $('cardNew').textContent = !was ? 'FIRST RUN' : better ? 'A NEW BEST' : `BEST ${mode === 'time' ? clock(was.time) : fmt(was.score)}`;
+  card.classList.toggle('best', better && !!was);
+  const row = (k: string, v: string) => `<div class="row"><span>${k}</span><span>${v}</span></div>`;
+  $('cardRows').innerHTML = row('DISTANCE', `${(Math.max(0, rider.s - 2) / 1000).toFixed(1)} KM`) + row('TIME', clock(score.time)) + (mode === 'time' ? row('SCORE', fmt(score.shown)) : '')
+    + row('TRICKS', String(score.tricks)) + row('BEST COMBO', fmt(score.bestCombo)) + row('FALLS', String(score.falls));
+  menuOpen = true; paused = true; menu.classList.add('on'); menu.removeAttribute('inert'); show('card'); sound.hush(true);
+  sound.chime(better && !!was ? 3 : 2); $('cardAgain').focus();
 }
 go.addEventListener('click', () => { sound.start(); if (!running) begin(); close(); });
 again.addEventListener('click', () => { sound.start(); begin(); close(); });
+finishBtn.addEventListener('click', () => finish());
+quit.addEventListener('click', () => toTitle());
+$('cardAgain').addEventListener('click', () => { sound.start(); begin(); close(); });
+$('cardMenu').addEventListener('click', () => toTitle());
+$('toPrefs').addEventListener('click', () => { show('prefs'); $('fromPrefs').focus(); });
+$('fromPrefs').addEventListener('click', () => { show('main'); $('toPrefs').focus(); });
 sndBtn.addEventListener('click', () => { settings.sound = !settings.sound; keep(); showSettings(); if (settings.sound) sound.start(); });
 vol.addEventListener('input', () => { settings.volume = Number(vol.value) / 100; keep(); showSettings(); });
 for (const b of camBtns) b.addEventListener('click', () => { settings.camera = b.dataset.cam as Settings['camera']; keep(); showSettings(); });
+for (const b of modeBtns) b.addEventListener('click', () => { settings.mode = b.dataset.mode as Mode; keep(); showSettings(); });
 another.addEventListener('click', () => { const u = new URL(location.href); u.searchParams.set('seed', String(1 + Math.floor(Math.random() * 9999))); location.href = u.toString(); });
-document.getElementById('menuBtn')!.addEventListener('click', () => open());
+$('menuBtn').addEventListener('click', () => open());
 showSettings();
 if (direct) { menu.classList.remove('on'); menu.setAttribute('inert', ''); document.body.classList.add('direct'); } else document.body.classList.add('titled');
 
@@ -162,7 +207,8 @@ if (direct) { menu.classList.remove('on'); menu.setAttribute('inert', ''); docum
 const note = document.getElementById('note')!;
 let noteTimer = 0;
 function say(text: string) { if (auto) return; note.textContent = text; note.classList.add('on'); clearTimeout(noteTimer); noteTimer = window.setTimeout(() => note.classList.remove('on'), 1400); }
-const kmh = document.getElementById('kmh')!, dist = document.getElementById('dist')!, air = document.getElementById('air')!;
+const scoreEl = $('score'), statusEl = $('status'), comboEl = $('combo');
+let flashT = 0, flashText = '';
 let last = performance.now(), acc = 0, t = 0, drawn = 0, frames = 0, fps = 60, fpsT = 0, seen = 0, bigAir = 0;
 function loop(now: number) {
   const dt = Math.min(0.05, (now - last) / 1000); last = now;
@@ -176,10 +222,12 @@ function loop(now: number) {
       const steer = steerKeys || inp.steer;
       rider.step(1 / 120, auto ? autoInput() : { steer, brake: false, drive, whip: steer });
       rd.trail.add(rider);
+      if (running && !finished) score.update(rider, 1 / 120);
     }
   }
   for (let i = seen; i < rider.events.length; i++) {
     const e = rider.events[i];
+    if (running && !finished) score.event(e, rider);
     if (e.kind === 'land') cam.shake += e.k * 0.9;
     if (e.kind === 'crash' || e.kind === 'wall') cam.shake += 1.2;
     if (e.kind === 'checkpoint') say(`CHECKPOINT ${e.k}`);
@@ -192,16 +240,26 @@ function loop(now: number) {
   rd.frame(view(paused ? 0 : dt, t), rider, t, still || paused ? 0 : dt, drawn++ < 2 ? 99 : 1);
   seen = rider.events.length; sound.sync(seen);
   if (rider.air) bigAir = Math.max(bigAir, rider.airT);
-  kmh.textContent = String(Math.round(Math.hypot(rider.vx, rider.vz) * 3.6));
-  dist.textContent = `${Math.round(rider.dist)} m`;
-  air.textContent = rider.air && rider.airT > 0.4 ? `AIR ${rider.airT.toFixed(1)}` : rider.crashes ? `× ${rider.crashes}` : '';
+  // (the run's end: its finish reached, its last life gone (once you're put back after the third fall))
+  const progress = Math.max(0, rider.s - 2), length = MODES[mode].length ?? Infinity;
+  if (running && !finished && !paused && (progress >= length || (MODES[mode].lives && rider.crashes >= MODES[mode].lives! && rider.crashT <= 0))) finish();
+  // (the score, where the speed was: big; in a time trial the clock. Under it how the run's going, and the combo pending,
+  // its moves, its multiplier, what it'll bank)
+  for (const m of score.moments) {
+    if (m.kind === 'bank') { flashText = `+${fmt(m.points)} ${m.label}`; flashT = 1.3; scoreEl.classList.add('up'); sound.chime(m.points > 2000 ? 2 : 1); }
+    if (m.kind === 'wipe') { flashText = `WIPED OUT −${fmt(m.points)}`; flashT = 1.3; }
+  }
+  score.moments.length = 0; flashT -= dt; if (flashT < 1) scoreEl.classList.remove('up');
+  scoreEl.textContent = mode === 'time' ? clock(score.time) : fmt(score.shown);
+  statusEl.textContent = MODES[mode].lives ? `${'● '.repeat(Math.max(0, 3 - rider.crashes))}${'○ '.repeat(Math.min(3, rider.crashes))}`.trim() : length < Infinity ? `${(Math.min(progress, length) / 1000).toFixed(1)} / ${length / 1000} KM` : `${(progress / 1000).toFixed(1)} KM`;
+  comboEl.innerHTML = score.pool ? `${score.chain.join(' · ')} <i>×${score.mult}</i> +${fmt(score.pending)}` : flashT > 0 ? flashText : '';
   frames++; fpsT += dt; if (fpsT > 1) { fps = frames / fpsT; frames = 0; fpsT = 0; }
   requestAnimationFrame(loop);
 }
 requestAnimationFrame(loop);
 
 (window as unknown as { __switchback: unknown }).__switchback = {
-  probe: () => ({ s: rider.s, u: rider.u, v: rider.v, air: rider.air, crashes: rider.crashes, jumps: rider.jumps, bestAir: rider.bestAir, dist: rider.dist, checkpoints: rider.checkpoints, fps, bigAir, menu: menuOpen, running }),
+  probe: () => ({ score: score.shown, mode, finished, s: rider.s, u: rider.u, v: rider.v, air: rider.air, crashes: rider.crashes, jumps: rider.jumps, bestAir: rider.bestAir, dist: rider.dist, checkpoints: rider.checkpoints, fps, bigAir, menu: menuOpen, running }),
   get rider() { return rider; }, course,
 };
 export {};

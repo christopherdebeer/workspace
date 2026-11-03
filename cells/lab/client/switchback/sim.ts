@@ -35,6 +35,8 @@ export class Rider {
   whip = 0; private vWhip = 0;
   /** the nose turning in the air (rad/s, + up and over backward), and the pitch it took off at (so a flip's counted) */
   spin = 0; private pitch0 = 0;
+  /** how far off square to the slope the last landing came down (rad): for the score's CLEAN */
+  lastMiss = 0;
   /** the drive as last asked, and where it stood when you left the ground: in the air the nose answers to how far it's
    * moved from there (so the throttle held through a lip doesn't tip you over), from nothing once it's let go */
   private driveNow = 0; private drive0 = 0;
@@ -253,6 +255,7 @@ export class Rider {
       const fx = (this.vx / vh) * 0.8, fz = (this.vz / vh) * 0.8, gF = this.groundAt(this.x + fx, this.z + fz), gB = this.groundAt(this.x - fx, this.z - fz);
       const slope = Math.abs(gB - sy) > 0.6 ? Math.atan2(gF - sy, 0.8) : Math.abs(gF - sy) > 0.6 ? Math.atan2(sy - gB, 0.8) : Math.atan2(gF - gB, 1.6);
       const miss = Math.abs(wrap(this.pitch - slope)), square = miss < 0.12;
+      this.lastMiss = miss;
       const imp = -(this.vy + vh * (sy - ah)) * (square ? 0.7 : 1) + Math.max(0, miss - 0.3) * 18, gap = Math.abs(this.u) <= half && !p.surface;
       if (gap || sy - this.y > 1.2 || imp > 15 || this.u > half + 14 || Math.abs(this.whip) > 0.6 || miss > 0.75) { this.crash(); return; }
       // (else on the ground again; a hard one squashes and costs a little)

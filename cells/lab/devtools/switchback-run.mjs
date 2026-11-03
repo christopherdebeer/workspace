@@ -6,8 +6,8 @@ import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 const here = dirname(fileURLToPath(import.meta.url));
 const outfile = join(tmpdir(), `switchback-${process.pid}.mjs`);
-await build({ stdin: { contents: `export * from './client/switchback/sim'; export * from './client/switchback/course'; export { ground } from './client/switchback/ground'; export { Trickster } from './client/switchback/tricks';`, resolveDir: join(here, '..'), loader: 'ts' }, bundle: true, platform: 'node', format: 'esm', outfile, logLevel: 'warning' });
-const { Rider, Course, autoSteer, ground, Trickster } = await import(outfile);
+await build({ stdin: { contents: `export * from './client/switchback/sim'; export * from './client/switchback/course'; export { ground } from './client/switchback/ground'; export { Trickster } from './client/switchback/tricks'; export { Score } from './client/switchback/score';`, resolveDir: join(here, '..'), loader: 'ts' }, bundle: true, platform: 'node', format: 'esm', outfile, logLevel: 'warning' });
+const { Rider, Course, autoSteer, ground, Trickster, Score } = await import(outfile);
 const secs = Number(process.argv[2] ?? 180), seeds = process.argv.slice(3).map(Number);
 let bad = 0;
 for (const seed of seeds.length ? seeds : [1, 2, 3]) {
@@ -134,5 +134,22 @@ for (const seed of seeds.length ? seeds : [1, 2, 3]) {
   const rate = (n) => (landed[n] ?? 0) / (tried[n] || 1), f = (tried.flip ?? 0) + (tried.front ?? 0), fl = (landed.flip ?? 0) + (landed.front ?? 0);
   const ok = flips >= 6 && fl / (f || 1) >= 0.85 && rate('whip') >= 0.85 && (tried.slide ?? 0) > 5 && crashes <= 4; if (!ok) bad++;
   console.log(`${ok ? 'ok  ' : 'FAIL'}  tricks: ${fl}/${f} flips landed (${flips} turns counted), ${landed.whip ?? 0}/${tried.whip ?? 0} whips, ${tried.slide ?? 0} slides; ${crashes} crashes in nine minutes`);
+}
+// (the score: a 3 km run, the plain rider (pace, air, clean landings, checkpoints) against the showing-off one (flips,
+// whips, combos): tricks are worth riding for; and a fall wipes what's pending)
+{
+  const run = (tricks, seed) => {
+    const r = new Rider(new Course(seed)), k = new Trickster(), sc = new Score(); let last = null, t = 0;
+    while (r.s < 3002 && t < 300) {
+      r.step(1 / 120, tricks ? k.input(r) : { steer: autoSteer(r), brake: false });
+      for (const e of r.events.slice(r.events.indexOf(last) + 1)) sc.event(e, r); last = r.events[r.events.length - 1];
+      sc.update(r, 1 / 120); t += 1 / 120;
+    }
+    sc.close(); return sc;
+  };
+  const plain = [1, 2].map((s) => run(false, s)), shown = [1, 2].map((s) => run(true, s));
+  const w = new Score(); w.event({ kind: 'flip', k: 1 }, {}); const pend = w.pending; w.event({ kind: 'crash', k: 1 }, {});
+  const ok = shown.every((s, i) => s.shown > plain[i].shown * 1.5) && plain.every((s) => s.shown > 2000) && pend > 0 && w.pending === 0 && w.falls === 1; if (!ok) bad++;
+  console.log(`${ok ? 'ok  ' : 'FAIL'}  score: 3 km ridden plainly ${plain.map((s) => s.shown).join(', ')}; showing off ${shown.map((s) => s.shown).join(', ')} (best combos ${shown.map((s) => s.bestCombo).join(', ')}); a fall wipes a pending ${pend}`);
 }
 process.exit(bad ? 1 : 0);

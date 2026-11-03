@@ -108,6 +108,12 @@ export class Sound {
     g.gain.setValueAtTime(0.8 * k, at); g.gain.exponentialRampToValueAtTime(0.001, at + len);
     s.connect(lp).connect(g).connect(this.master); s.start(at, Math.random()); s.stop(at + len + 0.05);
   }
+  /** a combo banked, a run's card: a little rising run of notes, more of them for more */
+  chime(n: number) {
+    const ctx = this.ctx; if (!ctx) return;
+    const now = ctx.currentTime, f = [784, 988, 1175, 1568];
+    for (let i = 0; i <= Math.min(3, n); i++) this.note(now + i * 0.07, f[i], 0.14);
+  }
   /** a bright short note (the chime) */
   private note(at: number, f: number, len: number) {
     const ctx = this.ctx!, o = ctx.createOscillator(), g = ctx.createGain();

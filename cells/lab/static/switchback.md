@@ -82,9 +82,27 @@ Motion is drawn as vector shapes on a canvas over the world, never as blurred pi
 - **Braking** draws it all in: the white shards shorten and slow, the wake shortens, the eye's field of view tightens a little (it widens a little under push). **A landing's** jolt does the same for a moment, with its thump, its burst and the eye's shake, all from the same impact.
 - **Smears**: each fence post near you is dragged back as a wedge from where it is to where it was a moment ago, against the eye.
 
-## Title, menu, settings
+## Title, menu, modes, score (`score.ts`)
 
-It opens on its title, the sim's own rider showing off on the mountain behind a veil of the sky's blue: flicking into kinks so the rear steps out, whipping, and flipping where a jump gives it the air (at take-off it flies the flight forward against the ground to see how long it'll be up, and picks what fits; it uses only the player's own inputs, so what it lands, you can). **RIDE** starts your run from the top (and the sound: browsers only start it from a tap). The menu (the two bars top left, or Esc) pauses the run: **CARRY ON**, **START AGAIN**, and the settings, kept in this browser:
+It opens on its title, the sim's own rider showing off on the mountain behind a veil of the sky's blue: flicking into kinks so the rear steps out, whipping, and flipping where a jump gives it the air (at take-off it flies the flight forward against the ground to see how long it'll be up, and picks what fits; it uses only the player's own inputs, so what it lands, you can). Pick a **mode** and **RIDE** (which starts the sound too: browsers only start it from a tap):
+
+- **RUN**: 3 km down, scored.
+- **THREE LIVES**: on until the third fall, scored.
+- **TIME TRIAL**: the same 3 km against the clock; the time is the result.
+- **ENDLESS**: on and on; **FINISH** it from the menu when you've had enough, and it's scored then.
+
+Each mode keeps its best on each mountain (in this browser), shown under the mode; a run that beats it gets a gold card, A NEW BEST.
+
+**The score** takes the place of the speed (the speed layer shows that): big, top right (in a time trial, the clock), under it how the run's going (the kilometres of the three, the lives left, or how far), and the combo pending. Points come from riding well:
+
+- **Pace**: a steady trickle while you're really moving (nothing below ~90 km/h).
+- **Tricks**, into the combo: **AIR** on a real jump (by how long you were up), a **WHIP** (by how far out you threw it), a **BACKFLIP** (1,000), a **FRONT FLIP** (1,200; doubles more), a **CLEAN** landing square to the slope, a **SLIDE** held really sideways through a turn.
+- **Checkpoints**: 250 each, more for reaching it under par.
+- **Falls**: 200 off, and the combo pending lost.
+
+**The combo**: each trick adds its points to a pool; each move after the first (a flight, a slide) lifts the multiplier half a step, to ×4. It banks (pool × multiplier into the score, with a little run of notes) once you've ridden a couple of seconds on the ground without another trick, or at a checkpoint; a fall before then wipes it. A clean 3 km run without tricks scores about 6,000; one showing off, flips and whips strung together, twice that and more.
+
+The menu (the two bars top left, or Esc) pauses a run: **CARRY ON**, **START AGAIN**, **FINISH** (endless), **QUIT** (back to the title). **SETTINGS ›** opens the settings, kept in this browser:
 
 - **Sound**: on or off, and its volume.
 - **Camera**: how far back the eye rides. MID is the usual chase. CLOSE is tight behind and low: the rider and bike fill the lower half of the screen. FAR is high and well back, an overview of the road ahead with the rider small in it. (`cam=close|mid|far` sets it for one page, for pinned frames.)
@@ -100,8 +118,8 @@ All made in the page (WebAudio, no files):
 
 ## Flags
 
-`seed=` the mountain · `auto` the rider rides itself (`auto=tricks` showing off, as on the title) · (any flag below skips the title) · `fx=0` no speed layer · `fog=0` no distance fade (both for judging a frame) · `rider=sil|facets`, `whip=`, `world=0` the rider studies (above) · `t=` start that many seconds down the run (ridden there by the auto rider) · `still` hold the frame · `preview` no HUD.
+`seed=` the mountain · `mode=run|lives|time|endless` the mode for this page · `auto` the rider rides itself (`auto=tricks` showing off, as on the title) · (any flag below skips the title) · `fx=0` no speed layer · `fog=0` no distance fade (both for judging a frame) · `rider=sil|facets`, `whip=`, `world=0` the rider studies (above) · `t=` start that many seconds down the run (ridden there by the auto rider) · `still` hold the frame · `preview` no HUD.
 
 ## Tests
 
-`node cells/lab/devtools/switchback-run.mjs [seconds] [seeds…]` rides the auto rider down seeds 1–3 for three minutes with no page (few crashes, kickers cleared, pace held), and checks that hands off, nothing steers for you: the bike leaves the line at the first real bend; that a whip thrown over a gap and let go lands, while one held out into the landing is a crash; and that a pull held over a kicker and let go in time lands a backflip, held on it loops out, and the throttle held open (through the jumps too) is faster than left alone. `node cells/lab/devtools/switchback-shot.mjs [query…]` renders pinned moments at a landscape and a phone size beside the target, in `devtools/out/switchback-board.png`. It also measures the jumps by size (airtime at the run's own pace, a hop about a second up to a booter over three) and rides the showing-off rider down three seeds (its flips, whips and slides, and what it lands).
+`node cells/lab/devtools/switchback-run.mjs [seconds] [seeds…]` rides the auto rider down seeds 1–3 for three minutes with no page (few crashes, kickers cleared, pace held), and checks that hands off, nothing steers for you: the bike leaves the line at the first real bend; that a whip thrown over a gap and let go lands, while one held out into the landing is a crash; and that a pull held over a kicker and let go in time lands a backflip, held on it loops out, and the throttle held open (through the jumps too) is faster than left alone. `node cells/lab/devtools/switchback-shot.mjs [query…]` renders pinned moments at a landscape and a phone size beside the target, in `devtools/out/switchback-board.png`. It also measures the jumps by size (airtime at the run's own pace, a hop about a second up to a booter over three) and rides the showing-off rider down three seeds (its flips, whips and slides, and what it lands). And it scores a 3 km run ridden plainly against one showing off (tricks are worth riding for), and checks a fall wipes the combo pending.
