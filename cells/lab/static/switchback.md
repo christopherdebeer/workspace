@@ -1,97 +1,46 @@
 # Switchback
 
-A downhill motocross run down a mountain made as you ride it. The style target is a single flat-colour illustration (`switchback/target.jpg`): an orange-and-black rider on a pale cliff road, a charcoal rock wall, an orange fence along the drop, the road switchbacking down the cliff below, black pines, a deep ultramarine sky, blue ranges under snow, a white river far below, and speed drawn as orange, white and charcoal shards and flying chunks rather than blur.
+A downhill motocross run down a mountain made as you ride it. The style target is a single flat-colour illustration (`switchback/target.jpg`): an orange-and-black rider on a pale cliff road, a charcoal rock wall, an orange fence along the drop, black pines, a deep ultramarine sky, blue snow-banded ranges, a white river far below, and speed drawn as orange, white and charcoal shards rather than blur.
 
 ![A run down the cliff road](switchback/v-ride.jpg)
 
 ## Riding
 
-**Drag to aim the bike.** When your finger goes down, the bike's heading is noted; as you drag sideways, the bike turns by how far you've moved from there (a radian for a third of the screen's short side) and holds that heading when you stop. Drag further than that and it keeps turning, faster the further, for a hairpin. Lift and drag again for the next bend. Nothing steers for you: the bike goes where it points, and hands off it runs straight on. Drag down (or hold ↓ / S) to brake; ← → or A D turn it at a rate from a keyboard.
+Drag left or right to steer: the drag's distance from where it began sets how hard you turn. Nothing steers for you: the bike goes where it points, and with no input it runs straight on, so every bend has to be ridden. Turn hard at speed and the rear steps out: the way you're travelling follows the way the bike points only as far as the tyres grip (less at speed, less braking), so the bike yaws past its line and slides, scrubbing pace and throwing roost, until it lines up again. Drag down (or hold ↓ / S) to brake; ← → or A D steer from a keyboard. The engine and the hill keep you going. Kickers (a ramp painted with an orange arrow, a gap over a ravine, a landing deck, both on black trestles) launch you; whoops (a run of rollers) throw you at speed; any crest that falls away faster than you would drop puts you in the air. In the air you can turn a little. The wall on the left glances you off it and costs pace; over the fence on the right is the drop, and that run ends there: you're back on the line where you fell.
 
-**The rear slides.** The way you're travelling follows the way the bike points only as fast as the tyres grip (a lateral pull of about 2.8 g, less braking, less off the road). Turn harder than that and the bike yaws past its line, sliding, scrubbing pace and throwing roost, until the travel comes round.
+The rider is yours from the start; `auto` (a debug and test flag; the preview uses it) hands the steering to the sim's own rider. The eye rides over your right shoulder, the drop side, so the wall rises beyond the rider and the valley opens under you.
 
-**Brake assist** (on unless `assist=0`) eases off for a turn ahead that your pace would run wide in. The engine pulls toward 165 km/h; the legs are fast, the hairpins are not.
+## The course (`course.ts`)
 
-**Hazards.** A face rising sharply in front is a wall: you glance off it and lose pace. Ground falling away faster than you'd drop (a ramp's lip, a crest, the edge of an embankment) puts you in the air; in the air you can turn a little. You come down on whatever's under you. A hard landing into the ground's slope, a fall onto rough ground well off the road, or a drop off the mountain is a crash, and you're back on the line where you left it.
+The line is laid a metre at a time from the seed, as an off-road route picks its way down rock rather than a road's arcs: straight legs broken by short, sharp kinks (seven to fourteen metres each, some hard; always turning back toward the fall line once the route has wandered, so it keeps going down the valley), a width that never settles (a new one every few metres, joined straight; now and then a pinch between rocks under 5 m, or a wide flat over 10), a fall that steepens and eases, and a rough surface that steps up and down over rock, a new height every few metres joined straight. On the legs, features: a kicker every so often (a 14 m ramp, an 18 m gap, a 36 m deck), whoops between. The mountain stands on the left (a rock wall going up) and falls away on the right, as a cliff road does. Everything asks the course the same things: where the line is at distance `s`, the surface height at (s, u) with u across it, and whether there's surface at all (a gap has none).
 
-The rider is yours from the start; `auto` (a debug and test flag, which the preview uses) hands it to the sim's own rider, which aims at a point on the line ahead and brakes for the turns it can't make. The eye rides close behind, high, over the shoulder on the drop side, looking down the road and over the edge.
+## The rider (`sim.ts`)
 
-## The mountain and the route (`course.ts`)
+Arcade physics in the world: the bike has a heading (where it points) and a travel (where it's going); steering turns the heading, quicker at low speed; the travel follows through the grip; where you are on the course (how far down, how far across) is read back from your position. The fall of the hill and the engine drive you, the air holds you back, the loose shoulder slows you. The lean is what the turn asks (pace times how fast the heading swings, against gravity). The engine pulls hard toward 165 km/h; a run averages well over 100. Off a lip you fly; off a crest too, where the ground a tenth of a second on falls away below the arc you'd fly by more than the suspension takes up (so the rough rattles you without throwing you every step). You fly a ballistic arc; you land along whatever's under you, a hard landing squashing the suspension and costing pace; landing short into a deck's face, or falling far below the road, is a crash.
 
-**The mountain** is one height field for the whole world: a steep face (rising about 1.1 m per metre), ridged and gullied, falling toward a valley floor 2.3 km below with a river winding along it. Across the valley the far side rises to the ranges, their crests ridged and sharp, snow above a ragged snow line.
+## The bike and rider
 
-**The route** is laid a metre at a time down that face as a mountain road is. Traverses run across the slope, each angled a little downhill and broken by short sharp kinks; some legs are short, some long. **Hairpins** turn the route back through the fall line, flatter and wider, so each leg runs back below the last, 30–40 m down. From a leg you see the ones below as ledges cut into the cliff, fenced.
-
-- **Height:** the road follows the mountain a little below it, so it's cut in, never steeper than a bike can hold.
-- **Width:** it never settles; there are pinches under 5 m and wide flats over 10.
-- **Surface:** rough, stepping over rock.
-- **Kickers,** on long legs and laid on a gentle grade: a 14 m ramp with its arrow, a 15 m gap through the ledge, a 36 m landing deck.
-- **Whoops** between kickers.
-- **The fence:** posts at uneven spacing along the drop side, each leaning its own way.
-- **Pennants** before the hairpins and the kickers.
-
-**The carved ground** is the mountain with the route cut into it:
-- a bench where the road runs;
-- a cut face rising above it on the uphill side;
-- an embankment falling steeply below it on the downhill side, so between two legs there's a cliff from the one above down to the one below;
-- a notch through the ledge under a kicker's gap.
-
-## The bike and rider (`mesh.ts`)
-
-The bike is a motocross bike in its real proportions:
-- a 1.48 m wheelbase and a 21-inch front wheel on a fork raked at 27°;
-- the rear tyre fat and knobbly, its knob blocks standing proud round the tread, with the rim and spokes inside;
-- a swingarm and shock;
-- tank and shrouds, a long seat, the rear fender kicked up, the pipe and silencer.
-
-The suspension works: the frame sinks as you land and as the rough throws you up, the fork shortens, the swingarm swings up, and in the air it all extends.
-
-The rider is sculpted in facets, not boxes:
-- tapered limbs and a broad back;
-- a faceted orange helmet with its chin bar, peak and goggles;
-- crouched in the attack position, leaning into the turn, boots on the pegs, elbows up.
+A motocross bike in its real proportions: a 1.48 m wheelbase, a 21-inch front wheel on a fork raked at 27°, knobbly tyres drawn as open rings with the rim inside, a swingarm and shock behind, tank and radiator shrouds, a long flat seat, the rear fender kicked up, the pipe and silencer. The suspension works: the frame sinks on its springs as you land and as the rough throws you up, the fork shortening between axle and clamps and the swingarm swinging up, and in the air it extends. The rider stands in the attack position: boots on the pegs, knees bent (more as the bike sinks), hips back, chest over the tank, elbows up, head over the bars; orange jersey with black panels, black pants with orange knee guards, white boots, an orange helmet with its chin bar, peak and goggles.
 
 ## The drawing (`mesh.ts`, `render.ts`)
 
-The look is three values in big masses, as in the target: warm pale where the light falls, charcoal where it doesn't, the blues beyond, and very little in between.
+Every triangle has one material and one tone. The renderer takes each face's normal from the screen (so every face is flat), and its light, nudged by its tone, picks one of its material's four colours, all taken from the target: pale snow, packed track, charcoal rock, orange, black, white, the ranges' blues. So planes lit alike still break into different greys, as a painter sets them. Distance doesn't fade smoothly: it steps, four hard bands toward the valley's blues, each face keeping its band so the far slopes stay faceted. The ranges and the valley floor (with its river) are drawn round the eye, far off. The rider's shadow is the bike itself flattened along the sun onto the ground.
 
-**Faces.** Every triangle has one material and a tone. The renderer takes each face's normal from the screen, so every face is flat. Its light, nudged a little by its tone, picks one of its material's four colours, all sampled from the target.
-
-**Shadows.** The sun is high, from up the mountain, so shadows fall toward the valley. A shadow map around the rider gives hard, dark cast shadows: the cliff across the road, the pines, the truss, the rider. Anything in shadow takes its material's deepest band, the target's charcoal. Filtered and thresholded, the edges stay sharp but run smooth.
-
-**Distance** fades things toward the valley's blues in hard steps, not smoothly, and each material fades by its own amount: the snow and the far blues hardly at all.
-
-**The ground is drawn in rings,** coarsest first, each over the one before:
-1. the far ranges (384 m cells);
-2. the valley and its river (96 m);
-3. the mountainside (24 m);
-4. the near ground (4 m), carved, jittered where it's off the road so it breaks into ledges and planes, its vertices near the road's edge laid along it.
-
-On the near ground: slender black pines in jagged tiers, blocky crags of vertical-faced columns, and boulders by the road. Each far ring leaves out detail finer than its cells, so it reads as big shapes, not speckle. Far ground is snow above the snow line where it isn't steep, blue rock where it is, and dark forest low down.
+The world is built in 48-metre chunks: a cross-section every four metres, a few big planes from high up the wall to far down the drop, jittered hard in all three directions so its faces break into rock, its character drifting as you go down: the wall from a snowy bank to a sheer cliff, the drop from a shelf to straight down, now and then an outcrop of rock rising between the route and the valley; rock where it's steep and snow where it isn't; the track over it, its edges ragged, its ruts straight-cut; the fence (posts, an orange tape and a white one), flags on the wall side, kickers on trestles, big jagged boulders bedded along both sides, crags (clusters of leaning rock towers) down the shelves and up the banks, a few pines.
 
 ## Speed, drawn
 
-Motion is drawn as vector shapes, never as blurred pixels.
+Motion is drawn as vector shapes on a canvas over the world, never as blurred pixels:
 
-**Debris.** Faceted blocks of snow, track and rock are thrown off the rear wheel, fanning out to the outside of a slide. There's a burst on every landing, a spray on a crash, and chips off a wall. Each block is a 3D block lit like the world; it bounces once and stops. Each fast one has a wedge smeared back along its motion.
-
-**Shards** are thin wedges in white, pale, charcoal and orange. They stream out from the point you're riding at, to the sides and below, more and longer the faster you go. The sky stays clean.
-
-**Smears.** Each fence post and pennant near you is dragged back as a wedge from where it is to where it was a moment ago.
-
-**Wake.** Thin wedges trail back from the helmet, the tail and the bars.
+- **Shards**: thin wedges (white, pale, charcoal, orange; a few big ones) streaming out from the point you're riding at, to the sides and below, more and longer the faster you go.
+- **Smears**: each fence post and flag near you is dragged back as a wedge from where it is to where it was a moment ago, against the eye.
+- **Wake**: thin wedges trailing back from the helmet, the tail and the bars.
+- **Debris**: faceted chunks of snow and rock thrown off the rear wheel as you ride, a burst on every landing, a spray on a crash, charcoal chips off the wall, each spun and smeared along its own motion.
 
 ## Flags
 
-- `seed=` the mountain
-- `auto` the sim's own rider rides
-- `t=` start that many seconds down the run, ridden there by the sim's rider
-- `still` hold the frame
-- `preview` no HUD
-- `assist=0` no brake assist
-- `shadows=0` no cast shadows
+`seed=` the mountain · `auto` the rider rides itself · `t=` start that many seconds down the run (ridden there by the auto rider) · `still` hold the frame · `preview` no HUD.
 
 ## Tests
 
-- `node cells/lab/devtools/switchback-run.mjs [seconds] [seeds…]` rides the sim's rider down seeds 1–3 with no page. It checks for few crashes, hairpins made, kickers cleared and pace held. It also checks that, hands off, nothing steers for you: the bike leaves the road within seconds.
-- `node cells/lab/devtools/switchback-shot.mjs [query…]` renders pinned moments at a landscape and a phone size beside the target, in `devtools/out/switchback-board.png`.
+`node cells/lab/devtools/switchback-run.mjs [seconds] [seeds…]` rides the auto rider down seeds 1–3 for three minutes with no page (few crashes, kickers cleared, pace held), and checks that hands off, nothing steers for you: the bike leaves the line at the first real bend. `node cells/lab/devtools/switchback-shot.mjs [query…]` renders pinned moments at a landscape and a phone size beside the target, in `devtools/out/switchback-board.png`.
