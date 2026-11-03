@@ -1,8 +1,9 @@
 /**
  * Switchback's ruts, and your own track: worn lines drawn as bolts, not stripes.
  *
- * A rut is a chain of straight strokes with breaks between them, each a thin wedge that comes to a point at its uphill end
- * (toward the eye) and is cut off blunt, at a slant, at its downhill end. The strokes kink where the surface bends (a rock
+ * A rut is a run of bolts, each drawn as the sign is: two thick strokes slanting across the line, parallel, offset at a
+ * step where they meet, cut square at the downhill end and coming to a point at the uphill end (toward the eye), in the
+ * road's own shade, a step darker than the road. The strokes kink where the surface bends (a rock
  * step's edge, a roller's crest or trough, and between those now and then), so each one lies on one plane of the road and
  * takes that plane's light: in perspective the ruts are what describes the road's rise and fall, and nothing else need.
  * Near the eye they stream past as speed; further off fewer of them are drawn; past about 60 m, none.
@@ -63,8 +64,8 @@ function knots(c: Course, a: number, b: number) {
 function lines(c: Course, K: number) {
   const seed = c.seed, half = c.at(K).width / 2, lim = half - 0.35;
   const n = (salt: number, per: number) => drift(seed, K / per, salt);
-  // (each kink is the bolt's: a sideways step, either way, now and then a big one)
-  const jag = (salt: number) => (hash(seed, K, salt) < 0.5 ? -1 : 1) * (0.14 + 0.3 * hash(seed, K, salt, 2)) * (hash(seed, K, salt, 3) < 0.18 ? 1.7 : 1);
+  // (a little sideways wander at each knot: the bolts carry their own zig)
+  const jag = (salt: number) => (hash(seed, K, salt) < 0.5 ? -1 : 1) * (0.06 + 0.12 * hash(seed, K, salt, 2));
   let a = -1.25 + (n(11, 23) - 0.5) * 0.9, b = 1.05 + (n(12, 27) - 0.5) * 0.9;
   let ja = jag(1), jb = jag(2);
   // (the two, where they come close, run as one)
@@ -79,8 +80,31 @@ function lines(c: Course, K: number) {
   return [{ u: at(a, ja), own: true }, { u: at(b, jb), own: !one }, { u: at(cu, jc), own: Math.abs(cu - par) > 0.4 }];
 }
 
-/** one stroke: a wedge from its point at (sA, uA) to its blunt end at (sB, uB), w wide there, the end cut at a slant (e),
- * a row every metre so it lies on the faces under it */
+/** a ribbon laid on the road from (sa, ua) to (sb, ub) in the course's own terms, w0 wide at its start narrowing (or not)
+ * to w1 at its end, a row every metre or so so it lies on the faces under it */
+function ribbon(m: Mesh, c: Course, sa: number, ua: number, sb: number, ub: number, w0: number, w1: number, y: (s: number, u: number) => number, tone: number) {
+  const ds = sb - sa, du = ub - ua, L = Math.hypot(ds, du) || 1, ns = -du / L, nu = ds / L, rows = Math.max(1, Math.ceil(L));
+  const P = (s: number, u: number) => { const p = c.point(s, u); return [p.x, y(s, u), p.z]; };
+  let A: number[] | null = null, B: number[] | null = null;
+  for (let k = 0; k <= rows; k++) {
+    const t = k / rows, cs = sa + ds * t, cu = ua + du * t, hw = (w0 + (w1 - w0) * t) / 2;
+    const A1 = P(cs + ns * hw, cu + nu * hw), B1 = P(cs - ns * hw, cu - nu * hw);
+    if (A && B) { if (hw < 1e-3) m.tri(A, B, A1, M.RUT, tone); else m.quad(A, B, B1, A1, M.RUT, tone); }
+    A = A1; B = B1;
+  }
+}
+
+/** a bolt, as the sign is drawn: two thick strokes, parallel and slanting across the line, offset at a step where they
+ * meet; its far (downhill) end cut square, its near end (toward the eye) a point. Centred on uC from sA to sB, leaning
+ * one way or the other (dir), w wide */
+function bolt(m: Mesh, c: Course, sA: number, sB: number, uC: number, dir: number, w: number, y: (s: number, u: number) => number) {
+  const L = sB - sA, mid = sA + L * 0.5, J = L * 0.5 * Math.tan(0.34), S = w * 1.1, u0 = uC + dir * (J - S / 2);
+  ribbon(m, c, sB, u0, mid - w * 0.45, u0 - dir * J, w, w, y, 0.5);
+  ribbon(m, c, mid + w * 0.45, u0 - dir * J + dir * S, sA, u0 - dir * (2 * J - S), w, 0, y, 0.5);
+}
+
+/** one stroke of your own track: a wedge from its point at (sA, uA) to its blunt end at (sB, uB), w wide there, the end
+ * cut at a slant (e), a row every metre so it lies on the faces under it */
 function stroke(m: Mesh, c: Course, sA: number, uA: number, sB: number, uB: number, w: number, e: number, y: (s: number, u: number) => number, tone: number) {
   const rows = [sA];
   for (let s = Math.floor(sA) + 1; s < sB - 0.25; s++) rows.push(s);
@@ -94,6 +118,7 @@ function stroke(m: Mesh, c: Course, sA: number, uA: number, sB: number, uB: numb
     L = L1; R = R1;
   }
 }
+void stroke;
 
 /** the ruts near the rider at s: from behind the eye to where they stop being drawn */
 export function buildRuts(c: Course, s: number) {
@@ -112,8 +137,9 @@ export function buildRuts(c: Course, s: number) {
       // (fewer of them further off; none past 60 m)
       if (K0 - s > 60 - 22 * hash(seed, K0, j, 7) ** 2) continue;
       const g0 = Math.min(0.15 + hash(seed, K0, j, 5) * 0.75, len * 0.2), g1 = Math.min(0.1 + hash(seed, K0, j, 6) * 0.6, len * 0.15);
-      const du = B[j].u - A[j].u;
-      stroke(m, c, K0 + g0, A[j].u + (du * g0) / len, K1 - g1, A[j].u + (du * (len - g1)) / len, 0.12 + 0.1 * hash(seed, K0, j, 8), (hash(seed, K0, j, 9) - 0.5) * 0.5, y, 0.5);
+      // (a bolt in the gap between knots, on the line midway, leaning either way, 35–50 cm wide)
+      const sa = K0 + g0, sb = K1 - g1, uc = (A[j].u + B[j].u) / 2;
+      bolt(m, c, sa, sb, uc, hash(seed, K0, j, 9) < 0.5 ? -1 : 1, 0.35 + 0.15 * hash(seed, K0, j, 8), y);
     }
   }
   return new Float32Array(m.v);

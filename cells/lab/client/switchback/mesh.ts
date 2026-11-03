@@ -24,7 +24,7 @@ export const PALETTE: string[][] = [
   ['#f4f1ee', '#e3dee0', '#8c9be0', '#4f6bd8'], // far snow: white where it's lit, blue in its shade
   ['#6b5348', '#4c3b34', '#3d2f2a', '#2c221e'], // umber
   ['#a399a2', '#a399a2', '#a399a2', '#a399a2'], // shadow on snow
-  ['#5f5a68', '#4d4858', '#3d3a4a', '#2f2d3d'], // ruts: the track's shade, nearly charcoal
+  ['#ccbcb2', '#ab9c9c', '#8f8394', '#6f6a86'], // ruts: the track's own colours a step down (worn grooves)
   ['#535e8a', '#2c3768', '#162140', '#101a36'], // navy
   // (the backdrop: one family of blues, lighter and flatter the further off; no charcoal in it)
   ['#5b80f2', '#4c74f0', '#3d66ec', '#3560e6'], // the farthest range
@@ -37,6 +37,9 @@ export const PALETTE: string[][] = [
   ['#1d1d22', '#1d1d22', '#1d1d22', '#1d1d22'], // charcoal: the legs and the whole machine, one mass, no marks inside it
   ['#f6e7c6', '#f6e7c6', '#f6e7c6', '#c7ae86'], // cream accents (boots, fork, plates, helmet), a tan cut
 ];
+
+/** the ruts lighter than the road instead (`ruts=light`): the worn line polished, catching the light like a flash */
+export const RUT_LIGHT = ['#f7f3ef', '#ebe4de', '#d6ccc6', '#b4aaac'];
 
 export class Mesh {
   v: number[] = [];

@@ -16,6 +16,7 @@ import { Course } from './course';
 import { Rider, autoSteer, VMAX } from './sim';
 import { Trickster } from './tricks';
 import { Renderer, View } from './render';
+import { M, PALETTE, RUT_LIGHT } from './mesh';
 import { Sound } from './audio';
 
 const q = new URLSearchParams(location.search);
@@ -33,6 +34,7 @@ if (preview) document.body.classList.add('preview');
 const world = document.getElementById('world') as HTMLCanvasElement, speed = document.getElementById('speed') as HTMLCanvasElement;
 const course = new Course(seed);
 let rider = new Rider(course);
+if (q.get('ruts') === 'light') PALETTE[M.RUT] = RUT_LIGHT;
 const rd = new Renderer(world, speed, course);
 rd.resize(); addEventListener('resize', () => rd.resize());
 rd.speed = q.get('fx') !== '0'; rd.fog = q.get('fog') !== '0';
