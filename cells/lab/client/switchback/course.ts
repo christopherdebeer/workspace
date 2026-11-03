@@ -102,11 +102,12 @@ export class Course {
           if (k < 48) { st.feature = 'whoop'; st.lift = 0.45 * (0.5 - 0.5 * Math.cos((k / 12) * Math.PI * 2)); } else this.plan.shift();
         }
       }
-      // (flags: the checkpoints, one every 280 m or more, where the route's plain; the roll that once placed a flag every
-      // 31 m is still made, so the course is laid exactly as before, but only one in many is kept)
+      // (flags: the checkpoints, where the route's plain, further apart the further down you are (from ~280 m apart at
+      // the top to ~1 km five kilometres on); the roll that once placed a flag every 31 m is still made, so the course is
+      // laid exactly as before, but only one in many is kept)
       const roll = st.feature === 'none' && i % 31 === 0 && r() < 0.7;
       st.flag = roll && i >= this.nextFlag;
-      if (st.flag) this.nextFlag = i + 280 + Math.floor(hash(this.seed, i, 77) * 120);
+      if (st.flag) this.nextFlag = i + 250 + Math.floor(i * 0.15 + hash(this.seed, i, 77) * 80);
     }
   }
   /** the station at distance s (clamped), and the one after it, for interpolation */

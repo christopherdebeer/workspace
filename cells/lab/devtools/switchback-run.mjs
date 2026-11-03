@@ -48,9 +48,10 @@ for (const seed of seeds.length ? seeds : [1, 2, 3]) {
   const ok = off > 6 && sink < 0.05; if (!ok) bad++;
   console.log(`${ok ? 'ok  ' : 'FAIL'}  drop side: ${off.toFixed(1)} s ridden off the road over three seeds, never more than ${sink.toFixed(2)} m into the drawn ground`);
 }
-// (checkpoints: flags spaced far apart, and a crash puts you back just past the last one passed)
+// (checkpoints: flags spaced far apart, further apart the further down, and a crash puts you back just past the last one
+// passed)
 {
-  const c = new Course(1); c.ensure(5000);
+  const c = new Course(1); c.ensure(8000);
   const fl = c.st.map((s, i) => (s.flag ? i : -1)).filter((i) => i >= 0), gaps = fl.slice(1).map((v, k) => v - fl[k]);
   const r = new Rider(new Course(1)); let t = 0;
   while (r.checkpoints < 2 && t < 120) { r.step(1 / 120, { steer: autoSteer(r), brake: false }); t += 1 / 120; }
@@ -58,7 +59,8 @@ for (const seed of seeds.length ? seeds : [1, 2, 3]) {
   while (r.s < ahead && t < 160) { r.step(1 / 120, { steer: autoSteer(r), brake: false }); t += 1 / 120; }
   for (let k = 0; k < 1200 && !r.crashes; k++) r.step(1 / 120, { steer: 1, brake: false });
   for (let k = 0; k < 300 && r.crashT > 0; k++) r.step(1 / 120, { steer: 0, brake: false });
-  const ok = Math.min(...gaps) >= 280 && r.crashes > 0 && r.s > cp && r.s < cp + 12; if (!ok) bad++;
-  console.log(`${ok ? 'ok  ' : 'FAIL'}  checkpoints: ${fl.length} flags in 5 km, ${Math.min(...gaps)}–${Math.max(...gaps)} m apart; crashed past checkpoint ${r.checkpoints} (s ${cp}), back at s ${r.s.toFixed(1)}`);
+  const first = gaps.slice(0, 3).reduce((a, b) => a + b, 0) / 3, lastG = gaps.slice(-3).reduce((a, b) => a + b, 0) / 3;
+  const ok = Math.min(...gaps) >= 250 && lastG > first * 2 && r.crashes > 0 && r.s > cp && r.s < cp + 12; if (!ok) bad++;
+  console.log(`${ok ? 'ok  ' : 'FAIL'}  checkpoints: ${fl.length} flags in 8 km, ${gaps.slice(0, 3).join(', ')} m apart at the top, ${gaps.slice(-3).join(', ')} m by the end; crashed past checkpoint ${r.checkpoints} (s ${cp}), back at s ${r.s.toFixed(1)}`);
 }
 process.exit(bad ? 1 : 0);

@@ -160,7 +160,7 @@ function loop(now: number) {
     if (e.kind === 'crash' || e.kind === 'wall') cam.shake += 1.2;
     if (e.kind === 'checkpoint') say(`CHECKPOINT ${e.k}`);
     // (put back at the flag: the eye goes with you at once, not in a long swoop)
-    if (e.kind === 'respawn') { say(e.k ? `BACK TO CHECKPOINT ${e.k}` : 'BACK TO THE START'); snapEye(); }
+    if (e.kind === 'respawn') { say(e.k ? `CHECKPOINT ${e.k}` : 'START'); snapEye(); }
   }
   if (!auto) sound.update(rider, braking, paused ? 0 : dt);
   seen = rider.events.length;
