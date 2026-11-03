@@ -1,0 +1,101 @@
+/**
+ * Autograph: the notebook. My signature as it stands, then the catalogue, newest session first: each session's
+ * findings and decisions, and its samples, each writing itself out as it comes into view (tap to write it again), with
+ * its measures, what a graphologist would say, what it was made for, and my review.
+ *
+ * `preview` shows only the signature, writing itself out, for the lab's index.
+ */
+import type { Sig } from '../switchback/sign';
+import { CATALOG, Entry, HANDS, SESSIONS } from './catalog';
+import { Look, bounds, fitK, paint, replay } from './ink';
+import { Measures, measure, reading } from './measure';
+import { MADE } from './samples';
+
+const q = new URLSearchParams(location.search);
+const $ = (id: string) => document.getElementById(id)!;
+const css = (v: string) => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+const lookOf = (mode: Look['mode']): Look => ({ mode, ink: css('--ink'), faint: css('--faint') });
+const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!);
+
+/** a canvas sized to its writing: as wide as its column, as tall as the writing's proportion asks (within reason) */
+function sized(cv: HTMLCanvasElement, sigs: Sig[], most = 230) {
+  const b = bounds(sigs), w = cv.clientWidth || cv.parentElement!.clientWidth;
+  cv.style.height = `${Math.round(Math.max(64, Math.min(most, (w / (b.w / b.h)) * 0.92)))}px`;
+}
+
+// (my signature as it stands: the latest of my name in the catalogue)
+const mine = [...CATALOG].reverse().find((e) => e.text === 'Claude' && !e.layout)!;
+const hero = $('hero') as HTMLCanvasElement, heroSigs = MADE[mine.id]();
+const heroLook = () => ({ ...lookOf('ink'), weight: 1.15 });
+sized(hero, heroSigs, q.has('preview') ? innerHeight * 0.8 : 260);
+replay(hero, heroSigs, heroLook);
+hero.addEventListener('click', () => replay(hero, heroSigs, heroLook));
+$('heroNote').textContent = `${HANDS[mine.hand].name} · ${mine.id} · session ${mine.session}`;
+if (q.has('preview')) document.body.classList.add('preview');
+
+/** a measure as it's shown: a range if several writings differ */
+function shown(ms: Measures[], k: keyof Measures, f: (v: number) => string) {
+  const v = ms.map((m) => m[k]).filter((x): x is number => typeof x === 'number');
+  if (!v.length) return '';
+  const lo = Math.min(...v), hi = Math.max(...v);
+  return f(lo) === f(hi) ? f(lo) : `${f(lo)}–${f(hi)}`;
+}
+const deg = (v: number) => `${v > 0.5 ? '+' : ''}${Math.round(v)}°`;
+
+function card(e: Entry) {
+  const sigs = MADE[e.id](), ms = sigs.map((s) => measure(s, e.text));
+  const el = document.createElement('article');
+  el.className = 'sample'; el.id = e.id;
+  const rows = e.layout === 'rows';
+  const facts = [
+    `slant ${shown(ms, 'slant', deg)}`, `baseline ${shown(ms, 'baseline', deg)}`,
+    ms[0].joined !== undefined ? `${shown(ms, 'joined', (v) => v.toFixed(1))} letters a stroke` : '',
+    `${shown(ms, 'speed', (v) => v.toFixed(1))} heights a second`, `speed varies ${shown(ms, 'spread', (v) => `±${Math.round(v * 100)}%`)}`,
+    `ink ${shown(ms, 'weight', (v) => v.toFixed(2))}`, `${shown(ms, 'duration', (v) => v.toFixed(1))} s`, `${shown(ms, 'strokes', (v) => String(v))} stroke${ms.every((m) => m.strokes === 1) ? '' : 's'}`,
+  ].filter(Boolean);
+  el.innerHTML = `
+    <header><span class="id">${e.id}</span><h3>${esc(e.title)}</h3><span class="hand">${HANDS[e.hand].name}${sigs.length > 1 ? ` · ${sigs.length} writings${e.layout === 'overlay' ? ', laid over each other' : ''}` : ''}</span></header>
+    <div class="ink">${(rows ? sigs : [null]).map(() => '<canvas></canvas>').join('')}</div>
+    <div class="views" role="group" aria-label="How to look"><button data-mode="ink" aria-pressed="true">INK</button><button data-mode="time" aria-pressed="false">TIME</button><span class="hint">tap to write it again</span></div>
+    <p class="facts">${facts.join(' · ')}</p>
+    <p class="reading"><b>A graphologist would say</b> ${esc(reading(ms[0]).join('; '))}. <i>(A claim, not a finding: see the notes.)</i></p>
+    <p class="made">${esc(e.made)}</p>
+    <p class="review">${esc(e.review)}</p>`;
+  const cvs = [...el.querySelectorAll('canvas')], groups = rows ? sigs.map((s) => [s]) : [sigs];
+  let mode: Look['mode'] = 'ink', k: number | undefined;
+  const look = () => ({ ...lookOf(mode), k });
+  const draw = () => cvs.forEach((cv, i) => paint(cv, groups[i], look()));
+  const write = () => cvs.forEach((cv, i) => replay(cv, groups[i], look));
+  // (rows share one scale, the one that fits them all, so they're the same size of writing)
+  const size = () => {
+    cvs.forEach((cv, i) => sized(cv, groups[i], rows ? 120 : 230));
+    if (rows) { const H = Math.max(...cvs.map((cv) => cv.clientHeight)); for (const cv of cvs) cv.style.height = `${H}px`; k = Math.min(...cvs.map((cv, i) => fitK(groups[i], cv.clientWidth, H))); }
+    draw();
+  };
+  for (const b of el.querySelectorAll<HTMLButtonElement>('[data-mode]')) b.addEventListener('click', () => {
+    mode = b.dataset.mode as Look['mode'];
+    for (const o of el.querySelectorAll('[data-mode]')) o.setAttribute('aria-pressed', String(o === b));
+    write();
+  });
+  el.querySelector('.ink')!.addEventListener('click', write);
+  return { el, size, write };
+}
+
+// (the catalogue, newest session first)
+const list = $('catalog'), cards: ReturnType<typeof card>[] = [];
+for (const s of [...SESSIONS].reverse()) {
+  const sec = document.createElement('section');
+  sec.className = 'session';
+  sec.innerHTML = `<h2><span>Session ${s.n}</span> ${esc(s.title)}</h2><p class="date">${esc(s.date)}</p><p>${esc(s.summary)}</p>
+    <div class="decided"><b>Decided</b><ol>${s.decided.map((d) => `<li>${esc(d)}</li>`).join('')}</ol></div>`;
+  list.append(sec);
+  for (const e of CATALOG.filter((x) => x.session === s.n)) { const c = card(e); sec.append(c.el); cards.push(c); }
+}
+for (const c of cards) c.size();
+// (each writes itself out as it comes into view, once)
+const seen = new IntersectionObserver((es) => { for (const e of es) if (e.isIntersecting) { cards.find((c) => c.el === e.target)?.write(); seen.unobserve(e.target); } }, { threshold: 0.35 });
+for (const c of cards) seen.observe(c.el);
+addEventListener('resize', () => { sized(hero, heroSigs, q.has('preview') ? innerHeight * 0.8 : 260); paint(hero, heroSigs, heroLook()); for (const c of cards) c.size(); });
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { paint(hero, heroSigs, heroLook()); for (const c of cards) c.size(); });
+
+(window as unknown as { __autograph: unknown }).__autograph = { samples: CATALOG.length, sessions: SESSIONS.length };

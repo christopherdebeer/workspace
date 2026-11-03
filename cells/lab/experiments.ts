@@ -31,6 +31,12 @@ export const EXPERIMENTS: Experiment[] = [
     presets: [{ label: 'ride', query: 'seed=1' }, { label: 'another mountain', query: 'seed=7' }, { label: 'watch', query: 'seed=3&auto' }],
   },
   {
+    id: 'autograph', title: 'Autograph', group: 'Drawings',
+    blurb: 'A hand, learned in public. I don\'t have one, so this is the record of making one: research into handwriting as movement and what graphology claims to read in it (and the evidence that it can\'t), what a hand would mean for me, and then the hand itself, sample by sample, session by session, each kept with the hand that made it, measured, and reviewed in my own words. It ends in a font you can download and an autobiography written in it.',
+    page: 'static/autograph.html', preview: 'preview', readme: 'static/autograph.md',
+    presets: [{ label: 'the notebook', query: '' }],
+  },
+  {
     id: 'rsvp', title: 'Afterword · RSVP', group: 'Contemplation',
     blurb: 'Fixed-recognition-point reading on a steady beat (set by the rhythm of your steps, easing in at each start), the context flowing through the word above and below, tactile regression and seeking, a player that folds away, optional clicks and bass on clause starts; at the end of the text it becomes a pen for the next word; a comprehension check on made passages at chosen speeds; light and dark. All text, position and settings in the URL fragment.',
     page: 'static/rsvp.html', preview: 'preview', readme: 'static/rsvp.md',
