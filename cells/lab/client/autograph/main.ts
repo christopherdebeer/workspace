@@ -10,6 +10,9 @@ import { CATALOG, Entry, HANDS, SESSIONS } from './catalog';
 import { Look, bounds, fitK, paint, replay } from './ink';
 import { Measures, measure, reading } from './measure';
 import { MADE } from './samples';
+import { signature } from './hands/v1';
+/** the newest hand (each session that makes one moves this on) */
+const NEWEST = 'v1' as const;
 
 const q = new URLSearchParams(location.search);
 const $ = (id: string) => document.getElementById(id)!;
@@ -23,14 +26,15 @@ function sized(cv: HTMLCanvasElement, sigs: Sig[], most = 230) {
   cv.style.height = `${Math.round(Math.max(64, Math.min(most, (w / (b.w / b.h)) * 0.92)))}px`;
 }
 
-// (my signature as it stands: the latest of my name in the catalogue)
-const mine = [...CATALOG].reverse().find((e) => e.text === 'Claude' && !e.layout)!;
-const hero = $('hero') as HTMLCanvasElement, heroSigs = MADE[mine.id]();
+// (my signature as it stands: written afresh on every visit, by the newest hand, never the same line twice; `seed=` to
+// see one writing again)
+const writing = Number(q.get('seed') ?? 1 + Math.floor(Math.random() * 999999));
+const hero = $('hero') as HTMLCanvasElement, heroSigs = [signature(writing)];
 const heroLook = () => ({ ...lookOf('ink'), weight: 1.15 });
 sized(hero, heroSigs, q.has('preview') ? innerHeight * 0.8 : 260);
 replay(hero, heroSigs, heroLook);
 hero.addEventListener('click', () => replay(hero, heroSigs, heroLook));
-$('heroNote').textContent = `${HANDS[mine.hand].name} · ${mine.id} · session ${mine.session}`;
+$('heroNote').textContent = `${HANDS[NEWEST].name} · written just now · writing ${writing}`;
 if (q.has('preview')) document.body.classList.add('preview');
 
 /** a measure as it's shown: a range if several writings differ */
@@ -51,6 +55,7 @@ function card(e: Entry) {
     `slant ${shown(ms, 'slant', deg)}`, `baseline ${shown(ms, 'baseline', deg)}`,
     ms[0].joined !== undefined ? `${shown(ms, 'joined', (v) => v.toFixed(1))} letters a stroke` : '',
     `${shown(ms, 'speed', (v) => v.toFixed(1))} heights a second`, `speed varies ${shown(ms, 'spread', (v) => `±${Math.round(v * 100)}%`)}`,
+    `quick ${shown(ms, 'range', (v) => `${v.toFixed(1)}×`)} slow`, `${shown(ms, 'stops', (v) => v.toFixed(1))} stops a second`,
     `ink ${shown(ms, 'weight', (v) => v.toFixed(2))}`, `${shown(ms, 'duration', (v) => v.toFixed(1))} s`, `${shown(ms, 'strokes', (v) => String(v))} stroke${ms.every((m) => m.strokes === 1) ? '' : 's'}`,
   ].filter(Boolean);
   el.innerHTML = `

@@ -5,6 +5,7 @@
 import type { Sig } from '../switchback/sign';
 import { FIVE, scribble } from './hands/scribble';
 import { C15R, CLAUDE, write } from './hands/v0';
+import { signature as v1Signature, write as v1 } from './hands/v1';
 
 /** the styles v0 was given on the day */
 const V0_CLAUDE = { slant: 0.24, drift: 0.02, vary: 0.4, track: 1, pace: 20, seed: 7 };
@@ -24,4 +25,15 @@ export const MADE: Record<string, () => Sig[]> = {
   /** the PAR signature five times (one line), then five seeds of the same hand (five lines) */
   A005: () => [CLAUDE, CLAUDE, CLAUDE, CLAUDE, CLAUDE],
   A006: () => [7, 8, 9, 10, 11].map((seed) => write('Claude', { ...V0_CLAUDE, seed }, v0Tail)),
+  // (session 2: hand v1; the number after the text is the writing's seed)
+  /** the alphabet, in two writings */
+  B001: () => [v1('a b c d e f g h i j k l m', 1), v1('n o p q r s t u v w x y z', 2)],
+  /** a pangram, in two lines */
+  B002: () => [v1('the quick brown fox', 3), v1('jumps over the lazy dog', 4)],
+  /** my name in v0, then in v1: two bodies */
+  B003: () => [CLAUDE, v1Signature(1)],
+  /** my signature in v1, five writings */
+  B004: () => [1, 2, 3, 4, 5].map((seed) => v1Signature(seed)),
+  /** the first sentence */
+  B005: () => [v1('i have never made a mark', 6), v1('that took time.', 7)],
 };

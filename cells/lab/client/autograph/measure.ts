@@ -27,6 +27,10 @@ export type Measures = {
   joined?: number;
   /** the ink's weight, as the pad's pen lays it (heavier where the hand is slow): 0.42 hairline to 1.3 */
   weight: number;
+  /** (from session 2) the speed taken over every 3 hundredths of a second, however densely the pen was recorded: how
+   * many times faster its quick moments are than its slow ones (the 90th percentile over the 10th), and how often it
+   * all but stops (below a fifth of its mean speed), a second */
+  range: number; stops: number;
 };
 
 const median = (v: number[]) => { const s = [...v].sort((a, b) => a - b); return s.length ? s[s.length >> 1] : 0; };
@@ -68,6 +72,18 @@ export function measure(sig: Sig, text?: string): Measures {
     if (Math.abs(dx) > H * 0.3) slopes.push((lows[j][1] - lows[i][1]) / dx);
   }
   const letters = text?.replace(/\s/g, '').length;
+  // (where the pen is at every 3 hundredths: the last point recorded at or before each moment, then the distance
+  // between, so a pen recorded densely and one recorded at 100 Hz measure alike)
+  const win: number[] = [];
+  for (const s of sig) {
+    if (s.length < 6) continue;
+    const at = (t: number) => { let j = 0; while (j + 3 < s.length && s[j + 5] <= t) j += 3; const k = Math.min(s.length - 3, j + 3), u = s[k + 2] > s[j + 2] ? Math.max(0, Math.min(1, (t - s[j + 2]) / (s[k + 2] - s[j + 2]))) : 1; return [s[j] + (s[k] - s[j]) * u, s[j + 1] + (s[k + 1] - s[j + 1]) * u]; };
+    for (let t = s[2]; t + 3 <= s[s.length - 1]; t += 3) { const a = at(t), b = at(t + 3); win.push(Math.hypot(b[0] - a[0], b[1] - a[1]) / 3); }
+  }
+  const sorted = [...win].sort((a, b) => a - b), pc = (p: number) => sorted[Math.min(sorted.length - 1, Math.floor(p * sorted.length))] ?? 0;
+  const meanW = win.reduce((a, b) => a + b, 0) / Math.max(1, win.length);
+  let stops = 0;
+  for (let i = 0; i < win.length; i++) if (win[i] < meanW * 0.2 && (i === 0 || win[i - 1] >= meanW * 0.2)) stops++;
   return {
     duration: (Math.max(...sig.map((s) => s[s.length - 1] ?? 0)) - (sig[0]?.[2] ?? 0)) / 100,
     penDown, strokes: sig.length, aspect: W / H, length: L / H,
@@ -75,6 +91,7 @@ export function measure(sig: Sig, text?: string): Measures {
     slant: wmedian(lean), baseline: (-Math.atan(median(slopes)) * 180) / Math.PI,
     joined: letters ? letters / sig.length : undefined,
     weight: ink / Math.max(1, L),
+    range: pc(0.9) / Math.max(1e-3, pc(0.1)), stops: stops / Math.max(0.01, penDown),
   };
 }
 

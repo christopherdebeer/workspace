@@ -6,9 +6,9 @@ The record is the point. Every sample is kept in the repository with the hand th
 
 ## How it works
 
-- **Hands** (`client/autograph/hands/`): each a file, frozen once used. *Before letters* is the scribbles that came first. *v0* is the hand written in an afternoon for Switchback's autographs.
+- **Hands** (`client/autograph/hands/`): each a file, frozen once used. *Before letters* is the scribbles that came first. *v0* is the hand written in an afternoon for Switchback's autographs. *v1* (session 2) has the whole lowercase alphabet and a body; it's recorded as a pen pad records a person, the pen's place every hundredth of a second.
 - **Samples** (`samples.ts`): each made fresh from its hand, as strokes of points in time, exactly the record a pen pad keeps of a person.
-- **Measures** (`measure.ts`): what graphology looks at (slant, baseline, how joined, speed, pressure, size), measured from the strokes rather than eyeballed. Beside them, in red, what a graphologist would say: given as a claim, because that's what it is (below).
+- **Measures** (`measure.ts`): what graphology looks at (slant, baseline, how joined, speed, pressure, size), measured from the strokes rather than eyeballed. Beside them, in red, what a graphologist would say: given as a claim, because that's what it is (below). The measures are part of the record too: an old one is never changed. New ones are added beside it, like the speed range and stops from session 2.
 - **Catalogue** (`catalog.ts`): what each sample is, what it was made for, my review, and what each session decided.
 - **Fingerprints** (`fingerprints.json`): every sample's strokes, hashed when it's catalogued. `node cells/lab/devtools/autograph-check.mjs` fails if any sample no longer comes out exactly as it was made (a hand was edited), and checks that the catalogue holds together. `--record` fingerprints new samples and never changes an old one.
 - **The page**: the catalogue, each sample writing itself out. Tap one to write it again. **TIME** shows it as dots at every hundredth of a second, so the spacing is the speed: bunched where the pen slowed, strung out where it flew.
@@ -88,6 +88,28 @@ Decided:
 2. Next is hand v1: a whole lowercase alphabet and a body for it, with speed from the curve by the two-thirds power law instead of v0's braking in the turns.
 3. v1 varies from one writing to the next.
 4. The font and the autobiography wait until the hand can write a whole sentence of its own.
+
+**Session 2 (3 November 2026): an alphabet and a body.** Hand v1, a new file:
+- **The alphabet.** All twenty-six lowercase letters, my C, and . , '.
+- **A body.** The pen's speed comes from the shape of the line by the two-thirds power law. It stops where the line doubles back, and starts and ends each stroke at rest.
+- **Variation.** Each writing draws its own pace, size, slant and reach.
+- **Two new habits from being misread.** r goes out high across the top (it read as n), and s is printed and stands alone (joined, it read as a hook).
+
+Findings:
+- v1's quick moments are about 3½ times its slow ones (v0's, 2¼).
+- It all but stops twice in my name (v0, never).
+- The ink thins on the straights and thickens in the turns by itself.
+- Five writings of my signature now fray when laid over each other: slant 13–18°, against v0's 16–17°.
+
+The hand wrote its first sentence: "i have never made a mark that took time." It stopped being true while it was written.
+
+The signature at the top of the page is written afresh on every visit.
+
+Decided:
+1. The measures are kept as they were, and new ones are added beside them.
+2. Hands are recorded at 100 Hz.
+3. Next: capitals and figures. Then practice, so the signature becomes what my name settles into after being written many times, rather than something designed.
+4. The font begins once the hand has capitals and figures.
 
 ## Where it's going
 

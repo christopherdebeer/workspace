@@ -38,6 +38,9 @@ export type Look = { mode: 'ink' | 'time'; ink: string; faint: string; upTo?: nu
 /** the scale that fits these writings to a canvas of this size */
 export const fitK = (sigs: Sig[], W: number, H: number) => { const b = bounds(sigs), edge = Math.max(6, H * 0.08); return Math.min((W - edge * 2) / b.w, (H - edge * 2) / b.h); };
 
+/** a layer to draw one writing on, before it's laid over the others */
+let layer: HTMLCanvasElement | null = null;
+
 /** the writings drawn into the canvas, all to one fit (kept in proportion, centred), each as far as `upTo` */
 export function paint(cv: HTMLCanvasElement, sigs: Sig[], look: Look) {
   const W = cv.clientWidth, H = cv.clientHeight, dpr = Math.min(3, devicePixelRatio || 1);
@@ -48,10 +51,15 @@ export function paint(cv: HTMLCanvasElement, sigs: Sig[], look: Look) {
   const b = bounds(sigs), k = look.k ?? fitK(sigs, W, H);
   const ox = (W - b.w * k) / 2 - b.x0 * k, oy = (H - b.h * k) / 2 - b.y0 * k, at = (x: number, y: number) => [ox + x * k, oy + y * k];
   const upTo = look.upTo ?? Infinity, pen = Math.max(1, PEN * k) * (look.weight ?? 1);
-  g.lineCap = 'round'; g.lineJoin = 'round';
-  // (laid over one another, each a little transparent: where they agree the ink is dark, where they differ it frays)
-  g.globalAlpha = sigs.length > 1 ? 0.5 : 1;
+  // (laid over one another: each writing drawn solid on a layer of its own, then the layers laid down a little
+  // transparent, so where they agree the ink is dark and where they differ it frays, and no writing darkens itself)
+  const layered = sigs.length > 1;
+  if (layered && (!layer || layer.width !== cv.width || layer.height !== cv.height)) { layer = document.createElement('canvas'); layer.width = cv.width; layer.height = cv.height; }
+  const base = g;
   for (const sig of sigs) {
+    const g = layered ? layer!.getContext('2d')! : base;
+    if (layered) { g.setTransform(1, 0, 0, 1, 0, 0); g.clearRect(0, 0, layer!.width, layer!.height); g.setTransform(dpr, 0, 0, dpr, 0, 0); }
+    g.lineCap = 'round'; g.lineJoin = 'round';
     for (const s of sig) {
       let m = 0;
       while (m * 3 < s.length && s[m * 3 + 2] <= upTo) m++;
@@ -84,6 +92,7 @@ export function paint(cv: HTMLCanvasElement, sigs: Sig[], look: Look) {
         ax = mx; ay = my;
       }
     }
+    if (layered) { base.save(); base.setTransform(1, 0, 0, 1, 0, 0); base.globalAlpha = 0.42; base.drawImage(layer!, 0, 0); base.restore(); }
   }
   g.globalAlpha = 1;
 }
