@@ -34,7 +34,7 @@ export const PALETTE: string[][] = [
   ['#2f5be6', '#2f5be6', '#2a55e0', '#2a55e0'], // the valley floor
   // (the rider drawn as cut colour (style 'cut'): each mass one flat field, and one cut where it turns from the light)
   ['#ff6c12', '#ff6c12', '#ff6c12', '#1d1d22'], // orange, its cut charcoal: the shadow side merges into the dark mass
-  ['#2e2e36', '#1d1d22', '#1d1d22', '#1d1d22'], // charcoal: the legs and the whole machine, one mass
+  ['#1d1d22', '#1d1d22', '#1d1d22', '#1d1d22'], // charcoal: the legs and the whole machine, one mass, no marks inside it
   ['#f6e7c6', '#f6e7c6', '#f6e7c6', '#c7ae86'], // cream accents (boots, fork, plates, helmet), a tan cut
 ];
 
@@ -365,18 +365,19 @@ export function buildValley(seed: number) {
 export interface Pose {
   x: number; y: number; z: number; heading: number; pitch: number; lean: number; squash: number; crashT: number; air?: boolean;
   steer?: number; yFront?: number; yRear?: number; dist?: number;
-  body?: { roll: number; shift: number; fore: number; rise: number };
+  body?: { roll: number; shift: number; fore: number; rise: number; look?: number; nod?: number };
   /** a whip: the machine swung out beneath the rider (rad, + its nose to the right) and laid over with it; the rider's
    * body stays with the way it's going, its legs and arms re-solved to where the pegs and bars have gone */
   whip?: number;
-  /** 'cut': drawn as a few flat masses (orange, charcoal, cream), each with one dark cut, not facet by facet */
-  style?: 'facets' | 'cut';
+  /** 'cut': drawn as a few flat masses (orange, charcoal, cream), each with one dark cut, not facet by facet; 'sil': the
+   * whole figure one solid charcoal (for judging its silhouette); 'facets' (or unset): every face its own band */
+  style?: 'facets' | 'cut' | 'sil';
 }
 export function buildRider(r: Pose, t: number) {
-  const cut = r.style === 'cut', m = new Mesh(true, cut);
+  const sil = r.style === 'sil', cut = r.style === 'cut' || sil, m = new Mesh(true, cut);
   // (the materials. As facets: the kit's own. Cut: three masses, the jersey and bodywork orange, the legs and the whole
   // machine one charcoal, a few cream accents where it touches and steers (boots, fork) and its plates and helmet)
-  const OR = cut ? M.CUT_ORANGE : M.ORANGE, BK = cut ? M.CUT_BLACK : M.BLACK, WH = cut ? M.CREAM : M.WHITE, RK = cut ? M.CUT_BLACK : M.ROCK;
+  const OR = sil ? M.CUT_BLACK : cut ? M.CUT_ORANGE : M.ORANGE, BK = cut ? M.CUT_BLACK : M.BLACK, WH = sil ? M.CUT_BLACK : cut ? M.CREAM : M.WHITE, RK = cut ? M.CUT_BLACK : M.ROCK;
   const ch = Math.cos(r.heading), sh = Math.sin(r.heading);
   const fw = [sh, 0, ch], rt = [-ch, 0, sh];
   const rot = (v: number[], ax: number[], a: number) => { const c = Math.cos(a), s = Math.sin(a), d = v[0] * ax[0] + v[1] * ax[1] + v[2] * ax[2]; const cr = [ax[1] * v[2] - ax[2] * v[1], ax[2] * v[0] - ax[0] * v[2], ax[0] * v[1] - ax[1] * v[0]]; return [0, 1, 2].map((i) => v[i] * c + cr[i] * s + ax[i] * d * (1 - c)); };
@@ -469,46 +470,77 @@ export function buildRider(r: Pose, t: number) {
   box([0, fr(1.04), 0.14], [0.13, 0.08, 0.2], OR, 0.15); // tank
   for (const x of [-0.17, 0.17]) { box([x, fr(0.96), 0.27], [0.025, 0.13, 0.15], OR, 0.35); if (!cut) box([x * 1.05, fr(0.9), 0.32], [0.012, 0.05, 0.08], M.WHITE, 0.35); }
   box([0, fr(1.07), -0.3], [0.11, 0.035, 0.36], BK, -0.05); // seat
-  for (const x of [-0.14, 0.14]) box([x, fr(0.95), -0.44], [0.018, 0.1, 0.17], WH, -0.1); // side plates
+  for (const x of [-0.14, 0.14]) box([x, fr(0.95), -0.44], [0.018, 0.1, 0.17], cut ? BK : WH, -0.1); // side plates (cut: part of the dark mass)
   box([0, fr(1.05), -0.82], [0.1, 0.018, 0.24], OR, -0.32); // rear fender
   wheel(ra, 0.39, 0.27, 0.065, ID);
   const pivot = [0, fr(0.62), -0.14];
   for (const x of [-0.09, 0.09]) limb([x, pivot[1], pivot[2]], [x, ra[1], ra[2]], 0.035, 0.028, RK, 4);
   limb(L(pivot, ra, 0.35), [0, fr(0.98), -0.18], 0.04, 0.04, cut ? BK : OR, 6); // the shock
   limb([0.11, fr(0.78), 0.26], [0.17, fr(0.86), -0.62], 0.03, 0.03, RK, 5); // the pipe
-  limb([0.17, fr(0.86), -0.52], [0.17, fr(0.96), -0.9], 0.055, 0.045, WH, 6); // the silencer
+  limb([0.17, fr(0.86), -0.52], [0.17, fr(0.96), -0.9], 0.055, 0.045, cut ? BK : WH, 6); // the silencer (cut: merged into the machine)
   // (the rider. The body rides on springs: the hips shifted and lifted by it, the torso swaying against the bike's lean
   // and pitched with the hips' fore and aft; the head held nearer level; the legs from the hips to the pegs, the arms from
   // the shoulders to the grips, each solved through its joint, so the knees and elbows take up the difference. In a whip
   // the pegs and bars have swung away with the machine, and the limbs reach for them)
   onBike = false;
-  const b = r.body ?? { roll: 0, shift: 0, fore: 0, rise: 0 }, crouch = Math.max(0, r.squash) * 0.12;
-  const hipC = [b.shift, fr(1.3) - crouch + b.rise, -0.2 + b.fore];
-  const zf = [0, 0, 1], tilt = 0.66 + b.fore * 1.6;
-  const tdir = rot([0, Math.cos(tilt), Math.sin(tilt)], zf, b.roll), right = rot([1, 0, 0], zf, b.roll);
-  const shC = add(hipC, tdir, 0.5);
+  // (the rider, a body working the machine. The body rides on springs (the sim's): its sway against the bike's lean, its
+  // shift, fore and aft, up and down; and the head, quicker, leading. Here it's put together as a chain of parts that
+  // don't all turn alike: the pelvis over the seat, twisted toward a whipped bike; the chest bent forward off it and
+  // turned less; the shoulders' line tipped under the effort of the bars; the head looking its own way. The legs reach
+  // from the hips to the pegs and the arms from the shoulders to the grips, each solved through its joint, and the
+  // joints are pushed differently on each side, so the openings under the elbows and between the knees and the machine
+  // are made by what the body's doing: one opens as the other closes)
+  const b = r.body ?? { roll: 0, shift: 0, fore: 0, rise: 0 }, sqz = Math.max(0, r.squash), steerA = r.steer ?? 0;
+  const yaw = (v: number[], a: number) => rot(v, [0, 1, 0], a), zf = [0, 0, 1];
+  // (the pelvis: standing on the pegs, off the seat; dropping toward it as a landing compresses (never into it))
+  const hipC = [b.shift, Math.max(fr(1.14), fr(1.3) - sqz * 0.3 + b.rise), -0.2 + b.fore + sqz * 0.04];
+  const tiltP = 0.5 + b.fore * 1.6 + sqz * 0.15, tiltC = tiltP + 0.25 + sqz * 0.12;
+  const sT = Math.max(-0.3, Math.min(0.3, steerA * 0.5 + wy * 0.35));
+  const upP = yaw(rot([0, Math.cos(tiltP), Math.sin(tiltP)], zf, b.roll), wy * 0.45), rgP = yaw(rot([1, 0, 0], zf, b.roll), wy * 0.45);
+  const upC = yaw(rot([0, Math.cos(tiltC), Math.sin(tiltC)], zf, b.roll + sT * 0.5), wy * 0.15), rgC = yaw(rot([1, 0, 0], zf, b.roll + sT), wy * 0.15);
+  const c1 = add(hipC, upP, 0.17), c2 = add(c1, upC, 0.17), c3 = add(c2, upC, 0.15), c4 = add(c3, upC, 0.05);
+  // (asymmetry: which side opens. e: the arms (the bars turned, the whip); k: the knees)
+  const e = Math.max(-1, Math.min(1, steerA * 1.5 + wy * 1.2 + b.roll * 1.5)), kk = Math.max(-1, Math.min(1, wy * 1.5 + r.lean * 1.2));
   for (const side of [-1, 1]) {
-    // (legs: the boot on its peg, the knee pushed forward and a little out, gripping the bike)
-    const ankle = B([side * 0.2, fr(0.8), -0.08]), hip = add(add(hipC, right, side * 0.12), tdir, -0.03);
-    const knee = ik(hip, ankle, 0.46, 0.46, Bd([side * 0.35, 0.15, 1]));
+    // (legs: the boot on its peg, the knee forward and out, one gripping the machine as the other comes away)
+    const ankle = B([side * 0.2, fr(0.8), -0.08]), hip = add(add(hipC, rgP, side * 0.12), upP, -0.03);
+    const knee = ik(hip, ankle, 0.46, 0.46, Bd([side * (0.35 + 0.35 * kk * side), 0.15, 1]));
     limb(B([side * 0.2, fr(0.7), -0.18]), B([side * 0.2, fr(0.7), 0.08]), 0.06, 0.05, WH, 5); // boot
     limb(ankle, L(ankle, knee, 0.45), 0.055, 0.06, WH, 5); // boot's leg
     limb(L(ankle, knee, 0.4), knee, 0.058, 0.07, BK, 6); // shin
     limb(L(knee, ankle, 0.35), add(knee, [0, 0.04, 0.03]), 0.05, 0.065, cut ? BK : OR, 5); // knee guard
     limb(knee, hip, 0.075, 0.095, BK, 6); // thigh
-    // (arms: the shoulder to the grip, the elbow up and out)
-    const shoulder = add(shC, right, side * 0.2), grip = B(bar(side * 0.33)), elbow = ik(shoulder, grip, 0.3, 0.3, [side * 1, 0.55, -0.25]);
-    limb(shoulder, elbow, 0.07, 0.055, OR, 6); limb(elbow, L(elbow, grip, 0.8), 0.05, 0.045, OR, 6);
+    // (arms: the shoulder to the grip; on the side the effort's on, the elbow up and out (a broad opening), on the other
+    // down and in (closing); the sleeve full at the shoulder, narrowing to the elbow, the forearm to the wrist)
+    const shoulder = add(add(c3, rgC, side * 0.2), upC, -0.02), grip = B(bar(side * 0.33));
+    // (compressed (a landing), the elbows go out and back, taking it, not up)
+    const elbow = ik(shoulder, grip, 0.3, 0.3, [side * (1 + 0.6 * e * side) * (1 + sqz * 0.5), 0.55 + 0.6 * e * side - sqz * 0.7, -0.25 - sqz * 0.3]);
+    limb(shoulder, elbow, cut ? 0.085 : 0.07, cut ? 0.048 : 0.055, OR, 6); limb(elbow, L(elbow, grip, 0.8), cut ? 0.058 : 0.05, cut ? 0.04 : 0.045, OR, 6);
     limb(L(elbow, grip, 0.75), grip, 0.045, 0.045, BK, 5); // glove
   }
-  limb(hipC, shC, 0.13, 0.16, OR, 6, 1.35, right); // jersey, the back broad
-  if (!cut) {
-    limb(L(hipC, shC, -0.05), L(hipC, shC, 0.42), 0.135, 0.14, M.BLACK, 6, 1.4, right); // its black lower panels
-    limb(L(hipC, shC, 0.75), L(hipC, shC, 1.06), 0.17, 0.12, M.BLACK, 6, 1.3, right); // shoulders, the neck brace
+  if (cut) {
+    // (the jersey: one shape, lofted through the pelvis, the waist (narrowest), the chest, the shoulders (broadest,
+    // rounded over the top); its two parts each with their own lean and twist, so it bends between chest and pelvis)
+    const ring = (c: number[], up: number[], rg: number[], a: number, d: number) => {
+      const rr = nrm(sub(rg, up.map((v) => v * (rg[0] * up[0] + rg[1] * up[1] + rg[2] * up[2])))), f = crs(rr, up), n = 10;
+      return Array.from({ length: n }, (_, k) => { const th = (k / n) * Math.PI * 2, cs = Math.cos(th), sn = Math.sin(th); return W(add(add(c, rr, Math.sign(cs) * Math.abs(cs) ** 0.8 * a), f, Math.sign(sn) * Math.abs(sn) ** 0.8 * d)); });
+    };
+    const rings = [ring(hipC, upP, rgP, 0.16, 0.11), ring(c1, upP, rgP, 0.145, 0.1), ring(c2, upC, rgC, 0.2, 0.12), ring(c3, upC, rgC, 0.235, 0.11), ring(c4, upC, rgC, 0.15, 0.07)];
+    for (let q = 0; q < rings.length - 1; q++) for (let k = 0; k < 10; k++) { const k1 = (k + 1) % 10; m.quad(rings[q][k], rings[q][k1], rings[q + 1][k1], rings[q + 1][k], OR); }
+    const bot = W(hipC), top = W(add(c4, upC, 0.03));
+    for (let k = 0; k < 10; k++) { const k1 = (k + 1) % 10; m.tri(bot, rings[0][k1], rings[0][k], OR); m.tri(top, rings[4][k], rings[4][k1], OR); }
+  } else {
+    limb(hipC, c3, 0.13, 0.16, OR, 6, 1.35, rgC); // jersey, the back broad
+    limb(L(hipC, c3, -0.05), L(hipC, c3, 0.42), 0.135, 0.14, M.BLACK, 6, 1.4, rgC); // its black lower panels
+    limb(L(hipC, c3, 0.75), L(hipC, c3, 1.06), 0.17, 0.12, M.BLACK, 6, 1.3, rgC); // shoulders, the neck brace
   }
-  // (the head: on the neck, forward of the shoulders, rolled back toward level against the bike's lean)
-  const hRoll = b.roll - r.lean * 0.5, hx = rot([1, 0, 0], zf, hRoll), hy = rot([0, 1, 0], zf, hRoll), hz = zf;
-  const hc = add(add(shC, tdir, 0.17), [0, 0.02, 0.12]);
+  // (the head: on the neck, forward of the shoulders, its own way: turned where it looks (and a little against a whip,
+  // toward where it'll land), nodding down toward the ground as it comes, rolled back toward level against the lean)
+  const look = (b.look ?? 0) - wy * 0.2, nod = b.nod ?? 0, hRoll = b.roll - r.lean * 0.5;
+  let hx = yaw([1, 0, 0], look), hy = [0, 1, 0], hz = yaw(zf, look);
+  hz = rot(hz, hx, nod); hy = rot(hy, hx, nod); hx = rot(hx, hz, hRoll); hy = rot(hy, hz, hRoll);
+  const hc = add(add(c3, nrm(add(upC, [0, 0.6, 0])), 0.17), [0, 0.02, 0.12]);
+  if (cut) limb(add(c3, upC, 0.02), add(hc, hy, -0.08), 0.06, 0.055, BK, 6); // the neck: one dark cut between helmet and jersey
   // (the helmet: a faceted ball, a little long front to back. Cut: cream, its one dark cut the goggles and strap as one
   // band, an orange stripe over the top)
   const HM = cut ? WH : M.ORANGE;

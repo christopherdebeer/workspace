@@ -77,7 +77,7 @@ export class Renderer {
   private chunks = new Map<number, Buf>(); private ranges: Buf; private valley: Buf; private rider: Buf; private shadow: Buf; private flags: Buf; private ruts: Buf; private track: Buf;
   /** how the rider's drawn ('cut': flat masses, lit for the picture), a whip held for a pinned frame (rad), and whether
    * the world's drawn at all (`world=0`: the rider alone on the sky, for judging its shapes) */
-  style: 'facets' | 'cut' = 'facets'; whip = 0; world = true;
+  style: 'facets' | 'cut' | 'sil' = 'cut'; whip = 0; world = true;
   /** your own track, fed after each step of the sim */
   readonly trail: Trail;
   vp: Mat = new Float32Array(16); W = 1; H = 1; dpr = 1;
@@ -122,7 +122,7 @@ export class Renderer {
     gl.enable(gl.DEPTH_TEST); gl.disable(gl.CULL_FACE);
     gl.useProgram(this.prog);
     gl.uniformMatrix4fv(this.u.uVP, false, this.vp); gl.uniform3fv(this.u.uEye, new Float32Array(view.eye));
-    const body = buildRider({ x: r.x, y: r.y, z: r.z, heading: r.heading, pitch: r.pitch, lean: r.lean, squash: r.squash, crashT: r.crashT, air: r.air, steer: r.steer, yFront: r.yFront, yRear: r.yRear, dist: r.dist, body: r.body, whip: this.whip, style: this.style }, t);
+    const body = buildRider({ x: r.x, y: r.y, z: r.z, heading: r.heading, pitch: r.pitch, lean: r.lean, squash: r.squash, crashT: r.crashT, air: r.air, steer: r.steer, yFront: r.yFront, yRear: r.yRear, dist: r.dist, body: r.body, whip: this.whip || r.whip, style: this.style }, t);
     // (the rider, cut: lit for the picture rather than by the sun, from above, behind the eye and to its left, so what
     // faces you is one flat field and only the side turned toward the eye's right (the flank, the outside of each arm and
     // leg, the undersides) takes its one cut)

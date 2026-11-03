@@ -13,7 +13,9 @@ import { ground } from './ground';
 
 export const G = 9.8, VMAX = 46;
 export type Event = { kind: 'roost' | 'land' | 'wall' | 'launch' | 'crash' | 'checkpoint' | 'respawn'; x: number; y: number; z: number; k: number };
-export interface Input { steer: number; brake: boolean }
+/** steer (−1…1, + right), brake; and the whip (−1…1): what the bars do in the air, throwing the bike out beneath you (the
+ * player's steering, in the air; the sim's own rider never whips) */
+export interface Input { steer: number; brake: boolean; whip?: number }
 
 export class Rider {
   s = 2; u = 0; psi = 0; v = 18;
@@ -25,9 +27,13 @@ export class Rider {
   /** the front's steering angle (+ right; opposite lock in a slide), and the ground under each wheel (for drawing the
    * bike standing on both) */
   steer = 0; yFront = 0; yRear = 0;
+  /** the whip: in the air the bike swung out sideways beneath the rider (rad, + its nose to the right), sprung toward
+   * what the bars ask and back when they let go. Land with it still out and the bike comes down yawed off the way it's
+   * going and slides it straight, scrubbing pace; too far out (past ~34°) and it's a crash */
+  whip = 0; private vWhip = 0;
   /** the rider's body on the bike, sprung (it lags, overshoots, settles): its roll against the bike's lean, its shift
    * across, fore and aft, and up and down (the legs and arms taking the bumps) */
-  body = { roll: 0, shift: 0, fore: 0, rise: 0, vRoll: 0, vShift: 0, vFore: 0, vRise: 0 };
+  body = { roll: 0, shift: 0, fore: 0, rise: 0, look: 0, nod: 0, vRoll: 0, vShift: 0, vFore: 0, vRise: 0, vLook: 0, vNod: 0 };
   private yawS = 0; private vWas = 0; private vyWas = 0;
   /** the run: metres down, best air, crashes, a score */
   dist = 0; bestAir = 0; crashes = 0; jumps = 0;
@@ -49,7 +55,7 @@ export class Rider {
         // (back to the last checkpoint flag passed, just past it, on the line, and going again)
         this.u = 0; this.psi = 0; this.v = 16; this.air = false; this.vy = 0; this.vyGround = NaN; this.s = this.checkpoint + 3;
         while (!this.course.point(this.s, 0).surface || this.course.at(this.s).feature !== 'none') this.s += 1;
-        this.place(); this.sPrev = this.s; this.headingWas = this.travel; this.lean = 0; this.squash = 0; this.wheels();
+        this.place(); this.sPrev = this.s; this.headingWas = this.travel; this.lean = 0; this.squash = 0; this.wheels(); this.whip = this.vWhip = 0;
         this.ev('respawn', this.checkpoints);
       }
       else { this.vy -= G * dt; this.x += this.vx * dt; this.y += this.vy * dt; this.z += this.vz * dt; this.pitch += dt * 3; }
@@ -164,11 +170,19 @@ export class Rider {
     const b = this.body, acc = (this.v - this.vWas) / dt; this.vWas = this.v;
     const lurch = this.air ? 0 : Math.max(-3, Math.min(3, this.vy - this.vyWas)) / dt; this.vyWas = this.vy;
     const spring = (x: number, v: number, to: number, w: number, z: number, force: number) => { const a = -w * w * (x - to) - 2 * z * w * v + force; v += a * dt; return [x + v * dt, v]; };
-    [b.roll, b.vRoll] = spring(b.roll, b.vRoll, -this.lean * 0.45, 7, 0.45, 0);
+    // (in the air: up off the seat at first, the limbs long; coming down, the hips settle back toward it and the weight
+    // goes forward, ready for the ground)
+    const coming = this.air && this.vy < -2;
+    // (the counter-lean: the bike tips further than the body, which stays nearer upright over it)
+    [b.roll, b.vRoll] = spring(b.roll, b.vRoll, -this.lean * 0.7, 7, 0.45, 0);
     [b.shift, b.vShift] = spring(b.shift, b.vShift, this.slip * 0.12 - this.lean * 0.05, 8, 0.4, 0);
-    [b.fore, b.vFore] = spring(b.fore, b.vFore, this.air ? -0.04 : 0, 8, 0.3, -Math.max(-25, Math.min(25, acc)) * 0.7);
-    [b.rise, b.vRise] = spring(b.rise, b.vRise, this.air ? 0.07 : 0, 10, 0.28, -Math.max(-40, Math.min(40, lurch)) * 0.3);
-    b.fore = Math.max(-0.16, Math.min(0.14, b.fore)); b.rise = Math.max(-0.14, Math.min(0.1, b.rise)); b.roll = Math.max(-0.4, Math.min(0.4, b.roll)); b.shift = Math.max(-0.12, Math.min(0.12, b.shift));
+    [b.fore, b.vFore] = spring(b.fore, b.vFore, this.air ? (coming ? 0.08 : -0.06) : 0, 8, 0.3, -Math.max(-25, Math.min(25, acc)) * 0.7);
+    [b.rise, b.vRise] = spring(b.rise, b.vRise, this.air ? (coming ? 0 : 0.17) : 0, 10, 0.28, -Math.max(-40, Math.min(40, lurch)) * 0.3);
+    // (the head, quicker than the body, so it leads: it looks where the bike's going (into the turn, along a slide), down
+    // toward the ground as you come down to it, and up and out at the top of a flight)
+    [b.look, b.vLook] = spring(b.look, b.vLook, Math.max(-0.6, Math.min(0.6, this.steerK * 0.3 + this.slip * 0.8)), 11, 0.6, 0);
+    [b.nod, b.vNod] = spring(b.nod, b.vNod, this.air ? (coming ? 0.34 : -0.08) : 0.06 + Math.max(0, this.squash) * 0.25, 9, 0.6, 0);
+    b.fore = Math.max(-0.16, Math.min(0.14, b.fore)); b.rise = Math.max(-0.14, Math.min(0.18, b.rise)); b.roll = Math.max(-0.5, Math.min(0.5, b.roll)); b.shift = Math.max(-0.12, Math.min(0.12, b.shift));
   }
   private launch(yBefore: number, dt: number, edge: boolean, lip = !edge) {
     // (off: the flight keeps the way you were carried, and the rise the ground was giving you; a lip gives a little pop)
@@ -180,6 +194,10 @@ export class Rider {
   }
   private fly(dt: number, inp: Input) {
     this.airT += dt;
+    // (the whip: only once you're truly off the ground (a crest's hop is too short to throw the bike), toward ~49° at full
+    // lock, sprung so it swings out and comes back)
+    const wTo = (inp.whip ?? 0) * 0.85 * Math.max(0, Math.min(1, (this.airT - 0.2) / 0.2)), wk = 60;
+    this.vWhip += (-wk * (this.whip - wTo) - 2 * 0.75 * Math.sqrt(wk) * this.vWhip) * dt; this.whip += this.vWhip * dt;
     // (a little steer in the air, the bike's heading turned and the flight with it)
     const turn = -this.steerK * 0.6 * dt, c = Math.cos(turn), s = Math.sin(turn);
     const nvx = this.vx * c + this.vz * s, nvz = -this.vx * s + this.vz * c; this.vx = nvx; this.vz = nvz;
@@ -202,10 +220,13 @@ export class Rider {
       // onto it, too hard, or far down the drop: a crash)
       const vh = Math.hypot(this.vx, this.vz) || 1, ah = this.groundAt(this.x + this.vx / vh, this.z + this.vz / vh);
       const imp = -(this.vy + vh * (sy - ah)), gap = Math.abs(this.u) <= half && !p.surface;
-      if (gap || sy - this.y > 1.2 || imp > 15 || this.u > half + 14) { this.crash(); return; }
+      if (gap || sy - this.y > 1.2 || imp > 15 || this.u > half + 14 || Math.abs(this.whip) > 0.6) { this.crash(); return; }
       // (else on the ground again; a hard one squashes and costs a little)
       this.air = false; this.y = sy; this.v = Math.max(6, Math.hypot(this.vx, this.vz) * (imp > 14 ? 0.86 : imp > 8 ? 0.97 : 1));
       this.travel = Math.atan2(this.vx, this.vz); this.headingWas = this.travel;
+      // (down with the bike still whipped: it lands yawed off the way it's going (its nose right of it: heading less) and
+      // the slide takes it straight)
+      if (this.whip) { this.slip = wrap(this.slip - this.whip); this.heading = this.travel + this.slip; this.whip = this.vWhip = 0; }
       this.bestAir = Math.max(this.bestAir, this.airT); this.squash = Math.min(1, imp / 12); this.vyGround = NaN;
       this.ev('land', Math.min(1, imp / 10));
       this.wheels();

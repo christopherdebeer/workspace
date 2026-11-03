@@ -32,7 +32,7 @@ let rider = new Rider(course);
 const rd = new Renderer(world, speed, course);
 rd.resize(); addEventListener('resize', () => rd.resize());
 rd.speed = q.get('fx') !== '0'; rd.fog = q.get('fog') !== '0';
-rd.style = q.get('rider') === 'cut' ? 'cut' : 'facets'; rd.whip = (Number(q.get('whip') ?? 0) * Math.PI) / 180; rd.world = q.get('world') !== '0';
+rd.style = q.get('rider') === 'facets' ? 'facets' : q.get('rider') === 'sil' ? 'sil' : 'cut'; rd.whip = (Number(q.get('whip') ?? 0) * Math.PI) / 180; rd.world = q.get('world') !== '0';
 const sound = new Sound();
 
 // (settings, kept in this browser where it can)
@@ -162,7 +162,7 @@ function loop(now: number) {
     while (acc >= 1 / 120) {
       acc -= 1 / 120; t += 1 / 120;
       const steer = auto ? autoSteer(rider) : steerKeys || inp.steer;
-      rider.step(1 / 120, { steer, brake: braking });
+      rider.step(1 / 120, { steer, brake: braking, whip: auto ? 0 : steer });
       rd.trail.add(rider);
     }
   }

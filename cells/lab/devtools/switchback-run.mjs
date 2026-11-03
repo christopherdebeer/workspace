@@ -63,4 +63,21 @@ for (const seed of seeds.length ? seeds : [1, 2, 3]) {
   const ok = Math.min(...gaps) >= 250 && lastG > first * 2 && r.crashes > 0 && r.s > cp && r.s < cp + 12; if (!ok) bad++;
   console.log(`${ok ? 'ok  ' : 'FAIL'}  checkpoints: ${fl.length} flags in 8 km, ${gaps.slice(0, 3).join(', ')} m apart at the top, ${gaps.slice(-3).join(', ')} m by the end; crashed past checkpoint ${r.checkpoints} (s ${cp}), back at s ${r.s.toFixed(1)}`);
 }
+// (the whip: steering in the air throws the bike out beneath you. Thrown over a kicker's gap and let go, it swings back
+// and lands; held out into the landing, it's a crash)
+{
+  const go = (hold) => {
+    const r = new Rider(new Course(1)); let maxW = 0, slipLand = 0, wasAir = false, t = 0, onGap = false;
+    while (t < 9) {
+      const f = r.course.at(r.s).feature; if (f === 'gap') onGap = true;
+      r.step(1 / 120, { steer: autoSteer(r), brake: false, whip: r.air && onGap && (hold || f === 'gap') ? 1 : 0 });
+      maxW = Math.max(maxW, Math.abs(r.whip));
+      if (wasAir && !r.air && r.crashT <= 0 && onGap && !slipLand) slipLand = Math.abs(r.slip) || 1e-9;
+      wasAir = r.air; t += 1 / 120;
+    }
+    return { crashes: r.crashes, maxW, slipLand };
+  };
+  const a = go(false), b = go(true), ok = a.crashes === 0 && a.maxW > 0.4 && b.crashes > 0; if (!ok) bad++;
+  console.log(`${ok ? 'ok  ' : 'FAIL'}  whip: thrown over the gap to ${(a.maxW * 57.3).toFixed(0)}° and let go, landed (${a.crashes} crashes, ${(a.slipLand * 57.3).toFixed(0)}° of slide); held out into the landing, ${b.crashes ? 'a crash' : 'no crash'}`);
+}
 process.exit(bad ? 1 : 0);
