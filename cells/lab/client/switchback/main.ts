@@ -77,7 +77,7 @@ function hint() { if (!hinted) { hinted = true; hintEl.classList.add('gone'); } 
 
 // (start down the hill if asked, ridden by the sim's rider)
 const T0 = Number(q.get('t') ?? 0);
-for (let t = 0; t < T0; t += 1 / 120) rider.step(1 / 120, { steer: autoSteer(rider), brake: false });
+for (let t = 0; t < T0; t += 1 / 120) { rider.step(1 / 120, { steer: autoSteer(rider), brake: false }); rd.trail.add(rider); }
 rider.events.length = 0;
 
 // (the chase eye: behind and above, over the drop-side shoulder, swinging round after the bike, never into the ground;
@@ -133,7 +133,7 @@ function open() {
 function close() { menuOpen = false; paused = false; menu.classList.remove('on'); menu.setAttribute('inert', ''); sound.hush(false); }
 function begin() {
   // (a fresh run: a new rider at the top, the eye with it, yours to ride)
-  rider = new Rider(course); auto = false; running = true; sound.reset(); seen = 0; snapEye();
+  rider = new Rider(course); auto = false; running = true; sound.reset(); seen = 0; snapEye(); rd.trail.clear();
   hinted = false; hintEl.classList.remove('gone');
 }
 go.addEventListener('click', () => { sound.start(); if (!running) begin(); close(); });
@@ -162,6 +162,7 @@ function loop(now: number) {
       acc -= 1 / 120; t += 1 / 120;
       const steer = auto ? autoSteer(rider) : steerKeys || inp.steer;
       rider.step(1 / 120, { steer, brake: braking });
+      rd.trail.add(rider);
     }
   }
   for (let i = seen; i < rider.events.length; i++) {

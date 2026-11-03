@@ -4,7 +4,7 @@
  *
  * The world is made in chunks along the line (a chunk: 48 m of it): the cross-section at every station, from high up the
  * wall on the left to far down the drop on the right, jittered so its faces break; rock where it's steep and snow where
- * it isn't; the pale track laid over it, with its ruts; the fence along the drop, its posts and tape; flags on the wall
+ * it isn't; the pale track laid over it; the fence along the drop, its posts and tape; flags on the wall
  * side; kickers on black trestles; black pines down the drop. Behind it all a ring of far ranges, blue, their tops snow,
  * that keeps its distance from the eye.
  */
@@ -24,7 +24,7 @@ export const PALETTE: string[][] = [
   ['#f4f1ee', '#e3dee0', '#8c9be0', '#4f6bd8'], // far snow: white where it's lit, blue in its shade
   ['#6b5348', '#4c3b34', '#3d2f2a', '#2c221e'], // umber
   ['#a399a2', '#a399a2', '#a399a2', '#a399a2'], // shadow on snow
-  ['#b9aaa6', '#a8999a', '#8f8394', '#6f6c88'], // ruts
+  ['#5f5a68', '#4d4858', '#3d3a4a', '#2f2d3d'], // ruts: the track's shade, nearly charcoal
   ['#535e8a', '#2c3768', '#162140', '#101a36'], // navy
   // (the backdrop: one family of blues, lighter and flatter the further off; no charcoal in it)
   ['#5b80f2', '#4c74f0', '#3d66ec', '#3560e6'], // the farthest range
@@ -103,6 +103,13 @@ export class Mesh {
 
 export const CHUNK = 48;
 
+/** the track's row at station r: column k (0 the wall-side edge … 3 the drop-side edge) across it, where it stands (u) and
+ * how far above the line (dy): the edges ragged in u, the two inner columns rough in height */
+export function trackCol(seed: number, r: number, k: number, half: number): [number, number] {
+  const f = [-1, -0.35, 0.3, 1][k];
+  return [f * half + (k % 3 ? 0 : (hash(seed, r, k, 5) - 0.5) * 1.1), 0.02 + (k % 3 ? (hash(seed, r, k) - 0.5) * 0.12 : 0)];
+}
+
 /** build chunk n of the world (stations n·CHUNK … (n+1)·CHUNK) */
 export function buildChunk(c: Course, n: number) {
   const m = new Mesh(), s0 = n * CHUNK, s1 = s0 + CHUNK;
@@ -124,21 +131,16 @@ export function buildChunk(c: Course, n: number) {
     // (things on the ground here)
     for (let t = 0; t < STEP; t++) dress(c, m, s + t, A);
   }
-  // (the track: a metre a row, three facets across, its ruts; a kicker's ramp and deck carried on trestles)
+  // (the track: a metre a row, three facets across; a kicker's ramp and deck carried on trestles. Its ruts are drawn
+  // near the eye only, frame by frame: ruts.ts)
   for (let s = s0; s < s1; s++) {
     const a = c.at(s);
     if (a.feature === 'gap') continue;
     const e = c.at(s + 1).feature === 'gap' ? s + 0.999 : s + 1;
-    const cols = [-1, -0.35, 0.3, 1];
-    const row = (ss: number) => { const half = a.width / 2, r = Math.round(ss); return cols.map((f, k) => { const p = c.point(ss, f * half + (k % 3 ? 0 : (hash(c.seed, r, k, 5) - 0.5) * 1.1)); return [p.x, p.y + 0.02 + (k % 3 ? (hash(c.seed, r, k) - 0.5) * 0.12 : 0), p.z]; }); };
+    const row = (ss: number) => { const half = a.width / 2, r = Math.round(ss); return [0, 1, 2, 3].map((k) => { const [u, dy] = trackCol(c.seed, r, k, half), p = c.point(ss, u); return [p.x, p.y + dy, p.z]; }); };
     const R0 = row(s), R1 = row(e);
     const deck = a.feature === 'ramp' || a.feature === 'deck';
     for (let k = 0; k < 3; k++) m.quad(R0[k], R0[k + 1], R1[k + 1], R1[k], M.TRACK);
-    // (ruts: two worn lines, a shade down, a hair above)
-    if (!deck) for (const u of [-1.3, 1.1]) {
-      const q = (ss: number, du: number) => { const p = c.point(ss, u + du + (hash(c.seed, Math.round(ss / 6), u) - 0.5) * 0.8); return [p.x, p.y + 0.05, p.z]; };
-      m.quad(q(s, -0.22), q(s, 0.22), q(e, 0.22), q(e, -0.22), M.RUT);
-    }
     if (deck) kickerPiece(c, m, s, e, a.feature === 'ramp');
   }
   return new Float32Array(m.v);

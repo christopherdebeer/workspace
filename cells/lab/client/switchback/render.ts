@@ -14,6 +14,7 @@
 import { Course } from './course';
 import { CHUNK, PALETTE, buildChunk, buildFlags, buildRanges, buildRider, buildValley } from './mesh';
 import type { Rider, Event } from './sim';
+import { buildRuts, Trail } from './ruts';
 
 const VS = `#version 300 es
 in vec4 aP; uniform mat4 uVP; uniform vec3 uOff; out vec3 vW; flat out int vM;
@@ -73,7 +74,9 @@ class Buf {
 export class Renderer {
   gl: WebGL2RenderingContext; ctx: CanvasRenderingContext2D;
   private prog: WebGLProgram; private u: Record<string, WebGLUniformLocation | null> = {};
-  private chunks = new Map<number, Buf>(); private ranges: Buf; private valley: Buf; private rider: Buf; private shadow: Buf; private flags: Buf;
+  private chunks = new Map<number, Buf>(); private ranges: Buf; private valley: Buf; private rider: Buf; private shadow: Buf; private flags: Buf; private ruts: Buf; private track: Buf;
+  /** your own track, fed after each step of the sim */
+  readonly trail: Trail;
   vp: Mat = new Float32Array(16); W = 1; H = 1; dpr = 1;
   fx = new Fx();
   /** for judging a frame: the speed layer (`fx=0` hides it) and the distance fade (`fog=0` shows each face's own colour) */
@@ -90,7 +93,7 @@ export class Renderer {
     gl.useProgram(p);
     gl.uniform3fv(this.u.uPal, new Float32Array(PALETTE.flat().map(hex).flat()));
     gl.uniform3fv(this.u.uSun, new Float32Array(SUN));
-    this.ranges = new Buf(gl, buildRanges(course.seed)); this.valley = new Buf(gl, buildValley(course.seed)); this.rider = new Buf(gl, null); this.shadow = new Buf(gl, null); this.flags = new Buf(gl, null);
+    this.ranges = new Buf(gl, buildRanges(course.seed)); this.valley = new Buf(gl, buildValley(course.seed)); this.rider = new Buf(gl, null); this.shadow = new Buf(gl, null); this.flags = new Buf(gl, null); this.ruts = new Buf(gl, null); this.track = new Buf(gl, null); this.trail = new Trail(course);
   }
   resize() {
     this.dpr = Math.min(2, devicePixelRatio || 1);
@@ -121,6 +124,11 @@ export class Renderer {
     gl.clear(gl.DEPTH_BUFFER_BIT);
     gl.uniform1f(this.u.uFog, this.fog ? 1 : 0); gl.uniform3f(this.u.uOff, 0, 0, 0);
     for (const b of this.chunks.values()) b.draw();
+    // (the ruts near the eye, and your own track, a hair over the road)
+    gl.enable(gl.POLYGON_OFFSET_FILL); gl.polygonOffset(-1, -1);
+    this.ruts.set(buildRuts(this.course, r.s), true); this.ruts.draw();
+    this.track.set(this.trail.mesh(), true); this.track.draw();
+    gl.disable(gl.POLYGON_OFFSET_FILL);
     // (the rider, and its shadow flattened along the sun onto the ground under it)
     const body = buildRider({ x: r.x, y: r.y, z: r.z, heading: r.heading, pitch: r.pitch, lean: r.lean, squash: r.squash, crashT: r.crashT, air: r.air, steer: r.steer, yFront: r.yFront, yRear: r.yRear, dist: r.dist, body: r.body }, t);
     this.rider.set(body, true); this.rider.draw();
