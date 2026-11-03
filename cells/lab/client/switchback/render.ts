@@ -88,6 +88,11 @@ export class Renderer {
   fx = new Fx();
   /** for judging a frame: the speed layer (`fx=0` hides it) and the distance fade (`fog=0` shows each face's own colour) */
   speed = true; fog = true;
+  /** the air on the rider: three streaks set at the helmet and the bars (as they've been), or peeling off the posed
+   * figure's outline (`wake=peel`, a study), or none (`wake=0`) */
+  wake: 'fixed' | 'peel' | 'none' = 'fixed';
+  /** this frame's posed rider (its vertices, four floats each), for the air peeling off it */
+  body: Float32Array | null = null;
   constructor(readonly canvas: HTMLCanvasElement, readonly overlay: HTMLCanvasElement, readonly course: Course) {
     const gl = canvas.getContext('webgl2', { antialias: true, preserveDrawingBuffer: true });
     if (!gl) throw new Error('no webgl2');
@@ -126,7 +131,7 @@ export class Renderer {
     gl.enable(gl.DEPTH_TEST); gl.disable(gl.CULL_FACE);
     gl.useProgram(this.prog);
     gl.uniformMatrix4fv(this.u.uVP, false, this.vp); gl.uniform3fv(this.u.uEye, new Float32Array(view.eye));
-    const body = buildRider({ x: r.x, y: r.y, z: r.z, heading: r.heading, pitch: r.pitch, lean: r.lean, squash: r.squash, crashT: r.crashT, air: r.air, steer: r.steer, yFront: r.yFront, yRear: r.yRear, dist: r.dist, body: r.body, whip: this.whip || r.whip, style: this.style }, t);
+    const body = this.body = buildRider({ x: r.x, y: r.y, z: r.z, heading: r.heading, pitch: r.pitch, lean: r.lean, squash: r.squash, crashT: r.crashT, air: r.air, steer: r.steer, yFront: r.yFront, yRear: r.yRear, dist: r.dist, body: r.body, whip: this.whip || r.whip, style: this.style }, t);
     // (the rider, cut: lit for the picture rather than by the sun, from above, behind the eye and to its left, so what
     // faces you is one flat field and only the side turned toward the eye's right (the flank, the outside of each arm and
     // leg, the undersides) takes its one cut)
@@ -178,10 +183,14 @@ type Gust = { x: number; y: number; z: number; w: number; col: string };
  * charcoal, the ground taking it (braking, sliding) */
 const AIR_COLS = ['#ffffff', '#ffffff', '#f1ece8', '#d9d0ca'], PUSH_COLS = ['#e85a0d', '#ff7428', '#e85a0d'], GRIT_COLS = ['#24262e', '#2c2d32', '#3a3b44'];
 type Streak = { a: number; r: number; w: number; len: number; col: string; sp: number };
+/** a streak of air peeling off the rider (`wake=peel`): born at the point of the posed figure that stands out furthest
+ * in its direction on the screen (vertex v), it peels away from the figure, never across it, its root kept on that
+ * point as the body turns, and is gone in a moment; its length and width in the figure's own size on the screen */
+type Peel = { v: number; age: number; life: number; len: number; w: number; col: string };
 
 /** the speed layer: shards, smears, wake and debris, all flat vector shapes */
 export class Fx {
-  debris: Chunk[] = []; gusts: Gust[] = []; pushes: Streak[] = []; grit: Streak[] = [];
+  debris: Chunk[] = []; gusts: Gust[] = []; pushes: Streak[] = []; grit: Streak[] = []; peels: Peel[] = []; private peelDue = 0; private peelP = new Float32Array(0);
   /** what the ride's doing, as the speed layer (and the eye's field of view) read it: the push (0…1, speeding up on the
    * ground), the brake (0…1, slowing), a shift's pulse (at each change up the engine's gears, as the sound has them) and a
    * landing's jolt */
@@ -251,8 +260,10 @@ export class Fx {
         wedge(a, b, Math.max(1, px * 0.9), col);
       }
     }
+    // (the air peeling off the rider, `wake=peel`)
+    if (rd.wake === 'peel') this.peel(rd, r, dt, pace, eye, view, wedge);
     // (the rider's wake: a few thin wedges trailing from the helmet, the tail and the bars, back along its way)
-    if (pace > 0.15 && r.crashT <= 0) {
+    if (rd.wake === 'fixed' && pace > 0.15 && r.crashT <= 0) {
       const fx = Math.sin(r.heading), fz = Math.cos(r.heading), rx = -Math.cos(r.heading), rz = Math.sin(r.heading);
       // (the air off the helmet and the bars, as fast as you're going; the orange off the tail only as the engine pushes)
       const anchors: [number, number, number, string, number, number][] = [[0, 2.05, 0.15, '#ffffff', 0.04, 1], [-0.34, 1.1, 0.48, '#ffffff', 0.02, 1], [0.34, 1.1, 0.48, '#d9d0ca', 0.02, 1], [0.2, 0.98, -1.0, '#e85a0d', 0.04, this.push]];
@@ -326,5 +337,71 @@ export class Fx {
     } else { this.pushes.length = 0; this.grit.length = 0; }
   }
 
+  /**
+   * The air peeling off the rider (`wake=peel`, a study): streaks born now and then at the figure's outline as it's posed
+   * this frame (whatever it's doing: leaning, whipped, upside down in a flip), each peeling outward, away from the figure
+   * and back with the air, and gone in a fraction of a second. More of them the faster you go (none below the pace the
+   * fixed streaks showed at), fewer braking; only where the air's leaving the figure (out from the point the eye flies
+   * at: mostly its sides), and on the ground not off the wheels at the road. A still or paused frame holds them as they
+   * are, or, if there are none yet, shows a moment's worth.
+   */
+  private peel(rd: Renderer, r: Rider, dt: number, pace: number, eye: number[], view: View, wedge: (a: number[], b: number[], w: number, col: string) => void) {
+    const B = rd.body, R = this.rand;
+    if (!B || r.crashT > 0) { this.peels.length = 0; return; }
+    // (the figure on the screen: each vertex (projected as rd.project does, without the garbage), its box and its middle)
+    const n = B.length >> 2, P = this.peelP.length >= n * 2 ? this.peelP : (this.peelP = new Float32Array(n * 2)), m = rd.vp;
+    let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity, cx = 0, cy = 0, k = 0;
+    for (let i = 0; i < n; i++) {
+      const X = B[i * 4], Y = B[i * 4 + 1], Z = B[i * 4 + 2], w = m[3] * X + m[7] * Y + m[11] * Z + m[15];
+      if (w < 0.4) { P[i * 2] = NaN; continue; }
+      const px = ((m[0] * X + m[4] * Y + m[8] * Z + m[12]) / w * 0.5 + 0.5) * rd.W, py = (0.5 - (m[1] * X + m[5] * Y + m[9] * Z + m[13]) / w * 0.5) * rd.H;
+      P[i * 2] = px; P[i * 2 + 1] = py; cx += px; cy += py; k++;
+      if (px < x0) x0 = px; if (px > x1) x1 = px; if (py < y0) y0 = py; if (py > y1) y1 = py;
+    }
+    if (k < 3) return;
+    cx /= k; cy /= k;
+    const S = Math.max(x1 - x0, y1 - y0);
+    // (where the air streams from on the screen: the point the eye's flying at)
+    const vp = rd.project([eye[0] + (view.target[0] - eye[0]) * 20, eye[1] + (view.target[1] - eye[1]) * 20, eye[2] + (view.target[2] - eye[2]) * 20]) ?? [rd.W / 2, rd.H * 0.42, 1];
+    const rate = pace > 0.15 ? ((0.3 + pace * pace) * 26 + (r.air ? 10 : 0)) * (1 - this.brake * 0.6) : 0;
+    const born = () => {
+      // (where on the outline: a direction out from the figure, and the point standing out furthest that way; taken only
+      // where the air's leaving the figure there (streaming out from the point the eye flies at, it leaves by the sides,
+      // and by the top only when the figure's above that point), and on the ground not off the wheels at the road)
+      for (let tries = 0; tries < 8; tries++) {
+        const ang = R() * Math.PI * 2, dx = Math.cos(ang), dy = Math.sin(ang);
+        let v = -1, best = -Infinity;
+        for (let i = 0; i < n; i++) { const d = P[i * 2] * dx + P[i * 2 + 1] * dy; if (d > best) { best = d; v = i; } } // (NaN never wins)
+        if (v < 0) return;
+        const x = P[v * 2], y = P[v * 2 + 1], fl = Math.hypot(x - vp[0], y - vp[1]) || 1;
+        if (((x - vp[0]) * dx + (y - vp[1]) * dy) / fl < 0.25) continue;
+        if (!r.air && y > y0 + (y1 - y0) * 0.75) continue;
+        this.peels.push({ v, age: 0, life: 0.16 + R() * 0.18, len: (0.18 + R() * 0.24) * (1 + pace * 0.4), w: 0.012 + R() * 0.016, col: AIR_COLS[Math.floor(R() * AIR_COLS.length)] });
+        return;
+      }
+    };
+    if (dt > 0) {
+      this.peelDue += rate * dt;
+      while (this.peelDue >= 1) { this.peelDue -= 1; born(); }
+    } else if (!this.peels.length && rate > 0) {
+      // (a still frame: a moment's worth, at every age)
+      const m = Math.round(rate * 0.25);
+      for (let i = 0; i < m; i++) { born(); const q = this.peels[this.peels.length - 1]; if (q) q.age = R() * q.life; }
+    }
+    for (const q of this.peels) {
+      q.age += dt;
+      const x = P[q.v * 2], y = P[q.v * 2 + 1];
+      if (!(x === x) || q.age >= q.life) { q.age = q.life; continue; }
+      // (with the air, streaming out from the point the eye flies at, but held off the figure: never turned back across it)
+      let nx = x - cx, ny = y - cy; const nl = Math.hypot(nx, ny) || 1; nx /= nl; ny /= nl;
+      let fx = x - vp[0], fy = y - vp[1]; const fl = Math.hypot(fx, fy) || 1; fx /= fl; fy /= fl;
+      let dx = fx * 0.75 + nx * 0.25, dy = fy * 0.75 + ny * 0.25; let dl = Math.hypot(dx, dy) || 1; dx /= dl; dy /= dl;
+      if (dx * nx + dy * ny < 0.3) { dx += nx; dy += ny; dl = Math.hypot(dx, dy) || 1; dx /= dl; dy /= dl; }
+      const t = q.age / q.life, gap = S * (0.03 + 0.22 * t * t), L = q.len * S * (0.35 + 0.65 * Math.min(1, t * 4)) * (1 - 0.3 * t);
+      const a = [x + dx * gap, y + dy * gap], b = [a[0] + dx * L, a[1] + dy * L];
+      wedge(a, b, Math.max(0.6, q.w * S * (1 - 0.8 * t)), q.col);
+    }
+    this.peels = this.peels.filter((q) => q.age < q.life);
+  }
 }
 function mulberry(seed: number) { let a = seed >>> 0; return () => { a = (a + 0x6d2b79f5) >>> 0; let t = a; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
