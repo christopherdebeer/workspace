@@ -127,7 +127,7 @@ All made in the page (WebAudio, no files):
 
 ## Flags
 
-`seed=` the mountain · `mode=run|lives|time|endless` the mode for this page (THREE LIVES unless chosen) · `auto` the rider rides itself (`auto=tricks` showing off, as on the title) · (any flag below skips the title) · `fx=0` no speed layer · `fog=0` no distance fade (both for judging a frame) · `rider=sil|facets`, `whip=`, `world=0` the rider studies (above) · `t=` start that many seconds down the run (ridden there by the auto rider) · `still` hold the frame · `preview` no HUD.
+`seed=` the mountain · `mode=run|lives|time|endless` the mode for this page (THREE LIVES unless chosen) · `auto` the rider rides itself (`auto=tricks` showing off, as on the title), a run like yours in the page's mode: scored, its tricks called, its lives or kilometres shown, ended as the mode ends with its card, but never kept on your board (a touch takes over, and the run still isn't kept; AGAIN rides the sim's run again) · (any flag below skips the title) · `fx=0` no speed layer · `fog=0` no distance fade (both for judging a frame) · `rider=sil|facets`, `whip=`, `world=0` the rider studies (above) · `t=` start that many seconds down the run (ridden there by the auto rider) · `still` hold the frame · `preview` no HUD.
 
 ## Tests
 

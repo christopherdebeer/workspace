@@ -8,7 +8,8 @@
  * needs a tap). The menu (the button top left, or Esc) pauses, with the settings: sound and its volume, how far back the
  * eye rides, another mountain. Settings are kept in this browser.
  *
- * Flags: `seed=` the mountain; `auto` the sim's own rider rides (the preview does too); `t=` start that many seconds
+ * Flags: `seed=` the mountain; `auto` the sim's own rider rides a run, scored and ended in the page's mode like yours but
+ * never kept on your board (`auto=tricks` showing off; the preview rides too); `t=` start that many seconds
  * down (ridden by it, for pinned frames); `still` hold the frame there; `preview` no HUD; `look=side|front|rear|quarter`
  * a close look at the bike. Any of these skips the title. `ruts=bolts` the ruts as they were before they were carved
  * (`ruts=light`, with them, paler than the road). `wake=fixed` the air on the rider as it was
@@ -32,6 +33,9 @@ const direct = preview || still || q.has('auto') || q.has('t') || !!look;
 let auto = q.has('auto') || preview || !direct;
 // (the sim's own rider shows off on the title, and with `auto=tricks`: slides, whips, flips, whatever the jump allows)
 const showing = q.get('auto') === 'tricks' || !direct;
+/** `auto` (or `auto=tricks`) is a run like yours, in the mode chosen: scored, called, ended as the mode ends, with its card
+ * (but the sim's runs are never kept on your board); held frames (`still`, `look=`) aren't runs */
+const demo = q.has('auto') && !still && !look;
 let trickster = new Trickster();
 const autoInput = () => (showing ? trickster.input(rider) : { steer: autoSteer(rider), brake: false });
 
@@ -155,7 +159,9 @@ const panels = { main: $('main'), prefs: $('prefs'), board: $('board'), card: $(
 /** which of the menu's panels shows: the main one (ride, the mode), the settings, the leaderboard, a finished run's card */
 const show = (k: keyof typeof panels) => { for (const [n, el] of Object.entries(panels)) el.hidden = n !== k; menu.dataset.panel = k; };
 $('mseed').textContent = String(seed);
-let menuOpen = !direct, running = false, paused = false, finished = false, mode: Mode = settings.mode, score = new Score();
+/** (this run was the sim's, if only to begin with: it's never kept) */
+let simRun = demo;
+let menuOpen = !direct, running = demo, paused = false, finished = false, mode: Mode = settings.mode, score = new Score();
 const fmt = (n: number) => String(Math.round(n)).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
 const clock = (t: number) => `${Math.floor(t / 60)}:${(t % 60).toFixed(1).padStart(4, '0')}`;
 function showSettings() {
@@ -177,7 +183,9 @@ function open() {
 function close() { menuOpen = false; paused = false; menu.classList.remove('on'); menu.setAttribute('inert', ''); sound.hush(false); }
 function begin() {
   // (a fresh run in the mode chosen: a new rider at the top, the eye with it, yours to ride, the score at nothing)
-  rider = new Rider(course); auto = false; running = true; finished = false; mode = settings.mode; score = new Score();
+  // (on a page the sim rides, `auto`: the sim's run again, yours as soon as you touch)
+  rider = new Rider(course); auto = demo; simRun = demo; running = true; finished = false; mode = settings.mode; score = new Score();
+  if (demo) trickster = new Trickster();
   sound.reset(); seen = 0; snapEye(); rd.trail.clear();
   hinted = false; hintEl.classList.remove('gone');
 }
@@ -226,10 +234,12 @@ addEventListener('resize', () => pad.paint());
 /** the run's over (its finish reached, its lives gone, or called a day): scored, kept if it's the best, and shown */
 function finish() {
   score.close(); finished = true; running = false;
-  const { better, was, rank, at } = keepBest(mode, seed, score.shown, score.time), card = $('card');
+  // (the sim's own run: shown like yours, but not kept, so it's never on your board)
+  const sims = simRun, { better, was, rank, at } = sims ? { better: false, was: bestOf(mode, seed), rank: -1, at: 0 } : keepBest(mode, seed, score.shown, score.time), card = $('card');
   $('cardMode').textContent = `${MODES[mode].name} · MOUNTAIN ${seed}`;
   $('cardBig').textContent = mode === 'time' ? clock(score.time) : fmt(score.shown);
-  $('cardNew').textContent = (!was ? 'FIRST RUN' : better ? 'A NEW BEST' : `BEST ${mode === 'time' ? clock(was.time) : fmt(was.score)}`) + (rank >= 0 ? ` · ${ordinal(rank + 1)} ON THE BOARD` : '')
+  $('cardNew').textContent = sims ? `THE SIM'S RUN · NOT KEPT${overPar(mode, score.shown, score.time) ? ' · PAR BEATEN' : ''}`
+    : (!was ? 'FIRST RUN' : better ? 'A NEW BEST' : `BEST ${mode === 'time' ? clock(was.time) : fmt(was.score)}`) + (rank >= 0 ? ` · ${ordinal(rank + 1)} ON THE BOARD` : '')
     + (overPar(mode, score.shown, score.time) ? ' · PAR BEATEN' : '');
   card.classList.toggle('best', better && !!was);
   const row = (k: string, v: string) => `<div class="row"><span>${k}</span><span>${v}</span></div>`;
@@ -265,7 +275,7 @@ if (direct) { menu.classList.remove('on'); menu.setAttribute('inert', ''); docum
 /** a word across the screen for a moment (a checkpoint passed, a return to one) */
 const note = document.getElementById('note')!;
 let noteTimer = 0;
-function say(text: string) { if (auto) return; note.textContent = text; note.classList.add('on'); clearTimeout(noteTimer); noteTimer = window.setTimeout(() => note.classList.remove('on'), 1400); }
+function say(text: string) { if (auto && !running) return; note.textContent = text; note.classList.add('on'); clearTimeout(noteTimer); noteTimer = window.setTimeout(() => note.classList.remove('on'), 1400); }
 const scoreEl = $('score'), statusEl = $('status'), comboEl = $('combo');
 let flashT = 0, flashText = '';
 let last = performance.now(), acc = 0, t = 0, drawn = 0, frames = 0, fps = 60, fpsT = 0, seen = 0, bigAir = 0;
