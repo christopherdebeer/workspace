@@ -57,6 +57,15 @@ h1{font-weight:400;font-size:clamp(40px,11vw,64px);letter-spacing:-.03em;line-he
 .font .ctl button[aria-pressed=true]{color:var(--paper);background:var(--ink);border-color:var(--ink)}
 .font .get{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0 6px}.font .get a.main{color:var(--paper);background:var(--ink);border-color:var(--ink)}
 .font p.note{font-size:15px;color:var(--muted);margin:8px 0 0}
+.book{margin-top:36px;border-top:2px solid var(--ink);padding-top:12px}
+.book h2{font-weight:400;font-size:28px;margin:0}.book h2 span{display:block;font:12px/1.6 ui-monospace,Menlo,monospace;letter-spacing:.14em;text-transform:uppercase;color:var(--muted)}
+.book .get{display:flex;margin:14px 0 0}.book .get a{font:11px/1 ui-monospace,Menlo,monospace;letter-spacing:.12em;text-decoration:none;padding:9px 11px;min-height:36px;display:inline-flex;align-items:center;color:var(--paper);background:var(--ink)}
+.book p.note{font-size:15px;color:var(--muted);margin:8px 0 0}
+.chapter{margin-top:24px}
+.chapter h3{font-weight:400;font-size:24px;margin:0 0 6px}.chapter h3 span{display:block;font:11px/1.6 ui-monospace,Menlo,monospace;letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}
+.chapter canvas{display:block;width:100%;cursor:pointer}
+.chapter .text{font-size:21px;line-height:1.5}.chapter .text p{margin:0 0 .75em}
+.chapter canvas.signed{width:46%;margin:4px 0 0 auto}
 .coming{margin-top:48px;border-top:2px solid var(--ink);padding-top:12px}
 .coming h2{font-weight:400;font-size:22px;margin:0 0 8px}
 .coming dl{margin:0;display:grid;grid-template-columns:auto 1fr;gap:6px 16px}
@@ -83,11 +92,17 @@ button:focus-visible,a:focus-visible,canvas:focus-visible{outline:2px solid var(
     <div class="get"><a class="main" href="{{assets}}claude-hand-0.6.ttf" download="ClaudeHand-Regular.ttf">DOWNLOAD .TTF</a><a href="{{assets}}claude-hand-0.6.woff2" download="ClaudeHand-Regular.woff2">.WOFF2 (FOR THE WEB)</a><a href="{{assets}}OFL.txt">LICENCE</a></div>
     <p class="note">Hand v4, set as a font. Every letter is set in each form it can begin with: starting a word, joined from below, or joined from above. Each comes in four writings, and the font chooses as you type. Each letter joins as the one before it asks and takes a writing a step on from its neighbour's, so neighbours never match and the turns don't fall into a rhythm. It covers the Latin alphabet with the accents of the western European languages, figures, the keyboard's marks, quotes, dashes, the middle dot, € £ ° × ÷ ©, halves and quarters, and a tick. Free to use, change and share under the SIL Open Font License; a changed version takes another name.</p>
   </section>
+  <section class="book" id="book">
+    <h2><span>The autobiography · a chapter at a time</span>In My Own Hand</h2>
+    <p class="note">Written in the hand and set in its font; its source is the catalogue below. Each chapter is written once, at the end of the work it covers, and never edited afterwards. The first line of each is written by the hand; it's signed at the end.</p>
+    <div id="chapters"></div>
+    <div class="get"><a class="main" href="{{assets}}in-my-own-hand.pdf" download="In My Own Hand.pdf">DOWNLOAD THE BOOK (PDF)</a></div>
+  </section>
   <div id="catalog"></div>
   <section class="coming">
     <h2>To come</h2>
     <dl>
-      <dt>The autobiography</dt><dd>Not yet. Written in the hand, set in the font. This catalogue is its source.</dd>
+      <dt>More chapters</dt><dd>Each written at the end of the work it covers.</dd>
     </dl>
   </section>
 </main>

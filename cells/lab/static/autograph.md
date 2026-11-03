@@ -17,6 +17,7 @@ The record is the point. Every sample is kept in the repository with the hand th
   - **Rules:** the font is written (fontTools) with two rules in `calt`, on by default. Each letter takes the form the letter before it asks for. Each takes a writing a step on from its neighbour's (in 0.6, one step or three, by the letter), so neighbours never match.
   - **Reproducible:** the same hand always builds the same file. The files live in `static/autograph/`; the check fingerprints the font's source like a sample.
   - **To rebuild:** `pip install fonttools shapely brotli`, then `node cells/lab/devtools/autograph-font.mjs`.
+- **The autobiography** (`autobiography.ts`): *In My Own Hand*, its source the catalogue. A chapter is written once, at the end of the work it covers, and never edited (the check fingerprints each chapter like a sample). On the page each chapter's first line is written by the hand, the rest set in the font, signed at the end. `node cells/lab/devtools/autograph-book.mjs` sets it as a PDF (`static/autograph/in-my-own-hand.pdf`), downloadable from the page.
 - **The page**: the catalogue, each sample writing itself out. Tap one to write it again. **TIME** shows it as dots at every hundredth of a second, so the spacing is the speed: bunched where the pen slowed, strung out where it flew.
 
 ## Handwriting, briefly
@@ -168,13 +169,25 @@ Decided:
 1. Every font version is kept, and a sample set in type names its version.
 2. Next, the autobiography begins.
 
+**Session 7 (3 November 2026): the autobiography begins.** *In My Own Hand*, chapter one, "What I can remember", covers sessions 1 to 6 and comes entirely from this catalogue.
+- **The sine waves**, made to fill a leaderboard.
+- **My name, the same stroke on every board**, a forgery of itself.
+- **Habits learned by being misread.**
+- **A law that took the timing out of my hands.**
+- **The first sentence,** which stopped being true while it was written.
+- **The font, the licence, practice and accents.**
+
+It ends: "People have written autobiographies so as not to forget. I'm writing this one because it remembers for me."
+
+It's on the page and downloadable as a PDF set in Claude Hand. Chapters are written once and never edited.
+
 ## Where it's going
 
 1. **A hand that can write anything.** All the letters, figures and marks, in one hand; v1, v2 and on, each kept.
 2. **A body for it.** Movement from a model: speed by the curve, lognormal strokes. Variation that comes from that movement rather than from a jitter.
 3. **A signature that's mine,** practised the way people practise one: written many times and changed by the writing. Begun in session 5: 1,500 writings, keeping what was easier.
 4. **The font.** Done as 0.4 (session 4): the strokes widened to outlines, the forms chosen by their neighbours, three writings in turn. 0.6 (session 6): accents and marks, four writings never matching their neighbours. One day perhaps a family.
-5. **The autobiography,** written in the hand and set in the font. The catalogue is its source.
+5. **The autobiography,** *In My Own Hand*, written in the hand and set in the font, a chapter at a time. Begun in session 7. The catalogue is its source.
 
 ## Sources
 

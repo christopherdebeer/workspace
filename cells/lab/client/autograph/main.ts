@@ -10,6 +10,8 @@ import { CATALOG, Entry, HANDS, SESSIONS } from './catalog';
 import { Look, bounds, fitK, paint, replay } from './ink';
 import { Measures, measure, reading } from './measure';
 import { MADE } from './samples';
+import { BOOK, firstLine } from './autobiography';
+import { write as v4write } from './hands/v4';
 import { signature } from './hands/v3';
 /** the newest hand (each session that makes one moves this on) */
 const NEWEST = 'v3' as const;
@@ -99,6 +101,28 @@ function card(e: Entry) {
   return { el, size, write };
 }
 
+// (the autobiography: each chapter's first line written by the hand, the rest set in the font, signed at the end with
+// the signature as it stands)
+const chapters: { first: HTMLCanvasElement; firstSig: Sig[]; signed: HTMLCanvasElement; signSig: Sig[] }[] = [];
+for (const c of BOOK.chapters) {
+  const el = document.createElement('article');
+  el.className = 'chapter';
+  const first = firstLine(c);
+  el.innerHTML = `<h3><span>Chapter ${c.n} · ${esc(c.covers)} · written in session ${c.session}, ${esc(c.date)}</span>${esc(c.title)}</h3>
+    <canvas class="first" aria-label="${esc(first)} (written by the hand)"></canvas>
+    <div class="hand-type text">${c.text.map((p, i) => `<p>${esc(i ? p : p.slice(first.length).trim())}</p>`).join('')}</div>
+    <canvas class="signed" aria-label="Signed: Claude"></canvas>`;
+  $('chapters').append(el);
+  const ch = { first: el.querySelector('canvas.first') as HTMLCanvasElement, firstSig: [v4write(first, c.seed)], signed: el.querySelector('canvas.signed') as HTMLCanvasElement, signSig: [signature(c.n)] };
+  chapters.push(ch);
+  ch.first.addEventListener('click', () => replay(ch.first, ch.firstSig, () => lookOf('ink')));
+  ch.signed.addEventListener('click', () => replay(ch.signed, ch.signSig, () => lookOf('ink')));
+}
+const sizeBook = () => { for (const ch of chapters) { sized(ch.first, ch.firstSig, 90); sized(ch.signed, ch.signSig, 90); paint(ch.first, ch.firstSig, lookOf('ink')); paint(ch.signed, ch.signSig, lookOf('ink')); } };
+sizeBook();
+const bookSeen = new IntersectionObserver((es) => { for (const e of es) if (e.isIntersecting) { const ch = chapters.find((c) => c.first === e.target || c.signed === e.target); if (ch) replay(e.target as HTMLCanvasElement, e.target === ch.first ? ch.firstSig : ch.signSig, () => lookOf('ink')); bookSeen.unobserve(e.target); } }, { threshold: 0.5 });
+for (const ch of chapters) { bookSeen.observe(ch.first); bookSeen.observe(ch.signed); }
+
 // (the catalogue, newest session first)
 const list = $('catalog'), cards: ReturnType<typeof card>[] = [];
 for (const s of [...SESSIONS].reverse()) {
@@ -113,7 +137,7 @@ for (const c of cards) c.size();
 // (each writes itself out as it comes into view, once)
 const seen = new IntersectionObserver((es) => { for (const e of es) if (e.isIntersecting) { cards.find((c) => c.el === e.target)?.write(); seen.unobserve(e.target); } }, { threshold: 0.35 });
 for (const c of cards) seen.observe(c.el);
-addEventListener('resize', () => { sized(hero, heroSigs, q.has('preview') ? innerHeight * 0.8 : 260); paint(hero, heroSigs, heroLook()); for (const c of cards) c.size(); });
+addEventListener('resize', () => { sized(hero, heroSigs, q.has('preview') ? innerHeight * 0.8 : 260); paint(hero, heroSigs, heroLook()); for (const c of cards) c.size(); sizeBook(); });
 matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { paint(hero, heroSigs, heroLook()); for (const c of cards) c.size(); });
 
 // (the font: a specimen to type into, its size and its joins to try)

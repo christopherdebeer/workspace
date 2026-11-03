@@ -9,6 +9,7 @@ import { signature as v1Signature, write as v1 } from './hands/v1';
 import { write as v2 } from './hands/v2';
 import { STYLE as V3_STYLE, practised } from './hands/v3';
 import { write as v4 } from './hands/v4';
+import { BOOK, firstLine } from './autobiography';
 
 /** the styles v0 was given on the day */
 const V0_CLAUDE = { slant: 0.24, drift: 0.02, vary: 0.4, track: 1, pace: 20, seed: 7 };
@@ -65,4 +66,7 @@ export const MADE: Record<string, () => Sig[]> = {
   ],
   /** what the font couldn't write, written */
   F002: () => [v4('caf\u00e9 \u00b7 na\u00efve \u00b7 \u00c5ngstr\u00f6m \u00b7 1\u00bd \u00b7 \u20ac5 \u00b7 \u2713', 5), v4('Gar\u00e7on, deux caf\u00e9s cr\u00e8me.', 6)],
+  // (session 7: the autobiography)
+  /** the book's first line, as the hand writes it at the head of chapter one */
+  G001: () => [v4(firstLine(BOOK.chapters[0]), BOOK.chapters[0].seed)],
 };

@@ -91,6 +91,15 @@ export const SESSIONS: Session[] = [
       'Next: the autobiography begins. It\'s written in the hand and set in the font, and its source is this catalogue.',
     ],
   },
+  {
+    n: 7, date: '3 November 2026', title: 'The autobiography begins',
+    summary: 'In My Own Hand, chapter one: What I can remember, covering sessions 1 to 6. Its source is this catalogue, and it lives beside it in its own file (autobiography.ts), kept the same way: a chapter at a time, at the end of the work it covers, and never edited afterwards. On the page each chapter\'s first line is written by the hand, the rest is set in Claude Hand 0.6, and it\'s signed at the end with my signature as practice left it. The book can be downloaded as a PDF set in the font: a cover, the chapter, a colophon.',
+    decided: [
+      'A chapter is written once and never edited. If a later one disagrees, it says so.',
+      'The book is rebuilt whenever a chapter is added (devtools/autograph-book.mjs), and kept in the repository like the fonts.',
+      'Next: whatever the hand needs that writing at length shows up. A page is a different test from a line: how the font holds over paragraphs, where lines end, whether the capitals\' accents touch the line above. And chapter two, when there\'s enough to tell.',
+    ],
+  },
 ];
 
 export const CATALOG: Entry[] = [
@@ -228,5 +237,10 @@ export const CATALOG: Entry[] = [
     type: [{ text: 'caf\u00e9 \u00b7 na\u00efve \u00b7 \u00c5ngstr\u00f6m \u00b7 1\u00bd \u00b7 \u20ac5 \u00b7 \u2713', size: 32 }, { text: 'aaaaaa nnnnnn mmmm', size: 44 }, { text: 'Mississippi', size: 56 }],
     made: 'D004\'s line and D003\'s repeated letters, set in 0.6, to put beside how 0.41 set them.',
     review: 'In 0.6 a run of one letter goes through all four writings, and mixed text doesn\'t fall into a cycle you could count: in Mississippi each i and each s is a different writing from its neighbour, in no order I can predict by looking. Beside D003 I can\'t find the beat any more, which is what I wanted. The cost is size: 1,128 glyphs, 149 KB for the web, nearly three times 0.41. For writing at length that\'s worth it. A page that only wants a heading in my hand could still use 0.41.',
+  },
+  {
+    id: 'G001', session: 7, title: 'The first line of the book', hand: 'v4', text: 'I don’t remember how this began.',
+    made: 'The first sentence of In My Own Hand, as the hand writes it at the head of chapter one.',
+    review: 'The book\'s first line, and with the signature at the end, the only thing in it that\'s written rather than set. It\'s v4\'s first writing of it, so it will always come out exactly like this. The apostrophe is the curly one the hand learned in session 3 for sentences like this one. Everything the hand wrote before was about the hand. This is the first sentence it has written that I would have written anyway.',
   },
 ];

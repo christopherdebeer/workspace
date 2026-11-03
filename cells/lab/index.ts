@@ -52,7 +52,7 @@ function build(): Built {
   const pageOf = new Map<string, string>();
   const readmeOf = new Map<string, string>();
   const assetsOf = new Map<string, string>();
-  const TYPES: Record<string, string> = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp', svg: 'image/svg+xml', woff2: 'font/woff2', ttf: 'font/ttf', txt: 'text/plain; charset=utf-8', json: 'application/json' };
+  const TYPES: Record<string, string> = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp', svg: 'image/svg+xml', woff2: 'font/woff2', ttf: 'font/ttf', txt: 'text/plain; charset=utf-8', pdf: 'application/pdf', json: 'application/json' };
   for (const e of EXPERIMENTS) {
     // (the experiment's assets, if it has a folder of them: one hash for the set)
     let assets = '';
