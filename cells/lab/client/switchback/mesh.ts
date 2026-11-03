@@ -11,7 +11,7 @@
 import { Course, JUMPS, hash } from './course';
 import { STEP, WALL, section, character, groundAt, notch } from './ground';
 
-export const M = { SNOW: 0, TRACK: 1, ROCK: 2, ORANGE: 3, BLACK: 4, WHITE: 5, MTN: 6, MTNSNOW: 7, UMBER: 8, SHADOW: 9, RUT: 10, NAVY: 11, FAR: 12, FARSNOW: 13, RIDGE: 14, FOREST: 15, VALLEY: 16, CUT_ORANGE: 17, CUT_BLACK: 18, CREAM: 19 } as const;
+export const M = { SNOW: 0, TRACK: 1, ROCK: 2, ORANGE: 3, BLACK: 4, WHITE: 5, MTN: 6, MTNSNOW: 7, UMBER: 8, SHADOW: 9, RUT: 10, NAVY: 11, FAR: 12, FARSNOW: 13, RIDGE: 14, FOREST: 15, VALLEY: 16, CUT_ORANGE: 17, CUT_BLACK: 18, CREAM: 19, GOUGE: 20 } as const;
 /** each material's four bands, lit to unlit (the reference's own colours) */
 export const PALETTE: string[][] = [
   ['#f1ece8', '#d9d0ca', '#a399a2', '#6f6c93'], // snow
@@ -36,6 +36,7 @@ export const PALETTE: string[][] = [
   ['#ff6c12', '#ff6c12', '#ff6c12', '#1d1d22'], // orange, its cut charcoal: the shadow side merges into the dark mass
   ['#1d1d22', '#1d1d22', '#1d1d22', '#1d1d22'], // charcoal: the legs and the whole machine, one mass, no marks inside it
   ['#f6e7c6', '#f6e7c6', '#f6e7c6', '#c7ae86'], // cream accents (boots, fork, plates, helmet), a tan cut
+  ['#857c92', '#7d7590', '#6f6a86', '#5d5a78'], // a gouge's shadowed wall (`ruts=cut`): the deep shade's violet, the road's ink
 ];
 
 /** the ruts lighter than the road instead (`ruts=light`): the worn line polished, catching the light like a flash */

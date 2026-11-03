@@ -41,7 +41,7 @@ function topY(c: Course, s: number, u: number) {
 }
 
 /** where ruts run: the plain road, the rollers, a kicker's landing deck (not its ramp, under its chevrons, nor its gap) */
-const plain = (c: Course, i: number) => { const f = c.at(i).feature; return f !== 'ramp' && f !== 'gap'; };
+export const plain = (c: Course, i: number) => { const f = c.at(i).feature; return f !== 'ramp' && f !== 'gap'; };
 
 /** where the surface bends between a and b: a rock step's edge (the lift changing slope), a roller's crest or trough, a
  * feature's start or end; and between those, where they're far apart, every five metres or so */
@@ -61,7 +61,7 @@ function knots(c: Course, a: number, b: number) {
 }
 
 /** the lines across the road at knot K: where each is (u), and whether it's drawn on its own there */
-function lines(c: Course, K: number) {
+export function lines(c: Course, K: number) {
   const seed = c.seed, half = c.at(K).width / 2, lim = half - 0.35;
   const n = (salt: number, per: number) => drift(seed, K / per, salt);
   // (a little sideways wander at each knot: the bolts carry their own zig)
@@ -147,6 +147,8 @@ export function buildRuts(c: Course, s: number) {
 
 /** your own track: strokes laid behind the rear tyre, the last 30 m of them */
 export class Trail {
+  /** (`ruts=cut`: the freshest cut, nearly unbroken, a little wider, in the gouges' ink) */
+  cut = false;
   private done: { d: number; v: number[] }[] = [];
   private head: { x: number; z: number; d: number; len: number; slip: number } | null = null;
   private last: { x: number; z: number } | null = null;
@@ -169,7 +171,7 @@ export class Trail {
   private end() {
     const h = this.head; if (!h) return;
     if (this.d - h.d > 0.6 && this.last) this.done.push({ d: this.d, v: this.stroke(h, this.last.x, this.last.z) });
-    this.head = null; this.n++; this.wait = this.d + 0.3 + 0.6 * hash(this.n, 32);
+    this.head = null; this.n++; this.wait = this.d + (this.cut ? 0.03 : 0.3 + 0.6 * hash(this.n, 32));
     this.done = this.done.filter((k) => this.d - k.d < 30);
   }
   /** a stroke from where it began (its point) straight to (x, z) (its blunt end), lying on what's under it */
@@ -177,13 +179,13 @@ export class Trail {
     const m = new Mesh(), c = this.c, dx = x - h.x, dz = z - h.z, L = Math.hypot(dx, dz) || 1;
     // (a slight sideways step at its end, so the chain is a bolt too, not a smooth line)
     const j = (hash(this.n, 33) - 0.5) * 0.14, rx = dz / L, rz = -dx / L, ex = x + rx * j, ez = z + rz * j;
-    const w = 0.1 + Math.min(0.28, h.slip * 0.7), rows = Math.max(1, Math.ceil(L / 0.9));
+    const w = (this.cut ? 0.17 : 0.1) + Math.min(0.28, h.slip * 0.7), rows = Math.max(1, Math.ceil(L / 0.9)), tone = this.cut ? 0.5 : 0.15, mat = this.cut ? M.GOUGE : M.RUT;
     const P = (px: number, pz: number) => { const q = c.locate(px, pz, this.s - 2); return [px, topY(c, q.s, q.u) + 0.06, pz]; };
     let A = P(h.x, h.z), B = A;
     for (let k = 1; k <= rows; k++) {
       const t = k / rows, cx = h.x + (ex - h.x) * t, cz = h.z + (ez - h.z) * t, hw = (w / 2) * t, sl = k === rows ? 0.12 : 0;
       const A1 = P(cx - rx * hw + dx / L * sl, cz - rz * hw + dz / L * sl), B1 = P(cx + rx * hw - dx / L * sl, cz + rz * hw - dz / L * sl);
-      if (k === 1) m.tri(A, B1, A1, M.RUT, 0.15); else m.quad(A, B, B1, A1, M.RUT, 0.15);
+      if (k === 1) m.tri(A, B1, A1, mat, tone); else m.quad(A, B, B1, A1, mat, tone);
       A = A1; B = B1;
     }
     return m.v;

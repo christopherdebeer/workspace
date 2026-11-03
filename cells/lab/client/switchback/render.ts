@@ -16,6 +16,7 @@ import { CHUNK, PALETTE, buildChunk, buildFalls, buildFlags, buildRanges, buildR
 import type { Rider, Event } from './sim';
 import { GEARS } from './audio';
 import { buildRuts, Trail } from './ruts';
+import { buildGouges } from './gouge';
 
 const VS = `#version 300 es
 in vec4 aP; uniform mat4 uVP; uniform vec3 uOff; out vec3 vW; flat out int vM;
@@ -25,7 +26,7 @@ flat out float vT; uniform vec3 uEye;
 void main() { vec3 w = aP.xyz + uOff; vW = w - uEye; vM = int(aP.w); vT = fract(aP.w); gl_Position = uVP * vec4(w, 1.); }`;
 const FS = `#version 300 es
 precision highp float;
-in vec3 vW; flat in int vM; flat in float vT; uniform vec3 uPal[80]; uniform vec3 uEye; uniform vec3 uSun; uniform float uFog; out vec4 o;
+in vec3 vW; flat in int vM; flat in float vT; uniform vec3 uPal[84]; uniform vec3 uEye; uniform vec3 uSun; uniform float uFog; out vec4 o;
 void main() {
   vec3 n = normalize(cross(dFdx(vW), dFdy(vW)));
   // (the face's light, nudged by its own tone, picks one of its material's four bands)
@@ -75,6 +76,8 @@ class Buf {
 export class Renderer {
   gl: WebGL2RenderingContext; ctx: CanvasRenderingContext2D;
   private prog: WebGLProgram; private u: Record<string, WebGLUniformLocation | null> = {};
+  /** how the ruts are drawn: as bolts (as they've been), or carved, as gouge strokes (`ruts=cut`, a study) */
+  rutStyle: 'bolts' | 'cut' = 'bolts';
   private chunks = new Map<number, Buf>(); private ranges: Buf; private valley: Buf; private rider: Buf; private shadow: Buf; private flags: Buf; private ruts: Buf; private track: Buf; private falls: Buf;
   /** how the rider's drawn ('cut': flat masses, lit for the picture), a whip held for a pinned frame (rad), and whether
    * the world's drawn at all (`world=0`: the rider alone on the sky, for judging its shapes) */
@@ -140,7 +143,7 @@ export class Renderer {
     for (const b of this.chunks.values()) b.draw();
     // (the ruts near the eye, and your own track, a hair over the road)
     gl.enable(gl.POLYGON_OFFSET_FILL); gl.polygonOffset(-1, -1);
-    this.ruts.set(buildRuts(this.course, r.s), true); this.ruts.draw();
+    this.ruts.set(this.rutStyle === 'cut' ? buildGouges(this.course, r.s) : buildRuts(this.course, r.s), true); this.ruts.draw();
     this.track.set(this.trail.mesh(), true); this.track.draw();
     gl.disable(gl.POLYGON_OFFSET_FILL);
     // (the rider, and its shadow flattened along the sun onto the ground under it)
