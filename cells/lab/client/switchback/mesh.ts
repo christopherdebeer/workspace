@@ -11,7 +11,7 @@
 import { Course, hash } from './course';
 import { STEP, section, character, groundAt } from './ground';
 
-export const M = { SNOW: 0, TRACK: 1, ROCK: 2, ORANGE: 3, BLACK: 4, WHITE: 5, MTN: 6, MTNSNOW: 7, UMBER: 8, SHADOW: 9, RUT: 10, NAVY: 11 } as const;
+export const M = { SNOW: 0, TRACK: 1, ROCK: 2, ORANGE: 3, BLACK: 4, WHITE: 5, MTN: 6, MTNSNOW: 7, UMBER: 8, SHADOW: 9, RUT: 10, NAVY: 11, FAR: 12, FARSNOW: 13, RIDGE: 14, FOREST: 15, VALLEY: 16 } as const;
 /** each material's four bands, lit to unlit (the reference's own colours) */
 export const PALETTE: string[][] = [
   ['#f1ece8', '#d9d0ca', '#a399a2', '#6f6c93'], // snow
@@ -26,6 +26,12 @@ export const PALETTE: string[][] = [
   ['#a399a2', '#a399a2', '#a399a2', '#a399a2'], // shadow on snow
   ['#b9aaa6', '#a8999a', '#8f8394', '#6f6c88'], // ruts
   ['#535e8a', '#2c3768', '#162140', '#101a36'], // navy
+  // (the backdrop: one family of blues, lighter and flatter the further off; no charcoal in it)
+  ['#5b80f2', '#4c74f0', '#3d66ec', '#3560e6'], // the farthest range
+  ['#f2f3f8', '#e2e5f2', '#aab8f0', '#93a6ee'], // its snow
+  ['#1b49d0', '#1742c2', '#1238a8', '#10329a'], // the foothill ridge
+  ['#163291', '#142d84', '#12287a', '#11246e'], // forest along its foot
+  ['#2f5be6', '#2f5be6', '#2a55e0', '#2a55e0'], // the valley floor
 ];
 
 export class Mesh {
@@ -239,46 +245,97 @@ function dress(c: Course, m: Mesh, i: number, sec: { u: number; y: number; ds: n
   }
 }
 
-/** the far ranges: a ring of faceted peaks round the origin (drawn about the eye), bodies blue, tops snow; and the valley
- * floor far below, pale, with its river */
-export function buildRanges(seed: number) {
-  const m = new Mesh();
-  const ring = (R: number, n: number, hMin: number, hMax: number, k: number, body: number, cap: number) => {
-    for (let i = 0; i < n; i++) {
-      const a = (i / n) * Math.PI * 2 + hash(seed, i, k) * 0.3, r = R * (0.9 + 0.25 * hash(seed, i, k, 1));
-      const cx = Math.sin(a) * r, cz = Math.cos(a) * r, h = hMin + (hMax - hMin) * hash(seed, i, k, 2), w = h * (1.1 + hash(seed, i, k, 3));
-      const sides = 5 + Math.floor(hash(seed, i, k, 4) * 3), peak = [cx + (hash(seed, i, k, 5) - 0.5) * w * 0.4, h, cz];
-      const base = Array.from({ length: sides }, (_, j) => { const b = (j / sides) * Math.PI * 2; return [cx + Math.cos(b) * w * (0.7 + 0.5 * hash(seed, i, j, k)), -60, cz + Math.sin(b) * w * (0.7 + 0.5 * hash(seed, i, j, k, 9))]; });
-      // (the snow line, a band partway up each face, jagged)
-      const sl = 0.52 + 0.18 * hash(seed, i, k, 6);
-      const mid = base.map((b, j) => { const f = sl + (hash(seed, i, j, k, 7) - 0.5) * 0.16; return [b[0] + (peak[0] - b[0]) * f, b[1] + (peak[1] - b[1]) * f, b[2] + (peak[2] - b[2]) * f]; });
-      for (let j = 0; j < sides; j++) {
-        const j1 = (j + 1) % sides;
-        m.quad(base[j], base[j1], mid[j1], mid[j], body);
-        m.tri(mid[j], mid[j1], peak, cap);
-      }
+/** the backdrop, drawn about the eye (far enough that it needn't move with you): skylines and a foothill ridge, built as
+ * continuous ridge lines rather than repeated peaks. Each is a crest (peaks of their own heights and widths, broad
+ * shoulders and sharp summits, some broken by a notch, overlapping so one hides the next), a fold row partway down (pushed
+ * toward you under the summits, back in the saddles, so each face is one plane, lit or in shade), and a base below the
+ * valley's floor. Snow comes down from the crest where it's above the snow line, further down the gullies than the
+ * spurs, so it reads as fields and runnels, not caps. All one family of blues, lighter the further off. */
+function skyline(m: Mesh, seed: number, k: number, spec: { R: number; floor: number; lo: number; hi: number; peaks: number; body: number; snow: number; snowline: number; from?: number; to?: number; fold: number }) {
+  const { R, floor, lo, hi, body, snow, snowline } = spec, from = spec.from ?? 0, to = spec.to ?? Math.PI * 2, arc = spec.from !== undefined;
+  const H = (i: number, salt: number) => hash(seed, k, i, salt);
+  const peaks = Array.from({ length: spec.peaks }, (_, i) => ({
+    a: from + (to - from) * (arc ? 0.12 + 0.76 * H(i, 1) : H(i, 1)), h: lo + (hi - lo) * Math.pow(H(i, 2), 1.3),
+    wl: 0.1 + 0.32 * H(i, 3), wr: 0.1 + 0.32 * H(i, 4), p: 0.65 + 1.0 * H(i, 5), notch: H(i, 6) < 0.4,
+  }));
+  const wrap = (d: number) => (arc ? d : Math.atan2(Math.sin(d), Math.cos(d)));
+  const crest = (a: number) => {
+    // (the ridge between summits never sinks far: a range is continuous, its saddles a little below its lowest peaks)
+    let h = lo * (arc ? 0.3 : 0.7) * (0.85 + 0.3 * Math.sin(a * 3 + k));
+    for (const pk of peaks) {
+      const d = wrap(a - pk.a), w = d < 0 ? pk.wl : pk.wr, f = Math.max(0, 1 - Math.abs(d) / w);
+      let v = pk.h * Math.pow(f, pk.p);
+      // (a broken summit: a notch cut just off the top)
+      if (pk.notch && Math.abs(d - w * 0.12) < w * 0.06) v *= 0.93;
+      h = Math.max(h, v);
     }
+    // (an arc rises from the floor at one end and falls back to it at the other)
+    if (arc) { const e = Math.min(a - from, to - a) / ((to - from) * 0.18); h *= Math.max(0, Math.min(1, e)); }
+    return floor + h;
   };
-  ring(3000, 24, 520, 900, 1, M.MTN, M.MTNSNOW);
-  ring(2300, 18, 260, 520, 2, M.MTN, M.MTNSNOW);
+  // (the crest's vertices: irregularly spaced, and at every summit and shoulder, so each face spans a feature)
+  const at = new Set<number>();
+  for (let a = from, i = 0; a < to; a += 0.035 + 0.075 * H(i, 7), i++) at.add(a);
+  for (const pk of peaks) for (const f of [0, -0.5, 0.5]) { const a = pk.a + (f < 0 ? pk.wl : pk.wr) * f; if (a > from && a < to) at.add(a); }
+  at.add(to);
+  const as = [...at].sort((x, y) => x - y);
+  const cs = as.map(crest);
+  const pt = (a: number, r: number, y: number) => [Math.sin(a) * r, y, Math.cos(a) * r];
+  const rows = as.map((a, i) => {
+    // (spur or gully: higher than its neighbours' mean, the fold comes toward you; lower, it goes back)
+    const nb = (cs[Math.max(0, i - 1)] + cs[Math.min(cs.length - 1, i + 1)]) / 2, spur = Math.max(-1, Math.min(1, (cs[i] - nb) / (hi * 0.08 + 1)));
+    const c = cs[i], foldY = c - (c - floor) * (0.42 + 0.1 * H(i, 8)), base = floor - 40;
+    const C = pt(a, R, c), Fd = pt(a, R * (1 - spec.fold * spur), foldY), B = pt(a, R * 0.97, base);
+    let S = C;
+    if (c > snowline) {
+      const depth = (c - snowline) * (0.5 + 0.35 * H(i, 9)) * (spur < 0 ? 1.4 : 0.85), t = Math.min(0.92, depth / Math.max(1, c - foldY));
+      S = C.map((v, d) => v + (Fd[d] - v) * t);
+    }
+    return { C, S, Fd, B, snowy: S !== C };
+  });
+  for (let i = 0; i < rows.length - 1; i++) {
+    const a = rows[i], b = rows[i + 1];
+    if (a.snowy || b.snowy) { if (a.snowy) m.tri(a.C, b.C, a.S, snow, 0.5); if (b.snowy) m.tri(b.C, b.S, a.S, snow, 0.5); }
+    m.quad(a.S, b.S, b.Fd, a.Fd, body, 0.5);
+    m.quad(a.Fd, b.Fd, b.B, a.B, body, 0.5);
+  }
+  return { rows, crest, as };
+}
+/** the skylines: the farthest range, then a nearer one in front of it, both all round; snow on both */
+export function buildRanges(seed: number) {
+  const m = new Mesh(), F = -260;
+  skyline(m, seed, 1, { R: 3400, floor: F - 20, lo: 420, hi: 1050, peaks: 15, body: M.FAR, snow: M.FARSNOW, snowline: F + 560, fold: 0.03 });
+  skyline(m, seed, 2, { R: 2500, floor: F - 10, lo: 230, hi: 620, peaks: 12, body: M.MTN, snow: M.MTNSNOW, snowline: F + 430, fold: 0.04 });
   return new Float32Array(m.v);
 }
 
-/** the valley floor far below: a faceted blue plain, foothills rising toward the ranges, a white river winding down it */
+/** the valley: its floor (flat, one blue), the river winding over it (pale), and a foothill ridge or two in the middle
+ * distance: one dominant ridge each, its face coming down from the crest in a few big planes (one fold to show its
+ * volume), and a band of forest along its foot, its top edge ragged as treetops */
 export function buildValley(seed: number) {
-  const m = new Mesh(), F = -260, R = [0, 260, 450, 700, 1000, 1400, 1900, 2500], n = 30;
-  const at = (i: number, j: number) => {
-    const a = (j / n) * Math.PI * 2 + (i ? (hash(seed, i, j, 3) - 0.5) * 0.12 : 0), r = R[i] * (i ? 0.9 + 0.2 * hash(seed, i, j, 4) : 0);
-    const rise = Math.max(0, (R[i] - 900) / 1600) ** 1.5 * 260;
-    return [Math.sin(a) * r, F + rise + (i ? (hash(seed, i, j, 5) - 0.5) * (14 + rise * 0.5) : 0), Math.cos(a) * r];
-  };
-  for (let i = 0; i < R.length - 1; i++) for (let j = 0; j < n; j++) {
-    const a = at(i, j), b = at(i, j + 1), c = at(i + 1, j), d = at(i + 1, j + 1);
-    if (i) m.tri(a, c, b, M.MTN); m.tri(b, c, d, i > 4 ? M.NAVY : M.MTN);
+  const m = new Mesh(), F = -260;
+  // (the floor: a flat disc out past the skylines' feet)
+  for (let i = 0; i < 24; i++) { const a0 = (i / 24) * Math.PI * 2, a1 = ((i + 1) / 24) * Math.PI * 2; m.tri([0, F, 0], [Math.sin(a0) * 3500, F, Math.cos(a0) * 3500], [Math.sin(a1) * 3500, F, Math.cos(a1) * 3500], M.VALLEY, 0.5); }
+  // (the foothills: two arcs, each a long continuous ridge)
+  for (let k = 0; k < 2; k++) {
+    const mid = hash(seed, k, 50) * Math.PI * 2 + k * Math.PI, span = 1.0 + 0.6 * hash(seed, k, 51), R = 1150 + 300 * hash(seed, k, 52);
+    const { rows } = skyline(m, seed, 10 + k, { R, floor: F, lo: 90, hi: 260 + 60 * hash(seed, k, 53), peaks: 3, body: M.RIDGE, snow: M.RIDGE, snowline: 1e9, from: mid - span / 2, to: mid + span / 2, fold: 0.07 });
+    // (its forest: a band along the foot, in front of the face, its top edge ragged)
+    for (let i = 0; i < rows.length - 1; i++) {
+      const a = rows[i], b = rows[i + 1], h = (r: { C: number[] }) => Math.max(0, r.C[1] - F);
+      const top = (r: { C: number[]; B: number[] }, j: number) => { const t = Math.min(0.32, 22 / Math.max(1, h(r))) * (0.7 + 0.6 * hash(seed, k, i + j, 60)); return r.B.map((v, d) => (d === 1 ? F + h(r) * t : v * 0.985)); };
+      const lo0 = a.B.map((v, d) => (d === 1 ? F - 5 : v * 0.985)), lo1 = b.B.map((v, d) => (d === 1 ? F - 5 : v * 0.985));
+      const t0 = top(a, 0), t1 = top(b, 1);
+      if (h(a) < 4 && h(b) < 4) continue;
+      m.quad(lo0, lo1, t1, t0, M.FOREST, 0.5);
+      // (a few treetops standing above the band)
+      const tm = t0.map((v, d) => (v + t1[d]) / 2); tm[1] += 6 + 10 * hash(seed, k, i, 61);
+      m.tri(t0, t1, tm, M.FOREST, 0.5);
+    }
   }
-  // (the river: a ribbon winding across the plain, wide and pale, from the far ranges down past the foot of the mountain)
+  // (the river: a ribbon winding across the floor, pale)
   const rv: number[][] = [];
-  for (let k = 0; k <= 40; k++) { const z = -2200 + k * 110, x = -520 + Math.sin(k * 0.55 + seed) * 160 + Math.sin(k * 1.7) * 50; rv.push([x, F + 3, z]); }
+  for (let k = 0; k <= 40; k++) { const z = -2200 + k * 110, x = -520 + Math.sin(k * 0.55 + seed) * 160 + Math.sin(k * 1.7) * 50; rv.push([x, F + 1, z]); }
   for (let k = 0; k < rv.length - 1; k++) {
     const p = rv[k], q = rv[k + 1], dx = q[0] - p[0], dz = q[2] - p[2], L = Math.hypot(dx, dz), w = 16 + 8 * hash(seed, k, 7);
     const nx = (-dz / L) * w, nz = (dx / L) * w;

@@ -17,11 +17,13 @@ import type { Rider, Event } from './sim';
 
 const VS = `#version 300 es
 in vec4 aP; uniform mat4 uVP; uniform vec3 uOff; out vec3 vW; flat out int vM;
-flat out float vT;
-void main() { vW = aP.xyz + uOff; vM = int(aP.w); vT = fract(aP.w); gl_Position = uVP * vec4(vW, 1.); }`;
+flat out float vT; uniform vec3 uEye;
+// (positions relative to the eye: in world metres, far down the mountain, the faces' screen derivatives lose precision and
+// their normals speckle)
+void main() { vec3 w = aP.xyz + uOff; vW = w - uEye; vM = int(aP.w); vT = fract(aP.w); gl_Position = uVP * vec4(w, 1.); }`;
 const FS = `#version 300 es
 precision highp float;
-in vec3 vW; flat in int vM; flat in float vT; uniform vec3 uPal[48]; uniform vec3 uEye; uniform vec3 uSun; uniform float uFog; out vec4 o;
+in vec3 vW; flat in int vM; flat in float vT; uniform vec3 uPal[68]; uniform vec3 uEye; uniform vec3 uSun; uniform float uFog; out vec4 o;
 void main() {
   vec3 n = normalize(cross(dFdx(vW), dFdy(vW)));
   // (the face's light, nudged by its own tone, picks one of its material's four bands)
@@ -29,7 +31,7 @@ void main() {
   int b = l > .62 ? 0 : l > .3 ? 1 : l > -.05 ? 2 : 3;
   vec3 c = uPal[vM * 4 + b];
   // (distance: toward the valley's blues in four hard steps, each face keeping its band, so the far slopes stay faceted)
-  float d = length(vW.xz - uEye.xz), f = floor(clamp((d - 80.) / 520., 0., 1.) * 4.) / 4.;
+  float d = length(vW.xz), f = floor(clamp((d - 80.) / 520., 0., 1.) * 4.) / 4.;
   vec3 fogs[4] = vec3[4](vec3(.62, .66, .9), vec3(.33, .45, .88), vec3(.14, .33, .84), vec3(.09, .26, .78));
   o = vec4(mix(c, fogs[b], min(1., f * 1.1) * uFog), 1.);
 }`;

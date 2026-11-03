@@ -39,7 +39,16 @@ type Settings = { sound: boolean; volume: number; camera: 'close' | 'mid' | 'far
 const settings: Settings = { sound: true, volume: 0.7, camera: 'mid' };
 try { Object.assign(settings, JSON.parse(localStorage.getItem('switchback') ?? '{}')); } catch { /* (private, or blocked: defaults) */ }
 const keep = () => { try { localStorage.setItem('switchback', JSON.stringify(settings)); } catch { /* (no matter) */ } };
-const CAMERA = { close: 0.72, mid: 1, far: 1.4 };
+/** the eye's three distances: MID as it always was; CLOSE tight behind the rider and low; FAR high and well back, an
+ * overview of the road ahead (each a scale on how far back, how high, how far to the side, how far ahead it looks, how
+ * far down, and its field) */
+const CAMERA = {
+  close: { back: 0.5, high: 0.72, side: 0.6, ahead: 0.62, drop: 1.05, fov: 0.92 },
+  mid: { back: 1, high: 1, side: 1, ahead: 1, drop: 1, fov: 1 },
+  far: { back: 2.3, high: 2.2, side: 1.6, ahead: 1.45, drop: 1.9, fov: 0.95 },
+};
+/** `cam=close|mid|far` for this page only (not kept): for pinned frames */
+const camFlag = q.get('cam') as keyof typeof CAMERA | null;
 
 // (input: a drag steers from where it began; low in the drag brakes; keys too. Not while the menu's open, and never from
 // a press on the menu or a link)
@@ -88,8 +97,8 @@ function view(dt: number, t: number): View {
   const k = 1 - Math.exp(-dt * (rider.air ? 1.6 : 3.2));
   // (after the way you're going, not the way the bike points, so a slide shows as the bike yawed across the frame)
   if (rider.crashT <= 0) cam.h += Math.atan2(Math.sin(rider.travel - cam.h), Math.cos(rider.travel - cam.h)) * k;
-  const fx = Math.sin(cam.h), fz = Math.cos(cam.h), rx = -Math.cos(cam.h), rz = Math.sin(cam.h), d = CAMERA[settings.camera] ?? 1;
-  const pace = Math.min(1, Math.hypot(rider.vx, rider.vz) / VMAX), back = (4.6 + pace * 1.1) * d, high = (3.3 + pace * 0.4) * (0.75 + 0.25 * d), side = 1.5 * Math.min(1, d);
+  const fx = Math.sin(cam.h), fz = Math.cos(cam.h), rx = -Math.cos(cam.h), rz = Math.sin(cam.h), d = CAMERA[camFlag ?? settings.camera] ?? CAMERA.mid;
+  const pace = Math.min(1, Math.hypot(rider.vx, rider.vz) / VMAX), back = (4.6 + pace * 1.1) * d.back, high = (3.3 + pace * 0.4) * d.high, side = 1.5 * d.side;
   const want = [rider.x - fx * back + rx * side, rider.y + high, rider.z - fz * back + rz * side];
   if (rider.crashT > 0) { want[0] = cam.eye[0]; want[2] = cam.eye[2]; }
   const ke = 1 - Math.exp(-dt * 7);
@@ -99,9 +108,9 @@ function view(dt: number, t: number): View {
   cam.eye[1] = Math.max(cam.eye[1], gy + 1.8);
   cam.shake *= Math.exp(-dt * 7);
   const sh = cam.shake, jx = Math.sin(t * 61) * sh * 0.3, jy = Math.sin(t * 47 + 1) * sh * 0.25;
-  const target = rider.crashT > 0 ? [rider.x, rider.y + 0.5, rider.z] : [rider.x + fx * 12, rider.y - 3, rider.z + fz * 12];
+  const target = rider.crashT > 0 ? [rider.x, rider.y + 0.5, rider.z] : [rider.x + fx * 12 * d.ahead, rider.y - 3 * d.drop, rider.z + fz * 12 * d.ahead];
   cam.fovKick += ((rider.air ? 0.06 : 0) - cam.fovKick) * (1 - Math.exp(-dt * 3));
-  return { eye: [cam.eye[0] + jx, cam.eye[1] + jy, cam.eye[2]], target, fov: (58 + pace * 16) * Math.PI / 180 + cam.fovKick, roll: rider.lean * 0.15 + Math.sin(t * 53) * sh * 0.02 };
+  return { eye: [cam.eye[0] + jx, cam.eye[1] + jy, cam.eye[2]], target, fov: (58 + pace * 16) * d.fov * Math.PI / 180 + cam.fovKick, roll: rider.lean * 0.15 + Math.sin(t * 53) * sh * 0.02 };
 }
 
 // (the title and the menu: one panel. On the title the sim's rider rides behind it; RIDE starts your run. In a run, the

@@ -38,7 +38,14 @@ Kit: orange jersey with black panels, black pants with orange knee guards, white
 
 ## The drawing (`mesh.ts`, `render.ts`)
 
-Every triangle has one material and one tone. The renderer takes each face's normal from the screen (so every face is flat), and its light, nudged by its tone, picks one of its material's four colours, all taken from the target: pale snow, packed track, charcoal rock, orange, black, white, the ranges' blues. So planes lit alike still break into different greys, as a painter sets them. Distance doesn't fade smoothly: it steps, four hard bands toward the valley's blues, each face keeping its band so the far slopes stay faceted. The ranges and the valley floor (with its river) are drawn round the eye, far off. The rider's shadow is the bike itself flattened along the sun onto the ground.
+Every triangle has one material and one tone. The renderer takes each face's normal from the screen (so every face is flat), and its light, nudged by its tone, picks one of its material's four colours, all taken from the target: pale snow, packed track, charcoal rock, orange, black, white, the ranges' blues. So planes lit alike still break into different greys, as a painter sets them. Distance doesn't fade smoothly: it steps, four hard bands toward the valley's blues, each face keeping its band so the far slopes stay faceted. The rider's shadow is the bike itself flattened along the sun onto the ground. Each face's position is taken relative to the eye before its normal is found, so far down the mountain, where world coordinates run to thousands of metres, faces don't speckle between bands.
+
+**The backdrop** is drawn round the eye, far enough off that it needn't move with you, in one family of blues: lighter and flatter the further off, never charcoal. It's a few deliberate set pieces rather than a field of random facets:
+- **Two skylines**, the farthest (3.4 km) and a nearer one (2.5 km) in front of it. Each is one continuous ridge line: peaks of their own heights and widths, broad shoulders and sharp summits, some broken by a notch, overlapping so one hides the next, and saddles that never sink far.
+- **Folds:** each skyline has one fold row partway down, pushed toward you under the summits and back in the saddles, so each face is one plane, lit or in shade.
+- **Snow** comes down from the crest where it's above the snow line, further down the gullies than the spurs, so it reads as fields and runnels rather than caps.
+- **Foothill ridges:** one or two in the middle distance (about 1.2–1.5 km), each a single long ridge rising from the valley floor and falling back to it, its face in a few big planes with one fold, and a band of forest along its foot, its top edge ragged as treetops.
+- **The valley floor** is flat, in one blue, with the white river winding across it.
 
 The world is built in 48-metre chunks: a cross-section every four metres, a few big planes from high up the wall to far down the drop, jittered hard in all three directions so its faces break into rock, its character drifting as you go down: the wall from a snowy bank to a sheer cliff, the drop from a shelf to straight down, now and then an outcrop of rock rising between the route and the valley; rock where it's steep and snow where it isn't; the track over it, its edges ragged, its ruts straight-cut; the fence (posts, an orange tape and a white one), checkpoint flags on the wall side, further apart the further down (their banners flying, built fresh each frame: waves run out along them, bigger toward the free end, which droops and swings; the facets catch the light and lose it as they turn), kickers on trestles, big jagged boulders bedded along both sides, crags (clusters of leaning rock towers) down the shelves and up the banks, a few pines.
 
@@ -56,7 +63,7 @@ Motion is drawn as vector shapes on a canvas over the world, never as blurred pi
 It opens on its title, the sim's own rider riding the mountain behind a veil of the sky's blue. **RIDE** starts your run from the top (and the sound: browsers only start it from a tap). The menu (the two bars top left, or Esc) pauses the run: **CARRY ON**, **START AGAIN**, and the settings, kept in this browser:
 
 - **Sound**: on or off, and its volume.
-- **Camera**: how far back the eye rides: close, mid or far.
+- **Camera**: how far back the eye rides. MID is the usual chase. CLOSE is tight behind and low: the rider and bike fill the lower half of the screen. FAR is high and well back, an overview of the road ahead with the rider small in it. (`cam=close|mid|far` sets it for one page, for pinned frames.)
 - **Mountain**: another seed.
 
 ## Sound (`audio.ts`)
@@ -69,7 +76,7 @@ All made in the page (WebAudio, no files):
 
 ## Flags
 
-`seed=` the mountain · `auto` the rider rides itself · (any flag below skips the title) · `t=` start that many seconds down the run (ridden there by the auto rider) · `still` hold the frame · `preview` no HUD.
+`seed=` the mountain · `auto` the rider rides itself · (any flag below skips the title) · `fx=0` no speed layer · `fog=0` no distance fade (both for judging a frame) · `t=` start that many seconds down the run (ridden there by the auto rider) · `still` hold the frame · `preview` no HUD.
 
 ## Tests
 
