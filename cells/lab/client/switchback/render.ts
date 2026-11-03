@@ -88,9 +88,9 @@ export class Renderer {
   fx = new Fx();
   /** for judging a frame: the speed layer (`fx=0` hides it) and the distance fade (`fog=0` shows each face's own colour) */
   speed = true; fog = true;
-  /** the air on the rider: three streaks set at the helmet and the bars (as they've been), or peeling off the posed
-   * figure's outline (`wake=peel`, a study), or none (`wake=0`) */
-  wake: 'fixed' | 'peel' | 'none' = 'fixed';
+  /** the air on the rider: peeling off the posed figure, or the three streaks set at the helmet and the bars it had
+   * before (`wake=fixed`), or none (`wake=0`) */
+  wake: 'fixed' | 'peel' | 'none' = 'peel';
   /** this frame's posed rider (its vertices, four floats each), for the air peeling off it */
   body: Float32Array | null = null;
   constructor(readonly canvas: HTMLCanvasElement, readonly overlay: HTMLCanvasElement, readonly course: Course) {
@@ -183,10 +183,10 @@ type Gust = { x: number; y: number; z: number; w: number; col: string };
  * charcoal, the ground taking it (braking, sliding) */
 const AIR_COLS = ['#ffffff', '#ffffff', '#f1ece8', '#d9d0ca'], PUSH_COLS = ['#e85a0d', '#ff7428', '#e85a0d'], GRIT_COLS = ['#24262e', '#2c2d32', '#3a3b44'];
 type Streak = { a: number; r: number; w: number; len: number; col: string; sp: number };
-/** a streak of air peeling off the rider (`wake=peel`): born at the point of the posed figure that stands out furthest
- * in its direction on the screen (vertex v), it peels away from the figure, never across it, its root kept on that
- * point as the body turns, and is gone in a moment; its length and width in the figure's own size on the screen */
-type Peel = { v: number; age: number; life: number; len: number; w: number; col: string };
+/** a streak of air peeling off the rider: the air leaving a point on the posed body (between two of its vertices, ia and
+ * ib, at f), streaming back past it and pushed out round it (dir, in the world, set when it's born), cut loose as it goes
+ * and gone in a moment; its length and its width at the near end in metres */
+type Peel = { ia: number; ib: number; f: number; dir: number[]; age: number; life: number; len: number; w: number; col: string };
 
 /** the speed layer: shards, smears, wake and debris, all flat vector shapes */
 export class Fx {
@@ -260,8 +260,8 @@ export class Fx {
         wedge(a, b, Math.max(1, px * 0.9), col);
       }
     }
-    // (the air peeling off the rider, `wake=peel`)
-    if (rd.wake === 'peel') this.peel(rd, r, dt, pace, eye, view, wedge);
+    // (the air peeling off the rider)
+    if (rd.wake === 'peel') this.peel(rd, r, dt, pace, wedge);
     // (the rider's wake: a few thin wedges trailing from the helmet, the tail and the bars, back along its way)
     if (rd.wake === 'fixed' && pace > 0.15 && r.crashT <= 0) {
       const fx = Math.sin(r.heading), fz = Math.cos(r.heading), rx = -Math.cos(r.heading), rz = Math.sin(r.heading);
@@ -338,68 +338,98 @@ export class Fx {
   }
 
   /**
-   * The air peeling off the rider (`wake=peel`, a study): streaks born now and then at the figure's outline as it's posed
-   * this frame (whatever it's doing: leaning, whipped, upside down in a flip), each peeling outward, away from the figure
-   * and back with the air, and gone in a fraction of a second. More of them the faster you go (none below the pace the
-   * fixed streaks showed at), fewer braking; only where the air's leaving the figure (out from the point the eye flies
-   * at: mostly its sides), and on the ground not off the wheels at the road. A still or paused frame holds them as they
-   * are, or, if there are none yet, shows a moment's worth.
+   * The air peeling off the rider: now and then a streak where the air leaves the figure as it's posed this frame
+   * (whatever it's doing: leaning, whipped, upside down in a flip). It's drawn in the world, not on the screen: from a point
+   * on the body it streams back past the rider and a little out round it, cut loose as it goes, so the eye sees it as the
+   * air does go, fine where it leaves the body and broadening toward the eye. Born evenly along the outline (not most of
+   * them at whatever sticks out furthest, the helmet), never where one's still going, and only where the air leaving
+   * there is seen to leave the figure, never crossing it; on the ground only sideways off its flanks (not up off the top,
+   * which from a chase eye reads as hair on end, nor down off the wheels at the road). More of them the faster you go (none below the pace the fixed streaks showed at), fewer braking, a few
+   * more in the air. A still or paused frame holds them as they are, or, if there are none yet, shows a moment's worth.
    */
-  private peel(rd: Renderer, r: Rider, dt: number, pace: number, eye: number[], view: View, wedge: (a: number[], b: number[], w: number, col: string) => void) {
-    const B = rd.body, R = this.rand;
-    if (!B || r.crashT > 0) { this.peels.length = 0; return; }
-    // (the figure on the screen: each vertex (projected as rd.project does, without the garbage), its box and its middle)
+  private peel(rd: Renderer, r: Rider, dt: number, pace: number, wedge: (a: number[], b: number[], w: number, col: string) => void) {
+    const B = rd.body, R = this.rand, speed = Math.hypot(r.vx, r.vy, r.vz);
+    if (!B || r.crashT > 0 || speed < 1) { this.peels.length = 0; return; }
+    // (the figure on the screen: each vertex (projected as rd.project does, without the garbage), its box and its middle;
+    // and its middle in the world)
     const n = B.length >> 2, P = this.peelP.length >= n * 2 ? this.peelP : (this.peelP = new Float32Array(n * 2)), m = rd.vp;
-    let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity, cx = 0, cy = 0, k = 0;
+    let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity, cx = 0, cy = 0, k = 0, X0 = 0, Y0 = 0, Z0 = 0;
     for (let i = 0; i < n; i++) {
       const X = B[i * 4], Y = B[i * 4 + 1], Z = B[i * 4 + 2], w = m[3] * X + m[7] * Y + m[11] * Z + m[15];
+      X0 += X; Y0 += Y; Z0 += Z;
       if (w < 0.4) { P[i * 2] = NaN; continue; }
       const px = ((m[0] * X + m[4] * Y + m[8] * Z + m[12]) / w * 0.5 + 0.5) * rd.W, py = (0.5 - (m[1] * X + m[5] * Y + m[9] * Z + m[13]) / w * 0.5) * rd.H;
       P[i * 2] = px; P[i * 2 + 1] = py; cx += px; cy += py; k++;
       if (px < x0) x0 = px; if (px > x1) x1 = px; if (py < y0) y0 = py; if (py > y1) y1 = py;
     }
     if (k < 3) return;
-    cx /= k; cy /= k;
+    cx /= k; cy /= k; X0 /= n; Y0 /= n; Z0 /= n;
     const S = Math.max(x1 - x0, y1 - y0);
-    // (where the air streams from on the screen: the point the eye's flying at)
-    const vp = rd.project([eye[0] + (view.target[0] - eye[0]) * 20, eye[1] + (view.target[1] - eye[1]) * 20, eye[2] + (view.target[2] - eye[2]) * 20]) ?? [rd.W / 2, rd.H * 0.42, 1];
-    const rate = pace > 0.15 ? ((0.3 + pace * pace) * 26 + (r.air ? 10 : 0)) * (1 - this.brake * 0.6) : 0;
+    const at = (q: Peel) => { const a = q.ia * 4, b = q.ib * 4, f = q.f; return [B[a] + (B[b] - B[a]) * f, B[a + 1] + (B[b + 1] - B[a + 1]) * f, B[a + 2] + (B[b + 2] - B[a + 2]) * f]; };
+    const onScreen = (q: Peel) => { const a = q.ia * 2, b = q.ib * 2; return [P[a] + (P[b] - P[a]) * q.f, P[a + 1] + (P[b + 1] - P[a + 1]) * q.f]; };
+    // (the outline, near enough: the vertex standing out furthest in each of 24 directions round the figure, in order)
+    const ring: number[] = [];
+    for (let j = 0; j < 24; j++) {
+      const dx = Math.cos((j / 24) * Math.PI * 2), dy = Math.sin((j / 24) * Math.PI * 2);
+      let v = -1, best = -Infinity;
+      for (let i = 0; i < n; i++) { const d = P[i * 2] * dx + P[i * 2 + 1] * dy; if (d > best) { best = d; v = i; } }
+      if (v >= 0 && ring[ring.length - 1] !== v && ring[0] !== v) ring.push(v);
+    }
+    if (ring.length < 3) return;
+    const edges = ring.map((v, j) => { const u = ring[(j + 1) % ring.length]; return Math.hypot(P[u * 2] - P[v * 2], P[u * 2 + 1] - P[v * 2 + 1]); });
+    const around = edges.reduce((a, b) => a + b, 0);
+    const back = [-r.vx / speed, -r.vy / speed, -r.vz / speed];
+    /** (as the eye sees it now, it leaves the figure, never crossing it; and on the ground only sideways off its flanks:
+     * from a chase eye the air rushing back past the top of the figure is drawn going up, which reads as hair on end, and
+     * past the bottom going down, as spray; `steep` lets it, in the air, now and then, as the figure turns) */
+    const seen = (q: Peel, steep: boolean) => {
+      const p = at(q), [sx, sy] = onScreen(q), e = rd.project([p[0] + q.dir[0], p[1] + q.dir[1], p[2] + q.dir[2]]);
+      if (!e || !(sx === sx)) return false;
+      let ex = e[0] - sx, ey = e[1] - sy; const el = Math.hypot(ex, ey); if (el < 1) return false; ex /= el; ey /= el;
+      const nx = sx - cx, ny = sy - cy, nl = Math.hypot(nx, ny) || 1;
+      return (ex * nx + ey * ny) / nl >= 0.2 && (steep || Math.abs(ey) <= 0.55);
+    };
+    // (a still or paused frame: the eye may still be settling, so what was there is kept only while it still holds)
+    if (dt === 0) this.peels = this.peels.filter((q) => q.ia < n && q.ib < n && seen(q, r.air));
+    const live = this.peels.filter((q) => q.ia < n && q.ib < n && q.age < q.life);
     const born = () => {
-      // (where on the outline: a direction out from the figure, and the point standing out furthest that way; taken only
-      // where the air's leaving the figure there (streaming out from the point the eye flies at, it leaves by the sides,
-      // and by the top only when the figure's above that point), and on the ground not off the wheels at the road)
       for (let tries = 0; tries < 8; tries++) {
-        const ang = R() * Math.PI * 2, dx = Math.cos(ang), dy = Math.sin(ang);
-        let v = -1, best = -Infinity;
-        for (let i = 0; i < n; i++) { const d = P[i * 2] * dx + P[i * 2 + 1] * dy; if (d > best) { best = d; v = i; } } // (NaN never wins)
-        if (v < 0) return;
-        const x = P[v * 2], y = P[v * 2 + 1], fl = Math.hypot(x - vp[0], y - vp[1]) || 1;
-        if (((x - vp[0]) * dx + (y - vp[1]) * dy) / fl < 0.25) continue;
-        if (!r.air && y > y0 + (y1 - y0) * 0.75) continue;
-        this.peels.push({ v, age: 0, life: 0.16 + R() * 0.18, len: (0.18 + R() * 0.24) * (1 + pace * 0.4), w: 0.012 + R() * 0.016, col: AIR_COLS[Math.floor(R() * AIR_COLS.length)] });
+        // (somewhere along the outline, evenly by its length)
+        let d = R() * around, j = 0;
+        while (j < edges.length - 1 && d > edges[j]) { d -= edges[j]; j++; }
+        const q: Peel = { ia: ring[j], ib: ring[(j + 1) % ring.length], f: edges[j] > 0 ? Math.min(1, d / edges[j]) : 0, dir: back, age: 0, life: 0.3 + R() * 0.25, len: (0.5 + R() * 0.6) * (0.7 + pace * 0.6), w: 0.03 + R() * 0.03, col: AIR_COLS[Math.floor(R() * AIR_COLS.length)] };
+        const [sx, sy] = onScreen(q);
+        if (!(sx === sx)) continue;
+        if (!r.air && sy > y0 + (y1 - y0) * 0.75) continue;
+        // (not where one's still going)
+        if (live.some((o) => { const [ox, oy] = onScreen(o); return Math.hypot(ox - sx, oy - sy) < S * 0.12; })) continue;
+        // (its way: back past the rider, and out round the body from its middle (square to the way back), as air's pushed)
+        const p = at(q);
+        let ox = p[0] - X0, oy = p[1] - Y0, oz = p[2] - Z0; const ob = ox * back[0] + oy * back[1] + oz * back[2];
+        ox -= back[0] * ob; oy -= back[1] * ob; oz -= back[2] * ob; const ol = Math.hypot(ox, oy, oz) || 1;
+        const dir = [back[0] + (ox / ol) * 0.55, back[1] + (oy / ol) * 0.55, back[2] + (oz / ol) * 0.55], dl = Math.hypot(dir[0], dir[1], dir[2]);
+        q.dir = [dir[0] / dl, dir[1] / dl, dir[2] / dl];
+        if (!seen(q, r.air && R() < 0.3)) continue;
+        this.peels.push(q); live.push(q);
         return;
       }
     };
+    const rate = pace > 0.15 ? ((0.25 + pace * pace) * 11 + (r.air ? 5 : 0)) * (1 - this.brake * 0.6) : 0;
     if (dt > 0) {
       this.peelDue += rate * dt;
       while (this.peelDue >= 1) { this.peelDue -= 1; born(); }
-    } else if (!this.peels.length && rate > 0) {
-      // (a still frame: a moment's worth, at every age)
-      const m = Math.round(rate * 0.25);
-      for (let i = 0; i < m; i++) { born(); const q = this.peels[this.peels.length - 1]; if (q) q.age = R() * q.life; }
+    } else if (rate > 0) {
+      // (a still frame: a moment's worth, at every age, topped up as the eye settles)
+      for (let i = Math.round(rate * 0.42) - this.peels.length; i > 0; i--) { const was = this.peels.length; born(); if (this.peels.length > was) this.peels[was].age = R() * this.peels[was].life; }
     }
     for (const q of this.peels) {
       q.age += dt;
-      const x = P[q.v * 2], y = P[q.v * 2 + 1];
-      if (!(x === x) || q.age >= q.life) { q.age = q.life; continue; }
-      // (with the air, streaming out from the point the eye flies at, but held off the figure: never turned back across it)
-      let nx = x - cx, ny = y - cy; const nl = Math.hypot(nx, ny) || 1; nx /= nl; ny /= nl;
-      let fx = x - vp[0], fy = y - vp[1]; const fl = Math.hypot(fx, fy) || 1; fx /= fl; fy /= fl;
-      let dx = fx * 0.75 + nx * 0.25, dy = fy * 0.75 + ny * 0.25; let dl = Math.hypot(dx, dy) || 1; dx /= dl; dy /= dl;
-      if (dx * nx + dy * ny < 0.3) { dx += nx; dy += ny; dl = Math.hypot(dx, dy) || 1; dx /= dl; dy /= dl; }
-      const t = q.age / q.life, gap = S * (0.03 + 0.22 * t * t), L = q.len * S * (0.35 + 0.65 * Math.min(1, t * 4)) * (1 - 0.3 * t);
-      const a = [x + dx * gap, y + dy * gap], b = [a[0] + dx * L, a[1] + dy * L];
-      wedge(a, b, Math.max(0.6, q.w * S * (1 - 0.8 * t)), q.col);
+      if (q.ia >= n || q.ib >= n || q.age >= q.life) { q.age = q.life; continue; }
+      // (cut loose as it goes: its near end streaming on toward the eye, its far end leaving the body)
+      const t = q.age / q.life, p = at(q), gap = 0.06 + 1.1 * t * t, L = q.len * (0.3 + 0.7 * Math.min(1, t * 3));
+      const a = rd.project([p[0] + q.dir[0] * (gap + L), p[1] + q.dir[1] * (gap + L), p[2] + q.dir[2] * (gap + L)]), b = rd.project([p[0] + q.dir[0] * gap, p[1] + q.dir[1] * gap, p[2] + q.dir[2] * gap]);
+      if (!a || !b || Math.hypot(a[0] - b[0], a[1] - b[1]) < 2) continue;
+      wedge(a, b, Math.max(0.6, Math.min(6, (q.w * rd.H) / a[2]) * (1 - 0.6 * t)), q.col);
     }
     this.peels = this.peels.filter((q) => q.age < q.life);
   }
