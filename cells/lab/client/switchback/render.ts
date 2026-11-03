@@ -74,6 +74,8 @@ export class Renderer {
   private chunks = new Map<number, Buf>(); private ranges: Buf; private valley: Buf; private rider: Buf; private shadow: Buf; private flags: Buf;
   vp: Mat = new Float32Array(16); W = 1; H = 1; dpr = 1;
   fx = new Fx();
+  /** for judging a frame: the speed layer (`fx=0` hides it) and the distance fade (`fog=0` shows each face's own colour) */
+  speed = true; fog = true;
   constructor(readonly canvas: HTMLCanvasElement, readonly overlay: HTMLCanvasElement, readonly course: Course) {
     const gl = canvas.getContext('webgl2', { antialias: true, preserveDrawingBuffer: true });
     if (!gl) throw new Error('no webgl2');
@@ -115,7 +117,7 @@ export class Renderer {
     // (the far ranges, round the eye and a little below it, unfaded)
     gl.uniform1f(this.u.uFog, 0); gl.uniform3f(this.u.uOff, view.eye[0], view.eye[1] - 60, view.eye[2]); this.ranges.draw(); this.valley.draw();
     gl.clear(gl.DEPTH_BUFFER_BIT);
-    gl.uniform1f(this.u.uFog, 1); gl.uniform3f(this.u.uOff, 0, 0, 0);
+    gl.uniform1f(this.u.uFog, this.fog ? 1 : 0); gl.uniform3f(this.u.uOff, 0, 0, 0);
     for (const b of this.chunks.values()) b.draw();
     // (the rider, and its shadow flattened along the sun onto the ground under it)
     const body = buildRider({ x: r.x, y: r.y, z: r.z, heading: r.heading, pitch: r.pitch, lean: r.lean, squash: r.squash, crashT: r.crashT, air: r.air, steer: r.steer, yFront: r.yFront, yRear: r.yRear, dist: r.dist, body: r.body }, t);
@@ -131,7 +133,7 @@ export class Renderer {
     if (!r.air || body[1] - g < 6) { this.shadow.set(sh, true); this.shadow.draw(); }
     gl.disable(gl.POLYGON_OFFSET_FILL);
     // (the speed layer)
-    this.fx.draw(this, view, r, dt);
+    if (this.speed) this.fx.draw(this, view, r, dt); else { this.ctx.setTransform(1, 0, 0, 1, 0, 0); this.ctx.clearRect(0, 0, this.overlay.width, this.overlay.height); }
   }
   /** a world point on the screen (css px) and its depth, or null behind the eye */
   project(p: number[]): [number, number, number] | null {
