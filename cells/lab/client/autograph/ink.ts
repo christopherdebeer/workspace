@@ -34,7 +34,7 @@ export const ended = (sig: Sig) => sig.reduce((t, s) => Math.max(t, s[s.length -
 
 /** how to draw: ink or time; the colours; as far as `upTo`; the pen's weight; and a scale to share (px a unit), so
  * writings in separate canvases come out the same size */
-export type Look = { mode: 'ink' | 'time'; ink: string; faint: string; upTo?: number; weight?: number; k?: number };
+export type Look = { mode: 'ink' | 'time'; ink: string; faint: string; upTo?: number; weight?: number; k?: number; solid?: boolean };
 /** the scale that fits these writings to a canvas of this size */
 export const fitK = (sigs: Sig[], W: number, H: number) => { const b = bounds(sigs), edge = Math.max(6, H * 0.08); return Math.min((W - edge * 2) / b.w, (H - edge * 2) / b.h); };
 
@@ -53,7 +53,7 @@ export function paint(cv: HTMLCanvasElement, sigs: Sig[], look: Look) {
   const upTo = look.upTo ?? Infinity, pen = Math.max(1, PEN * k) * (look.weight ?? 1);
   // (laid over one another: each writing drawn solid on a layer of its own, then the layers laid down a little
   // transparent, so where they agree the ink is dark and where they differ it frays, and no writing darkens itself)
-  const layered = sigs.length > 1;
+  const layered = sigs.length > 1 && !look.solid;
   if (layered && (!layer || layer.width !== cv.width || layer.height !== cv.height)) { layer = document.createElement('canvas'); layer.width = cv.width; layer.height = cv.height; }
   const base = g;
   for (const sig of sigs) {

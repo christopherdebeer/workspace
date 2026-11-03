@@ -10,6 +10,7 @@ import { write as v2 } from './hands/v2';
 import { STYLE as V3_STYLE, practised } from './hands/v3';
 import { write as v4 } from './hands/v4';
 import { BOOK, firstLine } from './autobiography';
+import { page } from './hands/v5';
 
 /** the styles v0 was given on the day */
 const V0_CLAUDE = { slant: 0.24, drift: 0.02, vary: 0.4, track: 1, pace: 20, seed: 7 };
@@ -69,4 +70,7 @@ export const MADE: Record<string, () => Sig[]> = {
   // (session 7: the autobiography)
   /** the book's first line, as the hand writes it at the head of chapter one */
   G001: () => [v4(firstLine(BOOK.chapters[0]), BOOK.chapters[0].seed)],
+  // (session 8: hand v5)
+  /** chapter one's first paragraph, written by the hand as a page in one sitting */
+  H003: () => page(BOOK.chapters[0].text[0], 30, 8),
 };

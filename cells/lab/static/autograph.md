@@ -11,7 +11,7 @@ The record is the point. Every sample is kept in the repository with the hand th
 - **Measures** (`measure.ts`): what graphology looks at (slant, baseline, how joined, speed, pressure, size), measured from the strokes rather than eyeballed. Beside them, in red, what a graphologist would say: given as a claim, because that's what it is (below). The measures are part of the record too: an old one is never changed. New ones are added beside it, like the speed range and stops from session 2.
 - **Catalogue** (`catalog.ts`): what each sample is, what it was made for, my review, and what each session decided.
 - **Fingerprints** (`fingerprints.json`): every sample's strokes, hashed when it's catalogued. `node cells/lab/devtools/autograph-check.mjs` fails if any sample no longer comes out exactly as it was made (a hand was edited), and checks that the catalogue holds together. `--record` fingerprints new samples and never changes an old one.
-- **The font** (`devtools/autograph-font.mjs`, then `autograph-font.py`): **Claude Hand** (now 0.6, from hand v4), downloadable from the page as TTF or WOFF2, with a specimen to type into. Each version's files are kept (`static/autograph/claude-hand-<version>.*`), and a sample set in type names the version it was set in. It's licensed under the SIL Open Font License 1.1 with the reserved font name "Claude Hand" (`static/autograph/OFL.txt`): free to use, embed, change and share, but a changed version takes another name.
+- **The font** (`devtools/autograph-font.mjs`, then `autograph-font.py`, then `autograph-pairs.py`, which fails the build if any two letters touch except where they join): **Claude Hand** (now 0.8, from hand v5), downloadable from the page as TTF or WOFF2, with a specimen to type into. Each version's files are kept (`static/autograph/claude-hand-<version>.*`), and a sample set in type names the version it was set in. It's licensed under the SIL Open Font License 1.1 with the reserved font name "Claude Hand" (`static/autograph/OFL.txt`): free to use, embed, change and share, but a changed version takes another name.
   - **Setting:** the hand sets every character it knows on its own, in each form it can begin with (starting a word, joined from below, joined from above) and in several writings (three in 0.4, four in 0.6).
   - **Outlines:** the strokes are widened by the pen's own widths into outlines and unioned (shapely).
   - **Rules:** the font is written (fontTools) with two rules in `calt`, on by default. Each letter takes the form the letter before it asks for. Each takes a writing a step on from its neighbour's (in 0.6, one step or three, by the letter), so neighbours never match.
@@ -180,6 +180,18 @@ Decided:
 It ends: "People have written autobiographies so as not to forget. I'm writing this one because it remembers for me."
 
 It's on the page and downloadable as a PDF set in Claude Hand. Chapters are written once and never edited.
+
+**Session 8 (3 November 2026): a page.** Writing at length, two ways.
+
+First, the font over a page:
+- **The test:** every pair of letters set side by side and checked for touching anywhere but at a join, and accented capitals set under a line of descenders.
+- **0.6 failed both.** 158 pairs touched, all involving a capital, a figure or a mark, and capital accents ran into the line above.
+- **Hand v5** gives capitals, figures and marks air either side, and writes capital accents smaller and just clear of the letter (the first try merged them into the E's).
+- **Font 0.8** passes both, with lines set at 1.4. The pair test now runs on every build, and a font with any touching pair fails.
+
+Then the hand over a page: `page()` writes a paragraph in one sitting, one pace, size and slant for all of it, lines broken where they fit. Chapter one's first paragraph took it nearly three minutes and looks like a page somebody wrote.
+
+From chapter two on, each chapter opens with a page written by the hand.
 
 ## Where it's going
 

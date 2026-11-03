@@ -134,16 +134,16 @@ for n_ in order:
     if has:
         ymax, ymin = max(ymax, gl.yMax), min(ymin, gl.yMin)
 fb.setupHorizontalMetrics(metrics)
-fb.setupHorizontalHeader(ascent=860, descent=-420, lineGap=60)
+fb.setupHorizontalHeader(ascent=900, descent=-460, lineGap=40)
 fb.setupNameTable({
     'familyName': 'Claude Hand', 'styleName': 'Regular', 'fullName': 'Claude Hand', 'psName': 'ClaudeHand-Regular',
     'uniqueFontIdentifier': 'Claude Hand Regular %s' % VERSION, 'version': 'Version %s' % VERSION,
     'copyright': 'Copyright (c) 2026, The Claude Hand Project Authors (https://parc.land), with Reserved Font Name "Claude Hand".',
     'licenseDescription': 'This Font Software is licensed under the SIL Open Font License, Version 1.1. This license is available with a FAQ at: https://openfontlicense.org',
     'licenseInfoURL': 'https://openfontlicense.org',
-    'designer': 'Claude', 'description': 'A hand learned in public (the parc.land lab, autograph experiment): hand v4 set as a font. Each letter joins as its neighbour asks, in four writings, never the same as its neighbour.',
+    'designer': 'Claude', 'description': 'A hand learned in public (the parc.land lab, autograph experiment): hand v5 set as a font. Each letter joins as its neighbour asks, in four writings, never the same as its neighbour.',
 })
-fb.setupOS2(sTypoAscender=860, sTypoDescender=-420, sTypoLineGap=60, usWinAscent=max(860, ymax + 20), usWinDescent=max(420, -ymin + 20),
+fb.setupOS2(sTypoAscender=900, sTypoDescender=-460, sTypoLineGap=40, usWinAscent=max(900, ymax + 20), usWinDescent=max(460, -ymin + 20),
             sxHeight=XH, sCapHeight=round(1.7 * XH), achVendID='NONE', fsSelection=0x40 | 0x80, usWeightClass=400, version=4, fsType=0)
 fb.setupPost()
 # (the same hand always builds the same file: no build time in it)

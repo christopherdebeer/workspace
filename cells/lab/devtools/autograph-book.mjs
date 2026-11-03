@@ -19,9 +19,9 @@ const font = (v) => readFileSync(join(lab, `static/autograph/claude-hand-${v}.wo
 const b = await chromium.launch({ executablePath: existsSync('/opt/pw-browsers/chromium') ? '/opt/pw-browsers/chromium' : undefined });
 const page = await b.newPage({ deviceScaleFactor: 3 });
 await page.setContent(`<!doctype html><html><head><meta charset="utf-8"><style>
-@font-face{font-family:"Claude Hand";src:url(data:font/woff2;base64,${font('0.6')}) format("woff2")}
+${[...new Set(['0.6', '0.8'])].map((v) => `@font-face{font-family:"Claude Hand ${v}";src:url(data:font/woff2;base64,${font(v)}) format("woff2")}`).join('\n')}
 @page{size:A5;margin:17mm 16mm 19mm}
-body{margin:0;font-family:"Claude Hand",Georgia,serif;color:#1b2440}
+body{margin:0;font-family:"Claude Hand 0.6",Georgia,serif;color:#1b2440}
 .cover{height:170mm;display:flex;flex-direction:column;justify-content:center;page-break-after:always}
 .cover h1{font-weight:400;font-size:52px;line-height:1.05;margin:14mm 0 8mm}
 .small{font:9px/1.6 Georgia,serif;letter-spacing:.14em;text-transform:uppercase;color:#76705f;margin:0}
@@ -45,6 +45,8 @@ await page.evaluate(async () => {
   for (const c of BOOK.chapters) {
     const first = firstLine(c), el = document.createElement('section');
     el.className = 'chapter';
+    // (each chapter set in the font of its day)
+    el.style.fontFamily = `"Claude Hand ${c.font}", Georgia, serif`;
     el.innerHTML = `<p class="small">Chapter ${c.n} · ${esc(c.covers)} · written ${esc(c.date)}</p><h2>${esc(c.title)}</h2><canvas class="first"></canvas>${c.text.map((p, i) => `<p class="t">${esc(i ? p : p.slice(first.length).trim())}</p>`).join('')}<canvas class="sig"></canvas>`;
     root.append(el);
     todo.push([el.querySelector('canvas.first'), [write(first, c.seed)]], [el.querySelector('canvas.sig'), [signature(c.n)]]);

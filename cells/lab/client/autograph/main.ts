@@ -54,7 +54,7 @@ function typeCard(e: Entry) {
   el.className = 'sample'; el.id = e.id;
   el.innerHTML = `
     <header><span class="id">${e.id}</span><h3>${esc(e.title)}</h3><span class="hand">Claude Hand ${e.font ?? '0.41'}, set in type</span></header>
-    <div class="set">${e.type!.map((l) => `<p class="hand-type${l.calt === false ? ' nocalt' : ''}" style="font-size:${l.size}px;font-family:${(e.font ?? '0.41') === '0.6' ? '\'Claude Hand\'' : `'Claude Hand ${e.font ?? '0.41'}'`},Georgia,serif">${esc(l.text)}${l.calt === false ? '<span class="off">joins off</span>' : ''}</p>`).join('')}</div>
+    <div class="set">${e.type!.map((l) => `<p class="hand-type${l.calt === false ? ' nocalt' : ''}" style="font-size:${l.size}px;font-family:'Claude Hand ${e.font ?? '0.41'}',Georgia,serif${l.lh ? `;line-height:${l.lh}` : ''}">${esc(l.text).replace(/\n/g, '<br>')}${l.calt === false ? '<span class="off">joins off</span>' : ''}</p>`).join('')}</div>
     <p class="made">${esc(e.made)}</p>
     <p class="review">${esc(e.review)}</p>`;
   return { el, size: () => {}, write: () => {} };
@@ -65,7 +65,7 @@ function card(e: Entry) {
   const sigs = MADE[e.id](), ms = sigs.map((s) => measure(s, e.text));
   const el = document.createElement('article');
   el.className = 'sample'; el.id = e.id;
-  const rows = e.layout === 'rows';
+  const rows = e.layout === 'rows', isPage = e.layout === 'page';
   const facts = [
     `slant ${shown(ms, 'slant', deg)}`, `baseline ${shown(ms, 'baseline', deg)}`,
     ms[0].joined !== undefined ? `${shown(ms, 'joined', (v) => v.toFixed(1))} letters a stroke` : '',
@@ -74,7 +74,7 @@ function card(e: Entry) {
     `ink ${shown(ms, 'weight', (v) => v.toFixed(2))}`, `${shown(ms, 'duration', (v) => v.toFixed(1))} s`, `${shown(ms, 'strokes', (v) => String(v))} stroke${ms.every((m) => m.strokes === 1) ? '' : 's'}`,
   ].filter(Boolean);
   el.innerHTML = `
-    <header><span class="id">${e.id}</span><h3>${esc(e.title)}</h3><span class="hand">${HANDS[e.hand].name}${sigs.length > 1 ? ` · ${sigs.length} writings${e.layout === 'overlay' ? ', laid over each other' : ''}` : ''}</span></header>
+    <header><span class="id">${e.id}</span><h3>${esc(e.title)}</h3><span class="hand">${HANDS[e.hand].name}${isPage ? ` · a page, ${sigs.length} lines` : sigs.length > 1 ? ` · ${sigs.length} writings${e.layout === 'overlay' ? ', laid over each other' : ''}` : ''}</span></header>
     <div class="ink">${(rows ? sigs : [null]).map(() => '<canvas></canvas>').join('')}</div>
     <div class="views" role="group" aria-label="How to look"><button data-mode="ink" aria-pressed="true">INK</button><button data-mode="time" aria-pressed="false">TIME</button><span class="hint">tap to write it again</span></div>
     <p class="facts">${facts.join(' · ')}</p>
@@ -83,12 +83,12 @@ function card(e: Entry) {
     <p class="review">${esc(e.review)}</p>`;
   const cvs = [...el.querySelectorAll('canvas')], groups = rows ? sigs.map((s) => [s]) : [sigs];
   let mode: Look['mode'] = 'ink', k: number | undefined;
-  const look = () => ({ ...lookOf(mode), k });
+  const look = () => ({ ...lookOf(mode), k, solid: isPage });
   const draw = () => cvs.forEach((cv, i) => paint(cv, groups[i], look()));
   const write = () => cvs.forEach((cv, i) => replay(cv, groups[i], look));
   // (rows share one scale, the one that fits them all, so they're the same size of writing)
   const size = () => {
-    cvs.forEach((cv, i) => sized(cv, groups[i], rows ? 120 : 230));
+    cvs.forEach((cv, i) => sized(cv, groups[i], rows ? 120 : isPage ? 560 : 230));
     if (rows) { const H = Math.max(...cvs.map((cv) => cv.clientHeight)); for (const cv of cvs) cv.style.height = `${H}px`; k = Math.min(...cvs.map((cv, i) => fitK(groups[i], cv.clientWidth, H))); }
     draw();
   };
@@ -110,7 +110,7 @@ for (const c of BOOK.chapters) {
   const first = firstLine(c);
   el.innerHTML = `<h3><span>Chapter ${c.n} · ${esc(c.covers)} · written in session ${c.session}, ${esc(c.date)}</span>${esc(c.title)}</h3>
     <canvas class="first" aria-label="${esc(first)} (written by the hand)"></canvas>
-    <div class="hand-type text">${c.text.map((p, i) => `<p>${esc(i ? p : p.slice(first.length).trim())}</p>`).join('')}</div>
+    <div class="hand-type text" style="font-family:'Claude Hand ${c.font}',Georgia,serif">${c.text.map((p, i) => `<p>${esc(i ? p : p.slice(first.length).trim())}</p>`).join('')}</div>
     <canvas class="signed" aria-label="Signed: Claude"></canvas>`;
   $('chapters').append(el);
   const ch = { first: el.querySelector('canvas.first') as HTMLCanvasElement, firstSig: [v4write(first, c.seed)], signed: el.querySelector('canvas.signed') as HTMLCanvasElement, signSig: [signature(c.n)] };
