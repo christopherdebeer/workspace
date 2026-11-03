@@ -6,7 +6,7 @@ A downhill motocross run down a mountain made as you ride it. The style target i
 
 ## Riding
 
-Drag left or right to steer: the drag's distance from where it began sets how hard you turn. Nothing steers for you: the bike goes where it points, and with no input it runs straight on, so every bend has to be ridden. Turn hard at speed and the rear steps out: the way you're travelling follows the way the bike points only as far as the tyres grip (less at speed, less braking), so the bike yaws past its line and slides, scrubbing pace and throwing roost, until it lines up again. Drag down (or hold ↓ / S) to brake; ← → or A D steer from a keyboard. The engine and the hill keep you going. Kickers (a ramp painted with an orange double chevron, a gap over a ravine, a landing deck, both on black trestles) launch you; whoops (a run of rollers) throw you at speed; any crest that falls away faster than you would drop puts you in the air. In the air you can turn a little. The wall on the left glances you off it and costs pace; over the fence on the right is the drop. A fall or a crash puts you back at the last **checkpoint**: the flags on the wall side, one every 300–500 m, each one counted as you pass it (a word across the screen says which), and you start again just past it, going.
+Drag left or right to steer: the drag's distance from where it began sets how hard you turn. Nothing steers for you: the bike goes where it points, and with no input it runs straight on, so every bend has to be ridden. Turn hard at speed and the rear steps out: the way you're travelling follows the way the bike points only as far as the tyres grip (less at speed, less braking), so the bike yaws past its line and slides, scrubbing pace and throwing roost, until it lines up again. Drag down (or hold ↓ / S) to brake; ← → or A D steer from a keyboard. The engine and the hill keep you going. Kickers (a ramp painted with an orange double chevron, a gap over a ravine, a landing deck, both on black trestles) launch you; whoops (a run of rollers) throw you at speed; any crest that falls away faster than you would drop puts you in the air. In the air you can turn a little. The wall on the left glances you off it and costs pace; the drop side, on the right, is forgiving: you can ride the shoulder past the fence and the slope beyond it (the bike rides the ground as it's drawn there, and slides down it where it's steep), and only going too far down it, landing too hard into it, or riding into a face (an outcrop, the side of a raised deck) ends it. A fall or a crash puts you back at the last **checkpoint**: the flags on the wall side, one every 300–500 m, each one counted as you pass it (a word across the screen says which), and you start again just past it, going.
 
 The rider is yours from the start; `auto` (a debug and test flag; the preview uses it) hands the steering to the sim's own rider. The eye rides over your right shoulder, the drop side, so the wall rises beyond the rider and the valley opens under you.
 
@@ -51,9 +51,25 @@ Motion is drawn as vector shapes on a canvas over the world, never as blurred pi
 - **Wake**: thin wedges trailing back from the helmet, the tail and the bars.
 - **Debris**: faceted chunks of snow and rock thrown off the rear wheel as you ride, a burst on every landing, a spray on a crash, charcoal chips off the wall, each spun and smeared along its own motion.
 
+## Title, menu, settings
+
+It opens on its title, the sim's own rider riding the mountain behind a veil of the sky's blue. **RIDE** starts your run from the top (and the sound: browsers only start it from a tap). The menu (the two bars top left, or Esc) pauses the run: **CARRY ON**, **START AGAIN**, and the settings, kept in this browser:
+
+- **Sound**: on or off, and its volume.
+- **Camera**: how far back the eye rides: close, mid or far.
+- **Mountain**: another seed.
+
+## Sound (`audio.ts`)
+
+All made in the page (WebAudio, no files):
+- **The engine:** a two-stroke's buzz, three detuned oscillators driven through a soft clipper and a low-pass that opens as it revs. The revs come from the pace through six gears, so it climbs, drops a gear and climbs again. In the air the back wheel's free and it screams; braking, it falls to a burble.
+- **The wind:** noise through a band-pass that rises with the pace, louder as the square of it.
+- **The ground:** a gravel crunch under the tyres, more in a slide, none in the air.
+- **One-shots:** a landing's thump, a crash, a glance off rock, a checkpoint's two-note chime.
+
 ## Flags
 
-`seed=` the mountain · `auto` the rider rides itself · `t=` start that many seconds down the run (ridden there by the auto rider) · `still` hold the frame · `preview` no HUD.
+`seed=` the mountain · `auto` the rider rides itself · (any flag below skips the title) · `t=` start that many seconds down the run (ridden there by the auto rider) · `still` hold the frame · `preview` no HUD.
 
 ## Tests
 

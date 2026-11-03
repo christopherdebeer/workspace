@@ -6,8 +6,8 @@ import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 const here = dirname(fileURLToPath(import.meta.url));
 const outfile = join(tmpdir(), `switchback-${process.pid}.mjs`);
-await build({ stdin: { contents: `export * from './client/switchback/sim'; export * from './client/switchback/course';`, resolveDir: join(here, '..'), loader: 'ts' }, bundle: true, platform: 'node', format: 'esm', outfile, logLevel: 'warning' });
-const { Rider, Course, autoSteer } = await import(outfile);
+await build({ stdin: { contents: `export * from './client/switchback/sim'; export * from './client/switchback/course'; export { ground } from './client/switchback/ground';`, resolveDir: join(here, '..'), loader: 'ts' }, bundle: true, platform: 'node', format: 'esm', outfile, logLevel: 'warning' });
+const { Rider, Course, autoSteer, ground } = await import(outfile);
 const secs = Number(process.argv[2] ?? 180), seeds = process.argv.slice(3).map(Number);
 let bad = 0;
 for (const seed of seeds.length ? seeds : [1, 2, 3]) {
@@ -31,6 +31,22 @@ for (const seed of seeds.length ? seeds : [1, 2, 3]) {
   for (; t < 60 && !r.crashes; t += 1 / 120) r.step(1 / 120, { steer: 0, brake: false });
   const ok = r.crashes > 0 && t < 30; if (!ok) bad++;
   console.log(`${ok ? 'ok  ' : 'FAIL'}  hands off: off the line after ${t.toFixed(1)} s (nothing steers for you)`);
+}
+// (the drop side is forgiving: drifting off it you ride the shoulder and the slope for a while, never sinking into the
+// ground drawn there, before going too far down is a crash)
+{
+  let off = 0, sink = 0;
+  for (const seed of [1, 2, 3]) {
+    const r = new Rider(new Course(seed)); let t = 0;
+    while (t < 6) { r.step(1 / 120, { steer: autoSteer(r), brake: false }); t += 1 / 120; }
+    for (let k = 0; k < 120 * 20 && !r.crashes; k++) {
+      const half = r.course.at(r.s).width / 2;
+      r.step(1 / 120, { steer: Math.max(-1, Math.min(1, autoSteer(r) * 0.4 + (r.u < half + 5 ? 0.5 : -0.5))), brake: false });
+      if (r.u > half && r.crashT <= 0) { off += 1 / 120; if (!r.air) sink = Math.max(sink, ground(r.course, r.s, r.u) - r.y); }
+    }
+  }
+  const ok = off > 6 && sink < 0.05; if (!ok) bad++;
+  console.log(`${ok ? 'ok  ' : 'FAIL'}  drop side: ${off.toFixed(1)} s ridden off the road over three seeds, never more than ${sink.toFixed(2)} m into the drawn ground`);
 }
 // (checkpoints: flags spaced far apart, and a crash puts you back just past the last one passed)
 {

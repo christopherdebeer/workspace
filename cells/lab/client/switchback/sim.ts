@@ -9,6 +9,7 @@
  * under you. Off the drop side, too far: a fall, and back on the line. Into the wall: a glance off it, the pace lost.
  */
 import { Course } from './course';
+import { ground } from './ground';
 
 export const G = 9.8, VMAX = 46;
 export type Event = { kind: 'roost' | 'land' | 'wall' | 'launch' | 'crash' | 'checkpoint' | 'respawn'; x: number; y: number; z: number; k: number };
@@ -81,25 +82,44 @@ export class Rider {
     const yBefore = this.y, sWas = this.s;
     this.x += Math.sin(this.travel) * this.v * dt; this.z += Math.cos(this.travel) * this.v * dt;
     const loc = c.locate(this.x, this.z, this.s); this.s = loc.s; this.u = loc.u; this.dist += Math.max(0, this.s - sWas);
-    // (the wall, on the left: a glance off it, turned back along the line; the drop, on the right: over the edge)
+    // (the wall, on the left: a glance off it, turned back along the line)
     if (this.u < -half - 1.4) {
       this.u = -half - 1.4; const w = c.point(this.s, this.u); this.x = w.x; this.z = w.z;
       this.travel = this.heading = w.heading - 0.12; this.v *= 0.72; this.ev('wall', this.v / VMAX);
     }
+    let sy = this.surfaceY(this.s, this.u);
+    // (a face rising in front (an outcrop on the drop side, the side of a raised deck): a glance off it, turned away
+    // from it, the pace lost; + u is right, and turning left raises the heading)
+    if (sy - yBefore > 0.9) {
+      const back = c.locate(this.x - Math.sin(this.travel) * this.v * dt, this.z - Math.cos(this.travel) * this.v * dt, this.s), w = c.point(back.s, back.u);
+      const away = this.u > back.u ? 1 : -1;
+      this.s = back.s; this.u = back.u; this.x = w.x; this.z = w.z;
+      this.travel = this.heading = w.heading + away * 0.12; this.v *= 0.72; this.ev('wall', this.v / VMAX);
+      sy = this.surfaceY(this.s, this.u);
+    }
     this.psi = wrap(c.point(this.s, 0).heading - this.travel);
     const p = c.point(this.s, this.u);
-    // (a ramp's lip, or a crest that falls away faster than you'd drop: you fly; off the edge, or onto nothing: you fall)
+    // (a ramp's lip: you fly; onto nothing (a kicker's gap): you fall)
     if (here.feature === 'ramp' && p.feature !== 'ramp') { this.launch(yBefore, dt, false); return; }
-    if (this.u > half + 2.2 || !p.surface) { this.launch(yBefore, dt, true); return; }
-    const vyG = (p.y - yBefore) / dt;
-    // (a crest: the ground a tenth of a second on falls away below the arc you'd fly from here, by more than the
-    // suspension takes up)
-    const tau = 0.12, ahead = c.point(this.s + this.v * tau, this.u).y, arc = p.y + vyG * tau - 0.5 * G * tau * tau;
+    if (Math.abs(this.u) <= half && !p.surface) { this.launch(yBefore, dt, true); return; }
+    // (the drop side is ridden, not fallen off: the shoulder, then the slope beyond it, which takes you down it if it's
+    // steep (sliding toward the valley); far enough down and you've gone over: a crash)
+    if (this.u > half + 14) { this.crash(); return; }
+    if (this.u > half + 2.6) {
+      const cross = this.surfaceY(this.s, this.u) - this.surfaceY(this.s, this.u + 1);
+      if (cross > 0.45) this.travel -= Math.min(1, cross - 0.45) * 0.9 * dt;
+    }
+    // (off the side of something raised (a deck, a ramp), or over a step down: the ground's gone from under you, you fall)
+    if (sy < yBefore - 0.4) { this.launch(yBefore, dt, true); return; }
+    const vyG = (sy - yBefore) / dt;
+    // (a crest: the ground a tenth of a second on (the way you're going, across the line too) falls away below the arc
+    // you'd fly from here, by more than the suspension takes up: an edge, a lip, the shelf's brink)
+    const tau = 0.12, ahead = this.surfaceY(this.s + this.v * tau * Math.cos(this.psi), this.u + this.v * tau * Math.sin(this.psi)), arc = sy + vyG * tau - 0.5 * G * tau * tau;
     if (this.v > 8 && !Number.isNaN(this.vyGround) && ahead < arc - 0.26) { this.launch(yBefore, dt, false, here.feature === 'ramp'); return; }
     // (the suspension takes up each step the ground throws you up by)
     if (!Number.isNaN(this.vyGround)) this.squash = Math.min(1, this.squash + Math.max(0, vyG - this.vyGround) * 0.07);
     this.vyGround = vyG;
-    this.y = p.y;
+    this.y = sy;
     const fx = Math.sin(this.travel), fz = Math.cos(this.travel);
     this.vx = fx * this.v; this.vz = fz * this.v; this.vy = vyG;
     // (lean: what the turn asks, its pace times how fast the travel's swinging (smoothed: a flick of the bars isn't a
@@ -109,16 +129,24 @@ export class Rider {
     this.lean += (Math.max(-0.6, Math.min(0.6, Math.atan2(-this.v * this.yawS, G) * 0.8)) - this.lean) * (1 - Math.exp(-dt * 2.6));
     // (each wheel on the ground under it, the bike pitched between them: + is nose up)
     const fx0 = Math.sin(this.heading), fz0 = Math.cos(this.heading);
-    this.yFront = this.groundAt(this.x + fx0 * 0.82, this.z + fz0 * 0.82, p.y);
-    this.yRear = this.groundAt(this.x - fx0 * 0.78, this.z - fz0 * 0.78, p.y);
+    this.yFront = this.groundAt(this.x + fx0 * 0.82, this.z + fz0 * 0.82);
+    this.yRear = this.groundAt(this.x - fx0 * 0.78, this.z - fz0 * 0.78);
     this.pitch += (Math.atan2(this.yFront - this.yRear, 1.6) - this.pitch) * (1 - Math.exp(-dt * 25));
     this.squash *= Math.exp(-dt * 6);
     if (Math.random() < dt * (6 + this.v * 0.6 + Math.abs(this.slip) * 120)) this.ev('roost', Math.min(1, this.v / VMAX + Math.abs(this.slip) * 2));
   }
-  /** the road's height under a world point near here (for a wheel's contact) */
-  private groundAt(x: number, z: number, fallback: number) {
-    const loc = this.course.locate(x, z, this.s), q = this.course.point(loc.s, loc.u);
-    return q.surface ? q.y : fallback;
+  /** what's under (s, u): the road within its width (where there's road; up to the wall on the left), else the ground
+   * beside it (the drop side's shoulder and slope, a gap's notch) as it's drawn */
+  surfaceY(s: number, u: number) {
+    const p = this.course.point(s, u), half = p.width / 2;
+    if (u < -half) return p.y;
+    if (u <= half && p.surface) return p.y;
+    return ground(this.course, s, u);
+  }
+  /** what's under a world point near here (for a wheel's contact) */
+  private groundAt(x: number, z: number) {
+    const loc = this.course.locate(x, z, this.s);
+    return this.surfaceY(loc.s, loc.u);
   }
   /** the front's steering and the rider's body, after the step (both ground and air) */
   private sprung(dt: number) {
@@ -160,19 +188,23 @@ export class Rider {
     this.lean *= Math.exp(-dt * 2);
     this.squash += (-0.35 - this.squash) * (1 - Math.exp(-dt * 4)); // (in the air the springs extend)
     void inp;
-    const over = p.surface && Math.abs(this.u) < half + 2.2 && this.u > -half - 1.4;
-    if (over && this.y <= p.y && p.y - this.y > 1.2) { this.crash(); return; }
-    if (over && this.y <= p.y) {
-      // (down: on the line again, its pace the flight's along the line; a hard one squashes and costs a little)
-      const imp = -this.vy;
-      this.air = false; this.y = p.y; this.v = Math.max(6, Math.hypot(this.vx, this.vz) * (imp > 14 ? 0.86 : imp > 8 ? 0.97 : 1));
+    // (the wall, from the air: a crash)
+    if (this.u < -half - 1.4 && this.y < p.y + 0.3) { this.crash(); return; }
+    const sy = this.surfaceY(this.s, this.u);
+    if (this.y <= sy) {
+      // (down. The impact is the speed into the ground's own slope, the way you're going: a landing down a slope that
+      // matches the flight is soft, one onto the flat from the same height isn't. Into a gap, through a face rather than
+      // onto it, too hard, or far down the drop: a crash)
+      const vh = Math.hypot(this.vx, this.vz) || 1, ah = this.groundAt(this.x + this.vx / vh, this.z + this.vz / vh);
+      const imp = -(this.vy + vh * (sy - ah)), gap = Math.abs(this.u) <= half && !p.surface;
+      if (gap || sy - this.y > 1.2 || imp > 15 || this.u > half + 14) { this.crash(); return; }
+      // (else on the ground again; a hard one squashes and costs a little)
+      this.air = false; this.y = sy; this.v = Math.max(6, Math.hypot(this.vx, this.vz) * (imp > 14 ? 0.86 : imp > 8 ? 0.97 : 1));
       this.travel = Math.atan2(this.vx, this.vz); this.headingWas = this.travel;
       this.bestAir = Math.max(this.bestAir, this.airT); this.squash = Math.min(1, imp / 12); this.vyGround = NaN;
       this.ev('land', Math.min(1, imp / 10));
       return;
     }
-    // (fallen well below where the surface would be: a crash, and back on the line)
-    if (this.y < p.y - 7 || (this.u < -half - 1.4 && this.y < p.y + 0.3)) this.crash();
   }
   private crash() { this.crashT = 1.1; this.crashes++; this.ev('crash', 1); this.air = true; }
 }
