@@ -49,7 +49,7 @@ export class Rider {
         // (back to the last checkpoint flag passed, just past it, on the line, and going again)
         this.u = 0; this.psi = 0; this.v = 16; this.air = false; this.vy = 0; this.vyGround = NaN; this.s = this.checkpoint + 3;
         while (!this.course.point(this.s, 0).surface || this.course.at(this.s).feature !== 'none') this.s += 1;
-        this.place(); this.sPrev = this.s; this.headingWas = this.travel; this.lean = 0; this.squash = 0;
+        this.place(); this.sPrev = this.s; this.headingWas = this.travel; this.lean = 0; this.squash = 0; this.wheels();
         this.ev('respawn', this.checkpoints);
       }
       else { this.vy -= G * dt; this.x += this.vx * dt; this.y += this.vy * dt; this.z += this.vz * dt; this.pitch += dt * 3; }
@@ -128,9 +128,7 @@ export class Rider {
     this.yawS += (yaw - this.yawS) * (1 - Math.exp(-dt * 3));
     this.lean += (Math.max(-0.6, Math.min(0.6, Math.atan2(-this.v * this.yawS, G) * 0.8)) - this.lean) * (1 - Math.exp(-dt * 2.6));
     // (each wheel on the ground under it, the bike pitched between them: + is nose up)
-    const fx0 = Math.sin(this.heading), fz0 = Math.cos(this.heading);
-    this.yFront = this.groundAt(this.x + fx0 * 0.82, this.z + fz0 * 0.82);
-    this.yRear = this.groundAt(this.x - fx0 * 0.78, this.z - fz0 * 0.78);
+    this.wheels();
     this.pitch += (Math.atan2(this.yFront - this.yRear, 1.6) - this.pitch) * (1 - Math.exp(-dt * 25));
     this.squash *= Math.exp(-dt * 6);
     if (Math.random() < dt * (6 + this.v * 0.6 + Math.abs(this.slip) * 120)) this.ev('roost', Math.min(1, this.v / VMAX + Math.abs(this.slip) * 2));
@@ -142,6 +140,13 @@ export class Rider {
     if (u < -half) return p.y;
     if (u <= half && p.surface) return p.y;
     return ground(this.course, s, u);
+  }
+  /** each wheel's contact: the ground under it (on every step that ends on the ground, the landing one included, so the
+   * bike is never drawn standing on where it took off from) */
+  private wheels() {
+    const fx0 = Math.sin(this.heading), fz0 = Math.cos(this.heading);
+    this.yFront = this.groundAt(this.x + fx0 * 0.82, this.z + fz0 * 0.82);
+    this.yRear = this.groundAt(this.x - fx0 * 0.78, this.z - fz0 * 0.78);
   }
   /** what's under a world point near here (for a wheel's contact) */
   private groundAt(x: number, z: number) {
@@ -203,6 +208,7 @@ export class Rider {
       this.travel = Math.atan2(this.vx, this.vz); this.headingWas = this.travel;
       this.bestAir = Math.max(this.bestAir, this.airT); this.squash = Math.min(1, imp / 12); this.vyGround = NaN;
       this.ev('land', Math.min(1, imp / 10));
+      this.wheels();
       return;
     }
   }

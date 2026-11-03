@@ -39,11 +39,15 @@ export class Mesh {
   /** a face's own tone (0…1, carried in the material's fraction): it nudges which band the face falls in, so planes lit
    * alike still break into different greys, as a painter would set them */
   private n = 0;
+  /** `moving`: the mesh is built afresh each frame (the rider, the flags), so a face's own tone comes from its place in
+   * the build, not from where it is, and holds steady as it moves rather than flickering between bands */
+  constructor(readonly moving = false) {}
+  private tone(a: number[], b: number[], c: number[]) { return this.moving ? hash(this.n++, 7.3) : hash(a[0] * 0.37 + this.n++, a[2] * 0.53, c[1]); }
   tri(a: number[], b: number[], c: number[], m: number, tone = -1) {
-    const t = m + (tone >= 0 ? tone : hash(a[0] * 0.37 + this.n++, a[2] * 0.53, b[1])) * 0.9;
+    const t = m + (tone >= 0 ? tone : this.tone(a, b, b)) * 0.9;
     this.v.push(a[0], a[1], a[2], t, b[0], b[1], b[2], t, c[0], c[1], c[2], t);
   }
-  quad(a: number[], b: number[], c: number[], d: number[], m: number, tone = hash(a[0] * 0.37 + this.n++, a[2] * 0.53, c[1])) { this.tri(a, b, c, m, tone); this.tri(a, c, d, m, tone); }
+  quad(a: number[], b: number[], c: number[], d: number[], m: number, tone = this.tone(a, b, c)) { this.tri(a, b, c, m, tone); this.tri(a, c, d, m, tone); }
   /** a triangle whose material is chosen by its slope: rock where it's steeper than `steep`, else `flat` */
   slope(a: number[], b: number[], c: number[], flat: number, steep = M.ROCK, k = 0.72) {
     const ux = b[0] - a[0], uy = b[1] - a[1], uz = b[2] - a[2], vx = c[0] - a[0], vy = c[1] - a[1], vz = c[2] - a[2];
@@ -180,7 +184,7 @@ function kickerPiece(c: Course, m: Mesh, s: number, e: number, ramp: boolean) {
  * over the shoulder, flying: waves running out along it, bigger toward its free end, which droops and trails back a
  * little; its facets catch the light and lose it as they turn, so it flickers between orange's bands as it moves */
 export function buildFlags(c: Course, s0: number, s1: number, t: number) {
-  const m = new Mesh(), W = 2.8, cols = 6, rows = 2;
+  const m = new Mesh(true), W = 2.8, cols = 6, rows = 2;
   for (let i = Math.max(0, Math.floor(s0)); i < s1; i++) {
     const st = c.at(i); if (!st.flag) continue;
     const half = st.width / 2, b = c.point(i, -half - 0.9), base = [b.x, st.y, b.z];
@@ -359,7 +363,7 @@ export interface Pose {
   body?: { roll: number; shift: number; fore: number; rise: number };
 }
 export function buildRider(r: Pose, t: number) {
-  const m = new Mesh();
+  const m = new Mesh(true);
   const ch = Math.cos(r.heading), sh = Math.sin(r.heading);
   const fw = [sh, 0, ch], rt = [-ch, 0, sh];
   const rot = (v: number[], ax: number[], a: number) => { const c = Math.cos(a), s = Math.sin(a), d = v[0] * ax[0] + v[1] * ax[1] + v[2] * ax[2]; const cr = [ax[1] * v[2] - ax[2] * v[1], ax[2] * v[0] - ax[0] * v[2], ax[0] * v[1] - ax[1] * v[0]]; return [0, 1, 2].map((i) => v[i] * c + cr[i] * s + ax[i] * d * (1 - c)); };
