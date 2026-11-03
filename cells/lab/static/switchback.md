@@ -4,6 +4,16 @@ A downhill motocross run down a mountain made as you ride it. The style target i
 
 ![A run down the cliff road](switchback/v-ride.jpg)
 
+## The brief
+
+A moving composition of cut colour: cobalt space, pale passages, charcoal weight and orange force. The mountain, the rider and the machine come out of overlapping silhouettes, deliberate openings and a few decisive internal marks; large areas stay flat and unbroken. Depth comes from perspective, occlusion, parallax, contact and a changing silhouette, not from shading every facet. What isn't drawn matters as much as what is:
+
+- **An edge earns its place** by explaining a silhouette, an overlap, a fold that matters, a contact or a direction. A polygon boundary alone earns nothing.
+- **Negative space is designed**: the opening under an elbow, through a wheel, between the hips and the seat.
+- **Boundaries may disappear and return**: a black leg merges with the bike, then separates as the rider shifts; posture, contact and the riding decision stay readable.
+- **It works between frames**: masses hold together as the rider turns, openings widen and close with load and lean, marks stay attached to what made them.
+- **Rider and motorcycle are a changing partnership of masses.** Their axes separate under effort, open in flight and gather for landing. Hands and feet make the contact; elbows, knees and the spaces between show the forces.
+
 ## Riding
 
 Drag left or right to steer: the drag's distance from where it began sets how hard you turn. Nothing steers for you: the bike goes where it points, and with no input it runs straight on, so every bend has to be ridden. Turn hard at speed and the rear steps out: the way you're travelling follows the way the bike points only as far as the tyres grip (less at speed, less braking), so the bike yaws past its line and slides, scrubbing pace and throwing roost, until it lines up again. Drag down (or hold ↓ / S) to brake; ← → or A D steer from a keyboard. The engine and the hill keep you going. Kickers (a ramp painted with an orange double chevron, a gap over a ravine, a landing deck, both on black trestles) launch you; whoops (a run of rollers) throw you at speed; any crest that falls away faster than you would drop puts you in the air. In the air you can turn a little. The wall on the left glances you off it and costs pace; the drop side, on the right, is forgiving: you can ride the shoulder past the fence and the slope beyond it (the bike rides the ground as it's drawn there, and slides down it where it's steep), and only going too far down it, landing too hard into it, or riding into a face (an outcrop, the side of a raised deck) ends it. A fall or a crash puts you back at the last **checkpoint**: the flags on the wall side, further apart the further down you are (about 300 m apart at the top, about a kilometre five kilometres on), each one counted as you pass it (CHECKPOINT n across the screen, and again when you're put back at it), and you start again just past it, going.
@@ -35,6 +45,11 @@ The rider isn't fixed to the bike:
 Kit: orange jersey with black panels, black pants with orange knee guards, white boots, black gloves, a faceted orange helmet with its chin bar, peak, goggles and strap.
 
 `look=side|front|rear|quarter` holds the eye off the bike, for judging the model.
+
+**Studies toward the brief** (flags; the game is drawn as above unless they're set):
+- `rider=cut` draws the rider and bike as cut colour: three masses, each one flat field with one dark cut where it turns from the light. Orange is the jersey and bodywork; one charcoal is the legs and the whole machine (engine, frame, swingarm, pipe, tyres). Cream is kept for what touches or steers (the boots, the fork as one slash), the plates and the helmet, its one dark cut the goggles and strap as a single band. The wheels are thick knobbled rings, open through the middle. The rider is lit for the picture, not by the sun: from above, behind the eye and to its left, so what faces you is one field and only the side turned to the eye's right takes the cut.
+- `whip=<degrees>` holds the bike in a whip beneath the rider: the machine yawed about a point between the pegs and laid over with it, while the body stays with the way it's going and the legs and arms reach for where the pegs and bars have gone.
+- `world=0` draws the rider alone on the sky, to judge its silhouette and openings.
 
 ## The drawing (`mesh.ts`, `render.ts`)
 
@@ -80,7 +95,7 @@ All made in the page (WebAudio, no files):
 
 ## Flags
 
-`seed=` the mountain · `auto` the rider rides itself · (any flag below skips the title) · `fx=0` no speed layer · `fog=0` no distance fade (both for judging a frame) · `t=` start that many seconds down the run (ridden there by the auto rider) · `still` hold the frame · `preview` no HUD.
+`seed=` the mountain · `auto` the rider rides itself · (any flag below skips the title) · `fx=0` no speed layer · `fog=0` no distance fade (both for judging a frame) · `rider=cut`, `whip=`, `world=0` the rider studies (above) · `t=` start that many seconds down the run (ridden there by the auto rider) · `still` hold the frame · `preview` no HUD.
 
 ## Tests
 

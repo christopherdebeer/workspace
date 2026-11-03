@@ -24,7 +24,7 @@ flat out float vT; uniform vec3 uEye;
 void main() { vec3 w = aP.xyz + uOff; vW = w - uEye; vM = int(aP.w); vT = fract(aP.w); gl_Position = uVP * vec4(w, 1.); }`;
 const FS = `#version 300 es
 precision highp float;
-in vec3 vW; flat in int vM; flat in float vT; uniform vec3 uPal[68]; uniform vec3 uEye; uniform vec3 uSun; uniform float uFog; out vec4 o;
+in vec3 vW; flat in int vM; flat in float vT; uniform vec3 uPal[80]; uniform vec3 uEye; uniform vec3 uSun; uniform float uFog; out vec4 o;
 void main() {
   vec3 n = normalize(cross(dFdx(vW), dFdy(vW)));
   // (the face's light, nudged by its own tone, picks one of its material's four bands)
@@ -75,6 +75,9 @@ export class Renderer {
   gl: WebGL2RenderingContext; ctx: CanvasRenderingContext2D;
   private prog: WebGLProgram; private u: Record<string, WebGLUniformLocation | null> = {};
   private chunks = new Map<number, Buf>(); private ranges: Buf; private valley: Buf; private rider: Buf; private shadow: Buf; private flags: Buf; private ruts: Buf; private track: Buf;
+  /** how the rider's drawn ('cut': flat masses, lit for the picture), a whip held for a pinned frame (rad), and whether
+   * the world's drawn at all (`world=0`: the rider alone on the sky, for judging its shapes) */
+  style: 'facets' | 'cut' = 'facets'; whip = 0; world = true;
   /** your own track, fed after each step of the sim */
   readonly trail: Trail;
   vp: Mat = new Float32Array(16); W = 1; H = 1; dpr = 1;
@@ -119,6 +122,16 @@ export class Renderer {
     gl.enable(gl.DEPTH_TEST); gl.disable(gl.CULL_FACE);
     gl.useProgram(this.prog);
     gl.uniformMatrix4fv(this.u.uVP, false, this.vp); gl.uniform3fv(this.u.uEye, new Float32Array(view.eye));
+    const body = buildRider({ x: r.x, y: r.y, z: r.z, heading: r.heading, pitch: r.pitch, lean: r.lean, squash: r.squash, crashT: r.crashT, air: r.air, steer: r.steer, yFront: r.yFront, yRear: r.yRear, dist: r.dist, body: r.body, whip: this.whip, style: this.style }, t);
+    // (the rider, cut: lit for the picture rather than by the sun, from above, behind the eye and to its left, so what
+    // faces you is one flat field and only the side turned toward the eye's right (the flank, the outside of each arm and
+    // leg, the undersides) takes its one cut)
+    const drawRider = () => {
+      if (this.style === 'cut') gl.uniform3fv(this.u.uSun, new Float32Array(norm([-rt[0] * 0.5 - fwd[0] * 0.3, 0.8, -rt[2] * 0.5 - fwd[2] * 0.3])));
+      this.rider.set(body, true); this.rider.draw();
+      gl.uniform3fv(this.u.uSun, new Float32Array(SUN));
+    };
+    if (!this.world) { gl.uniform1f(this.u.uFog, 0); gl.uniform3f(this.u.uOff, 0, 0, 0); drawRider(); this.ctx.setTransform(1, 0, 0, 1, 0, 0); this.ctx.clearRect(0, 0, this.overlay.width, this.overlay.height); return; }
     // (the far ranges, round the eye and a little below it, unfaded)
     gl.uniform1f(this.u.uFog, 0); gl.uniform3f(this.u.uOff, view.eye[0], view.eye[1] - 60, view.eye[2]); this.ranges.draw(); this.valley.draw();
     gl.clear(gl.DEPTH_BUFFER_BIT);
@@ -130,8 +143,7 @@ export class Renderer {
     this.track.set(this.trail.mesh(), true); this.track.draw();
     gl.disable(gl.POLYGON_OFFSET_FILL);
     // (the rider, and its shadow flattened along the sun onto the ground under it)
-    const body = buildRider({ x: r.x, y: r.y, z: r.z, heading: r.heading, pitch: r.pitch, lean: r.lean, squash: r.squash, crashT: r.crashT, air: r.air, steer: r.steer, yFront: r.yFront, yRear: r.yRear, dist: r.dist, body: r.body }, t);
-    this.rider.set(body, true); this.rider.draw();
+    drawRider();
     // (the flags near enough to see, flying)
     this.flags.set(buildFlags(this.course, r.s - 40, r.s + 320, t), true); this.flags.draw();
     const g = this.course.point(r.s, r.u).y + 0.06, sh = new Float32Array(body.length);

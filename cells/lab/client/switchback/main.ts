@@ -32,6 +32,7 @@ let rider = new Rider(course);
 const rd = new Renderer(world, speed, course);
 rd.resize(); addEventListener('resize', () => rd.resize());
 rd.speed = q.get('fx') !== '0'; rd.fog = q.get('fog') !== '0';
+rd.style = q.get('rider') === 'cut' ? 'cut' : 'facets'; rd.whip = (Number(q.get('whip') ?? 0) * Math.PI) / 180; rd.world = q.get('world') !== '0';
 const sound = new Sound();
 
 // (settings, kept in this browser where it can)
