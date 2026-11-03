@@ -187,12 +187,42 @@ function kickerPiece(c: Course, m: Mesh, s: number, e: number, ramp: boolean) {
     const t2 = top(s + 4, u);
     if (c.at(s + 4).feature === 'ramp' || c.at(s + 4).feature === 'deck') m.quad([f[0], f[1], f[2]], [f[0], f[1] + 0.2, f[2]], [t2[0], t2[1] - 0.3, t2[2]], [t2[0], t2[1] - 0.5, t2[2]], M.BLACK);
   }
-  // (on the ramp, the arrow: a chevron and its shaft, orange, laid on the boards)
+  // (on the ramp, a double chevron, orange, laid on the boards, pointing up it)
   if (ramp && c.at(s - 1).feature !== 'ramp') {
     const L = 14, mid = (f: number, u: number) => { const p = c.point(s + f * L, u); return [p.x, p.y + 0.06, p.z]; };
-    m.quad(mid(0.08, -0.55), mid(0.08, 0.55), mid(0.55, 0.55), mid(0.55, -0.55), M.ORANGE);
-    m.tri(mid(0.5, -2.1), mid(0.5, 2.1), mid(0.92, 0), M.ORANGE);
+    const arm = 2.1, rise = 0.17, thick = 0.09;
+    for (const f0 of [0.3, 0.56]) for (const side of [-1, 1]) {
+      // (each chevron two bars meeting at its point, up the ramp)
+      m.quad(mid(f0, side * arm), mid(f0 + thick, side * arm), mid(f0 + rise + thick, 0), mid(f0 + rise, 0), M.ORANGE, 0.3);
+    }
   }
+}
+
+/** the flags' banners between stations s0 and s1, at time t: each an orange banner hung from the top of its pole out
+ * over the shoulder, flying: waves running out along it, bigger toward its free end, which droops and trails back a
+ * little; its facets catch the light and lose it as they turn, so it flickers between orange's bands as it moves */
+export function buildFlags(c: Course, s0: number, s1: number, t: number) {
+  const m = new Mesh(), W = 2.8, cols = 6, rows = 2;
+  for (let i = Math.max(0, Math.floor(s0)); i < s1; i++) {
+    const st = c.at(i); if (!st.flag) continue;
+    const half = st.width / 2, b = c.point(i, -half - 0.9), base = [b.x, st.y, b.z];
+    const fx = Math.sin(b.heading), fz = Math.cos(b.heading), rx = -Math.cos(b.heading), rz = Math.sin(b.heading);
+    const ph = hash(c.seed, i, 31) * 6.28, gust = 1 + 0.35 * Math.sin(t * 0.9 + ph);
+    // (streaming out over the shoulder and partly back along the road, so its waves show in its outline as well as
+    // its facets: the free end swings, the top and bottom edges ripple)
+    const sw = 0.55, ox = rx * Math.cos(sw) - fx * Math.sin(sw), oz = rz * Math.cos(sw) - fz * Math.sin(sw), nx = rx * Math.sin(sw) + fx * Math.cos(sw), nz = rz * Math.sin(sw) + fz * Math.cos(sw);
+    const P = (a: number, v: number) => {
+      const wave = Math.sin(a * 5.2 - t * 7.5 + ph + v * 0.6) * gust, ripple = Math.sin(a * 7 - t * 9 + ph * 1.7) * gust;
+      const out = a * W * (1 - 0.06 * Math.abs(wave) * a), up = 5.9 - v * 2.3 - 0.35 * a * a * v - 0.15 * a * a + ripple * 0.2 * a;
+      const across = (0.08 + 0.6 * a) * wave;
+      return [base[0] + ox * out + nx * across, base[1] + up, base[2] + oz * out + nz * across];
+    };
+    for (let u = 0; u < cols; u++) for (let v = 0; v < rows; v++) {
+      const a0 = u / cols, a1 = (u + 1) / cols, v0 = v / rows, v1 = (v + 1) / rows;
+      m.tri(P(a0, v0), P(a1, v0), P(a1, v1), M.ORANGE, 0.5); m.tri(P(a0, v0), P(a1, v1), P(a0, v1), M.ORANGE, 0.5);
+    }
+  }
+  return new Float32Array(m.v);
 }
 
 /** what stands on the ground at station i: the fence on the drop side, a flag on the wall side, pines down the drop, rocks */
@@ -209,14 +239,8 @@ function dress(c: Course, m: Mesh, i: number, sec: { u: number; y: number; ds: n
       for (const [y0, y1] of [[0.78, 1.02], [0.34, 0.5]]) m.quad([p[0], st.y + y0, p[2]], [q.x, qy + y0, q.z], [q.x, qy + y1, q.z], [p[0], st.y + y1, p[2]], y0 > 0.5 ? M.ORANGE : M.WHITE);
     }
   }
-  // (a flag: a tall black pole on the wall side, an orange banner hung out over the shoulder)
-  if (st.flag) {
-    const base = at(-half - 0.9), fw = c.point(i, 0), fx = Math.sin(fw.heading), fz = Math.cos(fw.heading), rx = -Math.cos(fw.heading), rz = Math.sin(fw.heading);
-    m.box(base, X, Y, Z, [0, 3, 0], [0.06, 3, 0.06], M.BLACK);
-    const P = (out: number, up: number, back: number) => [base[0] + rx * out - fx * back, base[1] + up, base[2] + rz * out - fz * back];
-    m.quad(P(0, 5.9, 0), P(1.3, 5.6, 0.5), P(1.3, 3.5, 0.5), P(0, 3.7, 0), M.ORANGE);
-    m.quad(P(1.3, 5.6, 0.5), P(2.7, 5.75, 0.2), P(2.7, 3.7, 0.2), P(1.3, 3.5, 0.5), M.ORANGE);
-  }
+  // (a flag: a tall black pole on the wall side; its banner is drawn each frame, flying (buildFlags))
+  if (st.flag) m.box(at(-half - 0.9), X, Y, Z, [0, 3, 0], [0.06, 3, 0.06], M.BLACK);
   // (pines down the drop, a few up the wall's top; rocks bedded in the snow)
   const r = hash(c.seed, i, 101);
   if (i % 2 === 0 && r < 0.26) {

@@ -7,12 +7,12 @@
  *   ground under it.
  * - **the speed** (a 2D canvas over it): motion drawn as vector shapes rather than blurred pixels. Shards (thin wedges,
  *   white, pale, charcoal, orange) streaming out from the point you're riding at, more and longer as you go faster; a
- *   wedge smeared back from each fence post and flag as it whips past (from where it is to where it was a moment ago);
+ *   wedge smeared back from each fence post as it whips past (from where it is to where it was a moment ago);
  *   the rider's own wake; and the debris (faceted chunks of snow and rock thrown off the rear wheel, a burst on landing,
  *   a spray on a crash), each smeared along its own motion.
  */
 import { Course } from './course';
-import { CHUNK, PALETTE, buildChunk, buildRanges, buildRider, buildValley } from './mesh';
+import { CHUNK, PALETTE, buildChunk, buildFlags, buildRanges, buildRider, buildValley } from './mesh';
 import type { Rider, Event } from './sim';
 
 const VS = `#version 300 es
@@ -71,7 +71,7 @@ class Buf {
 export class Renderer {
   gl: WebGL2RenderingContext; ctx: CanvasRenderingContext2D;
   private prog: WebGLProgram; private u: Record<string, WebGLUniformLocation | null> = {};
-  private chunks = new Map<number, Buf>(); private ranges: Buf; private valley: Buf; private rider: Buf; private shadow: Buf;
+  private chunks = new Map<number, Buf>(); private ranges: Buf; private valley: Buf; private rider: Buf; private shadow: Buf; private flags: Buf;
   vp: Mat = new Float32Array(16); W = 1; H = 1; dpr = 1;
   fx = new Fx();
   constructor(readonly canvas: HTMLCanvasElement, readonly overlay: HTMLCanvasElement, readonly course: Course) {
@@ -86,7 +86,7 @@ export class Renderer {
     gl.useProgram(p);
     gl.uniform3fv(this.u.uPal, new Float32Array(PALETTE.flat().map(hex).flat()));
     gl.uniform3fv(this.u.uSun, new Float32Array(SUN));
-    this.ranges = new Buf(gl, buildRanges(course.seed)); this.valley = new Buf(gl, buildValley(course.seed)); this.rider = new Buf(gl, null); this.shadow = new Buf(gl, null);
+    this.ranges = new Buf(gl, buildRanges(course.seed)); this.valley = new Buf(gl, buildValley(course.seed)); this.rider = new Buf(gl, null); this.shadow = new Buf(gl, null); this.flags = new Buf(gl, null);
   }
   resize() {
     this.dpr = Math.min(2, devicePixelRatio || 1);
@@ -120,6 +120,8 @@ export class Renderer {
     // (the rider, and its shadow flattened along the sun onto the ground under it)
     const body = buildRider({ x: r.x, y: r.y, z: r.z, heading: r.heading, pitch: r.pitch, lean: r.lean, squash: r.squash, crashT: r.crashT, air: r.air, steer: r.steer, yFront: r.yFront, yRear: r.yRear, dist: r.dist, body: r.body }, t);
     this.rider.set(body, true); this.rider.draw();
+    // (the flags near enough to see, flying)
+    this.flags.set(buildFlags(this.course, r.s - 40, r.s + 320, t), true); this.flags.draw();
     const g = this.course.point(r.s, r.u).y + 0.06, sh = new Float32Array(body.length);
     for (let i = 0; i < body.length; i += 4) {
       const h = body[i + 1] - g, k = Math.max(0, h) / SUN[1];
@@ -178,7 +180,7 @@ export class Fx {
       const dx = b[0] - a[0], dy = b[1] - a[1], L = Math.hypot(dx, dy) || 1, nx = -dy / L * w, ny = dx / L * w;
       c.fillStyle = col; c.beginPath(); c.moveTo(a[0] + nx, a[1] + ny); c.lineTo(b[0], b[1]); c.lineTo(a[0] - nx, a[1] - ny); c.closePath(); c.fill();
     };
-    // (smears off the near furniture: each post and flag dragged back to where it stood a moment ago, against the eye)
+    // (smears off the near furniture: each post dragged back to where it stood a moment ago, against the eye)
     const tau = 0.035 + pace * 0.06;
     const crs = rd.course;
     for (let i = Math.floor(r.s) - 6; i < r.s + 34; i++) {
@@ -186,7 +188,6 @@ export class Fx {
       const half = st.width / 2;
       const items: [number, number, number, string][] = [];
       if (st.post && st.feature === 'none') items.push([half + 1.9, 0.6, 0.11, i % 10 ? '#e85a0d' : '#ff7428']);
-      if (st.flag) items.push([-half + 0.4, 4.6, 0.9, '#e85a0d']);
       for (const [u, h, w, col] of items) {
         const p = crs.point(i, u), P = [p.x, st.y + h, p.z];
         const a = rd.project(P), b = rd.project([P[0] + cv[0] * tau * 3, P[1] + cv[1] * tau * 3, P[2] + cv[2] * tau * 3]);
