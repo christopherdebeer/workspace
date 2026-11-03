@@ -9,7 +9,7 @@
  * that keeps its distance from the eye.
  */
 import { Course, JUMPS, hash } from './course';
-import { STEP, section, character, groundAt } from './ground';
+import { STEP, section, character, groundAt, notch } from './ground';
 
 export const M = { SNOW: 0, TRACK: 1, ROCK: 2, ORANGE: 3, BLACK: 4, WHITE: 5, MTN: 6, MTNSNOW: 7, UMBER: 8, SHADOW: 9, RUT: 10, NAVY: 11, FAR: 12, FARSNOW: 13, RIDGE: 14, FOREST: 15, VALLEY: 16, CUT_ORANGE: 17, CUT_BLACK: 18, CREAM: 19 } as const;
 /** each material's four bands, lit to unlit (the reference's own colours) */
@@ -128,9 +128,13 @@ export function buildChunk(c: Course, n: number) {
   c.ensure(s1 + 8);
   const W = (s: number, u: number, y: number) => { const p = c.point(s, u); return [p.x, y, p.z]; };
   // (the ground: section beside section, each face its own plane; the rows under the track only where it's lifted off them)
+  const natGap = (i: number) => { const st = c.at(i); return st.feature === 'gap' && !!st.site && st.site !== 'built'; };
   for (let s = s0; s < s1; s += STEP) {
     const A = section(c, s), B = section(c, s + STEP), a = c.at(s), b = c.at(s + STEP);
     const under = a.feature !== 'none' || b.feature !== 'none';
+    let fine = false;
+    for (let i = s; i <= s + STEP && !fine; i++) fine = natGap(i);
+    if (fine) { cutBlock(c, m, s, A, B, W); continue; }
     for (let k = 0; k < A.length - 1; k++) {
       // (under the track too, a little below it, so a kink's outside never shows a hole)
       void under;
@@ -158,8 +162,42 @@ export function buildChunk(c: Course, n: number) {
   return new Float32Array(m.v);
 }
 
+/** a block of ground (STEP stations) through which a natural gap cuts: drawn a metre at a time, each row between the block's
+ * two sections as the coarse ground would lie, less the gap's notch, so the cleft or gorge has a crisp shape and still
+ * meets the ground either side; at the gap's middle, a gorge's stream, white, along its floor and on down the drop (and
+ * for a waterfall, down the wall's gully too) */
+function cutBlock(c: Course, m: Mesh, s: number, A: { u: number; y: number; ds: number }[], B: { u: number; y: number; ds: number }[], W: (s: number, u: number, y: number) => number[]) {
+  const rows: number[][][] = [];
+  for (let i = 0; i <= STEP; i++) {
+    const f = i / STEP;
+    rows.push(A.map((p, k) => { const u = p.u + (B[k].u - p.u) * f, ds = p.ds + (B[k].ds - p.ds) * f; return W(s + i + ds, u, p.y + (B[k].y - p.y) * f - notch(c, s + i, u)); }));
+  }
+  for (let i = 0; i < STEP; i++) for (let k = 0; k < A.length - 1; k++) {
+    const p00 = rows[i][k], p01 = rows[i][k + 1], p10 = rows[i + 1][k], p11 = rows[i + 1][k + 1];
+    if (hash(c.seed, s + i, k, 77) < 0.5) { m.slope(p00, p10, p11, M.SNOW, M.ROCK, 0.84); m.slope(p00, p11, p01, M.SNOW, M.ROCK, 0.84); } else { m.slope(p00, p10, p01, M.SNOW, M.ROCK, 0.84); m.slope(p10, p11, p01, M.SNOW, M.ROCK, 0.84); }
+  }
+  for (let i = 0; i < STEP; i++) {
+    const st = c.at(s + i), nx = c.at(s + i + 1);
+    if (st.site !== 'gorge' || st.feature !== 'gap' || (st.gapT ?? 0) > 0.5 || (nx.feature === 'gap' && (nx.gapT ?? 1) <= 0.5)) continue;
+    // (the stream: from the gully's top if it falls down the wall, else from the wall's foot; on down to the drop's end)
+    const h = st.heading, fx = Math.sin(h) * 0.9, fz = Math.cos(h) * 0.9, row = rows[i], start = st.fall ? 0 : A.length - 1 - 4 - 8 - 2;
+    for (let k = Math.max(0, start); k < row.length - 1; k++) {
+      // (held a little off the rock toward the open side, so it reads as falling water, not a stripe painted on)
+      const p = row[k], q = row[k + 1], rx = -Math.cos(h), rz = Math.sin(h), out = k < A.length - 12 ? 1.2 : 0;
+      const up = (v: number[], d: number) => [v[0] + fx * d + rx * out, v[1] + 0.8, v[2] + fz * d + rz * out];
+      m.quad(up(p, -1.6), up(p, 1.6), up(q, 1.6), up(q, -1.6), M.WHITE, 0.5);
+    }
+  }
+}
+
 /** a kicker's ramp or deck, from s to s+2: its sides, its trestle, and on the ramp the painted arrow */
 function kickerPiece(c: Course, m: Mesh, s: number, e: number, ramp: boolean) {
+  const built = !c.at(s).site || c.at(s).site === 'built';
+  if (built) builtPiece(c, m, s, e);
+  chevrons(c, m, s, ramp);
+}
+/** a built kicker's boards and trestle, black, its edge rail orange */
+function builtPiece(c: Course, m: Mesh, s: number, e: number) {
   const half = c.at(s).width / 2, line = (ss: number) => c.at(ss).y, top = (ss: number, u: number) => { const p = c.point(ss, u); return [p.x, p.y, p.z]; };
   const foot = (ss: number, u: number) => { const p = c.point(ss, u); return [p.x, line(ss) - 0.1, p.z]; };
   // (side boards, black; the edge rail orange)
@@ -177,8 +215,10 @@ function kickerPiece(c: Course, m: Mesh, s: number, e: number, ramp: boolean) {
     const t2 = top(s + 4, u);
     if (c.at(s + 4).feature === 'ramp' || c.at(s + 4).feature === 'deck') m.quad([f[0], f[1], f[2]], [f[0], f[1] + 0.2, f[2]], [t2[0], t2[1] - 0.3, t2[2]], [t2[0], t2[1] - 0.5, t2[2]], M.BLACK);
   }
-  // (on the ramp, its chevrons, orange, laid on the boards, pointing up it: as many as the jump's size, one for a hop to
-  // four for a booter, so how big it is reads from the run-in)
+}
+/** on the ramp, its chevrons, orange, laid on the boards (or painted on the rock, like trail marks), pointing up it: as
+ * many as the jump's size, one for a hop to four for a booter, so how big it is reads from the run-in */
+function chevrons(c: Course, m: Mesh, s: number, ramp: boolean) {
   if (ramp && c.at(s - 1).feature !== 'ramp') {
     const n = c.at(s).size ?? 2, L = JUMPS[n].ramp, at = (d: number, u: number) => { const p = c.point(s + d, u); return [p.x, p.y + 0.06, p.z]; };
     const arm = 2.1, rise = 2.4, thick = 1.26, pitch = 3.4, d0 = L * 0.5 - ((n - 1) * pitch + rise + thick) / 2;

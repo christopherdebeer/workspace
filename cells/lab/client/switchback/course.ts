@@ -32,8 +32,10 @@ export interface Station {
   lift: number; feature: Feature;
   /** a checkpoint flag (on the wall side) or a fence post (on the drop side) stands here */
   flag: boolean; post: boolean;
-  /** on a jump's stations, its size (1–4) */
-  size?: number;
+  /** on a jump's stations, its size (1–4); and what its site is: built (a kicker on trestles over a trench), a cleft
+   * cracking the mountainside, or a gorge cut through it (with a waterfall down its wall when `fall`); on a gap's stations
+   * how far across the gap (0…1) */
+  size?: number; site?: 'built' | 'cleft' | 'gorge'; fall?: boolean; gapT?: number;
 }
 
 export function rng(seed: number) {
@@ -53,7 +55,7 @@ export class Course {
   /** what the laying is doing now: the turn it's making (rad/m), for how long, and the feature it's laying */
   private turn = 0; private turnLeft = 0; private grade = 0.22; private gradeTo = 0.22;
   private width = 7; private widthTo = 7; private widthStep = 0; private wideLeft = 0; private roughFrom = 0; private roughTo = 0; private roughLeft = 0; private roughLen = 1;
-  private plan: { kind: Feature; at: number; size?: number; H?: number; lipY?: number; line0?: number; vy0?: number; xs?: number; xt?: number; xe?: number }[] = [];
+  private plan: { kind: Feature; at: number; size?: number; site?: Station['site']; fall?: boolean; H?: number; lipY?: number; line0?: number; vy0?: number; xs?: number; xt?: number; xe?: number }[] = [];
   /** a booter's due here (just past a checkpoint flag), or 0 */
   private booterDue = 0;
   private sinceKicker = 0;
@@ -103,10 +105,10 @@ export class Course {
       // (features, laid on straights and gentle bends: a kicker every so often, whoops between)
       this.sinceKicker++;
       // (a booter, the big set piece, just past a checkpoint flag when one's due)
-      if (!this.plan.length && this.booterDue && i >= this.booterDue) { this.plan.push({ kind: 'ramp', at: i, size: 4 }); this.booterDue = 0; this.sinceKicker = 0; }
+      if (!this.plan.length && this.booterDue && i >= this.booterDue) { this.plan.push({ kind: 'ramp', at: i, size: 4, site: 'gorge', fall: hash(this.seed, i, 95) < 0.65 }); this.booterDue = 0; this.sinceKicker = 0; }
       if (!this.plan.length && i > 120 && this.turn === 0 && this.turnLeft > 6) {
         // (a kicker's size: a hop, a kicker, a big one; drawn from its own hash so the rest of the course is laid as before)
-        if (this.sinceKicker > 160 && r() < 0.05) { const h = hash(this.seed, i, 61); this.plan.push({ kind: 'ramp', at: i, size: h < 0.3 ? 1 : h < 0.72 ? 2 : 3 }); this.sinceKicker = 0; }
+        if (this.sinceKicker > 160 && r() < 0.05) { const h = hash(this.seed, i, 61), size = h < 0.3 ? 1 : h < 0.72 ? 2 : 3; this.plan.push({ kind: 'ramp', at: i, size, site: size === 3 ? 'gorge' : size === 2 && hash(this.seed, i, 97) < 0.5 ? 'built' : 'cleft', fall: size === 3 && hash(this.seed, i, 95) < 0.3 }); this.sinceKicker = 0; }
         else if (r() < 0.006) this.plan.push({ kind: 'whoop', at: i });
       }
       const f = this.plan[0];
@@ -150,7 +152,7 @@ export class Course {
     if (k < A) { st.feature = 'none'; st.lift = 0; if ((f.size ?? 2) > 2) this.gradeTo = 0.1; return; }
     if (k <= A + L) {
       if (k === A) { this.gradeTo = this.grade; f.H = ((Math.tan(J.angle!) + this.grade) * L) / 2; }
-      st.feature = 'ramp'; st.size = f.size; st.lift = f.H! * ((k - A) / L) ** 2;
+      st.feature = 'ramp'; st.size = f.size; st.site = f.site; st.lift = f.H! * ((k - A) / L) ** 2;
       if (k === A + L) {
         // (the lip: the flight from here, at the design pace, its rise what the last metre of ramp gives plus the lip's pop)
         f.lipY = st.y + st.lift; f.line0 = st.y; f.vy0 = DESIGN_V * (f.H! * (1 - ((L - 1) / L) ** 2) - this.grade) + 1.2;
@@ -164,7 +166,7 @@ export class Course {
     // (below the flight before the sweet spot by more the nearer the knuckle (so a slower rider, flying lower and shorter,
     // still comes down on it), along it after)
     const c0 = Math.max(1.2, 0.12 * (f.xt! - f.xs!)), S = (xx: number) => (xx <= f.xt! ? Y(xx) - c0 * ((f.xt! - xx) / (f.xt! - f.xs!)) ** 1.3 : Y(f.xt!) + dY(f.xt!) * (xx - f.xt!));
-    if (x < f.xs!) { st.feature = 'gap'; st.lift = 0; st.post = false; st.y = f.line0! + ((S(f.xs!) - f.line0!) * x) / f.xs!; }
+    if (x < f.xs!) { st.feature = 'gap'; st.lift = 0; st.post = false; st.site = f.site; st.fall = f.fall; st.size = f.size; st.gapT = (x + 0.5) / f.xs!; st.y = f.line0! + ((S(f.xs!) - f.line0!) * x) / f.xs!; }
     else if (x <= f.xe!) { st.feature = 'none'; st.lift = 0; st.y = S(x); }
     else { this.grade = Math.min(0.9, -dY(f.xe!)); this.gradeTo = 0.2; st.y = p.y - this.grade; this.plan.shift(); }
     void i;

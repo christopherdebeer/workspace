@@ -29,14 +29,29 @@ export function section(c: Course, i: number) {
   const j = (k: number, amp: number) => (hash(c.seed, i, k) - 0.5) * amp;
   const ch = character(c, i), wy = 0.25 + 0.95 * ch.wall, wu = 1.9 - 0.9 * ch.wall, dyk = 0.3 + 0.7 * ch.drop, duk = 1.9 - 0.9 * ch.drop;
   for (let k = WALL.length - 1; k >= 0; k--) { const [du0, dy0] = WALL[k], du = du0 * (k ? wu : 1), dy = dy0 * wy; out.push({ u: -half - du + (k ? j(k, du * 0.3) : 0), y: st.y + dy + (k ? j(k + 20, 0.6 + dy * 0.35) : 0), ds: k > 1 ? j(k + 80, STEP * 0.9) : 0 }); }
-  const gap = st.feature === 'gap';
+  const gap = st.feature === 'gap', natural = st.site && st.site !== 'built';
   const under = st.feature === 'none' || st.feature === 'whoop' ? -0.08 : 0;
-  out.push({ u: -half, y: st.y + under, ds: 0 }, { u: -half * 0.3, y: st.y - (gap ? 7 : -under), ds: 0 }, { u: half * 0.3, y: st.y - (gap ? 7 : -under), ds: 0 }, { u: half, y: st.y + under, ds: 0 });
+  // (a natural take-off: the ground itself rises under the ramp, a mound of snow and rock, not a trestle)
+  const mound = st.feature === 'ramp' && natural ? st.lift : 0;
+  out.push({ u: -half, y: st.y + under + mound * 0.9, ds: 0 }, { u: -half * 0.3, y: st.y - (gap && !natural ? 7 : -under) + mound - 0.15 * Math.sign(mound), ds: 0 }, { u: half * 0.3, y: st.y - (gap && !natural ? 7 : -under) + mound - 0.15 * Math.sign(mound), ds: 0 }, { u: half, y: st.y + under + mound * 0.9, ds: 0 });
   // (the drop: a shelf where it's gentle, straight down where it's sheer; an outcrop of rock rising beside the route where
   // the knob's up, the valley beyond it)
   const knob = [0, 4.5, 7, 3, 0, 0, 0, 0];
   for (let k = 0; k < DROP.length; k++) { const [du0, dy0] = DROP[k], du = du0 * (k ? duk : 1), dy = dy0 * (k ? dyk : 1) + knob[k] * ch.knob; out.push({ u: half + du + (k ? j(k + 40, du * 0.25) : 0), y: st.y + dy + (k > 1 ? j(k + 60, 0.6 - dy * 0.22) : 0), ds: k > 1 ? j(k + 90, STEP * 0.9) : 0 }); }
+  if (mound) { out[WALL.length - 1].y += mound * 0.45; out[WALL.length + 4].y += mound * 0.35; }
   return out;
+}
+
+/** a natural gap's notch at station i, u across: how far below the ground as it would be the mountainside is cut there.
+ * The whole way across: a cleft (narrow, sheer-sided, ~7 m deep) or a gorge (wide, ~20 m and more), deepest under the road,
+ * running up the wall as a gully (shallower the higher) and on down the drop as a channel */
+export function notch(c: Course, i: number, u: number) {
+  const st = c.at(i);
+  if (st.feature !== 'gap' || !st.site || st.site === 'built') return 0;
+  const t = Math.max(0, Math.min(1, st.gapT ?? 0.5)), deep = st.site === 'gorge' ? 18 + (st.size === 4 ? 8 : 0) : 7;
+  const D = deep * Math.min(1, 2.6 * Math.sin(Math.PI * t) ** 0.7), half = st.width / 2;
+  const f = u < -half ? Math.max(0.35, 1 - (0.65 * (-half - u)) / 50) : u <= half ? 1 : Math.max(0.45, 1 - (0.55 * (u - half)) / 120);
+  return D * f;
 }
 
 /** the height of a section at u across it */
@@ -49,5 +64,5 @@ export function groundAt(sec: { u: number; y: number }[], u: number) {
  * STEP stations, as its faces lie (near the road's edge exactly; further out a little smoothed) */
 export function ground(c: Course, s: number, u: number) {
   const s0 = Math.floor(s / STEP) * STEP, f = (s - s0) / STEP;
-  return groundAt(section(c, s0), u) * (1 - f) + groundAt(section(c, s0 + STEP), u) * f;
+  return groundAt(section(c, s0), u) * (1 - f) + groundAt(section(c, s0 + STEP), u) * f - notch(c, Math.round(s), u);
 }
