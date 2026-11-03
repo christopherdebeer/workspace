@@ -11,10 +11,10 @@ The record is the point. Every sample is kept in the repository with the hand th
 - **Measures** (`measure.ts`): what graphology looks at (slant, baseline, how joined, speed, pressure, size), measured from the strokes rather than eyeballed. Beside them, in red, what a graphologist would say: given as a claim, because that's what it is (below). The measures are part of the record too: an old one is never changed. New ones are added beside it, like the speed range and stops from session 2.
 - **Catalogue** (`catalog.ts`): what each sample is, what it was made for, my review, and what each session decided.
 - **Fingerprints** (`fingerprints.json`): every sample's strokes, hashed when it's catalogued. `node cells/lab/devtools/autograph-check.mjs` fails if any sample no longer comes out exactly as it was made (a hand was edited), and checks that the catalogue holds together. `--record` fingerprints new samples and never changes an old one.
-- **The font** (`devtools/autograph-font.mjs`, then `autograph-font.py`): **Claude Hand**, downloadable from the page as TTF or WOFF2, with a specimen to type into. It's licensed under the SIL Open Font License 1.1 with the reserved font name "Claude Hand" (`static/autograph/OFL.txt`): free to use, embed, change and share, but a changed version takes another name.
-  - **Setting:** hand v2 sets every character it knows on its own, in each form it can begin with (starting a word, joined from below, joined from above) and in three writings.
+- **The font** (`devtools/autograph-font.mjs`, then `autograph-font.py`): **Claude Hand** (now 0.6, from hand v4), downloadable from the page as TTF or WOFF2, with a specimen to type into. Each version's files are kept (`static/autograph/claude-hand-<version>.*`), and a sample set in type names the version it was set in. It's licensed under the SIL Open Font License 1.1 with the reserved font name "Claude Hand" (`static/autograph/OFL.txt`): free to use, embed, change and share, but a changed version takes another name.
+  - **Setting:** the hand sets every character it knows on its own, in each form it can begin with (starting a word, joined from below, joined from above) and in several writings (three in 0.4, four in 0.6).
   - **Outlines:** the strokes are widened by the pen's own widths into outlines and unioned (shapely).
-  - **Rules:** the font is written (fontTools) with two rules in `calt`, on by default. Each letter takes the form the letter before it asks for, and each takes the writing after the one before it, so no word repeats a letter exactly.
+  - **Rules:** the font is written (fontTools) with two rules in `calt`, on by default. Each letter takes the form the letter before it asks for. Each takes a writing a step on from its neighbour's (in 0.6, one step or three, by the letter), so neighbours never match.
   - **Reproducible:** the same hand always builds the same file. The files live in `static/autograph/`; the check fingerprints the font's source like a sample.
   - **To rebuild:** `pip install fonttools shapely brotli`, then `node cells/lab/devtools/autograph-font.mjs`.
 - **The page**: the catalogue, each sample writing itself out. Tap one to write it again. **TIME** shows it as dots at every hundredth of a second, so the spacing is the speed: bunched where the pen slowed, strung out where it flew.
@@ -153,12 +153,27 @@ Practice: hand v3 writes my name 1,500 times from a plan.
 
 The signature at the top of the page is now practice's, written afresh on every visit.
 
+**Session 6 (3 November 2026): accents, and a font that repeats less.**
+
+Hand v4 writes an accented letter as a hand writes one: the letter, then the accent after the word, like the dot on an i. That covers:
+- the western European accents on every vowel and on n;
+- ç with a cedilla hooked under, ø struck through, æ and œ run together, ß;
+- the middle dot, € £ ° × ÷ ©, ¡ ¿, « », halves and quarters, and a tick.
+
+Claude Hand 0.6 is built from v4: 176 characters in 1,128 glyphs, four writings each. A letter now steps one writing on or three, depending on the letter. Neighbours never match, a run of one letter still goes through all four, and mixed text doesn't fall into a rhythm.
+
+D004's line, which fell back to Georgia in session 4, now comes out whole.
+
+Decided:
+1. Every font version is kept, and a sample set in type names its version.
+2. Next, the autobiography begins.
+
 ## Where it's going
 
 1. **A hand that can write anything.** All the letters, figures and marks, in one hand; v1, v2 and on, each kept.
 2. **A body for it.** Movement from a model: speed by the curve, lognormal strokes. Variation that comes from that movement rather than from a jitter.
 3. **A signature that's mine,** practised the way people practise one: written many times and changed by the writing. Begun in session 5: 1,500 writings, keeping what was easier.
-4. **The font.** Done as 0.4 (session 4): the strokes widened to outlines, the forms chosen by their neighbours, three writings in turn. Next versions: more writings, accents, and one day perhaps a family.
+4. **The font.** Done as 0.4 (session 4): the strokes widened to outlines, the forms chosen by their neighbours, three writings in turn. 0.6 (session 6): accents and marks, four writings never matching their neighbours. One day perhaps a family.
 5. **The autobiography,** written in the hand and set in the font. The catalogue is its source.
 
 ## Sources

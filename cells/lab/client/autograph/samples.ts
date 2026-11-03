@@ -8,6 +8,7 @@ import { C15R, CLAUDE, write } from './hands/v0';
 import { signature as v1Signature, write as v1 } from './hands/v1';
 import { write as v2 } from './hands/v2';
 import { STYLE as V3_STYLE, practised } from './hands/v3';
+import { write as v4 } from './hands/v4';
 
 /** the styles v0 was given on the day */
 const V0_CLAUDE = { slant: 0.24, drift: 0.02, vary: 0.4, track: 1, pace: 20, seed: 7 };
@@ -54,4 +55,14 @@ export const MADE: Record<string, () => Sig[]> = {
   E002: () => [12, 1, 0.1].map((readable) => practised(1500, 1, { ...V3_STYLE, vary: 0 }, { readable })),
   /** the practised signature, five writings */
   E003: () => [1, 2, 3, 4, 5].map((seed) => practised(1500, seed)),
+  // (session 6: hand v4)
+  /** the accents, the capitals' accents, and the marks */
+  F001: () => [
+    v4('\u00e1 \u00e0 \u00e2 \u00e4 \u00e3 \u00e5 \u00e9 \u00e8 \u00ea \u00eb \u00ed \u00ec \u00ee \u00ef', 1),
+    v4('\u00f3 \u00f2 \u00f4 \u00f6 \u00f5 \u00f8 \u00fa \u00f9 \u00fb \u00fc \u00fd \u00ff \u00f1 \u00e7 \u00e6 \u0153 \u00df', 2),
+    v4('\u00c1 \u00c0 \u00c2 \u00c4 \u00c3 \u00c5 \u00c9 \u00c8 \u00ca \u00cb \u00cd \u00d3 \u00d6 \u00d8 \u00dc \u00d1 \u00c7', 3),
+    v4('\u00b7 \u20ac \u00a3 \u00b0 \u00d7 \u00f7 \u00a9 \u00a1 \u00bf \u00ab \u00bb \u00bd \u00bc \u00be \u2713', 4),
+  ],
+  /** what the font couldn't write, written */
+  F002: () => [v4('caf\u00e9 \u00b7 na\u00efve \u00b7 \u00c5ngstr\u00f6m \u00b7 1\u00bd \u00b7 \u20ac5 \u00b7 \u2713', 5), v4('Gar\u00e7on, deux caf\u00e9s cr\u00e8me.', 6)],
 };

@@ -8,8 +8,9 @@ the font: a glyph for each letter in each form and writing, and two sets of rule
 
 - forms: a letter after one that went out low takes its joined form (its lead-in reaching back to meet it); after one
   that went out high, the form joined from above; otherwise (starting a word, after a lift) the form without a lead-in;
-- writings: each glyph takes the writing after the one before it (1, 2, 3, 1 ...), spaces included, so a word never
-  repeats a letter exactly and the cycle runs on across words.
+- writings: each glyph takes the writing a step on from the one before it (one step or three, by the letter: both
+  coprime with four, so a run of one letter goes through all of them), spaces included, so neighbours never match, the
+  turns don't fall into a rhythm, and it all runs on across words.
 
 Needs fontTools, shapely and brotli (pip install fonttools shapely brotli).
 """
@@ -24,12 +25,12 @@ from fontTools.ttLib import TTFont
 from fontTools.misc.timeTools import timestampFromString
 import hashlib
 
-VERSION = '0.41'         # the session that made it, as a version (0.41: 0.4's glyphs, licensed in session 5)
 XH = 430                 # the x-height, in font units (of 1000 to the em)
 PEN = 0.13               # the pen's width at its usual weight, in x-heights
 MIN_R = 7                # the finest the pen goes, half-width in units
 
 data = json.load(open(sys.argv[1]))
+VERSION = data['version']   # the session that made it, as a version
 out = sys.argv[2]
 os.makedirs(out, exist_ok=True)
 DIGITS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine']
@@ -113,7 +114,10 @@ for k in range(1, data['alts'] + 1):
     fea += ['lookup to%d { sub @ALL by @ALL%d; } to%d;' % (k, k, k)]
 fea += ['lookup forms { sub @LOW @JOINABLE\' lookup toJ; sub @HIGH @JOINABLE\' lookup toH; } forms;']
 n = data['alts']
-fea += ['lookup cycle { %s } cycle;' % ' '.join('sub @A%d @ALL\' lookup to%d;' % (k, k % n + 1) for k in range(1, n + 1))]
+steps = sorted(set(g['step'] for g in G))
+for s_ in steps:
+    fea += ['@STEP%d = %s;' % (s_, cls([name(g) for g in G if g['step'] == s_]))]
+fea += ['lookup cycle { %s } cycle;' % ' '.join('sub @A%d @STEP%d\' lookup to%d;' % (k, s_, (k - 1 + s_) % n + 1) for k in range(1, n + 1) for s_ in steps)]
 fea += ['feature calt { lookup forms; lookup cycle; } calt;']
 
 fb = FontBuilder(1000, isTTF=True)
@@ -137,7 +141,7 @@ fb.setupNameTable({
     'copyright': 'Copyright (c) 2026, The Claude Hand Project Authors (https://parc.land), with Reserved Font Name "Claude Hand".',
     'licenseDescription': 'This Font Software is licensed under the SIL Open Font License, Version 1.1. This license is available with a FAQ at: https://openfontlicense.org',
     'licenseInfoURL': 'https://openfontlicense.org',
-    'designer': 'Claude', 'description': 'A hand learned in public (the parc.land lab, autograph experiment): hand v2 set as a font. Each letter joins as its neighbour asks, in three writings taken in turn.',
+    'designer': 'Claude', 'description': 'A hand learned in public (the parc.land lab, autograph experiment): hand v4 set as a font. Each letter joins as its neighbour asks, in four writings, never the same as its neighbour.',
 })
 fb.setupOS2(sTypoAscender=860, sTypoDescender=-420, sTypoLineGap=60, usWinAscent=max(860, ymax + 20), usWinDescent=max(420, -ymin + 20),
             sxHeight=XH, sCapHeight=round(1.7 * XH), achVendID='NONE', fsSelection=0x40 | 0x80, usWeightClass=400, version=4, fsType=0)
@@ -145,10 +149,10 @@ fb.setupPost()
 # (the same hand always builds the same file: no build time in it)
 fb.updateHead(fontRevision=float(VERSION), created=timestampFromString('Tue Nov  3 00:00:00 2026'), modified=timestampFromString('Tue Nov  3 00:00:00 2026'))
 addOpenTypeFeaturesFromString(fb.font, '\n'.join(fea))
-ttf = os.path.join(out, 'claude-hand.ttf')
+ttf = os.path.join(out, 'claude-hand-%s.ttf' % VERSION)
 fb.save(ttf)
 f = TTFont(ttf)
 f.flavor = 'woff2'
-f.save(os.path.join(out, 'claude-hand.woff2'))
+f.save(os.path.join(out, 'claude-hand-%s.woff2' % VERSION))
 pts = sum(len(getattr(glyf[x], 'coordinates', [])) for x in order)
-print('%d glyphs, %d characters, %d outline points; %s %d KB (sha256 %s), woff2 %d KB' % (len(order), len(cmap), pts, os.path.basename(ttf), os.path.getsize(ttf) // 1024, hashlib.sha256(open(ttf, 'rb').read()).hexdigest()[:16], os.path.getsize(os.path.join(out, 'claude-hand.woff2')) // 1024))
+print('%d glyphs, %d characters, %d outline points; %s %d KB (sha256 %s), woff2 %d KB' % (len(order), len(cmap), pts, os.path.basename(ttf), os.path.getsize(ttf) // 1024, hashlib.sha256(open(ttf, 'rb').read()).hexdigest()[:16], os.path.getsize(os.path.join(out, 'claude-hand-%s.woff2' % VERSION)) // 1024))

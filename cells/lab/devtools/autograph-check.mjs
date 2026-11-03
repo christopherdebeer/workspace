@@ -11,8 +11,8 @@ import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 const here = dirname(fileURLToPath(import.meta.url)), lab = join(here, '..');
 const outfile = join(tmpdir(), `autograph-${process.pid}.mjs`);
-await build({ stdin: { contents: `export { MADE } from './client/autograph/samples'; export { CATALOG, SESSIONS, HANDS } from './client/autograph/catalog'; export { measure } from './client/autograph/measure'; export { KNOWS, letter, formsOf } from './client/autograph/hands/v2';`, resolveDir: lab, loader: 'ts' }, bundle: true, platform: 'node', format: 'esm', outfile, logLevel: 'warning' });
-const { MADE, CATALOG, SESSIONS, HANDS, measure, KNOWS, letter, formsOf } = await import(outfile);
+await build({ stdin: { contents: `export { MADE } from './client/autograph/samples'; export { CATALOG, SESSIONS, HANDS } from './client/autograph/catalog'; export { measure } from './client/autograph/measure'; export { KNOWS, letter, formsOf } from './client/autograph/hands/v2'; export { KNOWS as KNOWS4, letter as letter4, formsOf as formsOf4 } from './client/autograph/hands/v4';`, resolveDir: lab, loader: 'ts' }, bundle: true, platform: 'node', format: 'esm', outfile, logLevel: 'warning' });
+const { MADE, CATALOG, SESSIONS, HANDS, measure, KNOWS, letter, formsOf, KNOWS4, letter4, formsOf4 } = await import(outfile);
 const fpFile = join(lab, 'client/autograph/fingerprints.json');
 const fps = existsSync(fpFile) ? JSON.parse(readFileSync(fpFile, 'utf8')) : {};
 const record = process.argv.includes('--record');
@@ -27,13 +27,18 @@ const finite = CATALOG.filter((e) => MADE[e.id]).every((e) => MADE[e.id]().every
 ok(finite, 'every sample measures to finite numbers');
 let added = 0;
 const changed = [];
-// (the font: its source, every letter as hand v2 sets it for the font, is fingerprinted like a sample; and its files
-// are there)
-const fontSrc = [' ', ...KNOWS].flatMap((ch) => formsOf(ch).flatMap((f) => [1, 2, 3].map((a) => letter(ch, f, a))));
-const fontFp = createHash('sha256').update(JSON.stringify(fontSrc)).digest('hex').slice(0, 16);
-if (!fps['font 0.4']) { if (record) { fps['font 0.4'] = fontFp; added++; } else changed.push('font 0.4 (no fingerprint: run with --record)'); }
-else if (fps['font 0.4'] !== fontFp) changed.push(`font 0.4 (was ${fps['font 0.4']}, now ${fontFp})`);
-ok(['claude-hand.ttf', 'claude-hand.woff2'].every((f) => existsSync(join(lab, 'static/autograph', f))), 'the font\'s files are there (static/autograph/claude-hand.ttf, .woff2)');
+// (the fonts: each one's source, every letter as its hand sets it for the font, is fingerprinted like a sample; and
+// each version's files are there, and every sample set in type names one that is)
+const FONTS = [
+  { key: 'font 0.4', files: '0.41', src: () => [' ', ...KNOWS].flatMap((ch) => formsOf(ch).flatMap((f) => [1, 2, 3].map((a) => letter(ch, f, a)))) },
+  { key: 'font 0.6', files: '0.6', src: () => [' ', ...KNOWS4].flatMap((ch) => formsOf4(ch).flatMap((f) => [1, 2, 3, 4].map((a) => letter4(ch, f, a)))) },
+];
+for (const F of FONTS) {
+  const fp = createHash('sha256').update(JSON.stringify(F.src())).digest('hex').slice(0, 16);
+  if (!fps[F.key]) { if (record) { fps[F.key] = fp; added++; } else changed.push(`${F.key} (no fingerprint: run with --record)`); }
+  else if (fps[F.key] !== fp) changed.push(`${F.key} (was ${fps[F.key]}, now ${fp})`);
+}
+ok(FONTS.every((F) => ['ttf', 'woff2'].every((x) => existsSync(join(lab, `static/autograph/claude-hand-${F.files}.${x}`)))) && CATALOG.filter((e) => e.type).every((e) => existsSync(join(lab, `static/autograph/claude-hand-${e.font ?? '0.41'}.woff2`))), `the fonts' files are there (${FONTS.map((F) => F.files).join(', ')}), and every sample set in type names one`);
 for (const e of CATALOG.filter((x) => MADE[x.id])) {
   const fp = createHash('sha256').update(JSON.stringify(MADE[e.id]())).digest('hex').slice(0, 16);
   if (!fps[e.id]) { if (record) { fps[e.id] = fp; added++; } else changed.push(`${e.id} (no fingerprint: run with --record)`); }

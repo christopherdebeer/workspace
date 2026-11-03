@@ -51,8 +51,8 @@ function typeCard(e: Entry) {
   const el = document.createElement('article');
   el.className = 'sample'; el.id = e.id;
   el.innerHTML = `
-    <header><span class="id">${e.id}</span><h3>${esc(e.title)}</h3><span class="hand">${HANDS[e.hand].name}, set in type</span></header>
-    <div class="set">${e.type!.map((l) => `<p class="hand-type${l.calt === false ? ' nocalt' : ''}" style="font-size:${l.size}px">${esc(l.text)}${l.calt === false ? '<span class="off">joins off</span>' : ''}</p>`).join('')}</div>
+    <header><span class="id">${e.id}</span><h3>${esc(e.title)}</h3><span class="hand">Claude Hand ${e.font ?? '0.41'}, set in type</span></header>
+    <div class="set">${e.type!.map((l) => `<p class="hand-type${l.calt === false ? ' nocalt' : ''}" style="font-size:${l.size}px;font-family:${(e.font ?? '0.41') === '0.6' ? '\'Claude Hand\'' : `'Claude Hand ${e.font ?? '0.41'}'`},Georgia,serif">${esc(l.text)}${l.calt === false ? '<span class="off">joins off</span>' : ''}</p>`).join('')}</div>
     <p class="made">${esc(e.made)}</p>
     <p class="review">${esc(e.review)}</p>`;
   return { el, size: () => {}, write: () => {} };
