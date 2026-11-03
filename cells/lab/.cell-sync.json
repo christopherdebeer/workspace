@@ -1,8 +1,8 @@
 {
   "cell": "c15r/lab",
   "cellId": "lab-8928acf3",
-  "treeVersion": "tree:dfd2b235ba557d8f6b44de308b16e5dde7f0c0e0d238b07c7b03220374d0baee",
-  "syncedAt": "2026-11-03T09:56:04.305Z",
+  "treeVersion": "tree:7cdacc61505f6fa056dd73ccbfe700aa6dab8cf498ad4c467d0dd94e7178939c",
+  "syncedAt": "2026-11-03T10:08:03.407Z",
   "files": {
     "README.md": "sha256:665df4179140457c44ea9e0f6f5820bd6e9b557fb196a37cf1245a07cb11f7c6",
     "client/bamboo/chase.ts": "sha256:86eda509044fedcbee75e3fc296b49af244257f62551251e7a668573424ee06c",
@@ -218,10 +218,10 @@
     "client/switchback/course.ts": "sha256:84fe44a3af267c90fdee8d0d7f08cf3f314132262bb0702d0098742beeed8002",
     "client/switchback/ground.ts": "sha256:72a9d3507f4e11b2e53c2d19bd732dd3fff3e563445ee10d01d6144f5496c445",
     "client/switchback/main.ts": "sha256:75277b5a48739f6f51a10f3cd99e7bb5175cb5434e66958eeb8f2807b2386b77",
-    "client/switchback/mesh.ts": "sha256:f2557349b6cbe7b6368cf304bd938ed93e37a68beaed23f1443826957ccc5358",
+    "client/switchback/mesh.ts": "sha256:33afd2d066715c4189b10f5ed4e58cec382814b69207def43069f0108e9168fe",
     "client/switchback/render.ts": "sha256:5910d353cba53a36a05a8ed15aeaaf0533d5bb17723b61ddda0ef8de9156d90c",
     "client/switchback/ruts.ts": "sha256:76ce53f358a7fea20380d5fb9ec6eed0eec395f2cda98c8e5d1858591708da70",
-    "client/switchback/sim.ts": "sha256:3fb1b44cf4b1bce983ea6d041c16192b8f5ee4a257fa966d0503245c3a3260c2",
+    "client/switchback/sim.ts": "sha256:9e9771e1daa96cafc075d08e95605dcd03a85293f6d3248cf15cba807ab565f1",
     "client/taohua/bench.ts": "sha256:7b69453d8c2fdfeeb671ba58ec8ac243ed922bebf9b6e60dc7bce31ff04e36d6",
     "client/taohua/compose.ts": "sha256:eeb974a3ac14997cb3eddeeb4fbe1951e4d8a9e28e588fc511a5eceac01ef8b2",
     "client/taohua/deer.ts": "sha256:e6d792f0fe2c34e29f1a84e52c2fcc03cb91402d44bf04136134486ef2c32ae6",
