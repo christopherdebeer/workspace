@@ -118,7 +118,7 @@ export class Renderer {
     gl.uniform1f(this.u.uFog, 1); gl.uniform3f(this.u.uOff, 0, 0, 0);
     for (const b of this.chunks.values()) b.draw();
     // (the rider, and its shadow flattened along the sun onto the ground under it)
-    const body = buildRider({ ...r, lean: r.lean, air: r.air } as Parameters<typeof buildRider>[0], t);
+    const body = buildRider({ x: r.x, y: r.y, z: r.z, heading: r.heading, pitch: r.pitch, lean: r.lean, squash: r.squash, crashT: r.crashT, air: r.air, steer: r.steer, yFront: r.yFront, yRear: r.yRear, dist: r.dist, body: r.body }, t);
     this.rider.set(body, true); this.rider.draw();
     const g = this.course.point(r.s, r.u).y + 0.06, sh = new Float32Array(body.length);
     for (let i = 0; i < body.length; i += 4) {

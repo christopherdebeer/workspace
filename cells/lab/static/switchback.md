@@ -20,7 +20,21 @@ Arcade physics in the world: the bike has a heading (where it points) and a trav
 
 ## The bike and rider
 
-A motocross bike in its real proportions: a 1.48 m wheelbase, a 21-inch front wheel on a fork raked at 27°, knobbly tyres drawn as open rings with the rim inside, a swingarm and shock behind, tank and radiator shrouds, a long flat seat, the rear fender kicked up, the pipe and silencer. The suspension works: the frame sinks on its springs as you land and as the rough throws you up, the fork shortening between axle and clamps and the swingarm swinging up, and in the air it extends. The rider stands in the attack position: boots on the pegs, knees bent (more as the bike sinks), hips back, chest over the tank, elbows up, head over the bars; orange jersey with black panels, black pants with orange knee guards, white boots, an orange helmet with its chin bar, peak and goggles.
+A motocross bike in its real proportions: a 1.48 m wheelbase, a 21-inch front wheel on a fork raked at 27°, knobbly tyres drawn as open rings with the rim inside, a swingarm and shock behind, tank and radiator shrouds, a long flat seat, the rear fender kicked up, the pipe and silencer.
+
+- **On the ground:** each wheel stands on the surface under it (sampled ahead and behind), and the bike is pitched between them, so both tyres touch on slopes, crests and the rough.
+- **Steering:** the whole front (the wheel, fork, fender, clamps, bars, grips and number plate) turns about the raked steering head. It turns the way you steer, less at speed, and toward where you're going in a slide (opposite lock).
+- **Lean:** what the turn asks (the pace times how fast the way you're going is swinging, smoothed so a flick isn't a turn, against gravity). It comes in over about a third of a second and is never more than about 35°.
+- **Suspension:** the frame sinks on its springs as you land and as the rough throws you up, and in the air it extends.
+
+The rider isn't fixed to the bike:
+- **The body rides on springs.** It sways against the bike's lean (staying more upright), shifts to the outside of a slide, rocks back as the bike speeds up and forward as it brakes, bobs with the bike's lurches up and down, and stands up in the air. It lags, overshoots and settles.
+- **The head** is held nearer level than the bike.
+- **Legs and arms are solved each frame** (two bones each) from the hips to the pegs and from the shoulders to the grips, which turn with the bars. So the knees (forward and gripping) and elbows (up and out) take up whatever the body does.
+
+Kit: orange jersey with black panels, black pants with orange knee guards, white boots, black gloves, a faceted orange helmet with its chin bar, peak, goggles and strap.
+
+`look=side|front|rear|quarter` holds the eye off the bike, for judging the model.
 
 ## The drawing (`mesh.ts`, `render.ts`)
 

@@ -46,7 +46,17 @@ rider.events.length = 0;
 
 // (the chase eye: behind and above, a touch to the wall side, swinging round after the bike, never into the ground)
 const cam = { h: rider.travel, eye: [rider.x, rider.y + 4, rider.z - 8], shake: 0, fovKick: 0 };
+/** a close look at the bike and rider (`look=side|front|rear|quarter`), for judging the model: the eye held off the bike */
+const look = q.get('look');
+function closeLook(): View | null {
+  if (!look) return null;
+  const fx = Math.sin(rider.heading), fz = Math.cos(rider.heading), rx = -Math.cos(rider.heading), rz = Math.sin(rider.heading);
+  const at = (f: number, s: number, h: number) => [rider.x + fx * f + rx * s, rider.y + h, rider.z + fz * f + rz * s];
+  const eye = look === 'side' ? at(0, 3.6, 1.1) : look === 'front' ? at(4.2, 0.4, 1.3) : look === 'rear' ? at(-4, 0.3, 1.4) : at(-2.6, 2.8, 1.7);
+  return { eye, target: at(0, 0, 0.85), fov: 0.8, roll: 0 };
+}
 function view(dt: number, t: number): View {
+  const close = closeLook(); if (close) return close;
   const k = 1 - Math.exp(-dt * (rider.air ? 1.6 : 3.2));
   // (after the way you're going, not the way the bike points, so a slide shows as the bike yawed across the frame)
   if (rider.crashT <= 0) cam.h += Math.atan2(Math.sin(rider.travel - cam.h), Math.cos(rider.travel - cam.h)) * k;

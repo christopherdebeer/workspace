@@ -21,6 +21,13 @@ export class Rider {
   air = false; airT = 0; crashT = 0;
   /** for the eye and the model: lean into the turn, pitch with the ground or the flight, the suspension's give */
   lean = 0; pitch = 0; squash = 0; steerK = 0;
+  /** the front's steering angle (+ right; opposite lock in a slide), and the ground under each wheel (for drawing the
+   * bike standing on both) */
+  steer = 0; yFront = 0; yRear = 0;
+  /** the rider's body on the bike, sprung (it lags, overshoots, settles): its roll against the bike's lean, its shift
+   * across, fore and aft, and up and down (the legs and arms taking the bumps) */
+  body = { roll: 0, shift: 0, fore: 0, rise: 0, vRoll: 0, vShift: 0, vFore: 0, vRise: 0 };
+  private yawS = 0; private vWas = 0; private vyWas = 0;
   /** the run: metres down, best air, crashes, a score */
   dist = 0; bestAir = 0; crashes = 0; jumps = 0;
   events: Event[] = [];
@@ -43,7 +50,10 @@ export class Rider {
       return;
     }
     this.steerK += (inp.steer - this.steerK) * (1 - Math.exp(-dt * 10));
-    if (this.air) return this.fly(dt, inp);
+    if (this.air) this.fly(dt, inp); else this.ride(dt, inp);
+    this.sprung(dt);
+  }
+  private ride(dt: number, inp: Input) {
     const c = this.course, here = c.point(this.s, this.u), half = here.width / 2;
     // (pace: the hill's fall, the engine up to its top, the air's drag, the brake; slower on the loose shoulder)
     const grade = c.point(this.s - 1, 0).y - c.point(this.s + 1, 0).y;
@@ -84,12 +94,40 @@ export class Rider {
     this.y = p.y;
     const fx = Math.sin(this.travel), fz = Math.cos(this.travel);
     this.vx = fx * this.v; this.vz = fz * this.v; this.vy = vyG;
-    // (lean: what the turn asks, its pace times how fast the heading's swinging, against gravity; + leans right)
+    // (lean: what the turn asks, its pace times how fast the travel's swinging (smoothed: a flick of the bars isn't a
+    // turn), against gravity, and never more than ~35°; it comes in over a third of a second, not at once; + leans right)
     const yaw = wrap(this.travel - this.headingWas) / dt; this.headingWas = this.travel;
-    this.lean += (Math.max(-0.95, Math.min(0.95, Math.atan2(-this.v * yaw, G))) - this.lean) * (1 - Math.exp(-dt * 8));
-    this.pitch += (Math.atan2(-vyG, this.v) - this.pitch) * (1 - Math.exp(-dt * 10));
+    this.yawS += (yaw - this.yawS) * (1 - Math.exp(-dt * 3));
+    this.lean += (Math.max(-0.6, Math.min(0.6, Math.atan2(-this.v * this.yawS, G) * 0.8)) - this.lean) * (1 - Math.exp(-dt * 2.6));
+    // (each wheel on the ground under it, the bike pitched between them: + is nose up)
+    const fx0 = Math.sin(this.heading), fz0 = Math.cos(this.heading);
+    this.yFront = this.groundAt(this.x + fx0 * 0.82, this.z + fz0 * 0.82, p.y);
+    this.yRear = this.groundAt(this.x - fx0 * 0.78, this.z - fz0 * 0.78, p.y);
+    this.pitch += (Math.atan2(this.yFront - this.yRear, 1.6) - this.pitch) * (1 - Math.exp(-dt * 25));
     this.squash *= Math.exp(-dt * 6);
     if (Math.random() < dt * (6 + this.v * 0.6 + Math.abs(this.slip) * 120)) this.ev('roost', Math.min(1, this.v / VMAX + Math.abs(this.slip) * 2));
+  }
+  /** the road's height under a world point near here (for a wheel's contact) */
+  private groundAt(x: number, z: number, fallback: number) {
+    const loc = this.course.locate(x, z, this.s), q = this.course.point(loc.s, loc.u);
+    return q.surface ? q.y : fallback;
+  }
+  /** the front's steering and the rider's body, after the step (both ground and air) */
+  private sprung(dt: number) {
+    // (the bars: turned the way you steer, less at speed; in a slide, toward where the bike's going (opposite lock))
+    const want = Math.max(-0.6, Math.min(0.6, this.steerK * 0.5 * (1 - 0.5 * Math.min(1, this.v / VMAX)) + this.slip * 0.9));
+    this.steer += (want - this.steer) * (1 - Math.exp(-dt * 12));
+    // (the body: springs toward its posture (upright against the bike's lean, shifted to the outside of a slide,
+    // standing up in the air), pushed by what the bike does under it (its speeding up and slowing, its lurches up and
+    // down), so it lags and settles rather than riding as a statue)
+    const b = this.body, acc = (this.v - this.vWas) / dt; this.vWas = this.v;
+    const lurch = this.air ? 0 : Math.max(-3, Math.min(3, this.vy - this.vyWas)) / dt; this.vyWas = this.vy;
+    const spring = (x: number, v: number, to: number, w: number, z: number, force: number) => { const a = -w * w * (x - to) - 2 * z * w * v + force; v += a * dt; return [x + v * dt, v]; };
+    [b.roll, b.vRoll] = spring(b.roll, b.vRoll, -this.lean * 0.45, 7, 0.45, 0);
+    [b.shift, b.vShift] = spring(b.shift, b.vShift, this.slip * 0.12 - this.lean * 0.05, 8, 0.4, 0);
+    [b.fore, b.vFore] = spring(b.fore, b.vFore, this.air ? -0.04 : 0, 8, 0.3, -Math.max(-25, Math.min(25, acc)) * 0.7);
+    [b.rise, b.vRise] = spring(b.rise, b.vRise, this.air ? 0.07 : 0, 10, 0.28, -Math.max(-40, Math.min(40, lurch)) * 0.3);
+    b.fore = Math.max(-0.16, Math.min(0.14, b.fore)); b.rise = Math.max(-0.14, Math.min(0.1, b.rise)); b.roll = Math.max(-0.4, Math.min(0.4, b.roll)); b.shift = Math.max(-0.12, Math.min(0.12, b.shift));
   }
   private launch(yBefore: number, dt: number, edge: boolean, lip = !edge) {
     // (off: the flight keeps the way you were carried, and the rise the ground was giving you; a lip gives a little pop)
@@ -109,7 +147,8 @@ export class Rider {
     this.travel = Math.atan2(this.vx, this.vz); this.heading = this.travel + this.slip; this.slip *= Math.exp(-dt * 3);
     const loc = this.course.locate(this.x, this.z, this.s); this.s = loc.s; this.u = loc.u;
     const p = this.course.point(this.s, this.u), half = p.width / 2;
-    this.pitch += (Math.atan2(-this.vy, Math.hypot(this.vx, this.vz)) * 0.8 - this.pitch) * (1 - Math.exp(-dt * 3));
+    // (in the air the nose follows the flight, slowly: + is nose up)
+    this.pitch += (Math.atan2(this.vy, Math.hypot(this.vx, this.vz)) * 0.7 - this.pitch) * (1 - Math.exp(-dt * 2.5));
     this.lean *= Math.exp(-dt * 2);
     this.squash += (-0.35 - this.squash) * (1 - Math.exp(-dt * 4)); // (in the air the springs extend)
     void inp;
