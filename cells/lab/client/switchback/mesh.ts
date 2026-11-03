@@ -8,7 +8,7 @@
  * side; kickers on black trestles; black pines down the drop. Behind it all a ring of far ranges, blue, their tops snow,
  * that keeps its distance from the eye.
  */
-import { Course, hash } from './course';
+import { Course, JUMPS, hash } from './course';
 import { STEP, section, character, groundAt } from './ground';
 
 export const M = { SNOW: 0, TRACK: 1, ROCK: 2, ORANGE: 3, BLACK: 4, WHITE: 5, MTN: 6, MTNSNOW: 7, UMBER: 8, SHADOW: 9, RUT: 10, NAVY: 11, FAR: 12, FARSNOW: 13, RIDGE: 14, FOREST: 15, VALLEY: 16, CUT_ORANGE: 17, CUT_BLACK: 18, CREAM: 19 } as const;
@@ -174,13 +174,15 @@ function kickerPiece(c: Course, m: Mesh, s: number, e: number, ramp: boolean) {
     const t2 = top(s + 4, u);
     if (c.at(s + 4).feature === 'ramp' || c.at(s + 4).feature === 'deck') m.quad([f[0], f[1], f[2]], [f[0], f[1] + 0.2, f[2]], [t2[0], t2[1] - 0.3, t2[2]], [t2[0], t2[1] - 0.5, t2[2]], M.BLACK);
   }
-  // (on the ramp, a double chevron, orange, laid on the boards, pointing up it)
+  // (on the ramp, its chevrons, orange, laid on the boards, pointing up it: as many as the jump's size, one for a hop to
+  // four for a booter, so how big it is reads from the run-in)
   if (ramp && c.at(s - 1).feature !== 'ramp') {
-    const L = 14, mid = (f: number, u: number) => { const p = c.point(s + f * L, u); return [p.x, p.y + 0.06, p.z]; };
-    const arm = 2.1, rise = 0.17, thick = 0.09;
-    for (const f0 of [0.3, 0.56]) for (const side of [-1, 1]) {
+    const n = c.at(s).size ?? 2, L = JUMPS[n].ramp, at = (d: number, u: number) => { const p = c.point(s + d, u); return [p.x, p.y + 0.06, p.z]; };
+    const arm = 2.1, rise = 2.4, thick = 1.26, pitch = 3.4, d0 = L * 0.5 - ((n - 1) * pitch + rise + thick) / 2;
+    for (let j = 0; j < n; j++) for (const side of [-1, 1]) {
       // (each chevron two bars meeting at its point, up the ramp)
-      m.quad(mid(f0, side * arm), mid(f0 + thick, side * arm), mid(f0 + rise + thick, 0), mid(f0 + rise, 0), M.ORANGE, 0.3);
+      const d = d0 + j * pitch;
+      m.quad(at(d, side * arm), at(d + thick, side * arm), at(d + rise + thick, 0), at(d + rise, 0), M.ORANGE, 0.3);
     }
   }
 }

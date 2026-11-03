@@ -14,6 +14,7 @@
  */
 import { Course } from './course';
 import { Rider, autoSteer, VMAX } from './sim';
+import { Trickster } from './tricks';
 import { Renderer, View } from './render';
 import { Sound } from './audio';
 
@@ -23,6 +24,9 @@ const look = q.get('look');
 /** straight into it (tests, pinned frames, the preview): no title */
 const direct = preview || still || q.has('auto') || q.has('t') || !!look;
 let auto = q.has('auto') || preview || !direct;
+// (the sim's own rider shows off on the title, and with `auto=tricks`: slides, whips, flips, whatever the jump allows)
+const showing = q.get('auto') === 'tricks' || !direct, trickster = new Trickster();
+const autoInput = () => (showing ? trickster.input(rider) : { steer: autoSteer(rider), brake: false });
 
 document.getElementById('seed')!.textContent = String(seed);
 if (preview) document.body.classList.add('preview');
@@ -79,12 +83,12 @@ function hint() { if (!hinted) { hinted = true; hintEl.classList.add('gone'); } 
 
 // (start down the hill if asked, ridden by the sim's rider)
 const T0 = Number(q.get('t') ?? 0);
-for (let t = 0; t < T0; t += 1 / 120) { rider.step(1 / 120, { steer: autoSteer(rider), brake: false }); rd.trail.add(rider); }
+for (let t = 0; t < T0; t += 1 / 120) { rider.step(1 / 120, autoInput()); rd.trail.add(rider); }
 rider.events.length = 0;
 
 // (the chase eye: behind and above, over the drop-side shoulder, swinging round after the bike, never into the ground;
 // how far back it rides is a setting)
-const cam = { h: rider.travel, eye: [rider.x, rider.y + 4, rider.z - 8], shake: 0, fovKick: 0 };
+const cam = { h: rider.travel, eye: [rider.x, rider.y + 4, rider.z - 8], shake: 0, fovKick: 0, air: 0 };
 /** a close look at the bike and rider (`look=side|front|rear|quarter`), for judging the model: the eye held off the bike */
 function closeLook(): View | null {
   if (!look) return null;
@@ -100,7 +104,10 @@ function view(dt: number, t: number): View {
   // (after the way you're going, not the way the bike points, so a slide shows as the bike yawed across the frame)
   if (rider.crashT <= 0) cam.h += Math.atan2(Math.sin(rider.travel - cam.h), Math.cos(rider.travel - cam.h)) * k;
   const fx = Math.sin(cam.h), fz = Math.cos(cam.h), rx = -Math.cos(cam.h), rz = Math.sin(cam.h), d = CAMERA[camFlag ?? settings.camera] ?? CAMERA.mid;
-  const pace = Math.min(1, Math.hypot(rider.vx, rider.vz) / VMAX), back = (4.6 + pace * 1.1) * d.back, high = (3.3 + pace * 0.4) * d.high, side = 1.5 * d.side;
+  // (a long flight: the eye eases out to the drop side and holds the rider in the middle of the frame, so a flip or a whip
+  // reads as a turn of the whole figure; it comes back in as you come down)
+  cam.air += ((rider.air && rider.crashT <= 0 && rider.airT > 0.35 ? 1 : 0) - cam.air) * (1 - Math.exp(-dt * 1.6));
+  const pace = Math.min(1, Math.hypot(rider.vx, rider.vz) / VMAX), back = (4.6 + pace * 1.1 + cam.air * 1.5) * d.back, high = (3.3 + pace * 0.4 - cam.air * 1.2) * d.high, side = (1.5 + cam.air * 4.5) * d.side;
   const want = [rider.x - fx * back + rx * side, rider.y + high, rider.z - fz * back + rz * side];
   if (rider.crashT > 0) { want[0] = cam.eye[0]; want[2] = cam.eye[2]; }
   const ke = 1 - Math.exp(-dt * 7);
@@ -110,7 +117,8 @@ function view(dt: number, t: number): View {
   cam.eye[1] = Math.max(cam.eye[1], gy + 1.8);
   cam.shake *= Math.exp(-dt * 7);
   const sh = cam.shake, jx = Math.sin(t * 61) * sh * 0.3, jy = Math.sin(t * 47 + 1) * sh * 0.25;
-  const target = rider.crashT > 0 ? [rider.x, rider.y + 0.5, rider.z] : [rider.x + fx * 12 * d.ahead, rider.y - 3 * d.drop, rider.z + fz * 12 * d.ahead];
+  const ah = 12 * d.ahead * (1 - cam.air * 0.75), dr = 3 * d.drop * (1 - cam.air * 0.8);
+  const target = rider.crashT > 0 ? [rider.x, rider.y + 0.5, rider.z] : [rider.x + fx * ah, rider.y - dr, rider.z + fz * ah];
   cam.fovKick += ((rider.air ? 0.06 : 0) - cam.fovKick) * (1 - Math.exp(-dt * 3));
   return { eye: [cam.eye[0] + jx, cam.eye[1] + jy, cam.eye[2]], target, fov: (58 + pace * 16) * d.fov * Math.PI / 180 + cam.fovKick, roll: rider.lean * 0.15 + Math.sin(t * 53) * sh * 0.02 };
 }
@@ -163,8 +171,8 @@ function loop(now: number) {
     const steerKeys = (keys.has('arrowright') || keys.has('d') ? 1 : 0) - (keys.has('arrowleft') || keys.has('a') ? 1 : 0);
     while (acc >= 1 / 120) {
       acc -= 1 / 120; t += 1 / 120;
-      const steer = auto ? autoSteer(rider) : steerKeys || inp.steer;
-      rider.step(1 / 120, { steer, brake: false, drive, whip: auto ? 0 : steer });
+      const steer = steerKeys || inp.steer;
+      rider.step(1 / 120, auto ? autoInput() : { steer, brake: false, drive, whip: steer });
       rd.trail.add(rider);
     }
   }

@@ -8,7 +8,7 @@
  * or over a crest steeper than you can hold, you fly (a ballistic arc, steerable a little), and come down on whatever's
  * under you. Off the drop side, too far: a fall, and back on the line. Into the wall: a glance off it, the pace lost.
  */
-import { Course } from './course';
+import { AIR, Course } from './course';
 import { ground } from './ground';
 
 export const G = 9.8, VMAX = 46;
@@ -60,7 +60,7 @@ export class Rider {
       this.crashT -= dt;
       if (this.crashT <= 0) {
         // (back to the last checkpoint flag passed, just past it, on the line, and going again)
-        this.u = 0; this.psi = 0; this.v = 16; this.air = false; this.vy = 0; this.vyGround = NaN; this.s = this.checkpoint + 3;
+        this.u = 0; this.psi = 0; this.v = 24; this.air = false; this.vy = 0; this.vyGround = NaN; this.s = this.checkpoint + 3;
         while (!this.course.point(this.s, 0).surface || this.course.at(this.s).feature !== 'none') this.s += 1;
         this.place(); this.sPrev = this.s; this.headingWas = this.travel; this.lean = 0; this.squash = 0; this.wheels(); this.whip = this.vWhip = 0; this.spin = 0; this.pitch = wrap(this.pitch);
         this.ev('respawn', this.checkpoints);
@@ -117,7 +117,9 @@ export class Rider {
     this.psi = wrap(c.point(this.s, 0).heading - this.travel);
     const p = c.point(this.s, this.u);
     // (a ramp's lip: you fly; onto nothing (a kicker's gap): you fall)
-    if (here.feature === 'ramp' && p.feature !== 'ramp') { this.launch(yBefore, dt, false); return; }
+    // (the lip is the ramp's last station: past it, off you go, at the pace the ramp's last metre was lifting you; not a
+    // metre on, where the surface has already gone flat over the gap)
+    if (here.feature === 'ramp' && (p.feature !== 'ramp' || c.at(Math.floor(this.s) + 1).feature !== 'ramp')) { this.launch(yBefore, dt, false); return; }
     if (Math.abs(this.u) <= half && !p.surface) { this.launch(yBefore, dt, true); return; }
     // (the drop side is ridden, not fallen off: the shoulder, then the slope beyond it, which takes you down it if it's
     // steep (sliding toward the valley); far enough down and you've gone over: a crash)
@@ -132,7 +134,8 @@ export class Rider {
     // (a crest: the ground a tenth of a second on (the way you're going, across the line too) falls away below the arc
     // you'd fly from here, by more than the suspension takes up: an edge, a lip, the shelf's brink)
     const tau = 0.12, ahead = this.surfaceY(this.s + this.v * tau * Math.cos(this.psi), this.u + this.v * tau * Math.sin(this.psi)), arc = sy + vyG * tau - 0.5 * G * tau * tau;
-    if (this.v > 8 && !Number.isNaN(this.vyGround) && ahead < arc - 0.26) { this.launch(yBefore, dt, false, here.feature === 'ramp'); return; }
+    // (not on a ramp: there the lip is the launch, exactly, so a big ramp throws you as steeply as it's built to)
+    if (here.feature !== 'ramp' && this.v > 8 && !Number.isNaN(this.vyGround) && ahead < arc - 0.26) { this.launch(yBefore, dt, false, false); return; }
     // (the suspension takes up each step the ground throws you up by)
     if (!Number.isNaN(this.vyGround)) this.squash = Math.min(1, this.squash + Math.max(0, vyG - this.vyGround) * 0.07);
     this.vyGround = vyG;
@@ -213,7 +216,9 @@ export class Rider {
     // (a little steer in the air, the bike's heading turned and the flight with it)
     const turn = -this.steerK * 0.6 * dt, c = Math.cos(turn), s = Math.sin(turn);
     const nvx = this.vx * c + this.vz * s, nvz = -this.vx * s + this.vz * c; this.vx = nvx; this.vz = nvz;
-    this.vy -= G * dt; this.vx *= 1 - 0.002; this.vz *= 1 - 0.002;
+    // (gravity, and the air holding you back as it does on the ground, with the square of the pace)
+    const drag = 1 - AIR * Math.hypot(this.vx, this.vz) * dt;
+    this.vy -= G * dt; this.vx *= drag; this.vz *= drag;
     this.x += this.vx * dt; this.y += this.vy * dt; this.z += this.vz * dt;
     this.travel = Math.atan2(this.vx, this.vz); this.heading = this.travel + this.slip; this.slip *= Math.exp(-dt * 3);
     const loc = this.course.locate(this.x, this.z, this.s); this.s = loc.s; this.u = loc.u;
@@ -223,7 +228,9 @@ export class Rider {
     // quickly, and once it's slow and near the flight's line the nose follows the flight again, as it does untouched)
     const raw = inp.drive ?? 0; if (!raw) this.drive0 = 0;
     const cmd = -drive({ steer: 0, brake: false, drive: raw - this.drive0 }, 0.2);
-    if (cmd) this.spin += (cmd * 5.2 - this.spin) * (1 - Math.exp(-dt * 5)); else this.spin *= Math.exp(-dt * 4);
+    // (a heavy turn: it takes a moment to get going and comes round at ~3.2 rad/s at most, so a whole flip wants over
+    // two seconds of air: a big kicker or a booter, not a kicker)
+    if (cmd) this.spin += (cmd * 3.2 - this.spin) * (1 - Math.exp(-dt * 3)); else this.spin *= Math.exp(-dt * 4);
     this.pitch += this.spin * dt;
     const off = wrap(this.pitch - Math.atan2(this.vy, Math.hypot(this.vx, this.vz)) * 0.7);
     if (!cmd && Math.abs(this.spin) < 1.5 && Math.abs(off) < 1.2) this.pitch -= off * (1 - Math.exp(-dt * 2.5));
