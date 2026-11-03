@@ -10,9 +10,9 @@ import { CATALOG, Entry, HANDS, SESSIONS } from './catalog';
 import { Look, bounds, fitK, paint, replay } from './ink';
 import { Measures, measure, reading } from './measure';
 import { MADE } from './samples';
-import { signature } from './hands/v2';
+import { signature } from './hands/v3';
 /** the newest hand (each session that makes one moves this on) */
-const NEWEST = 'v2' as const;
+const NEWEST = 'v3' as const;
 
 const q = new URLSearchParams(location.search);
 const $ = (id: string) => document.getElementById(id)!;

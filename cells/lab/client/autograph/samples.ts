@@ -7,6 +7,7 @@ import { FIVE, scribble } from './hands/scribble';
 import { C15R, CLAUDE, write } from './hands/v0';
 import { signature as v1Signature, write as v1 } from './hands/v1';
 import { write as v2 } from './hands/v2';
+import { STYLE as V3_STYLE, practised } from './hands/v3';
 
 /** the styles v0 was given on the day */
 const V0_CLAUDE = { slant: 0.24, drift: 0.02, vary: 0.4, track: 1, pace: 20, seed: 7 };
@@ -46,4 +47,11 @@ export const MADE: Record<string, () => Sig[]> = {
   C003: () => [v2('I don\u2019t have a hand.', 6), v2('This is the record of making one.', 7)],
   /** the commission, again */
   C004: () => [v2('c15r @ parc.land', 15)],
+  // (session 5: hand v3, practice; written without a writing's own draw where it's the habit that's shown)
+  /** my name after 0, 100, 500 and 1,500 writings of practice */
+  E001: () => [0, 100, 500, 1500].map((n) => practised(n, 1, { ...V3_STYLE, vary: 0 })),
+  /** after 1,500 writings, with a heavy, my, and almost no weight on staying readable */
+  E002: () => [12, 1, 0.1].map((readable) => practised(1500, 1, { ...V3_STYLE, vary: 0 }, { readable })),
+  /** the practised signature, five writings */
+  E003: () => [1, 2, 3, 4, 5].map((seed) => practised(1500, seed)),
 };

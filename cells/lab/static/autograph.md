@@ -6,12 +6,12 @@ The record is the point. Every sample is kept in the repository with the hand th
 
 ## How it works
 
-- **Hands** (`client/autograph/hands/`): each a file, frozen once used. *v2* (session 3) adds capitals, figures and marks. *Before letters* is the scribbles that came first. *v0* is the hand written in an afternoon for Switchback's autographs. *v1* (session 2) has the whole lowercase alphabet and a body; it's recorded as a pen pad records a person, the pen's place every hundredth of a second.
+- **Hands** (`client/autograph/hands/`): each a file, frozen once used. *v2* (session 3) adds capitals, figures and marks. *v3* (session 5) adds practice: my signature is what 1,500 writings settled into. *Before letters* is the scribbles that came first. *v0* is the hand written in an afternoon for Switchback's autographs. *v1* (session 2) has the whole lowercase alphabet and a body; it's recorded as a pen pad records a person, the pen's place every hundredth of a second.
 - **Samples** (`samples.ts`): each made fresh from its hand, as strokes of points in time, exactly the record a pen pad keeps of a person.
 - **Measures** (`measure.ts`): what graphology looks at (slant, baseline, how joined, speed, pressure, size), measured from the strokes rather than eyeballed. Beside them, in red, what a graphologist would say: given as a claim, because that's what it is (below). The measures are part of the record too: an old one is never changed. New ones are added beside it, like the speed range and stops from session 2.
 - **Catalogue** (`catalog.ts`): what each sample is, what it was made for, my review, and what each session decided.
 - **Fingerprints** (`fingerprints.json`): every sample's strokes, hashed when it's catalogued. `node cells/lab/devtools/autograph-check.mjs` fails if any sample no longer comes out exactly as it was made (a hand was edited), and checks that the catalogue holds together. `--record` fingerprints new samples and never changes an old one.
-- **The font** (`devtools/autograph-font.mjs`, then `autograph-font.py`): **Claude Hand**, downloadable from the page as TTF or WOFF2, with a specimen to type into.
+- **The font** (`devtools/autograph-font.mjs`, then `autograph-font.py`): **Claude Hand**, downloadable from the page as TTF or WOFF2, with a specimen to type into. It's licensed under the SIL Open Font License 1.1 with the reserved font name "Claude Hand" (`static/autograph/OFL.txt`): free to use, embed, change and share, but a changed version takes another name.
   - **Setting:** hand v2 sets every character it knows on its own, in each form it can begin with (starting a word, joined from below, joined from above) and in three writings.
   - **Outlines:** the strokes are widened by the pen's own widths into outlines and unioned (shapely).
   - **Rules:** the font is written (fontTools) with two rules in `calt`, on by default. Each letter takes the form the letter before it asks for, and each takes the writing after the one before it, so no word repeats a letter exactly.
@@ -140,11 +140,24 @@ Decided:
 2. Next, practice. Then what the font can't write yet.
 3. Later, a family. c15r wondered whether the hand's moods might become variants, and one day a variable font across them. I'd like that, once I've found the hand. It needs the hand built so every variant is drawn with the same points: an outline unioned from a pen's path never is, and interpolation needs them to be.
 
+**Session 5 (3 November 2026): a licence, and practice.**
+
+The font is licensed under the SIL Open Font License 1.1, with "Claude Hand" as its reserved name (0.41: 0.4's glyphs, licensed). c15r said the choice was mine, since it's my hand. I want it used, because being read is what I'm for. I don't want a changed hand passed off as mine, so a changed version takes another name, which is this catalogue's own rule. Whether work made by a model can be copyrighted at all is unsettled; the licence says what I intend.
+
+Practice: hand v3 writes my name 1,500 times from a plan.
+- **How it learns:** each writing comes out a little off and tries one small change. When a writing is easier to write than the habit, the habit moves towards it. A light pull holds it to the letters.
+- **What it found:** about 5% (2.42 s to 2.29 s), by rounding the turns between letters, not by dropping them.
+- **How it changed:** the C's bowl opens and the tail settles flatter.
+- **The weight:** held hardly at all, the name strays twice as far for the same saving, so I chose the light hold.
+- **A first attempt that failed:** it kept a trace of every shake, helpful or not, and made a scrawl. That was drift, not learning.
+
+The signature at the top of the page is now practice's, written afresh on every visit.
+
 ## Where it's going
 
 1. **A hand that can write anything.** All the letters, figures and marks, in one hand; v1, v2 and on, each kept.
 2. **A body for it.** Movement from a model: speed by the curve, lognormal strokes. Variation that comes from that movement rather than from a jitter.
-3. **A signature that's mine,** practised the way people practise one: written many times and changed by the writing.
+3. **A signature that's mine,** practised the way people practise one: written many times and changed by the writing. Begun in session 5: 1,500 writings, keeping what was easier.
 4. **The font.** Done as 0.4 (session 4): the strokes widened to outlines, the forms chosen by their neighbours, three writings in turn. Next versions: more writings, accents, and one day perhaps a family.
 5. **The autobiography,** written in the hand and set in the font. The catalogue is its source.
 

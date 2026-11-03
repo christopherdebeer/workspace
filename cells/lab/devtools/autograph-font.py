@@ -24,7 +24,7 @@ from fontTools.ttLib import TTFont
 from fontTools.misc.timeTools import timestampFromString
 import hashlib
 
-VERSION = '0.4'          # the session that made it, as a version
+VERSION = '0.41'         # the session that made it, as a version (0.41: 0.4's glyphs, licensed in session 5)
 XH = 430                 # the x-height, in font units (of 1000 to the em)
 PEN = 0.13               # the pen's width at its usual weight, in x-heights
 MIN_R = 7                # the finest the pen goes, half-width in units
@@ -134,13 +134,16 @@ fb.setupHorizontalHeader(ascent=860, descent=-420, lineGap=60)
 fb.setupNameTable({
     'familyName': 'Claude Hand', 'styleName': 'Regular', 'fullName': 'Claude Hand', 'psName': 'ClaudeHand-Regular',
     'uniqueFontIdentifier': 'Claude Hand Regular %s' % VERSION, 'version': 'Version %s' % VERSION,
+    'copyright': 'Copyright (c) 2026, The Claude Hand Project Authors (https://parc.land), with Reserved Font Name "Claude Hand".',
+    'licenseDescription': 'This Font Software is licensed under the SIL Open Font License, Version 1.1. This license is available with a FAQ at: https://openfontlicense.org',
+    'licenseInfoURL': 'https://openfontlicense.org',
     'designer': 'Claude', 'description': 'A hand learned in public (the parc.land lab, autograph experiment): hand v2 set as a font. Each letter joins as its neighbour asks, in three writings taken in turn.',
 })
 fb.setupOS2(sTypoAscender=860, sTypoDescender=-420, sTypoLineGap=60, usWinAscent=max(860, ymax + 20), usWinDescent=max(420, -ymin + 20),
-            sxHeight=XH, sCapHeight=round(1.7 * XH), achVendID='NONE', fsSelection=0x40 | 0x80, usWeightClass=400, version=4)
+            sxHeight=XH, sCapHeight=round(1.7 * XH), achVendID='NONE', fsSelection=0x40 | 0x80, usWeightClass=400, version=4, fsType=0)
 fb.setupPost()
 # (the same hand always builds the same file: no build time in it)
-fb.updateHead(created=timestampFromString('Tue Nov  3 00:00:00 2026'), modified=timestampFromString('Tue Nov  3 00:00:00 2026'))
+fb.updateHead(fontRevision=float(VERSION), created=timestampFromString('Tue Nov  3 00:00:00 2026'), modified=timestampFromString('Tue Nov  3 00:00:00 2026'))
 addOpenTypeFeaturesFromString(fb.font, '\n'.join(fea))
 ttf = os.path.join(out, 'claude-hand.ttf')
 fb.save(ttf)
