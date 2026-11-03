@@ -12,10 +12,12 @@ import { Course } from './course';
 import { ground } from './ground';
 
 export const G = 9.8, VMAX = 46;
-export type Event = { kind: 'roost' | 'land' | 'wall' | 'launch' | 'crash' | 'checkpoint' | 'respawn'; x: number; y: number; z: number; k: number };
-/** steer (−1…1, + right), brake; and the whip (−1…1): what the bars do in the air, throwing the bike out beneath you (the
- * player's steering, in the air; the sim's own rider never whips) */
-export interface Input { steer: number; brake: boolean; whip?: number }
+export type Event = { kind: 'roost' | 'land' | 'wall' | 'launch' | 'crash' | 'checkpoint' | 'respawn' | 'flip'; x: number; y: number; z: number; k: number };
+/** steer (−1…1, + right); drive (−1…1): + the throttle opened wider, − the brake, as hard as it's pulled (`brake` is the
+ * same as drive −1), and in the air the same axis tips the nose (− pulls it up and over, + pushes it down); and the
+ * whip (−1…1): what the bars do in the air, throwing the bike out beneath you (the player's steering, in the air; the
+ * sim's own rider never whips, nor tips) */
+export interface Input { steer: number; brake: boolean; drive?: number; whip?: number }
 
 export class Rider {
   s = 2; u = 0; psi = 0; v = 18;
@@ -31,6 +33,11 @@ export class Rider {
    * what the bars ask and back when they let go. Land with it still out and the bike comes down yawed off the way it's
    * going and slides it straight, scrubbing pace; too far out (past ~34°) and it's a crash */
   whip = 0; private vWhip = 0;
+  /** the nose turning in the air (rad/s, + up and over backward), and the pitch it took off at (so a flip's counted) */
+  spin = 0; private pitch0 = 0;
+  /** the drive as last asked, and where it stood when you left the ground: in the air the nose answers to how far it's
+   * moved from there (so the throttle held through a lip doesn't tip you over), from nothing once it's let go */
+  private driveNow = 0; private drive0 = 0;
   /** the rider's body on the bike, sprung (it lags, overshoots, settles): its roll against the bike's lean, its shift
    * across, fore and aft, and up and down (the legs and arms taking the bumps) */
   body = { roll: 0, shift: 0, fore: 0, rise: 0, look: 0, nod: 0, vRoll: 0, vShift: 0, vFore: 0, vRise: 0, vLook: 0, vNod: 0 };
@@ -55,13 +62,14 @@ export class Rider {
         // (back to the last checkpoint flag passed, just past it, on the line, and going again)
         this.u = 0; this.psi = 0; this.v = 16; this.air = false; this.vy = 0; this.vyGround = NaN; this.s = this.checkpoint + 3;
         while (!this.course.point(this.s, 0).surface || this.course.at(this.s).feature !== 'none') this.s += 1;
-        this.place(); this.sPrev = this.s; this.headingWas = this.travel; this.lean = 0; this.squash = 0; this.wheels(); this.whip = this.vWhip = 0;
+        this.place(); this.sPrev = this.s; this.headingWas = this.travel; this.lean = 0; this.squash = 0; this.wheels(); this.whip = this.vWhip = 0; this.spin = 0; this.pitch = wrap(this.pitch);
         this.ev('respawn', this.checkpoints);
       }
       else { this.vy -= G * dt; this.x += this.vx * dt; this.y += this.vy * dt; this.z += this.vz * dt; this.pitch += dt * 3; }
       return;
     }
     this.steerK += (inp.steer - this.steerK) * (1 - Math.exp(-dt * 10));
+    if (!this.air) this.driveNow = inp.drive ?? (inp.brake ? -1 : 0);
     if (this.air) this.fly(dt, inp); else this.ride(dt, inp);
     this.sprung(dt);
     // (past a flag: that's the checkpoint now)
@@ -72,7 +80,10 @@ export class Rider {
     const c = this.course, here = c.point(this.s, this.u), half = here.width / 2;
     // (pace: the hill's fall, the engine up to its top, the air's drag, the brake; slower on the loose shoulder)
     const grade = c.point(this.s - 1, 0).y - c.point(this.s + 1, 0).y;
-    let a = G * grade * 0.5 * 0.85 + (this.v < VMAX ? 11 * (1 - this.v / VMAX) : 0) - 0.0022 * this.v * this.v - (inp.brake ? 18 : 0);
+    // (the drive: left alone the engine pulls toward its top as it always has; opened wider it pulls harder, toward ~185
+    // km/h; the brake bites as hard as it's pulled)
+    const d = drive(inp), gas = Math.max(0, d), brk = Math.max(0, -d), top = VMAX * (1 + 0.12 * gas);
+    let a = G * grade * 0.5 * 0.85 + (this.v < top ? 11 * (1 + 0.6 * gas) * (1 - this.v / top) : 0) - 0.0022 * this.v * this.v - brk * 18;
     if (Math.abs(this.u) > half) a -= 6;
     this.v = Math.max(4, this.v + a * dt);
     // (steering turns the bike, quicker at low speed; + is right, which turns the heading down)
@@ -80,7 +91,7 @@ export class Rider {
     this.heading -= this.steerK * maxYaw * dt;
     // (the travel follows the bike through the tyres' grip, less of it at speed and braking; the slide self-aligns slowly,
     // and scrubs pace)
-    const grip = 10 - 6 * Math.min(1, this.v / VMAX) - (inp.brake ? 3 : 0);
+    const grip = 10 - 6 * Math.min(1, this.v / VMAX) - brk * 3;
     this.travel += wrap(this.heading - this.travel) * (1 - Math.exp(-dt * grip));
     this.slip = wrap(this.heading - this.travel);
     this.heading -= this.slip * dt * 1.5;
@@ -191,6 +202,7 @@ export class Rider {
     this.vx = fx * this.v; this.vz = fz * this.v; this.vy = (this.vyGround || 0) + (lip ? 1.2 : 0);
     this.x += this.vx * dt; this.z += this.vz * dt; this.y = yBefore + this.vy * dt;
     if (lip) { this.jumps++; this.ev('launch', 1); }
+    this.spin = 0; this.pitch0 = this.pitch; this.drive0 = this.driveNow;
   }
   private fly(dt: number, inp: Input) {
     this.airT += dt;
@@ -206,8 +218,15 @@ export class Rider {
     this.travel = Math.atan2(this.vx, this.vz); this.heading = this.travel + this.slip; this.slip *= Math.exp(-dt * 3);
     const loc = this.course.locate(this.x, this.z, this.s); this.s = loc.s; this.u = loc.u;
     const p = this.course.point(this.s, this.u), half = p.width / 2;
-    // (in the air the nose follows the flight, slowly: + is nose up)
-    this.pitch += (Math.atan2(this.vy, Math.hypot(this.vx, this.vz)) * 0.7 - this.pitch) * (1 - Math.exp(-dt * 2.5));
+    // (in the air the drive tips the nose (+ is nose up): pulled back it comes up and keeps coming, over into a backflip
+    // if you hold it; pushed, it goes down (to meet a falling slope, or over the front). Let go and the turning dies away
+    // quickly, and once it's slow and near the flight's line the nose follows the flight again, as it does untouched)
+    const raw = inp.drive ?? 0; if (!raw) this.drive0 = 0;
+    const cmd = -drive({ steer: 0, brake: false, drive: raw - this.drive0 }, 0.2);
+    if (cmd) this.spin += (cmd * 5.2 - this.spin) * (1 - Math.exp(-dt * 5)); else this.spin *= Math.exp(-dt * 4);
+    this.pitch += this.spin * dt;
+    const off = wrap(this.pitch - Math.atan2(this.vy, Math.hypot(this.vx, this.vz)) * 0.7);
+    if (!cmd && Math.abs(this.spin) < 1.5 && Math.abs(off) < 1.2) this.pitch -= off * (1 - Math.exp(-dt * 2.5));
     this.lean *= Math.exp(-dt * 2);
     this.squash += (-0.35 - this.squash) * (1 - Math.exp(-dt * 4)); // (in the air the springs extend)
     void inp;
@@ -219,10 +238,22 @@ export class Rider {
       // matches the flight is soft, one onto the flat from the same height isn't. Into a gap, through a face rather than
       // onto it, too hard, or far down the drop: a crash)
       const vh = Math.hypot(this.vx, this.vz) || 1, ah = this.groundAt(this.x + this.vx / vh, this.z + this.vz / vh);
-      const imp = -(this.vy + vh * (sy - ah)), gap = Math.abs(this.u) <= half && !p.surface;
-      if (gap || sy - this.y > 1.2 || imp > 15 || this.u > half + 14 || Math.abs(this.whip) > 0.6) { this.crash(); return; }
+      // (and how the bike meets it: its pitch against the ground's own slope under it. Square to it, the landing's soft
+      // and keeps its pace (a nose pushed down onto a falling slope carries you on faster); a little off and one wheel
+      // slams; well off (nose first, or looped over onto the back wheel) it's a crash)
+      // (the slope across where the wheels come down; just past a gap's edge (or just short of a drop), the side over the
+      // hole doesn't count)
+      const fx = (this.vx / vh) * 0.8, fz = (this.vz / vh) * 0.8, gF = this.groundAt(this.x + fx, this.z + fz), gB = this.groundAt(this.x - fx, this.z - fz);
+      const slope = Math.abs(gB - sy) > 0.6 ? Math.atan2(gF - sy, 0.8) : Math.abs(gF - sy) > 0.6 ? Math.atan2(sy - gB, 0.8) : Math.atan2(gF - gB, 1.6);
+      const miss = Math.abs(wrap(this.pitch - slope)), square = miss < 0.12;
+      const imp = -(this.vy + vh * (sy - ah)) * (square ? 0.7 : 1) + Math.max(0, miss - 0.3) * 18, gap = Math.abs(this.u) <= half && !p.surface;
+      if (gap || sy - this.y > 1.2 || imp > 15 || this.u > half + 14 || Math.abs(this.whip) > 0.6 || miss > 0.75) { this.crash(); return; }
       // (else on the ground again; a hard one squashes and costs a little)
-      this.air = false; this.y = sy; this.v = Math.max(6, Math.hypot(this.vx, this.vz) * (imp > 14 ? 0.86 : imp > 8 ? 0.97 : 1));
+      this.air = false; this.y = sy; this.v = Math.max(6, Math.hypot(this.vx, this.vz) * (imp > 14 ? 0.86 : imp > 8 ? 0.97 : square && slope < -0.12 ? 1.05 : 1));
+      // (a whole turn or more of the nose since take-off, landed: a flip (+ back, − front))
+      const turns = Math.round((this.pitch - this.pitch0) / (Math.PI * 2));
+      if (turns) this.ev('flip', turns);
+      this.pitch = wrap(this.pitch); this.spin = 0;
       this.travel = Math.atan2(this.vx, this.vz); this.headingWas = this.travel;
       // (down with the bike still whipped: it lands yawed off the way it's going (its nose right of it: heading less) and
       // the slide takes it straight)
@@ -243,3 +274,8 @@ export function autoSteer(r: Rider) {
   return Math.max(-1, Math.min(1, -wrap(want - r.travel) * 4));
 }
 const wrap = (a: number) => Math.atan2(Math.sin(a), Math.cos(a));
+/** the drive asked for (−1…1), less a dead zone (so a drag that's mostly sideways doesn't brake or tip the nose) */
+function drive(inp: Input, dead = 0.15) {
+  const d = inp.drive ?? (inp.brake ? -1 : 0), m = Math.max(0, Math.abs(d) - dead) / (1 - dead);
+  return Math.sign(d) * Math.min(1, m);
+}

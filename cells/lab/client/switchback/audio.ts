@@ -8,7 +8,7 @@
  * - **the ground**: a gravel crunch under the tyres (noise, high-passed, roughened every frame), more in a slide, none
  *   in the air.
  * - **one-shots**: a landing's thump (a falling low tone and a dull burst), a crash (a longer, harder burst), a glance off
- *   rock (a short bright one), and a checkpoint's two-note chime.
+ *   rock (a short bright one), a checkpoint's two-note chime, and a flip's three.
  *
  * It starts only from a tap (the browser's rule), and sits under one master gain: the volume, or nothing.
  */
@@ -88,6 +88,7 @@ export class Sound {
     else if (e.kind === 'wall') { this.burst(now, 0.4, 2600, 0.12); this.thump(now, 0.5, 120, 0.15); }
     else if (e.kind === 'checkpoint') { this.note(now, 880, 0.12); this.note(now + 0.11, 1318.5, 0.22); }
     else if (e.kind === 'respawn') { this.note(now, 659.3, 0.18); }
+    else if (e.kind === 'flip') { this.note(now, 659.3, 0.1); this.note(now + 0.09, 880, 0.1); this.note(now + 0.18, 1318.5, 0.26); }
   }
   /** a low tone falling away: a thump */
   private thump(at: number, k: number, f: number, len: number) {

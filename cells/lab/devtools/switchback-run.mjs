@@ -80,4 +80,25 @@ for (const seed of seeds.length ? seeds : [1, 2, 3]) {
   const a = go(false), b = go(true), ok = a.crashes === 0 && a.maxW > 0.4 && b.crashes > 0; if (!ok) bad++;
   console.log(`${ok ? 'ok  ' : 'FAIL'}  whip: thrown over the gap to ${(a.maxW * 57.3).toFixed(0)}° and let go, landed (${a.crashes} crashes, ${(a.slipLand * 57.3).toFixed(0)}° of slide); held out into the landing, ${b.crashes ? 'a crash' : 'no crash'}`);
 }
+// (the drive: up the throttle, down the brake, as far as you drag; in the air, the nose. A pull held over a kicker turns
+// the bike over backward, and let go in time it lands a backflip; held on into the landing it loops out, a crash)
+{
+  const go = (mode) => {
+    const r = new Rider(new Course(1)); let t = 0, onGap = false, landed = false, p0 = null, flips = 0, seen = null, vSum = 0, n = 0;
+    while (t < (mode === 'gas' || mode === 'cruise' ? 30 : 10)) {
+      const f = r.course.at(r.s).feature; if (f === 'gap' && !landed) onGap = true;
+      if (r.air && p0 === null) p0 = r.pitch; if (!r.air) { if (p0 !== null && onGap) { landed = true; onGap = false; } p0 = null; }
+      const rot = p0 === null ? 0 : r.pitch - p0;
+      const drive = mode === 'gas' ? 1 : mode === 'cruise' ? 0 : r.air && onGap ? (mode === 'hold' || rot + r.spin / 4 < Math.PI * 2 ? -1 : 0) : 0;
+      r.step(1 / 120, { steer: autoSteer(r), brake: false, drive });
+      // (the list keeps its last 64: read on from the last one seen)
+      for (const e of r.events.slice(r.events.indexOf(seen) + 1)) if (e.kind === 'flip') flips += e.k; seen = r.events[r.events.length - 1];
+      vSum += r.v; n++; t += 1 / 120;
+    }
+    return { crashes: r.crashes, flips, mean: vSum / n };
+  };
+  const flip = go('flip'), hold = go('hold'), gas = go('gas'), cruise = go('cruise');
+  const ok = flip.flips === 1 && flip.crashes === 0 && hold.crashes > 0 && gas.mean > cruise.mean * 1.03; if (!ok) bad++;
+  console.log(`${ok ? 'ok  ' : 'FAIL'}  drive: a pull over the gap let go in time lands ${flip.flips} backflip (${flip.crashes} crashes); held on into the landing, ${hold.crashes ? 'a crash' : 'no crash'}; throttle open ${(gas.mean * 3.6).toFixed(0)} km/h against ${(cruise.mean * 3.6).toFixed(0)} left alone`);
+}
 process.exit(bad ? 1 : 0);

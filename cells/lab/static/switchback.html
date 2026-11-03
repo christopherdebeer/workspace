@@ -38,9 +38,9 @@ body:has(#menu.on) header,body:has(#menu.on) #hint,body:has(#menu.on) #notes{opa
 .direct #menuBtn{display:none}
 .preview header,.preview #hint,.preview #notes,.preview #note,.preview #menu{display:none}
 </style></head><body>
-<canvas id="world" aria-label="A motocross rider racing down a faceted mountain road. Drag left or right to steer; drag down to brake."></canvas><canvas id="speed"></canvas>
+<canvas id="world" aria-label="A motocross rider racing down a faceted mountain road. Drag left or right to steer; drag up for throttle and down to brake; in the air, drag down to pull the nose up and over, up to push it down."></canvas><canvas id="speed"></canvas>
 <header><div class="title"><button id="menuBtn" aria-label="Menu and settings (pauses)"><i></i></button><div><b>SWITCH<br>BACK</b><small>SEED <span id="seed">1</span></small></div></div><div class="pace"><b id="kmh">0</b><small>KM/H</small><span id="dist">0 m</span><span id="air"></span></div></header>
-<div id="note" role="status" aria-live="polite"></div><div id="hint">DRAG TO STEER · DRAG DOWN TO BRAKE</div><a id="notes" href="{{readme}}">NOTES</a>
+<div id="note" role="status" aria-live="polite"></div><div id="hint">DRAG ← → STEER · ↑ GAS · ↓ BRAKE<br>IN THE AIR ↓ ↑ TIPS THE NOSE</div><a id="notes" href="{{readme}}">NOTES</a>
 <div id="menu" class="on" role="dialog" aria-modal="true" aria-label="Switchback">
   <div><h1>SWITCH<span>BACK</span></h1><p class="tag">A RUN DOWN A MOUNTAIN MADE AS YOU RIDE IT</p></div>
   <div>
@@ -50,7 +50,7 @@ body:has(#menu.on) header,body:has(#menu.on) #hint,body:has(#menu.on) #notes{opa
       <div class="row"><span>CAMERA</span><span class="ctl" role="group" aria-label="Camera distance"><button data-cam="close">CLOSE</button><button data-cam="mid">MID</button><button data-cam="far">FAR</button></span></div>
       <div class="row"><span>MOUNTAIN <span id="mseed">1</span></span><span class="ctl"><button id="another">ANOTHER</button></span></div>
     </div>
-    <p class="how">DRAG TO STEER · DRAG DOWN TO BRAKE<br>FLAGS ARE CHECKPOINTS · <a href="{{readme}}">NOTES</a></p>
+    <p class="how">DRAG ← → STEER · ↑ GAS · ↓ BRAKE<br>IN THE AIR: ← → WHIP · ↓ ↑ TIP THE NOSE<br>FLAGS ARE CHECKPOINTS · <a href="{{readme}}">NOTES</a></p>
   </div>
 </div>
 <script type="module" src="{{app}}"></script></body></html>

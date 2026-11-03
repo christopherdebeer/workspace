@@ -1,6 +1,6 @@
 /**
  * Switchback: a downhill motocross run down a mountain that's made as you ride it, drawn flat and faceted, its speed
- * drawn as vector shards. Drag to steer (nothing steers for you), drag down to brake. Kickers launch you over gaps;
+ * drawn as vector shards. Drag across to steer (nothing steers for you), up and down to drive (throttle, brake; in the air, the nose). Kickers launch you over gaps;
  * whoops throw you; the wall glances you off; the drop side can be ridden, but too far down it, or too hard a landing,
  * is a crash, and you're back at the last checkpoint flag.
  *
@@ -51,9 +51,10 @@ const CAMERA = {
 /** `cam=close|mid|far` for this page only (not kept): for pinned frames */
 const camFlag = q.get('cam') as keyof typeof CAMERA | null;
 
-// (input: a drag steers from where it began; low in the drag brakes; keys too. Not while the menu's open, and never from
-// a press on the menu or a link)
-const inp = { steer: 0, brake: false };
+// (input: a drag from where it began: across, it steers; up and down, it drives (up the throttle, down the brake, as far
+// as you drag; in the air, the nose: down pulls it up and over, up pushes it down). Keys too. Not while the menu's open,
+// and never from a press on the menu or a link)
+const inp = { steer: 0, drive: 0 };
 let drag: { x: number; y: number; id: number } | null = null;
 const keys = new Set<string>();
 const onUi = (e: Event) => !!(e.target as HTMLElement).closest('a,button,input,#menu');
@@ -62,9 +63,9 @@ addEventListener('pointermove', (e) => {
   if (!drag || e.pointerId !== drag.id) return;
   const span = Math.min(innerWidth, innerHeight) * 0.24;
   inp.steer = Math.max(-1, Math.min(1, (e.clientX - drag.x) / span));
-  inp.brake = e.clientY - drag.y > 70;
+  inp.drive = Math.max(-2, Math.min(2, (drag.y - e.clientY) / span)); // (past ±1 only matters in the air, from where the drag stood at take-off)
 });
-const up = (e: PointerEvent) => { if (drag && e.pointerId === drag.id) { drag = null; inp.steer = 0; inp.brake = false; } };
+const up = (e: PointerEvent) => { if (drag && e.pointerId === drag.id) { drag = null; inp.steer = 0; inp.drive = 0; } };
 addEventListener('pointerup', up); addEventListener('pointercancel', up);
 addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && !direct) { if (menuOpen && running) close(); else open(); return; }
@@ -155,14 +156,15 @@ const kmh = document.getElementById('kmh')!, dist = document.getElementById('dis
 let last = performance.now(), acc = 0, t = 0, drawn = 0, frames = 0, fps = 60, fpsT = 0, seen = 0, bigAir = 0;
 function loop(now: number) {
   const dt = Math.min(0.05, (now - last) / 1000); last = now;
-  const braking = !auto && (inp.brake || keys.has('arrowdown') || keys.has('s'));
+  const driveKeys = (keys.has('arrowup') || keys.has('w') ? 1 : 0) - (keys.has('arrowdown') || keys.has('s') ? 1 : 0);
+  const drive = auto ? 0 : driveKeys || inp.drive, braking = drive < -0.3;
   if (!still && !paused) {
     acc += dt;
     const steerKeys = (keys.has('arrowright') || keys.has('d') ? 1 : 0) - (keys.has('arrowleft') || keys.has('a') ? 1 : 0);
     while (acc >= 1 / 120) {
       acc -= 1 / 120; t += 1 / 120;
       const steer = auto ? autoSteer(rider) : steerKeys || inp.steer;
-      rider.step(1 / 120, { steer, brake: braking, whip: auto ? 0 : steer });
+      rider.step(1 / 120, { steer, brake: false, drive, whip: auto ? 0 : steer });
       rd.trail.add(rider);
     }
   }
@@ -171,6 +173,7 @@ function loop(now: number) {
     if (e.kind === 'land') cam.shake += e.k * 0.9;
     if (e.kind === 'crash' || e.kind === 'wall') cam.shake += 1.2;
     if (e.kind === 'checkpoint') say(`CHECKPOINT ${e.k}`);
+    if (e.kind === 'flip') { const n = Math.abs(e.k); say(`${n > 2 ? `${n}× ` : n === 2 ? 'DOUBLE ' : ''}${e.k > 0 ? 'BACKFLIP' : 'FRONT FLIP'}`); }
     // (put back at the flag: the eye goes with you at once, not in a long swoop)
     if (e.kind === 'respawn') { say(e.k ? `CHECKPOINT ${e.k}` : 'START'); snapEye(); }
   }
