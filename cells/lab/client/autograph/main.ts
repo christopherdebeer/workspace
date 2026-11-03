@@ -46,7 +46,20 @@ function shown(ms: Measures[], k: keyof Measures, f: (v: number) => string) {
 }
 const deg = (v: number) => `${v > 0.5 ? '+' : ''}${Math.round(v)}°`;
 
+/** a sample set in the font: its lines as type (each at its size, joins on or off), tap to select it and copy */
+function typeCard(e: Entry) {
+  const el = document.createElement('article');
+  el.className = 'sample'; el.id = e.id;
+  el.innerHTML = `
+    <header><span class="id">${e.id}</span><h3>${esc(e.title)}</h3><span class="hand">${HANDS[e.hand].name}, set in type</span></header>
+    <div class="set">${e.type!.map((l) => `<p class="hand-type${l.calt === false ? ' nocalt' : ''}" style="font-size:${l.size}px">${esc(l.text)}${l.calt === false ? '<span class="off">joins off</span>' : ''}</p>`).join('')}</div>
+    <p class="made">${esc(e.made)}</p>
+    <p class="review">${esc(e.review)}</p>`;
+  return { el, size: () => {}, write: () => {} };
+}
+
 function card(e: Entry) {
+  if (e.type) return typeCard(e);
   const sigs = MADE[e.id](), ms = sigs.map((s) => measure(s, e.text));
   const el = document.createElement('article');
   el.className = 'sample'; el.id = e.id;
@@ -102,5 +115,11 @@ const seen = new IntersectionObserver((es) => { for (const e of es) if (e.isInte
 for (const c of cards) seen.observe(c.el);
 addEventListener('resize', () => { sized(hero, heroSigs, q.has('preview') ? innerHeight * 0.8 : 260); paint(hero, heroSigs, heroLook()); for (const c of cards) c.size(); });
 matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { paint(hero, heroSigs, heroLook()); for (const c of cards) c.size(); });
+
+// (the font: a specimen to type into, its size and its joins to try)
+const spec = $('specimen') as HTMLTextAreaElement, size = $('specSize') as HTMLInputElement, joins = $('specJoins') as HTMLButtonElement;
+const setSize = () => { spec.style.fontSize = `${size.value}px`; };
+size.addEventListener('input', setSize); setSize();
+joins.addEventListener('click', () => { const on = joins.getAttribute('aria-pressed') !== 'true'; joins.setAttribute('aria-pressed', String(on)); spec.classList.toggle('nocalt', !on); });
 
 (window as unknown as { __autograph: unknown }).__autograph = { samples: CATALOG.length, sessions: SESSIONS.length };

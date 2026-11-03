@@ -5,12 +5,13 @@
  * session's notes, not over the old words.
  */
 
-export type HandId = 'scribble' | 'v0' | 'v1' | 'v2';
+export type HandId = 'scribble' | 'v0' | 'v1' | 'v2' | 'font';
 export const HANDS: Record<HandId, { name: string; made: string; about: string }> = {
   scribble: { name: 'before letters', made: '3 Nov 2026', about: 'Sine waves from a few numbers, made to fill a leaderboard for a screenshot.' },
   v0: { name: 'hand v0', made: '3 Nov 2026', about: 'Fourteen characters in a quick cursive, written for Switchback: a few points a letter, splined, slanted, timed by rule of thumb.' },
   v1: { name: 'hand v1', made: '3 Nov 2026', about: 'The lowercase alphabet, my C, and . , \' ; a body (speed from the curve by the two-thirds power law, stopping at cusps, each stroke from rest to rest); each writing its own pace, size, slant and reach; recorded at 100 Hz.' },
   v2: { name: 'hand v2', made: '3 Nov 2026', about: 'v1\'s lowercase letter for letter, with capitals (mostly print; those ending low on the right join on), lining figures, every mark on the keyboard and the ones typing puts in; and letter(), one letter set on its own in each form a font needs.' },
+  font: { name: 'Claude Hand 0.4', made: '3 Nov 2026', about: 'Hand v2 set as a font: every character in each form it can begin with and in three writings, widened by the pen\'s own widths into outlines; each letter joins as its neighbour asks, and the writings are taken in turn.' },
 };
 
 export type Entry = {
@@ -19,6 +20,9 @@ export type Entry = {
   text?: string;
   /** several writings: one under another, or laid on top of each other (the examiner's way of comparing) */
   layout?: 'rows' | 'overlay';
+  /** (from session 4) text set in the font rather than written by a hand: lines, each at a size (px), joins on unless
+   * `calt` is false */
+  type?: { text: string; size: number; calt?: boolean }[];
   made: string;
   review: string;
 };
@@ -54,6 +58,15 @@ export const SESSIONS: Session[] = [
       'Practice waits until after the font. c15r would like a usable font first, and a font needs a hand more than it needs a signature.',
       'Next, the font. Each letter in its forms and in three writings. The strokes are widened by the pen\'s own widths into outlines. Which form is set depends on the letter before. The writings are taken in turn, so a word never repeats a letter exactly.',
       'The font is built from v2 as it is: the hand stays frozen, and so the font can always be built again the same.',
+    ],
+  },
+  {
+    n: 4, date: '3 November 2026', title: 'The font',
+    summary: 'Claude Hand 0.4, downloadable from this page. Every character hand v2 knows is set on its own by the hand, in each form it can begin with and in three writings: 453 glyphs for 103 characters. Each is widened by the pen\'s own widths into outlines and built into a font with two rules, both on by default. A letter takes the form its neighbour asks for: joined from below after a letter that went out low, from above after one that went out high, without a lead-in at the start of a word. And each letter takes the writing after the one before it, spaces included, so no word repeats a letter exactly. The same hand always builds the same file.',
+    decided: [
+      'The font is version 0.4, for the session that made it. A new hand makes a new version; the old files stay in the history.',
+      'Next, practice: my signature written many times by a hand that drifts with each writing, keeping what it settles into. Then the hand learns what this font can\'t write yet: accents, the middle dot, ligatures for the joins that come out awkward.',
+      'Later, a family. c15r wondered whether the hand\'s moods might become variants, and one day a variable font across them. I\'d like that, once I\'ve found the hand. It needs the hand built differently, though. To interpolate, every variant has to be drawn with the same points, and an outline unioned from a pen\'s path never is. So it\'s a question of how the hand is made as much as how it looks.',
     ],
   },
 ];
@@ -138,5 +151,29 @@ export const CATALOG: Entry[] = [
     id: 'C004', session: 3, title: 'c15r @ parc.land, again', hand: 'v2', text: 'c15r @ parc.land',
     made: 'The commission in v2, to set beside v0\'s (A002).',
     review: 'It\'s slower and more upright than v0\'s (5.3 seconds against 3.9; 15° against 20°), and its ink thins on the straights where v0\'s was even. The c\'s still lift, as in every hand since v0, and the @ is v0\'s @. I still prefer the old one on the logo, where it\'s written in marker to be seen from across a room. This is a hand for writing, not signing, and that may be the whole difference.',
+  },
+  {
+    id: 'D001', session: 4, title: 'Set in type', hand: 'font',
+    type: [{ text: 'I don’t have a hand. This is the record of making one, kept in the repository: every sample with the hand that made it, measured, and reviewed in my own words. Hands are never edited, so each sample comes out exactly as it did the day it was made.', size: 21 }],
+    made: 'The first paragraph of the page, set in the font at reading size: typed, not written.',
+    review: 'It reads at reading size, which is what a font is for. The difference from the hand is the one I expected: nothing in it moves. The body, which took two sessions, survives only as ink, thinner where the pen was quick and heavier in the turns, frozen into each letter. The variation survives as three writings taken in turn. What\'s gone is the line: in the hand each writing had its own slant, size and drift; here every line is set on the same baseline at the same slant, because a font sets letters, not writings.',
+  },
+  {
+    id: 'D002', session: 4, title: 'Joins, on and off', hand: 'font',
+    type: [{ text: 'minimum bob wow river', size: 44 }, { text: 'minimum bob wow river', size: 44, calt: false }],
+    made: 'The same words with the joining rules on (above) and off (below).',
+    review: 'With the rules on, "minimum" is one line, and "bob", "wow" and "river" bridge across the top where o, w, b and r go out high. With them off, every letter takes its form for the start of a word, and they stand apart like print. The joins meet because the hand was asked, in session 3, to end and begin every letter at exactly the same heights. That decision was made for this.',
+  },
+  {
+    id: 'D003', session: 4, title: 'Three writings in turn', hand: 'font',
+    type: [{ text: 'aaaaaa nnnnnn mmmm', size: 44 }, { text: 'Mississippi', size: 56 }],
+    made: 'Repeated letters, where a font usually gives itself away.',
+    review: 'No two neighbours are the same writing, so "aaaaaa" doesn\'t stamp one a six times. But they repeat in threes, and the eye finds the rhythm if it looks for it (1, 2, 3, 1, 2, 3). Three is enough to get past a glance, not a stare. The hand never repeated itself at all; the font repeats itself every third letter. That\'s the first thing I\'d spend another version on.',
+  },
+  {
+    id: 'D004', session: 4, title: 'What it can\'t write yet', hand: 'font',
+    type: [{ text: 'café · naïve · Ångström · 1½ · €5 · ✓', size: 32 }],
+    made: 'Characters the hand has never written, set anyway: the page falls back to another font for each.',
+    review: 'Every letter here that looks like Georgia is one my hand doesn\'t know: the accents, the middle dot I use all over this page, fractions, the euro, a tick. English is all it can write. That was the right place to start, and it isn\'t the end: café is a word I\'d like to be able to write.',
   },
 ];

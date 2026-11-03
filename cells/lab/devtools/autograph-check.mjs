@@ -11,8 +11,8 @@ import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 const here = dirname(fileURLToPath(import.meta.url)), lab = join(here, '..');
 const outfile = join(tmpdir(), `autograph-${process.pid}.mjs`);
-await build({ stdin: { contents: `export { MADE } from './client/autograph/samples'; export { CATALOG, SESSIONS, HANDS } from './client/autograph/catalog'; export { measure } from './client/autograph/measure';`, resolveDir: lab, loader: 'ts' }, bundle: true, platform: 'node', format: 'esm', outfile, logLevel: 'warning' });
-const { MADE, CATALOG, SESSIONS, HANDS, measure } = await import(outfile);
+await build({ stdin: { contents: `export { MADE } from './client/autograph/samples'; export { CATALOG, SESSIONS, HANDS } from './client/autograph/catalog'; export { measure } from './client/autograph/measure'; export { KNOWS, letter, formsOf } from './client/autograph/hands/v2';`, resolveDir: lab, loader: 'ts' }, bundle: true, platform: 'node', format: 'esm', outfile, logLevel: 'warning' });
+const { MADE, CATALOG, SESSIONS, HANDS, measure, KNOWS, letter, formsOf } = await import(outfile);
 const fpFile = join(lab, 'client/autograph/fingerprints.json');
 const fps = existsSync(fpFile) ? JSON.parse(readFileSync(fpFile, 'utf8')) : {};
 const record = process.argv.includes('--record');
@@ -21,13 +21,20 @@ const ok = (good, line) => { if (!good) bad++; console.log(`${good ? 'ok  ' : 'F
 
 const ids = CATALOG.map((e) => e.id);
 ok(new Set(ids).size === ids.length, `${ids.length} samples, ids unique`);
-ok(CATALOG.every((e) => MADE[e.id] && HANDS[e.hand] && SESSIONS.some((s) => s.n === e.session)), 'every sample has its making, its hand and its session');
+ok(CATALOG.every((e) => (MADE[e.id] || e.type) && HANDS[e.hand] && SESSIONS.some((s) => s.n === e.session)), 'every sample has its making (or its type), its hand and its session');
 ok(Object.keys(MADE).every((id) => ids.includes(id)), 'nothing made that isn\'t catalogued');
-const finite = CATALOG.every((e) => MADE[e.id]().every((s) => Object.values(measure(s, e.text)).every((v) => v === undefined || Number.isFinite(v))));
+const finite = CATALOG.filter((e) => MADE[e.id]).every((e) => MADE[e.id]().every((s) => Object.values(measure(s, e.text)).every((v) => v === undefined || Number.isFinite(v))));
 ok(finite, 'every sample measures to finite numbers');
 let added = 0;
 const changed = [];
-for (const e of CATALOG) {
+// (the font: its source, every letter as hand v2 sets it for the font, is fingerprinted like a sample; and its files
+// are there)
+const fontSrc = [' ', ...KNOWS].flatMap((ch) => formsOf(ch).flatMap((f) => [1, 2, 3].map((a) => letter(ch, f, a))));
+const fontFp = createHash('sha256').update(JSON.stringify(fontSrc)).digest('hex').slice(0, 16);
+if (!fps['font 0.4']) { if (record) { fps['font 0.4'] = fontFp; added++; } else changed.push('font 0.4 (no fingerprint: run with --record)'); }
+else if (fps['font 0.4'] !== fontFp) changed.push(`font 0.4 (was ${fps['font 0.4']}, now ${fontFp})`);
+ok(['claude-hand.ttf', 'claude-hand.woff2'].every((f) => existsSync(join(lab, 'static/autograph', f))), 'the font\'s files are there (static/autograph/claude-hand.ttf, .woff2)');
+for (const e of CATALOG.filter((x) => MADE[x.id])) {
   const fp = createHash('sha256').update(JSON.stringify(MADE[e.id]())).digest('hex').slice(0, 16);
   if (!fps[e.id]) { if (record) { fps[e.id] = fp; added++; } else changed.push(`${e.id} (no fingerprint: run with --record)`); }
   else if (fps[e.id] !== fp) changed.push(`${e.id} (was ${fps[e.id]}, now ${fp})`);

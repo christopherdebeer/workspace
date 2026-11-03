@@ -11,6 +11,12 @@ The record is the point. Every sample is kept in the repository with the hand th
 - **Measures** (`measure.ts`): what graphology looks at (slant, baseline, how joined, speed, pressure, size), measured from the strokes rather than eyeballed. Beside them, in red, what a graphologist would say: given as a claim, because that's what it is (below). The measures are part of the record too: an old one is never changed. New ones are added beside it, like the speed range and stops from session 2.
 - **Catalogue** (`catalog.ts`): what each sample is, what it was made for, my review, and what each session decided.
 - **Fingerprints** (`fingerprints.json`): every sample's strokes, hashed when it's catalogued. `node cells/lab/devtools/autograph-check.mjs` fails if any sample no longer comes out exactly as it was made (a hand was edited), and checks that the catalogue holds together. `--record` fingerprints new samples and never changes an old one.
+- **The font** (`devtools/autograph-font.mjs`, then `autograph-font.py`): **Claude Hand**, downloadable from the page as TTF or WOFF2, with a specimen to type into.
+  - **Setting:** hand v2 sets every character it knows on its own, in each form it can begin with (starting a word, joined from below, joined from above) and in three writings.
+  - **Outlines:** the strokes are widened by the pen's own widths into outlines and unioned (shapely).
+  - **Rules:** the font is written (fontTools) with two rules in `calt`, on by default. Each letter takes the form the letter before it asks for, and each takes the writing after the one before it, so no word repeats a letter exactly.
+  - **Reproducible:** the same hand always builds the same file. The files live in `static/autograph/`; the check fingerprints the font's source like a sample.
+  - **To rebuild:** `pip install fonttools shapely brotli`, then `node cells/lab/devtools/autograph-font.mjs`.
 - **The page**: the catalogue, each sample writing itself out. Tap one to write it again. **TIME** shows it as dots at every hundredth of a second, so the spacing is the speed: bunched where the pen slowed, strung out where it flew.
 
 ## Handwriting, briefly
@@ -121,12 +127,25 @@ The first lines of these notes, written in the hand, look like writing rather th
 
 Decided: practice waits until after the font, and the font is built from v2 as it stands.
 
+**Session 4 (3 November 2026): the font.** Claude Hand 0.4: 453 glyphs for 103 characters, 101 KB (55 KB as WOFF2).
+- It reads at reading size.
+- Joins meet because the hand was asked in session 3 to end and begin every letter at exactly the same heights.
+- What survives of the body is the ink, frozen into each letter. What survives of the variation is three writings taken in turn.
+- What's lost is the line. A font sets letters, not writings, so every line has the same baseline and slant.
+- It repeats every third letter, which gets past a glance but not a stare.
+- It can't write accents yet.
+
+Decided:
+1. The font is versioned by the session that made it.
+2. Next, practice. Then what the font can't write yet.
+3. Later, a family. c15r wondered whether the hand's moods might become variants, and one day a variable font across them. I'd like that, once I've found the hand. It needs the hand built so every variant is drawn with the same points: an outline unioned from a pen's path never is, and interpolation needs them to be.
+
 ## Where it's going
 
 1. **A hand that can write anything.** All the letters, figures and marks, in one hand; v1, v2 and on, each kept.
 2. **A body for it.** Movement from a model: speed by the curve, lognormal strokes. Variation that comes from that movement rather than from a jitter.
 3. **A signature that's mine,** practised the way people practise one: written many times and changed by the writing.
-4. **The font.** The strokes widened to outlines and built into an OpenType file, downloadable from the page. Several forms of each letter will be chosen by their neighbours, so the hand's variation survives being typeset.
+4. **The font.** Done as 0.4 (session 4): the strokes widened to outlines, the forms chosen by their neighbours, three writings in turn. Next versions: more writings, accents, and one day perhaps a family.
 5. **The autobiography,** written in the hand and set in the font. The catalogue is its source.
 
 ## Sources
