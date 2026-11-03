@@ -1,8 +1,8 @@
 {
   "cell": "c15r/lab",
   "cellId": "lab-8928acf3",
-  "treeVersion": "tree:771494cd65240a38b2ad1dd69307fde46ddbb793ded7acb1e13537cf8b86f902",
-  "syncedAt": "2026-11-03T12:45:59.941Z",
+  "treeVersion": "tree:8aeab559ff1f8338ca56c208704553acaf8f5814434e791e25f6b569b6ea3b30",
+  "syncedAt": "2026-11-03T13:03:18.376Z",
   "files": {
     "README.md": "sha256:665df4179140457c44ea9e0f6f5820bd6e9b557fb196a37cf1245a07cb11f7c6",
     "client/bamboo/chase.ts": "sha256:86eda509044fedcbee75e3fc296b49af244257f62551251e7a668573424ee06c",
@@ -219,7 +219,7 @@
     "client/switchback/ground.ts": "sha256:64f81f177026a656d039e16a2f35bbdbb4ea45a0c93dd4a7237432f9899a8a0b",
     "client/switchback/main.ts": "sha256:78d4a7694e5858920b31d52d797664d79a17b3ba36fd55369c03c894ecf7a51f",
     "client/switchback/mesh.ts": "sha256:0aa6dc555328387b51c8d691900306a2de6fda90bc2620823bbc2a7048e1ec7b",
-    "client/switchback/render.ts": "sha256:de7f5d0702be1dc3609d498af40d62022c9bd439547ce351b5798df249c32d5f",
+    "client/switchback/render.ts": "sha256:b94b74b7d766ba0b2a57cda49131b61021507aa2663deda4f083022c5dfb554d",
     "client/switchback/ruts.ts": "sha256:f25062c1006e1e573d34d287bf921158f1fd1e16ef35d880ba3993ff59002d44",
     "client/switchback/sim.ts": "sha256:2b94388dbd96cef038eb28da25e5d2b798843744578503381658292c17fb7dc5",
     "client/switchback/tricks.ts": "sha256:04f615785a5ae127f3c9115de43901bab103ff3760c36a88d948daaf3d81c3fe",
@@ -866,7 +866,7 @@
     "static/squishy/views.json": "sha256:38eab78b803c68f26480101b51a1c50f25d81fe7f8e66cf13efaeb579b65201e",
     "static/squishy/views.md": "sha256:24f7d5f15bc879291312ffe614884ed7bde68aed7741c25b73a4618faf65b9a3",
     "static/switchback.html": "sha256:c60a014dbe2ba63bcba9cf8e362d77b83004fe326e6e675861b1851861a34fa1",
-    "static/switchback.md": "sha256:1cf728d508fbd36607d75c14c0fc3b933f896a469fa5e793eebf8381c352d1b1",
+    "static/switchback.md": "sha256:0ad71bfbffd6aaf3dd42f694b191088cd6cc338b4f739828c4979b0a215d73e7",
     "static/switchback/target.jpg": "sha256:4e643285e47e56c9453bf366f31cee2833ee10caafcdc6c714b1e93089b793d4",
     "static/switchback/v-ride.jpg": "sha256:f38d13c99e3d4f9a0c3aa6cc657013fd3ef9e123d399a46b330d8555615a3e72",
     "static/taohua.html": "sha256:aee134e461ff6dc464964f958fc3f0fd3f98fdf9cfd2e66e9b711017cf44d7bc",
