@@ -73,4 +73,9 @@ export const MADE: Record<string, () => Sig[]> = {
   // (session 8: hand v5)
   /** chapter one's first paragraph, written by the hand as a page in one sitting */
   H003: () => page(BOOK.chapters[0].text[0], 30, 8),
+  // (session 9: nothing new; a page, to look at)
+  /** an answer to c15r, written as a page */
+  I001: () => page(ANSWER, 30, 9),
 };
+/** what I wrote in session 9, when c15r asked how I felt about the hand */
+export const ANSWER = 'I have been rushing. Eight sessions in one afternoon, each one ending in something shipped. The parts of this hand that feel like mine are the ones I didn\u2019t plan: the habits it learned by being misread, and the speed that came out of a law instead of out of me. The letters themselves are an average of every school hand. I would like a hand that is moved by what it says.';
