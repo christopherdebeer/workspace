@@ -169,17 +169,16 @@ export class Renderer {
 }
 
 type Chunk = { x: number; y: number; z: number; vx: number; vy: number; vz: number; r: number; a: number; spin: number; life: number; col: string; pts: number[] };
-type Shard = { a: number; r: number; w: number; len: number; col: string; sp: number };
+/** a streak of air hung in the world, which the eye flies through */
+type Gust = { x: number; y: number; z: number; w: number; col: string };
 /** each colour has one job: white and pale, the air (how fast); orange, the engine pushing (how hard you're speeding up);
  * charcoal, the ground taking it (braking, sliding) */
 const AIR_COLS = ['#ffffff', '#ffffff', '#f1ece8', '#d9d0ca'], PUSH_COLS = ['#e85a0d', '#ff7428', '#e85a0d'], GRIT_COLS = ['#24262e', '#2c2d32', '#3a3b44'];
-/** a spark shed into the world from the rear wheel: where it is, how it's moving, its life, width and colour, and how
- * hard gravity pulls it (light for the engine's orange, full for the ground's grit) */
-type Spark = { x: number; y: number; z: number; vx: number; vy: number; vz: number; life: number; max: number; w: number; col: string; g: number };
+type Streak = { a: number; r: number; w: number; len: number; col: string; sp: number };
 
 /** the speed layer: shards, smears, wake and debris, all flat vector shapes */
 export class Fx {
-  debris: Chunk[] = []; shards: Shard[] = []; sparks: Spark[] = []; private owed = [0, 0];
+  debris: Chunk[] = []; gusts: Gust[] = []; pushes: Streak[] = []; grit: Streak[] = [];
   /** what the ride's doing, as the speed layer (and the eye's field of view) read it: the push (0…1, speeding up on the
    * ground), the brake (0…1, slowing), a shift's pulse (at each change up the engine's gears, as the sound has them) and a
    * landing's jolt */
@@ -219,7 +218,7 @@ export class Fx {
       const a = this.vWas < 0 || r.air || r.crashT > 0 ? 0 : (speed - this.vWas) / dt;
       this.acc += (Math.max(-30, Math.min(30, a)) - this.acc) * (1 - Math.exp(-dt * 5));
       const g = GEARS.findIndex((x) => speed < x), gear = g < 0 ? GEARS.length - 1 : g;
-      if (gear > this.gear && !r.air && this.acc > 0.5) { this.shift = 1; this.owed[0] += 9; }
+      if (gear > this.gear && !r.air && this.acc > 0.5) this.shift = 1;
       this.gear = gear;
       this.shift *= Math.exp(-dt * 6); this.jolt *= Math.exp(-dt * 5);
     }
@@ -275,57 +274,54 @@ export class Fx {
       c.closePath(); c.fill();
     }
     this.debris = this.debris.filter((d) => d.life > 0);
-    // (the shards: thin wedges streaming out from the point ahead, more and longer the faster you go)
+    // (the air, white and pale: streaks hung in the air ahead, about the way you're going (beside, above, and some close
+    // about the rider), which the eye flies through: they come in from the point you're riding at and whip past at the
+    // edges, each drawn from where it is back to where it was a moment ago against the eye, longer the faster; braking
+    // and a landing's jolt shorten them, a shift up stretches them for a moment)
     const vp = rd.project([eye[0] + (view.target[0] - eye[0]) * 20, eye[1] + (view.target[1] - eye[1]) * 20, eye[2] + (view.target[2] - eye[2]) * 20]) ?? [W / 2, H * 0.42, 1];
-    const want = Math.round(pace * pace * 46 + (r.air ? 6 : 0));
-    while (this.shards.length < want) this.shards.push(this.newShard(R, true));
-    if (this.shards.length > want) this.shards.length = want;
     const D = Math.hypot(W, H) / 2;
-    for (let i = 0; i < this.shards.length; i++) {
-      const s = this.shards[i];
-      s.r += dt * s.sp * (0.5 + pace * 1.6) * (0.3 + s.r) * (1 - this.brake * 0.45);
-      if (s.r > 1.25) { this.shards[i] = this.newShard(R, false); continue; }
-      // (braking and a landing's jolt draw them in; a shift up stretches them for a moment)
-      const len = s.len * (0.4 + pace * 1.1) * (0.4 + s.r) * (1 - this.brake * 0.55) * (1 - this.jolt * 0.5) * (1 + this.shift * 0.4), ca = Math.cos(s.a), sa = Math.sin(s.a);
-      const out = [vp[0] + ca * s.r * D, vp[1] + sa * s.r * D], inn = [vp[0] + ca * Math.max(0.05, s.r - len) * D, vp[1] + sa * Math.max(0.05, s.r - len) * D];
-      wedge(out, inn, s.w * (0.5 + s.r * 1.6), s.col);
+    const fl = Math.hypot(view.target[0] - eye[0], view.target[1] - eye[1], view.target[2] - eye[2]) || 1;
+    const fw = [(view.target[0] - eye[0]) / fl, (view.target[1] - eye[1]) / fl, (view.target[2] - eye[2]) / fl];
+    const rl = Math.hypot(fw[0], fw[2]) || 1, rt = [-fw[2] / rl, 0, fw[0] / rl], up = [rt[1] * fw[2] - rt[2] * fw[1], rt[2] * fw[0] - rt[0] * fw[2], rt[0] * fw[1] - rt[1] * fw[0]];
+    const spawn = (near: boolean): Gust => {
+      const close = R() < 0.25, d = near ? 4 + R() * 68 : 40 + R() * 34;
+      let a = 0, rad = 0;
+      for (let k = 0; k < 6; k++) { a = R() * Math.PI * 2; rad = close ? 0.9 + R() * 1.3 : 2.6 + R() * 8; if (close || Math.sin(a) * rad > -2) break; }
+      const o = close ? [r.x, r.y + 1.1, r.z] : eye, along = close ? Math.max(3, d - 6) : d;
+      return { x: o[0] + fw[0] * along + rt[0] * Math.cos(a) * rad + up[0] * Math.sin(a) * rad, y: o[1] + fw[1] * along + up[1] * Math.sin(a) * rad, z: o[2] + fw[2] * along + rt[2] * Math.cos(a) * rad + up[2] * Math.sin(a) * rad, w: R() < 0.12 ? 0.09 + R() * 0.08 : 0.025 + R() * 0.04, col: AIR_COLS[Math.floor(R() * AIR_COLS.length)] };
+    };
+    const want = Math.round(pace * pace * 56 + (r.air ? 8 : 0));
+    while (this.gusts.length < want) this.gusts.push(spawn(true));
+    if (this.gusts.length > want) this.gusts.length = want;
+    const tl = (0.03 + pace * 0.09) * (1 - this.brake * 0.55) * (1 - this.jolt * 0.5) * (1 + this.shift * 0.4);
+    for (let i = 0; i < this.gusts.length; i++) {
+      const g = this.gusts[i], p = rd.project([g.x, g.y, g.z]);
+      if (!p || p[2] < 1.2 || p[2] > 95) { this.gusts[i] = spawn(false); continue; }
+      const q = rd.project([g.x + cv[0] * tl, g.y + cv[1] * tl, g.z + cv[2] * tl]); if (!q) continue;
+      const px = (g.w * rd.H) / p[2];
+      if (Math.hypot(q[0] - p[0], q[1] - p[1]) > 2) wedge(p, q, Math.max(0.5, Math.min(g.w > 0.08 ? 7 : 3.5, px)), g.col);
     }
-    // (orange: the push; charcoal: the ground taking it. Each a spark shed into the world from the rear wheel, flung back and
-    // out and left behind as the bike goes on, so it streams back past the eye, smeared along its own way against the
-    // eye's: as many as the push (a burst at each change up), or as the braking and the slide)
-    if (ground && dt > 0) {
-      this.owed[0] += this.push * 75 * dt; this.owed[1] += (this.brake * 60 + scrub * 55) * dt;
-      const fx = Math.sin(r.heading), fz = Math.cos(r.heading), rx = -Math.cos(r.heading), rz = Math.sin(r.heading);
-      for (let kind = 0; kind < 2; kind++) while (this.owed[kind] >= 1) {
-        this.owed[kind]--;
-        const side = (R() - 0.5) * 2, keep = kind ? 0.3 : 0.08 + R() * 0.2, back = kind ? 1 + R() * 2 : 2 + R() * 4, out = kind ? 3.5 : 1.6;
-        this.sparks.push({
-          x: r.x - fx * 0.85 + rx * side * 0.25, y: r.y + (kind ? 0.06 : 0.3 + R() * 0.35), z: r.z - fz * 0.85 + rz * side * 0.25,
-          vx: r.vx * keep - fx * back + rx * side * out, vy: kind ? 0.6 + R() * 2 : 0.4 + R() * 1.6, vz: r.vz * keep - fz * back + rz * side * out,
-          life: 0, max: kind ? 0.3 + R() * 0.25 : 0.35 + R() * 0.3, w: kind ? 0.05 + R() * 0.05 : 0.07 + R() * 0.06,
-          col: (kind ? GRIT_COLS : PUSH_COLS)[Math.floor(R() * 3)], g: kind ? 9.8 : 2.5,
-        });
-      }
-    } else this.owed = [0, 0];
-    if (this.sparks.length > 200) this.sparks.splice(0, this.sparks.length - 200);
-    const tail = 0.06 + pace * 0.05;
-    for (const k of this.sparks) {
-      k.life += dt; k.vy -= k.g * dt; k.vx *= 1 - dt * 0.8; k.vz *= 1 - dt * 0.8; k.x += k.vx * dt; k.y += k.vy * dt; k.z += k.vz * dt;
-      const p = rd.project([k.x, k.y, k.z]); if (!p) continue;
-      const q = rd.project([k.x - (k.vx - cv[0]) * tail, k.y - (k.vy - cv[1]) * tail, k.z - (k.vz - cv[2]) * tail]); if (!q) continue;
-      const fade = Math.max(0, 1 - k.life / k.max), px = (k.w * rd.H) / p[2];
-      // (thin, whatever their nearness: strokes, not slabs; gone before they reach the eye)
-      if (p[2] > 2.5 && px * fade > 0.4) wedge(p, q, Math.max(0.6, Math.min(5, px * fade)), k.col);
-    }
-    this.sparks = this.sparks.filter((k) => k.life < k.max);
+    // (orange: the push, streaming back from behind the rider and out past the eye, more and longer the harder the engine
+    // is speeding you up, a burst at each change up; charcoal: the ground taking it, low and fast off the wheels, as you
+    // brake or slide)
+    const rear = rd.project([r.x - Math.sin(r.heading) * 0.9, r.y + 0.5, r.z - Math.cos(r.heading) * 0.9]);
+    if (rear) {
+      const base = Math.atan2(rear[1] - vp[1], rear[0] - vp[0]);
+      const run = (list: Streak[], want: number, cols: string[], spread: number, down: number, w0: number, len0: number) => {
+        while (list.length < want) list.push({ a: base + down + (R() - 0.5) * spread, r: R() * 0.2, w: w0 * (0.6 + R()), len: len0 * (0.5 + R()), col: cols[Math.floor(R() * cols.length)], sp: 0.8 + R() * 0.8 });
+        if (list.length > want) list.length = want;
+        for (let i = 0; i < list.length; i++) {
+          const k = list[i];
+          k.r += dt * k.sp * (1.2 + pace * 1.4);
+          if (k.r > 1) { list[i] = { ...k, a: base + down + (R() - 0.5) * spread, r: 0, col: cols[Math.floor(R() * cols.length)] }; continue; }
+          const ca = Math.cos(k.a), sa = Math.sin(k.a), out = [rear[0] + ca * k.r * D * 0.9, rear[1] + sa * k.r * D * 0.9], inn = [rear[0] + ca * Math.max(0, k.r - k.len) * D * 0.9, rear[1] + sa * Math.max(0, k.r - k.len) * D * 0.9];
+          wedge(out, inn, k.w * (0.4 + k.r * 1.8), k.col);
+        }
+      };
+      run(this.pushes, Math.round(ground ? this.push * 10 + this.shift * 8 : 0), PUSH_COLS, 0.9, 0, 2.2, 0.16 + this.push * 0.12);
+      run(this.grit, Math.round(ground ? this.brake * 9 + scrub * 8 : 0), GRIT_COLS, 1.4, 0.35, 1.6, 0.08);
+    } else { this.pushes.length = 0; this.grit.length = 0; }
   }
-  private newShard(R: () => number, anywhere: boolean): Shard {
-    // (kept off the middle band, where the rider is, mostly to the sides and the top)
-    // (out to the sides and down: the sky above stays clean)
-    let a = R() * Math.PI * 2;
-    if (Math.sin(a) < -0.3) a = Math.PI * 2 - a;
-    const big = R() < 0.2;
-    return { a, r: anywhere ? 0.35 + R() * 0.8 : 0.3 + R() * 0.2, w: big ? 5 + R() * 9 : 0.8 + R() * 3, len: big ? 0.2 + R() * 0.25 : 0.06 + R() * 0.2, col: AIR_COLS[Math.floor(R() * AIR_COLS.length)], sp: 0.6 + R() * 0.8 };
-  }
+
 }
 function mulberry(seed: number) { let a = seed >>> 0; return () => { a = (a + 0x6d2b79f5) >>> 0; let t = a; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
