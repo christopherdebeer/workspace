@@ -18,7 +18,8 @@ import { Trickster } from './tricks';
 import { Renderer, View } from './render';
 import { M, PALETTE, RUT_LIGHT } from './mesh';
 import { Sound } from './audio';
-import { MODES, Mode, Score, bestOf, keepBest } from './score';
+import { MODES, Mode, Score, bestOf, board, keepBest, sign } from './score';
+import { Pad, replay } from './sign';
 
 const q = new URLSearchParams(location.search);
 const seed = Number(q.get('seed') ?? 1) | 0 || 1, preview = q.has('preview'), still = q.has('still');
@@ -44,10 +45,15 @@ rd.style = q.get('rider') === 'facets' ? 'facets' : q.get('rider') === 'sil' ? '
 const sound = new Sound();
 
 // (settings, kept in this browser where it can)
-type Settings = { sound: boolean; volume: number; camera: 'close' | 'mid' | 'far'; mode: Mode };
-const settings: Settings = { sound: true, volume: 0.7, camera: 'mid', mode: 'run' };
-try { Object.assign(settings, JSON.parse(localStorage.getItem('switchback') ?? '{}')); } catch { /* (private, or blocked: defaults) */ }
-if (!MODES[settings.mode]) settings.mode = 'run';
+type Settings = { sound: boolean; volume: number; camera: 'close' | 'mid' | 'far'; mode: Mode; v: number };
+const settings: Settings = { sound: true, volume: 0.7, camera: 'mid', mode: 'lives', v: 2 };
+try {
+  // (settings kept before THREE LIVES was the first choice: the mode they kept was only ever the old first one, so it goes)
+  const kept = JSON.parse(localStorage.getItem('switchback') ?? '{}');
+  if (kept.v !== 2) delete kept.mode;
+  Object.assign(settings, kept, { v: 2 });
+} catch { /* (private, or blocked: defaults) */ }
+if (!MODES[settings.mode]) settings.mode = 'lives';
 const keep = () => { try { localStorage.setItem('switchback', JSON.stringify(settings)); } catch { /* (no matter) */ } };
 /** `mode=run|lives|time|endless` for this page only */
 const modeFlag = q.get('mode') as Mode | null;
@@ -137,9 +143,10 @@ const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getEleme
 const menu = $('menu'), go = $<HTMLButtonElement>('go'), again = $<HTMLButtonElement>('again'), finishBtn = $<HTMLButtonElement>('finish'), quit = $<HTMLButtonElement>('quit');
 const sndBtn = $<HTMLButtonElement>('snd'), vol = $<HTMLInputElement>('vol'), another = $<HTMLButtonElement>('another');
 const camBtns = [...document.querySelectorAll<HTMLButtonElement>('[data-cam]')], modeBtns = [...document.querySelectorAll<HTMLButtonElement>('[data-mode]')];
-const panels = { main: $('main'), prefs: $('prefs'), card: $('card') };
-/** which of the menu's panels shows: the main one (ride, the mode), the settings, a finished run's card */
-const show = (k: keyof typeof panels) => { for (const [n, el] of Object.entries(panels)) el.hidden = n !== k; };
+const toBoard = $<HTMLButtonElement>('toBoard'), boardBtns = [...document.querySelectorAll<HTMLButtonElement>('[data-board]')];
+const panels = { main: $('main'), prefs: $('prefs'), board: $('board'), card: $('card') };
+/** which of the menu's panels shows: the main one (ride, the mode), the settings, the leaderboard, a finished run's card */
+const show = (k: keyof typeof panels) => { for (const [n, el] of Object.entries(panels)) el.hidden = n !== k; menu.dataset.panel = k; };
 $('mseed').textContent = String(seed);
 let menuOpen = !direct, running = false, paused = false, finished = false, mode: Mode = settings.mode, score = new Score();
 const fmt = (n: number) => String(Math.round(n)).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
@@ -155,7 +162,7 @@ function showSettings() {
 }
 function open() {
   menuOpen = true; paused = running; menu.classList.add('on'); menu.removeAttribute('inert'); show('main');
-  go.textContent = running ? 'CARRY ON' : 'RIDE'; again.hidden = !running; quit.hidden = !running;
+  go.textContent = running ? 'CARRY ON' : 'RIDE'; again.hidden = !running; quit.hidden = !running; toBoard.hidden = running;
   // (an endless run is finished by hand: that's when it's scored)
   finishBtn.hidden = !(running && mode === 'endless'); $('modeSet').hidden = running;
   sound.hush(true); go.focus();
@@ -172,19 +179,55 @@ function toTitle() {
   running = false; finished = false; rider = new Rider(course); auto = true; trickster = new Trickster(); seen = 0; sound.reset(); snapEye(); rd.trail.clear();
   showSettings(); open();
 }
+/** the leaderboard for a mode: its best runs in this browser, each signature written out again as it was, one after
+ * another down the board; the run just signed in orange */
+let lastAt = 0;
+const ordinal = (n: number) => `${n}${n % 10 === 1 && n !== 11 ? 'ST' : n % 10 === 2 && n !== 12 ? 'ND' : n % 10 === 3 && n !== 13 ? 'RD' : 'TH'}`;
+function showBoard(m: Mode) {
+  for (const b of boardBtns) b.setAttribute('aria-pressed', String(b.dataset.board === m));
+  const list = board(m), ol = $('boardList');
+  ol.textContent = '';
+  if (!list.length) { ol.innerHTML = `<li class="none">NO ${MODES[m].name} RUNS YET<br>A NEW BEST GOES UP HERE, SIGNED</li>`; return; }
+  list.forEach((e, i) => {
+    const li = document.createElement('li'), now = !!e.at && e.at === lastAt;
+    const day = e.at ? new Date(e.at).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }).toUpperCase() : '';
+    const what = m === 'time' ? clock(e.time) : fmt(e.score);
+    li.className = now ? 'now' : '';
+    li.innerHTML = `<b class="n">${i + 1}</b><canvas aria-hidden="true"></canvas><span class="pts">${what}<small>MOUNTAIN ${e.seed}${day ? ` · ${day}` : ''}</small></span>`;
+    li.setAttribute('aria-label', `${ordinal(i + 1)}: ${what}, mountain ${e.seed}${e.sig ? ', signed' : ''}`);
+    ol.append(li);
+    if (e.sig?.length) replay(li.querySelector('canvas')!, e.sig, now ? '#ff7428' : '#fff', 150 + i * 180);
+  });
+}
+/** the pad on a new best's card: each stroke put to the run on the board as it's made (so there's nothing to confirm:
+ * leave it blank and the run stays unsigned) */
+const signEl = $('sign'), clearSig = $<HTMLButtonElement>('clearSig');
+let signing: { mode: Mode; at: number } | null = null;
+const pad = new Pad($<HTMLCanvasElement>('pad'), (sig) => {
+  if (signing) sign(signing.mode, signing.at, sig);
+  signEl.classList.toggle('inked', sig.length > 0); clearSig.hidden = !sig.length;
+});
+pad.cv.addEventListener('pointerdown', () => signEl.classList.add('inked'));
+clearSig.addEventListener('click', () => pad.clear());
+addEventListener('resize', () => pad.paint());
+
 /** the run's over (its finish reached, its lives gone, or called a day): scored, kept if it's the best, and shown */
 function finish() {
   score.close(); finished = true; running = false;
-  const { better, was } = keepBest(mode, seed, score.shown, score.time), card = $('card');
+  const { better, was, rank, at } = keepBest(mode, seed, score.shown, score.time), card = $('card');
   $('cardMode').textContent = `${MODES[mode].name} · MOUNTAIN ${seed}`;
   $('cardBig').textContent = mode === 'time' ? clock(score.time) : fmt(score.shown);
-  $('cardNew').textContent = !was ? 'FIRST RUN' : better ? 'A NEW BEST' : `BEST ${mode === 'time' ? clock(was.time) : fmt(was.score)}`;
+  $('cardNew').textContent = (!was ? 'FIRST RUN' : better ? 'A NEW BEST' : `BEST ${mode === 'time' ? clock(was.time) : fmt(was.score)}`) + (rank >= 0 ? ` · ${ordinal(rank + 1)} ON THE BOARD` : '');
   card.classList.toggle('best', better && !!was);
   const row = (k: string, v: string) => `<div class="row"><span>${k}</span><span>${v}</span></div>`;
   $('cardRows').innerHTML = row('DISTANCE', `${(Math.max(0, rider.s - 2) / 1000).toFixed(1)} KM`) + row('TIME', clock(score.time)) + (mode === 'time' ? row('SCORE', fmt(score.shown)) : '')
     + row('TRICKS', String(score.tricks)) + row('BEST COMBO', fmt(score.bestCombo)) + row('FALLS', String(score.falls));
+  // (on the board: it's yours to sign)
+  signing = rank >= 0 ? { mode, at } : null; signEl.hidden = !signing; card.classList.toggle('signing', !!signing); signEl.classList.remove('inked'); clearSig.hidden = true;
+  if (signing) lastAt = at;
   menuOpen = true; paused = true; menu.classList.add('on'); menu.removeAttribute('inert'); show('card'); sound.hush(true);
-  sound.chime(better && !!was ? 3 : 2); $('cardAgain').focus();
+  pad.reset();
+  sound.chime(better && !!was ? 3 : 2); $('cardAgain').focus({ preventScroll: true }); card.parentElement!.scrollTop = 0; menu.scrollTop = 0;
 }
 go.addEventListener('click', () => { sound.start(); if (!running) begin(); close(); });
 again.addEventListener('click', () => { sound.start(); begin(); close(); });
@@ -194,6 +237,9 @@ $('cardAgain').addEventListener('click', () => { sound.start(); begin(); close()
 $('cardMenu').addEventListener('click', () => toTitle());
 $('toPrefs').addEventListener('click', () => { show('prefs'); $('fromPrefs').focus(); });
 $('fromPrefs').addEventListener('click', () => { show('main'); $('toPrefs').focus(); });
+toBoard.addEventListener('click', () => { show('board'); showBoard(settings.mode); boardBtns.find((b) => b.dataset.board === settings.mode)?.focus(); });
+for (const b of boardBtns) b.addEventListener('click', () => showBoard(b.dataset.board as Mode));
+$('fromBoard').addEventListener('click', () => { show('main'); toBoard.focus(); });
 sndBtn.addEventListener('click', () => { settings.sound = !settings.sound; keep(); showSettings(); if (settings.sound) sound.start(); });
 vol.addEventListener('input', () => { settings.volume = Number(vol.value) / 100; keep(); showSettings(); });
 for (const b of camBtns) b.addEventListener('click', () => { settings.camera = b.dataset.cam as Settings['camera']; keep(); showSettings(); });

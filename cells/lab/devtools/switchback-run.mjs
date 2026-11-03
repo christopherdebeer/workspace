@@ -6,8 +6,8 @@ import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 const here = dirname(fileURLToPath(import.meta.url));
 const outfile = join(tmpdir(), `switchback-${process.pid}.mjs`);
-await build({ stdin: { contents: `export * from './client/switchback/sim'; export * from './client/switchback/course'; export { ground } from './client/switchback/ground'; export { Trickster } from './client/switchback/tricks'; export { Score } from './client/switchback/score';`, resolveDir: join(here, '..'), loader: 'ts' }, bundle: true, platform: 'node', format: 'esm', outfile, logLevel: 'warning' });
-const { Rider, Course, autoSteer, ground, Trickster, Score } = await import(outfile);
+await build({ stdin: { contents: `export * from './client/switchback/sim'; export * from './client/switchback/course'; export { ground } from './client/switchback/ground'; export { Trickster } from './client/switchback/tricks'; export { Score, keepBest, board, sign } from './client/switchback/score';`, resolveDir: join(here, '..'), loader: 'ts' }, bundle: true, platform: 'node', format: 'esm', outfile, logLevel: 'warning' });
+const { Rider, Course, autoSteer, ground, Trickster, Score, keepBest, board, sign } = await import(outfile);
 const secs = Number(process.argv[2] ?? 180), seeds = process.argv.slice(3).map(Number);
 let bad = 0;
 for (const seed of seeds.length ? seeds : [1, 2, 3]) {
@@ -151,5 +151,26 @@ for (const seed of seeds.length ? seeds : [1, 2, 3]) {
   const w = new Score(); w.event({ kind: 'flip', k: 1 }, {}); const pend = w.pending; w.event({ kind: 'crash', k: 1 }, {});
   const ok = shown.every((s, i) => s.shown > plain[i].shown * 1.5) && plain.every((s) => s.shown > 2000) && pend > 0 && w.pending === 0 && w.falls === 1; if (!ok) bad++;
   console.log(`${ok ? 'ok  ' : 'FAIL'}  score: 3 km ridden plainly ${plain.map((s) => s.shown).join(', ')}; showing off ${shown.map((s) => s.shown).join(', ')} (best combos ${shown.map((s) => s.bestCombo).join(', ')}); a fall wipes a pending ${pend}`);
+}
+// (the board, in a stand-in for the browser's storage: the bests kept before it start it, unsigned; a new best goes up
+// where it places and can be signed (and unsigned); a run that isn't a best doesn't; a time trial's go by the clock;
+// ten at most)
+{
+  const store = new Map();
+  globalThis.localStorage = { getItem: (k) => store.get(k) ?? null, setItem: (k, v) => store.set(k, String(v)), key: (i) => [...store.keys()][i] ?? null, get length() { return store.size; } };
+  store.set('switchback:best:lives:1', JSON.stringify({ score: 5000, time: 90 })); store.set('switchback:best:lives:2', JSON.stringify({ score: 8000, time: 80 }));
+  const seeded = board('lives').map((e) => e.score).join(',');
+  const a = keepBest('lives', 1, 9000, 100), b = keepBest('lives', 1, 4000, 70);
+  sign('lives', a.at, [[10, 20, 0, 30, 40, 5]]);
+  const signed = board('lives').find((e) => e.at === a.at)?.sig?.length === 1;
+  sign('lives', a.at, []);
+  const unsigned = !board('lives').find((e) => e.at === a.at)?.sig;
+  keepBest('time', 1, 100, 200); const t = keepBest('time', 2, 50, 150), tSlow = keepBest('time', 3, 900, 300);
+  for (let i = 0; i < 14; i++) keepBest('run', 10 + i, 1000 + i * 100, 60);
+  const ok = seeded === '8000,5000' && a.better && a.rank === 0 && board('lives').length === 3 && !b.better && b.rank === -1 && signed && unsigned
+    && t.rank === 0 && tSlow.rank === 2 && board('run').length === 10 && board('run')[0].score === 2300;
+  if (!ok) bad++;
+  delete globalThis.localStorage;
+  console.log(`${ok ? 'ok  ' : 'FAIL'}  board: started from the old bests (${seeded}); a new best went up ${a.rank + 1}${a.rank === 0 ? 'st' : 'th'}, signed and unsigned; a lesser run left off; time trials by the clock; ten kept of 14`);
 }
 process.exit(bad ? 1 : 0);

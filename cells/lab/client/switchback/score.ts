@@ -16,6 +16,7 @@
  */
 import type { Event, Rider } from './sim';
 import { VMAX } from './sim';
+import type { Sig } from './sign';
 
 export type Mode = 'run' | 'lives' | 'time' | 'endless';
 export const MODES: Record<Mode, { name: string; short: string; length?: number; lives?: number; about: string }> = {
@@ -114,9 +115,52 @@ const KEY = (mode: Mode, seed: number) => `switchback:best:${mode}:${seed}`;
 export function bestOf(mode: Mode, seed: number): Best | null {
   try { const v = localStorage.getItem(KEY(mode, seed)); return v ? JSON.parse(v) : null; } catch { return null; }
 }
-/** keep the run if it beats the best: a higher score, or in a time trial a faster time. Says whether it did */
+/** keep the run if it beats the best: a higher score, or in a time trial a faster time. Says whether it did, and if it
+ * did, where it went on the board (-1 if it didn't make it), and when it was ridden (its name there, to sign it by) */
 export function keepBest(mode: Mode, seed: number, score: number, time: number) {
   const was = bestOf(mode, seed), better = !was || (mode === 'time' ? time < was.time : score > was.score);
-  if (better) try { localStorage.setItem(KEY(mode, seed), JSON.stringify({ score, time })); } catch { /* (no matter) */ }
-  return { better, was };
+  let rank = -1;
+  const at = Date.now();
+  if (better) {
+    const list = board(mode);
+    try { localStorage.setItem(KEY(mode, seed), JSON.stringify({ score, time })); } catch { /* (no matter) */ }
+    rank = enter(mode, list, { score, time, seed, at });
+  }
+  return { better, was, rank, at };
+}
+
+/**
+ * The board: a mode's best runs, in this browser. Each new best (on any mountain) goes up, and the top ten stay, each
+ * signed or not. A time trial's go by the clock, the rest by the score.
+ */
+export type Entry = { score: number; time: number; seed: number; at: number; sig?: Sig };
+const BOARD = (mode: Mode) => `switchback:board:${mode}`;
+const TOP = 10;
+const order = (mode: Mode) => (a: Entry, b: Entry) => (mode === 'time' ? a.time - b.time : b.score - a.score) || a.at - b.at;
+export function board(mode: Mode): Entry[] {
+  try {
+    const v = localStorage.getItem(BOARD(mode));
+    if (v) return JSON.parse(v);
+    // (no board yet: it starts with the bests kept before there was one, unsigned)
+    const list: Entry[] = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const m = localStorage.key(i)?.match(/^switchback:best:(\w+):(\d+)$/);
+      if (m && m[1] === mode) { const b = bestOf(mode, Number(m[2])); if (b) list.push({ score: b.score, time: b.time, seed: Number(m[2]), at: 0 }); }
+    }
+    return list.sort(order(mode)).slice(0, TOP);
+  } catch { return []; }
+}
+function keepBoard(mode: Mode, list: Entry[]) { try { localStorage.setItem(BOARD(mode), JSON.stringify(list)); } catch { /* (no matter) */ } }
+/** a run onto the board: where it went (0 the top), or -1 if it didn't make it */
+function enter(mode: Mode, list: Entry[], e: Entry) {
+  const top = [...list, e].sort(order(mode)).slice(0, TOP);
+  keepBoard(mode, top);
+  return top.indexOf(e);
+}
+/** a signature put to a run on the board (by when it was ridden); none, and it's unsigned again */
+export function sign(mode: Mode, at: number, sig: Sig) {
+  const list = board(mode), e = list.find((x) => x.at === at);
+  if (!e) return;
+  if (sig.length) e.sig = sig; else delete e.sig;
+  keepBoard(mode, list);
 }
