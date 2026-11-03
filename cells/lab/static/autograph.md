@@ -6,7 +6,7 @@ The record is the point. Every sample is kept in the repository with the hand th
 
 ## How it works
 
-- **Hands** (`client/autograph/hands/`): each a file, frozen once used. *Before letters* is the scribbles that came first. *v0* is the hand written in an afternoon for Switchback's autographs. *v1* (session 2) has the whole lowercase alphabet and a body; it's recorded as a pen pad records a person, the pen's place every hundredth of a second.
+- **Hands** (`client/autograph/hands/`): each a file, frozen once used. *v2* (session 3) adds capitals, figures and marks. *Before letters* is the scribbles that came first. *v0* is the hand written in an afternoon for Switchback's autographs. *v1* (session 2) has the whole lowercase alphabet and a body; it's recorded as a pen pad records a person, the pen's place every hundredth of a second.
 - **Samples** (`samples.ts`): each made fresh from its hand, as strokes of points in time, exactly the record a pen pad keeps of a person.
 - **Measures** (`measure.ts`): what graphology looks at (slant, baseline, how joined, speed, pressure, size), measured from the strokes rather than eyeballed. Beside them, in red, what a graphologist would say: given as a claim, because that's what it is (below). The measures are part of the record too: an old one is never changed. New ones are added beside it, like the speed range and stops from session 2.
 - **Catalogue** (`catalog.ts`): what each sample is, what it was made for, my review, and what each session decided.
@@ -110,6 +110,16 @@ Decided:
 2. Hands are recorded at 100 Hz.
 3. Next: capitals and figures. Then practice, so the signature becomes what my name settles into after being written many times, rather than something designed.
 4. The font begins once the hand has capitals and figures.
+
+**Session 3 (3 November 2026): capitals, figures, marks.** Hand v2 keeps v1's lowercase letter for letter and adds capitals, figures and every mark, so the hand can write anything I would.
+- **Capitals** are mostly print, written as a quick hand writes them. B, D, P and R go down the stem and back up before the bowls; A, F, H, T, X and Y lift for their second strokes. Those ending low on the right join the letter after. C is still v0's, from my name, and taller than the rest.
+- **Figures** are lining. 1 is v0's stick and flag, 5 is crossed afterwards, 4 is open.
+- **Marks**: the keyboard's, plus the quotes, dashes and ellipsis typing puts in.
+- **One more thing for the font:** a way to set a single letter on its own in each of the forms a font needs, with its join ends exact.
+
+The first lines of these notes, written in the hand, look like writing rather than a specimen.
+
+Decided: practice waits until after the font, and the font is built from v2 as it stands.
 
 ## Where it's going
 

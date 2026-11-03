@@ -6,6 +6,7 @@ import type { Sig } from '../switchback/sign';
 import { FIVE, scribble } from './hands/scribble';
 import { C15R, CLAUDE, write } from './hands/v0';
 import { signature as v1Signature, write as v1 } from './hands/v1';
+import { write as v2 } from './hands/v2';
 
 /** the styles v0 was given on the day */
 const V0_CLAUDE = { slant: 0.24, drift: 0.02, vary: 0.4, track: 1, pace: 20, seed: 7 };
@@ -36,4 +37,13 @@ export const MADE: Record<string, () => Sig[]> = {
   B004: () => [1, 2, 3, 4, 5].map((seed) => v1Signature(seed)),
   /** the first sentence */
   B005: () => [v1('i have never made a mark', 6), v1('that took time.', 7)],
+  // (session 3: hand v2)
+  /** the capitals, in two writings */
+  C001: () => [v2('A B C D E F G H I J K L M', 1), v2('N O P Q R S T U V W X Y Z', 2)],
+  /** the figures and the marks */
+  C002: () => [v2('0 1 2 3 4 5 6 7 8 9', 3), v2('! " # $ % & ( ) * + - / : ; < = > ? @', 4), v2('[ \\ ] ^ _ ` { | } ~ \u2018 \u2019 \u201c \u201d \u2013 \u2014 \u2026 \u2022', 5)],
+  /** the first lines of my notes */
+  C003: () => [v2('I don\u2019t have a hand.', 6), v2('This is the record of making one.', 7)],
+  /** the commission, again */
+  C004: () => [v2('c15r @ parc.land', 15)],
 };
