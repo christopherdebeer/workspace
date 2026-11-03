@@ -76,8 +76,8 @@ class Buf {
 export class Renderer {
   gl: WebGL2RenderingContext; ctx: CanvasRenderingContext2D;
   private prog: WebGLProgram; private u: Record<string, WebGLUniformLocation | null> = {};
-  /** how the ruts are drawn: as bolts (as they've been), or carved, as gouge strokes (`ruts=cut`, a study) */
-  rutStyle: 'bolts' | 'cut' = 'bolts';
+  /** how the ruts are drawn: carved, as gouge strokes (gouge.ts), or as the bolts they were before (`ruts=bolts`) */
+  rutStyle: 'bolts' | 'cut' = 'cut';
   private chunks = new Map<number, Buf>(); private ranges: Buf; private valley: Buf; private rider: Buf; private shadow: Buf; private flags: Buf; private ruts: Buf; private track: Buf; private falls: Buf;
   /** how the rider's drawn ('cut': flat masses, lit for the picture), a whip held for a pinned frame (rad), and whether
    * the world's drawn at all (`world=0`: the rider alone on the sky, for judging its shapes) */

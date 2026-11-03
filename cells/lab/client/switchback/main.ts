@@ -10,8 +10,8 @@
  *
  * Flags: `seed=` the mountain; `auto` the sim's own rider rides (the preview does too); `t=` start that many seconds
  * down (ridden by it, for pinned frames); `still` hold the frame there; `preview` no HUD; `look=side|front|rear|quarter`
- * a close look at the bike. Any of these skips the title. `ruts=cut` the ruts as carved marks (a study; `ruts=light`
- * paler than the road).
+ * a close look at the bike. Any of these skips the title. `ruts=bolts` the ruts as they were before they were carved
+ * (`ruts=light`, with them, paler than the road).
  */
 import { Course } from './course';
 import { Rider, autoSteer, VMAX } from './sim';
@@ -43,8 +43,8 @@ if (q.get('ruts') === 'light') PALETTE[M.RUT] = RUT_LIGHT;
 const rd = new Renderer(world, speed, course);
 rd.resize(); addEventListener('resize', () => rd.resize());
 rd.speed = q.get('fx') !== '0'; rd.fog = q.get('fog') !== '0';
-/** `ruts=cut`: the ruts as carved marks (a study) */
-if (q.get('ruts') === 'cut') { rd.rutStyle = 'cut'; rd.trail.cut = true; }
+/** `ruts=bolts`: the ruts as they were before they were carved */
+if (q.get('ruts') === 'bolts') { rd.rutStyle = 'bolts'; rd.trail.cut = false; }
 rd.style = q.get('rider') === 'facets' ? 'facets' : q.get('rider') === 'sil' ? 'sil' : 'cut'; rd.whip = (Number(q.get('whip') ?? 0) * Math.PI) / 180; rd.world = q.get('world') !== '0';
 const sound = new Sound();
 

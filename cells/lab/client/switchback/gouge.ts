@@ -1,6 +1,6 @@
 /**
- * Switchback's ruts as carved marks (`ruts=cut`, a study): the road's surface told the way a linocut tells a form, in
- * gouge strokes.
+ * Switchback's ruts as carved marks (the default; the bolts they replaced are kept behind `ruts=bolts`): the road's
+ * surface told the way a linocut tells a form, in gouge strokes.
  *
  * Each mark is a stroke with a life: it enters fine at the near end, swells, and is cut off square where the gouge lifts
  * out (or, now and then, tapers out again). Its floor is a band darker than the road; down the wall the sun can't reach
@@ -8,7 +8,8 @@
  * white (seen where the road round it lies in shade). They say what the ground is, not where to ride:
  *
  * - **Smooth ground**: combs of cuts, three to five side by side, going with the road (a print's way of laying down a
- *   field), with long rests of clean road between; more of them, longer and leaning out, through a bend.
+ *   field), cut by hand rather than stamped (staggered starts, uneven gaps, lengths of their own, now and then one left
+ *   out), with long rests of clean road between; more of them, longer and leaning out, through a bend.
  * - **Broken ground**: where the surface steps (a rock edge), short choppy strokes clustered just below the edge, at odd
  *   angles; a long stroke never runs over an edge, it stops at it and starts again below.
  * - **Whoops**: strokes across the road on the face of each hump, like contour hatching, so the humps show as humps.
@@ -130,18 +131,28 @@ export function buildGouges(c: Course, s: number) {
       if (i0 < 3 || i0 > hi || !plain(c, i0) || c.at(i0).feature !== 'none' || drift(seed, i0 / 38, 21) < 0.2) continue;
       const turn = c.at(i0 + 8).heading - c.at(Math.max(0, i0 - 8)).heading, bend = Math.abs(turn);
       if (hash(seed, blk, side, 31) > 0.62 + Math.min(0.3, bend * 1.2)) continue;
-      let L = 1.8 + hash(seed, blk, side, 32) * 2.2 + Math.min(3, bend * 8);
-      for (let d = 1; d < L + 1; d++) if (edge(c, i0 + d) > 0.012 || !plain(c, i0 + d) || c.at(i0 + d).feature !== 'none') { L = Math.min(L, d - 0.4); break; }
+      // (where the ground stops being smooth: no cut runs past it)
+      let stop = i0 + 12;
+      for (let d = 1; d < 12; d++) if (edge(c, i0 + d) > 0.012 || !plain(c, i0 + d) || c.at(i0 + d).feature !== 'none') { stop = i0 + d - 0.4; break; }
+      const L = Math.min(1.8 + hash(seed, blk, side, 32) * 2.2 + Math.min(3, bend * 8), stop - i0);
       if (L < 1) continue;
       const half = c.at(i0).width / 2 - 0.7, uc = (side ? 1 : -1) * half * (0.12 + 0.6 * hash(seed, blk, side, 33));
       const n = 3 + Math.floor(hash(seed, blk, side, 34) * 3), sp = 0.34 + hash(seed, blk, side, 35) * 0.16;
       // (the comb's lean: a little either way, and through a bend out toward its outside, the way the ground's thrown)
       const ang = (hash(seed, blk, side, 36) - 0.5) * 0.14 - Math.sign(turn) * Math.min(0.12, bend * 0.25);
+      // (cut by hand, not stamped: each cut set in a little further along than the last, or a little short of it, so the
+      // comb's front edge slants one way or the other; on top of that each starts where it starts, the gaps between them
+      // are uneven, each runs its own length at its own small angle, and now and then one's left out)
+      const step = (hash(seed, blk, side, 41) - 0.5) * 1.1, from = step < 0 ? -step * (n - 1) : 0;
+      const gaps: number[] = [0];
+      for (let j = 1; j < n; j++) gaps.push(gaps[j - 1] + sp * (0.7 + 0.65 * hash(seed, blk, side, j, 42)));
       for (let j = 0; j < n; j++) {
-        const off = (j - (n - 1) / 2) * sp, sl = L * (0.6 + 0.4 * hash(seed, blk, side, j, 37)), sa = i0 + hash(seed, blk, side, j, 38) * 0.7, sb = sa + sl;
-        if (sb < lo - 2) continue;
-        const ua = uc + off, ub = ua + Math.tan(ang) * sl;
-        gouge(m, c, sa, ua, sb, ub, 0.2 + 0.12 * hash(seed, blk, side, j, 39), (hash(seed, blk, side, j, 40) - 0.5) * 0.15, false, fade, 0.05);
+        if (n > 3 && hash(seed, blk, side, j, 43) < 0.15) continue;
+        const off = gaps[j] - gaps[n - 1] / 2, sl = L * (0.45 + 0.55 * hash(seed, blk, side, j, 37));
+        const sa = i0 + from + j * step + hash(seed, blk, side, j, 38) * 1.1, sb = Math.min(sa + sl, stop);
+        if (sb - sa < 0.6 || sb < lo - 2) continue;
+        const ua = uc + off, ub = ua + Math.tan(ang + (hash(seed, blk, side, j, 44) - 0.5) * 0.08) * sl;
+        gouge(m, c, sa, ua, sb, ub, 0.17 + 0.17 * hash(seed, blk, side, j, 39), (hash(seed, blk, side, j, 40) - 0.5) * 0.15, false, fade, 0.05);
       }
     }
   }

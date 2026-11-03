@@ -1,5 +1,6 @@
 /**
- * Switchback's ruts, and your own track: worn lines drawn as bolts, not stripes.
+ * Switchback's ruts as they were (`ruts=bolts`; the default now is gouge.ts, carved), and your own track: worn lines
+ * drawn as bolts, not stripes.
  *
  * A rut is a run of bolts, each drawn as the sign is: two thick strokes slanting across the line, parallel, offset at a
  * step where they meet, cut square at the downhill end and coming to a point at the uphill end (toward the eye), in the
@@ -147,8 +148,8 @@ export function buildRuts(c: Course, s: number) {
 
 /** your own track: strokes laid behind the rear tyre, the last 30 m of them */
 export class Trail {
-  /** (`ruts=cut`: the freshest cut, nearly unbroken, a little wider, in the gouges' ink) */
-  cut = false;
+  /** (with the carved ruts: the freshest cut, nearly unbroken, a little wider, in the gouges' ink; off with `ruts=bolts`) */
+  cut = true;
   private done: { d: number; v: number[] }[] = [];
   private head: { x: number; z: number; d: number; len: number; slip: number } | null = null;
   private last: { x: number; z: number } | null = null;
