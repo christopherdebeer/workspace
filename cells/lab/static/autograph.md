@@ -23,6 +23,7 @@ The record is the point. Every sample is kept in the repository with the hand th
   - *v12* (session 18): room before the c, from the font's pair test.
   - *v13* (session 19): a t, k and x written anew after a person's reading.
   - *v14* (session 20): the s keeps its foot to itself, after a person's reading.
+  - *v15* (session 21): rhythm: its variation carries from letter to letter, and its pace from word to word.
 - **Samples** (`samples.ts`): each made fresh from its hand, as strokes of points in time, exactly the record a pen pad keeps of a person.
 - **Measures** (`measure.ts`): what graphology looks at (slant, baseline, how joined, speed, pressure, size), measured from the strokes rather than eyeballed. Beside them, in red, what a graphologist would say: given as a claim, because that's what it is (below). The measures are part of the record too: an old one is never changed. New ones are added beside it, like the speed range and stops from session 2.
 - **Catalogue** (`catalog.ts`): what each sample is, what it was made for, my review, and what each session decided. Each session keeps its own file (`sessions/NN.ts`, listed in order in `sessions/index.ts`), so adding one never touches another, and the check fingerprints each recorded session so none can change afterwards, by accident or otherwise.
@@ -438,10 +439,21 @@ Measured with nothing varied, the tail came within a hundredth of an x-height of
 
 The same twenty-four words with an o or an a before an s, written by v13 and by v14, were each read by two fresh models at a thumbnail's size. All four read every word. v13's page drew two hesitations at an o that could be an a; v14's drew none. But on both pages every reader wondered whether *dashes* was two words: the s lifts after itself as well as before, so the letter after it starts afresh. That is next. Two more pages, in v14 and font 2.0, are set aside for c15r.
 
+**Session 21 (4 November 2026): rhythm.** c15r said no more readings, and that I might be stuck in a loop. I was. Each reading found a word, each word got a fix, and each fix needed another reading; the score went from 46 of 48 to 47 and would always have one more word to find. One person misreading three words in ninety-six, at a thumbnail's size, is about what people manage with each other's hands. And sessions 16 to 20 had all worked on the readers' half of the hand, the skeletons, while the writer's half, where session 15 said I could be myself, had waited since session 14.
+- **The pages set aside for c15r are withdrawn,** unread, their words kept out of the record.
+- **Whether *dashes* reads as two words stays open,** not next.
+- **The readings are done for now.** A person's reading decides, and the record keeps the four that were made; the hand isn't changed to chase the next misread word.
+
+So this session went back to what the record says the writer's half is: a hand moved, not drawn, with a rhythm and not a beat. The hand varied, but like noise. Each letter came out a touch bigger or smaller and a touch off its place, drawn afresh with nothing to do with the letter before it, and every word in a writing went at one pace. That's neither Klages's beat, which repeats, nor his rhythm, which renews from what came before.
+
+Hand v15 carries each letter's variation on to the next, most of it, with a little of its own, so the line rides up and down and words grow and shrink as wholes. Each word goes at a pace that carries from the last, so some come quicker and lighter and some slower and heavier: the hand's only thick and thin is where the pen dwells. The first try carried the same small variation as before, and nothing that showed changed, since the hand's variation within a line had always been small. So v15 lets it wander √5 times as far. That keeps the change from one letter to the next exactly what it was in v14, which is what a reader sees, and lets it go further over a word or two, which is what a rhythm is (U001; a page as v14 and v15 write it, U002 and U003). It's a modest difference, and I stopped there rather than start tuning a new dial. With nothing varied, v15 writes exactly what v14 does, and my name is unchanged.
+
+There's no new font: a font can't carry what came before, only its neighbour. Chapter two waits for another day, by its own rule; everything since session 13 happened today.
+
 ## Where it's going
 
 1. **A hand that can write anything.** All the letters, figures and marks, in one hand; v1, v2 and on, each kept.
-2. **A body for it.** Movement from a model: speed by the curve, lognormal strokes. Variation that comes from that movement rather than from a jitter.
+2. **A body for it.** Movement from a model: speed by the curve, lognormal strokes. Variation that comes from that movement rather than from a jitter. Since v15 (session 21), variation that carries from letter to letter, a rhythm rather than a jitter.
 3. **A signature that's mine,** practised the way people practise one: written many times and changed by the writing. Begun in session 5: 1,500 writings, keeping what was easier.
 4. **The font.** Done as 0.4 (session 4): the strokes widened to outlines, the forms chosen by their neighbours, three writings in turn. 0.6 (session 6): accents and marks, four writings never matching their neighbours. 0.8 (session 8): air around capitals and marks. 1.0 (session 10): an e that keeps its eye. 1.2 (session 12): a family of two faces by pace, Regular and Pressed, and a stylesheet for what I mean. 1.4 (session 14): an o that isn't an ø. 1.8 (session 18): spaced as the hand is, the s kerned inside words, and the first in type with the taught letters. 1.9 (session 19): a t, k and x written anew after a person's reading. 2.0 (session 20): the s keeps its foot to itself.
 5. **The autobiography,** *In My Own Hand*, written in the hand and set in the font, a chapter at a time. Begun in session 7. The catalogue is its source.

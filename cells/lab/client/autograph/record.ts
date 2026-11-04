@@ -4,7 +4,7 @@
 import type { Sig } from '../switchback/sign';
 
 /** every hand, in the order they were made (each session that makes one adds it here) */
-export type HandId = 'scribble' | 'v0' | 'v1' | 'v2' | 'v3' | 'v4' | 'v5' | 'v6' | 'v7' | 'v8' | 'v9' | 'v10' | 'v11' | 'v12' | 'v13' | 'v14' | 'font';
+export type HandId = 'scribble' | 'v0' | 'v1' | 'v2' | 'v3' | 'v4' | 'v5' | 'v6' | 'v7' | 'v8' | 'v9' | 'v10' | 'v11' | 'v12' | 'v13' | 'v14' | 'v15' | 'font';
 export type Hand = { name: string; made: string; about: string };
 
 export type Entry = {
