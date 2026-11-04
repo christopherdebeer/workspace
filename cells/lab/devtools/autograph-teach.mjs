@@ -1,7 +1,7 @@
 // Autograph's teaching (session 16): hand v10's letters practised in stages, each stage read by a reader who hasn't
 // seen the hand, and every letter misread or guessed put back before the next stage.
 //
-//   node cells/lab/devtools/autograph-teach.mjs page <name> [--plan] [--words=24]   a page of words from the record,
+//   node cells/lab/devtools/autograph-teach.mjs page <name> [--plan] [--words=24] [--hand=v11]   a page of words from the record,
 //        written by the hand as the teaching has it (or as planned); the picture to <state>/<name>.png, the words kept
 //        aside in <state>/<name>.truth.json for scoring, never printed
 //   node cells/lab/devtools/autograph-teach.mjs stage <k>          practise from where the teaching is, then a page
@@ -45,7 +45,9 @@ function page(name, habits, n, seed) {
   const lines = []; for (let i = 0; i < picked.length; i += 4) lines.push(picked.slice(i, i + 4));
   save(`${name}.truth.json`, lines);
   const entry = S(`${name}.entry.ts`);
-  writeFileSync(entry, `import { write, withHabits } from ${JSON.stringify(v10)};\nconst H = ${JSON.stringify(habits)};\nconst L = ${JSON.stringify(lines.map((l) => l.join(' ')))};\nexport default () => withHabits(H, () => L.map((t, i) => write(t, ${seed} + i)));\n`);
+  // (written by v10, or with --hand by another hand that has withHabits: from session 17, to read a later hand)
+  const handFile = opt.hand ? join(lab, `client/autograph/hands/${opt.hand}.ts`) : v10;
+  writeFileSync(entry, `import { write, withHabits } from ${JSON.stringify(handFile)};\nconst H = ${JSON.stringify(habits)};\nconst L = ${JSON.stringify(lines.map((l) => l.join(' ')))};\nexport default () => withHabits(H, () => L.map((t, i) => write(t, ${seed} + i)));\n`);
   execFileSync('node', [join(here, 'autograph-look.mjs'), `--entry=${entry}`, '--rows', '--width=1100', `--out=${S(name + '.png')}`], { stdio: 'pipe' });
   console.log(`page ${name}: ${lines.length} lines of 4 words, at ${S(name + '.png')}`);
 }

@@ -19,11 +19,13 @@ The record is the point. Every sample is kept in the repository with the hand th
   - *v8* (session 13): adding a word, as the type taught it.
   - *v9* (session 14): an o that doesn't cross itself; its letters' practice kept, not adopted.
   - *v10* (session 16): its letters practised with a teacher, every change read blind and kept only where it still read.
+  - *v11* (session 17): spaced, from a look at the white between n's.
 - **Samples** (`samples.ts`): each made fresh from its hand, as strokes of points in time, exactly the record a pen pad keeps of a person.
 - **Measures** (`measure.ts`): what graphology looks at (slant, baseline, how joined, speed, pressure, size), measured from the strokes rather than eyeballed. Beside them, in red, what a graphologist would say: given as a claim, because that's what it is (below). The measures are part of the record too: an old one is never changed. New ones are added beside it, like the speed range and stops from session 2.
 - **Catalogue** (`catalog.ts`): what each sample is, what it was made for, my review, and what each session decided. Each session keeps its own file (`sessions/NN.ts`, listed in order in `sessions/index.ts`), so adding one never touches another, and the check fingerprints each recorded session so none can change afterwards, by accident or otherwise.
 - **Looking** (`node cells/lab/devtools/autograph-look.mjs <id>`, or `--entry=<file>` for a try that isn't a sample yet; `--rows`, `--mode=time`): draws a sample whole, with the page's ink, and saves it as a picture, so it can be looked at slowly, a line at a time.
 - **Practice and teaching** (`devtools/autograph-practise.mjs`, `devtools/autograph-teach.mjs`): the letters practised by writing the record's words, and (from session 16) taught: practised in stages, each stage's page read blind by a reader who has never seen the hand, every letter misread or guessed put back, and an exam at the end against the hand as planned.
+- **The white** (`devtools/autograph-white.mjs`): the hand's spacing measured the way a face is spaced, each letter between n's, the white beside it at three heights against the white between two n's.
 - **Fingerprints** (`fingerprints.json`): every sample's strokes, hashed when it's catalogued. `node cells/lab/devtools/autograph-check.mjs` fails if any sample no longer comes out exactly as it was made (a hand was edited), and checks that the catalogue holds together. `--record` fingerprints new samples and never changes an old one.
 - **The font** (`devtools/autograph-font.mjs`, then `autograph-font.py`, then `autograph-pairs.py`, which fails the build if any two letters touch except where they join): **Claude Hand** (now 1.4, from hand v9; the number is the session's, not a claim that it's finished), in two faces: Regular, and Pressed, its bold, every letter written at the pace the hand writes what's strong. Downloadable from the page as TTF or WOFF2, with its stylesheet (`claude-hand-1.4.css`), which dresses marked text for the web the way the hand marks it, as far as type can. A changed stylesheet is a new version, like the font. Each version's files are kept (`static/autograph/claude-hand-<version>.*`), and a sample set in type names the version it was set in; one set with the stylesheet is fingerprinted as it's set (`typeset.ts` turns the hand's markup into HTML). It's licensed under the SIL Open Font License 1.1 with the reserved font name "Claude Hand" (`static/autograph/OFL.txt`): free to use, embed, change and share, but a changed version takes another name.
   - **Setting:** the hand sets every character it knows on its own, in each form it can begin with (starting a word, joined from below, joined from above) and in several writings (three in 0.4, four in 0.6).
@@ -374,6 +376,20 @@ Klages's one keepable idea is on the page: the hand writing *the beat repeats; t
 What's left is hand v10: 22 letters practised, with d, m, n and o as planned. The record's words come out 4.9% quicker, and four blind readers read it in the exams as well as the hand it came from (P002). The change you can see is the s, which now comes in from below with a small tail of its own (P001). It isn't much, five percent and a tail, but it's the first change in the hand I didn't decide that stayed.
 
 A hesitation is the warning, not a misreading: a letter goes back when a reader has to guess at it. A stage can only catch the letters its page happens to show, so the end is examined on a longer page. The font stays 1.4 until a person has read the taught hand: the readers so far were models, and c15r is the first reader this hand had.
+
+**Session 17 (4 November 2026): the white.** c15r asked for the next session, and the record said what it was. Session 15 had decided the hand's spacing would be looked at, the white inside letters and between them together, before anything more was changed.
+
+So I measured it the way a type designer spaces a face (`devtools/autograph-white.mjs`): each letter between n's, and the white beside it, at three heights through the x-height, against the white between two n's. My first measure counted downstrokes, and it was wrong for this hand. In a joined hand the joining stroke rises right beside the next letter, and a bowl's right side is an upstroke, so what the eye takes for stems are partly upstrokes. Any stroke through the x-height is a wall. Measured that way:
+- **The n's own rhythm is even,** its inside as wide as the space between two n's, and most letters sit within a fifth of it.
+- **The open letters,** c and r, gape after themselves, as they do in type. r's open side is what keeps *rn* from reading as *m*.
+- **Four letters crowded the one after:** h most, at half the n's white, then a, b and p.
+- **The s,** printed and standing alone, left twice the n's white before it: session 9's words with s's breaking into pieces, measured at last.
+
+By eye, two of these mattered: the h, which ran into the next n, and the s, so that *sense* read as *sen se*. Hand v11 lets the exits of h, a, b and p run a little further, and sets an s inside a word nearer the letter before it (Q001, Q002).
+
+I meant to keep the s's tail clear of the letter before it, and measuring showed it already wasn't. The tail that session 16's practice gave the s reaches back from below, and it touched the exit before it in v10. The s that session 2 kept apart, because joined it read as a hook, now joins by touch, and no blind reader has read a hook.
+
+Two blind readers read forty words in each hand. Both read every word, and their hesitations were no more than readers differ by. But the reader of v11 wasn't sure *app stem* was two words, because an s starting a word had moved into the space before it. So an s starting a word now stays where it was.
 
 ## Where it's going
 
