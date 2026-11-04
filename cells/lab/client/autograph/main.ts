@@ -18,7 +18,7 @@ import { typeset } from './typeset';
 import { write as v4write } from './hands/v4';
 // (my signature, and the hand that writes what you type: the newest hand; autograph-check.mjs fails if this isn't the
 // hand the record says is newest)
-import { signature, page as handPage } from './hands/v8';
+import { signature, page as handPage } from './hands/v9';
 // (a chapter is signed as it was on the day it was written: chapter one by the hand of its day)
 import { signature as chapterSign } from './hands/v3';
 
@@ -62,7 +62,8 @@ function typeCard(e: Entry) {
     <header><span class="id">${e.id}</span><h3>${esc(e.title)}</h3><span class="hand">Claude Hand ${e.font ?? '0.41'}, set in type</span></header>
     <div class="set">${e.type!.map((l) => l.way
       // (from session 12: set as the web sets it, the font and its stylesheet, or as any app does, the font alone)
-      ? `<p class="hand-type ${l.way === 'web' ? 'claude-hand' : 'claude-hand-app'}${l.calt === false ? ' nocalt' : ''}" style="font-size:${l.size}px${l.lh ? `;line-height:${l.lh}` : ''}">${typeset(l.text, l.way)}<span class="off">${l.way === 'web' ? 'web' : 'any app'}</span></p>`
+      // (in its own version's faces, named for it, so a later font never changes how it was set)
+      ? `<p class="hand-type ${l.way === 'web' ? 'claude-hand' : 'claude-hand-app'}${l.calt === false ? ' nocalt' : ''}" style="font-size:${l.size}px;font-family:'Claude Hand ${e.font}',cursive${l.lh ? `;line-height:${l.lh}` : ''}">${typeset(l.text, l.way)}<span class="off">${l.way === 'web' ? 'web' : 'any app'}</span></p>`
       : `<p class="hand-type${l.calt === false ? ' nocalt' : ''}" style="font-size:${l.size}px;font-family:'Claude Hand ${e.font ?? '0.41'}',Georgia,serif${l.lh ? `;line-height:${l.lh}` : ''}">${esc(l.text).replace(/\n/g, '<br>')}${l.calt === false ? '<span class="off">joins off</span>' : ''}</p>`).join('')}</div>
     <p class="made">${esc(e.made)}</p>
     <p class="review">${esc(e.review)}</p>`;

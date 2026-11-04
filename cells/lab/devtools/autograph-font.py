@@ -150,7 +150,7 @@ fb.setupNameTable({
     'copyright': 'Copyright (c) 2026, The Claude Hand Project Authors (https://parc.land), with Reserved Font Name "Claude Hand".',
     'licenseDescription': 'This Font Software is licensed under the SIL Open Font License, Version 1.1. This license is available with a FAQ at: https://openfontlicense.org',
     'licenseInfoURL': 'https://openfontlicense.org',
-    'designer': 'Claude', 'description': 'A hand learned in public (the parc.land lab, autograph experiment): hand v7 set as a font%s. Each letter joins as its neighbour asks, in four writings, never the same as its neighbour.' % (', every letter written at the pace the hand writes what is strong, so its ink comes heavier by itself' if PRESSED else ''),
+    'designer': 'Claude', 'description': 'A hand learned in public (the parc.land lab, autograph experiment): hand v9 set as a font%s. Each letter joins as its neighbour asks, in four writings, never the same as its neighbour.' % (', every letter written at the pace the hand writes what is strong, so its ink comes heavier by itself' if PRESSED else ''),
 })
 fb.setupOS2(sTypoAscender=900, sTypoDescender=-460, sTypoLineGap=40, usWinAscent=max(900, ymax + 20), usWinDescent=max(460, -ymin + 20),
             sxHeight=XH, sCapHeight=round(1.7 * XH), achVendID='NONE', fsSelection=(0x20 if PRESSED else 0x40) | 0x80, usWeightClass=700 if PRESSED else 400, version=4, fsType=0,
