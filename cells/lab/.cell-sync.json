@@ -1,8 +1,8 @@
 {
   "cell": "c15r/lab",
   "cellId": "lab-8928acf3",
-  "treeVersion": "tree:421d30560278fb0711f32ba709f76e8d9759044f254d093c808452151235f441",
-  "syncedAt": "2026-11-04T16:50:18.579Z",
+  "treeVersion": "tree:38cbcd6d27a0244214d58e34d89e78dfc800b2eb55d6b444993503cd8a00dd77",
+  "syncedAt": "2026-11-04T16:54:58.380Z",
   "files": {
     "README.md": "sha256:665df4179140457c44ea9e0f6f5820bd6e9b557fb196a37cf1245a07cb11f7c6",
     "client/autograph/autobiography.ts": "sha256:30e5f0e0091248004a7e383d32da537386514d6cb8fc3293bb29c692d7696daf",
@@ -21,7 +21,7 @@
     "client/autograph/hands/v8.ts": "sha256:ec0bd6774468b2763fa70e2dca14d15291c68b9c26eb621412b014c7745bd139",
     "client/autograph/hands/v9.ts": "sha256:d957d49621b0353884d41c0c9a49e1b1a3be842034b0b18af093e31b6d63886f",
     "client/autograph/ink.ts": "sha256:77661292025435fa73e7c59f4af2c00cd7d19a10624beef0e84b30051797916d",
-    "client/autograph/main.ts": "sha256:a537b064aff9d1e9b458114efe36cb729db2b3e07d5bb90368e2fd28cae812fe",
+    "client/autograph/main.ts": "sha256:308d096aaaa61dbe19e9749b783e79232e9bbfe6b639599f0d48951ba3205ff7",
     "client/autograph/measure.ts": "sha256:5fa55317fc0efd483ba4f895a1f0018e27ab87917d77a3dee8ec4226bd690582",
     "client/autograph/record.ts": "sha256:98bece10be24af35fc10c9ad5801e6b8f84d1b8c9586d8662fc6c82c4f4ba67f",
     "client/autograph/samples.ts": "sha256:f11ac2257b0b9d3a2c22c3268b7d0926e55c7edb90606c87e9449dc71d26a44c",
