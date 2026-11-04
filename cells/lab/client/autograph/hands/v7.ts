@@ -4,9 +4,12 @@
  * v6, and emphasis, the ways a hand has of it. Type has italic and bold; a hand has older means. It underlines (after
  * the word, as it dots an i); it slows and presses, so the ink comes heavier by itself (the pen's own body, not a
  * second weight); it writes bigger; it prints a word letter by letter when it has to be read exactly; and it writes an
- * aside smaller and quicker. Text comes marked as I write it: *stress* or _stress_, **strong**, `literal`, and (an
- * aside). How each is written is a table (`MANNERS`), so the means can be tried against each other. Unmarked, v7 writes
- * exactly as v6 did, point for point.
+ * aside smaller and quicker. And it has gestures type has none of: it strikes a word through and leaves it readable,
+ * adds a word over the line after the line is done, at a caret, and circles a word. Text comes marked as I write it
+ * (*stress*, **strong**, `literal`, ~~struck~~, (an aside)), and with elements for what markdown has no word for, the
+ * way HTML says what's meant rather than how it looks: <em> <strong> <code> <small> <del> <ins> <q> <mark>, and two of
+ * my own, <unsure> and <care>. How each is written is a table (`MANNERS`), so the means can be tried against each
+ * other. Unmarked, v7 writes exactly as v6 did, point for point.
  *
  * v6 was v5, and two habits learned from being misread, a day later:
  *
@@ -307,32 +310,75 @@ function move(P: [number, number][], pace: number): number[] {
   return t;
 }
 
-/** the ways a hand marks a word: underlined (once or twice, after the word), slower (so heavier), bigger, printed
- * letter by letter, more upright, after a pause, in capitals. Factors multiply the writing's own. */
-export type Manner = { underline?: number; pace?: number; size?: number; print?: boolean; upright?: number; pause?: number; caps?: boolean };
-export type Emphasis = 'stress' | 'strong' | 'code' | 'aside';
-/** how v7 writes each kind of emphasis, unless told otherwise */
-export const MANNERS: Record<Emphasis, Manner> = {
-  stress: { underline: 1, pace: 0.85, pause: 0.12 },
-  strong: { pace: 0.55, size: 1.1, pause: 0.18 },
-  code: { print: true, upright: 0.3 },
-  aside: { size: 0.82, pace: 1.25 },
+/** the ways a hand marks a word. Factors multiply the writing's own; the marks (underline, a strike, a circle) are
+ * written after the word, as its dots are; `later` words are left out of the line and written over it once the line
+ * is done, at a caret; `quote` puts the words in quotation marks. */
+export type Manner = {
+  underline?: number; strike?: boolean; circle?: boolean; later?: boolean; quote?: boolean;
+  pace?: number; size?: number; print?: boolean; upright?: number; pause?: number; caps?: boolean; wobble?: number; track?: number;
 };
-/** a character to write, and the emphases it's under */
+/** what I mean by a word, as markup says it (see parse) */
+export type Emphasis = 'stress' | 'strong' | 'code' | 'aside' | 'struck' | 'later' | 'unsure' | 'care' | 'quote' | 'circled';
+/** how v7 writes each, unless told otherwise */
+export const MANNERS: Record<Emphasis, Manner> = {
+  // (this word, not another: underlined once, after, on rereading)
+  stress: { underline: 1 },
+  // (this matters: pressed, the pen slowed so the ink comes heavier by itself, after a breath)
+  strong: { pace: 0.4, pause: 0.2 },
+  // (exactly this: printed, letter by letter, upright)
+  code: { print: true, upright: 0.3 },
+  // (by the way: smaller, quicker)
+  aside: { size: 0.82, pace: 1.25 },
+  // (I was wrong: written, then struck through, still readable)
+  struck: { strike: true },
+  // (I'd add this: over the line, after it, at a caret)
+  later: { later: true },
+  // (I'm not sure: a pause before it, then lighter and looser)
+  unsure: { pause: 0.35, pace: 1.35, size: 0.95, wobble: 1.8 },
+  // (chosen with care: slower, more upright, more evenly made, a little more room)
+  care: { pace: 0.75, upright: 0.5, wobble: 0.35, track: 1.06 },
+  // (someone else's words)
+  quote: { quote: true },
+  // (look at this: circled)
+  circled: { circle: true },
+};
+/** a character to write, and what it's under */
 export type Styled = { ch: string; e: Emphasis[] };
 
-/** marked text, read: *x* or _x_ stress, **x** strong, `x` literal, (x) an aside (with its brackets); \ escapes. An
- * underscore inside a word (snake_case) is an underscore. */
+/** the elements a hand reads, and what each means (`<em>`, `<del>`, … and two of my own, `<unsure>` and `<care>`) */
+const TAGS: Record<string, Emphasis> = { em: 'stress', strong: 'strong', code: 'code', small: 'aside', del: 'struck', s: 'struck', ins: 'later', unsure: 'unsure', care: 'care', q: 'quote', mark: 'circled' };
+
+/** marked text, read. Markdown as I write it: *x* or _x_ stress, **x** strong, `x` literal, ~~x~~ struck, (x) an aside
+ * with its brackets. And elements, for what markdown has no word for: <em> <strong> <code> <small> <del> <ins> <q>
+ * <mark> <unsure> <care>. \ escapes; an underscore inside a word (snake_case) is an underscore; a < that doesn't open
+ * a known element is a <. */
 export function parse(text: string): Styled[] {
   const out: Styled[] = [], cs = [...text];
-  let stress = false, strong = false, code = false, aside = 0;
-  const cur = (): Emphasis[] => [...(strong ? ['strong' as const] : []), ...(stress ? ['stress' as const] : []), ...(aside > 0 ? ['aside' as const] : [])];
+  const open: Partial<Record<Emphasis, number>> = {};
+  let stress = false, strong = false, code = false, struck = false, aside = 0;
+  const cur = (): Emphasis[] => {
+    const e = new Set<Emphasis>(Object.entries(open).filter(([, n]) => (n ?? 0) > 0).map(([k]) => k as Emphasis));
+    if (strong) e.add('strong'); if (stress) e.add('stress'); if (struck) e.add('struck'); if (aside > 0) e.add('aside');
+    return [...e];
+  };
   const word = (c: string | undefined) => !!c && /[\p{L}\p{N}]/u.test(c);
   for (let i = 0; i < cs.length; i++) {
     const c = cs[i];
+    if (c === '<') {
+      const close = cs.indexOf('>', i), tag = close > i ? cs.slice(i + 1, close).join('') : '', m = /^(\/?)([a-z]+)$/.exec(tag);
+      if (m && TAGS[m[2]]) {
+        const k = TAGS[m[2]], n = open[k] ?? 0;
+        if (k === 'quote' && !m[1]) { open.quote = n + 1; out.push({ ch: '“', e: cur() }); }
+        else if (k === 'quote') { out.push({ ch: '”', e: cur() }); open.quote = Math.max(0, n - 1); }
+        else open[k] = m[1] ? Math.max(0, n - 1) : n + 1;
+        i = close;
+        continue;
+      }
+    }
     if (code) { if (c === '`') code = false; else out.push({ ch: c, e: ['code', ...cur()] }); continue; }
     if (c === '\\' && i + 1 < cs.length) { out.push({ ch: cs[++i], e: cur() }); continue; }
     if (c === '`') { code = true; continue; }
+    if (c === '~' && cs[i + 1] === '~') { struck = !struck; i++; continue; }
     if (c === '*' && cs[i + 1] === '*') { strong = !strong; i++; continue; }
     if (c === '*') { stress = !stress; continue; }
     if (c === '_' && !(word(cs[i - 1]) && word(cs[i + 1]))) { stress = !stress; continue; }
@@ -343,20 +389,21 @@ export function parse(text: string): Styled[] {
   return out;
 }
 
-/** the text written, with this writing's seed; marked text is read for emphasis (see parse). A `tail` (points in
+/** the text written, with this writing's seed; marked text is read for what I mean (see parse). A `tail` (points in
  * x-height units, given where the writing ended) is carried on from the last letter in the same stroke, as a
- * signature's flourish is. `manners` changes how emphasis is written (to try one means against another). */
+ * signature's flourish is. `manners` changes how each is written (to try one against another). */
 export function write(text: string, seed: number, st: Style = STYLE, tail?: (w: number) => number[], manners: Record<Emphasis, Manner> = MANNERS): Sig {
   return writeStyled(parse(text), seed, st, tail, manners);
 }
 
-/** a manner's factors, for a character under these emphases (several multiply; underlines take the most) */
+/** a manner's factors, for a character under these (several multiply; underlines take the most) */
 function mannerOf(e: Emphasis[], manners: Record<Emphasis, Manner>) {
-  const m = { underline: 0, pace: 1, size: 1, print: false, upright: 1, pause: 0, caps: false };
+  const m = { underline: 0, strike: false, circle: false, later: false, pace: 1, size: 1, print: false, upright: 1, pause: 0, caps: false, wobble: 1, track: 1 };
   for (const k of e) {
     const x = manners[k];
-    m.underline = Math.max(m.underline, x.underline ?? 0); m.pace *= x.pace ?? 1; m.size *= x.size ?? 1;
-    m.print ||= !!x.print; m.upright *= x.upright ?? 1; m.pause = Math.max(m.pause, x.pause ?? 0); m.caps ||= !!x.caps;
+    m.underline = Math.max(m.underline, x.underline ?? 0); m.strike ||= !!x.strike; m.circle ||= !!x.circle; m.later ||= !!x.later;
+    m.pace *= x.pace ?? 1; m.size *= x.size ?? 1; m.print ||= !!x.print; m.upright *= x.upright ?? 1;
+    m.pause = Math.max(m.pause, x.pause ?? 0); m.caps ||= !!x.caps; m.wobble *= x.wobble ?? 1; m.track *= x.track ?? 1;
   }
   return m;
 }
@@ -364,7 +411,7 @@ function mannerOf(e: Emphasis[], manners: Record<Emphasis, Manner>) {
 /** styled characters written, as write() */
 export function writeStyled(text: Styled[], seed: number, st: Style = STYLE, tail?: (w: number) => number[], manners: Record<Emphasis, Manner> = MANNERS): Sig {
   const r = stream(seed * 7919 + 13), V = st.vary;
-  // (the underlines' own wobble, from a stream of their own, so marking a word never moves the rest of the line)
+  // (the marks' own wobble, from a stream of their own, so marking a word never moves the rest of the line)
   const ru = stream(seed * 7919 + 29);
   // (this writing's own draw: how it differs from the last)
   const pace = st.pace * (1 + 0.1 * V * r.n()), size = st.size * (1 + 0.05 * V * r.n()), slant = st.slant + 0.035 * V * r.n();
@@ -373,51 +420,89 @@ export function writeStyled(text: Styled[], seed: number, st: Style = STYLE, tai
   const plain = { pace: 1, upright: 1, pause: 0 };
   const strokes: Stroke[] = [];
   let x = 0, word: [number, number][] | null = null, wordM = plain, high = false, later: Stroke[] = [];
-  let under: { x0: number; x1: number; n: number } | null = null;
+  // (the marks that run under, through or round words, each written once its run is over)
+  type Run = { x0: number; x1: number; n: number };
+  const runs: { under: Run | null; strike: Run | null; circle: Run | null } = { under: null, strike: null, circle: null };
+  // (words left out of the line to be written over it afterwards, at a caret)
+  const inserts: { x: number; chars: Styled[] }[] = [];
   const flush = () => { if (word) strokes.push({ p: word, ...wordM }); word = null; high = false; };
   const end = () => { flush(); strokes.push(...later); later = []; };
-  // (an underline, written after the word as a quick stroke a little under the line; a second one under it)
-  const underline = () => {
-    if (!under) return;
-    const { x0, x1, n } = under;
-    for (let i = 0; i < n; i++) {
-      const y = -0.2 - 0.2 * i + 0.02 * V * ru.n(), sag = 0.03 + 0.02 * V * ru.n();
-      later.push({ p: [[x0 - 0.05 + 0.03 * V * ru.n(), y + 0.02], [(x0 + x1) / 2, y - sag], [x1 + 0.07 + 0.04 * V * ru.n(), y + 0.03 * V * ru.n()]], pace: 1.4, upright: 1, pause: 0.05 });
+  const mark = (p: [number, number][], pc = 1.4) => later.push({ p, pace: pc, upright: 1, pause: 0.05 });
+  const close = (kind: 'under' | 'strike' | 'circle') => {
+    const run = runs[kind];
+    if (!run) return;
+    const { x0, x1, n } = run, w = ru.n, v = 0.02 * V;
+    if (kind === 'under') for (let i = 0; i < n; i++) {
+      // (a quick stroke a little under the line; a second one under it)
+      const y = -0.2 - 0.2 * i + v * w(), sag = 0.03 + v * w();
+      mark([[x0 - 0.05 + 1.5 * v * w(), y + 0.02], [(x0 + x1) / 2, y - sag], [x1 + 0.07 + 2 * v * w(), y + 1.5 * v * w()]]);
     }
-    under = null;
+    if (kind === 'strike') {
+      // (one line through the middle of the letters, rising a little, so what's under it still reads)
+      const y = 0.42 + v * w();
+      mark([[x0 - 0.06, y - 0.03 + v * w()], [(x0 + x1) / 2, y + 0.02 + v * w()], [x1 + 0.06, y + 0.06 + v * w()]], 1.6);
+    }
+    if (kind === 'circle') {
+      // (once round, from the top left, a little over where it began)
+      // (loose, with room inside: drawn tight round one letter, a circle read as ©)
+      const cx = (x0 + x1) / 2, rx = Math.max(0.62, (x1 - x0) / 2 + 0.34), cy = 0.48, ry = 0.98, p: [number, number][] = [];
+      for (let k = 0; k <= 14; k++) { const a = Math.PI * 0.85 - (k / 12) * Math.PI * 2; p.push([cx + rx * Math.cos(a) * (1 + 1.5 * v * w()), cy + ry * Math.sin(a) * (1 + 1.5 * v * w())]); }
+      mark(p, 1.2);
+    }
+    runs[kind] = null;
   };
-  for (const { ch: c0, e } of text) {
-    const m = mannerOf(e, manners), ch = m.caps ? c0.toUpperCase() : c0;
-    if (under && !m.underline) underline();
+  const extend = (kind: 'under' | 'strike' | 'circle', on: boolean, x0: number, x1: number, n = 1) => {
+    if (!on) { close(kind); return; }
+    if (!runs[kind]) runs[kind] = { x0, x1, n };
+    runs[kind]!.x1 = x1;
+  };
+  for (const s of text) {
+    const m = mannerOf(s.e, manners), ch = m.caps ? s.ch.toUpperCase() : s.ch;
+    // (an insertion: kept for after the line, at this place)
+    if (m.later) {
+      const last = inserts[inserts.length - 1];
+      if (last && last.x === x) last.chars.push({ ch: s.ch, e: s.e.filter((k) => k !== 'later') });
+      else inserts.push({ x, chars: [{ ch: s.ch, e: s.e.filter((k) => k !== 'later') }] });
+      continue;
+    }
+    if (runs.under && !m.underline) close('under');
+    if (runs.strike && !m.strike) close('strike');
+    if (runs.circle && !m.circle) close('circle');
     const g = G[ch] ?? G[' '];
-    if (!g.p.length) { end(); x += g.w * track * m.size; continue; }
+    if (!g.p.length) { end(); x += g.w * track * m.size * m.track; continue; }
     const mm = { pace: m.pace, upright: m.upright, pause: m.pause };
     // (a change of manner mid-word starts a new stroke; printing lifts before every letter)
     if (word && ((g.lift || g.alone || m.print) || mm.pace !== wordM.pace || mm.upright !== wordM.upright)) flush();
     // (each letter a touch bigger or smaller, a touch off its place, and the pen never quite where it meant to be)
-    const k = (1 + 0.035 * V * r.n()) * m.size, dx = 0.02 * V * r.n(), dy = 0.02 * V * r.n();
+    const Vw = V * m.wobble;
+    const k = (1 + 0.035 * Vw * r.n()) * m.size, dx = 0.02 * Vw * r.n(), dy = 0.02 * Vw * r.n();
     const from: number = !word ? (g.lead ?? 0) : high ? (g.lead ?? 0) : 0;
     const place = (p: number[], skip = 0) => {
       const q: [number, number][] = [];
-      for (let i = skip * 2; i < p.length; i += 2) q.push([x + dx + p[i] * k + 0.012 * V * r.n(), dy + p[i + 1] * k + 0.012 * V * r.n()]);
+      for (let i = skip * 2; i < p.length; i += 2) q.push([x + dx + p[i] * k + 0.012 * Vw * r.n(), dy + p[i + 1] * k + 0.012 * Vw * r.n()]);
       return q;
     };
     // (a letter of several strokes: the ones before its last, each on its own)
-    if (g.pre) { flush(); for (const s of g.pre) strokes.push({ p: place(s), ...mm }); }
+    if (g.pre) { flush(); for (const sp of g.pre) strokes.push({ p: place(sp), ...mm }); }
     // (not joined from below, a letter with a stroke of its own for that writes it; any other leaves off its lead-in)
     const pts: [number, number][] = g.top && from ? place(g.top) : place(g.p, g.pre ? 0 : from);
     if (word) word.push(...pts); else { word = pts; wordM = mm; }
     for (const mk of g.marks ?? []) later.push({ p: place(mk), ...plain });
     high = !!g.high;
-    if (m.underline) { if (!under) under = { x0: x, x1: x, n: m.underline }; }
-    x += g.w * k * track;
-    if (under && m.underline) under.x1 = x;
+    const x0 = x;
+    x += g.w * k * track * m.track;
+    extend('under', m.underline > 0, x0, x, m.underline);
+    extend('strike', m.strike, x0, x);
+    extend('circle', m.circle, x0, x);
     if (g.alone || m.print) flush();
   }
-  underline();
+  close('under'); close('strike'); close('circle');
   // (the tail reaches a little further or less far each time)
   if (tail && word) { const p = tail(x), w = word as [number, number][]; for (let i = 0; i < p.length; i += 2) w.push([p[i] * (1 + 0.04 * V * r.n()), p[i + 1] + 0.03 * V * r.n()]); }
   end();
+  // (once the line is done: a caret where each insertion goes, under the line)
+  // (in the gap, pointing up into it: low and short, it read as a comma)
+  for (const ins of inserts) { const cx = ins.x - 0.14; strokes.push({ p: [[cx - 0.14, -0.22], [cx, 0.42], [cx + 0.14, -0.22]], pace: 1.3, upright: 1, pause: 0.3 }); }
   const sig: Sig = [];
   let t = 0, last: [number, number] | null = null;
   for (const s of strokes) {
@@ -438,6 +523,16 @@ export function writeStyled(text: Styled[], seed: number, st: Style = STYLE, tai
     t += T[T.length - 1];
     last = P[P.length - 1];
   }
+  // (then the insertions themselves: smaller, over the line, centred on their caret, written after everything else)
+  inserts.forEach((ins, j) => {
+    const small = writeStyled(ins.chars, seed * 31 + j + 1, { ...st, size: size * 0.62, vary: V }, undefined, manners);
+    if (!small.length) return;
+    let lo = Infinity, hi = -Infinity, t0 = Infinity;
+    for (const s of small) for (let i = 0; i < s.length; i += 3) { lo = Math.min(lo, s[i]); hi = Math.max(hi, s[i]); t0 = Math.min(t0, s[i + 2]); }
+    const lift = 1.5, cx = 120 + (ins.x - 0.14 + slant * lift) * size, dxp = cx - (lo + hi) / 2, dyp = -(lift + drift * ins.x) * size, dt = Math.round(t * 100) + 25 - t0;
+    for (const s of small) sig.push(s.map((v, i) => (i % 3 === 0 ? Math.round(v + dxp) : i % 3 === 1 ? Math.round(v + dyp) : v + dt)));
+    t = Math.max(...sig[sig.length - 1].filter((_, i) => i % 3 === 2)) / 100;
+  });
   return sig;
 }
 
@@ -589,7 +684,8 @@ export function page(text: string, width: number, seed: number, gap = 3.1, st: S
   const r = stream(seed * 7919 + 77), V = st.vary;
   const pace = st.pace * (1 + 0.1 * V * r.n()), size = st.size * (1 + 0.05 * V * r.n()), slant = st.slant + 0.035 * V * r.n(), track = st.track * (1 + 0.04 * V * r.n());
   const chars = parse(text);
-  const adv = (w: Styled[]) => w.reduce((a, { ch, e }) => a + (G[ch] ?? G[' ']).w * track * mannerOf(e, manners).size, 0);
+  // (an insertion takes no room on the line: it goes over it)
+  const adv = (w: Styled[]) => w.reduce((a, { ch, e }) => { const m = mannerOf(e, manners); return m.later ? a : a + (G[ch] ?? G[' ']).w * track * m.size * m.track; }, 0);
   // (the words, styled; a space keeps its words' emphasis where both sides share it, so an underline runs across it)
   const words: Styled[][] = [[]];
   for (const c of chars) { if (c.ch === ' ') words.push([]); else words[words.length - 1].push(c); }
