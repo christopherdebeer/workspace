@@ -13,6 +13,8 @@ export interface CellPersistence {
   dynamo?: boolean;
   /** Enable TTL (the `ttl` attribute) on the DynamoDB table. */
   dynamoTtl?: boolean;
+  /** Keep the table (and its data) if the stack or the cell is ever removed. */
+  retain?: boolean;
   /**
    * Mark the cell as using Turso/libSQL for relational data. The connection
    * string and auth token are expected via `environment` (typically sourced
@@ -104,6 +106,7 @@ export class HttpServiceCell extends Construct {
       this.table = TableFactory.standardTable(this, 'Table', {
         serviceName: props.name,
         ttl: props.persistence.dynamoTtl,
+        retain: props.persistence.retain,
       });
       environment.TABLE_NAME = this.table.tableName;
     }

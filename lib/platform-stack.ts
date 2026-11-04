@@ -74,7 +74,9 @@ export class PlatformStack extends cdk.Stack {
     // bus. Scope-partitioned; the workspace cell is its room provider, and
     // dynamic cells get LeadingKeys-scoped read access through the permission
     // boundary. See docs/substrate-storage.md.
-    const substrate = new SubstrateTable(this, 'Substrate');
+    // The platform's shared truth: never deleted with the stack (DESTROY was the
+    // non-production default; this is production).
+    const substrate = new SubstrateTable(this, 'Substrate', { retain: true });
 
     // Auth primitive: WebAuthn passkeys + OAuth 2.1 + scoped tokens (ported from
     // c15r/mcp-auth). Owns the auth_* data; peers consume it via tokens, never
@@ -86,7 +88,8 @@ export class PlatformStack extends cdk.Stack {
       // The authorize/consent page is a React SPA bundled from client/main.tsx.
       clientEntry: path.join(__dirname, '..', '..', 'services', 'auth', 'client', 'main.tsx'),
       routes: ['/auth/*', '/oauth/*', '/webauthn/*', '/.well-known/*'],
-      persistence: { dynamo: true, dynamoTtl: true },
+      // Users, passkeys and tokens: retained like the substrate.
+      persistence: { dynamo: true, dynamoTtl: true, retain: true },
       commands: ['validateToken', 'mintToken', 'listTokens', 'tokens', 'revokeToken', 'describeTools'],
       emits: ['auth.user.registered', 'auth.token.minted', 'auth.token.revoked'],
       eventBus,
@@ -421,7 +424,8 @@ export class PlatformStack extends cdk.Stack {
       name: 'cells',
       entry: serviceEntry('cells'),
       routes: [],
-      persistence: { dynamo: true },
+      // The cell registry (owners, grants, deploy state): retained.
+      persistence: { dynamo: true, retain: true },
       commands: ['create', 'list', 'get', 'call', 'grant', 'revoke', 'delete', 'logs', 'describeTools', 'catalogCells', 'describeCellTools', 'callCellTool', 'describeTypes', 'writeFile', 'replaceInFile', 'appendToFile', 'readFile', 'readFiles', 'listFiles', 'searchFiles', 'deleteFile', 'moveFile', 'applyPatchSet', 'status', 'snapshot', 'diff', 'deploy', 'putData', 'getData', 'listData'],
       emits: ['cell.create.requested', 'cell.shared', 'cell.unshared', 'cell.delete.requested', 'cell.deployed', 'cell.files.changed', 'cell.data.changed'],
       eventBus,
