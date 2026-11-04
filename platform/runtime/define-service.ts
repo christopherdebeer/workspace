@@ -420,6 +420,7 @@ export function defineService(definition: ServiceDefinition) {
     }
 
     try {
+      definition.httpCommandGuard?.(tail, ctx.identity);
       const result = await runCommand(tail, input, ctx);
       ctx.logger.info('command handled', { command: tail });
       return json(200, { ok: true, result }, correlationId);

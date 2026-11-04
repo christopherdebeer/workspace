@@ -65,6 +65,15 @@ export interface ServiceDefinition {
    * Matched before command dispatch. A `path` ending in `*` matches by prefix.
    */
   http?: HttpRoute[];
+  /**
+   * Guards the public `POST /<service>/<command>` route, which runs a command
+   * under the caller's own token with no gateway in front of it. Called before
+   * the command with its name and the caller's identity: throw
+   * `UnknownCommandError` to keep a command off HTTP, or `ServiceAuthError` to
+   * refuse it (e.g. the scope the gateway would have enforced). Direct invokes
+   * from peers do not pass through it.
+   */
+  httpCommandGuard?: (command: string, identity: Identity) => void;
 }
 
 /** A parsed HTTP request handed to raw `http` route handlers. */

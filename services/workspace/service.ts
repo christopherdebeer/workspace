@@ -8,6 +8,7 @@
  * table. See `handlers.ts`, `docs/substrate.md`, `docs/substrate-storage.md`.
  */
 import { defineService } from '../../platform/runtime';
+import { workspaceHttpGuard } from './http-guard';
 import { createWorkspaceCommands, createSubstrateWriteHandler, createTendHandler, createMachineTickHandler, createCellLifecycleHandler, createDataFileMirrorHandler, createFactReactionHandler, createReindexHandler, createCapabilityTouchHandler, dynamoDeps } from './handlers';
 
 const commands = createWorkspaceCommands(dynamoDeps);
@@ -15,6 +16,9 @@ const commands = createWorkspaceCommands(dynamoDeps);
 export const handler = defineService({
   name: 'workspace',
   commands,
+  // `/workspace/*` is public: a bare POST gets the gateway's scope rule, and
+  // only the advertised tools.
+  httpCommandGuard: workspaceHttpGuard,
   events: {
     emits: [
       'workspace.fact.written',

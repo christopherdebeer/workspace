@@ -97,7 +97,7 @@ import {
   type DenyGrantInput,
 } from './commands-sharing';
 import { type TendReport } from './event-handlers';
-import { type ToolDescriptor, TOOL_DESCRIPTORS } from './descriptors';
+import { type ToolDescriptor, TOOL_DESCRIPTORS, toolScope } from './descriptors';
 import { createAthenaCommand, type AthenaInput, type AthenaResult } from './commands-athena';
 import { createMetricsCommand, type MetricsInput, type MetricsResult } from './commands-metrics';
 
@@ -191,7 +191,7 @@ export function createWorkspaceCommands(build: DepsBuilder): WorkspaceCommands {
     async describeTools() {
       const tools = TOOL_DESCRIPTORS.map((t) => ({
         ...t,
-        scope: t.scope ?? (t.kind === 'read' ? 'read:workspace' : 'write:workspace'),
+        scope: toolScope(t),
         ...(t.scopeFamily ? { scopeFamily: t.scopeFamily } : {}),
       }));
       return { tools };

@@ -115,6 +115,13 @@ const EDGE_SCHEMA = {
   },
 } as const;
 
+/** The scope a tool is enforced under: its explicit scope, else its verb
+ *  (reads `read:workspace`, acts `write:workspace`). One rule for the gateway
+ *  (via describeTools) and the public HTTP route (http-guard.ts). */
+export function toolScope(t: Pick<ToolDescriptor, 'scope' | 'kind'>): string {
+  return t.scope ?? (t.kind === 'read' ? 'read:workspace' : 'write:workspace');
+}
+
 /**
  * The workspace vocabulary as MCP tool descriptors. Every command operates on the
  * caller's own slice (or subsets explicitly granted to them) — ownership/slice
@@ -937,17 +944,17 @@ export const TOOL_DESCRIPTORS: ToolDescriptor[] = [
   {
     name: 'share',
     description:
-      'Grant access to a fact, a key prefix (`inbox/*`), or your whole slice (omit `key`). Share `to` a user, to `public` (the universal audience — anyone, including unauthenticated readers; read-only), or to `group:<name>` (a named audience you define with `workspace.group`). mode "read" (default) makes it appear in their recall; mode "write" additionally lets them remember into the covered keys of your slice (write-through — their identity is stamped as the writer).',
+      'Grant access to a fact, a key prefix (`inbox/*`), or your whole slice (`key: "*"`, which must be named; there is no default). Share `to` a user, to `public` (the universal audience — anyone, including unauthenticated readers; read-only), or to `group:<name>` (a named audience you define with `workspace.group`). mode "read" (default) makes it appear in their recall; mode "write" additionally lets them remember into the covered keys of your slice (write-through — their identity is stamped as the writer).',
     scope: null,
     kind: 'act',
     inputSchema: {
       type: 'object',
       properties: {
         to: { type: 'string', description: 'A username, "public" (anyone), or "group:<name>" (a named audience)' },
-        key: { type: 'string', description: 'A fact key, a prefix ending in `*` (e.g. "inbox/*"), or omit for your whole slice' },
+        key: { type: 'string', description: 'A fact key, a prefix ending in `*` (e.g. "inbox/*"), or "*" for your whole slice' },
         mode: { type: 'string', enum: ['read', 'write'], description: 'read (default) = visibility; write = write-through too (not allowed for public)' },
       },
-      required: ['to'],
+      required: ['to', 'key'],
       additionalProperties: false,
     },
     resultSchema: {
