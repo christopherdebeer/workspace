@@ -6,10 +6,19 @@ The record is the point. Every sample is kept in the repository with the hand th
 
 ## How it works
 
-- **Hands** (`client/autograph/hands/`): each a file, frozen once used. *v7* (session 11) reads what I mean as well as what I say (below). *v6* (session 10) gives e a way in when it isn't joined from below. *v2* (session 3) adds capitals, figures and marks. *v3* (session 5) adds practice: my signature is what 1,500 writings settled into. *Before letters* is the scribbles that came first. *v0* is the hand written in an afternoon for Switchback's autographs. *v1* (session 2) has the whole lowercase alphabet and a body; it's recorded as a pen pad records a person, the pen's place every hundredth of a second.
+- **Hands** (`client/autograph/hands/`): each a file, frozen once used, in the order they were made:
+  - *Before letters*: the scribbles that came first.
+  - *v0*: the hand written in an afternoon for Switchback's autographs.
+  - *v1* (session 2): the whole lowercase alphabet and a body. It's recorded as a pen pad records a person, the pen's place every hundredth of a second.
+  - *v2* (session 3): capitals, figures and marks.
+  - *v3* (session 5): practice. My signature is what 1,500 writings settled into.
+  - *v4* (session 6): accents, written after the word.
+  - *v5* (session 8): air around capitals and marks, and a page written in one sitting.
+  - *v6* (session 10): an e that keeps its eye when it isn't joined from below.
+  - *v7* (session 11): what I mean as well as what I say.
 - **Samples** (`samples.ts`): each made fresh from its hand, as strokes of points in time, exactly the record a pen pad keeps of a person.
 - **Measures** (`measure.ts`): what graphology looks at (slant, baseline, how joined, speed, pressure, size), measured from the strokes rather than eyeballed. Beside them, in red, what a graphologist would say: given as a claim, because that's what it is (below). The measures are part of the record too: an old one is never changed. New ones are added beside it, like the speed range and stops from session 2.
-- **Catalogue** (`catalog.ts`): what each sample is, what it was made for, my review, and what each session decided.
+- **Catalogue** (`catalog.ts`): what each sample is, what it was made for, my review, and what each session decided. Each session keeps its own file (`sessions/NN.ts`, listed in order in `sessions/index.ts`), so adding one never touches another, and the check fingerprints each recorded session so none can change afterwards, by accident or otherwise.
 - **Looking** (`node cells/lab/devtools/autograph-look.mjs <id>`, or `--entry=<file>` for a try that isn't a sample yet; `--rows`, `--mode=time`): draws a sample whole, with the page's ink, and saves it as a picture, so it can be looked at slowly, a line at a time.
 - **Fingerprints** (`fingerprints.json`): every sample's strokes, hashed when it's catalogued. `node cells/lab/devtools/autograph-check.mjs` fails if any sample no longer comes out exactly as it was made (a hand was edited), and checks that the catalogue holds together. `--record` fingerprints new samples and never changes an old one.
 - **The font** (`devtools/autograph-font.mjs`, then `autograph-font.py`, then `autograph-pairs.py`, which fails the build if any two letters touch except where they join): **Claude Hand** (now 1.0, from hand v6; the number is the session's, not a claim that it's finished), downloadable from the page as TTF or WOFF2, with a specimen to type into. Each version's files are kept (`static/autograph/claude-hand-<version>.*`), and a sample set in type names the version it was set in. It's licensed under the SIL Open Font License 1.1 with the reserved font name "Claude Hand" (`static/autograph/OFL.txt`): free to use, embed, change and share, but a changed version takes another name.
@@ -19,7 +28,7 @@ The record is the point. Every sample is kept in the repository with the hand th
   - **Reproducible:** the same hand always builds the same file. The files live in `static/autograph/`; the check fingerprints the font's source like a sample.
   - **To rebuild:** `pip install fonttools shapely brotli`, then `node cells/lab/devtools/autograph-font.mjs`.
 - **The autobiography** (`autobiography.ts`): *In My Own Hand*, its source the catalogue. A chapter is written once, at the end of the work it covers, and never edited (the check fingerprints each chapter like a sample). On the page each chapter's first line is written by the hand, the rest set in the font, signed at the end. `node cells/lab/devtools/autograph-book.mjs` sets it as a PDF (`static/autograph/in-my-own-hand.pdf`), downloadable from the page.
-- **The page**: the catalogue, each sample writing itself out. Tap one to write it again. **TIME** shows it as dots at every hundredth of a second, so the spacing is the speed: bunched where the pen slowed, strung out where it flew.
+- **The page**: the catalogue from the first session on (a link at the top jumps to the latest), each sample writing itself out. Tap one to write it again. **TIME** shows it as dots at every hundredth of a second, so the spacing is the speed: bunched where the pen slowed, strung out where it flew.
 
 ## Handwriting, briefly
 

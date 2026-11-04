@@ -11,8 +11,8 @@ import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 const here = dirname(fileURLToPath(import.meta.url)), lab = join(here, '..');
 const outfile = join(tmpdir(), `autograph-${process.pid}.mjs`);
-await build({ stdin: { contents: `export { MADE } from './client/autograph/samples'; export { CATALOG, SESSIONS, HANDS } from './client/autograph/catalog'; export { measure } from './client/autograph/measure'; export { KNOWS, letter, formsOf } from './client/autograph/hands/v2'; export { KNOWS as KNOWS4, letter as letter4, formsOf as formsOf4 } from './client/autograph/hands/v4'; export { BOOK } from './client/autograph/autobiography'; export { KNOWS as KNOWS5, letter as letter5, formsOf as formsOf5 } from './client/autograph/hands/v5'; export { KNOWS as KNOWS6, letter as letter6, formsOf as formsOf6 } from './client/autograph/hands/v6';`, resolveDir: lab, loader: 'ts' }, bundle: true, platform: 'node', format: 'esm', outfile, logLevel: 'warning' });
-const { MADE, CATALOG, SESSIONS, HANDS, measure, KNOWS, letter, formsOf, KNOWS4, letter4, formsOf4, BOOK, KNOWS5, letter5, formsOf5, KNOWS6, letter6, formsOf6 } = await import(outfile);
+await build({ stdin: { contents: `export { MADE } from './client/autograph/samples'; export { CATALOG, SESSIONS, HANDS, NEWEST } from './client/autograph/catalog'; export { SESSION_FILES } from './client/autograph/sessions'; export { measure } from './client/autograph/measure'; export { KNOWS, letter, formsOf } from './client/autograph/hands/v2'; export { KNOWS as KNOWS4, letter as letter4, formsOf as formsOf4 } from './client/autograph/hands/v4'; export { BOOK } from './client/autograph/autobiography'; export { KNOWS as KNOWS5, letter as letter5, formsOf as formsOf5 } from './client/autograph/hands/v5'; export { KNOWS as KNOWS6, letter as letter6, formsOf as formsOf6 } from './client/autograph/hands/v6';`, resolveDir: lab, loader: 'ts' }, bundle: true, platform: 'node', format: 'esm', outfile, logLevel: 'warning' });
+const { MADE, CATALOG, SESSIONS, HANDS, NEWEST, SESSION_FILES, measure, KNOWS, letter, formsOf, KNOWS4, letter4, formsOf4, BOOK, KNOWS5, letter5, formsOf5, KNOWS6, letter6, formsOf6 } = await import(outfile);
 const fpFile = join(lab, 'client/autograph/fingerprints.json');
 const fps = existsSync(fpFile) ? JSON.parse(readFileSync(fpFile, 'utf8')) : {};
 const record = process.argv.includes('--record');
@@ -54,6 +54,35 @@ for (const e of CATALOG.filter((x) => MADE[x.id])) {
   if (!fps[e.id]) { if (record) { fps[e.id] = fp; added++; } else changed.push(`${e.id} (no fingerprint: run with --record)`); }
   else if (fps[e.id] !== fp) changed.push(`${e.id} (was ${fps[e.id]}, now ${fp})`);
 }
+// (the record itself: each session's file, once recorded, is fingerprinted like a sample, so no session's findings,
+// decisions, hands or reviews can change afterwards; a later session that thinks differently says so in its own)
+const frozen = [];
+for (const f of SESSION_FILES) {
+  const key = `session ${f.session.n}`, fp = createHash('sha256').update(JSON.stringify({ session: f.session, hands: f.hands ?? {}, entries: f.entries })).digest('hex').slice(0, 16);
+  if (!fps[key]) { if (record) { fps[key] = fp; added++; } else frozen.push(`${key} (no fingerprint: run with --record)`); }
+  else if (fps[key] !== fp) frozen.push(`${key} was changed (was ${fps[key]}, now ${fp})`);
+}
+ok(SESSION_FILES.every((f, i) => f.session.n === i + 1 && f.entries.every((e) => e.session === f.session.n)), `the sessions are in order, 1 to ${SESSION_FILES.length}, each holding only its own samples`);
+ok(!frozen.length, frozen.length ? `the record changed: ${frozen.join(', ')}` : 'every session is as it was recorded');
+// (the notes: every session told, in order, each as it was first told; every hand listed, in the order made)
+const md = readFileSync(join(lab, 'static/autograph.md'), 'utf8');
+const told = [...md.matchAll(/\*\*Session (\d+) \(/g)];
+ok(told.length === SESSIONS.length && told.every((m, i) => Number(m[1]) === i + 1), `the notes tell every session in order (${told.map((m) => m[1]).join(', ')})`);
+const retold = [];
+told.forEach((m, i) => {
+  const end = i + 1 < told.length ? told[i + 1].index : md.indexOf('\n## ', m.index);
+  const key = `notes, session ${m[1]}`, fp = createHash('sha256').update(md.slice(m.index, end).trim()).digest('hex').slice(0, 16);
+  if (!fps[key]) { if (record) { fps[key] = fp; added++; } else retold.push(`${key} (no fingerprint: run with --record)`); }
+  else if (fps[key] !== fp) retold.push(`${key} was rewritten (was ${fps[key]}, now ${fp})`);
+});
+ok(!retold.length, retold.length ? `the notes changed: ${retold.join(', ')}` : 'every session is told as it was first told');
+const handsBlock = md.slice(md.indexOf('- **Hands**'), md.indexOf('- **Samples**'));
+const named = Object.keys(HANDS).filter((h) => h !== 'font').map((h) => (h === 'scribble' ? '*Before letters*' : `*${h}*`));
+const at = named.map((n) => handsBlock.indexOf(n));
+ok(at.every((x, i) => x >= 0 && (i === 0 || x > at[i - 1])), `the notes list every hand, in the order made (${named.join(' ')})`);
+// (the page's signature is by the newest hand)
+const page = readFileSync(join(lab, 'client/autograph/main.ts'), 'utf8'), heroHand = /import \{ signature \} from '\.\/hands\/(\w+)'/.exec(page)?.[1];
+ok(heroHand === NEWEST, `the page signs with the newest hand (${heroHand}; the record's newest is ${NEWEST})`);
 if (added) writeFileSync(fpFile, JSON.stringify(fps, null, 2) + '\n');
 ok(!changed.length, changed.length ? `samples no longer as made: ${changed.join(', ')}` : `every sample comes out exactly as it was made${added ? ` (${added} newly fingerprinted)` : ''}`);
 process.exit(bad ? 1 : 0);

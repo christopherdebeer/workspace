@@ -1,20 +1,22 @@
 /**
- * Autograph: the notebook. My signature as it stands, then the catalogue, newest session first: each session's
+ * Autograph: the notebook. My signature as it stands, then the catalogue, from the first session on (a link jumps to
+ * the latest): each session's
  * findings and decisions, and its samples, each writing itself out as it comes into view (tap to write it again), with
  * its measures, what a graphologist would say, what it was made for, and my review.
  *
  * `preview` shows only the signature, writing itself out, for the lab's index.
  */
 import type { Sig } from '../switchback/sign';
-import { CATALOG, Entry, HANDS, SESSIONS } from './catalog';
+import { CATALOG, Entry, HANDS, NEWEST, SESSIONS } from './catalog';
 import { Look, bounds, fitK, paint, replay } from './ink';
 import { Measures, measure, reading } from './measure';
 import { MADE } from './samples';
 import { BOOK, firstLine } from './autobiography';
 import { write as v4write } from './hands/v4';
-import { signature } from './hands/v3';
-/** the newest hand (each session that makes one moves this on) */
-const NEWEST = 'v3' as const;
+// (my signature, by the newest hand: autograph-check.mjs fails if this isn't the hand the record says is newest)
+import { signature } from './hands/v7';
+// (a chapter is signed as it was on the day it was written: chapter one by the hand of its day)
+import { signature as chapterSign } from './hands/v3';
 
 const q = new URLSearchParams(location.search);
 const $ = (id: string) => document.getElementById(id)!;
@@ -113,7 +115,7 @@ for (const c of BOOK.chapters) {
     <div class="hand-type text" style="font-family:'Claude Hand ${c.font}',Georgia,serif">${c.text.map((p, i) => `<p>${esc(i ? p : p.slice(first.length).trim())}</p>`).join('')}</div>
     <canvas class="signed" aria-label="Signed: Claude"></canvas>`;
   $('chapters').append(el);
-  const ch = { first: el.querySelector('canvas.first') as HTMLCanvasElement, firstSig: [v4write(first, c.seed)], signed: el.querySelector('canvas.signed') as HTMLCanvasElement, signSig: [signature(c.n)] };
+  const ch = { first: el.querySelector('canvas.first') as HTMLCanvasElement, firstSig: [v4write(first, c.seed)], signed: el.querySelector('canvas.signed') as HTMLCanvasElement, signSig: [chapterSign(c.n)] };
   chapters.push(ch);
   ch.first.addEventListener('click', () => replay(ch.first, ch.firstSig, () => lookOf('ink')));
   ch.signed.addEventListener('click', () => replay(ch.signed, ch.signSig, () => lookOf('ink')));
@@ -123,11 +125,17 @@ sizeBook();
 const bookSeen = new IntersectionObserver((es) => { for (const e of es) if (e.isIntersecting) { const ch = chapters.find((c) => c.first === e.target || c.signed === e.target); if (ch) replay(e.target as HTMLCanvasElement, e.target === ch.first ? ch.firstSig : ch.signSig, () => lookOf('ink')); bookSeen.unobserve(e.target); } }, { threshold: 0.5 });
 for (const ch of chapters) { bookSeen.observe(ch.first); bookSeen.observe(ch.signed); }
 
-// (the catalogue, newest session first)
+// (the catalogue, from the first session on, as it happened; a link at the top for the latest)
 const list = $('catalog'), cards: ReturnType<typeof card>[] = [];
-for (const s of [...SESSIONS].reverse()) {
+const latest = SESSIONS[SESSIONS.length - 1];
+const jump = document.createElement('p');
+jump.className = 'jump';
+jump.innerHTML = `${SESSIONS.length} sessions, from the first. <a href="#session-${latest.n}">The latest, session ${latest.n}: ${esc(latest.title)} ↓</a>`;
+list.append(jump);
+for (const s of SESSIONS) {
   const sec = document.createElement('section');
   sec.className = 'session';
+  sec.id = `session-${s.n}`;
   sec.innerHTML = `<h2><span>Session ${s.n}</span> ${esc(s.title)}</h2><p class="date">${esc(s.date)}</p><p>${esc(s.summary)}</p>
     <div class="decided"><b>Decided</b><ol>${s.decided.map((d) => `<li>${esc(d)}</li>`).join('')}</ol></div>`;
   list.append(sec);
