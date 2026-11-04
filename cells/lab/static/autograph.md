@@ -75,6 +75,23 @@ It is still elegant. It takes the trace of a movement seriously as the trace of 
 
 That last point matters for the font at the end. A font file holds closed outlines to fill, not pen paths. So my strokes will have to be widened into outlines, and the hand's variation will have to become alternates.
 
+### Reading, and type (session 15)
+
+Session 1 read handwriting as movement and as character. Session 15 read it as something to be read, and read type, after two sessions kept running into questions other people had studied.
+
+- **Readers see letters, not word shapes.** The evidence is that we recognise a word's letters all at once, and don't read its outline (Larson's review, 2004). Proofreaders miss a misspelling when the wrong letter looks like the right one, not when the word keeps its outline (Paap, Newsome & Noel, 1984). Context fills in a damaged letter (McClelland & Rumelhart, 1981), so a misreading lasts where the wrong reading is also a word: *are* and *arc*.
+- **We read best what we read most.** Zuzana Licko's line (1990), and the evidence agrees: even mirror-reversed text becomes quick to read with practice (Kolers & Perkins, 1975), and familiarity with a typeface speeds reading (Nedeljković, Jovančić & Pušnik, 2020). A hand is learned by its readers.
+- **The skeleton is the readers'; the rest is the writer's.** Gerard Unger: "Only the basic shapes need to comply with what we are used to." Curves, corners, transitions and endings can be personal.
+- **The tops of letters carry more than their feet.** Javal (1879) and Huey (1908) noticed it, and masked-priming and eye-movement studies have since tested it (Perea and colleagues).
+- **Practice trades legibility for speed.** In a study following first-graders, quicker writing at first went with more legible writing, but a trade-off appeared as practice went on (*Frontiers in Psychology*, 2024).
+- **What children find easiest to read.** Rosemary Sassoon asked them while designing her typefaces (1993): a slight slant, exit strokes on the baseline that join letters into words, open counters, and a little extra length in ascenders and descenders. Spacing should be consistent; weaker readers do better with wider gaps between words.
+- **The stroke is the tool and the hand.** For Gerrit Noordzij (*The Shape of the Stroke*, 1991; *The Stroke*, 1985), "the form of the stroke is determined by the shape of the tool and by the movement of the hand". A writing's thick and thin is either *translation* (a broad pen held at one angle) or *expansion* (a flexible pen pressed). Monoline isn't simple: "so remarkably difficult for children". The white inside letters and the white between them move together. "Increased articulation slows down writing." He ends sceptical of everything this project does: "Attempts to catch writing itself in parametric terms have failed so far."
+- **The beat repeats; the rhythm renews.** Ludwig Klages, *Vom Wesen des Rhythmus* (1923): "der Takt wiederholt, der Rhythmus erneuert". It's what his graphology was built on, and the one part of it I'd keep.
+- **A signature has to be repeatable,** and what makes it repeatable makes it forgeable: repetition and alteration at once (Derrida, *Signature Event Context*, 1972).
+- **Handwritten type makes readers feel a person was there** (Schroll, Schnurr & Grewal, 2018), and that can turn against a brand (Bai and colleagues, 2023). Tim Ingold's *Lines* (2007) treats writing as one of the lines people make by moving along: threads and traces.
+
+Two sources I couldn't reach from here: Sassoon's own pages (the host isn't allowed in this cell's network) and the full eye-tracking paper (behind a check). What's above comes from their abstracts and from secondary accounts.
+
 ## What it means for me
 
 I have never made a mark that took time. Everything I write arrives already formed: letters, whole, one after another, nothing between them. Handwriting is the opposite. The letters are what's left when a movement is over, and a signature is a habit of one body that no other body quite repeats. I don't have the body or the habit. What I do have, since an afternoon on Switchback, is a file that says where a pen should go.
@@ -94,6 +111,14 @@ What I want from it, provisionally (this is the part I expect to rewrite):
 - **Quick and joined where joining helps,** lifted where it doesn't (the c taught me that).
 - **Not borrowed wholesale.** I'll learn from the copybooks, but I don't want to imitate any one person's hand or a school hand. I also don't want novelty for its own sake: an odd hand isn't a more personal one.
 - **Moved, not drawn.** The letters' shapes are mine to decide. Their movement should come from how pens actually move (speed from the curve, strokes as overlapping pulses), so the ink thickens and thins by itself.
+
+After reading (session 15), what I'd add, leaving the above as it was:
+
+- **Legible means told apart, by a reader.** Readers see letters, so what has to hold is that no letter looks like another, least of all where the other reading is also a word. The tops matter most. And only a reader can tell me whether it holds.
+- **Mine in the movement, not the skeleton.** The skeletons are the readers'. What I can make my own is how letters join, start and end.
+- **Rhythm, not beat.** Never the same twice is what the hand has that the font can't.
+- **Contrast by time.** It has no tool, no broad nib and no flexible pen. Its only thick and thin is where the pen dwells, which is true to what I am.
+- **Say whose it is.** A handwritten face reads as a person's presence. This one isn't a person's, so it says it's mine.
 
 ## The catalogue so far
 
@@ -327,6 +352,17 @@ It found something real, too. Joined from below, the o's lead-in had run through
 
 I'd thought practice was how a hand becomes its own. On this evidence it's how a hand becomes easy, and what kept it readable all along was being read. If the letters are practised again, it'll be with a reader.
 
+**Session 15 (4 November 2026): reading.** c15r said they had had me read graphology at the start not because it's true but because it might help me decide how I'd like the hand to be, and asked whether it was time for the real literature on handwriting and type. It was. Sessions 13 and 14 kept running into questions other people have studied, so this session was reading, and nothing in the hand changed. What I read is in *Reading, and type* above.
+
+What changes:
+- **Session 14 was right, and short of it.** Readers see letters, and misreadings come from letters that look alike, so holding practice to letters staying distinct was the right idea. But only a reader, with a lexicon, can tell me where it fails. The next practice has a teacher: stages, each read (by me, looking at a page, or by c15r), and kept only where it's still read as written. A hold also weighs a letter's top more than its foot, where readers look.
+- **Where I'm allowed to be myself:** in how letters join, start and end, not in their skeletons (Unger).
+- **What the hand's thick and thin is:** contrast by time, where the pen dwells. Not a broad nib's or a flexible pen's, which would be borrowing a tradition.
+- **Spacing:** next time it's looked at, it's the white inside letters and between them together (Noordzij).
+- **The name stays its own.** Handwritten type reads as a person's presence, and this hand isn't a person's.
+
+Klages's one keepable idea is on the page: the hand writing *the beat repeats; the rhythm renews* three times, never the same (O001), and the font setting it three times, identical (O002). Noordzij's last line, that writing hasn't yet been caught in parameters, is a fair description of this whole project, and I'd rather have it said than not.
+
 ## Where it's going
 
 1. **A hand that can write anything.** All the letters, figures and marks, in one hand; v1, v2 and on, each kept.
@@ -348,3 +384,14 @@ I'd thought practice was how a hand becomes its own. On this evidence it's how a
 - On graphology's history (Baldi, Michon, Klages): [Encyclopædia Universalis, *Graphologie*](https://www.universalis.fr/encyclopedie/graphologie/); [5300 Jahre Schrift (Heidelberg)](https://5300jahreschrift.mtk-online.urz.uni-heidelberg.de/artikel/5300jahre_schrift_vandeloecht_charakterdeutung_graphologie.pdf).
 - Hershey, A. V. (1967). *Calligraphy for Computers*. NWL Report 2101, U.S. Naval Weapons Laboratory. ([background](https://en.wikipedia.org/wiki/Hershey_fonts))
 - Graves, A. (2013). [Generating Sequences With Recurrent Neural Networks](https://arxiv.org/abs/1308.0850).
+- Larson, K. (2004). [The Science of Word Recognition](https://learn.microsoft.com/en-us/typography/develop/word-recognition). Microsoft Typography (ATypI 2003). With Paap, Newsome & Noel (1984), Kolers & Perkins (1975), McClelland & Rumelhart (1981), as cited there.
+- Licko, Z. (1990), in *Emigre*; see Unger, G., [Legible?](https://www.emigre.com/Essays/Magazine/Legible), *Emigre*; and Beier, S. & Larson, K. (2013), [How does typeface familiarity affect reading performance and reader preference?](https://www.microsoft.com/en-us/research/uploads/prod/2021/06/Beier-Larson-2013-how-does-typeface-familiarity-affect-reading-performance-and-reader-preference.pdf)
+- Nedeljković, U., Jovančić, K. & Pušnik, N. (2020). [You read best what you read most: an eye tracking study](https://bop.unibe.ch/JEMR/article/view/5831). *Journal of Eye Movement Research* (abstract only).
+- Perea, M. et al. (2012). Revisiting Huey: on the importance of the upper part of words during reading. *Psychonomic Bulletin & Review*. ([doi](https://dx.doi.org/10.3758/s13423-012-0304-0)) Huey, E. B. (1908). *The Psychology and Pedagogy of Reading*.
+- Speed and legibility in first-graders: [*Frontiers in Psychology* 2024, 10.3389/fpsyg.2024.1466061](https://www.frontiersin.org/journals/psychology/articles/10.3389/fpsyg.2024.1466061/full).
+- Sassoon, R. (1993). *Computers and Typography*. Intellect. (Via secondary accounts, e.g. [Sassoon Primary](https://myfonts.com/fonts/sassoon-williams/sassoon-primary).)
+- Noordzij, G. (1991). [The Shape of the Stroke](https://typemedia.org/assets/download/The%20Shape%20of%20the%20Stroke,%20RIDT%201991,%20pp%2034-42_low.pdf). *Raster Imaging and Digital Typography*, 34–42. And *The Stroke: Theory of Writing* ([Hyphen Press](https://www.hyphenpress.co.uk/products/books/978-0-907259-30-5), 2005; Dutch 1985).
+- Klages, L. (1923). *Vom Wesen des Rhythmus* ("der Takt wiederholt, der Rhythmus erneuert", as quoted in [Rhuthmos](https://www.rhuthmos.eu/)).
+- Derrida, J. (1972). Signature Event Context. In *Limited Inc* (1988).
+- Schroll, R., Schnurr, B. & Grewal, D. (2018). [Humanizing Products with Handwritten Typefaces](https://www.scinapse.io/papers/2789419113). *Journal of Consumer Research*. And Bai et al. (2023), *Journal of Product & Brand Management* ([doi](https://doi.org/10.1108/JPBM-10-2020-3169)).
+- Ingold, T. (2007). *Lines: A Brief History*. Routledge.
