@@ -109,18 +109,19 @@ button:focus-visible,a:focus-visible,canvas:focus-visible{outline:2px solid var(
     <h2><span>Yours to use · live, and to take away</span>The hand, the font, the book</h2>
     <div class="part write" id="write">
       <h3><span>One input · the hand, and type</span>Write in it</h3>
-      <textarea id="mark" spellcheck="false" maxlength="400" aria-label="Type here: the hand writes it, and the font sets it">Say what you mean, and the hand decides how it looks: I never said *she* stole my money. It took me ~~an afternoon~~ <ins>two days</ins> to see the <mark>e</mark>, and I <unsure>think</unsure> this one is **mine**.</textarea>
+      <textarea id="mark" spellcheck="false" maxlength="400" aria-label="Type here: the hand writes it, and the font sets it">Say what you mean, and the hand decides how it looks: I never said *she* stole my money. It took me ~~an afternoon~~ <ins>two days</ins> to see the e, and I <unsure>think</unsure> this <mark>one</mark> is **mine**.</textarea>
       <div class="marks" role="group" aria-label="Mark what you mean: select a word, then choose">
         <button data-mark="*|*">STRESS</button><button data-mark="**|**">STRONG</button><button data-mark="~~|~~">STRUCK</button><button data-mark="<ins>|</ins>">ADDED LATER</button><button data-mark="<q>|</q>">QUOTED</button><button data-mark="<mark>|</mark>">CIRCLED</button><button data-mark="`|`">EXACTLY</button><button data-mark="(|)">ASIDE</button><button data-mark="<unsure>|</unsure>">UNSURE</button><button data-mark="<care>|</care>">WITH CARE</button>
       </div>
       <p class="note">Type, or select a word and choose how to mark it. Markdown works (*stress*, **strong**, ~~struck~~, `exactly`, (an aside)), and so do elements for what markdown has no word for: &lt;ins&gt; &lt;del&gt; &lt;q&gt; &lt;mark&gt; &lt;small&gt; &lt;unsure&gt; &lt;care&gt;.</p>
+      <p class="note">Then three steps down from the hand, each keeping less of what you marked: the hand itself, then type for the web, then type in any app. Only the last two are text you can copy.</p>
       <div class="out">
-        <p class="way"><b>Written</b><span id="writeHand">by the hand</span></p>
+        <p class="way"><b>The hand</b><span id="writeHand">everything you marked, in time · not text</span></p>
         <canvas id="written" aria-label="What you typed, written by the hand. Tap to write it again."></canvas>
         <p id="writtenNote"></p>
       </div>
       <div class="out">
-        <div class="way"><b>Set in type</b><div class="ways" role="group" aria-label="How it's set"><button data-way="web" aria-pressed="true">WEB · FONT + CSS</button><button data-way="app" aria-pressed="false">ANY APP · FONT ALONE</button></div></div>
+        <div class="way"><b>In type</b><div class="ways" role="group" aria-label="How it's set"><button data-way="web" aria-pressed="true">WEB · FONT + CSS</button><button data-way="app" aria-pressed="false">ANY APP · FONT ALONE</button></div></div>
         <div id="typed" class="claude-hand" aria-live="polite"></div>
         <div class="ctl"><span>SIZE</span><input id="specSize" type="range" min="14" max="72" value="30" aria-label="Size"><button id="specJoins" aria-pressed="true">JOINS</button></div>
         <p class="note" id="wayNote"></p>

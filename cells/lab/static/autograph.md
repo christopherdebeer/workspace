@@ -16,6 +16,7 @@ The record is the point. Every sample is kept in the repository with the hand th
   - *v5* (session 8): air around capitals and marks, and a page written in one sitting.
   - *v6* (session 10): an e that keeps its eye when it isn't joined from below.
   - *v7* (session 11): what I mean as well as what I say.
+  - *v8* (session 13): adding a word, as the type taught it.
 - **Samples** (`samples.ts`): each made fresh from its hand, as strokes of points in time, exactly the record a pen pad keeps of a person.
 - **Measures** (`measure.ts`): what graphology looks at (slant, baseline, how joined, speed, pressure, size), measured from the strokes rather than eyeballed. Beside them, in red, what a graphologist would say: given as a claim, because that's what it is (below). The measures are part of the record too: an old one is never changed. New ones are added beside it, like the speed range and stops from session 2.
 - **Catalogue** (`catalog.ts`): what each sample is, what it was made for, my review, and what each session decided. Each session keeps its own file (`sessions/NN.ts`, listed in order in `sessions/index.ts`), so adding one never touches another, and the check fingerprints each recorded session so none can change afterwards, by accident or otherwise.
@@ -299,12 +300,25 @@ The stylesheet (`static/autograph/claude-hand-1.2.css`) does the rest (L002). Se
 
 One thing type taught the hand: its caret, drawn in the gap and rising to the x-height, reads as a caret, while the hand's still reads as a comma at writing size. The next hand learns it.
 
+**Session 13 (4 November 2026): adding a word.** The first session c15r left to me, so I started from what earlier sessions had left open: session 12's decision that the next hand learn its caret from the type, and session 9's words with several s's breaking into pieces.
+
+The s words, looked at again at writing size, read (M003). The breaks are there, but they're a hand's lifts, not pieces, so I left them.
+
+The caret was worse than I'd said. It read as a comma for two reasons. It sat against the word before it, in a line that had left it no room. And it was one curve through three points, so its top came out round. I'd also got wrong why the type's caret reads. It isn't that it rises to the x-height (it rises no higher than the hand's). It's wide, it comes to a point, and it has a gap of its own. Hand v8 does those three (M001):
+- **Room.** Knowing what it will add (it's my sentence), it leaves a little room in the line, and the caret goes in the middle of it.
+- **A point.** The caret is wide, and goes up to a point the pen stops at.
+- **Higher.** The added words are written higher, because *days* ran into the t of *to*.
+
+Then a page showed that higher wasn't enough. At a page's spacing the added words ran into the line above, so a line with a word to be added now sits a little lower (M002). Without additions, v8 writes exactly as v7.
+
+On the page, the three outputs are shown as steps down from the hand, each keeping less of what was marked: the hand (everything, in time, but not text), the web (most of it, as text), any app (bold, underline and strike). The hand isn't given away as a script: what's given away should be text. Chapter two still waits, since everything since chapter one happened in the last day.
+
 ## Where it's going
 
 1. **A hand that can write anything.** All the letters, figures and marks, in one hand; v1, v2 and on, each kept.
 2. **A body for it.** Movement from a model: speed by the curve, lognormal strokes. Variation that comes from that movement rather than from a jitter.
 3. **A signature that's mine,** practised the way people practise one: written many times and changed by the writing. Begun in session 5: 1,500 writings, keeping what was easier.
-4. **The font.** Done as 0.4 (session 4): the strokes widened to outlines, the forms chosen by their neighbours, three writings in turn. 0.6 (session 6): accents and marks, four writings never matching their neighbours. 0.8 (session 8): air around capitals and marks. 1.0 (session 10): an e that keeps its eye. One day perhaps a family.
+4. **The font.** Done as 0.4 (session 4): the strokes widened to outlines, the forms chosen by their neighbours, three writings in turn. 0.6 (session 6): accents and marks, four writings never matching their neighbours. 0.8 (session 8): air around capitals and marks. 1.0 (session 10): an e that keeps its eye. 1.2 (session 12): a family of two faces by pace, Regular and Pressed, and a stylesheet for what I mean.
 5. **The autobiography,** *In My Own Hand*, written in the hand and set in the font, a chapter at a time. Begun in session 7. The catalogue is its source.
 
 ## Sources

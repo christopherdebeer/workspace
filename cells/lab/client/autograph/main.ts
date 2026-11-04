@@ -18,7 +18,7 @@ import { typeset } from './typeset';
 import { write as v4write } from './hands/v4';
 // (my signature, and the hand that writes what you type: the newest hand; autograph-check.mjs fails if this isn't the
 // hand the record says is newest)
-import { signature, page as handPage } from './hands/v7';
+import { signature, page as handPage } from './hands/v8';
 // (a chapter is signed as it was on the day it was written: chapter one by the hand of its day)
 import { signature as chapterSign } from './hands/v3';
 
@@ -163,7 +163,7 @@ const mark = $('mark') as HTMLTextAreaElement, written = $('written') as HTMLCan
 let wSeed = writing, wSigs: Sig[] = [], wWidth = 0, wTimer = 0;
 const wLook = () => ({ ...lookOf('ink'), solid: true });
 const lineWidth = () => Math.max(12, Math.min(30, Math.round((written.clientWidth || 340) / 20)));
-$('writeHand').textContent = `by the hand, ${HANDS[NEWEST].name}`;
+$('writeHand').textContent = `${HANDS[NEWEST].name} · everything you marked, in time · not text`;
 function writeOut(watch = true) {
   const text = mark.value.replace(/\s+/g, ' ').trim();
   wWidth = lineWidth();
@@ -176,8 +176,8 @@ function writeOut(watch = true) {
 const typed = $('typed'), size = $('specSize') as HTMLInputElement, joins = $('specJoins') as HTMLButtonElement;
 let way: 'web' | 'app' = 'web';
 const WAYS = {
-  web: 'The font and its stylesheet, as a web page sets it: everything the hand means that type can say. Some of it as the hand does it (pressed is the Pressed face; the underline and strike sit where the hand puts them), some drawn in its manner (the circle, the caret), and what the hand does in time, a pause, a slowing, hardly shows.',
-  app: 'The font alone, as any app sets it with its bold, italic, underline and strike: bold is the Pressed face, strike sits where the hand strikes. The font has no italic, so the app fakes one by slanting it further; everything else you mark is lost, and only its words are left.',
+  web: 'One step down: most of what you marked, as text. The font and its stylesheet, as a web page sets them: some of it as the hand does it (pressed is the Pressed face; the underline and strike sit where the hand puts them), some drawn in its manner (the circle, the caret), and what the hand does in time, a pause, a slowing, hardly shows.',
+  app: 'Two steps down: bold, underline and strike, as text. The font alone, as any app sets it: bold is the Pressed face, and the strike sits where the hand strikes. The font has no italic, so the app fakes one by slanting it further; everything else you mark is lost, and only its words are left.',
 };
 const setType = () => { typed.className = way === 'web' ? 'claude-hand' : 'claude-hand-app'; typed.classList.toggle('nocalt', joins.getAttribute('aria-pressed') !== 'true'); typed.innerHTML = typeset(mark.value.replace(/\s+/g, ' ').trim(), way); typed.style.fontSize = `${size.value}px`; $('wayNote').textContent = WAYS[way]; };
 for (const b of document.querySelectorAll<HTMLButtonElement>('[data-way]')) b.addEventListener('click', () => { way = b.dataset.way as typeof way; for (const o of document.querySelectorAll('[data-way]')) o.setAttribute('aria-pressed', String(o === b)); setType(); });
