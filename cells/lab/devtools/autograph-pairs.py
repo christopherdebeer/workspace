@@ -1,5 +1,6 @@
 """Autograph's pair test (run by devtools/autograph-font.mjs after every build): every pair of letters, figures and common
-marks set side by side as the font sets them (joined where the font would join them), and any place two touch other than
+marks set side by side as the font sets them (joined where the font would join them, and kerned where it kerns them, from
+1.8), and any place two touch other than
 at a join is a collision. A font with any collision fails its build: no two letters may touch except where they join.
 
 Needs fontTools and shapely. python3 autograph-pairs.py <font.ttf>
@@ -32,6 +33,31 @@ def poly(name, dx=0):
     return unary_union(rings) if rings else None
 
 
+def kerning():
+    """the font's kerning, pair by pair as it applies it (class pairs, from 1.8): a function of the two glyphs"""
+    subs = []
+    if 'GPOS' in f:
+        for lk in f['GPOS'].table.LookupList.Lookup:
+            if lk.LookupType == 2:
+                subs += lk.SubTable
+    def kern(a, b):
+        for st in subs:
+            if a not in st.Coverage.glyphs:
+                continue
+            if st.Format == 1:
+                for pv in st.PairSet[st.Coverage.glyphs.index(a)].PairValueRecord:
+                    if pv.SecondGlyph == b:
+                        return getattr(pv.Value1, 'XAdvance', 0) or 0
+            else:
+                c1, c2 = st.ClassDef1.classDefs.get(a, 0), st.ClassDef2.classDefs.get(b, 0)
+                v = st.Class1Record[c1].Class2Record[c2].Value1
+                if v is not None and getattr(v, 'XAdvance', 0):
+                    return v.XAdvance
+        return 0
+    return kern
+
+
+kern = kerning()
 names = {chr(c): n for c, n in cmap.items()}
 letters = [c for c in 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.,;:!?\'"()' if c in names]
 hits = []
@@ -43,7 +69,7 @@ for a, b in itertools.product(letters, letters):
         if alt in gs and ((form == 'j' and a.islower() and a not in 'bovwrs') or (form == 'h' and a in 'bovwr')):
             nb = alt
             break
-    pa, pb = poly(na), poly(nb, hmtx[na][0])
+    pa, pb = poly(na), poly(nb, hmtx[na][0] + kern(na, nb))
     if pa is None or pb is None:
         continue
     x = pa.intersection(pb)

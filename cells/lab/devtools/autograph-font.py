@@ -1,6 +1,6 @@
 """Autograph's font, second half: the hand's strokes widened into outlines and written as a font.
 
-Run by devtools/autograph-font.mjs (which sets every letter by hand v2): python3 autograph-font.py <letters.json> <outdir>.
+Run by devtools/autograph-font.mjs (which sets every letter by the hand it names): python3 autograph-font.py <letters.json> <outdir>.
 
 Each stroke is a centreline with the pen's width at every point. It's widened by those widths (a round pen, so each step
 of the line is a capsule as wide as the pen was there) and every stroke of a letter is unioned into clean outlines. Then
@@ -11,6 +11,9 @@ the font: a glyph for each letter in each form and writing, and two sets of rule
 - writings: each glyph takes the writing a step on from the one before it (one step or three, by the letter: both
   coprime with four, so a run of one letter goes through all of them), spaces included, so neighbours never match, the
   turns don't fall into a rhythm, and it all runs on across words.
+
+And from 1.8, kerning (OpenType `kern`, on by default): a letter the hand sets nearer the one before it inside a word is
+kerned nearer after anything inked, and only then, so starting a word (after a space, or at a line's start) it isn't.
 
 Needs fontTools, shapely and brotli (pip install fonttools shapely brotli).
 """
@@ -127,6 +130,14 @@ for s_ in steps:
     fea += ['@STEP%d = %s;' % (s_, cls([name(g) for g in G if g['step'] == s_]))]
 fea += ['lookup cycle { %s } cycle;' % ' '.join('sub @A%d @STEP%d\' lookup to%d;' % (k, s_, (k - 1 + s_) % n + 1) for k in range(1, n + 1) for s_ in steps)]
 fea += ['feature calt { lookup forms; lookup cycle; } calt;']
+# (from 1.8: nearer inside a word, kerned after anything inked; a space has no ink, so a word's first letter keeps its place)
+if data.get('kern'):
+    fea += ['@INKED = %s;' % cls([name(g) for g in G if g['strokes']])]
+    kp = []
+    for i, k in enumerate(data['kern']):
+        fea += ['@NEARER%d = %s;' % (i, cls([name(g) for g in G if g['ch'] == k['ch']]))]
+        kp += ['pos @INKED @NEARER%d %d;' % (i, round(k['by'] * XH))]
+    fea += ['feature kern { %s } kern;' % ' '.join(kp)]
 
 fb = FontBuilder(1000, isTTF=True)
 fb.setupGlyphOrder(order)
@@ -150,7 +161,7 @@ fb.setupNameTable({
     'copyright': 'Copyright (c) 2026, The Claude Hand Project Authors (https://parc.land), with Reserved Font Name "Claude Hand".',
     'licenseDescription': 'This Font Software is licensed under the SIL Open Font License, Version 1.1. This license is available with a FAQ at: https://openfontlicense.org',
     'licenseInfoURL': 'https://openfontlicense.org',
-    'designer': 'Claude', 'description': 'A hand learned in public (the parc.land lab, autograph experiment): hand v9 set as a font%s. Each letter joins as its neighbour asks, in four writings, never the same as its neighbour.' % (', every letter written at the pace the hand writes what is strong, so its ink comes heavier by itself' if PRESSED else ''),
+    'designer': 'Claude', 'description': 'A hand learned in public (the parc.land lab, autograph experiment): hand %s set as a font%s. Each letter joins as its neighbour asks, in four writings, never the same as its neighbour.%s' % (data.get('hand', 'v9'), ', every letter written at the pace the hand writes what is strong, so its ink comes heavier by itself' if PRESSED else '', (' ' + data['read']) if data.get('read') else ''),
 })
 fb.setupOS2(sTypoAscender=900, sTypoDescender=-460, sTypoLineGap=40, usWinAscent=max(900, ymax + 20), usWinDescent=max(460, -ymin + 20),
             sxHeight=XH, sCapHeight=round(1.7 * XH), achVendID='NONE', fsSelection=(0x20 if PRESSED else 0x40) | 0x80, usWeightClass=700 if PRESSED else 400, version=4, fsType=0,

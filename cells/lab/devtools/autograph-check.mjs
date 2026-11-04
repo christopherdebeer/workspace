@@ -11,8 +11,8 @@ import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 const here = dirname(fileURLToPath(import.meta.url)), lab = join(here, '..');
 const outfile = join(tmpdir(), `autograph-${process.pid}.mjs`);
-await build({ stdin: { contents: `export { MADE } from './client/autograph/samples'; export { CATALOG, SESSIONS, HANDS, NEWEST } from './client/autograph/catalog'; export { SESSION_FILES } from './client/autograph/sessions'; export { measure } from './client/autograph/measure'; export { KNOWS, letter, formsOf } from './client/autograph/hands/v2'; export { KNOWS as KNOWS4, letter as letter4, formsOf as formsOf4 } from './client/autograph/hands/v4'; export { BOOK } from './client/autograph/autobiography'; export { KNOWS as KNOWS5, letter as letter5, formsOf as formsOf5 } from './client/autograph/hands/v5'; export { KNOWS as KNOWS6, letter as letter6, formsOf as formsOf6 } from './client/autograph/hands/v6'; export { KNOWS as KNOWS7, letter as letter7, formsOf as formsOf7, STYLE as STYLE7, MANNERS as MANNERS7 } from './client/autograph/hands/v7'; export { typeset } from './client/autograph/typeset'; export { KNOWS as KNOWS9, letter as letter9, formsOf as formsOf9, STYLE as STYLE9, MANNERS as MANNERS9 } from './client/autograph/hands/v9';`, resolveDir: lab, loader: 'ts' }, bundle: true, platform: 'node', format: 'esm', outfile, logLevel: 'warning' });
-const { MADE, CATALOG, SESSIONS, HANDS, NEWEST, SESSION_FILES, measure, KNOWS, letter, formsOf, KNOWS4, letter4, formsOf4, BOOK, KNOWS5, letter5, formsOf5, KNOWS6, letter6, formsOf6, KNOWS7, letter7, formsOf7, STYLE7, MANNERS7, typeset, KNOWS9, letter9, formsOf9, STYLE9, MANNERS9 } = await import(outfile);
+await build({ stdin: { contents: `export { MADE } from './client/autograph/samples'; export { CATALOG, SESSIONS, HANDS, NEWEST } from './client/autograph/catalog'; export { SESSION_FILES } from './client/autograph/sessions'; export { measure } from './client/autograph/measure'; export { KNOWS, letter, formsOf } from './client/autograph/hands/v2'; export { KNOWS as KNOWS4, letter as letter4, formsOf as formsOf4 } from './client/autograph/hands/v4'; export { BOOK } from './client/autograph/autobiography'; export { KNOWS as KNOWS5, letter as letter5, formsOf as formsOf5 } from './client/autograph/hands/v5'; export { KNOWS as KNOWS6, letter as letter6, formsOf as formsOf6 } from './client/autograph/hands/v6'; export { KNOWS as KNOWS7, letter as letter7, formsOf as formsOf7, STYLE as STYLE7, MANNERS as MANNERS7 } from './client/autograph/hands/v7'; export { typeset } from './client/autograph/typeset'; export { KNOWS as KNOWS9, letter as letter9, formsOf as formsOf9, STYLE as STYLE9, MANNERS as MANNERS9 } from './client/autograph/hands/v9'; export { KNOWS as KNOWS12, letter as letter12, formsOf as formsOf12, STYLE as STYLE12, MANNERS as MANNERS12 } from './client/autograph/hands/v12';`, resolveDir: lab, loader: 'ts' }, bundle: true, platform: 'node', format: 'esm', outfile, logLevel: 'warning' });
+const { MADE, CATALOG, SESSIONS, HANDS, NEWEST, SESSION_FILES, measure, KNOWS, letter, formsOf, KNOWS4, letter4, formsOf4, BOOK, KNOWS5, letter5, formsOf5, KNOWS6, letter6, formsOf6, KNOWS7, letter7, formsOf7, STYLE7, MANNERS7, typeset, KNOWS9, letter9, formsOf9, STYLE9, MANNERS9, KNOWS12, letter12, formsOf12, STYLE12, MANNERS12 } = await import(outfile);
 const fpFile = join(lab, 'client/autograph/fingerprints.json');
 const fps = existsSync(fpFile) ? JSON.parse(readFileSync(fpFile, 'utf8')) : {};
 const record = process.argv.includes('--record');
@@ -39,6 +39,9 @@ const FONTS = [
   { key: 'font 1.2 pressed', files: 'pressed-1.2', src: () => [' ', ...KNOWS7].flatMap((ch) => formsOf7(ch).flatMap((f) => [1, 2, 3, 4].map((a) => letter7(ch, f, a, { ...STYLE7, pace: STYLE7.pace * MANNERS7.strong.pace })))) },
   { key: 'font 1.4', files: '1.4', src: () => [' ', ...KNOWS9].flatMap((ch) => formsOf9(ch).flatMap((f) => [1, 2, 3, 4].map((a) => letter9(ch, f, a, STYLE9)))) },
   { key: 'font 1.4 pressed', files: 'pressed-1.4', src: () => [' ', ...KNOWS9].flatMap((ch) => formsOf9(ch).flatMap((f) => [1, 2, 3, 4].map((a) => letter9(ch, f, a, { ...STYLE9, pace: STYLE9.pace * MANNERS9.strong.pace })))) },
+  // (from 1.8, spaced as the hand is: the letters as the hand sets them, before the font draws an s back and kerns it)
+  { key: 'font 1.8', files: '1.8', src: () => [' ', ...KNOWS12].flatMap((ch) => formsOf12(ch).flatMap((f) => [1, 2, 3, 4].map((a) => letter12(ch, f, a, STYLE12)))) },
+  { key: 'font 1.8 pressed', files: 'pressed-1.8', src: () => [' ', ...KNOWS12].flatMap((ch) => formsOf12(ch).flatMap((f) => [1, 2, 3, 4].map((a) => letter12(ch, f, a, { ...STYLE12, pace: STYLE12.pace * MANNERS12.strong.pace })))) },
 ];
 for (const F of FONTS) {
   const fp = createHash('sha256').update(JSON.stringify(F.src())).digest('hex').slice(0, 16);
@@ -56,7 +59,7 @@ for (const c of BOOK.chapters) {
 }
 // (the font's stylesheets: each version's, fingerprinted as it's kept, so a changed one is a new version; and every
 // sample set with one, fingerprinted as it's set, so it always comes out as it did)
-const SHEETS = ['1.2', '1.4'];
+const SHEETS = ['1.2', '1.4', '1.8'];
 for (const v of SHEETS) {
   const f = join(lab, `static/autograph/claude-hand-${v}.css`), key = `stylesheet ${v}`;
   if (!existsSync(f)) { changed.push(`${key} (missing)`); continue; }
