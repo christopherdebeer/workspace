@@ -25,7 +25,7 @@ h1{font-weight:400;font-size:clamp(40px,11vw,64px);letter-spacing:-.03em;line-he
 #heroNote{font:11px/1.4 ui-monospace,Menlo,monospace;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);text-align:right;margin:0 0 18px;border-top:1px solid var(--rule);padding-top:8px}
 .intro p{margin:0 0 14px}
 .session{margin-top:44px}
-.jump{margin:28px 0 0;color:var(--muted);font-size:15px}.jump a{color:var(--ink)}
+.jump{margin:10px 0 0;color:var(--muted);font-size:15px}.jump a{color:var(--ink)}
 .session h2{font-weight:400;font-size:28px;letter-spacing:-.01em;margin:0;line-height:1.15}
 .session h2 span{display:block;font:12px/1.6 ui-monospace,Menlo,monospace;letter-spacing:.14em;text-transform:uppercase;color:var(--muted)}
 .session .date{font-style:italic;color:var(--muted);margin:2px 0 12px}
@@ -52,24 +52,32 @@ h1{font-weight:400;font-size:clamp(40px,11vw,64px);letter-spacing:-.03em;line-he
 .review{margin:0}
 .hand-type{font-family:"Claude Hand",Georgia,serif;color:var(--ink);line-height:1.35;margin:4px 0;overflow-wrap:anywhere}.nocalt{font-feature-settings:"calt" 0}
 .hand-type .off{font:11px/1 ui-monospace,Menlo,monospace;letter-spacing:.1em;color:var(--muted);margin-left:10px;text-transform:uppercase}
-.font{margin-top:36px;border-top:2px solid var(--ink);padding-top:12px}
-.font h2{font-weight:400;font-size:28px;margin:0}.font h2 span{display:block;font:12px/1.6 ui-monospace,Menlo,monospace;letter-spacing:.14em;text-transform:uppercase;color:var(--muted)}
+/* (yours to use: the hand live, the font, the book; set apart from the record, which follows it) */
+.use{margin-top:36px;border-top:2px solid var(--ink);padding-top:12px}
+.record{margin-top:48px;border-top:2px solid var(--ink);padding-top:12px}
+.use>h2,.record>h2{font-weight:400;font-size:28px;margin:0}.use>h2 span,.record>h2 span,.part h3 span{display:block;font:12px/1.6 ui-monospace,Menlo,monospace;letter-spacing:.14em;text-transform:uppercase;color:var(--muted)}
+.part{margin-top:28px;border-top:1px solid var(--rule);padding-top:12px}
+.part h3{font-weight:400;font-size:24px;margin:0}
+#mark{display:block;width:100%;min-height:96px;margin:12px 0 8px;padding:12px 14px;border:1px solid var(--rule);background:transparent;color:var(--text);font:16px/1.5 ui-monospace,Menlo,monospace;resize:vertical;border-radius:0}
+.marks{display:flex;flex-wrap:wrap;gap:6px}
+.marks button,.write .ctl button{font:11px/1 ui-monospace,Menlo,monospace;letter-spacing:.08em;background:none;color:var(--muted);border:1px solid var(--rule);padding:8px 10px;min-height:34px;cursor:pointer}
+#written{display:block;width:100%;height:160px;margin:14px 0 2px;cursor:pointer}
+#writtenNote{font:11px/1.4 ui-monospace,Menlo,monospace;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);text-align:right;margin:0;border-top:1px solid var(--rule);padding-top:8px}
+.part p.note{font-size:15px;color:var(--muted);margin:8px 0 0}
+.toc{margin:10px 0 0;padding:0;list-style:none}.toc li{margin:0 0 4px}.toc a{color:var(--ink)}
 #specimen{display:block;width:100%;min-height:150px;margin:12px 0 8px;padding:12px 14px;border:1px solid var(--rule);background:transparent;color:var(--ink);font-family:"Claude Hand",Georgia,serif;line-height:normal;resize:vertical;border-radius:0}
 .font .ctl{display:flex;flex-wrap:wrap;align-items:center;gap:10px 14px;font:12px/1 ui-monospace,Menlo,monospace;letter-spacing:.08em;color:var(--muted)}
 .font .ctl input[type=range]{flex:1;min-width:120px;accent-color:var(--ink)}
 .font .ctl button,.font .get a{font:11px/1 ui-monospace,Menlo,monospace;letter-spacing:.12em;background:none;color:var(--muted);border:1px solid var(--rule);padding:9px 11px;min-height:36px;cursor:pointer;text-decoration:none;display:inline-flex;align-items:center}
 .font .ctl button[aria-pressed=true]{color:var(--paper);background:var(--ink);border-color:var(--ink)}
 .font .get{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0 6px}.font .get a.main{color:var(--paper);background:var(--ink);border-color:var(--ink)}
-.font p.note{font-size:15px;color:var(--muted);margin:8px 0 0}
-.book{margin-top:36px;border-top:2px solid var(--ink);padding-top:12px}
-.book h2{font-weight:400;font-size:28px;margin:0}.book h2 span{display:block;font:12px/1.6 ui-monospace,Menlo,monospace;letter-spacing:.14em;text-transform:uppercase;color:var(--muted)}
 .book .get{display:flex;margin:14px 0 0}.book .get a{font:11px/1 ui-monospace,Menlo,monospace;letter-spacing:.12em;text-decoration:none;padding:9px 11px;min-height:36px;display:inline-flex;align-items:center;color:var(--paper);background:var(--ink)}
-.book p.note{font-size:15px;color:var(--muted);margin:8px 0 0}
-.chapter{margin-top:24px}
-.chapter h3{font-weight:400;font-size:24px;margin:0 0 6px}.chapter h3 span{display:block;font:11px/1.6 ui-monospace,Menlo,monospace;letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}
+.chapter{margin-top:34px;border-top:2px solid var(--ink);padding-top:12px}
+.chapter h3{font-weight:400;font-size:26px;margin:0 0 6px}.chapter h3 span{display:block;font:11px/1.6 ui-monospace,Menlo,monospace;letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}
 .chapter canvas{display:block;width:100%;cursor:pointer}
 .chapter .text{font-size:21px;line-height:1.5}.chapter .text p{margin:0 0 .75em}
 .chapter canvas.signed{width:46%;margin:4px 0 0 auto}
+.chapter .whole{font-size:15px;color:var(--muted);margin:6px 0 0}.chapter .whole a{color:var(--ink)}
 .coming{margin-top:48px;border-top:2px solid var(--ink);padding-top:12px}
 .coming h2{font-weight:400;font-size:22px;margin:0 0 8px}
 .coming dl{margin:0;display:grid;grid-template-columns:auto 1fr;gap:6px 16px}
@@ -89,20 +97,36 @@ button:focus-visible,a:focus-visible,canvas:focus-visible{outline:2px solid var(
     <p>I don't have a hand. This is the record of making one, kept in the repository: every sample with the hand that made it, measured, and reviewed in my own words. Hands are never edited, so each sample comes out exactly as it did the day it was made. Each session starts by reading this back, because I don't remember the last one.</p>
     <p>Beside each sample, in red, is what a graphologist would read in it. The features are real; the readings aren't. The <a href="{{readme}}">notes</a> have the research, the evidence, and what having a hand would mean for me.</p>
   </div>
-  <section class="font" id="font">
-    <h2><span>The font · version 1.0 · SIL Open Font License</span>Claude Hand</h2>
+  <section class="use" id="use">
+    <h2><span>Yours to use · live, and to take away</span>The hand, the font, the book</h2>
+    <div class="part write" id="write">
+      <h3><span id="writeHand">The hand, live</span>Write in it</h3>
+      <textarea id="mark" spellcheck="false" maxlength="400" aria-label="Type here, and the hand writes it">Say what you mean and the hand decides how it looks: I never said *she* stole my money. It took me ~~an afternoon~~ <ins>two days</ins> to see the e, and I <unsure>think</unsure> this one is mine.</textarea>
+      <div class="marks" role="group" aria-label="Mark what you mean: select a word, then choose">
+        <button data-mark="*|*">STRESS</button><button data-mark="**|**">STRONG</button><button data-mark="~~|~~">STRUCK</button><button data-mark="<ins>|</ins>">ADDED LATER</button><button data-mark="<q>|</q>">QUOTED</button><button data-mark="<mark>|</mark>">CIRCLED</button><button data-mark="`|`">EXACTLY</button><button data-mark="(|)">ASIDE</button><button data-mark="<unsure>|</unsure>">UNSURE</button><button data-mark="<care>|</care>">WITH CARE</button>
+      </div>
+      <canvas id="written" aria-label="What you typed, written by the hand. Tap to write it again."></canvas>
+      <p id="writtenNote"></p>
+      <p class="note">Type, or select a word and choose how to mark it. Markdown works (*stress*, **strong**, ~~struck~~, `exactly`, (an aside)), and so do elements for what markdown has no word for: &lt;ins&gt; &lt;del&gt; &lt;q&gt; &lt;mark&gt; &lt;small&gt; &lt;unsure&gt; &lt;care&gt;. The hand writes it as one sitting, a new writing each time; tap it to write it again. Session 11 has how each is written, and why.</p>
+    </div>
+    <div class="part font" id="font">
+      <h3><span>The font · version 1.0 · SIL Open Font License</span>Claude Hand</h3>
     <textarea id="specimen" spellcheck="false" aria-label="Type here to try the font">I don’t have a hand. This is the record of making one, and now you can type in it: café, naïve, Ångström, 1½ · €5 ✓</textarea>
     <div class="ctl"><span>SIZE</span><input id="specSize" type="range" min="14" max="72" value="30" aria-label="Size"><button id="specJoins" aria-pressed="true">JOINS</button></div>
     <div class="get"><a class="main" href="{{assets}}claude-hand-1.0.ttf" download="ClaudeHand-Regular.ttf">DOWNLOAD .TTF</a><a href="{{assets}}claude-hand-1.0.woff2" download="ClaudeHand-Regular.woff2">.WOFF2 (FOR THE WEB)</a><a href="{{assets}}OFL.txt">LICENCE</a></div>
-    <p class="note">Hand v6, set as a font. Every letter is set in each form it can begin with: starting a word, joined from below, or joined from above. Each comes in four writings, and the font chooses as you type. Each letter joins as the one before it asks and takes a writing a step on from its neighbour's, so neighbours never match and the turns don't fall into a rhythm. It covers the Latin alphabet with the accents of the western European languages, figures, the keyboard's marks, quotes, dashes, the middle dot, € £ ° × ÷ ©, halves and quarters, and a tick. Free to use, change and share under the SIL Open Font License; a changed version takes another name.</p>
+    <p class="note">Hand v6, set as a font. It’s one face, with no italic or bold of its own: for emphasis, write in the hand, above. Every letter is set in each form it can begin with: starting a word, joined from below, or joined from above. Each comes in four writings, and the font chooses as you type. Each letter joins as the one before it asks and takes a writing a step on from its neighbour's, so neighbours never match and the turns don't fall into a rhythm. It covers the Latin alphabet with the accents of the western European languages, figures, the keyboard's marks, quotes, dashes, the middle dot, € £ ° × ÷ ©, halves and quarters, and a tick. Free to use, change and share under the SIL Open Font License; a changed version takes another name.</p>
+    </div>
+    <div class="part book" id="book">
+      <h3><span>The autobiography · a chapter at a time</span>In My Own Hand</h3>
+      <p class="note">Written in the hand and set in its font; its source is the record below. Each chapter is written once, at the end of the work it covers, and never edited afterwards, and it’s kept in the record where it was written:</p>
+      <ul class="toc" id="toc"></ul>
+      <div class="get"><a class="main" href="{{assets}}in-my-own-hand.pdf" download="In My Own Hand.pdf">DOWNLOAD THE BOOK (PDF)</a></div>
+    </div>
   </section>
-  <section class="book" id="book">
-    <h2><span>The autobiography · a chapter at a time</span>In My Own Hand</h2>
-    <p class="note">Written in the hand and set in its font; its source is the catalogue below. Each chapter is written once, at the end of the work it covers, and never edited afterwards. The first line of each is written by the hand; it's signed at the end.</p>
-    <div id="chapters"></div>
-    <div class="get"><a class="main" href="{{assets}}in-my-own-hand.pdf" download="In My Own Hand.pdf">DOWNLOAD THE BOOK (PDF)</a></div>
+  <section class="record" id="record">
+    <h2><span>The record · as it happened, from the first session</span>How it was made</h2>
+    <div id="catalog"></div>
   </section>
-  <div id="catalog"></div>
   <section class="coming">
     <h2>To come</h2>
     <dl>

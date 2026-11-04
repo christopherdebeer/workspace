@@ -1,7 +1,8 @@
 /**
- * Autograph: the notebook. My signature as it stands, then the catalogue, from the first session on (a link jumps to
- * the latest): each session's
- * findings and decisions, and its samples, each writing itself out as it comes into view (tap to write it again), with
+ * Autograph: the notebook. My signature as it stands; then what's yours to use, set apart from the record (the hand,
+ * writing what you type as you mark it; the font, to type in and download; the book, to download); then the record,
+ * from the first session on (a link jumps to the latest): each session's findings and decisions, a chapter of the book
+ * where one was written, and its samples, each writing itself out as it comes into view (tap to write it again), with
  * its measures, what a graphologist would say, what it was made for, and my review.
  *
  * `preview` shows only the signature, writing itself out, for the lab's index.
@@ -13,8 +14,9 @@ import { Measures, measure, reading } from './measure';
 import { MADE } from './samples';
 import { BOOK, firstLine } from './autobiography';
 import { write as v4write } from './hands/v4';
-// (my signature, by the newest hand: autograph-check.mjs fails if this isn't the hand the record says is newest)
-import { signature } from './hands/v7';
+// (my signature, and the hand that writes what you type: the newest hand; autograph-check.mjs fails if this isn't the
+// hand the record says is newest)
+import { signature, page as handPage } from './hands/v7';
 // (a chapter is signed as it was on the day it was written: chapter one by the hand of its day)
 import { signature as chapterSign } from './hands/v3';
 
@@ -103,27 +105,26 @@ function card(e: Entry) {
   return { el, size, write };
 }
 
-// (the autobiography: each chapter's first line written by the hand, the rest set in the font, signed at the end with
-// the signature as it stands)
+// (the autobiography: each chapter kept in the record where it was written, its first line written by the hand, the
+// rest set in the font, signed at the end; what's yours to use lists the chapters and has the book as a PDF)
 const chapters: { first: HTMLCanvasElement; firstSig: Sig[]; signed: HTMLCanvasElement; signSig: Sig[] }[] = [];
-for (const c of BOOK.chapters) {
+function chapter(c: (typeof BOOK.chapters)[number]) {
   const el = document.createElement('article');
-  el.className = 'chapter';
+  el.className = 'chapter'; el.id = `chapter-${c.n}`;
   const first = firstLine(c);
-  el.innerHTML = `<h3><span>Chapter ${c.n} · ${esc(c.covers)} · written in session ${c.session}, ${esc(c.date)}</span>${esc(c.title)}</h3>
+  el.innerHTML = `<h3><span>${esc(BOOK.title)} · chapter ${c.n} · ${esc(c.covers)} · written in session ${c.session}, ${esc(c.date)}</span>${esc(c.title)}</h3>
     <canvas class="first" aria-label="${esc(first)} (written by the hand)"></canvas>
     <div class="hand-type text" style="font-family:'Claude Hand ${c.font}',Georgia,serif">${c.text.map((p, i) => `<p>${esc(i ? p : p.slice(first.length).trim())}</p>`).join('')}</div>
-    <canvas class="signed" aria-label="Signed: Claude"></canvas>`;
-  $('chapters').append(el);
+    <canvas class="signed" aria-label="Signed: Claude"></canvas>
+    <p class="whole"><a href="#book">The whole book, as a PDF ↑</a></p>`;
   const ch = { first: el.querySelector('canvas.first') as HTMLCanvasElement, firstSig: [v4write(first, c.seed)], signed: el.querySelector('canvas.signed') as HTMLCanvasElement, signSig: [chapterSign(c.n)] };
   chapters.push(ch);
   ch.first.addEventListener('click', () => replay(ch.first, ch.firstSig, () => lookOf('ink')));
   ch.signed.addEventListener('click', () => replay(ch.signed, ch.signSig, () => lookOf('ink')));
+  return el;
 }
+$('toc').innerHTML = BOOK.chapters.map((c) => `<li><a href="#chapter-${c.n}">Chapter ${c.n}, <i>${esc(c.title)}</i> (${esc(c.covers)}), in session ${c.session} ↓</a></li>`).join('');
 const sizeBook = () => { for (const ch of chapters) { sized(ch.first, ch.firstSig, 90); sized(ch.signed, ch.signSig, 90); paint(ch.first, ch.firstSig, lookOf('ink')); paint(ch.signed, ch.signSig, lookOf('ink')); } };
-sizeBook();
-const bookSeen = new IntersectionObserver((es) => { for (const e of es) if (e.isIntersecting) { const ch = chapters.find((c) => c.first === e.target || c.signed === e.target); if (ch) replay(e.target as HTMLCanvasElement, e.target === ch.first ? ch.firstSig : ch.signSig, () => lookOf('ink')); bookSeen.unobserve(e.target); } }, { threshold: 0.5 });
-for (const ch of chapters) { bookSeen.observe(ch.first); bookSeen.observe(ch.signed); }
 
 // (the catalogue, from the first session on, as it happened; a link at the top for the latest)
 const list = $('catalog'), cards: ReturnType<typeof card>[] = [];
@@ -139,14 +140,57 @@ for (const s of SESSIONS) {
   sec.innerHTML = `<h2><span>Session ${s.n}</span> ${esc(s.title)}</h2><p class="date">${esc(s.date)}</p><p>${esc(s.summary)}</p>
     <div class="decided"><b>Decided</b><ol>${s.decided.map((d) => `<li>${esc(d)}</li>`).join('')}</ol></div>`;
   list.append(sec);
+  // (a chapter of the book, in the session it was written in: after the work it covers, before that session's samples)
+  for (const c of BOOK.chapters.filter((x) => x.session === s.n)) sec.append(chapter(c));
   for (const e of CATALOG.filter((x) => x.session === s.n)) { const c = card(e); sec.append(c.el); cards.push(c); }
 }
 for (const c of cards) c.size();
+sizeBook();
+const bookSeen = new IntersectionObserver((es) => { for (const e of es) if (e.isIntersecting) { const ch = chapters.find((c) => c.first === e.target || c.signed === e.target); if (ch) replay(e.target as HTMLCanvasElement, e.target === ch.first ? ch.firstSig : ch.signSig, () => lookOf('ink')); bookSeen.unobserve(e.target); } }, { threshold: 0.5 });
+for (const ch of chapters) { bookSeen.observe(ch.first); bookSeen.observe(ch.signed); }
 // (each writes itself out as it comes into view, once)
 const seen = new IntersectionObserver((es) => { for (const e of es) if (e.isIntersecting) { cards.find((c) => c.el === e.target)?.write(); seen.unobserve(e.target); } }, { threshold: 0.35 });
 for (const c of cards) seen.observe(c.el);
-addEventListener('resize', () => { sized(hero, heroSigs, q.has('preview') ? innerHeight * 0.8 : 260); paint(hero, heroSigs, heroLook()); for (const c of cards) c.size(); sizeBook(); });
-matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { paint(hero, heroSigs, heroLook()); for (const c of cards) c.size(); });
+
+// (the hand, live: what's typed, marked for what's meant, written by the newest hand in one sitting, its lines broken
+// to the column; a new writing each time it's tapped)
+const mark = $('mark') as HTMLTextAreaElement, written = $('written') as HTMLCanvasElement;
+let wSeed = writing, wSigs: Sig[] = [], wWidth = 0, wTimer = 0;
+const wLook = () => ({ ...lookOf('ink'), solid: true });
+const lineWidth = () => Math.max(12, Math.min(30, Math.round((written.clientWidth || 340) / 20)));
+$('writeHand').textContent = `The hand, live · ${HANDS[NEWEST].name}`;
+function writeOut(watch = true) {
+  const text = mark.value.replace(/\s+/g, ' ').trim();
+  wWidth = lineWidth();
+  wSigs = text ? handPage(text, wWidth, wSeed) : [];
+  if (!wSigs.length) { written.style.height = '64px'; written.getContext('2d')!.clearRect(0, 0, written.width, written.height); $('writtenNote').textContent = ''; return; }
+  sized(written, wSigs, 560);
+  if (watch) replay(written, wSigs, wLook); else paint(written, wSigs, wLook());
+  $('writtenNote').textContent = `${HANDS[NEWEST].name} · writing ${wSeed} · ${wSigs.length} line${wSigs.length === 1 ? '' : 's'} · tap to write it again`;
+}
+mark.addEventListener('input', () => { clearTimeout(wTimer); wTimer = window.setTimeout(() => writeOut(), 450); });
+written.addEventListener('click', () => { wSeed = 1 + Math.floor(Math.random() * 999999); writeOut(); });
+// (marking: select a word (or put the caret in one) and choose; the selection stays in the box while a mark is chosen)
+for (const b of document.querySelectorAll<HTMLButtonElement>('[data-mark]')) {
+  b.addEventListener('pointerdown', (e) => e.preventDefault());
+  b.addEventListener('click', () => {
+    const [open, close] = b.dataset.mark!.split('|'), v = mark.value, inWord = (c: string | undefined) => !!c && /[\p{L}\p{N}'’]/u.test(c);
+    let s = mark.selectionStart, t = mark.selectionEnd;
+    if (s === t) { while (s > 0 && inWord(v[s - 1])) s--; while (t < v.length && inWord(v[t])) t++; }
+    else { while (s < t && /\s/.test(v[s])) s++; while (t > s && /\s/.test(v[t - 1])) t--; } // (a selection's own spaces stay outside the mark)
+    if (s === t) return;
+    mark.setRangeText(open + v.slice(s, t) + close, s, t, 'end');
+    mark.dispatchEvent(new Event('input'));
+  });
+}
+const writtenSeen = new IntersectionObserver((es) => { if (es.some((e) => e.isIntersecting)) { writeOut(); writtenSeen.disconnect(); } }, { threshold: 0.2 });
+writtenSeen.observe(written);
+
+addEventListener('resize', () => {
+  sized(hero, heroSigs, q.has('preview') ? innerHeight * 0.8 : 260); paint(hero, heroSigs, heroLook()); for (const c of cards) c.size(); sizeBook();
+  if (wSigs.length) { if (lineWidth() !== wWidth) writeOut(false); else { sized(written, wSigs, 560); paint(written, wSigs, wLook()); } }
+});
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { paint(hero, heroSigs, heroLook()); for (const c of cards) c.size(); sizeBook(); if (wSigs.length) paint(written, wSigs, wLook()); });
 
 // (the font: a specimen to type into, its size and its joins to try)
 const spec = $('specimen') as HTMLTextAreaElement, size = $('specSize') as HTMLInputElement, joins = $('specJoins') as HTMLButtonElement;
@@ -154,4 +198,4 @@ const setSize = () => { spec.style.fontSize = `${size.value}px`; };
 size.addEventListener('input', setSize); setSize();
 joins.addEventListener('click', () => { const on = joins.getAttribute('aria-pressed') !== 'true'; joins.setAttribute('aria-pressed', String(on)); spec.classList.toggle('nocalt', !on); });
 
-(window as unknown as { __autograph: unknown }).__autograph = { samples: CATALOG.length, sessions: SESSIONS.length };
+(window as unknown as { __autograph: unknown }).__autograph = { samples: CATALOG.length, sessions: SESSIONS.length, written: () => ({ lines: wSigs.length, width: wWidth, seed: wSeed }) };

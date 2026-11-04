@@ -80,9 +80,9 @@ const handsBlock = md.slice(md.indexOf('- **Hands**'), md.indexOf('- **Samples**
 const named = Object.keys(HANDS).filter((h) => h !== 'font').map((h) => (h === 'scribble' ? '*Before letters*' : `*${h}*`));
 const at = named.map((n) => handsBlock.indexOf(n));
 ok(at.every((x, i) => x >= 0 && (i === 0 || x > at[i - 1])), `the notes list every hand, in the order made (${named.join(' ')})`);
-// (the page's signature is by the newest hand)
-const page = readFileSync(join(lab, 'client/autograph/main.ts'), 'utf8'), heroHand = /import \{ signature \} from '\.\/hands\/(\w+)'/.exec(page)?.[1];
-ok(heroHand === NEWEST, `the page signs with the newest hand (${heroHand}; the record's newest is ${NEWEST})`);
+// (the page's signature, and the hand that writes what's typed on it, are the newest hand)
+const page = readFileSync(join(lab, 'client/autograph/main.ts'), 'utf8'), heroHand = /import \{ signature[^}]*\} from '\.\/hands\/(\w+)'/.exec(page)?.[1];
+ok(heroHand === NEWEST, `the page signs, and writes what's typed, with the newest hand (${heroHand}; the record's newest is ${NEWEST})`);
 if (added) writeFileSync(fpFile, JSON.stringify(fps, null, 2) + '\n');
 ok(!changed.length, changed.length ? `samples no longer as made: ${changed.join(', ')}` : `every sample comes out exactly as it was made${added ? ` (${added} newly fingerprinted)` : ''}`);
 process.exit(bad ? 1 : 0);
