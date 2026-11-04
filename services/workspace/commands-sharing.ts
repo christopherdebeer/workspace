@@ -179,11 +179,16 @@ export function createSharingCommands(build: DepsBuilder): Pick<WorkspaceCommand
       // `public` is the universal audience (anyone, including anonymous): read-only,
       // never write — an open-write public grant would be an unbounded ingress.
       if (input.to === PUBLIC && mode !== 'read') throw new Error('public shares are read-only');
+      // Sharing the whole slice is never a default: a share that forgot its key
+      // must not open everything. The caller names it with key "*".
+      if (typeof input.key !== 'string' || !input.key.trim()) {
+        throw new Error(`key is required: a fact key, a prefix ending in "*", or "${WHOLE_SLICE}" for your whole slice`);
+      }
       const { grants } = build(ctx);
       const grant: Grant = {
         owner,
         grantee: input.to,
-        key: input.key ?? WHOLE_SLICE,
+        key: input.key,
         mode,
         createdAt: new Date().toISOString(),
       };

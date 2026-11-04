@@ -32,7 +32,9 @@ at all: CloudFront and S3, never the Lambda.
 ```
 index.ts          the Lambda: the index, the redirects, the namespace's misses
 experiments.ts    the registry: id, title, group, blurb, page, preview query, README, presets
-md.ts             markdown to HTML (the READMEs)
+md.ts             markdown to HTML (the READMEs: images, and a paragraph of only images is a gallery)
+views.mjs         makes an experiment's README pictures: `node cells/lab/views.mjs <id>` runs the views it
+                  registers in client/<id>/views.mjs, writes static/<id>/v-<name>.jpg, rewrites the README's gallery
 client/main.ts    the one bundle: picks the experiment its page names, imports it lazily
 client/<id>/      an experiment's source
 client/kit/       what experiments share: seeded randomness (rng.ts), the pencil (pencil.ts)
@@ -54,11 +56,17 @@ The bundler keeps each `import()` lazy, so a page runs only its own experiment.
 
 ## Deploy
 
-From the repo root: `node scripts/cell-sync.mjs push lab --deploy --message "…"`. The
-experiments' devtools run against the lab's bundle (`EXPERIMENT=<id>`, Mistwood by default):
-`node cells/lab/devtools/<tool>.mjs`.
+From the repo root: `node scripts/cell-sync.mjs push lab --deploy --message "…"`. It needs a
+token: from a session that already holds the substrate (the Substate MCP), mint one directly
+with `auth.mintToken` (`scope: "cells:create read:workspace write:workspace"`, a label, a
+lifetime) and put it in `PARC_TOKEN` or `/tmp/parc-token.json` as `{"access_token": …}`; the
+device flow is only for a session with no substrate access at all. The
+experiments' devtools run against the lab's bundle (`EXPERIMENT=<id>`, Mistwood by default; `READY=__<id>`
+names the global the page reports itself on, `__mistwood` by default): `node cells/lab/devtools/<tool>.mjs`.
 
 ## The experiments
 
 - **Mistwood** (`client/mistwood/`): a walk through a seeded wood in fog. It was its own cell
   (`@c15r/mistwood`); that cell now only redirects here, keeping the query.
+- **Marble Run** (`client/marbles/`): a roster of twelve glass marbles (each its own seeded look and name) released from a gate down wide obstacle boards (pegs, deflectors, splitters, chicanes, spinners, funnels, gates, bends) in a seeded run that grows as you build it, to a funnel and a single-file channel where the result sits at rest; themes (`theme.ts`: atelier by day, nocturne by lamplight) change the place and the materials under a race; rigid spheres with spin against floors, walls, pegs and turning arms (`physics.ts`, `track.ts`, tested on their own), a chase camera, a shadow map.
+- **Technic** (`client/technic/`): Bricks evolved: beams, pins and axles on a pegboard, gears, wheels, ramps and marbles, a motor and a hub; a position-based solver (`sim.ts`) runs it. Builds are kept and started from (a start screen), pieces come from a drawer; a drop explains itself, pins and axles come with the drop, gears are magnetic; missions with a bell and a cup; always alive, with pause and rewind; builds are pieces (`keep`). Rules and solver tested on their own (`devtools/technic.test.mjs`).

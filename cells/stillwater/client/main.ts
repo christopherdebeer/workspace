@@ -32,6 +32,20 @@ import { PROGRAMS } from './render';
 import { program } from './gl';
 import { layDrops, liveCount, Pad, Planting, Pond, seeded } from './world';
 
+// (no page zoom on a phone: iOS Safari zooms on a pinch, and on a quick double tap anywhere off the canvas, and keeps
+// that zoom across reloads; the pond zooms its own way. The second tap's touchend is what it zooms on: the pointer
+// events still come)
+{
+  for (const g of ['gesturestart', 'gesturechange', 'gestureend']) document.addEventListener(g, (e) => e.preventDefault(), { passive: false } as AddEventListenerOptions);
+  let last = 0, lx = 0, ly = 0;
+  document.addEventListener('touchend', (e) => {
+    const t = e.changedTouches[0], now = e.timeStamp;
+    if (t && now - last < 350 && Math.hypot(t.clientX - lx, t.clientY - ly) < 40 && e.cancelable) e.preventDefault();
+    last = now; lx = t?.clientX ?? 0; ly = t?.clientY ?? 0;
+  }, { passive: false });
+  document.addEventListener('dblclick', (e) => e.preventDefault(), { passive: false });
+}
+
 const canvas = document.getElementById('pond') as HTMLCanvasElement;
 const ui = new Overlay();
 const mathUI = new ChallengeUI();

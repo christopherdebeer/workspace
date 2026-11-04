@@ -48,8 +48,11 @@ export class DynamicCellControlPlane extends Construct {
     this.codeBucket = new s3.Bucket(this, 'CodeBucket', {
       blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
       encryption: s3.BucketEncryption.S3_MANAGED,
-      removalPolicy: cdk.RemovalPolicy.DESTROY,
-      autoDeleteObjects: true,
+      // Every cell's source, builds and per-user data live here: retained, and
+      // never emptied by the stack. (Dropping autoDeleteObjects is safe: CDK
+      // removes the bucket's auto-delete tag first, and the handler only ever
+      // empties a bucket that still carries it.)
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
       // Browsers PUT blobs straight to presigned URLs (the data layer's
       // large-upload path — the edge caps request bodies, S3 does not).
       cors: [

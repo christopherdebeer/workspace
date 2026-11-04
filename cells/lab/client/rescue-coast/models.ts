@@ -1,0 +1,784 @@
+/**
+ * The things, modelled after the concept boards: toy-like and glossy, chunky enough to read on a phone.
+ *
+ * - **the lifeboat**: a navy hull, red below the waterline, RNLI in white along the bow; the wheelhouse, the gunwale and
+ *   the pennant in the boat's own colour (orange, red, blue, yellow, green: the boat-choice cards); a tall black mast
+ *   with its radar bar and blue beacon; lifebuoys, rails, an upper steering position for the crew.
+ * - **people**: big-headed, round, in lifejackets; the crew in yellow with white helmets; arms that move (wave, reach,
+ *   climb).
+ * - **little boats**: rowing dinghies, kayaks and sailing dinghies in bright colours.
+ * - **the coast**: faceted granite boulders (a small library, drawn many times), lighthouses with red bands, cottages,
+ *   the lifeboat station and its slipway, gorse, the harbour's quay, the finish banner.
+ */
+import { Builder, M, SRC, WHITE, join, smooth, type Mesh, type RGB, type V3 } from './shapes';
+import { seeded } from '../kit/rng';
+
+const NAVY: RGB = [0.05, 0.11, 0.3], BOOT: RGB = [0.75, 0.09, 0.07], DECK: RGB = [0.34, 0.38, 0.41], BLACK: RGB = [0.06, 0.06, 0.07];
+const STEEL: RGB = [0.85, 0.87, 0.88], GLASS: RGB = [0.06, 0.1, 0.15], ORANGE: RGB = [1, 0.38, 0.04], ROPE: RGB = [0.98, 0.82, 0.2];
+
+// ─── the lifeboat ───
+
+/** the hull's shape: t from 0 at the transom to 1 at the stem */
+export const HULL = { z0: -5.4, z1: 5.6 };
+const hb = (t: number) => t < 0.5 ? 2.0 + 0.1 * Math.sin((t / 0.5) * Math.PI / 2) : 2.1 * Math.pow(Math.max(0, 1 - Math.pow((t - 0.5) / 0.5, 2.2)), 0.6);
+export const sheer = (t: number) => 1.42 + 0.24 * t + 0.55 * t ** 4;
+const keel = (t: number) => t < 0.7 ? -0.62 - 0.23 * Math.min(1, t / 0.25) : -0.85 + 1.5 * ((t - 0.7) / 0.3) ** 1.8;
+export const tAt = (z: number) => (z - HULL.z0) / (HULL.z1 - HULL.z0);
+/** the deck's height at a point along the boat */
+export const deckAt = (z: number) => sheer(Math.max(0, Math.min(1, tAt(z)))) - 0.1;
+/** the deck's half width at a point along the boat */
+export const deckHalf = (z: number) => Math.max(0, hb(Math.max(0, Math.min(1, tAt(z)))) - 0.25);
+
+function section(t: number): V3[] {
+  const b = hb(t), s = sheer(t), k = keel(t), z = HULL.z0 + t * (HULL.z1 - HULL.z0), chine = Math.min(-0.02, k * 0.25 + 0.05);
+  const half: [number, number][] = [[0, k], [0.45 * b, k + 0.17 + 0.1 * t], [0.86 * b, chine], [0.97 * b, chine + 0.4], [b, (chine + s) / 2 + 0.25], [b, s]];
+  return [...half.slice(1).reverse().map(([x, y]) => [-x, y, z] as V3), ...half.map(([x, y]) => [x, y, z] as V3)];
+}
+
+export function lifeboat(): Mesh {
+  const b = new Builder();
+  // (the hull: lofted sections; red below the boot-top, navy above)
+  const rows: V3[][] = [];
+  for (let i = 0; i <= 26; i++) rows.push(section(Math.min(1, i / 26) * 0.999));
+  b.use(0, SRC.OWN, M.PAINT);
+  b.loft(rows, (p) => (p[1] < 0.22 ? BOOT : NAVY));
+  // (the transom: fanned shut)
+  const tr = rows[0], mid: V3 = [0, (keel(0) + sheer(0)) / 2, HULL.z0];
+  for (let i = 0; i < tr.length - 1; i++) b.tri(mid, tr[i + 1], tr[i], (tr[i][1] + tr[i + 1][1]) / 2 < 0.22 ? BOOT : NAVY);
+  b.tri(mid, tr[0], tr[tr.length - 1], NAVY);
+  // (the deck, grey, a hand's width below the gunwale)
+  const deck: V3[][] = [];
+  for (let i = 0; i <= 24; i++) { const t = (i / 24) * 0.985, z = HULL.z0 + t * (HULL.z1 - HULL.z0), w = Math.max(0.02, hb(t) - 0.12), y = sheer(t) - 0.1; deck.push([[w, y, z], [0, y + 0.03, z], [-w, y, z]]); }
+  b.use(0, SRC.OWN, M.MATTE); b.loft(deck, () => DECK);
+  // (the gunwale in the boat's colour, a black rubbing strake under it)
+  const edge = (side: number, dy: number, out: number) => rows.map((r) => { const p = r[side < 0 ? 0 : r.length - 1]; return [p[0] + side * out, p[1] + dy, p[2]] as V3; });
+  for (const side of [-1, 1]) {
+    const top = edge(side, 0.08, 0.02), rub = edge(side, -0.32, 0.07);
+    b.use(0, SRC.A, M.PAINT);
+    for (let i = 0; i < top.length - 1; i++) b.tube(top[i], top[i + 1], 0.16, WHITE, 8);
+    // (a broad black rubbing strake along the hull under the gunwale, its fastenings showing)
+    b.use(0, SRC.OWN, M.SOFT);
+    for (let i = 0; i < rub.length - 2; i++) b.tube(rub[i], rub[i + 1], 0.17, [0.08, 0.1, 0.13], 9);
+  }
+  b.use(0, SRC.A, M.PAINT); b.tube([-1.95, sheer(0) + 0.08, HULL.z0 + 0.02], [1.95, sheer(0) + 0.08, HULL.z0 + 0.02], 0.16, WHITE, 8);
+  // (RNLI along the bow, both sides, following the hull's flare)
+  b.use(0, SRC.OWN, M.PAINT);
+  for (const side of [-1, 1]) letters(b, 'RNLI', side, 0.3, 0.42, 0.1);
+  // (tyre fenders hung on short lines along both sides)
+  b.use(0, SRC.OWN, M.SOFT);
+  for (const side of [-1, 1]) for (const z of [-4.1, -2.6, -1.1, 3.35]) {
+    const t = tAt(z), x = side * (hb(t) + 0.13), y = sheer(t) - 0.62;
+    b.basis([x, y, z], [0, 0, 1], [0, 1, 0], [side, 0, 0]);
+    b.torus([0, 0, 0], 0.27, 0.13, () => BLACK, 14, 6);
+    b.at();
+    b.tube([x, y + 0.36, z], [side * (hb(t) - 0.02), sheer(t) + 0.06, z], 0.025, ROPE, 4);
+  }
+  // ─── the wheelhouse: tall and chunky, its corners rounded, windows framed all round ───
+  const wz = -0.9, wy = deckAt(wz), WH = 1.02, WX = 1.6, WZ = 1.95;
+  b.use(0, SRC.A, M.PAINT);
+  b.roundBox([0, wy + WH, wz], [WX, WH, WZ], 0.34, WHITE, 5);
+  // (a darker plinth where it meets the deck)
+  b.use(0, SRC.OWN, M.PAINT); b.roundBox([0, wy + 0.1, wz], [WX + 0.04, 0.1, WZ + 0.04], 0.08, [0.15, 0.17, 0.2], 2);
+  // (windows: dark glass, a black frame proud of the wall)
+  const pane = (c: V3, u: V3, v: V3, n: V3, w: number, h: number) => {
+    const P = (a: number, bb: number, out: number): V3 => [c[0] + u[0] * a + v[0] * bb + n[0] * out, c[1] + u[1] * a + v[1] * bb + n[1] * out, c[2] + u[2] * a + v[2] * bb + n[2] * out];
+    b.use(0, SRC.OWN, M.WINDOW);
+    b.quad(P(-w, -h, 0.012), P(w, -h, 0.012), P(w, h, 0.012), P(-w, h, 0.012), GLASS);
+    b.use(0, SRC.OWN, M.PAINT);
+    const f = 0.06, d = 0.05;
+    for (const [a0, a1, b0, b1] of [[-w - f, w + f, h, h + f], [-w - f, w + f, -h - f, -h], [-w - f, -w, -h, h], [w, w + f, -h, h]]) {
+      b.quad(P(a0, b0, d), P(a1, b0, d), P(a1, b1, d), P(a0, b1, d), BLACK);
+    }
+  };
+  const wy0 = wy + 1.35, wh = 0.36;
+  for (const x of [-1.0, 0, 1.0]) pane([x, wy0, wz + WZ + 0.005], [1, 0, 0], [0, 1, 0], [0, 0, 1], 0.4, wh);
+  for (const side of [-1, 1]) for (const z of [wz - 1.25, wz, wz + 1.2]) pane([side * (WX + 0.005), wy0, z], [0, 0, -side], [0, 1, 0], [side, 0, 0], 0.46, wh);
+  for (const x of [-0.75, 0.75]) pane([x, wy0, wz - WZ - 0.005], [-1, 0, 0], [0, 1, 0], [0, 0, -1], 0.38, wh);
+  // (the roof: pale, with an upper steering position at its front — a chunky coaming in the boat's colour and a windscreen)
+  const ry = wy + WH * 2;
+  b.use(0, SRC.OWN, M.PAINT); b.roundBox([0, ry + 0.05, wz], [WX + 0.1, 0.07, WZ + 0.1], 0.07, [0.92, 0.92, 0.9], 3);
+  b.use(0, SRC.A, M.PAINT);
+  b.roundBox([0, ry + 0.34, wz + WZ - 0.12], [WX - 0.05, 0.3, 0.14], 0.1, WHITE, 3);
+  for (const side of [-1, 1]) b.roundBox([side * (WX - 0.08), ry + 0.34, wz + 0.55], [0.12, 0.3, 1.25], 0.1, WHITE, 3);
+  b.use(0, SRC.OWN, M.GLASS); b.quad([-1.3, ry + 0.64, wz + WZ - 0.1], [1.3, ry + 0.64, wz + WZ - 0.1], [1.3, ry + 1.02, wz + WZ - 0.3], [-1.3, ry + 1.02, wz + WZ - 0.3], [0.2, 0.3, 0.36]);
+  b.use(0, SRC.OWN, M.GLASS);
+  for (const [x0, z0, x1, z1] of [[-1.6, -2.75, 1.6, -2.75], [-1.6, -2.75, -1.6, 0.6], [1.6, -2.75, 1.6, 0.6]] as const) b.tube([x0, ry + 0.75, wz + z0 + 0.9], [x1, ry + 0.75, wz + z1 + 0.9], 0.05, STEEL, 6);
+  for (const [x, z] of [[-1.6, -1.85], [1.6, -1.85], [0, -1.85]]) b.tube([x, ry + 0.1, wz + z], [x, ry + 0.75, wz + z], 0.045, STEEL, 6);
+  // (lifebuoys on the wheelhouse sides, a searchlight)
+  b.use(0, SRC.OWN, M.PAINT);
+  for (const side of [-1, 1]) {
+    b.basis([side * (WX + 0.06), wy + 0.72, wz - 0.2], [0, 0, 1], [0, 1, 0], [side, 0, 0]);
+    b.torus([0, 0, 0], 0.38, 0.12, (i) => (Math.floor(i / 2) % 2 ? WHITE : ORANGE), 16, 6);
+    b.at();
+  }
+  b.at(0.95, ry + 0.66, wz + WZ - 0.12); b.lathe([[0.12, 0], [0.16, 0.18], [0.2, 0.32], [0.2, 0.42], [0, 0.44]], [0.2, 0.2, 0.22], 10); b.at();
+  // ─── the mast: black, tall, with its radar bar, beacon and lights; the pennant in the boat's colour ───
+  const mz = wz - 1.0, MH = 2.5;
+  b.use(0, SRC.OWN, M.PAINT);
+  for (const side of [-1, 1]) b.tube([side * 0.8, ry + 0.1, mz], [side * 0.48, ry + MH, mz + 0.15], 0.13, BLACK, 8);
+  for (const y of [1.0, 1.9]) b.tube([-0.75 + y * 0.12, ry + y, mz + y * 0.06], [0.75 - y * 0.12, ry + y, mz + y * 0.06], 0.08, BLACK, 6);
+  b.roundBox([0, ry + MH + 0.1, mz + 0.15], [1.05, 0.1, 0.3], 0.06, BLACK, 2);
+  b.roundBox([0, ry + MH + 0.3, mz + 0.18], [0.85, 0.07, 0.16], 0.05, [0.93, 0.93, 0.93], 2);
+  b.tube([0, ry + MH + 0.36, mz + 0.15], [0, ry + MH + 1.15, mz + 0.15], 0.06, BLACK, 6);
+  for (const side of [-1, 1]) b.tube([side * 0.8, ry + MH + 0.2, mz + 0.15], [side * 0.8, ry + MH + 0.9, mz + 0.15], 0.03, BLACK, 4);
+  b.use(0, SRC.OWN, M.LIT);
+  b.at(0, ry + MH + 0.36, mz + 0.45); b.lathe([[0.15, 0], [0.15, 0.24], [0.07, 0.32], [0, 0.34]], [0.25, 0.5, 1], 10); b.at();
+  b.sphere([0, ry + MH + 1.2, mz + 0.15], 0.09, [1, 1, 0.92], [1, 1, 1], 4, 6);
+  b.sphere([1.0, ry + MH + 0.08, mz + 0.5], 0.08, [0.2, 1, 0.3], [1, 1, 1], 3, 5); b.sphere([-1.0, ry + MH + 0.08, mz + 0.5], 0.08, [1, 0.2, 0.15], [1, 1, 1], 3, 5);
+  pennant(b, [0, ry + MH + 1.05, mz + 0.15], 1.1, 0.48);
+  // ─── the aft deck: rails, a tow post, a coil of line ───
+  b.use(0, SRC.OWN, M.GLASS);
+  const ay = sheer(0) + 0.82;
+  for (const side of [-1, 1]) {
+    b.tube([side * 1.9, ay, HULL.z0 + 0.2], [side * 1.95, ay, wz - 2.2], 0.045, STEEL, 6);
+    for (const z of [HULL.z0 + 0.2, -3.6, wz - 2.2]) b.tube([side * 1.93, deckAt(z), z], [side * 1.93, ay, z], 0.04, STEEL, 6);
+  }
+  b.tube([-1.9, ay, HULL.z0 + 0.2], [1.9, ay, HULL.z0 + 0.2], 0.045, STEEL, 6);
+  // (the bow's rail, the pulpit)
+  const bowRail: V3[] = [];
+  for (let i = 0; i <= 8; i++) { const z = 2.4 + (i / 8) * 2.7, t = tAt(z), w = Math.max(0.05, hb(t) - 0.15); bowRail.push([w, sheer(t) + 0.75, z]); }
+  for (const side of [-1, 1]) for (let i = 0; i < bowRail.length - 1; i++) b.tube([bowRail[i][0] * side, bowRail[i][1], bowRail[i][2]], [bowRail[i + 1][0] * side, bowRail[i + 1][1], bowRail[i + 1][2]], 0.045, STEEL, 6);
+  for (const i of [0, 4, 8]) for (const side of [-1, 1]) b.tube([bowRail[i][0] * side, bowRail[i][1] - 0.75, bowRail[i][2]], [bowRail[i][0] * side, bowRail[i][1], bowRail[i][2]], 0.04, STEEL, 6);
+  b.use(0, SRC.OWN, M.PAINT);
+  b.tube([0, deckAt(-4.6), -4.6], [0, deckAt(-4.6) + 0.55, -4.6], 0.13, BLACK, 8);
+  b.basis([-1.0, deckAt(-4.5) + 0.06, -4.5], [1, 0, 0], [0, 0, 1], [0, 1, 0]);
+  b.use(0, SRC.OWN, M.SOFT);
+  for (let k = 0; k < 3; k++) b.torus([0, 0, k * 0.07], 0.32 - k * 0.04, 0.05, () => ROPE, 14, 4);
+  b.at();
+  return smooth(b.done(), 0.75);
+}
+
+// ─── the inshore lifeboat: a rigid inflatable, fast and light ───
+
+/** a tube swept along a path (its radius at each point), capped with a dome at each end */
+function sweep(b: Builder, path: V3[], r: (i: number) => number, col: RGB, segs = 14) {
+  const rows: V3[][] = path.map((c, i) => {
+    const a = path[Math.max(0, i - 1)], d = path[Math.min(path.length - 1, i + 1)];
+    let t: V3 = [d[0] - a[0], d[1] - a[1], d[2] - a[2]];
+    const tl = Math.hypot(...t) || 1; t = [t[0] / tl, t[1] / tl, t[2] / tl];
+    let n: V3 = [-t[1] * t[0], 1 - t[1] * t[1], -t[1] * t[2]];
+    const nl = Math.hypot(...n) || 1; n = [n[0] / nl, n[1] / nl, n[2] / nl];
+    const bb: V3 = [t[1] * n[2] - t[2] * n[1], t[2] * n[0] - t[0] * n[2], t[0] * n[1] - t[1] * n[0]];
+    return Array.from({ length: segs }, (_, k) => { const q = (k / segs) * Math.PI * 2, cq = Math.cos(q) * r(i), sq = Math.sin(q) * r(i); return [c[0] + bb[0] * cq + n[0] * sq, c[1] + bb[1] * cq + n[1] * sq, c[2] + bb[2] * cq + n[2] * sq] as V3; });
+  });
+  b.loft(rows, () => col, true);
+  for (const i of [0, path.length - 1]) b.sphere(path[i], r(i) * 0.98, col, [1, 1, 1], 6, segs);
+}
+/** the RIB's tube: its middle line's half width and height along it (z from the transom at -4.9 to the bow at 5.2) */
+const RIB = { z0: -4.9, z1: 5.2, mid: 1.2, w: 1.72, r: 0.5 };
+const ribHalf = (z: number) => z < RIB.mid ? RIB.w : RIB.w * Math.sqrt(Math.max(0, 1 - ((z - RIB.mid) / (RIB.z1 - RIB.mid)) ** 2));
+const ribTubeY = (z: number) => 0.84 + 0.36 * Math.max(0, (z - RIB.mid) / (RIB.z1 - RIB.mid)) ** 1.5;
+export function inshore(): Mesh {
+  const b = new Builder();
+  // (the tube: in the crew's colour, all round from one quarter to the other, round the bow; a black rubbing strip along it)
+  const path: V3[] = [];
+  for (let i = 0; i <= 14; i++) { const z = RIB.z0 + (i / 14) * (RIB.mid - RIB.z0); path.push([RIB.w, ribTubeY(z), z]); }
+  for (let i = 1; i < 18; i++) { const a = (i / 18) * Math.PI, z = RIB.mid + Math.sin(a) * (RIB.z1 - RIB.mid); path.push([Math.cos(a) * RIB.w, ribTubeY(z), z]); }
+  for (let i = 0; i <= 14; i++) { const z = RIB.mid - (i / 14) * (RIB.mid - RIB.z0); path.push([-RIB.w, ribTubeY(z), z]); }
+  b.use(0, SRC.A, M.SOFT); sweep(b, path, (i) => RIB.r * (1 - 0.15 * Math.sin((Math.min(path.length - 1, Math.max(0, i - 14)) / 18) * Math.PI) * (i > 14 && i < 32 ? 1 : 0)), WHITE);
+  b.use(0, SRC.OWN, M.SOFT);
+  sweep(b, path.map(([x, y, z]) => { const l = Math.hypot(x, z - (z > RIB.mid ? RIB.mid : z)) || 1; return [x + (x / l) * 0.42, y - 0.12, z + (z > RIB.mid ? ((z - RIB.mid) / l) * 0.42 : 0)] as V3; }), () => 0.1, BLACK, 8);
+  // (the hull under it: a deep V, navy, red below the waterline)
+  const rows: V3[][] = [];
+  for (let i = 0; i <= 22; i++) {
+    const z = RIB.z0 + (i / 22) * (RIB.z1 - 0.15 - RIB.z0), w = Math.max(0.04, ribHalf(z) - 0.2), k = z < 1.8 ? -0.45 : -0.45 + 1.15 * ((z - 1.8) / (RIB.z1 - 1.8)) ** 1.6;
+    const half: [number, number][] = [[0, k], [0.5 * w, k + 0.22], [0.95 * w, 0.28], [w, 0.62]];
+    rows.push([...half.slice(1).reverse().map(([x, y]) => [-x, y, z] as V3), ...half.map(([x, y]) => [x, y, z] as V3)]);
+  }
+  b.use(0, SRC.OWN, M.PAINT); b.loft(rows, (p) => (p[1] < 0.12 ? BOOT : NAVY));
+  const tr = rows[0], mid: V3 = [0, 0.1, RIB.z0];
+  for (let i = 0; i < tr.length - 1; i++) b.tri(mid, tr[i + 1], tr[i], NAVY);
+  // (the deck, the console amidships with its screen, two jockey seats behind it)
+  b.use(0, SRC.OWN, M.MATTE);
+  b.loft(Array.from({ length: 16 }, (_, i) => { const z = RIB.z0 + 0.1 + (i / 15) * (RIB.z1 - 0.9 - RIB.z0), w = Math.max(0.05, ribHalf(z) - 0.35); return [[w, 0.6, z], [0, 0.62, z], [-w, 0.6, z]] as V3[]; }), () => DECK);
+  b.use(0, SRC.OWN, M.PAINT); b.roundBox([0, 1.15, 0.35], [0.62, 0.55, 0.55], 0.14, WHITE, 3);
+  b.use(0, SRC.A, M.PAINT); b.roundBox([0, 1.72, 0.35], [0.66, 0.05, 0.59], 0.04, WHITE, 2);
+  b.use(0, SRC.OWN, M.GLASS); b.quad([-0.55, 1.75, 0.82], [0.55, 1.75, 0.82], [0.5, 2.2, 0.62], [-0.5, 2.2, 0.62], [0.2, 0.3, 0.36]);
+  b.use(0, SRC.OWN, M.SOFT); for (const x of [-0.36, 0.36]) b.roundBox([x, 1.0, -0.6], [0.22, 0.4, 0.28], 0.12, [0.12, 0.13, 0.15], 3);
+  // (RNLI on the tubes)
+  b.use(0, SRC.OWN, M.PAINT);
+  for (const side of [-1, 1]) b.text('RNLI', [side * (RIB.w + RIB.r + 0.015), ribTubeY(0) - 0.24, side > 0 ? 0.84 : -0.84], [0, 0, -side * 0.07], [0, 0.07, 0], [side * 0.02, 0, 0], WHITE);
+  // (the A-frame aft: black, its beacon and lights, the pennant; twin outboards on the transom)
+  b.use(0, SRC.OWN, M.PAINT);
+  for (const side of [-1, 1]) b.tube([side * 1.3, 0.6, -4.15], [side * 0.85, 2.75, -3.95], 0.08, BLACK, 8);
+  b.tube([-0.88, 2.7, -3.95], [0.88, 2.7, -3.95], 0.08, BLACK, 8);
+  b.sphere([0.45, 2.88, -3.95], 0.2, WHITE, [1, 0.6, 1], 5, 10);
+  b.use(0, SRC.OWN, M.LIT); b.at(-0.35, 2.78, -3.95); b.lathe([[0.12, 0], [0.12, 0.2], [0.06, 0.27], [0, 0.29]], [0.25, 0.5, 1], 10); b.at();
+  b.use(0, SRC.OWN, M.PAINT); b.tube([0, 2.78, -3.95], [0, 3.5, -3.95], 0.035, BLACK, 5);
+  pennant(b, [0, 3.45, -3.95], 0.9, 0.38);
+  b.use(0, SRC.OWN, M.PAINT);
+  for (const x of [-0.55, 0.55]) { b.roundBox([x, 1.0, -5.15], [0.24, 0.42, 0.3], 0.1, [0.16, 0.17, 0.19], 3); b.tube([x, 0.6, -5.2], [x, -0.35, -5.25], 0.08, [0.2, 0.2, 0.22], 6); }
+  return smooth(b.done(), 0.75);
+}
+
+// ─── the harbour launch: broad and steady, its wheelhouse forward, an open working deck aft ───
+
+const LAUNCH = { z0: -5.0, z1: 5.3 };
+const lb = (t: number) => t < 0.6 ? 2.12 + 0.05 * Math.sin((t / 0.6) * Math.PI / 2) : 2.17 * Math.pow(Math.max(0, 1 - Math.pow((t - 0.6) / 0.4, 2.4)), 0.55);
+const lsheer = (t: number) => 1.22 + 0.16 * t + 0.5 * t ** 4;
+const lkeel = (t: number) => t < 0.7 ? -0.7 - 0.2 * Math.min(1, t / 0.25) : -0.9 + 1.55 * ((t - 0.7) / 0.3) ** 1.8;
+const ltAt = (z: number) => Math.max(0, Math.min(1, (z - LAUNCH.z0) / (LAUNCH.z1 - LAUNCH.z0)));
+const ldeckAt = (z: number) => lsheer(ltAt(z)) - 0.1;
+export function launch(): Mesh {
+  const b = new Builder();
+  const rows: V3[][] = [];
+  for (let i = 0; i <= 26; i++) {
+    const t = Math.min(1, i / 26) * 0.999, w = lb(t), s = lsheer(t), k = lkeel(t), z = LAUNCH.z0 + t * (LAUNCH.z1 - LAUNCH.z0), chine = Math.min(-0.05, k * 0.3);
+    const half: [number, number][] = [[0, k], [0.5 * w, k + 0.2], [0.9 * w, chine], [w, (chine + s) / 2], [w, s]];
+    rows.push([...half.slice(1).reverse().map(([x, y]) => [-x, y, z] as V3), ...half.map(([x, y]) => [x, y, z] as V3)]);
+  }
+  b.use(0, SRC.OWN, M.PAINT); b.loft(rows, (p) => (p[1] < 0.2 ? BOOT : NAVY));
+  const tr = rows[0], mid: V3 = [0, 0.3, LAUNCH.z0];
+  for (let i = 0; i < tr.length - 1; i++) b.tri(mid, tr[i + 1], tr[i], (tr[i][1] + tr[i + 1][1]) / 2 < 0.2 ? BOOT : NAVY);
+  b.tri(mid, tr[0], tr[tr.length - 1], NAVY);
+  // (the deck; the gunwale in the crew's colour; a fat black fender all round, transom too)
+  const deck: V3[][] = [];
+  for (let i = 0; i <= 24; i++) { const t = (i / 24) * 0.985, z = LAUNCH.z0 + t * (LAUNCH.z1 - LAUNCH.z0), w = Math.max(0.02, lb(t) - 0.12), y = lsheer(t) - 0.1; deck.push([[w, y, z], [0, y + 0.03, z], [-w, y, z]]); }
+  b.use(0, SRC.OWN, M.MATTE); b.loft(deck, () => [0.62, 0.48, 0.34]);
+  const edge = (side: number, dy: number, out: number) => rows.map((r) => { const p = r[side < 0 ? 0 : r.length - 1]; return [p[0] + side * out, p[1] + dy, p[2]] as V3; });
+  for (const side of [-1, 1]) {
+    b.use(0, SRC.A, M.PAINT); const top = edge(side, 0.1, 0.02);
+    for (let i = 0; i < top.length - 1; i++) b.tube(top[i], top[i + 1], 0.17, WHITE, 8);
+    b.use(0, SRC.OWN, M.SOFT); const f = edge(side, -0.35, 0.1);
+    for (let i = 0; i < f.length - 2; i++) b.tube(f[i], f[i + 1], 0.22, BLACK, 8);
+  }
+  b.use(0, SRC.A, M.PAINT); b.tube([-2.1, lsheer(0) + 0.1, LAUNCH.z0 + 0.02], [2.1, lsheer(0) + 0.1, LAUNCH.z0 + 0.02], 0.17, WHITE, 8);
+  b.use(0, SRC.OWN, M.SOFT); b.tube([-2.15, lsheer(0) - 0.35, LAUNCH.z0 - 0.06], [2.15, lsheer(0) - 0.35, LAUNCH.z0 - 0.06], 0.22, BLACK, 8);
+  // (the wheelhouse forward: squat, in the crew's colour, windows all round, RNLI on its sides; a mast, a stack)
+  const wz = 1.75, wy = ldeckAt(wz), WX = 1.38, WH = 0.88, WZ = 1.3;
+  b.use(0, SRC.A, M.PAINT); b.roundBox([0, wy + WH, wz], [WX, WH, WZ], 0.3, WHITE, 5);
+  b.use(0, SRC.OWN, M.PAINT); b.roundBox([0, wy + WH * 2 + 0.06, wz - 0.05], [WX + 0.12, 0.08, WZ + 0.18], 0.07, [0.92, 0.92, 0.9], 3);
+  const pane = (c: V3, u: V3, n: V3, w: number, h: number) => {
+    const P = (a: number, bb: number, o: number): V3 => [c[0] + u[0] * a + n[0] * o, c[1] + bb, c[2] + u[2] * a + n[2] * o];
+    b.use(0, SRC.OWN, M.WINDOW); b.quad(P(-w, -h, 0.012), P(w, -h, 0.012), P(w, h, 0.012), P(-w, h, 0.012), GLASS);
+  };
+  const wy0 = wy + 1.22;
+  for (const x of [-0.75, 0.75]) pane([x, wy0, wz + WZ + 0.005], [1, 0, 0], [0, 0, 1], 0.5, 0.3);
+  for (const side of [-1, 1]) for (const z of [wz - 0.6, wz + 0.6]) pane([side * (WX + 0.005), wy0, z], [0, 0, -side], [side, 0, 0], 0.42, 0.3);
+  pane([0, wy0 - 0.2, wz - WZ - 0.005], [-1, 0, 0], [0, 0, -1], 0.36, 0.5);
+  b.use(0, SRC.OWN, M.PAINT);
+  for (const side of [-1, 1]) b.text('RNLI', [side * (WX + 0.02), wy + 0.42, side > 0 ? wz + 0.98 : wz - 0.98], [0, 0, -side * 0.08], [0, 0.065, 0], [side * 0.02, 0, 0], WHITE);
+  const ry = wy + WH * 2 + 0.14;
+  b.use(0, SRC.OWN, M.PAINT);
+  b.tube([0, ry, wz - 0.4], [0, ry + 2.0, wz - 0.4], 0.09, BLACK, 8);
+  b.roundBox([0, ry + 1.45, wz - 0.35], [0.8, 0.07, 0.16], 0.05, [0.93, 0.93, 0.93], 2);
+  b.use(0, SRC.OWN, M.LIT); b.at(0, ry + 2.0, wz - 0.4); b.lathe([[0.14, 0], [0.14, 0.22], [0.07, 0.3], [0, 0.32]], [0.25, 0.5, 1], 10); b.at();
+  b.use(0, SRC.OWN, M.PAINT); pennant(b, [0, ry + 2.1, wz - 0.45], 1.0, 0.42);
+  b.use(0, SRC.OWN, M.PAINT); b.tube([0.85, ry - 0.1, wz - 0.95], [0.85, ry + 0.75, wz - 1.05], 0.2, BLACK, 10);
+  // (the working deck aft: a lifebuoy on the wheelhouse's back, a tow post, a coil of line, a davit to lift people aboard)
+  for (const x of [-0.95, 0.95]) { b.basis([x, wy + 0.85, wz - WZ - 0.08], [1, 0, 0], [0, 1, 0], [0, 0, -1]); b.torus([0, 0, 0], 0.34, 0.11, (i) => (Math.floor(i / 2) % 2 ? WHITE : ORANGE), 16, 6); b.at(); }
+  b.tube([0, ldeckAt(-4.4), -4.4], [0, ldeckAt(-4.4) + 0.55, -4.4], 0.14, BLACK, 8);
+  b.tube([1.55, ldeckAt(-2.6), -2.6], [1.55, ldeckAt(-2.6) + 2.1, -2.6], 0.08, BLACK, 6);
+  b.tube([1.55, ldeckAt(-2.6) + 2.1, -2.6], [2.35, ldeckAt(-2.6) + 1.85, -2.6], 0.07, BLACK, 6);
+  b.basis([-1.1, ldeckAt(-4.3) + 0.06, -4.3], [1, 0, 0], [0, 0, 1], [0, 1, 0]);
+  b.use(0, SRC.OWN, M.SOFT); for (let k = 0; k < 3; k++) b.torus([0, 0, k * 0.07], 0.32 - k * 0.04, 0.05, () => ROPE, 14, 4);
+  b.at();
+  return smooth(b.done(), 0.75);
+}
+
+/** where people go aboard each kind of lifeboat (model coordinates: x to its left, z ahead): the deck's height along it;
+ * the places on deck in the order they fill, then the overflow (on the roof, or the RIB's tubes) at `topY`; the two at
+ * the helm; along the deck where the line's thrown from; how far out from the middle the crew leans to take a hand */
+export interface Layout { deckAt: (z: number) => number; seats: [number, number][]; top: [number, number][]; topY: number; helm: V3[]; aft: number; rail: number }
+export const LAYOUTS: Record<'lifeboat' | 'inshore' | 'launch', Layout> = {
+  lifeboat: { deckAt, seats: [], top: [], topY: 0, helm: [], aft: -3.4, rail: 1.48 },
+  inshore: {
+    deckAt: () => 0.6,
+    seats: [...[-1.5, -2.2, -2.9].flatMap((z) => [-0.95, -0.3, 0.3, 0.95].map((x) => [x, z] as [number, number])), ...([[1.5, [-0.9, -0.3, 0.3, 0.9]], [2.3, [-0.7, 0, 0.7]], [3.1, [-0.4, 0.4]]] as const).flatMap(([z, xs]) => xs.map((x) => [x, z] as [number, number]))],
+    top: [-3.6, -2.7, -1.8, -0.9, 0, 0.9].flatMap((z) => [[RIB.w, z], [-RIB.w, z]] as [number, number][]), topY: ribTubeY(0) + RIB.r - 0.1,
+    helm: [[0.36, 0.6, -0.15], [-0.36, 0.6, -0.25]], aft: -3.3, rail: 1.4,
+  },
+  launch: {
+    deckAt: ldeckAt,
+    seats: [...[-1.0, -1.8, -2.6, -3.4].flatMap((z) => [-1.3, -0.45, 0.45, 1.3].map((x) => [x, z] as [number, number])), ...[0.8, 1.6, 2.5].flatMap((z) => [[1.72, z], [-1.72, z]] as [number, number][]), [0.6, 3.6], [-0.6, 3.6], [0, 4.3]],
+    top: [[-0.75, 1.0], [0.75, 1.0], [-0.75, 1.9], [0.75, 1.9], [0, 2.5]], topY: ldeckAt(1.75) + 0.88 * 2 + 0.14,
+    helm: [[0.55, ldeckAt(0), -0.05], [-0.55, ldeckAt(-0.1), -0.2]], aft: -4.1, rail: 1.6,
+  },
+};
+
+/** block letters following the hull's side, starting `z0` along it, their foot at `y0` */
+function letters(b: Builder, s: string, side: number, z0: number, y0: number, px: number) {
+  const wide = (s.length * 6 - 1) * px;
+  let col = 0;
+  for (const ch of s) {
+    const g = GLYPH_ROWS[ch];
+    for (let row = 0; row < 7; row++) for (let c = 0; c < 5; c++) if (g[row][c] === '#') {
+      // (read from outside: on the +x side the reading runs aft, on the -x side forward)
+      const P = (u: number, v: number): V3 => {
+        const k = (col + c + u) * px, z = side > 0 ? z0 + wide - k : z0 + k, y = y0 + (6 - row + v) * px, t = tAt(z);
+        return [side * (Math.min(hb(t), interpHalf(t, y)) + 0.025), y, z];
+      };
+      b.quad(P(0, 0), P(1, 0), P(1, 1), P(0, 1), WHITE);
+    }
+    col += 6;
+  }
+}
+/** the hull's half width at a height (between the sections' points) */
+function interpHalf(t: number, y: number) {
+  const sec = section(t).slice(5);
+  for (let i = 0; i < sec.length - 1; i++) {
+    const [x0, y0] = sec[i], [x1, y1] = sec[i + 1];
+    if (y >= Math.min(y0, y1) && y <= Math.max(y0, y1)) return x0 + ((x1 - x0) * (y - y0)) / (y1 - y0 || 1);
+  }
+  return hb(t);
+}
+/** a swallow-tailed pennant trailing aft from a staff (it flutters) */
+function pennant(b: Builder, top: V3, len: number, h: number) {
+  b.use(3, SRC.A, M.SAIL);
+  const n = 6;
+  for (let i = 0; i < n; i++) {
+    const u0 = i / n, u1 = (i + 1) / n, w0 = h * (1 - u0 * 0.55), w1 = h * (1 - u1 * 0.55);
+    const p = (u: number, w: number, dy: number): V3 => [0, top[1] - h / 2 + dy + (h - w) / 2 + w * 0, top[2] - u * len];
+    const a = p(u0, w0, 0), bq = p(u1, w1, 0), c = p(u1, w1, w1), d = p(u0, w0, w0);
+    b.part = 3 + u0 * 0.99; b.v(a, [1, 0, 0], WHITE); b.part = 3 + u1 * 0.99; b.v(bq, [1, 0, 0], WHITE); b.v(c, [1, 0, 0], WHITE);
+    b.part = 3 + u0 * 0.99; b.v(a, [1, 0, 0], WHITE); b.part = 3 + u1 * 0.99; b.v(c, [1, 0, 0], WHITE); b.part = 3 + u0 * 0.99; b.v(d, [1, 0, 0], WHITE);
+  }
+  b.part = 0;
+}
+
+/** where the rescued stand and sit: aft deck, foredeck, the side decks, the wheelhouse roof [across, along] */
+export const SEATS: [number, number][] = (() => {
+  const s: [number, number][] = [];
+  for (const z of [-3.15, -3.85, -4.55]) for (const x of [-1.25, -0.42, 0.42, 1.25]) s.push([x, z]);
+  for (const [z, xs] of [[1.55, [-1.05, -0.35, 0.35, 1.05]], [2.35, [-0.8, 0, 0.8]], [3.15, [-0.45, 0.45]], [3.85, [0]]] as const) for (const x of xs) s.push([x, z]);
+  for (const z of [-2.3, -1.3, -0.3, 0.7]) for (const x of [-1.86, 1.86]) s.push([x, z]);
+  return s;
+})();
+/** the roof, for when the decks are full (across, along, height above the deck) */
+export const ROOF: [number, number][] = [[-1.0, -2.2], [1.0, -2.2], [-1.0, -1.4], [1.0, -1.4], [0, -2.5], [-1.05, -0.6], [1.05, -0.6]];
+export const ROOF_Y = deckAt(-0.9) + 2.12;
+Object.assign(LAYOUTS.lifeboat, { seats: SEATS, top: ROOF, topY: ROOF_Y, helm: [[0.5, ROOF_Y, 0.15], [-0.5, ROOF_Y, 0.1]] });
+
+// ─── people ───
+
+/** the shoulders, about which the arms turn */
+export const SHOULDER = [0.29, 0.8] as const;
+
+export function person(kind: 'crew' | 'kid', style = 0): Mesh {
+  const b = new Builder(), JACKET: RGB = kind === 'crew' ? [0.95, 0.24, 0.08] : ORANGE;
+  // (legs and boots)
+  b.use(0, kind === 'crew' ? SRC.A : SRC.OWN, M.SOFT);
+  for (const x of [-0.11, 0.11]) b.roundBox([x, 0.22, 0], [0.095, 0.17, 0.11], 0.08, kind === 'crew' ? WHITE : [0.22, 0.28, 0.45], 2);
+  b.use(0, SRC.OWN, M.PAINT);
+  for (const x of [-0.11, 0.11]) b.roundBox([x, 0.05, 0.03], [0.1, 0.06, 0.14], 0.05, kind === 'crew' ? BLACK : [0.95, 0.95, 0.95], 2);
+  // (the body in its shirt or jacket; the lifejacket over it, with its reflective tape)
+  b.use(0, SRC.A, M.SOFT); b.roundBox([0, 0.58, 0], [0.24, 0.24, 0.17], 0.12, WHITE, 2);
+  b.use(0, SRC.OWN, M.SOFT); b.roundBox([0, 0.62, 0.01], [0.265, 0.19, 0.2], 0.12, JACKET, 2);
+  b.use(0, SRC.OWN, M.GLASS); for (const x of [-0.13, 0.13]) b.box(x - 0.035, x + 0.035, 0.58, 0.74, 0.205, 0.215, [0.85, 0.88, 0.9]);
+  // (the arms: sleeve, then a hand; each turns about its shoulder)
+  for (const [side, part] of [[1, 1], [-1, 2]] as const) {
+    b.use(part, SRC.A, M.SOFT); b.tube([side * SHOULDER[0], SHOULDER[1], 0], [side * 0.31, 0.47, 0.02], 0.075, WHITE, 7);
+    b.use(part, SRC.B, M.SOFT); b.sphere([side * 0.31, 0.42, 0.02], 0.08, WHITE, [1, 1, 1], 4, 6);
+  }
+  // (the head: big and round; eyes, cheeks, a smile)
+  b.use(0, SRC.B, M.SOFT); b.sphere([0, 1.08, 0], 0.3, WHITE, [1.06, 0.97, 1], 8, 12);
+  b.use(0, SRC.OWN, M.PAINT);
+  for (const x of [-0.1, 0.1]) b.sphere([x, 1.11, 0.275], 0.038, [0.05, 0.04, 0.04], [1, 1.25, 0.5], 3, 6);
+  b.use(0, SRC.OWN, M.SOFT);
+  for (const x of [-0.18, 0.18]) b.sphere([x, 1.0, 0.24], 0.05, [0.98, 0.55, 0.5], [1, 0.7, 0.5], 3, 6);
+  b.use(0, SRC.OWN, M.MATTE);
+  for (let i = 0; i < 4; i++) { const a0 = -0.6 + i * 0.3, a1 = a0 + 0.3; b.tube([Math.sin(a0) * 0.08, 0.99 - Math.cos(a0) * 0.03, 0.29], [Math.sin(a1) * 0.08, 0.99 - Math.cos(a1) * 0.03, 0.29], 0.012, [0.35, 0.12, 0.1], 4); }
+  if (kind === 'crew') {
+    // (the white helmet, its visor and strap)
+    b.use(0, SRC.OWN, M.PAINT);
+    b.sphere([0, 1.12, -0.01], 0.345, [0.97, 0.97, 0.96], [1.04, 0.95, 1.04], 5, 12, Math.PI * 0.53);
+    b.box(-0.25, 0.25, 1.2, 1.24, 0.24, 0.37, [0.97, 0.97, 0.96]);
+    b.use(0, SRC.OWN, M.GLASS); b.box(-0.2, 0.2, 1.13, 1.2, 0.3, 0.34, [0.15, 0.18, 0.22]);
+  } else {
+    b.use(0, SRC.C, M.SOFT);
+    b.sphere([0, 1.12, -0.02], 0.322, WHITE, [1.06, 0.97, 1.05], 5, 12, Math.PI * (style === 1 ? 0.6 : 0.52));
+    if (style === 1) for (const x of [-0.27, 0.27]) b.sphere([x, 1.0, -0.12], 0.1, WHITE, [0.8, 1.3, 0.8], 4, 6);
+    if (style === 2) b.sphere([0, 1.3, -0.2], 0.13, WHITE, [1, 1, 1], 4, 8);
+    if (style === 0) b.sphere([0, 1.2, 0.18], 0.16, WHITE, [1.4, 0.45, 0.8], 4, 8);
+  }
+  return b.done();
+}
+
+// ─── little boats ───
+
+function smallHull(len: number, beam: number, depth: number, pointy: boolean): V3[][] {
+  const rows: V3[][] = [];
+  for (let i = 0; i <= 12; i++) {
+    const t = i / 12, z = -len / 2 + t * len;
+    const w = pointy ? beam / 2 * Math.pow(Math.sin(Math.PI * Math.min(0.995, Math.max(0.005, t))), 0.7) : beam / 2 * (t < 0.6 ? 0.82 + 0.18 * Math.sin((t / 0.6) * Math.PI / 2) : Math.pow(Math.max(0, 1 - ((t - 0.6) / 0.4) ** 2), 0.55));
+    const top = depth * 0.55 + 0.12 * t * t, bot = -depth * 0.45 + (pointy ? 0.1 * Math.abs(t - 0.5) : 0.18 * Math.max(0, t - 0.75) / 0.25);
+    const sec: [number, number][] = [[0, bot], [w * 0.6, bot + 0.05], [w * 0.95, (bot + top) / 2], [w, top]];
+    rows.push([...sec.slice(1).reverse().map(([x, y]) => [-x, y, z] as V3), ...sec.map(([x, y]) => [x, y, z] as V3)]);
+  }
+  return rows;
+}
+export function craftMesh(kind: 'row' | 'kayak' | 'sail' | 'paddle' | 'yacht' | 'fishing'): Mesh {
+  const b = new Builder();
+  if (kind === 'fishing') {
+    // (a little fishing boat, as on the boards: a beamy hull in its own colour with a white top band, a wheelhouse forward
+    // with windows all round, a mast with a red flag, tyre fenders, a fish box and a lobster pot on the open deck aft)
+    const len = 5.2, rows = smallHull(len, 2.05, 0.95, false);
+    b.use(0, SRC.A, M.PAINT); b.loft(rows, () => WHITE);
+    const rimL = rows.map((r) => r[r.length - 1]), rimR = rows.map((r) => r[0]);
+    b.use(0, SRC.OWN, M.PAINT);
+    for (const rim of [rimL, rimR]) for (let i = 0; i < rim.length - 1; i++) b.tube(rim[i], rim[i + 1], 0.07, WHITE, 5);
+    b.tube(rimL[0], rimR[0], 0.07, WHITE, 5);
+    b.use(0, SRC.OWN, M.MATTE); b.loft(rows.map((r) => { const p = r[r.length - 1], q = r[0]; return [[p[0] * 0.95, p[1] - 0.12, p[2]], [0, p[1] - 0.1, p[2]], [q[0] * 0.95, q[1] - 0.12, q[2]]] as V3[]; }), () => [0.66, 0.6, 0.52]);
+    const transom = rows[0];
+    for (let i = 0; i < transom.length - 1; i++) b.tri([0, 0.1, transom[0][2]], transom[i + 1], transom[i], WHITE);
+    b.use(0, SRC.OWN, M.PAINT); b.roundBox([0, 1.05, 0.75], [0.62, 0.5, 0.62], 0.1, WHITE, 3); b.roundBox([0, 1.6, 0.75], [0.72, 0.06, 0.74], 0.04, [0.15, 0.22, 0.35], 2);
+    b.use(0, SRC.OWN, M.WINDOW);
+    for (const sx of [-1, 1]) b.box(sx * 0.63 - 0.01, sx * 0.63 + 0.01, 1.1, 1.4, 0.4, 1.15, GLASS);
+    b.box(-0.45, 0.45, 1.1, 1.4, 1.37, 1.39, GLASS);
+    b.use(0, SRC.OWN, M.PAINT); b.tube([0, 1.6, 0.6], [0, 3.3, 0.6], 0.04, BLACK, 5);
+    b.use(3, SRC.OWN, M.SAIL); b.quad([0, 3.25, 0.6], [0, 3.25, 0.05], [0, 2.95, 0.05], [0, 2.95, 0.6], [0.9, 0.12, 0.1]);
+    b.use(0, SRC.OWN, M.MATTE);
+    for (const [sx, z] of [[-1, -0.8], [1, -0.8], [-1, 0.9], [1, 0.9]] as const) { b.at(sx * 1.02, 0.42, z, 0, [1, 1, 1]); b.lathe([[0.22, -0.09], [0.26, 0], [0.22, 0.09]], BLACK, 10); b.at(); }
+    b.use(0, SRC.OWN, M.PAINT); b.box(-0.55, -0.05, 0.4, 0.68, -1.7, -1.2, [0.2, 0.45, 0.85]);
+    b.use(0, SRC.OWN, M.MATTE); b.box(0.15, 0.7, 0.4, 0.75, -1.85, -1.35, [0.25, 0.4, 0.35]);
+    return smooth(b.done(), 0.7);
+  }
+  if (kind === 'paddle') {
+    // (a paddleboard: a long flat board in its own colour, a white stripe down it, the paddle lying across)
+    b.use(0, SRC.A, M.PAINT); b.roundBox([0, 0.02, 0], [0.38, 0.06, 1.55], 0.06, WHITE, 3);
+    b.use(0, SRC.OWN, M.PAINT); b.box(-0.07, 0.07, 0.075, 0.085, -1.35, 1.35, WHITE);
+    b.tube([-0.85, 0.11, 0.55], [0.75, 0.11, -0.05], 0.022, BLACK, 5);
+    b.at(-0.95, 0.11, 0.6, 0.35, [1, 1, 1]); b.roundBox([0, 0, 0], [0.1, 0.012, 0.2], 0.01, [1, 0.85, 0.1], 2); b.at();
+    return smooth(b.done(), 0.7);
+  }
+  if (kind === 'yacht') {
+    // (a little yacht that's lost its mast: a longer white hull with a stripe in its own colour, a cabin with windows, the
+    // mast broken off short and the rest of it lying along the deck, the sail in a heap)
+    const len = 6.2, rows = smallHull(len, 2.3, 0.95, false);
+    b.use(0, SRC.OWN, M.PAINT); b.loft(rows, () => WHITE);
+    const rimL = rows.map((r) => r[r.length - 1]), rimR = rows.map((r) => r[0]);
+    b.loft(rows.map((r) => { const p = r[r.length - 1], q = r[0]; return [[p[0], p[1], p[2]], [0, p[1] + 0.06, p[2]], [q[0], q[1], q[2]]] as V3[]; }), () => [0.93, 0.92, 0.88]);
+    const transom = rows[0];
+    for (let i = 0; i < transom.length - 1; i++) b.tri([0, 0.1, transom[0][2]], transom[i + 1], transom[i], WHITE);
+    b.use(0, SRC.A, M.PAINT);
+    for (const rim of [rimL, rimR]) for (let i = 0; i < rim.length - 1; i++) b.tube([rim[i][0] * 1.01, rim[i][1] - 0.16, rim[i][2]], [rim[i + 1][0] * 1.01, rim[i + 1][1] - 0.16, rim[i + 1][2]], 0.06, WHITE, 5);
+    b.use(0, SRC.OWN, M.PAINT);
+    for (const rim of [rimL, rimR]) for (let i = 1; i < rim.length - 2; i++) b.tube([rim[i][0] * 0.94, rim[i][1] + 0.38, rim[i][2]], [rim[i + 1][0] * 0.94, rim[i + 1][1] + 0.38, rim[i + 1][2]], 0.025, [0.8, 0.8, 0.82], 4);
+    b.roundBox([0, 0.78, 0.3], [0.62, 0.26, 0.85], 0.12, WHITE, 3);
+    b.use(0, SRC.OWN, M.WINDOW); for (const s of [-1, 1]) b.box(s * 0.63 - 0.01, s * 0.63 + 0.01, 0.72, 0.86, -0.15, 0.75, [0.12, 0.18, 0.24]);
+    b.use(0, SRC.OWN, M.PAINT);
+    b.tube([0, 1.0, 0.9], [0.04, 2.0, 0.9], 0.07, [0.8, 0.8, 0.82], 6, 0.06);
+    b.tube([0.15, 1.05, 1.0], [0.75, 0.62, -2.7], 0.06, [0.8, 0.8, 0.82], 6);
+    b.use(3, SRC.OWN, M.SAIL); b.roundBox([0.35, 0.72, -1.4], [0.45, 0.16, 0.9], 0.14, [0.97, 0.97, 0.95], 3); b.roundBox([0.55, 0.62, -0.4], [0.3, 0.12, 0.5], 0.1, [0.97, 0.97, 0.95], 3);
+    return smooth(b.done(), 0.7);
+  }
+  if (kind === 'kayak') {
+    const rows = smallHull(3.6, 0.72, 0.42, true);
+    b.use(0, SRC.A, M.PAINT); b.loft(rows, () => WHITE);
+    const deck: V3[][] = rows.map((r) => { const p = r[r.length - 1], z = p[2]; return [[p[0], p[1], z], [0, p[1] + 0.08, z], [-p[0], p[1], z]]; });
+    b.loft(deck, () => WHITE);
+    b.use(0, SRC.OWN, M.MATTE); b.at(0, 0.27, -0.1, 0, [1, 1, 1.5]); b.lathe([[0.3, 0], [0.3, 0.04], [0, 0.04]], [0.08, 0.08, 0.1], 12); b.at();
+    b.use(0, SRC.OWN, M.PAINT); b.tube([-1.1, 0.55, 0.25], [1.1, 0.75, 0.25], 0.03, BLACK, 5);
+    for (const s of [-1, 1]) b.at(s * 1.15, 0.55 + (s + 1) * 0.1, 0.25, 0, [1, 1, 1]), b.roundBox([0, 0, 0], [0.22, 0.03, 0.09], 0.02, [1, 0.85, 0.1], 2), b.at();
+    return smooth(b.done(), 0.7);
+  }
+  const len = kind === 'sail' ? 3.7 : 3.3, rows = smallHull(len, 1.55, 0.62, false);
+  b.use(0, SRC.A, M.PAINT); b.loft(rows, () => WHITE);
+  // (inside: white, a little in from the outside; seats; the rim)
+  const inner = rows.map((r) => r.map((p) => [p[0] * 0.9, p[1] * 0.85 + 0.05, p[2] * 0.97] as V3).reverse());
+  b.use(0, SRC.OWN, M.PAINT); b.loft(inner, () => [0.95, 0.95, 0.93]);
+  const transom = rows[0];
+  for (let i = 0; i < transom.length - 1; i++) b.tri([0, 0.1, transom[0][2]], transom[i + 1], transom[i], [0.95, 0.95, 0.93]);
+  b.use(0, SRC.OWN, M.PAINT);
+  const rimL = rows.map((r) => r[r.length - 1]), rimR = rows.map((r) => r[0]);
+  for (const rim of [rimL, rimR]) for (let i = 0; i < rim.length - 1; i++) b.tube(rim[i], rim[i + 1], 0.05, [0.97, 0.97, 0.95], 5);
+  b.tube(rimL[0], rimR[0], 0.05, [0.97, 0.97, 0.95], 5);
+  b.use(0, SRC.OWN, M.MATTE);
+  for (const z of [0.6 - len / 2 + 0.6, 0.15, -0.9]) b.box(-0.62, 0.62, 0.12, 0.18, z - 0.13, z + 0.13, [0.72, 0.5, 0.3]);
+  if (kind === 'row') {
+    // (the oars, shipped across the gunwales)
+    for (const s of [-1, 1]) {
+      b.tube([s * 0.4, 0.42, 0.9], [s * 1.6, 0.25, -1.0], 0.035, [0.75, 0.55, 0.32], 5);
+      b.basis([s * 1.65, 0.24, -1.1], [Math.cos(0.6) * s, 0, Math.sin(0.6)], [0, 1, 0], [-Math.sin(0.6) * s, 0, Math.cos(0.6)]);
+      b.box(-0.08, 0.08, -0.02, 0.02, -0.3, 0.3, [0.75, 0.55, 0.32]); b.at();
+    }
+  } else {
+    // (a mast, a boom, and a white sail that flutters along its leech)
+    b.use(0, SRC.OWN, M.PAINT);
+    b.tube([0, 0.15, 0.7], [0, 3.6, 0.7], 0.045, [0.8, 0.8, 0.82], 6);
+    b.tube([0, 0.95, 0.7], [0, 0.95, -1.5], 0.04, [0.8, 0.8, 0.82], 6);
+    b.use(3, SRC.OWN, M.SAIL);
+    const n = 6;
+    for (let i = 0; i < n; i++) {
+      const y0 = 1.0 + (i / n) * 2.5, y1 = 1.0 + ((i + 1) / n) * 2.5, l0 = 2.15 * (1 - i / n), l1 = 2.15 * (1 - (i + 1) / n);
+      const V = (y: number, l: number, w: number): [V3, number] => [[0, y, 0.68 - l], 3 + Math.min(0.99, w)];
+      const q = [V(y0, 0, 0), V(y0, l0, l0 / 2.2), V(y1, l1, l1 / 2.2), V(y1, 0, 0)];
+      for (const k of [0, 1, 2, 0, 2, 3]) { b.part = q[k][1]; b.v(q[k][0], [1, 0, 0], [0.98, 0.98, 0.96]); }
+    }
+    b.part = 0;
+    b.use(0, SRC.OWN, M.PAINT); b.box(-0.02, 0.02, 2.6, 2.95, 0.72, 0.95, [0.9, 0.12, 0.1]);
+  }
+  return smooth(b.done(), 0.7);
+}
+
+// ─── buoys ───
+
+export function buoyMesh(kind: 'red' | 'green' | 'yellow'): Mesh {
+  const b = new Builder(), col: RGB = kind === 'red' ? [0.88, 0.1, 0.08] : kind === 'green' ? [0.08, 0.6, 0.25] : [1, 0.8, 0.05];
+  b.use(0, SRC.OWN, M.PAINT);
+  b.lathe([[0, -0.5], [0.75, -0.45], [0.85, -0.1], [0.8, 0.25], [0.45, 0.35]], col, 14);
+  if (kind === 'green') b.lathe([[0.55, 0.35], [0.5, 0.9], [0.2, 1.9], [0, 2.1]], col, 14);
+  else b.lathe([[0.45, 0.35], [0.42, 1.8], [0.38, 1.85], [0, 1.85]], (i) => kind === 'yellow' && i === 1 ? BLACK : col, 14);
+  b.tube([0, 1.8, 0], [0, 2.5, 0], 0.04, BLACK, 5);
+  if (kind === 'red') { b.at(0, 2.45, 0); b.lathe([[0.2, 0], [0.2, 0.35], [0, 0.35]], col, 10); b.at(); }
+  if (kind === 'green') { b.at(0, 2.4, 0); b.lathe([[0.22, 0], [0, 0.4]], col, 10); b.at(); }
+  if (kind === 'yellow') { b.at(0, 2.4, 0); b.lathe([[0, 0], [0.2, 0.25], [0, 0.25]], BLACK, 8); b.lathe([[0, 0.3], [0.2, 0.55], [0, 0.55]], BLACK, 8); b.at(); }
+  b.use(0, SRC.OWN, M.LIT); b.sphere([0, 2.0, 0], 0.09, kind === 'red' ? [1, 0.3, 0.2] : kind === 'green' ? [0.3, 1, 0.4] : [1, 1, 0.7], [1, 1, 1], 3, 6);
+  return smooth(b.done(), 0.7);
+}
+
+// ─── granite ───
+
+/** a boulder: a cube rounded toward a sphere, then chipped by a few planes (flat facets with soft edges) */
+export function boulder(seed: number, n: number): Mesh {
+  const rand = seeded(seed * 7919 + 13), b = new Builder();
+  const cuts: { n: V3; d: number }[] = [];
+  for (let i = 0; i < 7; i++) {
+    const a = rand() * 6.283, e = (rand() - 0.25) * 1.4, nn: V3 = [Math.cos(e) * Math.sin(a), Math.sin(e), Math.cos(e) * Math.cos(a)];
+    cuts.push({ n: nn, d: 0.62 + rand() * 0.28 });
+  }
+  const P = (q: V3): V3 => {
+    const l = Math.hypot(q[0], q[1], q[2]);
+    let p: V3 = [q[0] * 0.45 + (q[0] / l) * 0.62, q[1] * 0.45 + (q[1] / l) * 0.62, q[2] * 0.45 + (q[2] / l) * 0.62];
+    for (const c of cuts) { const d = p[0] * c.n[0] + p[1] * c.n[1] + p[2] * c.n[2]; if (d > c.d) p = [p[0] - c.n[0] * (d - c.d), p[1] - c.n[1] * (d - c.d), p[2] - c.n[2] * (d - c.d)]; }
+    const w = 0.035 * Math.sin(p[0] * 7.1 + seed) * Math.sin(p[2] * 6.3 - seed) + 0.03 * Math.sin(p[1] * 9.7 + seed * 2);
+    return [p[0] * (1 + w), Math.max(-0.75, p[1] * (1 + w)), p[2] * (1 + w)];
+  };
+  // (darker underneath, where it's shaded and wet)
+  const shade = (y: number): RGB => { const k = 0.62 + 0.38 * Math.max(0, Math.min(1, (y + 0.7) / 1.3)); return [k, k, k]; };
+  b.use(0, SRC.A, M.ROCK);
+  const faces: [number, number, number, number][] = [[0, 1, 2, 1], [0, 1, 2, -1], [1, 2, 0, 1], [1, 2, 0, -1], [2, 0, 1, 1], [2, 0, 1, -1]];
+  for (const [a, u, w, s] of faces) for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) {
+    const q = (ii: number, jj: number): V3 => { const v: V3 = [0, 0, 0]; v[a] = s; v[u] = (2 * ii) / n - 1; v[w] = (2 * jj) / n - 1; return P(v); };
+    const p = [q(i, j), q(i + 1, j), q(i + 1, j + 1), q(i, j + 1)], c = shade((p[0][1] + p[2][1]) / 2);
+    // (each facet flat; the smoothing below rounds the shallow folds and keeps the chips)
+    b.triOut([0, 0, 0], p[0], p[1], p[2], c); b.triOut([0, 0, 0], p[0], p[2], p[3], c);
+  }
+  return smooth(b.done(), 0.8);
+}
+
+/**
+ * a block of the cliff face: granite split along its joints, standing on y = 0 to y = 1 — two to four beds (strata) one
+ * on another, each an irregular slab of five to seven sides with sharp, flat-faced edges, a little set back or jutting
+ * out from the one under it, its corners chipped, its top tilted; stacked, the blocks make a face of ledges, joints and
+ * fractured planes rather than rounded stones
+ */
+export function column(seed: number): Mesh {
+  // (one jointed block of granite: faces square to the coast's two joint sets — so neighbouring blocks, turned alike,
+  // line up face to face — corners broken off, and sometimes a second bed set back above a ledge)
+  const rand = seeded(seed * 4271 + 7), b = new Builder();
+  b.use(0, SRC.A, M.ROCK);
+  const hx = 1, hz = 0.72 + rand() * 0.22;
+  const outline = (inset: [number, number, number, number]) => {
+    // (a rectangle with each corner cut back by a broken-off wedge; inset pulls whole faces in)
+    const ring: [number, number][] = [], [e, n, w, s] = inset;
+    const corners: [number, number, boolean][] = [[hx - e, hz - n, true], [-hx + w, hz - n, false], [-hx + w, -hz + s, true], [hx - e, -hz + s, false]];
+    for (const [x, z, xFirst] of corners) {
+      // (the two points either side of the corner, in order round the outline: in along the face before it, then the face after)
+      const cut = 0.1 + rand() * (rand() < 0.5 ? 0.5 : 0.16), px = Math.sign(x), pz = Math.sign(z);
+      const alongX: [number, number] = [x, z - pz * cut * (0.7 + rand() * 0.6)], alongZ: [number, number] = [x - px * cut * (0.7 + rand() * 0.6), z];
+      ring.push(...(xFirst ? [alongX, alongZ] : [alongZ, alongX]));
+    }
+    return ring;
+  };
+  const beds = rand() < 0.55 ? 2 : 1, split = 0.45 + rand() * 0.3;
+  for (let k = 0; k < beds; k++) {
+    const y0 = k ? split : 0, y1 = beds === 1 ? 1 : k ? 1 : split;
+    // (the upper bed set back from one or two faces: a ledge)
+    const inset: [number, number, number, number] = k ? [rand() < 0.5 ? 0.15 + rand() * 0.3 : 0.02, rand() < 0.4 ? 0.12 + rand() * 0.2 : 0.02, rand() * 0.06, rand() < 0.3 ? 0.1 + rand() * 0.2 : 0.02] : [0, 0, 0, 0];
+    const ring = outline(inset), n = ring.length;
+    const tilt = [(rand() - 0.5) * 0.08, (rand() - 0.5) * 0.08];
+    // (the top's height at each rim point: one plane, with a corner or two knocked lower)
+    const tops = ring.map(([x, z]) => y1 + x * tilt[0] + z * tilt[1] - (rand() < 0.25 ? 0.03 + rand() * 0.06 : 0));
+    const lean = 0.86 + rand() * 0.08, mid = 0.3 + rand() * 0.4, kink = (rand() - 0.5) * 0.14;
+    const shade = (y: number): RGB => { const v = 0.6 + 0.4 * y; return [v, v, v]; };
+    const C: V3 = [0, (y0 + y1) / 2, 0];
+    const ym = y0 + (y1 - y0) * mid;
+    for (let i = 0; i < n; i++) {
+      const j = (i + 1) % n, [x0, z0] = ring[i], [x1, z1] = ring[j];
+      const a0: V3 = [x0, y0, z0], a1: V3 = [x1, y0, z1];
+      const m0: V3 = [x0 * (1 + kink), ym, z0 * (1 + kink)], m1: V3 = [x1 * (1 + kink), ym, z1 * (1 + kink)];
+      const t0: V3 = [x0 * lean, tops[i], z0 * lean], t1: V3 = [x1 * lean, tops[j], z1 * lean];
+      b.triOut(C, a0, a1, m1, shade(y0)); b.triOut(C, a0, m1, m0, shade(y0));
+      b.triOut(C, m0, m1, t1, shade(ym)); b.triOut(C, m0, t1, t0, shade(ym));
+    }
+    // (the top: one fan about a single centre at the rim's mean height)
+    const cy = tops.reduce((p, q) => p + q, 0) / n;
+    for (let i = 0; i < n; i++) {
+      const j = (i + 1) % n;
+      b.triOut(C, [ring[i][0] * lean, tops[i], ring[i][1] * lean], [ring[j][0] * lean, tops[j], ring[j][1] * lean], [0, cy, 0], shade(1));
+    }
+  }
+  return smooth(b.done(), 0.97);
+}
+
+// ─── ashore ───
+
+function lump(b: Builder, c: V3, r: number, seed: number, col: (k: number) => RGB) {
+  const rand = seeded(seed), rings = 5, segs = 9, off = Array.from({ length: (rings + 1) * segs }, () => 0.8 + rand() * 0.35);
+  for (let j = 0; j < rings; j++) for (let i = 0; i < segs; i++) {
+    const P = (jj: number, ii: number): V3 => { const th = (jj / rings) * Math.PI * 0.62, ph = (ii / segs) * 2 * Math.PI, k = off[(jj * segs + (ii % segs)) % off.length] * (jj === 0 ? 1 : 1); return [c[0] + Math.sin(th) * Math.sin(ph) * r * k, c[1] + Math.cos(th) * r * 0.75 * (jj === 0 ? 1 : k), c[2] + Math.sin(th) * Math.cos(ph) * r * k]; };
+    const q = [P(j, i), P(j + 1, i), P(j + 1, i + 1), P(j, i + 1)], cc = col(j * segs + i);
+    b.triOut([c[0], c[1] - r * 0.3, c[2]], q[0], q[2], q[1], cc); b.triOut([c[0], c[1] - r * 0.3, c[2]], q[0], q[3], q[2], cc);
+  }
+}
+
+export function lighthouse(b: Builder, v: number) {
+  const band: RGB = v === 4 ? [0.1, 0.55, 0.25] : [0.85, 0.1, 0.08], small = v >= 2;
+  const H = small ? 7 : 12, r0 = small ? 1.4 : 2.3, r1 = small ? 1.0 : 1.55;
+  b.use(0, SRC.OWN, M.ROCK); b.lathe([[r0 + 1.4, -2], [r0 + 1.3, 0.4], [0, 0.45]], [0.8, 0.78, 0.74], 14);
+  b.use(0, SRC.OWN, M.PAINT);
+  const prof: [number, number][] = [];
+  for (let i = 0; i <= 10; i++) prof.push([r0 + (r1 - r0) * (i / 10), 0.4 + (H * i) / 10]);
+  b.lathe(prof, (i) => ((small ? i >= 3 && i < 6 : (i >= 3 && i < 5) || (i >= 7 && i < 9)) ? band : [0.97, 0.97, 0.95]), 16);
+  b.lathe([[r1 + 0.55, H + 0.4], [r1 + 0.55, H + 0.6], [0, H + 0.62]], [0.12, 0.12, 0.13], 16);
+  for (let i = 0; i < 12; i++) { const a = (i / 12) * 6.283; b.tube([Math.sin(a) * (r1 + 0.5), H + 0.6, Math.cos(a) * (r1 + 0.5)], [Math.sin(a) * (r1 + 0.5), H + 1.3, Math.cos(a) * (r1 + 0.5)], 0.04, [0.12, 0.12, 0.13], 4); }
+  b.use(0, SRC.OWN, M.LIT); b.lathe([[r1 * 0.72, H + 0.6], [r1 * 0.72, H + 2.0]], [1, 0.88, 0.5], 12);
+  b.use(0, SRC.OWN, M.PAINT); b.lathe([[r1 * 0.8, H + 2.0], [r1 * 0.85, H + 2.15], [r1 * 0.5, H + 2.7], [0.12, H + 3.0], [0.1, H + 3.5], [0, H + 3.5]], small ? band : [0.12, 0.12, 0.13], 12);
+  b.box(-0.5, 0.5, 0.4, 2.3, r0 - 0.15, r0 + 0.05, [0.2, 0.25, 0.32]);
+}
+
+export function cottage(b: Builder, v: number) {
+  const W = 3, D = 2.2, H = 3.2, roof: RGB = v % 2 ? [0.62, 0.24, 0.17] : [0.3, 0.35, 0.42], door: RGB = ([[0.15, 0.35, 0.75], [0.8, 0.15, 0.12], [0.15, 0.55, 0.3], [0.95, 0.75, 0.1]] as RGB[])[v % 4];
+  const wall: RGB = v === 3 ? [0.98, 0.92, 0.78] : [0.97, 0.96, 0.93];
+  b.use(0, SRC.OWN, M.ROCK); b.box(-W - 0.2, W + 0.2, -3, 0.25, -D - 0.2, D + 0.2, [0.7, 0.68, 0.64]);
+  b.use(0, SRC.OWN, M.MATTE); b.box(-W, W, 0.25, H, -D, D, wall);
+  b.tri([-W, H, D], [W, H, D], [0, H + 1.9, D], wall); b.tri([W, H, -D], [-W, H, -D], [0, H + 1.9, -D], wall);
+  b.use(0, SRC.OWN, M.PAINT);
+  // (gable ends front and back; the roof pitched across the house's width)
+  b.quad([-W - 0.3, H - 0.15, -D - 0.3], [-W - 0.3, H - 0.15, D + 0.3], [0, H + 1.95, D + 0.3], [0, H + 1.95, -D - 0.3], roof);
+  b.quad([W + 0.3, H - 0.15, D + 0.3], [W + 0.3, H - 0.15, -D - 0.3], [0, H + 1.95, -D - 0.3], [0, H + 1.95, D + 0.3], roof);
+  b.use(0, SRC.OWN, M.ROCK); b.box(W - 1.0, W - 0.3, H, H + 2.6, -0.4, 0.3, [0.66, 0.63, 0.58]);
+  b.use(0, SRC.OWN, M.PAINT); b.box(-0.45, 0.45, 0.25, 2.1, D, D + 0.06, door);
+  for (const x of [-1.9, 1.9]) for (const z of [D + 0.03, -D - 0.06]) { b.box(x - 0.55, x + 0.55, 1.2, 2.3, z, z + 0.04, [0.98, 0.98, 0.98]); b.use(0, SRC.OWN, M.WINDOW); b.box(x - 0.42, x + 0.42, 1.3, 2.2, z + (z > 0 ? 0.02 : -0.01), z + (z > 0 ? 0.06 : 0.03), GLASS); b.use(0, SRC.OWN, M.PAINT); }
+}
+
+export function station(b: Builder) {
+  const W = 5, D = 8, H = 5.5, blue: RGB = [0.24, 0.45, 0.74], red: RGB = [0.75, 0.16, 0.12];
+  b.use(0, SRC.OWN, M.ROCK); b.box(-W - 0.4, W + 0.4, -4, 0.3, -D - 0.4, D + 0.4, [0.72, 0.7, 0.66]);
+  b.use(0, SRC.OWN, M.MATTE); b.box(-W, W, 0.3, H, -D, D, blue);
+  b.tri([-W, H, D], [W, H, D], [0, H + 3, D], blue); b.tri([W, H, -D], [-W, H, -D], [0, H + 3, -D], blue);
+  b.use(0, SRC.OWN, M.PAINT);
+  b.quad([-W - 0.4, H - 0.2, -D - 0.4], [-W - 0.4, H - 0.2, D + 0.4], [0, H + 3.1, D + 0.4], [0, H + 3.1, -D - 0.4], red);
+  b.quad([W + 0.4, H - 0.2, D + 0.4], [W + 0.4, H - 0.2, -D - 0.4], [0, H + 3.1, -D - 0.4], [0, H + 3.1, D + 0.4], red);
+  b.box(-3.2, 3.2, 0.3, 4.4, D, D + 0.08, [0.1, 0.16, 0.3]);
+  b.box(-3.4, 3.4, 4.4, 4.6, D, D + 0.12, WHITE);
+  b.text('RNLI', [-2.85, 5.0, D + 0.1], [0.2, 0, 0], [0, 0.2, 0], [0, 0, 0.02], WHITE);
+  // (the slipway, down into the bay)
+  b.use(0, SRC.OWN, M.ROCK);
+  b.quad([2.6, 0.32, D], [-2.6, 0.32, D], [-2.6, -2.6, D + 30], [2.6, -2.6, D + 30], [0.66, 0.65, 0.62]);
+  b.use(0, SRC.OWN, M.PAINT); for (const x of [-1.2, 1.2]) b.quad([x + 0.12, 0.36, D], [x - 0.12, 0.36, D], [x - 0.12, -2.56, D + 30], [x + 0.12, -2.56, D + 30], [0.25, 0.22, 0.2]);
+}
+
+// ─── the harbour's life: jetties, lamps, bunting, what's left about on a quay ───
+
+const WOOD: RGB = [0.52, 0.4, 0.28], PILE: RGB = [0.3, 0.24, 0.19], IRON: RGB = [0.22, 0.24, 0.26];
+/** a timber jetty on its piles, `len` metres out from the quay (local +z), 3.2 m wide: planks across, piles either side
+ * standing up past the deck (some with an iron band, some a rope's turns), a bollard, a ladder down at the end, a lifebuoy */
+export function jetty(b: Builder, len: number, seed: number) {
+  const rand = seeded(seed), W = 1.6, top = 2.35;
+  b.use(0, SRC.OWN, M.MATTE);
+  for (let z = 0.2; z < len; z += 0.42) { const t = 0.8 + rand() * 0.25; b.box(-W, W, top - 0.12, top, z, z + 0.36, [WOOD[0] * t, WOOD[1] * t, WOOD[2] * t]); }
+  for (const sx of [-1, 1]) b.box(sx * W - 0.12, sx * W + 0.12, top - 0.45, top - 0.1, 0, len, [0.42, 0.33, 0.24]);
+  for (let z = 1.2; z < len + 0.1; z += 3) for (const sx of [-1, 1]) {
+    const h = top + 0.6 + rand() * 0.6, r = 0.17 + rand() * 0.04;
+    b.use(0, SRC.OWN, M.MATTE); b.tube([sx * (W + 0.1), -3, z], [sx * (W + 0.1), h, z], r, PILE, 7);
+    b.sphere([sx * (W + 0.1), h, z], r, PILE, [1, 0.5, 1], 3, 7);
+    if (rand() < 0.35) { b.use(0, SRC.OWN, M.PAINT); b.tube([sx * (W + 0.1), h - 0.45, z], [sx * (W + 0.1), h - 0.32, z], r + 0.025, IRON, 7); }
+    if (rand() < 0.3) { b.use(0, SRC.OWN, M.MATTE); for (let k = 0; k < 3; k++) b.tube([sx * (W + 0.1), top + 0.12 + k * 0.08, z], [sx * (W + 0.1), top + 0.16 + k * 0.08, z], r + 0.035, [0.86, 0.74, 0.5], 7); }
+  }
+  b.use(0, SRC.OWN, M.PAINT); b.lathe([[0.14, 0], [0.12, 0.3], [0.2, 0.34], [0.2, 0.4], [0, 0.42]], IRON, 8);
+  b.at(0.9, top, len * 0.55); b.lathe([[0.14, 0], [0.12, 0.3], [0.2, 0.34], [0.2, 0.4], [0, 0.42]], IRON, 8); b.at();
+  for (let y = -0.3; y < top; y += 0.35) b.tube([-0.35, y, len + 0.12], [0.35, y, len + 0.12], 0.025, IRON, 4);
+  for (const sx of [-0.35, 0.35]) b.tube([sx, -0.6, len + 0.12], [sx, top + 0.7, len + 0.12], 0.03, IRON, 4);
+  b.at(-W - 0.12, top + 0.25, len * 0.3, Math.PI / 2, [1, 1, 1]); b.lathe([[0.2, -0.05], [0.28, 0], [0.2, 0.05]], (i) => (i % 2 ? WHITE : [0.95, 0.4, 0.1]), 12); b.at();
+}
+/** a harbour lamp: a black post, a lantern on a bracket, lit warm (brighter as it gets dark) */
+export function lamp(b: Builder) {
+  b.use(0, SRC.OWN, M.PAINT);
+  b.lathe([[0.16, 0], [0.12, 0.4], [0.07, 0.5], [0.06, 3.6], [0.1, 3.7], [0, 3.75]], BLACK, 8);
+  b.tube([0, 3.5, 0], [0.55, 3.55, 0], 0.035, BLACK, 4);
+  b.box(0.4, 0.7, 3.62, 3.68, -0.15, 0.15, BLACK);
+  b.use(0, SRC.OWN, M.LIT); b.box(0.44, 0.66, 3.3, 3.6, -0.11, 0.11, [1, 0.82, 0.5]);
+  b.use(0, SRC.OWN, M.PAINT); b.box(0.42, 0.68, 3.26, 3.3, -0.13, 0.13, BLACK);
+}
+/** bunting: little flags in bright colours on a line from here `len` metres along local +x, sagging in the middle */
+export function bunting(b: Builder, len: number, seed: number) {
+  const cols: RGB[] = [[0.92, 0.2, 0.15], [1, 0.8, 0.1], [0.15, 0.45, 0.9], [0.2, 0.7, 0.3], [1, 1, 1], [0.95, 0.45, 0.7]];
+  const y = (x: number) => -1.1 * (1 - ((2 * x) / len - 1) ** 2);
+  b.use(0, SRC.OWN, M.MATTE);
+  for (let x = 0; x < len - 0.01; x += len / 16) b.tube([x, y(x), 0], [x + len / 16, y(x + len / 16), 0], 0.012, [0.3, 0.3, 0.3], 3);
+  b.use(3, SRC.OWN, M.SAIL);
+  for (let x = 0.5, k = seed % 6; x < len - 0.4; x += 0.75, k++) b.tri([x - 0.25, y(x - 0.25), 0], [x + 0.25, y(x + 0.25), 0], [x, y(x) - 0.42, 0], cols[k % cols.length]);
+}
+/** what's about on a quay: a stack of fish boxes, lobster pots, a coil of rope, an upturned dinghy's tarpaulin */
+export function clutter(b: Builder, seed: number) {
+  const rand = seeded(seed + 7);
+  b.use(0, SRC.OWN, M.PAINT);
+  for (let k = 0, n = 2 + Math.floor(rand() * 3); k < n; k++) { const c: RGB = ([[0.2, 0.45, 0.85], [0.9, 0.25, 0.15], [0.95, 0.75, 0.15]] as RGB[])[Math.floor(rand() * 3)]; b.roundBox([0, 0.18 + k * 0.36, 0], [0.42, 0.17, 0.3], 0.04, c, 2); }
+  b.use(0, SRC.OWN, M.MATTE);
+  for (let k = 0, n = 1 + Math.floor(rand() * 3); k < n; k++) {
+    const x = 1.1 + k * 0.85, z = (rand() - 0.5) * 0.6;
+    b.box(x - 0.36, x + 0.36, 0, 0.06, z - 0.28, z + 0.28, [0.45, 0.33, 0.22]);
+    b.at(x, 0.05, z, Math.PI / 2, [1, 1, 1]); b.lathe([[0.3, -0.34], [0.31, -0.2], [0.3, 0.2], [0.3, 0.34]], [0.2, 0.42, 0.38], 7, ); b.at();
+  }
+  b.at(-0.9, 0, 0.6); b.lathe([[0.2, 0], [0.42, 0.04], [0.45, 0.12], [0.4, 0.2], [0.2, 0.18], [0.15, 0.08]], [0.85, 0.72, 0.45], 12); b.at();
+}
+
+export function gorse(b: Builder, seed: number, flowering: boolean) {
+  b.use(0, SRC.OWN, M.LEAF);
+  lump(b, [0, 0, 0], 1.3, seed, (k) => (flowering && (k * 7919 + seed) % 5 === 0 ? [1, 0.82, 0.1] : (k + seed) % 3 ? [0.2, 0.36, 0.12] : [0.26, 0.44, 0.15]));
+}
+
+/** a finish post: a striped pole, a chequered flag at its top */
+export function post(b: Builder) {
+  b.use(0, SRC.OWN, M.ROCK); b.lathe([[1.6, -2], [1.4, 0.8], [0, 0.85]], [0.72, 0.7, 0.66], 12);
+  b.use(0, SRC.OWN, M.PAINT);
+  const prof: [number, number][] = []; for (let i = 0; i <= 14; i++) prof.push([0.22, 0.8 + i * 0.9]);
+  b.lathe(prof, (i) => (i % 2 ? BLACK : [0.97, 0.97, 0.97]), 10);
+  b.sphere([0, 13.5, 0], 0.3, [0.95, 0.75, 0.1], [1, 1, 1], 4, 8);
+}
+
+/** the banner across the harbour mouth: FINISH, chequered along its edges */
+export function banner(b: Builder, x0: number, x1: number, z: number, y: number) {
+  const H = 2.6, sq = 0.65;
+  b.use(0, SRC.OWN, M.SAIL);
+  b.quad([x1, y, z], [x0, y, z], [x0, y + H, z], [x1, y + H, z], [0.98, 0.98, 0.96]);
+  for (let x = x1, k = 0; x > x0 + 1e-3; x -= sq, k++) for (const [yy, off] of [[y, 0], [y + H - sq, 1]] as const) {
+    if ((k + off) % 2) continue;
+    const xa = Math.max(x0, x - sq);
+    b.quad([x, yy, z - 0.02], [xa, yy, z - 0.02], [xa, yy + sq, z - 0.02], [x, yy + sq, z - 0.02], BLACK);
+  }
+  // (the letters, to be read from the south: as you come up to it)
+  const px = 0.2, wide = 6 * 6 * px - px, mid = (x0 + x1) / 2;
+  b.text('FINISH', [mid + wide / 2, y + (H - 7 * px) / 2, z - 0.03], [-px, 0, 0], [0, px, 0], [0, 0, -0.01], [0.85, 0.08, 0.06]);
+  b.use(0, SRC.OWN, M.PAINT);
+  for (const x of [x0, x1]) b.tube([x, y + H, z], [x, y + H + 0.05, z], 0.05, BLACK, 4);
+}
+
+// ─── gulls ───
+
+export const WING = [0.12, 0.05] as const;
+export function gull(): Mesh {
+  const b = new Builder();
+  b.use(0, SRC.OWN, M.SOFT);
+  b.sphere([0, 0, 0], 0.22, [0.97, 0.97, 0.97], [0.8, 0.75, 1.8], 5, 8);
+  b.sphere([0, 0.08, 0.38], 0.14, [0.97, 0.97, 0.97], [1, 1, 1], 4, 8);
+  b.use(0, SRC.OWN, M.PAINT); b.tube([0, 0.07, 0.5], [0, 0.05, 0.66], 0.035, [1, 0.75, 0.1], 4, 0.01);
+  for (const [s, part] of [[1, 1], [-1, 2]] as const) {
+    b.use(part, SRC.OWN, M.SOFT);
+    b.quad([s * WING[0], WING[1], 0.18], [s * WING[0], WING[1], -0.15], [s * 0.75, WING[1], -0.2], [s * 0.7, WING[1], 0.12], [0.85, 0.87, 0.9]);
+    b.quad([s * 0.7, WING[1], 0.12], [s * 0.75, WING[1], -0.2], [s * 1.0, WING[1], -0.32], [s * 0.98, WING[1], -0.05], [0.25, 0.27, 0.3]);
+  }
+  return b.done();
+}
+
+export { join };
+
+/** the 5×7 capitals (shared with shapes' text) */
+const GLYPH_ROWS: Record<string, string[]> = {
+  R: ['####.', '#...#', '#...#', '####.', '#.#..', '#..#.', '#...#'],
+  N: ['#...#', '##..#', '#.#.#', '#.#.#', '#..##', '#...#', '#...#'],
+  L: ['#....', '#....', '#....', '#....', '#....', '#....', '#####'],
+  I: ['#####', '..#..', '..#..', '..#..', '..#..', '..#..', '#####'],
+};

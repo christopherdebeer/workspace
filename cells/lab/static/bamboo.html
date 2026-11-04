@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en" data-exp="bamboo">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#efe6d2">
+  <title>Bamboo · 竹径</title>
+  <style>
+    html, body { margin: 0; height: 100%; background: #efe6d2; overflow: hidden; touch-action: none; }
+    body { color: #23201b; font-family: "Iowan Old Style", "Palatino Linotype", Palatino, "Songti SC", "Noto Serif SC", Georgia, serif; -webkit-user-select: none; user-select: none; -webkit-tap-highlight-color: transparent; }
+    #view { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
+    /* (the chase's last line: where it brought you, quiet, at the foot of the page) */
+    #chasenote { position: fixed; left: 0; right: 0; bottom: 14%; text-align: center; font: italic 15px Georgia, serif; color: rgba(40, 32, 22, .78); letter-spacing: .04em; opacity: 0; transition: opacity 2.5s ease; pointer-events: none; }
+    #chasenote.shown { opacity: 1; }
+    #labnav { position: fixed; left: 12px; top: max(8px, env(safe-area-inset-top)); z-index: 5; font-size: 13px; color: #23201b; text-decoration: none; opacity: .55; letter-spacing: .04em; }
+    #title { position: fixed; right: 14px; top: max(10px, env(safe-area-inset-top)); font-size: 15px; letter-spacing: .08em; opacity: .7; writing-mode: vertical-rl; pointer-events: none; }
+    #hint { position: fixed; left: 0; right: 0; bottom: calc(max(18px, env(safe-area-inset-bottom)) + 10px); text-align: center; font-size: 15px; font-style: italic; opacity: .75; transition: opacity 1.6s; pointer-events: none; text-shadow: 0 0 6px #efe6d2, 0 0 2px #efe6d2; }
+    #hint.gone { opacity: 0; }
+    #caption { position: fixed; left: 0; right: 0; bottom: calc(max(18px, env(safe-area-inset-bottom)) + 44px); text-align: center; font-size: 16px; font-style: italic; opacity: 0; transition: opacity .8s; pointer-events: none; text-shadow: 0 0 8px #efe6d2, 0 0 3px #efe6d2; }
+    #caption.on { opacity: .85; }
+    #inkbtn { position: fixed; right: 10px; bottom: calc(max(14px, env(safe-area-inset-bottom)) + 4px); width: 38px; height: 38px; border-radius: 50%; border: 1px solid rgba(35,32,27,.35); background: rgba(239,230,210,.82); font: 19px/36px inherit; text-align: center; color: #23201b; z-index: 6; cursor: pointer; }
+    /* the layers, the paper up (layers.ts): a row of slots, the one touched open under them with its sliders */
+    #layers { position: fixed; left: 10px; right: 10px; bottom: calc(max(14px, env(safe-area-inset-bottom)) + 52px); z-index: 6; display: none; flex-direction: column; padding: 6px; border-radius: 26px; background: rgba(246,241,231,.92); box-shadow: 0 2px 14px rgba(70,50,30,.12), inset 0 0 0 1px rgba(70,50,30,.08); -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); max-width: 560px; margin: 0 auto; }
+    #layers.shown { display: flex; }
+    #layers .row { display: flex; gap: 2px; justify-content: space-between; }
+    #layers .row button { appearance: none; border: 0; background: none; color: #4a3f36; flex: 1 1 0; min-width: 52px; min-height: 56px; border-radius: 20px; display: grid; justify-items: center; align-content: center; gap: 3px; cursor: pointer; font: inherit; -webkit-tap-highlight-color: transparent; }
+    #layers .row svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round; }
+    #layers .row i { font-style: normal; font-size: 9px; letter-spacing: .14em; text-transform: uppercase; }
+    #layers .row s { display: block; width: 26px; height: 2px; border-radius: 1px; background: rgba(43,36,32,.16); overflow: hidden; text-decoration: none; }
+    #layers .row s b { display: block; height: 100%; background: currentColor; }
+    #layers .row button.on { background: #2b2420; color: #f3ede1; }
+    #layers .row button.on s { background: rgba(243,237,225,.25); }
+    #layers .tray { display: none; padding: 6px 8px 4px; }
+    #layers.open .tray { display: grid; gap: 0; }
+    #layers .dial { display: grid; grid-template-columns: 82px 1fr 46px; align-items: center; gap: 10px; min-height: 44px; }
+    #layers .dial span { font-size: 13px; font-style: italic; }
+    #layers .dial output { font-size: 11.5px; text-align: right; font-variant-numeric: tabular-nums; opacity: .7; }
+    #layers .track { position: relative; height: 44px; display: flex; align-items: center; }
+    #layers .track em { position: absolute; top: 50%; width: 2px; height: 12px; margin: -6px 0 0 -1px; background: #b05c1e; opacity: .55; border-radius: 1px; pointer-events: none; }
+    #layers input[type=range] { -webkit-appearance: none; appearance: none; width: 100%; height: 44px; margin: 0; background: transparent; cursor: pointer; touch-action: none; }
+    #layers input[type=range]::-webkit-slider-runnable-track { height: 3px; border-radius: 2px; background: linear-gradient(to right, #2b2420 var(--t, 0%), rgba(43,36,32,.18) var(--t, 0%)); }
+    #layers input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 24px; height: 24px; margin-top: -10.5px; border-radius: 50%; background: #f6f1e7; box-shadow: 0 1px 5px rgba(40,30,20,.3), inset 0 0 0 1.5px #2b2420; }
+    #layers input[type=range]::-moz-range-track { height: 3px; border-radius: 2px; background: rgba(43,36,32,.18); }
+    #layers input[type=range]::-moz-range-progress { height: 3px; border-radius: 2px; background: #2b2420; }
+    #layers input[type=range]::-moz-range-thumb { width: 22px; height: 22px; border: 0; border-radius: 50%; background: #f6f1e7; box-shadow: 0 1px 5px rgba(40,30,20,.3), inset 0 0 0 1.5px #2b2420; }
+    #layers .starts { display: flex; gap: 5px; align-items: center; flex-wrap: wrap; margin-top: 4px; padding-top: 8px; border-top: 1px solid rgba(43,36,32,.1); }
+    #layers .starts i { font-style: normal; font-size: 10px; letter-spacing: .12em; text-transform: uppercase; opacity: .6; margin-right: 4px; }
+    #layers .starts button { appearance: none; border: 0; font: inherit; font-size: 12.5px; font-style: italic; color: #2b2420; background: none; box-shadow: inset 0 0 0 1px rgba(43,36,32,.18); border-radius: 14px; min-height: 34px; padding: 0 12px; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+    body.preview #labnav, body.preview #hint, body.preview #title, body.preview #caption, body.preview #inkbtn, body.preview #layers { display: none; }
+  </style>
+</head>
+<body>
+  <canvas id="view"></canvas>
+  <a id="labnav" href="./">‹ lab</a>
+  <div id="title">竹径 · bamboo</div>
+  <div id="caption"></div>
+  <div id="hint">hold to run · drag to turn · drag first to look round · pinch to zoom</div>
+  <button id="inkbtn" aria-label="the layers: how it's drawn">墨</button>
+  <div id="layers" aria-label="the layers"></div>
+  <script>if (/[?&](preview|ref)\b/.test(location.search)) document.body.classList.add('preview');</script>
+  <script type="module" src="{{app}}"></script>
+</body>
+</html>

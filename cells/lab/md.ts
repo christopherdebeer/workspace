@@ -1,15 +1,21 @@
 /**
  * Markdown to HTML, as much of it as the experiments' READMEs use: headings, paragraphs, lists
- * (nested by indent), fenced code, rules, tables, and inline code, bold, italic and links. No
- * dependencies, no raw HTML passed through (everything is escaped first).
+ * (nested by indent), fenced code, rules, tables, and inline code, bold, italic, links and images. No
+ * dependencies, no raw HTML passed through (everything is escaped first; a line that's only an HTML comment, as
+ * `<!-- views -->`, is left out). A paragraph of nothing but images is a gallery: each a figure, its alt its caption.
+ * Images' sources go through `resolve` (an experiment's README points its own at its deployed assets).
  */
 const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!);
 
+let resolve = (src: string) => src;
+const IMG = /!\[([^\]]*)\]\(([^)\s]+)\)/g;
+const img = (alt: string, src: string) => `<img src="${/^(https?:|\/|\.|[\w-]+\/)/.test(src) ? resolve(src) : '#'}" alt="${alt}" loading="lazy">`;
 function inline(s: string): string {
-  // code spans first (their insides are not formatted), then links, bold, italic
+  // code spans first (their insides are not formatted), then images, links, bold, italic
   const codes: string[] = [];
   let t = esc(s).replace(/`([^`]+)`/g, (_, c: string) => `\u0000${codes.push(c) - 1}\u0000`);
   t = t
+    .replace(IMG, (_, alt: string, src: string) => img(alt, src))
     .replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (_, label: string, href: string) => `<a href="${/^(https?:|\/|#|\.)/.test(href) ? href : '#'}">${label}</a>`)
     .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
     .replace(/(^|[\s(])\*([^*\s][^*]*)\*/g, '$1<em>$2</em>')
@@ -20,7 +26,8 @@ function inline(s: string): string {
 /** A heading's id: its text, lower-cased, words joined by hyphens. */
 export const slug = (s: string) => s.toLowerCase().replace(/`/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
 
-export function markdown(src: string): { html: string; title: string; headings: Array<{ level: number; text: string; id: string }> } {
+export function markdown(src: string, opts: { resolve?: (src: string) => string } = {}): { html: string; title: string; headings: Array<{ level: number; text: string; id: string }> } {
+  resolve = opts.resolve ?? ((x) => x);
   const lines = src.replace(/\r/g, '').split('\n');
   const out: string[] = [];
   const headings: Array<{ level: number; text: string; id: string }> = [];
@@ -30,7 +37,10 @@ export function markdown(src: string): { html: string; title: string; headings: 
   const lists: Array<{ indent: number; tag: 'ul' | 'ol' }> = [];
   let item: string[] | null = null;
   const flushPara = () => {
-    if (para.length) out.push(`<p>${inline(para.join(' '))}</p>`);
+    const text = para.join(' ');
+    // (nothing but images: a gallery, each captioned with its alt)
+    if (para.length && !text.replace(IMG, '').trim()) out.push(`<div class="gallery">${[...text.matchAll(IMG)].map((m) => `<figure>${img(esc(m[1]), esc(m[2]))}<figcaption>${inline(m[1])}</figcaption></figure>`).join('')}</div>`);
+    else if (para.length) out.push(`<p>${inline(text)}</p>`);
     para = [];
   };
   const flushItem = () => {
@@ -43,6 +53,7 @@ export function markdown(src: string): { html: string; title: string; headings: 
   };
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
+    if (/^\s*<!--.*-->\s*$/.test(line)) continue;
     if (/^```/.test(line)) {
       flushPara();
       closeLists();

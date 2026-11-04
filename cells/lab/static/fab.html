@@ -1,0 +1,281 @@
+<!doctype html>
+<html lang="en" data-exp="fab">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#ddd0bd">
+  <title>Fab</title>
+  <style>
+    :root {
+      --ink: #3b2f24; --ink2: #6b5a46; --ink3: #9a8770;
+      --paper: #fbf6ec; --paper2: #f3ebdd; --glass: rgba(251,246,236,.86);
+      --rose: #d9536b; --rose2: #f6d6d9; --dark: #42342a;
+      --serif: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, serif;
+      --round: ui-rounded, "SF Pro Rounded", "Nunito", system-ui, sans-serif;
+      --lift: 0 1px 2px rgba(60,40,20,.12), 0 4px 14px rgba(60,40,20,.12);
+    }
+    html, body { margin: 0; height: 100%; background: #ddd0bd; overflow: hidden; touch-action: none; }
+    body { color: var(--ink); font-family: var(--round); -webkit-user-select: none; user-select: none; display: flex; flex-direction: column; }
+    button, a { -webkit-tap-highlight-color: transparent; }
+    #stage { position: relative; flex: 1; min-height: 0; }
+    body.rails { --drawer: 0px; }
+    canvas#gl { position: absolute; inset: 0; width: 100%; height: 100%; display: block; cursor: grab; }
+    canvas#sheet { position: absolute; inset: 8px; width: calc(100% - 16px); height: calc(100% - 16px); border-radius: 14px; box-shadow: 0 8px 30px rgba(60,40,20,.25); display: none; z-index: 5; }
+    body.sheet canvas#sheet { display: block; }
+
+    /* the top: Fab, and the room's three places (where you are, dark); under it, what can be done here */
+    nav { position: absolute; top: max(10px, env(safe-area-inset-top)); left: 10px; right: 10px; display: flex; gap: 8px; align-items: center; z-index: 4; }
+    nav .title { font-family: var(--serif); font-size: 26px; font-weight: 700; letter-spacing: -.01em; margin-right: auto; padding: 0 4px; color: #2e231a; text-shadow: 0 0 10px rgba(251,246,236,.8); cursor: default; }
+    nav a.back { all: unset; cursor: pointer; font-family: var(--serif); font-size: 15px; padding: 7px 12px; border-radius: 999px; background: var(--glass); box-shadow: var(--lift); }
+    #places { display: flex; padding: 3px; gap: 2px; border-radius: 999px; background: var(--glass); box-shadow: var(--lift); -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); }
+    #places button { all: unset; cursor: pointer; font-family: var(--serif); font-size: 15px; padding: 6px 13px; border-radius: 999px; color: var(--ink2); transition: background .2s, color .2s; }
+    #places button.on { background: var(--dark); color: #fbf3e6; }
+    #acts { position: absolute; top: calc(max(10px, env(safe-area-inset-top)) + 46px); right: 10px; left: 10px; display: flex; gap: 6px; justify-content: flex-end; flex-wrap: wrap; z-index: 4; pointer-events: none; }
+    #acts > * { all: unset; pointer-events: auto; cursor: pointer; display: inline-flex; align-items: center; gap: 5px; font-family: var(--serif); font-size: 14px; padding: 6px 12px; border-radius: 999px; background: var(--glass); box-shadow: var(--lift); color: var(--ink); }
+    #acts svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+    #acts > .icon { width: 34px; height: 34px; padding: 0; justify-content: center; }
+    #acts > .icon svg { width: 20px; height: 20px; }
+    /* (twirl's a moment, not a mode: lit only while it turns. Posing's a mode: lit while it's on, its joints marked) */
+    /* the figure's tools: a column down the right, the one in hand lit */
+    #figtools { position: absolute; right: 10px; top: calc(max(10px, env(safe-area-inset-top)) + 96px); z-index: 4; display: flex; flex-direction: column; gap: 4px; padding: 4px; border-radius: 26px; background: var(--glass); box-shadow: var(--lift); }
+    #figtools button { all: unset; cursor: pointer; width: 44px; min-height: 48px; border-radius: 22px; display: grid; justify-items: center; align-content: center; gap: 1px; color: var(--ink2); }
+    #figtools svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+    #figtools i { font-style: normal; font-family: var(--serif); font-size: 10px; line-height: 1; }
+    #figtools button.on { background: var(--rose); color: #fff6ee; }
+    body.preview #figtools { display: none; }
+    /* (with the pose or the tug in hand, the drawer's about that: the garment's own tabs wait) */
+    body[data-tool=pose] #figtabs, body[data-tool=tug] #figtabs, body[data-tool=pose] #wearing, body[data-tool=tug] #wearing, body[data-tool=pose] #custom, body[data-tool=tug] #custom { display: none !important; }
+    .figsec .hint { font-size: 13px; color: var(--ink2); margin: 2px 2px 10px; line-height: 1.4; }
+    .figsec .acts { display: flex; gap: 8px; flex-wrap: wrap; }
+    .figsec .acts button { all: unset; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; padding: 8px 14px; border-radius: 999px; background: var(--paper2); font-family: var(--serif); font-size: 14px; color: var(--ink); }
+    .figsec .acts svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+    .joint { position: absolute; left: 0; top: 0; width: 18px; height: 18px; margin: -9px 0 0 -9px; border-radius: 50%; border: 2px solid var(--rose); background: rgba(255,250,240,.3); box-shadow: 0 1px 6px rgba(60,30,20,.25); pointer-events: none; z-index: 3; transition: transform .05s linear, background .15s; }
+    .joint.held { background: var(--rose); }
+    /* (the chest's handle, bending it at the waist: larger, a ring within a ring) */
+    .joint.torso { width: 26px; height: 26px; margin: -13px 0 0 -13px; box-shadow: inset 0 0 0 4px rgba(255,250,240,.6), 0 1px 6px rgba(60,30,20,.25); }
+    /* (a pin's glass head, while a garment's pinned on to be sewn) */
+    .pinhead { position: absolute; left: 0; top: 0; width: 7px; height: 7px; margin: -3.5px 0 0 -3.5px; border-radius: 50%; box-shadow: 0 0 0 1px rgba(40,30,20,.35), inset -1px -1px 2px rgba(0,0,0,.25); pointer-events: none; z-index: 3; }
+    body.table .pinhead, body.rails .pinhead { display: none; }
+    body:not(.posing) .joint, body.table .joint, body.rails .joint { display: none; }
+    #acts #cloth.on { background: var(--dark); color: #fbf3e6; }
+    body.sheet #acts #pattern { background: var(--dark); color: #fbf3e6; }
+
+    /* the pattern, pinned up beside the figure: tap it to go to the cutting table */
+    #note { all: unset; position: absolute; right: 12px; bottom: calc(var(--drawer, 180px) + 14px); width: 64px; padding: 7px 6px 5px; background: #fbf7ee; border-radius: 2px; box-shadow: 0 2px 3px rgba(60,40,20,.12), 0 6px 16px rgba(60,40,20,.2); transform: rotate(3deg); cursor: pointer; z-index: 3; display: grid; gap: 1px; justify-items: center; background-image: linear-gradient(rgba(120,150,170,.09) 1px, transparent 1px), linear-gradient(90deg, rgba(120,150,170,.09) 1px, transparent 1px); background-size: 6px 6px; transition: transform .15s; }
+    #note:active { transform: rotate(3deg) scale(.95); }
+    #note .pin { position: absolute; top: -4px; left: 50%; width: 9px; height: 9px; margin-left: -4px; border-radius: 50%; background: radial-gradient(circle at 35% 35%, #f2c46a, #b07a28); box-shadow: 0 2px 2px rgba(60,40,20,.35); }
+    #note canvas { width: 52px; height: 58px; display: block; }
+    #note em { font-style: normal; font-size: 10px; font-weight: 800; color: var(--rose); }
+
+    /* what the cut found, over the scene: words with a soft halo, no card */
+    #notes { position: absolute; left: 14px; right: 90px; bottom: calc(var(--drawer, 180px) + 10px); text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-family: var(--serif); font-size: 14px; color: var(--ink); z-index: 2; pointer-events: none; text-shadow: 0 0 6px rgba(244,236,222,.95), 0 0 14px rgba(244,236,222,.8); }
+    #notes:empty { display: none; }
+
+    /* the drawer: a sheet of paper drawn up over the room */
+    /* (over the room, not under it: the scene never changes size as the drawer opens and closes) */
+    #bench { position: absolute; left: 0; right: 0; bottom: 0; box-sizing: border-box; max-height: 82vh; overflow: hidden; overscroll-behavior: contain; z-index: 4; transition: height .34s cubic-bezier(.2,.9,.25,1); will-change: height; background: var(--paper); border-radius: 22px 22px 0 0; padding: 14px 12px max(12px, env(safe-area-inset-bottom)); box-shadow: 0 -8px 26px rgba(60,40,20,.16); }
+    #grip { all: unset; display: block; box-sizing: border-box; width: calc(100% + 24px); position: relative; margin: -14px -12px 6px; padding: 16px 12px 2px; cursor: pointer; touch-action: none; text-align: center; min-height: 6px; }
+    #bench.held { transition: none; }
+    body[data-drawer=full] #bench:not(.held) { overflow-y: auto; }
+    #grip:active::before, #bench.held #grip::before { background: rgba(60,40,20,.38); width: 48px; margin-left: -24px; }
+    #grip::before { content: ""; position: absolute; top: 6px; left: 50%; width: 36px; height: 4px; margin-left: -18px; border-radius: 4px; background: rgba(60,40,20,.16); }
+    /* the drawer's three states, each the one before with more below it: closed (its handle, and what's chosen in a
+       line); focused (at the figure, a section's tabs and swatches; at the table, the tool, its panels, undo and history);
+       expanded (that section made your own, dial by dial; the tool's gestures and what it's set to). The drawer's only
+       ever clipped to a height: dragging its handle shows more or less of it, and it settles to a state when let go */
+    #gripsum { display: block; height: 20px; font-family: var(--serif); font-size: 14px; color: var(--ink2); padding: 2px 0 0; opacity: 0; transition: opacity .2s; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    body[data-drawer=closed] #gripsum { opacity: 1; }
+    #figtabs { display: flex; padding: 3px; gap: 2px; border-radius: 14px; background: var(--paper2); margin-bottom: 10px; }
+    #figtabs button { all: unset; flex: 1; text-align: center; cursor: pointer; padding: 6px 4px; border-radius: 11px; font-family: var(--serif); font-size: 14px; color: var(--ink2); }
+    #figtabs button.on { background: #fffdf8; color: var(--ink); box-shadow: var(--lift); }
+    #figtabs button#tune { flex: none; padding: 6px 10px; color: var(--rose); }
+    body[data-drawer=full] #figtabs button#tune { background: var(--rose); color: #fff6ee; }
+    /* customising: the one chosen, made one's own, dial by dial */
+    #custom { display: none; }
+    body:not(.table) #custom { display: block; }
+    #custom .chead { display: flex; align-items: baseline; gap: 8px; margin: 2px 2px 8px; }
+    #custom .chead b { font-family: var(--serif); font-size: 17px; }
+    #custom .chead span { font-size: 11.5px; font-weight: 600; color: var(--ink2); flex: 1; }
+    #custom .chead button { all: unset; cursor: pointer; font-family: var(--serif); font-size: 13px; padding: 3px 10px; border-radius: 999px; background: var(--paper2); }
+    #custom .dials { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px 4px; }
+    #custom .inks { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+    #custom .ink { position: relative; display: grid; justify-items: center; gap: 4px; font-size: 11px; font-weight: 700; color: var(--ink2); }
+    #custom .ink span { width: 54px; height: 54px; border-radius: 50%; box-shadow: inset 0 0 0 1px rgba(60,40,20,.15), var(--lift); }
+    #custom .ink input { position: absolute; inset: 0; opacity: 0; width: 100%; height: 100%; cursor: pointer; }
+    #custom .ink i { font-style: normal; font-family: ui-monospace, monospace; font-size: 10px; color: var(--ink3); }
+    #custom .note { font-size: 11px; color: var(--ink3); margin: 8px 2px 0; }
+    .figsec:not(.on) { display: none; }
+    /* what's made: its kind, and its parts' choices (a row of each group, labelled) and dials */
+    .fam { all: unset; flex: none; cursor: pointer; font-family: var(--serif); font-size: 14px; padding: 6px 12px; border-radius: 999px; background: var(--paper2); color: var(--ink2); }
+    .fam.on { background: var(--ink); color: #fffdf8; }
+    .choices { align-items: center; }
+    .choices i { flex: none; font-style: normal; font-size: 10px; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; color: var(--ink3); margin: 0 2px 0 8px; }
+    .choices button { all: unset; flex: none; display: flex; align-items: center; gap: 5px; padding: 6px 10px; border-radius: 12px; background: var(--paper2); cursor: pointer; font-family: var(--serif); font-size: 13px; color: var(--ink2); white-space: nowrap; }
+    .choices svg { width: 22px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+    .choices button.on { background: #fffdf8; color: var(--ink); box-shadow: var(--lift); }
+    .choices button.off { opacity: .4; }
+    #bodicedials, #legdials { display: grid; grid-template-columns: repeat(auto-fit, minmax(64px, 1fr)); gap: 8px 4px; margin-top: 4px; }
+    #figtabs [hidden] { display: none; }
+    /* at the table, a garment without a skirt to work: its pattern to look at, no tools */
+    /* (a top's, trousers' or a jumpsuit's whole pattern: the hand and the scissors, on its hems; no history of moves) */
+    body.table:not(.skirted) #palette .tool[data-tool=fold], body.table:not(.skirted) #palette .tool[data-tool=thread], body.table:not(.skirted) .stepper { display: none !important; }
+    .figsec .lab { display: none; }
+    [data-tier="2"] { border-top: 1px dashed rgba(60,40,20,.15); padding-top: 10px; }
+    .figsec .row { margin-bottom: 6px; }
+    .row { display: flex; gap: 8px; margin-bottom: 10px; overflow-x: auto; scrollbar-width: none; }
+    .row::-webkit-scrollbar { display: none; }
+    .lab { font-size: 10px; font-weight: 800; letter-spacing: .14em; text-transform: uppercase; color: var(--ink3); margin: 2px 2px 6px; }
+    #methods { padding: 3px; border-radius: 14px; background: var(--paper2); gap: 2px; }
+    #methods button { all: unset; flex: 1; display: flex; align-items: center; justify-content: center; gap: 6px; padding: 7px 4px; border-radius: 11px; cursor: pointer; font-family: var(--serif); font-size: 14px; color: var(--ink2); }
+    #methods svg { width: 24px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+    #methods button.on { background: #fffdf8; color: var(--ink); box-shadow: var(--lift); }
+    #knobs { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; margin-bottom: 10px; }
+    .knob { text-align: center; touch-action: none; cursor: grab; }
+    .knob svg { width: 52px; height: 52px; display: block; margin: 0 auto; overflow: visible; }
+    .knob .face { fill: #fffdf8; stroke: rgba(60,40,20,.15); stroke-width: 1.5; }
+    .knob .track { fill: none; stroke: rgba(90,60,30,.12); stroke-width: 5; stroke-linecap: round; }
+    .knob .arc { fill: none; stroke: var(--rose); stroke-width: 5; stroke-linecap: round; }
+    .knob .dot { fill: var(--ink); }
+    .knob.turning svg { transform: scale(1.08); }
+    .knob b { display: block; font-size: 9.5px; letter-spacing: .12em; text-transform: uppercase; margin-top: 3px; color: var(--ink3); }
+    .knob i { display: block; font-style: normal; font-family: var(--serif); font-size: 15px; color: var(--ink); min-height: 18px; white-space: nowrap; }
+    .swatch, .print { all: unset; flex: none; display: flex; flex-direction: column; align-items: center; gap: 4px; font-size: 11px; font-weight: 600; color: var(--ink2); padding: 3px; border-radius: 12px; cursor: pointer; min-width: 52px; }
+    .swatch span, .print canvas { width: 50px !important; height: 34px !important; border-radius: 8px; box-shadow: inset 0 0 0 1px rgba(60,40,20,.14), 0 1px 3px rgba(60,40,20,.14); outline: 2px solid transparent; outline-offset: 2px; }
+    .swatch span { background-image: repeating-linear-gradient(45deg, rgba(0,0,0,.04) 0 2px, transparent 2px 4px) !important; }
+    .swatch.on, .print.on { color: var(--ink); font-weight: 800; }
+    .swatch.on span, .print.on canvas { outline-color: var(--rose); }
+
+    /* the paper, its tools, its history (and the dials instead, with ?ui=dials) */
+    body:not(.dials) #methods, body:not(.dials) #knobs, body.dials #tools, body.dials #gestures, body.dials #toolctl, body.dials #palette, body.dials #history { display: none !important; }
+    /* the tools: a palette down the right of the table; the drawer, what the one in hand does and what it's set to */
+    #palette { position: absolute; right: 10px; top: calc(max(10px, env(safe-area-inset-top)) + 96px); display: flex; flex-direction: column; gap: 2px; padding: 4px; border-radius: 18px; background: var(--glass); box-shadow: var(--lift); -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); z-index: 4; }
+    .tool { all: unset; cursor: pointer; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px; width: 56px; padding: 7px 0 5px; border-radius: 14px; font-family: var(--serif); font-size: 12px; color: var(--ink2); }
+    .tool svg { width: 28px; height: 28px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+    .tool.on { background: var(--rose2); color: #8a2638; }
+    #tools { display: flex; gap: 6px; align-items: center; margin-bottom: 8px; }
+    #toolhead { flex: 1; min-width: 0; display: grid; }
+    #toolname { font-family: var(--serif); font-size: 20px; font-weight: 700; line-height: 1.1; }
+    #toolwhat { font-size: 12px; font-weight: 600; color: var(--ink2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    #gestures { display: grid; gap: 4px; margin-bottom: 8px; }
+    .gest { display: flex; align-items: center; gap: 8px; font-family: var(--serif); font-size: 14px; color: var(--ink); }
+    .gest svg { flex: none; width: 26px; height: 26px; fill: none; stroke: var(--rose); stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+    .gest i { font-style: normal; font-family: var(--round); font-size: 11px; font-weight: 700; color: var(--ink3); margin-left: auto; white-space: nowrap; }
+    #toolctl { display: flex; gap: 6px 8px; flex-wrap: wrap; margin-bottom: 4px; }
+    .ctl { display: flex; align-items: center; gap: 6px; padding: 3px 4px 3px 10px; border-radius: 14px; background: var(--paper2); font-size: 11px; font-weight: 700; color: var(--ink3); }
+    .ctl b { font-family: var(--serif); font-size: 15px; font-weight: 600; color: var(--ink); min-width: 46px; text-align: center; }
+    .ctl b:empty { display: none; }
+    .ctl button { all: unset; cursor: pointer; width: 26px; height: 26px; border-radius: 999px; text-align: center; line-height: 26px; font-size: 16px; background: #fffdf8; box-shadow: var(--lift); color: var(--ink); }
+    .ctl button.word { width: auto; padding: 0 9px; font-family: var(--serif); font-size: 13px; }
+    .ctl button.on { background: var(--dark); color: #fbf3e6; }
+    .stepper { flex: none; display: flex; align-items: center; gap: 2px; background: var(--paper2); border-radius: 14px; padding: 3px; }
+    .stepper button, #undo, #redo { all: unset; cursor: pointer; width: 28px; height: 28px; border-radius: 999px; text-align: center; line-height: 28px; font-size: 18px; background: #fffdf8; box-shadow: var(--lift); }
+    .stepper b { display: flex; flex-direction: column; align-items: center; font-family: var(--serif); font-size: 17px; font-weight: 600; line-height: 1; min-width: 34px; }
+    .stepper b i { font-style: normal; font-family: var(--round); font-size: 9px; font-weight: 700; color: var(--ink3); margin-top: 2px; }
+    #undo, #redo { flex: none; width: auto; height: 40px; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 0 10px; border-radius: 14px; font-family: var(--serif); font-size: 12px; line-height: 1.1; background: var(--paper2); box-shadow: none; }
+    #undo svg, #redo svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+    #history { margin-bottom: 10px; min-height: 30px; align-items: center; }
+    #history .chip { all: unset; flex: none; cursor: pointer; font-family: var(--serif); font-size: 13px; padding: 5px 11px; border-radius: 999px; background: #fffdf8; box-shadow: inset 0 0 0 1px rgba(60,40,20,.14); }
+    #history .chip:last-child { box-shadow: inset 0 0 0 1.5px var(--rose); }
+    #history .chip i { font-style: normal; color: var(--ink3); margin-left: 4px; }
+    #history .chip.dud { opacity: .5; text-decoration: line-through; }
+    #history .none { font-family: var(--serif); font-size: 13px; color: var(--ink3); padding: 4px 2px; }
+    .preview nav, .preview #acts, .preview #bench, .preview #note, .preview #notes, .preview #railui { display: none; }
+
+    /* the rails */
+    body.rails #bench, body.rails #note, body.rails #notes, body.rails .benchonly, body:not(.rails) .railsonly, body:not(.rails) #railui { display: none !important; }
+    #railui { position: absolute; inset: 0; pointer-events: none; z-index: 3; }
+    #railtags { position: absolute; top: calc(max(10px, env(safe-area-inset-top)) + 50px); left: 10px; right: 10px; display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; pointer-events: auto; padding: 2px 2px 6px; }
+    #railtags::-webkit-scrollbar { display: none; }
+    .tag { all: unset; flex: none; cursor: pointer; font-family: var(--serif); font-size: 15px; padding: 6px 14px 6px 11px; border-radius: 4px 12px 12px 4px; background: var(--glass); box-shadow: var(--lift); border-left: 6px solid var(--c, #999); }
+    .tag.on { background: #fffdf8; box-shadow: 0 2px 10px rgba(60,40,20,.28); font-weight: 700; }
+    .tag small { display: block; font-family: var(--round); font-size: 8.5px; font-weight: 800; letter-spacing: .14em; text-transform: uppercase; color: var(--ink3); line-height: 1; margin-bottom: 1px; }
+    .tag.add { border: 1.5px dashed rgba(60,40,20,.3); border-radius: 12px; background: rgba(251,246,236,.45); box-shadow: none; }
+    /* the one in front, named over the scene: no card, just words with a soft halo so they read on cloth or wall */
+    #railcard { position: absolute; left: 14px; right: 14px; bottom: max(18px, env(safe-area-inset-bottom)); display: grid; gap: 4px; pointer-events: none; text-align: center; text-shadow: 0 0 6px rgba(244,236,222,.95), 0 0 16px rgba(244,236,222,.85), 0 1px 0 rgba(255,250,240,.9); }
+    #railcard b { font-family: var(--serif); font-size: 26px; font-weight: 700; color: #2e231a; letter-spacing: -.01em; }
+    #railcard > span { font-family: var(--serif); font-size: 16px; color: #4f3f30; min-height: 20px; }
+    #railcard button[hidden] { display: none; }
+    #railcard button { all: unset; pointer-events: auto; cursor: pointer; justify-self: center; display: inline-flex; align-items: center; gap: 10px; margin: 10px 0 6px; padding: 12px 24px; border-radius: 999px; background: var(--rose); color: #fff6ee; font-family: var(--serif); font-size: 18px; text-shadow: none; box-shadow: 0 4px 16px rgba(140,40,55,.32); }
+    #railcard button svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+    #railcard .hints { display: flex; justify-content: center; gap: 14px; flex-wrap: wrap; font-size: 11.5px; font-weight: 700; color: #5d4b38; }
+    #railcard .hints span { all: unset; display: inline-flex; align-items: center; gap: 4px; }
+    #railcard .hints svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+    #toast { position: absolute; left: 50%; top: 104px; transform: translate(-50%, -8px); padding: 8px 14px; border-radius: 999px; background: var(--dark); color: #fbf3e6; font-family: var(--serif); font-size: 14px; opacity: 0; transition: opacity .25s, transform .25s; pointer-events: none; z-index: 6; white-space: nowrap; }
+    #toast.show { opacity: 1; transform: translate(-50%, 0); }
+
+    /* three places in the room: the rails, the figure, the cutting table; each its own drawer */
+    body.rails .figonly, body.table .figonly, body:not(.table) .tableonly, body:not(.table) .cutonly { display: none !important; }
+    body.table canvas#gl { cursor: crosshair; }
+    body.table .figdrawer, body.table #note { display: none !important; }
+    body.table #notes { right: 14px; }
+    #perf { position: absolute; left: 10px; right: 10px; top: calc(max(10px, env(safe-area-inset-top)) + 84px); z-index: 6; font: 600 11px ui-monospace, Menlo, monospace; color: #3b2f24; background: rgba(255,250,240,.8); border-radius: 8px; padding: 4px 8px; pointer-events: none; }
+
+    /* (the table: the tools only for a skirt's paper, its panels' stepper with them; a piece's own choices and its seams
+       in the expanded drawer; undo and redo together; the notes line only while the drawer's closed) */
+    body.table:not(.skirtpaper) #palette, body.table:not(.skirtpaper) .stepper, body.table .stepper:has(#tiersn) { display: none !important; }
+    body.table #undo, body.table #redo, body.table #history { display: flex !important; }
+    #undo:disabled, #redo:disabled { opacity: .35; cursor: default; }
+    .join-note { width: 100%; font-size: 11px; color: var(--ink3); padding: 2px 4px; }
+    body.table #notes { display: none; }
+    #wearing:empty { display: none; }
+    #railwith { display: flex; align-items: center; justify-content: center; gap: 4px; margin-top: 8px; font-family: var(--serif); font-size: 13px; color: var(--ink2); pointer-events: auto; }
+    #railwith[hidden] { display: none; }
+    #railwith span { margin-right: 4px; }
+    #railwith button { all: unset; cursor: pointer; padding: 5px 12px; border-radius: 999px; background: var(--glass); box-shadow: var(--lift); color: var(--ink); }
+    #railwith button.on { background: var(--dark); color: #fbf3e6; }
+    #acts>.icon{min-width:44px;min-height:44px}
+    .stepper button,.ctl button{min-width:34px;min-height:34px;line-height:34px}
+    button:focus-visible,select:focus-visible{outline:3px solid var(--rose);outline-offset:2px}
+    button:disabled{opacity:.35;cursor:default}
+    @media(prefers-reduced-motion:reduce){*{transition:none!important}}
+  </style>
+</head>
+<body>
+  <div id="stage">
+    <canvas id="gl"></canvas>
+    <button id="note" class="figonly" title="the pattern: take it to the cutting table"><i class="pin"></i><canvas id="card"></canvas><em>cut ✂</em></button>
+    <canvas id="sheet"></canvas>
+    <div id="notes"></div>
+    <nav><a href="/" class="back railsonly">←</a><span class="title">Fab</span><div id="places"><button data-place="rails">rails</button><button data-place="bench">figure</button><button data-place="table">table</button></div></nav>
+    <div id="acts" class="benchonly">
+      <button id="cloth" class="tableonly icon" aria-label="the cloth on the paper" title="the cloth on the paper"><svg viewBox="0 0 20 20"><path d="M3 5l7-2 7 2v10l-7 2-7-2z"/><path d="M3 5l7 2 7-2M10 7v10"/></svg></button>
+      <button id="hang" title="save to rail"><svg viewBox="0 0 20 20"><path d="M10 6.5a2 2 0 112-2M10 6.5v1.5L2.5 14h15L10 8"/></svg><span>save to rail</span></button>
+    </div>
+    <!-- (the figure's tools, down the right: what a finger on the scene does) -->
+    <div id="figtools" class="figonly benchonly" role="toolbar" aria-label="what a finger does">
+      <button data-tool="hand" aria-label="hand: turn the figure, flick it to twirl, pinch to come close" title="hand"><svg viewBox="0 0 24 24"><path d="M8 12V5.5a1.5 1.5 0 013 0V11M11 10.5V4a1.5 1.5 0 013 0v6.5M14 10.5V5.5a1.5 1.5 0 013 0V14c0 4-2.5 6.5-6 6.5-2.8 0-4.2-1.3-5.6-3.6L3.6 13.6a1.4 1.4 0 012.2-1.7L8 14"/></svg><i>hand</i></button>
+      <button data-tool="pose" aria-label="the figure: take hold of a joint and move it" title="pose"><svg viewBox="0 0 24 24"><circle cx="12" cy="4.5" r="2.2"/><path d="M12 7v7M12 9l-5 3.5M12 9l5.5-3M12 14l-3.5 6.5M12 14l3.5 6.5"/><circle cx="7" cy="12.5" r=".9"/><circle cx="17.5" cy="6" r=".9"/></svg><i>pose</i></button>
+      <button data-tool="tug" aria-label="tug: take hold of the cloth and pull it" title="tug"><svg viewBox="0 0 24 24"><path d="M3 7c3-2 6 2 9 0s6-2 9 0M3 7v10c3 2 6-2 9 0s6 2 9 0V7"/><path d="M12 7v-3.5M10 5.5l2-2 2 2"/><circle cx="12" cy="7" r="1.3"/></svg><i>tug</i></button>
+    </div>
+    <div id="railui">
+      <div id="railtags"></div>
+      <div id="railcard"><b id="railname"></b><span id="railwhat"></span><button id="wear" hidden><svg viewBox="0 0 24 24"><path d="M12 3v4M12 17v4M3 12h4M17 12h4M6 6l2.5 2.5M15.5 15.5L18 18M6 18l2.5-2.5M15.5 8.5L18 6"/></svg><span>A New Creation</span><svg viewBox="0 0 24 24"><path d="M5 12h14M14 7l5 5-5 5"/></svg></button><div id="railwith" hidden><span>put it on</span><button data-with="instead">instead</button><button data-with="also">as well</button></div>
+        <div class="hints"><span><svg viewBox="0 0 20 20"><path d="M3 10h14M6 7l-3 3 3 3M14 7l3 3-3 3"/></svg>slide along the rail</span><span><svg viewBox="0 0 20 20"><path d="M10 3v14M7 6l3-3 3 3M7 14l3 3 3-3"/></svg>swipe for another rail</span><span><svg viewBox="0 0 20 20"><circle cx="10" cy="10" r="2.5"/><path d="M10 2.5v2M10 15.5v2M2.5 10h2M15.5 10h2"/></svg>tap the front one</span></div>
+      </div>
+    </div>
+    <div id="palette" class="tableonly"></div>
+    <div id="toast"></div>
+  </div>
+  <div id="bench">
+    <button id="grip" aria-label="the drawer: open, focus or close it"><span id="gripsum"></span></button>
+    <div class="row" id="methods"></div>
+    <div id="knobs"></div>
+    <div id="tools" class="cutonly"><div id="toolhead"><b id="toolname"></b><span id="toolwhat"></span></div><div class="stepper"><button id="panelsless" aria-label="fewer panels">−</button><b><span id="panelsn">4</span><i>panels</i></b><button id="panelsmore" aria-label="more panels">+</button></div><div class="stepper"><button id="tiersless" aria-label="fewer tiers">−</button><b><span id="tiersn">1</span><i>tiers</i></b><button id="tiersmore" aria-label="more tiers">+</button></div><button id="undo"><svg viewBox="0 0 24 24"><path d="M9 7L5 11l4 4"/><path d="M5 11h9a5 5 0 010 10h-2"/></svg>undo</button><button id="redo"><svg viewBox="0 0 24 24"><path d="M15 7l4 4-4 4"/><path d="M19 11h-9a5 5 0 000 10h2"/></svg>redo</button></div>
+    <div class="row cutonly" id="history"></div>
+    <div id="gestures" class="cutonly" data-tier="2"></div>
+    <div id="toolctl" class="cutonly"></div>
+    <div class="row choices figdrawer" id="wearing"></div>
+    <div id="figtabs" class="figdrawer"><button data-sec="what">Make</button><button data-sec="bodice">Bodice</button><button data-sec="legs">Legs</button><button data-sec="fabric">Fabric</button><button data-sec="print">Print</button><button data-sec="colour">Colour</button><button id="tune" aria-label="make it your own" title="make it your own">⚙</button></div>
+    <div class="figsec figdrawer" data-sec="what"><div class="lab">what it is</div><div class="row" id="families"></div><div class="row choices" id="tierrow"></div></div>
+    <div class="figsec figdrawer" data-sec="bodice"><div class="lab">the bodice</div><div class="row choices" id="choices"></div><div class="dials" id="bodicedials"></div></div>
+    <div class="figsec figdrawer" data-sec="legs"><div class="lab">the legs</div><div class="row choices" id="legpicks"></div><div class="dials" id="legdials"></div></div>
+    <div class="figsec figdrawer" data-sec="fabric"><div class="lab">fabric</div><div class="row" id="fabrics"></div></div>
+    <div class="figsec figdrawer" data-sec="print"><div class="lab">print</div><div class="row" id="prints"></div></div>
+    <div class="figsec figdrawer" data-sec="colour"><div class="lab">colour</div><div class="row" id="colours"></div></div>
+    <div class="figsec figdrawer" data-sec="figure"><div class="hint">Take hold of a ring and move it: an elbow, a hand, a knee, an ankle, the head, or the chest (the large ring) to bend it at the waist. What it wears moves with it.</div><div class="acts"><button id="unpose"><svg viewBox="0 0 20 20"><path d="M6 6L3 9l3 3"/><path d="M3 9h9a4.5 4.5 0 010 9H9"/></svg>stand it as it was</button><button class="resew"><svg viewBox="0 0 20 20"><path d="M15.5 2.5L5 13l-1.5 4.5L8 16 18.5 5.5z"/><circle cx="15.2" cy="4.8" r=".9"/><path d="M3.5 17.5c2 0 2-2 4-2s2 2 4 2 2-2 4-2"/></svg>pin and sew it on again</button></div></div>
+    <div class="figsec figdrawer" data-sec="tug"><div class="hint">Take hold of the cloth anywhere and pull: let go, and it falls as it would.</div><div class="acts"><button class="resew"><svg viewBox="0 0 20 20"><path d="M15.5 2.5L5 13l-1.5 4.5L8 16 18.5 5.5z"/><circle cx="15.2" cy="4.8" r=".9"/><path d="M3.5 17.5c2 0 2-2 4-2s2 2 4 2 2-2 4-2"/></svg>pin and sew it on again</button></div></div>
+    <div id="custom" class="figdrawer" data-tier="2"></div>
+  </div>
+  <script type="module" src="{{app}}"></script>
+</body>
+</html>

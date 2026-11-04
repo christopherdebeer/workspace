@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="en" data-exp="squishy">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#8a7a62">
+  <title>Squishy</title>
+  <style>
+    html, body { margin: 0; height: 100%; background: #9a8c78; overflow: hidden; touch-action: none; }
+    body { color: #fff; font-family: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif; -webkit-user-select: none; user-select: none; }
+    canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
+    button { all: unset; cursor: pointer; box-sizing: border-box; }
+    #top { position: fixed; left: 0; right: 0; top: 0; height: calc(max(12px, env(safe-area-inset-top)) + 70px); background: linear-gradient(to bottom, rgba(30,22,14,.5), rgba(30,22,14,0)); pointer-events: none; }
+    nav { position: fixed; top: max(12px, env(safe-area-inset-top)); left: 14px; }
+    nav a { font-size: 13px; letter-spacing: .1em; font-variant: small-caps; padding: 4px 2px; color: #fff; text-shadow: 0 1px 3px rgba(0,0,0,.6); text-decoration: none; }
+    #status { position: fixed; right: 14px; top: max(12px, env(safe-area-inset-top)); font-size: 13px; letter-spacing: .06em; text-shadow: 0 1px 3px rgba(0,0,0,.6); font-variant-numeric: tabular-nums; }
+    /* (a double tap on it copies the flick log: room enough to tap, and a flash when it has) */
+    #status { padding: 6px 4px 8px 12px; margin: -6px -4px 0 0; touch-action: none; user-select: none; -webkit-user-select: none; pointer-events: auto; z-index: 5; border-radius: 10px; }
+    #status.copied { animation: copied 1.2s ease-out; }
+    @keyframes copied { 0% { background: rgba(255,236,170,.95); color: #4b2614; text-shadow: none; } 100% { background: rgba(255,236,170,0); } }
+    #hands { position: fixed; left: 0; right: 0; bottom: 0; padding: 28px 14px max(12px, env(safe-area-inset-bottom)); display: flex; flex-direction: column; align-items: center; gap: 10px; pointer-events: none; background: linear-gradient(to top, rgba(30,22,14,.55), rgba(30,22,14,.25) 60%, rgba(30,22,14,0)); }
+    #hands button, #hands a { pointer-events: auto; }
+    #hint { min-height: 20px; padding: 0 10px; text-align: center; font-size: 15px; font-style: italic; text-shadow: 0 1px 3px rgba(0,0,0,.6); opacity: 0; transition: opacity .6s; }
+    #hint.on { opacity: 1; }
+    .pills { display: flex; gap: 10px; }
+    .pills button { height: 50px; border-radius: 25px; line-height: 50px; padding: 0 22px; font-size: 16px; letter-spacing: .08em; font-variant: small-caps; background: rgba(255,250,242,.86); color: #3a2e22; box-shadow: 0 4px 16px rgba(0,0,0,.18); transition: transform .08s; }
+    .pills button:active { transform: scale(.96); }
+    #next { display: none; background: #3a2e22; color: #fff6e8; }
+    /* again: out of the way of a thumb pulling the dumpling back, a small round mark under the clock */
+    #again { position: fixed; right: 12px; top: calc(max(12px, env(safe-area-inset-top)) + 28px); width: 38px; height: 38px; padding: 0; border-radius: 50%; line-height: 38px; font-size: 0; background: rgba(255,250,242,.78); box-shadow: 0 2px 10px rgba(0,0,0,.18); }
+    /* (drawn, not a glyph: an arrow's glyph sits off its middle, by the font; this is in the middle of the button, whatever its text) */
+    #again::before { content: ""; position: absolute; inset: 0; margin: auto; width: 20px; height: 20px; background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%233a2e22' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4 12a8 8 0 1 0 2.35-5.65L4 8.7'/%3E%3Cpath d='M4 4v4.7h4.7'/%3E%3C/svg%3E") center / contain no-repeat; }
+    .home #again { display: none; }
+    /* the lab's words, quieter: they're for trying things, not for play */
+    .words { opacity: .72; }
+    .home #next { display: inline-block; }
+    .words { display: flex; gap: 4px 16px; align-items: baseline; flex-wrap: wrap; justify-content: center; }
+    .words button, .words a, .words span { font-size: 13px; letter-spacing: .1em; font-variant: small-caps; padding: 6px 2px; color: #fff; opacity: .92; text-shadow: 0 1px 3px rgba(0,0,0,.6); text-decoration: none; }
+    #title { position: fixed; left: 0; right: 0; top: 34%; text-align: center; pointer-events: none; opacity: 0; transform: translateY(6px); transition: opacity .9s, transform .9s; text-shadow: 0 1px 12px rgba(40,24,10,.55), 0 1px 2px rgba(40,24,10,.5); }
+    #title.on { opacity: 1; transform: none; }
+    #title b { display: block; font-weight: 400; font-size: 21px; letter-spacing: .32em; text-transform: uppercase; padding-left: .32em; }
+    #title s { display: block; width: 26px; height: 1px; margin: 12px auto 9px; background: rgba(255,255,255,.85); }
+    #title i { display: block; font-style: normal; font-size: 12px; letter-spacing: .22em; opacity: .85; }
+    /* home: how it went, on a card; a new best, gold */
+    #done { position: fixed; left: 50%; top: calc(max(12px, env(safe-area-inset-top)) + 70px); width: min(80vw, 300px); box-sizing: border-box; padding: 14px 20px 8px; border-radius: 24px; background: rgba(255,250,240,.94); border: 3px solid #4b2614; color: #4b2614; box-shadow: 0 6px 16px rgba(60,30,10,.28); pointer-events: none; opacity: 0; transform: translate(-50%, -8px) scale(.96); transition: opacity .5s, transform .5s; }
+    #done.on { opacity: 1; transform: translate(-50%, 0); }
+    #done > b { display: block; text-align: center; font: 700 24px Georgia, "Iowan Old Style", serif; letter-spacing: .02em; margin-bottom: 6px; }
+    #done .row { display: grid; grid-template-columns: 1fr auto; column-gap: 10px; align-items: baseline; padding: 6px 0; border-bottom: 1px solid rgba(75,38,20,.15); font-size: 15px; }
+    #done .row:last-child { border-bottom: none; font-size: 17px; }
+    #done .row span { font-variant: small-caps; letter-spacing: .08em; opacity: .8; }
+    #done .row b { font-variant-numeric: tabular-nums; }
+    #done .row i { grid-column: 1 / -1; text-align: right; font-size: 12px; opacity: .6; }
+    #done .row i:empty { display: none; }
+    #done.best { border-color: #c99a3e; box-shadow: 0 0 0 2.5px #4b2614, 0 0 28px rgba(255,200,90,.75), 0 6px 16px rgba(60,30,10,.28); animation: shine 1.6s ease-in-out .4s 2; }
+    #done.best > b { color: #a0661a; }
+    #done .row.hi b { color: #a0661a; }
+    #done .row.hi b::after { content: " \2605"; font-size: .8em; }
+    @keyframes shine { 50% { box-shadow: 0 0 0 2.5px #4b2614, 0 0 48px rgba(255,210,110,1), 0 6px 16px rgba(60,30,10,.28); transform: translate(-50%, 0) scale(1.03); } }
+    .preview #done, .title #done { display: none; }
+    .preview #top, .preview nav, .preview #status, .preview #hands, .preview #title { display: none; }
+    /* the title: the name, and what to do */
+    #menu { position: fixed; inset: 0; display: none; flex-direction: column; align-items: center; padding-top: calc(max(12px, env(safe-area-inset-top)) + 8vh); pointer-events: none; }
+    .title #menu { display: flex; animation: menuIn .9s ease-out both; }
+    /* (taller than the glass, on a phone: it scrolls; and past the first card, the name small, out of the way) */
+    #menu { overflow-y: auto; -webkit-overflow-scrolling: touch; padding-bottom: calc(24px + env(safe-area-inset-bottom)); box-sizing: border-box; }
+    #menu.deep { pointer-events: auto; padding-top: calc(max(10px, env(safe-area-inset-top)) + 2vh); }
+    #menu.deep #logo { width: min(46vw, 220px); }
+    #menu .choices { flex-shrink: 0; }
+    /* (paused: a veil over the level, still behind it; the first button's to go back to it) */
+    .paused #menu { background: rgba(250,240,220,.35); pointer-events: auto; animation: none; }
+    .paused #menu #new.primary { width: min(76vw, 320px); height: 60px; line-height: 54px; font-size: 23px; border: 3px solid #4b2614; box-shadow: inset 0 3px 0 rgba(255,255,255,.9), inset 0 -4px 0 rgba(170,120,60,.22), 0 6px 16px rgba(60,30,10,.28); }
+    @media (max-height: 760px) { .card .row { padding: 6px 0; } .big { height: 52px; line-height: 46px; font-size: 21px; } .big.primary { height: 58px; line-height: 50px; } .choices { gap: 10px; margin-top: 2vh; } }
+    .title #hands, .title #status, .title #top, .title #title { display: none; }
+    @keyframes menuIn { from { opacity: 0; transform: translateY(10px); } }
+    #logo { width: min(92vw, 480px); filter: drop-shadow(0 7px 10px rgba(60,30,10,.35)); animation: bob 4.5s ease-in-out infinite; transform-origin: 50% 80%; }
+    #logo svg { display: block; width: 100%; height: auto; }
+    @keyframes bob { 0%, 100% { transform: translateY(0) scale(1, 1); } 46% { transform: translateY(-5px) scale(1.01, .985); } 54% { transform: translateY(-4px) scale(.995, 1.01); } }
+    .choices { margin-top: 3.5vh; display: flex; flex-direction: column; align-items: center; gap: 14px; pointer-events: auto; }
+    .choices[hidden] { display: none; }
+    .big { display: block; width: min(76vw, 320px); height: 60px; border-radius: 30px; text-align: center; line-height: 54px; font: 700 23px Georgia, "Iowan Old Style", "Palatino Linotype", serif; letter-spacing: .01em; color: #4b2614;
+      background: linear-gradient(#fffaf0, #f0e0c2); border: 3px solid #4b2614;
+      box-shadow: inset 0 3px 0 rgba(255,255,255,.9), inset 0 -4px 0 rgba(170,120,60,.22), 0 6px 16px rgba(60,30,10,.28); transition: transform .08s; }
+    .big:active { transform: scale(.97); }
+    .big.primary { width: min(84vw, 350px); height: 68px; line-height: 60px; font-size: 27px; border: 4px solid #c99a3e;
+      box-shadow: 0 0 0 2.5px #4b2614, inset 0 3px 0 rgba(255,255,255,.9), inset 0 -5px 0 rgba(170,120,60,.25), 0 8px 22px rgba(60,30,10,.32); }
+    .big small { font-size: 13px; font-weight: 400; letter-spacing: .08em; font-variant: small-caps; opacity: .75; margin-left: 6px; }
+    .big[hidden] { display: none; }
+    .card { width: min(80vw, 320px); box-sizing: border-box; padding: 8px 20px; border-radius: 24px; background: rgba(255,250,240,.93); border: 3px solid #4b2614; color: #4b2614; box-shadow: 0 6px 16px rgba(60,30,10,.28); font: 18px Georgia, "Iowan Old Style", serif; }
+    .card .row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 9px 0; border-bottom: 1px solid rgba(75,38,20,.15); }
+    .card .row:last-child { border-bottom: none; }
+    .card .chip { padding: 4px 14px; border-radius: 14px; border: 2px solid #4b2614; background: #fff8ea; font: 700 16px Georgia, serif; }
+    .card .chip.off { opacity: .45; }
+    .card .pick { display: flex; align-items: center; gap: 10px; }
+    .card .pick b { min-width: 26px; text-align: center; }
+    .card i { font-size: 13px; opacity: .7; }
+    .card.benches { max-height: 52vh; overflow-y: auto; padding: 4px 16px; }
+    .card.benches button { display: block; width: 100%; text-align: left; padding: 10px 0; background: none; border: none; border-bottom: 1px solid rgba(75,38,20,.15); color: #4b2614; font: 700 17px Georgia, serif; }
+    .card.benches button:last-child { border-bottom: none; }
+    .card.benches small { display: block; font-weight: 400; font-size: 13px; opacity: .7; margin-top: 2px; }
+  </style>
+</head>
+<body>
+  <canvas id="play"></canvas>
+  <canvas id="ui" style="pointer-events:none"></canvas>
+  <div id="top"></div>
+  <nav><a href="/">← lab</a></nav>
+  <div id="status"></div>
+  <div id="title"><b></b><s></s><i></i></div>
+  <div id="done"><b></b><div class="rows"></div></div>
+  <div id="menu">
+    <div id="logo"></div>
+    <div class="choices" id="main">
+      <button class="big primary" id="resume" hidden>Resume</button>
+      <button class="big primary" id="new">New Game</button>
+      <button class="big" id="cont" hidden>Continue</button>
+      <button class="big" id="opts">Settings</button>
+      <button class="big" id="totitle" hidden>Leave the level</button>
+    </div>
+    <div class="choices" id="settings" hidden>
+      <div class="card">
+        <div class="row"><span>sound</span><button class="chip" id="s-sound">on</button></div>
+        <div class="row"><span>dumpling</span><button class="chip" id="s-skin">dough</button></div>
+        <div class="row"><span>level</span><span class="pick"><button class="chip" id="s-prev">‹</button><b id="s-level">1</b><button class="chip" id="s-next">›</button></span></div>
+        <div class="row"><i id="s-place">The Preparation Table</i></div>
+        <div class="row"><span>aim</span><button class="chip" id="s-ring">default</button></div>
+        <div class="row"><i id="s-aim">arc and ring to level 6, the arc to 20, then neither</i></div>
+        <div class="row"><span>after a fall</span><button class="chip" id="s-reset">last top</button></div>
+        <div class="row"><span>benches</span><button class="chip" id="s-benches">›</button></div>
+      </div>
+      <button class="big primary" id="s-play">Play</button>
+      <button class="big" id="s-back">Back</button>
+    </div>
+    <div class="choices" id="benches" hidden>
+      <div class="card benches" id="b-list"></div>
+      <button class="big" id="b-back">Back</button>
+    </div>
+  </div>
+  <div id="hands">
+    <div id="hint"></div>
+    <div class="pills"><button id="again" aria-label="again" title="again (R)">again</button><button id="next">next level</button></div>
+    <div class="words"><button id="prev">‹</button><span id="level">level 1</span><button id="nextw">›</button><button id="skin">jelly</button><button id="sound">sound on</button><button id="tomenu">menu</button><a href="{{readme}}">notes</a></div>
+  </div>
+  <script type="module" src="{{app}}"></script>
+</body>
+</html>

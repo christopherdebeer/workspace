@@ -41,7 +41,19 @@ function treeVersionOf(files) {
 }
 
 /** Top-level directories that are repo-side only and never cell source. */
-const SKIP = new Set(['node_modules', 'devtools', 'native']);
+const SKIP = new Set(['node_modules', 'native']);
+
+/**
+ * A cell's `devtools/` (its tests and harnesses) syncs like its source, both
+ * ways, so what another agent changes on the cell (one that can't run the
+ * browser checks, say) comes down too. Only what git would keep is counted
+ * locally (`cell-sync.mjs` asks git: tracked, or new and not ignored), so
+ * `devtools/out/` and the like never go up, and a file just pulled isn't
+ * taken for one deleted here.
+ */
+function isMirrored(path) {
+  return path.split('/')[0] === 'devtools';
+}
 
 /**
  * Paths the sync never moves in either direction. Applied to BOTH sides now:
@@ -112,4 +124,4 @@ function nextBase(local, remote, base) {
   return next;
 }
 
-module.exports = { contentVersion, treeVersionOf, isIgnored, isGenerated, plan, nextBase, SKIP };
+module.exports = { contentVersion, treeVersionOf, isIgnored, isGenerated, isMirrored, plan, nextBase, SKIP };

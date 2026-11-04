@@ -1,0 +1,286 @@
+[
+ {
+  "group": "The menu",
+  "views": [
+   {
+    "name": "title",
+    "title": "Lily’s Rescue Boats",
+    "caption": "All boats home: your lifeboat charging along under the lighthouse; Play (the Rescue Service), Rally (Lily’s race), Boats, Weather, Settings",
+    "file": "v-title.jpg"
+   },
+   {
+    "name": "title-wide",
+    "title": "The title, on a bigger screen",
+    "caption": "the menu to the right, as on the boards",
+    "file": "v-title-wide.jpg"
+   },
+   {
+    "name": "boats",
+    "title": "Choose your boat",
+    "caption": "a small drawer; behind it, the three kinds moored side by side along your pier in your crew’s colour, the camera on the one chosen: the lifeboat, good at everything; the inshore boat, quickest but bumpy alongside out at sea; the harbour launch, slow but steadiest. Lily’s five crews below",
+    "file": "v-boats.jpg"
+   },
+   {
+    "name": "boats-wide",
+    "title": "Choose your boat, on a bigger screen",
+    "caption": "the drawer down the side, the boat chosen at its mooring",
+    "file": "v-boats-wide.jpg"
+   },
+   {
+    "name": "weather",
+    "title": "The weather",
+    "caption": "seven, from the boards: the title behind changes as you pick",
+    "file": "v-weather.jpg"
+   },
+   {
+    "name": "settings",
+    "title": "Settings",
+    "caption": "how good the others are, which side the stick goes, sound, a new coast",
+    "file": "v-settings.jpg"
+   }
+  ]
+ },
+ {
+  "group": "The Rescue Service",
+  "views": [
+   {
+    "name": "start",
+    "title": "Moored in the harbour",
+    "caption": "as the count goes down, a look round your harbour: your lifeboat moored at the end of the pier, bows to the mouth, the town on its hill behind; a few from the town on the quay to see you off",
+    "file": "v-start.jpg"
+   },
+   {
+    "name": "home",
+    "title": "Home harbour",
+    "caption": "your harbour from above its mouth: your lifeboat at the end of the pier with its lamps and bunting, the station, timber jetties all round the basin with boats moored along them and more at their buoys, the town on the hill",
+    "file": "v-home.jpg"
+   },
+   {
+    "name": "harbour",
+    "title": "Setting out",
+    "caption": "out through the harbour, the town on its hill, the lighthouses either side of the mouth",
+    "file": "v-harbour.jpg"
+   },
+   {
+    "name": "racing",
+    "title": "Along the coast",
+    "caption": "your first calls are just outside the harbour; everyone rescued so far (of everyone whose call has come in), your own crew’s count, the time with the weather as it is now; the map, a little boat another crew is going for ringed in their colour; the three crews’ counts under it",
+    "file": "v-racing.jpg"
+   }
+  ]
+ },
+ {
+  "group": "Steering",
+  "views": [
+   {
+    "name": "steer",
+    "title": "Touch anywhere and drag",
+    "caption": "until you’ve steered, a faint ring low down, its dot drifting up, says how: put your finger anywhere on the sea and drag up",
+    "file": "v-steer.jpg"
+   },
+   {
+    "name": "steer-drag",
+    "title": "Wherever you touch is the stick",
+    "caption": "where your finger goes down is the middle of the stick: drag ahead to go, to one side to turn, back to slow down; a faint ring where you put it; let go and she eases to a stop",
+    "file": "v-steer-drag.jpg"
+   }
+  ]
+ },
+ {
+  "group": "Down the coast",
+  "views": [
+   {
+    "name": "north",
+    "title": "The neighbours: North Head",
+    "caption": "a little harbour down the coast, its breakwaters round the water in front of it, a light on the end of one; the station and its slipway at the head of the basin, a jetty, boats moored along the quays; their inshore boat at its berth",
+    "file": "v-north.jpg"
+   },
+   {
+    "name": "south",
+    "title": "The neighbours: South Sound",
+    "caption": "further down, where the coast turns away west: another little harbour, their harbour launch at its berth",
+    "file": "v-south.jpg"
+   }
+  ]
+ },
+ {
+  "group": "Coming alongside",
+  "views": [
+   {
+    "name": "line",
+    "title": "The line goes over",
+    "caption": "alongside and slowed right down, the little boat in the lee of the hull: the crew throws a line; the camera cuts in",
+    "file": "v-line.jpg"
+   },
+   {
+    "name": "climb",
+    "title": "Climbing aboard",
+    "caption": "held steady, the water calm in the lifeboat’s lee: a crew member leans over the rail to take a hand, and up they come",
+    "file": "v-climb.jpg"
+   },
+   {
+    "name": "paddle",
+    "title": "A paddleboarder",
+    "caption": "near each harbour the first calls are the little ones: a kayaker, a paddleboarder blown out from the shore; here the neighbours from North Head, in their inshore boat",
+    "file": "v-paddle.jpg"
+   }
+  ]
+ },
+ {
+  "group": "Out at sea",
+  "views": [
+   {
+    "name": "open-sea",
+    "title": "The open sea",
+    "caption": "past the harbour’s headland the far shore falls away: islets and reefs out over the water, the swell bigger out here; the sun going down; the neighbours’ inshore boat on its way to its next call",
+    "file": "v-open-sea.jpg"
+   },
+   {
+    "name": "rough",
+    "title": "Rough water",
+    "caption": "out at sea, beam-on in a bigger swell: they climb across more slowly, and the bar goes amber; the harbour launch, broad and steady, has them across quicker than most",
+    "file": "v-rough.jpg"
+   },
+   {
+    "name": "yacht",
+    "title": "A yacht that’s lost its mast",
+    "caption": "further out, the bigger calls: a yacht dismasted, four aboard, the mast lying along her deck",
+    "file": "v-yacht.jpg"
+   },
+   {
+    "name": "deck",
+    "title": "A full deck",
+    "caption": "everyone found out there, and no one left waiting: home with all ten of them",
+    "file": "v-deck.jpg"
+   }
+  ]
+ },
+ {
+  "group": "Home",
+  "views": [
+   {
+    "name": "landing",
+    "title": "Safe ashore",
+    "caption": "in through the mouth as night comes down: they step ashore one by one, to the crowd waving on the pier by the station",
+    "file": "v-landing.jpg"
+   },
+   {
+    "name": "their-landing",
+    "title": "The neighbours home",
+    "caption": "down the coast, the North Head crew come in through their breakwaters in the dusk, and land theirs on their own quay",
+    "file": "v-their-landing.jpg"
+   },
+   {
+    "name": "podium",
+    "title": "Everyone home",
+    "caption": "everyone rescued, every crew in at its own harbour, yours at the pier; then the crews’ honours, 1st to 3rd by Lily’s rule",
+    "file": "v-podium.jpg"
+   }
+  ]
+ },
+ {
+  "group": "The Rally",
+  "views": [
+   {
+    "name": "rally",
+    "title": "Lily’s race",
+    "caption": "the same coast as a race: your place and the places under the map; the last call when the first boat is home",
+    "file": "v-rally.jpg"
+   },
+   {
+    "name": "rally-finish",
+    "title": "The finish line",
+    "caption": "the race’s finish: through the harbour mouth under the banner",
+    "file": "v-rally-finish.jpg"
+   },
+   {
+    "name": "rally-podium",
+    "title": "1st to 5th",
+    "caption": "in at the quay, the places by most rescued",
+    "file": "v-rally-podium.jpg"
+   }
+  ]
+ },
+ {
+  "group": "Looks",
+  "views": [
+   {
+    "name": "wide",
+    "title": "On a bigger screen",
+    "caption": "granite cliffs, sheltered water calmer and greener in the lee of the headlands, the wake churning white",
+    "file": "v-wide.jpg"
+   },
+   {
+    "name": "study-inshore",
+    "title": "The inshore boat",
+    "caption": "a rigid inflatable: its tube in the crew’s colour, RNLI along it; the console amidships, the A-frame aft with its beacon, twin outboards",
+    "file": "v-study-inshore.jpg"
+   },
+   {
+    "name": "study-launch",
+    "title": "The harbour launch",
+    "caption": "broad and steady: its wheelhouse forward in the crew’s colour, a fat black fender all round, an open working deck aft with a davit to lift people aboard",
+    "file": "v-study-launch.jpg"
+   },
+   {
+    "name": "study",
+    "title": "The lifeboat",
+    "caption": "navy hull, red below the waterline, RNLI along the bow; the wheelhouse in the boat’s own colour, a tall black mast; the crew in white helmets",
+    "file": "v-study.jpg"
+   }
+  ]
+ },
+ {
+  "group": "Weather",
+  "views": [
+   {
+    "name": "weather-calm",
+    "title": "Calm",
+    "caption": "a gentle swell, little foam, gulls",
+    "file": "v-weather-calm.jpg"
+   },
+   {
+    "name": "weather-windy",
+    "title": "Windy",
+    "caption": "a bigger, steeper sea; whitecaps and streaks of foam; spray flying",
+    "file": "v-weather-windy.jpg"
+   },
+   {
+    "name": "weather-stormy",
+    "title": "Stormy",
+    "caption": "a big grey sea under a lid of cloud; rain, lightning, the beams already turning",
+    "file": "v-weather-stormy.jpg"
+   },
+   {
+    "name": "weather-foggy",
+    "title": "Foggy",
+    "caption": "the coast lost in it; the lighthouses’ beams and the searchlight cut through",
+    "file": "v-weather-foggy.jpg"
+   },
+   {
+    "name": "weather-night",
+    "title": "Night",
+    "caption": "stars, the moon on the water, windows lit, the beams turning, your searchlight ahead",
+    "file": "v-weather-night.jpg"
+   },
+   {
+    "name": "weather-sunset",
+    "title": "Sunset",
+    "caption": "the sun low ahead, the sea gold and the cliffs warm",
+    "file": "v-weather-sunset.jpg"
+   },
+   {
+    "name": "storm-wide",
+    "title": "A storm, on a bigger screen",
+    "caption": "the swell high enough to hide the next boat",
+    "file": "v-storm-wide.jpg"
+   },
+   {
+    "name": "night-wide",
+    "title": "Night, on a bigger screen",
+    "caption": "your searchlight on the water, the lighthouse beam sweeping the harbour mouth",
+    "file": "v-night-wide.jpg"
+   }
+  ]
+ }
+]

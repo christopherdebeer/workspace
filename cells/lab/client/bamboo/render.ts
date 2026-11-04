@@ -1,0 +1,1662 @@
+/**
+ * The grove drawn as the board has it (devtools/bamboo/board.jpg): a lit picture with ink on it, held close to the
+ * eye, giving out through ink to the page.
+ *
+ * Two passes, after Labyrinth, and a shadow pass before them:
+ * - **the shadows**: the culms near you, seen from the sun, so their shadows stripe the litter, the steps and each
+ *   other; the canopy's own shade is its dapple, cast down the sun from the gaps overhead;
+ * - **the picture** (one framebuffer, two colour targets and depth): every surface lit by the sun (warm, through the
+ *   dapple and the culms' shadows), the sky and a little bounce, in its own colour; and beside the colour what it is (its
+ *   kind), whether an outline may run along its edge here (a culm's breaks just under each node, as a brush lifts
+ *   there), how far it's drawn (its ink's reach), and its own **marks**: the ink the things call for, drawn on them (a
+ *   culm's node ticks and dry-brush streaks down its shaded side, ink pooled at its foot; a spray's blades, filled in
+ *   ink where the colour's given out; a fallen leaf's edge); and on the land, laid in the same pass, its own strokes
+ *   (strokes.ts: a trail's edges, a bank's rim and hachures, a face's fall, the hillside's contours), inked into the marks;
+ * - **the page** (post): the outlines found from the depth and the kinds, inked on the side that's in front.
+ *
+ * **The layers** (`Renderer.dials`, layers.ts; set by `?look=` and each dial by its name, or the page's palette): laid
+ * from the paper up, after Labyrinth, each its own. Every thing asks one measure, how far **out** it is (`outAt`: from
+ * the focus across the frame, 1 at every edge, and in depth; or in the world, 1 at `distance` metres; whichever is
+ * further), once for the whole of it, give or take its own pick; and each layer has its own reach in that measure.
+ * **Colour**, by kind (culms, leaves, land), gives way to the paper; the **light** (shade, cast shadows, hollows, each
+ * its own strength, factored out of the sun and sky so each can be laid again) reaches further, onto the paper itself,
+ * there in sepia; the **ink** (things' own marks, the land's strokes, the outlines) further again, ending by thinning
+ * (fewer things inked, by their picks) or fading (all paler); and **under** says how much of the drawing lies beneath
+ * the colour. A culm, a spray, a stone is left out whole only where none of its layers reach it; the ground never is.
+ *
+ * `?clean`: no shafts or paper grain. `?marks=0`: the picture without its ink.
+ */
+import { type Chunk, CHUNK, CN, CELL, HALF, BANK } from './world';
+import { STROKE_STRIDE } from './strokes';
+import { type Dials, HOUSE } from './layers';
+import { lumpMesh, LUMP_SEED } from './lump';
+import { rockMesh, ROCK_STRIDE } from './rock';
+import { skyAt, type Sky } from './sky';
+
+export interface Frame {
+  eye: [number, number, number]; look: [number, number, number]; fov: number; t: number;
+  /** the head's up, when it isn't the world's (a tumble turning the view over); else up is the world's, rolled by `roll` */
+  up?: [number, number, number];
+  /** a gust: its direction (x, z), where its front is along that direction, how strong (0..1) */
+  gust: [number, number, number, number];
+  /** how fast you're going (m/s): the view widens with it */
+  speed?: number;
+  /** the head's roll (radians): leaning into a turn, swaying with the stride */
+  roll?: number;
+  /** how far off the focus is (metres): what's straight ahead, that the page comes in round */
+  focus?: number;
+  /** the sheet's own size in pixels (the screen's), so the paper's grain holds still when the picture's drawn smaller */
+  paper?: [number, number];
+}
+
+/** the paper's own colour */
+
+const NOISE = `
+float h21(vec2 p) { p = fract(p * vec2(123.34, 456.21)); p += dot(p, p + 45.32); return fract(p.x * p.y); }
+float vn(vec2 p) { vec2 i = floor(p), f = fract(p), u = f * f * (3. - 2. * f);
+  return mix(mix(h21(i), h21(i + vec2(1, 0)), u.x), mix(h21(i + vec2(0, 1)), h21(i + vec2(1, 1)), u.x), u.y); }
+float fbm2(vec2 p) { return vn(p) * .55 + vn(p * 2.03 + 7.1) * .3 + vn(p * 4.1 - 3.7) * .15; }
+`;
+const COMMON = `#version 300 es
+precision highp float; precision highp int; precision highp sampler2DShadow;
+uniform float uClay;
+uniform mat4 uVP; uniform vec3 uEye; uniform float uTime; uniform vec3 uSun; uniform vec4 uGust; uniform vec4 uStir; uniform vec4 uStirs[8];
+// (the layers (layers.ts): each one's reach (the page's pull taken in) and how soft its edge; the measure (the focus's
+// distance, how much sooner things far beyond it go, how far out in the world a reach of one is); the colour by kind,
+// the ink by kind and how it ends, how much of it lies under the picture)
+uniform vec4 uRch; uniform vec4 uFoc; uniform vec4 uColK; uniform vec4 uInkK; uniform float uUnder;
+// (the ink's hand: how open its contours, how much it swells, how much grain breaks it)
+uniform vec4 uHand;
+// (how big a pixel is, in metres, a metre from the eye: so a thing can draw its own lines a set number of pixels wide)
+uniform float uPxW;
+// (focus: aperture, how wet the near goes, how dry the far, how much the colour and light soften)
+uniform vec4 uFocus;
+// (how strong each surface's relief is, and the dark of its creases)
+uniform float uRelief;
+${NOISE}
+// (how far a culm's top is blown, per metre of its height: a slow sway of its own, and the gust's front passing)
+vec2 windAt(vec2 p, float phase) {
+  vec2 d = vec2(-.92, -.38);
+  float sway = .010 * sin(uTime * .8 + phase + dot(p, vec2(.05, .03))) + .004 * sin(uTime * 2.1 + phase * 1.7);
+  float along = dot(p, uGust.xy) - uGust.z, front = exp(-along * along / 300.) * uGust.w;
+  // (and where something's passing through (presence.ts): a stir high in the canopy bending the culms away from it, a fox
+  // or a runner brushing past the ones beside it)
+  vec2 sp = p - uStir.xy; float sk = uStir.z * exp(-dot(sp, sp) / (uStir.w * uStir.w));
+  vec2 w = d * sway + uGust.xy * front * (.05 + .012 * sin(uTime * 5. + phase)) + normalize(sp + 1e-3) * sk * (.06 + .03 * sin(uTime * 6. + phase * 3.));
+  // (and where it's just passed: stems still swaying back and forth, less and less, settling)
+  for (int i = 0; i < 8; i++) { vec4 q = uStirs[i]; vec2 qp = p - q.xy; float k = q.z * exp(-dot(qp, qp) / (q.w * q.w)); w += normalize(qp + 1e-3) * k * .07 * sin(uTime * 7. + phase * 2.); }
+  return w;
+}
+// (how much of the wind a culm's put in: 1 as it's drawn; 0 where it stands at rest, which is where it's asked how far
+// out it is, so a culm, a branch, a spray is drawn by where it stands, never flickering in and out as it sways)
+float gWind = 1.;
+// (where a culm's centre is, y metres up it)
+vec3 culmAt(vec3 b, float h, vec2 lean, float phase, float y, float bend) {
+  float v = clamp(y / h, 0., 1.);
+  // (its lean, growing up it; and its top bowed over under its leaves, the way it leans, straight below)
+  vec2 dir = length(lean) > .05 ? normalize(lean) : vec2(cos(phase), sin(phase));
+  // (\`bend\` past 1.5: bowed right over in an arc, its tip turned through bend - 1.5 radians, as world.ts's culmPoint)
+  float bow = max(0., bend - 1.5), yy = y;
+  vec2 off = lean * pow(v, 1.6) + dir * (bow > 0. ? 0. : bend) * h * .14 * pow(v, 3.) + windAt(b.xz, phase) * v * v * h * gWind;
+  if (bow > 0.) { float th = bow * v; off += dir * h * (1. - cos(th)) / bow; yy = h * sin(th) / bow; }
+  return b + vec3(off.x, yy, off.y);
+}
+vec3 culmRest(vec3 b, float h, vec2 lean, float phase, float y, float bend) { gWind = 0.; vec3 r = culmAt(b, h, lean, phase, y, bend); gWind = 1.; return r; }
+// (how far out a point is, for every layer alike: from the focus (where you're going and looking) across the frame, 1
+// at every edge of it (measured near-square, so top and bottom as much as the sides), and in depth (further for being
+// far beyond the focus, a little for being much nearer); or in the world, 1 at \`distance\` metres; whichever is further.
+// A thing asks it at a point of its own, so it's drawn one way whole, never cut by a line on the screen)
+uniform float uHeld;
+float outAt(vec3 p) {
+  float d = distance(p, uEye), world = d / max(uFoc.z, 1.);
+  vec4 cp = uVP * vec4(p, 1.);
+  if (cp.w < .05) return world;
+  vec2 n = abs(cp.xy / cp.w);
+  // (the bottom of the frame, the ground at your feet, held as much as \`held\` asks: the page comes in from the sides
+  // and the top first, as a painting keeps its foreground)
+  if (cp.y < 0.) n.y *= 1. - .75 * uHeld;
+  float m = pow(pow(n.x, 3.) + pow(n.y, 3.), 1. / 3.), dl = log2(max(d, .3) / max(uFoc.x, 1.));
+  return max(world, m + uFoc.y * .2 * (dl > 0. ? dl : -dl * .25));
+}
+// (the land as a column: a point of the ground, a stone, a step, a stroke on it, as far out as the least of it and the
+// air above it (3 and 8 m up, where what stands on it is seen), so the ground is never gone from under a culm that's
+// still drawn; a point above that's behind the eye doesn't count)
+float outCol(vec3 p) {
+  float o = outAt(p);
+  for (int k = 0; k < 2; k++) { vec3 q = p + vec3(0., k == 0 ? 3. : 8., 0.); if ((uVP * vec4(q, 1.)).w > .05) o = min(o, outAt(q) + .03); }
+  return o;
+}
+// (how far out of focus a point at this distance is, signed: below 0 nearer than the focus (growing fast as it nears the
+// eye, as much as \`near\` lets it), above it beyond (to 1 far off), as a lens has it; one measure every layer reads its own way)
+float cocAt(float d) { float c = clamp(1. - uFoc.x / max(d, .1), -2.5, 1.); return uFocus.x * (c < 0. ? c * uFoc.w : c); }
+// (whether a layer's here, at so far out, given its reach: whole inside it, gone past it, over a soft edge)
+float hasS(float o, float r, float soft) { return 1. - smoothstep(r * (1. - soft), r * (1. + soft), o); }
+float has(float o, float r) { return hasS(o, r, uRch.w); }
+// (how much ink a thing of pick \`q\` has here, 0–1, never switched: as the ink thins, each thing gives out over its own
+// short stretch of the reach (one of low pick last), so fewer are inked; as it fades, all of them alike)
+float inkAt(float o, float q) { float r = has(o, uRch.z); return mix(clamp((r - q * .75) / .25, 0., 1.), r, uInkK.w); }
+// (a mark is laid by its amount as a brush lays it: its length first, from where it starts (u = 0) out to its end, its
+// tip lifting; then its weight; a mark never comes or goes at once. Fading, it goes paler as well)
+float laidLen(float a, float u) { float L = clamp(a * 1.7, 0., 1.12); return a < .001 ? 0. : 1. - smoothstep(L - .1, L, u); }
+float laidW(float a) { return mix(.3, 1., clamp((a - .3) / .7, 0., 1.)); }
+float fadeOf(float a) { return mix(1., a, uInkK.w); }
+float laid(float a, float u) { return laidLen(a, u) * laidW(a) * fadeOf(a); }
+`;
+// (the light: the sun through the canopy's gaps and past the culms' shadows, shared by every surface, so a patch of
+// sun lies across the path, the litter and a culm alike)
+const LIGHT = `
+uniform vec3 uSunC; uniform vec3 uSky; uniform float uExpo; uniform vec3 uHaze; uniform vec3 uVeil; uniform float uMist; uniform float uOpen; uniform vec4 uLitK; uniform vec3 uPaperC;
+uniform sampler2DShadow uShadow; uniform mat4 uLightVP; uniform float uShadowOn;
+// (the canopy over the ground round you, from where the sprays really hang (world.ts): 0 open sky … 1 closed)
+uniform sampler2D uCanopy; uniform vec3 uCanO;
+float coverAt(vec2 xz) { vec2 q = (xz - uCanO.xy) / uCanO.z; return q.x < 0. || q.y < 0. || q.x > 1. || q.y > 1. ? .5 : texture(uCanopy, q).r; }
+// (how far in under the canopy a surface is: the ground and what's on it all the way, a culm less up its length, its
+// leaves least; set by each surface before it's lit)
+float gUnder = 1.;
+// (how far inside the light's map of what casts a point is: where it is, the shade is real)
+float gInMap = 0.;
+// (the shade of everything near that stands in the light's way, culms, their leaves, the boulders, the steps, as the light
+// sees them: real shadow, the leaves' moving as they move)
+float culmShade(vec3 p) {
+  gInMap = 0.;
+  if (uShadowOn < .5) return 1.;
+  vec4 l = uLightVP * vec4(p, 1.); vec3 q = l.xyz / l.w * .5 + .5;
+  if (q.x < 0. || q.x > 1. || q.y < 0. || q.y > 1.) return 1.;
+  gInMap = smoothstep(0., .06, min(min(q.x, 1. - q.x), min(q.y, 1. - q.y)));
+  float s = 0., o = 1. / 2048.;
+  for (int i = -1; i <= 1; i++) for (int j = -1; j <= 1; j++) s += texture(uShadow, vec3(q.xy + vec2(i, j) * o, q.z - .0005));
+  return mix(1., s / 9., gInMap);
+}
+// (beyond the light's map, the canopy's own cover over the point, looked for up toward the light, broken into flecks
+// where the leaves part; where it's open, the sun; under a closed stand, shade with a fleck or two. Never the near
+// shade: that's real)
+float dapple(vec3 p) {
+  vec2 up = uSun.xz / max(uSun.y, .25) * 8.;
+  float cov = coverAt(p.xz + up);
+  vec2 q = p.xz + up;
+  float g = fbm2(q * .55) * .55 + vn(q * 2.4) * .45, fl = smoothstep(.5 - uOpen * .1, .57 - uOpen * .1, g);
+  return 1. - cov * (1. - fl);
+}
+float sunThrough(vec3 p) { float c = culmShade(p); return c * mix(dapple(p), 1., gInMap); }
+vec3 lin(vec3 c) { return c * c; }
+// (the carpet of fallen leaves: one leaf to a cell, in two sizes, each turned its own way and its own colour, read
+// from the cells round it; given out to its average tone where a cell is smaller than a few pixels. .a: on a leaf;
+// .w of the second: its edge, for the ink)
+vec4 leaves(vec2 p, float cell, out float rim, out float id) {
+  vec2 g = p / cell, i0 = floor(g);
+  float best = 0.; vec3 col = vec3(0.); rim = 1.;
+  for (int a = -1; a <= 1; a++) for (int b = -1; b <= 1; b++) {
+    vec2 c = i0 + vec2(a, b), h = vec2(h21(c), h21(c + 17.3));
+    vec2 o = c + h; float ang = h21(c + 5.1) * 3.1416, s = sin(ang), co = cos(ang);
+    vec2 d = g - o; d = vec2(co * d.x + s * d.y, -s * d.x + co * d.y);
+    float len = 1.1 + h.x * .9, t = d.x / len + .5;
+    if (t < 0. || t > 1.) continue;
+    float w = .095 * pow(sin(3.1416 * pow(t, .8)), .7) * len, e = w - abs(d.y);
+    if (e > 0. && h.y > best) { best = h.y; float tone = h21(c + 9.7); col = mix(vec3(.93, .78, .5), vec3(.52, .33, .17), tone) * (.85 + .3 * smoothstep(0., w, e)); rim = e / max(w, 1e-3); }
+  }
+  id = best;
+  return vec4(col, best > 0. ? 1. : 0.);
+}
+vec3 carpet(vec3 base, vec2 p, float px, out float mark, out float leaf, out float hgt, out float cav) {
+  float r1, r2, i1, i2;
+  vec4 a = leaves(p, .16, r1, i1), b = leaves(p + 7.3, .26, r2, i2);
+  // (which leaf is on top here, if any: its own pick, for how long its colour holds)
+  leaf = px > .05 ? -1. : a.a > .5 ? i1 : b.a > .5 ? i2 : -1.;
+  // (its relief: each leaf a thin blade lying on the one under it, rising from its edge; the soil showing between them
+  // lower, and darker, in the shade of the leaves round it)
+  // (each rising over at least a few pixels, wherever it's seen from, so its edge never flickers)
+  float ra = max(.3, 2.5 * px / .023), rb = max(.3, 2.5 * px / .037);
+  hgt = b.a * .009 * smoothstep(0., rb, r2) + a.a * .011 * smoothstep(0., ra, r1);
+  cav = mix(.76, 1., max(a.a * smoothstep(0., ra * .5, r1), b.a * smoothstep(0., rb * .5, r2) * .9));
+  vec3 c = mix(base, b.rgb, b.a * .9);
+  c = mix(c, a.rgb, a.a * .85);
+  float far = smoothstep(.02, .06, px);
+  // (each near leaf's edge, a fine stroke)
+  mark = (1. - far) * max(a.a * (1. - smoothstep(0., .18, r1)), b.a * (1. - smoothstep(0., .14, r2)) * .7) * (1. - smoothstep(.01, .03, px));
+  return mix(c, mix(base, vec3(.76, .58, .36), .55), far);
+}
+// (the display: a soft shoulder, then back to the eye's curve)
+vec3 show(vec3 c) { c = 1. - exp(-c * 1.4); return sqrt(c); }
+// (a surface as the layers lay it, the paper up: its colour as the sun shows it, going to the paper as far as the
+// colour's reach (and as strong as its kind's dial: \`colK\`); over it, the light, by kind, each its own strength (the
+// sun's shade on it, by its turn from the sun; what's cast across it, the culms' shadows and the canopy's dapple; the
+// hollows, the sky shut out), as far as the light's reach, past the colour onto the paper itself, there in sepia. The
+// light's factored out of what the sun and sky give, so each part can be laid again at its own strength: their product
+// is the light as it is. \`glow\`: light it gives back of its own (a leaf with the sun behind it). \`land\`: the land's (it
+// keeps \`landlight\` of its shade and hollows, and its colour gives out over a broader, broken edge))
+// (whether the colour layer reaches here at all, whatever its kind's strength: what \`under\` asks)
+float gColHere = 0.;
+// (how sharp a surface's colour gives out (1 the soft edge every layer has; more, a thing whose paper is its own bare
+// surface, not a fog over it), and how much further its light reaches than its colour (its cast shadows lingering pale
+// on the paper): each surface may set its own)
+float gColSharp = 1., gLitO = 0.;
+// (how much of the sun reaches here past the land itself (baked with the land: a cliff's, a ridge's shadow), for a
+// surface that knows it; 1 for one that doesn't)
+float gSunVis = 1.;
+// (relief: a surface's normal tipped by a height \`h\` given over the world, read from how it changes across the
+// screen, so any surface (a level floor, a cliff's face) takes its own bumps without a map)
+vec3 bumpN(vec3 N, vec3 p, float h) {
+  vec3 dpx = dFdx(p), dpy = dFdy(p); float dhx = dFdx(h), dhy = dFdy(h);
+  vec3 r1 = cross(dpy, N), r2 = cross(N, dpx); float det = dot(dpx, r1);
+  vec3 g = sign(det) * (dhx * r1 + dhy * r2);
+  // (fine relief tips a surface a little, never over: a jump in a height across a pixel isn't a cliff)
+  float t = length(g) / max(abs(det), 1e-8);
+  g *= min(1., .7 / max(t, 1e-6));
+  return normalize(abs(det) * N - g);
+}
+// (cells: the distance to the nearest of a scatter of points, and how far the next is beyond it; the second is 0 along
+// the cracks between cells: clods, fracture creases, pitting)
+vec2 vor(vec2 p) {
+  vec2 i = floor(p), f = fract(p); float d1 = 9., d2 = 9.;
+  for (int y = -1; y <= 1; y++) for (int x = -1; x <= 1; x++) {
+    vec2 gg = vec2(x, y), o = vec2(h21(i + gg), h21(i + gg + 31.7)); float d = length(gg + o - f);
+    if (d < d1) { d2 = d1; d1 = d; } else if (d < d2) d2 = d;
+  }
+  return vec2(d1, d2 - d1);
+}
+vec3 layered(vec3 alb, vec3 N, vec3 p, float wrap, float ao, vec3 glow, float colK, float land, float o, out float colR, out float litR) {
+  // (and under the canopy less of the sky's light, the more the leaves close over)
+  ao *= 1. - .45 * coverAt(p.xz) * gUnder;
+  float sunV = sunThrough(p) * gSunVis, ndl = max(0., (dot(N, uSun) + wrap) / (1. + wrap));
+  vec3 skyT = uSky * (.5 + .5 * N.y), bnc = vec3(.2, .15, .08) * (1. - N.y) * .3 * (dot(uSunC, vec3(.3, .55, .15)) / 2.4875);
+  vec3 L0 = uSunC + skyT + bnc, Ls = uSunC * ndl + skyT + bnc, Lc = uSunC * ndl * sunV + skyT + bnc, Lh = uSunC * ndl * sunV + (skyT + bnc) * ao;
+  litR = has(o + gLitO, uRch.y);
+  gColHere = hasS(o, uRch.x, uRch.w * (land > .5 ? 2.2 : 1.) / gColSharp);
+  colR = clamp(colK, 0., 1.) * gColHere;
+  if (uClay > .5) { colR = 1.; litR = 1.; gColHere = 1.; return show(lin(vec3(.8, .78, .74)) * Lh); }
+  float ll = mix(1., uLitK.w, land);
+  vec3 Lk = pow(Ls / L0, vec3(uLitK.x * ll * litR)) * pow(Lc / max(Ls, vec3(1e-4)), vec3(uLitK.y * litR)) * pow(Lh / max(Lc, vec3(1e-4)), vec3(uLitK.z * ll * litR));
+  // (as the eye has it: by night, adjusted to the little light there is)
+  vec3 c = show((lin(alb) * L0 * Lk + glow * litR) * uExpo);
+  // (a little air between, warm and pale; and the valley's mist, a cool blue-grey veil in the hollows below the eye: each
+  // the colour of the hour, as thick as \`mist\` has it)
+  float d = distance(p, uEye);
+  c = mix(c, uHaze, (1. - exp(-max(0., d - 6.) * pow(uMist, 1.3) / 55.)) * min(.92, .55 * sqrt(uMist)));
+  float below = uEye.y - p.y, veil = smoothstep(3., 30., below / max(uMist, .2)) * smoothstep(12., 70., d / max(uMist, .2)) * (.55 + .35 * vn(p.xz * .02 + uTime * .01)) * min(1.5, uMist);
+  c = mix(c, uVeil, clamp(veil, 0., .85 + .1 * min(1., uMist - 1.)));
+  // (a little of the paper's warmth in it, as a wash takes the sheet's tone)
+  c *= mix(vec3(1.), uPaperC / .94, .3);
+  // (the light on the paper, where the colour's gone: its shade in sepia, not the sky's grey)
+  float lm = clamp(dot(Lk, vec3(.3, .55, .15)), 0., 1.);
+  vec3 onPaper = uPaperC * mix(vec3(1.), pow(vec3(lm), vec3(.82, 1., 1.3)), .55);
+  return mix(onPaper, c, colR);
+}
+`;
+// (what a fragment hands the page: its colour as the layers laid it, and how much of that is colour (a); its kind,
+// whether an outline may run here, how much outline ink it carries, and its own marks, both as the ink's dials, its
+// reach and the drawing under the picture have them)
+const OUT = `
+layout(location = 0) out vec4 oC; layout(location = 1) out vec4 oA;
+// (a thing that draws its own contour (a culm, a spray) sets it here; the page's outline pass leaves it alone)
+float gContour = 0.;
+void emit(vec3 c, float colR, float inkA, float kind, float allow, float mark) {
+  if (uClay > .5) { oC = vec4(c, 1.); oA = vec4(kind, allow, 0., 0.); return; }
+  // (under the picture, as much of the drawing as \`under\` lays there; on the paper, all of it)
+  // (\`under\` asks whether the colour layer reaches here, not how strong a kind's colour is, so a paler kind isn't
+  // also an inkier one)
+  float underF = 1. - gColHere * (1. - uUnder), bare = 1. + .6 * (1. - gColHere);
+  oC = vec4(c, colR);
+  // (as the colour goes, the marks come up to carry the thing)
+  oA = vec4(kind, allow, uInkK.z * inkA * underF, max(clamp(mark * uInkK.x * inkA * underF * bare * (1. + .5 * uHand.y), 0., 1.), clamp(gContour * uInkK.z * inkA * underF * bare, 0., 1.)));
+}
+`;
+
+const CULM_VS = COMMON + `
+layout(location = 0) in vec2 aUV;
+layout(location = 1) in vec4 iA; layout(location = 2) in vec4 iB; layout(location = 3) in vec4 iC;
+out vec3 vW; out vec3 vR0; out vec3 vN; out float vY; out float vQ; out float vU; out vec3 vI; out float vR; out float vA; flat out float vOut; flat out float vJit; flat out float vHero;
+uniform vec2 uPick; // drawn whole up to, gone by (metres)
+uniform mat4 uLightVP; uniform int uDepth;
+void main() {
+  vec3 b = iA.xyz; float r = iA.w, h = iB.x; vec2 lean = iB.yz; float node = iB.w, phase = iC.y, pick = iC.z, bend = iC.w;
+  float dist = distance(b.xz, uEye.xz);
+  // (left out whole where the drawing has thinned past its pick)
+  if (pick > 1. - smoothstep(uPick.x, uPick.y, dist)) { gl_Position = vec4(2., 2., 2., 1.); return; }
+  float y = aUV.y * h, a = aUV.x * 6.2832;
+  // (internodes lengthen up the culm; a slight swelling at each node)
+  float q = y / (node * (1. + .9 * smoothstep(0., .45 * h, y)));
+  float swell = 1. + .06 * exp(-pow(fract(q) * 14., 2.)) + .06 * exp(-pow((fract(q) - 1.) * 14., 2.));
+  // (and its last few metres drawn out to a whip, so its top is a fine point lost in the canopy, never a flat end)
+  float rr = r * (1. - .62 * pow(aUV.y, 1.3)) * swell * (1. - .96 * smoothstep(.72, 1., aUV.y));
+  vec3 c = culmAt(b, h, lean, phase, y, bend);
+  // (its ring square across it, wherever it's going: up, or over in a bow)
+  vec3 T = normalize(culmAt(b, h, lean, phase, min(h, y + .05), bend) - culmAt(b, h, lean, phase, max(0., y - .05), bend) + vec3(0., 1e-4, 0.));
+  vec3 S = normalize(cross(T, abs(T.x) < .9 ? vec3(1., 0., 0.) : vec3(0., 0., 1.))), Q = cross(S, T);
+  vec3 n = normalize(Q * cos(a) - S * sin(a));
+  vW = c + n * rr; vR0 = culmRest(b, h, lean, phase, y, bend) + n * rr; vR = rr; vA = a; vN = n; vY = y; vQ = q; vU = a * r; vI = vec3(iC.x, phase, h);
+  // (how far out it is, each culm a little its own way)
+  // (and each stand its own way, so the grove's limit is ragged by whole stands: some run on past the rest, some give
+  // way early)
+  vHero = r > .105 ? 1. : 0.;
+  vJit = (fract(pick * 7.31) - .5) * .24 + (vn(b.xz * .045) - .5) * .7;
+  // (how far out the culm is, whole: its least-out point along its length, so one seen from its foot looking up, or
+  // only its top in the frame, is still drawn)
+  float bb = 99.;
+  for (int k = 0; k < 5; k++) bb = min(bb, outAt(culmRest(b, h, lean, phase, min(1.6, h) + (h - min(1.6, h)) * float(k) / 4., bend)));
+  vOut = uDepth == 1 ? 0. : bb + vJit;
+  gl_Position = (uDepth == 1 ? uLightVP : uVP) * vec4(vW, 1.);
+}`;
+const CULM_FS = COMMON + LIGHT + OUT + `
+in vec3 vW; in vec3 vR0; in vec3 vN; in float vY; in float vQ; in float vU; in vec3 vI; in float vR; in float vA; flat in float vOut; flat in float vJit; flat in float vHero;
+uniform float uMarks;
+void main() {
+  vec3 N = normalize(vN), V = normalize(uEye - vW);
+  float age = vI.x, f = fract(vQ), dist = distance(vW, uEye);
+  // (how far drawn: an internode at a time, each whole, asked where it stands (from the node below it), so the page
+  // comes in on a culm wherever it crosses the frame; its top a little sooner, as a long stroke runs out; never fading
+  // along an internode)
+  float yNode = vY - f * fwidth(vY) / max(fwidth(vQ), 1e-4);
+  float drawn = outAt(vR0 + vec3(0., yNode - vY, 0.)) + vJit + smoothstep(4., vI.z, yNode) * .12;
+  // (the culm's own green: olive-celadon when young, duller and greyer with age, darker low down)
+  vec3 young = vec3(.56, .63, .4), old = vec3(.58, .58, .44);
+  vec3 alb = mix(young, old, age) * mix(.78, 1., smoothstep(0., 2.5, vY));
+  // (the dry brush down its length: long streaks, some dark, darkest just under a node)
+  float streak = vn(vec2(vU * 30., vY * .5 + vI.y)) * .55 + vn(vec2(vU * 85., vY * 1.6)) * .45;
+  alb *= .72 + .48 * streak;
+  alb = mix(alb, alb * .72, smoothstep(.5, .95, f) * .7);
+  // (lichen on the old ones, in grey-white patches)
+  alb = mix(alb, vec3(.8, .8, .72), smoothstep(.62, .8, vn(vec2(vU * 14., vY * 1.1) + vI.y * 3.)) * age * .55);
+  // (the band of white powder just under each node, and the node's own ring)
+  float far = smoothstep(10., 30., dist);
+  float band = smoothstep(.82, .9, f) * (1. - smoothstep(.955, .975, f));
+  alb = mix(alb, vec3(.94, .93, .86), band * (.85 - age * .4) * (1. - far));
+  float ring = 1. - smoothstep(.0, .025 + fwidth(vQ) * .8, min(f, 1. - f) - .003);
+  alb = mix(alb, alb * .4, ring * (1. - far * .6));
+  // (close to: the node's second ring, the branch ridge just above the sheath's scar; fine lines down its length; a dark
+  // scar or bud where a branch was, side to side, below the crown; on a young culm's low nodes the papery sheath it grew
+  // in, straw-brown, torn at its top, wrapping one side; moss low on it)
+  float nearK = 1. - smoothstep(4., 14., dist), nodeI = floor(vQ);
+  float ring2 = 1. - smoothstep(.0, .012 + fwidth(vQ) * .8, abs(f - .035));
+  alb = mix(alb, alb * .62, ring2 * .7 * nearK);
+  alb *= .94 + .1 * vn(vec2(vA * 90., vY * .6));
+  float dA = abs(mod(vA - nodeI * 3.14159 + 3.14159, 6.2832) - 3.14159);
+  float bud = (1. - smoothstep(.12, .3, dA)) * (1. - smoothstep(.0, .07, f)) * step(vY, vI.z * .45) * step(.8, vY);
+  alb = mix(alb, alb * .35, bud * nearK * .8);
+  float sheath = step(h21(vec2(nodeI, vI.y * 17.)), (1. - age) * .9) * (1. - smoothstep(1.5, 4.5, vY)) * step(-.2, cos(vA - nodeI * 2.4));
+  sheath *= 1. - smoothstep(.18, .24, f - (vn(vec2(vA * 6., nodeI)) - .5) * .12);
+  alb = mix(alb, vec3(.6, .5, .36) * (.8 + .4 * vn(vec2(vA * 40., vY * 3.))), sheath * .9 * (1. - far * .7));
+  alb = mix(alb, vec3(.33, .42, .18), (1. - smoothstep(.1, .8, vY)) * smoothstep(.45, .7, vn(vec2(vA * 3., vY * 4.))) * .6);
+  // (its foot in the soil: earth risen against it, dark, so it stands in the ground, not on it)
+  alb = mix(alb, vec3(.26, .22, .16), (1. - smoothstep(.0, .4, vY)) * .75);
+  float colR, litR;
+  // (its colour and light asked point by point along it, so they give way smoothly up it, never in bands an internode
+  // long; its ink still an internode at a time)
+  // (its relief, close to: the node's ridge, a groove just above it; fine grooves down its length)
+  float rK = uRelief * (1. - smoothstep(3., 12., dist));
+  float grv = exp(-pow((f - .075) / .014, 2.));
+  float gq = vU * 260. + vn(vec2(vU * 20., vY)) * 3., gK = 1. - smoothstep(.8, 2.2, fwidth(gq));
+  float hC = (exp(-pow((f - .035) / .014, 2.)) * .004 - grv * .0015 + sin(gq) * .00035 * gK) * rK;
+  vec3 Nc = bumpN(N, vW, hC);
+  gUnder = 1. - smoothstep(.45, .95, vY / max(vI.z, 1.));
+  vec3 c = layered(alb, Nc, vW, .25, 1. - .35 * grv * rK, vec3(0.), uColK.x, 0., outAt(vR0) + vJit + smoothstep(4., vI.z, vY) * .12, colR, litR);
+  // (near and out of focus, a culm goes wet: no contour, a dark wash in its place, streaked as the brush drags; the page
+  // softens it)
+  float wetK = uFocus.y * smoothstep(.25, 1.1, -cocAt(dist));
+  // (wet, it keeps its form: its light (the shaded side darker), the dry brush down it, its nodes dark and the powder
+  // band under them pale)
+  float lum = clamp(dot(c, vec3(.3, .55, .15)) * 1.15, 0., 1.);
+  vec3 wetC = mix(vec3(.12, .13, .1), vec3(.42, .44, .33), lum) * (.78 + .38 * streak);
+  wetC = mix(wetC, wetC * .45, ring * .8);
+  wetC = mix(wetC, wetC * 1.45 + .04, band * .45);
+  c = mix(c, wetC, wetK * .85); colR = max(colR, wetK); gColHere = max(gColHere, wetK);
+  // (the marks: a tick at each node, curving with the ring, darkest toward the culm's edges as the eye sees it; on the
+  // side away from the sun, dry-brush strokes down it; ink pooled at its foot)
+  float edge = 1. - abs(dot(N, V)), shade = smoothstep(.1, -.4, dot(N, uSun));
+  // (far off, only some nodes are ticked, by their own picks: a far culm is a few marks, not a chain of rings)
+  float chosen = clamp(((1. - smoothstep(10., 40., dist) * .75) * mix(.45, 1., colR) - h21(vec2(floor(vQ + .5), vI.y * 31.))) / .15, 0., 1.);
+  float tick = ring * chosen * (.35 + .65 * smoothstep(.1, .6, edge)) * (1. - smoothstep(30., 70., dist) * .75);
+  float dry = smoothstep(.62, .82, vn(vec2(vU * 40. + 3., vY * .35))) * shade * edge * (1. - far) * .6;
+  float foot = (1. - smoothstep(.0, .14, vY)) * .5 * (1. - smoothstep(15., 40., dist));
+  // (the dry brush is the picture's shading: it goes with the colour; the ticks and the foot carry on in the drawing)
+  float mark = max(max(tick, dry * colR), foot) * uMarks;
+  // (the outline breaks just under each node, as a brush lifts there)
+  // (in colour the outline lifts under each node, as a brush does; drawn in ink alone, a culm's edges run on whole,
+  // two long lines, and a few nodes ticked: never a chain of dashes)
+  float allow = 1. - smoothstep(.72, .8, f) * (1. - smoothstep(.97, .99, f)) * chosen * colR;
+  // (its two edges aren't alike, as a brush draws a culm: the side away from the sun the one firm contour, the lit side a
+  // fainter counter-line; each lifting here and there along its length (the lit side often), so the eye completes it)
+  float lit = smoothstep(-.15, .15, dot(N.xz, normalize(uSun.xz + 1e-4)));
+  float lift = smoothstep(.48, .7, vn(vec2(vY * .2 + vI.y * 7., 1.7 + lit * 3.6)));
+  allow *= mix(1., mix(.36, .08, uHand.x), lit) * (1. - lift * mix(.45, .95, lit) * (.6 + .6 * uHand.x) * (1. - vHero * (1. - lit) * .8));
+  // (its ink: as the ink thins, left out a culm at a time by its own pick (a near one held longest), so the drawing
+  // thins by omission, toward the paper, rather than standing as a fence of outlines)
+  float q = h21(vec2(vI.y * 3.7, 5.3)) * mix(.45, 1., smoothstep(6., 28., dist));
+  // (its ink laid up it from the foot, as one long stroke, by the culm's amount; lighter where its internodes are
+  // further out)
+  float aw = inkAt(vOut, q), inkA = laidLen(aw, vY / max(vI.z, .1)) * laidW(min(aw, inkAt(drawn, q))) * fadeOf(aw);
+  // (along it toward the frame's edge, its ink lifts off, as a long stroke runs out: so a culm whose foot is held still
+  // leaves the top of the page to the paper)
+  inkA *= smoothstep(0., .6, has(outAt(vR0) + vJit, uRch.z));
+  // (a few culms carry the drawing: past arm's length, half are quieter, secondary; and far ones lighter still, a
+  // register of tone rather than of lines)
+  float prom = h21(vec2(vI.y * 9.1, 2.7));
+  // (a giant by the way is the drawing's anchor: never secondary, its firm side heavier)
+  prom *= 1. - vHero;
+  inkA *= 1. + vHero * .3;
+  inkA *= mix(1., .42, smoothstep(.4, .6, prom) * smoothstep(10., 16., dist)) * mix(1., .5, smoothstep(22., 50., dist)) * (1. + .35 * (1. - smoothstep(6., 16., dist)));
+  // (a culm goes from the page whole, where none of its layers reach it (asked at its least-out point); along it, an
+  // internode at a time, its colour gives way, then its light: never a cylinder cut off mid-internode)
+  if (uClay < .5 && uColK.x * hasS(vOut, uRch.x, uRch.w) < .02 && has(vOut, uRch.y) * dot(uLitK.xyz, vec3(1.)) < .02 && aw < .002 && wetK < .02) discard;
+  // (its contour, drawn by itself from its own shape, so many culms side by side never run together into a mass: a line
+  // a set number of pixels in from its silhouette, its shaded side the firm one (and with \`swell\`, heavier, near), its
+  // lit side the hairline, lifting along its length as \`allow\` has it; too thin for two lines, one fine line)
+  float ndv = abs(dot(N, V)), rpx = vR / max(dist * uPxW, 1e-5), dpx = rpx * (1. - sqrt(max(0., 1. - ndv * ndv)));
+  float wpx = (.8 + uHand.y * 1.6 * (1. - lit) * (1. - smoothstep(6., 14., dist))) * (.75 + .5 * vn(vec2(vY * .35, vI.y * 9.)));
+  gContour = (1. - smoothstep(wpx * .55, wpx + .6, dpx)) * allow * mix(.4, 1., smoothstep(1., 3., rpx)) * mix(1., .3, smoothstep(10., 40., dist));
+  gContour *= 1. - wetK; mark *= 1. - wetK * .8;
+  emit(c, colR, inkA, .4, 0., mark);
+}`;
+const DEPTH_FS = `#version 300 es
+precision highp float;
+void main() {}`;
+
+const SPRAY_VS = COMMON + `
+layout(location = 0) in vec2 aUV;
+layout(location = 1) in vec4 iA; layout(location = 2) in vec4 iB; layout(location = 3) in vec4 iC; layout(location = 4) in vec4 iD;
+out vec3 vW; out vec2 vUV; out float vSeed; out vec3 vN; out vec3 vRt; out vec3 vUp; out float vSize; flat out float vOut; flat out float vCulmInk;
+uniform vec2 uPick; uniform vec3 uRight; uniform mat4 uLightVP; uniform int uDepth;
+void main() {
+  vec3 b = iA.xyz; float h = iA.w; vec2 lean = iB.xy; float phase = iB.z, pick = iB.w;
+  float dist = distance(b.xz, uEye.xz);
+  if (pick > 1. - smoothstep(uPick.x, uPick.y, dist)) { gl_Position = vec4(2., 2., 2., 1.); return; }
+  float sy = iC.x, size = iC.w, yaw = iD.x, tilt = iD.y, bend = iD.w;
+  vec3 anchor = culmAt(b, h, lean, phase, sy, bend) + vec3(iC.y, 0., iC.z), rest = culmRest(b, h, lean, phase, sy, bend) + vec3(iC.y, 0., iC.z);
+  // (a flutter of its own; streaming in a gust)
+  vec2 sq = b.xz - uStir.xy;
+  anchor.xz += vec2(sin(uTime * 2.7 + iD.z * 40.), cos(uTime * 2.2 + iD.z * 30.)) * .05 * (1. + uGust.w * 2. + 4. * uStir.z * exp(-dot(sq, sq) / (uStir.w * uStir.w)));
+  // (half turned to the eye, so a spray is never lost edge-on; hanging below its twig)
+  vec3 r0 = vec3(cos(yaw), 0., -sin(yaw)), right = normalize(mix(r0, uRight, .55));
+  vec3 up = normalize(vec3(0., 1., 0.) + cross(right, vec3(0., 1., 0.)) * tilt);
+  vW = anchor + right * aUV.x * size + up * (aUV.y - .75) * size;
+  vUV = aUV + .5; vSeed = iD.z; vSize = size; vN = normalize(cross(right, up)); vRt = right; vUp = up;
+  // (a spray's drawn as its culm is at eye height, a little further along for being high, and each its own way)
+  // (and where it stands in the frame itself, so the canopy at the top of the frame goes to the page too)
+  vOut = outAt(rest) + (fract(pick * 7.31) - .5) * .14 + smoothstep(4., h, sy) * .1 + (iD.z - .5) * .1 + (vn(b.xz * .045) - .5) * .7;
+  // (its culm's ink, where it hangs: the culm's amount (as the culm asks it: its least-out point, its pick), laid up from
+  // its foot to here, lifting as the culm's does toward the frame's edge; so a spray's blades come in with its culm's
+  // line, never before it)
+  float jit = (fract(pick * 7.31) - .5) * .24 + (vn(b.xz * .045) - .5) * .7, bb = 99.;
+  for (int k = 0; k < 5; k++) bb = min(bb, outAt(culmRest(b, h, lean, phase, min(1.6, h) + (h - min(1.6, h)) * float(k) / 4., bend)));
+  float cq = h21(vec2(phase * 3.7, 5.3)) * mix(.45, 1., smoothstep(6., 28., dist)), aw = inkAt(bb + jit, cq);
+  vCulmInk = laidLen(aw, sy / max(h, .1)) * aw * smoothstep(0., .6, has(outAt(rest) + jit, uRch.z));
+  gl_Position = (uDepth == 1 ? uLightVP : uVP) * vec4(vW, 1.);
+}`;
+// ─── a spray's blades, drawn in its quad: whether a point is on one, and which, and how it lies ───
+const BLADES = `
+float blades(vec2 uv, float seed, out float rim, out float best, out float along, out float ww, out float acr, out float roll, out float side, out float edged, out vec2 bd) {
+  // (the blades: three to seven from a twig near the top, drooping, 个 and 介, each its own: its own angle off the twig,
+  // its own length, curl and droop, and turned on its own length, so one shows its face to the light and the next its
+  // edge, narrowing as it turns; the one in front wins)
+  vec2 stem = vec2(.5 + (seed - .5) * .2, .82);
+  int n = 3 + int(seed * 4.99);
+  float inside = 0., front = -1.; rim = 1.; best = 0.; along = 0.; ww = .1; acr = 1.; roll = 0.; side = 0.; edged = 0.; bd = vec2(0., -1.);
+  for (int i = 0; i < 7; i++) {
+    if (i >= n) break;
+    float fi = float(i), s = fract(seed * 13.7 + fi * .618), s2 = fract(seed * 7.31 + fi * .377);
+    float ang = -1.5708 + (fi - float(n - 1) * .5) * (.5 + s * .25) + (s2 - .5) * .75;
+    vec2 d = vec2(cos(ang), sin(ang)); vec2 pp = uv - stem;
+    float len = .4 + s * .42, a = dot(pp, d) / len;
+    // (its curl: the midline bowing one way or the other, more toward the tip)
+    float bb = dot(pp, vec2(-d.y, d.x)) / len + a * a * (.05 + .14 * (s2 - .5));
+    // (its turn on its own length: seen across its face it's full width, turned to its edge a sliver)
+    float rl = (s2 - .5) * 2.6 + a * (s - .5) * 2.4, f = mix(.22, 1., abs(cos(rl)));
+    float w = .12 * f * pow(max(0., sin(3.1416 * pow(clamp(a, 0., 1.), .75))), .8) * (1. - .25 * a);
+    float e = w - abs(bb);
+    if (a > 0. && a < 1. && e > 0. && s2 > front) {
+      front = s2; inside = 1.; rim = e / max(w, 1e-3); best = s; along = a; ww = w * len; acr = 1. - e / max(w, 1e-3);
+      roll = rl; side = sign(bb) * sign(s - .5); bd = d;
+      // (an edge inked only on some blades, and on one side of each: a few chosen strokes, not every blade outlined)
+      edged = step(.5, fract(s * 7.13 + seed * 3.1));
+    }
+  }
+  return inside;
+}
+`;
+// (a spray as the light sees it: its blades, not its quad, so its shadow is leaves)
+const SPRAY_DEPTH_FS = `#version 300 es
+precision highp float;
+in vec2 vUV; in float vSeed;
+${BLADES}
+void main() { float rim, best, along, ww, acr, roll, side, edged; vec2 bd; if (blades(vUV, vSeed, rim, best, along, ww, acr, roll, side, edged, bd) < .5) discard; }`;
+const SPRAY_FS = COMMON + LIGHT + OUT + BLADES + `
+in vec3 vW; in vec2 vUV; in float vSeed; in vec3 vN; in vec3 vRt; in vec3 vUp; in float vSize; flat in float vOut; flat in float vCulmInk;
+uniform float uMarks;
+void main() {
+  float rim, best, along, ww, acr, roll, side, edged; vec2 bd;
+  float inside = blades(vUV, vSeed, rim, best, along, ww, acr, roll, side, edged, bd);
+  if (inside < .5) discard;
+  vec3 V = normalize(uEye - vW), d3 = normalize(vRt * bd.x + vUp * bd.y);
+  // (the blade's own face, turned on its length)
+  vec3 Nb = normalize(vN * cos(roll) + cross(d3, vN) * sin(roll)), N = faceforward(Nb, -V, Nb);
+  // (lit: dark ink-green in shade, yellow-green in the sun, glowing gold-green where the sun's behind it)
+  gUnder = .35;
+  float sun = sunThrough(vW), back = pow(max(0., dot(-V, uSun)), 2.5) * sun;
+  vec3 alb = mix(vec3(.18, .26, .12), vec3(.5, .6, .24), .35 + .65 * best);
+  // (close to, each blade's midrib, a fine darker line down its middle)
+  alb *= 1. - .28 * (1. - smoothstep(.0, .14, acr)) * (1. - smoothstep(4., 14., distance(vW, uEye))) * min(1., uRelief);
+  float colR, litR;
+  vec3 c = layered(alb, N, vW, .6, .9, lin(vec3(.9, .92, .42)) * back * 1.2 * uSunC, uColK.y, 0., vOut, colR, litR);
+  // (the marks: each blade's edge near; where the colour's given out, the blade filled in ink, as a brush lays it)
+  // (its own edge, drawn by itself a set number of pixels in from the blade's rim, so a far spray is a few fine blades,
+  // not a blot; a little ink in the blade where its colour's gone)
+  float dd = distance(vW, uEye), near = 1. - smoothstep(8., 26., dd), halfpx = ww * vSize / max(dd * uPxW, 1e-5);
+  float rimL = (1. - smoothstep(.55, 1.3, rim * halfpx)) * mix(.35, 1., smoothstep(.6, 2.5, halfpx)) * mix(1., .35, smoothstep(10., 40., dd));
+  // (its edge is its outline, on the outlines' dial with the culms' contours; only the fill is its own mark)
+  gContour = rimL * .85 * uMarks * edged * mix(.15, 1., step(0., side)) * (1. - .5 * smoothstep(.75, 1., along));
+  float mark = (1. - colR) * (.1 + .1 * best) * (1. - smoothstep(15., 40., dd) * .7) * uMarks;
+  // (left out whole, a spray at a time by its own pick, where no layer reaches it)
+  // (its ink laid out each blade from the stem, then to its weight)
+  // (near and out of focus, wet: its blades a dark wash, no edges)
+  float wetK = uFocus.y * smoothstep(.25, 1.1, -cocAt(dd));
+  c = mix(c, vec3(.15, .17, .12), wetK * .85); colR = max(colR, wetK); gColHere = max(gColHere, wetK); gContour *= 1. - wetK;
+  float sa = min(inkAt(vOut, fract(vSeed * 17.3)), vCulmInk), inkA = laid(sa, along);
+  if (uClay < .5 && colR < .02 && litR * dot(uLitK.xyz, vec3(1.)) < .02 && sa < .002) discard;
+  emit(c, colR, inkA, .6, 0., mark);
+}`;
+
+// ─── the branches: off the culm at a node of its crown, rising and arching out, thinning to their ends, where the
+// leaves hang; drawn as the culm is (its green, its own fine line), their ink its culm's at the node ───
+const TWIG_VS = COMMON + `
+layout(location = 0) in vec2 aUV;
+layout(location = 1) in vec4 iA; layout(location = 2) in vec4 iB; layout(location = 3) in vec4 iC; layout(location = 4) in vec4 iD;
+out vec3 vW; out vec3 vR0; out vec3 vN; out float vT; out float vRad; flat out float vCulmInk; flat out float vSeed;
+uniform vec2 uPick;
+void main() {
+  vec3 b = iA.xyz; float h = iA.w; vec2 lean = iB.xy; float phase = iB.z, bend = iB.w;
+  float y = iC.x, rise = iC.y, hor = iC.z, ang = iC.w, rad = iD.x, seed = iD.y, pick = iD.z;
+  float dist = distance(b.xz, uEye.xz);
+  if (pick > 1. - smoothstep(uPick.x, uPick.y, dist)) { gl_Position = vec4(2., 2., 2., 1.); return; }
+  vec3 p0 = culmAt(b, h, lean, phase, y, bend), p1 = culmAt(b, h, lean, phase, y + rise, bend) + vec3(cos(ang) * hor, 0., sin(ang) * hor);
+  // (rising off its node, then out, its end bowed by its leaves)
+  vec3 m = mix(p0, p1, .4) + vec3(0., rise * .3 + hor * .08, 0.);
+  float t = aUV.y;
+  vec3 p = mix(mix(p0, m, t), mix(m, p1, t), t), T = normalize(2. * (1. - t) * (m - p0) + 2. * t * (p1 - m) + 1e-4);
+  vec3 n1 = normalize(cross(T, vec3(0., 1., 0.)) + vec3(1e-4, 0., 0.)), n2 = cross(n1, T);
+  float a = aUV.x * 6.2832; vec3 n = n1 * cos(a) + n2 * sin(a);
+  vRad = rad * (1. - .7 * t);
+  vW = p + n * vRad; vN = n; vT = t; vSeed = seed;
+  vec3 p0r = culmRest(b, h, lean, phase, y, bend); vR0 = vW - (p0 - p0r);
+  // (its ink, its culm's where it leaves it)
+  float jit = (fract(pick * 7.31) - .5) * .24 + (vn(b.xz * .045) - .5) * .7, bb = 99.;
+  for (int k = 0; k < 5; k++) bb = min(bb, outAt(culmRest(b, h, lean, phase, min(1.6, h) + (h - min(1.6, h)) * float(k) / 4., bend)));
+  float cq = h21(vec2(phase * 3.7, 5.3)) * mix(.45, 1., smoothstep(6., 28., dist)), aw = inkAt(bb + jit, cq);
+  vCulmInk = laidLen(aw, y / max(h, .1)) * aw * smoothstep(0., .6, has(outAt(p0r) + jit, uRch.z));
+  gl_Position = uVP * vec4(vW, 1.);
+}`;
+const TWIG_FS = COMMON + LIGHT + OUT + `
+in vec3 vW; in vec3 vR0; in vec3 vN; in float vT; in float vRad; flat in float vCulmInk; flat in float vSeed;
+void main() {
+  vec3 N = normalize(vN), V = normalize(uEye - vW);
+  float dist = distance(vW, uEye);
+  vec3 alb = mix(vec3(.52, .56, .36), vec3(.46, .44, .32), vSeed) * (.85 + .3 * vn(vec2(vT * 24., vSeed * 31.)));
+  float colR, litR;
+  gUnder = .5;
+  vec3 c = layered(alb, N, vW, .3, 1., vec3(0.), uColK.x, 0., outAt(vR0), colR, litR);
+  float wetK = uFocus.y * smoothstep(.25, 1.1, -cocAt(dist));
+  c = mix(c, vec3(.15, .16, .12), wetK * .8); colR = max(colR, wetK); gColHere = max(gColHere, wetK);
+  // (its own line, as a culm draws its: in from its silhouette, or, thinner than that, one fine line as light as it's thin)
+  float ndv = abs(dot(N, V)), rpx = vRad / max(dist * uPxW, 1e-5), dpx = rpx * (1. - sqrt(max(0., 1. - ndv * ndv)));
+  gContour = (1. - smoothstep(.45, 1.2, dpx)) * mix(.35, .9, smoothstep(.5, 2.5, rpx)) * (1. - wetK) * mix(1., .3, smoothstep(10., 40., dist));
+  float inkA = vCulmInk;
+  if (uClay < .5 && colR < .02 && litR * dot(uLitK.xyz, vec3(1.)) < .02 && inkA < .002) discard;
+  emit(c, colR, inkA, .4, 0., 0.);
+}`;
+
+const GROUND_VS = COMMON + `
+layout(location = 0) in vec3 aP; layout(location = 1) in vec3 aN; layout(location = 2) in vec2 aD; layout(location = 3) in vec3 aL;
+out vec3 vW; out vec3 vN; out float vD; out float vRock; out float vSunVis; out float vAO; out float vGather;
+void main() { vW = aP; vN = aN; vD = aD.x; vRock = aD.y; vSunVis = aL.x; vAO = aL.y; vGather = aL.z; gl_Position = uVP * vec4(aP, 1.); }`;
+const GROUND_FS = COMMON + LIGHT + OUT + `
+in vec3 vW; in vec3 vN; in float vD; in float vRock; in float vSunVis; in float vAO; in float vGather;
+uniform float uMarks;
+void main() {
+  vec3 N = normalize(vN);
+  float dist = distance(vW, uEye);
+  // (the floor as three grounds in broad patches, not one carpet of equal leaves: so the next few metres read at once,
+  // and the leaves reward a closer look where they've gathered)
+  //   - compressed: a trail's trodden bed, pale earth matted with a few flattened leaves; the way, lightest
+  //   - settled: the floor's most, old litter matted down, its leaves only a quiet grain in one mid tone
+  //   - loose: drifts of fallen leaves, each its own, warm and lit: where they're caught (against rock and stone, in
+  //     hollows, swept to a trail's sides) and in broad patches
+  //   - humus: the dark damp earth showing, in patches and where it's steep
+  float n1 = fbm2(vW.xz * .45), n2 = vn(vW.xz * 3.1), pF = fbm2(vW.xz * .9 + 11.);
+  float worn = 1. - smoothstep(${(HALF * 0.4).toFixed(2)}, ${(HALF * 0.95).toFixed(2)}, vD + (pF - .5) * .45);
+  float swept = smoothstep(${(HALF * 0.75).toFixed(2)}, ${(HALF * 1.05).toFixed(2)}, vD + (pF - .5) * .3) * (1. - smoothstep(${(HALF * 1.3).toFixed(2)}, ${(HALF * 2.2).toFixed(2)}, vD));
+  float loose = clamp(smoothstep(.44, .64, fbm2(vW.xz * .2 + 3.) + (pF - .5) * .35) * .85 + smoothstep(.1, .6, vGather + (pF - .5) * .3) + swept * .55, 0., 1.) * (1. - worn * .85);
+  float humus = smoothstep(.56, .7, fbm2(vW.xz * .3 + 17.) + (pF - .5) * .3) * (1. - loose) * (1. - worn) + smoothstep(.3, .65, 1. - N.y) * .6 * (1. - loose * .5);
+  humus = clamp(humus, 0., 1.);
+  float px = length(fwidth(vW.xz)), leafMark, leaf;
+  float lH, lCav;
+  vec3 settled = mix(vec3(.56, .45, .32), vec3(.5, .4, .29), n1) * (.95 + .1 * vn(vW.xz * vec2(9., 2.5) + n1 * 4.));
+  vec3 carp = carpet(vec3(.62, .46, .3), vW.xz, px, leafMark, leaf, lH, lCav);
+  // (the leaves' own tones held close together, grouped in one warm value, a little lighter for the patch's own light)
+  vec3 lAvg = vec3(.84, .64, .4);
+  vec3 drift = mix(lAvg, carp * vec3(1.06, 1., .92), .6) * (1.04 + .1 * (n1 - .5));
+  vec3 matted = mix(settled, mix(settled * 1.1, carp * .8, .4), .25);
+  vec3 earth = mix(vec3(.84, .76, .61), vec3(.77, .68, .54), n2);
+  vec3 dark = mix(vec3(.3, .24, .18), vec3(.37, .29, .21), n2);
+  vec3 alb = mix(matted, drift, loose);
+  alb = mix(alb, dark, humus * (1. - loose));
+  // (down a trail's bed a few leaves left, flattened)
+  float cover = 1. - worn * .95 * (1. - (.1 + .25 * step(.62, vn(vW.xz * 2.2))));
+  alb = mix(earth, alb, cover);
+  // (only a loose leaf is a leaf of its own to the eye and the ink: elsewhere one patch)
+  float own = loose * cover;
+  // (but every leaf of the litter keeps its own pick for where the colour gives out, so the floor breaks into leaves on
+  // the paper, not a smear: a trodden bed or the bare humus has no leaves to break into)
+  leaf = cover * (1. - humus * (1. - loose)) > .4 && vRock < .3 ? leaf : -1.;
+  // (and of those, inked in groups, not each one: a cluster here, a few there, the rest left to their colour)
+  leafMark *= smoothstep(.45, .8, own) * smoothstep(.3, .45, h21(floor(vW.xz * .8 + 3.1)));
+  lH *= mix(.15, .55, own); lCav = mix(1., lCav, mix(.25, .8, own));
+  vec3 soil = vec3(.5, .43, .33);
+  // (a trail's cut bank: bare red-brown earth where it's steep, streaked down its fall, with roots run across it and
+  // small stones in it; the litter only lies on its ledges)
+  float cutBank = smoothstep(${(HALF + 0.15).toFixed(2)}, ${(HALF + 0.5).toFixed(2)}, vD) * (1. - smoothstep(${(HALF + BANK).toFixed(2)}, ${(HALF + BANK + 2.5).toFixed(2)}, vD)) * smoothstep(.04, .2, 1. - N.y);
+  if (cutBank > .01) {
+    vec2 fl = normalize(N.xz + 1e-4), ac = vec2(-fl.y, fl.x);
+    // (across the cut, a fixed direction, and down it by height: never along a direction that turns with the facets,
+    // which shears the pattern into chevrons)
+    float u = (vW.x - vW.z) * .707, v = vW.y;
+    vec3 earth2 = mix(vec3(.55, .38, .25), vec3(.42, .3, .2), vn(vec2(u * 1.3, v * 4.)));
+    earth2 *= .85 + .3 * vn(vec2(u * 6., v * .8));
+    // (roots: dark wavering lines across the cut)
+    float rl = abs(fract(v * 1.4 + vn(vec2(u * .7, 3.)) * 1.2) - .5);
+    float root = (1. - smoothstep(.02, .05, rl)) * step(.55, vn(vec2(u * .5, floor(v * 1.4) * 3.7)));
+    earth2 = mix(earth2, vec3(.3, .22, .16), root * .8);
+    // (stones in it, pale and mossed on top)
+    float st = smoothstep(.62, .7, vn(vec2(u, v * 1.6) * 2.2 + 11.));
+    earth2 = mix(earth2, mix(vec3(.64, .62, .56), vec3(.4, .5, .24), smoothstep(.5, .9, N.y + .3)), st);
+    float bareCut = cutBank * (1. - smoothstep(.93, .99, N.y)) * .9;
+    alb = mix(alb, earth2, bareCut); cover *= 1. - bareCut;
+  }
+  // (green: moss and low growth in patches, more along a trail's banks)
+  float green = smoothstep(.58, .74, fbm2(vW.xz * .3 + 9.)) * .45 + smoothstep(${(HALF + 0.2).toFixed(2)}, ${(HALF + 1.2).toFixed(2)}, vD) * (1. - smoothstep(3., 6., vD)) * smoothstep(.4, .7, vn(vW.xz * .9)) * .5;
+  alb = mix(alb, vec3(.36, .45, .2), green * (1. - worn));
+  // (rock where the ground's steep: grey stone, streaked down its fall, mossy where it's ledged)
+  vec2 fall = normalize(N.xz + 1e-4);
+  float across = (vW.x + vW.z) * .707 + (vn(vW.xz * .3 + vW.y * .2) - .5) * 1.4;
+  vec3 stone = mix(vec3(.66, .63, .56), vec3(.5, .49, .45), fbm2(vec2(across * .8, vW.y * .5)));
+  // (a cleft's floor (rock full): scree, broken stone and grit, not moss)
+  float scree = smoothstep(.97, 1., vRock);
+  stone = mix(stone, vec3(.42, .5, .26), smoothstep(.55, .75, N.y + (vn(vW.xz * 1.3) - .5) * .4) * .6 * (1. - scree));
+  stone = mix(stone, stone * (.78 + .34 * vn(vW.xz * 7.)) * vec3(1., .97, .92), scree);
+  alb = mix(alb, stone, vRock);
+  // (how far out: broken, as a brush's edge is, by strokes laid across the fall of the slope, dragged dry, so where a
+  // layer gives out it breaks into them in the world rather than following any line of the frame; further off, in
+  // bigger patches, so across a far slope it's ragged, not ruled; each fallen leaf by its own pick, so the litter thins
+  // to a few painted leaves and then their outlines on the paper; the bare ground between them first)
+  vec2 down2 = N.xz / max(length(N.xz), .05), across2 = vec2(-down2.y, down2.x);
+  float ac2 = (vW.x - vW.z) * .707, dn2 = vW.y * 2.2 + (vW.x + vW.z) * .25;
+  float stroke = vn(vec2(ac2 * .35, dn2 * 3.2)) * .6 + vn(vec2(ac2 * 1.1, dn2 * 9.)) * .4;
+  // (but where it's rock, broken as the rock's blocks are, in patches, never in strokes across the face: across a
+  // steep face, "across the fall" is level, and level bars say nothing of a cliff)
+  stroke = mix(stroke, fbm2(vec2(ac2, vW.y) * .4 + 5.), smoothstep(.3, .7, vRock));
+  float o = outCol(vW) + ((fbm2(vW.xz * .5 + 3.) - .5) * .5 + (stroke - .5) * 1.4 + (fbm2(vW.xz * .09 + 7.) - .5) * 1.6 * smoothstep(10., 40., dist)) / 3.;
+  o += leaf >= 0. ? (leaf - .5) * .27 : .08 + (vRock > .5 ? -.1 : 0.);
+  float colR, litR;
+  // (the land's relief, as the light finds it: the litter's small lumps on the level; grooves down a bank, as rain cuts
+  // it; on rock its bedding, layer over layer, and its fractures; fading out far off, where it's below a pixel)
+  // (the land's relief, each kind its own, in its own lie, with the dark of its creases; fine detail fading first, as
+  // it gets smaller than a pixel)
+  float fineK = 1. - smoothstep(.012, .035, px), midK = 1. - smoothstep(.05, .16, px), steepK = smoothstep(.25, .55, 1. - N.y);
+  // (the floor: the litter's leaves, and the gentle swell of the soil under them)
+  // (and the floor itself, never flat: a broad swell, lumps of earth, pebbles proud of it, and down a trail the ruts
+  // feet have worn; most where it's bare, under the litter only its swell)
+  vec2 pb = vor(vW.xz * 5.5);
+  // (which are pebbles, by a smooth pick, never a grid cell's: a pick that jumps at a cell's edge where the pebble
+  // doesn't is a step in the height, and its slope a dark dash)
+  float pebble = smoothstep(.32, .12, pb.x) * smoothstep(.55, .65, vn(vW.xz * 1.7 + 7.7));
+  float rut = exp(-pow((vD - ${(HALF * 0.35).toFixed(2)}) / .18, 2.)) + exp(-pow((vD + ${(HALF * 0.35).toFixed(2)}) / .18, 2.));
+  float bare = 1. - .8 * cover * (leaf >= 0. ? 1. : .4);
+  float hSoil = (fbm2(vW.xz * .7) - .5) * .12 + ((vn(vW.xz * 3.1) - .5) * .05 + pebble * .03) * midK * bare - rut * worn * .04;
+  float hF = lH * fineK * cover + hSoil, cF = mix(1., lCav, fineK * cover) * (1. - .3 * smoothstep(.12, .3, pb.x) * pebble * midK * bare);
+  // (a bank: clods of earth with cracks between, and grooves down it where the rain runs)
+  // (each feature fading by the footprint of its own coordinates, so a steep face, where height changes fast across a
+  // pixel though x and z hardly do, loses its detail as soon as the level ground does)
+  vec2 bc = vec2((vW.x - vW.z) * .707, vW.y * 1.2) * 3.4;
+  float bpx = length(fwidth(bc)), bK = 1. - smoothstep(.2, .6, bpx);
+  vec2 cl = vor(bc);
+  float crack = 1. - smoothstep(.0, .09 + bpx * .5, cl.y);
+  float hB = ((1. - cl.x) * .035 - crack * .015) * bK + (vn(vec2((vW.x - vW.z) * .707 * 3.5, vW.y * .7)) - .5) * .08;
+  float cB = 1. - .45 * crack * bK;
+  // (rock: its bedding, ledge over ledge, each undercut dark; fractures across it)
+  // (at the spacing the rock's own formations have (rock.ts: about two and a half metres), not a finer one of its own)
+  float bt = vW.y / 2.4 + fbm2(vW.xz * .12) * .8, bf = fract(bt), tK = 1. - smoothstep(.12, .4, fwidth(bt));
+  vec2 frq = vec2((vW.x + vW.z) * .9, vW.y * 1.2), fr = vor(frq);
+  float fpx = length(fwidth(frq)), fK = 1. - smoothstep(.15, .5, fpx);
+  float frc = (1. - smoothstep(.0, .06 + fpx * .6, fr.y)) * step(.45, h21(floor(frq)));
+  vec2 rcq = vec2((vW.x - vW.z) * 2.2, vW.y * 2.6), rch = vor(rcq);
+  float hR = .1 * mix(.5, smoothstep(0., .8, bf) - smoothstep(.82, .98, bf), tK) - .03 * frc * fK + (fbm2(vec2((vW.x - vW.z) * .8, vW.y * .9)) - .5) * .16 + (1. - rch.x) * .04 * (1. - smoothstep(.2, .6, length(fwidth(rcq))));
+  float cR = (1. - .5 * tK * smoothstep(.83, .95, bf) * (1. - smoothstep(.97, 1., bf))) * (1. - .4 * frc * fK);
+  float hh = mix(mix(hF, hB, steepK), hR, vRock) * uRelief, cav = mix(1., mix(mix(cF, cB, steepK), cR, vRock), clamp(uRelief * .45, 0., .95));
+  vec3 Nb = bumpN(N, vW, hh);
+  // (and in the shade, where no sun finds the bump, the hollows still hold the dark and the crowns the light)
+  cav *= clamp(1. + hh * 2.8, .4, 1.3);
+  // (and the land's own shadow and openness, baked with it; its creases shut out the sky, and a little of the sun)
+  gSunVis = vSunVis * mix(1., cav, .5);
+  vec3 c = layered(alb, Nb, vW, .2, .95 * vAO * cav, vec3(0.), uColK.z, 1., o, colR, litR);
+  // (the marks: each near fallen leaf's edge; the land's own (a trail's edges, a bank's rim, a face's fall, the lie of
+  // the hillside) are strokes laid on it, strokes.ts)
+  // (a fallen leaf's edge is the picture's detail: it goes with the colour, a few left, so in the drawing the land's own
+  // structure (edges, rims, contours) carries it, not the litter)
+  // (along a trail, near, the fallen leaves keep their marks in the ink, overlapping, broken: the path is where the eye
+  // goes, so it's drawn as a material, not left as an outlined patch)
+  float trailNear = (1. - smoothstep(${(HALF * 0.6).toFixed(2)}, ${(HALF * 1.9).toFixed(2)}, vD)) * (1. - smoothstep(8., 22., dist));
+  float mark = leafMark * .55 * uMarks * mix(.25 + .75 * colR, 1.1, trailNear * (1. - colR));
+  // (the land's never left out: past its layers it's the paper, which it gives its own place in the light to)
+  // (its ink by the smooth measure, not the broken one its colour gives out by: an outline along it thins, never dots)
+  // (open: the land's own silhouettes left to the paper in long stretches, as the eye completes a hill)
+  float gOpen = mix(1., .3 + .7 * smoothstep(.42, .62, vn(vW.xz * .12 + 4.)), uHand.x);
+  float oc = outCol(vW);
+  emit(c, colR, laidW(has(oc, uRch.z)) * has(oc, uRch.z), .2, gOpen, mark);
+}`;
+
+const SOLID_VS = COMMON + `
+layout(location = 0) in vec3 aP; layout(location = 1) in vec3 aN;
+layout(location = 2) in vec4 iA; layout(location = 3) in vec4 iB; layout(location = 4) in vec4 iC; layout(location = 5) in vec2 iD;
+out vec3 vW; out vec3 vN; out vec3 vL; out float vMoss; out float vSeed; flat out float vOut; out vec3 vBed; out float vWorn; out float vFoot; flat out float vFace;
+uniform int uKind; uniform mat4 uLightVP; uniform int uDepth; uniform int uMesh;
+void main() {
+  vBed = vec3(0.); vWorn = 0.; vFoot = 1.; vFace = .5;
+  if (uMesh == 1) {
+    // (the rock's blocks, meshed in the world already (rock.ts): each corner its place, its face's normal, its place in
+    // its block, its bedding, moss and seed; its block's anchor, asked how far it's drawn, so a block's drawn whole, one
+    // way, never triangle by triangle; whether it's a worn edge)
+    vW = aP; vN = aN; vL = iA.xyz; vMoss = iB.z; vSeed = iB.w; vBed = vec3(iB.xy, floor(iD.y + .01)); vWorn = iD.x;
+    // (how high up its block this corner is (0 at its foot), and which face it's on: read here, at the corner, not
+    // after they're spread across the face, where a value on a boundary would flip pixel by pixel)
+    vFoot = (iD.y - floor(iD.y + .01)) / .45; vFace = h21(floor(aN.xz * 3.7 + aN.y * 2.3 + .5) + iB.w * 17.);
+    vOut = uDepth == 1 ? 0. : outCol(iC.xyz + vec3(0., .2, 0.)) + (fract(iB.w * 7.7) - .5) * .1;
+    gl_Position = (uDepth == 1 ? uLightVP : uVP) * vec4(vW, 1.);
+    return;
+  }
+  vec3 p = aP, n = aN;
+  float yaw = iA.w;
+  if (uKind == 1) {
+    // (a step: the unit box set to its depth, width and drop, its front edge at the origin)
+    p = vec3(p.x * iB.y, p.y * iB.z - iB.z, (p.z + .5) * iB.x);
+    // (laid by hand and settled since: each a little tilted across and along, one end sunk)
+    float roll = (fract(iB.w * 13.7) - .5) * .14, pitch = (fract(iB.w * 7.9) - .5) * .08;
+    p.y += p.x * roll + (p.z - iB.x * .5) * pitch;
+    n = normalize(vec3(n.x - roll * n.y, n.y, n.z - pitch * n.y));
+  } else if (uKind == 3) {
+    // (a root: the lump drawn out long and thin along x, bowed a little, its ends thinning into the earth)
+    float u = clamp(p.x / 1.7, -1., 1.), thin = 1. - u * u * .6;
+    p = vec3(p.x / 1.7 * iB.y * .5, p.y * iB.x * .75 * thin + (1. - u * u) * iB.x * .4, p.z * iB.x * thin + sin(u * 2.4 + iB.w * 9.) * .12);
+    n = normalize(vec3(n.x * .2, n.y, n.z));
+  } else if (uKind == 4) {
+    // (a part of a body going through the grove (presence.ts): the lump stretched to its size)
+    // (and pitched, so a limb's segment lies along it)
+    // (tapered toward its far end, or with iC.y < 0 its near one: a snout, an ear, a tail's root and its tip)
+    float tq = iC.y > 0. ? (p.z + 1.) * .5 : (1. - p.z) * .5, tk = 1. - abs(iC.y) * tq * tq;
+    p = vec3(p.xy * tk * (1. + iC.z * .28), p.z * (1. + iC.z * .08)) * iB.xyz; n = normalize(vec3(n.xy / tk, n.z + abs(iC.y) * tq * sign(iC.y) * .8) / iB.xyz);
+    float cp = cos(iC.x), sp = sin(iC.x);
+    p = vec3(p.x, p.y * cp - p.z * sp, p.y * sp + p.z * cp); n = vec3(n.x, n.y * cp - n.z * sp, n.y * sp + n.z * cp);
+  } else {
+    p = vec3(p.x, p.y * iB.y, p.z) * iB.x; n = normalize(vec3(n.x, n.y / max(iB.y, .2), n.z));
+  }
+  float c = cos(yaw), s = sin(yaw);
+  p = vec3(c * p.x + s * p.z, p.y, -s * p.x + c * p.z); n = vec3(c * n.x + s * n.z, n.y, -s * n.x + c * n.z);
+  vW = iA.xyz + p; vN = n; vL = aP; vMoss = uKind == 4 ? iC.z : iB.z; vSeed = iB.w;
+  vOut = uDepth == 1 ? 0. : outCol(iA.xyz + vec3(0., .2, 0.)) + (fract(iA.x * .37 + iA.z * .71) - .5) * .14;
+  gl_Position = (uDepth == 1 ? uLightVP : uVP) * vec4(vW, 1.);
+}`;
+const SOLID_FS = COMMON + LIGHT + OUT + `
+in vec3 vW; in vec3 vN; in vec3 vL; in float vMoss; in float vSeed; flat in float vOut; in vec3 vBed; in float vWorn; in float vFoot; flat in float vFace;
+uniform int uKind; uniform float uMarks; uniform int uMesh;
+void main() {
+  vec3 N = normalize(vN);
+  float n1 = fbm2(vW.xz * 1.7 + vW.y * 1.3), n2 = vn(vW.xy * 5. + vW.z * 3.);
+  vec3 stone = mix(vec3(.76, .72, .63), vec3(.62, .6, .54), n1) * (.88 + .24 * n2);
+  float moss = smoothstep(.2, .8, N.y) * smoothstep(.45, .7, n1 + vMoss * .3);
+  vec3 alb = mix(stone, vec3(.4, .5, .22), moss * (uKind == 1 ? .2 : .7));
+  float mark = 0., frK = 0., frW = 0.;
+  vec2 fuv = vec2(0.);
+  // (a stone's shade drawn as a brush does: a few broken strokes across its turned-away side, not filled)
+  // (on the rock's blocks, in the block's own frame, so a face's strokes go with the face)
+  float hq = uMesh == 1 ? dot(vL.xz, vec2(.8, .6)) * 5. + vL.y * 3.5 : dot(vW.xz, vec2(.8, .6)) * 5. + vW.y * 3.5;
+  float hs = abs(fract(hq) - .5);
+  float hw = .07 + fwidth(hq) * .9;
+  float hatch = (1. - smoothstep(hw * .7, hw * .7 + .05, hs)) * smoothstep(.3, -.3, dot(N, uSun)) * step(.45, vn(vW.xz * 2.3 + vW.y)) * .42;
+  // (on the rock's broad faces: fewer, finer, broken into strokes along their length, a few to a face, not a ruled field)
+  if (uMesh == 1) hatch = (1. - smoothstep(.02, .02 + fwidth(hq) * 1.2, hs)) * smoothstep(.2, -.4, dot(N, uSun)) * step(.62, vn(vec2(floor(hq) * 1.7 + vSeed * 9., dot(vL.xz, vec2(-.6, .8)) * 1.6))) * .32;
+  if (uKind == 2) {
+    // (a boulder: its underside dark, the ground's shade gathering under it; now and then a fracture across it)
+    float under = smoothstep(-.05, -.6, N.y) * .5;
+    // (its fracture: one field, in the stone's own body, that the ink draws, the light finds as a crease and its dark
+    // gathers in, so the drawn crack and the lit one are the same crack)
+    float cr = abs(dot(vL, normalize(vec3(.8, .15, .5) + vec3(vSeed - .5, 0., fract(vSeed * 7.1) - .5))) + (vn(vL.xy * 5. + vSeed * 7.) - .5) * .18 - (fract(vSeed * 3.3) - .5) * .5);
+    float has = step(.35, fract(vSeed * 5.7)), fw = fwidth(cr);
+    frK = (1. - smoothstep(.015, .04 + fw, cr)) * has;
+    frW = (1. - smoothstep(.0, .09 + fw * 2., cr)) * has;
+    mark = max(max(hatch, under), frK * .8);
+    if (uMesh == 1) {
+      // (the rock's blocks (rock.ts): a broad face says its plane and little else. Its seams are the geometry's own (a
+      // tier's joint, a cleft, a recess), never painted on. Its colour by what the stone is: a quiet grey, varying slowly
+      // over the face in the face's own frame; a fresh break (a fallen piece) paler; the back of a cleft damp and dark;
+      // water stains run down from the ledges on the steep faces; worn edges lighter; moss in patches where a top holds
+      // it, never on a worn edge, now and then spilling down a damp run. Ink: its underside only; its edges are strokes.ts')
+      vec3 up = abs(N.y) > .9 ? vec3(1., 0., 0.) : vec3(0., 1., 0.), t1 = normalize(cross(up, N)), t2 = cross(N, t1);
+      fuv = vec2(dot(vW, t1), dot(vW, t2));
+      float role = vBed.z, g1 = vn(fuv * .3 + vSeed * 7.);
+      vec3 base = mix(vec3(.71, .68, .61), vec3(.6, .58, .53), g1) * (.95 + .08 * vn(fuv * 2.1 + 3.));
+      if (role > 3.5) base = mix(base, vec3(.8, .77, .7), .45);
+      if (role > 1.5 && role < 2.5) base *= .8;
+      float steep = 1. - smoothstep(.3, .6, abs(N.y));
+      float streak = smoothstep(.6, .8, vn(vec2(dot(vW.xz, vec2(-N.z, N.x)) * 2.2 + vSeed * 5., vW.y * .12)));
+      base = mix(base, base * vec3(.64, .65, .63), streak * steep * .55);
+      base = mix(base, base * 1.1 + .03, vWorn * .7);
+      float pk = fbm2(vW.xz * .55 + vSeed * 3.);
+      float mossM = smoothstep(.55, .8, N.y) * smoothstep(.56, .8, pk + vMoss * .3) * (1. - vWorn);
+      mossM = max(mossM, steep * streak * smoothstep(.62, .82, pk + vMoss * .2) * .5);
+      alb = mix(base, vec3(.38, .47, .22) * (.85 + .3 * vn(fuv * 4.)), mossM * .85);
+      mark = under * .9;
+    }
+  }
+  if (uKind == 4) {
+    // (a fox: russet, its underside and its tail's tip white; someone running: a dark coat, a pale sleeve, dark hair)
+    // (a fox's coat as a brush lays it: strokes along each part, the way its fur lies, a darker stroke now and then down
+    // the back and a pale one catching the light; at its edge the strokes break off dry, so its outline's fur, not a
+    // shell. vMoss is how furred the part is; vL its own place, z along it)
+    int part = int(vSeed + .5);
+    float ang = atan(vL.y, vL.x), fur = vMoss;
+    float strand = vn(vec2(ang * 2.6 + vSeed * 3.1, vL.z * 1.1 + ang * .4)), fine = vn(vec2(ang * 9. + vSeed, vL.z * 1.6));
+    // (tufts along its outline: fine along the part, so the edge breaks into strokes as it runs)
+    float tuft = vn(vec2(ang * 4. + vSeed * 3., vL.z * 11.)) * .7 + vn(vec2(ang * 9., vL.z * 23.)) * .3;
+    if (fur > 0.) {
+      vec3 V = normalize(uEye - vW);
+      // (the part's swollen by its fur; its outer half is tufts, kept where the brush laid them)
+      float ndv = abs(dot(N, V));
+      if (ndv < fur * (.15 + .8 * smoothstep(.35, .75, tuft))) discard;
+    }
+    vec3 rus = mix(vec3(.7, .37, .16), vec3(.88, .6, .36), strand * .7 + fine * .3), pale = vec3(.93, .9, .84), dark = vec3(.12, .085, .07);
+    // (the brush's strokes, along the fur: a dark one, a pale one)
+    rus = mix(rus, rus * .55, smoothstep(.72, .86, fine) * fur);
+    rus = mix(rus, mix(rus, pale, .45), smoothstep(.78, .9, vn(vec2(ang * 9. + 5., vL.z * 1.6))) * fur);
+    float belly = smoothstep(-.15, -.6, N.y);
+    // (its form said softly, as a wash does, not modelled hard: the fur turned toward the sky)
+    N = normalize(N + vec3(0., .55, 0.) * fur);
+    alb = part == 0 ? mix(mix(rus, rus * .62, smoothstep(.55, .9, N.y) * step(.55, fine) * .8), pale, belly * .5)
+        : part == 1 ? mix(rus, pale, smoothstep(-.05, -.45, N.y))
+        : part == 2 ? mix(mix(rus, rus * .55, step(.6, strand) * .7), pale * .9, belly * .35)
+        : part == 3 ? pale * (.92 + .1 * strand)
+        : part == 9 ? mix(rus, dark, smoothstep(-.2, .7, vL.z))
+        : part == 10 ? mix(rus * 1.05, dark, smoothstep(-.1, .6, vL.z) * .8 + .2)
+        : part == 11 ? mix(rus * .9, mix(dark, rus * .5, .3), smoothstep(.3, -.3, vL.z) * smoothstep(.05, .5, abs(vL.x) + strand * .3))
+        : part == 4 ? vec3(.3, .33, .4) : part == 5 ? vec3(.16, .13, .12) : part == 7 ? dark : part == 8 ? vec3(.72, .56, .44) : vec3(.88, .86, .8);
+    alb *= .9 + .2 * (fur > 0. ? fine : n2);
+  }
+  if (uKind == 3) {
+    // (a root: grey-brown bark, worn pale and smooth on top where it's trodden, moss low along it)
+    alb = mix(vec3(.45, .36, .27), vec3(.36, .3, .24), n1) * (.85 + .3 * n2);
+    alb = mix(alb, vec3(.66, .57, .45), smoothstep(.6, .95, N.y) * .5);
+    alb = mix(alb, vec3(.38, .47, .2), smoothstep(.3, .1, N.y) * smoothstep(.4, .7, n1 + vMoss * .4) * .6);
+  }
+  if (uKind == 1) {
+    // (a step: warm worn stone, each its own tone; the tread worn paler toward its middle and its front edge rounded
+    // and lit; leaves lying on it toward its ends; moss in the joint at its back; the riser in its own shade)
+    alb *= .82 + .3 * vSeed;
+    alb = mix(alb, alb * vec3(1.1, 1., .84), fract(vSeed * 7.3) * .7);
+    float onTop = smoothstep(.8, .95, N.y), front = 1. - smoothstep(.0, .12, vL.z + .5);
+    alb = mix(alb, vec3(.84, .79, .66), onTop * ((1. - abs(vL.x) * 1.6) * .35 + front * .4));
+    float r, lid; vec4 lv = leaves(vW.xz + vSeed * 13., .17, r, lid);
+    alb = mix(alb, lv.rgb, lv.a * onTop * (.3 + .6 * smoothstep(.15, .45, abs(vL.x))));
+    alb = mix(alb, vec3(.38, .48, .2), onTop * smoothstep(.36, .5, vL.z) * smoothstep(.4, .7, vn(vW.xz * 6.)) * .7);
+    alb *= mix(1., .74, 1. - smoothstep(.2, .6, N.y));
+    // (its foot in the soil: the joint dark, earth risen against it)
+    alb = mix(alb, vec3(.32, .26, .19), (1. - smoothstep(.0, .3, vL.y)) * (1. - onTop) * .7);
+    // (the marks: the crack or two across a stone, now and then)
+    mark = hatch * (1. - smoothstep(.2, .6, N.y)) * .8;
+    mark = max(mark, step(.8, fract(vSeed * 3.7)) * (1. - smoothstep(.0, .015, abs(vL.x - (fract(vSeed * 11.) - .5) * .6 + (vn(vW.xz * 7.) - .5) * .08))) * onTop * .7);
+  }
+  // (a stone, a step, a root: the land's colour; left out whole, by its own pick, where no layer reaches it)
+  // (its colour and light are the land's, asked where they are, as the ground's are, so a stone never stands as a hole
+  // in the land's wash; its ink is its own, whole)
+  float colR, litR;
+  // (a stone's surface as the light finds it: weathered, pitted; a step's tooled)
+  vec2 sv = vor(vW.xz * 4. + vW.y * 2.3);
+  // (a fracture here and there, not a net: only some of its cells part)
+  float spx = length(fwidth(vW)) * 4.;
+  float scr = uKind == 2 ? frW : (1. - smoothstep(.0, .05 + spx, sv.y)) * step(.6, h21(floor(vW.xz * 4. + vW.y * 2.3) + 3.1)), sK = (1. - smoothstep(10., 30., distance(vW, uEye))) * uRelief;
+  // (the finest of it (pits, tooling) gone where a pixel covers it)
+  float sFine = 1. - smoothstep(.04, .12, spx * 2.25);
+  // (a boulder: broad weathered facets, chips off it, pits, a crack or two; a step: tooling and wear)
+  // (the rock's blocks: chips in their own frame, few and quiet, so a broad face stays broad)
+  vec2 chip = uMesh == 1 ? vor(vL.xz * 2.5 + vL.y * 1.9 + vSeed * 9.) : vor(vW.xz * 2.2 + vW.y * 1.7);
+  float hRel = uKind == 4 ? 0. : uKind == 1 ? (vn(vW.xz * vec2(14., 3.)) - .5) * .01 * sFine + (vn(vW.xz * 4.) - .5) * .015 - scr * .008
+    : (fbm2(vW.xz * 1.1 + vW.y * .9) - .5) * (uMesh == 1 ? .05 : .12) + (1. - chip.x) * (uMesh == 1 ? .015 : .05) + ((fbm2(vW.xz * 3. + vW.y * 2.) - .5) * .04 - .02 * smoothstep(.7, .82, vn(vW.xz * 9. + vW.y * 5.))) * sFine - scr * .025;
+  // (the rock's blocks: only a fine grain in the face's own frame, nothing between, so a broad face stays one plane (its
+  // breaks are the geometry's: a tier's joint, a cleft, a recess, a shoulder); and in clay, none at all: clay's the forms
+  // alone)
+  float flake = 0.;
+  if (uMesh == 1) {
+    hRel = (vn(fuv * 9.) - .5) * .006 * sFine - flake * .012;
+    scr = 0.;
+    if (uClay > .5) sK = 0.;
+  }
+  N = bumpN(N, vW, hRel * sK);
+  float sHo = uMesh == 1 ? 1. : clamp(1. + hRel * sK * 4.5, .35, 1.3);
+  gSunVis = mix(1., sHo * (1. - (uKind == 1 ? .25 : .45) * scr * min(1., sK)), .75);
+  float sCav = uMesh == 1 ? 1. - flake * .25 : (1. - (uKind == 1 ? .25 : .35) * scr * min(1., sK)) * (uKind == 1 ? 1. : 1. - clamp(sK * .4, 0., .8) * smoothstep(.05, .0, chip.y) * .5) * sHo;
+  float oR = outCol(vW) + (fract(vSeed * 3.1) - .5) * .06, hatchR = 0.;
+  if (uMesh == 1) {
+    // (the rock goes to the paper feature by feature, each at its own place, never along one line across the frame: the
+    // paper's the stone's own bare face, so a face gives out with an edge of its own, broken in the face's frame, not
+    // a fog. A face the sun's on goes first; a side turned away keeps its wash (its light, past its colour) and a few
+    // strokes across it; the foot, where it meets the ground, holds longest; and here and there a lit patch is left far
+    // out on its own, its edge running along the bedding (the block's own layers), never a round blot. The culms' shadows across it linger pale on the paper after its colour's gone)
+    // (each by the face's own normal, never the bumped one, which wavers pixel to pixel: the face is one thing)
+    vec3 Nf = normalize(vN);
+    float foot = vFoot, litF = smoothstep(.05, .45, dot(Nf, uSun)), fid = vFace;
+    oR += (fid - .5) * .14 + .1 * litF - .07 * (1. - litF) + (fbm2(vec2(vL.y * 1.1 + vSeed * 3., (vL.x + vL.z) * .16)) - .5) * .34 - .16 * (1. - smoothstep(.0, .3, foot));
+    oR -= .24 * smoothstep(.7, .78, vn(fuv * .2 + vSeed * 3.)) * litF;
+    gColSharp = 2.5; gLitO = -.12 * litF;
+    // (and only on a side plane, turned edge-on to the eye (a recess's side, a block's flank); a broad face seen square
+    // says its plane by its edges alone, never ruled across)
+    hatchR = hatch * (1. - litF) * (1. - smoothstep(.3, .6, abs(dot(Nf, normalize(uEye - vW)))));
+  }
+  vec3 c = layered(alb, N, vW, .2, .85 * sCav, vec3(0.), uColK.z, 1., oR, colR, litR);
+  // (where its colour's gone, a side turned from the sun keeps a few strokes across it, in its own frame)
+  if (uMesh == 1) mark = max(mark, hatchR * (1. - colR) * 1.1);
+  // (its ink laid from its middle out to its sides, then to its weight; a step's by weight alone, as one of a flight, so
+  // the flight's edge thins as one line, never a row of dashes, a stone each)
+  float sa = inkAt(vOut, fract(vSeed * 5.13 + .3));
+  // (a rock block near you is never cut by where its colour gives out on the screen (a cut would be a false edge, inked
+  // as one): past its colour it's the paper, the stone's bare face, still standing in front of what's behind it, its
+  // ink where it is (its own, or as far out as it is here, whichever reaches); one further off goes whole, when its ink,
+  // its colour and its light have all gone)
+  bool nearRock = uMesh == 1 && distance(vW, uEye) < 15.;
+  if (uMesh == 1) sa = max(sa, inkAt(oR, fract(vSeed * 5.13 + .3)));
+  float inkA = laid(sa, uKind == 1 ? 0. : clamp(abs(vL.x), 0., 1.)) * (uKind == 4 ? .45 : 1.);
+  if (uClay < .5 && !nearRock && colR < .02 && litR * dot(uLitK.xyz, vec3(1.)) < .02 && sa < .002) discard;
+  // (open: a stone's contour carried by where it meets the land (its underside, its contact, a step's front), its top
+  // and its far side barely said, lifting here and there)
+  float auth = mix(.18, 1., smoothstep(.35, -.35, N.y)) * (1. - .8 * smoothstep(.45, .7, vn(vW.xz * 1.3 + vW.y * 2.)));
+  emit(c, colR, inkA, uKind == 1 ? .8 : .7, mix(1., auth, uHand.x), mark * uMarks);
+}`;
+
+const RIDGE_VS = COMMON + `
+layout(location = 0) in vec3 aP; layout(location = 1) in vec2 aT;
+out vec3 vW; out vec2 vT;
+void main() { vW = aP + vec3(uEye.x, uEye.y * .85, uEye.z); vT = aT; gl_Position = uVP * vec4(vW, 1.); }`;
+const RIDGE_FS = `#version 300 es
+precision highp float;
+in vec3 vW; in vec2 vT;
+layout(location = 0) out vec4 oC; layout(location = 1) out vec4 oA;
+uniform float uAway; uniform vec3 uTone;
+${NOISE}
+void main() {
+  // (a range as the ink lays it: darkest at its crest, washing out below into the mist)
+  float below = vT.x, layer = vT.y;
+  float a = exp(-below / (10. + layer * 6.)) * (.62 - layer * .1);
+  a *= (.75 + .25 * vn(vW.zy * .05)) * uAway;
+  // (a cool blue-grey, warmer toward the light: the far side of the valley in the morning's mist)
+  oC = vec4(mix(vec3(.46, .54, .62), vec3(.62, .66, .7), layer * .35) * uTone, min(1., a * 1.25));
+  oA = vec4(.1, 0., 0., 0.);
+}`;
+
+// ─── the run's working, drawn into the scene (debug.ts): ribbons in the world, a given width, turned to the eye; where
+// something's in front of them, still seen, faint and hatched ───
+const DBG_VS = `#version 300 es
+layout(location = 0) in vec3 aP; layout(location = 1) in vec4 aC;
+uniform mat4 uVP; out vec4 vC; out float vZ;
+void main() { vC = aC; vec4 c = uVP * vec4(aP, 1.); vZ = c.w; gl_Position = c; }`;
+const DBG_FS = `#version 300 es
+precision highp float;
+in vec4 vC; in float vZ; out vec4 o;
+uniform sampler2D uZ; uniform vec2 uRes; uniform float uNear; uniform float uFar;
+void main() {
+  float d = texture(uZ, gl_FragCoord.xy / uRes).r, z = uNear * uFar / (uFar - d * (uFar - uNear));
+  bool hid = vZ > z * 1.02 + 0.08;
+  float hatch = step(.5, fract((gl_FragCoord.x + gl_FragCoord.y) / 7.));
+  o = hid ? vec4(vC.rgb, vC.a * .38 * hatch) : vC;
+  if (o.a < .01) discard;
+}`;
+const POST_VS = `#version 300 es
+layout(location = 0) in vec2 aP; out vec2 vUV;
+void main() { vUV = aP * .5 + .5; gl_Position = vec4(aP, 0., 1.); }`;
+const POST_FS = `#version 300 es
+precision highp float;
+in vec2 vUV; out vec4 o;
+uniform sampler2D uC; uniform sampler2D uA; uniform sampler2D uZ;
+uniform vec2 uRes; uniform float uNear; uniform float uFar; uniform float uPx;
+uniform vec3 uPaper; uniform vec3 uInk; uniform vec3 uSunUV; uniform float uClean; uniform float uMarks; uniform float uClay; uniform vec4 uHand;
+uniform vec4 uFocA; uniform float uFocD;
+// (the hour: the sheet's own colour (its torn edge), the colour of a shaft of light, how much it's night, where the moon is)
+uniform vec3 uSheet; uniform vec3 uShaftC; uniform float uNight; uniform vec3 uMoonUV;
+// (the paper's own size in pixels: its grain, its torn edge, its stipple are the sheet's, fixed, whatever size the
+// picture's drawn at this frame)
+uniform vec2 uPaperRes;
+${NOISE}
+float lz(vec2 p) { float d = texture(uZ, p).r; return uNear * uFar / (uFar - d * (uFar - uNear)); }
+// (focus, as the vertex stages have it: signed, how far out of focus at this depth)
+uniform float uNearBlur, uFarBlur;
+// (how far out of focus, as the lens has it; and as the blur spreads it, the far side as much again as \`far\` asks)
+float cocL(float z) { float c = clamp(1. - uFocD / max(z, .1), -2.5, 1.); return uFocA.x * (c < 0. ? c * uNearBlur : c); }
+float cocP(float z) { float c = cocL(z); return c > 0. ? c * uFarBlur : c; }
+// (how much a thing of this kind at this depth softens: the land (ground .2, stones and steps .7+) not when near)
+float rOf(float z, float kind) { float c = cocP(z); bool land = (kind > .15 && kind < .3) || kind > .65; return c < 0. && land ? 0. : abs(c); }
+// (what's laid on the paper at a point, colour and light, before the ink: a thing's own, or the sky and far ranges over
+// the paper)
+vec3 laidAt(vec2 q) { vec4 Cs = texture(uC, q), As = texture(uA, q); return As.x > .15 ? Cs.rgb : mix(uPaper, Cs.rgb * mix(vec3(1.), uPaper / .94, .3), Cs.a); }
+void main() {
+  vec4 C = texture(uC, vUV), A = texture(uA, vUV);
+  // (\`?clay\`: the forms as they're lit, over a plain sky: no paper, no ink)
+  if (uClay > .5) { o = vec4(C.a > .01 ? C.rgb : vec3(.86, .87, .88), 1.); return; }
+  float z = lz(vUV);
+  // ─── the outlines: where the depth jumps or one kind meets another, inked on the side that's in front, as far as
+  // its reach and its allowance there let it ───
+  float ink = 0., ink2 = 0.;
+  if (uMarks > .5) {
+    vec2 px = uPx / uRes;
+    // (the outline found round each pixel, a ring at a time: the near ring for every line; with \`swell\`, a wider ring
+    // that only the strong lines reach, so they're heavier and the weak ones stay hairlines)
+    for (int ring = 0; ring < 2; ring++) {
+      if (ring == 1 && uHand.y < .01) break;
+      float rr = ring == 0 ? 1. : 2.3;
+      for (int k = 0; k < 8; k++) {
+        float ang = float(k) * .7854 + float(ring) * .39; vec2 o2 = vec2(cos(ang), sin(ang)) * px * rr * (k % 2 == 0 ? 1. : 1.41);
+        vec2 q = vUV + o2; float zq = lz(q), zo = lz(vUV - o2); vec4 Aq = texture(uA, q);
+        vec4 F = z < zq ? A : Aq;
+        // (against where the surface here would run on to: 1/z is straight across a plane, so a slope seen edge-on isn't
+        // a jump)
+        float zp = 1. / max(2. / z - 1. / zo, 1e-5);
+        float rel = min(abs(zq - z), abs(zq - zp)) / min(z, zq);
+        float dj = smoothstep(.05, .14, rel);
+        float kj = abs(Aq.x - A.x) > .05 && min(Aq.x, A.x) > .15 && !(min(Aq.x, A.x) < .22 && max(Aq.x, A.x) < .22) ? .8 : 0.;
+        // (a culm or a spray draws its own lines: here, only the land and what's set in it)
+        bool own = (A.x > .35 && A.x < .65) || (Aq.x > .35 && Aq.x < .65);
+        if (F.x < .15 || own) continue;
+        // (lighter with distance: a far culm is a fine grey line, not a dark one)
+        float zf = min(z, zq);
+        // (the edge found first, whole, then given its weight: so a light line is a light line, not the finding's flicker)
+        // (where two kinds meet with no step in depth (a stone sat in the ground), the line is either's, the stronger:
+        // never flickering, pixel by pixel, between the one side's weight and the other's)
+        float jw = max(clamp(dj * 2.5, 0., 1.) * F.y * F.z, kj * max(A.y * A.z, Aq.y * Aq.z));
+        float e = jw * mix(1., .28, smoothstep(10., 40., zf)) * (1.15 - .35 * C.a);
+        if (ring == 0) ink = max(ink, e); else ink2 = max(ink2, e * smoothstep(.45, .85, e));
+      }
+    }
+    ink = max(ink, ink2 * uHand.y);
+    // (and the things' own marks, as far as their ink reaches)
+    ink = max(ink, A.w);
+    // (far and out of focus, the ink dries: paler, and broken into stretches)
+    float dryK = uFocA.z * smoothstep(.3, .85, cocL(z));
+    ink *= 1. - dryK * (.45 + .5 * smoothstep(.45, .6, vn(vUV * uPaperRes * .08)));
+    // (grain: the line broken granular, as a crayon on a stone takes it)
+    float gn = vn(vUV * uPaperRes * .3) * .6 + vn(vUV * uPaperRes * .1) * .4;
+    ink *= mix(1., smoothstep(.32, .58, gn + ink * .25), uHand.z);
+  }
+  // ─── the page: each thing laid on it as it's drawn (its colour as far as that goes), its ink over that ───
+  float grain = uClean > .5 ? 0. : (vn(vUV * uPaperRes * .35) - .5) * .05 + (vn(vUV * uPaperRes * .04) - .5) * .04;
+  // (by night the sheet takes a wash, darker toward its top, a little uneven as a wash dries)
+  vec3 paper = uPaper * (1. + grain) * (1. - uNight * (.22 * vUV.y + .06 * (vn(vUV * uPaperRes * .006) - .5)));
+  // (a thing's laid already, its colour and its light on the paper as the layers have them; the sky and the far ranges
+  // washed over the paper as far as they go)
+  vec3 col = laidAt(vUV);
+  // ─── focus: what's laid (colour, light) softened by how far out of focus it is, never the ink; gathered so a nearer
+  // thing's blur spreads over what's behind it, and a farther one's stops at what's in front of it ───
+  if (uFocA.x > .001 && uFocA.w > .001) {
+    // (by kind, as the board has it: what stands (culms, sprays) and what's far go soft; the land near the eye (its
+    // ground, its stones, its steps) stays sharp, the most detailed thing in the picture)
+    float K = 6. * uPx * uFocA.w, rC = rOf(z, A.x) * K, rS = max(rC, K * uFocA.x * 1.2);
+    vec3 acc = col; float ws = 1.;
+    // (each pixel's samples turned its own way, so a wide blur is a soft grain, never a pattern of rings)
+    float spin = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453) * 6.2832;
+    for (int i = 0; i < 16; i++) {
+      float fi = float(i) + .5, rr = sqrt(fi / 16.), an = fi * 2.39996 + spin;
+      vec2 q = vUV + vec2(cos(an), sin(an)) * rr * rS / uRes;
+      float zs = lz(q), rs = rOf(zs, texture(uA, q).x) * K, dpx = rr * rS;
+      float w = clamp((zs < z ? rs : min(rs, rC)) - dpx + 1., 0., 1.);
+      acc += laidAt(q) * w; ws += w;
+    }
+    col = acc / ws;
+    // (where the colour's given out, softened light goes paler toward the paper, not greyer)
+    col = mix(col, uPaper, .4 * smoothstep(1., 6., rC) * (1. - C.a) * step(.15, A.x));
+  }
+  col *= 1. + grain;
+  // (grain: tone off the colour laid as stippled clusters, the darker the denser, the paper between)
+  {
+    float tone = clamp(1. - dot(col, vec3(.3, .55, .15)) / dot(paper, vec3(.3, .55, .15)), 0., 1.);
+    float st = step(vn(vUV * uPaperRes * .3) * .7 + vn(vUV * uPaperRes * .09) * .3, tone * 2.2 + .04);
+    col = mix(col, mix(paper, mix(col, uInk, tone * .6), st), uHand.z * (1. - C.a));
+  }
+  // (shafts of light where the canopy opens toward the sun)
+  if (uClean < .5 && uSunUV.z > 0.) {
+    vec2 d = (uSunUV.xy - vUV) / 32.; vec2 p = vUV; float acc = 0., w = 1.;
+    for (int i = 0; i < 32; i++) { p += d; vec4 Ap = texture(uA, p); acc += (Ap.x < .05 ? 1. : 0.) * w; w *= .95; }
+    float shaft = acc / 14. * uSunUV.z * (.5 + .5 * vn(vec2(atan(vUV.y - uSunUV.y, vUV.x - uSunUV.x) * 11., 1.)));
+    col = mix(col, uShaftC, clamp(shaft * .5 * C.a * (1. - .5 * uNight), 0., .6));
+  }
+  // (the moon: left as the bare sheet in the night's wash, a soft ring of light round it; only where nothing's in front)
+  if (uNight > .01 && uMoonUV.z > 0.) {
+    vec2 dm = (vUV - uMoonUV.xy) * uPaperRes; float rm = uPaperRes.y * .028, dd = length(dm);
+    float open = step(texture(uA, vUV).x, .05), disc = 1. - smoothstep(rm - 1.2, rm + 1.2, dd);
+    float halo = exp(-max(0., dd - rm) / (rm * 1.6)) * .3;
+    col = mix(col, uSheet * 1.02, clamp((disc + halo * (1. - disc)) * uNight * open, 0., 1.));
+  }
+  col = mix(col, uInk, clamp(ink, 0., 1.) * .9);
+  o = vec4(col, 1.);
+}`;
+
+// ─── the land's strokes (strokes.ts): ribbons laid on it, widened to a least width on the screen by their family so
+// the structure holds at any distance; each asks once, at its anchor, how far it's drawn, and is left out whole by its
+// pick, never faded; inked into the marks the page draws (max), so a stroke shows on the paper where the ground's colour
+// has gone, and over the colour as much as its family holds there ───
+const STROKE_VS = COMMON + `
+layout(location = 0) in vec3 aP; layout(location = 1) in vec3 aS; layout(location = 2) in vec2 aW; layout(location = 3) in vec2 aT;
+layout(location = 4) in vec3 aF; layout(location = 5) in vec3 aAnchor;
+uniform vec2 uRes; uniform float uAll;
+out float vAcross; out vec3 vW; flat out vec3 vF; flat out float vOut; flat out float vAmt; out float vAlong;
+// (the least a mark of each family is on the screen, in pixels: a rim most, then a string, a contact, an edge; detail less)
+// (primary structure (a rim, a trail's edge, a flight's string and nosings, a stone's contact) about a pixel; the secondary
+// (hachures, a face's strokes, contours, roots) finer, under a pixel, so they texture rather than rule)
+float least(float f) { return f < .5 ? 1.1 : f < 1.5 ? 1.4 : f < 2.5 ? .65 : f < 3.5 ? .7 : f < 4.5 ? .6 : f < 5.5 ? 1.1 : f < 6.5 ? 1. : f < 7.5 ? 1. : .75; }
+void main() {
+  float fam = floor(aF.x + .001);
+  // (across the way it runs, turned to the eye; lifted a little toward the eye, off what it lies on)
+  vec3 toEye = normalize(uEye - aP), side = normalize(cross(aS, toEye) + vec3(1e-5));
+  vec4 c0 = uVP * vec4(aP, 1.), c1 = uVP * vec4(aP + side * aW.x, 1.);
+  float px = c0.w > .01 && c1.w > .01 ? length((c1.xy / c1.w - c0.xy / c0.w) * .5 * uRes) : 1.;
+  // (and no wider than a brush lays it, however near: a stroke at your feet isn't a wedge)
+  float k = px < least(fam) ? min(5., least(fam) / max(px, 1e-3)) : min(1., least(fam) * 2.4 / px);
+  // (how much of it's laid: its ink here, and thinned with distance (the detail sooner), each by its own pick, never
+  // switched; laid out from its middle, its length first and then its weight (its width))
+  float pick = aF.z, d0 = distance(aAnchor, uEye);
+  vOut = max(outCol(aAnchor), outCol(aP)) + (pick - .5) * .14;
+  bool detail0 = (fam > 1.5 && fam < 4.5) || (fam > 5.5 && fam < 6.5) || fam > 8.5;
+  float keep = detail0 ? 1. - smoothstep(12., 60., d0) * .85 : 1. - smoothstep(60., 140., d0) * .7;
+  vAmt = uAll > .5 ? 1. : min(inkAt(vOut, pick), clamp((keep - pick) / .2 + .5, 0., 1.));
+  vAlong = abs(aT.y - .5) * 2.;
+  // (swell: the firm strokes heavier, the slight ones hairlines)
+  float wgt = fract(aF.x + .001);
+  vec3 p = aP + side * aW.x * aW.y * aT.x * k * laidW(vAmt) * mix(1., .5 + 1.2 * wgt, uHand.y) + toEye * min(.08, distance(uEye, aP) * .004);
+  vAcross = aT.x; vW = p; vF = aF;
+  gl_Position = uVP * vec4(p, 1.);
+}`;
+const STROKE_FS = COMMON + `
+in float vAcross; in vec3 vW; flat in vec3 vF; flat in float vOut; flat in float vAmt; in float vAlong;
+layout(location = 0) out vec4 oC; layout(location = 1) out vec4 oA;
+uniform float uMarks; uniform float uAll;
+void main() {
+  float fam = floor(vF.x + .001), weight = fract(vF.x + .001), persist = vF.y, pick = vF.z;
+  // (left out whole: through the sparse marks fewer and fewer, by each stroke's own pick, none at the page)
+  float lay = uAll > .5 ? 1. : laidLen(vAmt, vAlong) * fadeOf(vAmt);
+  if (lay < .01) discard;
+  float aa = max(fwidth(vAcross), 1e-4);
+  float cov = 1. - smoothstep(1. - aa, 1. + aa * .5, abs(vAcross));
+  float dry = smoothstep(.18, .42, vn(vW.xz * 6. + vW.y * 2. + fam * 3.1));
+  // (lighter with distance, as the outlines are: a far trail's edge, seen along, is a fine grey line, not a rule; a rim
+  // holds most)
+  float far = smoothstep(8., 45., distance(vW, uEye)) * (fam > .5 && fam < 1.5 ? .4 : .7);
+  float a = uAll > .5 ? cov : cov * mix(min(1., .4 + weight), clamp(pow(weight, 1.6) * 1.9, 0., 1.), uHand.x) * mix(.6, 1., dry) * mix(persist * uUnder, 1., 1. - hasS(vOut, uRch.x, uRch.w * 2.2)) * (1. - far) * uMarks * uInkK.y * lay;
+  if (a < .02) discard;
+  oC = vec4(0.); oA = vec4(0., 0., 1., min(1., a * 1.15));
+}`;
+
+// ─── meshes ───
+function culmMesh(sides: number, rings: number) {
+  const v: number[] = [];
+  for (let j = 0; j < rings; j++) for (let i = 0; i < sides; i++) {
+    const a0 = i / sides, a1 = (i + 1) / sides, y0 = j / rings, y1 = (j + 1) / rings;
+    v.push(a0, y0, a1, y0, a1, y1, a0, y0, a1, y1, a0, y1);
+  }
+  return new Float32Array(v);
+}
+/** the canopy texture round you: metres (a metre a texel) */
+const CAN = 256;
+const QUAD = new Float32Array([-0.5, -0.5, 0.5, -0.5, 0.5, 0.5, -0.5, -0.5, 0.5, 0.5, -0.5, 0.5]);
+function boxMesh() {
+  // (unit box: x -0.5..0.5, y 0..1, z -0.5..0.5; positions and normals)
+  const P: number[] = [], f = (a: number[], b: number[], c: number[], d: number[], n: number[]) => { for (const q of [a, b, c, a, c, d]) P.push(...q, ...n); };
+  const [x0, x1, y0, y1, z0, z1] = [-0.5, 0.5, 0, 1, -0.5, 0.5];
+  f([x0, y1, z0], [x1, y1, z0], [x1, y1, z1], [x0, y1, z1], [0, 1, 0]);
+  f([x0, y0, z0], [x1, y0, z0], [x1, y1, z0], [x0, y1, z0], [0, 0, -1]);
+  f([x1, y0, z1], [x0, y0, z1], [x0, y1, z1], [x1, y1, z1], [0, 0, 1]);
+  f([x0, y0, z1], [x0, y0, z0], [x0, y1, z0], [x0, y1, z1], [-1, 0, 0]);
+  f([x1, y0, z0], [x1, y0, z1], [x1, y1, z1], [x1, y1, z0], [1, 0, 0]);
+  return new Float32Array(P);
+}
+/** a step's stone: the unit box (x -0.5..0.5, y 0..1, z -0.5..0.5) as a worn slab, its edges rounded off and its faces
+ * a little uneven, so a flight is laid stones and not boxes */
+function slabMesh() {
+  const P: number[] = [], NU = 16, NV = 10, e = 0.3, f = (v: number) => Math.sign(v) * Math.pow(Math.abs(v), e);
+  // (a sphere pushed out toward the box: flat faces, the corners left round; the faces a little uneven)
+  const at = (i: number, j: number) => {
+    const u = (i / NU) * 2 * Math.PI, v = (j / NV) * Math.PI - Math.PI / 2, x = Math.cos(v) * Math.cos(u), y = Math.sin(v), z = Math.cos(v) * Math.sin(u);
+    const bx = f(x), by = f(y), bz = f(z), wob = 1 + 0.05 * Math.sin(x * 9 + z * 7) + 0.04 * Math.sin(z * 13 - x * 5);
+    return [bx * 0.5 * wob, 0.5 + by * 0.5 - (by > 0.9 ? 0.04 * Math.sin(x * 11 + z * 9) ** 2 : 0), bz * 0.5 * wob];
+  };
+  for (let j = 0; j < NV; j++) for (let i = 0; i < NU; i++) {
+    const a = at(i, j), b = at(i + 1, j), c = at(i + 1, j + 1), d = at(i, j + 1);
+    for (const T of [[a, c, b], [a, d, c]]) {
+      const u = T[1].map((q, k) => q - T[0][k]), w = T[2].map((q, k) => q - T[0][k]);
+      const n = [u[1] * w[2] - u[2] * w[1], u[2] * w[0] - u[0] * w[2], u[0] * w[1] - u[1] * w[0]], l = Math.hypot(...n) || 1;
+      for (const q of T) P.push(...q, n[0] / l, n[1] / l, n[2] / l);
+    }
+  }
+  return new Float32Array(P);
+}
+// ─── a little matrix arithmetic (column-major) ───
+function ortho(s: number, n: number, f: number) { return [1 / s, 0, 0, 0, 0, 1 / s, 0, 0, 0, 0, -2 / (f - n), 0, 0, 0, -(f + n) / (f - n), 1]; }
+function perspective(fov: number, asp: number, n: number, f: number) { const t = 1 / Math.tan(fov / 2); return [t / asp, 0, 0, 0, 0, t, 0, 0, 0, 0, (f + n) / (n - f), -1, 0, 0, (2 * f * n) / (n - f), 0]; }
+function lookAt(e: number[], c: number[], up = [0, 1, 0]) {
+  const z = norm([e[0] - c[0], e[1] - c[1], e[2] - c[2]]), x = norm(cross(up, z)), y = cross(z, x);
+  return [x[0], y[0], z[0], 0, x[1], y[1], z[1], 0, x[2], y[2], z[2], 0, -dot(x, e), -dot(y, e), -dot(z, e), 1];
+}
+function mul(a: number[], b: number[]) { const o = new Array(16).fill(0); for (let i = 0; i < 4; i++) for (let j = 0; j < 4; j++) for (let k = 0; k < 4; k++) o[j * 4 + i] += a[k * 4 + i] * b[j * 4 + k]; return o; }
+const dot = (a: number[], b: number[]) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+const cross = (a: number[], b: number[]) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+const norm = (a: number[]) => { const l = Math.hypot(a[0], a[1], a[2]) || 1; return [a[0] / l, a[1] / l, a[2] / l]; };
+
+/** what's on the GPU for one chunk */
+interface Held { key: string; x: number; z: number; x0: number; z0: number; canopy: Float32Array; roots: WebGLBuffer; nRoots: number; strokes: WebGLBuffer | null; nStrokes: number; ground: WebGLBuffer; culms: WebGLBuffer; nCulms: number; sprays: WebGLBuffer; nSprays: number; twigs: WebGLBuffer; nTwigs: number; stones: WebGLBuffer; nStones: number; steps: WebGLBuffer; nSteps: number; rocks: WebGLBuffer | null; nRocks: number }
+
+export class Renderer {
+  private gl: WebGL2RenderingContext;
+  private progs: Record<string, WebGLProgram> = {};
+  private fbo: WebGLFramebuffer | null = null; private texC: WebGLTexture | null = null; private texA: WebGLTexture | null = null; private texZ: WebGLTexture | null = null; private size = [0, 0];
+  private vbo: Record<string, { buf: WebGLBuffer; count: number }> = {};
+  private idx!: { buf: WebGLBuffer; count: number };
+  private chunks = new Map<string, Held>();
+  private ridge!: { buf: WebGLBuffer; count: number };
+  private vao: WebGLVertexArrayObject;
+  readonly clean: boolean; readonly marks: number;
+  /** `?strokes=all`: every stroke the land has, at full weight, none left out (to see what's laid) */
+  allStrokes = false;
+  /** `?culms=0`: the land alone, no culms or sprays (the gates' hard test: does the mountain and its path read?) */
+  bare = false;
+  /** `?clay`: every surface one clay, its light (sun, cast shadows, sky) kept; no paper, no ink: the forms alone */
+  clay = false;
+  /** the focus's distance, this frame */
+  focus = 15;
+  /** the layers' dials (see the head of this file, and layers.ts) */
+  dials: Dials = { ...HOUSE };
+  /** each layer's reach, the page's pull taken in */
+  private get reaches() { const k = 1 - Math.min(1, Math.max(0, this.dials.toward)), d = this.dials; return [d.colourreach * k, d.lightreach * k, d.inkreach * k]; }
+  /** how far out in the world anything's drawn at all (metres) */
+  private get farthest() { return Math.min(320, Math.max(...this.reaches) * this.dials.distance * 1.15); }
+  /** culms in whole up to / gone by (metres): past every layer's reach, so their leaving is never seen */
+  private get pick() { return [this.farthest, this.farthest * 1.3]; }
+  private shadowTex: WebGLTexture | null = null; private shadowFbo: WebGLFramebuffer | null = null; private lightVP: number[] = new Array(16).fill(0); readonly shadows: boolean;
+  /** the hour and the air (sky.ts): where the light comes from, its colour, the sky's, the haze, the page's wash */
+  sky: Sky = skyAt(8, 0.5);
+  /** something going through the grove (presence.ts): its body's parts, and where it stirs the culms (x, z, how hard, how
+   * far) */
+  presence: { x: number; y: number; z: number; yaw: number; pitch: number; sx: number; sy: number; sz: number; part: number; tp?: number; fur?: number }[] = [];
+  stir = [0, 0, 0, 1];
+  /** where it's passed: up to eight places still moving, settling (x, z, how hard now, how far) */
+  stirs: number[][] = [];
+  private vpLast: number[] = new Array(16).fill(0); private eyeLast = [0, 0, 0];
+  /** lines to draw into the scene this frame (debug.ts): each a polyline in the world, its colour and width (metres) */
+  debugLines: { pts: [number, number, number][]; col: [number, number, number, number]; w: number }[] = [];
+  private dbgBuf: WebGLBuffer | null = null;
+  /** where a point of the world is on the page, in CSS pixels, or null behind the eye (for overlays: debug.ts) */
+  project(p: [number, number, number]): [number, number] | null {
+    const v = this.vpLast, c = [0, 1, 3].map((i) => v[i] * p[0] + v[4 + i] * p[1] + v[8 + i] * p[2] + v[12 + i]);
+    if (c[2] < 0.05) return null;
+    return [(c[0] / c[2] * 0.5 + 0.5) * innerWidth, (0.5 - c[1] / c[2] * 0.5) * innerHeight];
+  }
+  /** whether the drawing describes a point now (0 … 1): in the frame, and as far out as the colour or the ink reaches
+   * (as the shaders' `outAt` has it, without its jitter) */
+  legible(x: number, y: number, z: number): number {
+    const v = this.vpLast, d = this.dials, c = [0, 1, 2, 3].map((i) => v[i] * x + v[4 + i] * y + v[8 + i] * z + v[12 + i]);
+    if (c[3] < 0.05) return 0;
+    const nx = Math.abs(c[0] / c[3]); let ny = Math.abs(c[1] / c[3]);
+    if (nx > 1 || ny > 1) return 0;
+    if (c[1] < 0) ny *= 1 - 0.75 * d.held;
+    const dist = Math.hypot(x - this.eyeLast[0], y - this.eyeLast[1], z - this.eyeLast[2]), world = dist / Math.max(d.distance, 1);
+    const dl = Math.log2(Math.max(dist, 0.3) / Math.max(this.focus, 1)), o = Math.max(world, Math.cbrt(nx ** 3 + ny ** 3) + d.depth * 0.2 * (dl > 0 ? dl : -dl * 0.25));
+    const has = (r: number) => 1 - Math.min(1, Math.max(0, (o - r * 0.88) / (r * 0.24)));
+    const [rc, , ri] = this.reaches;
+    return Math.max(has(rc) * Math.min(1, d.culms + d.terrain), has(ri) * Math.max(d.edges, d.lines));
+  }
+  private presBuf: WebGLBuffer | null = null; private presN = 0;
+  private presUpload() {
+    const gl = this.gl, P = this.presence, a = new Float32Array(P.length * 12);
+    P.forEach((q, k) => a.set([q.x, q.y, q.z, q.yaw, q.sx, q.sy, q.sz, q.part, q.pitch, q.tp ?? 0, q.fur ?? 0, 0], k * 12));
+    this.presBuf ??= gl.createBuffer()!;
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.presBuf); gl.bufferData(gl.ARRAY_BUFFER, a, gl.DYNAMIC_DRAW); this.presN = P.length;
+  }
+  /** the canopy round you, a metre a texel (from each chunk's `canopy`), for the shade beyond the light's map and the
+   * sky's light under the leaves */
+  private canTex: WebGLTexture | null = null; private canO = [1e9, 1e9]; private canDirty = true;
+  private canopyUpdate(eye: number[]) {
+    const gl = this.gl, ox = Math.floor((eye[0] - CAN / 2) / CHUNK) * CHUNK, oz = Math.floor((eye[2] - CAN / 2) / CHUNK) * CHUNK;
+    if (!this.canDirty && ox === this.canO[0] && oz === this.canO[1]) return;
+    this.canDirty = false; this.canO = [ox, oz];
+    const T = new Uint8Array(CAN * CAN).fill(128);
+    for (const h of this.chunks.values()) {
+      const bx = h.x0 - ox, bz = h.z0 - oz;
+      if (bx < 0 || bz < 0 || bx >= CAN || bz >= CAN) continue;
+      for (let j = 0; j < CHUNK; j++) for (let i = 0; i < CHUNK; i++) T[bx + i + (bz + j) * CAN] = Math.round(h.canopy[i + j * CN] * 255);
+    }
+    if (!this.canTex) { this.canTex = gl.createTexture()!; gl.bindTexture(gl.TEXTURE_2D, this.canTex); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE); }
+    gl.activeTexture(gl.TEXTURE4); gl.bindTexture(gl.TEXTURE_2D, this.canTex); gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, CAN, CAN, 0, gl.RED, gl.UNSIGNED_BYTE, T);
+  }
+  get sunDir() { return this.sky.lightDir; }
+
+  constructor(private canvas: HTMLCanvasElement, ridges: { x: number; z: number; y: number }[][], opts: { clean?: boolean; marks?: boolean; shadows?: boolean } = {}) {
+    const gl = canvas.getContext('webgl2', { antialias: false, preserveDrawingBuffer: true });
+    if (!gl) throw new Error('WebGL2 is needed');
+    this.gl = gl; this.clean = !!opts.clean; this.marks = opts.marks === false ? 0 : 1;
+    this.vao = gl.createVertexArray()!;
+    const P = (n: string, vs: string, fs: string) => { this.progs[n] = this.program(vs, fs); };
+    P('dbg', DBG_VS, DBG_FS);
+    P('culm', CULM_VS, CULM_FS); P('spray', SPRAY_VS, SPRAY_FS); P('twig', TWIG_VS, TWIG_FS); P('ground', GROUND_VS, GROUND_FS);
+    P('solid', SOLID_VS, SOLID_FS); P('ridge', RIDGE_VS, RIDGE_FS); P('post', POST_VS, POST_FS);
+    P('stroke', STROKE_VS, STROKE_FS); P('culmDepth', CULM_VS, DEPTH_FS); P('solidDepth', SOLID_VS, DEPTH_FS); P('sprayDepth', SPRAY_VS, SPRAY_DEPTH_FS);
+    // (the sun's view of the culms near you: their shadows)
+    this.shadows = opts.shadows !== false;
+    {
+      const t = gl.createTexture()!; gl.bindTexture(gl.TEXTURE_2D, t);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.DEPTH_COMPONENT24, 2048, 2048, 0, gl.DEPTH_COMPONENT, gl.UNSIGNED_INT, null);
+      for (const [k, v] of [[gl.TEXTURE_MIN_FILTER, gl.LINEAR], [gl.TEXTURE_MAG_FILTER, gl.LINEAR], [gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE], [gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE], [gl.TEXTURE_COMPARE_MODE, gl.COMPARE_REF_TO_TEXTURE], [gl.TEXTURE_COMPARE_FUNC, gl.LEQUAL]]) gl.texParameteri(gl.TEXTURE_2D, k, v);
+      this.shadowTex = t; this.shadowFbo = gl.createFramebuffer()!; gl.bindFramebuffer(gl.FRAMEBUFFER, this.shadowFbo);
+      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.TEXTURE_2D, t, 0); gl.drawBuffers([gl.NONE]); gl.readBuffer(gl.NONE);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    }
+    for (const [k, m] of [['culmNear', culmMesh(8, 20)], ['culmFar', culmMesh(5, 10)], ['twig', culmMesh(4, 6)], ['quad', QUAD]] as const) this.vbo[k] = { buf: this.buffer(m), count: m.length / 2 };
+    const box = boxMesh(); this.vbo.box = { buf: this.buffer(box), count: box.length / 6 };
+    const lump = lumpMesh(LUMP_SEED); this.vbo.lump = { buf: this.buffer(lump), count: lump.length / 6 };
+    // (a smooth unit sphere, for a body's parts: never the boulder's cleaved faces)
+    const orb: number[] = [], U = 16, V = 10, sp = (i: number, j: number) => { const u = (i / U) * 2 * Math.PI, v = (j / V) * Math.PI - Math.PI / 2; return [Math.cos(v) * Math.sin(u), Math.sin(v), Math.cos(v) * Math.cos(u)]; };
+    for (let j = 0; j < V; j++) for (let i = 0; i < U; i++) for (const [a, b] of [[i, j], [i + 1, j], [i + 1, j + 1], [i, j], [i + 1, j + 1], [i, j + 1]]) { const q = sp(a, b); orb.push(...q, ...q); }
+    this.vbo.orb = { buf: this.buffer(new Float32Array(orb)), count: orb.length / 6 };
+    const slab = slabMesh(); this.vbo.slab = { buf: this.buffer(slab), count: slab.length / 6 };
+    this.vbo.screen = { buf: this.buffer(new Float32Array([-1, -1, 3, -1, -1, 3])), count: 3 };
+    // (one index buffer serves every chunk's ground: the same grid)
+    {
+      const idx = new Uint16Array((CN - 1) * (CN - 1) * 6); let m = 0;
+      for (let j = 0; j < CN - 1; j++) for (let i = 0; i < CN - 1; i++) { const a = i + j * CN; idx.set([a, a + CN, a + 1, a + 1, a + CN, a + CN + 1], m); m += 6; }
+      const b = gl.createBuffer()!; gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, b); gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, idx, gl.STATIC_DRAW);
+      this.idx = { buf: b, count: idx.length };
+    }
+    // (the far ranges, round about: each a band from its crest down out of sight)
+    {
+      const d: number[] = [];
+      ridges.forEach((line, layer) => {
+        for (let i = 0; i + 1 < line.length; i++) {
+          const a = line[i], b = line[i + 1], lo = -500;
+          const A = [a.x, a.y, a.z, 0, layer], Bq = [b.x, b.y, b.z, 0, layer], C = [b.x, lo, b.z, b.y - lo, layer], D = [a.x, lo, a.z, a.y - lo, layer];
+          d.push(...A, ...Bq, ...C, ...A, ...C, ...D);
+        }
+      });
+      this.ridge = { buf: this.buffer(new Float32Array(d)), count: d.length / 5 };
+    }
+  }
+  private buffer(data: Float32Array) { const gl = this.gl, b = gl.createBuffer()!; gl.bindBuffer(gl.ARRAY_BUFFER, b); gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW); return b; }
+
+  get held() { return this.chunks.size; }
+  has(key: string) { return this.chunks.has(key); }
+  /** hand a chunk to the GPU */
+  /** a chunk's ground as it's drawn: each point, its normal, how near a trail, how much rock, its light and openness */
+  private groundVerts(c: Chunk) {
+    const G = c.ground, v = new Float32Array(CN * CN * 11);
+    for (let j = 0; j < CN; j++) for (let i = 0; i < CN; i++) {
+      const k = i + j * CN, hx = G[Math.min(CN - 1, i + 1) + j * CN] - G[Math.max(0, i - 1) + j * CN], hz = G[i + Math.min(CN - 1, j + 1) * CN] - G[i + Math.max(0, j - 1) * CN];
+      const n = norm([-hx * ((i === 0 || i === CN - 1) ? 2 : 1), 2 * CELL, -hz * ((j === 0 || j === CN - 1) ? 2 : 1)]);
+      v.set([c.x0 + i * CELL, G[k], c.z0 + j * CELL, n[0], n[1], n[2], c.near[k], c.rock[k], c.sunVis[k], c.ao[k], c.gather?.[k] ?? 0], k * 11);
+    }
+    return v;
+  }
+  /** a chunk's ground light again (its land's shadows baked anew for where the light is now) */
+  relight(key: string, c: Chunk) {
+    const h = this.chunks.get(key), gl = this.gl;
+    if (!h) return;
+    gl.bindBuffer(gl.ARRAY_BUFFER, h.ground); gl.bufferData(gl.ARRAY_BUFFER, this.groundVerts(c), gl.STATIC_DRAW);
+  }
+  add(key: string, c: Chunk, marks?: Float32Array) {
+    const v = this.groundVerts(c);
+    const cu = new Float32Array(c.tall * 12);
+    for (let k = 0; k < c.tall; k++) { const q = c.culms[k]; cu.set([q.x, q.y, q.z, q.r, q.h, q.lx, q.lz, q.node, q.age, q.phase, q.pick, q.bend], k * 12); }
+    const tw = new Float32Array(c.twigs.length * 16);
+    c.twigs.forEach((t, k) => { const q = c.culms[t.c]; tw.set([q.x, q.y, q.z, q.h, q.lx, q.lz, q.phase, q.bend, t.y, t.rise, t.hor, t.ang, t.rad, t.seed, q.pick, 0], k * 16); });
+    const sp = new Float32Array(c.sprays.length * 16);
+    c.sprays.forEach((s, k) => { const q = c.culms[s.c]; sp.set([q.x, q.y, q.z, q.h, q.lx, q.lz, q.phase, q.pick, s.y, s.ox, s.oz, s.size, s.yaw, s.tilt, s.seed, q.bend], k * 16); });
+    const st = new Float32Array(c.stones.length * 8);
+    c.stones.forEach((s, k) => st.set([s.x, s.y, s.z, s.yaw, s.r, s.flat, s.moss, 0], k * 8));
+    const rt = new Float32Array(c.roots.length * 8);
+    c.roots.forEach((q, k) => rt.set([q.x, q.y, q.z, q.yaw, q.r, q.len, q.moss, q.moss * 0.37], k * 8));
+    const sx = new Float32Array(c.steps.length * 8);
+    c.steps.forEach((s, k) => sx.set([s.x, s.y, s.z, Math.atan2(s.dx, s.dz), s.depth, s.width, s.drop, s.seed], k * 8));
+    const rk = c.rocks?.length ? rockMesh(c.rocks) : null;
+    this.canDirty = true;
+    this.chunks.set(key, { key, x: c.x0 + CHUNK / 2, z: c.z0 + CHUNK / 2, x0: c.x0, z0: c.z0, canopy: c.canopy, roots: this.buffer(rt), nRoots: c.roots.length, strokes: marks?.length ? this.buffer(marks) : null, nStrokes: marks ? marks.length / STROKE_STRIDE : 0, ground: this.buffer(v), culms: this.buffer(cu), nCulms: c.tall, sprays: this.buffer(sp), nSprays: c.sprays.length, twigs: this.buffer(tw), nTwigs: c.twigs.length, stones: this.buffer(st), nStones: c.stones.length, steps: this.buffer(sx), nSteps: c.steps.length, rocks: rk ? this.buffer(rk) : null, nRocks: rk ? rk.length / ROCK_STRIDE : 0 });
+  }
+  /** let a chunk go */
+  drop(key: string) {
+    this.canDirty = true;
+    const h = this.chunks.get(key); if (!h) return;
+    for (const b of [h.ground, h.culms, h.sprays, h.twigs, h.stones, h.steps, h.strokes, h.roots]) if (b) this.gl.deleteBuffer(b);
+    this.chunks.delete(key);
+  }
+  keys() { return [...this.chunks.keys()]; }
+
+  private program(vs: string, fs: string) {
+    const gl = this.gl, mk = (t: number, s: string) => { const sh = gl.createShader(t)!; gl.shaderSource(sh, s); gl.compileShader(sh); if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) throw new Error(`${t === gl.VERTEX_SHADER ? 'vertex' : 'fragment'}: ${gl.getShaderInfoLog(sh)}`); return sh; };
+    const p = gl.createProgram()!; gl.attachShader(p, mk(gl.VERTEX_SHADER, vs)); gl.attachShader(p, mk(gl.FRAGMENT_SHADER, fs)); gl.linkProgram(p);
+    if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p) ?? 'link');
+    return p;
+  }
+
+  private targets(w: number, h: number) {
+    if (this.size[0] === w && this.size[1] === h && this.fbo) return;
+    const gl = this.gl;
+    for (const t of [this.texC, this.texA, this.texZ]) if (t) gl.deleteTexture(t);
+    if (this.fbo) gl.deleteFramebuffer(this.fbo);
+    const tex = (ifmt: number, fmt: number, type: number, filter: number) => { const t = gl.createTexture()!; gl.bindTexture(gl.TEXTURE_2D, t); gl.texImage2D(gl.TEXTURE_2D, 0, ifmt, w, h, 0, fmt, type, null); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, filter); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, filter); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE); return t; };
+    this.texC = tex(gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, gl.LINEAR); this.texA = tex(gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, gl.NEAREST); this.texZ = tex(gl.DEPTH_COMPONENT24, gl.DEPTH_COMPONENT, gl.UNSIGNED_INT, gl.NEAREST);
+    this.fbo = gl.createFramebuffer()!; gl.bindFramebuffer(gl.FRAMEBUFFER, this.fbo);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, this.texC, 0);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT1, gl.TEXTURE_2D, this.texA, 0);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.TEXTURE_2D, this.texZ, 0);
+    gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1]);
+    this.size = [w, h];
+  }
+
+  private sunUV = [0.5, 0.9, 0]; private moonUV = [0.5, 0.9, 0];
+  private uni(p: WebGLProgram, f: Frame, vp: number[], right: number[]) {
+    const gl = this.gl, u = (n: string) => gl.getUniformLocation(p, n);
+    gl.uniformMatrix4fv(u('uVP'), false, vp); gl.uniform3fv(u('uEye'), f.eye); gl.uniform1f(u('uTime'), f.t); gl.uniform3fv(u('uSun'), this.sunDir);
+    gl.uniform4fv(u('uGust'), f.gust); gl.uniform4fv(u('uStir'), this.stir); { const a = new Float32Array(32); this.stirs.slice(0, 8).forEach((q, k) => a.set(q, k * 4)); for (let k = this.stirs.length; k < 8; k++) a.set([0, 0, 0, 1], k * 4); gl.uniform4fv(u('uStirs'), a); } gl.uniform1f(u('uClay'), this.clay ? 1 : 0); gl.uniform3fv(u('uSunC'), this.sky.lightC); gl.uniform3fv(u('uSky'), this.sky.skyC); gl.uniform1f(u('uExpo'), this.sky.expo); gl.uniform3fv(u('uHaze'), this.sky.haze); gl.uniform3fv(u('uVeil'), this.sky.veil); gl.uniform1f(u('uMist'), this.sky.mist); gl.uniform3fv(u('uTone'), this.sky.ridge); gl.uniform1f(u('uOpen'), 0);
+    gl.uniform2fv(u('uPick'), this.pick); gl.uniform1f(u('uMarks'), this.marks); gl.uniform3fv(u('uRight'), right);
+    const d = this.dials;
+    gl.uniform4fv(u('uRch'), [...this.reaches, 0.12]); gl.uniform4fv(u('uFoc'), [this.focus, d.depth, d.distance, d.near]);
+    gl.uniform4fv(u('uColK'), [d.culms, d.leaves, d.terrain, 0]); gl.uniform4fv(u('uLitK'), [d.shade, d.cast, d.hollow, d.landlight]);
+    gl.uniform4fv(u('uInkK'), [d.lines, d.strokes, d.edges, d.inkfade]); gl.uniform4fv(u('uHand'), [d.open, d.swell, d.grain, 0]); gl.uniform1f(u('uPxW'), this.pxW); gl.uniform4fv(u('uFocus'), [d.aperture, d.wet, d.dry, d.soften]); gl.uniform1f(u('uRelief'), d.relief); gl.uniform1f(u('uHeld'), d.held); gl.uniform1f(u('uUnder'), d.under); gl.uniform3fv(u('uPaperC'), this.sky.paper);
+    gl.uniform1f(u('uAway'), (1 - Math.min(1, d.toward)) * Math.min(1, d.terrain));
+    gl.uniformMatrix4fv(u('uLightVP'), false, this.lightVP); gl.uniform1i(u('uShadow'), 3); gl.uniform1i(u('uCanopy'), 4); gl.uniform3fv(u('uCanO'), [this.canO[0], this.canO[1], CAN]); gl.uniform1f(u('uShadowOn'), this.shadows ? 1 : 0); gl.uniform1i(u('uDepth'), 0);
+  }
+  private attr(loc: number, buf: WebGLBuffer, size: number, stride: number, off: number, div = 0) {
+    const gl = this.gl; gl.bindBuffer(gl.ARRAY_BUFFER, buf); gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, size, gl.FLOAT, false, stride * 4, off * 4); gl.vertexAttribDivisor(loc, div);
+  }
+  /** the rock's blocks (rock.ts), drawn as the boulders are, from the chunks' meshes */
+  private drawRocks(p: WebGLProgram, list: { c: Held }[]) {
+    const gl = this.gl, um = gl.getUniformLocation(p, 'uMesh');
+    gl.uniform1i(gl.getUniformLocation(p, 'uKind'), 2); gl.uniform1i(um, 1);
+    for (const { c } of list) if (c.rocks) {
+      this.attr(0, c.rocks, 3, ROCK_STRIDE, 0); this.attr(1, c.rocks, 3, ROCK_STRIDE, 3); this.attr(2, c.rocks, 3, ROCK_STRIDE, 6); this.attr(3, c.rocks, 4, ROCK_STRIDE, 9); this.attr(4, c.rocks, 3, ROCK_STRIDE, 13); this.attr(5, c.rocks, 2, ROCK_STRIDE, 16);
+      gl.drawArrays(gl.TRIANGLES, 0, c.nRocks);
+    }
+    gl.uniform1i(um, 0); gl.disableVertexAttribArray(4); gl.disableVertexAttribArray(5);
+  }
+  private clearAttrs() { const gl = this.gl; for (let i = 0; i < 6; i++) { gl.disableVertexAttribArray(i); gl.vertexAttribDivisor(i, 0); } }
+
+  private pxW = 0.001;
+  draw(f: Frame, w: number, h: number) {
+    this.focus = f.focus ?? 15;
+    this.pxW = (2 * Math.tan(f.fov / 2)) / h;
+    const gl = this.gl;
+    this.targets(w, h);
+    const fw = norm([f.look[0] - f.eye[0], f.look[1] - f.eye[1], f.look[2] - f.eye[2]]), side = norm(cross(fw, [0, 1, 0])), r = f.roll ?? 0;
+    const upv = f.up ?? [Math.sin(r) * side[0], Math.cos(r) + Math.sin(r) * side[1], Math.sin(r) * side[2]];
+    const near = 0.1, far = 3000, proj = perspective(f.fov, w / h, near, far), view = lookAt(f.eye, f.look, upv), vp = mul(proj, view);
+    this.vpLast = vp; this.eyeLast = f.eye;
+    const right = [view[0], view[4], view[8]], fwd = norm([f.look[0] - f.eye[0], 0, f.look[2] - f.eye[2]]);
+    gl.bindVertexArray(this.vao);
+    const use = (n: string) => { const p = this.progs[n]; gl.useProgram(p); this.uni(p, f, vp, right); this.clearAttrs(); return p; };
+    const all = [...this.chunks.values()].map((c) => { const dx = c.x - f.eye[0], dz = c.z - f.eye[2], d = Math.hypot(dx, dz); return { c, d, ok: d < CHUNK * 1.2 || (dx * fwd[0] + dz * fwd[2]) / d > -0.4 }; }).filter((q) => q.ok);
+    const inRange = (r: number) => all.filter((q) => q.d < r + CHUNK * 0.71);
+    // ─── the shadows: the culms and steps near you, from the sun ───
+    if (this.shadows) {
+      const S = 46, cx = f.eye[0] + fwd[0] * S * 0.6, cz = f.eye[2] + fwd[2] * S * 0.6, cy = f.eye[1], s = this.sunDir;
+      const lv = lookAt([cx + s[0] * 200, cy + s[1] * 200, cz + s[2] * 200], [cx, cy, cz], [0, 0, 1]);
+      this.lightVP = mul(ortho(S, 60, 340), lv);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, this.shadowFbo); gl.viewport(0, 0, 2048, 2048);
+      gl.clearBufferfv(gl.DEPTH, 0, [1]); gl.enable(gl.DEPTH_TEST); gl.depthFunc(gl.LEQUAL); gl.disable(gl.BLEND);
+      const near2 = all.filter((q) => Math.hypot(q.c.x - cx, q.c.z - cz) < S * 1.42 + CHUNK);
+      let p = use('culmDepth'); gl.uniform1i(gl.getUniformLocation(p, 'uDepth'), 1);
+      this.attr(0, this.vbo.culmFar.buf, 2, 2, 0);
+      for (const { c } of near2) if (c.nCulms) { for (let a = 0; a < 3; a++) this.attr(1 + a, c.culms, 4, 12, a * 4, 1); gl.drawArraysInstanced(gl.TRIANGLES, 0, this.vbo.culmFar.count, c.nCulms); }
+      p = use('solidDepth'); gl.uniform1i(gl.getUniformLocation(p, 'uDepth'), 1); gl.uniform1i(gl.getUniformLocation(p, 'uKind'), 1);
+      this.attr(0, this.vbo.slab.buf, 3, 6, 0); this.attr(1, this.vbo.slab.buf, 3, 6, 3);
+      for (const { c } of near2) if (c.nSteps) { this.attr(2, c.steps, 4, 8, 0, 1); this.attr(3, c.steps, 4, 8, 4, 1); gl.drawArraysInstanced(gl.TRIANGLES, 0, this.vbo.slab.count, c.nSteps); }
+      // (the boulders, and the leaves: each spray's blades as they hang and move, so the shade under the canopy is the
+      // canopy's)
+      gl.uniform1i(gl.getUniformLocation(p, 'uKind'), 2);
+      this.attr(0, this.vbo.lump.buf, 3, 6, 0); this.attr(1, this.vbo.lump.buf, 3, 6, 3);
+      for (const { c } of near2) if (c.nStones) { this.attr(2, c.stones, 4, 8, 0, 1); this.attr(3, c.stones, 4, 8, 4, 1); gl.drawArraysInstanced(gl.TRIANGLES, 0, this.vbo.lump.count, c.nStones); }
+      this.drawRocks(p, near2);
+      gl.uniform1i(gl.getUniformLocation(p, 'uKind'), 2);
+      this.presUpload();
+      if (this.presN) { gl.uniform1i(gl.getUniformLocation(p, 'uKind'), 4); this.attr(0, this.vbo.orb.buf, 3, 6, 0); this.attr(1, this.vbo.orb.buf, 3, 6, 3); this.attr(2, this.presBuf!, 4, 12, 0, 1); this.attr(3, this.presBuf!, 4, 12, 4, 1); this.attr(4, this.presBuf!, 4, 12, 8, 1); gl.drawArraysInstanced(gl.TRIANGLES, 0, this.vbo.orb.count, this.presN); }
+      if (!this.bare) {
+        p = use('sprayDepth'); gl.uniform1i(gl.getUniformLocation(p, 'uDepth'), 1);
+        this.attr(0, this.vbo.quad.buf, 2, 2, 0);
+        for (const { c } of near2) if (c.nSprays) { for (let a = 0; a < 4; a++) this.attr(1 + a, c.sprays, 4, 16, a * 4, 1); gl.drawArraysInstanced(gl.TRIANGLES, 0, 6, c.nSprays); }
+      }
+    }
+    gl.activeTexture(gl.TEXTURE3); gl.bindTexture(gl.TEXTURE_2D, this.shadowTex);
+    this.canopyUpdate(f.eye); gl.activeTexture(gl.TEXTURE4); gl.bindTexture(gl.TEXTURE_2D, this.canTex); gl.activeTexture(gl.TEXTURE0);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.fbo); gl.viewport(0, 0, w, h);
+    gl.clearBufferfv(gl.COLOR, 0, [0, 0, 0, 0]); gl.clearBufferfv(gl.COLOR, 1, [0, 0, 0, 0]); gl.clearBufferfv(gl.DEPTH, 0, [1]);
+    gl.enable(gl.DEPTH_TEST); gl.depthFunc(gl.LEQUAL); gl.disable(gl.BLEND); gl.disable(gl.CULL_FACE);
+    // ─── the far ranges, under everything ───
+    if (!this.clay) {
+      use('ridge');
+      this.attr(0, this.ridge.buf, 3, 5, 0); this.attr(1, this.ridge.buf, 2, 5, 3);
+      gl.drawArrays(gl.TRIANGLES, 0, this.ridge.count);
+    }
+    // ─── the ground ───
+    {
+      use('ground');
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.idx.buf);
+      for (const { c } of all) {
+        this.attr(0, c.ground, 3, 11, 0); this.attr(1, c.ground, 3, 11, 3); this.attr(2, c.ground, 2, 11, 6); this.attr(3, c.ground, 3, 11, 8);
+        gl.drawElements(gl.TRIANGLES, this.idx.count, gl.UNSIGNED_SHORT, 0);
+      }
+    }
+    // ─── steps and stones ───
+    {
+      const p = use('solid');
+      gl.uniform1i(gl.getUniformLocation(p, 'uKind'), 1);
+      this.attr(0, this.vbo.slab.buf, 3, 6, 0); this.attr(1, this.vbo.slab.buf, 3, 6, 3);
+      for (const { c } of inRange(this.farthest)) if (c.nSteps) { this.attr(2, c.steps, 4, 8, 0, 1); this.attr(3, c.steps, 4, 8, 4, 1); gl.drawArraysInstanced(gl.TRIANGLES, 0, this.vbo.slab.count, c.nSteps); }
+      gl.uniform1i(gl.getUniformLocation(p, 'uKind'), 2);
+      this.attr(0, this.vbo.lump.buf, 3, 6, 0); this.attr(1, this.vbo.lump.buf, 3, 6, 3);
+      for (const { c } of inRange(this.farthest)) if (c.nStones) { this.attr(2, c.stones, 4, 8, 0, 1); this.attr(3, c.stones, 4, 8, 4, 1); gl.drawArraysInstanced(gl.TRIANGLES, 0, this.vbo.lump.count, c.nStones); }
+      this.drawRocks(p, inRange(this.farthest));
+      this.attr(0, this.vbo.lump.buf, 3, 6, 0); this.attr(1, this.vbo.lump.buf, 3, 6, 3);
+      gl.uniform1i(gl.getUniformLocation(p, 'uKind'), 3);
+      for (const { c } of inRange(60)) if (c.nRoots) { this.attr(2, c.roots, 4, 8, 0, 1); this.attr(3, c.roots, 4, 8, 4, 1); gl.drawArraysInstanced(gl.TRIANGLES, 0, this.vbo.lump.count, c.nRoots); }
+      // (and whatever's going through the grove)
+      if (this.presence.length) { if (!this.shadows) this.presUpload(); gl.uniform1i(gl.getUniformLocation(p, 'uKind'), 4); this.attr(0, this.vbo.orb.buf, 3, 6, 0); this.attr(1, this.vbo.orb.buf, 3, 6, 3); this.attr(2, this.presBuf!, 4, 12, 0, 1); this.attr(3, this.presBuf!, 4, 12, 4, 1); this.attr(4, this.presBuf!, 4, 12, 8, 1); gl.drawArraysInstanced(gl.TRIANGLES, 0, this.vbo.orb.count, this.presN); }
+    }
+    // ─── the land's strokes, on it and on its steps, stones and roots (not over what stands in front of them) ───
+    if (this.marks && !this.clay) {
+      const p = use('stroke');
+      gl.uniform2fv(gl.getUniformLocation(p, 'uRes'), [w, h]); gl.uniform1f(gl.getUniformLocation(p, 'uAll'), this.allStrokes ? 1 : 0);
+      gl.enable(gl.BLEND); gl.blendEquation(gl.MAX); gl.depthMask(false); gl.enable(gl.POLYGON_OFFSET_FILL); gl.polygonOffset(-2, -4);
+      for (const { c } of inRange(this.farthest)) if (c.nStrokes && c.strokes) {
+        const S = STROKE_STRIDE;
+        this.attr(0, c.strokes, 3, S, 0); this.attr(1, c.strokes, 3, S, 3); this.attr(2, c.strokes, 2, S, 6); this.attr(3, c.strokes, 2, S, 8); this.attr(4, c.strokes, 3, S, 10); this.attr(5, c.strokes, 3, S, 13);
+        gl.drawArrays(gl.TRIANGLES, 0, c.nStrokes);
+      }
+      gl.disable(gl.BLEND); gl.blendEquation(gl.FUNC_ADD); gl.depthMask(true); gl.disable(gl.POLYGON_OFFSET_FILL);
+    }
+    // ─── the culms: finer near, coarser further ───
+    if (!this.bare) {
+      use('culm');
+      for (const { c, d } of inRange(this.pick[1])) {
+        if (!c.nCulms) continue;
+        const m = d < 30 ? this.vbo.culmNear : this.vbo.culmFar;
+        this.attr(0, m.buf, 2, 2, 0);
+        for (let a = 0; a < 3; a++) this.attr(1 + a, c.culms, 4, 12, a * 4, 1);
+        gl.drawArraysInstanced(gl.TRIANGLES, 0, m.count, c.nCulms);
+      }
+    }
+    // ─── the branches (near enough to be seen as more than a line) ───
+    if (!this.bare) {
+      use('twig');
+      this.attr(0, this.vbo.twig.buf, 2, 2, 0);
+      for (const { c } of inRange(Math.min(this.pick[1], 70))) {
+        if (!c.nTwigs) continue;
+        for (let a = 0; a < 4; a++) this.attr(1 + a, c.twigs, 4, 16, a * 4, 1);
+        gl.drawArraysInstanced(gl.TRIANGLES, 0, this.vbo.twig.count, c.nTwigs);
+      }
+    }
+    // ─── the sprays ───
+    if (!this.bare) {
+      use('spray');
+      this.attr(0, this.vbo.quad.buf, 2, 2, 0);
+      for (const { c } of inRange(this.pick[1] - 8)) {
+        if (!c.nSprays) continue;
+        for (let a = 0; a < 4; a++) this.attr(1 + a, c.sprays, 4, 16, a * 4, 1);
+        gl.drawArraysInstanced(gl.TRIANGLES, 0, 6, c.nSprays);
+      }
+    }
+    // ─── the page ───
+    {
+      const s = this.sunDir, sp = [f.eye[0] + s[0] * 1000, f.eye[1] + s[1] * 1000, f.eye[2] + s[2] * 1000, 1];
+      const c = [0, 1, 2, 3].map((i) => vp[i] * sp[0] + vp[4 + i] * sp[1] + vp[8 + i] * sp[2] + vp[12 + i] * sp[3]);
+      this.sunUV = c[3] > 0 ? [c[0] / c[3] * 0.5 + 0.5, c[1] / c[3] * 0.5 + 0.5, Math.min(1, c[3] / 1000)] : [0.5, 0.9, 0];
+      const m = this.sky.moonDir, mp = [f.eye[0] + m[0] * 1000, f.eye[1] + m[1] * 1000, f.eye[2] + m[2] * 1000, 1];
+      const mc = [0, 1, 2, 3].map((i) => vp[i] * mp[0] + vp[4 + i] * mp[1] + vp[8 + i] * mp[2] + vp[12 + i] * mp[3]);
+      this.moonUV = mc[3] > 0 && m[1] > 0 ? [mc[0] / mc[3] * 0.5 + 0.5, mc[1] / mc[3] * 0.5 + 0.5, 1] : [0.5, 0.9, 0];
+    }
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.viewport(0, 0, w, h); gl.disable(gl.DEPTH_TEST);
+    const p = this.progs.post; gl.useProgram(p); this.clearAttrs();
+    const u = (n: string) => gl.getUniformLocation(p, n);
+    gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, this.texC); gl.uniform1i(u('uC'), 0);
+    gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, this.texA); gl.uniform1i(u('uA'), 1);
+    gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, this.texZ); gl.uniform1i(u('uZ'), 2);
+    gl.uniform2fv(u('uRes'), [w, h]); gl.uniform2fv(u('uPaperRes'), f.paper ?? [w, h]); gl.uniform1f(u('uNear'), near); gl.uniform1f(u('uFar'), far); gl.uniform1f(u('uPx'), Math.max(1, h / 900));
+    gl.uniform3fv(u('uPaper'), this.sky.paper); gl.uniform3fv(u('uSheet'), this.sky.sheet); gl.uniform3fv(u('uShaftC'), this.sky.shaft); gl.uniform1f(u('uNight'), this.sky.night); gl.uniform3fv(u('uMoonUV'), this.moonUV); gl.uniform4fv(u('uHand'), [this.dials.open, this.dials.swell, this.dials.grain, 0]); gl.uniform4fv(u('uFocA'), [this.dials.aperture, this.dials.wet, this.dials.dry, this.dials.soften]); gl.uniform1f(u('uFocD'), this.focus); gl.uniform1f(u('uNearBlur'), this.dials.near); gl.uniform1f(u('uFarBlur'), this.dials.far ?? 1); gl.uniform3fv(u('uInk'), [0.13, 0.12, 0.105]); gl.uniform3fv(u('uSunUV'), this.sunUV);
+    gl.uniform1f(u('uClean'), this.clean ? 1 : 0); gl.uniform1f(u('uMarks'), this.marks); gl.uniform1f(u('uClay'), this.clay ? 1 : 0);
+    this.attr(0, this.vbo.screen.buf, 2, 2, 0);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    if (this.debugLines.length) this.drawDebug(vp, f.eye, w, h, near, far);
+  }
+  /** the debug lines as ribbons a given width in the world, each segment turned to the eye */
+  private drawDebug(vp: number[], eye: number[], w: number, h: number, near: number, far: number) {
+    const gl = this.gl, v: number[] = [];
+    for (const L of this.debugLines) {
+      const [r, g, b, a] = L.col;
+      for (let i = 0; i + 1 < L.pts.length; i++) {
+        const p = L.pts[i], q = L.pts[i + 1], d = [q[0] - p[0], q[1] - p[1], q[2] - p[2]];
+        const m = [(p[0] + q[0]) / 2 - eye[0], (p[1] + q[1]) / 2 - eye[1], (p[2] + q[2]) / 2 - eye[2]];
+        let sx = d[1] * m[2] - d[2] * m[1], sy = d[2] * m[0] - d[0] * m[2], sz = d[0] * m[1] - d[1] * m[0];
+        const sl = Math.hypot(sx, sy, sz), md = Math.hypot(m[0], m[1], m[2]); if (sl < 1e-9 || md < 0.7) continue;
+        // (its width the given one far off, thinner near, so a line passing close to the eye stays a line)
+        const wd = Math.min(L.w, Math.max(0.006, md * 0.009));
+        sx *= wd / 2 / sl; sy *= wd / 2 / sl; sz *= wd / 2 / sl;
+        const A = [p[0] - sx, p[1] - sy, p[2] - sz], B = [p[0] + sx, p[1] + sy, p[2] + sz], C = [q[0] + sx, q[1] + sy, q[2] + sz], D = [q[0] - sx, q[1] - sy, q[2] - sz];
+        for (const P of [A, B, C, A, C, D]) v.push(P[0], P[1], P[2], r, g, b, a);
+      }
+    }
+    if (!v.length) return;
+    this.dbgBuf ??= gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.dbgBuf); gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(v), gl.DYNAMIC_DRAW);
+    const p = this.progs.dbg; gl.useProgram(p); this.clearAttrs();
+    const u = (n: string) => gl.getUniformLocation(p, n);
+    gl.uniformMatrix4fv(u('uVP'), false, vp);
+    gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, this.texZ); gl.uniform1i(u('uZ'), 2);
+    gl.uniform2fv(u('uRes'), [w, h]); gl.uniform1f(u('uNear'), near); gl.uniform1f(u('uFar'), far);
+    gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA); gl.disable(gl.CULL_FACE);
+    this.attr(0, this.dbgBuf!, 3, 7, 0); this.attr(1, this.dbgBuf!, 4, 7, 3);
+    gl.drawArrays(gl.TRIANGLES, 0, v.length / 7);
+    gl.disable(gl.BLEND);
+  }
+}

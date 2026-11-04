@@ -48,22 +48,32 @@ describe('cell-sync plan', () => {
     expect(paths(p.conflict)).toEqual(['a.ts']);
   });
 
-  it('never pulls ignored or generated paths (devtools/ no longer comes back)', () => {
+  it('never pulls ignored or generated paths', () => {
     const p = sync.plan({}, {
-      'devtools/old.mjs': '1',
       'native/x.json': '2',
       'scratchpad/probe.log': '3',
       'vendor/cell-jobs.js': '4',
       'sync-staging/r1/main.ts': '5',
-    }, { 'devtools/old.mjs': '0', 'scratchpad/probe.log': '0' });
+    }, { 'scratchpad/probe.log': '0' });
     expect(p.pull).toEqual([]);
     expect(p.push).toEqual([]);
     expect(p.ignoredRemote).toEqual([
-      'devtools/old.mjs',
       'native/x.json',
       'scratchpad/probe.log',
       'sync-staging/r1/main.ts',
     ]);
+  });
+
+  it('syncs devtools/ both ways, like source: what changed on the cell comes down', () => {
+    const p = sync.plan(
+      { 'devtools/a.test.mjs': '1', 'devtools/new.mjs': '1', 'devtools/both.mjs': '7' },
+      { 'devtools/a.test.mjs': '9', 'devtools/theirs.mjs': '3', 'devtools/both.mjs': '8' },
+      { 'devtools/a.test.mjs': '1', 'devtools/both.mjs': '6' },
+    );
+    expect(paths(p.pull)).toEqual(['devtools/a.test.mjs', 'devtools/theirs.mjs']);
+    expect(paths(p.push)).toEqual(['devtools/new.mjs']);
+    expect(paths(p.conflict)).toEqual(['devtools/both.mjs']);
+    expect(p.ignoredRemote).toEqual([]);
   });
 
   it('a base inferred from git history survives into the next base (a git-deleted file stays deleted)', () => {

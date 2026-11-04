@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="en" data-exp="labyrinth">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#f2e6cc">
+  <title>Labyrinth</title>
+  <style>
+    html, body { margin: 0; height: 100%; background: #f2e6cc; overflow: hidden; touch-action: none; }
+    body { color: #2b2420; font-family: "Iowan Old Style", Palatino, Georgia, serif; -webkit-user-select: none; user-select: none; }
+    canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
+    #guide { pointer-events: none; z-index: 1; }
+    nav { position: fixed; top: max(12px, env(safe-area-inset-top)); left: 16px; right: 16px; display: flex; align-items: baseline; gap: 14px; z-index: 2; pointer-events: none; }
+    nav a { pointer-events: auto; font-size: 13px; letter-spacing: .1em; font-variant: small-caps; color: #2b2420; text-decoration: none; opacity: .75; min-height: 44px; display: flex; align-items: center; }
+    nav h1 { margin: 0; font-weight: 400; font-size: 15px; letter-spacing: .32em; text-transform: uppercase; }
+    #hint { position: fixed; left: 0; right: 0; bottom: calc(max(12px, env(safe-area-inset-bottom)) + 76px); text-align: center; font-style: italic; font-size: 15px; opacity: 0; transition: opacity .6s; pointer-events: none; text-shadow: 0 0 8px #f2e6cc, 0 0 3px #f2e6cc; }
+    #hint.on { opacity: .85; }
+    #hands { position: fixed; left: 10px; right: 10px; bottom: max(12px, env(safe-area-inset-bottom)); z-index: 2; display: flex; gap: 2px; justify-content: space-between; padding: 6px; border-radius: 26px; background: rgba(246,241,231,.86); box-shadow: 0 2px 14px rgba(70,50,30,.12), inset 0 0 0 1px rgba(70,50,30,.08); -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); overflow-x: auto; scrollbar-width: none; }
+    #hands::-webkit-scrollbar { display: none; }
+    #hands button { appearance: none; border: 0; background: none; color: #4a3f36; flex: 1 1 0; min-width: 52px; min-height: 52px; border-radius: 20px; display: grid; justify-items: center; align-content: center; gap: 3px; cursor: pointer; font: inherit; -webkit-tap-highlight-color: transparent; }
+    #hands svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round; }
+    #hands i { font-style: normal; font-size: 9px; letter-spacing: .14em; text-transform: uppercase; }
+    #hands button.on { background: #2b2420; color: #f3ede1; }
+    #acts { position: fixed; top: max(10px, env(safe-area-inset-top)); right: 10px; display: flex; gap: 5px; z-index: 2; }
+    #acts button { appearance: none; border: 0; background: rgba(246,241,231,.86); box-shadow: 0 1px 8px rgba(70,50,30,.12); color: #2b2420; width: 40px; height: 40px; border-radius: 20px; display: grid; place-items: center; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+    #acts svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+    #acts button.on { background: #2b2420; color: #f3ede1; }
+    #hands button { position: relative; }
+    #hands u { position: absolute; right: 9px; bottom: 9px; width: 0; height: 0; border-left: 4px solid transparent; border-bottom: 4px solid currentColor; opacity: .5; }
+    #sheet { position: fixed; left: 10px; right: 10px; bottom: calc(max(12px, env(safe-area-inset-bottom)) + 74px); z-index: 3; padding: 10px 12px 12px; border-radius: 22px; background: rgba(246,241,231,.96); box-shadow: 0 4px 22px rgba(70,50,30,.18), inset 0 0 0 1px rgba(70,50,30,.08); transform: translateY(12px); opacity: 0; pointer-events: none; transition: opacity .18s, transform .18s; }
+    #sheet.on { transform: none; opacity: 1; pointer-events: auto; }
+    #sheet h2 { margin: 4px 4px 4px; font-weight: 400; font-size: 10px; letter-spacing: .3em; text-transform: uppercase; opacity: .55; }
+    #sheet .grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 2px; }
+    #sheet button { appearance: none; border: 0; background: none; color: #4a3f36; min-height: 56px; border-radius: 16px; display: grid; justify-items: center; align-content: center; gap: 4px; font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+    #sheet svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round; }
+    #sheet i { font-style: normal; font-size: 9px; letter-spacing: .12em; text-transform: uppercase; }
+    #sheet button.on { background: #2b2420; color: #f3ede1; }
+    #card { position: fixed; left: 10px; right: 10px; bottom: calc(max(12px, env(safe-area-inset-bottom)) + 74px); z-index: 2; padding: 10px 12px; border-radius: 20px; background: rgba(246,241,231,.94); box-shadow: 0 3px 16px rgba(70,50,30,.15), inset 0 0 0 1px rgba(176,92,30,.35); display: none; }
+    #card.on { display: block; }
+    #card .row { display: flex; align-items: center; gap: 8px; }
+    #card .details { display: none; }
+    #card.detailed .details { display: block; }
+    #card #what { cursor: pointer; }
+    #card #more { background: none; width: 36px; padding: 0; display: grid; place-items: center; }
+    #card #more svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+    #card #more .down, #card.detailed #more .up { display: none; }
+    #card.detailed #more .down { display: inline; }
+    #card b { flex: 1; font-weight: 400; font-size: 15px; font-style: italic; }
+    #card .acts { display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; }
+    #card button { appearance: none; border: 0; font: inherit; font-size: 13px; color: #2b2420; background: rgba(43,36,32,.07); border-radius: 14px; min-height: 36px; padding: 0 12px; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+    #card [hidden] { display: none !important; }
+    #card #close { background: none; font-size: 22px; min-height: 36px; width: 36px; padding: 0; }
+    #card .chips { display: flex; gap: 4px; margin: 6px 0 8px; flex-wrap: wrap; }
+    #card .chips button { min-height: 28px; padding: 0 10px; font-size: 11px; letter-spacing: .1em; text-transform: uppercase; background: none; box-shadow: inset 0 0 0 1px rgba(43,36,32,.18); }
+    #card .chips button.on { background: #2b2420; color: #f3ede1; box-shadow: none; }
+    #card .readings, #card .dressrow { display: flex; gap: 4px; overflow-x: auto; scrollbar-width: none; margin-bottom: 6px; }
+    #card .readings::-webkit-scrollbar, #card .dressrow::-webkit-scrollbar { display: none; }
+    #card .readings button, #card .dressrow button { flex: 0 0 auto; display: grid; justify-items: center; gap: 3px; padding: 6px 8px; min-width: 62px; border-radius: 12px; background: none; }
+    #card .readings button.on { background: #2b2420; color: #f3ede1; }
+    #card .readings svg, #card .dressrow svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round; }
+    #card .readings i, #card .dressrow i { font-style: normal; font-size: 9.5px; letter-spacing: .06em; }
+    #card .dressrow { border-top: 1px solid rgba(43,36,32,.1); padding-top: 6px; }
+    #card .dressrow button { min-width: 54px; opacity: .85; }
+    body.selecting #hint { bottom: calc(max(12px, env(safe-area-inset-bottom)) + 300px); }
+    .preview #sheet, .preview #card { display: none; }
+    #say { position: fixed; left: 0; top: 0; z-index: 3; pointer-events: none; padding: 5px 11px; border-radius: 14px; background: rgba(246,241,231,.92); box-shadow: 0 1px 8px rgba(70,50,30,.15); font-size: 13px; font-style: italic; color: #2b2420; opacity: 0; transition: opacity .15s; white-space: nowrap; }
+    #say.on { opacity: 1; }
+    #alts { position: fixed; left: 10px; right: 10px; bottom: calc(max(12px, env(safe-area-inset-bottom)) + 76px); z-index: 2; display: none; gap: 5px; align-items: center; overflow-x: auto; scrollbar-width: none; padding: 6px 8px; border-radius: 18px; background: rgba(246,241,231,.9); box-shadow: 0 2px 10px rgba(70,50,30,.13); }
+    #alts.on { display: flex; }
+    .auto #alts { bottom: calc(max(12px, env(safe-area-inset-bottom)) + 120px); }
+    #alts::-webkit-scrollbar { display: none; }
+    #alts i { flex: 0 0 auto; font-size: 10px; letter-spacing: .12em; text-transform: uppercase; opacity: .6; padding: 0 4px; }
+    #alts button { flex: 0 0 auto; appearance: none; border: 0; font: inherit; font-size: 12.5px; font-style: italic; color: #2b2420; background: none; box-shadow: inset 0 0 0 1px rgba(43,36,32,.18); border-radius: 14px; min-height: 32px; padding: 0 11px; cursor: pointer; -webkit-tap-highlight-color: transparent; white-space: nowrap; }
+    #alts button.on { background: #2b2420; color: #f3ede1; box-shadow: none; }
+    .selecting #alts, .preview #alts { display: none; }
+    #say.warn { color: #8a3b12; box-shadow: 0 1px 8px rgba(70,50,30,.15), inset 0 0 0 1px rgba(176,92,30,.45); }
+    nav { right: 190px; gap: 10px; }
+    nav a { white-space: nowrap; }
+    nav small { display: block; font-size: 10px; letter-spacing: .3em; text-transform: uppercase; opacity: .6; margin-top: 4px; }
+    .preview nav, .preview #acts, .preview #hint, .preview #hands { display: none; }
+    #catcard { position: fixed; left: 50%; top: calc(max(12px, env(safe-area-inset-top)) + 54px); transform: translateX(-50%); z-index: 3; display: none; align-items: center; gap: 9px; padding: 6px 6px 6px 7px; border-radius: 24px; background: rgba(246,241,231,.94); box-shadow: 0 3px 16px rgba(70,50,30,.16), inset 0 0 0 1px rgba(43,36,32,.06); max-width: calc(100vw - 24px); }
+    #catcard.on { display: flex; }
+    #catcard .coat { flex: 0 0 auto; width: 30px; height: 30px; border-radius: 50%; box-shadow: inset 0 -3px 6px rgba(0,0,0,.18), inset 0 0 0 1px rgba(43,36,32,.12); }
+    #catcard .who { min-width: 0; display: grid; line-height: 1.15; }
+    #catcard b { font-weight: 400; font-size: 15px; }
+    #catcard span { font-size: 12.5px; font-style: italic; opacity: .7; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    #catcard button { appearance: none; border: 0; font: inherit; font-size: 12.5px; color: #f3ede1; background: #6e5a49; border-radius: 16px; min-height: 34px; padding: 0 13px; cursor: pointer; white-space: nowrap; -webkit-tap-highlight-color: transparent; }
+    #catcard #catclose { background: none; color: #2b2420; font-size: 20px; width: 34px; padding: 0; }
+    .following #hint, .following #alts { display: none !important; }
+    .preview #catcard { display: none !important; }
+    /* print: the layers in place of the brushes, the one touched open under them with its sliders (layers.ts) */
+    #layers { position: fixed; left: 10px; right: 10px; bottom: max(12px, env(safe-area-inset-bottom)); z-index: 2; display: none; flex-direction: column; padding: 6px; border-radius: 26px; background: rgba(246,241,231,.9); box-shadow: 0 2px 14px rgba(70,50,30,.12), inset 0 0 0 1px rgba(70,50,30,.08); -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); max-width: 560px; margin: 0 auto; }
+    .printing #layers { display: flex; }
+    .printing #hands, .printing #sheet, .printing #alts, .printing #card, .printing #hint { display: none !important; }
+    #layers .row { display: flex; gap: 2px; justify-content: space-between; }
+    #layers .row button { appearance: none; border: 0; background: none; color: #4a3f36; flex: 1 1 0; min-width: 52px; min-height: 56px; border-radius: 20px; display: grid; justify-items: center; align-content: center; gap: 3px; cursor: pointer; font: inherit; -webkit-tap-highlight-color: transparent; }
+    #layers .row svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round; }
+    #layers .row i { font-style: normal; font-size: 9px; letter-spacing: .14em; text-transform: uppercase; }
+    #layers .row s { display: block; width: 26px; height: 2px; border-radius: 1px; background: rgba(43,36,32,.16); overflow: hidden; text-decoration: none; }
+    #layers .row s b { display: block; height: 100%; background: currentColor; }
+    #layers .row button.on { background: #2b2420; color: #f3ede1; }
+    #layers .row button.on s { background: rgba(243,237,225,.25); }
+    #layers .tray { display: none; padding: 6px 8px 4px; }
+    #layers.open .tray { display: grid; gap: 0; }
+    #layers .dial { display: grid; grid-template-columns: 82px 1fr 46px; align-items: center; gap: 10px; min-height: 44px; }
+    #layers .dial span { font-size: 13px; font-style: italic; }
+    #layers .dial output { font-size: 11.5px; text-align: right; font-variant-numeric: tabular-nums; opacity: .7; }
+    #layers .track { position: relative; height: 44px; display: flex; align-items: center; }
+    #layers .track em { position: absolute; top: 50%; width: 2px; height: 12px; margin: -6px 0 0 -1px; background: #b05c1e; opacity: .55; border-radius: 1px; pointer-events: none; }
+    #layers input[type=range] { -webkit-appearance: none; appearance: none; width: 100%; height: 44px; margin: 0; background: transparent; cursor: pointer; touch-action: none; }
+    #layers input[type=range]::-webkit-slider-runnable-track { height: 3px; border-radius: 2px; background: linear-gradient(to right, #2b2420 var(--t, 0%), rgba(43,36,32,.18) var(--t, 0%)); }
+    #layers input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 24px; height: 24px; margin-top: -10.5px; border-radius: 50%; background: #f6f1e7; box-shadow: 0 1px 5px rgba(40,30,20,.3), inset 0 0 0 1.5px #2b2420; }
+    #layers input[type=range]::-moz-range-track { height: 3px; border-radius: 2px; background: rgba(43,36,32,.18); }
+    #layers input[type=range]::-moz-range-progress { height: 3px; border-radius: 2px; background: #2b2420; }
+    #layers input[type=range]::-moz-range-thumb { width: 22px; height: 22px; border: 0; border-radius: 50%; background: #f6f1e7; box-shadow: 0 1px 5px rgba(40,30,20,.3), inset 0 0 0 1.5px #2b2420; }
+    #layers .starts { display: flex; gap: 5px; align-items: center; flex-wrap: wrap; margin-top: 4px; padding-top: 8px; border-top: 1px solid rgba(43,36,32,.1); }
+    #layers .starts i { font-style: normal; font-size: 10px; letter-spacing: .12em; text-transform: uppercase; opacity: .6; margin-right: 4px; }
+    #layers .starts button { appearance: none; border: 0; font: inherit; font-size: 12.5px; font-style: italic; color: #2b2420; background: none; box-shadow: inset 0 0 0 1px rgba(43,36,32,.18); border-radius: 14px; min-height: 34px; padding: 0 12px; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+    .preview #layers { display: none; }
+  </style>
+</head>
+<body>
+  <canvas id="stone"></canvas>
+  <canvas id="guide"></canvas>
+  <nav><a href="/">← lab</a><h1>Labyrinth<small>touch to build</small></h1></nav>
+  <div id="acts">
+    <button id="undo" aria-label="undo" title="undo"><svg viewBox="0 0 20 20"><path d="M7 5L3.5 8.5 7 12"/><path d="M3.5 8.5h8a4.5 4.5 0 010 9H9"/></svg></button>
+    <button id="frame" aria-label="frame it all" title="frame it all"><svg viewBox="0 0 20 20"><path d="M3 7V3h4M13 3h4v4M17 13v4h-4M7 17H3v-4"/><rect x="7" y="7" width="6" height="6"/></svg></button>
+    <button id="print" aria-pressed="false" aria-label="print: the layers" title="print: the layers"><svg viewBox="0 0 20 20"><path d="M3 17L17 3M3 11L11 3M9 17L17 9M3 5l2-2M15 17l2-2"/></svg></button>
+    <button id="again" aria-label="clear the stone" title="clear the stone"><svg viewBox="0 0 20 20"><path d="M4 10a6 6 0 1 0 2-4.5"/><path d="M3.5 3v3.5H7"/></svg></button>
+  </div>
+  <div id="hint"></div>
+  <div id="say" aria-live="polite"></div>
+  <div id="alts" role="toolbar" aria-label="read it as"></div>
+  <div id="catcard" role="dialog" aria-label="a cat">
+    <i class="coat"></i><div class="who"><b id="catname"></b><span id="catdoing"></span></div>
+    <button id="catfollow">Follow ›</button><button id="catclose" aria-label="let it be">×</button>
+  </div>
+  <div id="card" role="dialog" aria-label="what's taken up">
+    <div class="row"><b id="what"></b><button id="more" aria-label="its details" aria-expanded="false"><svg viewBox="0 0 20 20"><path class="up" d="M5 12l5-5 5 5"/><path class="down" d="M5 8l5 5 5-5"/></svg></button><button id="close" aria-label="put it down">×</button></div>
+    <div class="details">
+    <div id="scope" class="chips" aria-label="how much of it"></div>
+    <div id="readings" class="readings" aria-label="read it as"></div>
+    <div id="dressrow" class="dressrow" aria-label="dress it"></div>
+    <div class="acts"><button id="takeaway">take it away</button></div>
+    </div>
+  </div>
+  <div id="sheet" role="menu" aria-label="what the piece brush holds">
+    <h2>pieces</h2>
+    <div class="grid">
+      <button data-held="block"><svg viewBox="0 0 24 24"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z"/><path d="M4 7.5l8 4.5 8-4.5M12 12v9"/></svg><i>block</i></button>
+      <button data-held="wall"><svg viewBox="0 0 24 24"><path d="M4 20V7l3-2h10l3 2v13"/><path d="M4 7h16M10 7v13M14 7v13"/></svg><i>wall</i></button>
+      <button data-held="arch"><svg viewBox="0 0 24 24"><path d="M4 21V4h16v17"/><path d="M9 21v-7a3 3 0 016 0v7"/></svg><i>arch</i></button>
+      <button data-held="stair"><svg viewBox="0 0 24 24"><path d="M3 21h4v-4h4v-4h4V9h4V5h2"/><path d="M3 21h18"/></svg><i>stair</i></button>
+      <button data-held="bridge"><svg viewBox="0 0 24 24"><path d="M2 8h20M2 11h20M3 20v-9M21 20v-9"/><path d="M6 20a6 6 0 0112 0"/></svg><i>bridge</i></button>
+      <button data-held="cypress"><svg viewBox="0 0 24 24"><path d="M12 2c-3 5-3.5 11-2 16h4c1.5-5 1-11-2-16z"/><path d="M12 18v4"/></svg><i>tree</i></button>
+      <button data-held="pool"><svg viewBox="0 0 24 24"><path d="M3 9h18v9H3z"/><path d="M6 13c1.5-1 3 1 4.5 0s3-1 4.5 0 3 1 3 0"/></svg><i>pool</i></button>
+    </div>
+    <h2>dressing</h2>
+    <div class="grid">
+      <button data-held="travertine"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16"/><path d="M4 10h16M4 15h16M11 4v6M15 10v5M9 15v5"/></svg><i>travertine</i></button>
+      <button data-held="brick"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14"/><path d="M3 9.7h18M3 14.3h18M9 5v4.7M15 5v4.7M6 9.7v4.6M12 9.7v4.6M18 9.7v4.6M9 14.3V19M15 14.3V19"/></svg><i>brick</i></button>
+      <button data-held="marble"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16"/><path d="M5 17c3-2 4-6 7-7s4-4 7-5M9 20c1-3 4-4 5-7"/></svg><i>marble</i></button>
+      <button data-held="moss"><svg viewBox="0 0 24 24"><path d="M3 19h18"/><path d="M5 19c0-3 2-4 3-4s2 2 3 1 1-4 3-4 3 3 3 4 1 1 2 3"/></svg><i>moss</i></button>
+      <button data-held="ivy"><svg viewBox="0 0 24 24"><path d="M12 2v20"/><path d="M12 6c-3-1-5 0-6 2 2 1 4 1 6-2zM12 11c3-1 5 0 6 2-2 1-4 1-6-2zM12 16c-3-1-5 0-6 2 2 1 4 1 6-2z"/></svg><i>ivy</i></button>
+      <button data-held="parapet"><svg viewBox="0 0 24 24"><path d="M3 20h18M3 20v-7h18v7"/><path d="M3 10h18M3 10V8h18v2"/></svg><i>parapet</i></button>
+      <button data-held="balustrade"><svg viewBox="0 0 24 24"><path d="M3 6h18M3 8h18M3 20h18M3 18h18"/><path d="M6 8c-1.5 3 1.5 4 0 10M10 8c-1.5 3 1.5 4 0 10M14 8c-1.5 3 1.5 4 0 10M18 8c-1.5 3 1.5 4 0 10"/></svg><i>balustrade</i></button>
+      <button data-held="jali"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16"/><circle cx="8" cy="9" r="1.6"/><circle cx="16" cy="9" r="1.6"/><circle cx="12" cy="15" r="1.6"/><path d="M12 7.5l1.5 1.5-1.5 1.5-1.5-1.5zM8 13.5l1.5 1.5L8 16.5 6.5 15zM16 13.5l1.5 1.5-1.5 1.5-1.5-1.5z"/></svg><i>jali</i></button>
+      <button data-held="lantern"><svg viewBox="0 0 24 24"><path d="M12 21v-9M9 12h6v-6H9zM8 6h8M12 3v3"/></svg><i>lantern</i></button>
+      <button data-held="pot"><svg viewBox="0 0 24 24"><path d="M7 14h10l-1.5 7h-7z"/><circle cx="12" cy="9" r="4.5"/></svg><i>pot</i></button>
+      <button data-held="pergola"><svg viewBox="0 0 24 24"><path d="M5 21V9M19 21V9M3 9h18M3 6.5h18"/><path d="M6 6.5v2.5M10 6.5v2.5M14 6.5v2.5M18 6.5v2.5"/><path d="M5 13c-1.5 0-2 1.5-1 2.5M19 12c1.5 0 2 1.5 1 2.5M9 9c0 2 2 2 2 4"/></svg><i>pergola</i></button>
+      <button data-held="mashrabiya"><svg viewBox="0 0 24 24"><path d="M3 3v18"/><path d="M3 7h12l2 2v8H3"/><path d="M6 9v8M9 9v8M12 9v8M3 11h14M3 14h14"/><path d="M5 17l3 3M13 17l-3 3"/></svg><i>mashrabiya</i></button>
+      <button data-held="colonnettes"><svg viewBox="0 0 24 24"><path d="M8 21V11a4 4 0 018 0v10"/><path d="M5 21V11M3.8 11h2.4M3.8 21h2.4M19 21V11M17.8 11h2.4M17.8 21h2.4"/></svg><i>colonnettes</i></button>
+    </div>
+  </div>
+  <div id="layers" aria-label="the print's layers"></div>
+  <div id="hands" role="toolbar" aria-label="brushes">
+    <button data-brush="hand" aria-label="hand: turn it, and ask what something is"><svg viewBox="0 0 24 24"><path d="M8 13V5.5a1.5 1.5 0 013 0V12M11 11V4a1.5 1.5 0 013 0v7M14 11V5.5a1.5 1.5 0 013 0V14c0 4-2.5 7-6 7-2.5 0-4-1.2-5.5-3.5L3.8 15a1.4 1.4 0 012.3-1.6L8 15.5"/></svg><i>hand</i></button>
+    <button data-brush="auto" aria-label="auto: tap raises, trace builds"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="2.2"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="9.5" opacity=".5"/></svg><i>auto</i></button>
+    <button data-brush="piece" aria-haspopup="menu" aria-expanded="false" aria-label="one piece, or dressing: hold for the sheet"><svg viewBox="0 0 24 24"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z"/></svg><i>piece</i><u></u></button>
+    <button data-brush="take" aria-label="take: tap takes away, trace carves"><svg viewBox="0 0 24 24"><path d="M5 19L19 5M7 5h10M5 9v10h10"/></svg><i>take</i></button>
+    <button data-brush="select" aria-label="select: take something up, and read it another way"><svg viewBox="0 0 24 24"><path d="M5 3l12 8-5.5 1.2L15 19l-2.4 1.2-3.4-6.8L5 17z"/></svg><i>select</i></button>
+  </div>
+  <script src="{{app}}"></script>
+</body>
+</html>

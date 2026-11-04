@@ -146,6 +146,13 @@ describe('workspace sharing / view layer', () => {
     await cmds.remember({ key: 'mine', value: 'bob stuff' }, ctxFor('bob').ctx);
   });
 
+  it('never shares the whole slice by default: the key must be named, "*" included', async () => {
+    await expect(cmds.share({ to: 'bob' } as never, ctxFor('alice').ctx)).rejects.toThrow(/key is required/);
+    await expect(cmds.share({ to: 'public', key: '  ' }, ctxFor('alice').ctx)).rejects.toThrow(/key is required/);
+    const shared = await cmds.shared({}, ctxFor('alice').ctx);
+    expect(JSON.stringify(shared)).not.toMatch(/"key":"\*"/);
+  });
+
   it('shares a single key into the grantee view, namespaced by owner, and announces it', async () => {
     const { ctx: alice, emitted } = ctxFor('alice');
     const g = await cmds.share({ to: 'bob', key: 'roadmap' }, alice);
@@ -174,7 +181,7 @@ describe('workspace sharing / view layer', () => {
   });
 
   it('whole-slice share exposes every non-superseded fact of the owner', async () => {
-    await cmds.share({ to: 'bob' }, ctxFor('alice').ctx); // no key → whole slice
+    await cmds.share({ to: 'bob', key: '*' }, ctxFor('alice').ctx); // the whole slice, named
     const bobView = await cmds.recall({ elision: 'none' }, ctxFor('bob').ctx);
     expect(bobView.entries['alice/roadmap'].value).toBe('Q3 plan');
     expect(bobView.entries['alice/secret'].value).toBe('private');
@@ -1791,7 +1798,7 @@ describe('workspace granular grants (write-through / prefix / request loop)', ()
     // The grant is a boundary, not a door: uncovered keys and reserved
     // namespaces stay refused even under a write grant.
     await expect(cmds.remember({ key: 'private/x', value: 'no', owner: 'alice' }, bob)).rejects.toThrow(/grant_denied/);
-    await cmds.share({ to: 'bob', mode: 'write' }, alice); // whole slice
+    await cmds.share({ to: 'bob', key: '*', mode: 'write' }, alice); // whole slice
     await expect(
       cmds.remember({ key: '_actions/evil', value: 1, owner: 'alice' }, bob),
     ).rejects.toThrow(/reserved/);

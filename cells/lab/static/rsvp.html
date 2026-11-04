@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en" data-exp="rsvp"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#f5f2eb"><title>Afterword · RSVP reading lab</title>
+<style>
+:root{--paper:#f5f2eb;--ink:#242521;--muted:#777970;--edge:#d8d7cd;--accent:#ae563f;--field:#fffefa;--good:#4f7a4a;font-family:ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:var(--ink);background:var(--paper);color-scheme:light}
+/* dark: as the device is (auto), or chosen; warm ink-on-slate rather than black, the accent lifted to read on it */
+@media(prefers-color-scheme:dark){:root:not([data-theme=light]){--paper:#171815;--ink:#e6e2d6;--muted:#8f9187;--edge:#34362f;--accent:#e2855f;--field:#1f201c;--good:#8fbf86;color-scheme:dark}}
+:root[data-theme=dark]{--paper:#171815;--ink:#e6e2d6;--muted:#8f9187;--edge:#34362f;--accent:#e2855f;--field:#1f201c;--good:#8fbf86;color-scheme:dark}
+body{background:var(--paper);color:var(--ink)}
+*{box-sizing:border-box}html,body{height:100%;margin:0;-webkit-text-size-adjust:100%}body{overscroll-behavior:none}button,input,select,textarea{font:inherit}button{border:0;background:none;color:inherit;cursor:pointer;-webkit-tap-highlight-color:transparent}button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible,summary:focus-visible{outline:2px solid var(--accent);outline-offset:2px}button{min-height:44px}a{color:inherit;text-decoration:none}input[type=range]{width:100%;accent-color:var(--accent);height:30px;touch-action:pan-x}
+#app{display:flex;flex-direction:column;height:100dvh;min-height:380px;max-width:980px;margin:0 auto;overflow:hidden}
+header{flex-shrink:0;display:flex;align-items:center;justify-content:space-between;padding:max(10px,env(safe-area-inset-top)) 18px 4px 24px;gap:12px}.brand{display:flex;gap:11px;align-items:baseline}.brand strong{font:500 19px/1.2 Georgia,serif;letter-spacing:-.05em}.brand small{font:10px ui-monospace,monospace;text-transform:uppercase;letter-spacing:.16em;color:var(--muted)}
+/* the beat, top right: the number, its unit, a dot that lands on each word (set by the rhythm of your steps) */
+#bpm-tap{display:flex;align-items:baseline;gap:6px;padding:4px 6px 4px 12px;min-width:44px;font-variant-numeric:tabular-nums;touch-action:manipulation}
+#bpm-value{font:400 26px/1 Georgia,serif;letter-spacing:-.03em}#bpm-unit{font:10px ui-monospace,monospace;letter-spacing:.14em;text-transform:uppercase;color:var(--muted)}
+#bpm-dot{width:7px;height:7px;border-radius:50%;background:var(--accent);opacity:.15;align-self:center}#bpm-dot.on{animation:beat .22s ease-out}
+@keyframes beat{0%{opacity:1;transform:scale(1.3)}100%{opacity:.15;transform:scale(1)}}
+#stage{position:relative;isolation:isolate;flex:1;min-height:190px;touch-action:none;user-select:none;-webkit-user-select:none;cursor:ew-resize;overflow:hidden;--ghost-opacity:.42}
+#word{position:absolute;left:0;right:0;top:50%;transform:translateY(-50%);display:grid;grid-template-columns:minmax(0,1fr) auto minmax(0,1fr);font:400 46px/1.15 Georgia,"Iowan Old Style",serif;white-space:nowrap;letter-spacing:-.035em;pointer-events:none}
+#word-before{text-align:right;justify-self:end}#word-after{text-align:left;justify-self:start}#word-anchor{color:var(--accent)}
+/* the context, placed round the word by the script: before ends where the word begins, after begins where it ends */
+.ghost{position:absolute;display:flex;flex-direction:column;max-height:38%;overflow:hidden;color:var(--ink);opacity:var(--ghost-opacity);font:400 clamp(17px,4.4vw,23px)/1.5 Georgia,serif;letter-spacing:-.012em;pointer-events:none;transition:opacity .17s ease;overflow-wrap:break-word}
+#before{justify-content:flex-end;text-align:right;mask-image:linear-gradient(to bottom,transparent 0%,black 45%,black 100%);-webkit-mask-image:linear-gradient(to bottom,transparent 0%,black 45%,black 100%)}
+#after{justify-content:flex-start;text-align:left;mask-image:linear-gradient(to bottom,black 0%,black 55%,transparent 100%);-webkit-mask-image:linear-gradient(to bottom,black 0%,black 55%,transparent 100%)}
+.ghost-token{white-space:nowrap}.tail{white-space:nowrap}.run-in{display:inline-block}.par-gap{display:block;height:.6em}.no-context .ghost{visibility:hidden}
+/* the player: all of it folds away to a slim bar (play, and the way back to it) */
+#dock{flex-shrink:0;border-top:1px solid var(--edge);padding:6px 22px max(15px,env(safe-area-inset-bottom));background:var(--paper)}
+.dock-top{display:flex;justify-content:space-between;align-items:center;font-size:12px;color:var(--muted)}.dock-top nav{display:flex;gap:14px}.dock-top button,.dock-top a{font-size:12px;min-height:36px;display:inline-flex;align-items:center}
+#collapse{font-size:16px;padding:0 4px}
+.timeline{display:flex;align-items:center;gap:13px;font:11px ui-monospace,monospace;color:var(--muted)}.timeline input{flex:1;min-width:0}.timeline span{font-variant-numeric:tabular-nums;white-space:nowrap}
+.transport{display:flex;justify-content:center;align-items:center;gap:14px;margin:5px 0 3px}.transport button{min-width:42px;font-size:20px}.transport button.sub{font-size:14px;color:var(--muted)}.transport #play{font-size:24px;border:1px solid var(--ink);border-radius:50%;height:62px;width:62px;margin:0 7px}
+.tuning{border-top:1px solid var(--edge);margin-top:8px;padding-top:2px;font-size:12px}.tuning summary{cursor:pointer;padding:12px 2px;color:var(--muted);list-style:none;display:flex;justify-content:space-between;min-height:40px}.tuning summary::-webkit-details-marker{display:none}.tuning summary:after{content:"⌄"}.tuning[open] summary:after{content:"⌃"}.controls{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:15px 24px;overflow-y:auto;max-height:min(35dvh,265px);padding:8px 2px 18px}.control{min-width:0;display:block}.control .heads{display:flex;justify-content:space-between;gap:6px;margin-bottom:5px}.control b{font-weight:400;color:var(--muted);font-variant-numeric:tabular-nums}.control select{width:100%;height:36px;color:var(--ink);background:transparent;border:1px solid var(--edge);padding:0 8px;border-radius:0}.control input[type=range]{margin:0}
+#mini{display:none;flex-shrink:0;align-items:center;justify-content:space-between;gap:12px;padding:4px 18px max(8px,env(safe-area-inset-bottom));border-top:1px solid var(--edge)}
+#mini-play{font-size:18px;min-width:44px}#expand{font-size:16px;color:var(--muted);min-width:44px}
+#mini-line{flex:1;height:2px;background:var(--edge);position:relative}#mini-fill{position:absolute;left:0;top:0;bottom:0;background:var(--accent)}
+.min #dock{display:none}.min #mini{display:flex}
+#sound-options[hidden],[hidden]{display:none!important}.sound-head{grid-column:1/-1;border-top:1px solid var(--edge);padding-top:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);font-size:10px}
+#editor{position:fixed;z-index:10;inset:0;background:var(--paper);padding:max(20px,env(safe-area-inset-top)) 22px max(22px,env(safe-area-inset-bottom));display:flex;flex-direction:column;gap:16px}#editor h2{font:400 30px Georgia,serif;margin:10px 0 0}#editor p{font:13px/1.5 sans-serif;color:var(--muted);margin:0}#editor textarea{flex:1;min-height:130px;width:100%;resize:none;border:1px solid var(--edge);background:var(--field);padding:16px;font:17px/1.55 Georgia,serif;color:var(--ink)}.edit-actions{display:flex;gap:8px;align-items:center}.edit-actions button{border:1px solid var(--edge);padding:0 16px}.edit-actions button.primary{background:var(--ink);color:var(--paper)}#share-status,#edit-status{font-size:12px;color:var(--accent);min-height:14px}
+.writing #word-after::after{content:"";display:inline-block;width:2px;height:.9em;margin-left:2px;vertical-align:-.08em;background:var(--accent);animation:caret 1.05s steps(1) infinite}
+@keyframes caret{50%{opacity:0}}
+.pil{opacity:.5}.par-next #before .ghost-box::after{content:"¶";display:block;text-align:right;opacity:.5}
+#write{position:absolute;left:0;top:50%;width:1px;height:1px;opacity:0;border:0;padding:0;font-size:16px;pointer-events:none}
+/* the check: an overlay, like the editor; while a passage plays the controls rest */
+#quiz{position:fixed;z-index:11;inset:0;background:var(--paper);overflow-y:auto;padding:max(20px,env(safe-area-inset-top)) 22px max(22px,env(safe-area-inset-bottom))}
+#quiz-body{max-width:560px;margin:0 auto;display:flex;flex-direction:column;gap:14px}#quiz h2{font:400 26px/1.25 Georgia,serif;margin:14px 0 0}#quiz p{font:14px/1.5 sans-serif;color:var(--muted);margin:0}#quiz p.big{font:400 44px Georgia,serif;color:var(--ink)}#quiz .small{font-size:11px;letter-spacing:.04em}
+.chips{display:flex;flex-wrap:wrap;gap:8px}.chip{border:1px solid var(--edge);border-radius:20px;padding:0 16px;font-variant-numeric:tabular-nums}.chip[aria-pressed=true]{background:var(--ink);color:var(--paper);border-color:var(--ink)}
+.answers{display:flex;flex-direction:column;gap:10px}.answers button{border:1px solid var(--edge);text-align:left;padding:10px 16px;font:18px Georgia,serif}
+.scores{border-collapse:collapse;font:14px ui-monospace,monospace;width:100%}.scores td,.scores th{padding:6px 8px 6px 0;text-align:left;font-weight:400;color:var(--muted)}.scores td{color:var(--ink);border-top:1px solid var(--edge)}.scores td:last-child{width:50%}.bar{display:block;height:8px;background:var(--accent)}
+.review{font-size:13px}.review summary{cursor:pointer;color:var(--muted);padding:8px 0}.review ul{margin:6px 0 14px;padding-left:18px}.review li{margin:4px 0}.review li.wrong{color:var(--accent)}.review li.right b{color:var(--good)}.past{border-top:1px solid var(--edge);padding-top:8px}
+.checking #dock,.checking #mini{pointer-events:none;opacity:.35}
+.preview header,.preview #dock,.preview #mini{display:none!important}.preview #app{height:100dvh}.preview #stage{min-height:100%}.preview .ghost{font-size:17px}
+@media(max-height:620px){header{padding-top:4px}.ghost{font-size:16px}#dock{padding-top:3px}.transport button{min-height:40px}.transport #play{width:48px;height:48px;font-size:20px}}
+@media(prefers-reduced-motion:reduce){*,*:before,*:after{transition:none!important;animation:none!important}}
+</style></head><body>
+<main id="app">
+<header><div class="brand"><strong>Afterword</strong><small>RSVP / context</small></div>
+<div id="bpm-tap" role="status" aria-label="Beats per minute, set by the rhythm of your steps"><span id="bpm-value">300</span><span id="bpm-unit">bpm</span><span id="bpm-dot"></span></div></header>
+<section id="stage" aria-label="Reader; tap left or right to step, centre to play or pause, drag to scan" tabindex="0"><div class="ghost" id="before"></div>
+<input id="write" type="text" autocomplete="off" autocapitalize="sentences" spellcheck="true" aria-label="Write the next word" enterkeyhint="next"><div id="word" aria-live="off"><span id="word-before"></span><span id="word-anchor"></span><span id="word-after"></span></div><div class="ghost" id="after"></div></section>
+<footer id="dock">
+<div class="dock-top"><nav><a href="/">Lab</a><button id="edit">Text</button><button id="check">Check</button><button id="copy">Share</button><button id="theme" aria-label="Light or dark">Auto</button></nav><button id="collapse" aria-label="Hide the player" aria-expanded="true">⌄</button></div>
+<div class="timeline"><span id="readout">0 / 0</span><input type="range" id="progress" min="0" max="100" step="1" value="0" aria-label="Reading position"><span id="percentage">0%</span></div>
+<div class="transport"><button id="back-sentence" class="sub" aria-label="Back ten words">−10</button><button id="back" aria-label="Previous word">‹</button><button id="play" aria-label="Play reading">▶</button><button id="forward" aria-label="Next word">›</button><button id="forward-sentence" class="sub" aria-label="Forward ten words">+10</button></div>
+<details class="tuning"><summary>Reading &amp; sound settings</summary><div class="controls">
+<label class="control"><span class="heads"><span>Beat (bpm)</span><b id="bpm-label">300</b></span><input type="range" id="bpm" min="40" max="1200" step="10"></label>
+<label class="control"><span class="heads"><span>Context</span></span><select id="mode"><option value="off">Off</option><option value="rail">Nearby words</option><option value="passage">Extended passage</option></select></label>
+<label class="control"><span class="heads"><span>Context span</span><b id="span-label">7</b></span><input type="range" id="span" min="1" max="24" step="1"></label>
+<label class="control"><span class="heads"><span>Context strength</span><b id="opacity-label">42%</b></span><input type="range" id="opacity" min="0" max="100" step="2"></label>
+<label class="control"><span class="heads"><span>Punctuation rests</span><b id="pause-label">1.0</b></span><input type="range" id="pause" min="0" max="3" step=".5"></label>
+<label class="control"><span class="heads"><span>Warm-up</span></span><select id="warm"><option value="0">None</option><option value="2">2 words</option><option value="4">4 words</option><option value="8">8 words</option></select></label>
+<label class="control"><span class="heads"><span>Word size</span><b id="font-label">46px</b></span><input type="range" id="font" min="28" max="72" step="2"></label>
+<div class="sound-head">Audio pulse · synthesised, no samples</div>
+<label class="control"><span class="heads"><span>Beat</span></span><select id="sound"><option value="off">Silent</option><option value="click">Click every word</option><option value="bass">Bass accents</option><option value="both">Click + bass</option></select></label>
+<div id="sound-options" class="control"><label class="control"><span class="heads"><span>Volume</span><b id="volume-label">38%</b></span><input type="range" id="volume" min="0" max="100" step="2"></label><label class="control"><span class="heads"><span>Bass on</span></span><select id="group"><option value="clause">Clause starts</option><option value="sentence">Sentence starts</option><option value="2">Every 2 words</option><option value="3">Every 3 words</option><option value="4">Every 4 words</option><option value="6">Every 6 words</option><option value="8">Every 8 words</option></select></label></div>
+</div><p id="audio-status" aria-live="polite"></p></details><div id="share-status" role="status" aria-live="polite"></div></footer>
+<div id="mini"><button id="mini-play" aria-label="Play or pause">▶</button><div id="mini-line"><div id="mini-fill"></div></div><button id="expand" aria-label="Show the player">⌃</button></div></main>
+<section id="quiz" hidden aria-label="Comprehension check"><div id="quiz-body"></div></section>
+<section id="editor" hidden aria-label="Edit reading text"><div class="edit-actions"><button id="close-editor">← Reader</button></div><h2>Bring your own text</h2><p>Paste a passage; a blank line starts a new paragraph. Text, position, beat, context and sound live in the URL fragment. Long text makes a long link; no server storage.</p>
+<textarea id="source" spellcheck="false" placeholder="Paste text to read…" aria-label="Source text"></textarea><div id="edit-status" role="status"></div><div class="edit-actions"><button id="use-text" class="primary">Read this text</button><button id="close-editor-bottom">Cancel</button></div></section>
+<script type="module" src="{{app}}"></script></body></html>

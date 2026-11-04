@@ -1,0 +1,282 @@
+[
+ {
+  "group": "The room",
+  "views": [
+   {
+    "name": "rails",
+    "title": "The rails",
+    "caption": "a rail per person; slide along, tap the front one to put it on",
+    "file": "v-rails.jpg"
+   },
+   {
+    "name": "figure",
+    "title": "The figure",
+    "caption": "cloth and print in the drawer; the pattern pinned up, bottom right",
+    "file": "v-figure.jpg"
+   },
+   {
+    "name": "tug",
+    "title": "Tugged",
+    "caption": "the tug in hand: the skirt's hem taken hold of and pulled out",
+    "file": "v-tug.jpg"
+   },
+   {
+    "name": "pose",
+    "title": "Posed",
+    "caption": "pose mode: its joints marked; an elbow and a knee taken hold of and moved, the dress pushed along with them",
+    "file": "v-pose.jpg"
+   },
+   {
+    "name": "figure-turned",
+    "title": "Turned round",
+    "caption": "the cutting table behind it: tap it to go there",
+    "file": "v-figure-turned.jpg"
+   },
+   {
+    "name": "table",
+    "title": "The cutting table",
+    "caption": "the pattern at true size, the figure across the room",
+    "file": "v-table.jpg"
+   },
+   {
+    "name": "table-up",
+    "title": "Looking up from the table",
+    "caption": "drag (or pinch) off the piece to look up at the figure",
+    "file": "v-table-up.jpg"
+   },
+   {
+    "name": "sheet",
+    "title": "The whole pattern",
+    "caption": "every piece, its grain, how much cloth, its checks",
+    "file": "v-sheet.jpg"
+   },
+   {
+    "name": "room-plan",
+    "title": "From above",
+    "caption": "the rails at the top, the figure on its rug, the cutting table below it; the back wall and its windows down the right, the window light across the floor",
+    "file": "v-room-plan.jpg"
+   },
+   {
+    "name": "room-wide",
+    "title": "The room",
+    "caption": "from the corner: the window light falling across the floor, the stool and the plant by the figure, the bolts of cloth behind the table",
+    "file": "v-room-wide.jpg"
+   },
+   {
+    "name": "room-along",
+    "title": "Along the rails",
+    "caption": "down the room past the rails to the figure and the table",
+    "file": "v-room-along.jpg"
+   }
+  ]
+ },
+ {
+  "group": "The drawer",
+  "views": [
+   {
+    "name": "drawer-closed",
+    "title": "Closed",
+    "caption": "its handle, and what's chosen in a line",
+    "file": "v-drawer-closed.jpg"
+   },
+   {
+    "name": "drawer-drag",
+    "title": "Drawn up",
+    "caption": "the drawer follows the finger: what's below comes into view before it's let go",
+    "file": "v-drawer-drag.jpg"
+   },
+   {
+    "name": "custom-fabric",
+    "title": "Your own cloth",
+    "caption": "expanded: the swatch's measured qualities, dial by dial; the skirt settles again",
+    "file": "v-custom-fabric.jpg"
+   },
+   {
+    "name": "custom-print",
+    "title": "Your own print",
+    "caption": "how big it's printed",
+    "file": "v-custom-print.jpg"
+   },
+   {
+    "name": "custom-colour",
+    "title": "Your own palette",
+    "caption": "its three inks, each picked",
+    "file": "v-custom-colour.jpg"
+   },
+   {
+    "name": "table-full",
+    "title": "The table's, expanded",
+    "caption": "the tool's gestures and what it's set to, under its history",
+    "file": "v-table-full.jpg"
+   }
+  ]
+ },
+ {
+  "group": "What can be made",
+  "views": [
+   {
+    "name": "family-dress",
+    "title": "A dress",
+    "caption": "a bodice to the waist, a gathered skirt sewn to its hem; the figure stands arms down to wear it",
+    "file": "v-family-dress.jpg"
+   },
+   {
+    "name": "family-top",
+    "title": "A top",
+    "caption": "front and back drafted from the figure, sleeves solved to their armholes",
+    "file": "v-family-top.jpg"
+   },
+   {
+    "name": "family-trousers",
+    "title": "Trousers",
+    "caption": "four panels, the crotch reaching the figure's own, an elastic waist",
+    "file": "v-family-trousers.jpg"
+   },
+   {
+    "name": "family-jumpsuit",
+    "title": "A jumpsuit",
+    "caption": "a bodice, trousers gathered onto its hem",
+    "file": "v-family-jumpsuit.jpg"
+   },
+   {
+    "name": "family-tiers",
+    "title": "A tiered skirt",
+    "caption": "each tier a ring of straight panels gathered onto the hem above",
+    "file": "v-family-tiers.jpg"
+   },
+   {
+    "name": "family-make",
+    "title": "Choosing what to make",
+    "caption": "the drawer's Make: the family, and for a skirt or a dress its tiers",
+    "file": "v-family-make.jpg"
+   },
+   {
+    "name": "family-top-table",
+    "title": "A top at the table",
+    "caption": "its pieces laid out: tap one to work it",
+    "file": "v-family-top-table.jpg"
+   },
+   {
+    "name": "piece-front",
+    "title": "A piece, picked",
+    "caption": "tapped on the paper: its edges lit; the drawer lists what each does, then what it's set to and its own choices",
+    "file": "v-piece-front.jpg"
+   },
+   {
+    "name": "family-jumpsuit-table",
+    "title": "Lengthening the sleeves",
+    "caption": "a jumpsuit's sleeve picked, its hem dragged: how long, by the finger",
+    "file": "v-family-jumpsuit-table.jpg"
+   },
+   {
+    "name": "family-legs",
+    "title": "The legs, picked",
+    "caption": "shorts, cropped or full; slim, straight or wide; tapered, straight or flared: the dials, expanded",
+    "file": "v-family-legs.jpg"
+   }
+  ]
+ },
+ {
+  "group": "The hand",
+  "views": [
+   {
+    "name": "hand",
+    "title": "The hand",
+    "caption": "the hem lit, its tab; the grain arrow's knob; a badge on the dart",
+    "file": "v-hand.jpg"
+   },
+   {
+    "name": "hand-hem",
+    "title": "Dragging the hem",
+    "caption": "how long, by the finger",
+    "file": "v-hand-hem.jpg"
+   },
+   {
+    "name": "hand-grain",
+    "title": "Turning the grain",
+    "caption": "the knob follows the finger, straight to bias",
+    "file": "v-hand-grain.jpg"
+   },
+   {
+    "name": "hand-dart",
+    "title": "A dart, tapped",
+    "caption": "closed into flare: the badge goes rose",
+    "file": "v-hand-dart.jpg"
+   }
+  ]
+ },
+ {
+  "group": "Slash",
+  "views": [
+   {
+    "name": "slash",
+    "title": "Scissors in hand",
+    "caption": "the hem lit: where a slash starts",
+    "file": "v-slash.jpg"
+   },
+   {
+    "name": "slash-touch",
+    "title": "Touched",
+    "caption": "a ghost of the cut, hem to waist, before it opens",
+    "file": "v-slash-touch.jpg"
+   },
+   {
+    "name": "slash-open",
+    "title": "Spread open",
+    "caption": "the wedge of new cloth, how much by the finger",
+    "file": "v-slash-open.jpg"
+   },
+   {
+    "name": "slash-made",
+    "title": "Slashed",
+    "caption": "its hinge ringed, an arrow across the opening; the figure flares",
+    "file": "v-slash-made.jpg"
+   }
+  ]
+ },
+ {
+  "group": "Fold",
+  "views": [
+   {
+    "name": "fold",
+    "title": "Folding a pleat",
+    "caption": "the waist lit; how much is folded in, by the finger",
+    "file": "v-fold.jpg"
+   },
+   {
+    "name": "fold-made",
+    "title": "A pleat",
+    "caption": "fold line, where it's laid, the way it folds, stitched down to a bar",
+    "file": "v-fold-made.jpg"
+   }
+  ]
+ },
+ {
+  "group": "Gather",
+  "views": [
+   {
+    "name": "gather",
+    "title": "Gathering",
+    "caption": "width added at the waist, by the finger",
+    "file": "v-gather.jpg"
+   },
+   {
+    "name": "gather-made",
+    "title": "Gathered",
+    "caption": "notched either side, a running stitch, drawn in",
+    "file": "v-gather-made.jpg"
+   }
+  ]
+ },
+ {
+  "group": "Cloth",
+  "views": [
+   {
+    "name": "cloth",
+    "title": "The cloth on the paper",
+    "caption": "off by default; laid on along the grain, as it'll be cut",
+    "file": "v-cloth.jpg"
+   }
+  ]
+ }
+]

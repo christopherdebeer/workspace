@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en" data-exp="switchback"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#0741eb"><title>Switchback</title>
+<style>
+*{box-sizing:border-box}html,body{margin:0;height:100%;overflow:hidden;background:#0741eb;color:#fff;font-family:"Helvetica Neue",Arial,sans-serif;-webkit-user-select:none;user-select:none}
+canvas{position:fixed;inset:0;width:100%;height:100%;touch-action:none}#speed{pointer-events:none}
+header{position:fixed;top:max(18px,env(safe-area-inset-top));left:18px;right:18px;display:flex;justify-content:space-between;align-items:flex-start;pointer-events:none}
+.title{display:flex;gap:12px;align-items:flex-start}.title b{display:block;font-weight:900;font-size:22px;line-height:.86;letter-spacing:-.02em}.title small,.pace small{display:block;font-size:9px;letter-spacing:.24em;margin-top:6px;opacity:.85}
+#menuBtn{pointer-events:auto;width:40px;height:40px;margin:-6px 0 0 -6px;border:0;background:none;color:#fff;cursor:pointer;display:grid;place-items:center;padding:0}
+#menuBtn i{display:block;width:4px;height:16px;background:#fff;margin:0 2px;box-shadow:7px 0 0 #fff;transform:translateX(-3px)}
+.pace{text-align:right;max-width:62vw}.pace b{display:block;font-weight:900;font-size:50px;line-height:.8;letter-spacing:-.04em;font-variant-numeric:tabular-nums;transition:color .2s}.pace b.up{color:#ff7428}.pace span{display:block;font-size:11px;font-weight:700;letter-spacing:.16em;margin-top:7px}
+#combo{color:#ff7428;font-size:10px!important;line-height:1.5;min-height:1.5em}#combo i{font-style:normal;color:#fff}
+#note{position:fixed;left:0;right:0;top:30%;text-align:center;font-weight:900;font-size:22px;letter-spacing:.18em;color:#fff;opacity:0;transform:translateY(8px);transition:opacity .35s,transform .35s;pointer-events:none;text-shadow:0 2px 0 #e85a0d}#note.on{opacity:1;transform:none}
+#hint{position:fixed;left:0;right:0;bottom:max(30px,env(safe-area-inset-bottom));text-align:center;font-size:10px;font-weight:700;letter-spacing:.3em;transition:opacity .6s;pointer-events:none}#hint.gone{opacity:0}
+a{color:#fff;font-size:9px;letter-spacing:.24em;font-weight:700}
+#notes{position:fixed;left:18px;bottom:max(18px,env(safe-area-inset-bottom))}
+a:focus-visible,button:focus-visible,input:focus-visible{outline:2px solid #fff;outline-offset:3px}
+/* (the title and the menu: the mountain riding behind a veil of the sky's own blue, the type big and hard) */
+#menu{position:fixed;inset:0;overflow-y:auto;display:flex;flex-direction:column;justify-content:space-between;padding:max(26px,env(safe-area-inset-top)) 22px max(24px,env(safe-area-inset-bottom));background:linear-gradient(180deg,#083feaee 0%,#083fea99 45%,#083feacc 100%);opacity:0;pointer-events:none;transition:opacity .35s}
+#menu.on{opacity:1;pointer-events:auto}
+#menu h1{margin:0;font-weight:900;font-size:clamp(48px,min(22vw,17vh),148px);line-height:.8;letter-spacing:-.05em}
+@media (min-aspect-ratio:4/3){#menu{flex-direction:row;align-items:flex-end;gap:5vw}#menu>div:last-child{flex:0 1 420px;max-height:100%;overflow-y:auto;scrollbar-width:thin}}
+@media (max-height:520px){#menu .row{padding:7px 0}#menu .acts button{padding:12px 18px;font-size:18px}#menu .how{margin-top:8px}}#menu h1 span{color:#e85a0d;display:block}
+#menu h1{position:relative}#autograph{position:absolute;inset:auto;left:1.25em;bottom:-.3em;width:3.3em;height:.85em;transform:rotate(-7deg);transform-origin:left bottom;pointer-events:none}
+#menu .tag{margin:14px 0 0;font-size:11px;font-weight:700;letter-spacing:.3em;max-width:30em;line-height:1.7}
+#menu .acts{display:flex;flex-direction:column;gap:10px;max-width:420px}
+#menu .acts button{font:900 22px/1 "Helvetica Neue",Arial,sans-serif;letter-spacing:.08em;padding:18px 20px;border:0;cursor:pointer;text-align:left;clip-path:polygon(0 0,100% 0,calc(100% - 18px) 100%,0 100%)}
+#go,#cardAgain{background:#e85a0d;color:#111}#again,#finish,#quit,#cardMenu,#toBoard{background:#fff;color:#111}
+#menu .set{max-width:420px;border-top:2px solid #fff;margin-top:6px}
+#menu .row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 0;border-bottom:1px solid #ffffff55;font-size:11px;font-weight:700;letter-spacing:.24em}
+#menu .row .ctl{display:flex;align-items:center;gap:8px}
+#menu .row button{font:700 11px/1 "Helvetica Neue",Arial,sans-serif;letter-spacing:.18em;background:none;color:#fff;border:1.5px solid #fff;padding:10px 12px;min-width:44px;min-height:36px;cursor:pointer}
+#menu .row button[aria-pressed=true]{background:#fff;color:#0741eb}
+#menu input[type=range]{width:110px;accent-color:#e85a0d}
+#menu .how{font-size:10px;font-weight:700;letter-spacing:.24em;opacity:.85;line-height:1.8;margin:14px 0 0}
+#modeSet .row{flex-direction:column;align-items:stretch;gap:10px}#menu .modes{display:flex;gap:6px}#menu .modes button{flex:1 1 0;padding:10px 4px;letter-spacing:.1em}
+#menu .about{font-size:10px;font-weight:700;letter-spacing:.22em;opacity:.85;margin:10px 0 0;line-height:1.7}
+#menu .sub{font:900 14px/1 "Helvetica Neue",Arial,sans-serif;letter-spacing:.2em;background:none;color:#fff;border:0;padding:14px 0;cursor:pointer;text-align:left;width:100%;border-bottom:1px solid #ffffff55}
+#menu [hidden]{display:none!important}
+#card .big{font-weight:900;font-size:clamp(44px,14vw,84px);line-height:.85;letter-spacing:-.04em;font-variant-numeric:tabular-nums;margin:6px 0 4px}#card.best .big{color:#ff7428}
+#menu .what{font-size:11px;font-weight:700;letter-spacing:.3em;margin:0 0 10px}#card .what{margin:0}#card .new{color:#ff7428;font-size:12px;font-weight:900;letter-spacing:.3em}
+#menu a{font-size:10px}
+/* (a new best's autograph: a blank, a line to sign on, the ink a pen's) */
+#sign{margin-top:14px}#sign .ask{position:absolute;left:14px;top:13px;font-size:11px;font-weight:900;letter-spacing:.3em;pointer-events:none}
+#sign button{position:absolute;right:8px;top:8px;font:700 10px/1 "Helvetica Neue",Arial,sans-serif;letter-spacing:.18em;background:none;color:#fff;border:1.5px solid #fff;padding:8px 10px;cursor:pointer}
+#sign .pad{position:relative;height:136px;background:#ffffff16;cursor:crosshair;touch-action:none}
+#sign .pad::after{content:"";position:absolute;left:14px;right:14px;bottom:28px;border-bottom:1.5px solid #ffffff99;pointer-events:none}
+#sign .pad canvas{position:absolute;inset:0;width:100%;height:100%;touch-action:none}
+#sign .x{position:absolute;left:14px;bottom:33px;font-size:18px;font-weight:900;line-height:1;pointer-events:none}
+#sign .here{position:absolute;left:0;right:0;bottom:8px;text-align:center;font-size:9px;font-weight:700;letter-spacing:.28em;opacity:.7;pointer-events:none;transition:opacity .2s}#sign.inked .here{opacity:0}
+/* (the leaderboard: the place, the autograph, the score and where it was ridden) */
+#board .row .modes{flex:1}
+/* (a card or the board needs the room: the tag line goes, and a card to sign sits its rows closer) */
+@media (max-aspect-ratio:1/1){#menu[data-panel=card] .tag,#menu[data-panel=board] .tag{display:none}}#card.signing .row{padding:9px 0}
+@media (max-height:700px){#cardRows{display:grid;grid-template-columns:1fr 1fr;column-gap:18px}#sign .pad{height:112px}}
+@media (max-height:520px){#menu{padding-top:16px;padding-bottom:16px}#card.signing .row{padding:6px 0}#sign{margin-top:8px}#sign .pad{height:96px}#card .big{font-size:48px}#card .acts{flex-direction:row;margin-top:10px!important}#card .acts button{flex:1}}
+#boardList{list-style:none;margin:0;padding:0;max-height:min(52vh,560px);overflow-y:auto}
+#boardList li{display:grid;grid-template-columns:1.6em minmax(0,1fr) auto;align-items:center;gap:12px;padding:6px 0;border-bottom:1px solid #ffffff55}
+#boardList .n{font-weight:900;font-size:20px;letter-spacing:-.03em}
+#boardList canvas{position:static;display:block;width:100%;height:46px}
+#boardList .pts{text-align:right;font-weight:900;font-size:22px;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
+#boardList .pts small{display:block;font-size:9px;font-weight:700;letter-spacing:.2em;margin-top:5px;opacity:.85}
+#boardList li.now{color:#ff7428}#boardList li.par .pts small{opacity:1;color:#ffd9c2}
+#boardList li.none{display:block;padding:16px 0;font-size:10px;font-weight:700;letter-spacing:.24em;line-height:1.7;opacity:.85}
+.titled header,.titled #hint{transition:opacity .35s}
+body:has(#menu.on) header,body:has(#menu.on) #hint,body:has(#menu.on) #notes{opacity:0}
+.direct #menuBtn{display:none}
+.preview header,.preview #hint,.preview #notes,.preview #note,.preview #menu{display:none}
+.demo #hint,.demo #notes,.demo #menu{display:none}
+</style></head><body>
+<canvas id="world" aria-label="A motocross rider racing down a faceted mountain road. Drag left or right to steer; drag up for throttle and down to brake; in the air, drag down to pull the nose up and over, up to push it down."></canvas><canvas id="speed"></canvas>
+<header><div class="title"><button id="menuBtn" aria-label="Menu and settings (pauses)"><i></i></button><div><b>SWITCH<br>BACK</b><small>SEED <span id="seed">1</span></small></div></div><div class="pace"><b id="score">0</b><span id="status"></span><span id="combo"></span></div></header>
+<div id="note" role="status" aria-live="polite"></div><div id="hint">DRAG ← → STEER · ↑ GAS · ↓ BRAKE<br>IN THE AIR ↓ ↑ TIPS THE NOSE</div><a id="notes" href="{{readme}}">NOTES</a>
+<div id="menu" class="on" role="dialog" aria-modal="true" aria-label="Switchback">
+  <div><h1>SWITCH<span>BACK</span><canvas id="autograph" aria-hidden="true"></canvas></h1><p class="tag">A RUN DOWN A MOUNTAIN MADE AS YOU RIDE IT</p></div>
+  <div>
+    <div id="main">
+      <div class="acts"><button id="go">RIDE</button><button id="toBoard">LEADERBOARD</button><button id="again" hidden>START AGAIN</button><button id="finish" hidden>FINISH</button><button id="quit" hidden>QUIT</button></div>
+      <div class="set" id="modeSet">
+        <div class="row"><span>MODE</span><span class="ctl modes" role="group" aria-label="Mode"><button data-mode="run">RUN</button><button data-mode="lives">LIVES</button><button data-mode="time">TIME</button><button data-mode="endless">ENDLESS</button></span></div>
+        <p class="about" id="about"></p>
+      </div>
+      <button class="sub" id="toPrefs">SETTINGS ›</button>
+      <p class="how">DRAG ← → STEER · ↑ GAS · ↓ BRAKE<br>IN THE AIR: ← → WHIP · ↓ ↑ TIP THE NOSE<br>FLAGS ARE CHECKPOINTS · <a href="{{readme}}">NOTES</a></p>
+    </div>
+    <div id="prefs" hidden>
+      <div class="set">
+        <div class="row"><span>SOUND</span><span class="ctl"><input id="vol" type="range" min="0" max="100" aria-label="Volume"><button id="snd" aria-pressed="true">ON</button></span></div>
+        <div class="row"><span>CAMERA</span><span class="ctl" role="group" aria-label="Camera distance"><button data-cam="close">CLOSE</button><button data-cam="mid">MID</button><button data-cam="far">FAR</button></span></div>
+        <div class="row"><span>MOUNTAIN <span id="mseed">1</span></span><span class="ctl"><button id="another">ANOTHER</button></span></div>
+      </div>
+      <button class="sub" id="fromPrefs">‹ BACK</button>
+    </div>
+    <div id="board" hidden>
+      <p class="what">LEADERBOARD · KEPT IN THIS BROWSER</p>
+      <div class="set"><div class="row"><span class="ctl modes" role="group" aria-label="Leaderboard mode"><button data-board="run">RUN</button><button data-board="lives">LIVES</button><button data-board="time">TIME</button><button data-board="endless">ENDLESS</button></span></div></div>
+      <ol id="boardList"></ol>
+      <button class="sub" id="fromBoard">‹ BACK</button>
+    </div>
+    <div id="card" hidden>
+      <p class="what" id="cardMode">RUN</p><div class="big" id="cardBig">0</div><p class="new" id="cardNew"></p>
+      <div class="set" id="cardRows"></div>
+      <div id="sign" hidden>
+        <div class="pad"><canvas id="pad" aria-label="Sign your run: draw here with a finger, a pen or the mouse"></canvas><span class="ask">SIGN IT?</span><button id="clearSig" hidden>CLEAR</button><span class="x">×</span><span class="here">YOUR AUTOGRAPH, NOT YOUR NAME</span></div>
+      </div>
+      <div class="acts" style="margin-top:16px"><button id="cardAgain">AGAIN</button><button id="cardMenu">MENU</button></div>
+    </div>
+  </div>
+</div>
+<script type="module" src="{{app}}"></script></body></html>

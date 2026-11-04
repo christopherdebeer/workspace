@@ -42,6 +42,7 @@ export async function withWood(fn, { width = 390, height = 844 } = {}) {
   const app = built.outputFiles[0].text;
   // (the lab's page for the experiment, its bundle served from here)
   const exp = process.env.EXPERIMENT ?? 'mistwood';
+  const ready = process.env.READY ?? '__mistwood';
   const html = readFileSync(join(CELL, `static/${exp}.html`), 'utf8').replace('{{app}}', '/app.js').replace(/\{\{assets\}\}/g, '/assets/');
   const TYPES = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp', svg: 'image/svg+xml' };
   const srv = http.createServer((req, res) => {
@@ -84,15 +85,24 @@ export async function withWood(fn, { width = 390, height = 844 } = {}) {
     browser,
     /** A page on the wood with these flags (a query string, without the `?`). Errors are collected. */
     async open(query = '', size = {}) {
-      const page = await browser.newPage({ viewport: { width: size.width ?? width, height: size.height ?? height }, deviceScaleFactor: 1, hasTouch: !!size.hasTouch });
+      const page = await browser.newPage({ viewport: { width: size.width ?? width, height: size.height ?? height }, deviceScaleFactor: size.dpr ?? 1, hasTouch: !!size.hasTouch });
       page.errors = [];
       page.on('pageerror', (e) => page.errors.push(String(e)));
       page.on('console', (m) => m.type() === 'error' && !m.text().includes('404') && page.errors.push(m.text()));
       await page.goto(base + (query ? `?${query}` : ''), { timeout: 600000 });
-      await page.waitForFunction(() => window.__mistwood, null, { timeout: 600000 });
+      // (what the experiment reports: `__mistwood`, or READY=__<id> for another; but a page that has thrown (a shader
+      // that won't compile, a script error) never will, so give up on it at once, saying why)
+      const t0 = Date.now();
+      for (;;) {
+        const fatal = page.errors.find((e) => !/Failed to load resource/.test(e));
+        if (fatal) { await page.close(); throw new Error(`page failed (${query}): ${fatal.slice(0, 1200)}`); }
+        if (await page.evaluate((k) => !!window[k], ready)) break;
+        if (Date.now() - t0 > 600000) { await page.close(); throw new Error(`page never ready (${query})`); }
+        await page.waitForTimeout(250);
+      }
       return page;
     },
-    state: (page) => page.evaluate(() => window.__mistwood),
+    state: (page) => page.evaluate((k) => window[k], ready),
     /** Set flags in the page (live ones apply at once: x, y, heading, seed, hour, fog …). */
     go: (page, flags) => page.evaluate((f) => window.__flags.setFlags(f), flags),
     /** Wait until everything in view is grown and baked (or the time runs out). */

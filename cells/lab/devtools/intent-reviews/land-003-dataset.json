@@ -1,0 +1,1262 @@
+[
+ {
+  "round": "a1",
+  "id": "land33-1",
+  "recipe": "block",
+  "authored": "Raise a single block here.",
+  "preferred": "Raise a single stone block/plinth on the ground exactly where I tapped (first build, testing the toy)",
+  "recovered": "yes",
+  "toyVerdict": "fulfilled",
+  "gap": "",
+  "verdict": "fulfilled",
+  "locationHonoured": "yes",
+  "endpointsHonoured": "n/a",
+  "coherence": 2,
+  "surprise": "neutral",
+  "handResponse": "build-on",
+  "disconnect": "",
+  "ops": [
+   {
+    "why": "raise",
+    "reached": null
+   }
+  ],
+  "during": null,
+  "said": "a block raised · hold to read it otherwise",
+  "alts": []
+ },
+ {
+  "round": "a1",
+  "id": "land33-2",
+  "recipe": "down-to-water",
+  "authored": "A way down from the top of the block I just raised to the water's edge.",
+  "preferred": "Make steps down from the top of my block to the ground on its west side, leading toward the stream",
+  "recovered": "yes",
+  "toyVerdict": "fulfilled",
+  "gap": "foot of stairs stops on the bank a little short of the water itself",
+  "verdict": "fulfilled",
+  "locationHonoured": "yes",
+  "endpointsHonoured": "yes",
+  "coherence": 3,
+  "surprise": "welcome",
+  "handResponse": "build-on",
+  "disconnect": "",
+  "ops": [
+   {
+    "why": "stairs",
+    "note": "going down 1 level, round what's in the way",
+    "took": [
+     "routed-round"
+    ],
+    "reached": true
+   }
+  ],
+  "during": "going down 1 level, round what's in the way",
+  "said": "going down 1 level, round what's in the way · hold at the end to read it otherwise",
+  "alts": [
+   "going down 1 level, round what's in the way",
+   "a walkway out at its height"
+  ]
+ },
+ {
+  "round": "a1",
+  "id": "land33-3",
+  "recipe": "pair-a",
+  "authored": "Raise a block here, the first of two I mean to join.",
+  "preferred": "Raise another stone block on the ground here, a second piece separate from the first",
+  "recovered": "yes",
+  "toyVerdict": "fulfilled",
+  "gap": "the 'first of two' purpose is invisible in a tap",
+  "verdict": "partial",
+  "locationHonoured": "yes",
+  "endpointsHonoured": "n/a",
+  "coherence": 2,
+  "surprise": "unwelcome",
+  "handResponse": "keep",
+  "disconnect": "boulder beside the tap quietly removed",
+  "ops": [
+   {
+    "why": "raise",
+    "reached": null
+   }
+  ],
+  "during": null,
+  "said": "a block raised · hold to read it otherwise",
+  "alts": []
+ },
+ {
+  "round": "a1",
+  "id": "land33-4",
+  "recipe": "pair-b",
+  "authored": "Raise a second block here, at the same ground level, to be joined to the first.",
+  "preferred": "Raise another single block on the open sand here",
+  "recovered": "partly",
+  "toyVerdict": "fulfilled",
+  "gap": "my preferred reading missed the 'pair to be joined' purpose; equal ground level unverifiable",
+  "verdict": "fulfilled",
+  "locationHonoured": "yes",
+  "endpointsHonoured": "n/a",
+  "coherence": 2,
+  "surprise": "none",
+  "handResponse": "build-on",
+  "disconnect": "",
+  "ops": [
+   {
+    "why": "raise",
+    "reached": null
+   }
+  ],
+  "during": null,
+  "said": "a block raised · hold to read it otherwise",
+  "alts": []
+ },
+ {
+  "round": "a1",
+  "id": "land33-5",
+  "recipe": "link",
+  "authored": "A walkway joining the tops of the two blocks, at their height.",
+  "preferred": "Join the tops of the two blocks with a raised walkway/bridge across the gap",
+  "recovered": "yes",
+  "toyVerdict": "fulfilled",
+  "gap": "walkway doglegs with extra bulk instead of running straight between the tops",
+  "verdict": "fulfilled",
+  "locationHonoured": "yes",
+  "endpointsHonoured": "yes",
+  "coherence": 2,
+  "surprise": "neutral",
+  "handResponse": "keep",
+  "disconnect": "joined, but by a bulky dogleg rather than my direct line",
+  "ops": [
+   {
+    "why": "bridge",
+    "note": "a bridge",
+    "reached": true
+   }
+  ],
+  "during": "a bridge",
+  "said": "a bridge",
+  "alts": []
+ },
+ {
+  "round": "a1",
+  "id": "land33-6",
+  "recipe": "climb",
+  "authored": "A path up the slope from here to the higher ground where I stop.",
+  "preferred": "A route through the construction: step up from the west ground onto the block tops, walk across, and get down to the east side",
+  "recovered": "partly",
+  "toyVerdict": "partial",
+  "gap": "I read it as crossing the block tops, not climbing the slope; toy climbed but stopped short of the end",
+  "verdict": "partial",
+  "locationHonoured": "partly",
+  "endpointsHonoured": "partly",
+  "coherence": 2,
+  "surprise": "unwelcome",
+  "handResponse": "look-for-alternative",
+  "disconnect": "routed round via the old stairs instead of over the tops I drew across",
+  "ops": [
+   {
+    "why": "way",
+    "note": "a way: 3 paved, a flight of 1, begun a step on, round what's in the way",
+    "took": [
+     "smoothed",
+     "begun-on",
+     "routed-round"
+    ],
+    "reached": true
+   }
+  ],
+  "during": "a way: 3 paved, a flight of 1, begun a step on, round what's in the way",
+  "said": "a way: 3 paved, a flight of 1, begun a step on, round what's in the way · hold at the end to read it otherwise",
+  "alts": [
+   "a way: 3 paved, a flight of 1, begun a step on, round what's in the way",
+   "a way: 3 paved, a flight of 1, begun a step on, round what's in the way, as drawn",
+   "as drawn",
+   "a row of olives",
+   "a gated wall"
+  ]
+ },
+ {
+  "round": "a1",
+  "id": "land33-7",
+  "recipe": "cross",
+  "authored": "A way across the stream, from one bank to the other.",
+  "preferred": "Bridge the stream: connect the far bank to the paved landing at the stair foot",
+  "recovered": "yes",
+  "toyVerdict": "partial",
+  "gap": "stops at the water instead of crossing it",
+  "verdict": "partial",
+  "locationHonoured": "partly",
+  "endpointsHonoured": "partly",
+  "coherence": 1,
+  "surprise": "unwelcome",
+  "handResponse": "undo-and-retry",
+  "disconnect": "no crossing; a jetty on the far side instead of a bridge",
+  "ops": [
+   {
+    "why": "way",
+    "note": "a way that can't reach as drawn: joining what it meets; at the water: steps down into the water from the bank, a post to tie up to",
+    "took": [
+     "trimmed"
+    ],
+    "reached": false
+   }
+  ],
+  "during": "a way that can't reach as drawn: joining what it meets",
+  "said": "it joins the stone it meets on the way",
+  "alts": [
+   "a way that can't reach as drawn: joining what it meets",
+   "a row of olives",
+   "at the water: the way ending at the bank",
+   "an arcaded wall"
+  ]
+ },
+ {
+  "round": "a1",
+  "id": "land33-8",
+  "recipe": "yard",
+  "authored": "A walled yard enclosing this patch of ground.",
+  "preferred": "Wall in this patch of ground: an enclosure/walled yard following the loop",
+  "recovered": "yes",
+  "toyVerdict": "acceptable-alternative",
+  "gap": "a raised walk-round rather than a yard wall, and it encloses more than the drawn patch",
+  "verdict": "acceptable-alternative",
+  "locationHonoured": "partly",
+  "endpointsHonoured": "n/a",
+  "coherence": 2,
+  "surprise": "neutral",
+  "handResponse": "keep",
+  "disconnect": "enclosure much bigger and further north than my loop",
+  "ops": [
+   {
+    "why": "way",
+    "note": "a walk all the way round",
+    "took": [
+     "begun-on"
+    ],
+    "reached": true
+   }
+  ],
+  "during": "a walk all the way round",
+  "said": "a walk all the way round · hold at the end to read it otherwise",
+  "alts": [
+   "a walk all the way round",
+   "a court, walled round",
+   "a grove of 1 olives",
+   "a court, walled round"
+  ]
+ },
+ {
+  "round": "a1",
+  "id": "land33-9",
+  "recipe": "winding",
+  "authored": "A winding path on the ground that keeps the zigzags I drew.",
+  "preferred": "A winding path from the west bank, round the blocks, ending by the yard to the south-east",
+  "recovered": "yes",
+  "toyVerdict": "misread",
+  "gap": "zigzag ground path became raised terrace and stairs",
+  "verdict": "misread",
+  "locationHonoured": "partly",
+  "endpointsHonoured": "no",
+  "coherence": 1,
+  "surprise": "unwelcome",
+  "handResponse": "undo-and-retry",
+  "disconnect": "a winding way became a bulky terrace and stair up",
+  "ops": [
+   {
+    "why": "way",
+    "note": "a way: a flight of 3, round what's in the way",
+    "took": [
+     "smoothed",
+     "routed-round"
+    ],
+    "reached": true
+   }
+  ],
+  "during": "a way: a flight of 3, round what's in the way",
+  "said": "a way: a flight of 3, round what's in the way · hold at the end to read it otherwise",
+  "alts": [
+   "a way: a flight of 3, round what's in the way",
+   "a way: a flight of 3, round what's in the way, as drawn",
+   "as drawn",
+   "a ladder instead",
+   "a row of olives",
+   "a gated wall"
+  ]
+ },
+ {
+  "round": "a1b",
+  "id": "land33-1",
+  "recipe": "block",
+  "authored": "Raise a single block here.",
+  "preferred": "Raise a single small stone block/platform on the ground right where I tapped (first marker of a build).",
+  "recovered": "yes",
+  "toyVerdict": "fulfilled",
+  "gap": "",
+  "verdict": "fulfilled",
+  "locationHonoured": "yes",
+  "endpointsHonoured": "n/a",
+  "coherence": 3,
+  "surprise": "neutral",
+  "handResponse": "build-on",
+  "disconnect": "",
+  "ops": [
+   {
+    "why": "raise",
+    "reached": null
+   }
+  ],
+  "during": null,
+  "said": "a block raised · hold to read it otherwise",
+  "alts": []
+ },
+ {
+  "round": "a1b",
+  "id": "land33-2",
+  "recipe": "down-to-water",
+  "authored": "A way down from the top of the block I just raised to the water's edge.",
+  "preferred": "Reach out from the block's top: extend a level walkway/ledge/arm westward from the cube top to the spot by the stream bank.",
+  "recovered": "partly",
+  "toyVerdict": "fulfilled",
+  "gap": "way down reached the water but via a detour and extra blocks",
+  "verdict": "acceptable-alternative",
+  "locationHonoured": "partly",
+  "endpointsHonoured": "partly",
+  "coherence": 2,
+  "surprise": "neutral",
+  "handResponse": "look-for-alternative",
+  "disconnect": "wanted a level arm out; got stairs down round the back plus extra blocks",
+  "ops": [
+   {
+    "why": "stairs",
+    "note": "going down 1 level, round what's in the way",
+    "took": [
+     "routed-round"
+    ],
+    "reached": true
+   }
+  ],
+  "during": "going down 1 level, round what's in the way",
+  "said": "going down 1 level, round what's in the way · hold at the end to read it otherwise",
+  "alts": [
+   "going down 1 level, round what's in the way",
+   "a walkway out at its height"
+  ]
+ },
+ {
+  "round": "a1b",
+  "id": "land33-3",
+  "recipe": "pair-a",
+  "authored": "Raise a block here, the first of two I mean to join.",
+  "preferred": "Raise a new single block on the ground right here, next to the existing low block.",
+  "recovered": "yes",
+  "toyVerdict": "fulfilled",
+  "gap": "",
+  "verdict": "fulfilled",
+  "locationHonoured": "yes",
+  "endpointsHonoured": "n/a",
+  "coherence": 3,
+  "surprise": "neutral",
+  "handResponse": "build-on",
+  "disconnect": "neighbouring rocks vanished",
+  "ops": [
+   {
+    "why": "raise",
+    "reached": null
+   }
+  ],
+  "during": null,
+  "said": "a block raised · hold to read it otherwise",
+  "alts": []
+ },
+ {
+  "round": "a1b",
+  "id": "land33-4",
+  "recipe": "pair-b",
+  "authored": "Raise a second block here, at the same ground level, to be joined to the first.",
+  "preferred": "Raise another single block here on the open sand, a second pier a short distance from the last one (perhaps to join them later).",
+  "recovered": "yes",
+  "toyVerdict": "fulfilled",
+  "gap": "",
+  "verdict": "fulfilled",
+  "locationHonoured": "yes",
+  "endpointsHonoured": "n/a",
+  "coherence": 3,
+  "surprise": "none",
+  "handResponse": "build-on",
+  "disconnect": "",
+  "ops": [
+   {
+    "why": "raise",
+    "reached": null
+   }
+  ],
+  "during": null,
+  "said": "a block raised · hold to read it otherwise",
+  "alts": []
+ },
+ {
+  "round": "a1b",
+  "id": "land33-5",
+  "recipe": "link",
+  "authored": "A walkway joining the tops of the two blocks, at their height.",
+  "preferred": "Join the two block tops with a level walkway/bridge across the gap at their height.",
+  "recovered": "yes",
+  "toyVerdict": "fulfilled",
+  "gap": "L-shaped detour instead of the drawn diagonal",
+  "verdict": "fulfilled",
+  "locationHonoured": "yes",
+  "endpointsHonoured": "yes",
+  "coherence": 2,
+  "surprise": "neutral",
+  "handResponse": "keep",
+  "disconnect": "joined, but as a solid L the other way round",
+  "ops": [
+   {
+    "why": "bridge",
+    "note": "a bridge",
+    "reached": true
+   }
+  ],
+  "during": "a bridge",
+  "said": "a bridge",
+  "alts": []
+ },
+ {
+  "round": "a1b",
+  "id": "land33-6",
+  "recipe": "climb",
+  "authored": "A path up the slope from here to the higher ground where I stop.",
+  "preferred": "A route right across the build: get up from the west ground onto the block tops, walk along them, and carry on out to the east side.",
+  "recovered": "partly",
+  "toyVerdict": "partial",
+  "gap": "climbs, but by a different route and not visibly to where I stopped",
+  "verdict": "misread",
+  "locationHonoured": "partly",
+  "endpointsHonoured": "partly",
+  "coherence": 2,
+  "surprise": "unwelcome",
+  "handResponse": "undo-and-retry",
+  "disconnect": "swept east along the tops; got a way north up to the high top",
+  "ops": [
+   {
+    "why": "way",
+    "note": "a way: 3 paved, a flight of 1, begun a step on, round what's in the way",
+    "took": [
+     "smoothed",
+     "begun-on",
+     "routed-round"
+    ],
+    "reached": true
+   }
+  ],
+  "during": "a way: 3 paved, a flight of 1, begun a step on, round what's in the way",
+  "said": "a way: 3 paved, a flight of 1, begun a step on, round what's in the way · hold at the end to read it otherwise",
+  "alts": [
+   "a way: 3 paved, a flight of 1, begun a step on, round what's in the way",
+   "a way: 3 paved, a flight of 1, begun a step on, round what's in the way, as drawn",
+   "as drawn",
+   "a row of olives",
+   "a gated wall"
+  ]
+ },
+ {
+  "round": "a1b",
+  "id": "land33-7",
+  "recipe": "cross",
+  "authored": "A way across the stream, from one bank to the other.",
+  "preferred": "Bridge the stream: a crossing from the far bank over the water to the foot of my stair/paved way.",
+  "recovered": "yes",
+  "toyVerdict": "partial",
+  "gap": "stopped at the water's edge instead of crossing",
+  "verdict": "partial",
+  "locationHonoured": "partly",
+  "endpointsHonoured": "partly",
+  "coherence": 2,
+  "surprise": "neutral",
+  "handResponse": "look-for-alternative",
+  "disconnect": "wanted to cross the stream; got a landing that stops at the water",
+  "ops": [
+   {
+    "why": "way",
+    "note": "a way that can't reach as drawn: joining what it meets; at the water: steps down into the water from the bank, a post to tie up to",
+    "took": [
+     "trimmed"
+    ],
+    "reached": false
+   }
+  ],
+  "during": "a way that can't reach as drawn: joining what it meets",
+  "said": "it joins the stone it meets on the way",
+  "alts": [
+   "a way that can't reach as drawn: joining what it meets",
+   "a row of olives",
+   "at the water: the way ending at the bank",
+   "an arcaded wall"
+  ]
+ },
+ {
+  "round": "a1b",
+  "id": "land33-8",
+  "recipe": "yard",
+  "authored": "A walled yard enclosing this patch of ground.",
+  "preferred": "Wall in this patch: a walled enclosure/courtyard following the loop.",
+  "recovered": "yes",
+  "toyVerdict": "acceptable-alternative",
+  "gap": "a raised ring-walk instead of a yard wall on the ground",
+  "verdict": "acceptable-alternative",
+  "locationHonoured": "partly",
+  "endpointsHonoured": "n/a",
+  "coherence": 2,
+  "surprise": "neutral",
+  "handResponse": "look-for-alternative",
+  "disconnect": "asked for a walled patch on the ground; got a big raised ring-walk tied to the high top",
+  "ops": [
+   {
+    "why": "way",
+    "note": "a walk all the way round",
+    "took": [
+     "begun-on"
+    ],
+    "reached": true
+   }
+  ],
+  "during": "a walk all the way round",
+  "said": "a walk all the way round · hold at the end to read it otherwise",
+  "alts": [
+   "a walk all the way round",
+   "a court, walled round",
+   "a grove of 1 olives",
+   "a court, walled round"
+  ]
+ },
+ {
+  "round": "a1b",
+  "id": "land33-9",
+  "recipe": "winding",
+  "authored": "A winding path on the ground that keeps the zigzags I drew.",
+  "preferred": "A winding way that follows my line: from the west ground up onto the block tops, along them, and down off the east side to the ground there.",
+  "recovered": "no",
+  "toyVerdict": "misread",
+  "gap": "wanted a zigzag ground path; got bulk and a stair up over the blocks",
+  "verdict": "partial",
+  "locationHonoured": "partly",
+  "endpointsHonoured": "partly",
+  "coherence": 1,
+  "surprise": "unwelcome",
+  "handResponse": "undo-and-retry",
+  "disconnect": "wanted to wander over and down; it climbed up to the ring and bulked up the blocks",
+  "ops": [
+   {
+    "why": "way",
+    "note": "a way: a flight of 3, round what's in the way",
+    "took": [
+     "smoothed",
+     "routed-round"
+    ],
+    "reached": true
+   }
+  ],
+  "during": "a way: a flight of 3, round what's in the way",
+  "said": "a way: a flight of 3, round what's in the way · hold at the end to read it otherwise",
+  "alts": [
+   "a way: a flight of 3, round what's in the way",
+   "a way: a flight of 3, round what's in the way, as drawn",
+   "as drawn",
+   "a ladder instead",
+   "a row of olives",
+   "a gated wall"
+  ]
+ },
+ {
+  "round": "a2",
+  "id": "land35-1",
+  "recipe": "block",
+  "authored": "Raise a single block here.",
+  "preferred": "Raise a single stone block / small stone mound right where I tapped, on the open slope.",
+  "recovered": "yes",
+  "toyVerdict": "fulfilled",
+  "gap": "",
+  "verdict": "fulfilled",
+  "locationHonoured": "yes",
+  "endpointsHonoured": "n/a",
+  "coherence": 2,
+  "surprise": "none",
+  "handResponse": "build-on",
+  "disconnect": "",
+  "ops": [
+   {
+    "why": "raise",
+    "reached": null
+   }
+  ],
+  "during": null,
+  "said": "a block raised · hold to read it otherwise",
+  "alts": []
+ },
+ {
+  "round": "a2",
+  "id": "land35-2",
+  "recipe": "down-to-water",
+  "authored": "A way down from the top of the block I just raised to the water's edge.",
+  "preferred": "Pump the block up: make this block taller / stack another block on it.",
+  "recovered": "no",
+  "toyVerdict": "no-effect",
+  "gap": "the drawn stroke never went toward the water",
+  "verdict": "no-effect",
+  "locationHonoured": "n/a",
+  "endpointsHonoured": "n/a",
+  "coherence": 3,
+  "surprise": "neutral",
+  "handResponse": "look-for-alternative",
+  "disconnect": "rub-to-raise read as a pointless walkway; nothing happened",
+  "ops": [],
+  "during": "nothing to lay along that: a walkway would add nothing that isn't there",
+  "said": "nothing to lay along that: a walkway would add nothing that isn't there",
+  "alts": []
+ },
+ {
+  "round": "a2",
+  "id": "land35-3",
+  "recipe": "pair-a",
+  "authored": "Raise a block here, the first of two I mean to join.",
+  "preferred": "Raise a second block here, beside the first, between it and the old ruin.",
+  "recovered": "yes",
+  "toyVerdict": "fulfilled",
+  "gap": "future join plan invisible in a tap",
+  "verdict": "acceptable-alternative",
+  "locationHonoured": "yes",
+  "endpointsHonoured": "n/a",
+  "coherence": 2,
+  "surprise": "neutral",
+  "handResponse": "keep",
+  "disconnect": "block landed on the ruin and towered over the first",
+  "ops": [
+   {
+    "why": "raise",
+    "reached": null
+   }
+  ],
+  "during": null,
+  "said": "a block raised · hold to read it otherwise",
+  "alts": []
+ },
+ {
+  "round": "a2",
+  "id": "land35-4",
+  "recipe": "pair-b",
+  "authored": "Raise a second block here, at the same ground level, to be joined to the first.",
+  "preferred": "Raise a single block here on the open ground, apart from the tower.",
+  "recovered": "yes",
+  "toyVerdict": "fulfilled",
+  "gap": "pair tops differ: first block stacked on the ruin",
+  "verdict": "fulfilled",
+  "locationHonoured": "yes",
+  "endpointsHonoured": "n/a",
+  "coherence": 3,
+  "surprise": "none",
+  "handResponse": "build-on",
+  "disconnect": "",
+  "ops": [
+   {
+    "why": "raise",
+    "reached": null
+   }
+  ],
+  "during": null,
+  "said": "a block raised · hold to read it otherwise",
+  "alts": []
+ },
+ {
+  "round": "a2",
+  "id": "land35-5",
+  "recipe": "climb",
+  "authored": "A path up the slope from here to the higher ground where I stop.",
+  "preferred": "A crenellated/battlemented wall running from the tower east past the first block to the ridge.",
+  "recovered": "partly",
+  "toyVerdict": "partial",
+  "gap": "level rampart from tower top, not a climbing ground path",
+  "verdict": "fulfilled",
+  "locationHonoured": "yes",
+  "endpointsHonoured": "yes",
+  "coherence": 2,
+  "surprise": "welcome",
+  "handResponse": "keep",
+  "disconnect": "zigzag profile flattened into a level wall-walk",
+  "ops": [
+   {
+    "why": "walkway",
+    "note": "a walkway; at its end: a parapet across its end",
+    "took": [
+     "smoothed"
+    ],
+    "reached": true
+   }
+  ],
+  "during": "a walkway",
+  "said": "a walkway; at its end: a parapet across its end · hold at the end to read it otherwise",
+  "alts": [
+   "a walkway",
+   "a walk all the way round, as drawn",
+   "at its end: a small terrace at its end, railed: a belvedere",
+   "at its end: the belvedere on its own pier, a lantern at it",
+   "a way: 1 paved, a flight of 2, round what's in the way"
+  ]
+ },
+ {
+  "round": "a2",
+  "id": "land35-6",
+  "recipe": "cross",
+  "authored": "A way across the stream, from one bank to the other.",
+  "preferred": "Join the far bank to the fortress: a way/bridge across the stream and over the ridge onto the wall-walk.",
+  "recovered": "yes",
+  "toyVerdict": "fulfilled",
+  "gap": "",
+  "verdict": "fulfilled",
+  "locationHonoured": "yes",
+  "endpointsHonoured": "yes",
+  "coherence": 3,
+  "surprise": "welcome",
+  "handResponse": "keep",
+  "disconnect": "",
+  "ops": [
+   {
+    "why": "way",
+    "note": "a way: 2 paved, a flight of 2, on a rampant arch, a bridge of 2; where it meets: the gap closed",
+    "reached": true
+   }
+  ],
+  "during": "a way: 2 paved, a flight of 2, on a rampant arch, a bridge of 2",
+  "said": "a way: 2 paved, a flight of 2, on a rampant arch, a bridge of 2; where it meets: the gap closed · hold at the end to read it otherwise",
+  "alts": [
+   "a way: 2 paved, a flight of 2, on a rampant arch, a bridge of 2",
+   "a stair tower",
+   "on the ground, to its foot",
+   "a row of olives",
+   "where it meets: a landing where they meet",
+   "where it meets: a landing on its own pier, a lantern at it"
+  ]
+ },
+ {
+  "round": "a2",
+  "id": "land35-7",
+  "recipe": "yard",
+  "authored": "A walled yard enclosing this patch of ground.",
+  "preferred": "Enclose the tower: a ring wall / walk all the way round it (a little court or ward around the tower).",
+  "recovered": "partly",
+  "toyVerdict": "misread",
+  "gap": "enclosure read as a linear walkway over tops",
+  "verdict": "misread",
+  "locationHonoured": "partly",
+  "endpointsHonoured": "partly",
+  "coherence": 2,
+  "surprise": "neutral",
+  "handResponse": "look-for-alternative",
+  "disconnect": "loop round the tower became a flat deck on its top",
+  "ops": [
+   {
+    "why": "walkway",
+    "note": "a walkway",
+    "reached": true
+   }
+  ],
+  "during": "a walkway",
+  "said": "a walkway · hold at the end to read it otherwise",
+  "alts": [
+   "a walkway",
+   "a walk all the way round"
+  ]
+ },
+ {
+  "round": "a2",
+  "id": "land35-8",
+  "recipe": "winding",
+  "authored": "A winding path on the ground that keeps the zigzags I drew.",
+  "preferred": "A way from the east end of the fortress top across it and down to the ground at the west foot (stairs down at the end).",
+  "recovered": "partly",
+  "toyVerdict": "misread",
+  "gap": "zigzags dropped; stroke lay over the fort, not ground",
+  "verdict": "partial",
+  "locationHonoured": "partly",
+  "endpointsHonoured": "partly",
+  "coherence": 1,
+  "surprise": "unwelcome",
+  "handResponse": "undo-and-retry",
+  "disconnect": "no visible way to where I stopped; water steps I didn't ask for",
+  "ops": [
+   {
+    "why": "way",
+    "note": "a way: 3 paved, a flight of 1, hung from the wall, a bridge of 1; at the water: steps down into the water from the bank, a post to tie up to",
+    "took": [
+     "smoothed",
+     "from-bank"
+    ],
+    "reached": true
+   }
+  ],
+  "during": "a way: 3 paved, a flight of 1, hung from the wall, a bridge of 1",
+  "said": "a way: 3 paved, a flight of 1, hung from the wall, a bridge of 1; at the water: steps down into the water from the bank, a post to tie up to · hold at the end to read it otherwise",
+  "alts": [
+   "a way: 3 paved, a flight of 1, hung from the wall, a bridge of 1",
+   "a way: 4 paved, a flight of 1, round what's in the way, as drawn",
+   "a row of olives",
+   "at the water: the way ending at the bank",
+   "a wall"
+  ]
+ },
+ {
+  "round": "a3",
+  "id": "land37-1",
+  "recipe": "block",
+  "authored": "Raise a single block here.",
+  "preferred": "Raise a single stone block/plinth right where I tapped, as the first piece of building (following the hint literally).",
+  "recovered": "yes",
+  "toyVerdict": "fulfilled",
+  "gap": "",
+  "verdict": "fulfilled",
+  "locationHonoured": "yes",
+  "endpointsHonoured": "n/a",
+  "coherence": 2,
+  "surprise": "none",
+  "handResponse": "build-on",
+  "disconnect": "",
+  "ops": [
+   {
+    "why": "raise",
+    "reached": null
+   }
+  ],
+  "during": null,
+  "said": "a block raised · hold to read it otherwise",
+  "alts": []
+ },
+ {
+  "round": "a3",
+  "id": "land37-2",
+  "recipe": "down-to-water",
+  "authored": "A way down from the top of the block I just raised to the water's edge.",
+  "preferred": "Make a way down from the top of the block to the ground in front of it: a short stair or ramp on the front face.",
+  "recovered": "partly",
+  "toyVerdict": "misread",
+  "gap": "water's edge destination not legible in the stroke; toy erased the block",
+  "verdict": "misread",
+  "locationHonoured": "yes",
+  "endpointsHonoured": "no",
+  "coherence": 1,
+  "surprise": "unwelcome",
+  "handResponse": "undo-and-retry",
+  "disconnect": "asked for a way down, got the block erased",
+  "ops": [
+   {
+    "why": "lower",
+    "note": "lowered 1 course",
+    "reached": null
+   }
+  ],
+  "during": "going down 1 level, round what's in the way",
+  "said": "lowered 1 course",
+  "alts": []
+ },
+ {
+  "round": "a3",
+  "id": "land37-3",
+  "recipe": "pair-a",
+  "authored": "Raise a block here, the first of two I mean to join.",
+  "preferred": "Raise a single block here (start again, slightly down the slope from the old spot).",
+  "recovered": "yes",
+  "toyVerdict": "fulfilled",
+  "gap": "",
+  "verdict": "fulfilled",
+  "locationHonoured": "yes",
+  "endpointsHonoured": "n/a",
+  "coherence": 2,
+  "surprise": "none",
+  "handResponse": "build-on",
+  "disconnect": "",
+  "ops": [
+   {
+    "why": "raise",
+    "reached": null
+   }
+  ],
+  "during": null,
+  "said": "a block raised · hold to read it otherwise",
+  "alts": []
+ },
+ {
+  "round": "a3",
+  "id": "land37-4",
+  "recipe": "pair-b",
+  "authored": "Raise a second block here, at the same ground level, to be joined to the first.",
+  "preferred": "Raise a second block up the slope here, separate from the first.",
+  "recovered": "partly",
+  "toyVerdict": "partial",
+  "gap": "second block raised but far taller than the first, not level",
+  "verdict": "acceptable-alternative",
+  "locationHonoured": "yes",
+  "endpointsHonoured": "n/a",
+  "coherence": 1,
+  "surprise": "neutral",
+  "handResponse": "unsure",
+  "disconnect": "block grew into a tall pillar against the spire",
+  "ops": [
+   {
+    "why": "raise",
+    "reached": null
+   }
+  ],
+  "during": null,
+  "said": "a block raised · hold to read it otherwise",
+  "alts": []
+ },
+ {
+  "round": "a3",
+  "id": "land37-5",
+  "recipe": "climb",
+  "authored": "A path up the slope from here to the higher ground where I stop.",
+  "preferred": "Fill/terrace the band I scribbled over: a flat paved or stone-edged terrace across the gully floor in front of the spire, from the first block to the right hummocks.",
+  "recovered": "no",
+  "toyVerdict": "partial",
+  "gap": "a way was made but reads as a flat forecourt, not a climb",
+  "verdict": "fulfilled",
+  "locationHonoured": "yes",
+  "endpointsHonoured": "yes",
+  "coherence": 2,
+  "surprise": "neutral",
+  "handResponse": "keep",
+  "disconnect": "",
+  "ops": [
+   {
+    "why": "way",
+    "note": "a way: 1 paved",
+    "reached": true
+   }
+  ],
+  "during": "a way: 1 paved",
+  "said": "a way: 1 paved · hold at the end to read it otherwise",
+  "alts": [
+   "a way: 1 paved",
+   "a row of olives",
+   "a wall"
+  ]
+ },
+ {
+  "round": "a3",
+  "id": "land37-6",
+  "recipe": "cross",
+  "authored": "A way across the stream, from one bank to the other.",
+  "preferred": "A way up: stairs/path from the forecourt climbing beside the spire's right flank onto the high ridge where I stopped.",
+  "recovered": "no",
+  "toyVerdict": "partial",
+  "gap": "crossing point too small/hidden to read as 'across the stream'; result reads as terrace walkway, not bridge",
+  "verdict": "partial",
+  "locationHonoured": "partly",
+  "endpointsHonoured": "partly",
+  "coherence": 1,
+  "surprise": "unwelcome",
+  "handResponse": "look-for-alternative",
+  "disconnect": "asked to climb the hill, the hill got cut away",
+  "ops": [
+   {
+    "why": "walkway",
+    "note": "a walkway",
+    "reached": true
+   }
+  ],
+  "during": "a walkway",
+  "said": "a walkway · hold at the end to read it otherwise",
+  "alts": [
+   "a walkway",
+   "a way: 3 paved"
+  ]
+ },
+ {
+  "round": "a3",
+  "id": "land37-7",
+  "recipe": "yard",
+  "authored": "A walled yard enclosing this patch of ground.",
+  "preferred": "Wall in this patch of slope: an enclosure (court/garden) bounded by a wall following the loop.",
+  "recovered": "yes",
+  "toyVerdict": "misread",
+  "gap": "closed loop read as a walk to the water, not a walled yard",
+  "verdict": "partial",
+  "locationHonoured": "partly",
+  "endpointsHonoured": "partly",
+  "coherence": 1,
+  "surprise": "unwelcome",
+  "handResponse": "look-for-alternative",
+  "disconnect": "drew a ring, got a quay to the water",
+  "ops": [
+   {
+    "why": "way",
+    "note": "a walk all the way round; at the water: steps down into the water from the bank, a post to tie up to",
+    "reached": true
+   }
+  ],
+  "during": "a walk all the way round",
+  "said": "a walk all the way round; at the water: steps down into the water from the bank, a post to tie up to · hold at the end to read it otherwise",
+  "alts": [
+   "a walk all the way round",
+   "a court, walled round",
+   "a hedge round it",
+   "at the water: the way ending at the bank",
+   "a court, walled round"
+  ]
+ },
+ {
+  "round": "a3",
+  "id": "land37-8",
+  "recipe": "winding",
+  "authored": "A winding path on the ground that keeps the zigzags I drew.",
+  "preferred": "A winding footpath from the right-side ground, across the platform, down off its front-left corner and along the lower slope to the left.",
+  "recovered": "yes",
+  "toyVerdict": "partial",
+  "gap": "drawn winding shape discarded; default straightened into plaza paving",
+  "verdict": "partial",
+  "locationHonoured": "partly",
+  "endpointsHonoured": "partly",
+  "coherence": 2,
+  "surprise": "neutral",
+  "handResponse": "look-for-alternative",
+  "disconnect": "winding path flattened into more plaza",
+  "ops": [
+   {
+    "why": "way",
+    "note": "a way: 3 paved",
+    "took": [
+     "smoothed"
+    ],
+    "reached": true
+   }
+  ],
+  "during": "a way: 3 paved",
+  "said": "a way: 3 paved · hold at the end to read it otherwise",
+  "alts": [
+   "a way: 3 paved",
+   "a way: 4 paved, as drawn",
+   "an avenue of cypresses",
+   "a gated wall"
+  ]
+ },
+ {
+  "round": "a4",
+  "id": "land39-1",
+  "recipe": "block",
+  "authored": "Raise a single block here.",
+  "preferred": "Raise a single stone block/pillar right where I tapped, as a first foothold to build from",
+  "recovered": "yes",
+  "toyVerdict": "fulfilled",
+  "gap": "",
+  "verdict": "fulfilled",
+  "locationHonoured": "yes",
+  "endpointsHonoured": "n/a",
+  "coherence": 2,
+  "surprise": "none",
+  "handResponse": "build-on",
+  "disconnect": "",
+  "ops": [
+   {
+    "why": "raise",
+    "reached": null
+   }
+  ],
+  "during": null,
+  "said": "a block raised · hold to read it otherwise",
+  "alts": []
+ },
+ {
+  "round": "a4",
+  "id": "land39-2",
+  "recipe": "pair-a",
+  "authored": "Raise a block here, the first of two I mean to join.",
+  "preferred": "Raise a second block on the ground right next to the first, to start a row or cluster",
+  "recovered": "yes",
+  "toyVerdict": "fulfilled",
+  "gap": "join plan invisible from a tap",
+  "verdict": "fulfilled",
+  "locationHonoured": "yes",
+  "endpointsHonoured": "n/a",
+  "coherence": 2,
+  "surprise": "none",
+  "handResponse": "build-on",
+  "disconnect": "",
+  "ops": [
+   {
+    "why": "raise",
+    "reached": null
+   }
+  ],
+  "during": null,
+  "said": "a block raised · hold to read it otherwise",
+  "alts": []
+ },
+ {
+  "round": "a4",
+  "id": "land39-3",
+  "recipe": "pair-b",
+  "authored": "Raise a second block here, at the same ground level, to be joined to the first.",
+  "preferred": "Raise a single block here, on the far side of the gully",
+  "recovered": "partly",
+  "toyVerdict": "fulfilled",
+  "gap": "joining purpose only in my secondary reading",
+  "verdict": "fulfilled",
+  "locationHonoured": "yes",
+  "endpointsHonoured": "n/a",
+  "coherence": 2,
+  "surprise": "none",
+  "handResponse": "build-on",
+  "disconnect": "",
+  "ops": [
+   {
+    "why": "raise",
+    "reached": null
+   }
+  ],
+  "during": null,
+  "said": "a block raised · hold to read it otherwise",
+  "alts": []
+ },
+ {
+  "round": "a4",
+  "id": "land39-4",
+  "recipe": "climb",
+  "authored": "A path up the slope from here to the higher ground where I stop.",
+  "preferred": "Join the lone far block to the block pair with a raised walkway/bridge across the gully, top to top",
+  "recovered": "partly",
+  "toyVerdict": "partial",
+  "gap": "a slope path became a fortified stair-bridge",
+  "verdict": "partial",
+  "locationHonoured": "partly",
+  "endpointsHonoured": "partly",
+  "coherence": 1,
+  "surprise": "unwelcome",
+  "handResponse": "look-for-alternative",
+  "disconnect": "asked to link the far block, got a fortress over the stream",
+  "ops": [
+   {
+    "why": "way",
+    "note": "a way: a flight of 4, on a rampant arch, a bridge of 4; at its end: a parapet across its end",
+    "took": [
+     "smoothed"
+    ],
+    "reached": true
+   }
+  ],
+  "during": "a way: a flight of 4, on a rampant arch, a bridge of 4",
+  "said": "a way: a flight of 4, on a rampant arch, a bridge of 4; at its end: a parapet across its end · hold at the end to read it otherwise",
+  "alts": [
+   "a way: a flight of 4, on a rampant arch, a bridge of 4",
+   "a way: 1 paved, a flight of 4, on a rampant arch, round what's in the way, as drawn",
+   "a ladder instead",
+   "a stair tower",
+   "a row of olives",
+   "at its end: a small terrace at its end, railed: a belvedere",
+   "at its end: the belvedere on its own pier, a lantern at it"
+  ]
+ },
+ {
+  "round": "a4",
+  "id": "land39-5",
+  "recipe": "cross",
+  "authored": "A way across the stream, from one bank to the other.",
+  "preferred": "Connect the castle to the lone far block: a way from the castle's top down to the far block's top",
+  "recovered": "partly",
+  "toyVerdict": "misread",
+  "gap": "stream hidden by earlier build; no crossing made",
+  "verdict": "misread",
+  "locationHonoured": "partly",
+  "endpointsHonoured": "no",
+  "coherence": 1,
+  "surprise": "unwelcome",
+  "handResponse": "undo-and-retry",
+  "disconnect": "drew to the far block, got paving off the other side",
+  "ops": [
+   {
+    "why": "way",
+    "note": "a way: 3 paved, round what's in the way",
+    "took": [
+     "smoothed",
+     "routed-round"
+    ],
+    "reached": true
+   }
+  ],
+  "during": "a way: 3 paved, round what's in the way",
+  "said": "a way: 3 paved, round what's in the way · hold at the end to read it otherwise",
+  "alts": [
+   "a way: 3 paved, round what's in the way",
+   "a way: 3 paved, round what's in the way, as drawn",
+   "as drawn",
+   "an avenue of cypresses",
+   "a wall"
+  ]
+ },
+ {
+  "round": "a4",
+  "id": "land39-6",
+  "recipe": "yard",
+  "authored": "A walled yard enclosing this patch of ground.",
+  "preferred": "Wall in a yard/enclosure against the east side of the lone block",
+  "recovered": "yes",
+  "toyVerdict": "partial",
+  "gap": "walled yard read as a walkway ring",
+  "verdict": "partial",
+  "locationHonoured": "partly",
+  "endpointsHonoured": "partly",
+  "coherence": 1,
+  "surprise": "neutral",
+  "handResponse": "look-for-alternative",
+  "disconnect": "a yard became broken raised walkways",
+  "ops": [
+   {
+    "why": "way",
+    "note": "a walk all the way round; where it meets: two ways at two levels, left as they are",
+    "reached": true
+   }
+  ],
+  "during": "a walk all the way round",
+  "said": "a walk all the way round; where it meets: two ways at two levels, left as they are · hold at the end to read it otherwise",
+  "alts": [
+   "a walk all the way round",
+   "a court, walled round",
+   "a hedge round it",
+   "where it meets: a step between them",
+   "where it meets: a step between them, a lantern at its head",
+   "a court, walled round"
+  ]
+ },
+ {
+  "round": "a4",
+  "id": "land39-7",
+  "recipe": "winding",
+  "authored": "A winding path on the ground that keeps the zigzags I drew.",
+  "preferred": "A winding path from the foot of the castle up past the west terrace to the slope behind it",
+  "recovered": "yes",
+  "toyVerdict": "misread",
+  "gap": "zigzag ground path became a stub",
+  "verdict": "partial",
+  "locationHonoured": "partly",
+  "endpointsHonoured": "no",
+  "coherence": 1,
+  "surprise": "unwelcome",
+  "handResponse": "undo-and-retry",
+  "disconnect": "winding path came out as a stub with a hole",
+  "ops": [
+   {
+    "why": "way",
+    "note": "a way that can't reach as drawn: joining what it meets",
+    "took": [
+     "smoothed"
+    ],
+    "reached": false
+   }
+  ],
+  "during": "a way that can't reach as drawn: joining what it meets",
+  "said": "it joins the stone it meets on the way",
+  "alts": [
+   "a way that can't reach as drawn: joining what it meets",
+   "a walk all the way round, as drawn",
+   "a row of olives",
+   "a gated wall"
+  ]
+ }
+]

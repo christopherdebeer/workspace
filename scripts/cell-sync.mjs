@@ -12,9 +12,12 @@
  *
  *   flags: --owner c15r · --dry-run · --take local|remote (settle conflicts) · --force
  *
- * Auth: PARC_TOKEN env, or a device-flow token JSON at /tmp/parc-token.json
- * (mint one: POST https://parc.land/auth/device, approve the user_code, then
- * exchange at /oauth/token with the device_code grant).
+ * Auth: PARC_TOKEN env, or a token JSON ({"access_token": …}) at /tmp/parc-token.json.
+ * A session that already holds the substrate (the Substate MCP) mints one directly:
+ * act("auth.mintToken", { scope: "cells:create read:workspace write:workspace",
+ * label, expiresInSec }) — no approval step. The device flow (POST
+ * https://parc.land/auth/device, approve the user_code, exchange at /oauth/token
+ * with the device_code grant) is only for a session with no substrate access.
  *
  * ── THREE-WAY, NOT MIRROR ──
  *
@@ -45,7 +48,7 @@ import { execFileSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const { contentVersion, treeVersionOf, isIgnored, isGenerated, plan, nextBase, SKIP } = require('./cell-sync-plan.cjs');
+const { contentVersion, treeVersionOf, isIgnored, isGenerated, isMirrored, plan, nextBase, SKIP } = require('./cell-sync-plan.cjs');
 
 const BASE = process.env.PARC_BASE ?? 'https://parc.land';
 
@@ -111,7 +114,7 @@ async function call(verb, target, input) {
  *  service's own BINARY_TYPES table — anything here must be a type the service
  *  will store with a non-text content type, or the round trip breaks in the
  *  middle: pushed as base64, read back as UTF-8. */
-const BINARY_RE = /\.(png|jpe?g|gif|webp|avif|ico|bmp|woff2?|ttf|otf|mp3|ogg|wav|mp4|webm|pdf|zip|wasm)$/i;
+const BINARY_RE = /\.(png|jpe?g|gif|webp|avif|ico|bmp|woff2?|ttf|otf|mp3|ogg|wav|mp4|webm|pdf|zip|gz|tgz|tar|wasm)$/i;
 
 /**
  * A BIG FILE GOES UP IN PIECES. A tool call carries its whole body in one
@@ -130,8 +133,9 @@ const BATCH_BYTES = 700000;
 const BATCH_CHANGES = 200;
 
 /** Repo-side entries that are not cell source: dot-files (the cells service
- *  rejects them as path segments anyway), dependency trees, each cell's
- *  devtools/ (local harnesses — e.g. canvas's headless-repro), and native/.
+ *  rejects them as path segments anyway), dependency trees, and native/.
+ *  (Each cell's devtools/ syncs both ways, the files git would keep —
+ *  cell-sync-plan.cjs `isMirrored`.)
  *
  *  NATIVE IS NOT SERVABLE, AND CANNOT BE STORED EITHER. Electron and Capacitor
  *  scaffolding is built locally and shipped through the app stores; the cell
@@ -140,9 +144,7 @@ const BATCH_CHANGES = 200;
  *  [A-Za-z0-9._-] in a path segment. So every deploy failed outright the
  *  moment the packaging landed — not for one cell, for anyone deploying it.
  *
- *  The same set now also guards PULL (cell-sync-plan.cjs `isIgnored`): the
- *  cell still holds `devtools/` copies from before this rule, and a pull used
- *  to write them over the working tree on every cycle. */
+ *  The same set now also guards PULL (cell-sync-plan.cjs `isIgnored`). */
 function* walk(dir, top = true) {
   for (const name of readdirSync(dir)) {
     if (name.startsWith('.') || (top && SKIP.has(name)) || name === 'node_modules') continue;
@@ -159,13 +161,24 @@ function storedBytes(abs, path) {
 
 // ─── the three states ────────────────────────────────────────────────
 
+/** The cell's `devtools/` files git would keep (tracked, or new and not ignored), relative to the cell: the only ones
+ *  synced; none if git can't say. */
+function trackedDevtools(localRoot) {
+  try {
+    const out = execFileSync('git', ['ls-files', '-z', '--cached', '--others', '--exclude-standard', '--', 'devtools'], { cwd: localRoot, encoding: 'utf8', maxBuffer: 64 << 20 });
+    return new Set(out.split('\0').filter(Boolean));
+  } catch { return new Set(); }
+}
+
 /** The working tree: path → version, for every file a push would send. */
 function localState(localRoot) {
   const files = {};
   if (!existsSync(localRoot)) return files;
+  const tracked = trackedDevtools(localRoot);
   for (const abs of walk(localRoot)) {
     const path = relative(localRoot, abs).split('\\').join('/');
     if (isIgnored(path) || isGenerated(path)) continue;
+    if (isMirrored(path) && !tracked.has(path)) continue;
     files[path] = contentVersion(storedBytes(abs, path));
   }
   return files;

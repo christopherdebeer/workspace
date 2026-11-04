@@ -1,0 +1,67 @@
+/**
+ * Forms chosen by their surroundings: what the land and what's built beside it ask of each other, worked out from the
+ * resolved world (model.ts), the same every time.
+ *
+ * - **Retaining walls**: where the land steps down a bank (one to three levels) and either side of it is used (a way, a
+ *   court's or a way's paving, something built at the ground, a pool, a bowl), the bank is held by a wall of dressed
+ *   stone instead of falling away: the ground either side flat to it, its face battered, coped along its top (a low
+ *   upstand where the ground above is open). Not where a stair climbs the bank (its own steps hold it), nor along water.
+ * - **Buildings stepping with the slope** (buildings.ts): a mass built across ground at different levels is read as
+ *   steps, each its own building at its own height, the lower against the higher under a lean-to; set into a bank, a
+ *   house's roof falls away from the hill, and it's come into from the hill above as well as from below; the wall a
+ *   building's downhill side stands on carried down to the lower ground (a retaining wall under it).
+ */
+import { DIRS, key, type World } from './model';
+import { groundAt } from './terrain';
+
+/** a bank held by a wall: the high cell, the way to the low one, the two grounds */
+export interface Retain { i: number; j: number; d: number; lo: number; hi: number }
+const cache = new WeakMap<World, { v: number; r: Map<string, Retain>; sharp: (i: number, j: number, d: number) => boolean }>();
+/** a column of stone at a cell filling from its ground (the stream's bed, if it's wet) up to a level: a bank built against */
+const filledTo = (w: World, x: number, z: number, hi: number) => { const lo = w.ground(x, z); if (lo >= hi) return false; for (let k = lo; k < hi; k++) if (!w.stone(k, x, z)) return false; return true; };
+
+/** where the land's banks are held by walls (keyed from both sides: `i.j.d`) */
+export function retaining(w: World): Map<string, Retain> { return worked(w).r; }
+function worked(w: World) {
+  const c = cache.get(w);
+  if (c && c.v === w.version) return c;
+  const r = new Map<string, Retain>(), filled = new Set<string>();
+  if (w.land) {
+    const e = w.extent(), wet = (i: number, j: number) => !!w.land?.water.has(j * 1000 + i);
+    const used = (i: number, j: number) => {
+      const g = w.ground(i, j);
+      return w.paved(i, j) || w.courts.has(key(0, i, j)) || w.occupied(g, i, j) || w.way(g, i, j) || w.bowl(g, i, j) || w.pools.has(key(0, i, j)) || w.tree(g, i, j);
+    };
+    for (let j = e.j0; j <= e.j1; j++) for (let i = e.i0; i <= e.i1; i++) {
+      const hi = w.ground(i, j);
+      // (where what's built below fills the bank's face, ground (or the stream's bed: a bridge) to top, the land on both
+      // sides stays flat to it: the stone holds the bank, and the ground meets it, not a slope running into it)
+      if (!wet(i, j)) for (let d = 0; d < 4; d++) {
+        const [a, b] = DIRS[d], x = i + a, z = j + b;
+        if (w.onSlab(x, z) && filledTo(w, x, z, hi)) { filled.add(`${i}.${j}.${d}`); filled.add(`${x}.${z}.${(d + 2) % 4}`); }
+      }
+      if (wet(i, j)) continue;
+      for (let d = 0; d < 4; d++) {
+        const [a, b] = DIRS[d], x = i + a, z = j + b;
+        if (!w.onSlab(x, z) || wet(x, z)) continue;
+        const lo = w.ground(x, z), drop = hi - lo;
+        if (drop < 1 || drop > 3 || !(used(i, j) || used(x, z))) continue;
+        // (not where a stair climbs it: its steps hold it)
+        if (w.stair(lo, x, z) === (d + 2) % 4 || w.stair(hi - 1, x, z) === (d + 2) % 4) continue;
+        // (nor where what's built below fills the bank's face, ground to top: that's its own wall)
+        let filled = true;
+        for (let k = lo; k < hi; k++) if (!w.block(k, x, z)) { filled = false; break; }
+        if (filled) continue;
+        const it = { i, j, d, lo, hi };
+        r.set(`${i}.${j}.${d}`, it); r.set(`${x}.${z}.${(d + 2) % 4}`, it);
+      }
+    }
+  }
+  const out = { v: w.version, r, sharp: (i: number, j: number, d: number) => r.has(`${i}.${j}.${d}`) || filled.has(`${i}.${j}.${d}`) };
+  cache.set(w, out);
+  return out;
+}
+/** whether the bank between a cell and the next its way d is held by a wall, or filled by what's built against it */
+export function walled(w: World): (i: number, j: number, d: number) => boolean { return worked(w).sharp; }
+/** the ground as it's drawn (grid units: cell (i, j) spans i..i+1): the hill and the benches let into it (terrain.ts) */
+export function groundY(w: World, x: number, z: number): number { return groundAt(w, x, z); }

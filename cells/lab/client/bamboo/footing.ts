@@ -1,0 +1,160 @@
+/**
+ * What the body meets (nothing decided here: runner.ts asks).
+ *
+ * - **underfoot**: anywhere near, the highest of the ground, a stair's tread, a stone's top, a root's and the rock's (a
+ *   block's own upward faces, rock.ts), each as the renderer draws it (a stone's top is the lump's own, turned and scaled
+ *   as it's drawn), and which it is; a cliff's face is the rock's rise, so what's in the way and what's seen past is the
+ *   same rock that's drawn;
+ * - **in the way**: the culms as they really go, leaning and bowed, cut into posts: an upright culm one post rising from
+ *   the ground, a bowed one a run of short ones along its arc, each knowing how high off the ground it passes. A post
+ *   low enough is stepped over, one at head height ducked under, the rest gone round or squeezed past.
+ */
+import { CHUNK, culmPoint, type Chunk, type Culm, type Land, type Stone } from './world';
+import { lumpTopAt, LUMP_R } from './lump';
+import { blockTop, blocksSegment, type Pad, type Block } from './rock';
+
+export type Footing = 'ground' | 'step' | 'stone' | 'root';
+export interface Under { y: number; kind: Footing; stone: Stone | null }
+/** a bit of culm near the body: where, how thick, how high off the ground it passes (lo … hi) */
+export interface Post { x: number; z: number; r: number; lo: number; hi: number; culm: Culm }
+/** how a post stands to a body running past it */
+export type Meets = 'over' | 'duck' | 'block' | 'free';
+/** a body's heights: the knees (stepped over below them), the hips, the head's top */
+export const KNEE = 0.5, HIPS = 1.15, HEAD = 1.78;
+export function meets(p: Post, duckTo = HEAD): Meets {
+  if (p.hi < KNEE) return 'over';
+  if (p.lo >= HEAD) return 'free';
+  if (p.lo >= HIPS) return p.lo >= duckTo ? 'free' : 'duck';
+  return 'block';
+}
+
+const key = (i: number, j: number) => `${i},${j}`;
+
+export class Footings {
+  constructor(readonly land: Land, readonly chunks: Map<string, Chunk>) {}
+  private near(x: number, z: number) {
+    const out: Chunk[] = [], ci = Math.floor(x / CHUNK), cj = Math.floor(z / CHUNK);
+    for (let a = -1; a <= 1; a++) for (let b = -1; b <= 1; b++) { const c = this.chunks.get(key(ci + a, cj + b)); if (c) out.push(c); }
+    return out;
+  }
+  /** the ground itself (a stair's tread, where there is one) */
+  groundAt(x: number, z: number) {
+    const tr = this.land.tread(x, z);
+    if (tr !== null) return tr;
+    const c = this.chunks.get(key(Math.floor(x / CHUNK), Math.floor(z / CHUNK)));
+    if (!c) return this.land.ground(x, z);
+    const fx = x - c.x0, fz = z - c.z0, i = Math.min(CHUNK - 1, Math.floor(fx)), j = Math.min(CHUNK - 1, Math.floor(fz)), u = fx - i, v = fz - j, N = CHUNK + 1, G = c.ground, k = i + j * N;
+    return (G[k] * (1 - u) + G[k + 1] * u) * (1 - v) + (G[k + N] * (1 - u) + G[k + N + 1] * u) * v;
+  }
+  /** how much leaf is over (x, z), 0 … 1 (the chunk's `canopy`) */
+  coverNear(x: number, z: number) {
+    const c = this.chunks.get(key(Math.floor(x / CHUNK), Math.floor(z / CHUNK)));
+    if (!c) return 0.5;
+    const i = Math.min(CHUNK, Math.max(0, Math.round(x - c.x0))), j = Math.min(CHUNK, Math.max(0, Math.round(z - c.z0)));
+    return c.canopy[i + j * (CHUNK + 1)];
+  }
+  /** what you'd stand on at (x, z) (with the rock, or without it: for sight, which asks the rock itself) */
+  /** whether there's a block top about as high as y at (x, z), other than b (the far side of a crack) */
+  private topAcross(x: number, z: number, y: number, not: Block) {
+    for (const c of this.near(x, z)) if (c.rocks) for (const o of c.rocks) { if (o === not) continue; const t = blockTop(o, x, z); if (!Number.isNaN(t) && Math.abs(t - y) < 0.5) return true; }
+    return false;
+  }
+  at(x: number, z: number, rock = true): Under {
+    const tr = this.land.tread(x, z);
+    if (tr !== null) return { y: tr, kind: 'step', stone: null };
+    let y = this.groundAt(x, z), kind: Footing = 'ground', stone: Stone | null = null;
+    for (const c of this.near(x, z)) {
+      for (const s of c.stones) {
+        const dx = x - s.x, dz = z - s.z, R = s.r * LUMP_R;
+        if (dx > R || dx < -R || dz > R || dz < -R) continue;
+        const co = Math.cos(s.yaw), si = Math.sin(s.yaw), t = lumpTopAt((co * dx - si * dz) / s.r, (si * dx + co * dz) / s.r);
+        if (Number.isNaN(t)) continue;
+        const ys = s.y + t * s.flat * s.r;
+        if (ys > y) { y = ys; kind = 'stone'; stone = s; }
+      }
+      if (rock && c.rocks) for (const b of c.rocks) {
+        // (a block's top, or just past its edge, its top there: a crack between two blocks narrower than a foot is stepped
+        // over, not fallen into)
+        let yb = blockTop(b, x, z);
+        // (only a crack: a top as high on the other side too; just past the edge of a block with nothing across, it's the
+        // ground there, not the block's top: a face isn't stood on from its foot)
+        if (Number.isNaN(yb)) {
+          const dx = b.c[0] - x, dz = b.c[2] - z, l = Math.hypot(dx, dz);
+          if (l > 0.2) {
+            const yt = blockTop(b, x + (dx / l) * 0.16, z + (dz / l) * 0.16);
+            if (!Number.isNaN(yt) && this.topAcross(x - (dx / l) * 0.16, z - (dz / l) * 0.16, yt, b)) yb = yt;
+          }
+        }
+        if (yb > y) { y = yb; kind = 'stone'; stone = null; }
+      }
+      for (const q of c.roots) {
+        const dx = x - q.x, dz = z - q.z;
+        if (Math.abs(dx) > q.len || Math.abs(dz) > q.len) continue;
+        const co = Math.cos(q.yaw), si = Math.sin(q.yaw), u = (co * dx - si * dz) / (q.len * 0.5), w = si * dx + co * dz;
+        if (Math.abs(u) >= 1) continue;
+        const thin = 1 - u * u * 0.6, a = Math.abs(w) / (q.r * thin);
+        if (a >= 1) continue;
+        const yr = q.y + q.r * (0.75 * thin + 0.4 * (1 - u * u)) * Math.sqrt(1 - a * a);
+        if (yr > y) { y = yr; kind = 'root'; stone = null; }
+      }
+    }
+    return { y, kind, stone };
+  }
+  /** the stones' crowns near (x, z) that could be stood on, each its middle and about how far its top reaches */
+  perchesNear(x: number, z: number, r: number): { x: number; z: number; r: number }[] {
+    const out: { x: number; z: number; r: number }[] = [];
+    for (const c of this.near(x, z)) for (const s of c.stones) if (Math.abs(s.x - x) < r + s.r && Math.abs(s.z - z) < r + s.r && s.r > 0.3) out.push({ x: s.x, z: s.z, r: s.r * 0.9 });
+    return out;
+  }
+  /** the rock's pads near (x, z) (rock.ts): footholds with their block, the slope, the room; the ones still on top (not
+   * under another block) */
+  padsNear(x: number, z: number, r: number): Pad[] {
+    const out: Pad[] = [];
+    for (const c of this.near(x, z)) if (c.rocks) for (const b of c.rocks) {
+      if (Math.abs(b.c[0] - x) > r + b.r || Math.abs(b.c[2] - z) > r + b.r) continue;
+      for (const p of b.pads) if (Math.abs(p.x - x) < r && Math.abs(p.z - z) < r && Math.abs(this.at(p.x, p.z).y - p.y) < 0.05) out.push(p);
+    }
+    return out;
+  }
+  /** whether the rock stands between a and b (its faces, so the space under an overhang is open) */
+  rockBetween(a: [number, number, number], b: [number, number, number]) {
+    const seen = new Set<Chunk>();
+    const L = Math.hypot(b[0] - a[0], b[2] - a[2]), n = Math.max(1, Math.ceil(L / 24));
+    for (let k = 0; k <= n; k++) for (const c of this.near(a[0] + ((b[0] - a[0]) * k) / n, a[2] + ((b[2] - a[2]) * k) / n)) {
+      if (seen.has(c) || !c.rocks) continue;
+      seen.add(c);
+      for (const bl of c.rocks) if (blocksSegment(bl, a, b)) return true;
+    }
+    return false;
+  }
+  /** the slope underfoot, as a normal (from what you'd stand on round about) */
+  normalAt(x: number, z: number, e = 0.15): [number, number, number] {
+    const gx = (this.at(x + e, z).y - this.at(x - e, z).y) / (2 * e), gz = (this.at(x, z + e).y - this.at(x, z - e).y) / (2 * e), l = Math.hypot(gx, 1, gz);
+    return [-gx / l, 1 / l, -gz / l];
+  }
+  /** the stones within r of (x, z) */
+  stonesNear(x: number, z: number, r: number): Stone[] {
+    const out: Stone[] = [];
+    for (const c of this.near(x, z)) for (const s of c.stones) if (Math.abs(s.x - x) < r + s.r && Math.abs(s.z - z) < r + s.r) out.push(s);
+    return out;
+  }
+  /** the culms near (x, z) cut into posts: an upright one at hip height (where it leans to there), a bowed one all
+   * along its arc */
+  posts(x: number, z: number, r: number): Post[] {
+    const out: Post[] = [];
+    for (const c of this.near(x, z)) for (let k = 0; k < c.tall; k++) {
+      const q = c.culms[k];
+      if (q.r <= 0) continue;
+      const bowed = q.bend > 1.5, reach = bowed ? q.h * 0.8 : 1;
+      if (Math.abs(q.x - x) > r + reach || Math.abs(q.z - z) > r + reach) continue;
+      if (!bowed) { const p = culmPoint(q, 1); out.push({ x: p[0], z: p[2], r: q.r, lo: 0, hi: q.h, culm: q }); continue; }
+      const n = Math.max(12, Math.ceil(q.h / 0.25));
+      for (let m = 0; m <= n; m++) {
+        const v = m / n, p = culmPoint(q, v * q.h), rr = q.r * (1 - 0.62 * v ** 1.3), hgt = p[1] - this.groundAt(p[0], p[2]);
+        if (Math.abs(p[0] - x) > r || Math.abs(p[2] - z) > r) continue;
+        out.push({ x: p[0], z: p[2], r: rr, lo: Math.max(0, hgt - rr), hi: hgt + rr, culm: q });
+      }
+    }
+    return out;
+  }
+}

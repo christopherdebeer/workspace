@@ -26,6 +26,7 @@ import {
   matches as subscriptionMatches,
   resolveParams,
   parseCellTarget,
+  mintsRunToken,
   type SubscriptionDefinition,
 } from './subscriptions';
 import { GROUPS_NS, PUBLIC_NS } from './grants';
@@ -688,7 +689,8 @@ export function createFactReactionHandler(build: DepsBuilder, deliver: CellDeliv
         // instead of needing direct substrate write IAM). The token rides in
         // as `token`.
         // system1: the ADR-0098 always-on perception organ, owner-approved 2026-09-25.
-        if (grants && (target.name === 'models' || target.name === 'run' || target.name === 'lit' || target.name === 'system1')) {
+        // Only the owner's own cells: see mintsRunToken.
+        if (grants && mintsRunToken(target, scope)) {
           const scopes: string[] = [];
           if (grants.read) scopes.push('workspace:read');
           if (grants.write) scopes.push('workspace:write');

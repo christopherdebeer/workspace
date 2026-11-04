@@ -1,0 +1,22 @@
+import {test} from 'node:test';
+import assert from 'node:assert/strict';
+import {mkdtempSync,readFileSync,writeFileSync,existsSync,rmSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+import {spawnSync} from 'node:child_process';
+import {fileURLToPath} from 'node:url';
+import {review,readJSON,writeJSON} from './labyrinth-intent-review.mjs';
+const cli=fileURLToPath(new URL('./labyrinth-intent.mjs',import.meta.url));
+const run=(root,mode)=>spawnSync(process.execPath,[cli,'--headless='+mode,'--out='+root],{encoding:'utf8'});
+test('headless production-model run: before only, gated execution, schematic reveal',t=>{
+ const root=mkdtempSync(join(tmpdir(),'intent-headless-'));t.after(()=>rmSync(root,{recursive:true,force:true}));
+ const prepared=run(root,'prepare');assert.equal(prepared.status,0,prepared.stderr);
+ assert(!existsSync(join(root,'sealed/bridge/result.json')));
+ assert.notEqual(run(root,'execute').status,0);
+ const next=review(root,'next');assert(next.image.endsWith('.svg'));
+ const e={id:'bridge',reviewer:'test',blind:true,sceneReading:'Two equal-height pillars',hypotheses:[{id:'h1',intent:'Bridge',visibleEvidence:'Joining stroke',plausibility:1,successCriteria:['Connect endpoints']}],preferred:'h1',mustPreserve:[],unacceptable:[],ambiguities:[],expectedFeedback:'Route'};
+ writeJSON(next.expectation,e);review(root,'expect');const executed=run(root,'execute');assert.equal(executed.status,0,executed.stderr);
+ const revealed=review(root,'reveal'),result=readJSON(revealed.diagnostics);
+ assert.equal(result.reached.reached,true);assert.equal(result.navigation.connected,true);assert.equal(result.navigation.connectedIncludingInteriors,true);
+ assert(revealed.image.endsWith('.svg'));assert.notEqual(run(root,'execute').status,0,'must not overwrite result');
+});
