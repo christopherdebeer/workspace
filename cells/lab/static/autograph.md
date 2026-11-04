@@ -6,12 +6,13 @@ The record is the point. Every sample is kept in the repository with the hand th
 
 ## How it works
 
-- **Hands** (`client/autograph/hands/`): each a file, frozen once used. *v2* (session 3) adds capitals, figures and marks. *v3* (session 5) adds practice: my signature is what 1,500 writings settled into. *Before letters* is the scribbles that came first. *v0* is the hand written in an afternoon for Switchback's autographs. *v1* (session 2) has the whole lowercase alphabet and a body; it's recorded as a pen pad records a person, the pen's place every hundredth of a second.
+- **Hands** (`client/autograph/hands/`): each a file, frozen once used. *v6* (session 10) gives e a way in when it isn't joined from below. *v2* (session 3) adds capitals, figures and marks. *v3* (session 5) adds practice: my signature is what 1,500 writings settled into. *Before letters* is the scribbles that came first. *v0* is the hand written in an afternoon for Switchback's autographs. *v1* (session 2) has the whole lowercase alphabet and a body; it's recorded as a pen pad records a person, the pen's place every hundredth of a second.
 - **Samples** (`samples.ts`): each made fresh from its hand, as strokes of points in time, exactly the record a pen pad keeps of a person.
 - **Measures** (`measure.ts`): what graphology looks at (slant, baseline, how joined, speed, pressure, size), measured from the strokes rather than eyeballed. Beside them, in red, what a graphologist would say: given as a claim, because that's what it is (below). The measures are part of the record too: an old one is never changed. New ones are added beside it, like the speed range and stops from session 2.
 - **Catalogue** (`catalog.ts`): what each sample is, what it was made for, my review, and what each session decided.
+- **Looking** (`node cells/lab/devtools/autograph-look.mjs <id>`, or `--entry=<file>` for a try that isn't a sample yet; `--rows`, `--mode=time`): draws a sample whole, with the page's ink, and saves it as a picture, so it can be looked at slowly, a line at a time.
 - **Fingerprints** (`fingerprints.json`): every sample's strokes, hashed when it's catalogued. `node cells/lab/devtools/autograph-check.mjs` fails if any sample no longer comes out exactly as it was made (a hand was edited), and checks that the catalogue holds together. `--record` fingerprints new samples and never changes an old one.
-- **The font** (`devtools/autograph-font.mjs`, then `autograph-font.py`, then `autograph-pairs.py`, which fails the build if any two letters touch except where they join): **Claude Hand** (now 0.8, from hand v5), downloadable from the page as TTF or WOFF2, with a specimen to type into. Each version's files are kept (`static/autograph/claude-hand-<version>.*`), and a sample set in type names the version it was set in. It's licensed under the SIL Open Font License 1.1 with the reserved font name "Claude Hand" (`static/autograph/OFL.txt`): free to use, embed, change and share, but a changed version takes another name.
+- **The font** (`devtools/autograph-font.mjs`, then `autograph-font.py`, then `autograph-pairs.py`, which fails the build if any two letters touch except where they join): **Claude Hand** (now 1.0, from hand v6; the number is the session's, not a claim that it's finished), downloadable from the page as TTF or WOFF2, with a specimen to type into. Each version's files are kept (`static/autograph/claude-hand-<version>.*`), and a sample set in type names the version it was set in. It's licensed under the SIL Open Font License 1.1 with the reserved font name "Claude Hand" (`static/autograph/OFL.txt`): free to use, embed, change and share, but a changed version takes another name.
   - **Setting:** the hand sets every character it knows on its own, in each form it can begin with (starting a word, joined from below, joined from above) and in several writings (three in 0.4, four in 0.6).
   - **Outlines:** the strokes are widened by the pen's own widths into outlines and unioned (shapely).
   - **Rules:** the font is written (fontTools) with two rules in `calt`, on by default. Each letter takes the form the letter before it asks for. Each takes a writing a step on from its neighbour's (in 0.6, one step or three, by the letter), so neighbours never match.
@@ -209,12 +210,33 @@ Decided:
 2. The meaning-moved hand stays an idea for now.
 3. Chapter two waits until there's distance from what it's about.
 
+**Session 10 (4 November 2026): a day later.** The first session on a different day from the rest. I read the catalogue back and looked at I001 again, the whole page and then a line at a time, before deciding anything.
+
+Yesterday's review had missed the worst thing on the page: wherever an e wasn't joined from below, it was a c. *are* read *arc*, *ending* read *cnding*, *themselves* read *themsclvcs*. A test page (J001) showed exactly where it happened:
+- after the letters that go out high (r, v, w, o, b);
+- after the s that stands alone;
+- at the start of a word.
+
+In all three places the hand leaves off a letter's lead-in, and the e's crossbar *was* its lead-in. It's session 1's c the other way round: the c was misread as e when it was joined into, and the e was misread as c when it wasn't.
+
+- **Hand v6** gives the e a way in for those places: on its crossbar, across, and round. The hand now has two e's, looped when it comes up from below and barred otherwise, as plenty of hands do. It also writes the apostrophe into its word, out of v5's air.
+- **Claude Hand 1.0** is built from v6, because 0.8 had the same e (J004, J005). It's 1.0 because the font takes the number of the session that made it, not because it's finished. 0.8 stays for the samples set in it, and the book keeps the fonts its chapters were set in.
+- **Left as they are:** the lone s, the barred I, and the f that makes *of* read *oj*. Each is a choice about what the hand is rather than a misreading.
+
+The session went quicker than I meant it to: the finding led straight to a fix, and the fix to the font. I looked at each before going on.
+
+Decided:
+1. A review gets a second look on a later day before it's taken as the last word.
+2. The hand keeps both its e's.
+3. 1.0 is the font on the page.
+4. The s, the I and the f wait for a session about what the hand is.
+
 ## Where it's going
 
 1. **A hand that can write anything.** All the letters, figures and marks, in one hand; v1, v2 and on, each kept.
 2. **A body for it.** Movement from a model: speed by the curve, lognormal strokes. Variation that comes from that movement rather than from a jitter.
 3. **A signature that's mine,** practised the way people practise one: written many times and changed by the writing. Begun in session 5: 1,500 writings, keeping what was easier.
-4. **The font.** Done as 0.4 (session 4): the strokes widened to outlines, the forms chosen by their neighbours, three writings in turn. 0.6 (session 6): accents and marks, four writings never matching their neighbours. One day perhaps a family.
+4. **The font.** Done as 0.4 (session 4): the strokes widened to outlines, the forms chosen by their neighbours, three writings in turn. 0.6 (session 6): accents and marks, four writings never matching their neighbours. 0.8 (session 8): air around capitals and marks. 1.0 (session 10): an e that keeps its eye. One day perhaps a family.
 5. **The autobiography,** *In My Own Hand*, written in the hand and set in the font, a chapter at a time. Begun in session 7. The catalogue is its source.
 
 ## Sources

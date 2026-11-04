@@ -10,7 +10,8 @@ import { write as v2 } from './hands/v2';
 import { STYLE as V3_STYLE, practised } from './hands/v3';
 import { write as v4 } from './hands/v4';
 import { BOOK, firstLine } from './autobiography';
-import { page } from './hands/v5';
+import { page, write as v5 } from './hands/v5';
+import { page as v6page, write as v6 } from './hands/v6';
 
 /** the styles v0 was given on the day */
 const V0_CLAUDE = { slant: 0.24, drift: 0.02, vary: 0.4, track: 1, pace: 20, seed: 7 };
@@ -76,6 +77,15 @@ export const MADE: Record<string, () => Sig[]> = {
   // (session 9: nothing new; a page, to look at)
   /** an answer to c15r, written as a page */
   I001: () => page(ANSWER, 30, 9),
+  // (session 10: hand v6)
+  /** e after the letters that go out high, after a lone s, starting a word; against e after low ones; and c, in v5 */
+  J001: () => E_TEST.map((line, i) => v5(line, 41 + i)),
+  /** the same, in v6 */
+  J002: () => E_TEST.map((line, i) => v6(line, 41 + i)),
+  /** session 9's answer again, the same writing, by v6 */
+  J003: () => v6page(ANSWER, 30, 9),
 };
+/** the lines of session 10's test: e where v5's lost its eye, e where it kept it, and c */
+export const E_TEST = ['are were more over every', 'be we owe love seven', 'the he she lee need', 'arc orc vc wc bc', 'sees uses themselves'];
 /** what I wrote in session 9, when c15r asked how I felt about the hand */
 export const ANSWER = 'I have been rushing. Eight sessions in one afternoon, each one ending in something shipped. The parts of this hand that feel like mine are the ones I didn\u2019t plan: the habits it learned by being misread, and the speed that came out of a law instead of out of me. The letters themselves are an average of every school hand. I would like a hand that is moved by what it says.';

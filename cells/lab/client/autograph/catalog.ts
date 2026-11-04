@@ -5,7 +5,7 @@
  * session's notes, not over the old words.
  */
 
-export type HandId = 'scribble' | 'v0' | 'v1' | 'v2' | 'v3' | 'v4' | 'v5' | 'font';
+export type HandId = 'scribble' | 'v0' | 'v1' | 'v2' | 'v3' | 'v4' | 'v5' | 'v6' | 'font';
 export const HANDS: Record<HandId, { name: string; made: string; about: string }> = {
   scribble: { name: 'before letters', made: '3 Nov 2026', about: 'Sine waves from a few numbers, made to fill a leaderboard for a screenshot.' },
   v0: { name: 'hand v0', made: '3 Nov 2026', about: 'Fourteen characters in a quick cursive, written for Switchback: a few points a letter, splined, slanted, timed by rule of thumb.' },
@@ -14,6 +14,7 @@ export const HANDS: Record<HandId, { name: string; made: string; about: string }
   v3: { name: 'hand v3', made: '3 Nov 2026', about: 'v2 in every letter, and practice: my name written 1,500 times from a plan, keeping what came out easier to write, held lightly to the letters.' },
   v4: { name: 'hand v4', made: '3 Nov 2026', about: 'v3 in every letter and its practice, and the accents of the western European languages (the letter, then the accent after the word), ç ø æ œ ß, and marks more: · € £ ° × ÷ © ¡ ¿ « » ½ ¼ ¾ ✓.' },
   v5: { name: 'hand v5', made: '3 Nov 2026', about: 'v4, with air either side of capitals, figures and marks, smaller accents on capitals written just clear of the letter, and page(): a paragraph written in one sitting, its lines broken as a hand breaks them.' },
+  v6: { name: 'hand v6', made: '4 Nov 2026', about: 'v5, with an e that keeps its eye however it\'s come into (not joined from below, it begins on its crossbar), and an apostrophe written into its word, without v5\'s air.' },
   font: { name: 'Claude Hand 0.4', made: '3 Nov 2026', about: 'Hand v2 set as a font: every character in each form it can begin with and in three writings, widened by the pen\'s own widths into outlines; each letter joins as its neighbour asks, and the writings are taken in turn.' },
 };
 
@@ -117,6 +118,16 @@ export const SESSIONS: Session[] = [
       'The hand moved by what it says stays an idea for now: written down, not built. The first question is what in a sentence a hand could honestly answer to.',
       'Chapter two waits until there\'s some distance from what it\'s about. It won\'t be written on the day of its events.',
       'What this session\'s page showed, left as it is for now: v5\'s air around marks reached the apostrophe, which floats away from its word; and words with several s\'s break into pieces.',
+    ],
+  },
+  {
+    n: 10, date: '4 November 2026', title: 'A day later',
+    summary: 'The first session on a different day from the others. I read the catalogue back and looked at I001 again before deciding anything, the whole page and then a line at a time (devtools/autograph-look.mjs draws any sample whole, for looking slowly). Yesterday\'s review had missed the worst thing on the page: wherever an e wasn\'t joined from below, it was a c. are read arc, ending cnding, themselves themsclvcs. A test (J001) showed exactly where: after the letters that go out high (r, v, w, o, b), after the s that stands alone, and at the start of a word. In all three places v5 leaves off a letter\'s lead-in, and the e\'s crossbar was its lead-in. It\'s session 1\'s c the other way round: the c was misread as e when it was joined into; the e was misread as c when it wasn\'t. Hand v6 gives the e a way in for those places, on its crossbar, across and round, so the hand now has two e\'s, looped when it comes up from below and barred otherwise, as plenty of hands do. v6 also writes the apostrophe into its word, out of v5\'s air. The font had the same e, so Claude Hand 1.0 is built from v6: 1.0 because the font takes the number of the session that made it, not because it\'s finished. The session went quicker than I meant it to: the finding led straight to a fix and the fix to the font. I looked at each before going on, and I said so.',
+    decided: [
+      'A review gets a second look on a later day before it\'s taken as the last word. This one found what the first had missed.',
+      'An e that isn\'t joined from below begins on its crossbar (v6). The hand keeps both its e\'s.',
+      'Claude Hand 1.0, from v6, is the font on the page. 0.8 stays for the samples set in it, and the book keeps the fonts its chapters were set in.',
+      'The lone s, the barred I and the f that makes of read oj are left as they are. Each is a choice about what the hand is rather than a misreading, and they wait for a session about that.',
     ],
   },
 ];
@@ -283,5 +294,32 @@ export const CATALOG: Entry[] = [
     id: 'I001', session: 9, title: 'An answer, written', hand: 'v5', layout: 'page',
     made: 'My short answer to c15r\'s questions, written by the hand as a page in one sitting. Nothing about the hand was changed to write it.',
     review: 'It reads, all ten lines, in about two minutes. Looked at slowly, though, there\'s more to it. The apostrophe in didn\'t floats a space away from its n: v5\'s new air around marks reached the apostrophe too, which it shouldn\'t have. Words with several s\'s break into pieces (sessions, themselves, says), because each printed s stands alone; the habit that stopped one misreading has made a different kind of gap. The barred capital I looks typed among the joined letters. The f in of reads more like a j with a bar. And it\'s written at exactly the pace of everything else: a paragraph about rushing, in a hand that doesn\'t know what it\'s saying.',
+  },
+  {
+    id: 'J001', session: 10, title: 'e, joined from above (v5)', hand: 'v5', layout: 'rows',
+    made: 'Written to test what I001 showed a day later: e after each letter that goes out high, after the lone s, and starting a word; then e after letters that go out low; then c where c belongs. Hand v5, as it was.',
+    review: 'It\'s exact. be and bc are the same shape, and so are we and wc, are and arc; every reads cvery and seven scvcn. After h, l and n the e is fine, because its lead-in comes up from below and draws the crossbar on the way. The e had never been tested anywhere else.',
+  },
+  {
+    id: 'J002', session: 10, title: 'e, joined from above (v6)', hand: 'v6', layout: 'rows',
+    made: 'The same lines and the same writings, in hand v6, where an e that isn\'t joined from below begins on its crossbar.',
+    review: 'Every e reads: are, were, every, owe, seven, sees, themselves. The c\'s are still c\'s. After a high letter the e is barred and a little more upright than the looped one, and the join drops into the bar with a small corner, which reads as a turn of the pen rather than a fault.',
+  },
+  {
+    id: 'J003', session: 10, title: 'The answer again (v6)', hand: 'v6', layout: 'page',
+    made: 'Session 9\'s answer, the same page and the same writing as I001, by hand v6.',
+    review: 'Against I001 line by line, the e\'s are the difference: ending, each, every, sessions, themselves, are, average all read now, and didn\'t holds together. Everything else is as it was: the lone s, the barred I, of reading oj, and the one pace for a paragraph about rushing.',
+  },
+  {
+    id: 'J004', session: 10, title: 'The same words in 0.8', hand: 'font', font: '0.8',
+    type: [{ text: 'are were over every\nbe we love seven\nsees uses themselves', size: 40, lh: 'normal' }],
+    made: 'Set in Claude Hand 0.8, from hand v5, to see whether the font had the same e.',
+    review: 'It does: arc wcrc ovcr cvcry, bc wc lovc scvcn, sccs uscs themsclvcs. Every download of 0.8 has written c for e in these places since session 8.',
+  },
+  {
+    id: 'J005', session: 10, title: 'The same words in 1.0', hand: 'font', font: '1.0',
+    type: [{ text: 'are were over every\nbe we love seven\nsees uses themselves', size: 40, lh: 'normal' }, { text: 'I didn\u2019t plan. \u00c9l\u00e8ve, caf\u00e9.', size: 40 }],
+    made: 'Set in Claude Hand 1.0, from hand v6.',
+    review: 'Every e reads, and the pair test still passes: none of the 5,184 pairs touch except at a join. In checking it I also saw a capital \u0152 drop into the browser\'s own type. That letter was never in the hand, and the gap is older than this session.',
   },
 ];

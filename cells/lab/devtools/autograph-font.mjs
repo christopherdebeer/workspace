@@ -1,6 +1,6 @@
 // Autograph's font (node cells/lab/devtools/autograph-font.mjs): the hand made into a font you can type with.
 //
-// Every character the hand knows is set on its own by the hand (hands/v5.ts, letter()), in each form it can begin with
+// Every character the hand knows is set on its own by the hand (hands/v6.ts, letter()), in each form it can begin with
 // (starting a word; joined from a letter that went out low; joined from one that went out high) and in four writings.
 // That gives centrelines with the pen's width at every point. Then devtools/autograph-font.py (fontTools + shapely: `pip
 // install fonttools shapely brotli`) widens them into outlines and writes the font, with its rules: each letter takes
@@ -16,12 +16,12 @@ import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 const here = dirname(fileURLToPath(import.meta.url)), lab = join(here, '..');
 const outfile = join(tmpdir(), `autograph-font-${process.pid}.mjs`);
-await build({ stdin: { contents: `export { KNOWS, letter, formsOf, exitOf, JOIN } from './client/autograph/hands/v5';`, resolveDir: lab, loader: 'ts' }, bundle: true, platform: 'node', format: 'esm', outfile, logLevel: 'warning' });
+await build({ stdin: { contents: `export { KNOWS, letter, formsOf, exitOf, JOIN } from './client/autograph/hands/v6';`, resolveDir: lab, loader: 'ts' }, bundle: true, platform: 'node', format: 'esm', outfile, logLevel: 'warning' });
 const { KNOWS, letter, formsOf, exitOf, JOIN } = await import(outfile);
 
-/** the version (the session that made it), how many writings of each letter, and how far each letter steps through
+/** the version (the session that made it: 1.0 is session 10's, by that rule, not a claim that it's done), how many writings of each letter, and how far each letter steps through
  * them: one or three (both turn a run of one letter through all four), by the letter */
-const VERSION = '0.8', ALTS = 4, step = (ch) => (ch.codePointAt(0) % 2 ? 3 : 1);
+const VERSION = '1.0', ALTS = 4, step = (ch) => (ch.codePointAt(0) % 2 ? 3 : 1);
 const chars = [' ', ...KNOWS];
 const glyphs = [];
 for (const ch of chars) {
@@ -33,7 +33,7 @@ for (const ch of chars) {
 }
 const data = join(tmpdir(), `autograph-font-${process.pid}.json`);
 writeFileSync(data, JSON.stringify({ version: VERSION, alts: ALTS, join: JOIN, glyphs }));
-console.log(`${chars.length} characters, ${glyphs.length} glyphs set by hand v5`);
+console.log(`${chars.length} characters, ${glyphs.length} glyphs set by hand v6`);
 execFileSync('python3', [join(here, 'autograph-font.py'), data, join(lab, 'static/autograph')], { stdio: 'inherit' });
 // (and the pair test: no two letters may touch except where they join)
 execFileSync('python3', [join(here, 'autograph-pairs.py'), join(lab, `static/autograph/claude-hand-${VERSION}.ttf`)], { stdio: 'inherit' });
