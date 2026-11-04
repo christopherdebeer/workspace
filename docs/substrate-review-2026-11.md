@@ -40,8 +40,8 @@ and consolidation have actually done. `npx jest` passes: 91 suites, 1,257 tests.
    grants and cell IAM are enforced were reported to the owner directly. **Because this repository
    is public, they are deliberately not recorded here.**
 4. **Durability and correctness hazards in the core.**
-   - The substrate table, the auth table and the code bucket are created with DESTROY removal
-     policies.
+   - The substrate table, the auth table and the code bucket were created with DESTROY removal
+     policies. *Fixed on this branch (8a5c996); live after the next platform deploy.*
    - A non-CAS write can lose a concurrent write's fan-out announcement.
    - Every read is a write (touch counters), which amplifies the stream and the lake.
 5. **The design record is honest but no longer a reliable map of the code.**
@@ -339,6 +339,9 @@ two hand-run sweeps and a proposal. The growth loop has two halves that never me
    (`platform/infra/substrate-table.ts:49`). The auth table is the same, and the code bucket is
    DESTROY with auto-deleted objects (`platform/infra/dynamic-cell-control-plane.ts:51`). Only the
    lake is retained. One mistaken `cdk destroy`, or a construct-ID change, deletes the workspace.
+   - *Fixed in 8a5c996:* the substrate, auth and cell-registry tables and the code bucket are now
+     Retain (checked by synth: same logical IDs, `DeletionPolicy` and `UpdateReplacePolicy` Retain).
+     It takes effect on the next platform deploy.
 2. **The reactor's depth cap is a lifetime cap.** `if (revision > (sub.maxDepth ?? 50)) skip`
    (`services/workspace/event-handlers.ts:663`) compares the fact's lifetime revision, not the
    reaction chain's depth. Any fact edited more than 50 times silently stops triggering every
