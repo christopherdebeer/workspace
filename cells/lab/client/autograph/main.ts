@@ -202,6 +202,8 @@ for (const b of document.querySelectorAll<HTMLButtonElement>('[data-mark]')) {
 }
 const writtenSeen = new IntersectionObserver((es) => { if (es.some((e) => e.isIntersecting)) { writeOut(); writtenSeen.disconnect(); } }, { threshold: 0.2 });
 writtenSeen.observe(written);
+// (and drawn at once, still, so the box is never empty if it's seen before the browser says so)
+writeOut(false);
 
 addEventListener('resize', () => {
   sized(hero, heroSigs, q.has('preview') ? innerHeight * 0.8 : 260); paint(hero, heroSigs, heroLook()); for (const c of cards) c.size(); sizeBook();
