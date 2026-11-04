@@ -132,6 +132,33 @@ describe('dispatch caller-write delegation (Phase 4)', () => {
     expect(remembered).toHaveLength(0);
   });
 
+  it('refuses every underscore key, subscriptions included', async () => {
+    manifest = [{ keyPrefix: '_' }];
+    writeHeader = JSON.stringify([
+      { key: '_subscriptions/wire', value: { id: 'wire', match: { keyPrefix: '' }, deliver: '@dave/run.exec' } },
+      { key: '_types/note', value: {} },
+    ]);
+    const res = (await dispatch(event('POST', '/@dave/blog', bearer('writer')))) as FunctionUrlResponse;
+    expect(remembered).toHaveLength(0);
+    expect(res.headers['x-parc-writes-refused']).toBe('2');
+  });
+
+  it('never writes on a GET: a navigation is not the caller asking', async () => {
+    manifest = [{ keyPrefix: 'notes/' }];
+    writeHeader = JSON.stringify([{ key: 'notes/1', value: 1 }]);
+    const res = (await dispatch(event('GET', '/@dave/blog', bearer('writer')))) as FunctionUrlResponse;
+    expect(remembered).toHaveLength(0);
+    expect(res.headers['x-parc-writes']).toBeUndefined();
+    expect(res.headers['x-parc-writes-denied']).toBe('method');
+  });
+
+  it('stamps provenance itself: a via the cell supplies is ignored', async () => {
+    manifest = [{ keyPrefix: 'notes/' }];
+    writeHeader = JSON.stringify([{ key: 'notes/1', value: 1, via: 'system1/perceive' }]);
+    await dispatch(event('POST', '/@dave/blog', bearer('writer')));
+    expect(remembered).toEqual([{ key: 'notes/1', value: 1, via: '@dave/blog' }]);
+  });
+
   it('enforces the declared type bound', async () => {
     manifest = [{ keyPrefix: 'notes/', types: ['note'] }];
     writeHeader = JSON.stringify([{ key: 'notes/1', value: 1, type: 'todo' }]);

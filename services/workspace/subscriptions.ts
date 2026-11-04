@@ -139,6 +139,21 @@ export function parseCellTarget(address: string): { owner: string; name: string;
   return m ? { owner: m[1], name: m[2], tool: m[3] } : null;
 }
 
+/** Cells the reactor may hand a per-run token to: models agents, run code
+ *  steps, lit's type-manager reactions, and System One (ADR-0098). */
+export const RUN_TOKEN_CELLS: ReadonlySet<string> = new Set(['models', 'run', 'lit', 'system1']);
+
+/**
+ * Whether a delivery to `target` may carry a per-run token minted for the slice
+ * owner. Only the owner's OWN cell of one of those names qualifies: the token
+ * carries the owner's authority, so a cell elsewhere that happens to be called
+ * `run` must never receive it, however the subscription that names it was
+ * written.
+ */
+export function mintsRunToken(target: { owner: string; name: string }, sliceOwner: string): boolean {
+  return target.owner === sliceOwner && RUN_TOKEN_CELLS.has(target.name);
+}
+
 // ── validation ─────────────────────────────────────────────────────
 
 function validateSubscription(def: SubscriptionDefinition): void {

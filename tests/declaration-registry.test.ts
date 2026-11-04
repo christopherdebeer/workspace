@@ -10,7 +10,7 @@ import {
   type DeclarationKind,
 } from '../platform/runtime';
 import type { Identity } from '../platform/runtime';
-import { createSubscriptions, SUBSCRIPTIONS_PREFIX, type SubscriptionDefinition } from '../services/workspace/subscriptions';
+import { createSubscriptions, SUBSCRIPTIONS_PREFIX, mintsRunToken, type SubscriptionDefinition } from '../services/workspace/subscriptions';
 import { createRegisteredViews, VIEWS_PREFIX, type ViewDefinition } from '../services/workspace/views';
 
 const alice: Identity = { user: 'alice', scopes: [] };
@@ -108,5 +108,18 @@ describe('views are a thin wrapper (parity, ADR-0001 step 2)', () => {
     expect(await views.remove('r', 'open', alice)).toEqual({ ok: true });
     await expect(views.remove('r', 'open', alice)).rejects.toThrow('not_found: view "open" not found');
     expect((await views.list('r')).length).toBe(0);
+  });
+});
+
+describe('the reactor hands a per-run token only to the slice owner\'s own cells', () => {
+  it('mints for the owner\'s models / run / lit / system1', () => {
+    for (const name of ['models', 'run', 'lit', 'system1']) expect(mintsRunToken({ owner: 'alice', name }, 'alice')).toBe(true);
+  });
+  it('never for a cell of the same name owned by someone else', () => {
+    expect(mintsRunToken({ owner: 'mallory', name: 'run' }, 'alice')).toBe(false);
+    expect(mintsRunToken({ owner: 'c15r', name: 'models' }, 'alice')).toBe(false);
+  });
+  it('never for the owner\'s other cells', () => {
+    expect(mintsRunToken({ owner: 'alice', name: 'notes' }, 'alice')).toBe(false);
   });
 });

@@ -206,7 +206,11 @@ async function runSsrReads(reads: SsrRead[], ctx: ServiceContext): Promise<Recor
  *   3. Reserved namespaces are always refused (a cell may not register the
  *      caller's vocabulary or rewrite its authority), and the batch is capped.
  */
-const RESERVED_WRITE_PREFIXES = ['_actions/', '_views/', '_grants/', '_groups/', '_public/'];
+/** Every `_`-prefixed key is system vocabulary (actions, views, subscriptions,
+ *  grants, groups, types, …): a page may never write it into its caller's
+ *  slice, whatever its manifest declares. A subscription written this way could
+ *  wire the caller's own facts to code they never chose to run. */
+const isReservedWriteKey = (key: string): boolean => key.startsWith('_');
 const MAX_CALLER_WRITES = 16;
 const WRITES_HEADER = 'x-parc-writes';
 
@@ -278,7 +282,7 @@ export async function applyCallerWrites(
     ctx.logger.warn('caller-writes batch capped', { requested: requested.length, cap: MAX_CALLER_WRITES });
   }
   for (const w of requested.slice(0, MAX_CALLER_WRITES)) {
-    const reserved = RESERVED_WRITE_PREFIXES.some((p) => w.key.startsWith(p));
+    const reserved = isReservedWriteKey(w.key);
     // A target slice other than the caller's own is a cross-slice write-through:
     // allowed only when the cell DECLARED `crossSlice` for the prefix, and finally
     // bounded at the act by the caller's own grant (workspace.requireWriteThrough).
@@ -306,7 +310,9 @@ export async function applyCallerWrites(
         ...(w.type ? { type: w.type } : {}),
         ...(w.tags ? { tags: w.tags } : {}),
         ...(crossSlice ? { owner: w.owner } : {}),
-        via: w.via ?? cellAddress,
+        // Provenance is the platform's to stamp: the cell that asked, never a
+        // label the cell supplies (organs key their loop guards on `via`).
+        via: cellAddress,
       });
       applied++;
     } catch (err) {
@@ -391,7 +397,13 @@ async function route(req: ServiceHttpRequest, ctx: ServiceContext): Promise<Serv
       const raw = result.headers![writeHeaderKey];
       outHeaders = { ...result.headers };
       delete outHeaders[writeHeaderKey];
-      if (ctx.identity.user) {
+      // Writes ride only on an unsafe method the caller sent (a form post, a
+      // fetch). A GET or HEAD is a navigation, which any page can trigger with
+      // the caller's cookies, so it never writes.
+      const safeMethod = req.method === 'GET' || req.method === 'HEAD';
+      if (ctx.identity.user && safeMethod) {
+        outHeaders['x-parc-writes-denied'] = 'method';
+      } else if (ctx.identity.user) {
         let manifest: CallerWriteIntent[] = [];
         try {
           const meta = await ctx.serviceClient('cells').command<{ writes?: CallerWriteIntent[] }>('callerWritesFor', {
