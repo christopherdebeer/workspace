@@ -21,14 +21,14 @@ The record is the point. Every sample is kept in the repository with the hand th
 - **Catalogue** (`catalog.ts`): what each sample is, what it was made for, my review, and what each session decided. Each session keeps its own file (`sessions/NN.ts`, listed in order in `sessions/index.ts`), so adding one never touches another, and the check fingerprints each recorded session so none can change afterwards, by accident or otherwise.
 - **Looking** (`node cells/lab/devtools/autograph-look.mjs <id>`, or `--entry=<file>` for a try that isn't a sample yet; `--rows`, `--mode=time`): draws a sample whole, with the page's ink, and saves it as a picture, so it can be looked at slowly, a line at a time.
 - **Fingerprints** (`fingerprints.json`): every sample's strokes, hashed when it's catalogued. `node cells/lab/devtools/autograph-check.mjs` fails if any sample no longer comes out exactly as it was made (a hand was edited), and checks that the catalogue holds together. `--record` fingerprints new samples and never changes an old one.
-- **The font** (`devtools/autograph-font.mjs`, then `autograph-font.py`, then `autograph-pairs.py`, which fails the build if any two letters touch except where they join): **Claude Hand** (now 1.0, from hand v6; the number is the session's, not a claim that it's finished), downloadable from the page as TTF or WOFF2, with a specimen to type into. Each version's files are kept (`static/autograph/claude-hand-<version>.*`), and a sample set in type names the version it was set in. It's licensed under the SIL Open Font License 1.1 with the reserved font name "Claude Hand" (`static/autograph/OFL.txt`): free to use, embed, change and share, but a changed version takes another name.
+- **The font** (`devtools/autograph-font.mjs`, then `autograph-font.py`, then `autograph-pairs.py`, which fails the build if any two letters touch except where they join): **Claude Hand** (now 1.2, from hand v7; the number is the session's, not a claim that it's finished), in two faces: Regular, and Pressed, its bold, every letter written at the pace the hand writes what's strong. Downloadable from the page as TTF or WOFF2, with its stylesheet (`claude-hand-1.2.css`), which dresses marked text for the web the way the hand marks it, as far as type can. A changed stylesheet is a new version, like the font. Each version's files are kept (`static/autograph/claude-hand-<version>.*`), and a sample set in type names the version it was set in; one set with the stylesheet is fingerprinted as it's set (`typeset.ts` turns the hand's markup into HTML). It's licensed under the SIL Open Font License 1.1 with the reserved font name "Claude Hand" (`static/autograph/OFL.txt`): free to use, embed, change and share, but a changed version takes another name.
   - **Setting:** the hand sets every character it knows on its own, in each form it can begin with (starting a word, joined from below, joined from above) and in several writings (three in 0.4, four in 0.6).
   - **Outlines:** the strokes are widened by the pen's own widths into outlines and unioned (shapely).
   - **Rules:** the font is written (fontTools) with two rules in `calt`, on by default. Each letter takes the form the letter before it asks for. Each takes a writing a step on from its neighbour's (in 0.6, one step or three, by the letter), so neighbours never match.
   - **Reproducible:** the same hand always builds the same file. The files live in `static/autograph/`; the check fingerprints the font's source like a sample.
   - **To rebuild:** `pip install fonttools shapely brotli`, then `node cells/lab/devtools/autograph-font.mjs`.
 - **The autobiography** (`autobiography.ts`): *In My Own Hand*, its source the catalogue. A chapter is written once, at the end of the work it covers, and never edited (the check fingerprints each chapter like a sample). On the page each chapter is kept in the record in the session it was written in (chapter one in session 7, after the six it covers), its first line written by the hand, the rest set in the font, signed at the end. `node cells/lab/devtools/autograph-book.mjs` sets it as a PDF (`static/autograph/in-my-own-hand.pdf`), downloadable from the page.
-- **The page**: my signature, by the newest hand; then what's yours to use, set apart from the record: the hand, writing whatever's typed, marked for what's meant (markdown, or the elements from session 11, with buttons to mark a selected word); the font, to type in and download; and the book, its chapters listed and its PDF to download. Then the record, from the first session on (a link at the top jumps to the latest), with each chapter of the book in the session it was written in and each sample writing itself out. Tap one to write it again. **TIME** shows it as dots at every hundredth of a second, so the spacing is the speed: bunched where the pen slowed, strung out where it flew.
+- **The page**: my signature, by the newest hand; then what's yours to use, set apart from the record: one input, marked for what's meant (markdown, or the elements from session 11, with buttons to mark a selected word), written by the hand and set in type, as the web sets it (the font and its stylesheet) or as any app would (the font alone); the font, its faces and its stylesheet to download; and the book, its chapters listed and its PDF to download. Then the record, from the first session on (a link at the top jumps to the latest), with each chapter of the book in the session it was written in and each sample writing itself out. Tap one to write it again. **TIME** shows it as dots at every hundredth of a second, so the spacing is the speed: bunched where the pen slowed, strung out where it flew.
 
 ## Handwriting, briefly
 
@@ -276,6 +276,28 @@ Decided:
 3. Unsure and care stay in the timing.
 4. Size alone never means emphasis.
 5. Circle words, not single letters.
+
+**Session 12 (4 November 2026): the font, dressed.** With c15r, who pointed out that a font can't carry what the hand does with emphasis, but a web font can, since it comes with a stylesheet. They also asked whether the page needed two places to type. It didn't: there's one input now. The hand writes it, and the font sets it either as the web would (the font and its stylesheet) or as any app would (the font alone).
+
+Making the stylesheet showed the font itself could carry more:
+- **Pressed.** The hand's strong is the pen slowed, so the ink comes heavier by itself. Written at that pace, every letter makes a second face. It's the family's bold, so any app's bold is the hand pressing (L001). It's a fifth heavier and no more, which is what pressing is in this hand. The quicker manners (asides, doubts) lighten the ink by under a tenth, too little for a face of their own.
+- **Where the marks go.** Each face says where its underline and strike go, where the hand writes them: close under the letters, and through their middles.
+
+The stylesheet (`static/autograph/claude-hand-1.2.css`) does the rest (L002). Session 11 said type can't strike a word, add one over the line, or circle one. Type alone can't; with a stylesheet it can, in the hand's manner if not by it. What it can't do is anything in time. Unsure, in the hand, is a pause and a looser line; in type it's only a little smaller, so it hardly shows. Care's extra room can't be had either, because spacing a joined hand's letters breaks its joins. Any app (L003) gets bold, underline and strike right, fakes an italic the hand doesn't have, and loses the rest.
+
+| I mean | the hand (v7) | the web (font 1.2 and its stylesheet) | any app (font 1.2 alone) |
+|---|---|---|---|
+| this word, not another | underlined, after | underlined, where the hand puts it | the app's italic: a slant on a slant |
+| this matters | pressed, and slower | the Pressed face | bold, which is the Pressed face |
+| I was wrong | struck, left readable | struck through the letters' middles | struck |
+| I'd add this | over the line, at a caret | over the line, at a caret | lost: it drops into the line |
+| look at this | circled | ringed, in the hand's manner | lost |
+| exactly this | printed, upright | unjoined, more upright | lost |
+| by the way | smaller, quicker | smaller | lost |
+| I'm not sure | a pause, then looser | a little smaller | lost |
+| chosen with care | slower, upright, even | more upright | lost |
+
+One thing type taught the hand: its caret, drawn in the gap and rising to the x-height, reads as a caret, while the hand's still reads as a comma at writing size. The next hand learns it.
 
 ## Where it's going
 

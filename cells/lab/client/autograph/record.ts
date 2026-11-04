@@ -14,8 +14,9 @@ export type Entry = {
   /** several writings: one under another, or laid on top of each other (the examiner's way of comparing) */
   layout?: 'rows' | 'overlay' | 'page';
   /** (from session 4) text set in the font rather than written by a hand: lines, each at a size (px), joins on unless
-   * `calt` is false */
-  type?: { text: string; size: number; calt?: boolean; lh?: string }[];
+   * `calt` is false; (from session 12) a line with a `way` is marked text (as the hand reads it, see typeset.ts), set as
+   * the web sets it, the font and its stylesheet, or as any app does, the font alone */
+  type?: { text: string; size: number; calt?: boolean; lh?: string; way?: 'web' | 'app' }[];
   /** the font's version it's set in (each version is kept, so it always comes out as it was set; 0.41 if not given,
    * which has 0.4's glyphs) */
   font?: string;

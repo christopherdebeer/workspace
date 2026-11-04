@@ -44,7 +44,7 @@ export async function withWood(fn, { width = 390, height = 844 } = {}) {
   const exp = process.env.EXPERIMENT ?? 'mistwood';
   const ready = process.env.READY ?? '__mistwood';
   const html = readFileSync(join(CELL, `static/${exp}.html`), 'utf8').replace('{{app}}', '/app.js').replace(/\{\{assets\}\}/g, '/assets/');
-  const TYPES = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp', svg: 'image/svg+xml' };
+  const TYPES = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp', svg: 'image/svg+xml', css: 'text/css', woff2: 'font/woff2', ttf: 'font/ttf', pdf: 'application/pdf' };
   const srv = http.createServer((req, res) => {
     const u = new URL(req.url, 'http://x');
     if (u.pathname === '/app.js') {

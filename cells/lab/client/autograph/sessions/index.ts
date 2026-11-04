@@ -13,4 +13,5 @@ import s08 from './08';
 import s09 from './09';
 import s10 from './10';
 import s11 from './11';
-export const SESSION_FILES: SessionFile[] = [s01, s02, s03, s04, s05, s06, s07, s08, s09, s10, s11];
+import s12 from './12';
+export const SESSION_FILES: SessionFile[] = [s01, s02, s03, s04, s05, s06, s07, s08, s09, s10, s11, s12];

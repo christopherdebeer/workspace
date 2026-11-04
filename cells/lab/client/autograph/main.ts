@@ -1,6 +1,7 @@
 /**
- * Autograph: the notebook. My signature as it stands; then what's yours to use, set apart from the record (the hand,
- * writing what you type as you mark it; the font, to type in and download; the book, to download); then the record,
+ * Autograph: the notebook. My signature as it stands; then what's yours to use, set apart from the record (one input,
+ * written by the hand and set in type, on the web with the font's stylesheet or as any app would set the font alone;
+ * the font and its stylesheet to download; the book, to download); then the record,
  * from the first session on (a link jumps to the latest): each session's findings and decisions, a chapter of the book
  * where one was written, and its samples, each writing itself out as it comes into view (tap to write it again), with
  * its measures, what a graphologist would say, what it was made for, and my review.
@@ -13,6 +14,7 @@ import { Look, bounds, fitK, paint, replay } from './ink';
 import { Measures, measure, reading } from './measure';
 import { MADE } from './samples';
 import { BOOK, firstLine } from './autobiography';
+import { typeset } from './typeset';
 import { write as v4write } from './hands/v4';
 // (my signature, and the hand that writes what you type: the newest hand; autograph-check.mjs fails if this isn't the
 // hand the record says is newest)
@@ -58,7 +60,10 @@ function typeCard(e: Entry) {
   el.className = 'sample'; el.id = e.id;
   el.innerHTML = `
     <header><span class="id">${e.id}</span><h3>${esc(e.title)}</h3><span class="hand">Claude Hand ${e.font ?? '0.41'}, set in type</span></header>
-    <div class="set">${e.type!.map((l) => `<p class="hand-type${l.calt === false ? ' nocalt' : ''}" style="font-size:${l.size}px;font-family:'Claude Hand ${e.font ?? '0.41'}',Georgia,serif${l.lh ? `;line-height:${l.lh}` : ''}">${esc(l.text).replace(/\n/g, '<br>')}${l.calt === false ? '<span class="off">joins off</span>' : ''}</p>`).join('')}</div>
+    <div class="set">${e.type!.map((l) => l.way
+      // (from session 12: set as the web sets it, the font and its stylesheet, or as any app does, the font alone)
+      ? `<p class="hand-type ${l.way === 'web' ? 'claude-hand' : 'claude-hand-app'}${l.calt === false ? ' nocalt' : ''}" style="font-size:${l.size}px${l.lh ? `;line-height:${l.lh}` : ''}">${typeset(l.text, l.way)}<span class="off">${l.way === 'web' ? 'web' : 'any app'}</span></p>`
+      : `<p class="hand-type${l.calt === false ? ' nocalt' : ''}" style="font-size:${l.size}px;font-family:'Claude Hand ${e.font ?? '0.41'}',Georgia,serif${l.lh ? `;line-height:${l.lh}` : ''}">${esc(l.text).replace(/\n/g, '<br>')}${l.calt === false ? '<span class="off">joins off</span>' : ''}</p>`).join('')}</div>
     <p class="made">${esc(e.made)}</p>
     <p class="review">${esc(e.review)}</p>`;
   return { el, size: () => {}, write: () => {} };
@@ -152,13 +157,13 @@ for (const ch of chapters) { bookSeen.observe(ch.first); bookSeen.observe(ch.sig
 const seen = new IntersectionObserver((es) => { for (const e of es) if (e.isIntersecting) { cards.find((c) => c.el === e.target)?.write(); seen.unobserve(e.target); } }, { threshold: 0.35 });
 for (const c of cards) seen.observe(c.el);
 
-// (the hand, live: what's typed, marked for what's meant, written by the newest hand in one sitting, its lines broken
-// to the column; a new writing each time it's tapped)
+// (one input: what's typed, marked for what's meant, written by the newest hand in one sitting, its lines broken to
+// the column, a new writing each time it's tapped; and set in type, as the web sets it or as any app would)
 const mark = $('mark') as HTMLTextAreaElement, written = $('written') as HTMLCanvasElement;
 let wSeed = writing, wSigs: Sig[] = [], wWidth = 0, wTimer = 0;
 const wLook = () => ({ ...lookOf('ink'), solid: true });
 const lineWidth = () => Math.max(12, Math.min(30, Math.round((written.clientWidth || 340) / 20)));
-$('writeHand').textContent = `The hand, live · ${HANDS[NEWEST].name}`;
+$('writeHand').textContent = `by the hand, ${HANDS[NEWEST].name}`;
 function writeOut(watch = true) {
   const text = mark.value.replace(/\s+/g, ' ').trim();
   wWidth = lineWidth();
@@ -168,7 +173,18 @@ function writeOut(watch = true) {
   if (watch) replay(written, wSigs, wLook); else paint(written, wSigs, wLook());
   $('writtenNote').textContent = `${HANDS[NEWEST].name} · writing ${wSeed} · ${wSigs.length} line${wSigs.length === 1 ? '' : 's'} · tap to write it again`;
 }
-mark.addEventListener('input', () => { clearTimeout(wTimer); wTimer = window.setTimeout(() => writeOut(), 450); });
+const typed = $('typed'), size = $('specSize') as HTMLInputElement, joins = $('specJoins') as HTMLButtonElement;
+let way: 'web' | 'app' = 'web';
+const WAYS = {
+  web: 'The font and its stylesheet, as a web page sets it: everything the hand means that type can say. Some of it as the hand does it (pressed is the Pressed face; the underline and strike sit where the hand puts them), some drawn in its manner (the circle, the caret), and what the hand does in time, a pause, a slowing, hardly shows.',
+  app: 'The font alone, as any app sets it with its bold, italic, underline and strike: bold is the Pressed face, strike sits where the hand strikes. The font has no italic, so the app fakes one by slanting it further; everything else you mark is lost, and only its words are left.',
+};
+const setType = () => { typed.className = way === 'web' ? 'claude-hand' : 'claude-hand-app'; typed.classList.toggle('nocalt', joins.getAttribute('aria-pressed') !== 'true'); typed.innerHTML = typeset(mark.value.replace(/\s+/g, ' ').trim(), way); typed.style.fontSize = `${size.value}px`; $('wayNote').textContent = WAYS[way]; };
+for (const b of document.querySelectorAll<HTMLButtonElement>('[data-way]')) b.addEventListener('click', () => { way = b.dataset.way as typeof way; for (const o of document.querySelectorAll('[data-way]')) o.setAttribute('aria-pressed', String(o === b)); setType(); });
+size.addEventListener('input', setType);
+joins.addEventListener('click', () => { joins.setAttribute('aria-pressed', String(joins.getAttribute('aria-pressed') !== 'true')); setType(); });
+setType();
+mark.addEventListener('input', () => { setType(); clearTimeout(wTimer); wTimer = window.setTimeout(() => writeOut(), 450); });
 written.addEventListener('click', () => { wSeed = 1 + Math.floor(Math.random() * 999999); writeOut(); });
 // (marking: select a word (or put the caret in one) and choose; the selection stays in the box while a mark is chosen)
 for (const b of document.querySelectorAll<HTMLButtonElement>('[data-mark]')) {
@@ -192,10 +208,4 @@ addEventListener('resize', () => {
 });
 matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { paint(hero, heroSigs, heroLook()); for (const c of cards) c.size(); sizeBook(); if (wSigs.length) paint(written, wSigs, wLook()); });
 
-// (the font: a specimen to type into, its size and its joins to try)
-const spec = $('specimen') as HTMLTextAreaElement, size = $('specSize') as HTMLInputElement, joins = $('specJoins') as HTMLButtonElement;
-const setSize = () => { spec.style.fontSize = `${size.value}px`; };
-size.addEventListener('input', setSize); setSize();
-joins.addEventListener('click', () => { const on = joins.getAttribute('aria-pressed') !== 'true'; joins.setAttribute('aria-pressed', String(on)); spec.classList.toggle('nocalt', !on); });
-
-(window as unknown as { __autograph: unknown }).__autograph = { samples: CATALOG.length, sessions: SESSIONS.length, written: () => ({ lines: wSigs.length, width: wWidth, seed: wSeed }) };
+(window as unknown as { __autograph: unknown }).__autograph = { samples: CATALOG.length, sessions: SESSIONS.length, written: () => ({ lines: wSigs.length, width: wWidth, seed: wSeed }), typed: () => typed.innerHTML };

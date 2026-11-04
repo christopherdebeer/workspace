@@ -11,8 +11,8 @@ import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 const here = dirname(fileURLToPath(import.meta.url)), lab = join(here, '..');
 const outfile = join(tmpdir(), `autograph-${process.pid}.mjs`);
-await build({ stdin: { contents: `export { MADE } from './client/autograph/samples'; export { CATALOG, SESSIONS, HANDS, NEWEST } from './client/autograph/catalog'; export { SESSION_FILES } from './client/autograph/sessions'; export { measure } from './client/autograph/measure'; export { KNOWS, letter, formsOf } from './client/autograph/hands/v2'; export { KNOWS as KNOWS4, letter as letter4, formsOf as formsOf4 } from './client/autograph/hands/v4'; export { BOOK } from './client/autograph/autobiography'; export { KNOWS as KNOWS5, letter as letter5, formsOf as formsOf5 } from './client/autograph/hands/v5'; export { KNOWS as KNOWS6, letter as letter6, formsOf as formsOf6 } from './client/autograph/hands/v6';`, resolveDir: lab, loader: 'ts' }, bundle: true, platform: 'node', format: 'esm', outfile, logLevel: 'warning' });
-const { MADE, CATALOG, SESSIONS, HANDS, NEWEST, SESSION_FILES, measure, KNOWS, letter, formsOf, KNOWS4, letter4, formsOf4, BOOK, KNOWS5, letter5, formsOf5, KNOWS6, letter6, formsOf6 } = await import(outfile);
+await build({ stdin: { contents: `export { MADE } from './client/autograph/samples'; export { CATALOG, SESSIONS, HANDS, NEWEST } from './client/autograph/catalog'; export { SESSION_FILES } from './client/autograph/sessions'; export { measure } from './client/autograph/measure'; export { KNOWS, letter, formsOf } from './client/autograph/hands/v2'; export { KNOWS as KNOWS4, letter as letter4, formsOf as formsOf4 } from './client/autograph/hands/v4'; export { BOOK } from './client/autograph/autobiography'; export { KNOWS as KNOWS5, letter as letter5, formsOf as formsOf5 } from './client/autograph/hands/v5'; export { KNOWS as KNOWS6, letter as letter6, formsOf as formsOf6 } from './client/autograph/hands/v6'; export { KNOWS as KNOWS7, letter as letter7, formsOf as formsOf7, STYLE as STYLE7, MANNERS as MANNERS7 } from './client/autograph/hands/v7'; export { typeset } from './client/autograph/typeset';`, resolveDir: lab, loader: 'ts' }, bundle: true, platform: 'node', format: 'esm', outfile, logLevel: 'warning' });
+const { MADE, CATALOG, SESSIONS, HANDS, NEWEST, SESSION_FILES, measure, KNOWS, letter, formsOf, KNOWS4, letter4, formsOf4, BOOK, KNOWS5, letter5, formsOf5, KNOWS6, letter6, formsOf6, KNOWS7, letter7, formsOf7, STYLE7, MANNERS7, typeset } = await import(outfile);
 const fpFile = join(lab, 'client/autograph/fingerprints.json');
 const fps = existsSync(fpFile) ? JSON.parse(readFileSync(fpFile, 'utf8')) : {};
 const record = process.argv.includes('--record');
@@ -34,6 +34,9 @@ const FONTS = [
   { key: 'font 0.6', files: '0.6', src: () => [' ', ...KNOWS4].flatMap((ch) => formsOf4(ch).flatMap((f) => [1, 2, 3, 4].map((a) => letter4(ch, f, a)))) },
   { key: 'font 0.8', files: '0.8', src: () => [' ', ...KNOWS5].flatMap((ch) => formsOf5(ch).flatMap((f) => [1, 2, 3, 4].map((a) => letter5(ch, f, a)))) },
   { key: 'font 1.0', files: '1.0', src: () => [' ', ...KNOWS6].flatMap((ch) => formsOf6(ch).flatMap((f) => [1, 2, 3, 4].map((a) => letter6(ch, f, a)))) },
+  // (from 1.2, two faces: the hand at its own pace, and at the pace it writes what's strong)
+  { key: 'font 1.2', files: '1.2', src: () => [' ', ...KNOWS7].flatMap((ch) => formsOf7(ch).flatMap((f) => [1, 2, 3, 4].map((a) => letter7(ch, f, a, STYLE7)))) },
+  { key: 'font 1.2 pressed', files: 'pressed-1.2', src: () => [' ', ...KNOWS7].flatMap((ch) => formsOf7(ch).flatMap((f) => [1, 2, 3, 4].map((a) => letter7(ch, f, a, { ...STYLE7, pace: STYLE7.pace * MANNERS7.strong.pace })))) },
 ];
 for (const F of FONTS) {
   const fp = createHash('sha256').update(JSON.stringify(F.src())).digest('hex').slice(0, 16);
@@ -48,6 +51,21 @@ for (const c of BOOK.chapters) {
   const key = `chapter ${c.n}`, fp = createHash('sha256').update(JSON.stringify(c)).digest('hex').slice(0, 16);
   if (!fps[key]) { if (record) { fps[key] = fp; added++; } else changed.push(`${key} (no fingerprint: run with --record)`); }
   else if (fps[key] !== fp) changed.push(`${key} was edited (was ${fps[key]}, now ${fp}): a chapter is written once`);
+}
+// (the font's stylesheets: each version's, fingerprinted as it's kept, so a changed one is a new version; and every
+// sample set with one, fingerprinted as it's set, so it always comes out as it did)
+const SHEETS = ['1.2'];
+for (const v of SHEETS) {
+  const f = join(lab, `static/autograph/claude-hand-${v}.css`), key = `stylesheet ${v}`;
+  if (!existsSync(f)) { changed.push(`${key} (missing)`); continue; }
+  const fp = createHash('sha256').update(readFileSync(f)).digest('hex').slice(0, 16);
+  if (!fps[key]) { if (record) { fps[key] = fp; added++; } else changed.push(`${key} (no fingerprint: run with --record)`); }
+  else if (fps[key] !== fp) changed.push(`${key} was edited (was ${fps[key]}, now ${fp}): a changed stylesheet is a new version`);
+}
+for (const e of CATALOG.filter((x) => x.type?.some((l) => l.way))) {
+  const key = `${e.id} (as set)`, fp = createHash('sha256').update(JSON.stringify(e.type.map((l) => (l.way ? typeset(l.text, l.way) : l.text)))).digest('hex').slice(0, 16);
+  if (!fps[key]) { if (record) { fps[key] = fp; added++; } else changed.push(`${key} (no fingerprint: run with --record)`); }
+  else if (fps[key] !== fp) changed.push(`${key} (was ${fps[key]}, now ${fp})`);
 }
 for (const e of CATALOG.filter((x) => MADE[x.id])) {
   const fp = createHash('sha256').update(JSON.stringify(MADE[e.id]())).digest('hex').slice(0, 16);

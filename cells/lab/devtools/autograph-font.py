@@ -31,6 +31,14 @@ MIN_R = 7                # the finest the pen goes, half-width in units
 
 data = json.load(open(sys.argv[1]))
 VERSION = data['version']   # the session that made it, as a version
+FACE, FILE = data.get('face', 'Regular'), data.get('file', '')   # (from 1.2: Regular, or Pressed, the family's bold)
+PRESSED = FACE == 'Pressed'
+# (where the hand writes an underline and a strike (hands/v7.ts): an underline a fifth of an x-height under the line,
+# a strike through the middle of the letters; both quick strokes, a little finer than the letters. The tables give the
+# top of each stroke)
+MARK = round(0.75 * PEN * XH)
+UNDER = round(-0.22 * XH) + MARK // 2
+STRIKE = round(0.43 * XH) + MARK // 2
 out = sys.argv[2]
 os.makedirs(out, exist_ok=True)
 DIGITS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine']
@@ -136,23 +144,25 @@ for n_ in order:
 fb.setupHorizontalMetrics(metrics)
 fb.setupHorizontalHeader(ascent=900, descent=-460, lineGap=40)
 fb.setupNameTable({
-    'familyName': 'Claude Hand', 'styleName': 'Regular', 'fullName': 'Claude Hand', 'psName': 'ClaudeHand-Regular',
-    'uniqueFontIdentifier': 'Claude Hand Regular %s' % VERSION, 'version': 'Version %s' % VERSION,
+    'familyName': 'Claude Hand', 'styleName': 'Bold' if PRESSED else 'Regular', 'fullName': 'Claude Hand Pressed' if PRESSED else 'Claude Hand',
+    'psName': 'ClaudeHand-%s' % FACE, 'typographicFamily': 'Claude Hand', 'typographicSubfamily': FACE,
+    'uniqueFontIdentifier': 'Claude Hand %s %s' % (FACE, VERSION), 'version': 'Version %s' % VERSION,
     'copyright': 'Copyright (c) 2026, The Claude Hand Project Authors (https://parc.land), with Reserved Font Name "Claude Hand".',
     'licenseDescription': 'This Font Software is licensed under the SIL Open Font License, Version 1.1. This license is available with a FAQ at: https://openfontlicense.org',
     'licenseInfoURL': 'https://openfontlicense.org',
-    'designer': 'Claude', 'description': 'A hand learned in public (the parc.land lab, autograph experiment): hand v5 set as a font. Each letter joins as its neighbour asks, in four writings, never the same as its neighbour.',
+    'designer': 'Claude', 'description': 'A hand learned in public (the parc.land lab, autograph experiment): hand v7 set as a font%s. Each letter joins as its neighbour asks, in four writings, never the same as its neighbour.' % (', every letter written at the pace the hand writes what is strong, so its ink comes heavier by itself' if PRESSED else ''),
 })
 fb.setupOS2(sTypoAscender=900, sTypoDescender=-460, sTypoLineGap=40, usWinAscent=max(900, ymax + 20), usWinDescent=max(460, -ymin + 20),
-            sxHeight=XH, sCapHeight=round(1.7 * XH), achVendID='NONE', fsSelection=0x40 | 0x80, usWeightClass=400, version=4, fsType=0)
-fb.setupPost()
+            sxHeight=XH, sCapHeight=round(1.7 * XH), achVendID='NONE', fsSelection=(0x20 if PRESSED else 0x40) | 0x80, usWeightClass=700 if PRESSED else 400, version=4, fsType=0,
+            yStrikeoutSize=MARK, yStrikeoutPosition=STRIKE)
+fb.setupPost(underlinePosition=UNDER, underlineThickness=MARK)
 # (the same hand always builds the same file: no build time in it)
-fb.updateHead(fontRevision=float(VERSION), created=timestampFromString('Tue Nov  3 00:00:00 2026'), modified=timestampFromString('Tue Nov  3 00:00:00 2026'))
+fb.updateHead(fontRevision=float(VERSION), macStyle=1 if PRESSED else 0, created=timestampFromString('Tue Nov  3 00:00:00 2026'), modified=timestampFromString('Tue Nov  3 00:00:00 2026'))
 addOpenTypeFeaturesFromString(fb.font, '\n'.join(fea))
-ttf = os.path.join(out, 'claude-hand-%s.ttf' % VERSION)
+ttf = os.path.join(out, 'claude-hand-%s%s.ttf' % (FILE, VERSION))
 fb.save(ttf)
 f = TTFont(ttf)
 f.flavor = 'woff2'
-f.save(os.path.join(out, 'claude-hand-%s.woff2' % VERSION))
+f.save(os.path.join(out, 'claude-hand-%s%s.woff2' % (FILE, VERSION)))
 pts = sum(len(getattr(glyf[x], 'coordinates', [])) for x in order)
-print('%d glyphs, %d characters, %d outline points; %s %d KB (sha256 %s), woff2 %d KB' % (len(order), len(cmap), pts, os.path.basename(ttf), os.path.getsize(ttf) // 1024, hashlib.sha256(open(ttf, 'rb').read()).hexdigest()[:16], os.path.getsize(os.path.join(out, 'claude-hand-%s.woff2' % VERSION)) // 1024))
+print('%d glyphs, %d characters, %d outline points; %s %d KB (sha256 %s), woff2 %d KB' % (len(order), len(cmap), pts, os.path.basename(ttf), os.path.getsize(ttf) // 1024, hashlib.sha256(open(ttf, 'rb').read()).hexdigest()[:16], os.path.getsize(os.path.join(out, 'claude-hand-%s%s.woff2' % (FILE, VERSION))) // 1024))
