@@ -26,6 +26,9 @@ and consolidation have actually done. `npx jest` passes: 91 suites, 1,257 tests.
      present after N days and read".
    - Perception is one-shot per fact.
    - Facts edited more than 50 times stop triggering subscriptions at all (§2.3).
+   - The measured, growing question taxonomy designed for it (`docs/research/stems`, 70 → 52 →
+     a proposed ~20-question root) was never wired in. Perception still asks hand-written
+     questions (§1.5).
 2. **Work has moved off the substrate.**
    - Since 1 October, 1,037 of 1,045 commits are in `cells/lab`.
    - `platform/`, `services/`, `lib/` and the organs have not changed since 2026-09-25.
@@ -213,6 +216,73 @@ diverged. This is most of both cells' line counts.
 6. **Find out why consolidation stopped on 2026-10-09.** Backfill, the taxonomy report and Stage B
    all hang off it.
 7. **Test the shell** against a fake gateway: revert round-trips, survival labelling, edges shapes.
+
+### 1.5 The question taxonomy that never reached System One
+
+*Added after the first draft. The first draft missed this work: it is in `docs/research/stems/` and
+in unindexed `_stems/` facts, not in the ADRs or the cells.*
+
+**What was built.** On 2026-09-29, alongside ADR-0098, an experiment set out to find the small, fixed,
+domain-agnostic root ("stems") of a *growing*, hierarchical set of categorising questions for Jev:
+- **v0:** 70 candidate questions over 13 facets: form, act, time, agent, subject, use, modality,
+  granularity, stakes, durability, place, sensitivity and fit. All 70 were asked of 578 facts across
+  20 types, one Jev call per fact, for about $0.08.
+  - Each question was scored on four measures: **bits** (how much routing information it buys),
+    **escape** (mass on `other`/`unclear`, i.e. where the options are missing a word), **na**
+    (mass on "does not apply", which marks a branch question posing as a root) and **redundancy**
+    with the questions already chosen.
+  - A greedy selection took 24 and hit its cap, not its gain floor.
+- **v1:** 52 questions in five tiers: routers, dials (scores), detectors (crisp yes/no),
+  probes, and **guards** (secret, private, health, financial, AI-directed, noise; always asked,
+  valued by the cost of a miss rather than by bits).
+  - Swept over 752 items in three corpora: workspace facts, archived web clips, and external
+    regulatory items. About $0.09.
+  - A second ranking (`minSeg`) kept only questions that split items *inside every* corpus. That
+    filters out questions that only tell corpora apart.
+- **Findings:**
+  - The universal root is **form + modality + time**: `form_kind`, `form_genre`,
+    `form_cognitive_role`, `mod_modality`, `time_orientation`, `form_speech_act`, `time_lifecycle`.
+  - Questions must be observable, not predictive: "would someone look this up later?" is a coin flip.
+  - **The growth signal works.** v0's escape pointed at missing options. Adding them in v1 took
+    `form_speech_act`'s `other` from 16% to 1% and `mod_modality`'s from 16% to 10%.
+- **Proposed v2:** about 20 questions (~1k tokens) plus the six guards. `act_type`,
+  `agent_audience`, `agent_focus` and `stakes*` move one level down, asked only where
+  `form_kind`/`form_genre` say the content is work.
+
+**What happened to it.** Nothing, after v1.
+- There is no v2 sweep. The last `_stems/` fact is `_stems/v1/report` (2026-09-29).
+- No code in `cells/system1`, consolidation or `services/` refers to it.
+- Perception still asks its original, hand-written questions: `kind` with five options (work,
+  knowledge, reference, log, noise), actionable, durability, project, serves and type.
+- The only declared judgments in the slice are `applies-model` and the two on `_types/bug`.
+
+So the *dynamic* part (a small fixed root, branches grown where the options run out) exists only as
+two hand-run sweeps and a proposal. The growth loop has two halves that never met:
+- the stems sweeps measured **escape** per question and showed that acting on it works;
+- System One records **residue** per run (addendum D), but its aggregate has not run since
+  2026-10-09, reported 0 items when it last did, and no System Two step reads it.
+
+**Critique.**
+- **It is the better design for System One's vocabulary.** It is measured rather than hand-written,
+  tiered by what each question is for, and has a growth signal. Today's `kind` question is exactly
+  what v0 found weakest: one hand-picked axis.
+- **It collides with an ADR guardrail.** ADR-0098 allows at most 6 judgments per fact. A
+  20-question root plus 6 guards needs that rule restated for per-fact root questions versus
+  declared, per-type ones.
+- **It has no ground truth yet.** `bits` measures how well a question *discriminates*, not whether
+  its answers are right. Routers need the labels of §1.4.1 before any of them gates an act, which is
+  one more reason the learner has to run.
+- **Corpus bias was measured, then left.** v1's three corpora were chosen to break it. Nothing since
+  has swept personal captures, agent turns or mail, which are the inputs System One sees most.
+
+**What would land it.**
+1. Run the v2 root in **shadow**: one extra Jev call per perceived fact, answers stored in the run
+   log, no acts. It costs about the same as today's project list.
+2. Make `system1.taxonomy` report **escape per question** as well as residue, from the same runs.
+3. Let the root's routers **gate** the declared, per-type judgments (`act_type` only where
+   `form_kind` says work), which is what v1 proposed.
+4. Replace `kind` with `form_kind` once the shadow has a few hundred labelled items.
+
 
 ## 2. The substrate core
 
@@ -474,3 +544,5 @@ Either way, before anything else:
    real "Superseded by" status?
 9. Which of the salience machinery (lenses, posture, reward, `_caps`, contested) is used week to
    week, and worth its read and write cost?
+10. Should the stems root (§1.5) replace perception's hand-written questions, and does ADR-0098's
+    six-judgment cap apply to root questions or only to declared ones?
