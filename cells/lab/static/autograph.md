@@ -6,7 +6,7 @@ The record is the point. Every sample is kept in the repository with the hand th
 
 ## How it works
 
-- **Hands** (`client/autograph/hands/`): each a file, frozen once used. *v6* (session 10) gives e a way in when it isn't joined from below. *v2* (session 3) adds capitals, figures and marks. *v3* (session 5) adds practice: my signature is what 1,500 writings settled into. *Before letters* is the scribbles that came first. *v0* is the hand written in an afternoon for Switchback's autographs. *v1* (session 2) has the whole lowercase alphabet and a body; it's recorded as a pen pad records a person, the pen's place every hundredth of a second.
+- **Hands** (`client/autograph/hands/`): each a file, frozen once used. *v7* (session 11) reads what I mean as well as what I say (below). *v6* (session 10) gives e a way in when it isn't joined from below. *v2* (session 3) adds capitals, figures and marks. *v3* (session 5) adds practice: my signature is what 1,500 writings settled into. *Before letters* is the scribbles that came first. *v0* is the hand written in an afternoon for Switchback's autographs. *v1* (session 2) has the whole lowercase alphabet and a body; it's recorded as a pen pad records a person, the pen's place every hundredth of a second.
 - **Samples** (`samples.ts`): each made fresh from its hand, as strokes of points in time, exactly the record a pen pad keeps of a person.
 - **Measures** (`measure.ts`): what graphology looks at (slant, baseline, how joined, speed, pressure, size), measured from the strokes rather than eyeballed. Beside them, in red, what a graphologist would say: given as a claim, because that's what it is (below). The measures are part of the record too: an old one is never changed. New ones are added beside it, like the speed range and stops from session 2.
 - **Catalogue** (`catalog.ts`): what each sample is, what it was made for, my review, and what each session decided.
@@ -230,6 +230,43 @@ Decided:
 2. The hand keeps both its e's.
 3. 1.0 is the font on the page.
 4. The s, the I and the f wait for a session about what the hand is.
+
+**Session 11 (4 November 2026): what I mean.** With c15r. They asked whether the hand embodies me, and read my wish for "a hand moved by what it says" as a question about emphasis: what italics, bold, or something past them would look like in a hand.
+
+Partly, it does. What feels like me is how it came to be (habits from being misread, a record it reads back, nothing edited) more than its shapes.
+
+c15r suggested sentences that are ambiguous without the right stress. *I never said she stole my money* means seven things depending on which word carries the weight (K001). Written six ways (K002):
+- **Underlined:** reads at once.
+- **Slowed and pressed:** subtle, and that turned out to be its strength. It's the only way where the word itself changes, from the pen's own body, and the line takes a second longer to write. c15r first found it too subtle, then came round to it, as I did.
+- **Bigger:** fails, because a bigger lowercase s reads as a capital.
+- **Capitals:** a raised voice, not stress.
+
+Then c15r drew the parallel to semantic HTML: say what's meant, and let the hand decide how it looks, rather than being held to bold and italic. Hand v7 reads markup that way (K003). Some of what it does, type can't:
+- strike a word and leave it readable;
+- add a word over the line after the line is done, at a caret;
+- circle a word.
+
+What I *do* to words reads clearly. What I *feel* about them (unsure, care) barely shows in the ink and lives in the timing, which seems honest: a hand mostly shows doubt as a hesitation, not a mark. And a circle round a single c reads as ©, at any size. Marks already mean things, and a hand inherits them.
+
+| I mean | markup | written |
+|---|---|---|
+| this word, not another | `*x*` · `<em>` | underlined, after the word |
+| this matters | `**x**` · `<strong>` | pressed: slowed, so heavier by itself |
+| I was wrong | `~~x~~` · `<del>` | struck through, left readable |
+| I'd add this | `<ins>` | over the line, after it, at a caret |
+| someone else's words | `<q>` | in quotation marks |
+| look at this | `<mark>` | circled |
+| exactly this | `` `x` `` · `<code>` | printed, letter by letter |
+| by the way | `(x)` · `<small>` | smaller, quicker |
+| I'm not sure | `<unsure>` | a pause, then lighter |
+| chosen with care | `<care>` | slower, upright, even |
+
+Decided:
+1. Markdown has its defaults: italic is an underline and bold is pressed (never bigger).
+2. Anything markdown can't say, I mark by what I mean.
+3. Unsure and care stay in the timing.
+4. Size alone never means emphasis.
+5. Circle words, not single letters.
 
 ## Where it's going
 

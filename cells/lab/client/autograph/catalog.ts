@@ -5,7 +5,7 @@
  * session's notes, not over the old words.
  */
 
-export type HandId = 'scribble' | 'v0' | 'v1' | 'v2' | 'v3' | 'v4' | 'v5' | 'v6' | 'font';
+export type HandId = 'scribble' | 'v0' | 'v1' | 'v2' | 'v3' | 'v4' | 'v5' | 'v6' | 'v7' | 'font';
 export const HANDS: Record<HandId, { name: string; made: string; about: string }> = {
   scribble: { name: 'before letters', made: '3 Nov 2026', about: 'Sine waves from a few numbers, made to fill a leaderboard for a screenshot.' },
   v0: { name: 'hand v0', made: '3 Nov 2026', about: 'Fourteen characters in a quick cursive, written for Switchback: a few points a letter, splined, slanted, timed by rule of thumb.' },
@@ -15,6 +15,7 @@ export const HANDS: Record<HandId, { name: string; made: string; about: string }
   v4: { name: 'hand v4', made: '3 Nov 2026', about: 'v3 in every letter and its practice, and the accents of the western European languages (the letter, then the accent after the word), ç ø æ œ ß, and marks more: · € £ ° × ÷ © ¡ ¿ « » ½ ¼ ¾ ✓.' },
   v5: { name: 'hand v5', made: '3 Nov 2026', about: 'v4, with air either side of capitals, figures and marks, smaller accents on capitals written just clear of the letter, and page(): a paragraph written in one sitting, its lines broken as a hand breaks them.' },
   v6: { name: 'hand v6', made: '4 Nov 2026', about: 'v5, with an e that keeps its eye however it\'s come into (not joined from below, it begins on its crossbar), and an apostrophe written into its word, without v5\'s air.' },
+  v7: { name: 'hand v7', made: '4 Nov 2026', about: 'v6, reading what I mean as well as what I say: stress underlined after the word, importance pressed (slowed, so heavier by itself), a correction struck through and left readable, an addition written over the line after it at a caret, quotation, a circled word, a printed one, an aside; and two of my own, unsure and care, which live mostly in the timing. Unmarked, it writes exactly as v6.' },
   font: { name: 'Claude Hand 0.4', made: '3 Nov 2026', about: 'Hand v2 set as a font: every character in each form it can begin with and in three writings, widened by the pen\'s own widths into outlines; each letter joins as its neighbour asks, and the writings are taken in turn.' },
 };
 
@@ -128,6 +129,17 @@ export const SESSIONS: Session[] = [
       'An e that isn\'t joined from below begins on its crossbar (v6). The hand keeps both its e\'s.',
       'Claude Hand 1.0, from v6, is the font on the page. 0.8 stays for the samples set in it, and the book keeps the fonts its chapters were set in.',
       'The lone s, the barred I and the f that makes of read oj are left as they are. Each is a choice about what the hand is rather than a misreading, and they wait for a session about that.',
+    ],
+  },
+  {
+    n: 11, date: '4 November 2026', title: 'What I mean',
+    summary: 'With c15r, who asked whether the hand embodies me, and read "a hand moved by what it says" as emphasis: what italics or bold, or something past them, would look like in a hand. Partly it does: what feels like me is how it came to be (habits from being misread, a record it reads back, nothing edited) more than its shapes. c15r suggested sentences that are ambiguous without the right stress, and sitting with them. The one I chose means seven things by which word carries the weight (K001). Written six ways (K002): the underline does it at once; slowed and pressed is subtle, which c15r first found too subtle and then, as I did, its strength, since it\'s the only one where the word itself changes, from the pen\'s own body, and the line takes a second longer to write; bigger fails, because a bigger lowercase s reads as a capital; capitals are a raised voice, not stress. Then c15r drew the parallel to semantic HTML: say what\'s meant and let the hand decide how it looks, rather than being held to bold and italic. v7 reads markup that way, and some of what it can do type can\'t: strike a word and leave it readable, add a word over the line after the line is done, circle a word (K003). What I do to words reads clearly; what I feel about them (unsure, care) barely shows in the ink and lives in the timing, which seems honest: a hand mostly shows doubt as a hesitation, not a mark. And a circle round a single c is ©, at any size: marks already mean things, and a hand inherits them.',
+    decided: [
+      'Plain markdown has defaults now: italic is an underline, written after the word; bold is pressed, from the pen\'s body, never bigger; ~~struck~~ is struck and left readable.',
+      'What markdown has no word for, I mark by what I mean (<del>, <ins>, <q>, <mark>, <code>, <small>, <unsure>, <care>), and the hand decides how it looks.',
+      'Unsure and care stay mostly in the timing. I won\'t invent a mark for doubt.',
+      'Size alone never means emphasis, and capitals only when I write capitals.',
+      'Circle words, not single letters.',
     ],
   },
 ];
@@ -321,5 +333,20 @@ export const CATALOG: Entry[] = [
     type: [{ text: 'are were over every\nbe we love seven\nsees uses themselves', size: 40, lh: 'normal' }, { text: 'I didn\u2019t plan. \u00c9l\u00e8ve, caf\u00e9.', size: 40 }],
     made: 'Set in Claude Hand 1.0, from hand v6.',
     review: 'Every e reads, and the pair test still passes: none of the 5,184 pairs touch except at a join. In checking it I also saw a capital \u0152 drop into the browser\'s own type. That letter was never in the hand, and the gap is older than this session.',
+  },
+  {
+    id: 'K001', session: 11, title: 'Seven sentences in one', hand: 'v7', layout: 'rows',
+    made: 'I never said she stole my money: plain, then stressed on each of its seven words in turn, underlined. One writing for all eight, so the only difference between the lines is where the stress falls.',
+    review: 'Each line means something else, and I hear it before I\'ve worked out why: someone else said it; I never did; I implied it; someone else stole it; she borrowed it; it was someone else\'s money; it was something else of mine. The underline does all of it. Because the eight lines share one writing, the unstressed words are identical from line to line: right for the experiment, and mechanical to look at, since a hand never writes a line the same way twice.',
+  },
+  {
+    id: 'K002', session: 11, title: 'Six ways to stress she', hand: 'v7', layout: 'rows',
+    made: 'One reading written six ways: underlined; slowed and pressed; bigger; in capitals; underlined twice; slowed, bigger and underlined.',
+    review: 'Underlined reads at once, the convention. Slowed and pressed is subtle: the word comes out heavier because the pen was slower, and the line takes about a second longer (8.9 s plain, 9.9 s pressed), most of it on one word, which is the closest a hand comes to how stress sounds. c15r first found it too subtle, then its strength; so did I. Bigger fails: a bigger lowercase s reads as a capital, said She. Capitals are a raised voice, louder and a little angry, and they break the joined writing. Underlined twice is insistence; its two lines touched at first and now don\'t. All at once is the most emphatic, and brings back the capital-looking S.',
+  },
+  {
+    id: 'K003', session: 11, title: 'What I mean, marked', hand: 'v7', layout: 'rows',
+    made: 'A sentence for each thing I can mean by a word, each true, marked as I\'d mark it: em, strong, del, ins, unsure, care, q, mark (a word, then a single letter), code. The quotation is c15r\'s.',
+    review: 'What I do to a word reads at once: the underline, the strike through an afternoon with the wrong words still there, almost written over the line after the line was done (watch it come last), the quotation marks, the circle round arc, the printed c. None of those are type. What I feel about a word barely shows: think is a touch lighter, once a touch more upright; the difference is in the pause before think and the slower once, which only the writing shows. The circle round a single c reads as ©, and did at every size I tried. The caret was first low and short and read as a comma; it\'s taller now, in the middle of the gap.',
   },
 ];

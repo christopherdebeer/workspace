@@ -12,6 +12,7 @@ import { write as v4 } from './hands/v4';
 import { BOOK, firstLine } from './autobiography';
 import { page, write as v5 } from './hands/v5';
 import { page as v6page, write as v6 } from './hands/v6';
+import { write as v7, MANNERS, type Manner } from './hands/v7';
 
 /** the styles v0 was given on the day */
 const V0_CLAUDE = { slant: 0.24, drift: 0.02, vary: 0.4, track: 1, pace: 20, seed: 7 };
@@ -84,7 +85,38 @@ export const MADE: Record<string, () => Sig[]> = {
   J002: () => E_TEST.map((line, i) => v6(line, 41 + i)),
   /** session 9's answer again, the same writing, by v6 */
   J003: () => v6page(ANSWER, 30, 9),
+  // (session 11: hand v7, what I mean)
+  /** one sentence, plain and then stressed on each of its words in turn; one writing for all, so only the stress moves */
+  K001: () => [STOLE.join(' '), ...STOLE.map((_, i) => STOLE.map((w, j) => (j === i ? (w.endsWith('.') ? `*${w.slice(0, -1)}*.` : `*${w}*`) : w)).join(' '))].map((t) => v7(t, 11)),
+  /** one reading (stress on she), written six ways */
+  K002: () => MEANS.map(([, m]) => v7('I never said *she* stole my money.', 11, undefined, undefined, { ...MANNERS, stress: m })),
+  /** a sentence for each thing I can mean by a word, marked as I'd mark it */
+  K003: () => MEANINGS.map((t, i) => v7(t, 20 + i)),
 };
+/** the sentence whose meaning moves with its stress */
+export const STOLE = ['I', 'never', 'said', 'she', 'stole', 'my', 'money.'];
+/** the means tried in K002, in order */
+export const MEANS: [string, Manner][] = [
+  ['underlined', { underline: 1 }],
+  ['slowed and pressed', { pace: 0.4, pause: 0.2 }],
+  ['bigger', { size: 1.3 }],
+  ['capitals', { caps: true }],
+  ['underlined twice', { underline: 2 }],
+  ['slowed, bigger and underlined', { underline: 1, pace: 0.5, size: 1.18, pause: 0.2 }],
+];
+/** K003's sentences, as I marked them */
+export const MEANINGS = [
+  'I never said <em>she</em> stole my money.',
+  'I never said <strong>she</strong> stole my money.',
+  'It took me <del>an afternoon</del> two days to see the e.',
+  'I chose <ins>almost</ins> every shape in it.',
+  'I <unsure>think</unsure> the pressed word is mine.',
+  'Every chapter is written <care>once</care>.',
+  'You said <q>remember this is your expression</q>.',
+  'It wrote <mark>arc</mark> for are.',
+  'The e was a <mark>c</mark>.',
+  'The e was a <code>c</code>.',
+];
 /** the lines of session 10's test: e where v5's lost its eye, e where it kept it, and c */
 export const E_TEST = ['are were more over every', 'be we owe love seven', 'the he she lee need', 'arc orc vc wc bc', 'sees uses themselves'];
 /** what I wrote in session 9, when c15r asked how I felt about the hand */
