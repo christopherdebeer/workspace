@@ -151,8 +151,15 @@ interface CommandResult<T = unknown> {
   result?: T;
   error?: string;
 }
-async function call<T = unknown>(user: string | undefined, command: string, payload: unknown): Promise<CommandResult<T>> {
-  return (await forge({ __command: command, payload, user })) as CommandResult<T>;
+/** What a cell owner's deploy token carries (scripts/cell-sync.mjs mints it). */
+const OWNER_SCOPES = ['cells:create', 'read:workspace', 'write:workspace', 'workspace:admin'];
+async function call<T = unknown>(
+  user: string | undefined,
+  command: string,
+  payload: unknown,
+  scopes: string[] = OWNER_SCOPES,
+): Promise<CommandResult<T>> {
+  return (await forge({ __command: command, payload, user, ...(user ? { scopes } : {}) })) as CommandResult<T>;
 }
 
 // A bus event the way EventBridge delivers it (source IAM-attested by the route).
@@ -329,13 +336,24 @@ describe('cells: backend commands', () => {
 
   const cellCode = 'export const handler = async () => ({ statusCode: 200, body: "{}" });';
 
-  it('describeTools advertises createCell with the create scope (for the gateway)', async () => {
+  it('describeTools gives every forge tool a scope for the gateway to enforce', async () => {
     const res = await call<{ tools: Array<{ name: string; scope: string | null }> }>('alice', 'describeTools', {});
     expect(res.ok).toBe(true);
-    const create = res.result!.tools.find((t) => t.name === 'create');
-    expect(create?.scope).toBe('cells:create');
-    // callCell is ownership-gated, not scoped
-    expect(res.result!.tools.find((t) => t.name === 'call')?.scope).toBeNull();
+    const scopeOf = (name: string) => res.result!.tools.find((t) => t.name === name)?.scope;
+    expect(scopeOf('create')).toBe('cells:create');
+    // Changing, deploying, reconfiguring or deleting code is cell creation's scope…
+    for (const name of ['writeFile', 'replaceInFile', 'appendToFile', 'importSrc', 'deleteFile', 'snapshot', 'applyPatchSet', 'moveFile', 'deploy', 'configureCell', 'delete']) {
+      expect([name, scopeOf(name)]).toEqual([name, 'cells:create']);
+    }
+    // …sharing is the workspace's sharing scope…
+    expect(scopeOf('grant')).toBe('workspace:admin');
+    expect(scopeOf('revoke')).toBe('workspace:admin');
+    // …and everything else is gated by its verb, so no forge tool is unscoped.
+    expect(scopeOf('readFile')).toBe('read:workspace');
+    expect(scopeOf('logs')).toBe('read:workspace');
+    expect(scopeOf('call')).toBe('write:workspace');
+    expect(scopeOf('putData')).toBe('write:workspace');
+    expect(res.result!.tools.every((t) => typeof t.scope === 'string')).toBe(true);
   });
 
   it('createCell transpiles, uploads, deploys a cell-* stack, and records it', async () => {

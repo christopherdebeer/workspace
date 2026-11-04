@@ -24,7 +24,7 @@ import {
 } from '../../platform/runtime';
 import { createRegistry, CellRecord, CellRegistry, DeployState } from './registry';
 import type { DeployNote } from './registry';
-import { leafActOf } from '../../platform/runtime/auth';
+import { leafActOf, hasScope } from '../../platform/runtime/auth';
 import { buildCellTemplate, cellResourceName, cellStackName } from './cell-template';
 import { transpileCell, bundleFiles, bundleClientFiles } from './transpile';
 import {
@@ -83,6 +83,8 @@ function sinceToMs(since: string | undefined): number {
 }
 
 const CREATE_SCOPE = 'cells:create';
+/** Sharing a cell is sharing: the same scope as workspace.share / approveGrant. */
+const SHARE_SCOPE = 'workspace:admin';
 
 /** Normalise a cell name into an address/ARN-safe slug. */
 function slugify(name: string): string {
@@ -193,6 +195,31 @@ function authorizeAccess(record: CellRecord, user: string, tool?: string): void 
   throw new ServiceAuthError(grantDenied(record, tool));
 }
 
+/**
+ * Throw unless `user` may touch the cell's CODE: read or change its source,
+ * deploy it, or read its logs. That is the owner or a full grantee. A per-tool
+ * grant reaches the cell (its page, discovery, the granted tools) but never its
+ * code: granting someone `review` must not let them rewrite and redeploy it.
+ */
+function authorizeSource(record: CellRecord, user: string): void {
+  if (record.owner === user || record.grants.includes(user)) return;
+  throw new ServiceAuthError(grantDenied(record));
+}
+
+/**
+ * Changing, deploying, reconfiguring or deleting a cell needs `cells:create` on
+ * the caller's token, however the command arrived. The gateway enforces the
+ * same scope from the tool table; this is the check that holds when it is not
+ * in the path, so a read-only or per-run token can never rewrite code that then
+ * runs with the cell's IAM.
+ */
+function requireForgeScope(ctx: ServiceContext, what: string): void {
+  if (hasScope(ctx.identity, CREATE_SCOPE)) return;
+  throw new ServiceAuthError(
+    `scope_denied: ${what} needs "${CREATE_SCOPE}"; this token holds [${ctx.identity.scopes.join(' ') || 'none'}].`,
+  );
+}
+
 /** A predicate for which of a cell's tools the user may see/call. */
 function toolVisibility(record: CellRecord, user: string): (tool: string) => boolean {
   if (record.owner === user || record.grants.includes(user)) return () => true;
@@ -252,10 +279,11 @@ const publicNamespaceArg = (
 ): { bucket: string; name: string } | undefined => (on ? { bucket, name: slugify(name) } : undefined);
 
 async function createCell(input: CreateCellInput, ctx: ServiceContext): Promise<unknown> {
-  // Scope (cells:create) is enforced at the /mcp gateway; forge is a backend
-  // reachable only via allow-listed invokes, and authorizes by ownership. Legacy
-  // platform:cells:create / platform:* tokens still satisfy it (impliesScope).
+  // Scope (cells:create) is enforced at the /mcp gateway and again here, so it
+  // holds however the command arrives. Legacy platform:cells:create /
+  // platform:* tokens still satisfy it (impliesScope).
   const owner = requireUser(ctx.identity);
+  requireForgeScope(ctx, 'creating a cell');
   if (!input?.name?.trim()) throw new Error('A cell `name` is required');
   if (!input?.code?.trim()) throw new Error('Cell `code` (a TypeScript module exporting `handler`) is required');
 
@@ -661,6 +689,7 @@ interface ConfigureCellInput extends CellRef {
 }
 async function configureCell(input: ConfigureCellInput, ctx: ServiceContext): Promise<unknown> {
   const user = requireUser(ctx.identity);
+  requireForgeScope(ctx, 'configureCell');
   const env = loadForgeEnv();
   const registry = createRegistry(env.registryTable);
   const cellId = resolveCellId(input);
@@ -735,6 +764,7 @@ async function configureCell(input: ConfigureCellInput, ctx: ServiceContext): Pr
 
 async function deleteCell(input: DeleteInput, ctx: ServiceContext): Promise<unknown> {
   const user = requireUser(ctx.identity);
+  requireForgeScope(ctx, 'delete');
   const env = loadForgeEnv();
   const registry = createRegistry(env.registryTable);
   const record = await registry.get(input?.cellId);
@@ -763,7 +793,7 @@ async function cellLogs(input: CellLogsInput, ctx: ServiceContext): Promise<unkn
   const cellId = resolveCellId(input);
   const record = await registry.get(cellId);
   if (!record) throw new Error(`Unknown cell "${cellId}"`);
-  authorizeAccess(record, user);
+  authorizeSource(record, user);
 
   const events = await getCellLogs({
     functionName: record.functionName,
@@ -788,14 +818,20 @@ interface CellRef {
   name?: string;
 }
 
-/** Resolve the target cell and authorize the caller (owner or grantee). */
-async function resolveAuthorized(input: CellRef, user: string): Promise<{ record: CellRecord; bucket: string; env: ForgeEnv }> {
+/** Resolve the target cell and authorize the caller: `reach` (owner or any
+ *  grantee: the data layer) or `source` (owner or full grantee: code, deploy). */
+async function resolveAuthorized(
+  input: CellRef,
+  user: string,
+  need: 'reach' | 'source',
+): Promise<{ record: CellRecord; bucket: string; env: ForgeEnv }> {
   const env = loadForgeEnv();
   const registry = createRegistry(env.registryTable);
   const cellId = resolveCellId(input);
   const record = await registry.get(cellId);
   if (!record) throw new Error(`Unknown cell "${cellId}"`);
-  authorizeAccess(record, user);
+  if (need === 'source') authorizeSource(record, user);
+  else authorizeAccess(record, user);
   return { record, bucket: env.codeBucket, env };
 }
 
@@ -963,12 +999,13 @@ function sourceText(path: string, obj: SourceObject, op: string): string {
 
 async function writeFile(input: WriteFileInput, ctx: ServiceContext): Promise<unknown> {
   const user = requireUser(ctx.identity);
+  requireForgeScope(ctx, 'writeFile');
   if (!input?.path) throw new Error('path is required');
   if (typeof input?.content !== 'string') throw new Error('content (string) is required');
   if (input.encoding !== undefined && input.encoding !== 'utf8' && input.encoding !== 'base64') {
     throw new Error("encoding must be 'utf8' or 'base64'");
   }
-  const { record, bucket, env } = await resolveAuthorized(input, user);
+  const { record, bucket, env } = await resolveAuthorized(input, user, 'source');
   const path = cleanPath(input.path);
   let body: string | Buffer;
   let contentType: string;
@@ -1031,8 +1068,9 @@ interface ImportSrcInput extends CellRef {
  */
 async function importSrc(input: ImportSrcInput, ctx: ServiceContext): Promise<unknown> {
   const user = requireUser(ctx.identity);
+  requireForgeScope(ctx, 'importSrc');
   if (!input?.url || !/^https:\/\//.test(input.url)) throw new Error('an https `url` is required');
-  const { record, bucket } = await resolveAuthorized(input, user);
+  const { record, bucket } = await resolveAuthorized(input, user, 'source');
 
   const fetchFn = (globalThis as { fetch?: (url: string) => Promise<{ ok: boolean; status: number; arrayBuffer(): Promise<ArrayBuffer> }> }).fetch;
   if (!fetchFn) throw new Error('fetch unavailable in this runtime');
@@ -1112,10 +1150,11 @@ function hunkAt(before: string, after: string, offset: number, oldLen: number, n
  */
 async function replaceInFile(input: ReplaceInFileInput, ctx: ServiceContext): Promise<unknown> {
   const user = requireUser(ctx.identity);
+  requireForgeScope(ctx, 'replaceInFile');
   if (!input?.path) throw new Error('path is required');
   if (typeof input?.old_str !== 'string' || input.old_str.length === 0) throw new Error('old_str (non-empty string) is required');
   if (typeof input?.new_str !== 'string') throw new Error('new_str (string, may be empty) is required');
-  const { record, bucket, env } = await resolveAuthorized(input, user);
+  const { record, bucket, env } = await resolveAuthorized(input, user, 'source');
   const path = cleanPath(input.path);
   const current = await readSource(bucket, record.cellId, path);
   if (current === null) throw new Error(`File not found: ${path}`);
@@ -1164,9 +1203,10 @@ interface AppendToFileInput extends CellRef {
 /** Append to a cell source file (creates it when missing, unless ifExists). */
 async function appendToFile(input: AppendToFileInput, ctx: ServiceContext): Promise<unknown> {
   const user = requireUser(ctx.identity);
+  requireForgeScope(ctx, 'appendToFile');
   if (!input?.path) throw new Error('path is required');
   if (typeof input?.content !== 'string' || input.content.length === 0) throw new Error('content (non-empty string) is required');
-  const { record, bucket, env } = await resolveAuthorized(input, user);
+  const { record, bucket, env } = await resolveAuthorized(input, user, 'source');
   const path = cleanPath(input.path);
   const current = await readSource(bucket, record.cellId, path);
   checkPreconditions(path, current, { ifVersion: input.ifVersion, ifExists: input.ifExists, ifAbsent: input.ifAbsent });
@@ -1221,7 +1261,7 @@ async function readFile(input: ReadFileInput, ctx: ServiceContext): Promise<unkn
   if (input.encoding !== undefined && input.encoding !== 'utf8' && input.encoding !== 'base64') {
     throw new Error("encoding must be 'utf8' or 'base64'");
   }
-  const { record, bucket } = await resolveAuthorized(input, user);
+  const { record, bucket } = await resolveAuthorized(input, user, 'source');
   const path = cleanPath(input.path);
   // RAW, THEN DECIDE. Reading as UTF-8 first and checking afterwards is not
   // possible — the damage is done by the decode, and a caller cannot tell a
@@ -1291,7 +1331,7 @@ async function listFiles(input: ListFilesInput, ctx: ServiceContext): Promise<un
   const view = input?.view ?? 'paths';
   if (view !== 'paths' && view !== 'meta') throw new Error("view must be 'paths' or 'meta'");
   if (input?.limit !== undefined && (!Number.isInteger(input.limit) || input.limit < 1)) throw new Error('limit must be an integer >= 1');
-  const { record, bucket } = await resolveAuthorized(input, user);
+  const { record, bucket } = await resolveAuthorized(input, user, 'source');
   const prefix = srcPrefix(record.cellId);
   const matches = pathMatcher(input.prefix?.replace(/^\/+/, ''), input.glob);
   const all = (await listObjectsMeta(bucket, prefix))
@@ -1351,7 +1391,7 @@ async function searchFiles(input: SearchFilesInput, ctx: ServiceContext): Promis
   const re = compileQuery({ query: input?.query, regex: input?.regex, caseSensitive: input?.caseSensitive });
   const contextLines = Math.max(0, Math.min(10, Math.floor(input.contextLines ?? 0)));
   const maxMatches = Math.max(1, Math.min(SEARCH_MAX_MATCHES, Math.floor(input.maxMatches ?? SEARCH_DEFAULT_MATCHES)));
-  const { record, bucket } = await resolveAuthorized(input, user);
+  const { record, bucket } = await resolveAuthorized(input, user, 'source');
   const prefix = srcPrefix(record.cellId);
   const matches = pathMatcher(input.prefix?.replace(/^\/+/, ''), input.glob);
   const paths = (await listObjectsMeta(bucket, prefix))
@@ -1404,8 +1444,9 @@ interface DeleteFileInput extends CellRef {
 }
 async function deleteFile(input: DeleteFileInput, ctx: ServiceContext): Promise<unknown> {
   const user = requireUser(ctx.identity);
+  requireForgeScope(ctx, 'deleteFile');
   if (!input?.path) throw new Error('path is required');
-  const { record, bucket, env } = await resolveAuthorized(input, user);
+  const { record, bucket, env } = await resolveAuthorized(input, user, 'source');
   const path = cleanPath(input.path);
   let previousVersion: string | undefined;
   if (input.ifVersion !== undefined) {
@@ -1464,7 +1505,7 @@ function compareManifests(from: ManifestFile[], to: ManifestFile[]): {
 
 async function sourceStatus(input: CellRef, ctx: ServiceContext): Promise<unknown> {
   const user = requireUser(ctx.identity);
-  const { record, bucket } = await resolveAuthorized(input, user);
+  const { record, bucket } = await resolveAuthorized(input, user, 'source');
   const store = new TreeStore(bucket, record.cellId);
   const tree = await store.tree();
   await store.flush();
@@ -1497,7 +1538,8 @@ interface SnapshotInput extends CellRef {
 
 async function snapshotSource(input: SnapshotInput, ctx: ServiceContext): Promise<unknown> {
   const user = requireUser(ctx.identity);
-  const { record, bucket } = await resolveAuthorized(input, user);
+  requireForgeScope(ctx, 'snapshot');
+  const { record, bucket } = await resolveAuthorized(input, user, 'source');
   const store = new TreeStore(bucket, record.cellId);
   const snap = await store.snapshot({ createdBy: user });
   if (input.ifTreeVersion !== undefined && snap.treeVersion !== input.ifTreeVersion) {
@@ -1616,11 +1658,12 @@ function formatConflicts(conflicts: Array<{ index: number; op: string; path: str
  */
 async function applyPatchSet(input: ApplyPatchSetInput, ctx: ServiceContext): Promise<unknown> {
   const user = requireUser(ctx.identity);
+  requireForgeScope(ctx, 'applyPatchSet');
   if (!Array.isArray(input?.changes) || input.changes.length === 0) throw new Error('changes (non-empty array) is required');
   if (input.changes.length > PATCH_MAX_CHANGES) throw new Error(`at most ${PATCH_MAX_CHANGES} changes per patch set`);
   if (input.ifTreeVersion !== undefined && !isTreeVersion(input.ifTreeVersion)) throw new Error('ifTreeVersion must be tree:<64 hex>');
   const contextLines = Math.max(0, Math.min(10, Math.floor(input.contextLines ?? 3)));
-  const { record, bucket, env } = await resolveAuthorized(input, user);
+  const { record, bucket, env } = await resolveAuthorized(input, user, 'source');
   const store = new TreeStore(bucket, record.cellId);
   const paths = touchedPaths(input.changes);
 
@@ -1811,7 +1854,7 @@ async function diffSource(input: DiffInput, ctx: ServiceContext): Promise<unknow
   const view = input?.view ?? 'files';
   if (!['summary', 'files', 'patch'].includes(view)) throw new Error("view must be 'summary', 'files' or 'patch'");
   const contextLines = Math.max(0, Math.min(10, Math.floor(input.contextLines ?? 3)));
-  const { record, bucket } = await resolveAuthorized(input, user);
+  const { record, bucket } = await resolveAuthorized(input, user, 'source');
   const store = new TreeStore(bucket, record.cellId);
   let cached: Promise<Tree> | undefined;
   const live = (): Promise<Tree> => (cached ??= store.tree());
@@ -1914,7 +1957,7 @@ async function readFiles(input: ReadFilesInput, ctx: ServiceContext): Promise<un
   if (!Array.isArray(input?.files) || input.files.length === 0) throw new Error('files (non-empty array) is required');
   if (input.files.length > READ_FILES_MAX) throw new Error(`at most ${READ_FILES_MAX} files per call`);
   const budget = Math.max(1024, Math.min(RANGE_MAX_BYTES, Math.floor(input.maxBytes ?? RANGE_MAX_BYTES)));
-  const { record, bucket } = await resolveAuthorized(input, user);
+  const { record, bucket } = await resolveAuthorized(input, user, 'source');
   const reqs = input.files.map((f) => {
     if (!f || typeof f.path !== 'string') throw new Error('each entry needs a path');
     return { ...f, path: cleanPath(f.path) };
@@ -2343,7 +2386,8 @@ export function deployNoteOf(
 
 async function deploy(input: DeployInput, ctx: ServiceContext): Promise<unknown> {
   const user = requireUser(ctx.identity);
-  const { record, env } = await resolveAuthorized(input, user);
+  requireForgeScope(ctx, 'deploy');
+  const { record, env } = await resolveAuthorized(input, user, 'source');
   return requestDeploy(record, env, ctx, input?.treeVersion, { description: input?.description, source: input?.source });
 }
 
@@ -2432,7 +2476,7 @@ async function putData(input: PutDataInput, ctx: ServiceContext): Promise<unknow
   const user = requireUser(ctx.identity);
   if (!input?.key) throw new Error('key is required');
   if (input.presign) {
-    const { record, bucket } = await resolveAuthorized(input, user);
+    const { record, bucket } = await resolveAuthorized(input, user, 'reach');
     const key = cleanPath(input.key);
     const contentType = input.contentType ?? 'application/octet-stream';
     const uploadUrl = presignPut(bucket, dataKey(record.cellId, user, input.key), contentType, 300);
@@ -2457,7 +2501,7 @@ async function putData(input: PutDataInput, ctx: ServiceContext): Promise<unknow
   } else {
     throw new Error('either content (string) or url (https) is required');
   }
-  const { record, bucket } = await resolveAuthorized(input, user);
+  const { record, bucket } = await resolveAuthorized(input, user, 'reach');
   if (body.length > 8 * 1024 * 1024) throw new Error('blob too large (>8MB)');
   const key = cleanPath(input.key);
   const resolvedType = input.contentType ?? fetchedType ?? 'application/octet-stream';
@@ -2511,7 +2555,7 @@ function targetDataUser(input: DataRefInput, caller: string, record: CellRecord)
 async function getData(input: DataRefInput, ctx: ServiceContext): Promise<unknown> {
   const user = requireUser(ctx.identity);
   if (!input?.key) throw new Error('key is required');
-  const { record, bucket } = await resolveAuthorized(input, user);
+  const { record, bucket } = await resolveAuthorized(input, user, 'reach');
   const target = targetDataUser(input, user, record);
   const content = await getObject(bucket, dataKey(record.cellId, target, input.key));
   if (content === null) throw new Error(`data not found: ${cleanPath(input.key)}`);
@@ -2520,7 +2564,7 @@ async function getData(input: DataRefInput, ctx: ServiceContext): Promise<unknow
 
 async function listData(input: DataRefInput, ctx: ServiceContext): Promise<unknown> {
   const user = requireUser(ctx.identity);
-  const { record, bucket } = await resolveAuthorized(input, user);
+  const { record, bucket } = await resolveAuthorized(input, user, 'reach');
   const target = targetDataUser(input, user, record);
   const prefix = dataPrefix(record.cellId, target);
   const keys = await listObjects(bucket, prefix);
@@ -2530,7 +2574,7 @@ async function listData(input: DataRefInput, ctx: ServiceContext): Promise<unkno
 async function deleteData(input: DataRefInput, ctx: ServiceContext): Promise<unknown> {
   const user = requireUser(ctx.identity);
   if (!input?.key) throw new Error('key is required');
-  const { record, bucket } = await resolveAuthorized(input, user);
+  const { record, bucket } = await resolveAuthorized(input, user, 'reach');
   const target = targetDataUser(input, user, record);
   const key = cleanPath(input.key);
   await deleteObject(bucket, dataKey(record.cellId, target, input.key));
@@ -2917,7 +2961,8 @@ async function callCellTool(input: CallCellToolInput, ctx: ServiceContext): Prom
 interface ToolSpec {
   description: string;
   inputSchema: Record<string, unknown>;
-  /** Scope the gateway enforces before forwarding (null = any authenticated user). */
+  /** Scope the gateway enforces before forwarding. null = gate by verb: reads
+   *  need `read:workspace`, acts `write:workspace` (see describeTools). */
   scope: string | null;
   /** `read` = side-effect-free; `act` = may mutate. Routes the gateway's read/act dispatch. */
   kind: 'read' | 'act';
@@ -3025,7 +3070,7 @@ const TOOLS: Record<string, ToolSpec> = {
   grant: {
     description:
       'Share a cell you own with another principal. Omit `tools` for full access; pass `tools` (exact names or trailing-`*` patterns like "list_*") to grant just those — the principal can reach the cell but only call matching tools. Re-granting replaces their standing (so a grant can narrow).',
-    scope: null,
+    scope: SHARE_SCOPE,
     kind: 'act',
     inputSchema: {
       type: 'object',
@@ -3043,7 +3088,7 @@ const TOOLS: Record<string, ToolSpec> = {
   },
   revoke: {
     description: "Revoke a principal's access to a cell you own (removes full and per-tool grants).",
-    scope: null,
+    scope: SHARE_SCOPE,
     kind: 'act',
     inputSchema: {
       type: 'object',
@@ -3060,7 +3105,7 @@ const TOOLS: Record<string, ToolSpec> = {
   },
   delete: {
     description: 'Delete a cell you own (tears down its stack).',
-    scope: null,
+    scope: CREATE_SCOPE,
     kind: 'act',
     inputSchema: {
       type: 'object',
@@ -3092,7 +3137,7 @@ const TOOLS: Record<string, ToolSpec> = {
   writeFile: {
     description:
       "Write a source file to a cell's editable tree (cells/<id>/src/<path>). Text by default; encoding:'base64' writes bytes (images, fonts) with a content type from the extension. Safe forms: ifVersion (replace only the version you read) or ifAbsent (create only). Returns the new `version`. Pass deploy:true to kick off an async deploy in the same call (poll get for deploy.phase), else call deploy.",
-    scope: null,
+    scope: CREATE_SCOPE,
     kind: 'act',
     inputSchema: {
       type: 'object',
@@ -3114,7 +3159,7 @@ const TOOLS: Record<string, ToolSpec> = {
   replaceInFile: {
     description:
       "Preferred for editing an existing cell source file: exact string replacement without resending the whole file. old_str must match exactly (case-sensitive); new_str may be empty to delete. SAFE BY DEFAULT: old_str must occur exactly once (expectedOccurrences, default 1) or nothing is written — widen old_str, or pass matchIndex (0-based) / replace_all. Pass ifVersion from your readFile to refuse edits to a file that changed since. dryRun:true returns the prospective hunks without writing. Returns the new `version`. Pass deploy:true to kick off an async deploy in the same call (poll get for deploy.phase). Use writeFile only when rewriting most of a file.",
-    scope: null,
+    scope: CREATE_SCOPE,
     kind: 'act',
     inputSchema: {
       type: 'object',
@@ -3149,7 +3194,7 @@ const TOOLS: Record<string, ToolSpec> = {
   },
   appendToFile: {
     description: "Append content to the end of a text cell source file (creates it when missing) — add a function or section without resending the file. Agent-safe form: ifExists:true (a typo'd path fails instead of creating a file) plus ifVersion. Returns the new `version`. Pass deploy:true to kick off an async deploy in the same call (poll get for deploy.phase).",
-    scope: null,
+    scope: CREATE_SCOPE,
     kind: 'act',
     inputSchema: {
       type: 'object',
@@ -3174,7 +3219,7 @@ const TOOLS: Record<string, ToolSpec> = {
   importSrc: {
     description:
       "Bulk-import text sources from a public https tar/tar.gz archive (e.g. a GitHub codeload tarball) into the cell's src tree — hoist an existing repo into a cell without pushing it file-by-file. `include` selects+strips an archive prefix; `prefix` is the destination under src/. Redeploy with cells.deploy.",
-    scope: null,
+    scope: CREATE_SCOPE,
     kind: 'act',
     inputSchema: {
       type: 'object',
@@ -3312,7 +3357,7 @@ const TOOLS: Record<string, ToolSpec> = {
   },
   deleteFile: {
     description: "Delete one source file from a cell's src/ tree. Pass ifVersion to delete only the version you read. Redeploy to take effect, or pass deploy:true to kick one off in the same call.",
-    scope: null,
+    scope: CREATE_SCOPE,
     kind: 'act',
     inputSchema: {
       type: 'object',
@@ -3351,7 +3396,7 @@ const TOOLS: Record<string, ToolSpec> = {
   },
   snapshot: {
     description: "Freeze the cell's current source tree as an immutable snapshot and return its `treeVersion`. Snapshots are what deploys build and what diff compares; content is stored once per version, so re-snapshotting an unchanged tree is free. ifTreeVersion refuses if the tree has moved.",
-    scope: null,
+    scope: CREATE_SCOPE,
     kind: 'act',
     inputSchema: {
       type: 'object',
@@ -3368,7 +3413,7 @@ const TOOLS: Record<string, ToolSpec> = {
   applyPatchSet: {
     description:
       "Apply several edits across files as ONE all-or-nothing change — the tool for coupled multi-file work. Each change is {op:'write'|'replace'|'append'|'delete'|'move', ...} with the same fields and preconditions as the single-file tools (ifVersion, ifAbsent, ifExists, expectedOccurrences, matchIndex; move takes from/to/overwrite). Preconditions refer to the tree BEFORE the patch set; edits apply in order. ifTreeVersion (from cells.status) refuses unless the WHOLE tree is still the one you inspected. dryRun:true returns every conflict at once, per-file +/- lines, one combined unified diff and the projected treeVersion, writing nothing. A real run validates everything first, then commits every file or rolls every write back; snapshot:true freezes the result, deploy:true deploys exactly the result.",
-    scope: null,
+    scope: CREATE_SCOPE,
     kind: 'act',
     inputSchema: {
       type: 'object',
@@ -3446,7 +3491,7 @@ const TOOLS: Record<string, ToolSpec> = {
   },
   moveFile: {
     description: 'Rename/move one source file atomically (a one-change applyPatchSet): the destination appears and the source disappears together. ifVersion guards the source; overwrite:true replaces an existing destination; ifTreeVersion, dryRun and deploy as in applyPatchSet.',
-    scope: null,
+    scope: CREATE_SCOPE,
     kind: 'act',
     inputSchema: {
       type: 'object',
@@ -3536,7 +3581,7 @@ const TOOLS: Record<string, ToolSpec> = {
   },
   deploy: {
     description: "Bundle a cell's source (resolving relative imports) and point its Lambda at the new build — no cdk deploy. SOURCE-PINNED: the deploy builds an immutable snapshot — `treeVersion` if given (from cells.status / cells.snapshot / applyPatchSet), else a snapshot of the tree taken now — never whatever src/ holds when the worker runs. Runs ASYNCHRONOUSLY: returns immediately with `deploy.phase: DEPLOYING` and the pinned `treeVersion`; poll `get` until `deploy.phase` is DEPLOYED (or FAILED, with `deploy.error`). A newer deploy supersedes an older one still bundling. Each landed deploy becomes a durable `cells/<id>/deploy/<version>` fact (who, why, source, files changed) linked to the cell and the deploy before it (ADR-0099) — pass `description` to say why.",
-    scope: null,
+    scope: CREATE_SCOPE,
     kind: 'act',
     inputSchema: {
       type: 'object',
@@ -3562,7 +3607,7 @@ const TOOLS: Record<string, ToolSpec> = {
   },
   configureCell: {
     description: "Reconfigure a cell you own: `timeoutSeconds` (10–300) and/or `memoryMb` (128–3008; CPU scales with memory — the latency knob) re-render the stack — run cells.deploy afterwards to restore client/static assets; `public` (registry-only, no rebuild — web-facing so a signed-out visitor gets the SPA shell). Pass any combination.",
-    scope: null,
+    scope: CREATE_SCOPE,
     kind: 'act',
     inputSchema: {
       type: 'object',
@@ -3665,7 +3710,10 @@ function describeTools(): {
       description: t.description,
       inputSchema: t.inputSchema,
       ...(t.resultSchema ? { resultSchema: t.resultSchema } : {}),
-      scope: t.scope,
+      // Verb scopes, as the workspace does (docs/capability-consent.md): a tool
+      // with no explicit scope is gated by its kind, so a read-only token
+      // cannot act. Legacy coarse tokens satisfy these via impliesScope.
+      scope: t.scope ?? (t.kind === 'read' ? 'read:workspace' : 'write:workspace'),
       kind: t.kind,
     })),
   };

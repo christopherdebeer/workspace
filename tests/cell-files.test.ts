@@ -126,8 +126,15 @@ let s3mem: ReturnType<typeof memoryS3>;
 const updateCodeCalls: Array<{ FunctionName: string; S3Key: string }> = [];
 
 interface CommandResult<T = unknown> { ok: boolean; result?: T; error?: string }
-async function call<T = unknown>(user: string | undefined, command: string, payload: unknown): Promise<CommandResult<T>> {
-  return (await forge({ __command: command, payload, user })) as CommandResult<T>;
+/** What a cell owner's deploy token carries (scripts/cell-sync.mjs mints it). */
+const OWNER_SCOPES = ['cells:create', 'read:workspace', 'write:workspace', 'workspace:admin'];
+async function call<T = unknown>(
+  user: string | undefined,
+  command: string,
+  payload: unknown,
+  scopes: string[] = OWNER_SCOPES,
+): Promise<CommandResult<T>> {
+  return (await forge({ __command: command, payload, user, ...(user ? { scopes } : {}) })) as CommandResult<T>;
 }
 
 /** Drive the async deploy end-to-end: kick it off, then run the event-driven
@@ -1006,5 +1013,57 @@ describe('forge: cell common layer (S3 files + data)', () => {
     const data = await call('bob', 'getData', { cellId, key: 'x' });
     expect(data.ok).toBe(false);
     expect(data.error).toMatch(/not authorised/i);
+  });
+
+  it('a per-tool grant reaches the cell but never its code; a full grant does', async () => {
+    const cellId = await makeCell('alice');
+    expect((await call('alice', 'grant', { cellId, principal: 'emily', tools: ['review'] })).ok).toBe(true);
+
+    // Every source, deploy and log path refuses the per-tool grantee.
+    for (const [command, payload] of [
+      ['writeFile', { cellId, path: 'index.ts', content: 'x' }],
+      ['applyPatchSet', { cellId, changes: [{ op: 'write', path: 'index.ts', content: 'x' }] }],
+      ['deploy', { cellId }],
+      ['readFile', { cellId, path: 'index.ts' }],
+      ['listFiles', { cellId }],
+      ['logs', { cellId }],
+    ] as const) {
+      const res = await call('emily', command, payload);
+      expect([command, res.ok]).toEqual([command, false]);
+      expect(res.error).toMatch(/grant_denied/);
+    }
+    // Their own data on the cell is still theirs.
+    expect((await call('emily', 'putData', { cellId, key: 'note', content: 'hi' })).ok).toBe(true);
+
+    // A full grant covers the code.
+    await call('alice', 'grant', { cellId, principal: 'emily' });
+    expect((await call('emily', 'readFile', { cellId, path: 'index.ts' })).ok).toBe(true);
+    expect((await call('emily', 'writeFile', { cellId, path: 'lib/x.ts', content: 'export {}' })).ok).toBe(true);
+  });
+
+  it('changing or deploying code needs cells:create on the token, however the command arrives', async () => {
+    const cellId = await makeCell('alice');
+    const readWrite = ['read:workspace', 'write:workspace'];
+    for (const [command, payload] of [
+      ['writeFile', { cellId, path: 'index.ts', content: 'x' }],
+      ['replaceInFile', { cellId, path: 'index.ts', find: 'a', replace: 'b' }],
+      ['appendToFile', { cellId, path: 'index.ts', content: 'x' }],
+      ['deleteFile', { cellId, path: 'index.ts' }],
+      ['applyPatchSet', { cellId, changes: [{ op: 'write', path: 'index.ts', content: 'x' }] }],
+      ['moveFile', { cellId, from: 'index.ts', to: 'main.ts' }],
+      ['snapshot', { cellId }],
+      ['deploy', { cellId }],
+      ['configureCell', { cellId, public: true }],
+      ['delete', { cellId }],
+      ['create', { name: 'other', code: cellCode }],
+    ] as const) {
+      const res = await call('alice', command, payload, readWrite);
+      expect([command, res.ok]).toEqual([command, false]);
+      expect(res.error).toMatch(/scope_denied: .*cells:create/);
+    }
+    // Reads are untouched; legacy coarse grants still satisfy the scope.
+    expect((await call('alice', 'readFile', { cellId, path: 'index.ts' }, readWrite)).ok).toBe(true);
+    expect((await call('alice', 'writeFile', { cellId, path: 'a.ts', content: 'x' }, ['platform:cells:create'])).ok).toBe(true);
+    expect((await call('alice', 'writeFile', { cellId, path: 'b.ts', content: 'x' }, ['platform:*'])).ok).toBe(true);
   });
 });
