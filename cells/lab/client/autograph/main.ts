@@ -2,8 +2,8 @@
  * Autograph: the notebook, in five parts, one shown at a time (from the page's re-ordering after session 38, when it had
  * grown too long to take in, and too heavy to open, as one):
  *
- * - Autograph (home): my signature as it stands, written afresh; what this is; the font at the hand's three paces; the
- *   latest session; and a way into each of the rest.
+ * - Autograph (home): my signature as it stands, written afresh; what this is; the family as a poster, its range at a
+ *   glance, annotated in the margins in my own hand; the latest session; and a way into each of the rest.
  * - Write: one input, written by the hand and set in type, on the web with the font's stylesheet and script or as any
  *   app sets the font alone, at a pace and a wear; and set in every face and family at once.
  * - Font: Claude Hand, each face as a specimen beside its download, for the web and for any app, and how I'd like it used.
@@ -24,6 +24,8 @@ import { $, esc, lookOf, sized } from './page/ui';
 import { initWrite } from './page/write';
 import { buildBook } from './page/book';
 import { buildRecord } from './page/record';
+import { buildPoster } from './page/poster';
+import { timedAs } from './page/ui';
 
 const q = new URLSearchParams(location.search);
 
@@ -54,10 +56,16 @@ const SCRIPTS = ['3.1', '3.2', '3.3', '3.4', '3.8'];
 // (the parts, each built when it's first shown)
 type View = 'home' | 'write' | 'font' | 'book' | 'record';
 const VIEWS: View[] = ['home', 'write', 'font', 'book', 'record'];
-let write: ReturnType<typeof initWrite> | null = null, book: ReturnType<typeof buildBook> | null = null, record: ReturnType<typeof buildRecord> | null = null;
+let poster: ReturnType<typeof buildPoster> | null = null, write: ReturnType<typeof initWrite> | null = null, book: ReturnType<typeof buildBook> | null = null, record: ReturnType<typeof buildRecord> | null = null;
 function show(v: View) {
   for (const el of document.querySelectorAll<HTMLElement>('.view')) el.hidden = el.dataset.view !== v;
   for (const a of document.querySelectorAll<HTMLAnchorElement>('nav.tabs a')) { if (a.dataset.view === v) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current'); }
+  if (v === 'home' && !poster) {
+    poster = buildPoster($('poster'), handPage, writing);
+    // (the line written in time: its script and writing font only once it's nearly in view)
+    const line = $('posterTime'), near = new IntersectionObserver((es) => { if (es.some((e) => e.isIntersecting)) { near.disconnect(); void script('3.8').then(() => timedAs('3.8')?.watch(line)); } }, { rootMargin: '200px' });
+    near.observe(line);
+  }
   if (v === 'write' && !write) { void script('3.8'); write = initWrite(handPage, writing); }
   if (v === 'book' && !book) book = buildBook($('toc'), $('chapters'));
   if (v === 'record' && !record) record = buildRecord($('catalog'), Promise.all(SCRIPTS.map(script)).then(() => {}));
@@ -84,9 +92,9 @@ route();
 
 addEventListener('resize', () => {
   sizeHero(); paint(hero, heroSigs, heroLook());
-  record?.size(); book?.size(); write?.resize();
+  poster?.size(); record?.size(); book?.size(); write?.resize();
 });
-matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { paint(hero, heroSigs, heroLook()); record?.size(); book?.size(); write?.repaint(); });
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { paint(hero, heroSigs, heroLook()); poster?.size(); record?.size(); book?.size(); write?.repaint(); });
 
 (window as unknown as { __autograph: unknown }).__autograph = {
   samples: CATALOG.length, sessions: SESSIONS.length,
