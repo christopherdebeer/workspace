@@ -98,12 +98,22 @@ def draw(polys):
     return pen.glyph()
 
 
+def draw_q(contours):
+    """(from 2.7) contours given already, every point off the curve, so the outline runs smoothly through the middle of
+    each pair of points: the masters of the variable font, which have to share their points (autograph-font-vary.py)"""
+    pen = TTGlyphPen(None)
+    for c in contours:
+        pen.qCurveTo(*[tuple(q) for q in c], None)
+        pen.closePath()
+    return pen.glyph()
+
+
 glyphs, order, adv, cmap = {}, ['.notdef'], {'.notdef': 500}, {}
 glyphs['.notdef'] = TTGlyphPen(None).glyph()
 for g in data['glyphs']:
     n = name(g)
     order.append(n)
-    glyphs[n] = draw(outline(g['strokes']))
+    glyphs[n] = draw_q(g['contours']) if 'contours' in g else draw(outline(g['strokes']))
     adv[n] = max(0, round(g['adv'] * XH))
     if g['form'] == 'i' and g['alt'] == 1:
         cmap[g['code']] = n
@@ -170,8 +180,12 @@ fb.setupPost(underlinePosition=UNDER, underlineThickness=MARK)
 # (the same hand always builds the same file: no build time in it)
 fb.updateHead(fontRevision=float(VERSION), macStyle=1 if PRESSED else 0, created=timestampFromString('Tue Nov  3 00:00:00 2026'), modified=timestampFromString('Tue Nov  3 00:00:00 2026'))
 addOpenTypeFeaturesFromString(fb.font, '\n'.join(fea))
-ttf = os.path.join(out, 'claude-hand-%s%s.ttf' % (FILE, VERSION))
+ttf = os.path.join(out, data['name'] + '.ttf' if data.get('name') else 'claude-hand-%s%s.ttf' % (FILE, VERSION))
 fb.save(ttf)
+if data.get('name'):
+    # (a master of the variable font: its parts are only for the build to put together)
+    print('master %s: %d glyphs' % (data['name'], len(order)))
+    sys.exit(0)
 f = TTFont(ttf)
 f.flavor = 'woff2'
 f.save(os.path.join(out, 'claude-hand-%s%s.woff2' % (FILE, VERSION)))

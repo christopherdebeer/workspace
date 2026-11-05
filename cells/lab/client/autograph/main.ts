@@ -18,7 +18,7 @@ import { typeset } from './typeset';
 import { write as v4write } from './hands/v4';
 // (my signature, and the hand that writes what you type: the newest hand; autograph-check.mjs fails if this isn't the
 // hand the record says is newest)
-import { signature, page as handPage } from './hands/v18';
+import { signature, page as handPage } from './hands/v19';
 // (a chapter is signed as it was on the day it was written: chapter one by the hand of its day)
 import { signature as chapterSign } from './hands/v3';
 // (from chapter two, a chapter opens with a page written by the hand of its day, and is signed by it: chapter two's is v15)
@@ -66,7 +66,8 @@ function typeCard(e: Entry) {
       // (from session 12: set as the web sets it, the font and its stylesheet, or as any app does, the font alone)
       // (in its own version's faces, named for it, so a later font never changes how it was set)
       ? `<p class="hand-type ${l.way === 'web' ? 'claude-hand' : 'claude-hand-app'}${l.calt === false ? ' nocalt' : ''}" style="font-size:${l.size}px;font-family:'Claude Hand ${e.font}',cursive${l.lh ? `;line-height:${l.lh}` : ''}">${typeset(l.text, l.way)}<span class="off">${l.way === 'web' ? 'web' : 'any app'}</span></p>`
-      : `<p class="hand-type${l.calt === false ? ' nocalt' : ''}" style="font-size:${l.size}px;font-family:'Claude Hand ${e.font ?? '0.41'}',Georgia,serif${l.lh ? `;line-height:${l.lh}` : ''}">${esc(l.text).replace(/\n/g, '<br>')}${l.calt === false ? '<span class="off">joins off</span>' : ''}</p>`).join('')}</div>
+      // (from session 27: a line at a place on the variable font's axes, pace and wear)
+      : `<p class="hand-type${l.calt === false ? ' nocalt' : ''}" style="font-size:${l.size}px;font-family:'Claude Hand ${e.font ?? '0.41'}',Georgia,serif${l.lh ? `;line-height:${l.lh}` : ''}${l.at ? `;font-weight:${l.at.pace};font-variation-settings:'WEAR' ${l.at.wear}` : ''}">${esc(l.text).replace(/\n/g, '<br>')}${l.calt === false ? '<span class="off">joins off</span>' : ''}${l.at ? `<span class="off">pace ${l.at.pace} · wear ${l.at.wear}</span>` : ''}</p>`).join('')}</div>
     <p class="made">${esc(e.made)}</p>
     <p class="review">${esc(e.review)}</p>`;
   return { el, size: () => {}, write: () => {} };
@@ -184,14 +185,18 @@ function writeOut(watch = true) {
   $('writtenNote').textContent = `${HANDS[NEWEST].name} · writing ${wSeed} · ${wSigs.length} line${wSigs.length === 1 ? '' : 's'} · tap to write it again`;
 }
 const typed = $('typed'), size = $('specSize') as HTMLInputElement, joins = $('specJoins') as HTMLButtonElement;
+// (from session 27: the variable font's two axes, the hand's pace and its wear)
+const pace = $('specPace') as HTMLInputElement, wear = $('specWear') as HTMLInputElement;
 let way: 'web' | 'app' = 'web';
 const WAYS = {
   web: 'One step down: most of what you marked, as text. The font and its stylesheet, as a web page sets them: some of it as the hand does it (pressed is the Pressed face; the underline and strike sit where the hand puts them), some drawn in its manner (the circle, the caret), and what the hand does in time, a pause, a slowing, hardly shows.',
   app: 'Two steps down: bold, underline and strike, as text. The font alone, as any app sets it: bold is the Pressed face, and the strike sits where the hand strikes. The font has no italic, so the app fakes one by slanting it further; everything else you mark is lost, and only its words are left.',
 };
-const setType = () => { typed.className = way === 'web' ? 'claude-hand' : 'claude-hand-app'; typed.classList.toggle('nocalt', joins.getAttribute('aria-pressed') !== 'true'); typed.innerHTML = typeset(mark.value.replace(/\s+/g, ' ').trim(), way); typed.style.fontSize = `${size.value}px`; $('wayNote').textContent = WAYS[way]; };
+const setType = () => { typed.className = way === 'web' ? 'claude-hand' : 'claude-hand-app'; typed.classList.toggle('nocalt', joins.getAttribute('aria-pressed') !== 'true'); typed.innerHTML = typeset(mark.value.replace(/\s+/g, ' ').trim(), way); typed.style.fontSize = `${size.value}px`; typed.style.fontWeight = pace.value; typed.style.fontVariationSettings = `'WEAR' ${wear.value}`; $('wayNote').textContent = WAYS[way]; };
 for (const b of document.querySelectorAll<HTMLButtonElement>('[data-way]')) b.addEventListener('click', () => { way = b.dataset.way as typeof way; for (const o of document.querySelectorAll('[data-way]')) o.setAttribute('aria-pressed', String(o === b)); setType(); });
 size.addEventListener('input', setType);
+pace.addEventListener('input', setType);
+wear.addEventListener('input', setType);
 joins.addEventListener('click', () => { joins.setAttribute('aria-pressed', String(joins.getAttribute('aria-pressed') !== 'true')); setType(); });
 setType();
 mark.addEventListener('input', () => { setType(); clearTimeout(wTimer); wTimer = window.setTimeout(() => writeOut(), 450); });

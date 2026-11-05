@@ -7,9 +7,11 @@ Needs fontTools and shapely. python3 autograph-pairs.py <font.ttf>
 """
 import sys, itertools
 from fontTools.ttLib import TTFont
-from fontTools.pens.recordingPen import RecordingPen
-from shapely.geometry import Polygon
-from shapely.ops import unary_union
+from fontTools.pens.basePen import BasePen
+import numpy as np
+from shapely.geometry import Polygon, LineString
+from shapely.ops import unary_union, polygonize
+from shapely.affinity import translate
 
 f = TTFont(sys.argv[1])
 # (the letters that go out high, so the letter after them is joined from above: given by the build from the hand itself
@@ -19,21 +21,73 @@ gs, cmap, hmtx = f.getGlyphSet(), f.getBestCmap(), f['hmtx']
 XH = f['OS/2'].sxHeight
 
 
+class Flat(BasePen):
+    """a glyph's contours as rings of points, its curves followed in short straight steps"""
+
+    def __init__(self, glyphset):
+        super().__init__(glyphset)
+        self.rings, self.cur = [], []
+
+    def _moveTo(self, p):
+        self.cur = [p]
+
+    def _lineTo(self, p):
+        self.cur.append(p)
+
+    def _qCurveToOne(self, p1, p2):
+        p0 = self._getCurrentPoint()
+        for t in (0.25, 0.5, 0.75, 1):
+            u = 1 - t
+            self.cur.append((u * u * p0[0] + 2 * u * t * p1[0] + t * t * p2[0], u * u * p0[1] + 2 * u * t * p1[1] + t * t * p2[1]))
+
+    def _curveToOne(self, p1, p2, p3):
+        p0 = self._getCurrentPoint()
+        for t in (0.25, 0.5, 0.75, 1):
+            u = 1 - t
+            self.cur.append(tuple(u ** 3 * a + 3 * u * u * t * b + 3 * u * t * t * c + t ** 3 * d for a, b, c, d in zip(p0, p1, p2, p3)))
+
+    def _closePath(self):
+        if len(self.cur) > 2:
+            self.rings.append(self.cur)
+        self.cur = []
+
+    _endPath = _closePath
+
+
+def winding(pt, rings):
+    """how many times the contours wind round a point (the font is filled wherever it isn't nought)"""
+    px, py, w = pt[0], pt[1], 0
+    for r in rings:
+        a = np.asarray(r)
+        b = np.roll(a, -1, axis=0)
+        x0, y0, x1, y1 = a[:, 0], a[:, 1], b[:, 0], b[:, 1]
+        left = (x1 - x0) * (py - y0) - (px - x0) * (y1 - y0)
+        w += int(np.sum((y0 <= py) & (y1 > py) & (left > 0))) - int(np.sum((y1 <= py) & (y0 > py) & (left < 0)))
+    return w
+
+
+_polys = {}
+
+
 def poly(name, dx=0):
-    """a glyph's outline as one shape (its counters filled: it's touching from outside that matters)"""
-    pen = RecordingPen()
-    gs[name].draw(pen)
-    rings, cur = [], []
-    for op, args in pen.value:
-        if op == 'moveTo':
-            cur = [args[0]]
-        elif op in ('lineTo', 'qCurveTo', 'curveTo'):
-            cur.append(args[-1])
-        elif op in ('closePath', 'endPath'):
-            if len(cur) > 2:
-                rings.append(Polygon([(x + dx, y) for x, y in cur]).buffer(0))
-            cur = []
-    return unary_union(rings) if rings else None
+    """a glyph's outline as one shape, filled as a renderer fills it (from 2.7 its strokes overlap, each its own
+    contour), and its counters filled: it's touching from outside that matters"""
+    if name not in _polys:
+        pen = Flat(gs)
+        gs[name].draw(pen)
+        rings = pen.rings
+        if not rings:
+            _polys[name] = None
+        else:
+            faces = polygonize(unary_union([LineString(list(r) + [r[0]]) for r in rings]))
+            keep = [fc for fc in faces if fc.area > 1 and winding(fc.representative_point().coords[0], rings) != 0]
+            u = unary_union(keep) if keep else None
+            if u is not None:
+                parts = list(u.geoms) if hasattr(u, 'geoms') else [u]
+                u = unary_union([Polygon(q.exterior) for q in parts])
+            _polys[name] = u
+    p = _polys[name]
+    return None if p is None else translate(p, dx, 0)
 
 
 def kerning():

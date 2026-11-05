@@ -1,10 +1,13 @@
-// Autograph's letter practice (node cells/lab/devtools/autograph-practise.mjs [--readable=4] [--distinct=0] [--out=f.json]):
+// Autograph's letter practice (node cells/lab/devtools/autograph-practise.mjs [--readable=4] [--distinct=0] [--out=f.json]
+// [--hand=v19] [--through=26]):
 // hand v9's letters practised by writing the words of the record, sessions 1 to 13 (every lowercase word in their
 // summaries, decisions, samples and reviews, each as often as it was written). Prints what practice did, letter by
 // letter: how often each was practised, how often a writing came out easier, how far it strayed from its plan, and how
 // much quicker the record's words come out; `--out` saves where it left the letters. Session 14's runs are kept in v9 as
 // TRIALS (readable 16, 4 and 1; and readable 1 with distinct 400, which also holds against new crossings); none was
-// adopted.
+// adopted. (From session 27, `--hand` names the hand whose letters practise (v9 if not given) and `--through` the last
+// session whose words are written (13 if not given): session 27 practised v19's letters, as they stand, through 26,
+// once, for the font's wear.)
 import { build } from 'esbuild';
 import { writeFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
@@ -13,12 +16,12 @@ import { tmpdir } from 'node:os';
 const here = dirname(fileURLToPath(import.meta.url)), lab = join(here, '..');
 const opt = Object.fromEntries(process.argv.slice(2).filter((a) => a.startsWith('--')).map((a) => [a.slice(2).split('=')[0], a.split('=')[1] ?? true]));
 const outfile = join(tmpdir(), `autograph-practise-${process.pid}.mjs`);
-await build({ stdin: { contents: `export { practiseLetters, PRACTICE_LETTERS } from './client/autograph/hands/v9'; export { SESSION_FILES } from './client/autograph/sessions';`, resolveDir: lab, loader: 'ts' }, bundle: true, platform: 'node', format: 'esm', outfile, logLevel: 'warning' });
+await build({ stdin: { contents: `export { practiseLetters, PRACTICE_LETTERS } from './client/autograph/hands/${opt.hand ?? 'v9'}'; export { SESSION_FILES } from './client/autograph/sessions';`, resolveDir: lab, loader: 'ts' }, bundle: true, platform: 'node', format: 'esm', outfile, logLevel: 'warning' });
 const { practiseLetters, PRACTICE_LETTERS, SESSION_FILES } = await import(outfile);
 
-// (the record's words: sessions 1 to 13, as they were written)
+// (the record's words: sessions 1 to 13 (or to --through), as they were written)
 const texts = [];
-for (const f of SESSION_FILES.filter((f) => f.session.n <= 13)) {
+for (const f of SESSION_FILES.filter((f) => f.session.n <= Number(opt.through ?? 13))) {
   texts.push(f.session.title, f.session.summary, ...f.session.decided);
   for (const e of f.entries) texts.push(e.title, e.text ?? '', e.made, e.review, ...(e.type ?? []).map((l) => l.text));
 }
