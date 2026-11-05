@@ -23,4 +23,5 @@ import s18 from './18';
 import s19 from './19';
 import s20 from './20';
 import s21 from './21';
-export const SESSION_FILES: SessionFile[] = [s01, s02, s03, s04, s05, s06, s07, s08, s09, s10, s11, s12, s13, s14, s15, s16, s17, s18, s19, s20, s21];
+import s22 from './22';
+export const SESSION_FILES: SessionFile[] = [s01, s02, s03, s04, s05, s06, s07, s08, s09, s10, s11, s12, s13, s14, s15, s16, s17, s18, s19, s20, s21, s22];

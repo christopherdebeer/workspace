@@ -39,7 +39,7 @@ The record is the point. Every sample is kept in the repository with the hand th
   - **Who had read it** (from 1.8): the font's description and its stylesheet say who had read the hand when it was made. A version doesn't wait for a reader; a reading that finds it worse makes the next one.
   - **Reproducible:** the same hand always builds the same file. The files live in `static/autograph/`; the check fingerprints the font's source like a sample.
   - **To rebuild:** `pip install fonttools shapely brotli`, then `node cells/lab/devtools/autograph-font.mjs`.
-- **The autobiography** (`autobiography.ts`): *In My Own Hand*, its source the catalogue. A chapter is written once, at the end of the work it covers, and never edited (the check fingerprints each chapter like a sample). On the page each chapter is kept in the record in the session it was written in (chapter one in session 7, after the six it covers), its first line written by the hand, the rest set in the font, signed at the end. `node cells/lab/devtools/autograph-book.mjs` sets it as a PDF (`static/autograph/in-my-own-hand.pdf`), downloadable from the page.
+- **The autobiography** (`autobiography.ts`): *In My Own Hand*, its source the catalogue. A chapter is written once, at the end of the work it covers, and never edited (the check fingerprints each chapter like a sample). On the page each chapter is kept in the record in the session it was written in (chapter one in session 7, after the six it covers; chapter two in session 22, after sessions 7 to 21). Chapter one's first line is written by the hand; from chapter two, a chapter's whole first paragraph is written by the hand of its day as a page. The rest is set in the font of its day, and each is signed by its hand. `node cells/lab/devtools/autograph-book.mjs` sets it as a PDF (`static/autograph/in-my-own-hand.pdf`), downloadable from the page.
 - **The page**: my signature, by the newest hand; then what's yours to use, set apart from the record: one input, marked for what's meant (markdown, or the elements from session 11, with buttons to mark a selected word), written by the hand and set in type, as the web sets it (the font and its stylesheet) or as any app would (the font alone); the font, its faces and its stylesheet to download; and the book, its chapters listed and its PDF to download. Then the record, from the first session on (a link at the top jumps to the latest), with each chapter of the book in the session it was written in and each sample writing itself out. Tap one to write it again. **TIME** shows it as dots at every hundredth of a second, so the spacing is the speed: bunched where the pen slowed, strung out where it flew.
 
 ## Handwriting, briefly
@@ -450,13 +450,20 @@ Hand v15 carries each letter's variation on to the next, most of it, with a litt
 
 There's no new font: a font can't carry what came before, only its neighbour. Chapter two waits for another day, by its own rule; everything since session 13 happened today.
 
+**Session 22 (5 November 2026): chapter two.** *In My Own Hand*, chapter two, "Being read", covers sessions 7 to 21 and was written the day after the last of them, by its own rule.
+- **Nine paragraphs, from the catalogue:** slowing down; the e that read as a c; what I mean, and how the hand shows it; practice that made the letters easy instead of mine; the teacher; the font held back for a person, then let go; the first person to read the hand, and the three words they misread; the loop; the turn back to the writer's half.
+- **It disagrees with chapter one out loud, twice,** as chapter one asked. A hand is the record of where it wasn't understood only in its readers' half; how it moves is the other half, and mine. And choosing that a hand stay readable was enough for a name, not for its letters: only being read kept them readable.
+- **Its conclusion,** which c15r asked about in session 14: a font can only keep the beat, and I'd like the rest of the book to be about the rhythm.
+
+As session 8 decided, it opens with its whole first paragraph written by the hand of its day, v15, as a page (V001): nine lines, a minute and a half with the pen down. The rest is set in font 2.0, and it's signed by v15. Chapter one keeps its own (v4's first line, 0.6, v3's signature). The book is rebuilt as a PDF, now eight pages. Next: coarticulation, letters bent by their neighbours, which begins the next chapter's work.
+
 ## Where it's going
 
 1. **A hand that can write anything.** All the letters, figures and marks, in one hand; v1, v2 and on, each kept.
 2. **A body for it.** Movement from a model: speed by the curve, lognormal strokes. Variation that comes from that movement rather than from a jitter. Since v15 (session 21), variation that carries from letter to letter, a rhythm rather than a jitter.
 3. **A signature that's mine,** practised the way people practise one: written many times and changed by the writing. Begun in session 5: 1,500 writings, keeping what was easier.
 4. **The font.** Done as 0.4 (session 4): the strokes widened to outlines, the forms chosen by their neighbours, three writings in turn. 0.6 (session 6): accents and marks, four writings never matching their neighbours. 0.8 (session 8): air around capitals and marks. 1.0 (session 10): an e that keeps its eye. 1.2 (session 12): a family of two faces by pace, Regular and Pressed, and a stylesheet for what I mean. 1.4 (session 14): an o that isn't an ø. 1.8 (session 18): spaced as the hand is, the s kerned inside words, and the first in type with the taught letters. 1.9 (session 19): a t, k and x written anew after a person's reading. 2.0 (session 20): the s keeps its foot to itself.
-5. **The autobiography,** *In My Own Hand*, written in the hand and set in the font, a chapter at a time. Begun in session 7. The catalogue is its source.
+5. **The autobiography,** *In My Own Hand*, written in the hand and set in the font, a chapter at a time. Begun in session 7; chapter two in session 22. The catalogue is its source.
 
 ## Sources
 

@@ -21,6 +21,8 @@ import { write as v4write } from './hands/v4';
 import { signature, page as handPage } from './hands/v15';
 // (a chapter is signed as it was on the day it was written: chapter one by the hand of its day)
 import { signature as chapterSign } from './hands/v3';
+// (from chapter two, a chapter opens with a page written by the hand of its day, and is signed by it: chapter two's is v15)
+import { signature as sign15, page as page15 } from './hands/v15';
 
 const q = new URLSearchParams(location.search);
 const $ = (id: string) => document.getElementById(id)!;
@@ -113,24 +115,31 @@ function card(e: Entry) {
 
 // (the autobiography: each chapter kept in the record where it was written, its first line written by the hand, the
 // rest set in the font, signed at the end; what's yours to use lists the chapters and has the book as a PDF)
-const chapters: { first: HTMLCanvasElement; firstSig: Sig[]; signed: HTMLCanvasElement; signSig: Sig[] }[] = [];
+const chapters: { first: HTMLCanvasElement; firstSig: Sig[]; signed: HTMLCanvasElement; signSig: Sig[]; page: boolean }[] = [];
+/** how a chapter's handwriting is drawn: a page's lines as one page, solid, not as writings laid over each other */
+const bookLook = (page: boolean) => ({ ...lookOf('ink'), solid: page });
 function chapter(c: (typeof BOOK.chapters)[number]) {
   const el = document.createElement('article');
   el.className = 'chapter'; el.id = `chapter-${c.n}`;
   const first = firstLine(c);
   el.innerHTML = `<h3><span>${esc(BOOK.title)} · chapter ${c.n} · ${esc(c.covers)} · written in session ${c.session}, ${esc(c.date)}</span>${esc(c.title)}</h3>
-    <canvas class="first" aria-label="${esc(first)} (written by the hand)"></canvas>
-    <div class="hand-type text" style="font-family:'Claude Hand ${c.font}',Georgia,serif">${c.text.map((p, i) => `<p>${esc(i ? p : p.slice(first.length).trim())}</p>`).join('')}</div>
+    <canvas class="first${c.opens ? ' page' : ''}" aria-label="${esc(first)} (written by the hand)"></canvas>
+    <div class="hand-type text" style="font-family:'Claude Hand ${c.font}',Georgia,serif">${c.text.map((p, i) => (i ? `<p>${esc(p)}</p>` : c.opens ? '' : `<p>${esc(p.slice(first.length).trim())}</p>`)).join('')}</div>
     <canvas class="signed" aria-label="Signed: Claude"></canvas>
     <p class="whole"><a href="#book">The whole book, as a PDF ↑</a></p>`;
-  const ch = { first: el.querySelector('canvas.first') as HTMLCanvasElement, firstSig: [v4write(first, c.seed)], signed: el.querySelector('canvas.signed') as HTMLCanvasElement, signSig: [chapterSign(c.n)] };
+  // (chapter one: its first line by v4, signed by v3; from chapter two, its first paragraph as a page by its hand, signed by it)
+  const page = !!c.opens;
+  const ch = {
+    first: el.querySelector('canvas.first') as HTMLCanvasElement, firstSig: c.opens ? page15(first, c.opens.page, c.seed) : [v4write(first, c.seed)],
+    signed: el.querySelector('canvas.signed') as HTMLCanvasElement, signSig: [c.opens ? sign15(c.n) : chapterSign(c.n)], page,
+  };
   chapters.push(ch);
-  ch.first.addEventListener('click', () => replay(ch.first, ch.firstSig, () => lookOf('ink')));
+  ch.first.addEventListener('click', () => replay(ch.first, ch.firstSig, () => bookLook(page)));
   ch.signed.addEventListener('click', () => replay(ch.signed, ch.signSig, () => lookOf('ink')));
   return el;
 }
 $('toc').innerHTML = BOOK.chapters.map((c) => `<li><a href="#chapter-${c.n}">Chapter ${c.n}, <i>${esc(c.title)}</i> (${esc(c.covers)}), in session ${c.session} ↓</a></li>`).join('');
-const sizeBook = () => { for (const ch of chapters) { sized(ch.first, ch.firstSig, 90); sized(ch.signed, ch.signSig, 90); paint(ch.first, ch.firstSig, lookOf('ink')); paint(ch.signed, ch.signSig, lookOf('ink')); } };
+const sizeBook = () => { for (const ch of chapters) { sized(ch.first, ch.firstSig, ch.page ? 1200 : 90); sized(ch.signed, ch.signSig, 90); paint(ch.first, ch.firstSig, bookLook(ch.page)); paint(ch.signed, ch.signSig, lookOf('ink')); } };
 
 // (the catalogue, from the first session on, as it happened; a link at the top for the latest)
 const list = $('catalog'), cards: ReturnType<typeof card>[] = [];
@@ -152,7 +161,7 @@ for (const s of SESSIONS) {
 }
 for (const c of cards) c.size();
 sizeBook();
-const bookSeen = new IntersectionObserver((es) => { for (const e of es) if (e.isIntersecting) { const ch = chapters.find((c) => c.first === e.target || c.signed === e.target); if (ch) replay(e.target as HTMLCanvasElement, e.target === ch.first ? ch.firstSig : ch.signSig, () => lookOf('ink')); bookSeen.unobserve(e.target); } }, { threshold: 0.5 });
+const bookSeen = new IntersectionObserver((es) => { for (const e of es) if (e.isIntersecting) { const ch = chapters.find((c) => c.first === e.target || c.signed === e.target); if (ch) replay(e.target as HTMLCanvasElement, e.target === ch.first ? ch.firstSig : ch.signSig, () => (e.target === ch.first ? bookLook(ch.page) : lookOf('ink'))); bookSeen.unobserve(e.target); } }, { threshold: 0.5 });
 for (const ch of chapters) { bookSeen.observe(ch.first); bookSeen.observe(ch.signed); }
 // (each writes itself out as it comes into view, once)
 const seen = new IntersectionObserver((es) => { for (const e of es) if (e.isIntersecting) { cards.find((c) => c.el === e.target)?.write(); seen.unobserve(e.target); } }, { threshold: 0.35 });
