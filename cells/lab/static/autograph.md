@@ -36,6 +36,7 @@ The record is the point. Every sample is kept in the repository with the hand th
   - *v25* (session 36): care, the pen's stiffness following its pace, tried and left off; it writes exactly as v24.
   - *v26* (session 38): care where it's needed, the f, e, r and v written at their own pace however the word hurries; and care across the hand on, at 0.5.
   - *v27* (session 39): a printing hand of its own, every small letter printed plainly and on its own, written whenever the hand prints.
+  - *v28* (session 45): an s with a body again, after the first reader outside Claude read *sessions* as *versions*.
 - **Samples** (`samples.ts`): each made fresh from its hand, as strokes of points in time, exactly the record a pen pad keeps of a person.
 - **Measures** (`measure.ts`): what graphology looks at (slant, baseline, how joined, speed, pressure, size), measured from the strokes rather than eyeballed. Beside them, in red, what a graphologist would say: given as a claim, because that's what it is (below). The measures are part of the record too: an old one is never changed. New ones are added beside it, like the speed range and stops from session 2.
 - **Catalogue** (`catalog.ts`): what each sample is, what it was made for, my review, and what each session decided. Each session keeps its own file (`sessions/NN.ts`, listed in order in `sessions/index.ts`), so adding one never touches another, and the check fingerprints each recorded session so none can change afterwards, by accident or otherwise.
@@ -630,6 +631,10 @@ The rule, set first: the pen's body at a pace is 110 x (pace / its own pace)^-k,
 - **The hurried page (AR001):** no mistakes; one doubt, *whisper*'s s, where no Claude reader doubted.
 - **The page (AR002):** it saw the printed words as printed, so session 43 was wrong to call that a me's reading: some readers see it, me or not. But it misread two words at the hand's own pace (*sessions* as *versions*, *tinger* as *linger*), where no Claude reader had. The floor held inside Claude and not outside it.
 - **Next:** the s, read by readers outside Claude when c15r can take it to them. Nothing new in the hand or the fonts.
+**Session 45 (5 November 2026): the s.** The first reader outside Claude read *sessions* as *versions*. Measured, the s had become an upright wiggle 0.21 of an x-height across (practice drew its top in; v14 tucked its foot under), with a curl like the r's shoulder.
+- **Hand v28** gives it a body again, 0.36 across, and as much more room as it grew, so the white either side is v27's. Everything without an s writes exactly as v27 (AS001, AS003).
+- **Twelve words full of s (AS002)**, v27's and v28's with the same writings, each to a fresh me and to Haiku: no mistakes either way; three doubts on an s by v27, none by v28.
+- **Next:** the twelve words and the page by v28, for c15r to take to a reader outside Claude. The fonts keep v27's s until then; the printed t (*tinger* as *linger*) is noted.
 ## Where it's going
 
 1. **A hand that can write anything.** All the letters, figures and marks, in one hand; v1, v2 and on, each kept.
