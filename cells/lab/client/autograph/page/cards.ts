@@ -40,10 +40,12 @@ function typeCard(e: Entry): Card {
 /** a sample, made by its hand when it's first shown */
 export function card(e: Entry): Card {
   if (e.type) return typeCard(e);
-  const sigs = MADE[e.id](), ms = sigs.map((s) => measure(s, e.text));
+  const rows = e.layout === 'rows', isPage = e.layout === 'page';
+  // (a page's lines are measured each on its own, without the text: the text is the whole page's, and divided among one
+  // line's strokes it said each line joined far more letters than it has; from session 42, whose signed page made it plain)
+  const sigs = MADE[e.id](), ms = sigs.map((s) => measure(s, isPage ? undefined : e.text));
   const el = document.createElement('article');
   el.className = 'sample'; el.id = e.id;
-  const rows = e.layout === 'rows', isPage = e.layout === 'page';
   const facts = [
     `slant ${shown(ms, 'slant', deg)}`, `baseline ${shown(ms, 'baseline', deg)}`,
     ms[0].joined !== undefined ? `${shown(ms, 'joined', (v) => v.toFixed(1))} letters a stroke` : '',

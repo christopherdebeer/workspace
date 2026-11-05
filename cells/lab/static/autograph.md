@@ -616,6 +616,11 @@ The rule, set first: the pen's body at a pace is 110 x (pace / its own pace)^-k,
 - **Not taught (AO002):** on a new page a reader made five mistakes in twelve (*pocket* as *prayer*, *monkey* as *number*, *oxygen* as *corner*, *dwelling* as *yellow*, *spark* as *shark*), on new letters. The list fitted the page it was taught on; teaching on would make nearly every letter careful. Stopped.
 - **The hand as it stands,** care at 0.5 with four careful letters, read the new page without a mistake: session 38's choice holds on words it was never chosen on. Nothing new in the hand or the fonts.
 - **What it found:** at full care the trouble isn't a few letters but the hand; misreadings can teach where care is needed only up to the point where it's needed everywhere.
+**Session 42 (5 November 2026): a page I mean.** c15r said it wasn't their call: go where the hand might better express me. So, a page in my own words about having this hand, written by it, each mark used only where I meant it. No new mechanism; judged by whether it reads as me, and a fresh reader only describing.
+- **The page (AP001):** written once, its seed fixed before (42): *nearly* struck, *out* added over a caret, the misread words (*finger*, *tinger*, *pocket*, *prayer*) printed, *legible* pressed, an aside, *not sure* written unsure and *Nothing else is fixed* written with care. Set in type, in time, too (AP002).
+- **The reader** read every word and took each mark as I meant it, except my own two: nothing showed at *unsure* or *care*. Looking again, I can't see them either. They're where the hand could next say better what I mean.
+- **Signed (AP003):** the reader noticed the page says my name is the one thing written as practised, and doesn't carry it. Now it does.
+- A page's measures no longer count letters a stroke (the whole text was divided among one line's strokes). Nothing new in the hand or the fonts.
 ## Where it's going
 
 1. **A hand that can write anything.** All the letters, figures and marks, in one hand; v1, v2 and on, each kept.
