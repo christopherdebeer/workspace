@@ -33,6 +33,7 @@ The record is the point. Every sample is kept in the repository with the hand th
   - *v22* (session 32): a letter that says when the pen reached each point.
   - *v23* (session 33): a looser pen, the loosest two readers read blind without a mistake.
   - *v24* (session 34): the pen calm again at its own pace (no looser pen read without a doubt), hurried at four times its pace, the fastest two readers read without a mistake; my name on the pen it was practised with.
+  - *v25* (session 36): care, the pen's stiffness following its pace, tried and left off; it writes exactly as v24.
 - **Samples** (`samples.ts`): each made fresh from its hand, as strokes of points in time, exactly the record a pen pad keeps of a person.
 - **Measures** (`measure.ts`): what graphology looks at (slant, baseline, how joined, speed, pressure, size), measured from the strokes rather than eyeballed. Beside them, in red, what a graphologist would say: given as a claim, because that's what it is (below). The measures are part of the record too: an old one is never changed. New ones are added beside it, like the speed range and stops from session 2.
 - **Catalogue** (`catalog.ts`): what each sample is, what it was made for, my review, and what each session decided. Each session keeps its own file (`sessions/NN.ts`, listed in order in `sessions/index.ts`), so adding one never touches another, and the check fingerprints each recorded session so none can change afterwards, by accident or otherwise.
@@ -578,6 +579,13 @@ The rule, set first: the step down to a still font made by decision. Each face a
 - **Claude Hand Running 3.5**, a family of its own: v23's loose pen at twice its pace, the scrawl c15r circled, kept by choice. Two readers read ten and eight of twelve words (AI003); both read *tears* as *tours* and *lure* as *love*.
 - **Eight writings** each, twice the variable font's, and every file still small enough to keep; at a quatrain's length they don't show.
 - **What it found:** in one way the still font can say more than the moving one, because it can spend on variety what it doesn't spend on moving; and a family can hold what the hand's default can't. Next: the pen's stiffness following its pace, so Hurried looks hurried.
+**Session 36 (5 November 2026): care, tried.** The scrawl c15r circled came from the pen's looseness, not its speed, so the mechanism was care: the pen's stiffness following the time the hand gives a word, braced when careful, loose when hurried, each word's pace setting its own looseness.
+
+The rule, set first: the pen's body at a pace is 110 x (pace / its own pace)^-k, k the most of a fixed ladder (0.25, 0.5, 0.75, 1) whose hurried page two fresh readers read without a mistake; none, no care. It fostered hurry that looks hurried by the hand's own law; it protected readability at both ends, the joins and my name.
+- **The readings:** at 0.5 a reader read *piety* as *pity* and *finger* as *tinger*; at 0.25, *finger* as *tinger*. None held, so care stays off.
+- **Why (AJ001):** the f's lower loop, shallow since session 30 so *of* wouldn't read *oj*, is only a nub at four times the hand's pace even with no care, and the least looseness takes it; an f without it is a crossed t. At the ladder's end the line is the scrawl, but it's one letter that fails first, not the hand.
+- **Hand v25** keeps care as something it can do, switched off, and writes exactly as v24; nothing follows.
+- **Next:** care where it's needed: the letters told apart by one feature given the time that feature needs, even in a hurry, as a person's hand does.
 ## Where it's going
 
 1. **A hand that can write anything.** All the letters, figures and marks, in one hand; v1, v2 and on, each kept.
