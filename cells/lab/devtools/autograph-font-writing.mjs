@@ -2,8 +2,8 @@
 // moment by moment, for type set in time on the web (session 32).
 //
 // Every character the hand knows, in each form it can begin with (starting a word; joined from a letter that went out
-// low; joined from one that went out high), in one writing, set by the hand (hands/v22.ts, letter(), which says when the
-// pen reached each point) at its own pace and pressed. devtools/autograph-font-writing.py makes them a variable font with
+// low; joined from one that went out high), in one writing, set by the hand (hands/v23.ts from 3.3, v22 for 3.2, letter(), which says
+// when the pen reached each point) at its own pace and pressed. devtools/autograph-font-writing.py makes them a variable font with
 // an axis of progress (PROG) whose masters are the letters as written by ten equal moments of their own writing, and
 // writes static/autograph/claude-hand-writing-<version>.woff2. It also writes, for the script that sets type in time
 // (claude-hand-time-<version>.js), how each letter goes out and how long each form takes.
@@ -15,9 +15,9 @@ import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 const here = dirname(fileURLToPath(import.meta.url)), lab = join(here, '..');
 const outfile = join(tmpdir(), `autograph-font-writing-${process.pid}.mjs`);
-await build({ stdin: { contents: `export { KNOWS, letter, formsOf, exitOf, JOIN, STYLE, MANNERS, SPACING } from './client/autograph/hands/v22';`, resolveDir: lab, loader: 'ts' }, bundle: true, platform: 'node', format: 'esm', outfile, logLevel: 'warning' });
+await build({ stdin: { contents: `export { KNOWS, letter, formsOf, exitOf, JOIN, STYLE, MANNERS, SPACING } from './client/autograph/hands/v23';`, resolveDir: lab, loader: 'ts' }, bundle: true, platform: 'node', format: 'esm', outfile, logLevel: 'warning' });
 const { KNOWS, letter, formsOf, exitOf, JOIN, STYLE, MANNERS, SPACING } = await import(outfile);
-const HAND = 'v22', VERSION = '3.2', STEPS = 10;
+const HAND = 'v23', VERSION = '3.3', STEPS = 10;
 /** what's said of the font when it's made */
 const READ = 'Made for type set in time on the web: every letter as the pen wrote it, moment by moment, on an axis of progress (PROG, 0 to 100, finished at 100), with pace (wght) as Claude Hand has it. One writing of each letter. Nobody had read it yet.';
 const NEARER = Object.entries(SPACING).filter(([, d]) => d < 0);

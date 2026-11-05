@@ -1,6 +1,6 @@
 // Autograph's font (node cells/lab/devtools/autograph-font.mjs): the hand made into a font you can type with.
 //
-// Every character the hand knows is set on its own by the hand (hands/v20.ts, letter(); 1.2 was v7's, 1.4 v9's, 1.8 v12's, 1.9 v13's, 2.0 v14's, 2.6 v18's, 2.7 v19's, 2.8 v20's), in each form it can begin with
+// Every character the hand knows is set on its own by the hand (hands/v23.ts, letter(); 1.2 was v7's, 1.4 v9's, 1.8 v12's, 1.9 v13's, 2.0 v14's, 2.6 v18's, 2.7 v19's, 2.8 v20's, 2.9 v21's), in each form it can begin with
 // (starting a word; joined from a letter that went out low; joined from one that went out high) and in four writings.
 // That gives centrelines with the pen's width at every point. Then devtools/autograph-font.py (fontTools + shapely: `pip
 // install fonttools shapely brotli`) widens them into outlines and writes the font, with its rules: each letter takes
@@ -28,19 +28,20 @@ import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 const here = dirname(fileURLToPath(import.meta.url)), lab = join(here, '..');
 const outfile = join(tmpdir(), `autograph-font-${process.pid}.mjs`);
-await build({ stdin: { contents: `export { KNOWS, letter, formsOf, exitOf, JOIN, STYLE, MANNERS, SPACING, worn } from './client/autograph/hands/v21';`, resolveDir: lab, loader: 'ts' }, bundle: true, platform: 'node', format: 'esm', outfile, logLevel: 'warning' });
+await build({ stdin: { contents: `export { KNOWS, letter, formsOf, exitOf, JOIN, STYLE, MANNERS, SPACING, worn } from './client/autograph/hands/v23';`, resolveDir: lab, loader: 'ts' }, bundle: true, platform: 'node', format: 'esm', outfile, logLevel: 'warning' });
 const { KNOWS, letter, formsOf, exitOf, JOIN, STYLE, MANNERS, SPACING, worn } = await import(outfile);
-const HAND = 'v21';
+const HAND = 'v23';
 
 /** the version (the session that made it: 1.0 is session 10's, by that rule, not a claim that it's done), how many writings of each letter, and how far each letter steps through
  * them: one or three (both turn a run of one letter through all four), by the letter */
-const VERSION = '2.9', ALTS = 4, step = (ch) => (ch.codePointAt(0) % 2 ? 3 : 1);
+const VERSION = '3.3', ALTS = 4, step = (ch) => (ch.codePointAt(0) % 2 ? 3 : 1);
 const chars = [' ', ...KNOWS];
 /** (1.8) the letters that sit nearer the one before them only inside a word: how much nearer (x-heights, less than
  * nothing). The hand has them drawn already nearer; the font draws them back where they stand starting a word, and kerns */
 const NEARER = Object.entries(SPACING).filter(([, d]) => d < 0);
 /** (1.8) what's said of the font when it's made: who had read the hand it was made from */
-const READ = 'When it was made, one person had read the hands before it blind, 94 words of 96 over four pages, and models had misread none. Its f, looped again with its lower loop turning forward, its wear and its hurry hadn\'t been read by anyone yet. It has two axes: pace (wght), the hand hurried, at twice its own pace (200), at its own pace (400) and at the pace it writes what is strong (700), its line as well as its ink moving with the pace; and wear (WEAR), the letters as they stand (0) and as practice for ease left them (100).';
+const READ = 'When it was made, its hand (v23, the loosest pen two readers read blind without a mistake) had been read by two models blind, every word, with doubts at four; no person had read it. It has two axes: pace (wght), the hand hurried, at twice its own pace (200), at its own pace (400) and at the pace it writes what is strong (700), its line as well as its ink moving with the pace; and wear (WEAR), the letters as they stand (0) and as practice for ease left them (100).';
+// (2.9's: 'When it was made, one person had read the hands before it blind, 94 words of 96 over four pages, and models had misread none. Its f, looped again with its lower loop turning forward, its wear and its hurry hadn\'t been read by anyone yet. It has two axes: pace (wght), the hand hurried, at twice its own pace (200), at its own pace (400) and at the pace it writes what is strong (700), its line as well as its ink moving with the pace; and wear (WEAR), the letters as they stand (0) and as practice for ease left them (100).')
 // (2.8's: 'When it was made, one person had read the hands before it blind, 94 words of 96 over four pages, and models had misread none. Its f, which stands on the line, its wear and its hurry hadn\'t been read by anyone yet. It has two axes: pace (wght), the hand hurried, at twice its own pace (200), at its own pace (400) and at the pace it writes what is strong (700), its line as well as its ink moving with the pace; and wear (WEAR), the letters as they stand (0) and as practice for ease left them (100).')
 // (2.7's: 'When it was made, one person had read the hands before it blind, 94 words of 96 over four pages, and models had misread none. Its f, which stands on the line, and its wear hadn\'t been read by anyone yet. It has two axes: pace (wght), the hand at its own pace (400) and at the pace it writes what is strong (700), and wear (WEAR), the letters as they stand (0) and as practice for ease left them (100).')
 // (2.6's: 'When it was made, one person had read the hands before it blind, 94 words of 96 over four pages, and models had misread none. This hand\'s f, which stands on the line, hadn\'t been read by anyone yet.')
