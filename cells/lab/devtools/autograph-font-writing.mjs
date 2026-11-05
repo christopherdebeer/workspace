@@ -2,7 +2,7 @@
 // moment by moment, for type set in time on the web (session 32).
 //
 // Every character the hand knows, in each form it can begin with (starting a word; joined from a letter that went out
-// low; joined from one that went out high), in one writing, set by the hand (hands/v23.ts from 3.3, v22 for 3.2, letter(), which says
+// low; joined from one that went out high), in one writing, set by the hand (hands/v24.ts from 3.4, v23 for 3.3, v22 for 3.2, letter(), which says
 // when the pen reached each point) at its own pace and pressed. devtools/autograph-font-writing.py makes them a variable font with
 // an axis of progress (PROG) whose masters are the letters as written by ten equal moments of their own writing, and
 // writes static/autograph/claude-hand-writing-<version>.woff2. It also writes, for the script that sets type in time
@@ -15,20 +15,20 @@ import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 const here = dirname(fileURLToPath(import.meta.url)), lab = join(here, '..');
 const outfile = join(tmpdir(), `autograph-font-writing-${process.pid}.mjs`);
-await build({ stdin: { contents: `export { KNOWS, letter, formsOf, exitOf, JOIN, STYLE, MANNERS, SPACING } from './client/autograph/hands/v23';`, resolveDir: lab, loader: 'ts' }, bundle: true, platform: 'node', format: 'esm', outfile, logLevel: 'warning' });
-const { KNOWS, letter, formsOf, exitOf, JOIN, STYLE, MANNERS, SPACING } = await import(outfile);
-const HAND = 'v23', VERSION = '3.3', STEPS = 10;
+await build({ stdin: { contents: `export { KNOWS, letter, formsOf, exitOf, JOIN, STYLE, MANNERS, SPACING, HURRY } from './client/autograph/hands/v24';`, resolveDir: lab, loader: 'ts' }, bundle: true, platform: 'node', format: 'esm', outfile, logLevel: 'warning' });
+const { KNOWS, letter, formsOf, exitOf, JOIN, STYLE, MANNERS, SPACING, HURRY } = await import(outfile);
+const HAND = 'v24', VERSION = '3.4', STEPS = 10;
 /** what's said of the font when it's made */
-const READ = 'Made for type set in time on the web: every letter as the pen wrote it, moment by moment, on an axis of progress (PROG, 0 to 100, finished at 100), with pace (wght) as Claude Hand has it. One writing of each letter. Nobody had read it yet.';
+const READ = 'Made for type set in time on the web: every letter as the pen wrote it, moment by moment, on an axis of progress (PROG, 0 to 100, finished at 100), with pace (wght) as Claude Hand has it, from hurried (200) through its own pace (400) to pressed (700). One writing of each letter. Nobody had read it yet.';
 const NEARER = Object.entries(SPACING).filter(([, d]) => d < 0);
-const pressed = { ...STYLE, pace: STYLE.pace * MANNERS.strong.pace };
+const pressed = { ...STYLE, pace: STYLE.pace * MANNERS.strong.pace }, hurried = { ...STYLE, pace: STYLE.pace * HURRY };
 const chars = [' ', ...KNOWS];
 const glyphs = [], timing = {};
 for (const ch of chars) {
   for (const form of formsOf(ch)) {
-    const d = letter(ch, form, 1, STYLE), dp = letter(ch, form, 1, pressed), back = -(NEARER.find(([c]) => c === ch)?.[1] ?? 0) * STYLE.track;
+    const d = letter(ch, form, 1, STYLE), dp = letter(ch, form, 1, pressed), dh = letter(ch, form, 1, hurried), back = -(NEARER.find(([c]) => c === ch)?.[1] ?? 0) * STYLE.track;
     const fix = (strokes) => strokes.map((s) => s.map(([x, y, w]) => [+(x + back).toFixed(4), +y.toFixed(4), +w.toFixed(3)]));
-    glyphs.push({ ch, code: ch.codePointAt(0), form, alt: 1, step: 1, exit: exitOf(ch), adv: d.adv + back, strokes: fix(d.strokes), pstrokes: fix(dp.strokes), times: d.times ?? [] });
+    glyphs.push({ ch, code: ch.codePointAt(0), form, alt: 1, step: 1, exit: exitOf(ch), adv: d.adv + back, strokes: fix(d.strokes), pstrokes: fix(dp.strokes), times: d.times ?? [], hstrokes: fix(dh.strokes), htimes: dh.times ?? [] });
     const total = Math.max(0, ...(d.times ?? []).map((t) => t[t.length - 1]));
     (timing[ch] ??= {})[form] = +total.toFixed(3);
   }

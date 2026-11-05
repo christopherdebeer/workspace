@@ -57,37 +57,50 @@ def at(C, R, T, tau):
 
 
 def glyph_masters(g, steps):
-    """one glyph's contours at every step of its writing (the hand's own pace), and pressed (finished)"""
-    S = [np.array([[x * XH, y * XH] for x, y, w in s], dtype=float) for s in g['strokes']]
-    W = [np.array([max(MIN_R, w * PEN * XH / 2) for x, y, w in s], dtype=float) for s in g['strokes']]
-    Sp = [np.array([[x * XH, y * XH] for x, y, w in s], dtype=float) for s in g['pstrokes']]
-    Wp = [np.array([max(MIN_R, w * PEN * XH / 2) for x, y, w in s], dtype=float) for s in g['pstrokes']]
+    """one glyph's contours at every step of its writing, at the hand's own pace and (from 3.4) hurried, each by its own
+    moments; and pressed, finished"""
+    def arrays(key):
+        return ([np.array([[x * XH, y * XH] for x, y, w in s], dtype=float) for s in g[key]],
+                [np.array([max(MIN_R, w * PEN * XH / 2) for x, y, w in s], dtype=float) for s in g[key]])
+    S, W = arrays('strokes')
+    Sp, Wp = arrays('pstrokes')
+    hurried = bool(g.get('hstrokes'))
+    Sh, Wh = arrays('hstrokes') if hurried else (S, W)
     T = [np.array(t, dtype=float) for t in g['times']]
+    Th = [np.array(t, dtype=float) for t in g['htimes']] if hurried else T
     total = max([t[-1] for t in T] or [0])
-    prog = [[] for _ in range(steps + 1)]
-    pressed = []
+    totalh = max([t[-1] for t in Th] or [0])
+    prog, hprog, pressed = [[] for _ in range(steps + 1)], [[] for _ in range(steps + 1)], []
+
+    def dot(P, Wd, t0, tot, k):
+        # (a dot is there from the moment after it's made; at the end, always)
+        c, r = P.mean(axis=0), (Wd.max() if k == steps or t0 < tot * k / steps else 0) / math.cos(math.pi / 8)
+        return [[int(round(c[0] + r * math.cos(a))), int(round(c[1] + r * math.sin(a)))] for a in (-2 * math.pi * q / 8 for q in range(8))]
+
     for j in range(len(S)):
-        if min(len(S[j]), len(Sp[j])) < 2:
-            # (a dot: a round mark as wide as the pen, there once its moment has come)
+        if min(len(S[j]), len(Sp[j]), len(Sh[j])) < 2:
             for k in range(steps + 1):
-                # (a dot is there from the moment after it's made; at the end, always)
-                c, r = S[j].mean(axis=0), (W[j].max() if k == steps or T[j][0] < total * k / steps else 0) / math.cos(math.pi / 8)
-                prog[k].append([[int(round(c[0] + r * math.cos(a))), int(round(c[1] + r * math.sin(a)))] for a in (-2 * math.pi * q / 8 for q in range(8))])
-            c, r = Sp[j].mean(axis=0), Wp[j].max() / math.cos(math.pi / 8)
-            pressed.append([[int(round(c[0] + r * math.cos(a))), int(round(c[1] + r * math.sin(a)))] for a in (-2 * math.pi * q / 8 for q in range(8))])
+                prog[k].append(dot(S[j], W[j], T[j][0], total, k))
+                hprog[k].append(dot(Sh[j], Wh[j], Th[j][0], totalh, k))
+            pressed.append(dot(Sp[j], Wp[j], 0, 0, steps))
             continue
-        cut = vary.splits([S[j], Sp[j]])
+        cut = vary.splits([S[j], Sp[j], Sh[j]])
         for q in range(len(cut[0]) - 1):
-            a0, a1, b0, b1 = cut[0][q], cut[0][q + 1], cut[1][q], cut[1][q + 1]
-            parts = [(S[j][a0:a1 + 1], W[j][a0:a1 + 1]), (Sp[j][b0:b1 + 1], Wp[j][b0:b1 + 1])]
-            n = max(1, max(math.ceil(vary.along(p)[-1] / (SP * XH)) for p, _ in parts))
+            a0, a1 = cut[0][q], cut[0][q + 1]
+            b0, b1 = cut[1][q], cut[1][q + 1]
+            c0, c1 = cut[2][q], cut[2][q + 1]
+            parts = [S[j][a0:a1 + 1], Sp[j][b0:b1 + 1], Sh[j][c0:c1 + 1]]
+            n = max(1, max(math.ceil(vary.along(p)[-1] / (SP * XH)) for p in parts))
             C, R, Tq = resample_t(S[j][a0:a1 + 1], W[j][a0:a1 + 1], T[j][a0:a1 + 1], n)
+            Ch, Rh, Thq = resample_t(Sh[j][c0:c1 + 1], Wh[j][c0:c1 + 1], Th[j][c0:c1 + 1], n)
             for k in range(steps + 1):
                 Ck, Rk = at(C, R, Tq, total * k / steps)
                 prog[k].append(vary.outline_piece(Ck, Rk))
+                Ck, Rk = at(Ch, Rh, Thq, totalh * k / steps)
+                hprog[k].append(vary.outline_piece(Ck, Rk))
             Cp, Rp = vary.resample(Sp[j][b0:b1 + 1], Wp[j][b0:b1 + 1], n)
             pressed.append(vary.outline_piece(Cp, Rp))
-    return prog, pressed
+    return prog, pressed, hprog
 
 
 def main():
@@ -98,7 +111,8 @@ def main():
     per = [glyph_masters(g, steps) for g in glyphs]
     tmp = tempfile.mkdtemp(prefix='autograph-writing-')
     ds = DesignSpaceDocument()
-    for tag, name, lo, df, hi in [('wght', 'Weight', 400, 400, 700), ('PROG', 'Progress', 0, 100, 100)]:
+    hurried = bool(glyphs and glyphs[0].get('hstrokes') is not None)
+    for tag, name, lo, df, hi in [('wght', 'Weight', 200 if hurried else 400, 400, 700), ('PROG', 'Progress', 0, 100, 100)]:
         a = AxisDescriptor()
         a.tag, a.name, a.minimum, a.default, a.maximum = tag, name, lo, df, hi
         ds.addAxis(a)
@@ -108,9 +122,12 @@ def main():
     # pressed pen's width to strokes not yet begun, and they'd show as specks ahead of the writing)
     masters += [('Pressed, not yet', {'Weight': 700, 'Progress': 0}, [p[0][0] for p in per])]
     masters += [('Step %d' % k, {'Weight': 400, 'Progress': 100 * k / steps}, [p[0][k] for p in per]) for k in range(steps + 1)]
+    # (from 3.4, and hurried, step by step by its own moments)
+    if hurried:
+        masters += [('Hurried, step %d' % k, {'Weight': 200, 'Progress': 100 * k / steps}, [p[2][k] for p in per]) for k in range(steps + 1)]
     for i, (name, loc, contours) in enumerate(masters):
         # (the builder only needs to know which glyphs have ink, for the s's kerning)
-        gl = [dict({kk: vv for kk, vv in g.items() if kk not in ('strokes', 'pstrokes', 'times')}, contours=c, strokes=[1] if g['strokes'] else []) for g, c in zip(glyphs, contours)]
+        gl = [dict({kk: vv for kk, vv in g.items() if kk not in ('strokes', 'pstrokes', 'times', 'hstrokes', 'htimes')}, contours=c, strokes=[1] if g['strokes'] else []) for g, c in zip(glyphs, contours)]
         d = dict(base, glyphs=gl, face='Regular', file='', name='writing-%d' % i)
         jp = os.path.join(tmp, 'writing-%d.json' % i)
         json.dump(d, open(jp, 'w'))
@@ -125,7 +142,7 @@ def main():
         if getattr(g, 'numberOfContours', 0) > 0:
             g.flags[0] |= 0x40
     buildStatTable(vf, [
-        {'tag': 'wght', 'name': 'Weight', 'values': [{'value': 400, 'name': 'Regular', 'flags': 0x2}, {'value': 700, 'name': 'Pressed'}]},
+        {'tag': 'wght', 'name': 'Weight', 'values': ([{'value': 200, 'name': 'Hurried'}] if hurried else []) + [{'value': 400, 'name': 'Regular', 'flags': 0x2}, {'value': 700, 'name': 'Pressed'}]},
         {'tag': 'PROG', 'name': 'Progress', 'values': [{'value': 100, 'name': 'Written', 'flags': 0x2}, {'value': 0, 'name': 'Not yet'}]},
     ])
     V = data['version']
@@ -136,7 +153,7 @@ def main():
     woff = os.path.join(out, 'claude-hand-writing-%s.woff2' % V)
     f.save(woff)
     pts = sum(len(getattr(glyf[x], 'coordinates', [])) for x in vf.getGlyphOrder())
-    print('writing: %d glyphs, %d outline points, %d masters (%d steps of the hand\'s time, and pressed, finished and not yet); woff2 %d KB' % (len(vf.getGlyphOrder()), pts, len(masters), steps, os.path.getsize(woff) // 1024))
+    print('writing: %d glyphs, %d outline points, %d masters (%d steps of the hand\'s time%s, and pressed, finished and not yet); woff2 %d KB' % (len(vf.getGlyphOrder()), pts, len(masters), steps, ', at its own pace and hurried' if hurried else '', os.path.getsize(woff) // 1024))
     return ttf
 
 
