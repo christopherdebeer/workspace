@@ -133,24 +133,29 @@ high = [name(g) for g in G if g['exit'] == 'high']
 joinable = [g for g in G if g['form'] in 'ijh' and any(h['ch'] == g['ch'] and h['form'] == 'j' for h in G)]
 cls = lambda names: '[' + ' '.join(names) + ']'
 fea = ['languagesystem DFLT dflt;', 'languagesystem latn dflt;']
-fea += ['@LOW = %s;' % cls(low), '@HIGH = %s;' % cls(high), '@JOINABLE = %s;' % cls([name(g) for g in joinable])]
-fea += ['@TOJ = %s;' % cls([name(g, 'j') for g in joinable]), '@TOH = %s;' % cls([name(g, 'h') for g in joinable])]
+# (from 3.7, a face that doesn't join, printed letter by letter, has no joined forms and so no rules for them)
+JOINS = bool(joinable)
+if JOINS:
+    fea += ['@LOW = %s;' % cls(low), '@HIGH = %s;' % cls(high), '@JOINABLE = %s;' % cls([name(g) for g in joinable])]
+    fea += ['@TOJ = %s;' % cls([name(g, 'j') for g in joinable]), '@TOH = %s;' % cls([name(g, 'h') for g in joinable])]
 fea += ['@ALL = %s;' % cls([name(g) for g in G])]
 for k in range(1, data['alts'] + 1):
     fea += ['@ALL%d = %s;' % (k, cls([name(g, None, k) for g in G])), '@A%d = %s;' % (k, cls([name(g) for g in G if g['alt'] == k]))]
-fea += ['lookup toJ { sub @JOINABLE by @TOJ; } toJ;', 'lookup toH { sub @JOINABLE by @TOH; } toH;']
+if JOINS:
+    fea += ['lookup toJ { sub @JOINABLE by @TOJ; } toJ;', 'lookup toH { sub @JOINABLE by @TOH; } toH;']
 for k in range(1, data['alts'] + 1):
     fea += ['lookup to%d { sub @ALL by @ALL%d; } to%d;' % (k, k, k)]
-fea += ['lookup forms { sub @LOW @JOINABLE\' lookup toJ; sub @HIGH @JOINABLE\' lookup toH; } forms;']
+if JOINS:
+    fea += ['lookup forms { sub @LOW @JOINABLE\' lookup toJ; sub @HIGH @JOINABLE\' lookup toH; } forms;']
 n = data['alts']
 steps = sorted(set(g['step'] for g in G))
 for s_ in steps:
     fea += ['@STEP%d = %s;' % (s_, cls([name(g) for g in G if g['step'] == s_]))]
 fea += ['lookup cycle { %s } cycle;' % ' '.join('sub @A%d @STEP%d\' lookup to%d;' % (k, s_, (k - 1 + s_) % n + 1) for k in range(1, n + 1) for s_ in steps)]
-fea += ['feature calt { lookup forms; lookup cycle; } calt;']
+fea += ['feature calt { %slookup cycle; } calt;' % ('lookup forms; ' if JOINS else '')]
 # (from 3.2, for a font whose letters are set one at a time, each in its own run, so the font can't see the letter before:
 # the joined forms on request, ss01 joined from a letter that went out low, ss02 from one that went out high)
-if data.get('ss'):
+if data.get('ss') and JOINS:
     fea += ['feature ss01 { sub @JOINABLE by @TOJ; } ss01;', 'feature ss02 { sub @JOINABLE by @TOH; } ss02;']
 # (from 1.8: nearer inside a word, kerned after anything inked; a space has no ink, so a word's first letter keeps its place)
 if data.get('kern'):
