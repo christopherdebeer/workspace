@@ -31,10 +31,6 @@ CAP = 3                                # points round each end of a stroke, betw
 CUSP = 2.0                             # how sharply the line turns back (radians, over a few points) to count as a cusp
 
 here = os.path.dirname(os.path.abspath(__file__))
-data = json.load(open(sys.argv[1]))
-out = sys.argv[2]
-HIGH = sys.argv[3] if len(sys.argv) > 3 else ''
-masters = data['masters']
 
 
 def turning(P):
@@ -139,110 +135,120 @@ def contours(strokes_by_master):
     return per
 
 
-# (the outlines, every master's at once)
-G = len(masters[0]['glyphs'])
-assert all(len(m['glyphs']) == G for m in masters)
-for gi in range(G):
-    cs = contours([m['glyphs'][gi]['strokes'] for m in masters])
-    for m, c in zip(masters, cs):
-        m['glyphs'][gi]['contours'] = c
+def main():
+    """(from session 32, the build is a function, so the writing font can use the outlines above)"""
+    data = json.load(open(sys.argv[1]))
+    out = sys.argv[2]
+    HIGH = sys.argv[3] if len(sys.argv) > 3 else ''
+    masters = data['masters']
+    # (the outlines, every master's at once)
+    G = len(masters[0]['glyphs'])
+    assert all(len(m['glyphs']) == G for m in masters)
+    for gi in range(G):
+        cs = contours([m['glyphs'][gi]['strokes'] for m in masters])
+        for m, c in zip(masters, cs):
+            m['glyphs'][gi]['contours'] = c
 
-# (each master a font, by the same builder as every font before it)
-tmp = tempfile.mkdtemp(prefix='autograph-vary-')
-ds = DesignSpaceDocument()
-named = lambda loc: {next(a[1] for a in data['axes'] if a[0] == t): v for t, v in loc.items()}   # (a designspace places by axis name)
-for tag, name, lo, df, hi in data['axes']:
-    a = AxisDescriptor()
-    a.tag, a.name, a.minimum, a.default, a.maximum = tag, name, lo, df, hi
-    ds.addAxis(a)
-for i, m in enumerate(masters):
-    d = {k: v for k, v in data.items() if k not in ('masters', 'axes', 'instances')}
-    d.update({'glyphs': m['glyphs'], 'face': 'Regular', 'file': '', 'name': 'master-%d' % i})
-    jp = os.path.join(tmp, 'master-%d.json' % i)
-    json.dump(d, open(jp, 'w'))
-    subprocess.run(['python3', os.path.join(here, 'autograph-font.py'), jp, tmp], check=True)
-    src = SourceDescriptor()
-    src.path, src.name, src.location = os.path.join(tmp, 'master-%d.ttf' % i), m['name'], named(m['loc'])
-    ds.addSource(src)
-for name, loc in data['instances']:
-    ins = InstanceDescriptor()
-    ins.familyName, ins.styleName, ins.location = 'Claude Hand', name, named(loc)
-    ds.addInstance(ins)
-vf, _, _ = varLib.build(ds)
+    # (each master a font, by the same builder as every font before it)
+    tmp = tempfile.mkdtemp(prefix='autograph-vary-')
+    ds = DesignSpaceDocument()
+    named = lambda loc: {next(a[1] for a in data['axes'] if a[0] == t): v for t, v in loc.items()}   # (a designspace places by axis name)
+    for tag, name, lo, df, hi in data['axes']:
+        a = AxisDescriptor()
+        a.tag, a.name, a.minimum, a.default, a.maximum = tag, name, lo, df, hi
+        ds.addAxis(a)
+    for i, m in enumerate(masters):
+        d = {k: v for k, v in data.items() if k not in ('masters', 'axes', 'instances')}
+        d.update({'glyphs': m['glyphs'], 'face': 'Regular', 'file': '', 'name': 'master-%d' % i})
+        jp = os.path.join(tmp, 'master-%d.json' % i)
+        json.dump(d, open(jp, 'w'))
+        subprocess.run(['python3', os.path.join(here, 'autograph-font.py'), jp, tmp], check=True)
+        src = SourceDescriptor()
+        src.path, src.name, src.location = os.path.join(tmp, 'master-%d.ttf' % i), m['name'], named(m['loc'])
+        ds.addSource(src)
+    for name, loc in data['instances']:
+        ins = InstanceDescriptor()
+        ins.familyName, ins.styleName, ins.location = 'Claude Hand', name, named(loc)
+        ds.addInstance(ins)
+    vf, _, _ = varLib.build(ds)
 
-def passes(font, loc, label):
-    ip = os.path.join(tmp, 'corner-%d-%d.ttf' % (loc['wght'], loc['WEAR']))
-    instancer.instantiateVariableFont(TTFont(font) if isinstance(font, str) else font, loc).save(ip)
-    print('%s %s: ' % (label, loc), end='', flush=True)
-    return subprocess.run(['python3', os.path.join(here, 'autograph-pairs.py'), ip, HIGH]).returncode == 0
+    def passes(font, loc, label):
+        ip = os.path.join(tmp, 'corner-%d-%d.ttf' % (loc['wght'], loc['WEAR']))
+        instancer.instantiateVariableFont(TTFont(font) if isinstance(font, str) else font, loc).save(ip)
+        print('%s %s: ' % (label, loc), end='', flush=True)
+        return subprocess.run(['python3', os.path.join(here, 'autograph-pairs.py'), ip, HIGH]).returncode == 0
 
 
-# (the pair test at every corner. The hand's own pace and pressed have to pass. From 2.8 pace runs on to hurried, and
-# like wear (2.7) it goes as far as it can with no two letters touching except where they join: to hurried if it can,
-# else to the furthest of three quarters, half and a quarter of the way there. Wear runs to the worn letters (100) if it
-# can, else to the furthest of three quarters, half and a quarter of the way, passing at every pace; those ends are where
-# the axes stop)
-full = os.path.join(tmp, 'full.ttf')
-vf.save(full)
-wlo, wdf, whi = next(a for a in data['axes'] if a[0] == 'wght')[2:5]
-if not (passes(full, {'wght': wdf, 'WEAR': 0}, 'Regular') & passes(full, {'wght': whi, 'WEAR': 0}, 'Pressed')):
-    sys.exit(1)
-LO = wdf
-if wlo < wdf:
-    for q in (1, 0.75, 0.5, 0.25):
-        w = round(wdf - (wdf - wlo) * q)
-        if passes(full, {'wght': w, 'WEAR': 0}, 'Hurried'):
-            LO = w
+    # (the pair test at every corner. The hand's own pace and pressed have to pass. From 2.8 pace runs on to hurried, and
+    # like wear (2.7) it goes as far as it can with no two letters touching except where they join: to hurried if it can,
+    # else to the furthest of three quarters, half and a quarter of the way there. Wear runs to the worn letters (100) if it
+    # can, else to the furthest of three quarters, half and a quarter of the way, passing at every pace; those ends are where
+    # the axes stop)
+    full = os.path.join(tmp, 'full.ttf')
+    vf.save(full)
+    wlo, wdf, whi = next(a for a in data['axes'] if a[0] == 'wght')[2:5]
+    if not (passes(full, {'wght': wdf, 'WEAR': 0}, 'Regular') & passes(full, {'wght': whi, 'WEAR': 0}, 'Pressed')):
+        sys.exit(1)
+    LO = wdf
+    if wlo < wdf:
+        for q in (1, 0.75, 0.5, 0.25):
+            w = round(wdf - (wdf - wlo) * q)
+            if passes(full, {'wght': w, 'WEAR': 0}, 'Hurried'):
+                LO = w
+                break
+    print('pace ends at %d' % LO)
+    paces = sorted({LO, wdf, whi})
+    END = None
+    for wear in (100, 75, 50, 25):
+        if all([passes(full, {'wght': p, 'WEAR': wear}, 'Worn') for p in paces]):
+            END = wear
             break
-print('pace ends at %d' % LO)
-paces = sorted({LO, wdf, whi})
-END = None
-for wear in (100, 75, 50, 25):
-    if all([passes(full, {'wght': p, 'WEAR': wear}, 'Worn') for p in paces]):
-        END = wear
-        break
-if END is None:
-    print('wear: no quarter of the way passes the pair test')
-    sys.exit(1)
-print('wear ends at %d' % END)
-vf = instancer.instantiateVariableFont(TTFont(full), {'wght': (LO, whi), 'WEAR': (0, END)})
-# (its named places: the ends of pace, each as the letters stand and worn as far as the font goes)
-from fontTools.ttLib.tables._f_v_a_r import NamedInstance
-fvar = vf['fvar']
-fvar.instances = []
-for name, loc in [('Hurried', {'wght': LO, 'WEAR': 0}), ('Regular', {'wght': wdf, 'WEAR': 0}), ('Pressed', {'wght': whi, 'WEAR': 0}),
-                  ('Worn Hurried', {'wght': LO, 'WEAR': END}), ('Worn', {'wght': wdf, 'WEAR': END}), ('Worn Pressed', {'wght': whi, 'WEAR': END})]:
-    if name.startswith('Hurried') or name == 'Worn Hurried':
-        if LO == wdf:
-            continue
-    ni = NamedInstance()
-    ni.subfamilyNameID = vf['name'].addMultilingualName({'en': name}, vf, mac=False)
-    ni.coordinates = {k: float(v) for k, v in loc.items()}
-    fvar.instances.append(ni)
+    if END is None:
+        print('wear: no quarter of the way passes the pair test')
+        sys.exit(1)
+    print('wear ends at %d' % END)
+    vf = instancer.instantiateVariableFont(TTFont(full), {'wght': (LO, whi), 'WEAR': (0, END)})
+    # (its named places: the ends of pace, each as the letters stand and worn as far as the font goes)
+    from fontTools.ttLib.tables._f_v_a_r import NamedInstance
+    fvar = vf['fvar']
+    fvar.instances = []
+    for name, loc in [('Hurried', {'wght': LO, 'WEAR': 0}), ('Regular', {'wght': wdf, 'WEAR': 0}), ('Pressed', {'wght': whi, 'WEAR': 0}),
+                      ('Worn Hurried', {'wght': LO, 'WEAR': END}), ('Worn', {'wght': wdf, 'WEAR': END}), ('Worn Pressed', {'wght': whi, 'WEAR': END})]:
+        if name.startswith('Hurried') or name == 'Worn Hurried':
+            if LO == wdf:
+                continue
+        ni = NamedInstance()
+        ni.subfamilyNameID = vf['name'].addMultilingualName({'en': name}, vf, mac=False)
+        ni.coordinates = {k: float(v) for k, v in loc.items()}
+        fvar.instances.append(ni)
 
-# (strokes overlap where they meet: say so, so every renderer fills them as one)
-glyf = vf['glyf']
-for gn in vf.getGlyphOrder():
-    g = glyf[gn]
-    if getattr(g, 'numberOfContours', 0) > 0:
-        g.flags[0] |= 0x40
-buildStatTable(vf, [
-    {'tag': 'wght', 'name': 'Weight', 'values': ([{'value': LO, 'name': 'Hurried'}] if LO < wdf else []) + [{'value': wdf, 'name': 'Regular', 'flags': 0x2}, {'value': whi, 'name': 'Pressed'}]},
-    {'tag': 'WEAR', 'name': 'Wear', 'values': [{'value': 0, 'name': 'As it stands', 'flags': 0x2}, {'value': END, 'name': 'Worn'}]},
-])
-VERSION = data['version']
-ttf = os.path.join(tmp, 'claude-hand-%s.ttf' % VERSION)
-vf.save(ttf)
-f = TTFont(ttf)
-f.flavor = 'woff2'
-f.save(os.path.join(out, 'claude-hand-%s.woff2' % VERSION))
-# (a TTF too big for the cell isn't kept: the web font is)
-kept = os.path.getsize(ttf) < 700 * 1024
-if kept:
-    import shutil
-    shutil.copy(ttf, os.path.join(out, 'claude-hand-%s.ttf' % VERSION))
-pts = sum(len(getattr(glyf[x], 'coordinates', [])) for x in vf.getGlyphOrder())
-print('variable: %d glyphs, %d outline points, %d masters, wght %d-%d, WEAR 0-%d; TTF %d KB%s, woff2 %d KB' % (len(vf.getGlyphOrder()), pts, len(masters), LO, whi, END, os.path.getsize(ttf) // 1024, '' if kept else ' (too big for the cell: not kept)', os.path.getsize(os.path.join(out, 'claude-hand-%s.woff2' % VERSION)) // 1024))
-print('final corners:')
-ok = all([passes(ttf, {'wght': w, 'WEAR': e}, 'final') for w in paces for e in (0, END)])
-sys.exit(0 if ok else 1)
+    # (strokes overlap where they meet: say so, so every renderer fills them as one)
+    glyf = vf['glyf']
+    for gn in vf.getGlyphOrder():
+        g = glyf[gn]
+        if getattr(g, 'numberOfContours', 0) > 0:
+            g.flags[0] |= 0x40
+    buildStatTable(vf, [
+        {'tag': 'wght', 'name': 'Weight', 'values': ([{'value': LO, 'name': 'Hurried'}] if LO < wdf else []) + [{'value': wdf, 'name': 'Regular', 'flags': 0x2}, {'value': whi, 'name': 'Pressed'}]},
+        {'tag': 'WEAR', 'name': 'Wear', 'values': [{'value': 0, 'name': 'As it stands', 'flags': 0x2}, {'value': END, 'name': 'Worn'}]},
+    ])
+    VERSION = data['version']
+    ttf = os.path.join(tmp, 'claude-hand-%s.ttf' % VERSION)
+    vf.save(ttf)
+    f = TTFont(ttf)
+    f.flavor = 'woff2'
+    f.save(os.path.join(out, 'claude-hand-%s.woff2' % VERSION))
+    # (a TTF too big for the cell isn't kept: the web font is)
+    kept = os.path.getsize(ttf) < 700 * 1024
+    if kept:
+        import shutil
+        shutil.copy(ttf, os.path.join(out, 'claude-hand-%s.ttf' % VERSION))
+    pts = sum(len(getattr(glyf[x], 'coordinates', [])) for x in vf.getGlyphOrder())
+    print('variable: %d glyphs, %d outline points, %d masters, wght %d-%d, WEAR 0-%d; TTF %d KB%s, woff2 %d KB' % (len(vf.getGlyphOrder()), pts, len(masters), LO, whi, END, os.path.getsize(ttf) // 1024, '' if kept else ' (too big for the cell: not kept)', os.path.getsize(os.path.join(out, 'claude-hand-%s.woff2' % VERSION)) // 1024))
+    print('final corners:')
+    ok = all([passes(ttf, {'wght': w, 'WEAR': e}, 'final') for w in paces for e in (0, END)])
+    sys.exit(0 if ok else 1)
+
+
+if __name__ == '__main__':
+    main()

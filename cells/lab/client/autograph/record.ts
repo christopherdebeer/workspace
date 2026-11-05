@@ -4,7 +4,7 @@
 import type { Sig } from '../switchback/sign';
 
 /** every hand, in the order they were made (each session that makes one adds it here) */
-export type HandId = 'scribble' | 'v0' | 'v1' | 'v2' | 'v3' | 'v4' | 'v5' | 'v6' | 'v7' | 'v8' | 'v9' | 'v10' | 'v11' | 'v12' | 'v13' | 'v14' | 'v15' | 'v16' | 'v17' | 'v18' | 'v19' | 'v20' | 'v21' | 'font';
+export type HandId = 'scribble' | 'v0' | 'v1' | 'v2' | 'v3' | 'v4' | 'v5' | 'v6' | 'v7' | 'v8' | 'v9' | 'v10' | 'v11' | 'v12' | 'v13' | 'v14' | 'v15' | 'v16' | 'v17' | 'v18' | 'v19' | 'v20' | 'v21' | 'v22' | 'font';
 export type Hand = { name: string; made: string; about: string };
 
 export type Entry = {
@@ -17,8 +17,9 @@ export type Entry = {
    * `calt` is false; (from session 12) a line with a `way` is marked text (as the hand reads it, see typeset.ts), set as
    * the web sets it, the font and its stylesheet, or as any app does, the font alone; (from session 27) a line `at` a
    * place on the variable font's axes, its pace (wght) and its wear (WEAR); (from session 31) a line set `time` is set as
-   * the web sets it and written in the hand's time by its script (claude-hand-time-3.1.js) when it's seen */
-  type?: { text: string; size: number; calt?: boolean; lh?: string; way?: 'web' | 'app' | 'time'; at?: { pace: number; wear: number } }[];
+   * the web sets it and written in the hand's time by its script (claude-hand-time-3.1.js) when it's seen; (from session
+   * 32) by the `script` version named, 3.1 if none is */
+  type?: { text: string; size: number; calt?: boolean; lh?: string; way?: 'web' | 'app' | 'time'; at?: { pace: number; wear: number }; script?: string }[];
   /** the font's version it's set in (each version is kept, so it always comes out as it was set; 0.41 if not given,
    * which has 0.4's glyphs) */
   font?: string;

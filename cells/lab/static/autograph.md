@@ -30,6 +30,7 @@ The record is the point. Every sample is kept in the repository with the hand th
   - *v19* (session 27): practice begun from the letters as they stand; where it left them kept, for the font's wear.
   - *v20* (session 28): a pen with a body, so pace moves the line.
   - *v21* (session 30): the looped f back, its lower loop turning forward.
+  - *v22* (session 32): a letter that says when the pen reached each point.
 - **Samples** (`samples.ts`): each made fresh from its hand, as strokes of points in time, exactly the record a pen pad keeps of a person.
 - **Measures** (`measure.ts`): what graphology looks at (slant, baseline, how joined, speed, pressure, size), measured from the strokes rather than eyeballed. Beside them, in red, what a graphologist would say: given as a claim, because that's what it is (below). The measures are part of the record too: an old one is never changed. New ones are added beside it, like the speed range and stops from session 2.
 - **Catalogue** (`catalog.ts`): what each sample is, what it was made for, my review, and what each session decided. Each session keeps its own file (`sessions/NN.ts`, listed in order in `sessions/index.ts`), so adding one never touches another, and the check fingerprints each recorded session so none can change afterwards, by accident or otherwise.
@@ -544,6 +545,15 @@ The rule, set first: reading first; then one mechanism, words arriving in time o
 - **The script** (`claude-hand-time-3.1.js`): each word drawn across over as long as v21 takes to write its letters (measured once), the hand's waits between words, phrases, sentences and lines, each word's pace carried on from the last and set on the font's weight, a new writing each load, then still.
 - **The sheet (AE001):** the Moving Finger arrives in order, waiting longest at its line ends, in about a minute; nothing moves after its last word, and with reduced motion it's all there at once (both measured). It's a wipe at the hand's pace, not the strokes in their order. Kept.
 - **From now on** each rule says what it fosters as well as what it protects.
+
+**Session 32 (5 November 2026): the stroke in the font.** c15r asked whether variability could capture the progress through the stroke itself, rather than session 31's wipe. It can.
+
+The rule, set first: one mechanism, a progress axis made from the hand's own timing. It fosters the strokes written in the hand's order and at its speed, the pen's tip leading; it protects the joins, the text, stillness after, reduced motion, and apps and the full font (progress defaults to finished).
+- **Hand v22** says when: letter() gives the moment the pen reached each point. It writes exactly as v21.
+- **The writing font** (`claude-hand-writing-3.2.woff2`): every letter as the pen had written it by ten equal moments of its own writing, the unwritten gathered at the pen's tip; one writing of each letter, its joined forms on request (two stylistic sets), pace as before. A pen that drops a contour's last point when it lands on its first had to go first: a stroke not yet begun is all one point.
+- **Script 3.2** writes each letter in turn, choosing its joined form as the font would and kerning the s; the hand's waits between words; each word at its own pace; then still.
+- **The sheet:** the strokes come in order, the letters join as in type (the finished line inks what it does set still, 0.956), nothing moves after, and reduced motion is at once. The look found faint specks ahead of the writing (a word's pace widening strokes not yet begun); a pressed master before anything's written removed them. Kept (AF001).
+- **Not yet the hand:** the dots and bars come after each letter rather than after the word, and a passage written in time keeps one writing of each letter.
 ## Where it's going
 
 1. **A hand that can write anything.** All the letters, figures and marks, in one hand; v1, v2 and on, each kept.

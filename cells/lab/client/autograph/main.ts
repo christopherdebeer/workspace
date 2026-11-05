@@ -18,7 +18,7 @@ import { typeset } from './typeset';
 import { write as v4write } from './hands/v4';
 // (my signature, and the hand that writes what you type: the newest hand; autograph-check.mjs fails if this isn't the
 // hand the record says is newest)
-import { signature, page as handPage } from './hands/v21';
+import { signature, page as handPage } from './hands/v22';
 // (a chapter is signed as it was on the day it was written: chapter one by the hand of its day)
 import { signature as chapterSign } from './hands/v3';
 // (from chapter two, a chapter opens with a page written by the hand of its day, and is signed by it: chapter two's is v15)
@@ -57,8 +57,10 @@ function shown(ms: Measures[], k: keyof Measures, f: (v: number) => string) {
 const deg = (v: number) => `${v > 0.5 ? '+' : ''}${Math.round(v)}°`;
 
 /** (from session 31) the font's script for the web's time, if it's loaded */
-type Timed = { write: (el: HTMLElement, opt?: { seed?: number }) => number; watch: (el: HTMLElement) => void; settle: (el: HTMLElement) => void };
+type Timed = { write: (el: HTMLElement, opt?: { seed?: number }) => number; watch: (el: HTMLElement) => void; settle: (el: HTMLElement) => void; version?: string };
 const timed = () => (window as unknown as { ClaudeHandTime?: Timed }).ClaudeHandTime;
+/** (from session 32) the version a sample was written with, so a later script never changes how it was written */
+const timedAs = (v: string) => { const w = window as unknown as { ClaudeHandTimes?: Record<string, Timed>; ClaudeHandTime?: Timed }; return w.ClaudeHandTimes?.[v] ?? (w.ClaudeHandTime?.version === v ? w.ClaudeHandTime : undefined); };
 
 /** a sample set in the font: its lines as type (each at its size, joins on or off), tap to select it and copy */
 function typeCard(e: Entry) {
@@ -75,7 +77,7 @@ function typeCard(e: Entry) {
       : `<p class="hand-type${l.calt === false ? ' nocalt' : ''}" style="font-size:${l.size}px;font-family:'Claude Hand ${e.font ?? '0.41'}',Georgia,serif${l.lh ? `;line-height:${l.lh}` : ''}${l.at ? `;font-weight:${l.at.pace};font-variation-settings:'WEAR' ${l.at.wear}` : ''}">${esc(l.text).replace(/\n/g, '<br>')}${l.calt === false ? '<span class="off">joins off</span>' : ''}${l.at ? `<span class="off">pace ${l.at.pace} · wear ${l.at.wear}</span>` : ''}</p>`).join('')}</div>
     <p class="made">${esc(e.made)}</p>
     <p class="review">${esc(e.review)}</p>`;
-  for (const p of el.querySelectorAll<HTMLElement>('.claude-hand-in-time')) timed()?.watch(p);
+  el.querySelectorAll<HTMLElement>('.claude-hand-in-time').forEach((p, i) => timedAs(e.type!.filter((l) => l.way === 'time')[i]?.script ?? '3.1')?.watch(p));
   return { el, size: () => {}, write: () => {} };
 }
 
@@ -195,7 +197,7 @@ const typed = $('typed'), size = $('specSize') as HTMLInputElement, joins = $('s
 const pace = $('specPace') as HTMLInputElement, wear = $('specWear') as HTMLInputElement;
 let way: 'web' | 'app' = 'web';
 const WAYS = {
-  web: 'One step down: most of what you marked, as text. The font, its stylesheet and its script, as a web page sets them: some of it as the hand does it (pressed is the hand pressing; the underline and strike sit where the hand puts them), some drawn in its manner (the circle, the caret). And some of its time: when you stop typing, the words arrive at the hand\'s pace, each drawn across, waiting where the hand waits, each at its own weight, and then keep still. Tap them to write them again.',
+  web: 'One step down: most of what you marked, as text. The font, its stylesheet and its script, as a web page sets them: some of it as the hand does it (pressed is the hand pressing; the underline and strike sit where the hand puts them), some drawn in its manner (the circle, the caret). And some of its time: when you stop typing, the words are written at the hand\'s pace, each letter stroke by stroke as the pen drew it, waiting where the hand waits, each word at its own weight, and then keep still. Tap them to write them again.',
   app: 'Two steps down: bold, underline and strike, as text. The font alone, as any app sets it: bold is the Pressed face, and the strike sits where the hand strikes. The font has no italic, so the app fakes one by slanting it further; everything else you mark is lost, and only its words are left.',
 };
 const setType = () => { typed.className = way === 'web' ? 'claude-hand' : 'claude-hand-app'; typed.classList.toggle('nocalt', joins.getAttribute('aria-pressed') !== 'true'); typed.innerHTML = typeset(mark.value.replace(/\s+/g, ' ').trim(), way); typed.style.fontSize = `${size.value}px`; typed.style.fontWeight = pace.value; typed.style.fontVariationSettings = `'WEAR' ${wear.value}`; $('wayNote').textContent = WAYS[way]; };

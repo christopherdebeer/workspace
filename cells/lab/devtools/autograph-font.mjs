@@ -84,7 +84,7 @@ writeFileSync(data, JSON.stringify({
 // (and the pair test, at every corner: no two letters may touch except where they join; it's told which letters go out
 // high, from the hand, so it sets each pair as the font does)
 const HIGH = [...KNOWS].filter((ch) => /[a-z]/.test(ch) && exitOf(ch) === 'high').join('');
-execFileSync('python3', [join(here, 'autograph-font-vary.py'), data, join(lab, 'static/autograph'), HIGH], { stdio: 'inherit' });
+execFileSync('python3', [join(here, 'autograph-font-vary.py'), data, process.env.FONT_OUT ?? join(lab, 'static/autograph'), HIGH], { stdio: 'inherit' });
 // (2.6 and before, two static faces, each the hand at a pace:
 // FACES = [{ face: 'Regular', file: '', st: STYLE }, { face: 'Pressed', file: 'pressed-', st: { ...STYLE, pace: STYLE.pace * MANNERS.strong.pace } }],
 // each set by the hand, written by autograph-font.py, and pair-tested.)

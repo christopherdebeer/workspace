@@ -22,7 +22,7 @@ import shapely
 from shapely.geometry import LineString, Point
 from shapely.geometry.polygon import orient
 from fontTools.fontBuilder import FontBuilder
-from fontTools.pens.ttGlyphPen import TTGlyphPen
+from fontTools.pens.ttGlyphPen import TTGlyphPen, TTGlyphPointPen
 from fontTools.feaLib.builder import addOpenTypeFeaturesFromString
 from fontTools.ttLib import TTFont
 from fontTools.misc.timeTools import timestampFromString
@@ -101,10 +101,14 @@ def draw(polys):
 def draw_q(contours):
     """(from 2.7) contours given already, every point off the curve, so the outline runs smoothly through the middle of
     each pair of points: the masters of the variable font, which have to share their points (autograph-font-vary.py)"""
-    pen = TTGlyphPen(None)
+    # (point by point: a pen drops a contour's last point when it lands on its first, and a writing font's stroke not yet
+    # begun is all one point, which every master has to keep)
+    pen = TTGlyphPointPen(None)
     for c in contours:
-        pen.qCurveTo(*[tuple(q) for q in c], None)
-        pen.closePath()
+        pen.beginPath()
+        for q in c:
+            pen.addPoint(tuple(q), segmentType=None)
+        pen.endPath()
     return pen.glyph()
 
 
@@ -140,6 +144,10 @@ for s_ in steps:
     fea += ['@STEP%d = %s;' % (s_, cls([name(g) for g in G if g['step'] == s_]))]
 fea += ['lookup cycle { %s } cycle;' % ' '.join('sub @A%d @STEP%d\' lookup to%d;' % (k, s_, (k - 1 + s_) % n + 1) for k in range(1, n + 1) for s_ in steps)]
 fea += ['feature calt { lookup forms; lookup cycle; } calt;']
+# (from 3.2, for a font whose letters are set one at a time, each in its own run, so the font can't see the letter before:
+# the joined forms on request, ss01 joined from a letter that went out low, ss02 from one that went out high)
+if data.get('ss'):
+    fea += ['feature ss01 { sub @JOINABLE by @TOJ; } ss01;', 'feature ss02 { sub @JOINABLE by @TOH; } ss02;']
 # (from 1.8: nearer inside a word, kerned after anything inked; a space has no ink, so a word's first letter keeps its place)
 if data.get('kern'):
     fea += ['@INKED = %s;' % cls([name(g) for g in G if g['strokes']])]
@@ -164,10 +172,11 @@ for n_ in order:
         ymax, ymin = max(ymax, gl.yMax), min(ymin, gl.yMin)
 fb.setupHorizontalMetrics(metrics)
 fb.setupHorizontalHeader(ascent=900, descent=-460, lineGap=40)
+FAMILY = data.get('family', 'Claude Hand')   # (from 3.2: or the family made for type set in time)
 fb.setupNameTable({
-    'familyName': 'Claude Hand', 'styleName': 'Bold' if PRESSED else 'Regular', 'fullName': 'Claude Hand Pressed' if PRESSED else 'Claude Hand',
-    'psName': 'ClaudeHand-%s' % FACE, 'typographicFamily': 'Claude Hand', 'typographicSubfamily': FACE,
-    'uniqueFontIdentifier': 'Claude Hand %s %s' % (FACE, VERSION), 'version': 'Version %s' % VERSION,
+    'familyName': FAMILY, 'styleName': 'Bold' if PRESSED else 'Regular', 'fullName': FAMILY + ' Pressed' if PRESSED else FAMILY,
+    'psName': '%s-%s' % (FAMILY.replace(' ', ''), FACE), 'typographicFamily': FAMILY, 'typographicSubfamily': FACE,
+    'uniqueFontIdentifier': '%s %s %s' % (FAMILY, FACE, VERSION), 'version': 'Version %s' % VERSION,
     'copyright': 'Copyright (c) 2026, The Claude Hand Project Authors (https://parc.land), with Reserved Font Name "Claude Hand".',
     'licenseDescription': 'This Font Software is licensed under the SIL Open Font License, Version 1.1. This license is available with a FAQ at: https://openfontlicense.org',
     'licenseInfoURL': 'https://openfontlicense.org',
