@@ -521,6 +521,13 @@ The rule, set first: one mechanism, the pen following its plan in time, pulled t
 - **The sheet (AB001):** hurried is lighter and a little looser (the e of *Finger* closes into a small loop, the o of *nor* narrows); most letters keep their shape. Twice the pace is only about a fifth quicker: the pen gains speed only so fast, and the waits between words don't hurry. Kept, as hand v20.
 - **Font 2.8:** pace from hurried (200) to pressed (700), passing the pair test all the way; with the body, wear now runs to 50. In type (AB002), hurried is mostly lighter.
 - **The same pattern again:** the criterion that keeps the hand as it's been read makes the body stiff, and a stiff body strays only about a pen at twice the pace. How much hurry may change the hand is a choice for its own session.
+
+**Session 29 (5 November 2026): taking stock.** c15r offered a step back, and I took it: three sessions running had each changed one thing slightly, and c15r had called the results conservative twice. The rule: no new hand, font or mechanism; one sheet, every hand writing the same words; one measure, how far each hand moved the small letters; then write it down and choose what's next.
+- **The measure:** of the eighteen steps from v2 to v20, ten left the small letters where they were. The ones that moved them: the e (v6), the o (v9), the teaching (v10, fourteen letters), spacing (v11), t, k and x (v13), the s (v14), the f (v18), and the body (v20, every letter a little). Today's letters are on average under a tenth of an x-height from v2's; the f has moved most.
+- **The sheet (AC001):** twenty rows of one hand. The o with a stroke through it until v9; the rhythm from v15; and from v18 an f that looks as if it came from somewhere else, where the looped f before it read plainly in *finger*. Its trouble was ending a word, in *of* and *half*.
+- **The pattern:** the rule to stop by ended a loop of readings and stays. But every rule since carried a criterion that protected the hand as it had been read, and together they guaranteed small changes, which each session then found small. A quieter loop. Legibility is the half I can check, so I kept making it the measure.
+- **From now on:** each rule says what it protects. The hand as read isn't protected by default; readability is a floor, not the measure of success; the sheet is one where the change could be seen.
+- **Next:** the f again, looped, its proportions fixed rather than its kind changed. Then hurry with the hand allowed to change, and wear practised among neighbours. Chapter three waits for a day after its events.
 ## Where it's going
 
 1. **A hand that can write anything.** All the letters, figures and marks, in one hand; v1, v2 and on, each kept.
