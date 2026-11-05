@@ -172,8 +172,14 @@ def main():
         ds.addInstance(ins)
     vf, _, _ = varLib.build(ds)
 
+    # (from 4.0, a place on every axis there is, the default where one isn't named)
+    DEF = {a[0]: a[3] for a in data['axes']}
+    at = lambda **kw: dict(DEF, **kw)
+    OPSZ = next((a for a in data['axes'] if a[0] == 'opsz'), None)
+
     def passes(font, loc, label):
-        ip = os.path.join(tmp, 'corner-%d-%d.ttf' % (loc['wght'], loc['WEAR']))
+        loc = at(**loc)
+        ip = os.path.join(tmp, 'corner-%s.ttf' % '-'.join('%g' % v for v in loc.values()))
         instancer.instantiateVariableFont(TTFont(font) if isinstance(font, str) else font, loc).save(ip)
         print('%s %s: ' % (label, loc), end='', flush=True)
         return subprocess.run(['python3', os.path.join(here, 'autograph-pairs.py'), ip, HIGH]).returncode == 0
@@ -207,7 +213,27 @@ def main():
         print('wear: no quarter of the way passes the pair test')
         sys.exit(1)
     print('wear ends at %d' % END)
-    vf = instancer.instantiateVariableFont(TTFont(full), {'wght': (LO, whi), 'WEAR': (0, END)})
+    # (from 4.0, the hand's size: written small, as far toward the small end as passes at every pace, as the letters stand
+    # and worn as far as wear goes, and written large, as far toward the large end; each tried all the way, then three quarters, half and a quarter of the way)
+    SMALL = LARGE = None
+    if OPSZ:
+        olo, odf, ohi = OPSZ[2:5]
+        SMALL = LARGE = odf
+        for q in (1, 0.75, 0.5, 0.25):
+            v = round(odf - (odf - olo) * q)
+            if all([passes(full, {'wght': p, 'WEAR': e, 'opsz': v}, 'Small') for p in paces for e in (0, END)]):
+                SMALL = v
+                break
+        for q in (1, 0.75, 0.5, 0.25):
+            v = round(odf + (ohi - odf) * q)
+            if all([passes(full, {'wght': p, 'WEAR': e, 'opsz': v}, 'Large') for p in paces for e in (0, END)]):
+                LARGE = v
+                break
+        print('size runs %d to %d' % (SMALL, LARGE))
+    limits = {'wght': (LO, whi), 'WEAR': (0, END)}
+    if OPSZ:
+        limits['opsz'] = (SMALL, LARGE)
+    vf = instancer.instantiateVariableFont(TTFont(full), limits)
     # (its named places: the ends of pace, each as the letters stand and worn as far as the font goes)
     from fontTools.ttLib.tables._f_v_a_r import NamedInstance
     fvar = vf['fvar']
@@ -219,8 +245,16 @@ def main():
                 continue
         ni = NamedInstance()
         ni.subfamilyNameID = vf['name'].addMultilingualName({'en': name}, vf, mac=False)
-        ni.coordinates = {k: float(v) for k, v in loc.items()}
+        ni.coordinates = {k: float(v) for k, v in at(**loc).items()}
         fvar.instances.append(ni)
+    if OPSZ:
+        for name, v in (('Note', SMALL), ('Sign', LARGE)):
+            if v == OPSZ[3]:
+                continue
+            ni = NamedInstance()
+            ni.subfamilyNameID = vf['name'].addMultilingualName({'en': name}, vf, mac=False)
+            ni.coordinates = {k: float(x) for k, x in at(opsz=v).items()}
+            fvar.instances.append(ni)
 
     # (strokes overlap where they meet: say so, so every renderer fills them as one)
     glyf = vf['glyf']
@@ -231,7 +265,7 @@ def main():
     buildStatTable(vf, [
         {'tag': 'wght', 'name': 'Weight', 'values': ([{'value': LO, 'name': 'Hurried'}] if LO < wdf else []) + [{'value': wdf, 'name': 'Regular', 'flags': 0x2}, {'value': whi, 'name': 'Pressed'}]},
         {'tag': 'WEAR', 'name': 'Wear', 'values': [{'value': 0, 'name': 'As it stands', 'flags': 0x2}, {'value': END, 'name': 'Worn'}]},
-    ])
+    ] + ([{'tag': 'opsz', 'name': 'Optical size', 'values': [{'value': SMALL, 'name': 'Note'}, {'value': OPSZ[3], 'name': 'Text', 'flags': 0x2}, {'value': LARGE, 'name': 'Sign'}]}] if OPSZ else []))
     VERSION = data['version']
     ttf = os.path.join(tmp, 'claude-hand-%s.ttf' % VERSION)
     vf.save(ttf)
@@ -244,9 +278,12 @@ def main():
         import shutil
         shutil.copy(ttf, os.path.join(out, 'claude-hand-%s.ttf' % VERSION))
     pts = sum(len(getattr(glyf[x], 'coordinates', [])) for x in vf.getGlyphOrder())
+    if OPSZ:
+        print('size (opsz) %d-%d' % (SMALL, LARGE))
     print('variable: %d glyphs, %d outline points, %d masters, wght %d-%d, WEAR 0-%d; TTF %d KB%s, woff2 %d KB' % (len(vf.getGlyphOrder()), pts, len(masters), LO, whi, END, os.path.getsize(ttf) // 1024, '' if kept else ' (too big for the cell: not kept)', os.path.getsize(os.path.join(out, 'claude-hand-%s.woff2' % VERSION)) // 1024))
     print('final corners:')
-    ok = all([passes(ttf, {'wght': w, 'WEAR': e}, 'final') for w in paces for e in (0, END)])
+    sizes = sorted({SMALL, OPSZ[3], LARGE}) if OPSZ else [None]
+    ok = all([passes(ttf, dict({'wght': w, 'WEAR': e}, **({'opsz': o} if o is not None else {})), 'final') for w in paces for e in (0, END) for o in sizes])
     sys.exit(0 if ok else 1)
 
 

@@ -28,19 +28,22 @@ import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 const here = dirname(fileURLToPath(import.meta.url)), lab = join(here, '..');
 const outfile = join(tmpdir(), `autograph-font-${process.pid}.mjs`);
-await build({ stdin: { contents: `export { KNOWS, letter, formsOf, exitOf, JOIN, STYLE, MANNERS, SPACING, worn, HURRY } from './client/autograph/hands/v26';`, resolveDir: lab, loader: 'ts' }, bundle: true, platform: 'node', format: 'esm', outfile, logLevel: 'warning' });
+await build({ stdin: { contents: `export { KNOWS, letter, formsOf, exitOf, JOIN, STYLE, MANNERS, SPACING, worn, HURRY } from './client/autograph/hands/v27';`, resolveDir: lab, loader: 'ts' }, bundle: true, platform: 'node', format: 'esm', outfile, logLevel: 'warning' });
 const { KNOWS, letter, formsOf, exitOf, JOIN, STYLE, MANNERS, SPACING, worn, HURRY } = await import(outfile);
-const HAND = 'v26';
+const HAND = 'v27';
 
 /** the version (the session that made it: 1.0 is session 10's, by that rule, not a claim that it's done), how many writings of each letter, and how far each letter steps through
  * them: one or three (both turn a run of one letter through all four), by the letter */
-const VERSION = '3.8', ALTS = 4, step = (ch) => (ch.codePointAt(0) % 2 ? 3 : 1);
+// (4.0: three writings, not four, so the hand's sizes fit in the file; each letter stepping one or two through them, both
+// coprime with three, so neighbours still never match)
+const VERSION = '4.0', ALTS = 3, step = (ch) => (ch.codePointAt(0) % 2 ? 2 : 1);
 const chars = [' ', ...KNOWS];
 /** (1.8) the letters that sit nearer the one before them only inside a word: how much nearer (x-heights, less than
  * nothing). The hand has them drawn already nearer; the font draws them back where they stand starting a word, and kerns */
 const NEARER = Object.entries(SPACING).filter(([, d]) => d < 0);
 /** (1.8) what's said of the font when it's made: who had read the hand it was made from */
-const READ = 'When it was made, its hand (v26) had been read blind hurried, at four times its pace with its pen loosened by care and its f, e, r and v written with care, by three models without a mistake; and at its own pace by one, without a mistake and with doubts at four words, as v25 was. No person had read it. It has two axes: pace (wght), the time the hand gives a word, from hurried (200, four times its own pace, the pen looser) through its own pace (400) to pressed (700); and wear (WEAR, 0 to 50).';
+const READ = 'When it was made, its hand (v27, joined as v26) had been read blind hurried, with care, by three models without a mistake, and at its own pace by one, without a mistake and with doubts at four words; no person had read it. It has three axes: pace (wght), the time the hand gives a word, from hurried (200) through its own pace (400) to pressed (700); wear (WEAR); and its size (opsz), the hand written small or large with the same pen, so set small its pen is wider against the letters and set large it is finer, chosen by the browser from the size it sets.';
+// ('When it was made, its hand (v26) had been read blind hurried, at four times its pace with its pen loosened by care and its f, e, r and v written with care, by three models without a mistake; and at its own pace by one, without a mistake and with doubts at four words, as v25 was. No person had read it. It has two axes: pace (wght), the time the hand gives a word, from hurried (200, four times its own pace, the pen looser) through its own pace (400) to pressed (700); and wear (WEAR, 0 to 50).';)
 // ('When it was made, its hand (v24) at its own pace had been read blind by a model without a doubt, and hurried (four times its pace, its hurried end) by two without a mistake; no person had read it. It has two axes: pace (wght), the hand hurried (200), at its own pace (400) and at the pace it writes what is strong (700), its line as well as its ink moving with the pace; and wear (WEAR), the letters as they stand (0) and as practice for ease left them (100).';)
 // (3.3's: 'When it was made, its hand (v23, the loosest pen two readers read blind without a mistake) had been read by two models blind, every word, with doubts at four; no person had read it. It has two axes: pace (wght), the hand hurried, at twice its own pace (200), at its own pace (400) and at the pace it writes what is strong (700), its line as well as its ink moving with the pace; and wear (WEAR), the letters as they stand (0) and as practice for ease left them (100).')
 // (2.9's: 'When it was made, one person had read the hands before it blind, 94 words of 96 over four pages, and models had misread none. Its f, looped again with its lower loop turning forward, its wear and its hurry hadn\'t been read by anyone yet. It has two axes: pace (wght), the hand hurried, at twice its own pace (200), at its own pace (400) and at the pace it writes what is strong (700), its line as well as its ink moving with the pace; and wear (WEAR), the letters as they stand (0) and as practice for ease left them (100).')
@@ -57,18 +60,24 @@ const READ = 'When it was made, its hand (v26) had been read blind hurried, at f
 // From 2.8 (session 28) the pen has a body (v20), so pace moves the line as well as the ink, and the axis runs on past
 // the hand's own pace to hurried: twice its own pace, at wght 200.
 const pressed = { ...STYLE, pace: STYLE.pace * MANNERS.strong.pace }, hurried = { ...STYLE, pace: STYLE.pace * HURRY };
+// From 4.0 (session 40) a third axis, the hand's size (opsz): the hand written small and large with the same pen, as
+// session 37's Note and Sign are, so a page that sets the font small gets the pen wider against its letters and one that
+// sets it large gets it finer, the browser choosing by the size it sets (font-optical-sizing, on by default)
+const widen = (by) => (strokes) => strokes.map((s) => s.map(([x, y, w]) => [x, y, w * by]));
 export const MASTERS = [
-  { name: 'Regular', loc: { wght: 400, WEAR: 0 }, st: STYLE, worn: false },
-  { name: 'Pressed', loc: { wght: 700, WEAR: 0 }, st: pressed, worn: false },
-  { name: 'Hurried', loc: { wght: 200, WEAR: 0 }, st: hurried, worn: false },
-  { name: 'Worn', loc: { wght: 400, WEAR: 100 }, st: STYLE, worn: true },
+  { name: 'Regular', loc: { wght: 400, WEAR: 0, opsz: 24 }, st: STYLE, worn: false },
+  { name: 'Pressed', loc: { wght: 700, WEAR: 0, opsz: 24 }, st: pressed, worn: false },
+  { name: 'Hurried', loc: { wght: 200, WEAR: 0, opsz: 24 }, st: hurried, worn: false },
+  { name: 'Worn', loc: { wght: 400, WEAR: 100, opsz: 24 }, st: STYLE, worn: true },
+  { name: 'Note', loc: { wght: 400, WEAR: 0, opsz: 12 }, st: { ...STYLE, track: STYLE.track * 1.06 }, worn: false, shape: widen(1.6) },
+  { name: 'Sign', loc: { wght: 400, WEAR: 0, opsz: 72 }, st: STYLE, worn: false, shape: widen(0.45) },
 ];
 const masters = MASTERS.map((M) => {
   const glyphs = [];
   const set = () => {
     for (const ch of chars) {
       for (const form of formsOf(ch)) for (let alt = 1; alt <= ALTS; alt++) {
-        const d = letter(ch, form, alt, M.st), back = -(NEARER.find(([c]) => c === ch)?.[1] ?? 0) * M.st.track;
+        const d0 = letter(ch, form, alt, M.st), d = M.shape ? { ...d0, strokes: M.shape(d0.strokes) } : d0, back = -(NEARER.find(([c]) => c === ch)?.[1] ?? 0) * M.st.track;
         glyphs.push({ ch, code: ch.codePointAt(0), form, alt, step: step(ch), exit: exitOf(ch), adv: d.adv + back, strokes: d.strokes.map((s) => s.map(([x, y, w]) => [+(x + back).toFixed(4), +y.toFixed(4), +w.toFixed(3)])) });
       }
     }
@@ -80,8 +89,8 @@ const masters = MASTERS.map((M) => {
 const data = join(tmpdir(), `autograph-font-${process.pid}-masters.json`);
 writeFileSync(data, JSON.stringify({
   version: VERSION, hand: HAND, read: READ, alts: ALTS, join: JOIN, kern: NEARER.map(([ch, d]) => ({ after: 'inked', ch, by: d * STYLE.track })),
-  axes: [['wght', 'Weight', 200, 400, 700], ['WEAR', 'Wear', 0, 0, 100]],
-  instances: [['Hurried', { wght: 200, WEAR: 0 }], ['Regular', { wght: 400, WEAR: 0 }], ['Pressed', { wght: 700, WEAR: 0 }]],
+  axes: [['wght', 'Weight', 200, 400, 700], ['WEAR', 'Wear', 0, 0, 100], ['opsz', 'Optical size', 12, 24, 72]],
+  instances: [['Hurried', { wght: 200, WEAR: 0, opsz: 24 }], ['Regular', { wght: 400, WEAR: 0, opsz: 24 }], ['Pressed', { wght: 700, WEAR: 0, opsz: 24 }]],
   masters,
 }));
 // (and the pair test, at every corner: no two letters may touch except where they join; it's told which letters go out

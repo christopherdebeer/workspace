@@ -19,7 +19,7 @@ export type Entry = {
    * place on the variable font's axes, its pace (wght) and its wear (WEAR); (from session 31) a line set `time` is set as
    * the web sets it and written in the hand's time by its script (claude-hand-time-3.1.js) when it's seen; (from session
    * 32) by the `script` version named, 3.1 if none is */
-  type?: { text: string; size: number; calt?: boolean; lh?: string; way?: 'web' | 'app' | 'time'; at?: { pace: number; wear: number }; script?: string; face?: 'Regular' | 'Pressed' | 'Hurried'; family?: string }[];
+  type?: { text: string; size: number; calt?: boolean; lh?: string; way?: 'web' | 'app' | 'time'; at?: { pace: number; wear: number; opsz?: number | 'auto' }; script?: string; face?: 'Regular' | 'Pressed' | 'Hurried'; family?: string }[];
   /** the font's version it's set in (each version is kept, so it always comes out as it was set; 0.41 if not given,
    * which has 0.4's glyphs) */
   font?: string;
