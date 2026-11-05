@@ -1,6 +1,6 @@
 // Autograph's font (node cells/lab/devtools/autograph-font.mjs): the hand made into a font you can type with.
 //
-// Every character the hand knows is set on its own by the hand (hands/v19.ts, letter(); 1.2 was v7's, 1.4 v9's, 1.8 v12's, 1.9 v13's, 2.0 v14's, 2.6 v18's), in each form it can begin with
+// Every character the hand knows is set on its own by the hand (hands/v20.ts, letter(); 1.2 was v7's, 1.4 v9's, 1.8 v12's, 1.9 v13's, 2.0 v14's, 2.6 v18's, 2.7 v19's), in each form it can begin with
 // (starting a word; joined from a letter that went out low; joined from one that went out high) and in four writings.
 // That gives centrelines with the pen's width at every point. Then devtools/autograph-font.py (fontTools + shapely: `pip
 // install fonttools shapely brotli`) widens them into outlines and writes the font, with its rules: each letter takes
@@ -28,19 +28,20 @@ import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 const here = dirname(fileURLToPath(import.meta.url)), lab = join(here, '..');
 const outfile = join(tmpdir(), `autograph-font-${process.pid}.mjs`);
-await build({ stdin: { contents: `export { KNOWS, letter, formsOf, exitOf, JOIN, STYLE, MANNERS, SPACING, worn } from './client/autograph/hands/v19';`, resolveDir: lab, loader: 'ts' }, bundle: true, platform: 'node', format: 'esm', outfile, logLevel: 'warning' });
+await build({ stdin: { contents: `export { KNOWS, letter, formsOf, exitOf, JOIN, STYLE, MANNERS, SPACING, worn } from './client/autograph/hands/v20';`, resolveDir: lab, loader: 'ts' }, bundle: true, platform: 'node', format: 'esm', outfile, logLevel: 'warning' });
 const { KNOWS, letter, formsOf, exitOf, JOIN, STYLE, MANNERS, SPACING, worn } = await import(outfile);
-const HAND = 'v19';
+const HAND = 'v20';
 
 /** the version (the session that made it: 1.0 is session 10's, by that rule, not a claim that it's done), how many writings of each letter, and how far each letter steps through
  * them: one or three (both turn a run of one letter through all four), by the letter */
-const VERSION = '2.7', ALTS = 4, step = (ch) => (ch.codePointAt(0) % 2 ? 3 : 1);
+const VERSION = '2.8', ALTS = 4, step = (ch) => (ch.codePointAt(0) % 2 ? 3 : 1);
 const chars = [' ', ...KNOWS];
 /** (1.8) the letters that sit nearer the one before them only inside a word: how much nearer (x-heights, less than
  * nothing). The hand has them drawn already nearer; the font draws them back where they stand starting a word, and kerns */
 const NEARER = Object.entries(SPACING).filter(([, d]) => d < 0);
 /** (1.8) what's said of the font when it's made: who had read the hand it was made from */
-const READ = 'When it was made, one person had read the hands before it blind, 94 words of 96 over four pages, and models had misread none. Its f, which stands on the line, and its wear hadn\'t been read by anyone yet. It has two axes: pace (wght), the hand at its own pace (400) and at the pace it writes what is strong (700), and wear (WEAR), the letters as they stand (0) and as practice for ease left them (100).';
+const READ = 'When it was made, one person had read the hands before it blind, 94 words of 96 over four pages, and models had misread none. Its f, which stands on the line, its wear and its hurry hadn\'t been read by anyone yet. It has two axes: pace (wght), the hand hurried, at twice its own pace (200), at its own pace (400) and at the pace it writes what is strong (700), its line as well as its ink moving with the pace; and wear (WEAR), the letters as they stand (0) and as practice for ease left them (100).';
+// (2.7's: 'When it was made, one person had read the hands before it blind, 94 words of 96 over four pages, and models had misread none. Its f, which stands on the line, and its wear hadn\'t been read by anyone yet. It has two axes: pace (wght), the hand at its own pace (400) and at the pace it writes what is strong (700), and wear (WEAR), the letters as they stand (0) and as practice for ease left them (100).')
 // (2.6's: 'When it was made, one person had read the hands before it blind, 94 words of 96 over four pages, and models had misread none. This hand\'s f, which stands on the line, hadn\'t been read by anyone yet.')
 // (2.0's: 'When it was made, one person had read the hands before it blind, 93 words of 96 over four pages, and models had misread none; in this hand the s, whose foot made lost read last, keeps its foot to itself.' One of the three, took read as room, was found in session 23 to have been a slip in typing.)
 // (1.9's: 'When it was made, the hand before it (v12) had been read blind by one person, who misread two words of 48, and by models, who misread none; in this hand the t, k and x misread in them are written anew.')
@@ -49,10 +50,13 @@ const READ = 'When it was made, one person had read the hands before it blind, 9
 // what's strong, and with its letters as practice for ease left them (v19's WORN), between which the font moves on two
 // axes, pace (wght, 400 to 700, so an app's bold is the hand pressing) and wear (WEAR, 0 to 100). Outlined so the
 // masters share their points, put together and pair-tested at every corner by devtools/autograph-font-vary.py.
-const pressed = { ...STYLE, pace: STYLE.pace * MANNERS.strong.pace };
+// From 2.8 (session 28) the pen has a body (v20), so pace moves the line as well as the ink, and the axis runs on past
+// the hand's own pace to hurried: twice its own pace, at wght 200.
+const pressed = { ...STYLE, pace: STYLE.pace * MANNERS.strong.pace }, hurried = { ...STYLE, pace: STYLE.pace * 2 };
 export const MASTERS = [
   { name: 'Regular', loc: { wght: 400, WEAR: 0 }, st: STYLE, worn: false },
   { name: 'Pressed', loc: { wght: 700, WEAR: 0 }, st: pressed, worn: false },
+  { name: 'Hurried', loc: { wght: 200, WEAR: 0 }, st: hurried, worn: false },
   { name: 'Worn', loc: { wght: 400, WEAR: 100 }, st: STYLE, worn: true },
 ];
 const masters = MASTERS.map((M) => {
@@ -72,8 +76,8 @@ const masters = MASTERS.map((M) => {
 const data = join(tmpdir(), `autograph-font-${process.pid}-masters.json`);
 writeFileSync(data, JSON.stringify({
   version: VERSION, hand: HAND, read: READ, alts: ALTS, join: JOIN, kern: NEARER.map(([ch, d]) => ({ after: 'inked', ch, by: d * STYLE.track })),
-  axes: [['wght', 'Weight', 400, 400, 700], ['WEAR', 'Wear', 0, 0, 100]],
-  instances: [['Regular', { wght: 400, WEAR: 0 }], ['Pressed', { wght: 700, WEAR: 0 }], ['Worn', { wght: 400, WEAR: 100 }], ['Worn Pressed', { wght: 700, WEAR: 100 }]],
+  axes: [['wght', 'Weight', 200, 400, 700], ['WEAR', 'Wear', 0, 0, 100]],
+  instances: [['Hurried', { wght: 200, WEAR: 0 }], ['Regular', { wght: 400, WEAR: 0 }], ['Pressed', { wght: 700, WEAR: 0 }]],
   masters,
 }));
 // (and the pair test, at every corner: no two letters may touch except where they join; it's told which letters go out
