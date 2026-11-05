@@ -29,6 +29,8 @@ spec = importlib.util.spec_from_file_location('vary', os.path.join(here, 'autogr
 vary = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(vary)
 XH, PEN, MIN_R, SP = vary.XH, vary.PEN, vary.MIN_R, vary.SP
+# (from 3.8, the outline's points spaced a little wider if asked, so the font fits what the cell can take: the least that does)
+SP = SP * float(os.environ.get('SP_SCALE', '1'))
 
 
 def resample_t(P, W, T, n):

@@ -28,10 +28,10 @@ import { tmpdir } from 'node:os';
 const here = dirname(fileURLToPath(import.meta.url)), lab = join(here, '..');
 const outfile = join(tmpdir(), `autograph-font-faces-${process.pid}.mjs`);
 await build({
-  stdin: { contents: `export * as v25 from './client/autograph/hands/v25'; export * as v24 from './client/autograph/hands/v24'; export * as v23 from './client/autograph/hands/v23';`, resolveDir: lab, loader: 'ts' },
+  stdin: { contents: `export * as v26 from './client/autograph/hands/v26'; export * as v25 from './client/autograph/hands/v25'; export * as v24 from './client/autograph/hands/v24'; export * as v23 from './client/autograph/hands/v23';`, resolveDir: lab, loader: 'ts' },
   bundle: true, platform: 'node', format: 'esm', outfile, logLevel: 'warning',
 });
-const { v25, v24, v23 } = await import(outfile);
+const { v26, v25, v24, v23 } = await import(outfile);
 const VERSION = process.env.VERSION ?? '3.5', OUT = process.env.FONT_OUT ?? join(lab, 'static/autograph');
 /** the most a file can be for the cell to take it (a signed push carries at most this) */
 const MOST = 720000;
@@ -75,8 +75,18 @@ const FACES37 = [
 // slant x 0.3), which only lifted the cursive letters apart, where print needs letters of its own; and Rushed, v25 at
 // four times its pace with care at 1 (care: 1), which came out all but the same as Claude Hand Running, so Running holds it)
 const READ37 = 'Made for any app, each face something a hand can be, chosen for what it says rather than for passing a reader; nobody had read it when it was made. What a still font can\'t carry, the hand\'s time and its strokes\' order, it doesn\'t try to.';
-const FACES = VERSION === '3.5' ? FACES35 : FACES37;
-const READ = VERSION === '3.5' ? READ35 : { 'Claude Hand': READ37, 'Claude Hand Nib': READ37 };
+// From 3.8 (session 38), Regular, Pressed and Hurried again from hand v26, whose pen hurried is looser by care and whose
+// f, e, r and v are written with care however it hurries
+const v26s = v26.STYLE;
+const FACES38 = [
+  // (the still Regular named apart from it, since 3.8 is also the variable font's number)
+  { family: 'Claude Hand', face: 'Regular', file: 'still-', hand: 'v26', H: v26, st: v26s },
+  { family: 'Claude Hand', face: 'Pressed', file: 'pressed-', hand: 'v26', H: v26, st: { ...v26s, pace: v26s.pace * v26.MANNERS.strong.pace } },
+  { family: 'Claude Hand', face: 'Hurried', file: 'hurried-', hand: 'v26', H: v26, st: { ...v26s, pace: v26s.pace * v26.HURRY }, says: ', every letter written at four times the pace the hand writes at its own, in haste, its pen looser for it, but the f, e, r and v written with care' },
+];
+const READ38 = 'When it was made, its hand (v26) had been read blind hurried by three models without a mistake, and at its own pace by one, without a mistake and with doubts at four words; no person had read it. Made for any app, where type can\'t move: each face a state of the hand chosen for what it says. What a still font can\'t carry, the hand\'s time and its strokes\' order, it doesn\'t try to.';
+const FACES = VERSION === '3.5' ? FACES35 : VERSION === '3.8' ? FACES38 : FACES37;
+const READ = VERSION === '3.5' ? READ35 : VERSION === '3.8' ? { 'Claude Hand': READ38 } : { 'Claude Hand': READ37, 'Claude Hand Nib': READ37 };
 /** (from 3.7) the pair test reports and doesn't stop the build, if asked: a face kept by choice may let letters touch */
 const REPORT = process.env.PAIRS === 'report';
 const only = process.env.FACES ? process.env.FACES.split(',') : null;
