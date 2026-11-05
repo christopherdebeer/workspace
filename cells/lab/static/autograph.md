@@ -24,6 +24,7 @@ The record is the point. Every sample is kept in the repository with the hand th
   - *v13* (session 19): a t, k and x written anew after a person's reading.
   - *v14* (session 20): the s keeps its foot to itself, after a person's reading.
   - *v15* (session 21): rhythm: its variation carries from letter to letter, and its pace from word to word.
+  - *v16* (session 24): time read from the sentence: the pen waits longer before a word after a phrase or a sentence ends.
 - **Samples** (`samples.ts`): each made fresh from its hand, as strokes of points in time, exactly the record a pen pad keeps of a person.
 - **Measures** (`measure.ts`): what graphology looks at (slant, baseline, how joined, speed, pressure, size), measured from the strokes rather than eyeballed. Beside them, in red, what a graphologist would say: given as a claim, because that's what it is (below). The measures are part of the record too: an old one is never changed. New ones are added beside it, like the speed range and stops from session 2.
 - **Catalogue** (`catalog.ts`): what each sample is, what it was made for, my review, and what each session decided. Each session keeps its own file (`sessions/NN.ts`, listed in order in `sessions/index.ts`), so adding one never touches another, and the check fingerprints each recorded session so none can change afterwards, by accident or otherwise.
@@ -465,6 +466,17 @@ As session 8 decided, it opens with its whole first paragraph written by the han
 Then coarticulation, with a rule set before it began: one mechanism, judged by eye on one sheet fixed in advance, no readers, no second dial, kept only if it looked like a better hand. In fluent cursive the end of a letter is shaped by the letter after it (Thomassen & Schomaker 1986: the downstroke of an *l* changes with the next letter, its upstroke doesn't). Every low join in this hand meets at one fixed place at the foot of the line, so I planned the meeting across both letters instead, moving it a quarter of the way towards the next letter's first stroke and a tenth towards the last one's.
 
 At writing size, the two hands were the same. Laid over each other, larger, the new joins went straight up where the old ones kinked at the foot; the line moved at most a tenth of an x-height, less than the pen is wide. So it isn't kept: no v16, and no stronger try (W001 shows the joins as they stay). What it found is that this hand's joins already anticipate. Each letter's lead-in carries the pen from the foot of the line to where that letter begins, so the way into the next letter is part of the letter. The coarticulation the research measured bends the letters themselves, and in this hand that's the skeleton, the readers' half. It stays open, and isn't next.
+
+**Session 24 (5 November 2026): where sentences end.** Session 9's oldest wish was still open: a hand moved by what it says. Session 11 gave it emphasis, marked from outside, but a sentence carries a shape of its own, and the hand didn't read it. Between strokes the pen only travelled, so a full stop cost it no more than the gap between two words.
+
+People who write pause longer before larger units: between paragraphs most, then sentences, then words, then within words (Schilperoord 2001, as a review of keystroke studies puts it). Most of that research is on composing and typing; a hand writing its own sentences is nearer composing than copying.
+
+The rule, set first: one mechanism; judged on chapter two's first paragraph by its timing and its ink; kept if the waits fall in that order and not one point of ink moves; no readers, no second dial.
+- **Hand v16** waits before a word as long as what the space closed asks: a little after a word (0.12 s on top of the travel), more after a comma, semicolon or colon (0.35 s), most after a full stop, question or exclamation (0.8 s). A line that ends one carries it into the next.
+- **On the paragraph,** every point of ink was where v15 put it. Lifts inside words stayed under a fifth of a second, waits between words came to about a quarter, phrase ends and line returns to about half, and the two sentence ends to nearly a second, the only waits that long. Kept.
+- **Session 9's answer about rushing,** written again with its own seed (X001): its four longest waits are now its four sentence ends.
+
+It's still one pace inside each sentence: moved by what it says only at the edges, so far. No font for it; type has no time.
 
 ## Where it's going
 
