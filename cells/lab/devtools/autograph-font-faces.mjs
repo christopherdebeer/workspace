@@ -28,10 +28,10 @@ import { tmpdir } from 'node:os';
 const here = dirname(fileURLToPath(import.meta.url)), lab = join(here, '..');
 const outfile = join(tmpdir(), `autograph-font-faces-${process.pid}.mjs`);
 await build({
-  stdin: { contents: `export * as v26 from './client/autograph/hands/v26'; export * as v25 from './client/autograph/hands/v25'; export * as v24 from './client/autograph/hands/v24'; export * as v23 from './client/autograph/hands/v23';`, resolveDir: lab, loader: 'ts' },
+  stdin: { contents: `export * as v27 from './client/autograph/hands/v27'; export * as v26 from './client/autograph/hands/v26'; export * as v25 from './client/autograph/hands/v25'; export * as v24 from './client/autograph/hands/v24'; export * as v23 from './client/autograph/hands/v23';`, resolveDir: lab, loader: 'ts' },
   bundle: true, platform: 'node', format: 'esm', outfile, logLevel: 'warning',
 });
-const { v26, v25, v24, v23 } = await import(outfile);
+const { v27, v26, v25, v24, v23 } = await import(outfile);
 const VERSION = process.env.VERSION ?? '3.5', OUT = process.env.FONT_OUT ?? join(lab, 'static/autograph');
 /** the most a file can be for the cell to take it (a signed push carries at most this) */
 const MOST = 720000;
@@ -85,8 +85,14 @@ const FACES38 = [
   { family: 'Claude Hand', face: 'Hurried', file: 'hurried-', hand: 'v26', H: v26, st: { ...v26s, pace: v26s.pace * v26.HURRY }, says: ', every letter written at four times the pace the hand writes at its own, in haste, its pen looser for it, but the f, e, r and v written with care' },
 ];
 const READ38 = 'When it was made, its hand (v26) had been read blind hurried by three models without a mistake, and at its own pace by one, without a mistake and with doubts at four words; no person had read it. Made for any app, where type can\'t move: each face a state of the hand chosen for what it says. What a still font can\'t carry, the hand\'s time and its strokes\' order, it doesn\'t try to.';
-const FACES = VERSION === '3.5' ? FACES35 : VERSION === '3.8' ? FACES38 : FACES37;
-const READ = VERSION === '3.5' ? READ35 : VERSION === '3.8' ? { 'Claude Hand': READ38 } : { 'Claude Hand': READ37, 'Claude Hand Nib': READ37 };
+// From 3.9 (session 39), Claude Hand Print: the hand printing, with letters of its own (v27's PRINT), upright as the hand
+// prints what has to be read exactly, nothing joined and nothing going out
+const FACES39 = [
+  { family: 'Claude Hand Print', face: 'Regular', file: 'print-', hand: 'v27', H: v27, st: { ...v27.STYLE, print: true, slant: v27.STYLE.slant * 0.3 }, forms: () => ['i'], says: ': the hand printing, every small letter its printed one, plain and upright, nothing joined' },
+];
+const READ39 = 'Made for any app: the hand printing, for what has to be read exactly. Nobody had read it when it was made.';
+const FACES = VERSION === '3.5' ? FACES35 : VERSION === '3.8' ? FACES38 : VERSION === '3.9' ? FACES39 : FACES37;
+const READ = VERSION === '3.5' ? READ35 : VERSION === '3.8' ? { 'Claude Hand': READ38 } : VERSION === '3.9' ? { 'Claude Hand Print': READ39 } : { 'Claude Hand': READ37, 'Claude Hand Nib': READ37 };
 /** (from 3.7) the pair test reports and doesn't stop the build, if asked: a face kept by choice may let letters touch */
 const REPORT = process.env.PAIRS === 'report';
 const only = process.env.FACES ? process.env.FACES.split(',') : null;
@@ -101,7 +107,7 @@ for (const F of FACES) {
   for (const ch of [' ', ...KNOWS]) {
     for (const form of formsOf(ch)) for (let alt = 1; alt <= ALTS; alt++) {
       const d = letter(ch, form, alt, F.st), back = -(NEARER.find(([c]) => c === ch)?.[1] ?? 0) * F.st.track;
-      glyphs.push({ ch, code: ch.codePointAt(0), form, alt, step: step(ch), exit: exitOf(ch), adv: d.adv + back, strokes: d.strokes.map((s) => s.map(([x, y, w]) => [+(x + back).toFixed(4), +y.toFixed(4), +w.toFixed(3)])) });
+      glyphs.push({ ch, code: ch.codePointAt(0), form, alt, step: step(ch), exit: F.st.print ? 'none' : exitOf(ch), adv: d.adv + back, strokes: d.strokes.map((s) => s.map(([x, y, w]) => [+(x + back).toFixed(4), +y.toFixed(4), +w.toFixed(3)])) });
     }
   }
   const data = join(tmpdir(), `autograph-font-faces-${process.pid}-${key}.json`);
