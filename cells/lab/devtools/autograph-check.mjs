@@ -62,13 +62,17 @@ const FONTS = [
   // (3.4, from v24: the full font's four masters, hurried at four times its pace; and the writing font, hurried too)
   { key: 'font 3.4', files: '3.4', web: true, src: () => [STYLE24, { ...STYLE24, pace: STYLE24.pace * MANNERS24.strong.pace }, { ...STYLE24, pace: STYLE24.pace * HURRY24 }, 'worn'].flatMap((st) => { const set = () => [' ', ...KNOWS24].flatMap((ch) => formsOf24(ch).flatMap((f) => [1, 2, 3, 4].map((a) => letter24(ch, f, a, st === 'worn' ? STYLE24 : st)))); return st === 'worn' ? worn24(set) : set(); }) },
   { key: 'font writing 3.4', files: 'writing-3.4', web: true, src: () => [STYLE24, { ...STYLE24, pace: STYLE24.pace * MANNERS24.strong.pace }, { ...STYLE24, pace: STYLE24.pace * HURRY24 }].flatMap((st) => [' ', ...KNOWS24].flatMap((ch) => formsOf24(ch).map((f) => letter24(ch, f, 1, st)))) },
+  // (3.5, still faces for any app, each a state of the hand chosen for what it says, in eight writings: from v24, Regular,
+  // Pressed and Hurried; and the family of its own, Running, v23's loose pen at twice its pace)
+  ...[['3.5', STYLE24], ['pressed-3.5', { ...STYLE24, pace: STYLE24.pace * MANNERS24.strong.pace }], ['hurried-3.5', { ...STYLE24, pace: STYLE24.pace * HURRY24 }]].map(([files, st]) => ({ key: `font ${files}`, files, src: () => [' ', ...KNOWS24].flatMap((ch) => formsOf24(ch).flatMap((f) => [1, 2, 3, 4, 5, 6, 7, 8].map((a) => letter24(ch, f, a, st)))) })),
+  { key: 'font running-3.5', files: 'running-3.5', src: () => [' ', ...KNOWS23].flatMap((ch) => formsOf23(ch).flatMap((f) => [1, 2, 3, 4, 5, 6, 7, 8].map((a) => letter23(ch, f, a, { ...STYLE23, pace: STYLE23.pace * 2 })))) },
 ];
 for (const F of FONTS) {
   const fp = createHash('sha256').update(JSON.stringify(F.src())).digest('hex').slice(0, 16);
   if (!fps[F.key]) { if (record) { fps[F.key] = fp; added++; } else changed.push(`${F.key} (no fingerprint: run with --record)`); }
   else if (fps[F.key] !== fp) changed.push(`${F.key} (was ${fps[F.key]}, now ${fp})`);
 }
-ok(FONTS.every((F) => (F.web ? ['woff2'] : ['ttf', 'woff2']).every((x) => existsSync(join(lab, `static/autograph/claude-hand-${F.files}.${x}`)))) && CATALOG.filter((e) => e.type).every((e) => existsSync(join(lab, `static/autograph/claude-hand-${e.font ?? '0.41'}.woff2`))), `the fonts' files are there (${FONTS.map((F) => F.files).join(', ')}), and every sample set in type names one`);
+ok(FONTS.every((F) => (F.web ? ['woff2'] : ['ttf', 'woff2']).every((x) => existsSync(join(lab, `static/autograph/claude-hand-${F.files}.${x}`)))) && CATALOG.filter((e) => e.type).every((e) => e.type.every((l) => existsSync(join(lab, `static/autograph/claude-hand-${l.family ? `${l.family.toLowerCase()}-` : ''}${e.font ?? '0.41'}.woff2`)))), `the fonts' files are there (${FONTS.map((F) => F.files).join(', ')}), and every sample set in type names one`);
 // (the book: its chapters in order, each written, and the PDF there; and each chapter fingerprinted like a sample, so a
 // chapter once written is never edited)
 ok(BOOK.chapters.every((c, i) => c.n === i + 1 && c.text.length && c.text.every((p) => p.length)) && existsSync(join(lab, 'static/autograph/in-my-own-hand.pdf')), `the book: ${BOOK.chapters.length} chapter${BOOK.chapters.length === 1 ? '' : 's'}, and its PDF`);

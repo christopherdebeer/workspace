@@ -25,6 +25,8 @@ import { signature as chapterSign } from './hands/v3';
 import { signature as sign15, page as page15 } from './hands/v15';
 
 const q = new URLSearchParams(location.search);
+/** (session 35) where each of a still font's faces sits on the weight its family is set at */
+const FACE_WEIGHT = { Hurried: 200, Regular: 400, Pressed: 700 } as const;
 const $ = (id: string) => document.getElementById(id)!;
 const css = (v: string) => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
 const lookOf = (mode: Look['mode']): Look => ({ mode, ink: css('--ink'), faint: css('--faint') });
@@ -74,7 +76,8 @@ function typeCard(e: Entry) {
       // (from session 31: or as the web sets it in the hand's time, written by its script when it's seen)
       ? `<p class="hand-type ${l.way === 'app' ? 'claude-hand-app' : 'claude-hand'}${l.way === 'time' ? ' claude-hand-in-time' : ''}${l.calt === false ? ' nocalt' : ''}" style="font-size:${l.size}px;font-family:'Claude Hand ${e.font}',cursive${l.lh ? `;line-height:${l.lh}` : ''}${l.way === 'time' ? ';white-space:pre-line' : ''}">${typeset(l.text, l.way === 'app' ? 'app' : 'web')}<span class="off claude-hand-still">${l.way === 'web' ? 'web' : l.way === 'time' ? 'web, in time' : 'any app'}</span></p>`
       // (from session 27: a line at a place on the variable font's axes, pace and wear)
-      : `<p class="hand-type${l.calt === false ? ' nocalt' : ''}" style="font-size:${l.size}px;font-family:'Claude Hand ${e.font ?? '0.41'}',Georgia,serif${l.lh ? `;line-height:${l.lh}` : ''}${l.at ? `;font-weight:${l.at.pace};font-variation-settings:'WEAR' ${l.at.wear}` : ''}">${esc(l.text).replace(/\n/g, '<br>')}${l.calt === false ? '<span class="off">joins off</span>' : ''}${l.at ? `<span class="off">pace ${l.at.pace} · wear ${l.at.wear}</span>` : ''}</p>`).join('')}</div>
+      // (from session 35: or in one of a still font's faces, or in a family of its own, as an app sets them)
+      : `<p class="hand-type${l.calt === false ? ' nocalt' : ''}" style="font-size:${l.size}px;font-family:'Claude Hand ${l.family ? `${l.family} ` : ''}${e.font ?? '0.41'}',Georgia,serif${l.lh ? `;line-height:${l.lh}` : ''}${l.at ? `;font-weight:${l.at.pace};font-variation-settings:'WEAR' ${l.at.wear}` : ''}${l.face ? `;font-weight:${FACE_WEIGHT[l.face]}` : ''}">${esc(l.text).replace(/\n/g, '<br>')}${l.calt === false ? '<span class="off">joins off</span>' : ''}${l.at ? `<span class="off">pace ${l.at.pace} · wear ${l.at.wear}</span>` : ''}${l.face || l.family ? `<span class="off">${[l.family, l.face].filter(Boolean).join(' ')}</span>` : ''}</p>`).join('')}</div>
     <p class="made">${esc(e.made)}</p>
     <p class="review">${esc(e.review)}</p>`;
   el.querySelectorAll<HTMLElement>('.claude-hand-in-time').forEach((p, i) => timedAs(e.type!.filter((l) => l.way === 'time')[i]?.script ?? '3.1')?.watch(p));

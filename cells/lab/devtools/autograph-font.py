@@ -9,7 +9,7 @@ the font: a glyph for each letter in each form and writing, and two sets of rule
 - forms: a letter after one that went out low takes its joined form (its lead-in reaching back to meet it); after one
   that went out high, the form joined from above; otherwise (starting a word, after a lift) the form without a lead-in;
 - writings: each glyph takes the writing a step on from the one before it (one step or three, by the letter: both
-  coprime with four, so a run of one letter goes through all of them), spaces included, so neighbours never match, the
+  coprime with four, and from 3.5 with eight, so a run of one letter goes through all of them), spaces included, so neighbours never match, the
   turns don't fall into a rhythm, and it all runs on across words.
 
 And from 1.8, kerning (OpenType `kern`, on by default): a letter the hand sets nearer the one before it inside a word is
@@ -36,6 +36,10 @@ data = json.load(open(sys.argv[1]))
 VERSION = data['version']   # the session that made it, as a version
 FACE, FILE = data.get('face', 'Regular'), data.get('file', '')   # (from 1.2: Regular, or Pressed, the family's bold)
 PRESSED = FACE == 'Pressed'
+# (from 3.5, a still face of its own beside them: Hurried, lighter than Regular, as the moving font's hurried end is;
+# an app lists it with the family, and it installs as its own family where an app knows only regular and bold)
+LINKED = FACE in ('Regular', 'Pressed')
+WEIGHT = {'Hurried': 200, 'Regular': 400, 'Pressed': 700}.get(FACE, 400)
 # (where the hand writes an underline and a strike (hands/v7.ts): an underline a fifth of an x-height under the line,
 # a strike through the middle of the letters; both quick strokes, a little finer than the letters. The tables give the
 # top of each stroke)
@@ -174,16 +178,16 @@ fb.setupHorizontalMetrics(metrics)
 fb.setupHorizontalHeader(ascent=900, descent=-460, lineGap=40)
 FAMILY = data.get('family', 'Claude Hand')   # (from 3.2: or the family made for type set in time)
 fb.setupNameTable({
-    'familyName': FAMILY, 'styleName': 'Bold' if PRESSED else 'Regular', 'fullName': FAMILY + ' Pressed' if PRESSED else FAMILY,
+    'familyName': FAMILY if LINKED else FAMILY + ' ' + FACE, 'styleName': 'Bold' if PRESSED else 'Regular', 'fullName': FAMILY if FACE == 'Regular' else FAMILY + ' ' + FACE,
     'psName': '%s-%s' % (FAMILY.replace(' ', ''), FACE), 'typographicFamily': FAMILY, 'typographicSubfamily': FACE,
     'uniqueFontIdentifier': '%s %s %s' % (FAMILY, FACE, VERSION), 'version': 'Version %s' % VERSION,
     'copyright': 'Copyright (c) 2026, The Claude Hand Project Authors (https://parc.land), with Reserved Font Name "Claude Hand".',
     'licenseDescription': 'This Font Software is licensed under the SIL Open Font License, Version 1.1. This license is available with a FAQ at: https://openfontlicense.org',
     'licenseInfoURL': 'https://openfontlicense.org',
-    'designer': 'Claude', 'description': 'A hand learned in public (the parc.land lab, autograph experiment): hand %s set as a font%s. Each letter joins as its neighbour asks, in four writings, never the same as its neighbour.%s' % (data.get('hand', 'v9'), ', every letter written at the pace the hand writes what is strong, so its ink comes heavier by itself' if PRESSED else '', (' ' + data['read']) if data.get('read') else ''),
+    'designer': 'Claude', 'description': 'A hand learned in public (the parc.land lab, autograph experiment): hand %s set as a font%s. Each letter joins as its neighbour asks, in %s writings, never the same as its neighbour.%s' % (data.get('hand', 'v9'), data['says'] if data.get('says') else ', every letter written at the pace the hand writes what is strong, so its ink comes heavier by itself' if PRESSED else '', {4: 'four', 5: 'five', 6: 'six', 7: 'seven', 8: 'eight'}.get(data['alts'], str(data['alts'])), (' ' + data['read']) if data.get('read') else ''),
 })
 fb.setupOS2(sTypoAscender=900, sTypoDescender=-460, sTypoLineGap=40, usWinAscent=max(900, ymax + 20), usWinDescent=max(460, -ymin + 20),
-            sxHeight=XH, sCapHeight=round(1.7 * XH), achVendID='NONE', fsSelection=(0x20 if PRESSED else 0x40) | 0x80, usWeightClass=700 if PRESSED else 400, version=4, fsType=0,
+            sxHeight=XH, sCapHeight=round(1.7 * XH), achVendID='NONE', fsSelection=(0x20 if PRESSED else 0x40) | 0x80, usWeightClass=WEIGHT, version=4, fsType=0,
             yStrikeoutSize=MARK, yStrikeoutPosition=STRIKE)
 fb.setupPost(underlinePosition=UNDER, underlineThickness=MARK)
 # (the same hand always builds the same file: no build time in it)
