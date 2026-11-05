@@ -24,6 +24,7 @@ from fontTools import varLib
 from fontTools.otlLib.builder import buildStatTable
 
 here = os.path.dirname(os.path.abspath(__file__))
+sys.dont_write_bytecode = True   # (no cache beside the tools: the cell takes only what's made on purpose)
 spec = importlib.util.spec_from_file_location('vary', os.path.join(here, 'autograph-font-vary.py'))
 vary = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(vary)
