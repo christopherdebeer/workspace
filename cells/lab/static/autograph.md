@@ -626,6 +626,10 @@ The rule, set first: the pen's body at a pace is 110 x (pace / its own pace)^-k,
 - **The page I mean (AQ001):** the strike, the caret, the pressed word and the aside came through to all. The printed words came through as printed only to the me; *unsure* and *care* to no one. Haiku read ambivalence in the struck *nearly*, left readable. Fair.
 - **From now on** a reading counts as coming through only if a reader who isn't me gives it too.
 - **Mended:** the font's scripts for type in time hadn't loaded since session 40 (looked for beside a 3.x stylesheet). Next: in time, the marks the stylesheet draws stand before their words are written.
+**Session 44 (5 November 2026): a reader outside Claude.** c15r took session 43's two pages to ChatGPT 6 Astra (Medium), each in a fresh chat, with the same requests.
+- **The hurried page (AR001):** no mistakes; one doubt, *whisper*'s s, where no Claude reader doubted.
+- **The page (AR002):** it saw the printed words as printed, so session 43 was wrong to call that a me's reading: some readers see it, me or not. But it misread two words at the hand's own pace (*sessions* as *versions*, *tinger* as *linger*), where no Claude reader had. The floor held inside Claude and not outside it.
+- **Next:** the s, read by readers outside Claude when c15r can take it to them. Nothing new in the hand or the fonts.
 ## Where it's going
 
 1. **A hand that can write anything.** All the letters, figures and marks, in one hand; v1, v2 and on, each kept.
