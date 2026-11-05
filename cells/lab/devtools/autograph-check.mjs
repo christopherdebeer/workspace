@@ -79,8 +79,17 @@ for (const v of SHEETS) {
   if (!fps[key]) { if (record) { fps[key] = fp; added++; } else changed.push(`${key} (no fingerprint: run with --record)`); }
   else if (fps[key] !== fp) changed.push(`${key} was edited (was ${fps[key]}, now ${fp}): a changed stylesheet is a new version`);
 }
+// (from session 31, the font's script for the web's time, kept and fingerprinted as the stylesheets are)
+const SCRIPTS = ['3.1'];
+for (const v of SCRIPTS) {
+  const f = join(lab, `static/autograph/claude-hand-time-${v}.js`), key = `script ${v}`;
+  if (!existsSync(f)) { changed.push(`${key} (missing)`); continue; }
+  const fp = createHash('sha256').update(readFileSync(f)).digest('hex').slice(0, 16);
+  if (!fps[key]) { if (record) { fps[key] = fp; added++; } else changed.push(`${key} (no fingerprint: run with --record)`); }
+  else if (fps[key] !== fp) changed.push(`${key} was edited (was ${fps[key]}, now ${fp}): a changed script is a new version`);
+}
 for (const e of CATALOG.filter((x) => x.type?.some((l) => l.way))) {
-  const key = `${e.id} (as set)`, fp = createHash('sha256').update(JSON.stringify(e.type.map((l) => (l.way ? typeset(l.text, l.way) : l.text)))).digest('hex').slice(0, 16);
+  const key = `${e.id} (as set)`, fp = createHash('sha256').update(JSON.stringify(e.type.map((l) => (l.way ? typeset(l.text, l.way === 'app' ? 'app' : 'web') + (l.way === 'time' ? ' (in time)' : '') : l.text)))).digest('hex').slice(0, 16);
   if (!fps[key]) { if (record) { fps[key] = fp; added++; } else changed.push(`${key} (no fingerprint: run with --record)`); }
   else if (fps[key] !== fp) changed.push(`${key} (was ${fps[key]}, now ${fp})`);
 }

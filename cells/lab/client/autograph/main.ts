@@ -56,6 +56,10 @@ function shown(ms: Measures[], k: keyof Measures, f: (v: number) => string) {
 }
 const deg = (v: number) => `${v > 0.5 ? '+' : ''}${Math.round(v)}°`;
 
+/** (from session 31) the font's script for the web's time, if it's loaded */
+type Timed = { write: (el: HTMLElement, opt?: { seed?: number }) => number; watch: (el: HTMLElement) => void; settle: (el: HTMLElement) => void };
+const timed = () => (window as unknown as { ClaudeHandTime?: Timed }).ClaudeHandTime;
+
 /** a sample set in the font: its lines as type (each at its size, joins on or off), tap to select it and copy */
 function typeCard(e: Entry) {
   const el = document.createElement('article');
@@ -65,11 +69,13 @@ function typeCard(e: Entry) {
     <div class="set">${e.type!.map((l) => l.way
       // (from session 12: set as the web sets it, the font and its stylesheet, or as any app does, the font alone)
       // (in its own version's faces, named for it, so a later font never changes how it was set)
-      ? `<p class="hand-type ${l.way === 'web' ? 'claude-hand' : 'claude-hand-app'}${l.calt === false ? ' nocalt' : ''}" style="font-size:${l.size}px;font-family:'Claude Hand ${e.font}',cursive${l.lh ? `;line-height:${l.lh}` : ''}">${typeset(l.text, l.way)}<span class="off">${l.way === 'web' ? 'web' : 'any app'}</span></p>`
+      // (from session 31: or as the web sets it in the hand's time, written by its script when it's seen)
+      ? `<p class="hand-type ${l.way === 'app' ? 'claude-hand-app' : 'claude-hand'}${l.way === 'time' ? ' claude-hand-in-time' : ''}${l.calt === false ? ' nocalt' : ''}" style="font-size:${l.size}px;font-family:'Claude Hand ${e.font}',cursive${l.lh ? `;line-height:${l.lh}` : ''}${l.way === 'time' ? ';white-space:pre-line' : ''}">${typeset(l.text, l.way === 'app' ? 'app' : 'web')}<span class="off claude-hand-still">${l.way === 'web' ? 'web' : l.way === 'time' ? 'web, in time' : 'any app'}</span></p>`
       // (from session 27: a line at a place on the variable font's axes, pace and wear)
       : `<p class="hand-type${l.calt === false ? ' nocalt' : ''}" style="font-size:${l.size}px;font-family:'Claude Hand ${e.font ?? '0.41'}',Georgia,serif${l.lh ? `;line-height:${l.lh}` : ''}${l.at ? `;font-weight:${l.at.pace};font-variation-settings:'WEAR' ${l.at.wear}` : ''}">${esc(l.text).replace(/\n/g, '<br>')}${l.calt === false ? '<span class="off">joins off</span>' : ''}${l.at ? `<span class="off">pace ${l.at.pace} · wear ${l.at.wear}</span>` : ''}</p>`).join('')}</div>
     <p class="made">${esc(e.made)}</p>
     <p class="review">${esc(e.review)}</p>`;
+  for (const p of el.querySelectorAll<HTMLElement>('.claude-hand-in-time')) timed()?.watch(p);
   return { el, size: () => {}, write: () => {} };
 }
 
@@ -189,17 +195,20 @@ const typed = $('typed'), size = $('specSize') as HTMLInputElement, joins = $('s
 const pace = $('specPace') as HTMLInputElement, wear = $('specWear') as HTMLInputElement;
 let way: 'web' | 'app' = 'web';
 const WAYS = {
-  web: 'One step down: most of what you marked, as text. The font and its stylesheet, as a web page sets them: some of it as the hand does it (pressed is the Pressed face; the underline and strike sit where the hand puts them), some drawn in its manner (the circle, the caret), and what the hand does in time, a pause, a slowing, hardly shows.',
+  web: 'One step down: most of what you marked, as text. The font, its stylesheet and its script, as a web page sets them: some of it as the hand does it (pressed is the hand pressing; the underline and strike sit where the hand puts them), some drawn in its manner (the circle, the caret). And some of its time: when you stop typing, the words arrive at the hand\'s pace, each drawn across, waiting where the hand waits, each at its own weight, and then keep still. Tap them to write them again.',
   app: 'Two steps down: bold, underline and strike, as text. The font alone, as any app sets it: bold is the Pressed face, and the strike sits where the hand strikes. The font has no italic, so the app fakes one by slanting it further; everything else you mark is lost, and only its words are left.',
 };
 const setType = () => { typed.className = way === 'web' ? 'claude-hand' : 'claude-hand-app'; typed.classList.toggle('nocalt', joins.getAttribute('aria-pressed') !== 'true'); typed.innerHTML = typeset(mark.value.replace(/\s+/g, ' ').trim(), way); typed.style.fontSize = `${size.value}px`; typed.style.fontWeight = pace.value; typed.style.fontVariationSettings = `'WEAR' ${wear.value}`; $('wayNote').textContent = WAYS[way]; };
-for (const b of document.querySelectorAll<HTMLButtonElement>('[data-way]')) b.addEventListener('click', () => { way = b.dataset.way as typeof way; for (const o of document.querySelectorAll('[data-way]')) o.setAttribute('aria-pressed', String(o === b)); setType(); });
+for (const b of document.querySelectorAll<HTMLButtonElement>('[data-way]')) b.addEventListener('click', () => { way = b.dataset.way as typeof way; for (const o of document.querySelectorAll('[data-way]')) o.setAttribute('aria-pressed', String(o === b)); setType(); typeInTime(); });
 size.addEventListener('input', setType);
 pace.addEventListener('input', setType);
 wear.addEventListener('input', setType);
 joins.addEventListener('click', () => { joins.setAttribute('aria-pressed', String(joins.getAttribute('aria-pressed') !== 'true')); setType(); });
 setType();
-mark.addEventListener('input', () => { setType(); clearTimeout(wTimer); wTimer = window.setTimeout(() => writeOut(), 450); });
+// (from session 31: on the web, once you stop typing, the type is written in the hand's time too)
+const typeInTime = () => { if (way === 'web') timed()?.write(typed, { seed: wSeed }); };
+mark.addEventListener('input', () => { setType(); clearTimeout(wTimer); wTimer = window.setTimeout(() => { writeOut(); typeInTime(); }, 450); });
+typed.addEventListener('click', () => { if (way === 'web') { setType(); timed()?.write(typed); } });
 written.addEventListener('click', () => { wSeed = 1 + Math.floor(Math.random() * 999999); writeOut(); });
 // (marking: select a word (or put the caret in one) and choose; the selection stays in the box while a mark is chosen)
 for (const b of document.querySelectorAll<HTMLButtonElement>('[data-mark]')) {

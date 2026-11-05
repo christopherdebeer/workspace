@@ -16,8 +16,9 @@ export type Entry = {
   /** (from session 4) text set in the font rather than written by a hand: lines, each at a size (px), joins on unless
    * `calt` is false; (from session 12) a line with a `way` is marked text (as the hand reads it, see typeset.ts), set as
    * the web sets it, the font and its stylesheet, or as any app does, the font alone; (from session 27) a line `at` a
-   * place on the variable font's axes, its pace (wght) and its wear (WEAR) */
-  type?: { text: string; size: number; calt?: boolean; lh?: string; way?: 'web' | 'app'; at?: { pace: number; wear: number } }[];
+   * place on the variable font's axes, its pace (wght) and its wear (WEAR); (from session 31) a line set `time` is set as
+   * the web sets it and written in the hand's time by its script (claude-hand-time-3.1.js) when it's seen */
+  type?: { text: string; size: number; calt?: boolean; lh?: string; way?: 'web' | 'app' | 'time'; at?: { pace: number; wear: number } }[];
   /** the font's version it's set in (each version is kept, so it always comes out as it was set; 0.41 if not given,
    * which has 0.4's glyphs) */
   font?: string;
