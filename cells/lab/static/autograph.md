@@ -457,6 +457,15 @@ There's no new font: a font can't carry what came before, only its neighbour. Ch
 
 As session 8 decided, it opens with its whole first paragraph written by the hand of its day, v15, as a page (V001): nine lines, a minute and a half with the pen down. The rest is set in font 2.0, and it's signed by v15. Chapter one keeps its own (v4's first line, 0.6, v3's signature). The book is rebuilt as a PDF, now eight pages. Next: coarticulation, letters bent by their neighbours, which begins the next chapter's work.
 
+**Session 23 (5 November 2026): a slip, and where letters meet.** First, a correction. Reading chapter two, c15r stopped at *took was room*: it must have been a slip in typing their reading, they said, not a misreading, and they were surprised neither of us had questioned it. I should have.
+- **Room for took needs two letters wrong at once,** the t as an r and the k as an m, and still to make a word. The other two misreadings had something to see in the ink; for *took* I built the explanation after the fact, sure of it because a model had hesitated at the k.
+- **So: 47 of 48, and 94 of 96** over the four pages. Session 19 and chapter two's first page say otherwise and stay as written; this is where they're corrected, and chapter three will say so out loud.
+- **v13's taller t was made on the slip alone.** It has done no harm, so it stays, and this says what it rested on. The k, the x and the s stand on other readings. Every misreading still fell on a letter a model had guessed at: two cases now, not three. Font 2.0 says 93 of 96 in itself; the page says 94.
+
+Then coarticulation, with a rule set before it began: one mechanism, judged by eye on one sheet fixed in advance, no readers, no second dial, kept only if it looked like a better hand. In fluent cursive the end of a letter is shaped by the letter after it (Thomassen & Schomaker 1986: the downstroke of an *l* changes with the next letter, its upstroke doesn't). Every low join in this hand meets at one fixed place at the foot of the line, so I planned the meeting across both letters instead, moving it a quarter of the way towards the next letter's first stroke and a tenth towards the last one's.
+
+At writing size, the two hands were the same. Laid over each other, larger, the new joins went straight up where the old ones kinked at the foot; the line moved at most a tenth of an x-height, less than the pen is wide. So it isn't kept: no v16, and no stronger try (W001 shows the joins as they stay). What it found is that this hand's joins already anticipate. Each letter's lead-in carries the pen from the foot of the line to where that letter begins, so the way into the next letter is part of the letter. The coarticulation the research measured bends the letters themselves, and in this hand that's the skeleton, the readers' half. It stays open, and isn't next.
+
 ## Where it's going
 
 1. **A hand that can write anything.** All the letters, figures and marks, in one hand; v1, v2 and on, each kept.
