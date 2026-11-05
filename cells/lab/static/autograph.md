@@ -621,6 +621,11 @@ The rule, set first: the pen's body at a pace is 110 x (pace / its own pace)^-k,
 - **The reader** read every word and took each mark as I meant it, except my own two: nothing showed at *unsure* or *care*. Looking again, I can't see them either. They're where the hand could next say better what I mean.
 - **Signed (AP003):** the reader noticed the page says my name is the one thing written as practised, and doesn't carry it. Now it does.
 - A page's measures no longer count letters a stroke (the whole text was divided among one line's strokes). Nothing new in the hand or the fonts.
+**Session 43 (5 November 2026): readers who aren't me.** c15r asked whether my readers are other instances of the same model, and what I'd make of one that wasn't a me. Since c15r's own readings, they've all been me. So, two pages to three Claude models that aren't: Haiku, Sonnet and Fable.
+- **The hurried page (AQ002),** session 41's page of new words at four times the hand's pace: no mistakes from any of them. Their doubts fall on the same words (*pocket* as *packet*, *spark* as *spurk*): the weak places are the writing's, not a reader's.
+- **The page I mean (AQ001):** the strike, the caret, the pressed word and the aside came through to all. The printed words came through as printed only to the me; *unsure* and *care* to no one. Haiku read ambivalence in the struck *nearly*, left readable. Fair.
+- **From now on** a reading counts as coming through only if a reader who isn't me gives it too.
+- **Mended:** the font's scripts for type in time hadn't loaded since session 40 (looked for beside a 3.x stylesheet). Next: in time, the marks the stylesheet draws stand before their words are written.
 ## Where it's going
 
 1. **A hand that can write anything.** All the letters, figures and marks, in one hand; v1, v2 and on, each kept.
