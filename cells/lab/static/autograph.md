@@ -610,6 +610,12 @@ The rule, set first: the pen's body at a pace is 110 x (pace / its own pace)^-k,
 - **Where it ends:** the build learned the third axis and finds its ends by the pair test, as pace and wear: small, 18, where the pressed e stopped touching; large, 72. 649,752 bytes, passing at every corner.
 - **Seen (AN001):** large and left to itself a fine line, held at text size heavy; small, a little sturdier. Stylesheet 4.0 leaves it to the browser; the page uses 4.0, and in Write the size moves the hand's size.
 - **What it found:** the hand's sizes needed no new hand, only the one pen at another size; and a page needn't choose them.
+**Session 41 (5 November 2026): taught by misreadings.** Could the readers' misreadings go on teaching the hand where to take care, until care at its full, the most hurried it looks, could be read?
+- **The loop:** the letters a misread word turned on are written with care too, and a fresh reader reads again; then a second reader on a page of new words; stop if the careful letters pass about ten.
+- **Taught (AO001):** with l, u, a, s and h added to the f, e, r and v, the page that failed in session 38 read clean, still looking hurried.
+- **Not taught (AO002):** on a new page a reader made five mistakes in twelve (*pocket* as *prayer*, *monkey* as *number*, *oxygen* as *corner*, *dwelling* as *yellow*, *spark* as *shark*), on new letters. The list fitted the page it was taught on; teaching on would make nearly every letter careful. Stopped.
+- **The hand as it stands,** care at 0.5 with four careful letters, read the new page without a mistake: session 38's choice holds on words it was never chosen on. Nothing new in the hand or the fonts.
+- **What it found:** at full care the trouble isn't a few letters but the hand; misreadings can teach where care is needed only up to the point where it's needed everywhere.
 ## Where it's going
 
 1. **A hand that can write anything.** All the letters, figures and marks, in one hand; v1, v2 and on, each kept.
