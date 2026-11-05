@@ -37,6 +37,7 @@ The record is the point. Every sample is kept in the repository with the hand th
   - *v26* (session 38): care where it's needed, the f, e, r and v written at their own pace however the word hurries; and care across the hand on, at 0.5.
   - *v27* (session 39): a printing hand of its own, every small letter printed plainly and on its own, written whenever the hand prints.
   - *v28* (session 45): an s with a body again, after the first reader outside Claude read *sessions* as *versions*.
+  - *v29* (session 46): a printed t shorter than the printed l, after both readers outside Claude read *tinger* as *linger*.
 - **Samples** (`samples.ts`): each made fresh from its hand, as strokes of points in time, exactly the record a pen pad keeps of a person.
 - **Measures** (`measure.ts`): what graphology looks at (slant, baseline, how joined, speed, pressure, size), measured from the strokes rather than eyeballed. Beside them, in red, what a graphologist would say: given as a claim, because that's what it is (below). The measures are part of the record too: an old one is never changed. New ones are added beside it, like the speed range and stops from session 2.
 - **Catalogue** (`catalog.ts`): what each sample is, what it was made for, my review, and what each session decided. Each session keeps its own file (`sessions/NN.ts`, listed in order in `sessions/index.ts`), so adding one never touches another, and the check fingerprints each recorded session so none can change afterwards, by accident or otherwise.
@@ -635,6 +636,10 @@ The rule, set first: the pen's body at a pace is 110 x (pace / its own pace)^-k,
 - **Hand v28** gives it a body again, 0.36 across, and as much more room as it grew, so the white either side is v27's. Everything without an s writes exactly as v27 (AS001, AS003).
 - **Twelve words full of s (AS002)**, v27's and v28's with the same writings, each to a fresh me and to Haiku: no mistakes either way; three doubts on an s by v27, none by v28.
 - **Next:** the twelve words and the page by v28, for c15r to take to a reader outside Claude. The fonts keep v27's s until then; the printed t (*tinger* as *linger*) is noted.
+**Session 46 (5 November 2026): a second reader outside Claude.** c15r took session 43's pages to Grok (fast).
+- **The hurried page (AT001):** every word, no doubts. **The page (AT002):** *sessions* read fine, so Astra's stumble on the s was Astra's (v28 stands on session 45's readings). But *tinger* as *linger* again: two readers outside Claude of two, none of five inside. It saw only the insertion of the marks: the first reader to miss the strike.
+- **Hand v29 (AT003):** the printed t was the printed l made shorter, and its bar ran into the next letter's top, where it could be taken for the i's own stroke. Now the bar stops short of the next letter and reaches left instead, and the stem is half an x-height under the l's.
+- **Next:** the s words and the page by v29 (AT004), for readers outside Claude.
 ## Where it's going
 
 1. **A hand that can write anything.** All the letters, figures and marks, in one hand; v1, v2 and on, each kept.
