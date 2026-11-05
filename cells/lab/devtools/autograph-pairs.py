@@ -12,6 +12,9 @@ from shapely.geometry import Polygon
 from shapely.ops import unary_union
 
 f = TTFont(sys.argv[1])
+# (the letters that go out high, so the letter after them is joined from above: given by the build from the hand itself
+# (from 2.6, where the f went out high too); b, o, v, w and r before that)
+HIGH = sys.argv[2] if len(sys.argv) > 2 else 'bovwr'
 gs, cmap, hmtx = f.getGlyphSet(), f.getBestCmap(), f['hmtx']
 XH = f['OS/2'].sxHeight
 
@@ -66,7 +69,7 @@ for a, b in itertools.product(letters, letters):
     # (as the font sets them: b joined from a, from below or above, where a goes out and b can be joined into)
     for form in ('j', 'h'):
         alt = nb.replace('.i1', '.%s2' % form)
-        if alt in gs and ((form == 'j' and a.islower() and a not in 'bovwrs') or (form == 'h' and a in 'bovwr')):
+        if alt in gs and ((form == 'j' and a.islower() and a not in HIGH + 's') or (form == 'h' and a in HIGH)):
             nb = alt
             break
     pa, pb = poly(na), poly(nb, hmtx[na][0] + kern(na, nb))
