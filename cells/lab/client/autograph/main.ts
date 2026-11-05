@@ -18,7 +18,7 @@ import { typeset } from './typeset';
 import { write as v4write } from './hands/v4';
 // (my signature, and the hand that writes what you type: the newest hand; autograph-check.mjs fails if this isn't the
 // hand the record says is newest)
-import { signature, page as handPage } from './hands/v16';
+import { signature, page as handPage } from './hands/v17';
 // (a chapter is signed as it was on the day it was written: chapter one by the hand of its day)
 import { signature as chapterSign } from './hands/v3';
 // (from chapter two, a chapter opens with a page written by the hand of its day, and is signed by it: chapter two's is v15)

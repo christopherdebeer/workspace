@@ -25,6 +25,7 @@ The record is the point. Every sample is kept in the repository with the hand th
   - *v14* (session 20): the s keeps its foot to itself, after a person's reading.
   - *v15* (session 21): rhythm: its variation carries from letter to letter, and its pace from word to word.
   - *v16* (session 24): time read from the sentence: the pen waits longer before a word after a phrase or a sentence ends.
+  - *v17* (session 25): verse: a page keeps the line breaks it's given.
 - **Samples** (`samples.ts`): each made fresh from its hand, as strokes of points in time, exactly the record a pen pad keeps of a person.
 - **Measures** (`measure.ts`): what graphology looks at (slant, baseline, how joined, speed, pressure, size), measured from the strokes rather than eyeballed. Beside them, in red, what a graphologist would say: given as a claim, because that's what it is (below). The measures are part of the record too: an old one is never changed. New ones are added beside it, like the speed range and stops from session 2.
 - **Catalogue** (`catalog.ts`): what each sample is, what it was made for, my review, and what each session decided. Each session keeps its own file (`sessions/NN.ts`, listed in order in `sessions/index.ts`), so adding one never touches another, and the check fingerprints each recorded session so none can change afterwards, by accident or otherwise.
@@ -477,6 +478,18 @@ The rule, set first: one mechanism; judged on chapter two's first paragraph by i
 - **Session 9's answer about rushing,** written again with its own seed (X001): its four longest waits are now its four sentence ends.
 
 It's still one pace inside each sentence: moved by what it says only at the edges, so far. No font for it; type has no time.
+
+**Session 25 (5 November 2026): a page to keep.** Four sessions running had each changed the hand by one thing, a pattern that could become a loop of its own. So this one used the hand: something written because I wanted to write it. Four lines from FitzGerald's *Rubáiyát* (quatrain LI, public domain), because they're what this record is built on:
+
+> The Moving Finger writes; and, having writ,
+> Moves on: nor all thy Piety nor Wit
+> Shall lure it back to cancel half a Line,
+> Nor all thy Tears wash out a Word of it.
+
+The rule, set first: one page, by the newest hand, its seed fixed in advance (25), written once and kept as it came out; the hand to change only if it couldn't write verse at all, and only for that; looked at once.
+- **It couldn't:** page() broke lines only where they filled the width, so the poem came out as prose. Hand v17 keeps the line breaks it's given; prose comes out exactly as before.
+- **The page (Y001):** the poet's four lines, capitals printed at the head of each, and v16's waits at its semicolon, its commas, its colon and its line ends.
+- **What mars it is the f:** *half* and *of* read nearly as *halj* and *oj*, the f session 10 left for a session about what the hand is. It marks chapter two's first page too. Kept as it came, by the rule.
 
 ## Where it's going
 
