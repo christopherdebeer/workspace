@@ -121,5 +121,7 @@ export function initWrite(handPage: (text: string, width: number, seed: number) 
     repaint: () => { if (wSigs.length) paint(written, wSigs, wLook()); },
     state: () => ({ lines: wSigs.length, width: wWidth, seed: wSeed }),
     typed: () => typed.innerHTML,
+    /** (once the script is in) on the web, the type as it stands written in the hand's time, as it is when you stop typing */
+    inTime: typeInTime,
   };
 }

@@ -47,8 +47,10 @@ $('latest').innerHTML = `<b>Latest</b> <a href="#session-${latest.n}">Session ${
 $('doorRecord').textContent = `${SESSIONS.length} sessions and ${CATALOG.length} samples, as they happened, grouped by the chapters of the book that tell them.`;
 
 // (the font's scripts for type in time, each loaded when a part first needs it: the newest for what's typed, and for the
-// record every version its samples were written with, so a later script never changes how one was written)
-const base = (document.querySelector<HTMLLinkElement>('link[href*="claude-hand-3."]')?.href ?? '').replace(/[^/]*$/, '');
+// record every version its samples were written with, so a later script never changes how one was written; found
+// beside the font's stylesheet, whatever its version: looked for by its 3.x name, it went missing when 4.0's stylesheet
+// came in with session 40, and no script loaded until session 42 was asked why)
+const base = (document.querySelector<HTMLLinkElement>('link[rel="stylesheet"][href*="claude-hand-"]')?.href ?? '').replace(/[^/]*$/, '');
 const loading: Record<string, Promise<void>> = {};
 const script = (v: string) => (loading[v] ??= new Promise<void>((done) => { const el = document.createElement('script'); el.src = `${base}claude-hand-time-${v}.js`; el.onload = el.onerror = () => done(); document.head.append(el); }));
 const SCRIPTS = ['3.1', '3.2', '3.3', '3.4', '3.8'];
@@ -66,7 +68,7 @@ function show(v: View) {
     const line = $('posterTime'), near = new IntersectionObserver((es) => { if (es.some((e) => e.isIntersecting)) { near.disconnect(); void script('3.8').then(() => timedAs('3.8')?.watch(line)); } }, { rootMargin: '200px' });
     near.observe(line);
   }
-  if (v === 'write' && !write) { void script('3.8'); write = initWrite(handPage, writing); }
+  if (v === 'write' && !write) { write = initWrite(handPage, writing); void script('3.8').then(() => write?.inTime()); }
   if (v === 'book' && !book) book = buildBook($('toc'), $('chapters'));
   if (v === 'record' && !record) record = buildRecord($('catalog'), Promise.all(SCRIPTS.map(script)).then(() => {}));
 }
