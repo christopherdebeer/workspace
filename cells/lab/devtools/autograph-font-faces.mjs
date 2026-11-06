@@ -28,10 +28,10 @@ import { tmpdir } from 'node:os';
 const here = dirname(fileURLToPath(import.meta.url)), lab = join(here, '..');
 const outfile = join(tmpdir(), `autograph-font-faces-${process.pid}.mjs`);
 await build({
-  stdin: { contents: `export * as v33 from './client/autograph/hands/v33'; export * as v32 from './client/autograph/hands/v32'; export * as v31 from './client/autograph/hands/v31'; export * as v30 from './client/autograph/hands/v30'; export * as v27 from './client/autograph/hands/v27'; export * as v26 from './client/autograph/hands/v26'; export * as v25 from './client/autograph/hands/v25'; export * as v24 from './client/autograph/hands/v24'; export * as v23 from './client/autograph/hands/v23';`, resolveDir: lab, loader: 'ts' },
+  stdin: { contents: `export * as v34 from './client/autograph/hands/v34'; export * as v33 from './client/autograph/hands/v33'; export * as v32 from './client/autograph/hands/v32'; export * as v31 from './client/autograph/hands/v31'; export * as v30 from './client/autograph/hands/v30'; export * as v27 from './client/autograph/hands/v27'; export * as v26 from './client/autograph/hands/v26'; export * as v25 from './client/autograph/hands/v25'; export * as v24 from './client/autograph/hands/v24'; export * as v23 from './client/autograph/hands/v23';`, resolveDir: lab, loader: 'ts' },
   bundle: true, platform: 'node', format: 'esm', outfile, logLevel: 'warning',
 });
-const { v33, v32, v31, v30, v27, v26, v25, v24, v23 } = await import(outfile);
+const { v34, v33, v32, v31, v30, v27, v26, v25, v24, v23 } = await import(outfile);
 const VERSION = process.env.VERSION ?? '3.5', OUT = process.env.FONT_OUT ?? join(lab, 'static/autograph');
 /** the most a file can be for the cell to take it (a signed push carries at most this) */
 const MOST = 720000;
@@ -128,8 +128,21 @@ const FACES55 = [
   { family: 'Claude Hand Broad', face: 'Regular', file: 'broad-', hand: 'v33', H: v33, st: v33.STYLE, pen: 'broad', says: ': the hand written with a broad pen held at forty degrees, its downstrokes broad and the strokes that join its letters hairlines, for type set large' },
 ];
 const READ55 = 'Made for type set large, beside any face of Claude Hand: the same hand with a broad pen. Its 5.4, from hand v32, had been read blind by one Claude model at three sizes, every word. Nobody had read 5.5 when it was made.';
-const FACES = VERSION === '5.5' ? FACES55 : VERSION === '5.4' ? FACES54 : VERSION === '3.5' ? FACES35 : VERSION === '3.8' ? FACES38 : VERSION === '3.9' ? FACES39 : VERSION === '4.1' ? FACES41 : VERSION === '5.1' ? FACES51 : VERSION === '5.2' ? FACES52 : FACES37;
-const READ = VERSION === '3.5' ? READ35 : VERSION === '3.8' ? { 'Claude Hand': READ38 } : VERSION === '3.9' ? { 'Claude Hand Print': READ39 } : VERSION === '4.1' ? { 'Claude Hand': READ41, 'Claude Hand Print': READ41P } : VERSION === '5.1' ? { 'Claude Hand Mono': READ51 } : VERSION === '5.2' ? { 'Claude Hand Marks': READ52 } : VERSION === '5.4' ? { 'Claude Hand Broad': READ54 } : VERSION === '5.5' ? { 'Claude Hand Broad': READ55 } : { 'Claude Hand': READ37, 'Claude Hand Nib': READ37 };
+// From 5.7 (session 57), the still faces caught up with the hand, from v34: Regular, Pressed and Hurried, and Print, with
+// the s in its word (v33). Everything else as 4.1
+const v34s = v34.STYLE;
+// (without the marks of the margin, which are a face of their own)
+const TYPE34 = [...v34.KNOWS].filter((ch) => !(ch in v34.MARKS));
+const FACES57 = [
+  { family: 'Claude Hand', face: 'Regular', file: 'still-', hand: 'v34', H: v34, st: v34s, chars: TYPE34 },
+  { family: 'Claude Hand', face: 'Pressed', file: 'pressed-', hand: 'v34', H: v34, st: { ...v34s, pace: v34s.pace * v34.MANNERS.strong.pace }, chars: TYPE34 },
+  { family: 'Claude Hand', face: 'Hurried', file: 'hurried-', hand: 'v34', H: v34, st: { ...v34s, pace: v34s.pace * v34.HURRY }, says: ', every letter written at four times the pace the hand writes at its own, in haste, its pen looser for it, but the f, e, r and v written with care', chars: TYPE34 },
+  { family: 'Claude Hand Print', face: 'Regular', file: 'print-', hand: 'v34', H: v34, st: { ...v34s, print: true, slant: v34s.slant * 0.3 }, forms: () => ['i'], chars: TYPE34, says: ': the hand printing, every small letter its printed one, plain and upright, nothing joined' },
+];
+const READ57 = 'When it was made, its hand (v34) wrote everything as v30 had, which four Claude models had read blind at its own pace, every word, and two models outside Claude with a word or more misread each, but for its s, set nearer the letter before it (v33): no reader had read that. Made for any app, where type can\'t move: each face a state of the hand chosen for what it says.';
+const READ57P = 'Made for any app: the hand printing, for what has to be read exactly. From hand v34; nobody had read this face when it was made.';
+const FACES = VERSION === '5.7' ? FACES57 : VERSION === '5.5' ? FACES55 : VERSION === '5.4' ? FACES54 : VERSION === '3.5' ? FACES35 : VERSION === '3.8' ? FACES38 : VERSION === '3.9' ? FACES39 : VERSION === '4.1' ? FACES41 : VERSION === '5.1' ? FACES51 : VERSION === '5.2' ? FACES52 : FACES37;
+const READ = VERSION === '3.5' ? READ35 : VERSION === '3.8' ? { 'Claude Hand': READ38 } : VERSION === '3.9' ? { 'Claude Hand Print': READ39 } : VERSION === '4.1' ? { 'Claude Hand': READ41, 'Claude Hand Print': READ41P } : VERSION === '5.1' ? { 'Claude Hand Mono': READ51 } : VERSION === '5.2' ? { 'Claude Hand Marks': READ52 } : VERSION === '5.4' ? { 'Claude Hand Broad': READ54 } : VERSION === '5.5' ? { 'Claude Hand Broad': READ55 } : VERSION === '5.7' ? { 'Claude Hand': READ57, 'Claude Hand Print': READ57P } : { 'Claude Hand': READ37, 'Claude Hand Nib': READ37 };
 /** (from 3.7) the pair test reports and doesn't stop the build, if asked: a face kept by choice may let letters touch */
 const REPORT = process.env.PAIRS === 'report';
 const only = process.env.FACES ? process.env.FACES.split(',') : null;

@@ -4,7 +4,7 @@
  * a step's place, `data-do` what it does, `data-wait` how long it waits first, in seconds, and `data-hold` how long the
  * next waits for it, if not until it's done):
  *
- * - `type`: set in Claude Hand on the web, written in time by the font's script (4.1), its marks after their words;
+ * - `type`: set in Claude Hand on the web, written in time by the font's script (5.7), its marks after their words;
  * - `hand`: a note written by the newest hand, in red, as marginalia are (`data-note`);
  * - `show`: brought up, set in a still face;
  * - `nums`: the circled numbers over the marked words of a line, one by one, and their legend.
@@ -65,7 +65,7 @@ export function buildPoster(root: HTMLElement, handPage: (text: string, width: n
         if (note) { note.played = true; await new Promise<void>((done) => replay(note.cv, note.sigs, look, done)); }
       } else if (kind === 'type') {
         await needTime();
-        const time = timedAs('4.1');
+        const time = timedAs('5.7');
         const took = time ? time.write(el, { seed: seed + 101 * ++n }) : 0;
         el.style.visibility = '';
         // (the next step waits for the writing, or as long as data-hold says, if that's less: a long line needn't keep its note)

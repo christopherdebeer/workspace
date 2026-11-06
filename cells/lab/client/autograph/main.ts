@@ -54,7 +54,7 @@ $('doorRecord').textContent = `${SESSIONS.length} sessions and ${CATALOG.length}
 const base = (document.querySelector<HTMLLinkElement>('link[rel="stylesheet"][href*="claude-hand-"]')?.href ?? '').replace(/[^/]*$/, '');
 const loading: Record<string, Promise<void>> = {};
 const script = (v: string) => (loading[v] ??= new Promise<void>((done) => { const el = document.createElement('script'); el.src = `${base}claude-hand-time-${v}.js`; el.onload = el.onerror = () => done(); document.head.append(el); }));
-const SCRIPTS = ['3.1', '3.2', '3.3', '3.4', '3.8', '4.1'];
+const SCRIPTS = ['3.1', '3.2', '3.3', '3.4', '3.8', '4.1', '5.7'];
 
 // (the parts, each built when it's first shown)
 type View = 'home' | 'write' | 'font' | 'book' | 'record';
@@ -64,8 +64,8 @@ function show(v: View) {
   for (const el of document.querySelectorAll<HTMLElement>('.view')) el.hidden = el.dataset.view !== v;
   for (const a of document.querySelectorAll<HTMLAnchorElement>('nav.tabs a')) { if (a.dataset.view === v) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current'); }
   // (the poster plays its own score; the font's script and writing font only when its first plate written in time is near)
-  if (v === 'home' && !poster) poster = buildPoster($('poster'), handPage, writing, () => script('4.1'));
-  if (v === 'write' && !write) { write = initWrite(handPage, writing); void script('4.1').then(() => write?.inTime()); }
+  if (v === 'home' && !poster) poster = buildPoster($('poster'), handPage, writing, () => script('5.7'));
+  if (v === 'write' && !write) { write = initWrite(handPage, writing); void script('5.7').then(() => write?.inTime()); }
   if (v === 'book' && !book) book = buildBook($('toc'), $('chapters'));
   if (v === 'record' && !record) record = buildRecord($('catalog'), Promise.all(SCRIPTS.map(script)).then(() => {}));
 }

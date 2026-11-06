@@ -28,22 +28,26 @@ import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 const here = dirname(fileURLToPath(import.meta.url)), lab = join(here, '..');
 const outfile = join(tmpdir(), `autograph-font-${process.pid}.mjs`);
-await build({ stdin: { contents: `export { KNOWS, letter, formsOf, exitOf, JOIN, STYLE, MANNERS, SPACING, worn, HURRY } from './client/autograph/hands/v30';`, resolveDir: lab, loader: 'ts' }, bundle: true, platform: 'node', format: 'esm', outfile, logLevel: 'warning' });
-const { KNOWS, letter, formsOf, exitOf, JOIN, STYLE, MANNERS, SPACING, worn, HURRY } = await import(outfile);
-const HAND = 'v30';
+await build({ stdin: { contents: `export { KNOWS, letter, formsOf, exitOf, JOIN, STYLE, MANNERS, SPACING, worn, HURRY, MARKS } from './client/autograph/hands/v34';`, resolveDir: lab, loader: 'ts' }, bundle: true, platform: 'node', format: 'esm', outfile, logLevel: 'warning' });
+const { KNOWS, letter, formsOf, exitOf, JOIN, STYLE, MANNERS, SPACING, worn, HURRY, MARKS } = await import(outfile);
+const HAND = 'v34';
 
 /** the version (the session that made it: 1.0 is session 10's, by that rule, not a claim that it's done), how many writings of each letter, and how far each letter steps through
  * them: one or three (both turn a run of one letter through all four), by the letter */
 // (4.0: three writings, not four, so the hand's sizes fit in the file; each letter stepping one or two through them, both
 // coprime with three, so neighbours still never match)
 // (4.1: from v30, the s with a body again (v28); everything else the font writes as 4.0 did)
-const VERSION = '4.1', ALTS = 3, step = (ch) => (ch.codePointAt(0) % 2 ? 2 : 1);
-const chars = [' ', ...KNOWS];
+// (5.7: from v34, the s in its word (v33); everything else the font writes as 4.1 did)
+const VERSION = '5.7', ALTS = 3, step = (ch) => (ch.codePointAt(0) % 2 ? 2 : 1);
+// (5.7: the marks a hand makes in a margin (v32) are a face of their own, Claude Hand Marks; the type for reading keeps
+// to what it had)
+const chars = [' ', ...[...KNOWS].filter((ch) => !(ch in MARKS))];
 /** (1.8) the letters that sit nearer the one before them only inside a word: how much nearer (x-heights, less than
  * nothing). The hand has them drawn already nearer; the font draws them back where they stand starting a word, and kerns */
 const NEARER = Object.entries(SPACING).filter(([, d]) => d < 0);
 /** (1.8) what's said of the font when it's made: who had read the hand it was made from */
-const READ = 'When it was made, its hand (v30) had been read blind at its own pace by four Claude models, every word, and by two models outside Claude, who misread at least a word each; its s was given its body again after one of those readers took sessions for versions, and on twelve words full of s two Claude readers doubted v27\'s s three times and v30\'s not at all. No person had read it. It has three axes: pace (wght), the time the hand gives a word, from hurried (200) through its own pace (400) to pressed (700); wear (WEAR); and its size (opsz), the hand written small or large with the same pen, so set small its pen is wider against the letters and set large it is finer, chosen by the browser from the size it sets.';
+const READ = 'When it was made, its hand (v34) wrote everything as v30 had, which four Claude models had read blind at its own pace, every word, and two models outside Claude with a word or more misread each, but for its s, set nearer the letter before it (v33): no reader had read that.';
+// (4.1's: 'When it was made, its hand (v30) had been read blind at its own pace by four Claude models, every word, and by two models outside Claude, who misread at least a word each; its s was given its body again after one of those readers took sessions for versions, and on twelve words full of s two Claude readers doubted v27\'s s three times and v30\'s not at all. No person had read it. It has three axes: pace (wght), the time the hand gives a word, from hurried (200) through its own pace (400) to pressed (700); wear (WEAR); and its size (opsz), the hand written small or large with the same pen, so set small its pen is wider against the letters and set large it is finer, chosen by the browser from the size it sets.')
 // (4.0's: 'When it was made, its hand (v27, joined as v26) had been read blind hurried, with care, by three models without a mistake, and at its own pace by one, without a mistake and with doubts at four words; no person had read it. It has three axes: pace (wght), the time the hand gives a word, from hurried (200) through its own pace (400) to pressed (700); wear (WEAR); and its size (opsz), the hand written small or large with the same pen, so set small its pen is wider against the letters and set large it is finer, chosen by the browser from the size it sets.')
 // ('When it was made, its hand (v26) had been read blind hurried, at four times its pace with its pen loosened by care and its f, e, r and v written with care, by three models without a mistake; and at its own pace by one, without a mistake and with doubts at four words, as v25 was. No person had read it. It has two axes: pace (wght), the time the hand gives a word, from hurried (200, four times its own pace, the pen looser) through its own pace (400) to pressed (700); and wear (WEAR, 0 to 50).';)
 // ('When it was made, its hand (v24) at its own pace had been read blind by a model without a doubt, and hurried (four times its pace, its hurried end) by two without a mistake; no person had read it. It has two axes: pace (wght), the hand hurried (200), at its own pace (400) and at the pace it writes what is strong (700), its line as well as its ink moving with the pace; and wear (WEAR), the letters as they stand (0) and as practice for ease left them (100).';)

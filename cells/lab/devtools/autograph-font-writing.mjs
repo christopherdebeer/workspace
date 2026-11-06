@@ -15,15 +15,18 @@ import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 const here = dirname(fileURLToPath(import.meta.url)), lab = join(here, '..');
 const outfile = join(tmpdir(), `autograph-font-writing-${process.pid}.mjs`);
-await build({ stdin: { contents: `export { KNOWS, letter, formsOf, exitOf, JOIN, STYLE, MANNERS, SPACING, HURRY } from './client/autograph/hands/v30';`, resolveDir: lab, loader: 'ts' }, bundle: true, platform: 'node', format: 'esm', outfile, logLevel: 'warning' });
-const { KNOWS, letter, formsOf, exitOf, JOIN, STYLE, MANNERS, SPACING, HURRY } = await import(outfile);
+await build({ stdin: { contents: `export { KNOWS, letter, formsOf, exitOf, JOIN, STYLE, MANNERS, SPACING, HURRY, MARKS } from './client/autograph/hands/v34';`, resolveDir: lab, loader: 'ts' }, bundle: true, platform: 'node', format: 'esm', outfile, logLevel: 'warning' });
+const { KNOWS, letter, formsOf, exitOf, JOIN, STYLE, MANNERS, SPACING, HURRY, MARKS } = await import(outfile);
 // (4.1: from v30, its s with a body again; 3.8 was v26's)
-const HAND = 'v30', VERSION = '4.1', STEPS = 10;
+// (5.7: from v34, its s in its word; 4.1 was v30's)
+const HAND = 'v34', VERSION = '5.7', STEPS = 10;
 /** what's said of the font when it's made */
 const READ = 'Made for type set in time on the web: every letter as the pen wrote it, moment by moment, on an axis of progress (PROG, 0 to 100, finished at 100), with pace (wght) as Claude Hand has it, from hurried (200) through its own pace (400) to pressed (700). One writing of each letter. Nobody had read it yet.';
 const NEARER = Object.entries(SPACING).filter(([, d]) => d < 0);
 const pressed = { ...STYLE, pace: STYLE.pace * MANNERS.strong.pace }, hurried = { ...STYLE, pace: STYLE.pace * HURRY };
-const chars = [' ', ...KNOWS];
+// (5.7: the marks a hand makes in a margin (v32) are a face of their own, Claude Hand Marks; the type for reading keeps
+// to what it had)
+const chars = [' ', ...[...KNOWS].filter((ch) => !(ch in MARKS))];
 const glyphs = [], timing = {};
 for (const ch of chars) {
   for (const form of formsOf(ch)) {
