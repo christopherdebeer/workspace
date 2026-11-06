@@ -22,6 +22,8 @@ export type Entry = {
   type?: { text: string; size: number; calt?: boolean; lh?: string; way?: 'web' | 'app' | 'time'; at?: { pace: number; wear: number; opsz?: number | 'auto' }; script?: string; face?: 'Regular' | 'Pressed' | 'Hurried'; family?: string;
     /** (from session 51) its spaces kept as they are, as code's are: its indents and its alignment */
     pre?: boolean }[];
+  /** (from session 54) the pen it's drawn with: the round pen, as every writing before, or the broad pen (ink.ts BROAD) */
+  pen?: 'round' | 'broad';
   /** the font's version it's set in (each version is kept, so it always comes out as it was set; 0.41 if not given,
    * which has 0.4's glyphs) */
   font?: string;

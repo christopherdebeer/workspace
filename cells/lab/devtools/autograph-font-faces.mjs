@@ -115,8 +115,15 @@ const FACES52 = [
   { family: 'Claude Hand Marks', face: 'Regular', file: 'marks-', hand: 'v32', H: v32, st: v32.STYLE, forms: () => ['i'], chars: [...Object.keys(v32.MARKS), '✓', '•'], says: ': the marks a hand makes in a margin, arrows, a check and a cross, an asterisk and a star, therefore and because, boxes and numbers in circles' },
 ];
 const READ52 = 'Made to mark a page, beside any face of Claude Hand: the marks a hand makes in a margin, each the character its meaning has. Nobody had read it when it was made.';
-const FACES = VERSION === '3.5' ? FACES35 : VERSION === '3.8' ? FACES38 : VERSION === '3.9' ? FACES39 : VERSION === '4.1' ? FACES41 : VERSION === '5.1' ? FACES51 : VERSION === '5.2' ? FACES52 : FACES37;
-const READ = VERSION === '3.5' ? READ35 : VERSION === '3.8' ? { 'Claude Hand': READ38 } : VERSION === '3.9' ? { 'Claude Hand Print': READ39 } : VERSION === '4.1' ? { 'Claude Hand': READ41, 'Claude Hand Print': READ41P } : VERSION === '5.1' ? { 'Claude Hand Mono': READ51 } : VERSION === '5.2' ? { 'Claude Hand Marks': READ52 } : { 'Claude Hand': READ37, 'Claude Hand Nib': READ37 };
+// From 5.4 (session 54), Claude Hand Broad: the hand (v32) as it is, written with a broad pen held at forty degrees
+// instead of the round one, so its downstrokes are broad and the strokes that join its letters are hairlines; for type
+// set large, where the round pen is thin
+const FACES54 = [
+  { family: 'Claude Hand Broad', face: 'Regular', file: 'broad-', hand: 'v32', H: v32, st: v32.STYLE, pen: 'broad', says: ': the hand written with a broad pen held at forty degrees, its downstrokes broad and the strokes that join its letters hairlines, for type set large' },
+];
+const READ54 = 'Made for type set large, beside any face of Claude Hand: the same hand with a broad pen. Nobody had read it when it was made.';
+const FACES = VERSION === '5.4' ? FACES54 : VERSION === '3.5' ? FACES35 : VERSION === '3.8' ? FACES38 : VERSION === '3.9' ? FACES39 : VERSION === '4.1' ? FACES41 : VERSION === '5.1' ? FACES51 : VERSION === '5.2' ? FACES52 : FACES37;
+const READ = VERSION === '3.5' ? READ35 : VERSION === '3.8' ? { 'Claude Hand': READ38 } : VERSION === '3.9' ? { 'Claude Hand Print': READ39 } : VERSION === '4.1' ? { 'Claude Hand': READ41, 'Claude Hand Print': READ41P } : VERSION === '5.1' ? { 'Claude Hand Mono': READ51 } : VERSION === '5.2' ? { 'Claude Hand Marks': READ52 } : VERSION === '5.4' ? { 'Claude Hand Broad': READ54 } : { 'Claude Hand': READ37, 'Claude Hand Nib': READ37 };
 /** (from 3.7) the pair test reports and doesn't stop the build, if asked: a face kept by choice may let letters touch */
 const REPORT = process.env.PAIRS === 'report';
 const only = process.env.FACES ? process.env.FACES.split(',') : null;
@@ -137,7 +144,7 @@ for (const F of FACES) {
     }
   }
   const data = join(tmpdir(), `autograph-font-faces-${process.pid}-${key}.json`);
-  writeFileSync(data, JSON.stringify({ version: VERSION, hand: F.hand, read: READ[F.family], family: F.family, face: F.face, file: F.file, says: F.says, mono: !!F.mono, alts: ALTS, join: JOIN, kern: NEARER.map(([ch, d]) => ({ after: 'inked', ch, by: d * F.st.track })), glyphs }));
+  writeFileSync(data, JSON.stringify({ version: VERSION, hand: F.hand, read: READ[F.family], family: F.family, face: F.face, file: F.file, says: F.says, mono: !!F.mono, pen: F.pen ?? 'round', alts: ALTS, join: JOIN, kern: NEARER.map(([ch, d]) => ({ after: 'inked', ch, by: d * F.st.track })), glyphs }));
   console.log(`${F.family} ${F.face}: ${glyphs.length} glyphs set by hand ${F.hand}, ${ALTS} writings`);
   execFileSync('python3', [join(here, 'autograph-font.py'), data, OUT], { stdio: 'inherit' });
   const ttf = join(OUT, `claude-hand-${F.file}${VERSION}.ttf`), size = statSync(ttf).size;

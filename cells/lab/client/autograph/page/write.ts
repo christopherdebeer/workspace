@@ -20,6 +20,7 @@ export const ACROSS: { name: string; family: string; weight: number; size?: numb
   { name: 'Running', family: 'Claude Hand Running 3.5', weight: 400 },
   { name: 'Print', family: 'Claude Hand Print 4.1', weight: 400 },
   { name: 'Mono, for code', family: 'Claude Hand Mono 5.1', weight: 400 },
+  { name: 'Broad, set large', family: 'Claude Hand Broad 5.4', weight: 400 },
 ];
 
 /** texts to start from, each showing one side of the hand, and why */

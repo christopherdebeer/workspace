@@ -33,7 +33,8 @@ const q = new URLSearchParams(location.search);
 // see one writing again)
 const writing = Number(q.get('seed') ?? 1 + Math.floor(Math.random() * 999999));
 const hero = $('hero') as HTMLCanvasElement, heroSigs = [signature(writing)];
-const heroLook = () => ({ ...lookOf('ink'), weight: 1.15 });
+// (from session 54, signed with the broad pen, as the masthead's title is set with it)
+const heroLook = () => ({ ...lookOf('ink'), weight: 1.15, pen: 'broad' as const });
 const sizeHero = () => sized(hero, heroSigs, q.has('preview') ? innerHeight * 0.8 : 260);
 sizeHero();
 replay(hero, heroSigs, heroLook);

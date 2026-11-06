@@ -19,7 +19,7 @@ Needs fontTools, shapely and brotli (pip install fonttools shapely brotli).
 """
 import json, math, sys, os
 import shapely
-from shapely.geometry import LineString, Point
+from shapely.geometry import LineString, Point, Polygon
 from shapely.geometry.polygon import orient
 from fontTools.fontBuilder import FontBuilder
 from fontTools.pens.ttGlyphPen import TTGlyphPen, TTGlyphPointPen
@@ -83,6 +83,34 @@ def outline(strokes):
     return [orient(p, -1.0) for p in polys if not p.is_empty]
 
 
+# (from 5.4) the broad pen, as the notebook's (ink.ts BROAD): an edge held at 40 degrees, 1.8 of the round pen across,
+# so each step of a stroke is the parallelogram its edge passes over; its own thickness a fine line along the stroke;
+# how fast the hand went telling a little; a dot the nib touched down and drawn a little down
+BROAD = data.get('pen') == 'broad'
+BROAD_ANGLE, BROAD_W, BROAD_R = math.radians(40), 1.8, 5
+
+
+def outline_broad(strokes):
+    """the strokes swept by the broad pen's edge and unioned: a list of polygons"""
+    ex, ey = math.cos(BROAD_ANGLE) / 2, math.sin(BROAD_ANGLE) / 2
+    parts = []
+    for s in strokes:
+        pts = [(x * XH, y * XH, BROAD_W * PEN * XH * (0.75 + 0.25 * w)) for x, y, w in s]
+        if len(pts) == 1:
+            x, y, n = pts[0]
+            pts = [(x, y, n), (x + 0.12 * PEN * XH, y - 0.3 * PEN * XH, n)]
+        for (x0, y0, n0), (x1, y1, n1) in zip(pts, pts[1:]):
+            q = Polygon([(x0 + ex * n0, y0 + ey * n0), (x1 + ex * n1, y1 + ey * n1), (x1 - ex * n1, y1 - ey * n1), (x0 - ex * n0, y0 - ey * n0)])
+            if q.area > 1:
+                parts.append(q if q.is_valid else q.buffer(0))
+        parts.append(LineString([(x, y) for x, y, _ in pts]).buffer(BROAD_R, quad_segs=2))
+    if not parts:
+        return []
+    u = shapely.union_all(parts).simplify(1.2, preserve_topology=True)
+    polys = list(u.geoms) if hasattr(u, 'geoms') else [u]
+    return [orient(p, -1.0) for p in polys if not p.is_empty]
+
+
 def draw(polys):
     pen = TTGlyphPen(None)
     for p in polys:
@@ -122,7 +150,7 @@ glyphs['.notdef'] = TTGlyphPen(None).glyph()
 for g in data['glyphs']:
     n = name(g)
     order.append(n)
-    glyphs[n] = draw_q(g['contours']) if 'contours' in g else draw(outline(g['strokes']))
+    glyphs[n] = draw_q(g['contours']) if 'contours' in g else draw(outline_broad(g['strokes']) if BROAD else outline(g['strokes']))
     adv[n] = max(0, round(g['adv'] * XH))
     if g['form'] == 'i' and g['alt'] == 1:
         cmap[g['code']] = n

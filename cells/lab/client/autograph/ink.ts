@@ -7,6 +7,10 @@
 import type { Sig } from '../switchback/sign';
 
 const PEN = 30;
+/** (from session 54) the broad pen: an edge held at 40 degrees, about a quarter of an x-height across (1.8 of the round
+ * pen), so a line is as thick as the nib is turned across its way: downstrokes broad, the upstrokes that join letters
+ * hairlines along the edge. Its own thickness is a fine line, and how fast the hand went still tells a little */
+export const BROAD = { angle: (40 * Math.PI) / 180, w: 1.8, edge: 0.16 };
 
 /** the ink's width along a stroke, by how fast the hand went there (as the pad's pen), eased */
 function widths(s: number[]) {
@@ -34,7 +38,7 @@ export const ended = (sig: Sig) => sig.reduce((t, s) => Math.max(t, s[s.length -
 
 /** how to draw: ink or time; the colours; as far as `upTo`; the pen's weight; and a scale to share (px a unit), so
  * writings in separate canvases come out the same size */
-export type Look = { mode: 'ink' | 'time'; ink: string; faint: string; upTo?: number; weight?: number; k?: number; solid?: boolean };
+export type Look = { mode: 'ink' | 'time'; ink: string; faint: string; upTo?: number; weight?: number; k?: number; solid?: boolean; pen?: 'round' | 'broad' };
 /** the scale that fits these writings to a canvas of this size */
 export const fitK = (sigs: Sig[], W: number, H: number) => { const b = bounds(sigs), edge = Math.max(6, H * 0.08); return Math.min((W - edge * 2) / b.w, (H - edge * 2) / b.h); };
 
@@ -84,6 +88,7 @@ export function paint(cv: HTMLCanvasElement, sigs: Sig[], look: Look) {
       g.strokeStyle = g.fillStyle = look.ink;
       if (m === 1) { const [x, y] = p(0); g.beginPath(); g.arc(x, y, pen * 0.55, 0, Math.PI * 2); g.fill(); continue; }
       const w = widths(s);
+      if (look.pen === 'broad') { broad(g, s, m, p, w, pen); continue; }
       let [ax, ay] = p(0);
       for (let i = 1; i < m; i++) {
         const [px, py] = p(i), [qx, qy] = i < m - 1 ? p(i + 1) : [px, py], mx = (px + qx) / 2, my = (py + qy) / 2;
@@ -95,6 +100,39 @@ export function paint(cv: HTMLCanvasElement, sigs: Sig[], look: Look) {
     if (layered) { base.save(); base.setTransform(1, 0, 0, 1, 0, 0); base.globalAlpha = 0.42; base.drawImage(layer!, 0, 0); base.restore(); }
   }
   g.globalAlpha = 1;
+}
+
+/** a stroke drawn with the broad pen: the nib swept along the same smoothed line the round pen draws, each step the
+ * parallelogram its edge passes over (all turned one way, so filled together they're one shape, with no seams), and a
+ * fine line along it, the nib's own thickness; a dot is the nib touched down and drawn a little down */
+function broad(g: CanvasRenderingContext2D, s: number[], m: number, p: (i: number) => number[], w: number[], pen: number) {
+  const ex = Math.cos(BROAD.angle) / 2, ey = -Math.sin(BROAD.angle) / 2;
+  const pts: number[][] = [];
+  if (m === 1) { const [x, y] = p(0); pts.push([x, y, 1], [x + pen * 0.12, y + pen * 0.3, 1]); }
+  else {
+    let [ax, ay] = p(0);
+    pts.push([ax, ay, w[0]]);
+    for (let i = 1; i < m; i++) {
+      const [px, py] = p(i), [qx, qy] = i < m - 1 ? p(i + 1) : [px, py], mx = (px + qx) / 2, my = (py + qy) / 2;
+      for (let t = 0.25; t <= 1.001; t += 0.25) {
+        const u = 1 - t;
+        pts.push([u * u * ax + 2 * u * t * px + t * t * mx, u * u * ay + 2 * u * t * py + t * t * my, w[i]]);
+      }
+      ax = mx; ay = my;
+    }
+  }
+  g.beginPath();
+  for (let i = 1; i < pts.length; i++) {
+    const [x0, y0, w0] = pts[i - 1], [x1, y1, w1] = pts[i];
+    const n0 = pen * BROAD.w * (0.75 + 0.25 * w0), n1 = pen * BROAD.w * (0.75 + 0.25 * w1);
+    const c = [[x0 + ex * n0, y0 + ey * n0], [x1 + ex * n1, y1 + ey * n1], [x1 - ex * n1, y1 - ey * n1], [x0 - ex * n0, y0 - ey * n0]];
+    if ((x1 - x0) * ey - (y1 - y0) * ex < 0) c.reverse();
+    g.moveTo(c[0][0], c[0][1]); for (const [x, y] of c.slice(1)) g.lineTo(x, y); g.closePath();
+  }
+  g.fill('nonzero');
+  g.lineWidth = pen * BROAD.edge; g.beginPath();
+  pts.forEach(([x, y], i) => (i ? g.lineTo(x, y) : g.moveTo(x, y)));
+  g.stroke();
 }
 
 /** the writings written out again as they were (all at once, if several), at their own pace or a little quicker */
