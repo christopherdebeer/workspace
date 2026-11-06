@@ -85,7 +85,7 @@ def outline(strokes):
 
 # (from 5.4) the broad pen, as the notebook's (ink.ts BROAD): an edge held at 40 degrees, 1.8 of the round pen across,
 # so each step of a stroke is the parallelogram its edge passes over; its own thickness a fine line along the stroke;
-# how fast the hand went telling a little; a dot the nib touched down and drawn a little down
+# how fast the hand went telling a little; a dot the nib moved across its own width
 BROAD = data.get('pen') == 'broad'
 BROAD_ANGLE, BROAD_W, BROAD_R = math.radians(40), 1.8, 5
 
@@ -96,9 +96,13 @@ def outline_broad(strokes):
     parts = []
     for s in strokes:
         pts = [(x * XH, y * XH, BROAD_W * PEN * XH * (0.75 + 0.25 * w)) for x, y, w in s]
-        if len(pts) == 1:
-            x, y, n = pts[0]
-            pts = [(x, y, n), (x + 0.12 * PEN * XH, y - 0.3 * PEN * XH, n)]
+        # (from 5.5, a dot is the nib moved across its own width, a small diamond; in 5.4, drawn a little way down, along
+        # its edge, it was a shard; and a mark too short to be a stroke, as the i's dot is, is a dot, made where it is)
+        if len(pts) == 1 or sum(math.hypot(b[0] - a[0], b[1] - a[1]) for a, b in zip(pts, pts[1:])) < 0.5 * BROAD_W * PEN * XH:
+            x, y = sum(q[0] for q in pts) / len(pts), sum(q[1] for q in pts) / len(pts)
+            n = BROAD_W * PEN * XH
+            d = 0.45 * n / 2
+            pts = [(x - math.sin(BROAD_ANGLE) * d, y + math.cos(BROAD_ANGLE) * d, n), (x + math.sin(BROAD_ANGLE) * d, y - math.cos(BROAD_ANGLE) * d, n)]
         for (x0, y0, n0), (x1, y1, n1) in zip(pts, pts[1:]):
             q = Polygon([(x0 + ex * n0, y0 + ey * n0), (x1 + ex * n1, y1 + ey * n1), (x1 - ex * n1, y1 - ey * n1), (x0 - ex * n0, y0 - ey * n0)])
             if q.area > 1:

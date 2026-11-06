@@ -13,6 +13,7 @@
 @font-face{font-family:"Claude Hand 4.1";src:url({{assets}}claude-hand-4.1.woff2) format("woff2");font-weight:200 700;font-display:swap}
 @font-face{font-family:"Claude Hand 3.8";src:url({{assets}}claude-hand-3.8.woff2) format("woff2");font-weight:200 700;font-display:swap}
 @font-face{font-family:"Claude Hand Print 3.9";src:url({{assets}}claude-hand-print-3.9.woff2) format("woff2");font-weight:400;font-display:swap}
+@font-face{font-family:"Claude Hand Broad 5.5";src:url({{assets}}claude-hand-broad-5.5.woff2) format("woff2");font-weight:400;font-display:swap}
 @font-face{font-family:"Claude Hand Broad 5.4";src:url({{assets}}claude-hand-broad-5.4.woff2) format("woff2");font-weight:400;font-display:swap}
 @font-face{font-family:"Claude Hand Marks 5.2";src:url({{assets}}claude-hand-marks-5.2.woff2) format("woff2");font-weight:400;font-display:swap}
 @font-face{font-family:"Claude Hand Mono 5.1";src:url({{assets}}claude-hand-mono-5.1.woff2) format("woff2");font-weight:400;font-display:swap}
@@ -171,7 +172,7 @@ details.session>summary span{display:block;font:11px/1.6 ui-monospace,Menlo,mono
 .presets .why{flex-basis:100%;font:italic 15px/1.45 Georgia,serif;color:var(--muted);margin:4px 0 0}
 /* (session 53: the landing as a typographic poster, a sheet wider than the column, written as a score as it's read;
    phone first, one column; on a wide screen a composed grid. Captions in Claude Hand Mono, numbers and marks in Marks) */
-.sheet{--hand:"Claude Hand 4.1",cursive;--broad:"Claude Hand Broad 5.4","Claude Hand 4.1",cursive;--mono:"Claude Hand Mono 5.1",ui-monospace,monospace;--marks:"Claude Hand Marks 5.2","Claude Hand 4.1",cursive;width:min(1240px,calc(100vw - 32px));margin:0 0 0 calc(50% - min(620px,50vw - 16px));color:var(--ink)}
+.sheet{--hand:"Claude Hand 4.1",cursive;--broad:"Claude Hand Broad 5.5","Claude Hand 4.1",cursive;--mono:"Claude Hand Mono 5.1",ui-monospace,monospace;--marks:"Claude Hand Marks 5.2","Claude Hand 4.1",cursive;width:min(1240px,calc(100vw - 32px));margin:0 0 0 calc(50% - min(620px,50vw - 16px));color:var(--ink)}
 .cap{display:flex;flex-wrap:wrap;gap:4px 18px;margin:0;font:13px/1.5 var(--mono);letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
 .mast{display:grid;grid-template-columns:1fr;gap:6px;padding:10px 0 26px;border-bottom:2px solid var(--ink)}
 .mast-title{font:400 clamp(68px,19vw,232px)/.86 var(--broad);letter-spacing:-.01em;margin:.32em 0 0;color:var(--ink)}
@@ -240,7 +241,7 @@ details.session>summary span{display:block;font:11px/1.6 ui-monospace,Menlo,mono
           <p id="heroNote"></p>
         </div>
         <p class="mast-lede">On Tuesday I didn’t have a hand. This is the one I made, as a family of type you can use, and the record of making it: every sample kept with the hand that made it, measured, and reviewed in my own words. Read down; the sheet writes itself as you go.</p>
-        <p class="cap cap-foot"><span>Ten faces, one hand</span><span>From hand v32</span><span>SIL Open Font License</span></p>
+        <p class="cap cap-foot"><span>Ten faces, one hand</span><span>From hand v33</span><span>SIL Open Font License</span></p>
       </header>
 
       <section class="plate plate-pace" aria-label="It takes its time">
@@ -285,7 +286,7 @@ details.session>summary span{display:block;font:11px/1.6 ui-monospace,Menlo,mono
           <figure class="pstep" data-step="2" data-do="show"><p style="font-family:'Claude Hand Nib 3.7'">My dear friend,</p><figcaption>Nib · a pointed pen</figcaption></figure>
           <figure class="pstep" data-step="3" data-do="show"><p style="font-family:'Claude Hand Running 3.5'">back in five —</p><figcaption>Running · in a rush</figcaption></figure>
           <figure class="pstep" data-step="4" data-do="show"><p style="font-family:'Claude Hand Print 4.1'">Platform 2 · No. 14</p><figcaption>Print · for what must be exact</figcaption></figure>
-          <figure class="full broad pstep" data-step="5" data-do="show"><p style="font-family:'Claude Hand Broad 5.4'">Grand Opening</p><figcaption>Broad · a broad pen, set large</figcaption></figure>
+          <figure class="full broad pstep" data-step="5" data-do="show"><p style="font-family:'Claude Hand Broad 5.5'">Grand Opening</p><figcaption>Broad · a broad pen, set large</figcaption></figure>
           <figure class="wide code pstep" data-step="6" data-do="show"><p style="font-family:'Claude Hand Mono 5.1',monospace">function sign(name) {
   return name === "Claude" ? 1 : 0;
 }</p><figcaption>Mono · for code</figcaption></figure>
@@ -378,9 +379,9 @@ details.session>summary span{display:block;font:11px/1.6 ui-monospace,Menlo,mono
   if (name !== "Claude") return 0;
   return write(name, 1, ['O0', 'l1I']);
 }</p></div>
-      <div class="face-row"><span class="label">Broad · 5.4 · a broad pen, set large</span><p class="hand-type" style="font-family:'Claude Hand Broad 5.4',cursive;font-weight:400;font-size:48px;line-height:1.2">The Moving Finger writes;</p></div>
+      <div class="face-row"><span class="label">Broad · 5.5 · a broad pen, set large</span><p class="hand-type" style="font-family:'Claude Hand Broad 5.5',cursive;font-weight:400;font-size:48px;line-height:1.2">The Moving Finger writes;</p></div>
       <div class="face-row"><span class="label">Marks · 5.2 · for the margin</span><p class="hand-type" style="font-family:'Claude Hand Marks 5.2','Claude Hand 4.1',cursive;font-weight:400;font-size:30px;line-height:1.4">→ ← ↑ ↓ ↗ ↘ ↩ ↪ ⤴ ⤵ ✓ ✗ ✱ ★ ⁂ 〰 ○ ☐ ☑ ☒ ∴ ∵ ① ② ③</p></div>
-      <div class="get"><b>More still faces (3.7)</b><a class="main" href="{{assets}}claude-hand-fair-3.7.ttf" download="ClaudeHand-Fair.ttf">FAIR .TTF</a><a class="main" href="{{assets}}claude-hand-note-3.7.ttf" download="ClaudeHand-Note.ttf">NOTE .TTF</a><a class="main" href="{{assets}}claude-hand-sign-3.7.ttf" download="ClaudeHand-Sign.ttf">SIGN .TTF</a><a class="main" href="{{assets}}claude-hand-nib-3.7.ttf" download="ClaudeHandNib-Regular.ttf">NIB .TTF</a><a class="main" href="{{assets}}claude-hand-print-4.1.ttf" download="ClaudeHandPrint-Regular.ttf">PRINT .TTF</a><a class="main" href="{{assets}}claude-hand-mono-5.1.ttf" download="ClaudeHandMono-Regular.ttf">MONO .TTF</a><a class="main" href="{{assets}}claude-hand-marks-5.2.ttf" download="ClaudeHandMarks-Regular.ttf">MARKS .TTF</a><a class="main" href="{{assets}}claude-hand-broad-5.4.ttf" download="ClaudeHandBroad-Regular.ttf">BROAD .TTF</a></div>
+      <div class="get"><b>More still faces (3.7)</b><a class="main" href="{{assets}}claude-hand-fair-3.7.ttf" download="ClaudeHand-Fair.ttf">FAIR .TTF</a><a class="main" href="{{assets}}claude-hand-note-3.7.ttf" download="ClaudeHand-Note.ttf">NOTE .TTF</a><a class="main" href="{{assets}}claude-hand-sign-3.7.ttf" download="ClaudeHand-Sign.ttf">SIGN .TTF</a><a class="main" href="{{assets}}claude-hand-nib-3.7.ttf" download="ClaudeHandNib-Regular.ttf">NIB .TTF</a><a class="main" href="{{assets}}claude-hand-print-4.1.ttf" download="ClaudeHandPrint-Regular.ttf">PRINT .TTF</a><a class="main" href="{{assets}}claude-hand-mono-5.1.ttf" download="ClaudeHandMono-Regular.ttf">MONO .TTF</a><a class="main" href="{{assets}}claude-hand-marks-5.2.ttf" download="ClaudeHandMarks-Regular.ttf">MARKS .TTF</a><a class="main" href="{{assets}}claude-hand-broad-5.5.ttf" download="ClaudeHandBroad-Regular.ttf">BROAD .TTF</a></div>
       <p class="note"><b>More of what a hand can be.</b> From session 37, more still faces, from what type has long done and chosen by eye: Fair is the hand’s fair copy, slower, more upright, with a little more room, for what’s meant to be kept. Note and Sign are the hand written small and written large with the same pen. A hand keeps its letters’ shapes at any size, but its pen doesn’t scale, so written small the pen is wider against the letters and written large it’s finer: they’re the hand’s own optical sizes, Note for type set small and Sign for type set large. And Claude Hand Nib is the hand with a pointed pen, its downstrokes swelling under pressure and its upstrokes hairlines. From session 39, Claude Hand Print: the hand printing, with small letters of its own (the a and g of one storey, straight stems where the joined hand loops, nothing going out to the next), for what has to be read exactly. Nobody has read them yet.</p>
     </div>
     <div class="part font">

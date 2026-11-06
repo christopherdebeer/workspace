@@ -104,11 +104,21 @@ export function paint(cv: HTMLCanvasElement, sigs: Sig[], look: Look) {
 
 /** a stroke drawn with the broad pen: the nib swept along the same smoothed line the round pen draws, each step the
  * parallelogram its edge passes over (all turned one way, so filled together they're one shape, with no seams), and a
- * fine line along it, the nib's own thickness; a dot is the nib touched down and drawn a little down */
+ * fine line along it, the nib's own thickness; a dot is the nib moved across its own width */
 function broad(g: CanvasRenderingContext2D, s: number[], m: number, p: (i: number) => number[], w: number[], pen: number) {
   const ex = Math.cos(BROAD.angle) / 2, ey = -Math.sin(BROAD.angle) / 2;
   const pts: number[][] = [];
-  if (m === 1) { const [x, y] = p(0); pts.push([x, y, 1], [x + pen * 0.12, y + pen * 0.3, 1]); }
+  // (from session 55: a dot is the nib moved across its own width, a small diamond, where drawn a little way down along
+  // its edge, as session 54 had it, it was a shard; and a mark too short to be a stroke, as the i's dot is, is a dot,
+  // made where it is)
+  let len = 0;
+  for (let i = 1; i < m; i++) { const [ax, ay] = p(i - 1), [bx, by] = p(i); len += Math.hypot(bx - ax, by - ay); }
+  if (len < pen * BROAD.w * 0.5) {
+    let cx = 0, cy = 0;
+    for (let i = 0; i < m; i++) { const [x, y] = p(i); cx += x / m; cy += y / m; }
+    const d = (pen * BROAD.w * 0.45) / 2, sx = Math.sin(BROAD.angle) * d, sy = Math.cos(BROAD.angle) * d;
+    pts.push([cx - sx, cy - sy, 1], [cx + sx, cy + sy, 1]);
+  }
   else {
     let [ax, ay] = p(0);
     pts.push([ax, ay, w[0]]);
