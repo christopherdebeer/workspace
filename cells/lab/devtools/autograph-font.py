@@ -56,7 +56,8 @@ def base(ch):
         return 'space'
     if ch.isascii() and ch.isalpha():
         return ch
-    if ch.isdigit():
+    # (only 0 to 9: Python counts ① as a digit too, and the marks have those, from 5.2)
+    if ch in '0123456789':
         return DIGITS[int(ch)]
     return 'uni%04X' % ord(ch)
 

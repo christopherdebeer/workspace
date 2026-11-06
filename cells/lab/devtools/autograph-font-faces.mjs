@@ -28,10 +28,10 @@ import { tmpdir } from 'node:os';
 const here = dirname(fileURLToPath(import.meta.url)), lab = join(here, '..');
 const outfile = join(tmpdir(), `autograph-font-faces-${process.pid}.mjs`);
 await build({
-  stdin: { contents: `export * as v31 from './client/autograph/hands/v31'; export * as v30 from './client/autograph/hands/v30'; export * as v27 from './client/autograph/hands/v27'; export * as v26 from './client/autograph/hands/v26'; export * as v25 from './client/autograph/hands/v25'; export * as v24 from './client/autograph/hands/v24'; export * as v23 from './client/autograph/hands/v23';`, resolveDir: lab, loader: 'ts' },
+  stdin: { contents: `export * as v32 from './client/autograph/hands/v32'; export * as v31 from './client/autograph/hands/v31'; export * as v30 from './client/autograph/hands/v30'; export * as v27 from './client/autograph/hands/v27'; export * as v26 from './client/autograph/hands/v26'; export * as v25 from './client/autograph/hands/v25'; export * as v24 from './client/autograph/hands/v24'; export * as v23 from './client/autograph/hands/v23';`, resolveDir: lab, loader: 'ts' },
   bundle: true, platform: 'node', format: 'esm', outfile, logLevel: 'warning',
 });
-const { v31, v30, v27, v26, v25, v24, v23 } = await import(outfile);
+const { v32, v31, v30, v27, v26, v25, v24, v23 } = await import(outfile);
 const VERSION = process.env.VERSION ?? '3.5', OUT = process.env.FONT_OUT ?? join(lab, 'static/autograph');
 /** the most a file can be for the cell to take it (a signed push carries at most this) */
 const MOST = 720000;
@@ -109,8 +109,14 @@ const FACES51 = [
   { family: 'Claude Hand Mono', face: 'Regular', file: 'mono-', hand: 'v31', H: v31, st: { ...v31.STYLE, mono: v31.MONO_CELL, slant: v31.STYLE.slant * 0.3 }, forms: () => ['i'], mono: true, says: ': the hand printing code, every character in a cell of its own, upright, nothing joined' },
 ];
 const READ51 = 'Made for code, in any app or editor: the hand printing on squared paper. Nobody had read it when it was made.';
-const FACES = VERSION === '3.5' ? FACES35 : VERSION === '3.8' ? FACES38 : VERSION === '3.9' ? FACES39 : VERSION === '4.1' ? FACES41 : VERSION === '5.1' ? FACES51 : FACES37;
-const READ = VERSION === '3.5' ? READ35 : VERSION === '3.8' ? { 'Claude Hand': READ38 } : VERSION === '3.9' ? { 'Claude Hand Print': READ39 } : VERSION === '4.1' ? { 'Claude Hand': READ41, 'Claude Hand Print': READ41P } : VERSION === '5.1' ? { 'Claude Hand Mono': READ51 } : { 'Claude Hand': READ37, 'Claude Hand Nib': READ37 };
+// From 5.2 (session 52), Claude Hand Marks: the marks a hand makes in a margin (v32's MARKS, with its check and bullet),
+// each at the character its meaning has, drawn by the pen; nothing else in it, so set beside any face it marks a page
+const FACES52 = [
+  { family: 'Claude Hand Marks', face: 'Regular', file: 'marks-', hand: 'v32', H: v32, st: v32.STYLE, forms: () => ['i'], chars: [...Object.keys(v32.MARKS), '✓', '•'], says: ': the marks a hand makes in a margin, arrows, a check and a cross, an asterisk and a star, therefore and because, boxes and numbers in circles' },
+];
+const READ52 = 'Made to mark a page, beside any face of Claude Hand: the marks a hand makes in a margin, each the character its meaning has. Nobody had read it when it was made.';
+const FACES = VERSION === '3.5' ? FACES35 : VERSION === '3.8' ? FACES38 : VERSION === '3.9' ? FACES39 : VERSION === '4.1' ? FACES41 : VERSION === '5.1' ? FACES51 : VERSION === '5.2' ? FACES52 : FACES37;
+const READ = VERSION === '3.5' ? READ35 : VERSION === '3.8' ? { 'Claude Hand': READ38 } : VERSION === '3.9' ? { 'Claude Hand Print': READ39 } : VERSION === '4.1' ? { 'Claude Hand': READ41, 'Claude Hand Print': READ41P } : VERSION === '5.1' ? { 'Claude Hand Mono': READ51 } : VERSION === '5.2' ? { 'Claude Hand Marks': READ52 } : { 'Claude Hand': READ37, 'Claude Hand Nib': READ37 };
 /** (from 3.7) the pair test reports and doesn't stop the build, if asked: a face kept by choice may let letters touch */
 const REPORT = process.env.PAIRS === 'report';
 const only = process.env.FACES ? process.env.FACES.split(',') : null;
@@ -121,9 +127,10 @@ for (const F of FACES) {
   const formsOf = F.forms ?? F.H.formsOf;
   const letter = (ch, form, alt, st) => { const was = F.H.CARE?.k; if (F.care != null) F.H.CARE.k = F.care; try { const d = letter0(ch, form, alt, st); return F.shape ? { ...d, strokes: F.shape(d.strokes) } : d; } finally { if (F.care != null) F.H.CARE.k = was; } };
   // (a monospaced face sets nothing nearer anything: every cell the same)
-  const NEARER = F.mono ? [] : Object.entries(SPACING).filter(([, d]) => d < 0);
+  const NEARER = F.mono ? [] : Object.entries(SPACING).filter(([ch, d]) => d < 0 && (!F.chars || F.chars.includes(ch)));
   const glyphs = [];
-  for (const ch of [' ', ...KNOWS]) {
+  // (a face may hold only some characters: the marks)
+  for (const ch of [' ', ...(F.chars ?? KNOWS)]) {
     for (const form of formsOf(ch)) for (let alt = 1; alt <= ALTS; alt++) {
       const d = letter(ch, form, alt, F.st), back = -(NEARER.find(([c]) => c === ch)?.[1] ?? 0) * F.st.track;
       glyphs.push({ ch, code: ch.codePointAt(0), form, alt, step: step(ch), exit: F.st.print ? 'none' : exitOf(ch), adv: d.adv + back, strokes: d.strokes.map((s) => s.map(([x, y, w]) => [+(x + back).toFixed(4), +y.toFixed(4), +w.toFixed(3)])) });
