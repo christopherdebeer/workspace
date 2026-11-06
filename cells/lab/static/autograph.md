@@ -42,6 +42,7 @@ The record is the point. Every sample is kept in the repository with the hand th
   - *v31* (session 51): a hand for code: every character printed in a cell of its own, its look-alikes told apart.
   - *v32* (session 52): the marks a hand makes in a margin: arrows, a check and a cross, an asterisk and a star, therefore and because, boxes, numbers in circles.
   - *v33* (session 55): the s in its word: nearer the letter before it, its top narrower and its foot under its spine.
+  - *v34* (session 56): what the pen does as it goes: <rising>, <falling> and <broad>; nothing in how the hand moves changes.
 - **Samples** (`samples.ts`): each made fresh from its hand, as strokes of points in time, exactly the record a pen pad keeps of a person.
 - **Measures** (`measure.ts`): what graphology looks at (slant, baseline, how joined, speed, pressure, size), measured from the strokes rather than eyeballed. Beside them, in red, what a graphologist would say: given as a claim, because that's what it is (below). The measures are part of the record too: an old one is never changed. New ones are added beside it, like the speed range and stops from session 2.
 - **Catalogue** (`catalog.ts`): what each sample is, what it was made for, my review, and what each session decided. Each session keeps its own file (`sessions/NN.ts`, listed in order in `sessions/index.ts`), so adding one never touches another, and the check fingerprints each recorded session so none can change afterwards, by accident or otherwise.
@@ -682,6 +683,12 @@ The rule, set first: the pen's body at a pace is 110 x (pace / its own pace)^-k,
 - **Hand v33 (BC001):** the s stood apart from the letter before it (eye s, sen se), its white 175% of the white between two n's, the loosest in the hand and loose since it was printed. It couldn't simply come nearer: its foot reached back under that white, and its top into the stroke of letters that go out high. Its top is narrower now, its foot ends under its spine, and it sits 0.18 of an x-height nearer, clear of every letter before it. Still printed, still alone.
 - **Claude Hand Broad 5.5 (BC002),** from v33, on the poster, the Font page and in Write. The type for reading is still from v30, so the hand is ahead of its type again.
 - **Next:** the type for reading caught up with v33.
+**Session 56 (6 November 2026): what the pen does as it goes.** c15r asked whether the pen's broadness should vary, and whether variation can happen inside a letter; I drew the extremes first.
+- **A font varies glyph by glyph; the hand's pen, point by point.** Round to broad over a sentence looked the same continuous, a letter at a time or a word at a time. Turned inside every letter, the nib read as an unsteady hand: inside a letter, variation says something only when the movement causes it. Widening and pressing read as loudness, ink running out as time and effort, a flat broad edge as another voice; a swinging angle just looked wrong.
+- **Hand v34 (BD001, BD002):** <rising>, <falling> and <broad>, reckoned over the whole text; each stroke carries the pen at its start and end, and the notebook's pen, now a shape swept along the line, changes as the stroke goes.
+- **Ink (BD003):** it runs out as the pen writes and is dipped again at a pause; Write draws with it.
+- **In type (BD004)** the pen changes a word at a time, so words keep their joins: louder heavier, softer lighter and paler, the broad voice in Claude Hand Broad.
+- **Next:** the pen as an axis of the variable font, set by size and free for markup; the type for reading caught up with the hand.
 ## Where it's going
 
 1. **A hand that can write anything.** All the letters, figures and marks, in one hand; v1, v2 and on, each kept.

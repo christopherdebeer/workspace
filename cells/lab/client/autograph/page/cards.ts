@@ -52,7 +52,7 @@ export function card(e: Entry): Card {
     `${shown(ms, 'speed', (v) => v.toFixed(1))} heights a second`, `speed varies ${shown(ms, 'spread', (v) => `±${Math.round(v * 100)}%`)}`,
     `quick ${shown(ms, 'range', (v) => `${v.toFixed(1)}×`)} slow`, `${shown(ms, 'stops', (v) => v.toFixed(1))} stops a second`,
     `ink ${shown(ms, 'weight', (v) => v.toFixed(2))}`, `${shown(ms, 'duration', (v) => v.toFixed(1))} s`, `${shown(ms, 'strokes', (v) => String(v))} stroke${ms.every((m) => m.strokes === 1) ? '' : 's'}`,
-    e.pen === 'broad' ? 'the broad pen' : '',
+    e.pen === 'broad' ? 'the broad pen' : '', e.dip ? 'the ink running out' : '',
   ].filter(Boolean);
   el.innerHTML = `
     <header><span class="id">${e.id}</span><h3>${esc(e.title)}</h3><span class="hand">${HANDS[e.hand].name}${isPage ? ` · a page, ${sigs.length} lines` : sigs.length > 1 ? ` · ${sigs.length} writings${e.layout === 'overlay' ? ', laid over each other' : ''}` : ''}</span></header>
@@ -64,7 +64,7 @@ export function card(e: Entry): Card {
     <p class="review">${esc(e.review)}</p>`;
   const cvs = [...el.querySelectorAll('canvas')], groups = rows ? sigs.map((s) => [s]) : [sigs];
   let mode: Look['mode'] = 'ink', k: number | undefined;
-  const look = () => ({ ...lookOf(mode), k, solid: isPage, pen: e.pen });
+  const look = () => ({ ...lookOf(mode), k, solid: isPage, pen: e.pen, dip: e.dip });
   const draw = () => cvs.forEach((cv, i) => paint(cv, groups[i], look()));
   const write = () => cvs.forEach((cv, i) => replay(cv, groups[i], look));
   // (rows share one scale, the one that fits them all, so they're the same size of writing)

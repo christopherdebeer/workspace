@@ -4,7 +4,7 @@
 import type { Sig } from '../switchback/sign';
 
 /** every hand, in the order they were made (each session that makes one adds it here) */
-export type HandId = 'scribble' | 'v0' | 'v1' | 'v2' | 'v3' | 'v4' | 'v5' | 'v6' | 'v7' | 'v8' | 'v9' | 'v10' | 'v11' | 'v12' | 'v13' | 'v14' | 'v15' | 'v16' | 'v17' | 'v18' | 'v19' | 'v20' | 'v21' | 'v22' | 'v23' | 'v24' | 'v25' | 'v26' | 'v27' | 'v28' | 'v29' | 'v30' | 'v31' | 'v32' | 'v33' | 'font';
+export type HandId = 'scribble' | 'v0' | 'v1' | 'v2' | 'v3' | 'v4' | 'v5' | 'v6' | 'v7' | 'v8' | 'v9' | 'v10' | 'v11' | 'v12' | 'v13' | 'v14' | 'v15' | 'v16' | 'v17' | 'v18' | 'v19' | 'v20' | 'v21' | 'v22' | 'v23' | 'v24' | 'v25' | 'v26' | 'v27' | 'v28' | 'v29' | 'v30' | 'v31' | 'v32' | 'v33' | 'v34' | 'font';
 export type Hand = { name: string; made: string; about: string };
 
 export type Entry = {
@@ -24,6 +24,8 @@ export type Entry = {
     pre?: boolean }[];
   /** (from session 54) the pen it's drawn with: the round pen, as every writing before, or the broad pen (ink.ts BROAD) */
   pen?: 'round' | 'broad';
+  /** (from session 56) drawn with ink that runs out as the hand writes, the pen dipped again at a pause */
+  dip?: boolean;
   /** the font's version it's set in (each version is kept, so it always comes out as it was set; 0.41 if not given,
    * which has 0.4's glyphs) */
   font?: string;

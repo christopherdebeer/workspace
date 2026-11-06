@@ -38,7 +38,20 @@ export const ended = (sig: Sig) => sig.reduce((t, s) => Math.max(t, s[s.length -
 
 /** how to draw: ink or time; the colours; as far as `upTo`; the pen's weight; and a scale to share (px a unit), so
  * writings in separate canvases come out the same size */
-export type Look = { mode: 'ink' | 'time'; ink: string; faint: string; upTo?: number; weight?: number; k?: number; solid?: boolean; pen?: 'round' | 'broad' };
+export type Look = { mode: 'ink' | 'time'; ink: string; faint: string; upTo?: number; weight?: number; k?: number; solid?: boolean; pen?: 'round' | 'broad';
+  /** (from session 56) the pen's ink runs out as it writes, and it's dipped again at a pause */
+  dip?: boolean };
+
+/** (from session 56) where the pen is, as the hand carries it on a stroke (hands/v34.ts, `pen`): its press, -1 to 1, and
+ * its voice, round 0 to broad 1, at the stroke's start and end */
+type PenAt = { press: number; voice: number };
+const penOf = (s: number[]) => (s as { pen?: [PenAt, PenAt] }).pen;
+/** how much louder the pen is at its hardest (its width, times), and how much finer and paler as it lifts off */
+const LOUD = { up: 1.3, down: 0.5, pale: 0.55 };
+/** how the ink runs out: how much a stroke's length uses (per x-height of line, at the round pen's width), how pale the
+ * pen is when it's nearly dry, and when it's dipped: at the first pause once it's below `low`, or straight away below
+ * `dry`; a pause is the pen off the paper longer than `pause` seconds */
+const INK = { use: 0.011, palest: 0.38, low: 0.45, dry: 0.12, pause: 0.22 };
 /** the scale that fits these writings to a canvas of this size */
 export const fitK = (sigs: Sig[], W: number, H: number) => { const b = bounds(sigs), edge = Math.max(6, H * 0.08); return Math.min((W - edge * 2) / b.w, (H - edge * 2) / b.h); };
 
@@ -60,6 +73,9 @@ export function paint(cv: HTMLCanvasElement, sigs: Sig[], look: Look) {
   const layered = sigs.length > 1 && !look.solid;
   if (layered && (!layer || layer.width !== cv.width || layer.height !== cv.height)) { layer = document.createElement('canvas'); layer.width = cv.width; layer.height = cv.height; }
   const base = g;
+  // (from session 56: how much ink the pen has, carried from stroke to stroke in the order they were written)
+  let wet = 1, lastEnd = -Infinity;
+  const xh = (pen * 220) / PEN;
   for (const sig of sigs) {
     const g = layered ? layer!.getContext('2d')! : base;
     if (layered) { g.setTransform(1, 0, 0, 1, 0, 0); g.clearRect(0, 0, layer!.width, layer!.height); g.setTransform(dpr, 0, 0, dpr, 0, 0); }
@@ -86,6 +102,17 @@ export function paint(cv: HTMLCanvasElement, sigs: Sig[], look: Look) {
         continue;
       }
       g.strokeStyle = g.fillStyle = look.ink;
+      // (from session 56: a pen that changes as it goes, or ink that runs out, is drawn as a shape swept along the line)
+      const pp = penOf(s);
+      if (pp || look.dip) {
+        if (look.dip) {
+          const t0 = s[2] / 100;
+          if (wet < INK.dry || (wet < INK.low && t0 - lastEnd > INK.pause)) wet = 1;
+          lastEnd = s[(m - 1) * 3 + 2] / 100;
+        }
+        wet = sweep(g, s, m, p, widths(s), pen, xh, look.pen === 'broad', pp, look.dip ? wet : null);
+        continue;
+      }
       if (m === 1) { const [x, y] = p(0); g.beginPath(); g.arc(x, y, pen * 0.55, 0, Math.PI * 2); g.fill(); continue; }
       const w = widths(s);
       if (look.pen === 'broad') { broad(g, s, m, p, w, pen); continue; }
@@ -143,6 +170,85 @@ function broad(g: CanvasRenderingContext2D, s: number[], m: number, p: (i: numbe
   g.lineWidth = pen * BROAD.edge; g.beginPath();
   pts.forEach(([x, y], i) => (i ? g.lineTo(x, y) : g.moveTo(x, y)));
   g.stroke();
+}
+
+/** (from session 56) a stroke drawn with the pen as a shape swept along the same smoothed line: at each point a rounded
+ * edge (as wide as the pen, as thick as its edge, at its angle; the round pen is the one whose edge is as thick as it is
+ * wide), each step the hull of where it was and where it is, all of a shade filled together so nothing darkens itself.
+ * Where the hand carries the pen on the stroke, it goes from the start's to the end's as the stroke goes: louder wider,
+ * softer finer and paler, and from round to broad. With ink that runs out (`wet`, given), each step uses some and the
+ * shade follows it; it returns what's left */
+const swept = new WeakMap<number[], { key: string; shades: Map<number, Path2D>; wet: number }>();
+function sweep(g: CanvasRenderingContext2D, s: number[], m: number, p: (i: number) => number[], w: number[], pen: number, xh: number, broadLook: boolean, pp: [PenAt, PenAt] | undefined, wet: number | null): number {
+  // (a whole stroke drawn as it was last time is drawn from what was kept, so writing it out again frame by frame
+  // only works out the stroke being written)
+  const whole = m * 3 >= s.length, [kx, ky] = p(0), key = `${kx},${ky},${pen},${broadLook},${wet}`;
+  const kept = whole ? swept.get(s) : undefined;
+  if (kept && kept.key === key) { fill(g, kept.shades); return kept.wet; }
+  const t0 = s[2], t1 = s[(m - 1) * 3 + 2], at = (t: number) => (t1 > t0 ? (t - t0) / (t1 - t0) : 0);
+  const penAt = (u: number) => pp ? { press: pp[0].press + (pp[1].press - pp[0].press) * u, voice: pp[0].voice + (pp[1].voice - pp[0].voice) * u } : { press: 0, voice: 0 };
+  // (the line, smoothed as the round pen draws it, with the time and the speed's width at each point)
+  const pts: number[][] = [];
+  let [ax, ay] = p(0);
+  pts.push([ax, ay, s[2], w[0]]);
+  for (let i = 1; i < m; i++) {
+    const [px, py] = p(i), [qx, qy] = i < m - 1 ? p(i + 1) : [px, py], mx = (px + qx) / 2, my = (py + qy) / 2;
+    for (let t = 0.5; t <= 1.001; t += 0.5) { const u = 1 - t; pts.push([u * u * ax + 2 * u * t * px + t * t * mx, u * u * ay + 2 * u * t * py + t * t * my, s[(i - 1) * 3 + 2] + (s[i * 3 + 2] - s[(i - 1) * 3 + 2]) * t, w[i]]); }
+    ax = mx; ay = my;
+  }
+  const a = BROAD.angle, ux = Math.cos(a), uy = -Math.sin(a), nx = Math.sin(a), ny = Math.cos(a);
+  // (the pen's shape at a point: how wide, how thick, how dark)
+  const shape = (q: number[]) => {
+    const { press, voice } = penAt(at(q[2])), v = broadLook ? 1 : Math.max(0, Math.min(1, voice));
+    const loud = press >= 0 ? 1 + LOUD.up * press : 1 + LOUD.down * press;
+    const round = pen * q[3] * loud, wide = pen * BROAD.w * (0.75 + 0.25 * q[3]) * loud, edge = pen * BROAD.edge * Math.min(1, loud);
+    return { wd: round + (wide - round) * v, th: round + (edge - round) * v, shade: press < 0 ? 1 + LOUD.pale * press : 1, loud, v };
+  };
+  const foot = (cx: number, cy: number, wd: number, th: number) => {
+    const half = Math.max(0, wd - th) / 2, r = th / 2, out: number[][] = [];
+    for (let j = 0; j < 10; j++) { const t = (2 * Math.PI * j) / 10, lx = Math.cos(t) * r + (Math.cos(t) >= 0 ? half : -half), ly = Math.sin(t) * r; out.push([cx + lx * ux + ly * nx, cy + lx * uy + ly * ny]); }
+    return out;
+  };
+  const hull = (P: number[][]) => {
+    P.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+    const cr = (o: number[], a: number[], b: number[]) => (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]), lo: number[][] = [], up: number[][] = [];
+    for (const q of P) { while (lo.length >= 2 && cr(lo[lo.length - 2], lo[lo.length - 1], q) <= 0) lo.pop(); lo.push(q); }
+    for (let i = P.length - 1; i >= 0; i--) { const q = P[i]; while (up.length >= 2 && cr(up[up.length - 2], up[up.length - 1], q) <= 0) up.pop(); up.push(q); }
+    return lo.slice(0, -1).concat(up.slice(0, -1));
+  };
+  const shades = new Map<number, Path2D>();
+  const add = (poly: number[][], shade: number) => {
+    const key = Math.round(shade * 12) / 12;
+    let pa = shades.get(key); if (!pa) shades.set(key, (pa = new Path2D()));
+    poly.forEach(([x, y], j) => (j ? pa!.lineTo(x, y) : pa!.moveTo(x, y))); pa.closePath();
+  };
+  const tone = () => (wet === null ? 1 : INK.palest + (1 - INK.palest) * Math.pow(Math.max(0, wet), 0.7));
+  // (a mark too short to be a stroke is a dot: round, a dot as the round pen makes one; broad, the nib moved across its width)
+  let len = 0;
+  for (let i = 1; i < pts.length; i++) len += Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]);
+  const sh0 = shape(pts[0]);
+  if (m === 1 || (sh0.v > 0.5 && len < sh0.wd * 0.5)) {
+    let cx = 0, cy = 0; for (const q of pts) { cx += q[0] / pts.length; cy += q[1] / pts.length; }
+    const d = (sh0.wd * 0.45) / 2, r = pen * 1.1 * sh0.loud;
+    add(sh0.v > 0.5 ? hull([...foot(cx - nx * d, cy - ny * d, sh0.wd, sh0.th), ...foot(cx + nx * d, cy + ny * d, sh0.wd, sh0.th)]) : foot(cx, cy, r, r), sh0.shade * tone());
+  } else {
+    let prev = foot(pts[0][0], pts[0][1], sh0.wd, sh0.th);
+    for (let i = 1; i < pts.length; i++) {
+      const sh = shape(pts[i]), cur = foot(pts[i][0], pts[i][1], sh.wd, sh.th);
+      if (wet !== null) wet -= (Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]) / xh) * INK.use * (sh.wd / pen);
+      // (pressing harder uses the ink quicker, and pushes more of it out: a pressed line is dark however dry the pen)
+      add(hull([...prev, ...cur]), sh.shade * Math.min(1, tone() + 0.8 * Math.max(0, sh.loud - 1) / LOUD.up));
+      prev = cur;
+    }
+  }
+  fill(g, shades);
+  if (whole) swept.set(s, { key, shades, wet: wet ?? 1 });
+  return wet ?? 1;
+}
+function fill(g: CanvasRenderingContext2D, shades: Map<number, Path2D>) {
+  const was = g.globalAlpha;
+  for (const [shade, pa] of shades) { g.globalAlpha = was * shade; g.fill(pa, 'nonzero'); }
+  g.globalAlpha = was;
 }
 
 /** the writings written out again as they were (all at once, if several), at their own pace or a little quicker */

@@ -26,6 +26,7 @@ export const ACROSS: { name: string; family: string; weight: number; size?: numb
 /** texts to start from, each showing one side of the hand, and why */
 export const PRESETS: { name: string; text: string; why: string }[] = [
   { name: 'What I mean', text: 'Say what you mean, and the hand decides how it looks: I never said *she* stole my money. It took me ~~an afternoon~~ <ins>two days</ins> to see the e, and I <unsure>think</unsure> this <mark>one</mark> is **mine**.', why: 'Every mark the hand makes: stressed, pressed, struck, added later, unsure, circled.' },
+  { name: 'Louder, and softer', text: 'It <rising>gets louder, and louder, and louder</rising>, then <falling>trails away to almost nothing</falling>. Said in a round hand, then <broad>in another voice</broad>.', why: 'The pen as it goes: pressing harder and harder, lifting off, and a broad pen for another voice. In type, a word at a time.' },
   { name: 'Changing my mind', text: 'I ~~think~~ <ins>know</ins> the f was the hardest letter to learn, and I’m <unsure>almost</unsure> sure it’s <mark>done</mark>.', why: 'A mind changing on the page: struck through and left readable, the new word over the line, a doubt, a circle.' },
   { name: 'Hurry and care', text: 'The Moving Finger writes; (and, having writ,) **moves on**: nor all thy Piety nor Wit', why: 'An aside comes quicker and smaller; what’s strong, slower and pressed. Turn the pace down to hurry the rest: the f, e, r and v keep their care.' },
   { name: 'Every letter', text: 'Sphinx of black quartz, judge my vow. The quick brown fox jumps over the lazy dog. JACKDAWS LOVE MY BIG SPHINX OF QUARTZ.', why: 'Every letter, small and capital, and how each one joins the letter before it.' },
@@ -49,7 +50,8 @@ export function initWrite(handPage: (text: string, width: number, seed: number) 
     mark.dispatchEvent(new Event('input'));
   });
   let wSeed = seed, wSigs: Sig[] = [], wWidth = 0, wTimer = 0;
-  const wLook = () => ({ ...lookOf('ink'), solid: true });
+  // (from session 56, the pen's ink runs out as it writes at length, and it's dipped again at a pause)
+  const wLook = () => ({ ...lookOf('ink'), solid: true, dip: true });
   const lineWidth = () => Math.max(12, Math.min(30, Math.round((written.clientWidth || 340) / 20)));
   $('writeHand').textContent = `${HANDS[NEWEST].name} · everything you marked, in time · not text`;
   function writeOut(watch = true) {
