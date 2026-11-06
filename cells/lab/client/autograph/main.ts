@@ -20,12 +20,13 @@ import { CATALOG, HANDS, NEWEST, SESSIONS } from './catalog';
 import { paint, replay } from './ink';
 // (my signature, and the hand that writes what you type: the newest hand; autograph-check.mjs fails if this isn't the
 // hand the record says is newest)
-import { signature, page as handPage } from './hands/v34';
+import { signature, page as handPage, write as handWrite } from './hands/v34';
 import { $, esc, lookOf, sized } from './page/ui';
 import { initWrite } from './page/write';
 import { buildBook } from './page/book';
 import { buildRecord } from './page/record';
 import { buildPoster } from './page/poster';
+import { buildSpecimen } from './page/specimen';
 
 const q = new URLSearchParams(location.search);
 
@@ -59,12 +60,14 @@ const SCRIPTS = ['3.1', '3.2', '3.3', '3.4', '3.8', '4.1', '5.7'];
 // (the parts, each built when it's first shown)
 type View = 'home' | 'write' | 'font' | 'book' | 'record';
 const VIEWS: View[] = ['home', 'write', 'font', 'book', 'record'];
-let poster: ReturnType<typeof buildPoster> | null = null, write: ReturnType<typeof initWrite> | null = null, book: ReturnType<typeof buildBook> | null = null, record: ReturnType<typeof buildRecord> | null = null;
+let specimen: ReturnType<typeof buildSpecimen> | null = null, poster: ReturnType<typeof buildPoster> | null = null, write: ReturnType<typeof initWrite> | null = null, book: ReturnType<typeof buildBook> | null = null, record: ReturnType<typeof buildRecord> | null = null;
 function show(v: View) {
   for (const el of document.querySelectorAll<HTMLElement>('.view')) el.hidden = el.dataset.view !== v;
   for (const a of document.querySelectorAll<HTMLAnchorElement>('nav.tabs a')) { if (a.dataset.view === v) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current'); }
   // (the poster plays its own score; the font's script and writing font only when its first plate written in time is near)
   if (v === 'home' && !poster) poster = buildPoster($('poster'), handPage, writing, () => script('5.7'));
+  // (from session 59, the specimen: the sheet written by the hand, not set)
+  if (v === 'home' && !specimen) specimen = buildSpecimen($('specimen'), { write: handWrite, page: handPage, signature }, writing);
   if (v === 'write' && !write) { write = initWrite(handPage, writing); void script('5.7').then(() => write?.inTime()); }
   if (v === 'book' && !book) book = buildBook($('toc'), $('chapters'));
   if (v === 'record' && !record) record = buildRecord($('catalog'), Promise.all(SCRIPTS.map(script)).then(() => {}));
@@ -91,9 +94,9 @@ route();
 
 addEventListener('resize', () => {
   sizeHero(); paint(hero, heroSigs, heroLook());
-  poster?.size(); record?.size(); book?.size(); write?.resize();
+  poster?.size(); specimen?.size(); record?.size(); book?.size(); write?.resize();
 });
-matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { paint(hero, heroSigs, heroLook()); poster?.size(); record?.size(); book?.size(); write?.repaint(); });
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { paint(hero, heroSigs, heroLook()); poster?.size(); specimen?.size(); record?.size(); book?.size(); write?.repaint(); });
 
 (window as unknown as { __autograph: unknown }).__autograph = {
   samples: CATALOG.length, sessions: SESSIONS.length,
