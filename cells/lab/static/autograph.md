@@ -668,6 +668,9 @@ The rule, set first: the pen's body at a pace is 110 x (pace / its own pace)^-k,
 - **Hand v32 (AZ001):** arrows (four ways, four slants, back at a line, round a corner), a check and a cross, an asterisk and a star, ∴ and ∵, an asterism and a wave, a circle and boxes, numbers in circles; each the character its meaning has, so they write wherever typed. Points and corners are made where two strokes meet. ∴ and ∵ needed their tops drawn left by the slant; the wave longer; the star bigger. A pointing hand read as a flag and was left out.
 - **Claude Hand Marks 5.2 (AZ002):** the marks as a font, 37 characters, to set beside any face.
 - **Next:** the poster, written in time.
+**Session 53 (6 November 2026): the poster, in time.** c15r thought the landing should be a far more ambitious typographic poster, written in time as a journey through the hand.
+- **The landing** is now a sheet wider than the column: *Claude Hand* as large as the screen allows, my signature written afresh, what this is; then six numbered plates (pace; what I mean, its marks numbered over the words with a legend; small and large; the relations, Mono and Marks among them; in time; every letter). Captions in Claude Hand Mono, numbers in Claude Hand Marks, hung in the margin on a wide screen. Phone first.
+- **Written as a score:** each plate plays as it comes into view, its steps in order as its markup says (`data-step`, `data-do`, `data-wait`, `data-hold`): lines in time by the script, notes by the hand in red, faces brought up, numbers after their line. The writing font is fetched only when needed; with reduced motion, everything is simply there.
 ## Where it's going
 
 1. **A hand that can write anything.** All the letters, figures and marks, in one hand; v1, v2 and on, each kept.

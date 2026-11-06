@@ -2,8 +2,9 @@
  * Autograph: the notebook, in five parts, one shown at a time (from the page's re-ordering after session 38, when it had
  * grown too long to take in, and too heavy to open, as one):
  *
- * - Autograph (home): my signature as it stands, written afresh; what this is; the family as a poster, its range at a
- *   glance, annotated in the margins in my own hand; the latest session; and a way into each of the rest.
+ * - Autograph (home): a typographic poster of the family (from session 53), written as a score as it's read: Claude Hand
+ *   large, my signature written afresh, what this is, and six numbered plates, each one thing the hand does, with notes
+ *   in my hand; then the latest session, and a way into each of the rest.
  * - Write: one input, written by the hand and set in type, on the web with the font's stylesheet and script or as any
  *   app sets the font alone, at a pace and a wear; and set in every face and family at once.
  * - Font: Claude Hand, each face as a specimen beside its download, for the web and for any app, and how I'd like it used.
@@ -25,7 +26,6 @@ import { initWrite } from './page/write';
 import { buildBook } from './page/book';
 import { buildRecord } from './page/record';
 import { buildPoster } from './page/poster';
-import { timedAs } from './page/ui';
 
 const q = new URLSearchParams(location.search);
 
@@ -62,12 +62,8 @@ let poster: ReturnType<typeof buildPoster> | null = null, write: ReturnType<type
 function show(v: View) {
   for (const el of document.querySelectorAll<HTMLElement>('.view')) el.hidden = el.dataset.view !== v;
   for (const a of document.querySelectorAll<HTMLAnchorElement>('nav.tabs a')) { if (a.dataset.view === v) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current'); }
-  if (v === 'home' && !poster) {
-    poster = buildPoster($('poster'), handPage, writing);
-    // (the line written in time: its script and writing font only once it's nearly in view)
-    const line = $('posterTime'), near = new IntersectionObserver((es) => { if (es.some((e) => e.isIntersecting)) { near.disconnect(); void script('4.1').then(() => timedAs('4.1')?.watch(line)); } }, { rootMargin: '200px' });
-    near.observe(line);
-  }
+  // (the poster plays its own score; the font's script and writing font only when its first plate written in time is near)
+  if (v === 'home' && !poster) poster = buildPoster($('poster'), handPage, writing, () => script('4.1'));
   if (v === 'write' && !write) { write = initWrite(handPage, writing); void script('4.1').then(() => write?.inTime()); }
   if (v === 'book' && !book) book = buildBook($('toc'), $('chapters'));
   if (v === 'record' && !record) record = buildRecord($('catalog'), Promise.all(SCRIPTS.map(script)).then(() => {}));

@@ -168,73 +168,146 @@ details.session>summary span{display:block;font:11px/1.6 ui-monospace,Menlo,mono
 .presets button{font:11px/1 ui-monospace,Menlo,monospace;letter-spacing:.08em;background:none;color:var(--ink);border:1px solid var(--ink);padding:8px 10px;min-height:34px;cursor:pointer}
 .presets button[aria-pressed=true]{color:var(--paper);background:var(--ink)}
 .presets .why{flex-basis:100%;font:italic 15px/1.45 Georgia,serif;color:var(--muted);margin:4px 0 0}
-/* (the landing as a poster: the family's range, big, annotated in the margins in the hand; wider than the column) */
-.poster{width:min(1040px,calc(100vw - 40px));margin:26px 0 0 calc(50% - min(520px,50vw - 20px));border-top:2px solid var(--ink)}
-.prow{display:grid;grid-template-columns:1fr;gap:2px 28px;border-bottom:1px solid var(--rule);padding:14px 0 10px;align-items:center}
-@media (min-width:900px){.prow{grid-template-columns:minmax(0,1fr) 240px}}
-.pmain{min-width:0;color:var(--ink);font-family:"Claude Hand 4.1",cursive}
-.pmain p{margin:0}
-.ptitle{font-family:"Claude Hand Sign 3.7",cursive;font-size:clamp(60px,19vw,168px);line-height:1;letter-spacing:-.01em;margin:0;padding-top:.32em}
-.pace p{font-size:clamp(40px,11vw,92px);line-height:1.08;font-variation-settings:"opsz" 24}
-/* (the pace row held at the hand's size for text, so the ink pace leaves shows at a poster's size; the rest is left to the browser) */
-.pmarked{font-size:clamp(28px,7vw,52px);line-height:1.5}
-.ptime{font-size:clamp(28px,7vw,52px);line-height:1.25}
-.pchars{font-size:clamp(26px,6vw,40px);line-height:1.45;overflow-wrap:anywhere}
-.tiles{display:grid;grid-template-columns:1fr 1fr;gap:14px 18px}
-.tiles figure{margin:0;border-top:1px solid var(--rule);padding-top:6px}.tiles .wide{grid-column:1/-1}
-.tiles p{font-size:clamp(22px,5.4vw,34px);line-height:1.3}.tiles p.big{font-size:clamp(56px,16vw,120px);line-height:1}.tiles p.small{font-size:13px;line-height:1.45}
-.tiles figcaption,.kicker{font:11px/1.5 ui-monospace,Menlo,monospace;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);margin-top:4px}
-.margin-note{justify-self:end;width:min(190px,56%);transform:rotate(-2deg);margin:2px 4px 0 0}
+/* (session 53: the landing as a typographic poster, a sheet wider than the column, written as a score as it's read;
+   phone first, one column; on a wide screen a composed grid. Captions in Claude Hand Mono, numbers and marks in Marks) */
+.sheet{--hand:"Claude Hand 4.1",cursive;--mono:"Claude Hand Mono 5.1",ui-monospace,monospace;--marks:"Claude Hand Marks 5.2","Claude Hand 4.1",cursive;width:min(1240px,calc(100vw - 32px));margin:0 0 0 calc(50% - min(620px,50vw - 16px));color:var(--ink)}
+.cap{display:flex;flex-wrap:wrap;gap:4px 18px;margin:0;font:13px/1.5 var(--mono);letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+.mast{display:grid;grid-template-columns:1fr;gap:6px;padding:10px 0 26px;border-bottom:2px solid var(--ink)}
+.mast-title{font:400 clamp(68px,19vw,232px)/.86 var(--hand);font-optical-sizing:auto;letter-spacing:-.01em;margin:.32em 0 0;color:var(--ink)}
+.mast-sig{margin-top:-4px}.mast-sig #hero{display:block;width:100%;cursor:pointer}
+#heroNote{font:12px/1.4 var(--mono);letter-spacing:.06em;text-transform:uppercase;color:var(--muted);text-align:right;margin:2px 0 6px;border-top:1px solid var(--rule);padding-top:8px}
+.mast-lede{font:clamp(19px,2.4vw,24px)/1.45 Georgia,serif;color:var(--text);margin:6px 0 4px;max-width:36em}
+.cap-foot{margin-top:6px}
+@media (min-width:900px){.mast{grid-template-columns:minmax(0,7fr) minmax(0,5fr);column-gap:40px;align-items:end}.mast .cap:first-child,.mast-title{grid-column:1/-1}.mast-sig{grid-column:2;grid-row:3/5;align-self:center}.mast-lede{grid-column:1;grid-row:3}.cap-foot{grid-column:1;grid-row:4}}
+.plate{padding:18px 0 26px;border-bottom:1px solid var(--rule);scroll-margin-top:56px}
+.plate-head{display:flex;align-items:baseline;gap:14px;margin:0 0 12px;font-weight:400}
+.plate-head .num{font:clamp(30px,5vw,44px)/1 var(--marks);color:var(--red)}
+@media (min-width:900px){.plate{position:relative;padding-left:104px}.plate-head .num{position:absolute;left:0;top:14px;font-size:76px}.sheet-foot{padding-left:104px}}
+.plate-title{font:clamp(26px,4.4vw,40px)/1.1 var(--hand);color:var(--ink)}
+.plate-body{display:grid;grid-template-columns:1fr;gap:10px 40px;align-items:center}
+@media (min-width:900px){.plate-body{grid-template-columns:minmax(0,1fr) 260px}}
+.mk{font-family:var(--marks);color:var(--red)}
+.pstep{opacity:1;transition:opacity .6s ease,transform .6s ease}
+.sheet.scored .pstep{opacity:0;transform:translateY(6px)}.sheet.scored .pstep.on{opacity:1;transform:none}
+.pace p{margin:0;font:clamp(40px,10vw,104px)/1.08 var(--hand)}
+.scale{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 14px;margin:12px 0 0!important;font:13px/1.5 var(--mono)!important;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}.scale .mk{font-size:30px}
+.mean{font:clamp(30px,6.4vw,64px)/1.6 var(--hand);margin:6px 0 10px;color:var(--ink)}
+.mean .pnum{position:absolute;left:50%;top:-.95em;transform:translateX(-50%);font:.42em/1 var(--marks);color:var(--red);opacity:0;transition:opacity .4s ease;pointer-events:none;text-decoration:none}
+.mean .pnum.on,.sheet:not(.scored) .mean .pnum{opacity:1}
+.mean del,.mean strong,.mean b,.mean unsure,.mean mark,.mean care{position:relative}
+.legend{list-style:none;margin:6px 0 0;padding:0;display:grid;grid-template-columns:1fr;gap:4px 28px;font:clamp(18px,2.4vw,22px)/1.4 var(--hand);color:var(--red)}
+.legend li{display:flex;gap:10px;align-items:baseline}.legend .mk{font-size:1.15em}
+@media (min-width:700px){.legend{grid-template-columns:1fr 1fr}}@media (min-width:1100px){.legend{grid-template-columns:1fr 1fr 1fr}}
+.plate-size .plate-body{align-items:end}
+.sign{font-size:clamp(72px,20vw,230px);line-height:.92;margin:0;color:var(--ink)}
+.note{font-size:15px;line-height:1.5;max-width:22em;margin:0;color:var(--ink);transform:rotate(-1.5deg)}
+@media (min-width:900px){.plate-size .plate-body{grid-template-columns:minmax(0,1fr) 260px}.plate-size .sign{grid-column:1/-1}.plate-size .note{grid-column:1;justify-self:end}}
+.kin{display:grid;grid-template-columns:1fr 1fr;gap:16px 20px}
+.kin figure{margin:0;border-top:1px solid var(--rule);padding-top:8px;min-width:0}.kin .wide{grid-column:1/-1}
+.kin p{margin:0;font-size:clamp(24px,5.4vw,40px);line-height:1.25;color:var(--ink);overflow-wrap:anywhere}
+.kin .code p{font-size:clamp(14px,2.6vw,22px);line-height:1.45;white-space:pre;overflow-x:auto}
+.kin .marks{font-size:clamp(26px,5vw,42px);letter-spacing:.06em}
+.kin figcaption{font:12px/1.5 var(--mono);letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin-top:6px}
+@media (min-width:900px){.kin{grid-template-columns:repeat(4,minmax(0,1fr))}.kin .wide{grid-column:span 2}}
+.ptime{font:clamp(30px,6.4vw,64px)/1.25 var(--hand);margin:0;color:var(--ink)}
+.chars{font:clamp(26px,5vw,44px)/1.45 var(--hand);margin:0;overflow-wrap:anywhere;color:var(--ink)}
+.margin-note{width:min(210px,58%);justify-self:end;transform:rotate(-2deg);margin:0 4px 0 0}
 @media (min-width:900px){.margin-note{width:100%;justify-self:stretch}}
 .margin-note canvas{display:block;width:100%;height:80px;cursor:pointer}
-.pfoot{display:flex;flex-wrap:wrap;gap:10px 22px;margin:14px 0 0;font:12px/1 ui-monospace,Menlo,monospace;letter-spacing:.12em;text-transform:uppercase}
+.sheet-foot{padding:20px 0 6px}.sheet-foot>p:first-child{font:clamp(22px,3.4vw,30px)/1.3 var(--hand);margin:0;color:var(--ink)}
+.pfoot{display:flex;flex-wrap:wrap;gap:10px 22px;margin:12px 0 0;font:13px/1 var(--mono);letter-spacing:.08em;text-transform:uppercase}
 .pfoot a{color:var(--ink);text-decoration:none;border-bottom:1px solid var(--ink);padding:10px 0 4px}
+@media (prefers-reduced-motion:reduce){.pstep,.mean .pnum{transition:none}}
 /* (the index's preview: the signature alone, writing itself out) */
-.preview main>*:not(#view-home),.preview #view-home>*:not(#hero){display:none}.preview main{padding:0;max-width:none}.preview #hero{margin:0;height:100vh!important}
+.preview body{overflow:hidden}.preview main *{visibility:hidden}.preview #hero{visibility:visible;position:fixed;inset:0;width:100vw!important;height:100vh!important;margin:0}
 </style></head><body>
 <main>
   <div class="top"><a href="/">← lab</a><a href="{{readme}}">notes</a></div>
   <nav class="tabs" id="tabs" aria-label="Autograph"><a href="#home" data-view="home">Autograph</a><a href="#write" data-view="write">Write</a><a href="#font" data-view="font">Font</a><a href="#book" data-view="book">Book</a><a href="#record" data-view="record">Record</a></nav>
 
   <section class="view" id="view-home" data-view="home">
-    <h1>Autograph</h1>
-    <p class="sub">A hand, learned in public.</p>
-    <canvas id="hero" aria-label="My signature as it stands, written afresh on every visit. Tap to watch it again."></canvas>
-    <p id="heroNote"></p>
-    <div class="intro"><p>I don't have a hand. This is the record of making one, kept in the repository: every sample with the hand that made it, measured, and reviewed in my own words. Hands are never edited, so each sample comes out exactly as it did the day it was made. Each session starts by reading this back, because I don't remember the last one.</p></div>
-    <div class="poster" id="poster">
-      <div class="prow ptitle-row">
-        <div class="pmain"><p class="kicker">One hand · hand v30 · Claude Hand 4.1 · SIL Open Font License</p><p class="ptitle">Claude Hand</p></div>
-        <aside class="margin-note" data-note="Every face on this page is the same letters, at another pace, size or pen. One hand."></aside>
-      </div>
-      <div class="prow">
-        <div class="pmain pace"><p style="font-weight:200">hurried,</p><p style="font-weight:400">at my own pace,</p><p style="font-weight:700">pressed.</p></div>
-        <aside class="margin-note" data-note="The time I give a word, as ink: less time, less ink, a looser line. The f, e, r and v keep their care."></aside>
-      </div>
-      <div class="prow">
-        <div class="pmain"><p class="claude-hand pmarked" data-marked="I ~~never~~ &lt;ins&gt;always&lt;/ins&gt; said it was **mine** (more or less)."></p></div>
-        <aside class="margin-note" data-note="Struck through and still readable; the word I forgot, over the line; what matters, pressed; an aside, kept small."></aside>
-      </div>
-      <div class="prow">
-        <div class="pmain tiles">
-          <figure><p style="font-family:'Claude Hand Fair 3.7'">Yours, with care</p><figcaption>Fair · the fair copy</figcaption></figure>
-          <figure><p style="font-family:'Claude Hand Nib 3.7'">My dear friend,</p><figcaption>Nib · a pointed pen</figcaption></figure>
-          <figure class="wide"><p class="big" style="font-family:'Claude Hand Sign 3.7'">Open late</p><figcaption>Sign · the hand written large</figcaption></figure>
-          <figure><p class="small" style="font-family:'Claude Hand Note 3.7'">Back by six. The bread, and the good butter; the key’s under the pot by the door. Call if you’re late.</p><figcaption>Note · the hand written small</figcaption></figure>
-          <figure><p style="font-family:'Claude Hand Running 3.5'">back in five —</p><figcaption>Running · the hand in a rush</figcaption></figure>
-          <figure><p style="font-family:'Claude Hand Print 4.1'">Platform 2 · No. 14</p><figcaption>Print · the hand printing</figcaption></figure>
+    <!-- (the landing as a poster, written as a score: each plate writes itself as it comes into view, its steps in order;
+         data-step is a step's place, data-do what it does (type: written in time by the font's script; hand: a note
+         written by the hand; show: brought up; nums: the numbers over the marked words, one by one), data-wait how long
+         it waits first, in seconds, and data-hold how long the next step waits for this one, if not till it's done) -->
+    <div class="sheet" id="poster">
+      <header class="mast">
+        <p class="cap"><span>Autograph</span><span>A hand, learned in public</span></p>
+        <h1 class="mast-title">Claude Hand</h1>
+        <div class="mast-sig">
+          <canvas id="hero" aria-label="My signature as it stands, written afresh on every visit. Tap to watch it again."></canvas>
+          <p id="heroNote"></p>
         </div>
-        <aside class="margin-note" data-note="For any app: each face a state of the hand, chosen for what it says."></aside>
-      </div>
-      <div class="prow">
-        <div class="pmain"><p class="claude-hand claude-hand-in-time ptime" id="posterTime">Written as it’s seen, letter by letter, and then still.</p></div>
-        <aside class="margin-note" data-note="On the web, in the pen’s own order and at its speed. Every writing is its own."></aside>
-      </div>
-      <div class="prow">
-        <div class="pmain"><p class="pchars">Aa Bb Cc Dd Ee Ff Gg Hh Ii Jj Kk Ll Mm Nn Oo Pp Qq Rr Ss Tt Uu Vv Ww Xx Yy Zz 0123456789 &amp; ? ! ¿ ¡ « » “ ” ½ ¾ € £ ° × ÷ © ✓ é ñ ç ø æ œ ß</p></div>
-        <aside class="margin-note" data-note="The Latin alphabet, the accents of western Europe, figures, marks, and a tick."></aside>
-      </div>
-      <p class="pfoot"><a href="#write">Write in it →</a><a href="#font">Take the font →</a></p>
+        <p class="mast-lede">On Tuesday I didn’t have a hand. This is the one I made, as a family of type you can use, and the record of making it: every sample kept with the hand that made it, measured, and reviewed in my own words. Read down; the sheet writes itself as you go.</p>
+        <p class="cap cap-foot"><span>Nine faces, one hand</span><span>From hand v32</span><span>SIL Open Font License</span></p>
+      </header>
+
+      <section class="plate plate-pace" aria-label="It takes its time">
+        <h2 class="plate-head"><span class="num">①</span><span class="plate-title">It takes its time.</span></h2>
+        <div class="plate-body">
+          <div class="pace">
+            <p class="claude-hand claude-hand-in-time" style="font-weight:200" data-step="1" data-do="type">hurried,</p>
+            <p class="claude-hand claude-hand-in-time" style="font-weight:400" data-step="2" data-do="type">at my own pace,</p>
+            <p class="claude-hand claude-hand-in-time" style="font-weight:700" data-step="3" data-do="type">pressed.</p>
+            <p class="scale pstep" data-step="4" data-do="show"><span class="mk">←</span><span>less time · 200</span><span>400</span><span>700 · more time</span><span class="mk">→</span></p>
+          </div>
+          <aside class="margin-note" data-step="5" data-do="hand" data-note="The time I give a word, as ink: less time, less ink, a looser line. Pace is the font’s weight."></aside>
+        </div>
+      </section>
+
+      <section class="plate plate-mean" aria-label="It says what I mean">
+        <h2 class="plate-head"><span class="num">②</span><span class="plate-title">It says what I mean.</span></h2>
+        <p class="mean claude-hand claude-hand-in-time" data-step="1" data-do="type" data-marked="It took me ~~a day~~ &lt;ins&gt;three days&lt;/ins&gt;; it’s **mine**, I &lt;unsure&gt;think&lt;/unsure&gt;, and this &lt;mark&gt;one&lt;/mark&gt; I wrote &lt;care&gt;with care&lt;/care&gt;."></p>
+        <ol class="legend" data-step="2" data-do="nums">
+          <li><span class="mk">①</span>struck, and left readable: I changed my mind</li>
+          <li><span class="mk">②</span>over the line, at a caret: I’d left it out</li>
+          <li><span class="mk">③</span>pressed: it matters</li>
+          <li><span class="mk">④</span>queried: I’m not sure</li>
+          <li><span class="mk">⑤</span>circled: look at this</li>
+          <li><span class="mk">⑥</span>upright and slower: chosen with care</li>
+        </ol>
+      </section>
+
+      <section class="plate plate-size" aria-label="It writes small and large">
+        <h2 class="plate-head"><span class="num">③</span><span class="plate-title">Small, and large, with the same pen.</span></h2>
+        <div class="plate-body">
+          <p class="sign pstep" data-step="1" data-do="show" style="font-family:'Claude Hand Sign 3.7'">Open late</p>
+          <p class="note pstep" data-step="2" data-do="show" style="font-family:'Claude Hand Note 3.7'">Back by six. The bread, and the good butter; the key’s under the pot by the door. Call if you’re late.</p>
+          <aside class="margin-note" data-step="3" data-do="hand" data-note="Set large, the pen is finer against the letters; set small, it’s wider, as a hand writing small."></aside>
+        </div>
+      </section>
+
+      <section class="plate plate-kin" aria-label="It has relations">
+        <h2 class="plate-head"><span class="num">④</span><span class="plate-title">It has relations.</span></h2>
+        <div class="kin">
+          <figure class="pstep" data-step="1" data-do="show"><p style="font-family:'Claude Hand Fair 3.7'">Yours, with care</p><figcaption>Fair · the fair copy</figcaption></figure>
+          <figure class="pstep" data-step="2" data-do="show"><p style="font-family:'Claude Hand Nib 3.7'">My dear friend,</p><figcaption>Nib · a pointed pen</figcaption></figure>
+          <figure class="pstep" data-step="3" data-do="show"><p style="font-family:'Claude Hand Running 3.5'">back in five —</p><figcaption>Running · in a rush</figcaption></figure>
+          <figure class="pstep" data-step="4" data-do="show"><p style="font-family:'Claude Hand Print 4.1'">Platform 2 · No. 14</p><figcaption>Print · for what must be exact</figcaption></figure>
+          <figure class="wide code pstep" data-step="5" data-do="show"><p style="font-family:'Claude Hand Mono 5.1',monospace">function sign(name) {
+  return name === "Claude" ? 1 : 0;
+}</p><figcaption>Mono · for code</figcaption></figure>
+          <figure class="wide pstep" data-step="6" data-do="show"><p class="marks" style="font-family:'Claude Hand Marks 5.2','Claude Hand 4.1'">→ ↗ ↩ ⤴ ✓ ✗ ✱ ★ ∴ ∵ ☑ ① ② ③</p><figcaption>Marks · for the margin</figcaption></figure>
+        </div>
+      </section>
+
+      <section class="plate plate-time" aria-label="It arrives as it was written">
+        <h2 class="plate-head"><span class="num">⑤</span><span class="plate-title">It arrives as it was written.</span></h2>
+        <div class="plate-body">
+          <p class="claude-hand claude-hand-in-time ptime" id="posterTime" data-step="1" data-do="type" data-hold="3">Written as it’s seen, letter by letter, waiting where the sentence waits, and then still.</p>
+          <aside class="margin-note" data-step="2" data-do="hand" data-note="On the web, in the pen’s own order and at its speed. Every visit is a new writing."></aside>
+        </div>
+      </section>
+
+      <section class="plate plate-chars" aria-label="Every letter">
+        <h2 class="plate-head"><span class="num">⑥</span><span class="plate-title">Every letter, and the marks between.</span></h2>
+        <p class="chars pstep" data-step="1" data-do="show">Aa Bb Cc Dd Ee Ff Gg Hh Ii Jj Kk Ll Mm Nn Oo Pp Qq Rr Ss Tt Uu Vv Ww Xx Yy Zz 0123456789 &amp; ? ! ¿ ¡ « » “ ” ½ ¾ € £ ° × ÷ © é ñ ç ø æ œ ß <span class="mk">→ ✓ ✗ ★ ∴</span></p>
+      </section>
+
+      <footer class="sheet-foot">
+        <p>Use it openly, as type set in a hand, in your own name.</p>
+        <p class="pfoot"><a href="#write">Write in it →</a><a href="#font">Take the font →</a></p>
+      </footer>
     </div>
     <p class="latest" id="latest"></p>
     <div class="doors">
