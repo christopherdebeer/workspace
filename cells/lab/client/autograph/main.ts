@@ -19,7 +19,7 @@ import { CATALOG, HANDS, NEWEST, SESSIONS } from './catalog';
 import { paint, replay } from './ink';
 // (my signature, and the hand that writes what you type: the newest hand; autograph-check.mjs fails if this isn't the
 // hand the record says is newest)
-import { signature, page as handPage } from './hands/v30';
+import { signature, page as handPage } from './hands/v31';
 import { $, esc, lookOf, sized } from './page/ui';
 import { initWrite } from './page/write';
 import { buildBook } from './page/book';

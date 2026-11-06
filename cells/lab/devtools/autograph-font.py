@@ -194,7 +194,10 @@ fb.setupNameTable({
 fb.setupOS2(sTypoAscender=900, sTypoDescender=-460, sTypoLineGap=40, usWinAscent=max(900, ymax + 20), usWinDescent=max(460, -ymin + 20),
             sxHeight=XH, sCapHeight=round(1.7 * XH), achVendID='NONE', fsSelection=(0x20 if PRESSED else 0x40) | 0x80, usWeightClass=WEIGHT, version=4, fsType=0,
             yStrikeoutSize=MARK, yStrikeoutPosition=STRIKE)
-fb.setupPost(underlinePosition=UNDER, underlineThickness=MARK)
+# (from 5.1, a monospaced face says so, so apps and editors can tell: every advance the same, and the font fixed-pitch)
+MONO = bool(data.get('mono'))
+fb.setupPost(underlinePosition=UNDER, underlineThickness=MARK, isFixedPitch=1 if MONO else 0)
+if MONO: fb.font['OS/2'].panose.bFamilyType, fb.font['OS/2'].panose.bProportion = 3, 9
 # (the same hand always builds the same file: no build time in it)
 fb.updateHead(fontRevision=float(VERSION), macStyle=1 if PRESSED else 0, created=timestampFromString('Tue Nov  3 00:00:00 2026'), modified=timestampFromString('Tue Nov  3 00:00:00 2026'))
 addOpenTypeFeaturesFromString(fb.font, '\n'.join(fea))

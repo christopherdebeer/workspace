@@ -4,7 +4,7 @@
 import type { Sig } from '../switchback/sign';
 
 /** every hand, in the order they were made (each session that makes one adds it here) */
-export type HandId = 'scribble' | 'v0' | 'v1' | 'v2' | 'v3' | 'v4' | 'v5' | 'v6' | 'v7' | 'v8' | 'v9' | 'v10' | 'v11' | 'v12' | 'v13' | 'v14' | 'v15' | 'v16' | 'v17' | 'v18' | 'v19' | 'v20' | 'v21' | 'v22' | 'v23' | 'v24' | 'v25' | 'v26' | 'v27' | 'v28' | 'v29' | 'v30' | 'font';
+export type HandId = 'scribble' | 'v0' | 'v1' | 'v2' | 'v3' | 'v4' | 'v5' | 'v6' | 'v7' | 'v8' | 'v9' | 'v10' | 'v11' | 'v12' | 'v13' | 'v14' | 'v15' | 'v16' | 'v17' | 'v18' | 'v19' | 'v20' | 'v21' | 'v22' | 'v23' | 'v24' | 'v25' | 'v26' | 'v27' | 'v28' | 'v29' | 'v30' | 'v31' | 'font';
 export type Hand = { name: string; made: string; about: string };
 
 export type Entry = {
@@ -19,7 +19,9 @@ export type Entry = {
    * place on the variable font's axes, its pace (wght) and its wear (WEAR); (from session 31) a line set `time` is set as
    * the web sets it and written in the hand's time by its script (claude-hand-time-3.1.js) when it's seen; (from session
    * 32) by the `script` version named, 3.1 if none is */
-  type?: { text: string; size: number; calt?: boolean; lh?: string; way?: 'web' | 'app' | 'time'; at?: { pace: number; wear: number; opsz?: number | 'auto' }; script?: string; face?: 'Regular' | 'Pressed' | 'Hurried'; family?: string }[];
+  type?: { text: string; size: number; calt?: boolean; lh?: string; way?: 'web' | 'app' | 'time'; at?: { pace: number; wear: number; opsz?: number | 'auto' }; script?: string; face?: 'Regular' | 'Pressed' | 'Hurried'; family?: string;
+    /** (from session 51) its spaces kept as they are, as code's are: its indents and its alignment */
+    pre?: boolean }[];
   /** the font's version it's set in (each version is kept, so it always comes out as it was set; 0.41 if not given,
    * which has 0.4's glyphs) */
   font?: string;

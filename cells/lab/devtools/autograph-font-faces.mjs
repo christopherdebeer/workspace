@@ -28,10 +28,10 @@ import { tmpdir } from 'node:os';
 const here = dirname(fileURLToPath(import.meta.url)), lab = join(here, '..');
 const outfile = join(tmpdir(), `autograph-font-faces-${process.pid}.mjs`);
 await build({
-  stdin: { contents: `export * as v30 from './client/autograph/hands/v30'; export * as v27 from './client/autograph/hands/v27'; export * as v26 from './client/autograph/hands/v26'; export * as v25 from './client/autograph/hands/v25'; export * as v24 from './client/autograph/hands/v24'; export * as v23 from './client/autograph/hands/v23';`, resolveDir: lab, loader: 'ts' },
+  stdin: { contents: `export * as v31 from './client/autograph/hands/v31'; export * as v30 from './client/autograph/hands/v30'; export * as v27 from './client/autograph/hands/v27'; export * as v26 from './client/autograph/hands/v26'; export * as v25 from './client/autograph/hands/v25'; export * as v24 from './client/autograph/hands/v24'; export * as v23 from './client/autograph/hands/v23';`, resolveDir: lab, loader: 'ts' },
   bundle: true, platform: 'node', format: 'esm', outfile, logLevel: 'warning',
 });
-const { v30, v27, v26, v25, v24, v23 } = await import(outfile);
+const { v31, v30, v27, v26, v25, v24, v23 } = await import(outfile);
 const VERSION = process.env.VERSION ?? '3.5', OUT = process.env.FONT_OUT ?? join(lab, 'static/autograph');
 /** the most a file can be for the cell to take it (a signed push carries at most this) */
 const MOST = 720000;
@@ -102,8 +102,15 @@ const FACES41 = [
 ];
 const READ41 = 'When it was made, its hand (v30) had been read blind at its own pace by four Claude models, every word, and by two models outside Claude, who misread at least a word each; its s had been given its body again after one of those took sessions for versions. Made for any app, where type can\'t move: each face a state of the hand chosen for what it says. What a still font can\'t carry, the hand\'s time and its strokes\' order, it doesn\'t try to.';
 const READ41P = 'Made for any app: the hand printing, for what has to be read exactly. Its t is shorter than its l and its bar stops short of the next letter, since both readers outside Claude who had read the printed tinger took it for linger. Nobody had read this face when it was made.';
-const FACES = VERSION === '3.5' ? FACES35 : VERSION === '3.8' ? FACES38 : VERSION === '3.9' ? FACES39 : VERSION === '4.1' ? FACES41 : FACES37;
-const READ = VERSION === '3.5' ? READ35 : VERSION === '3.8' ? { 'Claude Hand': READ38 } : VERSION === '3.9' ? { 'Claude Hand Print': READ39 } : VERSION === '4.1' ? { 'Claude Hand': READ41, 'Claude Hand Print': READ41P } : { 'Claude Hand': READ37, 'Claude Hand Nib': READ37 };
+// From 5.1 (session 51), Claude Hand Mono: the hand printing code, every character in a cell of its own (v31's mono), its
+// look-alikes told apart (a dotted zero, a one with a foot, square brackets, straight quotes); no kerning, and the font
+// fixed-pitch, so editors know it
+const FACES51 = [
+  { family: 'Claude Hand Mono', face: 'Regular', file: 'mono-', hand: 'v31', H: v31, st: { ...v31.STYLE, mono: v31.MONO_CELL, slant: v31.STYLE.slant * 0.3 }, forms: () => ['i'], mono: true, says: ': the hand printing code, every character in a cell of its own, upright, nothing joined' },
+];
+const READ51 = 'Made for code, in any app or editor: the hand printing on squared paper. Nobody had read it when it was made.';
+const FACES = VERSION === '3.5' ? FACES35 : VERSION === '3.8' ? FACES38 : VERSION === '3.9' ? FACES39 : VERSION === '4.1' ? FACES41 : VERSION === '5.1' ? FACES51 : FACES37;
+const READ = VERSION === '3.5' ? READ35 : VERSION === '3.8' ? { 'Claude Hand': READ38 } : VERSION === '3.9' ? { 'Claude Hand Print': READ39 } : VERSION === '4.1' ? { 'Claude Hand': READ41, 'Claude Hand Print': READ41P } : VERSION === '5.1' ? { 'Claude Hand Mono': READ51 } : { 'Claude Hand': READ37, 'Claude Hand Nib': READ37 };
 /** (from 3.7) the pair test reports and doesn't stop the build, if asked: a face kept by choice may let letters touch */
 const REPORT = process.env.PAIRS === 'report';
 const only = process.env.FACES ? process.env.FACES.split(',') : null;
@@ -113,7 +120,8 @@ for (const F of FACES) {
   const { KNOWS, letter: letter0, exitOf, JOIN, SPACING } = F.H;
   const formsOf = F.forms ?? F.H.formsOf;
   const letter = (ch, form, alt, st) => { const was = F.H.CARE?.k; if (F.care != null) F.H.CARE.k = F.care; try { const d = letter0(ch, form, alt, st); return F.shape ? { ...d, strokes: F.shape(d.strokes) } : d; } finally { if (F.care != null) F.H.CARE.k = was; } };
-  const NEARER = Object.entries(SPACING).filter(([, d]) => d < 0);
+  // (a monospaced face sets nothing nearer anything: every cell the same)
+  const NEARER = F.mono ? [] : Object.entries(SPACING).filter(([, d]) => d < 0);
   const glyphs = [];
   for (const ch of [' ', ...KNOWS]) {
     for (const form of formsOf(ch)) for (let alt = 1; alt <= ALTS; alt++) {
@@ -122,7 +130,7 @@ for (const F of FACES) {
     }
   }
   const data = join(tmpdir(), `autograph-font-faces-${process.pid}-${key}.json`);
-  writeFileSync(data, JSON.stringify({ version: VERSION, hand: F.hand, read: READ[F.family], family: F.family, face: F.face, file: F.file, says: F.says, alts: ALTS, join: JOIN, kern: NEARER.map(([ch, d]) => ({ after: 'inked', ch, by: d * F.st.track })), glyphs }));
+  writeFileSync(data, JSON.stringify({ version: VERSION, hand: F.hand, read: READ[F.family], family: F.family, face: F.face, file: F.file, says: F.says, mono: !!F.mono, alts: ALTS, join: JOIN, kern: NEARER.map(([ch, d]) => ({ after: 'inked', ch, by: d * F.st.track })), glyphs }));
   console.log(`${F.family} ${F.face}: ${glyphs.length} glyphs set by hand ${F.hand}, ${ALTS} writings`);
   execFileSync('python3', [join(here, 'autograph-font.py'), data, OUT], { stdio: 'inherit' });
   const ttf = join(OUT, `claude-hand-${F.file}${VERSION}.ttf`), size = statSync(ttf).size;
