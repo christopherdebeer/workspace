@@ -7,6 +7,10 @@ import { write as v4write } from '../hands/v4';
 import { signature as chapterSign } from '../hands/v3';
 // (from chapter two, a chapter opens with a page written by the hand of its day, and is signed by it: chapter two's is v15)
 import { signature as sign15, page as page15 } from '../hands/v15';
+// (chapter three's is v29)
+import { signature as sign29, page as page29 } from '../hands/v29';
+/** the hands that open and sign a chapter, from chapter two on */
+const OPENS: Record<string, { page: typeof page15; sign: typeof sign15 }> = { v15: { page: page15, sign: sign15 }, v29: { page: page29, sign: sign29 } };
 import { esc, lookOf, sized } from './ui';
 
 type Built = { first: HTMLCanvasElement; firstSig: Sig[]; signed: HTMLCanvasElement; signSig: Sig[]; page: boolean };
@@ -25,8 +29,8 @@ function chapter(c: (typeof BOOK.chapters)[number], into: Built[]) {
   // (chapter one: its first line by v4, signed by v3; from chapter two, its first paragraph as a page by its hand, signed by it)
   const page = !!c.opens;
   const ch: Built = {
-    first: el.querySelector('canvas.first') as HTMLCanvasElement, firstSig: c.opens ? page15(first, c.opens.page, c.seed) : [v4write(first, c.seed)],
-    signed: el.querySelector('canvas.signed') as HTMLCanvasElement, signSig: [c.opens ? sign15(c.n) : chapterSign(c.n)], page,
+    first: el.querySelector('canvas.first') as HTMLCanvasElement, firstSig: c.opens ? OPENS[c.hand].page(first, c.opens.page, c.seed) : [v4write(first, c.seed)],
+    signed: el.querySelector('canvas.signed') as HTMLCanvasElement, signSig: [c.opens ? OPENS[c.hand].sign(c.n) : chapterSign(c.n)], page,
   };
   into.push(ch);
   ch.first.addEventListener('click', () => replay(ch.first, ch.firstSig, () => bookLook(page)));
