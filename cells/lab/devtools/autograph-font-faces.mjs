@@ -28,10 +28,10 @@ import { tmpdir } from 'node:os';
 const here = dirname(fileURLToPath(import.meta.url)), lab = join(here, '..');
 const outfile = join(tmpdir(), `autograph-font-faces-${process.pid}.mjs`);
 await build({
-  stdin: { contents: `export * as v27 from './client/autograph/hands/v27'; export * as v26 from './client/autograph/hands/v26'; export * as v25 from './client/autograph/hands/v25'; export * as v24 from './client/autograph/hands/v24'; export * as v23 from './client/autograph/hands/v23';`, resolveDir: lab, loader: 'ts' },
+  stdin: { contents: `export * as v30 from './client/autograph/hands/v30'; export * as v27 from './client/autograph/hands/v27'; export * as v26 from './client/autograph/hands/v26'; export * as v25 from './client/autograph/hands/v25'; export * as v24 from './client/autograph/hands/v24'; export * as v23 from './client/autograph/hands/v23';`, resolveDir: lab, loader: 'ts' },
   bundle: true, platform: 'node', format: 'esm', outfile, logLevel: 'warning',
 });
-const { v27, v26, v25, v24, v23 } = await import(outfile);
+const { v30, v27, v26, v25, v24, v23 } = await import(outfile);
 const VERSION = process.env.VERSION ?? '3.5', OUT = process.env.FONT_OUT ?? join(lab, 'static/autograph');
 /** the most a file can be for the cell to take it (a signed push carries at most this) */
 const MOST = 720000;
@@ -91,8 +91,19 @@ const FACES39 = [
   { family: 'Claude Hand Print', face: 'Regular', file: 'print-', hand: 'v27', H: v27, st: { ...v27.STYLE, print: true, slant: v27.STYLE.slant * 0.3 }, forms: () => ['i'], says: ': the hand printing, every small letter its printed one, plain and upright, nothing joined' },
 ];
 const READ39 = 'Made for any app: the hand printing, for what has to be read exactly. Nobody had read it when it was made.';
-const FACES = VERSION === '3.5' ? FACES35 : VERSION === '3.8' ? FACES38 : VERSION === '3.9' ? FACES39 : FACES37;
-const READ = VERSION === '3.5' ? READ35 : VERSION === '3.8' ? { 'Claude Hand': READ38 } : VERSION === '3.9' ? { 'Claude Hand Print': READ39 } : { 'Claude Hand': READ37, 'Claude Hand Nib': READ37 };
+// From 4.1 (session 50), the still faces again from hand v30: its s with a body (v28), and in Print its t shorter than
+// its l, its bar clear of the next letter (v29). Everything else as 3.8 and 3.9
+const v30s = v30.STYLE;
+const FACES41 = [
+  { family: 'Claude Hand', face: 'Regular', file: 'still-', hand: 'v30', H: v30, st: v30s },
+  { family: 'Claude Hand', face: 'Pressed', file: 'pressed-', hand: 'v30', H: v30, st: { ...v30s, pace: v30s.pace * v30.MANNERS.strong.pace } },
+  { family: 'Claude Hand', face: 'Hurried', file: 'hurried-', hand: 'v30', H: v30, st: { ...v30s, pace: v30s.pace * v30.HURRY }, says: ', every letter written at four times the pace the hand writes at its own, in haste, its pen looser for it, but the f, e, r and v written with care' },
+  { family: 'Claude Hand Print', face: 'Regular', file: 'print-', hand: 'v30', H: v30, st: { ...v30s, print: true, slant: v30s.slant * 0.3 }, forms: () => ['i'], says: ': the hand printing, every small letter its printed one, plain and upright, nothing joined' },
+];
+const READ41 = 'When it was made, its hand (v30) had been read blind at its own pace by four Claude models, every word, and by two models outside Claude, who misread at least a word each; its s had been given its body again after one of those took sessions for versions. Made for any app, where type can\'t move: each face a state of the hand chosen for what it says. What a still font can\'t carry, the hand\'s time and its strokes\' order, it doesn\'t try to.';
+const READ41P = 'Made for any app: the hand printing, for what has to be read exactly. Its t is shorter than its l and its bar stops short of the next letter, since both readers outside Claude who had read the printed tinger took it for linger. Nobody had read this face when it was made.';
+const FACES = VERSION === '3.5' ? FACES35 : VERSION === '3.8' ? FACES38 : VERSION === '3.9' ? FACES39 : VERSION === '4.1' ? FACES41 : FACES37;
+const READ = VERSION === '3.5' ? READ35 : VERSION === '3.8' ? { 'Claude Hand': READ38 } : VERSION === '3.9' ? { 'Claude Hand Print': READ39 } : VERSION === '4.1' ? { 'Claude Hand': READ41, 'Claude Hand Print': READ41P } : { 'Claude Hand': READ37, 'Claude Hand Nib': READ37 };
 /** (from 3.7) the pair test reports and doesn't stop the build, if asked: a face kept by choice may let letters touch */
 const REPORT = process.env.PAIRS === 'report';
 const only = process.env.FACES ? process.env.FACES.split(',') : null;

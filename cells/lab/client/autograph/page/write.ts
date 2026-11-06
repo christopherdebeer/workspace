@@ -10,15 +10,15 @@ import { $, lookOf, sized, timedAs } from './ui';
 
 /** the faces and families what's typed is set in, beside each other: the still faces for apps, at the size each is for */
 export const ACROSS: { name: string; family: string; weight: number; size?: number }[] = [
-  { name: 'Regular', family: 'Claude Hand Still 3.8', weight: 400 },
-  { name: 'Pressed', family: 'Claude Hand Still 3.8', weight: 700 },
-  { name: 'Hurried', family: 'Claude Hand Still 3.8', weight: 200 },
+  { name: 'Regular', family: 'Claude Hand Still 4.1', weight: 400 },
+  { name: 'Pressed', family: 'Claude Hand Still 4.1', weight: 700 },
+  { name: 'Hurried', family: 'Claude Hand Still 4.1', weight: 200 },
   { name: 'Fair', family: 'Claude Hand Fair 3.7', weight: 400 },
   { name: 'Note, set small', family: 'Claude Hand Note 3.7', weight: 400, size: 15 },
   { name: 'Sign, set large', family: 'Claude Hand Sign 3.7', weight: 400, size: 44 },
   { name: 'Nib', family: 'Claude Hand Nib 3.7', weight: 400 },
   { name: 'Running', family: 'Claude Hand Running 3.5', weight: 400 },
-  { name: 'Print', family: 'Claude Hand Print 3.9', weight: 400 },
+  { name: 'Print', family: 'Claude Hand Print 4.1', weight: 400 },
 ];
 
 /** texts to start from, each showing one side of the hand, and why */

@@ -82,6 +82,9 @@ const FONTS = [
   // (4.1, from v30, its s with a body again: the variable font's six masters as 4.0's, and the writing font)
   { key: 'font 4.1', files: '4.1', web: true, src: () => [STYLE30, { ...STYLE30, pace: STYLE30.pace * MANNERS30.strong.pace }, { ...STYLE30, pace: STYLE30.pace * HURRY30 }, 'worn', { ...STYLE30, track: STYLE30.track * 1.06 }, STYLE30].flatMap((st) => { const set = () => [' ', ...KNOWS30].flatMap((ch) => formsOf30(ch).flatMap((f) => [1, 2, 3].map((a) => letter30(ch, f, a, st === 'worn' ? STYLE30 : st)))); return st === 'worn' ? worn30(set) : set(); }) },
   { key: 'font writing 4.1', files: 'writing-4.1', web: true, src: () => [STYLE30, { ...STYLE30, pace: STYLE30.pace * MANNERS30.strong.pace }, { ...STYLE30, pace: STYLE30.pace * HURRY30 }].flatMap((st) => [' ', ...KNOWS30].flatMap((ch) => formsOf30(ch).map((f) => letter30(ch, f, 1, st)))) },
+  // (4.1's still faces, from v30: Regular, Pressed and Hurried in eight writings, and Print with its own t)
+  ...[['still-4.1', STYLE30], ['pressed-4.1', { ...STYLE30, pace: STYLE30.pace * MANNERS30.strong.pace }], ['hurried-4.1', { ...STYLE30, pace: STYLE30.pace * HURRY30 }]].map(([files, st]) => ({ key: `font ${files}`, files, src: () => [' ', ...KNOWS30].flatMap((ch) => formsOf30(ch).flatMap((f) => [1, 2, 3, 4, 5, 6, 7, 8].map((a) => letter30(ch, f, a, st)))) })),
+  { key: 'font print-4.1', files: 'print-4.1', src: () => [' ', ...KNOWS30].flatMap((ch) => [1, 2, 3, 4, 5, 6, 7, 8].map((a) => letter30(ch, 'i', a, { ...STYLE30, print: true, slant: STYLE30.slant * 0.3 }))) },
 ];
 for (const F of FONTS) {
   const fp = createHash('sha256').update(JSON.stringify(F.src())).digest('hex').slice(0, 16);
