@@ -36,6 +36,7 @@ const experiments: Record<string, () => Promise<unknown>> = {
   rsvp: () => import('./rsvp/main'),
   switchback: () => import('./switchback/main'),
   autograph: () => import('./autograph/main'),
+  tactile: () => import('./tactile/main'),
 };
 
 // (loaded as a worker by an experiment that shapes off the page's thread: serve it)

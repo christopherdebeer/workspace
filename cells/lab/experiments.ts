@@ -37,6 +37,12 @@ export const EXPERIMENTS: Experiment[] = [
     presets: [{ label: 'the notebook', query: '' }],
   },
   {
+    id: 'tactile', title: 'Tactile · pebble in the hand', group: 'Contemplation',
+    blurb: 'A hardware simulation of the Tactile pebble (an M5Stack AtomS3R) for working out its interaction away from the bench. The firmware\'s own reader, compiled unchanged from C to WebAssembly, runs on a simulated BMI270 held in a simulated hand: turn the 3D device like a dial to change a retained reading pace, tip its top edge away to enter a word, toward you to come back out. Or hold the phone itself as the device. Gauges carry the firmware\'s thresholds, the event log lists every intention it refuses, tremor, walking and sensor noise can be dialled in, and sessions record in the device\'s telemetry schema (and device captures replay here).',
+    page: 'static/tactile.html', preview: 'preview', readme: 'static/tactile.md',
+    presets: [{ label: 'hold it', query: '' }, { label: 'first use', query: 'tutorial=1' }, { label: 'watch it used', query: 'auto&tutorial=1' }, { label: 'walking', query: 'tutorial=0&walk=1' }, { label: 'the phone is the pebble', query: 'mode=motion' }],
+  },
+  {
     id: 'rsvp', title: 'Afterword · RSVP', group: 'Contemplation',
     blurb: 'Fixed-recognition-point reading on a steady beat (set by the rhythm of your steps, easing in at each start), the context flowing through the word above and below, tactile regression and seeking, a player that folds away, optional clicks and bass on clause starts; at the end of the text it becomes a pen for the next word; a comprehension check on made passages at chosen speeds; light and dark. All text, position and settings in the URL fragment.',
     page: 'static/rsvp.html', preview: 'preview', readme: 'static/rsvp.md',
