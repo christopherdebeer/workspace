@@ -81,23 +81,23 @@ export function initWrite(handPage: (text: string, width: number, seed: number) 
   let scrub: Promise<number> | null = null;
   const resetScrub = () => { scrub = null; timeS.value = '100'; timeS.disabled = way !== 'web'; again.disabled = way !== 'web'; };
   timeS.addEventListener('input', () => {
-    const api = timedAs('3.8');
+    const api = timedAs('4.1');
     if (way !== 'web' || !api) return;
     if (!scrub) { setType(); const total = api.write(typed, { seed: wSeed }); scrub = (api as unknown as { ready: Promise<unknown> }).ready.then(() => total); }
     void scrub.then((total) => {
       for (const a of (typed as unknown as { __claudeHandTime?: Animation[] }).__claudeHandTime ?? []) { a.pause(); a.currentTime = (Number(timeS.value) / 100) * total * 1000; }
     });
   });
-  again.addEventListener('click', () => { resetScrub(); if (way === 'web') { setType(); timedAs('3.8')?.write(typed, { seed: wSeed }); } });
+  again.addEventListener('click', () => { resetScrub(); if (way === 'web') { setType(); timedAs('4.1')?.write(typed, { seed: wSeed }); } });
   const setType = () => { typed.className = way === 'web' ? 'claude-hand' : 'claude-hand-app'; typed.classList.toggle('nocalt', joins.getAttribute('aria-pressed') !== 'true'); typed.innerHTML = typeset(mark.value.replace(/\s+/g, ' ').trim(), way); typed.style.fontSize = `${size.value}px`; typed.style.fontWeight = pace.value; typed.style.fontVariationSettings = `'WEAR' ${wear.value}`; $('wayNote').textContent = WAYS[way]; };
   // (from session 31: on the web, once you stop typing, the type is written in the hand's time too)
-  const typeInTime = () => { if (way === 'web') timedAs('3.8')?.write(typed, { seed: wSeed }); };
+  const typeInTime = () => { if (way === 'web') timedAs('4.1')?.write(typed, { seed: wSeed }); };
   for (const b of document.querySelectorAll<HTMLButtonElement>('[data-way]')) b.addEventListener('click', () => { way = b.dataset.way as typeof way; for (const o of document.querySelectorAll('[data-way]')) o.setAttribute('aria-pressed', String(o === b)); resetScrub(); setType(); typeInTime(); });
   for (const el of [size, pace, wear]) el.addEventListener('input', () => { resetScrub(); setType(); });
   joins.addEventListener('click', () => { joins.setAttribute('aria-pressed', String(joins.getAttribute('aria-pressed') !== 'true')); resetScrub(); setType(); });
   setType();
   mark.addEventListener('input', () => { resetScrub(); setType(); setAcross(); clearTimeout(wTimer); wTimer = window.setTimeout(() => { writeOut(); typeInTime(); }, 450); });
-  typed.addEventListener('click', () => { if (way === 'web') { resetScrub(); setType(); timedAs('3.8')?.write(typed); } });
+  typed.addEventListener('click', () => { if (way === 'web') { resetScrub(); setType(); timedAs('4.1')?.write(typed); } });
   written.addEventListener('click', () => { wSeed = 1 + Math.floor(Math.random() * 999999); writeOut(); });
   // (marking: select a word (or put the caret in one) and choose; the selection stays in the box while a mark is chosen)
   for (const b of document.querySelectorAll<HTMLButtonElement>('[data-mark]')) {

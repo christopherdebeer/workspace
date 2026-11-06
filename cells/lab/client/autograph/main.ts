@@ -53,7 +53,7 @@ $('doorRecord').textContent = `${SESSIONS.length} sessions and ${CATALOG.length}
 const base = (document.querySelector<HTMLLinkElement>('link[rel="stylesheet"][href*="claude-hand-"]')?.href ?? '').replace(/[^/]*$/, '');
 const loading: Record<string, Promise<void>> = {};
 const script = (v: string) => (loading[v] ??= new Promise<void>((done) => { const el = document.createElement('script'); el.src = `${base}claude-hand-time-${v}.js`; el.onload = el.onerror = () => done(); document.head.append(el); }));
-const SCRIPTS = ['3.1', '3.2', '3.3', '3.4', '3.8'];
+const SCRIPTS = ['3.1', '3.2', '3.3', '3.4', '3.8', '4.1'];
 
 // (the parts, each built when it's first shown)
 type View = 'home' | 'write' | 'font' | 'book' | 'record';
@@ -65,10 +65,10 @@ function show(v: View) {
   if (v === 'home' && !poster) {
     poster = buildPoster($('poster'), handPage, writing);
     // (the line written in time: its script and writing font only once it's nearly in view)
-    const line = $('posterTime'), near = new IntersectionObserver((es) => { if (es.some((e) => e.isIntersecting)) { near.disconnect(); void script('3.8').then(() => timedAs('3.8')?.watch(line)); } }, { rootMargin: '200px' });
+    const line = $('posterTime'), near = new IntersectionObserver((es) => { if (es.some((e) => e.isIntersecting)) { near.disconnect(); void script('4.1').then(() => timedAs('4.1')?.watch(line)); } }, { rootMargin: '200px' });
     near.observe(line);
   }
-  if (v === 'write' && !write) { write = initWrite(handPage, writing); void script('3.8').then(() => write?.inTime()); }
+  if (v === 'write' && !write) { write = initWrite(handPage, writing); void script('4.1').then(() => write?.inTime()); }
   if (v === 'book' && !book) book = buildBook($('toc'), $('chapters'));
   if (v === 'record' && !record) record = buildRecord($('catalog'), Promise.all(SCRIPTS.map(script)).then(() => {}));
 }
