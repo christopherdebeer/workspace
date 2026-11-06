@@ -26,11 +26,33 @@ from fontTools.varLib import instancer
 from fontTools.otlLib.builder import buildStatTable
 
 XH, PEN, MIN_R = 430, 0.13, 7          # as autograph-font.py: the x-height in units, the pen's width, its finest
-SP = 0.06                              # the longest step along a stroke, in x-heights
+SP = float(os.environ.get('SP', 0.06))  # the longest step along a stroke, in x-heights (5.8: 0.07, so a fourth axis fits the cell)
 CAP = 3                                # points round each end of a stroke, between its two sides
 CUSP = 2.0                             # how sharply the line turns back (radians, over a few points) to count as a cusp
 
 here = os.path.dirname(os.path.abspath(__file__))
+# (from 5.8, session 58) the pen as an ellipse: round when its two axes are equal, the broad pen when it's an edge held
+# at 40 degrees, 1.8 of the round pen across and as thin as its own edge. Each point of the outline is where the pen
+# touches the line on that side (its support), which moves continuously as the line turns, so the round pen's outline
+# and the broad pen's have the same points and every pen between them is an outline too
+# (1.65 of the round pen across, not Broad's 1.8: pressed and broad together, at 1.8 the s touched a c after it)
+BROAD_ANGLE, BROAD_W, BROAD_B = math.radians(40), 1.65, 5
+
+
+def support(d, a, b, e):
+    """the point of an ellipse (semi-axes a along e, b across it) furthest in direction d"""
+    ep = np.array([-e[1], e[0]])
+    de, dp = d @ e, d @ ep
+    den = math.sqrt((a * de) ** 2 + (b * dp) ** 2) or 1e-9
+    return (a * a * de * e + b * b * dp * ep) / den
+
+
+def pen_of(R, pen):
+    """a point's pen: round, R either way; or broad, its edge as wide as the round pen there makes it, its thickness its edge"""
+    if pen != 'broad':
+        return R, R
+    w = R / (PEN * XH / 2)
+    return BROAD_W * PEN * XH / 2 * (0.75 + 0.25 * w), BROAD_B
 
 
 def turning(P):
@@ -93,8 +115,9 @@ def resample(P, W, n):
     return np.stack([np.interp(u, s, P[:, 0]), np.interp(u, s, P[:, 1])], axis=1), np.interp(u, s, W)
 
 
-def outline_piece(C, R):
-    """the pen's edge along one part of a stroke and round both its ends: one closed contour, every point off the curve"""
+def outline_piece(C, R, pen=None):
+    """the pen's edge along one part of a stroke and round both its ends: one closed contour, every point off the curve
+    (from 5.8, with the broad pen, `pen`, its edge where it touches either side, and its ends as it turns off)"""
     n = len(C) - 1
     T = np.zeros_like(C)
     for i in range(n + 1):
@@ -105,16 +128,27 @@ def outline_piece(C, R):
     if n and np.hypot(*T[0]) < 0.5:
         T[0] = T[1]
     N = np.stack([-T[:, 1], T[:, 0]], axis=1)
-    left, right = C + R[:, None] * N, C - R[:, None] * N
     k = 1 / math.cos(math.pi / (2 * (CAP + 1)))
+    if pen == 'broad':
+        e = np.array([math.cos(BROAD_ANGLE), math.sin(BROAD_ANGLE)])
+        ab = [pen_of(r, pen) for r in R]
+        sup = lambda i, d: support(d, ab[i][0], ab[i][1], e)
+        left = np.array([C[i] + sup(i, N[i]) for i in range(n + 1)])
+        right = np.array([C[i] - sup(i, N[i]) for i in range(n + 1)])
+        end = [C[n] + k * sup(n, N[n] * math.cos(f) + T[n] * math.sin(f)) for f in (math.pi * j / (CAP + 1) for j in range(1, CAP + 1))]
+        start = [C[0] + k * sup(0, -N[0] * math.cos(f) - T[0] * math.sin(f)) for f in (math.pi * j / (CAP + 1) for j in range(1, CAP + 1))]
+        pts = list(left) + end + list(right[::-1]) + start
+        return [[int(round(x)), int(round(y))] for x, y in pts]
+    left, right = C + R[:, None] * N, C - R[:, None] * N
     end = [C[n] + k * R[n] * (N[n] * math.cos(f) + T[n] * math.sin(f)) for f in (math.pi * j / (CAP + 1) for j in range(1, CAP + 1))]
     start = [C[0] + k * R[0] * (-N[0] * math.cos(f) - T[0] * math.sin(f)) for f in (math.pi * j / (CAP + 1) for j in range(1, CAP + 1))]
     pts = list(left) + end + list(right[::-1]) + start
     return [[int(round(x)), int(round(y))] for x, y in pts]
 
 
-def contours(strokes_by_master):
-    """one glyph's contours in every master, point for point"""
+def contours(strokes_by_master, pens=None):
+    """one glyph's contours in every master, point for point (from 5.8, each master with its pen)"""
+    pens = pens or [None] * len(strokes_by_master)
     per = [[] for _ in strokes_by_master]
     for j in range(len(strokes_by_master[0])):
         Ps = [np.array([[x * XH, y * XH] for x, y, w in sm[j]], dtype=float) for sm in strokes_by_master]
@@ -123,6 +157,14 @@ def contours(strokes_by_master):
             # (a dot: a round mark as wide as the pen)
             for m, (P, W) in enumerate(zip(Ps, Ws)):
                 c, r = P.mean(axis=0), W.max() / math.cos(math.pi / 8)
+                if pens[m] == 'broad':
+                    # (from 5.8, a broad dot: the nib moved across its own width, the same eight points)
+                    e = np.array([math.cos(BROAD_ANGLE), math.sin(BROAD_ANGLE)]); nh = np.array([math.sin(BROAD_ANGLE), -math.cos(BROAD_ANGLE)])
+                    a, b = pen_of(W.max(), 'broad'); dd = 0.45 * a
+                    ds = [np.array([math.cos(t), math.sin(t)]) for t in (-2 * math.pi * q / 8 for q in range(8))]
+                    pts = [c + support(d, a, b, e) / math.cos(math.pi / 8) + (dd if d @ nh >= 0 else -dd) * nh for d in ds]
+                    per[m].append([[int(round(x)), int(round(y))] for x, y in pts])
+                    continue
                 per[m].append([[int(round(c[0] + r * math.cos(a))), int(round(c[1] + r * math.sin(a)))] for a in (-2 * math.pi * q / 8 for q in range(8))])
             continue
         cut = splits(Ps)
@@ -131,7 +173,7 @@ def contours(strokes_by_master):
             steps = max(1, max(math.ceil(along(p)[-1] / (SP * XH)) for p, _ in parts))
             for m, (p, w) in enumerate(parts):
                 C, R = resample(p, w, steps)
-                per[m].append(outline_piece(C, R))
+                per[m].append(outline_piece(C, R, pens[m]))
     return per
 
 
@@ -145,7 +187,7 @@ def main():
     G = len(masters[0]['glyphs'])
     assert all(len(m['glyphs']) == G for m in masters)
     for gi in range(G):
-        cs = contours([m['glyphs'][gi]['strokes'] for m in masters])
+        cs = contours([m['glyphs'][gi]['strokes'] for m in masters], [m.get('pen') for m in masters])
         for m, c in zip(masters, cs):
             m['glyphs'][gi]['contours'] = c
 
@@ -230,9 +272,23 @@ def main():
                 LARGE = v
                 break
         print('size runs %d to %d' % (SMALL, LARGE))
+    # (from 5.8, the pen: as far toward the broad pen as passes at every pace, as the letters stand and worn as far as wear
+    # goes, and at every size the font has; all the way, then three quarters, half and a quarter of the way)
+    EDGE = next((a for a in data['axes'] if a[0] == 'EDGE'), None)
+    EDGEND = 0
+    if EDGE:
+        sz = sorted({SMALL, OPSZ[3], LARGE}) if OPSZ else [None]
+        for q in (1, 0.75, 0.5, 0.25):
+            v = round(EDGE[4] * q)
+            if all([passes(full, dict({'wght': p, 'WEAR': e, 'EDGE': v}, **({'opsz': o} if o is not None else {})), 'Broad') for p in paces for e in (0, END) for o in sz]):
+                EDGEND = v
+                break
+        print('the pen runs 0 to %d' % EDGEND)
     limits = {'wght': (LO, whi), 'WEAR': (0, END)}
     if OPSZ:
         limits['opsz'] = (SMALL, LARGE)
+    if EDGE:
+        limits['EDGE'] = (0, EDGEND) if EDGEND else 0
     vf = instancer.instantiateVariableFont(TTFont(full), limits)
     # (its named places: the ends of pace, each as the letters stand and worn as far as the font goes)
     from fontTools.ttLib.tables._f_v_a_r import NamedInstance
@@ -246,6 +302,11 @@ def main():
         ni = NamedInstance()
         ni.subfamilyNameID = vf['name'].addMultilingualName({'en': name}, vf, mac=False)
         ni.coordinates = {k: float(v) for k, v in at(**loc).items()}
+        fvar.instances.append(ni)
+    if EDGE and EDGEND:
+        ni = NamedInstance()
+        ni.subfamilyNameID = vf['name'].addMultilingualName({'en': 'Broad'}, vf, mac=False)
+        ni.coordinates = {k: float(x) for k, x in at(EDGE=EDGEND).items()}
         fvar.instances.append(ni)
     if OPSZ:
         for name, v in (('Note', SMALL), ('Sign', LARGE)):
@@ -265,7 +326,8 @@ def main():
     buildStatTable(vf, [
         {'tag': 'wght', 'name': 'Weight', 'values': ([{'value': LO, 'name': 'Hurried'}] if LO < wdf else []) + [{'value': wdf, 'name': 'Regular', 'flags': 0x2}, {'value': whi, 'name': 'Pressed'}]},
         {'tag': 'WEAR', 'name': 'Wear', 'values': [{'value': 0, 'name': 'As it stands', 'flags': 0x2}, {'value': END, 'name': 'Worn'}]},
-    ] + ([{'tag': 'opsz', 'name': 'Optical size', 'values': [{'value': SMALL, 'name': 'Note'}, {'value': OPSZ[3], 'name': 'Text', 'flags': 0x2}, {'value': LARGE, 'name': 'Sign'}]}] if OPSZ else []))
+    ] + ([{'tag': 'opsz', 'name': 'Optical size', 'values': [{'value': SMALL, 'name': 'Note'}, {'value': OPSZ[3], 'name': 'Text', 'flags': 0x2}, {'value': LARGE, 'name': 'Sign'}]}] if OPSZ else [])
+      + ([{'tag': 'EDGE', 'name': 'Edge', 'values': [{'value': 0, 'name': 'Round', 'flags': 0x2}, {'value': EDGEND, 'name': 'Broad'}]}] if EDGE and EDGEND else []))
     VERSION = data['version']
     ttf = os.path.join(tmp, 'claude-hand-%s.ttf' % VERSION)
     vf.save(ttf)
@@ -283,7 +345,8 @@ def main():
     print('variable: %d glyphs, %d outline points, %d masters, wght %d-%d, WEAR 0-%d; TTF %d KB%s, woff2 %d KB' % (len(vf.getGlyphOrder()), pts, len(masters), LO, whi, END, os.path.getsize(ttf) // 1024, '' if kept else ' (too big for the cell: not kept)', os.path.getsize(os.path.join(out, 'claude-hand-%s.woff2' % VERSION)) // 1024))
     print('final corners:')
     sizes = sorted({SMALL, OPSZ[3], LARGE}) if OPSZ else [None]
-    ok = all([passes(ttf, dict({'wght': w, 'WEAR': e}, **({'opsz': o} if o is not None else {})), 'final') for w in paces for e in (0, END) for o in sizes])
+    edges = sorted({0, EDGEND}) if EDGE and EDGEND else [None]
+    ok = all([passes(ttf, dict({'wght': w, 'WEAR': e}, **({'opsz': o} if o is not None else {}), **({'EDGE': g} if g is not None else {})), 'final') for w in paces for e in (0, END) for o in sizes for g in edges])
     sys.exit(0 if ok else 1)
 
 

@@ -93,7 +93,7 @@ export function initWrite(handPage: (text: string, width: number, seed: number) 
     });
   });
   again.addEventListener('click', () => { resetScrub(); if (way === 'web') { setType(); timedAs('5.7')?.write(typed, { seed: wSeed }); } });
-  const setType = () => { typed.className = way === 'web' ? 'claude-hand' : 'claude-hand-app'; typed.classList.toggle('nocalt', joins.getAttribute('aria-pressed') !== 'true'); typed.innerHTML = typeset(mark.value.replace(/\s+/g, ' ').trim(), way); typed.style.fontSize = `${size.value}px`; typed.style.fontWeight = pace.value; typed.style.fontVariationSettings = `'WEAR' ${wear.value}`; $('wayNote').textContent = WAYS[way]; };
+  const setType = () => { typed.className = way === 'web' ? 'claude-hand' : 'claude-hand-app'; typed.classList.toggle('nocalt', joins.getAttribute('aria-pressed') !== 'true'); typed.innerHTML = typeset(mark.value.replace(/\s+/g, ' ').trim(), way, '5.8'); typed.style.fontSize = `${size.value}px`; typed.style.fontWeight = pace.value; typed.style.fontVariationSettings = `'WEAR' ${wear.value}`; $('wayNote').textContent = WAYS[way]; };
   // (from session 31: on the web, once you stop typing, the type is written in the hand's time too)
   const typeInTime = () => { if (way === 'web') timedAs('5.7')?.write(typed, { seed: wSeed }); };
   for (const b of document.querySelectorAll<HTMLButtonElement>('[data-way]')) b.addEventListener('click', () => { way = b.dataset.way as typeof way; for (const o of document.querySelectorAll('[data-way]')) o.setAttribute('aria-pressed', String(o === b)); resetScrub(); setType(); typeInTime(); });

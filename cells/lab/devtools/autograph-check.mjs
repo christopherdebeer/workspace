@@ -87,6 +87,8 @@ const FONTS = [
   { key: 'font print-4.1', files: 'print-4.1', src: () => [' ', ...KNOWS30].flatMap((ch) => [1, 2, 3, 4, 5, 6, 7, 8].map((a) => letter30(ch, 'i', a, { ...STYLE30, print: true, slant: STYLE30.slant * 0.3 }))) },
   // (5.7, from v34, the s in its word (v33): the variable font, its writing font and the still faces, as 4.1's)
   { key: 'font 5.7', files: '5.7', web: true, src: () => [STYLE34, { ...STYLE34, pace: STYLE34.pace * MANNERS34.strong.pace }, { ...STYLE34, pace: STYLE34.pace * HURRY34 }, 'worn', { ...STYLE34, track: STYLE34.track * 1.06 }, STYLE34].flatMap((st) => { const set = () => [' ', ...[...KNOWS34].filter((ch) => !(ch in MARKS34))].flatMap((ch) => formsOf34(ch).flatMap((f) => [1, 2, 3].map((a) => letter34(ch, f, a, st === 'worn' ? STYLE34 : st)))); return st === 'worn' ? worn34(set) : set(); }) },
+  // (5.8, the pen as a fourth axis: the same masters as 5.7, and the broad pen's own, its pen and the pairs given room)
+  { key: 'font 5.8', files: '5.8', web: true, src: () => [{ pen: 'broad', angle: 40, w: 1.65, b: 5, edge: [0, 100], sp: 0.07, pairs: ['sc', 'tE', ')c', 'qj'] }, ...[STYLE34, { ...STYLE34, pace: STYLE34.pace * MANNERS34.strong.pace }, { ...STYLE34, pace: STYLE34.pace * HURRY34 }, 'worn', { ...STYLE34, track: STYLE34.track * 1.06 }, STYLE34].flatMap((st) => { const set = () => [' ', ...[...KNOWS34].filter((ch) => !(ch in MARKS34))].flatMap((ch) => formsOf34(ch).flatMap((f) => [1, 2, 3].map((a) => letter34(ch, f, a, st === 'worn' ? STYLE34 : st)))); return st === 'worn' ? worn34(set) : set(); })] },
   { key: 'font writing 5.7', files: 'writing-5.7', web: true, src: () => [STYLE34, { ...STYLE34, pace: STYLE34.pace * MANNERS34.strong.pace }, { ...STYLE34, pace: STYLE34.pace * HURRY34 }].flatMap((st) => [' ', ...[...KNOWS34].filter((ch) => !(ch in MARKS34))].flatMap((ch) => formsOf34(ch).map((f) => letter34(ch, f, 1, st)))) },
   ...[['still-5.7', STYLE34], ['pressed-5.7', { ...STYLE34, pace: STYLE34.pace * MANNERS34.strong.pace }], ['hurried-5.7', { ...STYLE34, pace: STYLE34.pace * HURRY34 }]].map(([files, st]) => ({ key: `font ${files}`, files, src: () => [' ', ...[...KNOWS34].filter((ch) => !(ch in MARKS34))].flatMap((ch) => formsOf34(ch).flatMap((f) => [1, 2, 3, 4, 5, 6, 7, 8].map((a) => letter34(ch, f, a, st)))) })),
   { key: 'font print-5.7', files: 'print-5.7', src: () => [' ', ...[...KNOWS34].filter((ch) => !(ch in MARKS34))].flatMap((ch) => [1, 2, 3, 4, 5, 6, 7, 8].map((a) => letter34(ch, 'i', a, { ...STYLE34, print: true, slant: STYLE34.slant * 0.3 }))) },
@@ -116,7 +118,7 @@ for (const c of BOOK.chapters) {
 }
 // (the font's stylesheets: each version's, fingerprinted as it's kept, so a changed one is a new version; and every
 // sample set with one, fingerprinted as it's set, so it always comes out as it did)
-const SHEETS = ['1.2', '1.4', '1.8', '1.9', '2.0', '2.6', '2.7', '2.8', '2.9', '3.3', '3.4', '3.8', '4.0', '4.1', '5.7'];
+const SHEETS = ['1.2', '1.4', '1.8', '1.9', '2.0', '2.6', '2.7', '2.8', '2.9', '3.3', '3.4', '3.8', '4.0', '4.1', '5.7', '5.8'];
 for (const v of SHEETS) {
   const f = join(lab, `static/autograph/claude-hand-${v}.css`), key = `stylesheet ${v}`;
   if (!existsSync(f)) { changed.push(`${key} (missing)`); continue; }
@@ -134,7 +136,7 @@ for (const v of SCRIPTS) {
   else if (fps[key] !== fp) changed.push(`${key} was edited (was ${fps[key]}, now ${fp}): a changed script is a new version`);
 }
 for (const e of CATALOG.filter((x) => x.type?.some((l) => l.way))) {
-  const key = `${e.id} (as set)`, fp = createHash('sha256').update(JSON.stringify(e.type.map((l) => (l.way ? typeset(l.text, l.way === 'app' ? 'app' : 'web') + (l.way === 'time' ? ' (in time)' + (l.script ? ' ' + l.script : '') : '') : l.text)))).digest('hex').slice(0, 16);
+  const key = `${e.id} (as set)`, fp = createHash('sha256').update(JSON.stringify(e.type.map((l) => (l.way ? typeset(l.text, l.way === 'app' ? 'app' : 'web', e.font) + (l.way === 'time' ? ' (in time)' + (l.script ? ' ' + l.script : '') : '') : l.text)))).digest('hex').slice(0, 16);
   if (!fps[key]) { if (record) { fps[key] = fp; added++; } else changed.push(`${key} (no fingerprint: run with --record)`); }
   else if (fps[key] !== fp) changed.push(`${key} (was ${fps[key]}, now ${fp})`);
 }

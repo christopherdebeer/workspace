@@ -38,10 +38,14 @@ const HAND = 'v34';
 // coprime with three, so neighbours still never match)
 // (4.1: from v30, the s with a body again (v28); everything else the font writes as 4.0 did)
 // (5.7: from v34, the s in its word (v33); everything else the font writes as 4.1 did)
-const VERSION = '5.7', ALTS = 3, step = (ch) => (ch.codePointAt(0) % 2 ? 2 : 1);
+// (5.8: and a fourth axis, the pen (EDGE): round, 0, to the broad pen, 100, a master of its own)
+const VERSION = process.env.VERSION ?? '5.8', ALTS = 3, step = (ch) => (ch.codePointAt(0) % 2 ? 2 : 1);
 // (5.7: the marks a hand makes in a margin (v32) are a face of their own, Claude Hand Marks; the type for reading keeps
 // to what it had)
 const chars = [' ', ...[...KNOWS].filter((ch) => !(ch in MARKS))];
+/** (5.8) room between pairs that the pen at its broadest, pressed and set small, brought together (x-heights): s before c,
+ * t before E, a bracket before c; and q before j, whose tails met set smallest, pressed and worn */
+export const PAIRS = [{ left: 's', right: 'c', by: 0.04 }, { left: 't', right: 'E', by: 0.04 }, { left: ')', right: 'c', by: 0.04 }, { left: 'q', right: 'j', by: 0.04 }];
 /** (1.8) the letters that sit nearer the one before them only inside a word: how much nearer (x-heights, less than
  * nothing). The hand has them drawn already nearer; the font draws them back where they stand starting a word, and kerns */
 const NEARER = Object.entries(SPACING).filter(([, d]) => d < 0);
@@ -77,6 +81,8 @@ export const MASTERS = [
   { name: 'Worn', loc: { wght: 400, WEAR: 100, opsz: 24 }, st: STYLE, worn: true },
   { name: 'Note', loc: { wght: 400, WEAR: 0, opsz: 12 }, st: { ...STYLE, track: STYLE.track * 1.06 }, worn: false, shape: widen(1.6) },
   { name: 'Sign', loc: { wght: 400, WEAR: 0, opsz: 72 }, st: STYLE, worn: false, shape: widen(0.45) },
+  // (from 5.8, session 58, the hand at its own pace with the broad pen: the pen axis's far end)
+  ...(VERSION >= '5.8' ? [{ name: 'Broad', loc: { wght: 400, WEAR: 0, opsz: 24, EDGE: 100 }, st: STYLE, worn: false, pen: 'broad' }] : []),
 ];
 const masters = MASTERS.map((M) => {
   const glyphs = [];
@@ -90,12 +96,14 @@ const masters = MASTERS.map((M) => {
   };
   if (M.worn) worn(set); else set();
   console.log(`${M.name}: ${chars.length} characters, ${glyphs.length} glyphs set by hand ${HAND}`);
-  return { name: M.name, loc: M.loc, glyphs };
+  return { name: M.name, loc: M.loc, glyphs, pen: M.pen };
 });
 const data = join(tmpdir(), `autograph-font-${process.pid}-masters.json`);
 writeFileSync(data, JSON.stringify({
   version: VERSION, hand: HAND, read: READ, alts: ALTS, join: JOIN, kern: NEARER.map(([ch, d]) => ({ after: 'inked', ch, by: d * STYLE.track })),
-  axes: [['wght', 'Weight', 200, 400, 700], ['WEAR', 'Wear', 0, 0, 100], ['opsz', 'Optical size', 12, 24, 72]],
+  // (from 5.8, a little room between pairs the broad pen, pressed and small, brought together)
+  pairs: VERSION >= '5.8' ? PAIRS : [],
+  axes: [['wght', 'Weight', 200, 400, 700], ['WEAR', 'Wear', 0, 0, 100], ['opsz', 'Optical size', 12, 24, 72], ...(VERSION >= '5.8' ? [['EDGE', 'Edge', 0, 0, 100]] : [])],
   instances: [['Hurried', { wght: 200, WEAR: 0, opsz: 24 }], ['Regular', { wght: 400, WEAR: 0, opsz: 24 }], ['Pressed', { wght: 700, WEAR: 0, opsz: 24 }]],
   masters,
 }));

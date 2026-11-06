@@ -197,7 +197,15 @@ if data.get('kern'):
     for i, k in enumerate(data['kern']):
         fea += ['@NEARER%d = %s;' % (i, cls([name(g) for g in G if g['ch'] == k['ch']]))]
         kp += ['pos @INKED @NEARER%d %d;' % (i, round(k['by'] * XH))]
-    fea += ['feature kern { %s } kern;' % ' '.join(kp)]
+    # (from 5.8, room between particular pairs, where the pen at its broadest and pressed brought them together: a lookup
+    # of its own, so merging the masters keeps it apart from the kerning after ink, and both apply)
+    pp = []
+    for i, k in enumerate(data.get('pairs', [])):
+        fea += ['@PL%d = %s;' % (i, cls([name(g) for g in G if g['ch'] == k['left']])), '@PR%d = %s;' % (i, cls([name(g) for g in G if g['ch'] == k['right']]))]
+        pp += ['pos @PL%d @PR%d %d;' % (i, i, round(k['by'] * XH))]
+    if pp:
+        fea += ['lookup pairs { %s } pairs;' % ' '.join(pp)]
+    fea += ['feature kern { %s%s } kern;' % (' '.join(kp), ' lookup pairs;' if pp else '')]
 
 fb = FontBuilder(1000, isTTF=True)
 fb.setupGlyphOrder(order)

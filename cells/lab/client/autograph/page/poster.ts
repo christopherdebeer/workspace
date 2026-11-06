@@ -28,7 +28,7 @@ export function buildPoster(root: HTMLElement, handPage: (text: string, width: n
   // kept out of the script's writing: it comes after, with the legend)
   const nums: HTMLElement[] = [];
   for (const p of root.querySelectorAll<HTMLElement>('[data-marked]')) {
-    p.innerHTML = typeset(p.dataset.marked!, 'web');
+    p.innerHTML = typeset(p.dataset.marked!, 'web', '5.8');
     p.querySelectorAll<HTMLElement>(MARKED).forEach((el, i) => {
       const n = document.createElement('span');
       n.className = 'pnum claude-hand-still'; n.textContent = NUMS[i] ?? ''; n.setAttribute('aria-hidden', 'true');
