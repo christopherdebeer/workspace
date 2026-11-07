@@ -25,7 +25,7 @@
  * `mode` shows the parts: 0 the picture; 1 each splat's 1σ and 2σ contours (its ellipse); 2 each one's footprint, solid
  * (the quad's reach, 3σ); 3 the centres only (the point cloud the splats grew from).
  */
-const VS = `#version 300 es
+const VS = () => `#version 300 es
 precision highp float; precision highp int;
 uniform highp usampler2D u_data;
 uniform mat4 u_view, u_proj;
@@ -34,6 +34,12 @@ uniform vec3 u_eye;
 uniform float u_size, u_detail, u_share;
 uniform int u_mode, u_thin, u_only;
 uniform float u_feat[16];
+// (Mist: the coarse density grid, the sun, which lighting, and the tiny network's numbers)
+uniform highp sampler3D u_grid;
+uniform vec3 u_sun;
+uniform int u_light, u_diff;
+uniform vec4 u_net[117];
+uniform vec2 u_ana;
 in vec2 a_corner;
 in uint a_index;
 out vec4 v_color;
@@ -43,6 +49,19 @@ vec3 octDecode(vec2 e) {
   if (n.z < 0.0) n.xy = (1.0 - abs(n.yx)) * vec2(n.x >= 0.0 ? 1.0 : -1.0, n.y >= 0.0 ? 1.0 : -1.0);
   return normalize(n);
 }
+float netAt(int i) { return u_net[i >> 2][i & 3]; }
+float gridAt(vec3 p, int ch) {
+  vec3 f = (p - vec3(${BOX.x0.toFixed(3)}, ${BOX.y0.toFixed(3)}, ${BOX.z0.toFixed(3)})) / vec3(${(BOX.x1 - BOX.x0).toFixed(3)}, ${(BOX.y1 - BOX.y0).toFixed(3)}, ${(BOX.z1 - BOX.z0).toFixed(3)}) * vec3(${GRID.nx}.0, ${GRID.ny}.0, ${GRID.nz}.0) - 0.5;
+  ivec3 i0 = ivec3(floor(f)); vec3 t = f - floor(f); float r = 0.0;
+  for (int c = 0; c < 8; c++) {
+    ivec3 d = ivec3(c & 1, (c >> 1) & 1, c >> 2), q = i0 + d;
+    if (any(lessThan(q, ivec3(0))) || any(greaterThanEqual(q, ivec3(${GRID.nx}, ${GRID.ny}, ${GRID.nz})))) continue;
+    vec3 w = mix(1.0 - t, t, vec3(d));
+    r += texelFetch(u_grid, q, 0)[ch] * w.x * w.y * w.z;
+  }
+  return r;
+}
+float hg(float c, float g) { return (1.0 - g * g) / (12.566 * pow(1.0 + g * g - 2.0 * g * c, 1.5)); }
 float hash(uint x) { x = x * 747796405u + 2891336453u; x = ((x >> ((x >> 28u) + 4u)) ^ x) * 277803737u; x = (x >> 22u) ^ x; return float(x) / 4294967295.0; }
 void main() {
   ivec2 t = ivec2(int(a_index & 1023u) * 2, int(a_index >> 10));
@@ -74,6 +93,32 @@ void main() {
     float s1 = dot(sn, v), s2 = dot(n2, v);
     keep *= s1 * s2 < 0.0 ? smoothstep(0.0, 0.12, min(abs(s1), abs(s2))) : 0.0;
     v_color.rgb = vec3(36.0, 31.0, 27.0) / 255.0;
+  }
+  // (a mist splat: its light by the chosen method: stored on it (the reference, or baked), the analytic formula, or the
+  // tiny network, both from the same cheap features of the coarse grid)
+  if (kind == 8u) {
+    float L = v_color.r * 3.0, refL = v_color.g * 3.0;
+    if (u_light > 0) {
+      vec3 view = normalize(u_eye - p);
+      float f[9];
+      f[0] = gridAt(p, 0); f[1] = gridAt(p, 1); f[2] = gridAt(p, 2);
+      f[3] = gridAt(p + u_sun * ${SUN_TAPS[0]}, 1); f[4] = gridAt(p + u_sun * ${SUN_TAPS[1]}, 1); f[5] = gridAt(p + u_sun * ${SUN_TAPS[2]}, 1); f[6] = gridAt(p + u_sun * ${SUN_TAPS[3]}, 1);
+      f[7] = dot(view, u_sun); f[8] = u_sun.y;
+      if (u_light == 1) {
+        float tau = f[3] * 0.08 + f[4] * 0.14 + f[5] * 0.23 + f[6] * 0.4;
+        L = u_ana.x * exp(-${SIGMA.toFixed(2)} * tau) * hg(f[7], 0.6) * 12.566 + u_ana.y * exp(-1.2 * f[2]);
+      } else {
+        // (the network: 9 → 16 → 16 → 1; its numbers in order w1 b1 w2 b2 w3 b3 mean std)
+        float x[9], h1[16], h2[16];
+        for (int i = 0; i < 9; i++) x[i] = (f[i] - netAt(449 + i)) / netAt(458 + i);
+        for (int j = 0; j < 16; j++) { float s = netAt(144 + j); for (int i = 0; i < 9; i++) s += netAt(j * 9 + i) * x[i]; h1[j] = max(s, 0.0); }
+        for (int j = 0; j < 16; j++) { float s = netAt(416 + j); for (int i = 0; i < 16; i++) s += netAt(160 + j * 16 + i) * h1[i]; h2[j] = max(s, 0.0); }
+        float o = netAt(448); for (int i = 0; i < 16; i++) o += netAt(432 + i) * h2[i];
+        L = max(0.0, exp(o) - 1.0);
+      }
+    }
+    // (shown linear, a little compressed at the top; or, in the error view, how far it is from the reference)
+    v_color.rgb = u_diff == 1 ? mix(vec3(0.22, 0.24, 0.27), vec3(1.0, 0.38, 0.2), clamp(abs(L - refL) * 2.5, 0.0, 1.0)) : vec3(0.96, 0.94, 0.88) * (L * 0.8 / (1.0 + 0.25 * L));
   }
   if (u_mode != 0 && u_mode != 3) keep = keep > 0.02 ? 1.0 : 0.0;
   if (keep < 0.01) return;
@@ -142,6 +187,7 @@ out vec4 o;
 void main() { o = vec4(0.0); }`;
 
 import { covariance, type Splats } from './format';
+import { BOX, GRID, SIGMA, SUN_TAPS, type Net } from './mist';
 
 export interface DrawOpts {
   size: number; mode: number; bg: [number, number, number];
@@ -154,6 +200,8 @@ export interface DrawOpts {
   occlude?: boolean;
   /** only one kind of mark (stone.ts MARK), or all (-1) */
   only?: number;
+  /** Mist: how its splats are lit (0 their stored colour, 1 analytic, 2 the network), and the sun */
+  light?: number; sun?: [number, number, number]; diff?: boolean;
 }
 
 export class Renderer {
@@ -162,16 +210,27 @@ export class Renderer {
   private oprog: WebGLProgram; private ovao: WebGLVertexArrayObject; private obuf: WebGLBuffer; private ocount = 0;
   private u: Record<string, WebGLUniformLocation | null> = {}; private ou: Record<string, WebGLUniformLocation | null> = {};
   n = 0; drawn = 0;
+  private gridTex: WebGLTexture | null = null; private net = new Float32Array(468); private ana = [0, 0];
+  /** Mist's coarse density grid (RGBA floats, GRID's size) */
+  setGrid(data: Float32Array) {
+    const gl = this.gl; gl.bindTexture(gl.TEXTURE_3D, this.gridTex);
+    gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MIN_FILTER, gl.NEAREST); gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    gl.texImage3D(gl.TEXTURE_3D, 0, gl.RGBA32F, GRID.nx, GRID.ny, GRID.nz, 0, gl.RGBA, gl.FLOAT, data);
+  }
+  /** the tiny network's numbers (w1 b1 w2 b2 w3 b3 mean std), and the analytic model's two weights */
+  setNet(n: Net, ana: { a: number; b: number }) { this.net.set([...n.w1, ...n.b1, ...n.w2, ...n.b2, ...n.w3, n.b3, ...n.mean, ...n.std]); this.ana = [ana.a, ana.b]; }
   constructor(readonly canvas: HTMLCanvasElement) {
     const gl = canvas.getContext('webgl2', { antialias: false, premultipliedAlpha: true, alpha: false, depth: true, powerPreference: 'high-performance' });
     if (!gl) throw new Error('WebGL2 is needed');
     this.gl = gl;
     const sh = (type: number, src: string) => { const s = gl.createShader(type)!; gl.shaderSource(s, src); gl.compileShader(s); if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s) ?? 'shader'); return s; };
     const link = (vs: string, fs: string) => { const p = gl.createProgram()!; gl.attachShader(p, sh(gl.VERTEX_SHADER, vs)); gl.attachShader(p, sh(gl.FRAGMENT_SHADER, fs)); gl.linkProgram(p); if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p) ?? 'link'); return p; };
-    const p = this.prog = link(VS, FS);
-    for (const k of ['u_data', 'u_view', 'u_proj', 'u_focal', 'u_viewport', 'u_size', 'u_mode', 'u_eye', 'u_detail', 'u_share', 'u_thin', 'u_feat', 'u_only']) this.u[k] = gl.getUniformLocation(p, k);
+    const p = this.prog = link(VS(), FS);
+    for (const k of ['u_data', 'u_view', 'u_proj', 'u_focal', 'u_viewport', 'u_size', 'u_mode', 'u_eye', 'u_detail', 'u_share', 'u_thin', 'u_feat', 'u_only', 'u_grid', 'u_sun', 'u_light', 'u_net', 'u_ana', 'u_diff']) this.u[k] = gl.getUniformLocation(p, k);
     // (an array's location, by its first element's name, where the bare name isn't found)
     this.u.u_feat ??= gl.getUniformLocation(p, 'u_feat[0]');
+    this.u.u_net ??= gl.getUniformLocation(p, 'u_net[0]');
+    this.gridTex = gl.createTexture()!;
     this.vao = gl.createVertexArray()!; gl.bindVertexArray(this.vao);
     const quad = gl.createBuffer()!; gl.bindBuffer(gl.ARRAY_BUFFER, quad); gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
     const ac = gl.getAttribLocation(p, 'a_corner'); gl.enableVertexAttribArray(ac); gl.vertexAttribPointer(ac, 2, gl.FLOAT, false, 0, 0);
@@ -232,6 +291,9 @@ export class Renderer {
     gl.uniform3fv(this.u.u_eye, opts.eye ?? [0, 0, 0]);
     gl.uniform1f(this.u.u_detail, opts.detail ?? 1); gl.uniform1f(this.u.u_share, opts.share ?? 1); gl.uniform1i(this.u.u_thin, opts.thin ?? 0); gl.uniform1i(this.u.u_only, opts.only ?? -1);
     gl.uniform1fv(this.u.u_feat, opts.features ?? new Float32Array(16));
+    gl.uniform1i(this.u.u_light, opts.light ?? 0); gl.uniform1i(this.u.u_diff, opts.diff ? 1 : 0); gl.uniform3fv(this.u.u_sun, opts.sun ?? [0, 1, 0]);
+    gl.uniform4fv(this.u.u_net, this.net); gl.uniform2f(this.u.u_ana, this.ana[0], this.ana[1]);
+    gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_3D, this.gridTex); gl.uniform1i(this.u.u_grid, 1); gl.activeTexture(gl.TEXTURE0);
     // (tested against the occluder's depth, never writing their own)
     gl.enable(gl.DEPTH_TEST); gl.depthFunc(gl.LEQUAL); gl.depthMask(false);
     gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);

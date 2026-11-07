@@ -103,6 +103,18 @@ ok('parse() tells a .splat by its bytes', F.parse(F.encodeSplat(g)).n === g.n);
   ok('brush: a wash stays in its region and is densest near its anchor', dw.length > 20 && dw.every((d) => Math.abs(d.p[0]) <= 0.31 && Math.abs(d.p[2]) <= 0.31) && dw.filter((d) => d.p[2] < -0.15).length > dw.filter((d) => d.p[2] > 0.15).length);
   void g1;
 }
+// (Mist: on an unseen bank under an unseen sun, the trained network is nearer the expensive reference than the analytic
+// model, and both far nearer than the baked colour; the CPU features match what was trained)
+{
+  const MI = await load('../client/splats/mist.ts'), NN = await load('../client/splats/mistnet.ts');
+  const shape = MI.mistShape(9), grid = MI.densityGrid(shape), pts = MI.mistPoints(shape, 160, 21), sun = MI.sunDir(1.6, 0.4), bake = MI.sunDir(NN.BAKE.az, NN.BAKE.el);
+  let eb = 0, ea = 0, en = 0;
+  for (const pt of pts) {
+    const v = [0.3, 0.5, 0.81], c = v[0] * sun[0] + v[1] * sun[1] + v[2] * sun[2], y = MI.referenceLight(MI.referenceAt(shape, pt.p, sun), c), f = MI.features(grid, pt.p, sun, v);
+    eb += Math.abs(MI.referenceLight(MI.referenceAt(shape, pt.p, bake), v[0] * bake[0] + v[1] * bake[1] + v[2] * bake[2]) - y); ea += Math.abs(MI.analytic(f, NN.ANALYTIC) - y); en += Math.abs(MI.netLight(NN.NET, f) - y);
+  }
+  ok(`mist: unseen bank and sun, mean error baked ${(eb / pts.length).toFixed(3)} > analytic ${(ea / pts.length).toFixed(3)} > neural ${(en / pts.length).toFixed(3)}`, en < ea && ea < eb);
+}
 if (R) {
   ok('half floats: 1, 0.5, 65504, 2e-5 round trip', R.toHalf(1) === 0x3c00 && R.toHalf(0.5) === 0x3800 && R.toHalf(65504) === 0x7bff && R.toHalf(0) === 0);
 }

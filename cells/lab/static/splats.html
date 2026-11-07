@@ -22,6 +22,7 @@ header a{pointer-events:auto;font:11px ui-monospace,monospace;color:var(--muted)
 #stats{font:11px ui-monospace,monospace;color:var(--muted);font-variant-numeric:tabular-nums}
 .sliders{display:grid;grid-template-columns:1fr 1fr;gap:4px 14px;font-size:12px;color:var(--muted)}.sliders label{display:flex;flex-direction:column;gap:2px}.sliders .v{float:right;font-family:ui-monospace,monospace;color:var(--ink)}
 input[type=range]{width:100%;accent-color:var(--accent)}
+#mist-controls{display:flex;flex-direction:column;gap:8px}#mist-controls[hidden]{display:none}.note{font-size:11px;color:var(--muted)}
 #stone-controls{display:flex;flex-direction:column;gap:8px}#stone-controls[hidden]{display:none}.sliders.one{grid-template-columns:1fr}
 .paper{--bg:#efe7d8;--card:rgba(246,241,231,.9);--ink:#2a2420;--muted:#7a7166;--edge:#d8cfbf;color-scheme:light}
 .preview header,.preview #panel,.clean header,.clean #panel,.clean #fold{display:none!important}
@@ -41,6 +42,12 @@ input[type=range]{width:100%;accent-color:var(--accent)}
     <div class="row" id="states"><span class="lab">state</span></div>
     <div class="row" id="thins"><span class="lab">thin</span></div>
     <div class="row" id="tools"><span class="lab">hand</span></div>
+  </div>
+  <div id="mist-controls" hidden>
+    <div class="row" id="lights"><span class="lab">light</span></div>
+    <div class="sliders"><label>sun round <span class="v" id="sunaz-v"></span><input type="range" id="sunaz" min="0" max="6.28" step="0.02"></label><label>sun height <span class="v" id="sunel-v"></span><input type="range" id="sunel" min="0.1" max="1.3" step="0.02"></label></div>
+    <div class="row" id="banks"><span class="lab">bank</span></div>
+    <div id="mist-note" class="note"></div>
   </div>
   <div class="row" id="modes"><span class="lab">see</span></div>
   <div id="note"></div>

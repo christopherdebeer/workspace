@@ -19,6 +19,8 @@ import { bounds, garden, parse, type Splats } from './format';
 import { Sorter, type SortDone } from './sort';
 import { MARK, STATES, oneStone, stoneShape, type Look, type Stone } from './stone';
 import { brushScene, type BrushScene } from './subjects';
+import { LIT, mistScene, referenceColours, sunDir, referenceAt, referenceLight, type MistScene } from './mist';
+import { NET, ANALYTIC, BAKE, RESULTS } from './mistnet';
 
 const qs = new URLSearchParams(location.search);
 const preview = qs.has('preview');
@@ -30,6 +32,7 @@ if (qs.has('clean')) document.documentElement.classList.add('clean');
 const SCENES: Record<string, { label: string; url?: string; mb?: number; up: 1 | -1 }> = {
   stone: { label: 'one stone', up: 1 },
   brushes: { label: 'brushes', up: 1 },
+  mist: { label: 'mist', up: 1 },
   garden: { label: 'garden', up: 1 },
   plush: { label: 'plush', url: 'https://huggingface.co/cakewalk/splat-data/resolve/main/plush.splat', mb: 9, up: -1 },
   nike: { label: 'shoe', url: 'https://huggingface.co/cakewalk/splat-data/resolve/main/nike.splat', mb: 8.7, up: -1 },
@@ -50,7 +53,8 @@ function show(s: Splats, name: string, u: 1 | -1) {
   R.load(s);
   if (name !== 'stone') stone = null;
   if (name !== 'brushes') brushes = null;
-  if (name !== 'stone' && name !== 'brushes') R.setOccluder(null);
+  if (name !== 'mist') mist = null;
+  if (name !== 'stone' && name !== 'brushes' && name !== 'mist') R.setOccluder(null);
   ranks = s.rank ? Float32Array.from(s.rank).sort() : null;
   document.documentElement.classList.toggle('paper', name === 'stone' || name === 'brushes');
   const b = bounds(s);
@@ -84,6 +88,7 @@ async function open(name: string) {
   try {
     if (name === 'stone') openStone();
     else if (name === 'brushes') openBrushes();
+    else if (name === 'mist') openMist();
     else if (!sc || !sc.url) { show(garden(Number(qs.get('count') ?? 120000)), 'garden', 1); }
     else show(parse(await fetchWithProgress(sc.url)), name, sc.up);
     loadMs = performance.now() - t0;
@@ -104,6 +109,60 @@ let only = qs.has('only') ? (MARK as Record<string, number>)[qs.get('only')!] ??
 const features = new Float32Array(16);
 let lastPaint: [number, number, number] | null = null;
 const shape = (() => { let s: Stone | null = null; return () => (s ??= stoneShape()); })();
+/**
+ * Mist (mist.ts): the same splats lit four ways: the expensive reference (worked out here, a chunk at a time), baked (the
+ * reference under one sun and view, frozen), the analytic formula, and the tiny trained network (both in the shader).
+ */
+let mist: MistScene | null = null, light = qs.get('light') ?? 'neural', sunAz = Number(qs.get('az') ?? 0.9), sunEl = Number(qs.get('el') ?? 0.5), bank = Number(qs.get('bank') ?? 1);
+let refJob = 0, refReady = false;
+const LIGHTS = ['reference', 'baked', 'analytic', 'neural'];
+function openMist() {
+  const M = mistScene(bank, Number(qs.get('count') ?? 10000));
+  show(M.drawing, 'mist', 1);
+  mist = M;
+  R.setGrid(M.grid); R.setNet(NET, ANALYTIC); R.setOccluder(M.occluder);
+  framing = { target: [0, 0.55, 0], dist: 4.2 };
+  setView('hero');
+  relight();
+  syncMist();
+}
+/**
+ * The mist's stored light, worked out here a chunk at a time and then uploaded: in red, the method's own if it's stored
+ * (the reference, or baked); in green, the reference, for the error view (`?diff`).
+ */
+let diff = qs.has('diff');
+function relight() {
+  if (!mist) return;
+  const M = mist, job = ++refJob, pts = M.points, eye: [number, number, number] = [...eyePos()] as [number, number, number];
+  refReady = false; $('status').textContent = '';
+  const needRef = light === 'reference' || diff, needBake = light === 'baked';
+  if (!needRef && !needBake) { refReady = true; return; }
+  const sun = sunDir(sunAz, sunEl), bakeSun = sunDir(BAKE.az, BAKE.el), bakeEye: [number, number, number] = [3.4, 1.8, 2.4];
+  const lightAt = (p: number[], s: number[], from: number[]) => { const v = norm([from[0] - p[0], from[1] - p[1], from[2] - p[2]]); return referenceLight(referenceAt(M.shape, p as [number, number, number], s as [number, number, number]), v[0] * s[0] + v[1] * s[1] + v[2] * s[2]); };
+  const enc = (L: number) => Math.max(0, Math.min(255, Math.round((L / 3) * 255)));
+  let i = 0;
+  const chunk = () => {
+    if (job !== refJob || mist !== M) return;
+    const end = Math.min(pts.length, i + 500);
+    for (; i < end; i++) {
+      const p = pts[i].p, ref = needRef ? lightAt(p, sun, eye) : 0;
+      if (needRef) M.drawing.rgba[i * 4 + 1] = enc(ref);
+      M.drawing.rgba[i * 4] = enc(needBake ? lightAt(p, bakeSun, bakeEye) : ref);
+    }
+    $('status').textContent = i < pts.length ? `working out the ${needRef ? 'reference' : 'baked'} light ${Math.round((i / pts.length) * 100)}%` : '';
+    if (i < pts.length) setTimeout(chunk, 0); else { R.load(M.drawing); lastDir = null; refReady = true; }
+  };
+  chunk();
+}
+void referenceColours; void LIT;
+const eyePos = () => eye().pos;
+function syncMist() {
+  [...$('lights').querySelectorAll('button')].forEach((b, k) => b.setAttribute('aria-pressed', String(k < LIGHTS.length ? LIGHTS[k] === light : diff)));
+  [...$('banks').querySelectorAll('button')].forEach((b, k) => b.setAttribute('aria-pressed', String([1, 9][k] === bank)));
+  $('mist-controls').hidden = !mist;
+  const r = RESULTS.unseenBankUnseenSuns as Record<string, { mae: number; corr: number }>;
+  $('mist-note').textContent = mist ? `measured against the reference on an unseen bank under unseen suns (mean light 0.59): baked mae ${r.baked.mae}, analytic ${r.analytic.mae}, neural ${r.neural.mae}` : '';
+}
 /** the Brushes scene (subjects.ts): the same brushes on a stone, a culm, a corner and a written gesture */
 let brushes: BrushScene | null = null;
 /** what the camera frames on a drawing: where, and from how far */
@@ -294,6 +353,11 @@ const syncs = [
 function syncStone() { syncs.forEach((f) => f()); $('stone-controls').hidden = !stone && !brushes; }
 slider('detail', () => detail, (v) => { detail = v; syncStone(); }, (v) => `${Math.round(v * 100)}%`);
 function syncDetail() { const el = $<HTMLInputElement>('detail'); el.value = String(detail); $('detail-v').textContent = `${Math.round(detail * 100)}%`; }
+LIGHTS.forEach((l) => { const b = document.createElement('button'); b.textContent = l; b.onclick = () => { light = l; relight(); syncMist(); }; $('lights').append(b); });
+(() => { const b = document.createElement('button'); b.textContent = 'error'; b.id = 'diffb'; b.onclick = () => { diff = !diff; relight(); syncMist(); }; $('lights').append(b); })();
+[[1, 'trained bank'], [9, 'unseen bank']].forEach(([k, l]) => { const b = document.createElement('button'); b.textContent = String(l); b.onclick = () => { bank = Number(k); openMist(); }; $('banks').append(b); });
+slider('sunaz', () => sunAz, (v) => { sunAz = v; if (light === 'reference') relight(); }, (v) => `${Math.round((v * 180) / Math.PI)}°`);
+slider('sunel', () => sunEl, (v) => { sunEl = v; if (light === 'reference') relight(); }, (v) => `${Math.round((v * 180) / Math.PI)}°`);
 $('fold').onclick = () => { const f = document.documentElement.classList.toggle('folded'); $('fold').setAttribute('aria-expanded', String(!f)); $('fold').textContent = f ? 'controls' : 'hide'; };
 $('fold').textContent = 'hide';
 $('flip').onclick = () => { up = up === 1 ? -1 : 1; lastDir = null; };
@@ -319,7 +383,7 @@ function frame() {
   const near = Math.max(0.01, cam.dist * 0.01), proj = perspective(cam.fov, w / h, near, cam.dist * 100);
   const fy = h / (2 * Math.tan(cam.fov / 2));
   const share = shareAt(detail);
-  R.draw(view, proj, [fy, fy], { size, mode, bg: stone || brushes ? [0.937, 0.906, 0.847] : theme(), detail, thin, share, features, eye: pos, occlude, only });
+  R.draw(view, proj, [fy, fy], { size, mode, bg: mist ? [0.13, 0.145, 0.165] : stone || brushes ? [0.937, 0.906, 0.847] : theme(), detail, thin, share, features, eye: pos, occlude, only, light: mist ? Math.max(0, LIGHTS.indexOf(light) - 1) : 0, sun: sunDir(sunAz, sunEl), diff: mist ? diff : false });
   frames++;
   if (t - fpsT > 500) {
     fps = (frames * 1000) / (t - fpsT); frames = 0; fpsT = t;
@@ -331,6 +395,7 @@ function frame() {
 (window as unknown as { __splats: unknown }).__splats = {
   get scene() { return scene ? { name: sceneName, n: scene.n } : null; }, cam, get fps() { return fps; }, get sortMs() { return sortMs; }, get drawn() { return R.drawn; },
   setMode: (m: number) => { mode = m; syncModes(); }, open, openUrl,
+  mist: { setDiff: (d: boolean) => { diff = d; relight(); }, setLight: (l: string) => { light = l; relight(); syncMist(); }, setSun: (az: number, el: number) => { sunAz = az; sunEl = el; relight(); }, setBank: (b: number) => { bank = b; openMist(); }, get ready() { return refReady; } },
   stone: { setView, setDetail: (d: number) => { detail = d; syncDetail(); syncStone(); }, setThin: (k: number) => { thin = k; }, setLook: (l: Look) => { look = l; if (brushes) openBrushes(); else openStone(); }, frame: (s: string | null) => { frameSubject(s); setView('hero'); }, paint, clear: () => { features.fill(0); lastPaint = null; }, features,
     /** a touch at a point of the stone (world), as the brush would make it from the eye; and the stone's own lines */
     touch: (p: [number, number, number]) => { if (!stone) return 0; const { pos } = eye(), d = norm([p[0] - pos[0], p[1] - pos[1], p[2] - pos[2]]), h = stone.ray(pos, d); if (!h) return 0; const f = stone.featureAt(h.p, h.region); if (f) features[f] = Math.min(1, features[f] + 0.07); return f; },

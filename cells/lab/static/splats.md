@@ -164,6 +164,65 @@ The test is whether the same brushes, given only different paths, regions and an
 
 `subjects.ts` makes no marks itself. Board: `node cells/lab/devtools/splats-brushes.mjs [wash|dry]`.
 
+## Mist: a learned lighting function on splats
+
+`?scene=mist` (`mist.ts`, `mistnet.ts`, `devtools/splats-mist-train.mjs`). After Charles Grassi's *Neural Shaders,
+Explained With Clouds*: a tiny network estimating the light a cloud scatters toward the camera from nearby density at
+several scales, density toward the sun and the view angle, while the renderer still does visibility and accumulation.
+The question here is whether a compact spatial asset (splats) plus a compact learned lighting function keeps more of
+an expensive scene's behaviour, within a phone's budget.
+
+**The scene** is a procedural bank of mist between bamboo stems (the stems opaque in its density, so they shadow it),
+drawn with the brushes, under a moving sun.
+
+**The reference** is an expensive light model, about 200 density evaluations per point:
+- the sun's transmittance marched through the density;
+- single scattering with a forward phase;
+- multiple scattering approximated by octaves;
+- sky light marched from six directions.
+
+**The same splats** (positions, sizes, opacity), seen from the same camera at the same resolution, are lit four ways:
+
+| method | where its light comes from | cost per splat |
+|---|---|---|
+| reference | the expensive model, on the CPU | ~200 density evaluations; seconds to update |
+| baked | the reference under one sun and view, frozen | nothing |
+| analytic | Beer–Lambert toward the sun with the phase, plus an ambient term; two weights fitted to the reference | 7 grid samples |
+| neural | 9 → 16 → 16 → 1, 467 numbers, trained offline against the reference | 7 grid samples and ~420 multiply-adds |
+
+The analytic and neural methods use the same cheap features, read from one coarse 48×24×32 grid in a 3D texture:
+- the density at three scales;
+- the blurred density at four distances toward the sun;
+- the view–sun cosine;
+- the sun's height.
+
+The CPU and the shader sample the grid identically.
+
+**Trained** on five banks × ten suns × three views (240,000 samples, about 30 s in Node). **Measured** where it
+wasn't trained: suns in a held-out band of azimuth and elevation, and a held-out bank:
+
+| | baked | analytic | neural |
+|---|---|---|---|
+| training banks, unseen suns: mean abs. error (mean light 0.45) | 0.297 | 0.102 | **0.070** |
+| unseen bank, unseen suns: mean abs. error (mean light 0.59) | 0.376 | 0.099 | **0.074** |
+| unseen bank, unseen suns: correlation with the reference | 0.33 | 0.91 | **0.93** |
+
+**What that says:**
+- Baked splats can't follow a moving sun at all, worst when back-lit.
+- A well-fitted analytic model does most of the work.
+- The network removes about a quarter of the analytic model's remaining error, on a shape and suns it never saw, for
+  ~420 multiply-adds per splat.
+- Both miss where the mist is finer than the coarse grid (the *error* view shows where), so a finer grid or splat
+  subdivision would matter more there than a bigger network.
+
+Caveats:
+- The comparison is per splat, not against a full volumetric render.
+- Phone timing is unmeasured: headless Chrome renders in software.
+- The network adds shading work and doesn't remove sorting or overdraw.
+
+`?light=reference|baked|analytic|neural` · `?az= ?el=` (the sun) · `?bank=1|9` · `?diff` (the error view). Board:
+`node cells/lab/devtools/splats-mist.mjs`; retrain: `node cells/lab/devtools/splats-mist-train.mjs`.
+
 ## Where it could go
 
 Roughly in order of what each teaches:
