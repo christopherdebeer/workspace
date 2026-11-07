@@ -12,7 +12,7 @@ mkdirSync(out, { recursive: true });
 const only = process.argv[3]?.split(',');
 const settle = (page) => page.waitForFunction(() => window.__blocks.settled() && window.__blocks.frames > 3, null, { timeout: 300000 });
 await withWood(async (wood) => {
-  const views = [['courtyard', 'demo=courtyard', [-2.356, 0.6, 8]], ['court', 'demo=courtyard', [-2.6, 0.55, 4.2, [5, 0.8, 3.5]]], ['castle', 'demo=castle', [-2.3, 0.6, 13]], ['arcade', 'demo=arcade', [-2.5, 0.5, 10]], ['aqueduct', 'demo=aqueduct', [-2.6, 0.45, 11]], ['stones', 'demo=stones', [-2.4, 0.55, 7]], ['house', 'demo=house', [-2.3, 0.6, 8]], ['harbour', 'demo=harbour', [-2.7, 0.5, 10]]];
+  const views = [['courtyard', 'demo=courtyard', [-2.356, 0.6, 8]], ['court', 'demo=courtyard', [-2.6, 0.55, 4.2, [5, 0.8, 3.5]]], ['castle', 'demo=castle', [-2.3, 0.6, 13]], ['arcade', 'demo=arcade', [-2.5, 0.5, 10]], ['aqueduct', 'demo=aqueduct', [-2.6, 0.45, 11]], ['stones', 'demo=stones', [-2.4, 0.55, 7]], ['house', 'demo=house', [-2.3, 0.6, 8]], ['harbour', 'demo=harbour', [-2.7, 0.5, 10]], ['cliff', 'demo=cliff', [-2.75, 0.55, 17, [7, 2.5, 10]]], ['cliff-near', 'demo=cliff', [-2.6, 0.5, 8, [5, 4, 13]]]];
   for (const [name, q, v] of views) {
     if (only && !only.includes(name)) continue;
     const page = await wood.open(q);

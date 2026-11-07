@@ -84,6 +84,26 @@ function stones(): Cell[] {
   return dedupe(out);
 }
 
+/** a village on a cliff over a harbour: two quay arms and a quay along the back round a basin of water; behind it rock
+ * in three terraces, each four deep and higher than the last; on each, small masses two or three across, one to
+ * three high, with gaps between. Nothing else is said: the rock, the houses' washes and roofs, their shutters and
+ * balconies, the washing across the gaps, the water and the boats in it are what the stone round them makes of it */
+function cliff(): Cell[] {
+  const out: Cell[] = [];
+  const box = (x0: number, x1: number, y0: number, y1: number, z0: number, z1: number) => { for (let x = x0; x <= x1; x++) for (let y = y0; y <= y1; y++) for (let z = z0; z <= z1; z++) out.push([x, y, z]); };
+  // (the quays: two arms and the back)
+  box(0, 1, 0, 0, 0, 8); box(12, 13, 0, 0, 0, 8); box(0, 13, 0, 0, 7, 8);
+  // (the rock, in three terraces, and a crag at the right rising over the harbour)
+  box(0, 13, 0, 2, 9, 12); box(0, 13, 0, 4, 13, 16); box(3, 13, 0, 6, 17, 20); box(10, 13, 0, 6, 9, 12);
+  // (on each terrace, at its back, the masses: [x0, x1, high])
+  const row = (z0: number, y0: number, masses: Array<[number, number, number]>) => { for (const [x0, x1, h] of masses) box(x0, x1, y0, y0 + h - 1, z0, z0 + 1); };
+  row(11, 3, [[0, 1, 2], [3, 5, 3], [7, 8, 2]]);
+  row(11, 7, [[11, 12, 2]]);
+  row(15, 5, [[1, 2, 2], [4, 6, 3], [8, 9, 2]]);
+  row(19, 7, [[4, 5, 2], [8, 10, 3], [12, 13, 2]]);
+  return dedupe(out);
+}
+
 function dedupe(cells: Cell[]): Cell[] {
   const seen = new Set<string>(), out: Cell[] = [];
   for (const c of cells) { const k = c.join(); if (!seen.has(k)) { seen.add(k); out.push(c); } }
@@ -91,4 +111,4 @@ function dedupe(cells: Cell[]): Cell[] {
   return out.sort((a, b) => a[1] - b[1]);
 }
 
-export const DEMOS: Record<string, () => Cell[]> = { courtyard, castle, arcade, aqueduct, stones, house, harbour };
+export const DEMOS: Record<string, () => Cell[]> = { courtyard, castle, arcade, aqueduct, stones, house, harbour, cliff };

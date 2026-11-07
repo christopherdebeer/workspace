@@ -36,11 +36,15 @@ const experiments: Record<string, () => Promise<unknown>> = {
   rsvp: () => import('./rsvp/main'),
   switchback: () => import('./switchback/main'),
   autograph: () => import('./autograph/main'),
+  tactile: () => import('./tactile/main'),
+  splats: () => import('./splats/main'),
 };
 
 // (loaded as a worker by an experiment that shapes off the page's thread: serve it)
 const workers: Record<string, () => Promise<unknown>> = {
   blocks: () => import('./blocks/mesher').then((m) => m.serve()),
+  labyrinth: () => import('./labyrinth/mesher').then((m) => m.serve()),
+  splats: () => import('./splats/sort').then((m) => m.serve()),
 };
 
 if (typeof document === 'undefined') {

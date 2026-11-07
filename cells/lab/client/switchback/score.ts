@@ -15,7 +15,8 @@
  * clock the result; ENDLESS, until you call it a day (FINISH, in the menu).
  */
 import type { Event, Rider } from './sim';
-import { VMAX } from './sim';
+import { BODY, TRICKS, VMAX } from './sim';
+import type { Body } from './sim';
 import type { Sig } from './sign';
 import { CLAUDE } from './hand';
 
@@ -44,6 +45,8 @@ export class Score {
     if (r.crashT > 0) { this.wasAir = false; return; }
     if (r.air) {
       this.airT = r.airT; this.whipMax = Math.max(this.whipMax, Math.abs(r.whip));
+      // (the body's tricks: each called as it comes back from all the way off, by how long it was held there)
+      for (const k of BODY) { if (r.outs[k] >= 1) this.bodyHeld[k] = r.held[k]; else if (this.bodyHeld[k] !== undefined) this.bodyDone(k); }
     } else {
       // (pace: a trickle into the score, only when you're really moving)
       const pace = Math.max(0, (Math.hypot(r.vx, r.vz) - 25) / (VMAX - 25));
@@ -66,6 +69,8 @@ export class Score {
     } else if (e.kind === 'land') {
       // (a real jump just landed (not a crest's hop): its air, its whip, whether it came down square; one step up the
       // multiplier for the lot)
+      for (const k of BODY) if (this.bodyHeld[k] !== undefined) this.bodyDone(k);
+      if (this.bodies) { this.bodies = 0; if (this.airT <= 0.8) this.beat(); }
       if (this.airT > 0.8) {
         this.add(`AIR ${this.airT.toFixed(1)}S`, Math.round((this.airT - 0.5) * 10) * 10);
         if (this.whipMax > 0.35) this.add('WHIP', Math.round(this.whipMax * 57.3 * 6));
@@ -76,7 +81,7 @@ export class Score {
     } else if (e.kind === 'crash') {
       this.falls++;
       if (this.pool) this.moments.push({ kind: 'wipe', label: 'WIPED OUT', points: Math.round(this.pool * this.mult) });
-      this.pool = 0; this.mult = 1; this.chain = []; this.airT = 0; this.whipMax = 0; this.slideT = 0; this.beats = 0; this.flipped = false;
+      this.pool = 0; this.mult = 1; this.chain = []; this.airT = 0; this.whipMax = 0; this.slideT = 0; this.beats = 0; this.flipped = false; this.bodyHeld = {}; this.bodies = 0;
       this.total = Math.max(0, this.total - 200);
     } else if (e.kind === 'checkpoint') {
       // (a checkpoint banks the combo, and pays for itself: more for reaching it under par)
@@ -94,6 +99,15 @@ export class Score {
   /** at the end of a run: anything pending banks */
   close() { if (this.pool) this.bank(); }
 
+  /** the body's tricks in the air: each held how long all the way off (while it's out), and how many this flight; each
+   * is called as it comes back: worth more the longer it was held, and half as much again for each one after the first
+   * in the same flight (one strung into the next) */
+  private bodyHeld: Partial<Record<Body, number>> = {}; private bodies = 0;
+  private bodyDone(k: Body) {
+    const held = this.bodyHeld[k] ?? 0, chain = 1 + 0.5 * this.bodies;
+    this.add(TRICKS[k].name, Math.round(((TRICKS[k].points + held * 500) * chain) / 10) * 10);
+    delete this.bodyHeld[k]; this.bodies++;
+  }
   private add(label: string, points: number) {
     if (label.includes('FLIP')) this.flipped = true;
     this.pool += points; this.chain.push(label); this.tricks++; this.quiet = 0;

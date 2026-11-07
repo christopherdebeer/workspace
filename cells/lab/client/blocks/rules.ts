@@ -20,6 +20,13 @@
  * from the walls, it holds water; against a wall, a bed; in a corner of walls, a tree, which grows on up through the
  * cells over it.
  *
+ * And where a mass's top is, and how broad: stone whose column ends within four, in a top two or three cells across
+ * (a top narrow both ways but not a single wall's width), at least two high, is a **house** (its walls washed in one of a few colours,
+ * the same colour to the top's corner; over its top, a pitched roof: the empty cell over each top block knows how far
+ * the top runs each way, to its eaves); stone thick both ways along its level (four or more) with stone on it is
+ * **rock**. And on the ground, a basin walled three ways and wide between two facing walls is a **harbour**: open
+ * water right up to the walls, not a pool.
+ *
  * And the neighbourhood itself, turned to a canonical orientation (the least of its eight turns and mirrors about the
  * vertical), as a code: blocks with the same surroundings, however turned, get the same code, and the carving that
  * comes of it, turned with them. Nothing is kept: a block is read again whenever what's round it changes.
@@ -53,6 +60,14 @@ export type Read = {
    * holds water (in a court, nothing within two), is a bed (in a court, against a wall), or bears a tree (a bed in a
    * corner of a court: 1, and the cells over it 2, 3) */
   court: number; pool: boolean; bed: boolean; tree: number;
+  /** stone: rock (thick along its level, loaded); a house (0 not, else 1 + its wash, 0…4) */
+  rock: boolean; house: number;
+  /** an empty cell over a house's top block: 0, else 1 + how many top blocks run on past it each way, −x +x −z +z (two
+   * bits each, up to 3): its roof's eaves */
+  roof: number;
+  /** an empty cell on the ground in a harbour: walled three ways within FAR, and HARBOUR_WIDE or more across between two
+   * facing walls (a court is never so wide): open water, right up to the walls */
+  harbour: boolean;
   /** its surroundings, turned to their canonical orientation: 12 bits from the 26 cells round it, 12 from all 124 */
   code: number;
   /** which of the eight turns and mirrors about the vertical brings it to that orientation */
@@ -134,6 +149,9 @@ export const exposure = (r: Read) => r.open.reduce((s, o) => s + o, 0) / 24;
 const EMPTY_OPEN = [0, 0, 0, 0, 0, 0], NO_THRUST = [0, 0, 0, 0];
 /** how far an empty cell's court reaches, each way along its level */
 export const COURT = 6;
+/** how far along the ground a cell looks for the walls of a harbour, and how wide a basin between two facing walls
+ * has to be to be one */
+export const FAR = 10, HARBOUR_WIDE = 9;
 /** how many of the four ways along its level, from a cell, meet stone within COURT */
 function courtAt(has: Look, x: number, y: number, z: number): number {
   let n = 0;
@@ -150,6 +168,31 @@ function bedAt(has: Look, x: number, z: number, b: number): [boolean, boolean] {
   const court = courtAt(has, x, 0, z);
   if (court < 2) return [false, false];
   return [true, (px || nx) && (pz || nz) && court >= 3];
+}
+
+/** how many cells run on from (x, y, z) in the direction (dx, dz) that `ok` holds for, up to n */
+function run(ok: (x: number, z: number) => boolean, x: number, z: number, dx: number, dz: number, n: number): number {
+  let k = 0;
+  while (k < n && ok(x + dx * (k + 1), z + dz * (k + 1))) k++;
+  return k;
+}
+/** stone at (x, y, z) read for where its mass's top is: rock, or a house (and its wash), or neither */
+function massAt(has: Look, x: number, y: number, z: number): { rock: boolean; house: number; top: number; runs: number[] } {
+  const at = (a: number, c: number) => has(a, y, c);
+  const thickX = 1 + run(at, x, z, 1, 0, 3) + run(at, x, z, -1, 0, 3), thickZ = 1 + run(at, x, z, 0, 1, 3) + run(at, x, z, 0, -1, 3);
+  const rock = has(x, y + 1, z) && Math.min(thickX, thickZ) >= 4;
+  let t = y;
+  while (t < y + 4 && has(x, t + 1, z)) t++;
+  const roofAt = (a: number, c: number) => has(a, t, c) && !has(a, t + 1, c);
+  const runs = [run(roofAt, x, z, -1, 0, 3), run(roofAt, x, z, 1, 0, 3), run(roofAt, x, z, 0, -1, 3), run(roofAt, x, z, 0, 1, 3)];
+  const sx = 1 + runs[0] + runs[1], sz = 1 + runs[2] + runs[3], narrow = Math.min(sx, sz);
+  // (a house stands at least two high, on stone or by itself: a mass one block high on the ground is a quay, a kerb)
+  const tall = t > y || has(x, y - 1, z);
+  if (rock || !tall || has(x, t + 1, z) || narrow < 2 || narrow > 3) return { rock, house: 0, top: t, runs };
+  // (the wash: one of five, by the top's corner, so a house is one colour)
+  let h = Math.imul(x - runs[0] + 1013, 0x27d4eb2d) ^ Math.imul(z - runs[2] + 7919, 0x165667b1);
+  h ^= h >>> 15; h = Math.imul(h, 0x2c1b3c6d); h ^= h >>> 12;
+  return { rock, house: 1 + ((h >>> 0) % 5), top: t, runs };
 }
 
 export function read(has: Look, x: number, y: number, z: number): Read {
@@ -169,6 +212,13 @@ export function read(has: Look, x: number, y: number, z: number): Read {
       pool = true;
       for (let a = -2; a <= 2 && pool; a++) for (let c = -2; c <= 2 && pool; c++) pool = !stone(a, 0, c) && !stone(a, 1, c);
     }
+    // (a harbour: walled three ways, wide between two facing walls: open water right up to them)
+    let harbour = false;
+    if (y === 0 && !has(x, 1, z)) {
+      const d = SIDES.map(([dx, dz]) => { let k = 1; while (k <= FAR && !has(x + dx * k, 0, z + dz * k)) k++; return k; });
+      const walled = d.filter((k) => k <= FAR).length, wide = (d[0] <= FAR && d[1] <= FAR && d[0] + d[1] - 1 >= HARBOUR_WIDE) || (d[2] <= FAR && d[3] <= FAR && d[2] + d[3] - 1 >= HARBOUR_WIDE);
+      if (walled >= 3 && wide) { harbour = true; pool = true; }
+    }
     if (y === 0 && !pool) { const [b, corner] = bedAt(has, x, z, 0); bed = b; if (corner) tree = 1; }
     // (over a tree's foot, with nothing between: the tree goes on up)
     if (y === 1 || y === 2) {
@@ -176,9 +226,12 @@ export function read(has: Look, x: number, y: number, z: number): Read {
       for (let b = 1; b <= y && clear; b++) clear = !stone(0, -b, 0);
       if (clear && bedAt(has, x, z, y)[1]) tree = y + 1;
     }
+    // (over a house's top block: how far its top runs each way, for the roof)
+    let roof = 0;
+    if (y > 0 && has(x, y - 1, z)) { const m = massAt(has, x, y - 1, z); if (m.house && m.top === y - 1) roof = 1 + (m.runs[0] | (m.runs[1] << 2) | (m.runs[2] << 4) | (m.runs[3] << 6)); }
     const [code, frame] = n || pool || bed ? canonical() : [0, 0];
-    const name = `.${soft}.${joins}.${level}.${court}${pool ? 1 : 0}${bed ? 1 : 0}${tree}.${code.toString(36)}.${frame}`;
-    return { solid: false, joins, soft, open: EMPTY_OPEN, above: 0, standing: false, level, under: 0, thrust: NO_THRUST, court, pool, bed, tree, code, frame, name, h1: textHash(name, 1), h2: textHash(name, 7) };
+    const name = `.${soft}.${joins}.${level}.${court}${pool ? 1 : 0}${bed ? 1 : 0}${tree}.${roof}.${harbour ? 1 : 0}.${code.toString(36)}.${frame}`;
+    return { solid: false, joins, soft, open: EMPTY_OPEN, above: 0, standing: false, level, under: 0, thrust: NO_THRUST, court, pool, bed, tree, rock: false, house: 0, roof, harbour, code, frame, name, h1: textHash(name, 1), h2: textHash(name, 7) };
   }
   let joins = 0;
   const open = FACES.map(([a, b, c], f) => {
@@ -210,16 +263,17 @@ export function read(has: Look, x: number, y: number, z: number): Read {
       }
     });
   }
+  const { rock, house } = massAt(has, x, y, z);
   const [code, frame] = canonical();
-  const name = `${joins}.${soft}.${open.join('')}.${above}${standing ? 1 : 0}${level}.${under.toString(36)}.${thrust.join('')}.${code.toString(36)}.${frame}`;
-  return { solid: true, joins, soft, open, above, standing, level, under, thrust, court: 0, pool: false, bed: false, tree: 0, code, frame, name, h1: textHash(name, 1), h2: textHash(name, 7) };
+  const name = `${joins}.${soft}.${open.join('')}.${above}${standing ? 1 : 0}${level}.${under.toString(36)}.${thrust.join('')}.${rock ? 1 : 0}${house}.${code.toString(36)}.${frame}`;
+  return { solid: true, joins, soft, open, above, standing, level, under, thrust, court: 0, pool: false, bed: false, tree: 0, rock, house, roof: 0, harbour: false, code, frame, name, h1: textHash(name, 1), h2: textHash(name, 7) };
 }
 
 /** the cells whose court a change at a cell can change: along its level within COURT each way (and on the ground, the
  * two cells over each, where a tree may grow) */
 export function courtsOf(x: number, y: number, z: number): Array<[number, number, number]> {
   const out: Array<[number, number, number]> = [];
-  for (const [dx, dz] of SIDES) for (let d = 1; d <= COURT; d++) for (let b = 0; b <= (y === 0 ? 2 : 0); b++) out.push([x + dx * d, y + b, z + dz * d]);
+  for (const [dx, dz] of SIDES) for (let d = 1; d <= (y === 0 ? FAR : COURT); d++) for (let b = 0; b <= (y === 0 ? 2 : 0); b++) out.push([x + dx * d, y + b, z + dz * d]);
   return out;
 }
 
@@ -233,9 +287,10 @@ export class Reads {
     if (!r) { r = read(this.has, x, y, z); this.memo.set(k, r); }
     return r;
   }
-  /** what's round a changed cell reads differently: forget those (two cells each way, and the courts it bounds) */
+  /** what's round a changed cell reads differently: forget those (two cells each way; three across and four down,
+   * whose mass's top and breadth it may change; and the courts it bounds) */
   changed(x: number, y: number, z: number) {
-    for (let a = -2; a <= 2; a++) for (let b = -2; b <= 2; b++) for (let c = -2; c <= 2; c++) this.memo.delete(key(x + a, y + b, z + c));
+    for (let a = -3; a <= 3; a++) for (let b = -4; b <= 2; b++) for (let c = -3; c <= 3; c++) this.memo.delete(key(x + a, y + b, z + c));
     for (const [cx, cy, cz] of courtsOf(x, y, z)) this.memo.delete(key(cx, cy, cz));
   }
   clear() { this.memo.clear(); }

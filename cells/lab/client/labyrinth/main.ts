@@ -11,13 +11,13 @@
  *
  * `?story=1..4` (the storyboard: first touch, a wall traced, an elevated connection, a resolved labyrinth) ·
  * `?ops=` (operations, as the model writes them) · `?brush=` · `?sheet` · `?select=k.i.j[&whole]` · `?print` (the layers in hand) · `?paper` · `?marks` (the drawing's marks by why they're there) · `?turn=` ·
- * `?zoom=` · `?plan=0.5` (squeezed in plan: a half-grid world seen in its own proportions, for looking only; static/labyrinth-grid.md) · `?preview` · `?still` · `?held` (the view never reframes on its own) · `?look=picture` · `?built= ?terrain= ?water= ?colour= ?colourreach= ?shade= ?cast= ?hollow= ?landlight= ?lightreach= ?lines= ?edges= ?inkreach= ?inkfade= ?under= ?toward=` (the dials: picture and drawing, judged apart) · `?instant` (no rising, no gliding, no dust, no cats: for pictures taken by a slow
+ * `?zoom=` · `?plan=0.5` (squeezed in plan: a half-grid world seen in its own proportions, for looking only; static/labyrinth-grid.md) · `?preview` · `?still` · `?held` (the view never reframes on its own) · `?look=picture` · `?built= ?terrain= ?water= ?colour= ?colourreach= ?shade= ?cast= ?hollow= ?landlight= ?lightreach= ?lines= ?edges= ?inkreach= ?inkfade= ?under= ?toward=` (the dials: picture and drawing, judged apart) · `?noworkers` (the mesh built on the page's own thread, as it was before the mesher) · `?instant` (no rising, no gliding, no dust, no cats: for pictures taken by a slow
  * renderer, where every transition is frames it hasn't time for)
  */
 import { CENTER, World, inGrid, key, replay, unkey, type Alt, type Cell, type Op } from './model';
 import { setLadder } from './ladder';
-import { STRIDE, buildMesh, drawnBox, inLand, inStone, setBleed } from './mesh';
-import { STROKE_STRIDE } from './strokes';
+import { STRIDE, MAT, buildMesh, drawnBox, inLand, inStone, setBleed } from './mesh';
+import { squeeze, type Done, type Job } from './mesher';
 import { Renderer, camera, invert, type View } from './render';
 import { asDrawn, carve, lift, stroke, surface, tap, touch, trace, type Intent, type Pick } from './gesture';
 import { story } from './demo';
@@ -113,21 +113,68 @@ const selKeys = () => (sel ? new Set(sel.s.cells.map((c) => key(...c))) : new Se
 const meshTimes = { last: 0, upload: 0, max: 0, n: 0 };
 /** whether the ground's been taken as it was (while drawing), and is still to be worked out again */
 let groundStale = false;
-/**
- * What's drawn squeezed in plan, its storeys as tall as they were: a world on the half grid seen in its own proportions
- * (a square half a cell). Built and struck in its own squares (the grid), drawn and seen in cells (the room): `plan()`
- * the room's size of a square; a touch's ray taken into the grid's (`pick`, `onPlane`), and a square's place out to the
- * screen (`screenOf`). `?plan=` sets it, to look at a world as if it were on the other grid.
- */
 const plan = () => (qs.has('plan') ? Number(qs.get('plan')) : 1 / world.bay);
-function squeeze(m: ReturnType<typeof buildMesh>) {
-  const planScale = plan();
-  if (planScale === 1) return m;
-  const mesh = (a: Float32Array, n: number) => { const o = a.slice(); for (let q = 0; q < n; q++) { const b = q * STRIDE; o[b] *= planScale; o[b + 2] *= planScale; const nx = o[b + 3] / planScale, nz = o[b + 5] / planScale, l = Math.hypot(nx, o[b + 4], nz) || 1; o[b + 3] = nx / l; o[b + 4] /= l; o[b + 5] = nz / l; } return o; };
-  const st = m.strokes.slice(); for (let q = 0; q < st.length; q += STROKE_STRIDE) { st[q] *= planScale; st[q + 2] *= planScale; st[q + 3] *= planScale; st[q + 5] *= planScale; }
-  return { ...m, data: mesh(m.data, m.count), ground: m.ground ? mesh(m.ground, m.ground.length / STRIDE) : m.ground, strokes: st };
+/**
+ * The mesh worked out off the page's thread (mesher.ts), so a touch is answered at once and what's drawn moves on while
+ * it's worked out: one asked at a time, and while it's out, the next only noted (asked when it's in, as the world is
+ * then). What the hand's just raised shows straight away as plain stone, rising as it will (`provisional`), until the
+ * mesh with it comes. The first is built here, so there's something to see from the start; `?noworkers` builds them all
+ * here, as before.
+ */
+let mesher: Worker | null = null, asked = 0, again: boolean | null = null;
+let out: { id: number; keepGround: boolean; mass: Set<number>; t0: number; prime: boolean } | null = null;
+/** what's drawn: its ground and strokes (kept, as the mesher sends them only when they change), and the stone it was
+ * made from (null: as the world is) */
+let shownGround: Float32Array | undefined, shownStrokes: Float32Array = new Float32Array(0), shownMass: Set<number> | null = null;
+try {
+  // (the bundle's own address, from the page's script (this page loads it as a classic script, so not import.meta))
+  const url = (document.querySelector('script[type=module][src]') ?? document.querySelector('script[src]') as HTMLScriptElement | null)?.getAttribute('src');
+  if (url && typeof Worker !== 'undefined' && !qs.has('noworkers')) {
+    const u = new URL(url, location.href); u.searchParams.set('worker', 'labyrinth');
+    mesher = new Worker(u, { type: 'module' });
+    mesher.onmessage = (e: MessageEvent<Done>) => landed(e.data);
+    // (if it can't be had, everything's built here)
+    mesher.onerror = () => { mesher = null; out = null; again = null; meshVersion = -1; };
+  }
+} catch { mesher = null; }
+function remesh(keepGround = false) {
+  const ks = selKeys();
+  if (mesher && meshTimes.n > 0) {
+    meshVersion = world.version; meshSel = [...ks].join(',');
+    if (out) { again = again === null ? keepGround : again && keepGround; perf.tag('remesh asked again'); return; }
+    ask(keepGround, ks);
+    return;
+  }
+  const t0 = performance.now(), m = squeeze(buildMesh(world, plain, ks, keepGround), plan()), t1 = performance.now();
+  groundStale = keepGround; shownGround = m.ground; shownStrokes = m.strokes; shownMass = mesher ? new Set(world.mass.keys()) : null; provFor = -1;
+  R.upload(m); meshVersion = world.version; meshSel = [...ks].join(',');
+  const t2 = performance.now(); meshTimes.last = t1 - t0; meshTimes.upload = t2 - t1; perf.add('mesh.build', t1 - t0); perf.add('mesh.upload', t2 - t1); perf.tag('remesh'); meshTimes.max = Math.max(meshTimes.max, t1 - t0); meshTimes.n++;
+  // (and the mesher's copy of the world made, so the first edit there's quick)
+  if (mesher && !out) ask(keepGround, ks, true);
 }
-function remesh(keepGround = false) { const ks = selKeys(), t0 = performance.now(), m = squeeze(buildMesh(world, plain, ks, keepGround)), t1 = performance.now(); groundStale = keepGround; R.upload(m); meshVersion = world.version; meshSel = [...ks].join(','); const t2 = performance.now(); meshTimes.last = t1 - t0; meshTimes.upload = t2 - t1; perf.add('mesh.build', t1 - t0); perf.add('mesh.upload', t2 - t1); perf.tag('remesh'); meshTimes.max = Math.max(meshTimes.max, t1 - t0); meshTimes.n++; }
+const G = globalThis as { labyrinthRegions?: unknown; labyrinthLadder?: boolean; labyrinthRung?: number };
+function ask(keepGround: boolean, ks: Set<number>, prime = false) {
+  const job: Job = { id: ++asked, seed: world.seed, landSeed: world.landSeed, bay: world.bay, ladder: world.ladder, ops: world.ops, hist: world.history(), plain, sel: [...ks], keepGround, bleed: R.bleed, plan: plan(), globals: { labyrinthRegions: G.labyrinthRegions, labyrinthLadder: G.labyrinthLadder, labyrinthRung: G.labyrinthRung } };
+  out = { id: job.id, keepGround, mass: new Set(world.mass.keys()), t0: performance.now(), prime };
+  mesher!.postMessage(job);
+}
+/** (for a picture of what's shown before the mesh comes: its answers held back while `held`) */
+let holdMesh = false, heldDone: Done | null = null;
+function landed(d: Done) {
+  if (holdMesh) { heldDone = d; return; }
+  const job = out;
+  if (!job || d.id !== job.id) return;
+  out = null;
+  if (d.ground !== null) shownGround = d.ground;
+  if (d.strokes) shownStrokes = d.strokes;
+  const t1 = performance.now();
+  // (the first answer's the copy being made: what's drawn is already this)
+  if (!job.prime) { R.upload({ data: d.data, count: d.count, ground: shownGround, strokes: shownStrokes }); groundStale = job.keepGround; shownMass = job.mass; provFor = -1; }
+  const t2 = performance.now();
+  meshTimes.last = d.ms; meshTimes.upload = t2 - t1; meshTimes.max = Math.max(meshTimes.max, d.ms); meshTimes.n++;
+  perf.add('mesh.build', d.ms); perf.add('mesh.upload', t2 - t1); perf.add('mesh.wait', t1 - job.t0); perf.tag('remesh');
+  if (again !== null) { const k = again; again = null; meshVersion = world.version; meshSel = [...selKeys()].join(','); ask(k, selKeys()); }
+}
 
 // ─── how it's seen ───
 const corner = (k: number) => Math.PI / 4 + (k * Math.PI) / 2;
@@ -1142,7 +1189,35 @@ function moving(t: number) {
     });
   }
   if (catsOn) cats.draw(out, 1, plan());
+  provisional(out);
   R.moving(out.data, out.count);
+}
+/**
+ * What the hand's raised since the mesh that's drawn was asked for, shown at once as plain stone (each block's faces, as
+ * it rises from when it was laid), so a touch is answered in the frame it's made while the mesher works the real one out
+ * (`remesh`). Only blocks: what else a touch makes waits for the mesh.
+ */
+let provFor = -1, prov: number[] = [];
+function provisional(o: Out) {
+  if (!shownMass) return;
+  if (provFor !== world.version) {
+    provFor = world.version; prov = [];
+    const s = plan(), F: Array<[number[], number[]]> = [[[1, 0, 0], [1, 0, 0, 1, 1, 0, 1, 1, 1, 1, 0, 1]], [[-1, 0, 0], [0, 0, 1, 0, 1, 1, 0, 1, 0, 0, 0, 0]], [[0, 1, 0], [0, 1, 0, 0, 1, 1, 1, 1, 1, 1, 1, 0]], [[0, 0, 1], [1, 0, 1, 1, 1, 1, 0, 1, 1, 0, 0, 1]], [[0, 0, -1], [0, 0, 0, 0, 1, 0, 1, 1, 0, 1, 0, 0]]];
+    for (const v of world.mass.keys()) {
+      if (shownMass.has(v)) continue;
+      const [k, i, j] = unkey(v), born = world.born(k, i, j), x0 = i - CENTER, z0 = j - CENTER;
+      for (const [n, c] of F) {
+        // (a face against stone that's there either way isn't seen)
+        const [a, b, d] = [n[0], n[1], n[2]];
+        if (world.block(k + b, i + a, j + d)) continue;
+        const P = (q: number) => [(x0 + c[q * 3]) * s, k + c[q * 3 + 1], (z0 + c[q * 3 + 2]) * s];
+        for (const q of [0, 1, 2, 0, 2, 3]) prov.push(...P(q), a, b, d, b > 0 ? 1 : 0.8, MAT.stone, born, k, 1, 0.5);
+      }
+    }
+  }
+  if (!prov.length) return;
+  o.room(prov.length);
+  o.data.set(prov, o.n); o.n += prov.length;
 }
 
 // ─── the cats ───
@@ -1223,7 +1298,11 @@ requestAnimationFrame(frame);
 
 (window as unknown as { __labyrinth: unknown }).__labyrinth = {
   telemetry, profileSweep, perf: () => perf.report(), perfReset: () => perf.reset(),
-  get world() { return world; }, view, R, pick, onPlane, inStone: (x: number, y: number, z: number) => inStone(world, x, y, z), inLand: (x: number, y: number, z: number) => inLand(world, x, y, z), setHand: (h: Hand | Dressing | Brush) => setBrush(h), setBrush,
+  get world() { return world; }, view, R,
+  /** the mesh as drawn: whether one's being worked out off the thread, how much stone's shown before it, how many built */
+  holdMesh: (on: boolean) => { holdMesh = on; if (!on && heldDone) { const d = heldDone; heldDone = null; landed(d); } },
+  meshState: () => ({ worker: !!mesher, out: !!out, provisional: prov.length / STRIDE, built: meshTimes.n, last: meshTimes.last, version: world.version, shownVersion: meshVersion }),
+  frameMax: (n: number) => { let m = 0, b = 0; for (let q = 0; q < Math.min(n, 600); q++) { m = Math.max(m, intervals[(frameNo - q + 600) % 600]); b = Math.max(b, busy[(frameNo - q + 600) % 600]); } return { interval: m, busy: b }; }, pick, onPlane, inStone: (x: number, y: number, z: number) => inStone(world, x, y, z), inLand: (x: number, y: number, z: number) => inLand(world, x, y, z), setHand: (h: Hand | Dressing | Brush) => setBrush(h), setBrush,
   get brush() { return brush; }, get held() { return held; }, get intent() { return intent; }, setIntent,
   cats: () => cats.list.map((c) => ({ name: c.name, coat: COATS[c.coat], doing: c.doing, x: c.x, y: c.y, z: c.z, at: c.at, want: c.want, air: c.air, asleep: c.asleep, call: c.call })), catScreen: (name: string) => { const c = cats.list.find((q) => q.name === name); if (!c) return null; const h = cats.headOf(c); return screenOf(h[0], h[1] - 0.04, h[2]); }, catsHome: () => cats.P?.capacity ?? 0,
   fan: () => (fan ? { labels: fan.list.map((f) => f.label), at: fan.at } : null), get gesture() { return g ? { mode: g.mode, id: g.id, rest: g.rest.length } : null; },
