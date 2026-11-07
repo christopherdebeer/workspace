@@ -97,11 +97,11 @@ It decides how what's built is finished and drawn, never what's built or where a
 | | The middle sea | The plateau | The north | The east |
 |---|---|---|---|---|
 | after | the Mediterranean hill towns | the Persian courtyard houses | the canal towns | the courtyard towns of China and Japan |
-| walls | dressed stone | dressed stone | timber frame over a stone ground storey | whitewash between dark posts, a beam at each floor; free walls too |
+| walls | dressed stone; a house rendered and washed in a colour of its own (ochre, peach, rose, pale blue or straw) | dressed stone | timber frame over a stone ground storey | whitewash between dark posts, a beam at each floor; free walls too |
 | tops | terracotta, hipped or gabled; a shed against what's taller; now and then a dome on a tower | flat, a parapet round them; now and then a dome on a tower | slate, steep gables, the ends stepped in brick or framed; dormers; a chimney; a spire on a tower | grey tile, hipped, low, the eaves deep and turned up at the corners; a skirt of tile at each floor |
 | arches | round | pointed; four-centred over two cells or more | round | round |
 | openings | arched, square or slit windows; shutters folded back; an awning now and then | tall windows, mostly arched, in panes behind teal, oxblood or turquoise bars; about half lit | square windows, small panes in white or green bars, about half lit; square-headed doors | lattice windows and screen doors, lit like paper |
-| stone dressing | marble or brick now and then | marble or brick now and then | brick, more often | none: it's whitewashed |
+| stone dressing | marble or brick now and then (never on a washed house) | marble or brick now and then | brick, more often | none: it's whitewashed |
 
 In the north and the east a roof leans only on taller stone, never on the hill: a house set into a bank has its own
 roof.
@@ -286,6 +286,19 @@ What a building's for can now be seen from the street (props.ts). Each prop stan
 It reckons as a town. `node devtools/labyrinth-props-look.mjs` draws the sheet below, close on each.
 
 ![what the uses leave outside](labyrinth/look-props.jpg)
+
+**Story 22**, a village climbing a hillside over a harbour (`?story=22`), is the cliff village board's (a village stacked
+on a cliff over a harbour; `node devtools/cliff-board.mjs labyrinth` draws it beside the target,
+`devtools/targets/cliff-village.jpg`). On a middle-sea land rising from level ground at the front in shelves to the
+back:
+- houses two cells square, two or three storeys, in rows up the shelves with a cell between them, each standing on the
+  ground at its own columns, so each row shows over the one below, each washed in its own colour;
+- a way climbing between them from the level ground to the top row;
+- a pond drawn round on the level ground in front, for the harbour, beside the way's foot.
+
+On the land a pond is now let into the ground: its bench sits a fifth of a level down, under its water, so the water and
+its kerb show (before, the hillside lay over it). Unlike Blocks, the village isn't cut out as a piece: the land round it
+thins out into lines on the page, as everything here does.
 
 ## Water
 

@@ -34,7 +34,8 @@ const ck = (i: number, j: number) => (j + 512) * 1024 + i + 512;
 function lev(w: World, C: Cells, i: number, j: number) {
   const k = ck(i, j);
   let v = C.lev.get(k);
-  if (v === undefined) { v = levelAt(w, Math.max(LO, Math.min(HI, i)), Math.max(LO, Math.min(HI, j))); C.lev.set(k, v); }
+  // (a pond let into the ground: its floor a fifth of a level down, under its water, so the water and its kerb show)
+  if (v === undefined) { v = levelAt(w, Math.max(LO, Math.min(HI, i)), Math.max(LO, Math.min(HI, j))) - (w.pools.has(key(0, i, j)) ? 0.2 : 0); C.lev.set(k, v); }
   return v;
 }
 /** whether a cell's a bench: flat at its level, because something's built there or it's the stream's */

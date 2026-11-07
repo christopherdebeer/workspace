@@ -47,6 +47,7 @@ export function story(stage: number): World {
   if (stage === 19) return halfHouse();
   if (stage === 20) return halfByHand();
   if (stage === 21) return atWork();
+  if (stage === 22) return village();
   const w = new World(7);
   const t = -100;
   const tapAt = (p: Pick) => { const op = tap(w, p, t); if (op && !('refused' in op)) w.apply(op, t); };
@@ -464,5 +465,38 @@ function atWork(): World {
   for (const i0 of [-15, -8, 6, 13, 20]) box(i0, i0 + 3, 0, 3, 2);
   box(-7, -4, 8, 14, 3); box(-3, -2, 11, 14, 5);
   traceAt(topOf(w, -6, 14), [[-6, 14], [-6, 13], [-6, 12], [-5, 12], [-4, 12], [-3, 12]], topOf(w, -3, 12));
+  return w;
+}
+
+/**
+ * storyboard 22: a village climbing a hillside over a harbour (the cliff village board, devtools/cliff-board.mjs). On a
+ * land that rises from low ground at the front in shelves to the back, houses two cells square, two or three storeys,
+ * in rows up the shelves with a cell between them, each standing on the ground at its own columns, so each row shows
+ * over the one below; a way climbing between them from the low ground to the top row; a pond drawn round on the low
+ * ground in front for the harbour, and a way down to its edge (the rules make a landing stage, steps into the water and
+ * a post to tie up to). Their washes, roofs, doors and windows are the rules' own. The land's edge thins out into lines
+ * on the page as it always does.
+ */
+function village(): World {
+  const w = new World(51, 7), t = -100;
+  const g = (i: number, j: number): Pick => { const k = w.ground(i, j); return { face: 'ground', hit: [k - 1, i, j], to: [k, i, j] }; };
+  const raise = (i: number, j: number, n: number) => w.apply({ add: Array.from({ length: n }, (_, k) => [w.ground(i, j) + k, i, j, t] as [number, number, number, number]) }, t);
+  const house = (i0: number, j0: number, n: number) => { for (const i of [i0, i0 + 1]) for (const j of [j0, j0 + 1]) raise(i, j, n); };
+  // (the rows, from the top of the shelves down to the front: [i, j, storeys]; the way up runs between them at i = 9)
+  for (const [i, j, n] of [[7, 0, 3], [10, 0, 2], [12, 1, 2], [7, 3, 2], [10, 3, 3], [12, 4, 2], [6, 6, 3], [10, 6, 2], [13, 6, 3]] as Array<[number, number, number]>) house(i, j, n);
+  // (a way up between them, from the low ground to the top row)
+  const up: Array<[number, number]> = [];
+  for (let j = 9; j >= 1; j--) up.push([9, j]);
+  const way = trace(w, g(9, 9), up, g(9, 1), () => t, t, [], 'way');
+  if (way && !('refused' in way)) w.apply({ ...way, alts: undefined }, t);
+  // (the harbour: a pond drawn round on the level ground in front, its ring walked cell by cell back to its start, beside
+  // the way's foot, so the way comes down to the water's edge)
+  const ring: Array<[number, number]> = [];
+  for (let i = 10; i <= 14; i++) ring.push([i, 8]);
+  for (let j = 9; j <= 10; j++) ring.push([14, j]);
+  for (let i = 13; i >= 10; i--) ring.push([i, 10]);
+  ring.push([10, 9]);
+  const pond = run(w, 'pool', g(10, 8), ring, 0, t);
+  if (pond) w.apply(pond, t);
   return w;
 }

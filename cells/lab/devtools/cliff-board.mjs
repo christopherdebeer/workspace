@@ -22,7 +22,7 @@ if (!only || only === 'blocks') {
 if (!only || only === 'labyrinth') {
   process.env.EXPERIMENT = 'labyrinth'; process.env.READY = '__labyrinth';
   await withWood(async (wood) => {
-    const page = await wood.open('demo=village&cam=cliff');
+    const page = await wood.open('story=22&zoom=0.62&still');
     await page.waitForTimeout(6000);
     shots.push(await wood.shot(page, 'cliff-labyrinth'));
     await page.close();

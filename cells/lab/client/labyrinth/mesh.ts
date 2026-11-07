@@ -68,6 +68,8 @@ function ringAt(f: ArchFamily, hw: number, ys: number, t: number, r: number): [n
   return [t - nt * r, ys + archY(f, t, hw) - ny * r];
 }
 export const MARGIN = 0.6, SLAB = 0.42;
+/** a washed building's colour (0 … 4), by its id: the same for every cell of it */
+const washOf = (id: number) => { let h = Math.imul(id ^ 0x9e3779b9, 0x85ebca6b); h ^= h >>> 13; h = Math.imul(h, 0xc2b2ae35); h ^= h >>> 16; return (h >>> 0) % 5; };
 const STEPS = 6, CURVE = 14, HW = 0.3;
 /** how wide a block's bevelled edges are */
 const BEVEL = 0.035;
@@ -472,12 +474,16 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
       // (a building's walls in its tradition's finish (regions.ts): a timber frame over a stone ground storey, or
       // whitewash between posts; the shader's, by the how)
       // (and in the east every wall's whitewashed, a building's or not)
-      const bd = buildings(w).of.get(key(k, i, j)), fin = grammarHere(w, k, i, j).wall;
+      const bd = buildings(w).of.get(key(k, i, j)), gr = grammarHere(w, k, i, j), fin = gr.wall;
       const keepHow = cur.how;
-      // (rubble, before stone's dressed (realise.ts), anyone's stone)
+      // (rubble, before stone's dressed (realise.ts), anyone's stone; a building washed in its own colour (one of five,
+      // by its id), the middle sea's)
       if (fin === 'frame' && bd && k > w.ground(i, j)) cur.how = 6; else if (fin === 'plaster') cur.how = 7; else if (fin === 'rubble') cur.how = 8;
+      const keepDress = cur.dress;
+      // (washed, its stone isn't dressed in brick or marble as well: the wash is its finish)
+      if (fin !== 'frame' && fin !== 'plaster' && fin !== 'rubble' && gr.wash && bd) { cur.how = 9 + washOf(bd.id); cur.dress = 0; }
       blockFaces(k, i, j);
-      cur.how = keepHow;
+      cur.how = keepHow; cur.dress = keepDress;
       // (over a thin wall, its underside shows either side of it)
       if (w.wall(k - 1, i, j) >= 0) quad([x0, y0, z0], [x0, y0, z0 + 1], [x0 + 1, y0, z0 + 1], [x0 + 1, y0, z0], [0, -1, 0], 0.55, MAT.stone);
       continue;
