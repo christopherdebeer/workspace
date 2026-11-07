@@ -69,11 +69,37 @@ function bench(w: World, C: Cells, i: number, j: number): boolean {
   C.bench.set(kk, h);
   return h;
 }
-/** the hill at a point, before anything's built into it */
+/** the hill at a point, before anything's built into it. Kept from build to build while no column's level has changed
+ * (the hill's made of the levels alone, and of the land's seed and stream): a block laid on a terrace, a wall, a roof
+ * leave every point of it as it was, so it's worked out again only when the ground itself is changed */
 export function hillAt(w: World, x: number, z: number): number {
   if (!w.land) return 0;
+  const H = hillKeep(w);
+  let col = H.m.get(x);
+  const had = col?.get(z);
+  if (had !== undefined) return had;
+  if (H.n > 400000) { H.m.clear(); H.n = 0; col = undefined; }
+  if (!col) { col = new Map(); H.m.set(x, col); }
+  const v = hillOf(w, x, z);
+  col.set(z, v); H.n++;
+  return v;
+}
+interface Hill { v: number; land: object; levs: Float64Array; m: Map<number, Map<number, number>>; n: number }
+const hillCache = new WeakMap<World, Hill>();
+function hillKeep(w: World): Hill {
+  let H = hillCache.get(w);
+  if (H && H.v === w.version && H.land === w.land) return H;
+  const C = cellsOf(w), levs = new Float64Array((HI - LO + 1) * (HI - LO + 1));
+  for (let j = LO, q = 0; j <= HI; j++) for (let i = LO; i <= HI; i++, q++) levs[q] = lev(w, C, i, j);
+  const same = !!H && H.land === w.land && H.levs.every((v, q) => v === levs[q]);
+  if (!H || !same) H = { v: w.version, land: w.land!, levs, m: new Map(), n: 0 };
+  else H.v = w.version;
+  hillCache.set(w, H);
+  return H;
+}
+function hillOf(w: World, x: number, z: number): number {
   // (in cells: on the half grid, a square half a cell, so its reach and its grain are twice the squares)
-  const C = cellsOf(w), i = Math.floor(x), j = Math.floor(z), seed = w.land.seed, B = w.bay, R = 2 * B, sg = 0.8 * B;
+  const C = cellsOf(w), i = Math.floor(x), j = Math.floor(z), seed = w.land!.seed, B = w.bay, R = 2 * B, sg = 0.8 * B;
   let num = 0, den = 0;
   for (let b = -R; b <= R; b++) for (let a = -R; a <= R; a++) {
     const dx = x - (i + a + 0.5), dz = z - (j + b + 0.5), k = Math.exp(-(dx * dx + dz * dz) / (2 * sg * sg));
@@ -141,9 +167,23 @@ export function riverOf(w: World): River | null {
   return r;
 }
 /** the nearest point of the stream's course to a point: how far, its bed and half-width there, along which stretch */
-export function nearRiver(w: World, x: number, z: number): { d: number; bed: number; hw: number; q: number; t: number } | null {
+type Near = { d: number; bed: number; hw: number; q: number; t: number };
+/** (the nearest points found, kept for each stream's course: it doesn't change while its land stands) */
+const nearMemo = new WeakMap<River, { m: Map<number, Map<number, Near | null>>; n: number }>();
+export function nearRiver(w: World, x: number, z: number): Near | null {
   const R = riverOf(w);
   if (!R) return null;
+  let M = nearMemo.get(R);
+  if (!M || M.n > 400000) { M = { m: new Map(), n: 0 }; nearMemo.set(R, M); }
+  let col = M.m.get(x);
+  const had = col?.get(z);
+  if (had !== undefined) return had;
+  if (!col) { col = new Map(); M.m.set(x, col); }
+  const v = nearOf(R, x, z);
+  col.set(z, v); M.n++;
+  return v;
+}
+function nearOf(R: River, x: number, z: number): Near | null {
   const list = R.grid.get(ck(Math.floor(x), Math.floor(z)));
   if (!list) return null;
   let best: { d: number; bed: number; hw: number; q: number; t: number } | null = null;

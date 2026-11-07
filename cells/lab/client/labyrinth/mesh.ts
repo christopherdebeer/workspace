@@ -128,7 +128,10 @@ function groundSig(w: World, plain: boolean, selected: Set<number>): string {
   return parts[0] + row.join(',');
 }
 /** the kept ground let go (for checking that what's kept is what would be built) */
-export function forgetGround() { groundCache = null; }
+export function forgetGround() { groundCache = null; tileCache = null; }
+/** the ground's grid kept in tiles, each with the signature of what it read (landMesh) */
+let tileCache: { w: World; head: string; tiles: Map<string, { sig: string; verts: Float32Array }> } | null = null;
+const hashNums = (a: number[]) => { let h = 0x811c9dc5; for (const v of a) h = Math.imul(h ^ Math.round(v * 1000), 16777619); return h >>> 0; };
 /** a cheap signature of the trees' skeletons (what the strokes' branch lines are drawn from) */
 const skelSig = (sk: Skeleton[]) => { let h = sk.length; for (const s of sk) for (const l of s.lines) for (const p of l) h = (h * 31 + Math.round(p[0] * 100) * 7 + Math.round(p[1] * 100) * 13 + Math.round(p[2] * 100)) | 0; return String(h); };
 const tone = (k: number, i: number, j: number) => (((k * 73856093) ^ (i * 19349663) ^ (j * 83492791)) >>> 0) / 4294967296;
@@ -1257,74 +1260,118 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
     drawnLand = { Y, B, on: (i, j) => i >= B.i0 && i <= B.i1 && j >= B.j0 && j <= B.j1, out: (i, j) => Math.max(Eo.i0 - i, i - Eo.i1, Eo.j0 - j, j - Eo.j1, 0), margin: DRAWN_MARGIN };
     perf.begin('mesh.build.ground.grid');
     const RES = 3, nx = (x1 - x0) * RES, nz = (z1 - z0) * RES;
-    const pts: V3[][] = [], nrm: V3[][] = [];
-    for (let a = 0; a <= nx; a++) {
-      pts.push([]); nrm.push([]);
-      for (let b = 0; b <= nz; b++) {
-        const gx = x0 + a / RES, gz = z0 + b / RES, e = 0.5 / RES;
-        pts[a].push([gx - CENTER, Y(gx, gz), gz - CENTER]);
-        const dx = Y(gx + e, gz) - Y(gx - e, gz), dz = Y(gx, gz + e) - Y(gx, gz - e), l = Math.hypot(dx, 2 * e, dz);
-        nrm[a].push([-dx / l, (2 * e) / l, -dz / l]);
-      }
-    }
-    // (how much sky each point sees, softened across its neighbours, so it lies in broad darkenings: under a cut, in a
-    // court, at the foot of a wall)
-    let sky: number[][] = pts.map((col, a) => col.map((p, b) => 0.25 + 0.75 * skyVis(p, nrm[a][b])));
-    for (let pass = 0; pass < 2; pass++) sky = sky.map((col, a) => col.map((_, b) => { let t = 0, c = 0; for (let da = -1; da <= 1; da++) for (let db = -1; db <= 1; db++) { const v = sky[a + da]?.[b + db]; if (v !== undefined) { t += v; c++; } } return t / c; }));
-    // (how near the water each point is (in its `tone`): the ground darker and greener where it's wet, at a bank)
-    const damp = pts.map((col) => col.map((p) => {
-      const gx = p[0] + CENTER, gz = p[2] + CENTER, y = p[1];
-      let d = 9;
-      for (let i = Math.floor(gx) - 2; i <= Math.floor(gx) + 2; i++) for (let j = Math.floor(gz) - 2; j <= Math.floor(gz) + 2; j++) {
-        if (!land.water.has(j * 1000 + i)) continue;
-        const up = Math.max(0, Math.abs(y - (w.ground(i, j) - 0.17)) - 0.12) * 2;
-        d = Math.min(d, Math.hypot(Math.max(i - gx, 0, gx - i - 1), Math.max(j - gz, 0, gz - j - 1), up));
-      }
-      return Math.max(0, 1 - d / 1.1) ** 1.5;
-    }));
-    // (where it's walked: worn to bare earth on a bench that isn't paved, and in a fringe along the paving and the ways,
-    // patchy, as a path's edge is; in the tone too, below nought, where it's not wet)
+    const P = (a: number, b: number): V3 => { const gx = x0 + a / RES, gz = z0 + b / RES; return [gx - CENTER, Y(gx, gz), gz - CENTER]; };
+    // (where it's walked, and the footpaths worn between (for the tone, below))
     const walked = (i: number, j: number) => w.paved(i, j) || w.courts.has(key(0, i, j)) || w.way(w.ground(i, j), i, j);
     const tracks = footpaths(walked);
-    const trod = pts.map((col) => col.map((p) => {
-      const gx = p[0] + CENTER, gz = p[2] + CENTER, i = Math.floor(gx), j = Math.floor(gz);
-      if (!onLand(i, j)) return 0;
-      if (benched(w, i, j) && !walked(i, j)) return 0.75;
-      let d = 9;
-      for (let b = -1; b <= 1; b++) for (let a = -1; a <= 1; a++) if (walked(i + a, j + b)) d = Math.min(d, Math.hypot(Math.max(i + a - gx, 0, gx - i - a - 1), Math.max(j + b - gz, 0, gz - j - b - 1)));
-      let t = (1 - Math.min(1, d / (0.22 + 0.25 * noise2(land.seed + 73, gx * 1.3, gz * 1.3)))) * 0.85;
-      // (and the footpaths worn through the grass between them, patchy along their length)
-      for (const tr of tracks) {
-        if (gx < tr.x0 || gx > tr.x1 || gz < tr.z0 || gz > tr.z1) continue;
-        let e = 9;
-        for (let q = 0; q + 1 < tr.p.length; q++) {
-          const [ax, az] = tr.p[q], [bx, bz] = tr.p[q + 1], dx = bx - ax, dz = bz - az, l2 = dx * dx + dz * dz || 1, u = Math.max(0, Math.min(1, ((gx - ax) * dx + (gz - az) * dz) / l2));
-          e = Math.min(e, Math.hypot(gx - ax - dx * u, gz - az - dz * u));
+    // (laid in tiles, each kept from the last build while nothing it reads has changed: what reads a point's ground is
+    // within a few cells of it (the hill's kernel, the benches by it, the water near it, what its sky's rays can meet), so
+    // a tile's signature is a code for each cell within that reach of it, and a change somewhere rebuilds the tiles round
+    // it, not the land)
+    const TILE = 6, REACH = 6, ci0 = B.i0 - REACH, cj0 = B.j0 - REACH, cw = B.i1 - B.i0 + 1 + 2 * REACH, chh = B.j1 - B.j0 + 1 + 2 * REACH;
+    const head = `${land.seed}|${w.bay}|${bleed}|${B.i0},${B.i1},${B.j0},${B.j1}|${Eo.i0},${Eo.i1},${Eo.j0},${Eo.j1}|${hashNums(tracks.flatMap((t) => t.p.flat()))}`;
+    if (!tileCache || tileCache.w !== w || tileCache.head !== head) tileCache = { w, head, tiles: new Map() };
+    const tiles = tileCache.tiles, codes = new Float64Array(cw * chh);
+    for (let j = 0; j < chh; j++) for (let i = 0; i < cw; i++) {
+      const ci = ci0 + i, cj = cj0 + j, g = w.ground(ci, cj);
+      let c = (onLand(ci, cj) ? 1 : 0) | (benched(w, ci, cj) ? 2 : 0) | (walked(ci, cj) ? 4 : 0) | (w.pools.has(key(0, ci, cj)) ? 8 : 0) | (land.water.has(cj * 1000 + ci) ? 16 : 0) | (land.sea.has(cj * 1000 + ci) ? 32 : 0);
+      for (let k = Math.max(0, g - 2), b = 64; k <= g + 5; k++, b *= 2) if (w.occupied(k, ci, cj) || w.earth(k, ci, cj)) c |= b;
+      codes[j * cw + i] = g * 65536 + c;
+    }
+    const tileSig = (ti0: number, ti1: number, tj0: number, tj1: number) => {
+      let h1 = 0x811c9dc5, h2 = 0x9e3779b9;
+      for (let j = tj0 - REACH; j <= tj1 + REACH; j++) for (let i = ti0 - REACH; i <= ti1 + REACH; i++) {
+        const v = codes[(j - cj0) * cw + (i - ci0)] ?? -1;
+        h1 = Math.imul(h1 ^ (v | 0), 16777619); h2 = Math.imul(h2 ^ ((v * 7919) | 0), 2246822519);
+      }
+      return `${h1 >>> 0}.${h2 >>> 0}`;
+    };
+    let kept = 0, built = 0;
+    const live = new Set<string>();
+    for (let tj = B.j0; tj <= B.j1; tj += TILE) for (let ti = B.i0; ti <= B.i1; ti += TILE) {
+      const ti1 = Math.min(B.i1, ti + TILE - 1), tj1 = Math.min(B.j1, tj + TILE - 1), id = `${ti},${tj}`, sig = tileSig(ti, ti1, tj, tj1);
+      live.add(id);
+      const had = tiles.get(id);
+      if (had && had.sig === sig) { for (let q = 0; q < had.verts.length; q++) out.push(had.verts[q]); kept++; continue; }
+      const o0 = out.length;
+      gridTile((ti - x0) * RES, (ti1 + 1 - x0) * RES, (tj - z0) * RES, (tj1 + 1 - z0) * RES);
+      tiles.set(id, { sig, verts: Float32Array.from(out.slice(o0)) });
+      built++;
+    }
+    for (const id of tiles.keys()) if (!live.has(id)) tiles.delete(id);
+    perf.count('mesh.groundTilesKept', kept); perf.count('mesh.groundTilesBuilt', built);
+    /** the ground's squares between grid points a0..a1, b0..b1 (its points' sky softened over two neighbours either way,
+     * so it works them out two further each way, as far as the land goes) */
+    function gridTile(a0: number, a1: number, b0: number, b1: number) {
+      const A0 = Math.max(0, a0 - 2), A1 = Math.min(nx, a1 + 2), B0 = Math.max(0, b0 - 2), B1 = Math.min(nz, b1 + 2);
+      const pts: V3[][] = [], nrm: V3[][] = [];
+      for (let a = A0; a <= A1; a++) {
+        pts.push([]); nrm.push([]);
+        for (let b = B0; b <= B1; b++) {
+          const gx = x0 + a / RES, gz = z0 + b / RES, e = 0.5 / RES;
+          pts[a - A0].push(P(a, b));
+          const dx = Y(gx + e, gz) - Y(gx - e, gz), dz = Y(gx, gz + e) - Y(gx, gz - e), l = Math.hypot(dx, 2 * e, dz);
+          nrm[a - A0].push([-dx / l, (2 * e) / l, -dz / l]);
         }
-        t = Math.max(t, (1 - Math.min(1, e / 0.3)) * (0.75 + 0.35 * noise2(land.seed + 74, gx * 2.1, gz * 2.1)));
       }
-      return t;
-    }));
-    // (where the hill's cut back high behind a bench, its face is held in dry stone, as the cut by a stair or a house is
-    // on a hillside: in the tone too, between the damp and the rock)
-    const dry = pts.map((col) => col.map((p) => {
-      const gx = p[0] + CENTER, gz = p[2] + CENTER, i = Math.floor(gx), j = Math.floor(gz);
-      if (!onLand(i, j) || benched(w, i, j)) return false;
-      for (let b = -1; b <= 1; b++) for (let a = -1; a <= 1; a++) {
-        if ((!a && !b) || !benched(w, i + a, j + b)) continue;
-        const L = w.ground(i + a, j + b), d = Math.hypot(Math.max(i + a - gx, 0, gx - i - a - 1), Math.max(j + b - gz, 0, gz - j - b - 1));
-        if (p[1] - L > 0.28 && d < CUT * w.bay + 0.04) return true;
+      // (how much sky each point sees, softened across its neighbours, so it lies in broad darkenings: under a cut, in a
+      // court, at the foot of a wall)
+      let sky: number[][] = pts.map((col, a) => col.map((p, b) => 0.25 + 0.75 * skyVis(p, nrm[a][b])));
+      for (let pass = 0; pass < 2; pass++) sky = sky.map((col, a) => col.map((_, b) => { let t = 0, c = 0; for (let da = -1; da <= 1; da++) for (let db = -1; db <= 1; db++) { const v = sky[a + da]?.[b + db]; if (v !== undefined) { t += v; c++; } } return t / c; }));
+      // (how near the water each point is (in its `tone`): the ground darker and greener where it's wet, at a bank)
+      const damp = (p: V3) => {
+        const gx = p[0] + CENTER, gz = p[2] + CENTER, y = p[1];
+        let d = 9;
+        for (let i = Math.floor(gx) - 2; i <= Math.floor(gx) + 2; i++) for (let j = Math.floor(gz) - 2; j <= Math.floor(gz) + 2; j++) {
+          if (!land.water.has(j * 1000 + i)) continue;
+          const up = Math.max(0, Math.abs(y - (w.ground(i, j) - 0.17)) - 0.12) * 2;
+          d = Math.min(d, Math.hypot(Math.max(i - gx, 0, gx - i - 1), Math.max(j - gz, 0, gz - j - 1), up));
+        }
+        return Math.max(0, 1 - d / 1.1) ** 1.5;
+      };
+      // (where it's walked: worn to bare earth on a bench that isn't paved, and in a fringe along the paving and the ways,
+      // patchy, as a path's edge is; in the tone too, below nought, where it's not wet)
+      const trod = (p: V3) => {
+        const gx = p[0] + CENTER, gz = p[2] + CENTER, i = Math.floor(gx), j = Math.floor(gz);
+        if (!onLand(i, j)) return 0;
+        if (benched(w, i, j) && !walked(i, j)) return 0.75;
+        let d = 9;
+        for (let b = -1; b <= 1; b++) for (let a = -1; a <= 1; a++) if (walked(i + a, j + b)) d = Math.min(d, Math.hypot(Math.max(i + a - gx, 0, gx - i - a - 1), Math.max(j + b - gz, 0, gz - j - b - 1)));
+        let t = (1 - Math.min(1, d / (0.22 + 0.25 * noise2(land.seed + 73, gx * 1.3, gz * 1.3)))) * 0.85;
+        // (and the footpaths worn through the grass between them, patchy along their length)
+        for (const tr of tracks) {
+          if (gx < tr.x0 || gx > tr.x1 || gz < tr.z0 || gz > tr.z1) continue;
+          let e = 9;
+          for (let q = 0; q + 1 < tr.p.length; q++) {
+            const [ax, az] = tr.p[q], [bx, bz] = tr.p[q + 1], dx = bx - ax, dz = bz - az, l2 = dx * dx + dz * dz || 1, u = Math.max(0, Math.min(1, ((gx - ax) * dx + (gz - az) * dz) / l2));
+            e = Math.min(e, Math.hypot(gx - ax - dx * u, gz - az - dz * u));
+          }
+          t = Math.max(t, (1 - Math.min(1, e / 0.3)) * (0.75 + 0.35 * noise2(land.seed + 74, gx * 2.1, gz * 2.1)));
+        }
+        return t;
+      };
+      // (where the hill's cut back high behind a bench, its face is held in dry stone, as the cut by a stair or a house is
+      // on a hillside: in the tone too, between the damp and the rock)
+      const dry = (p: V3) => {
+        const gx = p[0] + CENTER, gz = p[2] + CENTER, i = Math.floor(gx), j = Math.floor(gz);
+        if (!onLand(i, j) || benched(w, i, j)) return false;
+        for (let b = -1; b <= 1; b++) for (let a = -1; a <= 1; a++) {
+          if ((!a && !b) || !benched(w, i + a, j + b)) continue;
+          const L = w.ground(i + a, j + b), d = Math.hypot(Math.max(i + a - gx, 0, gx - i - a - 1), Math.max(j + b - gz, 0, gz - j - b - 1));
+          if (p[1] - L > 0.28 && d < CUT * w.bay + 0.04) return true;
+        }
+        return false;
+      };
+      const tone: number[][] = pts.map((col, a) => col.map((p, b) => { const A = a + A0, Bb = b + B0; if (A < a0 || A > a1 || Bb < b0 || Bb > b1) return 0; const dm = damp(p), tr = trod(p); return dry(p) ? 1.25 : dm > tr * 0.5 ? dm : -tr; }));
+      const V = (a: number, b: number) => { const u = a - A0, v = b - B0; cur.tone = tone[u][v]; vert(pts[u][v], nrm[u][v], sky[u][v], LANDMAT); };
+      for (let a = a0; a < a1; a++) for (let b = b0; b < b1; b++) {
+        const gx = x0 + (a + 0.5) / RES, gz = z0 + (b + 0.5) / RES;
+        if (!onLand(Math.floor(gx), Math.floor(gz))) continue;
+        // (each square cut along the diagonal that follows the ground best)
+        const p = (u: number, v: number) => pts[u - A0][v - B0], d1 = Math.abs(p(a, b)[1] - p(a + 1, b + 1)[1]), d2 = Math.abs(p(a + 1, b)[1] - p(a, b + 1)[1]);
+        if (d1 <= d2) { V(a, b); V(a, b + 1); V(a + 1, b + 1); V(a, b); V(a + 1, b + 1); V(a + 1, b); }
+        else { V(a, b); V(a, b + 1); V(a + 1, b); V(a + 1, b); V(a, b + 1); V(a + 1, b + 1); }
       }
-      return false;
-    }));
-    const V = (a: number, b: number) => { cur.tone = dry[a][b] ? 1.25 : damp[a][b] > trod[a][b] * 0.5 ? damp[a][b] : -trod[a][b]; vert(pts[a][b], nrm[a][b], sky[a][b], LANDMAT); };
-    for (let a = 0; a < nx; a++) for (let b = 0; b < nz; b++) {
-      const gx = x0 + (a + 0.5) / RES, gz = z0 + (b + 0.5) / RES;
-      if (!onLand(Math.floor(gx), Math.floor(gz))) continue;
-      // (each square cut along the diagonal that follows the ground best)
-      const p = pts, d1 = Math.abs(p[a][b][1] - p[a + 1][b + 1][1]), d2 = Math.abs(p[a + 1][b][1] - p[a][b + 1][1]);
-      if (d1 <= d2) { V(a, b); V(a, b + 1); V(a + 1, b + 1); V(a, b); V(a + 1, b + 1); V(a + 1, b); }
-      else { V(a, b); V(a, b + 1); V(a + 1, b); V(a + 1, b); V(a, b + 1); V(a + 1, b + 1); }
     }
     cur.tone = 0;
     // (its sides: down from its edge to the table; bleeding into the page, after Taohua, neither: the land's ground is
@@ -1332,7 +1379,8 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
     const foot = -SLAB;
     if (!bleed) {
       const side = (p: V3[], n: V3) => { for (let q = 0; q + 1 < p.length; q++) quad(p[q], p[q + 1], [p[q + 1][0], foot, p[q + 1][2]], [p[q][0], foot, p[q][2]], n, [1, 1, 0.6, 0.6], LANDMAT); };
-      side(pts.map((c) => c[0]), [0, 0, -1]); side(pts.map((c) => c[nz]), [0, 0, 1]); side(pts[0], [-1, 0, 0]); side(pts[nx], [1, 0, 0]);
+      const edge = (n: number, f: (q: number) => V3) => Array.from({ length: n + 1 }, (_, q) => f(q));
+      side(edge(nx, (a) => P(a, 0)), [0, 0, -1]); side(edge(nx, (a) => P(a, nz)), [0, 0, 1]); side(edge(nz, (b) => P(0, b)), [-1, 0, 0]); side(edge(nz, (b) => P(nx, b)), [1, 0, 0]);
       // (the table round it)
       const T = 90, R = 1.6, xa = x0 - CENTER, xb = x1 - CENTER, za = z0 - CENTER, zb = z1 - CENTER;
       quad([xa - R, foot, za - R], [xb + R, foot, za - R], [xb + R, foot, zb + R], [xa - R, foot, zb + R], [0, 1, 0], 1, MAT.table);
