@@ -1,6 +1,6 @@
 /**
  * Switchback: a downhill motocross run down a mountain that's made as you ride it, drawn flat and faceted, its speed
- * drawn as vector shards. Drag across to steer (nothing steers for you), up and down to drive (throttle, brake; in the air, the nose). Kickers launch you over gaps;
+ * drawn as vector shards. Drag across to steer (nothing steers for you), up and down to drive (throttle, brake; on a ramp, down pulls for a backflip; in the air, the throttle and brake trim it, and across are the body's tricks). Kickers launch you over gaps;
  * whoops throw you; the wall glances you off; the drop side can be ridden, but too far down it, or too hard a landing,
  * is a crash, and you're back at the last checkpoint flag.
  *
@@ -84,7 +84,8 @@ const CAMERA = {
 const camFlag = q.get('cam') as keyof typeof CAMERA | null;
 
 // (input: a drag from where it began: across, it steers; up and down, it drives (up the throttle, down the brake, as far
-// as you drag; in the air, the nose: down pulls it up and over, up pushes it down). Keys too. Not while the menu's open,
+// as you drag; on a ramp, down is the pull: a backflip, committed at the lip; in the air, up and down trim it, and across
+// is the body: right hands off, left feet off). Keys too. Not while the menu's open,
 // and never from a press on the menu or a link)
 const inp = { steer: 0, drive: 0 };
 let drag: { x: number; y: number; id: number } | null = null;
@@ -294,7 +295,7 @@ function loop(now: number) {
     while (acc >= 1 / 120) {
       acc -= 1 / 120; t += 1 / 120;
       const steer = steerKeys || inp.steer;
-      rider.step(1 / 120, auto ? autoInput() : { steer, brake: false, drive, whip: steer });
+      rider.step(1 / 120, auto ? autoInput() : rider.air ? { steer: 0, brake: false, drive, trick: steer } : { steer, brake: false, drive });
       rd.trail.add(rider);
       if (running && !finished) score.update(rider, 1 / 120);
     }

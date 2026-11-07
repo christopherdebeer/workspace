@@ -44,6 +44,9 @@ export class Score {
     if (r.crashT > 0) { this.wasAir = false; return; }
     if (r.air) {
       this.airT = r.airT; this.whipMax = Math.max(this.whipMax, Math.abs(r.whip));
+      // (the body's trick, how long it's been held all the way off)
+      if (r.trickOut >= 1 && r.trickKind) { const k = r.trickKind; if (this.bodyKind && this.bodyKind !== k) this.bodyDone(); this.bodyKind = k; this.bodyHeld = Math.max(this.bodyHeld, r.trickHeld); }
+      else if (this.bodyKind && r.trickOut < 1) this.bodyDone();
     } else {
       // (pace: a trickle into the score, only when you're really moving)
       const pace = Math.max(0, (Math.hypot(r.vx, r.vz) - 25) / (VMAX - 25));
@@ -66,6 +69,8 @@ export class Score {
     } else if (e.kind === 'land') {
       // (a real jump just landed (not a crest's hop): its air, its whip, whether it came down square; one step up the
       // multiplier for the lot)
+      if (this.bodyKind) this.bodyDone();
+      if (this.bodies) { this.bodies = 0; if (this.airT <= 0.8) this.beat(); }
       if (this.airT > 0.8) {
         this.add(`AIR ${this.airT.toFixed(1)}S`, Math.round((this.airT - 0.5) * 10) * 10);
         if (this.whipMax > 0.35) this.add('WHIP', Math.round(this.whipMax * 57.3 * 6));
@@ -76,7 +81,7 @@ export class Score {
     } else if (e.kind === 'crash') {
       this.falls++;
       if (this.pool) this.moments.push({ kind: 'wipe', label: 'WIPED OUT', points: Math.round(this.pool * this.mult) });
-      this.pool = 0; this.mult = 1; this.chain = []; this.airT = 0; this.whipMax = 0; this.slideT = 0; this.beats = 0; this.flipped = false;
+      this.pool = 0; this.mult = 1; this.chain = []; this.airT = 0; this.whipMax = 0; this.slideT = 0; this.beats = 0; this.flipped = false; this.bodyKind = 0; this.bodyHeld = 0; this.bodies = 0;
       this.total = Math.max(0, this.total - 200);
     } else if (e.kind === 'checkpoint') {
       // (a checkpoint banks the combo, and pays for itself: more for reaching it under par)
@@ -94,6 +99,13 @@ export class Score {
   /** at the end of a run: anything pending banks */
   close() { if (this.pool) this.bank(); }
 
+  /** (the take-off model) the body's trick in the air: which (+1 hands off, −1 feet off), held how long all the way off,
+   * and how many this flight; each is called once it's back on the bike: worth more the longer it was held */
+  private bodyKind = 0; private bodyHeld = 0; private bodies = 0;
+  private bodyDone() {
+    this.add(this.bodyKind > 0 ? 'NO HANDER' : 'NO FOOTER', 400 + Math.round(this.bodyHeld * 50) * 10);
+    this.bodyKind = 0; this.bodyHeld = 0; this.bodies++;
+  }
   private add(label: string, points: number) {
     if (label.includes('FLIP')) this.flipped = true;
     this.pool += points; this.chain.push(label); this.tricks++; this.quiet = 0;

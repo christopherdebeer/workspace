@@ -456,6 +456,9 @@ export interface Pose {
   /** a whip: the machine swung out beneath the rider (rad, + its nose to the right) and laid over with it; the rider's
    * body stays with the way it's going, its legs and arms re-solved to where the pegs and bars have gone */
   whip?: number;
+  /** (the take-off model) the body's trick: +1 hands off the bars (a no-hander: arms out wide), −1 feet off the pegs (a
+   * no-footer: legs kicked out behind); `out`, how far off the bike (0 on it, 1 all the way) */
+  trick?: { kind: number; out: number };
   /** 'cut': drawn as a few flat masses (orange, charcoal, cream), each with one dark cut, not facet by facet; 'sil': the
    * whole figure one solid charcoal (for judging its silhouette); 'facets' (or unset): every face its own band */
   style?: 'facets' | 'cut' | 'sil';
@@ -588,18 +591,21 @@ export function buildRider(r: Pose, t: number) {
   const c1 = add(hipC, upP, 0.17), c2 = add(c1, upC, 0.17), c3 = add(c2, upC, 0.15), c4 = add(c3, upC, 0.05);
   // (asymmetry: which side opens. e: the arms (the bars turned, the whip); k: the knees)
   const e = Math.max(-1, Math.min(1, steerA * 1.5 + wy * 1.2 + b.roll * 1.5)), kk = Math.max(-1, Math.min(1, wy * 1.5 + r.lean * 1.2));
+  const tk = r.trick, feetOff = tk && tk.kind < 0 ? tk.out : 0, handsOff = tk && tk.kind > 0 ? tk.out : 0;
   for (const side of [-1, 1]) {
-    // (legs: the boot on its peg, the knee forward and out, one gripping the machine as the other comes away)
-    const ankle = B([side * 0.2, fr(0.8), -0.08]), hip = add(add(hipC, rgP, side * 0.12), upP, -0.03);
-    const knee = ik(hip, ankle, 0.46, 0.46, Bd([side * (0.35 + 0.35 * kk * side), 0.15, 1]));
-    limb(B([side * 0.2, fr(0.7), -0.18]), B([side * 0.2, fr(0.7), 0.08]), 0.06, 0.05, WH, 5); // boot
+    // (legs: the boot on its peg, the knee forward and out, one gripping the machine as the other comes away; in a
+    // no-footer, both kicked out behind and apart, the hands still on the bars)
+    const kick = [side * 0.22 * feetOff, 0.28 * feetOff, -0.62 * feetOff];
+    const ankle = add(B([side * 0.2, fr(0.8), -0.08]), kick), hip = add(add(hipC, rgP, side * 0.12), upP, -0.03);
+    const knee = ik(hip, ankle, 0.46, 0.46, Bd([side * (0.35 + 0.35 * kk * side), 0.15 - feetOff * 0.6, 1 - feetOff * 1.6]));
+    limb(add(B([side * 0.2, fr(0.7), -0.18]), kick), add(B([side * 0.2, fr(0.7), 0.08]), kick), 0.06, 0.05, WH, 5); // boot
     limb(ankle, L(ankle, knee, 0.45), 0.055, 0.06, WH, 5); // boot's leg
     limb(L(ankle, knee, 0.4), knee, 0.058, 0.07, BK, 6); // shin
     limb(L(knee, ankle, 0.35), add(knee, [0, 0.04, 0.03]), 0.05, 0.065, cut ? BK : OR, 5); // knee guard
     limb(knee, hip, 0.075, 0.095, BK, 6); // thigh
     // (arms: the shoulder to the grip; on the side the effort's on, the elbow up and out (a broad opening), on the other
     // down and in (closing); the sleeve full at the shoulder, narrowing to the elbow, the forearm to the wrist)
-    const shoulder = add(add(c3, rgC, side * 0.2), upC, -0.02), grip = B(bar(side * 0.33));
+    const shoulder = add(add(c3, rgC, side * 0.2), upC, -0.02), grip = L(B(bar(side * 0.33)), add(add(shoulder, rgC, side * 0.5), upC, 0.16), handsOff);
     // (compressed (a landing), the elbows go out and back, taking it, not up)
     const elbow = ik(shoulder, grip, 0.3, 0.3, [side * (1 + 0.6 * e * side) * (1 + sqz * 0.5), 0.55 + 0.6 * e * side - sqz * 0.7, -0.25 - sqz * 0.3]);
     limb(shoulder, elbow, cut ? 0.085 : 0.07, cut ? 0.048 : 0.055, OR, 6); limb(elbow, L(elbow, grip, 0.8), cut ? 0.058 : 0.05, cut ? 0.04 : 0.045, OR, 6);
