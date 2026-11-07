@@ -169,6 +169,7 @@ The test is whether the same brushes, given only different paths, regions and an
 `?scene=mist` (`mist.ts`, `mistnet.ts`, `devtools/splats-mist-train.mjs`). After Charles Grassi's *Neural Shaders,
 Explained With Clouds*: a tiny network estimating the light a cloud scatters toward the camera from nearby density at
 several scales, density toward the sun and the view angle, while the renderer still does visibility and accumulation.
+(The article: <https://charlesgrassi.dev/blog/neural-volumetric-clouds/>.)
 The question here is whether a compact spatial asset (splats) plus a compact learned lighting function keeps more of
 an expensive scene's behaviour, within a phone's budget.
 
@@ -187,33 +188,68 @@ drawn with the brushes, under a moving sun.
 |---|---|---|
 | reference | the expensive model, on the CPU | ~200 density evaluations; seconds to update |
 | baked | the reference under one sun and view, frozen | nothing |
-| analytic | Beer–Lambert toward the sun with the phase, plus an ambient term; two weights fitted to the reference | 7 grid samples |
-| neural | 9 → 16 → 16 → 1, 467 numbers, trained offline against the reference | 7 grid samples and ~420 multiply-adds |
+| analytic | Beer–Lambert toward the sun from the six sun reads, with the phase, plus an ambient term; two weights fitted to the reference | 7 pyramid reads |
+| neural | 13 → 16 → 16 → 2, 556 numbers, trained offline against the reference | 12 pyramid reads and ~500 multiply-adds |
 
-The analytic and neural methods use the same cheap features, read from one coarse 48×24×32 grid in a 3D texture:
-- the density at three scales;
-- the blurred density at four distances toward the sun;
-- the view–sun cosine;
-- the sun's height.
+**Following Grassi's method.** The second version follows the capture of his article closely:
+- **Features:** one coarse 48×24×32 density grid and its six-level mip pyramid in a 3D texture. The inputs are:
+  - the mean density round the splat at six scales (one read per level);
+  - the mean density toward the sun at the same six scales (each level read at its own texel's distance, so the reads
+    tile the way out like a cone);
+  - the view–sun cosine.
 
-The CPU and the shader sample the grid identically.
+  That makes 13 inputs from 12 reads, and the CPU and the shader sample the pyramid identically.
+- **Network:** squared ReLU in the hidden layers and squared outputs. There are two outputs, the sun's light and the
+  sky's, sharing the hidden layers. (He has a third for ground bounce; this scene has no ground light.)
+- **Training:** fitted to the light itself, untransformed. Training points are where a camera's rays first meet the
+  mist, rather than spread through it.
 
-**Trained** on five banks × ten suns × three views (240,000 samples, about 30 s in Node). **Measured** where it
-wasn't trained: suns in a held-out band of azimuth and elevation, and a held-out bank:
+**Trained** on five banks × ten suns × three views (240,000 visible points). **Measured** where it wasn't trained,
+under suns in a held-out band of azimuth and elevation:
 
 | | baked | analytic | neural |
 |---|---|---|---|
-| training banks, unseen suns: mean abs. error (mean light 0.45) | 0.297 | 0.102 | **0.070** |
-| unseen bank, unseen suns: mean abs. error (mean light 0.59) | 0.376 | 0.099 | **0.074** |
-| unseen bank, unseen suns: correlation with the reference | 0.33 | 0.91 | **0.93** |
+| training banks, visible points: mean abs. error (mean light 0.59) | 0.376 | 0.134 | **0.084** |
+| unseen bank, visible points: mean abs. error (mean light 0.69) | 0.398 | 0.118 | **0.087** |
+| unseen bank, visible points: correlation | 0.33 | 0.91 | **0.93** |
+| unseen bank, the mist's splats: mean abs. error (mean light 0.59) | 0.372 | 0.128 | **0.086** |
+
+**Ablation.** Each of the recipe's choices was undone in turn on the same features. Error is on visible points of the
+unseen bank:
+
+| recipe | mean abs. error | correlation |
+|---|---|---|
+| Grassi's (as above) | 0.087 | 0.927 |
+| plain ReLU hidden | 0.088 | 0.928 |
+| log1p target | 0.088 | 0.928 |
+| one output (total light) | 0.086 | 0.930 |
+| trained on splats, not visible points | 0.087 | 0.923 |
+| all four undone (this experiment's first recipe) | 0.089 | 0.928 |
 
 **What that says:**
 - Baked splats can't follow a moving sun at all, worst when back-lit.
-- A well-fitted analytic model does most of the work.
-- The network removes about a quarter of the analytic model's remaining error, on a shape and suns it never saw, for
-  ~420 multiply-adds per splat.
-- Both miss where the mist is finer than the coarse grid (the *error* view shows where), so a finer grid or splat
-  subdivision would matter more there than a bigger network.
+- A well-fitted analytic model does most of the work. The network removes about a quarter to a third of its remaining
+  error, on a shape and suns it never saw.
+- **Here, the recipe barely matters.** Each of his lessons was a fix for a failure this scene doesn't have:
+  - *Creases from ReLU:* the target is smooth and the inputs are coarse.
+  - *Brightness lost to a cube-root target:* log1p cost nothing here (the light ratio stays within 2% of 1).
+  - *Noisy targets:* the reference here is marched, not path traced, so it has no noise.
+  - *Wasted interior samples:* the bank is thin, so splats and first hits are nearly the same population.
+
+  The choices are kept because they are cheap and are the ones that matter at his scale.
+- **The features matter more than the recipe.** The first version's hand-picked features (three blurs at the point,
+  four close sun taps, the sun's height) scored 0.074 against 0.086 now, on a comparable (not identical) set of
+  splats. The pyramid's sun reads get coarse with distance, and the near ones carry most of the shadow in a bank this
+  small.
+- Both cheap methods miss where the mist is finer than the coarse grid (the *error* view shows where). A finer base
+  level would matter more there than a bigger network.
+
+**Performance, as the article reports it** (laptop RTX 4080, cloud pass only):
+- His neural shading costs about **20% more** GPU time than the conventional approximation it replaces: 4K 1.88 →
+  2.32 ms, 5K 3.34 → 4.24 ms, 8K 7.83 → 9.21 ms.
+- It uses fewer texture reads per step (12 against 14), but adds 512 multiply-adds.
+- What it buys is accuracy across sun angles: within 0.90–1.01 of the path-traced reference at twelve of thirteen sun
+  positions, where the approximation ranges from 0.21 to 2.17.
 
 Caveats:
 - The comparison is per splat, not against a full volumetric render.

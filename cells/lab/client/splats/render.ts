@@ -38,7 +38,7 @@ uniform float u_feat[16];
 uniform highp sampler3D u_grid;
 uniform vec3 u_sun;
 uniform int u_light, u_diff;
-uniform vec4 u_net[117];
+uniform vec4 u_net[${Math.ceil(NET_SIZE / 4)}];
 uniform vec2 u_ana;
 in vec2 a_corner;
 in uint a_index;
@@ -50,14 +50,16 @@ vec3 octDecode(vec2 e) {
   return normalize(n);
 }
 float netAt(int i) { return u_net[i >> 2][i & 3]; }
-float gridAt(vec3 p, int ch) {
-  vec3 f = (p - vec3(${BOX.x0.toFixed(3)}, ${BOX.y0.toFixed(3)}, ${BOX.z0.toFixed(3)})) / vec3(${(BOX.x1 - BOX.x0).toFixed(3)}, ${(BOX.y1 - BOX.y0).toFixed(3)}, ${(BOX.z1 - BOX.z0).toFixed(3)}) * vec3(${GRID.nx}.0, ${GRID.ny}.0, ${GRID.nz}.0) - 0.5;
+// (one level of the density pyramid at a point: trilinear on exact texels, zero outside the box, as mist.ts's sampleGrid)
+float gridAt(vec3 p, int L) {
+  ivec3 n = textureSize(u_grid, L);
+  vec3 f = (p - vec3(${BOX.x0.toFixed(3)}, ${BOX.y0.toFixed(3)}, ${BOX.z0.toFixed(3)})) / vec3(${(BOX.x1 - BOX.x0).toFixed(3)}, ${(BOX.y1 - BOX.y0).toFixed(3)}, ${(BOX.z1 - BOX.z0).toFixed(3)}) * vec3(n) - 0.5;
   ivec3 i0 = ivec3(floor(f)); vec3 t = f - floor(f); float r = 0.0;
   for (int c = 0; c < 8; c++) {
     ivec3 d = ivec3(c & 1, (c >> 1) & 1, c >> 2), q = i0 + d;
-    if (any(lessThan(q, ivec3(0))) || any(greaterThanEqual(q, ivec3(${GRID.nx}, ${GRID.ny}, ${GRID.nz})))) continue;
+    if (any(lessThan(q, ivec3(0))) || any(greaterThanEqual(q, n))) continue;
     vec3 w = mix(1.0 - t, t, vec3(d));
-    r += texelFetch(u_grid, q, 0)[ch] * w.x * w.y * w.z;
+    r += texelFetch(u_grid, q, L).r * w.x * w.y * w.z;
   }
   return r;
 }
@@ -100,21 +102,24 @@ void main() {
     float L = v_color.r * 3.0, refL = v_color.g * 3.0;
     if (u_light > 0) {
       vec3 view = normalize(u_eye - p);
-      float f[9];
-      f[0] = gridAt(p, 0); f[1] = gridAt(p, 1); f[2] = gridAt(p, 2);
-      f[3] = gridAt(p + u_sun * ${SUN_TAPS[0]}, 1); f[4] = gridAt(p + u_sun * ${SUN_TAPS[1]}, 1); f[5] = gridAt(p + u_sun * ${SUN_TAPS[2]}, 1); f[6] = gridAt(p + u_sun * ${SUN_TAPS[3]}, 1);
-      f[7] = dot(view, u_sun); f[8] = u_sun.y;
+      // (Grassi's features: the mean density round it at six scales, toward the sun at the same six, the view–sun cosine)
+      float f[13];
+      for (int l = 0; l < 6; l++) f[l] = gridAt(p, l);
+      ${SUN_TAPS.map((d, L) => `f[${6 + L}] = gridAt(p + u_sun * ${d.toFixed(4)}, ${L});`).join(' ')}
+      f[12] = dot(view, u_sun);
       if (u_light == 1) {
-        float tau = f[3] * 0.08 + f[4] * 0.14 + f[5] * 0.23 + f[6] * 0.4;
-        L = u_ana.x * exp(-${SIGMA.toFixed(2)} * tau) * hg(f[7], 0.6) * 12.566 + u_ana.y * exp(-1.2 * f[2]);
+        float tau = 0.0;
+        ${SUN_TAPS.map((d, L) => `tau += f[${6 + L}] * ${(d * 0.5).toFixed(4)};`).join(' ')}
+        L = u_ana.x * exp(-${SIGMA.toFixed(2)} * tau) * hg(f[12], 0.6) * 12.566 + u_ana.y * exp(-1.2 * f[3]);
       } else {
-        // (the network: 9 → 16 → 16 → 1; its numbers in order w1 b1 w2 b2 w3 b3 mean std)
-        float x[9], h1[16], h2[16];
-        for (int i = 0; i < 9; i++) x[i] = (f[i] - netAt(449 + i)) / netAt(458 + i);
-        for (int j = 0; j < 16; j++) { float s = netAt(144 + j); for (int i = 0; i < 9; i++) s += netAt(j * 9 + i) * x[i]; h1[j] = max(s, 0.0); }
-        for (int j = 0; j < 16; j++) { float s = netAt(416 + j); for (int i = 0; i < 16; i++) s += netAt(160 + j * 16 + i) * h1[i]; h2[j] = max(s, 0.0); }
-        float o = netAt(448); for (int i = 0; i < 16; i++) o += netAt(432 + i) * h2[i];
-        L = max(0.0, exp(o) - 1.0);
+        // (the network: 13 → 16 → 16 → 2, squared ReLU, squared outputs (the sun's light and the sky's), summed; its
+        // numbers in order w1 b1 w2 b2 w3 b3 mean std)
+        float x[13], h1[16], h2[16];
+        for (int i = 0; i < 13; i++) x[i] = (f[i] - netAt(${NET_OFF.mean} + i)) / netAt(${NET_OFF.std} + i);
+        for (int j = 0; j < 16; j++) { float s = netAt(${NET_OFF.b1} + j); for (int i = 0; i < 13; i++) s += netAt(j * 13 + i) * x[i]; s = max(s, 0.0); h1[j] = s * s; }
+        for (int j = 0; j < 16; j++) { float s = netAt(${NET_OFF.b2} + j); for (int i = 0; i < 16; i++) s += netAt(${NET_OFF.w2} + j * 16 + i) * h1[i]; s = max(s, 0.0); h2[j] = s * s; }
+        L = 0.0;
+        for (int k = 0; k < 2; k++) { float o = netAt(${NET_OFF.b3} + k); for (int i = 0; i < 16; i++) o += netAt(${NET_OFF.w3} + k * 16 + i) * h2[i]; L += min(o * o, ${OUT_MAX.toFixed(1)}); }
       }
     }
     // (shown linear, a little compressed at the top; or, in the error view, how far it is from the reference)
@@ -187,7 +192,9 @@ out vec4 o;
 void main() { o = vec4(0.0); }`;
 
 import { covariance, type Splats } from './format';
-import { BOX, GRID, SIGMA, SUN_TAPS, type Net } from './mist';
+import { BOX, SIGMA, SUN_TAPS, NET_SIZE, OUT_MAX, IN, H, OUT, type Net, type Mips } from './mist';
+/** where each part of the network's numbers starts in u_net */
+const NET_OFF = (() => { const w2 = IN * H + H, b2 = w2 + H * H, w3 = b2 + H, b3 = w3 + OUT * H, mean = b3 + OUT; return { b1: IN * H, w2, b2, w3, b3, mean, std: mean + IN }; })();
 
 export interface DrawOpts {
   size: number; mode: number; bg: [number, number, number];
@@ -210,15 +217,16 @@ export class Renderer {
   private oprog: WebGLProgram; private ovao: WebGLVertexArrayObject; private obuf: WebGLBuffer; private ocount = 0;
   private u: Record<string, WebGLUniformLocation | null> = {}; private ou: Record<string, WebGLUniformLocation | null> = {};
   n = 0; drawn = 0;
-  private gridTex: WebGLTexture | null = null; private net = new Float32Array(468); private ana = [0, 0];
-  /** Mist's coarse density grid (RGBA floats, GRID's size) */
-  setGrid(data: Float32Array) {
+  private gridTex: WebGLTexture | null = null; private net = new Float32Array(Math.ceil(NET_SIZE / 4) * 4); private ana = [0, 0];
+  /** Mist's density pyramid (one float a texel; each level a mip of the 3D texture) */
+  setGrid(g: Mips) {
     const gl = this.gl; gl.bindTexture(gl.TEXTURE_3D, this.gridTex);
-    gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MIN_FILTER, gl.NEAREST); gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-    gl.texImage3D(gl.TEXTURE_3D, 0, gl.RGBA32F, GRID.nx, GRID.ny, GRID.nz, 0, gl.RGBA, gl.FLOAT, data);
+    gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MIN_FILTER, gl.NEAREST_MIPMAP_NEAREST); gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_BASE_LEVEL, 0); gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MAX_LEVEL, g.data.length - 1);
+    g.data.forEach((d, L) => { const [x, y, z] = g.dims[L]; gl.texImage3D(gl.TEXTURE_3D, L, gl.R32F, x, y, z, 0, gl.RED, gl.FLOAT, d); });
   }
   /** the tiny network's numbers (w1 b1 w2 b2 w3 b3 mean std), and the analytic model's two weights */
-  setNet(n: Net, ana: { a: number; b: number }) { this.net.set([...n.w1, ...n.b1, ...n.w2, ...n.b2, ...n.w3, n.b3, ...n.mean, ...n.std]); this.ana = [ana.a, ana.b]; }
+  setNet(n: Net, ana: { a: number; b: number }) { this.net.set([...n.w1, ...n.b1, ...n.w2, ...n.b2, ...n.w3, ...n.b3, ...n.mean, ...n.std]); this.ana = [ana.a, ana.b]; }
   constructor(readonly canvas: HTMLCanvasElement) {
     const gl = canvas.getContext('webgl2', { antialias: false, premultipliedAlpha: true, alpha: false, depth: true, powerPreference: 'high-performance' });
     if (!gl) throw new Error('WebGL2 is needed');

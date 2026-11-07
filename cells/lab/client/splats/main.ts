@@ -160,8 +160,8 @@ function syncMist() {
   [...$('lights').querySelectorAll('button')].forEach((b, k) => b.setAttribute('aria-pressed', String(k < LIGHTS.length ? LIGHTS[k] === light : diff)));
   [...$('banks').querySelectorAll('button')].forEach((b, k) => b.setAttribute('aria-pressed', String([1, 9][k] === bank)));
   $('mist-controls').hidden = !mist;
-  const r = RESULTS.unseenBankUnseenSuns as Record<string, { mae: number; corr: number }>;
-  $('mist-note').textContent = mist ? `measured against the reference on an unseen bank under unseen suns (mean light 0.59): baked mae ${r.baked.mae}, analytic ${r.analytic.mae}, neural ${r.neural.mae}` : '';
+  const r = RESULTS.unseenBankUnseenSuns;
+  $('mist-note').textContent = mist ? `measured against the reference where a camera sees an unseen bank under unseen suns (mean light ${r.meanLight}): baked mae ${r.baked.mae}, analytic ${r.analytic.mae}, neural ${r.neural.mae}` : '';
 }
 /** the Brushes scene (subjects.ts): the same brushes on a stone, a culm, a corner and a written gesture */
 let brushes: BrushScene | null = null;

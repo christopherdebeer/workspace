@@ -17,13 +17,16 @@
  * - **reference**: the expensive model, per splat, on the CPU (slow to update: the truth to compare against);
  * - **baked**: the reference under one sun and view, then frozen (what ordinary splats store);
  * - **analytic**: a hand-written formula from cheap features (Beer–Lambert toward the sun, the phase, an ambient term);
- * - **neural**: a tiny network (9 → 16 → 16 → 1, 449 numbers) from the same cheap features, trained offline against
+ * - **neural**: a tiny network (13 → 16 → 16 → 2, 556 numbers) from the same cheap features, trained offline against
  *   the reference (devtools/splats-mist-train.mjs), evaluated per splat in the shader.
  *
- * The **cheap features** (`features`, and the same in render.ts's shader): from one coarse density grid (48×24×32,
- * three channels: the density, and two blurs of it), the density at the splat at three scales, the blurred density at
- * four distances toward the sun, the cosine between the view and the sun, and the sun's height. The grid's sampled by
- * hand (trilinear on exact texels) so the CPU and the GPU agree.
+ * The **cheap features** follow Grassi's (`features`, and the same in render.ts's shader): one coarse density grid
+ * (48×24×32) and its mip pyramid (six levels), read for the mean density round the splat at six scales, the mean density
+ * toward the sun at the same six scales (each level read at its own distance, so the reads tile the way out like a cone),
+ * and the cosine between the view and the sun: 13 inputs, 12 reads. The network's recipe follows his too: squared ReLU
+ * in the hidden layers, squared outputs (the sun's light and the sky's, separately), fitted to the light itself
+ * (untransformed), on points where a camera's rays first meet the mist. The pyramid's sampled by hand (trilinear on exact
+ * texels of a level) so the CPU and the GPU agree.
  */
 import { stroke, wash, group, deposit, cylinderRegion, type Element, type V } from './brush';
 import { octBytes } from './stone';
@@ -80,82 +83,113 @@ export function referenceAt(m: MistShape, p: V, sun: V): { tau: number; sky: num
   return { tau, sky };
 }
 /** the reference light toward the eye, from that and the cosine between the view (toward the eye) and the sun */
-export function referenceLight(r: { tau: number; sky: number }, cosVS: number): number {
+export function referenceParts(r: { tau: number; sky: number }, cosVS: number): [number, number] {
   // (the phase: light from the sun scattered toward the eye, the angle between them; octaves of multiple scattering)
   let ms = 0, a = 1, b = 1, c = 1;
   for (let o = 0; o < 4; o++) { ms += a * Math.exp(-SIGMA * b * r.tau) * hg(cosVS, 0.6 * c); a *= 0.5; b *= 0.45; c *= 0.5; }
-  return SUN * ms * 4 * Math.PI * 0.12 + SKY * r.sky;
+  return [SUN * ms * 4 * Math.PI * 0.12, SKY * r.sky];
 }
+/** the sun's part and the sky's together */
+export const referenceLight = (r: { tau: number; sky: number }, cosVS: number): number => { const [a, b] = referenceParts(r, cosVS); return a + b; };
 
-// ─── the coarse grid and the cheap features ───
+// ─── the density pyramid and the cheap features ───
 export const GRID = { nx: 48, ny: 24, nz: 32 };
-/** the density on a coarse grid, three channels: itself, and two blurs (a 3-cell and a 7-cell box), as RGBA floats */
-export function densityGrid(m: MistShape): Float32Array {
-  const { nx, ny, nz } = GRID, N = nx * ny * nz, raw = new Float32Array(N);
+/** the pyramid's levels: the base grid, then each half the last (to one texel), as a GPU's mip chain would be */
+export const LEVELS = 6;
+export interface Mips { dims: Array<[number, number, number]>; data: Float32Array[] }
+export const mipDims = (): Array<[number, number, number]> => { const d: Array<[number, number, number]> = [[GRID.nx, GRID.ny, GRID.nz]]; while (d.length < LEVELS) { const [a, b, c] = d[d.length - 1]; d.push([Math.max(1, a >> 1), Math.max(1, b >> 1), Math.max(1, c >> 1)]); } return d; };
+/** the density on a coarse grid (each cell the mean of a few points in it), and its mip pyramid: each texel of a level
+ * the mean of the texels under it in the one below, so level L's texel is the mean density of a block 2^L cells wide */
+export function densityGrid(m: MistShape): Mips {
+  const dims = mipDims(), [nx, ny, nz] = dims[0], base = new Float32Array(nx * ny * nz);
   for (let k = 0; k < nz; k++) for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
     const [x, y, z] = cellPos(i, j, k);
-    // (each cell the mean of a few points in it, so thin stems still register)
+    // (so thin stems still register)
     let s = 0; for (let q = 0; q < 4; q++) s += Math.min(8, density(m, x + ((q & 1) - 0.5) * 0.04, y, z + ((q >> 1) - 0.5) * 0.04));
-    raw[(k * ny + j) * nx + i] = s / 4;
+    base[(k * ny + j) * nx + i] = s / 4;
   }
-  const blur = (src: Float32Array, r: number) => {
-    let a = src;
-    for (let axis = 0; axis < 3; axis++) {
-      const b = new Float32Array(N);
-      for (let k = 0; k < nz; k++) for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
-        let s = 0, c = 0;
-        for (let d = -r; d <= r; d++) { const ii = axis === 0 ? i + d : i, jj = axis === 1 ? j + d : j, kk = axis === 2 ? k + d : k; if (ii < 0 || jj < 0 || kk < 0 || ii >= nx || jj >= ny || kk >= nz) continue; s += a[(kk * ny + jj) * nx + ii]; c++; }
-        b[(k * ny + j) * nx + i] = s / c;
-      }
-      a = b;
+  const data = [base];
+  for (let L = 1; L < LEVELS; L++) {
+    const [ax, ay, az] = dims[L - 1], [bx, by, bz] = dims[L], src = data[L - 1], out = new Float32Array(bx * by * bz);
+    const span = (i: number, a: number, b: number): [number, number] => [Math.floor((i * a) / b), Math.max(Math.floor((i * a) / b) + 1, Math.ceil(((i + 1) * a) / b))];
+    for (let k = 0; k < bz; k++) for (let j = 0; j < by; j++) for (let i = 0; i < bx; i++) {
+      const [i0, i1] = span(i, ax, bx), [j0, j1] = span(j, ay, by), [k0, k1] = span(k, az, bz); let s = 0, c = 0;
+      for (let kk = k0; kk < k1; kk++) for (let jj = j0; jj < j1; jj++) for (let ii = i0; ii < i1; ii++) { s += src[(kk * ay + jj) * ax + ii]; c++; }
+      out[(k * by + j) * bx + i] = s / c;
     }
-    return a;
-  };
-  const b1 = blur(raw, 1), b2 = blur(raw, 3), out = new Float32Array(N * 4);
-  for (let q = 0; q < N; q++) { out[q * 4] = raw[q]; out[q * 4 + 1] = b1[q]; out[q * 4 + 2] = b2[q]; out[q * 4 + 3] = 0; }
-  return out;
+    data.push(out);
+  }
+  return { dims, data };
 }
 const cellPos = (i: number, j: number, k: number): V => [BOX.x0 + ((i + 0.5) / GRID.nx) * (BOX.x1 - BOX.x0), BOX.y0 + ((j + 0.5) / GRID.ny) * (BOX.y1 - BOX.y0), BOX.z0 + ((k + 0.5) / GRID.nz) * (BOX.z1 - BOX.z0)];
-/** the grid sampled at a point, one channel, trilinear on exact texels (as the shader does it) */
-export function sampleGrid(g: Float32Array, p: V, ch: number): number {
-  const { nx, ny, nz } = GRID;
+/** one level of the pyramid sampled at a point, trilinear on exact texels, zero outside the box (as the shader does it) */
+export function sampleGrid(g: Mips, p: V, L: number): number {
+  const [nx, ny, nz] = g.dims[L], d = g.data[L];
   const fx = ((p[0] - BOX.x0) / (BOX.x1 - BOX.x0)) * nx - 0.5, fy = ((p[1] - BOX.y0) / (BOX.y1 - BOX.y0)) * ny - 0.5, fz = ((p[2] - BOX.z0) / (BOX.z1 - BOX.z0)) * nz - 0.5;
   const x0 = Math.floor(fx), y0 = Math.floor(fy), z0 = Math.floor(fz), tx = fx - x0, ty = fy - y0, tz = fz - z0;
-  const at = (i: number, j: number, k: number) => { if (i < 0 || j < 0 || k < 0 || i >= nx || j >= ny || k >= nz) return 0; return g[((k * ny + j) * nx + i) * 4 + ch]; };
+  const at = (i: number, j: number, k: number) => { if (i < 0 || j < 0 || k < 0 || i >= nx || j >= ny || k >= nz) return 0; return d[(k * ny + j) * nx + i]; };
   let r = 0;
   for (let c = 0; c < 8; c++) { const dx = c & 1, dy = (c >> 1) & 1, dz = c >> 2; r += at(x0 + dx, y0 + dy, z0 + dz) * (dx ? tx : 1 - tx) * (dy ? ty : 1 - ty) * (dz ? tz : 1 - tz); }
   return r;
 }
-/** the distances toward the sun the features look */
-export const SUN_TAPS = [0.08, 0.22, 0.45, 0.85];
-/** the cheap features of a point for a sun and a view (toward the eye) */
-export function features(g: Float32Array, p: V, sun: V, view: V): number[] {
-  const f = [sampleGrid(g, p, 0), sampleGrid(g, p, 1), sampleGrid(g, p, 2)];
-  for (const d of SUN_TAPS) f.push(sampleGrid(g, [p[0] + sun[0] * d, p[1] + sun[1] * d, p[2] + sun[2] * d], 1));
-  f.push(view[0] * sun[0] + view[1] * sun[1] + view[2] * sun[2], sun[1]);
+/** how far toward the sun each level is read: its texel's width (about), so the six reads tile the way out like a cone */
+export const SUN_TAPS = Array.from({ length: LEVELS }, (_, L) => +(((BOX.x1 - BOX.x0) / GRID.nx) * 2 ** L).toFixed(4));
+/**
+ * The cheap features of a point for a sun and a view (toward the eye), as Grassi's: the mean density round the point at
+ * six scales (one pyramid read each), the mean density toward the sun at the same six scales (one read each, at that
+ * scale's distance), and the cosine between the view and the sun. 13 numbers, 12 reads.
+ */
+export function features(g: Mips, p: V, sun: V, view: V): number[] {
+  const f: number[] = [];
+  for (let L = 0; L < LEVELS; L++) f.push(sampleGrid(g, p, L));
+  for (let L = 0; L < LEVELS; L++) { const d = SUN_TAPS[L]; f.push(sampleGrid(g, [p[0] + sun[0] * d, p[1] + sun[1] * d, p[2] + sun[2] * d], L)); }
+  f.push(view[0] * sun[0] + view[1] * sun[1] + view[2] * sun[2]);
   return f;
 }
-/** the hand-written lighting's two terms from the features: Beer–Lambert toward the sun from the taps with the phase,
- * and an ambient falling with the broad density round it */
+/** the hand-written lighting's two terms from the features: Beer–Lambert toward the sun from its six reads (each covering
+ * about its distance, the cones overlapping by half) with the phase, and an ambient falling with the density round it */
 export function analyticTerms(f: number[]): [number, number] {
-  const tau = f[3] * 0.08 + f[4] * 0.14 + f[5] * 0.23 + f[6] * 0.4;
-  return [Math.exp(-SIGMA * tau) * hg(f[7], 0.6) * 4 * Math.PI, Math.exp(-1.2 * f[2])];
+  let tau = 0; for (let L = 0; L < LEVELS; L++) tau += f[LEVELS + L] * SUN_TAPS[L] * 0.5;
+  return [Math.exp(-SIGMA * tau) * hg(f[2 * LEVELS], 0.6) * 4 * Math.PI, Math.exp(-1.2 * f[3])];
 }
 /** the hand-written lighting (its two weights fitted to the reference on the training set, so it's a fair baseline) */
 export function analytic(f: number[], k: { a: number; b: number }): number { const [s, m] = analyticTerms(f); return k.a * s + k.b * m; }
 
 // ─── the tiny network ───
-export interface Net { w1: number[]; b1: number[]; w2: number[]; b2: number[]; w3: number[]; b3: number; mean: number[]; std: number[] }
-export const IN = 9, H = 16;
-/** the network's light from the features (inputs normalised; relu, relu, linear to the light's log1p) */
-export function netLight(n: Net, f: number[]): number {
+/** weights in order w1 b1 w2 b2 w3 b3 mean std; w3 is OUT×H, b3 OUT */
+export interface Net { w1: number[]; b1: number[]; w2: number[]; b2: number[]; w3: number[]; b3: number[]; mean: number[]; std: number[] }
+/** 13 → 16 → 16 → 2 (the sun's light and the sky's, sharing the hidden layers) */
+export const IN = 13, H = 16, OUT = 2, NET_SIZE = IN * H + H + H * H + H + OUT * H + OUT + 2 * IN;
+/** the largest light an output gives (squared outputs can't go negative; this caps them) */
+export const OUT_MAX = 16;
+/** the network's two lights (inputs normalised; squared ReLU, squared ReLU, then each output squared: no creases, no dead
+ * outputs, and it predicts the light itself, untransformed) */
+export function netParts(n: Net, f: number[]): number[] {
   const x = f.map((v, i) => (v - n.mean[i]) / n.std[i]), h1 = new Array(H), h2 = new Array(H);
-  for (let j = 0; j < H; j++) { let s = n.b1[j]; for (let i = 0; i < IN; i++) s += n.w1[j * IN + i] * x[i]; h1[j] = Math.max(0, s); }
-  for (let j = 0; j < H; j++) { let s = n.b2[j]; for (let i = 0; i < H; i++) s += n.w2[j * H + i] * h1[i]; h2[j] = Math.max(0, s); }
-  let o = n.b3; for (let i = 0; i < H; i++) o += n.w3[i] * h2[i];
-  // (it predicts the light's log1p: even attention to dim and bright)
-  return Math.max(0, Math.expm1(o));
+  for (let j = 0; j < H; j++) { let s = n.b1[j]; for (let i = 0; i < IN; i++) s += n.w1[j * IN + i] * x[i]; h1[j] = s > 0 ? s * s : 0; }
+  for (let j = 0; j < H; j++) { let s = n.b2[j]; for (let i = 0; i < H; i++) s += n.w2[j * H + i] * h1[i]; h2[j] = s > 0 ? s * s : 0; }
+  const o: number[] = [];
+  for (let k = 0; k < OUT; k++) { let s = n.b3[k]; for (let i = 0; i < H; i++) s += n.w3[k * H + i] * h2[i]; o.push(Math.min(OUT_MAX, s * s)); }
+  return o;
 }
+export const netLight = (n: Net, f: number[]): number => netParts(n, f).reduce((a, b) => a + b, 0);
+
+/** where a camera ray first collides with the mist: from outside the box along -view (view points toward the eye),
+ * through the jittered spot (u, v) across the box; a free path drawn from the transmittance; null if it passes through */
+export function cameraHit(m: MistShape, view: V, u: number, v: number, xi: number): V | null {
+  const up: V = Math.abs(view[1]) > 0.9 ? [1, 0, 0] : [0, 1, 0];
+  const r = norm3(cross(up, view)), s = cross(view, r), c: V = [0, 0.7, 0];
+  const o: V = [c[0] + view[0] * 3 + (r[0] * u * 2.2 + s[0] * v * 0.9), c[1] + view[1] * 3 + (r[1] * u * 2.2 + s[1] * v * 0.9), c[2] + view[2] * 3 + (r[2] * u * 2.2 + s[2] * v * 0.9)];
+  const need = -Math.log(Math.max(1e-6, xi)), dt = 0.02; let tau = 0;
+  for (let t = 0; t < 6; t += dt) {
+    const p: V = [o[0] - view[0] * t, o[1] - view[1] * t, o[2] - view[2] * t];
+    if (p[0] < BOX.x0 || p[0] > BOX.x1 || p[1] < BOX.y0 || p[1] > BOX.y1 || p[2] < BOX.z0 || p[2] > BOX.z1) continue;
+    const d = density(m, ...p); if (d >= 40) return null;
+    tau += SIGMA * d * dt; if (tau >= need) return p;
+  }
+  return null;
+}
+const cross = (a: V, b: V): V => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
 
 // ─── the splats ───
 /** the sun's direction from its azimuth and elevation (radians) */
@@ -173,7 +207,7 @@ export function mistPoints(m: MistShape, count = 14000, seed = 3): Array<{ p: V;
   return out;
 }
 
-export interface MistScene { shape: MistShape; grid: Float32Array; points: Array<{ p: V; size: number; alpha: number }>; drawing: Splats & { mark: Uint8Array; rank: Float32Array; normal: Float32Array; feature: Uint8Array }; stems: number; occluder: Float32Array }
+export interface MistScene { shape: MistShape; grid: Mips; points: Array<{ p: V; size: number; alpha: number }>; drawing: Splats & { mark: Uint8Array; rank: Float32Array; normal: Float32Array; feature: Uint8Array }; stems: number; occluder: Float32Array }
 /** the mist marks' kind (render.ts lights them by the chosen method) */
 export const LIT = 8;
 /**
