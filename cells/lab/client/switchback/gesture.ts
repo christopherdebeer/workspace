@@ -1,6 +1,7 @@
 /**
  * Switchback's air gestures: a stroke drawn in the air, read as it's drawn into a trick. A straight line is one of the
- * body's tricks by its direction (→ no hander, ← no footer, ↑ superman, ↓ can-can); a loop drawn round is the whip, the
+ * body's tricks by its direction, eight of them (→ no hander, ← no footer, ↑ superman, ↓ can-can; on the diagonals
+ * ↗ heel clicker, ↖ nac nac, ↘ seat grab, ↙ rock solid); a loop drawn round is the whip, the
  * way it goes round the way the bike swings (clockwise, its nose to the right). The trick is asked as soon as the shape
  * is clear and held while the finger stays down; the stroke goes on being read from there, so a second shape drawn
  * without lifting strings the next trick on (a line then a loop, a line then another line).
@@ -49,8 +50,11 @@ export class Stroke {
     if (Math.abs(turn) > 4.6 && len > this.size * 0.25) return turn > 0 ? 'whipR' : 'whipL';
     // (a line: long enough, straight, nearly unturned; its direction to the nearest of four)
     if (len > this.size / 6 && chord / len > 0.95 && Math.abs(turn) < 0.25) {
-      const ang = Math.atan2(b.y - a.y, b.x - a.x), q = Math.round(ang / (Math.PI / 2));
-      const t: Trick = q === 0 ? 'hands' : q === 2 || q === -2 ? 'feet' : q === -1 ? 'superman' : 'cancan';
+      // (the four straight ways take a little more of the circle than the diagonals (25° either side against 20°), since a
+      // line meant to go across or up is drawn a little off it more often than a diagonal is)
+      const ang = Math.atan2(b.y - a.y, b.x - a.x), deg = ((ang * 180) / Math.PI + 360) % 360, near = (c: number) => Math.abs(((deg - c + 540) % 360) - 180);
+      const t: Trick = near(0) <= 25 ? 'hands' : near(180) <= 25 ? 'feet' : near(270) <= 25 ? 'superman' : near(90) <= 25 ? 'cancan'
+        : near(315) < 45 ? 'heel' : near(225) < 45 ? 'nacnac' : near(45) < 45 ? 'grab' : 'rock';
       // (the same line drawn on in the same direction isn't a new trick: keep reading from here)
       return t === this.trick ? (this.from = this.pts.length - 1, null) : t;
     }

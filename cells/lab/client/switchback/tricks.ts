@@ -63,7 +63,7 @@ export class Trickster {
         // planned from the pace it'll really leave at; on the ramp it's committed)
         if (!this.plan || this.plan.lipS !== lipS || c.at(r.s).feature !== 'ramp') this.plan = this.choose(r, lipS);
         const p = this.plan, toLip = lipS - r.s;
-        if (p.kind === 'flip' && c.at(r.s).feature === 'ramp') drive = -p.pull;
+        if (p.kind === 'flip' && c.at(r.s).feature === 'ramp') drive = -(0.3 + 0.7 * p.pull); // (past the light pull that counts for nothing)
       } else if (this.slide > 0) { this.slide -= dt; steer = Math.max(-1, Math.min(1, -this.slideDir * 1 + steer * 0.3)); }
       else {
         // (now and then a flick into a kink ahead: the bars turned hard into it for a moment, at pace; never with a jump

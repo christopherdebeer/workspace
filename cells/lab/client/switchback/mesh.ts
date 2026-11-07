@@ -459,8 +459,10 @@ export interface Pose {
   /** the body's tricks, each how far into it (0 on the bike, 1 all the way), blended as one goes into the next: hands
    * off the bars (arms out wide), feet off the pegs (legs kicked out behind and apart), superman (both legs stretched
    * straight back, the body flat over the bike, hands on the bars), can-can (the left leg swung over the seat to the
-   * right) */
-  trick?: { hands?: number; feet?: number; superman?: number; cancan?: number };
+   * right), heel clicker (both feet up over the bars in front, heels together), nac nac (the right leg swung back over the
+   * rear fender to the left), seat grab (the right hand on the back of the seat, the legs kicked back a little), rock
+   * solid (hands and feet both off, the body floated up and back above the bike) */
+  trick?: { hands?: number; feet?: number; superman?: number; cancan?: number; heel?: number; nacnac?: number; grab?: number; rock?: number };
   /** 'cut': drawn as a few flat masses (orange, charcoal, cream), each with one dark cut, not facet by facet; 'sil': the
    * whole figure one solid charcoal (for judging its silhouette); 'facets' (or unset): every face its own band */
   style?: 'facets' | 'cut' | 'sil';
@@ -585,10 +587,11 @@ export function buildRider(r: Pose, t: number) {
   const b = r.body ?? { roll: 0, shift: 0, fore: 0, rise: 0 }, sqz = Math.max(0, r.squash), steerA = r.steer ?? 0;
   const yaw = (v: number[], a: number) => rot(v, [0, 1, 0], a), zf = [0, 0, 1];
   // (the pelvis: standing on the pegs, off the seat; dropping toward it as a landing compresses (never into it))
-  const tk = r.trick ?? {}, feetOff = tk.feet ?? 0, handsOff = tk.hands ?? 0, sm = tk.superman ?? 0, cc = tk.cancan ?? 0;
+  const tk = r.trick ?? {}, rock = tk.rock ?? 0, feetOff = Math.min(1, (tk.feet ?? 0) + rock * 0.8), handsOff = Math.min(1, (tk.hands ?? 0) + rock), sm = Math.min(1, (tk.superman ?? 0) + rock * 0.55), cc = tk.cancan ?? 0;
+  const heel = tk.heel ?? 0, nac = tk.nacnac ?? 0, grab = (tk.grab ?? 0) + 0, lean = heel * 0.45; // (a heel clicker sits back)
   // (superman: the hips lift and go back off the seat, the body laid flat along the bike)
   const hipC = [b.shift, Math.max(fr(1.14), fr(1.3) - sqz * 0.3 + b.rise) + sm * 0.14, -0.2 + b.fore + sqz * 0.04 - sm * 0.32];
-  const tiltP = 0.5 + b.fore * 1.6 + sqz * 0.15 + sm * 0.75, tiltC = tiltP + 0.25 + sqz * 0.12 + sm * 0.2;
+  const tiltP = 0.5 + b.fore * 1.6 + sqz * 0.15 + sm * 0.75 - lean, tiltC = tiltP + 0.25 + sqz * 0.12 + sm * 0.2 - lean * 0.3;
   const sT = Math.max(-0.3, Math.min(0.3, steerA * 0.5 + wy * 0.35));
   const upP = yaw(rot([0, Math.cos(tiltP), Math.sin(tiltP)], zf, b.roll), wy * 0.45), rgP = yaw(rot([1, 0, 0], zf, b.roll), wy * 0.45);
   const upC = yaw(rot([0, Math.cos(tiltC), Math.sin(tiltC)], zf, b.roll + sT * 0.5), wy * 0.15), rgC = yaw(rot([1, 0, 0], zf, b.roll + sT), wy * 0.15);
@@ -599,10 +602,14 @@ export function buildRider(r: Pose, t: number) {
     // (legs: the boot on its peg, the knee forward and out, one gripping the machine as the other comes away; in a
     // no-footer, both kicked out behind and apart, the hands still on the bars; in a superman both stretched straight
     // back, together; in a can-can the left one swung over the seat to join the right)
-    const cs = side < 0 ? cc : 0;
-    const kick = [side * 0.22 * feetOff + side * 0.05 * sm + 0.74 * cs, 0.28 * feetOff + 0.52 * sm + 0.4 * cs, -0.62 * feetOff - 1.08 * sm + 0.1 * cs].map((v) => v);
+    // (heel clicker: both up over the bars, in front, heels together; nac nac: the right swung back over the fender to
+    // the left; seat grab: both kicked back a little)
+    const cs = side < 0 ? cc : 0, ns = side > 0 ? nac : 0, gk = grab * 0.45;
+    const kick = [side * 0.22 * feetOff + side * 0.05 * sm + 0.74 * cs - side * 0.14 * heel - 0.62 * ns + side * 0.08 * gk,
+      0.28 * feetOff + 0.52 * sm + 0.4 * cs + 0.62 * heel + 0.5 * ns + 0.2 * gk,
+      -0.62 * feetOff - 1.08 * sm + 0.1 * cs + 0.78 * heel - 0.72 * ns - 0.62 * gk];
     const ankle = add(B([side * 0.2, fr(0.8), -0.08]), Bd(kick)), hip = add(add(hipC, rgP, side * 0.12), upP, -0.03);
-    const knee = ik(hip, ankle, 0.46, 0.46, Bd([side * (0.35 + 0.35 * kk * side) + 1.3 * cs, 0.15 - feetOff * 0.6 - sm * 0.7 + 0.5 * cs, 1 - feetOff * 1.6 - sm * 1.9 - 0.4 * cs]));
+    const knee = ik(hip, ankle, 0.46, 0.46, Bd([side * (0.35 + 0.35 * kk * side) + 1.3 * cs - 1.2 * ns, 0.15 - feetOff * 0.6 - sm * 0.7 + 0.5 * cs + 0.8 * heel + 0.6 * ns, 1 - feetOff * 1.6 - sm * 1.9 - 0.4 * cs + 0.6 * heel - 1.6 * ns - gk * 1.4]));
     limb(add(B([side * 0.2, fr(0.7), -0.18]), Bd(kick)), add(B([side * 0.2, fr(0.7), 0.08]), Bd(kick)), 0.06, 0.05, WH, 5); // boot
     limb(ankle, L(ankle, knee, 0.45), 0.055, 0.06, WH, 5); // boot's leg
     limb(L(ankle, knee, 0.4), knee, 0.058, 0.07, BK, 6); // shin
@@ -610,7 +617,9 @@ export function buildRider(r: Pose, t: number) {
     limb(knee, hip, 0.075, 0.095, BK, 6); // thigh
     // (arms: the shoulder to the grip; on the side the effort's on, the elbow up and out (a broad opening), on the other
     // down and in (closing); the sleeve full at the shoulder, narrowing to the elbow, the forearm to the wrist)
-    const shoulder = add(add(c3, rgC, side * 0.2), upC, -0.02), grip = L(B(bar(side * 0.33)), add(add(shoulder, rgC, side * 0.5), upC, 0.16), handsOff);
+    const shoulder = add(add(c3, rgC, side * 0.2), upC, -0.02);
+    let grip = L(B(bar(side * 0.33)), add(add(shoulder, rgC, side * 0.5), upC, 0.16), handsOff);
+    if (side > 0 && grab) grip = L(grip, B([0.1, fr(1.12), -0.58]), Math.min(1, grab)); // (the seat grab: the right hand back on the seat)
     // (compressed (a landing), the elbows go out and back, taking it, not up)
     const elbow = ik(shoulder, grip, 0.3, 0.3, [side * (1 + 0.6 * e * side) * (1 + sqz * 0.5), 0.55 + 0.6 * e * side - sqz * 0.7, -0.25 - sqz * 0.3]);
     limb(shoulder, elbow, cut ? 0.085 : 0.07, cut ? 0.048 : 0.055, OR, 6); limb(elbow, L(elbow, grip, 0.8), cut ? 0.058 : 0.05, cut ? 0.04 : 0.045, OR, 6);

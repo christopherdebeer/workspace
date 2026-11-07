@@ -97,11 +97,35 @@ for (const seed of seeds.length ? seeds : [1, 2, 3]) {
   const loop = (r, dir, n = 60, cx = 200, cy = 200, a0 = 0) => Array.from({ length: n + 1 }, (_, i) => { const a = a0 + dir * (i / n) * Math.PI * 2 * 0.95; return [cx + Math.cos(a) * r, cy + Math.sin(a) * r]; });
   const got = {
     right: draw(line(120, 0)).trick, left: draw(line(-120, 0)).trick, up: draw(line(0, -120)).trick, down: draw(line(0, 120)).trick,
+    ne: draw(line(90, -90)).trick, nw: draw(line(-90, -90)).trick, se: draw(line(90, 90)).trick, sw: draw(line(-90, 90)).trick, offRight: draw(line(120, -40)).trick,
     cw: draw(loop(70, 1)).trick, ccw: draw(loop(70, -1)).trick, bigArc: draw(loop(160, 1)).reads.map((r) => r.trick).join('+'),
     chain: draw([...line(100, 0), ...loop(60, -1, 60, 360, 200, 0)]).reads.map((r) => r.trick).join('+'), short: draw(line(30, 4)).trick,
   };
-  const ok = got.right === 'hands' && got.left === 'feet' && got.up === 'superman' && got.down === 'cancan' && got.cw === 'whipR' && got.ccw === 'whipL' && got.bigArc === 'whipR' && got.chain === 'hands+whipL' && got.short === null; if (!ok) bad++;
-  console.log(`${ok ? 'ok  ' : 'FAIL'}  gestures: → ${got.right}, ← ${got.left}, ↑ ${got.up}, ↓ ${got.down}, ↻ ${got.cw}, ↺ ${got.ccw}; a big slow loop ${got.bigArc}; a line into a loop ${got.chain}; a short scribble ${got.short}`);
+  const ok = got.right === 'hands' && got.left === 'feet' && got.up === 'superman' && got.down === 'cancan' && got.ne === 'heel' && got.nw === 'nacnac' && got.se === 'grab' && got.sw === 'rock' && got.offRight === 'hands' && got.cw === 'whipR' && got.ccw === 'whipL' && got.bigArc === 'whipR' && got.chain === 'hands+whipL' && got.short === null; if (!ok) bad++;
+  console.log(`${ok ? 'ok  ' : 'FAIL'}  gestures: → ${got.right}, ← ${got.left}, ↑ ${got.up}, ↓ ${got.down}, ↗ ${got.ne}, ↖ ${got.nw}, ↘ ${got.se}, ↙ ${got.sw}, a line 18° off across ${got.offRight}, ↻ ${got.cw}, ↺ ${got.ccw}; a big slow loop ${got.bigArc}; a line into a loop ${got.chain}; a short scribble ${got.short}`);
+}
+// (habits that mustn't crash a straight landing: the throttle held in the air (it only tilts the nose, ~20° at most),
+// braking into a ramp (a light pull counts for nothing, and one that can't come round isn't committed), and the throttle
+// held open all the way (too fast for the landing, but square: a heavy landing that costs pace, not a crash). Every jump
+// of four seeds' first 150 s)
+{
+  const ride = (f) => {
+    let jumps = 0, crashes = 0, slammed = 0;
+    for (const seed of [1, 2, 3, 4]) {
+      const r = new Rider(new Course(seed)); let jumped = false;
+      for (let i = 0; i < 120 * 150; i++) {
+        const c0 = r.crashes, wasAir = r.air, v0 = Math.hypot(r.vx, r.vz);
+        if (!r.air && r.course.at(r.s).feature === 'ramp') jumped = true;
+        r.step(1 / 120, { steer: r.air ? 0 : autoSteer(r), brake: false, drive: f(r) });
+        if (jumped && wasAir && !r.air) { jumps++; jumped = false; if (r.v < v0 * 0.75) slammed++; }
+        if (r.crashes > c0) { crashes++; jumped = false; }
+      }
+    }
+    return { jumps, crashes, slammed };
+  };
+  const gasAir = ride((r) => (r.air ? 1 : 0)), brake = ride((r) => (r.course.at(r.s).feature === 'ramp' && !r.air ? -0.4 : 0)), gas = ride(() => 1);
+  const ok = gasAir.crashes <= 1 && brake.crashes === 0 && gas.crashes <= 1 && gas.slammed > 0; if (!ok) bad++;
+  console.log(`${ok ? 'ok  ' : 'FAIL'}  habits: the throttle held in the air, ${gasAir.crashes} crashes in ${gasAir.jumps} jumps; braking into the ramps, ${brake.crashes} in ${brake.jumps}; flat out all the way, ${gas.crashes} in ${gas.jumps} (${gas.slammed} slammed down square, pace lost)`);
 }
 // (the pull: on a ramp, down is the pull, not the brake, and how hard you're pulling as you leave is the backflip. Full
 // on every ramp with no trim, the smaller jumps can't hold it: crashes; trimmed in the air with the throttle and the rear

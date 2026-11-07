@@ -89,11 +89,11 @@ const camFlag = q.get('cam') as keyof typeof CAMERA | null;
 // as you drag; on a ramp, down is the pull: a backflip, committed at the lip; in the air, up and down trim it, and across
 // does nothing). A touch that starts in the air (a fresh one, or a second finger) is a gesture: drawn, it's read into a
 // trick (gesture.ts) and held while it's down; one still down as you land becomes the steering. Keys too (in the air Z
-// X C V the body's tricks, Q E the whip). Not while the menu's open, and never from a press on the menu or a link)
+// X C V R F T G the body's tricks, Q E the whip). Not while the menu's open, and never from a press on the menu or a link)
 const inp = { steer: 0, drive: 0 };
 let drag: { x: number; y: number; id: number } | null = null;
 let gest: { id: number; stroke: Stroke } | null = null, trace: { stroke: Stroke; fade: number } | null = null;
-const trickKeys: [string, Trick][] = [['z', 'hands'], ['x', 'feet'], ['c', 'superman'], ['v', 'cancan'], ['q', 'whipL'], ['e', 'whipR']];
+const trickKeys: [string, Trick][] = [['z', 'hands'], ['x', 'feet'], ['c', 'superman'], ['v', 'cancan'], ['r', 'heel'], ['f', 'nacnac'], ['t', 'grab'], ['g', 'rock'], ['q', 'whipL'], ['e', 'whipR']];
 const keys = new Set<string>();
 const onUi = (e: Event) => !!(e.target as HTMLElement).closest('a,button,input,#menu');
 addEventListener('pointerdown', (e) => {
@@ -321,7 +321,8 @@ function loop(now: number) {
     if (e.kind === 'crash' || e.kind === 'wall') cam.shake += 1.2;
     if (e.kind === 'checkpoint') say(`CHECKPOINT ${e.k}`);
     if (e.kind === 'trick') say(TRICKS[BODY[e.k]].name);
-    if (e.kind === 'refuse') say('NOT ENOUGH AIR');
+    if (e.kind === 'refuse') say(e.k ? 'NO ROOM TO FLIP' : 'NOT ENOUGH AIR');
+    if (e.kind === 'crash' && rider.crashWhy) say(({ short: 'SHORT', face: 'INTO THE FACE', 'off the bike': 'STILL OFF THE BIKE', whip: 'STILL WHIPPED', 'nose up': 'NOSE UP', 'nose down': 'NOSE DOWN', hard: 'TOO HARD', over: 'OVER THE EDGE', wall: 'INTO THE WALL' } as Record<string, string>)[rider.crashWhy] ?? 'DOWN');
     if (e.kind === 'flip') { const n = Math.abs(e.k); say(`${n > 2 ? `${n}× ` : n === 2 ? 'DOUBLE ' : ''}${e.k > 0 ? 'BACKFLIP' : 'FRONT FLIP'}`); }
     // (put back at the flag: the eye goes with you at once, not in a long swoop)
     if (e.kind === 'respawn') { say(e.k ? `CHECKPOINT ${e.k}` : 'START'); snapEye(); }

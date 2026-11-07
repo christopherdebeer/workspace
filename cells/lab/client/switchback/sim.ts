@@ -24,14 +24,18 @@ export type Event = { kind: 'roost' | 'land' | 'wall' | 'launch' | 'crash' | 'ch
 export interface Input { steer: number; brake: boolean; drive?: number; trick?: Trick | null }
 /** the air's tricks: four of the body (off the bike, posed) and the whip (the bike swung out beneath you, either way).
  * Each takes `out` seconds to get all the way into and `back` to come out of; its points, and its gesture on the page */
-export type Trick = 'hands' | 'feet' | 'superman' | 'cancan' | 'whipL' | 'whipR';
-export const BODY = ['hands', 'feet', 'superman', 'cancan'] as const;
+export type Trick = 'hands' | 'feet' | 'superman' | 'cancan' | 'heel' | 'nacnac' | 'grab' | 'rock' | 'whipL' | 'whipR';
+export const BODY = ['hands', 'feet', 'superman', 'cancan', 'heel', 'nacnac', 'grab', 'rock'] as const;
 export type Body = (typeof BODY)[number];
 export const TRICKS: Record<Trick, { name: string; out: number; back: number; points: number; gesture: string }> = {
   hands: { name: 'NO HANDER', out: 0.25, back: 0.3, points: 400, gesture: '→' },
   feet: { name: 'NO FOOTER', out: 0.25, back: 0.3, points: 400, gesture: '←' },
   superman: { name: 'SUPERMAN', out: 0.35, back: 0.4, points: 700, gesture: '↑' },
   cancan: { name: 'CAN-CAN', out: 0.3, back: 0.35, points: 600, gesture: '↓' },
+  heel: { name: 'HEEL CLICKER', out: 0.3, back: 0.35, points: 650, gesture: '↗' },
+  nacnac: { name: 'NAC NAC', out: 0.3, back: 0.35, points: 600, gesture: '↖' },
+  grab: { name: 'SEAT GRAB', out: 0.25, back: 0.3, points: 500, gesture: '↘' },
+  rock: { name: 'ROCK SOLID', out: 0.45, back: 0.5, points: 1000, gesture: '↙' },
   whipL: { name: 'WHIP', out: 0.2, back: 0.3, points: 0, gesture: '↺' },
   whipR: { name: 'WHIP', out: 0.2, back: 0.3, points: 0, gesture: '↻' },
 };
@@ -63,15 +67,15 @@ export class Rider {
    * how long each has been held all the way, the trick asked for now, and whether that ask was refused (too little air
    * left to get into it and back: refused until it's asked again) */
   /** why the last landing was a crash (for the tests and the notes) */
-  crashWhy = '';
+  crashWhy = ''; crashImp = 0;
   pull = 0; spin0 = 0;
-  outs: Record<Body, number> = { hands: 0, feet: 0, superman: 0, cancan: 0 };
-  held: Record<Body, number> = { hands: 0, feet: 0, superman: 0, cancan: 0 };
+  outs = Object.fromEntries(BODY.map((k) => [k, 0])) as Record<Body, number>;
+  held = Object.fromEntries(BODY.map((k) => [k, 0])) as Record<Body, number>;
   asked: Trick | null = null; refused = false; private called = new Set<Body>();
   /** whether this flight came off a ramp's lip (a jump) rather than a crest or an edge */
   lipFlight = false;
   /** how far off the bike, all the body's tricks together (land with more than a little and it's a crash) */
-  get trickOut() { return this.outs.hands + this.outs.feet + this.outs.superman + this.outs.cancan; }
+  get trickOut() { let o = 0; for (const k of BODY) o += this.outs[k]; return o; }
   /** the drive as last asked, and where it stood when you left the ground: in the air the nose answers to how far it's
    * moved from there (so the throttle held through a lip doesn't tip you over), from nothing once it's let go */
   private driveNow = 0; private drive0 = 0;
@@ -165,7 +169,7 @@ export class Rider {
     if (Math.abs(this.u) <= half && !p.surface) { this.launch(yBefore, dt, true); return; }
     // (the drop side is ridden, not fallen off: the shoulder, then the slope beyond it, which takes you down it if it's
     // steep (sliding toward the valley); far enough down and you've gone over: a crash)
-    if (this.u > half + 14) { this.crash(); return; }
+    if (this.u > half + 14) { this.crash('over'); return; }
     if (this.u > half + 2.6) {
       const cross = this.surfaceY(this.s, this.u) - this.surfaceY(this.s, this.u + 1);
       if (cross > 0.45) this.travel -= Math.min(1, cross - 0.45) * 0.9 * dt;
@@ -248,8 +252,18 @@ export class Rider {
     this.x += this.vx * dt; this.z += this.vz * dt; this.y = yBefore + this.vy * dt;
     if (lip) { this.jumps++; this.ev('launch', 1); }
     this.spin = 0; this.pitch0 = this.pitch; this.drive0 = this.driveNow;
-    // (the lip commits you: off a ramp, the pull as you leave is the rotation; off a crest or an edge, none)
-    this.spin0 = lip ? this.pull * LIP.spin : 0; this.spin = this.spin0;
+    // (the lip commits you: off a ramp, the pull as you leave is the rotation (a light one, as a brake into the ramp
+    // would be, is nothing: it takes a firm pull); off a crest or an edge, none. And a rotation the flight can't bring
+    // round to a whole turn, even trimmed as hard as it can be, isn't committed at all: the flight's flown forward from
+    // the lip, and if a whole turn (or two) isn't within reach, it's an ordinary flight)
+    const eff = Math.max(0, (this.pull - 0.3) / 0.7);
+    this.spin0 = lip ? eff * LIP.spin : 0;
+    if (this.spin0) {
+      const T = Math.max(0, this.airLeft() - 0.25), lo = Math.max(0, this.spin0 - LIP.trimMax) * T, hi = (this.spin0 + LIP.trimMax) * T;
+      const reach = (turn: number) => lo <= turn + 0.5 && hi >= turn - 0.5;
+      if (!reach(Math.PI * 2) && !reach(Math.PI * 4)) { this.spin0 = 0; this.ev('refuse', 1); }
+    }
+    this.spin = this.spin0;
     this.pull = 0; this.clearTricks(); this.lipFlight = lip;
   }
   private clearTricks() {
@@ -311,16 +325,19 @@ export class Rider {
     const tr = drive({ steer: 0, brake: false, drive: rawD - this.drive0 }, 0.2);
     const flipping = Math.abs(this.spin0) > 0.8;
     if (flipping) this.spin = Math.max(this.spin0 - LIP.trimMax, Math.min(this.spin0 + LIP.trimMax, this.spin + tr * LIP.trim * dt));
-    else { this.spin += tr * LIP.trim * 1.5 * dt; if (!tr) this.spin *= Math.exp(-dt * 4); this.spin = Math.max(-LIP.trimMax, Math.min(LIP.trimMax, this.spin)); }
-    this.pitch += this.spin * dt;
-    // (no flip: untouched, the nose follows the flight, as the rider's body sets it)
-    const off = wrap(this.pitch - Math.atan2(this.vy, Math.hypot(this.vx, this.vz)) * 0.7);
-    if (!flipping && !tr && Math.abs(off) < 1.2) this.pitch -= off * (1 - Math.exp(-dt * 2.5));
+    if (flipping) this.pitch += this.spin * dt;
+    else {
+      // (no flip: the nose follows the flight, as the rider's body sets it, and the drive only tilts it, the throttle up
+      // and the rear brake down, at most a fifth of a turn's quarter (~20°) either way: never a rotation that builds, so
+      // a straight landing's always there to be had)
+      const want = Math.atan2(this.vy, Math.hypot(this.vx, this.vz)) * 0.7 + tr * 0.35, before = this.pitch;
+      this.pitch += wrap(want - this.pitch) * (1 - Math.exp(-dt * 4)); this.spin = (this.pitch - before) / dt;
+    }
     this.lean *= Math.exp(-dt * 2);
     this.squash += (-0.35 - this.squash) * (1 - Math.exp(-dt * 4)); // (in the air the springs extend)
     void inp;
     // (the wall, from the air: a crash)
-    if (this.u < -half - 1.4 && this.y < p.y + 0.3) { this.crash(); return; }
+    if (this.u < -half - 1.4 && this.y < p.y + 0.3) { this.crash('wall'); return; }
     const sy = this.surfaceY(this.s, this.u);
     if (this.y <= sy) {
       // (down. The impact is the speed into the ground's own slope, the way you're going: a landing down a slope that
@@ -336,14 +353,19 @@ export class Rider {
       const slope = Math.abs(gB - sy) > 0.6 ? Math.atan2(gF - sy, 0.8) : Math.abs(gF - sy) > 0.6 ? Math.atan2(sy - gB, 0.8) : Math.atan2(gF - gB, 1.6);
       const miss = Math.abs(wrap(this.pitch - slope)), square = miss < 0.12;
       this.lastMiss = miss;
-      const imp = -(this.vy + vh * (sy - ah)) * (square ? 0.7 : 1) + Math.max(0, miss - 0.3) * 18, gap = Math.abs(this.u) <= half && !p.surface;
+      // (the slam: the speed into the ground, and a crooked landing slams harder. Square (within ~11°) the bike and the
+      // legs take nearly twice as much, at a cost: a heavy landing past what the slope was built for (too fast, onto the
+      // flat) is survived square but scrubs a lot of pace)
+      const slam = -(this.vy + vh * (sy - ah)) * (square ? 0.7 : 1), imp = slam + Math.max(0, miss - 0.3) * 18, lim = 30 - 15 * Math.max(0, Math.min(1, (miss - 0.2) / 0.3)), gap = Math.abs(this.u) <= half && !p.surface;
       // (and the body still off the bike: a crash)
-      if (gap || sy - this.y > 1.2 || imp > 15 || this.u > half + 14 || Math.abs(this.whip) > 0.6 || miss > 0.75 || this.trickOut > 0.3) {
-        this.crashWhy = gap ? 'gap' : sy - this.y > 1.2 ? 'face' : imp > 15 ? `hard ${imp.toFixed(0)}` : this.u > half + 14 ? 'over' : Math.abs(this.whip) > 0.6 ? 'whip' : miss > 0.75 ? `miss ${(miss * 57.3).toFixed(0)}°` : 'off the bike';
-        this.crash(); return;
+      if (gap || sy - this.y > 1.2 || imp > lim || this.u > half + 14 || Math.abs(this.whip) > 0.6 || miss > 0.75 || this.trickOut > 0.3) {
+        const nose = wrap(this.pitch - slope) > 0 ? 'nose up' : 'nose down';
+        this.crashImp = imp;
+        this.crashWhy = gap ? 'short' : sy - this.y > 1.2 ? 'face' : this.trickOut > 0.3 ? 'off the bike' : Math.abs(this.whip) > 0.6 ? 'whip' : miss > 0.75 || (imp > lim && imp - slam > slam * 0.5) ? nose : imp > lim ? 'hard' : 'over';
+        this.crash(this.crashWhy); return;
       }
       // (else on the ground again; a hard one squashes and costs a little)
-      this.air = false; this.y = sy; this.v = Math.max(6, Math.hypot(this.vx, this.vz) * (imp > 14 ? 0.86 : imp > 8 ? 0.97 : square && slope < -0.12 ? 1.05 : 1));
+      this.air = false; this.y = sy; this.v = Math.max(6, Math.hypot(this.vx, this.vz) * (imp > 20 ? 0.7 : imp > 14 ? 0.86 : imp > 8 ? 0.97 : square && slope < -0.12 ? 1.05 : 1));
       // (a whole turn or more of the nose since take-off, landed: a flip (+ back, − front))
       const turns = Math.round((this.pitch - this.pitch0) / (Math.PI * 2));
       if (turns) this.ev('flip', turns);
@@ -358,7 +380,7 @@ export class Rider {
       return;
     }
   }
-  private crash() { this.crashT = 1.1; this.crashes++; this.ev('crash', 1); this.air = true; }
+  private crash(why: string) { this.crashWhy = why; this.crashT = 1.1; this.crashes++; this.ev('crash', 1); this.air = true; }
 }
 
 /** a steer that keeps to the line (for `auto`, the preview and the tests): pure pursuit of a point on the line ahead,
