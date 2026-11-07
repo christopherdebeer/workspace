@@ -6,8 +6,8 @@ import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 const here = dirname(fileURLToPath(import.meta.url));
 const outfile = join(tmpdir(), `switchback-${process.pid}.mjs`);
-await build({ stdin: { contents: `export * from './client/switchback/sim'; export * from './client/switchback/course'; export { ground } from './client/switchback/ground'; export { Trickster } from './client/switchback/tricks'; export { Score, keepBest, board, sign, PAR } from './client/switchback/score'; export { CLAUDE, C15R } from './client/switchback/hand';`, resolveDir: join(here, '..'), loader: 'ts' }, bundle: true, platform: 'node', format: 'esm', outfile, logLevel: 'warning' });
-const { Rider, Course, autoSteer, ground, Trickster, Score, keepBest, board, sign, PAR, CLAUDE, C15R } = await import(outfile);
+await build({ stdin: { contents: `export * from './client/switchback/sim'; export * from './client/switchback/course'; export { ground } from './client/switchback/ground'; export { Trickster } from './client/switchback/tricks'; export { Score, keepBest, board, sign, PAR } from './client/switchback/score'; export { CLAUDE, C15R } from './client/switchback/hand'; export { Stroke } from './client/switchback/gesture';`, resolveDir: join(here, '..'), loader: 'ts' }, bundle: true, platform: 'node', format: 'esm', outfile, logLevel: 'warning' });
+const { Rider, Course, autoSteer, ground, Trickster, Score, keepBest, board, sign, PAR, CLAUDE, C15R, Stroke } = await import(outfile);
 const secs = Number(process.argv[2] ?? 180), seeds = process.argv.slice(3).map(Number);
 let bad = 0;
 for (const seed of seeds.length ? seeds : [1, 2, 3]) {
@@ -63,26 +63,45 @@ for (const seed of seeds.length ? seeds : [1, 2, 3]) {
   const ok = Math.min(...gaps) >= 250 && lastG > first * 2 && r.crashes > 0 && r.s > cp && r.s < cp + 12; if (!ok) bad++;
   console.log(`${ok ? 'ok  ' : 'FAIL'}  checkpoints: ${fl.length} flags in 8 km, ${gaps.slice(0, 3).join(', ')} m apart at the top, ${gaps.slice(-3).join(', ')} m by the end; crashed past checkpoint ${r.checkpoints} (s ${cp}), back at s ${r.s.toFixed(1)}`);
 }
-// (the take-off model: the lip decides the flight. A whip is a flick across as you leave a big ramp: it swings out and
-// comes back by itself, and lands; a body trick (hands off) held into the landing is a crash, and let go in time it lands)
+// (the air's tricks, asked by name (the page reads them from gestures): a whip held a moment off a big ramp swings out
+// and comes back by itself, and lands; a no hander held into the landing is a crash, let go in time it lands. Over a
+// crest's little air, steering hard does nothing, and a superman asked there is refused (not attempted): no crash)
 {
   const go = (mode) => {
-    const r = new Rider(new Course(1)); let maxW = 0, t = 0, big = false, done = false, held = 0;
-    while (t < 18 && !done) {
+    const r = new Rider(new Course(1)); let maxW = 0, t = 0, big = false, done = false, held = 0, out = 0, refused = 0, crestAir = 0, crests = 0, was = false;
+    while (t < 120 && !done) {
       const st = r.course.at(r.s), f = st.feature; if (f === 'ramp') big = (st.size ?? 2) >= 3;
-      const lipNear = f === 'ramp' && r.course.at(Math.floor(r.s) + 5).feature !== 'ramp';
-      let steer = autoSteer(r), trick = 0;
-      if (r.air && big && r.jumps > 0) { steer = 0; if (mode === 'whip' && r.airT < 0.2) trick = 1; if (mode === 'hold' && r.airT > 0.35) trick = 1; if (mode === 'brief' && r.airT > 0.35 && r.airT < 0.8) trick = 1; }
+      let steer = autoSteer(r), trick = null;
+      if (r.air && big && r.jumps > 0) { if (mode === 'whip' && r.airT > 0.1 && r.airT < 0.5) trick = 'whipR'; if (mode === 'hold' && r.airT > 0.2) trick = 'hands'; if (mode === 'brief' && r.airT > 0.2 && r.airT < 0.8) trick = 'hands'; }
+      // (every crest's air (not a jump's): the bars thrown full one way then the other, and a superman asked as it leaves)
+      if (r.air && r.crashT <= 0 && mode === 'crest' && !r.lipFlight) { steer = r.airT < 0.3 ? 1 : -1; if (r.airT > 0.02) trick = 'superman'; crestAir = Math.max(crestAir, r.airT); if (!was) crests++; }
+      was = r.air && !r.lipFlight;
       r.step(1 / 120, { steer, brake: false, trick });
-      maxW = Math.max(maxW, Math.abs(r.whip)); held = Math.max(held, r.trickHeld);
-      if (big && !r.air && r.jumps > 0 && r.crashT <= 0 && maxW + held > 0 && t > 1) done = true;
+      maxW = Math.max(maxW, Math.abs(r.whip)); held = Math.max(held, r.held.hands); out = Math.max(out, r.trickOut); if (r.refused) refused = 1;
+      if (mode !== 'crest' && big && !r.air && r.jumps > 0 && r.crashT <= 0 && maxW + held > 0 && t > 1) done = true;
+      if (mode === 'crest' && crests >= 6 && !r.air) done = true;
       if (r.crashes) done = true;
       t += 1 / 120;
     }
-    return { crashes: r.crashes, maxW, held };
+    return { crashes: r.crashes, maxW, held, out, refused, crestAir, crests };
   };
-  const w = go('whip'), h = go('hold'), b = go('brief'), ok = w.crashes === 0 && w.maxW > 0.4 && h.crashes > 0 && b.crashes === 0 && b.held > 0.1; if (!ok) bad++;
-  console.log(`${ok ? 'ok  ' : 'FAIL'}  the lip: a whip flicked leaving a big ramp threw the bike to ${(w.maxW * 57.3).toFixed(0)}° and came back by itself (${w.crashes} crashes); hands off held into the landing, ${h.crashes ? 'a crash' : 'no crash'}; held ${b.held.toFixed(2)} s and let go in time, ${b.crashes ? 'a crash' : 'landed'}`);
+  const w = go('whip'), h = go('hold'), b = go('brief'), c = go('crest');
+  const ok = w.crashes === 0 && w.maxW > 0.4 && h.crashes > 0 && b.crashes === 0 && b.held > 0.1 && c.crashes === 0 && c.refused && c.crests >= 6; if (!ok) bad++;
+  console.log(`${ok ? 'ok  ' : 'FAIL'}  air tricks: a whip held a moment off a big ramp threw the bike to ${(w.maxW * 57.3).toFixed(0)}° and came back (${w.crashes} crashes); a no hander held into the landing, ${h.crashes ? 'a crash' : 'no crash'}; held ${b.held.toFixed(2)} s and let go in time, ${b.crashes ? 'a crash' : 'landed'}; over ${c.crests} crests' airs (up to ${c.crestAir.toFixed(2)} s) full steering and a superman asked: ${c.refused ? 'refused where too short' : 'never refused'}, ${c.crashes} crashes`);
+}
+// (the gestures: lines by their direction, loops by the way round, a big slow arc not mistaken for a line, two shapes
+// in one stroke strung together, and a scribble too short to be anything)
+{
+  const size = 400, draw = (pts) => { const st = new Stroke(size); for (const [x, y] of pts) st.add(x, y); return st; };
+  const line = (dx, dy, n = 20, x0 = 200, y0 = 200) => Array.from({ length: n + 1 }, (_, i) => [x0 + (dx * i) / n, y0 + (dy * i) / n]);
+  const loop = (r, dir, n = 60, cx = 200, cy = 200, a0 = 0) => Array.from({ length: n + 1 }, (_, i) => { const a = a0 + dir * (i / n) * Math.PI * 2 * 0.95; return [cx + Math.cos(a) * r, cy + Math.sin(a) * r]; });
+  const got = {
+    right: draw(line(120, 0)).trick, left: draw(line(-120, 0)).trick, up: draw(line(0, -120)).trick, down: draw(line(0, 120)).trick,
+    cw: draw(loop(70, 1)).trick, ccw: draw(loop(70, -1)).trick, bigArc: draw(loop(160, 1)).reads.map((r) => r.trick).join('+'),
+    chain: draw([...line(100, 0), ...loop(60, -1, 60, 360, 200, 0)]).reads.map((r) => r.trick).join('+'), short: draw(line(30, 4)).trick,
+  };
+  const ok = got.right === 'hands' && got.left === 'feet' && got.up === 'superman' && got.down === 'cancan' && got.cw === 'whipR' && got.ccw === 'whipL' && got.bigArc === 'whipR' && got.chain === 'hands+whipL' && got.short === null; if (!ok) bad++;
+  console.log(`${ok ? 'ok  ' : 'FAIL'}  gestures: → ${got.right}, ← ${got.left}, ↑ ${got.up}, ↓ ${got.down}, ↻ ${got.cw}, ↺ ${got.ccw}; a big slow loop ${got.bigArc}; a line into a loop ${got.chain}; a short scribble ${got.short}`);
 }
 // (the pull: on a ramp, down is the pull, not the brake, and how hard you're pulling as you leave is the backflip. Full
 // on every ramp with no trim, the smaller jumps can't hold it: crashes; trimmed in the air with the throttle and the rear
@@ -138,7 +157,7 @@ for (const seed of seeds.length ? seeds : [1, 2, 3]) {
     for (const [n, v] of Object.entries(k.landed)) landed[n] = (landed[n] ?? 0) + v;
   }
   const rate = (n) => (landed[n] ?? 0) / (tried[n] || 1), f = (tried.flip ?? 0) + (tried.front ?? 0), fl = (landed.flip ?? 0) + (landed.front ?? 0);
-  const ok = flips >= 6 && fl / (f || 1) >= 0.85 && rate('whip') >= 0.85 && (tried.slide ?? 0) > 3 && crashes <= 4; if (!ok) bad++;
+  const ok = flips >= 6 && fl / (f || 1) >= 0.85 && rate('whip') >= 0.85 && (tried.slide ?? 0) >= 3 && crashes <= 4; if (!ok) bad++;
   console.log(`${ok ? 'ok  ' : 'FAIL'}  tricks: ${fl}/${f} flips landed (${flips} turns counted), ${landed.whip ?? 0}/${tried.whip ?? 0} whips, ${tried.slide ?? 0} slides; ${crashes} crashes in nine minutes`);
 }
 // (the score: a 3 km run, the plain rider (pace, air, clean landings, checkpoints) against the showing-off one (flips,

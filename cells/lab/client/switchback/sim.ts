@@ -6,26 +6,39 @@
  * through the tyres' grip, which gives at speed: turn hard and the rear steps out, the bike yawed past its line, sliding
  * (scrubbing pace, throwing roost). Where you are on the course (s down it, u across it) is read back from the world. The fall of the hill drives you on, the engine adds to it, the air holds you back. Off a ramp's lip,
  * or over a crest steeper than you can hold, you fly (a ballistic arc), and come down on whatever's under you. The lip
- * decides the flight: how hard you pull up it is your backflip, how you're steering as you leave is your whip; in the air
- * the throttle and the rear brake only trim the rotation, and your steering is the body's tricks, which have to be back
- * on the bike before you land. Off the drop side, too far: a fall, and back on the line. Into the wall: a glance off it, the pace lost.
+ * decides the flight: how hard you pull up it is your backflip; in the air the throttle and the rear brake only trim the
+ * rotation, steering does nothing, and the tricks are asked for by name (`Input.trick`, drawn as gestures on the page):
+ * the body off the bike, or the bike whipped out beneath it, held as long as they're asked and back before you land. One
+ * the flight left can't fit is refused, not attempted. Off the drop side, too far: a fall, and back on the line. Into the wall: a glance off it, the pace lost.
  */
 import { AIR, Course } from './course';
 import { ground } from './ground';
 
 export const G = 9.8, VMAX = 46;
-export type Event = { kind: 'roost' | 'land' | 'wall' | 'launch' | 'crash' | 'checkpoint' | 'respawn' | 'flip' | 'trick'; x: number; y: number; z: number; k: number };
+export type Event = { kind: 'roost' | 'land' | 'wall' | 'launch' | 'crash' | 'checkpoint' | 'respawn' | 'flip' | 'trick' | 'refuse'; x: number; y: number; z: number; k: number };
 /** steer (−1…1, + right); drive (−1…1): + the throttle opened wider, − the brake, as hard as it's pulled (`brake` is the
  * same as drive −1). From the take-off model (see `fly`): on a ramp, − is the pull, not the brake, and how hard you're
  * pulling as you leave the lip is the backflip's rotation, committed; in the air the same axis trims the rotation as a
  * real bike's rear wheel does (+ the throttle, nose up, turning faster; − the rear brake, nose down, slower). And the
- * body's tricks (−1, 0, +1), the steering in the air: + right, hands off the bars (a no-hander), − left, feet off the
- * pegs (a no-footer), held as long as it's held, then back to the bike */
-export interface Input { steer: number; brake: boolean; drive?: number; trick?: number }
+ * trick asked for in the air (held as long as it's asked, then back to the bike; none, nothing) */
+export interface Input { steer: number; brake: boolean; drive?: number; trick?: Trick | null }
+/** the air's tricks: four of the body (off the bike, posed) and the whip (the bike swung out beneath you, either way).
+ * Each takes `out` seconds to get all the way into and `back` to come out of; its points, and its gesture on the page */
+export type Trick = 'hands' | 'feet' | 'superman' | 'cancan' | 'whipL' | 'whipR';
+export const BODY = ['hands', 'feet', 'superman', 'cancan'] as const;
+export type Body = (typeof BODY)[number];
+export const TRICKS: Record<Trick, { name: string; out: number; back: number; points: number; gesture: string }> = {
+  hands: { name: 'NO HANDER', out: 0.25, back: 0.3, points: 400, gesture: '→' },
+  feet: { name: 'NO FOOTER', out: 0.25, back: 0.3, points: 400, gesture: '←' },
+  superman: { name: 'SUPERMAN', out: 0.35, back: 0.4, points: 700, gesture: '↑' },
+  cancan: { name: 'CAN-CAN', out: 0.3, back: 0.35, points: 600, gesture: '↓' },
+  whipL: { name: 'WHIP', out: 0.2, back: 0.3, points: 0, gesture: '↺' },
+  whipR: { name: 'WHIP', out: 0.2, back: 0.3, points: 0, gesture: '↻' },
+};
 /** the take-off model: the most a full pull at the lip turns the bike (rad/s; a whole backflip in ~1.5 s), how much the
  * throttle and the rear brake can trim it in the air (rad/s each second, and at most this far from what the lip gave),
- * how far a whip set at the lip throws the bike (rad, at full lock) and how long it's held before it comes back (s) */
-export const LIP = { spin: 4.2, trim: 1.6, trimMax: 1.0, whip: 0.85, whipHold: 0.55 };
+ * and how far a whip throws the bike out (rad) */
+export const LIP = { spin: 4.2, trim: 1.6, trimMax: 1.0, whip: 0.85 };
 
 export class Rider {
   s = 2; u = 0; psi = 0; v = 18;
@@ -45,15 +58,20 @@ export class Rider {
   spin = 0; private pitch0 = 0;
   /** how far off square to the slope the last landing came down (rad): for the score's CLEAN */
   lastMiss = 0;
-  /** the take-off model: the pull (0…1) built on the ramp, eased toward how hard you're pulling; the rotation and the
-   * whip committed by a flick as you left a lip; and the body's trick (−1 no-footer, +1 no-hander), how far off the bike it is (0 on
-   * it, 1 all the way off), and how long it's been all the way off */
+  /** the take-off model: the pull (0…1) built on the ramp, eased toward how hard you're pulling, and the rotation it
+   * committed at the lip. The air's tricks: how far into each of the body's it is (0 on the bike, 1 all the way off),
+   * how long each has been held all the way, the trick asked for now, and whether that ask was refused (too little air
+   * left to get into it and back: refused until it's asked again) */
   /** why the last landing was a crash (for the tests and the notes) */
   crashWhy = '';
-  pull = 0; spin0 = 0; whip0 = 0; trickKind = 0; trickOut = 0; trickHeld = 0; private trickCalled = false;
-  /** the drag across as last asked (raw), where it stood as you left the ground, whether this flight came off a lip (a
-   * whip can be thrown only off one), and whether a flick has been thrown this flight */
-  private steerRaw = 0; private steer0 = 0; private whipLip = false; private flicked = false;
+  pull = 0; spin0 = 0;
+  outs: Record<Body, number> = { hands: 0, feet: 0, superman: 0, cancan: 0 };
+  held: Record<Body, number> = { hands: 0, feet: 0, superman: 0, cancan: 0 };
+  asked: Trick | null = null; refused = false; private called = new Set<Body>();
+  /** whether this flight came off a ramp's lip (a jump) rather than a crest or an edge */
+  lipFlight = false;
+  /** how far off the bike, all the body's tricks together (land with more than a little and it's a crash) */
+  get trickOut() { return this.outs.hands + this.outs.feet + this.outs.superman + this.outs.cancan; }
   /** the drive as last asked, and where it stood when you left the ground: in the air the nose answers to how far it's
    * moved from there (so the throttle held through a lip doesn't tip you over), from nothing once it's let go */
   private driveNow = 0; private drive0 = 0;
@@ -82,14 +100,13 @@ export class Rider {
         this.u = 0; this.psi = 0; this.v = 24; this.air = false; this.vy = 0; this.vyGround = NaN; this.s = this.checkpoint + 3;
         while (!this.course.point(this.s, 0).surface || this.course.at(this.s).feature !== 'none') this.s += 1;
         this.place(); this.sPrev = this.s; this.headingWas = this.travel; this.lean = 0; this.squash = 0; this.wheels(); this.whip = this.vWhip = 0; this.spin = 0; this.pitch = wrap(this.pitch);
-        this.spin0 = 0; this.whip0 = 0; this.pull = 0; this.trickKind = 0; this.trickOut = 0;
+        this.spin0 = 0; this.pull = 0; this.clearTricks();
         this.ev('respawn', this.checkpoints);
       }
       else { this.vy -= G * dt; this.x += this.vx * dt; this.y += this.vy * dt; this.z += this.vz * dt; this.pitch += dt * 3; }
       return;
     }
     this.steerK += (inp.steer - this.steerK) * (1 - Math.exp(-dt * 10));
-    if (!this.air) this.steerRaw = inp.steer;
     if (!this.air) this.driveNow = inp.drive ?? (inp.brake ? -1 : 0);
     if (this.air) this.fly(dt, inp); else this.ride(dt, inp);
     this.sprung(dt);
@@ -231,35 +248,53 @@ export class Rider {
     this.x += this.vx * dt; this.z += this.vz * dt; this.y = yBefore + this.vy * dt;
     if (lip) { this.jumps++; this.ev('launch', 1); }
     this.spin = 0; this.pitch0 = this.pitch; this.drive0 = this.driveNow;
-    // (the lip commits you: off a ramp, the pull as you leave is the rotation, and the bars turned as you leave are the
-    // whip; off a crest or an edge, neither)
+    // (the lip commits you: off a ramp, the pull as you leave is the rotation; off a crest or an edge, none)
     this.spin0 = lip ? this.pull * LIP.spin : 0; this.spin = this.spin0;
-    this.whip0 = 0; this.whipLip = lip; this.steer0 = this.steerRaw; this.flicked = false;
-    this.pull = 0; this.trickKind = 0; this.trickOut = 0; this.trickHeld = 0; this.trickCalled = false;
+    this.pull = 0; this.clearTricks(); this.lipFlight = lip;
+  }
+  private clearTricks() {
+    for (const k of BODY) { this.outs[k] = 0; this.held[k] = 0; }
+    this.asked = null; this.refused = false; this.called.clear();
+  }
+  /** how long until the flight comes down, flown forward from now as the sim flies it (gravity and the air) */
+  airLeft() {
+    let x = this.x, y = this.y, z = this.z, vx = this.vx, vy = this.vy, vz = this.vz, s = this.s, T = 0;
+    const h = 1 / 60;
+    for (; T < 6; T += h) {
+      const d = 1 - AIR * Math.hypot(vx, vz) * h;
+      vy -= G * h; vx *= d; vz *= d; x += vx * h; y += vy * h; z += vz * h;
+      const loc = this.course.locate(x, z, s); s = loc.s;
+      if (y <= this.surfaceY(loc.s, loc.u)) break;
+    }
+    return T;
   }
   private fly(dt: number, inp: Input) {
     this.airT += dt;
-    // (the whip the lip set: thrown out once you're truly off the ground, held a moment (longer the bigger it is), and
-    // brought back by itself. Nothing in the air steers the bike: you leave lined up, or you don't)
-    const hold = 0.3 + LIP.whipHold * (0.5 + Math.abs(this.whip0) / LIP.whip / 2);
-    const wTo = this.whip0 * (this.airT < hold ? 1 : 0), wk = 60;
+    // (the trick asked for: a new ask is weighed against the air left, flown forward: if getting into it and back out
+    // won't fit (with a little to spare), it's refused, and stays refused until something else is asked. Steering does
+    // nothing up here)
+    const ask = inp.trick ?? null;
+    if (ask !== this.asked) {
+      this.asked = ask; this.refused = false;
+      if (ask) { const tk = TRICKS[ask], left = this.airLeft(); if (left < tk.out + tk.back + 0.08) { this.refused = true; this.ev('refuse', 0); } }
+    }
+    const doing = this.refused ? null : this.asked;
+    // (the body's tricks: into the one asked as quickly as it goes, out of every other as quickly as it comes back; all
+    // the way off, it's called, and held as long as it's asked)
+    BODY.forEach((k, i) => {
+      const tk = TRICKS[k];
+      if (doing === k) this.outs[k] = Math.min(1, this.outs[k] + dt / tk.out); else this.outs[k] = Math.max(0, this.outs[k] - dt / tk.back);
+      if (this.outs[k] >= 1) { this.held[k] += dt; if (!this.called.has(k)) { this.called.add(k); this.ev('trick', i); } }
+    });
+    // (the whip: the bike swung out beneath you, sprung, either way, as long as it's asked, and back by itself)
+    const wTo = doing === 'whipR' ? LIP.whip : doing === 'whipL' ? -LIP.whip : 0, wk = 60;
     this.vWhip += (-wk * (this.whip - wTo) - 2 * 0.75 * Math.sqrt(wk) * this.vWhip) * dt; this.whip += this.vWhip * dt;
-    // (the drag across in the air, measured from where it stood as you left (a drag held through the lip asks nothing),
-    // from nothing once it's let go: a flick in the first moment off a lip is the whip, thrown and committed, coming back
-    // by itself; after that, held, it's the body's trick: off the bike as long as it's asked, quickly (a quarter of a
-    // second all the way off), and back a little slower; all the way off, it's called)
-    const raw = inp.trick ?? 0; if (!raw) this.steer0 = 0;
-    const rel = raw - this.steer0, want = Math.abs(rel) > 0.35 ? Math.sign(rel) : 0;
-    if (want && this.whipLip && !this.flicked && this.airT < 0.3) { this.flicked = true; this.whip0 = want * LIP.whip * Math.min(1, (Math.abs(rel) - 0.35) / 0.4 + 0.5); }
-    if (!want && this.flicked && this.airT >= 0.3) this.flicked = false, this.whipLip = false;
-    if (want && !(this.flicked && this.whipLip) && (!this.trickKind || this.trickKind === want) && this.airT > 0.3) { this.trickKind = want; this.trickOut = Math.min(1, this.trickOut + dt / 0.25); }
-    else { this.trickOut = Math.max(0, this.trickOut - dt / 0.3); if (!this.trickOut) { this.trickKind = 0; this.trickCalled = false; } }
-    if (this.trickOut >= 1) { this.trickHeld += dt; if (!this.trickCalled) { this.trickCalled = true; this.ev('trick', this.trickKind); } }
     // (the line: nothing you do in the air steers, but the rider's body keeps the bike on line, as a rider's does, easing
-    // the flight back along the road and toward its middle, gently (at most ~0.6 rad/s). Lining up isn't the trick here:
-    // the rotation and the whip stay what the lip and the flick made them)
+    // the flight back along the road and toward its middle, gently (at most ~0.6 rad/s off a jump; off a crest, an air
+    // you didn't ask for, twice that, so the road's bend doesn't carry you off it). Lining up isn't the trick here:
+    // the rotation stays what the lip made it)
     const ln = this.course.point(this.s, 0), toward = ln.heading + Math.max(-0.2, Math.min(0.2, this.u * 0.05)), cur = Math.atan2(this.vx, this.vz);
-    const turn = Math.max(-0.6 * dt, Math.min(0.6 * dt, wrap(toward - cur) * dt * 3)), tc = Math.cos(turn), ts = Math.sin(turn);
+    const lim = (this.lipFlight ? 0.6 : 1.2) * dt, turn = Math.max(-lim, Math.min(lim, wrap(toward - cur) * dt * 3)), tc = Math.cos(turn), ts = Math.sin(turn);
     const nvx = this.vx * tc + this.vz * ts, nvz = -this.vx * ts + this.vz * tc; this.vx = nvx; this.vz = nvz;
     // (gravity, and the air holding you back as it does on the ground, with the square of the pace)
     const drag = 1 - AIR * Math.hypot(this.vx, this.vz) * dt;
@@ -312,7 +347,7 @@ export class Rider {
       // (a whole turn or more of the nose since take-off, landed: a flip (+ back, − front))
       const turns = Math.round((this.pitch - this.pitch0) / (Math.PI * 2));
       if (turns) this.ev('flip', turns);
-      this.pitch = wrap(this.pitch); this.spin = 0; this.spin0 = 0; this.whip0 = 0; this.trickKind = 0; this.trickOut = 0;
+      this.pitch = wrap(this.pitch); this.spin = 0; this.spin0 = 0; this.clearTricks();
       this.travel = Math.atan2(this.vx, this.vz); this.headingWas = this.travel;
       // (down with the bike still whipped: it lands yawed off the way it's going (its nose right of it: heading less) and
       // the slide takes it straight)

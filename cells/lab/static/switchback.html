@@ -11,6 +11,7 @@ header{position:fixed;top:max(18px,env(safe-area-inset-top));left:18px;right:18p
 .pace{text-align:right;max-width:62vw}.pace b{display:block;font-weight:900;font-size:50px;line-height:.8;letter-spacing:-.04em;font-variant-numeric:tabular-nums;transition:color .2s}.pace b.up{color:#ff7428}.pace span{display:block;font-size:11px;font-weight:700;letter-spacing:.16em;margin-top:7px}
 #combo{color:#ff7428;font-size:10px!important;line-height:1.5;min-height:1.5em}#combo i{font-style:normal;color:#fff}
 #note{position:fixed;left:0;right:0;top:30%;text-align:center;font-weight:900;font-size:22px;letter-spacing:.18em;color:#fff;opacity:0;transform:translateY(8px);transition:opacity .35s,transform .35s;pointer-events:none;text-shadow:0 2px 0 #e85a0d}#note.on{opacity:1;transform:none}
+#ink{position:fixed;inset:0;width:100%;height:100%;pointer-events:none}
 #hint{position:fixed;left:0;right:0;bottom:max(30px,env(safe-area-inset-bottom));text-align:center;font-size:10px;font-weight:700;letter-spacing:.3em;transition:opacity .6s;pointer-events:none}#hint.gone{opacity:0}
 a{color:#fff;font-size:9px;letter-spacing:.24em;font-weight:700}
 #notes{position:fixed;left:18px;bottom:max(18px,env(safe-area-inset-bottom))}
@@ -68,9 +69,9 @@ body:has(#menu.on) header,body:has(#menu.on) #hint,body:has(#menu.on) #notes{opa
 .preview header,.preview #hint,.preview #notes,.preview #note,.preview #menu{display:none}
 .demo #hint,.demo #notes,.demo #menu{display:none}
 </style></head><body>
-<canvas id="world" aria-label="A motocross rider racing down a faceted mountain road. Drag left or right to steer; drag up for throttle and down to brake; in the air, drag down to pull the nose up and over, up to push it down."></canvas><canvas id="speed"></canvas>
+<canvas id="world" aria-label="A motocross rider racing down a faceted mountain road. Drag left or right to steer; drag up for throttle and down to brake; on a ramp, drag down to pull a backflip; in the air, draw a line or a loop and hold it for a trick."></canvas><canvas id="speed"></canvas><canvas id="ink" aria-hidden="true"></canvas>
 <header><div class="title"><button id="menuBtn" aria-label="Menu and settings (pauses)"><i></i></button><div><b>SWITCH<br>BACK</b><small>SEED <span id="seed">1</span></small></div></div><div class="pace"><b id="score">0</b><span id="status"></span><span id="combo"></span></div></header>
-<div id="note" role="status" aria-live="polite"></div><div id="hint">DRAG ← → STEER · ↑ GAS · ↓ BRAKE · ON A RAMP ↓ PULLS<br>FLICK ← → OFF THE LIP: WHIP · HOLD IN THE AIR: HANDS / FEET OFF</div><a id="notes" href="{{readme}}">NOTES</a>
+<div id="note" role="status" aria-live="polite"></div><div id="hint">DRAG ← → STEER · ↑ GAS · ↓ BRAKE · ON A RAMP ↓ PULLS<br>IN THE AIR, DRAW A TRICK AND HOLD IT: → ← ↑ ↓ OR A LOOP</div><a id="notes" href="{{readme}}">NOTES</a>
 <div id="menu" class="on" role="dialog" aria-modal="true" aria-label="Switchback">
   <div><h1>SWITCH<span>BACK</span><canvas id="autograph" aria-hidden="true"></canvas></h1><p class="tag">A RUN DOWN A MOUNTAIN MADE AS YOU RIDE IT</p></div>
   <div>

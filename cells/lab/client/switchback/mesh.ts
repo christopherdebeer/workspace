@@ -456,9 +456,11 @@ export interface Pose {
   /** a whip: the machine swung out beneath the rider (rad, + its nose to the right) and laid over with it; the rider's
    * body stays with the way it's going, its legs and arms re-solved to where the pegs and bars have gone */
   whip?: number;
-  /** (the take-off model) the body's trick: +1 hands off the bars (a no-hander: arms out wide), −1 feet off the pegs (a
-   * no-footer: legs kicked out behind); `out`, how far off the bike (0 on it, 1 all the way) */
-  trick?: { kind: number; out: number };
+  /** the body's tricks, each how far into it (0 on the bike, 1 all the way), blended as one goes into the next: hands
+   * off the bars (arms out wide), feet off the pegs (legs kicked out behind and apart), superman (both legs stretched
+   * straight back, the body flat over the bike, hands on the bars), can-can (the left leg swung over the seat to the
+   * right) */
+  trick?: { hands?: number; feet?: number; superman?: number; cancan?: number };
   /** 'cut': drawn as a few flat masses (orange, charcoal, cream), each with one dark cut, not facet by facet; 'sil': the
    * whole figure one solid charcoal (for judging its silhouette); 'facets' (or unset): every face its own band */
   style?: 'facets' | 'cut' | 'sil';
@@ -583,22 +585,25 @@ export function buildRider(r: Pose, t: number) {
   const b = r.body ?? { roll: 0, shift: 0, fore: 0, rise: 0 }, sqz = Math.max(0, r.squash), steerA = r.steer ?? 0;
   const yaw = (v: number[], a: number) => rot(v, [0, 1, 0], a), zf = [0, 0, 1];
   // (the pelvis: standing on the pegs, off the seat; dropping toward it as a landing compresses (never into it))
-  const hipC = [b.shift, Math.max(fr(1.14), fr(1.3) - sqz * 0.3 + b.rise), -0.2 + b.fore + sqz * 0.04];
-  const tiltP = 0.5 + b.fore * 1.6 + sqz * 0.15, tiltC = tiltP + 0.25 + sqz * 0.12;
+  const tk = r.trick ?? {}, feetOff = tk.feet ?? 0, handsOff = tk.hands ?? 0, sm = tk.superman ?? 0, cc = tk.cancan ?? 0;
+  // (superman: the hips lift and go back off the seat, the body laid flat along the bike)
+  const hipC = [b.shift, Math.max(fr(1.14), fr(1.3) - sqz * 0.3 + b.rise) + sm * 0.14, -0.2 + b.fore + sqz * 0.04 - sm * 0.32];
+  const tiltP = 0.5 + b.fore * 1.6 + sqz * 0.15 + sm * 0.75, tiltC = tiltP + 0.25 + sqz * 0.12 + sm * 0.2;
   const sT = Math.max(-0.3, Math.min(0.3, steerA * 0.5 + wy * 0.35));
   const upP = yaw(rot([0, Math.cos(tiltP), Math.sin(tiltP)], zf, b.roll), wy * 0.45), rgP = yaw(rot([1, 0, 0], zf, b.roll), wy * 0.45);
   const upC = yaw(rot([0, Math.cos(tiltC), Math.sin(tiltC)], zf, b.roll + sT * 0.5), wy * 0.15), rgC = yaw(rot([1, 0, 0], zf, b.roll + sT), wy * 0.15);
   const c1 = add(hipC, upP, 0.17), c2 = add(c1, upC, 0.17), c3 = add(c2, upC, 0.15), c4 = add(c3, upC, 0.05);
   // (asymmetry: which side opens. e: the arms (the bars turned, the whip); k: the knees)
   const e = Math.max(-1, Math.min(1, steerA * 1.5 + wy * 1.2 + b.roll * 1.5)), kk = Math.max(-1, Math.min(1, wy * 1.5 + r.lean * 1.2));
-  const tk = r.trick, feetOff = tk && tk.kind < 0 ? tk.out : 0, handsOff = tk && tk.kind > 0 ? tk.out : 0;
   for (const side of [-1, 1]) {
     // (legs: the boot on its peg, the knee forward and out, one gripping the machine as the other comes away; in a
-    // no-footer, both kicked out behind and apart, the hands still on the bars)
-    const kick = [side * 0.22 * feetOff, 0.28 * feetOff, -0.62 * feetOff];
-    const ankle = add(B([side * 0.2, fr(0.8), -0.08]), kick), hip = add(add(hipC, rgP, side * 0.12), upP, -0.03);
-    const knee = ik(hip, ankle, 0.46, 0.46, Bd([side * (0.35 + 0.35 * kk * side), 0.15 - feetOff * 0.6, 1 - feetOff * 1.6]));
-    limb(add(B([side * 0.2, fr(0.7), -0.18]), kick), add(B([side * 0.2, fr(0.7), 0.08]), kick), 0.06, 0.05, WH, 5); // boot
+    // no-footer, both kicked out behind and apart, the hands still on the bars; in a superman both stretched straight
+    // back, together; in a can-can the left one swung over the seat to join the right)
+    const cs = side < 0 ? cc : 0;
+    const kick = [side * 0.22 * feetOff + side * 0.05 * sm + 0.74 * cs, 0.28 * feetOff + 0.52 * sm + 0.4 * cs, -0.62 * feetOff - 1.08 * sm + 0.1 * cs].map((v) => v);
+    const ankle = add(B([side * 0.2, fr(0.8), -0.08]), Bd(kick)), hip = add(add(hipC, rgP, side * 0.12), upP, -0.03);
+    const knee = ik(hip, ankle, 0.46, 0.46, Bd([side * (0.35 + 0.35 * kk * side) + 1.3 * cs, 0.15 - feetOff * 0.6 - sm * 0.7 + 0.5 * cs, 1 - feetOff * 1.6 - sm * 1.9 - 0.4 * cs]));
+    limb(add(B([side * 0.2, fr(0.7), -0.18]), Bd(kick)), add(B([side * 0.2, fr(0.7), 0.08]), Bd(kick)), 0.06, 0.05, WH, 5); // boot
     limb(ankle, L(ankle, knee, 0.45), 0.055, 0.06, WH, 5); // boot's leg
     limb(L(ankle, knee, 0.4), knee, 0.058, 0.07, BK, 6); // shin
     limb(L(knee, ankle, 0.35), add(knee, [0, 0.04, 0.03]), 0.05, 0.065, cut ? BK : OR, 5); // knee guard

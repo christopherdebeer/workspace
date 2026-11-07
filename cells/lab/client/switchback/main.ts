@@ -17,7 +17,9 @@
  * (three streaks set at the helmet and the bars); `wake=0` none on the rider at all.
  */
 import { Course } from './course';
-import { Rider, autoSteer, VMAX } from './sim';
+import { BODY, Rider, TRICKS, autoSteer, VMAX } from './sim';
+import type { Trick } from './sim';
+import { Stroke } from './gesture';
 import { Trickster } from './tricks';
 import { Renderer, View } from './render';
 import { M, PALETTE, RUT_LIGHT } from './mesh';
@@ -85,20 +87,29 @@ const camFlag = q.get('cam') as keyof typeof CAMERA | null;
 
 // (input: a drag from where it began: across, it steers; up and down, it drives (up the throttle, down the brake, as far
 // as you drag; on a ramp, down is the pull: a backflip, committed at the lip; in the air, up and down trim it, and across
-// is the body: right hands off, left feet off). Keys too. Not while the menu's open,
-// and never from a press on the menu or a link)
+// does nothing). A touch that starts in the air (a fresh one, or a second finger) is a gesture: drawn, it's read into a
+// trick (gesture.ts) and held while it's down; one still down as you land becomes the steering. Keys too (in the air Z
+// X C V the body's tricks, Q E the whip). Not while the menu's open, and never from a press on the menu or a link)
 const inp = { steer: 0, drive: 0 };
 let drag: { x: number; y: number; id: number } | null = null;
+let gest: { id: number; stroke: Stroke } | null = null, trace: { stroke: Stroke; fade: number } | null = null;
+const trickKeys: [string, Trick][] = [['z', 'hands'], ['x', 'feet'], ['c', 'superman'], ['v', 'cancan'], ['q', 'whipL'], ['e', 'whipR']];
 const keys = new Set<string>();
 const onUi = (e: Event) => !!(e.target as HTMLElement).closest('a,button,input,#menu');
-addEventListener('pointerdown', (e) => { if (onUi(e) || menuOpen) return; drag = { x: e.clientX, y: e.clientY, id: e.pointerId }; if (direct) auto = false; hint(); });
+addEventListener('pointerdown', (e) => {
+  if (onUi(e) || menuOpen) return;
+  if (direct) auto = false; hint();
+  if (rider.air && rider.crashT <= 0 && !auto && !gest) { const st = new Stroke(Math.min(innerWidth, innerHeight)); st.add(e.clientX, e.clientY); gest = { id: e.pointerId, stroke: st }; trace = { stroke: st, fade: 1 }; return; }
+  drag = { x: e.clientX, y: e.clientY, id: e.pointerId };
+});
 addEventListener('pointermove', (e) => {
+  if (gest && e.pointerId === gest.id) { gest.stroke.add(e.clientX, e.clientY); return; }
   if (!drag || e.pointerId !== drag.id) return;
   const span = Math.min(innerWidth, innerHeight) * 0.24;
   inp.steer = Math.max(-1, Math.min(1, (e.clientX - drag.x) / span));
   inp.drive = Math.max(-2, Math.min(2, (drag.y - e.clientY) / span)); // (past ±1 only matters in the air, from where the drag stood at take-off)
 });
-const up = (e: PointerEvent) => { if (drag && e.pointerId === drag.id) { drag = null; inp.steer = 0; inp.drive = 0; } };
+const up = (e: PointerEvent) => { if (gest && e.pointerId === gest.id) gest = null; if (drag && e.pointerId === drag.id) { drag = null; inp.steer = 0; inp.drive = 0; } };
 addEventListener('pointerup', up); addEventListener('pointercancel', up);
 addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && !direct) { if (menuOpen && running) close(); else open(); return; }
@@ -295,7 +306,10 @@ function loop(now: number) {
     while (acc >= 1 / 120) {
       acc -= 1 / 120; t += 1 / 120;
       const steer = steerKeys || inp.steer;
-      rider.step(1 / 120, auto ? autoInput() : rider.air ? { steer: 0, brake: false, drive, trick: steer } : { steer, brake: false, drive });
+      // (down with a gesture still held: it becomes the steering, from where the finger is now)
+      if (gest && !rider.air) { const p = gest.stroke.pts[gest.stroke.pts.length - 1]; if (!drag) drag = { x: p.x, y: p.y, id: gest.id }; gest = null; }
+      const trick = gest?.stroke.trick ?? trickKeys.find(([k]) => keys.has(k))?.[1] ?? null;
+      rider.step(1 / 120, auto ? autoInput() : rider.air ? { steer: 0, brake: false, drive, trick } : { steer, brake: false, drive });
       rd.trail.add(rider);
       if (running && !finished) score.update(rider, 1 / 120);
     }
@@ -306,6 +320,8 @@ function loop(now: number) {
     if (e.kind === 'land') cam.shake += e.k * 0.9;
     if (e.kind === 'crash' || e.kind === 'wall') cam.shake += 1.2;
     if (e.kind === 'checkpoint') say(`CHECKPOINT ${e.k}`);
+    if (e.kind === 'trick') say(TRICKS[BODY[e.k]].name);
+    if (e.kind === 'refuse') say('NOT ENOUGH AIR');
     if (e.kind === 'flip') { const n = Math.abs(e.k); say(`${n > 2 ? `${n}× ` : n === 2 ? 'DOUBLE ' : ''}${e.k > 0 ? 'BACKFLIP' : 'FRONT FLIP'}`); }
     // (put back at the flag: the eye goes with you at once, not in a long swoop)
     if (e.kind === 'respawn') { say(e.k ? `CHECKPOINT ${e.k}` : 'START'); snapEye(); }
@@ -328,10 +344,35 @@ function loop(now: number) {
   scoreEl.textContent = mode === 'time' ? clock(score.time) : fmt(score.shown);
   statusEl.textContent = MODES[mode].lives ? `${'● '.repeat(Math.max(0, 3 - rider.crashes))}${'○ '.repeat(Math.min(3, rider.crashes))}`.trim() : length < Infinity ? `${(Math.min(progress, length) / 1000).toFixed(1)} / ${length / 1000} KM` : `${(progress / 1000).toFixed(1)} KM`;
   comboEl.innerHTML = score.pool ? `${score.chain.join(' · ')} <i>×${score.mult}</i> +${fmt(score.pending)}` : flashT > 0 ? flashText : '';
+  drawTrace(dt);
   frames++; fpsT += dt; if (fpsT > 1) { fps = frames / fpsT; frames = 0; fpsT = 0; }
   requestAnimationFrame(loop);
 }
 requestAnimationFrame(loop);
+
+/** the gesture as it's drawn: a white line where the finger went, orange from where a trick was read; it fades once
+ * the finger's lifted */
+const inkCv = $<HTMLCanvasElement>('ink'), inkCx = inkCv.getContext('2d')!;
+function drawTrace(dt: number) {
+  const dpr = Math.min(2, devicePixelRatio || 1), w = Math.round(innerWidth * dpr), h = Math.round(innerHeight * dpr);
+  if (inkCv.width !== w || inkCv.height !== h) { inkCv.width = w; inkCv.height = h; }
+  inkCx.clearRect(0, 0, w, h);
+  if (!trace) return;
+  if (!gest || gest.stroke !== trace.stroke) trace.fade -= dt / 0.4;
+  if (trace.fade <= 0) { trace = null; return; }
+  const { pts, reads } = trace.stroke, first = reads.length ? reads[0].at : pts.length;
+  inkCx.lineCap = inkCx.lineJoin = 'round'; inkCx.lineWidth = 7 * dpr;
+  const run = (a: number, b: number, col: string) => {
+    if (b - a < 1) return;
+    inkCx.strokeStyle = col; inkCx.beginPath(); inkCx.moveTo(pts[a].x * dpr, pts[a].y * dpr);
+    for (let i = a + 1; i <= b; i++) inkCx.lineTo(pts[i].x * dpr, pts[i].y * dpr);
+    inkCx.stroke();
+  };
+  inkCx.globalAlpha = 0.75 * trace.fade;
+  run(0, Math.min(first, pts.length - 1), '#fff');
+  run(first, pts.length - 1, rider.refused ? '#9aa4c8' : '#ff6a1a');
+  inkCx.globalAlpha = 1;
+}
 
 (window as unknown as { __switchback: unknown }).__switchback = {
   probe: () => ({ score: score.shown, mode, finished, s: rider.s, u: rider.u, v: rider.v, air: rider.air, crashes: rider.crashes, jumps: rider.jumps, bestAir: rider.bestAir, dist: rider.dist, checkpoints: rider.checkpoints, fps, bigAir, menu: menuOpen, running }),
