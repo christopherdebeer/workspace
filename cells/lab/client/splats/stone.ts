@@ -65,7 +65,8 @@ const PLANES: Array<{ n: V; h: number; name: string }> = [
   { n: norm([-0.55, 0.62, 0.56]), h: 0.66, name: 'broken corner' },
   { n: [0, -1, 0], h: 0.45, name: 'foot' },
 ];
-const LF = 9, BROKEN = 10, FOOT = 11, CROWN_A = 0, CROWN_B = 1;
+export const LF = 9, BROKEN = 10, FOOT = 11, CROWN_A = 0, CROWN_B = 1;
+export const PLANE_NORMALS = () => PLANES.map((p) => p.n);
 const CENTRE: V = [0, 0.45, 0];
 /** the ledge: below this height on the back-left, the stone's cut back deep to an inner plane */
 const LEDGE_Y = 0.44, LEDGE = { n: norm([-0.66, 0, -0.75]), h: 0.46 };
@@ -73,7 +74,7 @@ export const RECESS = PLANES.length;
 /** the ledge's soffit: the flat underside of the overhang, between its face and the recess */
 export const SOFFIT = PLANES.length + 1;
 const DOWN: V = [0, -1, 0];
-const planeOf = (reg: number) => (reg === RECESS ? LEDGE : reg === SOFFIT ? { n: DOWN, h: CENTRE[1] - LEDGE_Y } : PLANES[reg]);
+export const planeOf = (reg: number) => (reg === RECESS ? LEDGE : reg === SOFFIT ? { n: DOWN, h: CENTRE[1] - LEDGE_Y } : PLANES[reg]);
 /** whether a point (from the middle) is on the stone: inside every plane, above the ground, not in the recess */
 const inside = (q: V, eps = 1e-4) => q[1] + CENTRE[1] > -eps && !PLANES.some((pl) => dot(q, pl.n) > pl.h + eps) && !(q[1] + CENTRE[1] < LEDGE_Y - eps && dot(q, LEDGE.n) > LEDGE.h + eps);
 
@@ -270,7 +271,7 @@ export function arris(p: V, reg: number): { d: number; j: number; dir: V; nj: V 
   });
   return best;
 }
-function octBytes(n: V): [number, number] {
+export function octBytes(n: V): [number, number] {
   const l = Math.abs(n[0]) + Math.abs(n[1]) + Math.abs(n[2]) || 1;
   let u = n[0] / l, v = n[1] / l;
   if (n[2] < 0) { const pu = u; u = (1 - Math.abs(v)) * (pu >= 0 ? 1 : -1); v = (1 - Math.abs(pu)) * (v >= 0 ? 1 : -1); }

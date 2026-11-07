@@ -130,6 +130,40 @@ relationship it's built around), then the hero and grazing views by the same rul
 Next: the Bamboo connection. A cliff face could give up its wash while a ledge keeps its lip and a fissure its line.
 A culm could keep its silhouette and nodes while its shaded body drops away.
 
+## Brushes: a shared medium
+
+`?scene=brushes` (`brush.ts`, `subjects.ts`). One Stone showed the ideas; this generalises them into a medium that
+Taohua's lines and washes, Labyrinth's architecture, Bamboo's moving landscape and Autograph's gesture could all
+share:
+
+    scene structure → drawing instructions → strokes and washes → splats → image
+
+A **stroke** and a **wash** are objects that keep their identity: a path, a gesture, a material, a place in a group.
+They become splats only when deposited, so a stroke can be shortened, re-pressured, regenerated at another density, or
+withdrawn with its group, and its gesture is kept. There are three operations:
+
+1. **Stroke along a path.** *Support*: on a surface (it lies flat and wraps over it) or in open space (round in
+   section). *Gesture*: width, pressure along it, taper, breaks, tremor. *Material*: ink, dry (fragmenting where the
+   pressure's light), wash-line.
+2. **Wash within a region.** Any patch of a surface that can sample itself, test a point and project onto itself
+   (a plane polygon, a cylinder, a strip beside a curve). It's firm along an anchor edge, softens away, has an uneven
+   reach, and leaves places open. *Material*: wash (discs) or dry (hatching along a direction).
+3. **Group.** A principal, its supports and its accents simplify together. The principal goes last, the wash withdraws
+   toward its anchor, and the accents drop to the one that matters.
+
+Each stroke names its heart (where its meaning lives), and reduces toward it.
+
+The test is whether the same brushes, given only different paths, regions and anchors, can draw unlike subjects:
+- **A stone:** the seam with its wedge, the lip with the underside and crevice, the faces' tones, and the profile.
+- **A bamboo culm:** silhouette strokes up its facets, node strokes round it, and a shaded body that goes first,
+  so it keeps silhouette and nodes as it simplifies.
+- **An architectural corner:** the cornice's lip with the shade under it (the same relationship as the stone's
+  ledge), a niche with its shadow, and the shadowed wall on the corner.
+- **A written gesture:** one curve with a hand's pressure, drawn by the same stroke in open space and wrapped over
+  the corner's wall.
+
+`subjects.ts` makes no marks itself. Board: `node cells/lab/devtools/splats-brushes.mjs [wash|dry]`.
+
 ## Where it could go
 
 Roughly in order of what each teaches:

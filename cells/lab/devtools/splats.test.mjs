@@ -83,6 +83,26 @@ ok('parse() tells a .splat by its bytes', F.parse(F.encodeSplat(g)).n === g.n);
     ok(`stone, ${look}: the seam at ${thr} is one run, not fragments`, runs === 1, runs);
   }
 }
+// (the brush: a stroke keeps its identity through deposit; it reduces toward its heart; it lies flat on a surface and is
+// round in open space; a group ranks its principal above its supports and accents)
+{
+  const B = await load('../client/splats/brush.ts');
+  const pts = Array.from({ length: 50 }, (_, k) => [k * 0.02, 0, 0]);
+  let r = 3; const rnd = () => ((r = (r * 48271) % 2147483647) / 2147483647);
+  const free = B.stroke({ pts }, { width: 0.01 }, { heart: 0 }), flat = B.stroke({ pts, normals: pts.map(() => [0, 1, 0]) }, { width: 0.01 }, { heart: 'middle' });
+  const [g1] = B.group(0.9, free), df = B.deposit(free, rnd), dl = B.deposit(flat, rnd);
+  ok('brush: a stroke deposits splats that all name it', df.length > 20 && df.every((d) => d.element === free.id));
+  ok('brush: its rank falls away from its heart (at its start)', df[0].rank > df[df.length - 1].rank && Math.abs(df[0].rank - 0.9) < 0.05, [df[0].rank, df[df.length - 1].rank]);
+  ok('brush: on a surface it lies flat; in open space it\'s round', dl.every((d) => d.s[2] < 0.002) && df.every((d) => Math.abs(d.s[2] - d.s[1]) < 1e-9));
+  ok('brush: at half density, about half the splats, the same gesture', Math.abs(B.deposit(free, rnd, 0.5).length - df.length / 2) < df.length * 0.15);
+  const w = B.wash(B.planeRegion([0, 1, 0], [0, 0, 0], (p) => Math.abs(p[0]) < 0.3 && Math.abs(p[2]) < 0.3, 0.5), [[-0.3, 0, -0.3], [0.3, 0, -0.3]], { reach: 0.3 });
+  const acc = B.stroke({ pts }, { width: 0.01 });
+  B.group(0.8, flat, [w], [acc]);
+  ok('brush: a group ranks principal > support > accent', flat.rank > w.rank && w.rank > acc.rank, [flat.rank, w.rank, acc.rank]);
+  const dw = B.deposit(w, rnd);
+  ok('brush: a wash stays in its region and is densest near its anchor', dw.length > 20 && dw.every((d) => Math.abs(d.p[0]) <= 0.31 && Math.abs(d.p[2]) <= 0.31) && dw.filter((d) => d.p[2] < -0.15).length > dw.filter((d) => d.p[2] > 0.15).length);
+  void g1;
+}
 if (R) {
   ok('half floats: 1, 0.5, 65504, 2e-5 round trip', R.toHalf(1) === 0x3c00 && R.toHalf(0.5) === 0x3800 && R.toHalf(65504) === 0x7bff && R.toHalf(0) === 0);
 }
