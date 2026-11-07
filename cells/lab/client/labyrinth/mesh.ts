@@ -1285,6 +1285,20 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
     }
     cur.tone = 0.5;
     perf.end(); perf.begin('mesh.build.ground.water');
+    // (a coast's sea: its surface a little under level nought over every sea cell drawn, flat, the seabed under it and
+    // the shore where the hill goes under; it runs on as far as the land's drawn, and past that the page takes it, as it
+    // takes the land)
+    if (land.sea.size) {
+      // (its how, 10, tells the shader it's the sea: it breaks up into the page, raggedly, where the drawing's reach runs
+      // out, as the land's own marks thin; one depth, its shallows where the hill comes up under it)
+      const SEA = -0.12, wet = (i: number, j: number) => land.sea.has(j * 1000 + i);
+      for (let j = z0; j < z1; j++) for (let i = x0; i < x1; i++) {
+        if (!wet(i, j) && !(wet(i + 1, j) || wet(i - 1, j) || wet(i, j + 1) || wet(i, j - 1))) continue;
+        cur = { born: -1e3, pivot: 0, how: 10, tone: 0.7, dress: 0, sel: false };
+        const cx = X(i), cz = Z(j);
+        quad([cx, SEA, cz], [cx + 1, SEA, cz], [cx + 1, SEA, cz + 1], [cx, SEA, cz + 1], [0, 1, 0], 1, MAT.water);
+      }
+    }
     // (the stream: its water along its course (terrain.ts), a little over its bed: a ribbon down the channel, which way it
     // runs at each stretch (its angle, in the vertex's how, past 1, so the shader moves its ripples that way), shallow at
     // its banks and deep down its middle; where its bed steps, a fall, foaming where it lands)

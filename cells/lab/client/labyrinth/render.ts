@@ -327,6 +327,12 @@ void main() {
     gT *= 1. - uToward; gTL *= 1. - uToward;
   }
   gDetail = smoothstep(.5, .85, gT);
+  // (the sea (its how, 10): broken up into the page where the drawing's reach runs low, ragged and fine, as a dry brush
+  // leaves a wash, so it never runs on as a sheet to the drawing's edge)
+  if (mat == 2 && vU > 9.5 && vU < 10.5 && onPaper && !sel) {
+    float grain = fbm(vec3(vPos.xz * 1.3, 11.)) * .7 + hash(vec3(floor(vPos.xz * 18.), 4.)) * .3;
+    if (grain > gT * 1.5 - .1) discard;
+  }
   // (a crown cut through more as it's drawn, so its limbs show and it reads as drawn canopy)
   if (vMat < 511.5 && leafCut(vPos, vMat, leafEdge(n) + .32 * (1. - smoothstep(.1, .7, gT)))) discard;
   if (!fur && leftOut(vPos, vU)) discard;

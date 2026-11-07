@@ -287,18 +287,29 @@ It reckons as a town. `node devtools/labyrinth-props-look.mjs` draws the sheet b
 
 ![what the uses leave outside](labyrinth/look-props.jpg)
 
-**Story 22**, a village climbing a hillside over a harbour (`?story=22`), is the cliff village board's (a village stacked
-on a cliff over a harbour; `node devtools/cliff-board.mjs labyrinth` draws it beside the target,
-`devtools/targets/cliff-village.jpg`). On a middle-sea land rising from level ground at the front in shelves to the
-back:
+**A coast.** A land seed below nought is the coast made from that seed's size (`?land=-11`). It's the same land met by
+the sea across its front:
+- the sea at level nought: its bed well down under the water, so the shore lies wherever the hill goes under, and the
+  rules read it as water (nothing's planted in it, a fall into it lands in water);
+- out of it a cliff, two levels at once, then the shelves on up to the back; the court's shelf and the outcrop kept up off
+  the water;
+- the stream falling out of its ravine into the sea.
+
+Stone built in the sea stands on its own ground (a mole, a quay). The sea is drawn as far as the land is, and where the
+drawing's reach runs out it breaks up into the page, raggedly and finely, as a dry brush leaves a wash, so it never runs
+on as a sheet to the drawing's edge.
+
+**Story 22**, a village on a cliff over a harbour (`?story=22`), is the cliff village board's (`node
+devtools/cliff-board.mjs labyrinth` draws it beside the target, `devtools/targets/cliff-village.jpg`). On a middle-sea
+coast (land −11):
 - houses two cells square, two or three storeys, in rows up the shelves with a cell between them, each standing on the
   ground at its own columns, so each row shows over the one below, each washed in its own colour;
-- a way climbing between them from the level ground to the top row;
-- a pond drawn round on the level ground in front, for the harbour, beside the way's foot.
+- a way climbing between them from the clifftop to the top row;
+- a mole of stone along the foot of the cliff in the sea, a level up off the water, the way brought down onto it.
 
-On the land a pond is now let into the ground: its bench sits a fifth of a level down, under its water, so the water and
-its kerb show (before, the hillside lay over it). Unlike Blocks, the village isn't cut out as a piece: the land round it
-thins out into lines on the page, as everything here does.
+A pond on the land is let into the ground too: its bench sits a fifth of a level down, under its water, so the water
+and its kerb show (before, the hillside lay over it). Unlike Blocks, the village isn't cut out as a piece: the land and
+the sea round it thin out into lines on the page.
 
 ## Water
 

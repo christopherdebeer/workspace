@@ -469,34 +469,31 @@ function atWork(): World {
 }
 
 /**
- * storyboard 22: a village climbing a hillside over a harbour (the cliff village board, devtools/cliff-board.mjs). On a
- * land that rises from low ground at the front in shelves to the back, houses two cells square, two or three storeys,
- * in rows up the shelves with a cell between them, each standing on the ground at its own columns, so each row shows
- * over the one below; a way climbing between them from the low ground to the top row; a pond drawn round on the low
- * ground in front for the harbour, and a way down to its edge (the rules make a landing stage, steps into the water and
- * a post to tie up to). Their washes, roofs, doors and windows are the rules' own. The land's edge thins out into lines
- * on the page as it always does.
+ * storyboard 22: a village on a cliff over a harbour (the cliff village board, devtools/cliff-board.mjs). On a coast
+ * (land −11: the sea across the front, a cliff out of it, shelves rising behind), houses two cells square, two or three
+ * storeys, in rows up the shelves with a cell between them, each standing on the ground at its own columns, so each row
+ * shows over the one below; a way climbing between them from the clifftop to the top row; and a mole of stone built out
+ * along the foot of the cliff in the sea, a level up off the water, with the way brought down onto it. Their washes,
+ * roofs, doors and windows are the rules' own. The sea and the land thin out into lines on the page round it.
  */
 function village(): World {
-  const w = new World(51, 7), t = -100;
+  const w = new World(51, -11), t = -100;
   const g = (i: number, j: number): Pick => { const k = w.ground(i, j); return { face: 'ground', hit: [k - 1, i, j], to: [k, i, j] }; };
   const raise = (i: number, j: number, n: number) => w.apply({ add: Array.from({ length: n }, (_, k) => [w.ground(i, j) + k, i, j, t] as [number, number, number, number]) }, t);
   const house = (i0: number, j0: number, n: number) => { for (const i of [i0, i0 + 1]) for (const j of [j0, j0 + 1]) raise(i, j, n); };
-  // (the rows, from the top of the shelves down to the front: [i, j, storeys]; the way up runs between them at i = 9)
-  for (const [i, j, n] of [[7, 0, 3], [10, 0, 2], [12, 1, 2], [7, 3, 2], [10, 3, 3], [12, 4, 2], [6, 6, 3], [10, 6, 2], [13, 6, 3]] as Array<[number, number, number]>) house(i, j, n);
-  // (a way up between them, from the low ground to the top row)
+  // (the rows, from the top of the shelves down to the clifftop: [i, j, storeys]; the way up runs between them at i = 8)
+  for (const [i, j, n] of [[6, 0, 3], [9, 0, 2], [12, 1, 2], [6, 3, 2], [9, 3, 3], [12, 4, 3], [6, 6, 3], [9, 6, 2], [12, 7, 2]] as Array<[number, number, number]>) house(i, j, n);
   const up: Array<[number, number]> = [];
-  for (let j = 9; j >= 1; j--) up.push([9, j]);
-  const way = trace(w, g(9, 9), up, g(9, 1), () => t, t, [], 'way');
+  for (let j = 8; j >= 0; j--) up.push([8, j]);
+  const way = trace(w, g(8, 8), up, g(8, 0), () => t, t, [], 'way');
   if (way && !('refused' in way)) w.apply({ ...way, alts: undefined }, t);
-  // (the harbour: a pond drawn round on the level ground in front, its ring walked cell by cell back to its start, beside
-  // the way's foot, so the way comes down to the water's edge)
-  const ring: Array<[number, number]> = [];
-  for (let i = 10; i <= 14; i++) ring.push([i, 8]);
-  for (let j = 9; j <= 10; j++) ring.push([14, j]);
-  for (let i = 13; i >= 10; i--) ring.push([i, 10]);
-  ring.push([10, 9]);
-  const pond = run(w, 'pool', g(10, 8), ring, 0, t);
-  if (pond) w.apply(pond, t);
+  // (the mole: stone a level up off the water, along the cliff's foot and out into the sea)
+  const mole: Array<[number, number, number]> = [];
+  for (let i = 6; i <= 13; i++) if (w.land?.sea.has(9000 + i)) mole.push([0, i, 9]);
+  for (let j = 10; j <= 11; j++) mole.push([0, 13, j]);
+  w.apply({ add: mole.map(([k, i, j]) => [k, i, j, t] as [number, number, number, number]) }, t);
+  // (the way down to it)
+  const down = trace(w, g(8, 8), [[8, 8], [8, 9]], topOf(w, 8, 9), () => t, t, [], 'way');
+  if (down && !('refused' in down)) w.apply({ ...down, alts: undefined }, t);
   return w;
 }

@@ -1188,7 +1188,7 @@ export class World {
   /** a cell on the slab */
   onSlab(i: number, j: number) { const e = this.extent(); return i >= e.i0 && i <= e.i1 && j >= e.j0 && j <= e.j1; }
   /** a pool at a cell of the ground */
-  pool(i: number, j: number) { return this.pools.has(key(0, i, j)) || (!!this.land && this.land.water.has(j * 1000 + i)) || this.decor.some((d) => d.kind === 'pool' && d.i === i && d.j === j); }
+  pool(i: number, j: number) { return this.pools.has(key(0, i, j)) || (!!this.land && (this.land.water.has(j * 1000 + i) || this.land.sea.has(j * 1000 + i))) || this.decor.some((d) => d.kind === 'pool' && d.i === i && d.j === j); }
 
   /** the operations, as text (to keep, and to make again: when they were laid isn't kept) */
   /** what's been done, written down (on the land, with the land's seed) */
