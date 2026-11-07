@@ -21,11 +21,21 @@
  * - **beside stone**: at the foot of stone on the ground, a plinth; under the top of a wall, a cornice on dentils;
  * - **over stone**: along a roof's open edges, a low parapet with a crest of dentils; over a roof surrounded by roof, a
  *   dome.
+ *
+ * And where the mass's top makes it a house or rock (rules.ts): a house's stone is washed render, its open faces
+ * windows with a pair of shutters (on its lowest storey, now and then a door), bougainvillea over some; over its top,
+ * a pitched roof of clay tile, rising from each eave at the same pitch (hipped where the top's as long as it's wide,
+ * gabled where it's longer, the gable washed), now and then a chimney; an empty cell hung off a house's wall, a
+ * balcony, and one between two houses' walls, washing on a line. Rock is weathered back, windowless, with a tuft on
+ * top. And a harbour's water comes right up to its walls: a plain stone kerb and boats moored along it.
  */
 import { SIDES, SIDE_FACE, thinning, type Read } from './rules';
 
 export const M = 12;
-export const MAT = { air: 0, stone: 1, trim: 2, tile: 3, wood: 4, glass: 5, water: 6, leaf: 7, bark: 8, paving: 9, soil: 10, plaster: 11, bloom: 12 };
+export const MAT = { air: 0, stone: 1, trim: 2, tile: 3, wood: 4, glass: 5, water: 6, leaf: 7, bark: 8, paving: 9, soil: 10, plaster: 11, bloom: 12, roof: 13, shutter: 14, rock: 15, wash: 16, cloth: 21 };
+/** a house's wash, as a stuff (house 1…5 → 16…20) */
+const washOf = (house: number) => MAT.wash + Math.max(0, house - 1);
+
 /** the read of a cell round this one (a, b, c each −1 … 1) */
 export type Near = (a: number, b: number, c: number) => Read;
 export type Grid = Uint8Array;
@@ -87,7 +97,8 @@ export function voxels(N: Near): Grid {
 
 // ─── a cell of stone ───
 function stoneCell(g: Grid, N: Near) {
-  const r = N(0, 0, 0), up = N(0, 1, 0), dn = N(0, -1, 0), [tx, tz] = thinning(r), slender = tx > 0.5 && tz > 0.5;
+  const r = N(0, 0, 0), up = N(0, 1, 0), dn = N(0, -1, 0), [tx, tz] = thinning(r), slender = tx > 0.5 && tz > 0.5 && !r.house;
+  const body = r.rock ? MAT.rock : r.house ? washOf(r.house) : MAT.stone;
   // (each row's section: drawn in, stepping out to broader stone over or under it, and to the ground)
   const ins: number[][] = [];
   for (let j = 0; j < M; j++) {
@@ -101,9 +112,11 @@ function stoneCell(g: Grid, N: Near) {
     for (let i = row[1]; i < M - row[0]; i++) for (let k = row[3]; k < M - row[2]; k++) {
       // (a slender stone's corners taken off)
       if (slender) { const ei = Math.min(i - row[1], M - 1 - row[0] - i), ek = Math.min(k - row[3], M - 1 - row[2] - k); if (ei + ek < 1) continue; }
-      g[at(i, j, k)] = MAT.stone;
+      g[at(i, j, k)] = body;
     }
   }
+  // (rock: weathered back a cube or two in blotches on its open faces, no openings, a tuft on top)
+  if (r.rock) { weather(g, r, ins); return; }
   // (a slender stone fluted: every other cube of its faces cut back)
   if (slender) for (let j = 2; j < M - 2; j++) for (let s = 0; s < 4; s++) {
     const a = s < 2 ? 3 : 1, b = s < 2 ? 2 : 0, lo = ins[j][a], hi = M - ins[j][b];
@@ -128,6 +141,16 @@ function stoneCell(g: Grid, N: Near) {
     const a = s < 2 ? 3 : 1, b = s < 2 ? 2 : 0;
     const wide = M - ins[M >> 1][a] - ins[M >> 1][b] >= 8;
     if (!wide) return;
+    // (on the ground facing a court, a house keeps the court's openings: the porch door, the pointed windows)
+    if (r.house && !covered && !(v.court >= 3 && r.level === 0)) {
+      // (a house: a window with shutters in each block of the wall; on its lowest storey, where the ground or stone in
+      // front would take a step, now and then a door; bougainvillea over some)
+      const lowest = !dn.solid || !dn.house, floor = v.level === 0 || N(dx, -1, dz).solid;
+      if (lowest && floor && (r.code >> 3) % 3 === 0) door(g, s, ins, body);
+      else window(g, s, ins, (r.code >> 5) & 1);
+      if (v.code && (v.code & 7) < 2) climber(g, s, ins, v.code, r.level, body);
+      return;
+    }
     if (covered && beyond) panel(g, s, ins);
     else if (covered && walled >= 2) opening(g, s, ins, 3, r.level === 0 ? 0 : 2, 6, MAT.glass, MAT.wood, r.level === 0 ? 6 : 2, MAT.tile);
     else if (covered) opening(g, s, ins, 2, r.level === 0 ? 0 : 3, 6, MAT.glass, MAT.wood, r.level === 0 ? 6 : 0, MAT.trim);
@@ -147,6 +170,50 @@ function opening(g: Grid, s: number, ins: number[][], hw: number, sill: number, 
       for (let d = 0; d < depth; d++) g[side(s, u, j, d0 + d)] = MAT.air;
       if (g[side(s, u, j, d0 + depth)]) g[side(s, u, j, d0 + depth)] = j < sill + lowRows ? low : back;
     } else if (frame && inArch(u, j, hw + 1, spring + 0.5) && g[side(s, u, j, d0)]) g[side(s, u, j, d0)] = frame;
+  }
+}
+/** a window with a pair of shutters, let into the face s: four cubes wide, five high; glass at its back; a sill of trim;
+ * shutters open against the wall either side (or, now and then, closed over it) */
+function window(g: Grid, s: number, ins: number[][], closed: number) {
+  const lo = 4, hi = 9, u0 = 4, u1 = 8;
+  for (let j = lo; j < hi; j++) for (let u = u0; u < u1; u++) {
+    const d0 = ins[j][s];
+    g[side(s, u, j, d0)] = closed ? MAT.shutter : MAT.air;
+    if (!closed && g[side(s, u, j, d0 + 1)]) g[side(s, u, j, d0 + 1)] = MAT.glass;
+  }
+  for (let u = u0 - 1; u <= u1; u++) { const d0 = ins[lo - 1][s]; if (g[side(s, u, lo - 1, d0)]) g[side(s, u, lo - 1, d0)] = MAT.trim; }
+  // (open, the shutters lie flat on the wall either side, two cubes each)
+  if (!closed) for (let j = lo; j < hi; j++) for (const u of [u0 - 2, u0 - 1, u1, u1 + 1]) { const q = side(s, u, j, ins[j][s]); if (g[q]) g[q] = MAT.shutter; }
+}
+/** a door let into the face s: four wide, eight high, of wood, under a lintel of trim */
+function door(g: Grid, s: number, ins: number[][], body: number) {
+  for (let j = 0; j < 9; j++) for (let u = 4; u < 8; u++) {
+    const d0 = ins[j][s];
+    if (j === 8) { if (g[side(s, u, j, d0)] === body) g[side(s, u, j, d0)] = MAT.trim; continue; }
+    g[side(s, u, j, d0)] = MAT.air;
+    if (g[side(s, u, j, d0 + 1)]) g[side(s, u, j, d0 + 1)] = MAT.wood;
+  }
+}
+/** bougainvillea over a washed face: leaf in blotches thick with flowers, spilling down from the top */
+function climber(g: Grid, s: number, ins: number[][], seed: number, level: number, body: number) {
+  for (let j = 0; j < M; j++) for (let u = 0; u < M; u++) {
+    const q = side(s, u, j, ins[j][s]);
+    if (g[q] !== body) continue;
+    const b = blotch(seed, u, j + level * M, 3.5);
+    if (b > 0.6 - 0.025 * j) g[q] = chance(seed, u, j, level) < 0.55 ? MAT.bloom : MAT.leaf;
+  }
+}
+/** rock weathered: its open faces cut back a cube or two in blotches; on top, where nothing stands, a few tufts */
+function weather(g: Grid, r: Read, ins: number[][]) {
+  for (let s = 0; s < 4; s++) {
+    if ((r.joins >> SIDE_FACE[s]) & 1) continue;
+    for (let j = 0; j < M; j++) for (let u = 0; u < M; u++) {
+      const cut = Math.floor(3 * blotch(r.code + s * 31, u, j, 2.5) - 0.6);
+      for (let d = 0; d < cut; d++) g[side(s, u, j, ins[j][s] + d)] = MAT.air;
+    }
+  }
+  if (!((r.joins >> 2) & 1)) for (let i = 1; i < M - 1; i++) for (let k = 1; k < M - 1; k++) {
+    if (blotch(r.code, i, k, 2) > 0.72 && g[at(i, M - 1, k)]) g[at(i, M - 1, k)] = MAT.leaf;
   }
 }
 /** a sunk panel of tile on the face s */
@@ -176,6 +243,13 @@ function emptyCell(g: Grid, N: Near) {
     if (v.bed) bed(g, N, v);
   }
   if (v.tree) cypress(g, v);
+  if (v.roof) { roof(g, v, below); return; }
+  // (hung off a house's wall over nothing: now and then a balcony; between two houses' walls, washing on a line)
+  if (v.level >= 1 && !below.solid && !(v.joins & 4)) {
+    const walls = SIDES.map(([dx, dz]) => N(dx, 0, dz)), houses = walls.map((w) => w.solid && w.house > 0);
+    if ((houses[0] && houses[1]) || (houses[2] && houses[3])) washing(g, v, houses[0] && houses[1] ? 0 : 2);
+    else { const s = houses.findIndex(Boolean); if (s >= 0 && houses.filter(Boolean).length === 1 && (v.code & 15) < 5) balcony(g, s); }
+  }
   // (beside stone: at its foot on the ground, a plinth; under the top of a wall, a cornice on dentils)
   SIDES.forEach(([dx, dz], s) => {
     const w = N(dx, 0, dz);
@@ -192,7 +266,7 @@ function emptyCell(g: Grid, N: Near) {
     }
   });
   // (over stone: along a roof's open edges, a parapet; over a roof that's roof all round, a dome)
-  if (below.solid && !below.under) {
+  if (below.solid && !below.under && !below.house) {
     const hj = bits(below.joins & 0b110011);
     if (hj >= 1 && below.level >= 1) SIDES.forEach(([dx, dz], s) => {
       if ((below.joins >> SIDE_FACE[s]) & 1) return;
@@ -220,13 +294,64 @@ function emptyCell(g: Grid, N: Near) {
 /** water in a rimmed basin: a rim of tile where the next cell isn't water too, lilies, and a jet where it's water all
  * round */
 function pool(g: Grid, N: Near, v: Read) {
-  for (let i = 0; i < M; i++) for (let k = 0; k < M; k++) g[at(i, 0, k)] = chance(v.code, i, 0, k) < 0.07 ? MAT.leaf : MAT.water;
-  let round = 0;
+  const harbour = v.harbour;
+  for (let i = 0; i < M; i++) for (let k = 0; k < M; k++) g[at(i, 0, k)] = !harbour && chance(v.code, i, 0, k) < 0.07 ? MAT.leaf : MAT.water;
+  let round = 0, edge = -1;
   SIDES.forEach(([dx, dz], s) => {
     if (N(dx, 0, dz).pool) { round++; return; }
-    for (let u = 0; u < M; u++) { g[side(s, u, 0, 0)] = MAT.tile; g[side(s, u, 1, 0)] = MAT.tile; g[side(s, u, 0, 1)] = MAT.trim; }
+    edge = s;
+    for (let u = 0; u < M; u++) { g[side(s, u, 0, 0)] = harbour ? MAT.trim : MAT.tile; g[side(s, u, 1, 0)] = harbour ? MAT.paving : MAT.tile; g[side(s, u, 0, 1)] = MAT.trim; }
   });
+  // (a harbour: a boat moored in each cell along a quay, its bow to it)
+  if (harbour) { if (round === 3) boat(g, edge < 2 ? 1 : 0); return; }
   if (round === 4) for (let j = 0; j < 4; j++) for (const [i, k] of [[5, 5], [5, 6], [6, 5], [6, 6]]) g[at(i, j, k)] = j === 3 ? MAT.water : MAT.trim;
+}
+/** a rowing boat moored: a hull ten cubes long and five across, white outside with a coloured strake, wood within, a
+ * thwart; lying along x (along 1) or along z */
+function boat(g: Grid, along: number) {
+  const off = 0;
+  for (let a = 0; a < M; a++) for (let c = 0; c < M; c++) {
+    const L = (a + 0.5 - M / 2) / 5, W = (c + 0.5 - M / 2 - off) / 2.6;
+    const e = L * L + W * W * (1 + 0.6 * L * L);
+    if (e > 1) continue;
+    const [i, k] = along ? [a, c] : [c, a];
+    const rim = e > 0.55;
+    for (let j = 1; j <= 3; j++) {
+      if (!rim && j > 1) { if (j === 2 && Math.abs(L) < 0.12) g[at(i, j, k)] = MAT.wood; continue; }
+      g[at(i, j, k)] = rim ? (j === 2 ? MAT.shutter : MAT.trim) : MAT.wood;
+    }
+  }
+}
+/** a pitched roof of clay tile over a house's top block: rising from each eave at one pitch (half a cell for a cell
+ * in); where the top runs further one way than the other, the ridge runs that way (a gable, washed under the tile);
+ * now and then a chimney */
+function roof(g: Grid, v: Read, below: Read) {
+  const e = v.roof - 1, run = [e & 3, (e >> 2) & 3, (e >> 4) & 3, (e >> 6) & 3];
+  const sx = 1 + run[0] + run[1], sz = 1 + run[2] + run[3], wash = washOf(below.house), PITCH = 0.5;
+  for (let i = 0; i < M; i++) for (let k = 0; k < M; k++) {
+    const x = (i + 0.5) / M, z = (k + 0.5) / M;
+    const ex = Math.min(run[0] + x, run[1] + 1 - x), ez = Math.min(run[2] + z, run[3] + 1 - z);
+    const d = sx > sz ? ez : sz > sx ? ex : Math.min(ex, ez), h = Math.min(M - 1, Math.round(PITCH * d * M));
+    for (let j = 0; j <= h; j++) g[at(i, j, k)] = j >= h - 1 ? MAT.roof : wash;
+  }
+  if ((v.code & 31) < 4) for (let j = 0; j < M; j++) for (const [i, k] of [[3, 3], [3, 4], [4, 3], [4, 4]]) g[at(i, j, k)] = j > M - 3 ? MAT.trim : wash;
+}
+/** a balcony off the wall s: a slab three cubes out, a railing at its edge */
+function balcony(g: Grid, s: number) {
+  for (let u = 2; u < M - 2; u++) for (let d = 0; d < 3; d++) {
+    g[side(s, u, 0, d)] = MAT.trim;
+    if (d === 2 || u === 2 || u === M - 3) for (let j = 1; j <= 4; j++) if (j === 4 || u % 2 === 0) g[side(s, u, j, d)] = MAT.wood;
+  }
+}
+/** washing on a line across from wall to wall along the side s (0: along x, 2: along z): the line, and cloths of
+ * several colours pegged on it, some long, some short */
+function washing(g: Grid, v: Read, s: number) {
+  for (let u = 0; u < M; u++) {
+    const [i, k] = s === 0 ? [u, M >> 1] : [M >> 1, u];
+    g[at(i, 9, k)] = MAT.wood;
+    const piece = Math.floor(u / 3), len = 2 + Math.floor(3 * chance(v.code, piece, 0, 0));
+    if (u % 3 !== 2 && chance(v.code, piece, 1, 0) < 0.5) for (let j = 9 - len; j < 9; j++) g[at(i, j, k)] = MAT.cloth;
+  }
 }
 /** a bed against the walls: earth in a kerb, shrubs and flowers, higher by the wall */
 function bed(g: Grid, N: Near, v: Read) {

@@ -67,6 +67,17 @@ mirrors about the vertical, compared cell by cell. That gives a **code**, which 
 chosen by chance (where ivy grows, the lilies, the blooms). Cells with the same surroundings,
 however turned, come out alike.
 
+And where a mass's top is, and how broad:
+- **a house**: stone whose column ends within four blocks, at least two high, in a top two or
+  three cells across (narrow both ways, but wider than a single wall). Its wash is one of five
+  colours, chosen by the top's corner, so a house is one colour from its foot to its roof.
+- **rock**: stone four or more thick both ways along its level, with stone resting on it.
+- **a harbour**: on the ground, a basin walled three ways within ten cells, nine or more across
+  between two facing walls. A court is never that wide.
+
+None of these is a name given to a block. A small tall mass with a narrow top reads as a house;
+a thick loaded one as rock.
+
 ## What a stone cell becomes
 
 - **Section.** Each open side is drawn in. How far depends on how open the two sides across are,
@@ -93,6 +104,14 @@ however turned, come out alike.
 
   Where the empty cell's code says so, ivy grows over the face, thicker low down.
 
+- **A house's stone** is render in its wash. Each open face facing outward gets a window four
+  cubes wide with a pair of green shutters, open flat on the wall or now and then closed. On its
+  lowest storey, where the ground or stone in front would take a step, now and then there's a door.
+  Bougainvillea, leaf thick with magenta flowers, spills down some faces. On the ground facing a
+  court, a house keeps the court's own openings (the porch door, the pointed windows).
+- **Rock** is grey stone in beds, weathered back a cube or two in blotches, with no openings and a
+  few tufts on top.
+
 ## What an empty cell becomes
 
 - **On the ground:**
@@ -104,6 +123,13 @@ however turned, come out alike.
 - **Beside stone:**
   - at the foot of a standing run, a plinth;
   - under the top of a wall above the ground, open to the sky, a cornice on dentils.
+- **Over a house's top:** a pitched roof of clay tile, rising from each eave at the same pitch.
+  It's hipped where the top is as long as it's wide, and gabled (the gable washed) where it's
+  longer. Now and then there's a chimney.
+- **Hung off a house's wall, over nothing:** now and then a balcony, a slab three cubes out with a
+  railing. Between two houses' facing walls, there's washing on a line in several colours.
+- **In a harbour:** open water right up to the walls, a plain stone kerb, and a rowing boat moored
+  in each cell along a quay, bow to it.
 - **Over stone:**
   - along a roof's open edges, a low parapet with a crest of dentils;
   - over a roof that's roof all round, with nothing beside it, a dome: plaster or tile, by the
@@ -132,22 +158,30 @@ the vertex shader, so a touch is felt without any work on the CPU.
 
 ## Drawing
 
-The build is seen from above, square on to the diagonal, with no perspective. It stands in the
-dark on a slab of ground cut square round it, with the section of earth and stone strata showing.
+The build is seen from above, square on to the diagonal, with no perspective. It stands on a pale
+ground, in soft light, on a slab cut square round it, with the section of earth and stone strata
+showing.
 
 Each cube's face is coloured by its stuff and where it is:
 - limestone laid in courses, each cube a little different, dusty on top and damp low down;
 - trim paler;
 - tile in a mosaic of turquoise, cobalt and cream;
 - wood, and glass lit warm from within;
-- water, leaves, flowers, paving and earth.
+- water, leaves, flowers, paving and earth;
+- clay roof tile in courses;
+- render in five washes (ochre, peach, rose, pale blue and straw), green shutters;
+- grey rock in beds;
+- washing in mixed colours.
 
-It's lit by a low warm sun with shadows, a dim sky, and light thrown back from the ground.
+It's lit by a warm sun with soft shadows, a pale sky that fills the shade, and light thrown back
+from the ground.
 
 ## Presets
 
 - `?demo=`: a build to start from (it replaces what's kept). The builds are `courtyard`, `castle`,
-  `arcade`, `aqueduct`, `stones`, `house` and `harbour`.
+  `arcade`, `aqueduct`, `stones`, `house`, `harbour` and `cliff`. The `cliff` demo says only where
+the stone goes: two quay arms and a back quay round a basin, rock in three terraces with a crag,
+and small masses on each terrace with gaps between. The village comes from the reads.
 - `?preview`: the courtyard, building itself a block at a time, turning. The lab's index uses it.
 - `?debug=1`: no shadows. `?debug=2`: normals. `?debug=3`: each cube coloured plainly by its stuff.
 - `?noworkers`: all the shaping on the page's own thread.
@@ -173,3 +207,7 @@ It's lit by a low warm sun with shadows, a dim sky, and light thrown back from t
 
 `node cells/lab/devtools/blocks-shot.mjs [outdir] [view,view…]` draws each demo and tries the hand
 in a browser: a tap sets, a drag lays a run, a hold takes, and undo puts it back.
+
+`node cells/lab/devtools/cliff-board.mjs blocks` draws the cliff demo from a pinned eye beside the
+target it's working toward (`devtools/targets/cliff-village.jpg`: a village stacked on a cliff over
+a harbour, made as a tabletop piece), in `devtools/out/cliff-board.png`.

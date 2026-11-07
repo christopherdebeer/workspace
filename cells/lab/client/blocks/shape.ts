@@ -12,7 +12,7 @@ import { voxels, M, type Grid, type Near } from './voxels';
 import type { Read } from './rules';
 
 /** a cell's mesh, in its own coordinates, 4 floats a vertex: position, and face, stuff and occlusion packed (face +
- * 6 × (stuff + 16 × occlusion)); and triangles */
+ * 6 × (stuff + 32 × occlusion)); and triangles */
 export type Mesh = { v: Float32Array; i: Uint32Array };
 export const VERTEX = 4;
 const cache = new Map<string, Mesh>();
@@ -114,7 +114,7 @@ export function surface(P: Read[]): Mesh {
               e[ua] -= du; const s2 = cube(e[0], e[1], e[2]) ? 1 : 0;
               ao |= (s1 && s2 ? 0 : 3 - (s1 + s2 + cn)) << (corner * 2);
             }
-            key = 1 + m + 16 * ao;
+            key = 1 + m + 32 * ao;
           }
         }
         mask[u * M + v] = key;
@@ -137,14 +137,14 @@ export function surface(P: Read[]): Mesh {
 }
 
 function quad(vs: number[], is: number[], f: number, ax: number, ua: number, va: number, sg: number, s: number, u: number, v: number, w: number, h: number, key: number) {
-  const m = key & 15, ao = key >> 4, base = vs.length / VERTEX;
+  const m = key & 31, ao = key >> 5, base = vs.length / VERTEX;
   const plane = sg > 0 ? s + 1 : s;
   const corners = [[u, v], [u + w, v], [u + w, v + h], [u, v + h]];
   const o = [0, 1, 2, 3].map((c) => (ao >> (c * 2)) & 3);
   for (let c = 0; c < 4; c++) {
     const q = [0, 0, 0];
     q[ax] = plane; q[ua] = corners[c][0]; q[va] = corners[c][1];
-    vs.push(q[0] / M - 0.5, q[1] / M - 0.5, q[2] / M - 0.5, f + 6 * (m + 16 * o[c]));
+    vs.push(q[0] / M - 0.5, q[1] / M - 0.5, q[2] / M - 0.5, f + 6 * (m + 32 * o[c]));
   }
   // (wound to face out; split along the diagonal that keeps the shading even)
   const tri = o[0] + o[2] < o[1] + o[3] ? [1, 2, 3, 1, 3, 0] : [0, 1, 2, 0, 2, 3];
