@@ -1,8 +1,8 @@
 {
   "cell": "c15r/lab",
   "cellId": "lab-8928acf3",
-  "treeVersion": "tree:d9f4cd61687871186e3d12b5237f71ad7153a3618359b009a09ab5de9c70dc04",
-  "syncedAt": "2026-11-07T11:37:14.808Z",
+  "treeVersion": "tree:f3d2e8fc676e82c34498aca636ef67116cd70e7bc5ee3250bd4679fff3d315f2",
+  "syncedAt": "2026-11-07T12:22:36.024Z",
   "files": {
     "README.md": "sha256:665df4179140457c44ea9e0f6f5820bd6e9b557fb196a37cf1245a07cb11f7c6",
     "client/autograph/autobiography.ts": "sha256:1aa72dbb927e6de87cdd920842be3b826ae520031f2589fadc9d4fe98abfbd67",
@@ -903,6 +903,7 @@
     "static/labyrinth/look-print.jpg": "sha256:d7ad94160f260806ebe2366cf08eaef5aa9c9a3ad4bc363d7417ee1447ec9c9a",
     "static/labyrinth/look-props.jpg": "sha256:03bbfd19e80bbc541bdb16d1b81c0702336d90ea47e571ecb5e1c474d5fef8bc",
     "static/labyrinth/look-reach.jpg": "sha256:19be7f4b10e8807eea9e9510ae3d7e01869d05f01c5344026ed255f6fd046c51",
+    "static/labyrinth/look-ref.jpg": "sha256:514f1cd60fa341dfe8b54568bbfe7702520e3b05cd18133f561c5509ca540833",
     "static/labyrinth/look-relief1.jpg": "sha256:d17eb22874226e9fd7f1580585a2afbd04f112d7a1dce12a05294792e2a7fa75",
     "static/labyrinth/look-relief2.jpg": "sha256:7de2b84c9b7590a35354f02d728af13c9d920a5378bda77d8a1f1df7c245e93f",
     "static/labyrinth/look-relief3.jpg": "sha256:1e65fae250dd21e08ab3769b477fff24edde4ec2946fa22de1acd4e8744874bf",
