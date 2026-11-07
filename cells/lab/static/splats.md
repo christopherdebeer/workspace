@@ -64,6 +64,48 @@ Sources: [kishimisu/Gaussian-Splatting-WebGL](https://github.com/kishimisu/Gauss
 [SOG open-sourced](https://blog.playcanvas.com/playcanvas-open-sources-sog-format-for-gaussian-splatting/).
 Captured scenes are the examples from antimatter15's viewer, hosted on Hugging Face.
 
+## One Stone: splats as a drawing
+
+`?scene=stone` (`stone.ts`). The idea is procedural drawing as a way to author a 3D world: each feature gets a way
+of drawing itself, and the Gaussian is what the marks are made of. The interesting decisions are where a mark belongs,
+what it describes, and when the drawing can do without it.
+
+One faceted boulder, with one ledge and one seam, on warm paper. Its marks:
+
+| mark | placed by | in motion |
+|---|---|---|
+| **fracture** | the seam: a curve hooking over the crown, of overlapping splats long along its tangent, spaced, tapered, broken twice; a branch off it | stays on the rock and goes behind it |
+| **lip** | the facet edges where the ledge overhangs | the same: the ledge comes into view from behind |
+| **wash** | the faces turned from the light, and the ledge's underside most: hatching (dry) or broad faint discs that pool (wash) | goes first as the drawing simplifies |
+| **stipple** | moss: three tufts caught on the seam's damp side, two at the foot; dense cores, loose outliers | the outliers drop away, the tuft still reads |
+| **shadow** | the ground at the foot, reaching away from the light | kept long |
+| **contour** | candidates all over the surface, flat discs. A flat disc seen edge-on projects to a short line along the profile, so the shader fades each by how far its face is from edge-on, over a range of angles | belongs to this view: accents move round the profile as it turns |
+
+The fracture belongs to the rock and the contour belongs to this view of the rock. That split makes it read as a drawing
+made from a 3D subject.
+
+**Occluder.** The stone's own faceted shape, shrunk 1.5% toward its middle, is drawn into the depth buffer only, and
+the marks are tested against it. A face left blank still hides what's behind it. Check it with the *occluder* toggle
+from the reverse and grazing views: without it, the far side's hatching shows through.
+
+**Detail.** Every mark has a rank, the order it goes in. The wash goes first (the general wash before the wash under
+the ledge), then loose stipple and chips, then the moss cores and contour accents. The branch, shadow, lip and hooked
+seam go last. *Evenly* thins the same number of marks at random, for comparison: by rank, a quarter of the marks still
+draws the stone, while even thinning fades everything alike. Marks ease out over a band rather than popping.
+
+**Brush.** With *brush* on, a finger on the stone brings the detail back round where it touches. The patch is a point
+on the stone, so it stays on the surface as you turn.
+
+**Two looks.** *Dry* tests how little it takes to convey form: dark broken seams, chips, hatching and clean paper.
+*Wash* tests whether the Gaussian's softness earns its place: pooled wash, feathered seams, soft moss. Both use the
+same shape, camera and roughly the same number of marks.
+
+Boards: `node cells/lab/devtools/splats-stone.mjs [views|detail|occluder|brush]`.
+
+Next, from here: the Bamboo connection. A cliff face could give up its wash while a ledge keeps its lip and a fissure
+its line. A culm could keep its silhouette and nodes while its shaded body drops away. Each feature simplifies by
+what lets you recognise it in motion.
+
 ## Where it could go
 
 Roughly in order of what each teaches:
@@ -80,7 +122,7 @@ Roughly in order of what each teaches:
 
 ## Flags
 
-`?scene=garden|plush|nike|train` · `?url=…` (any `.splat` or `.ply` CORS lets it read) · `?up=1` (for a file that's
+`?scene=stone|garden|plush|nike|train` · `?look=dry|wash` · `?detail=0..1` · `?thin=even` · `?view=hero|grazing|reverse` · `?orbit` · `?brush` · `?occluder=0` · `?clean` (no controls) · `?url=…` (any `.splat` or `.ply` CORS lets it read) · `?up=1` (for a file that's
 y-up) · `?mode=0..3` · `?size=` · `?res=` · `?count=` (garden size) · `?noworkers` · `?preview`
 
 Checks: `node cells/lab/devtools/splats.test.mjs` (formats, covariance, sort) and

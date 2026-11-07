@@ -22,13 +22,25 @@ header a{pointer-events:auto;font:11px ui-monospace,monospace;color:var(--muted)
 #stats{font:11px ui-monospace,monospace;color:var(--muted);font-variant-numeric:tabular-nums}
 .sliders{display:grid;grid-template-columns:1fr 1fr;gap:4px 14px;font-size:12px;color:var(--muted)}.sliders label{display:flex;flex-direction:column;gap:2px}.sliders .v{float:right;font-family:ui-monospace,monospace;color:var(--ink)}
 input[type=range]{width:100%;accent-color:var(--accent)}
-.preview header,.preview #panel{display:none!important}
+#stone-controls{display:flex;flex-direction:column;gap:8px}#stone-controls[hidden]{display:none}.sliders.one{grid-template-columns:1fr}
+.paper{--bg:#efe7d8;--card:rgba(246,241,231,.9);--ink:#2a2420;--muted:#7a7166;--edge:#d8cfbf;color-scheme:light}
+.preview header,.preview #panel,.clean header,.clean #panel,.clean #fold{display:none!important}
+#fold{position:fixed;right:12px;bottom:max(10px,env(safe-area-inset-bottom));z-index:2;min-height:36px;background:var(--card)}
+.folded #panel{display:none}#panel{padding-right:64px}
 </style></head><body>
 <canvas id="view" aria-label="The splat scene. Drag to turn it, pinch to come closer, two fingers to move, double tap to frame it again."></canvas>
 <header><div><strong>Splats</strong> <small>gaussian splatting, from scratch</small></div><a href="/splats/readme">how it works</a></header>
 <div id="status">starting</div>
+<button id="fold" aria-expanded="true">controls</button>
 <div id="panel">
   <div class="row" id="scenes"><span class="lab">scene</span><label class="file" id="file-label">your file…<input type="file" id="file" accept=".splat,.ply"></label></div>
+  <div id="stone-controls" hidden>
+    <div class="row" id="looks"><span class="lab">look</span></div>
+    <div class="row" id="views"><span class="lab">view</span></div>
+    <div class="sliders one"><label>detail <span class="v" id="detail-v"></span><input type="range" id="detail" min="0" max="1" step="0.01"></label></div>
+    <div class="row" id="thins"><span class="lab">thin</span></div>
+    <div class="row" id="tools"><span class="lab">hand</span></div>
+  </div>
   <div class="row" id="modes"><span class="lab">see</span></div>
   <div id="note"></div>
   <div class="sliders">

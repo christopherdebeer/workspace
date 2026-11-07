@@ -26,9 +26,9 @@ export interface Experiment {
 export const EXPERIMENTS: Experiment[] = [
   {
     id: 'splats', title: 'Splats', group: 'Perception',
-    blurb: 'Gaussian splatting from scratch, on a phone: a scene as hundreds of thousands of soft coloured ellipsoids, each projected to an ellipse on the screen and blended back to front. A small viewer written to learn from (the formats, the sort, the projection, each in its own file), with ways to see the parts: every splat\'s ellipse, its footprint, the point cloud underneath. A scene made of splats here, three captured ones, or your own .splat or .ply.',
-    page: 'static/splats.html', preview: 'preview&scene=garden&count=60000', readme: 'static/splats.md',
-    presets: [{ label: 'garden', query: 'scene=garden' }, { label: 'the ellipses', query: 'scene=garden&mode=1' }, { label: 'plush (9 MB)', query: 'scene=plush' }, { label: 'shoe (9 MB)', query: 'scene=nike' }, { label: 'train (33 MB)', query: 'scene=train' }],
+    blurb: 'Gaussian splatting from scratch, on a phone: a scene as hundreds of thousands of soft coloured ellipsoids, each projected to an ellipse on the screen and blended back to front. A small viewer written to learn from (the formats, the sort, the projection, each in its own file), with ways to see the parts: every splat\'s ellipse, its footprint, the point cloud underneath. A scene made of splats here, three captured ones, or your own .splat or .ply. And One Stone: a boulder drawn in splats on paper, each feature drawing itself (a broken seam, a wash under the ledge, moss stipple, profile accents chosen for the view), simplifying by what each mark is for.',
+    page: 'static/splats.html', preview: 'preview&scene=stone', readme: 'static/splats.md',
+    presets: [{ label: 'one stone', query: 'scene=stone' }, { label: 'one stone, wash', query: 'scene=stone&look=wash' }, { label: 'orbit, spare', query: 'scene=stone&detail=0.3&orbit' }, { label: 'brush it back', query: 'scene=stone&detail=0.15&look=wash&brush' }, { label: 'garden', query: 'scene=garden' }, { label: 'the ellipses', query: 'scene=garden&mode=1' }, { label: 'plush (9 MB)', query: 'scene=plush' }, { label: 'shoe (9 MB)', query: 'scene=nike' }, { label: 'train (33 MB)', query: 'scene=train' }],
   },
   {
     id: 'switchback', title: 'Switchback', group: 'Play',

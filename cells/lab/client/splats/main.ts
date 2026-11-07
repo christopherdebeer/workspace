@@ -7,18 +7,27 @@
  * Flags: `?scene=garden|plush|nike|train` · `?url=` (a .splat or .ply anywhere CORS lets it be read) · `?mode=0..3` ·
  * `?size=` (the splats' size, 1 as made) · `?res=` (pixels per CSS pixel, capped at the screen's) · `?preview` (a
  * small turning picture, no controls) · `?noworkers` (sort on the page's thread).
+ *
+ * One Stone (`?scene=stone`, stone.ts): a drawing made of splats, each feature of a boulder drawing itself (the seam a
+ * broken line, the ledge's underside a wash, moss a stipple, the profile a few accents chosen for this view), on paper.
+ * `?look=dry|wash` · `?detail=0..1` (how much of the drawing is kept; by each mark's rank, or `?thin=even` thinned
+ * evenly to the same number) · `?view=hero|grazing|reverse` · `?orbit` (one turn round it, the same every time) ·
+ * `?brush` (a finger brings the detail back where it touches, on the stone, and it stays there) · `?occluder=0`.
  */
 import { Renderer } from './render';
 import { bounds, garden, parse, type Splats } from './format';
 import { Sorter, type SortDone } from './sort';
+import { oneStone, stoneShape, type Look, type Stone } from './stone';
 
 const qs = new URLSearchParams(location.search);
 const preview = qs.has('preview');
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 if (preview) document.documentElement.classList.add('preview');
+if (qs.has('clean')) document.documentElement.classList.add('clean');
 
 /** the captured scenes: from the antimatter15 viewer's examples (hosted on Hugging Face), with an up for each */
 const SCENES: Record<string, { label: string; url?: string; mb?: number; up: 1 | -1 }> = {
+  stone: { label: 'one stone', up: 1 },
   garden: { label: 'garden', up: 1 },
   plush: { label: 'plush', url: 'https://huggingface.co/cakewalk/splat-data/resolve/main/plush.splat', mb: 9, up: -1 },
   nike: { label: 'shoe', url: 'https://huggingface.co/cakewalk/splat-data/resolve/main/nike.splat', mb: 8.7, up: -1 },
@@ -37,6 +46,9 @@ let home = { ...cam, target: [...cam.target] as [number, number, number] };
 function show(s: Splats, name: string, u: 1 | -1) {
   scene = s; up = u; sceneName = name;
   R.load(s);
+  if (name !== 'stone') { R.setOccluder(null); stone = null; }
+  ranks = s.rank ? Float32Array.from(s.rank).sort() : null;
+  document.documentElement.classList.toggle('paper', name === 'stone');
   const b = bounds(s);
   cam.target = b.centre; cam.dist = b.radius * 2.2; cam.yaw = 0.6; cam.pitch = 0.3;
   home = { ...cam, target: [...cam.target] as [number, number, number] };
@@ -66,7 +78,8 @@ async function open(name: string) {
   document.querySelectorAll<HTMLButtonElement>('#scenes button[data-scene]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.scene === name)));
   const t0 = performance.now();
   try {
-    if (!sc || !sc.url) { show(garden(Number(qs.get('count') ?? 120000)), 'garden', 1); }
+    if (name === 'stone') openStone();
+    else if (!sc || !sc.url) { show(garden(Number(qs.get('count') ?? 120000)), 'garden', 1); }
     else show(parse(await fetchWithProgress(sc.url)), name, sc.up);
     loadMs = performance.now() - t0;
   } catch (e) { $('status').textContent = String((e as Error).message); }
@@ -76,6 +89,36 @@ async function openUrl(url: string) {
   try { show(parse(await fetchWithProgress(url)), url.split('/').pop() ?? 'url', Number(qs.get('up') ?? -1) < 0 ? -1 : 1); loadMs = performance.now() - t0; }
   catch (e) { $('status').textContent = String((e as Error).message); }
 }
+
+// ─── One Stone ───
+let stone: Stone | null = null, look: Look = qs.get('look') === 'wash' ? 'wash' : 'dry', ranks: Float32Array | null = null;
+let detail = Number(qs.get('detail') ?? 1), thin = qs.get('thin') === 'even' ? 1 : 0, brush = qs.has('brush'), occlude = qs.get('occluder') !== '0';
+const reveals: Array<[number, number, number, number]> = [];
+const shape = (() => { let s: Stone | null = null; return () => (s ??= stoneShape()); })();
+function openStone() {
+  const S = shape();
+  show(oneStone(look, S), 'stone', 1);
+  stone = S;
+  // (its shape, drawn into the depth buffer only, shrunk a little toward its middle so the marks on its surface stand in
+  // front of it, and only what's on the far side is hidden)
+  const k = 0.985, tri = new Float32Array(S.tris.length * 3);
+  for (let i = 0; i < S.tris.length; i++) for (let a = 0; a < 3; a++) tri[i * 3 + a] = S.centre[a] + (S.pos[S.tris[i] * 3 + a] - S.centre[a]) * k;
+  R.setOccluder(tri);
+  setView((qs.get('view') as 'hero' | 'grazing' | 'reverse') ?? 'hero');
+  syncStone();
+}
+const VIEWS = { hero: { yaw: 0.6, pitch: 0.32 }, grazing: { yaw: 1.35, pitch: 0.035 }, reverse: { yaw: 0.6 + Math.PI, pitch: 0.3 } };
+function setView(v: keyof typeof VIEWS) {
+  const V = VIEWS[v] ?? VIEWS.hero;
+  Object.assign(cam, { yaw: V.yaw, pitch: V.pitch, dist: 4.4, target: [0, 0.3, 0] as [number, number, number] });
+  home = { ...cam, target: [...cam.target] as [number, number, number] };
+  orbitFrom = null;
+}
+/** the orbit: one turn at the hero's height, the same every time */
+let orbitFrom: number | null = null;
+const ORBIT_S = 16;
+/** the share of marks the detail keeps by rank (so the even thinning can keep the same number) */
+const shareAt = (d: number) => { if (!ranks) return 1; const thr = 1 - d; let lo = 0, hi = ranks.length; while (lo < hi) { const m = (lo + hi) >> 1; if (ranks[m] < thr) lo = m + 1; else hi = m; } return (ranks.length - lo) / ranks.length; };
 
 // ─── the sort: in a worker if there is one (the same bundle, `?worker=splats`), else here ───
 const sorter = (() => {
@@ -124,8 +167,24 @@ function perspective(fovy: number, aspect: number, near: number, far: number) {
 // ─── touch: one finger turns, two pinch and pan; a mouse drags, wheels, right-drags; a double tap frames it ───
 const pts = new Map<number, { x: number; y: number }>();
 let lastTap = 0, touched = performance.now();
+/** a brush stroke on the stone: where the finger's ray meets it, detail brought back round there */
+function paint(x: number, y: number): boolean {
+  if (!stone) return false;
+  const { pos, view } = eye(), r = canvas.getBoundingClientRect(), th = Math.tan(cam.fov / 2), asp = r.width / r.height;
+  const sx = ((x - r.left) / r.width) * 2 - 1, sy = 1 - ((y - r.top) / r.height) * 2;
+  const R0: [number, number, number] = [view[0], view[4], view[8]], U: [number, number, number] = [view[1], view[5], view[9]], F: [number, number, number] = [-view[2], -view[6], -view[10]];
+  const d = norm([F[0] + R0[0] * sx * th * asp + U[0] * sy * th, F[1] + R0[1] * sx * th * asp + U[1] * sy * th, F[2] + R0[2] * sx * th * asp + U[2] * sy * th]);
+  const h = stone.ray(pos, d);
+  if (!h) return false;
+  const last = reveals[reveals.length - 1];
+  if (last && Math.hypot(last[0] - h.p[0], last[1] - h.p[1], last[2] - h.p[2]) < 0.07) return true;
+  reveals.push([h.p[0], h.p[1], h.p[2], 0.32]);
+  if (reveals.length > 24) reveals.shift();
+  return true;
+}
 canvas.addEventListener('pointerdown', (e) => {
   canvas.setPointerCapture(e.pointerId); pts.set(e.pointerId, { x: e.clientX, y: e.clientY }); touched = performance.now();
+  if (brush && stone && pts.size === 1) { paint(e.clientX, e.clientY); return; }
   if (pts.size === 1) { const t = performance.now(); if (t - lastTap < 300) Object.assign(cam, { ...home, target: [...home.target] }); lastTap = t; }
 });
 canvas.addEventListener('pointermove', (e) => {
@@ -133,6 +192,7 @@ canvas.addEventListener('pointermove', (e) => {
   if (!p) return;
   touched = performance.now();
   const dx = e.clientX - p.x, dy = e.clientY - p.y;
+  if (brush && stone && pts.size === 1) { paint(e.clientX, e.clientY); p.x = e.clientX; p.y = e.clientY; return; }
   if (pts.size === 1 && !(e.buttons & 2) && !e.shiftKey) {
     cam.yaw -= dx * 0.006; cam.pitch = Math.max(-1.45, Math.min(1.45, cam.pitch + dy * 0.006));
   } else if (pts.size === 1) pan(dx, dy);
@@ -185,6 +245,22 @@ const slider = (id: string, get: () => number, set: (v: number) => void, fmt: (v
 };
 slider('size', () => size, (v) => { size = v; }, (v) => `${v.toFixed(2)}×`);
 slider('res', () => res, (v) => { res = v; }, (v) => `${Math.min(v, devicePixelRatio).toFixed(2)}`);
+// (One Stone's own)
+const seg = (id: string, items: Array<[string, () => void, () => boolean]>) => {
+  const el = $(id);
+  for (const [label, act] of items) { const b = document.createElement('button'); b.textContent = label; b.onclick = () => { act(); syncStone(); }; el.append(b); }
+  return () => [...el.querySelectorAll('button')].forEach((b, k) => b.setAttribute('aria-pressed', String(items[k][2]())));
+};
+const syncs = [
+  seg('looks', [['dry', () => { look = 'dry'; const c = { ...cam, target: [...cam.target] }; openStone(); Object.assign(cam, c); }, () => look === 'dry'], ['wash', () => { look = 'wash'; const c = { ...cam, target: [...cam.target] }; openStone(); Object.assign(cam, c); }, () => look === 'wash']]),
+  seg('thins', [['by rank', () => { thin = 0; }, () => thin === 0], ['evenly', () => { thin = 1; }, () => thin === 1]]),
+  seg('views', [['hero', () => setView('hero'), () => false], ['grazing', () => setView('grazing'), () => false], ['reverse', () => setView('reverse'), () => false], ['orbit', () => { setView('hero'); orbitFrom = performance.now(); }, () => orbitFrom !== null]]),
+  seg('tools', [['brush', () => { brush = !brush; }, () => brush], ['clear', () => { reveals.length = 0; }, () => false], ['occluder', () => { occlude = !occlude; }, () => occlude]]),
+];
+function syncStone() { syncs.forEach((f) => f()); $('stone-controls').hidden = !stone; }
+slider('detail', () => detail, (v) => { detail = v; }, (v) => `${Math.round(v * 100)}%`);
+$('fold').onclick = () => { const f = document.documentElement.classList.toggle('folded'); $('fold').setAttribute('aria-expanded', String(!f)); $('fold').textContent = f ? 'controls' : 'hide'; };
+$('fold').textContent = 'hide';
 $('flip').onclick = () => { up = up === 1 ? -1 : 1; lastDir = null; };
 $('home').onclick = () => Object.assign(cam, { ...home, target: [...home.target] });
 
@@ -193,20 +269,26 @@ let frames = 0, fpsT = performance.now(), fps = 0, last = performance.now();
 const theme = () => (matchMedia('(prefers-color-scheme: dark)').matches ? [0.07, 0.075, 0.08] : [0.11, 0.115, 0.12]) as [number, number, number];
 function frame() {
   const t = performance.now(), dt = Math.min(0.1, (t - last) / 1000); last = t;
-  if (preview || t - touched > 8000) cam.yaw += dt * 0.15;
+  if (orbitFrom !== null) {
+    const u = (t - orbitFrom) / 1000 / ORBIT_S;
+    cam.yaw = VIEWS.hero.yaw + Math.min(1, u) * Math.PI * 2;
+    if (u >= 1) { orbitFrom = null; syncStone(); }
+  } else if (!stone && (preview || t - touched > 8000)) cam.yaw += dt * 0.15;
+  else if (stone && preview) cam.yaw += dt * 0.25;
   // (the canvas at the resolution asked, never past the screen's)
   const dpr = Math.min(res, devicePixelRatio || 1), w = Math.round(canvas.clientWidth * dpr), h = Math.round(canvas.clientHeight * dpr);
   if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
-  const { view, fwd } = eye();
+  const { view, fwd, pos } = eye();
   // (sorted again once the view's turned more than a little, and the last sort's in)
   if (scene && !sorter.busy && (!lastDir || dot(lastDir, fwd) < 0.9995)) { lastDir = fwd; sorter.ask(fwd); }
   const near = Math.max(0.01, cam.dist * 0.01), proj = perspective(cam.fov, w / h, near, cam.dist * 100);
   const fy = h / (2 * Math.tan(cam.fov / 2));
-  R.draw(view, proj, [fy, fy], { size, mode, bg: theme() });
+  const share = shareAt(detail);
+  R.draw(view, proj, [fy, fy], { size, mode, bg: stone ? [0.937, 0.906, 0.847] : theme(), detail, thin, share, reveals, eye: pos, occlude });
   frames++;
   if (t - fpsT > 500) {
     fps = (frames * 1000) / (t - fpsT); frames = 0; fpsT = t;
-    $('stats').textContent = scene ? `${(scene.n / 1000).toFixed(0)}k splats · ${fps.toFixed(0)} fps · sort ${sortMs.toFixed(0)} ms${sorter.worker ? '' : ' (here)'} · ${w}×${h} · loaded in ${(loadMs / 1000).toFixed(1)} s` : '';
+    $('stats').textContent = stone && scene ? `${Math.round(shareAt(detail) * scene.n)} of ${scene.n} marks${reveals.length ? ' + brushed' : ''} · ${fps.toFixed(0)} fps` : scene ? `${(scene.n / 1000).toFixed(0)}k splats · ${fps.toFixed(0)} fps · sort ${sortMs.toFixed(0)} ms${sorter.worker ? '' : ' (here)'} · ${w}×${h} · loaded in ${(loadMs / 1000).toFixed(1)} s` : '';
   }
   requestAnimationFrame(frame);
 }
@@ -214,6 +296,8 @@ function frame() {
 (window as unknown as { __splats: unknown }).__splats = {
   get scene() { return scene ? { name: sceneName, n: scene.n } : null; }, cam, get fps() { return fps; }, get sortMs() { return sortMs; }, get drawn() { return R.drawn; },
   setMode: (m: number) => { mode = m; syncModes(); }, open, openUrl,
+  stone: { setView, setDetail: (d: number) => { detail = d; }, setThin: (k: number) => { thin = k; }, setLook: (l: Look) => { look = l; openStone(); }, paint, clear: () => { reveals.length = 0; }, setBrush: (b: boolean) => { brush = b; }, setOccluder: (b: boolean) => { occlude = b; }, orbit: () => { setView('hero'); orbitFrom = performance.now(); }, at: (yaw: number, pitch: number) => { cam.yaw = yaw; cam.pitch = pitch; orbitFrom = null; } },
 };
 if (qs.has('url')) void openUrl(qs.get('url')!); else void open(qs.get('scene') ?? 'garden');
+if (qs.has('orbit')) setTimeout(() => { setView('hero'); orbitFrom = performance.now(); }, 300);
 requestAnimationFrame(frame);
