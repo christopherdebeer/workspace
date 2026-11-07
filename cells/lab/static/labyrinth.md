@@ -295,7 +295,7 @@ the sea across its front:
   the water;
 - the stream falling out of its ravine into the sea.
 
-Stone built in the sea stands on its own ground (a mole, a quay). The sea is drawn as far as the land is, and where the
+Stone built in the sea stands on its own ground (a mole, a quay), and in some of the water beside it a rowing boat is moored, white with a wooden inside, its bow to the stone. Along the foot of the cliff, where the sea meets land nothing's built on, there's white water at the waterline and now and then a rock half under it. The sea is drawn as far as the land is, and where the
 drawing's reach runs out it breaks up into the page, raggedly and finely, as a dry brush leaves a wash, so it never runs
 on as a sheet to the drawing's edge.
 

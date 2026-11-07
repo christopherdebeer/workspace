@@ -907,6 +907,31 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
       quad(A, D, C, B, [-nx, 0.3, -nz], 0.8, MAT.water);
     }
   }
+  /** a rowing boat moored on the sea: a white hull, pointed at the bow (toward `ang`), a little sheer, a band
+   * under its gunwale, a thwart across it, floating at the sea's level */
+  function boat(cx: number, cz: number, ang: number, seed: number) {
+    const keep = { ...cur };
+    cur = { born: -1e3, pivot: -0.12, how: 1, tone: 0.5, dress: 0, sel: false };
+    const L = 0.4, Wd = 0.15, y0 = -0.17, y1 = -0.01, ca = Math.cos(ang), sa = Math.sin(ang), N = 12;
+    const at = (u: number, v: number, y: number): V3 => [cx + ca * u - sa * v, y, cz + sa * u + ca * v];
+    // (its plan, round from the stern to the pointed bow and back: half-widths along it)
+    const ring = Array.from({ length: N }, (_, k) => { const t = (k / N) * Math.PI * 2, u = Math.cos(t) * L, w0 = Math.sin(t) * Wd * (u > 0 ? Math.sqrt(1 - (u / L) ** 2) * 0.55 + 0.45 * (1 - u / L) : 1); return [u, w0] as [number, number]; });
+    const band = (seed % 3) === 0 ? MAT.clay : MAT.wood;
+    for (let k = 0; k < N; k++) {
+      const [u0, v0] = ring[k], [u1, v1] = ring[(k + 1) % N], s0 = 1 + 0.25 * Math.abs(u0 / L), s1 = 1 + 0.25 * Math.abs(u1 / L);
+      const a0 = at(u0 * 0.8, v0 * 0.7, y0), a1 = at(u1 * 0.8, v1 * 0.7, y0), b0 = at(u0, v0, y1 + 0.02 * s0 - 0.02), b1 = at(u1, v1, y1 + 0.02 * s1 - 0.02);
+      const m0: V3 = [(a0[0] + b0[0]) / 2, y1 - 0.025, (a0[2] + b0[2]) / 2], m1: V3 = [(a1[0] + b1[0]) / 2, y1 - 0.025, (a1[2] + b1[2]) / 2];
+      const nx = (b0[2] - b1[2]), nz = (b1[0] - b0[0]), nl = Math.hypot(nx, nz) || 1;
+      quad(a0, a1, m1, m0, [nx / nl, -0.3, nz / nl], 0.9, MAT.table);
+      quad(m0, m1, b1, b0, [nx / nl, 0.1, nz / nl], 1, band);
+      // (inside: the hull's planking seen over the gunwale)
+      quad(b0, b1, [ (b1[0] + cx) / 2, y0 + 0.03, (b1[2] + cz) / 2 ], [ (b0[0] + cx) / 2, y0 + 0.03, (b0[2] + cz) / 2 ], [-nx / nl, 0.6, -nz / nl], 0.7, MAT.wood);
+    }
+    const c0 = at(0, 0, y0 + 0.03);
+    for (let k = 0; k < N; k++) { const [u0, v0] = ring[k], [u1, v1] = ring[(k + 1) % N]; tri(c0, at(u0 * 0.5, v0 * 0.5, y0 + 0.03), at(u1 * 0.5, v1 * 0.5, y0 + 0.03), [0, 1, 0], 0.65, MAT.wood); }
+    box(Math.min(at(-0.02, -Wd, 0)[0], at(0.02, Wd, 0)[0]), Math.max(at(-0.02, -Wd, 0)[0], at(0.02, Wd, 0)[0]), y1 - 0.03, y1 - 0.015, Math.min(at(-0.02, -Wd, 0)[2], at(0.02, Wd, 0)[2]), Math.max(at(-0.02, -Wd, 0)[2], at(0.02, Wd, 0)[2]), MAT.wood, 0.9);
+    cur = keep;
+  }
   /** where falling water lands: a few patches of white */
   function foam(x: number, y: number, z: number, seed: number) {
     const keep = cur.tone;
@@ -1552,6 +1577,32 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
         if (!onLand(ci, cj) || !drawnLand!.on(ci, cj) || !bare(ci, cj) || benched(w, ci, cj) || clearedAt(ci, cj, w.ground(ci, cj)) && !fallHere) continue;
         if (w.paved(ci, cj) || DIRS.some(([a, b]) => w.paved(ci + a, cj + b) && Math.hypot(cx - (ci + a + 0.5), cz - (cj + b + 0.5)) < 0.5 + s)) continue;
         outcrop(cx, cz, s, qq, Math.atan2(-nz2 * sd, -nx2 * sd));
+      }
+    }
+    // (a coast's shore: along the foot of the cliff, where the sea meets land nothing's built on, white water and now and
+    // then a rock half under it; beside stone built out in the sea (a mole, a quay), a rowing boat moored in some of the
+    // water, its bow to the stone)
+    if (land.sea.size) {
+      const SEA = -0.12, sea = (i: number, j: number) => land.sea.has(j * 1000 + i);
+      for (let j = B.j0; j <= B.j1; j++) for (let i = B.i0; i <= B.i1; i++) {
+        if (!sea(i, j) || w.stone(0, i, j)) continue;
+        const q = 9000 + (j - LAND.j0) * 100 + (i - LAND.i0);
+        DIRS.forEach(([a, b], d) => {
+          const x = i + a, z = j + b, qd = q * 4 + d;
+          if (sea(x, z)) {
+            // (moored: water beside stone built in the sea)
+            if (!w.stone(0, x, z) || r(qd, 70) > 0.6 || w.stair(0, i, j) >= 0 || w.stair(1, i, j) >= 0) return;
+            boat(X(i) + 0.5 - a * 0.08, Z(j) + 0.5 - b * 0.08, Math.atan2(b, a) + (r(qd, 71) - 0.5) * 0.25, qd);
+            return;
+          }
+          if (w.occupied(w.ground(x, z), x, z) || w.paved(x, z)) return;
+          // (the shore: surf along the edge, a rock now and then)
+          // (the surf fades into the page with the sea (its how, 10))
+          cur = { born: -1e3, pivot: 0, how: 10, tone: 0.5, dress: 0, sel: false };
+          // (the waterline lies in the sea's cell, where the hill comes down under the water: the surf there)
+          for (const t of [-0.25, 0.05, 0.3]) foam(X(i) + 0.5 + a * 0.02 + b * t, SEA + 0.008, Z(j) + 0.5 + b * 0.02 + a * t, qd * 3 + Math.round(t * 10));
+          if (r(qd, 72) < 0.4) outcrop(i + 0.5 + a * 0.1 * r(qd, 73) + b * (r(qd, 74) - 0.5) * 0.6, j + 0.5 + b * 0.1 * r(qd, 73) + a * (r(qd, 74) - 0.5) * 0.6, 0.1 + 0.1 * r(qd, 75), qd, Math.atan2(-b, -a));
+        });
       }
     }
     perf.end();
