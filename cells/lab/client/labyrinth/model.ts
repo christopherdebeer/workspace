@@ -420,6 +420,11 @@ export class World {
   replaceLast(op: Op, now = 0) { const seen = new Set(this.derivedMass); this.ops[this.ops.length - 1] = op; this.rebuild(now); this.adopt(op, now, seen); }
   undo(now = 0): Op | null { const op = this.ops.pop() ?? null; if (op) this.rebuild(now); return op; }
   clear() { this.ops = []; this.seen.clear(); this.rebuild(0); }
+  /** what this world is that its operations don't say (when each thing the rules made first appeared, and when it was
+   * last built), so a copy made from the same operations elsewhere (the mesher's, off the page's thread) builds the same */
+  history(): { seen: Array<[string, number]>; now: number } { return { seen: [...this.seen], now: this.now }; }
+  /** a copy's operations and history set to another's, and built (`history`) */
+  mirror(ops: Op[], h: { seen: Array<[string, number]>; now: number }) { this.ops = ops; this.seen = new Map(h.seen); this.rebuild(h.now); }
 
   /** the operations replayed into the intended solid, and that resolved */
   /**

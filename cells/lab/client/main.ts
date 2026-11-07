@@ -42,6 +42,7 @@ const experiments: Record<string, () => Promise<unknown>> = {
 // (loaded as a worker by an experiment that shapes off the page's thread: serve it)
 const workers: Record<string, () => Promise<unknown>> = {
   blocks: () => import('./blocks/mesher').then((m) => m.serve()),
+  labyrinth: () => import('./labyrinth/mesher').then((m) => m.serve()),
 };
 
 if (typeof document === 'undefined') {
