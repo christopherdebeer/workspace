@@ -88,20 +88,80 @@ ok('parse() tells a .splat by its bytes', F.parse(F.encodeSplat(g)).n === g.n);
 {
   const B = await load('../client/splats/brush.ts');
   const pts = Array.from({ length: 50 }, (_, k) => [k * 0.02, 0, 0]);
-  let r = 3; const rnd = () => ((r = (r * 48271) % 2147483647) / 2147483647);
   const free = B.stroke({ pts }, { width: 0.01 }, { heart: 0 }), flat = B.stroke({ pts, normals: pts.map(() => [0, 1, 0]) }, { width: 0.01 }, { heart: 'middle' });
-  const [g1] = B.group(0.9, free), df = B.deposit(free, rnd), dl = B.deposit(flat, rnd);
+  const [g1] = B.group(0.9, free), df = B.deposit(free), dl = B.deposit(flat);
   ok('brush: a stroke deposits splats that all name it', df.length > 20 && df.every((d) => d.element === free.id));
   ok('brush: its rank falls away from its heart (at its start)', df[0].rank > df[df.length - 1].rank && Math.abs(df[0].rank - 0.9) < 0.05, [df[0].rank, df[df.length - 1].rank]);
   ok('brush: on a surface it lies flat; in open space it\'s round', dl.every((d) => d.s[2] < 0.002) && df.every((d) => Math.abs(d.s[2] - d.s[1]) < 1e-9));
-  ok('brush: at half density, about half the splats, the same gesture', Math.abs(B.deposit(free, rnd, 0.5).length - df.length / 2) < df.length * 0.15);
+  ok('brush: at half density, about half the splats, the same gesture', Math.abs(B.deposit(free, 0.5).length - df.length / 2) < df.length * 0.15);
   const w = B.wash(B.planeRegion([0, 1, 0], [0, 0, 0], (p) => Math.abs(p[0]) < 0.3 && Math.abs(p[2]) < 0.3, 0.5), [[-0.3, 0, -0.3], [0.3, 0, -0.3]], { reach: 0.3 });
   const acc = B.stroke({ pts }, { width: 0.01 });
   B.group(0.8, flat, [w], [acc]);
   ok('brush: a group ranks principal > support > accent', flat.rank > w.rank && w.rank > acc.rank, [flat.rank, w.rank, acc.rank]);
-  const dw = B.deposit(w, rnd);
+  const dw = B.deposit(w);
   ok('brush: a wash stays in its region and is densest near its anchor', dw.length > 20 && dw.every((d) => Math.abs(d.p[0]) <= 0.31 && Math.abs(d.p[2]) <= 0.31) && dw.filter((d) => d.p[2] < -0.15).length > dw.filter((d) => d.p[2] > 0.15).length);
   void g1;
+}
+// (dependable deposition: the same instructions give the same drawing, whatever was built before, however the curve is
+// sampled, at any density (tone held); and every mark says where it's attached)
+{
+  const B = await load('../client/splats/brush.ts'), SU = await load('../client/splats/subjects.ts'), MI = await load('../client/splats/mist.ts');
+  const a = SU.brushScene('wash'); MI.mistScene(1, 2000); B.stroke({ pts: [[0, 0, 0], [1, 0, 0]] }, { width: 0.01 }); const b = SU.brushScene('wash');
+  ok('deposit: a subject rebuilt after other scenes is identical', a.drawing.n === b.drawing.n && a.drawing.pos.every((v, i) => v === b.drawing.pos[i]) && a.drawing.rgba.every((v, i) => v === b.drawing.rgba[i]), [a.drawing.n, b.drawing.n]);
+  ok('deposit: element ids come from keys (a subject\'s scope and place)', a.elements[0].key.startsWith('stone/') && a.elements.every((e) => e.id === B.hashKey(e.key)), a.elements[0].key);
+  // (a CPU rasterisation of marks on the plane y = 0: each splat's footprint, composited as the renderer does)
+  const N = 96, X0 = -0.45, X1 = 0.45;
+  const raster = (deps) => {
+    const T = new Float64Array(N * N).fill(1), px = (X1 - X0) / N;
+    for (const d of deps) {
+      const [e1, e2] = d.ax, s0 = Math.max(d.s[0], 1e-4), s1 = Math.max(d.s[1], 1e-4), R = 3 * Math.max(s0, s1);
+      const i0 = Math.max(0, Math.floor((d.p[0] - R - X0) / px)), i1 = Math.min(N - 1, Math.ceil((d.p[0] + R - X0) / px)), j0 = Math.max(0, Math.floor((d.p[2] - R - X0) / px)), j1 = Math.min(N - 1, Math.ceil((d.p[2] + R - X0) / px));
+      for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) {
+        const x = X0 + (i + 0.5) * px - d.p[0], z = X0 + (j + 0.5) * px - d.p[2], u = x * e1[0] + z * e1[2], v = x * e2[0] + z * e2[2];
+        T[j * N + i] *= 1 - Math.min(0.99, d.a * Math.exp(-0.5 * ((u / s0) ** 2 + (v / s1) ** 2)));
+      }
+    }
+    return T;
+  };
+  const dark = (T) => T.reduce((s, t) => s + (1 - t), 0) / T.length;
+  const blocks = (T, k = 8) => { const M = N / k, out = new Float64Array(M * M); for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) out[Math.floor(j / k) * M + Math.floor(i / k)] += (1 - T[j * N + i]) / (k * k); return out; };
+  const corr = (x, y) => { const n = x.length, mx = x.reduce((s, v) => s + v, 0) / n, my = y.reduce((s, v) => s + v, 0) / n; let sxy = 0, sxx = 0, syy = 0; for (let i = 0; i < n; i++) { sxy += (x[i] - mx) * (y[i] - my); sxx += (x[i] - mx) ** 2; syy += (y[i] - my) ** 2; } return sxy / Math.sqrt(sxx * syy); };
+  const sq = B.planeRegion([0, 1, 0], [0, 0, 0], (p) => Math.abs(p[0]) < 0.3 && Math.abs(p[2]) < 0.3, 0.5);
+  const line = (n) => Array.from({ length: n }, (_, k) => [-0.3 + (0.6 * k) / (n - 1), 0, -0.3]);
+  for (const material of ['wash', 'dry']) {
+    const w = B.wash(sq, line(2), { reach: 0.4, material, key: `tone-${material}` });
+    const t = [0.5, 1, 2].map((d) => dark(raster(B.deposit(w, d))));
+    ok(`deposit: ${material} tone held across density 0.5 / 1 / 2 (${t.map((v) => v.toFixed(3)).join(' / ')})`, t.every((v) => Math.abs(v / t[1] - 1) < 0.1));
+  }
+  // (resampling: the same straight anchor in 2 points and 40; the same arc in 12 points and 120)
+  {
+    const w2 = B.wash(sq, line(2), { reach: 0.4, key: 'rs' }), w40 = B.wash(sq, line(40), { reach: 0.4, key: 'rs' });
+    const A = raster(B.deposit(w2)), C = raster(B.deposit(w40));
+    ok(`deposit: an anchor resampled (2 vs 40 points) gives the same wash (tone ${dark(A).toFixed(3)} vs ${dark(C).toFixed(3)}, layout r ${corr(blocks(A), blocks(C)).toFixed(3)})`, Math.abs(dark(A) / dark(C) - 1) < 0.05 && corr(blocks(A), blocks(C)) > 0.95);
+    const arc = (n) => Array.from({ length: n }, (_, k) => { const t = -0.9 + (1.8 * k) / (n - 1); return [0.42 * Math.sin(t), 0, -0.42 + 0.42 * (1 - Math.cos(t))]; });
+    const a12 = B.wash(sq, arc(12), { reach: 0.3, key: 'arc' }), a120 = B.wash(sq, arc(120), { reach: 0.3, key: 'arc' }), P = raster(B.deposit(a12)), Q = raster(B.deposit(a120));
+    ok(`deposit: an arc resampled (12 vs 120 points) gives the same wash (tone ${dark(P).toFixed(3)} vs ${dark(Q).toFixed(3)}, layout r ${corr(blocks(P), blocks(Q)).toFixed(3)})`, Math.abs(dark(P) / dark(Q) - 1) < 0.06 && corr(blocks(P), blocks(Q)) > 0.93);
+  }
+  // (strokes: tone held across density too)
+  {
+    const s = B.stroke({ pts: line(30).map((p) => [p[0], 0, 0]), normals: line(30).map(() => [0, 1, 0]) }, { width: 0.012 }, { key: 'tone-stroke' });
+    const t = [0.5, 1, 2].map((d) => dark(raster(B.deposit(s, d))));
+    ok(`deposit: a stroke's tone held across density 0.5 / 1 / 2 (${t.map((v) => v.toFixed(4)).join(' / ')})`, t.every((v) => Math.abs(v / t[1] - 1) < 0.1));
+  }
+  // (support: on a surface, on an edge, free; a wash in a volume is free and round)
+  {
+    const P2 = [[0, 0, 0], [0.3, 0, 0]], onS = B.deposit(B.stroke({ pts: P2, normals: [[0, 1, 0], [0, 1, 0]] }, { width: 0.01 })), edge = B.deposit(B.stroke({ pts: P2, normals: [[0, 1, 0], [0, 1, 0]] }, { width: 0.01 }, { profile: [1, 0, 0], mark: 4 })), fr = B.deposit(B.stroke({ pts: P2 }, { width: 0.01 }));
+    const vol = B.deposit(B.wash(B.volumeRegion([0, 0, 0], [0.3, 0.2, 0.3]), [[-0.2, 0, 0], [0.2, 0, 0]], { reach: 0.25 }));
+    ok('deposit: support is explicit (surface, edge with its second normal, free; a volume wash free and round)', onS.every((d) => d.support === B.SUPPORT.surface) && edge.every((d) => d.support === B.SUPPORT.edge && d.n2) && fr.every((d) => d.support === B.SUPPORT.free) && vol.length > 50 && vol.every((d) => d.support === B.SUPPORT.free && d.s[0] === d.s[2]));
+    const m = MI.mistScene(1, 500);
+    ok('deposit: mist splats are free (no surface depth), its stems\' contours keep their own colour', [...m.drawing.support.slice(m.stems)].every((v) => v === B.SUPPORT.free) && [...Array(m.stems).keys()].some((i) => m.drawing.mark[i] === 4 && m.drawing.rgba[i * 4] === 230));
+  }
+  // (an edited stroke keeps its identity and its tremor: only what changed changes)
+  {
+    const s = B.stroke(B.pathFrom([[0, 0, 0], [0.2, 0, 0.1], [0.4, 0, 0]]), { width: 0.01, tremor: 0.5 }, { key: 'edit' }), id = s.id, d1 = B.deposit(s);
+    s.gesture = { ...s.gesture, pressure: () => 0.6 }; const d2 = B.deposit(s);
+    ok('edit: a re-pressured stroke keeps its id and its marks\' places', s.id === id && d1.length === d2.length && d1.every((d, i) => Math.abs(d.p[0] - d2[i].p[0]) < 1e-3));
+  }
 }
 // (Mist: on an unseen bank under an unseen sun, the trained network is nearer the expensive reference than the analytic
 // model, and both far nearer than the baked colour; the CPU features match what was trained)

@@ -164,6 +164,57 @@ The test is whether the same brushes, given only different paths, regions and an
 
 `subjects.ts` makes no marks itself. Board: `node cells/lab/devtools/splats-brushes.mjs [wash|dry]`.
 
+## The Bench: one brush made dependable, one stroke made editable
+
+`?scene=bench` (`bench.ts`; brush.ts). This answers a source review of the brush. Its five findings, all confirmed in the
+code, and what changed:
+
+| finding | why it mattered | now |
+|---|---|---|
+| element ids from a global counter; wash variation from that counter | rebuilding a subject after visiting another scene could change it | ids hash a **key**: given, or the subject's `scope` and the element's place in it (`stone/w3`), or the element's content. Each element deposits from **its own random stream**, seeded by its id |
+| wash reach and firm edge indexed by anchor sample | resampling a curve changed the wash | measured by **arc length** in scene units. Points are placed by true distance from the anchor polyline; the firm edge is laid every 12 mm |
+| density added overlapping marks with no opacity compensation | a quality setting darkened the drawing | marks scattered at d× the number are each 1/d as opaque, or wider where that can't be (`faint`). Strokes size marks to their spacing |
+| feature ids in 4 bits, 16 uniforms | a few objects exhaust it | a **32-bit feature id** per mark, its development read from a feature texture. Brushes gives each object its own range |
+| contours carried their second normal in their colour, then forced to ink | a brush's contour colour was lost | a **third texel** per splat: support, second normal, feature, element. Contours keep their colour (Mist's stems are now light, as they asked to be) |
+
+Two renderer issues were fixed too:
+- **Support is explicit** on every splat: *surface*, *edge* or *free*. Only surface marks take the surface-plane depth under
+  each corner. Mist's splats are free, so they no longer go through the surface-depth branch with a made-up upward normal.
+- Region sampling in `subjects.ts` had used a shared random stream; it now uses each element's own.
+
+**Checked** (`devtools/splats.test.mjs`, on a CPU rasterisation of the marks):
+
+| check | result |
+|---|---|
+| a subject rebuilt after building other scenes | identical, mark for mark |
+| a wash's tone at density 0.5 / 1 / 2 | 0.116 / 0.115 / 0.116 |
+| dry hatching's tone at density 0.5 / 1 / 2 | 0.021 / 0.023 / 0.023 |
+| a stroke's tone at density 0.5 / 1 / 2 | 0.0119 / 0.0116 / 0.0115 |
+| a straight anchor in 2 points vs 40 | same tone; layout correlation 1.000 |
+| an arc in 12 points vs 120 | tone 0.131 vs 0.128; layout correlation 0.997 |
+| a re-pressured stroke | same id, its marks in the same places |
+
+**The Bench** shows the same stroke and wash on a plane (a board), a cylinder (a culm) and in open space (a volume wash
+round a free stroke). Each stroke is authored as control points; its wash is anchored to it.
+- **Tap** a stroke to select it. Its control points appear as handles.
+- **Drag** a handle to bend the stroke. On a surface, the point is taken onto the surface, so the stroke stays on the
+  culm or the board.
+- Change its **pressure** (even, swell, press in, lift off), its **weight** and its **material** (ink, dry, wash-line).
+- **Undo** steps back through edits.
+- **Density** re-deposits everything at 0.5, 1 or 2×.
+
+An edit deposits again only the stroke and the wash anchored to it: 2 of 29 elements, about 400 of 4,600 marks, in 10–25 ms
+in headless Chrome. The rest come from the cache. The whole buffer is still re-uploaded and re-sorted; incremental upload is
+not done yet. Four edits undone restore the drawing exactly (the board checks this).
+
+What it doesn't do yet:
+- add or delete strokes, or edit washes directly (only through their anchor stroke);
+- edit anything in the composed subjects (only the Bench's three strokes);
+- handles are screen-space, so dragging a point to the far side of the culm needs an orbit first.
+
+Board: `node cells/lab/devtools/splats-bench.mjs` (`bench-deposit.png`: density and sides; `bench-edit.png`: a real tap
+and drag, dry, swell, undo).
+
 ## Mist: a learned lighting function on splats
 
 `?scene=mist` (`mist.ts`, `mistnet.ts`, `devtools/splats-mist-train.mjs`). After Charles Grassi's *Neural Shaders,
@@ -252,7 +303,16 @@ unseen bank:
   positions, where the approximation ranges from 0.21 to 2.17.
 
 Caveats:
-- The comparison is per splat, not against a full volumetric render.
+- The comparison is per splat, against the chosen lighting model, which is itself an approximation. It is not against a
+  full volumetric image, so it shows the network approximates that model well; it doesn't show neural rendering is
+  better.
+- **The cost per splat is understated** by "12 reads and ~500 multiply-adds":
+  - the lighting runs in the vertex shader, once for each of a splat's four corners;
+  - each pyramid read is a hand-made trilinear lookup of eight texels;
+  - so a splat costs four times (12 × 8 texel fetches + ~500 multiply-adds).
+
+  Lighting once per splat (a pass into a texture, read by the quad) is the obvious fix. It should be measured on a phone
+  first.
 - Phone timing is unmeasured: headless Chrome renders in software.
 - The network adds shading work and doesn't remove sorting or overdraw.
 
@@ -275,7 +335,7 @@ Roughly in order of what each teaches:
 
 ## Flags
 
-`?scene=stone|garden|plush|nike|train` · `?look=dry|wash` · `?detail=0..1` · `?thin=even` · `?only=wash` · `?view=hero|grazing|reverse` · `?orbit` · `?detail=0.25|0.55|1` (sparse, intermediate, resolved) · `?brush` · `?occluder=0` · `?clean` (no controls) · `?url=…` (any `.splat` or `.ply` CORS lets it read) · `?up=1` (for a file that's
+`?scene=stone|brushes|bench|mist|garden|plush|nike|train` · `?look=dry|wash` · `?detail=0..1` · `?thin=even` · `?only=wash` · `?view=hero|grazing|reverse` · `?orbit` · `?detail=0.25|0.55|1` (sparse, intermediate, resolved) · `?brush` · `?occluder=0` · `?clean` (no controls) · `?url=…` (any `.splat` or `.ply` CORS lets it read) · `?up=1` (for a file that's
 y-up) · `?mode=0..3` · `?size=` · `?res=` · `?count=` (garden size) · `?noworkers` · `?preview`
 
 Checks: `node cells/lab/devtools/splats.test.mjs` (formats, covariance, sort) and

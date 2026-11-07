@@ -16,11 +16,10 @@
  *
  * Nothing here makes a mark itself: each subject only supplies paths, regions and anchors, and chooses the brush.
  */
-import { add, cross, deposit, dot, group, len, mul, norm, sub, wash, stroke, planeRegion, cylinderRegion, INK, type Element, type Path, type Region, type V } from './brush';
-import { LIGHT, RECESS, SOFFIT, arrisLines, faceSampler, octBytes, planeOf, stoneShape, toneOf, CROWN_A, CROWN_B, BROKEN, type Look } from './stone';
-import { alloc, type Splats } from './format';
+import { add, cross, deposit, dot, group, len, mul, norm, sub, wash, stroke, planeRegion, cylinderRegion, scope, toSplats, INK, type Drawing, type Element, type Path, type Region, type V } from './brush';
+import { LIGHT, RECESS, SOFFIT, arrisLines, faceSampler, planeOf, stoneShape, toneOf, CROWN_A, CROWN_B, BROKEN, type Look } from './stone';
 
-export type BrushDrawing = Splats & { mark: Uint8Array; rank: Float32Array; normal: Float32Array; stroke: Uint16Array; feature: Uint8Array };
+export type BrushDrawing = Drawing;
 export interface BrushScene { drawing: BrushDrawing; occluder: Float32Array; elements: Element[]; centres: Record<string, V> }
 
 const UP: V = [0, 1, 0];
@@ -57,7 +56,7 @@ function stoneElements(look: Look, off: V): { els: Element[]; tris: number[] } {
   const faceRegion = (reg: number): Region => {
     const { n, h } = planeOf(reg), fs = faceSampler(reg, rnd), C = S.centre;
     return {
-      area: fs.area, sample: () => ({ p: at(fs.at()), n }), on: (p) => fs.on(sub(p, off)),
+      area: fs.area, sample: (r) => ({ p: at(fs.at(r)), n }), on: (p) => fs.on(sub(p, off)),
       project: (p) => { const q = sub(p, off), pq = sub(q, mul(n, dot(sub(q, C), n) - h)); return fs.on(pq) ? { p: at(pq), n } : null; },
     };
   };
@@ -228,31 +227,19 @@ function gestureElements(front: { o: V; u: V; n: V }, free: V): Element[] {
 
 /** the whole scene: the stone in the middle, the corner to its left, the culm to its right, the gesture in front */
 export function brushScene(look: Look = 'wash'): BrushScene {
-  const stone = stoneElements(look, [0, 0, 0]);
-  const corner = cornerElements(look, [-2.4, 0, 0.2], 0.45);
-  const culm = culmElements(look, [2.2, 0, 0.1]);
-  const els = [...stone.els, ...corner.els, ...culm.els, ...gestureElements(corner.front, [0, 1.75, 0.9])];
-  let rs = 11; const rnd = () => ((rs = (rs * 48271) % 2147483647) / 2147483647);
-  const deps = els.flatMap((e) => deposit(e, rnd));
-  const s = Object.assign(alloc(deps.length), { mark: new Uint8Array(deps.length), rank: new Float32Array(deps.length), normal: new Float32Array(deps.length * 3), stroke: new Uint16Array(deps.length), feature: new Uint8Array(deps.length) });
-  deps.forEach((d, i) => {
-    s.pos.set(d.p, i * 3); s.scale.set(d.s, i * 3); s.rot.set(quat(d.ax), i * 4);
-    const col = d.profile ? [...octBytes(d.profile), 0] : d.c;
-    s.rgba.set([col[0], col[1], col[2], Math.round(Math.max(0, Math.min(1, d.a)) * 255)], i * 4);
-    s.mark[i] = d.mark; s.rank[i] = Math.max(0, Math.min(1, d.rank)); s.normal.set(d.n1 ?? d.ax[2], i * 3); s.stroke[i] = d.element % 65536; s.feature[i] = d.feature;
-  });
+  // (each subject in its own scope, so its elements are keyed by the subject and their place in it: the same drawing
+  // whatever was built before; and its features its own (the object's number in the high bits), so developing one
+  // object's seam doesn't develop another's)
+  const own = (obj: number, els: Element[]) => { for (const e of els) if (e.feature) e.feature = obj * 256 + e.feature; return els; };
+  const stone = scope('stone', () => stoneElements(look, [0, 0, 0]));
+  const corner = scope('corner', () => cornerElements(look, [-2.4, 0, 0.2], 0.45));
+  const culm = scope('culm', () => culmElements(look, [2.2, 0, 0.1]));
+  const gesture = scope('gesture', () => gestureElements(corner.front, [0, 1.75, 0.9]));
+  const els = [...own(1, stone.els), ...own(2, corner.els), ...own(3, culm.els), ...own(4, gesture)];
+  const s = toSplats(els.flatMap((e) => deposit(e)));
   return { drawing: s, occluder: new Float32Array([...stone.tris, ...corner.tris, ...culm.tris]), elements: els, centres: { stone: [0, 0.45, 0], corner: [-2.4, 0.6, 0.2], culm: [2.2, 0.85, 0.1], gesture: [-0.5, 1.4, 0.6] } };
 }
 
-function quat([x, y, z]: [V, V, V]): [number, number, number, number] {
-  const m00 = x[0], m10 = x[1], m20 = x[2], m01 = y[0], m11 = y[1], m21 = y[2], m02 = z[0], m12 = z[1], m22 = z[2], tr = m00 + m11 + m22;
-  let w, a, b, c;
-  if (tr > 0) { const q = Math.sqrt(tr + 1) * 2; w = q / 4; a = (m21 - m12) / q; b = (m02 - m20) / q; c = (m10 - m01) / q; }
-  else if (m00 > m11 && m00 > m22) { const q = Math.sqrt(1 + m00 - m11 - m22) * 2; w = (m21 - m12) / q; a = q / 4; b = (m01 + m10) / q; c = (m02 + m20) / q; }
-  else if (m11 > m22) { const q = Math.sqrt(1 + m11 - m00 - m22) * 2; w = (m02 - m20) / q; a = (m01 + m10) / q; b = q / 4; c = (m12 + m21) / q; }
-  else { const q = Math.sqrt(1 + m22 - m00 - m11) * 2; w = (m10 - m01) / q; a = (m02 + m20) / q; b = (m12 + m21) / q; c = q / 4; }
-  const l = Math.hypot(w, a, b, c); return [w / l, a / l, b / l, c / l];
-}
 function hull(pts: Array<[number, number]>): Array<[number, number]> {
   const p = [...pts].sort((a, b) => a[0] - b[0] || a[1] - b[1]), cr = (o: number[], a: number[], b: number[]) => (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
   const lo: Array<[number, number]> = [], hi: Array<[number, number]> = [];

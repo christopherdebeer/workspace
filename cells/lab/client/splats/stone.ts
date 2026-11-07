@@ -117,12 +117,13 @@ function onFace(reg: number, p: V): boolean {
   return inside(q, 1e-4);
 }
 /** a region's face, exactly: points on it at random, its area, and its plane's frame */
-export function faceSampler(reg: number, rnd: () => number): { at: () => V; area: number; on: (p: V) => boolean } {
+export function faceSampler(reg: number, rnd: () => number): { at: (r?: () => number) => V; area: number; on: (p: V) => boolean } {
   const pl = planeOf(reg), n = pl.n, e1 = norm(Math.abs(n[1]) < 0.9 ? cross(n, [0, 1, 0]) : cross(n, [1, 0, 0])), e2 = cross(n, e1), base = add(mul(n, pl.h), CENTRE), R = 1.4;
-  const pick = () => add(base, add(mul(e1, (rnd() * 2 - 1) * R), mul(e2, (rnd() * 2 - 1) * R)));
+  const pick = (r = rnd) => add(base, add(mul(e1, (r() * 2 - 1) * R), mul(e2, (r() * 2 - 1) * R)));
   let hit = 0; const N = 4000;
   for (let k = 0; k < N; k++) if (onFace(reg, pick())) hit++;
-  const at = () => { for (let k = 0; k < 4000; k++) { const p = pick(); if (onFace(reg, p)) return p; } return base; };
+  // (a point of the face, from the caller's random stream if given)
+  const at = (r = rnd) => { for (let k = 0; k < 4000; k++) { const p = pick(r); if (onFace(reg, p)) return p; } return base; };
   return { at, area: (hit / N) * (2 * R) ** 2, on: (p) => onFace(reg, p) };
 }
 
@@ -279,7 +280,7 @@ export function octBytes(n: V): [number, number] {
   return [b(u), b(v)];
 }
 
-export type Drawing = Splats & { mark: Uint8Array; rank: Float32Array; normal: Float32Array; stroke: Uint16Array; feature: Uint8Array };
+export type Drawing = Splats & { mark: Uint8Array; rank: Float32Array; normal: Float32Array; normal2: Float32Array; support: Uint8Array; stroke: Uint32Array; feature: Uint32Array };
 /** the detail at which each composed state is drawn */
 export const STATES = { sparse: 0.25, intermediate: 0.55, resolved: 1 } as const;
 
@@ -287,11 +288,11 @@ export const STATES = { sparse: 0.25, intermediate: 0.55, resolved: 1 } as const
 export function oneStone(look: Look = 'dry', S = stoneShape(), seed = 11): Drawing {
   let rs = seed; const r = () => { rs = (rs + 0x6d2b79f5) | 0; let x = Math.imul(rs ^ (rs >>> 15), 1 | rs); x = (x + Math.imul(x ^ (x >>> 7), 61 | x)) ^ x; return ((x ^ (x >>> 14)) >>> 0) / 4294967296; };
   const g = () => { let u = 0; for (let k = 0; k < 4; k++) u += r(); return (u - 2) / 0.58; };
-  type Mk = { k: number; rank: number; st: number; f: number; p: V; ax: [V, V, V]; s: V; c: V; a: number; n1?: V };
+  type Mk = { k: number; rank: number; st: number; f: number; p: V; ax: [V, V, V]; s: V; c: V; a: number; n1?: V; n2?: V };
   const out: Mk[] = [];
   let strokes = 0;
   /** a stroke of one feature: its rank (its heart's), and how much its periphery goes before its heart */
-  const stroke = (feature: number, R: number, span: number) => { const id = strokes++; return (k: number, w: number, p: V, ax: [V, V, V], s: V, c: V, a: number, n1?: V) => out.push({ k, rank: Math.max(0, Math.min(1, R - span * Math.max(0, Math.min(1, w)))), st: id, f: feature, p, ax, s, c, a, n1 }); };
+  const stroke = (feature: number, R: number, span: number) => { const id = strokes++; return (k: number, w: number, p: V, ax: [V, V, V], s: V, c: V, a: number, n1?: V, n2?: V) => out.push({ k, rank: Math.max(0, Math.min(1, R - span * Math.max(0, Math.min(1, w)))), st: id, f: feature, p, ax, s, c, a, n1, n2 }); };
   const dry = look === 'dry', lift = (p: V, n: V, h = 0.003) => add(p, mul(n, h));
   const surf = (p: V) => S.ray(S.centre, norm(sub(p, S.centre)));
   const nearest = (pts: V[], p: V) => { let d = Infinity, k = 0; for (let i = 0; i < pts.length; i++) { const e = len(sub(pts[i], p)); if (e < d) { d = e; k = i; } } return { d, k }; };
@@ -491,19 +492,22 @@ export function oneStone(look: Look = 'dry', S = stoneShape(), seed = 11): Drawi
   for (const ln of lines) {
     if ((ln.i === CROWN_A && ln.j === CROWN_B) || ln.i === BROKEN || ln.j === BROKEN) continue;
     const n1 = PLANES[ln.i].n, n2 = PLANES[ln.j].n, nm = norm(add(n1, n2)), np = ln.pts.length;
-    const cs = stroke(FEATURE.none, 0.62 + 0.14 * r(), 0.4), phase = r() * 6.28, freq = 0.6 + 0.5 * r(), e2 = octBytes(n2);
+    const cs = stroke(FEATURE.none, 0.62 + 0.14 * r(), 0.4), phase = r() * 6.28, freq = 0.6 + 0.5 * r();
     for (let k = 0; k < np; k++) {
       if (Math.sin(phase + k * freq * 0.18) < -0.3) continue;
       const tan = norm(sub(ln.pts[Math.min(np - 1, k + 1)], ln.pts[Math.max(0, k - 1)]));
-      cs(MARK.contour, Math.abs(2 * (k / (np - 1)) - 1) ** 2, add(ln.pts[k], mul(nm, 0.003)), frame(nm, tan), [0.014, dry ? 0.0028 : 0.003, 0.001], [e2[0], e2[1], 0], dry ? 0.8 : 0.6, n1);
+      cs(MARK.contour, Math.abs(2 * (k / (np - 1)) - 1) ** 2, add(ln.pts[k], mul(nm, 0.003)), frame(nm, tan), [0.014, dry ? 0.0028 : 0.003, 0.001], INK, dry ? 0.8 : 0.6, n1, n2);
     }
   }
 
-  const s = Object.assign(alloc(out.length), { mark: new Uint8Array(out.length), rank: new Float32Array(out.length), normal: new Float32Array(out.length * 3), stroke: new Uint16Array(out.length), feature: new Uint8Array(out.length) });
+  // (every mark lies on the stone's surface, but the contours, which sit on an edge between two faces, their second
+  // face's normal carried beside their first, their colour their own)
+  const s = Object.assign(alloc(out.length), { mark: new Uint8Array(out.length), rank: new Float32Array(out.length), normal: new Float32Array(out.length * 3), normal2: new Float32Array(out.length * 3), support: new Uint8Array(out.length), stroke: new Uint32Array(out.length), feature: new Uint32Array(out.length) });
   out.forEach((m, i) => {
     s.pos.set(m.p, i * 3); s.scale.set(m.s, i * 3); s.rot.set(quat(...m.ax), i * 4);
     s.rgba.set([m.c[0], m.c[1], m.c[2], Math.round(Math.min(1, Math.max(0, m.a)) * 255)], i * 4);
-    s.mark[i] = m.k; s.rank[i] = m.rank; s.normal.set(m.n1 ?? m.ax[2], i * 3); s.stroke[i] = Math.min(65535, m.st); s.feature[i] = Math.min(15, m.f);
+    s.mark[i] = m.k; s.rank[i] = m.rank; s.normal.set(m.n1 ?? m.ax[2], i * 3); if (m.n2) s.normal2.set(m.n2, i * 3);
+    s.support[i] = m.k === MARK.contour ? 2 : 1; s.stroke[i] = m.st; s.feature[i] = m.f;
   });
   return s;
 }

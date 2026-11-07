@@ -5,9 +5,10 @@
  * attribute: the splat's index). Its data comes from a texture rather than vertex buffers, so re-sorting means
  * uploading only the order (4 bytes a splat), never the splats.
  *
- * - **The data texture** (RGBA32UI, 2 texels a splat): the centre's three floats as their bits and the colour packed
+ * - **The data texture** (RGBA32UI, 3 texels a splat): the centre's three floats as their bits and the colour packed
  *   in one uint; then the 3D covariance's six numbers as three pairs of half floats, and one more uint for a drawing's
- *   marks (stone.ts): its rank (8 bits), its kind (8), and the normal of the surface it lies on (16, octahedral).
+ *   marks (stone.ts, brush.ts): its rank (8 bits), its kind (4), and the normal of the surface it lies on (16, octahedral); and a
+ *   third texel: where it is attached, an edge mark's second normal, its feature id and its element (see `load`).
  * - **The vertex shader** does the splat maths, per splat (the same for its 4 corners): take the centre into the
  *   camera; take the 3D covariance to a 2D one on the screen (Σ' = J W Σ Wᵀ Jᵀ: W the camera's rotation, J the
  *   perspective's local stretch at that point, its Jacobian); add a little (0.3 px²) so nothing is thinner than a pixel;
@@ -33,7 +34,7 @@ uniform vec2 u_focal, u_viewport;
 uniform vec3 u_eye;
 uniform float u_size, u_detail, u_share;
 uniform int u_mode, u_thin, u_only;
-uniform float u_feat[16];
+uniform highp sampler2D u_feat;
 // (Mist: the coarse density grid, the sun, which lighting, and the tiny network's numbers)
 uniform highp sampler3D u_grid;
 uniform vec3 u_sun;
@@ -66,8 +67,8 @@ float gridAt(vec3 p, int L) {
 float hg(float c, float g) { return (1.0 - g * g) / (12.566 * pow(1.0 + g * g - 2.0 * g * c, 1.5)); }
 float hash(uint x) { x = x * 747796405u + 2891336453u; x = ((x >> ((x >> 28u) + 4u)) ^ x) * 277803737u; x = (x >> 22u) ^ x; return float(x) / 4294967295.0; }
 void main() {
-  ivec2 t = ivec2(int(a_index & 1023u) * 2, int(a_index >> 10));
-  uvec4 d0 = texelFetch(u_data, t, 0), d1 = texelFetch(u_data, t + ivec2(1, 0), 0);
+  ivec2 t = ivec2(int(a_index & 1023u) * 3, int(a_index >> 10));
+  uvec4 d0 = texelFetch(u_data, t, 0), d1 = texelFetch(u_data, t + ivec2(1, 0), 0), d2 = texelFetch(u_data, t + ivec2(2, 0), 0);
   vec3 p = uintBitsToFloat(d0.xyz);
   vec4 cam = u_view * vec4(p, 1.0);
   vec4 clip = u_proj * cam;
@@ -78,23 +79,25 @@ void main() {
   v_color = vec4(float(d0.w & 255u), float((d0.w >> 8) & 255u), float((d0.w >> 16) & 255u), float(d0.w >> 24)) / 255.0;
   // (a drawing's mark: how much of it the detail keeps)
   float rank = float(d1.w & 255u) / 255.0;
-  uint kind = (d1.w >> 8) & 15u, feature = (d1.w >> 12) & 15u;
+  // (its kind; where it's attached (0 none, 1 a surface, 2 an edge, 3 free); its feature, any 32-bit id, its development
+  // looked up in the feature texture (1024 a row))
+  uint kind = (d1.w >> 8) & 15u, support = d2.x & 3u, feature = d2.y;
   if (u_only >= 0 && int(kind) != u_only) return;
   vec3 sn = octDecode(vec2(float((d1.w >> 16) & 255u), float(d1.w >> 24)) / 127.5 - 1.0);
   // (a feature the brush has developed: its own marks brought back by their ranks, as far as it's been brushed)
-  float detail = max(u_detail, feature > 0u ? u_feat[feature] : 0.0);
+  float detail = u_detail;
+  if (feature > 0u) { ivec2 fs = textureSize(u_feat, 0); int fi = int(feature); if (fi < fs.x * fs.y) detail = max(detail, texelFetch(u_feat, ivec2(fi % fs.x, fi / fs.x), 0).r); }
   // (kept by rank against the detail asked, or thinned evenly to the same share; and round what the brush touched, all of it
   // brought back by rank)
   float keep = u_thin == 1 ? smoothstep(1.0 - u_share - 0.03, 1.0 - u_share, hash(a_index) * 0.999) : smoothstep(1.0 - u_detail - 0.04, 1.0 - u_detail, rank);
   if (detail > u_detail + 0.001) keep = max(keep, smoothstep(1.0 - detail - 0.04, 1.0 - detail, rank));
   // (a contour mark: there only where its surface is near edge-on from here, eased over a range of angles)
   if (kind == 4u) {
-    // (its second face's normal rides in its colour (it's always ink): drawn where the two faces are turned opposite
-    // ways from the eye, eased in as the turning face passes edge-on)
-    vec3 v = normalize(u_eye - p), n2 = octDecode(vec2(float(d0.w & 255u), float((d0.w >> 8) & 255u)) / 127.5 - 1.0);
+    // (its second face's normal rides in its own place (its colour is its own): drawn where the two faces are turned
+    // opposite ways from the eye, eased in as the turning face passes edge-on)
+    vec3 v = normalize(u_eye - p), n2 = octDecode(vec2(float((d2.x >> 8) & 255u), float((d2.x >> 16) & 255u)) / 127.5 - 1.0);
     float s1 = dot(sn, v), s2 = dot(n2, v);
     keep *= s1 * s2 < 0.0 ? smoothstep(0.0, 0.12, min(abs(s1), abs(s2))) : 0.0;
-    v_color.rgb = vec3(36.0, 31.0, 27.0) / 255.0;
   }
   // (a mist splat: its light by the chosen method: stored on it (the reference, or baked), the analytic formula, or the
   // tiny network, both from the same cheap features of the coarse grid)
@@ -148,10 +151,10 @@ void main() {
   v_r = a_corner * 3.0;
   vec2 ndc = clip.xy / clip.w, at = ndc + px * 2.0 / u_viewport;
   gl_Position = vec4(at, clip.z / clip.w, 1.0);
-  // (a drawing's mark lies on a surface: each corner of its quad given the depth of that surface under it (the ray
-  // through the corner meeting the mark's plane), so a broad mark on a face turned away isn't cut by the face's own
-  // depth; a captured scene's splats, or a plane seen edge-on, keep their centre's depth)
-  if (kind != 0u && kind != 4u) {
+  // (a mark attached to a surface: each corner of its quad given the depth of that surface under it (the ray through the
+  // corner meeting the mark's plane), so a broad mark on a face turned away isn't cut by the face's own depth; marks on
+  // an edge, free marks (open space, a volume), a captured scene's splats, or a plane seen edge-on keep their centre's)
+  if (support == 1u) {
     vec3 nv = mat3(u_view) * sn, d = vec3(at.x / u_proj[0][0], at.y / u_proj[1][1], -1.0);
     float dn = dot(nv, d);
     if (abs(dn) > 0.05) {
@@ -217,7 +220,7 @@ export class Renderer {
   private oprog: WebGLProgram; private ovao: WebGLVertexArrayObject; private obuf: WebGLBuffer; private ocount = 0;
   private u: Record<string, WebGLUniformLocation | null> = {}; private ou: Record<string, WebGLUniformLocation | null> = {};
   n = 0; drawn = 0;
-  private gridTex: WebGLTexture | null = null; private net = new Float32Array(Math.ceil(NET_SIZE / 4) * 4); private ana = [0, 0];
+  private gridTex: WebGLTexture | null = null; private featTex: WebGLTexture | null = null; private featLast: Float32Array | null = null; private net = new Float32Array(Math.ceil(NET_SIZE / 4) * 4); private ana = [0, 0];
   /** Mist's density pyramid (one float a texel; each level a mip of the 3D texture) */
   setGrid(g: Mips) {
     const gl = this.gl; gl.bindTexture(gl.TEXTURE_3D, this.gridTex);
@@ -236,9 +239,8 @@ export class Renderer {
     const p = this.prog = link(VS(), FS);
     for (const k of ['u_data', 'u_view', 'u_proj', 'u_focal', 'u_viewport', 'u_size', 'u_mode', 'u_eye', 'u_detail', 'u_share', 'u_thin', 'u_feat', 'u_only', 'u_grid', 'u_sun', 'u_light', 'u_net', 'u_ana', 'u_diff']) this.u[k] = gl.getUniformLocation(p, k);
     // (an array's location, by its first element's name, where the bare name isn't found)
-    this.u.u_feat ??= gl.getUniformLocation(p, 'u_feat[0]');
     this.u.u_net ??= gl.getUniformLocation(p, 'u_net[0]');
-    this.gridTex = gl.createTexture()!;
+    this.gridTex = gl.createTexture()!; this.featTex = gl.createTexture()!; this.setFeatures(new Float32Array(1));
     this.vao = gl.createVertexArray()!; gl.bindVertexArray(this.vao);
     const quad = gl.createBuffer()!; gl.bindBuffer(gl.ARRAY_BUFFER, quad); gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
     const ac = gl.getAttribLocation(p, 'a_corner'); gl.enableVertexAttribArray(ac); gl.vertexAttribPointer(ac, 2, gl.FLOAT, false, 0, 0);
@@ -254,22 +256,40 @@ export class Renderer {
     gl.bindVertexArray(null);
   }
   /** the splats into the data texture (once a scene) */
+  /**
+   * The splats into the data texture, three texels each (1024 splats a row):
+   * - 0: centre (3 × f32), colour + opacity (4 × u8);
+   * - 1: covariance (6 halves), then rank (8 bits) | kind (4 bits, 4 spare) | normal (octahedral, 2 × 8 bits);
+   * - 2: support (2 bits) | second normal (octahedral, 2 × 8 bits, from bit 8); feature (32 bits); element (32 bits); spare.
+   */
   load(s: Splats) {
-    const gl = this.gl, rows = Math.max(1, Math.ceil(s.n / 1024)), data = new Uint32Array(2048 * rows * 4), f = new Float32Array(data.buffer), cov = new Float32Array(6);
+    const gl = this.gl, rows = Math.max(1, Math.ceil(s.n / 1024)), data = new Uint32Array(3072 * rows * 4), f = new Float32Array(data.buffer), cov = new Float32Array(6);
     for (let i = 0; i < s.n; i++) {
-      const o = i * 8;
+      const o = i * 12;
       f[o] = s.pos[i * 3]; f[o + 1] = s.pos[i * 3 + 1]; f[o + 2] = s.pos[i * 3 + 2];
       data[o + 3] = s.rgba[i * 4] | (s.rgba[i * 4 + 1] << 8) | (s.rgba[i * 4 + 2] << 16) | (s.rgba[i * 4 + 3] << 24);
       covariance(s, i, cov, 0, 2);
       data[o + 4] = half2(cov[0], cov[1]); data[o + 5] = half2(cov[2], cov[3]); data[o + 6] = half2(cov[4], cov[5]);
-      const rank = s.rank ? Math.round(s.rank[i] * 255) : 255, kind = (s.mark ? s.mark[i] & 15 : 0) | ((s.feature ? s.feature[i] & 15 : 0) << 4);
+      const rank = s.rank ? Math.round(s.rank[i] * 255) : 255, kind = s.mark ? s.mark[i] & 15 : 0;
       const [ox, oy] = s.normal ? octEncode(s.normal[i * 3], s.normal[i * 3 + 1], s.normal[i * 3 + 2]) : [128, 128];
       data[o + 7] = (rank | (kind << 8) | (ox << 16) | (oy << 24)) >>> 0;
+      const sup = s.support ? s.support[i] & 3 : 0, [px, py] = s.normal2 ? octEncode(s.normal2[i * 3], s.normal2[i * 3 + 1], s.normal2[i * 3 + 2]) : [128, 128];
+      data[o + 8] = (sup | (px << 8) | (py << 16)) >>> 0; data[o + 9] = s.feature ? s.feature[i] >>> 0 : 0; data[o + 10] = s.element ? s.element[i] >>> 0 : 0;
     }
     gl.bindTexture(gl.TEXTURE_2D, this.tex);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32UI, 2048, rows, 0, gl.RGBA_INTEGER, gl.UNSIGNED_INT, data);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32UI, 3072, rows, 0, gl.RGBA_INTEGER, gl.UNSIGNED_INT, data);
     this.n = s.n; this.drawn = 0;
+  }
+  /** each feature's development (0..1), by id (any number of them, 1024 a row): uploaded only when it changes */
+  setFeatures(v: Float32Array) {
+    if (this.featLast && this.featLast.length === v.length && this.featLast.every((x, i) => x === v[i])) return;
+    this.featLast = v.slice();
+    const gl = this.gl, w = Math.min(1024, Math.max(1, v.length)), rows = Math.max(1, Math.ceil(v.length / 1024)), d = new Float32Array(w * rows); d.set(v);
+    gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, this.featTex);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.R32F, w, rows, 0, gl.RED, gl.FLOAT, d);
+    gl.activeTexture(gl.TEXTURE0);
   }
   /** a shape to hide what's behind it (triangles, three floats a vertex), drawn into the depth buffer only; or none */
   setOccluder(tris: Float32Array | null) {
@@ -298,7 +318,8 @@ export class Renderer {
     gl.uniform1f(this.u.u_size, opts.size); gl.uniform1i(this.u.u_mode, opts.mode);
     gl.uniform3fv(this.u.u_eye, opts.eye ?? [0, 0, 0]);
     gl.uniform1f(this.u.u_detail, opts.detail ?? 1); gl.uniform1f(this.u.u_share, opts.share ?? 1); gl.uniform1i(this.u.u_thin, opts.thin ?? 0); gl.uniform1i(this.u.u_only, opts.only ?? -1);
-    gl.uniform1fv(this.u.u_feat, opts.features ?? new Float32Array(16));
+    if (opts.features) this.setFeatures(opts.features);
+    gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, this.featTex); gl.uniform1i(this.u.u_feat, 2); gl.activeTexture(gl.TEXTURE0);
     gl.uniform1i(this.u.u_light, opts.light ?? 0); gl.uniform1i(this.u.u_diff, opts.diff ? 1 : 0); gl.uniform3fv(this.u.u_sun, opts.sun ?? [0, 1, 0]);
     gl.uniform4fv(this.u.u_net, this.net); gl.uniform2f(this.u.u_ana, this.ana[0], this.ana[1]);
     gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_3D, this.gridTex); gl.uniform1i(this.u.u_grid, 1); gl.activeTexture(gl.TEXTURE0);

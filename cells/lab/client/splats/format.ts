@@ -25,7 +25,11 @@ export interface Splats {
   rgba: Uint8Array;
   /** (a drawing's, stone.ts) what kind of mark each is, how long it survives as the drawing simplifies (1 the last),
    * and the surface it lies on (for the marks that show only edge-on) */
-  mark?: Uint8Array; rank?: Float32Array; normal?: Float32Array; feature?: Uint8Array;
+  mark?: Uint8Array; rank?: Float32Array; normal?: Float32Array;
+  /** (a drawing's) a feature id per mark (any 32-bit number: its development is looked up in a texture), where it's
+   * attached (brush.ts SUPPORT: none, surface, edge, free), an edge mark's second face's normal, and the element (stroke
+   * or wash) it came from */
+  feature?: Uint8Array | Uint32Array; support?: Uint8Array; normal2?: Float32Array; element?: Uint32Array;
 }
 
 export function alloc(n: number): Splats {

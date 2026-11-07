@@ -28,9 +28,7 @@
  * (untransformed), on points where a camera's rays first meet the mist. The pyramid's sampled by hand (trilinear on exact
  * texels of a level) so the CPU and the GPU agree.
  */
-import { stroke, wash, group, deposit, cylinderRegion, type Element, type V } from './brush';
-import { octBytes } from './stone';
-import { alloc, type Splats } from './format';
+import { stroke, wash, group, deposit, cylinderRegion, scope, toSplats, SUPPORT, type Drawing, type Element, type V } from './brush';
 
 // ─── the density ───
 const hash = (x: number, y: number, z: number, s: number) => { let h = (x * 374761393 + y * 668265263 + z * 1274126177 + s * 2246822519) | 0; h = Math.imul(h ^ (h >>> 13), 1274126177); return ((h ^ (h >>> 16)) >>> 0) / 4294967296; };
@@ -207,7 +205,7 @@ export function mistPoints(m: MistShape, count = 14000, seed = 3): Array<{ p: V;
   return out;
 }
 
-export interface MistScene { shape: MistShape; grid: Mips; points: Array<{ p: V; size: number; alpha: number }>; drawing: Splats & { mark: Uint8Array; rank: Float32Array; normal: Float32Array; feature: Uint8Array }; stems: number; occluder: Float32Array }
+export interface MistScene { shape: MistShape; grid: Mips; points: Array<{ p: V; size: number; alpha: number }>; drawing: Drawing; stems: number; occluder: Float32Array }
 /** the mist marks' kind (render.ts lights them by the chosen method) */
 export const LIT = 8;
 /**
@@ -216,7 +214,7 @@ export const LIT = 8;
  */
 export function mistScene(seed: number, count = 14000): MistScene {
   const shape = mistShape(seed), grid = densityGrid(shape), points = mistPoints(shape, count);
-  const els: Element[] = [];
+  const els: Element[] = scope(`mist${seed}`, () => { const els: Element[] = [];
   for (const [x, z, rr] of shape.stems) {
     const SIDES = 14, h = 1.75;
     for (let k = 0; k < SIDES; k++) {
@@ -231,19 +229,14 @@ export function mistScene(seed: number, count = 14000): MistScene {
     }
     void wash; void cylinderRegion;
   }
-  let rs = 5; const rnd = () => ((rs = (rs * 48271) % 2147483647) / 2147483647);
-  const deps = els.flatMap((e) => deposit(e, rnd));
-  const n = points.length + deps.length;
-  const s = Object.assign(alloc(n), { mark: new Uint8Array(n), rank: new Float32Array(n), normal: new Float32Array(n * 3), feature: new Uint8Array(n) });
-  points.forEach((pt, i) => { s.pos.set(pt.p, i * 3); s.scale.set([pt.size, pt.size, pt.size], i * 3); s.rot.set([1, 0, 0, 0], i * 4); s.rgba.set([255, 255, 255, Math.round(pt.alpha * 255)], i * 4); s.mark[i] = LIT; s.rank[i] = 1; s.normal.set([0, 1, 0], i * 3); });
-  deps.forEach((d, j) => {
-    const i = points.length + j; s.pos.set(d.p, i * 3); s.scale.set(d.s, i * 3); s.rot.set(quat(d.ax), i * 4);
-    const col = d.profile ? [...octBytes(d.profile), 0] : d.c; s.rgba.set([col[0], col[1], col[2], Math.round(Math.min(1, d.a) * 255)], i * 4);
-    s.mark[i] = d.mark; s.rank[i] = Math.max(0, Math.min(1, d.rank)); s.normal.set(d.n1 ?? d.ax[2], i * 3);
-  });
+  return els; });
+  // (the stems' marks first, from their own keys; then the mist's splats, free in the volume (no surface: they keep their
+  // centres' depth), coloured later by the method)
+  const s = toSplats(els.flatMap((e) => deposit(e)), points.length), m0 = s.n - points.length;
+  points.forEach((pt, j) => { const i = m0 + j; s.pos.set(pt.p, i * 3); s.scale.set([pt.size, pt.size, pt.size], i * 3); s.rot.set([1, 0, 0, 0], i * 4); s.rgba.set([255, 255, 255, Math.round(pt.alpha * 255)], i * 4); s.mark[i] = LIT; s.rank[i] = 1; s.support[i] = SUPPORT.free; });
   const tris: number[] = [];
   for (const [x, z, rr] of shape.stems) for (let k = 0; k < 14; k++) { const a0 = (k / 14) * Math.PI * 2, a1 = ((k + 1) / 14) * Math.PI * 2, r2 = rr * 0.95, h = 1.75; const A: V = [x + Math.cos(a0) * r2, 0, z + Math.sin(a0) * r2], B: V = [x + Math.cos(a1) * r2, 0, z + Math.sin(a1) * r2]; tris.push(...A, ...B, B[0], h, B[2], ...A, B[0], h, B[2], A[0], h, A[2]); }
-  return { shape, grid, points, drawing: s, stems: deps.length, occluder: new Float32Array(tris) };
+  return { shape, grid, points, drawing: s, stems: m0, occluder: new Float32Array(tris) };
 }
 /** each mist splat's brightness by a method on the CPU: the reference (slow), or baked (the reference at one sun and view) */
 export function referenceColours(sc: MistScene, sun: V, eye: V): Float32Array {
@@ -253,12 +246,3 @@ export function referenceColours(sc: MistScene, sun: V, eye: V): Float32Array {
 }
 const sub3 = (a: V, b: V): V => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
 const norm3 = (a: V): V => { const l = Math.hypot(a[0], a[1], a[2]) || 1; return [a[0] / l, a[1] / l, a[2] / l]; };
-function quat([x, y, z]: [V, V, V]): [number, number, number, number] {
-  const m00 = x[0], m10 = x[1], m20 = x[2], m01 = y[0], m11 = y[1], m21 = y[2], m02 = z[0], m12 = z[1], m22 = z[2], tr = m00 + m11 + m22;
-  let w, a, b, c;
-  if (tr > 0) { const q = Math.sqrt(tr + 1) * 2; w = q / 4; a = (m21 - m12) / q; b = (m02 - m20) / q; c = (m10 - m01) / q; }
-  else if (m00 > m11 && m00 > m22) { const q = Math.sqrt(1 + m00 - m11 - m22) * 2; w = (m21 - m12) / q; a = q / 4; b = (m01 + m10) / q; c = (m02 + m20) / q; }
-  else if (m11 > m22) { const q = Math.sqrt(1 + m11 - m00 - m22) * 2; w = (m02 - m20) / q; a = (m01 + m10) / q; b = q / 4; c = (m12 + m21) / q; }
-  else { const q = Math.sqrt(1 + m22 - m00 - m11) * 2; w = (m10 - m01) / q; a = (m02 + m20) / q; b = (m12 + m21) / q; c = q / 4; }
-  const l = Math.hypot(w, a, b, c); return [w / l, a / l, b / l, c / l];
-}

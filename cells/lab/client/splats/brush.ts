@@ -23,7 +23,24 @@
  *
  * Each stroke says where its meaning lives (its *heart*, a place along it or, for a wash, its anchor), so as the detail
  * falls it reduces toward that, and goes as a whole.
+ *
+ * **Dependable deposition** (what makes the same instructions give the same drawing):
+ * - *Identity*: an element's id is a hash of its key: given (`key`), or made from the scope it was made in and its place
+ *   there (`scope('stone', ...)`: `stone/s0`, `stone/w3`, ...), or, outside any scope, from its content. Never from a
+ *   global counter, so building one subject doesn't depend on what was built before it.
+ * - *Randomness*: each element deposits from its own random stream, seeded by its id, so one element's marks don't
+ *   change when another's do, and an edited stroke keeps its tremor.
+ * - *Sampling*: strokes and washes are measured along their paths by arc length in scene units, so resampling the same
+ *   curve gives the same drawing.
+ * - *Density* changes fidelity, not tone: where marks are scattered (a wash's), d times as many are each 1/d as opaque
+ *   (or, where that can't be, wider), so the light through the drawing is held (`faint`); a stroke's marks are spaced by
+ *   the density and sized to their spacing, so their overlap, and tone, is the same at any. Checked by
+ *   `splats.test.mjs` on a CPU rasterisation at 0.5, 1 and 2.
+ * - *Support* is explicit on every splat (`SUPPORT`): on a surface (lies flat, takes the surface's depth under each
+ *   corner), on an edge (a crease between two faces: shown by the profile, keeps its centre's depth), or free (in open
+ *   space or a volume: round, keeps its centre's depth).
  */
+import { alloc, type Splats } from './format';
 type V = [number, number, number];
 const add = (a: V, b: V): V => [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
 const sub = (a: V, b: V): V => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
@@ -38,8 +55,60 @@ export type { V };
 
 export const INK: V = [36, 31, 27], MOSS: V = [96, 110, 50];
 
+/** where a splat is attached (render.ts reads it): none (a captured splat), a surface, an edge between two faces, free */
+export const SUPPORT = { none: 0, surface: 1, edge: 2, free: 3 } as const;
+
+/** a 32-bit hash of a string (FNV-1a, then mixed) */
+export function hashKey(k: string): number {
+  let h = 2166136261;
+  for (let i = 0; i < k.length; i++) { h ^= k.charCodeAt(i); h = Math.imul(h, 16777619); }
+  h ^= h >>> 15; h = Math.imul(h, 2246822519); h ^= h >>> 13;
+  return (h >>> 0) || 1;
+}
+/** a random stream from a seed (mulberry32) */
+export function rng(seed: number): () => number {
+  let a = seed >>> 0;
+  return () => { a = (a + 0x6d2b79f5) >>> 0; let t = a; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+}
+const scopes: Array<{ name: string; n: Record<string, number> }> = [];
+/** make elements within a named scope: those without a key are keyed by the scope and their order in it */
+export function scope<T>(name: string, fn: () => T): T {
+  const parent = scopes[scopes.length - 1];
+  scopes.push({ name: parent ? `${parent.name}/${name}` : name, n: {} });
+  try { return fn(); } finally { scopes.pop(); }
+}
+const r3 = (v: V) => v.map((x) => x.toFixed(3)).join(',');
+function keyFor(kind: 's' | 'w', given: string | undefined, content: () => string): string {
+  if (given) { const sc = scopes[scopes.length - 1]; return sc ? `${sc.name}/${given}` : given; }
+  const sc = scopes[scopes.length - 1];
+  if (sc) { const k = (sc.n[kind] = (sc.n[kind] ?? 0) + 1) - 1; return `${sc.name}/${kind}${k}`; }
+  return `${kind}:${content()}`;
+}
+
 /** a path: points, and (lying on a surface) the surface's normal at each */
 export interface Path { pts: V[]; normals?: V[] }
+/**
+ * A path from control points (the editable form of a stroke): a Catmull–Rom curve through them, resampled every `step`
+ * (scene units), and, given a surface, each point taken onto it with its normal there (a point the surface won't take
+ * keeps its place and the last normal).
+ */
+export function pathFrom(ctrl: V[], onto?: Region, step = 0.01): Path {
+  const P = ctrl, pts: V[] = [];
+  if (P.length < 2) return { pts: [...P] };
+  const at = (i: number) => P[Math.max(0, Math.min(P.length - 1, i))];
+  for (let i = 0; i < P.length - 1; i++) {
+    const p0 = at(i - 1), p1 = at(i), p2 = at(i + 1), p3 = at(i + 2), n = Math.max(2, Math.ceil(len(sub(p2, p1)) / step));
+    for (let k = 0; k < n; k++) {
+      const t = k / n, t2 = t * t, t3 = t2 * t;
+      pts.push([0, 1, 2].map((a) => 0.5 * (2 * p1[a] + (-p0[a] + p2[a]) * t + (2 * p0[a] - 5 * p1[a] + 4 * p2[a] - p3[a]) * t2 + (-p0[a] + 3 * p1[a] - 3 * p2[a] + p3[a]) * t3)) as V);
+    }
+  }
+  pts.push(P[P.length - 1]);
+  if (!onto) return { pts };
+  let last: V = [0, 1, 0]; const out: V[] = [], ns: V[] = [];
+  for (const p of pts) { const q = onto.project(p); if (q?.n) last = q.n; out.push(q ? q.p : p); ns.push(last); }
+  return { pts: out, normals: ns };
+}
 export interface Gesture {
   /** the mark's width at full pressure */
   width: number;
@@ -57,7 +126,7 @@ export type Material = 'ink' | 'dry' | 'washline';
 export type Heart = number | 'middle' | 'ends';
 
 export interface Stroke {
-  kind: 'stroke'; id: number; path: Path; gesture: Gesture; material: Material; heart: Heart;
+  kind: 'stroke'; id: number; key: string; path: Path; gesture: Gesture; material: Material; heart: Heart;
   colour: V; alpha: number; mark: number; feature: number;
   /** its rank (set by its group): when it goes as a whole; and how much of it goes before its heart */
   rank: number; span: number;
@@ -65,19 +134,19 @@ export interface Stroke {
   profile?: V;
 }
 export interface Region {
-  /** a point on it at random, with the surface's normal there */
-  sample(rnd: () => number): { p: V; n: V };
+  /** a point on it at random, with the surface's normal there (none: a volume) */
+  sample(rnd: () => number): { p: V; n?: V };
   /** its area (roughly) */
   area: number;
   /** whether a point is on it */
   on(p: V): boolean;
-  /** a point taken onto it (and the normal there), or null */
-  project(p: V): { p: V; n: V } | null;
+  /** a point taken onto it (and the normal there; none in a volume), or null */
+  project(p: V): { p: V; n?: V } | null;
   /** places it leaves open (paper showing) */
   open?(p: V): boolean;
 }
 export interface Wash {
-  kind: 'wash'; id: number; region: Region; anchor: V[]; reach: number; material: 'wash' | 'dry';
+  kind: 'wash'; id: number; key: string; region: Region; anchor: V[]; reach: number; material: 'wash' | 'dry';
   /** the hatching's direction at a point (dry) */
   direction?: (p: V, n: V) => V;
   /** how dark (0..1) */
@@ -87,12 +156,13 @@ export interface Wash {
 }
 export type Element = Stroke | Wash;
 
-let nextId = 1;
-export function stroke(path: Path, gesture: Gesture, o: { material?: Material; heart?: Heart; colour?: V; alpha?: number; mark?: number; feature?: number; profile?: V } = {}): Stroke {
-  return { kind: 'stroke', id: nextId++, path, gesture, material: o.material ?? 'ink', heart: o.heart ?? 'middle', colour: o.colour ?? INK, alpha: o.alpha ?? 0.9, mark: o.mark ?? 1, feature: o.feature ?? 0, rank: 0.9, span: 0.3, profile: o.profile };
+export function stroke(path: Path, gesture: Gesture, o: { key?: string; material?: Material; heart?: Heart; colour?: V; alpha?: number; mark?: number; feature?: number; profile?: V } = {}): Stroke {
+  const key = keyFor('s', o.key, () => `${path.pts.map(r3).join(';')}|${gesture.width}|${o.mark ?? 1}|${o.feature ?? 0}`);
+  return { kind: 'stroke', id: hashKey(key), key, path, gesture, material: o.material ?? 'ink', heart: o.heart ?? 'middle', colour: o.colour ?? INK, alpha: o.alpha ?? 0.9, mark: o.mark ?? 1, feature: o.feature ?? 0, rank: 0.9, span: 0.3, profile: o.profile };
 }
-export function wash(region: Region, anchor: V[], o: { reach?: number; material?: 'wash' | 'dry'; depth?: number; direction?: (p: V, n: V) => V; colour?: V; mark?: number; feature?: number; uneven?: number } = {}): Wash {
-  return { kind: 'wash', id: nextId++, region, anchor, reach: o.reach ?? 0.3, material: o.material ?? 'wash', direction: o.direction, depth: o.depth ?? 0.6, colour: o.colour ?? INK, mark: o.mark ?? 2, feature: o.feature ?? 0, rank: 0.6, span: 0.5, uneven: o.uneven ?? 0.35, phase: (nextId * 2.399) % 6.283 };
+export function wash(region: Region, anchor: V[], o: { key?: string; reach?: number; material?: 'wash' | 'dry'; depth?: number; direction?: (p: V, n: V) => V; colour?: V; mark?: number; feature?: number; uneven?: number } = {}): Wash {
+  const key = keyFor('w', o.key, () => `${anchor.map(r3).join(';')}|${o.reach ?? 0.3}|${o.depth ?? 0.6}|${o.material ?? 'wash'}|${o.mark ?? 2}`), id = hashKey(key);
+  return { kind: 'wash', id, key, region, anchor, reach: o.reach ?? 0.3, material: o.material ?? 'wash', direction: o.direction, depth: o.depth ?? 0.6, colour: o.colour ?? INK, mark: o.mark ?? 2, feature: o.feature ?? 0, rank: 0.6, span: 0.5, uneven: o.uneven ?? 0.35, phase: (id % 6283) / 1000 };
 }
 /**
  * A group: a principal, its supports, its accents, simplifying together. The group's rank is the principal's; the
@@ -107,7 +177,14 @@ export function group(rank: number, principal: Element | null, supports: Element
 }
 
 /** a splat as deposited: where, its axes and sizes, colour, and which element (and where along it) it came from */
-export interface Dep { p: V; ax: [V, V, V]; s: V; c: V; a: number; rank: number; mark: number; feature: number; element: number; u: number; n1?: V; profile?: V }
+export interface Dep { p: V; ax: [V, V, V]; s: V; c: V; a: number; rank: number; mark: number; feature: number; element: number; u: number; support: number; n1?: V; n2?: V }
+/**
+ * A mark's opacity, and how much wider it must be, when `d` times as many are scattered over the same place: the marks
+ * fall at random, so the light through a point is exp(−(number over it × opacity × footprint)) on average, and holding
+ * that means dividing the opacity by `d`; where that would pass nearly opaque (few strong marks, at a low density) the
+ * rest goes into the mark's footprint instead.
+ */
+export function faint(a: number, d: number): [number, number] { const x = Math.max(0, a) / Math.max(1e-3, d); return x <= 0.95 ? [x, 1] : [0.95, x / 0.95]; }
 
 function frame(n: V, along: V): [V, V, V] {
   let t = sub(along, mul(n, dot(along, n)));
@@ -117,8 +194,9 @@ function frame(n: V, along: V): [V, V, V] {
 }
 const heartDist = (h: Heart, u: number) => (h === 'middle' ? Math.abs(2 * u - 1) : h === 'ends' ? 1 - Math.abs(2 * u - 1) : Math.min(1, Math.abs(u - h) / Math.max(h, 1 - h)));
 
-/** a stroke into splats, at a density (1 as made; less, fewer and longer) */
-export function depositStroke(s: Stroke, rnd: () => number, density = 1): Dep[] {
+/** a stroke into splats, at a density (1 as made; less, fewer and longer: each mark's length follows its spacing, so the
+ * overlap, and so the tone, is the same at any density) */
+export function depositStroke(s: Stroke, density = 1, rnd: () => number = rng(s.id)): Dep[] {
   const P = s.path.pts, N = s.path.normals, out: Dep[] = [];
   if (P.length < 2) return out;
   // (its length along, to place splats at even spacing whatever the path's sampling)
@@ -141,53 +219,117 @@ export function depositStroke(s: Stroke, rnd: () => number, density = 1): Dep[] 
     // (on a surface: flat on it; in open space: round, the same from every side)
     const ax: [V, V, V] = n ? frame(n, tan) : [tan, across, norm(cross(tan, across))];
     const sz: V = n ? [step * 0.9, w * 0.5, 0.001] : [step * 0.9, w * 0.5, w * 0.5];
-    out.push({ p: q, ax, s: sz, c: s.colour, a: s.alpha * (s.material === 'washline' ? 0.85 : 1) * (0.75 + 0.25 * pr), rank, mark: s.mark, feature: s.feature, element: s.id, u, n1: s.profile ? n ?? undefined : undefined, profile: s.profile });
-    if (s.material === 'washline' && n) out.push({ p: add(q, mul(n, 0.0005)), ax, s: [step * 1.4, w * 1.6, 0.001], c: s.colour, a: s.alpha * 0.12 * pr, rank: rank - 0.05, mark: s.mark, feature: s.feature, element: s.id, u });
+    const support = s.profile ? SUPPORT.edge : n ? SUPPORT.surface : SUPPORT.free;
+    out.push({ p: q, ax, s: sz, c: s.colour, a: s.alpha * (s.material === 'washline' ? 0.85 : 1) * (0.75 + 0.25 * pr), rank, mark: s.mark, feature: s.feature, element: s.id, u, support, n1: n ?? undefined, n2: s.profile });
+    if (s.material === 'washline') out.push({ p: n ? add(q, mul(n, 0.0005)) : q, ax, s: n ? [step * 1.4, w * 1.6, 0.001] : [step * 1.4, w * 1.6, w * 1.6], c: s.colour, a: s.alpha * 0.12 * pr, rank: rank - 0.05, mark: s.mark, feature: s.feature, element: s.id, u, support: n ? SUPPORT.surface : SUPPORT.free, n1: n ?? undefined });
   }
   return out;
 }
 
-/** a wash into splats */
-export function depositWash(w: Wash, rnd: () => number, density = 1): Dep[] {
+/**
+ * A wash into splats. Measured along its anchor by arc length (scene units): the reach's unevenness and the heart vary
+ * with distance along it, the firm edge is laid at even spacing along it, and each point of the body is placed by its
+ * true distance from the anchor polyline, so the same curve sampled differently gives the same wash. Its marks' number
+ * grows with the density at fixed sizes, so each is made fainter to keep the tone. On a volume region (no normals) its
+ * marks are round and free; the firm edge is then a core round the anchor.
+ */
+export function depositWash(w: Wash, density = 1, rnd: () => number = rng(w.id)): Dep[] {
   const out: Dep[] = [], A = w.anchor, R = w.region;
   if (A.length < 2) return out;
-  const nearest = (p: V) => { let d = Infinity, k = 0; for (let i = 0; i < A.length; i += 1) { const e = len(sub(A[i], p)); if (e < d) { d = e; k = i; } } return { d, k }; };
-  const reach = (k: number) => w.reach * (1 - w.uneven * 0.5 + w.uneven * (0.6 * 0.5 * (1 + Math.sin(w.phase + k * 0.07)) + 0.4 * 0.5 * (1 + Math.sin(w.phase * 1.7 + k * 0.21))));
-  const heart = (f: number, k: number) => Math.max(f, Math.abs((2 * k) / Math.max(1, A.length - 1) - 1) * 0.85);
+  const cum = [0]; for (let i = 1; i < A.length; i++) cum.push(cum[i - 1] + len(sub(A[i], A[i - 1])));
+  const L = cum[cum.length - 1] || 1e-6;
+  /** the nearest point of the anchor: its distance, and how far along (arc length) */
+  const nearest = (p: V) => {
+    let d = Infinity, s = 0;
+    for (let i = 0; i < A.length - 1; i++) {
+      const e = sub(A[i + 1], A[i]), l2 = dot(e, e) || 1e-12, t = Math.max(0, Math.min(1, dot(sub(p, A[i]), e) / l2)), q = add(A[i], mul(e, t)), dd = len(sub(p, q));
+      if (dd < d) { d = dd; s = cum[i] + t * Math.sqrt(l2); }
+    }
+    return { d, s };
+  };
+  const pointAt = (s: number): { p: V; tan: V } => {
+    let i = 0; while (i < A.length - 2 && cum[i + 1] < s) i++;
+    const t = (s - cum[i]) / Math.max(1e-9, cum[i + 1] - cum[i]);
+    return { p: add(A[i], mul(sub(A[i + 1], A[i]), Math.max(0, Math.min(1, t)))), tan: norm(sub(A[i + 1], A[i])) };
+  };
+  // (its far boundary's unevenness: two waves along the anchor, wavelengths in scene units)
+  const reach = (s: number) => w.reach * (1 - w.uneven * 0.5 + w.uneven * (0.6 * 0.5 * (1 + Math.sin(w.phase + s * 6.5)) + 0.4 * 0.5 * (1 + Math.sin(w.phase * 1.7 + s * 19.5))));
+  const heart = (f: number, s: number) => Math.max(f, Math.abs((2 * s) / L - 1) * 0.85);
   const g = () => { let u = 0; for (let q = 0; q < 4; q++) u += rnd(); return (u - 2) / 0.58; };
-  const rankOf = (f: number, k: number) => w.rank - w.span * heart(f, k);
-  // (the firm edge: a band along the anchor, just inside the region, long along it)
-  for (let k = 0; k < A.length; k++) {
-    const a0 = A[k], tan = norm(sub(A[Math.min(A.length - 1, k + 1)], A[Math.max(0, k - 1)])), pa = R.project(a0); if (!pa) continue;
-    let inw = norm(cross(pa.n, tan)); if (!R.on(add(a0, mul(inw, 0.02)))) inw = mul(inw, -1);
-    if (!R.on(add(a0, mul(inw, 0.02)))) continue;
-    for (let q = 0; q < 3 * density; q++) {
-      const off = 0.006 + 0.022 * rnd() ** 1.5, pp = R.project(add(a0, mul(inw, off))); if (!pp || R.open?.(pp.p)) continue;
-      const f = off / reach(k);
-      if (w.material === 'dry') out.push({ p: add(pp.p, mul(pp.n, 0.0025)), ax: frame(pp.n, tan), s: [0.02, 0.0018, 0.001], c: w.colour, a: 0.7 * (1 - f), rank: rankOf(f, k), mark: w.mark, feature: w.feature, element: w.id, u: f });
-      else out.push({ p: add(pp.p, mul(pp.n, 0.0025)), ax: frame(pp.n, tan), s: [0.024, 0.008 + 0.006 * rnd(), 0.001], c: w.colour, a: (0.1 + 0.12 * w.depth) * (1 - off * 18), rank: rankOf(f, k), mark: w.mark, feature: w.feature, element: w.id, u: f });
+  const rankOf = (f: number, s: number) => w.rank - w.span * heart(f, s);
+  const base = { c: w.colour, mark: w.mark, feature: w.feature, element: w.id };
+  // (the firm edge: a band along the anchor, just inside the region, long along it; laid every DS along the anchor)
+  const DS = 0.012, edgeN = 3 * density;
+  for (let s = DS / 2; s < L; s += DS) {
+    const { p: a0, tan } = pointAt(s), pa = R.project(a0); if (!pa) continue;
+    let inw: V | null = null;
+    if (pa.n) { inw = norm(cross(pa.n, tan)); if (!R.on(add(a0, mul(inw, 0.02)))) inw = mul(inw, -1); if (!R.on(add(a0, mul(inw, 0.02)))) continue; }
+    for (let q = 0; q < edgeN; q++) {
+      if (q + 1 > edgeN && rnd() > edgeN - q) break;
+      const off = 0.006 + 0.022 * rnd() ** 1.5, f = off / reach(s);
+      // (on a surface, inward from the anchor; in a volume, any way across it)
+      const dir = inw ?? norm(cross(tan, [g(), g(), g()]));
+      const pp = R.project(add(a0, mul(dir, off))); if (!pp || R.open?.(pp.p)) continue;
+      if (pp.n) {
+        const at = add(pp.p, mul(pp.n, 0.0025));
+        if (w.material === 'dry') { const [a, k] = faint(0.7 * (1 - f), density); out.push({ ...base, p: at, ax: frame(pp.n, tan), s: [0.02, 0.0018 * k, 0.001], a, rank: rankOf(f, s), u: f, support: SUPPORT.surface, n1: pp.n }); }
+        else { const [a, k] = faint((0.1 + 0.12 * w.depth) * (1 - off * 18), density); out.push({ ...base, p: at, ax: frame(pp.n, tan), s: [0.024 * Math.sqrt(k), (0.008 + 0.006 * rnd()) * Math.sqrt(k), 0.001], a, rank: rankOf(f, s), u: f, support: SUPPORT.surface, n1: pp.n }); }
+      } else {
+        const [a, k] = faint((0.1 + 0.12 * w.depth) * (1 - off * 18), density), r = (0.008 + 0.006 * rnd()) * Math.cbrt(k);
+        out.push({ ...base, p: pp.p, ax: frame(norm([g(), g(), g()]), tan), s: [r, r, r], a, rank: rankOf(f, s), u: f, support: SUPPORT.free });
+      }
     }
   }
   // (the body: filled to a density within its reach of the anchor, leaving open what it leaves open)
   const want = Math.round(R.area * (w.material === 'dry' ? 900 : 420) * w.depth * density);
   for (let q = 0, got = 0; got < want && q < want * 14; q++) {
     const { p, n } = R.sample(rnd); if (R.open?.(p)) continue;
-    const { d, k } = nearest(p), D = reach(k), f = d / D;
+    const { d, s } = nearest(p), D = reach(s), f = d / D;
     if (f >= 1) continue;
     got++;
-    if (w.material === 'dry') {
+    if (!n) {
+      // (a volume: round soft marks, larger away from the anchor)
+      const [a, k] = faint((0.17 - 0.1 * f) * (0.55 + 0.45 * w.depth), density), rad = Math.min(0.014 + 0.08 * f * (0.6 + 0.4 * rnd()), Math.max(0.007, d * 0.9)) * Math.cbrt(k);
+      out.push({ ...base, p, ax: frame(norm([g(), g(), g()]), [1, 0, 0]), s: [rad, rad, rad], a, rank: rankOf(f, s), u: f, support: SUPPORT.free });
+    } else if (w.material === 'dry') {
       if (rnd() > Math.pow(1 - f, 0.8)) continue;
       const dir = w.direction?.(p, n) ?? norm(cross(n, [0, 1, 0])), Ls = 0.016 + 0.045 * (1 - f) * (0.7 + 0.3 * rnd());
-      out.push({ p: add(p, mul(n, 0.002)), ax: frame(n, dir), s: [Ls / 2, 0.0019, 0.001], c: w.colour, a: 0.5 + 0.3 * (1 - f), rank: rankOf(f, k), mark: w.mark, feature: w.feature, element: w.id, u: f });
+      const [a, k] = faint(0.5 + 0.3 * (1 - f), density);
+      out.push({ ...base, p: add(p, mul(n, 0.002)), ax: frame(n, dir), s: [Ls / 2, 0.0019 * k, 0.001], a, rank: rankOf(f, s), u: f, support: SUPPORT.surface, n1: n });
     } else {
-      const rad = Math.min(0.014 + 0.08 * f * (0.6 + 0.4 * rnd()), Math.max(0.007, d * 0.9));
-      out.push({ p: add(p, mul(n, 0.002)), ax: frame(n, [g(), g(), g()]), s: [rad * 1.08, rad * 0.92, 0.002], c: w.colour, a: (0.17 - 0.1 * f) * (0.55 + 0.45 * w.depth), rank: rankOf(f, k), mark: w.mark, feature: w.feature, element: w.id, u: f });
+      const [a, k] = faint((0.17 - 0.1 * f) * (0.55 + 0.45 * w.depth), density), rad = Math.min(0.014 + 0.08 * f * (0.6 + 0.4 * rnd()), Math.max(0.007, d * 0.9)) * Math.sqrt(k);
+      out.push({ ...base, p: add(p, mul(n, 0.002)), ax: frame(n, [g(), g(), g()]), s: [rad * 1.08, rad * 0.92, 0.002], a, rank: rankOf(f, s), u: f, support: SUPPORT.surface, n1: n });
     }
   }
   return out;
 }
 
-export function deposit(e: Element, rnd: () => number, density = 1): Dep[] { return e.kind === 'stroke' ? depositStroke(e, rnd, density) : depositWash(e, rnd, density); }
+/** an element into splats, from its own random stream */
+export function deposit(e: Element, density = 1): Dep[] { return e.kind === 'stroke' ? depositStroke(e, density) : depositWash(e, density); }
+
+/** splats as the renderer takes them, from deposits (each keeps its element, support, feature and both normals) */
+export type Drawing = Splats & { mark: Uint8Array; rank: Float32Array; normal: Float32Array; normal2: Float32Array; support: Uint8Array; feature: Uint32Array; element: Uint32Array };
+export function toSplats(deps: Dep[], extra = 0): Drawing {
+  const n = deps.length + extra;
+  const s = Object.assign(alloc(n), { mark: new Uint8Array(n), rank: new Float32Array(n), normal: new Float32Array(n * 3), normal2: new Float32Array(n * 3), support: new Uint8Array(n), feature: new Uint32Array(n), element: new Uint32Array(n) });
+  deps.forEach((d, i) => {
+    s.pos.set(d.p, i * 3); s.scale.set(d.s, i * 3); s.rot.set(quat(d.ax), i * 4);
+    s.rgba.set([d.c[0], d.c[1], d.c[2], Math.round(Math.max(0, Math.min(1, d.a)) * 255)], i * 4);
+    s.mark[i] = d.mark; s.rank[i] = Math.max(0, Math.min(1, d.rank)); s.normal.set(d.n1 ?? d.ax[2], i * 3); if (d.n2) s.normal2.set(d.n2, i * 3);
+    s.support[i] = d.support; s.feature[i] = d.feature; s.element[i] = d.element;
+  });
+  return s;
+}
+/** a rotation (unit quaternion w x y z) from an orthonormal frame (its three axes, the columns) */
+export function quat([x, y, z]: [V, V, V]): [number, number, number, number] {
+  const m00 = x[0], m10 = x[1], m20 = x[2], m01 = y[0], m11 = y[1], m21 = y[2], m02 = z[0], m12 = z[1], m22 = z[2], tr = m00 + m11 + m22;
+  let w, a, b, c;
+  if (tr > 0) { const q = Math.sqrt(tr + 1) * 2; w = q / 4; a = (m21 - m12) / q; b = (m02 - m20) / q; c = (m10 - m01) / q; }
+  else if (m00 > m11 && m00 > m22) { const q = Math.sqrt(1 + m00 - m11 - m22) * 2; w = (m21 - m12) / q; a = q / 4; b = (m01 + m10) / q; c = (m02 + m20) / q; }
+  else if (m11 > m22) { const q = Math.sqrt(1 + m11 - m00 - m22) * 2; w = (m02 - m20) / q; a = (m01 + m10) / q; b = q / 4; c = (m12 + m21) / q; }
+  else { const q = Math.sqrt(1 + m22 - m00 - m11) * 2; w = (m10 - m01) / q; a = (m02 + m20) / q; b = (m12 + m21) / q; c = q / 4; }
+  const l = Math.hypot(w, a, b, c); return [w / l, a / l, b / l, c / l];
+}
 
 // ─── regions ───
 /** a region of a plane: a point of it, its normal, and what's on it (a test in world space) */
@@ -214,5 +356,17 @@ export function cylinderRegion(x: number, z: number, r: number, y0: number, y1: 
     on: (p) => p[1] >= y0 && p[1] <= y1 && wrap(Math.atan2(p[2] - z, p[0] - x)) <= span,
     project: (p) => { const a = Math.atan2(p[2] - z, p[0] - x); if (p[1] < y0 || p[1] > y1 || wrap(a) > span) return null; return at(a, p[1]); },
     open,
+  };
+}
+/** a volume: an ellipsoid round a centre (radii along x y z); its points have no normal, so marks in it are free. Its
+ * "area" (what sets a wash's number of marks) is its broadest cross-section, not its volume: seen from any side its marks
+ * pile up through its depth, so it's filled to the tone of a surface the size of its silhouette */
+export function volumeRegion(c: V, r: V, open?: (p: V) => boolean): Region {
+  const inside = (p: V) => ((p[0] - c[0]) / r[0]) ** 2 + ((p[1] - c[1]) / r[1]) ** 2 + ((p[2] - c[2]) / r[2]) ** 2 <= 1;
+  const [ra, rb] = [...r].sort((a, b) => b - a);
+  return {
+    area: Math.PI * ra * rb,
+    sample: (rnd) => { for (let k = 0; k < 200; k++) { const p: V = [c[0] + (rnd() * 2 - 1) * r[0], c[1] + (rnd() * 2 - 1) * r[1], c[2] + (rnd() * 2 - 1) * r[2]]; if (inside(p)) return { p }; } return { p: c }; },
+    on: inside, project: (p) => (inside(p) ? { p } : null), open,
   };
 }

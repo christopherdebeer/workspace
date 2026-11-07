@@ -21,6 +21,8 @@ import { MARK, STATES, oneStone, stoneShape, type Look, type Stone } from './sto
 import { brushScene, type BrushScene } from './subjects';
 import { LIT, mistScene, referenceColours, sunDir, referenceAt, referenceLight, type MistScene } from './mist';
 import { NET, ANALYTIC, BAKE, RESULTS } from './mistnet';
+import { benchScene, PRESSURES, type Bench } from './bench';
+import type { Material, V as BV } from './brush';
 
 const qs = new URLSearchParams(location.search);
 const preview = qs.has('preview');
@@ -32,6 +34,7 @@ if (qs.has('clean')) document.documentElement.classList.add('clean');
 const SCENES: Record<string, { label: string; url?: string; mb?: number; up: 1 | -1 }> = {
   stone: { label: 'one stone', up: 1 },
   brushes: { label: 'brushes', up: 1 },
+  bench: { label: 'bench', up: 1 },
   mist: { label: 'mist', up: 1 },
   garden: { label: 'garden', up: 1 },
   plush: { label: 'plush', url: 'https://huggingface.co/cakewalk/splat-data/resolve/main/plush.splat', mb: 9, up: -1 },
@@ -54,9 +57,10 @@ function show(s: Splats, name: string, u: 1 | -1) {
   if (name !== 'stone') stone = null;
   if (name !== 'brushes') brushes = null;
   if (name !== 'mist') mist = null;
-  if (name !== 'stone' && name !== 'brushes' && name !== 'mist') R.setOccluder(null);
+  if (name !== 'bench') { bench = null; benchSel = -1; syncBench(); }
+  if (name !== 'stone' && name !== 'brushes' && name !== 'mist' && name !== 'bench') R.setOccluder(null);
   ranks = s.rank ? Float32Array.from(s.rank).sort() : null;
-  document.documentElement.classList.toggle('paper', name === 'stone' || name === 'brushes');
+  document.documentElement.classList.toggle('paper', name === 'stone' || name === 'brushes' || name === 'bench');
   const b = bounds(s);
   cam.target = b.centre; cam.dist = b.radius * 2.2; cam.yaw = 0.6; cam.pitch = 0.3;
   home = { ...cam, target: [...cam.target] as [number, number, number] };
@@ -89,6 +93,7 @@ async function open(name: string) {
     if (name === 'stone') openStone();
     else if (name === 'brushes') openBrushes();
     else if (name === 'mist') openMist();
+    else if (name === 'bench') openBench();
     else if (!sc || !sc.url) { show(garden(Number(qs.get('count') ?? 120000)), 'garden', 1); }
     else show(parse(await fetchWithProgress(sc.url)), name, sc.up);
     loadMs = performance.now() - t0;
@@ -146,8 +151,10 @@ function relight() {
     const end = Math.min(pts.length, i + 500);
     for (; i < end; i++) {
       const p = pts[i].p, ref = needRef ? lightAt(p, sun, eye) : 0;
-      if (needRef) M.drawing.rgba[i * 4 + 1] = enc(ref);
-      M.drawing.rgba[i * 4] = enc(needBake ? lightAt(p, bakeSun, bakeEye) : ref);
+      // (the mist's splats come after the stems' marks)
+      const o = (M.stems + i) * 4;
+      if (needRef) M.drawing.rgba[o + 1] = enc(ref);
+      M.drawing.rgba[o] = enc(needBake ? lightAt(p, bakeSun, bakeEye) : ref);
     }
     $('status').textContent = i < pts.length ? `working out the ${needRef ? 'reference' : 'baked'} light ${Math.round((i / pts.length) * 100)}%` : '';
     if (i < pts.length) setTimeout(chunk, 0); else { R.load(M.drawing); lastDir = null; refReady = true; }
@@ -206,6 +213,91 @@ let orbitFrom: number | null = null;
 const ORBIT_S = 16;
 /** the share of marks the detail keeps by rank (so the even thinning can keep the same number) */
 const shareAt = (d: number) => { if (!ranks) return 1; const thr = 1 - d; let lo = 0, hi = ranks.length; while (lo < hi) { const m = (lo + hi) >> 1; if (ranks[m] < thr) lo = m + 1; else hi = m; } return (ranks.length - lo) / ranks.length; };
+
+
+// ─── the Bench (bench.ts): one brush made dependable, and one stroke made editable ───
+let bench: Bench | null = null, benchSel = -1, benchDirty = false, benchMsg = '';
+const undoStack: Array<ReturnType<Bench['snapshot']>> = [];
+function openBench() {
+  const B = benchScene();
+  show(B.drawing(-1), 'bench', 1);
+  bench = B; benchSel = -1; undoStack.length = 0; benchMsg = `${B.total.toLocaleString()} marks from ${B.fixed.length + B.items.length * 2} elements`;
+  R.setOccluder(B.occluder);
+  framing = { target: [0, 0.62, 0], dist: 3.9 };
+  setView('hero');
+  syncBench();
+}
+/** the drawing again from the cache (after an edit), keeping the camera */
+function benchUpload() {
+  if (!bench) return;
+  const d = bench.drawing(benchSel); scene = d; R.load(d); sorter.data(d); lastDir = null;
+  ranks = Float32Array.from(d.rank).sort();
+}
+/** an edit to the selected stroke: remember how it was (for undo), apply it, deposit again only what it affects */
+function benchEdit(apply: () => void, remember = true) {
+  if (!bench || benchSel < 0) return;
+  if (remember) undoStack.push(bench.snapshot(benchSel));
+  apply(); benchRegen(benchSel);
+}
+function benchRegen(which: number | 'all') {
+  if (!bench) return;
+  const r = bench.regenerate(which);
+  benchMsg = `deposited again: ${r.elements} of ${bench.fixed.length + bench.items.length * 2} elements, ${r.marks.toLocaleString()} of ${bench.total.toLocaleString()} marks, in ${r.ms.toFixed(0)} ms`;
+  benchUpload(); syncBench();
+}
+function benchSelect(i: number) { benchSel = i; benchUpload(); syncBench(); }
+/** a ray from the eye through a point of the screen */
+function rayAt(x: number, y: number): { pos: [number, number, number]; d: [number, number, number] } {
+  const { pos, view } = eye(), r = canvas.getBoundingClientRect(), th = Math.tan(cam.fov / 2), asp = r.width / r.height;
+  const sx = ((x - r.left) / r.width) * 2 - 1, sy = 1 - ((y - r.top) / r.height) * 2;
+  const R0 = [view[0], view[4], view[8]], U = [view[1], view[5], view[9]], F = [-view[2], -view[6], -view[10]];
+  return { pos, d: norm([F[0] + R0[0] * sx * th * asp + U[0] * sy * th, F[1] + R0[1] * sx * th * asp + U[1] * sy * th, F[2] + R0[2] * sx * th * asp + U[2] * sy * th]) };
+}
+/** a point of the scene on the screen (CSS pixels), or null behind the eye */
+function toScreen(p: number[]): [number, number] | null {
+  const { view } = eye(), r = canvas.getBoundingClientRect(), f = 1 / Math.tan(cam.fov / 2), asp = r.width / r.height;
+  const cx = view[0] * p[0] + view[4] * p[1] + view[8] * p[2] + view[12], cy = view[1] * p[0] + view[5] * p[1] + view[9] * p[2] + view[13], cz = view[2] * p[0] + view[6] * p[1] + view[10] * p[2] + view[14];
+  if (cz > -0.02) return null;
+  return [r.left + ((f / asp) * (cx / -cz) + 1) * 0.5 * r.width, r.top + (1 - f * (cy / -cz)) * 0.5 * r.height];
+}
+/** the stroke nearest a tap (within a finger's width of one of its marks), or -1 */
+function benchPick(x: number, y: number): number {
+  if (!bench) return -1;
+  let best = -1, bd = 28;
+  bench.items.forEach((it, i) => { for (const d of bench!.deps(it.stroke.id)) { const s = toScreen(d.p); if (!s) continue; const e = Math.hypot(s[0] - x, s[1] - y); if (e < bd) { bd = e; best = i; } } });
+  return best;
+}
+// (the selected stroke's control points as handles over the canvas: drag one to bend the stroke)
+const handles = $('handles');
+let dragging: { k: number; P0: [number, number, number]; fwd: [number, number, number] } | null = null;
+function placeHandles() {
+  const want = bench && benchSel >= 0 ? bench.items[benchSel].ctrl : [];
+  while (handles.children.length < want.length) {
+    const h = document.createElement('div'), k = handles.children.length;
+    h.addEventListener('pointerdown', (e) => {
+      if (!bench || benchSel < 0) return;
+      e.stopPropagation(); h.setPointerCapture(e.pointerId);
+      undoStack.push(bench.snapshot(benchSel));
+      const c = bench.items[benchSel].ctrl[k];
+      dragging = { k, P0: [c[0], c[1], c[2]], fwd: eye().fwd };
+    });
+    h.addEventListener('pointermove', (e) => {
+      if (!dragging || !bench || benchSel < 0 || dragging.k !== k) return;
+      // (the finger's ray meets the plane through the point facing the eye; on a surface the point is then taken onto it)
+      const { pos, d } = rayAt(e.clientX, e.clientY), f = dragging.fwd, t = dot([dragging.P0[0] - pos[0], dragging.P0[1] - pos[1], dragging.P0[2] - pos[2]], f) / dot(d, f);
+      if (bench.setCtrl(benchSel, k, [pos[0] + d[0] * t, pos[1] + d[1] * t, pos[2] + d[2] * t] as BV)) benchDirty = true;
+    });
+    const up = () => { dragging = null; };
+    h.addEventListener('pointerup', up); h.addEventListener('pointercancel', up);
+    handles.append(h);
+  }
+  [...handles.children].forEach((h, k) => {
+    const el = h as HTMLElement, s = k < want.length ? toScreen(want[k]) : null;
+    el.style.display = s ? 'block' : 'none';
+    if (s) { el.style.left = `${s[0]}px`; el.style.top = `${s[1]}px`; }
+  });
+}
+let syncBench = () => {};
 
 // ─── the sort: in a worker if there is one (the same bundle, `?worker=splats`), else here ───
 const sorter = (() => {
@@ -272,8 +364,10 @@ function paint(x: number, y: number): boolean {
   lastPaint = h.p; features[f] = Math.min(1, features[f] + 0.07);
   return true;
 }
+let tapFrom: { x: number; y: number; t: number } | null = null;
 canvas.addEventListener('pointerdown', (e) => {
   canvas.setPointerCapture(e.pointerId); pts.set(e.pointerId, { x: e.clientX, y: e.clientY }); touched = performance.now();
+  tapFrom = pts.size === 1 ? { x: e.clientX, y: e.clientY, t: performance.now() } : null;
   if (brush && stone && pts.size === 1) { paint(e.clientX, e.clientY); return; }
   if (pts.size === 1) { const t = performance.now(); if (t - lastTap < 300) Object.assign(cam, { ...home, target: [...home.target] }); lastTap = t; }
 });
@@ -294,7 +388,11 @@ canvas.addEventListener('pointermove', (e) => {
   }
   p.x = e.clientX; p.y = e.clientY;
 });
-const lift = (e: PointerEvent) => pts.delete(e.pointerId);
+const lift = (e: PointerEvent) => {
+  // (on the Bench, a tap (no drag) selects the stroke under it, or none)
+  if (bench && tapFrom && e.type === 'pointerup' && Math.hypot(e.clientX - tapFrom.x, e.clientY - tapFrom.y) < 8 && performance.now() - tapFrom.t < 350) { const i = benchPick(e.clientX, e.clientY); if (i !== benchSel) benchSelect(i); }
+  tapFrom = null; pts.delete(e.pointerId);
+};
 canvas.addEventListener('pointerup', lift); canvas.addEventListener('pointercancel', lift);
 canvas.addEventListener('contextmenu', (e) => e.preventDefault());
 canvas.addEventListener('wheel', (e) => { e.preventDefault(); cam.dist *= Math.exp(e.deltaY * 0.001); touched = performance.now(); }, { passive: false });
@@ -358,6 +456,38 @@ LIGHTS.forEach((l) => { const b = document.createElement('button'); b.textConten
 [[1, 'trained bank'], [9, 'unseen bank']].forEach(([k, l]) => { const b = document.createElement('button'); b.textContent = String(l); b.onclick = () => { bank = Number(k); openMist(); }; $('banks').append(b); });
 slider('sunaz', () => sunAz, (v) => { sunAz = v; if (light === 'reference') relight(); }, (v) => `${Math.round((v * 180) / Math.PI)}°`);
 slider('sunel', () => sunEl, (v) => { sunEl = v; if (light === 'reference') relight(); }, (v) => `${Math.round((v * 180) / Math.PI)}°`);
+// (the Bench's own)
+{
+  const segB = (id: string, items: Array<[string, () => void, () => boolean]>) => {
+    const el = $(id);
+    for (const [label, act] of items) { const b = document.createElement('button'); b.textContent = label; b.onclick = () => { act(); syncBench(); }; el.append(b); }
+    return () => [...el.querySelectorAll('button')].forEach((b, k) => { b.setAttribute('aria-pressed', String(items[k][2]())); (b as HTMLButtonElement).disabled = id !== 'b-items' && benchSel < 0; });
+  };
+  const it = () => (bench && benchSel >= 0 ? bench.items[benchSel] : null);
+  const fs = [
+    segB('b-items', ['plane', 'cylinder', 'free'].map((n, i) => [n, () => benchSelect(benchSel === i ? -1 : i), () => benchSel === i] as [string, () => void, () => boolean])),
+    segB('b-materials', (['ink', 'dry', 'washline'] as Material[]).map((m) => [m === 'washline' ? 'wash-line' : m, () => benchEdit(() => bench!.setMaterial(benchSel, m)), () => it()?.stroke.material === m] as [string, () => void, () => boolean])),
+    segB('b-pressures', Object.keys(PRESSURES).map((p) => [p, () => benchEdit(() => bench!.setPressure(benchSel, p)), () => it()?.pressure === p] as [string, () => void, () => boolean])),
+  ];
+  const wEl = $<HTMLInputElement>('b-weight'), dEl = $<HTMLInputElement>('b-density');
+  let wFrom: ReturnType<Bench['snapshot']> | null = null;
+  wEl.onpointerdown = () => { if (bench && benchSel >= 0) wFrom = bench.snapshot(benchSel); };
+  wEl.oninput = () => { if (!bench || benchSel < 0) return; if (!wFrom) wFrom = bench.snapshot(benchSel); bench.setWeight(benchSel, Number(wEl.value)); benchDirty = true; $('b-weight-v').textContent = `${Number(wEl.value).toFixed(2)}×`; };
+  wEl.onchange = () => { if (wFrom) undoStack.push(wFrom); wFrom = null; };
+  dEl.oninput = () => { if (!bench) return; bench.density = Number(dEl.value); $('b-density-v').textContent = `${bench.density}×`; benchRegen('all'); };
+  $('b-undo').onclick = () => { const s = undoStack.pop(); if (!bench || !s) return; bench.restore(s); benchSel = s.item; benchRegen(s.item); };
+  $('b-none').onclick = () => benchSelect(-1);
+  syncBench = () => {
+    $('bench-controls').hidden = !bench;
+    if (!bench) { placeHandles(); return; }
+    fs.forEach((f) => f());
+    wEl.disabled = benchSel < 0; $('b-weight-v').textContent = benchSel >= 0 ? `${bench.weight(benchSel).toFixed(2)}×` : '';
+    if (benchSel >= 0) wEl.value = String(bench.weight(benchSel));
+    dEl.value = String(bench.density); $('b-density-v').textContent = `${bench.density}×`;
+    ($('b-undo') as HTMLButtonElement).disabled = !undoStack.length;
+    $('b-note').textContent = (benchSel >= 0 ? `${bench.items[benchSel].name} stroke selected: drag its points to bend it. ` : 'tap a stroke to select it. ') + benchMsg;
+  };
+}
 $('fold').onclick = () => { const f = document.documentElement.classList.toggle('folded'); $('fold').setAttribute('aria-expanded', String(!f)); $('fold').textContent = f ? 'controls' : 'hide'; };
 $('fold').textContent = 'hide';
 $('flip').onclick = () => { up = up === 1 ? -1 : 1; lastDir = null; };
@@ -372,22 +502,24 @@ function frame() {
     const u = (t - orbitFrom) / 1000 / ORBIT_S;
     cam.yaw = VIEWS.hero.yaw + Math.min(1, u) * Math.PI * 2;
     if (u >= 1) { orbitFrom = null; syncStone(); }
-  } else if (!stone && !brushes && (preview || t - touched > 8000)) cam.yaw += dt * 0.15;
+  } else if (!stone && !brushes && !bench && (preview || t - touched > 8000)) cam.yaw += dt * 0.15;
   else if ((stone || brushes) && preview) cam.yaw += dt * 0.25;
   // (the canvas at the resolution asked, never past the screen's)
   const dpr = Math.min(res, devicePixelRatio || 1), w = Math.round(canvas.clientWidth * dpr), h = Math.round(canvas.clientHeight * dpr);
   if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
+  if (bench && benchDirty && benchSel >= 0) { benchDirty = false; benchRegen(benchSel); }
+  if (bench) placeHandles();
   const { view, fwd, pos } = eye();
   // (sorted again once the view's turned more than a little, and the last sort's in)
   if (scene && !sorter.busy && (!lastDir || dot(lastDir, fwd) < 0.9995)) { lastDir = fwd; sorter.ask(fwd); }
   const near = Math.max(0.01, cam.dist * 0.01), proj = perspective(cam.fov, w / h, near, cam.dist * 100);
   const fy = h / (2 * Math.tan(cam.fov / 2));
   const share = shareAt(detail);
-  R.draw(view, proj, [fy, fy], { size, mode, bg: mist ? [0.13, 0.145, 0.165] : stone || brushes ? [0.937, 0.906, 0.847] : theme(), detail, thin, share, features, eye: pos, occlude, only, light: mist ? Math.max(0, LIGHTS.indexOf(light) - 1) : 0, sun: sunDir(sunAz, sunEl), diff: mist ? diff : false });
+  R.draw(view, proj, [fy, fy], { size, mode, bg: mist ? [0.13, 0.145, 0.165] : stone || brushes || bench ? [0.937, 0.906, 0.847] : theme(), detail, thin, share, features, eye: pos, occlude, only, light: mist ? Math.max(0, LIGHTS.indexOf(light) - 1) : 0, sun: sunDir(sunAz, sunEl), diff: mist ? diff : false });
   frames++;
   if (t - fpsT > 500) {
     fps = (frames * 1000) / (t - fpsT); frames = 0; fpsT = t;
-    $('stats').textContent = (stone || brushes) && scene ? `${Math.round(shareAt(detail) * scene.n)} of ${scene.n} marks${features.some((v) => v > 0) ? ' + brushed' : ''} · ${fps.toFixed(0)} fps` : scene ? `${(scene.n / 1000).toFixed(0)}k splats · ${fps.toFixed(0)} fps · sort ${sortMs.toFixed(0)} ms${sorter.worker ? '' : ' (here)'} · ${w}×${h} · loaded in ${(loadMs / 1000).toFixed(1)} s` : '';
+    $('stats').textContent = (stone || brushes || bench) && scene ? `${Math.round(shareAt(detail) * scene.n)} of ${scene.n} marks${features.some((v) => v > 0) ? ' + brushed' : ''} · ${fps.toFixed(0)} fps` : scene ? `${(scene.n / 1000).toFixed(0)}k splats · ${fps.toFixed(0)} fps · sort ${sortMs.toFixed(0)} ms${sorter.worker ? '' : ' (here)'} · ${w}×${h} · loaded in ${(loadMs / 1000).toFixed(1)} s` : '';
   }
   requestAnimationFrame(frame);
 }
@@ -395,6 +527,12 @@ function frame() {
 (window as unknown as { __splats: unknown }).__splats = {
   get scene() { return scene ? { name: sceneName, n: scene.n } : null; }, cam, get fps() { return fps; }, get sortMs() { return sortMs; }, get drawn() { return R.drawn; },
   setMode: (m: number) => { mode = m; syncModes(); }, open, openUrl,
+  bench: {
+    get state() { return bench ? { selected: benchSel, items: bench.items.map((it) => ({ name: it.name, id: it.stroke.id, ctrl: it.ctrl, material: it.stroke.material, pressure: it.pressure, weight: bench!.weight(bench!.items.indexOf(it)), marks: bench!.deps(it.stroke.id).length })), total: bench.total, density: bench.density, undo: undoStack.length, msg: benchMsg } : null; },
+    select: (i: number) => benchSelect(i), pick: (x: number, y: number) => benchPick(x, y), screen: (p: number[]) => toScreen(p),
+    drag: (k: number, p: BV) => benchEdit(() => bench!.setCtrl(benchSel, k, p)), material: (m: Material) => benchEdit(() => bench!.setMaterial(benchSel, m)), pressure: (p: string) => benchEdit(() => bench!.setPressure(benchSel, p)), weight: (w: number) => benchEdit(() => bench!.setWeight(benchSel, w)),
+    undo: () => $('b-undo').click(), density: (d: number) => { if (bench) { bench.density = d; benchRegen('all'); } },
+  },
   mist: { setDiff: (d: boolean) => { diff = d; relight(); }, setLight: (l: string) => { light = l; relight(); syncMist(); }, setSun: (az: number, el: number) => { sunAz = az; sunEl = el; relight(); }, setBank: (b: number) => { bank = b; openMist(); }, get ready() { return refReady; } },
   stone: { setView, setDetail: (d: number) => { detail = d; syncDetail(); syncStone(); }, setThin: (k: number) => { thin = k; }, setLook: (l: Look) => { look = l; if (brushes) openBrushes(); else openStone(); }, frame: (s: string | null) => { frameSubject(s); setView('hero'); }, paint, clear: () => { features.fill(0); lastPaint = null; }, features,
     /** a touch at a point of the stone (world), as the brush would make it from the eye; and the stone's own lines */

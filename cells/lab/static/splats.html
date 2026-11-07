@@ -22,7 +22,8 @@ header a{pointer-events:auto;font:11px ui-monospace,monospace;color:var(--muted)
 #stats{font:11px ui-monospace,monospace;color:var(--muted);font-variant-numeric:tabular-nums}
 .sliders{display:grid;grid-template-columns:1fr 1fr;gap:4px 14px;font-size:12px;color:var(--muted)}.sliders label{display:flex;flex-direction:column;gap:2px}.sliders .v{float:right;font-family:ui-monospace,monospace;color:var(--ink)}
 input[type=range]{width:100%;accent-color:var(--accent)}
-#mist-controls{display:flex;flex-direction:column;gap:8px}#mist-controls[hidden]{display:none}.note{font-size:11px;color:var(--muted)}
+#mist-controls,#bench-controls{display:flex;flex-direction:column;gap:8px}#mist-controls[hidden],#bench-controls[hidden]{display:none}
+#handles{position:fixed;inset:0;pointer-events:none;z-index:2}#handles div{position:absolute;width:30px;height:30px;margin:-15px 0 0 -15px;border-radius:50%;border:2px solid #a8482a;background:rgba(168,72,42,.15);pointer-events:auto;touch-action:none;cursor:grab}#handles div::after{content:'';position:absolute;left:11px;top:11px;width:4px;height:4px;border-radius:50%;background:#a8482a}.note{font-size:11px;color:var(--muted)}
 #stone-controls{display:flex;flex-direction:column;gap:8px}#stone-controls[hidden]{display:none}.sliders.one{grid-template-columns:1fr}
 .paper{--bg:#efe7d8;--card:rgba(246,241,231,.9);--ink:#2a2420;--muted:#7a7166;--edge:#d8cfbf;color-scheme:light}
 .preview header,.preview #panel,.clean header,.clean #panel,.clean #fold{display:none!important}
@@ -32,6 +33,7 @@ input[type=range]{width:100%;accent-color:var(--accent)}
 <canvas id="view" aria-label="The splat scene. Drag to turn it, pinch to come closer, two fingers to move, double tap to frame it again."></canvas>
 <header><div><strong>Splats</strong> <small>gaussian splatting, from scratch</small></div><a href="/splats/readme">how it works</a></header>
 <div id="status">starting</div>
+<div id="handles"></div>
 <button id="fold" aria-expanded="true">controls</button>
 <div id="panel">
   <div class="row" id="scenes"><span class="lab">scene</span><label class="file" id="file-label">your file…<input type="file" id="file" accept=".splat,.ply"></label></div>
@@ -42,6 +44,14 @@ input[type=range]{width:100%;accent-color:var(--accent)}
     <div class="row" id="states"><span class="lab">state</span></div>
     <div class="row" id="thins"><span class="lab">thin</span></div>
     <div class="row" id="tools"><span class="lab">hand</span></div>
+  </div>
+  <div id="bench-controls" hidden>
+    <div class="row" id="b-items"><span class="lab">stroke</span></div>
+    <div class="row" id="b-materials"><span class="lab">material</span></div>
+    <div class="row" id="b-pressures"><span class="lab">pressure</span></div>
+    <div class="sliders"><label>weight <span class="v" id="b-weight-v"></span><input type="range" id="b-weight" min="0.4" max="2.2" step="0.05"></label><label>density <span class="v" id="b-density-v"></span><input type="range" id="b-density" min="0.5" max="2" step="0.5"></label></div>
+    <div class="row"><button id="b-undo">undo</button><button id="b-none">deselect</button></div>
+    <div id="b-note" class="note">tap a stroke to select it; drag its points to bend it</div>
   </div>
   <div id="mist-controls" hidden>
     <div class="row" id="lights"><span class="lab">light</span></div>
