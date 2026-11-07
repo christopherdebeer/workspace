@@ -17,7 +17,7 @@
 import { Renderer } from './render';
 import { bounds, garden, parse, type Splats } from './format';
 import { Sorter, type SortDone } from './sort';
-import { oneStone, stoneShape, type Look, type Stone } from './stone';
+import { MARK, oneStone, stoneShape, type Look, type Stone } from './stone';
 
 const qs = new URLSearchParams(location.search);
 const preview = qs.has('preview');
@@ -93,7 +93,9 @@ async function openUrl(url: string) {
 // ─── One Stone ───
 let stone: Stone | null = null, look: Look = qs.get('look') === 'wash' ? 'wash' : 'dry', ranks: Float32Array | null = null;
 let detail = Number(qs.get('detail') ?? 1), thin = qs.get('thin') === 'even' ? 1 : 0, brush = qs.has('brush'), occlude = qs.get('occluder') !== '0';
-const reveals: Array<[number, number, number, number]> = [];
+/** `?only=fracture|wash|stipple|contour|shadow|lip|chip`: one kind of mark alone */
+let only = qs.has('only') ? (MARK as Record<string, number>)[qs.get('only')!] ?? -1 : -1;
+const reveals: Array<[number, number, number, number]> = [], revealNormals: Array<[number, number, number]> = [];
 const shape = (() => { let s: Stone | null = null; return () => (s ??= stoneShape()); })();
 function openStone() {
   const S = shape();
@@ -101,7 +103,7 @@ function openStone() {
   stone = S;
   // (its shape, drawn into the depth buffer only, shrunk a little toward its middle so the marks on its surface stand in
   // front of it, and only what's on the far side is hidden)
-  const k = 0.985, tri = new Float32Array(S.tris.length * 3);
+  const k = 0.99, tri = new Float32Array(S.tris.length * 3);
   for (let i = 0; i < S.tris.length; i++) for (let a = 0; a < 3; a++) tri[i * 3 + a] = S.centre[a] + (S.pos[S.tris[i] * 3 + a] - S.centre[a]) * k;
   R.setOccluder(tri);
   setView((qs.get('view') as 'hero' | 'grazing' | 'reverse') ?? 'hero');
@@ -176,10 +178,10 @@ function paint(x: number, y: number): boolean {
   const d = norm([F[0] + R0[0] * sx * th * asp + U[0] * sy * th, F[1] + R0[1] * sx * th * asp + U[1] * sy * th, F[2] + R0[2] * sx * th * asp + U[2] * sy * th]);
   const h = stone.ray(pos, d);
   if (!h) return false;
-  const last = reveals[reveals.length - 1];
-  if (last && Math.hypot(last[0] - h.p[0], last[1] - h.p[1], last[2] - h.p[2]) < 0.07) return true;
-  reveals.push([h.p[0], h.p[1], h.p[2], 0.32]);
-  if (reveals.length > 24) reveals.shift();
+  // (a patch already near here, on the same side, covers it: patches merge, so a long session keeps what it brushed)
+  if (reveals.some((q, k) => Math.hypot(q[0] - h.p[0], q[1] - h.p[1], q[2] - h.p[2]) < 0.12 && dot(revealNormals[k], h.n) > 0.5)) return true;
+  reveals.push([h.p[0], h.p[1], h.p[2], 0.3]); revealNormals.push(h.n);
+  if (reveals.length > 48) { reveals.shift(); revealNormals.shift(); }
   return true;
 }
 canvas.addEventListener('pointerdown', (e) => {
@@ -255,7 +257,7 @@ const syncs = [
   seg('looks', [['dry', () => { look = 'dry'; const c = { ...cam, target: [...cam.target] }; openStone(); Object.assign(cam, c); }, () => look === 'dry'], ['wash', () => { look = 'wash'; const c = { ...cam, target: [...cam.target] }; openStone(); Object.assign(cam, c); }, () => look === 'wash']]),
   seg('thins', [['by rank', () => { thin = 0; }, () => thin === 0], ['evenly', () => { thin = 1; }, () => thin === 1]]),
   seg('views', [['hero', () => setView('hero'), () => false], ['grazing', () => setView('grazing'), () => false], ['reverse', () => setView('reverse'), () => false], ['orbit', () => { setView('hero'); orbitFrom = performance.now(); }, () => orbitFrom !== null]]),
-  seg('tools', [['brush', () => { brush = !brush; }, () => brush], ['clear', () => { reveals.length = 0; }, () => false], ['occluder', () => { occlude = !occlude; }, () => occlude]]),
+  seg('tools', [['brush', () => { brush = !brush; }, () => brush], ['clear', () => { reveals.length = 0; revealNormals.length = 0; }, () => false], ['occluder', () => { occlude = !occlude; }, () => occlude]]),
 ];
 function syncStone() { syncs.forEach((f) => f()); $('stone-controls').hidden = !stone; }
 slider('detail', () => detail, (v) => { detail = v; }, (v) => `${Math.round(v * 100)}%`);
@@ -284,7 +286,7 @@ function frame() {
   const near = Math.max(0.01, cam.dist * 0.01), proj = perspective(cam.fov, w / h, near, cam.dist * 100);
   const fy = h / (2 * Math.tan(cam.fov / 2));
   const share = shareAt(detail);
-  R.draw(view, proj, [fy, fy], { size, mode, bg: stone ? [0.937, 0.906, 0.847] : theme(), detail, thin, share, reveals, eye: pos, occlude });
+  R.draw(view, proj, [fy, fy], { size, mode, bg: stone ? [0.937, 0.906, 0.847] : theme(), detail, thin, share, reveals, revealNormals, eye: pos, occlude, only });
   frames++;
   if (t - fpsT > 500) {
     fps = (frames * 1000) / (t - fpsT); frames = 0; fpsT = t;
@@ -296,7 +298,7 @@ function frame() {
 (window as unknown as { __splats: unknown }).__splats = {
   get scene() { return scene ? { name: sceneName, n: scene.n } : null; }, cam, get fps() { return fps; }, get sortMs() { return sortMs; }, get drawn() { return R.drawn; },
   setMode: (m: number) => { mode = m; syncModes(); }, open, openUrl,
-  stone: { setView, setDetail: (d: number) => { detail = d; }, setThin: (k: number) => { thin = k; }, setLook: (l: Look) => { look = l; openStone(); }, paint, clear: () => { reveals.length = 0; }, setBrush: (b: boolean) => { brush = b; }, setOccluder: (b: boolean) => { occlude = b; }, orbit: () => { setView('hero'); orbitFrom = performance.now(); }, at: (yaw: number, pitch: number) => { cam.yaw = yaw; cam.pitch = pitch; orbitFrom = null; } },
+  stone: { setView, setDetail: (d: number) => { detail = d; }, setThin: (k: number) => { thin = k; }, setLook: (l: Look) => { look = l; openStone(); }, paint, clear: () => { reveals.length = 0; revealNormals.length = 0; }, setBrush: (b: boolean) => { brush = b; }, setOccluder: (b: boolean) => { occlude = b; }, setOnly: (k: number) => { only = k; }, orbit: () => { setView('hero'); orbitFrom = performance.now(); }, at: (yaw: number, pitch: number) => { cam.yaw = yaw; cam.pitch = pitch; orbitFrom = null; } },
 };
 if (qs.has('url')) void openUrl(qs.get('url')!); else void open(qs.get('scene') ?? 'garden');
 if (qs.has('orbit')) setTimeout(() => { setView('hero'); orbitFrom = performance.now(); }, 300);

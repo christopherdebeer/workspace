@@ -70,41 +70,56 @@ Captured scenes are the examples from antimatter15's viewer, hosted on Hugging F
 of drawing itself, and the Gaussian is what the marks are made of. The interesting decisions are where a mark belongs,
 what it describes, and when the drawing can do without it.
 
-One faceted boulder, with one ledge and one seam, on warm paper. Its marks:
+**The stone** is a cut stone on warm paper: broad slab faces, a wedge silhouette (tall at one end, tapering to the
+other), a ledge whose overhang has a flat underside (the soffit), and a seam in a fracture plane. It's exact. The mesh is
+each plane's polygon cut by the others, rays meet the planes, faces are sampled as their own polygons, and edges are
+the true arrises where planes meet. So the marks describe geological structure the surface really has.
 
-| mark | placed by | in motion |
+**The marks come in strokes.** Every mark belongs to a stroke (the seam, its branch, the ledge's lip, a face's wash, a
+tuft of moss, the contact shadow). The stroke has one survival rank, and each mark's rank is the stroke's minus how
+peripheral it is. So as the detail falls, a stroke *shortens*: the seam withdraws from its far end and keeps its hook,
+the lip shortens from both ends, a face's wash withdraws toward its darkest pool, and moss loses its outliers. Nothing
+crumbles into scattered pieces.
+
+| mark | what it describes | in motion |
 |---|---|---|
-| **fracture** | the seam: a curve hooking over the crown, of overlapping splats long along its tangent, spaced, tapered, broken twice; a branch off it | stays on the rock and goes behind it |
-| **lip** | the facet edges where the ledge overhangs | the same: the ledge comes into view from behind |
-| **wash** | the faces turned from the light, and the ledge's underside most: hatching (dry) or broad faint discs that pool (wash) | goes first as the drawing simplifies |
-| **stipple** | moss: three tufts caught on the seam's damp side, two at the foot; dense cores, loose outliers | the outliers drop away, the tuft still reads |
-| **shadow** | the ground at the foot, reaching away from the light | kept long |
-| **contour** | candidates all over the surface, flat discs. A flat disc seen edge-on projects to a short line along the profile, so the shader fades each by how far its face is from edge-on, over a range of angles | belongs to this view: accents move round the profile as it turns |
+| **fracture** | the seam: tapered, broken twice; a branch | stays on the rock and goes behind it |
+| **lip** | the ledge's edge, a straight line | the ledge comes into view from behind |
+| **wash** | one tone for each face by how it's turned from the light: lit faces none, half-lit one, shadowed two, the recess and the soffit under the ledge darkest | goes first; the ledge's weight goes last of the wash |
+| **stipple** | moss on the seam's damp side and at the foot | the outliers go first |
+| **shadow** | the ground at the foot, reaching away from the light, and a dark found edge where stone meets ground | kept long |
+| **contour** | marks along every arris, each knowing both its faces' normals | drawn only where one face turns toward you and the other away: the profile from this view, eased in as a face turns, broken into accents |
 
-The fracture belongs to the rock and the contour belongs to this view of the rock. That split makes it read as a drawing
-made from a 3D subject.
+The fracture belongs to the rock and the contour belongs to this view of the rock.
 
-**Occluder.** The stone's own faceted shape, shrunk 1.5% toward its middle, is drawn into the depth buffer only, and
-the marks are tested against it. A face left blank still hides what's behind it. Check it with the *occluder* toggle
-from the reverse and grazing views: without it, the far side's hatching shows through.
+**The two looks.** Same shape, camera and roughly the same number of marks (about 4,500 each).
+- *Dry* tests how little it takes: broken seams, chips, parallel hatching (each face its own direction, closer the
+  darker), clean paper.
+- *Wash* tests whether the Gaussian's softness earns its place. Each face gets broad soft discs laid exactly on its
+  plane, shrinking toward its arrises so the tone stays soft inside but holds at the edge. A darker rim gathers along
+  the face's lower edges, where a wash's water runs and dries. A little granulation settles in the darkest washes, and
+  the seam bleeds into the shadow side only. The result is tonal planes, which hatching can only suggest.
 
-**Detail.** Every mark has a rank, the order it goes in. The wash goes first (the general wash before the wash under
-the ledge), then loose stipple and chips, then the moss cores and contour accents. The branch, shadow, lip and hooked
-seam go last. *Evenly* thins the same number of marks at random, for comparison: by rank, a quarter of the marks still
-draws the stone, while even thinning fades everything alike. Marks ease out over a band rather than popping.
+Two renderer details make the wash possible. Each corner of a mark's quad takes the depth of the surface the mark lies
+on, so a broad disc on a face turned away isn't cut by the face's own depth. And the stone's exact mesh is the depth
+occluder, so a blank face still hides the far side (toggle *occluder* in the reverse and grazing views to see it).
 
-**Brush.** With *brush* on, a finger on the stone brings the detail back round where it touches. The patch is a point
-on the stone, so it stays on the surface as you turn.
+**Detail.** The wash goes first (half-lit, then shadow), then chips and loose stipple, then moss cores and contour
+accents. The branch, shadow, the wash under the ledge, the lip and the hooked seam go last. *Evenly* thins the same
+number of marks at random, for comparison.
 
-**Two looks.** *Dry* tests how little it takes to convey form: dark broken seams, chips, hatching and clean paper.
-*Wash* tests whether the Gaussian's softness earns its place: pooled wash, feathered seams, soft moss. Both use the
-same shape, camera and roughly the same number of marks.
+**Brush.** With *brush* on, a finger on the stone brings the detail back where it touches. Patches merge, up to 48
+are kept, and each is bound to the face it was laid on, so it doesn't reach through a thin ledge. A patch stays on the
+surface as you turn.
 
-Boards: `node cells/lab/devtools/splats-stone.mjs [views|detail|occluder|brush]`.
+`?only=wash|fracture|contour|stipple|shadow|lip|chip` shows one kind of mark alone.
 
-Next, from here: the Bamboo connection. A cliff face could give up its wash while a ledge keeps its lip and a fissure
-its line. A culm could keep its silhouette and nodes while its shaded body drops away. Each feature simplifies by
-what lets you recognise it in motion.
+Boards: `node cells/lab/devtools/splats-stone.mjs [views|pairs [dry|wash]|detail|occluder|brush]`. *pairs* is the
+board for judging against a reference: within one look, the three cameras crossed with resolved and sparse detail, the
+camera and marks fixed.
+
+Next: the Bamboo connection. A cliff face could give up its wash while a ledge keeps its lip and a fissure its line.
+A culm could keep its silhouette and nodes while its shaded body drops away.
 
 ## Where it could go
 
@@ -122,7 +137,7 @@ Roughly in order of what each teaches:
 
 ## Flags
 
-`?scene=stone|garden|plush|nike|train` · `?look=dry|wash` · `?detail=0..1` · `?thin=even` · `?view=hero|grazing|reverse` · `?orbit` · `?brush` · `?occluder=0` · `?clean` (no controls) · `?url=…` (any `.splat` or `.ply` CORS lets it read) · `?up=1` (for a file that's
+`?scene=stone|garden|plush|nike|train` · `?look=dry|wash` · `?detail=0..1` · `?thin=even` · `?only=wash` · `?view=hero|grazing|reverse` · `?orbit` · `?brush` · `?occluder=0` · `?clean` (no controls) · `?url=…` (any `.splat` or `.ply` CORS lets it read) · `?up=1` (for a file that's
 y-up) · `?mode=0..3` · `?size=` · `?res=` · `?count=` (garden size) · `?noworkers` · `?preview`
 
 Checks: `node cells/lab/devtools/splats.test.mjs` (formats, covariance, sort) and

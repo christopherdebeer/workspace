@@ -2,6 +2,8 @@
 // - views: both looks (dry, wash) from the hero, grazing and reverse views (stone-views.png)
 // - detail: the detail scrubbed down, by rank against evenly, at the same number of marks (stone-detail.png)
 // - occluder: the far side's marks with and without the stone's depth (stone-occluder.png)
+// - pairs [look]: within one look, the three cameras crossed with sparse and resolved detail, the camera and the marks
+//   fixed (stone-pairs-<look>.png): the board for judging the drawing against the reference
 // - brush: the drawing spare, one patch brushed back, then seen from round the side (stone-brush.png)
 import { withWood } from './harness.mjs';
 process.env.EXPERIMENT = 'splats'; process.env.READY = '__splats';
@@ -26,6 +28,15 @@ await withWood(async (wood) => {
     for (const d of [1, 0.7, 0.45, 0.2]) for (const th of [0, 1]) { await S('setDetail', d); await S('setThin', th); shots.push(await shot(`stone-detail-${d}-${th}`)); labels.push(`${Math.round(d * 100)}% · ${th ? 'even' : 'by rank'} · ${(await stats()).split(' ·')[0]}`); }
     await S('setDetail', 1); await S('setThin', 0);
     await wood.montage(shots, 'stone-detail', { height: 460, labels });
+  }
+  if (which === 'all' || which === 'pairs') {
+    for (const look of process.argv[3] ? [process.argv[3]] : ['wash', 'dry']) {
+      const shots = [], labels = [];
+      await S('setLook', look); await S('setThin', 0);
+      for (const d of [1, 0.3]) for (const v of ['hero', 'grazing', 'reverse']) { await S('setView', v); await S('setDetail', d); shots.push(await shot(`stone-pair-${look}-${v}-${d}`)); labels.push(`${look} · ${v} · ${d === 1 ? 'resolved' : 'sparse'} · ${(await stats()).split(' ·')[0]}`); }
+      await S('setDetail', 1);
+      await wood.montage(shots, `stone-pairs-${look}`, { height: 520, labels, columns: 3 });
+    }
   }
   if (which === 'all' || which === 'occluder') {
     const shots = [], labels = [];

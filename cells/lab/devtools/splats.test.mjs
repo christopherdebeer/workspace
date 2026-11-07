@@ -61,6 +61,28 @@ ok('parse() tells a .splat by its bytes', F.parse(F.encodeSplat(g)).n === g.n);
   const t0 = performance.now(), big = F.garden(500000, 1); const t1 = performance.now(); new S.Sorter().sort(big.pos, big.n, d); const t2 = performance.now();
   console.log(`      (half a million splats: made in ${(t1 - t0).toFixed(0)} ms, sorted in ${(t2 - t1).toFixed(0)} ms here)`);
 }
+// (One Stone: the cut stone's rays, faces and marks)
+{
+  const ST = await load('../client/splats/stone.ts');
+  const S = ST.stoneShape();
+  let hits = 0, onFace = 0;
+  for (let k = 0; k < 400; k++) { const a = k * 2.399, z = 1 - 2 * ((k + 0.5) / 400), r = Math.sqrt(1 - z * z), d = [Math.cos(a) * r, z, Math.sin(a) * r]; const h = S.ray(S.centre, d); if (h) { hits++; if (h.p[1] >= -1e-6) onFace++; } }
+  ok('stone: every ray from its middle meets its surface, at or above the ground', hits === 400 && onFace === 400, { hits, onFace });
+  const eye = [3, 1.5, 3], dir = ST.polyRay ? [-3, -1.1, -3] : null, l = Math.hypot(...dir), hit = ST.polyRay(eye, dir.map((v) => v / l));
+  ok('stone: a ray from an eye outside enters it', !!hit && hit.t > 0);
+  ok('stone: its exact mesh has the ledge\'s recess and soffit', [...S.region].includes(ST.RECESS) && [...S.region].includes(ST.SOFFIT) && S.tris.length / 3 > 20);
+  for (const look of ['dry', 'wash']) {
+    const d = ST.oneStone(look, S);
+    const finite = d.pos.every(Number.isFinite) && d.scale.every((v) => Number.isFinite(v) && v > 0) && d.rank.every((v) => v >= 0 && v <= 1);
+    const kinds = new Set(d.mark);
+    ok(`stone, ${look}: ${d.n} marks, all finite, ranked, every kind there`, finite && [1, 2, 3, 4, 5, 6].every((k) => kinds.has(k)), [...kinds]);
+    // (a stroke shortens rather than crumbling: its marks' ranks fall off from its heart, so at any threshold what's
+    // left of the seam is one run)
+    const seam = d.stroke[[...d.mark].indexOf(1)], idx = [...d.stroke.keys()].filter((i) => d.stroke[i] === seam), thr = 0.82;
+    const kept = idx.map((i) => d.rank[i] > thr), runs = kept.filter((v, k) => v && !kept[k - 1]).length;
+    ok(`stone, ${look}: the seam at ${thr} is one run, not fragments`, runs === 1, runs);
+  }
+}
 if (R) {
   ok('half floats: 1, 0.5, 65504, 2e-5 round trip', R.toHalf(1) === 0x3c00 && R.toHalf(0.5) === 0x3800 && R.toHalf(65504) === 0x7bff && R.toHalf(0) === 0);
 }

@@ -32,8 +32,9 @@ uniform mat4 u_view, u_proj;
 uniform vec2 u_focal, u_viewport;
 uniform vec3 u_eye;
 uniform float u_size, u_detail, u_share;
-uniform int u_mode, u_thin, u_reveals;
-uniform vec4 u_reveal[24];
+uniform int u_mode, u_thin, u_reveals, u_only;
+uniform vec4 u_reveal[48];
+uniform vec3 u_revealN[48];
 in vec2 a_corner;
 in uint a_index;
 out vec4 v_color;
@@ -58,17 +59,29 @@ void main() {
   // (a drawing's mark: how much of it the detail keeps)
   float rank = float(d1.w & 255u) / 255.0;
   uint kind = (d1.w >> 8) & 255u;
+  if (u_only >= 0 && int(kind) != u_only) return;
   float detail = u_detail;
-  for (int k = 0; k < 24; k++) { if (k >= u_reveals) break; float dd = distance(p, u_reveal[k].xyz); detail = max(detail, 1.0 - smoothstep(0.5 * u_reveal[k].w, u_reveal[k].w, dd)); }
+  vec3 sn = octDecode(vec2(float((d1.w >> 16) & 255u), float(d1.w >> 24)) / 127.5 - 1.0);
+  // (round each point the brush touched, on the surface it touched: a mark on a face turned away (the other side of a
+  // thin ledge) isn't brought back by it; the ground's marks, lying flat, by any patch near the foot)
+  for (int k = 0; k < 48; k++) {
+    if (k >= u_reveals) break;
+    if (dot(sn, u_revealN[k]) < 0.2 && sn.y < 0.9) continue;
+    float dd = distance(p, u_reveal[k].xyz);
+    detail = max(detail, 1.0 - smoothstep(0.5 * u_reveal[k].w, u_reveal[k].w, dd));
+  }
   // (kept by rank against the detail asked, or thinned evenly to the same share; and round what the brush touched, all of it
   // brought back by rank)
   float keep = u_thin == 1 ? smoothstep(1.0 - u_share - 0.03, 1.0 - u_share, hash(a_index) * 0.999) : smoothstep(1.0 - u_detail - 0.04, 1.0 - u_detail, rank);
   if (detail > u_detail + 0.001) keep = max(keep, smoothstep(1.0 - detail - 0.04, 1.0 - detail, rank));
   // (a contour mark: there only where its surface is near edge-on from here, eased over a range of angles)
   if (kind == 4u) {
-    vec3 n = octDecode(vec2(float((d1.w >> 16) & 255u), float(d1.w >> 24)) / 127.5 - 1.0);
-    float f = abs(dot(n, normalize(u_eye - p)));
-    keep *= 1.0 - smoothstep(0.05, 0.2, f);
+    // (its second face's normal rides in its colour (it's always ink): drawn where the two faces are turned opposite
+    // ways from the eye, eased in as the turning face passes edge-on)
+    vec3 v = normalize(u_eye - p), n2 = octDecode(vec2(float(d0.w & 255u), float((d0.w >> 8) & 255u)) / 127.5 - 1.0);
+    float s1 = dot(sn, v), s2 = dot(n2, v);
+    keep *= s1 * s2 < 0.0 ? smoothstep(0.0, 0.12, min(abs(s1), abs(s2))) : 0.0;
+    v_color.rgb = vec3(36.0, 31.0, 27.0) / 255.0;
   }
   if (u_mode != 0 && u_mode != 3) keep = keep > 0.02 ? 1.0 : 0.0;
   if (keep < 0.01) return;
@@ -91,8 +104,21 @@ void main() {
   vec2 px = 3.0 * (a_corner.x * sqrt(l1) * e1 + a_corner.y * sqrt(l2) * e2);
   if (u_mode == 3) px = a_corner * 1.5;
   v_r = a_corner * 3.0;
-  vec2 ndc = clip.xy / clip.w;
-  gl_Position = vec4(ndc + px * 2.0 / u_viewport, clip.z / clip.w, 1.0);
+  vec2 ndc = clip.xy / clip.w, at = ndc + px * 2.0 / u_viewport;
+  gl_Position = vec4(at, clip.z / clip.w, 1.0);
+  // (a drawing's mark lies on a surface: each corner of its quad given the depth of that surface under it (the ray
+  // through the corner meeting the mark's plane), so a broad mark on a face turned away isn't cut by the face's own
+  // depth; a captured scene's splats, or a plane seen edge-on, keep their centre's depth)
+  if (kind != 0u && kind != 4u) {
+    vec3 nv = mat3(u_view) * sn, d = vec3(at.x / u_proj[0][0], at.y / u_proj[1][1], -1.0);
+    float dn = dot(nv, d);
+    if (abs(dn) > 0.05) {
+      float tt = dot(nv, cam.xyz) / dn;
+      vec3 X = d * clamp(tt, -cam.z - 0.5, -cam.z + 0.5);
+      vec4 cx = u_proj * vec4(X, 1.0);
+      gl_Position = vec4(at * cx.w, cx.z, cx.w);
+    }
+  }
 }`;
 const FS = `#version 300 es
 precision highp float; precision highp int;
@@ -129,11 +155,13 @@ export interface DrawOpts {
   size: number; mode: number; bg: [number, number, number];
   /** how much of a drawing's marks to keep (1 all), and how: by their ranks (0), or thinned evenly (1) keeping `share` */
   detail?: number; thin?: number; share?: number;
-  /** points the brush brought detail back round: x y z radius */
-  reveals?: Array<[number, number, number, number]>;
+  /** points the brush brought detail back round: x y z radius, and the surface's normal there */
+  reveals?: Array<[number, number, number, number]>; revealNormals?: Array<[number, number, number]>;
   eye?: [number, number, number];
   /** draw the occluder into the depth buffer (if there is one) */
   occlude?: boolean;
+  /** only one kind of mark (stone.ts MARK), or all (-1) */
+  only?: number;
 }
 
 export class Renderer {
@@ -149,9 +177,10 @@ export class Renderer {
     const sh = (type: number, src: string) => { const s = gl.createShader(type)!; gl.shaderSource(s, src); gl.compileShader(s); if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s) ?? 'shader'); return s; };
     const link = (vs: string, fs: string) => { const p = gl.createProgram()!; gl.attachShader(p, sh(gl.VERTEX_SHADER, vs)); gl.attachShader(p, sh(gl.FRAGMENT_SHADER, fs)); gl.linkProgram(p); if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p) ?? 'link'); return p; };
     const p = this.prog = link(VS, FS);
-    for (const k of ['u_data', 'u_view', 'u_proj', 'u_focal', 'u_viewport', 'u_size', 'u_mode', 'u_eye', 'u_detail', 'u_share', 'u_thin', 'u_reveals', 'u_reveal']) this.u[k] = gl.getUniformLocation(p, k);
+    for (const k of ['u_data', 'u_view', 'u_proj', 'u_focal', 'u_viewport', 'u_size', 'u_mode', 'u_eye', 'u_detail', 'u_share', 'u_thin', 'u_reveals', 'u_reveal', 'u_revealN', 'u_only']) this.u[k] = gl.getUniformLocation(p, k);
     // (an array's location, by its first element's name, where the bare name isn't found)
     this.u.u_reveal ??= gl.getUniformLocation(p, 'u_reveal[0]');
+    this.u.u_revealN ??= gl.getUniformLocation(p, 'u_revealN[0]');
     this.vao = gl.createVertexArray()!; gl.bindVertexArray(this.vao);
     const quad = gl.createBuffer()!; gl.bindBuffer(gl.ARRAY_BUFFER, quad); gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
     const ac = gl.getAttribLocation(p, 'a_corner'); gl.enableVertexAttribArray(ac); gl.vertexAttribPointer(ac, 2, gl.FLOAT, false, 0, 0);
@@ -210,10 +239,10 @@ export class Renderer {
     gl.uniform2f(this.u.u_focal, focal[0], focal[1]); gl.uniform2f(this.u.u_viewport, c.width, c.height);
     gl.uniform1f(this.u.u_size, opts.size); gl.uniform1i(this.u.u_mode, opts.mode);
     gl.uniform3fv(this.u.u_eye, opts.eye ?? [0, 0, 0]);
-    gl.uniform1f(this.u.u_detail, opts.detail ?? 1); gl.uniform1f(this.u.u_share, opts.share ?? 1); gl.uniform1i(this.u.u_thin, opts.thin ?? 0);
-    const rv = (opts.reveals ?? []).slice(-24);
+    gl.uniform1f(this.u.u_detail, opts.detail ?? 1); gl.uniform1f(this.u.u_share, opts.share ?? 1); gl.uniform1i(this.u.u_thin, opts.thin ?? 0); gl.uniform1i(this.u.u_only, opts.only ?? -1);
+    const rv = (opts.reveals ?? []).slice(-48), rn = (opts.revealNormals ?? []).slice(-48);
     gl.uniform1i(this.u.u_reveals, rv.length);
-    if (rv.length) gl.uniform4fv(this.u.u_reveal, new Float32Array(rv.flat()));
+    if (rv.length) { gl.uniform4fv(this.u.u_reveal, new Float32Array(rv.flat())); gl.uniform3fv(this.u.u_revealN, new Float32Array(rv.map((_, k) => rn[k] ?? [0, 1, 0]).flat())); }
     // (tested against the occluder's depth, never writing their own)
     gl.enable(gl.DEPTH_TEST); gl.depthFunc(gl.LEQUAL); gl.depthMask(false);
     gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
