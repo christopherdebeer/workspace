@@ -145,6 +145,31 @@ export function drawnBox(w: World): { i0: number; i1: number; j0: number; j1: nu
   if (!bleed || !w.land) return e;
   return { i0: Math.max(DOMAIN.i0, e.i0 - DRAWN_MARGIN), i1: Math.min(DOMAIN.i1, e.i1 + DRAWN_MARGIN), j0: Math.max(DOMAIN.j0, e.j0 - DRAWN_MARGIN), j1: Math.min(DOMAIN.j1, e.j1 + DRAWN_MARGIN) };
 }
+/** the sky's visibility as last worked out, for a world: by the cell each point's in (its bucket), and what was occupied
+ * then; a new build forgets the buckets within the rays' reach of any cell whose occupancy changed */
+const SKY_REACH = 4;
+let skyState: { w: World; occ: Set<number>; seen: Map<number, Map<number, number>> } | null = null;
+const skyBucket = (x: number, y: number, z: number) => ((Math.floor(y) + 16) * 512 + Math.floor(x) + 256) * 512 + Math.floor(z) + 256;
+function occupancy(w: World): Set<number> {
+  const o = new Set<number>();
+  for (const v of w.mass.keys()) o.add(v);
+  for (const v of w.stairs.keys()) o.add(v);
+  for (const v of w.piers.keys()) o.add(v);
+  for (const v of w.filled()) o.add(v);
+  return o;
+}
+function skyKeep(w: World) {
+  const occ = occupancy(w);
+  if (!skyState || skyState.w !== w) { skyState = { w, occ, seen: new Map() }; return skyState; }
+  const changed: Array<[number, number, number]> = [];
+  for (const v of occ) if (!skyState.occ.has(v)) changed.push(unkey(v));
+  for (const v of skyState.occ) if (!occ.has(v)) changed.push(unkey(v));
+  if (changed.length > 400) skyState.seen.clear();
+  else for (const [k, i, j] of changed) for (let b = -SKY_REACH; b <= SKY_REACH; b++) for (let a = -SKY_REACH; a <= SKY_REACH; a++) for (let c = -SKY_REACH; c <= SKY_REACH; c++) skyState.seen.delete(skyBucket(i + a, k + b, j + c));
+  skyState.occ = occ;
+  return skyState;
+}
+
 export function buildMesh(w: World, plain = false, selected: Set<number> = new Set(), keepGround = false): Mesh {
   /** `keepGround`: the ground and its strokes taken as they were last built, whatever's changed (while a finger draws:
    * worked out again once it's lifted) */
@@ -182,13 +207,18 @@ export function buildMesh(w: World, plain = false, selected: Set<number> = new S
     if (s === undefined) { s = k < w.ground(i, j) || (k >= 0 && (w.occupied(k, i, j) || w.earth(k, i, j))); solid.set(v, s); }
     return s;
   };
-  const seen = new Map<number, number>();
+  // (kept from build to build of the same world: what's only changed somewhere doesn't change the sky a few cells off,
+  // so only the points within reach of what changed are worked out again (skyKeep))
+  const sky = skyKeep(w);
   // (what working out the sky's visibility costs, across the whole build: how often, and how long)
   let skyN = 0, skyMs = 0;
   const skyVis = (p: V3, n: V3) => {
     const id = (((Math.round(p[0] * 8) + 512) * 1024 + Math.round(p[1] * 8) + 512) * 1024 + Math.round(p[2] * 8) + 512) * 729 + ((Math.round(n[0] * 4) + 4) * 9 + Math.round(n[1] * 4) + 4) * 9 + Math.round(n[2] * 4) + 4;
-    const had = seen.get(id);
+    const bk = skyBucket(p[0] + CENTER, p[1], p[2] + CENTER);
+    let seen = sky.seen.get(bk);
+    const had = seen?.get(id);
     if (had !== undefined) return had;
+    if (!seen) { seen = new Map(); sky.seen.set(bk, seen); }
     skyN++; const sky0 = performance.now();
     // (a frame round the normal; rays at two heights round it, eight about each)
     const t = Math.abs(n[1]) < 0.9 ? [0, 1, 0] : [1, 0, 0];

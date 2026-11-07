@@ -349,6 +349,8 @@ export class World {
   span(k: number, i: number, j: number): Span | null { return inGrid(i, j) ? this.spanOf.get(key(k, i, j)) ?? null : null; }
   /** anything at a cell: stone, a stair, a pier, the fill under a flight */
   occupied(k: number, i: number, j: number) { return k >= 0 && k < CEIL && inGrid(i, j) && (this.mass.has(key(k, i, j)) || this.stairs.has(key(k, i, j)) || this.piers.has(key(k, i, j)) || this.earth(k, i, j) || this.fills.get(key(k, i, j)) === 'fill'); }
+  /** the cells filled under flights (their masonry), as keys */
+  *filled() { for (const [v, f] of this.fills) if (f === 'fill') yield v; }
   /** under a flight: filled (its masonry), or too low to stand in (`low`), or nothing ('') */
   underFlight(k: number, i: number, j: number): 'fill' | 'low' | '' { return inGrid(i, j) ? this.fills.get(key(k, i, j)) ?? '' : ''; }
   /** the flight a stair is one of, and which step of it */
