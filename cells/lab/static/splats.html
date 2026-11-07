@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en" data-exp="splats"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#1c1d1f"><title>Splats</title>
+<style>
+:root{--bg:#1c1d1f;--card:rgba(30,31,34,.86);--ink:#ecebe6;--muted:#9a9c98;--edge:#3a3c40;--accent:#f2a65a;font-family:ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:var(--ink);background:var(--bg);color-scheme:dark}
+*{box-sizing:border-box}html,body{height:100%;margin:0;background:var(--bg);overscroll-behavior:none;-webkit-text-size-adjust:100%}
+button,input{font:inherit;color:inherit}
+button,.file{border:1px solid var(--edge);background:transparent;border-radius:16px;min-height:32px;padding:0 12px;font-size:13px;cursor:pointer;-webkit-tap-highlight-color:transparent;display:inline-flex;align-items:center;white-space:nowrap}
+button[aria-pressed=true]{background:var(--ink);color:var(--bg);border-color:var(--ink)}
+button:focus-visible,.file:focus-within{outline:2px solid var(--accent);outline-offset:2px}
+#view{position:fixed;inset:0;width:100%;height:100%;touch-action:none;display:block}
+header{position:fixed;top:0;left:0;right:0;display:flex;align-items:baseline;justify-content:space-between;gap:10px;padding:max(10px,env(safe-area-inset-top)) 16px 8px;pointer-events:none;background:linear-gradient(var(--bg),transparent)}
+header strong{font:600 17px/1.2 ui-sans-serif,system-ui,sans-serif;letter-spacing:-.02em}header small{font:10px ui-monospace,monospace;letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}
+header a{pointer-events:auto;font:11px ui-monospace,monospace;color:var(--muted);text-decoration:none}
+#status{position:fixed;left:0;right:0;top:46%;text-align:center;font:13px ui-monospace,monospace;color:var(--muted);pointer-events:none}
+#panel{position:fixed;left:0;right:0;bottom:0;padding:8px 12px max(10px,env(safe-area-inset-bottom));background:var(--card);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);border-top:1px solid var(--edge);display:flex;flex-direction:column;gap:8px;max-width:720px;margin:0 auto}
+.row{display:flex;gap:6px;overflow-x:auto;scrollbar-width:none;align-items:center}.row::-webkit-scrollbar{display:none}
+.row .lab{font:10px ui-monospace,monospace;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);min-width:44px}
+.file input{display:none}
+#note{font-size:12px;color:var(--muted);line-height:1.4;min-height:1.4em}
+#stats{font:11px ui-monospace,monospace;color:var(--muted);font-variant-numeric:tabular-nums}
+.sliders{display:grid;grid-template-columns:1fr 1fr;gap:4px 14px;font-size:12px;color:var(--muted)}.sliders label{display:flex;flex-direction:column;gap:2px}.sliders .v{float:right;font-family:ui-monospace,monospace;color:var(--ink)}
+input[type=range]{width:100%;accent-color:var(--accent)}
+.preview header,.preview #panel{display:none!important}
+</style></head><body>
+<canvas id="view" aria-label="The splat scene. Drag to turn it, pinch to come closer, two fingers to move, double tap to frame it again."></canvas>
+<header><div><strong>Splats</strong> <small>gaussian splatting, from scratch</small></div><a href="/splats/readme">how it works</a></header>
+<div id="status">starting</div>
+<div id="panel">
+  <div class="row" id="scenes"><span class="lab">scene</span><label class="file" id="file-label">your file…<input type="file" id="file" accept=".splat,.ply"></label></div>
+  <div class="row" id="modes"><span class="lab">see</span></div>
+  <div id="note"></div>
+  <div class="sliders">
+    <label>splat size <span class="v" id="size-v"></span><input type="range" id="size" min="0.1" max="1.6" step="0.01"></label>
+    <label>resolution <span class="v" id="res-v"></span><input type="range" id="res" min="0.5" max="3" step="0.25"></label>
+  </div>
+  <div class="row"><button id="home">frame it</button><button id="flip">turn over</button><span id="stats"></span></div>
+</div>
+<script src="{{app}}"></script>
+</body></html>

@@ -25,6 +25,12 @@ export interface Experiment {
 
 export const EXPERIMENTS: Experiment[] = [
   {
+    id: 'splats', title: 'Splats', group: 'Perception',
+    blurb: 'Gaussian splatting from scratch, on a phone: a scene as hundreds of thousands of soft coloured ellipsoids, each projected to an ellipse on the screen and blended back to front. A small viewer written to learn from (the formats, the sort, the projection, each in its own file), with ways to see the parts: every splat\'s ellipse, its footprint, the point cloud underneath. A scene made of splats here, three captured ones, or your own .splat or .ply.',
+    page: 'static/splats.html', preview: 'preview&scene=garden&count=60000', readme: 'static/splats.md',
+    presets: [{ label: 'garden', query: 'scene=garden' }, { label: 'the ellipses', query: 'scene=garden&mode=1' }, { label: 'plush (9 MB)', query: 'scene=plush' }, { label: 'shoe (9 MB)', query: 'scene=nike' }, { label: 'train (33 MB)', query: 'scene=train' }],
+  },
+  {
     id: 'switchback', title: 'Switchback', group: 'Play',
     blurb: 'A downhill motocross run down a mountain made as you ride it: drawn flat and faceted in a few hard colours (ultramarine sky, pale snow, charcoal rock, orange), its speed drawn as vector shards, smears and flying chunks rather than blur. Drag to steer, drag down to brake; kickers over gaps, whoops, the wall, the drop.',
     page: 'static/switchback.html', preview: 'preview&auto=tricks&seed=3&t=3', readme: 'static/switchback.md',
