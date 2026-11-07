@@ -126,7 +126,10 @@ export type Material = 'ink' | 'dry' | 'washline';
 export type Heart = number | 'middle' | 'ends';
 
 export interface Stroke {
-  kind: 'stroke'; id: number; key: string; path: Path; gesture: Gesture; material: Material; heart: Heart;
+  kind: 'stroke'; id: number; key: string; path: Path;
+  /** which object of a scene it belongs to (1–255; 0 none): render.ts breaks a mark where a different, nearer object's
+   * silhouette passes just in front of it (the halo) */
+  object?: number; gesture: Gesture; material: Material; heart: Heart;
   colour: V; alpha: number; mark: number; feature: number;
   /** its rank (set by its group): when it goes as a whole; and how much of it goes before its heart */
   rank: number; span: number;
@@ -146,7 +149,7 @@ export interface Region {
   open?(p: V): boolean;
 }
 export interface Wash {
-  kind: 'wash'; id: number; key: string; region: Region; anchor: V[]; reach: number; material: 'wash' | 'dry';
+  kind: 'wash'; id: number; key: string; region: Region; object?: number; anchor: V[]; reach: number; material: 'wash' | 'dry';
   /** the hatching's direction at a point (dry) */
   direction?: (p: V, n: V) => V;
   /** how dark (0..1) */
@@ -177,7 +180,7 @@ export function group(rank: number, principal: Element | null, supports: Element
 }
 
 /** a splat as deposited: where, its axes and sizes, colour, and which element (and where along it) it came from */
-export interface Dep { p: V; ax: [V, V, V]; s: V; c: V; a: number; rank: number; mark: number; feature: number; element: number; u: number; support: number; n1?: V; n2?: V }
+export interface Dep { p: V; ax: [V, V, V]; s: V; c: V; a: number; rank: number; mark: number; feature: number; element: number; u: number; support: number; n1?: V; n2?: V; object?: number }
 /**
  * A mark's opacity, and how much wider it must be, when `d` times as many are scattered over the same place: the marks
  * fall at random, so the light through a point is exp(−(number over it × opacity × footprint)) on average, and holding
@@ -304,19 +307,23 @@ export function depositWash(w: Wash, density = 1, rnd: () => number = rng(w.id))
   return out;
 }
 
-/** an element into splats, from its own random stream */
-export function deposit(e: Element, density = 1): Dep[] { return e.kind === 'stroke' ? depositStroke(e, density) : depositWash(e, density); }
+/** an element into splats, from its own random stream (each carrying the element's object) */
+export function deposit(e: Element, density = 1): Dep[] {
+  const d = e.kind === 'stroke' ? depositStroke(e, density) : depositWash(e, density);
+  if (e.object) for (const m of d) m.object = e.object;
+  return d;
+}
 
 /** splats as the renderer takes them, from deposits (each keeps its element, support, feature and both normals) */
-export type Drawing = Splats & { mark: Uint8Array; rank: Float32Array; normal: Float32Array; normal2: Float32Array; support: Uint8Array; feature: Uint32Array; element: Uint32Array };
+export type Drawing = Splats & { mark: Uint8Array; rank: Float32Array; normal: Float32Array; normal2: Float32Array; support: Uint8Array; feature: Uint32Array; element: Uint32Array; object: Uint8Array };
 export function toSplats(deps: Dep[], extra = 0): Drawing {
   const n = deps.length + extra;
-  const s = Object.assign(alloc(n), { mark: new Uint8Array(n), rank: new Float32Array(n), normal: new Float32Array(n * 3), normal2: new Float32Array(n * 3), support: new Uint8Array(n), feature: new Uint32Array(n), element: new Uint32Array(n) });
+  const s = Object.assign(alloc(n), { mark: new Uint8Array(n), rank: new Float32Array(n), normal: new Float32Array(n * 3), normal2: new Float32Array(n * 3), support: new Uint8Array(n), feature: new Uint32Array(n), element: new Uint32Array(n), object: new Uint8Array(n) });
   deps.forEach((d, i) => {
     s.pos.set(d.p, i * 3); s.scale.set(d.s, i * 3); s.rot.set(quat(d.ax), i * 4);
     s.rgba.set([d.c[0], d.c[1], d.c[2], Math.round(Math.max(0, Math.min(1, d.a)) * 255)], i * 4);
     s.mark[i] = d.mark; s.rank[i] = Math.max(0, Math.min(1, d.rank)); s.normal.set(d.n1 ?? d.ax[2], i * 3); if (d.n2) s.normal2.set(d.n2, i * 3);
-    s.support[i] = d.support; s.feature[i] = d.feature; s.element[i] = d.element;
+    s.support[i] = d.support; s.feature[i] = d.feature; s.element[i] = d.element; s.object[i] = d.object ?? 0;
   });
   return s;
 }
@@ -337,10 +344,12 @@ export function planeRegion(n: V, through: V, on: (p: V) => boolean, extent = 1.
   const e1 = norm(Math.abs(n[1]) < 0.9 ? cross(n, [0, 1, 0]) : cross(n, [1, 0, 0])), e2 = cross(n, e1);
   const proj = (p: V): V => sub(p, mul(n, dot(sub(p, through), n)));
   const pick = (rnd: () => number) => add(through, add(mul(e1, (rnd() * 2 - 1) * extent), mul(e2, (rnd() * 2 - 1) * extent)));
-  let r = 7; const rr = () => ((r = (r * 48271) % 2147483647) / 2147483647);
-  let hit = 0; for (let k = 0; k < 3000; k++) if (on(pick(rr))) hit++;
+  // (its area, measured the first time it's asked: so a region whose test depends on things made after it, such as a
+  // shadow kept off later objects' footprints, is measured once they all exist)
+  let area: number | null = null;
+  const measure = () => { let r = 7; const rr = () => ((r = (r * 48271) % 2147483647) / 2147483647); let hit = 0; for (let k = 0; k < 3000; k++) if (on(pick(rr))) hit++; return (hit / 3000) * (2 * extent) ** 2; };
   return {
-    area: (hit / 3000) * (2 * extent) ** 2,
+    get area() { return (area ??= measure()); },
     sample: (rnd) => { for (let k = 0; k < 4000; k++) { const p = pick(rnd); if (on(p)) return { p, n }; } return { p: through, n }; },
     on: (p) => on(proj(p)), project: (p) => { const q = proj(p); return on(q) ? { p: q, n } : null; }, open,
   };

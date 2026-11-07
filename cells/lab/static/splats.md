@@ -164,6 +164,51 @@ The test is whether the same brushes, given only different paths, regions and an
 
 `subjects.ts` makes no marks itself. Board: `node cells/lab/devtools/splats-brushes.mjs [wash|dry]`.
 
+## Composed: one small scene
+
+`?scene=composed` (`subjects.ts` `composedScene`). The isolated specimens never had to deal with each other. This puts a
+stone, three culms and an architectural corner together, drawn with the same brushes throughout:
+- the corner behind the stone and to its left;
+- two culms behind it to the right, standing in its cast shadow (the far one also in the back one's shadow);
+- one culm in front, crossing the stone's right side.
+
+The relationships a scene needs, on by default (`?compose=0` or the *relate* row draws each object as if alone):
+- **Importance.** The stone leads. The others' washes are lighter, their lines thinner and fainter, and their ranks lower,
+  so they go first as the detail falls. The sparse state is the stone plus the few lines that place the rest.
+- **One ground.** A cast shadow is kept off every other object's footprint, and off the shadows made before it, so where
+  two fall together the ground is one shadow, not two layered.
+- **The halo** (render.ts, view by view). A mark breaks where a nearer, different object's silhouette passes just in front
+  of it. Lines stop short of a culm crossing them, and a wash leaves a sliver of paper along every overlap. It deals with
+  competing contours and with where to leave paper open as one rule.
+  - The occluder is drawn once more into a depth-and-object texture.
+  - Each drawing mark reads two rings of eight samples round itself (at 9 and 18 px, `?halopx=`).
+  - Every element carries its object.
+
+**Checked** (`splats.test.mjs`):
+
+| check | composed | each alone |
+|---|---|---|
+| shadow marks under another object's foot | 0 | 11 |
+| ground cells holding two objects' shadow marks | 0 | 6 |
+| each object's last mark to go, by importance (stone, front culm, corner, back culm, far culm) | 0.99 > 0.88 > 0.87 > 0.84 > 0.82 | all alike |
+
+**What the boards show** (`node cells/lab/devtools/splats-composed.mjs [wash|dry]`: states with and without, a full
+turn, close inspection):
+- The scene holds through a full turn in both looks. Occlusion between the five objects is right from every side.
+- The halo works but is quiet at phone scale. At 30 px it's unmistakable; 18 px is the default, a judgement call.
+- The difference the relationships make is clearest in the sparse state. At resolved the two versions are close, which
+  suggests the specimens were already fairly well behaved, and the remaining problems are ones these rules don't address.
+
+**Not done, and the next problems this scene raises:**
+- **Shadows don't fall on other objects.** The back culm stands in the stone's shadow but is drawn lit. Ground shadows
+  are regions on a plane, and a shadow on a cylinder or a wall needs the same region from the shadow-caster's side.
+- **No counterchange.** The light side of the stone doesn't get a darker ground behind it, or the reverse. That would
+  need tone decided by what is seen beside a mark, which is per view, like the halo, but on washes.
+- **Tonal balance isn't measured,** only set by hand through importance. From behind (180°) the corner's shadowed walls
+  dominate.
+- **Two culms nearly in line** (90°) still give two parallel outlines; the halo separates them but doesn't choose one.
+- **The halo's cost:** 32 extra texel fetches per drawing mark per corner. Unmeasured on a phone.
+
 ## The Bench: one brush made dependable, one stroke made editable
 
 `?scene=bench` (`bench.ts`; brush.ts). This answers a source review of the brush. Its five findings, all confirmed in the
@@ -335,7 +380,7 @@ Roughly in order of what each teaches:
 
 ## Flags
 
-`?scene=stone|brushes|bench|mist|garden|plush|nike|train` · `?look=dry|wash` · `?detail=0..1` · `?thin=even` · `?only=wash` · `?view=hero|grazing|reverse` · `?orbit` · `?detail=0.25|0.55|1` (sparse, intermediate, resolved) · `?brush` · `?occluder=0` · `?clean` (no controls) · `?url=…` (any `.splat` or `.ply` CORS lets it read) · `?up=1` (for a file that's
+`?scene=stone|brushes|composed|bench|mist|garden|plush|nike|train` · `?compose=0` · `?halo=0` · `?halopx=` · `?look=dry|wash` · `?detail=0..1` · `?thin=even` · `?only=wash` · `?view=hero|grazing|reverse` · `?orbit` · `?detail=0.25|0.55|1` (sparse, intermediate, resolved) · `?brush` · `?occluder=0` · `?clean` (no controls) · `?url=…` (any `.splat` or `.ply` CORS lets it read) · `?up=1` (for a file that's
 y-up) · `?mode=0..3` · `?size=` · `?res=` · `?count=` (garden size) · `?noworkers` · `?preview`
 
 Checks: `node cells/lab/devtools/splats.test.mjs` (formats, covariance, sort) and

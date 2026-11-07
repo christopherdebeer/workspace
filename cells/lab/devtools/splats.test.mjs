@@ -163,6 +163,24 @@ ok('parse() tells a .splat by its bytes', F.parse(F.encodeSplat(g)).n === g.n);
     ok('edit: a re-pressured stroke keeps its id and its marks\' places', s.id === id && d1.length === d2.length && d1.every((d, i) => Math.abs(d.p[0] - d2[i].p[0]) < 1e-3));
   }
 }
+// (the composed scene: one ground. Cast shadows kept off other objects' footprints and off each other; every mark knows
+// its object; lesser objects go first as the detail falls)
+{
+  const SU = await load('../client/splats/subjects.ts');
+  const on = SU.composedScene('wash', true), off = SU.composedScene('wash', false);
+  const culms = [[1.35, 0.95, 0.065, 3], [1.55, -0.95, 0.085, 4], [2.1, -1.3, 0.075, 5]];
+  const ground = (sc) => { const d = sc.drawing, out = []; for (let i = 0; i < d.n; i++) if (d.pos[i * 3 + 1] < 0.004 && d.mark[i] !== 5) out.push([d.pos[i * 3], d.pos[i * 3 + 2], d.object[i]]); return out; };
+  const under = (g) => g.filter(([x, z, o]) => culms.some(([cx, cz, r, co]) => co !== o && Math.hypot(x - cx, z - cz) < r * 0.8)).length;
+  const doubled = (g) => { const cell = new Map(); for (const [x, z, o] of g) { const k = `${Math.floor(x / 0.05)},${Math.floor(z / 0.05)}`; (cell.get(k) ?? cell.set(k, new Set()).get(k)).add(o); } return [...cell.values()].filter((v) => v.size > 1).length; };
+  const gOn = ground(on), gOff = ground(off);
+  ok(`composed: no shadow drawn under another object (${under(gOn)} marks; ${under(gOff)} with each alone)`, under(gOn) === 0 && under(gOff) > 0);
+  ok(`composed: where shadows fall together the ground is one shadow (${doubled(gOn)} cells with two objects' shadow marks; ${doubled(gOff)} with each alone)`, doubled(gOn) < doubled(gOff) * 0.2);
+  ok('composed: every mark knows its object', [...on.drawing.object].every((o) => o > 0));
+  // (each object's principal: the detail at which it goes, in the order of importance; drawn alone they're all alike)
+  const top = (sc, obj) => { let m = 0; for (let i = 0; i < sc.drawing.n; i++) if (sc.drawing.object[i] === obj) m = Math.max(m, sc.drawing.rank[i]); return m; };
+  const order = [1, 3, 2, 4, 5].map((o) => top(on, o));
+  ok(`composed: as the detail falls the objects go in order of importance (last marks at ${order.map((v) => v.toFixed(2)).join(' > ')})`, order.every((v, i) => i === 0 || v < order[i - 1]));
+}
 // (Mist: on an unseen bank under an unseen sun, the trained network is nearer the expensive reference than the analytic
 // model, and both far nearer than the baked colour; the CPU features match what was trained)
 {

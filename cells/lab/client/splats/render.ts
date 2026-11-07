@@ -41,6 +41,10 @@ uniform vec3 u_sun;
 uniform int u_light, u_diff;
 uniform vec4 u_net[${Math.ceil(NET_SIZE / 4)}];
 uniform vec2 u_ana;
+// (the halo: the occluder's depth and object at each pixel, the ring's radius in pixels (0 off), the near and far planes)
+uniform highp sampler2D u_hdep, u_hobj;
+uniform float u_halo;
+uniform vec2 u_nf;
 in vec2 a_corner;
 in uint a_index;
 out vec4 v_color;
@@ -128,6 +132,29 @@ void main() {
     // (shown linear, a little compressed at the top; or, in the error view, how far it is from the reference)
     v_color.rgb = u_diff == 1 ? mix(vec3(0.22, 0.24, 0.27), vec3(1.0, 0.38, 0.2), clamp(abs(L - refL) * 2.5, 0.0, 1.0)) : vec3(0.96, 0.94, 0.88) * (L * 0.8 / (1.0 + 0.25 * L));
   }
+  // (the halo: a mark of one object with a nearer, different object's surface just round it on the screen is broken
+  // there: a line passing behind a culm stops short of it, a wash leaves a sliver of paper along a nearer silhouette.
+  // Two rings of eight reads of the occluder's depth and object; the nearer ring counts more)
+  if (u_halo > 0.0 && support != 0u && kind != 8u && (d2.w & 255u) != 0u && keep > 0.01) {
+    uint obj = d2.w & 255u;
+    vec2 px0 = (clip.xy / clip.w * 0.5 + 0.5) * u_viewport;
+    float zM = -cam.z, hit = 0.0;
+    ivec2 lim = ivec2(u_viewport) - 1;
+    for (int k = 0; k < 8; k++) {
+      float a = float(k) * 0.7853982;
+      vec2 dir = vec2(cos(a), sin(a));
+      for (int ring = 1; ring <= 2; ring++) {
+        ivec2 q = clamp(ivec2(px0 + dir * u_halo * float(ring) * 0.5), ivec2(0), lim);
+        float d = texelFetch(u_hdep, q, 0).r;
+        if (d >= 1.0) continue;
+        uint so = uint(texelFetch(u_hobj, q, 0).r * 255.0 + 0.5);
+        if (so == obj || so == 0u) continue;
+        float zS = 2.0 * u_nf.x * u_nf.y / (u_nf.y + u_nf.x - (2.0 * d - 1.0) * (u_nf.y - u_nf.x));
+        if (zS < zM - max(0.04, 0.04 * zM)) hit += ring == 1 ? 0.25 : 0.12;
+      }
+    }
+    keep *= 1.0 - clamp(hit, 0.0, 1.0);
+  }
   if (u_mode != 0 && u_mode != 3) keep = keep > 0.02 ? 1.0 : 0.0;
   if (keep < 0.01) return;
   v_color.a *= keep;
@@ -188,11 +215,15 @@ void main() {
 const OVS = `#version 300 es
 uniform mat4 u_view, u_proj;
 in vec3 a_pos;
-void main() { gl_Position = u_proj * u_view * vec4(a_pos, 1.0); }`;
+in float a_obj;
+flat out float v_obj;
+void main() { gl_Position = u_proj * u_view * vec4(a_pos, 1.0); v_obj = a_obj; }`;
+// (its object, written only into the halo's target: which object is nearest at each pixel)
 const OFS = `#version 300 es
 precision mediump float;
+flat in float v_obj;
 out vec4 o;
-void main() { o = vec4(0.0); }`;
+void main() { o = vec4(v_obj / 255.0, 0.0, 0.0, 1.0); }`;
 
 import { covariance, type Splats } from './format';
 import { BOX, SIGMA, SUN_TAPS, NET_SIZE, OUT_MAX, IN, H, OUT, type Net, type Mips } from './mist';
@@ -212,12 +243,15 @@ export interface DrawOpts {
   only?: number;
   /** Mist: how its splats are lit (0 their stored colour, 1 analytic, 2 the network), and the sun */
   light?: number; sun?: [number, number, number]; diff?: boolean;
+  /** the halo's radius in pixels (0 off), and the near and far planes the projection used */
+  halo?: number; nf?: [number, number];
 }
 
 export class Renderer {
   readonly gl: WebGL2RenderingContext;
   private prog: WebGLProgram; private tex: WebGLTexture; private order: WebGLBuffer; private vao: WebGLVertexArrayObject;
-  private oprog: WebGLProgram; private ovao: WebGLVertexArrayObject; private obuf: WebGLBuffer; private ocount = 0;
+  private oprog: WebGLProgram; private ovao: WebGLVertexArrayObject; private obuf: WebGLBuffer; private oobj: WebGLBuffer; private ocount = 0;
+  private hfbo: WebGLFramebuffer | null = null; private hdep: WebGLTexture | null = null; private hobj: WebGLTexture | null = null; private hsize = [0, 0];
   private u: Record<string, WebGLUniformLocation | null> = {}; private ou: Record<string, WebGLUniformLocation | null> = {};
   n = 0; drawn = 0;
   private gridTex: WebGLTexture | null = null; private featTex: WebGLTexture | null = null; private featLast: Float32Array | null = null; private net = new Float32Array(Math.ceil(NET_SIZE / 4) * 4); private ana = [0, 0];
@@ -253,14 +287,18 @@ export class Renderer {
     this.ovao = gl.createVertexArray()!; gl.bindVertexArray(this.ovao);
     this.obuf = gl.createBuffer()!; gl.bindBuffer(gl.ARRAY_BUFFER, this.obuf);
     const ap = gl.getAttribLocation(op, 'a_pos'); gl.enableVertexAttribArray(ap); gl.vertexAttribPointer(ap, 3, gl.FLOAT, false, 0, 0);
+    this.oobj = gl.createBuffer()!; gl.bindBuffer(gl.ARRAY_BUFFER, this.oobj);
+    const ao = gl.getAttribLocation(op, 'a_obj'); gl.enableVertexAttribArray(ao); gl.vertexAttribPointer(ao, 1, gl.FLOAT, false, 0, 0);
     gl.bindVertexArray(null);
+    for (const k of ['u_hdep', 'u_hobj', 'u_halo', 'u_nf']) this.u[k] = gl.getUniformLocation(p, k);
   }
   /** the splats into the data texture (once a scene) */
   /**
    * The splats into the data texture, three texels each (1024 splats a row):
    * - 0: centre (3 × f32), colour + opacity (4 × u8);
    * - 1: covariance (6 halves), then rank (8 bits) | kind (4 bits, 4 spare) | normal (octahedral, 2 × 8 bits);
-   * - 2: support (2 bits) | second normal (octahedral, 2 × 8 bits, from bit 8); feature (32 bits); element (32 bits); spare.
+   * - 2: support (2 bits) | second normal (octahedral, 2 × 8 bits, from bit 8); feature (32 bits); element (32 bits);
+   *   object (8 bits, for the halo).
    */
   load(s: Splats) {
     const gl = this.gl, rows = Math.max(1, Math.ceil(s.n / 1024)), data = new Uint32Array(3072 * rows * 4), f = new Float32Array(data.buffer), cov = new Float32Array(6);
@@ -274,7 +312,7 @@ export class Renderer {
       const [ox, oy] = s.normal ? octEncode(s.normal[i * 3], s.normal[i * 3 + 1], s.normal[i * 3 + 2]) : [128, 128];
       data[o + 7] = (rank | (kind << 8) | (ox << 16) | (oy << 24)) >>> 0;
       const sup = s.support ? s.support[i] & 3 : 0, [px, py] = s.normal2 ? octEncode(s.normal2[i * 3], s.normal2[i * 3 + 1], s.normal2[i * 3 + 2]) : [128, 128];
-      data[o + 8] = (sup | (px << 8) | (py << 16)) >>> 0; data[o + 9] = s.feature ? s.feature[i] >>> 0 : 0; data[o + 10] = s.element ? s.element[i] >>> 0 : 0;
+      data[o + 8] = (sup | (px << 8) | (py << 16)) >>> 0; data[o + 9] = s.feature ? s.feature[i] >>> 0 : 0; data[o + 10] = s.element ? s.element[i] >>> 0 : 0; data[o + 11] = s.object ? s.object[i] : 0;
     }
     gl.bindTexture(gl.TEXTURE_2D, this.tex);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
@@ -291,9 +329,27 @@ export class Renderer {
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.R32F, w, rows, 0, gl.RED, gl.FLOAT, d);
     gl.activeTexture(gl.TEXTURE0);
   }
-  /** a shape to hide what's behind it (triangles, three floats a vertex), drawn into the depth buffer only; or none */
-  setOccluder(tris: Float32Array | null) {
-    const gl = this.gl; gl.bindBuffer(gl.ARRAY_BUFFER, this.obuf); gl.bufferData(gl.ARRAY_BUFFER, tris ?? new Float32Array(0), gl.STATIC_DRAW); this.ocount = tris ? tris.length / 3 : 0;
+  /** a shape to hide what's behind it (triangles, three floats a vertex), drawn into the depth buffer only; or none.
+   * With each vertex's object (one float a vertex), the halo can tell one object's silhouette from another's */
+  setOccluder(tris: Float32Array | null, objects?: Float32Array) {
+    const gl = this.gl, n = tris ? tris.length / 3 : 0;
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.obuf); gl.bufferData(gl.ARRAY_BUFFER, tris ?? new Float32Array(0), gl.STATIC_DRAW); this.ocount = n;
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.oobj); gl.bufferData(gl.ARRAY_BUFFER, objects && objects.length === n ? objects : new Float32Array(n), gl.STATIC_DRAW);
+  }
+  /** the halo's target, the canvas's size: the occluder's object in red, its depth */
+  private haloTarget(w: number, h: number) {
+    const gl = this.gl;
+    if (this.hfbo && this.hsize[0] === w && this.hsize[1] === h) return;
+    this.hfbo ??= gl.createFramebuffer(); this.hdep ??= gl.createTexture(); this.hobj ??= gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, this.hobj); gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    gl.bindTexture(gl.TEXTURE_2D, this.hdep); gl.texImage2D(gl.TEXTURE_2D, 0, gl.DEPTH_COMPONENT24, w, h, 0, gl.DEPTH_COMPONENT, gl.UNSIGNED_INT, null);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.hfbo);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, this.hobj, 0);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.TEXTURE_2D, this.hdep, 0);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    this.hsize = [w, h];
   }
   /** the order to draw them in (from the sort) */
   setOrder(order: Uint32Array) { const gl = this.gl; gl.bindBuffer(gl.ARRAY_BUFFER, this.order); gl.bufferData(gl.ARRAY_BUFFER, order, gl.DYNAMIC_DRAW); this.drawn = order.length; }
@@ -303,6 +359,19 @@ export class Renderer {
     gl.clearColor(opts.bg[0], opts.bg[1], opts.bg[2], 1); gl.clearDepth(1); gl.depthMask(true); gl.colorMask(true, true, true, true);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
     if (!this.drawn) return;
+    const halo = (opts.halo ?? 0) > 0 && this.ocount > 0 && opts.occlude !== false;
+    // (the halo's target: the occluder's depth and object, drawn first into a texture the marks can read)
+    if (halo) {
+      this.haloTarget(c.width, c.height);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, this.hfbo); gl.viewport(0, 0, c.width, c.height);
+      gl.clearColor(0, 0, 0, 0); gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+      gl.useProgram(this.oprog); gl.bindVertexArray(this.ovao);
+      gl.uniformMatrix4fv(this.ou.u_view, false, view); gl.uniformMatrix4fv(this.ou.u_proj, false, proj);
+      gl.enable(gl.DEPTH_TEST); gl.depthFunc(gl.LESS); gl.disable(gl.BLEND); gl.colorMask(true, true, true, true);
+      gl.drawArrays(gl.TRIANGLES, 0, this.ocount);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      gl.clearColor(opts.bg[0], opts.bg[1], opts.bg[2], 1); gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+    }
     // (the occluder: depth only)
     if (this.ocount && opts.occlude !== false) {
       gl.useProgram(this.oprog); gl.bindVertexArray(this.ovao);
@@ -322,7 +391,11 @@ export class Renderer {
     gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, this.featTex); gl.uniform1i(this.u.u_feat, 2); gl.activeTexture(gl.TEXTURE0);
     gl.uniform1i(this.u.u_light, opts.light ?? 0); gl.uniform1i(this.u.u_diff, opts.diff ? 1 : 0); gl.uniform3fv(this.u.u_sun, opts.sun ?? [0, 1, 0]);
     gl.uniform4fv(this.u.u_net, this.net); gl.uniform2f(this.u.u_ana, this.ana[0], this.ana[1]);
-    gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_3D, this.gridTex); gl.uniform1i(this.u.u_grid, 1); gl.activeTexture(gl.TEXTURE0);
+    gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_3D, this.gridTex); gl.uniform1i(this.u.u_grid, 1);
+    gl.uniform1f(this.u.u_halo, halo ? opts.halo! : 0); gl.uniform2f(this.u.u_nf, opts.nf?.[0] ?? 0.01, opts.nf?.[1] ?? 100);
+    if (halo) { gl.activeTexture(gl.TEXTURE3); gl.bindTexture(gl.TEXTURE_2D, this.hdep); gl.uniform1i(this.u.u_hdep, 3); gl.activeTexture(gl.TEXTURE4); gl.bindTexture(gl.TEXTURE_2D, this.hobj); gl.uniform1i(this.u.u_hobj, 4); }
+    else { gl.activeTexture(gl.TEXTURE3); gl.bindTexture(gl.TEXTURE_2D, this.featTex); gl.uniform1i(this.u.u_hdep, 3); gl.activeTexture(gl.TEXTURE4); gl.bindTexture(gl.TEXTURE_2D, this.featTex); gl.uniform1i(this.u.u_hobj, 4); }
+    gl.activeTexture(gl.TEXTURE0);
     // (tested against the occluder's depth, never writing their own)
     gl.enable(gl.DEPTH_TEST); gl.depthFunc(gl.LEQUAL); gl.depthMask(false);
     gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);

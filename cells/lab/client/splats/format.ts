@@ -30,6 +30,8 @@ export interface Splats {
    * attached (brush.ts SUPPORT: none, surface, edge, free), an edge mark's second face's normal, and the element (stroke
    * or wash) it came from */
   feature?: Uint8Array | Uint32Array; support?: Uint8Array; normal2?: Float32Array; element?: Uint32Array;
+  /** (a composed drawing's) the object each mark belongs to (0 none), for the halo */
+  object?: Uint8Array;
 }
 
 export function alloc(n: number): Splats {

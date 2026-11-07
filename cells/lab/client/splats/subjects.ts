@@ -26,6 +26,13 @@ const UP: V = [0, 1, 0];
 const away = norm([-LIGHT[0], 0, -LIGHT[2]]);
 const F = { seam: 1, ledge: 2, stoneFoot: 3, stoneFaces: 4, culm: 5, culmBody: 6, cornice: 7, niche: 8, wall: 9, gesture: 10, wrapped: 11, crown: 12 };
 
+/**
+ * The ground shared by a composed scene's objects: each object's footprint, and each cast shadow in the order made.
+ * When it's set, a cast shadow is kept off every other object's footprint (no shadow drawn under a thing) and off the
+ * shadows made before it (where two fall together the ground is one shadow, not two layered).
+ */
+interface Ground { solids: Array<(x: number, z: number) => boolean>; shadows: Array<(x: number, z: number) => boolean> }
+let ground: Ground | null = null;
 /** a cast shadow on the ground from a footprint (points round it), as a region and the anchor on its far side */
 function castShadow(foot: V[], height: number): { region: Region; anchor: V[] } {
   const shift = mul(LIGHT, -height / LIGHT[1]);
@@ -33,7 +40,10 @@ function castShadow(foot: V[], height: number): { region: Region; anchor: V[] } 
   const H = hull(pts2), inside = (x: number, z: number) => { let c = false; for (let i = 0, j = H.length - 1; i < H.length; j = i++) { const [xi, zi] = H[i], [xj, zj] = H[j]; if ((zi > z) !== (zj > z) && x < ((xj - xi) * (z - zi)) / (zj - zi) + xi) c = !c; } return c; };
   const F2 = hull(foot.map((p) => [p[0], p[2]] as [number, number])), inFoot = (x: number, z: number) => { let c = false; for (let i = 0, j = F2.length - 1; i < F2.length; j = i++) { const [xi, zi] = F2[i], [xj, zj] = F2[j]; if ((zi > z) !== (zj > z) && x < ((xj - xi) * (z - zi)) / (zj - zi) + xi) c = !c; } return c; };
   const c = foot.reduce((s, p) => add(s, mul(p, 1 / foot.length)), [0, 0, 0] as V);
-  const region = planeRegion(UP, [c[0], 0.001, c[2]], (p) => inside(p[0], p[2]) && !inFoot(p[0], p[2]), 2.2);
+  const g = ground, before = g ? g.shadows.slice() : [];
+  const mine = (x: number, z: number) => inside(x, z) && !inFoot(x, z);
+  if (g) { g.solids.push(inFoot); g.shadows.push(mine); }
+  const region = planeRegion(UP, [c[0], 0.001, c[2]], (p) => mine(p[0], p[2]) && (!g || (!g.solids.some((f) => f !== inFoot && f(p[0], p[2])) && !before.some((f) => f(p[0], p[2])))), 2.6);
   const anchor = foot.filter((p) => dot(norm(sub(p, c)), away) > 0.25).map((p) => [p[0], 0.001, p[2]] as V);
   anchor.sort((a, b) => Math.atan2(a[2] - c[2], a[0] - c[0]) - Math.atan2(b[2] - c[2], b[0] - c[0]));
   return { region, anchor };
@@ -104,8 +114,10 @@ function stoneElements(look: Look, off: V): { els: Element[]; tris: number[] } {
 }
 
 // ─── the bamboo culm ───
-function culmElements(look: Look, base: V): { els: Element[]; tris: number[] } {
-  const dry = look === 'dry', r = 0.1, h = 1.7, x = base[0], z = base[2], nodes = [0.3, 0.62, 0.95, 1.27, 1.56], SIDES = 20, els: Element[] = [];
+function culmElements(look: Look, base: V, r = 0.1, h = 1.7): { els: Element[]; tris: number[] } {
+  const dry = look === 'dry', x = base[0], z = base[2], SIDES = 20, els: Element[] = [];
+  // (its nodes, spaced to its height)
+  const nodes = [0.3, 0.62, 0.95, 1.27, 1.56, 1.85, 2.14].map((y) => (y * h) / 1.7).filter((y) => y < h - 0.08);
   // (the terminator: the angle round it where it turns from the light; its shadowed side from there)
   const la = Math.atan2(LIGHT[2], LIGHT[0]), term = la + Math.PI / 2, shadeFrom = term, shadeTo = term + Math.PI;
   // (silhouette: profile strokes up the edges between facets; principal of the culm with the nodes)
@@ -238,6 +250,51 @@ export function brushScene(look: Look = 'wash'): BrushScene {
   const els = [...own(1, stone.els), ...own(2, corner.els), ...own(3, culm.els), ...own(4, gesture)];
   const s = toSplats(els.flatMap((e) => deposit(e)));
   return { drawing: s, occluder: new Float32Array([...stone.tris, ...corner.tris, ...culm.tris]), elements: els, centres: { stone: [0, 0.45, 0], corner: [-2.4, 0.6, 0.2], culm: [2.2, 0.85, 0.1], gesture: [-0.5, 1.4, 0.6] } };
+}
+
+
+/**
+ * One small composed scene: the stone (the subject), an architectural corner behind it to the left, three culms (two
+ * behind to the right, in the stone's cast shadow; one in front, across the stone's right side), all drawn with the
+ * same brushes (the far culm stands in the back culm's shadow, and casts its own along it). With `compose` (the default) the relationships a scene needs and isolated specimens avoid:
+ * - **importance**: the stone leads; the others' washes lighter and their lines thinner and fainter, and they go earlier
+ *   as the detail falls, so the sparse state is the stone and the few lines that place the rest;
+ * - **one ground**: cast shadows kept off other objects' footprints and off each other (render.ts can't know this);
+ * - **halo** (render.ts, view by view): a mark breaks where a nearer, different object's silhouette passes just in front
+ *   of it, so lines don't run into each other and paper is left along every overlap. Each element carries its object.
+ * Without it (`compose = false`): the same objects in the same places, each drawn as if alone.
+ */
+export interface ComposedScene extends BrushScene { objects: Float32Array; importance: Record<string, number> }
+export function composedScene(look: Look = 'wash', compose = true): ComposedScene {
+  ground = compose ? { solids: [], shadows: [] } : null;
+  try {
+    const layout = [
+      { name: 'stone', obj: 1, w: 1, make: () => stoneElements(look, [0, 0, 0]) },
+      { name: 'culm-front', obj: 3, w: 0.75, make: () => culmElements(look, [1.35, 0, 0.95], 0.065, 1.6) },
+      { name: 'culm-back', obj: 4, w: 0.6, make: () => culmElements(look, [1.55, 0, -0.95], 0.085, 2.3) },
+      { name: 'culm-far', obj: 5, w: 0.5, make: () => culmElements(look, [2.1, 0, -1.3], 0.075, 1.95) },
+      { name: 'corner', obj: 2, w: 0.65, make: () => cornerElements(look, [-1.65, 0, -1.55], 0.45) },
+    ];
+    const els: Element[] = [], tris: number[] = [], objs: number[] = [], importance: Record<string, number> = {};
+    for (const L of layout) {
+      const made = scope(L.name, L.make), w = compose ? L.w : 1;
+      importance[L.name] = w;
+      for (const e of made.els) {
+        e.object = L.obj;
+        if (e.feature) e.feature = L.obj * 256 + e.feature;
+        if (w < 1) {
+          // (lesser objects: lighter, thinner, and they go first)
+          e.rank *= 0.72 + 0.28 * w;
+          if (e.kind === 'stroke') { e.alpha *= 0.5 + 0.5 * w; e.gesture = { ...e.gesture, width: e.gesture.width * (0.65 + 0.35 * w) }; }
+          else e.depth *= 0.4 + 0.6 * w;
+        }
+        els.push(e);
+      }
+      tris.push(...made.tris); for (let k = 0; k < made.tris.length / 3; k++) objs.push(L.obj);
+    }
+    const s = toSplats(els.flatMap((e) => deposit(e)));
+    return { drawing: s, occluder: new Float32Array(tris), objects: new Float32Array(objs), elements: els, importance, centres: { all: [0.3, 0.75, -0.45], stone: [0, 0.45, 0], overlap: [0.9, 0.6, 0.55], corner: [-1.65, 0.6, -1.55], grove: [1.7, 1.0, -0.6] } };
+  } finally { ground = null; }
 }
 
 function hull(pts: Array<[number, number]>): Array<[number, number]> {

@@ -18,7 +18,7 @@ import { Renderer } from './render';
 import { bounds, garden, parse, type Splats } from './format';
 import { Sorter, type SortDone } from './sort';
 import { MARK, STATES, oneStone, stoneShape, type Look, type Stone } from './stone';
-import { brushScene, type BrushScene } from './subjects';
+import { brushScene, composedScene, type BrushScene } from './subjects';
 import { LIT, mistScene, referenceColours, sunDir, referenceAt, referenceLight, type MistScene } from './mist';
 import { NET, ANALYTIC, BAKE, RESULTS } from './mistnet';
 import { benchScene, PRESSURES, type Bench } from './bench';
@@ -34,6 +34,7 @@ if (qs.has('clean')) document.documentElement.classList.add('clean');
 const SCENES: Record<string, { label: string; url?: string; mb?: number; up: 1 | -1 }> = {
   stone: { label: 'one stone', up: 1 },
   brushes: { label: 'brushes', up: 1 },
+  composed: { label: 'composed', up: 1 },
   bench: { label: 'bench', up: 1 },
   mist: { label: 'mist', up: 1 },
   garden: { label: 'garden', up: 1 },
@@ -55,12 +56,13 @@ function show(s: Splats, name: string, u: 1 | -1) {
   scene = s; up = u; sceneName = name;
   R.load(s);
   if (name !== 'stone') stone = null;
-  if (name !== 'brushes') brushes = null;
+  if (name !== 'brushes' && name !== 'composed') brushes = null;
+  if (name !== 'composed') composed = false;
   if (name !== 'mist') mist = null;
   if (name !== 'bench') { bench = null; benchSel = -1; syncBench(); }
-  if (name !== 'stone' && name !== 'brushes' && name !== 'mist' && name !== 'bench') R.setOccluder(null);
+  if (name !== 'stone' && name !== 'brushes' && name !== 'mist' && name !== 'bench' && name !== 'composed') R.setOccluder(null);
   ranks = s.rank ? Float32Array.from(s.rank).sort() : null;
-  document.documentElement.classList.toggle('paper', name === 'stone' || name === 'brushes' || name === 'bench');
+  document.documentElement.classList.toggle('paper', name === 'stone' || name === 'brushes' || name === 'bench' || name === 'composed');
   const b = bounds(s);
   cam.target = b.centre; cam.dist = b.radius * 2.2; cam.yaw = 0.6; cam.pitch = 0.3;
   home = { ...cam, target: [...cam.target] as [number, number, number] };
@@ -94,6 +96,7 @@ async function open(name: string) {
     else if (name === 'brushes') openBrushes();
     else if (name === 'mist') openMist();
     else if (name === 'bench') openBench();
+    else if (name === 'composed') openComposed();
     else if (!sc || !sc.url) { show(garden(Number(qs.get('count') ?? 120000)), 'garden', 1); }
     else show(parse(await fetchWithProgress(sc.url)), name, sc.up);
     loadMs = performance.now() - t0;
@@ -183,9 +186,24 @@ function openBrushes() {
   setView((qs.get('view') as 'hero' | 'grazing' | 'reverse') ?? 'hero');
   syncStone();
 }
+/**
+ * The composed scene (subjects.ts `composedScene`): a stone, three culms and a corner together, with the relationships
+ * (importance, one ground, the halo) on, or each drawn as if alone (`?compose=0`, the relate row).
+ */
+let composed = false, compose = qs.get('compose') !== '0', haloOn = qs.get('halo') !== '0', haloPx = Number(qs.get('halopx') ?? 18);
+function openComposed() {
+  const B = composedScene(look, compose);
+  show(B.drawing, 'composed', 1);
+  brushes = B; composed = true;
+  R.setOccluder(B.occluder, B.objects);
+  frameSubject(qs.get('subject'));
+  setView((qs.get('view') as 'hero' | 'grazing' | 'reverse') ?? 'hero');
+  syncStone();
+}
 /** frame one of the Brushes subjects (stone, corner, culm, gesture), or all of them */
 function frameSubject(s: string | null) {
   const c = s && brushes?.centres[s];
+  if (composed) { const k = (c || brushes!.centres.all) as [number, number, number]; framing = { target: [k[0], k[1], k[2]], dist: !c || s === 'all' ? 6.4 : s === 'stone' ? 3.6 : 2.2 }; return; }
   framing = c ? { target: [c[0], c[1], c[2]], dist: s === 'gesture' ? 2.4 : 3.2 } : { target: [0, 0.6, 0.2], dist: 7.8 };
 }
 function openStone() {
@@ -435,7 +453,7 @@ slider('size', () => size, (v) => { size = v; }, (v) => `${v.toFixed(2)}×`);
 slider('res', () => res, (v) => { res = v; }, (v) => `${Math.min(v, devicePixelRatio).toFixed(2)}`);
 // (One Stone's own)
 /** the current drawing again in the other look, from where the camera is */
-function reopen() { const c = { ...cam, target: [...cam.target] }; if (brushes) openBrushes(); else openStone(); Object.assign(cam, c); }
+function reopen() { const c = { ...cam, target: [...cam.target] }; if (composed) openComposed(); else if (brushes) openBrushes(); else openStone(); Object.assign(cam, c); }
 const seg = (id: string, items: Array<[string, () => void, () => boolean]>) => {
   const el = $(id);
   for (const [label, act] of items) { const b = document.createElement('button'); b.textContent = label; b.onclick = () => { act(); syncStone(); }; el.append(b); }
@@ -446,9 +464,10 @@ const syncs = [
   seg('states', [['sparse', () => { detail = STATES.sparse; syncDetail(); }, () => Math.abs(detail - STATES.sparse) < 0.01], ['intermediate', () => { detail = STATES.intermediate; syncDetail(); }, () => Math.abs(detail - STATES.intermediate) < 0.01], ['resolved', () => { detail = STATES.resolved; syncDetail(); }, () => detail === 1]]),
   seg('thins', [['by rank', () => { thin = 0; }, () => thin === 0], ['evenly', () => { thin = 1; }, () => thin === 1]]),
   seg('views', [['hero', () => setView('hero'), () => false], ['grazing', () => setView('grazing'), () => false], ['reverse', () => setView('reverse'), () => false], ['orbit', () => { setView('hero'); orbitFrom = performance.now(); }, () => orbitFrom !== null]]),
+  seg('relations', [['compose', () => { compose = !compose; reopen(); }, () => compose], ['halo', () => { haloOn = !haloOn; }, () => haloOn]]),
   seg('tools', [['brush', () => { brush = !brush; }, () => brush], ['clear', () => { features.fill(0); lastPaint = null; }, () => false], ['occluder', () => { occlude = !occlude; }, () => occlude]]),
 ];
-function syncStone() { syncs.forEach((f) => f()); $('stone-controls').hidden = !stone && !brushes; }
+function syncStone() { syncs.forEach((f) => f()); $('stone-controls').hidden = !stone && !brushes; $('relations').hidden = !composed; }
 slider('detail', () => detail, (v) => { detail = v; syncStone(); }, (v) => `${Math.round(v * 100)}%`);
 function syncDetail() { const el = $<HTMLInputElement>('detail'); el.value = String(detail); $('detail-v').textContent = `${Math.round(detail * 100)}%`; }
 LIGHTS.forEach((l) => { const b = document.createElement('button'); b.textContent = l; b.onclick = () => { light = l; relight(); syncMist(); }; $('lights').append(b); });
@@ -515,7 +534,7 @@ function frame() {
   const near = Math.max(0.01, cam.dist * 0.01), proj = perspective(cam.fov, w / h, near, cam.dist * 100);
   const fy = h / (2 * Math.tan(cam.fov / 2));
   const share = shareAt(detail);
-  R.draw(view, proj, [fy, fy], { size, mode, bg: mist ? [0.13, 0.145, 0.165] : stone || brushes || bench ? [0.937, 0.906, 0.847] : theme(), detail, thin, share, features, eye: pos, occlude, only, light: mist ? Math.max(0, LIGHTS.indexOf(light) - 1) : 0, sun: sunDir(sunAz, sunEl), diff: mist ? diff : false });
+  R.draw(view, proj, [fy, fy], { size, mode, bg: mist ? [0.13, 0.145, 0.165] : stone || brushes || bench ? [0.937, 0.906, 0.847] : theme(), detail, thin, share, features, eye: pos, occlude, only, light: mist ? Math.max(0, LIGHTS.indexOf(light) - 1) : 0, sun: sunDir(sunAz, sunEl), diff: mist ? diff : false, halo: composed && compose && haloOn ? haloPx * dpr : 0, nf: [near, cam.dist * 100] });
   frames++;
   if (t - fpsT > 500) {
     fps = (frames * 1000) / (t - fpsT); frames = 0; fpsT = t;
@@ -534,7 +553,8 @@ function frame() {
     undo: () => $('b-undo').click(), density: (d: number) => { if (bench) { bench.density = d; benchRegen('all'); } },
   },
   mist: { setDiff: (d: boolean) => { diff = d; relight(); }, setLight: (l: string) => { light = l; relight(); syncMist(); }, setSun: (az: number, el: number) => { sunAz = az; sunEl = el; relight(); }, setBank: (b: number) => { bank = b; openMist(); }, get ready() { return refReady; } },
-  stone: { setView, setDetail: (d: number) => { detail = d; syncDetail(); syncStone(); }, setThin: (k: number) => { thin = k; }, setLook: (l: Look) => { look = l; if (brushes) openBrushes(); else openStone(); }, frame: (s: string | null) => { frameSubject(s); setView('hero'); }, paint, clear: () => { features.fill(0); lastPaint = null; }, features,
+  composed: { setCompose: (c: boolean) => { compose = c; reopen(); }, setHalo: (h: boolean, px?: number) => { haloOn = h; if (px) haloPx = px; }, get importance() { return composed ? (brushes as ReturnType<typeof composedScene>).importance : null; } },
+  stone: { setView, setDetail: (d: number) => { detail = d; syncDetail(); syncStone(); }, setThin: (k: number) => { thin = k; }, setLook: (l: Look) => { look = l; reopen(); }, frame: (s: string | null) => { frameSubject(s); setView('hero'); }, paint, clear: () => { features.fill(0); lastPaint = null; }, features,
     /** a touch at a point of the stone (world), as the brush would make it from the eye; and the stone's own lines */
     touch: (p: [number, number, number]) => { if (!stone) return 0; const { pos } = eye(), d = norm([p[0] - pos[0], p[1] - pos[1], p[2] - pos[2]]), h = stone.ray(pos, d); if (!h) return 0; const f = stone.featureAt(h.p, h.region); if (f) features[f] = Math.min(1, features[f] + 0.07); return f; },
     lines: () => (stone ? { seam: stone.seam, lip: stone.lip, crown: stone.crown } : null), setBrush: (b: boolean) => { brush = b; }, setOccluder: (b: boolean) => { occlude = b; }, setOnly: (k: number) => { only = k; }, orbit: () => { setView('hero'); orbitFrom = performance.now(); }, at: (yaw: number, pitch: number) => { cam.yaw = yaw; cam.pitch = pitch; orbitFrom = null; } },
