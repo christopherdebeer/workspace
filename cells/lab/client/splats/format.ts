@@ -25,7 +25,7 @@ export interface Splats {
   rgba: Uint8Array;
   /** (a drawing's, stone.ts) what kind of mark each is, how long it survives as the drawing simplifies (1 the last),
    * and the surface it lies on (for the marks that show only edge-on) */
-  mark?: Uint8Array; rank?: Float32Array; normal?: Float32Array;
+  mark?: Uint8Array; rank?: Float32Array; normal?: Float32Array; feature?: Uint8Array;
 }
 
 export function alloc(n: number): Splats {

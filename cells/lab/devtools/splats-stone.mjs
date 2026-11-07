@@ -2,6 +2,8 @@
 // - views: both looks (dry, wash) from the hero, grazing and reverse views (stone-views.png)
 // - detail: the detail scrubbed down, by rank against evenly, at the same number of marks (stone-detail.png)
 // - occluder: the far side's marks with and without the stone's depth (stone-occluder.png)
+// - states [look]: the three composed states (sparse, intermediate, resolved), from the reverse view first, then the hero
+//   and grazing views by the same rules (stone-states-<look>.png)
 // - pairs [look]: within one look, the three cameras crossed with sparse and resolved detail, the camera and the marks
 //   fixed (stone-pairs-<look>.png): the board for judging the drawing against the reference
 // - brush: the drawing spare, one patch brushed back, then seen from round the side (stone-brush.png)
@@ -29,6 +31,15 @@ await withWood(async (wood) => {
     await S('setDetail', 1); await S('setThin', 0);
     await wood.montage(shots, 'stone-detail', { height: 460, labels });
   }
+  if (which === 'all' || which === 'states') {
+    for (const look of process.argv[3] ? [process.argv[3]] : ['wash', 'dry']) {
+      const shots = [], labels = [];
+      await S('setLook', look); await S('setThin', 0);
+      for (const v of ['reverse', 'hero', 'grazing']) for (const [nm, d] of [['sparse', 0.25], ['intermediate', 0.55], ['resolved', 1]]) { await S('setView', v); await S('setDetail', d); shots.push(await shot(`stone-state-${look}-${v}-${nm}`)); labels.push(`${look} · ${v} · ${nm} · ${(await stats()).split(' ·')[0]}`); }
+      await S('setDetail', 1);
+      await wood.montage(shots, `stone-states-${look}`, { height: 480, labels, columns: 3 });
+    }
+  }
   if (which === 'all' || which === 'pairs') {
     for (const look of process.argv[3] ? [process.argv[3]] : ['wash', 'dry']) {
       const shots = [], labels = [];
@@ -48,16 +59,19 @@ await withWood(async (wood) => {
     await wood.montage(shots, 'stone-occluder', { height: 560, labels });
   }
   if (which === 'all' || which === 'brush') {
+    // (the drawing sparse; the seam touched (its branch, chips and moss come); then under the ledge (its underside
+    // develops); then turned: what was developed stays on the stone)
     const shots = [], labels = [];
-    await S('setLook', 'wash'); await S('setView', 'hero'); await S('setDetail', 0.15);
-    shots.push(await shot('stone-brush-0')); labels.push('spare (15%)');
-    // (a stroke across the stone's shadowed side, on the screen)
-    const box = await page.evaluate(() => { const r = document.getElementById('view').getBoundingClientRect(); return [r.width, r.height]; });
-    for (let k = 0; k <= 12; k++) await S('paint', box[0] * (0.5 + k * 0.03), box[1] * (0.5 + k * 0.006));
-    console.log('brushed', await stats());
-    shots.push(await shot('stone-brush-1')); labels.push('a patch brushed back');
-    await S('at', 1.6, 0.3); shots.push(await shot('stone-brush-2')); labels.push('turned: the patch stays on the stone');
-    await wood.montage(shots, 'stone-brush', { height: 560, labels });
+    await S('setLook', 'wash'); await S('setView', 'reverse'); await S('setDetail', 0.25); await S('clear');
+    shots.push(await shot('stone-brush-0')); labels.push('sparse');
+    const L = await page.evaluate(() => window.__splats.stone.lines());
+    for (let k = 0; k < 14; k++) await S('touch', L.seam[Math.floor((L.seam.length - 1) * (0.1 + 0.05 * k))]);
+    shots.push(await shot('stone-brush-1')); labels.push('the seam brushed: its branch, chips, moss');
+    for (let k = 0; k < 14; k++) { const p = L.lip[Math.floor((L.lip.length - 1) * (0.2 + 0.045 * k))]; await S('touch', [p[0], p[1] - 0.03, p[2]]); }
+    shots.push(await shot('stone-brush-2')); labels.push('under the ledge brushed: its underside');
+    await S('at', 0.6 + Math.PI - 0.9, 0.3); shots.push(await shot('stone-brush-3')); labels.push('turned: it stays');
+    await S('clear'); await S('setDetail', 1);
+    await wood.montage(shots, 'stone-brush', { height: 520, labels });
   }
   if (page.errors.length) console.log('errors', page.errors);
 }, { width: 390, height: 640 });

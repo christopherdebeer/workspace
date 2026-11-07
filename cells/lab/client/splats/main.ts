@@ -17,7 +17,7 @@
 import { Renderer } from './render';
 import { bounds, garden, parse, type Splats } from './format';
 import { Sorter, type SortDone } from './sort';
-import { MARK, oneStone, stoneShape, type Look, type Stone } from './stone';
+import { MARK, STATES, oneStone, stoneShape, type Look, type Stone } from './stone';
 
 const qs = new URLSearchParams(location.search);
 const preview = qs.has('preview');
@@ -95,7 +95,9 @@ let stone: Stone | null = null, look: Look = qs.get('look') === 'wash' ? 'wash' 
 let detail = Number(qs.get('detail') ?? 1), thin = qs.get('thin') === 'even' ? 1 : 0, brush = qs.has('brush'), occlude = qs.get('occluder') !== '0';
 /** `?only=fracture|wash|stipple|contour|shadow|lip|chip`: one kind of mark alone */
 let only = qs.has('only') ? (MARK as Record<string, number>)[qs.get('only')!] ?? -1 : -1;
-const reveals: Array<[number, number, number, number]> = [], revealNormals: Array<[number, number, number]> = [];
+/** how far the brush has developed each of the drawing's features (stone.ts FEATURE) */
+const features = new Float32Array(16);
+let lastPaint: [number, number, number] | null = null;
 const shape = (() => { let s: Stone | null = null; return () => (s ??= stoneShape()); })();
 function openStone() {
   const S = shape();
@@ -106,7 +108,7 @@ function openStone() {
   const k = 0.99, tri = new Float32Array(S.tris.length * 3);
   for (let i = 0; i < S.tris.length; i++) for (let a = 0; a < 3; a++) tri[i * 3 + a] = S.centre[a] + (S.pos[S.tris[i] * 3 + a] - S.centre[a]) * k;
   R.setOccluder(tri);
-  setView((qs.get('view') as 'hero' | 'grazing' | 'reverse') ?? 'hero');
+  setView((qs.get('view') as 'hero' | 'grazing' | 'reverse') ?? 'reverse');
   syncStone();
 }
 const VIEWS = { hero: { yaw: 0.6, pitch: 0.32 }, grazing: { yaw: 1.35, pitch: 0.035 }, reverse: { yaw: 0.6 + Math.PI, pitch: 0.3 } };
@@ -179,9 +181,12 @@ function paint(x: number, y: number): boolean {
   const h = stone.ray(pos, d);
   if (!h) return false;
   // (a patch already near here, on the same side, covers it: patches merge, so a long session keeps what it brushed)
-  if (reveals.some((q, k) => Math.hypot(q[0] - h.p[0], q[1] - h.p[1], q[2] - h.p[2]) < 0.12 && dot(revealNormals[k], h.n) > 0.5)) return true;
-  reveals.push([h.p[0], h.p[1], h.p[2], 0.3]); revealNormals.push(h.n);
-  if (reveals.length > 48) { reveals.shift(); revealNormals.shift(); }
+  // (the feature touched develops a little with each stretch of the stroke: its own marks come back in its own order,
+  // heart first, so what's revealed has the feature's shape, not the brush's)
+  const f = stone.featureAt(h.p, h.region);
+  if (!f) return false;
+  if (lastPaint && Math.hypot(lastPaint[0] - h.p[0], lastPaint[1] - h.p[1], lastPaint[2] - h.p[2]) < 0.025) return true;
+  lastPaint = h.p; features[f] = Math.min(1, features[f] + 0.07);
   return true;
 }
 canvas.addEventListener('pointerdown', (e) => {
@@ -255,12 +260,14 @@ const seg = (id: string, items: Array<[string, () => void, () => boolean]>) => {
 };
 const syncs = [
   seg('looks', [['dry', () => { look = 'dry'; const c = { ...cam, target: [...cam.target] }; openStone(); Object.assign(cam, c); }, () => look === 'dry'], ['wash', () => { look = 'wash'; const c = { ...cam, target: [...cam.target] }; openStone(); Object.assign(cam, c); }, () => look === 'wash']]),
+  seg('states', [['sparse', () => { detail = STATES.sparse; syncDetail(); }, () => Math.abs(detail - STATES.sparse) < 0.01], ['intermediate', () => { detail = STATES.intermediate; syncDetail(); }, () => Math.abs(detail - STATES.intermediate) < 0.01], ['resolved', () => { detail = STATES.resolved; syncDetail(); }, () => detail === 1]]),
   seg('thins', [['by rank', () => { thin = 0; }, () => thin === 0], ['evenly', () => { thin = 1; }, () => thin === 1]]),
   seg('views', [['hero', () => setView('hero'), () => false], ['grazing', () => setView('grazing'), () => false], ['reverse', () => setView('reverse'), () => false], ['orbit', () => { setView('hero'); orbitFrom = performance.now(); }, () => orbitFrom !== null]]),
-  seg('tools', [['brush', () => { brush = !brush; }, () => brush], ['clear', () => { reveals.length = 0; revealNormals.length = 0; }, () => false], ['occluder', () => { occlude = !occlude; }, () => occlude]]),
+  seg('tools', [['brush', () => { brush = !brush; }, () => brush], ['clear', () => { features.fill(0); lastPaint = null; }, () => false], ['occluder', () => { occlude = !occlude; }, () => occlude]]),
 ];
 function syncStone() { syncs.forEach((f) => f()); $('stone-controls').hidden = !stone; }
-slider('detail', () => detail, (v) => { detail = v; }, (v) => `${Math.round(v * 100)}%`);
+slider('detail', () => detail, (v) => { detail = v; syncStone(); }, (v) => `${Math.round(v * 100)}%`);
+function syncDetail() { const el = $<HTMLInputElement>('detail'); el.value = String(detail); $('detail-v').textContent = `${Math.round(detail * 100)}%`; }
 $('fold').onclick = () => { const f = document.documentElement.classList.toggle('folded'); $('fold').setAttribute('aria-expanded', String(!f)); $('fold').textContent = f ? 'controls' : 'hide'; };
 $('fold').textContent = 'hide';
 $('flip').onclick = () => { up = up === 1 ? -1 : 1; lastDir = null; };
@@ -286,11 +293,11 @@ function frame() {
   const near = Math.max(0.01, cam.dist * 0.01), proj = perspective(cam.fov, w / h, near, cam.dist * 100);
   const fy = h / (2 * Math.tan(cam.fov / 2));
   const share = shareAt(detail);
-  R.draw(view, proj, [fy, fy], { size, mode, bg: stone ? [0.937, 0.906, 0.847] : theme(), detail, thin, share, reveals, revealNormals, eye: pos, occlude, only });
+  R.draw(view, proj, [fy, fy], { size, mode, bg: stone ? [0.937, 0.906, 0.847] : theme(), detail, thin, share, features, eye: pos, occlude, only });
   frames++;
   if (t - fpsT > 500) {
     fps = (frames * 1000) / (t - fpsT); frames = 0; fpsT = t;
-    $('stats').textContent = stone && scene ? `${Math.round(shareAt(detail) * scene.n)} of ${scene.n} marks${reveals.length ? ' + brushed' : ''} · ${fps.toFixed(0)} fps` : scene ? `${(scene.n / 1000).toFixed(0)}k splats · ${fps.toFixed(0)} fps · sort ${sortMs.toFixed(0)} ms${sorter.worker ? '' : ' (here)'} · ${w}×${h} · loaded in ${(loadMs / 1000).toFixed(1)} s` : '';
+    $('stats').textContent = stone && scene ? `${Math.round(shareAt(detail) * scene.n)} of ${scene.n} marks${features.some((v) => v > 0) ? ' + brushed' : ''} · ${fps.toFixed(0)} fps` : scene ? `${(scene.n / 1000).toFixed(0)}k splats · ${fps.toFixed(0)} fps · sort ${sortMs.toFixed(0)} ms${sorter.worker ? '' : ' (here)'} · ${w}×${h} · loaded in ${(loadMs / 1000).toFixed(1)} s` : '';
   }
   requestAnimationFrame(frame);
 }
@@ -298,7 +305,10 @@ function frame() {
 (window as unknown as { __splats: unknown }).__splats = {
   get scene() { return scene ? { name: sceneName, n: scene.n } : null; }, cam, get fps() { return fps; }, get sortMs() { return sortMs; }, get drawn() { return R.drawn; },
   setMode: (m: number) => { mode = m; syncModes(); }, open, openUrl,
-  stone: { setView, setDetail: (d: number) => { detail = d; }, setThin: (k: number) => { thin = k; }, setLook: (l: Look) => { look = l; openStone(); }, paint, clear: () => { reveals.length = 0; revealNormals.length = 0; }, setBrush: (b: boolean) => { brush = b; }, setOccluder: (b: boolean) => { occlude = b; }, setOnly: (k: number) => { only = k; }, orbit: () => { setView('hero'); orbitFrom = performance.now(); }, at: (yaw: number, pitch: number) => { cam.yaw = yaw; cam.pitch = pitch; orbitFrom = null; } },
+  stone: { setView, setDetail: (d: number) => { detail = d; syncDetail(); syncStone(); }, setThin: (k: number) => { thin = k; }, setLook: (l: Look) => { look = l; openStone(); }, paint, clear: () => { features.fill(0); lastPaint = null; }, features,
+    /** a touch at a point of the stone (world), as the brush would make it from the eye; and the stone's own lines */
+    touch: (p: [number, number, number]) => { if (!stone) return 0; const { pos } = eye(), d = norm([p[0] - pos[0], p[1] - pos[1], p[2] - pos[2]]), h = stone.ray(pos, d); if (!h) return 0; const f = stone.featureAt(h.p, h.region); if (f) features[f] = Math.min(1, features[f] + 0.07); return f; },
+    lines: () => (stone ? { seam: stone.seam, lip: stone.lip, crown: stone.crown } : null), setBrush: (b: boolean) => { brush = b; }, setOccluder: (b: boolean) => { occlude = b; }, setOnly: (k: number) => { only = k; }, orbit: () => { setView('hero'); orbitFrom = performance.now(); }, at: (yaw: number, pitch: number) => { cam.yaw = yaw; cam.pitch = pitch; orbitFrom = null; } },
 };
 if (qs.has('url')) void openUrl(qs.get('url')!); else void open(qs.get('scene') ?? 'garden');
 if (qs.has('orbit')) setTimeout(() => { setView('hero'); orbitFrom = performance.now(); }, 300);
