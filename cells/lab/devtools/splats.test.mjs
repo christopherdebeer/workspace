@@ -88,8 +88,9 @@ ok('parse() tells a .splat by its bytes', F.parse(F.encodeSplat(g)).n === g.n);
 }
 // (the stone's drawing fitted as a field: discs whose ink depends on the view, unpacked; the fit beat the baseline)
 {
-  const FD = await load('../client/splats/field.ts'), d = FD.fieldDrawing(false), b = FD.fieldDrawing(true);
-  const head = (await import('node:fs')).readFileSync(new URL('../client/splats/fieldstone.ts', import.meta.url), 'utf8').slice(0, 400), m = head.match(/held-out error ([\d.]+) against ([\d.]+)/), fit = { field: { test: +m[1] }, constant: { test: +m[2] } };
+  const fs = await import('node:fs'), buf = fs.readFileSync(new URL('../static/splats/field-stone.bin', import.meta.url)), ab = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.length);
+  const FD = await load('../client/splats/field.ts'), d = FD.fieldDrawing(ab, false), b = FD.fieldDrawing(ab, true);
+  const about = JSON.parse(fs.readFileSync(new URL('../static/splats/field-stone.json', import.meta.url), 'utf8')).about, m = about.match(/held-out error ([\d.]+) against ([\d.]+)/), fit = { field: { test: +m[1] }, constant: { test: +m[2] } };
   const finite = d.pos.every(Number.isFinite) && d.rot.every(Number.isFinite) && d.scale.every((v) => v > 0);
   ok(`field: ${d.n} discs unpacked, kind 11, terms packed; held-out error ${fit.field.test} against ${fit.constant.test} without view dependence`, finite && d.mark.every((k) => k === 11) && d.n === b.n && d.feature.some((v, i) => v !== b.feature[i]) && fit.field.test < fit.constant.test, fit);
 }

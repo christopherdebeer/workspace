@@ -19,7 +19,7 @@ import { bounds, garden, parse, type Splats } from './format';
 import { Sorter, type SortDone } from './sort';
 import { MARK, STATES, stoneShape, type Look, type Stone } from './stone';
 import { inkScene, type InkStats } from './ink';
-import { fieldDrawing } from './field';
+import { fetchField, fieldDrawing } from './field';
 import { brushScene, composedScene, stoneDrawing, REF_CAM, type BrushScene, type ComposedScene } from './subjects';
 import { LIT, mistScene, referenceColours, sunDir, referenceAt, referenceLight, type MistScene } from './mist';
 import { NET, ANALYTIC, BAKE, RESULTS } from './mistnet';
@@ -109,7 +109,7 @@ async function open(name: string) {
     else if (name === 'bench') openBench();
     else if (name === 'composed') openComposed();
     else if (name === 'pen') openPen();
-    else if (name === 'field') openField();
+    else if (name === 'field') await openField();
     else if (!sc || !sc.url) { showCaptured(garden(Number(qs.get('count') ?? 120000)), 'garden', 1); }
     else showCaptured(parse(await fetchWithProgress(sc.url)), name, sc.up);
     loadMs = performance.now() - t0;
@@ -306,13 +306,25 @@ function openStone() {
  * The stone's drawing fitted as a field (field.ts): discs whose ink depends on where they're seen from, fitted to the
  * brush-drawn stone from 36 views. `&field=flat` for the baseline (the same discs, one constant opacity each).
  */
-function openField() {
-  framing = { target: [0, 0.3, 0], dist: 4.4 };
-  show(fieldDrawing(qs.get('field') === 'flat'), 'field', 1);
-  const S = shape(), k = 0.99, tri = new Float32Array(S.tris.length * 3);
-  for (let i = 0; i < S.tris.length; i++) for (let a = 0; a < 3; a++) tri[i * 3 + a] = S.centre[a] + (S.pos[S.tris[i] * 3 + a] - S.centre[a]) * k;
-  R.setOccluder(tri);
-  setView((qs.get('view') as 'hero' | 'grazing' | 'reverse') ?? 'reverse');
+async function openField() {
+  // (`field=stone` (the default), `composed`, `composed-resolved` (taught by the reference study too); `flat` (or the old
+  // `field=flat`) for the stone's baseline)
+  const which = qs.get('field') === 'flat' ? 'stone' : qs.get('field') ?? 'stone', flat = qs.has('flat') || qs.get('field') === 'flat';
+  $('status').textContent = `fetching the fitted field (${which})`;
+  const file = await fetchField(which);
+  if (which.startsWith('composed')) {
+    const sc = composedScene('wash', true);
+    framing = { target: [...REF_CAM.target] as [number, number, number], dist: REF_CAM.dist };
+    show(fieldDrawing(file, flat), 'field', 1); R.setOccluder(sc.occluder);
+    camRef();
+  } else {
+    framing = { target: [0, 0.3, 0], dist: 4.4 };
+    show(fieldDrawing(file, flat), 'field', 1);
+    const S = shape(), k = 0.99, tri = new Float32Array(S.tris.length * 3);
+    for (let i = 0; i < S.tris.length; i++) for (let a = 0; a < 3; a++) tri[i * 3 + a] = S.centre[a] + (S.pos[S.tris[i] * 3 + a] - S.centre[a]) * k;
+    R.setOccluder(tri);
+    setView((qs.get('view') as 'hero' | 'grazing' | 'reverse') ?? 'reverse');
+  }
 }
 const VIEWS = { hero: { yaw: 0.6, pitch: 0.32 }, grazing: { yaw: 1.35, pitch: 0.035 }, reverse: { yaw: 0.6 + Math.PI, pitch: 0.3 } };
 function setView(v: keyof typeof VIEWS) {
@@ -821,6 +833,8 @@ function frame() {
   get scene() { return scene ? { name: sceneName, n: scene.n } : null; }, cam, get fps() { return fps; }, get sortMs() { return sortMs; }, get drawn() { return R.drawn; },
   setMode: (m: number) => { mode = m; syncModes(); }, open, openUrl,
   ink: { get stats() { return inkStats; }, get on() { return inkOn; } },
+  /** set the whole camera (an orbit: yaw, pitch, distance, target, field of view) */
+  camera: (c: { yaw: number; pitch: number; dist: number; target: [number, number, number]; fov?: number }) => { Object.assign(cam, { yaw: c.yaw, pitch: c.pitch, dist: c.dist, target: [...c.target] as [number, number, number] }); if (c.fov) cam.fov = c.fov; orbitFrom = null; },
   /** this frame drawn now and read back: its lightness (green channel, 0…1) and the camera that drew it */
   grab: () => {
     drawNow(); const c = document.createElement('canvas'); c.width = canvas.width; c.height = canvas.height;

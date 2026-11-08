@@ -5,19 +5,27 @@
  * the renderer evaluates each disc's opacity from its terms every frame (render.ts), the terms packed into the bits a
  * drawing's feature and element ids use (four at 8 bits, five at 6, each over −12…12).
  */
-import { FIELD_STONE } from './fieldstone';
 import type { Splats } from './format';
 
 export const FIELD_KIND = 11;
 const INK = [36, 31, 27], LO = -12, HI = 12;
 const q = (v: number, bits: number) => Math.round(((Math.max(LO, Math.min(HI, v)) - LO) / (HI - LO)) * ((1 << bits) - 1));
 
-export function fieldDrawing(flat = false): Splats & { mark: Uint8Array; rank: Float32Array; normal: Float32Array; feature: Uint32Array; element: Uint32Array } {
-  const B = Uint8Array.from(atob(FIELD_STONE.data), (c) => c.charCodeAt(0)), dv = new DataView(B.buffer), N = FIELD_STONE.n, K = FIELD_STONE.stride;
+/** the experiment's assets folder (static/splats/, served with the page) */
+const ASSETS = (() => { const m = typeof document !== 'undefined' ? document.querySelector<HTMLMetaElement>('meta[name=assets]') : null; return m?.content && !m.content.includes('{{') ? m.content : ''; })();
+/** a fitted field's file (static/splats/field-<name>.bin), fetched */
+export async function fetchField(name: string): Promise<ArrayBuffer> {
+  const r = await fetch(`${ASSETS}field-${name}.bin`); if (!r.ok) throw new Error(`no fitted field '${name}' (${r.status})`);
+  return r.arrayBuffer();
+}
+/** a fitted field's file into splats: a 12-byte header (discs, bytes a disc, the span of its places), then the discs */
+export function fieldDrawing(file: ArrayBuffer, flat = false): Splats & { mark: Uint8Array; rank: Float32Array; normal: Float32Array; feature: Uint32Array; element: Uint32Array } {
+  const head = new DataView(file, 0, 12), N = head.getUint32(0, true), K = head.getUint32(4, true), SPAN = head.getFloat32(8, true);
+  const B = new Uint8Array(file, 12), dv = new DataView(file, 12);
   const s = { n: N, pos: new Float32Array(N * 3), scale: new Float32Array(N * 3), rot: new Float32Array(N * 4), rgba: new Uint8Array(N * 4), mark: new Uint8Array(N), rank: new Float32Array(N), normal: new Float32Array(N * 3), feature: new Uint32Array(N), element: new Uint32Array(N) };
   const term = (b: number) => (b / 255) * (HI - LO) + LO;
   for (let i = 0; i < N; i++) {
-    const o = i * K, p = [0, 1, 2].map((k) => (dv.getInt16(o + k * 2, true) / 32767) * 2.5), n = unOct(B[o + 6], B[o + 7]), sz = B[o + 8] * 0.0002;
+    const o = i * K, p = [0, 1, 2].map((k) => (dv.getInt16(o + k * 2, true) / 32767) * SPAN), n = unOct(B[o + 6], B[o + 7]), sz = B[o + 8] * 0.0002;
     const t1 = norm(Math.abs(n[1]) < 0.9 ? cross(n, [0, 1, 0]) : cross(n, [1, 0, 0])), t2 = cross(n, t1);
     s.pos.set(p, i * 3); s.scale.set([sz, sz, 0.0008], i * 3); s.rot.set(quat(t1, t2, n), i * 4); s.normal.set(n, i * 3);
     s.rgba.set([INK[0], INK[1], INK[2], 255], i * 4); s.mark[i] = FIELD_KIND; s.rank[i] = 1;
