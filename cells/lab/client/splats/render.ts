@@ -117,6 +117,12 @@ void main() {
     float s1 = dot(sn, v), s2 = dot(n2, v);
     keep *= s1 * s2 < 0.0 ? smoothstep(0.0, 0.12, min(abs(s1), abs(s2))) : 0.0;
   }
+  // (a captured scene in ink (ink.ts): a disc's ink copy shown only from where the disc is near edge-on, so the discs on
+  // the outline from here draw it; its paper body stepping aside at the same angles, so it doesn't cover its own line)
+  if (kind == 9u || kind == 10u) {
+    float s = abs(dot(sn, normalize(u_eye - p))), e = 1.0 - smoothstep(0.1, 0.28, s);
+    keep *= kind == 9u ? e : 1.0 - 0.9 * e;
+  }
   // (a mist splat: its light by the chosen method: stored on it (the reference, or baked), the analytic formula, or the
   // tiny network, both from the same cheap features of the coarse grid)
   if (kind == 8u) {

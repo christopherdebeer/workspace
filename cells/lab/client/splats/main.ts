@@ -18,6 +18,7 @@ import { Renderer } from './render';
 import { bounds, garden, parse, type Splats } from './format';
 import { Sorter, type SortDone } from './sort';
 import { MARK, STATES, stoneShape, type Look, type Stone } from './stone';
+import { inkScene, type InkStats } from './ink';
 import { brushScene, composedScene, stoneDrawing, REF_CAM, type BrushScene, type ComposedScene } from './subjects';
 import { LIT, mistScene, referenceColours, sunDir, referenceAt, referenceLight, type MistScene } from './mist';
 import { NET, ANALYTIC, BAKE, RESULTS } from './mistnet';
@@ -61,6 +62,7 @@ let home = { ...cam, target: [...cam.target] as [number, number, number] };
 function show(s: Splats, name: string, u: 1 | -1) {
   scene = s; up = u; sceneName = name;
   R.load(s);
+  if (captured && captured.name !== name) { captured = null; inkStats = null; }
   if (name !== 'stone') stone = null;
   if (name !== 'brushes' && name !== 'composed') brushes = null;
   if (name !== 'composed') composed = false;
@@ -69,7 +71,7 @@ function show(s: Splats, name: string, u: 1 | -1) {
   if (name !== 'pen') { penS = null; showReference(false); }
   if (name !== 'stone' && name !== 'brushes' && name !== 'mist' && name !== 'bench' && name !== 'composed' && name !== 'pen') R.setOccluder(null);
   ranks = s.rank ? Float32Array.from(s.rank).sort() : null;
-  document.documentElement.classList.toggle('paper', name === 'stone' || name === 'brushes' || name === 'bench' || name === 'composed' || name === 'pen');
+  document.documentElement.classList.toggle('paper', (inkOn && !!s.mark && !['stone', 'brushes', 'bench', 'composed', 'pen', 'mist'].includes(name)) || name === 'stone' || name === 'brushes' || name === 'bench' || name === 'composed' || name === 'pen');
   const b = bounds(s);
   cam.target = b.centre; cam.dist = b.radius * 2.2; cam.yaw = 0.6; cam.pitch = 0.3;
   home = { ...cam, target: [...cam.target] as [number, number, number] };
@@ -105,14 +107,23 @@ async function open(name: string) {
     else if (name === 'bench') openBench();
     else if (name === 'composed') openComposed();
     else if (name === 'pen') openPen();
-    else if (!sc || !sc.url) { show(garden(Number(qs.get('count') ?? 120000)), 'garden', 1); }
-    else show(parse(await fetchWithProgress(sc.url)), name, sc.up);
+    else if (!sc || !sc.url) { showCaptured(garden(Number(qs.get('count') ?? 120000)), 'garden', 1); }
+    else showCaptured(parse(await fetchWithProgress(sc.url)), name, sc.up);
     loadMs = performance.now() - t0;
   } catch (e) { $('status').textContent = String((e as Error).message); }
 }
+/**
+ * A captured scene (a preset, a URL, a file): shown as captured, or in ink (ink.ts: its own splats as paper, outline and
+ * tone). `?ink` or the *ink* button; the captured splats are kept so it toggles without loading again.
+ */
+let captured: { s: Splats; name: string; up: 1 | -1 } | null = null, inkOn = qs.has('ink'), inkStats: InkStats | null = null;
+function showCaptured(s: Splats, name: string, up: 1 | -1) {
+  if (inkOn) { const r = inkScene(s); inkStats = r.stats; show(r.drawing, name, up); } else { inkStats = null; show(s, name, up); }
+  captured = { s, name, up }; syncStone();
+}
 async function openUrl(url: string) {
   const t0 = performance.now();
-  try { show(parse(await fetchWithProgress(url)), url.split('/').pop() ?? 'url', Number(qs.get('up') ?? -1) < 0 ? -1 : 1); loadMs = performance.now() - t0; }
+  try { showCaptured(parse(await fetchWithProgress(url)), url.split('/').pop() ?? 'url', Number(qs.get('up') ?? -1) < 0 ? -1 : 1); loadMs = performance.now() - t0; }
   catch (e) { $('status').textContent = String((e as Error).message); }
 }
 
@@ -511,12 +522,15 @@ for (const [k, s] of Object.entries(SCENES)) {
   const b = document.createElement('button'); b.dataset.scene = k; b.textContent = s.mb ? `${s.label} · ${Math.round(s.mb)} MB` : s.label;
   b.onclick = () => void open(k); sceneBar.insertBefore(b, $('file-label'));
 }
+{ const b = document.createElement('button'); b.id = 'ink-toggle'; b.textContent = 'ink'; b.setAttribute('aria-pressed', String(inkOn)); b.title = 'draw a captured scene in ink, from its own splats';
+  b.onclick = () => { inkOn = !inkOn; b.setAttribute('aria-pressed', String(inkOn)); if (captured) showCaptured(captured.s, captured.name, captured.up); };
+  sceneBar.append(b); }
 $<HTMLInputElement>('file').addEventListener('change', async (e) => {
   const f = (e.target as HTMLInputElement).files?.[0];
   if (!f) return;
   const t0 = performance.now();
   $('status').textContent = `reading ${f.name}`;
-  try { show(parse(await f.arrayBuffer()), f.name, Number(qs.get('up') ?? -1) < 0 ? -1 : 1); loadMs = performance.now() - t0; document.querySelectorAll('#scenes button').forEach((b) => b.setAttribute('aria-pressed', 'false')); }
+  try { showCaptured(parse(await f.arrayBuffer()), f.name, Number(qs.get('up') ?? -1) < 0 ? -1 : 1); loadMs = performance.now() - t0; document.querySelectorAll('#scenes button').forEach((b) => b.setAttribute('aria-pressed', 'false')); }
   catch (err) { $('status').textContent = String((err as Error).message); }
 });
 const slider = (id: string, get: () => number, set: (v: number) => void, fmt: (v: number) => string) => {
@@ -542,7 +556,7 @@ const syncs = [
   seg('policies', [['ranks', () => { policyMode = 'ranks'; policyTarget = null; }, () => policyMode === 'ranks'], ['rules', () => { policyMode = 'rules'; policyTarget = null; }, () => policyMode === 'rules'], ['learned', () => { policyMode = 'learned'; policyTarget = null; }, () => policyMode === 'learned'], ['judge', () => { judge.on = true; judgeNext(); }, () => judge.on]]),
   seg('tools', [['brush', () => { brush = !brush; }, () => brush], ['clear', () => { features.fill(0); lastPaint = null; }, () => false], ['occluder', () => { occlude = !occlude; }, () => occlude]]),
 ];
-function syncStone() { syncs.forEach((f) => f()); $('stone-controls').hidden = !stone && !brushes; $('relations').hidden = !composed; $('policies').hidden = !composed; }
+function syncStone() { syncs.forEach((f) => f()); $('stone-controls').hidden = !stone && !brushes && !(captured && inkOn); $('relations').hidden = !composed; $('policies').hidden = !composed; }
 slider('detail', () => detail, (v) => { detail = v; syncStone(); }, (v) => `${Math.round(v * 100)}%`);
 function syncDetail() { const el = $<HTMLInputElement>('detail'); el.value = String(detail); $('detail-v').textContent = `${Math.round(detail * 100)}%`; }
 LIGHTS.forEach((l) => { const b = document.createElement('button'); b.textContent = l; b.onclick = () => { light = l; relight(); syncMist(); }; $('lights').append(b); });
@@ -791,6 +805,7 @@ function frame() {
 (window as unknown as { __splats: unknown }).__splats = {
   get scene() { return scene ? { name: sceneName, n: scene.n } : null; }, cam, get fps() { return fps; }, get sortMs() { return sortMs; }, get drawn() { return R.drawn; },
   setMode: (m: number) => { mode = m; syncModes(); }, open, openUrl,
+  ink: { get stats() { return inkStats; }, get on() { return inkOn; } },
   pen: { frame: (n: string) => penFrame(n), reference: (on: boolean) => showReference(on), get bank() { return penS?.bank ?? null; }, get rock() { return penS?.rock ?? null; } },
   bench: {
     get state() { return bench ? { selected: benchSel, items: bench.items.map((it, i) => ({ name: it.name, id: it.stroke.id, ctrl: it.handles(), material: it.stroke.material, pressure: it.pressure, weight: bench!.editor.weight(i), wash: bench!.editor.washScale(i), marks: bench!.editor.deps(it.stroke.id).length })), total: bench.editor.total, density: bench.editor.density, undo: undoStack.length, msg: benchMsg, lastEdit } : null; },
