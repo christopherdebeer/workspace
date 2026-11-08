@@ -97,7 +97,7 @@ void main() {
   // (set each frame from the view); otherwise it's developed by the brush, brought back by rank as far as its value)
   float detail = u_detail, gate = 1.0;
   bool gated = (feature & 0x80000000u) != 0u; uint fid = feature & 0x7fffffffu;
-  if (fid > 0u) { ivec2 fs = textureSize(u_feat, 0); int fi = int(fid); float fv = fi < fs.x * fs.y ? texelFetch(u_feat, ivec2(fi % fs.x, fi / fs.x), 0).r : 0.0; if (gated) gate = fv; else detail = max(detail, fv); }
+  if (fid > 0u && kind != 11u) { ivec2 fs = textureSize(u_feat, 0); int fi = int(fid); float fv = fi < fs.x * fs.y ? texelFetch(u_feat, ivec2(fi % fs.x, fi / fs.x), 0).r : 0.0; if (gated) gate = fv; else detail = max(detail, fv); }
   // (kept by rank against the detail asked, or thinned evenly to the same share; and round what the brush touched, all of it
   // brought back by rank)
   float keep = u_thin == 1 ? smoothstep(1.0 - u_share - 0.03, 1.0 - u_share, hash(a_index) * 0.999) : smoothstep(1.0 - u_detail - 0.04, 1.0 - u_detail, rank);
@@ -116,6 +116,17 @@ void main() {
     vec3 v = normalize(u_eye - p), n2 = octDecode(vec2(float((d2.x >> 8) & 255u), float((d2.x >> 16) & 255u)) / 127.5 - 1.0);
     float s1 = dot(sn, v), s2 = dot(n2, v);
     keep *= s1 * s2 < 0.0 ? smoothstep(0.0, 0.12, min(abs(s1), abs(s2))) : 0.0;
+  }
+  // (a fitted field (field.ts): the disc's ink opacity from the direction it's seen from, nine low-order terms of it,
+  // packed into its feature and element bits)
+  if (kind == 11u) {
+    vec3 d = normalize(u_eye - p);
+    uint e = d2.z;
+    float c0 = float(feature & 255u), c1 = float((feature >> 8) & 255u), c2 = float((feature >> 16) & 255u), c3 = float(feature >> 24);
+    float z = (c0 / 255.0 * 24.0 - 12.0) + (c1 / 255.0 * 24.0 - 12.0) * d.x + (c2 / 255.0 * 24.0 - 12.0) * d.y + (c3 / 255.0 * 24.0 - 12.0) * d.z;
+    z += (float(e & 63u) / 63.0 * 24.0 - 12.0) * d.x * d.y + (float((e >> 6) & 63u) / 63.0 * 24.0 - 12.0) * d.y * d.z + (float((e >> 12) & 63u) / 63.0 * 24.0 - 12.0) * d.x * d.z;
+    z += (float((e >> 18) & 63u) / 63.0 * 24.0 - 12.0) * (d.x * d.x - d.y * d.y) + (float((e >> 24) & 63u) / 63.0 * 24.0 - 12.0) * (3.0 * d.z * d.z - 1.0);
+    v_color.a *= 1.0 / (1.0 + exp(-z));
   }
   // (a captured scene in ink (ink.ts): a disc's ink copy shown only from where the disc is near edge-on, so the discs on
   // the outline from here draw it; its paper body stepping aside at the same angles, so it doesn't cover its own line)

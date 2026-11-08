@@ -19,6 +19,7 @@ import { bounds, garden, parse, type Splats } from './format';
 import { Sorter, type SortDone } from './sort';
 import { MARK, STATES, stoneShape, type Look, type Stone } from './stone';
 import { inkScene, type InkStats } from './ink';
+import { fieldDrawing } from './field';
 import { brushScene, composedScene, stoneDrawing, REF_CAM, type BrushScene, type ComposedScene } from './subjects';
 import { LIT, mistScene, referenceColours, sunDir, referenceAt, referenceLight, type MistScene } from './mist';
 import { NET, ANALYTIC, BAKE, RESULTS } from './mistnet';
@@ -42,6 +43,7 @@ const SCENES: Record<string, { label: string; url?: string; mb?: number; up: 1 |
   brushes: { label: 'brushes', up: 1 },
   composed: { label: 'composed', up: 1 },
   pen: { label: 'pen', up: 1 },
+  field: { label: 'fitted', up: 1 },
   bench: { label: 'bench', up: 1 },
   mist: { label: 'mist', up: 1 },
   garden: { label: 'garden', up: 1 },
@@ -69,9 +71,9 @@ function show(s: Splats, name: string, u: 1 | -1) {
   if (name !== 'mist') mist = null;
   if (name !== 'bench' && name !== 'composed') { bench = null; benchSel = -1; syncBench(); }
   if (name !== 'pen') { penS = null; showReference(false); }
-  if (name !== 'stone' && name !== 'brushes' && name !== 'mist' && name !== 'bench' && name !== 'composed' && name !== 'pen') R.setOccluder(null);
+  if (name !== 'stone' && name !== 'brushes' && name !== 'mist' && name !== 'bench' && name !== 'composed' && name !== 'pen' && name !== 'field') R.setOccluder(null);
   ranks = s.rank ? Float32Array.from(s.rank).sort() : null;
-  document.documentElement.classList.toggle('paper', (inkOn && !!s.mark && !['stone', 'brushes', 'bench', 'composed', 'pen', 'mist'].includes(name)) || name === 'stone' || name === 'brushes' || name === 'bench' || name === 'composed' || name === 'pen');
+  document.documentElement.classList.toggle('paper', (inkOn && !!s.mark && !['stone', 'brushes', 'bench', 'composed', 'pen', 'mist'].includes(name)) || name === 'stone' || name === 'brushes' || name === 'bench' || name === 'composed' || name === 'pen' || name === 'field');
   const b = bounds(s);
   cam.target = b.centre; cam.dist = b.radius * 2.2; cam.yaw = 0.6; cam.pitch = 0.3;
   home = { ...cam, target: [...cam.target] as [number, number, number] };
@@ -107,6 +109,7 @@ async function open(name: string) {
     else if (name === 'bench') openBench();
     else if (name === 'composed') openComposed();
     else if (name === 'pen') openPen();
+    else if (name === 'field') openField();
     else if (!sc || !sc.url) { showCaptured(garden(Number(qs.get('count') ?? 120000)), 'garden', 1); }
     else showCaptured(parse(await fetchWithProgress(sc.url)), name, sc.up);
     loadMs = performance.now() - t0;
@@ -298,6 +301,18 @@ function openStone() {
   R.setOccluder(tri);
   setView((qs.get('view') as 'hero' | 'grazing' | 'reverse') ?? 'reverse');
   syncStone();
+}
+/**
+ * The stone's drawing fitted as a field (field.ts): discs whose ink depends on where they're seen from, fitted to the
+ * brush-drawn stone from 36 views. `&field=flat` for the baseline (the same discs, one constant opacity each).
+ */
+function openField() {
+  framing = { target: [0, 0.3, 0], dist: 4.4 };
+  show(fieldDrawing(qs.get('field') === 'flat'), 'field', 1);
+  const S = shape(), k = 0.99, tri = new Float32Array(S.tris.length * 3);
+  for (let i = 0; i < S.tris.length; i++) for (let a = 0; a < 3; a++) tri[i * 3 + a] = S.centre[a] + (S.pos[S.tris[i] * 3 + a] - S.centre[a]) * k;
+  R.setOccluder(tri);
+  setView((qs.get('view') as 'hero' | 'grazing' | 'reverse') ?? 'reverse');
 }
 const VIEWS = { hero: { yaw: 0.6, pitch: 0.32 }, grazing: { yaw: 1.35, pitch: 0.035 }, reverse: { yaw: 0.6 + Math.PI, pitch: 0.3 } };
 function setView(v: keyof typeof VIEWS) {
@@ -777,7 +792,7 @@ function frame() {
     const u = (t - orbitFrom) / 1000 / ORBIT_S;
     cam.yaw = VIEWS.hero.yaw + Math.min(1, u) * Math.PI * 2;
     if (u >= 1) { orbitFrom = null; syncStone(); }
-  } else if (!stone && !brushes && !bench && !penS && (preview || t - touched > 8000)) cam.yaw += dt * 0.15;
+  } else if (!stone && !brushes && !bench && !penS && sceneName !== 'field' && (preview || t - touched > 8000)) cam.yaw += dt * 0.15;
   else if ((stone || brushes) && preview) cam.yaw += dt * 0.25;
   // (the canvas at the resolution asked, never past the screen's)
   const dpr = Math.min(res, devicePixelRatio || 1), w = Math.round(canvas.clientWidth * dpr), h = Math.round(canvas.clientHeight * dpr);
@@ -790,7 +805,7 @@ function frame() {
   const near = Math.max(0.01, cam.dist * 0.01), proj = perspective(cam.fov, w / h, near, cam.dist * 100);
   const fy = h / (2 * Math.tan(cam.fov / 2));
   const share = shareAt(detail), gv = updateGates(dt);
-  drawNow = () => R.draw(view, proj, [fy, fy], { size, mode, bg: mist ? [0.13, 0.145, 0.165] : stone || brushes || bench || penS || (captured && inkOn) ? [0.937, 0.906, 0.847] : theme(), detail, thin, share, features: gv ?? features, eye: pos, occlude, only, light: mist ? Math.max(0, LIGHTS.indexOf(light) - 1) : 0, sun: sunDir(sunAz, sunEl), diff: mist ? diff : false, halo: composed && compose && haloOn ? haloPx * dpr : 0, nf: [near, cam.dist * 100] });
+  drawNow = () => R.draw(view, proj, [fy, fy], { size, mode, bg: mist ? [0.13, 0.145, 0.165] : stone || brushes || bench || penS || sceneName === 'field' || (captured && inkOn) ? [0.937, 0.906, 0.847] : theme(), detail, thin, share, features: gv ?? features, eye: pos, occlude, only, light: mist ? Math.max(0, LIGHTS.indexOf(light) - 1) : 0, sun: sunDir(sunAz, sunEl), diff: mist ? diff : false, halo: composed && compose && haloOn ? haloPx * dpr : 0, nf: [near, cam.dist * 100] });
   applyPolicy(dt, pos, fwd);
   drawNow();
   judgeStep();
@@ -806,6 +821,13 @@ function frame() {
   get scene() { return scene ? { name: sceneName, n: scene.n } : null; }, cam, get fps() { return fps; }, get sortMs() { return sortMs; }, get drawn() { return R.drawn; },
   setMode: (m: number) => { mode = m; syncModes(); }, open, openUrl,
   ink: { get stats() { return inkStats; }, get on() { return inkOn; } },
+  /** this frame drawn now and read back: its lightness (green channel, 0…1) and the camera that drew it */
+  grab: () => {
+    drawNow(); const c = document.createElement('canvas'); c.width = canvas.width; c.height = canvas.height;
+    const g = c.getContext('2d')!; g.drawImage(canvas, 0, 0); const d = g.getImageData(0, 0, c.width, c.height).data, L: number[] = [];
+    for (let i = 0; i < c.width * c.height; i++) L.push(+(d[i * 4 + 1] / 255).toFixed(3));
+    return { w: c.width, h: c.height, L, eye: eye().pos, target: [...cam.target], fov: cam.fov, up };
+  },
   pen: { frame: (n: string) => penFrame(n), reference: (on: boolean) => showReference(on), get bank() { return penS?.bank ?? null; }, get rock() { return penS?.rock ?? null; } },
   bench: {
     get state() { return bench ? { selected: benchSel, items: bench.items.map((it, i) => ({ name: it.name, id: it.stroke.id, ctrl: it.handles(), material: it.stroke.material, pressure: it.pressure, weight: bench!.editor.weight(i), wash: bench!.editor.washScale(i), marks: bench!.editor.deps(it.stroke.id).length })), total: bench.editor.total, density: bench.editor.density, undo: undoStack.length, msg: benchMsg, lastEdit } : null; },
