@@ -72,18 +72,32 @@ export function inkScene(src: Splats, o: { steps?: number } = {}): { drawing: In
     for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) for (let dz = -1; dz <= 1; dz++) { const g = fgrid.get(`${a + dx},${b + dy},${c + dz}`); if (g) { x += g[0]; y += g[1]; z += g[2]; w += g[3]; } }
     const ox = src.pos[i * 3] - x / w, oy = src.pos[i * 3 + 1] - y / w, oz = src.pos[i * 3 + 2] - z / w, ol = Math.hypot(ox, oy, oz);
     if (ol < 0.3 * fine || src.rgba[i * 4 + 3] < 100) return;
-    // (at most two to a cell, so the outline is a line, not a crowd)
-    const key = `${a},${b},${c}`, had = perCell.get(key) ?? 0; if (had >= 2) return; perCell.set(key, had + 1);
+    // (one to a cell, so the outline is a line, not a crowd)
+    const key = `${a},${b},${c}`; if (perCell.has(key)) return; perCell.set(key, k);
     outward.set([ox / ol, oy / ol, oz / ol], k * 3); surface[k] = 1;
   });
+  // (smoothed: each surface splat's outward direction the mean of its neighbouring cells', so a lumpy or furry surface
+  // turns edge-on along its outline, not at every tuft)
+  const cellDir = new Map<string, number[]>();
+  for (const [key, k] of perCell) cellDir.set(key, [outward[k * 3], outward[k * 3 + 1], outward[k * 3 + 2]]);
+  for (let pass = 0; pass < 2; pass++) {
+    const next = new Map<string, number[]>();
+    for (const key of cellDir.keys()) {
+      const [a, b, c] = key.split(',').map(Number); let x = 0, y = 0, z = 0;
+      for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) for (let dz = -1; dz <= 1; dz++) { const d = cellDir.get(`${a + dx},${b + dy},${c + dz}`); if (d) { x += d[0]; y += d[1]; z += d[2]; } }
+      const l = Math.hypot(x, y, z) || 1; next.set(key, [x / l, y / l, z / l]);
+    }
+    for (const [k, v] of next) cellDir.set(k, v);
+  }
+  for (const [key, k] of perCell) outward.set(cellDir.get(key)!, k * 3);
 
   // ─── the marks ───
   const tone = new Float32Array(N);
   let nFlat = 0, nTone = 0;
   for (let k = 0; k < N; k++) {
     const i = keep[k], g = Math.max(0, Math.min(1, (Lp - L[k]) / Math.max(0.05, Lp - Ld))), c = Math.max(0, Math.min(1, (around(i) - L[k]) * 4));
-    tone[k] = Math.max(g ** 1.2, 0.8 * c);
-    if (tone[k] > 0.12) nTone++;
+    tone[k] = Math.max(g ** 1.6, 0.8 * c);
+    if (tone[k] > 0.2) nTone++;
     if (surface[k]) nFlat++;
   }
   const M = N + nFlat + nTone;
@@ -110,7 +124,7 @@ export function inkScene(src: Splats, o: { steps?: number } = {}): { drawing: In
       out.rgba.set([INK[0], INK[1], INK[2], 230], m * 4); out.mark[m] = INK_KIND.silhouette; out.rank[m] = 0.3 + 0.65 * sizeRank(size[k]); out.normal.set([nx, ny, nz], m * 3);
       m++;
     }
-    if (tone[k] > 0.12) { const q = Math.ceil(tone[k] * steps) / steps; put(k, INK_KIND.tone, INK, (src.rgba[keep[k] * 4 + 3] / 255) * (0.15 + 0.75 * q), 0.15 + 0.8 * tone[k], 0.92); }
+    if (tone[k] > 0.2) { const q = Math.ceil(tone[k] * steps) / steps; put(k, INK_KIND.tone, INK, (src.rgba[keep[k] * 4 + 3] / 255) * (0.15 + 0.75 * q), 0.15 + 0.8 * tone[k], 0.92); }
   }
   return { drawing: out, stats: { source: n0, kept: N, flat: nFlat, toned: nTone, marks: M, paper: +Lp.toFixed(2), ms: Math.round(performance.now() - t0) } };
 }

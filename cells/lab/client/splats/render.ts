@@ -120,7 +120,7 @@ void main() {
   // (a captured scene in ink (ink.ts): a disc's ink copy shown only from where the disc is near edge-on, so the discs on
   // the outline from here draw it; its paper body stepping aside at the same angles, so it doesn't cover its own line)
   if (kind == 9u || kind == 10u) {
-    float s = abs(dot(sn, normalize(u_eye - p))), e = 1.0 - smoothstep(0.1, 0.28, s);
+    float s = abs(dot(sn, normalize(u_eye - p))), e = 1.0 - smoothstep(0.06, 0.2, s);
     keep *= kind == 9u ? e : 1.0 - 0.9 * e;
   }
   // (a mist splat: its light by the chosen method: stored on it (the reference, or baked), the analytic formula, or the
