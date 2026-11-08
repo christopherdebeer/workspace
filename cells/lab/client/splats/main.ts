@@ -22,6 +22,8 @@ import { brushScene, composedScene, REF_CAM, type BrushScene, type ComposedScene
 import { LIT, mistScene, referenceColours, sunDir, referenceAt, referenceLight, type MistScene } from './mist';
 import { NET, ANALYTIC, BAKE, RESULTS } from './mistnet';
 import { benchScene, PRESSURES } from './bench';
+import { penScene, type PenScene } from './penscene';
+import { paint as autographPaint } from '../autograph/ink';
 import type { Editor, EditItem, Snapshot } from './edit';
 import { competitionOf, controls, ease, features as groupFeatures, learned, marksAtDetail, marksOf, matchBudget, rules, jitter, type GroupInfo, type Treatment, type ViewIn } from './policy';
 import { POLICY } from './policynet';
@@ -38,6 +40,7 @@ const SCENES: Record<string, { label: string; url?: string; mb?: number; up: 1 |
   stone: { label: 'one stone', up: 1 },
   brushes: { label: 'brushes', up: 1 },
   composed: { label: 'composed', up: 1 },
+  pen: { label: 'pen', up: 1 },
   bench: { label: 'bench', up: 1 },
   mist: { label: 'mist', up: 1 },
   garden: { label: 'garden', up: 1 },
@@ -63,9 +66,10 @@ function show(s: Splats, name: string, u: 1 | -1) {
   if (name !== 'composed') composed = false;
   if (name !== 'mist') mist = null;
   if (name !== 'bench' && name !== 'composed') { bench = null; benchSel = -1; syncBench(); }
-  if (name !== 'stone' && name !== 'brushes' && name !== 'mist' && name !== 'bench' && name !== 'composed') R.setOccluder(null);
+  if (name !== 'pen') { penS = null; showReference(false); }
+  if (name !== 'stone' && name !== 'brushes' && name !== 'mist' && name !== 'bench' && name !== 'composed' && name !== 'pen') R.setOccluder(null);
   ranks = s.rank ? Float32Array.from(s.rank).sort() : null;
-  document.documentElement.classList.toggle('paper', name === 'stone' || name === 'brushes' || name === 'bench' || name === 'composed');
+  document.documentElement.classList.toggle('paper', name === 'stone' || name === 'brushes' || name === 'bench' || name === 'composed' || name === 'pen');
   const b = bounds(s);
   cam.target = b.centre; cam.dist = b.radius * 2.2; cam.yaw = 0.6; cam.pitch = 0.3;
   home = { ...cam, target: [...cam.target] as [number, number, number] };
@@ -100,6 +104,7 @@ async function open(name: string) {
     else if (name === 'mist') openMist();
     else if (name === 'bench') openBench();
     else if (name === 'composed') openComposed();
+    else if (name === 'pen') openPen();
     else if (!sc || !sc.url) { show(garden(Number(qs.get('count') ?? 120000)), 'garden', 1); }
     else show(parse(await fetchWithProgress(sc.url)), name, sc.up);
     loadMs = performance.now() - t0;
@@ -209,6 +214,31 @@ function openComposed() {
 }
 /** the camera nearest the reference drawings' composition (devtools/splats/targets): the culm across the stone's right, the corner behind to the left */
 function camRef() { Object.assign(cam, { yaw: REF_CAM.yaw, pitch: REF_CAM.pitch, dist: REF_CAM.dist, target: [...REF_CAM.target] as [number, number, number] }); home = { ...cam, target: [...cam.target] as [number, number, number] }; }
+/**
+ * The pen scene (penscene.ts): an Autograph stroke carried through the brush, on a board and round a culm, against the
+ * brush's static stroke; and a Bamboo bank edge drawn by a hand and the pen. `reference` lays Autograph's own rendering
+ * of the same writing over the screen.
+ */
+let penS: PenScene | null = null;
+function openPen() {
+  const P = penScene();
+  show(P.drawing, 'pen', 1);
+  penS = P; R.setOccluder(P.occluder);
+  penFrame(qs.get('part') ?? 'word');
+  if (qs.has('reference')) showReference(true);
+}
+function penFrame(name: string) {
+  const c = penS?.centres[name]; if (!c) return;
+  Object.assign(cam, { yaw: c.yaw, pitch: c.pitch, dist: c.dist, target: [...c.target] as [number, number, number] }); home = { ...cam, target: [...cam.target] as [number, number, number] };
+}
+let refCanvas: HTMLCanvasElement | null = null;
+function showReference(on: boolean) {
+  if (!on) { refCanvas?.remove(); refCanvas = null; return; }
+  if (!penS) return;
+  refCanvas ??= Object.assign(document.createElement('canvas'), { style: 'position:fixed;inset:0;width:100%;height:100%;z-index:4;background:#efe7d8' });
+  document.body.append(refCanvas);
+  autographPaint(refCanvas, [penS.sig], { mode: 'ink', ink: '#24201b', faint: '#bbb', pen: 'broad', dip: true, solid: true });
+}
 /**
  * The composed scene's gates, each frame: how much of the stone's tone is in sight from here (its shadowed faces'
  * washes, weighted by how far each faces the eye); its lit-side alternative shown as that falls; the other objects'
@@ -648,7 +678,7 @@ function frame() {
     const u = (t - orbitFrom) / 1000 / ORBIT_S;
     cam.yaw = VIEWS.hero.yaw + Math.min(1, u) * Math.PI * 2;
     if (u >= 1) { orbitFrom = null; syncStone(); }
-  } else if (!stone && !brushes && !bench && (preview || t - touched > 8000)) cam.yaw += dt * 0.15;
+  } else if (!stone && !brushes && !bench && !penS && (preview || t - touched > 8000)) cam.yaw += dt * 0.15;
   else if ((stone || brushes) && preview) cam.yaw += dt * 0.25;
   // (the canvas at the resolution asked, never past the screen's)
   const dpr = Math.min(res, devicePixelRatio || 1), w = Math.round(canvas.clientWidth * dpr), h = Math.round(canvas.clientHeight * dpr);
@@ -661,7 +691,7 @@ function frame() {
   const near = Math.max(0.01, cam.dist * 0.01), proj = perspective(cam.fov, w / h, near, cam.dist * 100);
   const fy = h / (2 * Math.tan(cam.fov / 2));
   const share = shareAt(detail), gv = updateGates(dt);
-  drawNow = () => R.draw(view, proj, [fy, fy], { size, mode, bg: mist ? [0.13, 0.145, 0.165] : stone || brushes || bench ? [0.937, 0.906, 0.847] : theme(), detail, thin, share, features: gv ?? features, eye: pos, occlude, only, light: mist ? Math.max(0, LIGHTS.indexOf(light) - 1) : 0, sun: sunDir(sunAz, sunEl), diff: mist ? diff : false, halo: composed && compose && haloOn ? haloPx * dpr : 0, nf: [near, cam.dist * 100] });
+  drawNow = () => R.draw(view, proj, [fy, fy], { size, mode, bg: mist ? [0.13, 0.145, 0.165] : stone || brushes || bench || penS ? [0.937, 0.906, 0.847] : theme(), detail, thin, share, features: gv ?? features, eye: pos, occlude, only, light: mist ? Math.max(0, LIGHTS.indexOf(light) - 1) : 0, sun: sunDir(sunAz, sunEl), diff: mist ? diff : false, halo: composed && compose && haloOn ? haloPx * dpr : 0, nf: [near, cam.dist * 100] });
   applyPolicy(dt, pos, fwd);
   drawNow();
   judgeStep();
@@ -676,6 +706,7 @@ function frame() {
 (window as unknown as { __splats: unknown }).__splats = {
   get scene() { return scene ? { name: sceneName, n: scene.n } : null; }, cam, get fps() { return fps; }, get sortMs() { return sortMs; }, get drawn() { return R.drawn; },
   setMode: (m: number) => { mode = m; syncModes(); }, open, openUrl,
+  pen: { frame: (n: string) => penFrame(n), reference: (on: boolean) => showReference(on), get bank() { return penS?.bank ?? null; } },
   bench: {
     get state() { return bench ? { selected: benchSel, items: bench.items.map((it, i) => ({ name: it.name, id: it.stroke.id, ctrl: it.handles(), material: it.stroke.material, pressure: it.pressure, weight: bench!.editor.weight(i), wash: bench!.editor.washScale(i), marks: bench!.editor.deps(it.stroke.id).length })), total: bench.editor.total, density: bench.editor.density, undo: undoStack.length, msg: benchMsg, lastEdit } : null; },
     select: (i: number) => benchSelect(i), pick: (x: number, y: number) => benchPick(x, y), screen: (p: number[]) => toScreen(p),

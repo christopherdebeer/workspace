@@ -858,7 +858,7 @@ function splineIdx(P: [number, number][], per = 24): { P: [number, number][]; se
  * stroke's start, per point (x-height units). Where the line doubles back on itself (a cusp: the top of an i, the foot of
  * an n) the power law alone only slows it; a pen stops there, so it does */
 const BRAKE = 0.08, ACCEL = 260, CUSP = 2;
-function move(P: [number, number][], pace0: number, local?: number[]): number[] {
+export function move(P: [number, number][], pace0: number, local?: number[]): number[] {
   const n = P.length, ds: number[] = [0], v: number[] = new Array(n);
   // (v26: a letter that needs care goes at its own pace, however quick the word around it)
   let pace = pace0;
@@ -909,7 +909,7 @@ const careful = (ch: string) => TELLING.letters.includes(ch);
 /** (v20) the pen following the plan in time: the plan's points `P`, reached at times `T` (move()), and the pen pulled
  * towards wherever the plan has got to. Where the pen is at each of those times, and then, once the plan has stopped,
  * its last few hundredths of a second coming to rest at the plan's end, exactly */
-function body(P: [number, number][], T: number[], omega: number | number[] = BODY.omega): { Q: [number, number][]; TQ: number[] } {
+export function body(P: [number, number][], T: number[], omega: number | number[] = BODY.omega): { Q: [number, number][]; TQ: number[] } {
   // (v26: or a stiffness for every point, where a letter that needs care is written more carefully than the word round it)
   const n = P.length, ws = typeof omega === 'number' ? null : omega;
   let w = ws ? ws[0] : (omega as number);

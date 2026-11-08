@@ -305,6 +305,68 @@ Boards: `node cells/lab/devtools/splats-composed.mjs [wash|dry]`:
 - **Washes are still smoky patches more than connected tonal shapes.**
 - **The phone is unmeasured.**
 
+## The pen: Autograph's hand and tool in the Splats brush
+
+`?scene=pen` (`pen.ts`, `penscene.ts`; `&part=word|board|culm|bank`, `&reference`). Three experiments each had part of
+a drawing medium:
+- **Autograph** has the most developed model of *making* a mark: a hand that plans and moves, a pen that answers the
+  movement.
+- **Bamboo** has the most developed model of *where* marks belong: which edges describe a real change of mass, where a
+  trail cuts a bank, how a broken line withdraws.
+- **Splats** keeps the mark as an editable object in space.
+
+Until now the Splats brush's "pressure" was a prescribed width profile along a supplied path: convenient and
+controllable, but a mark didn't look as it did because of how it was made. This brings in Autograph's hand and pen,
+reused rather than copied (`move()`, `body()`, `widths()`, `BROAD`, `LOUD`, `INK` exported from Autograph, unchanged):
+
+| part | responsibility | here |
+|---|---|---|
+| drawing rules | what to describe, which marks belong together | Bamboo (its bank-rim selection and dashes, unchanged) |
+| hand (optional) | a timed trajectory from a plan | Autograph's `move()` (speed by the two-thirds power law, rest at the ends, stops at cusps) and `body()` (a critically damped follower: hurried, it rounds corners) |
+| tool | movement and carried state into material | **the pen**: Autograph's rules for speed, broad nib, press, voice and ink; a nib-aligned Gaussian at every step |
+| spatial support | where the page goes in space | `planeMap`, `cylinderMap`, `groundMap`: the nib keeps its angle to the surface |
+| deposition and display | splats, rendered | Splats |
+
+**How the pen keeps the tool's character in splats:**
+- The nib is an elongated Gaussian laid along its edge at every step. Moving across the edge sweeps a broad band;
+  moving along it leaves a hairline. The contrast comes from the tool's shape, not from a width profile.
+- **No self-darkening:** a step's opacity is shared among the steps that overlap it along the motion. Where a stroke
+  crosses itself, the later pass leaves what the earlier one laid. That's the splat equivalent of Autograph's union of
+  swept shapes.
+
+**Astra's three questions, answered** (`splats.test.mjs`, a CPU rasterisation at fine resolution):
+
+| question | result |
+|---|---|
+| does the broad nib keep its directional character? | 56.9 mm moving across its edge, 5.0 mm along it: **11.4×** |
+| is the tone held without accidental darkening? | peak darkness 0.85 whichever way it moves; a self-crossing 0.83 against the line's 0.87 (**0.99** without the union) |
+| does the gesture keep its character on a curved surface? | wrapped round a cylinder: 56.9 mm and 5.0 mm, the same **11.4×** |
+| does ink behave? | a long stroke goes from 0.84 to 0.35 as the pen runs dry; after a pause it's dipped (0.85) |
+
+**On the boards** (`node cells/lab/devtools/splats-pen.mjs`):
+- **The word:** Autograph writes "stone" with the broad pen, timestamps and pen state kept. On a board and round a culm,
+  the pen gives the broad nib's contrast (full downstrokes, hairline joins), close to Autograph's own rendering
+  (overlaid with `&reference`). Today's static stroke along the same path is uniform and blobby. Wrapped round the culm,
+  the contrast survives, foreshortened toward the edges.
+- **The bank:** one of Bamboo's bank rims (seed 1, chunk −2,−2), chosen and broken into dashes by Bamboo's own drawing
+  (`strokes.ts` now reports each rim run it draws through an optional tap; its output is unchanged, byte for byte).
+  - Left: today's brush, width and strength from Bamboo's weight.
+  - Right: moved by a hand (a looser one than writing) and drawn by the pen. Each dash is its own stroke with the pen
+    lifted between, press from Bamboo's weight, ink running down and dipped at the pauses.
+
+  The difference is real but quiet at this scale: the pen's dashes thicken and thin with their direction and press.
+
+**Gaps:**
+- **Tone on screen:** the pen is paler than Autograph's solid ink at viewing distance. The nib's thin edge is under a
+  pixel, and the renderer's minimum footprint spreads its opacity. A minimum on-screen thickness, or rendering the
+  hairline as its own splat, would help.
+- **The nib's frame:** its angle is fixed to the surface. A pen held against the picture plane (the page as seen) is a
+  different and equally valid choice, not tried.
+- **Hand settings:** the bank's hand was chosen by eye (pace 5, stiffness 45). Bamboo's other features (contours, cut
+  edges, rock rims) aren't routed through it yet.
+- **Editing:** the composed scene's editable strokes don't use the pen yet. That's the obvious next join: an edit
+  changes the plan, the hand re-times it, and the pen redraws it.
+
 ## A drawing policy: learning which marks to keep
 
 `policy.ts`, `?scene=composed&policy=ranks|rules|learned`, `?judge`. The idea comes from the Mist experiment,
@@ -545,7 +607,7 @@ Roughly in order of what each teaches:
 
 ## Flags
 
-`?scene=stone|brushes|composed|bench|mist|garden|plush|nike|train` · `?compose=0` · `?halo=0` · `?halopx=` · `?policy=ranks|rules|learned` · `?judge` · `?look=dry|wash` · `?detail=0..1` · `?thin=even` · `?only=wash` · `?view=hero|grazing|reverse` · `?orbit` · `?detail=0.25|0.55|1` (sparse, intermediate, resolved) · `?brush` · `?occluder=0` · `?clean` (no controls) · `?url=…` (any `.splat` or `.ply` CORS lets it read) · `?up=1` (for a file that's
+`?scene=stone|brushes|composed|bench|mist|garden|plush|nike|train` · `?compose=0` · `?halo=0` · `?halopx=` · `?policy=ranks|rules|learned` · `?judge` · `?scene=pen&part=word|board|culm|bank&reference` · `?look=dry|wash` · `?detail=0..1` · `?thin=even` · `?only=wash` · `?view=hero|grazing|reverse` · `?orbit` · `?detail=0.25|0.55|1` (sparse, intermediate, resolved) · `?brush` · `?occluder=0` · `?clean` (no controls) · `?url=…` (any `.splat` or `.ply` CORS lets it read) · `?up=1` (for a file that's
 y-up) · `?mode=0..3` · `?size=` · `?res=` · `?count=` (garden size) · `?noworkers` · `?preview`
 
 Checks: `node cells/lab/devtools/splats.test.mjs` (formats, covariance, sort) and

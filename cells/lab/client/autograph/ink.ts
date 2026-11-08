@@ -13,7 +13,7 @@ const PEN = 30;
 export const BROAD = { angle: (40 * Math.PI) / 180, w: 1.8, edge: 0.16 };
 
 /** the ink's width along a stroke, by how fast the hand went there (as the pad's pen), eased */
-function widths(s: number[]) {
+export function widths(s: number[]) {
   const out = [1];
   let w = 1;
   for (let i = 3; i < s.length; i += 3) {
@@ -44,14 +44,14 @@ export type Look = { mode: 'ink' | 'time'; ink: string; faint: string; upTo?: nu
 
 /** (from session 56) where the pen is, as the hand carries it on a stroke (hands/v34.ts, `pen`): its press, -1 to 1, and
  * its voice, round 0 to broad 1, at the stroke's start and end */
-type PenAt = { press: number; voice: number };
+export type PenAt = { press: number; voice: number };
 const penOf = (s: number[]) => (s as { pen?: [PenAt, PenAt] }).pen;
 /** how much louder the pen is at its hardest (its width, times), and how much finer and paler as it lifts off */
-const LOUD = { up: 1.3, down: 0.5, pale: 0.55 };
+export const LOUD = { up: 1.3, down: 0.5, pale: 0.55 };
 /** how the ink runs out: how much a stroke's length uses (per x-height of line, at the round pen's width), how pale the
  * pen is when it's nearly dry, and when it's dipped: at the first pause once it's below `low`, or straight away below
  * `dry`; a pause is the pen off the paper longer than `pause` seconds */
-const INK = { use: 0.011, palest: 0.38, low: 0.45, dry: 0.12, pause: 0.22 };
+export const INK = { use: 0.011, palest: 0.38, low: 0.45, dry: 0.12, pause: 0.22 };
 /** the scale that fits these writings to a canvas of this size */
 export const fitK = (sigs: Sig[], W: number, H: number) => { const b = bounds(sigs), edge = Math.max(6, H * 0.08); return Math.min((W - edge * 2) / b.w, (H - edge * 2) / b.h); };
 

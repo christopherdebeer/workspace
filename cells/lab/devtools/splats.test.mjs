@@ -224,6 +224,60 @@ ok('parse() tells a .splat by its bytes', F.parse(F.encodeSplat(g)).n === g.n);
   const g0 = G.find((g) => g.ranks.length > 20);
   ok('policy: extent 0 keeps none of a group, 1 all of it, between some of it from its heart', P.keptAt(g0, P.thresholdOf(g0, 0)) === 0 && P.keptAt(g0, P.thresholdOf(g0, 1)) === g0.ranks.length && P.keptAt(g0, P.thresholdOf(g0, 0.3)) < g0.ranks.length);
 }
+// (the pen (pen.ts, after Autograph): a broad nib thick across its edge and fine along it, its tone held whatever the
+// direction, a stroke's crossing no darker than its line, ink that runs out and is dipped again, and the same nib on a
+// cylinder)
+{
+  const PN = await load('../client/splats/pen.ts');
+  const k = 0.001, spec = (o = {}) => ({ pen: 30, k, voice: 1, dip: false, union: true, colour: [36, 31, 27], element: 1, ...o });
+  // (a straight stroke at an angle, at an even pace: page units, time in hundredths)
+  const line = (deg, L = 300, x0 = 0, y0 = 0, t0 = 0) => { const a = (deg * Math.PI) / 180, s = []; for (let i = 0; i <= 60; i++) s.push(x0 + Math.cos(a) * L * i / 60, y0 - Math.sin(a) * L * i / 60, t0 + i * 1.5); return s; };
+  const plane = PN.planeMap([0, 0, 0], [1, 0, 0], [0, 0, -1], k);
+  // (the deposits rasterised on the plane y = 0 (or, for the cylinder, unrolled), N pixels over a span)
+  const raster = (deps, span = 0.5, N = 400, c = [0.15, 0.15], unroll = null) => {
+    const T = new Float64Array(N * N).fill(1), px = span / N, X0 = c[0] - span / 2, Z0 = c[1] - span / 2;
+    for (const d of deps) {
+      const P = unroll ? unroll(d.p) : [d.p[0], d.p[2]], A = unroll ? [unroll.dir(d.ax[0]), unroll.dir(d.ax[1])] : [[d.ax[0][0], d.ax[0][2]], [d.ax[1][0], d.ax[1][2]]];
+      const s0 = d.s[0], s1 = d.s[1], R = 3 * Math.max(s0, s1);
+      for (let j = Math.max(0, Math.floor((P[1] - R - Z0) / px)); j <= Math.min(N - 1, Math.ceil((P[1] + R - Z0) / px)); j++) for (let i = Math.max(0, Math.floor((P[0] - R - X0) / px)); i <= Math.min(N - 1, Math.ceil((P[0] + R - X0) / px)); i++) {
+        const x = X0 + (i + 0.5) * px - P[0], z = Z0 + (j + 0.5) * px - P[1], u = x * A[0][0] + z * A[0][1], v = x * A[1][0] + z * A[1][1], e = (u / s0) ** 2 + (v / s1) ** 2;
+        if (e < 9) T[j * N + i] *= 1 - Math.min(0.99, d.a * Math.exp(-0.5 * e));
+      }
+    }
+    return { T, N, px, X0, Z0, at: (x, z) => 1 - T[Math.round((z - Z0) / px - 0.5) * N + Math.round((x - X0) / px - 0.5)] };
+  };
+  // (a line's width: across it at its middle, the run darker than half its peak)
+  const width = (R, mid, dir) => { const nx = -dir[1], nz = dir[0]; let peak = 0; const v = []; for (let s = -0.06; s <= 0.06; s += R.px * 0.5) { const d = R.at(mid[0] + nx * s, mid[1] + nz * s); v.push(d); peak = Math.max(peak, d); } return { w: v.filter((d) => d > peak / 2).length * R.px * 0.5, peak }; };
+  const across = 40 + 90, alongA = 40;
+  const wide = PN.penDeposit([line(across)], plane, spec()).deps, thin = PN.penDeposit([line(alongA)], plane, spec()).deps;
+  // (the page's y runs down and lies along +z, so a line at an angle on the page runs at minus that angle in x, z)
+  const dirOf = (deg) => { const a = (deg * Math.PI) / 180; return [Math.cos(a), -Math.sin(a)]; };
+  const midOf = (deg) => { const a = (deg * Math.PI) / 180; return [Math.cos(a) * 0.15, -Math.sin(a) * 0.15]; };
+  const Wd = width(raster(wide, 0.5, 400, [0, 0]), midOf(across), dirOf(across)), Th = width(raster(thin, 0.5, 400, [0, 0]), midOf(alongA), dirOf(alongA));
+  ok(`pen: the broad nib is thick moving across its edge (${(Wd.w * 1000).toFixed(1)} mm) and fine along it (${(Th.w * 1000).toFixed(1)} mm): ${(Wd.w / Th.w).toFixed(1)}×`, Wd.w / Th.w > 4);
+  ok(`pen: its tone the same whichever way it moves (peaks ${Wd.peak.toFixed(2)} and ${Th.peak.toFixed(2)})`, Math.abs(Wd.peak / Th.peak - 1) < 0.2);
+  // (a stroke that crosses itself: a loop; its darkness at the crossing against along its line)
+  const loop = []; for (let i = 0; i <= 120; i++) { const t = (i / 120) * Math.PI * 2 * 1.15, r = 80; loop.push(150 + Math.sin(t) * r * 1.4, 150 - Math.sin(2 * t) * r * 0.6, i * 1.2); }
+  const lp = (u) => PN.penDeposit([loop], plane, spec({ voice: 0, union: u })).deps;
+  const cross = (deps) => { const R = raster(deps, 0.4, 400, [0.15, 0.15]); return { x: R.at(0.15, 0.15), line: R.at(0.262, 0.15) }; };
+  const cu = cross(lp(true)), cn = cross(lp(false));
+  ok(`pen: where a stroke crosses itself it's no darker than its line (crossing ${cu.x.toFixed(2)} against ${cu.line.toFixed(2)}; without the union ${cn.x.toFixed(2)})`, cu.x <= Math.max(cu.line, 0.3) * 1.15 && cn.x > cu.x + 0.03);
+  // (ink: a long stroke pales as the pen runs dry; after a pause it's dipped)
+  // (long enough to run the pen low: Autograph dips at a pause only once it's below INK.low)
+  const long = [line(0, 45000, 0, 0, 0), line(0, 600, 0, 200, 4000)];
+  const dp = PN.penDeposit(long, plane, spec({ voice: 0, dip: true })).deps;
+  // (the drawn darkness on the line, where it's drawn: early, late, and the next stroke after the pause)
+  const darkAt = (x, z) => { const R = raster(dp.filter((d) => Math.abs(d.p[0] - x) < 0.08 && Math.abs(d.p[2] - z) < 0.08), 0.1, 200, [x, z]); let m = 0; for (let dz = -0.03; dz <= 0.03; dz += 0.0005) m = Math.max(m, R.at(x, z + dz)); return m; };
+  const early = darkAt(0.6, 0), late = darkAt(43.5, 0), dipped = darkAt(0.4, 0.2);
+  ok(`pen: ink runs out along a long stroke (darkness ${early.toFixed(2)} → ${late.toFixed(2)}) and is dipped at a pause (${dipped.toFixed(2)})`, late < early * 0.85 && dipped > late * 1.1);
+  // (the same broad strokes wrapped round a cylinder: widths measured unrolled)
+  const r = 0.12, cyl = PN.cylinderMap([0, 0.3, 0], r, 0, k);
+  // (unrolled: round the circumference as x, down from the top as z, as the page was laid)
+  const unroll = Object.assign((p) => [Math.atan2(p[0], p[2]) * r, 0.3 - p[1]], { dir: (d) => [Math.hypot(d[0], d[2]) * Math.sign(d[0] + d[2] * 0 || d[0]), -d[1]] });
+  const cw = PN.penDeposit([line(across)], cyl, spec()).deps, ct = PN.penDeposit([line(alongA)], cyl, spec()).deps;
+  const Cw = width(raster(cw, 0.5, 400, [0, 0], unroll), midOf(across), dirOf(across)), Ct = width(raster(ct, 0.5, 400, [0, 0], unroll), midOf(alongA), dirOf(alongA));
+  ok(`pen: on a cylinder the nib keeps its character (${(Cw.w * 1000).toFixed(1)} mm across, ${(Ct.w * 1000).toFixed(1)} mm along: ${(Cw.w / Ct.w).toFixed(1)}×, on the plane ${(Wd.w / Th.w).toFixed(1)}×)`, Cw.w / Ct.w > 4 && Math.abs(Cw.w / Wd.w - 1) < 0.2);
+}
 // (Mist: on an unseen bank under an unseen sun, the trained network is nearer the expensive reference than the analytic
 // model, and both far nearer than the baked colour; the CPU features match what was trained)
 {
