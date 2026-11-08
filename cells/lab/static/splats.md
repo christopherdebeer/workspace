@@ -535,6 +535,50 @@ this scale. Both captures are only good from the front, inked or not.
 - Outline discs are one size. A capture's fine detail (laces, stitching) would want smaller ones where the surface
   curves tightly.
 
+## A drawing fitted as a field (`?scene=field`)
+
+Can a drawing be what splats are, a field fitted to pictures, rather than strokes placed by procedure? This is the
+first, bounded test, on the stone.
+- **The teacher:** the brush-drawn stone (`?scene=stone`), rendered by the real renderer from 36 views round it at
+  three heights, at 160 × 120 (`devtools/splats-field-targets.mjs`). 12 views between them are held out.
+- **The field:** 16,751 small flat discs laid evenly over the stone's surface (12,853) and the ground round it
+  (3,898), their places and shapes fixed. What's learned is each disc's ink opacity as a function of the direction
+  it's seen from: a logit in nine low-order terms of the view direction (constant, linear, quadratic), the way a
+  radiance field's colour depends on view. So a mark can be there from one side and gone from another.
+- **The fit:** `devtools/splats-field-fit.mjs`, in Node, by gradient descent (Adam, 300 iterations, about 6 minutes)
+  through a small splat renderer written for it.
+  - Ink is composited as ink is: each mark absorbs a share of the light, so a pixel's light is the product of
+    (1 − αG) over the marks there. That doesn't depend on order, and its gradient is exact and cheap.
+  - Since every mark is one ink colour, the real renderer's sorted blending gives the same result.
+  - Discs behind the stone from a view are left out, using its mesh rasterised per view.
+- **The baseline:** the same discs with one constant opacity each, no view dependence.
+
+**Result:** on the held-out views, the mean squared error (× 1000) of the drawing's darkness is:
+
+| | held-out error |
+|---|---|
+| blank paper | 26.3 |
+| constant opacity (baseline) | 4.45 |
+| view-dependent field | 3.52 |
+
+That's 21% lower than the baseline. On the board (`devtools/splats-field-board.mjs`, the real renderer at twice the
+fitting resolution) the difference is the point of the experiment:
+- **The baseline draws ghost lines across every face.** With one opacity, a line must exist from everywhere, so it
+  becomes a faint average of all the stone's edges.
+- **The fitted field shows each edge only where the teacher does.** It learned, from pictures alone, which edges to
+  draw from which side, on views it never saw. That's the contour rule the brush hand-codes (a profile shows only
+  edge-on), recovered as a property of the field.
+
+The renderer evaluates each disc's opacity from its terms every frame (mark kind 11). The terms are packed into the
+bits a drawing's feature and element ids use; the file stores 19 bytes a disc.
+
+**Gaps:**
+- The field's lines are thinner and greyer than the teacher's, its cast shadow fainter (the ground discs are coarser),
+  and the seam's darkest stroke softer. Only opacity is fitted: the discs' places, sizes and orientations aren't.
+- It overfits a little (training error 2.81 against 3.52 held out).
+- The teacher is our own procedural drawing. The real test is to add the reference studies as teachers from their
+  view, or to fit a captured scene's ink to drawn views of it.
+
 ## The Bench: one brush made dependable, one stroke made editable
 
 `?scene=bench` (`bench.ts`; brush.ts). This answers a source review of the brush. Its five findings, all confirmed in the
@@ -706,7 +750,7 @@ Roughly in order of what each teaches:
 
 ## Flags
 
-`?scene=stone|brushes|composed|bench|mist|garden|plush|nike|train` · `?compose=0` · `?halo=0` · `?halopx=` · `?policy=ranks|rules|learned` · `?judge` · `?perf` · `?ink` (a captured scene in ink) · `?scene=pen&part=word|board|culm|bank|rock&reference` · `?look=dry|wash` · `?detail=0..1` · `?thin=even` · `?only=wash` · `?view=hero|grazing|reverse` · `?orbit` · `?detail=0.25|0.55|1` (sparse, intermediate, resolved) · `?brush` · `?occluder=0` · `?clean` (no controls) · `?url=…` (any `.splat` or `.ply` CORS lets it read) · `?up=1` (for a file that's
+`?scene=stone|brushes|composed|pen|field|bench|mist|garden|plush|nike|train` · `?field=flat` (the fitted field's baseline) · `?compose=0` · `?halo=0` · `?halopx=` · `?policy=ranks|rules|learned` · `?judge` · `?perf` · `?ink` (a captured scene in ink) · `?scene=pen&part=word|board|culm|bank|rock&reference` · `?look=dry|wash` · `?detail=0..1` · `?thin=even` · `?only=wash` · `?view=hero|grazing|reverse` · `?orbit` · `?detail=0.25|0.55|1` (sparse, intermediate, resolved) · `?brush` · `?occluder=0` · `?clean` (no controls) · `?url=…` (any `.splat` or `.ply` CORS lets it read) · `?up=1` (for a file that's
 y-up) · `?mode=0..3` · `?size=` · `?res=` · `?count=` (garden size) · `?noworkers` · `?preview`
 
 Checks: `node cells/lab/devtools/splats.test.mjs` (formats, covariance, sort) and
