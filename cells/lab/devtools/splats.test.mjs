@@ -207,6 +207,22 @@ ok('parse() tells a .splat by its bytes', F.parse(F.encodeSplat(g)).n === g.n);
     ok(`edit: in the composed scene, the seam bent (its wedge follows: ${r.elements} elements of ${ed.order.length} deposited again), then undone exactly`, moved && r.elements === 2 && changed && after.n === before.n && after.pos.every((v, i) => v === before.pos[i]));
   }
 }
+// (the drawing policy: every policy held to the same mark budget; controls for every group; a treatment's extent 0 keeps
+// nothing of a group, 1 all of it)
+{
+  const SU = await load('../client/splats/subjects.ts'), P = await load('../client/splats/policy.ts');
+  const sc = SU.composedScene('wash', true), G = sc.infos();
+  const v = { eye: [4, 2.5, 4], fwd: (() => { const f = [0.3 - 4, 0.75 - 2.5, -0.45 - 4], l = Math.hypot(...f); return f.map((x) => x / l); })(), focalPx: 560, detail: 0.25 };
+  const comp = P.competitionOf(G, v), F = G.map((g, i) => P.features(g, v, sc.proxies, comp[i], 0)), budget = P.marksAtDetail(G, v.detail);
+  const ru = P.matchBudget(G, P.rules(G, F, v.detail), budget);
+  let r = 5; const rnd = () => ((r = (r * 48271) % 2147483647) / 2147483647);
+  const H = 12, IN = P.N_FEATURES + 4, net = { inputs: IN, hidden: H, w1: Array.from({ length: H * IN }, () => rnd() - 0.5), b1: Array(H).fill(0), w2: Array.from({ length: H * H }, () => rnd() - 0.5), b2: Array(H).fill(0), w3: Array.from({ length: H }, () => rnd() - 0.5), b3: 0 };
+  const le = P.learned(net, G, F, budget), mr = P.marksOf(G, ru), ml = P.marksOf(G, le);
+  ok(`policy: rules and a model held to the budget (${budget} marks: rules ${mr}, model ${ml})`, Math.abs(mr / budget - 1) < 0.01 && ml <= budget && ml > budget * 0.9);
+  ok(`policy: every one of the scene's ${G.length} groups has a control, numbered on its marks`, G.every((g) => g.index > 0) && [...sc.drawing.group].every((x) => x > 0));
+  const g0 = G.find((g) => g.ranks.length > 20);
+  ok('policy: extent 0 keeps none of a group, 1 all of it, between some of it from its heart', P.keptAt(g0, P.thresholdOf(g0, 0)) === 0 && P.keptAt(g0, P.thresholdOf(g0, 1)) === g0.ranks.length && P.keptAt(g0, P.thresholdOf(g0, 0.3)) < g0.ranks.length);
+}
 // (Mist: on an unseen bank under an unseen sun, the trained network is nearer the expensive reference than the analytic
 // model, and both far nearer than the baked colour; the CPU features match what was trained)
 {

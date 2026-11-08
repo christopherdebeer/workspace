@@ -32,6 +32,9 @@ export interface Splats {
   feature?: Uint8Array | Uint32Array; support?: Uint8Array; normal2?: Float32Array; element?: Uint32Array;
   /** (a composed drawing's) the object each mark belongs to (0 none), for the halo */
   object?: Uint8Array;
+  /** (a composed drawing's) the group each mark belongs to (its index in the scene, 1-based; 0 none), for a drawing
+   * policy's controls */
+  group?: Uint32Array;
 }
 
 export function alloc(n: number): Splats {

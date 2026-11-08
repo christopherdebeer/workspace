@@ -18,6 +18,7 @@
  */
 import { add, cross, deposit, dot, group, len, mul, norm, sub, wash, stroke, planeRegion, cylinderRegion, scope, toSplats, pieces, pathFrom, groupsOf, INK, type Drawing, type Element, type Group, type Gesture, type Path, type Region, type Stroke, type V, type Wash } from './brush';
 import { Editor, deformItem, type EditItem } from './edit';
+import { groupInfo, type GroupInfo, type Proxy } from './policy';
 import { LIGHT, RECESS, SOFFIT, arrisLines, faceSampler, planeOf, stoneShape, toneOf, CROWN_A, CROWN_B, BROKEN, type Look } from './stone';
 
 export type BrushDrawing = Drawing;
@@ -345,6 +346,8 @@ export interface ComposedScene extends BrushScene {
   objects: Float32Array; importance: Record<string, number>; editor: Editor; gates: Gate[]; gateBase: number;
   /** the stone's tone washes (which way each faces, how much) for working out how much of its tone is in sight */
   tone: Array<{ facing: V; weight: number }>; stoneCentre: V; groups: Group[];
+  /** what a drawing policy knows about each group (worked out again after an edit), and the objects' stand-ins */
+  infos: () => GroupInfo[]; proxies: Proxy[];
 }
 export const GATE_BASE = 4096;
 export const LAYOUT = ['stone', 'culm-front', 'culm-back', 'culm-far', 'corner'];
@@ -421,9 +424,19 @@ export function composedScene(look: Look = 'wash', compose = true, order: string
     else if (e.facing && e.kind === 'wash' && objName !== 'stone') gateFor('cap');
     else if (e.facing && objName === 'stone' && !e.alt) tone.push({ facing: e.facing, weight: e.toneArea ?? 0.1 });
   }
+  // ─── groups for a drawing policy: every element in one (a lone element its own), each numbered, the number on its
+  // marks ───
+  for (const e of els) if (!e.group) { const m = [e]; e.group = { key: e.key, rank: e.rank, principal: e, supports: [], accents: [], get minimum() { return m.filter((x) => x.structural); } }; }
+  const groups = groupsOf(els), membersOf = new Map<Group, Element[]>();
+  for (const e of els) { const g = e.group!; if (!membersOf.has(g)) membersOf.set(g, []); membersOf.get(g)!.push(e); }
+  groups.forEach((g, i) => { for (const e of membersOf.get(g)!) e.gi = i + 1; });
   const items: EditItem[] = edits.map((e) => deformItem(e.name, e.stroke, e.handles, e.onto, e.deps));
   const editor = new Editor(els, items);
-  return { drawing: editor.drawing(-1), occluder: new Float32Array(tris), objects: new Float32Array(objs), elements: els, importance, editor, gates, gateBase: GATE_BASE, tone, stoneCentre: [0, 0.45, 0], groups: groupsOf(els), centres: { all: [0.3, 0.75, -0.45], stone: [0, 0.45, 0], overlap: [0.9, 0.6, 0.55], corner: [-1.65, 0.6, -1.55], grove: [1.7, 1.0, -0.6] } };
+  const emphasisOf = (obj: number) => { const n = order.find((k) => specs[k].obj === obj); return n ? importance[n] : 0.8; };
+  const infos = () => groups.map((g, i) => groupInfo(g, i + 1, membersOf.get(g)!, (e) => editor.deps(e.id), emphasisOf(membersOf.get(g)![0].object ?? 0)));
+  // (each object's stand-in, for telling whether it hides a group: the stone a sphere, a culm a capsule, the corner a sphere)
+  const proxies: Proxy[] = [{ object: 1, c: [0.1, 0.4, 0], r: 0.75 }, { object: 3, c: [1.35, 0, 0.95], r: 0.065, h: 1.6 }, { object: 4, c: [1.55, 0, -0.95], r: 0.085, h: 2.3 }, { object: 5, c: [2.1, 0, -1.3], r: 0.075, h: 1.95 }, { object: 2, c: [-1.65, 0.6, -1.55], r: 0.62 }];
+  return { drawing: editor.drawing(-1), occluder: new Float32Array(tris), objects: new Float32Array(objs), elements: els, importance, editor, gates, gateBase: GATE_BASE, tone, stoneCentre: [0, 0.45, 0], groups, infos, proxies, centres: { all: [0.3, 0.75, -0.45], stone: [0, 0.45, 0], overlap: [0.9, 0.6, 0.55], corner: [-1.65, 0.6, -1.55], grove: [1.7, 1.0, -0.6] } };
 }
 /**
  * One element's three decisions in a composed scene (`w` its object's emphasis, 1 the subject):

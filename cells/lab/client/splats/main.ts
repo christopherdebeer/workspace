@@ -23,6 +23,8 @@ import { LIT, mistScene, referenceColours, sunDir, referenceAt, referenceLight, 
 import { NET, ANALYTIC, BAKE, RESULTS } from './mistnet';
 import { benchScene, PRESSURES } from './bench';
 import type { Editor, EditItem, Snapshot } from './edit';
+import { competitionOf, controls, ease, features as groupFeatures, learned, marksAtDetail, marksOf, matchBudget, rules, jitter, type GroupInfo, type Treatment, type ViewIn } from './policy';
+import { POLICY } from './policynet';
 import type { Material, V as BV } from './brush';
 
 const qs = new URLSearchParams(location.search);
@@ -196,7 +198,8 @@ function openComposed() {
   const B = composedScene(look, compose);
   show(B.drawing, 'composed', 1);
   brushes = B; composed = true;
-  editHere(B.editor); gateVals = null;
+  editHere(B.editor); gateVals = null; policyInfo = null; policyPrev = null;
+  if (judge.on) setTimeout(judgeNext, 200);
   R.setOccluder(B.occluder, B.objects);
   frameSubject(qs.get('subject'));
   setView((qs.get('view') as 'hero' | 'grazing' | 'reverse') ?? 'hero');
@@ -282,7 +285,7 @@ function openBench() {
 /** the drawing again from the cache (after an edit), keeping the camera */
 function benchUpload() {
   if (!bench) return;
-  const d = bench.editor.drawing(benchSel); scene = d; R.load(d); sorter.data(d); lastDir = null;
+  const d = bench.editor.drawing(benchSel); scene = d; R.load(d); sorter.data(d); lastDir = null; policyInfo = null; policyTarget = null;
   ranks = Float32Array.from(d.rank).sort();
 }
 /** an edit to the selected stroke: remember how it was (for undo), apply it, deposit again only what it affects */
@@ -502,9 +505,10 @@ const syncs = [
   seg('thins', [['by rank', () => { thin = 0; }, () => thin === 0], ['evenly', () => { thin = 1; }, () => thin === 1]]),
   seg('views', [['hero', () => setView('hero'), () => false], ['grazing', () => setView('grazing'), () => false], ['reverse', () => setView('reverse'), () => false], ['orbit', () => { setView('hero'); orbitFrom = performance.now(); }, () => orbitFrom !== null]]),
   seg('relations', [['compose', () => { compose = !compose; reopen(); }, () => compose], ['halo', () => { haloOn = !haloOn; }, () => haloOn]]),
+  seg('policies', [['ranks', () => { policyMode = 'ranks'; policyTarget = null; }, () => policyMode === 'ranks'], ['rules', () => { policyMode = 'rules'; policyTarget = null; }, () => policyMode === 'rules'], ['learned', () => { policyMode = 'learned'; policyTarget = null; }, () => policyMode === 'learned'], ['judge', () => { judge.on = true; judgeNext(); }, () => judge.on]]),
   seg('tools', [['brush', () => { brush = !brush; }, () => brush], ['clear', () => { features.fill(0); lastPaint = null; }, () => false], ['occluder', () => { occlude = !occlude; }, () => occlude]]),
 ];
-function syncStone() { syncs.forEach((f) => f()); $('stone-controls').hidden = !stone && !brushes; $('relations').hidden = !composed; }
+function syncStone() { syncs.forEach((f) => f()); $('stone-controls').hidden = !stone && !brushes; $('relations').hidden = !composed; $('policies').hidden = !composed; }
 slider('detail', () => detail, (v) => { detail = v; syncStone(); }, (v) => `${Math.round(v * 100)}%`);
 function syncDetail() { const el = $<HTMLInputElement>('detail'); el.value = String(detail); $('detail-v').textContent = `${Math.round(detail * 100)}%`; }
 LIGHTS.forEach((l) => { const b = document.createElement('button'); b.textContent = l; b.onclick = () => { light = l; relight(); syncMist(); }; $('lights').append(b); });
@@ -558,8 +562,78 @@ slider('sunel', () => sunEl, (v) => { sunEl = v; if (light === 'reference') reli
 }
 $('fold').onclick = () => { const f = document.documentElement.classList.toggle('folded'); $('fold').setAttribute('aria-expanded', String(!f)); $('fold').textContent = f ? 'controls' : 'hide'; };
 $('fold').textContent = 'hide';
+$('j-a').onclick = () => judgeChoose('A'); $('j-b').onclick = () => judgeChoose('B');
+$('j-same').onclick = () => judgeChoose('same'); $('j-skip').onclick = () => judgeChoose('skip'); $('j-export').onclick = judgeExport;
+$('j-close').onclick = () => { judge.on = false; judge.stage = 'idle'; $('judge').hidden = true; syncStone(); };
 $('flip').onclick = () => { up = up === 1 ? -1 : 1; lastDir = null; };
 $('home').onclick = () => Object.assign(cam, { ...home, target: [...home.target] });
+
+// ─── the drawing policy (policy.ts): each group's treatment from the view, held to the mark budget the detail gives ───
+let drawNow = () => {};
+let policyTarget: Treatment | null = null, policyTick = 0, policyMs = 0, policyMode = qs.get('policy') ?? 'ranks', policyPrev: Treatment | null = null, policyInfo: GroupInfo[] | null = null, policyNote = '';
+/** what the policy knows about the composed scene's groups (again after an edit) */
+const infosNow = () => (policyInfo ??= composed ? (brushes as ComposedScene).infos() : null);
+function viewIn(pos: number[], fwd: number[]): ViewIn { return { eye: [pos[0], pos[1], pos[2]], fwd: [fwd[0], fwd[1], fwd[2]], focalPx: canvas.clientHeight / (2 * Math.tan(cam.fov / 2)), detail }; }
+/** the rank-based treatment as a treatment (what the global detail keeps), so every policy draws through the same controls */
+function ranksAsTreatment(G: GroupInfo[]): Treatment { const e = new Float32Array(G.length), s = new Float32Array(G.length).fill(1); G.forEach((g, i) => { e[i] = Math.max(0, Math.min(1, (g.hi - (1 - detail) + 0.0001) / (g.hi - g.lo + 0.03))); }); return { e, s }; }
+function treatmentFor(kind: string, G: GroupInfo[], F: number[][], budget: number): Treatment {
+  if (kind === 'learned' && POLICY) return learned(POLICY, G, F, budget);
+  if (kind === 'rules' || kind === 'learned') return matchBudget(G, rules(G, F, detail), budget);
+  return ranksAsTreatment(G);
+}
+function applyPolicy(dt: number, pos: number[], fwd: number[]) {
+  if (!composed || !compose || policyMode === 'ranks' || judge.on) { if (!judge.on) R.setControls(null); policyPrev = null; policyTarget = null; return; }
+  const G = infosNow(); if (!G) return;
+  const t0 = performance.now(), v = viewIn(pos, fwd), comp = competitionOf(G, v), prevE = policyPrev?.e;
+  const F = G.map((g, i) => groupFeatures(g, v, (brushes as ComposedScene).proxies, comp[i], prevE ? prevE[i] : 0));
+  // (the target worked out every third frame, eased toward every frame: decisions change slowly, so this costs a third)
+  const budget = marksAtDetail(G, detail);
+  if (!policyTarget || policyTick++ % 3 === 0) policyTarget = treatmentFor(policyMode, G, F, budget);
+  policyPrev = ease(policyPrev, policyTarget, 1 - Math.exp(-dt * 5));
+  R.setControls(controls(G, policyPrev));
+  policyMs = policyMs * 0.9 + (performance.now() - t0) * 0.1;
+  policyNote = `${policyMode}${policyMode === 'learned' && !POLICY ? ' (no model yet: rules)' : ''} · ${marksOf(G, policyPrev)} of ${budget} marks · ${policyMs.toFixed(1)} ms`;
+}
+
+// ─── judging (?judge): two treatments of one view, side by side, unlabelled; the better one picked; kept to train on ───
+interface Judged { view: ViewIn; budget: number; F: number[][]; A: { kind: string; e: number[]; s: number[] }; B: { kind: string; e: number[]; s: number[] }; choice: 'A' | 'B' | 'same'; cam: { yaw: number; pitch: number; dist: number }; at: string }
+const judge = { on: qs.has('judge'), stage: 'idle' as 'idle' | 'settle' | 'shown', wait: 0, pair: null as null | Omit<Judged, 'choice' | 'at'>, flip: false };
+const JKEY = 'splats-judgements';
+const judged = (): Judged[] => { try { return JSON.parse(localStorage.getItem(JKEY) ?? '[]'); } catch { return []; } };
+let jr = Date.now() % 2147483647 || 7; const jrnd = () => ((jr = (jr * 48271) % 2147483647) / 2147483647);
+function judgeNext() {
+  if (!composed) return;
+  Object.assign(cam, { yaw: jrnd() * Math.PI * 2, pitch: 0.12 + jrnd() * 0.45, dist: 3.4 + jrnd() * 2.6, target: [0.3, 0.7, -0.4] as [number, number, number] });
+  detail = jrnd() < 0.5 ? STATES.sparse : STATES.intermediate; syncDetail();
+  judge.stage = 'settle'; judge.wait = 4; $('judge').hidden = false; $('j-a').removeAttribute('src'); $('j-b').removeAttribute('src');
+}
+function judgeStep() {
+  if (!judge.on || judge.stage !== 'settle' || !composed) return;
+  if (sorter.busy || --judge.wait > 0) return;
+  const G = infosNow(); if (!G) return;
+  const { pos, fwd } = eye(), v = viewIn(pos, fwd), comp = competitionOf(G, v);
+  const F = G.map((g, i) => groupFeatures(g, v, (brushes as ComposedScene).proxies, comp[i], 0)), budget = marksAtDetail(G, detail);
+  // (which two: the rules against a variation of them; the rules against the ranks; the model against the rules)
+  const base = matchBudget(G, rules(G, F, detail), budget), roll = jrnd();
+  let A = { kind: 'rules', t: base }, B: { kind: string; t: Treatment };
+  if (POLICY && roll < 0.3) B = { kind: 'learned', t: learned(POLICY, G, F, budget) };
+  else if (roll < 0.55) B = { kind: 'ranks', t: ranksAsTreatment(G) };
+  else B = { kind: 'variation', t: matchBudget(G, jitter(G, base, jrnd), budget) };
+  if (jrnd() < 0.5) [A, B] = [B, A];
+  const img = (t: Treatment) => { R.setControls(controls(G, t)); drawNow(); return canvas.toDataURL('image/png'); };
+  ($('j-a') as HTMLImageElement).src = img(A.t); ($('j-b') as HTMLImageElement).src = img(B.t);
+  judge.pair = { view: v, budget, F, A: { kind: A.kind, e: [...A.t.e], s: [...A.t.s] }, B: { kind: B.kind, e: [...B.t.e], s: [...B.t.s] }, cam: { yaw: cam.yaw, pitch: cam.pitch, dist: cam.dist } };
+  judge.stage = 'shown';
+  $('j-count').textContent = `${judged().length} judged`;
+}
+function judgeChoose(c: 'A' | 'B' | 'same' | 'skip') {
+  if (judge.pair && c !== 'skip') { const all = judged(); all.push({ ...judge.pair, choice: c, at: new Date().toISOString() }); try { localStorage.setItem(JKEY, JSON.stringify(all)); } catch { /* storage full or blocked: the pair is lost */ } }
+  judgeNext();
+}
+function judgeExport() {
+  const blob = new Blob([JSON.stringify(judged())], { type: 'application/json' }), a = document.createElement('a');
+  a.href = URL.createObjectURL(blob); a.download = `splats-judgements-${new Date().toISOString().slice(0, 10)}.json`; a.click();
+}
 
 // ─── each frame ───
 let frames = 0, fpsT = performance.now(), fps = 0, last = performance.now();
@@ -583,11 +657,14 @@ function frame() {
   const near = Math.max(0.01, cam.dist * 0.01), proj = perspective(cam.fov, w / h, near, cam.dist * 100);
   const fy = h / (2 * Math.tan(cam.fov / 2));
   const share = shareAt(detail), gv = updateGates(dt);
-  R.draw(view, proj, [fy, fy], { size, mode, bg: mist ? [0.13, 0.145, 0.165] : stone || brushes || bench ? [0.937, 0.906, 0.847] : theme(), detail, thin, share, features: gv ?? features, eye: pos, occlude, only, light: mist ? Math.max(0, LIGHTS.indexOf(light) - 1) : 0, sun: sunDir(sunAz, sunEl), diff: mist ? diff : false, halo: composed && compose && haloOn ? haloPx * dpr : 0, nf: [near, cam.dist * 100] });
+  drawNow = () => R.draw(view, proj, [fy, fy], { size, mode, bg: mist ? [0.13, 0.145, 0.165] : stone || brushes || bench ? [0.937, 0.906, 0.847] : theme(), detail, thin, share, features: gv ?? features, eye: pos, occlude, only, light: mist ? Math.max(0, LIGHTS.indexOf(light) - 1) : 0, sun: sunDir(sunAz, sunEl), diff: mist ? diff : false, halo: composed && compose && haloOn ? haloPx * dpr : 0, nf: [near, cam.dist * 100] });
+  applyPolicy(dt, pos, fwd);
+  drawNow();
+  judgeStep();
   frames++;
   if (t - fpsT > 500) {
     fps = (frames * 1000) / (t - fpsT); frames = 0; fpsT = t;
-    $('stats').textContent = (stone || brushes || bench) && scene ? `${Math.round(shareAt(detail) * scene.n)} of ${scene.n} marks${features.some((v) => v > 0) ? ' + brushed' : ''} · ${fps.toFixed(0)} fps` : scene ? `${(scene.n / 1000).toFixed(0)}k splats · ${fps.toFixed(0)} fps · sort ${sortMs.toFixed(0)} ms${sorter.worker ? '' : ' (here)'} · ${w}×${h} · loaded in ${(loadMs / 1000).toFixed(1)} s` : '';
+    $('stats').textContent = (stone || brushes || bench) && scene ? `${composed && policyMode !== 'ranks' ? policyNote : `${Math.round(shareAt(detail) * scene.n)} of ${scene.n} marks`}${features.some((v) => v > 0) ? ' + brushed' : ''} · ${fps.toFixed(0)} fps` : scene ? `${(scene.n / 1000).toFixed(0)}k splats · ${fps.toFixed(0)} fps · sort ${sortMs.toFixed(0)} ms${sorter.worker ? '' : ' (here)'} · ${w}×${h} · loaded in ${(loadMs / 1000).toFixed(1)} s` : '';
   }
   requestAnimationFrame(frame);
 }
@@ -602,7 +679,7 @@ function frame() {
     undo: () => $('b-undo').click(), density: (d: number) => { if (bench) { bench.editor.density = d; benchRegen('all'); } },
   },
   mist: { setDiff: (d: boolean) => { diff = d; relight(); }, setLight: (l: string) => { light = l; relight(); syncMist(); }, setSun: (az: number, el: number) => { sunAz = az; sunEl = el; relight(); }, setBank: (b: number) => { bank = b; openMist(); }, get ready() { return refReady; } },
-  composed: { get gates() { return gateNow; }, setCompose: (c: boolean) => { compose = c; reopen(); }, setHalo: (h: boolean, px?: number) => { haloOn = h; if (px) haloPx = px; }, get importance() { return composed ? (brushes as ReturnType<typeof composedScene>).importance : null; } },
+  composed: { get gates() { return gateNow; }, setPolicy: (m: string) => { policyMode = m; policyPrev = null; policyTarget = null; syncStone(); }, get policy() { return { mode: policyMode, note: policyNote, model: !!POLICY }; }, judge: { next: () => { judge.on = true; judgeNext(); }, choose: judgeChoose, get stage() { return judge.stage; }, get pair() { return judge.pair; }, get count() { return judged().length; }, exportJson: () => judged() }, setCompose: (c: boolean) => { compose = c; reopen(); }, setHalo: (h: boolean, px?: number) => { haloOn = h; if (px) haloPx = px; }, get importance() { return composed ? (brushes as ReturnType<typeof composedScene>).importance : null; } },
   stone: { setView, setDetail: (d: number) => { detail = d; syncDetail(); syncStone(); }, setThin: (k: number) => { thin = k; }, setLook: (l: Look) => { look = l; reopen(); }, frame: (s: string | null) => { frameSubject(s); setView('hero'); }, paint, clear: () => { features.fill(0); lastPaint = null; }, features,
     /** a touch at a point of the stone (world), as the brush would make it from the eye; and the stone's own lines */
     touch: (p: [number, number, number]) => { if (!stone) return 0; const { pos } = eye(), d = norm([p[0] - pos[0], p[1] - pos[1], p[2] - pos[2]]), h = stone.ray(pos, d); if (!h) return 0; const f = stone.featureAt(h.p, h.region); if (f) features[f] = Math.min(1, features[f] + 0.07); return f; },

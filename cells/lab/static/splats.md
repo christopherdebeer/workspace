@@ -267,6 +267,75 @@ Boards: `node cells/lab/devtools/splats-composed.mjs [wash|dry]`:
 - **Washes are still smoky patches more than connected tonal shapes.**
 - **The phone is unmeasured.**
 
+## A drawing policy: learning which marks to keep
+
+`policy.ts`, `?scene=composed&policy=ranks|rules|learned`, `?judge`. The idea comes from the Mist experiment,
+generalised: use an expensive process offline to teach a compact model a useful decision. Here the decision is which
+marks best describe the scene at a given detail and view, decided at the level of groups, above deposition.
+
+**What a policy controls.** For each group (a seam with its wedge, a cornice with its underside, a culm's sides), a
+treatment:
+- **extent:** how much of the group survives, heart first by its marks' ranks;
+- **strength:** a multiple of its marks' opacity.
+
+The brushes still make every mark, so identities, anchors and editability are untouched. The renderer reads each mark's
+group (a 24-bit index in the third texel) and the group's control (a texture of thresholds and strengths).
+
+**Its inputs**, per group per view:
+- role (line, edge, contact, tone or ground), and whether it's structural or an alternative;
+- its object's emphasis;
+- projected size, how far it faces the eye, and how much of it a nearer object hides (tested against stand-ins for each
+  object's shape);
+- how many other objects' groups crowd it on the screen;
+- the detail asked, and the previous decision.
+
+**Policies, always compared at the same mark budget** (the number of marks the ranks would keep at that detail):
+
+| policy | how it decides |
+|---|---|
+| ranks | the scene's own ranks against the global detail: no control |
+| rules | hand-written rules over the inputs (structure keeps a floor; tone only as far as it faces you; hidden or tiny detail keeps less; lesser objects give way where they crowd; contacts stay strong), scaled to the budget |
+| learned | a small model (the group's features plus the treatment, 2 × 12 hidden units) scores each group's possible treatments; each group gets the best score less a price per mark, the price found to meet the budget, the rest filled greedily |
+
+All three draw through the same controls. Treatments are eased between frames, and the target is worked out every third
+frame.
+
+**The teacher is you.** A good sparse drawing is an artistic judgement; training on the rank rules would only reproduce
+their limits.
+- `?judge` (or the *judge* button) shows two treatments of a random view at the same budget, unlabelled and in random
+  order: the rules against a variation of them, the rules against the ranks, or (once there is one) the model against
+  the rules.
+- Tap the better one, or *about the same*. Choices are kept in the browser, rejected treatments included. *Export*
+  downloads them as JSON.
+- Put the JSON in `devtools/judgements/` and run `node cells/lab/devtools/splats-policy-train.mjs`. It fits the model by
+  pairwise logistic loss (a drawing's score is the sum of its groups') and writes `policynet.ts`. It needs at least 20
+  decided pairs.
+
+**What's checked so far:**
+- Budgets: rules keep 12,841 of 12,840 marks, a model 12,831 (`splats.test.mjs`).
+- Extent 0 keeps none of a group and 1 all of it.
+- **The machinery, on synthetic preferences only** (`--synthetic`): pairs labelled by a hidden utility written in the
+  trainer. The fitted model agrees with it on 100% of held-out pairs, and its policy beats the rules by that utility in
+  20 of 30 fresh views. That shows the pipeline can learn a preference and act on it at a fixed budget. **It says nothing
+  about drawing quality.**
+- Motion (`splats-motion.mjs`): the rules policy over a stepped orbit at sparse has its largest step at 1.21× the median
+  (ranks: 1.16). Its median change is higher (4.7 against 3.4) because it spends marks on larger elements such as the
+  bank.
+- Cost (Node on a desktop): the inputs plus rules take about 1.5 ms a frame; a model about 4.5 ms, which is why the
+  target is recomputed every third frame. Unmeasured on a phone.
+- `node cells/lab/devtools/splats-policy.mjs [wash|dry]`: ranks against rules at the sparse state from six views (same
+  budget), and the judging page.
+
+**Not yet:**
+- **No real judgements, so no trained model.** `policynet.ts` is empty, and *learned* falls back to the rules.
+- **Whether the rules beat the ranks is undecided.** They visibly move marks to the bank and to tone that faces you, away
+  from scattered detail on lesser objects. Judging will tell.
+- **Unseen arrangements:** a policy trained on this layout should be tested on others.
+- **Groups are judged one at a time.** The competition input summarises their neighbours, but a whole-composition
+  judgement (balance across the picture) isn't modelled.
+- **Reference fitting** (adjusting the instructions to match target images, as DiffVG does for vector shapes) is a
+  separate, optimisation-only path, not started.
+
 ## The Bench: one brush made dependable, one stroke made editable
 
 `?scene=bench` (`bench.ts`; brush.ts). This answers a source review of the brush. Its five findings, all confirmed in the
@@ -438,7 +507,7 @@ Roughly in order of what each teaches:
 
 ## Flags
 
-`?scene=stone|brushes|composed|bench|mist|garden|plush|nike|train` · `?compose=0` · `?halo=0` · `?halopx=` · `?look=dry|wash` · `?detail=0..1` · `?thin=even` · `?only=wash` · `?view=hero|grazing|reverse` · `?orbit` · `?detail=0.25|0.55|1` (sparse, intermediate, resolved) · `?brush` · `?occluder=0` · `?clean` (no controls) · `?url=…` (any `.splat` or `.ply` CORS lets it read) · `?up=1` (for a file that's
+`?scene=stone|brushes|composed|bench|mist|garden|plush|nike|train` · `?compose=0` · `?halo=0` · `?halopx=` · `?policy=ranks|rules|learned` · `?judge` · `?look=dry|wash` · `?detail=0..1` · `?thin=even` · `?only=wash` · `?view=hero|grazing|reverse` · `?orbit` · `?detail=0.25|0.55|1` (sparse, intermediate, resolved) · `?brush` · `?occluder=0` · `?clean` (no controls) · `?url=…` (any `.splat` or `.ply` CORS lets it read) · `?up=1` (for a file that's
 y-up) · `?mode=0..3` · `?size=` · `?res=` · `?count=` (garden size) · `?noworkers` · `?preview`
 
 Checks: `node cells/lab/devtools/splats.test.mjs` (formats, covariance, sort) and

@@ -35,6 +35,10 @@ uniform vec3 u_eye;
 uniform float u_size, u_detail, u_share;
 uniform int u_mode, u_thin, u_only;
 uniform highp sampler2D u_feat;
+// (a drawing policy's controls, by group: the rank a group's marks must reach to show, and their strength; off when
+// u_ctlOn is 0)
+uniform highp sampler2D u_ctl;
+uniform int u_ctlOn;
 // (Mist: the coarse density grid, the sun, which lighting, and the tiny network's numbers)
 uniform highp sampler3D u_grid;
 uniform vec3 u_sun;
@@ -99,6 +103,12 @@ void main() {
   float keep = u_thin == 1 ? smoothstep(1.0 - u_share - 0.03, 1.0 - u_share, hash(a_index) * 0.999) : smoothstep(1.0 - u_detail - 0.04, 1.0 - u_detail, rank);
   if (detail > u_detail + 0.001) keep = max(keep, smoothstep(1.0 - detail - 0.04, 1.0 - detail, rank));
   keep *= gate;
+  // (a policy's treatment of this mark's group: how much of the group is kept (heart first, by rank) and how strong)
+  uint gi = d2.w >> 8;
+  if (u_ctlOn == 1 && gi > 0u) {
+    ivec2 cs = textureSize(u_ctl, 0); int ci = int(gi);
+    if (ci < cs.x * cs.y) { vec4 c = texelFetch(u_ctl, ivec2(ci % cs.x, ci / cs.x), 0); if (c.b > 0.5) { keep = smoothstep(c.r - 0.03, c.r, rank) * gate; v_color.a *= c.g; } }
+  }
   // (a contour mark: there only where its surface is near edge-on from here, eased over a range of angles)
   if (kind == 4u) {
     // (its second face's normal rides in its own place (its colour is its own): drawn where the two faces are turned
@@ -256,7 +266,7 @@ export class Renderer {
   private hfbo: WebGLFramebuffer | null = null; private hdep: WebGLTexture | null = null; private hobj: WebGLTexture | null = null; private hsize = [0, 0];
   private u: Record<string, WebGLUniformLocation | null> = {}; private ou: Record<string, WebGLUniformLocation | null> = {};
   n = 0; drawn = 0;
-  private gridTex: WebGLTexture | null = null; private featTex: WebGLTexture | null = null; private featLast: Float32Array | null = null; private net = new Float32Array(Math.ceil(NET_SIZE / 4) * 4); private ana = [0, 0];
+  private gridTex: WebGLTexture | null = null; private featTex: WebGLTexture | null = null; private ctlTex: WebGLTexture | null = null; private featLast: Float32Array | null = null; private net = new Float32Array(Math.ceil(NET_SIZE / 4) * 4); private ana = [0, 0];
   /** Mist's density pyramid (one float a texel; each level a mip of the 3D texture) */
   setGrid(g: Mips) {
     const gl = this.gl; gl.bindTexture(gl.TEXTURE_3D, this.gridTex);
@@ -276,7 +286,7 @@ export class Renderer {
     for (const k of ['u_data', 'u_view', 'u_proj', 'u_focal', 'u_viewport', 'u_size', 'u_mode', 'u_eye', 'u_detail', 'u_share', 'u_thin', 'u_feat', 'u_only', 'u_grid', 'u_sun', 'u_light', 'u_net', 'u_ana', 'u_diff']) this.u[k] = gl.getUniformLocation(p, k);
     // (an array's location, by its first element's name, where the bare name isn't found)
     this.u.u_net ??= gl.getUniformLocation(p, 'u_net[0]');
-    this.gridTex = gl.createTexture()!; this.featTex = gl.createTexture()!; this.setFeatures(new Float32Array(1));
+    this.gridTex = gl.createTexture()!; this.featTex = gl.createTexture()!; this.setFeatures(new Float32Array(1)); this.ctlTex = gl.createTexture()!; this.setControls(new Float32Array(4)); this.ctlOn = false;
     this.vao = gl.createVertexArray()!; gl.bindVertexArray(this.vao);
     const quad = gl.createBuffer()!; gl.bindBuffer(gl.ARRAY_BUFFER, quad); gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
     const ac = gl.getAttribLocation(p, 'a_corner'); gl.enableVertexAttribArray(ac); gl.vertexAttribPointer(ac, 2, gl.FLOAT, false, 0, 0);
@@ -292,7 +302,7 @@ export class Renderer {
     this.oobj = gl.createBuffer()!; gl.bindBuffer(gl.ARRAY_BUFFER, this.oobj);
     const ao = gl.getAttribLocation(op, 'a_obj'); gl.enableVertexAttribArray(ao); gl.vertexAttribPointer(ao, 1, gl.FLOAT, false, 0, 0);
     gl.bindVertexArray(null);
-    for (const k of ['u_hdep', 'u_hobj', 'u_halo', 'u_nf']) this.u[k] = gl.getUniformLocation(p, k);
+    for (const k of ['u_hdep', 'u_hobj', 'u_halo', 'u_nf', 'u_ctl', 'u_ctlOn']) this.u[k] = gl.getUniformLocation(p, k);
   }
   /** the splats into the data texture (once a scene) */
   /**
@@ -300,7 +310,7 @@ export class Renderer {
    * - 0: centre (3 × f32), colour + opacity (4 × u8);
    * - 1: covariance (6 halves), then rank (8 bits) | kind (4 bits, 4 spare) | normal (octahedral, 2 × 8 bits);
    * - 2: support (2 bits) | second normal (octahedral, 2 × 8 bits, from bit 8); feature (32 bits); element (32 bits);
-   *   object (8 bits, for the halo).
+   *   object (8 bits, for the halo) | group (24 bits, for a drawing policy's controls).
    */
   load(s: Splats) {
     const gl = this.gl, rows = Math.max(1, Math.ceil(s.n / 1024)), data = new Uint32Array(3072 * rows * 4), f = new Float32Array(data.buffer), cov = new Float32Array(6);
@@ -314,13 +324,25 @@ export class Renderer {
       const [ox, oy] = s.normal ? octEncode(s.normal[i * 3], s.normal[i * 3 + 1], s.normal[i * 3 + 2]) : [128, 128];
       data[o + 7] = (rank | (kind << 8) | (ox << 16) | (oy << 24)) >>> 0;
       const sup = s.support ? s.support[i] & 3 : 0, [px, py] = s.normal2 ? octEncode(s.normal2[i * 3], s.normal2[i * 3 + 1], s.normal2[i * 3 + 2]) : [128, 128];
-      data[o + 8] = (sup | (px << 8) | (py << 16)) >>> 0; data[o + 9] = s.feature ? s.feature[i] >>> 0 : 0; data[o + 10] = s.element ? s.element[i] >>> 0 : 0; data[o + 11] = s.object ? s.object[i] : 0;
+      data[o + 8] = (sup | (px << 8) | (py << 16)) >>> 0; data[o + 9] = s.feature ? s.feature[i] >>> 0 : 0; data[o + 10] = s.element ? s.element[i] >>> 0 : 0; data[o + 11] = ((s.object ? s.object[i] : 0) | ((s.group ? s.group[i] : 0) << 8)) >>> 0;
     }
     gl.bindTexture(gl.TEXTURE_2D, this.tex);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32UI, 3072, rows, 0, gl.RGBA_INTEGER, gl.UNSIGNED_INT, data);
     this.n = s.n; this.drawn = 0;
   }
+  /** a drawing policy's controls, four floats a group (by group index, 1024 a row): the rank its marks must reach,
+   * their strength, and whether the control applies (1) or the global detail does (0); or none */
+  setControls(v: Float32Array | null) {
+    const gl = this.gl; this.ctlOn = !!v;
+    if (!v) return;
+    const n = v.length / 4, w = Math.min(1024, Math.max(1, n)), rows = Math.max(1, Math.ceil(n / 1024)), d = new Float32Array(w * rows * 4); d.set(v);
+    gl.activeTexture(gl.TEXTURE5); gl.bindTexture(gl.TEXTURE_2D, this.ctlTex);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, w, rows, 0, gl.RGBA, gl.FLOAT, d);
+    gl.activeTexture(gl.TEXTURE0);
+  }
+  private ctlOn = false;
   /** each feature's development (0..1), by id (any number of them, 1024 a row): uploaded only when it changes */
   setFeatures(v: Float32Array) {
     if (this.featLast && this.featLast.length === v.length && this.featLast.every((x, i) => x === v[i])) return;
@@ -390,7 +412,8 @@ export class Renderer {
     gl.uniform3fv(this.u.u_eye, opts.eye ?? [0, 0, 0]);
     gl.uniform1f(this.u.u_detail, opts.detail ?? 1); gl.uniform1f(this.u.u_share, opts.share ?? 1); gl.uniform1i(this.u.u_thin, opts.thin ?? 0); gl.uniform1i(this.u.u_only, opts.only ?? -1);
     if (opts.features) this.setFeatures(opts.features);
-    gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, this.featTex); gl.uniform1i(this.u.u_feat, 2); gl.activeTexture(gl.TEXTURE0);
+    gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, this.featTex); gl.uniform1i(this.u.u_feat, 2);
+    gl.activeTexture(gl.TEXTURE5); gl.bindTexture(gl.TEXTURE_2D, this.ctlTex); gl.uniform1i(this.u.u_ctl, 5); gl.uniform1i(this.u.u_ctlOn, this.ctlOn ? 1 : 0); gl.activeTexture(gl.TEXTURE0);
     gl.uniform1i(this.u.u_light, opts.light ?? 0); gl.uniform1i(this.u.u_diff, opts.diff ? 1 : 0); gl.uniform3fv(this.u.u_sun, opts.sun ?? [0, 1, 0]);
     gl.uniform4fv(this.u.u_net, this.net); gl.uniform2f(this.u.u_ana, this.ana[0], this.ana[1]);
     gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_3D, this.gridTex); gl.uniform1i(this.u.u_grid, 1);

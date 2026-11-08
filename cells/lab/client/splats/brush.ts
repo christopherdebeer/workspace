@@ -180,7 +180,9 @@ export function pieces(parts: Array<{ pts: V[]; reach: number }>): { anchor: V[]
  *   the scene sets each frame);
  * - `gate`: the index of that value.
  */
-export interface Tags { group?: Group; structural?: boolean; facing?: V; toneArea?: number; alt?: string; gate?: number }
+export interface Tags { group?: Group; structural?: boolean;
+  /** its group's index in the scene (1-based), carried onto its marks for a drawing policy */
+  gi?: number; facing?: V; toneArea?: number; alt?: string; gate?: number }
 export type Element = (Stroke | Wash) & Tags;
 /** a group as an object: its members by role, and its minimum (the structural members) */
 export interface Group { key: string; rank: number; principal: Element | null; supports: Element[]; accents: Element[]; minimum: Element[] }
@@ -212,7 +214,7 @@ export function group(rank: number, principal: Element | null, supports: Element
 export function groupsOf(els: Element[]): Group[] { const seen = new Set<Group>(); for (const e of els) if (e.group) seen.add(e.group); return [...seen]; }
 
 /** a splat as deposited: where, its axes and sizes, colour, and which element (and where along it) it came from */
-export interface Dep { p: V; ax: [V, V, V]; s: V; c: V; a: number; rank: number; mark: number; feature: number; element: number; u: number; support: number; n1?: V; n2?: V; object?: number }
+export interface Dep { p: V; ax: [V, V, V]; s: V; c: V; a: number; rank: number; mark: number; feature: number; element: number; u: number; support: number; n1?: V; n2?: V; object?: number; gi?: number }
 /**
  * A mark's opacity, and how much wider it must be, when `d` times as many are scattered over the same place: the marks
  * fall at random, so the light through a point is exp(−(number over it × opacity × footprint)) on average, and holding
@@ -346,19 +348,20 @@ export function depositWash(w: Wash, density = 1, rnd: () => number = rng(w.id))
 export function deposit(e: Element, density = 1): Dep[] {
   const d = e.kind === 'stroke' ? depositStroke(e, density) : depositWash(e, density);
   if (e.object) for (const m of d) m.object = e.object;
+  if (e.gi) for (const m of d) m.gi = e.gi;
   return d;
 }
 
 /** splats as the renderer takes them, from deposits (each keeps its element, support, feature and both normals) */
-export type Drawing = Splats & { mark: Uint8Array; rank: Float32Array; normal: Float32Array; normal2: Float32Array; support: Uint8Array; feature: Uint32Array; element: Uint32Array; object: Uint8Array };
+export type Drawing = Splats & { mark: Uint8Array; rank: Float32Array; normal: Float32Array; normal2: Float32Array; support: Uint8Array; feature: Uint32Array; element: Uint32Array; object: Uint8Array; group: Uint32Array };
 export function toSplats(deps: Dep[], extra = 0): Drawing {
   const n = deps.length + extra;
-  const s = Object.assign(alloc(n), { mark: new Uint8Array(n), rank: new Float32Array(n), normal: new Float32Array(n * 3), normal2: new Float32Array(n * 3), support: new Uint8Array(n), feature: new Uint32Array(n), element: new Uint32Array(n), object: new Uint8Array(n) });
+  const s = Object.assign(alloc(n), { mark: new Uint8Array(n), rank: new Float32Array(n), normal: new Float32Array(n * 3), normal2: new Float32Array(n * 3), support: new Uint8Array(n), feature: new Uint32Array(n), element: new Uint32Array(n), object: new Uint8Array(n), group: new Uint32Array(n) });
   deps.forEach((d, i) => {
     s.pos.set(d.p, i * 3); s.scale.set(d.s, i * 3); s.rot.set(quat(d.ax), i * 4);
     s.rgba.set([d.c[0], d.c[1], d.c[2], Math.round(Math.max(0, Math.min(1, d.a)) * 255)], i * 4);
     s.mark[i] = d.mark; s.rank[i] = Math.max(0, Math.min(1, d.rank)); s.normal.set(d.n1 ?? d.ax[2], i * 3); if (d.n2) s.normal2.set(d.n2, i * 3);
-    s.support[i] = d.support; s.feature[i] = d.feature; s.element[i] = d.element; s.object[i] = d.object ?? 0;
+    s.support[i] = d.support; s.feature[i] = d.feature; s.element[i] = d.element; s.object[i] = d.object ?? 0; s.group[i] = d.gi ?? 0;
   });
   return s;
 }

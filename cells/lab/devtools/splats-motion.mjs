@@ -1,7 +1,8 @@
 // Motion and timing for the composed scene (node cells/lab/devtools/splats-motion.mjs). Static boards can't show
 // contour handovers, gates opening, halo flicker or disappearing supports, so:
 // - an orbit stepped 10° at a time (36 steps), a few frames rendered at each so the eased gates move as they would,
-//   in four configurations (sparse and resolved, with the halo on and off); each step's frame saved, and the change
+//   in five configurations (sparse and resolved, with the halo on and off; sparse under the rules policy, its
+//   treatment worked out every frame and eased); each step's frame saved, and the change
 //   from the previous frame measured (mean absolute difference of the grey image, 0..255). A pop is a step whose change
 //   is far above the median; the ratio of the largest to the median says how even the motion is;
 // - edit latency: the seam dragged ten times, deposit and assemble-and-upload times each (headless Chrome renders in
@@ -20,8 +21,8 @@ await withWood(async (wood) => {
   const C = (f, ...a) => page.evaluate(([f, a]) => window.__splats.composed[f](...a), [f, a]);
   const B = (f, ...a) => page.evaluate(([f, a]) => window.__splats.bench[f](...a), [f, a]);
   await S('frame', null);
-  for (const [nm, d, halo] of [['sparse', 0.25, true], ['resolved', 1, true], ['resolved-nohalo', 1, false], ['sparse-nohalo', 0.25, false]]) {
-    await S('setDetail', d); await C('setHalo', halo);
+  for (const [nm, d, halo, pol] of [['sparse', 0.25, true, 'ranks'], ['resolved', 1, true, 'ranks'], ['resolved-nohalo', 1, false, 'ranks'], ['sparse-nohalo', 0.25, false, 'ranks'], ['sparse-rules', 0.25, true, 'rules']]) {
+    await S('setDetail', d); await C('setHalo', halo); await C('setPolicy', pol);
     const gates = [];
     for (let k = 0; k <= 36; k++) {
       await S('at', 0.6 + (k / 36) * Math.PI * 2, 0.3);
@@ -34,7 +35,7 @@ await withWood(async (wood) => {
     results[nm] = { gates };
   }
   // ─── edit latency ───
-  await S('setDetail', 1); await S('frame', 'stone'); await S('at', 0.6, 0.3);
+  await C('setPolicy', 'ranks'); await S('setDetail', 1); await S('frame', 'stone'); await S('at', 0.6, 0.3);
   const seam = (await page.evaluate(() => window.__splats.bench.state.items.findIndex((i) => i.name === 'seam')));
   await B('select', seam);
   const times = [];
@@ -59,7 +60,7 @@ for nm in names:
   s=sorted(d); med=s[len(s)//2]
   out[nm]={'median':round(med,3),'max':round(max(d),3),'ratio':round(max(d)/med,2),'worst_step':d.index(max(d))+1,'steps':[round(x,3) for x in d]}
 print(json.dumps(out))`;
-const diffs = JSON.parse(execFileSync('python3', ['-c', py, out, 'sparse', 'resolved', 'resolved-nohalo', 'sparse-nohalo']).toString());
+const diffs = JSON.parse(execFileSync('python3', ['-c', py, out, 'sparse', 'resolved', 'resolved-nohalo', 'sparse-nohalo', 'sparse-rules']).toString());
 for (const k of Object.keys(diffs)) results[k].diff = diffs[k];
 writeFileSync(new URL('./out/motion.json', import.meta.url).pathname, JSON.stringify(results, null, 1));
 for (const k of Object.keys(diffs)) console.log(`${k.padEnd(16)} change per 10° step: median ${diffs[k].median}, max ${diffs[k].max} (step ${diffs[k].worst_step}, ${diffs[k].worst_step * 10}°), max/median ${diffs[k].ratio}`);
