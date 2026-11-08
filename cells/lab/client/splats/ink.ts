@@ -59,6 +59,24 @@ export function inkScene(src: Splats, o: { steps?: number } = {}): { drawing: In
   });
   const sz = Float32Array.from(size).sort(), sizeRank = (v: number) => { let lo = 0, hi = N - 1; while (lo < hi) { const m = (lo + hi) >> 1; if (sz[m] < v) lo = m + 1; else hi = m; } return lo / N; };
 
+  // ─── each splat's outward direction, from where its neighbours lie (its offset from their centre), on a finer grid:
+  // reliable where a capture's own discs aren't (fur, foliage, noise). A splat well off its neighbours' centre is on the
+  // surface; there an outline disc is made for it, thin and facing out, so it's a line only where the surface turns
+  // edge-on from the eye ───
+  const fine = Math.max(med * 3, radius / 90), fgrid = new Map<string, number[]>();
+  const fcell = (i: number) => [Math.floor(src.pos[i * 3] / fine), Math.floor(src.pos[i * 3 + 1] / fine), Math.floor(src.pos[i * 3 + 2] / fine)];
+  keep.forEach((i) => { const key = fcell(i).join(','), w = src.rgba[i * 4 + 3], g = fgrid.get(key); if (g) { g[0] += src.pos[i * 3] * w; g[1] += src.pos[i * 3 + 1] * w; g[2] += src.pos[i * 3 + 2] * w; g[3] += w; } else fgrid.set(key, [src.pos[i * 3] * w, src.pos[i * 3 + 1] * w, src.pos[i * 3 + 2] * w, w]); });
+  const outward = new Float32Array(N * 3), surface = new Uint8Array(N), perCell = new Map<string, number>();
+  keep.forEach((i, k) => {
+    const [a, b, c] = fcell(i); let x = 0, y = 0, z = 0, w = 0;
+    for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) for (let dz = -1; dz <= 1; dz++) { const g = fgrid.get(`${a + dx},${b + dy},${c + dz}`); if (g) { x += g[0]; y += g[1]; z += g[2]; w += g[3]; } }
+    const ox = src.pos[i * 3] - x / w, oy = src.pos[i * 3 + 1] - y / w, oz = src.pos[i * 3 + 2] - z / w, ol = Math.hypot(ox, oy, oz);
+    if (ol < 0.3 * fine || src.rgba[i * 4 + 3] < 100) return;
+    // (at most two to a cell, so the outline is a line, not a crowd)
+    const key = `${a},${b},${c}`, had = perCell.get(key) ?? 0; if (had >= 2) return; perCell.set(key, had + 1);
+    outward.set([ox / ol, oy / ol, oz / ol], k * 3); surface[k] = 1;
+  });
+
   // ─── the marks ───
   const tone = new Float32Array(N);
   let nFlat = 0, nTone = 0;
@@ -66,7 +84,7 @@ export function inkScene(src: Splats, o: { steps?: number } = {}): { drawing: In
     const i = keep[k], g = Math.max(0, Math.min(1, (Lp - L[k]) / Math.max(0.05, Lp - Ld))), c = Math.max(0, Math.min(1, (around(i) - L[k]) * 4));
     tone[k] = Math.max(g ** 1.2, 0.8 * c);
     if (tone[k] > 0.12) nTone++;
-    if (flat[k]) nFlat++;
+    if (surface[k]) nFlat++;
   }
   const M = N + nFlat + nTone;
   const out: InkDrawing = { n: M, pos: new Float32Array(M * 3), scale: new Float32Array(M * 3), rot: new Float32Array(M * 4), rgba: new Uint8Array(M * 4), mark: new Uint8Array(M), rank: new Float32Array(M), normal: new Float32Array(M * 3), support: new Uint8Array(M) };
@@ -81,10 +99,29 @@ export function inkScene(src: Splats, o: { steps?: number } = {}): { drawing: In
     m++;
   };
   // (the bodies first, the ink after, so where the sort ties ink is drawn over paper)
-  for (let k = 0; k < N; k++) put(k, flat[k] ? INK_KIND.bodyFlat : INK_KIND.body, PAPER, src.rgba[keep[k] * 4 + 3] / 255, 1);
+  for (let k = 0; k < N; k++) put(k, INK_KIND.body, PAPER, src.rgba[keep[k] * 4 + 3] / 255, 1);
   for (let k = 0; k < N; k++) {
-    if (flat[k]) put(k, INK_KIND.silhouette, INK, 0.9, 0.3 + 0.65 * sizeRank(size[k]));
-    if (tone[k] > 0.12) { const q = Math.ceil(tone[k] * steps) / steps; put(k, INK_KIND.tone, INK, (src.rgba[keep[k] * 4 + 3] / 255) * (0.1 + 0.6 * q), 0.15 + 0.8 * tone[k], 0.92); }
+    if (surface[k]) {
+      // (an outline disc: wide across, thin along its outward normal, set a little out from the surface)
+      const nx = outward[k * 3], ny = outward[k * 3 + 1], nz = outward[k * 3 + 2], i = keep[k];
+      const t1 = Math.abs(ny) < 0.9 ? norm3(cross3([nx, ny, nz], [0, 1, 0])) : norm3(cross3([nx, ny, nz], [1, 0, 0])), t2 = cross3([nx, ny, nz], t1);
+      out.pos.set([src.pos[i * 3] + nx * fine * 0.2, src.pos[i * 3 + 1] + ny * fine * 0.2, src.pos[i * 3 + 2] + nz * fine * 0.2], m * 3);
+      out.scale.set([fine * 0.55, fine * 0.55, fine * 0.04], m * 3); out.rot.set(quatOf(t1, t2, [nx, ny, nz]), m * 4);
+      out.rgba.set([INK[0], INK[1], INK[2], 230], m * 4); out.mark[m] = INK_KIND.silhouette; out.rank[m] = 0.3 + 0.65 * sizeRank(size[k]); out.normal.set([nx, ny, nz], m * 3);
+      m++;
+    }
+    if (tone[k] > 0.12) { const q = Math.ceil(tone[k] * steps) / steps; put(k, INK_KIND.tone, INK, (src.rgba[keep[k] * 4 + 3] / 255) * (0.15 + 0.75 * q), 0.15 + 0.8 * tone[k], 0.92); }
   }
   return { drawing: out, stats: { source: n0, kept: N, flat: nFlat, toned: nTone, marks: M, paper: +Lp.toFixed(2), ms: Math.round(performance.now() - t0) } };
+}
+
+const cross3 = (a: number[], b: number[]) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+const norm3 = (a: number[]) => { const l = Math.hypot(a[0], a[1], a[2]) || 1; return [a[0] / l, a[1] / l, a[2] / l]; };
+/** a rotation (unit quaternion w x y z) whose columns are the three axes given */
+function quatOf(x: number[], y: number[], z: number[]): number[] {
+  const tr = x[0] + y[1] + z[2];
+  if (tr > 0) { const q = Math.sqrt(tr + 1) * 2; return [q / 4, (y[2] - z[1]) / q, (z[0] - x[2]) / q, (x[1] - y[0]) / q]; }
+  if (x[0] > y[1] && x[0] > z[2]) { const q = Math.sqrt(1 + x[0] - y[1] - z[2]) * 2; return [(y[2] - z[1]) / q, q / 4, (y[0] + x[1]) / q, (z[0] + x[2]) / q]; }
+  if (y[1] > z[2]) { const q = Math.sqrt(1 + y[1] - x[0] - z[2]) * 2; return [(z[0] - x[2]) / q, (y[0] + x[1]) / q, q / 4, (z[1] + y[2]) / q]; }
+  const q = Math.sqrt(1 + z[2] - x[0] - y[1]) * 2; return [(x[1] - y[0]) / q, (z[0] + x[2]) / q, (z[1] + y[2]) / q, q / 4];
 }
