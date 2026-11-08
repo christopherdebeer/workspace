@@ -137,7 +137,18 @@ const views = T.map(makeView);
 // (a reference study, aligned to the reference view (splats-field-ref.py): as a teacher it takes that view's place in
 // training, weighted as several views, where it's valid; either way it's the yardstick for how near the field comes to
 // the study from its view)
-const refFile = COMPOSED ? new URL(`./out/field/ref-${REF ?? 'resolved'}.json`, import.meta.url) : null;
+// (--teach=<style>: the six restyled wireframe views of that style are the teachers (splats-field-sheets.py), alone
+// unless --with-procedural; --holdout=<view> leaves one out, to test on)
+const TEACH = (process.argv.find((a) => a.startsWith('--teach=')) ?? '').slice(8) || null, HOLD = (process.argv.find((a) => a.startsWith('--holdout=')) ?? '').slice(10) || null;
+if (TEACH) {
+  if (!process.argv.includes('--with-procedural')) views.length = 0;
+  for (const view of ['ref', 'left', 'right', 'far-left', 'far-right', 'high']) {
+    const R = JSON.parse(readFileSync(new URL(`./out/field/ref-${TEACH}-${view}.json`, import.meta.url)));
+    views.push({ ...makeView({ ...R.camera, split: view === HOLD ? 'test' : 'train', D: R.D }), weight: process.argv.includes('--with-procedural') ? 6 : 1, view });
+  }
+  console.log(`teachers: the ${TEACH} restyle, ${views.filter((v) => v.split === 'train').length} views${HOLD ? `, ${HOLD} held out` : ''}`);
+}
+const refFile = COMPOSED && !TEACH ? new URL(`./out/field/ref-${REF ?? 'resolved'}.json`, import.meta.url) : null;
 let refEval = null;
 if (refFile) {
   // (a teacher with its own camera (a redrawn canvas, or a study given one) is a view of its own, added to training;
@@ -184,9 +195,9 @@ function fit(terms, iters, label) {
   return { c, train: +err(train).toFixed(3), test: +err(test).toFixed(3), blankTest: +blank(test).toFixed(3), ref: refErr };
 }
 const t0 = Date.now();
-const flat = COMPOSED ? null : fit(1, ITERS, 'constant');
+const flat = COMPOSED && !TEACH ? null : fit(1, ITERS, 'constant');
 const field = fit(NB, ITERS, REF ? `view-dependent, taught by the study too` : 'view-dependent');
-const name = COMPOSED ? (REF ? `composed-${REF}` : 'composed') : look;
+const name = COMPOSED ? (TEACH ? `composed-${TEACH}${HOLD ? `-minus-${HOLD}` : ''}` : REF ? `composed-${REF}` : 'composed') : look;
 const res = { scene: COMPOSED ? 'composed' : 'stone', ref: REF, discs: N, views: T.length, look, iters: ITERS, constant: flat && { train: flat.train, test: flat.test }, field: { train: field.train, test: field.test, refError: field.ref }, blankTest: field.blankTest, seconds: Math.round((Date.now() - t0) / 1000) };
 console.log(res);
 writeFileSync(new URL(`./out/field/fit-${name}.json`, import.meta.url), JSON.stringify(res, null, 1));
@@ -201,8 +212,11 @@ discs.forEach((d, i) => {
   const [ox, oy] = oct(d.n); B[o + 6] = ox; B[o + 7] = oy; B[o + 8] = Math.min(255, Math.round(d.s / 0.0002));
   for (let b = 0; b < NB; b++) B[o + 9 + b] = qb(field.c[i * NB + b]); B[o + 18] = flat ? qb(flat.c[i * NB]) : qb(0);
 });
-const fname = COMPOSED ? (REF ? `composed-${REF}` : 'composed') : 'stone';
-const about = COMPOSED
+if (HOLD) { console.log('(a held-out run: no field written)'); process.exit(0); }
+const fname = COMPOSED ? (TEACH ? `composed-${TEACH}` : REF ? `composed-${REF}` : 'composed') : 'stone';
+const about = TEACH
+  ? `The composed scene fitted as a field to the ${TEACH} restyle of its six wireframe views (an image model's drawing over the scene's geometry; devtools/splats-field-fit.mjs, ${N} discs${process.argv.includes('--with-procedural') ? ', with the procedural views' : ''}; error on its views ${field.train}, ${flat.train} without view dependence).`
+  : COMPOSED
   ? `The composed scene's drawing fitted as a field (devtools/splats-field-fit.mjs, ${look}, ${N} discs, ${T.length} views${REF ? `, and the ${REF} reference study from its view as a teacher` : ''}; held-out error ${field.test}; error against the ${REF ?? 'resolved'} study from its view ${field.ref}).`
   : `The stone's drawing fitted as a field (devtools/splats-field-fit.mjs, ${look}, ${N} discs, ${T.length} views; held-out error ${field.test} against ${flat.test} without view dependence, ${res.blankTest} for blank paper).`;
 // (static/splats/field-<name>.bin: a 12-byte header (discs, bytes a disc, span), then the discs; its account beside it)
