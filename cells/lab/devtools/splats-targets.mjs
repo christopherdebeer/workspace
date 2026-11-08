@@ -1,5 +1,5 @@
 // The composed scene against its reference drawings (node cells/lab/devtools/splats-targets.mjs [wash|dry]).
-// devtools/splats/targets/composed-{sparse,intermediate,resolved}.png are three studies of a stone, a culm across it,
+// devtools/splats/targets/composed-{sparse,intermediate,resolved}.jpg are three studies of a stone, a culm across it,
 // two culms behind and an architectural corner, made as artistic targets (generated, so their geometry is close to
 // the scene's but not the same: they're judged by eye for what survives together at each state, not compared pixel by
 // pixel). Each state beside them, from the camera nearest their composition (?cam=ref), drawn by the scene's own ranks
@@ -14,7 +14,7 @@ await withWood(async (wood) => {
   const C = (f, ...a) => page.evaluate(([f, a]) => window.__splats.composed[f](...a), [f, a]);
   const sh = [], lb = [];
   for (const [nm, d] of [['sparse', 0.25], ['intermediate', 0.55], ['resolved', 1]]) {
-    sh.push(new URL(`./splats/targets/composed-${nm}.png`, import.meta.url).pathname); lb.push(`target · ${nm}`);
+    sh.push(new URL(`./splats/targets/composed-${nm}.jpg`, import.meta.url).pathname); lb.push(`target · ${nm}`);
     for (const m of ['ranks', 'rules']) {
       await C('setPolicy', m); await S('setDetail', d); await C('camRef');
       await page.waitForTimeout(1800);

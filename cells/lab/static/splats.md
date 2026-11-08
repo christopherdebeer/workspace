@@ -255,7 +255,7 @@ inside the camera's own motion. Finer steps across the gates' transitions would 
 | seam | 4 ms | 21 ms |
 | bank (its slope is a large region) | 100–200 ms | about 15 ms |
 
-**Reference drawings** (`devtools/splats/targets/composed-{sparse,intermediate,resolved}.png`). Three studies of
+**Reference drawings** (`devtools/splats/targets/composed-{sparse,intermediate,resolved}.jpg`). Three studies of
 this scene, made as artistic targets. Because they're generated, their geometry is close to the scene's but not the
 same, so they're judged by eye for *what survives together*, not compared pixel by pixel or used as training pairs.
 
