@@ -23,9 +23,10 @@ import { write } from '../autograph/hands/v34';
 import { World } from '../bamboo/world';
 import { strokes as bambooStrokes } from '../bamboo/strokes';
 import type { PenAt } from '../autograph/ink';
+import { rockBank } from './rockbank';
 
 const INKC: V = [36, 31, 27];
-export interface PenScene { drawing: ReturnType<typeof toSplats>; occluder: Float32Array; centres: Record<string, { target: V; yaw: number; pitch: number; dist: number }>; sig: number[][]; bank: { dashes: number; length: number; chunk: string } }
+export interface PenScene { drawing: ReturnType<typeof toSplats>; occluder: Float32Array; centres: Record<string, { target: V; yaw: number; pitch: number; dist: number }>; sig: number[][]; bank: { dashes: number; length: number; chunk: string }; rock: ReturnType<typeof rockBank>['info'] }
 
 export function penScene(): PenScene {
   const deps: Dep[] = [], tris: number[] = [], extra: Element[] = [];
@@ -90,10 +91,12 @@ export function penScene(): PenScene {
     }
   }
   for (const e of extra) deps.push(...deposit(e));
+  // ─── the rock and bank: one Bamboo passage, drawn only by the brush (rockbank.ts) ───
+  const rb = rockBank(world, 28); deps.push(...rb.deps); tris.push(...rb.tris);
   const length = dashes.reduce((s, d) => s + d.pts.reduce((q, p, i) => (i ? q + Math.hypot(p[0] - d.pts[i - 1][0], p[2] - d.pts[i - 1][2]) : 0), 0), 0);
   return {
     drawing: toSplats(deps), occluder: new Float32Array(tris), sig: page,
-    centres: { word: { target: [-0.2, 0.85, 0], yaw: 0.1, pitch: 0.08, dist: 1.9 }, board: { target: [-0.95, 0.85, 0.05], yaw: 0.0, pitch: 0.12, dist: 1.0 }, bank: { target: [14, 0.05, 0], yaw: 0.0, pitch: 0.9, dist: 3.4 }, culm: { target: [0.55, 0.9, 0], yaw: 0.0, pitch: 0.05, dist: 1.3 } },
-    bank: { dashes: dashes.length, length, chunk: run.chunk },
+    centres: { word: { target: [-0.2, 0.85, 0], yaw: 0.1, pitch: 0.08, dist: 1.9 }, board: { target: [-0.95, 0.85, 0.05], yaw: 0.0, pitch: 0.12, dist: 1.0 }, bank: { target: [14, 0.05, 0], yaw: 0.0, pitch: 0.9, dist: 3.4 }, culm: { target: [0.55, 0.9, 0], yaw: 0.0, pitch: 0.05, dist: 1.3 }, rock: rb.centre },
+    bank: { dashes: dashes.length, length, chunk: run.chunk }, rock: rb.info,
   };
 }

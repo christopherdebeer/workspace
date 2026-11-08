@@ -71,17 +71,27 @@ ok('parse() tells a .splat by its bytes', F.parse(F.encodeSplat(g)).n === g.n);
   const eye = [3, 1.5, 3], dir = ST.polyRay ? [-3, -1.1, -3] : null, l = Math.hypot(...dir), hit = ST.polyRay(eye, dir.map((v) => v / l));
   ok('stone: a ray from an eye outside enters it', !!hit && hit.t > 0);
   ok('stone: its exact mesh has the ledge\'s recess and soffit', [...S.region].includes(ST.RECESS) && [...S.region].includes(ST.SOFFIT) && S.tris.length / 3 > 20);
+  const SU = await load('../client/splats/subjects.ts');
   for (const look of ['dry', 'wash']) {
-    const d = ST.oneStone(look, S);
+    // (the One Stone study, drawn by the shared brush: strokes, washes, moss and the pen all there)
+    const d = SU.stoneDrawing(look);
     const finite = d.pos.every(Number.isFinite) && d.scale.every((v) => Number.isFinite(v) && v > 0) && d.rank.every((v) => v >= 0 && v <= 1);
-    const kinds = new Set(d.mark);
-    ok(`stone, ${look}: ${d.n} marks, all finite, ranked, every kind there`, finite && [1, 2, 3, 4, 5, 6].every((k) => kinds.has(k)), [...kinds]);
-    // (a stroke shortens rather than crumbling: its marks' ranks fall off from its heart, so at any threshold what's
-    // left of the seam is one run)
-    const seam = d.stroke[[...d.mark].indexOf(1)], idx = [...d.stroke.keys()].filter((i) => d.stroke[i] === seam), thr = 0.82;
+    const kinds = new Set(d.mark), mossy = [...Array(d.n).keys()].some((i) => d.rgba[i * 4 + 1] === 110);
+    ok(`stone, ${look}: ${d.n} marks by the brush, all finite, ranked; lines, washes, contacts and moss there`, finite && [1, 2, 3, 5].every((k) => kinds.has(k)) && mossy, [...kinds]);
+    // (a stroke shortens rather than crumbling: at a threshold what's left of the seam (its principal, the highest-ranked
+    // element) is one run)
+    let top = 0; for (let i = 0; i < d.n; i++) if (d.rank[i] > d.rank[top]) top = i;
+    const seam = d.element[top], idx = [...d.element.keys()].filter((i) => d.element[i] === seam), thr = 0.82;
     const kept = idx.map((i) => d.rank[i] > thr), runs = kept.filter((v, k) => v && !kept[k - 1]).length;
-    ok(`stone, ${look}: the seam at ${thr} is one run, not fragments`, runs === 1, runs);
+    ok(`stone, ${look}: the seam at ${thr} is one run, not fragments (${idx.length} marks)`, runs === 1, runs);
   }
+}
+// (one Bamboo passage through the brush: a rock outcrop of Bamboo's and the bank rim beside it; only the brush draws it)
+{
+  const RB = await load('../client/splats/rockbank.ts'), WD = await load('../client/bamboo/world.ts');
+  const a = RB.rockBank(new WD.World(1), 28), b = RB.rockBank(new WD.World(1), 28);
+  const finite = a.deps.every((d) => d.p.every(Number.isFinite) && d.s.every((v) => v > 0));
+  ok(`rock and bank: Bamboo's ${a.info.block}, ${a.info.faces} faces washed, ${a.info.edges} edges and ${a.info.dashes} rim dashes by the pen, ${a.deps.length} marks; deterministic`, a.info.faces > 0 && a.info.dashes > 0 && finite && a.deps.length === b.deps.length && a.tris.length > 0, a.info);
 }
 // (the brush: a stroke keeps its identity through deposit; it reduces toward its heart; it lies flat on a surface and is
 // round in open space; a group ranks its principal above its supports and accents)

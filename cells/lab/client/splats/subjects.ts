@@ -26,6 +26,7 @@ export interface BrushScene { drawing: BrushDrawing; occluder: Float32Array; ele
 
 const UP: V = [0, 1, 0];
 const away = norm([-LIGHT[0], 0, -LIGHT[2]]);
+const MOSS: V = [96, 110, 50];
 const F = { seam: 1, ledge: 2, stoneFoot: 3, stoneFaces: 4, culm: 5, culmBody: 6, cornice: 7, niche: 8, wall: 9, gesture: 10, wrapped: 11, crown: 12 };
 
 /**
@@ -74,7 +75,7 @@ export interface EditSpec { name: string; stroke: Stroke; handles: number; onto:
  * Material: the ledge, the faces' tone, the rest of the seam and outline. With `alts`, an alternative for views where
  * its shadowed faces are turned away: a little tone low on each lit side face, shown only then (`alt: 'lit'`).
  */
-function stoneElements(look: Look, off: V, alts = false): { els: Element[]; tris: number[]; edits: EditSpec[]; surface: Region } {
+export function stoneElements(look: Look, off: V, alts = false): { els: Element[]; tris: number[]; edits: EditSpec[]; surface: Region } {
   const S = stoneShape(), at = (p: V): V => add(p, off), dry = look === 'dry';
   let rs = 5; const rnd = () => ((rs = (rs * 48271) % 2147483647) / 2147483647);
   const faceRegion = (reg: number): Region & { fsArea: number } => {
@@ -101,7 +102,26 @@ function stoneElements(look: Look, off: V, alts = false): { els: Element[]; tris
   };
   const wedge: Element = wash(wedgeRegion, hookPts.map(at), { key: 'seam/wedge', reach: 0.06, material: dry ? 'dry' : 'wash', depth: 0.9, feature: F.seam, direction: (p, n) => norm(cross(n, UP)) });
   seam.structural = true; wedge.structural = true;
-  els.push(...group(0.99, seam, [wedge], [], 'seam'));
+  // (its branch: a lesser fracture leaving the seam a fifth of the way along, down and away, with one gap)
+  const bi = Math.floor(S.seam.length * 0.22), bPts: V[] = [], bNs: V[] = [];
+  { let bp = S.seam[bi], bd = norm(add(mul(norm(sub(S.seam[Math.min(S.seam.length - 1, bi + 6)], S.seam[bi])), 0.4), [0.2, -0.75, 0.45]));
+    for (let k = 0; k < 56; k++) { const h = S.ray(S.centre, norm(sub(add(bp, mul(bd, 0.008)), S.centre))); if (!h) break; bPts.push(at(h.p)); bNs.push(h.n); bd = norm(add(bd, [Math.sin(k * 0.7) * 0.05, -0.02, 0.03])); bp = h.p; } }
+  const branch = bPts.length > 4 ? stroke({ pts: bPts, normals: bNs }, { width: dry ? 0.006 : 0.005, taper: [0.05, 0.6], breaks: [[0.44, 0.52]] }, { key: 'seam/branch', material: dry ? 'dry' : 'ink', heart: 0, feature: F.seam }) : null;
+  // (moss: a cluster on the damp side of the seam by its hook, kept with it; two lesser ones along it)
+  const moss = (u: number, size: number, k: number): Element | null => {
+    const i = Math.floor(u * (S.seam.length - 1)), p = S.seam[i], n = normalAt(p), t = norm(sub(S.seam[Math.min(S.seam.length - 1, i + 3)], S.seam[Math.max(0, i - 3)]));
+    let d = norm(cross(n, t)); if (dot(d, LIGHT) > 0) d = mul(d, -1);
+    const c = add(p, mul(d, 0.018)), side = norm(cross(n, t));
+    const region: Region = {
+      area: Math.PI * size * size * 1.05,
+      sample: (r) => { const a = r() * Math.PI * 2, rr = Math.sqrt(r()) * size, q = add(c, add(mul(t, Math.cos(a) * rr * 1.5), mul(side, Math.sin(a) * rr * 0.7))), h = S.ray(S.centre, norm(sub(q, S.centre))); return { p: at(h?.p ?? q), n: h?.n ?? n }; },
+      on: (q) => len(sub(sub(q, off), c)) < size * 1.6,
+      project: (q) => { const h = S.ray(S.centre, norm(sub(sub(q, off), S.centre))); return h ? { p: at(h.p), n: h.n } : null; },
+    };
+    return wash(region, [at(add(c, mul(t, -size))), at(add(c, mul(t, size)))], { key: `seam/moss${k}`, reach: size * 1.6, material: 'dry', depth: 0.7, colour: MOSS, mark: 3, feature: F.seam, uneven: 0.6, edge: 'soft', direction: () => t });
+  };
+  const mosses = [moss(0.18, 0.03, 0), moss(0.32, 0.022, 1), moss(0.72, 0.02, 2)].filter((m): m is Element => !!m);
+  els.push(...group(0.99, seam, [wedge], [...(branch ? [branch] : []), ...mosses], 'seam'));
   edits.push({ name: 'seam', stroke: seam as Stroke, handles: 5, onto: surface, deps: [{ wash: wedge as Wash, anchor: hookOf }] });
   // (the ledge: the lip principal; the soffit's and recess's wash under it; the crevice an accent)
   const lip: Element = stroke({ pts: S.lip.map(at), normals: S.lip.map(() => UP) }, { width: 0.008, taper: [0.15, 0.15] }, { key: 'lip', heart: 'middle', feature: F.ledge });
@@ -157,7 +177,10 @@ function stoneElements(look: Look, off: V, alts = false): { els: Element[]; tris
   const cs = castShadow(foot, 0.9);
   const contacts = [planeOf(RECESS).n, planeOf(6).n, planeOf(8).n].map((n, k) => { const d = norm([n[0], 0, n[2]]), h = S.ray([0, 0.004, 0], d); return h ? contact(at([h.p[0] + d[0] * 0.004, 0, h.p[2] + d[2] * 0.004]), norm(cross(UP, d)), F.stoneFoot, `foot/contact${k}`) : null; }).filter((e): e is Element => !!e);
   for (const c of contacts) c.structural = false;
-  els.push(...group(0.96, contacts[0], [shadowWash(cs, 'foot/shadow', { reach: 0.45, material: dry ? 'dry' : 'wash', depth: 0.7, feature: F.stoneFoot })], contacts.slice(1), 'foot'));
+  // (the base: where the stone meets the ground, light and broken, so the lower outline reads where no arris shows it)
+  const ring = [...foot, foot[0]].map((p) => add(p, [0, 0.0015, 0]));
+  const base = stroke({ pts: ring, normals: ring.map(() => UP) }, { width: 0.005, taper: [0.02, 0.02], breaks: [[0.08, 0.14], [0.3, 0.37], [0.55, 0.6], [0.78, 0.86]] }, { key: 'foot/base', alpha: 0.55, feature: F.stoneFoot, mark: 5 });
+  els.push(...group(0.96, contacts[0], [shadowWash(cs, 'foot/shadow', { reach: 0.45, material: dry ? 'dry' : 'wash', depth: 0.7, feature: F.stoneFoot })], [...contacts.slice(1), base], 'foot'));
   const tris: number[] = []; for (let i = 0; i < S.tris.length; i++) for (let a = 0; a < 3; a++) tris.push(off[a] + S.centre[a] + (S.pos[S.tris[i] * 3 + a] - S.centre[a]) * 0.99);
   return { els, tris, edits, surface };
 }
@@ -304,6 +327,17 @@ function gestureElements(front: { o: V; u: V; n: V }, free: V): Element[] {
 }
 
 /** the whole scene: the stone in the middle, the corner to its left, the culm to its right, the gesture in front */
+/**
+ * The One Stone study (`?scene=stone`), drawn by the shared brush: the same elements the composed scene's stone is made
+ * of, its plain lines through the pen in the stone's manner. (It was once drawn by its own bespoke marks in stone.ts;
+ * those are retired.)
+ */
+export function stoneDrawing(look: Look = 'wash'): Drawing {
+  const { els } = scope('stone', () => stoneElements(look, [0, 0, 0]));
+  for (const e of els) if (e.kind === 'stroke' && e.material === 'ink' && e.mark === 1 && e.path.normals && !e.profile) { e.material = 'pen'; e.pen = MANNER.stone; }
+  return toSplats(els.flatMap((e) => deposit(e)));
+}
+
 export function brushScene(look: Look = 'wash'): BrushScene {
   // (each subject in its own scope, so its elements are keyed by the subject and their place in it: the same drawing
   // whatever was built before; and its features its own (the object's number in the high bits), so developing one

@@ -17,8 +17,8 @@
 import { Renderer } from './render';
 import { bounds, garden, parse, type Splats } from './format';
 import { Sorter, type SortDone } from './sort';
-import { MARK, STATES, oneStone, stoneShape, type Look, type Stone } from './stone';
-import { brushScene, composedScene, REF_CAM, type BrushScene, type ComposedScene } from './subjects';
+import { MARK, STATES, stoneShape, type Look, type Stone } from './stone';
+import { brushScene, composedScene, stoneDrawing, REF_CAM, type BrushScene, type ComposedScene } from './subjects';
 import { LIT, mistScene, referenceColours, sunDir, referenceAt, referenceLight, type MistScene } from './mist';
 import { NET, ANALYTIC, BAKE, RESULTS } from './mistnet';
 import { benchScene, PRESSURES } from './bench';
@@ -278,7 +278,7 @@ function frameSubject(s: string | null) {
 function openStone() {
   framing = { target: [0, 0.3, 0], dist: 4.4 };
   const S = shape();
-  show(oneStone(look, S), 'stone', 1);
+  show(stoneDrawing(look), 'stone', 1);
   stone = S;
   // (its shape, drawn into the depth buffer only, shrunk a little toward its middle so the marks on its surface stand in
   // front of it, and only what's on the far side is hidden)
@@ -767,7 +767,7 @@ function frame() {
 (window as unknown as { __splats: unknown }).__splats = {
   get scene() { return scene ? { name: sceneName, n: scene.n } : null; }, cam, get fps() { return fps; }, get sortMs() { return sortMs; }, get drawn() { return R.drawn; },
   setMode: (m: number) => { mode = m; syncModes(); }, open, openUrl,
-  pen: { frame: (n: string) => penFrame(n), reference: (on: boolean) => showReference(on), get bank() { return penS?.bank ?? null; } },
+  pen: { frame: (n: string) => penFrame(n), reference: (on: boolean) => showReference(on), get bank() { return penS?.bank ?? null; }, get rock() { return penS?.rock ?? null; } },
   bench: {
     get state() { return bench ? { selected: benchSel, items: bench.items.map((it, i) => ({ name: it.name, id: it.stroke.id, ctrl: it.handles(), material: it.stroke.material, pressure: it.pressure, weight: bench!.editor.weight(i), wash: bench!.editor.washScale(i), marks: bench!.editor.deps(it.stroke.id).length })), total: bench.editor.total, density: bench.editor.density, undo: undoStack.length, msg: benchMsg, lastEdit } : null; },
     select: (i: number) => benchSelect(i), pick: (x: number, y: number) => benchPick(x, y), screen: (p: number[]) => toScreen(p),

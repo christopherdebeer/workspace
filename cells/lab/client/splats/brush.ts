@@ -347,10 +347,21 @@ export function depositWash(w: Wash, density = 1, rnd: () => number = rng(w.id))
   // (the body: filled to a density within its reach of the anchor, leaving open what it leaves open)
   // (a pooled wash is laid in smaller marks, more of them, so its tone connects into one shape instead of soft patches)
   const want = Math.round(R.area * (w.material === 'dry' ? 900 : pooled ? 1150 : 420) * w.depth * density);
-  for (let q = 0, got = 0; got < want && q < want * 14; q++) {
+  // (a pooled wash's marks are spaced, not merely random: each kept a minimum distance from the others (blue noise), so
+  // its tone doesn't depend on where random marks happen to clump and leave gaps; that clumping read as mottle)
+  const gap = pooled ? 0.8 * Math.sqrt(R.area / Math.max(1, want)) : 0, cellSz = gap || 1, taken = new Map<string, V[]>();
+  const cellOf = (p: V) => [Math.floor(p[0] / cellSz), Math.floor(p[1] / cellSz), Math.floor(p[2] / cellSz)];
+  const spaced = (p: V) => {
+    if (!gap) return true;
+    const [i, j, l] = cellOf(p);
+    for (let a = -1; a <= 1; a++) for (let b = -1; b <= 1; b++) for (let c = -1; c <= 1; c++) for (const o of taken.get(`${i + a},${j + b},${l + c}`) ?? []) if (len(sub(o, p)) < gap) return false;
+    const key = `${i},${j},${l}`; (taken.get(key) ?? taken.set(key, []).get(key)!).push(p);
+    return true;
+  };
+  for (let q = 0, got = 0; got < want && q < want * (gap ? 30 : 14); q++) {
     const { p, n } = R.sample(rnd); if (R.open?.(p)) continue;
     const { d, s, k } = nearest(p), D = reach(s, k), f = d / D;
-    if (f >= 1) continue;
+    if (f >= 1 || !spaced(p)) continue;
     got++;
     if (!n) {
       // (a volume: round soft marks, larger away from the anchor)
@@ -364,7 +375,7 @@ export function depositWash(w: Wash, density = 1, rnd: () => number = rng(w.id))
     } else if (pooled) {
       // (flatter tone, a gentle fall from the anchor; marks a little smaller toward the far edge, so it stays crisp)
       const left = (1 - f) * D;
-      const [a, k] = faint((0.12 - 0.035 * f) * (0.55 + 0.45 * w.depth), density), rad = Math.min(0.017 + 0.014 * rnd(), left * 0.75 + 0.005, d * 0.9 + 0.005) * Math.sqrt(k);
+      const [a, k] = faint((0.14 - 0.04 * f) * (0.55 + 0.45 * w.depth), density), rad = Math.min(0.021 + 0.005 * rnd(), left * 0.75 + 0.005, d * 0.9 + 0.005) * Math.sqrt(k);
       out.push({ ...base, p: add(p, mul(n, 0.002)), ax: frame(n, [g(), g(), g()]), s: [rad * 1.08, rad * 0.92, 0.002], a, rank: rankOf(f, s), u: f, support: SUPPORT.surface, n1: n });
       // (granulation: now and then a speck of settled pigment)
       if (rnd() < 0.05) { const [sa] = faint(0.15 * (0.5 + 0.5 * w.depth), density); out.push({ ...base, p: add(p, mul(n, 0.0022)), ax: frame(n, [g(), g(), g()]), s: [0.0016, 0.0013, 0.001], a: sa, rank: rankOf(f, s), u: f, support: SUPPORT.surface, n1: n }); }

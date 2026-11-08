@@ -379,9 +379,42 @@ with fewer, larger, steadier marks, darkest near the firm edge and fading inward
 Rare specks give granulation. `edge: 'soft'` turns the rim off. Washes now make up about 18.6k of the composed scene's
 34.7k marks, up from about 24.6k in all.
 
-Honestly, against the reference drawings, the washes are better but still mottled at viewing distance. They read as
-patches of grey, not the flat graded tone of the resolved study. The next step is fewer overlapping layers, or a
-per-wash coverage target, so the tone stops depending on how random marks overlap.
+The first pass was better but still mottled at viewing distance: the tone depended on where random marks clumped and
+left gaps. The body's marks are now spaced (blue noise: each kept a minimum distance from the others), at a steadier
+size, so a wash reads as one flat graded tone with its rim. That also cut the mark count back (the composed scene is
+about 38.7k with the additions below).
+
+### One brush for the One Stone
+
+`?scene=stone` used to be drawn by about 230 lines of bespoke marks in stone.ts: its own seam, wedge, chips, moss,
+hatching, contours and shadow. Those are retired. The study is now the composed scene's stone, made of brush elements,
+its plain lines drawn by the pen in the stone's manner (`stoneDrawing`). Three things it lacked were added as brush
+elements, so the composed stone has them too:
+- the seam's branch (a lesser fracture);
+- three moss clusters (small dry washes in moss green, accents of the seam's group);
+- a light, broken base line where the stone meets the ground, so its lower outline reads where no arris shows it.
+
+The chips were dropped. stone.ts now holds only the stone's shape: its planes, mesh, ray, faces, arrises and tone.
+
+### A Bamboo passage: rock and bank (`?scene=pen&part=rock`)
+
+This is one real Bamboo passage drawn only by the brush (rockbank.ts). The scene picks the biggest outcrop on Bamboo's
+slope (seed 1) with a bank rim within a few metres. The outcrop is a slab, about 2.3 × 2.0 × 1.2 m, with eight
+neighbours and fragments round it. Each of them is drawn as Bamboo made it:
+- **the blocks' edges:** as Bamboo inks them (crest, sides, joints, foot), each a pen stroke. The crest is loudest,
+  the foot pressed, the joints light and broken.
+- **their shadowed faces:** the blocks' own triangles grouped by plane, each face turned from the light washed in a
+  pooled wash anchored on its top edge.
+- **the bank's rim:** in the dashes Bamboo broke it into, by the pen, with press from Bamboo's weight.
+- **the bank's slope:** between the rim and the trail's edge below it, one pooled wash anchored on the rim.
+
+The blocks' meshes and Bamboo's ground are the occluder. The ground is sampled finer than Bamboo's cells and set a
+little low, so it doesn't cut into the slope's wash. In all: 21 faces washed, 79 edges, 3 dashes, about 22k marks.
+
+**Gaps:**
+- The far edges of the washes still wave regularly (the brush's two-sine unevenness).
+- The blocks have no cast shadows yet.
+- Bamboo's escarpment blocks are left out: one tier alone reads as nothing, only the formation does.
 
 ### Measuring on a phone (`&perf`)
 
@@ -635,7 +668,7 @@ Roughly in order of what each teaches:
 
 ## Flags
 
-`?scene=stone|brushes|composed|bench|mist|garden|plush|nike|train` · `?compose=0` · `?halo=0` · `?halopx=` · `?policy=ranks|rules|learned` · `?judge` · `?perf` · `?scene=pen&part=word|board|culm|bank&reference` · `?look=dry|wash` · `?detail=0..1` · `?thin=even` · `?only=wash` · `?view=hero|grazing|reverse` · `?orbit` · `?detail=0.25|0.55|1` (sparse, intermediate, resolved) · `?brush` · `?occluder=0` · `?clean` (no controls) · `?url=…` (any `.splat` or `.ply` CORS lets it read) · `?up=1` (for a file that's
+`?scene=stone|brushes|composed|bench|mist|garden|plush|nike|train` · `?compose=0` · `?halo=0` · `?halopx=` · `?policy=ranks|rules|learned` · `?judge` · `?perf` · `?scene=pen&part=word|board|culm|bank|rock&reference` · `?look=dry|wash` · `?detail=0..1` · `?thin=even` · `?only=wash` · `?view=hero|grazing|reverse` · `?orbit` · `?detail=0.25|0.55|1` (sparse, intermediate, resolved) · `?brush` · `?occluder=0` · `?clean` (no controls) · `?url=…` (any `.splat` or `.ply` CORS lets it read) · `?up=1` (for a file that's
 y-up) · `?mode=0..3` · `?size=` · `?res=` · `?count=` (garden size) · `?noworkers` · `?preview`
 
 Checks: `node cells/lab/devtools/splats.test.mjs` (formats, covariance, sort) and
