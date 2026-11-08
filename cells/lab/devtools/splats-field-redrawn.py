@@ -1,4 +1,4 @@
-# A redrawn canvas as a teacher for the fitted field (python3 cells/lab/devtools/splats-field-redrawn.py <image> <view>
+# A redrawn wireframe or canvas as a teacher for the fitted field (python3 cells/lab/devtools/splats-field-redrawn.py <image> <view>
 # [name]): an image of the composed scene redrawn over devtools/out/field/canvas-<view>.png (its geometry kept), its
 # darkness at the field's resolution with the canvas's camera (canvases.json) → devtools/out/field/ref-<name>.json, for
 # `splats-field-fit.mjs composed wash 200 --ref=<name>`.
@@ -6,7 +6,10 @@ import json, sys, numpy as np
 from PIL import Image
 img, view = sys.argv[1], sys.argv[2]; name = sys.argv[3] if len(sys.argv) > 3 else f'redrawn-{view}'
 base = __file__.rsplit('/', 1)[0]
-C = next(c for c in json.load(open(f'{base}/out/field/canvases.json')) if c['name'] == view)
+# (the view's camera: a wireframe's (wires.json: ref, left, right, far-left, far-right, high) or a canvas's)
+import os
+cams = (json.load(open(f'{base}/out/field/wires.json')) if os.path.exists(f'{base}/out/field/wires.json') else []) + (json.load(open(f'{base}/out/field/canvases.json')) if os.path.exists(f'{base}/out/field/canvases.json') else [])
+C = next(c for c in cams if c['name'] == view)
 W, H = 192, 128
 a = np.asarray(Image.open(img).convert('L').resize((W, H), Image.LANCZOS), dtype=np.float32) / 255
 paper, ink = np.percentile(a, 90), np.percentile(a, 0.5)
