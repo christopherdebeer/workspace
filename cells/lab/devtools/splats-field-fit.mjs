@@ -144,9 +144,10 @@ const REG = Number((process.argv.find((a) => a.startsWith('--reg=')) ?? '--reg=0
 const TEACH = (process.argv.find((a) => a.startsWith('--teach=')) ?? '').slice(8) || null, HOLD = (process.argv.find((a) => a.startsWith('--holdout=')) ?? '').slice(10) || null;
 if (TEACH) {
   if (!process.argv.includes('--with-procedural')) views.length = 0;
-  for (const view of ['ref', 'left', 'right', 'far-left', 'far-right', 'high']) {
-    const R = JSON.parse(readFileSync(new URL(`./out/field/ref-${TEACH}-${view}.json`, import.meta.url)));
-    views.push({ ...makeView({ ...R.camera, split: view === HOLD ? 'test' : 'train', D: R.D }), weight: process.argv.includes('--with-procedural') ? 6 : 1, view });
+  // (several styles, comma-separated, pool their views: several executions of one style are samples of it)
+  for (const st of TEACH.split(',')) for (const view of ['ref', 'left', 'right', 'far-left', 'far-right', 'high']) {
+    const R = JSON.parse(readFileSync(new URL(`./out/field/ref-${st}-${view}.json`, import.meta.url)));
+    views.push({ ...makeView({ ...R.camera, split: view === HOLD ? 'test' : 'train', D: R.D }), weight: process.argv.includes('--with-procedural') ? 6 : 1, view, style: st });
   }
   console.log(`teachers: the ${TEACH} restyle, ${views.filter((v) => v.split === 'train').length} views${HOLD ? `, ${HOLD} held out` : ''}`);
 }
@@ -196,10 +197,63 @@ function fit(terms, iters, label) {
   const blank = (set) => set.reduce((s, v) => s + v.Tgt.reduce((q, t) => q + t * t, 0) / (W * H), 0) / set.length * 1000;
   return { c, train: +err(train).toFixed(3), test: +err(test).toFixed(3), blankTest: +blank(test).toFixed(3), ref: refErr };
 }
+// ─── --neural: neural splats. Each disc carries a small learned feature (K numbers) in place of its own view terms;
+// each teacher style (each execution, pooled) a learned code (D numbers); and one small network, shared by every
+// disc, maps (feature, view terms, style code) to the disc's ink opacity. The part anchored to the geometry is shared
+// by every execution; the code is how this one hand chose. Fitted together by back-propagation through the same ink
+// compositing. ───
+function fitNeural(iters, label) {
+  const K = 6, D = 2, IN = K + NB + D, HN = 16, styles = [...new Set(views.map((v) => v.style ?? 'procedural'))];
+  const P = { feat: new Float32Array(N * K).map(() => (rnd() - 0.5) * 0.2), code: new Float32Array(styles.length * D).map(() => (rnd() - 0.5) * 0.2), w1: new Float32Array(HN * IN).map(() => (rnd() - 0.5) * 0.6), b1: new Float32Array(HN), w2: new Float32Array(HN).map(() => (rnd() - 0.5) * 0.6), b2: new Float32Array([-4]) };
+  const G = Object.fromEntries(Object.entries(P).map(([k, v]) => [k, new Float32Array(v.length)])), M1 = Object.fromEntries(Object.entries(P).map(([k, v]) => [k, new Float32Array(v.length)])), M2 = Object.fromEntries(Object.entries(P).map(([k, v]) => [k, new Float32Array(v.length)]));
+  const logT = new Float32Array(W * H), cov = new Float32Array(W * H), x = new Float32Array(IN), h = new Float32Array(HN);
+  const forward = (i, Y, s) => {
+    for (let q = 0; q < K; q++) x[q] = P.feat[i * K + q]; for (let q = 0; q < NB; q++) x[K + q] = Y[q]; for (let q = 0; q < D; q++) x[K + NB + q] = P.code[s * D + q];
+    let z = P.b2[0]; for (let j = 0; j < HN; j++) { let a = P.b1[j]; for (let q = 0; q < IN; q++) a += P.w1[j * IN + q] * x[q]; h[j] = Math.tanh(a); z += P.w2[j] * h[j]; }
+    return z;
+  };
+  const pass = (v, grad) => {
+    logT.fill(0);
+    const s = styles.indexOf(v.style ?? 'procedural'), al = new Float32Array(v.fp.length);
+    v.fp.forEach((f, k) => { al[k] = 1 / (1 + Math.exp(-forward(f.i, f.Y, s))); });
+    v.fp.forEach((f, k) => { const a = al[k]; for (let y = f.y0; y <= f.y1; y++) for (let xx = f.x0; xx <= f.x1; xx++) { const dx = xx + 0.5 - f.sx, dy = y + 0.5 - f.sy, g = Math.exp(-0.5 * (f.ia * dx * dx + 2 * f.ib * dx * dy + f.ic * dy * dy)); if (g < 0.01) continue; logT[y * W + xx] += Math.log(1 - Math.min(0.99, a * g)); } });
+    let loss = 0;
+    for (let p = 0; p < W * H; p++) { const C = 1 - Math.exp(logT[p]), e = (C - v.Tgt[p]) * (v.mask ? v.mask[p] : 1); cov[p] = e * v.weight; loss += e * e; }
+    if (grad) v.fp.forEach((f, k) => {
+      const a = al[k]; let g = 0;
+      for (let y = f.y0; y <= f.y1; y++) for (let xx = f.x0; xx <= f.x1; xx++) { const dx = xx + 0.5 - f.sx, dy = y + 0.5 - f.sy, gg = Math.exp(-0.5 * (f.ia * dx * dx + 2 * f.ib * dx * dy + f.ic * dy * dy)); if (gg < 0.01) continue; const aG = Math.min(0.99, a * gg), p = y * W + xx; g += 2 * cov[p] * Math.exp(logT[p]) / (1 - aG) * gg; }
+      g *= a * (1 - a); if (!g) return;
+      forward(f.i, f.Y, s);
+      G.b2[0] += g;
+      for (let j = 0; j < HN; j++) {
+        G.w2[j] += g * h[j]; const da = g * P.w2[j] * (1 - h[j] * h[j]); G.b1[j] += da;
+        for (let q = 0; q < IN; q++) { G.w1[j * IN + q] += da * x[q]; const dxq = da * P.w1[j * IN + q]; if (q < K) G.feat[f.i * K + q] += dxq; else if (q >= K + NB) G.code[s * D + q - K - NB] += dxq; }
+      }
+    });
+    return loss / (W * H);
+  };
+  const train = views.filter((v) => v.split === 'train'), test = views.filter((v) => v.split === 'test');
+  for (let it = 1; it <= iters; it++) {
+    for (const k in G) G[k].fill(0); let L = 0;
+    for (const v of train) L += pass(v, true);
+    for (const k in P) { const p = P[k], g = G[k], m1 = M1[k], m2 = M2[k], lr = k === 'feat' ? 0.03 : 0.01, reg = k === 'feat' ? REG * 0.1 : 1e-4;
+      for (let j = 0; j < p.length; j++) { const gj = g[j] / train.length + reg * p[j]; m1[j] = 0.9 * m1[j] + 0.1 * gj; m2[j] = 0.999 * m2[j] + 0.001 * gj * gj; p[j] -= (lr * (m1[j] / (1 - 0.9 ** it))) / (Math.sqrt(m2[j] / (1 - 0.999 ** it)) + 1e-7); if (k === 'feat') p[j] = Math.max(-3, Math.min(3, p[j])); } }
+    if (it % 20 === 0 || it === 1) console.log(`${label} ${it}: train ${(L / train.length * 1000).toFixed(2)}`);
+  }
+  const err = (set) => set.reduce((q, v) => q + pass(v, false), 0) / Math.max(1, set.length) * 1000;
+  return { P, styles, K, D, HN, IN, train: +err(train).toFixed(3), test: +err(test).toFixed(3) };
+}
+if (process.argv.includes('--neural')) {
+  const t1 = Date.now(), flatN = fit(1, ITERS, 'constant'), nn = fitNeural(ITERS, 'neural');
+  const resN = { teach: TEACH, holdout: HOLD, discs: N, iters: ITERS, constant: { train: flatN.train, test: flatN.test }, neural: { train: nn.train, test: nn.test, styles: nn.styles, codes: Array.from(nn.P.code).map((v) => +v.toFixed(3)) }, seconds: Math.round((Date.now() - t1) / 1000) };
+  console.log(resN);
+  writeFileSync(new URL(`./out/field/fit-neural-${(TEACH ?? 'procedural').replace(/,/g, '+')}${HOLD ? `-minus-${HOLD}` : ''}.json`, import.meta.url), JSON.stringify(resN, null, 1));
+  process.exit(0);
+}
 const t0 = Date.now();
 const flat = COMPOSED && !TEACH ? null : fit(1, ITERS, 'constant');
 const field = fit(TERMS, ITERS, REF ? `view-dependent, taught by the study too` : 'view-dependent');
-const name = COMPOSED ? (TEACH ? `composed-${TEACH}${HOLD ? `-minus-${HOLD}` : ''}` : REF ? `composed-${REF}` : 'composed') : look;
+const name = COMPOSED ? (TEACH ? `composed-${TEACH.replace(/,/g, '+')}${HOLD ? `-minus-${HOLD}` : ''}` : REF ? `composed-${REF}` : 'composed') : look;
 const res = { scene: COMPOSED ? 'composed' : 'stone', ref: REF, discs: N, views: T.length, look, iters: ITERS, constant: flat && { train: flat.train, test: flat.test }, field: { train: field.train, test: field.test, refError: field.ref }, blankTest: field.blankTest, seconds: Math.round((Date.now() - t0) / 1000) };
 console.log(res);
 writeFileSync(new URL(`./out/field/fit-${name}.json`, import.meta.url), JSON.stringify(res, null, 1));
@@ -215,7 +269,7 @@ discs.forEach((d, i) => {
   for (let b = 0; b < NB; b++) B[o + 9 + b] = qb(field.c[i * NB + b]); B[o + 18] = flat ? qb(flat.c[i * NB]) : qb(0);
 });
 if (HOLD) { console.log('(a held-out run: no field written)'); process.exit(0); }
-const fname = COMPOSED ? (TEACH ? `composed-${TEACH}` : REF ? `composed-${REF}` : 'composed') : 'stone';
+const fname = COMPOSED ? (TEACH ? `composed-${TEACH.split(',').length > 1 ? `${TEACH.split(',')[0]}-pooled` : TEACH}` : REF ? `composed-${REF}` : 'composed') : 'stone';
 const about = TEACH
   ? `The composed scene fitted as a field to the ${TEACH} restyle of its six wireframe views (an image model's drawing over the scene's geometry; devtools/splats-field-fit.mjs, ${N} discs${process.argv.includes('--with-procedural') ? ', with the procedural views' : ''}; error on its views ${field.train}, ${flat.train} without view dependence).`
   : COMPOSED

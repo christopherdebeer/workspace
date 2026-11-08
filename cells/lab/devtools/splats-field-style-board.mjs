@@ -4,7 +4,7 @@
 // covered: halfway between the reference and the right, from behind, and from low down
 // (devtools/out/field-style-<style>.png).
 import { withWood } from './harness.mjs';
-import { readFileSync } from 'node:fs';
+import { readFileSync, existsSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 process.env.EXPERIMENT = 'splats'; process.env.READY = '__splats';
 const styles = process.argv.slice(2), dir = new URL('./out/field/', import.meta.url).pathname;
@@ -18,7 +18,9 @@ await withWood(async (wood) => {
     const rows = [];
     for (const w of wires) {
       await page.evaluate((c) => window.__splats.camera(c), { yaw: w.yaw, pitch: w.pitch, dist: w.dist, target: w.target, fov: w.fov }); await page.waitForTimeout(1800);
-      rows.push([w.name, new URL(`./field-teachers/${style}/${w.name}.jpg`, import.meta.url).pathname, await wood.shot(page, `field-style-${style}-${w.name}`)]);
+      // (a pooled field's drawings: its first execution's, for comparison)
+      const t = new URL(`./field-teachers/${style.replace(/-pooled$/, '')}/${w.name}.jpg`, import.meta.url).pathname;
+      rows.push([w.name, existsSync(t) ? t : '', await wood.shot(page, `field-style-${style}-${w.name}`)]);
     }
     for (const [nm, yaw, pitch, dist] of novel) {
       await page.evaluate((c) => window.__splats.camera(c), { yaw, pitch, dist, target: ref.target, fov: ref.fov }); await page.waitForTimeout(1800);
