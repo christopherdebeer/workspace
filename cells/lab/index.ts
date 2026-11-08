@@ -120,13 +120,16 @@ const HEAD = (title: string) => `<!doctype html>
 function card(e: Experiment, b: Built): string {
   const page = b.pageOf.get(e.id)!;
   const readme = b.readmeOf.get(e.id);
-  const presets = e.presets.map((s) => `<a href="${page}${s.query ? `?${esc(s.query)}` : ''}">[${esc(s.label)}]</a>`).join(' ') + (readme ? ` <a href="${readme}">[readme]</a>` : '');
-  return `<article class="card">
+  // (each preset a toggle: it shows that configuration in the card's live preview; `open` goes to whichever is chosen,
+  // the experiment as it is when none is)
+  const presets = e.presets.map((s) => `<button type="button" class="preset" aria-pressed="false" data-preview="${esc(page)}?preview${s.query ? `&amp;${esc(s.query)}` : ''}" data-open="${esc(page)}${s.query ? `?${esc(s.query)}` : ''}">${esc(s.label)}</button>`).join('');
+  return `<article class="card" data-preview="${esc(page)}?${esc(e.preview)}" data-open="${esc(page)}">
   <a class="live" href="${page}" aria-label="${esc(e.title)}"><iframe data-src="${page}?${esc(e.preview)}" title="${esc(e.title)} (preview)" tabindex="-1" aria-hidden="true"></iframe><span class="idle px">${esc(e.title)}</span></a>
   <div class="meta">
     <div class="name"><a class="px" href="${page}">${esc(e.title)}</a>${readme ? `<a href="${readme}">readme</a>` : ''}</div>
     <p class="muted">${esc(e.blurb)}</p>
-    <nav>${presets}</nav>
+    ${presets ? `<div class="presets" role="group" aria-label="${esc(e.title)} previews">${presets}</div>` : ''}
+    <a class="open" href="${page}">open <span class="chosen"></span>&rarr;</a>
   </div>
 </article>`;
 }
@@ -151,8 +154,14 @@ function indexPage(b: Built): string {
   .name { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
   .name .px { font-size: 15px; text-decoration: none; }
   .meta p { margin: 4px 0 8px; }
-  nav a { text-decoration: none; white-space: nowrap; }
-  nav a:hover, .name a:hover { background: var(--ink); color: var(--paper); }
+  .presets { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 8px; }
+  .preset { font: inherit; font-size: 12px; color: var(--ink); background: none; border: 1px solid var(--rule); padding: 2px 6px; cursor: pointer; white-space: nowrap; }
+  .preset:hover { border-color: var(--ink); }
+  .preset[aria-pressed="true"] { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+  .preset:focus-visible, .open:focus-visible { outline: 2px solid var(--ink); outline-offset: 1px; }
+  .open { display: inline-block; text-decoration: none; border: 1px solid var(--ink); padding: 2px 8px; }
+  .open:hover, .name a:hover { background: var(--ink); color: var(--paper); }
+  .open .chosen:not(:empty)::after { content: ' '; }
 </style>
 </head>
 <body>
@@ -175,6 +184,18 @@ ${body}
     }
   }, { rootMargin: '120px' });
   frames.forEach((f) => io.observe(f));
+  // (a preset shows its configuration in the card's preview, and is what open opens; chosen again, back to the card's own)
+  document.querySelectorAll('.card').forEach((card) => {
+    const frame = card.querySelector('.live iframe'), live = card.querySelector('.live'), open = card.querySelector('.open'), chosen = card.querySelector('.chosen');
+    const show = (b) => {
+      card.querySelectorAll('.preset').forEach((x) => x.setAttribute('aria-pressed', String(x === b)));
+      const src = b ? b.dataset.preview : card.dataset.preview, href = b ? b.dataset.open : card.dataset.open;
+      frame.dataset.src = src;
+      if (frame.getAttribute('src')) frame.src = src;
+      live.href = href; open.href = href; chosen.textContent = b ? b.textContent : '';
+    };
+    card.querySelectorAll('.preset').forEach((b) => b.addEventListener('click', () => show(b.getAttribute('aria-pressed') === 'true' ? null : b)));
+  });
 </script>
 </body>
 </html>`;
