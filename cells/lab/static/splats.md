@@ -579,6 +579,52 @@ bits a drawing's feature and element ids use; the file stores 19 bytes a disc.
 - The teacher is our own procedural drawing. The real test is to add the reference studies as teachers from their
   view, or to fit a captured scene's ink to drawn views of it.
 
+### The whole composed scene as a field (`?scene=field&field=composed`)
+
+This is the same fit at scale. There are 33,730 discs over every object (the occluder's triangles, each faced away
+from its object's middle) and the ground round the scene. The teachers are the composed scene at full detail, from
+36 views orbiting the reference camera's target at its distance, at 192 × 128, with 12 views held out. The fit took
+200 iterations, about 4 minutes.
+
+| | error (× 1000) |
+|---|---|
+| held out | 18.8 |
+| training | 10.8 |
+| blank paper | 66.8 |
+
+From views it never saw, it draws the stone with its washes, the culms with their nodes, the corner and the ground's
+lines. The gap between training and held-out error is wider than the stone's: thin culms and more occlusion, with the
+same number of views.
+
+**Gaps:**
+- The ground lines (the bank, the foreline) come out beaded. The ground discs are 4.5 cm apart, too coarse for a thin
+  line.
+- The stone's washes are streakier than the teacher's.
+
+### The reference studies as teachers: not as they are
+
+The plan was to add the resolved reference study as a teacher from its own view, to see whether a drawing's character
+carries round the scene. It can't be done honestly with the studies as they are:
+- **Global alignment fails.** Matching the study's darkness to the scene's by a scale and shift settles on the wrong
+  match: the study's culms land on the stone.
+- **A camera doesn't fix it.** Fitted from seven landmarks marked by eye (`splats-field-refcam.mjs`), the best camera
+  is closer and narrower than the scene's (field of view 24° against 50°). It still leaves the landmarks 14 px off
+  (RMS, at 192 wide).
+- **A warp doesn't fix it.** A thin-plate spline through the landmarks (`splats-field-warp.py`) hits them exactly but
+  distorts everything between: the cornice stretched upward, the study's stone running into the culms, its front
+  culm leaning where the scene has none. After the warp, the correlation with the scene drawn from that camera is 0.11.
+
+The studies are compositions after the scene, not drawings of it. Used as pixel teachers, they'd teach the field
+their marks in the wrong places.
+
+**What would work:** a drawing made over the scene itself. `devtools/splats-field-canvas.mjs` renders the composed
+scene at the studies' size (1024 × 683) from the reference camera and a view either side, each with its camera
+(`devtools/out/field/canvas-*.png`, `canvases.json`). Redrawn in the studies' manner with the geometry kept exactly,
+for instance by an image model told to restyle without moving anything, a canvas becomes a teacher directly:
+`splats-field-redrawn.py <image> ref`, then `splats-field-fit.mjs composed wash 200 --ref=redrawn-ref`. One view
+redrawn tests whether the character carries to the views either side. Two or three redrawn test whether it carries
+round.
+
 ## The Bench: one brush made dependable, one stroke made editable
 
 `?scene=bench` (`bench.ts`; brush.ts). This answers a source review of the brush. Its five findings, all confirmed in the
@@ -750,7 +796,7 @@ Roughly in order of what each teaches:
 
 ## Flags
 
-`?scene=stone|brushes|composed|pen|field|bench|mist|garden|plush|nike|train` · `?field=flat` (the fitted field's baseline) · `?compose=0` · `?halo=0` · `?halopx=` · `?policy=ranks|rules|learned` · `?judge` · `?perf` · `?ink` (a captured scene in ink) · `?scene=pen&part=word|board|culm|bank|rock&reference` · `?look=dry|wash` · `?detail=0..1` · `?thin=even` · `?only=wash` · `?view=hero|grazing|reverse` · `?orbit` · `?detail=0.25|0.55|1` (sparse, intermediate, resolved) · `?brush` · `?occluder=0` · `?clean` (no controls) · `?url=…` (any `.splat` or `.ply` CORS lets it read) · `?up=1` (for a file that's
+`?scene=stone|brushes|composed|pen|field|bench|mist|garden|plush|nike|train` · `?field=stone|composed` · `?flat` (a fitted field's baseline) · `?compose=0` · `?halo=0` · `?halopx=` · `?policy=ranks|rules|learned` · `?judge` · `?perf` · `?ink` (a captured scene in ink) · `?scene=pen&part=word|board|culm|bank|rock&reference` · `?look=dry|wash` · `?detail=0..1` · `?thin=even` · `?only=wash` · `?view=hero|grazing|reverse` · `?orbit` · `?detail=0.25|0.55|1` (sparse, intermediate, resolved) · `?brush` · `?occluder=0` · `?clean` (no controls) · `?url=…` (any `.splat` or `.ply` CORS lets it read) · `?up=1` (for a file that's
 y-up) · `?mode=0..3` · `?size=` · `?res=` · `?count=` (garden size) · `?noworkers` · `?preview`
 
 Checks: `node cells/lab/devtools/splats.test.mjs` (formats, covariance, sort) and
