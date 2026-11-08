@@ -637,7 +637,11 @@ const judged = (): Judged[] => { try { return JSON.parse(localStorage.getItem(JK
 let jr = Date.now() % 2147483647 || 7; const jrnd = () => ((jr = (jr * 48271) % 2147483647) / 2147483647);
 function judgeNext() {
   if (!composed) return;
-  Object.assign(cam, { yaw: jrnd() * Math.PI * 2, pitch: 0.12 + jrnd() * 0.45, dist: 3.4 + jrnd() * 2.6, target: [0.3, 0.7, -0.4] as [number, number, number] });
+  // (round the scene's own middle: half the views near its designed side, half anywhere round it; far enough back that
+  // the whole group is in frame on a narrow portrait screen too)
+  const aspect = canvas.clientWidth / Math.max(1, canvas.clientHeight), back = Math.min(1.9, Math.max(1, 1 / aspect) ** 0.8);
+  const yaw = jrnd() < 0.5 ? REF_CAM.yaw + (jrnd() - 0.5) * 2.1 : jrnd() * Math.PI * 2;
+  Object.assign(cam, { yaw, pitch: 0.12 + jrnd() * 0.4, dist: REF_CAM.dist * (1.05 + jrnd() * 0.5) * back, target: [...REF_CAM.target] as [number, number, number] });
   detail = jrnd() < 0.5 ? STATES.sparse : STATES.intermediate; syncDetail();
   judge.stage = 'settle'; judge.wait = 4; $('judge').hidden = false; $('j-a').removeAttribute('src'); $('j-b').removeAttribute('src');
 }
@@ -654,11 +658,31 @@ function judgeStep() {
   else if (roll < 0.55) B = { kind: 'ranks', t: ranksAsTreatment(G) };
   else B = { kind: 'variation', t: matchBudget(G, jitter(G, base, jrnd), budget) };
   if (jrnd() < 0.5) [A, B] = [B, A];
-  const img = (t: Treatment) => { R.setControls(controls(G, t)); drawNow(); return canvas.toDataURL('image/png'); };
-  ($('j-a') as HTMLImageElement).src = img(A.t); ($('j-b') as HTMLImageElement).src = img(B.t);
+  // (both drawn, then both cropped to the same box round what either drew, so they compare at one scale with no empty
+  // paper round them)
+  const grab = (t: Treatment) => { R.setControls(controls(G, t)); drawNow(); const c = document.createElement('canvas'); c.width = canvas.width; c.height = canvas.height; c.getContext('2d')!.drawImage(canvas, 0, 0); return c; };
+  const ca = grab(A.t), cb = grab(B.t), box = inkBox([ca, cb]);
+  ($('j-a') as HTMLImageElement).src = crop(ca, box); ($('j-b') as HTMLImageElement).src = crop(cb, box);
   judge.pair = { view: v, budget, F, A: { kind: A.kind, e: [...A.t.e], s: [...A.t.s] }, B: { kind: B.kind, e: [...B.t.e], s: [...B.t.s] }, cam: { yaw: cam.yaw, pitch: cam.pitch, dist: cam.dist } };
   judge.stage = 'shown';
   $('j-count').textContent = `${judged().length} judged`;
+}
+/** the box round everything drawn in any of the canvases (where a pixel differs from the paper), with a margin */
+function inkBox(cs: HTMLCanvasElement[]): [number, number, number, number] {
+  const W = cs[0].width, H = cs[0].height;
+  let x0 = W, y0 = H, x1 = -1, y1 = -1;
+  for (const c of cs) {
+    const d = c.getContext('2d')!.getImageData(0, 0, W, H).data, r0 = d[0], g0 = d[1], b0 = d[2];
+    for (let y = 0; y < H; y += 2) for (let x = 0; x < W; x += 2) { const i = (y * W + x) * 4; if (Math.abs(d[i] - r0) + Math.abs(d[i + 1] - g0) + Math.abs(d[i + 2] - b0) > 24) { if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; } }
+  }
+  if (x1 < 0) return [0, 0, W, H];
+  const m = Math.round(Math.max(W, H) * 0.03);
+  return [Math.max(0, x0 - m), Math.max(0, y0 - m), Math.min(W, x1 + m), Math.min(H, y1 + m)];
+}
+function crop(c: HTMLCanvasElement, [x0, y0, x1, y1]: [number, number, number, number]): string {
+  const o = document.createElement('canvas'); o.width = x1 - x0; o.height = y1 - y0;
+  o.getContext('2d')!.drawImage(c, x0, y0, o.width, o.height, 0, 0, o.width, o.height);
+  return o.toDataURL('image/jpeg', 0.9);
 }
 function judgeChoose(c: 'A' | 'B' | 'same' | 'skip') {
   if (judge.pair && c !== 'skip') { const all = judged(); all.push({ ...judge.pair, choice: c, at: new Date().toISOString() }); try { localStorage.setItem(JKEY, JSON.stringify(all)); } catch { /* storage full or blocked: the pair is lost */ } }

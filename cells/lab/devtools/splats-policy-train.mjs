@@ -21,7 +21,7 @@ let r = 99; const rnd = () => ((r = (r * 48271) % 2147483647) / 2147483647);
 // ─── the scene and its views ───
 const sc = SU.composedScene('wash', true), groups = sc.infos();
 const viewAt = (yaw, pitch, dist, detail) => {
-  const T = [0.3, 0.75, -0.45], eye = [T[0] + Math.sin(yaw) * Math.cos(pitch) * dist, T[1] + Math.sin(pitch) * dist, T[2] + Math.cos(yaw) * Math.cos(pitch) * dist];
+  const T = SU.REF_CAM.target, eye = [T[0] + Math.sin(yaw) * Math.cos(pitch) * dist, T[1] + Math.sin(pitch) * dist, T[2] + Math.cos(yaw) * Math.cos(pitch) * dist];
   const f = T.map((v, i) => v - eye[i]), l = Math.hypot(...f);
   return { eye, fwd: f.map((v) => v / l), focalPx: 520 / (2 * Math.tan(25 * Math.PI / 180)), detail };
 };
@@ -47,7 +47,7 @@ const U = (F, t) => groups.reduce((a, g, i) => a + hiddenU(g, F[i], t.e[i], t.s[
 let pairs = [];
 if (SYN) {
   for (let k = 0; k < 360; k++) {
-    const v = viewAt(rnd() * Math.PI * 2, 0.1 + rnd() * 0.5, 4.5 + rnd() * 3, [0.25, 0.55, 1][k % 3]);
+    const v = viewAt(rnd() * Math.PI * 2, 0.1 + rnd() * 0.5, SU.REF_CAM.dist * (1.05 + rnd() * 0.5) * 1.5, [0.25, 0.55, 1][k % 3]);
     const F = featuresFor(v), budget = P.marksAtDetail(groups, v.detail), base = P.matchBudget(groups, P.rules(groups, F, v.detail), budget);
     const A = P.matchBudget(groups, P.jitter(groups, base, rnd), budget), B = rnd() < 0.5 ? base : P.matchBudget(groups, P.jitter(groups, base, rnd), budget);
     const d = U(F, A) - U(F, B);
@@ -106,7 +106,7 @@ if (SYN) {
   // (on fresh views: the learned policy against the rules, by the hidden utility, at the same budget)
   let better = 0, n = 0, gain = 0;
   for (let k = 0; k < 30; k++) {
-    const v = viewAt(rnd() * Math.PI * 2, 0.1 + rnd() * 0.5, 4.5 + rnd() * 3, [0.25, 0.55][k % 2]), F = featuresFor(v), budget = P.marksAtDetail(groups, v.detail);
+    const v = viewAt(rnd() * Math.PI * 2, 0.1 + rnd() * 0.5, SU.REF_CAM.dist * (1.05 + rnd() * 0.5) * 1.5, [0.25, 0.55][k % 2]), F = featuresFor(v), budget = P.marksAtDetail(groups, v.detail);
     const ru = P.matchBudget(groups, P.rules(groups, F, v.detail), budget), le = P.learned(out, groups, F, budget);
     const du = U(F, le) - U(F, ru); gain += du; if (du > 0) better++; n++;
   }
