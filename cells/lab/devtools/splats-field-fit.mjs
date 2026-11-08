@@ -139,6 +139,8 @@ const views = T.map(makeView);
 // the study from its view)
 // (--teach=<style>: the six restyled wireframe views of that style are the teachers (splats-field-sheets.py), alone
 // unless --with-procedural; --holdout=<view> leaves one out, to test on)
+// (--reg=: how hard the view terms are held to zero (only the constant is free); --terms=: how many of the nine are used)
+const REG = Number((process.argv.find((a) => a.startsWith('--reg=')) ?? '--reg=0.0001').slice(6)), TERMS = Number((process.argv.find((a) => a.startsWith('--terms=')) ?? '--terms=9').slice(8));
 const TEACH = (process.argv.find((a) => a.startsWith('--teach=')) ?? '').slice(8) || null, HOLD = (process.argv.find((a) => a.startsWith('--holdout=')) ?? '').slice(10) || null;
 if (TEACH) {
   if (!process.argv.includes('--with-procedural')) views.length = 0;
@@ -186,7 +188,7 @@ function fit(terms, iters, label) {
     grad.fill(0); let L = 0;
     for (const v of train) L += pass(v, grad);
     const lr = 0.08;
-    for (let j = 0; j < N * NB; j++) { if (j % NB >= terms) continue; const g = grad[j] / train.length + 1e-4 * c[j] * (j % NB ? 1 : 0); m1[j] = 0.9 * m1[j] + 0.1 * g; m2[j] = 0.999 * m2[j] + 0.001 * g * g; c[j] -= (lr * (m1[j] / (1 - 0.9 ** it))) / (Math.sqrt(m2[j] / (1 - 0.999 ** it)) + 1e-7); c[j] = Math.max(-12, Math.min(12, c[j])); }
+    for (let j = 0; j < N * NB; j++) { if (j % NB >= terms) continue; const g = grad[j] / train.length + REG * c[j] * (j % NB ? 1 : 0); m1[j] = 0.9 * m1[j] + 0.1 * g; m2[j] = 0.999 * m2[j] + 0.001 * g * g; c[j] -= (lr * (m1[j] / (1 - 0.9 ** it))) / (Math.sqrt(m2[j] / (1 - 0.999 ** it)) + 1e-7); c[j] = Math.max(-12, Math.min(12, c[j])); }
     if (it % 20 === 0 || it === 1) console.log(`${label} ${it}: train ${(L / train.length * 1000).toFixed(2)}`);
   }
   const err = (set) => set.reduce((s, v) => s + pass(v, null), 0) / set.length * 1000;
@@ -196,7 +198,7 @@ function fit(terms, iters, label) {
 }
 const t0 = Date.now();
 const flat = COMPOSED && !TEACH ? null : fit(1, ITERS, 'constant');
-const field = fit(NB, ITERS, REF ? `view-dependent, taught by the study too` : 'view-dependent');
+const field = fit(TERMS, ITERS, REF ? `view-dependent, taught by the study too` : 'view-dependent');
 const name = COMPOSED ? (TEACH ? `composed-${TEACH}${HOLD ? `-minus-${HOLD}` : ''}` : REF ? `composed-${REF}` : 'composed') : look;
 const res = { scene: COMPOSED ? 'composed' : 'stone', ref: REF, discs: N, views: T.length, look, iters: ITERS, constant: flat && { train: flat.train, test: flat.test }, field: { train: field.train, test: field.test, refError: field.ref }, blankTest: field.blankTest, seconds: Math.round((Date.now() - t0) / 1000) };
 console.log(res);
