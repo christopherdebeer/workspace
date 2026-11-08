@@ -8,18 +8,20 @@ import { withWood } from './harness.mjs';
 process.env.EXPERIMENT = 'splats'; process.env.READY = '__splats';
 const look = process.argv[2] ?? 'wash';
 await withWood(async (wood) => {
-  const page = await wood.open(`scene=composed&res=1&clean&look=${look}&cam=ref`);
-  await page.waitForFunction(() => window.__splats.scene?.name === 'composed' && window.__splats.drawn > 0, null, { timeout: 120000 });
-  const S = (f, ...a) => page.evaluate(([f, a]) => window.__splats.stone[f](...a), [f, a]);
-  const C = (f, ...a) => page.evaluate(([f, a]) => window.__splats.composed[f](...a), [f, a]);
   const sh = [], lb = [];
   for (const [nm, d] of [['sparse', 0.25], ['intermediate', 0.55], ['resolved', 1]]) {
+    // (a page a state: a long session of software GL can exhaust headless Chrome)
+    const page = await wood.open(`scene=composed&res=1&clean&look=${look}&cam=ref`);
+    await page.waitForFunction(() => window.__splats.scene?.name === 'composed' && window.__splats.drawn > 0, null, { timeout: 120000 });
+    const S = (f, ...a) => page.evaluate(([f, a]) => window.__splats.stone[f](...a), [f, a]);
+    const C = (f, ...a) => page.evaluate(([f, a]) => window.__splats.composed[f](...a), [f, a]);
     sh.push(new URL(`./splats/targets/composed-${nm}.jpg`, import.meta.url).pathname); lb.push(`target · ${nm}`);
     for (const m of ['ranks', 'rules']) {
       await C('setPolicy', m); await S('setDetail', d); await C('camRef');
       await page.waitForTimeout(1800);
       sh.push(await wood.shot(page, `targets-${look}-${nm}-${m}`)); lb.push(`${m} · ${nm}`);
     }
+    await page.close();
   }
   await wood.montage(sh, `targets-${look}`, { height: 340, labels: lb, columns: 3 });
 }, { width: 768, height: 512 });

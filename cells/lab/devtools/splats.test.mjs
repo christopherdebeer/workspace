@@ -278,6 +278,18 @@ ok('parse() tells a .splat by its bytes', F.parse(F.encodeSplat(g)).n === g.n);
   const Cw = width(raster(cw, 0.5, 400, [0, 0], unroll), midOf(across), dirOf(across)), Ct = width(raster(ct, 0.5, 400, [0, 0], unroll), midOf(alongA), dirOf(alongA));
   ok(`pen: on a cylinder the nib keeps its character (${(Cw.w * 1000).toFixed(1)} mm across, ${(Ct.w * 1000).toFixed(1)} mm along: ${(Cw.w / Ct.w).toFixed(1)}×, on the plane ${(Wd.w / Th.w).toFixed(1)}×)`, Cw.w / Ct.w > 4 && Math.abs(Cw.w / Wd.w - 1) < 0.2);
 }
+// (the pen as a brush material: on a flat surface its nib keeps one orientation however the path turns, where an inked
+// stroke's marks follow the path; the same instructions give the same marks)
+{
+  const B = await load('../client/splats/brush.ts');
+  const pts = Array.from({ length: 80 }, (_, i) => { const t = (i / 79) * Math.PI * 1.5; return [Math.cos(t) * 0.2, 0, Math.sin(t) * 0.2]; });
+  const mk = (material) => B.stroke({ pts, normals: pts.map(() => [0, 1, 0]) }, { width: 0.012 }, { key: `pen-test-${material}`, material, ...(material === 'pen' ? {} : {}) });
+  const pe = mk('pen'); pe.pen = { voice: 1, pace: 10 };
+  const dp = B.deposit(pe), di = B.deposit(mk('ink'));
+  const spread = (ds) => { let m = 0; for (const d of ds) m = Math.max(m, 1 - Math.abs(B.dot(d.ax[0], ds[0].ax[0]))); return m; };
+  const again = B.deposit(pe);
+  ok(`pen material: its nib keeps one orientation on a flat surface (spread ${spread(dp).toFixed(4)}), an inked stroke's marks follow the path (${spread(di).toFixed(2)}); deterministic`, spread(dp) < 1e-6 && spread(di) > 0.5 && dp.length > 20 && again.length === dp.length && again.every((d, i) => d.p.every((v, j) => v === dp[i].p[j])));
+}
 // (Mist: on an unseen bank under an unseen sun, the trained network is nearer the expensive reference than the analytic
 // model, and both far nearer than the baked colour; the CPU features match what was trained)
 {

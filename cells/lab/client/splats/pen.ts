@@ -22,7 +22,7 @@
  *
  * Coordinates are Autograph's: page units (an x-height is 220), y down, time in hundredths of a second.
  */
-import { add, cross, dot, len, mul, norm, sub, stroke, type Dep, type Element, type V } from './brush';
+import { add, cross, dot, len, mul, norm, sub, stroke, SUPPORT, type Dep, type Element, type Heart, type Stroke, type V } from './brush';
 import { BROAD, INK, LOUD, widths, type PenAt } from '../autograph/ink';
 import { body, move } from '../autograph/hands/v34';
 
@@ -169,5 +169,67 @@ export function staticStrokes(strokes: TimedStroke[], map: SurfaceMap, spec: Pen
     const pts = smoothed(s), P = pts.map((q) => map.place(q[0], q[1])), w = pts.map((q) => q[3]);
     return stroke({ pts: P.map((q) => add(q.p, mul(q.n, 0.0015))), normals: P.map((q) => q.n) }, { width: spec.pen * spec.k * 1.1, pressure: (u) => w[Math.min(w.length - 1, Math.round(u * (w.length - 1)))], taper: [0.08, 0.12] }, { key: `${key}/${i}`, colour: spec.colour, alpha: 0.9 });
   });
+}
+
+/**
+ * A brush stroke drawn by a hand and the pen (material `pen`), on the surface its path lies on: its path kept exactly
+ * (its identity, rank, heart, breaks and taper as the brush's), its timing by the hand, its marks by the pen.
+ * - **timing:** the path unbent into a flat curve with the same lengths and turns (each turn measured about the surface's
+ *   normal), then timed by Autograph's `move()` at the manner's pace; the speed's widths from that (`widths`);
+ * - **the nib:** held at its angle to the surface's own "up" (the world's up taken onto the surface; on a level surface,
+ *   the world's −z), so a broad pen keeps its orientation on a wall, a stone's face or the ground;
+ * - the stroke's authored pressure (its rhythm) multiplies the pen's width; its ink runs down along it;
+ * - opacity shared along the motion, and its crossings left as first laid, as `penDeposit`.
+ * The pen's width at full press is the stroke's width; `density` scales the step.
+ */
+export function penStroke(s: Stroke, density: number, heartDist: (h: Heart, u: number) => number): Dep[] {
+  const P = s.path.pts, N = s.path.normals!, out: Dep[] = [], m = s.pen ?? { voice: 0.5, pace: 10 };
+  if (P.length < 2) return out;
+  const cum = [0]; for (let i = 1; i < P.length; i++) cum.push(cum[i - 1] + len(sub(P[i], P[i - 1])));
+  const L = cum[cum.length - 1]; if (L < 1e-6) return out;
+  // (page units: the round pen 30 wide; the stroke's width is the pen's)
+  const k = s.gesture.width / 30;
+  // (unbent: the same lengths and turns, flat)
+  const flat: Array<[number, number]> = [[0, 0]]; let head = 0;
+  for (let i = 1; i < P.length; i++) {
+    if (i >= 2) { const d0 = sub(P[i - 1], P[i - 2]), d1 = sub(P[i], P[i - 1]), n = N[i - 1], a0 = norm(sub(d0, mul(n, dot(d0, n)))), a1 = norm(sub(d1, mul(n, dot(d1, n)))); head += Math.atan2(dot(cross(a0, a1), n), dot(a0, a1)); }
+    const l = (cum[i] - cum[i - 1]) / k; flat.push([flat[i - 1][0] + Math.cos(head) * l, flat[i - 1][1] + Math.sin(head) * l]);
+  }
+  const T = move(flat.map(([x, y]) => [x / 220, y / 220] as [number, number]), m.pace);
+  const timed: number[] = []; flat.forEach(([x, y], i) => timed.push(x, y, T[i] * 100));
+  const w = widths(timed);
+  const press = m.press ?? 0, loud = press >= 0 ? 1 + LOUD.up * press : 1 + LOUD.down * press, v = Math.max(0, Math.min(1, m.voice));
+  const a = BROAD.angle, ca = Math.cos(a), sa = Math.sin(a), g = s.gesture, ti = Math.max(1e-3, (g.taper ?? [0.12, 0.2])[0]), to = Math.max(1e-3, (g.taper ?? [0.12, 0.2])[1]);
+  const sm = (x0: number, x1: number, x: number) => { const t = Math.max(0, Math.min(1, (x - x0) / (x1 - x0))); return t * t * (3 - 2 * t); };
+  let wet = 1, seg = 0;
+  const visited = new Map<string, number>();
+  const pen = 30;
+  // (the step: a fraction of the nib's thinner side, so a nib moved across its edge leaves no gaps)
+  const thin = pen * (1 + (BROAD.edge - 1) * v), step = Math.max(pen * 0.04, thin * 0.5) / Math.max(0.25, density);
+  for (let dU = step * 0.5; dU < L / k; dU += step) {
+    const d = dU * k; while (seg < P.length - 2 && cum[seg + 1] < d) seg++;
+    const t = (d - cum[seg]) / Math.max(1e-9, cum[seg + 1] - cum[seg]), u = d / L;
+    if (g.breaks?.some(([b0, b1]) => u > b0 && u < b1)) continue;
+    const pr = (g.pressure?.(u) ?? 1) * sm(0, ti, u) * sm(1, 1 - to, u);
+    if (pr < 0.05) continue;
+    const wi = w[Math.min(w.length - 1, seg + 1)];
+    const round = pen * wi * loud * pr, wide = pen * BROAD.w * (0.75 + 0.25 * wi) * loud * pr, edge = pen * BROAD.edge * Math.min(1, loud);
+    const wd = round + (wide - round) * v, th = round + (edge - round) * v;
+    const p = add(P[seg], mul(sub(P[seg + 1], P[seg]), t)), n = norm(add(mul(N[seg], 1 - t), mul(N[seg + 1], t))), tan = norm(sub(P[seg + 1], P[seg]));
+    // (the surface's up: the world's up taken onto it, or the world's −z on a level surface)
+    let up = sub([0, 1, 0], mul(n, n[1])); if (len(up) < 0.25) up = sub([0, 0, -1], mul(n, -n[2]));
+    up = norm(up); const right = norm(cross(up, n)), E = norm(add(mul(right, ca), mul(up, sa))), A = norm(cross(n, E));
+    // (how many steps overlap here along the motion: the opacity shared)
+    const cosf = dot(tan, E), sinf = Math.sqrt(Math.max(0, 1 - cosf * cosf)), ext = 2 * Math.hypot((wd / 2) * cosf, (th / 2) * sinf), Nn = Math.max(1, ext / step);
+    const tone = 0.38 + 0.62 * Math.pow(Math.max(0, wet), 0.7);
+    wet -= ((step * k) / (k * 220)) * 0.011 * (wd / pen);
+    const T0 = Math.min(0.95, s.alpha * Math.min(1, tone + (0.8 * Math.max(0, loud - 1)) / LOUD.up)), alpha = 1 - Math.pow(1 - T0, 1 / Nn);
+    // (a crossing: a cell this stroke laid well before here)
+    const cs = Math.max(th, wd * 0.35) * k, key = `${Math.floor(p[0] / cs)},${Math.floor(p[1] / cs)},${Math.floor(p[2] / cs)}`, was = visited.get(key);
+    if (was !== undefined && dU - was > ext * 1.6 + (cs / k) * 2) continue;
+    if (was === undefined) visited.set(key, dU);
+    out.push({ p: add(p, mul(n, 0.003)), ax: [E, A, n], s: [(wd / 2 / 1.5) * k, Math.max(th / 2 / 1.5, step * 0.6) * k, 0.0008], c: s.colour, a: alpha, rank: s.rank - s.span * heartDist(s.heart, u), mark: s.mark, feature: s.feature, element: s.id, u, support: s.profile ? SUPPORT.edge : SUPPORT.surface, n1: n, n2: s.profile });
+  }
+  return out;
 }
 void sub; void len;

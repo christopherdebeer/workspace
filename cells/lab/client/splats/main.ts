@@ -566,7 +566,7 @@ slider('sunel', () => sunEl, (v) => { sunEl = v; if (light === 'reference') reli
   };
   const fs = [
     () => itemSync(),
-    segB('b-materials', (['ink', 'dry', 'washline'] as Material[]).map((m) => [m === 'washline' ? 'wash-line' : m, () => benchEdit(() => bench!.editor.setMaterial(benchSel, m)), () => it()?.stroke.material === m] as [string, () => void, () => boolean])),
+    segB('b-materials', (['ink', 'dry', 'washline', 'pen'] as Material[]).map((m) => [m === 'washline' ? 'wash-line' : m, () => benchEdit(() => bench!.editor.setMaterial(benchSel, m)), () => it()?.stroke.material === m] as [string, () => void, () => boolean])),
     segB('b-pressures', Object.keys(PRESSURES).map((p) => [p, () => benchEdit(() => bench!.editor.setPressure(benchSel, p)), () => it()?.pressure === p] as [string, () => void, () => boolean])),
   ];
   const wEl = $<HTMLInputElement>('b-weight'), dEl = $<HTMLInputElement>('b-density'), aEl = $<HTMLInputElement>('b-wash');
@@ -669,11 +669,72 @@ function judgeExport() {
   a.href = URL.createObjectURL(blob); a.download = `splats-judgements-${new Date().toISOString().slice(0, 10)}.json`; a.click();
 }
 
+// ─── measuring on the device (&perf): each configuration in turn while the camera turns, then edits; a table to copy ───
+const perf = { rec: null as number[] | null, sorts: [] as number[], spin: false };
+const quantile = (a: number[], q: number) => { const b = [...a].sort((x, y) => x - y); return b.length ? b[Math.min(b.length - 1, Math.floor(q * b.length))] : 0; };
+async function runPerf() {
+  const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
+  type Phase = { name: string; apply: () => void };
+  const phases: Phase[] = composed
+    ? [
+        { name: 'resolved · halo · ranks', apply: () => { detail = 1; haloOn = true; policyMode = 'ranks'; } },
+        { name: 'resolved · no halo · ranks', apply: () => { detail = 1; haloOn = false; policyMode = 'ranks'; } },
+        { name: 'sparse · halo · ranks', apply: () => { detail = STATES.sparse; haloOn = true; policyMode = 'ranks'; } },
+        { name: 'sparse · halo · rules', apply: () => { detail = STATES.sparse; haloOn = true; policyMode = 'rules'; policyTarget = null; } },
+        { name: 'resolved · halo · rules', apply: () => { detail = 1; haloOn = true; policyMode = 'rules'; policyTarget = null; } },
+      ]
+    : mist
+      ? ['reference', 'analytic', 'neural'].map((l) => ({ name: `light: ${l === 'reference' ? 'stored (no lighting work)' : l}`, apply: () => { light = l; diff = false; relight(); } }))
+      : [{ name: 'as it is', apply: () => {} }];
+  const rows: string[][] = [];
+  $('status').textContent = 'measuring…';
+  for (const ph of phases) {
+    ph.apply(); syncDetail(); syncStone();
+    perf.spin = true; await wait(1500);
+    perf.rec = []; perf.sorts = []; const pm0 = policyMs;
+    await wait(6000);
+    const d = perf.rec; perf.rec = null;
+    rows.push([ph.name, (1000 / (d.reduce((a, b) => a + b, 0) / Math.max(1, d.length))).toFixed(0), quantile(d, 0.5).toFixed(1), quantile(d, 0.95).toFixed(1), quantile(perf.sorts, 0.5).toFixed(0), policyMode !== 'ranks' ? policyMs.toFixed(1) : '–']);
+    void pm0;
+  }
+  perf.spin = false;
+  // (edits: the seam dragged a little, ten times, each deposited again and uploaded)
+  const edits: string[] = [];
+  if (composed && bench) {
+    const si = bench.items.findIndex((x) => x.name === 'seam');
+    if (si >= 0) {
+      benchSelect(si); detail = 1; policyMode = 'ranks';
+      const dep: number[] = [], up: number[] = [];
+      for (let k = 0; k < 10; k++) { const h = bench.items[si].handles()[2]; benchEdit(() => bench!.editor.setHandle(si, 2, [h[0] + (k % 2 ? -0.01 : 0.01), h[1] + 0.01, h[2]])); dep.push(lastEdit.deposit); up.push(lastEdit.upload); await wait(150); }
+      for (let k = 0; k < 10; k++) $('b-undo').click();
+      benchSelect(-1);
+      edits.push(`seam edit: deposit ${quantile(dep, 0.5).toFixed(1)} ms, assemble + upload ${quantile(up, 0.5).toFixed(1)} ms (median of 10)`);
+    }
+  }
+  const gl = R.gl, ext = gl.getExtension('WEBGL_debug_renderer_info'), gpu = ext ? String(gl.getParameter(ext.UNMASKED_RENDERER_WEBGL)) : String(gl.getParameter(gl.RENDERER));
+  const head = `${sceneName} · ${scene?.n ?? 0} marks · ${canvas.width}×${canvas.height} (dpr ${devicePixelRatio}) · ${gpu} · ${navigator.userAgent.replace(/^Mozilla\/5.0 /, '')}`;
+  const table = ['configuration\tfps\tframe p50 ms\tframe p95 ms\tsort ms\tpolicy ms', ...rows.map((r) => r.join('\t'))].join('\n');
+  const text = `${head}\n${table}${edits.length ? '\n' + edits.join('\n') : ''}`;
+  try { localStorage.setItem('splats-perf', text); } catch { /* not kept */ }
+  const box = Object.assign(document.createElement('div'), { id: 'perf' });
+  box.setAttribute('style', 'position:fixed;inset:auto 8px 8px 8px;z-index:5;background:var(--bg,#efe7d8);border:1px solid #999;padding:10px;font:12px ui-monospace,monospace;white-space:pre-wrap;max-height:70vh;overflow:auto');
+  box.textContent = text;
+  const copy = Object.assign(document.createElement('button'), { textContent: 'copy' }), close = Object.assign(document.createElement('button'), { textContent: 'close' });
+  copy.onclick = () => { void navigator.clipboard?.writeText(text).then(() => { copy.textContent = 'copied'; }, () => { copy.textContent = 'select and copy'; }); };
+  close.onclick = () => box.remove();
+  const bar = document.createElement('div'); bar.style.marginTop = '8px'; bar.append(copy, ' ', close); box.append(bar);
+  document.body.append(box);
+  $('status').textContent = '';
+  (window as unknown as { __perf: string }).__perf = text;
+}
+
 // ─── each frame ───
 let frames = 0, fpsT = performance.now(), fps = 0, last = performance.now();
 const theme = () => (matchMedia('(prefers-color-scheme: dark)').matches ? [0.07, 0.075, 0.08] : [0.11, 0.115, 0.12]) as [number, number, number];
 function frame() {
-  const t = performance.now(), dt = Math.min(0.1, (t - last) / 1000); last = t;
+  const t = performance.now(), raw = t - last, dt = Math.min(0.1, raw / 1000); last = t;
+  if (perf.rec) { perf.rec.push(raw); perf.sorts.push(sortMs); }
+  if (perf.spin) cam.yaw += dt * 0.35;
   if (orbitFrom !== null) {
     const u = (t - orbitFrom) / 1000 / ORBIT_S;
     cam.yaw = VIEWS.hero.yaw + Math.min(1, u) * Math.PI * 2;
@@ -714,6 +775,7 @@ function frame() {
     undo: () => $('b-undo').click(), density: (d: number) => { if (bench) { bench.editor.density = d; benchRegen('all'); } },
   },
   mist: { setDiff: (d: boolean) => { diff = d; relight(); }, setLight: (l: string) => { light = l; relight(); syncMist(); }, setSun: (az: number, el: number) => { sunAz = az; sunEl = el; relight(); }, setBank: (b: number) => { bank = b; openMist(); }, get ready() { return refReady; } },
+  perf: () => runPerf(), get perfResult() { return (window as unknown as { __perf?: string }).__perf ?? null; },
   composed: { camRef: () => camRef(), get gates() { return gateNow; }, setPolicy: (m: string) => { policyMode = m; policyPrev = null; policyTarget = null; syncStone(); }, get policy() { return { mode: policyMode, note: policyNote, model: !!POLICY }; }, judge: { next: () => { judge.on = true; judgeNext(); }, choose: judgeChoose, get stage() { return judge.stage; }, get pair() { return judge.pair; }, get count() { return judged().length; }, exportJson: () => judged() }, setCompose: (c: boolean) => { compose = c; reopen(); }, setHalo: (h: boolean, px?: number) => { haloOn = h; if (px) haloPx = px; }, get importance() { return composed ? (brushes as ReturnType<typeof composedScene>).importance : null; } },
   stone: { setView, setDetail: (d: number) => { detail = d; syncDetail(); syncStone(); }, setThin: (k: number) => { thin = k; }, setLook: (l: Look) => { look = l; reopen(); }, frame: (s: string | null) => { frameSubject(s); setView('hero'); }, paint, clear: () => { features.fill(0); lastPaint = null; }, features,
     /** a touch at a point of the stone (world), as the brush would make it from the eye; and the stone's own lines */
@@ -722,4 +784,6 @@ function frame() {
 };
 if (qs.has('url')) void openUrl(qs.get('url')!); else void open(qs.get('scene') ?? 'garden');
 if (qs.has('orbit')) setTimeout(() => { setView('hero'); orbitFrom = performance.now(); }, 300);
+// (&perf: measure once the scene is up and the first sort is in)
+if (qs.has('perf')) { const go = () => (scene && R.drawn > 0 ? setTimeout(() => void runPerf(), 1500) : setTimeout(go, 300)); go(); }
 requestAnimationFrame(frame);

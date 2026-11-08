@@ -364,8 +364,36 @@ reused rather than copied (`move()`, `body()`, `widths()`, `BROAD`, `LOUD`, `INK
   different and equally valid choice, not tried.
 - **Hand settings:** the bank's hand was chosen by eye (pace 5, stiffness 45). Bamboo's other features (contours, cut
   edges, rock rims) aren't routed through it yet.
-- **Editing:** the composed scene's editable strokes don't use the pen yet. That's the obvious next join: an edit
-  changes the plan, the hand re-times it, and the pen redraws it.
+- **Editing:** now joined. The brush has a `pen` material (`material: 'pen'`, with a manner: voice, pace, press).
+  A pen stroke is unbent into a flat curve with the same lengths and turns, timed by Autograph's `move()`, and laid
+  back on its surface by `penStroke` (pen.ts). The composed scene's plain ink lines (edges, nodes, culm sides, the
+  corner) all go through it, each subject with its own manner: the stone deliberate (pace 9, voice 0.3), the culms
+  quicker and louder, the corner ruled (voice 0). An edit changes the path, and the hand re-times and redraws it. The
+  Bench's material buttons include `pen`. Strokes with a profile (the seam's wedge, contacts) keep the round brush.
+
+### Washes as tonal shapes
+
+Washes were cloudy stipple, not tone. A `wash` (not `dry`) now has a pooled edge. Along the firm side, a thin run of
+narrow marks sits a little inside the boundary, a touch darker: the rim where wet pigment dries. The body is laid
+with fewer, larger, steadier marks, darkest near the firm edge and fading inward, so it reads as one connected tone.
+Rare specks give granulation. `edge: 'soft'` turns the rim off. Washes now make up about 18.6k of the composed scene's
+34.7k marks, up from about 24.6k in all.
+
+Honestly, against the reference drawings, the washes are better but still mottled at viewing distance. They read as
+patches of grey, not the flat graded tone of the resolved study. The next step is fewer overlapping layers, or a
+per-wash coverage target, so the tone stops depending on how random marks overlap.
+
+### Measuring on a phone (`&perf`)
+
+`?scene=composed&perf` and `?scene=mist&perf` run a fixed benchmark while the camera turns:
+- **composed:** resolved, halo and ranks; resolved without halo; sparse with halo; sparse with rules; resolved with
+  rules;
+- **mist:** stored, analytic and neural lighting.
+
+Each phase settles for 1.5 s, then records for 6 s: fps, p50 and p95 frame time, sort time, and policy time. Then it
+times ten seam edits (deposit and upload). A table appears with the GPU name and a copy button. It's also kept in
+`localStorage` (`splats-perf`) and on `window.__perf`. Headless Chrome uses software GL, so only a real device's
+numbers mean anything (`devtools/splats-perf.mjs` just checks that it runs).
 
 ## A drawing policy: learning which marks to keep
 
@@ -607,7 +635,7 @@ Roughly in order of what each teaches:
 
 ## Flags
 
-`?scene=stone|brushes|composed|bench|mist|garden|plush|nike|train` · `?compose=0` · `?halo=0` · `?halopx=` · `?policy=ranks|rules|learned` · `?judge` · `?scene=pen&part=word|board|culm|bank&reference` · `?look=dry|wash` · `?detail=0..1` · `?thin=even` · `?only=wash` · `?view=hero|grazing|reverse` · `?orbit` · `?detail=0.25|0.55|1` (sparse, intermediate, resolved) · `?brush` · `?occluder=0` · `?clean` (no controls) · `?url=…` (any `.splat` or `.ply` CORS lets it read) · `?up=1` (for a file that's
+`?scene=stone|brushes|composed|bench|mist|garden|plush|nike|train` · `?compose=0` · `?halo=0` · `?halopx=` · `?policy=ranks|rules|learned` · `?judge` · `?perf` · `?scene=pen&part=word|board|culm|bank&reference` · `?look=dry|wash` · `?detail=0..1` · `?thin=even` · `?only=wash` · `?view=hero|grazing|reverse` · `?orbit` · `?detail=0.25|0.55|1` (sparse, intermediate, resolved) · `?brush` · `?occluder=0` · `?clean` (no controls) · `?url=…` (any `.splat` or `.ply` CORS lets it read) · `?up=1` (for a file that's
 y-up) · `?mode=0..3` · `?size=` · `?res=` · `?count=` (garden size) · `?noworkers` · `?preview`
 
 Checks: `node cells/lab/devtools/splats.test.mjs` (formats, covariance, sort) and

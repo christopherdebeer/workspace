@@ -41,6 +41,7 @@
  *   space or a volume: round, keeps its centre's depth).
  */
 import { alloc, type Splats } from './format';
+import { penStroke } from './pen';
 type V = [number, number, number];
 const add = (a: V, b: V): V => [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
 const sub = (a: V, b: V): V => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
@@ -121,7 +122,11 @@ export interface Gesture {
   /** a little tremor across the path, as a share of the width */
   tremor?: number;
 }
-export type Material = 'ink' | 'dry' | 'washline';
+/** how a stroke is made: ink, dry and wash-line deposit along the path by a width profile; `pen` is drawn by a hand and
+ * a pen (pen.ts, after Autograph): timed by the hand, the nib's shape, speed, press and ink making the mark */
+export type Material = 'ink' | 'dry' | 'washline' | 'pen';
+/** a pen stroke's manner: round (0) to broad (1), the hand's pace (x-heights a second), a press (-1 to 1) */
+export interface PenManner { voice: number; pace: number; press?: number }
 /** where along a stroke its meaning lives: as the detail falls it reduces toward there (0..1 along, or 'middle') */
 export type Heart = number | 'middle' | 'ends';
 
@@ -135,6 +140,8 @@ export interface Stroke {
   rank: number; span: number;
   /** the second face's normal, for a mark that shows only on the profile (render.ts: contour) */
   profile?: V;
+  /** (material `pen`) its manner */
+  pen?: PenManner;
 }
 export interface Region {
   /** a point on it at random, with the surface's normal there (none: a volume) */
@@ -156,6 +163,9 @@ export interface Wash {
   depth: number; colour: V; mark: number; feature: number; rank: number; span: number;
   /** how uneven its far boundary is (0 even) and the noise's phase */
   uneven: number; phase: number;
+  /** its far edge: pigment pooled there as it dried, a crisp darker rim ('pooled', a wash's default), or fading out
+   * ('soft', as washes were) */
+  edge?: 'pooled' | 'soft';
   /** an anchor of several pieces (`pieces`): the segments joining one piece to the next (left out), and each anchor
    * point's own reach (a multiple of `reach`) */
   cuts?: Set<number>; reachAt?: number[];
@@ -191,9 +201,9 @@ export function stroke(path: Path, gesture: Gesture, o: { key?: string; material
   const key = keyFor('s', o.key, () => `${path.pts.map(r3).join(';')}|${gesture.width}|${o.mark ?? 1}|${o.feature ?? 0}`);
   return { kind: 'stroke', id: hashKey(key), key, path, gesture, material: o.material ?? 'ink', heart: o.heart ?? 'middle', colour: o.colour ?? INK, alpha: o.alpha ?? 0.9, mark: o.mark ?? 1, feature: o.feature ?? 0, rank: 0.9, span: 0.3, profile: o.profile };
 }
-export function wash(region: Region, anchor: V[], o: { key?: string; reach?: number; material?: 'wash' | 'dry'; depth?: number; direction?: (p: V, n: V) => V; colour?: V; mark?: number; feature?: number; uneven?: number } = {}): Wash {
+export function wash(region: Region, anchor: V[], o: { key?: string; reach?: number; material?: 'wash' | 'dry'; depth?: number; direction?: (p: V, n: V) => V; colour?: V; mark?: number; feature?: number; uneven?: number; edge?: 'pooled' | 'soft' } = {}): Wash {
   const key = keyFor('w', o.key, () => `${anchor.map(r3).join(';')}|${o.reach ?? 0.3}|${o.depth ?? 0.6}|${o.material ?? 'wash'}|${o.mark ?? 2}`), id = hashKey(key);
-  return { kind: 'wash', id, key, region, anchor, reach: o.reach ?? 0.3, material: o.material ?? 'wash', direction: o.direction, depth: o.depth ?? 0.6, colour: o.colour ?? INK, mark: o.mark ?? 2, feature: o.feature ?? 0, rank: 0.6, span: 0.5, uneven: o.uneven ?? 0.35, phase: (id % 6283) / 1000 };
+  return { kind: 'wash', id, key, region, anchor, reach: o.reach ?? 0.3, material: o.material ?? 'wash', direction: o.direction, depth: o.depth ?? 0.6, colour: o.colour ?? INK, mark: o.mark ?? 2, feature: o.feature ?? 0, rank: 0.6, span: 0.5, uneven: o.uneven ?? 0.35, phase: (id % 6283) / 1000, edge: o.edge };
 }
 /**
  * A group: a principal, its supports, its accents, simplifying together. The group's rank is the principal's; the
@@ -234,6 +244,8 @@ const heartDist = (h: Heart, u: number) => (h === 'middle' ? Math.abs(2 * u - 1)
 /** a stroke into splats, at a density (1 as made; less, fewer and longer: each mark's length follows its spacing, so the
  * overlap, and so the tone, is the same at any density) */
 export function depositStroke(s: Stroke, density = 1, rnd: () => number = rng(s.id)): Dep[] {
+  // (drawn by a hand and a pen, where it lies on a surface)
+  if (s.material === 'pen' && s.path.normals) return penStroke(s, density, heartDist);
   const P = s.path.pts, N = s.path.normals, out: Dep[] = [];
   if (P.length < 2) return out;
   // (its length along, to place splats at even spacing whatever the path's sampling)
@@ -298,7 +310,7 @@ export function depositWash(w: Wash, density = 1, rnd: () => number = rng(w.id))
   const rankOf = (f: number, s: number) => w.rank - w.span * heart(f, s);
   const base = { c: w.colour, mark: w.mark, feature: w.feature, element: w.id };
   // (the firm edge: a band along the anchor, just inside the region, long along it; laid every DS along the anchor)
-  const DS = 0.012, edgeN = 3 * density;
+  const DS = 0.012, edgeN = 3 * density, pooled = w.material === 'wash' && w.edge !== 'soft';
   for (let s = DS / 2; s < L; s += DS) {
     const { p: a0, tan, cut, k: rk } = pointAt(s); if (cut) continue;
     const pa = R.project(a0); if (!pa) continue;
@@ -319,9 +331,22 @@ export function depositWash(w: Wash, density = 1, rnd: () => number = rng(w.id))
         out.push({ ...base, p: pp.p, ax: frame(norm([g(), g(), g()]), tan), s: [r, r, r], a, rank: rankOf(f, s), u: f, support: SUPPORT.free });
       }
     }
+    // (the pooled rim: where the wash dried, its pigment gathered along its far edge, a crisp darker line of thin marks
+    // laid along that edge (its reach from here), just inside it)
+    if (pooled && inw) {
+      const D = reach(s, rk), rimN = 2 * density;
+      for (let q = 0; q < rimN; q++) {
+        if (q + 1 > rimN && rnd() > rimN - q) break;
+        const back = 0.002 + 0.006 * rnd() ** 2, pr = R.project(add(a0, mul(inw, D - back)));
+        if (!pr?.n || R.open?.(pr.p)) continue;
+        const [a, k] = faint((0.16 + 0.14 * w.depth) * (0.75 + 0.25 * rnd()), density);
+        out.push({ ...base, p: add(pr.p, mul(pr.n, 0.0024)), ax: frame(pr.n, tan), s: [0.011 + 0.006 * rnd(), 0.0022 * Math.sqrt(k), 0.001], a, rank: rankOf(1, s), u: 1, support: SUPPORT.surface, n1: pr.n });
+      }
+    }
   }
   // (the body: filled to a density within its reach of the anchor, leaving open what it leaves open)
-  const want = Math.round(R.area * (w.material === 'dry' ? 900 : 420) * w.depth * density);
+  // (a pooled wash is laid in smaller marks, more of them, so its tone connects into one shape instead of soft patches)
+  const want = Math.round(R.area * (w.material === 'dry' ? 900 : pooled ? 1150 : 420) * w.depth * density);
   for (let q = 0, got = 0; got < want && q < want * 14; q++) {
     const { p, n } = R.sample(rnd); if (R.open?.(p)) continue;
     const { d, s, k } = nearest(p), D = reach(s, k), f = d / D;
@@ -336,6 +361,13 @@ export function depositWash(w: Wash, density = 1, rnd: () => number = rng(w.id))
       const dir = w.direction?.(p, n) ?? norm(cross(n, [0, 1, 0])), Ls = 0.016 + 0.045 * (1 - f) * (0.7 + 0.3 * rnd());
       const [a, k] = faint(0.5 + 0.3 * (1 - f), density);
       out.push({ ...base, p: add(p, mul(n, 0.002)), ax: frame(n, dir), s: [Ls / 2, 0.0019 * k, 0.001], a, rank: rankOf(f, s), u: f, support: SUPPORT.surface, n1: n });
+    } else if (pooled) {
+      // (flatter tone, a gentle fall from the anchor; marks a little smaller toward the far edge, so it stays crisp)
+      const left = (1 - f) * D;
+      const [a, k] = faint((0.12 - 0.035 * f) * (0.55 + 0.45 * w.depth), density), rad = Math.min(0.017 + 0.014 * rnd(), left * 0.75 + 0.005, d * 0.9 + 0.005) * Math.sqrt(k);
+      out.push({ ...base, p: add(p, mul(n, 0.002)), ax: frame(n, [g(), g(), g()]), s: [rad * 1.08, rad * 0.92, 0.002], a, rank: rankOf(f, s), u: f, support: SUPPORT.surface, n1: n });
+      // (granulation: now and then a speck of settled pigment)
+      if (rnd() < 0.05) { const [sa] = faint(0.15 * (0.5 + 0.5 * w.depth), density); out.push({ ...base, p: add(p, mul(n, 0.0022)), ax: frame(n, [g(), g(), g()]), s: [0.0016, 0.0013, 0.001], a: sa, rank: rankOf(f, s), u: f, support: SUPPORT.surface, n1: n }); }
     } else {
       const [a, k] = faint((0.17 - 0.1 * f) * (0.55 + 0.45 * w.depth), density), rad = Math.min(0.014 + 0.08 * f * (0.6 + 0.4 * rnd()), Math.max(0.007, d * 0.9)) * Math.sqrt(k);
       out.push({ ...base, p: add(p, mul(n, 0.002)), ax: frame(n, [g(), g(), g()]), s: [rad * 1.08, rad * 0.92, 0.002], a, rank: rankOf(f, s), u: f, support: SUPPORT.surface, n1: n });

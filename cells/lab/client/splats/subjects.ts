@@ -16,7 +16,7 @@
  *
  * Nothing here makes a mark itself: each subject only supplies paths, regions and anchors, and chooses the brush.
  */
-import { add, cross, deposit, dot, group, len, mul, norm, sub, wash, stroke, planeRegion, cylinderRegion, scope, toSplats, pieces, pathFrom, groupsOf, INK, type Drawing, type Element, type Group, type Gesture, type Path, type Region, type Stroke, type V, type Wash } from './brush';
+import { add, cross, deposit, dot, group, len, mul, norm, sub, wash, stroke, planeRegion, cylinderRegion, scope, toSplats, pieces, pathFrom, groupsOf, INK, type PenManner, type Drawing, type Element, type Group, type Gesture, type Path, type Region, type Stroke, type V, type Wash } from './brush';
 import { Editor, deformItem, type EditItem } from './edit';
 import { groupInfo, type GroupInfo, type Proxy } from './policy';
 import { LIGHT, RECESS, SOFFIT, arrisLines, faceSampler, planeOf, stoneShape, toneOf, CROWN_A, CROWN_B, BROKEN, type Look } from './stone';
@@ -479,8 +479,13 @@ export function composedScene(look: Look = 'wash', compose = true, order: string
  * - an alternative: ranked to show whole when its gate opens;
  * - material: ranked below all structure, lesser objects' first; its contrast set by emphasis.
  */
+/** each object's pen manner (its inked lines drawn by a hand and the pen): the stone's mostly round and brisk, a culm's
+ * half broad and quick, the corner's round and slow (measured), the ground's between */
+const MANNER: Record<string, PenManner> = { stone: { voice: 0.3, pace: 9 }, culm: { voice: 0.6, pace: 12 }, corner: { voice: 0, pace: 6 }, ground: { voice: 0.5, pace: 10 } };
 function decide(e: Element, name: string, w: number) {
   const subject = name === 'stone';
+  // (one manner for every stroke: an inked line lying on a surface is drawn by a hand and the pen)
+  if (e.kind === 'stroke' && e.material === 'ink' && e.mark === 1 && e.path.normals && !e.profile) { e.material = 'pen'; e.pen = MANNER[name.startsWith('culm') ? 'culm' : name] ?? MANNER.ground; }
   if (e.alt) { e.rank = 0.8; e.span = 0.3; return; }
   if (e.structural) {
     if (subject) { if (e.mark === 4) { e.rank = 0.92; e.span = 0.3; } else e.rank = 0.97; }
