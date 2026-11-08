@@ -3,7 +3,7 @@
 // two culms behind and an architectural corner, made as artistic targets (generated, so their geometry is close to
 // the scene's but not the same: they're judged by eye for what survives together at each state, not compared pixel by
 // pixel). Each state beside them, from the camera nearest their composition (?cam=ref), drawn by the scene's own ranks
-// and by the hand-written rules at the same number of marks. Writes devtools/out/targets-<look>.png.
+// by the hand-written rules, and by the policy learned from judged pairs, at the same number of marks. Writes devtools/out/targets-<look>.png.
 import { withWood } from './harness.mjs';
 process.env.EXPERIMENT = 'splats'; process.env.READY = '__splats';
 const look = process.argv[2] ?? 'wash';
@@ -16,12 +16,12 @@ await withWood(async (wood) => {
     const S = (f, ...a) => page.evaluate(([f, a]) => window.__splats.stone[f](...a), [f, a]);
     const C = (f, ...a) => page.evaluate(([f, a]) => window.__splats.composed[f](...a), [f, a]);
     sh.push(new URL(`./splats/targets/composed-${nm}.jpg`, import.meta.url).pathname); lb.push(`target · ${nm}`);
-    for (const m of ['ranks', 'rules']) {
+    for (const m of ['ranks', 'rules', 'learned']) {
       await C('setPolicy', m); await S('setDetail', d); await C('camRef');
       await page.waitForTimeout(1800);
       sh.push(await wood.shot(page, `targets-${look}-${nm}-${m}`)); lb.push(`${m} · ${nm}`);
     }
     await page.close();
   }
-  await wood.montage(sh, `targets-${look}`, { height: 340, labels: lb, columns: 3 });
+  await wood.montage(sh, `targets-${look}`, { height: 340, labels: lb, columns: 4 });
 }, { width: 768, height: 512 });

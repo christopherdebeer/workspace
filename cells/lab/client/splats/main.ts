@@ -604,7 +604,7 @@ $('home').onclick = () => Object.assign(cam, { ...home, target: [...home.target]
 
 // ─── the drawing policy (policy.ts): each group's treatment from the view, held to the mark budget the detail gives ───
 let drawNow = () => {};
-let policyTarget: Treatment | null = null, policyTick = 0, policyMs = 0, policyMode = qs.get('policy') ?? 'ranks', policyPrev: Treatment | null = null, policyInfo: GroupInfo[] | null = null, policyNote = '';
+let policyTarget: Treatment | null = null, policyTick = 0, policyMs = 0, policyMode = qs.get('policy') ?? (POLICY ? 'learned' : 'rules'), policyPrev: Treatment | null = null, policyInfo: GroupInfo[] | null = null, policyNote = '';
 /** what the policy knows about the composed scene's groups (again after an edit) */
 const infosNow = () => (policyInfo ??= composed ? (brushes as ComposedScene).infos() : null);
 function viewIn(pos: number[], fwd: number[]): ViewIn { return { eye: [pos[0], pos[1], pos[2]], fwd: [fwd[0], fwd[1], fwd[2]], focalPx: canvas.clientHeight / (2 * Math.tan(cam.fov / 2)), detail }; }
