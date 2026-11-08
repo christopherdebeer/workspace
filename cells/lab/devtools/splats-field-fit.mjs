@@ -150,8 +150,14 @@ const res = { discs: N, views: T.length, look, iters: ITERS, constant: { train: 
 console.log(res);
 writeFileSync(new URL(`./out/field/fit-${look}.json`, import.meta.url), JSON.stringify(res, null, 1));
 
-// ─── the fitted field, for the renderer: per disc its place, normal, size, nine view terms, and the baseline's constant ───
-const F = new Float32Array(N * 17);
-discs.forEach((d, i) => { F.set([...d.p, ...d.n, d.s], i * 17); for (let b = 0; b < NB; b++) F[i * 17 + 7 + b] = field.c[i * NB + b]; F[i * 17 + 16] = flat.c[i * NB]; });
-writeFileSync(new URL('../client/splats/fieldstone.ts', import.meta.url), `/** The stone's drawing fitted as a field (devtools/splats-field-fit.mjs, ${look}, ${N} discs, ${T.length} views; held-out error ${field.test} against ${flat.test} without view dependence). Per disc 17 floats: place (3), normal (3), size, nine view terms, the constant-only baseline's term. */\nexport const FIELD_STONE = { n: ${N}, stride: 17, look: '${look}', data: '${Buffer.from(F.buffer).toString('base64')}' };\n`);
+// ─── the fitted field, for the renderer, packed (19 bytes a disc): place (3 × int16 over ±2.5), normal (octahedral, 2
+// bytes), size (a byte, × 0.0002), nine view terms and the baseline's (a byte each over −12…12) ───
+const B = Buffer.alloc(N * 19), qb = (v) => Math.round(((Math.max(-12, Math.min(12, v)) + 12) / 24) * 255);
+const oct = (n) => { const l = Math.abs(n[0]) + Math.abs(n[1]) + Math.abs(n[2]); let x = n[0] / l, y = n[1] / l; if (n[2] < 0) { const ox = x; x = (1 - Math.abs(y)) * Math.sign(ox || 1); y = (1 - Math.abs(ox)) * Math.sign(y || 1); } return [Math.round((x * 0.5 + 0.5) * 255), Math.round((y * 0.5 + 0.5) * 255)]; };
+discs.forEach((d, i) => {
+  const o = i * 19; d.p.forEach((v, k) => B.writeInt16LE(Math.round((v / 2.5) * 32767), o + k * 2));
+  const [ox, oy] = oct(d.n); B[o + 6] = ox; B[o + 7] = oy; B[o + 8] = Math.round(d.s / 0.0002);
+  for (let b = 0; b < NB; b++) B[o + 9 + b] = qb(field.c[i * NB + b]); B[o + 18] = qb(flat.c[i * NB]);
+});
+writeFileSync(new URL('../client/splats/fieldstone.ts', import.meta.url), `/** The stone's drawing fitted as a field (devtools/splats-field-fit.mjs, ${look}, ${N} discs, ${T.length} views; held-out error ${field.test} against ${flat.test} without view dependence, ${res.blankTest} for blank paper). Packed 19 bytes a disc: place (3 × int16 over ±2.5), normal (octahedral, 2 bytes), size (× 0.0002), nine view terms and the constant-only baseline's term (a byte each over −12…12). */\nexport const FIELD_STONE = { n: ${N}, stride: 19, look: '${look}', data: '${B.toString('base64')}' };\n`);
 console.log('wrote client/splats/fieldstone.ts');

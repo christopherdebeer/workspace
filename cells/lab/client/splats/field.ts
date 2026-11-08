@@ -13,19 +13,21 @@ const INK = [36, 31, 27], LO = -12, HI = 12;
 const q = (v: number, bits: number) => Math.round(((Math.max(LO, Math.min(HI, v)) - LO) / (HI - LO)) * ((1 << bits) - 1));
 
 export function fieldDrawing(flat = false): Splats & { mark: Uint8Array; rank: Float32Array; normal: Float32Array; feature: Uint32Array; element: Uint32Array } {
-  const raw = Uint8Array.from(atob(FIELD_STONE.data), (c) => c.charCodeAt(0)), F = new Float32Array(raw.buffer), N = FIELD_STONE.n, K = FIELD_STONE.stride;
+  const B = Uint8Array.from(atob(FIELD_STONE.data), (c) => c.charCodeAt(0)), dv = new DataView(B.buffer), N = FIELD_STONE.n, K = FIELD_STONE.stride;
   const s = { n: N, pos: new Float32Array(N * 3), scale: new Float32Array(N * 3), rot: new Float32Array(N * 4), rgba: new Uint8Array(N * 4), mark: new Uint8Array(N), rank: new Float32Array(N), normal: new Float32Array(N * 3), feature: new Uint32Array(N), element: new Uint32Array(N) };
+  const term = (b: number) => (b / 255) * (HI - LO) + LO;
   for (let i = 0; i < N; i++) {
-    const o = i * K, n = [F[o + 3], F[o + 4], F[o + 5]], sz = F[o + 6];
+    const o = i * K, p = [0, 1, 2].map((k) => (dv.getInt16(o + k * 2, true) / 32767) * 2.5), n = unOct(B[o + 6], B[o + 7]), sz = B[o + 8] * 0.0002;
     const t1 = norm(Math.abs(n[1]) < 0.9 ? cross(n, [0, 1, 0]) : cross(n, [1, 0, 0])), t2 = cross(n, t1);
-    s.pos.set([F[o], F[o + 1], F[o + 2]], i * 3); s.scale.set([sz, sz, 0.0008], i * 3); s.rot.set(quat(t1, t2, n), i * 4); s.normal.set(n, i * 3);
+    s.pos.set(p, i * 3); s.scale.set([sz, sz, 0.0008], i * 3); s.rot.set(quat(t1, t2, n), i * 4); s.normal.set(n, i * 3);
     s.rgba.set([INK[0], INK[1], INK[2], 255], i * 4); s.mark[i] = FIELD_KIND; s.rank[i] = 1;
-    const c = flat ? [F[o + 16], 0, 0, 0, 0, 0, 0, 0, 0] : Array.from(F.subarray(o + 7, o + 16));
+    const c = flat ? [term(B[o + 18]), 0, 0, 0, 0, 0, 0, 0, 0] : Array.from(B.subarray(o + 9, o + 18), term);
     s.feature[i] = (q(c[0], 8) | (q(c[1], 8) << 8) | (q(c[2], 8) << 16) | (q(c[3], 8) << 24)) >>> 0;
     s.element[i] = (q(c[4], 6) | (q(c[5], 6) << 6) | (q(c[6], 6) << 12) | (q(c[7], 6) << 18) | (q(c[8], 6) << 24)) >>> 0;
   }
   return s;
 }
+const unOct = (a: number, b: number) => { let x = (a / 255) * 2 - 1, y = (b / 255) * 2 - 1; const z = 1 - Math.abs(x) - Math.abs(y); if (z < 0) { const ox = x; x = (1 - Math.abs(y)) * Math.sign(ox || 1); y = (1 - Math.abs(ox)) * Math.sign(y || 1); } return norm([x, y, z]); };
 const cross = (a: number[], b: number[]) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
 const norm = (a: number[]) => { const l = Math.hypot(a[0], a[1], a[2]) || 1; return [a[0] / l, a[1] / l, a[2] / l]; };
 function quat(x: number[], y: number[], z: number[]): number[] {
