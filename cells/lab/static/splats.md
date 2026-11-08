@@ -168,8 +168,8 @@ The test is whether the same brushes, given only different paths, regions and an
 
 `?scene=composed` (`subjects.ts` `composedScene`, `edit.ts`). A stone, three culms and an architectural corner, with a
 bank passing between them, drawn with the same brushes throughout:
-- the corner behind the stone and to its left;
-- two culms behind it to the right, the far one standing in the back one's shadow;
+- the corner behind the stone and to its left, its niche toward the camera;
+- two culms behind it to the right;
 - one culm in front, crossing the stone's right side.
 
 `?compose=0` (or the *relate* row) draws each object as if alone.
@@ -184,11 +184,13 @@ bank passing between them, drawn with the same brushes throughout:
 | material detail | what can go freely | everything else, ranked below all structure, lesser objects' first |
 
 The minimum descriptions are authored:
-- **stone:** the seam's hook with its wedge of tone, its crown, its contacts, and an interrupted outline. The outline
-  includes the crown ridge and the broken face's edges, which carry most of its silhouette and had been left out.
-- **culm:** one continuous silhouette and two nodes.
-- **corner:** its arrises and cornice lips.
-- **ground:** the bank.
+- **stone:** the seam's hook with its wedge of tone, its lip with its underside shadow, its crown, and the upper
+  silhouette's arrises (the crown ridge and the broken face's edges carry most of it).
+- **culm:** the lit side's silhouette, continuous, and its nodes (all of them on the front culm, two on the others).
+- **corner:** its turning arris, its cornice lips, and its niche's frame.
+- **ground:** the line in front of the stone.
+
+These follow the reference drawings (below).
 
 **Groups are kept as objects** (`group()` returns members that point to their group, with its principal, supports,
 accents and minimum). Structural washes fall gently from their anchor, so a group's minimum appears and goes together.
@@ -224,7 +226,7 @@ a feature with its top bit set is a gate), choosing among anchored alternatives 
 An edit deposits again only the stroke and its washes (2 of 168 elements).
 
 **Checked** (`splats.test.mjs`):
-- shadow marks under another object: 0 (8 with each alone);
+- shadow marks under another object's footprint (the stone's included): 0;
 - the same drawing, element for element, when the objects are made in reverse order (163 elements compared);
 - no element keyed by its position in its scope;
 - every object's minimum survives the sparse state;
@@ -252,6 +254,42 @@ inside the camera's own motion. Finer steps across the gates' transitions would 
 |---|---|---|
 | seam | 4 ms | 21 ms |
 | bank (its slope is a large region) | 100–200 ms | about 15 ms |
+
+**Reference drawings** (`devtools/splats/targets/composed-{sparse,intermediate,resolved}.png`). Three studies of
+this scene, made as artistic targets. Because they're generated, their geometry is close to the scene's but not the
+same, so they're judged by eye for *what survives together*, not compared pixel by pixel or used as training pairs.
+
+| state | the targets keep |
+|---|---|
+| sparse | the stone's upper silhouette, broken and angular; its crack with a small dark wedge; its overhang's edge with a dark wedge of underside shadow; the front culm as one continuous side with compressed nodes; the back culms as single lines with node ticks; the corner as cornice edges, one arris and the niche's frame (no sill); one ground line running into the culm's foot |
+| intermediate | the stone's full outline with its lower blocks; tone along edges; a broader underside shadow; culms with both sides and light tone; the cornice's thickness; the niche's inner shade |
+| resolved | full tone, moss, cast shadows on rising ground |
+
+What changed to follow them:
+- **The scene is laid out round the stone's designed side.** That's its reverse view, where One Stone put its seam,
+  lip and overhang. The composed scene had placed everything round the other side, so its strongest features faced away
+  from the main view.
+  - Places are now given across and along a reference camera's view (`REF_CAM`, `PLACES`, `?cam=ref`, the composed
+    scene's default).
+  - Light comes from the picture's right, where the targets' comes from the left.
+- **The pairs that survive together are now structural:**
+  - crack with wedge; lip with underside shadow;
+  - one culm side with its nodes (the lit side; the shaded side comes at intermediate);
+  - the niche's frame; the corner's turning arris;
+  - the stone's upper silhouette only (its lower outline comes at intermediate);
+  - a ground line in front of the stone, running into the front culm's foot.
+
+  The bank behind and the stone's and corner's contacts became detail.
+- **The rules keep no non-structural tone at the sparse state,** where they had been leaving blobs of the culms' body
+  tone.
+
+Board: `node cells/lab/devtools/splats-targets.mjs [wash|dry]`: each state beside its target, by ranks and by rules.
+
+**Gaps against the targets:**
+- **The stone:** theirs is a tall tilted block filling most of the width, with the overhang's underside wedge as the
+  strongest mark at sparse. Ours is lower and boxier from this side, so that wedge reads weakly. That's geometry, not a
+  drawing decision.
+- **Missing pieces:** the culms don't lean, and there's no moss or rising ground.
 
 Boards: `node cells/lab/devtools/splats-composed.mjs [wash|dry]`:
 - states with and without composition;

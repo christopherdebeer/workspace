@@ -18,7 +18,7 @@ import { Renderer } from './render';
 import { bounds, garden, parse, type Splats } from './format';
 import { Sorter, type SortDone } from './sort';
 import { MARK, STATES, oneStone, stoneShape, type Look, type Stone } from './stone';
-import { brushScene, composedScene, type BrushScene, type ComposedScene } from './subjects';
+import { brushScene, composedScene, REF_CAM, type BrushScene, type ComposedScene } from './subjects';
 import { LIT, mistScene, referenceColours, sunDir, referenceAt, referenceLight, type MistScene } from './mist';
 import { NET, ANALYTIC, BAKE, RESULTS } from './mistnet';
 import { benchScene, PRESSURES } from './bench';
@@ -203,8 +203,12 @@ function openComposed() {
   R.setOccluder(B.occluder, B.objects);
   frameSubject(qs.get('subject'));
   setView((qs.get('view') as 'hero' | 'grazing' | 'reverse') ?? 'hero');
+  // (its default view is the reference camera, the stone's designed side; ?view= for the others)
+  if (qs.get('cam') === 'ref' || !qs.get('view')) camRef();
   syncStone();
 }
+/** the camera nearest the reference drawings' composition (devtools/splats/targets): the culm across the stone's right, the corner behind to the left */
+function camRef() { Object.assign(cam, { yaw: REF_CAM.yaw, pitch: REF_CAM.pitch, dist: REF_CAM.dist, target: [...REF_CAM.target] as [number, number, number] }); home = { ...cam, target: [...cam.target] as [number, number, number] }; }
 /**
  * The composed scene's gates, each frame: how much of the stone's tone is in sight from here (its shadowed faces'
  * washes, weighted by how far each faces the eye); its lit-side alternative shown as that falls; the other objects'
@@ -679,7 +683,7 @@ function frame() {
     undo: () => $('b-undo').click(), density: (d: number) => { if (bench) { bench.editor.density = d; benchRegen('all'); } },
   },
   mist: { setDiff: (d: boolean) => { diff = d; relight(); }, setLight: (l: string) => { light = l; relight(); syncMist(); }, setSun: (az: number, el: number) => { sunAz = az; sunEl = el; relight(); }, setBank: (b: number) => { bank = b; openMist(); }, get ready() { return refReady; } },
-  composed: { get gates() { return gateNow; }, setPolicy: (m: string) => { policyMode = m; policyPrev = null; policyTarget = null; syncStone(); }, get policy() { return { mode: policyMode, note: policyNote, model: !!POLICY }; }, judge: { next: () => { judge.on = true; judgeNext(); }, choose: judgeChoose, get stage() { return judge.stage; }, get pair() { return judge.pair; }, get count() { return judged().length; }, exportJson: () => judged() }, setCompose: (c: boolean) => { compose = c; reopen(); }, setHalo: (h: boolean, px?: number) => { haloOn = h; if (px) haloPx = px; }, get importance() { return composed ? (brushes as ReturnType<typeof composedScene>).importance : null; } },
+  composed: { camRef: () => camRef(), get gates() { return gateNow; }, setPolicy: (m: string) => { policyMode = m; policyPrev = null; policyTarget = null; syncStone(); }, get policy() { return { mode: policyMode, note: policyNote, model: !!POLICY }; }, judge: { next: () => { judge.on = true; judgeNext(); }, choose: judgeChoose, get stage() { return judge.stage; }, get pair() { return judge.pair; }, get count() { return judged().length; }, exportJson: () => judged() }, setCompose: (c: boolean) => { compose = c; reopen(); }, setHalo: (h: boolean, px?: number) => { haloOn = h; if (px) haloPx = px; }, get importance() { return composed ? (brushes as ReturnType<typeof composedScene>).importance : null; } },
   stone: { setView, setDetail: (d: number) => { detail = d; syncDetail(); syncStone(); }, setThin: (k: number) => { thin = k; }, setLook: (l: Look) => { look = l; reopen(); }, frame: (s: string | null) => { frameSubject(s); setView('hero'); }, paint, clear: () => { features.fill(0); lastPaint = null; }, features,
     /** a touch at a point of the stone (world), as the brush would make it from the eye; and the stone's own lines */
     touch: (p: [number, number, number]) => { if (!stone) return 0; const { pos } = eye(), d = norm([p[0] - pos[0], p[1] - pos[1], p[2] - pos[2]]), h = stone.ray(pos, d); if (!h) return 0; const f = stone.featureAt(h.p, h.region); if (f) features[f] = Math.min(1, features[f] + 0.07); return f; },

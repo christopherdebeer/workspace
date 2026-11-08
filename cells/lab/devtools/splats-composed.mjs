@@ -1,7 +1,7 @@
 // The composed scene's boards (node cells/lab/devtools/splats-composed.mjs [wash|dry]): a stone, three culms and an
 // architectural corner together, drawn with the shared brushes.
 // - composed-states-<look>.png: sparse, intermediate, resolved, with the relationships (importance, one ground, the
-//   halo) and without (each object drawn as if alone), from the hero view;
+//   halo) and without (each object drawn as if alone), from the reference view (the stone's designed side);
 // - composed-orbit-<look>.png: a full turn, eight views, at sparse (top row) and resolved (bottom row);
 // - composed-edit-<look>.png: editing in the scene: the seam bent (its wedge follows), re-pressured, its wash widened,
 //   the bank bent, then all undone;
@@ -22,7 +22,7 @@ await withWood(async (wood) => {
   // ─── states, with and without the relationships ───
   const a = [], al = [];
   for (const on of [true, false]) {
-    await C('setCompose', on); await S('frame', null);
+    await C('setCompose', on); await S('frame', null); await C('camRef');
     for (const [nm, d] of STATES) { await S('setDetail', d); a.push(await shot(`composed-${look}-${on ? 'on' : 'off'}-${nm}`)); al.push(`${on ? 'composed' : 'each alone'} · ${nm}`); }
   }
   await wood.montage(a, `composed-states-${look}`, { height: 420, labels: al, columns: 3 });

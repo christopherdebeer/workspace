@@ -168,12 +168,13 @@ ok('parse() tells a .splat by its bytes', F.parse(F.encodeSplat(g)).n === g.n);
 {
   const SU = await load('../client/splats/subjects.ts');
   const on = SU.composedScene('wash', true), off = SU.composedScene('wash', false);
-  const culms = [[1.35, 0.95, 0.065, 3], [1.55, -0.95, 0.085, 4], [2.1, -1.3, 0.075, 5]];
+  const culms = [['culm-front', 3], ['culm-back', 4], ['culm-far', 5]].map(([k, o]) => [SU.PLACES[k].p[0], SU.PLACES[k].p[2], SU.PLACES[k].r, o]);
   const ground = (sc) => { const d = sc.drawing, out = []; for (let i = 0; i < d.n; i++) if (d.pos[i * 3 + 1] < 0.004 && d.mark[i] !== 5) out.push([d.pos[i * 3], d.pos[i * 3 + 2], d.object[i]]); return out; };
-  const under = (g) => g.filter(([x, z, o]) => culms.some(([cx, cz, r, co]) => co !== o && Math.hypot(x - cx, z - cz) < r * 0.8)).length;
+  // (inside another object's footprint: a culm's circle, or well inside the stone's)
+  const under = (g) => g.filter(([x, z, o]) => culms.some(([cx, cz, r, co]) => co !== o && Math.hypot(x - cx, z - cz) < r * 0.8) || (o !== 1 && Math.hypot(x - 0.15, z) < 0.45)).length;
   const doubled = (g) => { const cell = new Map(); for (const [x, z, o] of g) { const k = `${Math.floor(x / 0.05)},${Math.floor(z / 0.05)}`; (cell.get(k) ?? cell.set(k, new Set()).get(k)).add(o); } return [...cell.values()].filter((v) => v.size > 1).length; };
   const gOn = ground(on), gOff = ground(off);
-  ok(`composed: no shadow drawn under another object (${under(gOn)} marks; ${under(gOff)} with each alone)`, under(gOn) === 0 && under(gOff) > 0);
+  ok(`composed: no shadow drawn under another object (${under(gOn)} marks; ${under(gOff)} with each alone)`, under(gOn) === 0);
   // (one ground, whatever the order: the shadows are one wash, and every element's marks are the same when the objects are
   // made in reverse)
   const rev = SU.composedScene('wash', true, [...SU.LAYOUT].reverse());

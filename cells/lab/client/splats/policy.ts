@@ -86,8 +86,10 @@ export function rules(groups: GroupInfo[], F: number[][], detail: number): Treat
     const f = F[i], size = f[ROLES.length + 3], facing = f[ROLES.length + 4], hid = f[ROLES.length + 5], comp = f[ROLES.length + 6];
     // (structure keeps a floor; detail follows the detail asked)
     let x = g.structural ? 0.45 + 0.55 * detail : detail;
-    // (tone only as far as it's seen: a wash turned away goes)
+    // (tone only as far as it's seen: a wash turned away goes; and, unless it's structure (a crack's wedge, an
+    // overhang's underside), none at the sparse state: there tone is kept for the pairs that need it)
     if (g.role === 'tone') x *= Math.max(0, Math.min(1, (facing + 0.1) / 0.5));
+    if (g.role === 'tone' && !g.structural) x *= Math.max(0, Math.min(1, (detail - 0.35) / 0.3));
     // (what's mostly hidden by a nearer object, or tiny on the screen, keeps less, unless it's structure)
     if (!g.structural && hid > 0.6) x *= 0.4;
     if (!g.structural && size < 0.25) x *= 0.5;
