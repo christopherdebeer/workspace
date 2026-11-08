@@ -89,12 +89,16 @@ void main() {
   if (u_only >= 0 && int(kind) != u_only) return;
   vec3 sn = octDecode(vec2(float((d1.w >> 16) & 255u), float(d1.w >> 24)) / 127.5 - 1.0);
   // (a feature the brush has developed: its own marks brought back by their ranks, as far as it's been brushed)
-  float detail = u_detail;
-  if (feature > 0u) { ivec2 fs = textureSize(u_feat, 0); int fi = int(feature); if (fi < fs.x * fs.y) detail = max(detail, texelFetch(u_feat, ivec2(fi % fs.x, fi / fs.x), 0).r); }
+  // (a feature with its top bit set is a gate: an alternative description shown only as far as the scene's value for it
+  // (set each frame from the view); otherwise it's developed by the brush, brought back by rank as far as its value)
+  float detail = u_detail, gate = 1.0;
+  bool gated = (feature & 0x80000000u) != 0u; uint fid = feature & 0x7fffffffu;
+  if (fid > 0u) { ivec2 fs = textureSize(u_feat, 0); int fi = int(fid); float fv = fi < fs.x * fs.y ? texelFetch(u_feat, ivec2(fi % fs.x, fi / fs.x), 0).r : 0.0; if (gated) gate = fv; else detail = max(detail, fv); }
   // (kept by rank against the detail asked, or thinned evenly to the same share; and round what the brush touched, all of it
   // brought back by rank)
   float keep = u_thin == 1 ? smoothstep(1.0 - u_share - 0.03, 1.0 - u_share, hash(a_index) * 0.999) : smoothstep(1.0 - u_detail - 0.04, 1.0 - u_detail, rank);
   if (detail > u_detail + 0.001) keep = max(keep, smoothstep(1.0 - detail - 0.04, 1.0 - detail, rank));
+  keep *= gate;
   // (a contour mark: there only where its surface is near edge-on from here, eased over a range of angles)
   if (kind == 4u) {
     // (its second face's normal rides in its own place (its colour is its own): drawn where the two faces are turned
@@ -132,10 +136,10 @@ void main() {
     // (shown linear, a little compressed at the top; or, in the error view, how far it is from the reference)
     v_color.rgb = u_diff == 1 ? mix(vec3(0.22, 0.24, 0.27), vec3(1.0, 0.38, 0.2), clamp(abs(L - refL) * 2.5, 0.0, 1.0)) : vec3(0.96, 0.94, 0.88) * (L * 0.8 / (1.0 + 0.25 * L));
   }
-  // (the halo: a mark of one object with a nearer, different object's surface just round it on the screen is broken
-  // there: a line passing behind a culm stops short of it, a wash leaves a sliver of paper along a nearer silhouette.
-  // Two rings of eight reads of the occluder's depth and object; the nearer ring counts more)
-  if (u_halo > 0.0 && support != 0u && kind != 8u && (d2.w & 255u) != 0u && keep > 0.01) {
+  // (the halo: a line of one object with a nearer, different object's surface just round it on the screen is broken
+  // there, so two contours don't run into each other. Only lines (ink strokes, profiles): not washes, and not contact
+  // accents, which must stay strong where things touch. One ring of eight reads of the occluder's depth and object)
+  if (u_halo > 0.0 && (kind == 1u || kind == 4u) && (d2.w & 255u) != 0u && keep > 0.01) {
     uint obj = d2.w & 255u;
     vec2 px0 = (clip.xy / clip.w * 0.5 + 0.5) * u_viewport;
     float zM = -cam.z, hit = 0.0;
@@ -143,15 +147,13 @@ void main() {
     for (int k = 0; k < 8; k++) {
       float a = float(k) * 0.7853982;
       vec2 dir = vec2(cos(a), sin(a));
-      for (int ring = 1; ring <= 2; ring++) {
-        ivec2 q = clamp(ivec2(px0 + dir * u_halo * float(ring) * 0.5), ivec2(0), lim);
-        float d = texelFetch(u_hdep, q, 0).r;
-        if (d >= 1.0) continue;
-        uint so = uint(texelFetch(u_hobj, q, 0).r * 255.0 + 0.5);
-        if (so == obj || so == 0u) continue;
-        float zS = 2.0 * u_nf.x * u_nf.y / (u_nf.y + u_nf.x - (2.0 * d - 1.0) * (u_nf.y - u_nf.x));
-        if (zS < zM - max(0.04, 0.04 * zM)) hit += ring == 1 ? 0.25 : 0.12;
-      }
+      ivec2 q = clamp(ivec2(px0 + dir * u_halo), ivec2(0), lim);
+      float d = texelFetch(u_hdep, q, 0).r;
+      if (d >= 1.0) continue;
+      uint so = uint(texelFetch(u_hobj, q, 0).r * 255.0 + 0.5);
+      if (so == obj || so == 0u) continue;
+      float zS = 2.0 * u_nf.x * u_nf.y / (u_nf.y + u_nf.x - (2.0 * d - 1.0) * (u_nf.y - u_nf.x));
+      if (zS < zM - max(0.04, 0.04 * zM)) hit += 0.34;
     }
     keep *= 1.0 - clamp(hit, 0.0, 1.0);
   }

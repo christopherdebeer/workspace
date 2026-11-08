@@ -16,7 +16,8 @@
  *
  * Nothing here makes a mark itself: each subject only supplies paths, regions and anchors, and chooses the brush.
  */
-import { add, cross, deposit, dot, group, len, mul, norm, sub, wash, stroke, planeRegion, cylinderRegion, scope, toSplats, INK, type Drawing, type Element, type Path, type Region, type V } from './brush';
+import { add, cross, deposit, dot, group, len, mul, norm, sub, wash, stroke, planeRegion, cylinderRegion, scope, toSplats, pieces, pathFrom, groupsOf, INK, type Drawing, type Element, type Group, type Gesture, type Path, type Region, type Stroke, type V, type Wash } from './brush';
+import { Editor, deformItem, type EditItem } from './edit';
 import { LIGHT, RECESS, SOFFIT, arrisLines, faceSampler, planeOf, stoneShape, toneOf, CROWN_A, CROWN_B, BROKEN, type Look } from './stone';
 
 export type BrushDrawing = Drawing;
@@ -27,182 +28,236 @@ const away = norm([-LIGHT[0], 0, -LIGHT[2]]);
 const F = { seam: 1, ledge: 2, stoneFoot: 3, stoneFaces: 4, culm: 5, culmBody: 6, cornice: 7, niche: 8, wall: 9, gesture: 10, wrapped: 11, crown: 12 };
 
 /**
- * The ground shared by a composed scene's objects: each object's footprint, and each cast shadow in the order made.
- * When it's set, a cast shadow is kept off every other object's footprint (no shadow drawn under a thing) and off the
- * shadows made before it (where two fall together the ground is one shadow, not two layered).
+ * A cast shadow's own shape on the ground, kept with its wash so a composed scene can merge every object's shadow into
+ * one field (subjects.ts `composedScene`), the same whatever order the objects were made in.
  */
-interface Ground { solids: Array<(x: number, z: number) => boolean>; shadows: Array<(x: number, z: number) => boolean> }
-let ground: Ground | null = null;
-/** a cast shadow on the ground from a footprint (points round it), as a region and the anchor on its far side */
-function castShadow(foot: V[], height: number): { region: Region; anchor: V[] } {
+const shadowOf = new WeakMap<Element, { inside: (x: number, z: number) => boolean; inFoot: (x: number, z: number) => boolean; anchor: V[]; reach: number; depth: number }>();
+/** a cast shadow on the ground from a footprint (points round it): its region, the anchor on its far side, and its
+ * shape (inside the shadow; inside the footprint) */
+function castShadow(foot: V[], height: number): { region: Region; anchor: V[]; inside: (x: number, z: number) => boolean; inFoot: (x: number, z: number) => boolean } {
   const shift = mul(LIGHT, -height / LIGHT[1]);
   const pts2 = foot.flatMap((p) => [[p[0], p[2]], [p[0] + shift[0], p[2] + shift[2]]] as Array<[number, number]>);
-  const H = hull(pts2), inside = (x: number, z: number) => { let c = false; for (let i = 0, j = H.length - 1; i < H.length; j = i++) { const [xi, zi] = H[i], [xj, zj] = H[j]; if ((zi > z) !== (zj > z) && x < ((xj - xi) * (z - zi)) / (zj - zi) + xi) c = !c; } return c; };
-  const F2 = hull(foot.map((p) => [p[0], p[2]] as [number, number])), inFoot = (x: number, z: number) => { let c = false; for (let i = 0, j = F2.length - 1; i < F2.length; j = i++) { const [xi, zi] = F2[i], [xj, zj] = F2[j]; if ((zi > z) !== (zj > z) && x < ((xj - xi) * (z - zi)) / (zj - zi) + xi) c = !c; } return c; };
+  const inside = inPoly(hull(pts2)), inFoot = inPoly(hull(foot.map((p) => [p[0], p[2]] as [number, number])));
   const c = foot.reduce((s, p) => add(s, mul(p, 1 / foot.length)), [0, 0, 0] as V);
-  const g = ground, before = g ? g.shadows.slice() : [];
-  const mine = (x: number, z: number) => inside(x, z) && !inFoot(x, z);
-  if (g) { g.solids.push(inFoot); g.shadows.push(mine); }
-  const region = planeRegion(UP, [c[0], 0.001, c[2]], (p) => mine(p[0], p[2]) && (!g || (!g.solids.some((f) => f !== inFoot && f(p[0], p[2])) && !before.some((f) => f(p[0], p[2])))), 2.6);
+  const region = planeRegion(UP, [c[0], 0.001, c[2]], (p) => inside(p[0], p[2]) && !inFoot(p[0], p[2]), 2.6);
   const anchor = foot.filter((p) => dot(norm(sub(p, c)), away) > 0.25).map((p) => [p[0], 0.001, p[2]] as V);
   anchor.sort((a, b) => Math.atan2(a[2] - c[2], a[0] - c[0]) - Math.atan2(b[2] - c[2], b[0] - c[0]));
-  return { region, anchor };
+  return { region, anchor, inside, inFoot };
 }
-/** short dark accents where a thing meets the ground */
-function contact(p: V, along: V, feature: number): Element {
+/** a cast shadow's wash, its shape remembered for merging */
+function shadowWash(cs: ReturnType<typeof castShadow>, key: string, o: { reach: number; material: 'wash' | 'dry'; depth: number; feature: number; uneven?: number }): Element {
+  const w = wash(cs.region, cs.anchor, { key, reach: o.reach, material: o.material, depth: o.depth, feature: o.feature, direction: () => away, uneven: o.uneven });
+  shadowOf.set(w, { inside: cs.inside, inFoot: cs.inFoot, anchor: cs.anchor, reach: o.reach, depth: o.depth });
+  return w;
+}
+const inPoly = (H: Array<[number, number]>) => (x: number, z: number) => { let c = false; for (let i = 0, j = H.length - 1; i < H.length; j = i++) { const [xi, zi] = H[i], [xj, zj] = H[j]; if ((zi > z) !== (zj > z) && x < ((xj - xi) * (z - zi)) / (zj - zi) + xi) c = !c; } return c; };
+/** short dark accents where a thing meets the ground (structural: contact stays strong) */
+function contact(p: V, along: V, feature: number, key: string): Element {
   const pts: V[] = [add(p, mul(along, -0.05)), add(p, mul(along, 0.05))].map((q) => [q[0], 0.0015, q[2]] as V);
-  return stroke({ pts, normals: [UP, UP] }, { width: 0.008, taper: [0.3, 0.3] }, { mark: 5, feature, alpha: 0.9 });
+  const e: Element = stroke({ pts, normals: [UP, UP] }, { width: 0.008, taper: [0.3, 0.3] }, { key, mark: 5, feature, alpha: 0.9 });
+  e.structural = true;
+  return e;
 }
 /** a profile stroke along an edge between two faces (it shows only where they turn opposite ways from the eye) */
-function profile(pts: V[], n1: V, n2: V, feature: number): Element {
+function profile(pts: V[], n1: V, n2: V, feature: number, key: string, g: Partial<Gesture> = {}): Element {
   const nm = norm(add(n1, n2));
-  return stroke({ pts: pts.map((p) => add(p, mul(nm, 0.003))), normals: pts.map(() => n1) }, { width: 0.005, taper: [0.15, 0.15], breaks: [[0.42, 0.5]] }, { mark: 4, feature, profile: n2, alpha: 0.8 });
+  return stroke({ pts: pts.map((p) => add(p, mul(nm, 0.003))), normals: pts.map(() => n1) }, { width: 0.005, taper: [0.15, 0.15], breaks: [[0.42, 0.5]], ...g }, { key, mark: 4, feature, profile: n2, alpha: 0.8 });
 }
+/** what an editable stroke needs: how many handles, the surface it's on, and the washes anchored to it */
+export interface EditSpec { name: string; stroke: Stroke; handles: number; onto: Region; deps: Array<{ wash: Wash; anchor: (pts: V[]) => V[] }> }
 
 // ─── the stone ───
-function stoneElements(look: Look, off: V): { els: Element[]; tris: number[] } {
+/**
+ * The stone. Structural (its minimum description, which survives and goes together): the seam's hook with its wedge
+ * of tone, a short turn of the crown, its foot's contacts, and a broken outline (the arrises, their middles first).
+ * Material: the ledge, the faces' tone, the rest of the seam and outline. With `alts`, an alternative for views where
+ * its shadowed faces are turned away: a little tone low on each lit side face, shown only then (`alt: 'lit'`).
+ */
+function stoneElements(look: Look, off: V, alts = false): { els: Element[]; tris: number[]; edits: EditSpec[]; surface: Region } {
   const S = stoneShape(), at = (p: V): V => add(p, off), dry = look === 'dry';
   let rs = 5; const rnd = () => ((rs = (rs * 48271) % 2147483647) / 2147483647);
-  const faceRegion = (reg: number): Region => {
+  const faceRegion = (reg: number): Region & { fsArea: number } => {
     const { n, h } = planeOf(reg), fs = faceSampler(reg, rnd), C = S.centre;
     return {
-      area: fs.area, sample: (r) => ({ p: at(fs.at(r)), n }), on: (p) => fs.on(sub(p, off)),
+      area: fs.area, fsArea: fs.area, sample: (r) => ({ p: at(fs.at(r)), n }), on: (p) => fs.on(sub(p, off)),
       project: (p) => { const q = sub(p, off), pq = sub(q, mul(n, dot(sub(q, C), n) - h)); return fs.on(pq) ? { p: at(pq), n } : null; },
     };
   };
   const normalAt = (p: V) => S.ray(S.centre, norm(sub(p, S.centre)))?.n ?? UP;
-  const els: Element[] = [];
-  // (the seam: principal, its heart the hook; a wedge of wash beside it on the shadowed side; its branch an accent)
+  // (the whole surface: a point taken onto it along the ray from the stone's middle)
+  const surface: Region = { area: 1, sample: () => ({ p: at(S.centre), n: UP }), on: () => true, project: (p) => { const q = S.ray(S.centre, norm(sub(sub(p, off), S.centre))); return q ? { p: at(add(q.p, mul(q.n, 0.002))), n: q.n } : null; } };
+  const els: Element[] = [], edits: EditSpec[] = [];
+  // (the seam: principal, its heart the hook; a wedge of wash beside it on the shadowed side)
   const seamPath: Path = { pts: S.seam.map(at), normals: S.seam.map(normalAt) };
-  const seam = stroke(seamPath, { width: dry ? 0.009 : 0.008, pressure: (u) => 0.65 + 0.35 * Math.sin(u * 23) ** 2 + 0.5 * Math.max(0, 0.14 - u) / 0.14, taper: [0.06, 0.18], breaks: [[0.4, 0.42], [0.66, 0.675]] }, { material: dry ? 'dry' : 'ink', heart: 0, feature: F.seam });
-  const hookPts = S.seam.slice(0, Math.floor(S.seam.length * 0.45));
+  const seam: Element = stroke(seamPath, { width: dry ? 0.009 : 0.008, pressure: (u) => 0.65 + 0.35 * Math.sin(u * 23) ** 2 + 0.5 * Math.max(0, 0.14 - u) / 0.14, taper: [0.06, 0.18], breaks: [[0.4, 0.42], [0.66, 0.675]] }, { key: 'seam', material: dry ? 'dry' : 'ink', heart: 0, feature: F.seam });
+  const hookN = Math.floor(S.seam.length * 0.45), hookOf = (pts: V[]) => pts.slice(0, Math.max(2, Math.floor(pts.length * 0.45)));
+  const hookPts = S.seam.slice(0, hookN);
   const wedgeRegion: Region = {
     area: 0.04,
-    sample: (r) => { const i = Math.floor(r() * hookPts.length), p = hookPts[i], n = normalAt(p), t = norm(sub(hookPts[Math.min(hookPts.length - 1, i + 2)], hookPts[Math.max(0, i - 2)])); let d = norm(cross(n, t)); if (dot(d, LIGHT) > 0) d = mul(d, -1); const q = S.ray(S.centre, norm(sub(add(p, mul(d, r() * 0.06)), S.centre))); return { p: at(q?.p ?? p), n: q?.n ?? n }; },
-    on: (p) => { const q = sub(p, off); return hookPts.some((h) => len(sub(h, q)) < 0.08); },
+    sample: (r) => { const H = hookOf(seam.kind === 'stroke' ? seam.path.pts : []).map((p) => sub(p, off)), i = Math.floor(r() * H.length), p = H[i], n = normalAt(p), t = norm(sub(H[Math.min(H.length - 1, i + 2)], H[Math.max(0, i - 2)])); let d = norm(cross(n, t)); if (dot(d, LIGHT) > 0) d = mul(d, -1); const q = S.ray(S.centre, norm(sub(add(p, mul(d, r() * 0.06)), S.centre))); return { p: at(q?.p ?? p), n: q?.n ?? n }; },
+    on: (p) => { const q = sub(p, off), H = hookOf(seam.kind === 'stroke' ? seam.path.pts : []).map((h) => sub(h, off)); return H.some((h) => len(sub(h, q)) < 0.08); },
     project: (p) => { const q = S.ray(S.centre, norm(sub(sub(p, off), S.centre))); return q ? { p: at(q.p), n: q.n } : null; },
   };
-  els.push(...group(0.99, seam, [wash(wedgeRegion, hookPts.map(at), { reach: 0.06, material: dry ? 'dry' : 'wash', depth: 0.9, feature: F.seam, direction: (p, n) => norm(cross(n, UP)) })]));
+  const wedge: Element = wash(wedgeRegion, hookPts.map(at), { key: 'seam/wedge', reach: 0.06, material: dry ? 'dry' : 'wash', depth: 0.9, feature: F.seam, direction: (p, n) => norm(cross(n, UP)) });
+  seam.structural = true; wedge.structural = true;
+  els.push(...group(0.99, seam, [wedge], [], 'seam'));
+  edits.push({ name: 'seam', stroke: seam as Stroke, handles: 5, onto: surface, deps: [{ wash: wedge as Wash, anchor: hookOf }] });
   // (the ledge: the lip principal; the soffit's and recess's wash under it; the crevice an accent)
-  const lip = stroke({ pts: S.lip.map(at), normals: S.lip.map(() => UP) }, { width: 0.008, taper: [0.15, 0.15] }, { heart: 'middle', feature: F.ledge });
-  const crevice = stroke({ pts: S.crevice.map(at), normals: S.crevice.map(() => norm(add(planeOf(RECESS).n, [0, -1, 0]))) }, { width: 0.008, taper: [0.2, 0.2] }, { heart: 'middle', feature: F.ledge, mark: 5, alpha: 0.95 });
-  els.push(...group(0.98, lip, [wash(faceRegion(SOFFIT), S.lip.map(at), { reach: 0.55, material: dry ? 'dry' : 'wash', depth: 1, feature: F.ledge, direction: () => norm(cross([0, -1, 0], planeOf(RECESS).n)) }), wash(faceRegion(RECESS), S.crevice.map(at), { reach: 0.4, material: dry ? 'dry' : 'wash', depth: 0.9, feature: F.ledge, direction: () => [0, -1, 0] })], [crevice]));
-  // (the crown: one turn of it)
-  const top = S.crown.reduce((b, p, i) => (p[1] > S.crown[b][1] ? i : b), 0), crownPts = S.crown.slice(Math.max(0, top - 24), top + 24);
-  if (crownPts.length > 2) els.push(...group(0.92, stroke({ pts: crownPts.map(at), normals: crownPts.map(() => norm(add(planeOf(CROWN_A).n, planeOf(CROWN_B).n))) }, { width: 0.008, taper: [0.3, 0.3] }, { heart: 'middle', feature: F.crown })));
-  // (the shadowed faces: each a wash anchored on its terminator)
+  const lip: Element = stroke({ pts: S.lip.map(at), normals: S.lip.map(() => UP) }, { width: 0.008, taper: [0.15, 0.15] }, { key: 'lip', heart: 'middle', feature: F.ledge });
+  const crevice = stroke({ pts: S.crevice.map(at), normals: S.crevice.map(() => norm(add(planeOf(RECESS).n, [0, -1, 0]))) }, { width: 0.008, taper: [0.2, 0.2] }, { key: 'lip/crevice', heart: 'middle', feature: F.ledge, mark: 5, alpha: 0.95 });
+  const soffit: Element = wash(faceRegion(SOFFIT), S.lip.map(at), { key: 'lip/soffit', reach: 0.55, material: dry ? 'dry' : 'wash', depth: 1, feature: F.ledge, direction: () => norm(cross([0, -1, 0], planeOf(RECESS).n)) });
+  soffit.facing = planeOf(SOFFIT).n; soffit.toneArea = (soffit as Wash).region.area;
+  const recess: Element = wash(faceRegion(RECESS), S.crevice.map(at), { key: 'lip/recess', reach: 0.4, material: dry ? 'dry' : 'wash', depth: 0.9, feature: F.ledge, direction: () => [0, -1, 0] });
+  recess.facing = planeOf(RECESS).n; recess.toneArea = (recess as Wash).region.area;
+  els.push(...group(0.98, lip, [soffit, recess], [crevice], 'lip'));
+  edits.push({ name: 'lip', stroke: lip as Stroke, handles: 4, onto: surface, deps: [{ wash: soffit as Wash, anchor: (pts) => pts }] });
+  // (the crown: the stone's top silhouette from most views (the arrises leave it out), its middle structural)
+  const top = S.crown.reduce((b, p, i) => (p[1] > S.crown[b][1] ? i : b), 0), crownPts = S.crown.slice(Math.max(0, top - 70), top + 70);
+  if (crownPts.length > 2) { const cr: Element = stroke({ pts: crownPts.map(at), normals: crownPts.map(() => norm(add(planeOf(CROWN_A).n, planeOf(CROWN_B).n))) }, { width: 0.008, taper: [0.3, 0.3] }, { key: 'crown', heart: 'middle', feature: F.crown }); cr.structural = true; els.push(...group(0.92, cr, [], [], 'crown')); }
+  // (the shadowed faces: each a wash anchored on its terminator, carrying the stone's tone)
   const lines = arrisLines(0.01);
   for (let reg = 0; reg < 11; reg++) {
-    const n0 = planeOf(reg).n, tone = toneOf(n0, reg); if (tone === 0) continue;
+    const n0 = planeOf(reg).n, tone = toneOf(n0, reg);
+    if (tone === 0) {
+      // (a lit face: its alternative, a little tone low on it, for when the shadowed faces are out of sight)
+      if (!alts || Math.abs(n0[1]) > 0.75) continue;
+      let low: V[] = [], ly = Infinity;
+      for (const ln of lines) { if (ln.i !== reg && ln.j !== reg) continue; const my = ln.pts.reduce((s, p) => s + p[1], 0) / ln.pts.length; if (my < ly && ln.pts.length > 3) { ly = my; low = ln.pts; } }
+      if (low.length < 2) continue;
+      const fr = faceRegion(reg), a: Element = wash(fr, low.map(at), { key: `lit/${reg}`, reach: 0.3, material: dry ? 'dry' : 'wash', depth: 0.4, feature: F.stoneFaces, direction: () => [0, -1, 0], uneven: 0.45 });
+      a.alt = 'lit'; a.facing = n0; a.toneArea = fr.fsArea;
+      els.push(...group(0.7, null, [a], [], `lit/${reg}`));
+      continue;
+    }
     let anchor: V[] = [], best = Infinity;
     for (const ln of lines) { if (ln.i !== reg && ln.j !== reg) continue; const o = ln.i === reg ? ln.j : ln.i, on = planeOf(o).n; if (toneOf(on, o) < tone && -dot(on, LIGHT) < best) { best = -dot(on, LIGHT); anchor = ln.pts; } }
     if (anchor.length < 2) continue;
-    const shelf = n0[1] > 0.55;
-    els.push(...group(tone === 2 ? 0.84 : 0.62, null, [wash(faceRegion(reg), anchor.map(at), { reach: tone === 2 ? 0.5 : 0.32, material: dry ? 'dry' : 'wash', depth: tone === 2 ? 0.8 : 0.5, feature: F.stoneFaces, direction: (p, n) => (shelf ? norm(cross(UP, n)) : norm(sub([0, -1, 0], mul(n, -n[1])))) })]));
+    const shelf = n0[1] > 0.55, fr = faceRegion(reg);
+    const w: Element = wash(fr, anchor.map(at), { key: `face/${reg}`, reach: tone === 2 ? 0.5 : 0.32, material: dry ? 'dry' : 'wash', depth: tone === 2 ? 0.8 : 0.5, feature: F.stoneFaces, direction: (p, n) => (shelf ? norm(cross(UP, n)) : norm(sub([0, -1, 0], mul(n, -n[1])))) });
+    w.facing = n0; w.toneArea = fr.fsArea * (tone === 2 ? 0.8 : 0.5);
+    els.push(...group(tone === 2 ? 0.84 : 0.62, null, [w], [], `face/${reg}`));
   }
-  // (the profile: the arrises, each showing only edge-on)
-  for (const ln of lines) { if ((ln.i === CROWN_A && ln.j === CROWN_B) || ln.i === BROKEN || ln.j === BROKEN) continue; const e = profile(ln.pts.map(at), planeOf(ln.i).n, planeOf(ln.j).n, 0); e.rank = 0.62 + 0.12 * rnd(); e.span = 0.4; els.push(e); }
+  // (the outline: the arrises, each showing only edge-on; interrupted and a little angular, their middles structural)
+  // (the crown ridge and the broken face's edges carry most of its silhouette, so they're profiles too: the broken
+  // face's more broken)
+  for (const ln of lines) {
+    const broken = ln.i === BROKEN || ln.j === BROKEN, ph = (ln.i * 7 + ln.j * 3) % 5;
+    const breaks: Array<[number, number]> = broken ? [[0.1 + ph * 0.03, 0.2 + ph * 0.03], [0.45, 0.52], [0.74 + ph * 0.02, 0.82 + ph * 0.02]] : [[0.18 + ph * 0.04, 0.24 + ph * 0.04], [0.62 + ph * 0.02, 0.66 + ph * 0.02]];
+    const e = profile(ln.pts.map(at), planeOf(ln.i).n, planeOf(ln.j).n, 0, `arris/${ln.i}-${ln.j}`, { breaks, pressure: (u) => 0.7 + 0.3 * Math.abs(Math.sin(u * 9 + ph)) });
+    e.rank = 0.62 + 0.12 * rnd(); e.span = 0.4; e.structural = true; els.push(e);
+  }
   // (the foot: contacts, and the cast shadow)
   const foot: V[] = [];
   for (let k = 0; k < 48; k++) { const a = (k / 48) * Math.PI * 2, h = S.ray([0, 0.004, 0], [Math.cos(a), 0, Math.sin(a)]); if (h) foot.push(at([h.p[0], 0, h.p[2]])); }
   const cs = castShadow(foot, 0.9);
-  const contacts = [planeOf(RECESS).n, planeOf(6).n, planeOf(8).n].map((n) => { const d = norm([n[0], 0, n[2]]), h = S.ray([0, 0.004, 0], d); return h ? contact(at([h.p[0] + d[0] * 0.004, 0, h.p[2] + d[2] * 0.004]), norm(cross(UP, d)), F.stoneFoot) : null; }).filter((e): e is Element => !!e);
-  els.push(...group(0.96, contacts[0], [wash(cs.region, cs.anchor, { reach: 0.45, material: dry ? 'dry' : 'wash', depth: 0.7, feature: F.stoneFoot, direction: () => away })], contacts.slice(1)));
-  // (its mesh, for the occluder, shrunk a little toward its middle)
+  const contacts = [planeOf(RECESS).n, planeOf(6).n, planeOf(8).n].map((n, k) => { const d = norm([n[0], 0, n[2]]), h = S.ray([0, 0.004, 0], d); return h ? contact(at([h.p[0] + d[0] * 0.004, 0, h.p[2] + d[2] * 0.004]), norm(cross(UP, d)), F.stoneFoot, `foot/contact${k}`) : null; }).filter((e): e is Element => !!e);
+  els.push(...group(0.96, contacts[0], [shadowWash(cs, 'foot/shadow', { reach: 0.45, material: dry ? 'dry' : 'wash', depth: 0.7, feature: F.stoneFoot })], contacts.slice(1), 'foot'));
   const tris: number[] = []; for (let i = 0; i < S.tris.length; i++) for (let a = 0; a < 3; a++) tris.push(off[a] + S.centre[a] + (S.pos[S.tris[i] * 3 + a] - S.centre[a]) * 0.99);
-  return { els, tris };
+  return { els, tris, edits, surface };
 }
 
 // ─── the bamboo culm ───
+/**
+ * A culm. Structural: its silhouette (profile strokes up the facets, continuous, so whichever side is edge-on reads as
+ * one long line) and two of its nodes, and its contact. Material: the other nodes, the shaded body. Its gesture: each
+ * side a long loaded pull, heavy at the foot and lifting toward the top; each node compressed, a short dense ring.
+ */
 function culmElements(look: Look, base: V, r = 0.1, h = 1.7): { els: Element[]; tris: number[] } {
   const dry = look === 'dry', x = base[0], z = base[2], SIDES = 20, els: Element[] = [];
-  // (its nodes, spaced to its height)
   const nodes = [0.3, 0.62, 0.95, 1.27, 1.56, 1.85, 2.14].map((y) => (y * h) / 1.7).filter((y) => y < h - 0.08);
-  // (the terminator: the angle round it where it turns from the light; its shadowed side from there)
   const la = Math.atan2(LIGHT[2], LIGHT[0]), term = la + Math.PI / 2, shadeFrom = term, shadeTo = term + Math.PI;
-  // (silhouette: profile strokes up the edges between facets; principal of the culm with the nodes)
   const prof: Element[] = [];
   for (let k = 0; k < SIDES; k++) {
     const a = (k / SIDES) * Math.PI * 2, d = (Math.PI * 2) / SIDES, n1: V = [Math.cos(a - d / 2), 0, Math.sin(a - d / 2)], n2: V = [Math.cos(a + d / 2), 0, Math.sin(a + d / 2)];
     const pts: V[] = []; for (let y = 0.01; y <= h; y += 0.03) pts.push([x + Math.cos(a) * r, y, z + Math.sin(a) * r]);
-    const e = profile(pts, n1, n2, F.culm) as ReturnType<typeof stroke>; e.gesture.breaks = nodes.map((ny) => [ny / h - 0.008, ny / h + 0.008]); e.gesture.width = 0.006;
-    prof.push(e);
+    // (a loaded pull: full at the foot, lifting toward the top, a breath at each node)
+    const e = profile(pts, n1, n2, F.culm, `side/${k}`, { width: 0.0065, taper: [0.02, 0.22], pressure: (u) => 1 - 0.45 * u ** 1.4, breaks: nodes.map((ny) => [ny / h - 0.006, ny / h + 0.006] as [number, number]) });
+    e.structural = true; prof.push(e);
   }
-  // (nodes: strokes round it, each a little ridge; heart toward the light's side of the front)
-  const rings: Element[] = nodes.map((ny) => {
+  const rings: Element[] = nodes.map((ny, i) => {
     const pts: V[] = [], ns: V[] = [];
     for (let k = 0; k <= 48; k++) { const a = (k / 48) * Math.PI * 2; pts.push([x + Math.cos(a) * (r + 0.004), ny, z + Math.sin(a) * (r + 0.004)]); ns.push([Math.cos(a), 0, Math.sin(a)]); }
-    return stroke({ pts, normals: ns }, { width: 0.007, taper: [0, 0], breaks: [[0.1, 0.16], [0.55, 0.6]] }, { feature: F.culm, heart: 'middle' });
+    // (compressed: short, dense, a little heavier on the shaded side)
+    const e: Element = stroke({ pts, normals: ns }, { width: 0.0085, taper: [0, 0], breaks: [[0.08, 0.2], [0.52, 0.64]], pressure: (u) => 0.75 + 0.25 * Math.cos((u * Math.PI * 2) - term) }, { key: `node/${i}`, feature: F.culm, heart: 'middle' });
+    if (i === 1 || i === nodes.length - 2) e.structural = true;
+    return e;
   });
-  els.push(...group(0.95, prof[0], prof.slice(1).map((p) => { p.rank = 0.95; return p; }), []));
+  els.push(...group(0.95, prof[0], prof.slice(1).map((p) => { p.rank = 0.95; return p; }), [], 'sides'));
   for (const p of prof.slice(1)) { p.rank = 0.93; p.span = 0.3; }
-  els.push(...group(0.9, rings[0], [], rings.slice(1)));
+  els.push(...group(0.9, rings[0], [], rings.slice(1), 'nodes'));
   for (const rg of rings.slice(1)) { rg.rank = 0.88; rg.span = 0.3; }
-  // (the shaded body: a wash on each internode, anchored on the terminator, the first to go)
   const ys = [0, ...nodes, h];
   for (let i = 0; i + 1 < ys.length; i++) {
     const reg = cylinderRegion(x, z, r + 0.002, ys[i] + 0.012, ys[i + 1] - 0.012, shadeFrom, shadeTo);
     const anchor: V[] = []; for (let y = ys[i] + 0.012; y <= ys[i + 1] - 0.012; y += 0.015) anchor.push([x + Math.cos(term) * (r + 0.002), y, z + Math.sin(term) * (r + 0.002)]);
-    els.push(...group(0.6, null, [wash(reg, anchor, { reach: 0.2, material: dry ? 'dry' : 'wash', depth: 0.7, feature: F.culmBody, direction: () => UP, uneven: 0.25 })]));
+    const w: Element = wash(reg, anchor, { key: `body/${i}`, reach: 0.2, material: dry ? 'dry' : 'wash', depth: 0.7, feature: F.culmBody, direction: () => UP, uneven: 0.25 });
+    w.facing = [Math.cos(term + Math.PI / 2), 0, Math.sin(term + Math.PI / 2)]; w.toneArea = Math.PI * r * (ys[i + 1] - ys[i]) * 0.7;
+    els.push(...group(0.6, null, [w], [], `body/${i}`));
   }
-  // (its foot: a contact, and its cast shadow)
   const foot: V[] = []; for (let k = 0; k < 16; k++) { const a = (k / 16) * Math.PI * 2; foot.push([x + Math.cos(a) * r, 0, z + Math.sin(a) * r]); }
   const cs = castShadow(foot, h);
-  els.push(...group(0.9, contact([x + away[0] * r, 0, z + away[2] * r], norm(cross(UP, away)), F.culm), [wash(cs.region, cs.anchor, { reach: 0.9, material: dry ? 'dry' : 'wash', depth: 0.45, feature: F.culmBody, direction: () => away, uneven: 0.2 })]));
-  // (its cylinder for the occluder)
+  els.push(...group(0.9, contact([x + away[0] * r, 0, z + away[2] * r], norm(cross(UP, away)), F.culm, 'contact'), [shadowWash(cs, 'shadow', { reach: 0.9, material: dry ? 'dry' : 'wash', depth: 0.45, feature: F.culmBody, uneven: 0.2 })], [], 'foot'));
   const tris: number[] = [];
   for (let k = 0; k < SIDES; k++) { const a0 = (k / SIDES) * Math.PI * 2, a1 = ((k + 1) / SIDES) * Math.PI * 2, rr = r * 0.97; const A: V = [x + Math.cos(a0) * rr, 0, z + Math.sin(a0) * rr], B: V = [x + Math.cos(a1) * rr, 0, z + Math.sin(a1) * rr]; tris.push(...A, ...B, B[0], h, B[2], ...A, B[0], h, B[2], A[0], h, A[2]); }
   return { els, tris };
 }
 
 // ─── the architectural corner ───
+/**
+ * The corner. Structural: its vertical arrises (one decisive edge wherever it's seen from) and the cornice's lips, and
+ * its contacts. Material: the niche, the walls' tone, the cornice's shade. Its gesture: measured, even edges, with weight
+ * only where a lit wall turns into a shaded one.
+ */
 function cornerElements(look: Look, base: V, turn: number): { els: Element[]; tris: number[]; front: { o: V; u: V; v: V; n: V } } {
   const dry = look === 'dry', els: Element[] = [], c = Math.cos(turn), s = Math.sin(turn);
   const W = (lx: number, ly: number, lz: number): V => [base[0] + lx * c - lz * s, ly, base[2] + lx * s + lz * c], R = (n: V): V => [n[0] * c - n[2] * s, n[1], n[0] * s + n[2] * c];
   const hx = 0.5, hz = 0.38, top = 1.05, ch = 0.11, ov = 0.08;
   const faces = [{ n: R([0, 0, 1]), o: W(0, 0, hz), u: R([1, 0, 0]), ext: hx }, { n: R([1, 0, 0]), o: W(hx, 0, 0), u: R([0, 0, -1]), ext: hz }, { n: R([0, 0, -1]), o: W(0, 0, -hz), u: R([-1, 0, 0]), ext: hx }, { n: R([-1, 0, 0]), o: W(-hx, 0, 0), u: R([0, 0, 1]), ext: hz }];
   const wallRegion = (f: typeof faces[number], open?: (p: V) => boolean) => planeRegion(f.n, add(f.o, [0, top / 2, 0]), (p) => { const q = sub(p, f.o); return Math.abs(dot(q, f.u)) <= f.ext && q[1] >= 0 && q[1] <= top; }, 1.2, open);
-  // (the vertical arrises: profile strokes; the one nearest the light's terminator also a fixed principal accent)
+  const lit = (f: typeof faces[number]) => dot(f.n, LIGHT) > 0.2;
   const corners = [[0, 1], [1, 2], [2, 3], [3, 0]] as const;
-  for (const [i, j] of corners) {
+  corners.forEach(([i, j], ci) => {
     const fi = faces[i], fj = faces[j], p0 = add(fi.o, mul(fi.u, fi.ext)), pts: V[] = []; for (let y = 0.01; y <= top; y += 0.03) pts.push([p0[0], y, p0[2]]);
-    const e = profile(pts, fi.n, fj.n, F.wall); e.rank = 0.8; e.span = 0.35; els.push(e);
-  }
-  // (the cornice: its lip a principal stroke on each side; under it a wash on the wall, firm at the lip; the
-  // cornice's own profile)
-  for (const f of faces) {
-    const lit = dot(f.n, LIGHT) > 0.2;
+    // (measured: even, without breaks; heavier where a lit wall turns into a shaded one)
+    const turning = lit(fi) !== lit(fj);
+    const e = profile(pts, fi.n, fj.n, F.wall, `arris/${ci}`, { width: turning ? 0.0075 : 0.0045, breaks: [], taper: [0.04, 0.04] });
+    e.rank = 0.8; e.span = 0.35; e.structural = true; els.push(e);
+  });
+  faces.forEach((f, fi) => {
+    const L = lit(f);
     const a = add(add(f.o, mul(f.u, -f.ext - ov)), mul(f.n, ov)), b = add(add(f.o, mul(f.u, f.ext + ov)), mul(f.n, ov)), lipPts: V[] = [];
     for (let t = 0; t <= 1.0001; t += 0.02) { const p = add(a, mul(sub(b, a), t)); lipPts.push([p[0], top, p[2]]); }
-    const lipS = stroke({ pts: lipPts, normals: lipPts.map(() => norm(add(f.n, [0, -1, 0]))) }, { width: 0.008, taper: [0.1, 0.1] }, { feature: F.cornice, heart: 'middle' });
+    const lipS: Element = stroke({ pts: lipPts, normals: lipPts.map(() => norm(add(f.n, [0, -1, 0]))) }, { width: L ? 0.006 : 0.008, taper: [0.06, 0.06] }, { key: `cornice/${fi}`, feature: F.cornice, heart: 'middle' });
+    lipS.structural = true;
     const under: V[] = []; for (let t = -f.ext; t <= f.ext; t += 0.02) { const p = add(f.o, mul(f.u, t)); under.push([p[0], top - 0.004, p[2]]); }
-    els.push(...group(lit ? 0.9 : 0.96, lipS, [wash(wallRegion(f), under, { reach: lit ? 0.1 : 0.16, material: dry ? 'dry' : 'wash', depth: lit ? 0.6 : 1, feature: F.cornice, direction: () => f.u, uneven: 0.5 })]));
-    const topPts: V[] = lipPts.map((p) => [p[0], top + ch, p[2]]); const e = profile(topPts, f.n, UP, F.cornice); e.rank = 0.7; els.push(e);
-  }
-  // (the shadowed walls: a wash anchored on the corner they share with a lit wall)
+    const uw: Element = wash(wallRegion(f), under, { key: `cornice/${fi}/under`, reach: L ? 0.1 : 0.16, material: dry ? 'dry' : 'wash', depth: L ? 0.6 : 1, feature: F.cornice, direction: () => f.u, uneven: 0.5 });
+    uw.facing = f.n; uw.toneArea = f.ext * 2 * 0.13;
+    els.push(...group(L ? 0.9 : 0.96, lipS, [uw], [], `cornice/${fi}`));
+    const topPts: V[] = lipPts.map((p) => [p[0], top + ch, p[2]]); const e = profile(topPts, f.n, UP, F.cornice, `cornice/${fi}/top`, { breaks: [] }); e.rank = 0.7; els.push(e);
+  });
   for (let i = 0; i < 4; i++) {
-    const f = faces[i]; if (dot(f.n, LIGHT) > 0.2) continue;
+    const f = faces[i]; if (lit(f)) continue;
     for (const j of [(i + 1) % 4, (i + 3) % 4]) {
-      const g = faces[j]; if (dot(g.n, LIGHT) <= 0.2) continue;
+      const g = faces[j]; if (!lit(g)) continue;
       const edgeT = j === (i + 1) % 4 ? f.ext : -f.ext, p0 = add(f.o, mul(f.u, edgeT)), anchor: V[] = []; for (let y = 0.02; y < top - 0.02; y += 0.02) anchor.push([p0[0], y, p0[2]]);
-      els.push(...group(0.84, null, [wash(wallRegion(f), anchor, { reach: 0.55, material: dry ? 'dry' : 'wash', depth: 0.75, feature: F.wall, direction: () => [0, -1, 0] })]));
+      const w: Element = wash(wallRegion(f), anchor, { key: `wall/${i}-${j}`, reach: 0.55, material: dry ? 'dry' : 'wash', depth: 0.75, feature: F.wall, direction: () => [0, -1, 0] });
+      w.facing = f.n; w.toneArea = f.ext * 2 * top * 0.75;
+      els.push(...group(0.84, null, [w], [], `wall/${i}-${j}`));
     }
   }
-  // (a niche in the front wall: its edges strokes, heavier along the top and the shadowed side; its shadow a wash
-  // anchored along its top)
   const fr = faces[0], nw = 0.17, n0 = 0.22, n1 = 0.72, nb = (lx: number, ly: number) => add(add(fr.o, mul(fr.u, lx)), [0, ly, 0]);
   const nicheOn = (p: V) => { const q = sub(p, fr.o), lx = dot(q, fr.u); return Math.abs(lx) <= nw && q[1] >= n0 && q[1] <= n1; };
-  const edge = (a: V, b: V, w: number) => { const pts: V[] = []; for (let t = 0; t <= 1.0001; t += 0.05) pts.push(add(a, mul(sub(b, a), t))); return stroke({ pts, normals: pts.map(() => fr.n) }, { width: w, taper: [0.1, 0.1] }, { feature: F.niche, heart: 'middle' }); };
+  const edge = (a: V, b: V, w: number, key: string) => { const pts: V[] = []; for (let t = 0; t <= 1.0001; t += 0.05) pts.push(add(a, mul(sub(b, a), t))); return stroke({ pts, normals: pts.map(() => fr.n) }, { width: w, taper: [0.06, 0.06] }, { key, feature: F.niche, heart: 'middle' }); };
   const nicheTop: V[] = []; for (let t = -nw; t <= nw; t += 0.015) nicheTop.push(nb(t, n1 - 0.004));
   const nicheRegion = planeRegion(fr.n, nb(0, (n0 + n1) / 2), nicheOn, 0.5);
-  els.push(...group(0.93, edge(nb(-nw, n1), nb(nw, n1), 0.009), [wash(nicheRegion, nicheTop, { reach: 0.28, material: dry ? 'dry' : 'wash', depth: 1, feature: F.niche, direction: () => fr.u })], [edge(nb(-nw, n0), nb(-nw, n1), 0.006), edge(nb(nw, n0), nb(nw, n1), 0.004), edge(nb(-nw, n0), nb(nw, n0), 0.004)]));
-  // (contacts and a cast shadow)
+  const nw2: Element = wash(nicheRegion, nicheTop, { key: 'niche/shade', reach: 0.28, material: dry ? 'dry' : 'wash', depth: 1, feature: F.niche, direction: () => fr.u });
+  nw2.facing = fr.n; nw2.toneArea = 2 * nw * (n1 - n0);
+  els.push(...group(0.93, edge(nb(-nw, n1), nb(nw, n1), 0.009, 'niche/top'), [nw2], [edge(nb(-nw, n0), nb(-nw, n1), 0.006, 'niche/left'), edge(nb(nw, n0), nb(nw, n1), 0.004, 'niche/right'), edge(nb(-nw, n0), nb(nw, n0), 0.004, 'niche/sill')], 'niche'));
   const footPts: V[] = [W(-hx, 0, -hz), W(hx, 0, -hz), W(hx, 0, hz), W(-hx, 0, hz)];
   const foot: V[] = []; for (let k = 0; k < 4; k++) for (let t = 0; t < 1; t += 0.1) foot.push(add(footPts[k], mul(sub(footPts[(k + 1) % 4], footPts[k]), t)));
   const cs = castShadow(foot, top + ch);
-  const cn = footPts.filter((p) => dot(norm(sub(p, base)), away) > -0.2).slice(0, 2).map((p) => contact(p, norm(cross(UP, away)), F.wall));
-  els.push(...group(0.95, cn[0] ?? null, [wash(cs.region, cs.anchor, { reach: 0.7, material: dry ? 'dry' : 'wash', depth: 0.6, feature: F.wall, direction: () => away })], cn.slice(1)));
-  // (its boxes for the occluder: the wall and the cornice)
+  const cn = footPts.filter((p) => dot(norm(sub(p, base)), away) > -0.2).slice(0, 2).map((p, k) => contact(p, norm(cross(UP, away)), F.wall, `contact${k}`));
+  els.push(...group(0.95, cn[0] ?? null, [shadowWash(cs, 'shadow', { reach: 0.7, material: dry ? 'dry' : 'wash', depth: 0.6, feature: F.wall })], cn.slice(1), 'foot'));
   const tris: number[] = [], box = (x0: number, x1: number, y0: number, y1: number, z0: number, z1: number) => {
     const P = (lx: number, ly: number, lz: number) => W(lx, ly, lz);
     const q = (a: V, b: V, cc: V, d: V) => tris.push(...a, ...b, ...cc, ...a, ...cc, ...d);
@@ -255,46 +310,142 @@ export function brushScene(look: Look = 'wash'): BrushScene {
 
 /**
  * One small composed scene: the stone (the subject), an architectural corner behind it to the left, three culms (two
- * behind to the right, in the stone's cast shadow; one in front, across the stone's right side), all drawn with the
- * same brushes (the far culm stands in the back culm's shadow, and casts its own along it). With `compose` (the default) the relationships a scene needs and isolated specimens avoid:
- * - **importance**: the stone leads; the others' washes lighter and their lines thinner and fainter, and they go earlier
- *   as the detail falls, so the sparse state is the stone and the few lines that place the rest;
- * - **one ground**: cast shadows kept off other objects' footprints and off each other (render.ts can't know this);
- * - **halo** (render.ts, view by view): a mark breaks where a nearer, different object's silhouette passes just in front
- *   of it, so lines don't run into each other and paper is left along every overlap. Each element carries its object.
- * Without it (`compose = false`): the same objects in the same places, each drawn as if alone.
+ * behind to the right, the far one standing in the back one's shadow; one in front, across the stone's right side), a
+ * bank passing between them, all drawn with the same brushes.
+ *
+ * With `compose` (the default), three decisions are made separately for every element, where before one "importance"
+ * scaled them all together:
+ * - **structure** (what must survive to explain shape, contact and overlap): each object's minimum description, its
+ *   structural members, ranked to survive the sparse state and to go together. The stone keeps its seam's hook with its
+ *   wedge of tone, a short turn of its crown, its contacts and a broken outline; a culm keeps one continuous silhouette
+ *   and two nodes; the corner its arrises and cornice; the ground its bank. A background object keeps its decisive
+ *   edge at full strength;
+ * - **emphasis** (where the strongest contrasts belong): only the contrast of material marks, lighter washes and lines
+ *   on lesser objects;
+ * - **material detail** (what can go freely): everything else, ranked below all structure, lesser objects' first.
+ *
+ * And the relationships between objects:
+ * - **one ground**: every object's cast shadow merged into one wash, its region the union of their shadows less every
+ *   footprint, its anchor every shadow's far side. It's the same whatever order the objects are made in;
+ * - **views** (main.ts, each frame, smoothed): the stone's lit-side alternative appears as its shadowed faces turn away,
+ *   and no other object's wash may carry more than a share of the tone the stone shows from here (each judged by its
+ *   apparent weight: area × darkness × how far it faces the eye ÷ distance²), so the subject keeps the strongest tone
+ *   from every side. Both are gates (render.ts): values set from the view, not marks rebuilt;
+ * - **the halo** (render.ts): only on lines, where two contours compete.
+ *
+ * Editable (edit.ts): the stone's seam (its wedge follows), its lip (its soffit's shade follows), the bank (its slope
+ * follows).
+ *
+ * Without `compose`: the same objects in the same places, each drawn as if alone (their own ranks, their own shadows, no
+ * alternatives, no bank).
  */
-export interface ComposedScene extends BrushScene { objects: Float32Array; importance: Record<string, number> }
-export function composedScene(look: Look = 'wash', compose = true): ComposedScene {
-  ground = compose ? { solids: [], shadows: [] } : null;
-  try {
-    const layout = [
-      { name: 'stone', obj: 1, w: 1, make: () => stoneElements(look, [0, 0, 0]) },
-      { name: 'culm-front', obj: 3, w: 0.75, make: () => culmElements(look, [1.35, 0, 0.95], 0.065, 1.6) },
-      { name: 'culm-back', obj: 4, w: 0.6, make: () => culmElements(look, [1.55, 0, -0.95], 0.085, 2.3) },
-      { name: 'culm-far', obj: 5, w: 0.5, make: () => culmElements(look, [2.1, 0, -1.3], 0.075, 1.95) },
-      { name: 'corner', obj: 2, w: 0.65, make: () => cornerElements(look, [-1.65, 0, -1.55], 0.45) },
-    ];
-    const els: Element[] = [], tris: number[] = [], objs: number[] = [], importance: Record<string, number> = {};
-    for (const L of layout) {
-      const made = scope(L.name, L.make), w = compose ? L.w : 1;
-      importance[L.name] = w;
-      for (const e of made.els) {
-        e.object = L.obj;
-        if (e.feature) e.feature = L.obj * 256 + e.feature;
-        if (w < 1) {
-          // (lesser objects: lighter, thinner, and they go first)
-          e.rank *= 0.72 + 0.28 * w;
-          if (e.kind === 'stroke') { e.alpha *= 0.5 + 0.5 * w; e.gesture = { ...e.gesture, width: e.gesture.width * (0.65 + 0.35 * w) }; }
-          else e.depth *= 0.4 + 0.6 * w;
-        }
-        els.push(e);
-      }
-      tris.push(...made.tris); for (let k = 0; k < made.tris.length / 3; k++) objs.push(L.obj);
+/** a value set from the view each frame: which way its wash faces, where it is, and how much tone it carries */
+export interface Gate { index: number; kind: 'lit' | 'cap'; facing: V; object: string; centre: V; weight: number }
+export interface ComposedScene extends BrushScene {
+  objects: Float32Array; importance: Record<string, number>; editor: Editor; gates: Gate[]; gateBase: number;
+  /** the stone's tone washes (which way each faces, how much) for working out how much of its tone is in sight */
+  tone: Array<{ facing: V; weight: number }>; stoneCentre: V; groups: Group[];
+}
+export const GATE_BASE = 4096;
+export const LAYOUT = ['stone', 'culm-front', 'culm-back', 'culm-far', 'corner'];
+export function composedScene(look: Look = 'wash', compose = true, order: string[] = LAYOUT): ComposedScene {
+  const specs: Record<string, { obj: number; w: number; make: () => { els: Element[]; tris: number[]; edits?: EditSpec[] } }> = {
+    stone: { obj: 1, w: 1, make: () => stoneElements(look, [0, 0, 0], compose) },
+    'culm-front': { obj: 3, w: 0.75, make: () => culmElements(look, [1.35, 0, 0.95], 0.065, 1.6) },
+    'culm-back': { obj: 4, w: 0.6, make: () => culmElements(look, [1.55, 0, -0.95], 0.085, 2.3) },
+    'culm-far': { obj: 5, w: 0.5, make: () => culmElements(look, [2.1, 0, -1.3], 0.075, 1.95) },
+    corner: { obj: 2, w: 0.65, make: () => cornerElements(look, [-1.65, 0, -1.55], 0.45) },
+  };
+  const dry = look === 'dry';
+  let els: Element[] = [];
+  const tris: number[] = [], objs: number[] = [], importance: Record<string, number> = {}, edits: EditSpec[] = [];
+  for (const name of order) {
+    const L = specs[name], made = scope(name, L.make), w = compose ? L.w : 1;
+    importance[name] = w;
+    for (const e of made.els) {
+      e.object = L.obj;
+      if (e.feature) e.feature = L.obj * 256 + e.feature;
+      if (compose) decide(e, name, w);
+      els.push(e);
     }
-    const s = toSplats(els.flatMap((e) => deposit(e)));
-    return { drawing: s, occluder: new Float32Array(tris), objects: new Float32Array(objs), elements: els, importance, centres: { all: [0.3, 0.75, -0.45], stone: [0, 0.45, 0], overlap: [0.9, 0.6, 0.55], corner: [-1.65, 0.6, -1.55], grove: [1.7, 1.0, -0.6] } };
-  } finally { ground = null; }
+    if (made.edits) edits.push(...made.edits);
+    tris.push(...made.tris); for (let k = 0; k < made.tris.length / 3; k++) objs.push(L.obj);
+  }
+  if (compose) {
+    // ─── one ground: every cast shadow merged, the same whatever the order ───
+    const shadows = els.filter((e) => shadowOf.has(e)).sort((a, b) => (a.key < b.key ? -1 : 1));
+    const info = shadows.map((e) => shadowOf.get(e)!), feet = info.map((i) => i.inFoot);
+    els = els.filter((e) => !shadowOf.has(e));
+    for (const e of shadows) if (e.group) e.group.supports = e.group.supports.filter((m) => m !== e);
+    const maxReach = Math.max(...info.map((i) => i.reach)), P = pieces(info.map((i) => ({ pts: i.anchor, reach: i.reach / maxReach })));
+    const region = planeRegion(UP, [0.3, 0.001, -0.7], (p) => info.some((i) => i.inside(p[0], p[2])) && !feet.some((f) => f(p[0], p[2])), 3.6);
+    const g: Element = scope('ground', () => wash(region, P.anchor, { key: 'shadow', reach: maxReach, material: dry ? 'dry' : 'wash', depth: info.reduce((s, i) => s + i.depth, 0) / info.length, feature: 0, direction: () => away, uneven: 0.3 }));
+    Object.assign(g, { cuts: P.cuts, reachAt: P.reachAt, object: 6 });
+    group(0.85, null, [g], [], 'ground/shadow');
+    decide(g, 'ground', 0.8);
+    els.push(g);
+    // ─── the bank: one connective gesture between the objects, its slope falling toward the stone ───
+    const off = (p: V) => feet.some((f) => f(p[0], p[2]));
+    const groundR = planeRegion(UP, [0, 0, 0], (p) => !off(p), 4.5);
+    const ctrl: V[] = [[-2.9, 0.002, 0.55], [-1.05, 0.002, -0.45], [0.35, 0.002, -1.2], [1.85, 0.002, -1.08], [3.0, 0.002, -0.45]];
+    const made = scope('ground', () => {
+      const bank: Element = stroke(pathFrom(ctrl, groundR), { width: 0.007, taper: [0.08, 0.12], tremor: 0.25, pressure: (u) => 0.6 + 0.4 * Math.abs(Math.sin(u * 7.3 + 0.4)), breaks: [[0.31, 0.335], [0.71, 0.73]] }, { key: 'bank', heart: 'middle', alpha: 0.85 });
+      // (the slope: the ground on the stone's side of the bank, within reach of it)
+      // (against the bank's path every few points: close enough, and an edit to it deposits in milliseconds)
+      let src: V[] | null = null, cp: V[] = [];
+      const coarse = () => { const P = (bank as Stroke).path.pts; if (P !== src) { src = P; cp = P.filter((_, i, a) => i % 6 === 0 || i === a.length - 1); } return cp; };
+      const side = (p: V) => {
+        const pts = coarse(); let d = Infinity, sgn = 0;
+        for (let i = 0; i < pts.length - 1; i++) { const a = pts[i], e = sub(pts[i + 1], a), t = Math.max(0, Math.min(1, dot(sub(p, a), e) / (dot(e, e) || 1))), q = add(a, mul(e, t)), dd = len(sub(p, q)); if (dd < d) { d = dd; sgn = cross(e, sub(p, q))[1]; } }
+        return { d, front: sgn < 0 };
+      };
+      const downhill = (p: V): V => { const pts = coarse(); let d = Infinity, t: V = [1, 0, 0]; for (let i = 0; i < pts.length - 1; i++) { const dd = len(sub(p, pts[i])); if (dd < d) { d = dd; t = norm(sub(pts[i + 1], pts[i])); } } return norm(cross(UP, t)); };
+      const slopeR = planeRegion(UP, [0, 0.001, -0.6], (p) => { const s = side(p); return s.front && s.d < 0.5 && !off(p); }, 3.6);
+      const slope: Element = wash(slopeR, (bank as Stroke).path.pts, { key: 'bank/slope', reach: 0.32, material: dry ? 'dry' : 'wash', depth: 0.45, direction: (p) => downhill(p), uneven: 0.45 });
+      return { bank, slope };
+    });
+    made.bank.object = 6; made.slope.object = 6;
+    made.bank.structural = true;
+    group(0.88, made.bank, [made.slope], [], 'ground/bank');
+    decide(made.bank, 'ground', 0.8); decide(made.slope, 'ground', 0.8);
+    els.push(made.slope, made.bank);
+    edits.push({ name: 'bank', stroke: made.bank as Stroke, handles: 5, onto: groundR, deps: [{ wash: made.slope as Wash, anchor: (pts) => pts }] });
+  }
+  // ─── gates: the stone's lit-side alternative, and the other objects' tone ───
+  const gates: Gate[] = [], tone: Array<{ facing: V; weight: number }> = [];
+  const centreOf = (w: Wash): V => w.anchor.reduce((s, p) => add(s, mul(p, 1 / w.anchor.length)), [0, 0, 0] as V);
+  if (compose) for (const e of els) {
+    const objName = order.find((n) => specs[n].obj === e.object) ?? 'ground';
+    const gateFor = (kind: 'lit' | 'cap') => { e.gate = gates.length; gates.push({ index: GATE_BASE + gates.length, kind, facing: e.facing!, object: objName, centre: centreOf(e as Wash), weight: (e.toneArea ?? 0.1) * (e as Wash).depth }); e.feature = (0x80000000 | (GATE_BASE + e.gate)) >>> 0; };
+    if (e.alt === 'lit' && e.facing) gateFor('lit');
+    else if (e.facing && e.kind === 'wash' && objName !== 'stone') gateFor('cap');
+    else if (e.facing && objName === 'stone' && !e.alt) tone.push({ facing: e.facing, weight: e.toneArea ?? 0.1 });
+  }
+  const items: EditItem[] = edits.map((e) => deformItem(e.name, e.stroke, e.handles, e.onto, e.deps));
+  const editor = new Editor(els, items);
+  return { drawing: editor.drawing(-1), occluder: new Float32Array(tris), objects: new Float32Array(objs), elements: els, importance, editor, gates, gateBase: GATE_BASE, tone, stoneCentre: [0, 0.45, 0], groups: groupsOf(els), centres: { all: [0.3, 0.75, -0.45], stone: [0, 0.45, 0], overlap: [0.9, 0.6, 0.55], corner: [-1.65, 0.6, -1.55], grove: [1.7, 1.0, -0.6] } };
+}
+/**
+ * One element's three decisions in a composed scene (`w` its object's emphasis, 1 the subject):
+ * - structural: ranked to survive the sparse state (the subject's highest); its strength kept, a lesser object's a
+ *   little thinner; a culm's silhouette continuous (no fall from its heart), the stone's outline broken (middles first);
+ * - an alternative: ranked to show whole when its gate opens;
+ * - material: ranked below all structure, lesser objects' first; its contrast set by emphasis.
+ */
+function decide(e: Element, name: string, w: number) {
+  const subject = name === 'stone';
+  if (e.alt) { e.rank = 0.8; e.span = 0.3; return; }
+  if (e.structural) {
+    if (subject) { if (e.mark === 4) { e.rank = 0.92; e.span = 0.3; } else e.rank = 0.97; }
+    else { e.rank = 0.9; if (e.mark === 4 || /node/.test(e.key)) e.span = 0.04; }
+    // (a structural wash falls only gently from its anchor, so it survives nearly whole with its stroke)
+    if (e.kind === 'wash') e.span = Math.min(e.span, 0.25);
+    if (!subject && e.kind === 'stroke') e.gesture = { ...e.gesture, width: e.gesture.width * (0.85 + 0.15 * w) };
+    return;
+  }
+  e.rank = 0.25 + 0.55 * e.rank * (0.7 + 0.3 * w);
+  if (e.kind === 'wash') e.depth *= 0.5 + 0.5 * w;
+  else { e.alpha *= 0.65 + 0.35 * w; e.gesture = { ...e.gesture, width: e.gesture.width * (0.8 + 0.2 * w) }; }
 }
 
 function hull(pts: Array<[number, number]>): Array<[number, number]> {

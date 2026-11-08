@@ -166,48 +166,106 @@ The test is whether the same brushes, given only different paths, regions and an
 
 ## Composed: one small scene
 
-`?scene=composed` (`subjects.ts` `composedScene`). The isolated specimens never had to deal with each other. This puts a
-stone, three culms and an architectural corner together, drawn with the same brushes throughout:
+`?scene=composed` (`subjects.ts` `composedScene`, `edit.ts`). A stone, three culms and an architectural corner, with a
+bank passing between them, drawn with the same brushes throughout:
 - the corner behind the stone and to its left;
-- two culms behind it to the right, standing in its cast shadow (the far one also in the back one's shadow);
+- two culms behind it to the right, the far one standing in the back one's shadow;
 - one culm in front, crossing the stone's right side.
 
-The relationships a scene needs, on by default (`?compose=0` or the *relate* row draws each object as if alone):
-- **Importance.** The stone leads. The others' washes are lighter, their lines thinner and fainter, and their ranks lower,
-  so they go first as the detail falls. The sparse state is the stone plus the few lines that place the rest.
-- **One ground.** A cast shadow is kept off every other object's footprint, and off the shadows made before it, so where
-  two fall together the ground is one shadow, not two layered.
-- **The halo** (render.ts, view by view). A mark breaks where a nearer, different object's silhouette passes just in front
-  of it. Lines stop short of a culm crossing them, and a wash leaves a sliver of paper along every overlap. It deals with
-  competing contours and with where to leave paper open as one rule.
-  - The occluder is drawn once more into a depth-and-object texture.
-  - Each drawing mark reads two rings of eight samples round itself (at 9 and 18 px, `?halopx=`).
-  - Every element carries its object.
+`?compose=0` (or the *relate* row) draws each object as if alone.
+
+**Three decisions, made separately.** The first version scaled rank, width, opacity and wash depth together by one
+"importance", which weakened a secondary object every way at once and didn't protect the subject's identity. Now:
+
+| decision | controls | how |
+|---|---|---|
+| structure | which marks must survive, together, to explain shape, contact and overlap | each object's minimum description: its structural members, ranked to survive the sparse state at full strength |
+| emphasis | where the strongest contrasts belong | only the contrast of material marks: lighter washes, thinner lines on lesser objects |
+| material detail | what can go freely | everything else, ranked below all structure, lesser objects' first |
+
+The minimum descriptions are authored:
+- **stone:** the seam's hook with its wedge of tone, its crown, its contacts, and an interrupted outline. The outline
+  includes the crown ridge and the broken face's edges, which carry most of its silhouette and had been left out.
+- **culm:** one continuous silhouette and two nodes.
+- **corner:** its arrises and cornice lips.
+- **ground:** the bank.
+
+**Groups are kept as objects** (`group()` returns members that point to their group, with its principal, supports,
+accents and minimum). Structural washes fall gently from their anchor, so a group's minimum appears and goes together.
+
+**Views** (main.ts, each frame, eased so nothing pops). Values computed from the view open and close gates (render.ts:
+a feature with its top bit set is a gate), choosing among anchored alternatives without rebuilding marks:
+- **The stone's lit-side alternative:** a little tone low on each lit side face. It opens as the stone's shadowed faces
+  turn away; around 270° the stone was an empty outline.
+- **A tone cap:** no other object's wash may carry more than 30% of the stone's tone as seen from here. Each wash is
+  judged by its apparent weight: area × darkness × facing ÷ distance². At 180° the corner's shaded wall measured 62% of
+  the stone's; it's now capped to about half its strength.
+
+**Fixes from the review:**
+- **One ground, order-independent:** every cast shadow is merged into one wash. Its region is the union of the shadows
+  less every footprint; its anchor is every shadow's far side in pieces, each with its own reach.
+- **Semantic keys** for every authored element (`stone/seam`, `culm-back/node/3`, `corner/wall/2-3`), so inserting one
+  doesn't shift the rest.
+- **The halo** now applies only to lines (ink strokes and profiles), never washes or contact accents, with one ring of
+  eight reads instead of two.
+
+**Material gestures:**
+- **culms:** long loaded pulls, full at the foot and lifting toward the top; compressed nodes.
+- **stone:** interrupted, slightly angular outline strokes.
+- **corner:** measured, even edges, heavier only where a lit wall turns into a shaded one.
+
+**Editing in the scene** (the Bench's editor, generalised, `edit.ts`):
+- the stone's **seam** (its wedge follows), its **lip** (its soffit's shade follows), and the **bank** (its slope
+  follows);
+- bend them by handles that displace the authored path smoothly, so the seam keeps its jaggedness;
+- change pressure (presets, or *as made*), weight and material, and widen or narrow the anchored wash;
+- undo.
+
+An edit deposits again only the stroke and its washes (2 of 168 elements).
 
 **Checked** (`splats.test.mjs`):
+- shadow marks under another object: 0 (8 with each alone);
+- the same drawing, element for element, when the objects are made in reverse order (163 elements compared);
+- no element keyed by its position in its scope;
+- every object's minimum survives the sparse state;
+- each group's minimum goes together (within the 0.04 fade band);
+- the same element on the three culms goes earlier the less it's emphasised, and all material detail ranks below all
+  structure (0.79 < 0.88);
+- the seam, bent and re-pressured in the scene, undone exactly.
 
-| check | composed | each alone |
+**Motion** (`node cells/lab/devtools/splats-motion.mjs`): an orbit stepped 10° at a time, with frames rendered at each
+step so the eased gates move as they would.
+
+| configuration | change per 10° step (median) | largest | largest / median |
+|---|---|---|---|
+| sparse | 3.4 | 4.0 | 1.16 |
+| resolved | 13.5 | 15.9 | 1.17 |
+| resolved, no halo | 13.7 | 16.1 | 1.17 |
+| sparse, no halo | 3.7 | 4.7 | 1.25 |
+
+No step stands out, so nothing pops at this resolution. A 10° step is coarse, though: a small mark appearing could hide
+inside the camera's own motion. Finer steps across the gates' transitions would be a stricter test.
+
+**Edit latency** (headless Chrome, software GL; upper bounds for the CPU side, not phone timings):
+
+| edit | deposit | assemble and upload |
 |---|---|---|
-| shadow marks under another object's foot | 0 | 11 |
-| ground cells holding two objects' shadow marks | 0 | 6 |
-| each object's last mark to go, by importance (stone, front culm, corner, back culm, far culm) | 0.99 > 0.88 > 0.87 > 0.84 > 0.82 | all alike |
+| seam | 4 ms | 21 ms |
+| bank (its slope is a large region) | 100–200 ms | about 15 ms |
 
-**What the boards show** (`node cells/lab/devtools/splats-composed.mjs [wash|dry]`: states with and without, a full
-turn, close inspection):
-- The scene holds through a full turn in both looks. Occlusion between the five objects is right from every side.
-- The halo works but is quiet at phone scale. At 30 px it's unmistakable; 18 px is the default, a judgement call.
-- The difference the relationships make is clearest in the sparse state. At resolved the two versions are close, which
-  suggests the specimens were already fairly well behaved, and the remaining problems are ones these rules don't address.
+Boards: `node cells/lab/devtools/splats-composed.mjs [wash|dry]`:
+- states with and without composition;
+- the orbit at sparse and resolved, with the stone's visible tone per view;
+- close inspection;
+- editing in the scene.
 
-**Not done, and the next problems this scene raises:**
-- **Shadows don't fall on other objects.** The back culm stands in the stone's shadow but is drawn lit. Ground shadows
-  are regions on a plane, and a shadow on a cylinder or a wall needs the same region from the shadow-caster's side.
-- **No counterchange.** The light side of the stone doesn't get a darker ground behind it, or the reverse. That would
-  need tone decided by what is seen beside a mark, which is per view, like the halo, but on washes.
-- **Tonal balance isn't measured,** only set by hand through importance. From behind (180°) the corner's shadowed walls
-  dominate.
-- **Two culms nearly in line** (90°) still give two parallel outlines; the halo separates them but doesn't choose one.
-- **The halo's cost:** 32 extra texel fetches per drawing mark per corner. Unmeasured on a phone.
+**Still open:**
+- **Shadows on objects:** the back culm stands in the stone's shadow but is drawn lit.
+- **The tone cap only dims.** It can't choose a different, lighter description of the corner; from behind, its dry
+  hatching is still heavy.
+- **The bank is a line on flat ground,** with no rise in the geometry.
+- **Washes are still smoky patches more than connected tonal shapes.**
+- **The phone is unmeasured.**
 
 ## The Bench: one brush made dependable, one stroke made editable
 

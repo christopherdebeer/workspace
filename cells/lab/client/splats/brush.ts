@@ -156,8 +156,34 @@ export interface Wash {
   depth: number; colour: V; mark: number; feature: number; rank: number; span: number;
   /** how uneven its far boundary is (0 even) and the noise's phase */
   uneven: number; phase: number;
+  /** an anchor of several pieces (`pieces`): the segments joining one piece to the next (left out), and each anchor
+   * point's own reach (a multiple of `reach`) */
+  cuts?: Set<number>; reachAt?: number[];
 }
-export type Element = Stroke | Wash;
+/** one anchor from several pieces, each with its own reach: for a wash anchored in several places at once (a ground
+ * shadow made of every object's shadow, the same whichever object came first) */
+export function pieces(parts: Array<{ pts: V[]; reach: number }>): { anchor: V[]; cuts: Set<number>; reachAt: number[] } {
+  const anchor: V[] = [], cuts = new Set<number>(), reachAt: number[] = [];
+  for (const pt of parts) { if (pt.pts.length < 2) continue; if (anchor.length) cuts.add(anchor.length - 1); for (const p of pt.pts) { anchor.push(p); reachAt.push(pt.reach); } }
+  return { anchor, cuts, reachAt };
+}
+/**
+ * What a scene knows about an element beyond its marks:
+ * - `group`: the group it was drawn in (kept, not flattened: its principal, supports, accents and minimum stay
+ *   reachable from every member);
+ * - `structural`: part of its object's minimum description, the marks that must survive, together, for the object to
+ *   read at all (shape, contact, overlap). Structure is decided separately from emphasis (how strong the contrasts
+ *   are) and from material detail (what can go freely);
+ * - `facing` / `toneArea`: for a wash that carries tone, the way its surface faces and how much of it there is, so a
+ *   scene can work out, view by view, how much of an object's tone is in sight;
+ * - `alt`: an anchored alternative description, shown only when the view calls for it (render.ts gates it by a value
+ *   the scene sets each frame);
+ * - `gate`: the index of that value.
+ */
+export interface Tags { group?: Group; structural?: boolean; facing?: V; toneArea?: number; alt?: string; gate?: number }
+export type Element = (Stroke | Wash) & Tags;
+/** a group as an object: its members by role, and its minimum (the structural members) */
+export interface Group { key: string; rank: number; principal: Element | null; supports: Element[]; accents: Element[]; minimum: Element[] }
 
 export function stroke(path: Path, gesture: Gesture, o: { key?: string; material?: Material; heart?: Heart; colour?: V; alpha?: number; mark?: number; feature?: number; profile?: V } = {}): Stroke {
   const key = keyFor('s', o.key, () => `${path.pts.map(r3).join(';')}|${gesture.width}|${o.mark ?? 1}|${o.feature ?? 0}`);
@@ -171,13 +197,19 @@ export function wash(region: Region, anchor: V[], o: { key?: string; reach?: num
  * A group: a principal, its supports, its accents, simplifying together. The group's rank is the principal's; the
  * supports go a step earlier and withdraw toward their anchors; the accents earlier again, the first the last of them.
  */
-export function group(rank: number, principal: Element | null, supports: Element[] = [], accents: Element[] = []): Element[] {
+export function group(rank: number, principal: Element | null, supports: Element[] = [], accents: Element[] = [], key?: string): Element[] {
   const out: Element[] = [];
   if (principal) { principal.rank = rank; principal.span = 0.3; out.push(principal); }
   supports.forEach((s, k) => { s.rank = rank - 0.08 - 0.04 * k; s.span = 0.55; out.push(s); });
   accents.forEach((a, k) => { a.rank = rank - 0.2 - 0.07 * k; a.span = 0.35; out.push(a); });
+  // (the group kept as itself: each member points to it; its minimum is whichever members are structural, read when
+  // asked, so a scene can mark them after)
+  const g: Group = { key: key ?? principal?.key ?? out[0]?.key ?? 'group', rank, principal, supports, accents, get minimum() { return out.filter((e) => e.structural); } };
+  for (const e of out) e.group = g;
   return out;
 }
+/** the distinct groups of a list of elements, in order */
+export function groupsOf(els: Element[]): Group[] { const seen = new Set<Group>(); for (const e of els) if (e.group) seen.add(e.group); return [...seen]; }
 
 /** a splat as deposited: where, its axes and sizes, colour, and which element (and where along it) it came from */
 export interface Dep { p: V; ax: [V, V, V]; s: V; c: V; a: number; rank: number; mark: number; feature: number; element: number; u: number; support: number; n1?: V; n2?: V; object?: number }
@@ -241,22 +273,24 @@ export function depositWash(w: Wash, density = 1, rnd: () => number = rng(w.id))
   if (A.length < 2) return out;
   const cum = [0]; for (let i = 1; i < A.length; i++) cum.push(cum[i - 1] + len(sub(A[i], A[i - 1])));
   const L = cum[cum.length - 1] || 1e-6;
-  /** the nearest point of the anchor: its distance, and how far along (arc length) */
+  const cuts = w.cuts, RA = w.reachAt;
+  /** the nearest point of the anchor: its distance, how far along (arc length), and that place's own reach */
   const nearest = (p: V) => {
-    let d = Infinity, s = 0;
+    let d = Infinity, s = 0, k = 1;
     for (let i = 0; i < A.length - 1; i++) {
+      if (cuts?.has(i)) continue;
       const e = sub(A[i + 1], A[i]), l2 = dot(e, e) || 1e-12, t = Math.max(0, Math.min(1, dot(sub(p, A[i]), e) / l2)), q = add(A[i], mul(e, t)), dd = len(sub(p, q));
-      if (dd < d) { d = dd; s = cum[i] + t * Math.sqrt(l2); }
+      if (dd < d) { d = dd; s = cum[i] + t * Math.sqrt(l2); k = RA ? RA[i] + (RA[i + 1] - RA[i]) * t : 1; }
     }
-    return { d, s };
+    return { d, s, k };
   };
-  const pointAt = (s: number): { p: V; tan: V } => {
+  const pointAt = (s: number): { p: V; tan: V; cut: boolean; k: number } => {
     let i = 0; while (i < A.length - 2 && cum[i + 1] < s) i++;
-    const t = (s - cum[i]) / Math.max(1e-9, cum[i + 1] - cum[i]);
-    return { p: add(A[i], mul(sub(A[i + 1], A[i]), Math.max(0, Math.min(1, t)))), tan: norm(sub(A[i + 1], A[i])) };
+    const t = Math.max(0, Math.min(1, (s - cum[i]) / Math.max(1e-9, cum[i + 1] - cum[i])));
+    return { p: add(A[i], mul(sub(A[i + 1], A[i]), t)), tan: norm(sub(A[i + 1], A[i])), cut: !!cuts?.has(i), k: RA ? RA[i] + (RA[i + 1] - RA[i]) * t : 1 };
   };
   // (its far boundary's unevenness: two waves along the anchor, wavelengths in scene units)
-  const reach = (s: number) => w.reach * (1 - w.uneven * 0.5 + w.uneven * (0.6 * 0.5 * (1 + Math.sin(w.phase + s * 6.5)) + 0.4 * 0.5 * (1 + Math.sin(w.phase * 1.7 + s * 19.5))));
+  const reach = (s: number, k = 1) => k * w.reach * (1 - w.uneven * 0.5 + w.uneven * (0.6 * 0.5 * (1 + Math.sin(w.phase + s * 6.5)) + 0.4 * 0.5 * (1 + Math.sin(w.phase * 1.7 + s * 19.5))));
   const heart = (f: number, s: number) => Math.max(f, Math.abs((2 * s) / L - 1) * 0.85);
   const g = () => { let u = 0; for (let q = 0; q < 4; q++) u += rnd(); return (u - 2) / 0.58; };
   const rankOf = (f: number, s: number) => w.rank - w.span * heart(f, s);
@@ -264,12 +298,13 @@ export function depositWash(w: Wash, density = 1, rnd: () => number = rng(w.id))
   // (the firm edge: a band along the anchor, just inside the region, long along it; laid every DS along the anchor)
   const DS = 0.012, edgeN = 3 * density;
   for (let s = DS / 2; s < L; s += DS) {
-    const { p: a0, tan } = pointAt(s), pa = R.project(a0); if (!pa) continue;
+    const { p: a0, tan, cut, k: rk } = pointAt(s); if (cut) continue;
+    const pa = R.project(a0); if (!pa) continue;
     let inw: V | null = null;
     if (pa.n) { inw = norm(cross(pa.n, tan)); if (!R.on(add(a0, mul(inw, 0.02)))) inw = mul(inw, -1); if (!R.on(add(a0, mul(inw, 0.02)))) continue; }
     for (let q = 0; q < edgeN; q++) {
       if (q + 1 > edgeN && rnd() > edgeN - q) break;
-      const off = 0.006 + 0.022 * rnd() ** 1.5, f = off / reach(s);
+      const off = 0.006 + 0.022 * rnd() ** 1.5, f = off / reach(s, rk);
       // (on a surface, inward from the anchor; in a volume, any way across it)
       const dir = inw ?? norm(cross(tan, [g(), g(), g()]));
       const pp = R.project(add(a0, mul(dir, off))); if (!pp || R.open?.(pp.p)) continue;
@@ -287,7 +322,7 @@ export function depositWash(w: Wash, density = 1, rnd: () => number = rng(w.id))
   const want = Math.round(R.area * (w.material === 'dry' ? 900 : 420) * w.depth * density);
   for (let q = 0, got = 0; got < want && q < want * 14; q++) {
     const { p, n } = R.sample(rnd); if (R.open?.(p)) continue;
-    const { d, s } = nearest(p), D = reach(s), f = d / D;
+    const { d, s, k } = nearest(p), D = reach(s, k), f = d / D;
     if (f >= 1) continue;
     got++;
     if (!n) {

@@ -174,12 +174,38 @@ ok('parse() tells a .splat by its bytes', F.parse(F.encodeSplat(g)).n === g.n);
   const doubled = (g) => { const cell = new Map(); for (const [x, z, o] of g) { const k = `${Math.floor(x / 0.05)},${Math.floor(z / 0.05)}`; (cell.get(k) ?? cell.set(k, new Set()).get(k)).add(o); } return [...cell.values()].filter((v) => v.size > 1).length; };
   const gOn = ground(on), gOff = ground(off);
   ok(`composed: no shadow drawn under another object (${under(gOn)} marks; ${under(gOff)} with each alone)`, under(gOn) === 0 && under(gOff) > 0);
-  ok(`composed: where shadows fall together the ground is one shadow (${doubled(gOn)} cells with two objects' shadow marks; ${doubled(gOff)} with each alone)`, doubled(gOn) < doubled(gOff) * 0.2);
-  ok('composed: every mark knows its object', [...on.drawing.object].every((o) => o > 0));
-  // (each object's principal: the detail at which it goes, in the order of importance; drawn alone they're all alike)
-  const top = (sc, obj) => { let m = 0; for (let i = 0; i < sc.drawing.n; i++) if (sc.drawing.object[i] === obj) m = Math.max(m, sc.drawing.rank[i]); return m; };
-  const order = [1, 3, 2, 4, 5].map((o) => top(on, o));
-  ok(`composed: as the detail falls the objects go in order of importance (last marks at ${order.map((v) => v.toFixed(2)).join(' > ')})`, order.every((v, i) => i === 0 || v < order[i - 1]));
+  // (one ground, whatever the order: the shadows are one wash, and every element's marks are the same when the objects are
+  // made in reverse)
+  const rev = SU.composedScene('wash', true, [...SU.LAYOUT].reverse());
+  const byKey = (sc) => new Map(sc.elements.map((e) => [e.key, sc.editor.deps(e.id)]));
+  const ka = byKey(on), kb = byKey(rev);
+  const same = [...ka].every(([k, d]) => { const e = kb.get(k); return e && e.length === d.length && d.every((m, i) => m.p.every((v, j) => Math.abs(v - e[i].p[j]) < 1e-9)); });
+  ok(`composed: one ground shadow, and the same drawing whichever order the objects are made in (${ka.size} elements compared)`, same && ka.size === kb.size && on.elements.filter((e) => e.key.endsWith('shadow')).length === 1);
+  ok('composed: every authored element has a semantic key (none numbered by its place in its scope)', on.elements.every((e) => !/\/(s|w)\d+$/.test(e.key)), on.elements.filter((e) => /\/(s|w)\d+$/.test(e.key)).map((e) => e.key).slice(0, 5));
+  // (structure: every object's minimum survives the sparse state, at its heart; a group's minimum goes together)
+  const sparse = 0.75;
+  const objs = new Set(on.elements.map((e) => e.object));
+  const minOk = [...objs].every((o) => { const st = on.elements.filter((e) => e.object === o && e.structural); return st.length > 0 && st.every((e) => on.editor.deps(e.id).some((m) => m.rank >= sparse)); });
+  ok(`composed: every object's minimum description survives the sparse state (${objs.size} objects)`, minOk);
+  const together = on.groups.every((g) => { const m = g.minimum; if (m.length < 2) return true; const tops = m.map((e) => Math.max(...on.editor.deps(e.id).map((d) => d.rank))); return Math.max(...tops) - Math.min(...tops) < 0.04; });
+  ok('composed: each group\'s minimum goes together (its structural members\' last marks within the fade band, 0.04)', together);
+  // (the three culms are made alike: the same element on each goes earlier the less it's emphasised; and all material
+  // detail ranks below all structure)
+  const rk = (scope, key) => on.elements.find((e) => e.key === `${scope}/${key}`)?.rank ?? NaN;
+  const bodies = ['culm-front', 'culm-back', 'culm-far'].map((c) => rk(c, 'body/1'));
+  const maxDetail = Math.max(...on.elements.filter((e) => !e.structural && !e.alt).map((e) => e.rank)), minStruct = Math.min(...on.elements.filter((e) => e.structural).map((e) => e.rank));
+  ok(`composed: material detail goes first on lesser objects (the culms' body: ${bodies.map((v) => v.toFixed(3)).join(' > ')}), and all of it below structure (${maxDetail.toFixed(2)} < ${minStruct.toFixed(2)})`, bodies[0] > bodies[1] && bodies[1] > bodies[2] && maxDetail < minStruct);
+  ok(`composed: view gates for the stone's lit side (${on.gates.filter((g) => g.kind === 'lit').length}) and the others' tone (${on.gates.filter((g) => g.kind === 'cap').length})`, on.gates.some((g) => g.kind === 'lit') && on.gates.some((g) => g.kind === 'cap'));
+  // (editing in the composed scene: bend the seam, its wedge follows; re-pressure; undo restores it exactly)
+  {
+    const ed = on.editor, si = ed.items.findIndex((x) => x.name === 'seam'), seam = ed.items[si], before = ed.drawing(-1), s0 = ed.snapshot(si);
+    const h = seam.handles()[2], moved = seam.setHandle(2, [h[0] + 0.05, h[1] + 0.05, h[2]]), r = ed.regenerate(si);
+    ed.setPressure(si, 'swell'); ed.regenerate(si);
+    const changed = ed.drawing(-1).pos.some((v, i) => v !== before.pos[i]);
+    ed.restore(s0); ed.regenerate(si);
+    const after = ed.drawing(-1);
+    ok(`edit: in the composed scene, the seam bent (its wedge follows: ${r.elements} elements of ${ed.order.length} deposited again), then undone exactly`, moved && r.elements === 2 && changed && after.n === before.n && after.pos.every((v, i) => v === before.pos[i]));
+  }
 }
 // (Mist: on an unseen bank under an unseen sun, the trained network is nearer the expensive reference than the analytic
 // model, and both far nearer than the baked colour; the CPU features match what was trained)

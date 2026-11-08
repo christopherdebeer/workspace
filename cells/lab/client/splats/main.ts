@@ -18,10 +18,11 @@ import { Renderer } from './render';
 import { bounds, garden, parse, type Splats } from './format';
 import { Sorter, type SortDone } from './sort';
 import { MARK, STATES, oneStone, stoneShape, type Look, type Stone } from './stone';
-import { brushScene, composedScene, type BrushScene } from './subjects';
+import { brushScene, composedScene, type BrushScene, type ComposedScene } from './subjects';
 import { LIT, mistScene, referenceColours, sunDir, referenceAt, referenceLight, type MistScene } from './mist';
 import { NET, ANALYTIC, BAKE, RESULTS } from './mistnet';
-import { benchScene, PRESSURES, type Bench } from './bench';
+import { benchScene, PRESSURES } from './bench';
+import type { Editor, EditItem, Snapshot } from './edit';
 import type { Material, V as BV } from './brush';
 
 const qs = new URLSearchParams(location.search);
@@ -59,7 +60,7 @@ function show(s: Splats, name: string, u: 1 | -1) {
   if (name !== 'brushes' && name !== 'composed') brushes = null;
   if (name !== 'composed') composed = false;
   if (name !== 'mist') mist = null;
-  if (name !== 'bench') { bench = null; benchSel = -1; syncBench(); }
+  if (name !== 'bench' && name !== 'composed') { bench = null; benchSel = -1; syncBench(); }
   if (name !== 'stone' && name !== 'brushes' && name !== 'mist' && name !== 'bench' && name !== 'composed') R.setOccluder(null);
   ranks = s.rank ? Float32Array.from(s.rank).sort() : null;
   document.documentElement.classList.toggle('paper', name === 'stone' || name === 'brushes' || name === 'bench' || name === 'composed');
@@ -195,10 +196,41 @@ function openComposed() {
   const B = composedScene(look, compose);
   show(B.drawing, 'composed', 1);
   brushes = B; composed = true;
+  editHere(B.editor); gateVals = null;
   R.setOccluder(B.occluder, B.objects);
   frameSubject(qs.get('subject'));
   setView((qs.get('view') as 'hero' | 'grazing' | 'reverse') ?? 'hero');
   syncStone();
+}
+/**
+ * The composed scene's gates, each frame: how much of the stone's tone is in sight from here (its shadowed faces'
+ * washes, weighted by how far each faces the eye); its lit-side alternative shown as that falls; the other objects'
+ * tone capped by how much tone the stone shows. Eased toward their targets, so nothing pops as the view turns.
+ */
+let gateVals: Float32Array | null = null, gateFresh = true, gateNow = { vis: 0, stoneTone: 0 };
+function updateGates(dt: number): Float32Array | null {
+  const C = brushes as ComposedScene | null;
+  if (!composed || !compose || !C?.gates?.length) return null;
+  if (!gateVals || gateVals.length !== C.gateBase + C.gates.length) { gateVals = new Float32Array(C.gateBase + C.gates.length); gateFresh = true; }
+  const { pos } = eye(), e = norm([pos[0] - C.stoneCentre[0], pos[1] - C.stoneCentre[1], pos[2] - C.stoneCentre[2]]);
+  const ds2 = (pos[0] - C.stoneCentre[0]) ** 2 + (pos[1] - C.stoneCentre[1]) ** 2 + (pos[2] - C.stoneCentre[2]) ** 2;
+  let num = 0, den = 0; for (const t of C.tone) { num += t.weight * Math.max(0, dot(t.facing, e)); den += t.weight; }
+  const ss = (a: number, b: number, x: number) => { const t = Math.max(0, Math.min(1, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
+  // (how much of the stone's tone faces the eye: 0.09 to 0.43 round the scene, measured)
+  const vis = ss(0.08, 0.42, num / Math.max(1e-6, den));
+  const tgt = new Float32Array(C.gates.length); let lit = 0, stoneApp = num / ds2;
+  C.gates.forEach((g, i) => { if (g.kind === 'lit') { tgt[i] = ss(0.05, 0.5, dot(g.facing, e)) * (1 - vis); lit = Math.max(lit, tgt[i]); stoneApp += gateVals![g.index] * g.weight * Math.max(0, dot(g.facing, e)) / ds2; } });
+  // (each other wash: its apparent weight from here, capped at 30% of the stone's)
+  C.gates.forEach((g, i) => {
+    if (g.kind !== 'cap') return;
+    const d = [pos[0] - g.centre[0], pos[1] - g.centre[1], pos[2] - g.centre[2]], d2 = d[0] ** 2 + d[1] ** 2 + d[2] ** 2, app = g.weight * Math.max(0, dot(g.facing, norm(d))) / d2;
+    tgt[i] = Math.max(0.3, Math.min(1, (0.3 * stoneApp) / Math.max(1e-9, app)));
+  });
+  const stoneTone = Math.max(vis, lit * 0.8);
+  const k = gateFresh ? 1 : 1 - Math.exp(-dt * 4);
+  C.gates.forEach((g, i) => { gateVals![g.index] += (tgt[i] - gateVals![g.index]) * k; });
+  gateFresh = false; gateNow = { vis, stoneTone };
+  return gateVals;
 }
 /** frame one of the Brushes subjects (stone, corner, culm, gesture), or all of them */
 function frameSubject(s: string | null) {
@@ -234,12 +266,14 @@ const shareAt = (d: number) => { if (!ranks) return 1; const thr = 1 - d; let lo
 
 
 // ─── the Bench (bench.ts): one brush made dependable, and one stroke made editable ───
-let bench: Bench | null = null, benchSel = -1, benchDirty = false, benchMsg = '';
-const undoStack: Array<ReturnType<Bench['snapshot']>> = [];
+/** what's editable in the open scene (the Bench, or the composed scene): its editor and its items */
+let bench: { editor: Editor; items: EditItem[] } | null = null, benchSel = -1, benchDirty = false, benchMsg = '';
+const undoStack: Snapshot[] = [];
+function editHere(ed: Editor) { bench = { editor: ed, items: ed.items }; benchSel = -1; undoStack.length = 0; benchMsg = `${ed.total.toLocaleString()} marks from ${ed.order.length} elements`; buildItems(); }
 function openBench() {
   const B = benchScene();
-  show(B.drawing(-1), 'bench', 1);
-  bench = B; benchSel = -1; undoStack.length = 0; benchMsg = `${B.total.toLocaleString()} marks from ${B.fixed.length + B.items.length * 2} elements`;
+  show(B.editor.drawing(-1), 'bench', 1);
+  editHere(B.editor);
   R.setOccluder(B.occluder);
   framing = { target: [0, 0.62, 0], dist: 3.9 };
   setView('hero');
@@ -248,21 +282,24 @@ function openBench() {
 /** the drawing again from the cache (after an edit), keeping the camera */
 function benchUpload() {
   if (!bench) return;
-  const d = bench.drawing(benchSel); scene = d; R.load(d); sorter.data(d); lastDir = null;
+  const d = bench.editor.drawing(benchSel); scene = d; R.load(d); sorter.data(d); lastDir = null;
   ranks = Float32Array.from(d.rank).sort();
 }
 /** an edit to the selected stroke: remember how it was (for undo), apply it, deposit again only what it affects */
 function benchEdit(apply: () => void, remember = true) {
   if (!bench || benchSel < 0) return;
-  if (remember) undoStack.push(bench.snapshot(benchSel));
+  if (remember) undoStack.push(bench.editor.snapshot(benchSel));
   apply(); benchRegen(benchSel);
 }
 function benchRegen(which: number | 'all') {
   if (!bench) return;
-  const r = bench.regenerate(which);
-  benchMsg = `deposited again: ${r.elements} of ${bench.fixed.length + bench.items.length * 2} elements, ${r.marks.toLocaleString()} of ${bench.total.toLocaleString()} marks, in ${r.ms.toFixed(0)} ms`;
-  benchUpload(); syncBench();
+  const r = bench.editor.regenerate(which), t0 = performance.now();
+  benchUpload();
+  lastEdit = { deposit: r.ms, upload: performance.now() - t0, elements: r.elements, marks: r.marks };
+  benchMsg = `deposited again: ${r.elements} of ${bench.editor.order.length} elements, ${r.marks.toLocaleString()} of ${bench.editor.total.toLocaleString()} marks, in ${r.ms.toFixed(0)} ms (assembled and uploaded in ${lastEdit.upload.toFixed(0)} ms)`;
+  syncBench();
 }
+let lastEdit = { deposit: 0, upload: 0, elements: 0, marks: 0 };
 function benchSelect(i: number) { benchSel = i; benchUpload(); syncBench(); }
 /** a ray from the eye through a point of the screen */
 function rayAt(x: number, y: number): { pos: [number, number, number]; d: [number, number, number] } {
@@ -282,28 +319,28 @@ function toScreen(p: number[]): [number, number] | null {
 function benchPick(x: number, y: number): number {
   if (!bench) return -1;
   let best = -1, bd = 28;
-  bench.items.forEach((it, i) => { for (const d of bench!.deps(it.stroke.id)) { const s = toScreen(d.p); if (!s) continue; const e = Math.hypot(s[0] - x, s[1] - y); if (e < bd) { bd = e; best = i; } } });
+  bench.items.forEach((it, i) => { for (const d of bench!.editor.deps(it.stroke.id)) { const s = toScreen(d.p); if (!s) continue; const e = Math.hypot(s[0] - x, s[1] - y); if (e < bd) { bd = e; best = i; } } });
   return best;
 }
 // (the selected stroke's control points as handles over the canvas: drag one to bend the stroke)
 const handles = $('handles');
 let dragging: { k: number; P0: [number, number, number]; fwd: [number, number, number] } | null = null;
 function placeHandles() {
-  const want = bench && benchSel >= 0 ? bench.items[benchSel].ctrl : [];
+  const want = bench && benchSel >= 0 ? bench.items[benchSel].handles() : [];
   while (handles.children.length < want.length) {
     const h = document.createElement('div'), k = handles.children.length;
     h.addEventListener('pointerdown', (e) => {
       if (!bench || benchSel < 0) return;
       e.stopPropagation(); h.setPointerCapture(e.pointerId);
-      undoStack.push(bench.snapshot(benchSel));
-      const c = bench.items[benchSel].ctrl[k];
+      undoStack.push(bench.editor.snapshot(benchSel));
+      const c = bench.items[benchSel].handles()[k];
       dragging = { k, P0: [c[0], c[1], c[2]], fwd: eye().fwd };
     });
     h.addEventListener('pointermove', (e) => {
       if (!dragging || !bench || benchSel < 0 || dragging.k !== k) return;
       // (the finger's ray meets the plane through the point facing the eye; on a surface the point is then taken onto it)
       const { pos, d } = rayAt(e.clientX, e.clientY), f = dragging.fwd, t = dot([dragging.P0[0] - pos[0], dragging.P0[1] - pos[1], dragging.P0[2] - pos[2]], f) / dot(d, f);
-      if (bench.setCtrl(benchSel, k, [pos[0] + d[0] * t, pos[1] + d[1] * t, pos[2] + d[2] * t] as BV)) benchDirty = true;
+      if (bench.editor.setHandle(benchSel, k, [pos[0] + d[0] * t, pos[1] + d[1] * t, pos[2] + d[2] * t] as BV)) benchDirty = true;
     });
     const up = () => { dragging = null; };
     h.addEventListener('pointerup', up); h.addEventListener('pointercancel', up);
@@ -315,7 +352,7 @@ function placeHandles() {
     if (s) { el.style.left = `${s[0]}px`; el.style.top = `${s[1]}px`; }
   });
 }
-let syncBench = () => {};
+let syncBench = () => {}, buildItems = () => {};
 
 // ─── the sort: in a worker if there is one (the same bundle, `?worker=splats`), else here ───
 const sorter = (() => {
@@ -483,26 +520,38 @@ slider('sunel', () => sunEl, (v) => { sunEl = v; if (light === 'reference') reli
     return () => [...el.querySelectorAll('button')].forEach((b, k) => { b.setAttribute('aria-pressed', String(items[k][2]())); (b as HTMLButtonElement).disabled = id !== 'b-items' && benchSel < 0; });
   };
   const it = () => (bench && benchSel >= 0 ? bench.items[benchSel] : null);
+  // (the items row: one button an editable stroke, rebuilt for each scene)
+  let itemSync = () => {};
+  buildItems = () => {
+    const el = $('b-items'); [...el.querySelectorAll('button')].forEach((b) => b.remove());
+    itemSync = bench ? segB('b-items', bench.items.map((x, i) => [x.name, () => benchSelect(benchSel === i ? -1 : i), () => benchSel === i] as [string, () => void, () => boolean])) : () => {};
+  };
   const fs = [
-    segB('b-items', ['plane', 'cylinder', 'free'].map((n, i) => [n, () => benchSelect(benchSel === i ? -1 : i), () => benchSel === i] as [string, () => void, () => boolean])),
-    segB('b-materials', (['ink', 'dry', 'washline'] as Material[]).map((m) => [m === 'washline' ? 'wash-line' : m, () => benchEdit(() => bench!.setMaterial(benchSel, m)), () => it()?.stroke.material === m] as [string, () => void, () => boolean])),
-    segB('b-pressures', Object.keys(PRESSURES).map((p) => [p, () => benchEdit(() => bench!.setPressure(benchSel, p)), () => it()?.pressure === p] as [string, () => void, () => boolean])),
+    () => itemSync(),
+    segB('b-materials', (['ink', 'dry', 'washline'] as Material[]).map((m) => [m === 'washline' ? 'wash-line' : m, () => benchEdit(() => bench!.editor.setMaterial(benchSel, m)), () => it()?.stroke.material === m] as [string, () => void, () => boolean])),
+    segB('b-pressures', Object.keys(PRESSURES).map((p) => [p, () => benchEdit(() => bench!.editor.setPressure(benchSel, p)), () => it()?.pressure === p] as [string, () => void, () => boolean])),
   ];
-  const wEl = $<HTMLInputElement>('b-weight'), dEl = $<HTMLInputElement>('b-density');
-  let wFrom: ReturnType<Bench['snapshot']> | null = null;
-  wEl.onpointerdown = () => { if (bench && benchSel >= 0) wFrom = bench.snapshot(benchSel); };
-  wEl.oninput = () => { if (!bench || benchSel < 0) return; if (!wFrom) wFrom = bench.snapshot(benchSel); bench.setWeight(benchSel, Number(wEl.value)); benchDirty = true; $('b-weight-v').textContent = `${Number(wEl.value).toFixed(2)}×`; };
-  wEl.onchange = () => { if (wFrom) undoStack.push(wFrom); wFrom = null; };
-  dEl.oninput = () => { if (!bench) return; bench.density = Number(dEl.value); $('b-density-v').textContent = `${bench.density}×`; benchRegen('all'); };
-  $('b-undo').onclick = () => { const s = undoStack.pop(); if (!bench || !s) return; bench.restore(s); benchSel = s.item; benchRegen(s.item); };
+  const wEl = $<HTMLInputElement>('b-weight'), dEl = $<HTMLInputElement>('b-density'), aEl = $<HTMLInputElement>('b-wash');
+  let wFrom: Snapshot | null = null;
+  // (a slider's drag is one edit: remembered when it starts, kept when it ends)
+  const sliderEdit = (el: HTMLInputElement, apply: (v: number) => void, label: string) => {
+    el.onpointerdown = () => { if (bench && benchSel >= 0) wFrom = bench.editor.snapshot(benchSel); };
+    el.oninput = () => { if (!bench || benchSel < 0) return; if (!wFrom) wFrom = bench.editor.snapshot(benchSel); apply(Number(el.value)); benchDirty = true; $(label).textContent = `${Number(el.value).toFixed(2)}×`; };
+    el.onchange = () => { if (wFrom) undoStack.push(wFrom); wFrom = null; syncBench(); };
+  };
+  sliderEdit(wEl, (v) => bench!.editor.setWeight(benchSel, v), 'b-weight-v');
+  sliderEdit(aEl, (v) => bench!.editor.setWash(benchSel, v), 'b-wash-v');
+  dEl.oninput = () => { if (!bench) return; bench.editor.density = Number(dEl.value); $('b-density-v').textContent = `${bench.editor.density}×`; benchRegen('all'); };
+  $('b-undo').onclick = () => { const s = undoStack.pop(); if (!bench || !s) return; bench.editor.restore(s); benchSel = s.item; benchRegen(s.item); };
   $('b-none').onclick = () => benchSelect(-1);
   syncBench = () => {
     $('bench-controls').hidden = !bench;
     if (!bench) { placeHandles(); return; }
     fs.forEach((f) => f());
-    wEl.disabled = benchSel < 0; $('b-weight-v').textContent = benchSel >= 0 ? `${bench.weight(benchSel).toFixed(2)}×` : '';
-    if (benchSel >= 0) wEl.value = String(bench.weight(benchSel));
-    dEl.value = String(bench.density); $('b-density-v').textContent = `${bench.density}×`;
+    wEl.disabled = benchSel < 0; aEl.disabled = benchSel < 0 || !bench.items[benchSel].deps.length;
+    $('b-weight-v').textContent = benchSel >= 0 ? `${bench.editor.weight(benchSel).toFixed(2)}×` : ''; $('b-wash-v').textContent = benchSel >= 0 ? `${bench.editor.washScale(benchSel).toFixed(2)}×` : '';
+    if (benchSel >= 0) { wEl.value = String(bench.editor.weight(benchSel)); aEl.value = String(bench.editor.washScale(benchSel)); }
+    dEl.value = String(bench.editor.density); $('b-density-v').textContent = `${bench.editor.density}×`;
     ($('b-undo') as HTMLButtonElement).disabled = !undoStack.length;
     $('b-note').textContent = (benchSel >= 0 ? `${bench.items[benchSel].name} stroke selected: drag its points to bend it. ` : 'tap a stroke to select it. ') + benchMsg;
   };
@@ -533,8 +582,8 @@ function frame() {
   if (scene && !sorter.busy && (!lastDir || dot(lastDir, fwd) < 0.9995)) { lastDir = fwd; sorter.ask(fwd); }
   const near = Math.max(0.01, cam.dist * 0.01), proj = perspective(cam.fov, w / h, near, cam.dist * 100);
   const fy = h / (2 * Math.tan(cam.fov / 2));
-  const share = shareAt(detail);
-  R.draw(view, proj, [fy, fy], { size, mode, bg: mist ? [0.13, 0.145, 0.165] : stone || brushes || bench ? [0.937, 0.906, 0.847] : theme(), detail, thin, share, features, eye: pos, occlude, only, light: mist ? Math.max(0, LIGHTS.indexOf(light) - 1) : 0, sun: sunDir(sunAz, sunEl), diff: mist ? diff : false, halo: composed && compose && haloOn ? haloPx * dpr : 0, nf: [near, cam.dist * 100] });
+  const share = shareAt(detail), gv = updateGates(dt);
+  R.draw(view, proj, [fy, fy], { size, mode, bg: mist ? [0.13, 0.145, 0.165] : stone || brushes || bench ? [0.937, 0.906, 0.847] : theme(), detail, thin, share, features: gv ?? features, eye: pos, occlude, only, light: mist ? Math.max(0, LIGHTS.indexOf(light) - 1) : 0, sun: sunDir(sunAz, sunEl), diff: mist ? diff : false, halo: composed && compose && haloOn ? haloPx * dpr : 0, nf: [near, cam.dist * 100] });
   frames++;
   if (t - fpsT > 500) {
     fps = (frames * 1000) / (t - fpsT); frames = 0; fpsT = t;
@@ -547,13 +596,13 @@ function frame() {
   get scene() { return scene ? { name: sceneName, n: scene.n } : null; }, cam, get fps() { return fps; }, get sortMs() { return sortMs; }, get drawn() { return R.drawn; },
   setMode: (m: number) => { mode = m; syncModes(); }, open, openUrl,
   bench: {
-    get state() { return bench ? { selected: benchSel, items: bench.items.map((it) => ({ name: it.name, id: it.stroke.id, ctrl: it.ctrl, material: it.stroke.material, pressure: it.pressure, weight: bench!.weight(bench!.items.indexOf(it)), marks: bench!.deps(it.stroke.id).length })), total: bench.total, density: bench.density, undo: undoStack.length, msg: benchMsg } : null; },
+    get state() { return bench ? { selected: benchSel, items: bench.items.map((it, i) => ({ name: it.name, id: it.stroke.id, ctrl: it.handles(), material: it.stroke.material, pressure: it.pressure, weight: bench!.editor.weight(i), wash: bench!.editor.washScale(i), marks: bench!.editor.deps(it.stroke.id).length })), total: bench.editor.total, density: bench.editor.density, undo: undoStack.length, msg: benchMsg, lastEdit } : null; },
     select: (i: number) => benchSelect(i), pick: (x: number, y: number) => benchPick(x, y), screen: (p: number[]) => toScreen(p),
-    drag: (k: number, p: BV) => benchEdit(() => bench!.setCtrl(benchSel, k, p)), material: (m: Material) => benchEdit(() => bench!.setMaterial(benchSel, m)), pressure: (p: string) => benchEdit(() => bench!.setPressure(benchSel, p)), weight: (w: number) => benchEdit(() => bench!.setWeight(benchSel, w)),
-    undo: () => $('b-undo').click(), density: (d: number) => { if (bench) { bench.density = d; benchRegen('all'); } },
+    drag: (k: number, p: BV) => benchEdit(() => bench!.editor.setHandle(benchSel, k, p)), material: (m: Material) => benchEdit(() => bench!.editor.setMaterial(benchSel, m)), pressure: (p: string) => benchEdit(() => bench!.editor.setPressure(benchSel, p)), weight: (w: number) => benchEdit(() => bench!.editor.setWeight(benchSel, w)), wash: (k: number) => benchEdit(() => bench!.editor.setWash(benchSel, k)),
+    undo: () => $('b-undo').click(), density: (d: number) => { if (bench) { bench.editor.density = d; benchRegen('all'); } },
   },
   mist: { setDiff: (d: boolean) => { diff = d; relight(); }, setLight: (l: string) => { light = l; relight(); syncMist(); }, setSun: (az: number, el: number) => { sunAz = az; sunEl = el; relight(); }, setBank: (b: number) => { bank = b; openMist(); }, get ready() { return refReady; } },
-  composed: { setCompose: (c: boolean) => { compose = c; reopen(); }, setHalo: (h: boolean, px?: number) => { haloOn = h; if (px) haloPx = px; }, get importance() { return composed ? (brushes as ReturnType<typeof composedScene>).importance : null; } },
+  composed: { get gates() { return gateNow; }, setCompose: (c: boolean) => { compose = c; reopen(); }, setHalo: (h: boolean, px?: number) => { haloOn = h; if (px) haloPx = px; }, get importance() { return composed ? (brushes as ReturnType<typeof composedScene>).importance : null; } },
   stone: { setView, setDetail: (d: number) => { detail = d; syncDetail(); syncStone(); }, setThin: (k: number) => { thin = k; }, setLook: (l: Look) => { look = l; reopen(); }, frame: (s: string | null) => { frameSubject(s); setView('hero'); }, paint, clear: () => { features.fill(0); lastPaint = null; }, features,
     /** a touch at a point of the stone (world), as the brush would make it from the eye; and the stone's own lines */
     touch: (p: [number, number, number]) => { if (!stone) return 0; const { pos } = eye(), d = norm([p[0] - pos[0], p[1] - pos[1], p[2] - pos[2]]), h = stone.ray(pos, d); if (!h) return 0; const f = stone.featureAt(h.p, h.region); if (f) features[f] = Math.min(1, features[f] + 0.07); return f; },
