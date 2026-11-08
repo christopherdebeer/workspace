@@ -86,6 +86,14 @@ ok('parse() tells a .splat by its bytes', F.parse(F.encodeSplat(g)).n === g.n);
     ok(`stone, ${look}: the seam at ${thr} is one run, not fragments (${idx.length} marks)`, runs === 1, runs);
   }
 }
+// (a captured scene in ink: its own splats as paper bodies, outline discs (shown only edge-on) and ranked tone)
+{
+  const F = await load('../client/splats/format.ts'), IK = await load('../client/splats/ink.ts');
+  const g = F.garden(30000, 7), a = IK.inkScene(g), b = IK.inkScene(g), d = a.drawing;
+  const kinds = new Set(d.mark), bodies = [...d.mark].filter((k) => k === 0).length;
+  const finite = d.pos.every(Number.isFinite) && d.scale.every((v) => Number.isFinite(v) && v > 0) && d.rot.every(Number.isFinite);
+  ok(`ink: ${a.stats.kept} of ${a.stats.source} splats kept as paper, ${a.stats.flat} outline discs, ${a.stats.toned} toned; ${d.n} marks; deterministic`, bodies === a.stats.kept && kinds.has(9) && kinds.has(2) && finite && d.n === b.drawing.n, a.stats);
+}
 // (one Bamboo passage through the brush: a rock outcrop of Bamboo's and the bank rim beside it; only the brush draws it)
 {
   const RB = await load('../client/splats/rockbank.ts'), WD = await load('../client/bamboo/world.ts');

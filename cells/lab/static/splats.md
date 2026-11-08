@@ -488,14 +488,52 @@ their limits.
   budget), and the judging page.
 
 **Not yet:**
-- **No real judgements, so no trained model.** `policynet.ts` is empty, and *learned* falls back to the rules.
-- **Whether the rules beat the ranks is undecided.** They visibly move marks to the bank and to tone that faces you, away
-  from scattered detail on lesser objects. Judging will tell.
+- **Judged:** 31 pairs by the author on a phone, then 32 by Claude from headless boards
+  (`devtools/splats-selfjudge.mjs make 16`, then `save ABsA…`), on the same criteria: a seam hook kept, a lip with
+  its shadow, a closed silhouette, things grounded, one picture rather than clutter. Leaving out ties, that's 59 pairs.
+  The model agrees with 82% of the pairs it was trained on and 83% of held-out pairs. The two figures agree, so the
+  two teachers seem to agree.
+- **What the judgements say:** the rules beat the ranks 13 to 3, and random variations of the rules beat the rules 13
+  to 2. At the same budget the preferred drawings keep less structural outline, especially the stone's edges and the
+  corner's lines, and more contacts, tone and grounding: masses, not contours. *learned* is now the default. At sparse
+  it draws the stone as a mass with its shadow, where the rules keep broken outline. What it loses there is the seam's
+  hook, which the reference studies always keep.
 - **Unseen arrangements:** a policy trained on this layout should be tested on others.
 - **Groups are judged one at a time.** The competition input summarises their neighbours, but a whole-composition
   judgement (balance across the picture) isn't modelled.
 - **Reference fitting** (adjusting the instructions to match target images, as DiffVG does for vector shapes) is a
   separate, optimisation-only path, not started.
+
+## Captured scenes in ink: the splats drawing themselves
+
+Everything above lays strokes made by procedure. That uses Gaussians as stamps, not as what they are: a soft field
+fitted to a real thing, that a phone can capture. `?scene=nike&ink` (or *plush*, *train*, a URL or your own file, with
+the *ink* button) draws a captured scene in ink from its own splats (ink.ts). Every splat stays where it was captured,
+with its own shape; what changes is what it means:
+- **paper:** each splat as a paper-coloured body at its own opacity, always kept. The thing still hides its own far
+  side, so it's opaque where it is and blank paper where it's lit.
+- **outline:** each surface splat gets a thin ink disc facing outward, shown only from where it's near edge-on (mark
+  kind 9, decided in the shader every frame). A disc seen edge-on is a short line, and the surface's discs that are
+  edge-on from the eye are the ones on its outline. So the contour comes out of the field itself, from any view, with
+  nothing traced.
+  - Which splats are on the surface, and which way is out, comes from their neighbours: a splat well off its
+    neighbours' centre is on the surface, and its offset is outward. These directions are smoothed over neighbouring
+    cells, one disc a cell, none where the neighbourhood is thin.
+  - The capture's own discs were tried first. On fur they point every which way, so the "outline" fired everywhere as
+    hatching.
+- **tone:** each splat darker than the scene's paper level, or darker than its neighbours, also as ink, its opacity in
+  four steps and ranked by darkness. So the detail slider develops it from the darkest masses down. A capture's
+  long, thin splats turn into hatching of their own: the shoe's mesh upper and swoosh draw themselves.
+
+The shoe at half detail reads as a pen sketch from the front. The plush reads but is busy, because fur is noise at
+this scale. Both captures are only good from the front, inked or not.
+
+**Gaps:**
+- Nothing yet chooses what to keep the way the composed scene's policy does. Ranks are darkness and size, and could
+  be judged and learned the same way.
+- Tone is a lightness threshold, not light: a dark object is all tone.
+- Outline discs are one size. A capture's fine detail (laces, stitching) would want smaller ones where the surface
+  curves tightly.
 
 ## The Bench: one brush made dependable, one stroke made editable
 
@@ -668,7 +706,7 @@ Roughly in order of what each teaches:
 
 ## Flags
 
-`?scene=stone|brushes|composed|bench|mist|garden|plush|nike|train` · `?compose=0` · `?halo=0` · `?halopx=` · `?policy=ranks|rules|learned` · `?judge` · `?perf` · `?scene=pen&part=word|board|culm|bank|rock&reference` · `?look=dry|wash` · `?detail=0..1` · `?thin=even` · `?only=wash` · `?view=hero|grazing|reverse` · `?orbit` · `?detail=0.25|0.55|1` (sparse, intermediate, resolved) · `?brush` · `?occluder=0` · `?clean` (no controls) · `?url=…` (any `.splat` or `.ply` CORS lets it read) · `?up=1` (for a file that's
+`?scene=stone|brushes|composed|bench|mist|garden|plush|nike|train` · `?compose=0` · `?halo=0` · `?halopx=` · `?policy=ranks|rules|learned` · `?judge` · `?perf` · `?ink` (a captured scene in ink) · `?scene=pen&part=word|board|culm|bank|rock&reference` · `?look=dry|wash` · `?detail=0..1` · `?thin=even` · `?only=wash` · `?view=hero|grazing|reverse` · `?orbit` · `?detail=0.25|0.55|1` (sparse, intermediate, resolved) · `?brush` · `?occluder=0` · `?clean` (no controls) · `?url=…` (any `.splat` or `.ply` CORS lets it read) · `?up=1` (for a file that's
 y-up) · `?mode=0..3` · `?size=` · `?res=` · `?count=` (garden size) · `?noworkers` · `?preview`
 
 Checks: `node cells/lab/devtools/splats.test.mjs` (formats, covariance, sort) and

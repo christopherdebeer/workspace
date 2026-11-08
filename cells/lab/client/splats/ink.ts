@@ -71,7 +71,8 @@ export function inkScene(src: Splats, o: { steps?: number } = {}): { drawing: In
     const [a, b, c] = fcell(i); let x = 0, y = 0, z = 0, w = 0;
     for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) for (let dz = -1; dz <= 1; dz++) { const g = fgrid.get(`${a + dx},${b + dy},${c + dz}`); if (g) { x += g[0]; y += g[1]; z += g[2]; w += g[3]; } }
     const ox = src.pos[i * 3] - x / w, oy = src.pos[i * 3 + 1] - y / w, oz = src.pos[i * 3 + 2] - z / w, ol = Math.hypot(ox, oy, oz);
-    if (ol < 0.3 * fine || src.rgba[i * 4 + 3] < 100) return;
+    // (not where the neighbourhood is thin: a capture's stray splats off the surface would tick the paper)
+    if (ol < 0.3 * fine || src.rgba[i * 4 + 3] < 100 || w < 255 * 12) return;
     // (one to a cell, so the outline is a line, not a crowd)
     const key = `${a},${b},${c}`; if (perCell.has(key)) return; perCell.set(key, k);
     outward.set([ox / ol, oy / ol, oz / ol], k * 3); surface[k] = 1;

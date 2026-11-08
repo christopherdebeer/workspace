@@ -118,7 +118,7 @@ async function open(name: string) {
  */
 let captured: { s: Splats; name: string; up: 1 | -1 } | null = null, inkOn = qs.has('ink'), inkStats: InkStats | null = null;
 function showCaptured(s: Splats, name: string, up: 1 | -1) {
-  if (inkOn) { const r = inkScene(s); inkStats = r.stats; show(r.drawing, name, up); } else { inkStats = null; show(s, name, up); }
+  if (inkOn) { const r = inkScene(s); inkStats = r.stats; show(r.drawing, name, up); if (!qs.has('detail')) { detail = 0.5; syncDetail(); } } else { inkStats = null; show(s, name, up); }
   captured = { s, name, up }; syncStone();
 }
 async function openUrl(url: string) {
