@@ -19,7 +19,7 @@ await withWood(async (wood) => {
     for (const w of wires) {
       await page.evaluate((c) => window.__splats.camera(c), { yaw: w.yaw, pitch: w.pitch, dist: w.dist, target: w.target, fov: w.fov }); await page.waitForTimeout(1800);
       // (a pooled field's drawings: its first execution's, for comparison)
-      const t = new URL(`./field-teachers/${style.replace(/-pooled$/, '')}/${w.name}.jpg`, import.meta.url).pathname;
+      const t = new URL(`./field-teachers/${style.replace(/-(shape|fixed)$/, '').replace(/-pooled$/, '')}/${w.name}.jpg`, import.meta.url).pathname;
       rows.push([w.name, existsSync(t) ? t : '', await wood.shot(page, `field-style-${style}-${w.name}`)]);
     }
     for (const [nm, yaw, pitch, dist] of novel) {
