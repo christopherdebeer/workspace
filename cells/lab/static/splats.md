@@ -16,6 +16,9 @@ splat has:
 - a **colour**. In a trained scene this is a set of spherical-harmonic coefficients, so the colour can change with
   viewing direction (sheen, reflections). This viewer uses only the first band, the colour seen from every side.
 
+![A made scene: the procedural garden: 120,000 Gaussians, each a centre, a shape, a colour and an opacity, sorted and blended](splats/v-garden.jpg)
+![A captured scene: a phone capture (plush.splat), as captured: the kind of scene splats exist for](splats/v-plush.jpg)
+
 The splats are found by optimisation. Training starts from a sparse point cloud from photogrammetry (COLMAP). It
 renders the splats, compares the result with the photographs, and adjusts every parameter by gradient descent, splitting
 splats where detail is missing and pruning those that contribute nothing. This viewer only *renders* splats; it doesn't
@@ -69,6 +72,10 @@ Captured scenes are the examples from antimatter15's viewer, hosted on Hugging F
 `?scene=stone` (`stone.ts`). The idea is procedural drawing as a way to author a 3D world: each feature gets a way
 of drawing itself, and the Gaussian is what the marks are made of. The interesting decisions are where a mark belongs,
 what it describes, and when the drawing can do without it.
+
+![One stone, in wash: the One Stone study from its designed side: the seam and its wedge, the lip and the shadow under it, washes on the shaded faces, drawn by the brush](splats/v-stone.jpg)
+![One stone, dry brush: the same stone in the dry look: hatching in place of wash](splats/v-stone-dry.jpg)
+![One stone, spare: the detail turned down: the marks that rank highest survive (the seam’s hook, the lip, the shadow under it)](splats/v-stone-sparse.jpg)
 
 **The stone** is a cut stone of unequal geological planes on warm paper:
 - a crown of two planes meeting off-centre (high toward the tall end, falling away to the tapering one: a wedge);
@@ -138,6 +145,8 @@ share:
 
     scene structure → drawing instructions → strokes and washes → splats → image
 
+![Shared brushes: one brush drawing a stone, an architectural corner, a culm and a free gesture](splats/v-brushes.jpg)
+
 A **stroke** and a **wash** are objects that keep their identity: a path, a gesture, a material, a place in a group.
 They become splats only when deposited, so a stroke can be shortened, re-pressured, regenerated at another density, or
 withdrawn with its group, and its gesture is kept. There are three operations:
@@ -171,6 +180,12 @@ bank passing between them, drawn with the same brushes throughout:
 - the corner behind the stone and to its left, its niche toward the camera;
 - two culms behind it to the right;
 - one culm in front, crossing the stone's right side.
+
+![The composed scene, resolved: the stone, three culms and a corner from the reference camera, every mark kept](splats/v-composed.jpg)
+![Intermediate: the same view at intermediate detail, by the marks’ ranks](splats/v-composed-mid.jpg)
+![Sparse: sparse, by the marks’ ranks: broken outlines](splats/v-composed-sparse.jpg)
+
+![In dry brush: the composed scene resolved in the dry look](splats/v-composed-dry.jpg)
 
 `?compose=0` (or the *relate* row) draws each object as if alone.
 
@@ -315,6 +330,8 @@ a drawing medium:
   trail cuts a bank, how a broken line withdraws.
 - **Splats** keeps the mark as an editable object in space.
 
+![Autograph’s pen in space: Autograph’s hand writing “stone” with the broad pen, on a board and wrapped round a culm, against the brush’s round stroke](splats/v-pen-word.jpg)
+
 Until now the Splats brush's "pressure" was a prescribed width profile along a supplied path: convenient and
 controllable, but a mark didn't look as it did because of how it was made. This brings in Autograph's hand and pen,
 reused rather than copied (`move()`, `body()`, `widths()`, `BROAD`, `LOUD`, `INK` exported from Autograph, unchanged):
@@ -408,6 +425,8 @@ neighbours and fragments round it. Each of them is drawn as Bamboo made it:
 - **the bank's rim:** in the dashes Bamboo broke it into, by the pen, with press from Bamboo's weight.
 - **the bank's slope:** between the rim and the trail's edge below it, one pooled wash anchored on the rim.
 
+![A Bamboo rock and bank: one of Bamboo’s outcrops and the bank rim beside it, drawn only by the brush: edges by the pen, shadowed faces and the bank’s slope in pooled washes](splats/v-pen-rock.jpg)
+
 The blocks' meshes and Bamboo's ground are the occluder. The ground is sampled finer than Bamboo's cells and set a
 little low, so it doesn't cut into the slope's wash. In all: 21 faces washed, 79 edges, 3 dashes, about 22k marks.
 
@@ -433,6 +452,14 @@ numbers mean anything (`devtools/splats-perf.mjs` just checks that it runs).
 `policy.ts`, `?scene=composed&policy=ranks|rules|learned`, `?judge`. The idea comes from the Mist experiment,
 generalised: use an expensive process offline to teach a compact model a useful decision. Here the decision is which
 marks best describe the scene at a given detail and view, decided at the level of groups, above deposition.
+
+![Sparse, by the rules: the hand-written rules at the sparse budget: structure kept, broken](splats/v-policy-rules.jpg)
+![Sparse, learned: the policy learned from 59 judged pairs, at the same budget: the stone as a mass with its shadow, less outline](splats/v-policy-learned.jpg)
+
+![The three reference studies (left) against the composed scene from the camera nearest them, by its ranks, by the rules, and by the learned policy, at the same budget (devtools/splats-targets.mjs)](splats/b-targets.jpg)
+
+![Judging a pair: the judging page on a phone: two treatments of one view at one budget; tap the better](splats/v-judge.jpg)
+![One of Claude’s judging boards: four pairs, each the same view at the same budget (devtools/splats-selfjudge.mjs)](splats/b-selfjudge.jpg)
 
 **What a policy controls.** For each group (a seam with its wedge, a cornice with its underside, a culm's sides), a
 treatment:
@@ -525,6 +552,11 @@ with its own shape; what changes is what it means:
   four steps and ranked by darkness. So the detail slider develops it from the darkest masses down. A capture's
   long, thin splats turn into hatching of their own: the shoe's mesh upper and swoosh draw themselves.
 
+![A shoe drawn by its own splats: the shoe capture in ink: every splat paper, outline discs shown only edge-on, dark splats as ranked tone; its long splats hatch the mesh upper](splats/v-ink-shoe.jpg)
+![The plush in ink: the plush capture in ink: it reads, busily (fur is noise at this scale)](splats/v-ink-plush.jpg)
+
+![The shoe as captured (top), then in ink at full detail and at 0.35, from the front, side and back (devtools/splats-ink.mjs)](splats/b-ink-shoe.jpg)
+
 The shoe at half detail reads as a pen sketch from the front. The plush reads but is busy, because fur is noise at
 this scale. Both captures are only good from the front, inked or not.
 
@@ -552,6 +584,11 @@ first, bounded test, on the stone.
   - Since every mark is one ink colour, the real renderer's sorted blending gives the same result.
   - Discs behind the stone from a view are left out, using its mesh rasterised per view.
 - **The baseline:** the same discs with one constant opacity each, no view dependence.
+
+![The stone, fitted: the stone’s drawing fitted as a field: discs whose ink depends on where they’re seen from, on a view it wasn’t fitted to](splats/v-field-stone.jpg)
+![Without view dependence: the same discs with one opacity each, from the same view: every edge ghosts across every face](splats/v-field-stone-flat.jpg)
+
+![Views the field wasn’t fitted to: the brush-drawn teacher, the view-dependent field, and the baseline with one opacity per disc (devtools/splats-field-board.mjs)](splats/b-field-stone.jpg)
 
 **Result:** on the held-out views, the mean squared error (× 1000) of the drawing's darkness is:
 
@@ -586,6 +623,10 @@ from its object's middle) and the ground round the scene. The teachers are the c
 36 views orbiting the reference camera's target at its distance, at 192 × 128, with 12 views held out. The fit took
 200 iterations, about 4 minutes.
 
+![The composed scene, fitted: the whole composed scene fitted as a field (33,730 discs), from a view it wasn’t fitted to](splats/v-field-composed.jpg)
+
+![The composed scene: teacher (left) and fitted field (right); the top row a training view, the rest held out](splats/b-field-composed.jpg)
+
 | | error (× 1000) |
 |---|---|
 | held out | 18.8 |
@@ -614,6 +655,8 @@ carries round the scene. It can't be done honestly with the studies as they are:
   distorts everything between: the cornice stretched upward, the study's stone running into the culms, its front
   culm leaning where the scene has none. After the warp, the correlation with the scene drawn from that camera is 0.11.
 
+![The resolved study (green) warped onto the scene drawn from its fitted camera (red): landmarks on, everything between them off](splats/b-ref-overlay.jpg)
+
 The studies are compositions after the scene, not drawings of it. Used as pixel teachers, they'd teach the field
 their marks in the wrong places.
 
@@ -631,6 +674,20 @@ Since the studies can't teach, the scene supplied its own canvases. `devtools/sp
 scene's real geometry from six views, at 1024 × 683, each with its camera:
 - the meshes' creases and silhouettes, hidden lines removed;
 - the stone's seam, the culms' nodes and the corner's niche.
+
+![The six wireframes, each with its camera (devtools/splats-field-wire.mjs)](splats/b-wires.jpg)
+
+![Sumi-e: the wireframes restyled by an image model, geometry kept](splats/b-restyle-sumi.jpg)
+![Pen and wash](splats/b-restyle-all-pen-wash.jpg)
+![Watercolour](splats/b-restyle-watercolour.jpg)
+![Engraved hatching](splats/b-restyle-engraved.jpg)
+
+![Sumi-e, fitted: the field fitted to an image model’s sumi-e restyle of six wireframe views, each disc’s shape fitted with its ink, from the reference view](splats/v-field-sumi.jpg)
+![Sumi-e, from a view no drawing covered: the same field halfway between two of the drawn views](splats/v-field-sumi-new.jpg)
+![Sumi-e, from low: and from low down, also undrawn](splats/v-field-sumi-low.jpg)
+
+![Before: a sumi field with round discs at 192 × 128, each drawing beside the field from its view, then three undrawn views](splats/b-field-sumi-before.jpg)
+![After: each disc’s shape fitted, at 384 × 256](splats/b-field-sumi-shape.jpg)
 
 An image model redrew each view in a style, told to keep every line where it is. Seven restyles came back, each a
 sheet of all six views: fine pen and wash, textured stone with strong cast shadows, three sumi-e brush executions
@@ -678,6 +735,8 @@ code, and what changed:
 | feature ids in 4 bits, 16 uniforms | a few objects exhaust it | a **32-bit feature id** per mark, its development read from a feature texture. Brushes gives each object its own range |
 | contours carried their second normal in their colour, then forced to ink | a brush's contour colour was lost | a **third texel** per splat: support, second normal, feature, element. Contours keep their colour (Mist's stems are now light, as they asked to be) |
 
+![The bench: one stroke made editable: its handles, its pressure, its wash](splats/v-bench.jpg)
+
 Two renderer issues were fixed too:
 - **Support is explicit** on every splat: *surface*, *edge* or *free*. Only surface marks take the surface-plane depth under
   each corner. Mist's splats are free, so they no longer go through the surface-depth branch with a made-up upward normal.
@@ -724,6 +783,8 @@ several scales, density toward the sun and the view angle, while the renderer st
 (The article: <https://charlesgrassi.dev/blog/neural-volumetric-clouds/>.)
 The question here is whether a compact spatial asset (splats) plus a compact learned lighting function keeps more of
 an expensive scene's behaviour, within a phone's budget.
+
+![Mist: a volume of splats lit by a tiny network evaluated per splat in the shader](splats/v-mist.jpg)
 
 **The scene** is a procedural bank of mist between bamboo stems (the stems opaque in its density, so they shadow it),
 drawn with the brushes, under a moving sun.
