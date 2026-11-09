@@ -20,6 +20,7 @@ import { Sorter, type SortDone } from './sort';
 import { MARK, STATES, stoneShape, type Look, type Stone } from './stone';
 import { inkScene, type InkStats } from './ink';
 import { fetchField, fieldDrawing } from './field';
+import { TAUGHT } from './taught';
 import { drawer, lift as drawerLift } from '../drawer/drawer';
 import { sections } from '../drawer/sections';
 import { brushScene, composedScene, stoneDrawing, REF_CAM, type BrushScene, type ComposedScene } from './subjects';
@@ -29,7 +30,7 @@ import { benchScene, PRESSURES } from './bench';
 import { penScene, type PenScene } from './penscene';
 import { paint as autographPaint } from '../autograph/ink';
 import type { Editor, EditItem, Snapshot } from './edit';
-import { competitionOf, controls, ease, features as groupFeatures, learned, marksAtDetail, marksOf, matchBudget, rules, jitter, type GroupInfo, type Treatment, type ViewIn } from './policy';
+import { competitionOf, controls, ease, features as groupFeatures, learned, taught, marksAtDetail, marksOf, matchBudget, rules, jitter, type GroupInfo, type Treatment, type ViewIn } from './policy';
 import { POLICY } from './policynet';
 import type { Material, V as BV } from './brush';
 
@@ -582,7 +583,7 @@ const syncs = [
   seg('thins', [['by rank', () => { thin = 0; }, () => thin === 0], ['evenly', () => { thin = 1; }, () => thin === 1]]),
   seg('views', [['hero', () => setView('hero'), () => false], ['grazing', () => setView('grazing'), () => false], ['reverse', () => setView('reverse'), () => false], ['orbit', () => { setView('hero'); orbitFrom = performance.now(); }, () => orbitFrom !== null]]),
   seg('relations', [['compose', () => { compose = !compose; reopen(); }, () => compose], ['halo', () => { haloOn = !haloOn; }, () => haloOn]]),
-  seg('policies', [['ranks', () => { policyMode = 'ranks'; policyTarget = null; }, () => policyMode === 'ranks'], ['rules', () => { policyMode = 'rules'; policyTarget = null; }, () => policyMode === 'rules'], ['learned', () => { policyMode = 'learned'; policyTarget = null; }, () => policyMode === 'learned'], ['judge', () => { judge.on = true; judgeNext(); }, () => judge.on]]),
+  seg('policies', [['ranks', () => { policyMode = 'ranks'; policyTarget = null; }, () => policyMode === 'ranks'], ['rules', () => { policyMode = 'rules'; policyTarget = null; }, () => policyMode === 'rules'], ['learned', () => { policyMode = 'learned'; policyTarget = null; }, () => policyMode === 'learned'], ['taught', () => { policyMode = 'taught'; policyTarget = null; }, () => policyMode === 'taught'], ['judge', () => { judge.on = true; judgeNext(); }, () => judge.on]]),
   seg('tools', [['brush', () => { brush = !brush; }, () => brush], ['clear', () => { features.fill(0); lastPaint = null; }, () => false], ['occluder', () => { occlude = !occlude; }, () => occlude]]),
 ];
 function syncStone() { syncs.forEach((f) => f()); $('stone-controls').hidden = !stone && !brushes && !(captured && inkOn); $('composition').hidden = !composed; syncPanel(); }
@@ -675,6 +676,9 @@ function viewIn(pos: number[], fwd: number[]): ViewIn { return { eye: [pos[0], p
 /** the rank-based treatment as a treatment (what the global detail keeps), so every policy draws through the same controls */
 function ranksAsTreatment(G: GroupInfo[]): Treatment { const e = new Float32Array(G.length), s = new Float32Array(G.length).fill(1); G.forEach((g, i) => { e[i] = Math.max(0, Math.min(1, (g.hi - (1 - detail) + 0.0001) / (g.hi - g.lo + 0.03))); }); return { e, s }; }
 function treatmentFor(kind: string, G: GroupInfo[], F: number[][], budget: number): Treatment {
+  // (taught by a drawn teacher: its decisions for each edge and face, as they are; `?teacher=sumi|sumi-bold|sumi-light`,
+  // or with `-minus-right` for scoring on a view its table never saw)
+  if (kind === 'taught') return taught(G, TAUGHT, qs.get('teacher') ?? 'sumi');
   if (kind === 'learned' && POLICY) return learned(POLICY, G, F, budget);
   if (kind === 'rules' || kind === 'learned') return matchBudget(G, rules(G, F, detail), budget);
   return ranksAsTreatment(G);

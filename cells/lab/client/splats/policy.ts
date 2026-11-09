@@ -173,3 +173,40 @@ export function ease(prev: Treatment | null, next: Treatment, k: number): Treatm
   return { e: next.e.map((x, i) => prev.e[i] + (x - prev.e[i]) * k), s: next.s.map((x, i) => prev.s[i] + (x - prev.s[i]) * k) };
 }
 void norm;
+
+/**
+ * A treatment taught by a drawn teacher (taught.ts, devtools/splats-decisions.py): each group given what the teacher
+ * decided for the edge or face it draws. A group is matched to the teacher's entry of its own object and a kind it
+ * could be (a stroke to a crease, a silhouette or a line; a wash to a face), the nearest in the scene; one with no
+ * such entry takes its object's average for that kind. On the ground, shadows take the teacher's ground tone, and the
+ * contacts with them; the ground's lines take none (the teacher was shown no bank). The decision (ink along it, tone on
+ * it) becomes how much of the group is kept, from its heart, and how strongly.
+ */
+export interface TaughtTable { entries: Array<{ name: string; kind: string; obj: number; pts: number[][] }>; teachers: Record<string, number[]> }
+export function taught(groups: GroupInfo[], T: TaughtTable, teacher: string): Treatment {
+  const d = T.teachers[teacher] ?? Object.values(T.teachers)[0], e = new Float32Array(groups.length), s = new Float32Array(groups.length);
+  const ss = (a: number, b: number, x: number) => { const t = Math.max(0, Math.min(1, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
+  const val = (k: number) => Math.max(0, d[k]);
+  const ground = T.entries.map((en, k) => (en.kind.startsWith('ground') ? val(k) : -1)).filter((v) => v >= 0), groundTone = ground.length ? ground.reduce((a, b) => a + b, 0) / ground.length : 0;
+  groups.forEach((g, i) => {
+    let dec = 0;
+    const stroke = g.role === 'line' || g.role === 'edge';
+    if (g.role === 'ground') dec = g.key.endsWith('shadow') ? groundTone * 2.2 : 0;
+    else if (g.role === 'contact') dec = Math.min(1, groundTone * 3);
+    else {
+      const ok = (k: string) => (stroke ? k === 'crease' || k === 'silhouette' || k.startsWith('line') : k === 'face');
+      const cand = T.entries.map((en, k) => ({ en, k })).filter(({ en, k }) => en.obj === g.object && ok(en.kind) && d[k] >= 0 && en.pts.length);
+      if (cand.length) {
+        const pts = g.samples.length ? g.samples : [g.centre];
+        let best = cand[0], bd = Infinity;
+        for (const c of cand) { let sum = 0; for (const p of pts) { let m = Infinity; for (const q of c.en.pts) m = Math.min(m, Math.hypot(p[0] - q[0], p[1] - q[1], p[2] - q[2])); sum += m; } if (sum < bd) { bd = sum; best = c; } }
+        // (a far match is no match: the object's average for that kind instead)
+        dec = bd / pts.length < 0.35 ? val(best.k) : cand.reduce((a, c) => a + val(c.k), 0) / cand.length;
+      }
+    }
+    e[i] = stroke ? ss(0.1, 0.55, dec) : ss(0.02, 0.3, dec);
+    s[i] = Math.max(0.7, Math.min(1.15, stroke ? 0.72 + 0.5 * dec : 0.72 + 1.1 * dec));
+  });
+  return { e, s };
+}
+

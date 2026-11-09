@@ -771,6 +771,58 @@ of its own execution at 384 × 256. Lower is better for tone and decisions; agre
 - The unit to learn is the decision. It's what hands share, it's small enough for a few views to teach, and the brush
   already knows how to draw a decided stroke black.
 
+### Decisions as the unit: a rule, a table, and the brush
+
+`devtools/splats-decisions.py`. Each teacher's view is about 59 decisions; three sumi executions of six views give
+1,068.
+
+**Can a decision be predicted for a view it wasn't drawn from?** Leaving one view out, all six in turn:
+
+| what predicts the held-out view | decision error | agreement |
+|---|---|---|
+| blank paper | 235 | |
+| a table: each entry's average over the other five views | 57 | 0.68 |
+| the table with a view term per entry | 58 | 0.69 |
+| a rule: one small network for every edge and face, from 25 features of its geometry and how it's seen | 62 | 0.64 |
+| a sibling hand's decisions for the same view | 36 | 0.82 |
+
+- **For these teachers a decision belongs to the edge or face, not the view.** A view term adds nothing: what changes
+  with the view is which entries are in sight, which the geometry already knows.
+- **A rule that doesn't know which edge is which does nearly as well as the table** (0.64 against 0.68), from kind,
+  object, how the faces turn to the eye and across the picture, outline or not, direction, size and height.
+- **But the rule doesn't carry to an object it never saw.** With each object held out whole, it does no better than
+  the average decision for that kind of thing (error 58 against 50). One scene of five objects can't teach a rule
+  about geometry. That would take restyled wireframes of other scenes, not more views of this one.
+
+**The brush draws the decisions** (`policy.ts` `taught`, `?scene=composed&policy=taught&teacher=sumi`). Each group of
+the composed scene is matched to the teacher's entry of its own object and a kind it could be (a stroke to a crease,
+silhouette or line; a wash to a face), the nearest in the scene. The decision sets how much of the group is kept and
+how strongly. The ground's lines get none, since the teacher was shown no bank.
+
+![The right view, which no table saw. Top: the scene by its ranks (resolved, sparse), the rules, the learned policy. Middle: taught by each sumi teacher, then the sumi teacher. Bottom: the bold and light teachers](splats/b-taught.jpg)
+
+Scored on the right view, each table leaving it out (`splats-taught-score.mjs`, `splats-field-score.py`):
+
+| what drew it | sumi: tone | decisions | agreement | bold: tone | decisions | agreement | light: tone | decisions | agreement |
+|---|---|---|---|---|---|---|---|---|---|
+| blank paper | 7.09 | 327 | | 3.78 | 148 | | 1.88 | 166 | |
+| our best policy (rules or ranks) | 5.50 | 117 | 0.59 | 3.28 | 110 | 0.40 | 1.47 | 103 | 0.46 |
+| taught, drawn by the brush | 5.06 | 98 | 0.66 | 3.17 | 121 | 0.49 | 1.43 | 126 | 0.50 |
+| fitted field, shapes fitted | 1.45 | 53 | 0.80 | 1.78 | 76 | 0.52 | 0.62 | 57 | 0.62 |
+
+- **Taught agrees with its teacher more than any of our own policies does** (0.66, 0.49, 0.50 against 0.59, 0.40,
+  0.46), and it's the first of these to look like confident drawing: black strokes, the outline, the cornice, the
+  nodes.
+- **It still scores well behind the fitted fields.** It delivers the strokes and not the tone: the dark shaded face
+  and the cast shadows are missing or faint. The mapping from a decision to how much the brush lays down was set by
+  hand, and the measures count tone the brush didn't lay.
+- **So the two halves have opposite faults.** The field has the tone and smears the strokes; the brush has the
+  strokes and misses the tone.
+
+**Next:** close the loop on the brush. Measure the decisions of what it drew and adjust each group until they match
+the teacher's, instead of mapping by hand. Then washes and shadows carry their tone, and the score says whether crisp
+strokes with the right tone beat the smeared field.
+
 ## The Bench: one brush made dependable, one stroke made editable
 
 `?scene=bench` (`bench.ts`; brush.ts). This answers a source review of the brush. Its five findings, all confirmed in the
@@ -946,7 +998,7 @@ Roughly in order of what each teaches:
 
 ## Flags
 
-`?scene=stone|brushes|composed|pen|field|bench|mist|garden|plush|nike|train` · `?field=stone|composed` · `?flat` (a fitted field's baseline) · `?compose=0` · `?halo=0` · `?halopx=` · `?policy=ranks|rules|learned` · `?judge` · `?perf` · `?ink` (a captured scene in ink) · `?scene=pen&part=word|board|culm|bank|rock&reference` · `?look=dry|wash` · `?detail=0..1` · `?thin=even` · `?only=wash` · `?view=hero|grazing|reverse` · `?orbit` · `?detail=0.25|0.55|1` (sparse, intermediate, resolved) · `?brush` · `?occluder=0` · `?clean` (no controls) · `?url=…` (any `.splat` or `.ply` CORS lets it read) · `?up=1` (for a file that's
+`?scene=stone|brushes|composed|pen|field|bench|mist|garden|plush|nike|train` · `?field=stone|composed` · `?flat` (a fitted field's baseline) · `?compose=0` · `?halo=0` · `?halopx=` · `?policy=ranks|rules|learned|taught` · `?teacher=sumi|sumi-bold|sumi-light` · `?judge` · `?perf` · `?ink` (a captured scene in ink) · `?scene=pen&part=word|board|culm|bank|rock&reference` · `?look=dry|wash` · `?detail=0..1` · `?thin=even` · `?only=wash` · `?view=hero|grazing|reverse` · `?orbit` · `?detail=0.25|0.55|1` (sparse, intermediate, resolved) · `?brush` · `?occluder=0` · `?clean` (no controls) · `?url=…` (any `.splat` or `.ply` CORS lets it read) · `?up=1` (for a file that's
 y-up) · `?mode=0..3` · `?size=` · `?res=` · `?count=` (garden size) · `?noworkers` · `?preview`
 
 Checks: `node cells/lab/devtools/splats.test.mjs` (formats, covariance, sort) and
