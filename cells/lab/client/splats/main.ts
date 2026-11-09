@@ -583,7 +583,29 @@ const syncs = [
   seg('policies', [['ranks', () => { policyMode = 'ranks'; policyTarget = null; }, () => policyMode === 'ranks'], ['rules', () => { policyMode = 'rules'; policyTarget = null; }, () => policyMode === 'rules'], ['learned', () => { policyMode = 'learned'; policyTarget = null; }, () => policyMode === 'learned'], ['judge', () => { judge.on = true; judgeNext(); }, () => judge.on]]),
   seg('tools', [['brush', () => { brush = !brush; }, () => brush], ['clear', () => { features.fill(0); lastPaint = null; }, () => false], ['occluder', () => { occlude = !occlude; }, () => occlude]]),
 ];
-function syncStone() { syncs.forEach((f) => f()); $('stone-controls').hidden = !stone && !brushes && !(captured && inkOn); $('relations').hidden = !composed; $('policies').hidden = !composed; }
+function syncStone() { syncs.forEach((f) => f()); $('stone-controls').hidden = !stone && !brushes && !(captured && inkOn); $('composition').hidden = !composed; syncPanel(); }
+/**
+ * The panel's sections (splats.html): one open at a time (the open one closes the others, so there's room to work in
+ * it), remembered between visits; each closed one says in a line what it's set to. If the open section is hidden for
+ * this scene, the first one shown opens instead.
+ */
+const PANEL_KEY = 'splats-panel';
+const secs = () => [...document.querySelectorAll<HTMLDetailsElement>('#panel details.sec')];
+let panelOpen: string | null = (() => { try { return localStorage.getItem(PANEL_KEY); } catch { return null; } })() ?? 'drawing';
+for (const d of document.querySelectorAll<HTMLDetailsElement>('#panel details')) d.addEventListener('toggle', () => {
+  if (!d.open || !d.classList.contains('sec')) return;
+  for (const o of secs()) if (o !== d && o.open) o.open = false;
+  panelOpen = d.dataset.key ?? null; try { if (panelOpen) localStorage.setItem(PANEL_KEY, panelOpen); } catch { /* not kept */ }
+});
+function syncPanel() {
+  const shown = secs().filter((d) => !d.hidden);
+  if (!shown.some((d) => d.open)) { const d = shown.find((x) => x.dataset.key === panelOpen) ?? shown[0]; if (d) d.open = true; }
+  const set = (id: string, t: string) => { const e = document.getElementById(id); if (e && e.textContent !== t) e.textContent = t; };
+  set('sum-drawing', `${look} · detail ${Math.round(detail * 100)}%${composed ? ` · ${policyMode}` : ''}`);
+  set('sum-bench', bench && benchSel >= 0 ? `${bench.items[benchSel].name} · ${bench.items[benchSel].stroke.material}` : 'none selected');
+  set('sum-mist', `${light} · sun ${sunAz.toFixed(1)}, ${sunEl.toFixed(1)}`);
+  set('sum-display', `${MODES[mode]} · size ${size.toFixed(2)} · res ${res}`);
+}
 slider('detail', () => detail, (v) => { detail = v; syncStone(); }, (v) => `${Math.round(v * 100)}%`);
 function syncDetail() { const el = $<HTMLInputElement>('detail'); el.value = String(detail); $('detail-v').textContent = `${Math.round(detail * 100)}%`; }
 LIGHTS.forEach((l) => { const b = document.createElement('button'); b.textContent = l; b.onclick = () => { light = l; relight(); syncMist(); }; $('lights').append(b); });
@@ -635,8 +657,10 @@ slider('sunel', () => sunEl, (v) => { sunEl = v; if (light === 'reference') reli
     $('b-note').textContent = (benchSel >= 0 ? `${bench.items[benchSel].name} stroke selected: drag its points to bend it. ` : 'tap a stroke to select it. ') + benchMsg;
   };
 }
-$('fold').onclick = () => { const f = document.documentElement.classList.toggle('folded'); $('fold').setAttribute('aria-expanded', String(!f)); $('fold').textContent = f ? 'controls' : 'hide'; };
-$('fold').textContent = 'hide';
+// (the panel hidden by the *hide* in its top row; brought back by the *controls* button, shown only while it's hidden)
+const fold = (f: boolean) => { document.documentElement.classList.toggle('folded', f); $('fold').setAttribute('aria-expanded', String(!f)); };
+$('fold').onclick = () => fold(false); $('fold-in').onclick = () => fold(true);
+$('fold').textContent = 'controls';
 $('j-a').onclick = () => judgeChoose('A'); $('j-b').onclick = () => judgeChoose('B');
 $('j-same').onclick = () => judgeChoose('same'); $('j-skip').onclick = () => judgeChoose('skip'); $('j-export').onclick = judgeExport;
 $('j-close').onclick = () => { judge.on = false; judge.stage = 'idle'; $('judge').hidden = true; syncStone(); };
@@ -823,7 +847,7 @@ function frame() {
   judgeStep();
   frames++;
   if (t - fpsT > 500) {
-    fps = (frames * 1000) / (t - fpsT); frames = 0; fpsT = t;
+    fps = (frames * 1000) / (t - fpsT); frames = 0; fpsT = t; syncPanel();
     $('stats').textContent = (stone || brushes || bench) && scene ? `${composed && policyMode !== 'ranks' ? policyNote : `${Math.round(shareAt(detail) * scene.n)} of ${scene.n} marks`}${features.some((v) => v > 0) ? ' + brushed' : ''} · ${fps.toFixed(0)} fps` : scene ? `${(scene.n / 1000).toFixed(0)}k splats · ${fps.toFixed(0)} fps · sort ${sortMs.toFixed(0)} ms${sorter.worker ? '' : ' (here)'} · ${w}×${h} · loaded in ${(loadMs / 1000).toFixed(1)} s` : '';
   }
   requestAnimationFrame(frame);
