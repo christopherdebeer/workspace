@@ -722,6 +722,55 @@ All errors below are held-out error on the right view, with the other five views
   - What's wrong: streaks across the stone's faces (stretched discs), a paler, greyer tone than the bold strokes it
     learned from, and smeared ghosts at the edges from behind.
 
+### Measuring what drawn teachers share
+
+The sumi comparisons above were all scored by pixel error, and their differences were a few percent. Before building
+on them, the measure itself was tested (`devtools/splats-field-measure.py`). The restyled sheets are independent
+drawings of the same geometry, so a measure is only worth optimising if it passes two tests: given one execution's
+drawing of a view, it finds the same view among another execution's six (chance 1 in 6), and it scores that view far
+nearer than blank paper.
+
+| measure, three sumi executions | finds the same view | same view ÷ blank paper |
+|---|---|---|
+| pixel error at 192 × 128 | 36 of 36 | 1.00 |
+| tone: the same, blurred at three scales | 36 of 36 | 0.49 |
+| decisions: ink along each edge, tone on each face | 28 of 36 | 0.30 |
+
+- **Pixel error finds the view but has no headroom.** The right view by another hand scores no better than blank
+  paper, because two hands put their strokes in different places. It can't rank models, and it did all the ranking
+  above.
+- **Tone is a valid score for a picture.**
+- **Decisions are what the hands share.** The scene's known geometry (`wire-mesh.json`) turns a drawing into about 39
+  inks along edges (creases, silhouettes, the seam, the nodes, the niche) and 21 tones (faces, the ground's shadow).
+  Two executions agree on them at a correlation of 0.73 (0.69 across all seven styles).
+
+![The held-out right view: the teacher, the field fitted to its other five views, and another hand's drawing of the same view; for sumi (top) and bold (bottom)](splats/b-measure.jpg)
+
+**The fields scored again** (`splats-field-score.py`), on the right view held out, each fitted to the other five views
+of its own execution at 384 × 256. Lower is better for tone and decisions; agreement is the correlation of decisions.
+
+| what drew the held-out view | sumi: tone | decisions | agreement | bold: tone | decisions | agreement | light: tone | decisions | agreement |
+|---|---|---|---|---|---|---|---|---|---|
+| blank paper | 7.09 | 327 | | 3.78 | 148 | | 1.88 | 166 | |
+| another hand, same view | 2.11, 2.49 | 147, 109 | 0.51, 0.63 | 0.78 (light) | 28 | 0.85 | 0.78 (bold) | 28 | 0.85 |
+| field, one opacity a disc | 1.33 | 68 | 0.74 | 1.67 | 83 | 0.44 | 0.69 | 63 | 0.59 |
+| field, view terms and fitted shapes | 1.45 | 53 | 0.80 | 1.78 | 76 | 0.52 | 0.62 | 57 | 0.62 |
+
+- **Every field beats blank paper by two to three times** on both measures. By pixel error the bold field had equalled
+  blank paper; that was the measure, not the field.
+- **The sumi field beats a different hand's drawing of the same view** on tone, decisions and agreement. It learned
+  that execution's own manner across views.
+- **Bold and light are one hand at two weights**, and each predicts the other's view far better than either field
+  does (decisions 28 against 57 to 76). A sibling drawing of the *same* view is worth more than five views of your own.
+- **Fitted shapes help the decisions every time** (53 against 68, 76 against 83, 57 against 63), which is what the
+  eye said and pixel error denied. Tone is mixed.
+
+**What follows:**
+- The fields know more than they show. Their decisions are right far more often than their pictures look right: the
+  smear is in the drawing of a stroke, not in knowing where one goes.
+- The unit to learn is the decision. It's what hands share, it's small enough for a few views to teach, and the brush
+  already knows how to draw a decided stroke black.
+
 ## The Bench: one brush made dependable, one stroke made editable
 
 `?scene=bench` (`bench.ts`; brush.ts). This answers a source review of the brush. Its five findings, all confirmed in the
