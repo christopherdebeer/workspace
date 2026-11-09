@@ -1,11 +1,10 @@
 {
   "cell": "c15r/lab",
   "cellId": "lab-8928acf3",
-  "treeVersion": "tree:b11604f33e3dfb9d3385304cb10d6d3c279f4969f4243d6d2cee980b86640f32",
-  "syncedAt": "2026-11-09T13:08:03.946Z",
+  "treeVersion": "tree:2aa28341420ae2838ae7626f62d38dc2c3d4f20beaede922b237dba91d0f7e2f",
+  "syncedAt": "2026-11-09T13:10:02.265Z",
   "files": {
     "README.md": "sha256:665df4179140457c44ea9e0f6f5820bd6e9b557fb196a37cf1245a07cb11f7c6",
-    "app.js": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
     "client/autograph/autobiography.ts": "sha256:1aa72dbb927e6de87cdd920842be3b826ae520031f2589fadc9d4fe98abfbd67",
     "client/autograph/catalog.ts": "sha256:574a5007c699601c4bde393cccfabc6df859a66982991ce442d8e5967487327b",
     "client/autograph/fingerprints.json": "sha256:fc1342bf2ac57e6476c05f43d43fe8396067eafe33e48a42e8c899835e2139ab",
@@ -621,7 +620,7 @@
     "devtools/judgements/2026-11-08.json": "sha256:2aec06f57f55cfeca738fe44333f8473c81f5e026e95111f955160e4f6ad8715",
     "devtools/judgements/self-2026-11-08.json": "sha256:970f699c55a3dfa0b30b64d33db3eb96f3ce3e2f441dde932876df0e352113a1",
     "devtools/lab-globals.mjs": "sha256:85adad6a8fd7d1127f091cd8cb055960d7a641ceeafed974cc37242d62f53029",
-    "devtools/lab-index-check.mjs": "sha256:743afe5df137bbc4e71b80ee2e2a2dd147052a41fce506233434ea8bc4a219de",
+    "devtools/lab-index-check.mjs": "sha256:e38862a88595800a9f72a69c2a4f88693d410db82e7ae6c89f791f68f73ee13d",
     "devtools/labyrinth-atlas.mjs": "sha256:14c77149900dc3dc234208eebb0f59f45b2a39feeee886008dcb1ec6d35f5818",
     "devtools/labyrinth-connectors.mjs": "sha256:e4e4190fe9dcf6b11a95c79426dfbc433ef2f71bf56bcf47e6199de8bbec9386",
     "devtools/labyrinth-encounters-draw.mjs": "sha256:3da7bd5b6a301c830d344bbd0579bb59fd3e64cbeb7fdc2ac9e5646ed2d3ee7b",

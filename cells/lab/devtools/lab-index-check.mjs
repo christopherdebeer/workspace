@@ -8,6 +8,9 @@ import { createRequire } from 'node:module';
 import { chromium } from 'playwright';
 const out = new URL('../_idx.cjs', import.meta.url).pathname, app = new URL('../app.js', import.meta.url).pathname, stub = !existsSync(app);
 if (stub) writeFileSync(app, '');
+// (the stub and the bundle removed however the run ends: a stub app.js left behind would be synced into the cell)
+const tidy = () => { rmSync(out, { force: true }); if (stub) rmSync(app, { force: true }); };
+process.on('exit', tidy); process.on('uncaughtException', (e) => { tidy(); console.error(e); process.exit(1); });
 await build({ entryPoints: [new URL('../index.ts', import.meta.url).pathname], bundle: true, platform: 'node', format: 'cjs', outfile: out, external: ['@aws-sdk/*'], logLevel: 'error' });
 // (the handler resolves files from its own folder: run it as if it sat in cells/lab)
 const require = createRequire(import.meta.url), mod = require(out);
