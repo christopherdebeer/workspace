@@ -585,9 +585,11 @@ const syncs = [
   seg('views', [['hero', () => setView('hero'), () => false], ['grazing', () => setView('grazing'), () => false], ['reverse', () => setView('reverse'), () => false], ['orbit', () => { setView('hero'); orbitFrom = performance.now(); }, () => orbitFrom !== null]]),
   seg('relations', [['compose', () => { compose = !compose; reopen(); }, () => compose], ['halo', () => { haloOn = !haloOn; }, () => haloOn]]),
   seg('policies', [['ranks', () => { policyMode = 'ranks'; policyTarget = null; }, () => policyMode === 'ranks'], ['rules', () => { policyMode = 'rules'; policyTarget = null; }, () => policyMode === 'rules'], ['learned', () => { policyMode = 'learned'; policyTarget = null; }, () => policyMode === 'learned'], ['taught', () => { policyMode = 'taught'; policyTarget = null; }, () => policyMode === 'taught'], ['judge', () => { judge.on = true; judgeNext(); }, () => judge.on]]),
+  // (whose decisions a taught drawing follows: an image model's three sumi-e restyles of the scene's wireframes)
+  seg('teachers', (['sumi', 'sumi-bold', 'sumi-light'] as const).map((t) => [t.replace('sumi-', ''), () => { teacher = t; policyTarget = null; }, () => teacher.replace(/-minus-right$/, '') === t] as [string, () => void, () => boolean])),
   seg('tools', [['brush', () => { brush = !brush; }, () => brush], ['clear', () => { features.fill(0); lastPaint = null; }, () => false], ['occluder', () => { occlude = !occlude; }, () => occlude]]),
 ];
-function syncStone() { syncs.forEach((f) => f()); $('stone-controls').hidden = !stone && !brushes && !(captured && inkOn); $('composition').hidden = !composed; syncPanel(); }
+function syncStone() { syncs.forEach((f) => f()); $('stone-controls').hidden = !stone && !brushes && !(captured && inkOn); $('composition').hidden = !composed; $('teachers').hidden = policyMode !== 'taught'; syncPanel(); }
 /**
  * The panel is a drawer (client/drawer, made for every experiment): closed to its grip and a line (the scene, its
  * stats); focus, the scene chips and status; full, the sections (drawing, stroke, light, display), one open at a time,
@@ -599,7 +601,7 @@ const panel = drawer($('panel'), { persist: 'splats-drawer', start: 'focus', cap
 const panelSections = sections($('panel'), {
   persist: 'splats-panel',
   summaries: () => ({
-    drawing: `${look} · detail ${Math.round(detail * 100)}%${composed ? ` · ${policyMode}` : ''}`,
+    drawing: `${look} · detail ${Math.round(detail * 100)}%${composed ? ` · ${policyMode}${policyMode === 'taught' ? ` by ${teacher.replace(/-minus-right$/, '')}` : ''}` : ''}`,
     bench: bench && benchSel >= 0 ? `${bench.items[benchSel].name} · ${bench.items[benchSel].stroke.material}` : 'none selected',
     mist: `${light} · sun ${sunAz.toFixed(1)}, ${sunEl.toFixed(1)}`,
     display: `${MODES[mode]} · size ${size.toFixed(2)} · res ${res}`,
@@ -680,11 +682,13 @@ function treatmentFor(kind: string, G: GroupInfo[], F: number[][], budget: numbe
   // (taught by a drawn teacher: its decisions for each edge and face, as they are; `?teacher=sumi|sumi-bold|sumi-light`,
   // or with `-minus-right` for scoring on a view its table never saw)
   // (fitted where it's been fitted (never on the right view, so `-minus-right` names the same fit), else by hand)
-  if (kind === 'taught') { const t = qs.get('teacher') ?? 'sumi'; return taughtFit(G, TAUGHT_FIT[t.replace(/-minus-right$/, '')]) ?? taught(G, TAUGHT, t); }
+  if (kind === 'taught') { const t = teacher; return taughtFit(G, TAUGHT_FIT[t.replace(/-minus-right$/, '')]) ?? taught(G, TAUGHT, t); }
   if (kind === 'learned' && POLICY) return learned(POLICY, G, F, budget);
   if (kind === 'rules' || kind === 'learned') return matchBudget(G, rules(G, F, detail), budget);
   return ranksAsTreatment(G);
 }
+/** the teacher a taught drawing follows (`?teacher=sumi|sumi-bold|sumi-light`) */
+let teacher = qs.get('teacher') ?? 'sumi';
 /** a treatment set from outside (devtools/splats-taught-fit.mjs, fitting one): applied as given, not eased */
 let policyOverride: Treatment | null = null;
 function applyPolicy(dt: number, pos: number[], fwd: number[]) {

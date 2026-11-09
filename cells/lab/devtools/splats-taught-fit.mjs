@@ -8,7 +8,8 @@
 //   the stroke is kept; how heavy that ink is, a unit of ink, sets how wide its marks are;
 // - a wash group, against its face (or its object's body, or the ground): the tone's peak sets its strength; how much
 //   of the face the tone covers (its mean against its peak) sets how far the wash reaches;
-// - an edge shows away from the outline as far as the teacher inks interior creases against outline ones;
+// - an edge that is a real crease shows away from the outline as far as the teacher inks interior creases against
+//   outline ones (a culm's sides, which are its silhouette wherever it's seen from, stay outline only);
 // - a contact goes with its object's strokes; the ground's lines get nothing.
 // The best treatment met is written into client/splats/taughtfit.ts, by group key (`?policy=taught&teacher=<teacher>`).
 import { withWood } from './harness.mjs';
@@ -40,7 +41,7 @@ await withWood(async (wood) => {
     const ns = Object.keys(E).filter(kindOf(m)); if (!ns.length) return null;
     const keys = Object.keys(E[ns[0]]); return Object.fromEntries(keys.map((k) => [k, ns.reduce((a, n) => a + E[n][k], 0) / ns.length]));
   };
-  const st = map.map((m) => ({ e: m.cls === 'stroke' ? 0.6 : m.cls === 'none' ? 0 : m.cls === 'contact' ? 0.5 : 0.8, s: m.cls === 'stroke' || m.cls === 'contact' || m.cls === 'none' ? 1 : 1.5, w: m.cls === 'stroke' ? 1.3 : 1, inner: m.role === 'edge' ? target.inner : 0 }));
+  const st = map.map((m) => ({ e: m.cls === 'stroke' ? 0.6 : m.cls === 'none' ? 0 : m.cls === 'contact' ? 0.5 : 0.8, s: m.cls === 'stroke' || m.cls === 'contact' || m.cls === 'none' ? 1 : 1.5, w: m.cls === 'stroke' ? 1.3 : 1, inner: m.role === 'edge' && m.kind === 'crease' ? target.inner : 0 }));
   const contacts = () => map.forEach((m, i) => { if (m.cls !== 'contact') return; const own = map.map((x, j) => (x.cls === 'stroke' && x.object === m.object ? st[j] : null)).filter(Boolean); if (own.length) { st[i].e = own.reduce((a, x) => a + x.e, 0) / own.length; st[i].w = own.reduce((a, x) => a + x.w, 0) / own.length; } });
   const render = async () => {
     await page.evaluate((t) => window.__splats.composed.setTreatment(t), { e: st.map((x) => x.e), s: st.map((x) => x.s), w: st.map((x) => x.w), inner: st.map((x) => x.inner) });

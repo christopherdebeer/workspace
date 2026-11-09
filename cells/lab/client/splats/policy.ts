@@ -182,8 +182,8 @@ void norm;
  * the edge or face it draws.
  *
  * **The match** (`taughtMap`): a group to the teacher's entry of its own object and a kind it could be, the nearest in
- * the scene: a stroke to a crease, a silhouette or a line; a wash to a face. A wash on an object whose faces are too
- * small to have entries (a culm) goes with the object's body; a far match is no match (the object's average for that
+ * the scene: a stroke to a crease, a silhouette or a line; a wash to a face. A culm's washes go with its body as a
+ * whole; a far match is no match (the object's average for that
  * kind instead). On the ground, shadows go with the teacher's ground tone, contacts with their object's strokes, and
  * the ground's lines with nothing (the teacher was shown no bank).
  *
@@ -192,17 +192,18 @@ void norm;
  */
 export interface TaughtTable { entries: Array<{ name: string; kind: string; obj: number; pts: number[][] }>; teachers: Record<string, number[]> }
 export type TaughtClass = 'stroke' | 'wash' | 'body' | 'ground' | 'contact' | 'none';
-export interface TaughtMatch { key: string; role: Role; object: number; cls: TaughtClass; entry: string | null; k: number }
+export interface TaughtMatch { key: string; role: Role; object: number; cls: TaughtClass; entry: string | null; kind: string | null; k: number }
 /** a group's name in a fit: its object and its key (keys repeat from object to object: each culm has its nodes) */
 export const fitKey = (g: GroupInfo) => `${g.object}:${g.key}`;
 export function taughtMap(groups: GroupInfo[], T: TaughtTable): TaughtMatch[] {
   const hasFaces = new Set(T.entries.filter((en) => en.kind === 'face').map((en) => en.obj));
   return groups.map((g) => {
-    const out = (cls: TaughtClass, k = -1): TaughtMatch => ({ key: fitKey(g), role: g.role, object: g.object, cls, entry: k >= 0 ? T.entries[k].name : null, k });
+    const out = (cls: TaughtClass, k = -1): TaughtMatch => ({ key: fitKey(g), role: g.role, object: g.object, cls, entry: k >= 0 ? T.entries[k].name : null, kind: k >= 0 ? T.entries[k].kind : null, k });
     if (g.role === 'ground') return out(g.key.endsWith('shadow') ? 'ground' : 'none');
     if (g.role === 'contact') return out('contact');
     const stroke = g.role === 'line' || g.role === 'edge';
-    if (!stroke && !hasFaces.has(g.object)) return out('body');
+    // (a culm's washes go round its body, one tone: not face by face)
+    if (!stroke && (!hasFaces.has(g.object) || /(^|\/)body\//.test(g.key))) return out('body');
     const ok = (k: string) => (stroke ? k === 'crease' || k === 'silhouette' || k.startsWith('line') : k === 'face');
     const pts = g.samples.length ? g.samples : [g.centre];
     let best = -1, bd = Infinity;
