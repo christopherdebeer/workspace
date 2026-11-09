@@ -21,6 +21,7 @@ import { MARK, STATES, stoneShape, type Look, type Stone } from './stone';
 import { inkScene, type InkStats } from './ink';
 import { fetchField, fieldDrawing } from './field';
 import { TAUGHT } from './taught';
+import { TAUGHT_FIT } from './taughtfit';
 import { drawer, lift as drawerLift } from '../drawer/drawer';
 import { sections } from '../drawer/sections';
 import { brushScene, composedScene, stoneDrawing, REF_CAM, type BrushScene, type ComposedScene } from './subjects';
@@ -30,7 +31,7 @@ import { benchScene, PRESSURES } from './bench';
 import { penScene, type PenScene } from './penscene';
 import { paint as autographPaint } from '../autograph/ink';
 import type { Editor, EditItem, Snapshot } from './edit';
-import { competitionOf, controls, ease, features as groupFeatures, learned, taught, marksAtDetail, marksOf, matchBudget, rules, jitter, type GroupInfo, type Treatment, type ViewIn } from './policy';
+import { competitionOf, controls, ease, features as groupFeatures, learned, taught, taughtFit, taughtMap, marksAtDetail, marksOf, matchBudget, rules, jitter, type GroupInfo, type Treatment, type ViewIn } from './policy';
 import { POLICY } from './policynet';
 import type { Material, V as BV } from './brush';
 
@@ -678,12 +679,16 @@ function ranksAsTreatment(G: GroupInfo[]): Treatment { const e = new Float32Arra
 function treatmentFor(kind: string, G: GroupInfo[], F: number[][], budget: number): Treatment {
   // (taught by a drawn teacher: its decisions for each edge and face, as they are; `?teacher=sumi|sumi-bold|sumi-light`,
   // or with `-minus-right` for scoring on a view its table never saw)
-  if (kind === 'taught') return taught(G, TAUGHT, qs.get('teacher') ?? 'sumi');
+  // (fitted where it's been fitted (never on the right view, so `-minus-right` names the same fit), else by hand)
+  if (kind === 'taught') { const t = qs.get('teacher') ?? 'sumi'; return taughtFit(G, TAUGHT_FIT[t.replace(/-minus-right$/, '')]) ?? taught(G, TAUGHT, t); }
   if (kind === 'learned' && POLICY) return learned(POLICY, G, F, budget);
   if (kind === 'rules' || kind === 'learned') return matchBudget(G, rules(G, F, detail), budget);
   return ranksAsTreatment(G);
 }
+/** a treatment set from outside (devtools/splats-taught-fit.mjs, fitting one): applied as given, not eased */
+let policyOverride: Treatment | null = null;
 function applyPolicy(dt: number, pos: number[], fwd: number[]) {
+  if (composed && compose && policyOverride && !judge.on) { const G = infosNow(); if (G) { R.setControls(controls(G, policyOverride)); policyNote = `set from outside · ${marksOf(G, policyOverride)} marks`; } return; }
   if (!composed || !compose || policyMode === 'ranks' || judge.on) { if (!judge.on) R.setControls(null); policyPrev = null; policyTarget = null; return; }
   const G = infosNow(); if (!G) return;
   const t0 = performance.now(), v = viewIn(pos, fwd), comp = competitionOf(G, v), prevE = policyPrev?.e;
@@ -845,7 +850,11 @@ function frame() {
   // (the subject lifted clear of the drawer: the projection's centre moved up by `viewShift` of the screen's height)
   viewShift += (viewShiftGoal - viewShift) * Math.min(1, dt * 8); proj[9] = -viewShift;
   const fy = h / (2 * Math.tan(cam.fov / 2));
-  const share = shareAt(detail), gv = updateGates(dt);
+  const share = shareAt(detail), gv0 = updateGates(dt);
+  // (a taught drawing decides its washes itself: the scene's own view gates (its lit alternatives, its cap on lesser
+  // objects' tone) all open, so the teacher's decisions alone say what shows)
+  let gv = gv0;
+  if (gv0 && composed && (policyMode === 'taught' || policyOverride)) { gv = Float32Array.from(gv0); for (const g of (brushes as ComposedScene).gates) gv[g.index] = 1; }
   drawNow = () => R.draw(view, proj, [fy, fy], { size, mode, bg: mist ? [0.13, 0.145, 0.165] : stone || brushes || bench || penS || sceneName === 'field' || (captured && inkOn) ? [0.937, 0.906, 0.847] : theme(), detail, thin, share, features: gv ?? features, eye: pos, occlude, only, light: mist ? Math.max(0, LIGHTS.indexOf(light) - 1) : 0, sun: sunDir(sunAz, sunEl), diff: mist ? diff : false, halo: composed && compose && haloOn ? haloPx * dpr : 0, nf: [near, cam.dist * 100] });
   applyPolicy(dt, pos, fwd);
   drawNow();
@@ -880,7 +889,10 @@ function frame() {
   },
   mist: { setDiff: (d: boolean) => { diff = d; relight(); }, setLight: (l: string) => { light = l; relight(); syncMist(); }, setSun: (az: number, el: number) => { sunAz = az; sunEl = el; relight(); }, setBank: (b: number) => { bank = b; openMist(); }, get ready() { return refReady; } },
   perf: () => runPerf(), get perfResult() { return (window as unknown as { __perf?: string }).__perf ?? null; },
-  composed: { camRef: () => camRef(), get gates() { return gateNow; }, setPolicy: (m: string) => { policyMode = m; policyPrev = null; policyTarget = null; syncStone(); }, get policy() { return { mode: policyMode, note: policyNote, model: !!POLICY }; }, judge: { next: () => { judge.on = true; judgeNext(); }, choose: judgeChoose, get stage() { return judge.stage; }, get pair() { return judge.pair; }, get count() { return judged().length; }, exportJson: () => judged() }, setCompose: (c: boolean) => { compose = c; reopen(); }, setHalo: (h: boolean, px?: number) => { haloOn = h; if (px) haloPx = px; }, get importance() { return composed ? (brushes as ReturnType<typeof composedScene>).importance : null; } },
+  composed: { camRef: () => camRef(),
+    /** each group's match to a teacher's entries, and a treatment set from outside (null: the policy's own again) */
+    taughtMap: () => { const G = infosNow(); return G ? taughtMap(G, TAUGHT) : null; },
+    setTreatment: (t: { e: number[]; s: number[]; w?: number[]; inner?: number[] } | null) => { policyOverride = t ? { e: Float32Array.from(t.e), s: Float32Array.from(t.s), w: t.w ? Float32Array.from(t.w) : undefined, inner: t.inner ? Float32Array.from(t.inner) : undefined } : null; policyPrev = null; policyTarget = null; }, get gates() { return gateNow; }, setPolicy: (m: string) => { policyMode = m; policyPrev = null; policyTarget = null; syncStone(); }, get policy() { return { mode: policyMode, note: policyNote, model: !!POLICY }; }, judge: { next: () => { judge.on = true; judgeNext(); }, choose: judgeChoose, get stage() { return judge.stage; }, get pair() { return judge.pair; }, get count() { return judged().length; }, exportJson: () => judged() }, setCompose: (c: boolean) => { compose = c; reopen(); }, setHalo: (h: boolean, px?: number) => { haloOn = h; if (px) haloPx = px; }, get importance() { return composed ? (brushes as ReturnType<typeof composedScene>).importance : null; } },
   stone: { setView, setDetail: (d: number) => { detail = d; syncDetail(); syncStone(); }, setThin: (k: number) => { thin = k; }, setLook: (l: Look) => { look = l; reopen(); }, frame: (s: string | null) => { frameSubject(s); setView('hero'); }, paint, clear: () => { features.fill(0); lastPaint = null; }, features,
     /** a touch at a point of the stone (world), as the brush would make it from the eye; and the stone's own lines */
     touch: (p: [number, number, number]) => { if (!stone) return 0; const { pos } = eye(), d = norm([p[0] - pos[0], p[1] - pos[1], p[2] - pos[2]]), h = stone.ray(pos, d); if (!h) return 0; const f = stone.featureAt(h.p, h.region); if (f) features[f] = Math.min(1, features[f] + 0.07); return f; },

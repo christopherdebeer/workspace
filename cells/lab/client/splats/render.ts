@@ -104,10 +104,13 @@ void main() {
   if (detail > u_detail + 0.001) keep = max(keep, smoothstep(1.0 - detail - 0.04, 1.0 - detail, rank));
   keep *= gate;
   // (a policy's treatment of this mark's group: how much of the group is kept (heart first, by rank) and how strong)
+  // (its third number is on and how wide: the group's marks scaled by it (1 as made; a taught stroke may be heavier);
+  // its fourth, how much of an edge shows where it isn't on the outline (0: an outline only, as the brush has it))
   uint gi = d2.w >> 8;
+  float gscale = 1.0, ginner = 0.0;
   if (u_ctlOn == 1 && gi > 0u) {
     ivec2 cs = textureSize(u_ctl, 0); int ci = int(gi);
-    if (ci < cs.x * cs.y) { vec4 c = texelFetch(u_ctl, ivec2(ci % cs.x, ci / cs.x), 0); if (c.b > 0.5) { keep = smoothstep(c.r - 0.03, c.r, rank) * gate; v_color.a *= c.g; } }
+    if (ci < cs.x * cs.y) { vec4 c = texelFetch(u_ctl, ivec2(ci % cs.x, ci / cs.x), 0); if (c.b > 0.01) { keep = smoothstep(c.r - 0.03, c.r, rank) * gate; v_color.a *= c.g; gscale = c.b; ginner = c.a; } }
   }
   // (a contour mark: there only where its surface is near edge-on from here, eased over a range of angles)
   if (kind == 4u) {
@@ -115,7 +118,10 @@ void main() {
     // opposite ways from the eye, eased in as the turning face passes edge-on)
     vec3 v = normalize(u_eye - p), n2 = octDecode(vec2(float((d2.x >> 8) & 255u), float((d2.x >> 16) & 255u)) / 127.5 - 1.0);
     float s1 = dot(sn, v), s2 = dot(n2, v);
-    keep *= s1 * s2 < 0.0 ? smoothstep(0.0, 0.12, min(abs(s1), abs(s2))) : 0.0;
+    // (where neither face is turned away it's an interior edge: shown as far as its group says (a taught drawing may
+    // ink it); with both turned away, never)
+    float outline = s1 * s2 < 0.0 ? smoothstep(0.0, 0.12, min(abs(s1), abs(s2))) : 0.0;
+    keep *= max(s1, s2) > 0.0 ? outline + (1.0 - outline) * ginner : 0.0;
   }
   // (a fitted field (field.ts): the disc's ink opacity from the direction it's seen from, nine low-order terms of it,
   // packed into its feature and element bits)
@@ -189,7 +195,7 @@ void main() {
   v_color.a *= keep;
   vec2 c01 = unpackHalf2x16(d1.x), c23 = unpackHalf2x16(d1.y), c45 = unpackHalf2x16(d1.z);
   // (the covariance was stored 4× over, for the half floats' sake)
-  mat3 S = mat3(c01.x, c01.y, c23.x, c01.y, c23.y, c45.x, c23.x, c45.x, c45.y) * 0.25 * u_size * u_size;
+  mat3 S = mat3(c01.x, c01.y, c23.x, c01.y, c23.y, c45.x, c23.x, c45.x, c45.y) * 0.25 * u_size * u_size * gscale * gscale;
   // (the perspective's Jacobian at this point (camera looks down -z), and the camera's rotation)
   float z = -cam.z;
   mat3 J = mat3(u_focal.x / z, 0.0, 0.0, 0.0, u_focal.y / z, 0.0, u_focal.x * cam.x / (z * z), u_focal.y * cam.y / (z * z), 0.0);

@@ -45,49 +45,90 @@ def small(D): return np.asarray(Image.fromarray((D * 255).astype(np.uint8)).resi
 
 # ─── each view's geometry on the screen: the faces' ids, and each edge's seen samples ───
 GEO = {}
-for cam in M['cams']:
-  E = np.array(cam['eye']); f = norm(np.array(cam['target']) - E); r = norm(np.cross(f, [0, 1, 0])); u = np.cross(r, f); fy = H / (2 * np.tan(cam['fov'] / 2))
-  def proj(P, E=E, f=f, r=r, u=u, fy=fy):
-    q = np.asarray(P) - E; z = q @ f
-    return np.stack([W / 2 + fy * (q @ r) / z, H / 2 - fy * (q @ u) / z, z], -1)
-  zb = np.full((H, W), np.inf); fid = -np.ones((H, W), int)
-  for t in range(len(T)):
-    s = proj(T[t])
-    if (s[:, 2] < 0.05).any(): continue
-    x0, x1 = int(max(0, np.floor(s[:, 0].min()))), int(min(W - 1, np.ceil(s[:, 0].max()))); y0, y1 = int(max(0, np.floor(s[:, 1].min()))), int(min(H - 1, np.ceil(s[:, 1].max())))
-    if x1 < x0 or y1 < y0: continue
-    ys, xs = np.mgrid[y0:y1 + 1, x0:x1 + 1] + 0.5
-    (ax, ay, az), (bx, by, bz), (cx, cy, cz) = s; den = (by - cy) * (ax - cx) + (cx - bx) * (ay - cy)
-    if abs(den) < 1e-9: continue
-    l1 = ((by - cy) * (xs - cx) + (cx - bx) * (ys - cy)) / den; l2 = ((cy - ay) * (xs - cx) + (ax - cx) * (ys - cy)) / den; l3 = 1 - l1 - l2
-    z = l1 * az + l2 * bz + l3 * cz; hit = (l1 >= 0) & (l2 >= 0) & (l3 >= 0) & (z < zb[y0:y1 + 1, x0:x1 + 1])
-    zb[y0:y1 + 1, x0:x1 + 1] = np.where(hit, z, zb[y0:y1 + 1, x0:x1 + 1]); fid[y0:y1 + 1, x0:x1 + 1] = np.where(hit, face_of[t], fid[y0:y1 + 1, x0:x1 + 1])
-  def seen(P):
-    P = np.asarray(P, float); pts = np.concatenate([P[i] + (P[i + 1] - P[i]) * np.linspace(0, 1, 9)[:-1, None] for i in range(len(P) - 1)] + [P[-1:]])
-    s = proj(pts); out = []
-    for x, y, z in s:
-      ix, iy = int(x), int(y)
-      if z > 0.05 and 0 <= ix < W and 0 <= iy < H and z <= zb[iy, ix] + max(0.015, 0.006 * z): out.append((x, y))
-    return np.array(out)
-  view = lambda t, E=E: (E - T[t, 0]) @ N[t]
-  E_ = {}
-  for k, ts in edges.items():
-    a, b = np.array(k[0]), np.array(k[1])
-    if len(ts) < 2: continue
-    f1, f2 = sorted((face_of[ts[0]], face_of[ts[1]]))
-    if f1 == f2: continue
-    crease = abs(np.dot(N[ts[0]], N[ts[1]])) < np.cos(np.radians(40)); sil = (view(ts[0]) > 0) != (view(ts[1]) > 0)
-    if not (crease or sil): continue
-    # (a crease is its own entry, named by its two faces; a smooth object's silhouette (a culm's) is one entry an object)
-    name = f'crease {f1}-{f2}' if crease else f'silhouette obj{OBJ[ts[0]]}'
-    p = seen([a, b])
-    if len(p): E_.setdefault(name, []).append(p)
-  nodes = {}
-  for L in M['lines']:
-    p = seen(L['pts'])
-    if len(p): nodes.setdefault(L['name'], []).append(p)
-  for nm, ps in nodes.items(): E_[f'line {nm}'] = ps
-  GEO[cam['name']] = {'fid': fid, 'edges': {k: np.concatenate(v) for k, v in E_.items()}, 'zb': zb}
+def _build_geo():
+  for cam in M['cams']:
+    E = np.array(cam['eye']); f = norm(np.array(cam['target']) - E); r = norm(np.cross(f, [0, 1, 0])); u = np.cross(r, f); fy = H / (2 * np.tan(cam['fov'] / 2))
+    def proj(P, E=E, f=f, r=r, u=u, fy=fy):
+      q = np.asarray(P) - E; z = q @ f
+      return np.stack([W / 2 + fy * (q @ r) / z, H / 2 - fy * (q @ u) / z, z], -1)
+    zb = np.full((H, W), np.inf); fid = -np.ones((H, W), int)
+    for t in range(len(T)):
+      s = proj(T[t])
+      if (s[:, 2] < 0.05).any(): continue
+      x0, x1 = int(max(0, np.floor(s[:, 0].min()))), int(min(W - 1, np.ceil(s[:, 0].max()))); y0, y1 = int(max(0, np.floor(s[:, 1].min()))), int(min(H - 1, np.ceil(s[:, 1].max())))
+      if x1 < x0 or y1 < y0: continue
+      ys, xs = np.mgrid[y0:y1 + 1, x0:x1 + 1] + 0.5
+      (ax, ay, az), (bx, by, bz), (cx, cy, cz) = s; den = (by - cy) * (ax - cx) + (cx - bx) * (ay - cy)
+      if abs(den) < 1e-9: continue
+      l1 = ((by - cy) * (xs - cx) + (cx - bx) * (ys - cy)) / den; l2 = ((cy - ay) * (xs - cx) + (ax - cx) * (ys - cy)) / den; l3 = 1 - l1 - l2
+      z = l1 * az + l2 * bz + l3 * cz; hit = (l1 >= 0) & (l2 >= 0) & (l3 >= 0) & (z < zb[y0:y1 + 1, x0:x1 + 1])
+      zb[y0:y1 + 1, x0:x1 + 1] = np.where(hit, z, zb[y0:y1 + 1, x0:x1 + 1]); fid[y0:y1 + 1, x0:x1 + 1] = np.where(hit, face_of[t], fid[y0:y1 + 1, x0:x1 + 1])
+    def seen(P):
+      P = np.asarray(P, float); pts = np.concatenate([P[i] + (P[i + 1] - P[i]) * np.linspace(0, 1, 9)[:-1, None] for i in range(len(P) - 1)] + [P[-1:]])
+      s = proj(pts); out = []
+      for x, y, z in s:
+        ix, iy = int(x), int(y)
+        if z > 0.05 and 0 <= ix < W and 0 <= iy < H and z <= zb[iy, ix] + max(0.015, 0.006 * z): out.append((x, y))
+      return np.array(out)
+    view = lambda t, E=E: (E - T[t, 0]) @ N[t]
+    E_ = {}
+    for k, ts in edges.items():
+      a, b = np.array(k[0]), np.array(k[1])
+      if len(ts) < 2: continue
+      f1, f2 = sorted((face_of[ts[0]], face_of[ts[1]]))
+      if f1 == f2: continue
+      crease = abs(np.dot(N[ts[0]], N[ts[1]])) < np.cos(np.radians(40)); sil = (view(ts[0]) > 0) != (view(ts[1]) > 0)
+      if not (crease or sil): continue
+      # (a crease is its own entry, named by its two faces; a smooth object's silhouette (a culm's) is one entry an object)
+      name = f'crease {f1}-{f2}' if crease else f'silhouette obj{OBJ[ts[0]]}'
+      p = seen([a, b])
+      if len(p): E_.setdefault(name, []).append(p)
+    nodes = {}
+    for L in M['lines']:
+      p = seen(L['pts'])
+      if len(p): nodes.setdefault(L['name'], []).append(p)
+    for nm, ps in nodes.items(): E_[f'line {nm}'] = ps
+    GEO[cam['name']] = {'fid': fid.astype(np.int16), 'edges': {k: np.concatenate(v) for k, v in E_.items()}}
+# (the views' geometry is slow to rasterise and never changes with the drawing: kept on disk, keyed by the mesh's time)
+import os, pickle
+_cache = f'{base}/out/field/geo-cache.pkl'; _stamp = os.path.getmtime(f'{base}/out/field/wire-mesh.json')
+OBJ_OF_FACE = np.array([o for o, _, _ in faces])
+def _masks(g):
+  # (the regions a drawing is measured in, which depend only on the geometry: inside the objects away from their outline;
+  # the ground near them; each object's body)
+  fid = g['fid']; allm = fid >= 0; im = lambda m: Image.fromarray((m * 255).astype(np.uint8))
+  g['inside'] = np.asarray(im(allm).filter(ImageFilter.MinFilter(17))) > 0
+  g['ground'] = (np.asarray(im(allm).filter(ImageFilter.MaxFilter(101))) > 0) & ~allm & ~(np.asarray(im(allm).filter(ImageFilter.MaxFilter(13))) > 0)
+  oid = np.where(allm, OBJ_OF_FACE[np.clip(fid, 0, None)], 0)
+  g['body'] = {int(o): np.asarray(im(oid == o).filter(ImageFilter.MinFilter(9))) > 0 for o in np.unique(OBJ_OF_FACE)}
+_VERSION = 2
+try:
+  _c = pickle.load(open(_cache, 'rb')); assert _c['stamp'] == _stamp and _c.get('v') == _VERSION; GEO.update(_c['geo'])
+except Exception:
+  _build_geo()
+  for _g in GEO.values(): _masks(_g)
+  pickle.dump({'stamp': _stamp, 'v': _VERSION, 'geo': GEO}, open(_cache, 'wb'))
+_ANN = np.array([(dx, dy) for dx in range(-14, 15) for dy in range(-14, 15) if 9 <= np.hypot(dx, dy) <= 14])
+def extras(D, view):
+  '''What a fit needs beyond the decisions: for each edge, its ink and its weight in excess of the tone round it (so a
+  wash's edge isn't taken for a stroke: `inkx`, the darkest within 5 px less the darker side's tone; `mass`, the mean
+  within 5 px less the mean round it); for each face, each object's body and the ground, the tone's mean and its peak.'''
+  g = GEO[view]; fid = g['fid']; out = {}
+  Dm = np.asarray(Image.fromarray((D * 255).astype(np.uint8)).filter(ImageFilter.MaxFilter(11)), dtype=np.float32) / 255
+  Db = np.asarray(Image.fromarray((D * 255).astype(np.uint8)).filter(ImageFilter.BoxBlur(5)), dtype=np.float32) / 255
+  for name, p in g['edges'].items():
+    if len(p) < 6: continue
+    ix = np.clip(p[:, 0].astype(int), 0, W - 1); iy = np.clip(p[:, 1].astype(int), 0, H - 1)
+    ann = D[np.clip(iy[:, None] + _ANN[None, :, 1], 0, H - 1), np.clip(ix[:, None] + _ANN[None, :, 0], 0, W - 1)]
+    k75 = int(ann.shape[1] * 0.75)
+    out[name] = {'ink': float(Dm[iy, ix].mean()), 'inkx': float(np.maximum(0, Dm[iy, ix] - np.partition(ann, k75, axis=1)[:, k75]).mean()), 'mass': float(np.maximum(0, Db[iy, ix] - ann.mean(1)).mean())}
+  for f in np.unique(fid[fid >= 0]):
+    m = (fid == f) & g['inside']
+    if m.sum() > 400: out[f'face {f}'] = {'mean': float(D[m].mean()), 'peak': float(np.percentile(D[m], 90))}
+  for o, m in g['body'].items():
+    if m.sum() > 300: out[f'body obj{o}'] = {'mean': float(D[m].mean()), 'peak': float(np.percentile(D[m], 90))}
+  if g['ground'].sum() > 400: out['ground'] = {'mean': float(D[g['ground']].mean()), 'peak': float(np.percentile(D[g['ground']], 97))}
+  return out
 
 def decisions(D, view):
   g = GEO[view]; out = {}
@@ -97,12 +138,11 @@ def decisions(D, view):
     if len(p) < 6: continue
     out[name] = float(Dm[np.clip(p[:, 1].astype(int), 0, H - 1), np.clip(p[:, 0].astype(int), 0, W - 1)].mean())
   # (tone on a face: its inside, away from its edges; the ground's tone near the objects (their shadows))
-  inside = np.asarray(Image.fromarray(((g['fid'] >= 0) * 255).astype(np.uint8)).filter(ImageFilter.MinFilter(17))) > 0
+  inside = g['inside']
   for f in np.unique(g['fid'][g['fid'] >= 0]):
     m = (g['fid'] == f) & inside
     if m.sum() > 400: out[f'face {f}'] = float(D[m].mean())
-  near = np.asarray(Image.fromarray(((g['fid'] >= 0) * 255).astype(np.uint8)).filter(ImageFilter.MaxFilter(101))) > 0
-  ground = near & (g['fid'] < 0) & ~(np.asarray(Image.fromarray(((g['fid'] >= 0) * 255).astype(np.uint8)).filter(ImageFilter.MaxFilter(13))) > 0)
+  ground = g['ground']
   ys = np.where(ground.any(1))[0]
   if len(ys): out['ground, lower'] = float(D[ground & (np.arange(H)[:, None] > np.median(ys))].mean()); out['ground, upper'] = float(D[ground & (np.arange(H)[:, None] <= np.median(ys))].mean())
   return out

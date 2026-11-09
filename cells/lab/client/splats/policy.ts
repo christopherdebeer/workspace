@@ -78,7 +78,9 @@ export function competitionOf(groups: GroupInfo[], v: ViewIn): number[] {
   return groups.map((g, i) => { let c = 0; for (let j = 0; j < groups.length; j++) { if (j === i || groups[j].object === g.object) continue; if (len(sub(pos[i], pos[j])) < scr[i].r + scr[j].r) c += groups[j].emphasis; } return c; });
 }
 
-export interface Treatment { e: Float32Array; s: Float32Array }
+/** per group: how much of it is kept (extent, from its heart), how strong; and, for a taught drawing, how wide its marks
+ * are (1 as made) and how much of an edge shows where it isn't on the outline (0: only there) */
+export interface Treatment { e: Float32Array; s: Float32Array; w?: Float32Array; inner?: Float32Array }
 /** the hand-written rules: the baseline */
 export function rules(groups: GroupInfo[], F: number[][], detail: number): Treatment {
   const e = new Float32Array(groups.length), s = new Float32Array(groups.length);
@@ -116,7 +118,7 @@ export function matchBudget(groups: GroupInfo[], t: Treatment, budget: number): 
 /** the controls the renderer takes (four floats a group index): the rank to reach, the strength, on */
 export function controls(groups: GroupInfo[], t: Treatment): Float32Array {
   const n = Math.max(...groups.map((g) => g.index)) + 1, out = new Float32Array(n * 4);
-  groups.forEach((g, i) => { out[g.index * 4] = thresholdOf(g, t.e[i]); out[g.index * 4 + 1] = t.s[i]; out[g.index * 4 + 2] = 1; });
+  groups.forEach((g, i) => { out[g.index * 4] = thresholdOf(g, t.e[i]); out[g.index * 4 + 1] = t.s[i]; out[g.index * 4 + 2] = Math.max(0.02, t.w ? t.w[i] : 1); out[g.index * 4 + 3] = t.inner ? t.inner[i] : 0; });
   return out;
 }
 
@@ -170,43 +172,67 @@ export function jitter(groups: GroupInfo[], t: Treatment, rnd: () => number, amo
 /** ease a treatment toward a target (so decisions don't flicker as the view moves) */
 export function ease(prev: Treatment | null, next: Treatment, k: number): Treatment {
   if (!prev || prev.e.length !== next.e.length) return next;
-  return { e: next.e.map((x, i) => prev.e[i] + (x - prev.e[i]) * k), s: next.s.map((x, i) => prev.s[i] + (x - prev.s[i]) * k) };
+  const to = (a: Float32Array | undefined, b: Float32Array | undefined, d: number) => (b ? b.map((x, i) => { const p = a ? a[i] : d; return p + (x - p) * k; }) : undefined);
+  return { e: next.e.map((x, i) => prev.e[i] + (x - prev.e[i]) * k), s: next.s.map((x, i) => prev.s[i] + (x - prev.s[i]) * k), w: to(prev.w, next.w, 1), inner: to(prev.inner, next.inner, 0) };
 }
 void norm;
 
 /**
- * A treatment taught by a drawn teacher (taught.ts, devtools/splats-decisions.py): each group given what the teacher
- * decided for the edge or face it draws. A group is matched to the teacher's entry of its own object and a kind it
- * could be (a stroke to a crease, a silhouette or a line; a wash to a face), the nearest in the scene; one with no
- * such entry takes its object's average for that kind. On the ground, shadows take the teacher's ground tone, and the
- * contacts with them; the ground's lines take none (the teacher was shown no bank). The decision (ink along it, tone on
- * it) becomes how much of the group is kept, from its heart, and how strongly.
+ * Taught by a drawn teacher (taught.ts, devtools/splats-decisions.py): each group given what the teacher decided for
+ * the edge or face it draws.
+ *
+ * **The match** (`taughtMap`): a group to the teacher's entry of its own object and a kind it could be, the nearest in
+ * the scene: a stroke to a crease, a silhouette or a line; a wash to a face. A wash on an object whose faces are too
+ * small to have entries (a culm) goes with the object's body; a far match is no match (the object's average for that
+ * kind instead). On the ground, shadows go with the teacher's ground tone, contacts with their object's strokes, and
+ * the ground's lines with nothing (the teacher was shown no bank).
+ *
+ * **The treatment**: fitted where there's a fit (`taughtFit`: devtools/splats-taught-fit.mjs adjusts each group until
+ * what the brush draws measures as the teacher's drawing does); else mapped by hand from the table (`taught`).
  */
 export interface TaughtTable { entries: Array<{ name: string; kind: string; obj: number; pts: number[][] }>; teachers: Record<string, number[]> }
+export type TaughtClass = 'stroke' | 'wash' | 'body' | 'ground' | 'contact' | 'none';
+export interface TaughtMatch { key: string; role: Role; object: number; cls: TaughtClass; entry: string | null; k: number }
+export function taughtMap(groups: GroupInfo[], T: TaughtTable): TaughtMatch[] {
+  const hasFaces = new Set(T.entries.filter((en) => en.kind === 'face').map((en) => en.obj));
+  return groups.map((g) => {
+    const out = (cls: TaughtClass, k = -1): TaughtMatch => ({ key: g.key, role: g.role, object: g.object, cls, entry: k >= 0 ? T.entries[k].name : null, k });
+    if (g.role === 'ground') return out(g.key.endsWith('shadow') ? 'ground' : 'none');
+    if (g.role === 'contact') return out('contact');
+    const stroke = g.role === 'line' || g.role === 'edge';
+    if (!stroke && !hasFaces.has(g.object)) return out('body');
+    const ok = (k: string) => (stroke ? k === 'crease' || k === 'silhouette' || k.startsWith('line') : k === 'face');
+    const pts = g.samples.length ? g.samples : [g.centre];
+    let best = -1, bd = Infinity;
+    T.entries.forEach((en, k) => {
+      if (en.obj !== g.object || !ok(en.kind) || !en.pts.length) return;
+      let sum = 0; for (const p of pts) { let m = Infinity; for (const q of en.pts) m = Math.min(m, Math.hypot(p[0] - q[0], p[1] - q[1], p[2] - q[2])); sum += m; }
+      if (sum < bd) { bd = sum; best = k; }
+    });
+    return out(stroke ? 'stroke' : 'wash', best >= 0 && bd / pts.length < 0.35 ? best : -1);
+  });
+}
+/** mapped by hand from the table: the decision (ink along it, tone on it) as how much of the group is kept and how strongly */
 export function taught(groups: GroupInfo[], T: TaughtTable, teacher: string): Treatment {
   const d = T.teachers[teacher] ?? Object.values(T.teachers)[0], e = new Float32Array(groups.length), s = new Float32Array(groups.length);
   const ss = (a: number, b: number, x: number) => { const t = Math.max(0, Math.min(1, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
-  const val = (k: number) => Math.max(0, d[k]);
-  const ground = T.entries.map((en, k) => (en.kind.startsWith('ground') ? val(k) : -1)).filter((v) => v >= 0), groundTone = ground.length ? ground.reduce((a, b) => a + b, 0) / ground.length : 0;
-  groups.forEach((g, i) => {
-    let dec = 0;
-    const stroke = g.role === 'line' || g.role === 'edge';
-    if (g.role === 'ground') dec = g.key.endsWith('shadow') ? groundTone * 2.2 : 0;
-    else if (g.role === 'contact') dec = Math.min(1, groundTone * 3);
-    else {
-      const ok = (k: string) => (stroke ? k === 'crease' || k === 'silhouette' || k.startsWith('line') : k === 'face');
-      const cand = T.entries.map((en, k) => ({ en, k })).filter(({ en, k }) => en.obj === g.object && ok(en.kind) && d[k] >= 0 && en.pts.length);
-      if (cand.length) {
-        const pts = g.samples.length ? g.samples : [g.centre];
-        let best = cand[0], bd = Infinity;
-        for (const c of cand) { let sum = 0; for (const p of pts) { let m = Infinity; for (const q of c.en.pts) m = Math.min(m, Math.hypot(p[0] - q[0], p[1] - q[1], p[2] - q[2])); sum += m; } if (sum < bd) { bd = sum; best = c; } }
-        // (a far match is no match: the object's average for that kind instead)
-        dec = bd / pts.length < 0.35 ? val(best.k) : cand.reduce((a, c) => a + val(c.k), 0) / cand.length;
-      }
-    }
+  const val = (k: number) => Math.max(0, d[k]), mean = (ks: number[]) => (ks.length ? ks.reduce((a, k) => a + val(k), 0) / ks.length : 0);
+  const groundTone = mean(T.entries.map((en, k) => (en.kind.startsWith('ground') ? k : -1)).filter((k) => k >= 0));
+  taughtMap(groups, T).forEach((m, i) => {
+    const stroke = m.cls === 'stroke';
+    const same = (kinds: (k: string) => boolean) => T.entries.map((en, k) => (en.obj === m.object && kinds(en.kind) && d[k] >= 0 ? k : -1)).filter((k) => k >= 0);
+    const dec = m.cls === 'ground' ? groundTone * 2.2 : m.cls === 'contact' ? Math.min(1, groundTone * 3) : m.cls === 'none' || m.cls === 'body' ? 0
+      : m.k >= 0 && d[m.k] >= 0 ? val(m.k) : mean(same(stroke ? (k) => k === 'crease' || k === 'silhouette' || k.startsWith('line') : (k) => k === 'face'));
     e[i] = stroke ? ss(0.1, 0.55, dec) : ss(0.02, 0.3, dec);
     s[i] = Math.max(0.7, Math.min(1.15, stroke ? 0.72 + 0.5 * dec : 0.72 + 1.1 * dec));
   });
   return { e, s };
 }
-
+/** a fitted treatment, by group key (taughtfit.ts): extent, strength, width, and how much interior edges show */
+export interface TaughtFit { keys: string[]; e: number[]; s: number[]; w: number[]; inner: number[]; note?: string }
+export function taughtFit(groups: GroupInfo[], fit: TaughtFit | undefined): Treatment | null {
+  if (!fit) return null;
+  const at = new Map(fit.keys.map((k, i) => [k, i]));
+  const pick = (a: number[], d: number) => Float32Array.from(groups, (g) => { const i = at.get(g.key); return i === undefined ? d : a[i]; });
+  return { e: pick(fit.e, 0), s: pick(fit.s, 1), w: pick(fit.w, 1), inner: pick(fit.inner, 0) };
+}
