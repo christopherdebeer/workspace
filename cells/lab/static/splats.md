@@ -625,6 +625,46 @@ for instance by an image model told to restyle without moving anything, a canvas
 redrawn tests whether the character carries to the views either side. Two or three redrawn test whether it carries
 round.
 
+### Drawn teachers: wireframes restyled by an image model
+
+Since the studies can't teach, the scene supplied its own canvases. `devtools/splats-field-wire.mjs` draws the composed
+scene's real geometry from six views, at 1024 × 683, each with its camera:
+- the meshes' creases and silhouettes, hidden lines removed;
+- the stone's seam, the culms' nodes and the corner's niche.
+
+An image model redrew each view in a style, told to keep every line where it is. Seven restyles came back, each a
+sheet of all six views: fine pen and wash, textured stone with strong cast shadows, three sumi-e brush executions
+(spare, bold, light), warm watercolour and engraved hatching. The author's preference is sumi-e; I agree it suits
+splats best, since its marks are blots, graded washes and dry-brush edges.
+
+`splats-field-sheets.py` cuts each sheet's panels at its separators, masks the labels, and aligns each panel to its
+wireframe by a small scale and shift. After alignment, the panels match their wireframes at 0.34 to 0.77 (normalised
+correlation). The reference study managed 0.11 even after warping. The sparse brushes score lowest; that's sparsity,
+not misplacement (checked by overlay).
+
+**What the drawn teachers taught:**
+
+All errors below are held-out error on the right view, with the other five views of the same execution as teachers.
+
+- **Too few views for nine terms a disc.** The view-dependent field memorised them: training error 1.8, held-out
+  10.3, worse than one constant opacity per disc (8.3). Holding the view terms toward zero (`--reg`) fixes it. At
+  0.1, pen-and-wash scores 7.8 against the constant's 8.3, and sumi 9.99 against 10.35. Small wins, as they should
+  be: in sumi, each view's strokes are the drawer's choice for that view.
+- **Pooling the three sumi executions helps a little.** One field taught by all three averages 9.68 held out,
+  against 9.74 for the single-execution fits. One field for three hands can only learn their mean.
+- **Neural splats overfit first.** Each disc gets a learned 6-number feature, each execution a 2-number code, and one
+  shared network turns (feature, view, code) into ink (`splats-field-fit.mjs --neural`). Pooled, it reached training
+  error 2.8 but 14.7 held out. The codes do separate the three hands; the per-disc features memorise per-view detail.
+- **Fitted mark shapes make it read as a drawing.** Each disc also fits two sizes in its surface's plane, a turn and a
+  small shift. The fit runs at 384 × 256 with exact gradients through each disc's screen ellipse
+  (`splats-field-shape.mjs`).
+  - Training error falls (3.7 against 5.9 with fixed shapes); held-out pixel error doesn't (13.2 against 12.5). A
+    stroke drawn a few pixels from where the held-out drawing has it is penalised twice.
+  - But by eye it's a clear step. The culms are crisp with dark nodes, the cornice is a brush mark again, the stone's
+    edges read as strokes, and it holds together from views no drawing covered (`?scene=field&field=composed-sumi-shape`).
+  - What's wrong: streaks across the stone's faces (stretched discs), a paler, greyer tone than the bold strokes it
+    learned from, and smeared ghosts at the edges from behind.
+
 ## The Bench: one brush made dependable, one stroke made editable
 
 `?scene=bench` (`bench.ts`; brush.ts). This answers a source review of the brush. Its five findings, all confirmed in the
