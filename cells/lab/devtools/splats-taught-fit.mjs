@@ -64,7 +64,7 @@ await withWood(async (wood) => {
     contacts();
     const M = await render(), err = errors(M), score = err.ink + 3 * err.tone;
     console.log(`${String(it).padStart(2)}: ink off by ${err.ink.toFixed(3)}, tone by ${err.tone.toFixed(3)}`);
-    if (!best || score < best.score) best = { score, err, st: st.map((x) => ({ ...x })) };
+    if (!best || score < best.score) best = { score, err, st: st.map((x) => ({ ...x })), M };
     if (it === ITERS) break;
     map.forEach((m, i) => {
       const t = read(T, m), g = read(M, m), x = st[i]; if (!t || !g) return;
@@ -81,6 +81,8 @@ await withWood(async (wood) => {
     });
   }
   await page.close();
+  // (for looking into a fit: each entry's target beside what the best treatment drew, and each group's state)
+  writeFileSync(`${dir}fit-debug-${teacher}.json`, JSON.stringify({ T, M: best.M, groups: map.map((m, i) => ({ ...m, ...best.st[i] })) }));
   const f = here('../client/splats/taughtfit.ts'), all = JSON.parse(readFileSync(f, 'utf8').match(/= (\{.*\});\s*$/s)[1]);
   const r3 = (v) => +v.toFixed(3);
   all[teacher] = { keys: map.map((m) => m.key), e: best.st.map((x) => r3(x.e)), s: best.st.map((x) => r3(x.s)), w: best.st.map((x) => r3(x.w)), inner: best.st.map((x) => r3(x.inner)), note: `fitted on five views (not the right): ink off by ${best.err.ink.toFixed(3)}, tone by ${best.err.tone.toFixed(3)}` };

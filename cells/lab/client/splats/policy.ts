@@ -193,10 +193,12 @@ void norm;
 export interface TaughtTable { entries: Array<{ name: string; kind: string; obj: number; pts: number[][] }>; teachers: Record<string, number[]> }
 export type TaughtClass = 'stroke' | 'wash' | 'body' | 'ground' | 'contact' | 'none';
 export interface TaughtMatch { key: string; role: Role; object: number; cls: TaughtClass; entry: string | null; k: number }
+/** a group's name in a fit: its object and its key (keys repeat from object to object: each culm has its nodes) */
+export const fitKey = (g: GroupInfo) => `${g.object}:${g.key}`;
 export function taughtMap(groups: GroupInfo[], T: TaughtTable): TaughtMatch[] {
   const hasFaces = new Set(T.entries.filter((en) => en.kind === 'face').map((en) => en.obj));
   return groups.map((g) => {
-    const out = (cls: TaughtClass, k = -1): TaughtMatch => ({ key: g.key, role: g.role, object: g.object, cls, entry: k >= 0 ? T.entries[k].name : null, k });
+    const out = (cls: TaughtClass, k = -1): TaughtMatch => ({ key: fitKey(g), role: g.role, object: g.object, cls, entry: k >= 0 ? T.entries[k].name : null, k });
     if (g.role === 'ground') return out(g.key.endsWith('shadow') ? 'ground' : 'none');
     if (g.role === 'contact') return out('contact');
     const stroke = g.role === 'line' || g.role === 'edge';
@@ -233,6 +235,6 @@ export interface TaughtFit { keys: string[]; e: number[]; s: number[]; w: number
 export function taughtFit(groups: GroupInfo[], fit: TaughtFit | undefined): Treatment | null {
   if (!fit) return null;
   const at = new Map(fit.keys.map((k, i) => [k, i]));
-  const pick = (a: number[], d: number) => Float32Array.from(groups, (g) => { const i = at.get(g.key); return i === undefined ? d : a[i]; });
+  const pick = (a: number[], d: number) => Float32Array.from(groups, (g) => { const i = at.get(fitKey(g)); return i === undefined ? d : a[i]; });
   return { e: pick(fit.e, 0), s: pick(fit.s, 1), w: pick(fit.w, 1), inner: pick(fit.inner, 0) };
 }
