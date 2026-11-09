@@ -8,6 +8,8 @@
 import json, sys, os, numpy as np
 from PIL import Image, ImageFilter
 sheet, style = sys.argv[1], sys.argv[2]
+# (an optional third argument: the teacher's width (its height two thirds of it); other than 192, written beside as ref-<style>-<view>@<width>.json)
+RES = int(sys.argv[3]) if len(sys.argv) > 3 else 192
 base = __file__.rsplit('/', 1)[0]
 VIEWS = ['ref', 'left', 'right', 'far-left', 'far-right', 'high']
 cams = {c['name']: c for c in json.load(open(f'{base}/out/field/wires.json'))}
@@ -28,7 +30,7 @@ def bands(profile, n):
 cols = bands(G[int(G.shape[0] * 0.1):int(G.shape[0] * 0.9)].mean(0), 2); rows = bands(G[:, int(G.shape[1] * 0.1):int(G.shape[1] * 0.9)].mean(1), 3)
 assert len(cols) == 2 and len(rows) == 3, (cols, rows)
 os.makedirs(f'{base}/field-teachers/{style}', exist_ok=True)
-W, H, FW, FH = 1024, 683, 192, 128
+W, H, FW, FH = 1024, 683, RES, RES * 2 // 3
 blur = lambda a, r: np.asarray(Image.fromarray((np.clip(a, 0, 1) * 255).astype(np.uint8)).filter(ImageFilter.GaussianBlur(r)), dtype=np.float32) / 255
 report = []
 for i, view in enumerate(VIEWS):
@@ -65,6 +67,6 @@ for i, view in enumerate(VIEWS):
   Dal = np.where(okF, D[v0, u0], 0)
   Df = np.asarray(Image.fromarray((Dal * 255).astype(np.uint8)).resize((FW, FH), Image.LANCZOS), dtype=np.float32) / 255
   C = cams[view]
-  json.dump({'state': f'{style}-{view}', 'style': style, 'view': view, 'w': FW, 'h': FH, 'D': [round(float(x), 3) for x in Df.ravel()], 'camera': {'eye': C['eye'], 'target': C['target'], 'fov': C['fov'], 'up': 1}, 'align': {'scale': round(float(s), 3), 'shift': [int(tx * 2), int(ty * 2)], 'correlation': round(c, 3), 'unaligned': round(s0, 3)}}, open(f'{base}/out/field/ref-{style}-{view}.json', 'w'))
+  json.dump({'state': f'{style}-{view}', 'style': style, 'view': view, 'w': FW, 'h': FH, 'D': [round(float(x), 3) for x in Df.ravel()], 'camera': {'eye': C['eye'], 'target': C['target'], 'fov': C['fov'], 'up': 1}, 'align': {'scale': round(float(s), 3), 'shift': [int(tx * 2), int(ty * 2)], 'correlation': round(c, 3), 'unaligned': round(s0, 3)}}, open(f'{base}/out/field/ref-{style}-{view}' + ('' if RES == 192 else f'@{RES}') + '.json', 'w'))
   report.append(f'  {view:10s} scale {s:.2f} shift {tx * 2:+d},{ty * 2:+d} px  match {s0:.2f} → {c:.2f}  mean ink {Df.mean():.3f}')
 print(f'{style}:'); print('\n'.join(report))

@@ -25,11 +25,14 @@ export function fieldDrawing(file: ArrayBuffer, flat = false): Splats & { mark: 
   const s = { n: N, pos: new Float32Array(N * 3), scale: new Float32Array(N * 3), rot: new Float32Array(N * 4), rgba: new Uint8Array(N * 4), mark: new Uint8Array(N), rank: new Float32Array(N), normal: new Float32Array(N * 3), feature: new Uint32Array(N), element: new Uint32Array(N) };
   const term = (b: number) => (b / 255) * (HI - LO) + LO;
   for (let i = 0; i < N; i++) {
-    const o = i * K, p = [0, 1, 2].map((k) => (dv.getInt16(o + k * 2, true) / 32767) * SPAN), n = unOct(B[o + 6], B[o + 7]), sz = B[o + 8] * 0.0002;
-    const t1 = norm(Math.abs(n[1]) < 0.9 ? cross(n, [0, 1, 0]) : cross(n, [1, 0, 0])), t2 = cross(n, t1);
-    s.pos.set(p, i * 3); s.scale.set([sz, sz, 0.0008], i * 3); s.rot.set(quat(t1, t2, n), i * 4); s.normal.set(n, i * 3);
+    // (19 bytes a disc: one size, round; 21 (splats-field-shape.mjs): two sizes and a turn in its plane)
+    const o = i * K, p = [0, 1, 2].map((k) => (dv.getInt16(o + k * 2, true) / 32767) * SPAN), n = unOct(B[o + 6], B[o + 7]), shaped = K >= 21;
+    const s1 = B[o + 8] * 0.0002, s2 = shaped ? B[o + 9] * 0.0002 : s1, th = shaped ? (B[o + 10] / 255) * Math.PI : 0, T0 = shaped ? 11 : 9;
+    const u1 = norm(Math.abs(n[1]) < 0.9 ? cross(n, [0, 1, 0]) : cross(n, [1, 0, 0])), u2 = cross(n, u1), ct = Math.cos(th), st = Math.sin(th);
+    const t1 = [0, 1, 2].map((k) => ct * u1[k] + st * u2[k]), t2 = [0, 1, 2].map((k) => -st * u1[k] + ct * u2[k]);
+    s.pos.set(p, i * 3); s.scale.set([Math.max(s1, 0.0002), Math.max(s2, 0.0002), 0.0008], i * 3); s.rot.set(quat(t1, t2, n), i * 4); s.normal.set(n, i * 3);
     s.rgba.set([INK[0], INK[1], INK[2], 255], i * 4); s.mark[i] = FIELD_KIND; s.rank[i] = 1;
-    const c = flat ? [term(B[o + 18]), 0, 0, 0, 0, 0, 0, 0, 0] : Array.from(B.subarray(o + 9, o + 18), term);
+    const c = flat ? [term(B[o + T0 + 9]), 0, 0, 0, 0, 0, 0, 0, 0] : Array.from(B.subarray(o + T0, o + T0 + 9), term);
     s.feature[i] = (q(c[0], 8) | (q(c[1], 8) << 8) | (q(c[2], 8) << 16) | (q(c[3], 8) << 24)) >>> 0;
     s.element[i] = (q(c[4], 6) | (q(c[5], 6) << 6) | (q(c[6], 6) << 12) | (q(c[7], 6) << 18) | (q(c[8], 6) << 24)) >>> 0;
   }
