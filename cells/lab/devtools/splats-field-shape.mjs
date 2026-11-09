@@ -18,7 +18,7 @@ import { build } from 'esbuild';
 import { readFileSync, writeFileSync } from 'node:fs';
 const load = async (f) => { const o = await build({ entryPoints: [new URL(f, import.meta.url).pathname], bundle: true, write: false, format: 'esm', platform: 'node', logLevel: 'error' }); return import('data:text/javascript;base64,' + Buffer.from(o.outputFiles[0].text).toString('base64')); };
 const arg = (k, d) => (process.argv.find((a) => a.startsWith(`--${k}=`)) ?? `--${k}=${d}`).slice(k.length + 3);
-const TEACH = arg('teach', 'sumi').split(','), HOLD = arg('holdout', '') || null, RES = Number(arg('res', 384)), ITERS = Number(arg('iters', 200)), REG = Number(arg('reg', 0.1)), SHAPE = !process.argv.includes('--noshape');
+const TEACH = arg('teach', 'sumi').split(','), HOLD = arg('holdout', '') || null, RES = Number(arg('res', 384)), ITERS = Number(arg('iters', 200)), REG = Number(arg('reg', 0.1)), SHAPE = !process.argv.includes('--noshape'), TERMS = Number(arg('terms', 9)), DUMP = process.argv.includes('--dump');
 const W = RES, H = (RES * 2) / 3;
 let rs = 3; const rnd = () => ((rs = (rs * 48271) % 2147483647) / 2147483647);
 const sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]], dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
@@ -101,7 +101,7 @@ const ac = Adam(N * NB), as = Adam(N * NS), gc = new Float32Array(N * NB), gs = 
 const logT = new Float32Array(W * H), cov = new Float32Array(W * H);
 function pass(v, grad) {
   logT.fill(0);
-  const fps = v.seen.map((i, k) => { const e = ellipse(i, sh.subarray(i * NS, i * NS + NS), v.cam); let zz = 0; for (let b = 0; b < NB; b++) zz += c[i * NB + b] * v.Y[k][b]; return { i, k, e, a: 1 / (1 + Math.exp(-zz)) }; });
+  const fps = v.seen.map((i, k) => { const e = ellipse(i, sh.subarray(i * NS, i * NS + NS), v.cam); let zz = 0; for (let b = 0; b < TERMS; b++) zz += c[i * NB + b] * v.Y[k][b]; return { i, k, e, a: 1 / (1 + Math.exp(-zz)) }; });
   for (const f of fps) {
     const [sx, sy, ia, ib, ic, R] = f.e, x0 = Math.max(0, Math.floor(sx - R)), x1 = Math.min(W - 1, Math.ceil(sx + R)), y0 = Math.max(0, Math.floor(sy - R)), y1 = Math.min(H - 1, Math.ceil(sy + R));
     f.box = [x0, x1, y0, y1];
@@ -120,7 +120,7 @@ function pass(v, grad) {
       gia += gG * G * -0.5 * dx * dx; gib += gG * G * -dx * dy; gic += gG * G * -0.5 * dy * dy;
     }
     ga *= a * (1 - a);
-    for (let b = 0; b < NB; b++) gc[f.i * NB + b] += ga * v.Y[f.k][b];
+    for (let b = 0; b < TERMS; b++) gc[f.i * NB + b] += ga * v.Y[f.k][b];
     if (SHAPE && (gsx || gsy || gia || gib || gic)) {
       const s0 = Array.from(sh.subarray(f.i * NS, f.i * NS + NS));
       for (let j = 0; j < NS; j++) { const s1 = s0.slice(); s1[j] += 1e-3; const e1 = ellipse(f.i, s1, v.cam); gs[f.i * NS + j] += ((e1[0] - sx) * gsx + (e1[1] - sy) * gsy + (e1[2] - ia) * gia + (e1[3] - ib) * gib + (e1[4] - ic) * gic) / 1e-3; }
@@ -144,6 +144,9 @@ const res = { teach: TEACH, holdout: HOLD, res: RES, shape: SHAPE, discs: N, ite
 console.log(res);
 const tag = `${TEACH.length > 1 ? `${TEACH[0]}-pooled` : TEACH[0]}${SHAPE ? '-shape' : '-fixed'}@${RES}`;
 writeFileSync(new URL(`./out/field/fit-${tag}${HOLD ? `-minus-${HOLD}` : ''}.json`, import.meta.url), JSON.stringify(res, null, 1));
+// (--dump: what the field draws of each held-out view, as darkness, for measures other than pixel error
+// (splats-field-score.py))
+if (DUMP) for (const v of test) { pass(v, false); const C = Array.from(logT, (l) => +(1 - Math.exp(l)).toFixed(3)); writeFileSync(new URL(`./out/field/dump-${tag}${TERMS < 9 ? `-terms${TERMS}` : ''}-${v.style}-${v.view}.json`, import.meta.url), JSON.stringify({ w: W, h: H, style: v.style, view: v.view, C })); }
 if (HOLD) process.exit(0);
 
 // ─── the field, packed 21 bytes a disc: place (3 × int16 over ±4, the shift folded in), normal (octahedral), two sizes
