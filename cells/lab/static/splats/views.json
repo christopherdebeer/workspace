@@ -1,0 +1,192 @@
+[
+ {
+  "group": "Splats",
+  "views": [
+   {
+    "name": "garden",
+    "title": "A made scene",
+    "caption": "the procedural garden: 120,000 Gaussians, each a centre, a shape, a colour and an opacity, sorted and blended",
+    "file": "v-garden.jpg"
+   },
+   {
+    "name": "plush",
+    "title": "A captured scene",
+    "caption": "a phone capture (plush.splat), as captured: the kind of scene splats exist for",
+    "file": "v-plush.jpg"
+   }
+  ]
+ },
+ {
+  "group": "One stone",
+  "views": [
+   {
+    "name": "stone",
+    "title": "One stone, in wash",
+    "caption": "the One Stone study from its designed side: the seam and its wedge, the lip and the shadow under it, washes on the shaded faces, drawn by the brush",
+    "file": "v-stone.jpg"
+   },
+   {
+    "name": "stone-dry",
+    "title": "One stone, dry brush",
+    "caption": "the same stone in the dry look: hatching in place of wash",
+    "file": "v-stone-dry.jpg"
+   },
+   {
+    "name": "stone-sparse",
+    "title": "One stone, spare",
+    "caption": "the detail turned down: the marks that rank highest survive (the seam’s hook, the lip, the shadow under it)",
+    "file": "v-stone-sparse.jpg"
+   }
+  ]
+ },
+ {
+  "group": "Brushes and the composed scene",
+  "views": [
+   {
+    "name": "brushes",
+    "title": "Shared brushes",
+    "caption": "one brush drawing a stone, an architectural corner, a culm and a free gesture",
+    "file": "v-brushes.jpg"
+   },
+   {
+    "name": "composed",
+    "title": "The composed scene, resolved",
+    "caption": "the stone, three culms and a corner from the reference camera, every mark kept",
+    "file": "v-composed.jpg"
+   },
+   {
+    "name": "composed-mid",
+    "title": "Intermediate",
+    "caption": "the same view at intermediate detail, by the marks’ ranks",
+    "file": "v-composed-mid.jpg"
+   },
+   {
+    "name": "composed-sparse",
+    "title": "Sparse",
+    "caption": "sparse, by the marks’ ranks: broken outlines",
+    "file": "v-composed-sparse.jpg"
+   },
+   {
+    "name": "composed-dry",
+    "title": "In dry brush",
+    "caption": "the composed scene resolved in the dry look",
+    "file": "v-composed-dry.jpg"
+   }
+  ]
+ },
+ {
+  "group": "A drawing policy",
+  "views": [
+   {
+    "name": "policy-rules",
+    "title": "Sparse, by the rules",
+    "caption": "the hand-written rules at the sparse budget: structure kept, broken",
+    "file": "v-policy-rules.jpg"
+   },
+   {
+    "name": "policy-learned",
+    "title": "Sparse, learned",
+    "caption": "the policy learned from 59 judged pairs, at the same budget: the stone as a mass with its shadow, less outline",
+    "file": "v-policy-learned.jpg"
+   },
+   {
+    "name": "judge",
+    "title": "Judging a pair",
+    "caption": "the judging page on a phone: two treatments of one view at one budget; tap the better",
+    "file": "v-judge.jpg"
+   }
+  ]
+ },
+ {
+  "group": "The pen",
+  "views": [
+   {
+    "name": "pen-word",
+    "title": "Autograph’s pen in space",
+    "caption": "Autograph’s hand writing “stone” with the broad pen, on a board and wrapped round a culm, against the brush’s round stroke",
+    "file": "v-pen-word.jpg"
+   },
+   {
+    "name": "pen-rock",
+    "title": "A Bamboo rock and bank",
+    "caption": "one of Bamboo’s outcrops and the bank rim beside it, drawn only by the brush: edges by the pen, shadowed faces and the bank’s slope in pooled washes",
+    "file": "v-pen-rock.jpg"
+   }
+  ]
+ },
+ {
+  "group": "The bench and mist",
+  "views": [
+   {
+    "name": "bench",
+    "title": "The bench",
+    "caption": "one stroke made editable: its handles, its pressure, its wash",
+    "file": "v-bench.jpg"
+   },
+   {
+    "name": "mist",
+    "title": "Mist",
+    "caption": "a volume of splats lit by a tiny network evaluated per splat in the shader",
+    "file": "v-mist.jpg"
+   }
+  ]
+ },
+ {
+  "group": "Captured scenes in ink",
+  "views": [
+   {
+    "name": "ink-shoe",
+    "title": "A shoe drawn by its own splats",
+    "caption": "the shoe capture in ink: every splat paper, outline discs shown only edge-on, dark splats as ranked tone; its long splats hatch the mesh upper",
+    "file": "v-ink-shoe.jpg"
+   },
+   {
+    "name": "ink-plush",
+    "title": "The plush in ink",
+    "caption": "the plush capture in ink: it reads, busily (fur is noise at this scale)",
+    "file": "v-ink-plush.jpg"
+   }
+  ]
+ },
+ {
+  "group": "Drawings fitted as fields",
+  "views": [
+   {
+    "name": "field-stone",
+    "title": "The stone, fitted",
+    "caption": "the stone’s drawing fitted as a field: discs whose ink depends on where they’re seen from, on a view it wasn’t fitted to",
+    "file": "v-field-stone.jpg"
+   },
+   {
+    "name": "field-stone-flat",
+    "title": "Without view dependence",
+    "caption": "the same discs with one opacity each, from the same view: every edge ghosts across every face",
+    "file": "v-field-stone-flat.jpg"
+   },
+   {
+    "name": "field-composed",
+    "title": "The composed scene, fitted",
+    "caption": "the whole composed scene fitted as a field (33,730 discs), from a view it wasn’t fitted to",
+    "file": "v-field-composed.jpg"
+   },
+   {
+    "name": "field-sumi",
+    "title": "Sumi-e, fitted",
+    "caption": "the field fitted to an image model’s sumi-e restyle of six wireframe views, each disc’s shape fitted with its ink, from the reference view",
+    "file": "v-field-sumi.jpg"
+   },
+   {
+    "name": "field-sumi-new",
+    "title": "Sumi-e, from a view no drawing covered",
+    "caption": "the same field halfway between two of the drawn views",
+    "file": "v-field-sumi-new.jpg"
+   },
+   {
+    "name": "field-sumi-low",
+    "title": "Sumi-e, from low",
+    "caption": "and from low down, also undrawn",
+    "file": "v-field-sumi-low.jpg"
+   }
+  ]
+ }
+]
