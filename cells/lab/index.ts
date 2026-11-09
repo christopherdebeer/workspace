@@ -126,7 +126,7 @@ function card(e: Experiment, b: Built): string {
   return `<article class="card" data-preview="${esc(page)}?${esc(e.preview)}" data-open="${esc(page)}">
   <a class="live" href="${page}" aria-label="${esc(e.title)}"><iframe data-src="${page}?${esc(e.preview)}" title="${esc(e.title)} (preview)" tabindex="-1" aria-hidden="true"></iframe><span class="idle px">${esc(e.title)}</span></a>
   <div class="meta">
-    <div class="name"><a class="px" href="${page}">${esc(e.title)}</a>${readme ? `<a href="${readme}">readme</a>` : ''}</div>
+    <div class="name"><a class="px" href="${page}">${esc(e.title)}</a>${(e.tags ?? []).map((t) => `<span class="tag">${esc(t)}</span>`).join('')}${readme ? `<a href="${readme}">readme</a>` : ''}</div>
     <p class="muted">${esc(e.blurb)}</p>
     ${presets ? `<div class="presets" role="group" aria-label="${esc(e.title)} previews">${presets}</div>` : ''}
     <a class="open" href="${page}">open <span class="chosen"></span>&rarr;</a>
@@ -154,6 +154,7 @@ function indexPage(b: Built): string {
   .name { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
   .name .px { font-size: 15px; text-decoration: none; }
   .meta p { margin: 4px 0 8px; }
+  .tag { font: 10px ui-monospace, monospace; letter-spacing: .08em; text-transform: uppercase; border: 1px solid currentColor; border-radius: 8px; padding: 0 5px; margin-left: 6px; opacity: .6; }
   .presets { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 8px; }
   .preset { font: inherit; font-size: 12px; color: var(--ink); background: none; border: 1px solid var(--rule); padding: 2px 6px; cursor: pointer; white-space: nowrap; }
   .preset:hover { border-color: var(--ink); }

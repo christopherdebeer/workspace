@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en" data-exp="drawer"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#efe7d8"><title>Drawer</title>
+<style>
+:root{--bg:#efe7d8;--card:rgba(246,241,231,.9);--ink:#2a2420;--muted:#7a7166;--edge:#d8cfbf;--accent:#a8482a;font-family:ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:var(--ink);background:var(--bg);color-scheme:light}
+.dark{--bg:#1c1d1f;--card:rgba(30,31,34,.88);--ink:#ecebe6;--muted:#9a9c98;--edge:#3a3c40;--accent:#f2a65a;color-scheme:dark}
+*{box-sizing:border-box}html,body{height:100%;margin:0;background:var(--bg);overscroll-behavior:none}
+button,input{font:inherit;color:inherit}
+button{border:1px solid var(--edge);background:transparent;border-radius:16px;min-height:32px;padding:0 12px;font-size:13px;cursor:pointer;-webkit-tap-highlight-color:transparent;white-space:nowrap}
+button[aria-pressed=true]{background:var(--ink);color:var(--bg);border-color:var(--ink)}
+#view{position:fixed;inset:0;width:100%;height:100%;display:block}
+header{position:fixed;top:0;left:0;right:0;padding:max(10px,env(safe-area-inset-top)) 16px 8px;pointer-events:none}
+header strong{font:600 17px/1.2 ui-sans-serif,system-ui,sans-serif}header small{font:10px ui-monospace,monospace;letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}
+header a{pointer-events:auto;float:right;font:11px ui-monospace,monospace;color:var(--muted);text-decoration:none}
+#above{position:fixed;left:16px;right:16px;bottom:calc(var(--drawer,120px) + 10px);font:11px ui-monospace,monospace;color:var(--muted);text-align:center;pointer-events:none;transition:bottom .34s cubic-bezier(.2,.9,.25,1)}
+.row{display:flex;gap:6px;overflow-x:auto;scrollbar-width:none;align-items:center}.row::-webkit-scrollbar{display:none}
+.lab{font:10px ui-monospace,monospace;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);min-width:52px}
+.slider{display:flex;flex-direction:column;gap:2px;font-size:12px;color:var(--muted)}.slider .v{float:right;font-family:ui-monospace,monospace;color:var(--ink)}
+input[type=range]{width:100%;accent-color:var(--accent)}
+.preview header,.preview #above{display:none}.preview #drawer{pointer-events:none}
+</style></head><body>
+<canvas id="view" aria-label="A stand-in scene: a stone on a ground plane, which rises clear of the drawer as it opens."></canvas>
+<header><a href="/drawer/readme">how it works</a><strong>Drawer</strong> <small>a control surface over a scene</small></header>
+<div id="above">this line floats just above the drawer (bottom: var(--drawer))</div>
+<div id="drawer">
+  <button id="grip"><span class="sum" id="sum"></span></button>
+  <div class="row"><span class="lab">theme</span><button data-theme="paper">paper</button><button data-theme="dark">dark</button><button id="lifting" aria-pressed="true">lift the scene</button></div>
+  <div data-tier="2">
+    <details class="dw-sec" data-key="subject"><summary><span class="t">subject</span><span class="s"></span></summary>
+      <div class="dw-body">
+        <div class="slider" data-focus><label>size <span class="v" id="size-v"></span><input type="range" id="size" min="0.3" max="1.6" step="0.01" value="1"></label></div>
+        <div class="row" data-focus><span class="lab">ink</span><button data-ink="sumi">sumi</button><button data-ink="sepia">sepia</button><button data-ink="indigo">indigo</button></div>
+        <details class="dw-sub"><summary><span class="t">surface</span><span class="s">grain, crack</span></summary>
+          <div class="dw-body"><div class="slider" data-focus><label>grain <span class="v" id="grain-v"></span><input type="range" id="grain" min="0" max="1" step="0.01" value="0.4"></label></div>
+          <div class="row"><span class="lab">crack</span><button data-crack="on">on</button><button data-crack="off">off</button></div></div>
+        </details>
+      </div>
+    </details>
+    <details class="dw-sec" data-key="light"><summary><span class="t">light</span><span class="s"></span></summary>
+      <div class="dw-body">
+        <div class="slider" data-focus><label>sun round <span class="v" id="az-v"></span><input type="range" id="az" min="0" max="6.28" step="0.01" value="2.3"></label></div>
+        <div class="slider" data-focus><label>sun height <span class="v" id="el-v"></span><input type="range" id="el" min="0.1" max="1.4" step="0.01" value="0.6"></label></div>
+      </div>
+    </details>
+    <details class="dw-sec" data-key="display"><summary><span class="t">display</span><span class="s"></span></summary>
+      <div class="dw-body">
+        <div class="row"><span class="lab">ground</span><button data-grid="on">grid</button><button data-grid="off">bare</button></div>
+        <div class="slider" data-focus><label>zoom <span class="v" id="zoom-v"></span><input type="range" id="zoom" min="0.6" max="1.6" step="0.01" value="1"></label></div>
+      </div>
+    </details>
+  </div>
+</div>
+<script src="{{app}}"></script>
+</body></html>

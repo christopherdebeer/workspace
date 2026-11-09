@@ -211,7 +211,7 @@ void main() {
   // corner meeting the mark's plane), so a broad mark on a face turned away isn't cut by the face's own depth; marks on
   // an edge, free marks (open space, a volume), a captured scene's splats, or a plane seen edge-on keep their centre's)
   if (support == 1u) {
-    vec3 nv = mat3(u_view) * sn, d = vec3(at.x / u_proj[0][0], at.y / u_proj[1][1], -1.0);
+    vec3 nv = mat3(u_view) * sn, d = vec3((at.x + u_proj[2][0]) / u_proj[0][0], (at.y + u_proj[2][1]) / u_proj[1][1], -1.0);
     float dn = dot(nv, d);
     if (abs(dn) > 0.05) {
       float tt = dot(nv, cam.xyz) / dn;

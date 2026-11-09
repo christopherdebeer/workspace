@@ -21,6 +21,8 @@ export interface Experiment {
   preview: string;
   readme: string;
   presets: Preset[];
+  /** what kind of experiment it is, beyond its group (e.g. 'hci' for one about the interface itself) */
+  tags?: string[];
 }
 
 export const EXPERIMENTS: Experiment[] = [
@@ -301,6 +303,12 @@ export const EXPERIMENTS: Experiment[] = [
       { label: 'a springtail', query: 'one&seed=4&t=10&critter=hypo' },
       { label: 'a nematode, caught', query: 'one&seed=4&t=9.6&critter=trap' },
     ],
+  },
+  {
+    id: 'drawer', title: 'Drawer', group: 'Interface', tags: ['hci'],
+    blurb: 'A control surface over a scene, made once for every experiment here: a drawer that closes to a line saying what\u2019s chosen, opens to a focus and then in full, dragged, flicked or stepped by keyboard; sections inside it that open one at a time and summarise themselves shut; a focus mode that narrows it to one control; and the scene lifted clear of it as it opens. Lifted from FAB\u2019s bench, Splats\u2019 panel and the home cell\u2019s tuner.',
+    page: 'static/drawer.html', preview: 'preview', readme: 'static/drawer.md',
+    presets: [{ label: 'closed', query: 'drawer=closed' }, { label: 'full', query: 'drawer=full' }, { label: 'dark', query: 'theme=dark' }],
   },
 ];
 

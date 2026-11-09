@@ -20,6 +20,8 @@ import { Sorter, type SortDone } from './sort';
 import { MARK, STATES, stoneShape, type Look, type Stone } from './stone';
 import { inkScene, type InkStats } from './ink';
 import { fetchField, fieldDrawing } from './field';
+import { drawer, lift as drawerLift } from '../drawer/drawer';
+import { sections } from '../drawer/sections';
 import { brushScene, composedScene, stoneDrawing, REF_CAM, type BrushScene, type ComposedScene } from './subjects';
 import { LIT, mistScene, referenceColours, sunDir, referenceAt, referenceLight, type MistScene } from './mist';
 import { NET, ANALYTIC, BAKE, RESULTS } from './mistnet';
@@ -379,7 +381,7 @@ function benchSelect(i: number) { benchSel = i; benchUpload(); syncBench(); }
 /** a ray from the eye through a point of the screen */
 function rayAt(x: number, y: number): { pos: [number, number, number]; d: [number, number, number] } {
   const { pos, view } = eye(), r = canvas.getBoundingClientRect(), th = Math.tan(cam.fov / 2), asp = r.width / r.height;
-  const sx = ((x - r.left) / r.width) * 2 - 1, sy = 1 - ((y - r.top) / r.height) * 2;
+  const sx = ((x - r.left) / r.width) * 2 - 1, sy = 1 - ((y - r.top) / r.height) * 2 - viewShift;
   const R0 = [view[0], view[4], view[8]], U = [view[1], view[5], view[9]], F = [-view[2], -view[6], -view[10]];
   return { pos, d: norm([F[0] + R0[0] * sx * th * asp + U[0] * sy * th, F[1] + R0[1] * sx * th * asp + U[1] * sy * th, F[2] + R0[2] * sx * th * asp + U[2] * sy * th]) };
 }
@@ -388,7 +390,7 @@ function toScreen(p: number[]): [number, number] | null {
   const { view } = eye(), r = canvas.getBoundingClientRect(), f = 1 / Math.tan(cam.fov / 2), asp = r.width / r.height;
   const cx = view[0] * p[0] + view[4] * p[1] + view[8] * p[2] + view[12], cy = view[1] * p[0] + view[5] * p[1] + view[9] * p[2] + view[13], cz = view[2] * p[0] + view[6] * p[1] + view[10] * p[2] + view[14];
   if (cz > -0.02) return null;
-  return [r.left + ((f / asp) * (cx / -cz) + 1) * 0.5 * r.width, r.top + (1 - f * (cy / -cz)) * 0.5 * r.height];
+  return [r.left + ((f / asp) * (cx / -cz) + 1) * 0.5 * r.width, r.top + (1 - (f * (cy / -cz) + viewShift)) * 0.5 * r.height];
 }
 /** the stroke nearest a tap (within a finger's width of one of its marks), or -1 */
 function benchPick(x: number, y: number): number {
@@ -585,26 +587,26 @@ const syncs = [
 ];
 function syncStone() { syncs.forEach((f) => f()); $('stone-controls').hidden = !stone && !brushes && !(captured && inkOn); $('composition').hidden = !composed; syncPanel(); }
 /**
- * The panel's sections (splats.html): one open at a time (the open one closes the others, so there's room to work in
- * it), remembered between visits; each closed one says in a line what it's set to. If the open section is hidden for
- * this scene, the first one shown opens instead.
+ * The panel is a drawer (client/drawer, made for every experiment): closed to its grip and a line (the scene, its
+ * stats); focus, the scene chips and status; full, the sections (drawing, stroke, light, display), one open at a time,
+ * each saying what it's set to while shut, and a control's name tapped narrows it to that control. As it opens, the
+ * camera lifts the subject clear of it (`viewShift`, eased toward the drawer's share of the screen).
  */
-const PANEL_KEY = 'splats-panel';
-const secs = () => [...document.querySelectorAll<HTMLDetailsElement>('#panel details.sec')];
-let panelOpen: string | null = (() => { try { return localStorage.getItem(PANEL_KEY); } catch { return null; } })() ?? 'drawing';
-for (const d of document.querySelectorAll<HTMLDetailsElement>('#panel details')) d.addEventListener('toggle', () => {
-  if (!d.open || !d.classList.contains('sec')) return;
-  for (const o of secs()) if (o !== d && o.open) o.open = false;
-  panelOpen = d.dataset.key ?? null; try { if (panelOpen) localStorage.setItem(PANEL_KEY, panelOpen); } catch { /* not kept */ }
+let viewShift = 0, viewShiftGoal = 0;
+const panel = drawer($('panel'), { persist: 'splats-drawer', start: 'focus', cap: 0.62, onHeight: (h) => { viewShiftGoal = getComputedStyle($('panel')).display === 'none' ? 0 : drawerLift(h, innerHeight, 0.5); } });
+const panelSections = sections($('panel'), {
+  persist: 'splats-panel',
+  summaries: () => ({
+    drawing: `${look} · detail ${Math.round(detail * 100)}%${composed ? ` · ${policyMode}` : ''}`,
+    bench: bench && benchSel >= 0 ? `${bench.items[benchSel].name} · ${bench.items[benchSel].stroke.material}` : 'none selected',
+    mist: `${light} · sun ${sunAz.toFixed(1)}, ${sunEl.toFixed(1)}`,
+    display: `${MODES[mode]} · size ${size.toFixed(2)} · res ${res}`,
+  }),
 });
 function syncPanel() {
-  const shown = secs().filter((d) => !d.hidden);
-  if (!shown.some((d) => d.open)) { const d = shown.find((x) => x.dataset.key === panelOpen) ?? shown[0]; if (d) d.open = true; }
-  const set = (id: string, t: string) => { const e = document.getElementById(id); if (e && e.textContent !== t) e.textContent = t; };
-  set('sum-drawing', `${look} · detail ${Math.round(detail * 100)}%${composed ? ` · ${policyMode}` : ''}`);
-  set('sum-bench', bench && benchSel >= 0 ? `${bench.items[benchSel].name} · ${bench.items[benchSel].stroke.material}` : 'none selected');
-  set('sum-mist', `${light} · sun ${sunAz.toFixed(1)}, ${sunEl.toFixed(1)}`);
-  set('sum-display', `${MODES[mode]} · size ${size.toFixed(2)} · res ${res}`);
+  panelSections.refresh();
+  const t = `${sceneName || 'splats'} · ${$('stats').textContent ?? ''}`;
+  if ($('psum').textContent !== t) $('psum').textContent = t;
 }
 slider('detail', () => detail, (v) => { detail = v; syncStone(); }, (v) => `${Math.round(v * 100)}%`);
 function syncDetail() { const el = $<HTMLInputElement>('detail'); el.value = String(detail); $('detail-v').textContent = `${Math.round(detail * 100)}%`; }
@@ -657,10 +659,7 @@ slider('sunel', () => sunEl, (v) => { sunEl = v; if (light === 'reference') reli
     $('b-note').textContent = (benchSel >= 0 ? `${bench.items[benchSel].name} stroke selected: drag its points to bend it. ` : 'tap a stroke to select it. ') + benchMsg;
   };
 }
-// (the panel hidden by the *hide* in its top row; brought back by the *controls* button, shown only while it's hidden)
-const fold = (f: boolean) => { document.documentElement.classList.toggle('folded', f); $('fold').setAttribute('aria-expanded', String(!f)); };
-$('fold').onclick = () => fold(false); $('fold-in').onclick = () => fold(true);
-$('fold').textContent = 'controls';
+
 $('j-a').onclick = () => judgeChoose('A'); $('j-b').onclick = () => judgeChoose('B');
 $('j-same').onclick = () => judgeChoose('same'); $('j-skip').onclick = () => judgeChoose('skip'); $('j-export').onclick = judgeExport;
 $('j-close').onclick = () => { judge.on = false; judge.stage = 'idle'; $('judge').hidden = true; syncStone(); };
@@ -839,6 +838,8 @@ function frame() {
   // (sorted again once the view's turned more than a little, and the last sort's in)
   if (scene && !sorter.busy && (!lastDir || dot(lastDir, fwd) < 0.9995)) { lastDir = fwd; sorter.ask(fwd); }
   const near = Math.max(0.01, cam.dist * 0.01), proj = perspective(cam.fov, w / h, near, cam.dist * 100);
+  // (the subject lifted clear of the drawer: the projection's centre moved up by `viewShift` of the screen's height)
+  viewShift += (viewShiftGoal - viewShift) * Math.min(1, dt * 8); proj[9] = -viewShift;
   const fy = h / (2 * Math.tan(cam.fov / 2));
   const share = shareAt(detail), gv = updateGates(dt);
   drawNow = () => R.draw(view, proj, [fy, fy], { size, mode, bg: mist ? [0.13, 0.145, 0.165] : stone || brushes || bench || penS || sceneName === 'field' || (captured && inkOn) ? [0.937, 0.906, 0.847] : theme(), detail, thin, share, features: gv ?? features, eye: pos, occlude, only, light: mist ? Math.max(0, LIGHTS.indexOf(light) - 1) : 0, sun: sunDir(sunAz, sunEl), diff: mist ? diff : false, halo: composed && compose && haloOn ? haloPx * dpr : 0, nf: [near, cam.dist * 100] });

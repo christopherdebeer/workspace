@@ -1,0 +1,42 @@
+[
+ {
+  "group": "Heights",
+  "views": [
+   {
+    "name": "closed",
+    "title": "Closed",
+    "caption": "its grip and a line saying what’s chosen; the scene almost whole",
+    "file": "v-closed.jpg"
+   },
+   {
+    "name": "focus",
+    "title": "Focus",
+    "caption": "tier 1: the controls used most",
+    "file": "v-focus.jpg"
+   },
+   {
+    "name": "full",
+    "title": "Full",
+    "caption": "everything, in sections that open one at a time and summarise themselves shut; the subject lifted clear",
+    "file": "v-full.jpg"
+   }
+  ]
+ },
+ {
+  "group": "Working in it",
+  "views": [
+   {
+    "name": "focus-mode",
+    "title": "One control alone",
+    "caption": "a control’s name tapped: the drawer narrows to it, so the scene clears while you dial",
+    "file": "v-focus-mode.jpg"
+   },
+   {
+    "name": "dark",
+    "title": "In a dark page",
+    "caption": "the same drawer in a page with dark tokens: it takes the page’s look",
+    "file": "v-dark.jpg"
+   }
+  ]
+ }
+]

@@ -38,6 +38,7 @@ const experiments: Record<string, () => Promise<unknown>> = {
   autograph: () => import('./autograph/main'),
   tactile: () => import('./tactile/main'),
   splats: () => import('./splats/main'),
+  drawer: () => import('./drawer/main'),
 };
 
 // (loaded as a worker by an experiment that shapes off the page's thread: serve it)
