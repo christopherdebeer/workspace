@@ -1252,9 +1252,10 @@ The room taught again, the same way, with its solids (tone error, mean of three 
 
 ![The canopy view with the light overhead, low from one side, and from the other](splats/b-room-light.jpg)
 
-- **The light is a control, not something taught.** The teachers show one lighting, and they ink an arch along its
-  upper edge with a wash beneath, not its underside. Which side a role's ink keeps to should be taught too; it
-  isn't a parameter yet.
+- **The light is a control, not something taught.** The teachers show one lighting. (An earlier version of this
+  note said the teachers ink an arch along its upper edge. They don't: read stroke by stroke, 39 of the teacher's 45
+  limb strokes carry more ink below the limb's spine than above it, as the room's underdrawings did. See the root,
+  below.)
 
 ## The Bench: one brush made dependable, one stroke made editable
 

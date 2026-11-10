@@ -18,7 +18,7 @@ def sample(D, x, y):
   x0 = np.floor(x - 0.5).astype(int); y0 = np.floor(y - 0.5).astype(int); fx = x - 0.5 - x0; fy = y - 0.5 - y0; H, W = D.shape
   g = lambda i, j: np.where((i >= 0) & (i < W) & (j >= 0) & (j < H), D[np.clip(j, 0, H - 1), np.clip(i, 0, W - 1)], 0)
   return (g(x0, y0) * (1 - fx) + g(x0 + 1, y0) * fx) * (1 - fy) + (g(x0, y0 + 1) * (1 - fx) + g(x0 + 1, y0 + 1) * fx) * fy
-spines = json.load(open(OUT + 'spines.json')); imgs = {}; strips = []; meta = []
+spines = json.load(open(OUT + 'spines.json')); imgs = {}; strips = []; meta = []; geo = []
 for s in spines:
   P = s['pts']; ok = [p is not None and 0 <= p[0] < 1536 and 0 <= p[1] < 1024 and not p[4] for p in P]
   i = 0
@@ -36,8 +36,14 @@ for s in spines:
     tx = np.gradient(x); ty = np.gradient(y); tl = np.hypot(tx, ty) + 1e-9; nx, ny = -ty / tl, tx / tl
     v = np.linspace(-VR, VR, VN)
     strip = sample(imgs[s['view']], x[:, None] + nx[:, None] * v[None, :] * hw[:, None], y[:, None] + ny[:, None] * v[None, :] * hw[:, None]).astype(np.float32)
+    geo.append(np.stack([x, y, nx, ny, hw]).astype(np.float32))
     strips.append(strip); meta.append(dict(view=s['view'], key=s['key'], role=s['role'], u0=round((i0 + 0.5) / len(P), 3), u1=round((i1 - 0.5) / len(P), 3), length=n, hw=round(float(hw.mean()), 1), depth=round(float(run[:, 3].mean()), 1)))
-np.savez_compressed(OUT + 'pool.npz', **{f's{k}': s for k, s in enumerate(strips)}); json.dump(meta, open(OUT + 'pool.json', 'w'))
+np.savez_compressed(OUT + 'pool.npz', **{f's{k}': s for k, s in enumerate(strips)})
+# (and for the fitter, as plain 32-bit floats: each strip's stations (x, y, the way across, the half-width: five rows of
+# its length) then the strip itself, a row a station; `at` says where each starts)
+off = 0; parts = []
+for m, g, st in zip(meta, geo, strips): m['at'] = off; parts += [g.ravel(), st.ravel()]; off += g.size + st.size
+np.concatenate(parts).astype('<f4').tofile(OUT + 'pool.bin'); json.dump(meta, open(OUT + 'pool.json', 'w'))
 # (where the teacher's ink sits across each strip: its centre and how much of it lies within the limb as the scene draws it)
 print(f'{len(strips)} strokes of {len(set(m["key"] for m in meta))} limbs')
 v = np.linspace(-VR, VR, VN)

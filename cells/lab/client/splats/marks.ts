@@ -48,6 +48,11 @@ export interface Mark {
   /** a tube's shading: how far its ink keeps to its underside (0: all round; 1: its top left bare), as a limb drawn
    * with one loaded stroke along it and the paper left for the rest */
   shade?: number;
+  /** a banded limb: its rows keep to an arc of the tube, each with a part to play by its place across the arc: a
+   * firm edge along the middle of the arc (seen from the side, the limb's edge), a body beside it, and bristles that
+   * break up toward the arc's two ends. Where the arc's middle faces (a unit vector; default straight down: a limb
+   * inked along its underside) */
+  band?: V | true;
   /** where a tube's light comes from (a unit vector; none: from straight above its spine): its ink keeps to the side
    * turned away from it, and the side turned to it is left to the paper */
   light?: V;
@@ -64,9 +69,13 @@ export interface Mark {
   lod?: [number, number];
   params: number[]; resid: number[]; view: number[];
 }
-export const STROKE = 31, WASH = 10, RESID = 6, VIEW_TERMS = 9;
+export const STROKE = 36, WASH = 10, RESID = 6, VIEW_TERMS = 9;
 /** the parameters' places in a stroke */
-export const SP = { ink: 0, width: 6, u0: 12, u1: 13, sharp0: 14, sharp1: 15, along: 16, offset: 17, dry: 22, drySide: 26, spread: 27, splay: 28, step: 29, crisp: 30 } as const;
+export const SP = { ink: 0, width: 6, u0: 12, u1: 13, sharp0: 14, sharp1: 15, along: 16, offset: 17, dry: 22, drySide: 26, spread: 27, splay: 28, step: 29, crisp: 30, arc: 31, fine: 32, feather: 33, fall: 34, bristle: 35 } as const;
+/** a banded limb's own parameters (the last five), as they are when nothing has set them: its arc (a log, on 100° to each
+ * side); how much finer its edge and bristle rows are than its body's (a log); where across the arc its ink starts to
+ * fall (0…1); how steeply; how much drier its bristles are than its body */
+export const BAND = { arc: 0, fine: 0.9, feather: 0.55, fall: 1, bristle: 1 } as const;
 /** how many knots each run of a stroke's parameters has */
 export const KN = { ink: 6, width: 6, offset: 5, dry: 4 } as const;
 export const INK: [number, number, number] = [36, 31, 27];
@@ -101,11 +110,13 @@ export function paramRange(m: Mark, j: number): [number, number] {
   if (j < SP.width) return [-7, 5]; if (j < SP.u0) return [-1.6, 1.2];
   if (j === SP.u0) return [-0.1, 0.6]; if (j === SP.u1) return [0.4, 1.1]; if (j === SP.sharp0 || j === SP.sharp1) return [-2.5, 2]; if (j === SP.along) return [-1.5, 1];
   if (j < SP.dry) return [-1.5, 1.5]; if (j < SP.drySide) return [0, 2.5]; if (j === SP.drySide) return [-1, 1]; if (j === SP.spread) return [-0.8, 0.8]; if (j === SP.splay) return [-1.2, 1.2]; if (j === SP.crisp) return [0, 3];
+  if (j === SP.arc) return [-0.9, 0.5]; if (j === SP.fine) return [0, 2.2]; if (j === SP.feather) return [0.1, 0.95]; if (j === SP.fall) return [0, 4]; if (j === SP.bristle) return [0, 4];
   return [-3, 3];
 }
 /** a new stroke through control points: full along it, of even weight, wet */
 export function strokeMark(id: number, ctrl: V[], normal: V | V[] | 'tube' | undefined, width: number, count: number, rows = 1, name?: string): Mark {
   const params = new Array(STROKE).fill(0); for (let i = 0; i < 6; i++) params[i] = 1.5; params[SP.u0] = -0.04; params[SP.u1] = 1.04;
+  params[SP.arc] = BAND.arc; params[SP.fine] = BAND.fine; params[SP.feather] = BAND.feather; params[SP.fall] = BAND.fall; params[SP.bristle] = BAND.bristle;
   return { id, kind: 'stroke', name, ctrl: ctrl.map((p) => [...p] as V), normal, width, rows, count, params, resid: new Array(count * RESID).fill(0), view: new Array(VIEW_TERMS).fill(0) };
 }
 /** a new wash on a face (its triangles, in the scene): an even, light tone */
@@ -197,6 +208,24 @@ export function layout(m: Mark): Deposit[] {
       let n: V = free || tube ? norm(cross(t, Math.abs(t[1]) < 0.9 ? [0, 1, 0] : [1, 0, 0])) : norm(add(add([0, 0, 0], S.normals![k], 1 - f), S.normals![Math.min(S.normals!.length - 1, k + 1)], f));
       n = norm(sub(n, [t[0] * dot(n, t), t[1] * dot(n, t), t[2] * dot(n, t)]));
       const w = w0 * Math.exp(knots(P, SP.width, KN.width, u)), alt = i % 2 ? 1 : -1;
+      if (tube && m.band) {
+        // (a banded limb: rows in pairs, one to each side of the arc's middle; a row's part is its place across the
+        // arc, q: 0 the firm edge, then the body, then bristles toward 1. Edge and bristle rows are finer than the
+        // body's; the ink falls past `feather`; the bristles break up (each row its own run of gaps))
+        const dir: V = m.band === true ? [0, -1, 0] : m.band, dd = dot(dir, t); let D0: V = [dir[0] - t[0] * dd, dir[1] - t[1] * dd, dir[2] - t[2] * dd];
+        if (Math.hypot(D0[0], D0[1], D0[2]) < 0.3) { const alt2: V = Math.abs(t[0]) < 0.8 ? [1, 0, 0] : [0, 0, 1], da = dot(alt2, t); D0 = [alt2[0] - t[0] * da, alt2[1] - t[1] * da, alt2[2] - t[2] * da]; }
+        D0 = norm(D0); const B0 = cross(t, D0), pairs = Math.ceil(rows / 2), pr = Math.floor(row / 2), sgn = row % 2 ? -1 : 1;
+        const A = ((100 * Math.PI) / 180) * Math.exp(P[SP.arc] ?? BAND.arc), fine = P[SP.fine] ?? BAND.fine, qf = P[SP.feather] ?? BAND.feather, fall = P[SP.fall] ?? BAND.fall, bris = P[SP.bristle] ?? BAND.bristle;
+        // (each pair's share of the arc: less where it's an edge or a bristle)
+        const share = (j: number) => { const q = (j + 0.5) / pairs; return Math.exp(-fine * (Math.max(0, 1 - q / 0.22) + Math.max(0, (q - 0.68) / 0.32))); };
+        let tot = 0, before = 0; for (let j = 0; j < pairs; j++) { const sh = share(j); if (j < pr) before += sh; tot += sh; }
+        const q = (before + share(pr) / 2) / tot, phi = sgn * q * A, c = Math.cos(phi), sn = Math.sin(phi), rad: V = [D0[0] * c + B0[0] * sn, D0[1] * c + B0[1] * sn, D0[2] * c + B0[2] * sn];
+        const run = s / (5 * w0) + hash(m.id, row, 7) * 16, r0 = Math.floor(run), rf = run - r0, sm = rf * rf * (3 - 2 * rf), gap = hash(m.id, row, r0) * (1 - sm) + hash(m.id, row, r0 + 1) * sm;
+        const dry = Math.max(0, knots(P, SP.dry, KN.dry, u)) * (0.12 + bris * q * q * 3) * 9 * gap * gap, past = Math.max(0, (q - qf) / Math.max(0.05, 1 - qf));
+        const centre = add(add(pts[k], sub(pts[k + 1], pts[k]), f), D0, -knots(P, SP.offset, KN.offset, u) * w0);
+        out.push({ p: add(centre, rad, w / 2 + R[r + 4] * w0), t, n: rad, s1: (L / cols) * 0.9 * Math.exp(P[SP.along] + R[r + 1]), s2: ((A * w) / 2) * (share(pr) / tot) * 0.62 * Math.exp(P[SP.spread] + R[r + 2]), thin: 0.0008, turn: R[r + 3], logit: knots(P, SP.ink, KN.ink, u) - softplus((P[SP.u0] - u) / t0) - softplus((u - P[SP.u1]) / t1) - dry - fall * 6 * past * past + R[r] });
+        continue;
+      }
       if (tube) {
         // (round a tube: this row's place round it; its deposit lies on the tube's surface, facing out)
         const N0 = norm(sub(Math.abs(t[1]) < 0.95 ? [0, 1, 0] : [1, 0, 0], [t[0] * (Math.abs(t[1]) < 0.95 ? t[1] : t[0]), t[1] * (Math.abs(t[1]) < 0.95 ? t[1] : t[0]), t[2] * (Math.abs(t[1]) < 0.95 ? t[1] : t[0])])), B0 = cross(t, N0);
