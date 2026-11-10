@@ -236,7 +236,7 @@
    {
     "name": "walk-in",
     "title": "Inside it",
-    "caption": "from 1.5 m, under it: strands and dabs",
+    "caption": "from 1.5 m, under it: strands and their leaves, a few deposits a leaf",
     "file": "v-walk-in.jpg"
    }
   ]
@@ -267,6 +267,29 @@
     "title": "A reserved view, as taught",
     "caption": "between the pool and the canopy: a view the room was never fitted to, drawn as taught from the three it was",
     "file": "v-room-reserved.jpg"
+   }
+  ]
+ },
+ {
+  "group": "One limb, three ways",
+  "views": [
+   {
+    "name": "limb-parts",
+    "title": "A limb in parts",
+    "caption": "the root tunnel’s third arch as the room draws it: a line along each edge and a graded stroke between",
+    "file": "v-limb-parts.jpg"
+   },
+   {
+    "name": "limb-sweep",
+    "title": "The same limb as one sweep",
+    "caption": "the same deposits as one pass of a loaded brush: its pressure sets its width, its coverage and how far its ink spreads together",
+    "file": "v-limb-sweep.jpg"
+   },
+   {
+    "name": "limb-accents",
+    "title": "The sweep with accents",
+    "caption": "the sweep, with stretches of a line along one edge or the other, each there or not on its own",
+    "file": "v-limb-accents.jpg"
    }
   ]
  }

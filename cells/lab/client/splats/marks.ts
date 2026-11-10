@@ -71,8 +71,26 @@ export interface Mark {
   band?: V | true | 'seen' | 'edges';
   /** a band as seen keeps to the limb's upper side (as seen), not its lower */
   bandUp?: boolean;
+  /**
+   * A band as seen made a sweep: one pass of a loaded brush along the limb. A pressure runs along it (an attack, the
+   * stroke's own run of harder and lighter, a release), and three things follow it together:
+   * - its width: the band is `tmin` half-widths thick where the pressure is nothing, `tmax` where it's full;
+   * - its coverage: each row (a bristle) lays ink only where the pressure is over the row's own threshold, so a
+   *   lighter stretch thins into streaks and the release frays, row by row (`dry`: how far the thresholds spread);
+   * - its load: the ink runs out along it (`decay`, in the logit a stroke's length).
+   * `vary`: how much its own run of pressure dips (0…1); `taper`: how much of its length the release takes;
+   * `jitter`: how far its deposits stand off the tube, row by row (in base widths): a rim that isn't the tube's.
+   */
+  sweep?: { tmin: number; tmax: number; dry: number; decay: number; vary: number; taper: number; jitter: number; runs?: number; wet?: number };
   /** a tube that hides nothing (one of several marks on the same limb: only the first is its solid) */
   ghost?: boolean;
+  /** leaves along it (a stroke in open space): each a few deposits (`n`) along its own axis, `len` long, widest a
+   * third of the way out and narrowing to its tip by `taper` (0 none … 1 to a point), its tip paler by `fade`; they
+   * come off the spine at the stroke's `splay` (radians from the way the spine runs), turning round it leaf by leaf;
+   * `bunch` to a bunch, a bunch's leaves drawn together along the spine by `cluster` (0 evenly spaced … 1 on one spot) */
+  leaf?: { n: number; len: number; taper: number; fade: number; bunch: number; cluster: number };
+  /** the stretch of its spine its deposits are laid over (0…1 of its length); the whole of it if not given */
+  span?: [number, number];
   /** where a tube's light comes from (a unit vector; none: from straight above its spine): its ink keeps to the side
    * turned away from it, and the side turned to it is left to the paper */
   light?: V;
@@ -214,14 +232,37 @@ export function layout(m: Mark): Deposit[] {
   if (m.kind === 'stroke') {
     const S = spine(m), pts = S.pts, L = S.L, w0 = m.width ?? 0.01, tube = m.normal === 'tube', free = !S.normals && !tube, rows = Math.max(1, m.rows ?? 1), cols = Math.ceil(N / rows);
     const t0 = 0.03 * Math.exp(-P[SP.sharp0]), t1 = 0.03 * Math.exp(-P[SP.sharp1]);
+    const sp0 = m.span?.[0] ?? 0, sp1 = m.span?.[1] ?? 1, Lc = (L * (sp1 - sp0)) / cols;
     // (its rows across it: the outer ones finer than the middle ones by `crisp`, packed side by side)
     const rw: number[] = [], rc: number[] = []; let rs = 0;
     for (let j = 0; j < rows; j++) { const v = rows > 1 ? (j + 0.5) / rows - 0.5 : 0; rw.push(Math.exp(-Math.max(0, P[SP.crisp]) * 4 * v * v)); rs += rw[j]; }
     { let a = 0; for (let j = 0; j < rows; j++) { rc.push((a + rw[j] / 2) / rs - 0.5); a += rw[j]; } }
+    if (m.leaf) {
+      const F = m.leaf, n = Math.max(1, F.n), leaves = Math.floor(N / n), per = Math.max(1, Math.round(F.bunch)), bunches = Math.max(1, Math.ceil(leaves / per)), a0 = Math.max(0, P[SP.u0]), a1 = Math.min(1, P[SP.u1]);
+      const wl = (m.width ?? 0.02) * Math.exp(P[SP.spread]), cl = Math.max(0, Math.min(1, F.cluster));
+      for (let q = 0; q < leaves; q++) {
+        // (its bunch's place along the spine: evenly, a little off; the bunch's leaves over a stretch about it)
+        const g = Math.floor(q / per), centre = (g + 0.5 + 0.5 * (hash(m.id, 61, g) - 0.5)) / bunches, extent = (1 - 0.85 * cl) / bunches;
+        const u = Math.max(0, Math.min(1, a0 + (a1 - a0) * (centre + (((q % per) + 0.5) / per - 0.5) * extent + (hash(m.id, 62, q) - 0.5) * 0.3 * extent))), s = u * L;
+        let k = 0; while (k < pts.length - 2 && S.cum[k + 1] < s) k++;
+        const f = Math.max(0, Math.min(1, (s - S.cum[k]) / Math.max(1e-9, S.cum[k + 1] - S.cum[k]))), t = norm(sub(pts[k + 1], pts[k])), A = add(pts[k], sub(pts[k + 1], pts[k]), f);
+        // (its axis: off the way the spine runs by the splay, to a side that turns round the spine leaf by leaf)
+        const e1 = norm(cross(t, Math.abs(t[1]) < 0.9 ? [0, 1, 0] : [1, 0, 0])), e2 = cross(t, e1), phi = q * 2.39996 + hash(m.id, 63, 0) * 6.28, th = P[SP.splay] * (0.7 + 0.6 * hash(m.id, 64, q));
+        const c = Math.cos(phi), sn = Math.sin(phi), ct = Math.cos(th), st = Math.sin(th), axis = norm([t[0] * ct + (e1[0] * c + e2[0] * sn) * st, t[1] * ct + (e1[1] * c + e2[1] * sn) * st, t[2] * ct + (e1[2] * c + e2[2] * sn) * st]);
+        const nn = norm(cross(axis, Math.abs(dot(axis, t)) < 0.98 ? t : e1)), len = F.len * (0.75 + 0.5 * hash(m.id, 65, q));
+        for (let j = 0; j < n; j++) {
+          const r = (q * n + j) * RESID, x = (j + 0.5) / n, shape = Math.max(0.12, x < 0.35 ? 0.45 + 0.55 * (x / 0.35) : 1 - F.taper * Math.pow((x - 0.35) / 0.65, 1.3));
+          out.push({ p: add(A, axis, len * x), t: axis, n: nn, s1: (len / n) * 0.55 * Math.exp(P[SP.along] + R[r + 1]), s2: (wl / 2) * 0.7 * shape * Math.exp(R[r + 2]), thin: (wl / 2) * 0.7 * shape, turn: R[r + 3], logit: knots(P, SP.ink, KN.ink, u) - 1.5 * F.fade * x + R[r] });
+        }
+      }
+      // (any deposits over a whole number of leaves: none of them shown)
+      for (let i = leaves * n; i < N; i++) out.push({ p: [...pts[0]] as V, t: [0, -1, 0], n: [0, 0, 1], s1: 0.001, s2: 0.001, thin: 0.001, turn: 0, logit: -20 });
+      return out;
+    }
     for (let i = 0; i < N; i++) {
       const r = i * RESID, col = Math.floor(i / rows), row = i % rows, v = rows > 1 ? rc[row] : 0;
       // (rows staggered like bricks, so their deposits' ends don't line up across the stroke)
-      const u = Math.max(0, Math.min(1, (col + 0.5 + (rows > 1 ? ((row * 0.618) % 1) - 0.5 : 0) * 0.8 + R[r + 5]) / cols)), s = u * L;
+      const u = sp0 + (sp1 - sp0) * Math.max(0, Math.min(1, (col + 0.5 + (rows > 1 ? ((row * 0.618) % 1) - 0.5 : 0) * 0.8 + R[r + 5]) / cols)), s = u * L;
       let k = 0; while (k < pts.length - 2 && S.cum[k + 1] < s) k++;
       const f = Math.max(0, Math.min(1, (s - S.cum[k]) / Math.max(1e-9, S.cum[k + 1] - S.cum[k]))), t = norm(sub(pts[k + 1], pts[k]));
       // (on a surface, its plane is the surface's; in open space, any plane through its length: it's round in section)
@@ -234,10 +275,19 @@ export function layout(m: Mark): Deposit[] {
         // (ink where its face is edge-on to the eye: b (tau - (n·d)^2), a quadratic in d the nine terms hold exactly)
         const tau = 0.25 * Math.exp(P[SP.arc] ?? 0), b = 14 * Math.exp((P[SP.fall] ?? 1) - 1), S2 = (i: number, j: number) => rad[i] * rad[j];
         const view = [0, 0, 0, 0, -2 * b * S2(0, 1), -2 * b * S2(1, 2), -2 * b * S2(0, 2), (-b * (S2(0, 0) - S2(1, 1))) / 2, (-b * (-S2(0, 0) - S2(1, 1) + 2 * S2(2, 2))) / 6];
+        // (one edge only, if it says which: the limb's upper as seen or its lower. Each can be there or not on its own)
+        let one = 0;
+        if (m.bandUp !== undefined) {
+          const U: V = Math.abs(t[1]) < 0.8 ? N0 : norm(cross(t, cross([0.6, 0, 0.8], t))), sg = m.bandUp ? 1 : -1, c2 = 6, Sm = (a: number, bb: number) => (U[a] * rad[bb] + U[bb] * rad[a]) / 2, nU = dot(rad, U);
+          // (c (s v - 1), v the deposit's place across the limb as seen: n·U - (U·d)(n·d))
+          one = c2 * (sg * nU - 1) - (c2 * sg * nU) / 3;
+          const q = -c2 * sg;
+          view[4] += 2 * q * Sm(0, 1); view[5] += 2 * q * Sm(1, 2); view[6] += 2 * q * Sm(0, 2); view[7] += (q * (Sm(0, 0) - Sm(1, 1))) / 2; view[8] += (q * (-Sm(0, 0) - Sm(1, 1) + 2 * Sm(2, 2))) / 6;
+        }
         const run = s / (5 * w0) + hash(m.id, row, 7) * 16, r0 = Math.floor(run), rf = run - r0, sm = rf * rf * (3 - 2 * rf), gap = hash(m.id, row, r0) * (1 - sm) + hash(m.id, row, r0 + 1) * sm;
         const body = knots(P, SP.ink, KN.ink, u) - softplus((P[SP.u0] - u) / t0) - softplus((u - P[SP.u1]) / t1) - Math.max(0, knots(P, SP.dry, KN.dry, u)) * 9 * gap * gap + R[r];
         const centre = add(add(pts[k], sub(pts[k + 1], pts[k]), f), N0, knots(P, SP.offset, KN.offset, u) * w0);
-        out.push({ p: add(centre, rad, w / 2 + R[r + 4] * w0), t, n: rad, s1: (L / cols) * 0.9 * Math.exp(P[SP.along] + R[r + 1]), s2: ((Math.PI * w) / rows) * 0.62 * Math.exp(P[SP.spread] + R[r + 2]), thin: 0.0008, turn: R[r + 3], logit: b * (tau - 1 / 3), view, cap: 1 / (1 + Math.exp(-body)) });
+        out.push({ p: add(centre, rad, w / 2 + R[r + 4] * w0), t, n: rad, s1: Lc * 0.9 * Math.exp(P[SP.along] + R[r + 1]), s2: ((Math.PI * w) / rows) * 0.62 * Math.exp(P[SP.spread] + R[r + 2]), thin: 0.0008, turn: R[r + 3], logit: b * (tau - 1 / 3) + one, view, cap: 1 / (1 + Math.exp(-body)) });
         continue;
       }
       if (tube && m.band === 'seen') {
@@ -250,16 +300,33 @@ export function layout(m: Mark): Deposit[] {
         // (the band on the limb's lower side as seen, or its upper)
         const U: V = m.bandUp ? [-U0[0], -U0[1], -U0[2]] : U0;
         // (how thick the band is here: wavering along the limb, the same for every row, so its inner edge wobbles)
-        const wv = s / (2.2 * w0) + hash(m.id, 91, 5) * 9, w0i = Math.floor(wv), wf = wv - w0i, ws = wf * wf * (3 - 2 * wf), wob = (hash(m.id, 91, w0i) * (1 - ws) + hash(m.id, 91, w0i + 1) * ws) * 2 - 1;
-        const T = Math.exp(P[SP.arc] ?? 0) * (1 + (P[SP.bristle] ?? 0) * 0.5 * wob), K = 7 * Math.exp((P[SP.fall] ?? 1) - 1), nU = dot(rad, U);
+        const wv = s / ((m.sweep ? 0.7 : 2.2) * w0) + hash(m.id, 91, 5) * 9, w0i = Math.floor(wv), wf = wv - w0i, ws = wf * wf * (3 - 2 * wf), wob = (hash(m.id, 91, w0i) * (1 - ws) + hash(m.id, 91, w0i + 1) * ws) * 2 - 1;
+        // (a sweep's pressure here: its attack, its own run along it, its release)
+        const SW = m.sweep; let press = 1, cover = 0, load = 0, stand = 0;
+        if (SW) {
+          // (the brush is loaded where it's set down, and again a few times along the limb, each where the limb's own
+          // id puts it; from each loading it dries: its pressure falls toward 1 - vary over about half the way to the
+          // next. Which end it starts from is the limb's own too)
+          const sm3 = (x: number) => { const y = Math.max(0, Math.min(1, x)); return y * y * (3 - 2 * y); }, runs = SW.runs ?? 3, uu = hash(m.id, 57, 2) < 0.5 ? 1 - u : u;
+          const at = (k: number) => (k <= 0 ? 0 : (k + 0.7 * (hash(m.id, 55, k) - 0.5)) / runs);
+          let k0 = Math.floor(uu * runs); if (at(k0 + 1) <= uu) k0++; else if (at(k0) > uu) k0--;
+          const since = uu - at(k0);
+          press = (0.55 + 0.45 * sm3(since / 0.012)) * sm3((1 - uu) / Math.max(0.005, SW.taper)) * (1 - SW.vary * (1 - Math.exp((-since * runs) / 0.45)));
+          const jr = s / (0.6 * w0) + hash(m.id, row, 23) * 11, j0 = Math.floor(jr), jf = jr - j0, js = jf * jf * (3 - 2 * jf);
+          stand = SW.jitter * ((hash(m.id, row + 300, j0) * (1 - js) + hash(m.id, row + 300, j0 + 1) * js) * 2 - 1); load = SW.decay * 3 * u;
+        }
+        const T = (SW ? SW.tmin + Math.max(0, SW.tmax - SW.tmin) * press : Math.exp(P[SP.arc] ?? 0)) * (1 + (SW ? Math.min(0.6, P[SP.bristle] ?? 0) : P[SP.bristle] ?? 0) * 0.5 * wob), K = 7 * Math.exp((P[SP.fall] ?? 1) - 1), nU = dot(rad, U);
         // (ink where it lies under the band's inner edge as seen: K (B - n·U' ), U' the part of U across the line of
         // sight: B - n·U + (U·d)(n·d), the last a quadratic in d: the nine terms hold it exactly)
         const Sm = (a: number, b: number) => (U[a] * rad[b] + U[b] * rad[a]) / 2, Bd = -1 + T;
         const view = [0, 0, 0, 0, 2 * K * Sm(0, 1), 2 * K * Sm(1, 2), 2 * K * Sm(0, 2), (K * (Sm(0, 0) - Sm(1, 1))) / 2, (K * (-Sm(0, 0) - Sm(1, 1) + 2 * Sm(2, 2))) / 6];
-        const run = s / (5 * w0) + hash(m.id, row, 7) * 16, r0 = Math.floor(run), rf = run - r0, sm = rf * rf * (3 - 2 * rf), gap = hash(m.id, row, r0) * (1 - sm) + hash(m.id, row, r0 + 1) * sm;
-        const dry = Math.max(0, knots(P, SP.dry, KN.dry, u)) * 9 * gap * gap, body = knots(P, SP.ink, KN.ink, u) - softplus((P[SP.u0] - u) / t0) - softplus((u - P[SP.u1]) / t1) - dry + R[r];
+        // (each row's own unevenness along it: a sweep's bristles break over a couple of the limb's widths)
+        const run = s / ((SW ? 2 : 5) * w0) + hash(m.id, row, 7) * 16, r0 = Math.floor(run), rf = run - r0, sm = rf * rf * (3 - 2 * rf), gap = hash(m.id, row, r0) * (1 - sm) + hash(m.id, row, r0 + 1) * sm;
+        const dry = Math.max(0, knots(P, SP.dry, KN.dry, u)) * 9 * gap * gap, wet = SW ? (SW.wet ?? 0) * (press - 0.5) : 0, body = knots(P, SP.ink, KN.ink, u) - softplus((P[SP.u0] - u) / t0) - softplus((u - P[SP.u1]) / t1) - dry - load + 2 * wet + R[r];
+        // (a sweep's row lays ink where the pressure, with the row's own unevenness, is over the row's threshold)
+        if (SW) cover = 1 / (1 + Math.exp(-12 * (press * (0.7 + 0.6 * gap) - hash(m.id, row, 41) * SW.dry)));
         const centre = add(add(pts[k], sub(pts[k + 1], pts[k]), f), N0, knots(P, SP.offset, KN.offset, u) * w0);
-        out.push({ p: add(centre, rad, w / 2 + R[r + 4] * w0), t, n: rad, s1: (L / cols) * 0.9 * Math.exp(P[SP.along] + R[r + 1]), s2: ((Math.PI * w) / rows) * 0.62 * Math.exp(P[SP.spread] + R[r + 2]), thin: 0.0008, turn: R[r + 3], logit: K * (Bd - nU) + (K * nU) / 3, view, cap: 1 / (1 + Math.exp(-body)) });
+        out.push({ p: add(centre, rad, w / 2 + (R[r + 4] + stand) * w0), t, n: rad, s1: Lc * 0.9 * Math.exp(P[SP.along] + R[r + 1]), s2: ((Math.PI * w) / rows) * 0.62 * Math.exp(P[SP.spread] + wet + R[r + 2]), thin: 0.0008, turn: R[r + 3], logit: K * (Bd - nU) + (K * nU) / 3, view, cap: (SW ? cover : 1) / (1 + Math.exp(-body)) });
         continue;
       }
       if (tube && m.band) {
@@ -277,7 +344,7 @@ export function layout(m: Mark): Deposit[] {
         const run = s / (5 * w0) + hash(m.id, row, 7) * 16, r0 = Math.floor(run), rf = run - r0, sm = rf * rf * (3 - 2 * rf), gap = hash(m.id, row, r0) * (1 - sm) + hash(m.id, row, r0 + 1) * sm;
         const dry = Math.max(0, knots(P, SP.dry, KN.dry, u)) * (0.12 + bris * q * q * 3) * 9 * gap * gap, past = Math.max(0, (q - qf) / Math.max(0.05, 1 - qf));
         const centre = add(add(pts[k], sub(pts[k + 1], pts[k]), f), D0, -knots(P, SP.offset, KN.offset, u) * w0);
-        out.push({ p: add(centre, rad, w / 2 + R[r + 4] * w0), t, n: rad, s1: (L / cols) * 0.9 * Math.exp(P[SP.along] + R[r + 1]), s2: ((A * w) / 2) * (share(pr) / tot) * 0.62 * Math.exp(P[SP.spread] + R[r + 2]), thin: 0.0008, turn: R[r + 3], logit: knots(P, SP.ink, KN.ink, u) - softplus((P[SP.u0] - u) / t0) - softplus((u - P[SP.u1]) / t1) - dry - fall * 6 * past * past + R[r] });
+        out.push({ p: add(centre, rad, w / 2 + R[r + 4] * w0), t, n: rad, s1: Lc * 0.9 * Math.exp(P[SP.along] + R[r + 1]), s2: ((A * w) / 2) * (share(pr) / tot) * 0.62 * Math.exp(P[SP.spread] + R[r + 2]), thin: 0.0008, turn: R[r + 3], logit: knots(P, SP.ink, KN.ink, u) - softplus((P[SP.u0] - u) / t0) - softplus((u - P[SP.u1]) / t1) - dry - fall * 6 * past * past + R[r] });
         continue;
       }
       if (tube) {
@@ -287,7 +354,7 @@ export function layout(m: Mark): Deposit[] {
         const run = s / (5 * w0) + hash(m.id, row, 7) * 16, r0 = Math.floor(run), rf = run - r0, sm = rf * rf * (3 - 2 * rf), gap = hash(m.id, row, r0) * (1 - sm) + hash(m.id, row, r0 + 1) * sm;
         const dry = Math.max(0, knots(P, SP.dry, KN.dry, u)) * Math.max(0, 1 + P[SP.drySide] * c) * 9 * gap * gap;
         const centre = add(add(pts[k], sub(pts[k + 1], pts[k]), f), N0, knots(P, SP.offset, KN.offset, u) * w0);
-        out.push({ p: add(centre, rad, w / 2 + R[r + 4] * w0), t, n: rad, s1: (L / cols) * 0.9 * Math.exp(P[SP.along] + R[r + 1]), s2: ((Math.PI * w) / rows) * 0.62 * Math.exp(P[SP.spread] + R[r + 2]), thin: 0.0008, turn: R[r + 3], logit: knots(P, SP.ink, KN.ink, u) - softplus((P[SP.u0] - u) / t0) - softplus((u - P[SP.u1]) / t1) - dry - (m.shade ?? 0) * 3 * (1 + (m.light ? dot(rad, m.light) : c)) + R[r] });
+        out.push({ p: add(centre, rad, w / 2 + R[r + 4] * w0), t, n: rad, s1: Lc * 0.9 * Math.exp(P[SP.along] + R[r + 1]), s2: ((Math.PI * w) / rows) * 0.62 * Math.exp(P[SP.spread] + R[r + 2]), thin: 0.0008, turn: R[r + 3], logit: knots(P, SP.ink, KN.ink, u) - softplus((P[SP.u0] - u) / t0) - softplus((u - P[SP.u1]) / t1) - dry - (m.shade ?? 0) * 3 * (1 + (m.light ? dot(rad, m.light) : c)) + R[r] });
         continue;
       }
       const b = cross(n, t);
@@ -297,7 +364,7 @@ export function layout(m: Mark): Deposit[] {
       const run = s / (5 * w0) + hash(m.id, row, 7) * 16, r0 = Math.floor(run), rf = run - r0, sm = rf * rf * (3 - 2 * rf);
       const gap = hash(m.id, row, r0) * (1 - sm) + hash(m.id, row, r0 + 1) * sm;
       const dry = Math.max(0, knots(P, SP.dry, KN.dry, u)) * Math.max(0, 1 + 2 * P[SP.drySide] * v) * 9 * gap * gap;
-      out.push({ p: add(add(add(pts[k], sub(pts[k + 1], pts[k]), f), b, side), n, free ? 0 : 0.002), t, n, s1: (L / cols) * 0.9 * Math.exp(P[SP.along] + R[r + 1]), s2, thin: free ? s2 : 0.0008, turn: R[r + 3] + alt * P[SP.splay], logit: knots(P, SP.ink, KN.ink, u) - softplus((P[SP.u0] - u) / t0) - softplus((u - P[SP.u1]) / t1) - dry + R[r] });
+      out.push({ p: add(add(add(pts[k], sub(pts[k + 1], pts[k]), f), b, side), n, free ? 0 : 0.002), t, n, s1: Lc * 0.9 * Math.exp(P[SP.along] + R[r + 1]), s2, thin: free ? s2 : 0.0008, turn: R[r + 3] + alt * P[SP.splay], logit: knots(P, SP.ink, KN.ink, u) - softplus((P[SP.u0] - u) / t0) - softplus((u - P[SP.u1]) / t1) - dry + R[r] });
     }
   } else if (m.blob) {
     const B = m.blob, { pts, h } = washPoints(m), rm = Math.cbrt(B.r[0] * B.r[1] * B.r[2]);

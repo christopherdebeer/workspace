@@ -405,7 +405,50 @@ ok('parse() tells a .splat by its bytes', F.parse(F.encodeSplat(g)).n === g.n);
     const roles = new Set(plain.marks.map((m) => m.role)); let moved = 0, out = 0;
     taught.marks.forEach((m, i) => { if (m.params.some((v, j) => Math.abs(v - plain.marks[i].params[j]) > 1e-6)) moved++; m.params.forEach((v, j) => { const [lo, hi] = MK.paramRange(m, j); if (v < lo - 1e-9 || v > hi + 1e-9) out++; }); });
     const keys = new Set(plain.marks.map((m) => m.key)), stray = Object.keys(T.gains ?? {}).filter((k) => !keys.has(k)).length;
-    ok(`room, taught: ${roles.size} roles, each with a style; ${Object.keys(T.gains ?? {}).length} marks with a weight of their own, each by a key the room has; ${moved} marks drawn differently, every parameter in range`, stray === 0 && [...roles].every((r) => T.roles[r]) && moved > plain.marks.length * 0.9 && out === 0);
+    // (the marks anything was taught to: those whose role has a style, or with a weight of their own; limbs and fronds keep their own)
+    const taughtAt = plain.marks.filter((m) => (T.roles[m.role] ?? []).some((v) => v !== 0) || T.gains?.[m.key]).length;
+    ok(`room, taught: ${roles.size} roles, each with a style; ${Object.keys(T.gains ?? {}).length} marks with a weight of their own, each by a key the room has; ${moved} marks drawn differently, every parameter in range`, stray === 0 && [...roles].every((r) => T.roles[r]) && moved > taughtAt * 0.9 && out === 0);
+  }
+}
+// (one limb, three ways: the same deposits each way; a sweep's pressure sets its width and its ink together; an
+// accent lays its deposits over its own stretch of the limb, on one side of it)
+{
+  const MK = await load('../client/splats/marks.ts'), LB = await load('../client/splats/limb.ts'), fs = await import('node:fs');
+  const fp = new URL('../static/splats/root-parts.json', import.meta.url), fsw = new URL('../static/splats/limb-sweep.json', import.meta.url);
+  if (fs.existsSync(fp) && fs.existsSync(fsw)) {
+    const parts = JSON.parse(fs.readFileSync(fp, 'utf8')).parts, style = JSON.parse(fs.readFileSync(fsw, 'utf8')), laid = (ms) => ms.reduce((a, m) => a + m.count, 0);
+    const inParts = LB.limbMarks('parts', parts, style), sweep = LB.limbMarks('sweep', parts, style), acc = LB.limbMarks('accents', parts, style), n0 = laid(inParts);
+    ok(`limb: ${n0} deposits in parts, ${laid(sweep)} as a sweep, ${laid(acc)} as a sweep with ${acc.length - 1} accents`, sweep.length === 1 && acc.length > 1 && Math.abs(laid(sweep) - n0) < n0 * 0.03 && Math.abs(laid(acc) - n0) < n0 * 0.06);
+    // (from where the camera stands at 5.5 m: along the limb, how many of a column's bristles lay ink, and how much)
+    const sw = sweep[0], eye = LB.limbEye(5.5).eye, deps = MK.layout(sw), cols = Math.ceil(sw.count / sw.rows), wide = new Float64Array(cols), dark = new Float64Array(cols), cnt = new Float64Array(cols);
+    deps.forEach((d, i) => { const c = Math.floor(i / sw.rows), a = MK.inkOf(d, eye); if (a > 0.05) { wide[c]++; dark[c] += a; } cnt[c]++; });
+    const on = [...wide.keys()].filter((c) => wide[c] > 0), mw = on.reduce((a, c) => a + wide[c], 0) / on.length, md = on.reduce((a, c) => a + dark[c] / wide[c], 0) / on.length;
+    let sww = 0, sdd = 0, swd = 0; for (const c of on) { const a = wide[c] - mw, b = dark[c] / wide[c] - md; sww += a * a; sdd += b * b; swd += a * b; }
+    const together = swd / Math.sqrt(sww * sdd + 1e-12), dry = [...wide.keys()].filter((c) => wide[c] === 0).length / cols, spread = Math.max(...on.map((c) => wide[c])) / Math.max(1, Math.min(...on.map((c) => wide[c])));
+    ok(`limb: along a sweep its width and its ink rise and fall together (${together.toFixed(2)}); its widest stretch lays ${spread.toFixed(0)}× the bristles of its thinnest; ${(dry * 100).toFixed(0)}% of its length lays none`, together > 0.4 && spread >= 3);
+    // (an accent: its deposits inside its own stretch, and inked on one side of the limb only)
+    const ac = acc[1], S = MK.spine(ac), ad = MK.layout(ac); let inside = 0;
+    for (const d of ad) { let best = Infinity, bu = 0; S.pts.forEach((p, i) => { const e = Math.hypot(d.p[0] - p[0], d.p[1] - p[1], d.p[2] - p[2]); if (e < best) { best = e; bu = S.cum[i] / S.L; } }); if (bu >= ac.span[0] - 0.03 && bu <= ac.span[1] + 0.03) inside++; }
+    ok(`limb: an accent (${ac.name.split('/').pop()}) lays its ${ac.count} deposits over ${(100 * (ac.span[1] - ac.span[0])).toFixed(0)}% of the limb's length (${inside} of them there), on one side`, inside > ac.count * 0.95 && ac.span[1] - ac.span[0] < 0.6 && ac.bandUp !== undefined && ac.ghost === true);
+  }
+}
+// (formed leaves: a few deposits a leaf, along its own axis from the strand, narrowing to its tip; without a style, a
+// dab a leaf as before; what the room was taught by tone leaves them alone)
+{
+  const MK = await load('../client/splats/marks.ts'), CA = await load('../client/splats/canopy.ts'), CO = await load('../client/splats/conservatory.ts'), fs = await import('node:fs');
+  const f = new URL('../static/splats/leaf-style.json', import.meta.url);
+  if (fs.existsSync(f)) {
+    const leaf = JSON.parse(fs.readFileSync(f, 'utf8')).leaf, patch = { c: [0, 2.3, 0], r: [1.7, 1, 1.7], fronds: 12, seed: 11 };
+    const formed = CA.canopyPatch(1000, patch, 'fronds', undefined, undefined, 'canopy', leaf), plain = CA.canopyPatch(1000, patch, 'fronds');
+    const lv = formed.filter((m) => m.leaf), d = MK.layout(lv[0]), n = leaf.n, S = MK.spine(lv[0]); let tapers = 0, attached = 0, leaves = 0;
+    for (let q = 0; q + n <= d.length; q += n) { leaves++; if (d[q + n - 1].s2 < d[q + 1].s2) tapers++; let best = Infinity; for (const p of S.pts) best = Math.min(best, Math.hypot(d[q].p[0] - p[0], d[q].p[1] - p[1], d[q].p[2] - p[2])); if (best < leaf.len) attached++; }
+    ok(`leaves: ${lv.length} fronds of formed leaves, ${n} deposits a leaf; ${leaves} leaves on the first, each narrowing to its tip (${tapers}) and starting at its strand (${attached}); in ink, not olive; without a style, a dab a leaf (${plain.filter((m) => /dabs/.test(m.name)).every((m) => !m.leaf && m.count <= 12)})`, lv.length === 12 && lv.every((m) => m.count % n === 0 && !m.colour) && tapers === leaves && attached === leaves && plain.every((m) => !m.leaf));
+    const ft = new URL('../static/splats/room-taught.json', import.meta.url);
+    if (fs.existsSync(ft)) {
+      const T = JSON.parse(fs.readFileSync(ft, 'utf8')), a = CO.conservatory({}, 'both', undefined, undefined, undefined, leaf), b = CO.conservatory({}, 'both', T, undefined, undefined, leaf); let same = 0, fr = 0;
+      a.marks.forEach((m, i) => { if (m.role === 'strand' || m.role === 'dabs') { fr++; if (m.params.every((v, j) => Math.abs(v - b.marks[i].params[j]) < 1e-9)) same++; } });
+      ok(`leaves: the room's ${fr} strands and sprays are drawn the same taught or not (${same}): tone no longer fades them`, fr > 100 && same === fr);
+    }
   }
 }
 if (R) {

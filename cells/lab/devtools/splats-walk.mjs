@@ -15,7 +15,7 @@
 // how many deposits were drawn. Writes devtools/out/walk/walk.json, strips of frames, and static/splats/walk.json (the
 // fitted wash, for ?scene=walk).
 import { build } from 'esbuild';
-import { writeFileSync, mkdirSync } from 'node:fs';
+import { writeFileSync, mkdirSync, readFileSync, existsSync } from 'node:fs';
 import { deflateSync } from 'node:zlib';
 const load = async (f) => { const o = await build({ entryPoints: [new URL(f, import.meta.url).pathname], bundle: true, write: false, format: 'esm', platform: 'node', logLevel: 'error' }); return import('data:text/javascript;base64,' + Buffer.from(o.outputFiles[0].text).toString('base64')); };
 const C = await load('../client/splats/canopy.ts'), M = await load('../client/splats/marks.ts');
@@ -58,7 +58,9 @@ function blur(a, r) {
 const mean = (a) => a.reduce((s, v) => s + v, 0) / a.length;
 
 // ─── the wash fitted to the fronds from far off ───
-const fronds = C.canopyPatch(1000, WALK.patch, 'fronds'), washOnly = C.canopyPatch(1000, WALK.patch, 'wash'), wash = washOnly[0]; wash.params = [-1.5, -1.5, -1.5, -1.5, -1.5, -1.5, -1.5, -1.5, -1.5, 0];
+// (the fronds' leaves formed, in the style read off the teacher's, where there is one: the wash is fitted to those)
+const LEAF = existsSync(new URL('../static/splats/leaf-style.json', import.meta.url)) ? JSON.parse(readFileSync(new URL('../static/splats/leaf-style.json', import.meta.url), 'utf8')).leaf : undefined;
+const fronds = C.canopyPatch(1000, WALK.patch, 'fronds', undefined, undefined, undefined, LEAF), washOnly = C.canopyPatch(1000, WALK.patch, 'wash'), wash = washOnly[0]; wash.params = [-1.5, -1.5, -1.5, -1.5, -1.5, -1.5, -1.5, -1.5, -1.5, 0];
 const FD = deps(fronds), far = [12, 9].map((d) => { const cam = camAt(d), T = draw(FD, cam).D; return { cam, T: [2, 5].map((r) => blur(T, r)), mean: mean(T) }; });
 const washLoss = () => { const D = deps([wash]); let s = 0; for (const v of far) { const P = draw(D, v.cam).D; [2, 5].forEach((r, k) => { const b = blur(P, r); let q = 0; for (let p = 0; p < W * H; p++) q += (b[p] - v.T[k][p]) ** 2; s += q / (W * H); }); } return s; };
 {
@@ -71,7 +73,7 @@ const washLoss = () => { const D = deps([wash]); let s = 0; for (const v of far)
 }
 
 // ─── the walk ───
-const both = C.canopyPatch(1000, WALK.patch, 'both', undefined, wash.params.slice());
+const both = C.canopyPatch(1000, WALK.patch, 'both', undefined, wash.params.slice(), undefined, LEAF);
 const BD = deps(both), WD = deps([wash]);
 const ways = {
   fronds: (cam) => draw(FD, cam),

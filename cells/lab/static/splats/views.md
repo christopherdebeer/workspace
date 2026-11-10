@@ -62,7 +62,7 @@ Made by `node cells/lab/views.mjs splats` from `client/splats/views.mjs`. The RE
 
 ![A canopy from 12 m: one canopy patch from 12 m: a wash of fifty deposits](v-walk-far.jpg)
 ![From 5 m: from 5 m: the wash giving way to its fronds](v-walk-mid.jpg)
-![Inside it: from 1.5 m, under it: strands and dabs](v-walk-in.jpg)
+![Inside it: from 1.5 m, under it: strands and their leaves, a few deposits a leaf](v-walk-in.jpg)
 
 ## The room
 
@@ -70,3 +70,9 @@ Made by `node cells/lab/views.mjs splats` from `client/splats/views.mjs`. The RE
 ![The open pool: stepping stones, the willow, and a gesture on the air that stands on nothing; still water](v-room-pool.jpg)
 ![The canopy: the deck under hanging fronds, looking back across the water](v-room-canopy.jpg)
 ![A reserved view, as taught: between the pool and the canopy: a view the room was never fitted to, drawn as taught from the three it was](v-room-reserved.jpg)
+
+## One limb, three ways
+
+![A limb in parts: the root tunnel’s third arch as the room draws it: a line along each edge and a graded stroke between](v-limb-parts.jpg)
+![The same limb as one sweep: the same deposits as one pass of a loaded brush: its pressure sets its width, its coverage and how far its ink spreads together](v-limb-sweep.jpg)
+![The sweep with accents: the sweep, with stretches of a line along one edge or the other, each there or not on its own](v-limb-accents.jpg)

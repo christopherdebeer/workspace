@@ -1040,13 +1040,14 @@ with it (a strand and its dabs move together). Independent deposits offer nothin
 
 ### Walking into a wash (`?scene=walk`)
 
-From far off a teacher draws a canopy as a wash; close to, it's strands and dabs. Both are organisations of splats
-in the same volume (`client/splats/canopy.ts`): a wash of 30 large pale deposits, and 90 fronds (1,972 deposits).
+From far off a teacher draws a canopy as a wash; close to, it's strands and leaves. Both are organisations of splats
+in the same volume (`client/splats/canopy.ts`): a wash of 30 large pale deposits, and 90 fronds (4,424 deposits now
+their leaves are formed, a few deposits a leaf: see *One frond cluster, restored*; 1,972 when a leaf was one dab).
 
 - **Each deposit is shown by how large things look where it is**: a scene unit's size on the screen at the deposit's
   own depth, between two thresholds. The wash fades between them as the fronds come in, so at any depth the two are
   complementary. It follows the picture, not the distance: zooming in resolves it too.
-- **The wash is fitted to its own fronds**, as they look from 12 m and 9 m (tone error 58.1 to 4.4): one
+- **The wash is fitted to its own fronds**, as they look from 12 m and 9 m (tone error 72.5 to 3.3): one
   organisation taught by another.
 - A fitted mark keeps its ink however small it's drawn, so the fronds alone, all the way, are the reference for what
   the patch's tone should be at each distance.
@@ -1057,19 +1058,24 @@ Every 20 cm from 12 m to 0.3 m (`devtools/splats-walk.mjs`):
 
 | | tone against the fronds, beyond 3.4 m: worst / mean | largest change beyond the walk's own | deposits at 12 m / at most |
 |---|---|---|---|
-| the wash alone | 10% / 6% | none | 30 / 30 |
-| hand-over | 6% / 4% | 0.2 (where the walk's own is 132) | 30 / 2,002 |
-| swapped at once at 5 m | 10% / 5% | 26.8 (the walk's own there: 12.4) | 30 / 1,972 |
+| the wash alone | 21% / 15% | none | 30 / 30 |
+| hand-over | 13% / 9% | 0.06 (where the walk's own is 123) | 30 / 4,454 |
+| swapped at once at 5 m | 20% / 11% | 22.7 (the walk's own there: 10.3) | 30 / 4,424 |
 
-- **The hand-over carries the tone and doesn't pop.** The patch's darkness stays within 6% of the reference, and no
-  step changes the picture more than the walk itself does. A swap at 5 m changes it by twice the walk's own.
-- **It costs 30 deposits far off instead of 1,972.**
+- **The hand-over doesn't pop, and carries the tone less closely than it did.** No step changes the picture more than
+  the walk itself does; a swap at 5 m changes it by twice the walk's own. But the patch's darkness is now within 13%
+  of the reference, where with a dab a leaf it was within 6% (the wash alone: 21%, was 10%). The formed leaves are
+  darker and sharper, and thirty pale deposits hold their tone less well as they come nearer. That's the wash's
+  to fix, not the leaves'.
+- **It costs 30 deposits far off instead of 4,424.**
 - The wash alone, walked into, fills the screen with fog. Right at the eye a deposit is let go (between 0.7 m and
   0.25 m), in scenes that are walked through.
 
 ![From 12 m](splats/v-walk-far.jpg)
 ![From 5 m](splats/v-walk-mid.jpg)
 ![Under it](splats/v-walk-in.jpg)
+
+(`devtools/splats-walk-board.py` puts the board together.)
 
 ### The room (`?scene=room`)
 
@@ -1345,7 +1351,145 @@ teachers are sparse, so blank paper scores 27.0 on the views taught from and 24.
 - **What it looks like.** Nearer the teacher in weight: thin posts and planks, limbs as grey sweeps with dark edges.
   But the fronds have faded almost out (the teacher's leaves aren't where the scene's are, and tone can only fade
   what it can't place), the washes are faint, and a limb is even from end to end: no pressure along it, no frayed
-  release.
+  release. (The next two sections take those up: one limb, and one frond cluster.)
+
+### One limb, three ways (`?scene=limb`)
+
+The room's limbs read as shaded tubes: an even rim, a smooth gradient, the same from one end to the other. They were
+fitted to profiles *across* a limb, pooled over strokes, which throws away everything a stroke does *along* itself:
+where it's loaded, where it breaks, where it lifts. So one limb is taken out of the room (the root tunnel's third
+arch) and the teacher's strokes are read again as whole patches, along as well as across
+(`devtools/splats-limb.mjs`). At each step along a stroke the dark band is found, and what's kept is how it runs:
+
+- **cover**, **gap**: how much of the limb's length has a band at all, and how long its breaks are;
+- **thick**, **body**: its thickness (in the limb's half-widths) and its darkness; **swell**, **press**: how much
+  each varies along the stroke; **together**: whether they rise and fall together; **run**: over what length the
+  thickness changes;
+- **firm**, **feather**: how far each of its two edges takes to fall (px), the sharper and the softer; **rim**: how
+  ragged its edges are; **streak**: how uneven it is across itself (bristle lines with paper between);
+- **other**: how much of its length has a second line across the limb, apart from the band;
+- **release**: its thickness at the limb's end against its middle.
+
+Three ways of laying the limb, each with the same number of deposits (2,484 for the median limb; 3,240 for this arch):
+
+- **in parts**: the room's limb as it is. One stroke far off, handing over to a line along each edge with a graded
+  stroke between.
+- **a sweep** (`marks.ts`, `sweep`; `conservatory.ts`, `limbSweep`): one pass of a loaded brush, forty bristles
+  round the limb. The brush is loaded where it's set down and again a few times along the limb, and dries from each
+  loading. That one pressure sets three things together: how wide the band is, how many of its bristles still lay
+  ink, and how far each deposit's ink spreads (wet rows run together; dry ones stand apart as streaks). Which end it
+  starts from, where it reloads and which side it's loaded on are each limb's own.
+- **a sweep with accents**: the same, with stretches of a line along one edge or the other, each there or not on
+  its own.
+
+![The teacher's drawings of this limb where it's about as large; the limb in parts, as a sweep, as a sweep with accents; far, medium, close](splats/b-limb.jpg)
+
+Read along the stroke, over the 31 strokes from the three views taught from (the last two rows: distance from the
+teacher over all the readings, there and on the 36 strokes from the other five views):
+
+| | the teacher | in parts | a sweep | with accents |
+|---|---|---|---|---|
+| cover | 0.93 | 1.00 | 0.96 | 0.99 |
+| gap (px) | 14.3 | 0.0 | 14.1 | 3.7 |
+| thick | 0.54 | 0.41 | 0.48 | 0.46 |
+| swell | 1.21 | 0.37 | 0.89 | 0.70 |
+| press | 0.30 | 0.23 | 0.39 | 0.29 |
+| together | 0.35 | −0.04 | 0.48 | 0.40 |
+| firm (px) | 1.2 | 1.9 | 1.9 | 1.8 |
+| feather (px) | 2.9 | 5.2 | 6.7 | 6.0 |
+| rim (px) | 2.5 | 0.2 | 0.8 | 0.5 |
+| streak | 0.58 | 0.76 | 0.91 | 0.99 |
+| other | 0.73 | 0.73 | 0.40 | 0.78 |
+| **distance, views taught from** | | **56.6** | **26.8** | **33.9** |
+| **distance, the other five** | | **60.2** | **30.2** | **31.1** |
+
+- **A sweep is nearer the teacher's strokes than the limb in parts, at the same deposits, and it holds on the other
+  views.** The limb in parts never breaks, hardly swells, and its thickness and darkness don't move together. The
+  sweep breaks about as often as the teacher's, swells three quarters as much, and is wider where it's darker.
+- **The sweep supplies its own boundary; what accents add is the limb's other edge.** On its loaded side the sweep's
+  edge is as firm as the edge lines of the limb in parts (1.9 px), with no line drawn. Accents don't bring the
+  stroke nearer the teacher (33.9 against 26.8; 31.1 against 30.2). What they do is draw a second line across the
+  limb, which the teacher has over 73% of a limb's length and the bare sweep over 40% (its own dry streaks). They
+  also close the breaks (3.7 px against the teacher's 14). So: accents are a choice about whether the limb's far
+  edge is drawn, not something the stroke needs. With them the limb reads as a round thing; without, as a stroke.
+- **One mark at every distance.** The camera comes in from 14 m to 2.2 m, turning 35° round the limb. The sweep is
+  the same mark all the way; the limb in parts changes what it is between about 9 m and 5 m, where its far stroke
+  hands over to its parts. Ink from frame to frame grows by at most ×1.21 for the sweeps and ×1.27 for the limb in
+  parts, where the limb's own growth on the screen is ×1.17: no jump in any of them.
+
+![Each way along the camera's move, far to close](splats/b-limb-move.jpg)
+
+- **What's still wrong, in all three.** Edges are softer than the teacher's (the firm one 1.9 px against 1.2, the
+  soft one 6 against 2.9) and a third as ragged (0.8 px against 2.5). The sweep is more evenly streaked than the
+  teacher's, whose loaded passes are broad and solid and whose dry ones fan out. A deposit is the limit here: forty
+  rows round a limb are each about 2.5 px wide at the medium distance.
+- **The readings can be met by drawings that look nothing like a stroke.** A first fit, free over every number,
+  came within 8.6 of the teacher on the readings it then had, and drew a thin line with dark beads on it: the
+  teacher's thickness changes over about 1.4 half-widths (the reading follows its streaks in and out), and beads
+  at that spacing satisfy it. Two changes followed. Pressure now drives width by construction, not as one option
+  among several. And the style was chosen by eye in the real renderer first, then the fit run from there and kept
+  near it. That fit reached 25.0 and 35.6, and lost the bristles: an airbrushed band. What's shipped is the fit's
+  pressures with the eye's crispness, at 26.8 and 30.2. So the readings don't yet see everything the eye does, and
+  a lower number wasn't taken where the picture was worse.
+- **The other five views are validation now, not a test.** They've been used to choose between ways of laying a
+  limb twice. A route nothing has been chosen on is still to be drawn.
+
+The room's limbs are unchanged: this is one limb. Tone at low resolution took no part in any of it.
+
+![A limb in parts](splats/v-limb-parts.jpg)
+![The same limb as one sweep](splats/v-limb-sweep.jpg)
+![The sweep with accents](splats/v-limb-accents.jpg)
+
+### One frond cluster, restored
+
+Taught by tone, the room's fronds faded almost out. That was the objective's doing: the teacher's leaves are where
+an image model put them, and at low resolution the only way to agree with leaves that aren't where yours are is to
+have none. So nothing is asked any more of where a leaf is. What the tone fit taught the strands and their leaves is
+withdrawn (`room-taught.json`: their roles' offsets zeroed, their 231 weights dropped), and the leaves are taught
+one at a time instead.
+
+**Reading the teacher's leaves** (`devtools/splats-leaves.mjs`, `.py`). Where the room has fronds in a view, the
+restyle's ink is taken with its thin stems worn away, in connected pieces of a leaf's size. Each piece is measured
+on its own: its length and width (by the scale of the nearest strand), how pointed its ends are, how dark it is,
+its angle off straight down, how far the nearest other leaf is in leaf lengths, and how bunched they are against
+leaves scattered evenly. The room's own leaves are read the same way, from the real renderer.
+
+**Formed leaves** (`marks.ts`, `leaf`; `canopy.ts`, `LeafStyle`). A leaf was one dab. It is now four deposits along
+its own axis, widest a third of the way out and narrowing to its tip, coming off its strand at an angle and turning
+round it leaf by leaf, three to a bunch. Each stays on the strand it was on: the scene's fronds are where they
+were. The style's numbers are moved toward the teacher's readings, each by the ratio of the teacher's reading to
+ours, three rounds, on the three views taught from:
+
+| | leaves found | length (cm) | width (cm) | ends against middle | darkness | angle off straight down | to the nearest, in leaf lengths | bunched |
+|---|---|---|---|---|---|---|---|---|
+| the teacher | 454 | 6.8 | 2.7 | 0.89 | 0.62 | 20.7° | 1.38 | 0.62 |
+| a dab a leaf (as it was) | 182 | 7.1 | 2.6 | 0.96 | 0.46 | 6.3° | 1.56 | 0.62 |
+| formed leaves | 333 | 6.6 | 2.8 | 0.91 | 0.58 | 18.7° | 1.36 | 0.53 |
+| the teacher, the other five views | 514 | 7.8 | 3.0 | 0.88 | 0.62 | 20.5° | 1.36 | 0.58 |
+| formed leaves, the other five views | 497 | 7.4 | 2.9 | 0.92 | 0.59 | 17.3° | 1.22 | 0.50 |
+
+![One cluster close to: the teacher's, a dab a leaf, formed leaves](splats/b-frond.jpg)
+
+![In the room: the same window of the teacher's restyle, a dab a leaf, formed leaves](splats/b-leaves.jpg)
+
+- **A leaf is a leaf now.** Dabs crossed their strand in a herringbone and hung almost straight (6° off); formed
+  leaves hang off it at the teacher's angle, as dark as the teacher's nearly, and a frond reads as a stem with
+  leaves from the tunnel, under the canopy, and from a view it wasn't taught on. They are ink, as the second
+  teachers' are; the dabs were olive, from the first studies.
+- **What was taught is local, and small.** Six numbers: a leaf's length and width, its taper, its angle off the
+  strand, how many to a metre, how drawn together. Where they hang wasn't taught and didn't move.
+- **What the reading can't see.** A leaf here is 10 to 30 px long: how pointed it is hardly separates a lance from
+  a dab (0.89, 0.96). Lengths in centimetres take the room's strand for the teacher's depth, which it isn't quite.
+  Leaves that touch each other or a limb are missed, in both. By eye the teacher's leaves are plumper, widest at the
+  middle; ours are slimmer with a long tip.
+- **Composition is another matter, and wasn't touched.** The teacher draws a few fronds, each thick with leaves,
+  and paper between them. The room has 491 fronds. That's how many and where: the room's question, not a leaf's.
+- **It costs deposits.** The fronds lay 30,332 where they laid 10,746; the room 92,197 where it laid 72,611
+  (76,486 drawn once those with no ink are dropped). The phone was last measured at 23,227, before the limbs were
+  in parts: at this size its cost is an extrapolation until it's measured again.
+- **Close to the eye a leaf is a large soft shape.** A frond within a metre of the camera draws leaves the size of a
+  hand, blurred. The teacher never draws one that near. Not fixed.
+- In motion the leaves stay formed: a leaf's four deposits sway with their strand.
 
 ### Air, water, cost
 

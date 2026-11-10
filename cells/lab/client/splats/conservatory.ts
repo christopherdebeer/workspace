@@ -14,7 +14,7 @@
  * Frozen: nothing moves unless the page asks (a mark's `sway`), and the water is still (its mirror is the renderer's).
  */
 import { strokeMark, washMark, blobMark, paramRange, keyMarks, spine, knots, SP, KN, RESID, type Mark, type V } from './marks';
-import { canopyPatch, OLIVE, type Level } from './canopy';
+import { canopyPatch, OLIVE, type Level, type LeafStyle } from './canopy';
 
 /** fitted styles, by role: a stroke's or a wash's parameters */
 export interface Styles { root?: number[]; strand?: number[]; dabs?: number[]; veil?: number[]; wash?: number[] }
@@ -53,6 +53,8 @@ export function applyTaught(marks: Mark[], T: Taught): Mark[] {
   for (const m of marks) {
     // (a limb drawn as a stroke keeps its own style; what's taught to it is only how much ink it carries)
     if (m.band) { const o = T.roles[m.role ?? roleOf(m.name)], gb = T.gains?.[m.key ?? '']; for (let j = 0; j < SP.width; j++) { const [lo, hi] = paramRange(m, j); m.params[j] = Math.max(lo, Math.min(hi, m.params[j] + (o?.[j] ?? 0) + (gb?.[0] ?? 0))); } continue; }
+    // (formed leaves keep their own style too: read off the teacher's leaves, not taught by tone)
+    if (m.leaf) continue;
     const off = T.roles[m.role ?? roleOf(m.name)], g = T.gains?.[m.key ?? ''], stroke = m.kind === 'stroke';
     for (let j = 0; j < m.params.length; j++) {
       let v = m.params[j] + (off?.[j] ?? 0);
@@ -97,9 +99,39 @@ export function limbParts(m: Mark, R: RootParts): Mark[] {
   const near = asSeen(copy('near'), R.near, base); near.bandUp = R.up; near.lod = [lo, hi]; near.ghost = true;
   const ed = copy('edges'), set = (j: number, v: number) => { const [a, b] = paramRange(ed, j); ed.params[j] = Math.max(a, Math.min(b, v)); };
   for (let k = 0; k < KN.ink; k++) set(SP.ink + k, R.edges.ink); for (let k = 0; k < KN.dry; k++) set(SP.dry + k, R.edges.dry); for (let k = 0; k < KN.width; k++) set(SP.width + k, far.params[SP.width + k]); for (let k = 0; k < KN.offset; k++) set(SP.offset + k, far.params[SP.offset + k]);
-  set(SP.arc, R.edges.arc); set(SP.fall, R.edges.fall); set(SP.spread, R.edges.spread); set(SP.along, R.edges.along); ed.band = 'edges'; ed.shade = 0; ed.lod = [lo, hi]; ed.ghost = true;
+  set(SP.arc, R.edges.arc); set(SP.fall, R.edges.fall); set(SP.spread, R.edges.spread); set(SP.along, R.edges.along); ed.band = 'edges'; ed.bandUp = undefined; ed.shade = 0; ed.lod = [lo, hi]; ed.ghost = true;
   const out = [far, near, ed];
   if (R.sweep) { const sw = asSeen(copy('sweep'), R.sweep, base); sw.bandUp = R.up; sw.lod = [lo, hi]; sw.ghost = true; out.push(sw); }
+  return out;
+}
+/**
+ * A limb as one sweep of a loaded brush (marks.ts `sweep`), with or without accents: stretches of a line along one
+ * edge or the other, each there or not on its own. Which side the sweep is loaded on is the stroke's own (from its
+ * key; `upper`: how many of them the upper, as the teacher's are: the variation between strokes is kept, not made a
+ * rule), and so are where its accents fall. `deposits`: about how many the limb lays (its rows all round, as many
+ * columns as that allows).
+ */
+export interface SweepStyle { ink: number; fall: number; along: number; spread: number; tmin: number; tmax: number; dry: number; decay: number; vary: number; taper: number; jitter: number; runs?: number; wet?: number; ragged?: number; rows?: number; upper: number; accent?: AccentStyle }
+/** a sweep's accents: a line along an edge: its ink, how thin (`arc`), how much of the limb's length one runs (`share`,
+ * each its own length about that), and how often an edge has one at all (`there`; each edge on its own) */
+export interface AccentStyle { ink: number; arc: number; share: number; there?: number }
+export function limbSweep(m: Mark, S: SweepStyle, deposits = 1900): Mark[] {
+  const rnd = (salt: number) => { let h = (Math.imul(m.id | 0, 374761393) + Math.imul(salt, 668265263)) | 0; h = Math.imul(h ^ (h >>> 13), 1274126177); return ((h ^ (h >>> 16)) >>> 0) / 4294967296; };
+  const rows = S.rows ?? 24, acc = S.accent ? Math.round(deposits * 0.22) : 0, set = (q: Mark, j: number, v: number) => { const [lo, hi] = paramRange(q, j); q.params[j] = Math.max(lo, Math.min(hi, v)); };
+  const sw = m; sw.rows = rows; sw.count = rows * Math.max(8, Math.round((deposits - acc) / rows)); sw.resid = new Array(sw.count * RESID).fill(0);
+  for (let k = 0; k < KN.ink; k++) set(sw, SP.ink + k, S.ink); for (let k = 0; k < KN.dry; k++) set(sw, SP.dry + k, 0); for (let k = 0; k < KN.offset; k++) set(sw, SP.offset + k, 0);
+  set(sw, SP.along, S.along); set(sw, SP.spread, S.spread); set(sw, SP.fall, S.fall); set(sw, SP.bristle, S.ragged ?? 0.3); sw.band = 'seen'; sw.shade = 0; sw.bandUp = rnd(1) < S.upper;
+  sw.sweep = { tmin: S.tmin, tmax: S.tmax, dry: S.dry, decay: S.decay, vary: S.vary, taper: S.taper, jitter: S.jitter, runs: S.runs, wet: S.wet };
+  const out = [sw];
+  if (S.accent) for (const up of [true, false]) for (const half of [0, 1]) {
+    // (an accent: a stretch of this edge, somewhere in this half of the limb; each there or not on its own)
+    const salt = (up ? 10 : 20) + half * 4; if (rnd(salt) > (S.accent.there ?? 0.75)) continue;
+    // (a line needs few rows round the limb: only those edge-on to the eye show)
+    const len = Math.min(0.44, (S.accent.share / 2) * (0.6 + 0.8 * rnd(salt + 1))), at = half * 0.5 + 0.02 + rnd(salt + 2) * (0.46 - len), end = at + len, arows = 12, cols = Math.max(4, Math.round(acc / 4 / arows));
+    const e: Mark = { ...m, name: `${m.name}/accent ${up ? 'upper' : 'lower'} ${half}`, params: m.params.slice(), rows: arows, count: arows * cols, resid: new Array(arows * cols * RESID).fill(0), view: m.view.slice(), sweep: undefined, band: 'edges', bandUp: up, ghost: true, span: [Math.max(0, at - 0.03), Math.min(1, end + 0.03)] };
+    for (let k = 0; k < KN.ink; k++) set(e, SP.ink + k, S.accent.ink); set(e, SP.arc, S.accent.arc); set(e, SP.fall, 3); set(e, SP.spread, -0.3); set(e, SP.along, 0); for (let k = 0; k < KN.dry; k++) set(e, SP.dry + k, 0.3); set(e, SP.u0, at); set(e, SP.u1, end); set(e, SP.sharp0, -1); set(e, SP.sharp1, -1.5);
+    out.push(e);
+  }
   return out;
 }
 /**
@@ -142,7 +174,7 @@ export function routeAt(s: number, R: V[] = ROUTE): { p: V; dir: V } {
  * turned away from it, and a stone's heavy rim to its far side. None: every limb inked along its underside and the
  * stones as they fell, which is how the room was when it was taught.
  */
-export function conservatory(styles: Styles = {}, level: Level = 'both', taught?: Taught, light?: V, root?: RootStyle | RootParts): Room {
+export function conservatory(styles: Styles = {}, level: Level = 'both', taught?: Taught, light?: V, root?: RootStyle | RootParts, leaf?: LeafStyle): Room {
   let id = 1, r = 12345; const rnd = () => ((r = (Math.imul(r, 1664525) + 1013904223) >>> 0) / 4294967296);
   const marks: Mark[] = [], regions: Record<string, number> = {}, solids: number[] = [];
   const quad = (a: V, b: V, c: V, d: V) => solids.push(...a, ...b, ...c, ...a, ...c, ...d);
@@ -185,7 +217,7 @@ export function conservatory(styles: Styles = {}, level: Level = 'both', taught?
     limb([add(add(P, eT, 3.0 + rnd()), UP, -0.3), add(add(add(P, eT, 1.9), UP, h * 0.72), dT, lean * 0.4), add(add(add(P, eT, 0.2), UP, h), dT, lean), add(add(add(P, eT, -1.7), UP, h * 0.74), dT, lean * 0.6), add(add(P, eT, -2.9 - rnd() * 0.6), UP, -0.3)], w, `tunnel/arch ${i}`, 0.5);
   }
   for (let i = 0; i < 3; i++) limb([[1 - 0.3 * i, 0.5, 0.2 * i], [-1 - i * 0.4, 0.9 + 0.2 * i, 0.6 - i * 0.9], [-2.6 - i * 0.5, 0.35, 1.3 - i * 1.6], [-3.6 - i * 0.6, -0.25, 1.9 - i * 2.2]], 0.3, `tunnel/root ${i}`);
-  for (let i = 0; i < 3; i++) for (const m of canopyPatch(0, { c: add(lerp(T0, T1, 0.2 + i * 0.3), UP, 2.5), r: [1.7, 0.5, 1.7], fronds: 12, seed: 40 + i, reach: 2.6 }, 'fronds', undefined, undefined, `tunnel/strands ${i}`)) marks.push(m);
+  for (let i = 0; i < 3; i++) for (const m of canopyPatch(0, { c: add(lerp(T0, T1, 0.2 + i * 0.3), UP, 2.5), r: [1.7, 0.5, 1.7], fronds: 12, seed: 40 + i, reach: 2.6 }, 'fronds', undefined, undefined, `tunnel/strands ${i}`, leaf)) marks.push(m);
   { const m = tone(blobMark(id++, [-3.6, 1.5, -4.4], [2.4, 1.5, 2.4], 20, 'tunnel/mist'), -2.0); m.lod = [-1.5, -2.5]; marks.push(m); }
   // (the boardwalk: planks as lines across it, its two edges, posts)
   const walk = (a: number, b: number, name: string) => {
@@ -221,7 +253,7 @@ export function conservatory(styles: Styles = {}, level: Level = 'both', taught?
   { const g: V[] = [[3.6, 1.5, -2.6], [4.0, 1.85, -2.4], [4.5, 1.6, -2.1], [5.0, 1.35, -2.3], [5.5, 1.6, -2.6], [6.0, 1.3, -2.4], [6.3, 1.45, -2.0]];
     const th = line(g, 0.012, 34, 0.2, 'pool/gesture thread', 0); th.params[SP.along] = -1.0; th.sway = 0.03;
     g.forEach((p, k) => { const d = line([add(p, [-0.012, 0, 0]), p, add(p, [0.012, 0, 0])], 0.035, 2, 2.2, `pool/gesture seed ${k}`, 0); d.sway = 0.03; for (let h = 0; h < 6; h++) { const a = (h / 6) * Math.PI * 2 + k, e: V = [Math.cos(a) * 0.09, Math.sin(a) * 0.09, Math.sin(a * 1.7) * 0.03]; const t = line([add(p, e, 0.3), add(p, e, 0.65), add(p, e)], 0.006, 4, -0.2, `pool/gesture hair ${k}`, 0); t.sway = 0.03; } }); }
-  for (const m of canopyPatch(0, { c: [9, 3.7, -4], r: [1.7, 1.0, 1.7], fronds: 50, seed: 7, reach: 1.2 }, level, undefined, styles.wash, 'pool/canopy')) marks.push(m);
+  for (const m of canopyPatch(0, { c: [9, 3.7, -4], r: [1.7, 1.0, 1.7], fronds: 50, seed: 7, reach: 1.2 }, level, undefined, styles.wash, 'pool/canopy', leaf)) marks.push(m);
   count('pool', from);
 
   // ─── the canopy: a deck under hanging fronds, its rail and a rag on it ───
@@ -233,7 +265,7 @@ export function conservatory(styles: Styles = {}, level: Level = 'both', taught?
   line([[1.5, 1.38, 9.8], [5.5, 1.42, 9.8], [9.7, 1.38, 9.8]], 0.05, 80, 1.2, 'canopy/rail', 0.9);
   { const o: V = [4.9, 0.95, 9.82], rag = washMark(id++, [[o, [4.1, 1.36, 9.82], [5.7, 1.36, 9.82]], [o, [5.7, 1.36, 9.82], [5.5, 0.55, 9.82]], [o, [5.5, 0.55, 9.82], [4.6, 0.7, 9.82]], [o, [4.6, 0.7, 9.82], [4.1, 1.36, 9.82]]], [0, 0, -1], 18, 'canopy/rag'); marks.push(tone(rag, -1.9)); }
   const patches: Array<[V, number]> = [[[3.5, 3.6, 7.5], 80], [[6, 3.5, 6.2], 80], [[1.2, 3.7, 5.6], 70], [[-3.2, 3.8, 6.4], 70], [[7.6, 3.4, 8.6], 60], [[-7, 3.8, -3.4], 45]];
-  patches.forEach(([c, n], k) => { for (const m of canopyPatch(0, { c, r: [1.8, 1.1, 1.8], fronds: n, seed: 20 + k, reach: 1.25 }, level, undefined, styles.wash, `canopy/patch ${k}`)) marks.push(m); });
+  patches.forEach(([c, n], k) => { for (const m of canopyPatch(0, { c, r: [1.8, 1.1, 1.8], fronds: n, seed: 20 + k, reach: 1.25 }, level, undefined, styles.wash, `canopy/patch ${k}`, leaf)) marks.push(m); });
   walk(12 / 14, 1, 'canopy/boardwalk');
   count('canopy', from);
 
