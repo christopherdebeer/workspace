@@ -30,8 +30,8 @@ import { NET, ANALYTIC, BAKE, RESULTS } from './mistnet';
 import { benchScene, PRESSURES } from './bench';
 import { MarksScene, WAYS, BRUSHED, type MarksFile } from './marksscene';
 import { canopyPatch, WALK, type Level, type LeafStyle } from './canopy';
-import { marksToSplats } from './marks';
-import { limbMarks, limbEye, LIMB, LIMB_WAYS, type LimbWay, type LimbStyle } from './limb';
+import { marksToSplats, sweepMesh } from './marks';
+import { limbMarks, limbEye, LIMB, LIMB_WAYS, type LimbWay, type LimbStyle, type LimbFit } from './limb';
 import { conservatory, occluder, routeAt, EYE, WATER, type Room, type Styles, type Taught, type RootStyle, type RootParts } from './conservatory';
 import { penScene, type PenScene } from './penscene';
 import { paint as autographPaint } from '../autograph/ink';
@@ -87,7 +87,7 @@ function show(s: Splats, name: string, u: 1 | -1) {
   if (name !== 'marks') { marksS = null; marksSel = -1; syncMarks(); }
   if (name !== 'walk') { walkS = null; syncWalk(); }
   if (name !== 'room') { roomS = null; syncRoom(); }
-  if (name !== 'limb') { limbS = null; syncLimb(); }
+  if (name !== 'limb') { limbS = null; R.setStroke(null); syncLimb(); }
   if (name !== 'stone' && name !== 'brushes' && name !== 'mist' && name !== 'bench' && name !== 'composed' && name !== 'pen' && name !== 'field' && name !== 'room' && name !== 'limb') R.setOccluder(null);
   ranks = s.rank ? Float32Array.from(s.rank).sort() : null;
   document.documentElement.classList.toggle('paper', (inkOn && !!s.mark && !['stone', 'brushes', 'bench', 'composed', 'pen', 'mist'].includes(name)) || name === 'stone' || name === 'brushes' || name === 'bench' || name === 'composed' || name === 'pen' || name === 'field' || name === 'marks' || name === 'walk' || name === 'room' || name === 'limb');
@@ -464,24 +464,30 @@ function roomPlace(reset = false, at?: [number, number, number]) {
   const cp = Math.cos(cam.pitch); cam.target = [e[0] - Math.sin(cam.yaw) * cp, e[1] - Math.sin(cam.pitch), e[2] - Math.cos(cam.yaw) * cp];
 }
 // ─── one limb, three ways (limb.ts): the same deposits as the room's limb in parts, as one sweep, as a sweep with accents ───
-let limbS: { way: LimbWay; d: number; auto: number | null; n: number; laid: number; yaw0: number; pitch0: number; look: [number, number] } | null = null, limbStyle: LimbStyle | null = null, limbParts0: RootParts | null = null, syncLimb = () => {};
+let limbS: { way: LimbWay; d: number; auto: number | null; n: number; laid: number; bend: number; fixed?: { eye: [number, number, number]; at: [number, number, number] }; yaw0: number; pitch0: number; look: [number, number] } | null = null, limbStyle: LimbStyle | null = null, limbParts0: RootParts | null = null, limbFit: LimbFit | null | undefined, limbPaint: { w: number; h: number; data: Uint8Array } | null | undefined, syncLimb = () => {};
 async function openLimb(way: LimbWay = limbS?.way ?? (qs.get('way') as LimbWay) ?? 'sweep') {
   const assets = (() => { const m = document.querySelector<HTMLMetaElement>('meta[name=assets]'); return m?.content && !m.content.includes('{{') ? m.content : ''; })();
   if (!limbStyle) { const r = await fetch(`${assets}limb-sweep.json`); if (!r.ok) throw new Error(`no sweep (${r.status})`); limbStyle = (await r.json()) as LimbStyle; }
   if (!limbParts0) { const r = await fetch(`${assets}root-parts.json`); if (!r.ok) throw new Error(`no limb in parts (${r.status})`); limbParts0 = ((await r.json()) as { parts: RootParts }).parts; }
-  const marks = limbMarks(way, limbParts0, limbStyle), d = marksToSplats(marks);
-  const keep = limbS ? { d: limbS.d, auto: limbS.auto, look: limbS.look } : { d: Number(qs.get('d') ?? 6), auto: qs.has('auto') ? performance.now() : null, look: [0, 0] as [number, number] };
-  show(d, 'limb', 1); R.setOccluder(occluder({ marks, solids: [] } as unknown as Room));
-  limbS = { way, ...keep, n: d.n, laid: marks.reduce((a, m) => a + m.count, 0), yaw0: 0, pitch0: 0 }; cam.fov = LIMB.fov;
+  if (limbFit === undefined) { limbFit = null; try { const r = await fetch(`${assets}limb-fitted.json`); if (r.ok) limbFit = (await r.json()) as LimbFit; } catch { limbFit = null; } }
+  // (the teacher's ink for the surface: a header line (its width and height), then two bytes a texel)
+  if (limbPaint === undefined) { limbPaint = null; try { const r = await fetch(`${assets}limb-baked.bin`); if (r.ok) { const b = new Uint8Array(await r.arrayBuffer()), w = b[0] | (b[1] << 8), h = b[2] | (b[3] << 8); if (b.length === 4 + w * h * 2) limbPaint = { w, h, data: b.subarray(4) }; } } catch { limbPaint = null; } }
+  const keep = limbS ? { d: limbS.d, auto: limbS.auto, look: limbS.look, bend: limbS.bend, fixed: limbS.fixed } : { d: Number(qs.get('d') ?? 6), auto: qs.has('auto') ? performance.now() : null, look: [0, 0] as [number, number], bend: Number(qs.get('bend') ?? 0), fixed: undefined };
+  const marks = limbMarks(way, limbParts0, limbStyle, undefined, keep.bend, limbFit);
+  // (drawn on its surface, the limb lays no deposits: one too small to see stands in, so the scene has something to sort)
+  const surface = way === 'shader' || way === 'baked', d = surface ? marksToSplats([], 0.02, [{ d: { p: [...LIMB.at], t: [1, 0, 0], n: [0, 0, 1], s1: 0.0002, s2: 0.0002, thin: 0.0002, turn: 0, logit: -3.5 } }]) : marksToSplats(marks);
+  show(d, 'limb', 1); R.setOccluder(occluder({ marks, solids: [] } as unknown as Room)); R.setStroke(surface ? sweepMesh(marks[0]) : null, way === 'baked' ? limbPaint : null);
+  limbS = { way, ...keep, n: surface ? 0 : d.n, laid: surface ? 0 : marks.reduce((a, m) => a + m.count, 0), yaw0: 0, pitch0: 0 }; cam.fov = LIMB.fov;
   limbPlace(true); home = { ...cam, target: [...cam.target] as [number, number, number] }; syncLimb();
 }
-/** the camera where the move has got to: coming in to the limb and round it; a drag looks round from there */
+/** the camera where the move has got to: coming in to the limb and round it (or where it's been put); a drag looks
+ * round from there */
 function limbPlace(reset = false) {
   if (!limbS) return;
   if (limbS.auto !== null) { const t = ((performance.now() - limbS.auto) / 1000 / 24) % 1, k = t < 0.5 ? t * 2 : 2 - t * 2; limbS.d = LIMB.far * Math.pow(LIMB.close / LIMB.far, k * k * (3 - 2 * k)); }
-  const { eye: e, at } = limbEye(limbS.d), f = norm([at[0] - e[0], at[1] - e[1], at[2] - e[2]]);
+  const { eye: e, at } = limbS.fixed ?? limbEye(limbS.d), f = norm([at[0] - e[0], at[1] - e[1], at[2] - e[2]]);
   if (reset) limbS.look = [0, 0]; else { limbS.look[0] += cam.yaw - limbS.yaw0; limbS.look[1] += cam.pitch - limbS.pitch0; }
-  cam.yaw = Math.atan2(-f[0], -f[2]) + limbS.look[0]; cam.pitch = Math.max(-1.3, Math.min(1.3, Math.asin(-f[1]) + limbS.look[1])); limbS.yaw0 = cam.yaw; limbS.pitch0 = cam.pitch; cam.dist = 1;
+  cam.yaw = Math.atan2(-f[0], -f[2]) + limbS.look[0] + perfSway; cam.pitch = Math.max(-1.3, Math.min(1.3, Math.asin(-f[1]) + limbS.look[1])); limbS.yaw0 = cam.yaw; limbS.pitch0 = cam.pitch; cam.dist = 1;
   const cp = Math.cos(cam.pitch); cam.target = [e[0] - Math.sin(cam.yaw) * cp, e[1] - Math.sin(cam.pitch), e[2] - Math.cos(cam.yaw) * cp];
 }
 const VIEWS = { hero: { yaw: 0.6, pitch: 0.32 }, grazing: { yaw: 1.35, pitch: 0.035 }, reverse: { yaw: 0.6 + Math.PI, pitch: 0.3 } };
@@ -767,13 +773,16 @@ const syncs = [
   for (const [w, label] of LIMB_WAYS) { const b = document.createElement('button'); b.textContent = label; b.onclick = () => void openLimb(w); el.append(b); }
   const auto = document.createElement('button'); auto.textContent = 'come in and go back'; auto.onclick = () => { if (limbS) { limbS.auto = limbS.auto === null ? performance.now() : null; syncLimb(); } }; $('l-go').append(auto);
   // (the slider even in how large the limb looks: its place between far and close)
-  dEl.oninput = () => { if (limbS) { limbS.d = LIMB.far * Math.pow(LIMB.close / LIMB.far, Number(dEl.value)); limbS.auto = null; syncLimb(); } };
+  dEl.oninput = () => { if (limbS) { limbS.d = LIMB.far * Math.pow(LIMB.close / LIMB.far, Number(dEl.value)); limbS.auto = null; limbS.fixed = undefined; syncLimb(); } };
+  const bEl = $<HTMLInputElement>('l-bend'); let bendDue = 0;
+  bEl.oninput = () => { if (!limbS) return; limbS.bend = Number(bEl.value); $('l-bend-v').textContent = `${limbS.bend.toFixed(2)} m`; clearTimeout(bendDue); bendDue = window.setTimeout(() => void openLimb(), 60); };
   syncLimb = () => {
     $('limb-controls').hidden = !limbS; if (!limbS) return;
     [...el.querySelectorAll('button')].forEach((b, k) => b.setAttribute('aria-pressed', String(LIMB_WAYS[k][0] === limbS!.way)));
     auto.setAttribute('aria-pressed', String(limbS.auto !== null)); dEl.value = String(Math.log(LIMB.far / limbS.d) / Math.log(LIMB.far / LIMB.close));
     $('l-dist-v').textContent = `${limbS.d.toFixed(1)} m`; $('sum-limb').textContent = `${LIMB_WAYS.find((w) => w[0] === limbS!.way)![1]} · ${limbS.d.toFixed(1)} m`;
-    $('l-note').textContent = `${limbS.laid.toLocaleString()} deposits laid, the same each way. ` + (limbS.way === 'parts' ? 'The room’s limb: one loaded stroke far off, handing over to a line along each edge and a graded stroke between.' : limbS.way === 'sweep' ? 'One pass of a loaded brush: its pressure along it sets its width, its coverage and its load together. No edge lines.' : 'The sweep, with stretches of a line along one edge or the other, each there or not on its own.');
+    bEl.value = String(limbS.bend); $('l-bend-v').textContent = `${limbS.bend.toFixed(2)} m`;
+    $('l-note').textContent = limbS.way === 'baked' ? 'No deposits: the teacher’s own ink from two of its drawings of this limb, painted onto the limb’s surface. Where neither drawing sees, the sweep.' : limbS.way === 'shader' ? 'No deposits: the same sweep (its pressure, its band, its bristles and their gaps) worked out a pixel at a time on the limb’s surface. A bristle has an edge; thin ink lands in specks.' : limbS.way === 'fitted' ? `${limbS.laid.toLocaleString()} deposits: the sweep’s, some moved to where the teacher’s drawings of this limb have ink the gesture hasn’t, and each one’s ink, place and size fitted to two of them.` : `${limbS.laid.toLocaleString()} deposits laid, the same each way. ` + (limbS.way === 'parts' ? 'The room’s limb: one loaded stroke far off, handing over to a line along each edge and a graded stroke between.' : limbS.way === 'sweep' ? 'One pass of a loaded brush: its pressure along it sets its width, its coverage and its load together. No edge lines.' : 'The sweep, with stretches of a line along one edge or the other, each there or not on its own.');
   };
 }
 {
@@ -1018,6 +1027,13 @@ async function runPerf() {
             { name: `${v} · no water · air still`, apply: () => { roomS!.mirror = false; roomS!.moving = false; } },
             { name: `${v} · still water · air moving`, apply: () => { roomS!.mirror = true; roomS!.moving = true; } },
           ]).concat([2, 4, 8, 16].map((k) => ({ name: `canopy · still water · air moving · drawn ${k}× over`, apply: () => { perfLoad = k; } })))
+        : limbS
+          // (one limb, each renderer close to, then drawn many times over: what each has room for)
+          ? (['sweep', 'fitted', 'shader', 'baked'] as LimbWay[]).flatMap((w) => { const label = LIMB_WAYS.find((x) => x[0] === w)![1]; return [
+              { name: `${label} · from 2.6 m`, apply: () => { perfLoad = 1; limbS!.d = 2.6; limbS!.auto = null; limbS!.fixed = undefined; void openLimb(w); } },
+              { name: `${label} · drawn 16× over`, apply: () => { perfLoad = 16; } },
+              { name: `${label} · drawn 64× over`, apply: () => { perfLoad = 64; } },
+            ]; })
         : walkS
           ? [12, 5, 1.5].map((d) => ({ name: `canopy from ${d} m`, apply: () => { walkS!.d = d; walkS!.auto = null; } })).concat([8, 32, 128].map((k) => ({ name: `canopy from 1.5 m · drawn ${k}× over`, apply: () => { perfLoad = k; } })))
           : [{ name: 'as it is', apply: () => {} }];
@@ -1069,7 +1085,7 @@ const theme = () => (matchMedia('(prefers-color-scheme: dark)').matches ? [0.07,
 function frame() {
   const t = performance.now(), raw = t - last, dt = Math.min(0.1, raw / 1000); last = t;
   if (perf.rec) { perf.rec.push(raw); perf.sorts.push(sortMs); }
-  if (perf.spin && (walkS || roomS)) perfSway = 0.3 * Math.sin((performance.now() / 1000) * 0.9); else { perfSway = 0; if (perf.spin) cam.yaw += dt * 0.35; }
+  if (perf.spin && (walkS || roomS || limbS)) perfSway = 0.3 * Math.sin((performance.now() / 1000) * 0.9); else { perfSway = 0; if (perf.spin) cam.yaw += dt * 0.35; }
   if (orbitFrom !== null) {
     const u = (t - orbitFrom) / 1000 / ORBIT_S;
     cam.yaw = VIEWS.hero.yaw + Math.min(1, u) * Math.PI * 2;
@@ -1138,7 +1154,10 @@ function frame() {
   room: { get state() { return roomS ? { s: roomS.s, n: roomS.n, mode: roomS.mode, roots: roomS.roots, mirror: roomS.mirror, moving: roomS.moving, regions: roomS.room.regions, views: roomS.room.views } : null; },
     at: (s: number, look?: [number, number, number]) => { if (roomS) { roomS.s = s; roomS.auto = null; roomPlace(true, look); syncRoom(); } }, view: (v: string) => { const w = roomS?.room.views[v]; if (roomS && w) { roomS.s = w.s; roomS.auto = null; roomPlace(true, w.at); syncRoom(); } },
     set: (o: { mirror?: boolean; moving?: boolean; mode?: RoomMode; light?: number | null; roots?: boolean }) => { if (!roomS) return; if (o.mirror !== undefined) roomS.mirror = o.mirror; if (o.moving !== undefined) roomS.moving = o.moving; if (o.roots !== undefined && o.roots !== roomS.roots) { roomS.roots = o.roots; roomRelay(); } if (o.light !== undefined) { roomS.light = o.light; roomRelay(); } syncRoom(); return o.mode !== undefined && o.mode !== roomS.mode ? openRoom(o.mode) : undefined; } },
-  limb: { get state() { return limbS ? { ...limbS } : null; }, set: (d: number) => { if (limbS) { limbS.d = d; limbS.auto = null; limbPlace(true); syncLimb(); } }, way: (w: LimbWay) => openLimb(w), auto: (on: boolean) => { if (limbS) { limbS.auto = on ? performance.now() : null; syncLimb(); } } },
+  limb: { get state() { return limbS ? { ...limbS } : null; }, set: (d: number) => { if (limbS) { limbS.d = d; limbS.auto = null; limbS.fixed = undefined; limbPlace(true); syncLimb(); } }, way: (w: LimbWay) => openLimb(w), auto: (on: boolean) => { if (limbS) { limbS.auto = on ? performance.now() : null; syncLimb(); } },
+    // (its crown pulled out and up by so many metres; the camera put somewhere of its own; the frame's darkness, a byte a pixel)
+    bend: (b: number) => { if (limbS) { limbS.bend = b; return openLimb(limbS.way); } }, look: (eye: [number, number, number], at: [number, number, number]) => { if (limbS) { limbS.fixed = { eye, at }; limbS.auto = null; limbPlace(true); } },
+    dark: () => { drawNow(); const c = document.createElement('canvas'); c.width = canvas.width; c.height = canvas.height; const g = c.getContext('2d')!; g.drawImage(canvas, 0, 0); const px = g.getImageData(0, 0, c.width, c.height).data, P = [0.937, 0.906, 0.847]; let out = ''; for (let i = 0; i < c.width * c.height; i++) out += String.fromCharCode(Math.round(255 * Math.max(0, Math.min(1, Math.max((P[0] - px[i * 4] / 255) / (P[0] - 0.12), (P[1] - px[i * 4 + 1] / 255) / (P[1] - 0.12), (P[2] - px[i * 4 + 2] / 255) / (P[2] - 0.12)))))); return { w: c.width, h: c.height, d: btoa(out) }; } },
   walk: { get state() { return walkS ? { ...walkS } : null; }, set: (d: number) => { if (walkS) { walkS.d = d; walkS.auto = null; syncWalk(); } }, level: (l: Level) => openWalk(l), auto: (on: boolean) => { if (walkS) { walkS.auto = on ? performance.now() : null; syncWalk(); } } },
   marks: {
     get state() { return marksS ? { way: marksS.way, selected: marksSel, deposits: marksS.deposits, sheets: marksS.sheets.map((s) => s.name), marks: marksS.marks.map((m) => ({ id: m.id, name: m.name, kind: m.kind, count: m.count, ctrl: m.ctrl })) } : null; },

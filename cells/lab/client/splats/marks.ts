@@ -38,7 +38,9 @@ export type V = [number, number, number];
 export interface Deposit { p: V; t: V; n: V; s1: number; s2: number; thin: number; turn: number; logit: number;
   /** its own view terms (nine, as the mark's: added to them), and the most ink it lays whatever the view (0…1; 1 if
    * not given): a deposit whose ink depends on where it's seen from */
-  view?: number[]; cap?: number }
+  view?: number[]; cap?: number;
+  /** how its cap changes with its own ink residual (for fitting a deposit's ink where its cap carries it) */
+  dcap?: number }
 /** the nine terms a deposit's ink can depend on the view by: of d, the unit vector from it to the eye */
 export const viewBasis = (d: V): number[] => [1, d[0], d[1], d[2], d[0] * d[1], d[1] * d[2], d[0] * d[2], d[0] * d[0] - d[1] * d[1], 3 * d[2] * d[2] - 1];
 /** how much ink a deposit lays, seen from an eye (0…1): its cap, and its logit with its mark's view terms and its own */
@@ -89,6 +91,10 @@ export interface Mark {
    * come off the spine at the stroke's `splay` (radians from the way the spine runs), turning round it leaf by leaf;
    * `bunch` to a bunch, a bunch's leaves drawn together along the spine by `cluster` (0 evenly spaced … 1 on one spot) */
   leaf?: { n: number; len: number; taper: number; fade: number; bunch: number; cluster: number };
+  /** a sweep's deposits moved off its even lattice (three numbers a deposit): how far along the limb (0…1), which
+   * bristle (0…rows, round the limb), and how free of the gesture it is (0: it lays ink only where the sweep's band
+   * and its bristle do; 1: wherever it sits, whatever the view). Where a fit has put them (devtools/splats-limb-fit.mjs) */
+  homes?: number[];
   /** the stretch of its spine its deposits are laid over (0…1 of its length); the whole of it if not given */
   span?: [number, number];
   /** where a tube's light comes from (a unit vector; none: from straight above its spine): its ink keeps to the side
@@ -122,7 +128,7 @@ const cross = (a: V, b: V): V => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] 
 const norm = (a: V): V => { const l = Math.hypot(a[0], a[1], a[2]) || 1; return [a[0] / l, a[1] / l, a[2] / l]; };
 export const knots = (k: number[], o: number, n: number, u: number) => { const x = Math.max(0, Math.min(1, u)) * (n - 1), i = Math.min(n - 2, Math.floor(x)), f = x - i; return k[o + i] * (1 - f) + k[o + i + 1] * f; };
 const softplus = (x: number) => (x > 30 ? x : Math.log1p(Math.exp(x)));
-const hash = (a: number, b: number, c: number) => { let h = (Math.imul(a | 0, 374761393) + Math.imul(b | 0, 668265263) + Math.imul(c | 0, 2147483647)) | 0; h = Math.imul(h ^ (h >>> 13), 1274126177); return ((h ^ (h >>> 16)) >>> 0) / 4294967296; };
+export const hash = (a: number, b: number, c: number) => { let h = (Math.imul(a | 0, 374761393) + Math.imul(b | 0, 668265263) + Math.imul(c | 0, 2147483647)) | 0; h = Math.imul(h ^ (h >>> 13), 1274126177); return ((h ^ (h >>> 16)) >>> 0) / 4294967296; };
 
 /** an id from a key (a 32-bit hash of it) */
 export function keyId(key: string): number { let h = 2166136261; for (let i = 0; i < key.length; i++) { h ^= key.charCodeAt(i); h = Math.imul(h, 16777619); } return (h >>> 0) || 1; }
@@ -226,6 +232,28 @@ const grid = (P: number[], gx: number, gy: number) => {
   return (P[iy * 3 + ix] * (1 - fx) + P[iy * 3 + ix + 1] * fx) * (1 - fy) + (P[(iy + 1) * 3 + ix] * (1 - fx) + P[(iy + 1) * 3 + ix + 1] * fx) * fy;
 };
 
+/**
+ * A sweep as a surface, for a renderer that draws the gesture a pixel at a time (render.ts `setStroke`): the limb's
+ * tube as rings of vertices, each carrying where it is, which way its surface faces, the way the band takes as up
+ * there, how far along the limb it is (0…1), which bristle it lies on (0…rows, round the limb, the same bristles the
+ * deposits are laid on) and how far along in limb widths. And the sweep's numbers, as the deposits' layout reads them.
+ * Thirteen floats a vertex: position, normal, up, (along, bristle, along in widths, 0).
+ */
+export function sweepMesh(m: Mark, rings = 200, segs = 32): { verts: Float32Array; index: Uint32Array; style: { id: number; rows: number; ink: number; fall: number; spread: number; ragged: number; tmin: number; tmax: number; dry: number; decay: number; vary: number; taper: number; runs: number; wet: number } } {
+  const S = spine(m), pts = S.pts, L = S.L, P = m.params, w0 = m.width ?? 0.01, rows = Math.max(1, m.rows ?? 1), SW = m.sweep!, verts = new Float32Array((rings + 1) * (segs + 1) * 13), index = new Uint32Array(rings * segs * 6);
+  for (let a = 0; a <= rings; a++) {
+    const u = a / rings, s = u * L; let k = 0; while (k < pts.length - 2 && S.cum[k + 1] < s) k++;
+    const f = Math.max(0, Math.min(1, (s - S.cum[k]) / Math.max(1e-9, S.cum[k + 1] - S.cum[k]))), t = norm(sub(pts[k + 1], pts[k])), q = Math.abs(t[1]) < 0.95 ? t[1] : t[0];
+    const N0 = norm(sub(Math.abs(t[1]) < 0.95 ? [0, 1, 0] : [1, 0, 0], [t[0] * q, t[1] * q, t[2] * q])), B0 = cross(t, N0), U0: V = Math.abs(t[1]) < 0.8 ? N0 : norm(cross(t, cross([0.6, 0, 0.8], t))), U: V = m.bandUp ? [-U0[0], -U0[1], -U0[2]] : U0;
+    const w = w0 * Math.exp(knots(P, SP.width, KN.width, u)), centre = add(add(pts[k], sub(pts[k + 1], pts[k]), f), N0, knots(P, SP.offset, KN.offset, u) * w0);
+    for (let b = 0; b <= segs; b++) {
+      const rowf = (b / segs) * rows, th = (rowf / rows) * Math.PI * 2 + hash(m.id, 3, 3) * 6.28, c = Math.cos(th), sn = Math.sin(th), rad: V = [N0[0] * c + B0[0] * sn, N0[1] * c + B0[1] * sn, N0[2] * c + B0[2] * sn], o = (a * (segs + 1) + b) * 13;
+      verts.set(add(centre, rad, w / 2), o); verts.set(rad, o + 3); verts.set(U, o + 6); verts[o + 9] = u; verts[o + 10] = rowf; verts[o + 11] = s / w0;
+    }
+  }
+  for (let a = 0, o = 0; a < rings; a++) for (let b = 0; b < segs; b++) { const i0 = a * (segs + 1) + b, i1 = i0 + segs + 1; index.set([i0, i1, i0 + 1, i0 + 1, i1, i1 + 1], o); o += 6; }
+  return { verts, index, style: { id: m.id >>> 0, rows, ink: knots(P, SP.ink, KN.ink, 0.5), fall: P[SP.fall] ?? 1, spread: P[SP.spread], ragged: Math.min(0.6, P[SP.bristle] ?? 0), tmin: SW.tmin, tmax: SW.tmax, dry: SW.dry, decay: SW.decay, vary: SW.vary, taper: SW.taper, runs: SW.runs ?? 3, wet: SW.wet ?? 0 } };
+}
 /** a mark's deposits */
 export function layout(m: Mark): Deposit[] {
   const out: Deposit[] = [], N = m.count, P = m.params, R = m.resid;
@@ -259,10 +287,11 @@ export function layout(m: Mark): Deposit[] {
       for (let i = leaves * n; i < N; i++) out.push({ p: [...pts[0]] as V, t: [0, -1, 0], n: [0, 0, 1], s1: 0.001, s2: 0.001, thin: 0.001, turn: 0, logit: -20 });
       return out;
     }
+    const HM = m.homes && m.homes.length === N * 3 ? m.homes : null;
     for (let i = 0; i < N; i++) {
-      const r = i * RESID, col = Math.floor(i / rows), row = i % rows, v = rows > 1 ? rc[row] : 0;
+      const r = i * RESID, col = Math.floor(i / rows), row = HM ? ((Math.floor(HM[i * 3 + 1]) % rows) + rows) % rows : i % rows, v = rows > 1 ? rc[row] : 0;
       // (rows staggered like bricks, so their deposits' ends don't line up across the stroke)
-      const u = sp0 + (sp1 - sp0) * Math.max(0, Math.min(1, (col + 0.5 + (rows > 1 ? ((row * 0.618) % 1) - 0.5 : 0) * 0.8 + R[r + 5]) / cols)), s = u * L;
+      const u = HM ? Math.max(0, Math.min(1, HM[i * 3] + R[r + 5] / cols)) : sp0 + (sp1 - sp0) * Math.max(0, Math.min(1, (col + 0.5 + (rows > 1 ? ((row * 0.618) % 1) - 0.5 : 0) * 0.8 + R[r + 5]) / cols)), s = u * L;
       let k = 0; while (k < pts.length - 2 && S.cum[k + 1] < s) k++;
       const f = Math.max(0, Math.min(1, (s - S.cum[k]) / Math.max(1e-9, S.cum[k + 1] - S.cum[k]))), t = norm(sub(pts[k + 1], pts[k]));
       // (on a surface, its plane is the surface's; in open space, any plane through its length: it's round in section)
@@ -292,7 +321,8 @@ export function layout(m: Mark): Deposit[] {
       }
       if (tube && m.band === 'seen') {
         const N0 = norm(sub(Math.abs(t[1]) < 0.95 ? [0, 1, 0] : [1, 0, 0], [t[0] * (Math.abs(t[1]) < 0.95 ? t[1] : t[0]), t[1] * (Math.abs(t[1]) < 0.95 ? t[1] : t[0]), t[2] * (Math.abs(t[1]) < 0.95 ? t[1] : t[0])])), B0 = cross(t, N0);
-        const th = ((row + 0.5) / rows) * Math.PI * 2 + hash(m.id, 3, 3) * 6.28, c = Math.cos(th), sn = Math.sin(th), rad: V = [N0[0] * c + B0[0] * sn, N0[1] * c + B0[1] * sn, N0[2] * c + B0[2] * sn];
+        const free = HM ? Math.max(0, Math.min(1, HM[i * 3 + 2])) : 0;
+        const th = ((HM ? HM[i * 3 + 1] : row + 0.5) / rows) * Math.PI * 2 + hash(m.id, 3, 3) * 6.28, c = Math.cos(th), sn = Math.sin(th), rad: V = [N0[0] * c + B0[0] * sn, N0[1] * c + B0[1] * sn, N0[2] * c + B0[2] * sn];
         // (up as the band takes it: across the limb where the limb is anywhere near level; for an upright limb, to one side)
         // (or, where a light is given, toward the light: the band keeps to the side away from it)
         const lit = m.light ? sub(m.light, [t[0] * dot(m.light, t), t[1] * dot(m.light, t), t[2] * dot(m.light, t)]) : null;
@@ -315,7 +345,7 @@ export function layout(m: Mark): Deposit[] {
           const jr = s / (0.6 * w0) + hash(m.id, row, 23) * 11, j0 = Math.floor(jr), jf = jr - j0, js = jf * jf * (3 - 2 * jf);
           stand = SW.jitter * ((hash(m.id, row + 300, j0) * (1 - js) + hash(m.id, row + 300, j0 + 1) * js) * 2 - 1); load = SW.decay * 3 * u;
         }
-        const T = (SW ? SW.tmin + Math.max(0, SW.tmax - SW.tmin) * press : Math.exp(P[SP.arc] ?? 0)) * (1 + (SW ? Math.min(0.6, P[SP.bristle] ?? 0) : P[SP.bristle] ?? 0) * 0.5 * wob), K = 7 * Math.exp((P[SP.fall] ?? 1) - 1), nU = dot(rad, U);
+        const T = (SW ? SW.tmin + Math.max(0, SW.tmax - SW.tmin) * press : Math.exp(P[SP.arc] ?? 0)) * (1 + (SW ? Math.min(0.6, P[SP.bristle] ?? 0) : P[SP.bristle] ?? 0) * 0.5 * wob), K = 7 * Math.exp((P[SP.fall] ?? 1) - 1) * (1 - free), nU = dot(rad, U);
         // (ink where it lies under the band's inner edge as seen: K (B - n·U' ), U' the part of U across the line of
         // sight: B - n·U + (U·d)(n·d), the last a quadratic in d: the nine terms hold it exactly)
         const Sm = (a: number, b: number) => (U[a] * rad[b] + U[b] * rad[a]) / 2, Bd = -1 + T;
@@ -325,8 +355,11 @@ export function layout(m: Mark): Deposit[] {
         const dry = Math.max(0, knots(P, SP.dry, KN.dry, u)) * 9 * gap * gap, wet = SW ? (SW.wet ?? 0) * (press - 0.5) : 0, body = knots(P, SP.ink, KN.ink, u) - softplus((P[SP.u0] - u) / t0) - softplus((u - P[SP.u1]) / t1) - dry - load + 2 * wet + R[r];
         // (a sweep's row lays ink where the pressure, with the row's own unevenness, is over the row's threshold)
         if (SW) cover = 1 / (1 + Math.exp(-12 * (press * (0.7 + 0.6 * gap) - hash(m.id, row, 41) * SW.dry)));
+        // (a deposit freed of the gesture lays its ink whatever its bristle does and wherever the band is)
+        if (SW && free) cover = cover + (1 - cover) * free;
+        const sig = 1 / (1 + Math.exp(-body)), capv = (SW ? cover : 1) * sig;
         const centre = add(add(pts[k], sub(pts[k + 1], pts[k]), f), N0, knots(P, SP.offset, KN.offset, u) * w0);
-        out.push({ p: add(centre, rad, w / 2 + (R[r + 4] + stand) * w0), t, n: rad, s1: Lc * 0.9 * Math.exp(P[SP.along] + R[r + 1]), s2: ((Math.PI * w) / rows) * 0.62 * Math.exp(P[SP.spread] + wet + R[r + 2]), thin: 0.0008, turn: R[r + 3], logit: K * (Bd - nU) + (K * nU) / 3, view, cap: (SW ? cover : 1) / (1 + Math.exp(-body)) });
+        out.push({ p: add(centre, rad, w / 2 + (R[r + 4] + stand) * w0), t, n: rad, s1: Lc * 0.9 * Math.exp(P[SP.along] + R[r + 1]), s2: ((Math.PI * w) / rows) * 0.62 * Math.exp(P[SP.spread] + wet + R[r + 2]), thin: 0.0008, turn: R[r + 3], logit: K * (Bd - nU) + (K * nU) / 3 + 4 * free, view, cap: capv, dcap: capv * (1 - sig) });
         continue;
       }
       if (tube && m.band) {

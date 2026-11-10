@@ -292,5 +292,28 @@
     "file": "v-limb-accents.jpg"
    }
   ]
+ },
+ {
+  "group": "One limb, four renderers",
+  "views": [
+   {
+    "name": "limb-surface",
+    "title": "The sweep on a surface",
+    "caption": "no deposits: the same sweep worked out a pixel at a time on the limb’s surface. A bristle has an edge; a dry one’s ink lands in specks",
+    "file": "v-limb-surface.jpg"
+   },
+   {
+    "name": "limb-fitted",
+    "title": "Deposits, fitted",
+    "caption": "the sweep’s deposits, three in ten moved, each one’s ink, place and size fitted to two of the teacher’s drawings of this limb",
+    "file": "v-limb-fitted.jpg"
+   },
+   {
+    "name": "limb-baked",
+    "title": "The teacher’s ink on the surface",
+    "caption": "no deposits and no fitting: two of the teacher’s drawings of this limb painted onto its surface",
+    "file": "v-limb-baked.jpg"
+   }
+  ]
  }
 ]

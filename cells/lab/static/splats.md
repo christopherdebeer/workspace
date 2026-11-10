@@ -1444,6 +1444,103 @@ The room's limbs are unchanged: this is one limb. Tone at low resolution took no
 ![The same limb as one sweep](splats/v-limb-sweep.jpg)
 ![The sweep with accents](splats/v-limb-accents.jpg)
 
+### The same limb, four renderers: splats made to compete
+
+The sweep is a function worked out along a curve (a pressure, a band, bristles and their gaps) and then sampled into
+Gaussian deposits. Nothing in it is the deposits' own: `limbSweep` lays them with no residuals at all. So the last
+section showed a better brush model, not that splats are the way to draw it. Here the limb, its curve and the
+sweep's numbers are held fixed, and four renderers draw it:
+
+- **the sweep, as deposits**: 3,240 Gaussians on the gesture's lattice, as before.
+- **the sweep, on a surface** (`marks.ts` `sweepMesh`; `render.ts` `setStroke`): the limb's tube as a mesh, and the
+  same functions worked out a pixel at a time on it, with the same hashes, so it loads and runs dry in the same
+  places. No deposits and no sorting. A bristle is a stripe with an edge; where one is running dry its ink lands in
+  specks, as on the paper's tooth.
+- **deposits, fitted** (`devtools/splats-limb-fit.mjs`; `marks.ts` `homes`): what a splat can have and a worked-out
+  stroke can't. Each deposit's ink, its place across the limb and along it, its length and its width are fitted to
+  the teacher's restyles of two views of this limb, from opposite sides, at full size, within the limb's width.
+  Deposits that lay nothing are moved to where the teacher has ink the gesture hasn't, free of its band and
+  bristles. Held to the gesture: a penalty and a limit on every residual, and at most three deposits in ten moved.
+- **the teacher's ink, on the surface**: the counterpart a surface has to fitting. The same two drawings projected
+  onto the limb as a texture along it and round it (1,024 × 96 texels, 57% of them seen by one drawing or the
+  other; the sweep shows where neither sees). Nothing is fitted.
+
+![From the teacher's own cameras: its drawing of this limb, and the four renderers](splats/b-limb-fit.jpg)
+
+Every number below is read from the real renderer, from the five views the teacher drew this limb in.
+
+**Where its ink is**: squared error against the teacher's drawing, within the limb's width (×1000 a pixel):
+
+| | the two views fitted to | the three not |
+|---|---|---|
+| bare paper | 98.1 | 98.7 |
+| the sweep, as deposits | 158.3 | 179.2 |
+| the sweep, on a surface | 156.2 | 167.8 |
+| deposits, fitted | 10.6 | 107.2 |
+| the teacher's ink, on the surface | 13.6 | 163.2 |
+
+**How its stroke runs**: the readings along the stroke, on the teacher's five strips of this limb:
+
+| | the teacher | sweep, deposits | sweep, surface | deposits, fitted | teacher's ink, surface |
+|---|---|---|---|---|---|
+| firm edge (px) | 1.6 | 2.4 | 1.5 | 2.4 | 1.5 |
+| soft edge (px) | 3.7 | 9.8 | 3.2 | 7.2 | 5.4 |
+| rim (px) | 3.4 | 0.7 | 3.1 | 0.8 | 2.7 |
+| thick | 0.32 | 0.38 | 0.32 | 0.35 | 0.37 |
+| body | 0.53 | 0.73 | 0.84 | 0.58 | 0.67 |
+| cover | 0.85 | 0.83 | 0.68 | 0.71 | 0.68 |
+| **distance over all the readings** | | **114.2** | **83.9** | **63.8** | **55.5** |
+
+**What each fills**, from the scene's camera far, medium and close (thousands of pixels of a 960 × 640 frame): the
+sweep's deposits 193, 531, 1,387 (their quads, ±3σ each way; 870, 804 and 490 of the 3,240 drawn at all); the fitted
+ones 250, 817, 1,679; the surface 7, 37, 75, each pixel once.
+
+![The four from the scene's camera: far, medium, close, and close with the limb's crown bent](splats/b-limb-renderers.jpg)
+
+![Close up, at the frame's own size: an edge and a dry stretch in each](splats/b-limb-edges.jpg)
+
+- **The edges are the renderer's, and the surface has the teacher's.** Drawn on the surface, the same gesture has a
+  firm edge of 1.5 px against the teacher's 1.6, a ragged rim of 3.1 against 3.4. As deposits it has 2.4 and 0.7,
+  and fitting every deposit's size and place leaves them at 2.4 and 0.8. A Gaussian's falloff was the mismatch;
+  finer structure in the deposits didn't remove it.
+- **Fitting buys where the ink is, and a texture buys the same without fitting.** Fitted deposits put the teacher's
+  broad loading and its edge accents where it has them: 158 down to 10.6, far under bare paper. The teacher's ink
+  projected onto the surface gets 13.6, with the teacher's own dry-brush texture, and no optimiser.
+- **Neither carries to a view it wasn't made from.** There the fitted deposits score 107 and bare paper 98.7. The
+  teacher's five drawings of this limb don't agree with one another, so there is no one limb to recover. The fitted
+  deposits beat the painted surface there (163) only by leaving less ink behind.
+- **Three quarters of a sweep's deposits lay nothing.** 2,498 of the 3,240 lay no ink in either view fitted to:
+  they're round the far side, outside the band, or on a dry bristle. A lattice round a tube spends most of itself
+  where nothing is drawn.
+- **The surface fills a twentieth of the pixels**, and does more work at each. That's a count, not a time; the time
+  is the phone's to give (below).
+- **Every one follows an edit.** With the crown pulled 0.6 m out and up, all four redraw on the bent limb: a
+  deposit's home and a texel are both a place along the limb and round it.
+- **The move is continuous in all four**: ink from frame to frame grows by at most ×1.22, where the limb's own growth
+  is ×1.17.
+- **What the deposits' softness had been doing.** Ported exactly, the surface drew thin separate lines where the
+  deposits drew a band: the Gaussians had been filling in between bristles. A stripe is now half as wide again as a
+  deposit's half-height width, so the band reads as thick (0.32 against 0.38). The pressures, the band, the bristles
+  and the gaps are the same; the footprint is each renderer's own.
+
+**So, for a limb.** The mark stays: its curve, its pressure, its identity, its edits. Splats don't earn their place
+drawing it. The surface draws the same gesture with the teacher's edges at a fraction of the fill, and takes a
+teacher's ink directly where splats need an optimiser to get the same. What this doesn't test is what a surface
+can't have: ink that stands off a surface or hangs in open space (fronds, a wash, mist), where every deposit is
+placed on its own. That's where splats still have to be tried against something.
+
+What's weak in this: it's one limb and five strips. The teacher's drawings have other things crossing the limb, and
+they're painted on and fitted to with the rest. The specks are the surface's own addition, not the gesture's. And
+the cost on a phone isn't measured: `?scene=limb&perf` draws each renderer close to and then 16 and 64 times over;
+`?scene=room&perf` measures the room again, which now draws about 76,000 deposits where its last timing was taken
+at 23,000.
+
+The room still draws its limbs in parts, as deposits.
+
+![The sweep on a surface](splats/v-limb-surface.jpg)
+![Deposits, fitted](splats/v-limb-fitted.jpg)
+![The teacher's ink on the surface](splats/v-limb-baked.jpg)
+
 ### One frond cluster, restored
 
 Taught by tone, the room's fronds faded almost out. That was the objective's doing: the teacher's leaves are where

@@ -76,3 +76,9 @@ Made by `node cells/lab/views.mjs splats` from `client/splats/views.mjs`. The RE
 ![A limb in parts: the root tunnel’s third arch as the room draws it: a line along each edge and a graded stroke between](v-limb-parts.jpg)
 ![The same limb as one sweep: the same deposits as one pass of a loaded brush: its pressure sets its width, its coverage and how far its ink spreads together](v-limb-sweep.jpg)
 ![The sweep with accents: the sweep, with stretches of a line along one edge or the other, each there or not on its own](v-limb-accents.jpg)
+
+## One limb, four renderers
+
+![The sweep on a surface: no deposits: the same sweep worked out a pixel at a time on the limb’s surface. A bristle has an edge; a dry one’s ink lands in specks](v-limb-surface.jpg)
+![Deposits, fitted: the sweep’s deposits, three in ten moved, each one’s ink, place and size fitted to two of the teacher’s drawings of this limb](v-limb-fitted.jpg)
+![The teacher’s ink on the surface: no deposits and no fitting: two of the teacher’s drawings of this limb painted onto its surface](v-limb-baked.jpg)

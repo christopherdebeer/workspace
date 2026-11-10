@@ -451,6 +451,29 @@ ok('parse() tells a .splat by its bytes', F.parse(F.encodeSplat(g)).n === g.n);
     }
   }
 }
+// (one limb, other renderers: the sweep's surface carries the same places its deposits are laid on; deposits given
+// homes on the gesture's own lattice lie where the lattice put them; a fit's homes and residuals fit the limb, with at
+// most three in ten moved; the teacher's ink for the surface is the size it says)
+{
+  const MK = await load('../client/splats/marks.ts'), LB = await load('../client/splats/limb.ts'), fs = await import('node:fs');
+  const fp = new URL('../static/splats/root-parts.json', import.meta.url), fsw = new URL('../static/splats/limb-sweep.json', import.meta.url);
+  if (fs.existsSync(fp) && fs.existsSync(fsw)) {
+    const parts = JSON.parse(fs.readFileSync(fp, 'utf8')).parts, style = JSON.parse(fs.readFileSync(fsw, 'utf8')), sw = LB.limbMarks('sweep', parts, style)[0], rows = sw.rows, cols = Math.ceil(sw.count / rows);
+    const RINGS = 2 * cols, mesh = MK.sweepMesh(sw, RINGS, rows), deps = MK.layout(sw); let worst = 0;
+    // (a deposit of bristle r, column c, lies on the surface between the rings either side of it, half a bristle round from vertex r)
+    for (let i = 0; i < deps.length; i += 37) { const row = i % rows, d = deps[i], n = d.n; let best = Infinity; for (let a = 0; a <= RINGS; a++) for (const b of [row, row + 1]) { const o = (a * (rows + 1) + b) * 13; best = Math.min(best, Math.hypot(d.p[0] - mesh.verts[o], d.p[1] - mesh.verts[o + 1], d.p[2] - mesh.verts[o + 2])); } worst = Math.max(worst, best / sw.width); void n; }
+    ok(`limb, on a surface: ${mesh.verts.length / 13} vertices, ${mesh.index.length / 3} triangles; every deposit tested lies within ${(worst).toFixed(2)} of the limb's width of the surface's vertices for its bristle`, mesh.verts.length === (RINGS + 1) * (rows + 1) * 13 && mesh.index.length === RINGS * rows * 6 && mesh.verts.every(Number.isFinite) && worst < 0.25 && mesh.style.rows === rows);
+    const homed = LB.limbMarks('sweep', parts, style)[0]; homed.homes = new Array(sw.count * 3).fill(0); for (let i = 0; i < sw.count; i++) { const col = Math.floor(i / rows), row = i % rows; homed.homes[i * 3] = Math.max(0, Math.min(1, (col + 0.5 + (((row * 0.618) % 1) - 0.5) * 0.8) / cols)); homed.homes[i * 3 + 1] = row + 0.5; }
+    const hd = MK.layout(homed); let off = 0; for (let i = 0; i < deps.length; i++) off = Math.max(off, Math.hypot(deps[i].p[0] - hd[i].p[0], deps[i].p[1] - hd[i].p[1], deps[i].p[2] - hd[i].p[2]), Math.abs((deps[i].cap ?? 1) - (hd[i].cap ?? 1)));
+    // (and one freed of the gesture lays ink from where the band isn't)
+    const freed = LB.limbMarks('sweep', parts, style)[0]; freed.homes = homed.homes.slice(); for (let i = 0; i < sw.count; i++) freed.homes[i * 3 + 2] = 1; const fd = MK.layout(freed), eye = LB.limbEye(5.5).eye; let lit = 0, was = 0; for (let i = 0; i < fd.length; i++) { if (MK.inkOf(fd[i], eye) > 0.2) lit++; if (MK.inkOf(deps[i], eye) > 0.2) was++; }
+    ok(`limb, homes: deposits homed on the gesture's lattice lie where it laid them (${off.toExponential(1)} off at most); freed of the gesture ${lit} of ${fd.length} lay ink from a view where ${was} did`, off < 1e-9 && lit > 2 * was);
+    const ff = new URL('../static/splats/limb-fitted.json', import.meta.url), fb = new URL('../static/splats/limb-baked.bin', import.meta.url);
+    if (fs.existsSync(ff)) { const F = JSON.parse(fs.readFileSync(ff, 'utf8')), fit = LB.limbMarks('fitted', parts, style, undefined, 0, F)[0]; let moved = 0; for (let i = 0; i < F.count; i++) if (F.homes[i * 3 + 2] > 0) moved++; const LIM = [4, 0.7, 0.7, 0, 0.12, 1.5];
+      ok(`limb, fitted: ${F.count} deposits, ${moved} of them moved (${((100 * moved) / F.count).toFixed(0)}%); every residual within its limit; laid as deposits (${MK.layout(fit).length})`, F.count === sw.count && !!fit.homes && moved <= 0.3 * F.count + 1 && F.resid.every((v, j) => Math.abs(v) <= LIM[j % 6] + 1e-9) && MK.layout(fit).every((d) => d.p.every(Number.isFinite))); }
+    if (fs.existsSync(fb)) { const b = fs.readFileSync(fb), w = b[0] | (b[1] << 8), h = b[2] | (b[3] << 8); let seen = 0; for (let i = 0; i < w * h; i++) if (b[4 + i * 2 + 1]) seen++; ok(`limb, the teacher's ink for its surface: ${w} × ${h} texels, ${((100 * seen) / (w * h)).toFixed(0)}% of them painted`, b.length === 4 + w * h * 2 && seen > 0.3 * w * h && seen < w * h); }
+  }
+}
 // (the test route: six views, none of them standing where one of the room's eight does)
 {
   const CO = await load('../client/splats/conservatory.ts'), room = CO.conservatory({}), used = Object.values(room.views).map((v) => v.s), test = Object.entries(CO.TEST_VIEWS);

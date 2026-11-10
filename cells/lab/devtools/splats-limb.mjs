@@ -27,21 +27,17 @@
 // Writes devtools/out/pool/limb.json and static/splats/limb-sweep.json.
 import { build } from 'esbuild';
 import { readFileSync, writeFileSync } from 'node:fs';
+import { VN, VR, pool, read, pooled, apart, WHAT, fmt, med } from './splats-limb-lib.mjs';
 const load = async (f) => { const o = await build({ entryPoints: [new URL(f, import.meta.url).pathname], bundle: true, write: false, format: 'esm', platform: 'node', logLevel: 'error' }); return import('data:text/javascript;base64,' + Buffer.from(o.outputFiles[0].text).toString('base64')); };
 const arg = (k, d) => (process.argv.find((a) => a.startsWith(`--${k}=`)) ?? `--${k}=${d}`).slice(k.length + 3);
 const ITERS = Number(arg('iters', 0)), ROWS = Number(arg('rows', 40)), TAG = arg('tag', '');
 const C = await load('../client/splats/conservatory.ts'), M = await load('../client/splats/marks.ts'), { layout, axes } = M;
 const dir = new URL('./out/pool/', import.meta.url).pathname;
-const FOV = (55 * Math.PI) / 180, VN = 61, VR = 2.5, TEACH = ['tunnel', 'pool', 'canopy'];
+const FOV = (55 * Math.PI) / 180;
 const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2], cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]], norm = (a) => { const l = Math.hypot(...a) || 1; return a.map((v) => v / l); };
 const plain = C.conservatory({}), PARTS = JSON.parse(readFileSync(new URL('../static/splats/root-parts.json', import.meta.url))).parts;
 const cams = Object.fromEntries(Object.entries(plain.views).map(([name, v]) => { const p = C.routeAt(v.s).p, E = [p[0], p[1] + C.EYE, p[2]], f = norm([v.at[0] - E[0], v.at[1] - E[1], v.at[2] - E[2]]), r = norm(cross(f, [0, 1, 0])), u = cross(r, f); return [name.replace(/ /g, '-'), { E, f, r, u }]; }));
-const bin = new Float32Array(readFileSync(`${dir}pool.bin`).buffer.slice(0)), meta = JSON.parse(readFileSync(`${dir}pool.json`));
-function strip(m, S) {
-  const n0 = m.length, o = m.at, st = Math.round(1 / S), n = Math.floor(n0 / st), g = (row, k) => bin[o + row * n0 + k], x = new Float32Array(n), y = new Float32Array(n), nx = new Float32Array(n), ny = new Float32Array(n), hw = new Float32Array(n), T = new Float32Array(n * VN);
-  for (let k = 0; k < n; k++) { const a = k * st + Math.floor(st / 2); x[k] = g(0, a) * S; y[k] = g(1, a) * S; nx[k] = g(2, a); ny[k] = g(3, a); hw[k] = g(4, a) * S; for (let v = 0; v < VN; v++) { let s = 0; for (let j = 0; j < st; j++) s += bin[o + 5 * n0 + (k * st + j) * VN + v]; T[k * VN + v] = s / st; } }
-  return { ...m, n, x, y, nx, ny, hw, T, flip: g(0, n0 - 1) > g(0, 0), teach: TEACH.includes(m.view), S };
-}
+const { meta, strip } = pool(dir);
 function footprint(d, cam, fy, W, H, ax = axes(d)) {
   const q0 = [d.p[0] - cam.E[0], d.p[1] - cam.E[1], d.p[2] - cam.E[2]], q = [dot(q0, cam.r), dot(q0, cam.u), dot(q0, cam.f)], z = q[2]; if (z < 0.05) return null;
   const sx = W / 2 + (fy * q[0]) / z, sy = H / 2 - (fy * q[1]) / z, img = (a, s) => { const ar = dot(a, cam.r), au = dot(a, cam.u), af = dot(a, cam.f); return [s * (fy / z) * (ar - (q[0] * af) / z), s * (-fy / z) * (au - (q[1] * af) / z)]; };
@@ -86,53 +82,6 @@ function drawn(marks, st) {
   out.count = count; return out;
 }
 
-// ─── a stroke patch read along itself ───
-const med = (a) => { if (!a.length) return NaN; const b = Float64Array.from(a).sort(); return b[b.length >> 1]; };
-const spread = (a) => { if (a.length < 8) return NaN; const b = Float64Array.from(a).sort(); return (b[Math.floor(b.length * 0.75)] - b[Math.floor(b.length * 0.25)]) / Math.max(1e-6, b[b.length >> 1]); };
-function read(st, A) {
-  const n = st.n, dv = (2 * VR) / (VN - 1), at = (k, v) => A[k * VN + (st.flip ? VN - 1 - v : v)], sm = new Float32Array(VN), stepPx = Math.max(1, Math.round(4 * st.S)), R = Math.max(1, Math.round(3 * st.S));
-  let hwm = 0; for (let k = 0; k < n; k++) hwm += st.hw[k] / n; const px = (dv * hwm) / st.S;
-  // (where the band falls to a level, walking out from its peak: between samples)
-  const out2 = (i, dir, level) => { let v = i; while (v + dir >= 0 && v + dir < VN && sm[v + dir] > level) v += dir; const w = v + dir; return w < 0 || w >= VN ? v : v + (dir * (sm[v] - level)) / Math.max(1e-6, sm[v] - sm[w]); };
-  const T = [], D = [], LO = [], HI = [], FI = [], FE = [], OT = [], SK = [], has = []; let last = -1;
-  const in0 = Math.ceil((VR - 1.25) / dv), in1 = Math.floor((VR + 1.25) / dv);
-  for (let k = R; k < n - R; k += stepPx) {
-    for (let v = 0; v < VN; v++) { let s = 0; for (let j = -R; j <= R; j++) s += at(k + j, v); sm[v] = s / (2 * R + 1); }
-    let i = -1; const lo0 = last < 0 ? 6 : Math.max(2, last - 10), hi0 = last < 0 ? VN - 7 : Math.min(VN - 3, last + 10); for (let v = lo0; v <= hi0; v++) if (i < 0 || sm[v] > sm[i]) i = v;
-    const peak = sm[i]; if (peak < 0.2) { has.push(0); continue; }
-    const a = out2(i, -1, 0.5 * peak), b = out2(i, 1, 0.5 * peak);
-    let body = 0, c = 0; for (let v = Math.ceil(a); v <= Math.floor(b); v++) { body += sm[v]; c++; } if (!c) { has.push(0); continue; }
-    // (its two edges: how far each takes to fall from three quarters of the peak to a quarter; the firmer, the softer)
-    const e0 = Math.abs(out2(i, -1, 0.25 * peak) - out2(i, -1, 0.75 * peak)) * px, e1 = Math.abs(out2(i, 1, 0.25 * peak) - out2(i, 1, 0.75 * peak)) * px;
-    // (another line across the limb here, apart from the band: a peak beyond it, within the limb, with paper between)
-    { let o = -1; for (let v = in0; v <= in1; v++) if ((v < a - 3 || v > b + 3) && (o < 0 || sm[v] > sm[o])) o = v;
-      let there = 0; if (o >= 0 && sm[o] >= 0.2) { let lowest = 1; for (let v = Math.min(o, i); v <= Math.max(o, i); v++) lowest = Math.min(lowest, sm[v]); there = lowest < 0.5 * sm[o] ? 1 : 0; } OT.push(there); }
-    // (streaks: how uneven the band is across itself, sample to sample, against its darkness: bristle lines with paper
-    // between them, as against an even or a graded band)
-    { let u = 0, m = 0; for (let v = Math.ceil(a) + 1; v <= Math.floor(b) - 1; v++) { u += Math.abs(sm[v] - (sm[v - 1] + sm[v + 1]) / 2); m++; } if (m >= 3) SK.push(u / m / Math.max(0.05, body / c)); }
-    last = Math.round((a + b) / 2); has.push(1); T.push((b - a) * dv); D.push(body / c); LO.push(a * px); HI.push(b * px); FI.push(Math.min(e0, e1)); FE.push(Math.max(e0, e1));
-  }
-  const out = { cover: has.reduce((s, v) => s + v, 0) / Math.max(1, has.length) };
-  // (its breaks: runs of steps with no band, in px of the restyle)
-  { const runs = []; let r = 0; for (const h of has) { if (!h) r++; else if (r) { runs.push(r); r = 0; } } if (r) runs.push(r); out.gap = runs.length ? (runs.reduce((s, v) => s + v, 0) / runs.length) * (stepPx / st.S) : 0; }
-  out.thick = med(T); out.body = med(D); out.swell = spread(T); out.press = spread(D); out.firm = med(FI); out.feather = med(FE); out.streak = SK.length >= 6 ? 10 * (SK.reduce((s, v) => s + v, 0) / SK.length) : NaN; out.other = OT.length ? OT.reduce((s, v) => s + v, 0) / OT.length : NaN;
-  // (thickness and darkness together)
-  if (T.length >= 12) { const mt = T.reduce((s, v) => s + v, 0) / T.length, md = D.reduce((s, v) => s + v, 0) / D.length; let stt = 0, sdd = 0, std = 0; for (let i = 0; i < T.length; i++) { stt += (T[i] - mt) ** 2; sdd += (D[i] - md) ** 2; std += (T[i] - mt) * (D[i] - md); } out.together = std / Math.sqrt(stt * sdd + 1e-12); } else out.together = NaN;
-  // (over what length its thickness changes: the lag at which the thickness stops agreeing with itself (its
-  // autocorrelation under a half), in the limb's half-widths: long for a stroke that swells and thins, short for lumps)
-  if (T.length >= 24) { const mt = T.reduce((s, v) => s + v, 0) / T.length; let v0 = 0; for (const t of T) v0 += (t - mt) ** 2; let lag = 1; for (; lag < T.length / 2; lag++) { let c = 0; for (let i = 0; i + lag < T.length; i++) c += (T[i] - mt) * (T[i + lag] - mt); if (c / Math.max(1e-9, v0) < 0.5) break; } out.run = (lag * (stepPx / st.S)) / (hwm / st.S); } else out.run = NaN;
-  // (how ragged its edges: each edge about its own drift)
-  const rag = (E) => { if (E.length < 12) return NaN; const d = []; for (let i = 0; i < E.length; i++) d.push(Math.abs(E[i] - med(E.slice(Math.max(0, i - 7), i + 8)))); return 1.48 * (d.reduce((s, v) => s + v, 0) / d.length); };
-  out.rim = (rag(LO) + rag(HI)) / 2;
-  // (its release: over the last eighth of the limb, if the strip reaches the limb's end)
-  if (st.u1 > 0.94 && T.length >= 16) { const k = Math.max(2, Math.round(T.length * (0.125 / Math.max(0.2, st.u1 - st.u0)))); out.release = med(T.slice(-k)) / Math.max(1e-6, out.thick); } else out.release = NaN;
-  return out;
-}
-// (over strokes: the mean of the middle three fifths: steadier than a median, and a crossing mark or two don't move it)
-const trim = (a) => { if (!a.length) return NaN; const b = Float64Array.from(a).sort(), k = Math.floor(b.length * 0.2); let s = 0; for (let i = k; i < b.length - k; i++) s += b[i]; return s / (b.length - 2 * k); };
-const WHAT = ['cover', 'gap', 'thick', 'body', 'swell', 'press', 'together', 'firm', 'feather', 'rim', 'release', 'other', 'run', 'streak'], UNIT = { cover: 0.05, gap: 8, thick: 0.2, body: 0.1, swell: 0.15, press: 0.08, together: 0.2, firm: 1, feather: 2, rim: 0.7, release: 0.25, other: 0.15, run: 0.4, streak: 0.15 };
-const pooled = (rs) => Object.fromEntries(WHAT.map((k) => [k, trim(rs.map((r) => r[k]).filter(Number.isFinite))]));
-const apart = (a, b, what = WHAT) => what.reduce((s, k) => s + (Number.isFinite(a[k]) && Number.isFinite(b[k]) ? ((a[k] - b[k]) / UNIT[k]) ** 2 : 0), 0);
 
 // ─── the three ways ───
 const limbOf = (key) => plain.marks.find((m) => m.key === key), fresh = (m) => ({ ...m, params: m.params.slice(), resid: m.resid.slice(), view: m.view.slice() });
@@ -165,7 +114,6 @@ const OWN = WHAT.filter((k) => k !== 'other'), total = () => apart(pooled(train.
 { let best = Infinity; for (const share of [0.3, 0.45, 0.6, 0.75, 0.88]) { ACCENT.share = share; const o = pooled(train.map((st) => read(st, drawn(ways['a sweep with accents'](st.key, p), st)))).other, e = Math.abs(o - WANT.other); console.log(`  accents ${share} of the length: a second line over ${o.toFixed(2)} of it (the teacher's ${WANT.other.toFixed(2)})`); if (e < best) { best = e; ACCENT.best = share; } } ACCENT.share = ACCENT.best; delete ACCENT.best; }
 // ─── read at the restyles' own size ───
 const FULL = meta.map((m) => strip(m, 1)), report = { style: Object.fromEntries(Object.entries(p).map(([k, v]) => [k, +v.toFixed(3)])), accent: { ...ACCENT }, ways: {} };
-const fmt = (o) => WHAT.map((k) => `${k} ${Number.isFinite(o[k]) ? o[k].toFixed(k === 'gap' || k === 'rim' || k === 'firm' || k === 'feather' ? 1 : 2) : '–'}`).join('  ');
 const theirs = { taught: pooled(FULL.filter((s) => s.teach).map((s) => read(s, s.T))), others: pooled(FULL.filter((s) => !s.teach).map((s) => read(s, s.T))) };
 report.teacher = theirs; console.log(`${'the teacher'.padEnd(24)} taught from: ${fmt(theirs.taught)}\n${''.padEnd(24)} the others:  ${fmt(theirs.others)}`);
 for (const name of Object.keys(ways)) {

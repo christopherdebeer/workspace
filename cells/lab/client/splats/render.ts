@@ -297,10 +297,71 @@ out vec4 o;
 void main() { o = vec4(v_obj / 255.0, 0.0, 0.0, 1.0); }`;
 
 import { covariance, type Splats } from './format';
+// ─── a stroke drawn as a surface: a sweep's gesture evaluated a pixel at a time on its limb's tube ───
+// The same functions marks.ts samples into deposits (its `sweep`: the brush's pressure along the limb, the band that
+// keeps to one side of the limb as seen, the bristles round it, each with its own run of gaps), here read straight
+// off the surface: so a bristle has an edge, a gap is a gap, and paper shows through a dry stretch in specks.
+const SVS = `#version 300 es
+uniform mat4 u_view, u_proj;
+in vec3 a_pos, a_nrm, a_up; in vec4 a_at;
+out vec3 v_p, v_n, v_u; out vec3 v_at;
+void main() { v_p = a_pos; v_n = a_nrm; v_u = a_up; v_at = a_at.xyz; gl_Position = u_proj * u_view * vec4(a_pos, 1.0); }`;
+const SFS = `#version 300 es
+precision highp float; precision highp int;
+uniform vec3 u_eye, u_ink; uniform uint u_id; uniform float u_rows, u_grain;
+uniform sampler2D u_tex; uniform vec2 u_texsize;   // (ink painted on the surface, and where there is any; none: 0, 0)
+uniform vec4 u_a, u_b, u_c;   // (tmin, tmax, dry, decay), (vary, taper, runs, wet), (ragged, ink, fall, spread)
+in vec3 v_p, v_n, v_u; in vec3 v_at;
+out vec4 o;
+float hash(uint a, uint b, uint c) { uint h = a * 374761393u + b * 668265263u + c * 2147483647u; h = (h ^ (h >> 13)) * 1274126177u; return float(h ^ (h >> 16)) / 4294967296.0; }
+float sm3(float x) { x = clamp(x, 0.0, 1.0); return x * x * (3.0 - 2.0 * x); }
+float along(uint a, uint b, float x) { float f = floor(x), t = x - f; t = t * t * (3.0 - 2.0 * t); return mix(hash(a, b, uint(f)), hash(a, b, uint(f) + 1u), t); }
+float loadedAt(int k) { return k <= 0 ? 0.0 : (float(k) + 0.7 * (hash(u_id, 55u, uint(k)) - 0.5)) / u_b.z; }
+void main() {
+  vec3 n = normalize(v_n), d = normalize(u_eye - v_p), U = normalize(v_u);
+  float nd = dot(n, d); if (nd <= 0.0) discard;
+  float u = v_at.x, rf = v_at.y, sw = v_at.z;
+  // (the brush's pressure here: loaded where it's set down and again along the limb, drying from each)
+  float uu = hash(u_id, 57u, 2u) < 0.5 ? 1.0 - u : u; int k0 = int(floor(uu * u_b.z));
+  if (loadedAt(k0 + 1) <= uu) k0++; else if (loadedAt(k0) > uu) k0--;
+  float since = uu - loadedAt(k0);
+  float press = (0.55 + 0.45 * sm3(since / 0.012)) * sm3((1.0 - uu) / max(0.005, u_b.y)) * (1.0 - u_b.x * (1.0 - exp(-since * u_b.z / 0.45)));
+  // (the band: on one side of the limb as it's seen, as thick as the pressure makes it, its inner edge wavering)
+  float wob = along(u_id, 91u, sw / 0.7 + hash(u_id, 91u, 5u) * 9.0) * 2.0 - 1.0;
+  float T = (u_a.x + max(0.0, u_a.y - u_a.x) * press) * (1.0 + u_c.x * 0.5 * wob);
+  float v = dot(n, U) - dot(U, d) * nd;
+  float band = clamp((T - 1.0 - v) / max(fwidth(v), 0.02) + 0.5, 0.0, 1.0);
+  // (paper's tooth: where a bristle is running dry its ink lands in specks, the same ink on average; not from so far
+  // that a speck is under a pixel)
+  vec2 g = vec2(sw * 28.0, rf * 2.5), gi = floor(g), gf = g - gi; gf = gf * gf * (3.0 - 2.0 * gf);
+  float t00 = hash(u_id ^ 977u, uint(gi.x), uint(gi.y)), t10 = hash(u_id ^ 977u, uint(gi.x) + 1u, uint(gi.y)), t01 = hash(u_id ^ 977u, uint(gi.x), uint(gi.y) + 1u), t11 = hash(u_id ^ 977u, uint(gi.x) + 1u, uint(gi.y) + 1u);
+  float tooth = mix(mix(t00, t10, gf.x), mix(t01, t11, gf.x), gf.y), amt = u_grain * clamp(1.0 - 1.2 * max(fwidth(g.x), fwidth(g.y)), 0.0, 1.0);
+  // (the bristles: each a stripe round the limb, wider where the ink's wet, its edges wavering; each laying ink or not
+  // by the pressure)
+  float wet = u_b.w * (press - 0.5), hb = 1.1 * exp(u_c.w + wet), r0 = floor(rf), aa = max(fwidth(rf), 1e-4), ink = 0.0;
+  for (int dr = -1; dr <= 1; dr++) {
+    uint row = uint(mod(r0 + float(dr), u_rows));
+    float gap = along(u_id, row, sw / 2.0 + hash(u_id, row, 7u) * 16.0);
+    float cover = 1.0 / (1.0 + exp(-12.0 * (press * (0.7 + 0.6 * gap) - hash(u_id, row, 41u) * u_a.z)));
+    cover = mix(cover, smoothstep(tooth - 0.1, tooth + 0.1, cover * 1.2 - 0.1), amt);
+    float x = rf - (r0 + float(dr) + 0.5) + 0.22 * (along(u_id, row + 500u, sw * 5.0) - 0.5);
+    ink = max(ink, cover * clamp((hb - abs(x)) / aa + 0.5, 0.0, 1.0));
+  }
+  // (how much ink a wet bristle lays: the deposits' ink, several of them lying over one another)
+  float body = u_c.y - u_a.w * 3.0 * u + 2.0 * wet, a = band * ink * (1.0 - pow(1.0 - 1.0 / (1.0 + exp(-body)), 3.0));
+  // (ink painted on the surface, where there is some: along the limb and round it; elsewhere the gesture's)
+  if (u_texsize.x > 0.0) { vec2 t = texture(u_tex, vec2((u * (u_texsize.x - 1.0) + 0.5) / u_texsize.x, (rf / u_rows * u_texsize.y + 0.5) / u_texsize.y)).rg; a = mix(a, t.r, t.g); }
+  // (the limb's own outline: a pixel's worth of softening where its surface turns away)
+  a *= clamp(nd / max(fwidth(nd), 1e-4), 0.0, 1.0);
+  if (a < 1.0 / 255.0) discard;
+  o = vec4(u_ink * a, a);
+}`;
 import { BOX, SIGMA, SUN_TAPS, NET_SIZE, OUT_MAX, IN, H, OUT, type Net, type Mips } from './mist';
 /** where each part of the network's numbers starts in u_net */
 const NET_OFF = (() => { const w2 = IN * H + H, b2 = w2 + H * H, w3 = b2 + H, b3 = w3 + OUT * H, mean = b3 + OUT; return { b1: IN * H, w2, b2, w3, b3, mean, std: mean + IN }; })();
 
+/** a sweep's numbers, for a stroke drawn as a surface (marks.ts `sweepMesh`) */
+export interface StrokeStyle { id: number; rows: number; ink: number; fall: number; spread: number; ragged: number; tmin: number; tmax: number; dry: number; decay: number; vary: number; taper: number; runs: number; wet: number }
 export interface DrawOpts {
   size: number; mode: number; bg: [number, number, number];
   /** how much of a drawing's marks to keep (1 all), and how: by their ranks (0), or thinned evenly (1) keeping `share` */
@@ -313,6 +374,8 @@ export interface DrawOpts {
   time?: number; mirror?: [number, number];
   /** draw the splats this many times over (a load test: how much more than the scene a device has room for) */
   repeat?: number;
+  /** a stroke drawn as a surface: how much its thin ink breaks into specks on the paper's tooth (0 none … 1; 1 if not given) */
+  grain?: number;
   /** fitted marks let go as they reach the eye: gone at the first distance, whole by the second (none: kept) */
   near?: [number, number];
   /** draw the occluder into the depth buffer (if there is one) */
@@ -331,6 +394,7 @@ export class Renderer {
   private oprog: WebGLProgram; private ovao: WebGLVertexArrayObject; private obuf: WebGLBuffer; private oobj: WebGLBuffer; private ocount = 0;
   private hfbo: WebGLFramebuffer | null = null; private hdep: WebGLTexture | null = null; private hobj: WebGLTexture | null = null; private hsize = [0, 0];
   private u: Record<string, WebGLUniformLocation | null> = {}; private ou: Record<string, WebGLUniformLocation | null> = {};
+  private sprog: WebGLProgram | null = null; private svao: WebGLVertexArrayObject | null = null; private sbuf: WebGLBuffer | null = null; private sidx: WebGLBuffer | null = null; private scount = 0; private su: Record<string, WebGLUniformLocation | null> = {}; private sstyle: StrokeStyle | null = null; private stex: WebGLTexture | null = null; private stsize: [number, number] = [0, 0];
   n = 0; drawn = 0;
   private gridTex: WebGLTexture | null = null; private featTex: WebGLTexture | null = null; private ctlTex: WebGLTexture | null = null; private coefTex: WebGLTexture | null = null; private featLast: Float32Array | null = null; private net = new Float32Array(Math.ceil(NET_SIZE / 4) * 4); private ana = [0, 0];
   /** Mist's density pyramid (one float a texel; each level a mip of the 3D texture) */
@@ -425,6 +489,29 @@ export class Renderer {
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.R32F, w, rows, 0, gl.RED, gl.FLOAT, d);
     gl.activeTexture(gl.TEXTURE0);
   }
+  /** a stroke drawn as a surface (marks.ts `sweepMesh`): its vertices (thirteen floats each), its triangles, its
+   * sweep's numbers; or none. Drawn over the paper before the splats, tested against the occluder as they are */
+  setStroke(mesh: { verts: Float32Array; index: Uint32Array; style: StrokeStyle } | null, paint?: { w: number; h: number; data: Uint8Array } | null) {
+    const gl = this.gl; this.scount = 0; this.sstyle = null; this.stsize = [0, 0];
+    if (!mesh) return;
+    if (!this.sprog) {
+      const sh = (type: number, src: string) => { const s = gl.createShader(type)!; gl.shaderSource(s, src); gl.compileShader(s); if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s) ?? 'shader'); return s; };
+      const p = this.sprog = gl.createProgram()!; gl.attachShader(p, sh(gl.VERTEX_SHADER, SVS)); gl.attachShader(p, sh(gl.FRAGMENT_SHADER, SFS)); gl.linkProgram(p); if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p) ?? 'link');
+      for (const k of ['u_view', 'u_proj', 'u_eye', 'u_ink', 'u_id', 'u_rows', 'u_grain', 'u_a', 'u_b', 'u_c', 'u_tex', 'u_texsize']) this.su[k] = gl.getUniformLocation(p, k);
+      this.svao = gl.createVertexArray()!; gl.bindVertexArray(this.svao); this.sbuf = gl.createBuffer()!; gl.bindBuffer(gl.ARRAY_BUFFER, this.sbuf);
+      [['a_pos', 3, 0], ['a_nrm', 3, 12], ['a_up', 3, 24], ['a_at', 4, 36]].forEach(([name, size, off]) => { const a = gl.getAttribLocation(p, name as string); if (a >= 0) { gl.enableVertexAttribArray(a); gl.vertexAttribPointer(a, size as number, gl.FLOAT, false, 52, off as number); } });
+      this.sidx = gl.createBuffer()!; gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.sidx); gl.bindVertexArray(null);
+    }
+    gl.bindVertexArray(this.svao); gl.bindBuffer(gl.ARRAY_BUFFER, this.sbuf); gl.bufferData(gl.ARRAY_BUFFER, mesh.verts, gl.STATIC_DRAW);
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.sidx); gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, mesh.index, gl.STATIC_DRAW); gl.bindVertexArray(null);
+    this.scount = mesh.index.length; this.sstyle = mesh.style;
+    // (ink painted on it: two bytes a texel (how dark, and whether there's any), along the limb by round it)
+    this.stex ??= gl.createTexture(); gl.activeTexture(gl.TEXTURE7); gl.bindTexture(gl.TEXTURE_2D, this.stex); gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.REPEAT);
+    if (paint && paint.data.length === paint.w * paint.h * 2) { gl.texImage2D(gl.TEXTURE_2D, 0, gl.RG8, paint.w, paint.h, 0, gl.RG, gl.UNSIGNED_BYTE, paint.data); this.stsize = [paint.w, paint.h]; }
+    else gl.texImage2D(gl.TEXTURE_2D, 0, gl.RG8, 1, 1, 0, gl.RG, gl.UNSIGNED_BYTE, new Uint8Array(2));
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 4); gl.activeTexture(gl.TEXTURE0);
+  }
   /** a shape to hide what's behind it (triangles, three floats a vertex), drawn into the depth buffer only; or none.
    * With each vertex's object (one float a vertex), the halo can tell one object's silhouette from another's */
   setOccluder(tris: Float32Array | null, objects?: Float32Array) {
@@ -458,7 +545,7 @@ export class Renderer {
     gl.viewport(0, 0, c.width, c.height);
     gl.clearColor(opts.bg[0], opts.bg[1], opts.bg[2], 1); gl.clearDepth(1); gl.depthMask(true); gl.colorMask(true, true, true, true);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
-    if (!this.drawn) return;
+    if (!this.drawn && !this.scount) return;
     const halo = (opts.halo ?? 0) > 0 && this.ocount > 0 && opts.occlude !== false;
     // (the halo's target: the occluder's depth and object, drawn first into a texture the marks can read)
     if (halo) {
@@ -480,6 +567,19 @@ export class Renderer {
       gl.drawArrays(gl.TRIANGLES, 0, this.ocount);
       gl.colorMask(true, true, true, true);
     }
+    // (a stroke drawn as a surface: over the paper, under the splats)
+    if (this.scount && this.sstyle) {
+      const S = this.sstyle, su = this.su;
+      gl.useProgram(this.sprog); gl.bindVertexArray(this.svao);
+      gl.uniformMatrix4fv(su.u_view, false, view); gl.uniformMatrix4fv(su.u_proj, false, proj); gl.uniform3fv(su.u_eye, opts.eye ?? [0, 0, 0]); gl.uniform3f(su.u_ink, 36 / 255, 31 / 255, 27 / 255);
+      gl.uniform1ui(su.u_id, S.id); gl.uniform1f(su.u_rows, S.rows); gl.uniform1f(su.u_grain, opts.grain ?? 1);
+      gl.activeTexture(gl.TEXTURE7); gl.bindTexture(gl.TEXTURE_2D, this.stex); gl.uniform1i(su.u_tex, 7); gl.uniform2f(su.u_texsize, this.stsize[0], this.stsize[1]); gl.activeTexture(gl.TEXTURE0);
+      gl.uniform4f(su.u_a, S.tmin, S.tmax, S.dry, S.decay); gl.uniform4f(su.u_b, S.vary, S.taper, S.runs, S.wet); gl.uniform4f(su.u_c, S.ragged, S.ink, S.fall, S.spread);
+      gl.enable(gl.DEPTH_TEST); gl.depthFunc(gl.LEQUAL); gl.depthMask(false); gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+      for (let k = 0; k < Math.max(1, opts.repeat ?? 1); k++) gl.drawElements(gl.TRIANGLES, this.scount, gl.UNSIGNED_INT, 0);
+      gl.bindVertexArray(null);
+    }
+    if (!this.drawn) { gl.depthMask(true); return; }
     gl.useProgram(this.prog); gl.bindVertexArray(this.vao);
     gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, this.tex); gl.uniform1i(this.u.u_data, 0);
     gl.uniformMatrix4fv(this.u.u_view, false, view); gl.uniformMatrix4fv(this.u.u_proj, false, proj);
