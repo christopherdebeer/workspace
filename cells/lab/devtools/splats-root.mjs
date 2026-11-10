@@ -9,6 +9,8 @@
 // - **round**: the same arrangement, fitted here as the others are;
 // - **banded**: rows over an arc of the tube, each with a part by its place across it: a firm edge, a body, bristles
 //   (marks.ts `band`);
+// - **as seen**: rows all round the tube, each deposit laying its ink where it lies in the limb's lower band as the
+//   limb is seen (marks.ts `band: 'seen'`): the same stroke along the lower edge from any view;
 // - **flat**: a ribbon in the upright plane through the limb, its rows finer at its edges.
 // Each has the limb's own number of deposits (`--more`: banded with 2.5 times as many, too).
 //
@@ -82,7 +84,7 @@ function drawn(mark, st) {
     }
   }
   for (const d of layout(mark)) {
-    const a = 1 / (1 + Math.exp(-d.logit)); if (a < 0.004) continue;
+    const a = M.inkOf(d, cam.E); if (a < 0.004) continue;
     const e = footprint(d, cam, fy, W, H); if (!e) continue; const [sx, sy, ia, ib, ic, R, comp, z] = e; if (sx + R < x0 || sx - R > x1 || sy + R < y0 || sy - R > y1) continue;
     const al = a * comp; if (al < 1 / 255) continue; const surf = d.thin < 0.002;
     for (let y = Math.max(y0, Math.floor(sy - R)); y <= Math.min(y1, Math.ceil(sy + R)); y++) for (let x = Math.max(x0, Math.floor(sx - R)); x <= Math.min(x1, Math.ceil(sx + R)); x++) {
@@ -126,7 +128,10 @@ function read(st, A) {
 const WHAT = ['thick', 'body', 'firm', 'feather', 'dry', 'broken', 'swell', 'wander', 'press'], UNIT = { thick: 0.3, body: 0.15, firm: 3, feather: 4, dry: 0.1, broken: 0.1, swell: 0.12, wander: 0.04, press: 0.08 };
 /** the medians of what a set of strips is */
 const pooled = (rs) => Object.fromEntries(WHAT.map((k) => { const a = rs.map((r) => r[k]).filter(Number.isFinite).sort((p, q) => p - q); return [k, a.length ? a[a.length >> 1] : NaN]; }));
-const apart = (a, b) => WHAT.reduce((s, k) => s + (Number.isFinite(a[k]) ? ((a[k] - b[k]) / UNIT[k]) ** 2 : 9), 0);
+// (how far two readings are apart: over what a stroke is and how its darkness varies. Not its swell or its wander:
+// marks that cross the teacher's strips inflate the first, and none of these arrangements has the second)
+const FIT = ['thick', 'body', 'firm', 'feather', 'dry', 'broken', 'press'];
+const apart = (a, b) => FIT.reduce((s, k) => s + (Number.isFinite(a[k]) ? ((a[k] - b[k]) / UNIT[k]) ** 2 : 9), 0);
 
 // ─── the four ways ───
 /** a limb laid one way, with a shared style and its own pressure */
@@ -141,6 +146,8 @@ function limb(key, way, style, press, more = 1) {
   for (let k = 0; k < KN.ink; k++) set(SP.ink + k, style.ink + (press?.ink ?? 0) + (style.vink ?? 0) * 3 * xi(k, 1)); for (let k = 0; k < KN.dry; k++) set(SP.dry + k, style.dry);
   if (way !== 'flat') { for (let k = 0; k < KN.width; k++) set(SP.width + k, src.params[SP.width + k] + (style.vwide ?? 0) * xi(k, 2)); for (let k = 0; k < KN.offset; k++) set(SP.offset + k, (style.voff ?? 0) * xi(k, 3)); }
   set(SP.along, style.along); set(SP.spread, style.spread);
+  // (as seen: as the room lays it, conservatory.ts `asSeen`)
+  if (way === 'seen') return C.asSeen(m, style, src.params);
   if (way === 'band') { m.band = true; m.shade = 0; set(SP.arc, style.arc + (press?.wide ?? 0)); set(SP.fine, style.fine); set(SP.feather, style.feather); set(SP.fall, style.fall); set(SP.bristle, style.bristle); }
   else if (way === 'round') { m.shade = style.shade; set(SP.drySide, style.side); }
   else {
@@ -153,6 +160,7 @@ function limb(key, way, style, press, more = 1) {
 const START = {
   round: { ink: 0.9, dry: 0.8, along: 0, spread: 0, shade: 0.8, side: 0, vink: 0.1, vwide: 0.1, voff: 0.1 },
   band: { ink: 1.6, dry: 0.5, along: 0, spread: 0, arc: BAND.arc, fine: BAND.fine, feather: BAND.feather, fall: BAND.fall, bristle: BAND.bristle, vink: 0.1, vwide: 0.1, voff: 0.1 },
+  seen: { ink: 2.2, dry: 0.3, along: 0, spread: 0, arc: 0, fall: 1, bristle: 0.6, vink: 0.1, vwide: 0.1, voff: 0.1 },
   flat: { ink: 1.6, dry: 0.5, along: 0, spread: 0, fine: 1, side: 0.6, wide: -0.3, off: 0 },
 };
 const RANGE = { ink: [-3, 5], dry: [0, 2.5], along: [-1.5, 1], spread: [-0.8, 0.8], shade: [0, 2], side: [-1, 1], arc: [-0.9, 0.5], fine: [0, 2.2], feather: [0.1, 0.95], fall: [0, 4], bristle: [0, 4], wide: [-1.2, 0.6], off: [-1, 1], vink: [0, 1], vwide: [0, 0.8], voff: [0, 1] };
@@ -161,13 +169,13 @@ const HALF = meta.map((m) => strip(m, 0.5)), keys = [...new Set(meta.map((m) => 
 // (the teacher's strokes, read: at the size the fitting is done at, and at the restyles' own)
 const WANT = pooled(HALF.filter((s) => s.teach).map((s) => read(s, s.T)));
 function fit(way, more = 1) {
-  const style = { ...START[way] }, train = HALF.filter((s) => s.teach).filter((_, i) => i % 2 === 0), t0 = Date.now(), ITERS = way === 'band' && more === 1 ? N_ITERS : Math.round(N_ITERS * 0.5);
+  const style = { ...START[way] }, train = HALF.filter((s) => s.teach).filter((_, i) => i % 2 === 0), t0 = Date.now(), ITERS = (way === 'band' || way === 'seen') && more === 1 ? N_ITERS : Math.round(N_ITERS * 0.5);
   const total = () => apart(pooled(train.map((st) => read(st, drawn(limb(st.key, way, style, null, more), st)))), WANT);
   const adam = {}; const move = (k, g, lr) => { const A = (adam[k] ??= { m: 0, v: 0, t: 0 }); A.t++; A.m = 0.8 * A.m + 0.2 * g; A.v = 0.99 * A.v + 0.01 * g * g; const [lo, hi] = RANGE[k]; style[k] = Math.max(lo, Math.min(hi, style[k] - (lr * (A.m / (1 - 0.8 ** A.t))) / (Math.sqrt(A.v / (1 - 0.99 ** A.t)) + 1e-9))); };
   let best = { f: Infinity, style: null };
   for (let it = 0; it < ITERS; it++) {
     const f0 = total(); if (f0 < best.f) best = { f: f0, style: { ...style } };
-    for (const k of Object.keys(style)) { const was = style[k]; style[k] = was + EPS[k]; const f1 = total(); style[k] = was; move(k, (f1 - f0) / EPS[k], EPS[k] * 0.8 * (1 - 0.5 * (it / ITERS))); }
+    for (const k of Object.keys(style)) { if (k === 'bristle' || k === 'vwide' || k === 'voff') continue; const was = style[k]; style[k] = was + EPS[k]; const f1 = total(); style[k] = was; move(k, (f1 - f0) / EPS[k], EPS[k] * 0.8 * (1 - 0.5 * (it / ITERS))); }
     if (it % 5 === 0 || it === ITERS - 1) console.log(`  ${way}${more !== 1 ? ` ×${more}` : ''} ${it}: ${f0.toFixed(2)}  (${Math.round((Date.now() - t0) / 1000)} s)`);
   }
   const f = total(); if (f < best.f) best = { f, style: { ...style } };
@@ -199,10 +207,10 @@ const FULL = meta.map((m) => strip(m, 1)), THEIRS = { taught: pooled(FULL.filter
 report.teacher = THEIRS; { const say = (p) => WHAT.map((k) => `${k} ${p[k].toFixed(k === 'firm' || k === 'feather' ? 1 : 2)}${k === 'firm' || k === 'feather' ? ' px' : ''}`).join(' '); console.log(`${'the teacher'.padEnd(30)}       a limb | taught from: ${say(THEIRS.taught)} | reserved: ${say(THEIRS.reserved)}`); }
 const out = {}; out.now = score('as the room draws it now', (k) => limb(k, 'now'));
 const fits = {};
-for (const way of ['round', 'band', 'flat']) { fits[way] = fit(way); out[way] = score({ round: 'round, fitted', band: 'banded', flat: 'flat' }[way], (k) => limb(k, way, fits[way].style, fits[way].press[k])); }
-if (MORE) { fits.more = fit('band', 2.5); out.more = score('banded, 2.5 times the deposits', (k) => limb(k, 'band', fits.more.style, fits.more.press[k], 2.5)); }
+for (const way of ['round', 'band', 'seen', 'flat']) { fits[way] = fit(way); out[way] = score({ round: 'round, fitted', band: 'banded, on its underside', seen: 'banded, as seen', flat: 'flat' }[way], (k) => limb(k, way, fits[way].style, fits[way].press[k])); }
+if (MORE) { fits.more = fit('seen', 2.5); out.more = score('as seen, 2.5 times the deposits', (k) => limb(k, 'seen', fits.more.style, fits.more.press[k], 2.5)); }
 report.styles = Object.fromEntries(Object.entries(fits).map(([k, f]) => [k, Object.fromEntries(Object.entries(f.style).map(([a, b]) => [a, +b.toFixed(3)]))]));
 writeFileSync(`${dir}root.json`, JSON.stringify(report, null, 1));
-writeFileSync(new URL('../static/splats/root-style.json', import.meta.url), JSON.stringify({ note: 'A limb as a banded stroke: the style shared by every limb, fitted so its strokes read as the teacher\'s do in their own frame (devtools/splats-root.mjs).', style: report.styles.band }));
+writeFileSync(new URL('../static/splats/root-style.json', import.meta.url), JSON.stringify({ note: 'A limb as a banded stroke: the style shared by every limb, fitted so its strokes read as the teacher\'s do in their own frame (devtools/splats-root.mjs).', style: report.styles.seen }));
 // (the pictures: the eight longest strokes, the teacher's above each way's)
-[...meta.keys()].sort((a, b) => meta[b].length - meta[a].length).slice(0, 8).forEach((k, i) => png(out.now[k].st, [out.now[k].st.T, out.now[k].A, out.round[k].A, out.band[k].A, out.flat[k].A, ...(MORE ? [out.more[k].A] : [])], `root-${i}`));
+[...meta.keys()].sort((a, b) => meta[b].length - meta[a].length).slice(0, 8).forEach((k, i) => png(out.now[k].st, [out.now[k].st.T, out.now[k].A, out.band[k].A, out.seen[k].A, ...(MORE ? [out.more[k].A] : [])], `root-${i}`));

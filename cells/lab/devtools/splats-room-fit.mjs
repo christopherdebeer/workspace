@@ -98,13 +98,14 @@ function draw(v, D, g) {
     const e = footprint(d, cam); if (!e) return; const z = e[7];
     // (its hand-over by how large things look where it is, and its letting go at the eye, as the renderer's)
     let fac = d.lod ? Math.max(0, Math.min(1, (Math.log2(fy / (z * H)) - d.lod[0]) / (d.lod[1] - d.lod[0]))) : 1; const t = Math.max(0, Math.min(1, (z - 0.25) / 0.45)); fac *= t * t * (3 - 2 * t);
-    const a = 1 / (1 + Math.exp(-d.logit)); if (a * fac < 0.004) return;
+    // (its ink from here: a deposit's own view terms and cap, if it has them)
+    const a = M.inkOf(d, cam.E), sig = a / (d.cap ?? 1); if (a * fac < 0.004) return;
     const [sx, sy, ia, ib, ic, R, comp] = e; if (sx + R < 0 || sx - R > W || sy + R < 0 || sy - R > H) return;
     const al = a * fac * comp * d.k; if (al < 1 / 255) return;
     const box = [Math.max(0, Math.floor(sx - R)), Math.min(W - 1, Math.ceil(sx + R)), Math.max(0, Math.floor(sy - R)), Math.min(H - 1, Math.ceil(sy + R))];
     const surf = d.thin < 0.002;
     for (let y = box[2]; y <= box[3]; y++) for (let x = box[0]; x <= box[1]; x++) { const dx = x + 0.5 - sx, dy = y + 0.5 - sy, G = Math.exp(-0.5 * (ia * dx * dx + 2 * ib * dx * dy + ic * dy * dy)); if (G < 0.011 || al * G < 1 / 255 || hidden(e, surf, x, y, y * W + x)) continue; logT[y * W + x] += Math.log(1 - Math.min(0.99, al * G)); }
-    if (g) fps.push({ d, e, a, fac, box, surf, at: (start[mi] + i) * 6 });
+    if (g) fps.push({ d, e, a, sig, fac, box, surf, at: (start[mi] + i) * 6 });
   }));
   const P = new Float32Array(W * H); for (let p = 0; p < W * H; p++) P[p] = 1 - Math.exp(logT[p]);
   if (!g) return { D: P };
@@ -119,7 +120,7 @@ function draw(v, D, g) {
       const k = (2 * e[p] * Math.exp(logT[p])) / (1 - Math.min(0.99, al * G)), gG = k * al * G;
       ga += k * G; gsx += gG * (ia * dx + ib * dy); gsy += gG * (ib * dx + ic * dy); gia += gG * -0.5 * dx * dx; gib += gG * -dx * dy; gic += gG * -0.5 * dy * dy;
     }
-    g[f.at] += ga * comp * f.d.k * f.fac * f.a * (1 - f.a);
+    g[f.at] += ga * comp * f.d.k * f.fac * f.a * (1 - f.sig);
     const gcomp = ga * f.a * f.fac * f.d.k;
     for (let j = 0; j < 5; j++) { const eps = j < 3 ? 1e-3 : 1e-4, e1 = footprint(nudge(f.d, j, eps), cam); if (e1) g[f.at + 1 + j] += ((e1[0] - sx) * gsx + (e1[1] - sy) * gsy + (e1[2] - ia) * gia + (e1[3] - ib) * gib + (e1[4] - ic) * gic + (e1[6] - comp) * gcomp) / eps; }
   }

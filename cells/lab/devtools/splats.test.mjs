@@ -355,6 +355,19 @@ ok('parse() tells a .splat by its bytes', F.parse(F.encodeSplat(g)).n === g.n);
   const fromRight = limb([1, 0, 0]), fromLeft = limb([-1, 0, 0]);
   ok(`light: lit from +x, a limb's ink is on its -x side (${side(fromRight, -1).toFixed(2)} against ${side(fromRight, 1).toFixed(2)}); from -x, on its +x side`, side(fromRight, -1) > side(fromRight, 1) + 2 && side(fromLeft, 1) > side(fromLeft, -1) + 2);
 }
+// (a limb whose band is as it's seen: from either side, from above and from below, most of the ink of the deposits
+// facing the eye lies in the limb's lower half as seen, and about as much of it from each)
+{
+  const MK = await load('../client/splats/marks.ts');
+  const m = MK.strokeMark(5, [[-2, 2, 0], [0, 2, 0], [2, 2, 0]], 'tube', 0.4, 480, 24); m.band = 'seen';
+  const deps = MK.layout(m).filter((d) => Math.abs(d.p[0]) < 0.5), res = [];
+  for (const eye of [[0, 2, 6], [0, 2, -6], [0, 6.6, 5.5], [0, -2.6, 5.5]]) {
+    const d = [eye[0], eye[1] - 2, eye[2]], l = Math.hypot(...d), dir = d.map((v) => v / l), us = [-dir[1] * dir[0], 1 - dir[1] * dir[1], -dir[1] * dir[2]], ul = Math.hypot(...us);
+    let low = 0, all = 0, n = 0; for (const q of deps) { if (q.n[0] * dir[0] + q.n[1] * dir[1] + q.n[2] * dir[2] < 0.05) continue; const a = MK.inkOf(q, eye); all += a; if ((q.n[0] * us[0] + q.n[1] * us[1] + q.n[2] * us[2]) / ul < 0) low += a; n++; }
+    res.push([low / all, all / n]);
+  }
+  ok(`marks: a limb banded as seen keeps its ink to its lower half from each side, from above and from below (${res.map((r) => `${(r[0] * 100).toFixed(0)}%`).join(', ')}), at about the same weight (${res.map((r) => r[1].toFixed(2)).join(', ')})`, res.every((r) => r[0] > 0.7) && Math.max(...res.map((r) => r[1])) / Math.min(...res.map((r) => r[1])) < 1.2);
+}
 // (identity: no two of the room's marks share a key or an id; a mark added to the scene changes no other mark's; and
 // what hides what: the room's solids are triangles, each limb a tube inside its own deposits)
 {

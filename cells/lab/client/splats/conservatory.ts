@@ -49,6 +49,8 @@ export function roleOf(name = ''): string {
 export interface Taught { roles: Record<string, number[]>; gains?: Record<string, number[]>; resid?: Record<string, number[]>; note?: string }
 export function applyTaught(marks: Mark[], T: Taught): Mark[] {
   for (const m of marks) {
+    // (a limb drawn as a stroke has its own style: what was taught to its role as a tube inked all round isn't its)
+    if (m.band === 'seen') continue;
     const off = T.roles[m.role ?? roleOf(m.name)], g = T.gains?.[m.key ?? ''], stroke = m.kind === 'stroke';
     for (let j = 0; j < m.params.length; j++) {
       let v = m.params[j] + (off?.[j] ?? 0);
@@ -58,6 +60,23 @@ export function applyTaught(marks: Mark[], T: Taught): Mark[] {
     const r = T.resid?.[m.key ?? '']; if (r && r.length === m.count * RESID) m.resid = r.slice();
   }
   return marks;
+}
+/**
+ * A limb as a loaded stroke: its style, shared by every limb (devtools/splats-root.mjs fits it so the room's limbs
+ * read as the teacher's strokes do in their own frame): its ink and dryness, how long and wide its deposits, how
+ * thick its band (`arc`), how sharply it ends inside (`fall`), how its thickness wavers (`bristle`); and how much each
+ * limb's own pressure varies along it: its ink (`vink`), its width (`vwide`), its side-to-side (`voff`).
+ */
+export interface RootStyle { ink: number; dry: number; along: number; spread: number; arc: number; fall: number; bristle: number; vink?: number; vwide?: number; voff?: number }
+/** a limb made a stroke whose band is as it's seen (marks.ts `band: 'seen'`), in a style; its own pressure from its id */
+export function asSeen(m: Mark, style: RootStyle, base: number[] = m.params): Mark {
+  const P = m.params, set = (j: number, v: number) => { const [lo, hi] = paramRange(m, j); P[j] = Math.max(lo, Math.min(hi, v)); };
+  const xi = (k: number, salt: number) => { let h = (Math.imul(m.id | 0, 374761393) + Math.imul(k + 1, 668265263) + Math.imul(salt, 2147483647)) | 0; h = Math.imul(h ^ (h >>> 13), 1274126177); return (((h ^ (h >>> 16)) >>> 0) / 4294967296) * 2 - 1; };
+  const w0 = base.slice(SP.width, SP.width + KN.width);
+  for (let k = 0; k < KN.ink; k++) set(SP.ink + k, style.ink + (style.vink ?? 0) * 3 * xi(k, 1)); for (let k = 0; k < KN.dry; k++) set(SP.dry + k, style.dry);
+  for (let k = 0; k < KN.width; k++) set(SP.width + k, w0[k] + (style.vwide ?? 0) * xi(k, 2)); for (let k = 0; k < KN.offset; k++) set(SP.offset + k, (style.voff ?? 0) * xi(k, 3));
+  set(SP.along, style.along); set(SP.spread, style.spread); m.band = 'seen'; m.shade = 0; set(SP.arc, style.arc); set(SP.fall, style.fall); set(SP.bristle, style.bristle);
+  return m;
 }
 /**
  * What hides what: the room's solids as triangles, for the renderer's depth and the fitter's. A drawing made only of
@@ -99,7 +118,7 @@ export function routeAt(s: number, R: V[] = ROUTE): { p: V; dir: V } {
  * turned away from it, and a stone's heavy rim to its far side. None: every limb inked along its underside and the
  * stones as they fell, which is how the room was when it was taught.
  */
-export function conservatory(styles: Styles = {}, level: Level = 'both', taught?: Taught, light?: V): Room {
+export function conservatory(styles: Styles = {}, level: Level = 'both', taught?: Taught, light?: V, root?: RootStyle): Room {
   let id = 1, r = 12345; const rnd = () => ((r = (Math.imul(r, 1664525) + 1013904223) >>> 0) / 4294967296);
   const marks: Mark[] = [], regions: Record<string, number> = {}, solids: number[] = [];
   const quad = (a: V, b: V, c: V, d: V) => solids.push(...a, ...b, ...c, ...a, ...c, ...d);
@@ -205,6 +224,7 @@ export function conservatory(styles: Styles = {}, level: Level = 'both', taught?
 
   if (styles.strand || styles.dabs) for (const m of marks) { if (styles.strand && /\/strand \d+$/.test(m.name ?? '')) { const lod = m.lod; m.params = styles.strand.slice(); m.lod = lod; } }
   keyMarks(marks, roleOf);
+  if (root) for (const m of marks) if (m.normal === 'tube') asSeen(m, root);
   if (taught) applyTaught(marks, taught);
   return { marks, route: ROUTE, regions, solids, views: { tunnel: { s: 1.15 / 14, at: [-4.2, 1.7, -3.6] }, pool: { s: 4.2 / 14, at: [3, 1.8, -2.5] }, canopy: { s: 11.3 / 14, at: [0.5, 2.4, -3] }, 'between tunnel and pool': { s: 4.5 / 14, at: [4, 1.4, -4] }, 'between pool and canopy': { s: 9.2 / 14, at: [4.5, 2.4, 7.5] }, 'between canopy and tunnel': { s: 13.4 / 14, at: [-7.5, 1.8, 2] } } };
 }

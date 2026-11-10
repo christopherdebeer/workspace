@@ -1210,6 +1210,74 @@ The room taught again, the same way, with its solids (tone error, mean of three 
   what the teacher was shown. New teachers drawn from the solid room would separate them.
 - **The browser is the fitter's, less closely**: 0.87 to 0.99 of its ink, tone apart by at most 0.17.
 
+### The root: a limb as a loaded stroke
+
+The room's limbs are its main subject, and after teaching they were still soft bands. Three materials are being
+taken one at a time, starting with the root.
+
+**The pool.** Every limb the teacher drew is cut out of its restyle and straightened along the limb's own spine, at
+the restyle's full size (`devtools/splats-pool.mjs`, `.py`): 45 strokes of 24 limbs, 12 of them seen from more than
+one view. A strip runs a pixel a step along the limb, and across it from -2.5 to +2.5 of the limb's half-width.
+
+- **The teacher's ink is where the scene's limbs are**: 70% of it within the limb's band, its centre a fifth of a
+  half-width off the spine.
+- **Its loaded stroke keeps to the limb's lower edge**: 39 of 45 strokes carry more ink below the spine than above.
+  (The underdrawings were inked along the underside, and a restyle keeps that.)
+
+**Place by place doesn't work.** The first comparison drew each limb four ways from each stroke's view, straightened
+it the same way, and matched its profile across the limb to the teacher's. Every way came out a grey band (profile
+error 88 to 110, against 125 as the room draws it). Along a limb the teacher's stroke wanders from the scene's spine
+by up to half the limb's width: a restyle keeps the composition, not each edge. A profile matched in the limb's frame
+rewards a pale hedge.
+
+**Read in the stroke's own frame**, no correspondence is needed. At each step along a strip the dark band is found
+(nearest the last step's), and from it: how thick it is (in the limb's half-widths), how dark inside, how many pixels
+its ink takes to fall at its lower edge (firm) and its upper (feather), and how its darkness varies along it. Medians
+over the strokes from the views taught from / from the reserved views:
+
+| | thick | body | firm, px | feather, px | apart from the teacher |
+|---|---|---|---|---|---|
+| the teacher | 1.00 / 1.08 | 0.81 / 0.81 | 6.3 / 4.5 | 6.9 / 7.6 | |
+| as the room drew it (rows all round, inked beneath) | 0.83 / 0.92 | 0.63 / 0.63 | 1.9 / 2.0 | 9.7 / 14.2 | 4.4 / 6.0 |
+| the same, fitted here | 0.58 / 0.92 | 0.66 / 0.68 | 3.7 / 3.7 | 8.5 / 16.5 | 4.2 / 6.2 |
+| banded on its underside | 0.92 / 1.00 | 0.78 / 0.80 | 2.0 / 1.7 | 7.2 / 9.2 | 2.8 / 1.8 |
+| **banded as seen** | 0.92 / 1.08 | 0.79 / 0.81 | 2.7 / 3.1 | 5.6 / 7.0 | **2.2 / 1.1** |
+| a flat ribbon | 1.00 / 1.00 | 0.84 / 0.86 | 1.6 / 1.6 | 5.4 / 5.6 | 3.3 / 2.3 |
+| banded as seen, 2.5 times the deposits | 0.83 / 1.00 | 0.81 / 0.83 | 2.0 / 2.5 | 5.8 / 6.6 | 2.5 / 1.5 |
+
+![Four of the teacher's strokes, straightened; and the same limbs drawn four ways from the same views](splats/b-root.jpg)
+
+- **The room's limbs weren't soft where it was assumed.** Their outer edge is firmer than the teacher's (2 px
+  against 5 to 6: a tube's deposits are seen edge-on there). They were too pale (0.63 against 0.81) and their inner
+  side too soft (10 to 14 px against 7).
+- **Banded**: rows over an arc of the tube, each with a part by its place across it (a firm edge, a body, bristles;
+  `marks.ts`, `band`). Darker and tighter, but fixed to the limb's underside, so seen from above only its fringe shows.
+- **Banded as seen**: rows all round, each deposit laying its ink where it lies in the limb's lower band as the limb
+  is seen. That is a quadratic in the direction it's seen from, which a deposit's nine view terms hold exactly, so
+  the renderer needed nothing new. Seen level from either side, from 40° above and from below, 76 to 87% of a limb's
+  visible ink is in its lower half, at the same weight (`devtools/splats-seen-check.mjs`). It is the closest to the
+  teacher, and closer still on the strokes from the reserved views.
+- **More deposits don't help** at this scale. The limit isn't the budget.
+- **How soft this comparison is**: with the strokes' swell (how their thickness varies along them) counted in, as
+  seen led by four times as much. Swell is inflated by marks that cross the teacher's strips, so it was left out,
+  and the lead shrank to what's above. The order of the arrangements held; the sizes of the gaps shouldn't be leant on.
+
+![Four views: the teacher, limbs as tubes inked beneath, limbs as loaded strokes](splats/b-room-roots.jpg)
+
+In the room (the default now; `&roots=0` for the tubes), a limb is a dark stroke with a firm edge along its lower
+side from wherever it's seen, and the view between the canopy and the tunnel, where the nearest arch had gone
+blank, has its arch back.
+
+Not done:
+
+- **No short wander.** The teacher's band wobbles by 0.06 half-widths over about 150 px. None of these do.
+- **No dry edge, no tapered release.** The reading here doesn't see them (its dryness measure reads nothing in the
+  teacher's strokes either, which says the measure is too coarse, not that they're wet).
+- **Each limb's own pressure is made up**, from its key: a run of ink, width and drift along it, with amplitudes
+  set by hand. Separating what the strokes share from what is each stroke's own, from several teacher strokes
+  fitted together, isn't done.
+- **The room's tone against the teachers wasn't measured again** with its limbs as strokes.
+
 ### Air, water, cost
 
 - **Air moving**: a mark can sway (`sway`). Each deposit moves by its own share of it (none where a strand hangs
@@ -1432,7 +1500,7 @@ Roughly in order of what each teaches:
 
 ## Flags
 
-`?scene=stone|brushes|composed|pen|field|bench|marks|walk|room|mist|garden|plush|nike|train` · `?scene=marks&way=organised|organised+deposits|independent|style|unfitted|brush&only=<sheet>` · `?scene=walk&d=<metres>&level=both|fronds|wash&auto` · `?scene=room&view=tunnel|pool|canopy&s=<0…1>&style=taught|bench|plain&light=<degrees>&mirror=0&moving&auto` · `?field=stone|composed` · `?flat` (a fitted field's baseline) · `?compose=0` · `?halo=0` · `?halopx=` · `?policy=ranks|rules|learned|taught` · `?teacher=sumi|sumi-bold|sumi-light` · `?judge` · `?perf` · `?ink` (a captured scene in ink) · `?scene=pen&part=word|board|culm|bank|rock&reference` · `?look=dry|wash` · `?detail=0..1` · `?thin=even` · `?only=wash` · `?view=hero|grazing|reverse` · `?orbit` · `?detail=0.25|0.55|1` (sparse, intermediate, resolved) · `?brush` · `?occluder=0` · `?clean` (no controls) · `?url=…` (any `.splat` or `.ply` CORS lets it read) · `?up=1` (for a file that's
+`?scene=stone|brushes|composed|pen|field|bench|marks|walk|room|mist|garden|plush|nike|train` · `?scene=marks&way=organised|organised+deposits|independent|style|unfitted|brush&only=<sheet>` · `?scene=walk&d=<metres>&level=both|fronds|wash&auto` · `?scene=room&view=tunnel|pool|canopy&s=<0…1>&style=taught|bench|plain&roots=0&light=<degrees>&mirror=0&moving&auto` · `?field=stone|composed` · `?flat` (a fitted field's baseline) · `?compose=0` · `?halo=0` · `?halopx=` · `?policy=ranks|rules|learned|taught` · `?teacher=sumi|sumi-bold|sumi-light` · `?judge` · `?perf` · `?ink` (a captured scene in ink) · `?scene=pen&part=word|board|culm|bank|rock&reference` · `?look=dry|wash` · `?detail=0..1` · `?thin=even` · `?only=wash` · `?view=hero|grazing|reverse` · `?orbit` · `?detail=0.25|0.55|1` (sparse, intermediate, resolved) · `?brush` · `?occluder=0` · `?clean` (no controls) · `?url=…` (any `.splat` or `.ply` CORS lets it read) · `?up=1` (for a file that's
 y-up) · `?mode=0..3` · `?size=` · `?res=` · `?count=` (garden size) · `?noworkers` · `?preview`
 
 Checks: `node cells/lab/devtools/splats.test.mjs` (formats, covariance, sort) and

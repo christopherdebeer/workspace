@@ -31,7 +31,7 @@ import { benchScene, PRESSURES } from './bench';
 import { MarksScene, WAYS, BRUSHED, type MarksFile } from './marksscene';
 import { canopyPatch, WALK, type Level } from './canopy';
 import { marksToSplats } from './marks';
-import { conservatory, occluder, routeAt, EYE, WATER, type Room, type Styles, type Taught } from './conservatory';
+import { conservatory, occluder, routeAt, EYE, WATER, type Room, type Styles, type Taught, type RootStyle } from './conservatory';
 import { penScene, type PenScene } from './penscene';
 import { paint as autographPaint } from '../autograph/ink';
 import type { Editor, EditItem, Snapshot } from './edit';
@@ -390,15 +390,18 @@ function walkPlace() {
   cam.target = [0 - Math.sin(cam.yaw) * cp, WALK.eyeY - Math.sin(cam.pitch), walkS.d - Math.cos(cam.yaw) * cp];
 }
 // ─── the room (conservatory.ts): a flooded conservatory and a willow, all marks, walked round one looped route ───
-let roomS: { room: Room; s: number; s0?: number; fixed?: [number, number, number]; auto: number | null; mode: RoomMode; light: number | null; mirror: boolean; moving: boolean; n: number; yaw0: number; pitch0: number; look: [number, number] } | null = null, roomStyles: Styles | null = null, syncRoom = () => {};
+let roomS: { room: Room; s: number; s0?: number; fixed?: [number, number, number]; auto: number | null; mode: RoomMode; light: number | null; roots: boolean; mirror: boolean; moving: boolean; n: number; yaw0: number; pitch0: number; look: [number, number] } | null = null, roomStyles: Styles | null = null, syncRoom = () => {};
 /** how the room's marks are drawn: as taught from the three drawn views (a style a role and each mark's own weight);
  * in the styles fitted to single teacher marks on the Bench; or plain, as the scene lays them */
 type RoomMode = 'taught' | 'bench' | 'plain';
-let roomTaught: Taught | null | undefined;
+let roomTaught: Taught | null | undefined, roomRoot: RootStyle | null | undefined;
 async function openRoom(mode: RoomMode = roomS?.mode ?? (qs.get('style') as RoomMode) ?? 'taught') {
   const assets = (() => { const m = document.querySelector<HTMLMetaElement>('meta[name=assets]'); return m?.content && !m.content.includes('{{') ? m.content : ''; })();
   if (roomTaught === undefined) { try { const r = await fetch(`${assets}room-taught.json`); roomTaught = r.ok ? ((await r.json()) as Taught) : null; } catch { roomTaught = null; } }
+  // (and the limbs as loaded strokes, their band as it's seen: a style fitted to the teacher's strokes)
+  if (roomRoot === undefined) { try { const r = await fetch(`${assets}root-style.json`); roomRoot = r.ok ? ((await r.json()) as { style: RootStyle }).style : null; } catch { roomRoot = null; } }
   if (mode === 'taught' && !roomTaught) mode = 'bench';
+  const roots = (roomS ? roomS.roots : qs.get('roots') !== '0') && !!roomRoot;
   if (!roomStyles) {
     // (the styles fitted to the teacher's marks: a root stroke's, a spray's strand and dabs, a veil's)
     roomStyles = {};
@@ -409,10 +412,10 @@ async function openRoom(mode: RoomMode = roomS?.mode ?? (qs.get('style') as Room
     } catch { roomStyles = {}; }
   }
   const light = roomS ? roomS.light : qs.has('light') ? Number(qs.get('light')) : null;
-  const room = conservatory(mode === 'bench' ? roomStyles : {}, 'both', mode === 'taught' ? roomTaught! : undefined, lightFrom(light)), d = marksToSplats(room.marks);
+  const room = conservatory(mode === 'bench' ? roomStyles : {}, 'both', mode === 'taught' ? roomTaught! : undefined, lightFrom(light), roots ? roomRoot! : undefined), d = marksToSplats(room.marks);
   const keep = roomS ? { s: roomS.s, auto: roomS.auto, mirror: roomS.mirror, moving: roomS.moving, look: roomS.look } : { s: room.views[qs.get('view') ?? '']?.s ?? Number(qs.get('s') ?? room.views.tunnel.s), auto: qs.has('auto') ? performance.now() : null, mirror: qs.get('mirror') !== '0', moving: qs.has('moving'), look: [0, 0] as [number, number] };
   show(d, 'room', 1); R.setOccluder(occluder(room));
-  roomS = { room, mode, light, ...keep, n: d.n, yaw0: 0, pitch0: 0 }; cam.fov = (55 * Math.PI) / 180;
+  roomS = { room, mode, light, roots, ...keep, n: d.n, yaw0: 0, pitch0: 0 }; cam.fov = (55 * Math.PI) / 180;
   const v = room.views[qs.get('view') ?? '']; roomPlace(true, v && !keep.auto ? v.at : undefined); home = { ...cam, target: [...cam.target] as [number, number, number] }; syncRoom();
 }
 /** the light's direction from where it stands round the room (degrees; 35° up), or none: overhead, as taught */
@@ -421,7 +424,7 @@ const lightFrom = (az: number | null): [number, number, number] | undefined => (
 let roomRelayAt = 0, roomRelayDue = false;
 function roomRelay() {
   if (!roomS) return;
-  const room = conservatory(roomS.mode === 'bench' ? roomStyles ?? {} : {}, 'both', roomS.mode === 'taught' ? roomTaught! : undefined, lightFrom(roomS.light)), d = marksToSplats(room.marks);
+  const room = conservatory(roomS.mode === 'bench' ? roomStyles ?? {} : {}, 'both', roomS.mode === 'taught' ? roomTaught! : undefined, lightFrom(roomS.light), roomS.roots && roomRoot ? roomRoot : undefined), d = marksToSplats(room.marks);
   roomS.room = room; roomS.n = d.n; scene = d; R.load(d); R.setOccluder(occluder(room)); sorter.data(d); lastDir = null; roomRelayAt = performance.now(); roomRelayDue = false;
 }
 /** the camera where the walk round the room has got to: the eye over the route, looking the way it's heading (or at a
@@ -739,13 +742,14 @@ const syncs = [
   const mk = (label: string, act: () => void) => { const b = document.createElement('button'); b.textContent = label; b.onclick = () => { act(); syncRoom(); }; oEl.append(b); return b; };
   const bWalk = mk('walk', () => { if (roomS) { roomS.auto = roomS.auto === null ? performance.now() : null; roomS.s0 = roomS.s; roomS.fixed = undefined; } }), bMir = mk('still water', () => { if (roomS) roomS.mirror = !roomS.mirror; }), bMov = mk('air moving', () => { if (roomS) roomS.moving = !roomS.moving; });
   sEl.oninput = () => { if (roomS) { roomS.s = Number(sEl.value); roomS.auto = null; roomS.fixed = undefined; syncRoom(); } };
+  const bRoots = mk('limbs as strokes', () => { if (roomS && roomRoot) { roomS.roots = !roomS.roots; roomRelay(); } });
   const lEl = $<HTMLInputElement>('r-light'), bOver = mk('light overhead', () => { if (roomS && roomS.light !== null) { roomS.light = null; roomRelay(); } });
   lEl.oninput = () => { if (roomS) { roomS.light = Number(lEl.value); roomRelayDue = true; syncRoom(); } };
   syncRoom = () => {
     $('room-controls').hidden = !roomS; if (!roomS) return;
     const s = ((roomS.s % 1) + 1) % 1, where = s < 4.3 / 14 ? 'the root tunnel' : s < 9.6 / 14 ? 'the open pool' : s < 12.2 / 14 ? 'the canopy' : 'the way back';
     bWalk.setAttribute('aria-pressed', String(roomS.auto !== null)); bMir.setAttribute('aria-pressed', String(roomS.mirror)); bMov.setAttribute('aria-pressed', String(roomS.moving)); [...mEl.querySelectorAll('button')].forEach((b, k) => b.setAttribute('aria-pressed', String(MODES_R[k][0] === roomS!.mode)));
-    bOver.setAttribute('aria-pressed', String(roomS.light === null)); if (roomS.light !== null) lEl.value = String(roomS.light); $('r-light-v').textContent = roomS.light === null ? 'overhead, as taught' : `from ${roomS.light}°`;
+    bRoots.setAttribute('aria-pressed', String(roomS.roots)); bOver.setAttribute('aria-pressed', String(roomS.light === null)); if (roomS.light !== null) lEl.value = String(roomS.light); $('r-light-v').textContent = roomS.light === null ? 'overhead, as taught' : `from ${roomS.light}°`;
     sEl.value = String(s); $('r-s-v').textContent = where; $('sum-room').textContent = where;
     $('r-note').textContent = `${roomS.n.toLocaleString()} deposits in ${roomS.room.marks.length.toLocaleString()} marks; no outline pass: each is a stroke or a wash the scene put there. ${roomS.mode === 'taught' ? 'Drawn as taught from three drawn views (the tunnel, the pool, the canopy): a style for each role of mark and each mark\'s own weight. ' : roomS.mode === 'bench' ? 'Drawn in the styles fitted to single teacher marks. ' : ''}Drag to look round.`;
   };
@@ -1075,9 +1079,9 @@ function frame() {
     undo: () => $('b-undo').click(), density: (d: number) => { if (bench) { bench.editor.density = d; benchRegen('all'); } },
   },
   mist: { setDiff: (d: boolean) => { diff = d; relight(); }, setLight: (l: string) => { light = l; relight(); syncMist(); }, setSun: (az: number, el: number) => { sunAz = az; sunEl = el; relight(); }, setBank: (b: number) => { bank = b; openMist(); }, get ready() { return refReady; } },
-  room: { get state() { return roomS ? { s: roomS.s, n: roomS.n, mode: roomS.mode, mirror: roomS.mirror, moving: roomS.moving, regions: roomS.room.regions, views: roomS.room.views } : null; },
+  room: { get state() { return roomS ? { s: roomS.s, n: roomS.n, mode: roomS.mode, roots: roomS.roots, mirror: roomS.mirror, moving: roomS.moving, regions: roomS.room.regions, views: roomS.room.views } : null; },
     at: (s: number, look?: [number, number, number]) => { if (roomS) { roomS.s = s; roomS.auto = null; roomPlace(true, look); syncRoom(); } }, view: (v: string) => { const w = roomS?.room.views[v]; if (roomS && w) { roomS.s = w.s; roomS.auto = null; roomPlace(true, w.at); syncRoom(); } },
-    set: (o: { mirror?: boolean; moving?: boolean; mode?: RoomMode; light?: number | null }) => { if (!roomS) return; if (o.mirror !== undefined) roomS.mirror = o.mirror; if (o.moving !== undefined) roomS.moving = o.moving; if (o.light !== undefined) { roomS.light = o.light; roomRelay(); } syncRoom(); return o.mode !== undefined && o.mode !== roomS.mode ? openRoom(o.mode) : undefined; } },
+    set: (o: { mirror?: boolean; moving?: boolean; mode?: RoomMode; light?: number | null; roots?: boolean }) => { if (!roomS) return; if (o.mirror !== undefined) roomS.mirror = o.mirror; if (o.moving !== undefined) roomS.moving = o.moving; if (o.roots !== undefined && o.roots !== roomS.roots) { roomS.roots = o.roots; roomRelay(); } if (o.light !== undefined) { roomS.light = o.light; roomRelay(); } syncRoom(); return o.mode !== undefined && o.mode !== roomS.mode ? openRoom(o.mode) : undefined; } },
   walk: { get state() { return walkS ? { ...walkS } : null; }, set: (d: number) => { if (walkS) { walkS.d = d; walkS.auto = null; syncWalk(); } }, level: (l: Level) => openWalk(l), auto: (on: boolean) => { if (walkS) { walkS.auto = on ? performance.now() : null; syncWalk(); } } },
   marks: {
     get state() { return marksS ? { way: marksS.way, selected: marksSel, deposits: marksS.deposits, sheets: marksS.sheets.map((s) => s.name), marks: marksS.marks.map((m) => ({ id: m.id, name: m.name, kind: m.kind, count: m.count, ctrl: m.ctrl })) } : null; },

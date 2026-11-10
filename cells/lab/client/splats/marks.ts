@@ -35,7 +35,18 @@ import type { Splats } from './format';
 export type V = [number, number, number];
 /** a deposit: where, its long axis (unit, in its plane), its plane's normal, its sizes (along, across, through), its
  * turn in its plane, its ink (a logit) */
-export interface Deposit { p: V; t: V; n: V; s1: number; s2: number; thin: number; turn: number; logit: number }
+export interface Deposit { p: V; t: V; n: V; s1: number; s2: number; thin: number; turn: number; logit: number;
+  /** its own view terms (nine, as the mark's: added to them), and the most ink it lays whatever the view (0…1; 1 if
+   * not given): a deposit whose ink depends on where it's seen from */
+  view?: number[]; cap?: number }
+/** the nine terms a deposit's ink can depend on the view by: of d, the unit vector from it to the eye */
+export const viewBasis = (d: V): number[] => [1, d[0], d[1], d[2], d[0] * d[1], d[1] * d[2], d[0] * d[2], d[0] * d[0] - d[1] * d[1], 3 * d[2] * d[2] - 1];
+/** how much ink a deposit lays, seen from an eye (0…1): its cap, and its logit with its mark's view terms and its own */
+export function inkOf(d: Deposit, eye: V, markView?: number[]): number {
+  let z = d.logit;
+  if (d.view || markView) { const l = Math.hypot(eye[0] - d.p[0], eye[1] - d.p[1], eye[2] - d.p[2]) || 1, b = viewBasis([(eye[0] - d.p[0]) / l, (eye[1] - d.p[1]) / l, (eye[2] - d.p[2]) / l]); for (let k = 1; k < 9; k++) z += ((d.view?.[k] ?? 0) + (markView?.[k] ?? 0)) * b[k]; z += (d.view?.[0] ?? 0) + (markView?.[0] ?? 0); }
+  return (d.cap ?? 1) / (1 + Math.exp(-z));
+}
 export interface Mark {
   id: number; kind: 'stroke' | 'wash'; name?: string;
   /** what it is in its scene, said once: a key no other mark has (what's taught to it is kept by this, and its id is
@@ -51,8 +62,11 @@ export interface Mark {
   /** a banded limb: its rows keep to an arc of the tube, each with a part to play by its place across the arc: a
    * firm edge along the middle of the arc (seen from the side, the limb's edge), a body beside it, and bristles that
    * break up toward the arc's two ends. Where the arc's middle faces (a unit vector; default straight down: a limb
-   * inked along its underside) */
-  band?: V | true;
+   * inked along its underside). Or 'seen': its rows go all the way round, and each deposit lays its ink where it
+   * lies in the limb's lower band as the limb is seen (its view terms say so exactly): the same loaded stroke along
+   * the limb's lower edge from wherever it's looked at. Its parameters then: `arc` the band's thickness (a log, on one
+   * half-width), `fall` how sharply it ends inside (a log), `bristle` how far its thickness wavers along it */
+  band?: V | true | 'seen';
   /** where a tube's light comes from (a unit vector; none: from straight above its spine): its ink keeps to the side
    * turned away from it, and the side turned to it is left to the paper */
   light?: V;
@@ -208,11 +222,31 @@ export function layout(m: Mark): Deposit[] {
       let n: V = free || tube ? norm(cross(t, Math.abs(t[1]) < 0.9 ? [0, 1, 0] : [1, 0, 0])) : norm(add(add([0, 0, 0], S.normals![k], 1 - f), S.normals![Math.min(S.normals!.length - 1, k + 1)], f));
       n = norm(sub(n, [t[0] * dot(n, t), t[1] * dot(n, t), t[2] * dot(n, t)]));
       const w = w0 * Math.exp(knots(P, SP.width, KN.width, u)), alt = i % 2 ? 1 : -1;
+      if (tube && m.band === 'seen') {
+        const N0 = norm(sub(Math.abs(t[1]) < 0.95 ? [0, 1, 0] : [1, 0, 0], [t[0] * (Math.abs(t[1]) < 0.95 ? t[1] : t[0]), t[1] * (Math.abs(t[1]) < 0.95 ? t[1] : t[0]), t[2] * (Math.abs(t[1]) < 0.95 ? t[1] : t[0])])), B0 = cross(t, N0);
+        const th = ((row + 0.5) / rows) * Math.PI * 2 + hash(m.id, 3, 3) * 6.28, c = Math.cos(th), sn = Math.sin(th), rad: V = [N0[0] * c + B0[0] * sn, N0[1] * c + B0[1] * sn, N0[2] * c + B0[2] * sn];
+        // (up as the band takes it: across the limb where the limb is anywhere near level; for an upright limb, to one side)
+        // (or, where a light is given, toward the light: the band keeps to the side away from it)
+        const lit = m.light ? sub(m.light, [t[0] * dot(m.light, t), t[1] * dot(m.light, t), t[2] * dot(m.light, t)]) : null;
+        const U: V = lit && Math.hypot(lit[0], lit[1], lit[2]) > 0.25 ? norm(lit) : Math.abs(t[1]) < 0.8 ? N0 : norm(cross(t, cross([0.6, 0, 0.8], t)));
+        // (how thick the band is here: wavering along the limb, the same for every row, so its inner edge wobbles)
+        const wv = s / (2.2 * w0) + hash(m.id, 91, 5) * 9, w0i = Math.floor(wv), wf = wv - w0i, ws = wf * wf * (3 - 2 * wf), wob = (hash(m.id, 91, w0i) * (1 - ws) + hash(m.id, 91, w0i + 1) * ws) * 2 - 1;
+        const T = Math.exp(P[SP.arc] ?? 0) * (1 + (P[SP.bristle] ?? 0) * 0.5 * wob), K = 7 * Math.exp((P[SP.fall] ?? 1) - 1), nU = dot(rad, U);
+        // (ink where it lies under the band's inner edge as seen: K (B - n·U' ), U' the part of U across the line of
+        // sight: B - n·U + (U·d)(n·d), the last a quadratic in d: the nine terms hold it exactly)
+        const Sm = (a: number, b: number) => (U[a] * rad[b] + U[b] * rad[a]) / 2, Bd = -1 + T;
+        const view = [0, 0, 0, 0, 2 * K * Sm(0, 1), 2 * K * Sm(1, 2), 2 * K * Sm(0, 2), (K * (Sm(0, 0) - Sm(1, 1))) / 2, (K * (-Sm(0, 0) - Sm(1, 1) + 2 * Sm(2, 2))) / 6];
+        const run = s / (5 * w0) + hash(m.id, row, 7) * 16, r0 = Math.floor(run), rf = run - r0, sm = rf * rf * (3 - 2 * rf), gap = hash(m.id, row, r0) * (1 - sm) + hash(m.id, row, r0 + 1) * sm;
+        const dry = Math.max(0, knots(P, SP.dry, KN.dry, u)) * 9 * gap * gap, body = knots(P, SP.ink, KN.ink, u) - softplus((P[SP.u0] - u) / t0) - softplus((u - P[SP.u1]) / t1) - dry + R[r];
+        const centre = add(add(pts[k], sub(pts[k + 1], pts[k]), f), N0, knots(P, SP.offset, KN.offset, u) * w0);
+        out.push({ p: add(centre, rad, w / 2 + R[r + 4] * w0), t, n: rad, s1: (L / cols) * 0.9 * Math.exp(P[SP.along] + R[r + 1]), s2: ((Math.PI * w) / rows) * 0.62 * Math.exp(P[SP.spread] + R[r + 2]), thin: 0.0008, turn: R[r + 3], logit: K * (Bd - nU) + (K * nU) / 3, view, cap: 1 / (1 + Math.exp(-body)) });
+        continue;
+      }
       if (tube && m.band) {
         // (a banded limb: rows in pairs, one to each side of the arc's middle; a row's part is its place across the
         // arc, q: 0 the firm edge, then the body, then bristles toward 1. Edge and bristle rows are finer than the
         // body's; the ink falls past `feather`; the bristles break up (each row its own run of gaps))
-        const dir: V = m.band === true ? [0, -1, 0] : m.band, dd = dot(dir, t); let D0: V = [dir[0] - t[0] * dd, dir[1] - t[1] * dd, dir[2] - t[2] * dd];
+        const dir: V = m.band === true || m.band === 'seen' ? [0, -1, 0] : m.band, dd = dot(dir, t); let D0: V = [dir[0] - t[0] * dd, dir[1] - t[1] * dd, dir[2] - t[2] * dd];
         if (Math.hypot(D0[0], D0[1], D0[2]) < 0.3) { const alt2: V = Math.abs(t[0]) < 0.8 ? [1, 0, 0] : [0, 0, 1], da = dot(alt2, t); D0 = [alt2[0] - t[0] * da, alt2[1] - t[1] * da, alt2[2] - t[2] * da]; }
         D0 = norm(D0); const B0 = cross(t, D0), pairs = Math.ceil(rows / 2), pr = Math.floor(row / 2), sgn = row % 2 ? -1 : 1;
         const A = ((100 * Math.PI) / 180) * Math.exp(P[SP.arc] ?? BAND.arc), fine = P[SP.fine] ?? BAND.fine, qf = P[SP.feather] ?? BAND.feather, fall = P[SP.fall] ?? BAND.fall, bris = P[SP.bristle] ?? BAND.bristle;
@@ -288,7 +322,7 @@ export function marksToSplats(marks: Mark[], floor = 0.02, loose: Array<{ d: Dep
   for (const m of marks) {
     // (the most its view terms can add, roughly: their size)
     const lift = m.view.slice(1).reduce((a, v) => a + Math.abs(v), 0) + m.view[0];
-    layout(m).forEach((d, i) => { if (1 / (1 + Math.exp(-(d.logit + lift))) > floor) all.push({ d, m, i, colour: m.colour ?? INK }); });
+    layout(m).forEach((d, i) => { const own = d.view ? d.view.slice(1).reduce((a, v) => a + Math.abs(v), 0) + d.view[0] : 0; if ((d.cap ?? 1) / (1 + Math.exp(-(d.logit + lift + own))) > floor) all.push({ d, m, i, colour: m.colour ?? INK }); });
   }
   loose.forEach((l, i) => { if (1 / (1 + Math.exp(-l.d.logit)) > floor) all.push({ d: l.d, m: null, i, colour: l.colour ?? INK }); });
   const N = all.length;
@@ -297,8 +331,9 @@ export function marksToSplats(marks: Mark[], floor = 0.02, loose: Array<{ d: Dep
     const [x, y, z] = axes(d);
     s.pos.set(d.p, k * 3); s.scale.set([Math.max(d.s1, 0.0002), Math.max(d.s2, 0.0002), Math.max(d.thin, 0.0002)], k * 3); s.rot.set(quat(x, y, z), k * 4); s.normal.set(d.n, k * 3);
     // (on a surface: given its plane's depth, so the face it lies on doesn't cut it; in open space: its own)
-    s.support[k] = d.thin < 0.002 ? 1 : 3; s.rgba.set([colour[0], colour[1], colour[2], 255], k * 4); s.mark[k] = 12; s.rank[k] = 1; s.element[k] = m ? m.id : 0; s.feature[k] = i + 1; s.owner[k] = m ? m.id : 0;
-    s.coef[k * 12] = d.logit + (m ? m.view[0] : 0); if (m) { for (let b = 1; b < VIEW_TERMS; b++) s.coef[k * 12 + b] = m.view[b]; if (m.lod) { s.coef[k * 12 + 9] = m.lod[0]; s.coef[k * 12 + 10] = m.lod[1]; }
+    s.support[k] = d.thin < 0.002 ? 1 : 3; s.rgba.set([colour[0], colour[1], colour[2], Math.round(255 * (d.cap ?? 1))], k * 4); s.mark[k] = 12; s.rank[k] = 1; s.element[k] = m ? m.id : 0; s.feature[k] = i + 1; s.owner[k] = m ? m.id : 0;
+    s.coef[k * 12] = d.logit + (m ? m.view[0] : 0) + (d.view?.[0] ?? 0); if (d.view && !m) for (let b = 1; b < VIEW_TERMS; b++) s.coef[k * 12 + b] = d.view[b];
+    if (m) { for (let b = 1; b < VIEW_TERMS; b++) s.coef[k * 12 + b] = m.view[b] + (d.view?.[b] ?? 0); if (m.lod) { s.coef[k * 12 + 9] = m.lod[0]; s.coef[k * 12 + 10] = m.lod[1]; }
       // (its share of its mark's sway: none where it hangs from, all at its far end)
       if (m.sway) { const rows = Math.max(1, m.rows ?? 1), u = (Math.floor(i / rows) + 0.5) / Math.ceil(m.count / rows); s.coef[k * 12 + 11] = m.sway * u * u; } }
   });
