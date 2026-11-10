@@ -283,6 +283,7 @@ The look is now hill-climbed against five target studies (`devtools/bamboo/targe
 - `fov=<degrees>`.
 - `clean`: without the shafts and the paper's grain.
 - `marks=0`: the picture without its ink.
+- `brush=sweep`: a trial from the Splats lab: each culm laid as a brush lays one, a pull an internode on the side away from the sun, in place of its dry brush and its firm contour (see *The sweep on a bamboo culm* in the Splats notes). Without it nothing changes.
 - `strokes=all`: every stroke the land has, at full weight, none left out (to see what's laid).
 - `clay`: every surface one clay, its light kept (the sun on it, the culms' cast shadows, the sky), no paper, no ink: the forms alone.
 - `grove=0`: the land alone, no bamboo (the gates' hard test: does the mountain and its path still read?).

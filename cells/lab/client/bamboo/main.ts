@@ -32,7 +32,7 @@ const hint = document.getElementById('hint') as HTMLDivElement | null;
 if (hint && params.has('still')) hint.classList.add('gone');
 const seed = Number(params.get('seed') ?? 1) || 1;
 const world = new World(seed);
-const renderer = new Renderer(canvas, ridges(seed), { clean: params.has('clean'), marks: params.get('marks') !== '0', shadows: params.get('shadows') !== '0' });
+const renderer = new Renderer(canvas, ridges(seed), { clean: params.has('clean'), marks: params.get('marks') !== '0', shadows: params.get('shadows') !== '0', brush: params.get('brush') === 'sweep' });
 const auto = params.has('auto'), still = params.has('still');
 
 // ─── how it's drawn: the layers, each its own (layers.ts), from the address, and the palette under 墨 ───

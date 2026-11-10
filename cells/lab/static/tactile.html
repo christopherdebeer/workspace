@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en" data-exp="tactile"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#e9e6de"><title>Tactile · pebble in the hand</title>
+<style>
+:root{--paper:#e9e6de;--card:#f6f4ee;--ink:#22231f;--muted:#74766d;--edge:#d3d0c5;--accent:#d0604f;--teal:#16a586;--warn:#b5832a;--well:#dedad0;font-family:ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:var(--ink);background:var(--paper);color-scheme:light}
+@media(prefers-color-scheme:dark){:root:not([data-theme=light]){--paper:#121416;--card:#1a1d20;--ink:#e5e3dc;--muted:#8c918f;--edge:#2c3135;--accent:#f06f62;--teal:#26d0a8;--warn:#e0aa4c;--well:#202427;color-scheme:dark}}
+:root[data-theme=dark]{--paper:#121416;--card:#1a1d20;--ink:#e5e3dc;--muted:#8c918f;--edge:#2c3135;--accent:#f06f62;--teal:#26d0a8;--warn:#e0aa4c;--well:#202427;color-scheme:dark}
+*{box-sizing:border-box}html,body{height:100%;margin:0;background:var(--paper);color:var(--ink);-webkit-text-size-adjust:100%;overscroll-behavior:none}
+button,input,select,textarea{font:inherit;color:inherit}button{border:1px solid var(--edge);background:var(--card);border-radius:10px;min-height:40px;padding:0 14px;cursor:pointer;-webkit-tap-highlight-color:transparent}
+button[aria-pressed=true]{background:var(--ink);color:var(--paper);border-color:var(--ink)}button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+a{color:inherit}
+#app{display:flex;flex-direction:column;height:100dvh;max-width:720px;margin:0 auto}
+header{display:flex;align-items:baseline;justify-content:space-between;gap:10px;padding:max(10px,env(safe-area-inset-top)) 16px 2px}
+header strong{font:600 17px/1.2 ui-sans-serif,system-ui,sans-serif;letter-spacing:-.02em}header small{font:10px ui-monospace,monospace;letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}
+#fw{font:11px ui-monospace,monospace;color:var(--muted);text-decoration:none;white-space:nowrap}
+#stage{position:relative;flex:1 1 52%;min-height:240px;touch-action:none;user-select:none;-webkit-user-select:none;cursor:grab;background:radial-gradient(ellipse 60% 55% at 50% 46%,color-mix(in srgb,var(--card) 92%,white) 0%,var(--paper) 72%)}
+#stage.held{cursor:grabbing}#view{position:absolute;inset:0;width:100%;height:100%}
+#shadow{position:absolute;left:50%;top:50%;width:44%;max-width:240px;aspect-ratio:1/0.18;transform:translate(-50%,calc(min(30vw,150px) + 10px));background:radial-gradient(closest-side,rgba(0,0,0,.28),transparent);filter:blur(6px);pointer-events:none}
+#coach{position:absolute;left:0;right:0;bottom:10px;text-align:center;font-size:12px;color:var(--muted);pointer-events:none;transition:opacity .4s}
+#mode{position:absolute;top:8px;right:12px;display:flex;gap:6px}#mode button{min-height:32px;font-size:12px;padding:0 10px;border-radius:16px}
+#trail{position:absolute;top:10px;left:14px;font:12px ui-monospace,monospace;color:var(--muted)}
+#inst{display:grid;grid-template-columns:1.25fr 0.55fr 1.2fr;gap:8px;align-items:end;padding:6px 14px 4px;border-top:1px solid var(--edge);background:var(--card)}
+#inst svg{width:100%;height:auto;display:block}#inst .lab{font:9px ui-monospace,monospace;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);text-align:center;margin-top:2px}
+#flags{display:flex;flex-wrap:wrap;gap:4px 6px;padding:2px 14px 8px;background:var(--card);font:10px ui-monospace,monospace}
+#flags span{padding:2px 6px;border-radius:8px;border:1px solid var(--edge);color:var(--muted)}#flags span.on{background:var(--teal);color:#fff;border-color:var(--teal)}#flags span.warn.on{background:var(--warn);border-color:var(--warn)}
+#tabs{display:flex;gap:2px;padding:0 10px;border-top:1px solid var(--edge);background:var(--card)}#tabs button{border:0;border-radius:0;background:none;color:var(--muted);font-size:13px;flex:1;min-height:40px;border-bottom:2px solid transparent}#tabs button[aria-selected=true]{color:var(--ink);border-bottom-color:var(--accent)}
+#panel{flex:0 1 34%;min-height:150px;overflow-y:auto;padding:10px 16px max(14px,env(safe-area-inset-bottom));background:var(--card);font-size:13px}
+#panel section[hidden]{display:none}
+.row{display:flex;justify-content:space-between;gap:12px;padding:6px 0;border-bottom:1px solid var(--edge)}.row b{font-weight:400;font-variant-numeric:tabular-nums;font-family:ui-monospace,monospace;font-size:12px}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:12px 18px}.field{display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--muted)}.field input[type=range]{width:100%;accent-color:var(--accent)}.field select,.field textarea{background:var(--paper);border:1px solid var(--edge);border-radius:8px;padding:6px 8px;color:var(--ink)}
+.field .v{float:right;font-family:ui-monospace,monospace;color:var(--ink)}.wide{grid-column:1/-1}.check{flex-direction:row;align-items:center;gap:8px;color:var(--ink)}
+.buttons{display:flex;flex-wrap:wrap;gap:8px;margin:6px 0}
+#events ol{list-style:none;margin:0;padding:0;font:12px ui-monospace,monospace}#events li{display:flex;gap:10px;padding:4px 0;border-bottom:1px solid var(--edge)}#events li time{color:var(--muted);min-width:48px}#events li.enter{color:var(--teal)}#events li.exit{color:var(--accent)}#events li.notice{color:var(--warn)}
+p.note{color:var(--muted);font-size:12px;line-height:1.5;margin:6px 0}
+.preview header,.preview #inst,.preview #flags,.preview #tabs,.preview #panel,.preview #mode,.preview #coach{display:none!important}.preview #stage{flex:1}
+@media(min-height:860px){#panel{flex-basis:30%}}
+@media(prefers-reduced-motion:reduce){*{transition:none!important}}
+</style></head><body>
+<main id="app">
+<header><div><strong>Tactile</strong> <small>pebble in the hand</small></div><a id="fw" href="https://github.com/christopherdebeer/tactile" target="_blank" rel="noopener">firmware</a></header>
+<section id="stage" aria-label="The device. Drag sideways to turn it like a dial, up or down to tip its top edge away or toward you.">
+  <div id="shadow"></div><canvas id="view"></canvas>
+  <div id="trail"></div>
+  <div id="mode" role="group" aria-label="Input"><button id="m-hand" aria-pressed="true">hand</button><button id="m-motion" aria-pressed="false">phone</button></div>
+  <div id="coach">drag sideways to turn · up / down to tip</div>
+</section>
+<div id="inst" aria-hidden="true">
+  <div><svg id="g-roll" viewBox="0 0 160 92"></svg><div class="lab">roll · pace</div></div>
+  <div><svg id="g-pitch" viewBox="0 0 60 92"></svg><div class="lab">pitch · depth</div></div>
+  <div><svg id="g-rate" viewBox="0 0 160 92"></svg><div class="lab">rate</div></div>
+</div>
+<div id="flags"><span id="f-ready">ready</span><span id="f-armed">armed</span><span id="f-active">turning</span><span id="f-focused">focused</span><span id="f-latched" class="warn">latched</span><span id="f-stage">—</span></div>
+<nav id="tabs" role="tablist"><button role="tab" aria-selected="true" data-tab="events">Events</button><button role="tab" aria-selected="false" data-tab="measure">Measure</button><button role="tab" aria-selected="false" data-tab="settings">Settings</button><button role="tab" aria-selected="false" data-tab="trace">Trace</button></nav>
+<div id="panel">
+  <section id="events" data-panel="events"><ol id="log"></ol><p class="note" id="log-empty">Enters, exits, focus and every intention the firmware refuses appear here.</p></section>
+  <section data-panel="measure" hidden><div id="metrics"></div><div class="buttons"><button id="reset">Reset session</button><button id="restart">Restart tutorial</button></div></section>
+  <section data-panel="settings" hidden><div class="grid">
+    <label class="field">Pace <span class="v" id="v-pace"></span><input type="range" id="s-pace" min="150" max="2000" step="10"></label>
+    <label class="field">Hand <select id="s-hold"><option value="return">relaxes back to neutral</option><option value="hold">stays where left</option></select></label>
+    <label class="field check"><input type="checkbox" id="s-invert-roll"> invert roll</label>
+    <label class="field check"><input type="checkbox" id="s-invert-pitch"> invert pitch</label>
+    <label class="field">Tremor <span class="v" id="v-tremor"></span><input type="range" id="s-tremor" min="0" max="0.5" step="0.01"></label>
+    <label class="field">Walking <span class="v" id="v-walk"></span><input type="range" id="s-walk" min="0" max="1.5" step="0.05"></label>
+    <label class="field">Sensor noise <span class="v" id="v-noise"></span><input type="range" id="s-noise" min="0" max="4" step="0.1"></label>
+    <label class="field">Gyro bias <span class="v" id="v-bias"></span><input type="range" id="s-bias" min="0" max="0.03" step="0.001"></label>
+    <label class="field check"><input type="checkbox" id="s-haptics"> haptic preview (P4: pulse on focus, enter, exit, refusal)</label>
+    <label class="field check"><input type="checkbox" id="s-auto"> scripted operator drives the hand</label>
+    <label class="field wide">The letter (saved note) <textarea id="s-note" rows="2" maxlength="95" placeholder="lowercase words; empty uses the built-in letter"></textarea></label>
+  </div><p class="note">Pace, inversions and the note are the firmware's own settings (USB <code>reader pace</code>, <code>reader invert-…</code>, the saved note); changing the note reboots the device. Realism changes only the simulated hand and sensors.</p></section>
+  <section data-panel="trace" hidden>
+    <div class="buttons"><button id="rec" aria-pressed="false">● Record</button><button id="save">Download JSONL</button><button id="load">Replay a capture…</button><input type="file" id="file" accept=".jsonl,.json,.txt" hidden></div>
+    <p class="note" id="trace-status">Recordings use the firmware's telemetry schema (protocol/telemetry.md), so they run through <code>tools/replay.py</code>; a capture from the device (<code>tools/capture.py</code>) replays here through the same core, and its recorded reader state is checked against the simulated one.</p>
+  </section>
+</div>
+</main>
+<script type="module" src="{{app}}"></script></body></html>

@@ -4,7 +4,8 @@
  * of, how it covers its tops, how it opens its faces. What's drawn follows from those (buildings.ts, facade.ts,
  * roof.ts), never what's built or how a way goes.
  *
- * - **The middle sea**: dressed stone; pitched roofs of terracotta (hipped, gabled, a shed against what's taller);
+ * - **The middle sea**: dressed stone, its houses rendered and washed each in a colour of its own; pitched roofs of
+ *   terracotta (hipped, gabled, a shed against what's taller);
  *   round arches; shutters folded back, an awning now and then.
  * - **The plateau** (after the Persian courtyard houses): stone; flat tops with a parapet, a dome now and then on a
  *   tower; pointed arches, four-centred over wider spans; tall windows in panes, in teal, oxblood or turquoise, about
@@ -46,6 +47,9 @@ export interface Grammar {
   /** as the ladder draws it (realise.ts): what a pitched roof's covered with (else as its roof says: terracotta, slate,
    * grey tile); openings and spans under flat timber lintels, before the arch; a portal faced in tile, or in stone */
   cover?: 'tile' | 'slate' | 'grey' | 'thatch'; lintels?: boolean; mosaic?: boolean;
+  /** a building's walls rendered and washed, each building in one of a few colours of its own (the middle sea's: ochre,
+   * peach, rose, pale blue, straw); its other stone (walls, terraces, piers) dressed as its wall says */
+  wash?: boolean;
 }
 
 export type RegionMode = 'land' | 'mixed' | GrammarId;
@@ -118,7 +122,7 @@ export function archStations(f: ArchFamily, hw: number, n: number): number[] {
   return out;
 }
 export const GRAMMARS: Record<GrammarId, Grammar> = {
-  mediterranean: { id: 'mediterranean', wall: 'ashlar', roof: 'tile', arch: ROUND, span: () => ROUND, windows: ['arched', 'square', 'slit'], doorHead: 'arched', shutters: true, panes: null, stone: 'mixed', facade: null },
+  mediterranean: { id: 'mediterranean', wall: 'ashlar', roof: 'tile', arch: ROUND, span: () => ROUND, windows: ['arched', 'square', 'slit'], doorHead: 'arched', shutters: true, panes: null, stone: 'mixed', facade: null, wash: true },
   persian: { id: 'persian', wall: 'ashlar', roof: 'flat', arch: POINTED, span: (n) => (n >= 2 ? FOUR : POINTED), windows: ['square', 'arched', 'arched', 'arched'], doorHead: 'arched', shutters: false, panes: { paints: [0, 1, 2], fine: false, lit: 0.55 }, stone: 'mixed', facade: 'court' },
   timber: { id: 'timber', wall: 'frame', roof: 'steep', arch: ROUND, span: () => ROUND, windows: ['square'], doorHead: 'square', shutters: false, panes: { paints: [3, 4, 1], fine: false, lit: 0.45 }, stone: 'brick', facade: 'street' },
   eaves: { id: 'eaves', wall: 'plaster', roof: 'eave', arch: ROUND, span: () => ROUND, windows: ['square'], doorHead: 'square', shutters: false, panes: { paints: [5, 5, 6], fine: true, lit: 0.65 }, stone: 'none', facade: 'veranda' },

@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="en" data-exp="splats"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#1c1d1f"><meta name="assets" content="{{assets}}"><title>Splats</title>
+<style>
+:root{--bg:#1c1d1f;--card:rgba(30,31,34,.86);--ink:#ecebe6;--muted:#9a9c98;--edge:#3a3c40;--accent:#f2a65a;font-family:ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:var(--ink);background:var(--bg);color-scheme:dark}
+*{box-sizing:border-box}html,body{height:100%;margin:0;background:var(--bg);overscroll-behavior:none;-webkit-text-size-adjust:100%}
+button,input{font:inherit;color:inherit}
+button,.file{border:1px solid var(--edge);background:transparent;border-radius:16px;min-height:32px;padding:0 12px;font-size:13px;cursor:pointer;-webkit-tap-highlight-color:transparent;display:inline-flex;align-items:center;white-space:nowrap}
+button[aria-pressed=true]{background:var(--ink);color:var(--bg);border-color:var(--ink)}
+button:focus-visible,.file:focus-within{outline:2px solid var(--accent);outline-offset:2px}
+#view{position:fixed;inset:0;width:100%;height:100%;touch-action:none;display:block}
+header{position:fixed;top:0;left:0;right:0;display:flex;align-items:baseline;justify-content:space-between;gap:10px;padding:max(10px,env(safe-area-inset-top)) 16px 8px;pointer-events:none;background:linear-gradient(var(--bg),transparent)}
+header strong{font:600 17px/1.2 ui-sans-serif,system-ui,sans-serif;letter-spacing:-.02em}header small{font:10px ui-monospace,monospace;letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}
+header a{pointer-events:auto;font:11px ui-monospace,monospace;color:var(--muted);text-decoration:none}
+#status{position:fixed;left:0;right:0;top:46%;text-align:center;font:13px ui-monospace,monospace;color:var(--muted);pointer-events:none}
+
+.row{display:flex;gap:6px;overflow-x:auto;scrollbar-width:none;align-items:center}.row::-webkit-scrollbar{display:none}
+.row .lab{font:10px ui-monospace,monospace;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);min-width:44px}
+.file input{display:none}
+#note{font-size:12px;color:var(--muted);line-height:1.4;min-height:1.4em}
+#stats{font:11px ui-monospace,monospace;color:var(--muted);font-variant-numeric:tabular-nums}
+.sliders{display:grid;grid-template-columns:1fr 1fr;gap:4px 14px;font-size:12px;color:var(--muted)}.sliders label{display:flex;flex-direction:column;gap:2px}.sliders .v{float:right;font-family:ui-monospace,monospace;color:var(--ink)}
+input[type=range]{width:100%;accent-color:var(--accent)}
+#mist-controls[hidden],#bench-controls[hidden]{display:none}
+#judge{position:fixed;inset:0;z-index:3;background:var(--bg);display:flex;flex-direction:column;gap:8px;padding:12px 12px max(12px,env(safe-area-inset-bottom));overflow:auto}#judge[hidden]{display:none}#judge p{margin:0;font-size:13px}#judge{overflow:hidden}#judge .pair{display:flex;gap:8px;flex:1 1 0;min-height:0}#judge .pair img{flex:1 1 0;min-width:0;min-height:0;width:0;height:auto;max-height:100%}@media (orientation:portrait){#judge .pair{flex-direction:column}#judge .pair img{width:100%;height:0}}#judge .row{flex:none;flex-wrap:wrap}#judge img{object-fit:contain;border:1px solid var(--edge);border-radius:8px;background:#efe7d8;cursor:pointer}#judge img:active{outline:2px solid var(--accent)}
+#handles{position:fixed;inset:0;pointer-events:none;z-index:2}#handles div{position:absolute;width:30px;height:30px;margin:-15px 0 0 -15px;border-radius:50%;border:2px solid #a8482a;background:rgba(168,72,42,.15);pointer-events:auto;touch-action:none;cursor:grab}#handles div::after{content:'';position:absolute;left:11px;top:11px;width:4px;height:4px;border-radius:50%;background:#a8482a}.note{font-size:11px;color:var(--muted)}
+#stone-controls[hidden]{display:none}.sliders.one{grid-template-columns:1fr}
+.paper{--bg:#efe7d8;--card:rgba(246,241,231,.9);--ink:#2a2420;--muted:#7a7166;--edge:#d8cfbf;color-scheme:light}
+.preview header,.preview #panel,.clean header,.clean #panel{display:none!important}
+
+/* (the panel is a drawer (client/drawer): closed to its grip and a line; focus, the scene and its stats; full, the
+   sections, one open at a time. Placed, sized and styled there; these are the rows inside it) */
+#panel .top{display:flex;flex-direction:column;gap:4px;flex:none}
+#panel .status{justify-content:space-between}#panel .status #stats{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}#panel .status button{min-height:28px;font-size:12px}
+#panel .sections{display:flex;flex-direction:column;gap:2px}
+
+
+</style></head><body>
+<canvas id="view" aria-label="The splat scene. Drag to turn it, pinch to come closer, two fingers to move, double tap to frame it again."></canvas>
+<header><div><strong>Splats</strong> <small>gaussian splatting, from scratch</small></div><a href="/splats/readme">how it works</a></header>
+<div id="status">starting</div>
+<div id="handles"></div>
+<div id="judge" hidden>
+  <p>Which draws the scene better? Same view, same number of marks. Tap the better one.</p>
+  <div class="pair"><img id="j-a" alt="first drawing"><img id="j-b" alt="second drawing"></div>
+  <div class="row"><button id="j-same">about the same</button><button id="j-skip">skip</button><button id="j-export">export</button><button id="j-close">done</button><span id="j-count" class="note"></span></div>
+</div>
+<div id="panel">
+  <button id="grip"><span class="sum" id="psum"></span></button>
+  <div class="top">
+    <div class="row" id="scenes"><span class="lab">scene</span><label class="file" id="file-label">your file…<input type="file" id="file" accept=".splat,.ply"></label></div>
+    <div class="row status"><span id="stats"></span><button id="home">frame it</button></div>
+  </div>
+  <div class="sections" data-tier="2">
+    <details id="stone-controls" class="sec dw-sec" data-key="drawing" hidden>
+      <summary><span class="t">drawing</span><span class="s" id="sum-drawing"></span></summary>
+      <div class="body dw-body">
+        <div class="sliders one" data-focus><label>detail <span class="v" id="detail-v"></span><input type="range" id="detail" min="0" max="1" step="0.01"></label></div>
+        <div class="row" id="looks"><span class="lab">look</span></div>
+        <div class="row" id="views"><span class="lab">view</span></div>
+        <div class="row" id="states"><span class="lab">state</span></div>
+        <details class="sub dw-sub" id="composition" data-key="composition">
+          <summary><span class="t">composition</span><span class="s">relate · policy</span></summary>
+          <div class="body dw-body">
+            <div class="row" id="relations"><span class="lab">relate</span></div>
+            <div class="row" id="policies"><span class="lab">policy</span></div>
+            <div class="row" id="teachers" hidden><span class="lab">teacher</span></div>
+          </div>
+        </details>
+        <details class="sub dw-sub" data-key="hand">
+          <summary><span class="t">hand</span><span class="s">thinning · tools</span></summary>
+          <div class="body dw-body">
+            <div class="row" id="thins"><span class="lab">thin</span></div>
+            <div class="row" id="tools"><span class="lab">hand</span></div>
+          </div>
+        </details>
+      </div>
+    </details>
+    <details id="bench-controls" class="sec dw-sec" data-key="bench" hidden>
+      <summary><span class="t">stroke</span><span class="s" id="sum-bench"></span></summary>
+      <div class="body dw-body">
+        <div class="row" id="b-items"><span class="lab">stroke</span></div>
+        <div class="row" id="b-materials"><span class="lab">material</span></div>
+        <div class="row" id="b-pressures"><span class="lab">pressure</span></div>
+        <div class="sliders" data-focus><label>weight <span class="v" id="b-weight-v"></span><input type="range" id="b-weight" min="0.4" max="2.2" step="0.05"></label><label>density <span class="v" id="b-density-v"></span><input type="range" id="b-density" min="0.5" max="2" step="0.5"></label></div>
+        <div class="sliders one" data-focus><label>wash reach <span class="v" id="b-wash-v"></span><input type="range" id="b-wash" min="0.4" max="2" step="0.05"></label></div>
+        <div class="row"><button id="b-undo">undo</button><button id="b-none">deselect</button></div>
+        <div id="b-note" class="note">tap a stroke to select it; drag its points to bend it</div>
+      </div>
+    </details>
+    <details id="marks-controls" class="sec dw-sec" data-key="marks" hidden>
+      <summary><span class="t">marks</span><span class="s" id="sum-marks"></span></summary>
+      <div class="body dw-body">
+        <div class="row" id="m-ways"><span class="lab">drawn</span></div>
+        <div id="m-note" class="note"></div>
+      </div>
+    </details>
+    <details id="walk-controls" class="sec dw-sec" data-key="walk" hidden>
+      <summary><span class="t">walk</span><span class="s" id="sum-walk"></span></summary>
+      <div class="body dw-body">
+        <div class="row" id="w-levels"><span class="lab">drawn as</span></div>
+        <div class="sliders one" data-focus><label>distance <span class="v" id="w-dist-v"></span><input type="range" id="w-dist" min="0.3" max="12" step="0.1"></label></div>
+        <div class="row" id="w-go"></div>
+        <div id="w-note" class="note"></div>
+      </div>
+    </details>
+    <details id="limb-controls" class="sec dw-sec" data-key="limb" hidden>
+      <summary><span class="t">limb</span><span class="s" id="sum-limb"></span></summary>
+      <div class="body dw-body">
+        <div class="row" id="l-ways"><span class="lab">laid as</span></div>
+        <div class="sliders one" data-focus><label>from <span class="v" id="l-dist-v"></span><input type="range" id="l-dist" min="0" max="1" step="0.005"></label></div>
+        <div class="sliders one"><label>bend its crown <span class="v" id="l-bend-v"></span><input type="range" id="l-bend" min="-0.8" max="0.8" step="0.02"></label></div>
+        <div class="row" id="l-go"></div>
+        <div id="l-note" class="note"></div>
+      </div>
+    </details>
+    <details id="room-controls" class="sec dw-sec" data-key="room" hidden>
+      <summary><span class="t">room</span><span class="s" id="sum-room"></span></summary>
+      <div class="body dw-body">
+        <div class="row" id="r-views"><span class="lab">stand in</span></div>
+        <div class="sliders one" data-focus><label>round the route <span class="v" id="r-s-v"></span><input type="range" id="r-s" min="0" max="1" step="0.002"></label></div>
+        <div class="row" id="r-modes"><span class="lab">drawn</span></div>
+        <div class="sliders one" data-focus><label>light <span class="v" id="r-light-v"></span><input type="range" id="r-light" min="-180" max="180" step="5" value="60"></label></div>
+        <div class="row" id="r-opts"></div>
+        <div id="r-note" class="note"></div>
+      </div>
+    </details>
+    <details id="mist-controls" class="sec dw-sec" data-key="mist" hidden>
+      <summary><span class="t">light</span><span class="s" id="sum-mist"></span></summary>
+      <div class="body dw-body">
+        <div class="row" id="lights"><span class="lab">light</span></div>
+        <div class="sliders" data-focus><label>sun round <span class="v" id="sunaz-v"></span><input type="range" id="sunaz" min="0" max="6.28" step="0.02"></label><label>sun height <span class="v" id="sunel-v"></span><input type="range" id="sunel" min="0.1" max="1.3" step="0.02"></label></div>
+        <div class="row" id="banks"><span class="lab">bank</span></div>
+        <div id="mist-note" class="note"></div>
+      </div>
+    </details>
+    <details class="sec dw-sec" data-key="display">
+      <summary><span class="t">display</span><span class="s" id="sum-display"></span></summary>
+      <div class="body dw-body">
+        <div class="row" id="modes"><span class="lab">see</span></div>
+        <div id="note"></div>
+        <div class="sliders" data-focus>
+          <label>splat size <span class="v" id="size-v"></span><input type="range" id="size" min="0.1" max="1.6" step="0.01"></label>
+          <label>resolution <span class="v" id="res-v"></span><input type="range" id="res" min="0.5" max="3" step="0.25"></label>
+        </div>
+        <div class="row"><button id="flip">turn over</button></div>
+      </div>
+    </details>
+  </div>
+</div>
+<script src="{{app}}"></script>
+</body></html>

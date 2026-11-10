@@ -44,7 +44,7 @@ export async function withWood(fn, { width = 390, height = 844 } = {}) {
   const exp = process.env.EXPERIMENT ?? 'mistwood';
   const ready = process.env.READY ?? '__mistwood';
   const html = readFileSync(join(CELL, `static/${exp}.html`), 'utf8').replace('{{app}}', '/app.js').replace(/\{\{assets\}\}/g, '/assets/');
-  const TYPES = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp', svg: 'image/svg+xml' };
+  const TYPES = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp', svg: 'image/svg+xml', css: 'text/css', woff2: 'font/woff2', ttf: 'font/ttf', pdf: 'application/pdf' };
   const srv = http.createServer((req, res) => {
     const u = new URL(req.url, 'http://x');
     if (u.pathname === '/app.js') {
@@ -124,13 +124,13 @@ export async function withWood(fn, { width = 390, height = 844 } = {}) {
       return path;
     },
     /** Images side by side (each `height` px tall) in one PNG — for looking, or for a reference beside a render. */
-    async montage(paths, name, { height: h = 640, labels = [] } = {}) {
+    async montage(paths, name, { height: h = 640, labels = [], columns = 0 } = {}) {
       const page = await browser.newPage({ viewport: { width: 400, height: h + 24 } });
       const imgs = paths.map((p, i) => `<figure><img src="data:image/${p.endsWith('.jpg') || p.endsWith('.jpeg') ? 'jpeg' : 'png'};base64,${readFileSync(p).toString('base64')}"><figcaption>${labels[i] ?? ''}</figcaption></figure>`).join('');
-      await page.setContent(`<style>body{margin:0;display:flex;background:#222;font:12px monospace;color:#ccc}figure{margin:0}img{height:${h}px;display:block}figcaption{padding:4px}</style>${imgs}`);
+      await page.setContent(`<style>body{margin:0;display:${columns ? 'grid' : 'flex'};${columns ? `grid-template-columns:repeat(${columns},max-content);` : ''}background:#222;font:12px monospace;color:#ccc}figure{margin:0}img{height:${h}px;display:block}figcaption{padding:4px}</style>${imgs}`);
       await page.waitForTimeout(300);
-      const width = await page.evaluate(() => document.body.scrollWidth);
-      await page.setViewportSize({ width, height: h + 24 });
+      const width = await page.evaluate(() => document.body.scrollWidth), height = await page.evaluate(() => document.body.scrollHeight);
+      await page.setViewportSize({ width, height: Math.max(h + 24, height) });
       const path = join(OUT, `${name}.png`);
       // (software rendering can take a while over a heavy frame)
       await page.screenshot({ path, timeout: 300000 });

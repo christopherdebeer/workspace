@@ -327,6 +327,12 @@ void main() {
     gT *= 1. - uToward; gTL *= 1. - uToward;
   }
   gDetail = smoothstep(.5, .85, gT);
+  // (the sea (its how, 10): broken up into the page where the drawing's reach runs low, ragged and fine, as a dry brush
+  // leaves a wash, so it never runs on as a sheet to the drawing's edge)
+  if (mat == 2 && vU > 9.5 && vU < 10.5 && onPaper && !sel) {
+    float grain = fbm(vec3(vPos.xz * 1.3, 11.)) * .7 + hash(vec3(floor(vPos.xz * 18.), 4.)) * .3;
+    if (grain > gT * 1.5 - .1) discard;
+  }
   // (a crown cut through more as it's drawn, so its limbs show and it reads as drawn canopy)
   if (vMat < 511.5 && leafCut(vPos, vMat, leafEdge(n) + .32 * (1. - smoothstep(.1, .7, gT)))) discard;
   if (!fur && leftOut(vPos, vU)) discard;
@@ -525,7 +531,15 @@ void main() {
     // apart, a sill, a plate and a rail, braces in every other panel, lime between; or whitewash between dark posts at
     // the cells' edges and a beam at each floor)
     // (rubble: each stone its own grey-brown, a little proud, the joints deep and dark between them)
-    if (mat == 0 && vU > 7.9 && vU < 8.9 && abs(n.y) < .5) {
+    // (render washed in a colour of the building's own (the mesh's how, 9 … 13): ochre, peach, rose, pale blue, straw;
+    // a little uneven, streaked paler where rain's run down it)
+    if (mat == 0 && vU > 8.9 && vU < 13.9 && abs(n.y) < .5) {
+      vec3 W[5] = vec3[5](vec3(.88, .72, .48), vec3(.91, .72, .60), vec3(.86, .64, .60), vec3(.68, .74, .80), vec3(.92, .84, .62));
+      vec3 T = normalize(vec3(-n.z, 0., n.x) + 1e-5);
+      float u = dot(vPos, T), streak = smoothstep(.55, .9, noise(vec3(u * 6., vPos.y * .7, 7.)));
+      base = W[int(clamp(vU - 9., 0., 4.))] * (.93 + .09 * noise(vPos * 3.) + .05 * streak);
+    }
+    else if (mat == 0 && vU > 7.9 && vU < 8.9 && abs(n.y) < .5) {
       vec3 T = normalize(vec3(-n.z, 0., n.x) + 1e-5);
       vec2 id, r = rubble(vec2(dot(vPos, T), vPos.y), id);
       float kR = keep(14.), joint = 1. - smoothstep(.04, .12, r.y);

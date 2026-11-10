@@ -1,0 +1,75 @@
+/*
+ * Claude Hand 1.8, its stylesheet: what the hand means by a marked word, as far as type can say it.
+ *
+ * Keep it beside the fonts (claude-hand-1.8.woff2, claude-hand-pressed-1.8.woff2), put class="claude-hand" on what
+ * should be in the hand, and mark what you mean: <em> <strong> <del> <ins> <mark> <code> <small> <q>, and two the hand
+ * has that HTML doesn't, <unsure> and <care> (or class="unsure", class="care").
+ *
+ * The hand (parc.land lab, autograph, hands/v12.ts) writes each of these its own way; this is each as type can do it,
+ * from session 12. Some it does as the hand does: the pressed word is the font's Pressed face, the letters written at
+ * the pace the hand writes what's strong; the underline and the strike are where the font says the hand puts them.
+ * Some it draws in the hand's manner rather than with it (the circle, the caret). And what the hand does in time (a
+ * pause before a word it's unsure of, the slowing of care) type has no time for, so it barely shows.
+ *
+ * Part of the Font Software of Claude Hand: SIL Open Font License 1.1, Reserved Font Name "Claude Hand" (OFL.txt).
+ * A changed stylesheet is a new version, as a changed font is: 1.8 is 1.4 for font 1.8 (session 18: the hand spaced, an s
+ * inside a word kerned nearer the letter before it), and asks for the font's kerning, which most browsers give anyway.
+ * When it was made, only models had read this hand blind; no person yet.
+ */
+@font-face { font-family: "Claude Hand"; src: url(claude-hand-1.8.woff2) format("woff2"); font-weight: 400; font-display: swap; }
+@font-face { font-family: "Claude Hand"; src: url(claude-hand-pressed-1.8.woff2) format("woff2"); font-weight: 700; font-display: swap; }
+
+/* (the hand has no italic and no fake bold: nothing's slanted or smeared that the hand didn't write) */
+/* (and its kerning: an s inside a word sits nearer the letter before it, as the hand writes it; starting one, it doesn't) */
+.claude-hand { font-family: "Claude Hand", cursive; font-synthesis: none; font-kerning: normal; line-height: 1.5; }
+
+/* stress: this word, not another. Underlined once, where the hand underlines (the font says where) */
+.claude-hand em, .claude-hand i {
+  font-style: normal; text-decoration: underline; text-decoration-thickness: from-font; text-underline-offset: auto;
+  text-decoration-skip-ink: none;
+}
+/* strong: this matters. Pressed, the pen slowed so the ink comes heavier by itself: the Pressed face */
+.claude-hand strong, .claude-hand b { font-weight: 700; }
+/* struck: I was wrong. Struck through, where the hand strikes, still readable */
+.claude-hand del, .claude-hand s {
+  text-decoration: line-through; text-decoration-thickness: from-font; text-decoration-skip-ink: none;
+}
+/* exactly this: printed, letter by letter (no joins), and more upright (the hand's slant cut to three tenths) */
+.claude-hand code, .claude-hand kbd, .claude-hand samp {
+  font: inherit; font-feature-settings: "calt" 0; display: inline-block; transform: skewX(8.6deg); transform-origin: 0 72%;
+}
+/* by the way: smaller */
+.claude-hand small { font-size: .82em; }
+/* not sure: a little smaller. (In the hand it's mostly a pause before it and a looser line, in time: type has none) */
+.claude-hand unsure, .claude-hand .unsure { font-size: .95em; }
+/* chosen with care: more upright (the slant halved). (And slower and more even, in time; and a little more room,
+   which type can't give a joined hand: spacing its letters breaks their joins) */
+.claude-hand care, .claude-hand .care { display: inline-block; transform: skewX(6.1deg); transform-origin: 0 72%; }
+/* someone else's words: in the hand's quotation marks */
+.claude-hand q { quotes: "\201C" "\201D" "\2018" "\2019"; }
+
+/* look at this: circled. Loosely, with room inside (drawn tight round one letter, a circle reads as ©), not quite
+   round, and a little past where it began */
+.claude-hand mark { background: none; color: inherit; position: relative; margin: 0 .16em; }
+.claude-hand mark::after, .claude-hand mark::before {
+  content: ""; position: absolute; left: 50%; width: calc(100% + .36em); min-width: .56em; top: .12em; bottom: .24em;
+  border: .042em solid currentColor; border-width: .036em .044em .05em .04em;
+  border-radius: 52% 48% 55% 45% / 48% 54% 46% 52%; transform: translateX(-50%) rotate(-3deg); pointer-events: none;
+}
+/* (the pen going on past where it began: a second short arc at the top, just off the first) */
+.claude-hand mark::before {
+  border-width: .034em 0 0 0; border-radius: 50%; transform: translateX(-50%) rotate(-12deg) translate(.03em, -.05em);
+  clip-path: inset(0 40% 50% 8%);
+}
+
+/* I'd add this: written over the line, smaller, after the line was done, centred on a caret in the gap */
+.claude-hand ins {
+  text-decoration: none; display: inline-flex; justify-content: center; width: 0; white-space: nowrap;
+  font-size: .62em; line-height: 1; position: relative; top: -1.15em;
+}
+.claude-hand ins::before {
+  content: ""; position: absolute; left: -.17em; width: .34em; height: .5em; top: 1.6em;
+  background: currentColor; pointer-events: none;
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 34 50'%3E%3Cpath d='M3 47 Q12 22 17 4 Q23 24 31 47' fill='none' stroke='%23000' stroke-width='5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center / 100% 100% no-repeat;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 34 50'%3E%3Cpath d='M3 47 Q12 22 17 4 Q23 24 31 47' fill='none' stroke='%23000' stroke-width='5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center / 100% 100% no-repeat;
+}

@@ -1,0 +1,634 @@
+/**
+ * Drawing splats with WebGL2 (it runs on every phone; WebGPU is where this goes next).
+ *
+ * Every splat is one quad, drawn instanced: 4 corners × n splats, in the order the sort gives (an instanced integer
+ * attribute: the splat's index). Its data comes from a texture rather than vertex buffers, so re-sorting means
+ * uploading only the order (4 bytes a splat), never the splats.
+ *
+ * - **The data texture** (RGBA32UI, 3 texels a splat): the centre's three floats as their bits and the colour packed
+ *   in one uint; then the 3D covariance's six numbers as three pairs of half floats, and one more uint for a drawing's
+ *   marks (stone.ts, brush.ts): its rank (8 bits), its kind (4), and the normal of the surface it lies on (16, octahedral); and a
+ *   third texel: where it is attached, an edge mark's second normal, its feature id and its element (see `load`).
+ * - **The vertex shader** does the splat maths, per splat (the same for its 4 corners): take the centre into the
+ *   camera; take the 3D covariance to a 2D one on the screen (Σ' = J W Σ Wᵀ Jᵀ: W the camera's rotation, J the
+ *   perspective's local stretch at that point, its Jacobian); add a little (0.3 px²) so nothing is thinner than a pixel;
+ *   find the 2D ellipse's axes (the eigenvectors of Σ', their lengths the square roots of its eigenvalues); and put
+ *   the quad's corners out along them to 3 standard deviations. For a drawing it also decides how much of each mark is
+ *   there: its rank against the detail asked (eased over a band, so marks fade rather than pop), or with `thin` a
+ *   hash of its index against the same share kept (so the two ways of simplifying can be compared at the same number
+ *   of marks); detail brought back round the points the brush touched; and for a contour mark, how near edge-on its
+ *   surface is from here.
+ * - **The fragment shader** is a Gaussian: how far the pixel is from the middle in standard deviations, r, and its
+ *   opacity the splat's times exp(-r²/2). Blended premultiplied, over what's drawn already (back to front).
+ * - **The occluder** (a drawing's own shape, shrunk a little) is drawn first into the depth buffer only: the splats are
+ *   tested against it (not written), so marks on the far side of a face left blank are still hidden by it.
+ *
+ * `mode` shows the parts: 0 the picture; 1 each splat's 1σ and 2σ contours (its ellipse); 2 each one's footprint, solid
+ * (the quad's reach, 3σ); 3 the centres only (the point cloud the splats grew from).
+ */
+const VS = () => `#version 300 es
+precision highp float; precision highp int;
+uniform highp usampler2D u_data;
+uniform mat4 u_view, u_proj;
+uniform vec2 u_focal, u_viewport;
+uniform vec3 u_eye;
+uniform float u_size, u_detail, u_share;
+uniform int u_mode, u_thin, u_only;
+uniform highp sampler2D u_feat;
+// (a drawing policy's controls, by group: the rank a group's marks must reach to show, and their strength; off when
+// u_ctlOn is 0)
+uniform highp sampler2D u_ctl;
+// (a fitted mark's view terms: twelve floats a splat (nine used), laid out as the data is, three texels a splat)
+uniform highp sampler2D u_coef;
+uniform float u_time;
+uniform vec3 u_mirror;
+uniform vec2 u_near;
+uniform int u_ctlOn;
+// (Mist: the coarse density grid, the sun, which lighting, and the tiny network's numbers)
+uniform highp sampler3D u_grid;
+uniform vec3 u_sun;
+uniform int u_light, u_diff;
+uniform vec4 u_net[${Math.ceil(NET_SIZE / 4)}];
+uniform vec2 u_ana;
+// (the halo: the occluder's depth and object at each pixel, the ring's radius in pixels (0 off), the near and far planes)
+uniform highp sampler2D u_hdep, u_hobj;
+uniform float u_halo;
+uniform vec2 u_nf;
+in vec2 a_corner;
+in uint a_index;
+out vec4 v_color;
+out vec2 v_r;
+vec3 octDecode(vec2 e) {
+  vec3 n = vec3(e, 1.0 - abs(e.x) - abs(e.y));
+  if (n.z < 0.0) n.xy = (1.0 - abs(n.yx)) * vec2(n.x >= 0.0 ? 1.0 : -1.0, n.y >= 0.0 ? 1.0 : -1.0);
+  return normalize(n);
+}
+float netAt(int i) { return u_net[i >> 2][i & 3]; }
+// (one level of the density pyramid at a point: trilinear on exact texels, zero outside the box, as mist.ts's sampleGrid)
+float gridAt(vec3 p, int L) {
+  ivec3 n = textureSize(u_grid, L);
+  vec3 f = (p - vec3(${BOX.x0.toFixed(3)}, ${BOX.y0.toFixed(3)}, ${BOX.z0.toFixed(3)})) / vec3(${(BOX.x1 - BOX.x0).toFixed(3)}, ${(BOX.y1 - BOX.y0).toFixed(3)}, ${(BOX.z1 - BOX.z0).toFixed(3)}) * vec3(n) - 0.5;
+  ivec3 i0 = ivec3(floor(f)); vec3 t = f - floor(f); float r = 0.0;
+  for (int c = 0; c < 8; c++) {
+    ivec3 d = ivec3(c & 1, (c >> 1) & 1, c >> 2), q = i0 + d;
+    if (any(lessThan(q, ivec3(0))) || any(greaterThanEqual(q, n))) continue;
+    vec3 w = mix(1.0 - t, t, vec3(d));
+    r += texelFetch(u_grid, q, L).r * w.x * w.y * w.z;
+  }
+  return r;
+}
+float hg(float c, float g) { return (1.0 - g * g) / (12.566 * pow(1.0 + g * g - 2.0 * g * c, 1.5)); }
+float hash(uint x) { x = x * 747796405u + 2891336453u; x = ((x >> ((x >> 28u) + 4u)) ^ x) * 277803737u; x = (x >> 22u) ^ x; return float(x) / 4294967295.0; }
+void main() {
+  ivec2 t = ivec2(int(a_index & 1023u) * 3, int(a_index >> 10));
+  uvec4 d0 = texelFetch(u_data, t, 0), d1 = texelFetch(u_data, t + ivec2(1, 0), 0), d2 = texelFetch(u_data, t + ivec2(2, 0), 0);
+  vec3 p = uintBitsToFloat(d0.xyz);
+  // (a fitted mark that sways (marks.ts, its sway): moved by its own share of it, in a slow wave across the scene, so
+  // the deposits of one strand move together and its far end most)
+  if (u_time > 0.0 && ((d1.w >> 8) & 15u) == 12u) { float sw = texelFetch(u_coef, t + ivec2(2, 0), 0).w; if (sw != 0.0) p += vec3(sin(u_time * 1.3 + p.x * 2.1 + p.z * 1.7), 0.0, cos(u_time * 1.1 + p.x * 1.3 - p.z * 2.3)) * sw; }
+  // (the still water's pass: everything above the water drawn again turned over in it, fainter the higher it stands)
+  float mirror = 1.0;
+  // (u_mirror.z: 1 the mirror's pass; 2 the scene's own pass where there is water: what's under it isn't drawn)
+  if (u_mirror.z > 1.5) { if (p.y < u_mirror.x - 0.02) return; }
+  else if (u_mirror.z > 0.5) { if (p.y < u_mirror.x) return; mirror = u_mirror.y * exp(-(p.y - u_mirror.x) / 0.9); p.y = 2.0 * u_mirror.x - p.y; }
+  vec4 cam = u_view * vec4(p, 1.0);
+  vec4 clip = u_proj * cam;
+  float bound = 1.2 * clip.w;
+  gl_Position = vec4(0.0, 0.0, 2.0, 1.0);
+  // (behind the camera, or well off the screen: no quad)
+  if (-cam.z < 0.02 || clip.x < -bound || clip.x > bound || clip.y < -bound || clip.y > bound) return;
+  v_color = vec4(float(d0.w & 255u), float((d0.w >> 8) & 255u), float((d0.w >> 16) & 255u), float(d0.w >> 24)) / 255.0;
+  v_color.a *= mirror;
+  // (a drawing's mark: how much of it the detail keeps)
+  float rank = float(d1.w & 255u) / 255.0;
+  // (its kind; where it's attached (0 none, 1 a surface, 2 an edge, 3 free); its feature, any 32-bit id, its development
+  // looked up in the feature texture (1024 a row))
+  uint kind = (d1.w >> 8) & 15u, support = d2.x & 3u, feature = d2.y;
+  if (u_only >= 0 && int(kind) != u_only) return;
+  vec3 sn = octDecode(vec2(float((d1.w >> 16) & 255u), float(d1.w >> 24)) / 127.5 - 1.0);
+  if (u_mirror.z > 0.5 && u_mirror.z < 1.5) sn.y = -sn.y;
+  // (a feature the brush has developed: its own marks brought back by their ranks, as far as it's been brushed)
+  // (a feature with its top bit set is a gate: an alternative description shown only as far as the scene's value for it
+  // (set each frame from the view); otherwise it's developed by the brush, brought back by rank as far as its value)
+  float detail = u_detail, gate = 1.0;
+  bool gated = (feature & 0x80000000u) != 0u; uint fid = feature & 0x7fffffffu;
+  if (fid > 0u && kind != 11u) { ivec2 fs = textureSize(u_feat, 0); int fi = int(fid); float fv = fi < fs.x * fs.y ? texelFetch(u_feat, ivec2(fi % fs.x, fi / fs.x), 0).r : 0.0; if (gated) gate = fv; else detail = max(detail, fv); }
+  // (kept by rank against the detail asked, or thinned evenly to the same share; and round what the brush touched, all of it
+  // brought back by rank)
+  float keep = u_thin == 1 ? smoothstep(1.0 - u_share - 0.03, 1.0 - u_share, hash(a_index) * 0.999) : smoothstep(1.0 - u_detail - 0.04, 1.0 - u_detail, rank);
+  if (detail > u_detail + 0.001) keep = max(keep, smoothstep(1.0 - detail - 0.04, 1.0 - detail, rank));
+  keep *= gate;
+  // (a policy's treatment of this mark's group: how much of the group is kept (heart first, by rank) and how strong)
+  // (its third number is on and how wide: the group's marks scaled by it (1 as made; a taught stroke may be heavier);
+  // its fourth, how much of an edge shows where it isn't on the outline (0: an outline only, as the brush has it))
+  uint gi = d2.w >> 8;
+  float gscale = 1.0, ginner = 0.0;
+  if (u_ctlOn == 1 && gi > 0u) {
+    ivec2 cs = textureSize(u_ctl, 0); int ci = int(gi);
+    if (ci < cs.x * cs.y) { vec4 c = texelFetch(u_ctl, ivec2(ci % cs.x, ci / cs.x), 0); if (c.b > 0.01) { keep = smoothstep(c.r - 0.03, c.r, rank) * gate; v_color.a *= c.g; gscale = c.b; ginner = c.a; } }
+  }
+  // (a contour mark: there only where its surface is near edge-on from here, eased over a range of angles)
+  if (kind == 4u) {
+    // (its second face's normal rides in its own place (its colour is its own): drawn where the two faces are turned
+    // opposite ways from the eye, eased in as the turning face passes edge-on)
+    vec3 v = normalize(u_eye - p), n2 = octDecode(vec2(float((d2.x >> 8) & 255u), float((d2.x >> 16) & 255u)) / 127.5 - 1.0);
+    float s1 = dot(sn, v), s2 = dot(n2, v);
+    // (where neither face is turned away it's an interior edge: shown as far as its group says (a taught drawing may
+    // ink it); with both turned away, never)
+    float outline = s1 * s2 < 0.0 ? smoothstep(0.0, 0.12, min(abs(s1), abs(s2))) : 0.0;
+    keep *= max(s1, s2) > 0.0 ? outline + (1.0 - outline) * ginner : 0.0;
+  }
+  // (a fitted field (field.ts): the disc's ink opacity from the direction it's seen from, nine low-order terms of it,
+  // packed into its feature and element bits)
+  if (kind == 11u) {
+    vec3 d = normalize(u_eye - p);
+    uint e = d2.z;
+    float c0 = float(feature & 255u), c1 = float((feature >> 8) & 255u), c2 = float((feature >> 16) & 255u), c3 = float(feature >> 24);
+    float z = (c0 / 255.0 * 24.0 - 12.0) + (c1 / 255.0 * 24.0 - 12.0) * d.x + (c2 / 255.0 * 24.0 - 12.0) * d.y + (c3 / 255.0 * 24.0 - 12.0) * d.z;
+    z += (float(e & 63u) / 63.0 * 24.0 - 12.0) * d.x * d.y + (float((e >> 6) & 63u) / 63.0 * 24.0 - 12.0) * d.y * d.z + (float((e >> 12) & 63u) / 63.0 * 24.0 - 12.0) * d.x * d.z;
+    z += (float((e >> 18) & 63u) / 63.0 * 24.0 - 12.0) * (d.x * d.x - d.y * d.y) + (float((e >> 24) & 63u) / 63.0 * 24.0 - 12.0) * (3.0 * d.z * d.z - 1.0);
+    v_color.a *= 1.0 / (1.0 + exp(-z));
+  }
+  // (a fitted mark as it's fitted now (kind 12): its ink from the direction it's seen from, its nine terms unquantised in
+  // a texture of their own, so its feature and element stay its identity; and, below, its footprint energy-conserving)
+  if (kind == 12u) {
+    vec3 d = normalize(u_eye - p);
+    vec4 k0 = texelFetch(u_coef, t, 0), k1 = texelFetch(u_coef, t + ivec2(1, 0), 0), k2 = texelFetch(u_coef, t + ivec2(2, 0), 0);
+    float z = k0.x + k0.y * d.x + k0.z * d.y + k0.w * d.z + k1.x * d.x * d.y + k1.y * d.y * d.z + k1.z * d.x * d.z + k1.w * (d.x * d.x - d.y * d.y) + k2.x * (3.0 * d.z * d.z - 1.0);
+    v_color.a *= 1.0 / (1.0 + exp(-z));
+    // (a mark that hands over to another as it's approached (marks.ts, its lod): shown by how large a scene unit looks
+    // where it is, in screen heights, between two thresholds (log2); the first above the second for one that fades as
+    // it nears, below it for one that comes in. Two marks given the same two thresholds, swapped, are complementary)
+    if (k2.y != k2.z) v_color.a *= clamp((log2(u_focal.y / (max(0.02, -cam.z) * u_viewport.y)) - k2.y) / (k2.z - k2.y), 0.0, 1.0);
+    // (and right at the eye it's let go, in a scene that's walked through: a deposit a hand's width off would fill
+    // the screen as fog)
+    if (u_near.y > 0.0) v_color.a *= smoothstep(u_near.x, u_near.y, -cam.z);
+    if (v_color.a < 0.004) return;
+  }
+  // (a captured scene in ink (ink.ts): a disc's ink copy shown only from where the disc is near edge-on, so the discs on
+  // the outline from here draw it; its paper body stepping aside at the same angles, so it doesn't cover its own line)
+  if (kind == 9u || kind == 10u) {
+    float s = abs(dot(sn, normalize(u_eye - p))), e = 1.0 - smoothstep(0.06, 0.2, s);
+    keep *= kind == 9u ? e : 1.0 - 0.9 * e;
+  }
+  // (a mist splat: its light by the chosen method: stored on it (the reference, or baked), the analytic formula, or the
+  // tiny network, both from the same cheap features of the coarse grid)
+  if (kind == 8u) {
+    float L = v_color.r * 3.0, refL = v_color.g * 3.0;
+    if (u_light > 0) {
+      vec3 view = normalize(u_eye - p);
+      // (Grassi's features: the mean density round it at six scales, toward the sun at the same six, the view–sun cosine)
+      float f[13];
+      for (int l = 0; l < 6; l++) f[l] = gridAt(p, l);
+      ${SUN_TAPS.map((d, L) => `f[${6 + L}] = gridAt(p + u_sun * ${d.toFixed(4)}, ${L});`).join(' ')}
+      f[12] = dot(view, u_sun);
+      if (u_light == 1) {
+        float tau = 0.0;
+        ${SUN_TAPS.map((d, L) => `tau += f[${6 + L}] * ${(d * 0.5).toFixed(4)};`).join(' ')}
+        L = u_ana.x * exp(-${SIGMA.toFixed(2)} * tau) * hg(f[12], 0.6) * 12.566 + u_ana.y * exp(-1.2 * f[3]);
+      } else {
+        // (the network: 13 → 16 → 16 → 2, squared ReLU, squared outputs (the sun's light and the sky's), summed; its
+        // numbers in order w1 b1 w2 b2 w3 b3 mean std)
+        float x[13], h1[16], h2[16];
+        for (int i = 0; i < 13; i++) x[i] = (f[i] - netAt(${NET_OFF.mean} + i)) / netAt(${NET_OFF.std} + i);
+        for (int j = 0; j < 16; j++) { float s = netAt(${NET_OFF.b1} + j); for (int i = 0; i < 13; i++) s += netAt(j * 13 + i) * x[i]; s = max(s, 0.0); h1[j] = s * s; }
+        for (int j = 0; j < 16; j++) { float s = netAt(${NET_OFF.b2} + j); for (int i = 0; i < 16; i++) s += netAt(${NET_OFF.w2} + j * 16 + i) * h1[i]; s = max(s, 0.0); h2[j] = s * s; }
+        L = 0.0;
+        for (int k = 0; k < 2; k++) { float o = netAt(${NET_OFF.b3} + k); for (int i = 0; i < 16; i++) o += netAt(${NET_OFF.w3} + k * 16 + i) * h2[i]; L += min(o * o, ${OUT_MAX.toFixed(1)}); }
+      }
+    }
+    // (shown linear, a little compressed at the top; or, in the error view, how far it is from the reference)
+    v_color.rgb = u_diff == 1 ? mix(vec3(0.22, 0.24, 0.27), vec3(1.0, 0.38, 0.2), clamp(abs(L - refL) * 2.5, 0.0, 1.0)) : vec3(0.96, 0.94, 0.88) * (L * 0.8 / (1.0 + 0.25 * L));
+  }
+  // (the halo: a line of one object with a nearer, different object's surface just round it on the screen is broken
+  // there, so two contours don't run into each other. Only lines (ink strokes, profiles): not washes, and not contact
+  // accents, which must stay strong where things touch. One ring of eight reads of the occluder's depth and object)
+  if (u_halo > 0.0 && (kind == 1u || kind == 4u) && (d2.w & 255u) != 0u && keep > 0.01) {
+    uint obj = d2.w & 255u;
+    vec2 px0 = (clip.xy / clip.w * 0.5 + 0.5) * u_viewport;
+    float zM = -cam.z, hit = 0.0;
+    ivec2 lim = ivec2(u_viewport) - 1;
+    for (int k = 0; k < 8; k++) {
+      float a = float(k) * 0.7853982;
+      vec2 dir = vec2(cos(a), sin(a));
+      ivec2 q = clamp(ivec2(px0 + dir * u_halo), ivec2(0), lim);
+      float d = texelFetch(u_hdep, q, 0).r;
+      if (d >= 1.0) continue;
+      uint so = uint(texelFetch(u_hobj, q, 0).r * 255.0 + 0.5);
+      if (so == obj || so == 0u) continue;
+      float zS = 2.0 * u_nf.x * u_nf.y / (u_nf.y + u_nf.x - (2.0 * d - 1.0) * (u_nf.y - u_nf.x));
+      if (zS < zM - max(0.04, 0.04 * zM)) hit += 0.34;
+    }
+    keep *= 1.0 - clamp(hit, 0.0, 1.0);
+  }
+  if (u_mode != 0 && u_mode != 3) keep = keep > 0.02 ? 1.0 : 0.0;
+  if (keep < 0.01) return;
+  v_color.a *= keep;
+  vec2 c01 = unpackHalf2x16(d1.x), c23 = unpackHalf2x16(d1.y), c45 = unpackHalf2x16(d1.z);
+  // (the covariance was stored 4× over, for the half floats' sake)
+  mat3 S = mat3(c01.x, c01.y, c23.x, c01.y, c23.y, c45.x, c23.x, c45.x, c45.y) * 0.25 * u_size * u_size * gscale * gscale;
+  if (u_mirror.z > 0.5 && u_mirror.z < 1.5) { S[0][1] = -S[0][1]; S[1][0] = -S[1][0]; S[1][2] = -S[1][2]; S[2][1] = -S[2][1]; }
+  // (the perspective's Jacobian at this point (camera looks down -z), and the camera's rotation)
+  float z = -cam.z;
+  mat3 J = mat3(u_focal.x / z, 0.0, 0.0, 0.0, u_focal.y / z, 0.0, u_focal.x * cam.x / (z * z), u_focal.y * cam.y / (z * z), 0.0);
+  mat3 T = J * mat3(u_view);
+  mat3 P = T * S * transpose(T);
+  // (no thinner than a pixel)
+  float a = P[0][0] + 0.3, b = P[0][1], d = P[1][1] + 0.3;
+  // (a fitted mark keeps its ink whatever the screen's resolution: padded out to a pixel, it's fainter by as much as it's
+  // wider (the footprint's area before the padding over its area after), so a mark fitted at one size draws the same
+  // amount of ink at another. The brush's own marks aren't: their look was judged as they are)
+  if (kind == 12u) v_color.a *= sqrt(max(0.0, (P[0][0] * P[1][1] - P[0][1] * P[0][1]) / (a * d - b * b)));
+  // (the ellipse's axes: eigenvalues of [[a b][b d]], and the first's eigenvector)
+  float mid = 0.5 * (a + d), rad = length(vec2(0.5 * (a - d), b));
+  float l1 = mid + rad, l2 = max(mid - rad, 0.1);
+  vec2 e1 = abs(b) > 1e-6 ? normalize(vec2(b, l1 - a)) : (a >= d ? vec2(1.0, 0.0) : vec2(0.0, 1.0));
+  vec2 e2 = vec2(-e1.y, e1.x);
+  vec2 px = 3.0 * (a_corner.x * sqrt(l1) * e1 + a_corner.y * sqrt(l2) * e2);
+  if (u_mode == 3) px = a_corner * 1.5;
+  v_r = a_corner * 3.0;
+  vec2 ndc = clip.xy / clip.w, at = ndc + px * 2.0 / u_viewport;
+  gl_Position = vec4(at, clip.z / clip.w, 1.0);
+  // (a mark attached to a surface: each corner of its quad given the depth of that surface under it (the ray through the
+  // corner meeting the mark's plane), so a broad mark on a face turned away isn't cut by the face's own depth; marks on
+  // an edge, free marks (open space, a volume), a captured scene's splats, or a plane seen edge-on keep their centre's)
+  if (support == 1u) {
+    vec3 nv = mat3(u_view) * sn, d = vec3((at.x + u_proj[2][0]) / u_proj[0][0], (at.y + u_proj[2][1]) / u_proj[1][1], -1.0);
+    float dn = dot(nv, d);
+    if (abs(dn) > 0.05) {
+      float tt = dot(nv, cam.xyz) / dn;
+      vec3 X = d * clamp(tt, -cam.z - 0.5, -cam.z + 0.5);
+      vec4 cx = u_proj * vec4(X, 1.0);
+      gl_Position = vec4(at * cx.w, cx.z, cx.w);
+    }
+  }
+}`;
+const FS = `#version 300 es
+precision highp float; precision highp int;
+uniform int u_mode;
+in vec4 v_color;
+in vec2 v_r;
+out vec4 o;
+void main() {
+  float r2 = dot(v_r, v_r);
+  if (u_mode == 3) { o = vec4(v_color.rgb, 1.0); return; }
+  if (r2 > 9.0) discard;
+  float alpha;
+  if (u_mode == 1) {
+    // (its 1σ and 2σ contours, as thin lines)
+    float r = sqrt(r2), w = fwidth(r) * 1.2;
+    alpha = max(1.0 - smoothstep(0.0, w, abs(r - 1.0)), 0.5 * (1.0 - smoothstep(0.0, w, abs(r - 2.0)))) * 0.8;
+  } else if (u_mode == 2) alpha = 0.9;
+  else alpha = min(0.99, v_color.a * exp(-0.5 * r2));
+  if (alpha < 1.0 / 255.0) discard;
+  o = vec4(v_color.rgb * alpha, alpha);
+}`;
+const OVS = `#version 300 es
+uniform mat4 u_view, u_proj;
+in vec3 a_pos;
+in float a_obj;
+flat out float v_obj;
+void main() { gl_Position = u_proj * u_view * vec4(a_pos, 1.0); v_obj = a_obj; }`;
+// (its object, written only into the halo's target: which object is nearest at each pixel)
+const OFS = `#version 300 es
+precision mediump float;
+flat in float v_obj;
+out vec4 o;
+void main() { o = vec4(v_obj / 255.0, 0.0, 0.0, 1.0); }`;
+
+import { covariance, type Splats } from './format';
+// ─── a stroke drawn as a surface: a sweep's gesture evaluated a pixel at a time on its limb's tube ───
+// The same functions marks.ts samples into deposits (its `sweep`: the brush's pressure along the limb, the band that
+// keeps to one side of the limb as seen, the bristles round it, each with its own run of gaps), here read straight
+// off the surface: so a bristle has an edge, a gap is a gap, and paper shows through a dry stretch in specks.
+const SVS = `#version 300 es
+uniform mat4 u_view, u_proj;
+in vec3 a_pos, a_nrm, a_up; in vec4 a_at;
+out vec3 v_p, v_n, v_u; out vec3 v_at;
+void main() { v_p = a_pos; v_n = a_nrm; v_u = a_up; v_at = a_at.xyz; gl_Position = u_proj * u_view * vec4(a_pos, 1.0); }`;
+const SFS = `#version 300 es
+precision highp float; precision highp int;
+uniform vec3 u_eye, u_ink; uniform uint u_id; uniform float u_rows, u_grain;
+uniform sampler2D u_tex; uniform vec2 u_texsize;   // (ink painted on the surface, and where there is any; none: 0, 0)
+uniform vec4 u_a, u_b, u_c;   // (tmin, tmax, dry, decay), (vary, taper, runs, wet), (ragged, ink, fall, spread)
+in vec3 v_p, v_n, v_u; in vec3 v_at;
+out vec4 o;
+float hash(uint a, uint b, uint c) { uint h = a * 374761393u + b * 668265263u + c * 2147483647u; h = (h ^ (h >> 13)) * 1274126177u; return float(h ^ (h >> 16)) / 4294967296.0; }
+float sm3(float x) { x = clamp(x, 0.0, 1.0); return x * x * (3.0 - 2.0 * x); }
+float along(uint a, uint b, float x) { float f = floor(x), t = x - f; t = t * t * (3.0 - 2.0 * t); return mix(hash(a, b, uint(f)), hash(a, b, uint(f) + 1u), t); }
+float loadedAt(int k) { return k <= 0 ? 0.0 : (float(k) + 0.7 * (hash(u_id, 55u, uint(k)) - 0.5)) / u_b.z; }
+void main() {
+  vec3 n = normalize(v_n), d = normalize(u_eye - v_p), U = normalize(v_u);
+  float nd = dot(n, d); if (nd <= 0.0) discard;
+  float u = v_at.x, rf = v_at.y, sw = v_at.z;
+  // (the brush's pressure here: loaded where it's set down and again along the limb, drying from each)
+  float uu = hash(u_id, 57u, 2u) < 0.5 ? 1.0 - u : u; int k0 = int(floor(uu * u_b.z));
+  if (loadedAt(k0 + 1) <= uu) k0++; else if (loadedAt(k0) > uu) k0--;
+  float since = uu - loadedAt(k0);
+  float press = (0.55 + 0.45 * sm3(since / 0.012)) * sm3((1.0 - uu) / max(0.005, u_b.y)) * (1.0 - u_b.x * (1.0 - exp(-since * u_b.z / 0.45)));
+  // (the band: on one side of the limb as it's seen, as thick as the pressure makes it, its inner edge wavering)
+  float wob = along(u_id, 91u, sw / 0.7 + hash(u_id, 91u, 5u) * 9.0) * 2.0 - 1.0;
+  float T = (u_a.x + max(0.0, u_a.y - u_a.x) * press) * (1.0 + u_c.x * 0.5 * wob);
+  float v = dot(n, U) - dot(U, d) * nd;
+  float band = clamp((T - 1.0 - v) / max(fwidth(v), 0.02) + 0.5, 0.0, 1.0);
+  // (paper's tooth: where a bristle is running dry its ink lands in specks, the same ink on average; not from so far
+  // that a speck is under a pixel)
+  vec2 g = vec2(sw * 28.0, rf * 2.5), gi = floor(g), gf = g - gi; gf = gf * gf * (3.0 - 2.0 * gf);
+  float t00 = hash(u_id ^ 977u, uint(gi.x), uint(gi.y)), t10 = hash(u_id ^ 977u, uint(gi.x) + 1u, uint(gi.y)), t01 = hash(u_id ^ 977u, uint(gi.x), uint(gi.y) + 1u), t11 = hash(u_id ^ 977u, uint(gi.x) + 1u, uint(gi.y) + 1u);
+  float tooth = mix(mix(t00, t10, gf.x), mix(t01, t11, gf.x), gf.y), amt = u_grain * clamp(1.0 - 1.2 * max(fwidth(g.x), fwidth(g.y)), 0.0, 1.0);
+  // (the bristles: each a stripe round the limb, wider where the ink's wet, its edges wavering; each laying ink or not
+  // by the pressure)
+  float wet = u_b.w * (press - 0.5), hb = 1.1 * exp(u_c.w + wet), r0 = floor(rf), aa = max(fwidth(rf), 1e-4), ink = 0.0;
+  for (int dr = -1; dr <= 1; dr++) {
+    uint row = uint(mod(r0 + float(dr), u_rows));
+    float gap = along(u_id, row, sw / 2.0 + hash(u_id, row, 7u) * 16.0);
+    float cover = 1.0 / (1.0 + exp(-12.0 * (press * (0.7 + 0.6 * gap) - hash(u_id, row, 41u) * u_a.z)));
+    cover = mix(cover, smoothstep(tooth - 0.1, tooth + 0.1, cover * 1.2 - 0.1), amt);
+    float x = rf - (r0 + float(dr) + 0.5) + 0.22 * (along(u_id, row + 500u, sw * 5.0) - 0.5);
+    ink = max(ink, cover * clamp((hb - abs(x)) / aa + 0.5, 0.0, 1.0));
+  }
+  // (how much ink a wet bristle lays: the deposits' ink, several of them lying over one another)
+  float body = u_c.y - u_a.w * 3.0 * u + 2.0 * wet, a = band * ink * (1.0 - pow(1.0 - 1.0 / (1.0 + exp(-body)), 3.0));
+  // (ink painted on the surface, where there is some: along the limb and round it; elsewhere the gesture's)
+  if (u_texsize.x > 0.0) { vec2 t = texture(u_tex, vec2((u * (u_texsize.x - 1.0) + 0.5) / u_texsize.x, (rf / u_rows * u_texsize.y + 0.5) / u_texsize.y)).rg; a = mix(a, t.r, t.g); }
+  // (the limb's own outline: a pixel's worth of softening where its surface turns away)
+  a *= clamp(nd / max(fwidth(nd), 1e-4), 0.0, 1.0);
+  if (a < 1.0 / 255.0) discard;
+  o = vec4(u_ink * a, a);
+}`;
+import { BOX, SIGMA, SUN_TAPS, NET_SIZE, OUT_MAX, IN, H, OUT, type Net, type Mips } from './mist';
+/** where each part of the network's numbers starts in u_net */
+const NET_OFF = (() => { const w2 = IN * H + H, b2 = w2 + H * H, w3 = b2 + H, b3 = w3 + OUT * H, mean = b3 + OUT; return { b1: IN * H, w2, b2, w3, b3, mean, std: mean + IN }; })();
+
+/** a sweep's numbers, for a stroke drawn as a surface (marks.ts `sweepMesh`) */
+export interface StrokeStyle { id: number; rows: number; ink: number; fall: number; spread: number; ragged: number; tmin: number; tmax: number; dry: number; decay: number; vary: number; taper: number; runs: number; wet: number }
+export interface DrawOpts {
+  size: number; mode: number; bg: [number, number, number];
+  /** how much of a drawing's marks to keep (1 all), and how: by their ranks (0), or thinned evenly (1) keeping `share` */
+  detail?: number; thin?: number; share?: number;
+  /** how far the brush has developed each feature (0..1, sixteen of them) */
+  features?: Float32Array;
+  eye?: [number, number, number];
+  /** the time, for fitted marks that sway (0: still); still water at a height (nothing under it is drawn), and how
+   * strongly it mirrors (0…1; 0: no mirror) */
+  time?: number; mirror?: [number, number];
+  /** draw the splats this many times over (a load test: how much more than the scene a device has room for) */
+  repeat?: number;
+  /** a stroke drawn as a surface: how much its thin ink breaks into specks on the paper's tooth (0 none … 1; 1 if not given) */
+  grain?: number;
+  /** fitted marks let go as they reach the eye: gone at the first distance, whole by the second (none: kept) */
+  near?: [number, number];
+  /** draw the occluder into the depth buffer (if there is one) */
+  occlude?: boolean;
+  /** only one kind of mark (stone.ts MARK), or all (-1) */
+  only?: number;
+  /** Mist: how its splats are lit (0 their stored colour, 1 analytic, 2 the network), and the sun */
+  light?: number; sun?: [number, number, number]; diff?: boolean;
+  /** the halo's radius in pixels (0 off), and the near and far planes the projection used */
+  halo?: number; nf?: [number, number];
+}
+
+export class Renderer {
+  readonly gl: WebGL2RenderingContext;
+  private prog: WebGLProgram; private tex: WebGLTexture; private order: WebGLBuffer; private vao: WebGLVertexArrayObject;
+  private oprog: WebGLProgram; private ovao: WebGLVertexArrayObject; private obuf: WebGLBuffer; private oobj: WebGLBuffer; private ocount = 0;
+  private hfbo: WebGLFramebuffer | null = null; private hdep: WebGLTexture | null = null; private hobj: WebGLTexture | null = null; private hsize = [0, 0];
+  private u: Record<string, WebGLUniformLocation | null> = {}; private ou: Record<string, WebGLUniformLocation | null> = {};
+  private sprog: WebGLProgram | null = null; private svao: WebGLVertexArrayObject | null = null; private sbuf: WebGLBuffer | null = null; private sidx: WebGLBuffer | null = null; private scount = 0; private su: Record<string, WebGLUniformLocation | null> = {}; private sstyle: StrokeStyle | null = null; private stex: WebGLTexture | null = null; private stsize: [number, number] = [0, 0];
+  n = 0; drawn = 0;
+  private gridTex: WebGLTexture | null = null; private featTex: WebGLTexture | null = null; private ctlTex: WebGLTexture | null = null; private coefTex: WebGLTexture | null = null; private featLast: Float32Array | null = null; private net = new Float32Array(Math.ceil(NET_SIZE / 4) * 4); private ana = [0, 0];
+  /** Mist's density pyramid (one float a texel; each level a mip of the 3D texture) */
+  setGrid(g: Mips) {
+    const gl = this.gl; gl.bindTexture(gl.TEXTURE_3D, this.gridTex);
+    gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MIN_FILTER, gl.NEAREST_MIPMAP_NEAREST); gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_BASE_LEVEL, 0); gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MAX_LEVEL, g.data.length - 1);
+    g.data.forEach((d, L) => { const [x, y, z] = g.dims[L]; gl.texImage3D(gl.TEXTURE_3D, L, gl.R32F, x, y, z, 0, gl.RED, gl.FLOAT, d); });
+  }
+  /** the tiny network's numbers (w1 b1 w2 b2 w3 b3 mean std), and the analytic model's two weights */
+  setNet(n: Net, ana: { a: number; b: number }) { this.net.set([...n.w1, ...n.b1, ...n.w2, ...n.b2, ...n.w3, ...n.b3, ...n.mean, ...n.std]); this.ana = [ana.a, ana.b]; }
+  constructor(readonly canvas: HTMLCanvasElement) {
+    const gl = canvas.getContext('webgl2', { antialias: false, premultipliedAlpha: true, alpha: false, depth: true, powerPreference: 'high-performance' });
+    if (!gl) throw new Error('WebGL2 is needed');
+    this.gl = gl;
+    const sh = (type: number, src: string) => { const s = gl.createShader(type)!; gl.shaderSource(s, src); gl.compileShader(s); if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s) ?? 'shader'); return s; };
+    const link = (vs: string, fs: string) => { const p = gl.createProgram()!; gl.attachShader(p, sh(gl.VERTEX_SHADER, vs)); gl.attachShader(p, sh(gl.FRAGMENT_SHADER, fs)); gl.linkProgram(p); if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p) ?? 'link'); return p; };
+    const p = this.prog = link(VS(), FS);
+    for (const k of ['u_data', 'u_view', 'u_proj', 'u_focal', 'u_viewport', 'u_size', 'u_mode', 'u_eye', 'u_detail', 'u_share', 'u_thin', 'u_feat', 'u_only', 'u_grid', 'u_sun', 'u_light', 'u_net', 'u_ana', 'u_diff']) this.u[k] = gl.getUniformLocation(p, k);
+    // (an array's location, by its first element's name, where the bare name isn't found)
+    this.u.u_net ??= gl.getUniformLocation(p, 'u_net[0]');
+    this.gridTex = gl.createTexture()!; this.featTex = gl.createTexture()!; this.setFeatures(new Float32Array(1)); this.ctlTex = gl.createTexture()!; this.coefTex = gl.createTexture()!; this.setControls(new Float32Array(4)); this.ctlOn = false;
+    this.vao = gl.createVertexArray()!; gl.bindVertexArray(this.vao);
+    const quad = gl.createBuffer()!; gl.bindBuffer(gl.ARRAY_BUFFER, quad); gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
+    const ac = gl.getAttribLocation(p, 'a_corner'); gl.enableVertexAttribArray(ac); gl.vertexAttribPointer(ac, 2, gl.FLOAT, false, 0, 0);
+    this.order = gl.createBuffer()!; gl.bindBuffer(gl.ARRAY_BUFFER, this.order);
+    const ai = gl.getAttribLocation(p, 'a_index'); gl.enableVertexAttribArray(ai); gl.vertexAttribIPointer(ai, 1, gl.UNSIGNED_INT, 0, 0); gl.vertexAttribDivisor(ai, 1);
+    gl.bindVertexArray(null);
+    this.tex = gl.createTexture()!;
+    const op = this.oprog = link(OVS, OFS);
+    for (const k of ['u_view', 'u_proj']) this.ou[k] = gl.getUniformLocation(op, k);
+    this.ovao = gl.createVertexArray()!; gl.bindVertexArray(this.ovao);
+    this.obuf = gl.createBuffer()!; gl.bindBuffer(gl.ARRAY_BUFFER, this.obuf);
+    const ap = gl.getAttribLocation(op, 'a_pos'); gl.enableVertexAttribArray(ap); gl.vertexAttribPointer(ap, 3, gl.FLOAT, false, 0, 0);
+    this.oobj = gl.createBuffer()!; gl.bindBuffer(gl.ARRAY_BUFFER, this.oobj);
+    const ao = gl.getAttribLocation(op, 'a_obj'); gl.enableVertexAttribArray(ao); gl.vertexAttribPointer(ao, 1, gl.FLOAT, false, 0, 0);
+    gl.bindVertexArray(null);
+    for (const k of ['u_time', 'u_mirror', 'u_near', 'u_coef', 'u_hdep', 'u_hobj', 'u_halo', 'u_nf', 'u_ctl', 'u_ctlOn']) this.u[k] = gl.getUniformLocation(p, k);
+  }
+  /** the splats into the data texture (once a scene) */
+  /**
+   * The splats into the data texture, three texels each (1024 splats a row):
+   * - 0: centre (3 × f32), colour + opacity (4 × u8);
+   * - 1: covariance (6 halves), then rank (8 bits) | kind (4 bits, 4 spare) | normal (octahedral, 2 × 8 bits);
+   * - 2: support (2 bits) | second normal (octahedral, 2 × 8 bits, from bit 8); feature (32 bits); element (32 bits);
+   *   object (8 bits, for the halo) | group (24 bits, for a drawing policy's controls).
+   */
+  load(s: Splats) {
+    const gl = this.gl, rows = Math.max(1, Math.ceil(s.n / 1024)), data = new Uint32Array(3072 * rows * 4), f = new Float32Array(data.buffer), cov = new Float32Array(6);
+    for (let i = 0; i < s.n; i++) {
+      const o = i * 12;
+      f[o] = s.pos[i * 3]; f[o + 1] = s.pos[i * 3 + 1]; f[o + 2] = s.pos[i * 3 + 2];
+      data[o + 3] = s.rgba[i * 4] | (s.rgba[i * 4 + 1] << 8) | (s.rgba[i * 4 + 2] << 16) | (s.rgba[i * 4 + 3] << 24);
+      covariance(s, i, cov, 0, 2);
+      data[o + 4] = half2(cov[0], cov[1]); data[o + 5] = half2(cov[2], cov[3]); data[o + 6] = half2(cov[4], cov[5]);
+      const rank = s.rank ? Math.round(s.rank[i] * 255) : 255, kind = s.mark ? s.mark[i] & 15 : 0;
+      const [ox, oy] = s.normal ? octEncode(s.normal[i * 3], s.normal[i * 3 + 1], s.normal[i * 3 + 2]) : [128, 128];
+      data[o + 7] = (rank | (kind << 8) | (ox << 16) | (oy << 24)) >>> 0;
+      const sup = s.support ? s.support[i] & 3 : 0, [px, py] = s.normal2 ? octEncode(s.normal2[i * 3], s.normal2[i * 3 + 1], s.normal2[i * 3 + 2]) : [128, 128];
+      data[o + 8] = (sup | (px << 8) | (py << 16)) >>> 0; data[o + 9] = s.feature ? s.feature[i] >>> 0 : 0; data[o + 10] = s.element ? s.element[i] >>> 0 : 0; data[o + 11] = ((s.object ? s.object[i] : 0) | ((s.group ? s.group[i] : 0) << 8)) >>> 0;
+    }
+    gl.bindTexture(gl.TEXTURE_2D, this.tex);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32UI, 3072, rows, 0, gl.RGBA_INTEGER, gl.UNSIGNED_INT, data);
+    // (a fitted drawing's view terms, beside the data: the same three texels a splat; none: one empty texel)
+    gl.activeTexture(gl.TEXTURE6); gl.bindTexture(gl.TEXTURE_2D, this.coefTex);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    if (s.coef) { const c = new Float32Array(3072 * rows * 4); c.set(s.coef.subarray(0, Math.min(s.coef.length, c.length))); gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, 3072, rows, 0, gl.RGBA, gl.FLOAT, c); }
+    else gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, 1, 1, 0, gl.RGBA, gl.FLOAT, new Float32Array(4));
+    gl.activeTexture(gl.TEXTURE0);
+    this.n = s.n; this.drawn = 0;
+  }
+  /** a drawing policy's controls, four floats a group (by group index, 1024 a row): the rank its marks must reach,
+   * their strength, and whether the control applies (1) or the global detail does (0); or none */
+  setControls(v: Float32Array | null) {
+    const gl = this.gl; this.ctlOn = !!v;
+    if (!v) return;
+    const n = v.length / 4, w = Math.min(1024, Math.max(1, n)), rows = Math.max(1, Math.ceil(n / 1024)), d = new Float32Array(w * rows * 4); d.set(v);
+    gl.activeTexture(gl.TEXTURE5); gl.bindTexture(gl.TEXTURE_2D, this.ctlTex);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, w, rows, 0, gl.RGBA, gl.FLOAT, d);
+    gl.activeTexture(gl.TEXTURE0);
+  }
+  private ctlOn = false;
+  /** each feature's development (0..1), by id (any number of them, 1024 a row): uploaded only when it changes */
+  setFeatures(v: Float32Array) {
+    if (this.featLast && this.featLast.length === v.length && this.featLast.every((x, i) => x === v[i])) return;
+    this.featLast = v.slice();
+    const gl = this.gl, w = Math.min(1024, Math.max(1, v.length)), rows = Math.max(1, Math.ceil(v.length / 1024)), d = new Float32Array(w * rows); d.set(v);
+    gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, this.featTex);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.R32F, w, rows, 0, gl.RED, gl.FLOAT, d);
+    gl.activeTexture(gl.TEXTURE0);
+  }
+  /** a stroke drawn as a surface (marks.ts `sweepMesh`): its vertices (thirteen floats each), its triangles, its
+   * sweep's numbers; or none. Drawn over the paper before the splats, tested against the occluder as they are */
+  setStroke(mesh: { verts: Float32Array; index: Uint32Array; style: StrokeStyle } | null, paint?: { w: number; h: number; data: Uint8Array } | null) {
+    const gl = this.gl; this.scount = 0; this.sstyle = null; this.stsize = [0, 0];
+    if (!mesh) return;
+    if (!this.sprog) {
+      const sh = (type: number, src: string) => { const s = gl.createShader(type)!; gl.shaderSource(s, src); gl.compileShader(s); if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s) ?? 'shader'); return s; };
+      const p = this.sprog = gl.createProgram()!; gl.attachShader(p, sh(gl.VERTEX_SHADER, SVS)); gl.attachShader(p, sh(gl.FRAGMENT_SHADER, SFS)); gl.linkProgram(p); if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p) ?? 'link');
+      for (const k of ['u_view', 'u_proj', 'u_eye', 'u_ink', 'u_id', 'u_rows', 'u_grain', 'u_a', 'u_b', 'u_c', 'u_tex', 'u_texsize']) this.su[k] = gl.getUniformLocation(p, k);
+      this.svao = gl.createVertexArray()!; gl.bindVertexArray(this.svao); this.sbuf = gl.createBuffer()!; gl.bindBuffer(gl.ARRAY_BUFFER, this.sbuf);
+      [['a_pos', 3, 0], ['a_nrm', 3, 12], ['a_up', 3, 24], ['a_at', 4, 36]].forEach(([name, size, off]) => { const a = gl.getAttribLocation(p, name as string); if (a >= 0) { gl.enableVertexAttribArray(a); gl.vertexAttribPointer(a, size as number, gl.FLOAT, false, 52, off as number); } });
+      this.sidx = gl.createBuffer()!; gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.sidx); gl.bindVertexArray(null);
+    }
+    gl.bindVertexArray(this.svao); gl.bindBuffer(gl.ARRAY_BUFFER, this.sbuf); gl.bufferData(gl.ARRAY_BUFFER, mesh.verts, gl.STATIC_DRAW);
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.sidx); gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, mesh.index, gl.STATIC_DRAW); gl.bindVertexArray(null);
+    this.scount = mesh.index.length; this.sstyle = mesh.style;
+    // (ink painted on it: two bytes a texel (how dark, and whether there's any), along the limb by round it)
+    this.stex ??= gl.createTexture(); gl.activeTexture(gl.TEXTURE7); gl.bindTexture(gl.TEXTURE_2D, this.stex); gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.REPEAT);
+    if (paint && paint.data.length === paint.w * paint.h * 2) { gl.texImage2D(gl.TEXTURE_2D, 0, gl.RG8, paint.w, paint.h, 0, gl.RG, gl.UNSIGNED_BYTE, paint.data); this.stsize = [paint.w, paint.h]; }
+    else gl.texImage2D(gl.TEXTURE_2D, 0, gl.RG8, 1, 1, 0, gl.RG, gl.UNSIGNED_BYTE, new Uint8Array(2));
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 4); gl.activeTexture(gl.TEXTURE0);
+  }
+  /** a shape to hide what's behind it (triangles, three floats a vertex), drawn into the depth buffer only; or none.
+   * With each vertex's object (one float a vertex), the halo can tell one object's silhouette from another's */
+  setOccluder(tris: Float32Array | null, objects?: Float32Array) {
+    const gl = this.gl, n = tris ? tris.length / 3 : 0;
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.obuf); gl.bufferData(gl.ARRAY_BUFFER, tris ?? new Float32Array(0), gl.STATIC_DRAW); this.ocount = n;
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.oobj); gl.bufferData(gl.ARRAY_BUFFER, objects && objects.length === n ? objects : new Float32Array(n), gl.STATIC_DRAW);
+  }
+  /** the halo's target, the canvas's size: the occluder's object in red, its depth */
+  private haloTarget(w: number, h: number) {
+    const gl = this.gl;
+    if (this.hfbo && this.hsize[0] === w && this.hsize[1] === h) return;
+    this.hfbo ??= gl.createFramebuffer(); this.hdep ??= gl.createTexture(); this.hobj ??= gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, this.hobj); gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    gl.bindTexture(gl.TEXTURE_2D, this.hdep); gl.texImage2D(gl.TEXTURE_2D, 0, gl.DEPTH_COMPONENT24, w, h, 0, gl.DEPTH_COMPONENT, gl.UNSIGNED_INT, null);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.hfbo);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, this.hobj, 0);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.TEXTURE_2D, this.hdep, 0);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    this.hsize = [w, h];
+  }
+  /** wait for what's been drawn to be drawn (a one-pixel read): a device's GPU works apart from the page, so without
+   * this a frame's cost doesn't show in the time between frames */
+  sync() { const gl = this.gl; gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, this.px); }
+  private px = new Uint8Array(4);
+  /** the order to draw them in (from the sort) */
+  setOrder(order: Uint32Array) { const gl = this.gl; gl.bindBuffer(gl.ARRAY_BUFFER, this.order); gl.bufferData(gl.ARRAY_BUFFER, order, gl.DYNAMIC_DRAW); this.drawn = order.length; }
+  draw(view: Float32Array, proj: Float32Array, focal: [number, number], opts: DrawOpts) {
+    const gl = this.gl, c = this.canvas;
+    gl.viewport(0, 0, c.width, c.height);
+    gl.clearColor(opts.bg[0], opts.bg[1], opts.bg[2], 1); gl.clearDepth(1); gl.depthMask(true); gl.colorMask(true, true, true, true);
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+    if (!this.drawn && !this.scount) return;
+    const halo = (opts.halo ?? 0) > 0 && this.ocount > 0 && opts.occlude !== false;
+    // (the halo's target: the occluder's depth and object, drawn first into a texture the marks can read)
+    if (halo) {
+      this.haloTarget(c.width, c.height);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, this.hfbo); gl.viewport(0, 0, c.width, c.height);
+      gl.clearColor(0, 0, 0, 0); gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+      gl.useProgram(this.oprog); gl.bindVertexArray(this.ovao);
+      gl.uniformMatrix4fv(this.ou.u_view, false, view); gl.uniformMatrix4fv(this.ou.u_proj, false, proj);
+      gl.enable(gl.DEPTH_TEST); gl.depthFunc(gl.LESS); gl.disable(gl.BLEND); gl.colorMask(true, true, true, true);
+      gl.drawArrays(gl.TRIANGLES, 0, this.ocount);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      gl.clearColor(opts.bg[0], opts.bg[1], opts.bg[2], 1); gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+    }
+    // (the occluder: depth only)
+    if (this.ocount && opts.occlude !== false) {
+      gl.useProgram(this.oprog); gl.bindVertexArray(this.ovao);
+      gl.uniformMatrix4fv(this.ou.u_view, false, view); gl.uniformMatrix4fv(this.ou.u_proj, false, proj);
+      gl.enable(gl.DEPTH_TEST); gl.depthFunc(gl.LESS); gl.colorMask(false, false, false, false); gl.disable(gl.BLEND);
+      gl.drawArrays(gl.TRIANGLES, 0, this.ocount);
+      gl.colorMask(true, true, true, true);
+    }
+    // (a stroke drawn as a surface: over the paper, under the splats)
+    if (this.scount && this.sstyle) {
+      const S = this.sstyle, su = this.su;
+      gl.useProgram(this.sprog); gl.bindVertexArray(this.svao);
+      gl.uniformMatrix4fv(su.u_view, false, view); gl.uniformMatrix4fv(su.u_proj, false, proj); gl.uniform3fv(su.u_eye, opts.eye ?? [0, 0, 0]); gl.uniform3f(su.u_ink, 36 / 255, 31 / 255, 27 / 255);
+      gl.uniform1ui(su.u_id, S.id); gl.uniform1f(su.u_rows, S.rows); gl.uniform1f(su.u_grain, opts.grain ?? 1);
+      gl.activeTexture(gl.TEXTURE7); gl.bindTexture(gl.TEXTURE_2D, this.stex); gl.uniform1i(su.u_tex, 7); gl.uniform2f(su.u_texsize, this.stsize[0], this.stsize[1]); gl.activeTexture(gl.TEXTURE0);
+      gl.uniform4f(su.u_a, S.tmin, S.tmax, S.dry, S.decay); gl.uniform4f(su.u_b, S.vary, S.taper, S.runs, S.wet); gl.uniform4f(su.u_c, S.ragged, S.ink, S.fall, S.spread);
+      gl.enable(gl.DEPTH_TEST); gl.depthFunc(gl.LEQUAL); gl.depthMask(false); gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+      for (let k = 0; k < Math.max(1, opts.repeat ?? 1); k++) gl.drawElements(gl.TRIANGLES, this.scount, gl.UNSIGNED_INT, 0);
+      gl.bindVertexArray(null);
+    }
+    if (!this.drawn) { gl.depthMask(true); return; }
+    gl.useProgram(this.prog); gl.bindVertexArray(this.vao);
+    gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, this.tex); gl.uniform1i(this.u.u_data, 0);
+    gl.uniformMatrix4fv(this.u.u_view, false, view); gl.uniformMatrix4fv(this.u.u_proj, false, proj);
+    gl.uniform2f(this.u.u_focal, focal[0], focal[1]); gl.uniform2f(this.u.u_viewport, c.width, c.height);
+    gl.uniform1f(this.u.u_size, opts.size); gl.uniform1i(this.u.u_mode, opts.mode);
+    gl.uniform3fv(this.u.u_eye, opts.eye ?? [0, 0, 0]);
+    gl.uniform1f(this.u.u_detail, opts.detail ?? 1); gl.uniform1f(this.u.u_share, opts.share ?? 1); gl.uniform1i(this.u.u_thin, opts.thin ?? 0); gl.uniform1i(this.u.u_only, opts.only ?? -1);
+    if (opts.features) this.setFeatures(opts.features);
+    gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, this.featTex); gl.uniform1i(this.u.u_feat, 2);
+    gl.activeTexture(gl.TEXTURE6); gl.bindTexture(gl.TEXTURE_2D, this.coefTex); gl.uniform1i(this.u.u_coef, 6);
+    gl.activeTexture(gl.TEXTURE5); gl.bindTexture(gl.TEXTURE_2D, this.ctlTex); gl.uniform1i(this.u.u_ctl, 5); gl.uniform1i(this.u.u_ctlOn, this.ctlOn ? 1 : 0); gl.activeTexture(gl.TEXTURE0);
+    gl.uniform1i(this.u.u_light, opts.light ?? 0); gl.uniform1i(this.u.u_diff, opts.diff ? 1 : 0); gl.uniform3fv(this.u.u_sun, opts.sun ?? [0, 1, 0]);
+    gl.uniform4fv(this.u.u_net, this.net); gl.uniform2f(this.u.u_ana, this.ana[0], this.ana[1]);
+    gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_3D, this.gridTex); gl.uniform1i(this.u.u_grid, 1);
+    gl.uniform1f(this.u.u_halo, halo ? opts.halo! : 0); gl.uniform2f(this.u.u_nf, opts.nf?.[0] ?? 0.01, opts.nf?.[1] ?? 100);
+    if (halo) { gl.activeTexture(gl.TEXTURE3); gl.bindTexture(gl.TEXTURE_2D, this.hdep); gl.uniform1i(this.u.u_hdep, 3); gl.activeTexture(gl.TEXTURE4); gl.bindTexture(gl.TEXTURE_2D, this.hobj); gl.uniform1i(this.u.u_hobj, 4); }
+    else { gl.activeTexture(gl.TEXTURE3); gl.bindTexture(gl.TEXTURE_2D, this.featTex); gl.uniform1i(this.u.u_hdep, 3); gl.activeTexture(gl.TEXTURE4); gl.bindTexture(gl.TEXTURE_2D, this.featTex); gl.uniform1i(this.u.u_hobj, 4); }
+    gl.activeTexture(gl.TEXTURE0);
+    // (tested against the occluder's depth, never writing their own)
+    gl.enable(gl.DEPTH_TEST); gl.depthFunc(gl.LEQUAL); gl.depthMask(false);
+    gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+    gl.uniform1f(this.u.u_time, opts.time ?? 0); gl.uniform2f(this.u.u_near, opts.near?.[0] ?? 0, opts.near?.[1] ?? 0);
+    // (still water: its mirror first, then the scene over it)
+    for (let k = 0; k < Math.max(1, opts.repeat ?? 1); k++) {
+      if (opts.mirror && opts.mirror[1] > 0) { gl.uniform3f(this.u.u_mirror, opts.mirror[0], opts.mirror[1], 1); gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, this.drawn); }
+      gl.uniform3f(this.u.u_mirror, opts.mirror ? opts.mirror[0] : 0, 0, opts.mirror ? 2 : 0);
+      gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, this.drawn);
+    }
+    gl.depthMask(true);
+    gl.bindVertexArray(null);
+  }
+}
+
+/** a unit normal in two bytes (octahedral) */
+export function octEncode(x: number, y: number, z: number): [number, number] {
+  const l = Math.abs(x) + Math.abs(y) + Math.abs(z) || 1;
+  let u = x / l, v = y / l;
+  if (z < 0) { const pu = u; u = (1 - Math.abs(v)) * (pu >= 0 ? 1 : -1); v = (1 - Math.abs(pu)) * (v >= 0 ? 1 : -1); }
+  const b = (q: number) => Math.max(0, Math.min(255, Math.round((q + 1) * 127.5)));
+  return [b(u), b(v)];
+}
+
+/** two floats as half floats in one uint (low, high), as GLSL's unpackHalf2x16 reads them */
+const F32 = new Float32Array(1), U32 = new Uint32Array(F32.buffer);
+export function toHalf(v: number): number {
+  F32[0] = v; const x = U32[0], sign = (x >>> 16) & 0x8000, e = ((x >>> 23) & 0xff) - 127 + 15, m = x & 0x7fffff;
+  if (e <= 0) { if (e < -10) return sign; const mm = (m | 0x800000) >> (1 - e); return sign | ((mm + 0x1000) >> 13); }
+  if (e >= 31) return sign | 0x7c00;
+  // (added, not or'd: rounding up can carry into the exponent)
+  return sign | ((e << 10) + ((m + 0x1000) >> 13));
+}
+const half2 = (a: number, b: number) => (toHalf(a) | (toHalf(b) << 16)) >>> 0;

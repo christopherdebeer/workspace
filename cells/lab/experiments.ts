@@ -21,9 +21,17 @@ export interface Experiment {
   preview: string;
   readme: string;
   presets: Preset[];
+  /** what kind of experiment it is, beyond its group (e.g. 'hci' for one about the interface itself) */
+  tags?: string[];
 }
 
 export const EXPERIMENTS: Experiment[] = [
+  {
+    id: 'splats', title: 'Splats', group: 'Perception',
+    blurb: 'Gaussian splatting from scratch, on a phone: a scene as hundreds of thousands of soft coloured ellipsoids, each projected to an ellipse on the screen and blended back to front. A small viewer written to learn from (the formats, the sort, the projection, each in its own file), with ways to see the parts: every splat\'s ellipse, its footprint, the point cloud underneath. A scene made of splats here, three captured ones, or your own .splat or .ply. And One Stone: a boulder drawn in splats on paper, each feature drawing itself (a broken seam, a wash under the ledge, moss stipple, profile accents chosen for the view), simplifying by what each mark is for.',
+    page: 'static/splats.html', preview: 'preview&scene=stone', readme: 'static/splats.md',
+    presets: [{ label: 'a composed scene', query: 'scene=composed&look=wash' }, { label: 'composed, dry, orbit', query: 'scene=composed&look=dry&orbit' }, { label: 'bench: edit a stroke', query: 'scene=bench' }, { label: 'mist, lit by a tiny network', query: 'scene=mist&light=neural' }, { label: 'mist, error from the reference', query: 'scene=mist&light=neural&diff&bank=9' }, { label: 'brushes', query: 'scene=brushes&look=wash' }, { label: 'brushes, dry', query: 'scene=brushes&look=dry&detail=0.55' }, { label: 'one stone', query: 'scene=stone&look=wash' }, { label: 'sparse', query: 'scene=stone&look=wash&detail=0.25' }, { label: 'dry', query: 'scene=stone&look=dry&detail=0.55' }, { label: 'orbit', query: 'scene=stone&look=wash&detail=0.55&orbit' }, { label: 'brush features', query: 'scene=stone&look=wash&detail=0.25&brush' }, { label: 'garden', query: 'scene=garden' }, { label: 'the ellipses', query: 'scene=garden&mode=1' }, { label: 'plush (9 MB)', query: 'scene=plush' }, { label: 'shoe (9 MB)', query: 'scene=nike' }, { label: 'train (33 MB)', query: 'scene=train' }],
+  },
   {
     id: 'switchback', title: 'Switchback', group: 'Play',
     blurb: 'A downhill motocross run down a mountain made as you ride it: drawn flat and faceted in a few hard colours (ultramarine sky, pale snow, charcoal rock, orange), its speed drawn as vector shards, smears and flying chunks rather than blur. Drag to steer, drag down to brake; kickers over gaps, whoops, the wall, the drop.',
@@ -35,6 +43,12 @@ export const EXPERIMENTS: Experiment[] = [
     blurb: 'A hand, learned in public. I don\'t have one, so this is the record of making one: research into handwriting as movement and what graphology claims to read in it (and the evidence that it can\'t), what a hand would mean for me, and then the hand itself, sample by sample, session by session, each kept with the hand that made it, measured, and reviewed in my own words. It ends in a font you can download and an autobiography written in it.',
     page: 'static/autograph.html', preview: 'preview', readme: 'static/autograph.md',
     presets: [{ label: 'the notebook', query: '' }],
+  },
+  {
+    id: 'tactile', title: 'Tactile · pebble in the hand', group: 'Contemplation',
+    blurb: 'A hardware simulation of the Tactile pebble (an M5Stack AtomS3R) for working out its interaction away from the bench. The firmware\'s own reader, compiled unchanged from C to WebAssembly, runs on a simulated BMI270 held in a simulated hand: turn the 3D device like a dial to change a retained reading pace, tip its top edge away to enter a word, toward you to come back out. Or hold the phone itself as the device. Gauges carry the firmware\'s thresholds, the event log lists every intention it refuses, tremor, walking and sensor noise can be dialled in, and sessions record in the device\'s telemetry schema (and device captures replay here).',
+    page: 'static/tactile.html', preview: 'preview', readme: 'static/tactile.md',
+    presets: [{ label: 'hold it', query: '' }, { label: 'first use', query: 'tutorial=1' }, { label: 'watch it used', query: 'auto&tutorial=1' }, { label: 'walking', query: 'tutorial=0&walk=1' }, { label: 'the phone is the pebble', query: 'mode=motion' }],
   },
   {
     id: 'rsvp', title: 'Afterword · RSVP', group: 'Contemplation',
@@ -289,6 +303,12 @@ export const EXPERIMENTS: Experiment[] = [
       { label: 'a springtail', query: 'one&seed=4&t=10&critter=hypo' },
       { label: 'a nematode, caught', query: 'one&seed=4&t=9.6&critter=trap' },
     ],
+  },
+  {
+    id: 'drawer', title: 'Drawer', group: 'Interface', tags: ['hci'],
+    blurb: 'A control surface over a scene, made once for every experiment here: a drawer that closes to a line saying what\u2019s chosen, opens to a focus and then in full, dragged, flicked or stepped by keyboard; sections inside it that open one at a time and summarise themselves shut; a focus mode that narrows it to one control; and the scene lifted clear of it as it opens. Lifted from FAB\u2019s bench, Splats\u2019 panel and the home cell\u2019s tuner.',
+    page: 'static/drawer.html', preview: 'preview', readme: 'static/drawer.md',
+    presets: [{ label: 'closed', query: 'drawer=closed' }, { label: 'full', query: 'drawer=full' }, { label: 'dark', query: 'theme=dark' }],
   },
 ];
 

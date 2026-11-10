@@ -4,6 +4,11 @@
  * shelves; a ravine runs down it with a stream in its bed; a rocky outcrop stands in the way of the obvious line; and
  * there's a shelf flat enough for a court.
  *
+ * A **coast** (a land seed below nought: the coast made from the seed's size) is the same land met by the sea: across
+ * its front, the sea at level nought (a seabed under water, its shore where the hill goes under), and out of it a cliff,
+ * two levels at once, then the shelves rising on to the back; the court's shelf and the outcrop kept up off the water,
+ * the stream falling out of its ravine into the sea.
+ *
  * It's held two ways that never disagree:
  * - **by column** (`g`): the level the ground is at in each cell. What's built is in whole levels, so this is what
  *   stands, walks and is struck: earth fills each column below it (`World.earth`), and its top is a floor;
@@ -35,6 +40,8 @@ export interface Land {
   rock: [number, number];
   /** the shelf kept flat for a court (its middle) */
   shelf: [number, number];
+  /** a coast's sea: its cells (`j * 1000 + i`), level nought, under water; empty inland */
+  sea: Set<number>;
 }
 
 const DW = DOMAIN.i1 - DOMAIN.i0 + 1;
@@ -51,7 +58,8 @@ export function noise2(seed: number, x: number, y: number): number {
 }
 
 /** a landscape for a seed */
-export function makeLand(seed: number, bay = 1): Land {
+export function makeLand(landSeed: number, bay = 1): Land {
+  const coast = landSeed < 0, seed = Math.abs(landSeed);
   const R = (n: number) => hash(seed, n) / 4294967296, L = landBox(bay), W = L.i1 - L.i0 + 1, H = L.j1 - L.j0 + 1;
   /** a square's place in the first square's columns */
   const at = (i: number, j: number) => (j - L.j0) * W + (i - L.i0);
@@ -70,12 +78,18 @@ export function makeLand(seed: number, bay = 1): Land {
   // (the ravine's line down the rise: wandering a little either side of a line a third or two thirds across)
   const side = R(2) < 0.5 ? 0.36 : 0.64, phase = R(3) * 6.28, ravine = (v: number) => side + 0.09 * Math.sin(v * 5.2 + phase) + 0.05 * Math.sin(v * 11 + phase * 2);
   // (the outcrop: on the far side of the ravine from the court's shelf, partway up)
-  const rockU = side < 0.5 ? 0.66 + 0.12 * R(4) : 0.34 - 0.12 * R(4), rockV = 0.4 + 0.25 * R(5);
-  const shelfU = side < 0.5 ? 0.14 + 0.06 * R(6) : 0.86 - 0.06 * R(6), shelfV = 0.32 + 0.3 * R(7);
+  const rockU = side < 0.5 ? 0.66 + 0.12 * R(4) : 0.34 - 0.12 * R(4), rockV = coast ? 0.55 + 0.2 * R(5) : 0.4 + 0.25 * R(5);
+  const shelfU = side < 0.5 ? 0.14 + 0.06 * R(6) : 0.86 - 0.06 * R(6), shelfV = coast ? 0.55 + 0.2 * R(7) : 0.32 + 0.3 * R(7);
+  // (a coast's shore: across the front a little under a third of the way back, wandering, drawn in a bay toward the
+  // middle, where a harbour would be)
+  const sPhase = R(8) * 6.28, bayU = 0.45 + 0.2 * R(9);
+  const shore = (u: number) => 0.27 + 0.03 * Math.sin(u * 7 + sPhase) + 0.02 * Math.sin(u * 15 + sPhase * 2) + 0.07 * Math.exp(-(((u - bayU) / 0.16) ** 2));
+  const atSea = (u: number, v: number) => coast && v < shore(u);
   const g = new Int8Array(W * H);
   const height = (u: number, v: number) => {
-    // (the rise: gentle at the front, steeper toward the back, so the levels come as shelves)
-    let h = PEAK * 0.92 * smooth(0.04, 1.02, 0.78 * v + 0.22 * Math.abs(u - (1 - side)) * 0.6) + 0.35;
+    // (the rise: gentle at the front, steeper toward the back, so the levels come as shelves; on a coast, out of the
+    // sea two levels at once, a cliff, then the shelves on up)
+    let h = coast ? 2.3 + (PEAK - 2.1) * smooth(shore(u), 1.02, v) : PEAK * 0.92 * smooth(0.04, 1.02, 0.78 * v + 0.22 * Math.abs(u - (1 - side)) * 0.6) + 0.35;
     h += (noise2(seed + 11, u * 4.2, v * 4.2) - 0.5) * 1.1 + (noise2(seed + 12, u * 9, v * 9) - 0.5) * 0.4;
     // (the shelf kept flat for a court)
     const ds = Math.hypot((u - shelfU) * 1.1, v - shelfV);
@@ -86,18 +100,22 @@ export function makeLand(seed: number, bay = 1): Land {
     h -= 1.5 * smooth(0.1, 0.02, Math.abs(u - ravine(v))) * smooth(0, 0.15, v + 0.05);
     return h;
   };
+  const sea = new Set<number>();
   for (let j = L.j0; j <= L.j1; j++) for (let i = L.i0; i <= L.i1; i++) {
     const [u, v] = uv(i, j);
-    g[at(i, j)] = Math.max(0, Math.min(PEAK, Math.round(height(u, v))));
+    if (atSea(u, v)) { g[at(i, j)] = 0; sea.add(j * 1000 + i); continue; }
+    g[at(i, j)] = Math.max(coast ? 1 : 0, Math.min(PEAK, Math.round(height(u, v))));
   }
   // (a clean shelf: a court's floor and the walls round it, all at one level: two cells each way)
   const [si, sj] = cellOf(shelfU, shelfV), level = g[at(si, sj)], S2 = 2 * bay + bay - 1;
-  for (let j = sj - S2; j <= sj + S2; j++) for (let i = si - S2; i <= si + S2; i++) if (inFirst(i, j)) g[at(i, j)] = level;
+  for (let j = sj - S2; j <= sj + S2; j++) for (let i = si - S2; i <= si + S2; i++) if (inFirst(i, j) && !sea.has(j * 1000 + i)) g[at(i, j)] = level;
   // (the stream: down the ravine's bed, a cell at a time, never climbing, from the top edge to the bottom)
   const stream: Array<[number, number]> = [];
   const steps = 60 * bay;
   for (let s = 0; s <= steps; s++) {
     const v = 1 - s / steps, c = cellOf(ravine(v), v), last = stream[stream.length - 1];
+    // (on a coast it ends where it meets the sea)
+    if (sea.has(c[1] * 1000 + c[0])) break;
     if (last && last[0] === c[0] && last[1] === c[1]) continue;
     if (last && Math.abs(last[0] - c[0]) + Math.abs(last[1] - c[1]) > 1) stream.push([c[0], last[1]]);
     stream.push(c);
@@ -110,13 +128,13 @@ export function makeLand(seed: number, bay = 1): Land {
   }
   for (const [i, j] of stream) for (const [a, b] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
     const x = i + a, z = j + b;
-    if (inFirst(x, z) && !stream.some((c) => c[0] === x && c[1] === z) && g[at(x, z)] <= g[at(i, j)]) g[at(x, z)] = Math.min(PEAK, g[at(i, j)] + 1);
+    if (inFirst(x, z) && !sea.has(z * 1000 + x) && !stream.some((c) => c[0] === x && c[1] === z) && g[at(x, z)] <= g[at(i, j)]) g[at(x, z)] = Math.min(PEAK, g[at(i, j)] + 1);
   }
   // (and the shelf kept flat, whatever the stream's banks did to it)
   const water = new Set(stream.map(([i, j]) => j * 1000 + i));
   let flat = level;
   for (const [i, j] of stream) if (Math.abs(i - si) <= 3 * bay && Math.abs(j - sj) <= 3 * bay) flat = Math.max(flat, g[at(i, j)]);
-  for (let j = sj - S2; j <= sj + S2; j++) for (let i = si - S2; i <= si + S2; i++) if (inFirst(i, j) && !water.has(j * 1000 + i)) g[at(i, j)] = flat;
+  for (let j = sj - S2; j <= sj + S2; j++) for (let i = si - S2; i <= si + S2; i++) if (inFirst(i, j) && !water.has(j * 1000 + i) && !sea.has(j * 1000 + i)) g[at(i, j)] = flat;
   // ─── and on past it: the same rise, ravine and stream, carried on over the whole grid ───
   // (the first square exactly as it's composed; the rest from the same height, its stream run on up the ravine
   // (never lower than the water below it) and on down it (never higher than the water above), banks either side)
@@ -124,7 +142,8 @@ export function makeLand(seed: number, bay = 1): Land {
   for (let j = DOMAIN.j0; j <= DOMAIN.j1; j++) for (let i = DOMAIN.i0; i <= DOMAIN.i1; i++) {
     if (inFirst(i, j)) { D[atD(i, j)] = g[at(i, j)]; continue; }
     const [u, v] = uv(i, j);
-    D[atD(i, j)] = Math.max(0, Math.min(PEAK, Math.round(height(u, v))));
+    if (atSea(u, v)) { D[atD(i, j)] = 0; sea.add(j * 1000 + i); continue; }
+    D[atD(i, j)] = Math.max(coast ? 1 : 0, Math.min(PEAK, Math.round(height(u, v))));
   }
   const cellAny = (u: number, v: number): [number, number] => {
     const [a, b] = turn === 0 ? [u, v] : turn === 1 ? [v, 1 - u] : turn === 2 ? [1 - u, 1 - v] : [1 - v, u];
@@ -147,7 +166,7 @@ export function makeLand(seed: number, bay = 1): Land {
     }
     return out;
   };
-  const up = runOn(stream[0], 1 + 1 / steps, 1 / steps), down = runOn(stream[stream.length - 1], -1 / steps, -1 / steps);
+  const up = runOn(stream[0], 1 + 1 / steps, 1 / steps), down = coast ? [] : runOn(stream[stream.length - 1], -1 / steps, -1 / steps);
   let hi = D[atD(...stream[0])];
   for (const [i, j] of up) { hi = Math.max(hi, D[atD(i, j)]); D[atD(i, j)] = hi; }
   let lo = D[atD(...stream[stream.length - 1])];
@@ -156,9 +175,9 @@ export function makeLand(seed: number, bay = 1): Land {
   for (const [i, j] of more) water.add(j * 1000 + i);
   for (const [i, j] of more) for (const [a, b] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
     const x = i + a, z = j + b;
-    if (onLand(x, z) && !inFirst(x, z) && !water.has(z * 1000 + x) && D[atD(x, z)] <= D[atD(i, j)]) D[atD(x, z)] = Math.min(PEAK, D[atD(i, j)] + 1);
+    if (onLand(x, z) && !inFirst(x, z) && !water.has(z * 1000 + x) && !sea.has(z * 1000 + x) && D[atD(x, z)] <= D[atD(i, j)]) D[atD(x, z)] = Math.min(PEAK, D[atD(i, j)] + 1);
   }
-  return { seed, bay, box: L, g: D, stream: [...up.reverse(), ...stream, ...down], water, rock: cellOf(rockU, rockV), shelf: [si, sj] };
+  return { seed, bay, box: L, g: D, stream: [...up.reverse(), ...stream, ...down], water, rock: cellOf(rockU, rockV), shelf: [si, sj], sea };
 }
 
 /** the ground's level in a column (0 off the land) */

@@ -58,7 +58,7 @@ function ribbon(out: number[], pts: V3[], w: number, fam: number, weight: number
 /** a line broken into strokes: runs of `on` metres (give or take), gaps of `off`; one line still, its one pick, its runs
  * laid in order along it (from its middle out), so as its ink comes and goes it's one stroke with breaks in it, never a
  * scatter of dashes */
-function broken(out: number[], pts: V3[], r: () => number, on: [number, number], off: [number, number], w: number, fam: number, weight: (i: number) => number, persist: number) {
+function broken(out: number[], pts: V3[], r: () => number, on: [number, number], off: [number, number], w: number, fam: number, weight: (i: number) => number, persist: number, dash?: (run: V3[], weight: number) => void) {
   const L: number[] = [0];
   for (let k = 1; k < pts.length; k++) L.push(L[k - 1] + Math.hypot(pts[k][0] - pts[k - 1][0], pts[k][2] - pts[k - 1][2]));
   const total = L[L.length - 1] || 1, mid = pts[Math.floor(pts.length / 2)], pick = r();
@@ -66,7 +66,7 @@ function broken(out: number[], pts: V3[], r: () => number, on: [number, number],
   while (i < pts.length - 1) {
     const i0 = i, run: V3[] = [pts[i]]; let len = 0, want = on[0] + r() * (on[1] - on[0]);
     while (i < pts.length - 1 && len < want) { i++; len += Math.hypot(pts[i][0] - run[run.length - 1][0], pts[i][2] - run[run.length - 1][2]); run.push(pts[i]); }
-    if (run.length >= 2) ribbon(out, run, w * (0.8 + r() * 0.4), fam, weight(i), persist, pick, { t0: L[i0] / total, t1: L[i] / total, mid });
+    if (run.length >= 2) { ribbon(out, run, w * (0.8 + r() * 0.4), fam, weight(i), persist, pick, { t0: L[i0] / total, t1: L[i] / total, mid }); dash?.(run, weight(i)); }
     let gap = 0; want = off[0] + r() * (off[1] - off[0]);
     while (i < pts.length - 1 && gap < want) { i++; gap += Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][2] - pts[i - 1][2]); }
   }
@@ -107,8 +107,12 @@ function iso(F: Float32Array, at: (fi: number, fj: number) => V3, level: number)
   return lines;
 }
 
+/** what a chunk's drawing chose, reported as it's chosen, for anyone who wants to draw it another way (Splats' brush):
+ * a bank's rim where it's cut deep enough to draw (its points, how deep the cut is at each, the trail's edge along the
+ * foot of the cut, and the dashes it was broken into, each with its weight). Asking changes nothing about the marks */
+export interface StrokeTaps { rim?: (line: V3[], depth: number[], edge: V3[], dashes: Array<{ pts: V3[]; weight: number }>) => void }
 /** the marks of a chunk */
-export function strokes(world: World, c: Chunk): Float32Array {
+export function strokes(world: World, c: Chunk, taps?: StrokeTaps): Float32Array {
   const out: number[] = [], s = world.seed, G = c.ground, x0 = c.x0, z0 = c.z0;
   // (the ground as its mesh lays it, triangle by triangle (render.ts's index order), so a mark lies on it, not under it)
   const gAt = (fi: number, fj: number) => {
@@ -157,7 +161,9 @@ export function strokes(world: World, c: Chunk): Float32Array {
         if (run.length >= 3) cut.push(run);
         for (const line of cut) {
           const k0 = rim.indexOf(line[0]);
-          broken(out, line, r, [2.5, 7], [0.4, 1.4], 0.08, FAM.rim, (k) => 0.4 + Math.min(0.55, depth[Math.min(depth.length - 1, k0 + k)] * 0.18), 0.9);
+          const dashes: Array<{ pts: V3[]; weight: number }> = [];
+          broken(out, line, r, [2.5, 7], [0.4, 1.4], 0.08, FAM.rim, (k) => 0.4 + Math.min(0.55, depth[Math.min(depth.length - 1, k0 + k)] * 0.18), 0.9, taps?.rim ? (pts, weight) => dashes.push({ pts, weight }) : undefined);
+          taps?.rim?.(line, line.map((_, k) => depth[Math.min(depth.length - 1, k0 + k)]), line.map((_, k) => edge[Math.min(edge.length - 1, k0 + k)]), dashes);
           // (in small groups, down the cut from the rim toward the trail's edge)
           for (let k = 1; k < line.length - 1; k += 3 + Math.floor(r() * 3)) {
             if (r() > 0.75) continue;

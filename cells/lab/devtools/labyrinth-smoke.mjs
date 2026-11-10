@@ -249,7 +249,10 @@ await withWood(async (lab) => {
     const q = await lab.open('zoom=0.55&ops=[]');
     await q.waitForTimeout(800);
     const W2 = (f, ...a) => q.evaluate(([src, args]) => new Function('w', 'a', `return (${src})(w, ...a)`)(window.__labyrinth.world, args), [f.toString(), a]);
-    const piece = async (h, i, j, y) => { await q.evaluate((hh) => window.__labyrinth.setHand(hh), h); await q.waitForTimeout(700); const s = await q.evaluate(([a, b, d]) => window.__labyrinth.screenOf(a, b, d), [i, j, y]); await q.mouse.click(s[0], s[1]); await q.waitForTimeout(200); };
+    // (each touch made once the page has drawn what's built so far (software GL draws slowly, and the view may be moving
+    // to take in a slab that's grown), so where it lands on the screen is where it was aimed)
+    const caughtUp = () => q.waitForFunction(() => { const L = window.__labyrinth, s = L.meshState(); return !s.out && s.shownVersion === L.world.version; }, null, { timeout: 120000 }).then(() => q.evaluate(() => new Promise((ok) => requestAnimationFrame(() => requestAnimationFrame(ok)))));
+    const piece = async (h, i, j, y) => { await q.evaluate((hh) => window.__labyrinth.setHand(hh), h); await q.waitForTimeout(700); await caughtUp(); const s = await q.evaluate(([a, b, d]) => window.__labyrinth.screenOf(a, b, d), [i, j, y]); await q.mouse.click(s[0], s[1]); await q.waitForTimeout(200); };
     await piece('block', 4, 4, 0);
     c.ok('block: on the stone where it\'s touched', await W2((w) => w.block(0, 4, 4)));
     await piece('arch', 4, 5, 0);

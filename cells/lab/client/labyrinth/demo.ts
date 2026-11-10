@@ -47,6 +47,7 @@ export function story(stage: number): World {
   if (stage === 19) return halfHouse();
   if (stage === 20) return halfByHand();
   if (stage === 21) return atWork();
+  if (stage === 22) return village();
   const w = new World(7);
   const t = -100;
   const tapAt = (p: Pick) => { const op = tap(w, p, t); if (op && !('refused' in op)) w.apply(op, t); };
@@ -464,5 +465,35 @@ function atWork(): World {
   for (const i0 of [-15, -8, 6, 13, 20]) box(i0, i0 + 3, 0, 3, 2);
   box(-7, -4, 8, 14, 3); box(-3, -2, 11, 14, 5);
   traceAt(topOf(w, -6, 14), [[-6, 14], [-6, 13], [-6, 12], [-5, 12], [-4, 12], [-3, 12]], topOf(w, -3, 12));
+  return w;
+}
+
+/**
+ * storyboard 22: a village on a cliff over a harbour (the cliff village board, devtools/cliff-board.mjs). On a coast
+ * (land −11: the sea across the front, a cliff out of it, shelves rising behind), houses two cells square, two or three
+ * storeys, in rows up the shelves with a cell between them, each standing on the ground at its own columns, so each row
+ * shows over the one below; a way climbing between them from the clifftop to the top row; and a mole of stone built out
+ * along the foot of the cliff in the sea, a level up off the water, with the way brought down onto it. Their washes,
+ * roofs, doors and windows are the rules' own. The sea and the land thin out into lines on the page round it.
+ */
+function village(): World {
+  const w = new World(51, -11), t = -100;
+  const g = (i: number, j: number): Pick => { const k = w.ground(i, j); return { face: 'ground', hit: [k - 1, i, j], to: [k, i, j] }; };
+  const raise = (i: number, j: number, n: number) => w.apply({ add: Array.from({ length: n }, (_, k) => [w.ground(i, j) + k, i, j, t] as [number, number, number, number]) }, t);
+  const house = (i0: number, j0: number, n: number) => { for (const i of [i0, i0 + 1]) for (const j of [j0, j0 + 1]) raise(i, j, n); };
+  // (the rows, from the top of the shelves down to the clifftop: [i, j, storeys]; the way up runs between them at i = 8)
+  for (const [i, j, n] of [[6, 0, 3], [9, 0, 2], [12, 1, 2], [6, 3, 2], [9, 3, 3], [12, 4, 3], [6, 6, 3], [9, 6, 2], [12, 7, 2]] as Array<[number, number, number]>) house(i, j, n);
+  const up: Array<[number, number]> = [];
+  for (let j = 8; j >= 0; j--) up.push([8, j]);
+  const way = trace(w, g(8, 8), up, g(8, 0), () => t, t, [], 'way');
+  if (way && !('refused' in way)) w.apply({ ...way, alts: undefined }, t);
+  // (the mole: stone a level up off the water, along the cliff's foot and out into the sea)
+  const mole: Array<[number, number, number]> = [];
+  for (let i = 6; i <= 13; i++) if (w.land?.sea.has(9000 + i)) mole.push([0, i, 9]);
+  for (let j = 10; j <= 11; j++) mole.push([0, 13, j]);
+  w.apply({ add: mole.map(([k, i, j]) => [k, i, j, t] as [number, number, number, number]) }, t);
+  // (the way down to it)
+  const down = trace(w, g(8, 8), [[8, 8], [8, 9]], topOf(w, 8, 9), () => t, t, [], 'way');
+  if (down && !('refused' in down)) w.apply({ ...down, alts: undefined }, t);
   return w;
 }

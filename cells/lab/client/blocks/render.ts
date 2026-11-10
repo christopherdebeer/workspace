@@ -1,5 +1,6 @@
 /**
- * Drawing the blocks (WebGL2), as a diorama: seen square on to the diagonal from above (no perspective), in the dark,
+ * Drawing the blocks (WebGL2), as a diorama: seen square on to the diagonal from above (no perspective), on a pale
+ * ground in soft light,
  * the build standing on a slab of ground cut square round it, its section showing.
  *
  * The cells' meshes are gathered into chunks (8 cells a side), each one buffer, rebuilt when one of its cells changes
@@ -49,7 +50,7 @@ float shadowAt(sampler2DShadow map, vec4 ls) {
 // (warm sun, a dim sky, warm light thrown back from below; the display's curve)
 vec3 light(vec3 alb, vec3 n, float sh, float ao, vec3 sun) {
   float nl = max(dot(n, sun), 0.);
-  vec3 c = alb * (vec3(1., .84, .62) * 3.2 * nl * sh + vec3(.26, .31, .40) * (.55 + .45 * n.y) * ao + vec3(.42, .32, .22) * .35 * max(-n.y * .5 + .5, 0.) * ao);
+  vec3 c = alb * (vec3(1., .88, .72) * 2.5 * nl * mix(.35, 1., sh) + vec3(.46, .48, .52) * (.6 + .4 * n.y) * ao + vec3(.42, .34, .26) * .35 * max(-n.y * .5 + .5, 0.) * ao);
   return c;
 }
 vec3 display(vec3 c) { c = c / (1. + c * .6); return pow(c, vec3(1. / 2.2)); }`;
@@ -69,7 +70,7 @@ void main() {
   vec3 p = aPos; p.y += .5; p *= s; p.y -= .5;
   vec3 w = aCtr + p;
   int pack = int(aPack + .5);
-  vFace = pack % 6; vStuff = (pack / 6) % 16; vAo = float(pack / 96) / 3.;
+  vFace = pack % 6; vStuff = (pack / 6) % 32; vAo = float(pack / 192) / 3.;
   vPos = w; vRest = aCtr + aPos;
   vLs = uLight * vec4(w + NORMALS[vFace] * .03, 1.);
   gl_Position = uVP * vec4(w, 1.);
@@ -128,6 +129,25 @@ void main() {
     bool seam = mod(cell.x, 4.) == 0. || mod(cell.y, 4.) == 0.;
     alb = vec3(.76, .69, .56) * (.92 + .12 * h3(vec3(sq, 3.))) * (seam ? .9 : 1.);
   } else if (m == 10) alb = vec3(.28, .19, .12) * (.85 + .25 * j);
+  else if (m == 13) {
+    // (clay roof tile: courses down the slope, each tile a little different, the lap between courses darker)
+    float lap = mod(cube.y, 2.) == 0. ? .88 : 1.;
+    alb = mix(vec3(.66, .28, .17), vec3(.80, .42, .26), j) * lap * (mod(cell.x, 2.) == 0. ? .94 : 1.04);
+    if (j2 > .9) alb *= .8;
+  } else if (m == 14) alb = mix(vec3(.16, .36, .27), vec3(.22, .46, .34), j2) * (fract(uv.y * 1.) < .2 ? .78 : 1.);
+  else if (m == 15) {
+    // (rock: grey, in beds, stained and rough)
+    float bed = noise(vec3(vRest.x * .7, vRest.y * 3.2, vRest.z * .7));
+    alb = mix(vec3(.46, .44, .41), vec3(.66, .63, .58), bed) * (.82 + .3 * j) * (1. - .18 * noise(vRest * 4.));
+  } else if (m >= 16 && m <= 20) {
+    // (render washed in one of five colours, a little uneven and paler where the sun's bleached it)
+    vec3 W[5] = vec3[5](vec3(.88, .70, .44), vec3(.91, .68, .55), vec3(.84, .58, .54), vec3(.66, .72, .80), vec3(.93, .84, .60));
+    alb = W[m - 16] * (.94 + .08 * j) * (.95 + .08 * noise(vRest * 2.3));
+    if (vFace == 2) alb = mix(alb, vec3(.92, .88, .80), .3);
+  } else if (m == 21) {
+    vec3 C[4] = vec3[4](vec3(.95, .94, .90), vec3(.36, .52, .78), vec3(.90, .52, .58), vec3(.95, .82, .42));
+    alb = C[int(h3(floor(vRest * 4.)) * 3.99)];
+  }
   else alb = mix(vec3(.78, .14, .16), vec3(.92, .62, .70), j2) ;
   // (weather: damp and dark low down where it's sheltered)
   float low = 1. - smoothstep(-.5, .6, vRest.y);
@@ -184,7 +204,7 @@ const SKY_VS = `#version 300 es
 out vec2 vUv; void main() { vec2 p = vec2(gl_VertexID == 1 ? 3. : -1., gl_VertexID == 2 ? 3. : -1.); vUv = p * .5 + .5; gl_Position = vec4(p, .9999, 1.); }`;
 const SKY_FS = `#version 300 es
 precision mediump float; in vec2 vUv; out vec4 o;
-void main() { float d = length(vUv - vec2(.5, .55)); o = vec4(mix(vec3(.075, .075, .08), vec3(.025, .025, .028), smoothstep(.1, .85, d)), 1.); }`;
+void main() { float d = length(vUv - vec2(.5, .55)); o = vec4(mix(vec3(.90, .88, .85), vec3(.76, .74, .71), smoothstep(.1, .9, d)), 1.); }`;
 
 function compile(gl: WebGL2RenderingContext, vs: string, fs: string): WebGLProgram {
   const p = gl.createProgram()!;
@@ -288,7 +308,7 @@ export class Renderer {
     gl.cullFace(gl.BACK);
     // ─── the picture ───
     gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.viewport(0, 0, w, h);
-    gl.clearColor(0.04, 0.04, 0.045, 1); gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+    gl.clearColor(0.86, 0.84, 0.81, 1); gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
     gl.disable(gl.DEPTH_TEST); gl.useProgram(this.skyP); gl.bindVertexArray(null); gl.drawArrays(gl.TRIANGLES, 0, 3);
     gl.enable(gl.DEPTH_TEST);
     gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, this.shadowTex);

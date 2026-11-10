@@ -443,7 +443,11 @@ export class PlatformStack extends cdk.Stack {
       // so the same deploy runs faster as well as safer; the request-path
       // commands this function also serves are 50 ms–2 s each and are not
       // where the cost is.
-      memorySize: 1024,
+      // 2048, from 1024 (2026-11-07): the lab cell (74 MB of static/ and a large
+      // client tree) now runs out at 1024 the same way (Runtime.OutOfMemory at
+      // 39 s, 1023 MB used), every deploy superseded by its retry and the cell
+      // left serving the previous build.
+      memorySize: 2048,
       // The bundle (esm.sh dep fetches + esbuild) runs off the request path as an
       // event-driven invocation now (cell.deploy.requested → onDeployRequested),
       // so nothing in front caps it — give a cold cache headroom.
