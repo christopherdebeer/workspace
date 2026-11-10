@@ -13,12 +13,13 @@
  * layout written here.
  *
  * **A stroke** runs along a smooth curve through its control points, as several rows of deposits side by side (the
- * brush's bristles; one row for a line). Its parameters (`STROKE`, 25):
- * - six knots of ink along it (a logit); four of width (a log, on its base width);
+ * brush's bristles; one row for a line). Its parameters (`STROKE`, 31):
+ * - six knots of ink along it (a logit); six of width (a log, on its base width);
  * - its window: where it starts and stops (0…1 along it), and how sharply at each end;
- * - how long its deposits are against their spacing (a log); three knots of offset to the side (in base widths);
- * - three knots of dryness along it: how far its rows break up into streaks (each row has its own run of gaps, the same
- *   every time for the same mark); which side the dryness lies to; how far its rows overlap (a log);
+ * - how long its deposits are against their spacing (a log); five knots of offset to the side (in base widths);
+ * - four knots of dryness along it: how far its rows break up into streaks (each row has its own run of gaps, the same
+ *   every time for the same mark); which side the dryness lies to; how far its rows overlap (a log); how much finer
+ *   its outer rows are than its middle ones (a crisp edge round a full body);
  * - a splay (each deposit turned off the spine, alternately to each side) and an alternate step to the side (in base
  *   widths): with short deposits, a spray of dabs along a strand.
  * **A wash** lies on a face (a flat shape) or in a volume (an ellipsoid, in open space: its deposits round). Its
@@ -51,9 +52,11 @@ export interface Mark {
   lod?: [number, number];
   params: number[]; resid: number[]; view: number[];
 }
-export const STROKE = 25, WASH = 10, RESID = 6, VIEW_TERMS = 9;
+export const STROKE = 31, WASH = 10, RESID = 6, VIEW_TERMS = 9;
 /** the parameters' places in a stroke */
-export const SP = { ink: 0, width: 6, u0: 10, u1: 11, sharp0: 12, sharp1: 13, along: 14, offset: 15, dry: 18, drySide: 21, spread: 22, splay: 23, step: 24 } as const;
+export const SP = { ink: 0, width: 6, u0: 12, u1: 13, sharp0: 14, sharp1: 15, along: 16, offset: 17, dry: 22, drySide: 26, spread: 27, splay: 28, step: 29, crisp: 30 } as const;
+/** how many knots each run of a stroke's parameters has */
+export const KN = { ink: 6, width: 6, offset: 5, dry: 4 } as const;
 export const INK: [number, number, number] = [36, 31, 27];
 const add = (a: V, b: V, k = 1): V => [a[0] + b[0] * k, a[1] + b[1] * k, a[2] + b[2] * k], sub = (a: V, b: V): V => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
 const cross = (a: V, b: V): V => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]], dot = (a: V, b: V) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
@@ -142,8 +145,12 @@ export function layout(m: Mark): Deposit[] {
   if (m.kind === 'stroke') {
     const S = spine(m), pts = S.pts, L = S.L, w0 = m.width ?? 0.01, free = !S.normals, rows = Math.max(1, m.rows ?? 1), cols = Math.ceil(N / rows);
     const t0 = 0.03 * Math.exp(-P[SP.sharp0]), t1 = 0.03 * Math.exp(-P[SP.sharp1]);
+    // (its rows across it: the outer ones finer than the middle ones by `crisp`, packed side by side)
+    const rw: number[] = [], rc: number[] = []; let rs = 0;
+    for (let j = 0; j < rows; j++) { const v = rows > 1 ? (j + 0.5) / rows - 0.5 : 0; rw.push(Math.exp(-Math.max(0, P[SP.crisp]) * 4 * v * v)); rs += rw[j]; }
+    { let a = 0; for (let j = 0; j < rows; j++) { rc.push((a + rw[j] / 2) / rs - 0.5); a += rw[j]; } }
     for (let i = 0; i < N; i++) {
-      const r = i * RESID, col = Math.floor(i / rows), row = i % rows, v = rows > 1 ? (row + 0.5) / rows - 0.5 : 0;
+      const r = i * RESID, col = Math.floor(i / rows), row = i % rows, v = rows > 1 ? rc[row] : 0;
       // (rows staggered like bricks, so their deposits' ends don't line up across the stroke)
       const u = Math.max(0, Math.min(1, (col + 0.5 + (rows > 1 ? ((row * 0.618) % 1) - 0.5 : 0) * 0.8 + R[r + 5]) / cols)), s = u * L;
       let k = 0; while (k < pts.length - 2 && S.cum[k + 1] < s) k++;
@@ -151,14 +158,14 @@ export function layout(m: Mark): Deposit[] {
       // (on a surface, its plane is the surface's; in open space, any plane through its length: it's round in section)
       let n: V = free ? norm(cross(t, Math.abs(t[1]) < 0.9 ? [0, 1, 0] : [1, 0, 0])) : norm(add(add([0, 0, 0], S.normals![k], 1 - f), S.normals![Math.min(S.normals!.length - 1, k + 1)], f));
       n = norm(sub(n, [t[0] * dot(n, t), t[1] * dot(n, t), t[2] * dot(n, t)]));
-      const b = cross(n, t), w = w0 * Math.exp(knots(P, SP.width, 4, u)), alt = i % 2 ? 1 : -1;
-      const s2 = (w / rows) * 0.62 * Math.exp(P[SP.spread] + R[r + 2]);
-      const side = knots(P, SP.offset, 3, u) * w0 + v * w * 0.9 + (R[r + 4] + alt * P[SP.step]) * w0;
+      const b = cross(n, t), w = w0 * Math.exp(knots(P, SP.width, KN.width, u)), alt = i % 2 ? 1 : -1;
+      const s2 = ((w * rw[row]) / rs) * 0.62 * Math.exp(P[SP.spread] + R[r + 2]);
+      const side = knots(P, SP.offset, KN.offset, u) * w0 + v * w * 0.9 + (R[r + 4] + alt * P[SP.step]) * w0;
       // (dryness: each row has its own run of gaps along the stroke, a few widths long; drier to one side)
       const run = s / (5 * w0) + hash(m.id, row, 7) * 16, r0 = Math.floor(run), rf = run - r0, sm = rf * rf * (3 - 2 * rf);
       const gap = hash(m.id, row, r0) * (1 - sm) + hash(m.id, row, r0 + 1) * sm;
-      const dry = Math.max(0, knots(P, SP.dry, 3, u)) * Math.max(0, 1 + 2 * P[SP.drySide] * v) * 9 * gap * gap;
-      out.push({ p: add(add(add(pts[k], sub(pts[k + 1], pts[k]), f), b, side), n, free ? 0 : 0.002), t, n, s1: (L / cols) * 0.9 * Math.exp(P[SP.along] + R[r + 1]), s2, thin: free ? s2 : 0.0008, turn: R[r + 3] + alt * P[SP.splay], logit: knots(P, SP.ink, 6, u) - softplus((P[SP.u0] - u) / t0) - softplus((u - P[SP.u1]) / t1) - dry + R[r] });
+      const dry = Math.max(0, knots(P, SP.dry, KN.dry, u)) * Math.max(0, 1 + 2 * P[SP.drySide] * v) * 9 * gap * gap;
+      out.push({ p: add(add(add(pts[k], sub(pts[k + 1], pts[k]), f), b, side), n, free ? 0 : 0.002), t, n, s1: (L / cols) * 0.9 * Math.exp(P[SP.along] + R[r + 1]), s2, thin: free ? s2 : 0.0008, turn: R[r + 3] + alt * P[SP.splay], logit: knots(P, SP.ink, KN.ink, u) - softplus((P[SP.u0] - u) / t0) - softplus((u - P[SP.u1]) / t1) - dry + R[r] });
     }
   } else if (m.blob) {
     const B = m.blob, { pts, h } = washPoints(m), rm = Math.cbrt(B.r[0] * B.r[1] * B.r[2]);

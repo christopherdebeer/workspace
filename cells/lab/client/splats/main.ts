@@ -28,6 +28,7 @@ import { brushScene, composedScene, stoneDrawing, REF_CAM, type BrushScene, type
 import { LIT, mistScene, referenceColours, sunDir, referenceAt, referenceLight, type MistScene } from './mist';
 import { NET, ANALYTIC, BAKE, RESULTS } from './mistnet';
 import { benchScene, PRESSURES } from './bench';
+import { MarksScene, WAYS, BRUSHED, type MarksFile } from './marksscene';
 import { penScene, type PenScene } from './penscene';
 import { paint as autographPaint } from '../autograph/ink';
 import type { Editor, EditItem, Snapshot } from './edit';
@@ -49,6 +50,7 @@ const SCENES: Record<string, { label: string; url?: string; mb?: number; up: 1 |
   pen: { label: 'pen', up: 1 },
   field: { label: 'fitted', up: 1 },
   bench: { label: 'bench', up: 1 },
+  marks: { label: 'marks', up: 1 },
   mist: { label: 'mist', up: 1 },
   garden: { label: 'garden', up: 1 },
   plush: { label: 'plush', url: 'https://huggingface.co/cakewalk/splat-data/resolve/main/plush.splat', mb: 9, up: -1 },
@@ -75,9 +77,10 @@ function show(s: Splats, name: string, u: 1 | -1) {
   if (name !== 'mist') mist = null;
   if (name !== 'bench' && name !== 'composed') { bench = null; benchSel = -1; syncBench(); }
   if (name !== 'pen') { penS = null; showReference(false); }
+  if (name !== 'marks') { marksS = null; marksSel = -1; syncMarks(); }
   if (name !== 'stone' && name !== 'brushes' && name !== 'mist' && name !== 'bench' && name !== 'composed' && name !== 'pen' && name !== 'field') R.setOccluder(null);
   ranks = s.rank ? Float32Array.from(s.rank).sort() : null;
-  document.documentElement.classList.toggle('paper', (inkOn && !!s.mark && !['stone', 'brushes', 'bench', 'composed', 'pen', 'mist'].includes(name)) || name === 'stone' || name === 'brushes' || name === 'bench' || name === 'composed' || name === 'pen' || name === 'field');
+  document.documentElement.classList.toggle('paper', (inkOn && !!s.mark && !['stone', 'brushes', 'bench', 'composed', 'pen', 'mist'].includes(name)) || name === 'stone' || name === 'brushes' || name === 'bench' || name === 'composed' || name === 'pen' || name === 'field' || name === 'marks');
   const b = bounds(s);
   cam.target = b.centre; cam.dist = b.radius * 2.2; cam.yaw = 0.6; cam.pitch = 0.3;
   home = { ...cam, target: [...cam.target] as [number, number, number] };
@@ -114,6 +117,7 @@ async function open(name: string) {
     else if (name === 'composed') openComposed();
     else if (name === 'pen') openPen();
     else if (name === 'field') await openField();
+    else if (name === 'marks') await openMarks();
     else if (!sc || !sc.url) { showCaptured(garden(Number(qs.get('count') ?? 120000)), 'garden', 1); }
     else showCaptured(parse(await fetchWithProgress(sc.url)), name, sc.up);
     loadMs = performance.now() - t0;
@@ -330,6 +334,27 @@ async function openField() {
     setView((qs.get('view') as 'hero' | 'grazing' | 'reverse') ?? 'reverse');
   }
 }
+// ─── the marks (marksscene.ts): teacher marks from the conservatory studies, each drawn by a mark fitted to it ───
+let marksS: MarksScene | null = null, marksSel = -1, marksDirty = false, syncMarks = () => {};
+async function openMarks() {
+  $('status').textContent = 'fetching the marks';
+  const m = document.querySelector<HTMLMetaElement>('meta[name=assets]'), base = m?.content && !m.content.includes('{{') ? m.content : '';
+  const r = await fetch(`${base}marks-bench.json`); if (!r.ok) throw new Error(`no marks (${r.status})`);
+  const num = (k: string, d: number) => Number(qs.get(k) ?? d);
+  const S = new MarksScene((await r.json()) as MarksFile, qs.get('way') ?? 'organised', qs.get('only'), { width: num('bw', BRUSHED.width), material: (qs.get('bm') as Material) ?? BRUSHED.material, weight: num('ba', BRUSHED.weight), depth: num('bd', BRUSHED.depth), reach: num('br', BRUSHED.reach) });
+  show(S.drawing(), 'marks', 1); marksS = S; marksSel = -1;
+  // (square on to the wall, far enough to see all of it; one sheet alone: from where it was fitted)
+  const one = S.sheets.length === 1 ? S.sheets[0] : null, asp = canvas.clientWidth / Math.max(1, canvas.clientHeight), th = Math.tan(cam.fov / 2);
+  framing = { target: [...S.centre] as [number, number, number], dist: one ? one.z : Math.max(S.size[1] / 2 / th, S.size[0] / 2 / th / asp) * 1.12 };
+  if (one) cam.fov = one.fov;
+  Object.assign(cam, { yaw: 0, pitch: 0, dist: framing.dist, target: [...framing.target] as [number, number, number] }); home = { ...cam, target: [...cam.target] as [number, number, number] };
+  syncMarks();
+}
+/** the marks again (another way of drawing them, or a spine moved), keeping the camera */
+function marksUpload() {
+  if (!marksS) return;
+  const d = marksS.drawing(); scene = d; R.load(d); sorter.data(d); lastDir = null;
+}
 const VIEWS = { hero: { yaw: 0.6, pitch: 0.32 }, grazing: { yaw: 1.35, pitch: 0.035 }, reverse: { yaw: 0.6 + Math.PI, pitch: 0.3 } };
 function setView(v: keyof typeof VIEWS) {
   const V = VIEWS[v] ?? VIEWS.hero;
@@ -405,10 +430,11 @@ function benchPick(x: number, y: number): number {
 const handles = $('handles');
 let dragging: { k: number; P0: [number, number, number]; fwd: [number, number, number] } | null = null;
 function placeHandles() {
-  const want = bench && benchSel >= 0 ? bench.items[benchSel].handles() : [];
+  const want = bench && benchSel >= 0 ? bench.items[benchSel].handles() : marksS && marksSel >= 0 ? marksS.handles(marksSel) : [];
   while (handles.children.length < want.length) {
     const h = document.createElement('div'), k = handles.children.length;
     h.addEventListener('pointerdown', (e) => {
+      if (marksS && marksSel >= 0) { e.stopPropagation(); h.setPointerCapture(e.pointerId); const c = marksS.handles(marksSel)[k]; dragging = { k, P0: [c[0], c[1], c[2]], fwd: eye().fwd }; return; }
       if (!bench || benchSel < 0) return;
       e.stopPropagation(); h.setPointerCapture(e.pointerId);
       undoStack.push(bench.editor.snapshot(benchSel));
@@ -416,6 +442,11 @@ function placeHandles() {
       dragging = { k, P0: [c[0], c[1], c[2]], fwd: eye().fwd };
     });
     h.addEventListener('pointermove', (e) => {
+      if (dragging && marksS && marksSel >= 0 && dragging.k === k) {
+        // (a mark on the wall: the finger's ray meets the wall)
+        const { pos, d } = rayAt(e.clientX, e.clientY), t = (dragging.P0[2] - pos[2]) / (d[2] || 1e-9);
+        marksS.setHandle(marksSel, k, [pos[0] + d[0] * t, pos[1] + d[1] * t, dragging.P0[2]]); marksDirty = true; return;
+      }
       if (!dragging || !bench || benchSel < 0 || dragging.k !== k) return;
       // (the finger's ray meets the plane through the point facing the eye; on a surface the point is then taken onto it)
       const { pos, d } = rayAt(e.clientX, e.clientY), f = dragging.fwd, t = dot([dragging.P0[0] - pos[0], dragging.P0[1] - pos[1], dragging.P0[2] - pos[2]], f) / dot(d, f);
@@ -524,6 +555,7 @@ canvas.addEventListener('pointermove', (e) => {
 });
 const lift = (e: PointerEvent) => {
   // (on the Bench, a tap (no drag) selects the stroke under it, or none)
+  if (marksS && tapFrom && e.type === 'pointerup' && Math.hypot(e.clientX - tapFrom.x, e.clientY - tapFrom.y) < 8 && performance.now() - tapFrom.t < 350) { marksSel = marksS.pick(toScreen, e.clientX, e.clientY); syncMarks(); }
   if (bench && tapFrom && e.type === 'pointerup' && Math.hypot(e.clientX - tapFrom.x, e.clientY - tapFrom.y) < 8 && performance.now() - tapFrom.t < 350) { const i = benchPick(e.clientX, e.clientY); if (i !== benchSel) benchSelect(i); }
   tapFrom = null; pts.delete(e.pointerId);
 };
@@ -589,6 +621,18 @@ const syncs = [
   seg('teachers', (['sumi', 'sumi-bold', 'sumi-light'] as const).map((t) => [t.replace('sumi-', ''), () => { teacher = t; policyTarget = null; }, () => teacher.replace(/-minus-right$/, '') === t] as [string, () => void, () => boolean])),
   seg('tools', [['brush', () => { brush = !brush; }, () => brush], ['clear', () => { features.fill(0); lastPaint = null; }, () => false], ['occluder', () => { occlude = !occlude; }, () => occlude]]),
 ];
+{
+  const el = $('m-ways');
+  for (const w of WAYS) { const b = document.createElement('button'); b.textContent = w === 'organised+deposits' ? '+ deposits' : w; b.onclick = () => { if (marksS) { marksS.setWay(w); marksSel = -1; marksUpload(); syncMarks(); } }; el.append(b); }
+  syncMarks = () => {
+    $('marks-controls').hidden = !marksS; if (!marksS) { placeHandles(); return; }
+    [...el.querySelectorAll('button')].forEach((b, k) => b.setAttribute('aria-pressed', String(WAYS[k] === marksS!.way)));
+    const m = marksSel >= 0 ? marksS.marks[marksSel] : null;
+    $('sum-marks').textContent = marksS.way;
+    $('m-note').textContent = m ? `${m.name}: ${m.count} deposits organised by ${m.params.length} numbers${m.ctrl ? `; drag a point of its spine and they come with it` : ''}` : marksS.way === 'independent' ? `${marksS.deposits.toLocaleString()} deposits, each free: there is no mark to pick up` : marksS.way === 'brush' ? `the lab's existing brush on the same spines` : `${marksS.deposits.toLocaleString()} deposits in ${marksS.marks.length} marks; tap one to select it`;
+    syncPanel();
+  };
+}
 function syncStone() { syncs.forEach((f) => f()); $('stone-controls').hidden = !stone && !brushes && !(captured && inkOn); $('composition').hidden = !composed; $('teachers').hidden = policyMode !== 'taught'; syncPanel(); }
 /**
  * The panel is a drawer (client/drawer, made for every experiment): closed to its grip and a line (the scene, its
@@ -840,13 +884,14 @@ function frame() {
     const u = (t - orbitFrom) / 1000 / ORBIT_S;
     cam.yaw = VIEWS.hero.yaw + Math.min(1, u) * Math.PI * 2;
     if (u >= 1) { orbitFrom = null; syncStone(); }
-  } else if (!stone && !brushes && !bench && !penS && sceneName !== 'field' && (preview || t - touched > 8000)) cam.yaw += dt * 0.15;
+  } else if (!stone && !brushes && !bench && !penS && !marksS && sceneName !== 'field' && (preview || t - touched > 8000)) cam.yaw += dt * 0.15;
   else if ((stone || brushes) && preview) cam.yaw += dt * 0.25;
   // (the canvas at the resolution asked, never past the screen's)
   const dpr = Math.min(res, devicePixelRatio || 1), w = Math.round(canvas.clientWidth * dpr), h = Math.round(canvas.clientHeight * dpr);
   if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
   if (bench && benchDirty && benchSel >= 0) { benchDirty = false; benchRegen(benchSel); }
-  if (bench) placeHandles();
+  if (marksS && marksDirty) { marksDirty = false; marksUpload(); }
+  if (bench || marksS) placeHandles();
   const { view, fwd, pos } = eye();
   // (sorted again once the view's turned more than a little, and the last sort's in)
   if (scene && !sorter.busy && (!lastDir || dot(lastDir, fwd) < 0.9995)) { lastDir = fwd; sorter.ask(fwd); }
@@ -859,7 +904,7 @@ function frame() {
   // objects' tone) all open, so the teacher's decisions alone say what shows)
   let gv = gv0;
   if (gv0 && composed && (policyMode === 'taught' || policyOverride)) { gv = Float32Array.from(gv0); for (const g of (brushes as ComposedScene).gates) gv[g.index] = 1; }
-  drawNow = () => R.draw(view, proj, [fy, fy], { size, mode, bg: mist ? [0.13, 0.145, 0.165] : stone || brushes || bench || penS || sceneName === 'field' || (captured && inkOn) ? [0.937, 0.906, 0.847] : theme(), detail, thin, share, features: gv ?? features, eye: pos, occlude, only, light: mist ? Math.max(0, LIGHTS.indexOf(light) - 1) : 0, sun: sunDir(sunAz, sunEl), diff: mist ? diff : false, halo: composed && compose && haloOn ? haloPx * dpr : 0, nf: [near, cam.dist * 100] });
+  drawNow = () => R.draw(view, proj, [fy, fy], { size, mode, bg: mist ? [0.13, 0.145, 0.165] : stone || brushes || bench || penS || marksS || sceneName === 'field' || (captured && inkOn) ? [0.937, 0.906, 0.847] : theme(), detail, thin, share, features: gv ?? features, eye: pos, occlude, only, light: mist ? Math.max(0, LIGHTS.indexOf(light) - 1) : 0, sun: sunDir(sunAz, sunEl), diff: mist ? diff : false, halo: composed && compose && haloOn ? haloPx * dpr : 0, nf: [near, cam.dist * 100] });
   applyPolicy(dt, pos, fwd);
   drawNow();
   judgeStep();
@@ -882,7 +927,10 @@ function frame() {
     drawNow(); const c = document.createElement('canvas'); c.width = canvas.width; c.height = canvas.height;
     const g = c.getContext('2d')!; g.drawImage(canvas, 0, 0); const d = g.getImageData(0, 0, c.width, c.height).data, L: number[] = [];
     for (let i = 0; i < c.width * c.height; i++) L.push(+(d[i * 4 + 1] / 255).toFixed(3));
-    return { w: c.width, h: c.height, L, eye: eye().pos, target: [...cam.target], fov: cam.fov, up };
+    // (and its darkness: the most any channel is darkened from the paper, so a coloured mark counts as ink does)
+    const PAPER = [0.937, 0.906, 0.847], D: number[] = [];
+    for (let i = 0; i < c.width * c.height; i++) D.push(+Math.max(0, Math.min(1, Math.max((PAPER[0] - d[i * 4] / 255) / (PAPER[0] - 0.12), (PAPER[1] - d[i * 4 + 1] / 255) / (PAPER[1] - 0.12), (PAPER[2] - d[i * 4 + 2] / 255) / (PAPER[2] - 0.12)))).toFixed(3));
+    return { w: c.width, h: c.height, L, D, eye: eye().pos, target: [...cam.target], fov: cam.fov, up };
   },
   pen: { frame: (n: string) => penFrame(n), reference: (on: boolean) => showReference(on), get bank() { return penS?.bank ?? null; }, get rock() { return penS?.rock ?? null; } },
   bench: {
@@ -892,6 +940,11 @@ function frame() {
     undo: () => $('b-undo').click(), density: (d: number) => { if (bench) { bench.editor.density = d; benchRegen('all'); } },
   },
   mist: { setDiff: (d: boolean) => { diff = d; relight(); }, setLight: (l: string) => { light = l; relight(); syncMist(); }, setSun: (az: number, el: number) => { sunAz = az; sunEl = el; relight(); }, setBank: (b: number) => { bank = b; openMist(); }, get ready() { return refReady; } },
+  marks: {
+    get state() { return marksS ? { way: marksS.way, selected: marksSel, deposits: marksS.deposits, sheets: marksS.sheets.map((s) => s.name), marks: marksS.marks.map((m) => ({ id: m.id, name: m.name, kind: m.kind, count: m.count, ctrl: m.ctrl })) } : null; },
+    setWay: (w: string) => { if (marksS) { marksS.setWay(w); marksSel = -1; marksUpload(); syncMarks(); } }, select: (i: number) => { marksSel = i; syncMarks(); }, pick: (x: number, y: number) => (marksS ? marksS.pick(toScreen, x, y) : -1), screen: (p: number[]) => toScreen(p),
+    drag: (k: number, p: [number, number, number]) => { if (marksS && marksSel >= 0) { marksS.setHandle(marksSel, k, p); marksDirty = true; } },
+  },
   perf: () => runPerf(), get perfResult() { return (window as unknown as { __perf?: string }).__perf ?? null; },
   composed: { camRef: () => camRef(),
     /** each group's match to a teacher's entries, and a treatment set from outside (null: the policy's own again) */
