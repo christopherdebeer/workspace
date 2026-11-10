@@ -1278,6 +1278,16 @@ Not done:
   fitted together, isn't done.
 - **The room's tone against the teachers wasn't measured again** with its limbs as strokes.
 
+### Geometry for the next teachers
+
+The first underdrawings sent for restyling were the room drawn in its own marks, and the teacher kept their
+choices: where a limb's ink sat, how soft a wash was. The next set carries none (`devtools/splats-room-wires.mjs`,
+`.py`; `devtools/conservatory/wires2`): the solid room's geometry as thin even lines with what's hidden left out.
+Each limb is its tube's outline, both edges alike; planks, posts, rails, strands, the veil and the far bridge are the
+lines they run along; a leaf is a tick where it is; a wash or mist is the dotted outline of its volume. The same six
+views (three to teach from, three reserved), and two more for a reserved route: back along the tunnel, and sideways
+from the stones.
+
 ### Air, water, cost
 
 - **Air moving**: a mark can sway (`sway`). Each deposit moves by its own share of it (none where a strand hangs
