@@ -247,7 +247,7 @@
    {
     "name": "room-tunnel",
     "title": "The root tunnel",
-    "caption": "the boardwalk under the willow’s roots: every mark a stroke or a wash, no outline pass",
+    "caption": "the boardwalk under the willow’s roots, as taught from three drawn views: every mark a stroke or a wash, no outline pass",
     "file": "v-room-tunnel.jpg"
    },
    {
@@ -261,6 +261,12 @@
     "title": "The canopy",
     "caption": "the deck under hanging fronds, looking back across the water",
     "file": "v-room-canopy.jpg"
+   },
+   {
+    "name": "room-reserved",
+    "title": "A reserved view, as taught",
+    "caption": "between the pool and the canopy: a view the room was never fitted to, drawn as taught from the three it was",
+    "file": "v-room-reserved.jpg"
    }
   ]
  }

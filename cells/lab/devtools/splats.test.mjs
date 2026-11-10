@@ -347,6 +347,18 @@ ok('parse() tells a .splat by its bytes', F.parse(F.encodeSplat(g)).n === g.n);
   const loop = CO.routeAt(0).p, loop1 = CO.routeAt(1).p;
   ok(`room: ${room.marks.length} marks, ${rs.n} deposits, all finite and all fitted marks; its route closes; three regions and the house`, bad === 0 && rs.n > 15000 && rs.mark.every((k) => k === 12) && Math.hypot(loop[0] - loop1[0], loop[2] - loop1[2]) < 1e-6 && ['willow', 'tunnel', 'pool', 'canopy', 'house'].every((r) => room.regions[r] > 0));
 }
+// (the room taught: every mark has a role; what was taught from the drawn views fits the room as the scene lays it (a
+// weight a mark, an offset a role's parameter), moves its marks, and keeps every parameter in its range)
+{
+  const MK = await load('../client/splats/marks.ts'), CO = await load('../client/splats/conservatory.ts'), fs = await import('node:fs');
+  const f = new URL('../static/splats/room-taught.json', import.meta.url);
+  if (fs.existsSync(f)) {
+    const T = JSON.parse(fs.readFileSync(f, 'utf8')), plain = CO.conservatory({}), taught = CO.conservatory({}, 'both', T);
+    const roles = new Set(plain.marks.map((m) => CO.roleOf(m.name))); let moved = 0, out = 0;
+    taught.marks.forEach((m, i) => { if (m.params.some((v, j) => Math.abs(v - plain.marks[i].params[j]) > 1e-6)) moved++; m.params.forEach((v, j) => { const [lo, hi] = MK.paramRange(m, j); if (v < lo - 1e-9 || v > hi + 1e-9) out++; }); });
+    ok(`room, taught: ${roles.size} roles, each with a style; a weight for each of ${T.gains.length} marks; ${moved} marks drawn differently, every parameter in range`, T.gains.length === plain.marks.length && [...roles].every((r) => T.roles[r]) && moved > plain.marks.length * 0.9 && out === 0);
+  }
+}
 if (R) {
   ok('half floats: 1, 0.5, 65504, 2e-5 round trip', R.toHalf(1) === 0x3c00 && R.toHalf(0.5) === 0x3800 && R.toHalf(65504) === 0x7bff && R.toHalf(0) === 0);
 }

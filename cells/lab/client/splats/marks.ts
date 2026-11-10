@@ -71,6 +71,14 @@ const knots = (k: number[], o: number, n: number, u: number) => { const x = Math
 const softplus = (x: number) => (x > 30 ? x : Math.log1p(Math.exp(x)));
 const hash = (a: number, b: number, c: number) => { let h = (Math.imul(a | 0, 374761393) + Math.imul(b | 0, 668265263) + Math.imul(c | 0, 2147483647)) | 0; h = Math.imul(h ^ (h >>> 13), 1274126177); return ((h ^ (h >>> 16)) >>> 0) / 4294967296; };
 
+/** a parameter's range (a stroke's by its place, a wash's tones and size) */
+export function paramRange(m: Mark, j: number): [number, number] {
+  if (m.kind !== 'stroke') return j < 9 ? [-7, 3] : [-0.6, 0.9];
+  if (j < SP.width) return [-7, 5]; if (j < SP.u0) return [-1.6, 1.2];
+  if (j === SP.u0) return [-0.1, 0.6]; if (j === SP.u1) return [0.4, 1.1]; if (j === SP.sharp0 || j === SP.sharp1) return [-2.5, 2]; if (j === SP.along) return [-1.5, 1];
+  if (j < SP.dry) return [-1.5, 1.5]; if (j < SP.drySide) return [0, 2.5]; if (j === SP.drySide) return [-1, 1]; if (j === SP.spread) return [-0.8, 0.8]; if (j === SP.splay) return [-1.2, 1.2]; if (j === SP.crisp) return [0, 3];
+  return [-3, 3];
+}
 /** a new stroke through control points: full along it, of even weight, wet */
 export function strokeMark(id: number, ctrl: V[], normal: V | V[] | 'tube' | undefined, width: number, count: number, rows = 1, name?: string): Mark {
   const params = new Array(STROKE).fill(0); for (let i = 0; i < 6; i++) params[i] = 1.5; params[SP.u0] = -0.04; params[SP.u1] = 1.04;

@@ -1077,7 +1077,8 @@ hanging fronds that hand over as above).
 - **There is no outline pass and no surface to shade.** Every mark is a stroke or a wash the scene put there. A limb
   is a stroke laid round a tube, inked along its underside, so it is a band of the same weight from wherever it's seen.
 - **One gesture stands on nothing**: a run of seeds on the air over the pool, joined by a dotted thread.
-- **Styles** come from the fits above (a root's, a veil's), or plain.
+- **Styles**: plain, as the scene lays it; from the Bench's fits above (a root's, a veil's); or taught from drawn
+  views (the next section).
 - **Frozen, on still water**: the water's mirror is a second pass of the same deposits turned over in it, fainter the
   higher they stand.
 
@@ -1086,19 +1087,87 @@ hanging fronds that hand over as above).
 - **It holds together as a place walked through**, and the three regions are distinct.
 - **It is soft where the teacher is crisp.** Limbs are long blurred streaks, not loaded strokes with a dry edge; far
   canopy washes are smudges without a drawn edge. This is the organised stroke's softness from the Bench, at scale.
-- **Nothing here has been taught from a view yet.** The three teaching views and the three reserved between them are
-  set (`views` in conservatory.ts); the next step is the same as for the composed scene: underdrawings of these views
-  restyled by an image model, then the room's marks fitted to them, scored on the reserved stretch.
+- **As the scene lays it, nothing here has been taught from a view.** That is the next section.
 
 ![The root tunnel](splats/v-room-tunnel.jpg)
 ![The open pool](splats/v-room-pool.jpg)
 ![The canopy](splats/v-room-canopy.jpg)
 
+### The room, taught from three drawn views
+
+![The six teachers: an image model's sparse sumi-e restyles of the room's underdrawings; three taught from, three reserved](splats/b-room-teachers.jpg)
+
+The room drawn plain from six views round the route was restyled by an image model, as the composed scene's
+wireframes were. All six line up with their underdrawings with no shift (blurred, they correlate at 0.78 to 0.90),
+and the teacher uses about half to two thirds of the underdrawings' ink. Three are taught from (the root tunnel, the
+open pool, the canopy). The three between them are reserved: never fitted to, only scored on.
+
+The marks stay where the scene put them; their spines aren't moved. What is taught is how they are drawn, at four
+levels of freedom (`devtools/splats-room-fit.mjs`):
+
+- **a style a role**: an offset to the parameters of every mark of one role (every arch, every plank, every strand:
+  19 roles). 327 numbers for the whole room.
+- **+ each mark's weight**: three numbers a mark (a stroke's ink, width and dryness; a wash's tone and size).
+- **+ its deposits, bounded**: every deposit's own residuals, within the bounds a mark keeps them to.
+- **deposits set free** (in place of the last): the same residuals with the bounds off. As near a fitted field as
+  the room's own deposits can get.
+
+![The three reserved views: the teacher, and the room at each level of freedom](splats/b-room-levels.jpg)
+
+Tone error, mean of three views (blank paper: 74.7 on the views taught from, 71.6 on the reserved):
+
+| | numbers taught | on the views taught from | on the reserved views | reserved: ink on bare paper | reserved: ink against the teacher's |
+|---|---|---|---|---|---|
+| untaught | 0 | 63.6 | 33.0 | 81.6 | ×1.71 |
+| a style a role | 327 | 10.8 | 15.4 | 12.6 | ×0.69 |
+| + each mark's weight | + 4,149 | 7.7 | **14.9** | 14.2 | ×0.80 |
+| + its deposits, bounded | + 183,000 | 1.6 | 15.8 | 26.2 | ×0.87 |
+| deposits set free | (the same 183,000) | 0.8 | 25.7 | 96.3 | ×1.43 |
+
+Each reserved view on its own (between the tunnel and the pool / the pool and the canopy / the canopy and the tunnel):
+untaught 16.2 / 45.4 / 37.2; a style a role 10.8 / 14.9 / 20.7; + weights 9.5 / 13.3 / 21.8; + bounded deposits
+9.1 / 17.3 / 20.9; set free 34.3 / 22.8 / 20.1.
+
+- **On the views taught from, more freedom always fits better**: 10.8, 7.7, 1.6, 0.8.
+- **On the reserved views, the organisation is what carries.** A style a role takes the error from 33.0 to 15.4:
+  nearly all of the gain, from 327 numbers. Each mark's weight adds a little (14.9). Its deposits, even bounded, add
+  nothing and put twice the ink on bare paper. Set free, they are much worse (25.7), with more ink on bare paper
+  than the untaught room.
+- **Why**: a mark not seen from a teaching view still has its role's style. A deposit not seen has nothing, and a
+  deposit bent to suit one view is wrong from the next.
+- **What the teacher taught, by role**: nearly every role draws with shorter, narrower deposits; trunk, arches and
+  limbs with less ink; washes and mist paler and smaller (tone -0.5 to -1.0). Crisper and lighter.
+- **The taught room in the browser is the fitter's**: on all six views it lays 0.94 to 1.00 of the fitter's ink,
+  tone apart by at most 0.17 (`devtools/splats-room-browser.mjs`).
+
+![The reserved views: the teacher, the room as the scene lays it, the room as taught](splats/b-room-taught.jpg)
+![The views taught from, the same way](splats/b-room-taught-from.jpg)
+
+What this does and doesn't show:
+
+- **One room, one teacher, three views, one run.** The reserved views lie between the teaching ones on the same
+  route and share marks with them.
+- **The third reserved view barely separates the levels** (20 to 22 for all four). The mean's story rests on the
+  other two, and most on the first.
+- **"Set free" isn't a field fitted from scratch**: it's the room's own deposits unbound, and three views are few for
+  any free fit. A field given more views would do better than this; the Bench result says how much freedom buys when
+  there's one picture to match.
+- **A gap remains**: 14.9 on the reserved views against 7.7 on the taught ones.
+- **It is still short of the teacher**, and under-inked (×0.80). The teacher's arches are single loaded strokes and
+  its fronds are longer strands with larger leaves. Re-weighting marks whose spines are fixed can't reach either: the
+  first is the organised stroke's softness; the second is geometry the scene would have to change.
+
+The page draws the room as taught by default (a style a role and each mark's weight: 20 KB); `&style=bench` and
+`&style=plain` are the other two.
+
+![A reserved view, as taught](splats/v-room-reserved.jpg)
+
 ### Air, water, cost
 
 - **Air moving**: a mark can sway (`sway`). Each deposit moves by its own share of it (none where a strand hangs
   from, all at its far end), in a slow wave across the scene, in the vertex shader. Nothing is laid again.
-- **Still water**: the mirror pass doubles the deposits drawn.
+- **Still water**: the mirror pass doubles the deposits drawn. It isn't hidden by the deck or the boardwalk: nothing
+  in the room occludes anything, so the mirror shows through them.
 - **Cost**: the room draws about 23,000 deposits (some lay no ink and are left out), twice with the mirror. `&perf`
   now measures the room from each region with the mirror and the sway on and off, and the walk from 12, 5 and 1.5 m.
   **Phone numbers aren't in yet**: they need a phone.
@@ -1279,7 +1348,7 @@ Roughly in order of what each teaches:
 
 ## Flags
 
-`?scene=stone|brushes|composed|pen|field|bench|marks|walk|room|mist|garden|plush|nike|train` · `?scene=marks&way=organised|organised+deposits|independent|style|unfitted|brush&only=<sheet>` · `?scene=walk&d=<metres>&level=both|fronds|wash&auto` · `?scene=room&view=tunnel|pool|canopy&s=<0…1>&style=plain&mirror=0&moving&auto` · `?field=stone|composed` · `?flat` (a fitted field's baseline) · `?compose=0` · `?halo=0` · `?halopx=` · `?policy=ranks|rules|learned|taught` · `?teacher=sumi|sumi-bold|sumi-light` · `?judge` · `?perf` · `?ink` (a captured scene in ink) · `?scene=pen&part=word|board|culm|bank|rock&reference` · `?look=dry|wash` · `?detail=0..1` · `?thin=even` · `?only=wash` · `?view=hero|grazing|reverse` · `?orbit` · `?detail=0.25|0.55|1` (sparse, intermediate, resolved) · `?brush` · `?occluder=0` · `?clean` (no controls) · `?url=…` (any `.splat` or `.ply` CORS lets it read) · `?up=1` (for a file that's
+`?scene=stone|brushes|composed|pen|field|bench|marks|walk|room|mist|garden|plush|nike|train` · `?scene=marks&way=organised|organised+deposits|independent|style|unfitted|brush&only=<sheet>` · `?scene=walk&d=<metres>&level=both|fronds|wash&auto` · `?scene=room&view=tunnel|pool|canopy&s=<0…1>&style=taught|bench|plain&mirror=0&moving&auto` · `?field=stone|composed` · `?flat` (a fitted field's baseline) · `?compose=0` · `?halo=0` · `?halopx=` · `?policy=ranks|rules|learned|taught` · `?teacher=sumi|sumi-bold|sumi-light` · `?judge` · `?perf` · `?ink` (a captured scene in ink) · `?scene=pen&part=word|board|culm|bank|rock&reference` · `?look=dry|wash` · `?detail=0..1` · `?thin=even` · `?only=wash` · `?view=hero|grazing|reverse` · `?orbit` · `?detail=0.25|0.55|1` (sparse, intermediate, resolved) · `?brush` · `?occluder=0` · `?clean` (no controls) · `?url=…` (any `.splat` or `.ply` CORS lets it read) · `?up=1` (for a file that's
 y-up) · `?mode=0..3` · `?size=` · `?res=` · `?count=` (garden size) · `?noworkers` · `?preview`
 
 Checks: `node cells/lab/devtools/splats.test.mjs` (formats, covariance, sort) and

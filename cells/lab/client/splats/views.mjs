@@ -55,7 +55,8 @@ export const views = [
   { name: 'walk-far', group: 'Walking into a wash', title: 'A canopy from 12 m', caption: 'one canopy patch from 12 m: a wash of fifty deposits', query: 'scene=walk&d=12&clean', size: LAND, settle: 6000 },
   { name: 'walk-mid', group: 'Walking into a wash', title: 'From 5 m', caption: 'from 5 m: the wash giving way to its fronds', query: 'scene=walk&d=5&clean', size: LAND, settle: 6000 },
   { name: 'walk-in', group: 'Walking into a wash', title: 'Inside it', caption: 'from 1.5 m, under it: strands and dabs', query: 'scene=walk&d=1.5&clean', size: LAND, settle: 6000 },
-  { name: 'room-tunnel', group: 'The room', title: 'The root tunnel', caption: 'the boardwalk under the willow’s roots: every mark a stroke or a wash, no outline pass', query: 'scene=room&view=tunnel&clean', size: LAND, settle: 9000 },
+  { name: 'room-tunnel', group: 'The room', title: 'The root tunnel', caption: 'the boardwalk under the willow’s roots, as taught from three drawn views: every mark a stroke or a wash, no outline pass', query: 'scene=room&view=tunnel&clean', size: LAND, settle: 9000 },
   { name: 'room-pool', group: 'The room', title: 'The open pool', caption: 'stepping stones, the willow, and a gesture on the air that stands on nothing; still water', query: 'scene=room&view=pool&clean', size: LAND, settle: 9000 },
   { name: 'room-canopy', group: 'The room', title: 'The canopy', caption: 'the deck under hanging fronds, looking back across the water', query: 'scene=room&view=canopy&clean', size: LAND, settle: 9000 },
+  { name: 'room-reserved', group: 'The room', title: 'A reserved view, as taught', caption: 'between the pool and the canopy: a view the room was never fitted to, drawn as taught from the three it was', query: 'scene=room&view=between%20pool%20and%20canopy&clean', size: LAND, settle: 9000 },
 ];

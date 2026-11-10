@@ -13,12 +13,47 @@
  *
  * Frozen: nothing moves unless the page asks (a mark's `sway`), and the water is still (its mirror is the renderer's).
  */
-import { strokeMark, washMark, blobMark, SP, KN, type Mark, type V } from './marks';
+import { strokeMark, washMark, blobMark, paramRange, SP, KN, RESID, type Mark, type V } from './marks';
 import { canopyPatch, OLIVE, type Level } from './canopy';
 
 /** fitted styles, by role: a stroke's or a wash's parameters */
 export interface Styles { root?: number[]; strand?: number[]; dabs?: number[]; veil?: number[]; wash?: number[] }
 export interface Room { marks: Mark[]; route: V[]; views: Record<string, { s: number; at: V }>; regions: Record<string, number> }
+/**
+ * What a mark is, for teaching: marks of one role share a style. (A trunk, an arch, a lesser limb; a strand, its dabs,
+ * a canopy's wash; mist; a plank, a post, an edge; a stone's rim, far side, wash and waterline; the veil; a thin line
+ * of the far bridge or the house; the gesture; a leaf; the rag.)
+ */
+export function roleOf(name = ''): string {
+  if (name.startsWith('willow/trunk')) return 'trunk'; if (name.startsWith('tunnel/arch')) return 'arch';
+  if (name.startsWith('willow/') || name.startsWith('tunnel/root')) return 'limb';
+  if (name.startsWith('canopy/strand')) return 'strand'; if (name.startsWith('canopy/dabs')) return 'dabs'; if (name === 'canopy/wash') return 'canopy wash';
+  if (name === 'tunnel/mist' || name === 'pool/veil mist' || name === 'house/far canopy') return 'mist';
+  if (name.endsWith('/plank')) return 'plank'; if (name.endsWith('post') && !name.startsWith('pool/bridge')) return 'post';
+  if (name.endsWith('/edge') || name === 'canopy/deck edge' || name === 'canopy/rail') return 'edge';
+  if (name.startsWith('pool/stone')) return name.endsWith('rim') ? 'stone rim' : name.endsWith('far') ? 'stone far' : name.endsWith('wash') ? 'stone wash' : 'waterline';
+  if (/^pool\/veil \d/.test(name)) return 'veil'; if (name.startsWith('pool/gesture')) return 'gesture'; if (name === 'house/leaf') return 'leaf'; if (name === 'canopy/rag') return 'rag';
+  return 'line';
+}
+/**
+ * What the room was taught from drawn views (devtools/splats-room-fit.mjs), over its marks as the scene lays them:
+ * - `roles`: for each role, an offset to every parameter of every mark of that role (a style, shared);
+ * - `gains`: for each mark in order, its own weight: a stroke's ink, width and dryness; a wash's tone and size;
+ * - `resid`: for each mark in order, its deposits' own residuals (as the mark keeps them).
+ */
+export interface Taught { roles: Record<string, number[]>; gains?: number[][]; resid?: Array<number[] | null>; note?: string }
+export function applyTaught(marks: Mark[], T: Taught): Mark[] {
+  marks.forEach((m, i) => {
+    const off = T.roles[roleOf(m.name)], g = T.gains?.[i], stroke = m.kind === 'stroke';
+    for (let j = 0; j < m.params.length; j++) {
+      let v = m.params[j] + (off?.[j] ?? 0);
+      if (g) { if (stroke) { if (j < SP.width) v += g[0]; else if (j < SP.u0) v += g[1]; else if (j >= SP.dry && j < SP.drySide) v += g[2]; } else v += j < 9 ? g[0] : g[1]; }
+      const [lo, hi] = paramRange(m, j); m.params[j] = Math.max(lo, Math.min(hi, v));
+    }
+    const r = T.resid?.[i]; if (r && r.length === m.count * RESID) m.resid = r.slice();
+  });
+  return marks;
+}
 const add = (a: V, b: V, k = 1): V => [a[0] + b[0] * k, a[1] + b[1] * k, a[2] + b[2] * k];
 const lerp = (a: V, b: V, t: number): V => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
 const UP: V = [0, 1, 0];
@@ -34,7 +69,7 @@ export function routeAt(s: number, R: V[] = ROUTE): { p: V; dir: V } {
   return { p: a, dir: [d[0] / l, 0, d[2] / l] };
 }
 
-export function conservatory(styles: Styles = {}, level: Level = 'both'): Room {
+export function conservatory(styles: Styles = {}, level: Level = 'both', taught?: Taught): Room {
   let id = 1, r = 12345; const rnd = () => ((r = (Math.imul(r, 1664525) + 1013904223) >>> 0) / 4294967296);
   const marks: Mark[] = [], regions: Record<string, number> = {};
   const count = (name: string, from: number) => { regions[name] = (regions[name] ?? 0) + marks.slice(from).reduce((a, m) => a + m.count, 0); };
@@ -134,5 +169,6 @@ export function conservatory(styles: Styles = {}, level: Level = 'both'): Room {
   count('house', from);
 
   if (styles.strand || styles.dabs) for (const m of marks) { if (styles.strand && m.name?.startsWith('canopy/strand')) { const lod = m.lod; m.params = styles.strand.slice(); m.lod = lod; } }
+  if (taught) applyTaught(marks, taught);
   return { marks, route: ROUTE, regions, views: { tunnel: { s: 1.15 / 14, at: [-4.2, 1.7, -3.6] }, pool: { s: 4.2 / 14, at: [3, 1.8, -2.5] }, canopy: { s: 11.3 / 14, at: [0.5, 2.4, -3] }, 'between tunnel and pool': { s: 4.5 / 14, at: [4, 1.4, -4] }, 'between pool and canopy': { s: 9.2 / 14, at: [4.5, 2.4, 7.5] }, 'between canopy and tunnel': { s: 13.4 / 14, at: [-7.5, 1.8, 2] } } };
 }

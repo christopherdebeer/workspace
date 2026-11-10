@@ -66,6 +66,7 @@ Made by `node cells/lab/views.mjs splats` from `client/splats/views.mjs`. The RE
 
 ## The room
 
-![The root tunnel: the boardwalk under the willow’s roots: every mark a stroke or a wash, no outline pass](v-room-tunnel.jpg)
+![The root tunnel: the boardwalk under the willow’s roots, as taught from three drawn views: every mark a stroke or a wash, no outline pass](v-room-tunnel.jpg)
 ![The open pool: stepping stones, the willow, and a gesture on the air that stands on nothing; still water](v-room-pool.jpg)
 ![The canopy: the deck under hanging fronds, looking back across the water](v-room-canopy.jpg)
+![A reserved view, as taught: between the pool and the canopy: a view the room was never fitted to, drawn as taught from the three it was](v-room-reserved.jpg)
