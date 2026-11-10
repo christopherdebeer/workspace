@@ -308,6 +308,8 @@ export interface DrawOpts {
   eye?: [number, number, number];
   /** the time, for fitted marks that sway (0: still); still water at a height, and how strongly it mirrors (0…1) */
   time?: number; mirror?: [number, number];
+  /** draw the splats this many times over (a load test: how much more than the scene a device has room for) */
+  repeat?: number;
   /** fitted marks let go as they reach the eye: gone at the first distance, whole by the second (none: kept) */
   near?: [number, number];
   /** draw the occluder into the depth buffer (if there is one) */
@@ -494,9 +496,11 @@ export class Renderer {
     gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
     gl.uniform1f(this.u.u_time, opts.time ?? 0); gl.uniform2f(this.u.u_near, opts.near?.[0] ?? 0, opts.near?.[1] ?? 0);
     // (still water: its mirror first, then the scene over it)
-    if (opts.mirror && opts.mirror[1] > 0) { gl.uniform3f(this.u.u_mirror, opts.mirror[0], opts.mirror[1], 1); gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, this.drawn); }
-    gl.uniform3f(this.u.u_mirror, 0, 0, 0);
-    gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, this.drawn);
+    for (let k = 0; k < Math.max(1, opts.repeat ?? 1); k++) {
+      if (opts.mirror && opts.mirror[1] > 0) { gl.uniform3f(this.u.u_mirror, opts.mirror[0], opts.mirror[1], 1); gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, this.drawn); }
+      gl.uniform3f(this.u.u_mirror, 0, 0, 0);
+      gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, this.drawn);
+    }
     gl.depthMask(true);
     gl.bindVertexArray(null);
   }

@@ -437,10 +437,13 @@ little low, so it doesn't cut into the slope's wash. In all: 21 faces washed, 79
 
 ### Measuring on a phone (`&perf`)
 
-`?scene=composed&perf` and `?scene=mist&perf` run a fixed benchmark while the camera turns:
+`?scene=composed&perf`, `?scene=mist&perf`, `?scene=room&perf` and `?scene=walk&perf` run a fixed benchmark while the
+camera turns:
 - **composed:** resolved, halo and ranks; resolved without halo; sparse with halo; sparse with rules; resolved with
   rules;
-- **mist:** stored, analytic and neural lighting.
+- **mist:** stored, analytic and neural lighting;
+- **room:** each region with the water's mirror and the sway on and off, then the scene drawn 2 to 16 times over;
+- **walk:** the canopy from 12, 5 and 1.5 m, then drawn 8 to 128 times over.
 
 Each phase settles for 1.5 s, then records for 6 s: fps, p50 and p95 frame time, sort time, and policy time. Then it
 times ten seam edits (deposit and upload). A table appears with the GPU name and a copy button. It's also kept in
@@ -1169,8 +1172,14 @@ The page draws the room as taught by default (a style a role and each mark's wei
 - **Still water**: the mirror pass doubles the deposits drawn. It isn't hidden by the deck or the boardwalk: nothing
   in the room occludes anything, so the mirror shows through them.
 - **Cost**: the room draws about 23,000 deposits (some lay no ink and are left out), twice with the mirror. `&perf`
-  now measures the room from each region with the mirror and the sway on and off, and the walk from 12, 5 and 1.5 m.
-  **Phone numbers aren't in yet**: they need a phone.
+  measures the room from each region with the mirror and the sway on and off, and the walk from 12, 5 and 1.5 m.
+- **On a phone** (an iPhone, iOS 18.7, Safari, Apple GPU, 603 × 1071 at 3 device pixels a point): the room, in the
+  Bench's styles (23,227 deposits drawn; as taught it draws 22,780), holds 60 fps from all three regions, with the
+  water's mirror or without, the air still or moving: frame time 17.0 ms at the median and at the 95th centile,
+  sort 1 ms. The walk (2,002 deposits) holds 60 fps at 12, 5 and 1.5 m.
+- **That is the display's cap**, so it says the room fits and not how much room is left: the mirror's second pass and
+  the sway cost nothing that shows. `&perf` now also draws the room 2, 4, 8 and 16 times over (the walk 8, 32 and
+  128 times), to find where a device leaves 60. Those numbers aren't in yet.
 - **Light isn't done.**
 
 ## The Bench: one brush made dependable, one stroke made editable

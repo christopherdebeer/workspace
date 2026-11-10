@@ -920,6 +920,8 @@ function judgeExport() {
 // ─── measuring on the device (&perf): each configuration in turn while the camera turns, then edits; a table to copy ───
 const perf = { rec: null as number[] | null, sorts: [] as number[], spin: false };
 const quantile = (a: number[], q: number) => { const b = [...a].sort((x, y) => x - y); return b.length ? b[Math.min(b.length - 1, Math.floor(q * b.length))] : 0; };
+/** how many times over the scene is drawn (1, but for &perf's load test) */
+let perfLoad = 1;
 async function runPerf() {
   const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
   type Phase = { name: string; apply: () => void };
@@ -939,9 +941,9 @@ async function runPerf() {
             { name: `${v} · still water · air still`, apply: () => { const w = roomS!.room.views[v]; roomS!.s = w.s; roomS!.auto = null; roomS!.mirror = true; roomS!.moving = false; roomPlace(true, w.at); } },
             { name: `${v} · no water · air still`, apply: () => { roomS!.mirror = false; roomS!.moving = false; } },
             { name: `${v} · still water · air moving`, apply: () => { roomS!.mirror = true; roomS!.moving = true; } },
-          ])
+          ]).concat([2, 4, 8, 16].map((k) => ({ name: `canopy · still water · air moving · drawn ${k}× over`, apply: () => { perfLoad = k; } })))
         : walkS
-          ? [12, 5, 1.5].map((d) => ({ name: `canopy from ${d} m`, apply: () => { walkS!.d = d; walkS!.auto = null; } }))
+          ? [12, 5, 1.5].map((d) => ({ name: `canopy from ${d} m`, apply: () => { walkS!.d = d; walkS!.auto = null; } })).concat([8, 32, 128].map((k) => ({ name: `canopy from 1.5 m · drawn ${k}× over`, apply: () => { perfLoad = k; } })))
           : [{ name: 'as it is', apply: () => {} }];
   const rows: string[][] = [];
   $('status').textContent = 'measuring…';
@@ -954,7 +956,7 @@ async function runPerf() {
     rows.push([ph.name, (1000 / (d.reduce((a, b) => a + b, 0) / Math.max(1, d.length))).toFixed(0), quantile(d, 0.5).toFixed(1), quantile(d, 0.95).toFixed(1), quantile(perf.sorts, 0.5).toFixed(0), policyMode !== 'ranks' ? policyMs.toFixed(1) : '–']);
     void pm0;
   }
-  perf.spin = false;
+  perf.spin = false; perfLoad = 1;
   // (edits: the seam dragged a little, ten times, each deposited again and uploaded)
   const edits: string[] = [];
   if (composed && bench) {
@@ -1018,7 +1020,7 @@ function frame() {
   // objects' tone) all open, so the teacher's decisions alone say what shows)
   let gv = gv0;
   if (gv0 && composed && (policyMode === 'taught' || policyOverride)) { gv = Float32Array.from(gv0); for (const g of (brushes as ComposedScene).gates) gv[g.index] = 1; }
-  drawNow = () => R.draw(view, proj, [fy, fy], { size, mode, bg: mist ? [0.13, 0.145, 0.165] : stone || brushes || bench || penS || marksS || walkS || roomS || sceneName === 'field' || (captured && inkOn) ? [0.937, 0.906, 0.847] : theme(), detail, thin, share, features: gv ?? features, eye: pos, time: roomS?.moving || (walkS && qs.has('moving')) ? (performance.now() / 1000) % 3600 + 1 : 0, mirror: roomS?.mirror ? [WATER, 0.5] : undefined, near: roomS || walkS ? [0.25, 0.7] : undefined, occlude, only, light: mist ? Math.max(0, LIGHTS.indexOf(light) - 1) : 0, sun: sunDir(sunAz, sunEl), diff: mist ? diff : false, halo: composed && compose && haloOn ? haloPx * dpr : 0, nf: [near, cam.dist * 100] });
+  drawNow = () => R.draw(view, proj, [fy, fy], { size, mode, bg: mist ? [0.13, 0.145, 0.165] : stone || brushes || bench || penS || marksS || walkS || roomS || sceneName === 'field' || (captured && inkOn) ? [0.937, 0.906, 0.847] : theme(), detail, thin, share, features: gv ?? features, eye: pos, time: roomS?.moving || (walkS && qs.has('moving')) ? (performance.now() / 1000) % 3600 + 1 : 0, mirror: roomS?.mirror ? [WATER, 0.5] : undefined, near: roomS || walkS ? [0.25, 0.7] : undefined, repeat: perfLoad, occlude, only, light: mist ? Math.max(0, LIGHTS.indexOf(light) - 1) : 0, sun: sunDir(sunAz, sunEl), diff: mist ? diff : false, halo: composed && compose && haloOn ? haloPx * dpr : 0, nf: [near, cam.dist * 100] });
   applyPolicy(dt, pos, fwd);
   drawNow();
   judgeStep();
