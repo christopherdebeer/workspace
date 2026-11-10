@@ -147,7 +147,8 @@ writeFileSync(new URL(`./out/field/fit-${tag}${HOLD ? `-minus-${HOLD}` : ''}.jso
 // (--dump: what the field draws of each held-out view, as darkness, for measures other than pixel error
 // (splats-field-score.py))
 if (DUMP) for (const v of test) { pass(v, false); const C = Array.from(logT, (l) => +(1 - Math.exp(l)).toFixed(3)); writeFileSync(new URL(`./out/field/dump-${tag}${TERMS < 9 ? `-terms${TERMS}` : ''}-${v.style}-${v.view}.json`, import.meta.url), JSON.stringify({ w: W, h: H, style: v.style, view: v.view, C })); }
-if (HOLD) process.exit(0);
+// (--keep: a held-out run's field written too, as `…-minus-<view>`, to draw it in the browser from the view it never saw)
+if (HOLD && !process.argv.includes('--keep')) process.exit(0);
 
 // ─── the field, packed 21 bytes a disc: place (3 × int16 over ±4, the shift folded in), normal (octahedral), two sizes
 // (× 0.0002), the turn (over 0…π), nine view terms and a constant (over −12…12) ───
@@ -162,7 +163,7 @@ discs.forEach((D, i) => {
   for (let b = 0; b < NB; b++) Bf[o + 11 + b] = qb(c[i * NB + b]); Bf[o + 20] = qb(c[i * NB]);
 });
 const head = Buffer.alloc(12); head.writeUInt32LE(N, 0); head.writeUInt32LE(21, 4); head.writeFloatLE(SPAN, 8);
-const fname = `composed-${TEACH.length > 1 ? `${TEACH[0]}-pooled` : TEACH[0]}-${SHAPE ? 'shape' : 'fixed'}`;
+const fname = `composed-${TEACH.length > 1 ? `${TEACH[0]}-pooled` : TEACH[0]}-${SHAPE ? 'shape' : 'fixed'}${HOLD ? `-minus-${HOLD}` : ''}`;
 writeFileSync(new URL(`../static/splats/field-${fname}.bin`, import.meta.url), Buffer.concat([head, Bf]));
 writeFileSync(new URL(`../static/splats/field-${fname}.json`, import.meta.url), JSON.stringify({ about: `The composed scene fitted as a field to the ${TEACH.join(', ')} restyle${TEACH.length > 1 ? 's' : ''} of its six wireframe views at ${W}×${H}, ${SHAPE ? 'each disc\'s shape fitted with its ink' : 'its discs\' shapes fixed'} (devtools/splats-field-shape.mjs).`, ...res }));
 console.log(`wrote static/splats/field-${fname}.bin`);
