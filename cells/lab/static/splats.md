@@ -1435,8 +1435,10 @@ teacher over all the readings, there and on the 36 strokes from the other five v
   limb twice. A test route is set aside for the end (`conservatory.ts`, `TEST_VIEWS`): six views between the eight on
   the same loop, looking other ways (the tunnel's mouth, out through the roots, the tunnel from the pool, the willow
   from the east, down the deck, up into the canopy). Their geometry is exported for restyling
-  (`devtools/conservatory/wires-test`); nothing has been drawn, fitted or chosen on them, and they aren't on the
-  page.
+  (`devtools/conservatory/wires-test`) and the teacher's restyles of them are filed
+  (`devtools/conservatory/teachers-test`). Nothing has been drawn, fitted or chosen on them, no script reads them
+  (a check fails if one does), and they aren't on the page. They have been seen, once, on arrival: so what's kept
+  is that no measurement or choice is made against them until the test.
 
 The room's limbs are unchanged: this is one limb. Tone at low resolution took no part in any of it.
 

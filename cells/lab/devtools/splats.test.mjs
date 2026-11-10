@@ -480,6 +480,15 @@ ok('parse() tells a .splat by its bytes', F.parse(F.encodeSplat(g)).n === g.n);
   const nearest = Math.min(...test.map(([, v]) => Math.min(...used.map((s) => Math.min(Math.abs(s - v.s), 1 - Math.abs(s - v.s))))));
   ok(`test route: ${test.length} views kept aside, the nearest ${(nearest * 14).toFixed(2)} of the loop's 14 from any view that's been used; none shares a name with one`, test.length === 6 && nearest * 14 > 0.5 && test.every(([k]) => !(k in room.views)));
 }
+// (the test route's restyles are filed and left alone: no script or page source reads their folder)
+{
+  const fs = await import('node:fs'), dir = new URL('./conservatory/teachers-' + 'test/', import.meta.url), name = 'teachers-' + 'test';
+  if (fs.existsSync(dir)) {
+    const kept = fs.readdirSync(dir).filter((f) => f.endsWith('.jpg')), readers = [];
+    for (const d of ['./', '../client/splats/']) for (const f of fs.readdirSync(new URL(d, import.meta.url))) if (/\.(mjs|py|ts)$/.test(f) && fs.readFileSync(new URL(d + f, import.meta.url), 'utf8').includes(name)) readers.push(f);
+    ok(`test route: ${kept.length} restyles kept aside; no script reads them (${readers.join(', ') || 'none'})`, kept.length === 6 && readers.length === 0);
+  }
+}
 if (R) {
   ok('half floats: 1, 0.5, 65504, 2e-5 round trip', R.toHalf(1) === 0x3c00 && R.toHalf(0.5) === 0x3800 && R.toHalf(65504) === 0x7bff && R.toHalf(0) === 0);
 }
