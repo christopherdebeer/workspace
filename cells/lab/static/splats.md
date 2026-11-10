@@ -823,6 +823,65 @@ Scored on the right view, each table leaving it out (`splats-taught-score.mjs`, 
 the teacher's, instead of mapping by hand. Then washes and shadows carry their tone, and the score says whether crisp
 strokes with the right tone beat the smeared field.
 
+### Closing the loop on the brush, and checking the field against the renderer
+
+**The brush fitted to each teacher** (`devtools/splats-taught-fit.mjs`). The scene is drawn with a treatment set from
+outside, from the five views other than the right; what it drew is measured as the teacher's drawings are; each group
+is adjusted until they match, ten rounds.
+- A stroke group follows its edge: how much of the edge is inked sets how much of the stroke is kept; how heavy the ink
+  is, per unit of ink, sets a per-group width (new in the controls).
+- A wash group follows its face, its object's body, or the ground: the tone's peak sets its strength; how much of the
+  face the tone covers sets how far the wash reaches.
+- Stroke measures count ink in excess of the tone round the edge, so a wash's edge isn't taken for a stroke.
+- With that correction the teachers ink an interior crease about half as much as one on the outline (0.46 to 0.61).
+  The brush's own rule draws an arris only on the outline; a taught crease now shows in the interior by the teacher's
+  ratio.
+
+| on the five fitted views | sumi | bold | light |
+|---|---|---|---|
+| ink off by, before → after | 0.32 → 0.16 | 0.40 → 0.23 | 0.35 → 0.20 |
+| tone off by, before → after | 0.15 → 0.12 | 0.17 → 0.06 | 0.18 → 0.06 |
+
+It stalls about halfway on ink. The composed scene has washes only where its own light put them and strokes only where
+its own design put them, so some of a teacher's tone has no mark to carry it (one stone face asks for 0.33 and gets
+0.03 at full strength).
+
+![The right view again, the brush now fitted to each teacher (middle row), with the teachers](splats/b-taught-fit.jpg)
+
+On the right view, which no fit saw:
+
+| taught brush | sumi: tone | decisions | agreement | bold: tone | decisions | agreement | light: tone | decisions | agreement |
+|---|---|---|---|---|---|---|---|---|---|
+| mapped by hand | 5.06 | 98 | 0.66 | 3.17 | 121 | 0.49 | 1.43 | 126 | 0.50 |
+| fitted | 4.68 | 137 | 0.44 | 2.53 | 80 | 0.60 | 1.28 | 76 | 0.55 |
+
+- **Bold and light improve on every measure**, and now beat our own policies on decisions as well as agreement.
+- **Sumi gets worse on decisions and agreement.** Its fit converged least (it has the most tone), and the loop matches
+  the calibration measures, not the decisions it's scored by here.
+- The cast shadows and wall tone arrive; the stone's outline thins. It's a baseline for what re-weighting an existing
+  drawing can do, not the way to draw as a teacher does.
+
+**The field against the real renderer** (`devtools/splats-field-browser.mjs`). The fields' scores above were taken
+from the optimiser's own picture of the held-out view; the brush's from the browser. The same held-out sumi field,
+drawn by the real renderer from the same camera:
+
+![The held-out view: the optimiser's picture of its field, the same field drawn by the real renderer, the teacher](splats/b-field-vs-browser.jpg)
+
+| the held-out sumi field | tone | decisions | agreement | mean darkness |
+|---|---|---|---|---|
+| the optimiser's picture | 1.45 | 53 | 0.80 | 0.043 |
+| the real renderer | 2.55 | 60 | 0.83 | 0.024 |
+
+- **The renderer lays down about half the ink the optimiser believes.** The field's tone error in the browser (2.55)
+  is no better than another hand's drawing of the view (2.11, 2.49). Its decisions hold up (60, agreement 0.83).
+- **Part of it is resolution.** The field was fitted at 384 wide, where a thin disc is padded out to a pixel; at 1024
+  it's as thin as it was fitted. One field drawn in the browser at both sizes: mean darkness 0.032 at 384, 0.026 at
+  1024. A field is calibrated to the size it was fitted at.
+- **The rest isn't isolated yet.** Candidates: discs hidden behind the occluder (the fitters orient some normals by
+  the wrong object's middle, which sets a disc 3 mm inside its surface); the view terms' quantisation to 6 or 8 bits.
+- So the comparison of field and brush above overstated the field on tone. On decisions and agreement the field still
+  leads for sumi; for bold the fitted brush now agrees more (0.60 against 0.52).
+
 ## The Bench: one brush made dependable, one stroke made editable
 
 `?scene=bench` (`bench.ts`; brush.ts). This answers a source review of the brush. Its five findings, all confirmed in the
