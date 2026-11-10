@@ -32,7 +32,10 @@ const PAPER = [0.937, 0.906, 0.847], INK = [36, 31, 27], kappa = (c) => Math.max
 const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2], cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]], norm = (a) => { const l = Math.hypot(...a) || 1; return a.map((v) => v / l); };
 
 // ─── the room as the scene lays it, plain; its views ───
-const room = C.conservatory({}), marks = room.marks, base = marks.map((m) => m.params.slice()), roles = marks.map((m) => m.role);
+// (its limbs as the pool taught them, if that's been done: in parts by their width on the screen (splats-root2.mjs);
+// they keep that style here: what's taught below is everything else)
+const ROOT = (() => { try { return JSON.parse(readFileSync(new URL('../static/splats/root-parts.json', import.meta.url))).parts; } catch { return undefined; } })();
+const room = C.conservatory({}, 'both', undefined, undefined, process.argv.includes('--tubes') ? undefined : ROOT), marks = room.marks, base = marks.map((m) => m.params.slice()), roles = marks.map((m) => m.role);
 const start = []; { let o = 0; for (const m of marks) { start.push(o); o += m.count; } } const N = start[start.length - 1] + marks[marks.length - 1].count;
 const views = Object.entries(room.views).map(([name, v]) => {
   const key = name.replace(/ /g, '-'), p = C.routeAt(v.s).p, E = [p[0], p[1] + C.EYE, p[2]], f = norm([v.at[0] - E[0], v.at[1] - E[1], v.at[2] - E[2]]), r = norm(cross(f, [0, 1, 0])), u = cross(r, f);
@@ -97,7 +100,7 @@ function draw(v, D, g) {
     if (d.p[1] < C.WATER - 0.02) return;
     const e = footprint(d, cam); if (!e) return; const z = e[7];
     // (its hand-over by how large things look where it is, and its letting go at the eye, as the renderer's)
-    let fac = d.lod ? Math.max(0, Math.min(1, (Math.log2(fy / (z * H)) - d.lod[0]) / (d.lod[1] - d.lod[0]))) : 1; const t = Math.max(0, Math.min(1, (z - 0.25) / 0.45)); fac *= t * t * (3 - 2 * t);
+    let fac = d.lod ? Math.max(0, Math.min(1, (Math.log2(fy / (z * H)) - d.lod[0]) / (d.lod[1] - d.lod[0]))) : 1; if (fac <= 0) return; const t = Math.max(0, Math.min(1, (z - 0.25) / 0.45)); fac *= t * t * (3 - 2 * t);
     // (its ink from here: a deposit's own view terms and cap, if it has them)
     const a = M.inkOf(d, cam.E), sig = a / (d.cap ?? 1); if (a * fac < 0.004) return;
     const [sx, sy, ia, ib, ic, R, comp] = e; if (sx + R < 0 || sx - R > W || sy + R < 0 || sy - R > H) return;
@@ -121,6 +124,8 @@ function draw(v, D, g) {
       ga += k * G; gsx += gG * (ia * dx + ib * dy); gsy += gG * (ib * dx + ic * dy); gia += gG * -0.5 * dx * dx; gib += gG * -dx * dy; gic += gG * -0.5 * dy * dy;
     }
     g[f.at] += ga * comp * f.d.k * f.fac * f.a * (1 - f.sig);
+    // (and in the log of its cap, for a deposit whose ink has one: the most it lays whatever the view)
+    if (g.cap) g.cap[f.at / 6] += ga * comp * f.d.k * f.fac * f.a;
     const gcomp = ga * f.a * f.fac * f.d.k;
     for (let j = 0; j < 5; j++) { const eps = j < 3 ? 1e-3 : 1e-4, e1 = footprint(nudge(f.d, j, eps), cam); if (e1) g[f.at + 1 + j] += ((e1[0] - sx) * gsx + (e1[1] - sy) * gsy + (e1[2] - ia) * gia + (e1[3] - ib) * gib + (e1[4] - ic) * gic + (e1[6] - comp) * gcomp) / eps; }
   }
@@ -131,15 +136,15 @@ function step(A, p, g, lr, lo, hi) { A.t++; for (let j = 0; j < p.length; j++) {
 
 // ─── teaching ───
 const train = views.filter((v) => v.teach);
-const FREE = (m) => (m.kind !== 'stroke' ? [...Array(10).keys()] : [...Array(SP.u0).keys(), SP.along, SP.dry, SP.dry + 1, SP.dry + 2, SP.dry + 3, SP.drySide, SP.spread, ...(m.name?.startsWith('canopy/dabs') ? [SP.splay, SP.step] : [])]);
+const FREE = (m) => (m.band ? [...Array(SP.width).keys()] : m.kind !== 'stroke' ? [...Array(10).keys()] : [...Array(SP.u0).keys(), SP.along, SP.dry, SP.dry + 1, SP.dry + 2, SP.dry + 3, SP.drySide, SP.spread, ...(m.name?.startsWith('canopy/dabs') ? [SP.splay, SP.step] : [])]);
 const roleList = Object.keys(T.roles), roleMarks = Object.fromEntries(roleList.map((r) => [r, marks.map((_, i) => i).filter((i) => roles[i] === r)])), roleFree = Object.fromEntries(roleList.map((r) => [r, FREE(marks[roleMarks[r][0]])]));
 const A = { roles: Object.fromEntries(roleList.map((r) => [r, adam(roleFree[r].length)])), gains: adam(marks.length * 3), resid: adam(N * RESID) };
 /** how the loss changes with a change made to one mark (`mut`, undone by `undo`): through its layout's own slope */
-const slope = (mi, D, g, mut, undo, eps) => { const m = marks[mi]; mut(m); const d2 = layout(m); undo(m); let s = 0; const o = start[mi] * 6; for (let i = 0; i < m.count; i++) { if (!g[o + i * 6] && !g[o + i * 6 + 4]) continue; const df = differ(D[mi][i], d2[i]); for (let k = 0; k < 6; k++) s += g[o + i * 6 + k] * df[k]; } return s / eps; };
+const slope = (mi, D, g, mut, undo, eps) => { const m = marks[mi]; mut(m); const d2 = layout(m); undo(m); let s = 0; const o = start[mi] * 6; for (let i = 0; i < m.count; i++) { if (!g[o + i * 6] && !g[o + i * 6 + 4] && !(g.cap && g.cap[start[mi] + i])) continue; const df = differ(D[mi][i], d2[i]); for (let k = 0; k < 6; k++) s += g[o + i * 6 + k] * df[k]; if (g.cap && D[mi][i].cap !== undefined) s += g.cap[start[mi] + i] * Math.log((d2[i].cap + 1e-6) / (D[mi][i].cap + 1e-6)); } return s / eps; };
 function teach(stage, iters, bounds) {
-  const g = new Float32Array(N * 6), t0 = Date.now();
+  const g = new Float32Array(N * 6), t0 = Date.now(); g.cap = new Float32Array(N);
   for (let it = 0; it < iters; it++) {
-    apply(); const D = lay(); g.fill(0); let L = 0; for (const v of train) L += draw(v, D, g).loss;
+    apply(); const D = lay(); g.fill(0); g.cap.fill(0); let L = 0; for (const v of train) L += draw(v, D, g).loss;
     const seen = marks.map((m, mi) => { const o = start[mi] * 6; for (let i = 0; i < m.count * 6; i++) if (g[o + i]) return true; return false; }), pace = 1 - 0.6 * (it / iters);
     if (stage === 'roles' || stage === 'weights') for (const r of roleList) {
       const F = roleFree[r], gr = F.map((j) => roleMarks[r].reduce((s, mi) => s + (seen[mi] ? slope(mi, D, g, (m) => (m.params[j] += 1e-3), (m) => (m.params[j] -= 1e-3), 1e-3) : 0), 0));
@@ -148,7 +153,7 @@ function teach(stage, iters, bounds) {
     if (stage === 'weights') {
       const gg = new Float64Array(marks.length * 3), p = new Float64Array(marks.length * 3);
       marks.forEach((m, mi) => {
-        if (!seen[mi]) return; const st = m.kind === 'stroke', groups = st ? [[0, SP.width], [SP.width, SP.u0], [SP.dry, SP.drySide]] : [[0, 9], [9, 10]];
+        if (!seen[mi]) return; const st = m.kind === 'stroke', groups = m.band ? [[0, SP.width]] : st ? [[0, SP.width], [SP.width, SP.u0], [SP.dry, SP.drySide]] : [[0, 9], [9, 10]];
         groups.forEach(([a, b], k) => { gg[mi * 3 + k] = slope(mi, D, g, (q) => { for (let j = a; j < b; j++) q.params[j] += 1e-3; }, (q) => { for (let j = a; j < b; j++) q.params[j] -= 1e-3; }, 1e-3) + 0.002 * T.gains[m.key][k]; });
         for (let k = 0; k < 3; k++) p[mi * 3 + k] = T.gains[m.key][k];
       });
@@ -184,7 +189,7 @@ function png(D, name) {
 const report = { views: views.map((v) => ({ name: v.name, teach: v.teach })), levels: {} };
 function score(level, D = (apply(), lay())) {
   const per = {}; for (const v of views) { const P = draw(v, D).D; per[v.name] = measure(v, P); png(P, `fit-${v.key}-${level}`); }
-  const mean = (teach, k) => +(views.filter((v) => v.teach === teach).reduce((s, v) => s + per[v.name][k], 0) / 3).toFixed(2);
+  const mean = (teach, k) => { const vs = views.filter((v) => v.teach === teach); return +(vs.reduce((s, v) => s + per[v.name][k], 0) / vs.length).toFixed(2); };
   report.levels[level] = { per, taught: { tone: mean(true, 'tone'), bare: mean(true, 'bare'), ink: mean(true, 'ink') }, reserved: { tone: mean(false, 'tone'), bare: mean(false, 'bare'), ink: mean(false, 'ink') } };
   console.log(`${level.padEnd(22)} taught from: tone ${String(mean(true, 'tone')).padStart(6)}  bare ${String(mean(true, 'bare')).padStart(6)}  ink ×${mean(true, 'ink')}   reserved: tone ${String(mean(false, 'tone')).padStart(6)}  bare ${String(mean(false, 'bare')).padStart(6)}  ink ×${mean(false, 'ink')}`);
   writeFileSync(`${dir}fit.json`, JSON.stringify(report, null, 1));
@@ -196,7 +201,7 @@ const save = (level, resid) => writeFileSync(`${dir}taught-${level.replace(/[^a-
 
 for (const v of views) png(v.T, `fit-${v.key}-teacher`);
 // (nothing drawn at all, for scale; then the room as the scene lays it)
-{ const blank = new Float32Array(W * H), per = {}; for (const v of views) per[v.name] = measure(v, blank); const mean = (t) => +(views.filter((v) => v.teach === t).reduce((s, v) => s + per[v.name].tone, 0) / 3).toFixed(2); report.blank = { taught: mean(true), reserved: mean(false) }; console.log(`blank paper             taught from: tone ${mean(true)}   reserved: tone ${mean(false)}`); }
+{ const blank = new Float32Array(W * H), per = {}; for (const v of views) per[v.name] = measure(v, blank); const mean = (t) => { const vs = views.filter((v) => v.teach === t); return +(vs.reduce((s, v) => s + per[v.name].tone, 0) / vs.length).toFixed(2); }; report.blank = { taught: mean(true), reserved: mean(false) }; console.log(`blank paper             taught from: tone ${mean(true)}   reserved: tone ${mean(false)}`); }
 score('untaught');
 teach('roles', Math.round(60 * SCALE)); score('roles'); save('roles');
 teach('weights', Math.round(50 * SCALE)); score('roles + weights'); save('roles + weights');

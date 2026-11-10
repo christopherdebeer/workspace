@@ -8,8 +8,10 @@
 # half-widths), for every strip: whether a limb's place in the restyle is the scene's.
 import json, os, numpy as np
 from PIL import Image, ImageDraw, ImageFont
-HERE = os.path.dirname(os.path.abspath(__file__)); T = f'{HERE}/conservatory/teachers/'; OUT = f'{HERE}/out/pool/'
-ORDER = ['tunnel', 'between-tunnel-and-pool', 'pool', 'between-pool-and-canopy', 'canopy', 'between-canopy-and-tunnel']
+# (TEACHERS=teachers for the first set of restyles, of the room in its own marks; the default is the second, of its
+# geometry as wireframes, which left the teacher to choose where a limb's ink goes)
+HERE = os.path.dirname(os.path.abspath(__file__)); T = f'{HERE}/conservatory/{os.environ.get("TEACHERS", "teachers2")}/'; OUT = f'{HERE}/out/pool/'
+ORDER = ['tunnel', 'between-tunnel-and-pool', 'pool', 'between-pool-and-canopy', 'canopy', 'between-canopy-and-tunnel', 'back-along-the-tunnel', 'sideways-from-the-stones']
 VN, VR = 61, 2.5
 def dark(view):
   a = np.asarray(Image.open(f'{T}{ORDER.index(view) + 1}-{view}.jpg').convert('RGB'), np.float32) / 255; paper = np.percentile(a.reshape(-1, 3), 92, axis=0)
@@ -20,7 +22,7 @@ def sample(D, x, y):
   return (g(x0, y0) * (1 - fx) + g(x0 + 1, y0) * fx) * (1 - fy) + (g(x0, y0 + 1) * (1 - fx) + g(x0 + 1, y0 + 1) * fx) * fy
 spines = json.load(open(OUT + 'spines.json')); imgs = {}; strips = []; meta = []; geo = []
 for s in spines:
-  P = s['pts']; ok = [p is not None and 0 <= p[0] < 1536 and 0 <= p[1] < 1024 and not p[4] for p in P]
+  P = s['pts']; ok = [p is not None and 0 <= p[0] < 1536 and 0 <= p[1] < 1024 and not p[4] for p in P] if os.path.exists(f'{T}{ORDER.index(s["view"]) + 1}-{s["view"]}.jpg') else [False] * len(P)
   i = 0
   while i < len(P):
     if not ok[i]: i += 1; continue

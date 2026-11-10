@@ -368,6 +368,21 @@ ok('parse() tells a .splat by its bytes', F.parse(F.encodeSplat(g)).n === g.n);
   }
   ok(`marks: a limb banded as seen keeps its ink to its lower half from each side, from above and from below (${res.map((r) => `${(r[0] * 100).toFixed(0)}%`).join(', ')}), at about the same weight (${res.map((r) => r[1].toFixed(2)).join(', ')})`, res.every((r) => r[0] > 0.7) && Math.max(...res.map((r) => r[1])) / Math.min(...res.map((r) => r[1])) < 1.2);
 }
+// (a limb in parts by its width on the screen: one stroke far off, and close to a loaded stroke, a sweep and its two
+// edges; the far one's hand-over is the others' turned round; one solid a limb; every key its own)
+{
+  const MK = await load('../client/splats/marks.ts'), CO = await load('../client/splats/conservatory.ts'), fs = await import('node:fs');
+  const f = new URL('../static/splats/root-parts.json', import.meta.url);
+  if (fs.existsSync(f)) {
+    const R = JSON.parse(fs.readFileSync(f, 'utf8')).parts, room = CO.conservatory({}, 'both', undefined, undefined, R), tubes = room.marks.filter((m) => m.normal === 'tube'), solid = tubes.filter((m) => !m.ghost);
+    const arch = tubes.filter((m) => m.key.startsWith('tunnel/arch 0')), far = arch.find((m) => !m.ghost), near = arch.filter((m) => m.ghost);
+    ok(`root: a limb in ${arch.length} parts (${arch.map((m) => m.key.split('/').pop()).join(', ')}); the far stroke hands over to the others (${far.lod.map((v) => v.toFixed(2))} and ${near[0].lod.map((v) => v.toFixed(2))}); ${solid.length} solids for ${solid.length} limbs; ${new Set(room.marks.map((m) => m.key)).size} keys for ${room.marks.length} marks`, arch.length >= 3 && near.every((m) => m.lod[0] === far.lod[1] && m.lod[1] === far.lod[0]) && solid.length === 25 && new Set(room.marks.map((m) => m.key)).size === room.marks.length && new Set(room.marks.map((m) => m.id)).size === room.marks.length);
+    // (an edge line's ink is where the tube is seen edge-on, from any side)
+    const ed = arch.find((m) => m.band === 'edges'), deps = MK.layout(ed).slice(0, 400); let edge = 0, face = 0, ne = 0, nf = 0;
+    for (const eye of [[20, 2, 5], [-20, 3, -8]]) for (const d of deps) { const v = [eye[0] - d.p[0], eye[1] - d.p[1], eye[2] - d.p[2]], l = Math.hypot(...v), c = Math.abs((d.n[0] * v[0] + d.n[1] * v[1] + d.n[2] * v[2]) / l), a = MK.inkOf(d, eye) / (d.cap || 1); if (c < 0.15) { edge += a; ne++; } else if (c > 0.7) { face += a; nf++; } }
+    ok(`root: an edge line inks where the limb's surface is edge-on to the eye (${(edge / ne).toFixed(2)}) and not where it faces it (${(face / nf).toFixed(3)})`, edge / ne > 0.5 && face / nf < 0.05);
+  }
+}
 // (identity: no two of the room's marks share a key or an id; a mark added to the scene changes no other mark's; and
 // what hides what: the room's solids are triangles, each limb a tube inside its own deposits)
 {

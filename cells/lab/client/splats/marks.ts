@@ -65,8 +65,14 @@ export interface Mark {
    * inked along its underside). Or 'seen': its rows go all the way round, and each deposit lays its ink where it
    * lies in the limb's lower band as the limb is seen (its view terms say so exactly): the same loaded stroke along
    * the limb's lower edge from wherever it's looked at. Its parameters then: `arc` the band's thickness (a log, on one
-   * half-width), `fall` how sharply it ends inside (a log), `bristle` how far its thickness wavers along it */
-  band?: V | true | 'seen';
+   * half-width), `fall` how sharply it ends inside (a log), `bristle` how far its thickness wavers along it.
+   * Or 'edges': rows all round, each deposit laying its ink where the tube's surface is seen edge-on: a line along
+   * each of the limb's two edges as seen. Its parameters: `arc` how thick the lines (a log), `fall` how sharp */
+  band?: V | true | 'seen' | 'edges';
+  /** a band as seen keeps to the limb's upper side (as seen), not its lower */
+  bandUp?: boolean;
+  /** a tube that hides nothing (one of several marks on the same limb: only the first is its solid) */
+  ghost?: boolean;
   /** where a tube's light comes from (a unit vector; none: from straight above its spine): its ink keeps to the side
    * turned away from it, and the side turned to it is left to the paper */
   light?: V;
@@ -124,7 +130,7 @@ export function paramRange(m: Mark, j: number): [number, number] {
   if (j < SP.width) return [-7, 5]; if (j < SP.u0) return [-1.6, 1.2];
   if (j === SP.u0) return [-0.1, 0.6]; if (j === SP.u1) return [0.4, 1.1]; if (j === SP.sharp0 || j === SP.sharp1) return [-2.5, 2]; if (j === SP.along) return [-1.5, 1];
   if (j < SP.dry) return [-1.5, 1.5]; if (j < SP.drySide) return [0, 2.5]; if (j === SP.drySide) return [-1, 1]; if (j === SP.spread) return [-0.8, 0.8]; if (j === SP.splay) return [-1.2, 1.2]; if (j === SP.crisp) return [0, 3];
-  if (j === SP.arc) return [-0.9, 0.5]; if (j === SP.fine) return [0, 2.2]; if (j === SP.feather) return [0.1, 0.95]; if (j === SP.fall) return [0, 4]; if (j === SP.bristle) return [0, 4];
+  if (j === SP.arc) return [-1.4, 0.8]; if (j === SP.fine) return [0, 2.2]; if (j === SP.feather) return [0.1, 0.95]; if (j === SP.fall) return [0, 4]; if (j === SP.bristle) return [0, 4];
   return [-3, 3];
 }
 /** a new stroke through control points: full along it, of even weight, wet */
@@ -222,13 +228,27 @@ export function layout(m: Mark): Deposit[] {
       let n: V = free || tube ? norm(cross(t, Math.abs(t[1]) < 0.9 ? [0, 1, 0] : [1, 0, 0])) : norm(add(add([0, 0, 0], S.normals![k], 1 - f), S.normals![Math.min(S.normals!.length - 1, k + 1)], f));
       n = norm(sub(n, [t[0] * dot(n, t), t[1] * dot(n, t), t[2] * dot(n, t)]));
       const w = w0 * Math.exp(knots(P, SP.width, KN.width, u)), alt = i % 2 ? 1 : -1;
+      if (tube && m.band === 'edges') {
+        const N0 = norm(sub(Math.abs(t[1]) < 0.95 ? [0, 1, 0] : [1, 0, 0], [t[0] * (Math.abs(t[1]) < 0.95 ? t[1] : t[0]), t[1] * (Math.abs(t[1]) < 0.95 ? t[1] : t[0]), t[2] * (Math.abs(t[1]) < 0.95 ? t[1] : t[0])])), B0 = cross(t, N0);
+        const th = ((row + 0.5) / rows) * Math.PI * 2 + hash(m.id, 3, 3) * 6.28, c = Math.cos(th), sn = Math.sin(th), rad: V = [N0[0] * c + B0[0] * sn, N0[1] * c + B0[1] * sn, N0[2] * c + B0[2] * sn];
+        // (ink where its face is edge-on to the eye: b (tau - (n·d)^2), a quadratic in d the nine terms hold exactly)
+        const tau = 0.25 * Math.exp(P[SP.arc] ?? 0), b = 14 * Math.exp((P[SP.fall] ?? 1) - 1), S2 = (i: number, j: number) => rad[i] * rad[j];
+        const view = [0, 0, 0, 0, -2 * b * S2(0, 1), -2 * b * S2(1, 2), -2 * b * S2(0, 2), (-b * (S2(0, 0) - S2(1, 1))) / 2, (-b * (-S2(0, 0) - S2(1, 1) + 2 * S2(2, 2))) / 6];
+        const run = s / (5 * w0) + hash(m.id, row, 7) * 16, r0 = Math.floor(run), rf = run - r0, sm = rf * rf * (3 - 2 * rf), gap = hash(m.id, row, r0) * (1 - sm) + hash(m.id, row, r0 + 1) * sm;
+        const body = knots(P, SP.ink, KN.ink, u) - softplus((P[SP.u0] - u) / t0) - softplus((u - P[SP.u1]) / t1) - Math.max(0, knots(P, SP.dry, KN.dry, u)) * 9 * gap * gap + R[r];
+        const centre = add(add(pts[k], sub(pts[k + 1], pts[k]), f), N0, knots(P, SP.offset, KN.offset, u) * w0);
+        out.push({ p: add(centre, rad, w / 2 + R[r + 4] * w0), t, n: rad, s1: (L / cols) * 0.9 * Math.exp(P[SP.along] + R[r + 1]), s2: ((Math.PI * w) / rows) * 0.62 * Math.exp(P[SP.spread] + R[r + 2]), thin: 0.0008, turn: R[r + 3], logit: b * (tau - 1 / 3), view, cap: 1 / (1 + Math.exp(-body)) });
+        continue;
+      }
       if (tube && m.band === 'seen') {
         const N0 = norm(sub(Math.abs(t[1]) < 0.95 ? [0, 1, 0] : [1, 0, 0], [t[0] * (Math.abs(t[1]) < 0.95 ? t[1] : t[0]), t[1] * (Math.abs(t[1]) < 0.95 ? t[1] : t[0]), t[2] * (Math.abs(t[1]) < 0.95 ? t[1] : t[0])])), B0 = cross(t, N0);
         const th = ((row + 0.5) / rows) * Math.PI * 2 + hash(m.id, 3, 3) * 6.28, c = Math.cos(th), sn = Math.sin(th), rad: V = [N0[0] * c + B0[0] * sn, N0[1] * c + B0[1] * sn, N0[2] * c + B0[2] * sn];
         // (up as the band takes it: across the limb where the limb is anywhere near level; for an upright limb, to one side)
         // (or, where a light is given, toward the light: the band keeps to the side away from it)
         const lit = m.light ? sub(m.light, [t[0] * dot(m.light, t), t[1] * dot(m.light, t), t[2] * dot(m.light, t)]) : null;
-        const U: V = lit && Math.hypot(lit[0], lit[1], lit[2]) > 0.25 ? norm(lit) : Math.abs(t[1]) < 0.8 ? N0 : norm(cross(t, cross([0.6, 0, 0.8], t)));
+        const U0: V = lit && Math.hypot(lit[0], lit[1], lit[2]) > 0.25 ? norm(lit) : Math.abs(t[1]) < 0.8 ? N0 : norm(cross(t, cross([0.6, 0, 0.8], t)));
+        // (the band on the limb's lower side as seen, or its upper)
+        const U: V = m.bandUp ? [-U0[0], -U0[1], -U0[2]] : U0;
         // (how thick the band is here: wavering along the limb, the same for every row, so its inner edge wobbles)
         const wv = s / (2.2 * w0) + hash(m.id, 91, 5) * 9, w0i = Math.floor(wv), wf = wv - w0i, ws = wf * wf * (3 - 2 * wf), wob = (hash(m.id, 91, w0i) * (1 - ws) + hash(m.id, 91, w0i + 1) * ws) * 2 - 1;
         const T = Math.exp(P[SP.arc] ?? 0) * (1 + (P[SP.bristle] ?? 0) * 0.5 * wob), K = 7 * Math.exp((P[SP.fall] ?? 1) - 1), nU = dot(rad, U);
@@ -246,7 +266,7 @@ export function layout(m: Mark): Deposit[] {
         // (a banded limb: rows in pairs, one to each side of the arc's middle; a row's part is its place across the
         // arc, q: 0 the firm edge, then the body, then bristles toward 1. Edge and bristle rows are finer than the
         // body's; the ink falls past `feather`; the bristles break up (each row its own run of gaps))
-        const dir: V = m.band === true || m.band === 'seen' ? [0, -1, 0] : m.band, dd = dot(dir, t); let D0: V = [dir[0] - t[0] * dd, dir[1] - t[1] * dd, dir[2] - t[2] * dd];
+        const dir: V = m.band === true || m.band === 'seen' || m.band === 'edges' ? [0, -1, 0] : m.band, dd = dot(dir, t); let D0: V = [dir[0] - t[0] * dd, dir[1] - t[1] * dd, dir[2] - t[2] * dd];
         if (Math.hypot(D0[0], D0[1], D0[2]) < 0.3) { const alt2: V = Math.abs(t[0]) < 0.8 ? [1, 0, 0] : [0, 0, 1], da = dot(alt2, t); D0 = [alt2[0] - t[0] * da, alt2[1] - t[1] * da, alt2[2] - t[2] * da]; }
         D0 = norm(D0); const B0 = cross(t, D0), pairs = Math.ceil(rows / 2), pr = Math.floor(row / 2), sgn = row % 2 ? -1 : 1;
         const A = ((100 * Math.PI) / 180) * Math.exp(P[SP.arc] ?? BAND.arc), fine = P[SP.fine] ?? BAND.fine, qf = P[SP.feather] ?? BAND.feather, fall = P[SP.fall] ?? BAND.fall, bris = P[SP.bristle] ?? BAND.bristle;

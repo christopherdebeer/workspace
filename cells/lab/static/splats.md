@@ -1278,15 +1278,74 @@ Not done:
   fitted together, isn't done.
 - **The room's tone against the teachers wasn't measured again** with its limbs as strokes.
 
-### Geometry for the next teachers
+### The second teachers: from the room's geometry
 
 The first underdrawings sent for restyling were the room drawn in its own marks, and the teacher kept their
-choices: where a limb's ink sat, how soft a wash was. The next set carries none (`devtools/splats-room-wires.mjs`,
+choices: where a limb's ink sat, how soft a wash was. The second set carries none (`devtools/splats-room-wires.mjs`,
 `.py`; `devtools/conservatory/wires2`): the solid room's geometry as thin even lines with what's hidden left out.
-Each limb is its tube's outline, both edges alike; planks, posts, rails, strands, the veil and the far bridge are the
-lines they run along; a leaf is a tick where it is; a wash or mist is the dotted outline of its volume. The same six
-views (three to teach from, three reserved), and two more for a reserved route: back along the tunnel, and sideways
-from the stones.
+Each limb is its tube's outline; planks, posts, rails, strands, the veil and the far bridge are the lines they run
+along; a leaf is a tick where it is; a wash or mist is the dotted outline of its volume. Eight views: the six (three to
+teach from, three reserved), and two more reserved: back along the tunnel, and sideways from the stones.
+
+![Four views: the geometry sent, the teacher's restyle of it, the room now](splats/b-room-second.jpg)
+
+**The root, read again.** The pool cut from the new restyles is 67 strokes of 24 limbs, 73% of their ink within the
+limb's band. It reads differently from the first:
+
+- **What the teacher does with a limb goes by how wide it is on the screen.** Narrow (under about 30 px across), one
+  loaded stroke filling it. Wide, a line along each edge and a pale dry sweep between, darker to one side.
+- **The loaded side is the upper one on 47 of 67 strokes.** In the first set it was the lower on 39 of 45: that was
+  the underdrawing's side, kept.
+- **A wireframe has its own bias.** It draws both edges of a limb, and a restyle may be tracing them. No underdrawing
+  is neutral; this one biases toward outlines where the first biased toward the room's own ink.
+
+**A limb in parts, by its width on the screen** (`conservatory.ts`, `limbParts`): far off, one loaded stroke; close
+to, a loaded stroke along one side, a broad dry sweep under it, and a line along each edge. The far one hands over
+to the near ones by the limb's own width on the screen, the same way a canopy's wash hands over to its fronds. The
+edge lines need no outline pass: each deposit lays its ink where the tube's surface is edge-on to the eye, which
+its view terms hold exactly.
+
+Its style is fitted to the teacher's profiles across a limb, pooled over strokes by width class
+(`devtools/splats-root2.mjs`). Distance from the teacher's pooled profiles, strokes from the views taught from / from
+the five reserved views:
+
+| | deposits drawn a limb | taught from | reserved |
+|---|---|---|---|
+| one band as seen (the first root) | 640 | 36.8 | 61.1 |
+| in parts, by its width on the screen | 1,963 | 22.2 | 17.2 |
+
+![Four views: the teacher, each limb one band as seen, each limb in parts](splats/b-room-parts.jpg)
+
+- **In parts is closer, and holds on the reserved strokes**, at three times the deposits a limb.
+- **Two things that went wrong on the way, both the same mistake.** Pooled as they fell, the strokes' two loaded
+  sides cancelled into a pale even band, and the fit copied it: each stroke's profile is now turned so its loaded
+  side is the same before pooling. And a single band can't be a dark accent and a grey sweep at once: the sweep had
+  to be a part of its own. Without it the limbs came out as pen outlines.
+
+**The room taught again**, from three views of the second teachers, scored on five reserved (tone error; the second
+teachers are sparse, so blank paper scores 27.0 on the views taught from and 24.2 on the reserved):
+
+| | on the views taught from | on the reserved views |
+|---|---|---|
+| untaught (limbs in parts) | 89.4 | 99.9 |
+| a style a role, the limbs' ink left as the strokes taught it | 24.5 | 23.9 |
+| + each mark's weight | 23.4 | 24.7 |
+| a style a role, the limbs' ink taught too | 17.7 | 18.8 |
+| + each mark's weight | 13.9 | 20.3 |
+
+- **With its limbs as the strokes taught them, the room is no nearer these teachers in tone than blank paper.** The
+  views full of limbs are the worst (the tunnel 37, back along it 42, against 32 for blank).
+- **Let the tone objective weigh the limbs' ink and it takes their calligraphy out**: the edge lines go (by 3 to 4
+  in the logit), the loaded accents go (by 3), and a pale sweep stays. Tone improves to 18.8. At a quarter of the
+  restyles' size, a crisp dark line a few pixels from the teacher's costs twice; a faint broad band costs little.
+- **So the two readings disagree, and they measure different things.** Strokes read at full size in their own frame
+  say the edges and accents are there. Blurred tone at low resolution says remove them. The room is drawn by the
+  first for its limbs (what the tone objective taught them is kept aside, not used) and by the second for the rest.
+  A better objective for the room would score marks where they are marks.
+- **What it looks like.** Nearer the teacher in weight: thin posts and planks, limbs as grey sweeps with dark edges.
+  But the fronds have faded almost out (the teacher's leaves aren't where the scene's are, and tone can only fade
+  what it can't place), the washes are faint, and a limb is even from end to end: no pressure along it, no frayed
+  release.
 
 ### Air, water, cost
 
@@ -1510,7 +1569,7 @@ Roughly in order of what each teaches:
 
 ## Flags
 
-`?scene=stone|brushes|composed|pen|field|bench|marks|walk|room|mist|garden|plush|nike|train` · `?scene=marks&way=organised|organised+deposits|independent|style|unfitted|brush&only=<sheet>` · `?scene=walk&d=<metres>&level=both|fronds|wash&auto` · `?scene=room&view=tunnel|pool|canopy&s=<0…1>&style=taught|bench|plain&roots=0&light=<degrees>&mirror=0&moving&auto` · `?field=stone|composed` · `?flat` (a fitted field's baseline) · `?compose=0` · `?halo=0` · `?halopx=` · `?policy=ranks|rules|learned|taught` · `?teacher=sumi|sumi-bold|sumi-light` · `?judge` · `?perf` · `?ink` (a captured scene in ink) · `?scene=pen&part=word|board|culm|bank|rock&reference` · `?look=dry|wash` · `?detail=0..1` · `?thin=even` · `?only=wash` · `?view=hero|grazing|reverse` · `?orbit` · `?detail=0.25|0.55|1` (sparse, intermediate, resolved) · `?brush` · `?occluder=0` · `?clean` (no controls) · `?url=…` (any `.splat` or `.ply` CORS lets it read) · `?up=1` (for a file that's
+`?scene=stone|brushes|composed|pen|field|bench|marks|walk|room|mist|garden|plush|nike|train` · `?scene=marks&way=organised|organised+deposits|independent|style|unfitted|brush&only=<sheet>` · `?scene=walk&d=<metres>&level=both|fronds|wash&auto` · `?scene=room&view=tunnel|pool|canopy&s=<0…1>&style=taught|bench|plain&roots=0|band&light=<degrees>&mirror=0&moving&auto` · `?field=stone|composed` · `?flat` (a fitted field's baseline) · `?compose=0` · `?halo=0` · `?halopx=` · `?policy=ranks|rules|learned|taught` · `?teacher=sumi|sumi-bold|sumi-light` · `?judge` · `?perf` · `?ink` (a captured scene in ink) · `?scene=pen&part=word|board|culm|bank|rock&reference` · `?look=dry|wash` · `?detail=0..1` · `?thin=even` · `?only=wash` · `?view=hero|grazing|reverse` · `?orbit` · `?detail=0.25|0.55|1` (sparse, intermediate, resolved) · `?brush` · `?occluder=0` · `?clean` (no controls) · `?url=…` (any `.splat` or `.ply` CORS lets it read) · `?up=1` (for a file that's
 y-up) · `?mode=0..3` · `?size=` · `?res=` · `?count=` (garden size) · `?noworkers` · `?preview`
 
 Checks: `node cells/lab/devtools/splats.test.mjs` (formats, covariance, sort) and

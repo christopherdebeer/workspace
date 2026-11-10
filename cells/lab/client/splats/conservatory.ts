@@ -28,8 +28,10 @@ export interface Room { marks: Mark[]; route: V[]; views: Record<string, { s: nu
  */
 export function roleOf(name = ''): string {
   const last = name.slice(name.lastIndexOf('/') + 1);
-  if (name.startsWith('willow/trunk')) return 'trunk'; if (name.startsWith('tunnel/arch')) return 'arch';
-  if (name.startsWith('willow/') || name.startsWith('tunnel/root')) return 'limb';
+  // (a limb in parts: each part of each kind of limb its own role, so each can be weighed)
+  const part = last === 'near' || last === 'edges' || last === 'sweep' ? ` ${last}` : '';
+  if (name.startsWith('willow/trunk')) return `trunk${part}`; if (name.startsWith('tunnel/arch')) return `arch${part}`;
+  if (name.startsWith('willow/') || name.startsWith('tunnel/root')) return `limb${part}`;
   if (/^strand \d+$/.test(last)) return 'strand'; if (/^dabs \d+$/.test(last)) return 'dabs';
   if (name.startsWith('pool/stone')) return name.endsWith('rim') ? 'stone rim' : name.endsWith('far') ? 'stone far' : name.endsWith('wash') ? 'stone wash' : 'waterline';
   if (last === 'wash') return 'canopy wash';
@@ -49,8 +51,8 @@ export function roleOf(name = ''): string {
 export interface Taught { roles: Record<string, number[]>; gains?: Record<string, number[]>; resid?: Record<string, number[]>; note?: string }
 export function applyTaught(marks: Mark[], T: Taught): Mark[] {
   for (const m of marks) {
-    // (a limb drawn as a stroke has its own style: what was taught to its role as a tube inked all round isn't its)
-    if (m.band === 'seen') continue;
+    // (a limb drawn as a stroke keeps its own style; what's taught to it is only how much ink it carries)
+    if (m.band) { const o = T.roles[m.role ?? roleOf(m.name)], gb = T.gains?.[m.key ?? '']; for (let j = 0; j < SP.width; j++) { const [lo, hi] = paramRange(m, j); m.params[j] = Math.max(lo, Math.min(hi, m.params[j] + (o?.[j] ?? 0) + (gb?.[0] ?? 0))); } continue; }
     const off = T.roles[m.role ?? roleOf(m.name)], g = T.gains?.[m.key ?? ''], stroke = m.kind === 'stroke';
     for (let j = 0; j < m.params.length; j++) {
       let v = m.params[j] + (off?.[j] ?? 0);
@@ -79,6 +81,28 @@ export function asSeen(m: Mark, style: RootStyle, base: number[] = m.params): Ma
   return m;
 }
 /**
+ * A limb by how large it looks, as the teacher draws one from its bare geometry: far off, where it's narrow on the
+ * screen, one loaded stroke filling it; close to, where it's wide, a line along each of its edges and a dry, graded
+ * stroke between, darkest to one side. Three marks on the one limb, the far one handing over to the near two by the
+ * limb's width on the screen (marks.ts `lod`, set from the limb's own radius): `hand` the two widths between which it
+ * hands over (log2 of the limb's half-width in screen heights).
+ */
+export interface RootParts { far: RootStyle; near: RootStyle;
+  /** close to, under the loaded stroke: a broad pale sweep across most of the limb, dry */
+  sweep?: RootStyle; edges: { ink: number; dry: number; arc: number; fall: number; spread: number; along: number }; hand: [number, number]; up?: boolean }
+export function limbParts(m: Mark, R: RootParts): Mark[] {
+  const copy = (name: string): Mark => ({ ...m, name: `${m.name}/${name}`, params: m.params.slice(), resid: m.resid.slice(), view: m.view.slice() });
+  const r = 0.5 * (m.width ?? 0.1), lo = R.hand[0] - Math.log2(r), hi = R.hand[1] - Math.log2(r), base = m.params.slice();
+  const far = asSeen(m, R.far, base); far.bandUp = R.up; far.lod = [hi, lo];
+  const near = asSeen(copy('near'), R.near, base); near.bandUp = R.up; near.lod = [lo, hi]; near.ghost = true;
+  const ed = copy('edges'), set = (j: number, v: number) => { const [a, b] = paramRange(ed, j); ed.params[j] = Math.max(a, Math.min(b, v)); };
+  for (let k = 0; k < KN.ink; k++) set(SP.ink + k, R.edges.ink); for (let k = 0; k < KN.dry; k++) set(SP.dry + k, R.edges.dry); for (let k = 0; k < KN.width; k++) set(SP.width + k, far.params[SP.width + k]); for (let k = 0; k < KN.offset; k++) set(SP.offset + k, far.params[SP.offset + k]);
+  set(SP.arc, R.edges.arc); set(SP.fall, R.edges.fall); set(SP.spread, R.edges.spread); set(SP.along, R.edges.along); ed.band = 'edges'; ed.shade = 0; ed.lod = [lo, hi]; ed.ghost = true;
+  const out = [far, near, ed];
+  if (R.sweep) { const sw = asSeen(copy('sweep'), R.sweep, base); sw.bandUp = R.up; sw.lod = [lo, hi]; sw.ghost = true; out.push(sw); }
+  return out;
+}
+/**
  * What hides what: the room's solids as triangles, for the renderer's depth and the fitter's. A drawing made only of
  * marks still needs its unpainted interiors to conceal what's behind them: the deck, the boardwalk and the stones
  * (level, just under their marks), and each limb as a tube just inside its deposits, as wide as the limb is drawn now.
@@ -86,7 +110,7 @@ export function asSeen(m: Mark, style: RootStyle, base: number[] = m.params): Ma
 export function occluder(room: Room): Float32Array {
   const tris: number[] = [...room.solids], SIDES = 8;
   for (const m of room.marks) {
-    if (m.normal !== 'tube') continue;
+    if (m.normal !== 'tube' || m.ghost) continue;
     const S = spine(m), w0 = m.width ?? 0.1, n = S.pts.length, ring = (i: number): V[] => {
       const a = S.pts[Math.max(0, i - 1)], b = S.pts[Math.min(n - 1, i + 1)], t: V = [b[0] - a[0], b[1] - a[1], b[2] - a[2]], tl = Math.hypot(t[0], t[1], t[2]) || 1; t[0] /= tl; t[1] /= tl; t[2] /= tl;
       const up: V = Math.abs(t[1]) < 0.95 ? [0, 1, 0] : [1, 0, 0], d = up[0] * t[0] + up[1] * t[1] + up[2] * t[2], N: V = [up[0] - t[0] * d, up[1] - t[1] * d, up[2] - t[2] * d], nl = Math.hypot(N[0], N[1], N[2]) || 1; N[0] /= nl; N[1] /= nl; N[2] /= nl;
@@ -118,7 +142,7 @@ export function routeAt(s: number, R: V[] = ROUTE): { p: V; dir: V } {
  * turned away from it, and a stone's heavy rim to its far side. None: every limb inked along its underside and the
  * stones as they fell, which is how the room was when it was taught.
  */
-export function conservatory(styles: Styles = {}, level: Level = 'both', taught?: Taught, light?: V, root?: RootStyle): Room {
+export function conservatory(styles: Styles = {}, level: Level = 'both', taught?: Taught, light?: V, root?: RootStyle | RootParts): Room {
   let id = 1, r = 12345; const rnd = () => ((r = (Math.imul(r, 1664525) + 1013904223) >>> 0) / 4294967296);
   const marks: Mark[] = [], regions: Record<string, number> = {}, solids: number[] = [];
   const quad = (a: V, b: V, c: V, d: V) => solids.push(...a, ...b, ...c, ...a, ...c, ...d);
@@ -224,7 +248,11 @@ export function conservatory(styles: Styles = {}, level: Level = 'both', taught?
 
   if (styles.strand || styles.dabs) for (const m of marks) { if (styles.strand && /\/strand \d+$/.test(m.name ?? '')) { const lod = m.lod; m.params = styles.strand.slice(); m.lod = lod; } }
   keyMarks(marks, roleOf);
-  if (root) for (const m of marks) if (m.normal === 'tube') asSeen(m, root);
+  if (root && 'far' in root) {
+    // (each limb in its three parts: laid after its key and id are its own, so its parts share its pressure)
+    const all: Mark[] = []; for (const m of marks) { if (m.normal === 'tube') all.push(...limbParts(m, root)); else all.push(m); }
+    marks.length = 0; marks.push(...all); keyMarks(marks, roleOf);
+  } else if (root) for (const m of marks) if (m.normal === 'tube') asSeen(m, root);
   if (taught) applyTaught(marks, taught);
-  return { marks, route: ROUTE, regions, solids, views: { tunnel: { s: 1.15 / 14, at: [-4.2, 1.7, -3.6] }, pool: { s: 4.2 / 14, at: [3, 1.8, -2.5] }, canopy: { s: 11.3 / 14, at: [0.5, 2.4, -3] }, 'between tunnel and pool': { s: 4.5 / 14, at: [4, 1.4, -4] }, 'between pool and canopy': { s: 9.2 / 14, at: [4.5, 2.4, 7.5] }, 'between canopy and tunnel': { s: 13.4 / 14, at: [-7.5, 1.8, 2] } } };
+  return { marks, route: ROUTE, regions, solids, views: { tunnel: { s: 1.15 / 14, at: [-4.2, 1.7, -3.6] }, pool: { s: 4.2 / 14, at: [3, 1.8, -2.5] }, canopy: { s: 11.3 / 14, at: [0.5, 2.4, -3] }, 'between tunnel and pool': { s: 4.5 / 14, at: [4, 1.4, -4] }, 'between pool and canopy': { s: 9.2 / 14, at: [4.5, 2.4, 7.5] }, 'between canopy and tunnel': { s: 13.4 / 14, at: [-7.5, 1.8, 2] }, 'back along the tunnel': { s: 3.3 / 14, at: [-8.2, 1.9, 3.4] }, 'sideways from the stones': { s: 6.6 / 14, at: [0.8, 2.6, 0.2] } } };
 }

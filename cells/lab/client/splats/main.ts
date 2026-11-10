@@ -31,7 +31,7 @@ import { benchScene, PRESSURES } from './bench';
 import { MarksScene, WAYS, BRUSHED, type MarksFile } from './marksscene';
 import { canopyPatch, WALK, type Level } from './canopy';
 import { marksToSplats } from './marks';
-import { conservatory, occluder, routeAt, EYE, WATER, type Room, type Styles, type Taught, type RootStyle } from './conservatory';
+import { conservatory, occluder, routeAt, EYE, WATER, type Room, type Styles, type Taught, type RootStyle, type RootParts } from './conservatory';
 import { penScene, type PenScene } from './penscene';
 import { paint as autographPaint } from '../autograph/ink';
 import type { Editor, EditItem, Snapshot } from './edit';
@@ -394,12 +394,17 @@ let roomS: { room: Room; s: number; s0?: number; fixed?: [number, number, number
 /** how the room's marks are drawn: as taught from the three drawn views (a style a role and each mark's own weight);
  * in the styles fitted to single teacher marks on the Bench; or plain, as the scene lays them */
 type RoomMode = 'taught' | 'bench' | 'plain';
-let roomTaught: Taught | null | undefined, roomRoot: RootStyle | null | undefined;
+let roomTaught: Taught | null | undefined, roomRoot: RootStyle | RootParts | null | undefined;
 async function openRoom(mode: RoomMode = roomS?.mode ?? (qs.get('style') as RoomMode) ?? 'taught') {
   const assets = (() => { const m = document.querySelector<HTMLMetaElement>('meta[name=assets]'); return m?.content && !m.content.includes('{{') ? m.content : ''; })();
   if (roomTaught === undefined) { try { const r = await fetch(`${assets}room-taught.json`); roomTaught = r.ok ? ((await r.json()) as Taught) : null; } catch { roomTaught = null; } }
   // (and the limbs as loaded strokes, their band as it's seen: a style fitted to the teacher's strokes)
-  if (roomRoot === undefined) { try { const r = await fetch(`${assets}root-style.json`); roomRoot = r.ok ? ((await r.json()) as { style: RootStyle }).style : null; } catch { roomRoot = null; } }
+  // (`roots=band`: each limb one band as seen; else in parts by its width on the screen, where that's been fitted)
+  if (roomRoot === undefined) {
+    roomRoot = null;
+    try { const r = qs.get('roots') === 'band' ? null : await fetch(`${assets}root-parts.json`); if (r?.ok) roomRoot = ((await r.json()) as { parts: RootParts }).parts; } catch { roomRoot = null; }
+    if (!roomRoot) try { const r = await fetch(`${assets}root-style.json`); if (r.ok) roomRoot = ((await r.json()) as { style: RootStyle }).style; } catch { roomRoot = null; }
+  }
   if (mode === 'taught' && !roomTaught) mode = 'bench';
   const roots = (roomS ? roomS.roots : qs.get('roots') !== '0') && !!roomRoot;
   if (!roomStyles) {
