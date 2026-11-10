@@ -347,6 +347,14 @@ ok('parse() tells a .splat by its bytes', F.parse(F.encodeSplat(g)).n === g.n);
   const loop = CO.routeAt(0).p, loop1 = CO.routeAt(1).p;
   ok(`room: ${room.marks.length} marks, ${rs.n} deposits, all finite and all fitted marks; its route closes; three regions and the house`, bad === 0 && rs.n > 15000 && rs.mark.every((k) => k === 12) && Math.hypot(loop[0] - loop1[0], loop[2] - loop1[2]) < 1e-6 && ['willow', 'tunnel', 'pool', 'canopy', 'house'].every((r) => room.regions[r] > 0));
 }
+// (light: a limb's ink keeps to the side turned away from where the light is)
+{
+  const MK = await load('../client/splats/marks.ts');
+  const limb = (light) => { const m = MK.strokeMark(9, [[0, 0, 0], [0, 1, 0], [0, 2, 0]], 'tube', 0.4, 120, 12); m.shade = 0.8; m.light = light; return MK.layout(m); };
+  const side = (ds, sx) => { const a = ds.filter((d) => d.n[0] * sx > 0.5); return a.reduce((s, d) => s + d.logit, 0) / a.length; };
+  const fromRight = limb([1, 0, 0]), fromLeft = limb([-1, 0, 0]);
+  ok(`light: lit from +x, a limb's ink is on its -x side (${side(fromRight, -1).toFixed(2)} against ${side(fromRight, 1).toFixed(2)}); from -x, on its +x side`, side(fromRight, -1) > side(fromRight, 1) + 2 && side(fromLeft, 1) > side(fromLeft, -1) + 2);
+}
 // (the room taught: every mark has a role; what was taught from the drawn views fits the room as the scene lays it (a
 // weight a mark, an offset a role's parameter), moves its marks, and keeps every parameter in its range)
 {

@@ -69,7 +69,12 @@ export function routeAt(s: number, R: V[] = ROUTE): { p: V; dir: V } {
   return { p: a, dir: [d[0] / l, 0, d[2] / l] };
 }
 
-export function conservatory(styles: Styles = {}, level: Level = 'both', taught?: Taught): Room {
+/**
+ * `light`: where the light comes from (a unit vector), if it's somewhere: each limb's loaded stroke keeps to the side
+ * turned away from it, and a stone's heavy rim to its far side. None: every limb inked along its underside and the
+ * stones as they fell, which is how the room was when it was taught.
+ */
+export function conservatory(styles: Styles = {}, level: Level = 'both', taught?: Taught, light?: V): Room {
   let id = 1, r = 12345; const rnd = () => ((r = (Math.imul(r, 1664525) + 1013904223) >>> 0) / 4294967296);
   const marks: Mark[] = [], regions: Record<string, number> = {};
   const count = (name: string, from: number) => { regions[name] = (regions[name] ?? 0) + marks.slice(from).reduce((a, m) => a + m.count, 0); };
@@ -79,7 +84,7 @@ export function conservatory(styles: Styles = {}, level: Level = 'both', taught?
     const rows = width > 0.4 ? 12 : width > 0.2 ? 9 : 6, m = strokeMark(id++, ctrl, 'tube', width, rows * (cols || Math.max(10, Math.round(L / Math.max(0.09, width * 0.3)))), rows, name);
     if (styles.root) { m.params = styles.root.slice(); m.params[SP.u0] = -0.04; m.params[SP.u1] = 1.04; for (let k = 0; k < KN.offset; k++) m.params[SP.offset + k] *= 0.3; }
     else { for (let k = 0; k < KN.dry; k++) m.params[SP.dry + k] = 0.8; for (let k = 0; k < KN.ink; k++) m.params[SP.ink + k] = 0.9; }
-    m.shade = 0.8;
+    m.shade = 0.8; if (light) m.light = light;
     // (its own taper over whatever the style's width does, kept within a stroke's range)
     for (let k = 0; k < KN.width; k++) m.params[SP.width + k] = Math.max(-1.6, Math.min(0.6, m.params[SP.width + k] * 0.5 + 0.15 - taper * (k / (KN.width - 1))));
     marks.push(m); return m;
@@ -128,7 +133,7 @@ export function conservatory(styles: Styles = {}, level: Level = 'both', taught?
   // ─── the open pool: stones, the veil, a far bridge, and one gesture in open space ───
   from = marks.length;
   for (let i = 0; i < 9; i++) {
-    const { p, dir } = routeAt((4.45 + i * 0.56) / 14), ac: V = [-dir[2], 0, dir[0]], c = add(add(p, ac, (i % 2 ? 0.25 : -0.25)), UP, -p[1] + 0.12), rx = 0.5 + rnd() * 0.25, rz = 0.38 + rnd() * 0.2, turn = rnd() * 3;
+    const { p, dir } = routeAt((4.45 + i * 0.56) / 14), ac: V = [-dir[2], 0, dir[0]], c = add(add(p, ac, (i % 2 ? 0.25 : -0.25)), UP, -p[1] + 0.12), rx = 0.5 + rnd() * 0.25, rz = 0.38 + rnd() * 0.2, fell = rnd() * 3, turn = light ? Math.atan2(-light[2], -light[0]) - 1.75 : fell;
     const ring = (a0: number, a1: number, n = 7): V[] => Array.from({ length: n }, (_, k) => { const a = a0 + ((a1 - a0) * k) / (n - 1) + turn; return [c[0] + Math.cos(a) * rx, c[1], c[2] + Math.sin(a) * rz] as V; });
     flat(ring(0.2, 3.3), 0.11, 54, 1.6, `pool/stone ${i} rim`, 3, 0.6); flat(ring(3.5, 6.1), 0.03, 20, 0.2, `pool/stone ${i} far`, 1, 0.8);
     const poly = ring(0, 5.6, 9); marks.push(tone(washMark(id++, poly.map((q, k) => [c, q, poly[(k + 1) % poly.length]]), UP, 14, `pool/stone ${i} wash`), -1.3));

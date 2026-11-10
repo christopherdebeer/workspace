@@ -1174,17 +1174,43 @@ The page draws the room as taught by default (a style a role and each mark's wei
   in the room occludes anything, so the mirror shows through them.
 - **Cost**: the room draws about 23,000 deposits (some lay no ink and are left out), twice with the mirror. `&perf`
   measures the room from each region with the mirror and the sway on and off, and the walk from 12, 5 and 1.5 m.
-- **On a phone** (an iPhone, iOS 18.7, Safari, Apple GPU, 603 × 1071): the page's frames come at 60 a second in the
-  room (22,780 deposits as taught) from all three regions, with the water's mirror or without, the air still or
-  moving, and in the walk at 12, 5 and 1.5 m.
-- **That measure didn't show cost.** The frames still came at 60 with the room drawn 16 times over (about 730,000
-  splats a frame) and the walk 128 times over. A phone's GPU works apart from the page, and a frame here is a
-  handful of instanced draws, so the page's frames keep coming whether or not the GPU keeps up. The rows above say
-  the page didn't stall; they don't say the GPU drew every frame.
-- **`&perf` now waits for each frame to be drawn** (a one-pixel read) and reports how long drawing took, beside the
-  frame time. In the walk and the room the camera now sways about the view instead of turning all the way round
-  (turned on the spot, the walk's canopy was out of view most of the time). Those numbers aren't in yet.
-- **Light isn't done.**
+- **On a phone** (an iPhone, iOS 18.7, Safari, Apple GPU; the canvas 603 × 1071, half the phone's own resolution
+  each way). Each measured frame is waited for (a one-pixel read) and its draw time taken: time between frames
+  alone didn't show cost (the page's frames came at 60 a second even with the room drawn 16 times over, because the
+  phone's GPU works apart from the page).
+
+| the room, as taught (22,780 deposits) | draw time, median / 95th centile |
+|---|---|
+| the tunnel: still water / no water / air moving | 3 / 4 ms · 2 / 3 ms · 3 / 4 ms |
+| the pool: still water / no water / air moving | 2 / 4 ms · 2 / 3 ms · 2 / 4 ms |
+| the canopy: still water / no water / air moving | 4 / 5 ms · 3 / 4 ms · 4 / 5 ms |
+| the canopy, drawn 2 / 4 / 8 times over | 7 / 8 ms · 8 / 11 ms · 8 / 11 ms |
+| the canopy, drawn 16 times over | 14 / 18 ms (58 fps) |
+
+| the walk (2,002 deposits) | draw time, median / 95th centile |
+|---|---|
+| from 12 m / 5 m / 1.5 m | 1 / 2 ms · 2 / 3 ms · 2 / 2 ms |
+| from 1.5 m, drawn 8 / 32 times over | 7 / 8 ms · 8 / 12 ms |
+| from 1.5 m, drawn 128 times over | 20 / 23 ms (45 fps) |
+
+- **The room takes 2 to 4 ms of a 16.7 ms frame.** The water's mirror costs about a millisecond; the sway nothing that
+  shows (the phone's clock reads to the millisecond).
+- **Its headroom is about eight times over.** Drawn 8 times over it still takes 8 ms; at 16 it is at the edge (58
+  fps). Draw time doesn't grow in step with the load (2 times: 7 ms; 4 and 8 times: 8 ms), probably because a
+  phone's GPU runs slower when little is asked of it; so the load rows are the measure, not the light ones scaled.
+- **At the phone's own resolution** there are four times the pixels to fill. That wasn't measured.
+- **So cost isn't what limits the room.** Its softness could be bought down with finer deposits: several times as
+  many would still fit.
+- **Light**: a light can stand somewhere round the room (`&light=<degrees>`, or the slider). Each limb's loaded
+  stroke then keeps to the side turned away from it, and a stone's heavy rim to its far side: the marks are laid
+  again (about 0.2 s). With no light given, every limb is inked along its underside, which is how the room was when
+  it was taught.
+
+![The canopy view with the light overhead, low from one side, and from the other](splats/b-room-light.jpg)
+
+- **The light is a control, not something taught.** The teachers show one lighting, and they ink an arch along its
+  upper edge with a wash beneath, not its underside. Which side a role's ink keeps to should be taught too; it
+  isn't a parameter yet.
 
 ## The Bench: one brush made dependable, one stroke made editable
 
@@ -1361,7 +1387,7 @@ Roughly in order of what each teaches:
 
 ## Flags
 
-`?scene=stone|brushes|composed|pen|field|bench|marks|walk|room|mist|garden|plush|nike|train` · `?scene=marks&way=organised|organised+deposits|independent|style|unfitted|brush&only=<sheet>` · `?scene=walk&d=<metres>&level=both|fronds|wash&auto` · `?scene=room&view=tunnel|pool|canopy&s=<0…1>&style=taught|bench|plain&mirror=0&moving&auto` · `?field=stone|composed` · `?flat` (a fitted field's baseline) · `?compose=0` · `?halo=0` · `?halopx=` · `?policy=ranks|rules|learned|taught` · `?teacher=sumi|sumi-bold|sumi-light` · `?judge` · `?perf` · `?ink` (a captured scene in ink) · `?scene=pen&part=word|board|culm|bank|rock&reference` · `?look=dry|wash` · `?detail=0..1` · `?thin=even` · `?only=wash` · `?view=hero|grazing|reverse` · `?orbit` · `?detail=0.25|0.55|1` (sparse, intermediate, resolved) · `?brush` · `?occluder=0` · `?clean` (no controls) · `?url=…` (any `.splat` or `.ply` CORS lets it read) · `?up=1` (for a file that's
+`?scene=stone|brushes|composed|pen|field|bench|marks|walk|room|mist|garden|plush|nike|train` · `?scene=marks&way=organised|organised+deposits|independent|style|unfitted|brush&only=<sheet>` · `?scene=walk&d=<metres>&level=both|fronds|wash&auto` · `?scene=room&view=tunnel|pool|canopy&s=<0…1>&style=taught|bench|plain&light=<degrees>&mirror=0&moving&auto` · `?field=stone|composed` · `?flat` (a fitted field's baseline) · `?compose=0` · `?halo=0` · `?halopx=` · `?policy=ranks|rules|learned|taught` · `?teacher=sumi|sumi-bold|sumi-light` · `?judge` · `?perf` · `?ink` (a captured scene in ink) · `?scene=pen&part=word|board|culm|bank|rock&reference` · `?look=dry|wash` · `?detail=0..1` · `?thin=even` · `?only=wash` · `?view=hero|grazing|reverse` · `?orbit` · `?detail=0.25|0.55|1` (sparse, intermediate, resolved) · `?brush` · `?occluder=0` · `?clean` (no controls) · `?url=…` (any `.splat` or `.ply` CORS lets it read) · `?up=1` (for a file that's
 y-up) · `?mode=0..3` · `?size=` · `?res=` · `?count=` (garden size) · `?noworkers` · `?preview`
 
 Checks: `node cells/lab/devtools/splats.test.mjs` (formats, covariance, sort) and

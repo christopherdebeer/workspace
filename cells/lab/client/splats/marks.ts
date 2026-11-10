@@ -45,6 +45,9 @@ export interface Mark {
   /** a tube's shading: how far its ink keeps to its underside (0: all round; 1: its top left bare), as a limb drawn
    * with one loaded stroke along it and the paper left for the rest */
   shade?: number;
+  /** where a tube's light comes from (a unit vector; none: from straight above its spine): its ink keeps to the side
+   * turned away from it, and the side turned to it is left to the paper */
+  light?: V;
   /** how far its far end sways (scene units; render.ts moves a fitted mark's deposits by their own share of it) */
   sway?: number;
   /** a wash on a face: a point of it, two unit axes in its plane, its normal, its shape as triangles in (u, v) */
@@ -180,7 +183,7 @@ export function layout(m: Mark): Deposit[] {
         const run = s / (5 * w0) + hash(m.id, row, 7) * 16, r0 = Math.floor(run), rf = run - r0, sm = rf * rf * (3 - 2 * rf), gap = hash(m.id, row, r0) * (1 - sm) + hash(m.id, row, r0 + 1) * sm;
         const dry = Math.max(0, knots(P, SP.dry, KN.dry, u)) * Math.max(0, 1 + P[SP.drySide] * c) * 9 * gap * gap;
         const centre = add(add(pts[k], sub(pts[k + 1], pts[k]), f), N0, knots(P, SP.offset, KN.offset, u) * w0);
-        out.push({ p: add(centre, rad, w / 2 + R[r + 4] * w0), t, n: rad, s1: (L / cols) * 0.9 * Math.exp(P[SP.along] + R[r + 1]), s2: ((Math.PI * w) / rows) * 0.62 * Math.exp(P[SP.spread] + R[r + 2]), thin: 0.0008, turn: R[r + 3], logit: knots(P, SP.ink, KN.ink, u) - softplus((P[SP.u0] - u) / t0) - softplus((u - P[SP.u1]) / t1) - dry - (m.shade ?? 0) * 3 * (1 + c) + R[r] });
+        out.push({ p: add(centre, rad, w / 2 + R[r + 4] * w0), t, n: rad, s1: (L / cols) * 0.9 * Math.exp(P[SP.along] + R[r + 1]), s2: ((Math.PI * w) / rows) * 0.62 * Math.exp(P[SP.spread] + R[r + 2]), thin: 0.0008, turn: R[r + 3], logit: knots(P, SP.ink, KN.ink, u) - softplus((P[SP.u0] - u) / t0) - softplus((u - P[SP.u1]) / t1) - dry - (m.shade ?? 0) * 3 * (1 + (m.light ? dot(rad, m.light) : c)) + R[r] });
         continue;
       }
       const b = cross(n, t);
