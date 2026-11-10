@@ -38,9 +38,9 @@ const tri = [];
 if (COMPOSED) {
   const SU = await load('../client/splats/subjects.ts'), sc = SU.composedScene(look, true), O = sc.occluder, ob = sc.objects;
   const mid = new Map();
-  for (let t = 0; t < O.length / 9; t++) { const m = mid.get(ob[t]) ?? [0, 0, 0, 0]; for (let k = 0; k < 3; k++) { m[0] += O[t * 9 + k * 3]; m[1] += O[t * 9 + k * 3 + 1]; m[2] += O[t * 9 + k * 3 + 2]; m[3]++; } mid.set(ob[t], m); }
+  for (let t = 0; t < O.length / 9; t++) { const m = mid.get(ob[t * 3]) ?? [0, 0, 0, 0]; for (let k = 0; k < 3; k++) { m[0] += O[t * 9 + k * 3]; m[1] += O[t * 9 + k * 3 + 1]; m[2] += O[t * 9 + k * 3 + 2]; m[3]++; } mid.set(ob[t * 3], m); }
   for (let t = 0; t < O.length / 9; t++) {
-    const A = [...O.slice(t * 9, t * 9 + 3)], B = [...O.slice(t * 9 + 3, t * 9 + 6)], C = [...O.slice(t * 9 + 6, t * 9 + 9)], m = mid.get(ob[t]), M = [m[0] / m[3], m[1] / m[3], m[2] / m[3]];
+    const A = [...O.slice(t * 9, t * 9 + 3)], B = [...O.slice(t * 9 + 3, t * 9 + 6)], C = [...O.slice(t * 9 + 6, t * 9 + 9)], m = mid.get(ob[t * 3]), M = [m[0] / m[3], m[1] / m[3], m[2] / m[3]];
     let n = cross(sub(B, A), sub(C, A)); const area = Math.hypot(...n) / 2; if (area < 1e-9) continue; n = norm(n);
     const c = [(A[0] + B[0] + C[0]) / 3, (A[1] + B[1] + C[1]) / 3, (A[2] + B[2] + C[2]) / 3];
     // (a culm's or a wall's: away from its own axis or middle, horizontally where it's upright)

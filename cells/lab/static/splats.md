@@ -882,6 +882,42 @@ drawn by the real renderer from the same camera:
 - So the comparison of field and brush above overstated the field on tone. On decisions and agreement the field still
   leads for sumi; for bold the fitted brush now agrees more (0.60 against 0.52).
 
+### The fitter and the renderer made to agree
+
+A fitted field is only as good as the forward model it was fitted through. The check above found the browser laying
+about half the ink the optimiser believed. Five differences were found, one at a time, by drawing the same field both
+ways and comparing (`devtools/splats-field-agree.py`):
+
+- **The pixel floor.** A disc thinner than a pixel is padded out to one. Padded, it covered more and so inked more, by
+  an amount that depended on the resolution. A fitted mark (kind 12) is now fainter by as much as it's wider: its
+  footprint's area before the padding over its area after. The fitter does the same. The same field now draws the same
+  ink at 384 and 1024 wide.
+- **Normals turned the wrong way.** The fitters decided which way a face points from the middle of the wrong object
+  (an array indexed by triangle that is laid out by vertex), which set some discs 3 mm inside their surface, hidden.
+- **Storage.** The nine view terms were quantised to 6 or 8 bits into the feature and element slots (so a fitted disc
+  had no identity), and sizes above 51 mm were clipped (the ground's discs). The terms are now 16-bit floats in a
+  texture of their own; feature and element are free again for a mark's identity.
+- **A disc cut by its own face.** A disc lying on a face seen at a slant had its near half behind the face's depth.
+  Fitted marks on a surface now take their plane's depth (as the brush's surface marks do); the fitter tests each pixel
+  against the occluder the same way.
+- **Faint tails.** The renderer drops a fragment under a 255th; the fitter counted them.
+
+![The held-out view: the teacher; the optimiser's picture of its field; the same field drawn by the real renderer](splats/b-field-agree.jpg)
+
+| the held-out sumi field, refitted | tone | decisions | agreement | mean darkness |
+|---|---|---|---|---|
+| the optimiser's picture (384 wide) | 1.29 | 47 | 0.84 | 0.0449 |
+| the real renderer, 384 wide | 1.32 | 47 | 0.84 | 0.0431 |
+| the real renderer, 1024 wide | 1.32 | 33 | 0.87 | 0.0432 |
+
+- **The two pictures now agree**: the browser lays 4% less ink than the optimiser's picture (it was 45% less), and
+  their tone differs by 0.010 (it was 0.128, on the measure the fields are scored by).
+- **The field's score is now the drawing's**: tone 1.32 in the browser, against 2.55 before, and better than another
+  hand's drawing of the view (2.11, 2.49). Its decisions are closer at full size (33) than at the size it was fitted.
+- The file is a third the size: only the discs that ink anything from anywhere are kept (7,929 of 33,730; 248 KB).
+- The earlier fields (`composed`, `composed-sumi` and the rest) were fitted before these fixes and are kept as they
+  were; `composed-sumi-shape` is refitted.
+
 ## The Bench: one brush made dependable, one stroke made editable
 
 `?scene=bench` (`bench.ts`; brush.ts). This answers a source review of the brush. Its five findings, all confirmed in the

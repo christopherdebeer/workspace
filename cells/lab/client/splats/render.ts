@@ -38,6 +38,8 @@ uniform highp sampler2D u_feat;
 // (a drawing policy's controls, by group: the rank a group's marks must reach to show, and their strength; off when
 // u_ctlOn is 0)
 uniform highp sampler2D u_ctl;
+// (a fitted mark's view terms: twelve floats a splat (nine used), laid out as the data is, three texels a splat)
+uniform highp sampler2D u_coef;
 uniform int u_ctlOn;
 // (Mist: the coarse density grid, the sun, which lighting, and the tiny network's numbers)
 uniform highp sampler3D u_grid;
@@ -133,6 +135,19 @@ void main() {
     z += (float(e & 63u) / 63.0 * 24.0 - 12.0) * d.x * d.y + (float((e >> 6) & 63u) / 63.0 * 24.0 - 12.0) * d.y * d.z + (float((e >> 12) & 63u) / 63.0 * 24.0 - 12.0) * d.x * d.z;
     z += (float((e >> 18) & 63u) / 63.0 * 24.0 - 12.0) * (d.x * d.x - d.y * d.y) + (float((e >> 24) & 63u) / 63.0 * 24.0 - 12.0) * (3.0 * d.z * d.z - 1.0);
     v_color.a *= 1.0 / (1.0 + exp(-z));
+    // (a mark that hands over to another as it's approached (marks.ts, its lod): shown by how large a scene unit looks
+    // where it is, in screen heights, between two thresholds (log2); the first above the second for one that fades as
+    // it nears, below it for one that comes in. Two marks given the same two thresholds, swapped, are complementary)
+    if (k2.y != k2.z) v_color.a *= clamp((log2(u_focal.y / (max(0.02, -cam.z) * u_viewport.y)) - k2.y) / (k2.z - k2.y), 0.0, 1.0);
+    if (v_color.a < 0.004) return;
+  }
+  // (a fitted mark as it's fitted now (kind 12): its ink from the direction it's seen from, its nine terms unquantised in
+  // a texture of their own, so its feature and element stay its identity; and, below, its footprint energy-conserving)
+  if (kind == 12u) {
+    vec3 d = normalize(u_eye - p);
+    vec4 k0 = texelFetch(u_coef, t, 0), k1 = texelFetch(u_coef, t + ivec2(1, 0), 0), k2 = texelFetch(u_coef, t + ivec2(2, 0), 0);
+    float z = k0.x + k0.y * d.x + k0.z * d.y + k0.w * d.z + k1.x * d.x * d.y + k1.y * d.y * d.z + k1.z * d.x * d.z + k1.w * (d.x * d.x - d.y * d.y) + k2.x * (3.0 * d.z * d.z - 1.0);
+    v_color.a *= 1.0 / (1.0 + exp(-z));
   }
   // (a captured scene in ink (ink.ts): a disc's ink copy shown only from where the disc is near edge-on, so the discs on
   // the outline from here draw it; its paper body stepping aside at the same angles, so it doesn't cover its own line)
@@ -203,6 +218,10 @@ void main() {
   mat3 P = T * S * transpose(T);
   // (no thinner than a pixel)
   float a = P[0][0] + 0.3, b = P[0][1], d = P[1][1] + 0.3;
+  // (a fitted mark keeps its ink whatever the screen's resolution: padded out to a pixel, it's fainter by as much as it's
+  // wider (the footprint's area before the padding over its area after), so a mark fitted at one size draws the same
+  // amount of ink at another. The brush's own marks aren't: their look was judged as they are)
+  if (kind == 12u) v_color.a *= sqrt(max(0.0, (P[0][0] * P[1][1] - P[0][1] * P[0][1]) / (a * d - b * b)));
   // (the ellipse's axes: eigenvalues of [[a b][b d]], and the first's eigenvector)
   float mid = 0.5 * (a + d), rad = length(vec2(0.5 * (a - d), b));
   float l1 = mid + rad, l2 = max(mid - rad, 0.1);
@@ -289,7 +308,7 @@ export class Renderer {
   private hfbo: WebGLFramebuffer | null = null; private hdep: WebGLTexture | null = null; private hobj: WebGLTexture | null = null; private hsize = [0, 0];
   private u: Record<string, WebGLUniformLocation | null> = {}; private ou: Record<string, WebGLUniformLocation | null> = {};
   n = 0; drawn = 0;
-  private gridTex: WebGLTexture | null = null; private featTex: WebGLTexture | null = null; private ctlTex: WebGLTexture | null = null; private featLast: Float32Array | null = null; private net = new Float32Array(Math.ceil(NET_SIZE / 4) * 4); private ana = [0, 0];
+  private gridTex: WebGLTexture | null = null; private featTex: WebGLTexture | null = null; private ctlTex: WebGLTexture | null = null; private coefTex: WebGLTexture | null = null; private featLast: Float32Array | null = null; private net = new Float32Array(Math.ceil(NET_SIZE / 4) * 4); private ana = [0, 0];
   /** Mist's density pyramid (one float a texel; each level a mip of the 3D texture) */
   setGrid(g: Mips) {
     const gl = this.gl; gl.bindTexture(gl.TEXTURE_3D, this.gridTex);
@@ -309,7 +328,7 @@ export class Renderer {
     for (const k of ['u_data', 'u_view', 'u_proj', 'u_focal', 'u_viewport', 'u_size', 'u_mode', 'u_eye', 'u_detail', 'u_share', 'u_thin', 'u_feat', 'u_only', 'u_grid', 'u_sun', 'u_light', 'u_net', 'u_ana', 'u_diff']) this.u[k] = gl.getUniformLocation(p, k);
     // (an array's location, by its first element's name, where the bare name isn't found)
     this.u.u_net ??= gl.getUniformLocation(p, 'u_net[0]');
-    this.gridTex = gl.createTexture()!; this.featTex = gl.createTexture()!; this.setFeatures(new Float32Array(1)); this.ctlTex = gl.createTexture()!; this.setControls(new Float32Array(4)); this.ctlOn = false;
+    this.gridTex = gl.createTexture()!; this.featTex = gl.createTexture()!; this.setFeatures(new Float32Array(1)); this.ctlTex = gl.createTexture()!; this.coefTex = gl.createTexture()!; this.setControls(new Float32Array(4)); this.ctlOn = false;
     this.vao = gl.createVertexArray()!; gl.bindVertexArray(this.vao);
     const quad = gl.createBuffer()!; gl.bindBuffer(gl.ARRAY_BUFFER, quad); gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
     const ac = gl.getAttribLocation(p, 'a_corner'); gl.enableVertexAttribArray(ac); gl.vertexAttribPointer(ac, 2, gl.FLOAT, false, 0, 0);
@@ -325,7 +344,7 @@ export class Renderer {
     this.oobj = gl.createBuffer()!; gl.bindBuffer(gl.ARRAY_BUFFER, this.oobj);
     const ao = gl.getAttribLocation(op, 'a_obj'); gl.enableVertexAttribArray(ao); gl.vertexAttribPointer(ao, 1, gl.FLOAT, false, 0, 0);
     gl.bindVertexArray(null);
-    for (const k of ['u_hdep', 'u_hobj', 'u_halo', 'u_nf', 'u_ctl', 'u_ctlOn']) this.u[k] = gl.getUniformLocation(p, k);
+    for (const k of ['u_coef', 'u_hdep', 'u_hobj', 'u_halo', 'u_nf', 'u_ctl', 'u_ctlOn']) this.u[k] = gl.getUniformLocation(p, k);
   }
   /** the splats into the data texture (once a scene) */
   /**
@@ -352,6 +371,12 @@ export class Renderer {
     gl.bindTexture(gl.TEXTURE_2D, this.tex);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32UI, 3072, rows, 0, gl.RGBA_INTEGER, gl.UNSIGNED_INT, data);
+    // (a fitted drawing's view terms, beside the data: the same three texels a splat; none: one empty texel)
+    gl.activeTexture(gl.TEXTURE6); gl.bindTexture(gl.TEXTURE_2D, this.coefTex);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    if (s.coef) { const c = new Float32Array(3072 * rows * 4); c.set(s.coef.subarray(0, Math.min(s.coef.length, c.length))); gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, 3072, rows, 0, gl.RGBA, gl.FLOAT, c); }
+    else gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, 1, 1, 0, gl.RGBA, gl.FLOAT, new Float32Array(4));
+    gl.activeTexture(gl.TEXTURE0);
     this.n = s.n; this.drawn = 0;
   }
   /** a drawing policy's controls, four floats a group (by group index, 1024 a row): the rank its marks must reach,
@@ -436,6 +461,7 @@ export class Renderer {
     gl.uniform1f(this.u.u_detail, opts.detail ?? 1); gl.uniform1f(this.u.u_share, opts.share ?? 1); gl.uniform1i(this.u.u_thin, opts.thin ?? 0); gl.uniform1i(this.u.u_only, opts.only ?? -1);
     if (opts.features) this.setFeatures(opts.features);
     gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, this.featTex); gl.uniform1i(this.u.u_feat, 2);
+    gl.activeTexture(gl.TEXTURE6); gl.bindTexture(gl.TEXTURE_2D, this.coefTex); gl.uniform1i(this.u.u_coef, 6);
     gl.activeTexture(gl.TEXTURE5); gl.bindTexture(gl.TEXTURE_2D, this.ctlTex); gl.uniform1i(this.u.u_ctl, 5); gl.uniform1i(this.u.u_ctlOn, this.ctlOn ? 1 : 0); gl.activeTexture(gl.TEXTURE0);
     gl.uniform1i(this.u.u_light, opts.light ?? 0); gl.uniform1i(this.u.u_diff, opts.diff ? 1 : 0); gl.uniform3fv(this.u.u_sun, opts.sun ?? [0, 1, 0]);
     gl.uniform4fv(this.u.u_net, this.net); gl.uniform2f(this.u.u_ana, this.ana[0], this.ana[1]);

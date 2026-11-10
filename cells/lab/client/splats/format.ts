@@ -35,6 +35,9 @@ export interface Splats {
   /** (a composed drawing's) the group each mark belongs to (its index in the scene, 1-based; 0 none), for a drawing
    * policy's controls */
   group?: Uint32Array;
+  /** (a fitted drawing's) each mark's view terms, twelve floats a splat (nine used): its ink's logit as a constant, the
+   * view direction's three components, and five quadratic terms of it (render.ts, kind 12) */
+  coef?: Float32Array;
 }
 
 export function alloc(n: number): Splats {

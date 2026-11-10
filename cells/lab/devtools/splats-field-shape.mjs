@@ -12,8 +12,12 @@
 // view (five small extra projections). The teachers are the restyled wireframe views (splats-field-sheets.py, at this
 // resolution); --holdout leaves a view out to test on; --noshape fits the ink alone at the same resolution, to compare.
 //
-// Writes static/splats/field-composed-<style>-shape.bin (21 bytes a disc: place, normal, two sizes and a turn, nine
-// view terms, a constant) for ?scene=field&field=composed-<style>-shape.
+// The forward model is the renderer's (render.ts, kind 12): the same footprint, energy-conserving where it's padded out
+// to a pixel (so the ink doesn't depend on the resolution fitted at); occlusion a pixel at a time against the scene's
+// own occluder; the view terms unquantised.
+//
+// Writes static/splats/field-composed-<style>-shape.bin (`SFD3`: only the discs that ink anything; 32 bytes a disc) for
+// ?scene=field&field=composed-<style>-shape.
 import { build } from 'esbuild';
 import { readFileSync, writeFileSync } from 'node:fs';
 const load = async (f) => { const o = await build({ entryPoints: [new URL(f, import.meta.url).pathname], bundle: true, write: false, format: 'esm', platform: 'node', logLevel: 'error' }); return import('data:text/javascript;base64,' + Buffer.from(o.outputFiles[0].text).toString('base64')); };
@@ -27,9 +31,9 @@ const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a
 // ─── the discs: as splats-field-fit.mjs lays them for the composed scene (the same seed, so the same discs) ───
 const SU = await load('../client/splats/subjects.ts'), sc = SU.composedScene('wash', true), O = sc.occluder, ob = sc.objects;
 const tri = [], mid = new Map();
-for (let t = 0; t < O.length / 9; t++) { const m = mid.get(ob[t]) ?? [0, 0, 0, 0]; for (let k = 0; k < 3; k++) { m[0] += O[t * 9 + k * 3]; m[1] += O[t * 9 + k * 3 + 1]; m[2] += O[t * 9 + k * 3 + 2]; m[3]++; } mid.set(ob[t], m); }
+for (let t = 0; t < O.length / 9; t++) { const m = mid.get(ob[t * 3]) ?? [0, 0, 0, 0]; for (let k = 0; k < 3; k++) { m[0] += O[t * 9 + k * 3]; m[1] += O[t * 9 + k * 3 + 1]; m[2] += O[t * 9 + k * 3 + 2]; m[3]++; } mid.set(ob[t * 3], m); }
 for (let t = 0; t < O.length / 9; t++) {
-  const A = [...O.slice(t * 9, t * 9 + 3)], B = [...O.slice(t * 9 + 3, t * 9 + 6)], C = [...O.slice(t * 9 + 6, t * 9 + 9)], m = mid.get(ob[t]), M = [m[0] / m[3], m[1] / m[3], m[2] / m[3]];
+  const A = [...O.slice(t * 9, t * 9 + 3)], B = [...O.slice(t * 9 + 3, t * 9 + 6)], C = [...O.slice(t * 9 + 6, t * 9 + 9)], m = mid.get(ob[t * 3]), M = [m[0] / m[3], m[1] / m[3], m[2] / m[3]];
   let n = cross(sub(B, A), sub(C, A)); const area = Math.hypot(...n) / 2; if (area < 1e-9) continue; n = norm(n);
   const c = [(A[0] + B[0] + C[0]) / 3, (A[1] + B[1] + C[1]) / 3, (A[2] + B[2] + C[2]) / 3], out = Math.abs(n[1]) < 0.5 ? [c[0] - M[0], 0, c[2] - M[2]] : sub(c, M);
   if (dot(n, out) < 0) n = n.map((v) => -v);
@@ -71,9 +75,16 @@ for (const st of TEACH) for (const view of ['ref', 'left', 'right', 'far-left', 
     const den = (s[1][1] - s[2][1]) * (s[0][0] - s[2][0]) + (s[2][0] - s[1][0]) * (s[0][1] - s[2][1]); if (Math.abs(den) < 1e-9) continue;
     for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) { const px = x + 0.5, py = y + 0.5, a = ((s[1][1] - s[2][1]) * (px - s[2][0]) + (s[2][0] - s[1][0]) * (py - s[2][1])) / den, b = ((s[2][1] - s[0][1]) * (px - s[2][0]) + (s[0][0] - s[2][0]) * (py - s[2][1])) / den, g = 1 - a - b; if (a < 0 || b < 0 || g < 0) continue; const z = a * q[0][2] + b * q[1][2] + g * q[2][2]; if (z < zb[y * W + x]) zb[y * W + x] = z; }
   }
+  // (which discs could be seen: on the screen, and not behind the occluders at their middle or just round it. Whether
+  // each of a disc's pixels is seen is decided in the pass, a pixel at a time, as the renderer's depth test does)
   const seen = [], Y = [];
-  for (let i = 0; i < N; i++) { const q = toCam(discs[i].p); if (q[2] < 0.1) continue; const [sx, sy] = toPx(q); if (sx < -10 || sx > W + 10 || sy < -10 || sy > H + 10) continue; const ix = Math.min(W - 1, Math.max(0, Math.floor(sx))), iy = Math.min(H - 1, Math.max(0, Math.floor(sy))); if (q[2] > zb[iy * W + ix] + 0.02) continue; seen.push(i); Y.push(basis(norm(sub(E, discs[i].p)))); }
-  views.push({ style: st, view, split: view === HOLD ? 'test' : 'train', cam, seen, Y, Tgt: Float32Array.from(R.D) });
+  for (let i = 0; i < N; i++) {
+    const q = toCam(discs[i].p); if (q[2] < 0.1) continue; const [sx, sy] = toPx(q); if (sx < -10 || sx > W + 10 || sy < -10 || sy > H + 10) continue;
+    let far = 0; for (const [dx, dy] of [[0, 0], [-5, 0], [5, 0], [0, -5], [0, 5]]) { const ix = Math.min(W - 1, Math.max(0, Math.floor(sx + dx))), iy = Math.min(H - 1, Math.max(0, Math.floor(sy + dy))); far = Math.max(far, zb[iy * W + ix]); }
+    if (q[2] > far + 0.01) continue;
+    seen.push(i); Y.push(basis(norm(sub(E, discs[i].p))));
+  }
+  views.push({ style: st, view, split: view === HOLD ? 'test' : 'train', cam, seen, Y, zb, Tgt: Float32Array.from(R.D) });
 }
 console.log(`${N} discs; ${views.length} views at ${W}×${H} (${views.filter((v) => v.split === 'train').length} to fit${HOLD ? `, ${HOLD} held out` : ''}); shapes ${SHAPE ? 'fitted' : 'fixed'}`);
 
@@ -90,7 +101,13 @@ function ellipse(i, sh, cam) {
   const e1 = img(a1, s1), e2 = img(a2, s2), e3 = img(D.n, 0.0008);
   const A = e1[0] * e1[0] + e2[0] * e2[0] + e3[0] * e3[0] + 0.3, B = e1[0] * e1[1] + e2[0] * e2[1] + e3[0] * e3[1], C = e1[1] * e1[1] + e2[1] * e2[1] + e3[1] * e3[1] + 0.3;
   const det = A * C - B * B;
-  return [sx, sy, C / det, -B / det, A / det, 3 * Math.sqrt(Math.max(A, C))];
+  // (padded out to a pixel, it's fainter by as much as it's wider, as the renderer draws a fitted mark (kind 12): the
+  // footprint's area before the padding over its area after; and its depth, for the pixel-by-pixel occlusion)
+  const comp = Math.sqrt(Math.max(0, ((A - 0.3) * (C - 0.3) - B * B) / det));
+  // (its plane, in the camera's frame: for the depth of the disc under each pixel, as the renderer gives a mark that
+  // lies on a surface (so a face seen at a slant doesn't cut the near half of the discs lying on it))
+  const nx = dot(D.n, cam.r), ny = dot(D.n, cam.u), nz = dot(D.n, cam.f);
+  return [sx, sy, C / det, -B / det, A / det, 3 * Math.sqrt(Math.max(A, C)), comp, z, nx, ny, nz, nx * q[0] + ny * q[1] + nz * q[2]];
 }
 
 // ─── fitting ───
@@ -101,29 +118,40 @@ const ac = Adam(N * NB), as = Adam(N * NS), gc = new Float32Array(N * NB), gs = 
 const logT = new Float32Array(W * H), cov = new Float32Array(W * H);
 function pass(v, grad) {
   logT.fill(0);
+  const zb = v.zb;
   const fps = v.seen.map((i, k) => { const e = ellipse(i, sh.subarray(i * NS, i * NS + NS), v.cam); let zz = 0; for (let b = 0; b < TERMS; b++) zz += c[i * NB + b] * v.Y[k][b]; return { i, k, e, a: 1 / (1 + Math.exp(-zz)) }; });
   for (const f of fps) {
-    const [sx, sy, ia, ib, ic, R] = f.e, x0 = Math.max(0, Math.floor(sx - R)), x1 = Math.min(W - 1, Math.ceil(sx + R)), y0 = Math.max(0, Math.floor(sy - R)), y1 = Math.min(H - 1, Math.ceil(sy + R));
+    const [sx, sy, ia, ib, ic, R, comp, z, nx, ny, nz, nP] = f.e, x0 = Math.max(0, Math.floor(sx - R)), x1 = Math.min(W - 1, Math.ceil(sx + R)), y0 = Math.max(0, Math.floor(sy - R)), y1 = Math.min(H - 1, Math.ceil(sy + R)), al = f.a * comp, fy = v.cam.fy;
     f.box = [x0, x1, y0, y1];
-    for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) { const dx = x + 0.5 - sx, dy = y + 0.5 - sy, G = Math.exp(-0.5 * (ia * dx * dx + 2 * ib * dx * dy + ic * dy * dy)); if (G < 0.01) continue; logT[y * W + x] += Math.log(1 - Math.min(0.99, f.a * G)); }
+    for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
+      const p = y * W + x, dn = nx * ((x + 0.5 - W / 2) / fy) - ny * ((y + 0.5 - H / 2) / fy) + nz;
+      if ((Math.abs(dn) > 0.05 ? Math.max(z - 0.5, Math.min(z + 0.5, nP / dn)) : z) > zb[p]) continue;
+      const dx = x + 0.5 - sx, dy = y + 0.5 - sy, G = Math.exp(-0.5 * (ia * dx * dx + 2 * ib * dx * dy + ic * dy * dy));
+      // (the renderer's own cuts: past three sigma, and where the ink would be under a 255th)
+      if (G < 0.011 || al * G < 1 / 255) continue;
+      logT[p] += Math.log(1 - Math.min(0.99, al * G));
+    }
   }
   let loss = 0;
   for (let p = 0; p < W * H; p++) { const e = 1 - Math.exp(logT[p]) - v.Tgt[p]; cov[p] = e; loss += e * e; }
   if (grad) for (const f of fps) {
-    const [sx, sy, ia, ib, ic] = f.e, [x0, x1, y0, y1] = f.box, a = f.a;
+    const [sx, sy, ia, ib, ic, , comp, z, nx, ny, nz, nP] = f.e, [x0, x1, y0, y1] = f.box, a = f.a, al = a * comp, fy = v.cam.fy;
     let ga = 0, gsx = 0, gsy = 0, gia = 0, gib = 0, gic = 0;
     for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
-      const dx = x + 0.5 - sx, dy = y + 0.5 - sy, G = Math.exp(-0.5 * (ia * dx * dx + 2 * ib * dx * dy + ic * dy * dy)); if (G < 0.01) continue;
-      const aG = Math.min(0.99, a * G), p = y * W + x, k = (2 * cov[p] * Math.exp(logT[p])) / (1 - aG);
-      ga += k * G; const gG = k * a;
+      const p = y * W + x, dn = nx * ((x + 0.5 - W / 2) / fy) - ny * ((y + 0.5 - H / 2) / fy) + nz;
+      if ((Math.abs(dn) > 0.05 ? Math.max(z - 0.5, Math.min(z + 0.5, nP / dn)) : z) > zb[p]) continue;
+      const dx = x + 0.5 - sx, dy = y + 0.5 - sy, G = Math.exp(-0.5 * (ia * dx * dx + 2 * ib * dx * dy + ic * dy * dy)); if (G < 0.011 || al * G < 1 / 255) continue;
+      const aG = Math.min(0.99, al * G), k = (2 * cov[p] * Math.exp(logT[p])) / (1 - aG);
+      ga += k * G; const gG = k * al;
       gsx += gG * G * (ia * dx + ib * dy); gsy += gG * G * (ib * dx + ic * dy);
       gia += gG * G * -0.5 * dx * dx; gib += gG * G * -dx * dy; gic += gG * G * -0.5 * dy * dy;
     }
-    ga *= a * (1 - a);
+    // (ga is the loss's slope in the mark's whole opacity, a × comp: to its logit through a, to its shape through comp)
+    const gcomp = ga * a; ga *= comp * a * (1 - a);
     for (let b = 0; b < TERMS; b++) gc[f.i * NB + b] += ga * v.Y[f.k][b];
-    if (SHAPE && (gsx || gsy || gia || gib || gic)) {
+    if (SHAPE && (gsx || gsy || gia || gib || gic || gcomp)) {
       const s0 = Array.from(sh.subarray(f.i * NS, f.i * NS + NS));
-      for (let j = 0; j < NS; j++) { const s1 = s0.slice(); s1[j] += 1e-3; const e1 = ellipse(f.i, s1, v.cam); gs[f.i * NS + j] += ((e1[0] - sx) * gsx + (e1[1] - sy) * gsy + (e1[2] - ia) * gia + (e1[3] - ib) * gib + (e1[4] - ic) * gic) / 1e-3; }
+      for (let j = 0; j < NS; j++) { const s1 = s0.slice(); s1[j] += 1e-3; const e1 = ellipse(f.i, s1, v.cam); gs[f.i * NS + j] += ((e1[0] - sx) * gsx + (e1[1] - sy) * gsy + (e1[2] - ia) * gia + (e1[3] - ib) * gib + (e1[4] - ic) * gic + (e1[6] - comp) * gcomp) / 1e-3; }
     }
   }
   return loss / (W * H);
@@ -150,19 +178,27 @@ if (DUMP) for (const v of test) { pass(v, false); const C = Array.from(logT, (l)
 // (--keep: a held-out run's field written too, as `…-minus-<view>`, to draw it in the browser from the view it never saw)
 if (HOLD && !process.argv.includes('--keep')) process.exit(0);
 
-// ─── the field, packed 21 bytes a disc: place (3 × int16 over ±4, the shift folded in), normal (octahedral), two sizes
-// (× 0.0002), the turn (over 0…π), nine view terms and a constant (over −12…12) ───
-const SPAN = 4, Bf = Buffer.alloc(N * 21), qb = (v) => Math.round(((Math.max(-12, Math.min(12, v)) + 12) / 24) * 255);
+// ─── the field, written as the page reads it (client/splats/field.ts, `SFD3`): only the discs that ink anything from
+// anywhere (most of a sumi drawing is paper), 32 bytes each: place (3 × int16 over ±4, the shift folded in), normal
+// (octahedral), two sizes (uint16 × 0.00001), the turn (uint16 over 0…π), nine view terms (16-bit floats) ───
+const SPAN = 4;
 const oct = (n) => { const l = Math.abs(n[0]) + Math.abs(n[1]) + Math.abs(n[2]); let x = n[0] / l, y = n[1] / l; if (n[2] < 0) { const ox = x; x = (1 - Math.abs(y)) * Math.sign(ox || 1); y = (1 - Math.abs(ox)) * Math.sign(y || 1); } return [Math.round((x * 0.5 + 0.5) * 255), Math.round((y * 0.5 + 0.5) * 255)]; };
-discs.forEach((D, i) => {
-  const s = sh.subarray(i * NS, i * NS + NS), o = i * 21, P = [0, 1, 2].map((k) => D.p[k] + (s[3] * D.t1[k] + s[4] * D.t2[k]) * D.gap);
+const f32 = new Float32Array(1), u32 = new Uint32Array(f32.buffer);
+const toHalf = (v) => { f32[0] = v; const x = u32[0], sgn = (x >> 16) & 0x8000, e = ((x >> 23) & 255) - 112, m = x & 0x7fffff; if (e <= 0) return sgn | (e < -10 ? 0 : (m | 0x800000) >> (14 - e)); if (e >= 31) return sgn | 0x7c00; return sgn | (e << 10) | (m >> 13); };
+// (kept: a disc whose ink reaches a fiftieth from some direction (48 of them, round and above))
+const dirs = []; for (const el of [0.09, 0.44, 0.87, 1.4]) for (let k = 0; k < 12; k++) { const az = (k / 12) * Math.PI * 2; dirs.push([Math.cos(el) * Math.sin(az), Math.sin(el), Math.cos(el) * Math.cos(az)]); }
+const keep = []; for (let i = 0; i < N; i++) { let m = -Infinity; for (const d of dirs) { const Y = basis(d); let z = 0; for (let b = 0; b < TERMS; b++) z += c[i * NB + b] * Y[b]; m = Math.max(m, z); } if (1 / (1 + Math.exp(-m)) > 0.02) keep.push(i); }
+const Bf = Buffer.alloc(keep.length * 32);
+keep.forEach((i, j) => {
+  const D = discs[i], s = sh.subarray(i * NS, i * NS + NS), o = j * 32, P = [0, 1, 2].map((k) => D.p[k] + (s[3] * D.t1[k] + s[4] * D.t2[k]) * D.gap);
   P.forEach((v, k) => Bf.writeInt16LE(Math.round((v / SPAN) * 32767), o + k * 2));
   const [ox, oy] = oct(D.n); Bf[o + 6] = ox; Bf[o + 7] = oy;
-  Bf[o + 8] = Math.min(255, Math.round((D.s * Math.exp(s[0])) / 0.0002)); Bf[o + 9] = Math.min(255, Math.round((D.s * Math.exp(s[1])) / 0.0002));
-  Bf[o + 10] = Math.round((((s[2] % Math.PI) + Math.PI) % Math.PI) / Math.PI * 255);
-  for (let b = 0; b < NB; b++) Bf[o + 11 + b] = qb(c[i * NB + b]); Bf[o + 20] = qb(c[i * NB]);
+  Bf.writeUInt16LE(Math.min(65535, Math.round((D.s * Math.exp(s[0])) / 0.00001)), o + 8); Bf.writeUInt16LE(Math.min(65535, Math.round((D.s * Math.exp(s[1])) / 0.00001)), o + 10);
+  Bf.writeUInt16LE(Math.round(((((s[2] % Math.PI) + Math.PI) % Math.PI) / Math.PI) * 65535), o + 12);
+  for (let b = 0; b < NB; b++) Bf.writeUInt16LE(toHalf(b < TERMS ? c[i * NB + b] : 0), o + 14 + b * 2);
 });
-const head = Buffer.alloc(12); head.writeUInt32LE(N, 0); head.writeUInt32LE(21, 4); head.writeFloatLE(SPAN, 8);
+const head = Buffer.alloc(16); head.write('SFD3', 0, 'latin1'); head.writeUInt32LE(keep.length, 4); head.writeUInt32LE(32, 8); head.writeFloatLE(SPAN, 12);
+console.log(`${keep.length} of ${N} discs ink anything (${(Bf.length / 1024).toFixed(0)} KB)`);
 const fname = `composed-${TEACH.length > 1 ? `${TEACH[0]}-pooled` : TEACH[0]}-${SHAPE ? 'shape' : 'fixed'}${HOLD ? `-minus-${HOLD}` : ''}`;
 writeFileSync(new URL(`../static/splats/field-${fname}.bin`, import.meta.url), Buffer.concat([head, Bf]));
 writeFileSync(new URL(`../static/splats/field-${fname}.json`, import.meta.url), JSON.stringify({ about: `The composed scene fitted as a field to the ${TEACH.join(', ')} restyle${TEACH.length > 1 ? 's' : ''} of its six wireframe views at ${W}×${H}, ${SHAPE ? 'each disc\'s shape fitted with its ink' : 'its discs\' shapes fixed'} (devtools/splats-field-shape.mjs).`, ...res }));
