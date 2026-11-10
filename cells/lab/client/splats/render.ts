@@ -40,6 +40,9 @@ uniform highp sampler2D u_feat;
 uniform highp sampler2D u_ctl;
 // (a fitted mark's view terms: twelve floats a splat (nine used), laid out as the data is, three texels a splat)
 uniform highp sampler2D u_coef;
+uniform float u_time;
+uniform vec3 u_mirror;
+uniform vec2 u_near;
 uniform int u_ctlOn;
 // (Mist: the coarse density grid, the sun, which lighting, and the tiny network's numbers)
 uniform highp sampler3D u_grid;
@@ -80,6 +83,12 @@ void main() {
   ivec2 t = ivec2(int(a_index & 1023u) * 3, int(a_index >> 10));
   uvec4 d0 = texelFetch(u_data, t, 0), d1 = texelFetch(u_data, t + ivec2(1, 0), 0), d2 = texelFetch(u_data, t + ivec2(2, 0), 0);
   vec3 p = uintBitsToFloat(d0.xyz);
+  // (a fitted mark that sways (marks.ts, its sway): moved by its own share of it, in a slow wave across the scene, so
+  // the deposits of one strand move together and its far end most)
+  if (u_time > 0.0 && ((d1.w >> 8) & 15u) == 12u) { float sw = texelFetch(u_coef, t + ivec2(2, 0), 0).w; if (sw != 0.0) p += vec3(sin(u_time * 1.3 + p.x * 2.1 + p.z * 1.7), 0.0, cos(u_time * 1.1 + p.x * 1.3 - p.z * 2.3)) * sw; }
+  // (the still water's pass: everything above the water drawn again turned over in it, fainter the higher it stands)
+  float mirror = 1.0;
+  if (u_mirror.z > 0.5) { if (p.y < u_mirror.x) return; mirror = u_mirror.y * exp(-(p.y - u_mirror.x) / 0.9); p.y = 2.0 * u_mirror.x - p.y; }
   vec4 cam = u_view * vec4(p, 1.0);
   vec4 clip = u_proj * cam;
   float bound = 1.2 * clip.w;
@@ -87,6 +96,7 @@ void main() {
   // (behind the camera, or well off the screen: no quad)
   if (-cam.z < 0.02 || clip.x < -bound || clip.x > bound || clip.y < -bound || clip.y > bound) return;
   v_color = vec4(float(d0.w & 255u), float((d0.w >> 8) & 255u), float((d0.w >> 16) & 255u), float(d0.w >> 24)) / 255.0;
+  v_color.a *= mirror;
   // (a drawing's mark: how much of it the detail keeps)
   float rank = float(d1.w & 255u) / 255.0;
   // (its kind; where it's attached (0 none, 1 a surface, 2 an edge, 3 free); its feature, any 32-bit id, its development
@@ -94,6 +104,7 @@ void main() {
   uint kind = (d1.w >> 8) & 15u, support = d2.x & 3u, feature = d2.y;
   if (u_only >= 0 && int(kind) != u_only) return;
   vec3 sn = octDecode(vec2(float((d1.w >> 16) & 255u), float(d1.w >> 24)) / 127.5 - 1.0);
+  if (u_mirror.z > 0.5) sn.y = -sn.y;
   // (a feature the brush has developed: its own marks brought back by their ranks, as far as it's been brushed)
   // (a feature with its top bit set is a gate: an alternative description shown only as far as the scene's value for it
   // (set each frame from the view); otherwise it's developed by the brush, brought back by rank as far as its value)
@@ -135,11 +146,6 @@ void main() {
     z += (float(e & 63u) / 63.0 * 24.0 - 12.0) * d.x * d.y + (float((e >> 6) & 63u) / 63.0 * 24.0 - 12.0) * d.y * d.z + (float((e >> 12) & 63u) / 63.0 * 24.0 - 12.0) * d.x * d.z;
     z += (float((e >> 18) & 63u) / 63.0 * 24.0 - 12.0) * (d.x * d.x - d.y * d.y) + (float((e >> 24) & 63u) / 63.0 * 24.0 - 12.0) * (3.0 * d.z * d.z - 1.0);
     v_color.a *= 1.0 / (1.0 + exp(-z));
-    // (a mark that hands over to another as it's approached (marks.ts, its lod): shown by how large a scene unit looks
-    // where it is, in screen heights, between two thresholds (log2); the first above the second for one that fades as
-    // it nears, below it for one that comes in. Two marks given the same two thresholds, swapped, are complementary)
-    if (k2.y != k2.z) v_color.a *= clamp((log2(u_focal.y / (max(0.02, -cam.z) * u_viewport.y)) - k2.y) / (k2.z - k2.y), 0.0, 1.0);
-    if (v_color.a < 0.004) return;
   }
   // (a fitted mark as it's fitted now (kind 12): its ink from the direction it's seen from, its nine terms unquantised in
   // a texture of their own, so its feature and element stay its identity; and, below, its footprint energy-conserving)
@@ -148,6 +154,14 @@ void main() {
     vec4 k0 = texelFetch(u_coef, t, 0), k1 = texelFetch(u_coef, t + ivec2(1, 0), 0), k2 = texelFetch(u_coef, t + ivec2(2, 0), 0);
     float z = k0.x + k0.y * d.x + k0.z * d.y + k0.w * d.z + k1.x * d.x * d.y + k1.y * d.y * d.z + k1.z * d.x * d.z + k1.w * (d.x * d.x - d.y * d.y) + k2.x * (3.0 * d.z * d.z - 1.0);
     v_color.a *= 1.0 / (1.0 + exp(-z));
+    // (a mark that hands over to another as it's approached (marks.ts, its lod): shown by how large a scene unit looks
+    // where it is, in screen heights, between two thresholds (log2); the first above the second for one that fades as
+    // it nears, below it for one that comes in. Two marks given the same two thresholds, swapped, are complementary)
+    if (k2.y != k2.z) v_color.a *= clamp((log2(u_focal.y / (max(0.02, -cam.z) * u_viewport.y)) - k2.y) / (k2.z - k2.y), 0.0, 1.0);
+    // (and right at the eye it's let go, in a scene that's walked through: a deposit a hand's width off would fill
+    // the screen as fog)
+    if (u_near.y > 0.0) v_color.a *= smoothstep(u_near.x, u_near.y, -cam.z);
+    if (v_color.a < 0.004) return;
   }
   // (a captured scene in ink (ink.ts): a disc's ink copy shown only from where the disc is near edge-on, so the discs on
   // the outline from here draw it; its paper body stepping aside at the same angles, so it doesn't cover its own line)
@@ -211,6 +225,7 @@ void main() {
   vec2 c01 = unpackHalf2x16(d1.x), c23 = unpackHalf2x16(d1.y), c45 = unpackHalf2x16(d1.z);
   // (the covariance was stored 4× over, for the half floats' sake)
   mat3 S = mat3(c01.x, c01.y, c23.x, c01.y, c23.y, c45.x, c23.x, c45.x, c45.y) * 0.25 * u_size * u_size * gscale * gscale;
+  if (u_mirror.z > 0.5) { S[0][1] = -S[0][1]; S[1][0] = -S[1][0]; S[1][2] = -S[1][2]; S[2][1] = -S[2][1]; }
   // (the perspective's Jacobian at this point (camera looks down -z), and the camera's rotation)
   float z = -cam.z;
   mat3 J = mat3(u_focal.x / z, 0.0, 0.0, 0.0, u_focal.y / z, 0.0, u_focal.x * cam.x / (z * z), u_focal.y * cam.y / (z * z), 0.0);
@@ -291,6 +306,10 @@ export interface DrawOpts {
   /** how far the brush has developed each feature (0..1, sixteen of them) */
   features?: Float32Array;
   eye?: [number, number, number];
+  /** the time, for fitted marks that sway (0: still); still water at a height, and how strongly it mirrors (0…1) */
+  time?: number; mirror?: [number, number];
+  /** fitted marks let go as they reach the eye: gone at the first distance, whole by the second (none: kept) */
+  near?: [number, number];
   /** draw the occluder into the depth buffer (if there is one) */
   occlude?: boolean;
   /** only one kind of mark (stone.ts MARK), or all (-1) */
@@ -344,7 +363,7 @@ export class Renderer {
     this.oobj = gl.createBuffer()!; gl.bindBuffer(gl.ARRAY_BUFFER, this.oobj);
     const ao = gl.getAttribLocation(op, 'a_obj'); gl.enableVertexAttribArray(ao); gl.vertexAttribPointer(ao, 1, gl.FLOAT, false, 0, 0);
     gl.bindVertexArray(null);
-    for (const k of ['u_coef', 'u_hdep', 'u_hobj', 'u_halo', 'u_nf', 'u_ctl', 'u_ctlOn']) this.u[k] = gl.getUniformLocation(p, k);
+    for (const k of ['u_time', 'u_mirror', 'u_near', 'u_coef', 'u_hdep', 'u_hobj', 'u_halo', 'u_nf', 'u_ctl', 'u_ctlOn']) this.u[k] = gl.getUniformLocation(p, k);
   }
   /** the splats into the data texture (once a scene) */
   /**
@@ -473,6 +492,10 @@ export class Renderer {
     // (tested against the occluder's depth, never writing their own)
     gl.enable(gl.DEPTH_TEST); gl.depthFunc(gl.LEQUAL); gl.depthMask(false);
     gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+    gl.uniform1f(this.u.u_time, opts.time ?? 0); gl.uniform2f(this.u.u_near, opts.near?.[0] ?? 0, opts.near?.[1] ?? 0);
+    // (still water: its mirror first, then the scene over it)
+    if (opts.mirror && opts.mirror[1] > 0) { gl.uniform3f(this.u.u_mirror, opts.mirror[0], opts.mirror[1], 1); gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, this.drawn); }
+    gl.uniform3f(this.u.u_mirror, 0, 0, 0);
     gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, this.drawn);
     gl.depthMask(true);
     gl.bindVertexArray(null);

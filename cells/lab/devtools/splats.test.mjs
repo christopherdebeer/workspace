@@ -328,6 +328,25 @@ ok('parse() tells a .splat by its bytes', F.parse(F.encodeSplat(g)).n === g.n);
   }
   ok(`mist: unseen bank and sun, mean error baked ${(eb / pts.length).toFixed(3)} > analytic ${(ea / pts.length).toFixed(3)} > neural ${(en / pts.length).toFixed(3)}`, en < ea && ea < eb);
 }
+// (Marks: a stroke is its spine's: moved by a point of its spine, its deposits come with it and keep their number and
+// identity; a style put on another spine lays the same organisation there; a hand-over's two levels are complementary;
+// the room is all marks, every deposit finite)
+{
+  const MK = await load('../client/splats/marks.ts'), CA = await load('../client/splats/canopy.ts'), CO = await load('../client/splats/conservatory.ts');
+  const m = MK.strokeMark(7, [[0, 0, 0], [0.3, 0.1, 0], [0.6, 0, 0], [0.9, 0.15, 0]], [0, 0, 1], 0.04, 70, 7);
+  for (let k = 0; k < MK.KN.dry; k++) m.params[MK.SP.dry + k] = 0.6;
+  const a = MK.layout(m), a2 = MK.layout(m); m.ctrl[2] = [0.6, 0.2, 0]; const b = MK.layout(m);
+  const far = (x, y) => Math.hypot(x.p[0] - y.p[0], x.p[1] - y.p[1], x.p[2] - y.p[2]);
+  ok(`marks: a stroke lays the same ${a.length} deposits every time; a point of its spine moved, they come with it (the middle ones by ${far(a[35], b[35]).toFixed(3)}, the first by ${far(a[0], b[0]).toFixed(4)})`, a.length === 70 && a.every((d, i) => far(d, a2[i]) === 0 && d.logit === a2[i].logit) && far(a[35], b[35]) > 0.05 && far(a[0], b[0]) < 0.01);
+  const s = MK.marksToSplats([m]); ok(`marks: drawn as fitted marks, each deposit carrying its mark's id and its place in it`, s.n > 0 && s.mark.every((k) => k === 12) && s.element.every((e) => e === 7) && new Set(s.feature).size === s.n);
+  const other = MK.restyle(MK.strokeMark(8, [[0, 1, 0], [0.5, 1.2, 0], [1, 1, 0]], [0, 0, 1], 0.04, 70, 7), m), c = MK.layout(other);
+  ok('marks: a style put on another spine lays the same organisation there (the same ink along it where neither is dry)', c.length === 70 && other.params.every((v, i) => v === m.params[i]));
+  const both = CA.canopyPatch(100, CA.WALK.patch, 'both'), wash = both[0], frond = both[1];
+  ok(`marks: a hand-over's two levels share their thresholds, swapped (${wash.lod} and ${frond.lod})`, wash.lod[0] === frond.lod[1] && wash.lod[1] === frond.lod[0] && both.length === 1 + 2 * CA.WALK.patch.fronds);
+  const room = CO.conservatory({}), rs = MK.marksToSplats(room.marks); let bad = 0; for (let i = 0; i < rs.n * 3; i++) if (!Number.isFinite(rs.pos[i]) || !Number.isFinite(rs.scale[i])) bad++;
+  const loop = CO.routeAt(0).p, loop1 = CO.routeAt(1).p;
+  ok(`room: ${room.marks.length} marks, ${rs.n} deposits, all finite and all fitted marks; its route closes; three regions and the house`, bad === 0 && rs.n > 15000 && rs.mark.every((k) => k === 12) && Math.hypot(loop[0] - loop1[0], loop[2] - loop1[2]) < 1e-6 && ['willow', 'tunnel', 'pool', 'canopy', 'house'].every((r) => room.regions[r] > 0));
+}
 if (R) {
   ok('half floats: 1, 0.5, 65504, 2e-5 round trip', R.toHalf(1) === 0x3c00 && R.toHalf(0.5) === 0x3800 && R.toHalf(65504) === 0x7bff && R.toHalf(0) === 0);
 }

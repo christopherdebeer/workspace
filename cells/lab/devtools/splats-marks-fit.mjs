@@ -114,9 +114,11 @@ function differ(d, e) {
   return [e.logit - d.logit, Math.log(e.s1 / d.s1), Math.log(e.s2 / d.s2), Math.atan2(dot(c, n), dot(x, x2)), dot(dp, x), dot(dp, y)];
 }
 function blur(a, W, H, r) {
-  const o = new Float32Array(W * H), t = new Float32Array(W * H), k = []; let ks = 0; for (let i = -Math.ceil(r * 2.5); i <= Math.ceil(r * 2.5); i++) { const w = Math.exp(-0.5 * (i / r) ** 2); k.push([i, w]); ks += w; }
-  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) { let s = 0; for (const [i, w] of k) s += a[y * W + Math.max(0, Math.min(W - 1, x + i))] * w; t[y * W + x] = s / ks; }
-  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) { let s = 0; for (const [i, w] of k) s += t[Math.max(0, Math.min(H - 1, y + i)) * W + x] * w; o[y * W + x] = s / ks; }
+  // (a Gaussian, one axis then the other; the edges repeated)
+  const n = Math.ceil(r * 2.5), k = new Float32Array(2 * n + 1); let ks = 0; for (let i = -n; i <= n; i++) { k[i + n] = Math.exp(-0.5 * (i / r) ** 2); ks += k[i + n]; } for (let i = 0; i <= 2 * n; i++) k[i] /= ks;
+  const o = new Float32Array(W * H), t = new Float32Array(W * H);
+  for (let y = 0; y < H; y++) { const row = y * W; for (let x = 0; x < W; x++) { let s = 0; for (let i = -n; i <= n; i++) { const xx = x + i; s += a[row + (xx < 0 ? 0 : xx >= W ? W - 1 : xx)] * k[i + n]; } t[row + x] = s; } }
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) { let s = 0; for (let i = -n; i <= n; i++) { const yy = y + i; s += t[(yy < 0 ? 0 : yy >= H ? H - 1 : yy) * W + x] * k[i + n]; } o[y * W + x] = s; }
   return o;
 }
 const adam = (n) => ({ m: new Float64Array(n), v: new Float64Array(n), t: 0 });
@@ -291,6 +293,29 @@ function png(S, D, name) {
 }
 const strip = (m) => ({ id: m.id, kind: m.kind, name: m.name, role: m.role, ctrl: m.ctrl?.map((p) => p.map((v) => +v.toFixed(5))), normal: m.normal, width: m.width, rows: m.rows, face: m.face, count: m.count, colour: m.colour, params: m.params.map((v) => +v.toFixed(4)), resid: m.resid.map((v) => +v.toFixed(3)), view: m.view });
 const stripDeps = (deps) => deps.map((d) => [...d.p.map((v) => +v.toFixed(5)), +d.s1.toFixed(5), +d.s2.toFixed(5), +d.turn.toFixed(3), +d.logit.toFixed(3), d.t[0], d.t[1], d.t[2]]);
+
+// ─── --browser: the real renderer's pictures of the fitted marks (splats-marks-browser.mjs) scored the same way: how
+// far each is from the fitter's own picture of it, and the lab's existing brush (its best setting by tone) ───
+if (process.argv.includes('--browser')) {
+  const B = JSON.parse(readFileSync(`${dir}browser.json`)), rep = JSON.parse(readFileSync(`${dir}fit.json`)), bench = JSON.parse(readFileSync(new URL('../static/splats/marks-bench.json', import.meta.url)));
+  for (const t of TARGETS) {
+    const S = sheet(t), R = rep[t.name], pics = B[t.name]; if (!R || !pics) continue;
+    const sh = bench.sheets.find((x) => x.name === t.name); R.browser = {}; let best = null;
+    for (const [way, D0] of Object.entries(pics)) {
+      const D = Float32Array.from(D0), ms = sh.ways[way]?.marks, m = measure(S, D, ms && ms[0].kind === 'stroke' ? spinePx(S, ms[0]) : null);
+      if (way.startsWith('brush ')) { if (!best || m.tone < best.m.tone) best = { m, D, knobs: way.slice(6) }; continue; }
+      // (against the fitter's picture of the same marks: mean ink, and tone apart)
+      const mine = sh.ways[way].marks ? draw(S, allDeps(sh.ways[way].marks)).D : draw(S, sh.ways[way].deps.map((r, i) => ({ p: [r[0], r[1], r[2]], s1: r[3], s2: r[4], thin: 0.0008, turn: r[5], logit: r[6], t: [r[7], r[8], r[9]], n: [0, 0, 1], k: sh.ways[way].k[i] }))).D;
+      let tone = 0; for (const r of [1, 2.5, 5]) { const a = blur(D, S.W, S.H, r), b = blur(mine, S.W, S.H, r); let q = 0; for (let p = 0; p < a.length; p++) q += (a[p] - b[p]) ** 2; tone += q / a.length / 3; }
+      R.browser[way] = { ...m, inkAgainstFitter: +(D.reduce((a, v) => a + v, 0) / mine.reduce((a, v) => a + v, 1e-9)).toFixed(3), toneApart: +(tone * 1000).toFixed(3) };
+      png(S, D, `${t.name}-${way} (browser)`);
+    }
+    if (best) { R.ways.brush = { ...best.m, knobs: best.knobs }; png(S, best.D, `${t.name}-brush`); }
+    console.log(t.name); for (const [w, m] of Object.entries(R.browser)) console.log(`  ${w.padEnd(20)} in the browser: tone ${m.tone} (the fitter's picture: ${R.ways[w].tone}); ink ×${m.inkAgainstFitter} of the fitter's, tone apart ${m.toneApart}`);
+    if (best) console.log(`  brush ${best.knobs}: tone ${best.m.tone}  bare paper ${best.m.bare}  ink ×${best.m.ink}${'along' in best.m ? `  along ${best.m.along}  broken ${best.m.broken}  dry ${best.m.dry}  rough ${best.m.rough}` : ''}`);
+  }
+  writeFileSync(`${dir}fit.json`, JSON.stringify(rep, null, 1)); process.exit(0);
+}
 
 // ─── the run ───
 const report = {}, bench = { about: 'Marks fitted to teacher marks cut from the sparse conservatory studies (devtools/splats-marks-fit.mjs).', sheets: [] }, fitted = {};

@@ -96,6 +96,24 @@ input[type=range]{width:100%;accent-color:var(--accent)}
         <div id="m-note" class="note"></div>
       </div>
     </details>
+    <details id="walk-controls" class="sec dw-sec" data-key="walk" hidden>
+      <summary><span class="t">walk</span><span class="s" id="sum-walk"></span></summary>
+      <div class="body dw-body">
+        <div class="row" id="w-levels"><span class="lab">drawn as</span></div>
+        <div class="sliders one" data-focus><label>distance <span class="v" id="w-dist-v"></span><input type="range" id="w-dist" min="0.3" max="12" step="0.1"></label></div>
+        <div class="row" id="w-go"></div>
+        <div id="w-note" class="note"></div>
+      </div>
+    </details>
+    <details id="room-controls" class="sec dw-sec" data-key="room" hidden>
+      <summary><span class="t">room</span><span class="s" id="sum-room"></span></summary>
+      <div class="body dw-body">
+        <div class="row" id="r-views"><span class="lab">stand in</span></div>
+        <div class="sliders one" data-focus><label>round the route <span class="v" id="r-s-v"></span><input type="range" id="r-s" min="0" max="1" step="0.002"></label></div>
+        <div class="row" id="r-opts"></div>
+        <div id="r-note" class="note"></div>
+      </div>
+    </details>
     <details id="mist-controls" class="sec dw-sec" data-key="mist" hidden>
       <summary><span class="t">light</span><span class="s" id="sum-mist"></span></summary>
       <div class="body dw-body">

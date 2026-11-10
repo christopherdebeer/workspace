@@ -1,0 +1,138 @@
+/**
+ * The room (`?scene=room`): a flooded conservatory overtaken by a giant willow, drawn entirely as marks (marks.ts).
+ *
+ * Three regions round one looped route, the willow in the middle of the loop:
+ * - **the root tunnel** (west): a boardwalk under roots arching over it, strands hanging, a wash of mist beyond;
+ * - **the open pool** (north and east): stepping stones, a veil of water at the far side, a far bridge, and one
+ *   gesture in open space attached to nothing;
+ * - **the canopy** (south): a deck under hanging fronds (canopy.ts: washes far off, fronds close to).
+ * There is no outline pass and no surface to shade: every mark is a stroke or a wash put there by the scene. Limbs
+ * are strokes laid round a tube, so they are a band of the same weight from wherever they're seen. The styles the
+ * marks are drawn in can be the ones fitted to the teacher's marks in the sparse studies (devtools/splats-marks-fit.mjs:
+ * a root stroke's, a spray's, a veil's), or plain.
+ *
+ * Frozen: nothing moves unless the page asks (a mark's `sway`), and the water is still (its mirror is the renderer's).
+ */
+import { strokeMark, washMark, blobMark, SP, KN, type Mark, type V } from './marks';
+import { canopyPatch, OLIVE, type Level } from './canopy';
+
+/** fitted styles, by role: a stroke's or a wash's parameters */
+export interface Styles { root?: number[]; strand?: number[]; dabs?: number[]; veil?: number[]; wash?: number[] }
+export interface Room { marks: Mark[]; route: V[]; views: Record<string, { s: number; at: V }>; regions: Record<string, number> }
+const add = (a: V, b: V, k = 1): V => [a[0] + b[0] * k, a[1] + b[1] * k, a[2] + b[2] * k];
+const lerp = (a: V, b: V, t: number): V => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
+const UP: V = [0, 1, 0];
+
+/** the route: a closed loop (the walking surface's height; the eye is 1.5 above it) */
+export const ROUTE: V[] = [[-9.5, 0.3, 6], [-8.2, 0.3, 3.2], [-6.5, 0.3, 0.2], [-4.6, 0.3, -3], [-3, 0.3, -5.6], [-0.5, 0.15, -6.8], [3, 0.15, -6.6], [6.2, 0.15, -4.4], [8.2, 0.15, -1], [8.4, 0.2, 2.6], [7, 0.35, 6], [3.5, 0.35, 8], [-1, 0.35, 8.6], [-5.5, 0.33, 8.2]];
+export const EYE = 1.5, WATER = 0;
+/** a point of the route (s: 0…1 round the loop), and the way it's heading there */
+export function routeAt(s: number, R: V[] = ROUTE): { p: V; dir: V } {
+  const n = R.length, x = (((s % 1) + 1) % 1) * n, i = Math.floor(x), t = x - i, P = (k: number) => R[((i + k) % n + n) % n];
+  const at = (t: number): V => { const p0 = P(-1), p1 = P(0), p2 = P(1), p3 = P(2), t2 = t * t, t3 = t2 * t; return [0, 1, 2].map((a) => 0.5 * (2 * p1[a] + (-p0[a] + p2[a]) * t + (2 * p0[a] - 5 * p1[a] + 4 * p2[a] - p3[a]) * t2 + (-p0[a] + 3 * p1[a] - 3 * p2[a] + p3[a]) * t3)) as V; };
+  const a = at(t), b = at(t + 0.02), d: V = [b[0] - a[0], 0, b[2] - a[2]], l = Math.hypot(d[0], d[2]) || 1;
+  return { p: a, dir: [d[0] / l, 0, d[2] / l] };
+}
+
+export function conservatory(styles: Styles = {}, level: Level = 'both'): Room {
+  let id = 1, r = 12345; const rnd = () => ((r = (Math.imul(r, 1664525) + 1013904223) >>> 0) / 4294967296);
+  const marks: Mark[] = [], regions: Record<string, number> = {};
+  const count = (name: string, from: number) => { regions[name] = (regions[name] ?? 0) + marks.slice(from).reduce((a, m) => a + m.count, 0); };
+  /** a limb: a stroke round a tube, tapering; in the root style if there is one */
+  const limb = (ctrl: V[], width: number, name: string, taper = 0.9, cols = 0) => {
+    let L = 0; for (let i = 1; i < ctrl.length; i++) L += Math.hypot(ctrl[i][0] - ctrl[i - 1][0], ctrl[i][1] - ctrl[i - 1][1], ctrl[i][2] - ctrl[i - 1][2]);
+    const rows = width > 0.4 ? 12 : width > 0.2 ? 9 : 6, m = strokeMark(id++, ctrl, 'tube', width, rows * (cols || Math.max(10, Math.round(L / Math.max(0.09, width * 0.3)))), rows, name);
+    if (styles.root) { m.params = styles.root.slice(); m.params[SP.u0] = -0.04; m.params[SP.u1] = 1.04; for (let k = 0; k < KN.offset; k++) m.params[SP.offset + k] *= 0.3; }
+    else { for (let k = 0; k < KN.dry; k++) m.params[SP.dry + k] = 0.8; for (let k = 0; k < KN.ink; k++) m.params[SP.ink + k] = 0.9; }
+    m.shade = 0.8;
+    // (its own taper over whatever the style's width does, kept within a stroke's range)
+    for (let k = 0; k < KN.width; k++) m.params[SP.width + k] = Math.max(-1.6, Math.min(0.6, m.params[SP.width + k] * 0.5 + 0.15 - taper * (k / (KN.width - 1))));
+    marks.push(m); return m;
+  };
+  /** a thin line in open space (a rib, a rail, a strand) */
+  const line = (ctrl: V[], width: number, n: number, ink: number, name: string, dry = 0.25) => { const m = strokeMark(id++, ctrl, undefined, width, n, 1, name); for (let k = 0; k < KN.ink; k++) m.params[SP.ink + k] = ink; for (let k = 0; k < KN.dry; k++) m.params[SP.dry + k] = dry; marks.push(m); return m; };
+  /** a stroke on a level surface (a plank, a stone's rim, a dash on the water) */
+  const flat = (ctrl: V[], width: number, n: number, ink: number, name: string, rows = 1, dry = 0.3) => { const m = strokeMark(id++, ctrl, UP, width, n, rows, name); for (let k = 0; k < KN.ink; k++) m.params[SP.ink + k] = ink; for (let k = 0; k < KN.dry; k++) m.params[SP.dry + k] = dry; marks.push(m); return m; };
+  const tone = (m: Mark, t: number, edge = -1.2) => { for (let k = 0; k < 9; k++) m.params[k] = k === 4 ? t : t + edge * 0.5; return m; };
+
+  // ─── the willow: a trunk of three limbs, its crown, its roots ───
+  let from = marks.length;
+  limb([[1.3, -0.3, 0.3], [1.0, 1.5, 0.1], [0.4, 3.2, -0.3], [-0.3, 4.6, -0.2], [-1.2, 5.6, 0.2]], 0.85, 'willow/trunk a', 0.7);
+  limb([[0.6, -0.3, -0.4], [0.9, 1.4, -0.5], [1.5, 3.0, -0.9], [2.4, 4.4, -1.2], [3.6, 5.4, -1.0]], 0.7, 'willow/trunk b', 0.7);
+  limb([[1.6, -0.3, -0.3], [1.7, 1.2, 0.3], [1.9, 2.8, 1.2], [2.2, 4.2, 2.4], [2.0, 5.2, 3.8]], 0.6, 'willow/trunk c', 0.7);
+  limb([[2.0, 5.2, 3.8], [2.5, 5.6, 5.5], [3.5, 5.4, 7.5], [5, 4.9, 9]], 0.3, 'willow/crown south');
+  limb([[2.2, 4.2, 2.4], [4, 4.8, 4], [6, 4.9, 6], [8, 4.4, 7.5]], 0.28, 'willow/crown south-east');
+  limb([[-1.2, 5.6, 0.2], [-2.5, 5.9, 2.5], [-3, 5.6, 5], [-4, 5.0, 7.5]], 0.3, 'willow/crown south-west');
+  limb([[3.6, 5.4, -1.0], [5.5, 5.8, -2], [7.5, 5.5, -3.5], [9.5, 4.8, -4]], 0.28, 'willow/crown east');
+  limb([[-0.3, 4.6, -0.2], [-2.5, 5.2, -2], [-5, 5.4, -3], [-7.5, 5.0, -3.5]], 0.3, 'willow/crown west');
+  for (let k = 0; k < 8; k++) { const a = (k / 8) * Math.PI * 2 + 0.3, c = Math.cos(a), s = Math.sin(a), l = 2.2 + rnd() * 1.4; limb([[1 + c * 0.5, 0.6, s * 0.5], [1 + c * l * 0.5, 0.75 + rnd() * 0.3, s * l * 0.5], [1 + c * l * 0.85, 0.3, s * l * 0.85], [1 + c * l, -0.2, s * l]], 0.16 + rnd() * 0.1, `willow/root ${k}`); }
+  count('willow', from);
+
+  // ─── the root tunnel: arches over the boardwalk, strands, a wash of mist beyond ───
+  from = marks.length;
+  const T0: V = [-8.5, 0, 4], T1: V = [-3.5, 0, -4.5], dT: V = [0.507, 0, -0.862], eT: V = [0.862, 0, 0.507];
+  for (let i = 0; i < 6; i++) {
+    const P = add(lerp(T0, T1, 0.08 + i * 0.17), dT, (rnd() - 0.5) * 0.8), lean = (rnd() - 0.5) * 1.2, h = 2.9 + rnd() * 0.7, w = 0.3 + rnd() * 0.25;
+    limb([add(add(P, eT, 3.0 + rnd()), UP, -0.3), add(add(add(P, eT, 1.9), UP, h * 0.72), dT, lean * 0.4), add(add(add(P, eT, 0.2), UP, h), dT, lean), add(add(add(P, eT, -1.7), UP, h * 0.74), dT, lean * 0.6), add(add(P, eT, -2.9 - rnd() * 0.6), UP, -0.3)], w, `tunnel/arch ${i}`, 0.5);
+  }
+  for (let i = 0; i < 3; i++) limb([[1 - 0.3 * i, 0.5, 0.2 * i], [-1 - i * 0.4, 0.9 + 0.2 * i, 0.6 - i * 0.9], [-2.6 - i * 0.5, 0.35, 1.3 - i * 1.6], [-3.6 - i * 0.6, -0.25, 1.9 - i * 2.2]], 0.3, `tunnel/root ${i}`);
+  for (let i = 0; i < 3; i++) for (const m of canopyPatch((id += 100), { c: add(lerp(T0, T1, 0.2 + i * 0.3), UP, 2.5), r: [1.7, 0.5, 1.7], fronds: 12, seed: 40 + i, reach: 2.6 }, 'fronds')) marks.push(m);
+  { const m = tone(blobMark(id++, [-3.6, 1.5, -4.4], [2.4, 1.5, 2.4], 20, 'tunnel/mist'), -2.0); m.lod = [-1.5, -2.5]; marks.push(m); }
+  // (the boardwalk: planks as lines across it, its two edges, posts)
+  const walk = (a: number, b: number, name: string) => {
+    for (let s = a; s < b; s += 0.0032) {
+      const { p, dir } = routeAt(s), ac: V = [-dir[2], 0, dir[0]], k = Math.round((s - a) / 0.0032);
+      flat([add(p, ac, -0.62), p, add(p, ac, 0.62)], k % 3 ? 0.022 : 0.04, 9, k % 3 ? 0.2 : 1.1, `${name}/plank`);
+      if (k % 5 === 0) for (const side of [-0.7, 0.7]) line([add(add(p, ac, side), UP, -0.35), add(add(p, ac, side), UP, 0.15), add(add(p, ac, side), UP, 0.5)], 0.07, 7, 1.6, `${name}/post`, 0.1);
+    }
+    for (const side of [-0.64, 0.64]) { const pts: V[] = []; for (let s = a; s <= b + 1e-6; s += (b - a) / 14) { const { p, dir } = routeAt(s); pts.push(add(p, [-dir[2], 0, dir[0]], side)); } flat(pts, 0.03, 90, 0.9, `${name}/edge`, 1, 0.9); }
+  };
+  walk(0.0, 4 / 14, 'tunnel/boardwalk');
+  count('tunnel', from);
+
+  // ─── the open pool: stones, the veil, a far bridge, and one gesture in open space ───
+  from = marks.length;
+  for (let i = 0; i < 9; i++) {
+    const { p, dir } = routeAt((4.45 + i * 0.56) / 14), ac: V = [-dir[2], 0, dir[0]], c = add(add(p, ac, (i % 2 ? 0.25 : -0.25)), UP, -p[1] + 0.12), rx = 0.5 + rnd() * 0.25, rz = 0.38 + rnd() * 0.2, turn = rnd() * 3;
+    const ring = (a0: number, a1: number, n = 7): V[] => Array.from({ length: n }, (_, k) => { const a = a0 + ((a1 - a0) * k) / (n - 1) + turn; return [c[0] + Math.cos(a) * rx, c[1], c[2] + Math.sin(a) * rz] as V; });
+    flat(ring(0.2, 3.3), 0.11, 54, 1.6, `pool/stone ${i} rim`, 3, 0.6); flat(ring(3.5, 6.1), 0.03, 20, 0.2, `pool/stone ${i} far`, 1, 0.8);
+    const poly = ring(0, 5.6, 9); marks.push(tone(washMark(id++, poly.map((q, k) => [c, q, poly[(k + 1) % poly.length]]), UP, 14, `pool/stone ${i} wash`), -1.3));
+    flat([add(c, [-rx * 0.9, -0.115, rz * 1.15]), add(c, [0, -0.115, rz * 1.3]), add(c, [rx * 0.9, -0.115, rz * 1.15])], 0.02, 8, -0.4, `pool/stone ${i} waterline`);
+  }
+  for (let k = 0; k < 5; k++) { const x = 9.6 + k * 0.36, m = line([[x, 5.4, -8.2], [x + 0.03, 3.6, -8.2], [x - 0.02, 1.8, -8.15], [x, 0.05, -8.1]], 0.3, 54, -1.7, `pool/veil ${k}`); m.rows = 3; if (styles.veil) { m.params = styles.veil.slice(); } m.sway = 0.02; }
+  marks.push(tone(blobMark(id++, [10.3, 0.5, -7.7], [1.5, 0.6, 1.1], 16, 'pool/veil mist'), -2.1));
+  line([[9.2, 5.45, -8.3], [10.3, 5.5, -8.3], [11.4, 5.45, -8.3]], 0.06, 20, 0.6, 'pool/veil lip');
+  // (the far bridge: its deck, its posts and the arches between them, all pale)
+  line([[-10, 2.6, -15], [-3, 2.7, -15], [3, 2.7, -15], [10, 2.6, -15]], 0.07, 110, -0.3, 'pool/bridge deck'); line([[-10, 3.2, -15], [0, 3.3, -15], [10, 3.2, -15]], 0.035, 90, -1.0, 'pool/bridge rail', 0.8);
+  for (let k = 0; k <= 8; k++) { const x = -9.6 + k * 2.4; line([[x, 2.6, -15], [x, 1.3, -15], [x, 0, -15]], 0.05, 14, -0.6, 'pool/bridge post'); if (k < 8) line([[x, 0.9, -15], [x + 0.6, 2.0, -15], [x + 1.2, 2.35, -15], [x + 1.8, 2.0, -15], [x + 2.4, 0.9, -15]], 0.035, 26, -1.0, 'pool/bridge arch'); }
+  // (the gesture: a run of seeds on the air over the pool, joined by a dotted thread; it stands on nothing)
+  { const g: V[] = [[3.6, 1.5, -2.6], [4.0, 1.85, -2.4], [4.5, 1.6, -2.1], [5.0, 1.35, -2.3], [5.5, 1.6, -2.6], [6.0, 1.3, -2.4], [6.3, 1.45, -2.0]];
+    const th = line(g, 0.012, 34, 0.2, 'pool/gesture thread', 0); th.params[SP.along] = -1.0; th.sway = 0.03;
+    g.forEach((p, k) => { const d = line([add(p, [-0.012, 0, 0]), p, add(p, [0.012, 0, 0])], 0.035, 2, 2.2, `pool/gesture seed ${k}`, 0); d.sway = 0.03; for (let h = 0; h < 6; h++) { const a = (h / 6) * Math.PI * 2 + k, e: V = [Math.cos(a) * 0.09, Math.sin(a) * 0.09, Math.sin(a * 1.7) * 0.03]; const t = line([add(p, e, 0.3), add(p, e, 0.65), add(p, e)], 0.006, 4, -0.2, `pool/gesture hair ${k}`, 0); t.sway = 0.03; } }); }
+  for (const m of canopyPatch((id += 400), { c: [9, 3.7, -4], r: [1.7, 1.0, 1.7], fronds: 50, seed: 7, reach: 1.2 }, level, undefined, styles.wash)) marks.push(m);
+  count('pool', from);
+
+  // ─── the canopy: a deck under hanging fronds, its rail and a rag on it ───
+  from = marks.length;
+  for (let k = 0; k < 26; k++) { const x = 1.6 + k * 0.31; flat([[x, 0.35, 4.9], [x + 0.02, 0.35, 7.4], [x, 0.35, 9.7]], k % 4 ? 0.02 : 0.035, 22, k % 4 ? 0.1 : 0.9, 'canopy/plank', 1, 0.5); }
+  flat([[1.5, 0.35, 4.85], [5.5, 0.35, 4.85], [9.6, 0.35, 4.85]], 0.04, 60, 1.0, 'canopy/deck edge', 1, 0.7); flat([[1.5, 0.35, 9.75], [5.5, 0.35, 9.75], [9.6, 0.35, 9.75]], 0.04, 60, 1.0, 'canopy/deck edge', 1, 0.7);
+  for (let k = 0; k <= 5; k++) { const x = 1.6 + k * 1.6; line([[x, 0.3, 9.8], [x, 0.9, 9.8], [x, 1.4, 9.8]], 0.08, 9, 1.7, 'canopy/rail post', 0.1); }
+  line([[1.5, 1.38, 9.8], [5.5, 1.42, 9.8], [9.7, 1.38, 9.8]], 0.05, 80, 1.2, 'canopy/rail', 0.9);
+  { const o: V = [4.9, 0.95, 9.82], rag = washMark(id++, [[o, [4.1, 1.36, 9.82], [5.7, 1.36, 9.82]], [o, [5.7, 1.36, 9.82], [5.5, 0.55, 9.82]], [o, [5.5, 0.55, 9.82], [4.6, 0.7, 9.82]], [o, [4.6, 0.7, 9.82], [4.1, 1.36, 9.82]]], [0, 0, -1], 18, 'canopy/rag'); marks.push(tone(rag, -1.9)); }
+  const patches: Array<[V, number]> = [[[3.5, 3.6, 7.5], 80], [[6, 3.5, 6.2], 80], [[1.2, 3.7, 5.6], 70], [[-3.2, 3.8, 6.4], 70], [[7.6, 3.4, 8.6], 60], [[-7, 3.8, -3.4], 45]];
+  patches.forEach(([c, n], k) => { for (const m of canopyPatch((id += 400), { c, r: [1.8, 1.1, 1.8], fronds: n, seed: 20 + k, reach: 1.25 }, level, undefined, styles.wash)) marks.push(m); });
+  walk(12 / 14, 1, 'canopy/boardwalk');
+  count('canopy', from);
+
+  // ─── the glasshouse over it all, far masses of foliage, and a few leaves on the water ───
+  from = marks.length;
+  for (const z of [-17, -10.5, -4, 2.5, 9, 15]) line(Array.from({ length: 7 }, (_, k) => { const a = (k / 6) * Math.PI; return [-13.5 * Math.cos(a), 9.2 * Math.sin(a), z] as V; }), 0.05, 80, -1.9, 'house/rib', 0.5);
+  line([[0, 9.2, -17], [0, 9.2, -1], [0, 9.2, 15]], 0.05, 90, -2.0, 'house/ridge', 0.5);
+  for (const sx of [-1, 1]) line([[sx * 9.5, 6.5, -17], [sx * 9.5, 6.5, -1], [sx * 9.5, 6.5, 15]], 0.04, 90, -2.2, 'house/purlin', 0.5);
+  marks.push(tone(blobMark(id++, [-6, 4.6, -13], [3.6, 1.8, 2], 22, 'house/far canopy'), -2.2), tone(blobMark(id++, [5.5, 5.6, -13.5], [4, 2, 2], 24, 'house/far canopy'), -2.3));
+  for (let k = 0; k < 16; k++) { const x = -9 + rnd() * 19, z = -9 + rnd() * 17, a = rnd() * 3; const m = flat([[x, 0.004, z], [x + Math.cos(a) * 0.09, 0.004, z + Math.sin(a) * 0.09]], 0.035, 2, 0.6, 'house/leaf', 1, 0); m.colour = OLIVE; }
+  count('house', from);
+
+  if (styles.strand || styles.dabs) for (const m of marks) { if (styles.strand && m.name?.startsWith('canopy/strand')) { const lod = m.lod; m.params = styles.strand.slice(); m.lod = lod; } }
+  return { marks, route: ROUTE, regions, views: { tunnel: { s: 1.15 / 14, at: [-4.2, 1.7, -3.6] }, pool: { s: 4.2 / 14, at: [3, 1.8, -2.5] }, canopy: { s: 11.3 / 14, at: [0.5, 2.4, -3] }, 'between tunnel and pool': { s: 4.5 / 14, at: [4, 1.4, -4] }, 'between pool and canopy': { s: 9.2 / 14, at: [4.5, 2.4, 7.5] }, 'between canopy and tunnel': { s: 13.4 / 14, at: [-7.5, 1.8, 2] } } };
+}

@@ -188,5 +188,80 @@
     "file": "v-field-sumi-low.jpg"
    }
   ]
+ },
+ {
+  "group": "Marks as organised splats",
+  "views": [
+   {
+    "name": "marks",
+    "title": "Teacher marks, each drawn by a mark fitted to it",
+    "caption": "nine marks cut from the sparse conservatory studies (roots, sprays, washes, a veil), each drawn by a stroke or wash whose few parameters were fitted to it",
+    "file": "v-marks.jpg"
+   },
+   {
+    "name": "marks-independent",
+    "title": "The same, every deposit free",
+    "caption": "the same number of deposits, each set free: closer to each picture, and nothing left to pick up",
+    "file": "v-marks-independent.jpg"
+   },
+   {
+    "name": "marks-style",
+    "title": "A style put on other spines",
+    "caption": "the held-out marks drawn in the style learnt from another (only their pose fitted); the rest as fitted",
+    "file": "v-marks-style.jpg"
+   },
+   {
+    "name": "marks-bent",
+    "title": "A fitted mark, bent",
+    "caption": "a fitted root picked up by a point of its spine and bent: its deposits come with it",
+    "file": "v-marks-bent.jpg"
+   }
+  ]
+ },
+ {
+  "group": "Walking into a wash",
+  "views": [
+   {
+    "name": "walk-far",
+    "title": "A canopy from 12 m",
+    "caption": "one canopy patch from 12 m: a wash of fifty deposits",
+    "file": "v-walk-far.jpg"
+   },
+   {
+    "name": "walk-mid",
+    "title": "From 5 m",
+    "caption": "from 5 m: the wash giving way to its fronds",
+    "file": "v-walk-mid.jpg"
+   },
+   {
+    "name": "walk-in",
+    "title": "Inside it",
+    "caption": "from 1.5 m, under it: strands and dabs",
+    "file": "v-walk-in.jpg"
+   }
+  ]
+ },
+ {
+  "group": "The room",
+  "views": [
+   {
+    "name": "room-tunnel",
+    "title": "The root tunnel",
+    "caption": "the boardwalk under the willow’s roots: every mark a stroke or a wash, no outline pass",
+    "file": "v-room-tunnel.jpg"
+   },
+   {
+    "name": "room-pool",
+    "title": "The open pool",
+    "caption": "stepping stones, the willow, and a gesture on the air that stands on nothing; still water",
+    "file": "v-room-pool.jpg"
+   },
+   {
+    "name": "room-canopy",
+    "title": "The canopy",
+    "caption": "the deck under hanging fronds, looking back across the water",
+    "file": "v-room-canopy.jpg"
+   }
+  ]
  }
 ]

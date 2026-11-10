@@ -11,10 +11,11 @@ K = float(os.environ.get('K', 2)); rows = []
 for n in names:
   cells = []
   for w in WAYS:
-    ws = [w] if w != 'style' else [f for f in os.listdir(D) if f.startswith(f'render-{n}-style of ')]
+    ws = [w] if w != 'style' else [f for f in os.listdir(D) if f.startswith(f'render-{n}-style of ') and 'browser' not in f]
     f = D + (ws[0] if w == 'style' and ws else f'render-{n}-{w}.png')
     if not os.path.exists(f): continue
-    im = Image.open(f).convert('RGB'); cells.append((w if w != 'style' else ws[0][len(f'render-{n}-'):-4], im.resize((int(im.width * K), int(im.height * K)), Image.LANCZOS)))
+    im = Image.open(f).convert('RGB'); k = max(K, min(3.2, 170 / im.width))  # (a narrow sheet drawn larger, so its labels fit)
+    cells.append((w if w != 'style' else ws[0][len(f'render-{n}-'):-4], im.resize((int(im.width * k), int(im.height * k)), Image.LANCZOS)))
   if cells: rows.append((n, cells))
 W = max(sum(c[1].width + 10 for c in r[1]) for r in rows) + 10; H = sum(r[1][0][1].height + 34 for r in rows) + 10
 B = Image.new('RGB', (W, H), (250, 247, 240)); dr = ImageDraw.Draw(B); y = 8

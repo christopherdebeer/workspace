@@ -918,6 +918,192 @@ ways and comparing (`devtools/splats-field-agree.py`):
 - The earlier fields (`composed`, `composed-sumi` and the rest) were fitted before these fixes and are kept as they
   were; `composed-sumi-shape` is refitted.
 
+## Marks: a stroke or a wash as an organisation of splats (`?scene=marks`)
+
+A fitted field draws a view well and has no marks in it: nothing to pick up, nothing that says "this is a stroke".
+The taught brush has marks and keeps what it learns outside the splats, in a table. The aim here is the thing between
+them: **a stroke or a wash is an editable organisation of splats; a teacher can change both the organisation and its
+individual deposits.**
+
+### The conservatory studies
+
+![Six studies: the root tunnel, the open pool and the canopy of a flooded conservatory, each drawn dense and sparse](splats/b-conservatory-studies.jpg)
+
+Six studies for the next scene: a flooded conservatory overtaken by a willow, in three regions, each drawn dense and
+sparse. They are compositions, not views of any geometry here, so they can't teach a scene directly (as the earlier
+reference studies couldn't). Two things they do give:
+
+- **Each sparse study is a registered reduction of its dense one.** Blurred, the two correlate at 0.66 to 0.86 with no
+  shift between them. The sparse keeps 25 to 31% of the dense's ink and covers 16 to 19% of the page, against 56 to
+  75%. It is a teacher's statement of what stays.
+- **The sparse studies are made of separable marks**: a root stroke, a spray of leaf dabs on its strand, a canopy wash,
+  a veil of water. Nine of them are cut out as teachers (`devtools/splats-marks-targets.py`): each a box, the points
+  its spine runs through (or its outline) read off by eye, and everything outside its own neighbourhood made paper.
+
+### A mark
+
+A mark (`client/splats/marks.ts`) has a few parameters that organise its deposits, and each deposit has six small
+residuals of its own (ink, length, width, turn, two shifts).
+
+- **A stroke** runs along a smooth curve through its control points, as rows of deposits side by side (a brush's
+  bristles; one row for a line). 31 parameters: how its ink, its width, its offset and its dryness run along it; where
+  it starts and stops and how sharply; how long its deposits are; which side is dry; how its rows overlap; a splay, for
+  a spray of dabs. On a surface it lies flat; in open space it's round; as a limb, its rows go round a tube.
+- **A wash** lies on a face or fills a volume. 10 parameters: a 3 × 3 grid of tone and its deposits' size.
+- One function, `layout`, turns a mark into deposits. The page draws them as fitted marks (kind 12), each carrying its
+  mark's id and its place in the mark, so a mark stays one thing for an editor.
+
+### Three ways of drawing a teacher's mark, with the same number of deposits
+
+Each teacher mark is fitted through the renderer's forward model (`devtools/splats-marks-fit.mjs`):
+
+- **independent**: every deposit free (place, two sizes, turn, ink). A fitted field, in small.
+- **organised**: the mark's parameters and its spine only. Its deposits can't move on their own.
+- **organised, then its deposits**: the same, then each deposit's residuals set free within bounds.
+- **the existing brush**: the lab's brush on the same spine, the best of 16 settings of its width, material and
+  weight (8 of depth and reach for a wash), drawn in the browser.
+
+![Four teacher marks, each beside the four ways of drawing it](splats/b-marks-fit.jpg)
+
+Tone error / ink on paper the teacher left bare / dryness error (strokes; all lower is better):
+
+| teacher mark | deposits | independent | organised | organised, then deposits | existing brush |
+|---|---|---|---|---|---|
+| a root | 294 | 0.23 / 0.3 / 0 | 10.45 / 10.3 / 96 | 0.70 / 1.7 / 208 | 44.65 / 14.6 / 157 |
+| a second root | 294 | 0.13 / 0.1 / 0 | 5.47 / 1.0 / 42 | 0.46 / 0.1 / 77 | 22.02 / 28.7 / 123 |
+| a third root | 217 | 0.38 / 0.3 / 0 | 7.12 / 2.0 / 29 | 0.55 / 0.5 / 111 | 55.09 / 53.5 / 72 |
+| a branch | 161 | 0.19 / 0.6 / 0 | 12.70 / 7.0 / 94 | 5.04 / 0.4 / 146 | 19.17 / 25.5 / 82 |
+| a spray | 38 | 0.76 / 1.0 / 21 | 10.42 / 25.6 / 92 | 3.54 / 7.7 / 124 | 16.63 / 11.4 / 136 |
+| a second spray | 38 | 0.29 / 0.4 / 1 | 5.53 / 11.2 / 108 | 1.85 / 3.2 / 174 | 7.54 / 9.1 / 122 |
+| a canopy wash | 48 | 0.05 / 2.7 | 0.89 / 11.5 | 0.03 / 1.5 | 20.44 / 30.7 |
+| a larger wash | 96 | 0.26 / 1.1 | 5.12 / 6.0 | 0.35 / 1.5 | 19.17 / 1.3 |
+| a veil | 72 | 0.16 / 2.4 / 37 | 2.35 / 12.9 / 27 | 0.25 / 1.8 / 50 | 20.27 / 19.3 / 117 |
+
+- **Independent deposits win the picture, every time.** For one picture from one view, with nothing to carry over,
+  freedom is all advantage. They also match the dry-brush texture nearly exactly.
+- **An organisation alone is 6 to 60 times worse on tone**, and soft: it follows the stroke's course and weight, and
+  misses its crisp body and ragged edge. A spray is its weakest: evenly spaced dabs don't land on the teacher's.
+- **With its deposits' residuals it comes within 1.4 to 4 times of independent on the roots and washes**, and is
+  cleaner than independent on bare paper for some. So most of what an organisation can't say, small bounded changes
+  to its own deposits can. On the branch and the sprays it stays well short.
+- **The existing brush is last on every mark**, 2 to 6 times worse than the organisation alone (it has few knobs, and
+  its spine isn't fitted).
+- **A pixel loss can't teach a texture.** Fitted to the picture alone, a stroke's dryness goes to nothing: a streak
+  that doesn't fall exactly where the teacher's fell is an error twice. So a stroke's style is fitted to what's
+  measured in its own frame, unwrapped along its spine: its coarse shape, how much of each part is left bare, how
+  fast its ink changes along and across. Its slope is taken by drawing the stroke again with each parameter moved: 31
+  numbers are few enough for that, whatever is measured. A field's thousands aren't. That lowers the dryness error
+  (root: 207 to 96) at a cost in tone (8.3 to 10.4); and the residuals, fitted to the picture again, undo it (208).
+  The two objectives pull against each other in a blurred medium, and this doesn't resolve it.
+- **The fitter's pictures are the browser's**: all nine sheets drawn each way by the real renderer lay within 2.1% of
+  the fitter's ink, tone apart by at most 0.034 (`devtools/splats-marks-browser.mjs`).
+
+### A style, on another spine
+
+The test a field can't take. A held-out teacher mark is drawn with the parameters learnt from another mark; only its
+pose is fitted (the points of its spine, and one number each for its ink, its width and its two ends). Beside it: a
+plain stroke posed the same way; the held-out mark's own organised fit; and independent deposits.
+
+![Five held-out marks: the teacher, the style learnt from another mark, a plain stroke posed the same way, its own fit, independent deposits](splats/b-marks-style.jpg)
+
+Tone error (strokes: / dryness / roughness errors):
+
+| held-out mark | the learnt style, posed | a plain stroke, posed | its own organised fit | independent |
+|---|---|---|---|---|
+| a second root | 18.0 / 115 / 325 | 33.1 / 223 / 866 | 5.5 / 42 / 260 | 0.1 / 0 / 35 |
+| a third root | 32.6 / 120 / 122 | 84.9 / 130 / 336 | 7.1 / 29 / 163 | 0.4 / 0 / 26 |
+| a branch (another study) | 26.1 / 172 / 452 | 38.7 / 267 / 656 | 12.7 / 94 / 326 | 0.2 / 0 / 29 |
+| a second spray | 6.5 / 152 / 382 | 11.0 / 138 / 294 | 5.5 / 108 / 161 | 0.3 / 1 / 21 |
+| a larger wash | 7.1 | 7.9 | 5.1 | 0.3 |
+
+- **The learnt style helps on every held-out mark**: tone error 1.1 to 2.6 times lower than a plain stroke's, and
+  the roots' texture closer too. It carries to a branch in a different study.
+- **It stays 1.2 to 4.6 times short of the mark's own fit.** One teacher stroke isn't a style: what was fitted
+  includes that stroke's particular thick and thin. A style wants several strokes fitted together, with what is
+  particular to each kept apart from what they share. That isn't done here.
+- **The spray's style barely transfers on texture** (its tone improves; its dryness and roughness don't).
+
+### Still a mark
+
+![A fitted root picked up by a point of its spine and bent: its deposits come with it](splats/v-marks-bent.jpg)
+
+In the page a fitted mark can be tapped and bent by the points of its spine; its deposits are laid again and come
+with it (a strand and its dabs move together). Independent deposits offer nothing to pick up.
+
+![Teacher marks, each drawn by a mark fitted to it](splats/v-marks.jpg)
+![The same, every deposit free](splats/v-marks-independent.jpg)
+![The held-out marks in a style learnt from another](splats/v-marks-style.jpg)
+
+### Walking into a wash (`?scene=walk`)
+
+From far off a teacher draws a canopy as a wash; close to, it's strands and dabs. Both are organisations of splats
+in the same volume (`client/splats/canopy.ts`): a wash of 30 large pale deposits, and 90 fronds (1,972 deposits).
+
+- **Each deposit is shown by how large things look where it is**: a scene unit's size on the screen at the deposit's
+  own depth, between two thresholds. The wash fades between them as the fronds come in, so at any depth the two are
+  complementary. It follows the picture, not the distance: zooming in resolves it too.
+- **The wash is fitted to its own fronds**, as they look from 12 m and 9 m (tone error 58.1 to 4.4): one
+  organisation taught by another.
+- A fitted mark keeps its ink however small it's drawn, so the fronds alone, all the way, are the reference for what
+  the patch's tone should be at each distance.
+
+![One canopy patch on a straight approach from 12 m to under it, four ways](splats/b-walk.jpg)
+
+Every 20 cm from 12 m to 0.3 m (`devtools/splats-walk.mjs`):
+
+| | tone against the fronds, beyond 3.4 m: worst / mean | largest change beyond the walk's own | deposits at 12 m / at most |
+|---|---|---|---|
+| the wash alone | 10% / 6% | none | 30 / 30 |
+| hand-over | 6% / 4% | 0.2 (where the walk's own is 132) | 30 / 2,002 |
+| swapped at once at 5 m | 10% / 5% | 26.8 (the walk's own there: 12.4) | 30 / 1,972 |
+
+- **The hand-over carries the tone and doesn't pop.** The patch's darkness stays within 6% of the reference, and no
+  step changes the picture more than the walk itself does. A swap at 5 m changes it by twice the walk's own.
+- **It costs 30 deposits far off instead of 1,972.**
+- The wash alone, walked into, fills the screen with fog. Right at the eye a deposit is let go (between 0.7 m and
+  0.25 m), in scenes that are walked through.
+
+![From 12 m](splats/v-walk-far.jpg)
+![From 5 m](splats/v-walk-mid.jpg)
+![Under it](splats/v-walk-in.jpg)
+
+### The room (`?scene=room`)
+
+A flooded conservatory and a willow, built entirely of marks (`client/splats/conservatory.ts`): 1,383 of them, about
+30,000 deposits laid. Three regions round one looped route, the willow in the middle of the loop: a root tunnel (a
+boardwalk under arching roots), an open pool (stepping stones, a veil, a far bridge) and a canopy (a deck under
+hanging fronds that hand over as above).
+
+- **There is no outline pass and no surface to shade.** Every mark is a stroke or a wash the scene put there. A limb
+  is a stroke laid round a tube, inked along its underside, so it is a band of the same weight from wherever it's seen.
+- **One gesture stands on nothing**: a run of seeds on the air over the pool, joined by a dotted thread.
+- **Styles** come from the fits above (a root's, a veil's), or plain.
+- **Frozen, on still water**: the water's mirror is a second pass of the same deposits turned over in it, fainter the
+  higher they stand.
+
+![Six views round the route: three to teach from, three reserved between them](splats/b-room.jpg)
+
+- **It holds together as a place walked through**, and the three regions are distinct.
+- **It is soft where the teacher is crisp.** Limbs are long blurred streaks, not loaded strokes with a dry edge; far
+  canopy washes are smudges without a drawn edge. This is the organised stroke's softness from the Bench, at scale.
+- **Nothing here has been taught from a view yet.** The three teaching views and the three reserved between them are
+  set (`views` in conservatory.ts); the next step is the same as for the composed scene: underdrawings of these views
+  restyled by an image model, then the room's marks fitted to them, scored on the reserved stretch.
+
+![The root tunnel](splats/v-room-tunnel.jpg)
+![The open pool](splats/v-room-pool.jpg)
+![The canopy](splats/v-room-canopy.jpg)
+
+### Air, water, cost
+
+- **Air moving**: a mark can sway (`sway`). Each deposit moves by its own share of it (none where a strand hangs
+  from, all at its far end), in a slow wave across the scene, in the vertex shader. Nothing is laid again.
+- **Still water**: the mirror pass doubles the deposits drawn.
+- **Cost**: the room draws about 23,000 deposits (some lay no ink and are left out), twice with the mirror. `&perf`
+  now measures the room from each region with the mirror and the sway on and off, and the walk from 12, 5 and 1.5 m.
+  **Phone numbers aren't in yet**: they need a phone.
+- **Light isn't done.**
+
 ## The Bench: one brush made dependable, one stroke made editable
 
 `?scene=bench` (`bench.ts`; brush.ts). This answers a source review of the brush. Its five findings, all confirmed in the
@@ -1093,7 +1279,7 @@ Roughly in order of what each teaches:
 
 ## Flags
 
-`?scene=stone|brushes|composed|pen|field|bench|mist|garden|plush|nike|train` · `?field=stone|composed` · `?flat` (a fitted field's baseline) · `?compose=0` · `?halo=0` · `?halopx=` · `?policy=ranks|rules|learned|taught` · `?teacher=sumi|sumi-bold|sumi-light` · `?judge` · `?perf` · `?ink` (a captured scene in ink) · `?scene=pen&part=word|board|culm|bank|rock&reference` · `?look=dry|wash` · `?detail=0..1` · `?thin=even` · `?only=wash` · `?view=hero|grazing|reverse` · `?orbit` · `?detail=0.25|0.55|1` (sparse, intermediate, resolved) · `?brush` · `?occluder=0` · `?clean` (no controls) · `?url=…` (any `.splat` or `.ply` CORS lets it read) · `?up=1` (for a file that's
+`?scene=stone|brushes|composed|pen|field|bench|marks|walk|room|mist|garden|plush|nike|train` · `?scene=marks&way=organised|organised+deposits|independent|style|unfitted|brush&only=<sheet>` · `?scene=walk&d=<metres>&level=both|fronds|wash&auto` · `?scene=room&view=tunnel|pool|canopy&s=<0…1>&style=plain&mirror=0&moving&auto` · `?field=stone|composed` · `?flat` (a fitted field's baseline) · `?compose=0` · `?halo=0` · `?halopx=` · `?policy=ranks|rules|learned|taught` · `?teacher=sumi|sumi-bold|sumi-light` · `?judge` · `?perf` · `?ink` (a captured scene in ink) · `?scene=pen&part=word|board|culm|bank|rock&reference` · `?look=dry|wash` · `?detail=0..1` · `?thin=even` · `?only=wash` · `?view=hero|grazing|reverse` · `?orbit` · `?detail=0.25|0.55|1` (sparse, intermediate, resolved) · `?brush` · `?occluder=0` · `?clean` (no controls) · `?url=…` (any `.splat` or `.ply` CORS lets it read) · `?up=1` (for a file that's
 y-up) · `?mode=0..3` · `?size=` · `?res=` · `?count=` (garden size) · `?noworkers` · `?preview`
 
 Checks: `node cells/lab/devtools/splats.test.mjs` (formats, covariance, sort) and

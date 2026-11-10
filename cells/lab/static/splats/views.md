@@ -50,3 +50,22 @@ Made by `node cells/lab/views.mjs splats` from `client/splats/views.mjs`. The RE
 ![Sumi-e, fitted: the field fitted to an image model’s sumi-e restyle of six wireframe views, each disc’s shape fitted with its ink, from the reference view](v-field-sumi.jpg)
 ![Sumi-e, from a view no drawing covered: the same field halfway between two of the drawn views](v-field-sumi-new.jpg)
 ![Sumi-e, from low: and from low down, also undrawn](v-field-sumi-low.jpg)
+
+## Marks as organised splats
+
+![Teacher marks, each drawn by a mark fitted to it: nine marks cut from the sparse conservatory studies (roots, sprays, washes, a veil), each drawn by a stroke or wash whose few parameters were fitted to it](v-marks.jpg)
+![The same, every deposit free: the same number of deposits, each set free: closer to each picture, and nothing left to pick up](v-marks-independent.jpg)
+![A style put on other spines: the held-out marks drawn in the style learnt from another (only their pose fitted); the rest as fitted](v-marks-style.jpg)
+![A fitted mark, bent: a fitted root picked up by a point of its spine and bent: its deposits come with it](v-marks-bent.jpg)
+
+## Walking into a wash
+
+![A canopy from 12 m: one canopy patch from 12 m: a wash of fifty deposits](v-walk-far.jpg)
+![From 5 m: from 5 m: the wash giving way to its fronds](v-walk-mid.jpg)
+![Inside it: from 1.5 m, under it: strands and dabs](v-walk-in.jpg)
+
+## The room
+
+![The root tunnel: the boardwalk under the willow’s roots: every mark a stroke or a wash, no outline pass](v-room-tunnel.jpg)
+![The open pool: stepping stones, the willow, and a gesture on the air that stands on nothing; still water](v-room-pool.jpg)
+![The canopy: the deck under hanging fronds, looking back across the water](v-room-canopy.jpg)

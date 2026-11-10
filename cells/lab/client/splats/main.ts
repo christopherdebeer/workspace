@@ -29,6 +29,9 @@ import { LIT, mistScene, referenceColours, sunDir, referenceAt, referenceLight, 
 import { NET, ANALYTIC, BAKE, RESULTS } from './mistnet';
 import { benchScene, PRESSURES } from './bench';
 import { MarksScene, WAYS, BRUSHED, type MarksFile } from './marksscene';
+import { canopyPatch, WALK, type Level } from './canopy';
+import { marksToSplats } from './marks';
+import { conservatory, routeAt, EYE, WATER, type Room, type Styles } from './conservatory';
 import { penScene, type PenScene } from './penscene';
 import { paint as autographPaint } from '../autograph/ink';
 import type { Editor, EditItem, Snapshot } from './edit';
@@ -51,6 +54,8 @@ const SCENES: Record<string, { label: string; url?: string; mb?: number; up: 1 |
   field: { label: 'fitted', up: 1 },
   bench: { label: 'bench', up: 1 },
   marks: { label: 'marks', up: 1 },
+  walk: { label: 'walk', up: 1 },
+  room: { label: 'room', up: 1 },
   mist: { label: 'mist', up: 1 },
   garden: { label: 'garden', up: 1 },
   plush: { label: 'plush', url: 'https://huggingface.co/cakewalk/splat-data/resolve/main/plush.splat', mb: 9, up: -1 },
@@ -78,9 +83,11 @@ function show(s: Splats, name: string, u: 1 | -1) {
   if (name !== 'bench' && name !== 'composed') { bench = null; benchSel = -1; syncBench(); }
   if (name !== 'pen') { penS = null; showReference(false); }
   if (name !== 'marks') { marksS = null; marksSel = -1; syncMarks(); }
+  if (name !== 'walk') { walkS = null; syncWalk(); }
+  if (name !== 'room') { roomS = null; syncRoom(); }
   if (name !== 'stone' && name !== 'brushes' && name !== 'mist' && name !== 'bench' && name !== 'composed' && name !== 'pen' && name !== 'field') R.setOccluder(null);
   ranks = s.rank ? Float32Array.from(s.rank).sort() : null;
-  document.documentElement.classList.toggle('paper', (inkOn && !!s.mark && !['stone', 'brushes', 'bench', 'composed', 'pen', 'mist'].includes(name)) || name === 'stone' || name === 'brushes' || name === 'bench' || name === 'composed' || name === 'pen' || name === 'field' || name === 'marks');
+  document.documentElement.classList.toggle('paper', (inkOn && !!s.mark && !['stone', 'brushes', 'bench', 'composed', 'pen', 'mist'].includes(name)) || name === 'stone' || name === 'brushes' || name === 'bench' || name === 'composed' || name === 'pen' || name === 'field' || name === 'marks' || name === 'walk' || name === 'room');
   const b = bounds(s);
   cam.target = b.centre; cam.dist = b.radius * 2.2; cam.yaw = 0.6; cam.pitch = 0.3;
   home = { ...cam, target: [...cam.target] as [number, number, number] };
@@ -118,6 +125,8 @@ async function open(name: string) {
     else if (name === 'pen') openPen();
     else if (name === 'field') await openField();
     else if (name === 'marks') await openMarks();
+    else if (name === 'walk') await openWalk();
+    else if (name === 'room') await openRoom();
     else if (!sc || !sc.url) { showCaptured(garden(Number(qs.get('count') ?? 120000)), 'garden', 1); }
     else showCaptured(parse(await fetchWithProgress(sc.url)), name, sc.up);
     loadMs = performance.now() - t0;
@@ -336,16 +345,20 @@ async function openField() {
 }
 // ─── the marks (marksscene.ts): teacher marks from the conservatory studies, each drawn by a mark fitted to it ───
 let marksS: MarksScene | null = null, marksSel = -1, marksDirty = false, syncMarks = () => {};
-async function openMarks() {
-  $('status').textContent = 'fetching the marks';
-  const m = document.querySelector<HTMLMetaElement>('meta[name=assets]'), base = m?.content && !m.content.includes('{{') ? m.content : '';
-  const r = await fetch(`${base}marks-bench.json`); if (!r.ok) throw new Error(`no marks (${r.status})`);
+let marksFile: MarksFile | null = null;
+async function openMarks(only: string | null = qs.get('only'), way = marksS?.way ?? qs.get('way') ?? 'organised') {
+  if (!marksFile) {
+    $('status').textContent = 'fetching the marks';
+    const m = document.querySelector<HTMLMetaElement>('meta[name=assets]'), base = m?.content && !m.content.includes('{{') ? m.content : '';
+    const r = await fetch(`${base}marks-bench.json`); if (!r.ok) throw new Error(`no marks (${r.status})`);
+    marksFile = (await r.json()) as MarksFile;
+  }
   const num = (k: string, d: number) => Number(qs.get(k) ?? d);
-  const S = new MarksScene((await r.json()) as MarksFile, qs.get('way') ?? 'organised', qs.get('only'), { width: num('bw', BRUSHED.width), material: (qs.get('bm') as Material) ?? BRUSHED.material, weight: num('ba', BRUSHED.weight), depth: num('bd', BRUSHED.depth), reach: num('br', BRUSHED.reach) });
+  const S = new MarksScene(marksFile, way, only, { width: num('bw', BRUSHED.width), material: (qs.get('bm') as Material) ?? BRUSHED.material, weight: num('ba', BRUSHED.weight), depth: num('bd', BRUSHED.depth), reach: num('br', BRUSHED.reach) });
   show(S.drawing(), 'marks', 1); marksS = S; marksSel = -1;
   // (square on to the wall, far enough to see all of it; one sheet alone: from where it was fitted)
   const one = S.sheets.length === 1 ? S.sheets[0] : null, asp = canvas.clientWidth / Math.max(1, canvas.clientHeight), th = Math.tan(cam.fov / 2);
-  framing = { target: [...S.centre] as [number, number, number], dist: one ? one.z : Math.max(S.size[1] / 2 / th, S.size[0] / 2 / th / asp) * 1.12 };
+  framing = { target: [...S.centre] as [number, number, number], dist: one ? one.z * Math.max(1, one.w / one.h / asp) : Math.max(S.size[1] / 2 / th, S.size[0] / 2 / th / asp) * 1.12 };
   if (one) cam.fov = one.fov;
   Object.assign(cam, { yaw: 0, pitch: 0, dist: framing.dist, target: [...framing.target] as [number, number, number] }); home = { ...cam, target: [...cam.target] as [number, number, number] };
   syncMarks();
@@ -354,6 +367,60 @@ async function openMarks() {
 function marksUpload() {
   if (!marksS) return;
   const d = marksS.drawing(); scene = d; R.load(d); sorter.data(d); lastDir = null;
+}
+// ─── walking into one wash (canopy.ts): a canopy patch, a straight approach from 12 m to inside it ───
+let walkS: { level: Level; d: number; auto: number | null; n: number } | null = null, walkWash: number[] | null = null, syncWalk = () => {};
+async function openWalk(level: Level = walkS?.level ?? (qs.get('level') as Level) ?? 'both') {
+  if (!walkWash) {
+    const m = document.querySelector<HTMLMetaElement>('meta[name=assets]'), base = m?.content && !m.content.includes('{{') ? m.content : '';
+    try { const r = await fetch(`${base}walk.json`); walkWash = r.ok ? ((await r.json()) as { wash: number[] }).wash : []; } catch { walkWash = []; }
+  }
+  const marks = canopyPatch(1000, WALK.patch, level, undefined, walkWash);
+  const keep = walkS ? { d: walkS.d, auto: walkS.auto } : { d: Number(qs.get('d') ?? WALK.from), auto: qs.has('auto') ? performance.now() : null };
+  const d = marksToSplats(marks); show(d, 'walk', 1);
+  walkS = { level, ...keep, n: d.n }; cam.fov = WALK.fov; cam.yaw = 0; cam.pitch = Math.asin(-WALK.look[1]); cam.dist = 1;
+  walkPlace(); home = { ...cam, target: [...cam.target] as [number, number, number] }; syncWalk();
+}
+/** the camera where the walk has got to: the eye on the approach, looking the way it's going (a drag still looks round) */
+function walkPlace() {
+  if (!walkS) return;
+  if (walkS.auto !== null) { const t = ((performance.now() - walkS.auto) / 1000 / 28) % 1, k = t < 0.5 ? t * 2 : 2 - t * 2; walkS.d = WALK.from + (WALK.to - WALK.from) * (k * k * (3 - 2 * k)); }
+  const cp = Math.cos(cam.pitch); cam.dist = 1;
+  cam.target = [0 - Math.sin(cam.yaw) * cp, WALK.eyeY - Math.sin(cam.pitch), walkS.d - Math.cos(cam.yaw) * cp];
+}
+// ─── the room (conservatory.ts): a flooded conservatory and a willow, all marks, walked round one looped route ───
+let roomS: { room: Room; s: number; s0?: number; fixed?: [number, number, number]; auto: number | null; styled: boolean; mirror: boolean; moving: boolean; n: number; yaw0: number; pitch0: number; look: [number, number] } | null = null, roomStyles: Styles | null = null, syncRoom = () => {};
+async function openRoom(styled = roomS?.styled ?? qs.get('style') !== 'plain') {
+  if (!roomStyles) {
+    // (the styles fitted to the teacher's marks: a root stroke's, a spray's strand and dabs, a veil's)
+    roomStyles = {};
+    try {
+      if (!marksFile) { const m = document.querySelector<HTMLMetaElement>('meta[name=assets]'), base = m?.content && !m.content.includes('{{') ? m.content : ''; const r = await fetch(`${base}marks-bench.json`); if (r.ok) marksFile = (await r.json()) as MarksFile; }
+      const of = (sheet: string, k: number) => marksFile?.sheets.find((x) => x.name === sheet)?.ways.organised?.marks?.[k]?.params;
+      roomStyles = { root: of('root-a', 0), strand: of('spray-a', 0), dabs: of('spray-a', 1), veil: of('veil-a', 0) };
+    } catch { roomStyles = {}; }
+  }
+  const room = conservatory(styled ? roomStyles : {}), d = marksToSplats(room.marks);
+  const keep = roomS ? { s: roomS.s, auto: roomS.auto, mirror: roomS.mirror, moving: roomS.moving, look: roomS.look } : { s: room.views[qs.get('view') ?? '']?.s ?? Number(qs.get('s') ?? room.views.tunnel.s), auto: qs.has('auto') ? performance.now() : null, mirror: qs.get('mirror') !== '0', moving: qs.has('moving'), look: [0, 0] as [number, number] };
+  show(d, 'room', 1);
+  roomS = { room, styled, ...keep, n: d.n, yaw0: 0, pitch0: 0 }; cam.fov = (55 * Math.PI) / 180;
+  const v = room.views[qs.get('view') ?? '']; roomPlace(true, v && !keep.auto ? v.at : undefined); home = { ...cam, target: [...cam.target] as [number, number, number] }; syncRoom();
+}
+/** the camera where the walk round the room has got to: the eye over the route, looking the way it's heading (or at a
+ * point asked for); a drag looks round from there and is kept as the walk goes on */
+function roomPlace(reset = false, at?: [number, number, number]) {
+  if (!roomS) return;
+  if (roomS.auto !== null) { const t = (performance.now() - roomS.auto) / 1000 / 150; roomS.s = (roomS.s0 ?? 0) + t; }
+  const { p, dir } = routeAt(roomS.s), e: [number, number, number] = [p[0], p[1] + EYE, p[2]];
+  let f = at ? norm([at[0] - e[0], at[1] - e[1], at[2] - e[2]]) : [dir[0], -0.04, dir[2]];
+  const yaw = Math.atan2(-f[0], -f[2]), pitch = Math.asin(Math.max(-1, Math.min(1, -f[1] / Math.hypot(f[0], f[1], f[2]))));
+  // (what the drag has turned it by since it was last placed is kept)
+  if (reset) roomS.look = [0, 0]; else { roomS.look[0] += cam.yaw - roomS.yaw0; roomS.look[1] += cam.pitch - roomS.pitch0; }
+  if (at) roomS.fixed = at; else if (reset) roomS.fixed = undefined;
+  if (roomS.fixed && !at && roomS.auto === null) { const g = norm([roomS.fixed[0] - e[0], roomS.fixed[1] - e[1], roomS.fixed[2] - e[2]]); f = g; cam.yaw = Math.atan2(-g[0], -g[2]) + roomS.look[0]; cam.pitch = Math.asin(-g[1]) + roomS.look[1]; }
+  else { cam.yaw = yaw + roomS.look[0]; cam.pitch = Math.max(-1.2, Math.min(1.2, pitch + roomS.look[1])); }
+  roomS.yaw0 = cam.yaw; roomS.pitch0 = cam.pitch; cam.dist = 1;
+  const cp = Math.cos(cam.pitch); cam.target = [e[0] - Math.sin(cam.yaw) * cp, e[1] - Math.sin(cam.pitch), e[2] - Math.cos(cam.yaw) * cp];
 }
 const VIEWS = { hero: { yaw: 0.6, pitch: 0.32 }, grazing: { yaw: 1.35, pitch: 0.035 }, reverse: { yaw: 0.6 + Math.PI, pitch: 0.3 } };
 function setView(v: keyof typeof VIEWS) {
@@ -633,6 +700,33 @@ const syncs = [
     syncPanel();
   };
 }
+{
+  const el = $('w-levels'), LV: Array<[Level, string]> = [['both', 'hand-over'], ['fronds', 'fronds only'], ['wash', 'wash only']], dEl = $<HTMLInputElement>('w-dist');
+  for (const [l, label] of LV) { const b = document.createElement('button'); b.textContent = label; b.onclick = () => void openWalk(l); el.append(b); }
+  const auto = document.createElement('button'); auto.textContent = 'walk'; auto.onclick = () => { if (walkS) { walkS.auto = walkS.auto === null ? performance.now() : null; syncWalk(); } }; $('w-go').append(auto);
+  dEl.oninput = () => { if (walkS) { walkS.d = Number(dEl.value); walkS.auto = null; syncWalk(); } };
+  syncWalk = () => {
+    $('walk-controls').hidden = !walkS; if (!walkS) return;
+    [...el.querySelectorAll('button')].forEach((b, k) => b.setAttribute('aria-pressed', String(LV[k][0] === walkS!.level)));
+    auto.setAttribute('aria-pressed', String(walkS.auto !== null)); dEl.value = String(walkS.d);
+    $('w-dist-v').textContent = `${walkS.d.toFixed(1)} m`; $('sum-walk').textContent = `${walkS.d.toFixed(1)} m`;
+    $('w-note').textContent = walkS.level === 'both' ? 'a wash far off, fronds close to: each deposit shown by how large things look where it is, the two complementary between about 7 m and 3.5 m' : walkS.level === 'fronds' ? 'every strand and dab, all the way: the reference for tone' : 'the far wash alone, all the way';
+  };
+}
+{
+  const vEl = $('r-views'), oEl = $('r-opts'), sEl = $<HTMLInputElement>('r-s'), VW = ['tunnel', 'pool', 'canopy'];
+  for (const v of VW) { const b = document.createElement('button'); b.textContent = v; b.onclick = () => { const w = roomS?.room.views[v]; if (roomS && w) { roomS.s = w.s; roomS.auto = null; roomPlace(true, w.at); syncRoom(); } }; vEl.append(b); }
+  const mk = (label: string, act: () => void) => { const b = document.createElement('button'); b.textContent = label; b.onclick = () => { act(); syncRoom(); }; oEl.append(b); return b; };
+  const bWalk = mk('walk', () => { if (roomS) { roomS.auto = roomS.auto === null ? performance.now() : null; roomS.s0 = roomS.s; roomS.fixed = undefined; } }), bMir = mk('still water', () => { if (roomS) roomS.mirror = !roomS.mirror; }), bMov = mk('air moving', () => { if (roomS) roomS.moving = !roomS.moving; }), bSty = mk('taught styles', () => { if (roomS) void openRoom(!roomS.styled); });
+  sEl.oninput = () => { if (roomS) { roomS.s = Number(sEl.value); roomS.auto = null; roomS.fixed = undefined; syncRoom(); } };
+  syncRoom = () => {
+    $('room-controls').hidden = !roomS; if (!roomS) return;
+    const s = ((roomS.s % 1) + 1) % 1, where = s < 4.3 / 14 ? 'the root tunnel' : s < 9.6 / 14 ? 'the open pool' : s < 12.2 / 14 ? 'the canopy' : 'the way back';
+    bWalk.setAttribute('aria-pressed', String(roomS.auto !== null)); bMir.setAttribute('aria-pressed', String(roomS.mirror)); bMov.setAttribute('aria-pressed', String(roomS.moving)); bSty.setAttribute('aria-pressed', String(roomS.styled));
+    sEl.value = String(s); $('r-s-v').textContent = where; $('sum-room').textContent = where;
+    $('r-note').textContent = `${roomS.n.toLocaleString()} deposits in ${roomS.room.marks.length.toLocaleString()} marks; no outline pass: each is a stroke or a wash the scene put there. Drag to look round.`;
+  };
+}
 function syncStone() { syncs.forEach((f) => f()); $('stone-controls').hidden = !stone && !brushes && !(captured && inkOn); $('composition').hidden = !composed; $('teachers').hidden = policyMode !== 'taught'; syncPanel(); }
 /**
  * The panel is a drawer (client/drawer, made for every experiment): closed to its grip and a line (the scene, its
@@ -830,7 +924,16 @@ async function runPerf() {
       ]
     : mist
       ? ['reference', 'analytic', 'neural'].map((l) => ({ name: `light: ${l === 'reference' ? 'stored (no lighting work)' : l}`, apply: () => { light = l; diff = false; relight(); } }))
-      : [{ name: 'as it is', apply: () => {} }];
+      : roomS
+        // (the room, walked: the water's mirror and the air's movement on and off, from each region)
+        ? (['tunnel', 'pool', 'canopy'] as const).flatMap((v) => [
+            { name: `${v} · still water · air still`, apply: () => { const w = roomS!.room.views[v]; roomS!.s = w.s; roomS!.auto = null; roomS!.mirror = true; roomS!.moving = false; roomPlace(true, w.at); } },
+            { name: `${v} · no water · air still`, apply: () => { roomS!.mirror = false; roomS!.moving = false; } },
+            { name: `${v} · still water · air moving`, apply: () => { roomS!.mirror = true; roomS!.moving = true; } },
+          ])
+        : walkS
+          ? [12, 5, 1.5].map((d) => ({ name: `canopy from ${d} m`, apply: () => { walkS!.d = d; walkS!.auto = null; } }))
+          : [{ name: 'as it is', apply: () => {} }];
   const rows: string[][] = [];
   $('status').textContent = 'measuring…';
   for (const ph of phases) {
@@ -884,13 +987,15 @@ function frame() {
     const u = (t - orbitFrom) / 1000 / ORBIT_S;
     cam.yaw = VIEWS.hero.yaw + Math.min(1, u) * Math.PI * 2;
     if (u >= 1) { orbitFrom = null; syncStone(); }
-  } else if (!stone && !brushes && !bench && !penS && !marksS && sceneName !== 'field' && (preview || t - touched > 8000)) cam.yaw += dt * 0.15;
+  } else if (!stone && !brushes && !bench && !penS && !marksS && !walkS && !roomS && sceneName !== 'field' && (preview || t - touched > 8000)) cam.yaw += dt * 0.15;
   else if ((stone || brushes) && preview) cam.yaw += dt * 0.25;
   // (the canvas at the resolution asked, never past the screen's)
   const dpr = Math.min(res, devicePixelRatio || 1), w = Math.round(canvas.clientWidth * dpr), h = Math.round(canvas.clientHeight * dpr);
   if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
   if (bench && benchDirty && benchSel >= 0) { benchDirty = false; benchRegen(benchSel); }
   if (marksS && marksDirty) { marksDirty = false; marksUpload(); }
+  if (walkS) { walkPlace(); if (walkS.auto !== null) syncWalk(); }
+  if (roomS) { roomPlace(); if (roomS.auto !== null) syncRoom(); }
   if (bench || marksS) placeHandles();
   const { view, fwd, pos } = eye();
   // (sorted again once the view's turned more than a little, and the last sort's in)
@@ -904,7 +1009,7 @@ function frame() {
   // objects' tone) all open, so the teacher's decisions alone say what shows)
   let gv = gv0;
   if (gv0 && composed && (policyMode === 'taught' || policyOverride)) { gv = Float32Array.from(gv0); for (const g of (brushes as ComposedScene).gates) gv[g.index] = 1; }
-  drawNow = () => R.draw(view, proj, [fy, fy], { size, mode, bg: mist ? [0.13, 0.145, 0.165] : stone || brushes || bench || penS || marksS || sceneName === 'field' || (captured && inkOn) ? [0.937, 0.906, 0.847] : theme(), detail, thin, share, features: gv ?? features, eye: pos, occlude, only, light: mist ? Math.max(0, LIGHTS.indexOf(light) - 1) : 0, sun: sunDir(sunAz, sunEl), diff: mist ? diff : false, halo: composed && compose && haloOn ? haloPx * dpr : 0, nf: [near, cam.dist * 100] });
+  drawNow = () => R.draw(view, proj, [fy, fy], { size, mode, bg: mist ? [0.13, 0.145, 0.165] : stone || brushes || bench || penS || marksS || walkS || roomS || sceneName === 'field' || (captured && inkOn) ? [0.937, 0.906, 0.847] : theme(), detail, thin, share, features: gv ?? features, eye: pos, time: roomS?.moving || (walkS && qs.has('moving')) ? (performance.now() / 1000) % 3600 + 1 : 0, mirror: roomS?.mirror ? [WATER, 0.5] : undefined, near: roomS || walkS ? [0.25, 0.7] : undefined, occlude, only, light: mist ? Math.max(0, LIGHTS.indexOf(light) - 1) : 0, sun: sunDir(sunAz, sunEl), diff: mist ? diff : false, halo: composed && compose && haloOn ? haloPx * dpr : 0, nf: [near, cam.dist * 100] });
   applyPolicy(dt, pos, fwd);
   drawNow();
   judgeStep();
@@ -940,10 +1045,16 @@ function frame() {
     undo: () => $('b-undo').click(), density: (d: number) => { if (bench) { bench.editor.density = d; benchRegen('all'); } },
   },
   mist: { setDiff: (d: boolean) => { diff = d; relight(); }, setLight: (l: string) => { light = l; relight(); syncMist(); }, setSun: (az: number, el: number) => { sunAz = az; sunEl = el; relight(); }, setBank: (b: number) => { bank = b; openMist(); }, get ready() { return refReady; } },
+  room: { get state() { return roomS ? { s: roomS.s, n: roomS.n, styled: roomS.styled, mirror: roomS.mirror, moving: roomS.moving, regions: roomS.room.regions, views: roomS.room.views } : null; },
+    at: (s: number, look?: [number, number, number]) => { if (roomS) { roomS.s = s; roomS.auto = null; roomPlace(true, look); syncRoom(); } }, view: (v: string) => { const w = roomS?.room.views[v]; if (roomS && w) { roomS.s = w.s; roomS.auto = null; roomPlace(true, w.at); syncRoom(); } },
+    set: (o: { mirror?: boolean; moving?: boolean; styled?: boolean }) => { if (!roomS) return; if (o.mirror !== undefined) roomS.mirror = o.mirror; if (o.moving !== undefined) roomS.moving = o.moving; if (o.styled !== undefined && o.styled !== roomS.styled) void openRoom(o.styled); syncRoom(); } },
+  walk: { get state() { return walkS ? { ...walkS } : null; }, set: (d: number) => { if (walkS) { walkS.d = d; walkS.auto = null; syncWalk(); } }, level: (l: Level) => openWalk(l), auto: (on: boolean) => { if (walkS) { walkS.auto = on ? performance.now() : null; syncWalk(); } } },
   marks: {
     get state() { return marksS ? { way: marksS.way, selected: marksSel, deposits: marksS.deposits, sheets: marksS.sheets.map((s) => s.name), marks: marksS.marks.map((m) => ({ id: m.id, name: m.name, kind: m.kind, count: m.count, ctrl: m.ctrl })) } : null; },
     setWay: (w: string) => { if (marksS) { marksS.setWay(w); marksSel = -1; marksUpload(); syncMarks(); } }, select: (i: number) => { marksSel = i; syncMarks(); }, pick: (x: number, y: number) => (marksS ? marksS.pick(toScreen, x, y) : -1), screen: (p: number[]) => toScreen(p),
     drag: (k: number, p: [number, number, number]) => { if (marksS && marksSel >= 0) { marksS.setHandle(marksSel, k, p); marksDirty = true; } },
+    /** one sheet alone, from where it was fitted (null: the whole wall); the existing brush's knobs */
+    only: (name: string | null, way?: string) => openMarks(name, way), brushed: (b: Record<string, number | string>) => { if (marksS) { Object.assign(marksS.brushed, b); marksS.setWay('brush'); marksUpload(); syncMarks(); } },
   },
   perf: () => runPerf(), get perfResult() { return (window as unknown as { __perf?: string }).__perf ?? null; },
   composed: { camRef: () => camRef(),

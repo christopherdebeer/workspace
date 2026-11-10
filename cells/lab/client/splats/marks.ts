@@ -39,8 +39,14 @@ export interface Deposit { p: V; t: V; n: V; s1: number; s2: number; thin: numbe
 export interface Mark {
   id: number; kind: 'stroke' | 'wash'; name?: string;
   /** a stroke: the points its spine runs through; the surface's normal there (one for all, or one a point; none: a
-   * stroke in open space, round in section); its base width (scene units); its rows */
-  ctrl?: V[]; normal?: V | V[]; width?: number; rows?: number;
+   * stroke in open space, round in section; 'tube': its rows laid round a tube about its spine, its width the tube's,
+   * so it's a band of the same weight from wherever it's seen: a limb); its base width (scene units); its rows */
+  ctrl?: V[]; normal?: V | V[] | 'tube'; width?: number; rows?: number;
+  /** a tube's shading: how far its ink keeps to its underside (0: all round; 1: its top left bare), as a limb drawn
+   * with one loaded stroke along it and the paper left for the rest */
+  shade?: number;
+  /** how far its far end sways (scene units; render.ts moves a fitted mark's deposits by their own share of it) */
+  sway?: number;
   /** a wash on a face: a point of it, two unit axes in its plane, its normal, its shape as triangles in (u, v) */
   face?: { o: V; u: V; v: V; n: V; tris: number[][] };
   /** a wash in a volume: its middle and its three radii */
@@ -66,7 +72,7 @@ const softplus = (x: number) => (x > 30 ? x : Math.log1p(Math.exp(x)));
 const hash = (a: number, b: number, c: number) => { let h = (Math.imul(a | 0, 374761393) + Math.imul(b | 0, 668265263) + Math.imul(c | 0, 2147483647)) | 0; h = Math.imul(h ^ (h >>> 13), 1274126177); return ((h ^ (h >>> 16)) >>> 0) / 4294967296; };
 
 /** a new stroke through control points: full along it, of even weight, wet */
-export function strokeMark(id: number, ctrl: V[], normal: V | V[] | undefined, width: number, count: number, rows = 1, name?: string): Mark {
+export function strokeMark(id: number, ctrl: V[], normal: V | V[] | 'tube' | undefined, width: number, count: number, rows = 1, name?: string): Mark {
   const params = new Array(STROKE).fill(0); for (let i = 0; i < 6; i++) params[i] = 1.5; params[SP.u0] = -0.04; params[SP.u1] = 1.04;
   return { id, kind: 'stroke', name, ctrl: ctrl.map((p) => [...p] as V), normal, width, rows, count, params, resid: new Array(count * RESID).fill(0), view: new Array(VIEW_TERMS).fill(0) };
 }
@@ -87,7 +93,7 @@ export function restyle(m: Mark, from: Mark): Mark { m.params = from.params.slic
 /** a stroke's spine: a smooth curve through its control points (Catmull-Rom), with the surface's normal along it */
 export function spine(m: Mark): { pts: V[]; normals: V[] | null; cum: number[]; L: number } {
   const C = m.ctrl!, K = C.length, pts: V[] = [], ns: V[] = [], per = 10;
-  const nAt = (i: number): V | null => (!m.normal ? null : Array.isArray(m.normal[0]) ? (m.normal as V[])[Math.max(0, Math.min(K - 1, i))] : (m.normal as V));
+  const nAt = (i: number): V | null => (!m.normal || m.normal === 'tube' ? null : Array.isArray(m.normal[0]) ? (m.normal as V[])[Math.max(0, Math.min(K - 1, i))] : (m.normal as V));
   for (let i = 0; i < K - 1; i++) {
     const p0 = C[Math.max(0, i - 1)], p1 = C[i], p2 = C[i + 1], p3 = C[Math.min(K - 1, i + 2)];
     for (let k = 0; k < per + (i === K - 2 ? 1 : 0); k++) {
@@ -143,7 +149,7 @@ const grid = (P: number[], gx: number, gy: number) => {
 export function layout(m: Mark): Deposit[] {
   const out: Deposit[] = [], N = m.count, P = m.params, R = m.resid;
   if (m.kind === 'stroke') {
-    const S = spine(m), pts = S.pts, L = S.L, w0 = m.width ?? 0.01, free = !S.normals, rows = Math.max(1, m.rows ?? 1), cols = Math.ceil(N / rows);
+    const S = spine(m), pts = S.pts, L = S.L, w0 = m.width ?? 0.01, tube = m.normal === 'tube', free = !S.normals && !tube, rows = Math.max(1, m.rows ?? 1), cols = Math.ceil(N / rows);
     const t0 = 0.03 * Math.exp(-P[SP.sharp0]), t1 = 0.03 * Math.exp(-P[SP.sharp1]);
     // (its rows across it: the outer ones finer than the middle ones by `crisp`, packed side by side)
     const rw: number[] = [], rc: number[] = []; let rs = 0;
@@ -156,9 +162,20 @@ export function layout(m: Mark): Deposit[] {
       let k = 0; while (k < pts.length - 2 && S.cum[k + 1] < s) k++;
       const f = Math.max(0, Math.min(1, (s - S.cum[k]) / Math.max(1e-9, S.cum[k + 1] - S.cum[k]))), t = norm(sub(pts[k + 1], pts[k]));
       // (on a surface, its plane is the surface's; in open space, any plane through its length: it's round in section)
-      let n: V = free ? norm(cross(t, Math.abs(t[1]) < 0.9 ? [0, 1, 0] : [1, 0, 0])) : norm(add(add([0, 0, 0], S.normals![k], 1 - f), S.normals![Math.min(S.normals!.length - 1, k + 1)], f));
+      let n: V = free || tube ? norm(cross(t, Math.abs(t[1]) < 0.9 ? [0, 1, 0] : [1, 0, 0])) : norm(add(add([0, 0, 0], S.normals![k], 1 - f), S.normals![Math.min(S.normals!.length - 1, k + 1)], f));
       n = norm(sub(n, [t[0] * dot(n, t), t[1] * dot(n, t), t[2] * dot(n, t)]));
-      const b = cross(n, t), w = w0 * Math.exp(knots(P, SP.width, KN.width, u)), alt = i % 2 ? 1 : -1;
+      const w = w0 * Math.exp(knots(P, SP.width, KN.width, u)), alt = i % 2 ? 1 : -1;
+      if (tube) {
+        // (round a tube: this row's place round it; its deposit lies on the tube's surface, facing out)
+        const N0 = norm(sub(Math.abs(t[1]) < 0.95 ? [0, 1, 0] : [1, 0, 0], [t[0] * (Math.abs(t[1]) < 0.95 ? t[1] : t[0]), t[1] * (Math.abs(t[1]) < 0.95 ? t[1] : t[0]), t[2] * (Math.abs(t[1]) < 0.95 ? t[1] : t[0])])), B0 = cross(t, N0);
+        const th = ((row + 0.5) / rows) * Math.PI * 2 + hash(m.id, 3, 3) * 6.28, c = Math.cos(th), sn = Math.sin(th), rad: V = [N0[0] * c + B0[0] * sn, N0[1] * c + B0[1] * sn, N0[2] * c + B0[2] * sn];
+        const run = s / (5 * w0) + hash(m.id, row, 7) * 16, r0 = Math.floor(run), rf = run - r0, sm = rf * rf * (3 - 2 * rf), gap = hash(m.id, row, r0) * (1 - sm) + hash(m.id, row, r0 + 1) * sm;
+        const dry = Math.max(0, knots(P, SP.dry, KN.dry, u)) * Math.max(0, 1 + P[SP.drySide] * c) * 9 * gap * gap;
+        const centre = add(add(pts[k], sub(pts[k + 1], pts[k]), f), N0, knots(P, SP.offset, KN.offset, u) * w0);
+        out.push({ p: add(centre, rad, w / 2 + R[r + 4] * w0), t, n: rad, s1: (L / cols) * 0.9 * Math.exp(P[SP.along] + R[r + 1]), s2: ((Math.PI * w) / rows) * 0.62 * Math.exp(P[SP.spread] + R[r + 2]), thin: 0.0008, turn: R[r + 3], logit: knots(P, SP.ink, KN.ink, u) - softplus((P[SP.u0] - u) / t0) - softplus((u - P[SP.u1]) / t1) - dry - (m.shade ?? 0) * 3 * (1 + c) + R[r] });
+        continue;
+      }
+      const b = cross(n, t);
       const s2 = ((w * rw[row]) / rs) * 0.62 * Math.exp(P[SP.spread] + R[r + 2]);
       const side = knots(P, SP.offset, KN.offset, u) * w0 + v * w * 0.9 + (R[r + 4] + alt * P[SP.step]) * w0;
       // (dryness: each row has its own run of gaps along the stroke, a few widths long; drier to one side)
@@ -220,7 +237,9 @@ export function marksToSplats(marks: Mark[], floor = 0.02, loose: Array<{ d: Dep
     s.pos.set(d.p, k * 3); s.scale.set([Math.max(d.s1, 0.0002), Math.max(d.s2, 0.0002), Math.max(d.thin, 0.0002)], k * 3); s.rot.set(quat(x, y, z), k * 4); s.normal.set(d.n, k * 3);
     // (on a surface: given its plane's depth, so the face it lies on doesn't cut it; in open space: its own)
     s.support[k] = d.thin < 0.002 ? 1 : 3; s.rgba.set([colour[0], colour[1], colour[2], 255], k * 4); s.mark[k] = 12; s.rank[k] = 1; s.element[k] = m ? m.id : 0; s.feature[k] = i + 1; s.owner[k] = m ? m.id : 0;
-    s.coef[k * 12] = d.logit + (m ? m.view[0] : 0); if (m) { for (let b = 1; b < VIEW_TERMS; b++) s.coef[k * 12 + b] = m.view[b]; if (m.lod) { s.coef[k * 12 + 9] = m.lod[0]; s.coef[k * 12 + 10] = m.lod[1]; } }
+    s.coef[k * 12] = d.logit + (m ? m.view[0] : 0); if (m) { for (let b = 1; b < VIEW_TERMS; b++) s.coef[k * 12 + b] = m.view[b]; if (m.lod) { s.coef[k * 12 + 9] = m.lod[0]; s.coef[k * 12 + 10] = m.lod[1]; }
+      // (its share of its mark's sway: none where it hangs from, all at its far end)
+      if (m.sway) { const rows = Math.max(1, m.rows ?? 1), u = (Math.floor(i / rows) + 0.5) / Math.ceil(m.count / rows); s.coef[k * 12 + 11] = m.sway * u * u; } }
   });
   return s;
 }
