@@ -42,6 +42,16 @@ export function roleOf(name = ''): string {
   return 'line';
 }
 /**
+ * A route for the eventual test: six views nothing has been taught from, fitted to, or used to choose between ways of
+ * drawing. The eight views in `Room.views` have all been used for one or another of those (three to teach from; the
+ * other five to compare representations, twice: they validate now, they don't test). These stand between them on the
+ * same loop and look other ways. They aren't shown on the page, and nothing should be chosen by looking at them.
+ */
+export const TEST_VIEWS: Record<string, { s: number; at: V }> = {
+  'the tunnel mouth': { s: 0.4 / 14, at: [-5.5, 2.4, -0.5] }, 'out through the roots': { s: 2.3 / 14, at: [1.5, 1.8, -1.5] }, 'the tunnel from the pool': { s: 5.4 / 14, at: [-6.3, 2.2, 0.6] },
+  'the willow from the east': { s: 7.8 / 14, at: [1, 3, 0.5] }, 'down the deck': { s: 10.2 / 14, at: [-2, 1.4, 8.4] }, 'up into the canopy': { s: 12.3 / 14, at: [1.2, 3.9, 5.8] },
+};
+/**
  * What the room was taught from drawn views (devtools/splats-room-fit.mjs), kept by role and by each mark's key (so
  * adding a mark to the scene moves nothing onto another):
  * - `roles`: for each role, an offset to every parameter of every mark of that role (a style, shared);

@@ -1432,7 +1432,11 @@ teacher over all the readings, there and on the 36 strokes from the other five v
   pressures with the eye's crispness, at 26.8 and 30.2. So the readings don't yet see everything the eye does, and
   a lower number wasn't taken where the picture was worse.
 - **The other five views are validation now, not a test.** They've been used to choose between ways of laying a
-  limb twice. A route nothing has been chosen on is still to be drawn.
+  limb twice. A test route is set aside for the end (`conservatory.ts`, `TEST_VIEWS`): six views between the eight on
+  the same loop, looking other ways (the tunnel's mouth, out through the roots, the tunnel from the pool, the willow
+  from the east, down the deck, up into the canopy). Their geometry is exported for restyling
+  (`devtools/conservatory/wires-test`); nothing has been drawn, fitted or chosen on them, and they aren't on the
+  page.
 
 The room's limbs are unchanged: this is one limb. Tone at low resolution took no part in any of it.
 

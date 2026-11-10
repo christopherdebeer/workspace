@@ -13,7 +13,8 @@ import { build } from 'esbuild';
 import { writeFileSync, mkdirSync } from 'node:fs';
 const load = async (f) => { const o = await build({ entryPoints: [new URL(f, import.meta.url).pathname], bundle: true, write: false, format: 'esm', platform: 'node', logLevel: 'error' }); return import('data:text/javascript;base64,' + Buffer.from(o.outputFiles[0].text).toString('base64')); };
 const C = await load('../client/splats/conservatory.ts'), M = await load('../client/splats/marks.ts');
-const dir = new URL('./out/wires/', import.meta.url).pathname; mkdirSync(dir, { recursive: true });
+// (`--test`: the six views of the test route (conservatory.ts `TEST_VIEWS`) instead, into out/wires-test/)
+const TEST = process.argv.includes('--test'), dir = new URL(TEST ? './out/wires-test/' : './out/wires/', import.meta.url).pathname; mkdirSync(dir, { recursive: true });
 const W = 1536, H = 1024, FOV = (55 * Math.PI) / 180, fy = H / (2 * Math.tan(FOV / 2));
 const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2], cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]], norm = (a) => { const l = Math.hypot(...a) || 1; return a.map((v) => v / l); };
 const room = C.conservatory({}), tubes = room.marks.filter((m) => m.normal === 'tube');
@@ -23,8 +24,8 @@ const parts = tubes.map((m, i) => ({ id: i + 1, tris: C.occluder({ marks: [m], s
 // (the views: the six the room is taught from and scored on, and two more for a reserved route: back along the tunnel,
 // and sideways from the stones)
 const at = (s) => { const p = C.routeAt(s).p; return [p[0], p[1] + C.EYE, p[2]]; };
-const views = [...Object.entries(room.views).map(([name, v]) => ({ name: name.replace(/ /g, '-'), E: at(v.s), look: v.at })), { name: 'back-along-the-tunnel', E: at(3.3 / 14), look: [-8.2, 1.9, 3.4] }, { name: 'sideways-from-the-stones', E: at(6.6 / 14), look: [0.8, 2.6, 0.2] }];
-const ORDER = ['tunnel', 'between-tunnel-and-pool', 'pool', 'between-pool-and-canopy', 'canopy', 'between-canopy-and-tunnel', 'back-along-the-tunnel', 'sideways-from-the-stones'];
+const views = TEST ? Object.entries(C.TEST_VIEWS).map(([name, v]) => ({ name: name.replace(/ /g, '-'), E: at(v.s), look: v.at })) : [...Object.entries(room.views).map(([name, v]) => ({ name: name.replace(/ /g, '-'), E: at(v.s), look: v.at })), { name: 'back-along-the-tunnel', E: at(3.3 / 14), look: [-8.2, 1.9, 3.4] }, { name: 'sideways-from-the-stones', E: at(6.6 / 14), look: [0.8, 2.6, 0.2] }];
+const ORDER = TEST ? Object.keys(C.TEST_VIEWS).map((k) => k.replace(/ /g, '-')) : ['tunnel', 'between-tunnel-and-pool', 'pool', 'between-pool-and-canopy', 'canopy', 'between-canopy-and-tunnel', 'back-along-the-tunnel', 'sideways-from-the-stones'];
 for (const v of views) {
   const f = norm([v.look[0] - v.E[0], v.look[1] - v.E[1], v.look[2] - v.E[2]]), r = norm(cross(f, [0, 1, 0])), u = cross(r, f), E = v.E;
   const toCam = (P) => { const d = [P[0] - E[0], P[1] - E[1], P[2] - E[2]]; return [dot(d, r), dot(d, u), dot(d, f)]; }, px = (q) => [W / 2 + (fy * q[0]) / q[2], H / 2 - (fy * q[1]) / q[2]];

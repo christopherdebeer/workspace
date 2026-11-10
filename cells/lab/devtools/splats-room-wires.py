@@ -2,9 +2,11 @@
 # lines on white. The solids' outlines are where the nearest solid changes from one pixel to the next; the rest are the
 # lines as they were projected. A wash's outline is dashed (it's a volume of tone, not an edge); a leaf is a short tick.
 # Written to devtools/conservatory/wires2/<n>-<view>.png, at 1536 x 1024.
-import json, os, glob, numpy as np
+import json, os, glob, sys, numpy as np
 from PIL import Image, ImageDraw, ImageFilter
-HERE = os.path.dirname(os.path.abspath(__file__)); SRC = f'{HERE}/out/wires/'; OUT = f'{HERE}/conservatory/wires2/'; os.makedirs(OUT, exist_ok=True)
+# (--test: the test route's six views, from out/wires-test/ into conservatory/wires-test/)
+TEST = '--test' in sys.argv
+HERE = os.path.dirname(os.path.abspath(__file__)); SRC = f'{HERE}/out/wires-test/' if TEST else f'{HERE}/out/wires/'; OUT = f'{HERE}/conservatory/wires-test/' if TEST else f'{HERE}/conservatory/wires2/'; os.makedirs(OUT, exist_ok=True)
 K = 2
 for f in sorted(glob.glob(SRC + '*.json')):
   name = os.path.basename(f)[:-5]; J = json.load(open(f)); W, H = J['w'], J['h']

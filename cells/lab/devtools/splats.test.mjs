@@ -451,6 +451,12 @@ ok('parse() tells a .splat by its bytes', F.parse(F.encodeSplat(g)).n === g.n);
     }
   }
 }
+// (the test route: six views, none of them standing where one of the room's eight does)
+{
+  const CO = await load('../client/splats/conservatory.ts'), room = CO.conservatory({}), used = Object.values(room.views).map((v) => v.s), test = Object.entries(CO.TEST_VIEWS);
+  const nearest = Math.min(...test.map(([, v]) => Math.min(...used.map((s) => Math.min(Math.abs(s - v.s), 1 - Math.abs(s - v.s))))));
+  ok(`test route: ${test.length} views kept aside, the nearest ${(nearest * 14).toFixed(2)} of the loop's 14 from any view that's been used; none shares a name with one`, test.length === 6 && nearest * 14 > 0.5 && test.every(([k]) => !(k in room.views)));
+}
 if (R) {
   ok('half floats: 1, 0.5, 65504, 2e-5 round trip', R.toHalf(1) === 0x3c00 && R.toHalf(0.5) === 0x3800 && R.toHalf(65504) === 0x7bff && R.toHalf(0) === 0);
 }
