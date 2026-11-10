@@ -338,7 +338,7 @@ void main() {
 }`;
 const CULM_FS = COMMON + LIGHT + OUT + `
 in vec3 vW; in vec3 vR0; in vec3 vN; in float vY; in float vQ; in float vU; in vec3 vI; in float vR; in float vA; flat in float vOut; flat in float vJit; flat in float vHero;
-uniform float uMarks;
+uniform float uMarks; uniform float uBrush;
 void main() {
   vec3 N = normalize(vN), V = normalize(uEye - vW);
   float age = vI.x, f = fract(vQ), dist = distance(vW, uEye);
@@ -407,8 +407,30 @@ void main() {
   float tick = ring * chosen * (.35 + .65 * smoothstep(.1, .6, edge)) * (1. - smoothstep(30., 70., dist) * .75);
   float dry = smoothstep(.62, .82, vn(vec2(vU * 40. + 3., vY * .35))) * shade * edge * (1. - far) * .6;
   float foot = (1. - smoothstep(.0, .14, vY)) * .5 * (1. - smoothstep(15., 40., dist));
+  // (\`?brush=sweep\`, a trial (the Splats lab's sweep, drawn on the culm's own surface): in place of the dry brush, a
+  // culm laid as a brush lays one, a pull an internode. Pressed where it's set down above the node, drying and lifting
+  // toward the next, each internode its own load; a band on the side away from the sun as the eye sees it, as wide as
+  // the pressure; made of bristles round the culm, each running dry in its own stretches, sooner far off, its thin ink
+  // in specks on the paper's tooth. It carries on in the drawing where the colour's gone)
+  float sweep = 0., sweepSide = 0.;
+  if (uBrush > .5) {
+    vec2 sd = -normalize(uSun.xz + 1e-4); vec3 Us = vec3(sd.x, 0., sd.y) - V * dot(vec3(sd.x, 0., sd.y), V); Us = normalize(vec3(Us.x, 0., Us.z) + 1e-4);
+    float v = dot(N, Us), load = h21(vec2(nodeI, vI.y * 13.)), farK = smoothstep(8., 45., dist);
+    float press = (.5 + .5 * smoothstep(0., .06, f)) * (1. - (.25 + .55 * load) * (1. - exp(-f / .5))) * smoothstep(0., .07, 1. - f);
+    float bandT = (.75 + .45 * press) * (.8 + .4 * h21(vec2(nodeI * 1.7, vI.y * 23.))), inBand = smoothstep(0., max(fwidth(v) * 1.5, .03), v - (1. - bandT));
+    float rows = 22., rf = vA / 6.2832 * rows, r0 = floor(rf), aa = max(fwidth(rf), 1e-4), laid = 0.;
+    float tooth = vn(vec2(vU * 250., vY * 50.)), toothK = 1. - smoothstep(.5, 1.5, fwidth(vU * 250.));
+    for (int dr = -1; dr <= 1; dr++) {
+      float row = mod(r0 + float(dr), rows), gap = vn(vec2(row * 7.3 + vI.y * 11., vY / max(vR * 9., .2) + row * 3.1));
+      float cover = smoothstep(-.08, .08, press * (.7 + .6 * gap) - h21(vec2(row, vI.y * 5.)) * (.95 + 1.2 * farK));
+      cover = mix(cover, smoothstep(tooth - .1, tooth + .1, cover * 1.2 - .1), toothK);
+      float x = rf - (r0 + float(dr) + .5) + .2 * (vn(vec2(row * 5.1, vY * 2.5 / max(vR * 10., .2))) - .5);
+      laid = max(laid, cover * clamp((.5 * exp(1.1 * (press - .45)) - abs(x)) / aa + .5, 0., 1.));
+    }
+    sweep = inBand * laid * (.55 + .45 * press); sweepSide = smoothstep(-.2, .2, v);
+  }
   // (the dry brush is the picture's shading: it goes with the colour; the ticks and the foot carry on in the drawing)
-  float mark = max(max(tick, dry * colR), foot) * uMarks;
+  float mark = max(max(tick, uBrush > .5 ? sweep * mix(1., .5, colR) : dry * colR), foot) * uMarks;
   // (the outline breaks just under each node, as a brush lifts there)
   // (in colour the outline lifts under each node, as a brush does; drawn in ink alone, a culm's edges run on whole,
   // two long lines, and a few nodes ticked: never a chain of dashes)
@@ -416,6 +438,8 @@ void main() {
   // (its two edges aren't alike, as a brush draws a culm: the side away from the sun the one firm contour, the lit side a
   // fainter counter-line; each lifting here and there along its length (the lit side often), so the eye completes it)
   float lit = smoothstep(-.15, .15, dot(N.xz, normalize(uSun.xz + 1e-4)));
+  // (with the sweep, the culm's firm side is the sweep's own edge: no line drawn along it)
+  allow *= 1. - .9 * sweepSide * step(.5, uBrush);
   float lift = smoothstep(.48, .7, vn(vec2(vY * .2 + vI.y * 7., 1.7 + lit * 3.6)));
   allow *= mix(1., mix(.36, .08, uHand.x), lit) * (1. - lift * mix(.45, .95, lit) * (.6 + .6 * uHand.x) * (1. - vHero * (1. - lit) * .8));
   // (its ink: as the ink thins, left out a culm at a time by its own pick (a near one held longest), so the drawing
@@ -1262,6 +1286,8 @@ export class Renderer {
   private ridge!: { buf: WebGLBuffer; count: number };
   private vao: WebGLVertexArrayObject;
   readonly clean: boolean; readonly marks: number;
+  /** a trial: culms laid as a loaded brush lays them (`?brush=sweep`), in place of their dry brush and firm contour */
+  readonly brush: number;
   /** `?strokes=all`: every stroke the land has, at full weight, none left out (to see what's laid) */
   allStrokes = false;
   /** `?culms=0`: the land alone, no culms or sprays (the gates' hard test: does the mountain and its path read?) */
@@ -1337,10 +1363,10 @@ export class Renderer {
   }
   get sunDir() { return this.sky.lightDir; }
 
-  constructor(private canvas: HTMLCanvasElement, ridges: { x: number; z: number; y: number }[][], opts: { clean?: boolean; marks?: boolean; shadows?: boolean } = {}) {
+  constructor(private canvas: HTMLCanvasElement, ridges: { x: number; z: number; y: number }[][], opts: { clean?: boolean; marks?: boolean; shadows?: boolean; brush?: boolean } = {}) {
     const gl = canvas.getContext('webgl2', { antialias: false, preserveDrawingBuffer: true });
     if (!gl) throw new Error('WebGL2 is needed');
-    this.gl = gl; this.clean = !!opts.clean; this.marks = opts.marks === false ? 0 : 1;
+    this.gl = gl; this.clean = !!opts.clean; this.marks = opts.marks === false ? 0 : 1; this.brush = opts.brush ? 1 : 0;
     this.vao = gl.createVertexArray()!;
     const P = (n: string, vs: string, fs: string) => { this.progs[n] = this.program(vs, fs); };
     P('dbg', DBG_VS, DBG_FS);
@@ -1461,7 +1487,7 @@ export class Renderer {
     const gl = this.gl, u = (n: string) => gl.getUniformLocation(p, n);
     gl.uniformMatrix4fv(u('uVP'), false, vp); gl.uniform3fv(u('uEye'), f.eye); gl.uniform1f(u('uTime'), f.t); gl.uniform3fv(u('uSun'), this.sunDir);
     gl.uniform4fv(u('uGust'), f.gust); gl.uniform4fv(u('uStir'), this.stir); { const a = new Float32Array(32); this.stirs.slice(0, 8).forEach((q, k) => a.set(q, k * 4)); for (let k = this.stirs.length; k < 8; k++) a.set([0, 0, 0, 1], k * 4); gl.uniform4fv(u('uStirs'), a); } gl.uniform1f(u('uClay'), this.clay ? 1 : 0); gl.uniform3fv(u('uSunC'), this.sky.lightC); gl.uniform3fv(u('uSky'), this.sky.skyC); gl.uniform1f(u('uExpo'), this.sky.expo); gl.uniform3fv(u('uHaze'), this.sky.haze); gl.uniform3fv(u('uVeil'), this.sky.veil); gl.uniform1f(u('uMist'), this.sky.mist); gl.uniform3fv(u('uTone'), this.sky.ridge); gl.uniform1f(u('uOpen'), 0);
-    gl.uniform2fv(u('uPick'), this.pick); gl.uniform1f(u('uMarks'), this.marks); gl.uniform3fv(u('uRight'), right);
+    gl.uniform2fv(u('uPick'), this.pick); gl.uniform1f(u('uMarks'), this.marks); gl.uniform1f(u('uBrush'), this.brush); gl.uniform3fv(u('uRight'), right);
     const d = this.dials;
     gl.uniform4fv(u('uRch'), [...this.reaches, 0.12]); gl.uniform4fv(u('uFoc'), [this.focus, d.depth, d.distance, d.near]);
     gl.uniform4fv(u('uColK'), [d.culms, d.leaves, d.terrain, 0]); gl.uniform4fv(u('uLitK'), [d.shade, d.cast, d.hollow, d.landlight]);

@@ -1543,6 +1543,44 @@ The room still draws its limbs in parts, as deposits.
 ![Deposits, fitted](splats/v-limb-fitted.jpg)
 ![The teacher's ink on the surface](splats/v-limb-baked.jpg)
 
+### The sweep on a bamboo culm (a first slice: Bamboo, `?brush=sweep`)
+
+Bamboo is the better place for this than the glasshouse: it already has solid things that hide what's behind them,
+light, wind, and a list of what deserves a mark. And the last section says how a mark on a thing with a surface
+should be drawn: on the surface. So the first slice isn't deposits at all. The sweep goes into Bamboo's own culm
+shader (`client/bamboo/render.ts`), which already works in the coordinates it needs: how far up the culm, how far
+along the internode, how far round, and each culm's own number. Behind a flag; without it Bamboo draws exactly as it
+did.
+
+- **A pull an internode.** Pressed where it's set down above a node, running dry toward the next, lifting before
+  it. Each internode has its own load: some dark, some nearly dry.
+- **On one side as the eye sees it**: the side away from the sun, a band as wide as the pressure.
+- **Bristles round the culm**, each running dry in its own stretches, sooner far off; thin ink in specks.
+- **It takes the place of two things**: the dry-brush shading (which went with the colour and stopped where the
+  colour did), and the firm contour line on the shaded side. The sweep's own edge is that side now. The lit side
+  keeps its hairline; the node ticks stay.
+- **It bends with the culm and is hidden by what's in front of it** without anything being added: it's drawn on
+  the culm.
+
+![Bamboo's contour run: as it is, culms as a sweep; in ink alone, as it is, culms as a sweep](splats/b-bamboo-brush-run.jpg)
+
+![A giant culm close to, the same four ways](splats/b-bamboo-brush-close.jpg)
+
+Four of Bamboo's pinned scenes, each as its board and in ink alone, with and without (`devtools/bamboo-brush.mjs`):
+
+- **In ink alone, at the middle distance, the grove stops being a thicket of outlines.** As it is, every culm is two
+  thin lines and the stand reads as a fence. As a sweep, a culm is a column of pulls with paper beside it, heavier
+  near, broken far off: stems with a body and a side.
+- **Close to, it's a loaded stroke with dry edges**, where the ink-only culm was an outline and a few ticks.
+- **Over the colour it's a darker passage down one side**, at half strength: the celadon body stays.
+- **What's wrong with it.** The pulls are too alike: an internode after an internode at the same rhythm, which a
+  hand wouldn't do. It hasn't been read against any teacher: its numbers are by eye. Far culms become dashes, not
+  yet "a few nodes and a stretch of stroke". Nothing here is judged in motion yet, or timed on a phone.
+
+This is one of the four things the first comparison needs (a near culm, an overhead spray, a cut bank, a far
+stand). The other three aren't started. The far stand and the canopy's masses are where deposits would be tried:
+tone that sits in the air, handing over to drawn culms and leaves as they come near.
+
 ### One frond cluster, restored
 
 Taught by tone, the room's fronds faded almost out. That was the objective's doing: the teacher's leaves are where
