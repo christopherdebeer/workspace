@@ -13,46 +13,71 @@
  *
  * Frozen: nothing moves unless the page asks (a mark's `sway`), and the water is still (its mirror is the renderer's).
  */
-import { strokeMark, washMark, blobMark, paramRange, SP, KN, RESID, type Mark, type V } from './marks';
+import { strokeMark, washMark, blobMark, paramRange, keyMarks, spine, knots, SP, KN, RESID, type Mark, type V } from './marks';
 import { canopyPatch, OLIVE, type Level } from './canopy';
 
 /** fitted styles, by role: a stroke's or a wash's parameters */
 export interface Styles { root?: number[]; strand?: number[]; dabs?: number[]; veil?: number[]; wash?: number[] }
-export interface Room { marks: Mark[]; route: V[]; views: Record<string, { s: number; at: V }>; regions: Record<string, number> }
+export interface Room { marks: Mark[]; route: V[]; views: Record<string, { s: number; at: V }>; regions: Record<string, number>;
+  /** its level solids (the deck, the boardwalk, the stones' tops) as triangles: what `occluder` starts from */
+  solids: number[] }
 /**
  * What a mark is, for teaching: marks of one role share a style. (A trunk, an arch, a lesser limb; a strand, its dabs,
  * a canopy's wash; mist; a plank, a post, an edge; a stone's rim, far side, wash and waterline; the veil; a thin line
  * of the far bridge or the house; the gesture; a leaf; the rag.)
  */
 export function roleOf(name = ''): string {
+  const last = name.slice(name.lastIndexOf('/') + 1);
   if (name.startsWith('willow/trunk')) return 'trunk'; if (name.startsWith('tunnel/arch')) return 'arch';
   if (name.startsWith('willow/') || name.startsWith('tunnel/root')) return 'limb';
-  if (name.startsWith('canopy/strand')) return 'strand'; if (name.startsWith('canopy/dabs')) return 'dabs'; if (name === 'canopy/wash') return 'canopy wash';
-  if (name === 'tunnel/mist' || name === 'pool/veil mist' || name === 'house/far canopy') return 'mist';
-  if (name.endsWith('/plank')) return 'plank'; if (name.endsWith('post') && !name.startsWith('pool/bridge')) return 'post';
-  if (name.endsWith('/edge') || name === 'canopy/deck edge' || name === 'canopy/rail') return 'edge';
+  if (/^strand \d+$/.test(last)) return 'strand'; if (/^dabs \d+$/.test(last)) return 'dabs';
   if (name.startsWith('pool/stone')) return name.endsWith('rim') ? 'stone rim' : name.endsWith('far') ? 'stone far' : name.endsWith('wash') ? 'stone wash' : 'waterline';
+  if (last === 'wash') return 'canopy wash';
+  if (name === 'tunnel/mist' || name === 'pool/veil mist' || name === 'house/far canopy') return 'mist';
+  if (last === 'plank') return 'plank'; if (last.endsWith('post') && !name.startsWith('pool/bridge')) return 'post';
+  if (last === 'edge' || name === 'canopy/deck edge' || name === 'canopy/rail') return 'edge';
   if (/^pool\/veil \d/.test(name)) return 'veil'; if (name.startsWith('pool/gesture')) return 'gesture'; if (name === 'house/leaf') return 'leaf'; if (name === 'canopy/rag') return 'rag';
   return 'line';
 }
 /**
- * What the room was taught from drawn views (devtools/splats-room-fit.mjs), over its marks as the scene lays them:
+ * What the room was taught from drawn views (devtools/splats-room-fit.mjs), kept by role and by each mark's key (so
+ * adding a mark to the scene moves nothing onto another):
  * - `roles`: for each role, an offset to every parameter of every mark of that role (a style, shared);
- * - `gains`: for each mark in order, its own weight: a stroke's ink, width and dryness; a wash's tone and size;
- * - `resid`: for each mark in order, its deposits' own residuals (as the mark keeps them).
+ * - `gains`: a mark's own weight: a stroke's ink, width and dryness; a wash's tone and size;
+ * - `resid`: a mark's deposits' own residuals (as the mark keeps them).
  */
-export interface Taught { roles: Record<string, number[]>; gains?: number[][]; resid?: Array<number[] | null>; note?: string }
+export interface Taught { roles: Record<string, number[]>; gains?: Record<string, number[]>; resid?: Record<string, number[]>; note?: string }
 export function applyTaught(marks: Mark[], T: Taught): Mark[] {
-  marks.forEach((m, i) => {
-    const off = T.roles[roleOf(m.name)], g = T.gains?.[i], stroke = m.kind === 'stroke';
+  for (const m of marks) {
+    const off = T.roles[m.role ?? roleOf(m.name)], g = T.gains?.[m.key ?? ''], stroke = m.kind === 'stroke';
     for (let j = 0; j < m.params.length; j++) {
       let v = m.params[j] + (off?.[j] ?? 0);
       if (g) { if (stroke) { if (j < SP.width) v += g[0]; else if (j < SP.u0) v += g[1]; else if (j >= SP.dry && j < SP.drySide) v += g[2]; } else v += j < 9 ? g[0] : g[1]; }
       const [lo, hi] = paramRange(m, j); m.params[j] = Math.max(lo, Math.min(hi, v));
     }
-    const r = T.resid?.[i]; if (r && r.length === m.count * RESID) m.resid = r.slice();
-  });
+    const r = T.resid?.[m.key ?? '']; if (r && r.length === m.count * RESID) m.resid = r.slice();
+  }
   return marks;
+}
+/**
+ * What hides what: the room's solids as triangles, for the renderer's depth and the fitter's. A drawing made only of
+ * marks still needs its unpainted interiors to conceal what's behind them: the deck, the boardwalk and the stones
+ * (level, just under their marks), and each limb as a tube just inside its deposits, as wide as the limb is drawn now.
+ */
+export function occluder(room: Room): Float32Array {
+  const tris: number[] = [...room.solids], SIDES = 8;
+  for (const m of room.marks) {
+    if (m.normal !== 'tube') continue;
+    const S = spine(m), w0 = m.width ?? 0.1, n = S.pts.length, ring = (i: number): V[] => {
+      const a = S.pts[Math.max(0, i - 1)], b = S.pts[Math.min(n - 1, i + 1)], t: V = [b[0] - a[0], b[1] - a[1], b[2] - a[2]], tl = Math.hypot(t[0], t[1], t[2]) || 1; t[0] /= tl; t[1] /= tl; t[2] /= tl;
+      const up: V = Math.abs(t[1]) < 0.95 ? [0, 1, 0] : [1, 0, 0], d = up[0] * t[0] + up[1] * t[1] + up[2] * t[2], N: V = [up[0] - t[0] * d, up[1] - t[1] * d, up[2] - t[2] * d], nl = Math.hypot(N[0], N[1], N[2]) || 1; N[0] /= nl; N[1] /= nl; N[2] /= nl;
+      const B: V = [t[1] * N[2] - t[2] * N[1], t[2] * N[0] - t[0] * N[2], t[0] * N[1] - t[1] * N[0]], r = 0.5 * w0 * Math.exp(knots(m.params, SP.width, KN.width, S.cum[i] / S.L)) * 0.86, c = add(S.pts[i], N, knots(m.params, SP.offset, KN.offset, S.cum[i] / S.L) * w0);
+      return Array.from({ length: SIDES }, (_, k) => { const th = (k / SIDES) * Math.PI * 2; return [c[0] + (N[0] * Math.cos(th) + B[0] * Math.sin(th)) * r, c[1] + (N[1] * Math.cos(th) + B[1] * Math.sin(th)) * r, c[2] + (N[2] * Math.cos(th) + B[2] * Math.sin(th)) * r] as V; });
+    };
+    let prev = ring(0);
+    for (let i = 2; i < n; i += 2) { const cur = ring(Math.min(n - 1, i)); for (let k = 0; k < SIDES; k++) { const a = prev[k], b = prev[(k + 1) % SIDES], c = cur[k], d = cur[(k + 1) % SIDES]; tris.push(...a, ...b, ...d, ...a, ...d, ...c); } prev = cur; }
+  }
+  return new Float32Array(tris);
 }
 const add = (a: V, b: V, k = 1): V => [a[0] + b[0] * k, a[1] + b[1] * k, a[2] + b[2] * k];
 const lerp = (a: V, b: V, t: number): V => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
@@ -76,7 +101,8 @@ export function routeAt(s: number, R: V[] = ROUTE): { p: V; dir: V } {
  */
 export function conservatory(styles: Styles = {}, level: Level = 'both', taught?: Taught, light?: V): Room {
   let id = 1, r = 12345; const rnd = () => ((r = (Math.imul(r, 1664525) + 1013904223) >>> 0) / 4294967296);
-  const marks: Mark[] = [], regions: Record<string, number> = {};
+  const marks: Mark[] = [], regions: Record<string, number> = {}, solids: number[] = [];
+  const quad = (a: V, b: V, c: V, d: V) => solids.push(...a, ...b, ...c, ...a, ...c, ...d);
   const count = (name: string, from: number) => { regions[name] = (regions[name] ?? 0) + marks.slice(from).reduce((a, m) => a + m.count, 0); };
   /** a limb: a stroke round a tube, tapering; in the root style if there is one */
   const limb = (ctrl: V[], width: number, name: string, taper = 0.9, cols = 0) => {
@@ -116,7 +142,7 @@ export function conservatory(styles: Styles = {}, level: Level = 'both', taught?
     limb([add(add(P, eT, 3.0 + rnd()), UP, -0.3), add(add(add(P, eT, 1.9), UP, h * 0.72), dT, lean * 0.4), add(add(add(P, eT, 0.2), UP, h), dT, lean), add(add(add(P, eT, -1.7), UP, h * 0.74), dT, lean * 0.6), add(add(P, eT, -2.9 - rnd() * 0.6), UP, -0.3)], w, `tunnel/arch ${i}`, 0.5);
   }
   for (let i = 0; i < 3; i++) limb([[1 - 0.3 * i, 0.5, 0.2 * i], [-1 - i * 0.4, 0.9 + 0.2 * i, 0.6 - i * 0.9], [-2.6 - i * 0.5, 0.35, 1.3 - i * 1.6], [-3.6 - i * 0.6, -0.25, 1.9 - i * 2.2]], 0.3, `tunnel/root ${i}`);
-  for (let i = 0; i < 3; i++) for (const m of canopyPatch((id += 100), { c: add(lerp(T0, T1, 0.2 + i * 0.3), UP, 2.5), r: [1.7, 0.5, 1.7], fronds: 12, seed: 40 + i, reach: 2.6 }, 'fronds')) marks.push(m);
+  for (let i = 0; i < 3; i++) for (const m of canopyPatch(0, { c: add(lerp(T0, T1, 0.2 + i * 0.3), UP, 2.5), r: [1.7, 0.5, 1.7], fronds: 12, seed: 40 + i, reach: 2.6 }, 'fronds', undefined, undefined, `tunnel/strands ${i}`)) marks.push(m);
   { const m = tone(blobMark(id++, [-3.6, 1.5, -4.4], [2.4, 1.5, 2.4], 20, 'tunnel/mist'), -2.0); m.lod = [-1.5, -2.5]; marks.push(m); }
   // (the boardwalk: planks as lines across it, its two edges, posts)
   const walk = (a: number, b: number, name: string) => {
@@ -125,6 +151,8 @@ export function conservatory(styles: Styles = {}, level: Level = 'both', taught?
       flat([add(p, ac, -0.62), p, add(p, ac, 0.62)], k % 3 ? 0.022 : 0.04, 9, k % 3 ? 0.2 : 1.1, `${name}/plank`);
       if (k % 5 === 0) for (const side of [-0.7, 0.7]) line([add(add(p, ac, side), UP, -0.35), add(add(p, ac, side), UP, 0.15), add(add(p, ac, side), UP, 0.5)], 0.07, 7, 1.6, `${name}/post`, 0.1);
     }
+    // (the boardwalk as a solid, just under its planks)
+    { let last: [V, V] | null = null; for (let s = a; s <= b + 1e-6; s += 0.0096) { const { p, dir } = routeAt(Math.min(b, s)), ac: V = [-dir[2], 0, dir[0]], q: [V, V] = [add(add(p, ac, -0.64), UP, -0.02), add(add(p, ac, 0.64), UP, -0.02)]; if (last) quad(last[0], last[1], q[1], q[0]); last = q; } }
     for (const side of [-0.64, 0.64]) { const pts: V[] = []; for (let s = a; s <= b + 1e-6; s += (b - a) / 14) { const { p, dir } = routeAt(s); pts.push(add(p, [-dir[2], 0, dir[0]], side)); } flat(pts, 0.03, 90, 0.9, `${name}/edge`, 1, 0.9); }
   };
   walk(0.0, 4 / 14, 'tunnel/boardwalk');
@@ -136,6 +164,7 @@ export function conservatory(styles: Styles = {}, level: Level = 'both', taught?
     const { p, dir } = routeAt((4.45 + i * 0.56) / 14), ac: V = [-dir[2], 0, dir[0]], c = add(add(p, ac, (i % 2 ? 0.25 : -0.25)), UP, -p[1] + 0.12), rx = 0.5 + rnd() * 0.25, rz = 0.38 + rnd() * 0.2, fell = rnd() * 3, turn = light ? Math.atan2(-light[2], -light[0]) - 1.75 : fell;
     const ring = (a0: number, a1: number, n = 7): V[] => Array.from({ length: n }, (_, k) => { const a = a0 + ((a1 - a0) * k) / (n - 1) + turn; return [c[0] + Math.cos(a) * rx, c[1], c[2] + Math.sin(a) * rz] as V; });
     flat(ring(0.2, 3.3), 0.11, 54, 1.6, `pool/stone ${i} rim`, 3, 0.6); flat(ring(3.5, 6.1), 0.03, 20, 0.2, `pool/stone ${i} far`, 1, 0.8);
+    for (let k = 0; k < 12; k++) { const a0 = (k / 12) * Math.PI * 2, a1 = ((k + 1) / 12) * Math.PI * 2; solids.push(c[0], c[1] - 0.02, c[2], c[0] + Math.cos(a0) * rx, c[1] - 0.02, c[2] + Math.sin(a0) * rz, c[0] + Math.cos(a1) * rx, c[1] - 0.02, c[2] + Math.sin(a1) * rz); }
     const poly = ring(0, 5.6, 9); marks.push(tone(washMark(id++, poly.map((q, k) => [c, q, poly[(k + 1) % poly.length]]), UP, 14, `pool/stone ${i} wash`), -1.3));
     flat([add(c, [-rx * 0.9, -0.115, rz * 1.15]), add(c, [0, -0.115, rz * 1.3]), add(c, [rx * 0.9, -0.115, rz * 1.15])], 0.02, 8, -0.4, `pool/stone ${i} waterline`);
   }
@@ -149,18 +178,19 @@ export function conservatory(styles: Styles = {}, level: Level = 'both', taught?
   { const g: V[] = [[3.6, 1.5, -2.6], [4.0, 1.85, -2.4], [4.5, 1.6, -2.1], [5.0, 1.35, -2.3], [5.5, 1.6, -2.6], [6.0, 1.3, -2.4], [6.3, 1.45, -2.0]];
     const th = line(g, 0.012, 34, 0.2, 'pool/gesture thread', 0); th.params[SP.along] = -1.0; th.sway = 0.03;
     g.forEach((p, k) => { const d = line([add(p, [-0.012, 0, 0]), p, add(p, [0.012, 0, 0])], 0.035, 2, 2.2, `pool/gesture seed ${k}`, 0); d.sway = 0.03; for (let h = 0; h < 6; h++) { const a = (h / 6) * Math.PI * 2 + k, e: V = [Math.cos(a) * 0.09, Math.sin(a) * 0.09, Math.sin(a * 1.7) * 0.03]; const t = line([add(p, e, 0.3), add(p, e, 0.65), add(p, e)], 0.006, 4, -0.2, `pool/gesture hair ${k}`, 0); t.sway = 0.03; } }); }
-  for (const m of canopyPatch((id += 400), { c: [9, 3.7, -4], r: [1.7, 1.0, 1.7], fronds: 50, seed: 7, reach: 1.2 }, level, undefined, styles.wash)) marks.push(m);
+  for (const m of canopyPatch(0, { c: [9, 3.7, -4], r: [1.7, 1.0, 1.7], fronds: 50, seed: 7, reach: 1.2 }, level, undefined, styles.wash, 'pool/canopy')) marks.push(m);
   count('pool', from);
 
   // ─── the canopy: a deck under hanging fronds, its rail and a rag on it ───
   from = marks.length;
   for (let k = 0; k < 26; k++) { const x = 1.6 + k * 0.31; flat([[x, 0.35, 4.9], [x + 0.02, 0.35, 7.4], [x, 0.35, 9.7]], k % 4 ? 0.02 : 0.035, 22, k % 4 ? 0.1 : 0.9, 'canopy/plank', 1, 0.5); }
+  quad([1.5, 0.33, 4.85], [9.6, 0.33, 4.85], [9.6, 0.33, 9.75], [1.5, 0.33, 9.75]);
   flat([[1.5, 0.35, 4.85], [5.5, 0.35, 4.85], [9.6, 0.35, 4.85]], 0.04, 60, 1.0, 'canopy/deck edge', 1, 0.7); flat([[1.5, 0.35, 9.75], [5.5, 0.35, 9.75], [9.6, 0.35, 9.75]], 0.04, 60, 1.0, 'canopy/deck edge', 1, 0.7);
   for (let k = 0; k <= 5; k++) { const x = 1.6 + k * 1.6; line([[x, 0.3, 9.8], [x, 0.9, 9.8], [x, 1.4, 9.8]], 0.08, 9, 1.7, 'canopy/rail post', 0.1); }
   line([[1.5, 1.38, 9.8], [5.5, 1.42, 9.8], [9.7, 1.38, 9.8]], 0.05, 80, 1.2, 'canopy/rail', 0.9);
   { const o: V = [4.9, 0.95, 9.82], rag = washMark(id++, [[o, [4.1, 1.36, 9.82], [5.7, 1.36, 9.82]], [o, [5.7, 1.36, 9.82], [5.5, 0.55, 9.82]], [o, [5.5, 0.55, 9.82], [4.6, 0.7, 9.82]], [o, [4.6, 0.7, 9.82], [4.1, 1.36, 9.82]]], [0, 0, -1], 18, 'canopy/rag'); marks.push(tone(rag, -1.9)); }
   const patches: Array<[V, number]> = [[[3.5, 3.6, 7.5], 80], [[6, 3.5, 6.2], 80], [[1.2, 3.7, 5.6], 70], [[-3.2, 3.8, 6.4], 70], [[7.6, 3.4, 8.6], 60], [[-7, 3.8, -3.4], 45]];
-  patches.forEach(([c, n], k) => { for (const m of canopyPatch((id += 400), { c, r: [1.8, 1.1, 1.8], fronds: n, seed: 20 + k, reach: 1.25 }, level, undefined, styles.wash)) marks.push(m); });
+  patches.forEach(([c, n], k) => { for (const m of canopyPatch(0, { c, r: [1.8, 1.1, 1.8], fronds: n, seed: 20 + k, reach: 1.25 }, level, undefined, styles.wash, `canopy/patch ${k}`)) marks.push(m); });
   walk(12 / 14, 1, 'canopy/boardwalk');
   count('canopy', from);
 
@@ -173,7 +203,8 @@ export function conservatory(styles: Styles = {}, level: Level = 'both', taught?
   for (let k = 0; k < 16; k++) { const x = -9 + rnd() * 19, z = -9 + rnd() * 17, a = rnd() * 3; const m = flat([[x, 0.004, z], [x + Math.cos(a) * 0.09, 0.004, z + Math.sin(a) * 0.09]], 0.035, 2, 0.6, 'house/leaf', 1, 0); m.colour = OLIVE; }
   count('house', from);
 
-  if (styles.strand || styles.dabs) for (const m of marks) { if (styles.strand && m.name?.startsWith('canopy/strand')) { const lod = m.lod; m.params = styles.strand.slice(); m.lod = lod; } }
+  if (styles.strand || styles.dabs) for (const m of marks) { if (styles.strand && /\/strand \d+$/.test(m.name ?? '')) { const lod = m.lod; m.params = styles.strand.slice(); m.lod = lod; } }
+  keyMarks(marks, roleOf);
   if (taught) applyTaught(marks, taught);
-  return { marks, route: ROUTE, regions, views: { tunnel: { s: 1.15 / 14, at: [-4.2, 1.7, -3.6] }, pool: { s: 4.2 / 14, at: [3, 1.8, -2.5] }, canopy: { s: 11.3 / 14, at: [0.5, 2.4, -3] }, 'between tunnel and pool': { s: 4.5 / 14, at: [4, 1.4, -4] }, 'between pool and canopy': { s: 9.2 / 14, at: [4.5, 2.4, 7.5] }, 'between canopy and tunnel': { s: 13.4 / 14, at: [-7.5, 1.8, 2] } } };
+  return { marks, route: ROUTE, regions, solids, views: { tunnel: { s: 1.15 / 14, at: [-4.2, 1.7, -3.6] }, pool: { s: 4.2 / 14, at: [3, 1.8, -2.5] }, canopy: { s: 11.3 / 14, at: [0.5, 2.4, -3] }, 'between tunnel and pool': { s: 4.5 / 14, at: [4, 1.4, -4] }, 'between pool and canopy': { s: 9.2 / 14, at: [4.5, 2.4, 7.5] }, 'between canopy and tunnel': { s: 13.4 / 14, at: [-7.5, 1.8, 2] } } };
 }

@@ -31,7 +31,7 @@ import { benchScene, PRESSURES } from './bench';
 import { MarksScene, WAYS, BRUSHED, type MarksFile } from './marksscene';
 import { canopyPatch, WALK, type Level } from './canopy';
 import { marksToSplats } from './marks';
-import { conservatory, routeAt, EYE, WATER, type Room, type Styles, type Taught } from './conservatory';
+import { conservatory, occluder, routeAt, EYE, WATER, type Room, type Styles, type Taught } from './conservatory';
 import { penScene, type PenScene } from './penscene';
 import { paint as autographPaint } from '../autograph/ink';
 import type { Editor, EditItem, Snapshot } from './edit';
@@ -85,7 +85,7 @@ function show(s: Splats, name: string, u: 1 | -1) {
   if (name !== 'marks') { marksS = null; marksSel = -1; syncMarks(); }
   if (name !== 'walk') { walkS = null; syncWalk(); }
   if (name !== 'room') { roomS = null; syncRoom(); }
-  if (name !== 'stone' && name !== 'brushes' && name !== 'mist' && name !== 'bench' && name !== 'composed' && name !== 'pen' && name !== 'field') R.setOccluder(null);
+  if (name !== 'stone' && name !== 'brushes' && name !== 'mist' && name !== 'bench' && name !== 'composed' && name !== 'pen' && name !== 'field' && name !== 'room') R.setOccluder(null);
   ranks = s.rank ? Float32Array.from(s.rank).sort() : null;
   document.documentElement.classList.toggle('paper', (inkOn && !!s.mark && !['stone', 'brushes', 'bench', 'composed', 'pen', 'mist'].includes(name)) || name === 'stone' || name === 'brushes' || name === 'bench' || name === 'composed' || name === 'pen' || name === 'field' || name === 'marks' || name === 'walk' || name === 'room');
   const b = bounds(s);
@@ -411,7 +411,7 @@ async function openRoom(mode: RoomMode = roomS?.mode ?? (qs.get('style') as Room
   const light = roomS ? roomS.light : qs.has('light') ? Number(qs.get('light')) : null;
   const room = conservatory(mode === 'bench' ? roomStyles : {}, 'both', mode === 'taught' ? roomTaught! : undefined, lightFrom(light)), d = marksToSplats(room.marks);
   const keep = roomS ? { s: roomS.s, auto: roomS.auto, mirror: roomS.mirror, moving: roomS.moving, look: roomS.look } : { s: room.views[qs.get('view') ?? '']?.s ?? Number(qs.get('s') ?? room.views.tunnel.s), auto: qs.has('auto') ? performance.now() : null, mirror: qs.get('mirror') !== '0', moving: qs.has('moving'), look: [0, 0] as [number, number] };
-  show(d, 'room', 1);
+  show(d, 'room', 1); R.setOccluder(occluder(room));
   roomS = { room, mode, light, ...keep, n: d.n, yaw0: 0, pitch0: 0 }; cam.fov = (55 * Math.PI) / 180;
   const v = room.views[qs.get('view') ?? '']; roomPlace(true, v && !keep.auto ? v.at : undefined); home = { ...cam, target: [...cam.target] as [number, number, number] }; syncRoom();
 }
@@ -422,7 +422,7 @@ let roomRelayAt = 0, roomRelayDue = false;
 function roomRelay() {
   if (!roomS) return;
   const room = conservatory(roomS.mode === 'bench' ? roomStyles ?? {} : {}, 'both', roomS.mode === 'taught' ? roomTaught! : undefined, lightFrom(roomS.light)), d = marksToSplats(room.marks);
-  roomS.room = room; roomS.n = d.n; scene = d; R.load(d); sorter.data(d); lastDir = null; roomRelayAt = performance.now(); roomRelayDue = false;
+  roomS.room = room; roomS.n = d.n; scene = d; R.load(d); R.setOccluder(occluder(room)); sorter.data(d); lastDir = null; roomRelayAt = performance.now(); roomRelayDue = false;
 }
 /** the camera where the walk round the room has got to: the eye over the route, looking the way it's heading (or at a
  * point asked for); a drag looks round from there and is kept as the walk goes on */
@@ -1037,7 +1037,7 @@ function frame() {
   // objects' tone) all open, so the teacher's decisions alone say what shows)
   let gv = gv0;
   if (gv0 && composed && (policyMode === 'taught' || policyOverride)) { gv = Float32Array.from(gv0); for (const g of (brushes as ComposedScene).gates) gv[g.index] = 1; }
-  drawNow = () => R.draw(view, proj, [fy, fy], { size, mode, bg: mist ? [0.13, 0.145, 0.165] : stone || brushes || bench || penS || marksS || walkS || roomS || sceneName === 'field' || (captured && inkOn) ? [0.937, 0.906, 0.847] : theme(), detail, thin, share, features: gv ?? features, eye: pos, time: roomS?.moving || (walkS && qs.has('moving')) ? (performance.now() / 1000) % 3600 + 1 : 0, mirror: roomS?.mirror ? [WATER, 0.5] : undefined, near: roomS || walkS ? [0.25, 0.7] : undefined, repeat: perfLoad, occlude, only, light: mist ? Math.max(0, LIGHTS.indexOf(light) - 1) : 0, sun: sunDir(sunAz, sunEl), diff: mist ? diff : false, halo: composed && compose && haloOn ? haloPx * dpr : 0, nf: [near, cam.dist * 100] });
+  drawNow = () => R.draw(view, proj, [fy, fy], { size, mode, bg: mist ? [0.13, 0.145, 0.165] : stone || brushes || bench || penS || marksS || walkS || roomS || sceneName === 'field' || (captured && inkOn) ? [0.937, 0.906, 0.847] : theme(), detail, thin, share, features: gv ?? features, eye: pos, time: roomS?.moving || (walkS && qs.has('moving')) ? (performance.now() / 1000) % 3600 + 1 : 0, mirror: roomS ? [WATER, roomS.mirror ? 0.5 : 0] : undefined, near: roomS || walkS ? [0.25, 0.7] : undefined, repeat: perfLoad, occlude, only, light: mist ? Math.max(0, LIGHTS.indexOf(light) - 1) : 0, sun: sunDir(sunAz, sunEl), diff: mist ? diff : false, halo: composed && compose && haloOn ? haloPx * dpr : 0, nf: [near, cam.dist * 100] });
   applyPolicy(dt, pos, fwd);
   // (while it measures: each frame waited for, and how long drawing it took, so a frame's cost shows whatever the
   // display's rate)

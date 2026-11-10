@@ -38,6 +38,9 @@ export type V = [number, number, number];
 export interface Deposit { p: V; t: V; n: V; s1: number; s2: number; thin: number; turn: number; logit: number }
 export interface Mark {
   id: number; kind: 'stroke' | 'wash'; name?: string;
+  /** what it is in its scene, said once: a key no other mark has (what's taught to it is kept by this, and its id is
+   * made from it, so adding a mark elsewhere changes neither); and its role (marks of a role share a style) */
+  key?: string; role?: string;
   /** a stroke: the points its spine runs through; the surface's normal there (one for all, or one a point; none: a
    * stroke in open space, round in section; 'tube': its rows laid round a tube about its spine, its width the tube's,
    * so it's a band of the same weight from wherever it's seen: a limb); its base width (scene units); its rows */
@@ -70,10 +73,28 @@ export const INK: [number, number, number] = [36, 31, 27];
 const add = (a: V, b: V, k = 1): V => [a[0] + b[0] * k, a[1] + b[1] * k, a[2] + b[2] * k], sub = (a: V, b: V): V => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
 const cross = (a: V, b: V): V => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]], dot = (a: V, b: V) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 const norm = (a: V): V => { const l = Math.hypot(a[0], a[1], a[2]) || 1; return [a[0] / l, a[1] / l, a[2] / l]; };
-const knots = (k: number[], o: number, n: number, u: number) => { const x = Math.max(0, Math.min(1, u)) * (n - 1), i = Math.min(n - 2, Math.floor(x)), f = x - i; return k[o + i] * (1 - f) + k[o + i + 1] * f; };
+export const knots = (k: number[], o: number, n: number, u: number) => { const x = Math.max(0, Math.min(1, u)) * (n - 1), i = Math.min(n - 2, Math.floor(x)), f = x - i; return k[o + i] * (1 - f) + k[o + i + 1] * f; };
 const softplus = (x: number) => (x > 30 ? x : Math.log1p(Math.exp(x)));
 const hash = (a: number, b: number, c: number) => { let h = (Math.imul(a | 0, 374761393) + Math.imul(b | 0, 668265263) + Math.imul(c | 0, 2147483647)) | 0; h = Math.imul(h ^ (h >>> 13), 1274126177); return ((h ^ (h >>> 16)) >>> 0) / 4294967296; };
 
+/** an id from a key (a 32-bit hash of it) */
+export function keyId(key: string): number { let h = 2166136261; for (let i = 0; i < key.length; i++) { h ^= key.charCodeAt(i); h = Math.imul(h, 16777619); } return (h >>> 0) || 1; }
+/**
+ * Marks given their keys, ids and roles, once a scene has laid them all: a mark's key is its name, with its place among
+ * the marks of that name where there are several (`tunnel/boardwalk/plank #12`); its id is made from its key (no two the
+ * same); its role comes from `roleOf`.
+ */
+export function keyMarks(marks: Mark[], roleOf: (name: string) => string): Mark[] {
+  const many = new Map<string, number>(), at = new Map<string, number>(), ids = new Set<number>();
+  for (const m of marks) many.set(m.name ?? '', (many.get(m.name ?? '') ?? 0) + 1);
+  for (const m of marks) {
+    const n = m.name ?? '', k = at.get(n) ?? 0; at.set(n, k + 1);
+    m.key = many.get(n)! > 1 ? `${n} #${k}` : n; m.role = roleOf(n);
+    let id = keyId(m.key), salt = 0; while (ids.has(id)) id = keyId(`${m.key}~${++salt}`); ids.add(id); m.id = id;
+    delete (m as Mark & { _pts?: unknown })._pts;
+  }
+  return marks;
+}
 /** a parameter's range (a stroke's by its place, a wash's tones and size) */
 export function paramRange(m: Mark, j: number): [number, number] {
   if (m.kind !== 'stroke') return j < 9 ? [-7, 3] : [-0.6, 0.9];

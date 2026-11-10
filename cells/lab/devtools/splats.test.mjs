@@ -355,6 +355,18 @@ ok('parse() tells a .splat by its bytes', F.parse(F.encodeSplat(g)).n === g.n);
   const fromRight = limb([1, 0, 0]), fromLeft = limb([-1, 0, 0]);
   ok(`light: lit from +x, a limb's ink is on its -x side (${side(fromRight, -1).toFixed(2)} against ${side(fromRight, 1).toFixed(2)}); from -x, on its +x side`, side(fromRight, -1) > side(fromRight, 1) + 2 && side(fromLeft, 1) > side(fromLeft, -1) + 2);
 }
+// (identity: no two of the room's marks share a key or an id; a mark added to the scene changes no other mark's; and
+// what hides what: the room's solids are triangles, each limb a tube inside its own deposits)
+{
+  const MK = await load('../client/splats/marks.ts'), CO = await load('../client/splats/conservatory.ts');
+  const room = CO.conservatory({}), keys = new Set(room.marks.map((m) => m.key)), ids = new Set(room.marks.map((m) => m.id));
+  const more = [...room.marks.map((m) => ({ ...m })), MK.strokeMark(0, [[0, 0, 0], [1, 0, 0]], undefined, 0.1, 4, 1, 'pool/a new thing')]; MK.keyMarks(more, CO.roleOf);
+  ok(`identity: ${room.marks.length} marks, ${keys.size} keys, ${ids.size} ids; a mark added to the scene leaves every other mark's key and id as they were`, keys.size === room.marks.length && ids.size === room.marks.length && room.marks.every((m, i) => more[i].key === m.key && more[i].id === m.id));
+  const occ = CO.occluder(room), tubes = room.marks.filter((m) => m.normal === 'tube'); let inside = 0, n = 0;
+  // (a limb's deposits lie outside its tube: none nearer its spine than the tube's wall)
+  for (const m of tubes.slice(0, 6)) { const S = MK.spine(m); for (const d of MK.layout(m)) { let best = Infinity, bu = 0; S.pts.forEach((p, i) => { const e = Math.hypot(d.p[0] - p[0], d.p[1] - p[1], d.p[2] - p[2]); if (e < best) { best = e; bu = S.cum[i] / S.L; } }); const r = 0.5 * m.width * Math.exp(MK.knots(m.params, MK.SP.width, MK.KN.width, bu)); n++; if (best < r * 0.86) inside++; } }
+  ok(`occlusion: ${occ.length / 9} triangles hide what's behind the deck, the boardwalk, the stones and ${tubes.length} limbs; ${inside} of ${n} limb deposits tested lie inside their own tube`, occ.length % 9 === 0 && occ.length / 9 > 3000 && occ.every(Number.isFinite) && inside < n * 0.02);
+}
 // (the room taught: every mark has a role; what was taught from the drawn views fits the room as the scene lays it (a
 // weight a mark, an offset a role's parameter), moves its marks, and keeps every parameter in its range)
 {
@@ -362,9 +374,10 @@ ok('parse() tells a .splat by its bytes', F.parse(F.encodeSplat(g)).n === g.n);
   const f = new URL('../static/splats/room-taught.json', import.meta.url);
   if (fs.existsSync(f)) {
     const T = JSON.parse(fs.readFileSync(f, 'utf8')), plain = CO.conservatory({}), taught = CO.conservatory({}, 'both', T);
-    const roles = new Set(plain.marks.map((m) => CO.roleOf(m.name))); let moved = 0, out = 0;
+    const roles = new Set(plain.marks.map((m) => m.role)); let moved = 0, out = 0;
     taught.marks.forEach((m, i) => { if (m.params.some((v, j) => Math.abs(v - plain.marks[i].params[j]) > 1e-6)) moved++; m.params.forEach((v, j) => { const [lo, hi] = MK.paramRange(m, j); if (v < lo - 1e-9 || v > hi + 1e-9) out++; }); });
-    ok(`room, taught: ${roles.size} roles, each with a style; a weight for each of ${T.gains.length} marks; ${moved} marks drawn differently, every parameter in range`, T.gains.length === plain.marks.length && [...roles].every((r) => T.roles[r]) && moved > plain.marks.length * 0.9 && out === 0);
+    const keys = new Set(plain.marks.map((m) => m.key)), stray = Object.keys(T.gains ?? {}).filter((k) => !keys.has(k)).length;
+    ok(`room, taught: ${roles.size} roles, each with a style; ${Object.keys(T.gains ?? {}).length} marks with a weight of their own, each by a key the room has; ${moved} marks drawn differently, every parameter in range`, stray === 0 && [...roles].every((r) => T.roles[r]) && moved > plain.marks.length * 0.9 && out === 0);
   }
 }
 if (R) {

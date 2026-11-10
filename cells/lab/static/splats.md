@@ -1161,10 +1161,54 @@ What this does and doesn't show:
   its fronds are longer strands with larger leaves. Re-weighting marks whose spines are fixed can't reach either: the
   first is the organised stroke's softness; the second is geometry the scene would have to change.
 
-The page draws the room as taught by default (a style a role and each mark's weight: 20 KB); `&style=bench` and
+(These numbers are from before the room's solids hid anything: see the next section.)
+
+The page draws the room as taught by default (a style a role and each mark's weight); `&style=bench` and
 `&style=plain` are the other two.
 
 ![A reserved view, as taught](splats/v-room-reserved.jpg)
+
+### Identity and occlusion, and what they change
+
+Three things a review of the room found, fixed before going on:
+
+- **Identity.** 151 ids were each used by two marks (a canopy patch's ids were reused by what was laid after it),
+  183 of 265 names weren't unique, and what was taught was attached to marks by their place in a list. Every mark
+  now has a key no other has (its name, and its place among marks of that name: `tunnel/boardwalk/plank #12`), a
+  role said once, and an id made from its key. What is taught is kept by role and by key. A mark added to the scene
+  changes no other mark's key or id.
+- **Occlusion.** A drawing made only of marks still needs its unpainted interiors to hide what's behind them. The
+  deck, the boardwalk and the stones are now solids just under their marks, and each limb is a tube just inside its
+  own deposits, as wide as the limb is drawn. They are drawn into depth only; the fitter tests against them a pixel
+  at a time, as the renderer does. What's under the water isn't drawn, and the deck hides the water's mirror.
+- **Crispness never reached the limbs**: a tube ignored it, and the room's fitter left it out. That is taken up with
+  the root, below.
+
+![Before, when nothing hid anything; the limbs as solids; the deck hiding the mirror beneath it](splats/b-room-occlusion.jpg)
+
+The room taught again, the same way, with its solids (tone error, mean of three views):
+
+| | on the views taught from | on the reserved views | reserved: ink on bare paper |
+|---|---|---|---|
+| untaught | 63.0 | 35.6 | 79.2 |
+| a style a role | 19.1 | 22.7 | 15.2 |
+| + each mark's weight | 15.3 | 22.9 | 16.3 |
+| + its deposits, bounded | 4.7 | 22.0 | 16.0 |
+| deposits set free | 2.4 | 25.2 | 38.4 |
+
+- **The earlier result was partly the see-through room's.** A style a role still takes most of the gain on the
+  reserved views (35.6 to 22.7) and more freedom still adds nothing there. But freed deposits are no longer much
+  worse (25.2 against 22.7; it was 25.7 against 15.4). Without solids, a deposit bent to suit one view could be
+  seen from the others through whatever stood between; with them, it is mostly hidden. They still put more than
+  twice the ink on bare paper.
+- **Every level is further from the teachers than it was** (reserved: about 22, from 15). Two reasons. The
+  teachers were drawn from underdrawings in which nothing hid anything, so they show limbs behind limbs that the
+  solid room hides. And a limb's ink keeps to its underside, which a solid limb hides from above: from the view
+  between the canopy and the tunnel the nearest arch is almost blank, and that view no longer improves at all (39.3
+  untaught, 39.8 to 42.7 taught).
+- **So the teachers' scores now mix two things**: how the room is drawn, and where the solid room differs from
+  what the teacher was shown. New teachers drawn from the solid room would separate them.
+- **The browser is the fitter's, less closely**: 0.87 to 0.99 of its ink, tone apart by at most 0.17.
 
 ### Air, water, cost
 

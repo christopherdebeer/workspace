@@ -88,7 +88,9 @@ void main() {
   if (u_time > 0.0 && ((d1.w >> 8) & 15u) == 12u) { float sw = texelFetch(u_coef, t + ivec2(2, 0), 0).w; if (sw != 0.0) p += vec3(sin(u_time * 1.3 + p.x * 2.1 + p.z * 1.7), 0.0, cos(u_time * 1.1 + p.x * 1.3 - p.z * 2.3)) * sw; }
   // (the still water's pass: everything above the water drawn again turned over in it, fainter the higher it stands)
   float mirror = 1.0;
-  if (u_mirror.z > 0.5) { if (p.y < u_mirror.x) return; mirror = u_mirror.y * exp(-(p.y - u_mirror.x) / 0.9); p.y = 2.0 * u_mirror.x - p.y; }
+  // (u_mirror.z: 1 the mirror's pass; 2 the scene's own pass where there is water: what's under it isn't drawn)
+  if (u_mirror.z > 1.5) { if (p.y < u_mirror.x - 0.02) return; }
+  else if (u_mirror.z > 0.5) { if (p.y < u_mirror.x) return; mirror = u_mirror.y * exp(-(p.y - u_mirror.x) / 0.9); p.y = 2.0 * u_mirror.x - p.y; }
   vec4 cam = u_view * vec4(p, 1.0);
   vec4 clip = u_proj * cam;
   float bound = 1.2 * clip.w;
@@ -104,7 +106,7 @@ void main() {
   uint kind = (d1.w >> 8) & 15u, support = d2.x & 3u, feature = d2.y;
   if (u_only >= 0 && int(kind) != u_only) return;
   vec3 sn = octDecode(vec2(float((d1.w >> 16) & 255u), float(d1.w >> 24)) / 127.5 - 1.0);
-  if (u_mirror.z > 0.5) sn.y = -sn.y;
+  if (u_mirror.z > 0.5 && u_mirror.z < 1.5) sn.y = -sn.y;
   // (a feature the brush has developed: its own marks brought back by their ranks, as far as it's been brushed)
   // (a feature with its top bit set is a gate: an alternative description shown only as far as the scene's value for it
   // (set each frame from the view); otherwise it's developed by the brush, brought back by rank as far as its value)
@@ -225,7 +227,7 @@ void main() {
   vec2 c01 = unpackHalf2x16(d1.x), c23 = unpackHalf2x16(d1.y), c45 = unpackHalf2x16(d1.z);
   // (the covariance was stored 4× over, for the half floats' sake)
   mat3 S = mat3(c01.x, c01.y, c23.x, c01.y, c23.y, c45.x, c23.x, c45.x, c45.y) * 0.25 * u_size * u_size * gscale * gscale;
-  if (u_mirror.z > 0.5) { S[0][1] = -S[0][1]; S[1][0] = -S[1][0]; S[1][2] = -S[1][2]; S[2][1] = -S[2][1]; }
+  if (u_mirror.z > 0.5 && u_mirror.z < 1.5) { S[0][1] = -S[0][1]; S[1][0] = -S[1][0]; S[1][2] = -S[1][2]; S[2][1] = -S[2][1]; }
   // (the perspective's Jacobian at this point (camera looks down -z), and the camera's rotation)
   float z = -cam.z;
   mat3 J = mat3(u_focal.x / z, 0.0, 0.0, 0.0, u_focal.y / z, 0.0, u_focal.x * cam.x / (z * z), u_focal.y * cam.y / (z * z), 0.0);
@@ -306,7 +308,8 @@ export interface DrawOpts {
   /** how far the brush has developed each feature (0..1, sixteen of them) */
   features?: Float32Array;
   eye?: [number, number, number];
-  /** the time, for fitted marks that sway (0: still); still water at a height, and how strongly it mirrors (0…1) */
+  /** the time, for fitted marks that sway (0: still); still water at a height (nothing under it is drawn), and how
+   * strongly it mirrors (0…1; 0: no mirror) */
   time?: number; mirror?: [number, number];
   /** draw the splats this many times over (a load test: how much more than the scene a device has room for) */
   repeat?: number;
@@ -502,7 +505,7 @@ export class Renderer {
     // (still water: its mirror first, then the scene over it)
     for (let k = 0; k < Math.max(1, opts.repeat ?? 1); k++) {
       if (opts.mirror && opts.mirror[1] > 0) { gl.uniform3f(this.u.u_mirror, opts.mirror[0], opts.mirror[1], 1); gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, this.drawn); }
-      gl.uniform3f(this.u.u_mirror, 0, 0, 0);
+      gl.uniform3f(this.u.u_mirror, opts.mirror ? opts.mirror[0] : 0, 0, opts.mirror ? 2 : 0);
       gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, this.drawn);
     }
     gl.depthMask(true);

@@ -4,7 +4,8 @@
 // Three are taught from (the root tunnel, the open pool, the canopy); the three between them are reserved: never fitted
 // to, only scored on. The room's marks stay where the scene put them (their spines aren't moved); what is taught is how
 // they are drawn, at four levels of freedom, each through the renderer's forward model (render.ts, kind 12, with its
-// hand-over and its letting go at the eye):
+// hand-over, its letting go at the eye, and the room's solids hiding what's behind them: conservatory.ts `occluder`,
+// tested a pixel at a time as the renderer's depth test does; the limbs' tubes follow the widths being taught):
 // - **roles**: an offset to the parameters of every mark of one role (conservatory.ts `roleOf`: every arch, every plank,
 //   every strand…): a style a role, a few hundred numbers for the whole room;
 // - **+ each mark's weight**: three numbers a mark (a stroke's ink, width, dryness; a wash's tone and size);
@@ -31,7 +32,7 @@ const PAPER = [0.937, 0.906, 0.847], INK = [36, 31, 27], kappa = (c) => Math.max
 const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2], cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]], norm = (a) => { const l = Math.hypot(...a) || 1; return a.map((v) => v / l); };
 
 // ─── the room as the scene lays it, plain; its views ───
-const room = C.conservatory({}), marks = room.marks, base = marks.map((m) => m.params.slice()), roles = marks.map((m) => C.roleOf(m.name));
+const room = C.conservatory({}), marks = room.marks, base = marks.map((m) => m.params.slice()), roles = marks.map((m) => m.role);
 const start = []; { let o = 0; for (const m of marks) { start.push(o); o += m.count; } } const N = start[start.length - 1] + marks[marks.length - 1].count;
 const views = Object.entries(room.views).map(([name, v]) => {
   const key = name.replace(/ /g, '-'), p = C.routeAt(v.s).p, E = [p[0], p[1] + C.EYE, p[2]], f = norm([v.at[0] - E[0], v.at[1] - E[1], v.at[2] - E[2]]), r = norm(cross(f, [0, 1, 0])), u = cross(r, f);
@@ -40,9 +41,10 @@ const views = Object.entries(room.views).map(([name, v]) => {
 console.log(`${marks.length} marks, ${N} deposits, ${new Set(roles).size} roles; taught from ${views.filter((v) => v.teach).map((v) => v.name).join(', ')}; reserved: ${views.filter((v) => !v.teach).map((v) => v.name).join(', ')}`);
 
 // ─── what is taught: the roles' offsets, the marks' weights (their residuals are the marks' own) ───
-const T = { roles: Object.fromEntries([...new Set(roles)].map((r) => [r, new Array(marks.find((m, i) => roles[i] === r).params.length).fill(0)])), gains: marks.map(() => [0, 0, 0]) };
+const T = { roles: Object.fromEntries([...new Set(roles)].map((r) => [r, new Array(marks.find((m, i) => roles[i] === r).params.length).fill(0)])), gains: Object.fromEntries(marks.map((m) => [m.key, [0, 0, 0]])) };
+if (new Set(marks.map((m) => m.key)).size !== marks.length || new Set(marks.map((m) => m.id)).size !== marks.length) throw new Error('two marks share a key or an id');
 const apply = () => { marks.forEach((m, i) => (m.params = base[i].slice())); C.applyTaught(marks, T); };
-const lay = () => marks.map((m) => { const k = kappa(m.colour ?? INK); return layout(m).map((d) => ({ ...d, k, lod: m.lod ?? null })); });
+const lay = () => { const occ = C.occluder(room); for (const v of views) v.zb = depthOf(occ, v.cam); return marks.map((m) => { const k = kappa(m.colour ?? INK); return layout(m).map((d) => ({ ...d, k, lod: m.lod ?? null })); }); };
 
 // ─── the forward model, and the loss's slope in each deposit's own numbers ───
 function footprint(d, cam, ax = axes(d)) {
@@ -51,7 +53,22 @@ function footprint(d, cam, ax = axes(d)) {
   const img = (a, s) => { const ar = dot(a, cam.r), au = dot(a, cam.u), af = dot(a, cam.f); return [s * (fy / z) * (ar - (q[0] * af) / z), s * (-fy / z) * (au - (q[1] * af) / z)]; };
   const e1 = img(ax[0], d.s1), e2 = img(ax[1], d.s2), e3 = img(ax[2], d.thin);
   const A = e1[0] * e1[0] + e2[0] * e2[0] + e3[0] * e3[0] + 0.3, B = e1[0] * e1[1] + e2[0] * e2[1] + e3[0] * e3[1], Cc = e1[1] * e1[1] + e2[1] * e2[1] + e3[1] * e3[1] + 0.3, det = A * Cc - B * B;
-  return [sx, sy, Cc / det, -B / det, A / det, 3 * Math.sqrt(Math.max(A, Cc)), Math.sqrt(Math.max(0, ((A - 0.3) * (Cc - 0.3) - B * B) / det)), z];
+  // (and, for a deposit that lies on a surface, its plane in the camera's frame: its depth under each pixel)
+  const nx = dot(d.n, cam.r), ny = dot(d.n, cam.u), nz = dot(d.n, cam.f);
+  return [sx, sy, Cc / det, -B / det, A / det, 3 * Math.sqrt(Math.max(A, Cc)), Math.sqrt(Math.max(0, ((A - 0.3) * (Cc - 0.3) - B * B) / det)), z, nx, ny, nz, nx * q[0] + ny * q[1] + nz * q[2]];
+}
+/** the solids' depth from a view, a pixel at a time */
+function depthOf(tris, cam) {
+  const zb = new Float32Array(W * H).fill(Infinity), toCam = (i) => { const d = [tris[i] - cam.E[0], tris[i + 1] - cam.E[1], tris[i + 2] - cam.E[2]]; return [dot(d, cam.r), dot(d, cam.u), dot(d, cam.f)]; };
+  for (let t = 0; t < tris.length; t += 9) {
+    const q = [toCam(t), toCam(t + 3), toCam(t + 6)]; if (q[0][2] < 0.05 || q[1][2] < 0.05 || q[2][2] < 0.05) continue;
+    const s = q.map((c) => [W / 2 + (fy * c[0]) / c[2], H / 2 - (fy * c[1]) / c[2]]);
+    const x0 = Math.max(0, Math.floor(Math.min(s[0][0], s[1][0], s[2][0]))), x1 = Math.min(W - 1, Math.ceil(Math.max(s[0][0], s[1][0], s[2][0]))), y0 = Math.max(0, Math.floor(Math.min(s[0][1], s[1][1], s[2][1]))), y1 = Math.min(H - 1, Math.ceil(Math.max(s[0][1], s[1][1], s[2][1])));
+    const den = (s[1][1] - s[2][1]) * (s[0][0] - s[2][0]) + (s[2][0] - s[1][0]) * (s[0][1] - s[2][1]); if (Math.abs(den) < 1e-9) continue;
+    // (1/z is what's linear across the screen)
+    for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) { const px = x + 0.5, py = y + 0.5, a = ((s[1][1] - s[2][1]) * (px - s[2][0]) + (s[2][0] - s[1][0]) * (py - s[2][1])) / den, b = ((s[2][1] - s[0][1]) * (px - s[2][0]) + (s[0][0] - s[2][0]) * (py - s[2][1])) / den, c = 1 - a - b; if (a < 0 || b < 0 || c < 0) continue; const z = 1 / (a / q[0][2] + b / q[1][2] + c / q[2][2]); if (z < zb[y * W + x]) zb[y * W + x] = z; }
+  }
+  return zb;
 }
 function nudge(d, j, eps) {
   if (j === 0) return { ...d, s1: d.s1 * Math.exp(eps) };
@@ -72,8 +89,12 @@ function blur(a, r) {
 }
 /** a view of the room: darkness a pixel; with `g`, the loss's slope added into it (six numbers a deposit) */
 function draw(v, D, g) {
-  const cam = v.cam, logT = new Float32Array(W * H), fps = [];
+  const cam = v.cam, logT = new Float32Array(W * H), fps = [], zb = v.zb;
+  // (a deposit's depth under a pixel: its plane's where it lies on a surface, as the renderer gives it; else its own)
+  const hidden = (e, surf, x, y, p) => { const z = e[7]; if (zb[p] === Infinity) return false; if (!surf) return z > zb[p]; const dn = e[8] * ((x + 0.5 - W / 2) / fy) - e[9] * ((y + 0.5 - H / 2) / fy) + e[10]; return (Math.abs(dn) > 0.05 ? Math.max(z - 0.5, Math.min(z + 0.5, e[11] / dn)) : z) > zb[p]; };
   D.forEach((ds, mi) => ds.forEach((d, i) => {
+    // (what's under the water isn't drawn, as the renderer leaves it out)
+    if (d.p[1] < C.WATER - 0.02) return;
     const e = footprint(d, cam); if (!e) return; const z = e[7];
     // (its hand-over by how large things look where it is, and its letting go at the eye, as the renderer's)
     let fac = d.lod ? Math.max(0, Math.min(1, (Math.log2(fy / (z * H)) - d.lod[0]) / (d.lod[1] - d.lod[0]))) : 1; const t = Math.max(0, Math.min(1, (z - 0.25) / 0.45)); fac *= t * t * (3 - 2 * t);
@@ -81,8 +102,9 @@ function draw(v, D, g) {
     const [sx, sy, ia, ib, ic, R, comp] = e; if (sx + R < 0 || sx - R > W || sy + R < 0 || sy - R > H) return;
     const al = a * fac * comp * d.k; if (al < 1 / 255) return;
     const box = [Math.max(0, Math.floor(sx - R)), Math.min(W - 1, Math.ceil(sx + R)), Math.max(0, Math.floor(sy - R)), Math.min(H - 1, Math.ceil(sy + R))];
-    for (let y = box[2]; y <= box[3]; y++) for (let x = box[0]; x <= box[1]; x++) { const dx = x + 0.5 - sx, dy = y + 0.5 - sy, G = Math.exp(-0.5 * (ia * dx * dx + 2 * ib * dx * dy + ic * dy * dy)); if (G < 0.011 || al * G < 1 / 255) continue; logT[y * W + x] += Math.log(1 - Math.min(0.99, al * G)); }
-    if (g) fps.push({ d, e, a, fac, box, at: (start[mi] + i) * 6 });
+    const surf = d.thin < 0.002;
+    for (let y = box[2]; y <= box[3]; y++) for (let x = box[0]; x <= box[1]; x++) { const dx = x + 0.5 - sx, dy = y + 0.5 - sy, G = Math.exp(-0.5 * (ia * dx * dx + 2 * ib * dx * dy + ic * dy * dy)); if (G < 0.011 || al * G < 1 / 255 || hidden(e, surf, x, y, y * W + x)) continue; logT[y * W + x] += Math.log(1 - Math.min(0.99, al * G)); }
+    if (g) fps.push({ d, e, a, fac, box, surf, at: (start[mi] + i) * 6 });
   }));
   const P = new Float32Array(W * H); for (let p = 0; p < W * H; p++) P[p] = 1 - Math.exp(logT[p]);
   if (!g) return { D: P };
@@ -93,7 +115,7 @@ function draw(v, D, g) {
     const [sx, sy, ia, ib, ic, , comp] = f.e, [x0, x1, y0, y1] = f.box, al = f.a * f.fac * comp * f.d.k;
     let ga = 0, gsx = 0, gsy = 0, gia = 0, gib = 0, gic = 0;
     for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
-      const p = y * W + x, dx = x + 0.5 - sx, dy = y + 0.5 - sy, G = Math.exp(-0.5 * (ia * dx * dx + 2 * ib * dx * dy + ic * dy * dy)); if (G < 0.011 || al * G < 1 / 255) continue;
+      const p = y * W + x, dx = x + 0.5 - sx, dy = y + 0.5 - sy, G = Math.exp(-0.5 * (ia * dx * dx + 2 * ib * dx * dy + ic * dy * dy)); if (G < 0.011 || al * G < 1 / 255 || hidden(f.e, f.surf, x, y, p)) continue;
       const k = (2 * e[p] * Math.exp(logT[p])) / (1 - Math.min(0.99, al * G)), gG = k * al * G;
       ga += k * G; gsx += gG * (ia * dx + ib * dy); gsy += gG * (ib * dx + ic * dy); gia += gG * -0.5 * dx * dx; gib += gG * -dx * dy; gic += gG * -0.5 * dy * dy;
     }
@@ -126,10 +148,10 @@ function teach(stage, iters, bounds) {
       const gg = new Float64Array(marks.length * 3), p = new Float64Array(marks.length * 3);
       marks.forEach((m, mi) => {
         if (!seen[mi]) return; const st = m.kind === 'stroke', groups = st ? [[0, SP.width], [SP.width, SP.u0], [SP.dry, SP.drySide]] : [[0, 9], [9, 10]];
-        groups.forEach(([a, b], k) => { gg[mi * 3 + k] = slope(mi, D, g, (q) => { for (let j = a; j < b; j++) q.params[j] += 1e-3; }, (q) => { for (let j = a; j < b; j++) q.params[j] -= 1e-3; }, 1e-3) + 0.002 * T.gains[mi][k]; });
-        for (let k = 0; k < 3; k++) p[mi * 3 + k] = T.gains[mi][k];
+        groups.forEach(([a, b], k) => { gg[mi * 3 + k] = slope(mi, D, g, (q) => { for (let j = a; j < b; j++) q.params[j] += 1e-3; }, (q) => { for (let j = a; j < b; j++) q.params[j] -= 1e-3; }, 1e-3) + 0.002 * T.gains[m.key][k]; });
+        for (let k = 0; k < 3; k++) p[mi * 3 + k] = T.gains[m.key][k];
       });
-      step(A.gains, p, gg, 0.04 * pace, () => -3, () => 3); marks.forEach((_, mi) => { for (let k = 0; k < 3; k++) T.gains[mi][k] = p[mi * 3 + k]; });
+      step(A.gains, p, gg, 0.04 * pace, () => -3, () => 3); marks.forEach((m, mi) => { for (let k = 0; k < 3; k++) T.gains[m.key][k] = p[mi * 3 + k]; });
     }
     if (stage === 'deposits' || stage === 'free') {
       const gr = new Float64Array(N * RESID);
@@ -167,7 +189,9 @@ function score(level, D = (apply(), lay())) {
   writeFileSync(`${dir}fit.json`, JSON.stringify(report, null, 1));
 }
 const r3 = (v) => +v.toFixed(3);
-const save = (level, resid) => writeFileSync(`${dir}taught-${level.replace(/[^a-z]+/g, '-')}.json`, JSON.stringify({ roles: Object.fromEntries(Object.entries(T.roles).map(([k, a]) => [k, a.map(r3)])), gains: T.gains.map((g) => g.map(r3)), ...(resid ? { resid: marks.map((m) => (m.resid.some((x) => x) ? m.resid.map((x) => +x.toFixed(2)) : null)) } : {}) }));
+// (kept by role and by each mark's key; a mark with no weight of its own left out)
+const kept = () => ({ roles: Object.fromEntries(Object.entries(T.roles).map(([k, a]) => [k, a.map(r3)])), gains: Object.fromEntries(Object.entries(T.gains).filter(([, g]) => g.some((x) => Math.abs(x) > 5e-4)).map(([k, g]) => [k, g.map(r3)])) });
+const save = (level, resid) => writeFileSync(`${dir}taught-${level.replace(/[^a-z]+/g, '-')}.json`, JSON.stringify({ ...kept(), ...(resid ? { resid: Object.fromEntries(marks.filter((m) => m.resid.some((x) => x)).map((m) => [m.key, m.resid.map((x) => +x.toFixed(2))])) } : {}) }));
 
 for (const v of views) png(v.T, `fit-${v.key}-teacher`);
 // (nothing drawn at all, for scale; then the room as the scene lays it)
@@ -175,7 +199,8 @@ for (const v of views) png(v.T, `fit-${v.key}-teacher`);
 score('untaught');
 teach('roles', Math.round(60 * SCALE)); score('roles'); save('roles');
 teach('weights', Math.round(50 * SCALE)); score('roles + weights'); save('roles + weights');
-writeFileSync(new URL('../static/splats/room-taught.json', import.meta.url), JSON.stringify({ note: 'The room taught from three drawn views (the root tunnel, the open pool, the canopy): a style a role, and each mark\'s own weight (devtools/splats-room-fit.mjs).', roles: Object.fromEntries(Object.entries(T.roles).map(([k, a]) => [k, a.map(r3)])), gains: T.gains.map((g) => g.map(r3)) }));
+writeFileSync(new URL('../static/splats/room-taught.json', import.meta.url), JSON.stringify({ note: 'The room taught from three drawn views (the root tunnel, the open pool, the canopy): a style a role, and each mark\'s own weight, by its key (devtools/splats-room-fit.mjs).', ...kept() }));
+if (!process.argv.includes('--all')) process.exit(0);
 teach('deposits', Math.round(50 * SCALE), [2.5, 0.5, 0.5, 0.5, 0.6, 0.45]); score('+ deposits'); save('deposits', true);
 // (set free instead: from the weights again, the bounds off)
 marks.forEach((m) => m.resid.fill(0)); A.resid = adam(N * RESID);

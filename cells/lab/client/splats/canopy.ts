@@ -20,11 +20,11 @@ export const OLIVE: [number, number, number] = [87, 73, 35];
 export type Level = 'both' | 'fronds' | 'wash';
 
 /** a patch's marks: the wash first, then a strand and a spray for each frond */
-export function canopyPatch(idBase: number, P: Patch, level: Level = 'both', lod: [number, number] = HANDOVER, washParams?: number[]): Mark[] {
+export function canopyPatch(idBase: number, P: Patch, level: Level = 'both', lod: [number, number] = HANDOVER, washParams?: number[], key = 'canopy'): Mark[] {
   let r = (P.seed * 2654435761) >>> 0 || 5; const rnd = () => ((r = (Math.imul(r, 1664525) + 1013904223) >>> 0) / 4294967296);
   const out: Mark[] = [];
   if (level !== 'fronds') {
-    const w = blobMark(idBase, P.c, P.r, Math.max(12, Math.round(P.fronds / 3)), 'canopy/wash');
+    const w = blobMark(idBase, P.c, P.r, Math.max(12, Math.round(P.fronds / 3)), `${key}/wash`);
     // (its tones: fitted to its fronds seen from far off if they're given; else pale, paler at its edge)
     w.params = washParams?.length === 10 ? washParams.slice() : [-3.4, -2.9, -3.4, -2.6, -2.3, -2.9, -3.4, -3.0, -3.6, 0];
     if (level === 'both') w.lod = [lod[1], lod[0]];
@@ -37,10 +37,10 @@ export function canopyPatch(idBase: number, P: Patch, level: Level = 'both', lod
     const top = P.c[1] + P.r[1] * (0.95 - 0.55 * q * q), fall = P.r[1] * (0.9 + 0.8 * rnd()) * (P.reach ?? 1), lean = (rnd() - 0.5) * 0.25, la = rnd() * Math.PI * 2, bow = (rnd() - 0.5) * 0.12;
     const at = (u: number): V => [x + Math.cos(la) * (lean * u + bow * Math.sin(Math.PI * u)) * fall, top - fall * u, z + Math.sin(la) * (lean * u + bow * Math.sin(Math.PI * u)) * fall];
     const ctrl = [at(0), at(0.35), at(0.7), at(1)];
-    const strand = strokeMark(idBase + 1 + i * 2, ctrl, undefined, 0.005, 12, 1, `canopy/strand ${i}`);
+    const strand = strokeMark(idBase + 1 + i * 2, ctrl, undefined, 0.005, 12, 1, `${key}/strand ${i}`);
     for (let k = 0; k < KN.ink; k++) strand.params[SP.ink + k] = 0.2 - 0.25 * k;
     strand.sway = 0.05 + 0.05 * rnd();
-    const dabs = strokeMark(idBase + 2 + i * 2, ctrl, undefined, 0.02, 8 + Math.floor(rnd() * 5), 1, `canopy/dabs ${i}`);
+    const dabs = strokeMark(idBase + 2 + i * 2, ctrl, undefined, 0.02, 8 + Math.floor(rnd() * 5), 1, `${key}/dabs ${i}`);
     for (let k = 0; k < KN.ink; k++) dabs.params[SP.ink + k] = -0.3 + 0.3 * k;
     dabs.params[SP.along] = -0.35; dabs.params[SP.splay] = 0.45; dabs.params[SP.step] = 0.9; dabs.params[SP.u0] = 0.12; dabs.colour = OLIVE; dabs.sway = strand.sway;
     if (level === 'both') { strand.lod = [lod[0], lod[1]]; dabs.lod = [lod[0], lod[1]]; }
