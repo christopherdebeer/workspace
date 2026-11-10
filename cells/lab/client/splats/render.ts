@@ -444,6 +444,10 @@ export class Renderer {
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     this.hsize = [w, h];
   }
+  /** wait for what's been drawn to be drawn (a one-pixel read): a device's GPU works apart from the page, so without
+   * this a frame's cost doesn't show in the time between frames */
+  sync() { const gl = this.gl; gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, this.px); }
+  private px = new Uint8Array(4);
   /** the order to draw them in (from the sort) */
   setOrder(order: Uint32Array) { const gl = this.gl; gl.bindBuffer(gl.ARRAY_BUFFER, this.order); gl.bufferData(gl.ARRAY_BUFFER, order, gl.DYNAMIC_DRAW); this.drawn = order.length; }
   draw(view: Float32Array, proj: Float32Array, focal: [number, number], opts: DrawOpts) {

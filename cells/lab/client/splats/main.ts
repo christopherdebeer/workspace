@@ -385,6 +385,7 @@ async function openWalk(level: Level = walkS?.level ?? (qs.get('level') as Level
 function walkPlace() {
   if (!walkS) return;
   if (walkS.auto !== null) { const t = ((performance.now() - walkS.auto) / 1000 / 28) % 1, k = t < 0.5 ? t * 2 : 2 - t * 2; walkS.d = WALK.from + (WALK.to - WALK.from) * (k * k * (3 - 2 * k)); }
+  if (perf.spin) cam.yaw = perfSway;
   const cp = Math.cos(cam.pitch); cam.dist = 1;
   cam.target = [0 - Math.sin(cam.yaw) * cp, WALK.eyeY - Math.sin(cam.pitch), walkS.d - Math.cos(cam.yaw) * cp];
 }
@@ -426,7 +427,7 @@ function roomPlace(reset = false, at?: [number, number, number]) {
   if (at) roomS.fixed = at; else if (reset) roomS.fixed = undefined;
   if (roomS.fixed && !at && roomS.auto === null) { const g = norm([roomS.fixed[0] - e[0], roomS.fixed[1] - e[1], roomS.fixed[2] - e[2]]); f = g; cam.yaw = Math.atan2(-g[0], -g[2]) + roomS.look[0]; cam.pitch = Math.asin(-g[1]) + roomS.look[1]; }
   else { cam.yaw = yaw + roomS.look[0]; cam.pitch = Math.max(-1.2, Math.min(1.2, pitch + roomS.look[1])); }
-  roomS.yaw0 = cam.yaw; roomS.pitch0 = cam.pitch; cam.dist = 1;
+  cam.yaw += perfSway; roomS.yaw0 = cam.yaw; roomS.pitch0 = cam.pitch; cam.dist = 1;
   const cp = Math.cos(cam.pitch); cam.target = [e[0] - Math.sin(cam.yaw) * cp, e[1] - Math.sin(cam.pitch), e[2] - Math.cos(cam.yaw) * cp];
 }
 const VIEWS = { hero: { yaw: 0.6, pitch: 0.32 }, grazing: { yaw: 1.35, pitch: 0.035 }, reverse: { yaw: 0.6 + Math.PI, pitch: 0.3 } };
@@ -918,7 +919,10 @@ function judgeExport() {
 }
 
 // ─── measuring on the device (&perf): each configuration in turn while the camera turns, then edits; a table to copy ───
-const perf = { rec: null as number[] | null, sorts: [] as number[], spin: false };
+const perf = { rec: null as number[] | null, sorts: [] as number[], draws: [] as number[], spin: false };
+/** while it measures, the walk and the room look a little to each side of where they're looking (not all the way round:
+ * what's measured is the view) */
+let perfSway = 0;
 const quantile = (a: number[], q: number) => { const b = [...a].sort((x, y) => x - y); return b.length ? b[Math.min(b.length - 1, Math.floor(q * b.length))] : 0; };
 /** how many times over the scene is drawn (1, but for &perf's load test) */
 let perfLoad = 1;
@@ -950,10 +954,10 @@ async function runPerf() {
   for (const ph of phases) {
     ph.apply(); syncDetail(); syncStone();
     perf.spin = true; await wait(1500);
-    perf.rec = []; perf.sorts = []; const pm0 = policyMs;
+    perf.rec = []; perf.sorts = []; perf.draws = []; const pm0 = policyMs;
     await wait(6000);
     const d = perf.rec; perf.rec = null;
-    rows.push([ph.name, (1000 / (d.reduce((a, b) => a + b, 0) / Math.max(1, d.length))).toFixed(0), quantile(d, 0.5).toFixed(1), quantile(d, 0.95).toFixed(1), quantile(perf.sorts, 0.5).toFixed(0), policyMode !== 'ranks' ? policyMs.toFixed(1) : '–']);
+    rows.push([ph.name, (1000 / (d.reduce((a, b) => a + b, 0) / Math.max(1, d.length))).toFixed(0), quantile(d, 0.5).toFixed(1), quantile(d, 0.95).toFixed(1), quantile(perf.draws, 0.5).toFixed(1), quantile(perf.draws, 0.95).toFixed(1), quantile(perf.sorts, 0.5).toFixed(0), policyMode !== 'ranks' ? policyMs.toFixed(1) : '–']);
     void pm0;
   }
   perf.spin = false; perfLoad = 1;
@@ -972,7 +976,7 @@ async function runPerf() {
   }
   const gl = R.gl, ext = gl.getExtension('WEBGL_debug_renderer_info'), gpu = ext ? String(gl.getParameter(ext.UNMASKED_RENDERER_WEBGL)) : String(gl.getParameter(gl.RENDERER));
   const head = `${sceneName} · ${scene?.n ?? 0} marks · ${canvas.width}×${canvas.height} (dpr ${devicePixelRatio}) · ${gpu} · ${navigator.userAgent.replace(/^Mozilla\/5.0 /, '')}`;
-  const table = ['configuration\tfps\tframe p50 ms\tframe p95 ms\tsort ms\tpolicy ms', ...rows.map((r) => r.join('\t'))].join('\n');
+  const table = ['configuration\tfps\tframe p50 ms\tframe p95 ms\tdraw p50 ms\tdraw p95 ms\tsort ms\tpolicy ms', ...rows.map((r) => r.join('\t'))].join('\n');
   const text = `${head}\n${table}${edits.length ? '\n' + edits.join('\n') : ''}`;
   try { localStorage.setItem('splats-perf', text); } catch { /* not kept */ }
   const box = Object.assign(document.createElement('div'), { id: 'perf' });
@@ -993,7 +997,7 @@ const theme = () => (matchMedia('(prefers-color-scheme: dark)').matches ? [0.07,
 function frame() {
   const t = performance.now(), raw = t - last, dt = Math.min(0.1, raw / 1000); last = t;
   if (perf.rec) { perf.rec.push(raw); perf.sorts.push(sortMs); }
-  if (perf.spin) cam.yaw += dt * 0.35;
+  if (perf.spin && (walkS || roomS)) perfSway = 0.3 * Math.sin((performance.now() / 1000) * 0.9); else { perfSway = 0; if (perf.spin) cam.yaw += dt * 0.35; }
   if (orbitFrom !== null) {
     const u = (t - orbitFrom) / 1000 / ORBIT_S;
     cam.yaw = VIEWS.hero.yaw + Math.min(1, u) * Math.PI * 2;
@@ -1022,7 +1026,9 @@ function frame() {
   if (gv0 && composed && (policyMode === 'taught' || policyOverride)) { gv = Float32Array.from(gv0); for (const g of (brushes as ComposedScene).gates) gv[g.index] = 1; }
   drawNow = () => R.draw(view, proj, [fy, fy], { size, mode, bg: mist ? [0.13, 0.145, 0.165] : stone || brushes || bench || penS || marksS || walkS || roomS || sceneName === 'field' || (captured && inkOn) ? [0.937, 0.906, 0.847] : theme(), detail, thin, share, features: gv ?? features, eye: pos, time: roomS?.moving || (walkS && qs.has('moving')) ? (performance.now() / 1000) % 3600 + 1 : 0, mirror: roomS?.mirror ? [WATER, 0.5] : undefined, near: roomS || walkS ? [0.25, 0.7] : undefined, repeat: perfLoad, occlude, only, light: mist ? Math.max(0, LIGHTS.indexOf(light) - 1) : 0, sun: sunDir(sunAz, sunEl), diff: mist ? diff : false, halo: composed && compose && haloOn ? haloPx * dpr : 0, nf: [near, cam.dist * 100] });
   applyPolicy(dt, pos, fwd);
-  drawNow();
+  // (while it measures: each frame waited for, and how long drawing it took, so a frame's cost shows whatever the
+  // display's rate)
+  if (perf.rec) { const t0 = performance.now(); drawNow(); R.sync(); perf.draws.push(performance.now() - t0); } else drawNow();
   judgeStep();
   frames++;
   if (t - fpsT > 500) {
