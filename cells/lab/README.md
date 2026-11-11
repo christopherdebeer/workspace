@@ -66,6 +66,7 @@ names the global the page reports itself on, `__mistwood` by default): `node cel
 
 ## The experiments
 
+- **Volley** (`client/volley/`): a brick-breaker seen from the paddle. The game is the flat one (`sim.ts`: a circle against boxes in plan, fixed steps, seeded, with a stand-in player; tested on its own), laid down as a court's floor and looked along from the paddle (`draw.ts`: instanced boxes, one ball that lights what's near it); the head turns a little toward the ball, sound is placed by ear, and `plan` shows the same game from above.
 - **Mistwood** (`client/mistwood/`): a walk through a seeded wood in fog. It was its own cell
   (`@c15r/mistwood`); that cell now only redirects here, keeping the query.
 - **Marble Run** (`client/marbles/`): a roster of twelve glass marbles (each its own seeded look and name) released from a gate down wide obstacle boards (pegs, deflectors, splitters, chicanes, spinners, funnels, gates, bends) in a seeded run that grows as you build it, to a funnel and a single-file channel where the result sits at rest; themes (`theme.ts`: atelier by day, nocturne by lamplight) change the place and the materials under a race; rigid spheres with spin against floors, walls, pegs and turning arms (`physics.ts`, `track.ts`, tested on their own), a chase camera, a shadow map.

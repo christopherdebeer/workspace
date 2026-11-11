@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en" data-exp="volley"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,viewport-fit=cover"><meta name="theme-color" content="#ccd4d9"><title>Volley</title>
+<style>
+*{box-sizing:border-box}html,body{margin:0;height:100%;overflow:hidden;background:#ccd4d9;color:#1f2530;font-family:"Avenir Next","Helvetica Neue",Arial,sans-serif;-webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent}
+canvas#view{position:fixed;inset:0;width:100%;height:100%;touch-action:none;display:block}
+#top{position:fixed;top:max(14px,env(safe-area-inset-top));left:max(16px,env(safe-area-inset-left));right:max(16px,env(safe-area-inset-right));display:flex;justify-content:space-between;align-items:baseline;pointer-events:none;font-variant-numeric:tabular-nums}
+#score{font-size:30px;font-weight:600;letter-spacing:-.01em}
+#top small{font-size:11px;letter-spacing:.14em;text-transform:uppercase;opacity:.7}
+#lives{color:#e24a2c;letter-spacing:.2em;margin-left:10px;font-size:13px}
+#mid{position:fixed;left:0;right:0;top:13%;text-align:center;pointer-events:none}
+#say{font-size:clamp(40px,13vw,84px);font-weight:700;letter-spacing:-.03em;line-height:1;color:#1f2530}
+#sub{margin-top:12px;font-size:12px;letter-spacing:.16em;text-transform:uppercase;opacity:.75}
+#say:empty,#sub:empty{display:none}
+#bar{position:fixed;right:max(12px,env(safe-area-inset-right));bottom:max(12px,env(safe-area-inset-bottom));display:flex;gap:6px}
+#bar button,#bar a{font:inherit;font-size:11px;letter-spacing:.12em;text-transform:uppercase;text-decoration:none;color:#1f2530;background:#ffffffb0;border:0;border-radius:999px;padding:0 14px;min-height:40px;display:inline-flex;align-items:center;cursor:pointer;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px)}
+#bar button[aria-pressed="true"]{background:#1f2530;color:#fff}
+#bar button:focus-visible,#bar a:focus-visible{outline:2px solid #e24a2c;outline-offset:2px}
+#plan{position:fixed;left:max(12px,env(safe-area-inset-left));bottom:max(12px,env(safe-area-inset-bottom));border-radius:4px;box-shadow:0 2px 12px #0003;pointer-events:none;opacity:.92}
+#mark{position:fixed;top:55%;font-size:54px;line-height:1;color:#e24a2c;font-weight:700;pointer-events:none}
+#flash{position:fixed;inset:0;pointer-events:none;opacity:0;background:radial-gradient(ellipse at 50% 100%,#e24a2caa,#e24a2c00 70%)}
+#flash.on{animation:miss .6s ease-out}
+@keyframes miss{0%{opacity:1}100%{opacity:0}}
+[hidden]{display:none!important}
+.preview #top,.preview #mid,.preview #bar,.preview #mark{display:none}
+@media (prefers-reduced-motion:reduce){#flash.on{animation:none}}
+</style></head><body>
+<canvas id="view" aria-label="A court seen from the paddle: bricks at the far end, a ball coming down the boards. Drag to move, tap to serve."></canvas>
+<div id="top"><div id="score">0</div><div><small id="level">court 1</small><span id="lives" aria-label="balls left"></span></div></div>
+<div id="mid" role="status"><div id="say"></div><div id="sub"></div></div>
+<div id="mark" hidden></div>
+<div id="flash"></div>
+<canvas id="plan" hidden aria-hidden="true"></canvas>
+<div id="bar"><button id="toPlan" aria-pressed="false">plan</button><button id="toMute" aria-pressed="true">sound</button><a href="{{readme}}">notes</a></div>
+<script type="module" src="{{app}}"></script></body></html>

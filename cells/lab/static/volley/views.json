@@ -1,0 +1,42 @@
+[
+ {
+  "group": "The court",
+  "views": [
+   {
+    "name": "serve",
+    "title": "Waiting to serve",
+    "caption": "the bat on the boards in front of you, the ball on it, the bricks in their tiers at the far end",
+    "file": "v-serve.jpg"
+   },
+   {
+    "name": "rally",
+    "title": "A ball coming back",
+    "caption": "the ball lights the boards under it; its shadow says where it is",
+    "file": "v-rally.jpg"
+   },
+   {
+    "name": "plan",
+    "title": "With the plan",
+    "caption": "the same game from above, in the corner: the game as it has always been drawn, and the wedge of it the eye takes in",
+    "file": "v-plan.jpg"
+   },
+   {
+    "name": "wide",
+    "title": "On a wider screen",
+    "caption": "late in the first court: lanes cut through to the back wall",
+    "file": "v-wide.jpg"
+   }
+  ]
+ },
+ {
+  "group": "Courts",
+  "views": [
+   {
+    "name": "keep",
+    "title": "The keep",
+    "caption": "court four: a ring of bricks round a dark core that takes two",
+    "file": "v-keep.jpg"
+   }
+  ]
+ }
+]
