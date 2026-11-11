@@ -9,7 +9,7 @@
  * Flags: seed, hand (pad | swipe | catch: what a finger is), auto (a stand-in plays), t (run on this many seconds
  * first), still (and hold there), guide=0 (no ring where the ball will come back), mute, preview (the index's card).
  */
-import { H, ROWS, CELL, BRICK_T, R, HAND_R, FULL, MODES, SWIPE_MIN, create, advance, serve, grab, release, restart, speed, POWER_MAX, crossing, colsFor, cellX, cellY, type Sim, type Ev, type Mode, type Hand } from './sim';
+import { H, ROWS, CELL, BRICK_T, R, HAND_R, FULL, MODES, actOf, create, advance, serve, grab, release, restart, speed, POWER_MAX, crossing, colsFor, cellX, cellY, type Sim, type Ev, type Mode, type Hand } from './sim';
 import { createRenderer, KIND, STRIDE, type Frame } from './draw';
 import { seeded, seedFrom } from '../kit/rng';
 
@@ -29,7 +29,7 @@ const HARD = hex('#3a3440'), PANEL = hex('#6d7a8c'), WAKE = hex('#ff7a3a');
 // (the lamps' colour, by how far down you are)
 const TINTS = ['#ffd9a0', '#a8d8ff', '#ffb3a0', '#b8f0c8', '#d8c0ff'].map(hex);
 
-const sim: Sim = create(seed, aspect(), asked && MODES.includes(asked) ? asked : 'pad');
+const sim: Sim = create(seed, aspect(), asked && MODES.includes(asked) ? asked : 'all');
 if (preview) document.body.classList.add('preview');
 
 // ─── what's drawn ────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -107,7 +107,7 @@ function sound(e: Ev) {
 
 // ─── the words ───────────────────────────────────────────────────────────────────────────────────────────────────────
 const say = $('say'), sub = $('sub'), depth = $('depth'), broke = $('broken'), whole = $('whole'), flash = $('flash'), handBtn = $('toHand'), muteBtn = $('toMute'), best = $('best');
-const HOW: Record<Mode, string> = { pad: 'tap to send it · keep a finger where it comes back', swipe: 'tap to send it · swipe through it as it comes back, hard', catch: 'pick it up and throw it · catch it when it comes back' };
+const HOW: Record<Mode, string> = { all: 'pick it up and throw it · touch late to catch, hold to bat, swipe to hit', pad: 'tap to send it · keep a finger where it comes back', swipe: 'tap to send it · swipe through it as it comes back, hard', catch: 'pick it up and throw it · catch it when it comes back' };
 const bestKey = () => `volley.best.${sim.mode}`;
 const readBest = () => { try { return Number(localStorage.getItem(bestKey())) || 0; } catch { return 0; } };
 let shown = '';
@@ -131,7 +131,7 @@ function words() {
 }
 
 // ─── the fingers: each a hand on the glass ───────────────────────────────────────────────────────────────────────────
-interface Finger extends Hand { t: number; gone: number; mouse: boolean }
+interface Finger extends Hand { t: number; gone: number; mouse: boolean; /** when it touched down (a mouse with no button: long ago) */ t0: number }
 const fingers = new Map<number, Finger>();
 /** a point on the screen, on the glass */
 const onGlass = (e: { clientX: number; clientY: number }) => ({ x: (e.clientX / canvas.clientWidth - 0.5) * H * aspect(), y: (0.5 - e.clientY / canvas.clientHeight) * H });
@@ -146,16 +146,16 @@ canvas.addEventListener('pointerdown', (e) => {
   wake();
   if (e.pointerType !== 'mouse') canvas.setPointerCapture(e.pointerId);
   const p = onGlass(e);
-  fingers.set(e.pointerId, { id: e.pointerId, ...p, vx: 0, vy: 0, t: e.timeStamp, gone: 0, mouse: e.pointerType === 'mouse' });
+  fingers.set(e.pointerId, { id: e.pointerId, ...p, vx: 0, vy: 0, t: e.timeStamp, gone: 0, mouse: e.pointerType === 'mouse', t0: e.timeStamp });
   // (a waiting ball: sent off toward the touch, or, for a catching hand, picked up to be thrown)
-  if (sim.phase === 'ready') { if (sim.mode === 'catch') grab(sim, e.pointerId); else serve(sim, p.x / (sim.W / 2), p.y / (H / 2)); } else if (sim.phase === 'over') restart(sim);
+  if (sim.phase === 'ready') { if (sim.mode === 'catch' || sim.mode === 'all') grab(sim, e.pointerId); else serve(sim, p.x / (sim.W / 2), p.y / (H / 2)); } else if (sim.phase === 'over') restart(sim);
 });
 canvas.addEventListener('pointermove', (e) => {
   if (auto) return;
   const p = onGlass(e);
   let f = fingers.get(e.pointerId);
   // (a mouse is a hand wherever it is, button or no)
-  if (!f) { if (e.pointerType !== 'mouse') return; f = { id: e.pointerId, ...p, vx: 0, vy: 0, t: e.timeStamp, gone: 0, mouse: true }; fingers.set(e.pointerId, f); return; }
+  if (!f) { if (e.pointerType !== 'mouse') return; f = { id: e.pointerId, ...p, vx: 0, vy: 0, t: e.timeStamp, gone: 0, mouse: true, t0: -1e9 }; fingers.set(e.pointerId, f); return; }
   const dt = Math.max(0.004, (e.timeStamp - f.t) / 1000);
   f.vx = f.vx * 0.5 + ((p.x - f.x) / dt) * 0.5; f.vy = f.vy * 0.5 + ((p.y - f.y) / dt) * 0.5;
   f.x = p.x; f.y = p.y; f.t = e.timeStamp; f.gone = 0;
@@ -165,11 +165,11 @@ const lift = (e: PointerEvent) => {
   if (!f) return;
   release(sim, f.id, f.vx, f.vy);
   // (a mouse stays; a swipe carries on a moment past the finger's leaving)
-  if (f.mouse && e.type !== 'pointerleave') return;
-  if (sim.mode === 'swipe' && e.type === 'pointerup') f.gone = e.timeStamp; else fingers.delete(e.pointerId);
+  if (f.mouse && e.type !== 'pointerleave') { f.t0 = -1e9; return; }
+  if ((sim.mode === 'swipe' || sim.mode === 'all') && e.type === 'pointerup') f.gone = e.timeStamp; else fingers.delete(e.pointerId);
 };
 canvas.addEventListener('pointerup', lift); canvas.addEventListener('pointercancel', lift); canvas.addEventListener('pointerleave', lift);
-addEventListener('keydown', (e) => { if ((e.key === ' ' || e.key === 'Enter') && !auto) { e.preventDefault(); wake(); if (sim.phase === 'ready') { sim.mode === 'catch' ? (grab(sim, -9), release(sim, -9, 0, 20)) : serve(sim); } else restart(sim); } });
+addEventListener('keydown', (e) => { if ((e.key === ' ' || e.key === 'Enter') && !auto) { e.preventDefault(); wake(); if (sim.phase === 'ready') { sim.mode === 'catch' || sim.mode === 'all' ? (grab(sim, -9), release(sim, -9, 0, 12)) : serve(sim); } else restart(sim); } });
 handBtn.onclick = () => {
   if (sim.phase === 'held') release(sim, sim.heldBy);
   sim.mode = MODES[(MODES.indexOf(sim.mode) + 1) % MODES.length];
@@ -183,12 +183,13 @@ function marks() {
   const live = preview ? [] : sim.hands;
   while (rings.length < live.length) { const r = document.createElement('i'); glass.appendChild(r); rings.push(r); }
   rings.forEach((r, i) => {
-    const k = live[i], speed = k ? Math.hypot(k.vx, k.vy) : 0, on = !!k && (sim.mode !== 'swipe' || speed >= SWIPE_MIN);
-    r.hidden = !on;
-    if (!on) return;
-    const p = onScreen(k.x, k.y), rad = ((sim.mode === 'swipe' ? HAND_R * 1.5 : HAND_R) / H) * canvas.clientHeight;
+    // (the ring is what the hand would be to a ball landing now: a pad, a hit (dashed, wider), a catch (close, warm))
+    const k = live[i], act = k ? actOf(sim.mode, k) : null, holding = !!k && sim.phase === 'held' && sim.heldBy === k.id;
+    r.hidden = !act;
+    if (!k || !act) return;
+    const p = onScreen(k.x, k.y), rad = ((act === 'hit' && !holding ? HAND_R * 1.5 : HAND_R) / H) * canvas.clientHeight;
     r.style.transform = `translate(${p.x - rad}px,${p.y - rad}px)`; r.style.width = r.style.height = `${rad * 2}px`;
-    r.classList.toggle('holding', sim.phase === 'held' && sim.heldBy === k.id);
+    r.className = holding ? 'holding' : act;
   });
   const c = guide && !preview ? crossing(sim) : null;
   mark.hidden = !c || c.t > 1.3;
@@ -208,6 +209,7 @@ function run(dt: number, now: number) {
     for (const [id, f] of fingers) {
       if (f.gone && now - f.gone > 130) { fingers.delete(id); continue; }
       if (!f.gone && now - f.t > 70) { f.vx *= 0.6; f.vy *= 0.6; }
+      f.age = (now - f.t0) / 1000;
     }
     sim.hands = [...fingers.values()];
   }

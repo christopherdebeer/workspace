@@ -7,10 +7,10 @@ import { build } from 'esbuild';
 import assert from 'node:assert/strict';
 const load = async (f) => { const o = await build({ entryPoints: [new URL(f, import.meta.url).pathname], bundle: true, write: false, format: 'esm', platform: 'node' }); return import('data:text/javascript;base64,' + Buffer.from(o.outputFiles[0].text).toString('base64')); };
 const S = await load('../client/volley/sim.ts');
-const { create, advance, serve, grab, release, restart, makeSlab, crossing, speed, cellX, cellY, MODES, H, R, HAND_R, FULL, STAND, BRICK_T, ROWS, POWER_MAX, G } = S;
+const { create, advance, serve, grab, actOf, release, restart, makeSlab, crossing, speed, cellX, cellY, MODES, H, R, HAND_R, FULL, STAND, BRICK_T, ROWS, POWER_MAX, G } = S;
 
 {
-  const run = (seed, secs, mode = 'pad') => { const s = create(seed, 0.46, mode); for (let i = 0; i < secs * 60; i++) advance(s, 1 / 60, true); return s; };
+  const run = (seed, secs, mode = 'all') => { const s = create(seed, 0.46, mode); for (let i = 0; i < secs * 60; i++) advance(s, 1 / 60, true); return s; };
   const a = run(7, 40), b = run(7, 40), c = run(8, 40);
   assert.deepEqual([a.z, a.broken, a.ball], [b.z, b.broken, b.ball], 'a seed is the same game');
   assert.notDeepEqual(a.ball, c.ball, 'another seed is another');
@@ -55,7 +55,18 @@ for (const mode of MODES) for (const aspect of [0.46, 1.6]) {
   assert.ok(Math.abs(s.ball.x - 1) < 1e-9 && Math.abs(s.ball.y - 1) < 1e-9, 'held: it goes where the finger goes');
   release(s, 1, -24, 0); assert.ok(s.phase === 'play' && s.ball.vx < 0 && s.ball.vz > 0 && s.ball.sx < 0 && speed(s.ball) > 25, 'let go moving left, fast: thrown left, hard, spinning left');
   s = create(1, 0.46, 'catch'); grab(s, 4); assert.equal(s.phase, 'held'); release(s, 4, 0, 0);
-  assert.ok(Math.abs(speed(s.ball) - 8) < 1e-6, 'let go of a still finger: a lob');
+  assert.ok(Math.abs(speed(s.ball) - 14) < 1e-6 && s.ball.vx === 0, 'let go of a still finger: a toss, straight up');
+  // (the one hand: what the finger is doing as the ball lands is what it is)
+  s = back('all', { id: 1, x: 0.2, y: 0, vx: 0, vy: 0, age: 0.1 });
+  assert.equal(s.phase, 'held', 'one hand, still and only just down: a catch');
+  s = back('all', { id: 1, x: -HAND_R / 2, y: 0, vx: 0, vy: 0, age: 2 });
+  assert.ok(s.phase === 'play' && s.ball.vz > 0 && s.ball.vx > 0.2 * speed(s.ball), 'one hand, still and long down: a pad');
+  s = back('all', { id: 1, x: 0, y: 0, vx: 20, vy: 0, age: 0.1 });
+  const late = s.ball.vx / speed(s.ball);
+  assert.ok(s.phase === 'play' && s.ball.vz > 0 && late > 0.25, 'one hand, moving and only just down: a swipe at it');
+  s = back('all', { id: 1, x: 0, y: 0, vx: 20, vy: 0, age: 2 });
+  assert.ok(s.phase === 'play' && s.ball.vz > 0 && s.ball.vx > 0 && s.ball.vx / speed(s.ball) < late * 0.6, 'one hand, moving and long down: a bat being moved, which turns it less');
+  assert.deepEqual([actOf('all', { vx: 0, vy: 0, age: 0 }), actOf('all', { vx: 0, vy: 0 }), actOf('all', { vx: 9, vy: 0, age: 0 }), actOf('swipe', { vx: 0, vy: 0 })], ['catch', 'pad', 'hit', null]);
   // (the ball itself: thrown up the shaft it slows, stops as high as its speed takes it, and comes back down as fast)
   s = create(1, 0.46, 'pad'); s.phase = 'play'; s.z = s.slabs[0].z - BRICK_T / 2 - STAND; s.hands = [{ id: 1, x: 0, y: 0, vx: 0, vy: 0 }]; Object.assign(s.ball, { x: 0, y: 0, z: s.z + 1, vx: 0, vy: 0, vz: 8 });
   let top = 0, fell = 0; for (let i = 0; i < 240 * 2 && s.returns === 0; i++) { advance(s, 1 / 240); top = Math.max(top, s.ball.z - s.z); fell = Math.min(fell, s.ball.vz); }
@@ -90,10 +101,10 @@ await withWood(async (lab) => {
   const probe = () => p.evaluate(() => window.__volley.probe());
   let s = await probe();
   ok('waiting, drawn', s.phase === 'ready' && s.frames > 2 && s.error === 0 && s.boxes > 100, s);
-  ok('says how', (await p.textContent('#sub')).includes('tap to send it'));
+  ok('says how', (await p.textContent('#sub')).includes('pick it up and throw it'));
   await p.mouse.click(195, 422); await p.waitForTimeout(300);
   s = await probe();
-  ok('a touch sends it', s.phase === 'play' && s.ball.z > s.z + 1, s);
+  ok('a touch picks it up, and letting go throws it', s.phase === 'play' && s.ball.z > s.z + 1, s);
   // (a hand kept where it will come back, by the page's own reckoning, for a few returns)
   for (let i = 0; i < 400 && s.returns < 3 && s.phase === 'play'; i++) {
     const at = await p.evaluate(() => { const v = window.__volley, b = v.sim.ball; return v.onScreen(b.x, b.y); });
@@ -102,7 +113,7 @@ await withWood(async (lab) => {
   ok('a hand where it comes back returns it', s.returns >= 3 && s.integrity === 5, s);
   ok('a ring under the hand', await p.isVisible('#glass i'));
   await p.click('#toHand');
-  ok('the hand changes, and the address with it', (await probe()).mode === 'swipe' && p.url().includes('hand=swipe') && (await p.textContent('#toHand')).includes('swipe'));
+  ok('the hand changes, and the address with it', (await probe()).mode === 'pad' && p.url().includes('hand=pad') && (await p.textContent('#toHand')).includes('pad'));
   ok('no errors', !p.errors.length, p.errors.slice(0, 3));
   await p.close();
   const q = await lab.open('preview&seed=1&t=30');

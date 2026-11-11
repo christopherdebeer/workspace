@@ -12,13 +12,16 @@
  * enough it goes through a brick and on up into the next.
  *
  * There is no paddle. Wherever the ball comes back through the glass, a hand has to be there, and what the hand is
- * doing is how (and how hard) the ball leaves. Three ways of being a hand (`mode`):
+ * doing is how (and how hard) the ball leaves. A hand can be three things, and with the one hand (`mode` 'all') it is
+ * whichever the finger is doing as the ball lands: moving, it hits; still and only just touched down, it catches;
+ * still and long down, it is a pad. (A hit from a touch just made turns the ball more than one from a finger long
+ * down, which is a bat being moved.) The other modes are each of the three alone:
  *
  *   pad    a finger on the glass is a sprung pad: the ball leaves by where on the pad it lands, about as fast as it
  *          came (never slow); a finger moving as it lands adds to it
  *   swipe  only a moving finger counts: the ball leaves the way the finger was going, as hard as it was going
  *   catch  a finger under the ball catches it; it is thrown when the finger lets go, the way and as hard as the
- *          finger was going (let go of a still finger and it's a lob)
+ *          finger was going (let go of a still finger and it's a toss)
  *
  * The glass goes forward down a clear tunnel and halts before bricks still standing. Break most of a slab and the
  * rest of it falls: you go on. A ball let through the glass is one of five gone. Everything random is from the seed,
@@ -39,7 +42,7 @@ export const FULL = 5;
  * however big the slab, this many broken is enough */
 export const STAND = 3.6, GIVES = 0.4, MOST = 10;
 export const STEP = 1 / 240;
-export const MODES = ['pad', 'swipe', 'catch'] as const;
+export const MODES = ['all', 'pad', 'swipe', 'catch'] as const;
 export type Mode = (typeof MODES)[number];
 
 // the ball
@@ -56,14 +59,28 @@ const SPIN_OF = 0.3, SPIN_MAX = 9, BEND = 1.3, SPIN_LIFE = 0.9;
 /** pad: how much of the ball's speed goes sideways at the pad's rim */
 const PAD_K = 0.75;
 /** how much of a finger's speed goes into the ball's direction */
-const CARRY: Record<Mode, number> = { pad: 0.2, swipe: 0.35, catch: 0.35 };
+const CARRY = { pad: 0.2, swipe: 0.35, catch: 0.35 };
+/** the one hand ('all'): a touch younger than this when the ball lands is a catch; a moving finger's say over the
+ * ball's direction, from a touch just made (a swipe at it) down to one long held (a bat being moved) */
+export const FRESH = 0.3, SETTLED = 0.8;
+const CARRY_FRESH = 0.42, CARRY_HELD = 0.16;
 /** a finger slower than this isn't a swipe */
 export const SWIPE_MIN = 5;
 const MAX_SIDE = 0.8;
 export const POWER_MAX = 34;
 
 export type Phase = 'ready' | 'play' | 'held' | 'over';
-export interface Hand { id: number; x: number; y: number; vx: number; vy: number }
+export interface Hand { id: number; x: number; y: number; vx: number; vy: number; /** seconds since it touched down (left out: long ago) */ age?: number }
+export type Act = 'pad' | 'hit' | 'catch';
+/** What a hand is to a ball landing on it now. With the one hand: moving, it hits; still and only just down, it
+ * catches; still and long down, it's a pad. */
+export function actOf(mode: Mode, k: Hand): Act | null {
+  const moving = Math.hypot(k.vx, k.vy) >= SWIPE_MIN;
+  if (mode === 'pad') return 'pad';
+  if (mode === 'swipe') return moving ? 'hit' : null;
+  if (mode === 'catch') return 'catch';
+  return moving ? 'hit' : (k.age ?? 9) < FRESH ? 'catch' : 'pad';
+}
 export interface Slab { i: number; z: number; cells: Uint8Array; left: number; total: number; hue: number }
 export interface Ball { x: number; y: number; z: number; vx: number; vy: number; vz: number; sx: number; sy: number }
 export type Ev =
@@ -91,6 +108,7 @@ export interface Sim {
   rand: Rand;
   /** the stand-in's mark: the brick it's trying for */
   mark: { x: number; y: number; z: number } | null;
+  turn: 'pad' | 'swipe' | 'catch';
   t: number; acc: number;
 }
 
@@ -106,10 +124,10 @@ export function driftFor(s: Sim): number {
   return Math.min(12, 6.5 + 0.15 * s.passed) * u * (2 - u);
 }
 /** how hard a hand sends the ball: by the kind of hand, how fast the finger was going, and (a pad) how fast it came */
-export function power(s: Sim, mode: Mode, finger: number, came = 0): number {
+export function power(s: Sim, mode: 'pad' | 'swipe' | 'catch', finger: number, came = 0): number {
   const deep = Math.min(4, s.passed * 0.12);
-  const p = mode === 'pad' ? Math.max(17, came * 0.9) + finger * 0.4 : mode === 'swipe' ? 9 + finger * 0.75 : 7 + finger * 0.85;
-  return clamp(p + deep, mode === 'catch' ? 8 : 13, POWER_MAX);
+  const p = mode === 'pad' ? Math.max(17, came * 0.9) + finger * 0.4 : mode === 'swipe' ? 9 + finger * 0.75 : 14 + finger * 0.65;
+  return clamp(p + deep, 13, POWER_MAX);
 }
 
 /** Slab `i` of this seed's tunnel: one of a few figures across the section, denser and harder the deeper it is. */
@@ -137,11 +155,11 @@ export function makeSlab(seed: number, i: number, cols: number): Slab {
   return { i, z: slabZ(seed, i), cells, left, total: left, hue: hash(seed, i, 3) % 6 };
 }
 
-export function create(seed = 1, aspect = 0.46, mode: Mode = 'pad'): Sim {
+export function create(seed = 1, aspect = 0.46, mode: Mode = 'all'): Sim {
   const cols = colsFor(aspect);
   const s: Sim = {
     seed, W: H * aspect, cols, mode, z: 0, v: 0, ball: { x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, sx: 0, sy: 0 }, phase: 'ready', heldBy: 0,
-    integrity: FULL, broken: 0, passed: 0, returns: 0, slabs: [], nextSlab: 0, hands: [], events: [], rand: seeded(hash(seed, 9)), mark: null, t: 0, acc: 0,
+    integrity: FULL, broken: 0, passed: 0, returns: 0, slabs: [], nextSlab: 0, hands: [], events: [], rand: seeded(hash(seed, 9)), mark: null, turn: 'pad', t: 0, acc: 0,
   };
   grow(s); rest(s);
   return s;
@@ -165,7 +183,7 @@ export function serve(s: Sim, ax = 0, ay = 0) {
 }
 /** in 'catch': pick the waiting ball up under this finger */
 export function grab(s: Sim, id: number) {
-  if (s.phase !== 'ready' || s.mode !== 'catch') return;
+  if (s.phase !== 'ready' || (s.mode !== 'catch' && s.mode !== 'all')) return;
   s.phase = 'held'; s.heldBy = id;
 }
 /** in 'catch': the finger holding the ball has let go, moving like this */
@@ -269,18 +287,23 @@ function tick(s: Sim) {
   if (b.vz >= 0 && b.z - R < s.z + 0.02) { b.z = s.z + R + 0.02; b.vz = Math.max(b.vz, s.v + 6); }
   // the glass: is there a hand where it comes through?
   if (b.vz < 0 && b.z - R <= s.z && b.z >= s.z - LATE) {
-    let best: Hand | null = null, bestD = Infinity;
+    let best: Hand | null = null, bestD = Infinity, act: Act = 'pad';
     for (const k of s.hands) {
-      const d = Math.hypot(b.x - k.x, b.y - k.y);
-      const reach = s.mode === 'swipe' ? (Math.hypot(k.vx, k.vy) >= SWIPE_MIN ? HAND_R * 1.5 : -1) : HAND_R + R * 0.5;
-      if (d <= reach && d < bestD) { best = k; bestD = d; }
+      const d = Math.hypot(b.x - k.x, b.y - k.y), a = actOf(s.mode, k);
+      if (a && d <= (a === 'hit' ? HAND_R * 1.5 : HAND_R + R * 0.5) && d < bestD) { best = k; bestD = d; act = a; }
     }
     if (best) {
-      if (s.mode === 'catch') {
+      if (act === 'catch') {
         s.phase = 'held'; s.heldBy = best.id; Object.assign(b, { vx: 0, vy: 0, vz: 0, sx: 0, sy: 0, z: s.z + R + 0.05 });
         s.events.push({ kind: 'catch', ...at(s) });
       } else {
-        const p = power(s, s.mode, Math.hypot(best.vx, best.vy), speed(b)), k = s.mode === 'pad' ? (PAD_K * p) / HAND_R : 0, c = CARRY[s.mode];
+        const f = Math.hypot(best.vx, best.vy), came = speed(b);
+        // (the one hand's hit: a touch just made is a swipe at the ball; one long held is a bat being moved, which
+        // turns the ball less, and by where on it the ball landed as well)
+        const u = s.mode === 'all' && act === 'hit' ? clamp(((best.age ?? 9) - FRESH) / (SETTLED - FRESH), 0, 1) : act === 'pad' ? 1 : 0;
+        const p = s.mode === 'all' && act === 'hit' ? power(s, 'swipe', f) * (1 - u) + power(s, 'pad', f, came) * u : power(s, act === 'pad' ? 'pad' : 'swipe', f, came);
+        const k = ((act === 'pad' ? 1 : u * 0.5) * PAD_K * p) / HAND_R;
+        const c = act === 'pad' ? CARRY.pad : s.mode === 'all' ? CARRY_FRESH + (CARRY_HELD - CARRY_FRESH) * u : CARRY.swipe;
         leave(s, p, (b.x - best.x) * k + best.vx * c, (b.y - best.y) * k + best.vy * c, best.vx, best.vy);
         s.returns++;
         s.events.push({ kind: 'hand', ...at(s), hard: p });
@@ -323,7 +346,7 @@ export function crossing(s: Sim): { x: number; y: number; t: number; speed: numb
 function standIn(s: Sim) {
   s.hands.length = 0;
   if (s.phase === 'over') { if (s.t % 3 < STEP) restart(s); return; }
-  if (s.phase === 'ready') { if (s.t % 0.8 < STEP) { if (s.mode === 'catch') grab(s, -1); else serve(s, s.rand() * 2 - 1, s.rand() * 2 - 1); } return; }
+  if (s.phase === 'ready') { if (s.t % 0.8 < STEP) { if (s.mode === 'catch' || s.mode === 'all') grab(s, -1); else serve(s, s.rand() * 2 - 1, s.rand() * 2 - 1); } return; }
   const p = s.phase === 'held' ? { x: s.ball.x, y: s.ball.y, t: 0, speed: 0 } : crossing(s);
   if (!p || p.t > 0.5) return;
   if (!s.mark) {
@@ -333,31 +356,36 @@ function standIn(s: Sim) {
       for (let i = 0; i < sl.cells.length; i++) if (sl.cells[i] && n-- === 0) s.mark = { x: cellX(s, i % s.cols), y: cellY(Math.floor(i / s.cols)), z: sl.z };
     }
     s.mark ??= { x: 0, y: 0, z: s.z + 20 };
+    // (with the one hand, it takes turns being each)
+    s.turn = s.mode === 'all' ? (['pad', 'swipe', 'catch'] as const)[Math.floor(s.rand() * 3)] : s.mode;
   }
+  const as = s.turn;
   const dx = s.mark.x - p.x, dy = s.mark.y - p.y, dz = Math.max(1, s.mark.z - BRICK_T / 2 - R - s.z);
   // (the sideways speed that gets it there, at this power: a few rounds, since each depends on the other)
   const aim = (pw: number) => { let lx = 0, ly = 0; for (let i = 0; i < 4; i++) { const vz = Math.sqrt(Math.max(pw * pw * 0.3, pw * pw - lx * lx - ly * ly)), rise = vz * vz - 2 * G * dz, T = rise > 0 ? (vz - Math.sqrt(rise)) / G : vz / G; lx = dx / T; ly = dy / T; } return { lx, ly }; };
   // (and it has to get there at all: thrown up, it's slowing all the way)
   const need = Math.sqrt(2 * G * dz) * 1.3;
-  if (s.mode === 'pad') {
+  if (as === 'pad') {
     const pw = power(s, 'pad', 0, p.speed), { lx, ly } = aim(pw);
     let ox = lx / (PAD_K * pw), oy = ly / (PAD_K * pw);
     const m = Math.hypot(ox, oy), k = m > 0.9 ? 0.9 / m : 1;
     ox *= k; oy *= k;
     // (what the pad's rim can't give, the finger does: it's moving as the ball lands)
     let vx = (lx - ox * PAD_K * pw) / CARRY.pad, vy = (ly - oy * PAD_K * pw) / CARRY.pad;
-    const fm = Math.hypot(vx, vy), fk = fm > 30 ? 30 / fm : 1;
+    const fm = Math.hypot(vx, vy), fk = s.mode === 'all' ? 0 : fm > 30 ? 30 / fm : 1;
     vx *= fk; vy *= fk;
-    s.hands.push({ id: -1, x: p.x - ox * HAND_R, y: p.y - oy * HAND_R, vx, vy });
+    s.hands.push({ id: -1, x: p.x - ox * HAND_R, y: p.y - oy * HAND_R, vx, vy, age: 9 });
   } else {
     // (a finger's speed is both how hard and how far sideways: find the speed whose throw wants that much sideways)
     let f = 22, vx = 0, vy = f;
     for (let i = 0; i < 5; i++) {
-      const { lx, ly } = aim(power(s, s.mode, f)), m = Math.hypot(lx, ly) || 1e-6;
-      f = clamp(Math.max(m / CARRY[s.mode], s.mode === 'swipe' ? (need - 9) / 0.75 : (need - 7) / 0.85), SWIPE_MIN * 1.3, 40);
+      const thrown = s.phase === 'held', c = thrown ? CARRY.catch : s.mode === 'all' ? CARRY_FRESH : CARRY.swipe;
+      const { lx, ly } = aim(power(s, thrown ? 'catch' : 'swipe', f)), m = Math.hypot(lx, ly) || 1e-6;
+      f = clamp(Math.max(m / c, thrown ? (need - 14) / 0.65 : (need - 9) / 0.75), SWIPE_MIN * 1.3, 40);
       vx = (lx / m) * f; vy = (ly / m) * f;
     }
     if (s.phase === 'held') { release(s, -1, vx, vy); return; }
-    s.hands.push({ id: -1, x: p.x, y: p.y, vx, vy });
+    // (to catch: a still finger, only just down)
+    if (as === 'catch') s.hands.push({ id: -1, x: p.x, y: p.y, vx: 0, vy: 0, age: 0 }); else s.hands.push({ id: -1, x: p.x, y: p.y, vx, vy, age: 0 });
   }
 }

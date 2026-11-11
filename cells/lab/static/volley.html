@@ -8,7 +8,8 @@ canvas#view{position:fixed;inset:0;width:100%;height:100%;touch-action:none;disp
 #glass i,#mark{position:absolute;left:0;top:0;border-radius:50%;will-change:transform}
 #glass i{border:2px solid #ffffffcc;background:radial-gradient(circle,#ffffff00 55%,#ffffff2e 100%);box-shadow:0 0 24px #ffffff40}
 #glass i.holding{border-color:#ff8a4c;box-shadow:0 0 30px #ff8a4c}
-[data-hand="swipe"] #glass i{border-style:dashed;border-color:#ffffff90;background:none}
+#glass i.hit{border-style:dashed;border-color:#ffffff90;background:none}
+#glass i.catch{border-color:#ffb48a;box-shadow:0 0 18px #ff8a4c80}
 #mark{border:2px solid #ff8a4c;box-shadow:0 0 14px #ff8a4c80,inset 0 0 14px #ff8a4c50}
 #top{position:fixed;top:max(14px,env(safe-area-inset-top));left:max(16px,env(safe-area-inset-left));right:max(16px,env(safe-area-inset-right));display:flex;justify-content:space-between;align-items:flex-start;pointer-events:none;font-variant-numeric:tabular-nums;text-shadow:0 1px 8px #000a}
 #depth{font-size:34px;font-weight:600;letter-spacing:-.02em;line-height:1}
@@ -40,5 +41,5 @@ canvas#view{position:fixed;inset:0;width:100%;height:100%;touch-action:none;disp
 <div id="bar0"><div id="whole"></div></div>
 <div id="top"><div id="depth">0</div><div><small id="broken"></small><small id="best"></small></div></div>
 <div id="mid" role="status"><div id="say"></div><div id="sub"></div></div>
-<div id="bar"><button id="toHand">hand: pad</button><button id="toMute" aria-pressed="true">sound</button><a href="{{readme}}">notes</a></div>
+<div id="bar"><button id="toHand">hand: all</button><button id="toMute" aria-pressed="true">sound</button><a href="{{readme}}">notes</a></div>
 <script type="module" src="{{app}}"></script></body></html>
