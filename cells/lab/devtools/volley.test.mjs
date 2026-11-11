@@ -1,13 +1,15 @@
 // Volley's game on its own, then its page. (node cells/lab/devtools/volley.test.mjs; SIM=1 for the game only)
-// The game: a seed is the same game; the ball stays in the tunnel; each kind of hand returns it, the way and as hard
-// as it should; the ball falls back down the shaft, bends with spin, goes through a brick when thrown hard; no hand, and it's one of five gone, five and it's over; the glass halts before standing bricks and goes on
-// when a slab falls; the stand-in gets down the tunnel with every kind of hand; the tunnel never runs out.
+// The game: a seed is the same game; the ball stays in the way; each kind of hand returns it, the way and as hard as
+// it should; the ball falls back toward you, bends with spin; it breaks the shard it strikes, goes through when
+// thrown hard and takes the shards round the place with it, is turned by a glazed one; no hand, and it's one of five
+// gone, five and it's over; the pane halts before standing shards and goes on when a sheet gives way; the stand-in
+// gets on with every kind of hand; the sheets are what they should be, and never run out.
 // The page: it draws without error, a touch sends the ball, a finger where it comes back returns it, the hand changes.
 import { build } from 'esbuild';
 import assert from 'node:assert/strict';
 const load = async (f) => { const o = await build({ entryPoints: [new URL(f, import.meta.url).pathname], bundle: true, write: false, format: 'esm', platform: 'node' }); return import('data:text/javascript;base64,' + Buffer.from(o.outputFiles[0].text).toString('base64')); };
 const S = await load('../client/volley/sim.ts');
-const { create, advance, serve, grab, actOf, release, restart, makeSlab, crossing, speed, cellX, cellY, MODES, H, R, HAND_R, FULL, STAND, BRICK_T, ROWS, POWER_MAX, G } = S;
+const { create, advance, serve, grab, actOf, release, restart, makeSheet, crossing, speed, MODES, H, R, HAND_R, FULL, STAND, SHEET_T, POWER_MAX, G, GLAZED, THROUGH } = S;
 
 {
   const run = (seed, secs, mode = 'all') => { const s = create(seed, 0.46, mode); for (let i = 0; i < secs * 60; i++) advance(s, 1 / 60, true); return s; };
@@ -23,16 +25,16 @@ for (const mode of MODES) for (const aspect of [0.46, 1.6]) {
     const b = s.ball;
     assert.ok(Math.abs(b.x) <= s.W / 2 - R + 1e-6 && Math.abs(b.y) <= H / 2 - R + 1e-6 && b.z > s.z - 3 && b.z < s.z + 60, `in the tunnel (${mode}): ${JSON.stringify(b)}`);
     assert.ok(speed(b) <= POWER_MAX * 1.3 && Number.isFinite(speed(b)), 'never faster than it was thrown, give or take a fall');
-    const near = s.slabs.find((k) => k.left > 0);
-    assert.ok(!near || s.z <= near.z - BRICK_T / 2 - STAND + 0.05, 'the glass halts short of standing bricks');
-    assert.ok(s.slabs[s.slabs.length - 1].z > s.z + 80, 'there is always more tunnel');
+    const near = s.sheets.find((k) => k.left > 0);
+    assert.ok(!near || s.z <= near.z - SHEET_T / 2 - STAND + 0.05, 'the pane halts short of standing shards');
+    assert.ok(s.sheets[s.sheets.length - 1].z > s.z + 70, 'there is always more way');
   }
-  assert.ok(s.passed >= 6 && s.integrity === FULL, `the stand-in gets down the tunnel (${mode}, ${aspect}): ${s.passed} slabs, ${s.z.toFixed(0)} m`);
-  console.log(`ok   ${mode} ${aspect}: ${s.z.toFixed(0)} m, ${s.passed} slabs, ${s.broken} broken, ${s.returns} returns`);
+  assert.ok(s.passed >= 6 && s.integrity === FULL, `the stand-in gets on (${mode}, ${aspect}): ${s.passed} sheets, ${s.z.toFixed(0)} m`);
+  console.log(`ok   ${mode} ${aspect}: ${s.z.toFixed(0)} m, ${s.passed} sheets, ${s.broken} broken, ${s.returns} returns`);
 }
 {
   // (a ball coming straight back at the middle of the glass, and a hand: how it leaves)
-  const back = (mode, hand) => { const s = create(1, 0.46, mode); s.phase = 'play'; s.slabs.length = 0; Object.assign(s.ball, { x: 0, y: 0, z: 1, vx: 0, vy: 0, vz: -16 }); for (let i = 0; i < 40 && s.ball.vz < 0 && s.phase === 'play'; i++) { s.hands = hand ? [hand] : []; advance(s, 1 / 240); } return s; };
+  const back = (mode, hand) => { const s = create(1, 0.46, mode); s.phase = 'play'; s.sheets.length = 0; Object.assign(s.ball, { x: 0, y: 0, z: 1, vx: 0, vy: 0, vz: -16 }); for (let i = 0; i < 40 && s.ball.vz < 0 && s.phase === 'play'; i++) { s.hands = hand ? [hand] : []; advance(s, 1 / 240); } return s; };
   let s = back('pad', { id: 1, x: 0, y: -0.02, vx: 0, vy: 0 });
   assert.ok(s.ball.vz > 0 && Math.abs(s.ball.vx) < 1e-9 && s.returns === 1 && speed(s.ball) >= 16.5, 'pad, centred: straight back, and briskly');
   const still = speed(s.ball);
@@ -68,27 +70,51 @@ for (const mode of MODES) for (const aspect of [0.46, 1.6]) {
   assert.ok(s.phase === 'play' && s.ball.vz > 0 && s.ball.vx > 0 && s.ball.vx / speed(s.ball) < late * 0.6, 'one hand, moving and long down: a bat being moved, which turns it less');
   assert.deepEqual([actOf('all', { vx: 0, vy: 0, age: 0 }), actOf('all', { vx: 0, vy: 0 }), actOf('all', { vx: 9, vy: 0, age: 0 }), actOf('swipe', { vx: 0, vy: 0 })], ['catch', 'pad', 'hit', null]);
   // (the ball itself: thrown up the shaft it slows, stops as high as its speed takes it, and comes back down as fast)
-  s = create(1, 0.46, 'pad'); s.phase = 'play'; s.z = s.slabs[0].z - BRICK_T / 2 - STAND; s.hands = [{ id: 1, x: 0, y: 0, vx: 0, vy: 0 }]; Object.assign(s.ball, { x: 0, y: 0, z: s.z + 1, vx: 0, vy: 0, vz: 8 });
+  s = create(1, 0.46, 'pad'); s.phase = 'play'; s.z = s.sheets[0].z - SHEET_T / 2 - STAND; s.hands = [{ id: 1, x: 0, y: 0, vx: 0, vy: 0 }]; Object.assign(s.ball, { x: 0, y: 0, z: s.z + 1, vx: 0, vy: 0, vz: 8 });
   let top = 0, fell = 0; for (let i = 0; i < 240 * 2 && s.returns === 0; i++) { advance(s, 1 / 240); top = Math.max(top, s.ball.z - s.z); fell = Math.min(fell, s.ball.vz); }
   assert.ok(Math.abs(top - (1 + 64 / (2 * G))) < 0.05 && fell < -8 && s.returns === 1 && Math.abs(s.ball.y) < 1e-9, `it rises as far as its speed takes it, and falls back: ${top}, ${fell}`);
-  s = create(1, 0.46, 'pad'); s.phase = 'play'; s.slabs.length = 0; Object.assign(s.ball, { x: 0, y: 0, z: 2, vx: 0, vy: 0, vz: 10, sx: 8, sy: 0 });
+  s = create(1, 0.46, 'pad'); s.phase = 'play'; s.sheets.length = 0; Object.assign(s.ball, { x: 0, y: 0, z: 2, vx: 0, vy: 0, vz: 10, sx: 8, sy: 0 });
   for (let i = 0; i < 100; i++) advance(s, 1 / 240);
   assert.ok(s.ball.x > 0.3 && s.ball.sx < 8, 'spin bends it, and wears off');
   // (a brick: a hard ball goes through it and on; a softer one comes off it, and comes back at a fair pace)
-  const at = (vz, ticks = 20) => { const s = create(1, 0.46, 'pad'); s.phase = 'play'; s.z = 13; const sl = s.slabs[0], i = sl.cells.findIndex((v) => v === 1); Object.assign(s.ball, { x: cellX(s, i % s.cols), y: cellY(Math.floor(i / s.cols)), z: sl.z - 1.2, vx: 0, vy: 0, vz }); const n = sl.left; for (let k = 0; k < ticks; k++) advance(s, 1 / 240); return { s, broke: n - sl.left }; };
-  let r = at(30); assert.ok(r.broke === 1 && r.s.ball.vz > 20, 'thrown hard: through the brick');
-  r = at(12); assert.ok(r.broke === 1 && r.s.ball.vz < 0, 'thrown softly: off it, and back down');
-  r = at(3, 80); assert.ok(r.broke === 0 && r.s.ball.vz < 0, 'thrown too softly: it never gets there');
+  // (a shard: a hard ball goes through it and on, and the shards round the place go with it; a softer one breaks
+  // it and comes off; a glazed one takes two and always turns the ball)
+  const at = (vz, pick, ticks = 20) => {
+    const s = create(1, 0.46, 'pad'); s.phase = 'play';
+    const sh = s.sheets.find((k) => k.shards.some(pick)), k = sh.shards.findIndex(pick), d = sh.shards[k];
+    s.sheets = [sh]; s.z = sh.z - 6; Object.assign(s.ball, { x: d.cx, y: d.cy, z: sh.z - 1.1, vx: 0, vy: 0, vz });
+    const n = sh.shards.filter((o) => o.hp).length;
+    for (let j = 0; j < ticks; j++) advance(s, 1 / 240);
+    return { s, d, broke: n - sh.shards.filter((o) => o.hp).length };
+  };
+  const inside = (d) => !d.frame && d.kind !== GLAZED && Math.abs(d.cx) < 1 && Math.abs(d.cy) < 3;
+  let r = at(30, inside); assert.ok(r.d.hp === 0 && r.broke >= 2 && r.s.ball.vz > 20, `thrown hard: through the shard, and its neighbours go too (${r.broke})`);
+  const few = r.broke; r = at(34, inside); assert.ok(r.broke >= few, 'harder still: no fewer');
+  r = at(12, inside); assert.ok(r.d.hp === 0 && r.broke === 1 && r.s.ball.vz < 0, 'thrown softly: it breaks the one, and comes off it');
+  r = at(3, inside, 80); assert.ok(r.broke === 0 && r.s.ball.vz < 0, 'thrown too softly: it never gets there');
+  r = at(30, (d) => d.kind === GLAZED && !d.frame && Math.abs(d.cx) < 1.6 && Math.abs(d.cy) < 4.2); assert.ok(r.d.hp === 1 && r.s.ball.vz < 0, 'a glazed shard: one blow leaves it standing, and turns even a hard ball');
   // (nobody there: five, and it's over; then again)
   s = create(1, 0.46, 'pad');
-  for (let n = FULL; n > 0; n--) { assert.equal(s.phase, 'ready'); serve(s); s.slabs.length = 0; s.ball.vz = -16; for (let i = 0; i < 600 && s.phase === 'play'; i++) advance(s, 1 / 60); assert.equal(s.integrity, n - 1); }
+  for (let n = FULL; n > 0; n--) { assert.equal(s.phase, 'ready'); serve(s); s.sheets.length = 0; s.ball.vz = -16; for (let i = 0; i < 600 && s.phase === 'play'; i++) advance(s, 1 / 60); assert.equal(s.integrity, n - 1); }
   assert.equal(s.phase, 'over'); restart(s); assert.deepEqual([s.phase, s.integrity, s.z, s.broken], ['ready', FULL, 0, 0]);
   // (where it'll come back, off the walls and the floor)
-  s = create(1, 0.46, 'pad'); s.phase = 'play'; s.z = s.slabs[0].z - BRICK_T / 2 - STAND; Object.assign(s.ball, { x: 1, y: 2, z: s.z + 3, vx: 9, vy: 3, vz: -5, sx: 3, sy: 0 });
+  s = create(1, 0.46, 'pad'); s.phase = 'play'; s.z = s.sheets[0].z - SHEET_T / 2 - STAND; Object.assign(s.ball, { x: 1, y: 2, z: s.z + 3, vx: 9, vy: 3, vz: -5, sx: 3, sy: 0 });
   const c = crossing(s); for (let i = 0; i < 2000 && s.ball.z - R > s.z; i++) advance(s, 1 / 240);
   assert.ok(Math.hypot(s.ball.x - c.x, s.ball.y - c.y) < 0.4, `crossing ${JSON.stringify(c)} v ${JSON.stringify(s.ball)}`);
-  for (let i = 0; i < 60; i++) for (const cols of [4, 13]) { const sl = makeSlab(5, i, cols); assert.ok(sl.left > 0 && sl.left === sl.total && sl.cells.length === cols * ROWS && (i === 0 || sl.z > makeSlab(5, i - 1, cols).z), `slab ${i}`); }
-  console.log('ok   each hand and how hard, the ball\'s rise and fall, its spin, through a brick, nobody there, the crossing, the slabs');
+  // (the sheets: each a field of convex shards, some in the way and some its frame; the same for the same seed)
+  for (let i = 0; i < 40; i++) for (const W of [4.6, 16]) {
+    const sh = makeSheet(5, i, W);
+    assert.ok(sh.left > 0 && sh.left === sh.total && sh.left === sh.shards.filter((d) => !d.frame).length && (i === 0 || sh.z > makeSheet(5, i - 1, W).z), `sheet ${i}`);
+    assert.ok(sh.total < sh.shards.length && sh.total > 8, `sheet ${i}: a frame round it, and enough in it (${sh.total} of ${sh.shards.length})`);
+    for (const d of sh.shards) {
+      assert.ok(d.poly.length >= 6 && d.r > 0.1 && d.r < 2.5 && d.hp === (d.kind === GLAZED ? 2 : 1) && (!d.frame || d.kind !== GLAZED), 'a shard');
+      for (let k = 0; k < d.poly.length; k += 2) { const n = d.poly.length, ax = d.poly[(k + 2) % n] - d.poly[k], ay = d.poly[(k + 3) % n] - d.poly[k + 1], bx = d.poly[(k + 4) % n] - d.poly[(k + 2) % n], by = d.poly[(k + 5) % n] - d.poly[(k + 3) % n]; assert.ok(ax * by - ay * bx > -1e-9, 'convex, counter-clockwise'); }
+      for (const j of d.nb) assert.ok(j >= 0 && j < sh.shards.length);
+    }
+  }
+  assert.deepEqual(makeSheet(5, 7, 4.6).shards.map((d) => d.poly), makeSheet(5, 7, 4.6).shards.map((d) => d.poly));
+  assert.ok(Array.from({ length: 12 }, (_, i) => makeSheet(5, i, 4.6)).some((sh) => sh.shards.some((d) => d.kind === GLAZED)), 'some are glazed');
+  console.log('ok   each hand and how hard, the ball\'s rise and fall, its spin, through a shard, a glazed one, nobody there, the crossing, the sheets');
 }
 if (process.env.SIM) process.exit(0);
 
@@ -100,7 +126,7 @@ await withWood(async (lab) => {
   await p.waitForTimeout(800);
   const probe = () => p.evaluate(() => window.__volley.probe());
   let s = await probe();
-  ok('waiting, drawn', s.phase === 'ready' && s.frames > 2 && s.error === 0 && s.boxes > 100, s);
+  ok('waiting, drawn', s.phase === 'ready' && s.frames > 2 && s.error === 0 && s.verts > 2000, s);
   ok('says how', (await p.textContent('#sub')).includes('pick it up and throw it'));
   await p.mouse.click(195, 422); await p.waitForTimeout(300);
   s = await probe();
@@ -111,8 +137,9 @@ await withWood(async (lab) => {
     await p.mouse.move(at.x, at.y); await p.waitForTimeout(30); s = await probe();
   }
   ok('a hand where it comes back returns it', s.returns >= 3 && s.integrity === 5, s);
-  ok('a ring under the hand', await p.isVisible('#glass i'));
-  await p.click('#toHand');
+  ok('a ring under the hand', await p.isVisible('#pane i'));
+  ok('the buttons are out of the way in play', (await p.evaluate(() => getComputedStyle(document.getElementById('bar')).pointerEvents)) === 'none');
+  await p.evaluate(() => document.getElementById('toHand').click());
   ok('the hand changes, and the address with it', (await probe()).mode === 'pad' && p.url().includes('hand=pad') && (await p.textContent('#toHand')).includes('pad'));
   ok('no errors', !p.errors.length, p.errors.slice(0, 3));
   await p.close();

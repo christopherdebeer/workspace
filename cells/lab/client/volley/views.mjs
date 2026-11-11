@@ -5,8 +5,8 @@
 export const ready = '__volley';
 const PHONE = { width: 390, height: 844 };
 export const views = [
-  { name: 'ready', group: 'The tunnel', title: 'Before the first ball', caption: 'the glass is the whole screen; the first slab ahead, a frame of bricks, and the next ones through it', query: 'seed=1&still', size: PHONE, settle: 1200 },
-  { name: 'back', group: 'The tunnel', title: 'A ball in flight', caption: 'it lights the walls round it, which is most of how its depth is read', query: 'seed=1&auto&t=9&still', size: PHONE, settle: 1200 },
-  { name: 'deep', group: 'The tunnel', title: 'Further down', caption: 'a later slab at arm’s length, the lamps another colour; the orange ring is where the ball will come back through the glass', query: 'seed=1&auto&t=75.5&still', size: PHONE, settle: 1200 },
-  { name: 'wide', group: 'The tunnel', title: 'On a wider screen', caption: 'the tunnel is the screen’s shape: more columns across', query: 'seed=1&auto&t=41&still', size: { width: 1100, height: 620 }, settle: 1200 },
+  { name: 'ready', group: 'Sheets', title: 'Before the first ball', caption: 'the first sheet, a way off: a broken-off piece of a fractured wall, a hole through the middle of it, the next ones behind', query: 'seed=1&still', size: PHONE, settle: 1500 },
+  { name: 'struck', group: 'Sheets', title: 'A sheet being broken', caption: 'at arm’s length: pieces in the air, the holes’ shadows on the sheet behind, the ball and its own shadow', query: 'seed=1&auto&t=40&still', size: PHONE, settle: 1500 },
+  { name: 'glazed', group: 'Sheets', title: 'Glazed shards', caption: 'the blue ones take two blows, and always turn the ball; seen on the way to it', query: 'seed=1&auto&t=77&still', size: PHONE, settle: 1500 },
+  { name: 'wide', group: 'Sheets', title: 'On a wider screen', caption: 'the way is the screen’s shape: a wider sheet, of many more shards', query: 'seed=1&auto&t=41&still', size: { width: 1100, height: 620 }, settle: 1500 },
 ];

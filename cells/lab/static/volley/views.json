@@ -1,29 +1,29 @@
 [
  {
-  "group": "The tunnel",
+  "group": "Sheets",
   "views": [
    {
     "name": "ready",
     "title": "Before the first ball",
-    "caption": "the glass is the whole screen; the first slab ahead, a frame of bricks, and the next ones through it",
+    "caption": "the first sheet, a way off: a broken-off piece of a fractured wall, a hole through the middle of it, the next ones behind",
     "file": "v-ready.jpg"
    },
    {
-    "name": "back",
-    "title": "A ball in flight",
-    "caption": "it lights the walls round it, which is most of how its depth is read",
-    "file": "v-back.jpg"
+    "name": "struck",
+    "title": "A sheet being broken",
+    "caption": "at arm’s length: pieces in the air, the holes’ shadows on the sheet behind, the ball and its own shadow",
+    "file": "v-struck.jpg"
    },
    {
-    "name": "deep",
-    "title": "Further down",
-    "caption": "a later slab at arm’s length, the lamps another colour; the orange ring is where the ball will come back through the glass",
-    "file": "v-deep.jpg"
+    "name": "glazed",
+    "title": "Glazed shards",
+    "caption": "the blue ones take two blows, and always turn the ball; seen on the way to it",
+    "file": "v-glazed.jpg"
    },
    {
     "name": "wide",
     "title": "On a wider screen",
-    "caption": "the tunnel is the screen’s shape: more columns across",
+    "caption": "the way is the screen’s shape: a wider sheet, of many more shards",
     "file": "v-wide.jpg"
    }
   ]

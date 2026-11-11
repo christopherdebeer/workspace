@@ -1,57 +1,60 @@
 /**
- * Volley's game, on its own: a bouncy ball, a tunnel without end, slabs of bricks across it, and a hand.
+ * Volley's game, on its own: a bouncy ball, a way without end, sheets of shards across it, and a hand.
  *
- * The tunnel runs along z. Its section is H high and W wide (W is whatever the screen's shape makes it), centred on
- * the axis. You are a pane of glass across the whole section, at `z`; the ball goes on ahead of you into the slabs
- * and comes back.
+ * The way runs along z. Its section is H high and W wide (W is whatever the screen's shape makes it), centred on
+ * the axis, and the ball rebounds from its four sides. You are a pane across the whole section, at `z`; the ball
+ * goes on ahead of you into the sheets and comes back.
  *
- * The tunnel is a shaft, and you are lying at the bottom of it looking up: the ball falls (G) back down toward
- * you. Thrown up, it slows all the way, and if it meets nothing it stops and comes down again as fast as it left;
- * so how hard it's thrown is how high it gets. A bounce keeps most of its speed and not all; a throw's sideways
- * motion leaves it spinning, and the spin bends its flight until a bounce or the air takes it off. Thrown hard
- * enough it goes through a brick and on up into the next.
+ * A sheet is one fractured thing: a field of shards (the cells of a seeded Voronoi figure, each a convex polygon
+ * with a thickness) with holes through it where shards were left out. The ball meets a shard as the solid it is.
+ * It breaks the one it strikes; struck hard and square it goes through, and takes the shards round the place with
+ * it, more of them the harder it was going. Glazed shards take two, and always turn the ball. Break most of a
+ * sheet and what's left of it gives way.
  *
- * There is no paddle. Wherever the ball comes back through the glass, a hand has to be there, and what the hand is
+ * The ball is a ball thrown upward: it falls (G) back toward you. Thrown, it slows all the way, and if it meets
+ * nothing it stops and comes back as fast as it left; so how hard it's thrown is how far it gets. A bounce keeps
+ * most of its speed and not all; a throw's sideways motion leaves it spinning, and the spin bends its flight.
+ *
+ * There is no paddle. Wherever the ball comes back through the pane, a hand has to be there, and what the hand is
  * doing is how (and how hard) the ball leaves. A hand can be three things, and with the one hand (`mode` 'all') it is
  * whichever the finger is doing as the ball lands: moving, it hits; still and only just touched down, it catches;
  * still and long down, it is a pad. (A hit from a touch just made turns the ball more than one from a finger long
- * down, which is a bat being moved.) The other modes are each of the three alone:
+ * down, which is a bat being moved.) The other modes are each of the three alone.
  *
- *   pad    a finger on the glass is a sprung pad: the ball leaves by where on the pad it lands, about as fast as it
- *          came (never slow); a finger moving as it lands adds to it
- *   swipe  only a moving finger counts: the ball leaves the way the finger was going, as hard as it was going
- *   catch  a finger under the ball catches it; it is thrown when the finger lets go, the way and as hard as the
- *          finger was going (let go of a still finger and it's a toss)
- *
- * The glass goes forward down a clear tunnel and halts before bricks still standing. Break most of a slab and the
- * rest of it falls: you go on. A ball let through the glass is one of five gone. Everything random is from the seed,
- * and the step is fixed.
+ * The pane goes forward down a clear way and halts before shards still standing. A ball let through the pane is one
+ * of five gone. Everything random is from the seed, and the step is fixed.
  */
 import { seeded, hash, type Rand } from '../kit/rng';
 
-export const H = 10, ROWS = 8, CELL = H / ROWS;
-export const BRICK_T = 0.9, GAP = 13, FIRST = 18;
-/** how far a brick stops short of its cell on each side */
-export const JOINT = 0.04;
+export const H = 10;
+/** a sheet's thickness, the spacing of sheets, where the first is */
+export const SHEET_T = 0.5, GAP = 13, FIRST = 14;
+/** about how far apart a sheet's shards are; how much of itself a shard gives up to the joint round it */
+export const GRAIN = 0.92, JOINT = 0.035;
+/** how far a sheet runs on past the sides of the way (as a share of the way's width and height): its frame, which
+ * the ball can't reach, there so that a sheet near you fills the eye */
+export const FRAME = 0.5;
 export const R = 0.34;
 export const HAND_R = 1.15;
-/** how far behind the glass a ball can still be reached */
+/** how far behind the pane a ball can still be reached */
 export const LATE = 0.9;
 export const FULL = 5;
-/** how near the glass comes to bricks still standing; the share of a slab that, once all that's left, falls; and
- * however big the slab, this many broken is enough */
-export const STAND = 3.6, GIVES = 0.4, MOST = 10;
+/** how near the pane comes to shards still standing; the share of a sheet that, once all that's left, gives way;
+ * and however big the sheet, this many broken is enough */
+export const STAND = 3.6, GIVES = 0.4, MOST = 16;
 export const STEP = 1 / 240;
 export const MODES = ['all', 'pad', 'swipe', 'catch'] as const;
 export type Mode = (typeof MODES)[number];
 
 // the ball
-/** the fall: back down the shaft, toward the glass */
+/** the fall: back toward the pane */
 export const G = 18;
-/** what a bounce keeps: off a wall, off a brick */
-const WALL = 0.9, BRICK = 0.9;
-/** a ball meeting a brick this fast (along the tunnel) goes through it, and keeps this much */
+/** what a bounce keeps: off a side, off a shard */
+const WALL = 0.9, SHARD = 0.9;
+/** a ball meeting a shard this fast (square on) goes through it, and keeps this much */
 export const THROUGH = 19, KEEPS = 0.8;
+/** going through, it takes the shards within this of where it struck, and this much further per unit of speed over */
+const BURST = 0.75, BURST_PER = 0.07;
 /** spin: how much of a hand's sideways speed becomes it, the most there can be, how hard it bends the flight, and
  * how long it lasts */
 const SPIN_OF = 0.3, SPIN_MAX = 9, BEND = 1.3, SPIN_LIFE = 0.9;
@@ -81,45 +84,62 @@ export function actOf(mode: Mode, k: Hand): Act | null {
   if (mode === 'catch') return 'catch';
   return moving ? 'hit' : (k.age ?? 9) < FRESH ? 'catch' : 'pad';
 }
-export interface Slab { i: number; z: number; cells: Uint8Array; left: number; total: number; hue: number }
+
+/** what a shard is made of: plain, fired red, or glazed (which takes two, and always turns the ball) */
+export const PLAIN = 0, RED = 1, GLAZED = 2;
+export interface Shard {
+  /** its outline: x, y pairs, counter-clockwise, convex */
+  poly: number[];
+  cx: number; cy: number;
+  /** the furthest its outline gets from (cx, cy) */
+  r: number;
+  hp: number;
+  kind: number;
+  /** beyond the sides of the way: the ball can't reach it, and it isn't counted */
+  frame: boolean;
+  /** the shards it shares an edge with */
+  nb: number[];
+}
+export interface Sheet { i: number; z: number; shards: Shard[]; left: number; total: number; /** goes up whenever a shard of it changes */ ver: number }
 export interface Ball { x: number; y: number; z: number; vx: number; vy: number; vz: number; sx: number; sy: number }
 export type Ev =
-  | { kind: 'brick'; x: number; y: number; z: number; hue: number; row: number; broke: boolean; through: boolean; hard: number }
-  | { kind: 'fall'; x: number; y: number; z: number; hue: number; row: number }
+  /** a shard struck: `broke` if that was the end of it, `through` if the ball went on through, `chain` if it went
+   * with a neighbour that was struck */
+  | { kind: 'shard'; x: number; y: number; z: number; sheet: number; shard: number; broke: boolean; through: boolean; chain: boolean; hard: number }
+  /** a shard of a sheet that has given way */
+  | { kind: 'fall'; x: number; y: number; z: number; sheet: number; shard: number }
   | { kind: 'wall' | 'hand'; x: number; y: number; z: number; hard: number }
   | { kind: 'catch' | 'serve' | 'miss' | 'over' | 'pass' | 'through'; x: number; y: number; z: number };
 
 export interface Sim {
   seed: number;
-  W: number; cols: number;
+  W: number;
   mode: Mode;
-  /** where the glass is, and how fast it's going */
+  /** where the pane is, and how fast it's going */
   z: number; v: number;
   ball: Ball;
   phase: Phase;
   heldBy: number;
   integrity: number;
   broken: number; passed: number; returns: number;
-  slabs: Slab[];
-  nextSlab: number;
-  /** the hands on the glass now (set by whoever reads the fingers) */
+  sheets: Sheet[];
+  nextSheet: number;
+  /** the hands on the pane now (set by whoever reads the fingers) */
   hands: Hand[];
   events: Ev[];
   rand: Rand;
-  /** the stand-in's mark: the brick it's trying for */
+  /** the stand-in's mark: the shard it's trying for */
   mark: { x: number; y: number; z: number } | null;
   turn: 'pad' | 'swipe' | 'catch';
   t: number; acc: number;
 }
 
 const clamp = (v: number, a: number, b: number) => Math.max(a, Math.min(b, v));
-export const cellX = (s: { W: number; cols: number }, c: number) => -s.W / 2 + (c + 0.5) * (s.W / s.cols);
-export const cellY = (r: number) => -H / 2 + (r + 0.5) * CELL;
-export const colsFor = (aspect: number) => Math.max(3, Math.round((H * aspect) / CELL));
-const slabZ = (seed: number, i: number) => FIRST + GAP * i - (i >= 3 && hash(seed, i, 5) % 4 === 0 ? GAP - 2.6 : 0);
-/** how fast the glass would go: freely down a clear tunnel, slowing to a halt STAND short of bricks still standing */
+const unit = (...n: number[]) => hash(...n) / 4294967296;
+const sheetZ = (seed: number, i: number) => FIRST + GAP * i - (i >= 3 && hash(seed, i, 5) % 4 === 0 ? GAP - 2.6 : 0);
+/** how fast the pane would go: freely down a clear way, slowing to a halt STAND short of shards still standing */
 export function driftFor(s: Sim): number {
-  const sl = s.slabs.find((k) => k.left > 0), d = sl ? sl.z - BRICK_T / 2 - s.z : 99;
+  const sh = s.sheets.find((k) => k.left > 0), d = sh ? sh.z - SHEET_T / 2 - s.z : 99;
   const u = clamp((d - STAND) / 7, 0, 1);
   return Math.min(12, 6.5 + 0.15 * s.passed) * u * (2 - u);
 }
@@ -130,63 +150,142 @@ export function power(s: Sim, mode: 'pad' | 'swipe' | 'catch', finger: number, c
   return clamp(p + deep, 13, POWER_MAX);
 }
 
-/** Slab `i` of this seed's tunnel: one of a few figures across the section, denser and harder the deeper it is. */
-export function makeSlab(seed: number, i: number, cols: number): Slab {
-  const rand = seeded(hash(seed, i, 31)), cells = new Uint8Array(cols * ROWS);
-  const kind = i === 0 ? 0 : Math.floor(rand() * 7), flip = rand() < 0.5;
-  const dens = Math.min(0.7, 0.34 + i * 0.015), hard = i > 5 ? Math.min(0.3, (i - 5) * 0.03) : 0;
-  const mc = (cols - 1) / 2, mr = (ROWS - 1) / 2;
-  let left = 0;
-  for (let r = 0; r < ROWS; r++) for (let c = 0; c < cols; c++) {
-    const ce = Math.min(c, cols - 1 - c), re = Math.min(r, ROWS - 1 - r);
-    const on =
-      kind === 0 ? ce === 0 || re === 0 // a frame
-      : kind === 1 ? Math.abs(c - mc) < 1 || Math.abs(r - mr) < 1 // a cross
-      : kind === 2 ? (r + c) % 2 === (flip ? 1 : 0) // chequer
-      : kind === 3 ? (flip ? c : r) % 2 === 0 // bars
-      : kind === 4 ? ce < 1 || re < 2 // a window
-      : kind === 5 ? hash(seed, i, ce, r) / 4294967296 < dens // a figure, mirrored
-      : (r + (flip ? c : cols - 1 - c)) % 3 === 0; // diagonals
-    if (!on) continue;
-    cells[r * cols + c] = hash(seed, i, c, r, 9) / 4294967296 < hard ? 2 : 1;
-    left++;
+// ─── a sheet ─────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+/** the holes of sheet `i`: is this point in one? and, for the round ones, how far outside its rim (for glazing) */
+function holesOf(seed: number, i: number, W: number) {
+  const rand = seeded(hash(seed, i, 31)), kind = i === 0 ? 0 : Math.floor(rand() * 6), m = Math.min(W, H);
+  // (fewer and smaller the further out: the sheets fill in)
+  const open = Math.max(0.55, 1 - i * 0.02);
+  const rounds: { x: number; y: number; r: number; glazed: boolean }[] = [];
+  const round = (x: number, y: number, r: number) => rounds.push({ x, y, r: r * open, glazed: i >= 1 && rand() < Math.min(0.8, 0.3 + 0.04 * i) });
+  const tests: ((x: number, y: number) => boolean)[] = [];
+  if (kind === 0) { // an eye: one big hole, two small
+    round((rand() - 0.5) * W * 0.2, (rand() - 0.5) * H * 0.2, m * 0.36);
+    round(-W * 0.24, H * 0.36, m * 0.17); round(W * 0.24, -H * 0.36, m * 0.17);
+  } else if (kind === 1 || kind === 5) { // a few holes, or a scatter of small ones
+    const n = kind === 1 ? 3 + Math.floor(rand() * 2) : 7 + Math.floor(rand() * 4);
+    for (let k = 0; k < n; k++) round((rand() - 0.5) * W * 0.85, (rand() - 0.5) * H * 0.85, kind === 1 ? 0.9 + rand() * 0.9 : 0.55 + rand() * 0.4);
+  } else if (kind === 2) { // arches, in rows
+    const rows = 2 + Math.floor(rand() * 2), r = Math.min(W / 5, 1.5) * open;
+    for (let a = 0; a < rows; a++) {
+      const y0 = -H / 2 + ((a + 0.5) * H) / rows - r * 0.6, n = Math.max(1, Math.floor(W / (r * 2.7))), off = a % 2 ? 0.5 : 0;
+      for (let k = 0; k < n + 1; k++) { const x0 = -W / 2 + ((k + 0.5 - off) * W) / n; tests.push((x, y) => Math.abs(x - x0) < r && y > y0 - r * 0.9 && (y < y0 || Math.hypot(x - x0, y - y0) < r)); }
+    }
+  } else if (kind === 3) { // a rose: petals round a centre
+    const petals = 3 + Math.floor(rand() * 4), r0 = m * 0.44 * open, turn = rand() * 6.28, x0 = (rand() - 0.5) * W * 0.15, y0 = (rand() - 0.5) * H * 0.2;
+    tests.push((x, y) => { const d = Math.hypot(x - x0, y - y0), a = Math.atan2(y - y0, x - x0) + turn; return d < r0 * (0.3 + 0.7 * Math.abs(Math.cos((petals * a) / 2)) ** 1.5) && d > r0 * 0.16; });
+  } else { // bands across
+    const a = rand() * Math.PI, nx = Math.cos(a), ny = Math.sin(a), w = 0.75 * open, gap = 2.9 + rand() * 1.2, off = rand() * gap;
+    tests.push((x, y) => { const d = (((x * nx + y * ny + off) % gap) + gap) % gap; return d < w * 2; });
   }
-  if (!left) { cells[Math.floor(mr) * cols + Math.floor(mc)] = 1; left = 1; }
-  return { i, z: slabZ(seed, i), cells, left, total: left, hue: hash(seed, i, 3) % 6 };
+  return {
+    hole: (x: number, y: number) => rounds.some((o) => Math.hypot(x - o.x, y - o.y) < o.r) || tests.some((f) => f(x, y)),
+    glazed: (x: number, y: number) => rounds.some((o) => o.glazed && Math.hypot(x - o.x, y - o.y) < o.r + GRAIN * 0.75),
+  };
 }
 
+/** Sheet `i` of this seed's way: scattered sites, each one's Voronoi cell a shard, the ones in a hole left out. */
+export function makeSheet(seed: number, i: number, W: number): Sheet {
+  const ex = W * (0.5 + FRAME), ey = H * (0.5 + FRAME), { hole, glazed } = holesOf(seed, i, W);
+  // sites: a staggered grid, each shaken
+  const sx: number[] = [], sy: number[] = [];
+  const nx = Math.max(2, Math.round((2 * ex) / GRAIN)), ny = Math.max(2, Math.round((2 * ey) / (GRAIN * 0.9))), gx = (2 * ex) / nx, gy = (2 * ey) / ny;
+  for (let r = 0; r < ny; r++) for (let c = 0; c < nx; c++) {
+    sx.push(-ex + (c + 0.5 + (r % 2 ? 0.25 : -0.25)) * gx + (unit(seed, i, r, c, 1) - 0.5) * gx * 0.8);
+    sy.push(-ey + (r + 0.5) * gy + (unit(seed, i, r, c, 2) - 0.5) * gy * 0.8);
+  }
+  const n = sx.length, shards: Shard[] = [], index = new Int32Array(n).fill(-1), raw: number[][] = [];
+  // (the frame's own edge is ragged: a sheet is a broken-off piece, not a board)
+  const ragged = (x: number, y: number) => { const a = Math.atan2(y / ey, x / ex), d = Math.hypot(x / ex, y / ey); return d > 0.8 + 0.14 * Math.sin(a * 3 + i * 1.7 + seed) + 0.1 * Math.sin(a * 7 + i * 2.9); };
+  for (let a = 0; a < n; a++) {
+    const frame = Math.abs(sx[a]) > W / 2 || Math.abs(sy[a]) > H / 2;
+    if (frame ? ragged(sx[a], sy[a]) : hole(sx[a], sy[a])) continue;
+    // its cell: the sheet's whole rectangle, cut by the line halfway to each other site, nearest first
+    let poly = [-ex, -ey, ex, -ey, ex, ey, -ex, ey];
+    // (only the sites a few rows and columns round it can matter)
+    const ar = Math.floor(a / nx), acol = a % nx, near: number[] = [];
+    for (let r = Math.max(0, ar - 3); r <= Math.min(ny - 1, ar + 3); r++) for (let c = Math.max(0, acol - 3); c <= Math.min(nx - 1, acol + 3); c++) if (r * nx + c !== a) near.push(r * nx + c);
+    near.sort((p, q) => (sx[p] - sx[a]) ** 2 + (sy[p] - sy[a]) ** 2 - (sx[q] - sx[a]) ** 2 - (sy[q] - sy[a]) ** 2);
+    const cut: number[] = [];
+    for (const b of near) {
+      const dx = sx[b] - sx[a], dy = sy[b] - sy[a], d2 = dx * dx + dy * dy;
+      let far = 0;
+      for (let k = 0; k < poly.length; k += 2) far = Math.max(far, (poly[k] - sx[a]) ** 2 + (poly[k + 1] - sy[a]) ** 2);
+      if (d2 > 4 * far) break; // (too far to cut it, and so is every one after)
+      const mx = sx[a] + dx / 2, my = sy[a] + dy / 2, out: number[] = [];
+      let did = false;
+      for (let k = 0; k < poly.length; k += 2) {
+        const x0 = poly[k], y0 = poly[k + 1], x1 = poly[(k + 2) % poly.length], y1 = poly[(k + 3) % poly.length];
+        const s0 = (x0 - mx) * dx + (y0 - my) * dy, s1 = (x1 - mx) * dx + (y1 - my) * dy;
+        if (s0 <= 0) out.push(x0, y0); else did = true;
+        if (s0 <= 0 !== s1 <= 0) { const t = s0 / (s0 - s1); out.push(x0 + (x1 - x0) * t, y0 + (y1 - y0) * t); }
+      }
+      if (did) cut.push(b);
+      poly = out;
+      if (poly.length < 6) break;
+    }
+    if (poly.length < 6) continue;
+    let cx = 0, cy = 0;
+    for (let k = 0; k < poly.length; k += 2) { cx += poly[k]; cy += poly[k + 1]; }
+    cx /= poly.length / 2; cy /= poly.length / 2;
+    let r = 0;
+    for (let k = 0; k < poly.length; k += 2) { poly[k] = cx + (poly[k] - cx) * (1 - JOINT); poly[k + 1] = cy + (poly[k + 1] - cy) * (1 - JOINT); r = Math.max(r, Math.hypot(poly[k] - cx, poly[k + 1] - cy)); }
+    const kind = !frame && glazed(sx[a], sy[a]) ? GLAZED : unit(seed, i, a, 7) < 0.15 ? RED : PLAIN;
+    index[a] = shards.length; raw.push(cut);
+    shards.push({ poly, cx, cy, r, hp: kind === GLAZED ? 2 : 1, kind, frame, nb: [] });
+  }
+  shards.forEach((s, k) => { s.nb = raw[k].map((b) => index[b]).filter((b) => b >= 0); });
+  let left = shards.reduce((c, s) => c + (s.frame ? 0 : 1), 0);
+  if (!left) { const s = shards.reduce((a, b) => (Math.hypot(b.cx, b.cy) < Math.hypot(a.cx, a.cy) ? b : a)); s.frame = false; left = 1; }
+  return { i, z: sheetZ(seed, i), shards, left, total: left, ver: 0 };
+}
+
+/** The nearest point of a shard's outline to (x, y), or (x, y) itself if it's inside. */
+function nearest(poly: number[], x: number, y: number): [number, number] {
+  let inside = true, bx = 0, by = 0, bd = Infinity;
+  for (let k = 0; k < poly.length; k += 2) {
+    const x0 = poly[k], y0 = poly[k + 1], ex = poly[(k + 2) % poly.length] - x0, ey = poly[(k + 3) % poly.length] - y0;
+    if (ex * (y - y0) - ey * (x - x0) < 0) inside = false;
+    const t = clamp(((x - x0) * ex + (y - y0) * ey) / (ex * ex + ey * ey), 0, 1), px = x0 + ex * t, py = y0 + ey * t, d = (x - px) ** 2 + (y - py) ** 2;
+    if (d < bd) { bd = d; bx = px; by = py; }
+  }
+  return inside ? [x, y] : [bx, by];
+}
+
+// ─── the game ────────────────────────────────────────────────────────────────────────────────────────────────────────
+
 export function create(seed = 1, aspect = 0.46, mode: Mode = 'all'): Sim {
-  const cols = colsFor(aspect);
   const s: Sim = {
-    seed, W: H * aspect, cols, mode, z: 0, v: 0, ball: { x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, sx: 0, sy: 0 }, phase: 'ready', heldBy: 0,
-    integrity: FULL, broken: 0, passed: 0, returns: 0, slabs: [], nextSlab: 0, hands: [], events: [], rand: seeded(hash(seed, 9)), mark: null, turn: 'pad', t: 0, acc: 0,
+    seed, W: H * aspect, mode, z: 0, v: 0, ball: { x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, sx: 0, sy: 0 }, phase: 'ready', heldBy: 0,
+    integrity: FULL, broken: 0, passed: 0, returns: 0, sheets: [], nextSheet: 0, hands: [], events: [], rand: seeded(hash(seed, 9)), mark: null, turn: 'pad', t: 0, acc: 0,
   };
   grow(s); rest(s);
   return s;
 }
 export function restart(s: Sim) {
   if (s.phase !== 'over') return;
-  Object.assign(s, { z: 0, v: 0, integrity: FULL, broken: 0, passed: 0, returns: 0, slabs: [], nextSlab: 0, phase: 'ready', mark: null });
+  Object.assign(s, { z: 0, v: 0, integrity: FULL, broken: 0, passed: 0, returns: 0, sheets: [], nextSheet: 0, phase: 'ready', mark: null });
   grow(s); rest(s);
 }
-function grow(s: Sim) { while (slabZ(s.seed, s.nextSlab) < s.z + 110) s.slabs.push(makeSlab(s.seed, s.nextSlab++, s.cols)); }
+function grow(s: Sim) { while (sheetZ(s.seed, s.nextSheet) < s.z + 100) s.sheets.push(makeSheet(s.seed, s.nextSheet++, s.W)); }
 function rest(s: Sim) { Object.assign(s.ball, { x: 0, y: 0, z: s.z + R + 0.05, vx: 0, vy: 0, vz: 0, sx: 0, sy: 0 }); }
 const at = (s: Sim) => ({ x: s.ball.x, y: s.ball.y, z: s.ball.z });
 export const speed = (b: Ball) => Math.hypot(b.vx, b.vy, b.vz);
 
-/** send the ball off from 'ready', leaning toward (ax, ay) (each -1..1 across the glass) */
+/** send the ball off from 'ready', leaning toward (ax, ay) (each -1..1 across the pane) */
 export function serve(s: Sim, ax = 0, ay = 0) {
   if (s.phase !== 'ready') return;
   leave(s, 20 + Math.min(4, s.passed * 0.12), clamp(ax, -1, 1) * 4, clamp(ay, -1, 1) * 4, 0, 0);
   s.phase = 'play';
   s.events.push({ kind: 'serve', ...at(s) });
 }
-/** in 'catch': pick the waiting ball up under this finger */
+/** pick the waiting ball up under this finger (the hands that can catch) */
 export function grab(s: Sim, id: number) {
   if (s.phase !== 'ready' || (s.mode !== 'catch' && s.mode !== 'all')) return;
   s.phase = 'held'; s.heldBy = id;
 }
-/** in 'catch': the finger holding the ball has let go, moving like this */
+/** the finger holding the ball has let go, moving like this */
 export function release(s: Sim, id: number, vx = 0, vy = 0) {
   if (s.phase !== 'held' || s.heldBy !== id) return;
   const p = power(s, 'catch', Math.hypot(vx, vy));
@@ -194,7 +293,7 @@ export function release(s: Sim, id: number, vx = 0, vy = 0) {
   s.phase = 'play'; s.returns++;
   s.events.push({ kind: 'hand', ...at(s), hard: p });
 }
-/** the ball leaves the glass this fast, with this much of it sideways (never most of it), spun by the finger */
+/** the ball leaves the pane this fast, with this much of it sideways (never most of it), spun by the finger */
 function leave(s: Sim, p: number, lx: number, ly: number, fvx: number, fvy: number) {
   const m = Math.hypot(lx, ly), k = m > MAX_SIDE * p ? (MAX_SIDE * p) / m : 1, b = s.ball;
   b.vx = lx * k; b.vy = ly * k; b.vz = Math.sqrt(Math.max(0, p * p - b.vx * b.vx - b.vy * b.vy));
@@ -204,8 +303,9 @@ function leave(s: Sim, p: number, lx: number, ly: number, fvx: number, fvy: numb
   s.mark = null;
 }
 
-/** The ball's own motion for one step, with the shaft's walls: falling back toward you, bent by its spin, bouncing. Returns how hard
- * it struck a wall, if it did. (The game's step and the guess at where it will come back both use this.) */
+/** The ball's own motion for one step, with the four sides: falling back toward you, bent by its spin, bouncing.
+ * Returns how hard it struck a side, if it did. (The game's step and the guess at where it will come back both use
+ * this.) */
 function fly(b: Ball, W: number, h: number): number {
   b.vz -= G * h;
   b.vx += b.sx * BEND * h; b.vy += b.sy * BEND * h;
@@ -220,15 +320,23 @@ function fly(b: Ball, W: number, h: number): number {
   return struck;
 }
 
+/** one shard of a sheet takes a blow: an event, and (if that's the end of it) the counts */
+function strike(s: Sim, sh: Sheet, k: number, through: boolean, chain: boolean, hard: number) {
+  const d = sh.shards[k], broke = --d.hp === 0;
+  sh.ver++;
+  if (broke) { s.broken++; if (!d.frame) sh.left--; }
+  s.events.push({ kind: 'shard', x: d.cx, y: d.cy, z: sh.z, sheet: sh.i, shard: k, broke, through, chain, hard });
+}
+
 function tick(s: Sim) {
   const h = STEP, b = s.ball;
   s.t += h;
   if (s.phase === 'over') return;
   if (s.phase === 'ready') { rest(s); return; }
-  // the glass goes on: freely down a clear tunnel, to a halt before bricks still standing
+  // the pane goes on: freely down a clear way, to a halt before shards still standing
   s.v += clamp(driftFor(s) - s.v, -20 * h, 9 * h);
   s.z += s.v * h;
-  while (s.slabs.length && s.z >= s.slabs[0].z - BRICK_T / 2) { s.slabs.shift(); s.passed++; s.events.push({ kind: 'pass', x: 0, y: 0, z: s.z }); }
+  while (s.sheets.length && s.z >= s.sheets[0].z - SHEET_T / 2) { s.sheets.shift(); s.passed++; s.events.push({ kind: 'pass', x: 0, y: 0, z: s.z }); }
   grow(s);
   if (s.phase === 'held') {
     const hand = s.hands.find((k) => k.id === s.heldBy);
@@ -238,54 +346,51 @@ function tick(s: Sim) {
   }
   const struck = fly(b, s.W, h);
   if (struck > 2) s.events.push({ kind: 'wall', ...at(s), hard: struck });
-  // the bricks: of the slabs it's in, the brick it's deepest into
-  const cw = s.W / s.cols;
-  let hit: Slab | null = null, hc = 0, hr = 0, bd = R, nx = 0, ny = 0, nz = 0;
-  for (const sl of s.slabs) {
-    if (sl.z - BRICK_T / 2 > b.z + R) break;
-    if (!sl.left || sl.z + BRICK_T / 2 < b.z - R) continue;
-    const c0 = clamp(Math.floor((b.x - R + s.W / 2) / cw), 0, s.cols - 1), c1 = clamp(Math.floor((b.x + R + s.W / 2) / cw), 0, s.cols - 1);
-    const r0 = clamp(Math.floor((b.y - R + H / 2) / CELL), 0, ROWS - 1), r1 = clamp(Math.floor((b.y + R + H / 2) / CELL), 0, ROWS - 1);
-    for (let r = r0; r <= r1; r++) for (let c = c0; c <= c1; c++) {
-      if (!sl.cells[r * s.cols + c]) continue;
-      const cx = cellX(s, c), cy = cellY(r), ex = cw / 2 - JOINT, ey = CELL / 2 - JOINT, ez = BRICK_T / 2;
-      let dx = b.x - clamp(b.x, cx - ex, cx + ex), dy = b.y - clamp(b.y, cy - ey, cy + ey), dz = b.z - clamp(b.z, sl.z - ez, sl.z + ez);
-      let d = Math.hypot(dx, dy, dz);
-      if (d >= bd) continue;
-      if (d < 1e-6) { // its centre is inside: out by the nearest face
-        const ox = ex - Math.abs(b.x - cx), oy = ey - Math.abs(b.y - cy), oz = ez - Math.abs(b.z - sl.z);
-        dx = dy = dz = 0;
-        if (oz <= ox && oz <= oy) dz = b.z < sl.z ? -1 : 1; else if (ox <= oy) dx = b.x < cx ? -1 : 1; else dy = b.y < cy ? -1 : 1;
-        d = 0;
-      } else { dx /= d; dy /= d; dz /= d; }
-      hit = sl; hc = c; hr = r; bd = d; nx = dx; ny = dy; nz = dz;
+  // the shards: of the sheets it's in, the shard it's deepest into
+  let hit: Sheet | null = null, hk = 0, bd = R, nx = 0, ny = 0, nz = 0;
+  for (const sh of s.sheets) {
+    if (sh.z - SHEET_T / 2 > b.z + R) break;
+    if (sh.z + SHEET_T / 2 < b.z - R) continue;
+    for (let k = 0; k < sh.shards.length; k++) {
+      const d = sh.shards[k];
+      if (!d.hp || (b.x - d.cx) ** 2 + (b.y - d.cy) ** 2 > (d.r + R) ** 2) continue;
+      const [qx, qy] = nearest(d.poly, b.x, b.y), qz = clamp(b.z, sh.z - SHEET_T / 2, sh.z + SHEET_T / 2);
+      let dx = b.x - qx, dy = b.y - qy, dz = b.z - qz, dist = Math.hypot(dx, dy, dz);
+      if (dist >= bd) continue;
+      // (its centre is inside the shard: out by the nearer face)
+      if (dist < 1e-6) { dx = dy = 0; dz = b.z < sh.z ? -1 : 1; dist = 0; } else { dx /= dist; dy /= dist; dz /= dist; }
+      hit = sh; hk = k; bd = dist; nx = dx; ny = dy; nz = dz;
     }
   }
   if (hit) {
     const vn = b.vx * nx + b.vy * ny + b.vz * nz;
     if (vn < 0) {
-      const i = hr * s.cols + hc, hard = -vn;
-      // (hard enough, and square on: through it and on; otherwise off it)
-      const through = hit.cells[i] === 1 && hard >= THROUGH && Math.abs(nz) > 0.7;
-      const broke = --hit.cells[i] === 0;
-      if (through) { b.vx *= KEEPS; b.vy *= KEEPS; b.vz *= KEEPS; } else {
-        b.vx -= (1 + BRICK) * vn * nx; b.vy -= (1 + BRICK) * vn * ny; b.vz -= (1 + BRICK) * vn * nz;
+      const d = hit.shards[hk], hard = -vn;
+      // (hard enough, and square on: through it and on, and the shards round the place go with it; otherwise off it)
+      const through = d.hp === 1 && hard >= THROUGH && Math.abs(nz) > 0.7;
+      strike(s, hit, hk, through, false, hard);
+      if (through) {
+        b.vx *= KEEPS; b.vy *= KEEPS; b.vz *= KEEPS;
+        const reach = BURST + (hard - THROUGH) * BURST_PER;
+        hit.shards.forEach((o, k) => { if (o.hp === 1 && Math.hypot(o.cx - b.x, o.cy - b.y) < reach + o.r * 0.5) strike(s, hit!, k, false, true, hard); });
+      } else {
+        b.vx -= (1 + SHARD) * vn * nx; b.vy -= (1 + SHARD) * vn * ny; b.vz -= (1 + SHARD) * vn * nz;
         b.x += nx * (R - bd); b.y += ny * (R - bd); b.z += nz * (R - bd);
+        // (pushed out of the shard, but not out of the way)
+        b.x = clamp(b.x, -s.W / 2 + R, s.W / 2 - R); b.y = clamp(b.y, -H / 2 + R, H / 2 - R);
         b.sx *= 0.4; b.sy *= 0.4;
       }
-      if (broke) { hit.left--; s.broken++; }
-      s.events.push({ kind: 'brick', x: cellX(s, hc), y: cellY(hr), z: hit.z, hue: hit.hue, row: hr, broke, through, hard });
-      // (broken through: what's left of the slab falls)
-      if (broke && hit.total - hit.left >= Math.min(Math.ceil(hit.total * (1 - GIVES)), MOST)) {
-        for (let k = 0; k < hit.cells.length; k++) if (hit.cells[k]) { hit.cells[k] = 0; s.broken++; s.events.push({ kind: 'fall', x: cellX(s, k % s.cols), y: cellY(Math.floor(k / s.cols)), z: hit.z, hue: hit.hue, row: Math.floor(k / s.cols) }); }
-        hit.left = 0;
+      // (broken through: what's left of the sheet gives way, frame and all)
+      if (hit.left > 0 && hit.total - hit.left >= Math.min(Math.ceil(hit.total * (1 - GIVES)), MOST)) {
+        hit.shards.forEach((o, k) => { if (o.hp) { o.hp = 0; s.broken++; s.events.push({ kind: 'fall', x: o.cx, y: o.cy, z: hit!.z, sheet: hit!.i, shard: k }); } });
+        hit.left = 0; hit.ver++;
         s.events.push({ kind: 'through', x: 0, y: 0, z: hit.z });
       }
     }
   }
-  // (the glass, going on, never overtakes a ball that's going the same way: it's pushed along)
+  // (the pane, going on, never overtakes a ball that's going the same way: it's pushed along)
   if (b.vz >= 0 && b.z - R < s.z + 0.02) { b.z = s.z + R + 0.02; b.vz = Math.max(b.vz, s.v + 6); }
-  // the glass: is there a hand where it comes through?
+  // the pane: is there a hand where it comes through?
   if (b.vz < 0 && b.z - R <= s.z && b.z >= s.z - LATE) {
     let best: Hand | null = null, bestD = Infinity, act: Act = 'pad';
     for (const k of s.hands) {
@@ -328,8 +433,8 @@ export function advance(s: Sim, dt: number, auto = false) {
   }
 }
 
-/** Where and when the ball will come back through the glass, were nothing but the walls in its way: its flight run
- * on (falling, bending, bouncing), the glass going as it's going. */
+/** Where and when the ball will come back through the pane, were nothing but the sides in its way: its flight run
+ * on (falling, bending, bouncing), the pane going as it's going. */
 export function crossing(s: Sim): { x: number; y: number; t: number; speed: number } | null {
   if (s.phase !== 'play' || s.ball.vz >= 0) return null;
   const b = { ...s.ball }, h = 1 / 120;
@@ -341,8 +446,8 @@ export function crossing(s: Sim): { x: number; y: number; t: number; speed: numb
   return null;
 }
 
-/** A player to watch: sends the ball off, is where it comes back, and tries for a brick of the nearest slab,
- * allowing for the fall. */
+/** A player to watch: picks the ball up, is where it comes back, and tries for a shard of the nearest sheet,
+ * throwing hard enough to get there. */
 function standIn(s: Sim) {
   s.hands.length = 0;
   if (s.phase === 'over') { if (s.t % 3 < STEP) restart(s); return; }
@@ -350,17 +455,17 @@ function standIn(s: Sim) {
   const p = s.phase === 'held' ? { x: s.ball.x, y: s.ball.y, t: 0, speed: 0 } : crossing(s);
   if (!p || p.t > 0.5) return;
   if (!s.mark) {
-    const sl = s.slabs.find((k) => k.left > 0);
-    if (sl) {
-      let n = Math.floor(s.rand() * sl.left);
-      for (let i = 0; i < sl.cells.length; i++) if (sl.cells[i] && n-- === 0) s.mark = { x: cellX(s, i % s.cols), y: cellY(Math.floor(i / s.cols)), z: sl.z };
+    const sh = s.sheets.find((k) => k.left > 0);
+    if (sh) {
+      let n = Math.floor(s.rand() * sh.left);
+      for (const d of sh.shards) if (d.hp && !d.frame && n-- === 0) s.mark = { x: clamp(d.cx, -s.W / 2 + R, s.W / 2 - R), y: clamp(d.cy, -H / 2 + R, H / 2 - R), z: sh.z };
     }
     s.mark ??= { x: 0, y: 0, z: s.z + 20 };
     // (with the one hand, it takes turns being each)
     s.turn = s.mode === 'all' ? (['pad', 'swipe', 'catch'] as const)[Math.floor(s.rand() * 3)] : s.mode;
   }
   const as = s.turn;
-  const dx = s.mark.x - p.x, dy = s.mark.y - p.y, dz = Math.max(1, s.mark.z - BRICK_T / 2 - R - s.z);
+  const dx = s.mark.x - p.x, dy = s.mark.y - p.y, dz = Math.max(1, s.mark.z - SHEET_T / 2 - R - s.z);
   // (the sideways speed that gets it there, at this power: a few rounds, since each depends on the other)
   const aim = (pw: number) => { let lx = 0, ly = 0; for (let i = 0; i < 4; i++) { const vz = Math.sqrt(Math.max(pw * pw * 0.3, pw * pw - lx * lx - ly * ly)), rise = vz * vz - 2 * G * dz, T = rise > 0 ? (vz - Math.sqrt(rise)) / G : vz / G; lx = dx / T; ly = dy / T; } return { lx, ly }; };
   // (and it has to get there at all: thrown up, it's slowing all the way)

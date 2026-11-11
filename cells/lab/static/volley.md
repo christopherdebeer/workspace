@@ -1,28 +1,38 @@
 # Volley
 
-> A brick-breaker up a shaft without end, played lying on your back. There is no paddle: the screen is a pane of glass, and you throw the ball back up with a hand on it.
+> A ball thrown up into fractured sheets and caught again. There is no paddle: the screen is a pane, and you return the ball with a hand on it.
 
 ![Before the first ball](volley/v-ready.jpg)
-![A ball in flight](volley/v-back.jpg)
+![A sheet being broken](volley/v-struck.jpg)
 
-The tunnel is the shape of your screen and runs away from you for ever. You are a pane of glass across its whole section. The ball goes on ahead into slabs of bricks and comes back; wherever it comes back through the glass, a hand has to be there. Break most of a slab (three fifths) and the rest of it falls, and you go on down the tunnel to the next. A ball let through is one of five gone.
+You are lying on your back, throwing a bouncy ball up at what hangs above you: sheets of fractured plaster, one behind another, each with holes through it. The ball breaks the shard it strikes and falls back; wherever it comes back through the pane, a hand has to be there. Break most of a sheet and the rest of it gives way, and you rise to the next. A ball let through is one of five gone.
 
-Touch the glass to pick the ball up, and let go to throw it: a flick is a hard throw that way, a plain lift is a toss straight up. The orange ring on the glass is where the ball is going to come through; it closes as the ball arrives.
+Touch the pane to pick the ball up, and let go to throw it: a flick is a hard throw that way, a plain lift is a toss straight up. The ring that closes on the pane is where the ball is going to come through.
 
-## A ball thrown at the ceiling
+## Sheets and shards
 
-You are lying on your back at the bottom of a shaft, throwing a bouncy ball up at what's above you. Down is toward you.
+A sheet is one broken thing, not a wall of parts. It is a scatter of points, each point's nearest ground a shard (a Voronoi figure), so every shard is a flat-sided, many-cornered piece that fits its neighbours; the holes are where shards were left out (an eye, a few rounds, rows of arches, a rose, bands), and the sheet's own edge is ragged, a piece broken off something larger. Sheets fill in the further you go.
 
-- **It falls back.** Thrown up, the ball slows all the way; if it meets nothing it stops, hangs, and comes down again as fast as it left. Nothing else brings it back: there's no rule that returns it, only the fall.
-- **How hard is how high.** How fast your finger is going is how hard the ball goes, and so how far up the shaft it gets. A soft throw doesn't reach the bricks at all; a toss (letting go of a still finger) gets about five metres; a hard flick reaches the slab after next.
-- **It comes down harder off a brick.** A ball that meets the underside of a brick on the way up is turned, and then falls: the nearer the bricks, the quicker and sharper the volley.
-- **Thrown hard enough, it goes through.** A ball meeting a brick square on and fast breaks it and carries on up, a fifth slower, into the next: one good throw can take a line out of a slab, or two slabs. And it can come down on top of the slab it went through, and break its way back. (The dark bricks always turn it.)
-- **It spins.** The sideways motion of your finger leaves the ball spinning that way, and the spin bends its flight for about a second, or until a wall takes most of it off.
-- **The walls are just walls.** There is no floor: all four sides bounce the same, each keeping nine tenths.
+- **The ball meets a shard as the solid it is**: its face, or its broken edge inside a hole.
+- **Struck, a shard breaks**, and the ball comes off it and falls.
+- **Struck hard and square, it bursts** and the ball goes on through, a fifth slower, and the shards round the place go with it: the harder the throw, the bigger the hole, and one good throw can go through two sheets.
+- **Glazed shards** (blue, usually ringing a hole) take two blows, craze at the first, and always turn the ball.
+- **Three fifths of a sheet broken** (or sixteen shards, if that's fewer) and the rest gives way, outward from where it was last struck, and falls toward you.
+
+![Glazed shards](volley/v-glazed.jpg)
+
+## The ball
+
+- **It falls back.** Thrown up, it slows all the way; if it meets nothing it stops, hangs, and comes down again as fast as it left. Nothing else brings it back.
+- **How hard is how high.** How fast your finger is going is how hard the ball goes, and so how far up it gets.
+- **It comes down harder off a shard**: the nearer the sheet, the quicker and sharper the volley.
+- **It can come down on top of the sheet it went through**, and break its way back.
+- **It spins.** The sideways motion of your finger leaves the ball spinning that way, and the spin bends its flight for about a second, or until a bounce takes most of it off.
+- **The four sides of the screen are sides**: it comes off them, keeping nine tenths.
 
 ## One hand
 
-There is no paddle, and the whole screen is the surface. What a finger is to the ball is decided at the moment the ball lands on it, by two things: whether the finger is moving, and how long ago it touched down.
+What a finger is to the ball is decided at the moment the ball lands on it, by two things: whether the finger is moving, and how long ago it touched down.
 
 | as the ball lands, the finger is | it is | and the ball |
 |---|---|---|
@@ -31,34 +41,29 @@ There is no paddle, and the whole screen is the surface. What a finger is to the
 | moving, and only just down | a **swipe** at it | leaves the way the finger was going, as hard as it was going; the most the ball can be turned |
 | moving, and long down | a **bat being moved** | leaves partly the finger's way and partly by where it landed: turned less than half as much as by a swipe at it |
 
-So a rally sorts itself out by what you had time for. A finger left on the glass is a bat, and will keep the ball up on its own. Sliding it to get under the ball turns the return into a hit. Lifting off and coming down late is a catch, which is the one that needs timing, and buys you the time to look and throw. Between a swipe just made and a bat long held, the turn fades smoothly over half a second.
+A finger left on the pane is a bat, and will keep the ball up on its own. Sliding it to get under the ball turns the return into a hit. Lifting off and coming down late is a catch, which is the one that needs timing, and buys you the time to look and throw.
 
-The ring under your finger shows which of these it would be right now: a plain ring for a pad, a warm one for a catch, a wide dashed one for a hit, orange while it's holding the ball. A mouse with no button down is a long-held finger; pressing is touching down, letting go is letting go.
+The ring under your finger shows which of these it would be right now: a washed disc for a pad, the disc dotted round for a catch, a wide dashed ring for a hit. A mouse with no button down is a long-held finger; pressing is touching down.
 
-**hand** (bottom right) steps through the one hand and each of the three alone (`pad`, `swipe`, `catch`), for comparing; each keeps its own best depth. You pick the first ball up yourself, except with `pad` and `swipe`, where a touch sends it.
+**hand** (shown when the ball isn't in play) steps through the one hand and each of the three alone (`pad`, `swipe`, `catch`), for comparing; each keeps its own best.
 
-![Further down](volley/v-deep.jpg)
+## Reading it
 
-## Reading a ball in a tunnel
-
-From the glass, a ball going away and a ball coming back look nearly the same, and its depth is the thing you most need. Four things give it:
-
-- **Its light.** The ball lights the four walls round it, so there is a band of light on the tunnel at the ball's depth, moving with it. The walls are panelled on the bricks' own grid, which makes that band countable.
-- **The ring on the glass**, for the last second and a third of its fall: where it will come through, the bounces and the bend reckoned in. `guide=0` takes it away, to see how much the rest carries.
-- **Its sound.** Each hit is placed left or right and is quieter with distance; the bricks ring higher toward the top of the tunnel.
-- **It is never hidden.** Behind a slab it is drawn faintly through whatever covers it.
-
-## The tunnel
-
-Slab after slab, made from the seed: a frame, a cross, a chequer, bars, a window, a mirrored figure, diagonals; closer pairs now and then, which a ball can get between. Deeper slabs are denser and some bricks take two. The glass runs freely down a clear tunnel and comes to a halt at arm's length from bricks still standing, so the volley is quickest exactly when you're closest. On a wide screen a slab has many more bricks, and ten broken is always enough. The lamps change colour every hundred and twenty metres; the tunnel winds (in the picture only: the game's tunnel is straight).
+- **Shadows.** One low, warm light from behind your shoulder, and it casts: each sheet's holes fall on the sheet behind, and so does the ball. The gap between the ball and its shadow is its height off that sheet.
+- **Haze.** Everything further is paler, into the sky's own colour, so sheets sort themselves by depth.
+- **The ring on the pane**, for the last second and a third of the ball's fall. `guide=0` takes it away.
+- **Sound.** Fired clay, placed left and right and quieter with distance: a crack for a break, a lower burst for a ball going through, a ring for glaze, a rumble when a sheet goes.
+- **Never hidden.** Behind a sheet the ball is drawn faintly through it.
+- The air changes colour every hundred and fifty metres.
 
 ![On a wider screen](volley/v-wide.jpg)
 
 ## How it is made
 
-- `client/volley/sim.ts` is the game and nothing else: a falling, spinning sphere against boxes and four walls, in fixed steps of 1/240 s, everything random from the seed. Hands are given to it as points on the glass with a velocity; what a hand does is decided there. It also holds the stand-in player, which plays every hand (with the one hand, it takes turns batting, swiping and catching). Tested on its own in `devtools/volley.test.mjs`.
-- `client/volley/draw.ts` draws it: every surface an axis-aligned box, instanced, one program; the ball a sphere. The eye sits far enough behind the glass that the glass exactly fills the screen, so a point touched and a point in the tunnel are the same point. No assets, no libraries.
-- `client/volley/main.ts` is the fingers, the rings on the glass, the sound and the words.
+- `client/volley/sim.ts` is the game and nothing else: a falling, spinning sphere against convex prisms and four sides, in fixed steps of 1/240 s, everything random from the seed. Hands are given to it as points on the pane with a velocity and an age. It also holds the stand-in player. Tested on its own in `devtools/volley.test.mjs`.
+- `client/volley/draw.ts` draws it. Every solid is a flat-faced prism: a shard (its face tilted a little off the sheet's plane, so no two catch the light alike), or a piece of one in the air; even the ball is faceted. A sheet's mesh is made again when a shard of it changes. What a face is made of (plaster, fired red, crazed glaze, the bare body on a broken edge) is worked out where it's drawn. A shadow map from the one light; haze into a sky gradient. No assets, no libraries.
+- `client/volley/main.ts` is the fingers, the pieces in the air (a struck shard chips into a few, a burst one into many, a fallen sheet's go whole), the ball's wake, the dust, the sound and the words.
+- `static/volley-brief.md` describes the game with no picture in it, for anyone who wants to imagine it differently. This look began from four such imaginings.
 
 ## Flags
 
@@ -66,8 +71,4 @@ Slab after slab, made from the seed: a frame, a cross, a chequer, bars, a window
 
 ## Before this
 
-The third version's ball fell toward the bottom of the screen, like a ball thrown at a wall; it came back along the floor, and needed a rule to make it come back at all.
-
-The second version had the tunnel and the three hands, but its ball was an arcade one: weightless, always the same speed, a perfect mirror off everything.
-
-The first version kept the flat game as it was and only moved the eye: a court seen from behind a paddle you dragged left and right. It is in the repository's history (`lab: Volley, a brick-breaker seen from the paddle`).
+Four earlier versions are in the repository's history: a court seen from behind a dragged paddle; a tunnel of block slabs with three separate hands and an arcade ball; the same with a ball that fell down the screen; and the same with the fall turned toward you and the hands made one.
