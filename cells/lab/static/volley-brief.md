@@ -1,8 +1,8 @@
-# Volley: a brief without a picture
+# A brief without a picture
 
 This describes a game by what happens in it and how it feels to play, and nothing else. It says nothing about what anything looks like, what it is made of, where it is set, what it sounds like, or what it resembles. That is deliberate: it is written for someone who will decide all of that, and who should not have to un-see an existing answer first. There is a working version; please don't look at it before you have ideas of your own.
 
-Every noun below is a placeholder chosen to be as empty as possible. "The object" is not necessarily a ball. "Targets" are not necessarily solid things. Rename all of it.
+Every noun below is a placeholder chosen to be as empty as possible. "The object" and "targets" need not be solid things, or things at all. Rename all of it.
 
 ## The situation in one paragraph
 
