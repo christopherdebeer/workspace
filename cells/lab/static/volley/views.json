@@ -10,14 +10,14 @@
    },
    {
     "name": "back",
-    "title": "A ball coming back",
-    "caption": "the orange ring is where it will come through the glass; the white one is the hand, already there",
+    "title": "A ball in flight",
+    "caption": "it lights the walls round it, which is most of how its depth is read",
     "file": "v-back.jpg"
    },
    {
     "name": "deep",
     "title": "Further down",
-    "caption": "a later slab at arm’s length, the lamps another colour",
+    "caption": "a later slab at arm’s length, the lamps another colour; the orange ring is where the ball will come back through the glass",
     "file": "v-deep.jpg"
    },
    {

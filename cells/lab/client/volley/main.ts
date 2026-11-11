@@ -9,7 +9,7 @@
  * Flags: seed, hand (pad | swipe | catch: what a finger is), auto (a stand-in plays), t (run on this many seconds
  * first), still (and hold there), guide=0 (no ring where the ball will come back), mute, preview (the index's card).
  */
-import { H, ROWS, CELL, BRICK_T, R, HAND_R, FULL, MODES, SWIPE_MIN, create, advance, serve, release, restart, crossing, colsFor, cellX, cellY, type Sim, type Ev, type Mode, type Hand } from './sim';
+import { H, ROWS, CELL, BRICK_T, R, HAND_R, FULL, MODES, SWIPE_MIN, create, advance, serve, grab, release, restart, speed, POWER_MAX, crossing, colsFor, cellX, cellY, type Sim, type Ev, type Mode, type Hand } from './sim';
 import { createRenderer, KIND, STRIDE, type Frame } from './draw';
 import { seeded, seedFrom } from '../kit/rng';
 
@@ -25,7 +25,7 @@ const aspect = () => canvas.clientWidth / Math.max(1, canvas.clientHeight);
 const FOG: [number, number, number] = [0.03, 0.045, 0.07];
 const hex = (h: string): [number, number, number] => [parseInt(h.slice(1, 3), 16) / 255, parseInt(h.slice(3, 5), 16) / 255, parseInt(h.slice(5, 7), 16) / 255];
 const GLAZE = ['#2f6fb0', '#2aa39a', '#e0a23a', '#d9603c', '#8f6ad0', '#6fb04a'].map(hex);
-const HARD = hex('#3a3440'), PANEL = hex('#6d7a8c');
+const HARD = hex('#3a3440'), PANEL = hex('#6d7a8c'), WAKE = hex('#ff7a3a');
 // (the lamps' colour, by how far down you are)
 const TINTS = ['#ffd9a0', '#a8d8ff', '#ffb3a0', '#b8f0c8', '#d8c0ff'].map(hex);
 
@@ -39,7 +39,7 @@ function box(x: number, y: number, z: number, sx: number, sy: number, sz: number
   if (count >= MAX) return;
   boxes.set([x, y, z, sx, sy, sz, c[0], c[1], c[2], kind, glow], count++ * STRIDE);
 }
-interface Bit { x: number; y: number; z: number; vx: number; vy: number; vz: number; s: number; life: number; c: number[] }
+interface Bit { x: number; y: number; z: number; vx: number; vy: number; vz: number; s: number; life: number; c: number[]; wake?: boolean }
 const bits: Bit[] = [];
 const vr = seeded(seed ^ 0x5bd1);
 /** bricks just struck and still standing (the ones that take two): slab, cell, how long ago */
@@ -67,7 +67,7 @@ function scene(): Frame {
       box(x, y, sl.z, cw - 0.08, CELL - 0.08, BRICK_T, hp > 1 ? HARD : brickColour(sl.hue, r), KIND.brick, hit ? 0.6 * Math.max(0, 1 - hit.t * 5) : 0);
     }
   }
-  for (const b of bits) box(b.x, b.y, b.z, b.s, b.s, b.s, b.c, KIND.brick, 0.1);
+  for (const b of bits) box(b.x, b.y, b.z, b.s, b.s, b.s, b.c, b.wake ? KIND.plain : KIND.brick, b.wake ? 0.9 : 0.1);
   // (the tunnel winds as you go: the picture's bend, from where you are)
   const bend: [number, number] = [0.0052 * Math.sin(sim.z * 0.013 + seed) + 0.0026 * Math.sin(sim.z * 0.031 + 1), 0.003 * Math.sin(sim.z * 0.017 + seed * 2 + 2)];
   const d = sim.z / 120, i = Math.floor(d), f = d - i, u = f * f * (3 - 2 * f), a = TINTS[i % TINTS.length], b2 = TINTS[(i + 1) % TINTS.length];
@@ -94,9 +94,10 @@ function blip(freq: number, dur: number, x: number, z: number, gain = 0.2, type:
 }
 const SCALE = [0, 2, 4, 7, 9, 12, 14, 16];
 function sound(e: Ev) {
-  if (e.kind === 'brick') blip(330 * 2 ** (SCALE[e.row] / 12), e.broke ? 0.24 : 0.08, e.x, e.z, 0.28, e.broke ? 'triangle' : 'square');
-  else if (e.kind === 'wall') blip(140, 0.05, e.x, e.z, 0.14, 'sine', 100);
-  else if (e.kind === 'hand') blip(110, 0.14, e.x, e.z, 0.5, 'sine', 58);
+  // (how hard it struck is how loud; a ball going through a brick is a lower, rougher note than one coming off it)
+  if (e.kind === 'brick') blip(330 * 2 ** (SCALE[e.row] / 12) * (e.through ? 0.5 : 1), e.broke ? 0.24 : 0.08, e.x, e.z, 0.16 + 0.012 * e.hard, e.through ? 'sawtooth' : e.broke ? 'triangle' : 'square');
+  else if (e.kind === 'wall') blip(120 + e.hard * 4, 0.06, e.x, e.z, Math.min(0.3, 0.02 * e.hard), 'sine', 90);
+  else if (e.kind === 'hand') blip(80 + e.hard * 2.2, 0.14, e.x, e.z, 0.25 + 0.012 * e.hard, 'sine', 55);
   else if (e.kind === 'catch') blip(180, 0.08, e.x, e.z, 0.35, 'sine', 120);
   else if (e.kind === 'serve') blip(220, 0.1, e.x, e.z, 0.2);
   else if (e.kind === 'fall') blip(120 + vr() * 80, 0.3, e.x, e.z, 0.12, 'sawtooth', 50);
@@ -106,7 +107,7 @@ function sound(e: Ev) {
 
 // ─── the words ───────────────────────────────────────────────────────────────────────────────────────────────────────
 const say = $('say'), sub = $('sub'), depth = $('depth'), broke = $('broken'), whole = $('whole'), flash = $('flash'), handBtn = $('toHand'), muteBtn = $('toMute'), best = $('best');
-const HOW: Record<Mode, string> = { pad: 'keep a finger where it comes back', swipe: 'swipe through it as it comes back', catch: 'catch it under a finger, then flick' };
+const HOW: Record<Mode, string> = { pad: 'tap to send it · keep a finger where it comes back', swipe: 'tap to send it · swipe through it as it comes back, hard', catch: 'pick it up and throw it · catch it when it comes back' };
 const bestKey = () => `volley.best.${sim.mode}`;
 const readBest = () => { try { return Number(localStorage.getItem(bestKey())) || 0; } catch { return 0; } };
 let shown = '';
@@ -123,7 +124,7 @@ function words() {
   best.textContent = b ? `best ${b} m` : '';
   const fresh = sim.phase === 'ready' && !sim.z;
   say.textContent = sim.phase === 'over' ? `${m} m` : fresh ? 'Volley' : '';
-  sub.textContent = auto ? '' : sim.phase === 'over' ? 'tap to go again' : sim.phase === 'ready' ? `tap to send it · ${HOW[sim.mode]}` : '';
+  sub.textContent = auto ? '' : sim.phase === 'over' ? 'tap to go again' : sim.phase === 'ready' ? HOW[sim.mode] : '';
   handBtn.textContent = `hand: ${sim.mode}`;
   muteBtn.setAttribute('aria-pressed', String(!mute));
   document.body.dataset.phase = sim.phase; document.body.dataset.hand = sim.mode;
@@ -146,7 +147,8 @@ canvas.addEventListener('pointerdown', (e) => {
   if (e.pointerType !== 'mouse') canvas.setPointerCapture(e.pointerId);
   const p = onGlass(e);
   fingers.set(e.pointerId, { id: e.pointerId, ...p, vx: 0, vy: 0, t: e.timeStamp, gone: 0, mouse: e.pointerType === 'mouse' });
-  if (sim.phase === 'ready') serve(sim, p.x / (sim.W / 2), p.y / (H / 2)); else if (sim.phase === 'over') restart(sim);
+  // (a waiting ball: sent off toward the touch, or, for a catching hand, picked up to be thrown)
+  if (sim.phase === 'ready') { if (sim.mode === 'catch') grab(sim, e.pointerId); else serve(sim, p.x / (sim.W / 2), p.y / (H / 2)); } else if (sim.phase === 'over') restart(sim);
 });
 canvas.addEventListener('pointermove', (e) => {
   if (auto) return;
@@ -167,7 +169,7 @@ const lift = (e: PointerEvent) => {
   if (sim.mode === 'swipe' && e.type === 'pointerup') f.gone = e.timeStamp; else fingers.delete(e.pointerId);
 };
 canvas.addEventListener('pointerup', lift); canvas.addEventListener('pointercancel', lift); canvas.addEventListener('pointerleave', lift);
-addEventListener('keydown', (e) => { if ((e.key === ' ' || e.key === 'Enter') && !auto) { e.preventDefault(); wake(); if (sim.phase === 'ready') serve(sim); else restart(sim); } });
+addEventListener('keydown', (e) => { if ((e.key === ' ' || e.key === 'Enter') && !auto) { e.preventDefault(); wake(); if (sim.phase === 'ready') { sim.mode === 'catch' ? (grab(sim, -9), release(sim, -9, 0, 20)) : serve(sim); } else restart(sim); } });
 handBtn.onclick = () => {
   if (sim.phase === 'held') release(sim, sim.heldBy);
   sim.mode = MODES[(MODES.indexOf(sim.mode) + 1) % MODES.length];
@@ -212,16 +214,23 @@ function run(dt: number, now: number) {
   advance(sim, dt, auto);
   for (const e of sim.events) {
     sound(e);
-    if (e.kind === 'brick') { if (e.broke) shatter(e, 12, -2); else struck.push({ z: e.z, x: e.x, y: e.y, t: 0 }); }
+    if (e.kind === 'brick') { if (e.broke) shatter(e, e.through ? 16 : 12, e.through ? 6 : -2); else struck.push({ z: e.z, x: e.x, y: e.y, t: 0 }); if (e.through) shake = Math.max(shake, 0.3); }
     else if (e.kind === 'fall') shatter(e, 8, -1);
     else if (e.kind === 'through') { shake = Math.max(shake, 0.35); pulse('crash'); }
     else if (e.kind === 'miss') { shake = 1; pulse('miss'); }
+  }
+  // (the ball's wake: longer and brighter the faster it's going)
+  if (sim.phase === 'play') {
+    const b = sim.ball, sp = speed(b), k = Math.min(1, sp / POWER_MAX);
+    if (bits.length < 300) bits.push({ x: b.x, y: b.y, z: b.z, vx: 0, vy: 0, vz: 0, s: 0.42 * (0.4 + 0.6 * k), life: 0.1 + 0.22 * k, c: WAKE, wake: true });
   }
   for (let i = struck.length - 1; i >= 0; i--) if ((struck[i].t += dt) > 0.3) struck.splice(i, 1);
   shake = Math.max(0, shake - dt * 2.2);
   for (let i = bits.length - 1; i >= 0; i--) {
     const b = bits[i];
-    b.life -= dt; b.vy -= 12 * dt; b.x += b.vx * dt; b.y += b.vy * dt; b.z += b.vz * dt;
+    b.life -= dt;
+    if (b.wake) { b.s *= 0.9; if (b.life <= 0) bits.splice(i, 1); continue; }
+    b.vy -= 15 * dt; b.x += b.vx * dt; b.y += b.vy * dt; b.z += b.vz * dt;
     if (b.y < -H / 2 + b.s / 2) { b.y = -H / 2 + b.s / 2; b.vy = -b.vy * 0.35; b.vx *= 0.7; b.vz *= 0.7; }
     if (b.life < 0.25) b.s *= 0.86;
     if (b.life <= 0 || b.z < sim.z) bits.splice(i, 1);
@@ -250,6 +259,6 @@ if (!renderer) { say.textContent = 'Volley'; sub.textContent = 'This needs WebGL
 }
 (window as unknown as Record<string, unknown>).__volley = {
   sim, onScreen,
-  probe: () => ({ phase: sim.phase, mode: sim.mode, z: sim.z, integrity: sim.integrity, broken: sim.broken, passed: sim.passed, returns: sim.returns, t: sim.t, W: sim.W, cols: sim.cols, ball: { ...sim.ball }, hands: sim.hands.length, slabs: sim.slabs.length, frames, bits: bits.length, boxes: count, error: renderer?.gl.getError() ?? -1 }),
+  probe: () => ({ phase: sim.phase, mode: sim.mode, z: sim.z, integrity: sim.integrity, broken: sim.broken, passed: sim.passed, returns: sim.returns, t: sim.t, W: sim.W, cols: sim.cols, ball: { ...sim.ball }, speed: speed(sim.ball), hands: sim.hands.length, slabs: sim.slabs.length, frames, bits: bits.length, boxes: count, error: renderer?.gl.getError() ?? -1 }),
 };
 export {};

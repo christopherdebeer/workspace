@@ -1,19 +1,27 @@
 /**
- * Volley's game, on its own: a ball, a tunnel without end, slabs of bricks across it, and a hand.
+ * Volley's game, on its own: a bouncy ball, a tunnel without end, slabs of bricks across it, and a hand.
  *
  * The tunnel runs along z. Its section is H high and W wide (W is whatever the screen's shape makes it), centred on
- * the axis. You are a pane of glass across the whole section, at `z`, drifting forward; the ball goes on ahead of you
- * into the slabs and comes back. There is no paddle. Wherever the ball comes back through the glass, a hand has to
- * be there, and what the hand is doing is how the ball leaves. Three ways of being a hand (`mode`):
+ * the axis. You are a pane of glass across the whole section, at `z`; the ball goes on ahead of you into the slabs
+ * and comes back.
  *
- *   pad    a finger resting on the glass is a round pad: the ball leaves by where on the pad it lands, and a little
- *          by how the finger was moving
- *   swipe  only a moving finger counts: the ball leaves the way the finger was going
- *   catch  a finger under the ball catches it; it is thrown when the finger lets go, the way the finger was going
+ * The ball is a ball thrown at a wall. It falls (G), so it goes in arcs and comes back off the floor; a bounce
+ * keeps most of its speed and not all; it is as fast as it was thrown, and no faster; a throw's sideways motion
+ * leaves it spinning, and the spin bends its flight until a bounce or the air takes it off. Thrown hard enough it
+ * goes through a brick and on into the next. The one kindness: off a brick it always comes back at a fair pace.
  *
- * The glass goes forward down a clear tunnel and comes to a halt before bricks still standing. Break three quarters
- * of a slab and the rest of it falls: you go on. A ball let through the glass is one of five gone. Everything random
- * is from the seed, and the step is fixed.
+ * There is no paddle. Wherever the ball comes back through the glass, a hand has to be there, and what the hand is
+ * doing is how (and how hard) the ball leaves. Three ways of being a hand (`mode`):
+ *
+ *   pad    a finger on the glass is a sprung pad: the ball leaves by where on the pad it lands, about as fast as it
+ *          came (never slow); a finger moving as it lands adds to it
+ *   swipe  only a moving finger counts: the ball leaves the way the finger was going, as hard as it was going
+ *   catch  a finger under the ball catches it; it is thrown when the finger lets go, the way and as hard as the
+ *          finger was going (let go of a still finger and it's a lob)
+ *
+ * The glass goes forward down a clear tunnel and halts before bricks still standing. Break most of a slab and the
+ * rest of it falls: you go on. A ball let through the glass is one of five gone. Everything random is from the seed,
+ * and the step is fixed.
  */
 import { seeded, hash, type Rand } from '../kit/rng';
 
@@ -26,26 +34,43 @@ export const HAND_R = 1.15;
 /** how far behind the glass a ball can still be reached */
 export const LATE = 0.9;
 export const FULL = 5;
-/** how near the glass comes to bricks still standing; and the share of a slab that, once all that's left, falls */
-export const STAND = 4.5, GIVES = 0.25;
-/** (and however big the slab, this many broken is enough) */
-export const MOST = 14;
+/** how near the glass comes to bricks still standing; the share of a slab that, once all that's left, falls; and
+ * however big the slab, this many broken is enough */
+export const STAND = 3.6, GIVES = 0.4, MOST = 10;
 export const STEP = 1 / 240;
 export const MODES = ['pad', 'swipe', 'catch'] as const;
 export type Mode = (typeof MODES)[number];
-/** pad: how much of the ball's speed goes sideways at the pad's rim; and how much of a finger's speed the ball takes */
-const PAD_K = 0.7, CARRY: Record<Mode, number> = { pad: 0.2, swipe: 0.55, catch: 0.55 };
+
+// the ball
+export const G = 15;
+/** what a bounce keeps: off the floor, off the other walls, off a brick */
+const FLOOR = 0.86, WALL = 0.9, BRICK = 0.9;
+/** a ball meeting a brick this fast (along the tunnel) goes through it, and keeps this much */
+export const THROUGH = 19, KEEPS = 0.8;
+/** off a brick or out of the dark, it comes back at least this fast */
+export const BACK = 10;
+/** spin: how much of a hand's sideways speed becomes it, the most there can be, how hard it bends the flight, and
+ * how long it lasts */
+const SPIN_OF = 0.3, SPIN_MAX = 9, BEND = 1.3, SPIN_LIFE = 0.9;
+// the hand
+/** pad: how much of the ball's speed goes sideways at the pad's rim */
+const PAD_K = 0.75;
+/** how much of a finger's speed goes into the ball's direction */
+const CARRY: Record<Mode, number> = { pad: 0.2, swipe: 0.35, catch: 0.35 };
 /** a finger slower than this isn't a swipe */
 export const SWIPE_MIN = 5;
-const MAX_SIDE = 0.8, MIN_ALONG = 0.55;
+const MAX_SIDE = 0.8;
+export const POWER_MAX = 34;
 
 export type Phase = 'ready' | 'play' | 'held' | 'over';
 export interface Hand { id: number; x: number; y: number; vx: number; vy: number }
 export interface Slab { i: number; z: number; cells: Uint8Array; left: number; total: number; hue: number }
+export interface Ball { x: number; y: number; z: number; vx: number; vy: number; vz: number; sx: number; sy: number }
 export type Ev =
-  | { kind: 'brick'; x: number; y: number; z: number; hue: number; row: number; broke: boolean }
+  | { kind: 'brick'; x: number; y: number; z: number; hue: number; row: number; broke: boolean; through: boolean; hard: number }
   | { kind: 'fall'; x: number; y: number; z: number; hue: number; row: number }
-  | { kind: 'wall' | 'hand' | 'catch' | 'serve' | 'miss' | 'over' | 'pass' | 'through'; x: number; y: number; z: number };
+  | { kind: 'wall' | 'hand'; x: number; y: number; z: number; hard: number }
+  | { kind: 'catch' | 'serve' | 'miss' | 'over' | 'pass' | 'through'; x: number; y: number; z: number };
 
 export interface Sim {
   seed: number;
@@ -53,8 +78,7 @@ export interface Sim {
   mode: Mode;
   /** where the glass is, and how fast it's going */
   z: number; v: number;
-  ball: { x: number; y: number; z: number; vx: number; vy: number; vz: number };
-  speed: number;
+  ball: Ball;
   phase: Phase;
   heldBy: number;
   integrity: number;
@@ -79,9 +103,14 @@ const slabZ = (seed: number, i: number) => FIRST + GAP * i - (i >= 3 && hash(see
 export function driftFor(s: Sim): number {
   const sl = s.slabs.find((k) => k.left > 0), d = sl ? sl.z - BRICK_T / 2 - s.z : 99;
   const u = clamp((d - STAND) / 7, 0, 1);
-  return Math.min(8, 4.2 + 0.12 * s.passed) * u * (2 - u);
+  return Math.min(12, 6.5 + 0.15 * s.passed) * u * (2 - u);
 }
-export const speedOf = (passed: number) => Math.min(21, 13 + 0.3 * passed);
+/** how hard a hand sends the ball: by the kind of hand, how fast the finger was going, and (a pad) how fast it came */
+export function power(s: Sim, mode: Mode, finger: number, came = 0): number {
+  const deep = Math.min(4, s.passed * 0.12);
+  const p = mode === 'pad' ? Math.max(17, came * 0.9) + finger * 0.4 : mode === 'swipe' ? 9 + finger * 0.75 : 7 + finger * 0.85;
+  return clamp(p + deep, mode === 'catch' ? 8 : 13, POWER_MAX);
+}
 
 /** Slab `i` of this seed's tunnel: one of a few figures across the section, denser and harder the deeper it is. */
 export function makeSlab(seed: number, i: number, cols: number): Slab {
@@ -111,7 +140,7 @@ export function makeSlab(seed: number, i: number, cols: number): Slab {
 export function create(seed = 1, aspect = 0.46, mode: Mode = 'pad'): Sim {
   const cols = colsFor(aspect);
   const s: Sim = {
-    seed, W: H * aspect, cols, mode, z: 0, v: 0, ball: { x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0 }, speed: speedOf(0), phase: 'ready', heldBy: 0,
+    seed, W: H * aspect, cols, mode, z: 0, v: 0, ball: { x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, sx: 0, sy: 0 }, phase: 'ready', heldBy: 0,
     integrity: FULL, broken: 0, passed: 0, returns: 0, slabs: [], nextSlab: 0, hands: [], events: [], rand: seeded(hash(seed, 9)), mark: null, t: 0, acc: 0,
   };
   grow(s); rest(s);
@@ -119,42 +148,62 @@ export function create(seed = 1, aspect = 0.46, mode: Mode = 'pad'): Sim {
 }
 export function restart(s: Sim) {
   if (s.phase !== 'over') return;
-  Object.assign(s, { z: 0, v: 0, integrity: FULL, broken: 0, passed: 0, returns: 0, slabs: [], nextSlab: 0, phase: 'ready', mark: null, speed: speedOf(0) });
+  Object.assign(s, { z: 0, v: 0, integrity: FULL, broken: 0, passed: 0, returns: 0, slabs: [], nextSlab: 0, phase: 'ready', mark: null });
   grow(s); rest(s);
 }
 function grow(s: Sim) { while (slabZ(s.seed, s.nextSlab) < s.z + 110) s.slabs.push(makeSlab(s.seed, s.nextSlab++, s.cols)); }
-function rest(s: Sim) { Object.assign(s.ball, { x: 0, y: 0, z: s.z + R + 0.05, vx: 0, vy: 0, vz: 0 }); }
+function rest(s: Sim) { Object.assign(s.ball, { x: 0, y: 0, z: s.z + R + 0.05, vx: 0, vy: 0, vz: 0, sx: 0, sy: 0 }); }
+const at = (s: Sim) => ({ x: s.ball.x, y: s.ball.y, z: s.ball.z });
+export const speed = (b: Ball) => Math.hypot(b.vx, b.vy, b.vz);
 
 /** send the ball off from 'ready', leaning toward (ax, ay) (each -1..1 across the glass) */
 export function serve(s: Sim, ax = 0, ay = 0) {
   if (s.phase !== 'ready') return;
-  s.speed = speedOf(s.passed);
-  leave(s, clamp(ax, -1, 1) * 0.3, clamp(ay, -1, 1) * 0.3);
+  leave(s, 18 + Math.min(4, s.passed * 0.12), clamp(ax, -1, 1) * 5, clamp(ay, -1, 1) * 5 + 2.5, 0, 0);
   s.phase = 'play';
   s.events.push({ kind: 'serve', ...at(s) });
+}
+/** in 'catch': pick the waiting ball up under this finger */
+export function grab(s: Sim, id: number) {
+  if (s.phase !== 'ready' || s.mode !== 'catch') return;
+  s.phase = 'held'; s.heldBy = id;
 }
 /** in 'catch': the finger holding the ball has let go, moving like this */
 export function release(s: Sim, id: number, vx = 0, vy = 0) {
   if (s.phase !== 'held' || s.heldBy !== id) return;
-  leave(s, (vx * CARRY.catch) / s.speed, (vy * CARRY.catch) / s.speed);
+  const p = power(s, 'catch', Math.hypot(vx, vy));
+  leave(s, p, vx * CARRY.catch, vy * CARRY.catch, vx, vy);
   s.phase = 'play'; s.returns++;
-  s.events.push({ kind: 'hand', ...at(s) });
+  s.events.push({ kind: 'hand', ...at(s), hard: p });
 }
-const at = (s: Sim) => ({ x: s.ball.x, y: s.ball.y, z: s.ball.z });
-/** the ball leaves the glass with this much of its speed sideways (fx, fy), the rest ahead */
-function leave(s: Sim, fx: number, fy: number) {
-  const m = Math.hypot(fx, fy), k = m > MAX_SIDE ? MAX_SIDE / m : 1, b = s.ball;
-  fx *= k; fy *= k;
-  b.vx = fx * s.speed; b.vy = fy * s.speed; b.vz = Math.sqrt(Math.max(0, 1 - fx * fx - fy * fy)) * s.speed;
+/** the ball leaves the glass this fast, with this much of it sideways (never most of it), spun by the finger */
+function leave(s: Sim, p: number, lx: number, ly: number, fvx: number, fvy: number) {
+  const m = Math.hypot(lx, ly), k = m > MAX_SIDE * p ? (MAX_SIDE * p) / m : 1, b = s.ball;
+  b.vx = lx * k; b.vy = ly * k; b.vz = Math.sqrt(Math.max(0, p * p - b.vx * b.vx - b.vy * b.vy));
+  const sm = Math.hypot(fvx, fvy) * SPIN_OF, sk = sm > SPIN_MAX ? SPIN_MAX / sm : 1;
+  b.sx = fvx * SPIN_OF * sk; b.sy = fvy * SPIN_OF * sk;
   b.z = Math.max(b.z, s.z + R + 0.02);
   s.mark = null;
 }
-/** keep it from going sideways for ever: a share of its speed is always along the tunnel */
-function steepen(s: Sim) {
-  const b = s.ball, min = MIN_ALONG * s.speed;
-  if (Math.abs(b.vz) >= min) return;
-  const side = Math.hypot(b.vx, b.vy) || 1, k = Math.sqrt(s.speed * s.speed - min * min) / side;
-  b.vx *= k; b.vy *= k; b.vz = (b.vz < 0 ? -1 : 1) * min;
+
+/** The ball's own motion for one step, with the tunnel's walls: falling, bent by its spin, bouncing. Returns how hard
+ * it struck a wall, if it did. (The game's step and the guess at where it will come back both use this.) */
+function fly(b: Ball, W: number, h: number): number {
+  b.vy -= G * h;
+  b.vx += b.sx * BEND * h; b.vy += b.sy * BEND * h;
+  const fade = 1 - h / SPIN_LIFE; b.sx *= fade; b.sy *= fade;
+  b.x += b.vx * h; b.y += b.vy * h; b.z += b.vz * h;
+  const hx = W / 2 - R, hy = H / 2 - R;
+  let struck = 0;
+  if (b.x < -hx && b.vx < 0) { b.x = -hx; struck = -b.vx; b.vx *= -WALL; b.sx *= 0.4; }
+  if (b.x > hx && b.vx > 0) { b.x = hx; struck = b.vx; b.vx *= -WALL; b.sx *= 0.4; }
+  if (b.y > hy && b.vy > 0) { b.y = hy; struck = b.vy; b.vy *= -WALL; b.sy *= 0.4; }
+  if (b.y < -hy && b.vy < 0) {
+    b.y = -hy; struck = -b.vy; b.vy *= -FLOOR; b.sy *= 0.4;
+    // (too little left to leave the floor: it rolls)
+    if (b.vy < 1.2) { b.vy = 0; struck = 0; }
+  }
+  return struck;
 }
 
 function tick(s: Sim) {
@@ -163,26 +212,21 @@ function tick(s: Sim) {
   if (s.phase === 'over') return;
   if (s.phase === 'ready') { rest(s); return; }
   // the glass goes on: freely down a clear tunnel, to a halt before bricks still standing
-  s.v += clamp(driftFor(s) - s.v, -14 * h, 5 * h);
+  s.v += clamp(driftFor(s) - s.v, -20 * h, 9 * h);
   s.z += s.v * h;
   while (s.slabs.length && s.z >= s.slabs[0].z - BRICK_T / 2) { s.slabs.shift(); s.passed++; s.events.push({ kind: 'pass', x: 0, y: 0, z: s.z }); }
   grow(s);
-  const hx = s.W / 2 - R, hy = H / 2 - R;
   if (s.phase === 'held') {
     const hand = s.hands.find((k) => k.id === s.heldBy);
-    if (!hand) { const id = s.heldBy; release(s, id); return; }
-    b.x = clamp(hand.x, -hx, hx); b.y = clamp(hand.y, -hy, hy); b.z = s.z + R + 0.05;
+    if (!hand) { release(s, s.heldBy); return; }
+    b.x = clamp(hand.x, -s.W / 2 + R, s.W / 2 - R); b.y = clamp(hand.y, -H / 2 + R, H / 2 - R); b.z = s.z + R + 0.05;
     return;
   }
-  b.x += b.vx * h; b.y += b.vy * h; b.z += b.vz * h;
-  // the four walls
-  if (b.x < -hx && b.vx < 0) { b.x = -hx; b.vx = -b.vx; s.events.push({ kind: 'wall', ...at(s) }); }
-  if (b.x > hx && b.vx > 0) { b.x = hx; b.vx = -b.vx; s.events.push({ kind: 'wall', ...at(s) }); }
-  if (b.y < -hy && b.vy < 0) { b.y = -hy; b.vy = -b.vy; s.events.push({ kind: 'wall', ...at(s) }); }
-  if (b.y > hy && b.vy > 0) { b.y = hy; b.vy = -b.vy; s.events.push({ kind: 'wall', ...at(s) }); }
+  const struck = fly(b, s.W, h);
+  if (struck > 2) s.events.push({ kind: 'wall', ...at(s), hard: struck });
   // (a ball that threads everything is given back by the dark)
   const near = s.slabs.find((k) => k.left > 0);
-  if (b.vz > 0 && b.z > (near ? near.z + GAP + 3 : s.z + 30)) b.vz = -b.vz;
+  if (b.vz > 0 && b.z > (near ? near.z + GAP + 3 : s.z + 30)) b.vz = -Math.max(BACK, b.vz);
   // the bricks: of the slabs it's in, the brick it's deepest into
   const cw = s.W / s.cols;
   let hit: Slab | null = null, hc = 0, hr = 0, bd = R, nx = 0, ny = 0, nz = 0;
@@ -209,20 +253,28 @@ function tick(s: Sim) {
   if (hit) {
     const vn = b.vx * nx + b.vy * ny + b.vz * nz;
     if (vn < 0) {
-      b.vx -= 2 * vn * nx; b.vy -= 2 * vn * ny; b.vz -= 2 * vn * nz;
-      b.x += nx * (R - bd); b.y += ny * (R - bd); b.z += nz * (R - bd);
-      const broke = --hit.cells[hr * s.cols + hc] === 0;
+      const i = hr * s.cols + hc, hard = -vn;
+      // (hard enough, and square on: through it and on; otherwise off it)
+      const through = hit.cells[i] === 1 && hard >= THROUGH && Math.abs(nz) > 0.7;
+      const broke = --hit.cells[i] === 0;
+      if (through) { b.vx *= KEEPS; b.vy *= KEEPS; b.vz *= KEEPS; } else {
+        b.vx -= (1 + BRICK) * vn * nx; b.vy -= (1 + BRICK) * vn * ny; b.vz -= (1 + BRICK) * vn * nz;
+        b.x += nx * (R - bd); b.y += ny * (R - bd); b.z += nz * (R - bd);
+        b.sx *= 0.4; b.sy *= 0.4;
+        if (b.vz < 0 && b.vz > -BACK) b.vz = -BACK;
+      }
       if (broke) { hit.left--; s.broken++; }
-      steepen(s);
-      s.events.push({ kind: 'brick', x: cellX(s, hc), y: cellY(hr), z: hit.z, hue: hit.hue, row: hr, broke });
-      // (broken through: what little is left of the slab falls)
+      s.events.push({ kind: 'brick', x: cellX(s, hc), y: cellY(hr), z: hit.z, hue: hit.hue, row: hr, broke, through, hard });
+      // (broken through: what's left of the slab falls)
       if (broke && hit.total - hit.left >= Math.min(Math.ceil(hit.total * (1 - GIVES)), MOST)) {
-        for (let i = 0; i < hit.cells.length; i++) if (hit.cells[i]) { hit.cells[i] = 0; s.broken++; s.events.push({ kind: 'fall', x: cellX(s, i % s.cols), y: cellY(Math.floor(i / s.cols)), z: hit.z, hue: hit.hue, row: Math.floor(i / s.cols) }); }
+        for (let k = 0; k < hit.cells.length; k++) if (hit.cells[k]) { hit.cells[k] = 0; s.broken++; s.events.push({ kind: 'fall', x: cellX(s, k % s.cols), y: cellY(Math.floor(k / s.cols)), z: hit.z, hue: hit.hue, row: Math.floor(k / s.cols) }); }
         hit.left = 0;
         s.events.push({ kind: 'through', x: 0, y: 0, z: hit.z });
       }
     }
   }
+  // (the glass, going on, never overtakes a ball that's going the same way: it's pushed along)
+  if (b.vz >= 0 && b.z - R < s.z + 0.02) { b.z = s.z + R + 0.02; b.vz = Math.max(b.vz, s.v + 6); }
   // the glass: is there a hand where it comes through?
   if (b.vz < 0 && b.z - R <= s.z && b.z >= s.z - LATE) {
     let best: Hand | null = null, bestD = Infinity;
@@ -232,15 +284,14 @@ function tick(s: Sim) {
       if (d <= reach && d < bestD) { best = k; bestD = d; }
     }
     if (best) {
-      s.speed = speedOf(s.passed);
       if (s.mode === 'catch') {
-        s.phase = 'held'; s.heldBy = best.id; b.vx = b.vy = b.vz = 0; b.z = s.z + R + 0.05;
+        s.phase = 'held'; s.heldBy = best.id; Object.assign(b, { vx: 0, vy: 0, vz: 0, sx: 0, sy: 0, z: s.z + R + 0.05 });
         s.events.push({ kind: 'catch', ...at(s) });
       } else {
-        const k = s.mode === 'pad' ? PAD_K / HAND_R : 0, c = CARRY[s.mode] / s.speed;
-        leave(s, (b.x - best.x) * k + best.vx * c, (b.y - best.y) * k + best.vy * c);
+        const p = power(s, s.mode, Math.hypot(best.vx, best.vy), speed(b)), k = s.mode === 'pad' ? (PAD_K * p) / HAND_R : 0, c = CARRY[s.mode];
+        leave(s, p, (b.x - best.x) * k + best.vx * c, (b.y - best.y) * k + best.vy * c, best.vx, best.vy);
         s.returns++;
-        s.events.push({ kind: 'hand', ...at(s) });
+        s.events.push({ kind: 'hand', ...at(s), hard: p });
       }
     }
   }
@@ -262,23 +313,27 @@ export function advance(s: Sim, dt: number, auto = false) {
   }
 }
 
-/** Where and when the ball will come back through the glass, were nothing but the walls in its way. */
-export function crossing(s: Sim): { x: number; y: number; t: number } | null {
-  const b = s.ball, closing = -b.vz + s.v;
-  if (s.phase !== 'play' || b.vz >= 0) return null;
-  const t = (b.z - R - s.z) / closing;
-  if (t < 0) return null;
-  const fold = (p: number, v: number, half: number) => { const span = 2 * half; let u = (p + v * t + half) % (2 * span); if (u < 0) u += 2 * span; return -half + (u > span ? 2 * span - u : u); };
-  return { x: fold(b.x, b.vx, s.W / 2 - R), y: fold(b.y, b.vy, H / 2 - R), t };
+/** Where and when the ball will come back through the glass, were nothing but the walls in its way: its flight run
+ * on (falling, bending, bouncing), the glass going as it's going. */
+export function crossing(s: Sim): { x: number; y: number; t: number; speed: number } | null {
+  if (s.phase !== 'play' || s.ball.vz >= 0) return null;
+  const b = { ...s.ball }, h = 1 / 120;
+  let z = s.z;
+  for (let t = 0; t < 3; t += h) {
+    if (b.z - R <= z) return { x: b.x, y: b.y, t, speed: speed(b) };
+    fly(b, s.W, h); z += s.v * h;
+  }
+  return null;
 }
 
-/** A player to watch: sends the ball off, is where it comes back, and tries for a brick of the nearest slab. */
+/** A player to watch: sends the ball off, is where it comes back, and tries for a brick of the nearest slab,
+ * allowing for the fall. */
 function standIn(s: Sim) {
   s.hands.length = 0;
   if (s.phase === 'over') { if (s.t % 3 < STEP) restart(s); return; }
-  if (s.phase === 'ready') { if (s.t % 0.8 < STEP) serve(s, s.rand() * 2 - 1, s.rand() * 2 - 1); return; }
-  const p = s.phase === 'held' ? { x: s.ball.x, y: s.ball.y, t: 0 } : crossing(s);
-  if (!p) return;
+  if (s.phase === 'ready') { if (s.t % 0.8 < STEP) { if (s.mode === 'catch') grab(s, -1); else serve(s, s.rand() * 2 - 1, s.rand() * 2 - 1); } return; }
+  const p = s.phase === 'held' ? { x: s.ball.x, y: s.ball.y, t: 0, speed: 0 } : crossing(s);
+  if (!p || p.t > 0.5) return;
   if (!s.mark) {
     const sl = s.slabs.find((k) => k.left > 0);
     if (sl) {
@@ -287,18 +342,27 @@ function standIn(s: Sim) {
     }
     s.mark ??= { x: 0, y: 0, z: s.z + 20 };
   }
-  // (the share of its speed that has to go sideways to get there)
-  const dx = s.mark.x - p.x, dy = s.mark.y - p.y, dz = Math.max(1, s.mark.z - s.z), d = Math.hypot(dx, dy, dz);
-  let fx = dx / d, fy = dy / d;
+  const dx = s.mark.x - p.x, dy = s.mark.y - p.y, dz = Math.max(1, s.mark.z - BRICK_T / 2 - R - s.z);
+  // (the sideways speed that gets it there, at this power: a few rounds, since each depends on the other)
+  const aim = (pw: number) => { let lx = 0, ly = 0; for (let i = 0; i < 4; i++) { const T = dz / Math.sqrt(Math.max(pw * pw * 0.2, pw * pw - lx * lx - ly * ly)); lx = dx / T; ly = dy / T + (G * T) / 2; } return { lx, ly }; };
   if (s.mode === 'pad') {
-    const m = Math.hypot(fx, fy) / PAD_K, k = m > 0.9 ? 0.9 / m : 1;
-    fx = (fx / PAD_K) * k; fy = (fy / PAD_K) * k;
-    s.hands.push({ id: -1, x: p.x - fx * HAND_R, y: p.y - fy * HAND_R, vx: 0, vy: 0 });
+    const pw = power(s, 'pad', 0, p.speed), { lx, ly } = aim(pw);
+    let ox = lx / (PAD_K * pw), oy = ly / (PAD_K * pw);
+    const m = Math.hypot(ox, oy), k = m > 0.9 ? 0.9 / m : 1;
+    ox *= k; oy *= k;
+    // (what the pad's rim can't give, the finger does: it's moving as the ball lands)
+    let vx = (lx - ox * PAD_K * pw) / CARRY.pad, vy = (ly - oy * PAD_K * pw) / CARRY.pad;
+    const fm = Math.hypot(vx, vy), fk = fm > 30 ? 30 / fm : 1;
+    vx *= fk; vy *= fk;
+    s.hands.push({ id: -1, x: p.x - ox * HAND_R, y: p.y - oy * HAND_R, vx, vy });
   } else {
-    const c = s.speed / CARRY[s.mode];
-    let vx = fx * c, vy = fy * c;
-    // (a swipe has to be moving: straight on is a small flick upward)
-    if (s.mode === 'swipe' && Math.hypot(vx, vy) < SWIPE_MIN * 1.2) { const m = Math.hypot(vx, vy); if (m < 1e-3) { vx = 0; vy = SWIPE_MIN * 1.2; } else { vx *= (SWIPE_MIN * 1.2) / m; vy *= (SWIPE_MIN * 1.2) / m; } }
+    // (a finger's speed is both how hard and how far sideways: find the speed whose throw wants that much sideways)
+    let f = 22, vx = 0, vy = f;
+    for (let i = 0; i < 5; i++) {
+      const { lx, ly } = aim(power(s, s.mode, f)), m = Math.hypot(lx, ly) || 1e-6;
+      f = clamp(m / CARRY[s.mode], s.mode === 'swipe' ? SWIPE_MIN * 1.3 : 8, 40);
+      vx = (lx / m) * f; vy = (ly / m) * f;
+    }
     if (s.phase === 'held') { release(s, -1, vx, vy); return; }
     s.hands.push({ id: -1, x: p.x, y: p.y, vx, vy });
   }
