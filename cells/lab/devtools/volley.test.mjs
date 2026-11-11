@@ -1,53 +1,63 @@
 // Volley's game on its own, then its page. (node cells/lab/devtools/volley.test.mjs; SIM=1 for the game only)
-// The game: a seed is the same game; the ball stays in the court; where it meets the paddle sets how it leaves; a
-// ball let past costs one and three end it; the stand-in clears the first court; every court has bricks.
-// The page: it draws without error, a tap serves, a drag moves the paddle (and the eye with it), the plan shows.
+// The game: a seed is the same game; the ball stays in the tunnel; each kind of hand returns it, and the way it
+// should; no hand, and it's one of five gone, five and it's over; the glass halts before standing bricks and goes on
+// when a slab falls; the stand-in gets down the tunnel with every kind of hand; the tunnel never runs out.
+// The page: it draws without error, a touch sends the ball, a finger where it comes back returns it, the hand changes.
 import { build } from 'esbuild';
 import assert from 'node:assert/strict';
 const load = async (f) => { const o = await build({ entryPoints: [new URL(f, import.meta.url).pathname], bundle: true, write: false, format: 'esm', platform: 'node' }); return import('data:text/javascript;base64,' + Buffer.from(o.outputFiles[0].text).toString('base64')); };
 const S = await load('../client/volley/sim.ts');
-const { create, advance, serve, next, layout, crossing, W, D, R, COLS, ROWS, PADDLE_HALF } = S;
+const { create, advance, serve, release, restart, makeSlab, crossing, MODES, H, R, HAND_R, FULL, STAND, BRICK_T, ROWS } = S;
 
 {
-  const run = (seed, secs) => { const s = create(seed); for (let i = 0; i < secs * 60; i++) advance(s, 1 / 60, true); return s; };
-  const a = run(7, 30), b = run(7, 30), c = run(8, 30);
-  assert.deepEqual([a.score, a.ball, a.paddle, [...a.bricks]], [b.score, b.ball, b.paddle, [...b.bricks]], 'a seed is the same game');
+  const run = (seed, secs, mode = 'pad') => { const s = create(seed, 0.46, mode); for (let i = 0; i < secs * 60; i++) advance(s, 1 / 60, true); return s; };
+  const a = run(7, 40), b = run(7, 40), c = run(8, 40);
+  assert.deepEqual([a.z, a.broken, a.ball], [b.z, b.broken, b.ball], 'a seed is the same game');
   assert.notDeepEqual(a.ball, c.ball, 'another seed is another');
   console.log('ok   a seed is the same game');
 }
-{
-  for (const seed of [1, 2, 3, 4, 5]) {
-    const s = create(seed);
-    let cleared = false, rows = new Set();
-    for (let i = 0; i < 240 * 60 && !cleared; i++) {
-      advance(s, 1 / 60, true);
-      for (const e of s.events) { if (e.kind === 'brick') rows.add(e.row); if (e.kind === 'clear') cleared = true; }
-      assert.ok(Math.abs(s.ball.x) <= W / 2 - R + 1e-6 && s.ball.z <= D - R + 1e-6 && s.ball.z > -2, `in the court (seed ${seed}): ${JSON.stringify(s.ball)}`);
-      if (s.phase === 'play') assert.ok(Math.abs(Math.hypot(s.ball.vx, s.ball.vz) - s.speed) < 1e-6 && Math.abs(s.ball.vz) >= 0.27 * s.speed, 'its speed is its speed, and never all sideways');
-    }
-    assert.ok(cleared, `the stand-in clears the first court (seed ${seed}; ${s.left} left at ${s.t.toFixed(0)}s)`);
-    assert.equal(rows.size, ROWS);
-    console.log(`ok   seed ${seed}: cleared in ${s.t.toFixed(0)}s, ${s.score} points, ${s.lives} left`);
+for (const mode of MODES) for (const aspect of [0.46, 1.6]) {
+  const s = create(3, aspect, mode);
+  for (let i = 0; i < 150 * 60; i++) {
+    advance(s, 1 / 60, true);
+    const b = s.ball;
+    assert.ok(Math.abs(b.x) <= s.W / 2 - R + 1e-6 && Math.abs(b.y) <= H / 2 - R + 1e-6 && b.z > s.z - 3 && b.z < s.z + 60, `in the tunnel (${mode}): ${JSON.stringify(b)}`);
+    if (s.phase === 'play') assert.ok(Math.abs(Math.hypot(b.vx, b.vy, b.vz) - s.speed) < 1e-6 * s.speed + 1e-6 && Math.abs(b.vz) >= 0.54 * s.speed, 'its speed is its speed, and never all sideways');
+    const near = s.slabs.find((k) => k.left > 0);
+    assert.ok(!near || s.z <= near.z - BRICK_T / 2 - STAND + 0.05, 'the glass halts short of standing bricks');
+    assert.ok(s.slabs[s.slabs.length - 1].z > s.z + 80, 'there is always more tunnel');
   }
+  assert.ok(s.passed >= 3 && s.integrity === FULL, `the stand-in gets down the tunnel (${mode}, ${aspect}): ${s.passed} slabs, ${s.z.toFixed(0)} m`);
+  console.log(`ok   ${mode} ${aspect}: ${s.z.toFixed(0)} m, ${s.passed} slabs, ${s.broken} broken, ${s.returns} returns`);
 }
 {
-  // (the paddle: straight back off its middle, out to the side off its end)
-  const leave = (off) => { const s = create(1); s.phase = 'play'; s.ball.x = off * PADDLE_HALF; s.ball.z = 2; s.ball.vx = 0; s.ball.vz = -s.speed; for (let i = 0; i < 60 && s.ball.vz < 0; i++) advance(s, 1 / 60); return Math.atan2(s.ball.vx, s.ball.vz) * 180 / Math.PI; };
-  assert.ok(Math.abs(leave(0)) < 1e-6); assert.ok(leave(0.5) > 20 && leave(0.5) < 40); assert.ok(leave(-1) < -50);
-  // (let past: one fewer, back on the paddle; three, and it's over; then a new game)
-  const s = create(1); s.want = s.paddle = 0;
-  for (let n = 3; n > 0; n--) {
-    assert.equal(s.phase, 'serve'); serve(s); s.ball.x = 3; s.ball.vx = 0; s.ball.vz = -s.speed;
-    for (let i = 0; i < 600 && s.phase === 'play'; i++) advance(s, 1 / 60);
-    assert.equal(s.lives, n - 1);
-  }
-  assert.equal(s.phase, 'over'); next(s); assert.deepEqual([s.phase, s.lives, s.score, s.level], ['serve', 3, 0, 1]);
-  // (where it'll cross, off a wall)
-  const k = create(1); k.phase = 'play'; k.ball = { x: 3, z: 5, vx: 6, vz: -6 };
-  const x = crossing(k); for (let i = 0; i < 600 && k.ball.z > 1; i++) advance(k, 1 / 240);
-  assert.ok(Math.abs(k.ball.x - x) < 0.3, `crossing ${x} v ${k.ball.x}`);
-  for (let l = 1; l <= 12; l++) { const b = layout(l, 3); assert.ok(b.some((v) => v) && b.length === ROWS * COLS, `court ${l} has bricks`); if (l > 4) for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) assert.equal(b[r * COLS + c], b[r * COLS + COLS - 1 - c]); }
-  console.log('ok   the paddle\'s angle, a ball let past, three and over, the crossing, the courts');
+  // (a ball coming straight back at the middle of the glass, and a hand: how it leaves)
+  const back = (mode, hand, then) => { const s = create(1, 0.46, mode); s.phase = 'play'; s.slabs.length = 0; Object.assign(s.ball, { x: 0, y: 0, z: 3, vx: 0, vy: 0, vz: -s.speed }); for (let i = 0; i < 120 && (s.ball.vz < 0 || s.phase === 'held'); i++) { s.hands = hand ? [hand] : []; then?.(s); advance(s, 1 / 240); } return s; };
+  let s = back('pad', { id: 1, x: 0, y: 0, vx: 0, vy: 0 });
+  assert.ok(s.ball.vz > 0 && Math.abs(s.ball.vx) < 1e-9 && s.returns === 1, 'pad, centred: straight back');
+  s = back('pad', { id: 1, x: -HAND_R / 2, y: 0, vx: 0, vy: 0 });
+  assert.ok(s.ball.vx > 0.2 * s.speed && s.ball.vz > 0, 'pad, taken off-centre: away from the pad\'s middle');
+  s = back('pad', { id: 1, x: HAND_R * 2, y: 0, vx: 0, vy: 0 });
+  assert.ok(s.ball.vz < 0 || s.phase === 'ready', 'pad, not there: through');
+  s = back('swipe', { id: 1, x: 0.3, y: 0, vx: 0, vy: 0 });
+  assert.ok(s.ball.vz < 0 || s.phase === 'ready', 'swipe, a still finger: through');
+  s = back('swipe', { id: 1, x: 0.3, y: 0, vx: 0, vy: 12 });
+  assert.ok(s.ball.vz > 0 && s.ball.vy > 0.3 * s.speed && Math.abs(s.ball.vx) < 1e-9, 'swipe, upward: it leaves upward');
+  s = back('catch', { id: 1, x: 0.2, y: 0.1, vx: 0, vy: 0 });
+  assert.equal(s.phase, 'held', 'catch: held');
+  s.hands = [{ id: 1, x: 1, y: 1, vx: 0, vy: 0 }]; advance(s, 1 / 60);
+  assert.ok(Math.abs(s.ball.x - 1) < 1e-9 && Math.abs(s.ball.y - 1) < 1e-9, 'held: it goes where the finger goes');
+  release(s, 1, -10, 0); assert.ok(s.phase === 'play' && s.ball.vx < 0 && s.ball.vz > 0, 'let go moving left: thrown left');
+  // (nobody there: five, and it's over; then again)
+  s = create(1, 0.46, 'pad');
+  for (let n = FULL; n > 0; n--) { assert.equal(s.phase, 'ready'); serve(s); s.slabs.length = 0; s.ball.vz = -s.speed; for (let i = 0; i < 600 && s.phase === 'play'; i++) advance(s, 1 / 60); assert.equal(s.integrity, n - 1); }
+  assert.equal(s.phase, 'over'); restart(s); assert.deepEqual([s.phase, s.integrity, s.z, s.broken], ['ready', FULL, 0, 0]);
+  // (where it'll come back, off the walls)
+  s = create(1, 0.46, 'pad'); s.phase = 'play'; s.z = s.slabs[0].z - BRICK_T / 2 - STAND; Object.assign(s.ball, { x: 1, y: -2, z: s.z + 4, vx: 9, vy: 7, vz: -9 });
+  const c = crossing(s); for (let i = 0; i < 2000 && s.ball.z - R > s.z; i++) advance(s, 1 / 240);
+  assert.ok(Math.hypot(s.ball.x - c.x, s.ball.y - c.y) < 0.4, `crossing ${JSON.stringify(c)} v ${JSON.stringify(s.ball)}`);
+  for (let i = 0; i < 60; i++) for (const cols of [4, 13]) { const sl = makeSlab(5, i, cols); assert.ok(sl.left > 0 && sl.left === sl.total && sl.cells.length === cols * ROWS && (i === 0 || sl.z > makeSlab(5, i - 1, cols).z), `slab ${i}`); }
+  console.log('ok   each hand, nobody there, the crossing, the slabs');
 }
 if (process.env.SIM) process.exit(0);
 
@@ -55,31 +65,31 @@ process.env.EXPERIMENT = 'volley'; process.env.READY = '__volley';
 const { withWood, checks } = await import('./harness.mjs');
 const { ok, done } = checks();
 await withWood(async (lab) => {
-  const p = await lab.open('seed=1&plan');
+  const p = await lab.open('seed=1');
   await p.waitForTimeout(800);
   const probe = () => p.evaluate(() => window.__volley.probe());
   let s = await probe();
-  ok('waiting to serve, drawn', s.phase === 'serve' && s.frames > 2 && s.error === 0 && s.boxes > 40, s);
-  ok('says so', (await p.textContent('#sub')).includes('tap to serve'));
-  ok('the plan shows', await p.isVisible('#plan'));
-  await p.mouse.move(195, 500); await p.mouse.down();
-  for (let i = 1; i <= 10; i++) { await p.mouse.move(195 + i * 12, 500); await p.waitForTimeout(20); }
-  await p.mouse.up(); await p.waitForTimeout(400);
+  ok('waiting, drawn', s.phase === 'ready' && s.frames > 2 && s.error === 0 && s.boxes > 100, s);
+  ok('says how', (await p.textContent('#sub')).includes('tap to send it'));
+  await p.mouse.click(195, 422); await p.waitForTimeout(300);
   s = await probe();
-  ok('a drag moves the paddle, and does not serve', s.paddle > 1 && s.phase === 'serve', s);
-  await p.mouse.click(195, 500); await p.waitForTimeout(600);
-  s = await probe();
-  ok('a tap serves', s.phase === 'play' && s.ball.z > 1, s);
-  await p.keyboard.down('ArrowLeft'); await p.waitForTimeout(500); await p.keyboard.up('ArrowLeft');
-  ok('the keys move it', (await probe()).paddle < s.paddle);
-  await p.click('#toPlan'); ok('the plan hides', !(await p.isVisible('#plan')));
+  ok('a touch sends it', s.phase === 'play' && s.ball.z > s.z + 1, s);
+  // (a hand kept where it will come back, by the page's own reckoning, for a few returns)
+  for (let i = 0; i < 400 && s.returns < 3 && s.phase === 'play'; i++) {
+    const at = await p.evaluate(() => { const v = window.__volley, b = v.sim.ball; return v.onScreen(b.x, b.y); });
+    await p.mouse.move(at.x, at.y); await p.waitForTimeout(30); s = await probe();
+  }
+  ok('a hand where it comes back returns it', s.returns >= 3 && s.integrity === 5, s);
+  ok('a ring under the hand', await p.isVisible('#glass i'));
+  await p.click('#toHand');
+  ok('the hand changes, and the address with it', (await probe()).mode === 'swipe' && p.url().includes('hand=swipe') && (await p.textContent('#toHand')).includes('swipe'));
   ok('no errors', !p.errors.length, p.errors.slice(0, 3));
   await p.close();
   const q = await lab.open('preview&seed=1&t=30');
   await q.waitForTimeout(1500);
   s = await q.evaluate(() => window.__volley.probe());
-  ok('the preview plays itself, with no words', s.score > 0 && s.t > 30 && !(await q.isVisible('#bar')) && !(await q.isVisible('#top')), s);
+  ok('the preview plays itself, with no words', s.broken > 0 && s.t > 30 && !(await q.isVisible('#bar')) && !(await q.isVisible('#top')), s);
   ok('no errors in the preview', !q.errors.length && s.error === 0, q.errors.slice(0, 3));
   await q.close();
-});
+}, { width: 390, height: 844 });
 done();

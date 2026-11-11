@@ -5,9 +5,8 @@
 export const ready = '__volley';
 const PHONE = { width: 390, height: 844 };
 export const views = [
-  { name: 'serve', group: 'The court', title: 'Waiting to serve', caption: 'the bat on the boards in front of you, the ball on it, the bricks in their tiers at the far end', query: 'seed=1&still', size: PHONE, settle: 1200 },
-  { name: 'rally', group: 'The court', title: 'A ball coming back', caption: 'the ball lights the boards under it; its shadow says where it is', query: 'seed=1&auto&t=21&still', size: PHONE, settle: 1200 },
-  { name: 'plan', group: 'The court', title: 'With the plan', caption: 'the same game from above, in the corner: the game as it has always been drawn, and the wedge of it the eye takes in', query: 'seed=1&auto&t=44&still&plan', size: PHONE, settle: 1200 },
-  { name: 'wide', group: 'The court', title: 'On a wider screen', caption: 'late in the first court: lanes cut through to the back wall', query: 'seed=1&auto&t=52&still', size: { width: 1100, height: 620 }, settle: 1200 },
-  { name: 'keep', group: 'Courts', title: 'The keep', caption: 'court four: a ring of bricks round a dark core that takes two', query: 'seed=1&level=4&still', size: PHONE, settle: 1200 },
+  { name: 'ready', group: 'The tunnel', title: 'Before the first ball', caption: 'the glass is the whole screen; the first slab ahead, a frame of bricks, and the next ones through it', query: 'seed=1&still', size: PHONE, settle: 1200 },
+  { name: 'back', group: 'The tunnel', title: 'A ball coming back', caption: 'the orange ring is where it will come through the glass; the white one is the hand, already there', query: 'seed=1&auto&t=9&still', size: PHONE, settle: 1200 },
+  { name: 'deep', group: 'The tunnel', title: 'Further down', caption: 'a later slab at arm’s length, the lamps another colour', query: 'seed=1&auto&t=75.5&still&hand=catch', size: PHONE, settle: 1200 },
+  { name: 'wide', group: 'The tunnel', title: 'On a wider screen', caption: 'the tunnel is the screen’s shape: more columns across', query: 'seed=1&auto&t=41&still&hand=swipe', size: { width: 1100, height: 620 }, settle: 1200 },
 ];

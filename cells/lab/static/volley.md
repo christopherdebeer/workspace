@@ -1,42 +1,51 @@
 # Volley
 
-> The brick-breaking game, seen from the paddle.
+> A brick-breaker down a tunnel without end. There is no paddle: the screen is a pane of glass, and you return the ball with a hand on it.
 
-![Waiting to serve](volley/v-serve.jpg)
-![A ball coming back](volley/v-rally.jpg)
+![Before the first ball](volley/v-ready.jpg)
+![A ball coming back](volley/v-back.jpg)
 
-The game underneath is the plain one, unchanged: a ball, a paddle, rows of bricks, three walls, and the rule that where the ball meets the paddle sets the angle it leaves at. It is still played in a flat plan. The only thing moved is the eye. The plan is laid down as the floor of a court, and you look along it from where the paddle is: just behind and above it, going where it goes.
+The tunnel is the shape of your screen and runs away from you for ever. You are a pane of glass across its whole section. The ball goes on ahead into slabs of bricks and comes back; wherever it comes back through the glass, a hand has to be there. Break three quarters of a slab and the rest of it falls, and you go on down the tunnel to the next. A ball let through is one of five gone.
 
-Drag anywhere to move (a drag across most of the screen is the whole court), tap to serve. On a keyboard: the arrows or A and D, and space. Three balls. **plan** puts the game as it is usually drawn in the corner; **sound** turns the sound off.
+Touch anywhere to send the ball off (it leans toward where you touched). The orange ring on the glass is where the ball is going to come through; it closes as the ball arrives.
 
-## What changes when the eye moves
+## Three hands
 
-![With the plan](volley/v-plan.jpg)
+The question this is for: with the whole screen as the surface and no paddle to drag, what should a finger be? **hand** (bottom right) changes it as you play; each keeps its own best depth.
 
-From above, the game is about reading a line: you see the whole flight and put the paddle under its end. From the paddle, there is no line to read. Three things take its place.
+- **pad**: a finger resting on the glass is a round pad, about a sixth of the screen's height across. The ball leaves by where on the pad it landed (off the middle, straight back; off the rim, sharply away from the middle), and a little by how the finger was moving. This is the old paddle's rule, turned from a line into a disc, and it can be anywhere at once: two fingers are two pads.
+- **swipe**: a finger that is still does nothing. Only a moving finger counts, and the ball leaves the way the finger was going. The reach is half as big again, since you are passing through rather than waiting. It asks for timing where the pad asks for placing.
+- **catch**: a finger under the ball catches it, and it stays under the finger for as long as you hold it. It is thrown when you let go, the way the finger was moving. The slowest and the most exact: you can stop, look down the tunnel, and choose a brick.
 
-**A ball that will hit you does not move across your view; it only grows.** This is the sailor's rule for a collision (constant bearing, decreasing range), and here it is the whole skill. Because the eye moves with the paddle, steering and looking are one act: move until the ball stops sliding sideways and it is yours.
+A mouse is a hand wherever it is, button or no; letting the button go is letting go.
 
-**Depth has to be given.** A sphere on a plain floor could be anywhere along its line of sight. So the floor is boards running away from you, the walls carry a mark every two paces, the ball throws a shadow straight down and lights the boards and bricks near it. The light does most of the work: the patch on the floor is at the ball's true place, where the ball's own image is only at its bearing.
+![Further down](volley/v-deep.jpg)
 
-**You can't see everything.** The rows stand in rising tiers, so each shows over the one in front, but a ball that gets through to the lane behind them is hidden. It is drawn faintly through whatever covers it, and it is heard: every sound is placed left or right of you and quieter with distance, the rows ring higher the further back they are. The head turns part of the way toward the ball, never more than a glance, so a ball off a near side wall is not lost; if it is out of sight all the same, a mark at the screen's edge says which side.
+## Reading a ball in a tunnel
 
-The angle off the paddle is the one thing that is harder here than from above, and it is left so: you aim by where on the bat you take the ball, and from behind the bat that is a matter of a hand's width.
+From the glass, a ball going away and a ball coming back look nearly the same, and its depth is the thing you most need. Four things give it:
+
+- **Its light.** The ball lights the four walls round it, so there is a band of light on the tunnel at the ball's depth, moving with it. The walls are panelled on the bricks' own grid, which makes that band countable.
+- **The ring on the glass**, for the last second and a third of its flight. `guide=0` takes it away, to see how much the rest carries.
+- **Its sound.** Each hit is placed left or right and is quieter with distance; the bricks ring higher toward the top of the tunnel.
+- **It is never hidden.** Behind a slab it is drawn faintly through whatever covers it.
+
+## The tunnel
+
+Slab after slab, made from the seed: a frame, a cross, a chequer, bars, a window, a mirrored figure, diagonals; closer pairs now and then, which a ball can get between. Deeper slabs are denser and some bricks take two. The glass runs freely down a clear tunnel and comes to a halt at arm's length from bricks still standing, so the volley is quickest exactly when you're closest. On a wide screen a slab has many more bricks, and fourteen broken is always enough. The lamps change colour every hundred and twenty metres; the tunnel winds (in the picture only: the game's tunnel is straight).
 
 ![On a wider screen](volley/v-wide.jpg)
 
-## The courts
-
-The first is a full wall, six rows of seven. Then a colonnade (lanes straight through to the back), a chequer, and a keep: a ring round a dark core whose bricks take two. After those, each court is made from the seed, mirrored left to right, some bricks hard. The ball starts a little faster each court, quickens with every return and every brick, more for the far rows.
-
-![The keep](volley/v-keep.jpg)
-
 ## How it is made
 
-- `client/volley/sim.ts` is the game and nothing else: a circle against boxes in the plan, in fixed steps of 1/240 s, everything random from the seed. A seed and the same inputs are the same game. It also holds the stand-in player (it goes where the ball will cross the paddle's line, a little off-centre so its returns vary). Tested on its own in `devtools/volley.test.mjs`.
-- `client/volley/draw.ts` draws it: every surface an axis-aligned box, instanced, one program; the ball a sphere. The dark round the feet of the bricks is a 9 by 8 texture of which bricks stand, sampled smooth. No assets, no libraries.
-- `client/volley/main.ts` is the eye, the hand, the sound and the words.
+- `client/volley/sim.ts` is the game and nothing else: a sphere against boxes and four walls, in fixed steps of 1/240 s, everything random from the seed. Hands are given to it as points on the glass with a velocity; what a hand does is decided there. It also holds the stand-in player, which plays all three hands. Tested on its own in `devtools/volley.test.mjs`.
+- `client/volley/draw.ts` draws it: every surface an axis-aligned box, instanced, one program; the ball a sphere. The eye sits far enough behind the glass that the glass exactly fills the screen, so a point touched and a point in the tunnel are the same point. No assets, no libraries.
+- `client/volley/main.ts` is the fingers, the rings on the glass, the sound and the words.
 
 ## Flags
 
-`seed` (a number, or a name like `moss-ford-7`), `level` (the court to start on), `auto` (the stand-in plays), `t` (run on this many seconds first, the stand-in playing), `still` (and hold there), `plan`, `mute`, `preview` (the index's card). `window.__volley.probe()` reports the game and the renderer.
+`seed` (a number, or a name like `moss-ford-7`), `hand` (`pad`, `swipe`, `catch`), `auto` (the stand-in plays), `t` (run on this many seconds first, the stand-in playing), `still` (and hold there), `guide=0`, `mute`, `preview` (the index's card). `window.__volley.probe()` reports the game and the renderer.
+
+## Before this
+
+The first version kept the flat game as it was and only moved the eye: a court seen from behind a paddle you dragged left and right. It is in the repository's history (`lab: Volley, a brick-breaker seen from the paddle`).
