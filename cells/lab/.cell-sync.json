@@ -1,8 +1,8 @@
 {
   "cell": "c15r/lab",
   "cellId": "lab-8928acf3",
-  "treeVersion": "tree:6fe97f784bb28af9e5aa21b43201a47c1862768492914eeca4b1c5e7308c7980",
-  "syncedAt": "2026-11-11T17:41:03.704Z",
+  "treeVersion": "tree:e9dbb5df59a3cb6a91386ad3bf164802e196af06a84e97eb172fbd35992343cd",
+  "syncedAt": "2026-11-11T17:43:25.263Z",
   "files": {
     "README.md": "sha256:0be53420ec1d65ca68e1e925e1699b40295ecdd4991d17eb5c464a3ae8a51115",
     "client/autograph/autobiography.ts": "sha256:1aa72dbb927e6de87cdd920842be3b826ae520031f2589fadc9d4fe98abfbd67",
@@ -145,7 +145,7 @@
     "client/changes/classical.ts": "sha256:44f2d3ed0678e71b8581a9426f3f6bb0f5c36b3942534f446437bcebc58a917f",
     "client/changes/main.ts": "sha256:00411138eebb50605dee9737d0a3aac0468015af498171da31993eb048ab9ea3",
     "client/changes/model.ts": "sha256:aabf31ffdc2178a1c9ad336d204b02f7e35be918787be855d05f9bc91183454d",
-    "client/cloudfold/main.ts": "sha256:58de30bb0304136534de372a1581ae7cadf40ffbe1fcfc45992f4e2d1ebbcb0b",
+    "client/cloudfold/main.ts": "sha256:cf0cb4f6475478340a37e79203431c123adb57b53d76b9c182bf28ada527bb04",
     "client/crystals/engine.ts": "sha256:9411600a9426e5c77f10f687886db2b40be723529f2c4ea368e6f1b62ddf7e95",
     "client/crystals/main.ts": "sha256:fe41fd94e228236b4bbc61d38fa9df2224bbd24024baae5edaa99a2e3257e1fb",
     "client/crystals/mineral.ts": "sha256:506b2defadcf1f4a5d11a10912e924f01d692313a386dea9a1501babc59aefcc",
