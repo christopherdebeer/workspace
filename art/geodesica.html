@@ -1,0 +1,613 @@
+<title>Geodesica</title>
+<style>
+  html, body { margin: 0; padding: 0; height: 100%; background: #05060a; overflow: hidden; }
+  #orb {
+    position: fixed; inset: 0;
+    width: 100vw; height: 100dvh;
+    display: block; background: #05060a;
+    touch-action: none; cursor: pointer;
+    user-select: none; -webkit-user-select: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+  #hint {
+    position: fixed; left: 0; right: 0; bottom: 5vh;
+    text-align: center;
+    font: 400 11px/1.6 ui-sans-serif, system-ui, sans-serif;
+    letter-spacing: 0.22em; text-transform: uppercase;
+    color: rgba(196, 208, 222, 0.4);
+    pointer-events: none; transition: opacity 2s ease;
+  }
+  #hint.gone { opacity: 0; }
+</style>
+<canvas id="orb" aria-label="Geodesica — a steel sphere of fractal geodesic panels. Strike the panels: they ring like a handpan, remember the pattern, and let it fade."></canvas>
+<div id="hint">strike the panels</div>
+<script>
+'use strict';
+/* ============================================================
+   GEODESICA
+   A rendering experiment. One sphere, raytraced analytically in a
+   fragment shader; its skin is an octahedral geodesic lattice
+   whose triangular panels subdivide fractally — each panel decides
+   by hash whether it splits into four, and the recursion is cut
+   per pixel at the scale a pixel can resolve, so the detail is
+   effectively infinite as the sphere turns new regions toward you.
+
+   Every panel is real geometry to the light: a flat facet through
+   its three sphere vertices, with its own slight tilt, roughness,
+   anodized tint, brushed grain, beveled edges and dark seams. One
+   sun and a procedural environment light it; ACES tonemapping,
+   four-sample antialiasing and film grain finish it. The turn is
+   one whole revolution per loop, so the piece repeats exactly.
+   ============================================================ */
+
+const canvas = document.getElementById('orb');
+const TAU = Math.PI * 2;
+const LOOP = 96;                    // seconds per revolution
+const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+let gl = null, prog = null, uni = {}, quality = 1;
+let W = 0, H = 0, DPR = 1;
+
+const VERT = `#version 300 es
+void main() {
+  vec2 p = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2);
+  gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);
+}`;
+
+const FRAG = `#version 300 es
+precision highp float;
+uniform vec2 uRes;
+uniform float uPhase;
+uniform vec4 uStrikes[24];   // xyz: strike direction in the lattice frame · w: strength
+uniform float uAges[24];
+uniform int uNStrikes;
+out vec4 frag;
+
+#define TAU 6.28318530718
+
+float hash13(vec3 p) {
+  p = fract(p * 0.1031);
+  p += dot(p, p.zyx + 31.32);
+  return fract((p.x + p.y) * p.z);
+}
+float hash12(vec2 p) {
+  vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+  p3 += dot(p3, p3.yzx + 33.33);
+  return fract((p3.x + p3.y) * p3.z);
+}
+float n2(vec2 p) {
+  vec2 i = floor(p), f = fract(p);
+  f = f * f * (3.0 - 2.0 * f);
+  return mix(mix(hash12(i), hash12(i + vec2(1, 0)), f.x),
+             mix(hash12(i + vec2(0, 1)), hash12(i + vec2(1, 1)), f.x), f.y);
+}
+
+/* ------- the environment the metal reflects ------- */
+vec3 sunDir;
+vec3 env(vec3 r) {
+  float h = r.y;
+  // a cold studio sky: bright above, a warm thin band at the horizon,
+  // near-black floor — the classic look of an object shot at dusk
+  vec3 sky = mix(vec3(0.030, 0.036, 0.052), vec3(0.36, 0.44, 0.58), smoothstep(-0.1, 0.9, h));
+  sky += vec3(0.50, 0.30, 0.14) * exp(-abs(h + 0.02) * 14.0) * 0.7;
+  vec3 ground = vec3(0.012, 0.012, 0.014) * (0.6 + 0.4 * smoothstep(-1.0, 0.0, h));
+  vec3 e = mix(ground, sky, smoothstep(-0.06, 0.06, h));
+  float s = max(dot(r, sunDir), 0.0);
+  e += vec3(1.0, 0.86, 0.62) * (pow(s, 900.0) * 40.0 + pow(s, 24.0) * 0.5);
+  return e;
+}
+
+/* ------- the panel lattice ------- */
+
+/* vertex of the octant lattice, as a point on the unit sphere */
+vec3 latVert(vec2 ij, float invN, vec3 sgn) {
+  vec2 xy = ij * invN;
+  vec3 b = vec3(xy, max(1.0 - xy.x - xy.y, 0.0));
+  return normalize(b) * sgn;
+}
+
+struct Panel {
+  vec3 fn;        // facet normal
+  vec3 t1;        // brushed direction
+  float edge;     // distance to the panel border, in cell units
+  float id;       // stable hash id
+  float depth;    // subdivision depth reached
+};
+
+Panel panelAt(vec3 d, float pixBary) {
+  vec3 sgn = vec3(d.x < 0.0 ? -1.0 : 1.0, d.y < 0.0 ? -1.0 : 1.0, d.z < 0.0 ? -1.0 : 1.0);
+  vec3 a = abs(d);
+  vec3 b = a / (a.x + a.y + a.z);
+  float oct = sgn.x + sgn.y * 2.0 + sgn.z * 4.0;
+
+  float N = 5.0;
+  float upper = 0.0;
+  vec2 cell = vec2(0.0);
+  float id = 0.0;
+  float depth = 0.0;
+
+  for (int l = 0; l < 7; l++) {
+    vec2 UV = b.xy * N;
+    cell = floor(UV);
+    vec2 f = UV - cell;
+    upper = step(1.0, f.x + f.y);
+    id = hash13(vec3(cell + oct * 37.0, float(l) * 2.0 + upper));
+    // stop when the next level's panels would be smaller than the pixel
+    bool tooSmall = (0.5 / N) < pixBary * 3.0;
+    // the fractal rule: some panels split, and their children may split again
+    float p = l == 0 ? 0.85 : (l == 1 ? 0.62 : (l == 2 ? 0.5 : 0.42));
+    if (tooSmall || id > p || l == 6) break;
+    N *= 2.0;
+    depth += 1.0;
+  }
+
+  vec2 UV = b.xy * N;
+  cell = floor(UV);
+  vec2 f = UV - cell;
+  upper = step(1.0, f.x + f.y);
+  float invN = 1.0 / N;
+
+  vec3 v0, v1, v2;
+  if (upper < 0.5) {
+    v0 = latVert(cell, invN, sgn);
+    v1 = latVert(cell + vec2(1, 0), invN, sgn);
+    v2 = latVert(cell + vec2(0, 1), invN, sgn);
+  } else {
+    v0 = latVert(cell + vec2(1, 1), invN, sgn);
+    v1 = latVert(cell + vec2(0, 1), invN, sgn);
+    v2 = latVert(cell + vec2(1, 0), invN, sgn);
+  }
+
+  Panel P;
+  P.fn = normalize(cross(v1 - v0, v2 - v0));
+  if (dot(P.fn, d) < 0.0) P.fn = -P.fn;
+  P.t1 = normalize(v1 - v0);
+  P.edge = upper < 0.5 ? min(min(f.x, f.y), 1.0 - f.x - f.y)
+                       : min(min(1.0 - f.x, 1.0 - f.y), f.x + f.y - 1.0);
+  P.id = hash13(vec3(cell + oct * 53.0, N + upper));
+  P.depth = depth;
+  return P;
+}
+
+vec3 aces(vec3 x) {
+  return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), 0.0, 1.0);
+}
+
+vec3 shade(vec2 frag2) {
+  vec2 uv = (frag2 - uRes * 0.5) / uRes.y;
+
+  // camera: fixed; the sphere turns instead, one revolution per loop
+  vec3 ro = vec3(0.0, 0.12, 3.1);
+  vec3 rd = normalize(vec3(uv, -1.62));
+
+  float yaw = TAU * uPhase;
+  float cy = cos(yaw), sy = sin(yaw);
+  mat3 Ry = mat3(cy, 0, -sy, 0, 1, 0, sy, 0, cy);
+  float tilt = 0.41;
+  mat3 Rt = mat3(1, 0, 0, 0, cos(tilt), -sin(tilt), 0, sin(tilt), cos(tilt));
+  mat3 R = Ry * Rt;              // object -> world is transpose; fold rays into object space
+  sunDir = normalize(vec3(0.55, 0.42, 0.72));
+
+  // analytic sphere
+  float bq = dot(ro, rd);
+  float cq = dot(ro, ro) - 1.0;
+  float disc = bq * bq - cq;
+
+  if (disc < 0.0) {
+    // the backdrop: the environment itself, dimmed, with a breath of haze
+    vec3 bg = env(rd) * 0.16;
+    bg += vec3(0.05, 0.06, 0.08) * exp(-abs(rd.y + 0.03) * 9.0) * 0.4;
+    return bg;
+  }
+
+  float t = -bq - sqrt(disc);
+  if (t < 0.0) return env(rd) * 0.16;
+  vec3 pos = ro + rd * t;
+  vec3 n = pos;                       // unit sphere: position is the normal
+  vec3 dObj = transpose(R) * n;       // into the lattice's frame
+
+  // how much barycentric space one pixel spans here, for the LOD cut
+  float pixAng = 1.62 / uRes.y;
+  float grazing = max(dot(n, -rd), 0.08);
+  float pixBary = pixAng * t / grazing * 0.6;
+
+  Panel P = panelAt(dObj, pixBary);
+  vec3 fn = R * P.fn;                 // facet normal back in world
+  vec3 t1 = R * P.t1;
+
+  // ------- the panel's own character
+  float h1 = P.id;
+  float h2 = fract(P.id * 61.7);
+  float h3 = fract(P.id * 271.3);
+
+  // a slight physical mis-set: every real panel sits a hair off true
+  vec3 tiltAx = normalize(cross(fn, t1));
+  fn = normalize(fn + tiltAx * (h1 - 0.5) * 0.030 + t1 * (h2 - 0.5) * 0.030);
+
+  float rough = 0.30 + h2 * 0.40;
+  vec3 tint = mix(vec3(0.140, 0.146, 0.162),                 // gunmetal
+                  mix(vec3(0.120, 0.122, 0.130),             // smoke steel
+                      vec3(0.115, 0.135, 0.158), step(0.5, h3)), // blued steel
+                  0.35);
+  float glass = step(0.955, h1);                             // the odd dark pane
+  tint = mix(tint, vec3(0.030, 0.034, 0.040), glass);
+  rough = mix(rough, 0.10, glass);
+  // some panels are far gone: heavily oxidized, nearly matte
+  float corroded = smoothstep(0.78, 0.92, h3);
+  tint = mix(tint, vec3(0.058, 0.060, 0.066), corroded);
+  rough = mix(rough, 0.85, corroded);
+
+  // brushed grain: fine streaks along the panel, bending the normal a touch
+  vec2 pl = vec2(dot(pos, t1), dot(pos, cross(fn, t1)));
+  float brush = n2(pl * vec2(420.0, 26.0) + h1 * 100.0) - 0.5;
+  fn = normalize(fn + t1 * brush * 0.020);
+  rough += abs(brush) * 0.10;
+  // the smudge of weather, per panel, at two scales
+  float grime = n2(pl * 13.0 + h2 * 40.0) * 0.6 + n2(pl * 47.0 + h1 * 90.0) * 0.4;
+  tint *= 0.72 + 0.28 * grime;
+  rough += (1.0 - grime) * 0.18;
+  // rain has run down this thing for years
+  float streak = n2(vec2((dObj.x * 8.0 + dObj.z * 13.0) * 16.0, dObj.y * 2.2 + h1));
+  float stain = smoothstep(0.58, 0.82, streak * (0.55 + 0.45 * grime));
+  tint = mix(tint, vec3(0.042, 0.044, 0.050), stain * 0.5);     // the stains run charcoal, not rust
+  rough = min(rough + stain * 0.25, 0.95);
+  // patina blooms where the streaks pool
+  float bloom = smoothstep(0.6, 0.85, n2(pl * 6.0 + h3 * 70.0)) * stain;
+  tint = mix(tint, vec3(0.048, 0.066, 0.062), bloom * 0.35);    // the faintest cold bloom
+
+  // ------- edges: a bevel that catches light, then the dark seam
+  float ew = 0.045;
+  float bevel = smoothstep(ew * 1.7, ew * 0.8, P.edge);
+  vec3 toEdge = normalize(n - fn * dot(n, fn) + 1e-5);
+  fn = normalize(mix(fn, normalize(fn + toEdge * 0.8), bevel * 0.22));
+  // edges wear bright: the chamfer is where the oxide rubs off
+  float edgeShine = bevel * (0.4 + 0.6 * h2);
+  float seam = smoothstep(ew * 0.5, ew * 0.2, P.edge);
+  float seamAO = 1.0 - smoothstep(ew * 1.6, ew * 0.3, P.edge) * 0.45;
+
+  // ------- light
+  vec3 V = -rd;
+  vec3 L = sunDir;
+  vec3 Hv = normalize(L + V);
+  float NdL = max(dot(fn, L), 0.0);
+  float NdV = max(dot(fn, V), 0.0);
+  float NdH = max(dot(fn, Hv), 0.0);
+
+  float f0 = mix(mix(0.42, 0.12, corroded), 0.22, glass);
+  float fres = f0 + (1.0 - f0) * pow(1.0 - NdV, 5.0);
+
+  float shin = 2.0 / (rough * rough) - 2.0;
+  float spec = pow(NdH, shin) * (shin + 8.0) / 25.0;
+
+  vec3 refl = reflect(rd, fn);
+  vec3 e = env(refl);
+
+  // ------- the temper skin
+  // optical path 2·n·d·cosθ, in cycles; thickness varies panel to panel and
+  // drifts across each facet, so the interference sweeps in heat-treat bands
+  float film = 1.2 + h3 * 2.6 + grime * 0.9 + P.depth * 0.23;
+  float opd = film * (0.42 + 0.58 * NdV);
+  vec3 irid = 0.5 + 0.5 * cos(TAU * (opd * vec3(1.0, 1.21, 1.47) + vec3(0.0, 0.12, 0.24)));
+  irid = mix(vec3(dot(irid, vec3(0.299, 0.587, 0.114))), irid, 0.85);
+  // the film survives where the surface is still smooth; wear scours it off
+  float temper = (0.55 + 0.45 * h2) * smoothstep(0.92, 0.3, rough) * (1.0 - stain * 0.7) * (1.0 - glass);
+  vec3 filmTint = mix(vec3(1.0), irid * 1.5, temper);
+  e *= filmTint;
+  // rougher panels see a blurrier world: fake it by pulling toward the mean
+  e = mix(e, vec3(0.055, 0.060, 0.070), smoothstep(0.05, 0.55, rough) * 0.85);
+
+  vec3 col = vec3(0.0);
+  col += tint * e * fres * 2.0;                        // the little of the world it still holds
+  col += tint * vec3(1.0, 0.9, 0.76) * filmTint * spec * NdL * 2.6 * (1.0 - stain * 0.7);   // the sun, struck through the film
+  col += tint * (NdL * 0.22 + 0.020);                  // worn metal is half matte
+  float fill = max(dot(fn, normalize(vec3(-0.5, 0.25, -0.6))), 0.0);
+  col += tint * vec3(0.36, 0.44, 0.60) * fill * 0.045; // the sky answers from the far side
+  col += vec3(0.9, 0.92, 0.95) * edgeShine * spec * NdL * 0.5;
+  col *= seamAO;
+  col = mix(col, vec3(0.004, 0.005, 0.007), seam);     // the gap between panels
+
+  // deeper panels sit deeper in shadow between their neighbours
+  col *= 1.0 - P.depth * 0.022;
+
+  // the film speaks loudest at grazing incidence: a petrol sheen that lives
+  // on the dark body itself, crawling as the sphere turns
+  float grazeF = pow(1.0 - NdV, 2.2);
+  col += irid * grazeF * temper * 0.30 * seamAO * (1.0 - seam);
+
+  // ------- struck metal remembers: a glow at the strike, and a ring of
+  // light travelling the surface at a fixed angular speed
+  vec3 rung = vec3(0.0);
+  for (int i = 0; i < 24; i++) {
+    if (i >= uNStrikes) break;
+    float ang = acos(clamp(dot(dObj, uStrikes[i].xyz), -1.0, 1.0));
+    float age = uAges[i];
+    float ringR = age * 1.7;
+    float ring = exp(-pow((ang - ringR) / 0.09, 2.0)) * exp(-age * 1.9);
+    float core = exp(-pow(ang / 0.15, 2.0)) * exp(-age * 2.6);
+    rung += (irid * 0.55 + vec3(0.72, 0.80, 0.92) * 0.45)
+          * (core * 1.1 + ring * 0.5) * uStrikes[i].w;
+  }
+  col += rung * seamAO * (1.0 - seam * 0.6);
+
+  // ------- the sphere sits in air
+  float rimF = pow(1.0 - max(dot(n, V), 0.0), 3.0);
+  col += vec3(0.10, 0.13, 0.18) * rimF * 0.18;
+
+  return col;
+}
+
+void main() {
+  // four samples: panel edges are the whole picture, they must not stair-step
+  vec3 c = vec3(0.0);
+  c += shade(gl_FragCoord.xy + vec2(-0.25, -0.25));
+  c += shade(gl_FragCoord.xy + vec2(0.25, -0.25));
+  c += shade(gl_FragCoord.xy + vec2(-0.25, 0.25));
+  c += shade(gl_FragCoord.xy + vec2(0.25, 0.25));
+  c *= 0.25;
+
+  vec2 uv = gl_FragCoord.xy / uRes;
+  c *= 1.0 - 0.35 * pow(length(uv - vec2(0.5, 0.47)), 2.4);
+  vec3 col = aces(c * 1.5);
+  col = pow(col, vec3(1.0 / 1.1));
+  float grain = (hash12(gl_FragCoord.xy + fract(uPhase * 971.0) * 100.0) - 0.5) * 0.02;
+  col += grain;
+  frag = vec4(col, 1.0);
+}`;
+
+function compile(type, src) {
+  const s = gl.createShader(type);
+  gl.shaderSource(s, src);
+  gl.compileShader(s);
+  if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s));
+  return s;
+}
+
+function initGL() {
+  gl = canvas.getContext('webgl2', { antialias: false, alpha: false, preserveDrawingBuffer: true });
+  if (!gl) return false;
+  prog = gl.createProgram();
+  gl.attachShader(prog, compile(gl.VERTEX_SHADER, VERT));
+  gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, FRAG));
+  gl.linkProgram(prog);
+  if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(prog));
+  gl.useProgram(prog);
+  uni.uRes = gl.getUniformLocation(prog, 'uRes');
+  uni.uPhase = gl.getUniformLocation(prog, 'uPhase');
+  uni.uStrikes = gl.getUniformLocation(prog, 'uStrikes');
+  uni.uAges = gl.getUniformLocation(prog, 'uAges');
+  uni.uNStrikes = gl.getUniformLocation(prog, 'uNStrikes');
+  return true;
+}
+
+function resize() {
+  W = window.innerWidth; H = window.innerHeight;
+  DPR = Math.min(window.devicePixelRatio || 1, 2, Math.sqrt(2300000 / Math.max(1, W * H)));
+  DPR = Math.max(0.75, DPR * quality);
+  canvas.width = Math.round(W * DPR);
+  canvas.height = Math.round(H * DPR);
+  if (gl) gl.viewport(0, 0, canvas.width, canvas.height);
+}
+
+const MAXS = 24;
+const strikeVec = new Float32Array(MAXS * 4);
+const strikeAge = new Float32Array(MAXS);
+
+function draw(phase, nowMs) {
+  const now = nowMs === undefined ? performance.now() : nowMs;
+  let n = 0;
+  for (let i = flashes.length - 1; i >= 0 && n < MAXS; i--) {
+    const f = flashes[i];
+    const age = (now - f.t0) / 1000;
+    if (age > 3.2) continue;
+    strikeVec[n * 4] = f.dir[0];
+    strikeVec[n * 4 + 1] = f.dir[1];
+    strikeVec[n * 4 + 2] = f.dir[2];
+    strikeVec[n * 4 + 3] = f.strength;
+    strikeAge[n] = age;
+    n++;
+  }
+  gl.uniform2f(uni.uRes, canvas.width, canvas.height);
+  gl.uniform1f(uni.uPhase, phase);
+  gl.uniform4fv(uni.uStrikes, strikeVec);
+  gl.uniform1fv(uni.uAges, strikeAge);
+  gl.uniform1i(uni.uNStrikes, n);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+}
+
+/* ============================================================
+   THE INSTRUMENT
+   A steelpan is a tuned metal shell struck on panel regions, and
+   so is this. In the sphere's own frame: the top cap is the low
+   ding, eight notes of D Kurd ring the equator by azimuth, the
+   bottom cap is the deep gu. The note map turns with the metal.
+
+   Panels remember. Every strike is written into a six-second
+   memory loop and replayed in place, a fifth quieter each pass,
+   until it fades — unless you keep feeding the pattern.
+   ============================================================ */
+
+const hintEl = document.getElementById('hint');
+const P_LOOP = 6.0;                    // seconds of memory
+const ECHO_DECAY = 0.78;
+
+const DING = 146.83;                                       // D3
+const RING = [220.0, 261.63, 329.63, 392.0, 440.0, 349.23, 293.66, 233.08];
+const GU = 73.42;                                          // D2
+
+let ac = null, master = null, sendIn = null;
+
+function initAudio() {
+  if (ac) { if (ac.state === 'suspended') ac.resume(); return; }
+  try { ac = new (window.AudioContext || window.webkitAudioContext)(); }
+  catch (e) { return; }
+  if (ac.state === 'suspended') ac.resume();
+  const comp = ac.createDynamicsCompressor();
+  comp.threshold.value = -20; comp.knee.value = 18;
+  comp.ratio.value = 5; comp.attack.value = 0.003; comp.release.value = 0.3;
+  comp.connect(ac.destination);
+  master = ac.createGain();
+  master.gain.value = 0.7;
+  master.connect(comp);
+  // the room the pan rings in
+  sendIn = ac.createGain(); sendIn.gain.value = 1;
+  const delay = ac.createDelay(2.0); delay.delayTime.value = 0.31;
+  const fb = ac.createGain(); fb.gain.value = 0.36;
+  const damp = ac.createBiquadFilter(); damp.type = 'lowpass'; damp.frequency.value = 2400;
+  const wet = ac.createGain(); wet.gain.value = 0.24;
+  sendIn.connect(delay); delay.connect(damp); damp.connect(fb); fb.connect(delay);
+  delay.connect(wet); wet.connect(master);
+}
+
+/* one handpan strike: the tuned partials the maker hammered in —
+   fundamental, octave, compound fifth — a detuned twin for the slow
+   wah, a knuckle thump, and a breath of shimmer at contact */
+function strikeNote(freq, vel, pan) {
+  if (!ac) return;   // a suspended context still accepts the schedule and speaks on resume
+  const t = ac.currentTime;
+  const out = ac.createGain(); out.gain.value = 1;
+  const pn = ac.createStereoPanner ? ac.createStereoPanner() : null;
+  if (pn) { pn.pan.value = pan; out.connect(pn); pn.connect(master); pn.connect(sendIn); }
+  else { out.connect(master); out.connect(sendIn); }
+
+  const tau = 3.2 * Math.sqrt(150 / freq);
+  const parts = [
+    { r: 1.0, g: 1.0, d: tau },
+    { r: 2.0, g: 0.5, d: tau * 0.55 },
+    { r: 3.008, g: 0.24, d: tau * 0.34 },
+    { r: 4.94, g: 0.08, d: tau * 0.2 },
+  ];
+  for (const pt of parts) {
+    const o = ac.createOscillator(); o.type = 'sine';
+    o.frequency.value = freq * pt.r;
+    const g = ac.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(vel * pt.g * 0.22, t + 0.006);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + pt.d);
+    o.connect(g); g.connect(out);
+    o.start(t); o.stop(t + pt.d + 0.1);
+  }
+  // the twin, a hair sharp: the beating is the handpan's breath
+  const o2 = ac.createOscillator(); o2.type = 'sine';
+  o2.frequency.value = freq + 1.3;
+  const g2 = ac.createGain();
+  g2.gain.setValueAtTime(0.0001, t);
+  g2.gain.exponentialRampToValueAtTime(vel * 0.09, t + 0.008);
+  g2.gain.exponentialRampToValueAtTime(0.0001, t + tau * 0.8);
+  o2.connect(g2); g2.connect(out);
+  o2.start(t); o2.stop(t + tau);
+  // knuckle
+  const th = ac.createOscillator(); th.type = 'sine';
+  th.frequency.setValueAtTime(95, t);
+  th.frequency.exponentialRampToValueAtTime(55, t + 0.06);
+  const tg = ac.createGain();
+  tg.gain.setValueAtTime(vel * 0.16, t);
+  tg.gain.exponentialRampToValueAtTime(0.0001, t + 0.07);
+  th.connect(tg); tg.connect(out);
+  th.start(t); th.stop(t + 0.09);
+}
+
+/* where on the pan was that? the note lives in the sphere's own frame */
+function noteFor(dObj) {
+  const lat = Math.asin(Math.max(-1, Math.min(1, dObj[1])));
+  if (lat > 0.95) return GU * 2;                 // the ding, top centre
+  if (lat < -0.95) return GU;                    // the gu, underneath
+  const az = Math.atan2(dObj[2], dObj[0]);
+  const idx = ((Math.floor((az / TAU + 0.5) * 8) % 8) + 8) % 8;
+  const oct = lat > 0.35 ? 1 : (lat < -0.35 ? 0.5 : 1);
+  return RING[idx] * (lat < -0.35 ? 0.5 : 1) * (lat > 0.55 ? 2 : 1);
+}
+
+/* the memory of the metal */
+let memories = [];   // {dir, freq, pan, strength, nextFire}
+let flashes = [];    // {dir, strength, t0} — what the shader lights up
+
+function rotationOf(nowMs) {
+  const secs = (nowMs - t0) / 1000 * (reduceMotion ? 0.35 : 1);
+  return (secs % LOOP) / LOOP;
+}
+
+/* screen tap -> direction in the lattice frame, or null if the sky */
+function pickDir(px, py, nowMs) {
+  const ux = (px - W / 2) / H;
+  const uy = -(py - H / 2) / H;
+  const rd = [ux, uy, -1.62];
+  const rl = Math.hypot(rd[0], rd[1], rd[2]);
+  rd[0] /= rl; rd[1] /= rl; rd[2] /= rl;
+  const ro = [0, 0.12, 3.1];
+  const b = ro[0] * rd[0] + ro[1] * rd[1] + ro[2] * rd[2];
+  const c = ro[0] * ro[0] + ro[1] * ro[1] + ro[2] * ro[2] - 1;
+  const disc = b * b - c;
+  if (disc < 0) return null;
+  const tHit = -b - Math.sqrt(disc);
+  if (tHit < 0) return null;
+  const n = [ro[0] + rd[0] * tHit, ro[1] + rd[1] * tHit, ro[2] + rd[2] * tHit];
+  // world -> lattice: transpose of R = (Ry * Rt): apply Ry^T then Rt^T
+  const yaw = TAU * rotationOf(nowMs);
+  const cy = Math.cos(yaw), sy = Math.sin(yaw);
+  const v1 = [cy * n[0] - sy * n[2], n[1], sy * n[0] + cy * n[2]];
+  const tl = 0.41, ct = Math.cos(tl), st = Math.sin(tl);
+  return [v1[0], ct * v1[1] - st * v1[2], st * v1[1] + ct * v1[2]];
+}
+
+canvas.addEventListener('pointerdown', (e) => {
+  e.preventDefault();
+  initAudio();
+  const now = performance.now();
+  const dir = pickDir(e.clientX, e.clientY, now);
+  if (!dir) return;
+  hintEl.classList.add('gone');
+  const freq = noteFor(dir);
+  const pan = Math.max(-0.8, Math.min(0.8, (e.clientX - W / 2) / (W / 2)));
+  strikeNote(freq, 1.0, pan);
+  flashes.push({ dir, strength: 1.0, t0: now });
+  memories.push({ dir, freq, pan, strength: ECHO_DECAY, nextFire: now + P_LOOP * 1000 });
+  if (memories.length > 64) memories.shift();
+}, { passive: false });
+
+function updateMemories(now) {
+  for (let i = memories.length - 1; i >= 0; i--) {
+    const m = memories[i];
+    while (now >= m.nextFire) {
+      strikeNote(m.freq, m.strength, m.pan);
+      flashes.push({ dir: m.dir, strength: m.strength, t0: m.nextFire });
+      m.nextFire += P_LOOP * 1000;
+      m.strength *= ECHO_DECAY;
+    }
+    if (m.strength < 0.06) memories.splice(i, 1);
+  }
+  if (flashes.length > 96) flashes = flashes.slice(-64);
+}
+
+let t0 = performance.now();
+let raf = 0;
+let frameCount = 0, fpsT0 = 0;
+
+function frame(now) {
+  updateMemories(now);
+  draw(rotationOf(now), now);
+
+  frameCount++;
+  if (now - fpsT0 > 4000 && quality > 0.5) {
+    const fps = frameCount / ((now - fpsT0) / 1000);
+    if (fpsT0 > 0 && fps < 38) { quality *= 0.8; resize(); }
+    fpsT0 = now; frameCount = 0;
+  }
+  raf = requestAnimationFrame(frame);
+}
+
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) {
+    cancelAnimationFrame(raf);
+    if (ac && ac.state === 'running') ac.suspend();
+  } else {
+    raf = requestAnimationFrame(frame);
+    if (ac && ac.state === 'suspended') ac.resume();
+  }
+});
+
+window.addEventListener('resize', resize);
+if (initGL()) {
+  resize();
+  raf = requestAnimationFrame(frame);
+}
+</script>

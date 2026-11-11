@@ -1,0 +1,949 @@
+<title>Chorus Reef</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    height: 100%;
+    background: #041014;
+    overflow: hidden;
+  }
+  #reef {
+    position: fixed;
+    inset: 0;
+    width: 100vw;
+    height: 100dvh;
+    display: block;
+    background: #041014;
+    touch-action: none;
+    cursor: crosshair;
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+</style>
+<canvas id="reef" aria-label="Chorus Reef — an evolving ecology of singing creatures. Touch them to shape what the reef becomes."></canvas>
+<script>
+'use strict';
+/* ============================================================
+   CHORUS REEF — second growth
+   An ecology of singers, evolving toward a symphony.
+
+   Each creature carries a heritable genome:
+     voice    — one of four timbral families, each with its own
+                visible anatomy: bells orbit satellites, breaths
+                are nested rings, plucks are needled stars,
+                horns are heavy lobed blooms
+     register — bass / mid / high; bass bodies are larger, slower
+     motif    — scale degrees, sung relative to the current
+                tonal center
+     rhythm   — an autonomous clock, plus a SYNC gene: how firmly
+                this creature leans onto the shared pulse grid.
+                Attention nudges sync; offspring inherit it. A
+                tended reef drifts from free bells to ensemble.
+     ear      — whether and how fast it answers songs that reach
+                it (sound travels as a visible wavefront; hearing
+                is collision, not metaphor)
+     social   — what being touched does and sounds like for THIS
+                one: echo, flee, split, transpose, burst
+
+   The water itself modulates: every ~55 s the tonal center moves
+   and a slow golden tide crosses the reef — creatures it touches
+   answer in the new key, so each modulation elicits its chorus.
+
+   The motes are the matter cycle. Dying singers dissolve into
+   spores that keep their color; motes drift toward living singers
+   and are absorbed as energy — death feeds the chorus. A wavefront
+   crossing a pocket of motes scatters audibly as high shimmer.
+   Sweep motes toward a creature with a drag and you are feeding it.
+   ============================================================ */
+
+const canvas = document.getElementById('reef');
+const g2 = canvas.getContext('2d', { alpha: false });
+
+const BG = { r: 4, g: 16, b: 20 };
+const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+const TAU = Math.PI * 2;
+const rand = (a, b) => a + Math.random() * (b - a);
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
+
+let W = 0, H = 0, DPR = 1, minDim = 1;
+
+function resize() {
+  DPR = Math.min(window.devicePixelRatio || 1, 2);
+  W = window.innerWidth;
+  H = window.innerHeight;
+  minDim = Math.min(W, H);
+  canvas.width = Math.round(W * DPR);
+  canvas.height = Math.round(H * DPR);
+  g2.setTransform(DPR, 0, 0, DPR, 0, 0);
+  g2.fillStyle = `rgb(${BG.r},${BG.g},${BG.b})`;
+  g2.fillRect(0, 0, W, H);
+}
+
+/* ---------------- music ---------------- */
+
+const SCALE = [0, 2, 4, 7, 9];            // major pentatonic
+const ROOT = 130.81;                      // C3
+const WAVE_SPEED = 190;                   // px/s — songs travel the water
+const PULSE = 60 / 72 / 2;                // the shared pulse: eighths at 72 bpm
+const CENTERS = [0, 5, -2, 7];            // tonal centers the reef cycles through
+const MODULATE_EVERY = 55;                // seconds
+let centerIdx = 0;
+let nextModulation = 25;
+
+function degreeHz(deg, octaveOff) {
+  const oct = Math.floor(deg / SCALE.length);
+  const semi = SCALE[((deg % SCALE.length) + SCALE.length) % SCALE.length] + 12 * oct;
+  return ROOT * Math.pow(2, (CENTERS[centerIdx] + semi) / 12 + (octaveOff || 0));
+}
+
+/* lean a moment onto the shared grid, by sync ∈ [0,1] */
+function quantize(t, sync) {
+  const q = Math.round(t / PULSE) * PULSE;
+  return t + (q - t) * sync;
+}
+
+/* ---------------- audio ---------------- */
+
+let ac = null, master = null, sendIn = null, analyser = null, analyserBins = null, noiseBuf = null;
+let bed = null;
+
+function initAudio() {
+  if (ac) { if (ac.state === 'suspended') ac.resume(); return; }
+  try { ac = new (window.AudioContext || window.webkitAudioContext)(); }
+  catch (e) { return; }
+  if (ac.state === 'suspended') ac.resume();
+
+  const comp = ac.createDynamicsCompressor();
+  comp.threshold.value = -22; comp.knee.value = 20;
+  comp.ratio.value = 7; comp.attack.value = 0.004; comp.release.value = 0.35;
+  comp.connect(ac.destination);
+
+  master = ac.createGain();
+  master.gain.value = 0.6;
+  master.connect(comp);
+
+  analyser = ac.createAnalyser();
+  analyser.fftSize = 256;
+  analyser.smoothingTimeConstant = 0.85;
+  master.connect(analyser);
+  analyserBins = new Uint8Array(analyser.frequencyBinCount);
+
+  // shared water: a lowpassed feedback delay
+  sendIn = ac.createGain(); sendIn.gain.value = 1;
+  const delay = ac.createDelay(2.5); delay.delayTime.value = 0.43;
+  const fb = ac.createGain(); fb.gain.value = 0.45;
+  const damp = ac.createBiquadFilter(); damp.type = 'lowpass'; damp.frequency.value = 1600;
+  const wet = ac.createGain(); wet.gain.value = 0.4;
+  sendIn.connect(delay); delay.connect(damp); damp.connect(fb); fb.connect(delay);
+  delay.connect(wet); wet.connect(master);
+
+  noiseBuf = ac.createBuffer(1, ac.sampleRate, ac.sampleRate);
+  const d = noiseBuf.getChannelData(0);
+  for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+
+  // the bed: a nearly subliminal tonal floor that carries the modulations
+  const bedFilter = ac.createBiquadFilter();
+  bedFilter.type = 'lowpass'; bedFilter.frequency.value = 380;
+  const bedGain = ac.createGain();
+  bedGain.gain.setValueAtTime(0.0001, ac.currentTime);
+  bedGain.gain.exponentialRampToValueAtTime(0.05, ac.currentTime + 6);
+  bedFilter.connect(bedGain); bedGain.connect(master); bedGain.connect(sendIn);
+  bed = [
+    { ratio: 0.5, gain: 0.6 },   // root, an octave down
+    { ratio: 0.75, gain: 0.35 }, // the fifth below
+  ].map(v => {
+    const o = ac.createOscillator(); o.type = 'sine';
+    o.frequency.value = ROOT * Math.pow(2, CENTERS[centerIdx] / 12) * v.ratio;
+    const g = ac.createGain(); g.gain.value = v.gain;
+    o.connect(g); g.connect(bedFilter); o.start();
+    return { osc: o, ratio: v.ratio };
+  });
+}
+
+function retuneBed() {
+  if (!bed) return;
+  const base = ROOT * Math.pow(2, CENTERS[centerIdx] / 12);
+  for (const b of bed) b.osc.frequency.setTargetAtTime(base * b.ratio, ac.currentTime, 2.2);
+}
+
+/* One note in one creature's voice. */
+function playVoice(v, deg, vel, brightMul, octaveOff) {
+  if (!ac) return;
+  const t = ac.currentTime;
+  const freq = degreeHz(deg, octaveOff || 0);
+  const bright = clamp(v.bright * (brightMul || 1), 0.05, 1.5);
+  const dur = v.attack + v.decay;
+
+  const car = ac.createOscillator();
+  const env = ac.createGain();
+  env.gain.setValueAtTime(0.0001, t);
+  env.gain.exponentialRampToValueAtTime(Math.max(0.002, vel), t + Math.max(0.005, v.attack));
+  env.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+  car.connect(env); env.connect(master); env.connect(sendIn);
+
+  if (v.type === 0 || v.type === 3) {
+    car.type = 'sine'; car.frequency.value = freq;
+    const mod = ac.createOscillator();
+    mod.frequency.value = freq * (v.type === 0 ? 3.501 : 2.0);
+    const mg = ac.createGain();
+    mg.gain.setValueAtTime(freq * (0.3 + 1.9 * bright), t);
+    mg.gain.exponentialRampToValueAtTime(freq * 0.02, t + dur * 0.75);
+    mod.connect(mg); mg.connect(car.frequency);
+    mod.start(t); mod.stop(t + dur + 0.1);
+  } else if (v.type === 1) {
+    car.type = 'sine'; car.frequency.value = freq;
+    const vib = ac.createOscillator(); vib.frequency.value = rand(4.5, 6.5);
+    const va = ac.createGain(); va.gain.value = freq * 0.008;
+    vib.connect(va); va.connect(car.frequency);
+    vib.start(t); vib.stop(t + dur + 0.1);
+  } else {
+    car.type = 'triangle'; car.frequency.value = freq;
+    const lp = ac.createBiquadFilter(); lp.type = 'lowpass';
+    lp.frequency.setValueAtTime(freq * (2 + 6 * bright), t);
+    lp.frequency.exponentialRampToValueAtTime(freq * 1.2, t + dur * 0.6);
+    car.disconnect(); car.connect(lp); lp.connect(env);
+  }
+  car.start(t); car.stop(t + dur + 0.1);
+}
+
+function glissDown(freq, dur, vel) {
+  if (!ac) return;
+  const t = ac.currentTime;
+  const o = ac.createOscillator(); o.type = 'sine';
+  o.frequency.setValueAtTime(freq, t);
+  o.frequency.exponentialRampToValueAtTime(Math.max(30, freq * 0.4), t + dur);
+  const env = ac.createGain();
+  env.gain.setValueAtTime(0.0001, t);
+  env.gain.exponentialRampToValueAtTime(vel, t + 0.05);
+  env.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+  o.connect(env); env.connect(master); env.connect(sendIn);
+  o.start(t); o.stop(t + dur + 0.1);
+}
+
+function bassSwell() {
+  if (!ac) return;
+  const t = ac.currentTime;
+  const o = ac.createOscillator(); o.type = 'sine';
+  o.frequency.setValueAtTime(ROOT * Math.pow(2, CENTERS[centerIdx] / 12) * 0.25, t);
+  const env = ac.createGain();
+  env.gain.setValueAtTime(0.0001, t);
+  env.gain.exponentialRampToValueAtTime(0.22, t + 1.2);
+  env.gain.exponentialRampToValueAtTime(0.0001, t + 6);
+  o.connect(env); env.connect(master); env.connect(sendIn);
+  o.start(t); o.stop(t + 6.2);
+}
+
+function whoosh(speed) {
+  if (!ac || !noiseBuf) return;
+  const t = ac.currentTime;
+  const src = ac.createBufferSource(); src.buffer = noiseBuf;
+  src.playbackRate.value = rand(0.7, 1.2);
+  const bp = ac.createBiquadFilter(); bp.type = 'bandpass';
+  bp.frequency.value = 250 + speed * 500; bp.Q.value = 1.6;
+  const env = ac.createGain();
+  env.gain.setValueAtTime(0.0001, t);
+  env.gain.exponentialRampToValueAtTime(0.012 + 0.03 * clamp(speed, 0, 1), t + 0.05);
+  env.gain.exponentialRampToValueAtTime(0.0001, t + 0.5);
+  src.connect(bp); bp.connect(env); env.connect(master);
+  src.start(t); src.stop(t + 0.6);
+}
+
+/* sound scattering off the motes: high granular shimmer */
+let lastShimmer = 0;
+function shimmer(count) {
+  if (!ac || !noiseBuf) return;
+  const now = performance.now();
+  if (now - lastShimmer < 180) return;
+  lastShimmer = now;
+  const t = ac.currentTime;
+  const src = ac.createBufferSource(); src.buffer = noiseBuf;
+  src.playbackRate.value = rand(1.4, 2.2);
+  const bp = ac.createBiquadFilter(); bp.type = 'bandpass';
+  bp.frequency.value = rand(3200, 6400); bp.Q.value = 3;
+  const env = ac.createGain();
+  env.gain.setValueAtTime(0.0001, t);
+  env.gain.exponentialRampToValueAtTime(Math.min(0.05, 0.004 + count * 0.0022), t + 0.03);
+  env.gain.exponentialRampToValueAtTime(0.0001, t + 0.45);
+  src.connect(bp); bp.connect(env); env.connect(master); env.connect(sendIn);
+  src.start(t); src.stop(t + 0.5);
+}
+
+/* ---------------- genome ---------------- */
+
+const SOCIAL = { ECHO: 0, SHY: 1, FERTILE: 2, SHIFT: 3, BURST: 4 };
+const REGISTERS = [-1, 0, 0, 1];          // bass, mid, mid, high
+
+function randomGenome(seedIdx) {
+  const motifLen = pick([1, 1, 2, 2, 3]);
+  const base = Math.floor(rand(2, 12));
+  const motif = [base];
+  for (let i = 1; i < motifLen; i++) motif.push(clamp(base + pick([-2, -1, 1, 2, 3]), 0, 14));
+  const register = seedIdx !== undefined ? REGISTERS[seedIdx % 4] : pick(REGISTERS);
+  return {
+    voice: {
+      type: seedIdx !== undefined ? seedIdx % 4 : Math.floor(rand(0, 4)),
+      attack: rand(0.006, 0.15),
+      decay: rand(0.7, 3.2) * (register < 0 ? 1.6 : register > 0 ? 0.7 : 1),
+      bright: rand(0.15, 0.9),
+    },
+    register,
+    motif,
+    gap: rand(0.13, 0.4),
+    period: pick([2.5, 3.5, 5, 7, 9]) * rand(0.85, 1.15) * (register < 0 ? 1.5 : 1),
+    sync: rand(0.05, 0.4),               // pull toward the shared pulse; heritable
+    listen: rand(0.15, 0.8),
+    answerDelay: rand(0.15, 0.7),
+    social: Math.floor(rand(0, 5)),
+    hue: seedIdx !== undefined ? (seedIdx * 47) % 360 : rand(0, 360),
+    petals: Math.floor(rand(3, 8)),
+    r: rand(0.012, 0.026),               // body radius as a fraction of minDim
+  };
+}
+
+function mutate(g) {
+  const m = JSON.parse(JSON.stringify(g));
+  m.voice.attack = clamp(m.voice.attack * rand(0.7, 1.4), 0.004, 0.25);
+  m.voice.decay = clamp(m.voice.decay * rand(0.75, 1.3), 0.4, 4.5);
+  m.voice.bright = clamp(m.voice.bright + rand(-0.18, 0.18), 0.05, 1.0);
+  if (Math.random() < 0.12) m.voice.type = Math.floor(rand(0, 4));
+  if (Math.random() < 0.1) m.register = pick(REGISTERS);
+  m.motif = m.motif.map(d => clamp(d + pick([0, 0, 0, -1, 1]), 0, 14));
+  if (Math.random() < 0.18 && m.motif.length < 4) m.motif.push(clamp(m.motif[0] + pick([-2, 2, 3]), 0, 14));
+  else if (Math.random() < 0.1 && m.motif.length > 1) m.motif.pop();
+  m.gap = clamp(m.gap * rand(0.8, 1.25), 0.09, 0.55);
+  m.period = clamp(m.period * rand(0.8, 1.25), 1.6, 14);
+  m.sync = clamp(m.sync + rand(-0.12, 0.15), 0, 0.95);
+  m.listen = clamp(m.listen + rand(-0.15, 0.15), 0.05, 0.95);
+  m.answerDelay = clamp(m.answerDelay * rand(0.8, 1.25), 0.1, 1.2);
+  if (Math.random() < 0.15) m.social = Math.floor(rand(0, 5));
+  m.hue = (m.hue + rand(-24, 24) + 360) % 360;
+  m.petals = clamp(m.petals + pick([0, 0, 0, -1, 1]), 3, 9);
+  m.r = clamp(m.r * rand(0.85, 1.18), 0.008, 0.034);
+  return m;
+}
+
+/* ---------------- population ---------------- */
+
+const POP_MAX = 16, POP_MIN = 5;
+let creatures = [];
+let nextId = 1;
+let simT = 0;
+
+function makeCreature(genome, x, y, parentId) {
+  return {
+    id: nextId++,
+    g: genome,
+    x, y,
+    vx: 0, vy: 0,
+    rot: rand(0, TAU),
+    rotV: rand(-0.3, 0.3) * (genome.register < 0 ? 0.5 : genome.register > 0 ? 1.7 : 1),
+    energy: rand(0.8, 1.1),
+    born: simT,
+    parentId: parentId || 0,
+    nextSing: simT + rand(0.5, genome.period),
+    pendingSing: 0,
+    lastSing: -10,
+    notes: [],
+    feedFlash: 0,
+    dying: 0,
+    wanderA: rand(0, TAU),
+  };
+}
+
+function seedPopulation() {
+  creatures = [];
+  const n = 8;
+  for (let i = 0; i < n; i++) {
+    const a = (i / n) * TAU + rand(-0.3, 0.3);
+    const d = rand(0.14, 0.34) * minDim;
+    creatures.push(makeCreature(randomGenome(i),
+      W / 2 + Math.cos(a) * d, H / 2 + Math.sin(a) * d, 0));
+  }
+}
+
+function envOf(c) {
+  let e = 0;
+  for (let i = c.notes.length - 1; i >= 0; i--) {
+    const n = c.notes[i];
+    const t = simT - n.t0;
+    if (t < 0) continue;
+    if (t > n.attack + n.decay) { c.notes.splice(i, 1); continue; }
+    e += t < n.attack
+      ? (t / n.attack) * n.amp
+      : n.amp * Math.exp(-3 * (t - n.attack) / n.decay);
+  }
+  return Math.min(1.4, e);
+}
+
+/* ---------------- song + wavefronts ---------------- */
+
+let fronts = [];   // {x,y,r,str,hue,src,hops}
+
+function sing(c, opts) {
+  opts = opts || {};
+  const v = c.g.voice;
+  const motif = opts.motif || c.g.motif;
+  const vel = (opts.vel || 0.14) * clamp(0.4 + c.energy * 0.6, 0.3, 1)
+            * (c.g.register < 0 ? 0.85 : 1);
+  const bright = opts.bright || 1;
+  c.lastSing = simT;
+  c.energy = Math.max(0, c.energy - 0.02);
+
+  for (let i = 0; i < motif.length; i++) {
+    const delay = i * c.g.gap;
+    setTimeout(() => {
+      if (c.dying) return;
+      playVoice(v, motif[i], vel * (i === 0 ? 1 : 0.75), bright, c.g.register);
+    }, delay * 1000);
+    c.notes.push({
+      t0: simT + delay, attack: v.attack, decay: v.decay,
+      amp: Math.min(1, vel * 6 * (i === 0 ? 1 : 0.75)),
+    });
+  }
+
+  fronts.push({
+    x: c.x, y: c.y, r: 4,
+    str: clamp(0.5 + vel * 3, 0.4, 1.3),
+    hue: c.g.hue, src: c.id,
+    hops: (opts.hops || 0),
+  });
+}
+
+function humanCall(x, y) {
+  if (ac) playVoice({ type: 1, attack: 0.01, decay: 1.4, bright: 0.3 }, 12, 0.09, 1, 0);
+  fronts.push({ x, y, r: 4, str: 0.9, hue: 175, src: -1, hops: 0 });
+}
+
+/* the tide: the tonal center moves, and a slow golden wave crosses
+   the reef — every creature it touches may answer in the new key */
+function modulate() {
+  centerIdx = (centerIdx + 1) % CENTERS.length;
+  retuneBed();
+  bassSwell();
+  fronts.push({
+    x: W / 2, y: H / 2, r: 4,
+    str: 1.0, hue: 45, src: -2, hops: 0,
+    tide: true,
+  });
+}
+
+/* ---------------- interactions: the social gene ---------------- */
+
+function interact(c, px, py) {
+  c.energy = Math.min(2.0, c.energy + 0.35);
+  c.g.sync = Math.min(0.95, c.g.sync + 0.05);   // attention teaches ensemble
+  const s = c.g.social;
+  if (s === SOCIAL.ECHO) {
+    sing(c, { vel: 0.2, bright: 1.6 });
+  } else if (s === SOCIAL.SHY) {
+    const d = Math.hypot(c.x - px, c.y - py) + 0.001;
+    c.vx += ((c.x - px) / d) * 3.2;
+    c.vy += ((c.y - py) / d) * 3.2;
+    glissDown(degreeHz(c.g.motif[0], c.g.register), 0.7, 0.09);
+    c.notes.push({ t0: simT, attack: 0.02, decay: 0.7, amp: 0.7 });
+  } else if (s === SOCIAL.FERTILE) {
+    if (c.energy > 1.0 && creatures.length < POP_MAX) reproduce(c);
+    else sing(c, { vel: 0.16 });
+  } else if (s === SOCIAL.SHIFT) {
+    const shift = pick([-2, -1, 1, 2]);
+    c.g.motif = c.g.motif.map(d => clamp(d + shift, 0, 14));
+    c.g.hue = (c.g.hue + shift * 14 + 360) % 360;
+    sing(c, { vel: 0.18 });
+  } else {
+    const m = [c.g.motif[0], clamp(c.g.motif[0] + 3, 0, 14), clamp(c.g.motif[0] + 5, 0, 14)];
+    const keptGap = c.g.gap;
+    c.g.gap = 0.07;
+    sing(c, { motif: m, vel: 0.18, bright: 1.3 });
+    c.g.gap = keptGap;
+    const f = fronts[fronts.length - 1];
+    if (f) f.str = 1.6;
+  }
+}
+
+function reproduce(c) {
+  const child = makeCreature(mutate(c.g), c.x + rand(-30, 30), c.y + rand(-30, 30), c.id);
+  child.energy = 0.7;
+  c.energy = 0.7;
+  const d = Math.hypot(child.x - c.x, child.y - c.y) + 0.001;
+  child.vx = ((child.x - c.x) / d) * 2.5;
+  child.vy = ((child.y - c.y) / d) * 2.5;
+  creatures.push(child);
+  const base = child.g.motif[0];
+  const keptGap = child.g.gap;
+  child.g.gap = 0.11;
+  sing(child, { motif: [clamp(base - 2, 0, 14), base, clamp(base + 3, 0, 14)], vel: 0.15 });
+  child.g.gap = keptGap;
+}
+
+function die(c) {
+  if (c.dying) return;
+  c.dying = 1.6;
+  glissDown(degreeHz(c.g.motif[0], c.g.register) * 0.5, 1.4, 0.07);
+  // the body becomes spores: long-lived motes that keep its color
+  // and carry its substance back into the reef
+  for (let i = 0; i < 30; i++) {
+    dust.push({
+      x: c.x + rand(-10, 10), y: c.y + rand(-10, 10),
+      vx: rand(-0.9, 0.9), vy: rand(-0.9, 0.9),
+      hue: c.g.hue, life: rand(25, 45), spore: true, flare: 0,
+    });
+  }
+}
+
+/* ---------------- motes ---------------- */
+
+let dust = [];
+let ambientTarget = 0;
+
+function seedDust() {
+  dust = dust.filter(s => s.spore);
+  ambientTarget = clamp(Math.round((W * H) / 6500), 120, 380);
+  for (let i = 0; i < ambientTarget; i++) {
+    dust.push({
+      x: Math.random() * W, y: Math.random() * H,
+      vx: rand(-0.1, 0.1), vy: rand(-0.1, 0.1),
+      hue: 185 + rand(-20, 20), life: Infinity, spore: false, flare: 0,
+    });
+  }
+}
+
+function spawnAmbientMote() {
+  // arrive from an edge, like snow into the frame
+  const side = Math.floor(rand(0, 4));
+  const x = side === 0 ? -4 : side === 1 ? W + 4 : Math.random() * W;
+  const y = side === 2 ? -4 : side === 3 ? H + 4 : Math.random() * H;
+  dust.push({
+    x, y, vx: rand(-0.2, 0.2), vy: rand(-0.2, 0.2),
+    hue: 185 + rand(-20, 20), life: Infinity, spore: false, flare: 0,
+  });
+}
+
+/* ---------------- gestures ---------------- */
+
+const pointers = new Map();
+
+function creatureAt(x, y) {
+  let best = null, bestD = Infinity;
+  for (const c of creatures) {
+    if (c.dying) continue;
+    const d = Math.hypot(c.x - x, c.y - y);
+    const hit = Math.max(40, c.g.r * minDim * 2.6);
+    if (d < hit && d < bestD) { best = c; bestD = d; }
+  }
+  return best;
+}
+
+canvas.addEventListener('pointerdown', (e) => {
+  e.preventDefault();
+  initAudio();
+  pointers.set(e.pointerId, {
+    x: e.clientX, y: e.clientY,
+    sx: e.clientX, sy: e.clientY,
+    t0: performance.now(),
+    path: 0, longFired: false, lastWhoosh: 0,
+  });
+}, { passive: false });
+
+canvas.addEventListener('pointermove', (e) => {
+  const p = pointers.get(e.pointerId);
+  if (!p) return;
+  e.preventDefault();
+  const dx = e.clientX - p.x, dy = e.clientY - p.y;
+  p.path += Math.hypot(dx, dy);
+  p.x = e.clientX; p.y = e.clientY;
+
+  if (p.path > 20) {
+    const rad = minDim * 0.2, rr = rad * rad;
+    for (const c of creatures) {
+      const d2 = (c.x - p.x) ** 2 + (c.y - p.y) ** 2;
+      if (d2 < rr) {
+        const w = Math.exp(-d2 / (rr * 0.5)) * 0.14;
+        c.vx += dx * w; c.vy += dy * w;
+      }
+    }
+    for (const s of dust) {
+      const d2 = (s.x - p.x) ** 2 + (s.y - p.y) ** 2;
+      if (d2 < rr) {
+        const w = Math.exp(-d2 / (rr * 0.5)) * 0.25;
+        s.vx += dx * w; s.vy += dy * w;
+      }
+    }
+    const sp = Math.hypot(dx, dy);
+    const now = performance.now();
+    if (sp > 6 && now - p.lastWhoosh > 220) {
+      p.lastWhoosh = now;
+      whoosh(clamp(sp / 40, 0, 1));
+    }
+  }
+}, { passive: false });
+
+function releasePointer(e, cancelled) {
+  const p = pointers.get(e.pointerId);
+  if (!p) return;
+  pointers.delete(e.pointerId);
+  if (cancelled || p.longFired) return;
+  const dt = performance.now() - p.t0;
+  if (dt < 280 && p.path < 14) {
+    const c = creatureAt(p.x, p.y);
+    if (c) interact(c, p.x, p.y);
+    else humanCall(p.x, p.y);
+  }
+}
+
+canvas.addEventListener('pointerup', (e) => { e.preventDefault(); releasePointer(e, false); }, { passive: false });
+canvas.addEventListener('pointercancel', (e) => releasePointer(e, true));
+canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+
+function checkLongPress(now) {
+  for (const p of pointers.values()) {
+    if (!p.longFired && p.path < 14 && now - p.t0 > 620) {
+      p.longFired = true;
+      const c = creatureAt(p.x, p.y);
+      if (c) {
+        c.energy = Math.min(2.0, c.energy + 0.9);
+        sing(c, { vel: 0.2, bright: 1.4 });
+        if (c.energy > 1.5 && creatures.length < POP_MAX) reproduce(c);
+      } else if (creatures.length < POP_MAX) {
+        const nc = makeCreature(randomGenome(), p.x, p.y, 0);
+        creatures.push(nc);
+        sing(nc, { vel: 0.15 });
+      }
+    }
+  }
+}
+
+/* ---------------- simulation ---------------- */
+
+function updateCreatures(dt, dts) {
+  for (let i = creatures.length - 1; i >= 0; i--) {
+    const c = creatures[i];
+
+    if (c.dying) {
+      c.dying -= dts;
+      if (c.dying <= 0) creatures.splice(i, 1);
+      continue;
+    }
+
+    c.energy -= dts * 0.004;
+    if (c.energy <= 0.12) { die(c); continue; }
+    c.feedFlash = Math.max(0, c.feedFlash - dts * 2);
+
+    if (c.pendingSing && simT >= c.pendingSing) {
+      c.pendingSing = 0;
+      sing(c, { vel: 0.12, hops: c.hopsIn || 0 });
+      c.nextSing = quantize(simT + c.g.period * rand(0.7, 1.1), c.g.sync);
+    } else if (simT >= c.nextSing) {
+      sing(c, { vel: 0.12 });
+      c.nextSing = quantize(simT + c.g.period * rand(0.8, 1.25), c.g.sync);
+    }
+
+    if (c.energy > 1.7 && creatures.length < POP_MAX) reproduce(c);
+
+    // grazing: absorb nearby motes as energy; spores are richer
+    const R = c.g.r * minDim;
+    for (let j = dust.length - 1; j >= 0; j--) {
+      const s = dust[j];
+      const ddx = c.x - s.x, ddy = c.y - s.y;
+      const d2 = ddx * ddx + ddy * ddy;
+      const reach = R * 3.2;
+      if (d2 < reach * reach) {
+        const d = Math.sqrt(d2) + 0.001;
+        const pull = (1 - d / reach) * 0.9 * dts * 60;
+        s.vx += (ddx / d) * pull * 0.07;
+        s.vy += (ddy / d) * pull * 0.07;
+        if (d < R * 0.9) {
+          c.energy = Math.min(2.0, c.energy + (s.spore ? 0.03 : 0.01));
+          c.feedFlash = Math.min(1, c.feedFlash + 0.4);
+          dust.splice(j, 1);
+        }
+      }
+    }
+
+    // drift: wander + a slow gyre, so the flock circulates instead
+    // of pooling in the corners
+    c.wanderA += rand(-0.4, 0.4) * dts;
+    const wsp = reduceMotion ? 2 : 5;
+    c.vx += Math.cos(c.wanderA) * wsp * dts;
+    c.vy += Math.sin(c.wanderA) * wsp * dts;
+    const rx = c.x - W / 2, ry = c.y - H / 2;
+    const gy = (reduceMotion ? 0.01 : 0.024);
+    c.vx += -ry * gy * dts;
+    c.vy += rx * gy * dts;
+
+    // soft elliptical basin: past ~76% of the way to an edge,
+    // pull back toward open water
+    const nx = rx / (W * 0.38), ny = ry / (H * 0.38);
+    const e = Math.hypot(nx, ny);
+    if (e > 1) {
+      const k = (e - 1) * 22 * dts;
+      c.vx -= (nx / e) * k;
+      c.vy -= (ny / e) * k;
+    }
+
+    // spacing scaled to the (now smaller) bodies
+    for (const o of creatures) {
+      if (o === c || o.dying) continue;
+      const ddx = c.x - o.x, ddy = c.y - o.y;
+      const d2 = ddx * ddx + ddy * ddy;
+      const sep = (c.g.r + o.g.r) * minDim * 1.15;
+      if (d2 < sep * sep && d2 > 0.01) {
+        const d = Math.sqrt(d2);
+        const push = (sep - d) / sep * 8 * dts;
+        c.vx += (ddx / d) * push; c.vy += (ddy / d) * push;
+      }
+    }
+
+    c.vx *= Math.pow(0.92, dt); c.vy *= Math.pow(0.92, dt);
+    const vcap = 3.2;
+    const vm = Math.hypot(c.vx, c.vy);
+    if (vm > vcap) { c.vx = c.vx / vm * vcap; c.vy = c.vy / vm * vcap; }
+    c.x += c.vx * dt; c.y += c.vy * dt;
+    c.rot += c.rotV * dts * (1 + envOf(c));
+  }
+
+  if (creatures.filter(c => !c.dying).length < POP_MIN) {
+    const alive = creatures.filter(c => !c.dying);
+    const parent = alive.length ? pick(alive) : null;
+    const genome = parent ? mutate(parent.g) : randomGenome();
+    creatures.push(makeCreature(genome,
+      rand(0.25, 0.75) * W, rand(0.25, 0.75) * H, parent ? parent.id : 0));
+  }
+}
+
+function updateFronts(dt, dts) {
+  let struck = 0;
+  for (let i = fronts.length - 1; i >= 0; i--) {
+    const f = fronts[i];
+    const r0 = f.r;
+    f.r += WAVE_SPEED * dts * (f.tide ? 0.55 : 1) * (reduceMotion ? 0.6 : 1);
+    f.str *= Math.pow(f.tide ? 0.995 : 0.985, dt);
+
+    if (f.hops < 3) {
+      for (const c of creatures) {
+        if (c.dying || c.id === f.src) continue;
+        const d = Math.hypot(c.x - f.x, c.y - f.y);
+        if (d > r0 && d <= f.r
+            && simT - c.lastSing > 1.1
+            && !c.pendingSing
+            && Math.random() < c.g.listen * f.str * (f.tide ? 0.9 : 1)) {
+          c.pendingSing = quantize(simT + c.g.answerDelay, c.g.sync);
+          c.hopsIn = f.hops + 1;
+        }
+      }
+    }
+    const band = 26;
+    for (const s of dust) {
+      const d = Math.hypot(s.x - f.x, s.y - f.y);
+      if (Math.abs(d - f.r) < band && d > 1) {
+        const w = (1 - Math.abs(d - f.r) / band) * f.str * 0.6;
+        s.vx += ((s.x - f.x) / d) * w;
+        s.vy += ((s.y - f.y) / d) * w;
+        if (w > 0.15) { s.flare = 1; struck++; }
+      }
+    }
+    if (f.str < 0.03 || f.r > Math.hypot(W, H)) fronts.splice(i, 1);
+  }
+  if (struck > 5) shimmer(struck);
+}
+
+function updateDust(dt, dts) {
+  let ambient = 0;
+  for (let i = dust.length - 1; i >= 0; i--) {
+    const s = dust[i];
+    s.x += s.vx * dt; s.y += s.vy * dt;
+    s.vx *= Math.pow(0.96, dt); s.vy *= Math.pow(0.96, dt);
+    s.flare = Math.max(0, s.flare - dts * 2.5);
+    if (s.life !== Infinity) {
+      s.life -= dts;
+      if (s.life <= 0) { dust.splice(i, 1); continue; }
+    } else {
+      ambient++;
+    }
+    if (s.x < -8) s.x = W + 6; if (s.x > W + 8) s.x = -6;
+    if (s.y < -8) s.y = H + 6; if (s.y > H + 8) s.y = -6;
+  }
+  // grazing thins the ambient field; the frame slowly restocks it
+  if (ambient < ambientTarget && Math.random() < 0.3) spawnAmbientMote();
+}
+
+/* ---------------- render ---------------- */
+
+let audioAmp = 0;
+
+function readAmp() {
+  if (analyser) {
+    analyser.getByteFrequencyData(analyserBins);
+    let sum = 0;
+    for (let i = 0; i < analyserBins.length; i++) sum += analyserBins[i];
+    audioAmp = audioAmp * 0.9 + (sum / analyserBins.length / 255) * 0.1;
+  } else {
+    let e = 0;
+    for (const c of creatures) e += envOf(c);
+    audioAmp = audioAmp * 0.9 + Math.min(1, e * 0.25) * 0.1;
+  }
+}
+
+/* Anatomy follows the voice: you can see what something will
+   sound like before it sings. */
+function drawCreature(c) {
+  const env = envOf(c);
+  const fade = c.dying ? clamp(c.dying / 1.6, 0, 1) : 1;
+  const vigor = clamp(0.35 + c.energy * 0.5, 0.3, 1.2) * fade;
+  const regMul = c.g.register < 0 ? 1.3 : c.g.register > 0 ? 0.75 : 1;
+  const R = c.g.r * minDim * regMul
+          * (0.8 + Math.pow(c.energy, 0.4) * 0.35) * (1 + env * 0.65);
+  const hue = c.g.hue;
+  const t = c.g.voice.type;
+
+  const glow = g2.createRadialGradient(c.x, c.y, 0, c.x, c.y, R * 2.6);
+  glow.addColorStop(0, `hsla(${hue}, 85%, 60%, ${(0.09 + env * 0.2 + c.feedFlash * 0.1) * vigor})`);
+  glow.addColorStop(1, 'hsla(0, 0%, 0%, 0)');
+  g2.fillStyle = glow;
+  g2.beginPath(); g2.arc(c.x, c.y, R * 2.6, 0, TAU); g2.fill();
+
+  if (t === 0) {
+    // bell: a thin ring with orbiting satellites
+    g2.strokeStyle = `hsla(${hue}, 80%, 70%, ${(0.2 + env * 0.3) * vigor})`;
+    g2.lineWidth = 1;
+    g2.beginPath(); g2.arc(c.x, c.y, R, 0, TAU); g2.stroke();
+    for (let k = 0; k < c.g.petals; k++) {
+      const a = c.rot + (k / c.g.petals) * TAU;
+      g2.fillStyle = `hsla(${hue}, 85%, 70%, ${(0.35 + env * 0.4) * vigor})`;
+      g2.beginPath();
+      g2.arc(c.x + Math.cos(a) * R, c.y + Math.sin(a) * R, R * 0.18, 0, TAU);
+      g2.fill();
+    }
+  } else if (t === 1) {
+    // breath: nested undulating rings, a slow jelly
+    for (let k = 0; k < 3; k++) {
+      const rr = R * (0.45 + k * 0.3) * (1 + Math.sin(simT * 1.4 + k * 1.7 + c.rot) * 0.07);
+      g2.strokeStyle = `hsla(${hue}, 75%, 68%, ${(0.16 + env * 0.28) * vigor / (1 + k * 0.4)})`;
+      g2.lineWidth = 1.4 - k * 0.3;
+      g2.beginPath(); g2.arc(c.x, c.y, rr, 0, TAU); g2.stroke();
+    }
+  } else if (t === 2) {
+    // pluck: a needled star
+    const n = c.g.petals + 2;
+    g2.strokeStyle = `hsla(${hue}, 85%, 68%, ${(0.3 + env * 0.4) * vigor})`;
+    g2.lineWidth = 1;
+    g2.beginPath();
+    for (let k = 0; k < n; k++) {
+      const a = c.rot + (k / n) * TAU;
+      g2.moveTo(c.x + Math.cos(a) * R * 0.25, c.y + Math.sin(a) * R * 0.25);
+      g2.lineTo(c.x + Math.cos(a) * R * (1.15 + env * 0.35), c.y + Math.sin(a) * R * (1.15 + env * 0.35));
+    }
+    g2.stroke();
+  } else {
+    // horn: a heavy lobed bloom
+    const n = Math.max(3, c.g.petals - 2);
+    for (let k = 0; k < n; k++) {
+      const a = c.rot + (k / n) * TAU;
+      g2.fillStyle = `hsla(${hue}, 70%, 58%, ${(0.2 + env * 0.3) * vigor})`;
+      g2.beginPath();
+      g2.arc(c.x + Math.cos(a) * R * 0.5, c.y + Math.sin(a) * R * 0.5, R * 0.5, 0, TAU);
+      g2.fill();
+    }
+  }
+
+  g2.fillStyle = `hsla(${hue}, 45%, 88%, ${(0.45 + env * 0.5 + c.feedFlash * 0.3) * vigor})`;
+  g2.beginPath(); g2.arc(c.x, c.y, R * 0.24, 0, TAU); g2.fill();
+}
+
+function render() {
+  g2.globalCompositeOperation = 'source-over';
+  g2.fillStyle = `rgba(${BG.r},${BG.g},${BG.b},0.16)`;
+  g2.fillRect(0, 0, W, H);
+
+  g2.globalCompositeOperation = 'lighter';
+
+  const breathe = 0.03 + audioAmp * 0.14;
+  const bg = g2.createRadialGradient(W / 2, H / 2, 0, W / 2, H / 2, Math.max(W, H) * 0.75);
+  bg.addColorStop(0, `hsla(190, 60%, 40%, ${breathe})`);
+  bg.addColorStop(1, 'hsla(190, 60%, 10%, 0)');
+  g2.fillStyle = bg;
+  g2.fillRect(0, 0, W, H);
+
+  g2.lineWidth = 1;
+  for (const c of creatures) {
+    if (!c.parentId) continue;
+    const p = creatures.find(o => o.id === c.parentId);
+    if (!p) continue;
+    const pulse = Math.min(1, envOf(c) + envOf(p));
+    g2.strokeStyle = `hsla(${c.g.hue}, 70%, 65%, ${0.04 + pulse * 0.1})`;
+    g2.beginPath(); g2.moveTo(p.x, p.y); g2.lineTo(c.x, c.y); g2.stroke();
+  }
+
+  const da = 0.16 + audioAmp * 0.45;
+  for (const s of dust) {
+    const a = da + s.flare * 0.5;
+    const sz = 1.3 + s.flare * 1.4 + (s.spore ? 0.5 : 0);
+    g2.fillStyle = `hsla(${s.hue}, ${s.spore ? 80 : 60}%, 75%, ${a})`;
+    g2.fillRect(s.x, s.y, sz, sz);
+  }
+
+  for (const f of fronts) {
+    const lw = f.tide ? 10 : 2;
+    g2.strokeStyle = `hsla(${f.hue}, 85%, 70%, ${f.str * (f.tide ? 0.12 : 0.22)})`;
+    g2.lineWidth = lw;
+    g2.beginPath(); g2.arc(f.x, f.y, f.r, 0, TAU); g2.stroke();
+    g2.strokeStyle = `hsla(${f.hue}, 85%, 80%, ${f.str * 0.09})`;
+    g2.lineWidth = lw * 2.4;
+    g2.beginPath(); g2.arc(f.x, f.y, Math.max(1, f.r - lw), 0, TAU); g2.stroke();
+  }
+
+  for (const c of creatures) drawCreature(c);
+
+  for (const p of pointers.values()) {
+    const grad = g2.createRadialGradient(p.x, p.y, 0, p.x, p.y, 44);
+    grad.addColorStop(0, 'hsla(175, 80%, 70%, 0.12)');
+    grad.addColorStop(1, 'hsla(0, 0%, 0%, 0)');
+    g2.fillStyle = grad;
+    g2.beginPath(); g2.arc(p.x, p.y, 44, 0, TAU); g2.fill();
+  }
+}
+
+/* ---------------- main loop ---------------- */
+
+let last = performance.now();
+let raf = 0;
+
+function step(now) {
+  const dt = clamp((now - last) / 16.667, 0.2, 3);
+  const dts = dt * 0.016667;
+  last = now;
+  simT += dts;
+
+  if (simT >= nextModulation) {
+    nextModulation = simT + MODULATE_EVERY;
+    modulate();
+  }
+
+  checkLongPress(now);
+  updateCreatures(dt, dts);
+  updateFronts(dt, dts);
+  updateDust(dt, dts);
+  readAmp();
+  render();
+
+  raf = requestAnimationFrame(step);
+}
+
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) {
+    cancelAnimationFrame(raf);
+    if (ac && ac.state === 'running') ac.suspend();
+  } else {
+    last = performance.now();
+    raf = requestAnimationFrame(step);
+    if (ac && ac.state === 'suspended') ac.resume();
+  }
+});
+
+window.addEventListener('resize', () => { resize(); seedDust(); });
+resize();
+seedPopulation();
+seedDust();
+raf = requestAnimationFrame(step);
+</script>
