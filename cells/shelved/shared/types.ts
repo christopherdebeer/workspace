@@ -13,11 +13,32 @@ export interface Edition {
   genres?: string[];
 }
 
+/**
+ * A live commitment on a copy: someone has been accepted for it.
+ *
+ * `availability` is the owner's standing INTENT ("I'd lend this"), which is a
+ * different thing from whether the book is free right now. Conflating them is
+ * what let an accepted copy stay in the discover index, so two readers could
+ * both be accepted for the same physical book.
+ */
+export interface Loan {
+  requestId: string;
+  /** The other reader — who is receiving it, or has it. */
+  withId: string;
+  /** Whether the book is expected back. */
+  kind: 'lend' | 'pass';
+  status: 'reserved' | 'in-transit' | 'held' | 'returning';
+  since: string;
+}
+
 export interface BookCopy extends Edition {
   id: string;
   ownerId: string;
   readingState: ReadingState;
+  /** The owner's standing intent. Not "is it free" — see `loan`. */
   availability: Availability;
+  /** Set while a request is live. Absent means the copy is actually free. */
+  loan?: Loan;
   condition?: 'new' | 'very-good' | 'good' | 'fair';
   note?: string;
   addedAt: string;
@@ -107,7 +128,13 @@ export interface BorrowRequest {
   coverUrl?: string;
   requesterId: string;
   ownerId: string;
-  status: 'pending' | 'accepted' | 'declined' | 'cancelled';
+  /**
+   * The lifecycle used to stop at `accepted`, with no transition out of it, so
+   * a posted book stayed "accepted" forever and the copy never came back.
+   * `shipped`/`delivered` are the journey; `returned` closes a lend;
+   * `completed` is terminal for both kinds.
+   */
+  status: 'pending' | 'accepted' | 'declined' | 'cancelled' | 'shipped' | 'delivered' | 'returned' | 'completed';
   deliveryMethod: 'local' | 'post';
   message?: string;
   createdAt: string;

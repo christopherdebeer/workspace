@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient, GetCommand, PutCommand, QueryCommand, TransactWriteCommand } from '@aws-sdk/lib-dynamodb';
-import type { AddBookInput, BookCopy, BorrowRequest, DiscoverCopy, Edition } from '../shared/types';
+import type { AddBookInput, BookCopy, BorrowRequest, DiscoverCopy, Edition, Loan } from '../shared/types';
 import { ensureProfile, notifyAvailability, setUserBook, upsertWork, workIdFor } from './social';
 
 const TABLE = process.env.TABLE_NAME ?? '';
@@ -9,7 +9,33 @@ const OWNER = process.env.CELL_OWNER ?? 'c15r';
 const ddb = DynamoDBDocumentClient.from(new DynamoDBClient({}), { marshallOptions: { removeUndefinedValues: true } });
 const userPk = (caller: string): string => `USER#${caller}`;
 const copySk = (id: string): string => `COPY#${id}`;
-const isPublic = (copy: BookCopy): boolean => copy.availability !== 'private';
+/**
+ * Is this copy actually offerable right now?
+ *
+ * `availability` alone was the test, which conflated the owner's standing
+ * intent with whether the book is free — so a copy stayed in the discover
+ * index after its request was accepted, and a second reader could be accepted
+ * for the same physical book. A live loan takes it out of circulation until it
+ * comes back (or, for a pass, for good).
+ */
+const isPublic = (copy: BookCopy): boolean => copy.availability !== 'private' && !copy.loan;
+
+/** Read one of the owner's copies. */
+async function ownedCopy(ownerId: string, copyId: string): Promise<BookCopy | null> {
+  const row = await ddb.send(new GetCommand({ TableName: TABLE, Key: { pk: userPk(ownerId), sk: copySk(copyId) } }));
+  return (row.Item?.value as BookCopy | undefined) ?? null;
+}
+
+/** Re-persist a copy with its loan set or cleared, which moves it in/out of discovery. */
+async function setLoan(ownerId: string, copyId: string, loan: Loan | undefined): Promise<void> {
+  const copy = await ownedCopy(ownerId, copyId);
+  if (!copy) return; // the copy was removed underneath the request; nothing to reserve
+  const next: BookCopy = { ...copy, updatedAt: new Date().toISOString() };
+  if (loan) next.loan = loan; else delete next.loan;
+  // `announceAvailability` false: coming back from a loan is not a new arrival,
+  // and notifying every watcher each time a book is returned would be noise.
+  await persist(next, false);
+}
 
 function discovery(copy: BookCopy, shelfLabel?: string): DiscoverCopy {
   const shelfId = createHash('sha256').update(copy.ownerId).digest('hex').slice(0, 12);
@@ -108,19 +134,83 @@ export async function requestBook(caller: string, copyId: string, deliveryMethod
   return request;
 }
 
+/**
+ * Who may move a request where.
+ *
+ * There used to be no way OUT of `accepted`: the owner could accept and then
+ * the request sat there permanently, the copy never left the discover index,
+ * and a posted book was indistinguishable from one still on the shelf. Each
+ * entry is `from -> [to, who]`, because most of these are only sensible from
+ * one side — the owner says it is on its way, the borrower says it arrived.
+ */
+export const TRANSITIONS: Record<string, Array<{ to: BorrowRequest['status']; by: 'owner' | 'requester' | 'either' }>> = {
+  pending: [
+    { to: 'accepted', by: 'owner' },
+    { to: 'declined', by: 'owner' },
+    { to: 'cancelled', by: 'requester' },
+  ],
+  // Still recallable until it moves: plans change, and a copy stuck reserved
+  // forever because someone went quiet is worse than an ungraceful cancel.
+  accepted: [
+    { to: 'shipped', by: 'owner' },
+    { to: 'cancelled', by: 'either' },
+  ],
+  shipped: [{ to: 'delivered', by: 'requester' }],
+  // A lend goes back; a pass is done when it lands. Which of these is offered
+  // depends on the copy's kind, enforced below rather than here.
+  delivered: [
+    { to: 'returned', by: 'either' },
+    { to: 'completed', by: 'either' },
+  ],
+  returned: [{ to: 'completed', by: 'either' }],
+};
+
 export async function updateBorrowRequest(caller: string, requestId: string, status: BorrowRequest['status']): Promise<BorrowRequest> {
   const lists = await listBorrowRequests(caller);
   const current = [...lists.incoming, ...lists.outgoing].find((request) => request.id === requestId);
   if (!current) throw Object.assign(new Error('request not found'), { statusCode: 404 });
   const isOwner = current.ownerId === caller;
-  const allowed = isOwner ? ['accepted', 'declined'] : ['cancelled'];
-  if (current.status !== 'pending' || !allowed.includes(status)) throw Object.assign(new Error('that request cannot make this transition'), { statusCode: 400 });
+  const move = (TRANSITIONS[current.status] ?? []).find((t) => t.to === status);
+  if (!move) throw Object.assign(new Error(`a ${current.status} request cannot become ${status}`), { statusCode: 400 });
+  if (move.by !== 'either' && (move.by === 'owner') !== isOwner) {
+    throw Object.assign(new Error(move.by === 'owner' ? 'only the owner can do that' : 'only the borrower can do that'), { statusCode: 403 });
+  }
   const next: BorrowRequest = { ...current, status, updatedAt: new Date().toISOString() };
   await ddb.send(new TransactWriteCommand({ TransactItems: [
     { Put: { TableName: TABLE, Item: { pk: userPk(current.ownerId), sk: `REQUEST#${current.copyId}#${current.requesterId}`, entity: 'borrow-request', value: next } } },
     { Put: { TableName: TABLE, Item: { pk: userPk(current.requesterId), sk: `SENT#${current.copyId}#${current.ownerId}`, entity: 'borrow-request-sent', value: next } } },
   ] }));
+  await applyLoanFor(next);
   return next;
+}
+
+/**
+ * Keep the copy in step with its request.
+ *
+ * Written after the request, not inside its transaction: the two live under
+ * different partition keys and a copy that lags its request by a moment is
+ * recoverable, whereas a request that cannot be accepted because the copy row
+ * moved is not. Worst case the copy stays reserved a beat too long.
+ */
+async function applyLoanFor(request: BorrowRequest): Promise<void> {
+  const copy = await ownedCopy(request.ownerId, request.copyId);
+  if (!copy) return;
+  const kind: Loan['kind'] = copy.availability === 'pass' ? 'pass' : 'lend';
+  const base = { requestId: request.id, withId: request.requesterId, kind, since: request.updatedAt };
+  switch (request.status) {
+    case 'accepted': return setLoan(request.ownerId, request.copyId, { ...base, status: 'reserved' });
+    case 'shipped': return setLoan(request.ownerId, request.copyId, { ...base, status: 'in-transit' });
+    case 'delivered': return setLoan(request.ownerId, request.copyId, { ...base, status: 'held' });
+    case 'returned': return setLoan(request.ownerId, request.copyId, { ...base, status: 'returning' });
+    // Terminal, and the two kinds end differently: a lend comes back into
+    // circulation, a pass has changed hands.
+    case 'completed': return kind === 'pass'
+      ? transferCopy(request)
+      : setLoan(request.ownerId, request.copyId, undefined);
+    case 'declined':
+    case 'cancelled': return setLoan(request.ownerId, request.copyId, undefined);
+    default: return;
+  }
 }
 
 export async function listBorrowRequests(caller: string): Promise<{ incoming: BorrowRequest[]; outgoing: BorrowRequest[] }> {
@@ -139,4 +229,32 @@ export async function getEdition(isbn: string): Promise<Edition | null> {
 
 export async function putEdition(edition: Edition): Promise<void> {
   await ddb.send(new PutCommand({ TableName: TABLE, Item: { pk: 'EDITION', sk: `ISBN#${edition.isbn}`, entity: 'edition', cachedAt: new Date().toISOString(), value: edition } }));
+}
+
+/**
+ * Move a passed-on copy to the reader who received it.
+ *
+ * "Pass on" means the book is theirs now, so the record follows the object
+ * rather than being deleted — deleting would throw away the edition data we
+ * looked up from the ISBN and leave the new owner re-scanning a book they are
+ * holding. The copy keeps its id, so the request history still points at it.
+ *
+ * The new row is written BEFORE the old one is removed. Neither order is
+ * atomic across two partition keys, and of the two failure modes a book that
+ * briefly exists twice is recoverable while one that exists nowhere is not.
+ *
+ * What does not travel: the previous owner's lending intent, their private
+ * note, and their reading state. Those were about them.
+ */
+async function transferCopy(request: BorrowRequest): Promise<void> {
+  const copy = await ownedCopy(request.ownerId, request.copyId);
+  if (!copy) return;
+  const stamp = new Date().toISOString();
+  const moved: BookCopy = { ...copy, ownerId: request.requesterId, availability: 'private', readingState: 'unread', addedAt: stamp, updatedAt: stamp };
+  delete moved.loan;
+  delete moved.note;
+  await persist(moved, false);
+  await ddb.send(new TransactWriteCommand({ TransactItems: [
+    { Delete: { TableName: TABLE, Key: { pk: userPk(request.ownerId), sk: copySk(request.copyId) } } },
+  ] }));
 }
