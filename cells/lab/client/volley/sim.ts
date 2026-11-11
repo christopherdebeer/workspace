@@ -25,15 +25,9 @@
  * of five gone. Everything random is from the seed, and the step is fixed.
  */
 import { seeded, hash, type Rand } from '../kit/rng';
+import { H, SHEET_T, GAP, FIRING, GLAZED, makeSheet, sheetZ, firingOf, type Sheet } from './sheet';
+export { H, SHEET_T, GAP, FIRST, GRAIN, JOINT, FRAME, FIRING, PLAIN, FIRED, HARD, SOFT, RED, GLAZED, makeSheet, sheetZ, firingOf, type Shard, type Sheet } from './sheet';
 
-export const H = 10;
-/** a sheet's thickness, the spacing of sheets, where the first is */
-export const SHEET_T = 0.5, GAP = 13, FIRST = 14;
-/** about how far apart a sheet's shards are; how much of itself a shard gives up to the joint round it */
-export const GRAIN = 0.92, JOINT = 0.035;
-/** how far a sheet runs on past the sides of the way (as a share of the way's width and height): its frame, which
- * the ball can't reach, there so that a sheet near you fills the eye */
-export const FRAME = 0.5;
 export const R = 0.34;
 export const HAND_R = 1.15;
 /** how far behind the pane a ball can still be reached */
@@ -72,7 +66,12 @@ export const SWIPE_MIN = 5;
 const MAX_SIDE = 0.8;
 export const POWER_MAX = 34;
 
-export type Phase = 'ready' | 'play' | 'held' | 'over';
+export type Phase = 'ready' | 'play' | 'held' | 'over' | 'done';
+/** what a run is: five lives and it's over (go again from the last firing reached, if you like); a course of
+ * COURSE firings against the clock, no lives, a miss costing time; or free, nothing counted */
+export const RULES = ['lives', 'run', 'free'] as const;
+export type Rules = (typeof RULES)[number];
+export const COURSE = 4, MISS_TIME = 2;
 export interface Hand { id: number; x: number; y: number; vx: number; vy: number; /** seconds since it touched down (left out: long ago) */ age?: number }
 export type Act = 'pad' | 'hit' | 'catch';
 /** What a hand is to a ball landing on it now. With the one hand: moving, it hits; still and only just down, it
@@ -85,22 +84,6 @@ export function actOf(mode: Mode, k: Hand): Act | null {
   return moving ? 'hit' : (k.age ?? 9) < FRESH ? 'catch' : 'pad';
 }
 
-/** what a shard is made of: plain, fired red, or glazed (which takes two, and always turns the ball) */
-export const PLAIN = 0, RED = 1, GLAZED = 2;
-export interface Shard {
-  /** its outline: x, y pairs, counter-clockwise, convex */
-  poly: number[];
-  cx: number; cy: number;
-  /** the furthest its outline gets from (cx, cy) */
-  r: number;
-  hp: number;
-  kind: number;
-  /** beyond the sides of the way: the ball can't reach it, and it isn't counted */
-  frame: boolean;
-  /** the shards it shares an edge with */
-  nb: number[];
-}
-export interface Sheet { i: number; z: number; shards: Shard[]; left: number; total: number; /** goes up whenever a shard of it changes */ ver: number }
 export interface Ball { x: number; y: number; z: number; vx: number; vy: number; vz: number; sx: number; sy: number }
 export type Ev =
   /** a shard struck: `broke` if that was the end of it, `through` if the ball went on through, `chain` if it went
@@ -109,12 +92,15 @@ export type Ev =
   /** a shard of a sheet that has given way */
   | { kind: 'fall'; x: number; y: number; z: number; sheet: number; shard: number }
   | { kind: 'wall' | 'hand'; x: number; y: number; z: number; hard: number }
-  | { kind: 'catch' | 'serve' | 'miss' | 'over' | 'pass' | 'through'; x: number; y: number; z: number };
+  | { kind: 'catch' | 'serve' | 'miss' | 'over' | 'pass' | 'through'; x: number; y: number; z: number }
+  /** a firing finished: the next one's door is ahead; and the course's last, done */
+  | { kind: 'checkpoint' | 'done'; x: number; y: number; z: number; firing: number; clock: number };
 
 export interface Sim {
   seed: number;
   W: number;
   mode: Mode;
+  rules: Rules;
   /** where the pane is, and how fast it's going */
   z: number; v: number;
   ball: Ball;
@@ -132,11 +118,13 @@ export interface Sim {
   mark: { x: number; y: number; z: number } | null;
   turn: 'pad' | 'swipe' | 'catch';
   t: number; acc: number;
+  /** the course's clock (from the first throw, misses added in), and the clock at each firing finished */
+  clock: number; started: boolean; misses: number; splits: number[];
+  /** the sheet the last firing reached begins with (where a run can go again from), and whether this one did */
+  from: number; continued: boolean;
 }
 
 const clamp = (v: number, a: number, b: number) => Math.max(a, Math.min(b, v));
-const unit = (...n: number[]) => hash(...n) / 4294967296;
-const sheetZ = (seed: number, i: number) => FIRST + GAP * i - (i >= 3 && hash(seed, i, 5) % 4 === 0 ? GAP - 2.6 : 0);
 /** how fast the pane would go: freely down a clear way, slowing to a halt STAND short of shards still standing */
 export function driftFor(s: Sim): number {
   const sh = s.sheets.find((k) => k.left > 0), d = sh ? sh.z - SHEET_T / 2 - s.z : 99;
@@ -152,95 +140,6 @@ export function power(s: Sim, mode: 'pad' | 'swipe' | 'catch', finger: number, c
 
 // ─── a sheet ─────────────────────────────────────────────────────────────────────────────────────────────────────────
 
-/** the holes of sheet `i`: is this point in one? and, for the round ones, how far outside its rim (for glazing) */
-function holesOf(seed: number, i: number, W: number) {
-  const rand = seeded(hash(seed, i, 31)), kind = i === 0 ? 0 : Math.floor(rand() * 6), m = Math.min(W, H);
-  // (fewer and smaller the further out: the sheets fill in)
-  const open = Math.max(0.55, 1 - i * 0.02);
-  const rounds: { x: number; y: number; r: number; glazed: boolean }[] = [];
-  const round = (x: number, y: number, r: number) => rounds.push({ x, y, r: r * open, glazed: i >= 1 && rand() < Math.min(0.8, 0.3 + 0.04 * i) });
-  const tests: ((x: number, y: number) => boolean)[] = [];
-  if (kind === 0) { // an eye: one big hole, two small
-    round((rand() - 0.5) * W * 0.2, (rand() - 0.5) * H * 0.2, m * 0.36);
-    round(-W * 0.24, H * 0.36, m * 0.17); round(W * 0.24, -H * 0.36, m * 0.17);
-  } else if (kind === 1 || kind === 5) { // a few holes, or a scatter of small ones
-    const n = kind === 1 ? 3 + Math.floor(rand() * 2) : 7 + Math.floor(rand() * 4);
-    for (let k = 0; k < n; k++) round((rand() - 0.5) * W * 0.85, (rand() - 0.5) * H * 0.85, kind === 1 ? 0.9 + rand() * 0.9 : 0.55 + rand() * 0.4);
-  } else if (kind === 2) { // arches, in rows
-    const rows = 2 + Math.floor(rand() * 2), r = Math.min(W / 5, 1.5) * open;
-    for (let a = 0; a < rows; a++) {
-      const y0 = -H / 2 + ((a + 0.5) * H) / rows - r * 0.6, n = Math.max(1, Math.floor(W / (r * 2.7))), off = a % 2 ? 0.5 : 0;
-      for (let k = 0; k < n + 1; k++) { const x0 = -W / 2 + ((k + 0.5 - off) * W) / n; tests.push((x, y) => Math.abs(x - x0) < r && y > y0 - r * 0.9 && (y < y0 || Math.hypot(x - x0, y - y0) < r)); }
-    }
-  } else if (kind === 3) { // a rose: petals round a centre
-    const petals = 3 + Math.floor(rand() * 4), r0 = m * 0.44 * open, turn = rand() * 6.28, x0 = (rand() - 0.5) * W * 0.15, y0 = (rand() - 0.5) * H * 0.2;
-    tests.push((x, y) => { const d = Math.hypot(x - x0, y - y0), a = Math.atan2(y - y0, x - x0) + turn; return d < r0 * (0.3 + 0.7 * Math.abs(Math.cos((petals * a) / 2)) ** 1.5) && d > r0 * 0.16; });
-  } else { // bands across
-    const a = rand() * Math.PI, nx = Math.cos(a), ny = Math.sin(a), w = 0.75 * open, gap = 2.9 + rand() * 1.2, off = rand() * gap;
-    tests.push((x, y) => { const d = (((x * nx + y * ny + off) % gap) + gap) % gap; return d < w * 2; });
-  }
-  return {
-    hole: (x: number, y: number) => rounds.some((o) => Math.hypot(x - o.x, y - o.y) < o.r) || tests.some((f) => f(x, y)),
-    glazed: (x: number, y: number) => rounds.some((o) => o.glazed && Math.hypot(x - o.x, y - o.y) < o.r + GRAIN * 0.75),
-  };
-}
-
-/** Sheet `i` of this seed's way: scattered sites, each one's Voronoi cell a shard, the ones in a hole left out. */
-export function makeSheet(seed: number, i: number, W: number): Sheet {
-  const ex = W * (0.5 + FRAME), ey = H * (0.5 + FRAME), { hole, glazed } = holesOf(seed, i, W);
-  // sites: a staggered grid, each shaken
-  const sx: number[] = [], sy: number[] = [];
-  const nx = Math.max(2, Math.round((2 * ex) / GRAIN)), ny = Math.max(2, Math.round((2 * ey) / (GRAIN * 0.9))), gx = (2 * ex) / nx, gy = (2 * ey) / ny;
-  for (let r = 0; r < ny; r++) for (let c = 0; c < nx; c++) {
-    sx.push(-ex + (c + 0.5 + (r % 2 ? 0.25 : -0.25)) * gx + (unit(seed, i, r, c, 1) - 0.5) * gx * 0.8);
-    sy.push(-ey + (r + 0.5) * gy + (unit(seed, i, r, c, 2) - 0.5) * gy * 0.8);
-  }
-  const n = sx.length, shards: Shard[] = [], index = new Int32Array(n).fill(-1), raw: number[][] = [];
-  // (the frame's own edge is ragged: a sheet is a broken-off piece, not a board)
-  const ragged = (x: number, y: number) => { const a = Math.atan2(y / ey, x / ex), d = Math.hypot(x / ex, y / ey); return d > 0.8 + 0.14 * Math.sin(a * 3 + i * 1.7 + seed) + 0.1 * Math.sin(a * 7 + i * 2.9); };
-  for (let a = 0; a < n; a++) {
-    const frame = Math.abs(sx[a]) > W / 2 || Math.abs(sy[a]) > H / 2;
-    if (frame ? ragged(sx[a], sy[a]) : hole(sx[a], sy[a])) continue;
-    // its cell: the sheet's whole rectangle, cut by the line halfway to each other site, nearest first
-    let poly = [-ex, -ey, ex, -ey, ex, ey, -ex, ey];
-    // (only the sites a few rows and columns round it can matter)
-    const ar = Math.floor(a / nx), acol = a % nx, near: number[] = [];
-    for (let r = Math.max(0, ar - 3); r <= Math.min(ny - 1, ar + 3); r++) for (let c = Math.max(0, acol - 3); c <= Math.min(nx - 1, acol + 3); c++) if (r * nx + c !== a) near.push(r * nx + c);
-    near.sort((p, q) => (sx[p] - sx[a]) ** 2 + (sy[p] - sy[a]) ** 2 - (sx[q] - sx[a]) ** 2 - (sy[q] - sy[a]) ** 2);
-    const cut: number[] = [];
-    for (const b of near) {
-      const dx = sx[b] - sx[a], dy = sy[b] - sy[a], d2 = dx * dx + dy * dy;
-      let far = 0;
-      for (let k = 0; k < poly.length; k += 2) far = Math.max(far, (poly[k] - sx[a]) ** 2 + (poly[k + 1] - sy[a]) ** 2);
-      if (d2 > 4 * far) break; // (too far to cut it, and so is every one after)
-      const mx = sx[a] + dx / 2, my = sy[a] + dy / 2, out: number[] = [];
-      let did = false;
-      for (let k = 0; k < poly.length; k += 2) {
-        const x0 = poly[k], y0 = poly[k + 1], x1 = poly[(k + 2) % poly.length], y1 = poly[(k + 3) % poly.length];
-        const s0 = (x0 - mx) * dx + (y0 - my) * dy, s1 = (x1 - mx) * dx + (y1 - my) * dy;
-        if (s0 <= 0) out.push(x0, y0); else did = true;
-        if (s0 <= 0 !== s1 <= 0) { const t = s0 / (s0 - s1); out.push(x0 + (x1 - x0) * t, y0 + (y1 - y0) * t); }
-      }
-      if (did) cut.push(b);
-      poly = out;
-      if (poly.length < 6) break;
-    }
-    if (poly.length < 6) continue;
-    let cx = 0, cy = 0;
-    for (let k = 0; k < poly.length; k += 2) { cx += poly[k]; cy += poly[k + 1]; }
-    cx /= poly.length / 2; cy /= poly.length / 2;
-    let r = 0;
-    for (let k = 0; k < poly.length; k += 2) { poly[k] = cx + (poly[k] - cx) * (1 - JOINT); poly[k + 1] = cy + (poly[k + 1] - cy) * (1 - JOINT); r = Math.max(r, Math.hypot(poly[k] - cx, poly[k + 1] - cy)); }
-    const kind = !frame && glazed(sx[a], sy[a]) ? GLAZED : unit(seed, i, a, 7) < 0.15 ? RED : PLAIN;
-    index[a] = shards.length; raw.push(cut);
-    shards.push({ poly, cx, cy, r, hp: kind === GLAZED ? 2 : 1, kind, frame, nb: [] });
-  }
-  shards.forEach((s, k) => { s.nb = raw[k].map((b) => index[b]).filter((b) => b >= 0); });
-  let left = shards.reduce((c, s) => c + (s.frame ? 0 : 1), 0);
-  if (!left) { const s = shards.reduce((a, b) => (Math.hypot(b.cx, b.cy) < Math.hypot(a.cx, a.cy) ? b : a)); s.frame = false; left = 1; }
-  return { i, z: sheetZ(seed, i), shards, left, total: left, ver: 0 };
-}
-
 /** The nearest point of a shard's outline to (x, y), or (x, y) itself if it's inside. */
 function nearest(poly: number[], x: number, y: number): [number, number] {
   let inside = true, bx = 0, by = 0, bd = Infinity;
@@ -255,17 +154,21 @@ function nearest(poly: number[], x: number, y: number): [number, number] {
 
 // ─── the game ────────────────────────────────────────────────────────────────────────────────────────────────────────
 
-export function create(seed = 1, aspect = 0.46, mode: Mode = 'all'): Sim {
+export function create(seed = 1, aspect = 0.46, mode: Mode = 'all', rules: Rules = 'lives'): Sim {
   const s: Sim = {
-    seed, W: H * aspect, mode, z: 0, v: 0, ball: { x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, sx: 0, sy: 0 }, phase: 'ready', heldBy: 0,
+    seed, W: H * aspect, mode, rules, z: 0, v: 0, ball: { x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, sx: 0, sy: 0 }, phase: 'ready', heldBy: 0,
     integrity: FULL, broken: 0, passed: 0, returns: 0, sheets: [], nextSheet: 0, hands: [], events: [], rand: seeded(hash(seed, 9)), mark: null, turn: 'pad', t: 0, acc: 0,
+    clock: 0, started: false, misses: 0, splits: [], from: 0, continued: false,
   };
   grow(s); rest(s);
   return s;
 }
-export function restart(s: Sim) {
-  if (s.phase !== 'over') return;
-  Object.assign(s, { z: 0, v: 0, integrity: FULL, broken: 0, passed: 0, returns: 0, sheets: [], nextSheet: 0, phase: 'ready', mark: null });
+/** Again, from the start; or (lives) from the door of the last firing reached. */
+export function restart(s: Sim, fromCheckpoint = false) {
+  if (s.phase !== 'over' && s.phase !== 'done') return;
+  const k = fromCheckpoint && s.rules === 'lives' ? s.from : 0;
+  Object.assign(s, { z: k ? sheetZ(s.seed, k) - SHEET_T / 2 - STAND : 0, v: 0, integrity: FULL, broken: 0, passed: k, returns: 0, sheets: [], nextSheet: k, phase: 'ready', mark: null, clock: 0, started: false, misses: 0, splits: [], continued: k > 0 });
+  if (!k) s.from = 0;
   grow(s); rest(s);
 }
 function grow(s: Sim) { while (sheetZ(s.seed, s.nextSheet) < s.z + 100) s.sheets.push(makeSheet(s.seed, s.nextSheet++, s.W)); }
@@ -277,7 +180,7 @@ export const speed = (b: Ball) => Math.hypot(b.vx, b.vy, b.vz);
 export function serve(s: Sim, ax = 0, ay = 0) {
   if (s.phase !== 'ready') return;
   leave(s, 20 + Math.min(4, s.passed * 0.12), clamp(ax, -1, 1) * 4, clamp(ay, -1, 1) * 4, 0, 0);
-  s.phase = 'play';
+  s.phase = 'play'; s.started = true;
   s.events.push({ kind: 'serve', ...at(s) });
 }
 /** pick the waiting ball up under this finger (the hands that can catch) */
@@ -290,7 +193,7 @@ export function release(s: Sim, id: number, vx = 0, vy = 0) {
   if (s.phase !== 'held' || s.heldBy !== id) return;
   const p = power(s, 'catch', Math.hypot(vx, vy));
   leave(s, p, vx * CARRY.catch, vy * CARRY.catch, vx, vy);
-  s.phase = 'play'; s.returns++;
+  s.phase = 'play'; s.returns++; s.started = true;
   s.events.push({ kind: 'hand', ...at(s), hard: p });
 }
 /** the ball leaves the pane this fast, with this much of it sideways (never most of it), spun by the finger */
@@ -331,7 +234,8 @@ function strike(s: Sim, sh: Sheet, k: number, through: boolean, chain: boolean, 
 function tick(s: Sim) {
   const h = STEP, b = s.ball;
   s.t += h;
-  if (s.phase === 'over') return;
+  if (s.phase === 'over' || s.phase === 'done') return;
+  if (s.started && s.rules === 'run') s.clock += h;
   if (s.phase === 'ready') { rest(s); return; }
   // the pane goes on: freely down a clear way, to a halt before shards still standing
   s.v += clamp(driftFor(s) - s.v, -20 * h, 9 * h);
@@ -385,6 +289,14 @@ function tick(s: Sim) {
         hit.shards.forEach((o, k) => { if (o.hp) { o.hp = 0; s.broken++; s.events.push({ kind: 'fall', x: o.cx, y: o.cy, z: hit!.z, sheet: hit!.i, shard: k }); } });
         hit.left = 0; hit.ver++;
         s.events.push({ kind: 'through', x: 0, y: 0, z: hit.z });
+        // (the last of a firing: a checkpoint; the last of the course, done)
+        if ((hit.i + 1) % FIRING === 0 && hit.i + 1 > s.from) {
+          const firing = (hit.i + 1) / FIRING;
+          s.from = hit.i + 1; s.splits.push(s.clock);
+          if (s.rules === 'lives') s.integrity = Math.min(FULL, s.integrity + 1);
+          if (s.rules === 'run' && firing >= COURSE) { s.phase = 'done'; s.events.push({ kind: 'done', x: 0, y: 0, z: hit.z, firing, clock: s.clock }); return; }
+          s.events.push({ kind: 'checkpoint', x: 0, y: 0, z: hit.z, firing, clock: s.clock });
+        }
       }
     }
   }
@@ -416,7 +328,9 @@ function tick(s: Sim) {
     }
   }
   if (b.z < s.z - LATE - 1.5) {
-    s.integrity--;
+    s.misses++;
+    if (s.rules === 'lives') s.integrity--;
+    if (s.rules === 'run') s.clock += MISS_TIME;
     s.events.push({ kind: 'miss', ...at(s) });
     if (!s.integrity) { s.phase = 'over'; s.events.push({ kind: 'over', ...at(s) }); } else { s.phase = 'ready'; rest(s); }
   }
@@ -450,7 +364,7 @@ export function crossing(s: Sim): { x: number; y: number; t: number; speed: numb
  * throwing hard enough to get there. */
 function standIn(s: Sim) {
   s.hands.length = 0;
-  if (s.phase === 'over') { if (s.t % 3 < STEP) restart(s); return; }
+  if (s.phase === 'over' || s.phase === 'done') { if (s.t % 3 < STEP) restart(s); return; }
   if (s.phase === 'ready') { if (s.t % 0.8 < STEP) { if (s.mode === 'catch' || s.mode === 'all') grab(s, -1); else serve(s, s.rand() * 2 - 1, s.rand() * 2 - 1); } return; }
   const p = s.phase === 'held' ? { x: s.ball.x, y: s.ball.y, t: 0, speed: 0 } : crossing(s);
   if (!p || p.t > 0.5) return;

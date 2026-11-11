@@ -11,29 +11,22 @@
  * Flags: seed, hand (all | pad | swipe | catch: what a finger is), auto (a stand-in plays), t (run on this many
  * seconds first), still (and hold there), guide=0 (no ring where the ball will come back), mute, preview.
  */
-import { H, R, HAND_R, SHEET_T, FULL, MODES, THROUGH, actOf, create, advance, serve, grab, release, restart, speed, POWER_MAX, crossing, type Sim, type Ev, type Mode, type Hand } from './sim';
-import { createRenderer, prism, seat, matOf, STRIDE, SPRITE, EYE_BACK, type Frame } from './draw';
+import { H, R, HAND_R, SHEET_T, FULL, MODES, RULES, COURSE, FIRING, FRESH, SETTLED, STAND, THROUGH, sheetZ, firingOf, actOf, create, advance, serve, grab, release, restart, speed, POWER_MAX, crossing, type Sim, type Ev, type Mode, type Rules, type Hand } from './sim';
+import { createRenderer, prism, seat, matOf, paletteOf, PALETTES, STRIDE, SPRITE, EYE_BACK, type Frame } from './draw';
 import { seeded, seedFrom } from '../kit/rng';
 
 const qs = new URLSearchParams(location.search);
 const preview = qs.has('preview'), auto = preview || qs.has('auto'), still = qs.has('still'), guide = qs.get('guide') !== '0';
 const seed = seedFrom(qs.get('seed')) ?? 1;
 let mute = preview || qs.has('mute');
-const asked = qs.get('hand') as Mode | null;
+const asked = qs.get('hand') as Mode | null, askedRules = qs.get('rules') as Rules | null;
 
 const $ = (id: string) => document.getElementById(id)!;
 const canvas = document.querySelector('canvas')!;
 const aspect = () => canvas.clientWidth / Math.max(1, canvas.clientHeight);
-// (the air, by how far you've come: the sky at the top and the bottom of the screen, and the light)
-const AIRS = [
-  { top: [0.99, 0.87, 0.71], low: [0.93, 0.70, 0.59], sun: [1.0, 0.91, 0.76] },
-  { top: [0.97, 0.78, 0.74], low: [0.74, 0.58, 0.69], sun: [1.0, 0.84, 0.74] },
-  { top: [0.82, 0.89, 0.95], low: [0.94, 0.85, 0.79], sun: [1.0, 0.96, 0.87] },
-  { top: [0.90, 0.92, 0.80], low: [0.82, 0.78, 0.66], sun: [1.0, 0.96, 0.82] },
-  { top: [0.84, 0.78, 0.93], low: [0.62, 0.54, 0.74], sun: [1.0, 0.87, 0.82] },
-];
-
-const sim: Sim = create(seed, aspect(), asked && MODES.includes(asked) ? asked : 'all');
+const sim: Sim = create(seed, aspect(), asked && MODES.includes(asked) ? asked : 'all', askedRules && RULES.includes(askedRules) ? askedRules : 'lives');
+/** the palette sheet `i` is fired in */
+const palOf = (i: number) => paletteOf(seed, firingOf(i));
 if (preview) document.body.classList.add('preview');
 
 // ─── the pieces in the air ───────────────────────────────────────────────────────────────────────────────────────────
@@ -48,7 +41,7 @@ interface Frag {
   wait: number; life: number;
 }
 const frags: Frag[] = [], MAX_FRAGS = 420;
-const fragBuf = new Float32Array(MAX_FRAGS * 7 * 12 * STRIDE);
+const fragBuf = new Float32Array(MAX_FRAGS * 8 * 15 * STRIDE);
 interface Puff { x: number; y: number; z: number; vx: number; vy: number; vz: number; s: number; life: number; all: number }
 const puffs: Puff[] = [];
 const wake: { x: number; y: number; z: number; t: number }[] = [];
@@ -60,7 +53,7 @@ let shake = 0;
 function breakUp(e: { sheet: number; shard: number }, how: 'whole' | 'chip' | 'burst', ix: number, iy: number, push: [number, number, number], wait = 0) {
   const sh = sim.sheets.find((k) => k.i === e.sheet), d = sh?.shards[e.shard];
   if (!sh || !d) return;
-  const { tone } = seat(sh.i, e.shard), mat = matOf(d.kind, 1), n = d.poly.length / 2, pieces: number[][] = [];
+  const { tone } = seat(sh.i, e.shard), mat = matOf(d.kind, 1, palOf(sh.i)), n = d.poly.length / 2, pieces: number[][] = [];
   if (how === 'whole') pieces.push(d.poly);
   else {
     const mids: number[] = [];
@@ -98,7 +91,7 @@ function dust(x: number, y: number, z: number, n: number, hard: number) {
 function scene(): Frame {
   // the pieces, each turned and placed
   let o = 0;
-  const front: number[] = [], back: number[] = [], room = fragBuf.length - 8 * 12 * STRIDE;
+  const front: number[] = [], back: number[] = [], room = fragBuf.length - 8 * 15 * STRIDE;
   for (const f of frags) {
     if (o > room) break;
     const c = Math.cos(f.turn), s = Math.sin(f.turn), t = 1 - c, k = Math.min(1, f.life * 4);
@@ -124,7 +117,7 @@ function scene(): Frame {
     put(a.x - px * wa, a.y - py * wa, a.z, -1, 2, WAKE, fa); put(a.x + px * wa, a.y + py * wa, a.z, 1, 2, WAKE, fa); put(b.x + px * wb, b.y + py * wb, b.z, 1, 2, WAKE, fb);
     put(a.x - px * wa, a.y - py * wa, a.z, -1, 2, WAKE, fa); put(b.x + px * wb, b.y + py * wb, b.z, 1, 2, WAKE, fb); put(b.x - px * wb, b.y - py * wb, b.z, -1, 2, WAKE, fb);
   }
-  const air = airAt(sim.z);
+  const air = airNow();
   for (const p of puffs) {
     const s = p.s * (1 + (p.life / p.all) * 2.2), a = 0.34 * (1 - p.life / p.all), c = [0.97, 0.9, 0.8];
     for (const [u, v] of [[-1, -1], [1, -1], [1, 1], [-1, -1], [1, 1], [-1, 1]]) put(p.x + u * s, p.y + v * s, p.z, u, v, c, a);
@@ -133,13 +126,17 @@ function scene(): Frame {
   const bend: [number, number] = [0.0022 * Math.sin(sim.z * 0.013 + seed) + 0.0011 * Math.sin(sim.z * 0.031 + 1), 0.0016 * Math.sin(sim.z * 0.017 + seed * 2 + 2)];
   return {
     z: sim.z, W: sim.W, shake: [shake * Math.sin(sim.t * 61) * 0.1, shake * Math.cos(sim.t * 53) * 0.08], bend, skyTop: air.top, skyLow: air.low, sun: air.sun,
-    ball: [sim.ball.x, sim.ball.y, sim.ball.z], ballOn: sim.phase !== 'over', sheets: sim.sheets, frags: fragBuf, fragVerts: o / STRIDE, sprites: spriteBuf, spriteVerts: q / SPRITE,
+    ball: [sim.ball.x, sim.ball.y, sim.ball.z], ballOn: sim.phase !== 'over' && sim.phase !== 'done', ballPal: air.pal, palOf, focus: air.focus, sheets: sim.sheets, frags: fragBuf, fragVerts: o / STRIDE, sprites: spriteBuf, spriteVerts: q / SPRITE,
   };
 }
-function airAt(z: number) {
-  const d = z / 150, i = Math.floor(d), f = d - i, u = f * f * (3 - 2 * f), a = AIRS[i % AIRS.length], b = AIRS[(i + 1) % AIRS.length];
+/** The air now, and where the lens is focused: the palette of the next sheet still standing, eased in from the
+ * last one's over the way between them. */
+function airNow() {
+  const next = sim.sheets.find((k) => k.left > 0), n = next?.i ?? sim.nextSheet, a = PALETTES[palOf(Math.max(0, n - 1))], b = PALETTES[palOf(n)];
+  const z0 = n > 0 ? sheetZ(seed, n - 1) : 0, z1 = sheetZ(seed, n) - STAND - 2, u0 = Math.min(1, Math.max(0, (sim.z - z0) / Math.max(1, z1 - z0))), u = u0 * u0 * (3 - 2 * u0);
   const mix = (p: number[], q: number[]) => p.map((v, k) => v + (q[k] - v) * u);
-  return { top: mix(a.top, b.top), low: mix(a.low, b.low), sun: mix(a.sun, b.sun) };
+  const pal = u > 0.5 ? palOf(n) : palOf(Math.max(0, n - 1));
+  return { top: mix(a.top, b.top), low: mix(a.low, b.low), sun: mix(a.sun, b.sun), pal, focus: (next ? next.z - SHEET_T / 2 : sim.z + 14) - (sim.z - EYE_BACK) + 1.5 };
 }
 
 // ─── sound: fired clay, placed by ear (left and right of you, nearer and further) ────────────────────────────────────
@@ -186,25 +183,71 @@ function sound(e: Ev) {
 // ─── the words ───────────────────────────────────────────────────────────────────────────────────────────────────────
 const say = $('say'), sub = $('sub'), depth = $('depth'), left = $('left'), flash = $('flash'), edge = $('edge'), handBtn = $('toHand'), muteBtn = $('toMute'), best = $('best');
 const HOW: Record<Mode, string> = { all: 'pick it up and throw it · touch late to catch, hold to bat, swipe to hit', pad: 'tap to send it · keep a finger where it comes back', swipe: 'tap to send it · swipe through it as it comes back, hard', catch: 'pick it up and throw it · catch it when it comes back' };
-const bestKey = () => `volley.best.${sim.mode}`;
-const readBest = () => { try { return Number(localStorage.getItem(bestKey())) || 0; } catch { return 0; } };
-let shown = '';
+const cardEl = $('card'), bigEl = $('big'), linesEl = $('lines'), againBtn = $('again'), fromBtn = $('fromCk'), modesEl = $('modes'), bannerEl = $('banner');
+const ORD = ['', 'first', 'second', 'third', 'fourth', 'fifth', 'sixth', 'seventh', 'eighth', 'ninth', 'tenth'];
+const firingName = (f: number) => (f < ORD.length ? `the ${ORD[f]} firing` : `firing ${f}`);
+const clockText = (t: number) => `${Math.floor(t / 60)}:${(t % 60).toFixed(1).padStart(4, '0')}`;
+// (bests, in this browser: the furthest with five lives, by hand; a course's time and its splits, by seed and hand)
+const store = { get: (k: string) => { try { return localStorage.getItem(k); } catch { return null; } }, set: (k: string, v: string) => { try { localStorage.setItem(k, v); } catch { /* not kept, then */ } } };
+const livesKey = () => `volley.best.${sim.mode}`, runKey = () => `volley.run.${seed}.${sim.mode}`;
+const runBest = (): { time: number; splits: number[] } | null => { try { return JSON.parse(store.get(runKey()) ?? 'null'); } catch { return null; } };
+let shown = '', kept = '';
 function words() {
-  const m = Math.floor(sim.z), key = `${sim.phase}|${m}|${sim.integrity}|${sim.mode}|${mute}`;
+  const m = Math.floor(sim.z), f = sim.from / FIRING, key = `${sim.phase}|${m}|${sim.integrity}|${sim.mode}|${sim.rules}|${mute}|${f}|${sim.rules === 'run' ? sim.clock.toFixed(1) : ''}`;
   if (key === shown) return;
   shown = key;
-  depth.textContent = String(m);
-  left.innerHTML = Array.from({ length: FULL }, (_, i) => `<i${i < sim.integrity ? '' : ' class="gone"'}></i>`).join('');
-  left.setAttribute('aria-label', `${sim.integrity} of ${FULL} left`);
-  if (sim.phase === 'over' && !auto && m > readBest()) { try { localStorage.setItem(bestKey(), String(m)); } catch { /* not kept, then */ } }
-  const b = readBest();
-  best.textContent = b ? `best ${b}` : '';
-  const fresh = sim.phase !== 'play' && !sim.z;
-  say.textContent = sim.phase === 'over' ? String(m) : fresh ? 'Volley' : '';
-  sub.textContent = auto ? '' : sim.phase === 'over' ? 'touch to go again' : sim.phase === 'ready' || (fresh && sim.phase === 'held') ? HOW[sim.mode] : '';
+  const fresh = sim.phase !== 'play' && !sim.started && !sim.continued;
+  depth.textContent = sim.rules === 'run' ? clockText(sim.clock) : String(m);
+  left.innerHTML = sim.rules === 'lives' ? Array.from({ length: FULL }, (_, i) => `<i${i < sim.integrity ? '' : ' class="gone"'}></i>`).join('')
+    : sim.rules === 'run' ? Array.from({ length: COURSE }, (_, i) => `<b${i < f ? ' class="done"' : ''}></b>`).join('') : `<span>${ORD[f + 1] ?? f + 1}</span>`;
+  left.setAttribute('aria-label', sim.rules === 'lives' ? `${sim.integrity} of ${FULL} left` : sim.rules === 'run' ? `${f} of ${COURSE} firings` : `firing ${f + 1}`);
+  const lb = Number(store.get(livesKey())) || 0, rb = runBest();
+  best.textContent = sim.rules === 'lives' && lb ? `best ${lb}` : sim.rules === 'run' && rb ? `best ${clockText(rb.time)}` : '';
+  say.textContent = fresh ? 'Volley' : '';
+  sub.textContent = auto ? '' : sim.phase === 'ready' || (fresh && sim.phase === 'held') ? (sim.rules === 'run' && fresh ? `${COURSE} firings against the clock · a miss costs time · ${HOW[sim.mode]}` : HOW[sim.mode]) : '';
+  modesEl.hidden = !fresh || auto || sim.phase !== 'ready';
+  modesEl.querySelectorAll('button').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.rules === sim.rules)));
+  // the card at the end
+  const end = (sim.phase === 'over' || sim.phase === 'done') && !auto;
+  cardEl.hidden = !end;
+  if (end && kept !== `${sim.phase}${sim.t}`) {
+    kept = `${sim.phase}${sim.t}`;
+    const lines: string[] = [];
+    if (sim.phase === 'over') {
+      const isBest = !sim.continued && m > lb;
+      if (isBest) store.set(livesKey(), String(m));
+      bigEl.textContent = String(m);
+      lines.push(isBest ? 'a new best' : sim.continued ? 'gone on from a firing: not kept' : lb ? `best ${lb}` : '');
+      lines.push(`${sim.broken} shards · ${f} firing${f === 1 ? '' : 's'}`);
+      fromBtn.hidden = !sim.from;
+      fromBtn.textContent = `again from ${firingName(f + 1)}`;
+    } else {
+      const was = rb, isBest = !was || sim.clock < was.time;
+      if (isBest) store.set(runKey(), JSON.stringify({ time: sim.clock, splits: sim.splits }));
+      bigEl.textContent = clockText(sim.clock);
+      lines.push(isBest ? (was ? `a new best, by ${(was.time - sim.clock).toFixed(1)}` : 'a first time') : `best ${clockText(was!.time)}`);
+      lines.push(sim.splits.map((t, i) => { const d = was?.splits[i]; return `${ORD[i + 1]} ${clockText(t)}${d !== undefined ? ` <em>${t <= d ? '−' : '+'}${Math.abs(t - d).toFixed(1)}</em>` : ''}`; }).join(' · '));
+      lines.push(`${sim.misses} miss${sim.misses === 1 ? '' : 'es'}`);
+      fromBtn.hidden = true;
+    }
+    linesEl.innerHTML = lines.filter(Boolean).map((l) => `<p>${l}</p>`).join('');
+  }
   handBtn.textContent = `hand: ${sim.mode}`;
   muteBtn.setAttribute('aria-pressed', String(!mute));
-  document.body.dataset.phase = sim.phase; document.body.dataset.hand = sim.mode;
+  document.body.dataset.phase = sim.phase; document.body.dataset.hand = sim.mode; document.body.dataset.rules = sim.rules;
+}
+let ink = -1;
+/** the page's ink is the firing's */
+function inkNow(pal: number) {
+  if (pal === ink) return;
+  ink = pal;
+  document.documentElement.style.setProperty('--ink', PALETTES[pal].ink);
+  document.documentElement.style.setProperty('--ring', PALETTES[pal].ring);
+}
+function banner(title: string, line = '') {
+  if (preview) return;
+  bannerEl.innerHTML = `<b>${title}</b>${line ? `<span>${line}</span>` : ''}`;
+  pulse(bannerEl, 'on');
 }
 
 // ─── the fingers: each a hand on the pane ────────────────────────────────────────────────────────────────────────────
@@ -225,7 +268,7 @@ canvas.addEventListener('pointerdown', (e) => {
   const p = onPane(e);
   fingers.set(e.pointerId, { id: e.pointerId, ...p, vx: 0, vy: 0, t: e.timeStamp, gone: 0, mouse: e.pointerType === 'mouse', t0: e.timeStamp });
   // (a waiting ball: picked up to be thrown, or, for a hand that can't hold, sent off toward the touch)
-  if (sim.phase === 'ready') { if (sim.mode === 'catch' || sim.mode === 'all') grab(sim, e.pointerId); else serve(sim, p.x / (sim.W / 2), p.y / (H / 2)); } else if (sim.phase === 'over') restart(sim);
+  if (sim.phase === 'ready') { if (sim.mode === 'catch' || sim.mode === 'all') grab(sim, e.pointerId); else serve(sim, p.x / (sim.W / 2), p.y / (H / 2)); }
 });
 canvas.addEventListener('pointermove', (e) => {
   if (auto) return;
@@ -253,12 +296,19 @@ handBtn.onclick = () => {
   const u = new URL(location.href); u.searchParams.set('hand', sim.mode); history.replaceState(null, '', u);
 };
 muteBtn.onclick = () => { mute = !mute; shown = ''; };
+againBtn.onclick = () => { wakeSound(); restart(sim); };
+fromBtn.onclick = () => { wakeSound(); restart(sim, true); };
+modesEl.querySelectorAll('button').forEach((b) => { b.onclick = () => {
+  if (sim.started) return;
+  sim.rules = b.dataset.rules as Rules; shown = '';
+  const u = new URL(location.href); u.searchParams.set('rules', sim.rules); history.replaceState(null, '', u);
+}; });
 
 // (the marks on the pane: a ring under each hand, a ring where the ball will come back)
 const rings: HTMLElement[] = [], pane = $('pane'), mark = $('mark');
 function marks() {
   const live = preview ? [] : sim.hands;
-  while (rings.length < live.length) { const r = document.createElement('i'); pane.appendChild(r); rings.push(r); }
+  while (rings.length < live.length) { const r = document.createElement('i'); r.innerHTML = '<svg viewBox="-64 -64 128 128"><circle r="60" pathLength="100"/></svg>'; pane.appendChild(r); rings.push(r); }
   rings.forEach((r, i) => {
     // (the ring is what the hand would be to a ball landing now: a pad, a hit (dashed, wider), a catch (close, dotted round))
     const k = live[i], act = k ? actOf(sim.mode, k) : null, holding = !!k && sim.phase === 'held' && sim.heldBy === k.id;
@@ -267,6 +317,10 @@ function marks() {
     const p = onScreen(k.x, k.y), rad = ((act === 'hit' && !holding ? HAND_R * 1.5 : HAND_R) / H) * canvas.clientHeight;
     r.style.transform = `translate(${p.x - rad}px,${p.y - rad}px)`; r.style.width = r.style.height = `${rad * 2}px`;
     r.className = holding ? 'holding' : act;
+    // (round it, an arc of dashes growing as the touch settles: empty, it's a catch; full, a bat)
+    const u = Math.max(0, Math.min(1, ((k.age ?? 9) - FRESH) / (SETTLED - FRESH))), n = Math.round(u * 26), parts: number[] = [];
+    for (let j = 0; j < n; j++) { const d = 0.35 + (j / 26) * 2.3; parts.push(d, 100 / 26 - d); }
+    r.querySelector('circle')!.setAttribute('stroke-dasharray', n ? `${parts.join(' ')} 0 100` : '0 100');
   });
   const c = guide && !preview ? crossing(sim) : null;
   mark.hidden = !c || c.t > 1.3;
@@ -306,8 +360,12 @@ function run(dt: number, now: number, standIn = auto) {
     } else if (e.kind === 'fall') {
       // (the sheet gives way: outward from where it was last struck, each shard whole, falling toward you)
       const d = Math.hypot(e.x - (from?.x ?? 0), e.y - (from?.y ?? 0));
-      breakUp(e, vr() < 0.3 ? 'chip' : 'whole', from?.x ?? 0, from?.y ?? 0, [0, 0, -1 - vr() * 3], d * 0.045);
+      breakUp(e, vr() < 0.75 ? 'chip' : 'whole', from?.x ?? 0, from?.y ?? 0, [0, 0, 0.5 - vr() * 1.5], d * 0.045);
     } else if (e.kind === 'through') { shake = Math.max(shake, 0.5); pulse(flash, 'through'); }
+    else if (e.kind === 'checkpoint') {
+      const best = runBest()?.splits[e.firing - 1], name = PALETTES[palOf(e.firing * FIRING)].name;
+      banner(firingName(e.firing + 1), sim.rules === 'run' ? `${clockText(e.clock)}${best !== undefined ? ` · ${e.clock <= best ? '−' : '+'}${Math.abs(e.clock - best).toFixed(1)}` : ''}` : sim.rules === 'lives' ? `${name} · a chance back` : name);
+    } else if (e.kind === 'done') banner('fired', clockText(e.clock));
     else if (e.kind === 'miss') { shake = 1; pulse(flash, 'miss'); }
     else if (e.kind === 'wall' && !preview) {
       const p = onScreen(e.x, e.y);
@@ -319,7 +377,7 @@ function run(dt: number, now: number, standIn = auto) {
   for (let i = frags.length - 1; i >= 0; i--) {
     const f = frags[i];
     if (f.wait > 0) { f.wait -= dt; continue; }
-    f.life -= dt; f.vz -= 18 * dt; f.x += f.vx * dt; f.y += f.vy * dt; f.z += f.vz * dt; f.turn += f.w * dt;
+    f.life -= dt; f.vz -= 9 * dt; f.x += f.vx * dt; f.y += f.vy * dt; f.z += f.vz * dt; f.turn += f.w * dt;
     // (a piece that reaches the pane is let go of: it doesn't come through at you)
     if (f.z < sim.z + 0.6) f.life = Math.min(f.life, 0.2);
     if (f.life <= 0) frags.splice(i, 1);
@@ -338,14 +396,16 @@ function frame(now: number) {
   const dt = Math.min(0.05, (now - last) / 1000 || 0); last = now;
   if (!document.hidden) {
     // (the way is the screen's shape: a little change is taken as it comes, a real one is another way)
-    if (Math.abs(H * aspect() - sim.W) / sim.W > 0.22) { const mode = sim.mode; Object.assign(sim, create(seed, aspect(), mode)); frags.length = puffs.length = wake.length = 0; }
+    if (Math.abs(H * aspect() - sim.W) / sim.W > 0.22) { const mode = sim.mode; Object.assign(sim, create(seed, aspect(), mode, sim.rules)); frags.length = puffs.length = wake.length = 0; }
     if (!still) run(dt, now);
     // (a device that can't keep up is given fewer pixels to fill, in steps, and keeps them)
     if (frames > 30 && dt > 0.03) slow++; else slow = Math.max(0, slow - 1);
     if (slow > 40 && fine > 0.55) { fine *= 0.8; slow = 0; }
     const dpr = Math.min(preview ? 1 : 2, devicePixelRatio || 1) * fine, w = Math.max(1, Math.round(canvas.clientWidth * dpr)), h = Math.max(1, Math.round(canvas.clientHeight * dpr));
     if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
-    renderer!.render(scene());
+    const sc = scene();
+    inkNow(sc.ballPal);
+    renderer!.render(sc);
     marks(); words(); frames++;
   }
   requestAnimationFrame(frame);

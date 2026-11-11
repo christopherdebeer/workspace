@@ -34,9 +34,9 @@ export const EXPERIMENTS: Experiment[] = [
   },
   {
     id: 'volley', title: 'Volley', group: 'Play', tags: ['hci'],
-    blurb: 'A ball thrown up into fractured sheets and caught again, with no paddle. You are lying on your back; above you hang sheets of broken plaster, one behind another, each a field of flat-sided shards with holes through it. The ball breaks the shard it strikes and falls back, and wherever it comes back through the screen a hand has to be there. One hand that is three things, by what the finger is doing as the ball lands: a touch made at the last moment catches it (let go to throw), a finger long down is a sprung pad, a moving finger hits it. How fast your finger moves is how hard the ball goes: thrown hard enough it bursts through, and takes the shards round it. Break most of a sheet and the rest gives way.',
-    page: 'static/volley.html', preview: 'preview&seed=1&t=22', readme: 'static/volley.md',
-    presets: [{ label: 'play', query: '' }, { label: 'watch', query: 'auto' }, { label: 'pad only', query: 'hand=pad' }, { label: 'swipe only', query: 'hand=swipe' }, { label: 'catch only', query: 'hand=catch' }, { label: 'no guide ring', query: 'guide=0' }, { label: 'another seed', query: 'seed=7' }],
+    blurb: 'A ball thrown up into fired and glazed sheets and caught again, with no paddle. You are lying on your back; above you hang sheets of tiled clay, one behind another: rosettes, fans and ringed holes in faceted tiles, the glaze in bands. The ball breaks the tile it strikes and falls back, and wherever it comes back through the screen a hand has to be there: a touch made at the last moment catches it (let go to throw), a finger long down is a sprung pad, a moving finger hits it. How fast your finger moves is how hard the ball goes; thrown hard enough it bursts through. Every six sheets a firing, with its own clays, glazes and air. Five lives (and again from the last firing), four firings against the clock, or free.',
+    page: 'static/volley.html', preview: 'preview&seed=1&t=12', readme: 'static/volley.md',
+    presets: [{ label: 'play', query: '' }, { label: 'against the clock', query: 'rules=run' }, { label: 'free', query: 'rules=free' }, { label: 'watch', query: 'auto' }, { label: 'watch the course', query: 'auto&rules=run' }, { label: 'pad only', query: 'hand=pad' }, { label: 'catch only', query: 'hand=catch' }, { label: 'no guide ring', query: 'guide=0' }, { label: 'another seed', query: 'seed=7' }],
   },
   {
     id: 'switchback', title: 'Switchback', group: 'Play',

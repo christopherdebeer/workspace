@@ -1,30 +1,47 @@
 [
  {
-  "group": "Sheets",
+  "group": "Firings",
   "views": [
    {
     "name": "ready",
     "title": "Before the first ball",
-    "caption": "the first sheet, a way off: a broken-off piece of a fractured wall, a hole through the middle of it, the next ones behind",
+    "caption": "the first firing’s door: a great rosette, its petals open, a band of lapis round its hub; the rules to choose under it",
     "file": "v-ready.jpg"
    },
    {
-    "name": "struck",
-    "title": "A sheet being broken",
-    "caption": "at arm’s length: pieces in the air, the holes’ shadows on the sheet behind, the ball and its own shadow",
-    "file": "v-struck.jpg"
+    "name": "lapis",
+    "title": "The first firing: lapis",
+    "caption": "cream body, terracotta, a soft ochre glaze and a hard lapis one; a ringed hole, a fan, the next sheet out of focus beyond",
+    "file": "v-lapis.jpg"
    },
    {
-    "name": "glazed",
-    "title": "Glazed shards",
-    "caption": "the blue ones take two blows, and always turn the ball; seen on the way to it",
-    "file": "v-glazed.jpg"
+    "name": "celadon",
+    "title": "The second: celadon",
+    "caption": "porcelain and lilac, a celadon ring round a rosette, oxblood the glaze that takes two; a sheet giving way",
+    "file": "v-celadon.jpg"
+   },
+   {
+    "name": "tenmoku",
+    "title": "The third: tenmoku",
+    "caption": "terracotta and bisque, amber glaze and the black one, crazed; the hand’s ring in cream, its arc of dashes full: a bat",
+    "file": "v-tenmoku.jpg"
    },
    {
     "name": "wide",
     "title": "On a wider screen",
-    "caption": "the way is the screen’s shape: a wider sheet, of many more shards",
+    "caption": "the way is the screen’s shape: a wider sheet, more of it",
     "file": "v-wide.jpg"
+   }
+  ]
+ },
+ {
+  "group": "The rules",
+  "views": [
+   {
+    "name": "course",
+    "title": "The course, fired",
+    "caption": "four firings against the clock: the time, the splits against the best, the misses",
+    "file": "v-course.jpg"
    }
   ]
  }

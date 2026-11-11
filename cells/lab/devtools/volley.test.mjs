@@ -9,7 +9,7 @@ import { build } from 'esbuild';
 import assert from 'node:assert/strict';
 const load = async (f) => { const o = await build({ entryPoints: [new URL(f, import.meta.url).pathname], bundle: true, write: false, format: 'esm', platform: 'node' }); return import('data:text/javascript;base64,' + Buffer.from(o.outputFiles[0].text).toString('base64')); };
 const S = await load('../client/volley/sim.ts');
-const { create, advance, serve, grab, actOf, release, restart, makeSheet, crossing, speed, MODES, H, R, HAND_R, FULL, STAND, SHEET_T, POWER_MAX, G, GLAZED, THROUGH } = S;
+const { create, advance, serve, grab, actOf, release, restart, makeSheet, crossing, speed, MODES, H, R, HAND_R, FULL, STAND, SHEET_T, POWER_MAX, G, GLAZED, THROUGH, FIRING, COURSE, MISS_TIME, sheetZ } = S;
 
 {
   const run = (seed, secs, mode = 'all') => { const s = create(seed, 0.46, mode); for (let i = 0; i < secs * 60; i++) advance(s, 1 / 60, true); return s; };
@@ -105,7 +105,7 @@ for (const mode of MODES) for (const aspect of [0.46, 1.6]) {
   for (let i = 0; i < 40; i++) for (const W of [4.6, 16]) {
     const sh = makeSheet(5, i, W);
     assert.ok(sh.left > 0 && sh.left === sh.total && sh.left === sh.shards.filter((d) => !d.frame).length && (i === 0 || sh.z > makeSheet(5, i - 1, W).z), `sheet ${i}`);
-    assert.ok(sh.total < sh.shards.length && sh.total > 8, `sheet ${i}: a frame round it, and enough in it (${sh.total} of ${sh.shards.length})`);
+    assert.ok(sh.total < sh.shards.length && sh.total > 20, `sheet ${i}: a frame round it, and enough in it (${sh.total} of ${sh.shards.length})`);
     for (const d of sh.shards) {
       assert.ok(d.poly.length >= 6 && d.r > 0.1 && d.r < 2.5 && d.hp === (d.kind === GLAZED ? 2 : 1) && (!d.frame || d.kind !== GLAZED), 'a shard');
       for (let k = 0; k < d.poly.length; k += 2) { const n = d.poly.length, ax = d.poly[(k + 2) % n] - d.poly[k], ay = d.poly[(k + 3) % n] - d.poly[k + 1], bx = d.poly[(k + 4) % n] - d.poly[(k + 2) % n], by = d.poly[(k + 5) % n] - d.poly[(k + 3) % n]; assert.ok(ax * by - ay * bx > -1e-9, 'convex, counter-clockwise'); }
@@ -114,6 +114,23 @@ for (const mode of MODES) for (const aspect of [0.46, 1.6]) {
   }
   assert.deepEqual(makeSheet(5, 7, 4.6).shards.map((d) => d.poly), makeSheet(5, 7, 4.6).shards.map((d) => d.poly));
   assert.ok(Array.from({ length: 12 }, (_, i) => makeSheet(5, i, 4.6)).some((sh) => sh.shards.some((d) => d.kind === GLAZED)), 'some are glazed');
+  // (the rules: a firing's last sheet given way is a checkpoint; five lives, and a chance back at each, and again from
+  // the last reached; the course, against the clock, a miss costing time, done at its last; free, nothing counted)
+  const play = (rules, secs) => { const s = create(2, 0.46, 'all', rules), ev = []; for (let i = 0; i < secs * 60 && s.phase !== 'done'; i++) { advance(s, 1 / 60, true); ev.push(...s.events.filter((e) => e.kind === 'checkpoint' || e.kind === 'done')); } return { s, ev }; };
+  const run = play('run', 200);
+  assert.ok(run.s.phase === 'done' && run.s.splits.length === COURSE && run.ev.at(-1).kind === 'done' && run.ev.filter((e) => e.kind === 'checkpoint').length === COURSE - 1, `the course, done: ${run.s.splits.map((t) => t.toFixed(1))}`);
+  assert.ok(run.s.splits.every((t, i) => i === 0 || t > run.s.splits[i - 1]) && Math.abs(run.s.clock - run.s.splits.at(-1)) < 1e-9 && run.s.integrity === FULL, 'splits go up; no lives spent');
+  console.log(`ok   the course, by the stand-in: ${run.s.clock.toFixed(1)} s, ${run.s.misses} misses`);
+  s = create(1, 0.46, 'pad', 'run'); serve(s); s.sheets = []; s.ball.vz = -16; const c0 = s.clock; for (let i = 0; i < 600 && s.phase === 'play'; i++) advance(s, 1 / 60);
+  assert.ok(s.phase === 'ready' && s.integrity === FULL && s.misses === 1 && s.clock > c0 + MISS_TIME, 'the course: a miss costs time, not a life');
+  s = create(1, 0.46, 'pad', 'free'); for (let n = 0; n < 8; n++) { serve(s); s.sheets = []; s.ball.vz = -16; for (let i = 0; i < 600 && s.phase === 'play'; i++) advance(s, 1 / 60); }
+  assert.ok(s.phase === 'ready' && s.integrity === FULL && s.clock === 0, 'free: nothing counted');
+  const lives = play('lives', 120);
+  assert.ok(lives.s.from >= FIRING && lives.ev.length >= 1 && lives.ev.every((e) => e.kind === 'checkpoint'), `five lives: checkpoints (${lives.s.from})`);
+  s = lives.s; s.phase = 'over'; const door = s.from; restart(s, true);
+  assert.ok(s.phase === 'ready' && s.continued && s.passed === door && s.sheets[0].i === door && Math.abs(s.z - (sheetZ(2, door) - SHEET_T / 2 - STAND)) < 1e-9 && s.integrity === FULL, 'again from the last firing: at its door');
+  s.phase = 'over'; restart(s); assert.ok(!s.continued && s.z === 0 && s.from === 0 && s.sheets[0].i === 0, 'again from the start');
+  console.log('ok   the rules: checkpoints, the course and its clock, free, again from a firing');
   console.log('ok   each hand and how hard, the ball\'s rise and fall, its spin, through a shard, a glazed one, nobody there, the crossing, the sheets');
 }
 if (process.env.SIM) process.exit(0);
@@ -142,6 +159,21 @@ await withWood(async (lab) => {
   await p.evaluate(() => document.getElementById('toHand').click());
   ok('the hand changes, and the address with it', (await probe()).mode === 'pad' && p.url().includes('hand=pad') && (await p.textContent('#toHand')).includes('pad'));
   ok('no errors', !p.errors.length, p.errors.slice(0, 3));
+  await p.close();
+  // (the rules, chosen before the first throw; the course's end, its card)
+  const r = await lab.open('seed=1');
+  await r.waitForTimeout(600);
+  ok('the rules to choose, before the first throw', await r.isVisible('#modes'));
+  await r.click('#modes [data-rules="run"]'); await r.waitForTimeout(400);
+  ok('the course chosen: the clock in the corner, the firings to come', (await r.evaluate(() => window.__volley.sim.rules)) === 'run' && r.url().includes('rules=run') && (await r.textContent('#depth')).includes(':') && (await r.$$('#left b')).length === 4);
+  await r.evaluate(() => { const s = window.__volley.sim; s.clock = 83.4; s.splits = [20, 41, 62, 83.4]; s.phase = 'done'; });
+  await r.waitForTimeout(500);
+  ok('the course done: its card, its time, its splits', (await r.isVisible('#card')) && (await r.textContent('#big')) === '1:23.4' && (await r.textContent('#lines')).includes('fourth'));
+  await r.click('#again'); await r.waitForTimeout(600);
+  ok('again: from the start, the card gone', (await r.evaluate(() => window.__volley.sim.phase)) === 'ready' && !(await r.isVisible('#card')));
+  ok('no errors there either', !r.errors.length, r.errors.slice(0, 3));
+  await r.close();
+  const p2 = await lab.open('seed=1');
   await p.close();
   const q = await lab.open('preview&seed=1&t=30');
   await q.waitForTimeout(1500);
