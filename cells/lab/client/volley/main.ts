@@ -78,7 +78,7 @@ function scene(): Frame {
 function shatter(e: { x: number; y: number; z: number; hue: number; row: number }, n: number, toward: number) {
   const c = brickColour(e.hue, e.row), cw = sim.W / sim.cols;
   for (let i = 0; i < n && bits.length < 260; i++) {
-    bits.push({ x: e.x + (vr() - 0.5) * cw * 0.8, y: e.y + (vr() - 0.5) * CELL * 0.8, z: e.z + (vr() - 0.5) * BRICK_T, vx: (vr() - 0.5) * 6, vy: (vr() - 0.3) * 6, vz: toward + (vr() - 0.5) * 5, s: 0.12 + vr() * 0.26, life: 0.7 + vr() * 0.7, c });
+    bits.push({ x: e.x + (vr() - 0.5) * cw * 0.8, y: e.y + (vr() - 0.5) * CELL * 0.8, z: e.z + (vr() - 0.5) * BRICK_T, vx: (vr() - 0.5) * 6, vy: (vr() - 0.5) * 6, vz: toward + (vr() - 0.5) * 5, s: 0.12 + vr() * 0.26, life: 0.7 + vr() * 0.7, c });
   }
 }
 
@@ -230,8 +230,7 @@ function run(dt: number, now: number) {
     const b = bits[i];
     b.life -= dt;
     if (b.wake) { b.s *= 0.9; if (b.life <= 0) bits.splice(i, 1); continue; }
-    b.vy -= 15 * dt; b.x += b.vx * dt; b.y += b.vy * dt; b.z += b.vz * dt;
-    if (b.y < -H / 2 + b.s / 2) { b.y = -H / 2 + b.s / 2; b.vy = -b.vy * 0.35; b.vx *= 0.7; b.vz *= 0.7; }
+    b.vz -= 18 * dt; b.x += b.vx * dt; b.y += b.vy * dt; b.z += b.vz * dt;
     if (b.life < 0.25) b.s *= 0.86;
     if (b.life <= 0 || b.z < sim.z) bits.splice(i, 1);
   }

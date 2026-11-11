@@ -5,10 +5,11 @@
  * the axis. You are a pane of glass across the whole section, at `z`; the ball goes on ahead of you into the slabs
  * and comes back.
  *
- * The ball is a ball thrown at a wall. It falls (G), so it goes in arcs and comes back off the floor; a bounce
- * keeps most of its speed and not all; it is as fast as it was thrown, and no faster; a throw's sideways motion
- * leaves it spinning, and the spin bends its flight until a bounce or the air takes it off. Thrown hard enough it
- * goes through a brick and on into the next. The one kindness: off a brick it always comes back at a fair pace.
+ * The tunnel is a shaft, and you are lying at the bottom of it looking up: the ball falls (G) back down toward
+ * you. Thrown up, it slows all the way, and if it meets nothing it stops and comes down again as fast as it left;
+ * so how hard it's thrown is how high it gets. A bounce keeps most of its speed and not all; a throw's sideways
+ * motion leaves it spinning, and the spin bends its flight until a bounce or the air takes it off. Thrown hard
+ * enough it goes through a brick and on up into the next.
  *
  * There is no paddle. Wherever the ball comes back through the glass, a hand has to be there, and what the hand is
  * doing is how (and how hard) the ball leaves. Three ways of being a hand (`mode`):
@@ -42,13 +43,12 @@ export const MODES = ['pad', 'swipe', 'catch'] as const;
 export type Mode = (typeof MODES)[number];
 
 // the ball
-export const G = 15;
-/** what a bounce keeps: off the floor, off the other walls, off a brick */
-const FLOOR = 0.86, WALL = 0.9, BRICK = 0.9;
+/** the fall: back down the shaft, toward the glass */
+export const G = 18;
+/** what a bounce keeps: off a wall, off a brick */
+const WALL = 0.9, BRICK = 0.9;
 /** a ball meeting a brick this fast (along the tunnel) goes through it, and keeps this much */
 export const THROUGH = 19, KEEPS = 0.8;
-/** off a brick or out of the dark, it comes back at least this fast */
-export const BACK = 10;
 /** spin: how much of a hand's sideways speed becomes it, the most there can be, how hard it bends the flight, and
  * how long it lasts */
 const SPIN_OF = 0.3, SPIN_MAX = 9, BEND = 1.3, SPIN_LIFE = 0.9;
@@ -159,7 +159,7 @@ export const speed = (b: Ball) => Math.hypot(b.vx, b.vy, b.vz);
 /** send the ball off from 'ready', leaning toward (ax, ay) (each -1..1 across the glass) */
 export function serve(s: Sim, ax = 0, ay = 0) {
   if (s.phase !== 'ready') return;
-  leave(s, 18 + Math.min(4, s.passed * 0.12), clamp(ax, -1, 1) * 5, clamp(ay, -1, 1) * 5 + 2.5, 0, 0);
+  leave(s, 20 + Math.min(4, s.passed * 0.12), clamp(ax, -1, 1) * 4, clamp(ay, -1, 1) * 4, 0, 0);
   s.phase = 'play';
   s.events.push({ kind: 'serve', ...at(s) });
 }
@@ -186,10 +186,10 @@ function leave(s: Sim, p: number, lx: number, ly: number, fvx: number, fvy: numb
   s.mark = null;
 }
 
-/** The ball's own motion for one step, with the tunnel's walls: falling, bent by its spin, bouncing. Returns how hard
+/** The ball's own motion for one step, with the shaft's walls: falling back toward you, bent by its spin, bouncing. Returns how hard
  * it struck a wall, if it did. (The game's step and the guess at where it will come back both use this.) */
 function fly(b: Ball, W: number, h: number): number {
-  b.vy -= G * h;
+  b.vz -= G * h;
   b.vx += b.sx * BEND * h; b.vy += b.sy * BEND * h;
   const fade = 1 - h / SPIN_LIFE; b.sx *= fade; b.sy *= fade;
   b.x += b.vx * h; b.y += b.vy * h; b.z += b.vz * h;
@@ -198,11 +198,7 @@ function fly(b: Ball, W: number, h: number): number {
   if (b.x < -hx && b.vx < 0) { b.x = -hx; struck = -b.vx; b.vx *= -WALL; b.sx *= 0.4; }
   if (b.x > hx && b.vx > 0) { b.x = hx; struck = b.vx; b.vx *= -WALL; b.sx *= 0.4; }
   if (b.y > hy && b.vy > 0) { b.y = hy; struck = b.vy; b.vy *= -WALL; b.sy *= 0.4; }
-  if (b.y < -hy && b.vy < 0) {
-    b.y = -hy; struck = -b.vy; b.vy *= -FLOOR; b.sy *= 0.4;
-    // (too little left to leave the floor: it rolls)
-    if (b.vy < 1.2) { b.vy = 0; struck = 0; }
-  }
+  if (b.y < -hy && b.vy < 0) { b.y = -hy; struck = -b.vy; b.vy *= -WALL; b.sy *= 0.4; }
   return struck;
 }
 
@@ -224,9 +220,6 @@ function tick(s: Sim) {
   }
   const struck = fly(b, s.W, h);
   if (struck > 2) s.events.push({ kind: 'wall', ...at(s), hard: struck });
-  // (a ball that threads everything is given back by the dark)
-  const near = s.slabs.find((k) => k.left > 0);
-  if (b.vz > 0 && b.z > (near ? near.z + GAP + 3 : s.z + 30)) b.vz = -Math.max(BACK, b.vz);
   // the bricks: of the slabs it's in, the brick it's deepest into
   const cw = s.W / s.cols;
   let hit: Slab | null = null, hc = 0, hr = 0, bd = R, nx = 0, ny = 0, nz = 0;
@@ -261,7 +254,6 @@ function tick(s: Sim) {
         b.vx -= (1 + BRICK) * vn * nx; b.vy -= (1 + BRICK) * vn * ny; b.vz -= (1 + BRICK) * vn * nz;
         b.x += nx * (R - bd); b.y += ny * (R - bd); b.z += nz * (R - bd);
         b.sx *= 0.4; b.sy *= 0.4;
-        if (b.vz < 0 && b.vz > -BACK) b.vz = -BACK;
       }
       if (broke) { hit.left--; s.broken++; }
       s.events.push({ kind: 'brick', x: cellX(s, hc), y: cellY(hr), z: hit.z, hue: hit.hue, row: hr, broke, through, hard });
@@ -344,7 +336,9 @@ function standIn(s: Sim) {
   }
   const dx = s.mark.x - p.x, dy = s.mark.y - p.y, dz = Math.max(1, s.mark.z - BRICK_T / 2 - R - s.z);
   // (the sideways speed that gets it there, at this power: a few rounds, since each depends on the other)
-  const aim = (pw: number) => { let lx = 0, ly = 0; for (let i = 0; i < 4; i++) { const T = dz / Math.sqrt(Math.max(pw * pw * 0.2, pw * pw - lx * lx - ly * ly)); lx = dx / T; ly = dy / T + (G * T) / 2; } return { lx, ly }; };
+  const aim = (pw: number) => { let lx = 0, ly = 0; for (let i = 0; i < 4; i++) { const vz = Math.sqrt(Math.max(pw * pw * 0.3, pw * pw - lx * lx - ly * ly)), rise = vz * vz - 2 * G * dz, T = rise > 0 ? (vz - Math.sqrt(rise)) / G : vz / G; lx = dx / T; ly = dy / T; } return { lx, ly }; };
+  // (and it has to get there at all: thrown up, it's slowing all the way)
+  const need = Math.sqrt(2 * G * dz) * 1.3;
   if (s.mode === 'pad') {
     const pw = power(s, 'pad', 0, p.speed), { lx, ly } = aim(pw);
     let ox = lx / (PAD_K * pw), oy = ly / (PAD_K * pw);
@@ -360,7 +354,7 @@ function standIn(s: Sim) {
     let f = 22, vx = 0, vy = f;
     for (let i = 0; i < 5; i++) {
       const { lx, ly } = aim(power(s, s.mode, f)), m = Math.hypot(lx, ly) || 1e-6;
-      f = clamp(m / CARRY[s.mode], s.mode === 'swipe' ? SWIPE_MIN * 1.3 : 8, 40);
+      f = clamp(Math.max(m / CARRY[s.mode], s.mode === 'swipe' ? (need - 9) / 0.75 : (need - 7) / 0.85), SWIPE_MIN * 1.3, 40);
       vx = (lx / m) * f; vy = (ly / m) * f;
     }
     if (s.phase === 'held') { release(s, -1, vx, vy); return; }
