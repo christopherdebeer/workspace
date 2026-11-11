@@ -50,7 +50,7 @@ const vr = seeded(seed ^ 0x5bd1);
 let shake = 0;
 
 /** A shard, as pieces: whole, in a few (a chip), or in many (a burst). They go the way `push` says, and out from (ix, iy). */
-function breakUp(e: { sheet: number; shard: number }, how: 'whole' | 'chip' | 'burst', ix: number, iy: number, push: [number, number, number], wait = 0) {
+function breakUp(e: { sheet: number; shard: number }, how: 'whole' | 'chip' | 'burst', ix: number, iy: number, push: [number, number, number], wait = 0, last = 1) {
   const sh = sim.sheets.find((k) => k.i === e.sheet), d = sh?.shards[e.shard];
   if (!sh || !d) return;
   const { tone } = seat(sh.i, e.shard), mat = matOf(d.kind, 1, palOf(sh.i)), n = d.poly.length / 2, pieces: number[][] = [];
@@ -80,7 +80,7 @@ function breakUp(e: { sheet: number; shard: number }, how: 'whole' | 'chip' | 'b
     frags.push({
       pts: p.map((v, k) => v - (k % 2 ? cy : cx)), x: cx, y: cy, z: sh.z,
       vx: push[0] + (ox / ol) * out + (vr() - 0.5) * 2, vy: push[1] + (oy / ol) * out + (vr() - 0.5) * 2, vz: push[2] + (vr() - 0.5) * 3,
-      ax, ay, az, turn: 0, w: (how === 'whole' ? 1.5 : 4) + vr() * (how === 'whole' ? 3 : 9), tone, mat, wait, life: 1.5 + vr() * 0.8,
+      ax, ay, az, turn: 0, w: (how === 'whole' ? 1.5 : 4) + vr() * (how === 'whole' ? 3 : 9), tone, mat, wait, life: (1.5 + vr() * 0.8) * last,
     });
   }
 }
@@ -360,7 +360,11 @@ function run(dt: number, now: number, standIn = auto) {
     } else if (e.kind === 'fall') {
       // (the sheet gives way: outward from where it was last struck, each shard whole, falling toward you)
       const d = Math.hypot(e.x - (from?.x ?? 0), e.y - (from?.y ?? 0));
-      breakUp(e, vr() < 0.75 ? 'chip' : 'whole', from?.x ?? 0, from?.y ?? 0, [0, 0, 0.5 - vr() * 1.5], d * 0.045);
+      // (the frame's shards, half of them, just go; the rest fall whole, a few in chips, and don't last: the next sheet
+      // and the ball should be seen through them)
+      const sd = sim.sheets.find((k) => k.i === e.sheet)?.shards[e.shard];
+      if (sd?.frame && vr() < 0.5) continue;
+      breakUp(e, !sd?.frame && vr() < 0.3 ? 'chip' : 'whole', from?.x ?? 0, from?.y ?? 0, [0, 0, 0.5 - vr() * 1.5], d * 0.035, 0.5);
     } else if (e.kind === 'through') { shake = Math.max(shake, 0.5); pulse(flash, 'through'); }
     else if (e.kind === 'checkpoint') {
       const best = runBest()?.splits[e.firing - 1], name = PALETTES[palOf(e.firing * FIRING)].name;

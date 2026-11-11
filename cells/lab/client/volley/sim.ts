@@ -35,14 +35,14 @@ export const LATE = 0.9;
 export const FULL = 5;
 /** how near the pane comes to shards still standing; the share of a sheet that, once all that's left, gives way;
  * and however big the sheet, this many broken is enough */
-export const STAND = 3.6, GIVES = 0.4, MOST = 16;
+export const STAND = 8, GIVES = 0.4, MOST = 12;
 export const STEP = 1 / 240;
 export const MODES = ['all', 'pad', 'swipe', 'catch'] as const;
 export type Mode = (typeof MODES)[number];
 
 // the ball
 /** the fall: back toward the pane */
-export const G = 18;
+export const G = 12;
 /** what a bounce keeps: off a side, off a shard */
 const WALL = 0.9, SHARD = 0.9;
 /** a ball meeting a shard this fast (square on) goes through it, and keeps this much */
@@ -118,6 +118,9 @@ export interface Sim {
   mark: { x: number; y: number; z: number } | null;
   turn: 'pad' | 'swipe' | 'catch';
   t: number; acc: number;
+  /** goes up whenever the ball's flight is changed (a hand, a shard, a side): the guess at its crossing is kept till then */
+  flight: number;
+  guess: { flight: number; at: number; c: { x: number; y: number; t: number; speed: number } | null } | null;
   /** the course's clock (from the first throw, misses added in), and the clock at each firing finished */
   clock: number; started: boolean; misses: number; splits: number[];
   /** the sheet the last firing reached begins with (where a run can go again from), and whether this one did */
@@ -126,11 +129,13 @@ export interface Sim {
 
 const clamp = (v: number, a: number, b: number) => Math.max(a, Math.min(b, v));
 /** how fast the pane would go: freely down a clear way, slowing to a halt STAND short of shards still standing */
-export function driftFor(s: Sim): number {
-  const sh = s.sheets.find((k) => k.left > 0), d = sh ? sh.z - SHEET_T / 2 - s.z : 99;
+export function driftFor(s: Sim, z = s.z): number {
+  const sh = s.sheets.find((k) => k.left > 0), d = sh ? sh.z - SHEET_T / 2 - z : 99;
   const u = clamp((d - STAND) / 7, 0, 1);
   return Math.min(12, 6.5 + 0.15 * s.passed) * u * (2 - u);
 }
+/** the pane's speed a step on, from where it is and how fast it's going */
+const paneStep = (s: Sim, z: number, v: number, h: number) => v + clamp(driftFor(s, z) - v, -20 * h, 9 * h);
 /** how hard a hand sends the ball: by the kind of hand, how fast the finger was going, and (a pad) how fast it came */
 export function power(s: Sim, mode: 'pad' | 'swipe' | 'catch', finger: number, came = 0): number {
   const deep = Math.min(4, s.passed * 0.12);
@@ -158,7 +163,7 @@ export function create(seed = 1, aspect = 0.46, mode: Mode = 'all', rules: Rules
   const s: Sim = {
     seed, W: H * aspect, mode, rules, z: 0, v: 0, ball: { x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, sx: 0, sy: 0 }, phase: 'ready', heldBy: 0,
     integrity: FULL, broken: 0, passed: 0, returns: 0, sheets: [], nextSheet: 0, hands: [], events: [], rand: seeded(hash(seed, 9)), mark: null, turn: 'pad', t: 0, acc: 0,
-    clock: 0, started: false, misses: 0, splits: [], from: 0, continued: false,
+    clock: 0, started: false, misses: 0, splits: [], from: 0, continued: false, flight: 0, guess: null,
   };
   grow(s); rest(s);
   return s;
@@ -203,7 +208,7 @@ function leave(s: Sim, p: number, lx: number, ly: number, fvx: number, fvy: numb
   const sm = Math.hypot(fvx, fvy) * SPIN_OF, sk = sm > SPIN_MAX ? SPIN_MAX / sm : 1;
   b.sx = fvx * SPIN_OF * sk; b.sy = fvy * SPIN_OF * sk;
   b.z = Math.max(b.z, s.z + R + 0.02);
-  s.mark = null;
+  s.mark = null; s.flight++;
 }
 
 /** The ball's own motion for one step, with the four sides: falling back toward you, bent by its spin, bouncing.
@@ -223,6 +228,40 @@ function fly(b: Ball, W: number, h: number): number {
   return struck;
 }
 
+interface Contact { sheet: Sheet; k: number; d: number; nx: number; ny: number; nz: number }
+/** The shard (of the sheets it's in) the ball is deepest into, if any, and which way is out of it. Shards in `gone`
+ * (keys `sheet:shard`) are taken as broken already, and sheets in `fallen` as given way. */
+function contact(sheets: Sheet[], b: Ball, gone?: Set<number>, fallen?: Set<number>): Contact | null {
+  let best: Contact | null = null, bd = R;
+  for (const sh of sheets) {
+    if (sh.z - SHEET_T / 2 > b.z + R) break;
+    if (sh.z + SHEET_T / 2 < b.z - R || fallen?.has(sh.i)) continue;
+    for (let k = 0; k < sh.shards.length; k++) {
+      const d = sh.shards[k];
+      if (!d.hp || (b.x - d.cx) ** 2 + (b.y - d.cy) ** 2 > (d.r + R) ** 2 || gone?.has(sh.i * 4096 + k)) continue;
+      const [qx, qy] = nearest(d.poly, b.x, b.y), qz = clamp(b.z, sh.z - SHEET_T / 2, sh.z + SHEET_T / 2);
+      let dx = b.x - qx, dy = b.y - qy, dz = b.z - qz, dist = Math.hypot(dx, dy, dz);
+      if (dist >= bd) continue;
+      // (its centre is inside the shard: out by the nearer face)
+      if (dist < 1e-6) { dx = dy = 0; dz = b.z < sh.z ? -1 : 1; dist = 0; } else { dx /= dist; dy /= dist; dz /= dist; }
+      bd = dist; best = { sheet: sh, k, d: dist, nx: dx, ny: dy, nz: dz };
+    }
+  }
+  return best;
+}
+/** The ball meets a shard it's moving into (`hp` blows left in it): hard enough and square on, it goes through it and
+ * on, a little slower; otherwise off it. Returns whether it went through. */
+function meet(b: Ball, c: Contact, hp: number, W: number): boolean {
+  const vn = b.vx * c.nx + b.vy * c.ny + b.vz * c.nz;
+  if (hp === 1 && -vn >= THROUGH && Math.abs(c.nz) > 0.7) { b.vx *= KEEPS; b.vy *= KEEPS; b.vz *= KEEPS; return true; }
+  b.vx -= (1 + SHARD) * vn * c.nx; b.vy -= (1 + SHARD) * vn * c.ny; b.vz -= (1 + SHARD) * vn * c.nz;
+  b.x += c.nx * (R - c.d); b.y += c.ny * (R - c.d); b.z += c.nz * (R - c.d);
+  // (pushed out of the shard, but not out of the way)
+  b.x = clamp(b.x, -W / 2 + R, W / 2 - R); b.y = clamp(b.y, -H / 2 + R, H / 2 - R);
+  b.sx *= 0.4; b.sy *= 0.4;
+  return false;
+}
+
 /** one shard of a sheet takes a blow: an event, and (if that's the end of it) the counts */
 function strike(s: Sim, sh: Sheet, k: number, through: boolean, chain: boolean, hard: number) {
   const d = sh.shards[k], broke = --d.hp === 0;
@@ -238,7 +277,7 @@ function tick(s: Sim) {
   if (s.started && s.rules === 'run') s.clock += h;
   if (s.phase === 'ready') { rest(s); return; }
   // the pane goes on: freely down a clear way, to a halt before shards still standing
-  s.v += clamp(driftFor(s) - s.v, -20 * h, 9 * h);
+  s.v = paneStep(s, s.z, s.v, h);
   s.z += s.v * h;
   while (s.sheets.length && s.z >= s.sheets[0].z - SHEET_T / 2) { s.sheets.shift(); s.passed++; s.events.push({ kind: 'pass', x: 0, y: 0, z: s.z }); }
   grow(s);
@@ -249,40 +288,22 @@ function tick(s: Sim) {
     return;
   }
   const struck = fly(b, s.W, h);
+  if (struck) s.flight++;
   if (struck > 2) s.events.push({ kind: 'wall', ...at(s), hard: struck });
   // the shards: of the sheets it's in, the shard it's deepest into
-  let hit: Sheet | null = null, hk = 0, bd = R, nx = 0, ny = 0, nz = 0;
-  for (const sh of s.sheets) {
-    if (sh.z - SHEET_T / 2 > b.z + R) break;
-    if (sh.z + SHEET_T / 2 < b.z - R) continue;
-    for (let k = 0; k < sh.shards.length; k++) {
-      const d = sh.shards[k];
-      if (!d.hp || (b.x - d.cx) ** 2 + (b.y - d.cy) ** 2 > (d.r + R) ** 2) continue;
-      const [qx, qy] = nearest(d.poly, b.x, b.y), qz = clamp(b.z, sh.z - SHEET_T / 2, sh.z + SHEET_T / 2);
-      let dx = b.x - qx, dy = b.y - qy, dz = b.z - qz, dist = Math.hypot(dx, dy, dz);
-      if (dist >= bd) continue;
-      // (its centre is inside the shard: out by the nearer face)
-      if (dist < 1e-6) { dx = dy = 0; dz = b.z < sh.z ? -1 : 1; dist = 0; } else { dx /= dist; dy /= dist; dz /= dist; }
-      hit = sh; hk = k; bd = dist; nx = dx; ny = dy; nz = dz;
-    }
-  }
+  const ct = contact(s.sheets, b);
+  const hit = ct?.sheet ?? null, hk = ct?.k ?? 0, bd = ct?.d ?? R, nx = ct?.nx ?? 0, ny = ct?.ny ?? 0, nz = ct?.nz ?? 0;
   if (hit) {
     const vn = b.vx * nx + b.vy * ny + b.vz * nz;
     if (vn < 0) {
       const d = hit.shards[hk], hard = -vn;
       // (hard enough, and square on: through it and on, and the shards round the place go with it; otherwise off it)
-      const through = d.hp === 1 && hard >= THROUGH && Math.abs(nz) > 0.7;
+      const through = meet(b, ct!, d.hp, s.W);
+      s.flight++;
       strike(s, hit, hk, through, false, hard);
       if (through) {
-        b.vx *= KEEPS; b.vy *= KEEPS; b.vz *= KEEPS;
         const reach = BURST + (hard - THROUGH) * BURST_PER;
         hit.shards.forEach((o, k) => { if (o.hp === 1 && Math.hypot(o.cx - b.x, o.cy - b.y) < reach + o.r * 0.5) strike(s, hit!, k, false, true, hard); });
-      } else {
-        b.vx -= (1 + SHARD) * vn * nx; b.vy -= (1 + SHARD) * vn * ny; b.vz -= (1 + SHARD) * vn * nz;
-        b.x += nx * (R - bd); b.y += ny * (R - bd); b.z += nz * (R - bd);
-        // (pushed out of the shard, but not out of the way)
-        b.x = clamp(b.x, -s.W / 2 + R, s.W / 2 - R); b.y = clamp(b.y, -H / 2 + R, H / 2 - R);
-        b.sx *= 0.4; b.sy *= 0.4;
       }
       // (broken through: what's left of the sheet gives way, frame and all)
       if (hit.left > 0 && hit.total - hit.left >= Math.min(Math.ceil(hit.total * (1 - GIVES)), MOST)) {
@@ -347,17 +368,36 @@ export function advance(s: Sim, dt: number, auto = false) {
   }
 }
 
-/** Where and when the ball will come back through the pane, were nothing but the sides in its way: its flight run
- * on (falling, bending, bouncing), the pane going as it's going. */
+/** Where and when the ball will come back through the pane: its whole flight run on (falling, bending, off the
+ * sides, and off or through the shards in its way, by the same rule as the game), the pane going as it will. So
+ * it's known as soon as the ball leaves the hand whether it will come back off the sheet or go through it, and
+ * where it will come down either way. Kept until something changes the flight (a hand, a shard, a side), or for a
+ * tenth of a second. */
 export function crossing(s: Sim): { x: number; y: number; t: number; speed: number } | null {
-  if (s.phase !== 'play' || s.ball.vz >= 0) return null;
-  const b = { ...s.ball }, h = 1 / 120;
-  let z = s.z;
+  if (s.phase !== 'play') return null;
+  const g = s.guess;
+  if (g && g.flight === s.flight && s.t - g.at < 0.1) return g.c && { ...g.c, t: g.c.t - (s.t - g.at) };
+  const b = { ...s.ball }, h = 1 / 120, gone = new Set<number>(), fallen = new Set<number>(), broke = new Map<number, number>();
+  let z = s.z, v = s.v, c: { x: number; y: number; t: number; speed: number } | null = null;
   for (let t = 0; t < 3; t += h) {
-    if (b.z - R <= z) return { x: b.x, y: b.y, t, speed: speed(b) };
-    fly(b, s.W, h); z += s.v * h;
+    if (b.vz < 0 && b.z - R <= z) { c = { x: b.x, y: b.y, t, speed: speed(b) }; break; }
+    fly(b, s.W, h); v = paneStep(s, z, v, h); z += v * h;
+    const ct = contact(s.sheets, b, gone, fallen);
+    if (ct && b.vx * ct.nx + b.vy * ct.ny + b.vz * ct.nz < 0) {
+      const d = ct.sheet.shards[ct.k], hp = d.hp, hard = -(b.vx * ct.nx + b.vy * ct.ny + b.vz * ct.nz);
+      const through = meet(b, ct, hp, s.W), key = ct.sheet.i * 4096;
+      const n0 = gone.size;
+      if (hp === 1) gone.add(key + ct.k);
+      if (through) { const reach = BURST + (hard - THROUGH) * BURST_PER; ct.sheet.shards.forEach((o, k) => { if (o.hp === 1 && Math.hypot(o.cx - b.x, o.cy - b.y) < reach + o.r * 0.5) gone.add(key + k); }); }
+      // (enough of it broken, and the sheet gives way: the rest of the flight goes on without it)
+      const sh = ct.sheet, n = (broke.get(sh.i) ?? 0) + gone.size - n0;
+      broke.set(sh.i, n);
+      if (sh.left > 0 && sh.total - sh.left + n >= Math.min(Math.ceil(sh.total * (1 - GIVES)), MOST)) fallen.add(sh.i);
+    }
+    if (b.vz >= 0 && b.z - R < z + 0.02) { b.z = z + R + 0.02; b.vz = Math.max(b.vz, v + 6); }
   }
-  return null;
+  s.guess = { flight: s.flight, at: s.t, c };
+  return c;
 }
 
 /** A player to watch: picks the ball up, is where it comes back, and tries for a shard of the nearest sheet,

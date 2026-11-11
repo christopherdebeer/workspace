@@ -35,7 +35,7 @@ What each tile is made of: the **body**, another **clay**, a **soft glaze** (glo
 
 - **Struck, a tile breaks**, and the ball comes off it and falls.
 - **Struck hard and square, it bursts** and the ball goes on through, a fifth slower, and the tiles round the place go with it: the harder the throw, the bigger the hole, and one good throw can go through two sheets.
-- **Three fifths of a sheet broken** (or sixteen tiles, if that's fewer) and the rest gives way, outward from where it was last struck.
+- **Three fifths of a sheet broken** (or twelve tiles, if that's fewer) and the rest gives way, outward from where it was last struck.
 
 ![The second: celadon](volley/v-celadon.jpg)
 ![The third: tenmoku](volley/v-tenmoku.jpg)
@@ -47,6 +47,7 @@ Three so far, in turn from the seed: **lapis** (cream body, terracotta, a soft o
 ## The ball
 
 - **It falls back.** Thrown up, it slows all the way; if it meets nothing it stops, hangs, and comes down again as fast as it left. Nothing else brings it back.
+- **The nearest sheet is eight away.** The pane comes to rest that far short of the nearest sheet still standing: about the height a plain toss reaches, and far enough that a ball coming straight back off it takes around six tenths of a second to reach you (it was under a fifth, nearer).
 - **How hard is how high.** How fast your finger is going is how hard the ball goes, and so how far up it gets.
 - **It comes down harder off a tile**: the nearer the sheet, the quicker and sharper the volley.
 - **It can come down on top of the sheet it went through**, and break its way back.
@@ -75,7 +76,7 @@ The ring under your finger shows which of these it would be right now: round it,
 - **Shadows.** One low, warm light from behind your shoulder, and it casts: each sheet's holes fall on the sheet behind, and so does the ball. The gap between the ball and its shadow is its height off that sheet.
 - **Focus.** The nearest sheet still standing is sharp, and everything nearer; what's beyond it goes out of focus the further beyond it is, so the sheet you're working on stands out from the ones to come.
 - **Haze.** Everything further is paler, into the sky's own colour, so sheets sort themselves by depth.
-- **The ring on the pane**, for the last second and a third of the ball's fall. `guide=0` takes it away.
+- **The ring on the pane**, from a second and a third before the ball comes through. It knows the whole flight: the fall, the sides, the spin, and the tiles in the way, by the game's own rule, so it knows as soon as the ball leaves your hand whether it will come back off the sheet or burst through it (and from behind it, whether it will break back through toward you), and where it will come down either way; even whether the sheet will give way under it. `guide=0` takes it away.
 - **Sound.** Fired clay, placed left and right and quieter with distance: a crack for a break, a lower burst for a ball going through, a ring for glaze, a rumble when a sheet goes.
 - **Never hidden.** Behind a sheet the ball is drawn faintly through it.
 

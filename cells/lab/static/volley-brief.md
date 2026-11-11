@@ -56,7 +56,7 @@ The very first object, and each replacement after a failure, waits at the surfac
 ## Advancing
 
 - The player's surface moves outward on its own whenever the way ahead is clear, quickly, and comes to rest a short, fixed distance before the nearest group that still has targets. The player never steers this.
-- A group does not have to be cleared completely. Once most of it is gone (three fifths, or ten targets, whichever is fewer), the remainder gives way all at once and the surface moves on to the next.
+- A group does not have to be cleared completely. Once most of it is gone (three fifths, or twelve targets, whichever is fewer), the remainder gives way all at once and the surface moves on to the next.
 - The object is never left behind by this: if the surface catches up with an object travelling outward, it is carried ahead of it.
 - Further out, everything is somewhat quicker: the surface travels faster between groups and the hand sends the object a little harder.
 
@@ -98,8 +98,8 @@ Not prescriptions. Lengths are in units of the surface's height (so they carry t
 
 | | |
 |---|---|
-| the pull | 1.8 per second, per second |
-| send speed, softest to hardest | 1.3 to 3.4 per second (a toss: 1.4; a toss gets about 0.5 out, the hardest send about 3.2) |
+| the pull | 1.2 per second, per second |
+| send speed, softest to hardest | 1.3 to 3.4 per second (a toss: 1.4; a toss gets about 0.8 out, the hardest send about 4.8) |
 | speed needed to go through a target | 1.9 per second, square on; keeps 0.8 of it |
 | a rebound keeps | 0.9 |
 | the bend from a moving hand lasts | about 0.9 s |
@@ -108,7 +108,7 @@ Not prescriptions. Lengths are in units of the surface's height (so they carry t
 | "only just down" | under 0.3 s; fully "long down" by 0.8 s |
 | "moving" | faster than 0.5 per second |
 | spacing between groups | 1.3 (occasionally a pair only 0.26 apart) |
-| where the surface rests before a group | 0.36 short of it |
+| where the surface rests before a group | 0.8 short of it (a straight return takes about 0.6 s) |
 | the surface's travel speed | 0.65 per second at first, up to 1.2 |
 | a target's size | 0.125 across the space, 0.09 deep |
 | two-contact targets | from the sixth group on, rising to three in ten |
