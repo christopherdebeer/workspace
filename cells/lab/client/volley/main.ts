@@ -13,6 +13,7 @@
  */
 import { H, R, HAND_R, SHEET_T, FULL, MODES, RULES, COURSE, FIRING, FRESH, SETTLED, STAND, THROUGH, sheetZ, firingOf, actOf, create, advance, serve, grab, release, restart, speed, POWER_MAX, crossing, type Sim, type Ev, type Mode, type Rules, type Hand } from './sim';
 import { createRenderer, prism, seat, matOf, paletteOf, PALETTES, STRIDE, SPRITE, EYE_BACK, type Frame } from './draw';
+const HITS = 8;
 import { seeded, seedFrom } from '../kit/rng';
 
 const qs = new URLSearchParams(location.search);
@@ -39,6 +40,8 @@ interface Frag {
   tone: number; mat: number;
   /** it hangs where it was for this long first (a sheet gives way outward from where it was struck) */
   wait: number; life: number;
+  /** how thick it is */
+  th: number;
 }
 const frags: Frag[] = [], MAX_FRAGS = 420;
 const fragBuf = new Float32Array(MAX_FRAGS * 8 * 15 * STRIDE);
@@ -80,10 +83,34 @@ function breakUp(e: { sheet: number; shard: number }, how: 'whole' | 'chip' | 'b
     frags.push({
       pts: p.map((v, k) => v - (k % 2 ? cy : cx)), x: cx, y: cy, z: sh.z,
       vx: push[0] + (ox / ol) * out + (vr() - 0.5) * 2, vy: push[1] + (oy / ol) * out + (vr() - 0.5) * 2, vz: push[2] + (vr() - 0.5) * 3,
-      ax, ay, az, turn: 0, w: (how === 'whole' ? 1.5 : 4) + vr() * (how === 'whole' ? 3 : 9), tone, mat, wait, life: (1.5 + vr() * 0.8) * last,
+      ax, ay, az, turn: 0, w: (how === 'whole' ? 1.5 : 4) + vr() * (how === 'whole' ? 3 : 9), tone, mat, wait, life: (1.5 + vr() * 0.8) * last, th: SHEET_T * 0.75,
     });
   }
 }
+// the latest blows (each runs out through the tiles round it), the flashes where they land, and the ball's squash
+const hits = new Float32Array(HITS * 4).fill(-99), hitA = new Float32Array(HITS);
+let hitAt = 0;
+function blow(x: number, y: number, z: number, a: number) { hits.set([x, y, z, sim.t], hitAt * 4); hitA[hitAt] = a; hitAt = (hitAt + 1) % HITS; }
+const flashes: { x: number; y: number; z: number; t: number; s: number; a: number }[] = [];
+let squash = { x: 0, y: 0, z: 1, k: 0, t: -9 };
+/** the ball meets something: it squashes along the way it was pushed, as hard as it was pushed, and springs back */
+function squashed(dv: number[]) {
+  const l = Math.hypot(dv[0], dv[1], dv[2]);
+  if (l < 2) return;
+  squash = { x: dv[0] / l, y: dv[1] / l, z: dv[2] / l, k: Math.min(0.42, 0.06 + l * 0.012), t: sim.t };
+}
+/** a blow that didn't break it: a few chips spalled off the glaze, toward you */
+function spall(x: number, y: number, z: number, mat: number, tone: number, hard: number) {
+  for (let i = 0; i < 7 + Math.floor(hard / 6); i++) {
+    if (frags.length >= MAX_FRAGS) frags.shift();
+    const r = 0.08 + vr() * 0.13, a0 = vr() * 6.28, pts = [0, 1, 2].flatMap((k) => { const a = a0 + k * 2.1 + (vr() - 0.5) * 0.6, rr = r * (0.6 + vr() * 0.6); return [Math.cos(a) * rr, Math.sin(a) * rr]; });
+    let ax = vr() - 0.5, ay = vr() - 0.5, az = vr() - 0.5;
+    const al = Math.hypot(ax, ay, az) || 1; ax /= al; ay /= al; az /= al;
+    const sp = 2 + vr() * 3, an = vr() * 6.28;
+    frags.push({ pts, x, y, z: z - 0.05, vx: Math.cos(an) * sp, vy: Math.sin(an) * sp + 1, vz: -(2 + vr() * 4), ax, ay, az, turn: 0, w: 10 + vr() * 20, tone, mat, wait: 0, life: 0.45 + vr() * 0.35, th: 0.04 + vr() * 0.03 });
+  }
+}
+
 function dust(x: number, y: number, z: number, n: number, hard: number) {
   for (let i = 0; i < n && puffs.length < 90; i++) puffs.push({ x: x + (vr() - 0.5) * 0.5, y: y + (vr() - 0.5) * 0.5, z: z - 0.3, vx: (vr() - 0.5) * 3, vy: (vr() - 0.5) * 3, vz: -vr() * (1 + hard * 0.12), s: 0.35 + vr() * 0.5, life: 0, all: 0.5 + vr() * 0.5 });
 }
@@ -99,9 +126,9 @@ function scene(): Frame {
     const m = [t * f.ax * f.ax + c, t * f.ax * f.ay - s * f.az, t * f.ax * f.az + s * f.ay, t * f.ax * f.ay + s * f.az, t * f.ay * f.ay + c, t * f.ay * f.az - s * f.ax, t * f.ax * f.az - s * f.ay, t * f.ay * f.az + s * f.ax, t * f.az * f.az + c];
     const at = (x: number, y: number, z: number, into: number[]) => into.push(f.x + (m[0] * x + m[1] * y + m[2] * z) * k, f.y + (m[3] * x + m[4] * y + m[5] * z) * k, f.z + (m[6] * x + m[7] * y + m[8] * z) * k);
     front.length = back.length = 0;
-    for (let j = 0; j < f.pts.length; j += 2) { at(f.pts[j], f.pts[j + 1], -SHEET_T / 2, front); at(f.pts[j], f.pts[j + 1], SHEET_T / 2, back); }
+    for (let j = 0; j < f.pts.length; j += 2) { at(f.pts[j], f.pts[j + 1], -f.th / 2, front); at(f.pts[j], f.pts[j + 1], f.th / 2, back); }
     const cf: number[] = [], cb: number[] = [];
-    at(0, 0, -SHEET_T / 2, cf); at(0, 0, SHEET_T / 2, cb);
+    at(0, 0, -f.th / 2, cf); at(0, 0, f.th / 2, cb);
     o = prism(fragBuf, o, front, back, cf, [-m[2], -m[5], -m[8]], cb, f.tone, f.mat);
   }
   // the ball's wake (a ribbon, widest at the ball) and the dust
@@ -118,6 +145,12 @@ function scene(): Frame {
     put(a.x - px * wa, a.y - py * wa, a.z, -1, 2, WAKE, fa); put(b.x + px * wb, b.y + py * wb, b.z, 1, 2, WAKE, fb); put(b.x - px * wb, b.y - py * wb, b.z, -1, 2, WAKE, fb);
   }
   const air = airNow();
+  for (const f of flashes) {
+    const age = sim.t - f.t, u = age / 0.32, s = f.s * (0.35 + 0.9 * Math.sqrt(u)), a = f.a * (1 - u) ** 1.5, c = [1, 0.97, 0.9];
+    for (const [uu, vv] of [[-1, -1], [1, -1], [1, 1], [-1, -1], [1, 1], [-1, 1]]) put(f.x + uu * s, f.y + vv * s, f.z, uu + 10, vv, c, a);
+    const cs = f.s * 0.45 * (1 - u * 0.5);
+    for (const [uu, vv] of [[-1, -1], [1, -1], [1, 1], [-1, -1], [1, 1], [-1, 1]]) put(f.x + uu * cs, f.y + vv * cs, f.z, uu, vv, c, a * 0.8);
+  }
   for (const p of puffs) {
     const s = p.s * (1 + (p.life / p.all) * 2.2), a = 0.34 * (1 - p.life / p.all), c = [0.97, 0.9, 0.8];
     for (const [u, v] of [[-1, -1], [1, -1], [1, 1], [-1, -1], [1, 1], [-1, 1]]) put(p.x + u * s, p.y + v * s, p.z, u, v, c, a);
@@ -126,11 +159,16 @@ function scene(): Frame {
   const bend: [number, number] = [0.0022 * Math.sin(sim.z * 0.013 + seed) + 0.0011 * Math.sin(sim.z * 0.031 + 1), 0.0016 * Math.sin(sim.z * 0.017 + seed * 2 + 2)];
   return {
     z: sim.z, W: sim.W, shake: [shake * Math.sin(sim.t * 61) * 0.1, shake * Math.cos(sim.t * 53) * 0.08], bend, skyTop: air.top, skyLow: air.low, sun: air.sun,
-    ball: [sim.ball.x, sim.ball.y, sim.ball.z], ballOn: sim.phase !== 'over' && sim.phase !== 'done', ballPal: air.pal, palOf, focus: air.focus, sheets: sim.sheets, frags: fragBuf, fragVerts: o / STRIDE, sprites: spriteBuf, spriteVerts: q / SPRITE,
+    ball: [sim.ball.x, sim.ball.y, sim.ball.z], ballOn: sim.phase !== 'over' && sim.phase !== 'done', ballPal: air.pal, palOf, focus: air.focus, sheets: sim.sheets, nearest: sim.sheets.find((k) => k.left > 0)?.i ?? sim.nextSheet, now: sim.t, hits, hitA, squash: squashNow(), frags: fragBuf, fragVerts: o / STRIDE, sprites: spriteBuf, spriteVerts: q / SPRITE,
   };
 }
 /** The air now, and where the lens is focused: the palette of the next sheet still standing, eased in from the
  * last one's over the way between them. */
+/** the ball's squash now: sprung back and forth, dying away */
+function squashNow() {
+  const age = sim.t - squash.t, k = age < 0 || age > 0.5 ? 0 : squash.k * Math.exp(-age * 11) * Math.cos(age * 48);
+  return [squash.x, squash.y, squash.z, k];
+}
 function airNow() {
   const next = sim.sheets.find((k) => k.left > 0), n = next?.i ?? sim.nextSheet, a = PALETTES[palOf(Math.max(0, n - 1))], b = PALETTES[palOf(n)];
   const z0 = n > 0 ? sheetZ(seed, n - 1) : 0, z1 = sheetZ(seed, n) - STAND - 2, u0 = Math.min(1, Math.max(0, (sim.z - z0) / Math.max(1, z1 - z0))), u = u0 * u0 * (3 - 2 * u0);
@@ -351,7 +389,21 @@ function run(dt: number, now: number, standIn = auto) {
   for (const e of sim.events) {
     sound(e);
     if (e.kind === 'shard') {
-      if (!e.chain) from = { x: b.x, y: b.y };
+      if (!e.chain) {
+        from = { x: b.x, y: b.y };
+        // (every blow: it runs through the tiles round it, a flash where it landed, the ball squashed)
+        const front = e.z - SHEET_T / 2, k = Math.min(1, e.hard / 26);
+        blow(e.px, e.py, front, (e.broke ? 0.05 : 0.16) * (0.4 + 0.6 * k));
+        flashes.push({ x: e.px, y: e.py, z: front - 0.08, t: sim.t, s: e.broke ? 0.6 + 0.5 * k : 1.1 + 0.8 * k, a: e.broke ? 0.45 : 1 });
+        squashed([b.vx - was[0], b.vy - was[1], b.vz - was[2]]);
+        if (!e.broke) {
+          // (it held: chipped, cracked from where it was struck, rung)
+          const sd = sim.sheets.find((q) => q.i === e.sheet)?.shards[e.shard];
+          if (sd) spall(e.px, e.py, front, matOf(sd.kind, 1, palOf(e.sheet)), seat(e.sheet, e.shard).tone, e.hard);
+          dust(e.px, e.py, e.z, 5, e.hard);
+          shake = Math.max(shake, 0.12 + 0.2 * k);
+        }
+      }
       if (!e.broke) continue;
       // (struck through: it bursts, and goes on with the ball; struck and turned: it chips, and drops)
       const through = e.through || e.chain, k = through ? 0.22 : -0.08;
@@ -371,13 +423,16 @@ function run(dt: number, now: number, standIn = auto) {
       banner(firingName(e.firing + 1), sim.rules === 'run' ? `${clockText(e.clock)}${best !== undefined ? ` · ${e.clock <= best ? '−' : '+'}${Math.abs(e.clock - best).toFixed(1)}` : ''}` : sim.rules === 'lives' ? `${name} · a chance back` : name);
     } else if (e.kind === 'done') banner('fired', clockText(e.clock));
     else if (e.kind === 'miss') { shake = 1; pulse(flash, 'miss'); }
+    else if (e.kind === 'hand') squashed([b.vx - was[0], b.vy - was[1], b.vz - was[2]]);
     else if (e.kind === 'wall' && !preview) {
+      squashed([b.vx - was[0], b.vy - was[1], b.vz - was[2]]);
       const p = onScreen(e.x, e.y);
       edge.style.left = `${p.x}px`; edge.style.top = `${p.y}px`; edge.style.setProperty('--k', String(Math.min(1, e.hard / 14)));
       pulse(edge, 'on');
     }
   }
   shake = Math.max(0, shake - dt * 2.2);
+  for (let i = flashes.length - 1; i >= 0; i--) if (sim.t - flashes[i].t > 0.32) flashes.splice(i, 1);
   for (let i = frags.length - 1; i >= 0; i--) {
     const f = frags[i];
     if (f.wait > 0) { f.wait -= dt; continue; }

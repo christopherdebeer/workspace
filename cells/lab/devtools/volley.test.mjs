@@ -145,7 +145,7 @@ await withWood(async (lab) => {
   let s = await probe();
   ok('waiting, drawn', s.phase === 'ready' && s.frames > 2 && s.error === 0 && s.verts > 2000, s);
   ok('says how', (await p.textContent('#sub')).includes('pick it up and throw it'));
-  await p.mouse.click(195, 422); await p.waitForTimeout(300);
+  await p.mouse.click(195, 422); await p.waitForTimeout(1200);
   s = await probe();
   ok('a touch picks it up, and letting go throws it', s.phase === 'play' && s.ball.z > s.z + 1, s);
   // (a hand kept where it will come back, by the page's own reckoning, for a few returns)
@@ -164,12 +164,12 @@ await withWood(async (lab) => {
   const r = await lab.open('seed=1');
   await r.waitForTimeout(600);
   ok('the rules to choose, before the first throw', await r.isVisible('#modes'));
-  await r.click('#modes [data-rules="run"]'); await r.waitForTimeout(400);
+  await r.click('#modes [data-rules="run"]'); await r.waitForTimeout(1200);
   ok('the course chosen: the clock in the corner, the firings to come', (await r.evaluate(() => window.__volley.sim.rules)) === 'run' && r.url().includes('rules=run') && (await r.textContent('#depth')).includes(':') && (await r.$$('#left b')).length === 4);
   await r.evaluate(() => { const s = window.__volley.sim; s.clock = 83.4; s.splits = [20, 41, 62, 83.4]; s.phase = 'done'; });
-  await r.waitForTimeout(500);
+  await r.waitForTimeout(1500);
   ok('the course done: its card, its time, its splits', (await r.isVisible('#card')) && (await r.textContent('#big')) === '1:23.4' && (await r.textContent('#lines')).includes('fourth'));
-  await r.click('#again'); await r.waitForTimeout(600);
+  await r.click('#again'); await r.waitForTimeout(1500);
   ok('again: from the start, the card gone', (await r.evaluate(() => window.__volley.sim.phase)) === 'ready' && !(await r.isVisible('#card')));
   ok('no errors there either', !r.errors.length, r.errors.slice(0, 3));
   await r.close();

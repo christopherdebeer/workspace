@@ -10,6 +10,11 @@ Made by `node cells/lab/views.mjs volley` from `client/volley/views.mjs`. The RE
 ![The third: tenmoku: terracotta and bisque, amber glaze and the black one, crazed; the hand’s ring in cream, its arc of dashes full: a bat](v-tenmoku.jpg)
 ![On a wider screen: the way is the screen’s shape: a wider sheet, more of it](v-wide.jpg)
 
+## Blows
+
+![A blow that doesn’t break: a hard glazed tile struck too softly to break: the flash where it landed, chips spalling off toward you, the tiles round it jolted, the ball squashed against it](v-blow.jpg)
+![What it leaves: the tile knocked in a little, cracked from where it was struck down to the clay: one more and it goes](v-cracked.jpg)
+
 ## The rules
 
 ![The course, fired: four firings against the clock: the time, the splits against the best, the misses](v-course.jpg)

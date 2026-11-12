@@ -21,9 +21,13 @@ export const H = 10;
 /** a sheet's thickness, the spacing of sheets, where the first is */
 export const SHEET_T = 0.75, GAP = 13, FIRST = 14;
 /** about how far apart the body's shards are; how much of itself a shard gives up to the joint round it */
-export const GRAIN = 0.92, JOINT = 0.03;
+export const GRAIN = 1.35, JOINT = 0.035;
+/** the motifs' tiles, as a share of the size they were first drawn at */
+const TS = 1.4;
+/** half the width of the grout between tiles as drawn (the ball meets them a little wider: JOINT) */
+export const GROUT = 0.065;
 /** how far a sheet runs on past the sides of the way (as a share of the way's width and height): its frame */
-export const FRAME = 0.5;
+export const FRAME = 0.75;
 /** sheets to a firing: each firing its own glazes, and its start a checkpoint */
 export const FIRING = 6;
 export const firingOf = (i: number) => Math.floor(i / FIRING);
@@ -44,6 +48,11 @@ export interface Shard {
   frame: boolean;
   /** the shards it shares an edge with */
   nb: number[];
+  /** as drawn: its outline (its edges along a motif's rings bent to the ring's arc), inset by the grout; and its bed,
+   * the same outline uninset, which meets its neighbours' under the grout */
+  outline: number[]; bed: number[];
+  /** where the first blow that didn't break it landed (NaN till then) */
+  hx: number; hy: number;
 }
 export interface Sheet { i: number; z: number; shards: Shard[]; left: number; total: number; /** goes up whenever a shard of it changes */ ver: number }
 
@@ -56,7 +65,7 @@ interface Site { x: number; y: number; k: number }
 
 /** The sites of sheet `i`: its motifs, and the body round them. */
 function design(seed: number, i: number, W: number, ex: number, ey: number) {
-  const rand: Rand = seeded(hash(seed, i, 31)), sites: Site[] = [];
+  const rand: Rand = seeded(hash(seed, i, 31)), sites: Site[] = [], centres: { x: number; y: number; r: number }[] = [];
   /** where the motifs are, kept clear of the body: a disc, or (a fan's) the half of one on its side of the line it stands on */
   const discs: { x: number; y: number; r: number; dx?: number; dy?: number }[] = [];
   const inside = (d: (typeof discs)[number], x: number, y: number) => Math.hypot(d.x - x, d.y - y) < d.r && (d.dx === undefined || (x - d.x) * d.dx + (y - d.y) * d.dy! > -0.3);
@@ -75,11 +84,11 @@ function design(seed: number, i: number, W: number, ex: number, ey: number) {
    * about square. */
   const rosette = (cx: number, cy: number, R: number, a0 = 0, a1 = TAU) => {
     const whole = a1 - a0 >= TAU - 1e-6, arc = a1 - a0;
-    const petals = Math.max(whole ? 6 : 3, Math.min(whole ? 18 : 10, Math.round((arc * R * 0.58) / 1.45))), open = rand() < 0.65;
-    const rows = Math.max(2, Math.round((R * 0.44) / 0.62)), step = Math.max(0.5, Math.min(0.8, R * 0.2));
+    const petals = Math.max(whole ? 6 : 3, Math.min(whole ? 14 : 8, Math.round((arc * R * 0.58) / (1.45 * TS)))), open = rand() < 0.65;
+    const rows = Math.max(2, Math.round((R * 0.44) / (0.62 * TS))), step = Math.max(0.5, Math.min(0.8, R * 0.2)) * TS;
     const b1 = band(), b2 = rand() < 0.5 ? band() : FIRED, alt = rand() < 0.45, hub = rand() < 0.5 ? PLAIN : SOFT, petal = rand() < 0.7 ? PLAIN : FIRED, turn = whole ? rand() * TAU : 0;
     sites.push({ x: cx, y: cy, k: hub });
-    if (R > 2.6) ring(cx, cy, R * 0.15, step * 0.8, () => hub, a0, a1, turn);
+    if (R > 3.4) ring(cx, cy, R * 0.15, step * 0.8, () => hub, a0, a1, turn);
     ring(cx, cy, R * 0.27, step * 0.85, () => b1, a0, a1, turn);
     // (the petals: a site on each petal's axis, and one between; open, the petals are holes between spokes)
     const span = arc / petals;
@@ -95,16 +104,18 @@ function design(seed: number, i: number, W: number, ex: number, ey: number) {
     ring(cx, cy, R * 0.87 + 0.75, GRAIN * 0.8, () => PLAIN, a0, a1, turn);
     const mid = (a0 + a1) / 2;
     discs.push({ x: cx, y: cy, r: R * 0.87 + 0.75 + GRAIN * 0.35, ...(whole ? {} : { dx: Math.cos(mid), dy: Math.sin(mid) }) });
+    centres.push({ x: cx, y: cy, r: R * 0.87 + 1.3 });
   };
   /** a round hole with a rim of glaze round it */
   const ringed = (cx: number, cy: number, r: number) => {
     const rim = band(), alt = rand() < 0.3;
     sites.push({ x: cx, y: cy, k: -1 });
-    if (r > 1.3) ring(cx, cy, r * 0.5, 0.7, () => -1);
-    ring(cx, cy, Math.max(0.25, r - 0.33), 0.62, () => -1);
-    ring(cx, cy, r + 0.36, 0.62, (k) => (alt && k % 3 === 2 ? PLAIN : rim));
-    ring(cx, cy, r + 1.02, GRAIN * 0.8, () => PLAIN);
-    discs.push({ x: cx, y: cy, r: r + 1.02 + GRAIN * 0.35 });
+    if (r > 1.3) ring(cx, cy, r * 0.5, 0.7 * TS, () => -1);
+    ring(cx, cy, Math.max(0.25, r - 0.33 * TS), 0.62 * TS, () => -1);
+    ring(cx, cy, r + 0.36 * TS, 0.62 * TS, (k) => (alt && k % 3 === 2 ? PLAIN : rim));
+    ring(cx, cy, r + 1.02 * TS, GRAIN * 0.8, () => PLAIN);
+    discs.push({ x: cx, y: cy, r: r + 1.02 * TS + GRAIN * 0.35 });
+    centres.push({ x: cx, y: cy, r: r + 1.5 * TS });
   };
   const free = (x: number, y: number, r: number) => discs.every((d) => Math.hypot(d.x - x, d.y - y) > d.r + r * 0.92 || (d.dx !== undefined && (x - d.x) * d.dx + (y - d.y) * d.dy! < -r - 0.3));
   const place = (r: number, tries: number, make: (x: number, y: number) => void, spread = 1) => {
@@ -153,14 +164,14 @@ function design(seed: number, i: number, W: number, ex: number, ey: number) {
     const p = 0.5 + 0.5 * Math.sin(x * 0.9 + patch) * Math.sin(y * 0.7 + patch * 1.3) + (unit(seed, i, r, c, 3) - 0.5) * 0.3;
     sites.push({ x, y, k: p < fired ? FIRED : PLAIN });
   }
-  return sites;
+  return { sites, centres };
 }
 
 /** Sheet `i` of this seed's way. */
 export function makeSheet(seed: number, i: number, W: number): Sheet {
-  const ex = W * (0.5 + FRAME), ey = H * (0.5 + FRAME), sites = design(seed, i, W, ex, ey);
+  const ex = W * (0.5 + FRAME), ey = H * (0.5 + FRAME), { sites, centres } = design(seed, i, W, ex, ey);
   // (the frame's own edge is ragged: a sheet is a broken-off piece, not a board)
-  const ragged = (x: number, y: number) => { const a = Math.atan2(y / ey, x / ex), d = Math.hypot(x / ex, y / ey); return d > 0.8 + 0.14 * Math.sin(a * 3 + i * 1.7 + seed) + 0.1 * Math.sin(a * 7 + i * 2.9); };
+  const ragged = (x: number, y: number) => { const a = Math.atan2(y / ey, x / ex), d = Math.hypot(x / ex, y / ey); return d > 0.95 + 0.07 * Math.sin(a * 3 + i * 1.7 + seed) + 0.05 * Math.sin(a * 7 + i * 2.9); };
   // (a bucket grid of the sites, to find the ones near each)
   const B = GRAIN, bx = Math.ceil((2 * ex) / B) + 1, by = Math.ceil((2 * ey) / B) + 1, buckets: number[][] = Array.from({ length: bx * by }, () => []);
   const cell = (x: number, y: number) => [Math.max(0, Math.min(bx - 1, Math.floor((x + ex) / B))), Math.max(0, Math.min(by - 1, Math.floor((y + ey) / B)))];
@@ -203,15 +214,83 @@ export function makeSheet(seed: number, i: number, W: number): Sheet {
     let cx = 0, cy = 0;
     for (let k = 0; k < poly.length; k += 2) { cx += poly[k]; cy += poly[k + 1]; }
     cx /= poly.length / 2; cy /= poly.length / 2;
+    const bed = arcs(poly, centres), outline = offset(bed, GROUT);
+    poly = offset(poly, JOINT);
     let r = 0;
-    for (let k = 0; k < poly.length; k += 2) { poly[k] = cx + (poly[k] - cx) * (1 - JOINT); poly[k + 1] = cy + (poly[k + 1] - cy) * (1 - JOINT); r = Math.max(r, Math.hypot(poly[k] - cx, poly[k + 1] - cy)); }
-    if (r < 0.08) return;
+    for (let k = 0; k < poly.length; k += 2) r = Math.max(r, Math.hypot(poly[k] - cx, poly[k + 1] - cy));
+    if (r < 0.12 || !outline.length) return;
     const kind = frame && s.k === HARD ? SOFT : s.k;
     index[a] = shards.length; raw.push(cut);
-    shards.push({ poly, cx, cy, r, hp: kind === HARD ? 2 : 1, kind, frame, nb: [] });
+    shards.push({ poly, cx, cy, r, hp: kind === HARD ? 2 : 1, kind, frame, nb: [], outline, bed, hx: NaN, hy: NaN });
   });
   shards.forEach((d, k) => { d.nb = raw[k].map((b) => index[b]).filter((b) => b >= 0); });
   let left = shards.reduce((c, d) => c + (d.frame ? 0 : 1), 0);
   if (!left && shards.length) { const d = shards.reduce((a, b) => (Math.hypot(b.cx, b.cy) < Math.hypot(a.cx, a.cy) ? b : a)); d.frame = false; left = 1; }
   return { i, z: sheetZ(seed, i), shards, left, total: left, ver: 0 };
+}
+
+/** An outline with each edge that runs round a motif's centre (its ends about as far from it, the edge across the
+ * radius) bent to the arc round it: a ring of tiles becomes a ring. The same edge seen from the tile on its other side
+ * bends the same way, so the beds still meet. */
+function arcs(poly: number[], centres: { x: number; y: number; r: number }[]): number[] {
+  const out: number[] = [], n = poly.length / 2;
+  for (let k = 0; k < n; k++) {
+    const ax = poly[k * 2], ay = poly[k * 2 + 1], bx = poly[((k + 1) % n) * 2], by = poly[((k + 1) % n) * 2 + 1];
+    out.push(ax, ay);
+    const mx = (ax + bx) / 2, my = (ay + by) / 2, len = Math.hypot(bx - ax, by - ay);
+    if (len < 0.08) continue;
+    let best: { x: number; y: number } | null = null, bd = Infinity;
+    for (const c of centres) {
+      const dm = Math.hypot(mx - c.x, my - c.y);
+      if (dm > c.r || dm < 0.2 || dm >= bd) continue;
+      const da = Math.hypot(ax - c.x, ay - c.y), db = Math.hypot(bx - c.x, by - c.y);
+      if (Math.abs(da - db) > 0.12 * Math.max(1, len)) continue;
+      if (Math.abs(((bx - ax) * (mx - c.x) + (by - ay) * (my - c.y)) / (len * dm)) > 0.3) continue;
+      best = c; bd = dm;
+    }
+    if (!best) continue;
+    const c = best, a0 = Math.atan2(ay - c.y, ax - c.x), da = Math.hypot(ax - c.x, ay - c.y), db = Math.hypot(bx - c.x, by - c.y);
+    let d = Math.atan2(by - c.y, bx - c.x) - a0;
+    while (d > Math.PI) d -= 2 * Math.PI;
+    while (d < -Math.PI) d += 2 * Math.PI;
+    const segs = Math.min(8, Math.ceil(Math.abs(d) / 0.16));
+    for (let j = 1; j < segs; j++) { const t = j / segs, a = a0 + d * t, rr = da + (db - da) * t; out.push(c.x + Math.cos(a) * rr, c.y + Math.sin(a) * rr); }
+  }
+  return out;
+}
+
+/** An outline (counter-clockwise, convex or nearly) moved in by `j` all round: each corner along the line halving it.
+ * Empty if that leaves nothing. */
+export function offset(poly: number[], j: number): number[] {
+  const n = poly.length / 2, out: number[] = [], src: number[] = [];
+  for (let k = 0; k < n; k++) {
+    const p = (k + n - 1) % n, q = (k + 1) % n;
+    const x = poly[k * 2], y = poly[k * 2 + 1];
+    let e0x = x - poly[p * 2], e0y = y - poly[p * 2 + 1], e1x = poly[q * 2] - x, e1y = poly[q * 2 + 1] - y;
+    const l0 = Math.hypot(e0x, e0y) || 1, l1 = Math.hypot(e1x, e1y) || 1;
+    e0x /= l0; e0y /= l0; e1x /= l1; e1y /= l1;
+    // (inward, for counter-clockwise: the left of each edge)
+    const n0x = -e0y, n0y = e0x, n1x = -e1y, n1y = e1x;
+    let bx = n0x + n1x, by = n0y + n1y;
+    const bl = Math.hypot(bx, by) || 1; bx /= bl; by /= bl;
+    const d = j / Math.max(0.35, bx * n0x + by * n0y);
+    out.push(x + bx * d, y + by * d); src.push(k);
+  }
+  // (a short edge offset past nothing turns backwards: drop its far corner, till none does)
+  for (let pass = 0; pass < 4; pass++) {
+    const m = out.length / 2;
+    if (m < 3) return [];
+    let dropped = false;
+    for (let k = 0; k < out.length / 2 && out.length >= 8; k++) {
+      const q = (k + 1) % (out.length / 2), ex = out[q * 2] - out[k * 2], ey = out[q * 2 + 1] - out[k * 2 + 1];
+      const oi = src[k], oq = src[q], ox = poly[oq * 2] - poly[oi * 2], oy = poly[oq * 2 + 1] - poly[oi * 2 + 1];
+      if (ex * ox + ey * oy <= 0 || Math.hypot(ex, ey) < 0.012) { out.splice(q * 2, 2); src.splice(q, 1); dropped = true; }
+    }
+    if (!dropped) break;
+  }
+  // (if it's turned inside out, there's nothing left)
+  let area = 0;
+  const m = out.length / 2;
+  for (let k = 0; k < m; k++) area += out[k * 2] * out[((k + 1) % m) * 2 + 1] - out[((k + 1) % m) * 2] * out[k * 2 + 1];
+  return area > 0.004 ? out : [];
 }

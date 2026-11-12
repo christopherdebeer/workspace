@@ -88,7 +88,7 @@ export interface Ball { x: number; y: number; z: number; vx: number; vy: number;
 export type Ev =
   /** a shard struck: `broke` if that was the end of it, `through` if the ball went on through, `chain` if it went
    * with a neighbour that was struck */
-  | { kind: 'shard'; x: number; y: number; z: number; sheet: number; shard: number; broke: boolean; through: boolean; chain: boolean; hard: number }
+  | { kind: 'shard'; x: number; y: number; z: number; sheet: number; shard: number; broke: boolean; through: boolean; chain: boolean; hard: number; /** where the ball met it, and its own way back out */ px: number; py: number; nx: number; ny: number; nz: number }
   /** a shard of a sheet that has given way */
   | { kind: 'fall'; x: number; y: number; z: number; sheet: number; shard: number }
   | { kind: 'wall' | 'hand'; x: number; y: number; z: number; hard: number }
@@ -263,11 +263,11 @@ function meet(b: Ball, c: Contact, hp: number, W: number): boolean {
 }
 
 /** one shard of a sheet takes a blow: an event, and (if that's the end of it) the counts */
-function strike(s: Sim, sh: Sheet, k: number, through: boolean, chain: boolean, hard: number) {
+function strike(s: Sim, sh: Sheet, k: number, through: boolean, chain: boolean, hard: number, px = sh.shards[k].cx, py = sh.shards[k].cy, n: [number, number, number] = [0, 0, -1]) {
   const d = sh.shards[k], broke = --d.hp === 0;
   sh.ver++;
-  if (broke) { s.broken++; if (!d.frame) sh.left--; }
-  s.events.push({ kind: 'shard', x: d.cx, y: d.cy, z: sh.z, sheet: sh.i, shard: k, broke, through, chain, hard });
+  if (broke) { s.broken++; if (!d.frame) sh.left--; } else if (Number.isNaN(d.hx)) { d.hx = px; d.hy = py; }
+  s.events.push({ kind: 'shard', x: d.cx, y: d.cy, z: sh.z, sheet: sh.i, shard: k, broke, through, chain, hard, px, py, nx: n[0], ny: n[1], nz: n[2] });
 }
 
 function tick(s: Sim) {
@@ -298,9 +298,9 @@ function tick(s: Sim) {
     if (vn < 0) {
       const d = hit.shards[hk], hard = -vn;
       // (hard enough, and square on: through it and on, and the shards round the place go with it; otherwise off it)
-      const through = meet(b, ct!, d.hp, s.W);
+      const px = b.x - nx * R, py = b.y - ny * R, through = meet(b, ct!, d.hp, s.W);
       s.flight++;
-      strike(s, hit, hk, through, false, hard);
+      strike(s, hit, hk, through, false, hard, px, py, [nx, ny, nz]);
       if (through) {
         const reach = BURST + (hard - THROUGH) * BURST_PER;
         hit.shards.forEach((o, k) => { if (o.hp === 1 && Math.hypot(o.cx - b.x, o.cy - b.y) < reach + o.r * 0.5) strike(s, hit!, k, false, true, hard); });

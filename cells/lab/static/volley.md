@@ -29,13 +29,22 @@ A sheet is one fired thing, not a wall of parts. It is a Voronoi figure: a scatt
 - **A ringed hole**: a ring of sites left out inside a ring of glazed tiles.
 - **The body** round the motifs: a jittered grid of sites, broken into irregular tiles like any fired thing, with patches of the other clay.
 
-Sites left out still divide the ground, so a hole's edge is as faceted as everything else. Past the sides of the way the sheet runs on as a frame the ball can't reach, its outer edge ragged.
+Sites left out still divide the ground. Each tile's edges that run round a motif's centre are bent to the arc round it, so a ring of tiles is a ring and a ringed hole is round; the same edge seen from the tile on its other side bends the same way. Past the sides of the way the sheet runs on as a frame the ball can't reach, far enough that the nearest sheet fills the screen; its outer edge, ragged, only shows on the sheets further off.
+
+**How a tile is made.** A sheet is a slab of clay with tiles set in it. Each tile is its outline moved in by the grout's half-width: a face, tilted a little off the sheet's plane so no two catch the light alike; its rim rounded over in a quarter-round, the light running round it; its sides down into the grout. Under it, its bed: the same outline unmoved, meeting its neighbours' as the grout's dark floor, and running back as the slab, whose crumbling walls show in the holes and wherever a tile has gone.
 
 What each tile is made of: the **body**, another **clay**, a **soft glaze** (glossy, breaks like the body), or a **hard glaze** (takes two blows, crazes at the first, and always turns the ball). Glaze goes in bands: round hubs, along rims, round holes; the hard one more often the further in.
 
 - **Struck, a tile breaks**, and the ball comes off it and falls.
 - **Struck hard and square, it bursts** and the ball goes on through, a fifth slower, and the tiles round the place go with it: the harder the throw, the bigger the hole, and one good throw can go through two sheets.
 - **Three fifths of a sheet broken** (or twelve tiles, if that's fewer) and the rest gives way, outward from where it was last struck.
+
+## Blows
+
+Every blow shows where it landed: a flash, the tiles round it jolted (a ripple runs out through them, pushed back and sprung forward), and the ball squashed against what it met (it squashes off the sides and off your hand too, as hard as it was pushed, and springs back). A hard glazed tile struck and not broken spalls chips of glaze toward you, and keeps the mark: knocked in a little and tilted away from where it was struck, a crater down to the clay there, a ring crack round it and cracks running out across the glaze. One more blow and it goes.
+
+![A blow that doesn't break](volley/v-blow.jpg)
+![What it leaves](volley/v-cracked.jpg)
 
 ![The second: celadon](volley/v-celadon.jpg)
 ![The third: tenmoku](volley/v-tenmoku.jpg)
@@ -86,9 +95,11 @@ The ring under your finger shows which of these it would be right now: round it,
 
 - `client/volley/sheet.ts` makes the sheets: the motifs as sites, the Voronoi figure of them, each tile's outline and what it's made of.
 - `client/volley/sim.ts` is the game and nothing else: a falling, spinning sphere against convex prisms and four sides, in fixed steps of 1/240 s, everything random from the seed; the rules, the clock and the checkpoints. Hands are given to it as points on the pane with a velocity and an age. It also holds the stand-in player. Tested on its own in `devtools/volley.test.mjs`.
-- `client/volley/draw.ts` draws it. Every solid is a flat-faced prism: a tile (its face tilted a little off the sheet's plane, so no two catch the light alike, its rim eased off in two flat chamfers), or a piece of one in the air (sharp: it's broken); even the ball is faceted. A sheet's mesh is made again when a tile of it changes. What a face is made of is worked out where it's drawn: the body rough and porous (its grains tilt the face every way a little, so it sparkles), a glaze pooled deep in the middle of a tile and thinning to the body over the eased rim, crazed, glossy; the bare clay on a broken edge. A shadow map from the one light; haze into a sky gradient; a shoulder on the brightness alone, so the hues hold. It's drawn antialiased to a texture, then through the lens: a 24-tap gather in a disc, each tap counted only if its own blur reaches that far, so what's sharp in front never smears onto what's blurred behind. No assets, no libraries.
-- `client/volley/main.ts` is the fingers, the pieces in the air (a struck tile chips into a few, a burst one into many, a fallen sheet's mostly in chips), the ball's wake, the dust, the sound and the words.
+- `client/volley/draw.ts` draws it. A tile is its face, its rim rounded in three steps with smooth normals, its sides, and its bed (the grout's floor and the slab's wall); a piece in the air is a sharp prism (it's broken); the ball is faceted. A sheet's mesh is made again when a tile of it changes; the sheets beyond the nearest two, out of focus anyway, are made plainer (square rims). What a face is made of is worked out where it's drawn: the body sugary and porous, specked, pitted, its grains glinting; a glaze pooled on the face and thinning to the body over the rounded rim, orange-peeled so its highlights break up, crazed, with the sky's gradient and a broad and a hard reflection of the light in it; the grout dark; the slab's walls crumbling clay; a struck tile's crater and cracks from where it was struck (each tile's vertices carry that point). The ripple of the latest blows and the ball's squash are done where the vertices are placed. A shadow map from the one light; haze into a sky gradient; a shoulder on the brightness alone, so the hues hold. It's drawn antialiased to a texture, then through the lens: a 24-tap gather in a disc, each tap counted only if its own blur reaches that far, so what's sharp in front never smears onto what's blurred behind. No assets, no libraries.
+- `client/volley/main.ts` is the fingers, the blows (their flashes, their ripples, the chips they spall, the ball's squash), the pieces in the air (a struck tile chips into a few, a burst one into many, a fallen sheet's mostly in chips), the ball's wake, the dust, the sound and the words.
 - `static/volley-brief.md` describes the game with no picture in it, for anyone who wants to imagine it differently. This look began from four such imaginings.
+
+`node cells/lab/devtools/volley-hit.mjs` stages a blow that doesn't break and shoots it just after and a second later.
 
 ## Flags
 
@@ -96,4 +107,4 @@ The ring under your finger shows which of these it would be right now: round it,
 
 ## Before this
 
-Five earlier versions are in the repository's history: a court seen from behind a dragged paddle; a tunnel of block slabs with three separate hands and an arcade ball; the same with a ball that fell down the screen; the same with the fall turned toward you and the hands made one; and the first sheets, plaster in irregular shards, without motifs, firings or rules.
+Six earlier versions are in the repository's history: a court seen from behind a dragged paddle; a tunnel of block slabs with three separate hands and an arcade ball; the same with a ball that fell down the screen; the same with the fall turned toward you and the hands made one; the first sheets, plaster in irregular shards, without motifs, firings or rules; and the first fired sheets, their tiles flat-faced with chamfered rims, loose, the sky between them.

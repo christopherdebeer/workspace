@@ -35,6 +35,23 @@
   ]
  },
  {
+  "group": "Blows",
+  "views": [
+   {
+    "name": "blow",
+    "title": "A blow that doesn’t break",
+    "caption": "a hard glazed tile struck too softly to break: the flash where it landed, chips spalling off toward you, the tiles round it jolted, the ball squashed against it",
+    "file": "v-blow.jpg"
+   },
+   {
+    "name": "cracked",
+    "title": "What it leaves",
+    "caption": "the tile knocked in a little, cracked from where it was struck down to the clay: one more and it goes",
+    "file": "v-cracked.jpg"
+   }
+  ]
+ },
+ {
   "group": "The rules",
   "views": [
    {
