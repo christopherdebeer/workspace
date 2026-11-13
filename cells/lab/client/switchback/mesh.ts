@@ -20,15 +20,15 @@ export const PALETTE: string[][] = [
   ['#ff7a2e', '#e85a0d', '#e85a0d', '#c94a0a'], // orange (flat, nearly: it's the one colour that never goes dull)
   ['#2c2d32', '#1d1e23', '#16171b', '#101114'], // black
   ['#ffffff', '#f1ece8', '#d9d0ca', '#a399a2'], // white
-  ['#2457e3', '#1f4ed4', '#1546cd', '#123cb0'], // far range
-  ['#f4f1ee', '#e3dee0', '#8c9be0', '#4f6bd8'], // far snow: white where it's lit, blue in its shade
+  ['#4b72ee', '#3a63e6', '#1836b0', '#122a90'], // far range: lighter than the sky lit, deep ultramarine in shade
+  ['#f4f1ee', '#dcdbef', '#4f6ee0', '#16309c'], // far snow: white where it's lit, deep ultramarine in its shade
   ['#6b5348', '#4c3b34', '#3d2f2a', '#2c221e'], // umber
   ['#a399a2', '#a399a2', '#a399a2', '#a399a2'], // shadow on snow
   ['#ccbcb2', '#ab9c9c', '#8f8394', '#6f6a86'], // ruts: the track's own colours a step down (worn grooves)
   ['#535e8a', '#2c3768', '#162140', '#101a36'], // navy
   // (the backdrop: one family of blues, lighter and flatter the further off; no charcoal in it)
-  ['#5b80f2', '#4c74f0', '#3d66ec', '#3560e6'], // the farthest range
-  ['#f2f3f8', '#e2e5f2', '#aab8f0', '#93a6ee'], // its snow
+  ['#6f90f3', '#5c80f0', '#2141c0', '#17309a'], // the farthest range
+  ['#f3f2f7', '#d9dcf3', '#5a78e4', '#1a35a6'], // its snow
   ['#1b49d0', '#1742c2', '#1238a8', '#10329a'], // the foothill ridge
   ['#163291', '#142d84', '#12287a', '#11246e'], // forest along its foot
   ['#2f5be6', '#2f5be6', '#2a55e0', '#2a55e0'], // the valley floor
@@ -397,14 +397,22 @@ function skyline(m: Mesh, seed: number, k: number, spec: { R: number; floor: num
     m.quad(a.S, b.S, b.Fd, a.Fd, body, 0.5);
     m.quad(a.Fd, b.Fd, b.B, a.B, body, 0.5);
   }
-  return { rows, crest, as };
+  return { rows, crest, as, peaks };
 }
 /** the skylines: the farthest range, then a nearer one in front of it, both all round; snow on both */
+const RANGES = [
+  { k: 1, R: 3400, floor: -280, lo: 420, hi: 1050, peaks: 15, body: M.FAR, snow: M.FARSNOW, snowline: -260 + 420, fold: 0.03 },
+  { k: 2, R: 2500, floor: -270, lo: 230, hi: 620, peaks: 12, body: M.MTN, snow: M.MTNSNOW, snowline: -260 + 430, fold: 0.04 },
+];
 export function buildRanges(seed: number) {
-  const m = new Mesh(), F = -260;
-  skyline(m, seed, 1, { R: 3400, floor: F - 20, lo: 420, hi: 1050, peaks: 15, body: M.FAR, snow: M.FARSNOW, snowline: F + 560, fold: 0.03 });
-  skyline(m, seed, 2, { R: 2500, floor: F - 10, lo: 230, hi: 620, peaks: 12, body: M.MTN, snow: M.MTNSNOW, snowline: F + 430, fold: 0.04 });
+  const m = new Mesh();
+  for (const r of RANGES) skyline(m, seed, r.k, r);
   return new Float32Array(m.v);
+}
+/** the skylines' profiles, farthest first: each its radius, floor, snow line, materials, its crest's height round the eye
+ * and its summits (angle, height, half-widths each side) — for painting a range by its ridges rather than its faces */
+export function rangeProfiles(seed: number) {
+  return RANGES.map((r) => { const { crest, peaks } = skyline(new Mesh(), seed, r.k, r); return { ...r, crest, peaks }; });
 }
 
 /** the valley: its floor (flat, one blue), the river winding over it (pale), and a foothill ridge or two in the middle

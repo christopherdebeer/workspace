@@ -19,7 +19,7 @@
  * is, its green the paint's relief (the ridges catch the light), its blue which of the stroke's two colours.
  */
 import type { Course } from './course';
-import { M } from './mesh';
+import { M, rangeProfiles } from './mesh';
 import { ground } from './ground';
 import { lines, plain, trackY } from './ruts';
 
@@ -128,6 +128,7 @@ export function stampAtlas(): { data: Uint8Array; w: number; h: number } {
 export const STROKE = 20;
 export const NEVER = -1e9;
 const ROAD = new Set<number>([M.TRACK, M.RUT]), GROUND = new Set<number>([M.SNOW, M.SHADOW]), ROCKY = new Set<number>([M.ROCK, M.UMBER, M.GOUGE]);
+const RANGE = new Set<number>([M.MTN, M.MTNSNOW, M.FAR, M.FARSNOW, M.RIDGE]);
 const BACKDROP = new Set<number>([M.MTN, M.MTNSNOW, M.FAR, M.FARSNOW, M.RIDGE, M.FOREST, M.VALLEY]);
 const hash2 = (a: number, b: number) => { let h = Math.imul(a | 0, 0x27d4eb2d) ^ Math.imul(b | 0, 0x165667b1); h = Math.imul(h ^ (h >>> 15), 0x85ebca6b); return (h ^ (h >>> 13)) >>> 0; };
 
@@ -207,6 +208,52 @@ export function strokesOver(verts: Float32Array, seed: number, line: number[] | 
     const fx = nx * ny, fy = ny * ny - 1, fz = nz * ny, fl = Math.hypot(fx, fy, fz);
     const across = () => { const a = ny * fz - nz * fy, b = nz * fx - nx * fz, c = nx * fy - ny * fx, l = Math.hypot(a, b, c) || 1; return [a / l, b / l, c / l]; };
     const along = () => { const dp = lx * nx + lz * nz; const x = lx - nx * dp, y = -ny * dp, z = lz - nz * dp; const l = Math.hypot(x, y, z) || 1; return [x / l, y / l, z / l]; };
+    if (backdrop && RANGE.has(m)) {
+      // (its outward side: toward the eye at the middle of the ring, not up; a face turned from there is the far side of a
+      // spur, and isn't painted (the ranges are painted by order, not depth, so it would paint over the side you see))
+      if (nx * mx + ny * (ay + by + cy) / 3 + nz * mz > 0) { nx = -nx; ny = -ny; nz = -nz; }
+      // (a range's face as the studies paint it: strokes set off from the face's upper edge (its crest, where it has one)
+      // and pulled down its fall, so the ridge and the skyline are cut clean by the strokes' heads, and the two sides of a
+      // spur, falling opposite ways, meet in a chevron. The face is cut into columns down its fall; each stroke's head is
+      // at its column's top, or a way below it, most near the top; and they're long)
+      const steep = fl > 0.12; let [tx, ty, tz] = steep ? [fx / fl, fy / fl, fz / fl] : along();
+      // (leaned toward the way the face's upper edge runs down, as much as that edge falls: so on a peak's flanks the strokes
+      // run with the ridges, fanning from the summit, as the study has them; on a level crest, straight down)
+      {
+        const V = [[ax, ay, az], [bx, by, bz], [cx, cy, cz]].sort((p, q) => q[1] - p[1]);
+        let ex = V[1][0] - V[0][0], ey = V[1][1] - V[0][1], ez = V[1][2] - V[0][2]; const el = Math.hypot(ex, ey, ez) || 1;
+        ex /= el; ey /= el; ez /= el;
+        const lean = Math.min(0.72, Math.abs(ey) * 2.5);
+        const x = tx * (1 - lean) + ex * lean, y = ty * (1 - lean) + ey * lean, z = tz * (1 - lean) + ez * lean, l = Math.hypot(x, y, z) || 1;
+        if (steep) [tx, ty, tz] = [x / l, y / l, z / l];
+      }
+      const qx = ny * tz - nz * ty, qy = nz * tx - nx * tz, qz = nx * ty - ny * tx;
+      // (the face in its own plane: s down the fall, c across it)
+      const P = [[0, 0], [ux * tx + uy * ty + uz * tz, ux * qx + uy * qy + uz * qz], [vx * tx + vy * ty + vz * tz, vx * qx + vy * qy + vz * qz]];
+      const c0 = Math.min(P[0][1], P[1][1], P[2][1]), c1 = Math.max(P[0][1], P[1][1], P[2][1]), wide = c1 - c0;
+      const column = (c: number) => {
+        let lo = Infinity, hi = -Infinity;
+        for (let e = 0; e < 3; e++) {
+          const A = P[e], B = P[(e + 1) % 3];
+          if ((c - A[1]) * (c - B[1]) > 0 || A[1] === B[1]) continue;
+          const sv = A[0] + ((c - A[1]) / (B[1] - A[1])) * (B[0] - A[0]); lo = Math.min(lo, sv); hi = Math.max(hi, sv);
+        }
+        return [lo, hi];
+      };
+      const snowy = m === M.MTNSNOW || m === M.FARSNOW;
+      const tall = (area * 2) / Math.max(1, wide), Lm = Math.max(90, Math.min(900, tall * 1.1)), Wm = Math.max(45, Math.min(110, Lm * 0.14));
+      let k = Math.min(260, Math.ceil((area * 4) / (Lm * Wm)));
+      while (k-- > 0) {
+        const c = c0 + wide * R(), [lo, hi] = column(c);
+        if (!(hi > lo)) continue;
+        // (a stroke may run on past its face's foot, over the faces below, which are painted after it)
+        const col = hi - lo, L = Math.max(col, Lm * 0.6) * (0.8 + R() * 0.35) + 12, sc = lo + Math.max(0, col - L) * R() + L * 0.47;
+        const j = (R() - 0.5) * 0.1, cj = Math.cos(j), sj = Math.sin(j);
+        const dx = tx * cj + qx * sj, dy = ty * cj + qy * sj, dz = tz * cj + qz * sj;
+        out.push(ax + tx * sc + qx * c, ay + ty * sc + qy * c, az + tz * sc + qz * c, mt, dx, dy, dz, L, nx, ny, nz, Wm * (0.8 + R() * 0.4), R(), snowy ? [0, 7, 0, 11][Math.floor(R() * 4)] : [0, 7, 0, 5][Math.floor(R() * 4)], (R() - 0.5) * 0.1, 0, NEVER, 0, 0, 1);
+      }
+      continue;
+    }
     if (backdrop) {
       // (the far off as the reference has it: a few large calm planes, level, laid edge to edge so no paper shows through)
       // (a peak's faces brushed down their fall, as a painter cuts a mountain's planes, snow and rock alike; only what's
@@ -231,15 +278,76 @@ export function strokesOver(verts: Float32Array, seed: number, line: number[] | 
   return new Float32Array(out);
 }
 
+/** The ranges painted by their ridges, as the study paints a peak: each summit two planes, the strokes on each flank laid
+ * parallel to that flank's ridge line, so the skyline is cut clean by strokes running along it and the two sides meet at
+ * the summit in a chevron; snow above the snow line (lower in the gullies), the range's body below. Farthest range first,
+ * and in each the strokes low to high, so the ones along the crest lie on top. Each stroke's normal is its flank's: toward
+ * the eye and turned toward the side it falls to, so the far-off's light (from the left of the way you look) lights one
+ * flank and leaves the other in shade. */
+export function rangeStrokes(seed: number): Float32Array {
+  const out: number[] = [];
+  for (const g of rangeProfiles(seed)) {
+    const R0 = rng(seed * 131 + g.k * 17), list: number[][] = [];
+    const TAU = Math.PI * 2, wrap = (d: number) => Math.atan2(Math.sin(d), Math.cos(d));
+    // (the summit that makes the crest at a: the highest of them there)
+    const owner = (a: number) => {
+      let best = -1, bh = -Infinity;
+      for (let i = 0; i < g.peaks.length; i++) {
+        const pk = g.peaks[i], d = wrap(a - pk.a), w = d < 0 ? pk.wl : pk.wr, f = Math.max(0, 1 - Math.abs(d) / w), v = pk.h * Math.pow(f, pk.p);
+        if (v > bh) { bh = v; best = i; }
+      }
+      return g.peaks[best];
+    };
+    const W0 = g.R * 0.017, L0 = g.R * 0.085;
+    const n = Math.round((TAU * g.R * (g.hi * 0.55)) / (L0 * W0) * 6.5);
+    for (let i = 0; i < n; i++) {
+      const a = R0() * TAU, top = g.crest(a), y = g.floor + (top - g.floor) * Math.pow(R0(), 0.7);
+      const pk = owner(a), d = wrap(a - pk.a), side = d < 0 ? -1 : 1, w = side < 0 ? pk.wl : pk.wr;
+      // (the flank's ridge line, from the summit to where it meets the floor, in metres round and up)
+      const run = w * g.R, drop = Math.max(40, pk.h * 0.85), rl = Math.hypot(run, drop);
+      const da = (side * run) / rl, dy = -drop / rl; // down the ridge, away from the summit
+      const ca = Math.cos(a), sa = Math.sin(a), tx = ca, tz = -sa; // round (toward +a)
+      let dx = tx * da, dz = tz * da, ddy = dy;
+      // (a little of the way straight down mixed in lower on the flank, as the strokes fan out under the ridge)
+      const low = 1 - (y - g.floor) / Math.max(1, top - g.floor);
+      ddy -= low * 0.35; { const l = Math.hypot(dx, ddy, dz); dx /= l; ddy /= l; dz /= l; }
+      const L = L0 * (0.7 + R0() * 0.6) * (0.75 + 0.5 * (1 - low)), W = W0 * (0.8 + R0() * 0.5);
+      // (its head kept under the crest: slid down along itself till it's under, so the ones along the ridge run with it)
+      let cy = y, ca2 = a;
+      for (let t = 0; t < 6; t++) {
+        const ha = ca2 - (dx * tx + dz * tz) * (L * 0.5) / g.R, hy = cy - ddy * L * 0.5;
+        const over = hy - g.crest(ha);
+        if (over <= 0) break;
+        ca2 += (dx * tx + dz * tz) * over / g.R * 1.2; cy += ddy * over * 1.2;
+      }
+      if (cy < g.floor - 30) continue;
+      const pa = ca2, px = Math.sin(pa) * g.R, pz = Math.cos(pa) * g.R;
+      const rx = Math.sin(pa), rz = Math.cos(pa), tx2 = Math.cos(pa), tz2 = -Math.sin(pa);
+      // (the flank's normal: toward the eye, up a little, turned toward the side it falls to)
+      let nx = -rx * 0.7 + tx2 * side * 0.6, ny = 0.45, nz = -rz * 0.7 + tz2 * side * 0.6; { const l = Math.hypot(nx, ny, nz); nx /= l; ny /= l; nz /= l; }
+      const sx = tx2 * da, sz = tz2 * da; let ex = sx, ey = ddy, ez = sz; { const l = Math.hypot(ex, ey, ez); ex /= l; ey /= l; ez /= l; }
+      const snowAt = g.snowline - 70 * (0.5 + 0.5 * Math.sin(pa * 23 + g.k)) - (top - g.snowline) * 0.25 * (R0() - 0.3);
+      const snowy = cy > snowAt;
+      list.push([px, cy, pz, (snowy ? g.snow : g.body) + 0.5, ex, ey, ez, L, nx, ny, nz, W, R0(), [0, 7, 0, 1][Math.floor(R0() * 4)], (R0() - 0.5) * 0.08, 0, NEVER, 0, 0, 1]);
+    }
+    list.sort((p, q) => p[1] - q[1]);
+    for (const st of list) out.push(...st);
+  }
+  return new Float32Array(out);
+}
+
 /** The sky's strokes: level marks round the eye from the horizon up past the top, close enough to cover it, darkening as
  * they rise, a few paler. */
 export function skyStrokes(seed: number): Float32Array {
-  const R = rng(seed * 97 + 3), out: number[] = [], RAD = 3200;
-  for (let i = 0; i < 9000; i++) {
+  // (as the study has it: long strokes all on one slant, rising one way round the eye, in three blues that darken as they
+  // rise, overlapping; no pale clouds)
+  const R = rng(seed * 97 + 3), out: number[] = [], RAD = 3200, SLANT = 0.32;
+  for (let i = 0; i < 6500; i++) {
     const a = R() * Math.PI * 2, el = -0.02 + Math.pow(R(), 1.2) * 1.46, y = RAD * Math.tan(Math.min(1.45, el)) - 120;
-    const x = Math.sin(a) * RAD, z = Math.cos(a) * RAD, tx = Math.cos(a), tz = -Math.sin(a);
-    const len = RAD * (0.08 + R() * 0.11) * (1 + el * 1.5), wid = len * (0.3 + R() * 0.16);
-    out.push(x, y, z, Math.max(0, el) / 1.44, tx, 0, tz, len, -Math.sin(a), 0, -Math.cos(a), wid, R(), [7, 7, 11, 10, 0][Math.floor(R() * 5)], (R() - 0.5) * 0.25, R() < 0.1 ? 2 : 1, NEVER, 0, 0, 0);
+    const x = Math.sin(a) * RAD, z = Math.cos(a) * RAD, cs = Math.cos(SLANT), sn = Math.sin(SLANT);
+    const len = RAD * (0.18 + R() * 0.18) * (1 + el * 1.5), wid = len * (0.17 + R() * 0.08);
+    const band = Math.max(0, Math.min(1, Math.floor((Math.max(0, el) / 1.0 + (R() - 0.5) * 0.35) * 3) / 2));
+    out.push(x, y, z, band * 0.8, Math.cos(a) * cs, sn, -Math.sin(a) * cs, len, -Math.sin(a), 0, -Math.cos(a), wid, R(), [0, 7, 0, 1][Math.floor(R() * 4)], 0.12 + R() * 0.18, R() < 0.14 ? 2 : 1, NEVER, 0, 0, 0);
   }
   return new Float32Array(out);
 }
@@ -251,7 +359,7 @@ const VS = `#version 300 es
 layout(location=0) in vec2 aQ; layout(location=1) in vec4 a0; layout(location=2) in vec4 a1; layout(location=3) in vec4 a2; layout(location=4) in vec4 a3; layout(location=5) in vec4 a4;
 uniform mat4 uVP, uPrev; uniform vec3 uOff, uEye, uSun; uniform vec3 uPal[84]; uniform float uFog, uK, uMinW, uStretch, uDens, uGrow, uReveal; uniform vec2 uRes, uFront;
 uniform vec3 uSkyLo, uSkyHi, uSkyPale, uSmear;
-out vec2 vUv; out vec3 vA; out vec3 vB; flat out float vStamp; out float vFresh;
+out vec2 vUv; out vec3 vA; out vec3 vB; flat out float vStamp; out float vFresh; flat out float vTex;
 float h(float s, float k){ return fract(sin(s*k)*43758.5453); }
 void main(){
   vec3 w = a0.xyz + uOff, n = a2.xyz, T = normalize(a1.xyz); float seed = a3.x, kind = a3.w; bool sky = kind > .5 && kind < 2.5, both = kind > 2.5;
@@ -269,6 +377,8 @@ void main(){
   // (not the backdrop's: seen far off and edge on, a peak's flanks turned (by their normal) from the eye were left bare
   // paper; what's behind a range is hidden by its depth anyway)
   if (!sky && !both && !far) g *= smoothstep(-.02, .12, dot(n, V));
+  int mt0 = int(a0.w);
+  if (far && (mt0 == 6 || mt0 == 7 || mt0 == 12 || mt0 == 13 || mt0 == 14) && dot(n, V) < 0.) g = 0.;
   if (!sky && dot(n, V) < 0.) n = -n;
   // (thinned with distance: a stroke past its turn shrinks away over a little more distance, rather than going at once)
   g *= clamp((keep - h(seed, 12.9898))/.12 + 1., 0., 1.);
@@ -301,10 +411,10 @@ void main(){
   float lift = sky ? 0. : both ? .02 + max(len, wid)*.5 : .25 + dist*.02 + wid*.5;
   vec4 cl = uVP*vec4(p + V*min(lift, dist*.5), 1.);
   gl_Position = vec4(cq.xy, cl.z/cl.w*cq.w, cq.w);
-  vUv = vec2(u, aQ.y*.5 + .5); vStamp = a3.y; vFresh = fresh;
+  vUv = vec2(u, aQ.y*.5 + .5); vStamp = a3.y; vFresh = fresh; vTex = sky || far ? 1. : 0.;
   if (sky) {
     vec3 col = mix(uSkyLo, uSkyHi, smoothstep(0., .8, a0.w));
-    if (kind > 1.5) col = mix(col, uSkyPale, .55);
+    if (kind > 1.5) col = mix(col, uSkyPale, .35);
     vA = col*(.96 + h(seed, 3.7)*.08); vB = col*(1.04 + h(seed, 5.1)*.08);
     return;
   }
@@ -313,7 +423,13 @@ void main(){
   float l = dot(n, uSun) + (tone/.9 - .5)*.42 + (far ? 0. : (h(seed, 78.233) - .5)*.12);
   int b = l > .62 ? 0 : l > .3 ? 1 : l > -.05 ? 2 : 3;
   int b2 = clamp(b + (h(seed, 3.1) > .5 ? 1 : -1), 0, 3);
-  vec3 A = uPal[mt*4 + b], B = mix(A, uPal[mt*4 + b2], far ? .12 : .45);
+  // (the far off in two tones, as the study has it: a face is lit or in shade, so a range reads as a few planes; a stroke
+  // now and then of the other side's colour streaked through)
+  // (lit as a painter lights the far off, not by the sun: from the left of the way you look at it, high and a little from
+  // in front, so a peak shows a lit face and a shaded one whichever way you look, as the study has it)
+  vec3 rr = normalize(vec3(w.x - uEye.x, 0., w.z - uEye.z)), Lf = normalize(vec3(rr.z, 0., -rr.x)*.75 + vec3(0., .55, 0.) - rr*.3);
+  if (far) { bool lit = dot(n, Lf) > .3; float r = h(seed, 3.1); b = lit ? (r > .5 ? 0 : 1) : 3; b2 = lit ? (r > .75 ? 2 : 1) : (r > .7 ? 2 : 3); }
+  vec3 A = uPal[mt*4 + b], B = mix(A, uPal[mt*4 + b2], far ? .35 : .45);
   float fd = length((w - uEye).xz), f = floor(clamp((fd - 80.)/520., 0., 1.)*4.)/4.;
   vec3 fogs[4] = vec3[4](vec3(.62, .66, .9), vec3(.33, .45, .88), vec3(.14, .33, .84), vec3(.09, .26, .78));
   float fk = min(1., f*1.1)*uFog;
@@ -325,12 +441,13 @@ void main(){
 }`;
 const FS = `#version 300 es
 precision highp float;
-in vec2 vUv; in vec3 vA; in vec3 vB; flat in float vStamp; in float vFresh; uniform sampler2D uAtlas; out vec4 o;
+in vec2 vUv; in vec3 vA; in vec3 vB; flat in float vStamp; in float vFresh; flat in float vTex; uniform sampler2D uAtlas; out vec4 o;
 void main(){
   vec2 cell = vec2(mod(vStamp, ${STAMP.COLS}.), floor(vStamp/${STAMP.COLS}.));
   vec4 s = texture(uAtlas, (cell + vUv)/vec2(${STAMP.COLS}., ${STAMP.ROWS}.));
   if (s.r < .05) discard;
-  vec3 c = mix(vA, vB, s.b)*(.9 + .2*s.g);
+  // (the bristles' ridges and grooves: on the far off and the sky hard, as loaded paint dragged in one long pull)
+  vec3 c = mix(vA, vB, s.b)*mix(.9 + .2*s.g, .72 + .5*s.g, vTex);
   // (fresh paint, just laid: a little lighter, wet)
   c = mix(c, c*1.1 + .04, vFresh*.3);
   // (premultiplied, blended in a fixed order: no dithered coverage to crawl as the strokes shift)

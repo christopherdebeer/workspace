@@ -17,7 +17,7 @@ import type { Rider, Event } from './sim';
 import { GEARS } from './audio';
 import { buildRuts, Trail } from './ruts';
 import { buildGouges } from './gouge';
-import { Painter, Strokes, Brush2D, strokesOver, skyStrokes, lineOf, courseStrokes } from './paint';
+import { Painter, Strokes, Brush2D, strokesOver, skyStrokes, lineOf, courseStrokes, rangeStrokes } from './paint';
 
 const VS = `#version 300 es
 in vec4 aP; uniform mat4 uVP; uniform vec3 uOff; uniform float uZj; out vec3 vW; flat out int vM;
@@ -146,7 +146,7 @@ export class Renderer {
     const gl = this.gl;
     if (this.paint && !this.painter) {
       this.painter = new Painter(gl, new Float32Array(PALETTE.flat().map(hex).flat()), SUN);
-      this.backStrokes = [this.painter.make(strokesOver(buildRanges(this.course.seed), this.course.seed * 31, null, 45000)), this.painter.make(strokesOver(buildValley(this.course.seed), this.course.seed * 37, null, 30000))];
+      this.backStrokes = [this.painter.make(rangeStrokes(this.course.seed)), this.painter.make(strokesOver(buildValley(this.course.seed), this.course.seed * 37, null, 30000))];
       this.skyS = this.painter.make(skyStrokes(this.course.seed)); this.painter.stretch = this.stretchWanted; if (this.leadWanted) this.painter.lead = this.leadWanted;
       for (const b of this.chunks.values()) b.free();
       this.chunks.clear();
@@ -208,14 +208,17 @@ export class Renderer {
       // its whole outline, and nothing would paint there)
       gl.enable(gl.DEPTH_TEST); gl.clear(gl.DEPTH_BUFFER_BIT); gl.stencilFunc(gl.ALWAYS, 1, 0xff); near();
       gl.stencilOp(gl.KEEP, gl.KEEP, gl.KEEP); gl.disable(gl.DEPTH_TEST);
-      // (the sky, only where nothing stands)
-      gl.colorMask(true, true, true, true); gl.stencilFunc(gl.EQUAL, 0, 0xff);
+      // (the sky, wherever nothing near stands: the ranges are painted over it, as a painter would)
+      gl.colorMask(true, true, true, true); gl.stencilFunc(gl.NOTEQUAL, 1, 0xff);
       paintBegin(); if (this.skyS) pt.draw(this.skyS, view.eye, false); pt.end(); gl.useProgram(this.prog);
       // (the backdrop, by its own depth, only where nothing near stands)
       gl.enable(gl.DEPTH_TEST); gl.clear(gl.DEPTH_BUFFER_BIT); gl.colorMask(false, false, false, false); gl.stencilFunc(gl.ALWAYS, 0, 0xff);
       gl.uniform3f(this.u.uOff, off[0], off[1], off[2]); this.ranges.draw(); this.valley.draw();
       gl.colorMask(true, true, true, true); gl.stencilFunc(gl.NOTEQUAL, 1, 0xff);
-      paintBegin(); for (const b of this.backStrokes) pt.draw(b, off, false); pt.end(); gl.useProgram(this.prog);
+      // (the ranges over the sky and over each other, farthest first, by the order they're laid, not by depth: so their
+      // strokes run over the skyline as a brush does, and a nearer range is painted over the one behind it; then the
+      // valley, by depth, so its floor doesn't paint over the ranges' feet it lies behind)
+      paintBegin(); gl.disable(gl.DEPTH_TEST); pt.draw(this.backStrokes[0], off, false); gl.enable(gl.DEPTH_TEST); pt.draw(this.backStrokes[1], off, false); pt.end(); gl.useProgram(this.prog);
       gl.disable(gl.STENCIL_TEST);
       // (what's near: its facets only in the depth; then its strokes, laid in the world on them and lifted a little toward
       // the eye, tested against that depth pixel by pixel, far chunks first)
