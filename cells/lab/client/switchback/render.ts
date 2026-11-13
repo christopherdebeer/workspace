@@ -165,7 +165,7 @@ export class Renderer {
     if (dt === 0 || jump) this.eyeV = dt === 0 ? this.eyeV : [0, 0, 0];
     this.prevEye0 = view.eye.slice();
     const smear = dt > 0 ? this.eyeV.map((v) => v * 0.09) : [0, 0, 0];
-    const pt = this.painter, paintBegin = () => pt!.begin(this.vp, prev, view.eye, 1 / Math.tan(fov / 2), this.canvas.width, this.canvas.height, this.dpr, smear);
+    const pt = this.paint ? this.painter : null, paintBegin = () => pt!.begin(this.vp, prev, view.eye, 1 / Math.tan(fov / 2), this.canvas.width, this.canvas.height, this.dpr, smear);
     gl.viewport(0, 0, this.canvas.width, this.canvas.height);
     const sky = hex(SKY); gl.clearColor(sky[0], sky[1], sky[2], 1); gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
     gl.enable(gl.DEPTH_TEST); gl.disable(gl.CULL_FACE);

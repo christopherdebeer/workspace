@@ -42,7 +42,7 @@ export const EXPERIMENTS: Experiment[] = [
     id: 'switchback', title: 'Switchback', group: 'Play',
     blurb: 'A downhill motocross run down a mountain made as you ride it: drawn flat and faceted in a few hard colours (ultramarine sky, pale snow, charcoal rock, orange), its speed drawn as vector shards, smears and flying chunks rather than blur. Drag to steer, drag down to brake; kickers over gaps, whoops, the wall, the drop.',
     page: 'static/switchback.html', preview: 'preview&auto=tricks&seed=3&t=3', readme: 'static/switchback.md',
-    presets: [{ label: 'ride', query: 'seed=1' }, { label: 'another mountain', query: 'seed=7' }, { label: 'watch', query: 'seed=3&auto=tricks' }, { label: 'painted', query: 'seed=1&paint=1' }, { label: 'watch, painted', query: 'seed=3&auto=tricks&paint=1' }],
+    presets: [{ label: 'ride', query: 'seed=1' }, { label: 'another mountain', query: 'seed=7' }, { label: 'watch', query: 'seed=3&auto=tricks' }, { label: 'cut facets', query: 'seed=1&paint=0' }, { label: 'watch, cut', query: 'seed=3&auto=tricks&paint=0' }],
   },
   {
     id: 'autograph', title: 'Autograph', group: 'Drawings',

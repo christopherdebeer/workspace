@@ -14,7 +14,7 @@
  * the lab's listing shows it, the sim's run with its score and calls, riding again when it ends); `look=side|front|rear|quarter`
  * a close look at the bike. Any of these skips the title. `ruts=bolts` the ruts as they were before they were carved
  * (`ruts=light`, with them, paler than the road). `wake=fixed` the air on the rider as it was
- * (three streaks set at the helmet and the bars); `wake=0` none on the rider at all. `paint=1` everything painted in brush strokes, laid by a paint front ahead of you (`stretch=0…2` how far its strokes stretch along their motion; `front=420,110` how far ahead the front lays the masses and the detail).
+ * (three streaks set at the helmet and the bars); `wake=0` none on the rider at all. `paint=0|1` the look for this page (painted is the default, and a setting): everything painted in brush strokes, laid by a paint front ahead of you (`stretch=0…2` how far its strokes stretch along their motion; `front=420,110` how far ahead the front lays the masses and the detail).
  */
 import { Course } from './course';
 import { BODY, Rider, TRICKS, autoSteer, VMAX } from './sim';
@@ -60,7 +60,8 @@ if (q.get('wake') === 'fixed') rd.wake = 'fixed'; else if (q.get('wake') === '0'
 /** `ruts=bolts`: the ruts as they were before they were carved */
 if (q.get('ruts') === 'bolts') { rd.rutStyle = 'bolts'; rd.trail.cut = false; }
 /** `paint=1`: the mountain laid in brush strokes over its facets (paint.ts); `stretch=` how far its strokes stretch along their motion (0 none, 1 as drawn, 2 twice) */
-rd.paint = q.get('paint') === '1' || q.get('paint') === 'brush';
+/** the look: painted (the default) or cut facets; kept in the settings, `paint=0|1` for this page only */
+const paintFlag = q.has('paint') ? q.get('paint') !== '0' : null;
 /** `front=420,110`: how far ahead of the rider the paint front lays the masses and the detail (m) */
 if (q.has('front')) { const [a, b] = (q.get('front') ?? '').split(',').map(Number); if (a > 0 && b > 0) rd.leadWanted = [a, b]; }
 if (q.has('stretch')) rd.stretchWanted = Math.max(0, Math.min(2, Number(q.get('stretch')) || 0));
@@ -68,8 +69,8 @@ rd.style = q.get('rider') === 'facets' ? 'facets' : q.get('rider') === 'sil' ? '
 const sound = new Sound();
 
 // (settings, kept in this browser where it can)
-type Settings = { sound: boolean; volume: number; camera: 'close' | 'mid' | 'far'; mode: Mode; v: number };
-const settings: Settings = { sound: true, volume: 0.7, camera: 'mid', mode: 'lives', v: 2 };
+type Settings = { sound: boolean; volume: number; camera: 'close' | 'mid' | 'far'; mode: Mode; paint: boolean; v: number };
+const settings: Settings = { sound: true, volume: 0.7, camera: 'mid', mode: 'lives', paint: true, v: 2 };
 try {
   // (settings kept before THREE LIVES was the first choice: the mode they kept was only ever the old first one, so it goes)
   const kept = JSON.parse(localStorage.getItem('switchback') ?? '{}');
@@ -77,6 +78,8 @@ try {
   Object.assign(settings, kept, { v: 2 });
 } catch { /* (private, or blocked: defaults) */ }
 if (!MODES[settings.mode]) settings.mode = 'lives';
+if (typeof settings.paint !== 'boolean') settings.paint = true;
+rd.paint = paintFlag ?? settings.paint;
 const keep = () => { try { localStorage.setItem('switchback', JSON.stringify(settings)); } catch { /* (no matter) */ } };
 /** `mode=run|lives|time|endless` for this page only */
 const modeFlag = q.get('mode') as Mode | null;
@@ -175,7 +178,7 @@ function view(dt: number, t: number): View {
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const menu = $('menu'), go = $<HTMLButtonElement>('go'), again = $<HTMLButtonElement>('again'), finishBtn = $<HTMLButtonElement>('finish'), quit = $<HTMLButtonElement>('quit');
 const sndBtn = $<HTMLButtonElement>('snd'), vol = $<HTMLInputElement>('vol'), another = $<HTMLButtonElement>('another');
-const camBtns = [...document.querySelectorAll<HTMLButtonElement>('[data-cam]')], modeBtns = [...document.querySelectorAll<HTMLButtonElement>('[data-mode]')];
+const lookBtns = [...document.querySelectorAll<HTMLButtonElement>('[data-look]')], camBtns = [...document.querySelectorAll<HTMLButtonElement>('[data-cam]')], modeBtns = [...document.querySelectorAll<HTMLButtonElement>('[data-mode]')];
 const toBoard = $<HTMLButtonElement>('toBoard'), boardBtns = [...document.querySelectorAll<HTMLButtonElement>('[data-board]')];
 const panels = { main: $('main'), prefs: $('prefs'), board: $('board'), card: $('card') };
 /** which of the menu's panels shows: the main one (ride, the mode), the settings, the leaderboard, a finished run's card */
@@ -190,6 +193,7 @@ function showSettings() {
   sndBtn.textContent = settings.sound ? 'ON' : 'OFF'; sndBtn.setAttribute('aria-pressed', String(settings.sound));
   vol.value = String(Math.round(settings.volume * 100)); vol.disabled = !settings.sound;
   for (const b of camBtns) b.setAttribute('aria-pressed', String(b.dataset.cam === settings.camera));
+  for (const b of lookBtns) b.setAttribute('aria-pressed', String((b.dataset.look === 'paint') === rd.paint));
   for (const b of modeBtns) b.setAttribute('aria-pressed', String(b.dataset.mode === settings.mode));
   const best = bestOf(settings.mode, seed), m = settings.mode, mark = (b: { score: number; time: number }) => (m === 'time' ? clock(b.time) : fmt(b.score));
   $('about').textContent = `${MODES[m].about} · PAR ${mark(PAR[m])}${best ? ` · BEST ${mark(best)}` : ''}`;
@@ -290,6 +294,7 @@ $('fromBoard').addEventListener('click', () => { show('main'); toBoard.focus(); 
 sndBtn.addEventListener('click', () => { settings.sound = !settings.sound; keep(); showSettings(); if (settings.sound) sound.start(); });
 vol.addEventListener('input', () => { settings.volume = Number(vol.value) / 100; keep(); showSettings(); });
 for (const b of camBtns) b.addEventListener('click', () => { settings.camera = b.dataset.cam as Settings['camera']; keep(); showSettings(); });
+for (const b of lookBtns) b.addEventListener('click', () => { settings.paint = rd.paint = b.dataset.look === 'paint'; keep(); showSettings(); });
 for (const b of modeBtns) b.addEventListener('click', () => { settings.mode = b.dataset.mode as Mode; keep(); showSettings(); });
 another.addEventListener('click', () => { const u = new URL(location.href); u.searchParams.set('seed', String(1 + Math.floor(Math.random() * 9999))); location.href = u.toString(); });
 $('menuBtn').addEventListener('click', () => open());

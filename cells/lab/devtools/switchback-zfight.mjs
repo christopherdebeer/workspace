@@ -8,7 +8,7 @@ const out = new URL('./out/', import.meta.url).pathname;
 const qs = process.argv.slice(2).length ? process.argv.slice(2) : ['seed=1&t=9.5', 'seed=1&t=40', 'seed=3&t=60'];
 await withWood(async (lab) => {
   for (const [i, q] of qs.entries()) {
-    const p = await lab.open(`${q}&still&preview&fx=0&${process.env.JIT ?? 'zjit'}`, { width: 960, height: 540 });
+    const p = await lab.open(`${q.includes('paint=') ? q : q + '&paint=0'}&still&preview&fx=0&${process.env.JIT ?? 'zjit'}`, { width: 960, height: 540 });
     await p.waitForTimeout(Number(process.env.WAIT ?? 6000));
     const r = await p.evaluate(async () => {
       const c = document.getElementById('world'), grab = () => new Promise((res) => requestAnimationFrame(() => { const t = document.createElement('canvas'); t.width = c.width; t.height = c.height; const x = t.getContext('2d'); x.drawImage(c, 0, 0); res(x.getImageData(0, 0, t.width, t.height)); }));
