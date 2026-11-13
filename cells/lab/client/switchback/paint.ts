@@ -20,50 +20,96 @@
  */
 import type { Course } from './course';
 import { M } from './mesh';
+import { ground } from './ground';
 
 // ─── the stamps ─────────────────────────────────────────────────────────────────────────────────────────────────────────
 
-/** stamp kinds: a flat brush, a round one, a short dab, a dry flat (bristles running out), a long flat (for the far off) */
-const KINDS = ['flat', 'flat', 'round', 'dab', 'round', 'dry', 'dry', 'long'] as const;
-export const STAMP = { W: 256, H: 64, COLS: 2, ROWS: 4 } as const;
+/** The stamps, each a kind of brush (and two of some, loaded differently):
+ * 0-1 flat · 2 round · 3 dab · 4 round · 5-6 dry flat (running out) · 7 long flat (for the far off) · 8 flick (heavy at the
+ * start, whipped thin, curving) · 9 impasto (few thick bristles, deep ridges, ragged edges) · 10 scumble (broken, dragged
+ * dry over the tooth) · 11 wash (soft-edged, smooth, little relief) · 12 fan (bristles splayed apart along it) · 13 knife
+ * (a palette knife: flat, hard-edged, cut off on a slant, paint ridged at its sides) · 14 rake (a few distinct lines) ·
+ * 15 flick, the other way. */
+const KINDS = ['flat', 'flat', 'round', 'dab', 'round', 'dry', 'dry', 'long', 'flick', 'impasto', 'scumble', 'wash', 'fan', 'knife', 'rake', 'flick'] as const;
+export const STAMP = { W: 256, H: 64, COLS: 4, ROWS: 4 } as const;
 
 function rng(seed: number) { let a = seed >>> 0; return () => { a = (a + 0x9e3779b9) >>> 0; let t = a; t = Math.imul(t ^ (t >>> 16), 0x21f0aaad); t = Math.imul(t ^ (t >>> 15), 0x735a2d97); return ((t ^ (t >>> 15)) >>> 0) / 4294967296; }; }
 const ss = (a: number, b: number, x: number) => { const t = Math.max(0, Math.min(1, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
+
+/** each kind's brush: bristles (lanes), how distinct (groove: 0 none … 1 deep), how they run dry, how ragged, how wavy */
+const BRUSHES: Record<(typeof KINDS)[number], { lanes: [number, number]; groove: number; dry: number; rag: number; wav: number; soft: number; relief: number }> = {
+  flat: { lanes: [8, 13], groove: 0.12, dry: 0.18, rag: 0.3, wav: 0.07, soft: 0.18, relief: 0.7 },
+  round: { lanes: [8, 12], groove: 0.12, dry: 0.2, rag: 0.3, wav: 0.07, soft: 0.2, relief: 0.7 },
+  dab: { lanes: [6, 8], groove: 0.15, dry: 0.1, rag: 0.35, wav: 0.05, soft: 0.2, relief: 0.8 },
+  dry: { lanes: [10, 15], groove: 0.25, dry: 0.65, rag: 0.55, wav: 0.07, soft: 0.15, relief: 0.6 },
+  long: { lanes: [10, 14], groove: 0.1, dry: 0.15, rag: 0.25, wav: 0.03, soft: 0.2, relief: 0.5 },
+  flick: { lanes: [9, 12], groove: 0.15, dry: 0.3, rag: 0.35, wav: 0.16, soft: 0.2, relief: 0.75 },
+  impasto: { lanes: [5, 7], groove: 0.55, dry: 0.08, rag: 0.6, wav: 0.06, soft: 0.1, relief: 1.3 },
+  scumble: { lanes: [12, 18], groove: 0.2, dry: 0.45, rag: 0.95, wav: 0.08, soft: 0.25, relief: 0.4 },
+  wash: { lanes: [26, 34], groove: 0.02, dry: 0.1, rag: 0.12, wav: 0.04, soft: 0.45, relief: 0.15 },
+  fan: { lanes: [6, 8], groove: 0.9, dry: 0.35, rag: 0.4, wav: 0.1, soft: 0.1, relief: 0.6 },
+  knife: { lanes: [30, 40], groove: 0.03, dry: 0.05, rag: 0.15, wav: 0.0, soft: 0.04, relief: 0.5 },
+  rake: { lanes: [4, 6], groove: 1, dry: 0.3, rag: 0.4, wav: 0.08, soft: 0.1, relief: 0.6 },
+};
 
 /** The atlas: STAMP.COLS × STAMP.ROWS stamps, RGBA bytes. */
 export function stampAtlas(): { data: Uint8Array; w: number; h: number } {
   const { W: CW, H: CH, COLS, ROWS } = STAMP, w = CW * COLS, h = CH * ROWS, data = new Uint8Array(w * h * 4);
   KINDS.forEach((kind, idx) => {
-    const R = rng(idx * 7717 + 31), dry = kind === 'dry', lanes = kind === 'dab' ? 6 + Math.floor(R() * 3) : 8 + Math.floor(R() * 6);
+    const B = BRUSHES[kind], R = rng(idx * 7717 + 31), lanes = B.lanes[0] + Math.floor(R() * (B.lanes[1] - B.lanes[0] + 1));
     // (each bristle: its load, where it touches down and lifts, how fast it runs dry, its share of the second colour)
     const lane = Array.from({ length: lanes }, () => ({
-      load: 0.62 + R() * 0.45, start: R() * (kind === 'dab' ? 0.08 : 0.13), end: 1 - R() * (dry ? 0.32 : 0.14),
-      rate: (dry ? 0.55 : 0.18) + R() * (dry ? 0.5 : 0.2), tone: R(), ph: R() * 100,
+      load: 0.62 + R() * 0.45, start: R() * (kind === 'dab' ? 0.08 : kind === 'knife' ? 0.02 : 0.13), end: 1 - R() * (0.12 + B.dry * 0.3),
+      rate: B.dry * (0.6 + R() * 0.8), tone: R(),
     }));
+    // (bristles clump: each band its own width, a few broad, most narrow)
+    const bounds = [0];
+    for (let j = 0; j < lanes; j++) bounds.push(bounds[j] + 0.35 + 1.9 * Math.pow(R(), 1.6));
+    for (let j = 0; j <= lanes; j++) bounds[j] /= bounds[lanes];
     // (neighbouring bristles were loaded together: their colours are near)
     for (let p = 0; p < 2; p++) for (let j = 1; j < lanes - 1; j++) lane[j].tone = (lane[j - 1].tone + lane[j].tone * 2 + lane[j + 1].tone) / 4;
-    const wav = R() * 6.28, wavA = kind === 'long' ? 0.03 : 0.07;
+    const wav = R() * 6.28, flip = idx === 15;
     const noise = (x: number, s: number) => { const i = Math.floor(x), f = x - i, u = f * f * (3 - 2 * f), a = rng(i * 131 + s)(), b = rng((i + 1) * 131 + s)(); return a + (b - a) * u; };
     const ox = (idx % COLS) * CW, oy = Math.floor(idx / COLS) * CH;
     for (let py = 0; py < CH; py++) for (let px = 0; px < CW; px++) {
-      const u = (px - 6) / (CW - 12), v = ((py - 4) / (CH - 8)) * 2 - 1;
+      let u = (px - 6) / (CW - 12); const v = ((py - 4) / (CH - 8)) * 2 - 1;
+      if (flip) u = 1 - u;
       let cov = 0, rel = 0, tone = 0.5;
       if (u > 0 && u < 1 && v > -1 && v < 1) {
         // (the brush's outline along the stroke)
         const lift = Math.pow(1 - ss(0.72, 1, u), 0.6);
-        const e = kind === 'round' ? Math.pow(Math.sin(Math.PI * u), 0.55) : kind === 'dab' ? Math.sqrt(Math.max(0, 1 - ((u - 0.5) / 0.5) ** 2)) : kind === 'long' ? Math.min(1, u / 0.05) ** 0.5 * (1 - 0.45 * u) * lift : Math.min(1, u / 0.08) ** 0.6 * (0.35 + 0.65 * lift);
-        const v2 = e > 0.02 ? v / e + wavA * Math.sin(u * 7 + wav) : 9;
-        if (Math.abs(v2) < 1) {
-          const lp = ((v2 + 1) / 2) * lanes, j = Math.min(lanes - 1, Math.floor(lp)), fj = lp - j, L = lane[j];
-          const groove = ss(0, 0.24, fj) * (1 - ss(0.76, 1, fj));
-          let paint = L.load - L.rate * Math.max(0, u - L.start) ** 1.3 + (noise(u * 38 + j * 13.1, idx * 17 + j) - 0.5) * (dry ? 0.55 : 0.3);
+        let e: number;
+        switch (kind) {
+          case 'round': e = Math.pow(Math.sin(Math.PI * u), 0.55); break;
+          case 'dab': e = Math.sqrt(Math.max(0, 1 - ((u - 0.5) / 0.5) ** 2)); break;
+          case 'long': e = Math.min(1, u / 0.05) ** 0.5 * (1 - 0.45 * u) * lift; break;
+          case 'flick': e = Math.min(1, u / 0.04) ** 0.4 * Math.pow(1 - u, 0.75); break;
+          case 'wash': e = Math.pow(Math.sin(Math.PI * Math.min(1, u * 1.15)), 0.4); break;
+          case 'fan': e = (0.45 + 0.55 * u) * Math.min(1, u / 0.05) ** 0.5 * (0.4 + 0.6 * lift); break;
+          case 'knife': e = Math.min(1, u / 0.015); break;
+          default: e = Math.min(1, u / 0.08) ** 0.6 * (0.35 + 0.65 * lift);
+        }
+        // (a flick bends as it goes; the rest wave a little)
+        const v2 = e > 0.02 ? v / e + B.wav * Math.sin(u * 7 + wav) + (kind === 'flick' ? 0.5 * u * u : 0) : 9;
+        // (a knife is cut off on a slant)
+        const cut = kind === 'knife' ? u < 1 - 0.25 * (v + 1) : true;
+        const edge = 1 - B.rag * 0.25 * noise(u * 30 + v * 3, idx * 53);
+        if (Math.abs(v2) < edge && cut) {
+          const at = (v2 + 1) / 2 + 0.9 * (noise(u * 3 + v * 2, idx * 71) - 0.5) / lanes;
+          let j = 0; while (j < lanes - 1 && bounds[j + 1] < at) j++;
+          const fj = Math.max(0, Math.min(1, (at - bounds[j]) / (bounds[j + 1] - bounds[j]))), L = lane[j];
+          const gw = 0.5 - 0.35 * B.groove, groove = ss(0, gw, fj) * (1 - ss(1 - gw, 1, fj));
+          let paint = L.load - L.rate * Math.max(0, u - L.start) ** 1.3 + (noise(u * 38 + j * 13.1, idx * 17 + j) - 0.5) * (0.2 + B.rag * 0.4);
           paint += (noise(u * 9 + j * 3.3, idx * 29) - 0.5) * 0.2;
+          // (a scumble drags dry over the paper's tooth: broken in both directions)
+          if (kind === 'scumble') paint -= 0.55 * noise(u * 70 + v * 23, idx * 61) * noise(u * 17 - v * 9, idx * 67);
           cov = ss(0.18, 0.36, paint) * ss(L.start, L.start + 0.03, u) * (1 - ss(L.end - 0.035, L.end, u));
-          cov *= 0.88 + 0.12 * groove;
-          cov *= 1 - ss(0.82, 1, Math.abs(v2));
-          // (the relief: the bristles' ridges, and the paint piled where each lifts)
-          rel = cov * (0.7 + 0.15 * groove) * (0.45 + 0.5 * L.load) + cov * 0.55 * Math.exp(-(((L.end - 0.025 - u) / 0.035) ** 2));
-          tone = Math.max(0, Math.min(1, 0.5 + (L.tone - 0.5) * 0.9 + (noise(u * 3 + v2 * 1.5, idx * 41 + 3) - 0.5) * 0.55));
+          cov *= 1 - B.groove + B.groove * groove;
+          cov *= 1 - ss(1 - B.soft * 1.6 - 0.05, 1, Math.abs(v2) / edge);
+          // (the relief: the bristles' ridges, the paint piled where each lifts, a knife's paint pushed to its sides)
+          rel = cov * B.relief * ((0.55 + 0.45 * groove) * (0.45 + 0.5 * L.load) + 0.55 * Math.exp(-(((L.end - 0.025 - u) / 0.035) ** 2)));
+          if (kind === 'knife') rel = cov * (0.25 + 0.75 * ss(0.7, 0.95, Math.abs(v2)));
+          tone = Math.max(0, Math.min(1, 0.5 + (L.tone - 0.5) * (kind === 'knife' ? 0.5 : 0.9) + (noise(u * 3 + v2 * 1.5, idx * 41 + 3) - 0.5) * 0.55));
         }
       }
       const o = ((oy + py) * w + ox + px) * 4;
@@ -147,7 +193,7 @@ export function strokesOver(verts: Float32Array, seed: number, line: number[] | 
       // (a flat thing lying on the ground (your track, a shadow) is laid as the ground is: flat on it, one side; a
       // standing thing, both sides, turning to the eye)
       if (flat && ny < 0) { nx = -nx; ny = -ny; nz = -nz; }
-      emit(e[0] / el, e[1] / el, e[2] / el, Ls, Ls * (flat ? 0.35 : 0.5), flat ? 2.2 : 3.2, 1, flat ? [0, 1] : [0, 1, 2, 4], 0.35, flat ? 0.2 : 0.4, flat ? 0 : 3);
+      emit(e[0] / el, e[1] / el, e[2] / el, Ls, Ls * (flat ? 0.35 : 0.5), flat ? 2.2 : 3.2, 1, flat ? [0, 1, 11] : [0, 1, 2, 4, 8, 15], 0.35, flat ? 0.2 : 0.4, flat ? 0 : 3);
       continue;
     }
     // (the face's normal: up, or (a steep face) toward the road it's seen from)
@@ -160,7 +206,7 @@ export function strokesOver(verts: Float32Array, seed: number, line: number[] | 
     const along = () => { const dp = lx * nx + lz * nz; const x = lx - nx * dp, y = -ny * dp, z = lz - nz * dp; const l = Math.hypot(x, y, z) || 1; return [x / l, y / l, z / l]; };
     if (backdrop) {
       const [tx, ty, tz] = fl > 0.12 ? across() : along(), Ls = Math.max(10, Math.min(260, Math.sqrt(area) * 0.6));
-      emit(tx, ty, tz, Ls, Ls * 0.4, 3.2, 0, [7, 0, 1], 0.4, 0.3, 0);
+      emit(tx, ty, tz, Ls, Ls * 0.4, 3.2, 0, [7, 11, 0, 10], 0.4, 0.3, 0);
       continue;
     }
     let tx: number, ty: number, tz: number;
@@ -170,8 +216,8 @@ export function strokesOver(verts: Float32Array, seed: number, line: number[] | 
     else [tx, ty, tz] = across();
     const road = ROAD.has(m), Ls = Math.min(22, 2.3 * (1 + d / 22)) * (road ? 1.7 : 1);
     // (the masses: big and broad, laid first; then the detail over them)
-    emit(tx, ty, tz, Ls * 2.2, Ls * 2.2 * (road ? 0.3 : 0.42), ROCKY.has(m) ? 3.4 : 2.6, 0, [0, 1, 7], 0.3, 0.25, 0);
-    emit(tx, ty, tz, Ls, Ls * (road ? 0.16 : 0.34), 1.3, 1, road ? [0, 1] : ROCKY.has(m) ? [5, 6] : [2, 3, 4, 1], road ? 0.25 : 0.5, 0.9, 0);
+    emit(tx, ty, tz, Ls * 2.2, Ls * 2.2 * (road ? 0.3 : 0.42), ROCKY.has(m) ? 3.4 : 2.6, 0, road ? [0, 1, 7, 13] : ROCKY.has(m) ? [9, 13, 0, 5] : [11, 7, 0, 10], 0.3, 0.25, 0);
+    emit(tx, ty, tz, Ls, Ls * (road ? 0.16 : 0.34), 1.3, 1, road ? [0, 1, 13] : ROCKY.has(m) ? [5, 6, 9, 13, 14] : [2, 3, 4, 1, 10, 12, 8, 15], road ? 0.25 : 0.5, 0.9, 0);
   }
   return new Float32Array(out);
 }
@@ -184,7 +230,7 @@ export function skyStrokes(seed: number): Float32Array {
     const a = R() * Math.PI * 2, el = -0.02 + Math.pow(R(), 1.2) * 1.46, y = RAD * Math.tan(Math.min(1.45, el)) - 120;
     const x = Math.sin(a) * RAD, z = Math.cos(a) * RAD, tx = Math.cos(a), tz = -Math.sin(a);
     const len = RAD * (0.08 + R() * 0.11) * (1 + el * 1.5), wid = len * (0.3 + R() * 0.16);
-    out.push(x, y, z, Math.max(0, el) / 1.44, tx, 0, tz, len, -Math.sin(a), 0, -Math.cos(a), wid, R(), R() < 0.5 ? 7 : 0, (R() - 0.5) * 0.25, R() < 0.1 ? 2 : 1, NEVER, 0, 0, 0);
+    out.push(x, y, z, Math.max(0, el) / 1.44, tx, 0, tz, len, -Math.sin(a), 0, -Math.cos(a), wid, R(), [7, 7, 11, 10, 0][Math.floor(R() * 5)], (R() - 0.5) * 0.25, R() < 0.1 ? 2 : 1, NEVER, 0, 0, 0);
   }
   return new Float32Array(out);
 }
@@ -218,12 +264,13 @@ void main(){
   // The stroke is laid in the world, on its face, along its own way: nothing about how it lies comes from the screen, so
   // it can't swing as the eye moves. Across it, its width turns from lying on the face toward facing the eye as it gets
   // further off, so it never thins to a sliver (after Brush Rush).
-  // (the speed: at pace the stroke turns, on its own face, toward the way the eye is going (one way for every stroke, the
+  // (the speed, only near the eye (full within 14 m, gone by 30; further off the subject alone lays it): at pace the stroke turns, on its own face, toward the way the eye is going (one way for every stroke, the
   // eye's smoothed motion in the world, so it holds steady), and draws out by as far as the eye's gone in a moment: the
   // ground and the rock fall into line with the motion, and stream past)
   float smearL = 0.;
-  if (!sky && a4.z < .5 && dot(uSmear, uSmear) > 1e-3) {
-    vec3 sd = uSmear - n*dot(uSmear, n); float sl = length(sd);
+  float nearE = 1. - smoothstep(14., 30., dist);
+  if (!sky && a4.z < .5 && nearE > 0. && dot(uSmear, uSmear) > 1e-3) {
+    vec3 sd = (uSmear - n*dot(uSmear, n))*nearE; float sl = length(sd);
     if (sl > 1e-3) { sd /= sl; if (dot(sd, T) < 0.) sd = -sd; T = normalize(mix(T, sd, clamp(sl/2.4, 0., 1.)*.9)); smearL = sl; }
   }
   vec3 Bn = normalize(cross(n, T)), Be = cross(T, V); float bl = length(Be); Be = bl > .001 ? Be/bl : Bn; if (dot(Be, Bn) < 0.) Be = -Be;
@@ -257,6 +304,9 @@ void main(){
   float fd = length((w - uEye).xz), f = floor(clamp((fd - 80.)/520., 0., 1.)*4.)/4.;
   vec3 fogs[4] = vec3[4](vec3(.62, .66, .9), vec3(.33, .45, .88), vec3(.14, .33, .84), vec3(.09, .26, .78));
   float fk = min(1., f*1.1)*uFog;
+  // (no two strokes alike: a little lighter or darker, a little warmer or cooler)
+  vec3 tint = mix(vec3(.95, .98, 1.06), vec3(1.05, 1., .93), h(seed, 4.7))*(1. + (h(seed, 9.13) - .5)*.12);
+  A *= mix(vec3(1.), tint, .7); B *= mix(vec3(1.), tint, .7);
   vA = mix(A, fogs[b], fk); vB = mix(B, fogs[b2], fk);
 }`;
 const FS = `#version 300 es
@@ -266,7 +316,7 @@ void main(){
   vec2 cell = vec2(mod(vStamp, ${STAMP.COLS}.), floor(vStamp/${STAMP.COLS}.));
   vec4 s = texture(uAtlas, (cell + vUv)/vec2(${STAMP.COLS}., ${STAMP.ROWS}.));
   if (s.r < .05) discard;
-  vec3 c = mix(vA, vB, s.b)*(.84 + .32*s.g);
+  vec3 c = mix(vA, vB, s.b)*(.9 + .2*s.g);
   // (fresh paint, just laid: a little lighter, wet)
   c = mix(c, c*1.1 + .04, vFresh*.3);
   // (premultiplied, blended in a fixed order: no dithered coverage to crawl as the strokes shift)
@@ -391,3 +441,36 @@ export class Brush2D {
     ctx.restore();
   }
 }
+
+// ─── strokes the course calls for ───────────────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Strokes laid deliberately from the course itself, not scattered over faces: what says where the way goes.
+ * - the road's two edges: long strokes following the course, a band darker than the road, broken now and then;
+ * - the drop's lip (where the ground breaks away beside the road): a lit edge of snow;
+ * - the wall's foot (where the ground starts up beside the road): a line of shade.
+ * Each is laid at its station, by the detail's front.
+ */
+export function courseStrokes(c: Course, s0: number, s1: number): Float32Array {
+  const out: number[] = [], R = rng(c.seed * 977 + s0 * 13);
+  const lane = (u: (s: number, half: number) => number, y: (s: number, u: number, py: number) => number, m: number, tone: number, len: number, wid: number, step: number, stamps: number[], gap: number) => {
+    for (let s = s0; s < s1; s += step * (0.8 + R() * 0.4)) {
+      const a = c.at(s), b = c.at(s + 1);
+      if (a.feature === 'gap' || b.feature === 'gap' || a.feature === 'ramp' || a.feature === 'deck') continue;
+      if (R() < gap) continue;
+      const half = a.width / 2, ua = u(s, half), ub = u(s + 1, half), p = c.point(s, ua), q = c.point(s + 1, ub);
+      if (p.y == null || q.y == null) continue;
+      const ya = y(s, ua, p.y), yb = y(s + 1, ub, q.y), tx = q.x - p.x, ty = yb - ya, tz = q.z - p.z, tl = Math.hypot(tx, ty, tz) || 1;
+      out.push(p.x, ya + 0.04, p.z, m + tone * 0.9, tx / tl, ty / tl, tz / tl, len * (0.75 + R() * 0.5), 0, 1, 0, wid * (0.8 + R() * 0.4), R(), stamps[Math.floor(R() * stamps.length)], (R() - 0.5) * 0.25, 0, s, 1, 0, 0);
+    }
+  };
+  const jag = (s: number, k: number) => (hash3(c.seed, Math.round(s), k) - 0.5) * 0.5;
+  // (the road's edges)
+  lane((s, h) => -h + 0.25 + jag(s, 1), (s, u, py) => py + 0.03, M.RUT, 0.0, 2.8, 0.26, 1.6, [13, 0, 1], 0.12);
+  lane((s, h) => h - 0.25 + jag(s, 2), (s, u, py) => py + 0.03, M.RUT, 0.0, 2.8, 0.26, 1.6, [13, 0, 1], 0.12);
+  // (the drop's lip, lit; the wall's foot, in shade)
+  lane((s, h) => h + 2.3 + jag(s, 3), (s, u, py) => ground(c, s, u), M.SNOW, 0.95, 3.6, 0.4, 2.2, [8, 15, 7], 0.2);
+  lane((s, h) => -h - 1.2 + jag(s, 4), (s, u, py) => ground(c, s, u), M.SHADOW, 0.5, 3.2, 0.36, 2.2, [7, 0, 11], 0.2);
+  return new Float32Array(out);
+}
+function hash3(a: number, b: number, k: number) { let h = Math.imul(a | 0, 0x27d4eb2d) ^ Math.imul(b | 0, 0x165667b1) ^ Math.imul(k | 0, 0x9e3779b1); h = Math.imul(h ^ (h >>> 15), 0x85ebca6b); return ((h ^ (h >>> 13)) >>> 0) / 4294967296; }

@@ -17,7 +17,7 @@ import type { Rider, Event } from './sim';
 import { GEARS } from './audio';
 import { buildRuts, Trail } from './ruts';
 import { buildGouges } from './gouge';
-import { Painter, Strokes, Brush2D, strokesOver, skyStrokes, lineOf } from './paint';
+import { Painter, Strokes, Brush2D, strokesOver, skyStrokes, lineOf, courseStrokes } from './paint';
 
 const VS = `#version 300 es
 in vec4 aP; uniform mat4 uVP; uniform vec3 uOff; uniform float uZj; out vec3 vW; flat out int vM;
@@ -135,7 +135,11 @@ export class Renderer {
     for (let n = lo; n <= hi && budget > 0; n++) if (!this.chunks.has(n)) {
       const v = buildChunk(this.course, n);
       this.chunks.set(n, new Buf(this.gl, v)); budget--;
-      if (this.painter) this.strokes.set(n, this.painter.make(strokesOver(v, this.course.seed * 1009 + n, lineOf(this.course, n * CHUNK - 6, (n + 1) * CHUNK + 6))));
+      if (this.painter) {
+        const face = strokesOver(v, this.course.seed * 1009 + n, lineOf(this.course, n * CHUNK - 6, (n + 1) * CHUNK + 6)), way = courseStrokes(this.course, n * CHUNK, (n + 1) * CHUNK), all = new Float32Array(face.length + way.length);
+        all.set(face); all.set(way, face.length);
+        this.strokes.set(n, this.painter.make(all));
+      }
     }
   }
   frame(view: View, r: Rider, t: number, dt: number, budget = 1) {
