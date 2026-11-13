@@ -17,6 +17,7 @@ import type { Rider, Event } from './sim';
 import { GEARS } from './audio';
 import { buildRuts, Trail } from './ruts';
 import { buildGouges } from './gouge';
+import { Painter, Strokes, strokesOver, skyStrokes, lineOf } from './paint';
 
 const VS = `#version 300 es
 in vec4 aP; uniform mat4 uVP; uniform vec3 uOff; out vec3 vW; flat out int vM;
@@ -82,6 +83,10 @@ export class Renderer {
   /** how the rider's drawn ('cut': flat masses, lit for the picture), a whip held for a pinned frame (rad), and whether
    * the world's drawn at all (`world=0`: the rider alone on the sky, for judging its shapes) */
   style: 'facets' | 'cut' | 'sil' = 'cut'; whip = 0; world = true;
+  /** painted (`paint=1`, paint.ts): the mountain laid in brush strokes over its facets; and the strokes, built with each
+   * chunk, the backdrop's and the sky's once */
+  paint = false; painter: Painter | null = null; stretchWanted = 1;
+  private strokes = new Map<number, Strokes>(); private backStrokes: Strokes[] = []; private skyS: Strokes | null = null; private prevVP: Mat | null = null;
   /** your own track, fed after each step of the sim */
   readonly trail: Trail;
   vp: Mat = new Float32Array(16); W = 1; H = 1; dpr = 1;
@@ -115,17 +120,30 @@ export class Renderer {
   /** keep the chunks from just behind the rider to well ahead built, at most `budget` new ones a frame */
   private stream(s: number, budget: number) {
     const lo = Math.max(0, Math.floor((s - 70) / CHUNK)), hi = Math.floor((s + 640) / CHUNK);
-    for (const [n, b] of this.chunks) if (n < lo || n > hi) { b.free(); this.chunks.delete(n); }
-    for (let n = lo; n <= hi && budget > 0; n++) if (!this.chunks.has(n)) { this.chunks.set(n, new Buf(this.gl, buildChunk(this.course, n))); budget--; }
+    for (const [n, b] of this.chunks) if (n < lo || n > hi) { b.free(); this.chunks.delete(n); this.strokes.get(n)?.free(); this.strokes.delete(n); }
+    for (let n = lo; n <= hi && budget > 0; n++) if (!this.chunks.has(n)) {
+      const v = buildChunk(this.course, n);
+      this.chunks.set(n, new Buf(this.gl, v)); budget--;
+      if (this.painter) this.strokes.set(n, this.painter.make(strokesOver(v, this.course.seed * 1009 + n, lineOf(this.course, n * CHUNK - 6, (n + 1) * CHUNK + 6))));
+    }
   }
   frame(view: View, r: Rider, t: number, dt: number, budget = 1) {
     const gl = this.gl;
-    this.stream(r.s, budget);
+    if (this.paint && !this.painter) {
+      this.painter = new Painter(gl, new Float32Array(PALETTE.flat().map(hex).flat()), SUN);
+      this.backStrokes = [this.painter.make(strokesOver(buildRanges(this.course.seed), this.course.seed * 31, null, 22000)), this.painter.make(strokesOver(buildValley(this.course.seed), this.course.seed * 37, null, 12000))];
+      this.skyS = this.painter.make(skyStrokes(this.course.seed)); this.painter.stretch = this.stretchWanted;
+      for (const b of this.chunks.values()) b.free();
+      this.chunks.clear();
+    }
+    this.stream(r.s, this.painter && this.chunks.size === 0 ? 99 : budget);
     const asp = this.W / this.H, fov = asp < 1 ? view.fov * 1.25 : view.fov;
     // (the eye's roll: its up tipped toward its right)
     const fwd = norm([view.target[0] - view.eye[0], 0, view.target[2] - view.eye[2]]), rt = [-fwd[2], 0, fwd[0]];
     const upv = norm([rt[0] * Math.sin(view.roll), Math.cos(view.roll), rt[2] * Math.sin(view.roll)]);
     this.vp = mul(perspective(fov, asp, 0.3, 9000), lookAt(view.eye, view.target, upv));
+    const prev = this.prevVP ?? this.vp; this.prevVP = this.vp;
+    const pt = this.painter, paintBegin = () => pt!.begin(this.vp, prev, view.eye, 1 / Math.tan(fov / 2), this.canvas.width, this.canvas.height, this.dpr);
     gl.viewport(0, 0, this.canvas.width, this.canvas.height);
     const sky = hex(SKY); gl.clearColor(sky[0], sky[1], sky[2], 1); gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
     gl.enable(gl.DEPTH_TEST); gl.disable(gl.CULL_FACE);
@@ -141,11 +159,20 @@ export class Renderer {
       gl.uniform3fv(this.u.uSun, new Float32Array(SUN));
     };
     if (!this.world) { gl.uniform1f(this.u.uFog, 0); gl.uniform3f(this.u.uOff, 0, 0, 0); drawRider(); this.ctx.setTransform(1, 0, 0, 1, 0, 0); this.ctx.clearRect(0, 0, this.overlay.width, this.overlay.height); return; }
+    // (painted: the sky's strokes first, behind everything)
+    if (pt && this.skyS) { gl.disable(gl.DEPTH_TEST); paintBegin(); pt.draw(this.skyS, view.eye, false); pt.end(); gl.enable(gl.DEPTH_TEST); gl.useProgram(this.prog); }
     // (the far ranges, round the eye and a little below it, unfaded)
     gl.uniform1f(this.u.uFog, 0); gl.uniform3f(this.u.uOff, view.eye[0], view.eye[1] - 60, view.eye[2]); this.ranges.draw(); this.valley.draw();
+    if (pt) { paintBegin(); for (const b of this.backStrokes) pt.draw(b, [view.eye[0], view.eye[1] - 60, view.eye[2]], false); pt.end(); gl.useProgram(this.prog); }
     gl.clear(gl.DEPTH_BUFFER_BIT);
     gl.uniform1f(this.u.uFog, this.fog ? 1 : 0); gl.uniform3f(this.u.uOff, 0, 0, 0);
     for (const b of this.chunks.values()) b.draw();
+    // (painted: the ground's strokes over their facets, the far chunks first so the near paint over them at the edges)
+    if (pt) {
+      paintBegin();
+      for (const n of [...this.strokes.keys()].sort((a, b) => b - a)) pt.draw(this.strokes.get(n)!, [0, 0, 0], this.fog);
+      pt.end(); gl.useProgram(this.prog);
+    }
     // (the ruts near the eye, and your own track, a hair over the road)
     gl.enable(gl.POLYGON_OFFSET_FILL); gl.polygonOffset(-1, -1);
     this.ruts.set(this.rutStyle === 'cut' ? buildGouges(this.course, r.s) : buildRuts(this.course, r.s), true); this.ruts.draw();

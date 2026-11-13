@@ -46,6 +46,23 @@
   ]
  },
  {
+  "group": "Painted",
+  "views": [
+   {
+    "name": "painted",
+    "title": "Painted (`paint=1`)",
+    "caption": "the same frame laid in brush strokes over its facets: the road and the snow by it streaming along the way, the rock brushed down its face, the far snow in dabs, the sky in strokes; the rider, the fence and the pines left crisp",
+    "file": "v-painted.jpg"
+   },
+   {
+    "name": "painted-ride",
+    "title": "Painted, riding",
+    "caption": "at speed: each stroke stretched along its own motion on the screen, so the speed is in the ground’s own marks",
+    "file": "v-painted-ride.jpg"
+   }
+  ]
+ },
+ {
   "group": "The bike and rider",
   "views": [
    {

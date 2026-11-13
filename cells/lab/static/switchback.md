@@ -102,6 +102,23 @@ Motion is drawn as vector shapes on a canvas over the world, never as blurred pi
 ![Speed](switchback/v-speed.jpg)
 ![The air peeling off the rider](switchback/v-air.jpg)
 
+## Painted (`paint=1`, `paint.ts`)
+
+An experiment in drawing the mountain as paint, after looking closely at a brush-shader snowboard prototype (Brush Rush). The facets stay underneath as the underpainting, so nothing is ever a hole, and brush strokes go over them, each with a reason to be where it is:
+
+- **Planted on the ground** when a chunk is built: on its faces, more where they're bigger, never on the furniture. The rider, the fence, the posts, the pines and the kickers stay crisp facets, so what you have to read still reads.
+- **Running the way the ground runs**: along the road on the road and on the snow beside it, turning across the slope further off; down the face on rock; level on the far ranges.
+- **Fine by the road, broad away from it**: a stroke's size grows with its distance from the road's middle, and the far ranges are laid in a few big level marks, so the picture simplifies where you're not looking.
+- **The facets' own colours**: each stroke takes its face's band as the facets pick it (a little jittered), its bristles mixing toward the band next to it, so the colour breaks up as paint does and still holds the light.
+- **Built on the screen**: its length along its way as the eye sees it (never shorter than half itself, however end-on), never thinner than a few pixels.
+- **Stretched along its own motion**: each stroke is drawn from where it is back toward where it was on the screen a frame ago, as far as it actually moved, so the speed is in the ground's own marks rather than over them (`stretch=0` none, `stretch=2` twice). The sky's strokes stretch a third as much.
+- **The sky** is a band of level strokes round the eye, darker as they rise, a few paler.
+
+The strokes come from an atlas of brush stamps made when the page loads: each a brush of bristles, every bristle with its own load of paint, touching down and lifting a little apart from the rest, running dry along the stroke, and piling paint where it lifts. A stamp carries where the paint is, its relief (which catches the light) and which of the stroke's two colours. They're drawn instanced, with alpha-to-coverage, so they need no sorting.
+
+![Painted](switchback/v-painted.jpg)
+![Painted, riding](switchback/v-painted-ride.jpg)
+
 ## Title, menu, modes, score (`score.ts`)
 
 It opens on its title, the sim's own rider showing off on the mountain behind a veil of the sky's blue: flicking into kinks so the rear steps out, and at each ramp choosing what the flight will hold (on the run-in it flies the flight forward from the lip against the ground to see how long it'll be up and what it'll come down on, and picks what fits: a backflip, pulled up the ramp as hard as that flight needs and trimmed in the air; one of the body's tricks, or two strung together on a long flight, let go as soon as the air left is only enough to get back on; a whip; or nothing; it uses only the player's own inputs, so what it lands, you can). Pick a **mode** (THREE LIVES to begin with) and **RIDE** (which starts the sound too: browsers only start it from a tap), or look at the **LEADERBOARD**:
@@ -152,7 +169,7 @@ All made in the page (WebAudio, no files):
 
 ## Flags
 
-`seed=` the mountain · `mode=run|lives|time|endless` the mode for this page (THREE LIVES unless chosen) · `auto` the rider rides itself (`auto=tricks` showing off, as on the title), a run like yours in the page's mode: scored, its tricks called, its lives or kilometres shown, ended as the mode ends with its card, but never kept on your board (a touch takes over, and the run still isn't kept; AGAIN rides the sim's run again) · (any flag below skips the title) · `fx=0` no speed layer · `fog=0` no distance fade (both for judging a frame) · `rider=sil|facets`, `whip=`, `world=0` the rider studies (above) · `t=` start that many seconds down the run (ridden there by the auto rider) · `still` hold the frame · `preview` no HUD.
+`paint=1` the mountain painted in brush strokes over its facets (`stretch=0…2`: how far they stretch along their motion) · `seed=` the mountain · `mode=run|lives|time|endless` the mode for this page (THREE LIVES unless chosen) · `auto` the rider rides itself (`auto=tricks` showing off, as on the title), a run like yours in the page's mode: scored, its tricks called, its lives or kilometres shown, ended as the mode ends with its card, but never kept on your board (a touch takes over, and the run still isn't kept; AGAIN rides the sim's run again) · (any flag below skips the title) · `fx=0` no speed layer · `fog=0` no distance fade (both for judging a frame) · `rider=sil|facets`, `whip=`, `world=0` the rider studies (above) · `t=` start that many seconds down the run (ridden there by the auto rider) · `still` hold the frame · `preview` no HUD.
 
 ## Tests
 
