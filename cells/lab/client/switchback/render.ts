@@ -185,9 +185,14 @@ export class Renderer {
     const rutsV = this.rutStyle === 'cut' ? buildGouges(this.course, r.s) : buildRuts(this.course, r.s), trackV = this.trail.mesh();
     const flagsV = buildFlags(this.course, r.s - 40, r.s + 320, t), fallsV = buildFalls(this.course, r.s - 30, r.s + 420, t);
     const g = this.course.point(r.s, r.u).y + 0.06, sh = new Float32Array(body.length);
+    // (each point of it on the ground where it falls: the road ahead of the rider and behind, not a level plane at the
+    // rider's feet, which a slope going away would leave standing in the air)
+    const hx = Math.sin(r.heading), hz = Math.cos(r.heading), gy = new Map<number, number>();
+    const groundAt = (d: number) => { const k = Math.round(d * 4); let y = gy.get(k); if (y === undefined) { y = this.course.point(r.s + k / 4, r.u).y ?? g - 0.06; gy.set(k, y); } return y + 0.06; };
     for (let i = 0; i < body.length; i += 4) {
       const h = body[i + 1] - g, k = Math.max(0, h) / SUN[1];
-      sh[i] = body[i] - SUN[0] * k; sh[i + 1] = g; sh[i + 2] = body[i + 2] - SUN[2] * k; sh[i + 3] = 9.45;
+      sh[i] = body[i] - SUN[0] * k; sh[i + 2] = body[i + 2] - SUN[2] * k; sh[i + 3] = 9.45;
+      sh[i + 1] = groundAt((sh[i] - r.x) * hx + (sh[i + 2] - r.z) * hz);
     }
     const shadowOn = !r.air || body[1] - g < 6;
     if (pt) {
