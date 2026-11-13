@@ -157,7 +157,7 @@ export function strokesOver(verts: Float32Array, seed: number, line: number[] | 
   // (laid in three layers, in this order: the masses that block each region in, the few touches inside it, and the edges
   // that cut each region back where it meets another of a different colour)
   const masses: number[] = [], touches: number[] = [], edges: number[] = [];
-  const faces: { mt: number; band: number; n: number[]; c: number[]; st: number; Le: number; back: boolean }[] = [];
+  const faces: { mt: number; band: number; n: number[]; c: number[]; st: number; Le: number; back: boolean; kind: number }[] = [];
   const edgeOf = new Map<string, { fs: number[]; P: number[]; Q: number[] }>();
   const key = (x: number, y: number, z: number) => `${Math.round(x * 50)},${Math.round(y * 50)},${Math.round(z * 50)}`;
   const n = verts.length / 12;
@@ -193,6 +193,18 @@ export function strokesOver(verts: Float32Array, seed: number, line: number[] | 
           st, pass, moving ? 1 : 0, 0);
       }
     };
+    // (the face's colour, as the facets pick it: its light band; every stroke on it takes the same, so a region reads as one
+    // block)
+    const tone = mt - m, band = (() => { const l = nx * SUN_[0] + ny * SUN_[1] + nz * SUN_[2] + (tone / 0.9 - 0.5) * 0.42; return l > 0.62 ? 0 : l > 0.3 ? 1 : l > -0.05 ? 2 : 3; })();
+    const remember = (Le: number, kind = 0) => {
+      const f = faces.length;
+      faces.push({ mt, band, n: [nx, ny, nz], c: [(ax + bx + cx) / 3, (ay + by + cy) / 3, (az + bz + cz) / 3], st, Le, back: backdrop, kind });
+      for (const [p, q] of [[0, 1], [1, 2], [2, 0]]) {
+        const P = [verts[o + p * 4], verts[o + p * 4 + 1], verts[o + p * 4 + 2]], Q = [verts[o + q * 4], verts[o + q * 4 + 1], verts[o + q * 4 + 2]];
+        const kp = key(P[0], P[1], P[2]), kq = key(Q[0], Q[1], Q[2]), k = kp < kq ? kp + '|' + kq : kq + '|' + kp;
+        const e = edgeOf.get(k); if (e) e.fs.push(f); else edgeOf.set(k, { fs: [f], P, Q });
+      }
+    };
     if (thing) {
       // (a thing: along its face's longest edge, sized by the face; both sides)
       const e = [[ux, uy, uz], [vx, vy, vz], [cx - bx, cy - by, cz - bz]].sort((p, q) => Math.hypot(q[0], q[1], q[2]) - Math.hypot(p[0], p[1], p[2]))[0], el = Math.hypot(e[0], e[1], e[2]) || 1;
@@ -200,6 +212,8 @@ export function strokesOver(verts: Float32Array, seed: number, line: number[] | 
       // (a flat thing lying on the ground (your track, a shadow) is laid as the ground is: flat on it, one side; a
       // standing thing, both sides, turning to the eye)
       if (flat && ny < 0) { nx = -nx; ny = -ny; nz = -nz; }
+      // (a standing thing's regions are cut too, where its colours meet and at its sharp folds: its masses flat inside)
+      if (!flat) remember(moving ? 0.22 : 0.8, 3);
       emit(e[0] / el, e[1] / el, e[2] / el, Ls, Ls * (flat ? 0.35 : 0.5), flat ? 2.6 : 3.2, 1, flat ? [0, 1, 11] : [0, 1, 2, 4, 8, 15], 0.35, flat ? 0.2 : 0.4, flat ? 0 : 3);
       continue;
     }
@@ -211,18 +225,6 @@ export function strokesOver(verts: Float32Array, seed: number, line: number[] | 
     const fx = nx * ny, fy = ny * ny - 1, fz = nz * ny, fl = Math.hypot(fx, fy, fz);
     const across = () => { const a = ny * fz - nz * fy, b = nz * fx - nx * fz, c = nx * fy - ny * fx, l = Math.hypot(a, b, c) || 1; return [a / l, b / l, c / l]; };
     const along = () => { const dp = lx * nx + lz * nz; const x = lx - nx * dp, y = -ny * dp, z = lz - nz * dp; const l = Math.hypot(x, y, z) || 1; return [x / l, y / l, z / l]; };
-    // (the face's colour, as the facets pick it: its light band; every stroke on it takes the same, so a region reads as one
-    // block)
-    const tone = mt - m, band = (() => { const l = nx * SUN_[0] + ny * SUN_[1] + nz * SUN_[2] + (tone / 0.9 - 0.5) * 0.42; return l > 0.62 ? 0 : l > 0.3 ? 1 : l > -0.05 ? 2 : 3; })();
-    const remember = (Le: number) => {
-      const f = faces.length;
-      faces.push({ mt, band, n: [nx, ny, nz], c: [(ax + bx + cx) / 3, (ay + by + cy) / 3, (az + bz + cz) / 3], st, Le, back: backdrop });
-      for (const [p, q] of [[0, 1], [1, 2], [2, 0]]) {
-        const P = [verts[o + p * 4], verts[o + p * 4 + 1], verts[o + p * 4 + 2]], Q = [verts[o + q * 4], verts[o + q * 4 + 1], verts[o + q * 4 + 2]];
-        const kp = key(P[0], P[1], P[2]), kq = key(Q[0], Q[1], Q[2]), k = kp < kq ? kp + '|' + kq : kq + '|' + kp;
-        const e = edgeOf.get(k); if (e) e.fs.push(f); else edgeOf.set(k, { fs: [f], P, Q });
-      }
-    };
     if (backdrop) {
       // (the far off: big level masses, close enough to leave no gaps, and its regions' edges cut)
       const [tx, ty, tz] = fl > 0.12 ? across() : along(), Ls = Math.max(12, Math.min(320, Math.sqrt(area) * 0.85));
@@ -237,8 +239,8 @@ export function strokesOver(verts: Float32Array, seed: number, line: number[] | 
     else [tx, ty, tz] = across();
     const road = ROAD.has(m), Ls = Math.min(22, 2.3 * (1 + d / 22)) * (road ? 1.7 : 1);
     // (the masses: big and broad, blocking the region in; then a few touches inside it, no more)
-    emit(tx, ty, tz, Ls * 2.6, Ls * 2.6 * (road ? 0.3 : 0.42), ROCKY.has(m) ? 4 : 3.6, 0, road ? [0, 1, 7, 11] : ROCKY.has(m) ? [9, 13, 0, 11] : [11, 7, 0], 0.3, 0.25, 0);
-    emit(tx, ty, tz, Ls, Ls * (road ? 0.16 : 0.34), 0.35, 1, road ? [0, 1, 13] : ROCKY.has(m) ? [5, 6, 9, 13, 14] : [2, 3, 4, 1, 10, 12, 8, 15], road ? 0.25 : 0.5, 0.9, 0, touches);
+    emit(tx, ty, tz, Ls * 2.2, Ls * 2.2 * (road ? 0.3 : 0.42), ROCKY.has(m) ? 3.4 : 2.6, 0, road ? [0, 1, 7] : ROCKY.has(m) ? [9, 13, 0, 5] : [0, 7, 1, 2], 0.3, 0.25, 0);
+    emit(tx, ty, tz, Ls, Ls * (road ? 0.16 : 0.34), 1.1, 1, road ? [0, 1, 13] : ROCKY.has(m) ? [5, 6, 9, 13, 14] : [2, 3, 4, 1, 10, 12, 8, 15], road ? 0.25 : 0.5, 0.9, 0, touches);
     remember(Math.min(6, 1.6 * (1 + d / 30)));
   }
   // the edges: where two faces of different colour meet (material or light band), each side painted up to the edge in
@@ -249,8 +251,10 @@ export function strokesOver(verts: Float32Array, seed: number, line: number[] | 
     const fs = [faces[fi[0]], faces[fi[1]]];
     // (a change of material always earns an edge; within one material only a real fold does (the faces meeting at more
     // than about 12°, their light bands differing), not a face's own tone tipping it into the next band)
-    const same = Math.floor(fs[0].mt) === Math.floor(fs[1].mt), fold = fs[0].n[0] * fs[1].n[0] + fs[0].n[1] * fs[1].n[1] + fs[0].n[2] * fs[1].n[2] < 0.978;
-    if (same && (fs[0].band === fs[1].band || !fold)) continue;
+    const same = Math.floor(fs[0].mt) === Math.floor(fs[1].mt), cos = Math.abs(fs[0].n[0] * fs[1].n[0] + fs[0].n[1] * fs[1].n[1] + fs[0].n[2] * fs[1].n[2]);
+    if (fs[0].kind !== fs[1].kind) continue;
+    // (a thing: where its colours meet, or a sharp fold (35°); the ground: a change of material, or a real fold across bands)
+    if (fs[0].kind === 3 ? same && cos > 0.82 : same && (fs[0].band === fs[1].band || cos > 0.978)) continue;
     const tx = Q[0] - P[0], ty = Q[1] - P[1], tz = Q[2] - P[2], L = Math.hypot(tx, ty, tz);
     if (L < 0.05) continue;
     const T = [tx / L, ty / L, tz / L];
@@ -259,10 +263,12 @@ export function strokesOver(verts: Float32Array, seed: number, line: number[] | 
       let wx = F.n[1] * T[2] - F.n[2] * T[1], wy = F.n[2] * T[0] - F.n[0] * T[2], wz = F.n[0] * T[1] - F.n[1] * T[0];
       const wl = Math.hypot(wx, wy, wz) || 1; wx /= wl; wy /= wl; wz /= wl;
       if (wx * (F.c[0] - P[0]) + wy * (F.c[1] - P[1]) + wz * (F.c[2] - P[2]) < 0) { wx = -wx; wy = -wy; wz = -wz; }
-      const Le = Math.min(F.Le, L), We = Le * (F.back ? 0.22 : 0.2), k = Math.max(1, Math.ceil(L / (Le * 0.7)));
+      const Le = Math.min(F.Le, L), We = Le * (F.back ? 0.22 : F.kind === 3 ? 0.3 : 0.2), k = Math.max(1, Math.ceil(L / (Le * 0.7)));
       for (let i = 0; i < k; i++) {
         const t = (i + 0.5) / k * L, off = We * 0.42;
-        edges.push(P[0] + T[0] * t + wx * off, P[1] + T[1] * t + wy * off, P[2] + T[2] * t + wz * off, F.mt, T[0], T[1], T[2], Le * (0.9 + R2() * 0.3), F.n[0], F.n[1], F.n[2], We * (0.85 + R2() * 0.3), R2(), R2() < 0.6 ? 13 : 0, (R2() - 0.5) * 0.1, 0, F.st, 1, moving ? 1 : 0, 0);
+        // (the edges carry the brushwork: a knife's hard edge most often, but flicks, a dry flat, a rake; widths and lengths of their own)
+        const ja = (R2() - 0.5) * 0.12, cja = Math.cos(ja), sja = Math.sin(ja), Tx = T[0] * cja + wx * sja, Ty = T[1] * cja + wy * sja, Tz = T[2] * cja + wz * sja;
+        edges.push(P[0] + T[0] * t + wx * off, P[1] + T[1] * t + wy * off, P[2] + T[2] * t + wz * off, F.mt, Tx, Ty, Tz, Le * (0.7 + R2() * 0.7), F.n[0], F.n[1], F.n[2], We * (0.6 + R2() * 0.8), R2(), [13, 13, 13, 0, 8, 15, 5, 14][Math.floor(R2() * 8)], (R2() - 0.5) * 0.3, F.kind, F.st, 1, moving ? 1 : 0, 1);
       }
     }
   }
@@ -307,6 +313,8 @@ void main(){
   // (except the road: a kicker's deck is seen from under it too)
   int mt0 = int(a0.w);
   if (!sky && !both && a4.x > -1e8 && mt0 != 1 && mt0 != 10) g *= smoothstep(-.06, 0., dot(n, V));
+  // (the far off is left to its masses and its edges: the touches inside a region go between 70 and 170 m)
+  if (a4.y > .5 && a4.w < .5 && !both) g *= 1. - smoothstep(70., 170., dist);
   if (!sky && dot(n, V) < 0.) n = -n;
   // (thinned with distance: a stroke past its turn shrinks away over a little more distance, rather than going at once)
   g *= clamp((keep - h(seed, 12.9898))/.12 + 1., 0., 1.);
@@ -331,10 +339,10 @@ void main(){
   // its size: thinned out, the ones kept are bigger; never thinner on the picture than a few pixels, never more than a part of it
   float grow = inversesqrt(max(keep, .3)), k = uK*uRes.y*.5/max(c.w, .5);
   float len = a1.w*grow, wid = a2.w*grow;
-  wid = clamp(wid, uMinW/k, uRes.y*.4/k); len = clamp(len, wid*1.6, uRes.y*.9/k);
-  // (the smear never runs a stroke more than its own length on past where it's laid: further, and a slope that bends away
-  // would leave it standing clear of the ground)
-  len += min(smearL, min(len*1.2, uRes.y*.3/k));
+  wid = clamp(wid, uMinW/k, uRes.y*.19/k); len = clamp(len, wid*1.6, uRes.y*.5/k);
+  // (the smear never runs a stroke more than three times its own length on past where it's laid: further, and a slope
+  // that bends away would leave it standing clear of the ground)
+  len += min(smearL, min(len*3., uRes.y*.3/k));
   float u = aQ.x*g, c2 = 2.*u - 1., s = (u - .5)*len, bend = a3.z*len*(1. - c2*c2)*.25;
   vec3 p = w + T*s + Wd*(aQ.y*wid*.5 + bend);
   vec4 cq = uVP*vec4(p, 1.);
@@ -355,12 +363,12 @@ void main(){
   float l = dot(n, uSun) + (tone/.9 - .5)*.42;
   int b = l > .62 ? 0 : l > .3 ? 1 : l > -.05 ? 2 : 3;
   int b2 = clamp(b + (h(seed, 3.1) > .5 ? 1 : -1), 0, 3);
-  vec3 A = uPal[mt*4 + b], B = mix(A, uPal[mt*4 + b2], .22);
+  vec3 A = uPal[mt*4 + b], B = mix(A, uPal[mt*4 + b2], .35);
   float fd = length((w - uEye).xz), f = floor(clamp((fd - 80.)/520., 0., 1.)*4.)/4.;
   vec3 fogs[4] = vec3[4](vec3(.62, .66, .9), vec3(.33, .45, .88), vec3(.14, .33, .84), vec3(.09, .26, .78));
   float fk = min(1., f*1.1)*uFog;
   // (no two strokes alike: a little lighter or darker, a little warmer or cooler)
-  float wob = 1. + (h(seed, 9.13) - .5)*.06;
+  float wob = 1. + (h(seed, 9.13) - .5)*.14;
   A *= wob; B *= wob;
   vA = mix(A, fogs[b], fk); vB = mix(B, fogs[b2], fk);
 }`;
