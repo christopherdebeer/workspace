@@ -102,9 +102,10 @@ export function lineOf(c: Course, s0: number, s1: number) {
  *   the face on rock);
  * - the backdrop (the ranges, the valley): big level marks, one pass, always laid;
  * - things (the fence, the posts, the pines, the kickers, the rider, a flag): small, sized by their faces, along each
- *   face's longest edge, painted on both sides.
+ *   face's longest edge, painted on both sides; what lies flat on the ground (`flat`: your track, a shadow) is laid as
+ *   the ground is.
  */
-export function strokesOver(verts: Float32Array, seed: number, line: number[] | null, cap = 26000, moving = false, place = 0): Float32Array {
+export function strokesOver(verts: Float32Array, seed: number, line: number[] | null, cap = 26000, moving = false, place = 0, flat = false): Float32Array {
   const out: number[] = [];
   const n = verts.length / 12;
   for (let t = 0; t < n && out.length / STROKE < cap; t++) {
@@ -142,8 +143,11 @@ export function strokesOver(verts: Float32Array, seed: number, line: number[] | 
     if (thing) {
       // (a thing: along its face's longest edge, sized by the face; both sides)
       const e = [[ux, uy, uz], [vx, vy, vz], [cx - bx, cy - by, cz - bz]].sort((p, q) => Math.hypot(q[0], q[1], q[2]) - Math.hypot(p[0], p[1], p[2]))[0], el = Math.hypot(e[0], e[1], e[2]) || 1;
-      const Ls = Math.max(0.07, Math.min(moving ? 0.5 : 1.4, Math.sqrt(area) * 1.1));
-      emit(e[0] / el, e[1] / el, e[2] / el, Ls, Ls * 0.5, 3.2, 1, [0, 1, 2, 4], 0.35, 0.4, 3);
+      const Ls = Math.max(0.07, Math.min(moving ? (flat ? 1.2 : 0.5) : 1.4, Math.sqrt(area) * 1.1));
+      // (a flat thing lying on the ground (your track, a shadow) is laid as the ground is: flat on it, one side; a
+      // standing thing, both sides, turning to the eye)
+      if (flat && ny < 0) { nx = -nx; ny = -ny; nz = -nz; }
+      emit(e[0] / el, e[1] / el, e[2] / el, Ls, Ls * (flat ? 0.35 : 0.5), flat ? 2.2 : 3.2, 1, flat ? [0, 1] : [0, 1, 2, 4], 0.35, flat ? 0.2 : 0.4, flat ? 0 : 3);
       continue;
     }
     // (the face's normal: up, or (a steep face) toward the road it's seen from)
@@ -189,7 +193,7 @@ const SEG = 8;
 const VS = `#version 300 es
 layout(location=0) in vec2 aQ; layout(location=1) in vec4 a0; layout(location=2) in vec4 a1; layout(location=3) in vec4 a2; layout(location=4) in vec4 a3; layout(location=5) in vec4 a4;
 uniform mat4 uVP, uPrev; uniform vec3 uOff, uEye, uSun; uniform vec3 uPal[84]; uniform float uFog, uK, uMinW, uStretch, uDens, uGrow, uReveal; uniform vec2 uRes, uFront;
-uniform vec3 uSkyLo, uSkyHi, uSkyPale;
+uniform vec3 uSkyLo, uSkyHi, uSkyPale, uSmear;
 out vec2 vUv; out vec3 vA; out vec3 vB; flat out float vStamp; out float vFresh;
 float h(float s, float k){ return fract(sin(s*k)*43758.5453); }
 void main(){
@@ -209,20 +213,21 @@ void main(){
   // The stroke is laid in the world, on its face, along its own way: nothing about how it lies comes from the screen, so
   // it can't swing as the eye moves. Across it, its width turns from lying on the face toward facing the eye as it gets
   // further off, so it never thins to a sliver (after Brush Rush).
+  // (the speed: at pace the stroke turns, on its own face, toward the way the eye is going (one way for every stroke, the
+  // eye's smoothed motion in the world, so it holds steady), and draws out by as far as the eye's gone in a moment: the
+  // ground and the rock fall into line with the motion, and stream past)
+  float smearL = 0.;
+  if (!sky && a4.z < .5 && dot(uSmear, uSmear) > 1e-3) {
+    vec3 sd = uSmear - n*dot(uSmear, n); float sl = length(sd);
+    if (sl > 1e-3) { sd /= sl; if (dot(sd, T) < 0.) sd = -sd; T = normalize(mix(T, sd, clamp(sl/2.4, 0., 1.)*.9)); smearL = sl; }
+  }
   vec3 Bn = normalize(cross(n, T)), Be = cross(T, V); float bl = length(Be); Be = bl > .001 ? Be/bl : Bn; if (dot(Be, Bn) < 0.) Be = -Be;
   float face = sky ? 1. : both ? .35 + .5*smoothstep(4., 40., dist) : .15 + .75*smoothstep(5., 70., dist);
   vec3 Wd = normalize(mix(Bn, Be, face));
   // its size: thinned out, the ones kept are bigger; never thinner on the picture than a few pixels, never more than a part of it
   float grow = inversesqrt(max(keep, .3)), k = uK*uRes.y*.5/c.w;
   float len = a1.w*grow, wid = a2.w*grow;
-  wid = clamp(wid, uMinW/k, uRes.y*.19/k); len = clamp(len, wid*1.6, uRes.y*.5/k);
-  // (stretched along its own way, as far as it moves along it on the picture since the last frame: longer, never turned)
-  vec4 cp = uPrev*vec4(w, 1.);
-  if (cp.w > .3 && uStretch > 0. && a4.z < .5) {
-    vec4 ct = uVP*vec4(w + T, 1.); vec2 px = uRes*.5, dT = (ct.xy/max(ct.w, .05) - c.xy/c.w)*px, m = (c.xy/c.w - cp.xy/cp.w)*px;
-    float dl = length(dT), ml = length(m);
-    if (dl > 1e-3 && ml > 4.) len += min(ml, uRes.y*.12)/k*uStretch*abs(dot(dT/dl, m/ml))*smoothstep(4., 40., ml)*(sky ? .3 : 1.);
-  }
+  wid = clamp(wid, uMinW/k, uRes.y*.19/k); len = clamp(len, wid*1.6, uRes.y*.5/k) + min(smearL, uRes.y*.3/k);
   float u = aQ.x*g, c2 = 2.*u - 1., s = (u - .5)*len, bend = a3.z*len*(1. - c2*c2)*.25;
   vec3 p = w + T*s + Wd*(aQ.y*wid*.5 + bend);
   vec4 cq = uVP*vec4(p, 1.);
@@ -293,7 +298,7 @@ export class Painter {
     const p = gl.createProgram()!; gl.attachShader(p, sh(gl.VERTEX_SHADER, VS)); gl.attachShader(p, sh(gl.FRAGMENT_SHADER, FS)); gl.linkProgram(p);
     if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p) ?? 'link');
     this.prog = p;
-    for (const k of ['uVP', 'uPrev', 'uOff', 'uEye', 'uSun', 'uPal', 'uFog', 'uK', 'uMinW', 'uStretch', 'uDens', 'uRes', 'uAtlas', 'uSkyLo', 'uSkyHi', 'uSkyPale', 'uFront', 'uGrow', 'uReveal']) this.u[k] = gl.getUniformLocation(p, k);
+    for (const k of ['uSmear', 'uVP', 'uPrev', 'uOff', 'uEye', 'uSun', 'uPal', 'uFog', 'uK', 'uMinW', 'uStretch', 'uDens', 'uRes', 'uAtlas', 'uSkyLo', 'uSkyHi', 'uSkyPale', 'uFront', 'uGrow', 'uReveal']) this.u[k] = gl.getUniformLocation(p, k);
     gl.useProgram(p);
     gl.uniform3fv(this.u.uPal, palette); gl.uniform3fv(this.u.uSun, new Float32Array(sun));
     gl.uniform3f(this.u.uSkyLo, 0.2, 0.42, 0.95); gl.uniform3f(this.u.uSkyHi, 0.015, 0.2, 0.82); gl.uniform3f(this.u.uSkyPale, 0.62, 0.72, 0.98);
@@ -317,9 +322,10 @@ export class Painter {
     for (const i of [0, 1]) { const want = s + this.lead[i], f = this.front[i]; if (want > f) this.front[i] = f + Math.max((want - f) * Math.min(1, dt * 1.6), Math.min(want - f, 20 * dt)); }
   }
   /** set up for a frame: the eye, its matrices (now and the last frame's), the canvas */
-  begin(vp: Float32Array, prev: Float32Array, eye: number[], projY: number, w: number, h: number, dpr: number) {
+  begin(vp: Float32Array, prev: Float32Array, eye: number[], projY: number, w: number, h: number, dpr: number, smear: number[] = [0, 0, 0]) {
     const gl = this.gl;
     gl.useProgram(this.prog);
+    gl.uniform3f(this.u.uSmear, smear[0] * this.stretch, smear[1] * this.stretch, smear[2] * this.stretch);
     gl.uniformMatrix4fv(this.u.uVP, false, vp); gl.uniformMatrix4fv(this.u.uPrev, false, prev);
     gl.uniform3fv(this.u.uEye, new Float32Array(eye)); gl.uniform1f(this.u.uK, projY); gl.uniform2f(this.u.uRes, w, h);
     gl.uniform1f(this.u.uMinW, 2.4 * dpr); gl.uniform1f(this.u.uStretch, this.stretch); gl.uniform1f(this.u.uDens, this.dens);
@@ -364,10 +370,10 @@ export class Brush2D {
     return c;
   }
   /** a stroke from its base at `a` (half-width w) to its point at `b`, in stamp `st` */
-  wedge(ctx: CanvasRenderingContext2D, a: number[], b: number[], w: number, col: string, st = 7) {
+  wedge(ctx: CanvasRenderingContext2D, a: number[], b: number[], w: number, col: string, st = 0) {
     const dx = b[0] - a[0], dy = b[1] - a[1], L = Math.hypot(dx, dy);
     if (L < 1) return;
-    const W = Math.max(1.6, w * 2.6), cell = [(st % STAMP.COLS) * STAMP.W, Math.floor(st / STAMP.COLS) * STAMP.H];
+    const W = Math.max(2, w * 3), cell = [(st % STAMP.COLS) * STAMP.W, Math.floor(st / STAMP.COLS) * STAMP.H];
     ctx.save(); ctx.translate(a[0], a[1]); ctx.rotate(Math.atan2(dy, dx));
     ctx.drawImage(this.sheet(col), cell[0], cell[1], STAMP.W, STAMP.H, -L * 0.03, -W / 2, L * 1.06, W);
     ctx.restore();

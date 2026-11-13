@@ -95,7 +95,7 @@ export class Renderer {
   /** painted (`paint=1`, paint.ts): the mountain laid in brush strokes over its facets; and the strokes, built with each
    * chunk, the backdrop's and the sky's once */
   paint = false; painter: Painter | null = null; stretchWanted = 1; leadWanted: [number, number] | null = null;
-  private strokes = new Map<number, Strokes>(); private backStrokes: Strokes[] = []; private moving: Strokes | null = null; private prevEye: number[] | null = null; private skyS: Strokes | null = null; private prevVP: Mat | null = null;
+  private strokes = new Map<number, Strokes>(); private backStrokes: Strokes[] = []; private moving: Strokes | null = null; private prevEye: number[] | null = null; private prevEye0: number[] | null = null; private eyeV = [0, 0, 0]; private skyS: Strokes | null = null; private prevVP: Mat | null = null;
   /** your own track, fed after each step of the sim */
   readonly trail: Trail;
   vp: Mat = new Float32Array(16); W = 1; H = 1; dpr = 1;
@@ -156,7 +156,12 @@ export class Renderer {
     // (the last frame's eye, for the strokes' stretch: none on a held frame, or when the eye's jumped (put back, a cut))
     const jump = !this.prevEye || Math.hypot(view.eye[0] - this.prevEye[0], view.eye[1] - this.prevEye[1], view.eye[2] - this.prevEye[2]) > 8;
     const prev = this.prevVP && dt > 0 && !jump ? this.prevVP : this.vp; this.prevVP = this.vp; this.prevEye = view.eye.slice();
-    const pt = this.painter, paintBegin = () => pt!.begin(this.vp, prev, view.eye, 1 / Math.tan(fov / 2), this.canvas.width, this.canvas.height, this.dpr);
+    // (the eye's motion, smoothed (not its shake), for the strokes' smear: where the world was, as the eye sees it, 0.09 s ago)
+    if (dt > 0 && !jump && this.prevEye0) for (let k = 0; k < 3; k++) this.eyeV[k] += ((view.eye[k] - this.prevEye0[k]) / dt - this.eyeV[k]) * Math.min(1, dt * 6);
+    if (dt === 0 || jump) this.eyeV = dt === 0 ? this.eyeV : [0, 0, 0];
+    this.prevEye0 = view.eye.slice();
+    const smear = dt > 0 ? this.eyeV.map((v) => v * 0.09) : [0, 0, 0];
+    const pt = this.painter, paintBegin = () => pt!.begin(this.vp, prev, view.eye, 1 / Math.tan(fov / 2), this.canvas.width, this.canvas.height, this.dpr, smear);
     gl.viewport(0, 0, this.canvas.width, this.canvas.height);
     const sky = hex(SKY); gl.clearColor(sky[0], sky[1], sky[2], 1); gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
     gl.enable(gl.DEPTH_TEST); gl.disable(gl.CULL_FACE);
@@ -213,7 +218,7 @@ export class Renderer {
       // (the ruts, the track, the flags and the falls are windows sliding along the way: their strokes seeded by place)
       // (not the gouges: they're cut to the eye, finer near it and broader away, so their faces change as you ride and
       // strokes on them couldn't hold still; the road's own strokes run along it instead)
-      const parts = [new Float32Array(0), strokesOver(trackV, 13, null, 4000, true, 0.1), shadowOn ? strokesOver(sh, 17, null, 4000, true) : new Float32Array(0), strokesOver(flagsV, 19, null, 6000, true, 1.5), strokesOver(fallsV, 23, null, 6000, true, 2), strokesOver(body, 29, null, 9000, true)];
+      const parts = [new Float32Array(0), strokesOver(trackV, 13, null, 4000, true, 0.1, true), shadowOn ? strokesOver(sh, 17, null, 4000, true, 0, true) : new Float32Array(0), strokesOver(flagsV, 19, null, 6000, true, 1.5), strokesOver(fallsV, 23, null, 6000, true, 2), strokesOver(body, 29, null, 9000, true)];
       const all = new Float32Array(parts.reduce((a, p) => a + p.length, 0)); let at = 0;
       for (const p of parts) { all.set(p, at); at += p.length; }
       if (!this.moving) this.moving = pt.make(all, true); else this.moving.set(all);
