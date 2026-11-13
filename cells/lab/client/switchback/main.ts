@@ -31,6 +31,7 @@ import { C15R } from './hand';
 const q = new URLSearchParams(location.search);
 const seed = Number(q.get('seed') ?? 1) | 0 || 1, preview = q.has('preview'), still = q.has('still');
 const look = q.get('look');
+const zjit = q.has('zjit');
 /** straight into it (tests, pinned frames, the preview): no title */
 const direct = preview || still || q.has('auto') || q.has('t') || !!look;
 let auto = q.has('auto') || preview || !direct;
@@ -334,6 +335,9 @@ function loop(now: number) {
   }
   if (!auto) sound.update(rider, braking, paused ? 0 : dt);
   seen = rider.events.length;
+  // (`zjit`: every face's depth nudged a few steps every other frame, nothing else moved, for finding where faces fight in
+  // depth: a held frame that changes under it is fighting)
+  rd.zjit = zjit ? (drawn % 2) * 2.4e-7 : 0;
   rd.frame(view(paused ? 0 : dt, t), rider, t, still || paused ? 0 : dt, drawn++ < 2 ? 99 : 1);
   seen = rider.events.length; sound.sync(seen);
   if (rider.air) bigAir = Math.max(bigAir, rider.airT);

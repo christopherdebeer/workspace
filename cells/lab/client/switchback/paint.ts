@@ -93,8 +93,8 @@ export function lineOf(c: Course, s0: number, s1: number) {
 
 /**
  * Strokes over a mesh's faces (its vertices, four floats each: three to a triangle), enough to cover it with no
- * underpainting. Each face's strokes are its own (seeded by the face), so a mesh built afresh each frame (the rider)
- * keeps its strokes where they were on it.
+ * underpainting. Each face's strokes are its own (seeded by the face, or by its place: `place`), so a mesh built afresh
+ * each frame (the rider, the ruts) keeps its strokes where they were on it.
  *
  * - the ground (the road, the snow, the rock): two passes, the masses (big, broad, laid first as the front comes) and
  *   the detail over them; sized by the road (`line`: fine by it, broad away), each laid at its station so the front
@@ -104,11 +104,13 @@ export function lineOf(c: Course, s0: number, s1: number) {
  * - things (the fence, the posts, the pines, the kickers, the rider, a flag): small, sized by their faces, along each
  *   face's longest edge, painted on both sides.
  */
-export function strokesOver(verts: Float32Array, seed: number, line: number[] | null, cap = 26000, moving = false): Float32Array {
+export function strokesOver(verts: Float32Array, seed: number, line: number[] | null, cap = 26000, moving = false, place = 0): Float32Array {
   const out: number[] = [];
   const n = verts.length / 12;
   for (let t = 0; t < n && out.length / STROKE < cap; t++) {
-    const R = rng(hash2(seed, t) + 7);
+    // (each face's strokes seeded by the face: by its place in the mesh, or, for a mesh that's a window sliding along the
+    // way (`place`, the size it's known to), by where it is, so the same face keeps the same strokes as the window moves)
+    const R = place > 0 ? rng(hash2(seed, hash2(Math.round((verts[t * 12] + verts[t * 12 + 4] + verts[t * 12 + 8]) / (3 * place)), Math.round((verts[t * 12 + 2] + verts[t * 12 + 6] + verts[t * 12 + 10]) / (3 * place))) ^ Math.round((verts[t * 12 + 1] + verts[t * 12 + 5] + verts[t * 12 + 9]) / (3 * place))) + 7) : rng(hash2(seed, t) + 7);
     const o = t * 12, mt = verts[o + 3], m = Math.floor(mt);
     const ax = verts[o], ay = verts[o + 1], az = verts[o + 2], bx = verts[o + 4], by = verts[o + 5], bz = verts[o + 6], cx = verts[o + 8], cy = verts[o + 9], cz = verts[o + 10];
     const ux = bx - ax, uy = by - ay, uz = bz - az, vx = cx - ax, vy = cy - ay, vz = cz - az;
@@ -201,7 +203,10 @@ void main(){
   float keep = sky || both ? 1. : uDens*mix(1., .5, smoothstep(80., 900., dist));
   // (no culling by facing: the facets' depth says what's hidden; a face turned a little away still shows)
   if (!sky && dot(n, toE) < 0.) n = -n;
-  if (g <= 0. || h(seed, 12.9898) > keep) { gl_Position = vec4(2., 2., 2., 1.); return; }
+  // (thinned with distance: a stroke past its turn shrinks away over a little more distance, rather than going at once)
+  float thin = clamp((keep - h(seed, 12.9898))/.12 + 1., 0., 1.);
+  g *= thin;
+  if (g <= 0.) { gl_Position = vec4(2., 2., 2., 1.); return; }
   // (a hair toward the eye, more the further: it sits over its own face)
   if (!sky) w += toE*(both ? .03 + dist*.002 : .1 + dist*.003) + n*(both ? .01 : .03);
   vec4 c = uVP*vec4(w, 1.), ct = uVP*vec4(w + t, 1.);
@@ -211,9 +216,11 @@ void main(){
   if (uUseDepth > .5 && !sky) {
     vec3 nd = c.xyz/c.w; vec2 uv = nd.xy*.5 + .5;
     if (uv.x > 0. && uv.x < 1. && uv.y > 0. && uv.y < 1.) {
-      float z = texture(uDepth, uv).r*2. - 1., N = .3, F = 9000.;
+      float z = texture(uDepth, uv).r*2. - 1., N = .6, F = 9000.;
       float seen = 2.*N*F/(F + N - z*(F - N)), mine = c.w;
-      if (mine > seen + .3 + seen*.035) { gl_Position = vec4(2., 2., 2., 1.); return; }
+      float tol = .3 + seen*.035, hid = clamp((mine - seen - tol)/tol, 0., 1.);
+      if (hid >= 1.) { gl_Position = vec4(2., 2., 2., 1.); return; }
+      g *= 1. - hid;
     }
   }
   vec2 px = uRes*.5, sc = c.xy/c.w, st = ct.xy/max(ct.w, .05);
@@ -233,6 +240,10 @@ void main(){
   if (abs(bend) > .02) { float Rr = L/bend, an = s/Rr; q = vec2(Rr*sin(an), Rr*(1. - cos(an))); nr = vec2(-sin(an), cos(an)); } else { q = vec2(s, 0.); nr = vec2(0., 1.); }
   q += nr*aQ.y*W*.5;
   gl_Position = vec4(c.xy + (dir*q.x + vec2(-dir.y, dir.x)*q.y)/px*c.w, c.z, c.w);
+  // (its depth: lifted toward the eye by half its own size, along the line to the eye so it doesn't move on the picture,
+  // so a flat mark turned to the eye clears the face it's laid on instead of cutting through it; where it's tested
+  // against depth at all, nothing fights)
+  if (!sky) { float lift = max(a1.w, a2.w)*.5*grow; vec4 cl = uVP*vec4(w + toE*min(lift, dist*.5), 1.); gl_Position.z = cl.z/cl.w*c.w; }
   vUv = vec2(u, aQ.y*.5 + .5); vStamp = a3.y; vFresh = fresh;
   if (sky) {
     vec3 col = mix(uSkyLo, uSkyHi, smoothstep(0., .8, a0.w));

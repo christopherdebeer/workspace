@@ -20,11 +20,16 @@ import { buildGouges } from './gouge';
 import { Painter, Strokes, strokesOver, skyStrokes, lineOf } from './paint';
 
 const VS = `#version 300 es
-in vec4 aP; uniform mat4 uVP; uniform vec3 uOff; out vec3 vW; flat out int vM;
+in vec4 aP; uniform mat4 uVP; uniform vec3 uOff; uniform float uZj; out vec3 vW; flat out int vM;
 flat out float vT; uniform vec3 uEye;
 // (positions relative to the eye: in world metres, far down the mountain, the faces' screen derivatives lose precision and
 // their normals speckle)
-void main() { vec3 w = aP.xyz + uOff; vW = w - uEye; vM = int(aP.w); vT = fract(aP.w); gl_Position = uVP * vec4(w, 1.); }`;
+void main() { vec3 w = aP.xyz + uOff; vW = w - uEye; vM = int(aP.w); vT = fract(aP.w); gl_Position = uVP * vec4(w, 1.);
+  // (what's laid on the ground (the road, its ruts and gouges, a shadow) is drawn a hair toward the eye in depth, so it
+  // never fights the ground it lies on, however far off)
+  if (vM == 1 || vM == 9 || vM == 10 || vM == 20) gl_Position.z -= 3e-6 * gl_Position.w;
+  // (a test's nudge: a face's depth, and only its depth, moved by its own few steps)
+  gl_Position.z += uZj * fract(float(gl_VertexID / 3) * .618) * gl_Position.w; }`;
 const FS = `#version 300 es
 precision highp float;
 in vec3 vW; flat in int vM; flat in float vT; uniform vec3 uPal[84]; uniform vec3 uEye; uniform vec3 uSun; uniform float uFog; out vec4 o;
@@ -58,6 +63,8 @@ const hex = (h: string) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16) 
 /** the sun: high, ahead and to the right of the way down (the drop side), so the wall's faces catch it and shadows fall back toward the eye */
 export const SUN = norm([-0.5, 0.72, 0.5]);
 export const SKY = '#0741eb';
+/** the eye's near plane: as far out as the eye allows (the depth's precision goes as its square, far off) */
+export const NEAR = 0.6;
 /** the paper the painted picture's laid on (`paint=1`): where no stroke reaches */
 export const PAPER = '#ece7df';
 
@@ -95,6 +102,8 @@ export class Renderer {
   fx = new Fx();
   /** for judging a frame: the speed layer (`fx=0` hides it) and the distance fade (`fog=0` shows each face's own colour) */
   speed = true; fog = true;
+  /** a test's depth nudge (`zjit`) */
+  zjit = 0;
   /** the air on the rider: peeling off the posed figure, or the three streaks set at the helmet and the bars it had
    * before (`wake=fixed`), or none (`wake=0`) */
   wake: 'fixed' | 'peel' | 'none' = 'peel';
@@ -108,7 +117,7 @@ export class Renderer {
     const p = gl.createProgram()!; gl.attachShader(p, sh(gl.VERTEX_SHADER, VS)); gl.attachShader(p, sh(gl.FRAGMENT_SHADER, FS)); gl.bindAttribLocation(p, 0, 'aP'); gl.linkProgram(p);
     if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p) ?? 'link');
     this.prog = p;
-    for (const n of ['uVP', 'uOff', 'uPal', 'uEye', 'uSun', 'uFog']) this.u[n] = gl.getUniformLocation(p, n);
+    for (const n of ['uVP', 'uOff', 'uPal', 'uEye', 'uSun', 'uFog', 'uZj']) this.u[n] = gl.getUniformLocation(p, n);
     gl.useProgram(p);
     gl.uniform3fv(this.u.uPal, new Float32Array(PALETTE.flat().map(hex).flat()));
     gl.uniform3fv(this.u.uSun, new Float32Array(SUN));
@@ -143,7 +152,7 @@ export class Renderer {
     // (the eye's roll: its up tipped toward its right)
     const fwd = norm([view.target[0] - view.eye[0], 0, view.target[2] - view.eye[2]]), rt = [-fwd[2], 0, fwd[0]];
     const upv = norm([rt[0] * Math.sin(view.roll), Math.cos(view.roll), rt[2] * Math.sin(view.roll)]);
-    this.vp = mul(perspective(fov, asp, 0.3, 9000), lookAt(view.eye, view.target, upv));
+    this.vp = mul(perspective(fov, asp, NEAR, 9000), lookAt(view.eye, view.target, upv));
     // (the last frame's eye, for the strokes' stretch: none on a held frame, or when the eye's jumped (put back, a cut))
     const jump = !this.prevEye || Math.hypot(view.eye[0] - this.prevEye[0], view.eye[1] - this.prevEye[1], view.eye[2] - this.prevEye[2]) > 8;
     const prev = this.prevVP && dt > 0 && !jump ? this.prevVP : this.vp; this.prevVP = this.vp; this.prevEye = view.eye.slice();
@@ -152,7 +161,7 @@ export class Renderer {
     const sky = hex(SKY); gl.clearColor(sky[0], sky[1], sky[2], 1); gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
     gl.enable(gl.DEPTH_TEST); gl.disable(gl.CULL_FACE);
     gl.useProgram(this.prog);
-    gl.uniformMatrix4fv(this.u.uVP, false, this.vp); gl.uniform3fv(this.u.uEye, new Float32Array(view.eye));
+    gl.uniformMatrix4fv(this.u.uVP, false, this.vp); gl.uniform3fv(this.u.uEye, new Float32Array(view.eye)); gl.uniform1f(this.u.uZj, this.zjit);
     const body = this.body = buildRider({ x: r.x, y: r.y, z: r.z, heading: r.heading, pitch: r.pitch, lean: r.lean, squash: r.squash, crashT: r.crashT, air: r.air, steer: r.steer, yFront: r.yFront, yRear: r.yRear, dist: r.dist, body: r.body, whip: this.whip || r.whip, trick: r.trickOut ? r.outs : undefined, style: this.style }, t);
     // (the rider, cut: lit for the picture rather than by the sun, from above, behind the eye and to its left, so what
     // faces you is one flat field and only the side turned toward the eye's right (the flank, the outside of each arm and
@@ -203,7 +212,10 @@ export class Renderer {
       // (the ground's strokes, the far chunks first so the near paint over them at the edges)
       for (const n of [...this.strokes.keys()].sort((a, b) => b - a)) pt.draw(this.strokes.get(n)!, [0, 0, 0], this.fog);
       // (and what moves, each face's strokes its own, so they stay put on it)
-      const parts = [strokesOver(rutsV, 11, null, 6000, true), strokesOver(trackV, 13, null, 4000, true), shadowOn ? strokesOver(sh, 17, null, 4000, true) : new Float32Array(0), strokesOver(flagsV, 19, null, 6000, true), strokesOver(fallsV, 23, null, 6000, true), strokesOver(body, 29, null, 9000, true)];
+      // (the ruts, the track, the flags and the falls are windows sliding along the way: their strokes seeded by place)
+      // (not the gouges: they're cut to the eye, finer near it and broader away, so their faces change as you ride and
+      // strokes on them couldn't hold still; the road's own strokes run along it instead)
+      const parts = [new Float32Array(0), strokesOver(trackV, 13, null, 4000, true, 0.1), shadowOn ? strokesOver(sh, 17, null, 4000, true) : new Float32Array(0), strokesOver(flagsV, 19, null, 6000, true, 1.5), strokesOver(fallsV, 23, null, 6000, true, 2), strokesOver(body, 29, null, 9000, true)];
       const all = new Float32Array(parts.reduce((a, p) => a + p.length, 0)); let at = 0;
       for (const p of parts) { all.set(p, at); at += p.length; }
       if (!this.moving) this.moving = pt.make(all, true); else this.moving.set(all);

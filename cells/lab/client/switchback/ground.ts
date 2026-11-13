@@ -30,10 +30,12 @@ export function section(c: Course, i: number) {
   const ch = character(c, i), wy = 0.25 + 0.95 * ch.wall, wu = 1.9 - 0.9 * ch.wall, dyk = 0.3 + 0.7 * ch.drop, duk = 1.9 - 0.9 * ch.drop;
   for (let k = WALL.length - 1; k >= 0; k--) { const [du0, dy0] = WALL[k], du = du0 * (k ? wu : 1), dy = dy0 * wy; out.push({ u: -half - du + (k ? j(k, du * 0.3) : 0), y: st.y + dy + (k ? j(k + 20, 0.6 + dy * 0.35) : 0), ds: k > 1 ? j(k + 80, STEP * 0.9) : 0 }); }
   const natural = st.site && st.site !== 'built';
-  const under = st.feature === 'none' || st.feature === 'whoop' ? -0.08 : 0;
+  // (under the road the ground sinks away from it, so the two never lie in one plane: a little at its edges, more under its
+  // middle, where the road's own roughness and the 4 m between sections would otherwise bring the ground up through it)
+  const under = -0.15, sink = 0.3;
   // (a natural take-off: the ground itself rises under the ramp, a mound of snow and rock, not a trestle)
   const mound = st.feature === 'ramp' && natural ? st.lift : 0;
-  out.push({ u: -half, y: st.y + under + mound * 0.9, ds: 0 }, { u: -half * 0.3, y: st.y + under + mound - 0.15 * Math.sign(mound), ds: 0 }, { u: half * 0.3, y: st.y + under + mound - 0.15 * Math.sign(mound), ds: 0 }, { u: half, y: st.y + under + mound * 0.9, ds: 0 });
+  out.push({ u: -half, y: st.y + under + mound * 0.9, ds: 0 }, { u: -half * 0.3, y: st.y + under - sink + mound - 0.15 * Math.sign(mound), ds: 0 }, { u: half * 0.3, y: st.y + under - sink + mound - 0.15 * Math.sign(mound), ds: 0 }, { u: half, y: st.y + under + mound * 0.9, ds: 0 });
   // (the drop: a shelf where it's gentle, straight down where it's sheer; an outcrop of rock rising beside the route where
   // the knob's up, the valley beyond it)
   const knob = [0, 4.5, 7, 3, 0, 0, 0, 0];
