@@ -146,7 +146,7 @@ export class Renderer {
     const gl = this.gl;
     if (this.paint && !this.painter) {
       this.painter = new Painter(gl, new Float32Array(PALETTE.flat().map(hex).flat()), SUN);
-      this.backStrokes = [this.painter.make(strokesOver(buildRanges(this.course.seed), this.course.seed * 31, null, 22000)), this.painter.make(strokesOver(buildValley(this.course.seed), this.course.seed * 37, null, 12000))];
+      this.backStrokes = [this.painter.make(strokesOver(buildRanges(this.course.seed), this.course.seed * 31, null, 45000)), this.painter.make(strokesOver(buildValley(this.course.seed), this.course.seed * 37, null, 30000))];
       this.skyS = this.painter.make(skyStrokes(this.course.seed)); this.painter.stretch = this.stretchWanted; if (this.leadWanted) this.painter.lead = this.leadWanted;
       for (const b of this.chunks.values()) b.free();
       this.chunks.clear();
@@ -227,7 +227,8 @@ export class Renderer {
       // (the ruts, the track, the flags and the falls are windows sliding along the way: their strokes seeded by place)
       // (not the gouges: they're cut to the eye, finer near it and broader away, so their faces change as you ride and
       // strokes on them couldn't hold still; the road's own strokes run along it instead)
-      const parts = [new Float32Array(0), strokesOver(trackV, 13, null, 4000, true, 0.1, true), shadowOn ? strokesOver(sh, 17, null, 4000, true, 0, true) : new Float32Array(0), strokesOver(flagsV, 19, null, 6000, true, 1.5), strokesOver(fallsV, 23, null, 6000, true, 2), strokesOver(body, 29, null, 9000, true)];
+      const parts = [new Float32Array(0), strokesOver(trackV, 13, null, 4000, true, 0.1, true), new Float32Array(0), // (no shadow: as strokes it spiked out of the slope rather than lying on it)
+         strokesOver(flagsV, 19, null, 6000, true, 1.5), strokesOver(fallsV, 23, null, 6000, true, 2), strokesOver(body, 29, null, 9000, true)];
       const all = new Float32Array(parts.reduce((a, p) => a + p.length, 0)); let at = 0;
       for (const p of parts) { all.set(p, at); at += p.length; }
       if (!this.moving) this.moving = pt.make(all, true); else this.moving.set(all);

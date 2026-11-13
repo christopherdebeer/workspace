@@ -21,6 +21,7 @@
 import type { Course } from './course';
 import { M } from './mesh';
 import { ground } from './ground';
+import { lines, plain, trackY } from './ruts';
 
 // ─── the stamps ─────────────────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -183,7 +184,7 @@ export function strokesOver(verts: Float32Array, seed: number, line: number[] | 
         const j = (R() - 0.5) * jit, cj = Math.cos(j), sj = Math.sin(j);
         const bxx = ny * tz - nz * ty, byy = nz * tx - nx * tz, bzz = nx * ty - ny * tx;
         out.push(x, y, z, mt, tx * cj + bxx * sj, ty * cj + byy * sj, tz * cj + bzz * sj, Ls * (0.75 + R() * 0.5), nx, ny, nz, Ws * (0.8 + R() * 0.4), R(), stamps[Math.floor(R() * stamps.length)], (R() - 0.5) * bendA, kind,
-          st, pass, moving ? 1 : 0, 0);
+          st, pass, moving ? 1 : 0, backdrop ? 1 : 0);
       }
     };
     if (thing) {
@@ -205,8 +206,9 @@ export function strokesOver(verts: Float32Array, seed: number, line: number[] | 
     const across = () => { const a = ny * fz - nz * fy, b = nz * fx - nx * fz, c = nx * fy - ny * fx, l = Math.hypot(a, b, c) || 1; return [a / l, b / l, c / l]; };
     const along = () => { const dp = lx * nx + lz * nz; const x = lx - nx * dp, y = -ny * dp, z = lz - nz * dp; const l = Math.hypot(x, y, z) || 1; return [x / l, y / l, z / l]; };
     if (backdrop) {
-      const [tx, ty, tz] = fl > 0.12 ? across() : along(), Ls = Math.max(10, Math.min(260, Math.sqrt(area) * 0.6));
-      emit(tx, ty, tz, Ls, Ls * 0.4, 3.2, 0, [7, 11, 0, 10], 0.4, 0.3, 0);
+      // (the far off as the reference has it: a few large calm planes, level, laid edge to edge so no paper shows through)
+      const [tx, ty, tz] = fl > 0.12 ? across() : along(), Ls = Math.max(20, Math.min(420, Math.sqrt(area) * 1.1));
+      emit(tx, ty, tz, Ls, Ls * 0.5, 8, 0, [11, 7, 11], 0.15, 0.12, 0);
       continue;
     }
     let tx: number, ty: number, tz: number;
@@ -252,7 +254,9 @@ void main(){
   float g = 1., fresh = 0.;
   if (a4.x > -1e8) { float fr = a4.y < .5 ? uFront.x : uFront.y; g = clamp((fr - a4.x)/uGrow, 0., 1.); fresh = 1. - clamp((fr - a4.x - uGrow)/25., 0., 1.); }
   else g = clamp((uReveal*1.5 - h(seed, 7.77)*.9 - (sky ? 0. : .2))/.35, 0., 1.);
-  float keep = sky || both ? 1. : uDens*mix(1., .5, smoothstep(80., 900., dist));
+  bool far = a4.w > .5;
+  // (thinned with distance, but never the backdrop: thinned, it went to blotches on paper)
+  float keep = sky || both || far ? 1. : uDens*mix(1., .5, smoothstep(80., 900., dist));
   // (a stroke on a face turned away from the eye isn't laid (a thing, thin, is painted on both sides): it shrinks away as its
   // face turns from the eye, rather than going at once; so nothing lifted toward the eye shows through from behind an edge)
   if (!sky && !both) g *= smoothstep(-.02, .12, dot(n, V));
@@ -297,16 +301,17 @@ void main(){
   }
   // (its colour: the face's band, as the facets pick it, a little jittered stroke by stroke; and the band next to it)
   int mt = int(a0.w); float tone = fract(a0.w);
-  float l = dot(n, uSun) + (tone/.9 - .5)*.42 + (h(seed, 78.233) - .5)*.12;
+  float l = dot(n, uSun) + (tone/.9 - .5)*.42 + (far ? 0. : (h(seed, 78.233) - .5)*.12);
   int b = l > .62 ? 0 : l > .3 ? 1 : l > -.05 ? 2 : 3;
   int b2 = clamp(b + (h(seed, 3.1) > .5 ? 1 : -1), 0, 3);
-  vec3 A = uPal[mt*4 + b], B = mix(A, uPal[mt*4 + b2], .45);
+  vec3 A = uPal[mt*4 + b], B = mix(A, uPal[mt*4 + b2], far ? .12 : .45);
   float fd = length((w - uEye).xz), f = floor(clamp((fd - 80.)/520., 0., 1.)*4.)/4.;
   vec3 fogs[4] = vec3[4](vec3(.62, .66, .9), vec3(.33, .45, .88), vec3(.14, .33, .84), vec3(.09, .26, .78));
   float fk = min(1., f*1.1)*uFog;
   // (no two strokes alike: a little lighter or darker, a little warmer or cooler)
   vec3 tint = mix(vec3(.95, .98, 1.06), vec3(1.05, 1., .93), h(seed, 4.7))*(1. + (h(seed, 9.13) - .5)*.12);
-  A *= mix(vec3(1.), tint, .7); B *= mix(vec3(1.), tint, .7);
+  float tk = far ? .15 : .7;
+  A *= mix(vec3(1.), tint, tk); B *= mix(vec3(1.), tint, tk);
   vA = mix(A, fogs[b], fk); vB = mix(B, fogs[b2], fk);
 }`;
 const FS = `#version 300 es
@@ -448,29 +453,50 @@ export class Brush2D {
  * Strokes laid deliberately from the course itself, not scattered over faces: what says where the way goes.
  * - the road's two edges: long strokes following the course, a band darker than the road, broken now and then;
  * - the drop's lip (where the ground breaks away beside the road): a lit edge of snow;
- * - the wall's foot (where the ground starts up beside the road): a line of shade.
+ * - the ruts: the worn lines down the road (ruts.ts's own), a step darker than the road.
+ * Each lies on the surface, its normal the surface's own there.
  * Each is laid at its station, by the detail's front.
  */
 export function courseStrokes(c: Course, s0: number, s1: number): Float32Array {
   const out: number[] = [], R = rng(c.seed * 977 + s0 * 13);
-  const lane = (u: (s: number, half: number) => number, y: (s: number, u: number, py: number) => number, m: number, tone: number, len: number, wid: number, step: number, stamps: number[], gap: number) => {
-    for (let s = s0; s < s1; s += step * (0.8 + R() * 0.4)) {
-      const a = c.at(s), b = c.at(s + 1);
-      if (a.feature === 'gap' || b.feature === 'gap' || a.feature === 'ramp' || a.feature === 'deck') continue;
-      if (R() < gap) continue;
-      const half = a.width / 2, ua = u(s, half), ub = u(s + 1, half), p = c.point(s, ua), q = c.point(s + 1, ub);
-      if (p.y == null || q.y == null) continue;
-      const ya = y(s, ua, p.y), yb = y(s + 1, ub, q.y), tx = q.x - p.x, ty = yb - ya, tz = q.z - p.z, tl = Math.hypot(tx, ty, tz) || 1;
-      out.push(p.x, ya + 0.04, p.z, m + tone * 0.9, tx / tl, ty / tl, tz / tl, len * (0.75 + R() * 0.5), 0, 1, 0, wid * (0.8 + R() * 0.4), R(), stamps[Math.floor(R() * stamps.length)], (R() - 0.5) * 0.25, 0, s, 1, 0, 0);
-    }
+  /** a stroke laid on the surface from (sa, ua) to (sb, ub), its normal the surface's own there (so it lies along it, not
+   * standing out of a slope) */
+  const lay = (sa: number, ua: number, sb: number, ub: number, y: (s: number, u: number) => number, m: number, tone: number, len: number, wid: number, stamps: number[]) => {
+    const p = c.point(sa, ua), q = c.point(sb, ub);
+    if (p.y == null || q.y == null) return;
+    const ya = y(sa, ua), yb = y(sb, ub), tx = q.x - p.x, ty = yb - ya, tz = q.z - p.z, tl = Math.hypot(tx, ty, tz) || 1;
+    // (across the surface: a step in u)
+    const r = c.point(sa, ua + 0.5), cx = r.x - p.x, cy = y(sa, ua + 0.5) - ya, cz = r.z - p.z;
+    let nx = ty * cz - tz * cy, ny = tz * cx - tx * cz, nz = tx * cy - ty * cx;
+    const nl = Math.hypot(nx, ny, nz) || 1; nx /= nl; ny /= nl; nz /= nl;
+    if (ny < 0) { nx = -nx; ny = -ny; nz = -nz; }
+    out.push(p.x, ya + 0.03, p.z, m + tone * 0.9, tx / tl, ty / tl, tz / tl, len * (0.75 + R() * 0.5), nx, ny, nz, wid * (0.8 + R() * 0.4), R(), stamps[Math.floor(R() * stamps.length)], (R() - 0.5) * 0.2, 0, sa, 1, 0, 0);
   };
+  const open = (s: number) => { const a = c.at(s), b = c.at(s + 1); return !(a.feature === 'gap' || b.feature === 'gap' || a.feature === 'ramp' || a.feature === 'deck'); };
   const jag = (s: number, k: number) => (hash3(c.seed, Math.round(s), k) - 0.5) * 0.5;
-  // (the road's edges)
-  lane((s, h) => -h + 0.25 + jag(s, 1), (s, u, py) => py + 0.03, M.RUT, 0.0, 2.8, 0.26, 1.6, [13, 0, 1], 0.12);
-  lane((s, h) => h - 0.25 + jag(s, 2), (s, u, py) => py + 0.03, M.RUT, 0.0, 2.8, 0.26, 1.6, [13, 0, 1], 0.12);
-  // (the drop's lip, lit; the wall's foot, in shade)
-  lane((s, h) => h + 2.3 + jag(s, 3), (s, u, py) => ground(c, s, u), M.SNOW, 0.95, 3.6, 0.4, 2.2, [8, 15, 7], 0.2);
-  lane((s, h) => -h - 1.2 + jag(s, 4), (s, u, py) => ground(c, s, u), M.SHADOW, 0.5, 3.2, 0.36, 2.2, [7, 0, 11], 0.2);
+  const road = (s: number, u: number) => trackY(c, s, u), g = (s: number, u: number) => ground(c, s, u);
+  for (let s = s0; s < s1; s += 1.6 * (0.8 + R() * 0.4)) {
+    if (!open(s)) continue;
+    const h = c.at(s).width / 2;
+    // (the road's edges)
+    if (R() > 0.12) lay(s, -h + 0.25 + jag(s, 1), s + 1, -h + 0.25 + jag(s + 1, 1), road, M.RUT, 0, 2.8, 0.26, [13, 0, 1]);
+    if (R() > 0.12) lay(s, h - 0.25 + jag(s, 2), s + 1, h - 0.25 + jag(s + 1, 2), road, M.RUT, 0, 2.8, 0.26, [13, 0, 1]);
+  }
+  // (the drop's lip, lit)
+  for (let s = s0; s < s1; s += 2.2 * (0.8 + R() * 0.4)) {
+    if (!open(s) || R() < 0.2) continue;
+    const h = c.at(s).width / 2, h1 = c.at(s + 1).width / 2;
+    lay(s, h + 2.3 + jag(s, 3), s + 1, h1 + 2.3 + jag(s + 1, 3), g, M.SNOW, 0.95, 3.6, 0.4, [8, 15, 7]);
+  }
+  // (the ruts: the worn lines down the road, as ruts.ts has them, a step darker than the road, broken now and then)
+  for (let s = Math.ceil(s0); s < s1; s += 1.5) {
+    if (!plain(c, Math.round(s)) || !plain(c, Math.round(s + 1.5)) || !open(s)) continue;
+    const A = lines(c, Math.round(s)), B = lines(c, Math.round(s + 1.5));
+    for (let k = 0; k < 3; k++) {
+      if (!A[k].own || R() < 0.2) continue;
+      lay(s, A[k].u, s + 1.5, B[k].u, road, M.RUT, 0.4, 2.2, 0.3, [0, 1, 13]);
+    }
+  }
   return new Float32Array(out);
 }
 function hash3(a: number, b: number, k: number) { let h = Math.imul(a | 0, 0x27d4eb2d) ^ Math.imul(b | 0, 0x165667b1) ^ Math.imul(k | 0, 0x9e3779b1); h = Math.imul(h ^ (h >>> 15), 0x85ebca6b); return ((h ^ (h >>> 13)) >>> 0) / 4294967296; }
