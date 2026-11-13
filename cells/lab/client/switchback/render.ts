@@ -17,7 +17,7 @@ import type { Rider, Event } from './sim';
 import { GEARS } from './audio';
 import { buildRuts, Trail } from './ruts';
 import { buildGouges } from './gouge';
-import { Painter, Strokes, strokesOver, skyStrokes, lineOf } from './paint';
+import { Painter, Strokes, Brush2D, strokesOver, skyStrokes, lineOf } from './paint';
 
 const VS = `#version 300 es
 in vec4 aP; uniform mat4 uVP; uniform vec3 uOff; uniform float uZj; out vec3 vW; flat out int vM;
@@ -201,14 +201,12 @@ export class Renderer {
       gl.colorMask(true, true, true, true); gl.stencilFunc(gl.NOTEQUAL, 1, 0xff);
       paintBegin(); for (const b of this.backStrokes) pt.draw(b, off, false); pt.end(); gl.useProgram(this.prog);
       gl.disable(gl.STENCIL_TEST);
-      // (what's near: its facets' depth into a texture, for each stroke to ask whether where it's planted is seen; then
-      // its strokes, laid far to near, each whole, over whatever edge it runs across)
-      const [dw, dh] = this.seenTarget();
-      gl.bindFramebuffer(gl.FRAMEBUFFER, this.seenFbo); gl.viewport(0, 0, dw, dh); gl.clear(gl.DEPTH_BUFFER_BIT);
+      // (what's near: its facets only in the depth; then its strokes, laid in the world on them and lifted a little toward
+      // the eye, tested against that depth pixel by pixel, far chunks first)
+      gl.clear(gl.DEPTH_BUFFER_BIT);
       gl.colorMask(false, false, false, false); near(); gl.colorMask(true, true, true, true);
-      gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.viewport(0, 0, this.canvas.width, this.canvas.height);
-      gl.disable(gl.DEPTH_TEST);
-      paintBegin(); pt.seenBy(this.seenTex);
+      gl.depthFunc(gl.LEQUAL);
+      paintBegin();
       // (the ground's strokes, the far chunks first so the near paint over them at the edges)
       for (const n of [...this.strokes.keys()].sort((a, b) => b - a)) pt.draw(this.strokes.get(n)!, [0, 0, 0], this.fog);
       // (and what moves, each face's strokes its own, so they stay put on it)
@@ -220,7 +218,7 @@ export class Renderer {
       for (const p of parts) { all.set(p, at); at += p.length; }
       if (!this.moving) this.moving = pt.make(all, true); else this.moving.set(all);
       pt.draw(this.moving, [0, 0, 0], this.fog);
-      pt.seenBy(null); pt.end(); gl.enable(gl.DEPTH_TEST); gl.useProgram(this.prog);
+      pt.end(); gl.depthFunc(gl.LESS); gl.useProgram(this.prog);
     } else {
     // (the far ranges, round the eye and a little below it, unfaded)
     gl.uniform1f(this.u.uFog, 0); gl.uniform3f(this.u.uOff, view.eye[0], view.eye[1] - 60, view.eye[2]); this.ranges.draw(); this.valley.draw();
@@ -244,22 +242,6 @@ export class Renderer {
     // (the speed layer)
     if (this.speed) this.fx.draw(this, view, r, dt); else { this.ctx.setTransform(1, 0, 0, 1, 0, 0); this.ctx.clearRect(0, 0, this.overlay.width, this.overlay.height); }
   }
-  /** the depth target the painted strokes ask (half the canvas: it's only asked at each stroke's anchor) */
-  private seenFbo: WebGLFramebuffer | null = null; private seenTex: WebGLTexture | null = null; private seenSize = [0, 0];
-  private seenTarget(): [number, number] {
-    const gl = this.gl, w = Math.max(1, this.canvas.width >> 1), h = Math.max(1, this.canvas.height >> 1);
-    if (this.seenSize[0] !== w || this.seenSize[1] !== h) {
-      if (this.seenTex) gl.deleteTexture(this.seenTex);
-      if (!this.seenFbo) this.seenFbo = gl.createFramebuffer();
-      this.seenTex = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, this.seenTex);
-      gl.texImage2D(gl.TEXTURE_2D, 0, gl.DEPTH_COMPONENT24, w, h, 0, gl.DEPTH_COMPONENT, gl.UNSIGNED_INT, null);
-      for (const [k, v] of [[gl.TEXTURE_MIN_FILTER, gl.NEAREST], [gl.TEXTURE_MAG_FILTER, gl.NEAREST], [gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE], [gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE]]) gl.texParameteri(gl.TEXTURE_2D, k, v);
-      gl.bindFramebuffer(gl.FRAMEBUFFER, this.seenFbo); gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.TEXTURE_2D, this.seenTex, 0);
-      gl.drawBuffers([gl.NONE]); gl.readBuffer(gl.NONE); gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-      this.seenSize = [w, h];
-    }
-    return [w, h];
-  }
   /** a world point on the screen (css px) and its depth, or null behind the eye */
   project(p: number[]): [number, number, number] | null {
     const m = this.vp, x = m[0] * p[0] + m[4] * p[1] + m[8] * p[2] + m[12], y = m[1] * p[0] + m[5] * p[1] + m[9] * p[2] + m[13], w = m[3] * p[0] + m[7] * p[1] + m[11] * p[2] + m[15];
@@ -282,6 +264,8 @@ type Peel = { ia: number; ib: number; f: number; dir: number[]; age: number; lif
 
 /** the speed layer: shards, smears, wake and debris, all flat vector shapes */
 export class Fx {
+  /** painted: the speed layer laid in the same brush stamps */
+  private brush: Brush2D | null = null;
   debris: Chunk[] = []; gusts: Gust[] = []; pushes: Streak[] = []; grit: Streak[] = []; peels: Peel[] = []; private peelDue = 0; private peelP = new Float32Array(0);
   /** what the ride's doing, as the speed layer (and the eye's field of view) read it: the push (0…1, speeding up on the
    * ground), the brake (0…1, slowing), a shift's pulse (at each change up the engine's gears, as the sound has them) and a
@@ -331,7 +315,9 @@ export class Fx {
     this.push += (push - this.push) * (1 - Math.exp(-dt * 6)); this.brake += (brake - this.brake) * (1 - Math.exp(-dt * 6));
     const scrub = ground ? Math.min(1, Math.abs(r.slip) * 3) : 0;
     /** a wedge: its base across `a` (half-width w, square to the motion), its point at `b` */
+    const br = rd.paint ? (this.brush ??= new Brush2D()) : null;
     const wedge = (a: number[], b: number[], w: number, col: string) => {
+      if (br) { br.wedge(c, a, b, w, col); return; }
       const dx = b[0] - a[0], dy = b[1] - a[1], L = Math.hypot(dx, dy) || 1, nx = -dy / L * w, ny = dx / L * w;
       c.fillStyle = col; c.beginPath(); c.moveTo(a[0] + nx, a[1] + ny); c.lineTo(b[0], b[1]); c.lineTo(a[0] - nx, a[1] - ny); c.closePath(); c.fill();
     };
@@ -374,6 +360,7 @@ export class Fx {
       const s = (d.r * rd.H) / p[2]; if (s < 0.6) continue;
       const q = rd.project([d.x - (d.vx - cv[0]) * 0.05, d.y - (d.vy - cv[1]) * 0.05, d.z - (d.vz - cv[2]) * 0.05]);
       if (q && Math.hypot(q[0] - p[0], q[1] - p[1]) > s * 1.5) wedge(p, q, s * 0.75, d.col);
+      if (br) { br.dab(c, p, s, d.a, d.col); continue; }
       c.fillStyle = d.col; c.beginPath();
       const ca = Math.cos(d.a), sa = Math.sin(d.a);
       for (let j = 0; j < d.pts.length; j += 2) { const x = d.pts[j] * s, y = d.pts[j + 1] * s; c[j ? 'lineTo' : 'moveTo'](p[0] + x * ca - y * sa, p[1] + x * sa + y * ca); }

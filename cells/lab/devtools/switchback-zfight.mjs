@@ -1,13 +1,14 @@
 // Where faces fight in depth: a held frame drawn with the depth (and only its depth) nudged a few steps every other frame, by an amount of its own (`zjit`); two consecutive
 // frames read back and compared (off, on, off: what changes with no nudge isn't counted). On a held frame nothing should change, so what does is fighting. Writes the frame and
-// a map of what changed to devtools/out/zfight-*.png. (node cells/lab/devtools/switchback-zfight.mjs [query …])
+// a map of what changed to devtools/out/zfight-*.png. JIT=ejit instead moves the eye 1 cm every other frame (for the
+// painted picture, `paint=1` in the query: what a small move of the eye does to its strokes). (node cells/lab/devtools/switchback-zfight.mjs [query …])
 process.env.EXPERIMENT = 'switchback'; process.env.READY = '__switchback';
 const { withWood } = await import('./harness.mjs');
 const out = new URL('./out/', import.meta.url).pathname;
 const qs = process.argv.slice(2).length ? process.argv.slice(2) : ['seed=1&t=9.5', 'seed=1&t=40', 'seed=3&t=60'];
 await withWood(async (lab) => {
   for (const [i, q] of qs.entries()) {
-    const p = await lab.open(`${q}&still&preview&fx=0&zjit`, { width: 960, height: 540 });
+    const p = await lab.open(`${q}&still&preview&fx=0&${process.env.JIT ?? 'zjit'}`, { width: 960, height: 540 });
     await p.waitForTimeout(Number(process.env.WAIT ?? 6000));
     const r = await p.evaluate(async () => {
       const c = document.getElementById('world'), grab = () => new Promise((res) => requestAnimationFrame(() => { const t = document.createElement('canvas'); t.width = c.width; t.height = c.height; const x = t.getContext('2d'); x.drawImage(c, 0, 0); res(x.getImageData(0, 0, t.width, t.height)); }));

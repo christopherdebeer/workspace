@@ -31,7 +31,8 @@ import { C15R } from './hand';
 const q = new URLSearchParams(location.search);
 const seed = Number(q.get('seed') ?? 1) | 0 || 1, preview = q.has('preview'), still = q.has('still');
 const look = q.get('look');
-const zjit = q.has('zjit');
+const zjit = q.has("zjit"), ejit = q.has("ejit"), hold = q.has("hold"), t0 = performance.now();
+let heldView: View | null = null;
 /** straight into it (tests, pinned frames, the preview): no title */
 const direct = preview || still || q.has('auto') || q.has('t') || !!look;
 let auto = q.has('auto') || preview || !direct;
@@ -338,7 +339,12 @@ function loop(now: number) {
   // (`zjit`: every face's depth nudged a few steps every other frame, nothing else moved, for finding where faces fight in
   // depth: a held frame that changes under it is fighting)
   rd.zjit = zjit ? (drawn % 2) * 2.4e-7 : 0;
-  rd.frame(view(paused ? 0 : dt, t), rider, t, still || paused ? 0 : dt, drawn++ < 2 ? 99 : 1);
+  // (`ejit`: the eye moved 1 cm every other frame, for seeing what a small move of the eye does to the strokes)
+  // (a test (`zjit`, `ejit`, `hold`) holds the eye where it's settled after a few seconds, so only what's tested moves)
+  const vw = (zjit || ejit || hold) && heldView && performance.now() - t0 > 4000 ? heldView : view(paused ? 0 : dt, t);
+  if ((zjit || ejit || hold) && !heldView && performance.now() - t0 > 4000) heldView = { ...vw, eye: vw.eye.slice(), target: vw.target.slice() };
+  if (ejit) { const e = (drawn % 2) * 0.01; vw.eye = [vw.eye[0] + e, vw.eye[1], vw.eye[2]]; vw.target = [vw.target[0] + e, vw.target[1], vw.target[2]]; }
+  rd.frame(vw, rider, t, still || paused ? 0 : dt, drawn++ < 2 ? 99 : 1);
   seen = rider.events.length; sound.sync(seen);
   if (rider.air) bigAir = Math.max(bigAir, rider.airT);
   // (the run's end: its finish reached, its last life gone (once you're put back after the third fall))

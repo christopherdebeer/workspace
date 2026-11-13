@@ -189,61 +189,48 @@ const SEG = 8;
 const VS = `#version 300 es
 layout(location=0) in vec2 aQ; layout(location=1) in vec4 a0; layout(location=2) in vec4 a1; layout(location=3) in vec4 a2; layout(location=4) in vec4 a3; layout(location=5) in vec4 a4;
 uniform mat4 uVP, uPrev; uniform vec3 uOff, uEye, uSun; uniform vec3 uPal[84]; uniform float uFog, uK, uMinW, uStretch, uDens, uGrow, uReveal; uniform vec2 uRes, uFront;
-uniform vec3 uSkyLo, uSkyHi, uSkyPale; uniform sampler2D uDepth; uniform float uUseDepth;
+uniform vec3 uSkyLo, uSkyHi, uSkyPale;
 out vec2 vUv; out vec3 vA; out vec3 vB; flat out float vStamp; out float vFresh;
 float h(float s, float k){ return fract(sin(s*k)*43758.5453); }
 void main(){
-  vec3 w = a0.xyz + uOff, n = a2.xyz, t = a1.xyz; float seed = a3.x, kind = a3.w; bool sky = kind > .5 && kind < 2.5, both = kind > 2.5;
-  vec3 toE = uEye - w; float dist = length(toE); toE /= max(dist, 1e-4);
+  vec3 w = a0.xyz + uOff, n = a2.xyz, T = normalize(a1.xyz); float seed = a3.x, kind = a3.w; bool sky = kind > .5 && kind < 2.5, both = kind > 2.5;
+  vec3 V = uEye - w; float dist = length(V); V /= max(dist, 1e-4);
   // (the paint front: a stroke at its station is laid, tail to head, as the front for its pass comes past; the backdrop
   // and what moves are laid as the page opens)
   float g = 1., fresh = 0.;
   if (a4.x > -1e8) { float fr = a4.y < .5 ? uFront.x : uFront.y; g = clamp((fr - a4.x)/uGrow, 0., 1.); fresh = 1. - clamp((fr - a4.x - uGrow)/25., 0., 1.); }
   else g = clamp((uReveal*1.5 - h(seed, 7.77)*.9 - (sky ? 0. : .2))/.35, 0., 1.);
   float keep = sky || both ? 1. : uDens*mix(1., .5, smoothstep(80., 900., dist));
-  // (no culling by facing: the facets' depth says what's hidden; a face turned a little away still shows)
-  if (!sky && dot(n, toE) < 0.) n = -n;
+  if (!sky && dot(n, V) < 0.) n = -n;
   // (thinned with distance: a stroke past its turn shrinks away over a little more distance, rather than going at once)
-  float thin = clamp((keep - h(seed, 12.9898))/.12 + 1., 0., 1.);
-  g *= thin;
-  if (g <= 0.) { gl_Position = vec4(2., 2., 2., 1.); return; }
-  // (a hair toward the eye, more the further: it sits over its own face)
-  if (!sky) w += toE*(both ? .03 + dist*.002 : .1 + dist*.003) + n*(both ? .01 : .03);
-  vec4 c = uVP*vec4(w, 1.), ct = uVP*vec4(w + t, 1.);
-  if (c.w < .3) { gl_Position = vec4(2., 2., 2., 1.); return; }
-  // (is where it's planted seen? the near facets' depth there, against its own: hidden, it isn't laid at all; seen, it's
-  // laid whole, over whatever edge it runs across)
-  if (uUseDepth > .5 && !sky) {
-    vec3 nd = c.xyz/c.w; vec2 uv = nd.xy*.5 + .5;
-    if (uv.x > 0. && uv.x < 1. && uv.y > 0. && uv.y < 1.) {
-      float z = texture(uDepth, uv).r*2. - 1., N = .6, F = 9000.;
-      float seen = 2.*N*F/(F + N - z*(F - N)), mine = c.w;
-      float tol = .3 + seen*.035, hid = clamp((mine - seen - tol)/tol, 0., 1.);
-      if (hid >= 1.) { gl_Position = vec4(2., 2., 2., 1.); return; }
-      g *= 1. - hid;
-    }
-  }
-  vec2 px = uRes*.5, sc = c.xy/c.w, st = ct.xy/max(ct.w, .05);
-  vec2 d = (st - sc)*px; float dl = length(d), k = uK*px.y/c.w;
-  vec2 dir = dl > 1e-4 ? d/dl : vec2(1., 0.);
-  // (thinned with distance, the ones kept are bigger, so it's still covered)
-  float grow = inversesqrt(max(keep, .3));
-  // (and never more than a part of the screen, however near)
-  float L = clamp(a1.w*k*clamp(dl/max(k, 1e-5), .5, 1.)*grow, uMinW*3., px.y*.95), W = clamp(a2.w*k*grow, uMinW, px.y*.38);
-  // (stretched along its own motion on the screen since the last frame)
+  g *= clamp((keep - h(seed, 12.9898))/.12 + 1., 0., 1.);
+  vec4 c = uVP*vec4(w, 1.);
+  if (g <= 0. || c.w < .3) { gl_Position = vec4(2., 2., 2., 1.); return; }
+  // The stroke is laid in the world, on its face, along its own way: nothing about how it lies comes from the screen, so
+  // it can't swing as the eye moves. Across it, its width turns from lying on the face toward facing the eye as it gets
+  // further off, so it never thins to a sliver (after Brush Rush).
+  vec3 Bn = normalize(cross(n, T)), Be = cross(T, V); float bl = length(Be); Be = bl > .001 ? Be/bl : Bn; if (dot(Be, Bn) < 0.) Be = -Be;
+  float face = sky ? 1. : both ? .35 + .5*smoothstep(4., 40., dist) : .15 + .75*smoothstep(5., 70., dist);
+  vec3 Wd = normalize(mix(Bn, Be, face));
+  // its size: thinned out, the ones kept are bigger; never thinner on the picture than a few pixels, never more than a part of it
+  float grow = inversesqrt(max(keep, .3)), k = uK*uRes.y*.5/c.w;
+  float len = a1.w*grow, wid = a2.w*grow;
+  wid = clamp(wid, uMinW/k, uRes.y*.19/k); len = clamp(len, wid*1.6, uRes.y*.5/k);
+  // (stretched along its own way, as far as it moves along it on the picture since the last frame: longer, never turned)
   vec4 cp = uPrev*vec4(w, 1.);
   if (cp.w > .3 && uStretch > 0. && a4.z < .5) {
-    vec2 m = (sc - cp.xy/cp.w)*px; float ml = length(m), sm = uStretch*smoothstep(4., 50., ml)*(sky ? .3 : 1.);
-    if (sm > 0.) { dir = normalize(mix(dir, m/ml, sm*.85)); L += min(ml, px.y*.22)*sm; W *= 1. - .3*sm; }
+    vec4 ct = uVP*vec4(w + T, 1.); vec2 px = uRes*.5, dT = (ct.xy/max(ct.w, .05) - c.xy/c.w)*px, m = (c.xy/c.w - cp.xy/cp.w)*px;
+    float dl = length(dT), ml = length(m);
+    if (dl > 1e-3 && ml > 4.) len += min(ml, uRes.y*.12)/k*uStretch*abs(dot(dT/dl, m/ml))*smoothstep(4., 40., ml)*(sky ? .3 : 1.);
   }
-  float u = aQ.x*g, s = (u - .5)*L, bend = a3.z; vec2 q, nr;
-  if (abs(bend) > .02) { float Rr = L/bend, an = s/Rr; q = vec2(Rr*sin(an), Rr*(1. - cos(an))); nr = vec2(-sin(an), cos(an)); } else { q = vec2(s, 0.); nr = vec2(0., 1.); }
-  q += nr*aQ.y*W*.5;
-  gl_Position = vec4(c.xy + (dir*q.x + vec2(-dir.y, dir.x)*q.y)/px*c.w, c.z, c.w);
-  // (its depth: lifted toward the eye by half its own size, along the line to the eye so it doesn't move on the picture,
-  // so a flat mark turned to the eye clears the face it's laid on instead of cutting through it; where it's tested
-  // against depth at all, nothing fights)
-  if (!sky) { float lift = max(a1.w, a2.w)*.5*grow; vec4 cl = uVP*vec4(w + toE*min(lift, dist*.5), 1.); gl_Position.z = cl.z/cl.w*c.w; }
+  float u = aQ.x*g, c2 = 2.*u - 1., s = (u - .5)*len, bend = a3.z*len*(1. - c2*c2)*.25;
+  vec3 p = w + T*s + Wd*(aQ.y*wid*.5 + bend);
+  vec4 cq = uVP*vec4(p, 1.);
+  // its depth lifted toward the eye, along the line to the eye so it doesn't move on the picture: on the ground a little,
+  // more the further (after Brush Rush), on a thing by half its own size; so it clears its own face, never cutting into it
+  float lift = sky ? 0. : both ? .02 + max(len, wid)*.5 : .25 + dist*.02 + wid*.5;
+  vec4 cl = uVP*vec4(p + V*min(lift, dist*.5), 1.);
+  gl_Position = vec4(cq.xy, cl.z/cl.w*cq.w, cq.w);
   vUv = vec2(u, aQ.y*.5 + .5); vStamp = a3.y; vFresh = fresh;
   if (sky) {
     vec3 col = mix(uSkyLo, uSkyHi, smoothstep(0., .8, a0.w));
@@ -272,7 +259,9 @@ void main(){
   vec3 c = mix(vA, vB, s.b)*(.84 + .32*s.g);
   // (fresh paint, just laid: a little lighter, wet)
   c = mix(c, c*1.1 + .04, vFresh*.3);
-  o = vec4(c, smoothstep(.05, .5, s.r));
+  // (premultiplied, blended in a fixed order: no dithered coverage to crawl as the strokes shift)
+  float a = smoothstep(.05, .5, s.r);
+  o = vec4(c*a, a);
 }`;
 
 /** a buffer of strokes, drawn instanced (`set` again for what moves) */
@@ -304,7 +293,7 @@ export class Painter {
     const p = gl.createProgram()!; gl.attachShader(p, sh(gl.VERTEX_SHADER, VS)); gl.attachShader(p, sh(gl.FRAGMENT_SHADER, FS)); gl.linkProgram(p);
     if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p) ?? 'link');
     this.prog = p;
-    for (const k of ['uVP', 'uPrev', 'uOff', 'uEye', 'uSun', 'uPal', 'uFog', 'uK', 'uMinW', 'uStretch', 'uDens', 'uRes', 'uAtlas', 'uSkyLo', 'uSkyHi', 'uSkyPale', 'uFront', 'uGrow', 'uReveal', 'uDepth', 'uUseDepth']) this.u[k] = gl.getUniformLocation(p, k);
+    for (const k of ['uVP', 'uPrev', 'uOff', 'uEye', 'uSun', 'uPal', 'uFog', 'uK', 'uMinW', 'uStretch', 'uDens', 'uRes', 'uAtlas', 'uSkyLo', 'uSkyHi', 'uSkyPale', 'uFront', 'uGrow', 'uReveal']) this.u[k] = gl.getUniformLocation(p, k);
     gl.useProgram(p);
     gl.uniform3fv(this.u.uPal, palette); gl.uniform3fv(this.u.uSun, new Float32Array(sun));
     gl.uniform3f(this.u.uSkyLo, 0.2, 0.42, 0.95); gl.uniform3f(this.u.uSkyHi, 0.015, 0.2, 0.82); gl.uniform3f(this.u.uSkyPale, 0.62, 0.72, 0.98);
@@ -337,14 +326,7 @@ export class Painter {
     const fr = this.front ?? [-1e9, -1e9]; gl.uniform2f(this.u.uFront, fr[0], fr[1]); gl.uniform1f(this.u.uGrow, this.grow);
     gl.uniform1f(this.u.uReveal, Math.min(1, (performance.now() - this.born) / 1600));
     gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, this.atlas); gl.uniform1i(this.u.uAtlas, 0);
-    gl.uniform1i(this.u.uDepth, 1); gl.uniform1f(this.u.uUseDepth, 0);
-    gl.enable(gl.SAMPLE_ALPHA_TO_COVERAGE); gl.depthMask(false);
-  }
-  /** strokes from here on are laid only where they're planted on something seen (the near facets' depth, in `tex`) */
-  seenBy(tex: WebGLTexture | null) {
-    const gl = this.gl;
-    gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, tex); gl.activeTexture(gl.TEXTURE0);
-    gl.uniform1f(this.u.uUseDepth, tex ? 1 : 0);
+    gl.enable(gl.BLEND); gl.blendFuncSeparate(gl.ONE, gl.ONE_MINUS_SRC_ALPHA, gl.ZERO, gl.ONE); gl.depthMask(false);
   }
   draw(s: Strokes, off: number[], fog: boolean) {
     const gl = this.gl;
@@ -352,5 +334,49 @@ export class Painter {
     gl.uniform3f(this.u.uOff, off[0], off[1], off[2]); gl.uniform1f(this.u.uFog, fog ? 1 : 0);
     gl.bindVertexArray(s.vao); gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, (SEG + 1) * 2, s.n);
   }
-  end() { const gl = this.gl; gl.disable(gl.SAMPLE_ALPHA_TO_COVERAGE); gl.depthMask(true); gl.bindVertexArray(null); }
+  end() { const gl = this.gl; gl.disable(gl.BLEND); gl.depthMask(true); gl.bindVertexArray(null); }
+}
+
+// ─── the speed layer's brush ────────────────────────────────────────────────────────────────────────────────────────────
+
+/**
+ * The same stamps, for the 2D speed layer (shards, smears, the air off the rider, debris), when the picture's painted:
+ * a wedge (thick at its base, to its point) becomes a long brush stroke tapering the same way; a chip of debris a dab.
+ * Each colour's stamps are tinted once and kept.
+ */
+export class Brush2D {
+  private atlas: { data: Uint8Array; w: number; h: number };
+  private tinted = new Map<string, HTMLCanvasElement>();
+  constructor() { this.atlas = stampAtlas(); }
+  private sheet(col: string) {
+    let c = this.tinted.get(col);
+    if (c) return c;
+    const { data, w, h } = this.atlas, r = parseInt(col.slice(1, 3), 16), g = parseInt(col.slice(3, 5), 16), b = parseInt(col.slice(5, 7), 16);
+    c = document.createElement('canvas'); c.width = w; c.height = h;
+    const x = c.getContext('2d')!, img = x.createImageData(w, h);
+    for (let i = 0; i < w * h; i++) {
+      const cov = data[i * 4] / 255, rel = data[i * 4 + 1] / 255, tone = data[i * 4 + 2] / 255, k = 0.84 + 0.3 * rel + (tone - 0.5) * 0.12;
+      img.data[i * 4] = Math.min(255, r * k); img.data[i * 4 + 1] = Math.min(255, g * k); img.data[i * 4 + 2] = Math.min(255, b * k);
+      img.data[i * 4 + 3] = Math.round(255 * Math.min(1, Math.max(0, (cov - 0.05) / 0.45)));
+    }
+    x.putImageData(img, 0, 0);
+    this.tinted.set(col, c);
+    return c;
+  }
+  /** a stroke from its base at `a` (half-width w) to its point at `b`, in stamp `st` */
+  wedge(ctx: CanvasRenderingContext2D, a: number[], b: number[], w: number, col: string, st = 7) {
+    const dx = b[0] - a[0], dy = b[1] - a[1], L = Math.hypot(dx, dy);
+    if (L < 1) return;
+    const W = Math.max(1.6, w * 2.6), cell = [(st % STAMP.COLS) * STAMP.W, Math.floor(st / STAMP.COLS) * STAMP.H];
+    ctx.save(); ctx.translate(a[0], a[1]); ctx.rotate(Math.atan2(dy, dx));
+    ctx.drawImage(this.sheet(col), cell[0], cell[1], STAMP.W, STAMP.H, -L * 0.03, -W / 2, L * 1.06, W);
+    ctx.restore();
+  }
+  /** a dab, `s` across, turned by `a` */
+  dab(ctx: CanvasRenderingContext2D, p: number[], s: number, a: number, col: string) {
+    const st = 3, cell = [(st % STAMP.COLS) * STAMP.W, Math.floor(st / STAMP.COLS) * STAMP.H];
+    ctx.save(); ctx.translate(p[0], p[1]); ctx.rotate(a);
+    ctx.drawImage(this.sheet(col), cell[0], cell[1], STAMP.W, STAMP.H, -s * 1.3, -s * 0.6, s * 2.6, s * 1.2);
+    ctx.restore();
+  }
 }
