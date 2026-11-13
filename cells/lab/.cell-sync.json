@@ -1,8 +1,8 @@
 {
   "cell": "c15r/lab",
   "cellId": "lab-8928acf3",
-  "treeVersion": "tree:96ab2a5ca08eaec1d58cb34f8f81cca01ed5adb489a57f984a1931d66fd47c9a",
-  "syncedAt": "2026-11-13T16:46:33.179Z",
+  "treeVersion": "tree:a2586a28e16f23524f2b78e8f8c00309b094c4c28f1e7f6fe163ff9d2bd16953",
+  "syncedAt": "2026-11-13T16:54:37.299Z",
   "files": {
     "README.md": "sha256:0be53420ec1d65ca68e1e925e1699b40295ecdd4991d17eb5c464a3ae8a51115",
     "client/autograph/autobiography.ts": "sha256:1aa72dbb927e6de87cdd920842be3b826ae520031f2589fadc9d4fe98abfbd67",
@@ -366,7 +366,7 @@
     "client/switchback/hand.ts": "sha256:edcbb9d50b20f66bebfee403537d95260e9a9b6817c0552d5447cf557f1e263d",
     "client/switchback/main.ts": "sha256:84b9c0a9b6021ac6e3aea076af7d27c37ecd6dbfda10441b98172ba967e68abe",
     "client/switchback/mesh.ts": "sha256:6533175f3996322648c48ab35f7adbee6a9687bf621f33f2be30b50619928d51",
-    "client/switchback/paint.ts": "sha256:2a12400cda248cecef502e584bbd8ba13ad940bf05b33ad677149285564031a5",
+    "client/switchback/paint.ts": "sha256:bf336f05bc3134cda6bc4c06fd3b0a4b517bf8861b72722c7cc07e0f2667b2f4",
     "client/switchback/render.ts": "sha256:d9f21eb0d4e163ad622520e449e8f82b5aa3255e924ec5680e0593672caa5e52",
     "client/switchback/ruts.ts": "sha256:211e8ed8f47532d9f84c82b489905240711a69e7e9b9ae88f1a0ca670cdb5aa5",
     "client/switchback/score.ts": "sha256:76ab4b731089c7ce1a807fbd377d3b9bad679f9d3b982978dffeee523b100be8",
@@ -1491,7 +1491,7 @@
     "static/squishy/views.json": "sha256:38eab78b803c68f26480101b51a1c50f25d81fe7f8e66cf13efaeb579b65201e",
     "static/squishy/views.md": "sha256:24f7d5f15bc879291312ffe614884ed7bde68aed7741c25b73a4618faf65b9a3",
     "static/switchback.html": "sha256:94a751716711fcdc5e0f41b5907dba760bd91767b408ded1e72a24c49f37e58f",
-    "static/switchback.md": "sha256:e045fb46cd1ac383177cbaf3862f3a47bee79dead9572d6980a18a540704f46b",
+    "static/switchback.md": "sha256:d8f8e4aa87ad5d0d2d786ce3e3a802e80391468a6f61277d08797881748ac4d5",
     "static/switchback/target.jpg": "sha256:4e643285e47e56c9453bf366f31cee2833ee10caafcdc6c714b1e93089b793d4",
     "static/switchback/v-air.jpg": "sha256:f72b49124d7df7caa2f86fe3a5ff7edb396bfea76d89617a875aff1790443e2e",
     "static/switchback/v-board.jpg": "sha256:3cde437ab60cbdae46d08fcfd81a5cae7026cd94de006a60d5d2e379be8ec9b5",
