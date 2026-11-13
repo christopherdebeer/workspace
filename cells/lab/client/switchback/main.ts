@@ -14,7 +14,7 @@
  * the lab's listing shows it, the sim's run with its score and calls, riding again when it ends); `look=side|front|rear|quarter`
  * a close look at the bike. Any of these skips the title. `ruts=bolts` the ruts as they were before they were carved
  * (`ruts=light`, with them, paler than the road). `wake=fixed` the air on the rider as it was
- * (three streaks set at the helmet and the bars); `wake=0` none on the rider at all. `paint=0|1` the look for this page (painted is the default, and a setting): everything painted in brush strokes, laid by a paint front ahead of you (`stretch=0…2` how far its strokes stretch along their motion; `front=420,110` how far ahead the front lays the masses and the detail).
+ * (three streaks set at the helmet and the bars); `wake=0` none on the rider at all. `paint=0|1` the look for this page (painted is the default, and a setting): everything painted in brush strokes, laid by a paint front ahead of you (`stretch=0…2` how far its strokes stretch along their motion; `front=700,110` how far ahead the front lays the masses and the detail).
  */
 import { Course } from './course';
 import { BODY, Rider, TRICKS, autoSteer, VMAX } from './sim';
@@ -62,7 +62,7 @@ if (q.get('ruts') === 'bolts') { rd.rutStyle = 'bolts'; rd.trail.cut = false; }
 /** `paint=1`: the mountain laid in brush strokes over its facets (paint.ts); `stretch=` how far its strokes stretch along their motion (0 none, 1 as drawn, 2 twice) */
 /** the look: painted (the default) or cut facets; kept in the settings, `paint=0|1` for this page only */
 const paintFlag = q.has('paint') ? q.get('paint') !== '0' : null;
-/** `front=420,110`: how far ahead of the rider the paint front lays the masses and the detail (m) */
+/** `front=700,110`: how far ahead of the rider the paint front lays the masses and the detail (m) */
 if (q.has('front')) { const [a, b] = (q.get('front') ?? '').split(',').map(Number); if (a > 0 && b > 0) rd.leadWanted = [a, b]; }
 if (q.has('stretch')) rd.stretchWanted = Math.max(0, Math.min(2, Number(q.get('stretch')) || 0));
 rd.style = q.get('rider') === 'facets' ? 'facets' : q.get('rider') === 'sil' ? 'sil' : 'cut'; rd.whip = (Number(q.get('whip') ?? 0) * Math.PI) / 180; rd.world = q.get('world') !== '0';

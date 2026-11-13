@@ -204,13 +204,15 @@ export class Renderer {
       // (where things stand, in the stencil: 2 the backdrop, 1 anything near; nothing drawn)
       gl.colorMask(false, false, false, false); gl.disable(gl.DEPTH_TEST); gl.enable(gl.STENCIL_TEST); gl.stencilOp(gl.KEEP, gl.KEEP, gl.REPLACE); gl.stencilFunc(gl.ALWAYS, 2, 0xff);
       gl.uniform1f(this.u.uFog, 0); gl.uniform3f(this.u.uOff, off[0], off[1], off[2]); this.ranges.draw(); this.valley.draw();
-      gl.stencilFunc(gl.ALWAYS, 1, 0xff); near();
-      gl.stencilOp(gl.KEEP, gl.KEEP, gl.KEEP);
+      // (what's near marks only where it's seen: hidden behind the ground, a fall or a far chunk would otherwise claim
+      // its whole outline, and nothing would paint there)
+      gl.enable(gl.DEPTH_TEST); gl.clear(gl.DEPTH_BUFFER_BIT); gl.stencilFunc(gl.ALWAYS, 1, 0xff); near();
+      gl.stencilOp(gl.KEEP, gl.KEEP, gl.KEEP); gl.disable(gl.DEPTH_TEST);
       // (the sky, only where nothing stands)
       gl.colorMask(true, true, true, true); gl.stencilFunc(gl.EQUAL, 0, 0xff);
       paintBegin(); if (this.skyS) pt.draw(this.skyS, view.eye, false); pt.end(); gl.useProgram(this.prog);
       // (the backdrop, by its own depth, only where nothing near stands)
-      gl.enable(gl.DEPTH_TEST); gl.colorMask(false, false, false, false); gl.stencilFunc(gl.ALWAYS, 0, 0xff);
+      gl.enable(gl.DEPTH_TEST); gl.clear(gl.DEPTH_BUFFER_BIT); gl.colorMask(false, false, false, false); gl.stencilFunc(gl.ALWAYS, 0, 0xff);
       gl.uniform3f(this.u.uOff, off[0], off[1], off[2]); this.ranges.draw(); this.valley.draw();
       gl.colorMask(true, true, true, true); gl.stencilFunc(gl.NOTEQUAL, 1, 0xff);
       paintBegin(); for (const b of this.backStrokes) pt.draw(b, off, false); pt.end(); gl.useProgram(this.prog);

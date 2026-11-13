@@ -167,7 +167,7 @@ export function strokesOver(verts: Float32Array, seed: number, line: number[] | 
     if (area < 1e-5) continue;
     nx /= nl; ny /= nl; nz /= nl;
     const mx = (ax + bx + cx) / 3, mz = (az + bz + cz) / 3;
-    const backdrop = BACKDROP.has(m), ground = !moving && (ROAD.has(m) || GROUND.has(m) || ROCKY.has(m)), thing = !backdrop && !ground;
+    const backdrop = BACKDROP.has(m) || (!line && !moving), ground = !moving && (ROAD.has(m) || GROUND.has(m) || ROCKY.has(m)), thing = !backdrop && !ground;
     // (the road's middle nearest the face: how far off it is, the road's way there, its station)
     let d = 0, lx = 0, lz = 1, px = mx, pz = mz, st = NEVER;
     if (line && !moving) {
@@ -176,7 +176,9 @@ export function strokesOver(verts: Float32Array, seed: number, line: number[] | 
       d = Math.sqrt(best);
     }
     const emit = (tx: number, ty: number, tz: number, Ls: number, Ws: number, cover: number, pass: number, stamps: number[], jit: number, bendA: number, kind: number) => {
-      const want = (area * cover) / (Ls * Ws);
+      // (never more than a few hundred to a face: the valley's floor is a few faces kilometres across, and uncapped asked for
+      // hundreds of thousands, leaving nothing for the ridges after it)
+      const want = Math.min(backdrop ? 260 : 1e9, (area * cover) / (Ls * Ws));
       let k = Math.floor(want) + (R() < want - Math.floor(want) ? 1 : 0);
       while (k-- > 0) {
         let a = R(), b = R(); if (a + b > 1) { a = 1 - a; b = 1 - b; }
@@ -207,8 +209,13 @@ export function strokesOver(verts: Float32Array, seed: number, line: number[] | 
     const along = () => { const dp = lx * nx + lz * nz; const x = lx - nx * dp, y = -ny * dp, z = lz - nz * dp; const l = Math.hypot(x, y, z) || 1; return [x / l, y / l, z / l]; };
     if (backdrop) {
       // (the far off as the reference has it: a few large calm planes, level, laid edge to edge so no paper shows through)
-      const [tx, ty, tz] = fl > 0.12 ? across() : along(), Ls = Math.max(20, Math.min(420, Math.sqrt(area) * 1.1));
-      emit(tx, ty, tz, Ls, Ls * 0.5, 8, 0, [11, 7, 11], 0.15, 0.12, 0);
+      // (a peak's faces brushed down their fall, as a painter cuts a mountain's planes, snow and rock alike; only what's
+      // nearly level (the valley floor) laid level. Sized to the face, so a tall thin facet gets a long narrow stroke that
+      // fills it rather than level dabs that leave paper between them)
+      const steep = fl > 0.25, [tx, ty, tz] = steep ? [fx / fl, fy / fl, fz / fl] : along();
+      const e = Math.max(Math.hypot(ux, uy, uz), Math.hypot(vx, vy, vz), Math.hypot(cx - bx, cy - by, cz - bz)), Ls = Math.max(20, Math.min(420, steep ? e * 0.55 : Math.sqrt(area) * 1.1));
+      const snow = m === M.MTNSNOW || m === M.FARSNOW;
+      emit(tx, ty, tz, Ls, Ls * (steep ? 0.32 : 0.5), 8, 0, steep ? (snow ? [11, 0, 7] : [0, 5, 7, 13]) : [11, 7, 11], steep ? 0.35 : 0.15, 0.15, 0);
       continue;
     }
     let tx: number, ty: number, tz: number;
@@ -259,7 +266,9 @@ void main(){
   float keep = sky || both || far ? 1. : uDens*mix(1., .5, smoothstep(80., 900., dist));
   // (a stroke on a face turned away from the eye isn't laid (a thing, thin, is painted on both sides): it shrinks away as its
   // face turns from the eye, rather than going at once; so nothing lifted toward the eye shows through from behind an edge)
-  if (!sky && !both) g *= smoothstep(-.02, .12, dot(n, V));
+  // (not the backdrop's: seen far off and edge on, a peak's flanks turned (by their normal) from the eye were left bare
+  // paper; what's behind a range is hidden by its depth anyway)
+  if (!sky && !both && !far) g *= smoothstep(-.02, .12, dot(n, V));
   if (!sky && dot(n, V) < 0.) n = -n;
   // (thinned with distance: a stroke past its turn shrinks away over a little more distance, rather than going at once)
   g *= clamp((keep - h(seed, 12.9898))/.12 + 1., 0., 1.);
@@ -351,7 +360,7 @@ export class Painter {
   /** how much the strokes stretch along their motion (`stretch=` 0…2); how many are kept (0…1) */
   stretch = 1; dens = 1;
   /** the paint front: how far ahead of the rider the masses and the detail are laid, how long a stroke takes to lay (m) */
-  lead: [number, number] = [420, 110]; grow = 22;
+  lead: [number, number] = [700, 110]; grow = 22;
   private front: [number, number] | null = null; private born = performance.now(); private last = performance.now();
   constructor(private gl: WebGL2RenderingContext, palette: Float32Array, sun: number[]) {
     const sh = (t: number, s: string) => { const o = gl.createShader(t)!; gl.shaderSource(o, s); gl.compileShader(o); if (!gl.getShaderParameter(o, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(o) ?? 'shader'); return o; };
