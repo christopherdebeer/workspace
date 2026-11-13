@@ -151,7 +151,9 @@ export function strokesOver(verts: Float32Array, seed: number, line: number[] | 
       continue;
     }
     // (the face's normal: up, or (a steep face) toward the road it's seen from)
-    if (Math.abs(ny) < 0.35 && line && !moving) { if (nx * (px - mx) + nz * (pz - mz) < 0) { nx = -nx; ny = -ny; nz = -nz; } } else if (ny < 0) { nx = -nx; ny = -ny; nz = -nz; }
+    // (its outward side: the ground's a height field, so up, steep faces included; a cliff facing the valley faces the
+    // valley, and is culled when the eye's on the other side of it)
+    if (ny < 0) { nx = -nx; ny = -ny; nz = -nz; }
     // (the way down the face, and across it, and along the road)
     const fx = nx * ny, fy = ny * ny - 1, fz = nz * ny, fl = Math.hypot(fx, fy, fz);
     const across = () => { const a = ny * fz - nz * fy, b = nz * fx - nx * fz, c = nx * fy - ny * fx, l = Math.hypot(a, b, c) || 1; return [a / l, b / l, c / l]; };
@@ -205,6 +207,9 @@ void main(){
   if (a4.x > -1e8) { float fr = a4.y < .5 ? uFront.x : uFront.y; g = clamp((fr - a4.x)/uGrow, 0., 1.); fresh = 1. - clamp((fr - a4.x - uGrow)/25., 0., 1.); }
   else g = clamp((uReveal*1.5 - h(seed, 7.77)*.9 - (sky ? 0. : .2))/.35, 0., 1.);
   float keep = sky || both ? 1. : uDens*mix(1., .5, smoothstep(80., 900., dist));
+  // (a stroke on a face turned away from the eye isn't laid (a thing, thin, is painted on both sides): it shrinks away as its
+  // face turns from the eye, rather than going at once; so nothing lifted toward the eye shows through from behind an edge)
+  if (!sky && !both) g *= smoothstep(-.02, .12, dot(n, V));
   if (!sky && dot(n, V) < 0.) n = -n;
   // (thinned with distance: a stroke past its turn shrinks away over a little more distance, rather than going at once)
   g *= clamp((keep - h(seed, 12.9898))/.12 + 1., 0., 1.);
