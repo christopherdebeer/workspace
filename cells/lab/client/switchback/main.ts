@@ -14,7 +14,7 @@
  * the lab's listing shows it, the sim's run with its score and calls, riding again when it ends); `look=side|front|rear|quarter`
  * a close look at the bike. Any of these skips the title. `ruts=bolts` the ruts as they were before they were carved
  * (`ruts=light`, with them, paler than the road). `wake=fixed` the air on the rider as it was
- * (three streaks set at the helmet and the bars); `wake=0` none on the rider at all. `paint=1` the mountain painted in brush strokes over its facets (`stretch=0…2` how far its strokes stretch along their motion).
+ * (three streaks set at the helmet and the bars); `wake=0` none on the rider at all. `paint=1` everything painted in brush strokes, laid by a paint front ahead of you (`stretch=0…2` how far its strokes stretch along their motion; `front=420,110` how far ahead the front lays the masses and the detail).
  */
 import { Course } from './course';
 import { BODY, Rider, TRICKS, autoSteer, VMAX } from './sim';
@@ -59,6 +59,8 @@ if (q.get('wake') === 'fixed') rd.wake = 'fixed'; else if (q.get('wake') === '0'
 if (q.get('ruts') === 'bolts') { rd.rutStyle = 'bolts'; rd.trail.cut = false; }
 /** `paint=1`: the mountain laid in brush strokes over its facets (paint.ts); `stretch=` how far its strokes stretch along their motion (0 none, 1 as drawn, 2 twice) */
 rd.paint = q.get('paint') === '1' || q.get('paint') === 'brush';
+/** `front=420,110`: how far ahead of the rider the paint front lays the masses and the detail (m) */
+if (q.has('front')) { const [a, b] = (q.get('front') ?? '').split(',').map(Number); if (a > 0 && b > 0) rd.leadWanted = [a, b]; }
 if (q.has('stretch')) rd.stretchWanted = Math.max(0, Math.min(2, Number(q.get('stretch')) || 0));
 rd.style = q.get('rider') === 'facets' ? 'facets' : q.get('rider') === 'sil' ? 'sil' : 'cut'; rd.whip = (Number(q.get('whip') ?? 0) * Math.PI) / 180; rd.world = q.get('world') !== '0';
 const sound = new Sound();

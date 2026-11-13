@@ -16,7 +16,7 @@ Made by `node cells/lab/views.mjs switchback` from `client/switchback/views.mjs`
 
 ## Painted
 
-![Painted (`paint=1`): the same frame laid in brush strokes over its facets: the road and the snow by it streaming along the way, the rock brushed down its face, the far snow in dabs, the sky in strokes; the rider, the fence and the pines left crisp](v-painted.jpg)
+![Painted (`paint=1`): the same frame with nothing but brush strokes on paper: the road and the snow by it along the way, the rock brushed down its face, the ranges in level marks, the sky in strokes, the rider and its shadow too](v-painted.jpg)
 ![Painted, riding: at speed: each stroke stretched along its own motion on the screen, so the speed is in the ground’s own marks](v-painted-ride.jpg)
 
 ## The bike and rider
