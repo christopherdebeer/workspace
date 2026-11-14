@@ -418,9 +418,10 @@ const RANGES = [
 /** the ranges and, nearer, two arcs of forested hills in the middle distance (where they stand, by the seed), farthest
  * first; full rings for the ranges, arcs for the hills, so the valley opens between them */
 function rangeSpecs(seed: number) {
-  const arcs = [0, 1].map((j) => {
-    const mid = hash(seed, j, 70) * Math.PI * 2 + j * Math.PI * 0.9, span = 1.4 + 0.8 * hash(seed, j, 71);
-    return { k: 4 + j, R: 1850 + 250 * hash(seed, j, 72), floor: -265, lo: 160, hi: 430 + 120 * hash(seed, j, 73), peaks: 5, body: M.RIDGE, snow: M.RIDGE, snowline: 1e9, fold: 0.06, haze: 0.02, forest: true, from: mid - span / 2, to: mid + span / 2 };
+  // (four arcs, each taller and darker the nearer, overlapping one another so they stack up the middle distance)
+  const arcs = [0, 1, 2, 3].map((j) => {
+    const mid = hash(seed, j, 70) * Math.PI * 2 + j * Math.PI * 0.5, span = 1.1 + 0.8 * hash(seed, j, 71), R = 1550 + 750 * hash(seed, j, 72);
+    return { k: 4 + j, R, floor: -265, lo: 200, hi: 420 + 280 * hash(seed, j, 73), peaks: 4, body: M.RIDGE, snow: M.RIDGE, snowline: 1e9, fold: 0.06, haze: 0.05 * (R - 1550) / 750, forest: true, from: mid - span / 2, to: mid + span / 2 };
   });
   return [...RANGES.map((r) => ({ ...r, from: 0, to: Math.PI * 2 })), ...arcs.sort((p, q) => q.R - p.R)];
 }

@@ -347,16 +347,18 @@ function layerStrokes(g: Layer, seed: number, out: number[]) {
     for (let r = 0; r < rows; r++) {
       const depth = r * rowH, df = Math.min(1, depth / Math.max(1, tall));
       // (lower on a steep flank, turning down its fall; on a flat saddle staying level)
-      const L = Math.max(L0 * 0.4, Math.min(L0 * 1.4, Ls * 0.55)) * (1 + df * 0.3), n = Math.max(1, Math.round(Ls / (L * 0.6)));
+      const L = Math.max(L0 * 0.5, Math.min(L0 * 1.9, Ls * 0.65)) * (1 + df * 0.3), n = Math.max(1, Math.round(Ls / (L * 0.6)));
       // (only once a row's far enough under the crest that turning won't lift its head over it)
       const st = depth > L * 0.55 ? Math.min(1, df * 1.5) * (slope > 0.12 ? 0.5 : 0.1) : 0;
       let dr = ur * (1 - st) + side * 0.35 * st, dy = uy * (1 - st) - st; { const l = Math.hypot(dr, dy); dr /= l; dy /= l; }
+      // (kept within its segment: run on past its end, a stroke along a flank would carry on up past the summit)
+      const half = Math.min(0.5, (L * 0.5) / Ls);
       for (let j = 0; j < n; j++) {
-        const t = (j + 0.15 + R0() * 0.7) / n, xm = x0 + dxm * t, a = xm / g.R, cy = h0 + dh * t;
+        const t = half + (1 - 2 * half) * (j + 0.15 + R0() * 0.7) / n, xm = x0 + dxm * t, a = xm / g.R, cy = h0 + dh * t;
         const y = cy - depth - W0 * (0.42 + R0() * 0.3);
         if (y < g.floor - W0 * 0.5) continue;
         // (its tail kept above the layer's foot, where it would paint over what's in front)
-        const Lr = Math.min(L, (2 * (y - g.floor)) / Math.max(0.2, -dy) + W0);
+        const Lr = Math.min(L, (2 * (y - g.floor)) / Math.max(0.2, -dy) + W0, Ls * 0.95);
         const ca = Math.cos(a), sa = Math.sin(a), rx = sa, rz = ca, tx = ca, tz = -sa;
         // (under the crest, the nearest spur decides the plane, where it's nearer than the crest: the side of it the point
         // is on faces that way, lit on the left, shaded on the right, its strokes running down and away from the spur)
@@ -366,8 +368,11 @@ function layerStrokes(g: Layer, seed: number, out: number[]) {
           const sd = xm > sx ? 1 : -1, k2 = 0.55 + 0.35 * Math.min(1, ds / (W0 * 8));
           let qdr = sd * k2, qdy = -1; const l2 = Math.hypot(qdr, qdy); qdr /= l2; qdy /= l2;
           // (turned down the spur's plane only where its head stays under the crest)
-          const Lq = Math.min(L0 * 1.1, (2 * (y - g.floor)) / Math.max(0.2, -qdy) + W0, Math.max(W0, (2 * (dc - W0 * 0.5)) / Math.max(0.2, -qdy)));
-          if (Lq > W0 * 1.5) { pside = sd; pslope = 1; pdr = qdr; pdy = qdy; Lu = Lq; onSpur = ds < W0 * 2.5; }
+          const Lq = Math.min(L0 * 1.9, (2 * (y - g.floor)) / Math.max(0.2, -qdy) + W0, Math.max(W0, (2 * (dc - W0 * 0.5)) / Math.max(0.2, -qdy)));
+          // (and its head, wherever it lands, under the crest there)
+          let Lh = Lq;
+          for (let it = 0; it < 6 && Lh > W0; it++) { const hx = xm - qdr * Lh * 0.5, hy = y - qdy * Lh * 0.5; if (hy < g.crest(hx / g.R) - W0 * 0.5) break; Lh *= 0.7; }
+          if (Lh > W0 * 1.5) { const Lq2 = Lh; pside = sd; pslope = 1; pdr = qdr; pdy = qdy; Lu = Lq2; onSpur = ds < W0 * 2.5; }
         }
         const T = [tx * pdr, pdy, tz * pdr]; { const l = Math.hypot(T[0], T[1], T[2]); T[0] /= l; T[1] /= l; T[2] /= l; }
         const nn = [-rx * 0.75 + tx * pside * 0.55 * pslope, 0.5 - df * 0.5, -rz * 0.75 + tz * pside * 0.55 * pslope]; { const l = Math.hypot(nn[0], nn[1], nn[2]); nn[0] /= l; nn[1] /= l; nn[2] /= l; }
@@ -375,26 +380,33 @@ function layerStrokes(g: Layer, seed: number, out: number[]) {
         const s = streak(a), snowAt = g.snowline + 110 * s - (cy - g.snowline) * 0.35 * (0.5 + 0.5 * s);
         // (and down the spurs' crests, a way below the line)
         const snowy = (y > snowAt && (depth < tall * 0.55 || s < -0.35)) || (onSpur && y > g.snowline - 160 - 60 * s);
+        // (its plane's colour, one to the plane: lit (the left side of a ridge, or a level top) or in shade; the lit body
+        // a step darker low down)
+        const lit = pslope < 0.35 ? df < 0.6 : pside > 0, band = lit ? (snowy || df < 0.45 ? 0 : 1) : 3;
         const p = at(a, y);
-        plan(list, p[0], p[1], p[2], snowy ? g.snow : g.body, g.haze, T, Lu * (0.75 + R0() * 0.5), nn, W0 * (0.85 + R0() * 0.4), R0(), [0, 7, 0, 1][Math.floor(R0() * 4)], (R0() - 0.5) * 0.1, 4);
+        plan(list, p[0], p[1], p[2], snowy ? g.snow : g.body, g.haze, T, Lu * (0.8 + R0() * 0.4), nn, W0 * (1.0 + R0() * 0.35), R0(), [0, 7, 0, 7][Math.floor(R0() * 4)], (R0() - 0.5) * 0.08, band);
       }
     }
   }
+  list.sort((p, q) => p[1] - q[1]);
+  for (const st of list) out.push(...st);
+  list.length = 0;
   if (g.forest) {
-    // (a forest along the foot: a dark band, its top ragged with treetops)
-    const M2 = Math.ceil((span * g.R) / (W0 * 0.45));
+    // (a forest over the hill's lower slopes, painted over it: a dense dark band, its top serrated with treetops, rising
+    // and falling along the hill)
+    const M2 = Math.ceil((span * g.R) / (W0 * 0.3));
     for (let i = 0; i <= M2; i++) {
       const a = g.from + (span * i) / M2, c = g.crest(a), h = c - g.floor;
       if (h < 6) continue;
-      const top = g.floor + h * (0.3 + 0.18 * Math.sin(a * 19 + g.k) + 0.1 * Math.sin(a * 53)), ca = Math.cos(a), sa = Math.sin(a), nn = [-sa, 0.2, -ca];
-      // (a tree: a short upright stroke standing above the band)
-      const tH = W0 * (1.6 + R0() * 1.6), p = at(a, top + tH * 0.3);
-      plan(list, p[0], p[1], p[2], M.FOREST, g.haze, [0, -1, 0], tH, nn, W0 * 0.6, R0(), [0, 1][Math.floor(R0() * 2)], 0, 1 + Math.floor(R0() * 2));
+      const top = g.floor + h * (0.42 + 0.2 * Math.sin(a * 11 + g.k) + 0.1 * Math.sin(a * 37)), ca = Math.cos(a), sa = Math.sin(a), nn = [-sa, 0.2, -ca];
+      // (a treetop: a short upright stroke standing out of the band, close set, so the top's serrated, not a fence)
+      const tH = W0 * (0.7 + R0() * 1.0), p = at(a, top + tH * 0.25);
+      plan(list, p[0], p[1], p[2], M.FOREST, g.haze, [0, -1, 0], tH, nn, W0 * 0.85, R0(), [0, 1][Math.floor(R0() * 2)], 0, R0() < 0.8 ? 2 : 1);
       // (and the band under it, in level strokes)
-      for (let y = top - W0 * 0.5; y > g.floor - W0; y -= W0 * 0.8) {
-        if (R0() < 0.55) continue;
+      for (let y = top - W0 * 0.4; y > g.floor - W0; y -= W0 * 0.7) {
+        if (R0() < 0.72) continue;
         const q = at(a, y);
-        plan(list, q[0], q[1], q[2], M.FOREST, g.haze, [ca, 0, -sa], L0 * (0.6 + R0() * 0.6), nn, W0 * 0.9, R0(), [0, 7][Math.floor(R0() * 2)], 0, 1 + Math.floor(R0() * 3));
+        plan(list, q[0], q[1], q[2], M.FOREST, g.haze, [ca, 0, -sa], L0 * (0.7 + R0() * 0.6), nn, W0 * 1.1, R0(), [0, 7][Math.floor(R0() * 2)], 0, R0() < 0.7 ? 2 : 3);
       }
     }
   }
@@ -540,7 +552,7 @@ void main(){
   // in front, so a peak shows a lit face and a shaded one whichever way you look, as the study has it)
   vec3 rr = normalize(vec3(w.x - uEye.x, 0., w.z - uEye.z)), Lf = normalize(vec3(rr.z, 0., -rr.x)*.75 + vec3(0., .55, 0.) - rr*.3);
   int code = int(a4.y + .5) - 1;
-  if (far && code >= 0 && code < 4) { b = code; b2 = clamp(b + (h(seed, 3.1) > .5 ? 1 : -1), 0, 3); }
+  if (far && code >= 0 && code < 4) { b = code; b2 = h(seed, 3.1) > .78 ? clamp(b + (b < 2 ? 1 : -1), 0, 3) : b; }
   else if (far) { bool lit = dot(n, Lf) > .3; float r = h(seed, 3.1); b = lit ? (r > .5 ? 0 : 1) : 3; b2 = lit ? (r > .75 ? 2 : 1) : (r > .7 ? 2 : 3); }
   vec3 A = uPal[mt*4 + b], B = mix(A, uPal[mt*4 + b2], far ? .35 : .45);
   float fd = length((w - uEye).xz), f = floor(clamp((fd - 80.)/520., 0., 1.)*4.)/4.;
