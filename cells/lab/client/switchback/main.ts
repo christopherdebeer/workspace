@@ -136,6 +136,7 @@ function hint() { if (!hinted) { hinted = true; hintEl.classList.add('gone'); } 
 
 // (start down the hill if asked, ridden by the sim's rider)
 const T0 = Number(q.get('t') ?? 0);
+if (q.has('at')) { rider.putAt(Number(q.get("at")) || 0); }
 for (let t = 0; t < T0; t += 1 / 120) { rider.step(1 / 120, autoInput()); rd.trail.add(rider); }
 rider.events.length = 0;
 

@@ -19,7 +19,7 @@
  * is, its green the paint's relief (the ridges catch the light), its blue which of the stroke's two colours.
  */
 import type { Course } from './course';
-import { M, rangeProfiles, foothillProfiles, riverLine } from './mesh';
+import { M, rangeProfiles, foothillProfiles, riverLine, fallPaths } from './mesh';
 import { ground } from './ground';
 import { lines, plain, trackY } from './ruts';
 
@@ -448,6 +448,56 @@ export function valleyStrokes(seed: number): Float32Array {
   return new Float32Array(out);
 }
 
+/** A waterfall in strokes, not a ribbon: several sheets one in front of another (the back one in shadow, lilac-grey, the
+ * front ones white, a few pale blue), each a run of streaks sliding down its arc with the water, each streak drawn out
+ * by how fast the water's falling where it is (short at the lip, long below), growing as it comes over the lip and
+ * shrinking away as it lands; at the lip a few strokes across, the glassy edge; at its foot spray, dabs thrown up and
+ * out, growing as they rise and fading. Built each frame, every streak keeping its own place in the flow, so it moves
+ * with the water rather than flickering. */
+export function fallStrokes(c: Course, s0: number, s1: number, t: number): Float32Array {
+  const out: number[] = [];
+  const put = (p: number[], T: number[], L: number, n: number[], W: number, seed: number, stamp: number, mt: number, band: number) => {
+    if (L <= 0.02 || W <= 0.01) return;
+    out.push(p[0], p[1], p[2], mt + 0.5, T[0], T[1], T[2], L, n[0], n[1], n[2], W, seed, stamp, 0, 3, NEVER, 10 + band, 1, 0);
+  };
+  const norm = (v: number[]) => { const l = Math.hypot(v[0], v[1], v[2]) || 1; return [v[0] / l, v[1] / l, v[2] / l]; };
+  for (const f of fallPaths(c, s0, s1)) {
+    const R = rng(f.i * 7919 + 13);
+    // (the sheets, back to front: how far out from the wall, how many streaks, their colour)
+    const sheets = [
+      { out: 0, n: 110, mt: M.RUT, bands: [1, 2], w: 1.0 },
+      { out: 0.25, n: 90, mt: M.WHITE, bands: [2, 1], w: 0.75 },
+      { out: 0.5, n: 70, mt: M.WHITE, bands: [0, 1], w: 0.55 },
+      { out: 0.75, n: 26, mt: M.FARSNOW, bands: [1, 0], w: 0.4 },
+    ];
+    for (const sh of sheets) for (let k = 0; k < sh.n; k++) {
+      const phase = R(), rate = (0.7 + R() * 0.5) / f.T, side = (R() * 2 - 1) * (sh.out === 0 ? 1.02 : 0.95), seed = R(), stamp = [0, 1, 7, 11][Math.floor(R() * 4)], band = sh.bands[R() < 0.65 ? 0 : 1];
+      const u = (phase + t * rate) % 1, tau = u * f.T;
+      const p = f.P(tau, side, sh.out), q = f.P(Math.min(f.T, tau + 0.04), side, sh.out);
+      const T = norm([q[0] - p[0], q[1] - p[1], q[2] - p[2]]);
+      // (the sheet's face: across it (along the road) and down it; its normal out toward the road)
+      const a = f.P(tau, side + 0.05, sh.out), A = norm([a[0] - p[0], a[1] - p[1], a[2] - p[2]]);
+      const n = norm([A[1] * T[2] - A[2] * T[1], A[2] * T[0] - A[0] * T[2], A[0] * T[1] - A[1] * T[0]]);
+      const v = 9.8 * tau, env = Math.min(1, u * 7) * Math.min(1, (1 - u) * 9);
+      put(p, T, (1.3 + 0.28 * v) * env * (0.8 + R() * 0.4), n, sh.w * (0.8 + R() * 0.4) * (0.7 + 0.3 * env), seed, stamp, sh.mt, band);
+    }
+    // (the lip: a few strokes across it, glassy)
+    for (let k = 0; k < 6; k++) {
+      const side = -0.9 + (1.8 * (k + R() * 0.5)) / 6, p = f.P(0.03, side, 0.4), a = f.P(0.03, side + 0.3, 0.4);
+      put(p, norm([a[0] - p[0], a[1] - p[1], a[2] - p[2]]), 1.4, [0, 0, 1], 0.28, R(), 0, M.WHITE, k % 3 === 0 ? 1 : 0);
+    }
+    // (spray at its foot: dabs thrown up and out, growing as they rise, fading as they go)
+    for (let k = 0; k < 26; k++) {
+      const ph = R(), life = 1.3 + R() * 0.9, u = ((t + ph * life) % life) / life, side = (R() * 2 - 1) * 1.2, ang = R() * Math.PI * 2;
+      const base = f.P(f.T, side, 0.3), r = (0.6 + R() * 2.2) * u;
+      const p = [base[0] + Math.cos(ang) * r, f.footY + 0.4 + (1.2 + R() * 2.5) * Math.sin(Math.PI * u * 0.8), base[2] + Math.sin(ang) * r];
+      const sz = (0.5 + R() * 0.7) * (0.4 + u) * (1 - u * u);
+      put(p, norm([Math.cos(ang), 0.6, Math.sin(ang)]), sz * 1.4, [0, 1, 0], sz, R(), [2, 3, 4, 3][Math.floor(R() * 4)], M.WHITE, R() < 0.7 ? 0 : 1);
+    }
+  }
+  return new Float32Array(out);
+}
+
 /** The sky's strokes: level marks round the eye from the horizon up past the top, close enough to cover it, darkening as
  * they rise, a few paler. */
 export function skyStrokes(seed: number): Float32Array {
@@ -552,6 +602,8 @@ void main(){
   // in front, so a peak shows a lit face and a shaded one whichever way you look, as the study has it)
   vec3 rr = normalize(vec3(w.x - uEye.x, 0., w.z - uEye.z)), Lf = normalize(vec3(rr.z, 0., -rr.x)*.75 + vec3(0., .55, 0.) - rr*.3);
   int code = int(a4.y + .5) - 1;
+  // (a stroke given its colour outright, near: the waterfall's)
+  if (!far && a4.y > 9.5) { b = int(a4.y + .5) - 10; b2 = h(seed, 3.1) > .8 ? clamp(b + 1, 0, 3) : b; }
   if (far && code >= 0 && code < 4) { b = code; b2 = h(seed, 3.1) > .78 ? clamp(b + (b < 2 ? 1 : -1), 0, 3) : b; }
   else if (far) { bool lit = dot(n, Lf) > .3; float r = h(seed, 3.1); b = lit ? (r > .5 ? 0 : 1) : 3; b2 = lit ? (r > .75 ? 2 : 1) : (r > .7 ? 2 : 3); }
   vec3 A = uPal[mt*4 + b], B = mix(A, uPal[mt*4 + b2], far ? .35 : .45);

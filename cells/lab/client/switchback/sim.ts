@@ -93,6 +93,8 @@ export class Rider {
   /** the ground's own vertical pace under you last step (NaN: just come down, nothing to compare yet) */
   private vyGround = NaN; private headingWas = 0;
   constructor(readonly course: Course) { this.place(); }
+  /** put on the line at station s, riding (`at=`, for looking at a place) */
+  putAt(s: number) { this.s = s; this.u = 0; this.psi = 0; this.v = 20; this.air = false; this.vy = 0; this.place(); this.sPrev = s; this.headingWas = this.travel; this.wheels(); }
   private place() { const p = this.course.point(this.s, this.u); this.x = p.x; this.y = p.y; this.z = p.z; this.heading = this.travel = p.heading - this.psi; this.slip = 0; }
   private ev(kind: Event['kind'], k: number) { this.events.push({ kind, x: this.x, y: this.y, z: this.z, k }); if (this.events.length > 64) this.events.shift(); }
 

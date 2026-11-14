@@ -206,24 +206,34 @@ function cutPoint(c: Course, i: number, k: number, cut = true) {
 /** the waterfalls near the rider, built each frame so their water moves: where a gorge has one, at its middle, from a lip
  * partway up the wall's gully the water is thrown clear of the rock and falls in an arc to the gorge's floor, widening as
  * it goes, bands of it sliding down; spray tumbling at its foot */
-export function buildFalls(c: Course, s0: number, s1: number, t: number) {
-  const m = new Mesh(true, true);
+/** the waterfalls between stations s0 and s1: each its station, its fall's time T (s), the point on its sheet at a time
+ * tau into the fall and a place across it (side, -1 to 1; `out` metres further out from the wall), and its foot */
+export function fallPaths(c: Course, s0: number, s1: number) {
+  const out: { i: number; T: number; P: (tau: number, side: number, outM?: number) => number[]; footY: number; fu: number; lipS: number }[] = [];
   for (let i = Math.max(1, Math.floor(s0)); i < s1; i++) {
     const st = c.at(i), nx = c.at(i + 1);
     if (st.feature !== 'gap' || !st.fall || (st.gapT ?? 1) > 0.5 || (nx.feature === 'gap' && (nx.gapT ?? 1) <= 0.5)) continue;
     // (the lip at the gorge's rim on the wall side, where the stream comes off the mountain's face; below it the gorge has
     // been cut away, so the water falls clear)
     const lip = cutPoint(c, i, WALL.length - 3, false), foot = cutPoint(c, i, WALL.length), drop = Math.max(4, lip.y - foot.y);
-    const T = Math.sqrt(drop / 4.9), N = 14, P = (tau: number, side: number) => {
-      const a = (2.2 + tau * 1.1) * side, u = lip.u + 0.9 + 3.4 * tau, p = c.point(lip.s + a, u);
+    const T = Math.sqrt(drop / 4.9), P = (tau: number, side: number, outM = 0) => {
+      const a = (2.2 + tau * 1.1) * side, u = lip.u + 0.9 + 3.4 * tau + outM, p = c.point(lip.s + a, u);
       return [p.x, lip.y + 0.4 - 4.9 * tau * tau, p.z];
     };
+    out.push({ i, T, P, footY: foot.y, fu: lip.u + 0.9 + 3.4 * T, lipS: lip.s });
+  }
+  return out;
+}
+export function buildFalls(c: Course, s0: number, s1: number, t: number) {
+  const m = new Mesh(true, true);
+  for (const { i, T, P, footY, fu: fu0, lipS } of fallPaths(c, s0, s1)) {
+    const N = 14, foot = { y: footY }, lip = { s: lipS };
     for (let n = 0; n < N; n++) {
       const t0 = (n / N) * T, t1 = ((n + 1) / N) * T, ph = (((t0 + t1) / 2) * 2.4 - t * 1.7) % 1, band = (ph + 1) % 1 < 0.28;
       m.quad(P(t0, -1), P(t0, 1), P(t1, 1), P(t1, -1), band ? M.SNOW : M.WHITE);
     }
     // (spray: a few white shards tumbling where it lands)
-    const fu = lip.u + 0.9 + 3.4 * T;
+    const fu = fu0;
     for (let j = 0; j < 9; j++) {
       const a = t * (2 + hash(i, j) * 3) + j, r = 1.2 + 2.2 * hash(i, j, 2), q = c.point(lip.s + Math.cos(a + j) * r, fu + Math.sin(a * 0.7 + j) * r * 0.6);
       const y = foot.y + 0.6 + ((t * 1.3 + hash(i, j, 3)) % 1) * 3.5, sz = 0.5 + hash(i, j, 4) * 0.6;

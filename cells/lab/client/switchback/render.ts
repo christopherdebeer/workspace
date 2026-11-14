@@ -17,7 +17,7 @@ import type { Rider, Event } from './sim';
 import { GEARS } from './audio';
 import { buildRuts, Trail } from './ruts';
 import { buildGouges } from './gouge';
-import { Painter, Strokes, Brush2D, strokesOver, skyStrokes, lineOf, courseStrokes, rangeStrokes, foothillStrokes, valleyStrokes } from './paint';
+import { Painter, Strokes, Brush2D, strokesOver, skyStrokes, lineOf, courseStrokes, rangeStrokes, foothillStrokes, valleyStrokes, fallStrokes } from './paint';
 
 const VS = `#version 300 es
 in vec4 aP; uniform mat4 uVP; uniform vec3 uOff; uniform float uZj; out vec3 vW; flat out int vM;
@@ -234,7 +234,7 @@ export class Renderer {
       // (the ruts, the track, the flags and the falls are windows sliding along the way: their strokes seeded by place)
       // (not the gouges: they're cut to the eye, finer near it and broader away, so their faces change as you ride and
       // strokes on them couldn't hold still; the road's own strokes run along it instead)
-      const parts = [new Float32Array(0), strokesOver(trackV, 13, null, 4000, true, 0.1, true), shadowOn ? strokesOver(sh, 17, null, 4000, true, 0, true) : new Float32Array(0),  strokesOver(flagsV, 19, null, 6000, true, 1.5), strokesOver(fallsV, 23, null, 6000, true, 2), strokesOver(body, 29, null, 9000, true)];
+      const parts = [new Float32Array(0), strokesOver(trackV, 13, null, 4000, true, 0.1, true), shadowOn ? strokesOver(sh, 17, null, 4000, true, 0, true) : new Float32Array(0),  strokesOver(flagsV, 19, null, 6000, true, 1.5), fallStrokes(this.course, r.s - 30, r.s + 420, t), strokesOver(body, 29, null, 9000, true)];
       const all = new Float32Array(parts.reduce((a, p) => a + p.length, 0)); let at = 0;
       for (const p of parts) { all.set(p, at); at += p.length; }
       if (!this.moving) this.moving = pt.make(all, true); else this.moving.set(all);
