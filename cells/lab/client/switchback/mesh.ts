@@ -286,7 +286,14 @@ function chevrons(c: Course, m: Mesh, s: number, ramp: boolean) {
 /** the flags' banners between stations s0 and s1, at time t: each an orange banner hung from the top of its pole out
  * over the shoulder, flying: waves running out along it, bigger toward its free end, which droops and trails back a
  * little; its facets catch the light and lose it as they turn, so it flickers between orange's bands as it moves */
-export function buildFlags(c: Course, s0: number, s1: number, t: number) {
+/** the flags between stations s0 and s1 at time t: each its pole's foot, and the point on its banner at a (0 at the pole,
+ * 1 its free end) and v (0 its top edge, 1 its bottom) */
+export function flagPaths(c: Course, s0: number, s1: number, t: number) {
+  const out: { i: number; base: number[]; P: (a: number, v: number) => number[] }[] = [];
+  buildFlags(c, s0, s1, t, (i, base, P) => out.push({ i, base, P }));
+  return out;
+}
+export function buildFlags(c: Course, s0: number, s1: number, t: number, each?: (i: number, base: number[], P: (a: number, v: number) => number[]) => void) {
   const m = new Mesh(true), W = 2.8, cols = 6, rows = 2;
   for (let i = Math.max(0, Math.floor(s0)); i < s1; i++) {
     const st = c.at(i); if (!st.flag) continue;
@@ -302,6 +309,7 @@ export function buildFlags(c: Course, s0: number, s1: number, t: number) {
       const across = (0.08 + 0.6 * a) * wave;
       return [base[0] + ox * out + nx * across, base[1] + up, base[2] + oz * out + nz * across];
     };
+    if (each) { each(i, base, P); continue; }
     for (let u = 0; u < cols; u++) for (let v = 0; v < rows; v++) {
       const a0 = u / cols, a1 = (u + 1) / cols, v0 = v / rows, v1 = (v + 1) / rows;
       m.tri(P(a0, v0), P(a1, v0), P(a1, v1), M.ORANGE, 0.5); m.tri(P(a0, v0), P(a1, v1), P(a0, v1), M.ORANGE, 0.5);

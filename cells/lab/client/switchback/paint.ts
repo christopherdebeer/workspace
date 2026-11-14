@@ -19,7 +19,7 @@
  * is, its green the paint's relief (the ridges catch the light), its blue which of the stroke's two colours.
  */
 import type { Course } from './course';
-import { M, rangeProfiles, foothillProfiles, riverLine, fallPaths } from './mesh';
+import { M, rangeProfiles, foothillProfiles, riverLine, fallPaths, flagPaths } from './mesh';
 import { ground } from './ground';
 import { lines, plain, trackY } from './ruts';
 
@@ -493,6 +493,47 @@ export function fallStrokes(c: Course, s0: number, s1: number, t: number): Float
       const p = [base[0] + Math.cos(ang) * r, f.footY + 0.4 + (1.2 + R() * 2.5) * Math.sin(Math.PI * u * 0.8), base[2] + Math.sin(ang) * r];
       const sz = (0.5 + R() * 0.7) * (0.4 + u) * (1 - u * u);
       put(p, norm([Math.cos(ang), 0.6, Math.sin(ang)]), sz * 1.4, [0, 1, 0], sz, R(), [2, 3, 4, 3][Math.floor(R() * 4)], M.WHITE, R() < 0.7 ? 0 : 1);
+    }
+  }
+  return new Float32Array(out);
+}
+
+/** A flag in strokes, by how far off it is. Near (within ~25 m, gone by 40): strokes riding the cloth, four rows of
+ * them from the pole to the free end, four along each row, each tied to its own place on the cloth (not to a facet), so it
+ * moves with the wave and holds still on it; the wave in their colour, lit or in shade as the cloth turns to the sun
+ * or from it. Far (from ~20 m): the banner one gesture, a flick from the pole's top out along it, whipping thin to the
+ * free end, and a shorter one over it; what reads, a few pixels across, is an orange mark on a pole. Either way the pole
+ * one dark upright stroke. */
+export function flagStrokes(c: Course, s0: number, s1: number, t: number, eye: number[], sun: number[]): Float32Array {
+  const out: number[] = [];
+  const norm = (v: number[]) => { const l = Math.hypot(v[0], v[1], v[2]) || 1; return [v[0] / l, v[1] / l, v[2] / l]; };
+  const sub = (p: number[], q: number[]) => [p[0] - q[0], p[1] - q[1], p[2] - q[2]];
+  const put = (p: number[], T: number[], L: number, n: number[], W: number, seed: number, stamp: number, mt: number, band: number, bend = 0) => {
+    if (L <= 0.02 || W <= 0.02) return;
+    out.push(p[0], p[1], p[2], mt + 0.5, T[0], T[1], T[2], L, n[0], n[1], n[2], W, seed, stamp, bend, 3, NEVER, 10 + band, 1, 0);
+  };
+  const smooth = (a: number, b: number, x: number) => { const k = Math.max(0, Math.min(1, (x - a) / (b - a))); return k * k * (3 - 2 * k); };
+  for (const f of flagPaths(c, s0, s1, t)) {
+    const R = rng(f.i * 4421 + 7), d = Math.hypot(f.base[0] - eye[0], f.base[1] + 4 - eye[1], f.base[2] - eye[2]);
+    const wn = 1 - smooth(25, 40, d), wf = smooth(20, 34, d);
+    // (the pole)
+    put([f.base[0], f.base[1] + 3, f.base[2]], [0, 1, 0], 6.1, norm(sub(eye, f.base)), 0.16, R(), 0, M.BLACK, 1);
+    if (wn > 0) for (let r = 0; r < 4; r++) for (let k = 0; k < 4; k++) {
+      const v = (r + 0.5) / 4, a0 = k / 4 - 0.04, a1 = (k + 1) / 4 + 0.04, am = (a0 + a1) / 2;
+      const p0 = f.P(Math.max(0, a0), v), p1 = f.P(Math.min(1, a1), v), pm = f.P(am, v), T = norm(sub(p1, p0));
+      const du = sub(f.P(am + 0.02, v), f.P(am - 0.02, v)), dv = sub(f.P(am, v + 0.05), f.P(am, v - 0.05));
+      let n = norm([du[1] * dv[2] - du[2] * dv[1], du[2] * dv[0] - du[0] * dv[2], du[0] * dv[1] - du[1] * dv[0]]);
+      const e = sub(eye, pm); if (n[0] * e[0] + n[1] * e[1] + n[2] * e[2] < 0) n = [-n[0], -n[1], -n[2]];
+      const l = n[0] * sun[0] + n[1] * sun[1] + n[2] * sun[2], band = l > 0.55 ? 0 : l > 0.2 ? 1 : l > -0.15 ? 2 : 3;
+      // (its sag across the chord, as bend: the cloth's curve between its ends)
+      const chord = Math.hypot(...sub(p1, p0)), mid = [(p0[0] + p1[0]) / 2, (p0[1] + p1[1]) / 2, (p0[2] + p1[2]) / 2];
+      put(pm, T, chord * 1.1, n, (2.3 / 4) * 1.8 * wn, R(), [0, 1, 13, 9][Math.floor(R() * 4)], M.ORANGE, band, Math.max(-0.3, Math.min(0.3, (Math.hypot(...sub(pm, mid)) / Math.max(0.1, chord)) * 2 * (R() < 0.5 ? 1 : -1))));
+    }
+    if (wf > 0) {
+      const top = f.P(0, 0.3), end = f.P(1, 0.55), mid = f.P(0.5, 0.45), T = norm(sub(end, top)), n = norm(sub(eye, mid));
+      put(mid, T, Math.hypot(...sub(end, top)) * 1.15, n, 2.0 * wf, R(), 8, M.ORANGE, 1, 0.15);
+      const m2 = f.P(0.35, 0.2), e2 = f.P(0.75, 0.25);
+      put(m2, norm(sub(e2, f.P(0, 0.2))), Math.hypot(...sub(e2, f.P(0, 0.2))) * 0.9, n, 0.9 * wf, R(), 15, M.ORANGE, 0, -0.1);
     }
   }
   return new Float32Array(out);
