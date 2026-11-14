@@ -17,7 +17,7 @@ import type { Rider, Event } from './sim';
 import { GEARS } from './audio';
 import { buildRuts, Trail } from './ruts';
 import { buildGouges } from './gouge';
-import { Painter, Strokes, Brush2D, strokesOver, skyStrokes, lineOf, courseStrokes, rangeStrokes, foothillStrokes, valleyStrokes, fallStrokes, flagStrokes } from './paint';
+import { STROKE, Painter, Strokes, Brush2D, strokesOver, skyStrokes, lineOf, courseStrokes, rangeStrokes, foothillStrokes, valleyStrokes, fallStrokes, flagStrokes } from './paint';
 
 const VS = `#version 300 es
 in vec4 aP; uniform mat4 uVP; uniform vec3 uOff; uniform float uZj; out vec3 vW; flat out int vM;
@@ -32,8 +32,11 @@ void main() { vec3 w = aP.xyz + uOff; vW = w - uEye; vM = int(aP.w); vT = fract(
   gl_Position.z += uZj * fract(float(gl_VertexID / 3) * .618) * gl_Position.w; }`;
 const FS = `#version 300 es
 precision highp float;
-in vec3 vW; flat in int vM; flat in float vT; uniform vec3 uPal[88]; uniform vec3 uEye; uniform vec3 uSun; uniform float uFog; out vec4 o;
+in vec3 vW; flat in int vM; flat in float vT; uniform vec3 uPal[88]; uniform vec3 uEye; uniform vec3 uSun; uniform float uFog; uniform float uNoThings; out vec4 o;
 void main() {
+  // (painted, the things standing on the ground (the fence, the poles, the pines, a kicker's boards) claim no depth and no
+  // stencil: what's behind them is painted, and their strokes over it, so a gap between their strokes shows that, not paper)
+  if (uNoThings > .5 && (vM == 3 || vM == 4 || vM == 5 || vM == 11 || vM == 17 || vM == 18 || vM == 19)) discard;
   vec3 n = normalize(cross(dFdx(vW), dFdy(vW)));
   // (the face's light, nudged by its own tone, picks one of its material's four bands)
   float l = dot(n, uSun) + (vT / .9 - .5) * .42;
@@ -119,7 +122,7 @@ export class Renderer {
     const p = gl.createProgram()!; gl.attachShader(p, sh(gl.VERTEX_SHADER, VS)); gl.attachShader(p, sh(gl.FRAGMENT_SHADER, FS)); gl.bindAttribLocation(p, 0, 'aP'); gl.linkProgram(p);
     if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p) ?? 'link');
     this.prog = p;
-    for (const n of ['uVP', 'uOff', 'uPal', 'uEye', 'uSun', 'uFog', 'uZj']) this.u[n] = gl.getUniformLocation(p, n);
+    for (const n of ['uVP', 'uOff', 'uPal', 'uEye', 'uSun', 'uFog', 'uZj', 'uNoThings']) this.u[n] = gl.getUniformLocation(p, n);
     gl.useProgram(p);
     gl.uniform3fv(this.u.uPal, new Float32Array(PALETTE.flat().map(hex).flat()));
     gl.uniform3fv(this.u.uSun, new Float32Array(SUN));
@@ -138,8 +141,13 @@ export class Renderer {
       const v = buildChunk(this.course, n);
       this.chunks.set(n, new Buf(this.gl, v)); budget--;
       if (this.painter) {
-        const face = strokesOver(v, this.course.seed * 1009 + n, lineOf(this.course, n * CHUNK - 6, (n + 1) * CHUNK + 6)), way = courseStrokes(this.course, n * CHUNK, (n + 1) * CHUNK), all = new Float32Array(face.length + way.length);
-        all.set(face); all.set(way, face.length);
+        const face = strokesOver(v, this.course.seed * 1009 + n, lineOf(this.course, n * CHUNK - 6, (n + 1) * CHUNK + 6)), way = courseStrokes(this.course, n * CHUNK, (n + 1) * CHUNK);
+        // (the ground's strokes and the way's first, then the things' over them: the things hold no depth, so they're
+        // painted over what's behind them by order)
+        const G: number[] = [], Th: number[] = [];
+        for (let k = 0; k < face.length; k += STROKE) (face[k + 15] > 2.5 ? Th : G).push(...face.subarray(k, k + STROKE));
+        const all = new Float32Array(G.length + way.length + Th.length);
+        all.set(G); all.set(way, G.length); all.set(Th, G.length + way.length);
         this.strokes.set(n, this.painter.make(all));
       }
     }
@@ -202,7 +210,9 @@ export class Renderer {
       const paper = hex(PAPER); gl.clearColor(paper[0], paper[1], paper[2], 1); gl.clearStencil(0); gl.clear(gl.COLOR_BUFFER_BIT | gl.STENCIL_BUFFER_BIT);
       pt.advance(r.s);
       const off = [view.eye[0], view.eye[1] - 60, view.eye[2]];
-      const near = () => { if (this.bgOnly) return; gl.uniform3f(this.u.uOff, 0, 0, 0); for (const b of this.chunks.values()) b.draw(); this.rider.set(body, true); this.rider.draw(); this.flags.set(flagsV, true); this.flags.draw(); this.falls.set(fallsV, true); this.falls.draw(); };
+      // (the ground and the rider (whose strokes, on both sides of it, need its own depth to hide its far side): the things
+      // on the ground, the flags and the falls claim no depth or stencil)
+      const near = () => { if (this.bgOnly) return; gl.uniform3f(this.u.uOff, 0, 0, 0); gl.uniform1f(this.u.uNoThings, 1); for (const b of this.chunks.values()) b.draw(); gl.uniform1f(this.u.uNoThings, 0); this.rider.set(body, true); this.rider.draw(); };
       // (where things stand, in the stencil: 2 the backdrop, 1 anything near; nothing drawn)
       gl.colorMask(false, false, false, false); gl.disable(gl.DEPTH_TEST); gl.enable(gl.STENCIL_TEST); gl.stencilOp(gl.KEEP, gl.KEEP, gl.REPLACE); gl.stencilFunc(gl.ALWAYS, 2, 0xff);
       gl.uniform1f(this.u.uFog, 0); gl.uniform3f(this.u.uOff, off[0], off[1], off[2]); this.ranges.draw(); this.valley.draw();

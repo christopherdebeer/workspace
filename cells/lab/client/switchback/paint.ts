@@ -197,7 +197,7 @@ export function strokesOver(verts: Float32Array, seed: number, line: number[] | 
       // (a flat thing lying on the ground (your track, a shadow) is laid as the ground is: flat on it, one side; a
       // standing thing, both sides, turning to the eye)
       if (flat && ny < 0) { nx = -nx; ny = -ny; nz = -nz; }
-      emit(e[0] / el, e[1] / el, e[2] / el, Ls, Ls * (flat ? 0.35 : 0.5), flat ? 2.2 : 3.2, 1, flat ? [0, 1, 11] : [0, 1, 2, 4, 8, 15], 0.35, flat ? 0.2 : 0.4, flat ? 0 : 3);
+      emit(e[0] / el, e[1] / el, e[2] / el, Ls, Ls * (flat ? 0.35 : 0.5), flat ? 2.2 : 3.2, 0, flat ? [0, 1, 11] : [0, 1, 2, 4, 8, 15], 0.35, flat ? 0.2 : 0.4, flat ? 0 : 3);
       continue;
     }
     // (the face's normal: up, or (a steep face) toward the road it's seen from)
