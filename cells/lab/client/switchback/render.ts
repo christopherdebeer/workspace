@@ -129,6 +129,8 @@ export class Renderer {
     gl.uniform3fv(this.u.uSun, new Float32Array(SUN));
     this.ranges = new Buf(gl, buildRanges(course.seed)); this.valley = new Buf(gl, buildValley(course.seed)); this.rider = new Buf(gl, null); this.shadow = new Buf(gl, null); this.flags = new Buf(gl, null); this.ruts = new Buf(gl, null); this.track = new Buf(gl, null); this.falls = new Buf(gl, null); this.trail = new Trail(course);
   }
+  /** a fixed size in pixels, one to one (for an export); `resize` puts it back to the window */
+  setSize(w: number, h: number) { this.dpr = 1; this.W = w; this.H = h; for (const c of [this.canvas, this.overlay]) { c.width = w; c.height = h; } }
   resize() {
     this.dpr = Math.min(2, devicePixelRatio || 1);
     this.W = innerWidth; this.H = innerHeight;

@@ -181,6 +181,16 @@ All made in the page (WebAudio, no files):
 - **The ground:** a gravel crunch under the tyres, more in a slide, none in the air.
 - **One-shots:** a landing's thump, a crash, a glance off rock, a checkpoint's two-note chime.
 
+## Video
+
+Three ways to make a video of a run (`client/switchback/rec.ts`):
+
+- **REC** (settings, VIDEO): records what you see as you ride, the picture and its speed layer, as it plays (MP4 where the browser records it, WebM where not). Tap STOP for the file (shared on a phone, downloaded elsewhere). It's your run, at the pace your device keeps.
+- **EXPORT 15 S** (settings, VIDEO), or `rec=<seconds>[,<fps>[,<w>x<h>]]` in the address: the run from where it is, on the autopilot, rendered offline: the game held, then stepped a fixed 1/fps a frame at a fixed size (1080 × 1920 held upright, 1920 × 1080 on its side, unless given), each frame encoded in the page (WebCodecs: H.264, else VP9, else AV1) and packed into an MP4 (mp4-muxer, loaded only then). Smooth whatever the device manages; tap EXPORT again to cancel. No sound yet.
+- **Headless**, for making videos here: `node cells/lab/devtools/switchback-video.mjs '<flags>' --seconds 8 --fps 30 --size 1280x720 --out ride.mp4` opens the page with `rec=headless`, steps it a frame at a time and pipes the frames to ffmpeg. Software GL is slow (seconds a frame at 960 × 540), so keep these short and small.
+
+(The offline, fixed-step, in-page export is an idea seen in a sibling project's exporter, written here our own way.)
+
 ## Flags
 
 `paint=0|1` the look for this page (painted is the default, and a setting): everything painted in brush strokes, laid by a paint front ahead of you (`stretch=0…2`: how far they stretch along their motion; `front=700,110`: how far ahead the masses and the detail are laid) · `seed=` the mountain · `mode=run|lives|time|endless` the mode for this page (THREE LIVES unless chosen) · `auto` the rider rides itself (`auto=tricks` showing off, as on the title), a run like yours in the page's mode: scored, its tricks called, its lives or kilometres shown, ended as the mode ends with its card, but never kept on your board (a touch takes over, and the run still isn't kept; AGAIN rides the sim's run again) · (any flag below skips the title) · `fx=0` no speed layer · `fog=0` no distance fade (both for judging a frame) · `rider=sil|facets`, `whip=`, `world=0` the rider studies (above) · `t=` start that many seconds down the run (ridden there by the auto rider) · `still` hold the frame · `preview` no HUD.

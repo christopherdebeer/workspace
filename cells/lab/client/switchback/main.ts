@@ -27,6 +27,7 @@ import { Sound } from './audio';
 import { MODES, Mode, PAR, Score, bestOf, board, keepBest, overPar, sign } from './score';
 import { Pad, replay, show as ink } from './sign';
 import { C15R } from './hand';
+import { Composer, Live, exportClip, save } from './rec';
 
 const q = new URLSearchParams(location.search);
 const seed = Number(q.get('seed') ?? 1) | 0 || 1, preview = q.has('preview'), still = q.has('still');
@@ -312,8 +313,15 @@ function say(text: string) { if (auto && !running) return; note.textContent = te
 const scoreEl = $('score'), statusEl = $('status'), comboEl = $('combo');
 let flashT = 0, flashText = '';
 let last = performance.now(), acc = 0, t = 0, drawn = 0, frames = 0, fps = 60, fpsT = 0, seen = 0, bigAir = 0;
+// (the loop is held while an export steps the game itself)
+let holding = false;
 function loop(now: number) {
   const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  if (!holding) tick(dt);
+  requestAnimationFrame(loop);
+}
+/** one frame: the game advanced by dt (in 1/120 s steps), the picture drawn, the HUD updated */
+function tick(dt: number) {
   const driveKeys = (keys.has('arrowup') || keys.has('w') ? 1 : 0) - (keys.has('arrowdown') || keys.has('s') ? 1 : 0);
   const drive = auto ? 0 : driveKeys || inp.drive, braking = drive < -0.3;
   if (!still && !paused) {
@@ -371,10 +379,49 @@ function loop(now: number) {
   statusEl.textContent = MODES[mode].lives ? `${'● '.repeat(Math.max(0, 3 - rider.crashes))}${'○ '.repeat(Math.min(3, rider.crashes))}`.trim() : length < Infinity ? `${(Math.min(progress, length) / 1000).toFixed(1)} / ${length / 1000} KM` : `${(progress / 1000).toFixed(1)} KM`;
   comboEl.innerHTML = score.pool ? `${score.chain.join(' · ')} <i>×${score.mult}</i> +${fmt(score.pending)}` : flashT > 0 ? flashText : '';
   drawTrace(dt);
+  live.frame();
   frames++; fpsT += dt; if (fpsT > 1) { fps = frames / fpsT; frames = 0; fpsT = 0; }
-  requestAnimationFrame(loop);
 }
 requestAnimationFrame(loop);
+
+// ── video ──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+// (REC records what you see as you ride; EXPORT renders the run from here offline, on the autopilot, smooth at a fixed
+// size; `rec=<seconds>[,<fps>[,<w>x<h>]]` exports on opening; `rec=headless` hands frames to a script (rec.ts))
+const comp = new Composer([document.querySelector<HTMLCanvasElement>('#world')!, document.querySelector<HTMLCanvasElement>('#speed')!].filter(Boolean));
+const live = new Live(comp);
+const recBtn = document.querySelector<HTMLButtonElement>('#rec'), expBtn = document.querySelector<HTMLButtonElement>('#export');
+const recMsg = document.createElement('div'); recMsg.id = 'recmsg'; recMsg.style.cssText = 'position:fixed;left:50%;bottom:16px;transform:translateX(-50%);z-index:50;font:600 12px/1.4 system-ui;letter-spacing:.08em;color:#fff;background:rgba(10,20,60,.75);padding:8px 12px;border-radius:6px;display:none;max-width:90vw;text-align:center';
+document.body.appendChild(recMsg);
+const tellRec = (m: string, ms = 0) => { recMsg.textContent = m; recMsg.style.display = m ? 'block' : 'none'; if (ms) setTimeout(() => { if (recMsg.textContent === m) recMsg.style.display = 'none'; }, ms); };
+recBtn?.addEventListener('click', async () => {
+  if (!live.on) { live.start(30); recBtn.textContent = 'STOP'; recBtn.setAttribute('aria-pressed', 'true'); close(); tellRec('● REC', 1500); return; }
+  const blob = await live.stop(); recBtn.textContent = 'REC'; recBtn.setAttribute('aria-pressed', 'false');
+  await save(blob, `switchback-ride.${blob.type.includes('mp4') ? 'mp4' : 'webm'}`);
+});
+let exporting = false, cancelExport = false;
+async function runExport(seconds: number, fps = 30, w?: number, h?: number) {
+  if (exporting) { cancelExport = true; return; }
+  exporting = true; cancelExport = false; holding = true;
+  const was = { auto, paused }; auto = true; paused = false; close();
+  const portrait = innerHeight > innerWidth, W = w ?? (portrait ? 1080 : 1920), H = h ?? (portrait ? 1920 : 1080);
+  try {
+    const r = await exportClip({ seconds, fps, w: W, h: H }, comp, (a, b) => rd.setSize(a, b), (dt) => tick(dt), (f, m) => tellRec(`EXPORT ${Math.round(f * 100)}% · ${m} · tap EXPORT to cancel`), () => cancelExport);
+    tellRec(`Done · ${r.note}`, 6000); await save(r.blob, r.name);
+  } catch (e) { tellRec(`Export stopped: ${(e as Error).message ?? e}`, 6000); }
+  rd.resize(); auto = was.auto; paused = was.paused; holding = false; exporting = false; last = performance.now();
+}
+expBtn?.addEventListener('click', () => runExport(15));
+const recFlag = q.get('rec');
+if (recFlag === 'headless') {
+  // (for a script: size the picture, then step a frame at a time and take each as a JPEG)
+  (window as unknown as { __rec: unknown }).__rec = {
+    size: (w: number, h: number) => { holding = true; auto = true; rd.setSize(w, h); },
+    step: (dt: number, quality = 0.9) => { tick(dt); return comp.draw().toDataURL('image/jpeg', quality); },
+  };
+} else if (recFlag) {
+  const [sec, f, size] = recFlag.split(','), [rw, rh] = (size ?? '').split('x').map(Number);
+  setTimeout(() => runExport(Number(sec) || 10, Number(f) || 30, rw || undefined, rh || undefined), 1200);
+}
 
 /** the gesture as it's drawn: a white line where the finger went, orange from where a trick was read; it fades once
  * the finger's lifted */
