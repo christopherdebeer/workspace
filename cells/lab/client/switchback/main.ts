@@ -312,6 +312,7 @@ const note = document.getElementById('note')!;
 // (`ink`: the callouts written by hand in the picture (callout.ts); the type kept, unseen, for screen readers)
 const inkFlag = q.has('ink') && q.get('ink') !== '0', callouts = new Callouts();
 if (inkFlag) note.style.opacity = '0';
+const inkText = inkFlag ? q.get('inktext') : null; let inkAt = -9;
 let noteTimer = 0;
 function say(text: string) { if (auto && !running && !inkFlag) return; if (inkFlag) callouts.say(text, t); note.textContent = text; note.classList.add('on'); clearTimeout(noteTimer); noteTimer = window.setTimeout(() => note.classList.remove('on'), 1400); }
 const scoreEl = $('score'), statusEl = $('status'), comboEl = $('combo');
@@ -367,6 +368,8 @@ function tick(dt: number) {
   if (ejit) { const e = (drawn % 2) * 0.01; vw.eye = [vw.eye[0] + e, vw.eye[1], vw.eye[2]]; vw.target = [vw.target[0] + e, vw.target[1], vw.target[2]]; }
   if (bgFlag) { const [yw = 0, pc = 4, fv = 60] = bgFlag.map((v) => (v * Math.PI) / 180), d = 100; rd.bgOnly = true; vw.target = [vw.eye[0] + Math.sin(yw) * Math.cos(pc) * d, vw.eye[1] + Math.sin(pc) * d, vw.eye[2] + Math.cos(yw) * Math.cos(pc) * d]; vw.roll = 0; vw.fov = fv; }
   rd.frame(vw, rider, t, still || paused ? 0 : dt, drawn++ < 2 ? 99 : 1);
+  // (`inktext=<words>`: those words lettered every two seconds, for looking at the lettering)
+  if (inkText && t - inkAt > 2) { callouts.say(inkText, t); inkAt = t; }
   if (inkFlag) callouts.draw(rd.ctx, rd.W, rd.H, rd.dpr, t);
   seen = rider.events.length; sound.sync(seen);
   if (rider.air) bigAir = Math.max(bigAir, rider.airT);

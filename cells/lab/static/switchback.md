@@ -181,9 +181,9 @@ All made in the page (WebAudio, no files):
 - **The ground:** a gravel crunch under the tyres, more in a slide, none in the air.
 - **One-shots:** a landing's thump, a crash, a glance off rock, a checkpoint's two-note chime.
 
-## Written callouts (`ink`, a flag for now)
+## Painted callouts (`ink`, a flag for now)
 
-With `ink` in the address, a trick, a checkpoint or a wipe-out isn't set in type over the picture: it's written by hand into it (`client/switchback/callout.ts`), by the autograph experiment's newest hand (the same family of hand that signs the title), joined, in sentence case ("Seat grab", "Checkpoint 2"), writing itself out in about half a second in the order and at the pace the hand made its strokes, holding, and fading. It's inked as a loaded brush: each stroke one continuous line, broad where the hand went slowly, round at its turns, cream over an orange line a little offset (the type's own orange shadow), with fine bristle grooves along it. It's drawn in the speed layer's canvas, so it's in a REC or EXPORT video. The type is kept, unseen, for screen readers.
+With `ink` in the address, a trick, a checkpoint or a wipe-out isn't set in type over the picture: it's lettered into it in brushed capitals (`client/switchback/callout.ts`), sign-painter capitals drawn for the game: each letter (A–Z, 0–9, a few marks) a few strokes laid in the order a painter lays them, each stroke the painter's own brush stamp (loaded, its bristles in it) pulled along it and running dry at its end; slanted forward, each letter a little off its line and turned. Written on stroke by stroke in half a second, held, faded; cream over an orange stroke a little offset (the type's own orange shadow). It's drawn in the speed layer's canvas, so it's in a REC or EXPORT video; the type is kept, unseen, for screen readers. `inktext=<words>` letters those words every two seconds, for looking at it. (Tried first: the autograph experiment's joined hand, writing each callout as a signature is written; too quiet and personal for a shout at speed.)
 
 ## Video
 
