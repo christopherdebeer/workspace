@@ -928,6 +928,28 @@ export class Brush2D {
     ctx.drawImage(this.sheet(col), cell[0], cell[1], STAMP.W, STAMP.H, -L * 0.03, -W / 2, L * 1.06, W);
     ctx.restore();
   }
+  /** a stroke bent along a run of points (`pts`, x y pairs), `W` across, in stamp `st`: the stamp cut into thin slices along
+   * its length and each laid where it falls on the run, turned to it, so a curve is one unbroken stroke, its bristles
+   * following the bend. Drawn up to `upTo` of its length (the rest not yet laid, its texture not squashed) */
+  along(ctx: CanvasRenderingContext2D, pts: number[][], W: number, col: string, st = 0, upTo = 1) {
+    if (pts.length < 2 || W < 1) return;
+    const cum = [0]; for (let i = 1; i < pts.length; i++) cum.push(cum[i - 1] + Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]));
+    const L = cum[cum.length - 1]; if (L < 1) return;
+    // (the stamp's ends run a little past the run's, as a brush's do)
+    const pad = W * 0.18, total = L + pad * 2, N = Math.max(4, Math.ceil(total / 2.2)), sheet = this.sheet(col), cx = (st % STAMP.COLS) * STAMP.W, cy = Math.floor(st / STAMP.COLS) * STAMP.H;
+    const at = (d: number) => {
+      const dd = Math.max(0, Math.min(L, d)); let i = 1; while (i < cum.length - 1 && cum[i] < dd) i++;
+      const f = (dd - cum[i - 1]) / Math.max(1e-6, cum[i] - cum[i - 1]), a = pts[i - 1], b = pts[i], ang = Math.atan2(b[1] - a[1], b[0] - a[0]);
+      const ext = d - dd; return [a[0] + (b[0] - a[0]) * f + Math.cos(ang) * ext, a[1] + (b[1] - a[1]) * f + Math.sin(ang) * ext, ang];
+    };
+    const n = Math.ceil(N * Math.max(0, Math.min(1, upTo))), sw = STAMP.W / N, dw = (total / N) * 1.25;
+    for (let k = 0; k < n; k++) {
+      const [x, y, ang] = at(-pad + ((k + 0.5) / N) * total);
+      ctx.save(); ctx.translate(x, y); ctx.rotate(ang);
+      ctx.drawImage(sheet, cx + k * sw, cy, sw, STAMP.H, -dw / 2, -W / 2, dw, W);
+      ctx.restore();
+    }
+  }
   /** a dab, `s` across, turned by `a` */
   dab(ctx: CanvasRenderingContext2D, p: number[], s: number, a: number, col: string) {
     const st = 3, cell = [(st % STAMP.COLS) * STAMP.W, Math.floor(st / STAMP.COLS) * STAMP.H];
