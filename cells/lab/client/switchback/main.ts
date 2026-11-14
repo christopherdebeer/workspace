@@ -62,6 +62,9 @@ if (q.get('ruts') === 'bolts') { rd.rutStyle = 'bolts'; rd.trail.cut = false; }
 /** `paint=1`: the mountain laid in brush strokes over its facets (paint.ts); `stretch=` how far its strokes stretch along their motion (0 none, 1 as drawn, 2 twice) */
 /** the look: painted (the default) or cut facets; kept in the settings, `paint=0|1` for this page only */
 const paintFlag = q.has('paint') ? q.get('paint') !== '0' : null;
+// (`bg=yaw,pitch,fov` (degrees): only the backdrop (the sky, the ranges, the valley), looking that way from where you are,
+// for judging the far off on its own)
+const bgFlag = q.has('bg') ? (q.get('bg') ?? '').split(',').map(Number) : null;
 /** `front=700,110`: how far ahead of the rider the paint front lays the masses and the detail (m) */
 if (q.has('front')) { const [a, b] = (q.get('front') ?? '').split(',').map(Number); if (a > 0 && b > 0) rd.leadWanted = [a, b]; }
 if (q.has('stretch')) rd.stretchWanted = Math.max(0, Math.min(2, Number(q.get('stretch')) || 0));
@@ -349,6 +352,7 @@ function loop(now: number) {
   const vw = (zjit || ejit || hold) && heldView && performance.now() - t0 > 4000 ? heldView : view(paused ? 0 : dt, t);
   if ((zjit || ejit || hold) && !heldView && performance.now() - t0 > 4000) heldView = { ...vw, eye: vw.eye.slice(), target: vw.target.slice() };
   if (ejit) { const e = (drawn % 2) * 0.01; vw.eye = [vw.eye[0] + e, vw.eye[1], vw.eye[2]]; vw.target = [vw.target[0] + e, vw.target[1], vw.target[2]]; }
+  if (bgFlag) { const [yw = 0, pc = 4, fv = 60] = bgFlag.map((v) => (v * Math.PI) / 180), d = 100; rd.bgOnly = true; vw.target = [vw.eye[0] + Math.sin(yw) * Math.cos(pc) * d, vw.eye[1] + Math.sin(pc) * d, vw.eye[2] + Math.cos(yw) * Math.cos(pc) * d]; vw.roll = 0; vw.fov = fv; }
   rd.frame(vw, rider, t, still || paused ? 0 : dt, drawn++ < 2 ? 99 : 1);
   seen = rider.events.length; sound.sync(seen);
   if (rider.air) bigAir = Math.max(bigAir, rider.airT);

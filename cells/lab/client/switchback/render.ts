@@ -95,6 +95,8 @@ export class Renderer {
   /** painted (`paint=1`, paint.ts): the mountain laid in brush strokes over its facets; and the strokes, built with each
    * chunk, the backdrop's and the sky's once */
   paint = false; painter: Painter | null = null; stretchWanted = 1; leadWanted: [number, number] | null = null;
+  /** only the backdrop drawn (`bg=`) */
+  bgOnly = false;
   private strokes = new Map<number, Strokes>(); private backStrokes: Strokes[] = []; private moving: Strokes | null = null; private prevEye: number[] | null = null; private prevEye0: number[] | null = null; private eyeV = [0, 0, 0]; private skyS: Strokes | null = null; private prevVP: Mat | null = null;
   /** your own track, fed after each step of the sim */
   readonly trail: Trail;
@@ -200,7 +202,7 @@ export class Renderer {
       const paper = hex(PAPER); gl.clearColor(paper[0], paper[1], paper[2], 1); gl.clearStencil(0); gl.clear(gl.COLOR_BUFFER_BIT | gl.STENCIL_BUFFER_BIT);
       pt.advance(r.s);
       const off = [view.eye[0], view.eye[1] - 60, view.eye[2]];
-      const near = () => { gl.uniform3f(this.u.uOff, 0, 0, 0); for (const b of this.chunks.values()) b.draw(); this.rider.set(body, true); this.rider.draw(); this.flags.set(flagsV, true); this.flags.draw(); this.falls.set(fallsV, true); this.falls.draw(); };
+      const near = () => { if (this.bgOnly) return; gl.uniform3f(this.u.uOff, 0, 0, 0); for (const b of this.chunks.values()) b.draw(); this.rider.set(body, true); this.rider.draw(); this.flags.set(flagsV, true); this.flags.draw(); this.falls.set(fallsV, true); this.falls.draw(); };
       // (where things stand, in the stencil: 2 the backdrop, 1 anything near; nothing drawn)
       gl.colorMask(false, false, false, false); gl.disable(gl.DEPTH_TEST); gl.enable(gl.STENCIL_TEST); gl.stencilOp(gl.KEEP, gl.KEEP, gl.REPLACE); gl.stencilFunc(gl.ALWAYS, 2, 0xff);
       gl.uniform1f(this.u.uFog, 0); gl.uniform3f(this.u.uOff, off[0], off[1], off[2]); this.ranges.draw(); this.valley.draw();
@@ -227,7 +229,7 @@ export class Renderer {
       gl.depthFunc(gl.LEQUAL);
       paintBegin();
       // (the ground's strokes, the far chunks first so the near paint over them at the edges)
-      for (const n of [...this.strokes.keys()].sort((a, b) => b - a)) pt.draw(this.strokes.get(n)!, [0, 0, 0], this.fog);
+      if (!this.bgOnly) for (const n of [...this.strokes.keys()].sort((a, b) => b - a)) pt.draw(this.strokes.get(n)!, [0, 0, 0], this.fog);
       // (and what moves, each face's strokes its own, so they stay put on it)
       // (the ruts, the track, the flags and the falls are windows sliding along the way: their strokes seeded by place)
       // (not the gouges: they're cut to the eye, finer near it and broader away, so their faces change as you ride and
@@ -236,7 +238,7 @@ export class Renderer {
       const all = new Float32Array(parts.reduce((a, p) => a + p.length, 0)); let at = 0;
       for (const p of parts) { all.set(p, at); at += p.length; }
       if (!this.moving) this.moving = pt.make(all, true); else this.moving.set(all);
-      pt.draw(this.moving, [0, 0, 0], this.fog);
+      if (!this.bgOnly) pt.draw(this.moving, [0, 0, 0], this.fog);
       pt.end(); gl.depthFunc(gl.LESS); gl.useProgram(this.prog);
     } else {
     // (the far ranges, round the eye and a little below it, unfaded)
