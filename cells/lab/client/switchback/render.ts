@@ -17,7 +17,7 @@ import type { Rider, Event } from './sim';
 import { GEARS } from './audio';
 import { buildRuts, Trail } from './ruts';
 import { buildGouges } from './gouge';
-import { Painter, Strokes, Brush2D, strokesOver, skyStrokes, lineOf, courseStrokes, rangeStrokes } from './paint';
+import { Painter, Strokes, Brush2D, strokesOver, skyStrokes, lineOf, courseStrokes, rangeStrokes, foothillStrokes, valleyStrokes } from './paint';
 
 const VS = `#version 300 es
 in vec4 aP; uniform mat4 uVP; uniform vec3 uOff; uniform float uZj; out vec3 vW; flat out int vM;
@@ -32,7 +32,7 @@ void main() { vec3 w = aP.xyz + uOff; vW = w - uEye; vM = int(aP.w); vT = fract(
   gl_Position.z += uZj * fract(float(gl_VertexID / 3) * .618) * gl_Position.w; }`;
 const FS = `#version 300 es
 precision highp float;
-in vec3 vW; flat in int vM; flat in float vT; uniform vec3 uPal[84]; uniform vec3 uEye; uniform vec3 uSun; uniform float uFog; out vec4 o;
+in vec3 vW; flat in int vM; flat in float vT; uniform vec3 uPal[88]; uniform vec3 uEye; uniform vec3 uSun; uniform float uFog; out vec4 o;
 void main() {
   vec3 n = normalize(cross(dFdx(vW), dFdy(vW)));
   // (the face's light, nudged by its own tone, picks one of its material's four bands)
@@ -148,7 +148,7 @@ export class Renderer {
     const gl = this.gl;
     if (this.paint && !this.painter) {
       this.painter = new Painter(gl, new Float32Array(PALETTE.flat().map(hex).flat()), SUN);
-      this.backStrokes = [this.painter.make(rangeStrokes(this.course.seed)), this.painter.make(strokesOver(buildValley(this.course.seed), this.course.seed * 37, null, 30000))];
+      this.backStrokes = [this.painter.make(rangeStrokes(this.course.seed)), this.painter.make(valleyStrokes(this.course.seed)), this.painter.make(foothillStrokes(this.course.seed))];
       this.skyS = this.painter.make(skyStrokes(this.course.seed)); this.painter.stretch = this.stretchWanted; if (this.leadWanted) this.painter.lead = this.leadWanted;
       for (const b of this.chunks.values()) b.free();
       this.chunks.clear();
@@ -220,7 +220,7 @@ export class Renderer {
       // (the ranges over the sky and over each other, farthest first, by the order they're laid, not by depth: so their
       // strokes run over the skyline as a brush does, and a nearer range is painted over the one behind it; then the
       // valley, by depth, so its floor doesn't paint over the ranges' feet it lies behind)
-      paintBegin(); gl.disable(gl.DEPTH_TEST); pt.draw(this.backStrokes[0], off, false); gl.enable(gl.DEPTH_TEST); pt.draw(this.backStrokes[1], off, false); pt.end(); gl.useProgram(this.prog);
+      paintBegin(); gl.disable(gl.DEPTH_TEST); pt.draw(this.backStrokes[0], off, false); gl.enable(gl.DEPTH_TEST); pt.draw(this.backStrokes[1], off, false); gl.disable(gl.DEPTH_TEST); pt.draw(this.backStrokes[2], off, false); gl.enable(gl.DEPTH_TEST); pt.end(); gl.useProgram(this.prog);
       gl.disable(gl.STENCIL_TEST);
       // (what's near: its facets only in the depth; then its strokes, laid in the world on them and lifted a little toward
       // the eye, tested against that depth pixel by pixel, far chunks first)

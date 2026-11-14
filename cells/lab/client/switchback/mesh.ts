@@ -11,7 +11,7 @@
 import { Course, JUMPS, hash } from './course';
 import { STEP, WALL, section, character, groundAt, notch } from './ground';
 
-export const M = { SNOW: 0, TRACK: 1, ROCK: 2, ORANGE: 3, BLACK: 4, WHITE: 5, MTN: 6, MTNSNOW: 7, UMBER: 8, SHADOW: 9, RUT: 10, NAVY: 11, FAR: 12, FARSNOW: 13, RIDGE: 14, FOREST: 15, VALLEY: 16, CUT_ORANGE: 17, CUT_BLACK: 18, CREAM: 19, GOUGE: 20 } as const;
+export const M = { SNOW: 0, TRACK: 1, ROCK: 2, ORANGE: 3, BLACK: 4, WHITE: 5, MTN: 6, MTNSNOW: 7, UMBER: 8, SHADOW: 9, RUT: 10, NAVY: 11, FAR: 12, FARSNOW: 13, RIDGE: 14, FOREST: 15, VALLEY: 16, CUT_ORANGE: 17, CUT_BLACK: 18, CREAM: 19, GOUGE: 20, FIELD: 21 } as const;
 /** each material's four bands, lit to unlit (the reference's own colours) */
 export const PALETTE: string[][] = [
   ['#f1ece8', '#d9d0ca', '#a399a2', '#6f6c93'], // snow
@@ -21,22 +21,23 @@ export const PALETTE: string[][] = [
   ['#2c2d32', '#1d1e23', '#16171b', '#101114'], // black
   ['#ffffff', '#f1ece8', '#d9d0ca', '#a399a2'], // white
   ['#4b72ee', '#3a63e6', '#1836b0', '#122a90'], // far range: lighter than the sky lit, deep ultramarine in shade
-  ['#f4f1ee', '#dcdbef', '#4f6ee0', '#16309c'], // far snow: white where it's lit, deep ultramarine in its shade
+  ['#f7efe2', '#dcdbef', '#4f6ee0', '#16309c'], // far snow: white where it's lit, deep ultramarine in its shade
   ['#6b5348', '#4c3b34', '#3d2f2a', '#2c221e'], // umber
   ['#a399a2', '#a399a2', '#a399a2', '#a399a2'], // shadow on snow
   ['#ccbcb2', '#ab9c9c', '#8f8394', '#6f6a86'], // ruts: the track's own colours a step down (worn grooves)
   ['#535e8a', '#2c3768', '#162140', '#101a36'], // navy
   // (the backdrop: one family of blues, lighter and flatter the further off; no charcoal in it)
   ['#6f90f3', '#5c80f0', '#2141c0', '#17309a'], // the farthest range
-  ['#f3f2f7', '#d9dcf3', '#5a78e4', '#1a35a6'], // its snow
-  ['#1b49d0', '#1742c2', '#1238a8', '#10329a'], // the foothill ridge
-  ['#163291', '#142d84', '#12287a', '#11246e'], // forest along its foot
+  ['#f6eee4', '#d9dcf3', '#5a78e4', '#1a35a6'], // its snow
+  ['#8494e0', '#6178d8', '#2c46b8', '#1d3698'], // the hills: lavender-blue where lit, deep in shade
+  ['#1d2c7a', '#18256c', '#131e5c', '#0f184e'], // forest: dark navy
   ['#2f5be6', '#2f5be6', '#2a55e0', '#2a55e0'], // the valley floor
   // (the rider drawn as cut colour (style 'cut'): each mass one flat field, and one cut where it turns from the light)
   ['#ff6c12', '#ff6c12', '#ff6c12', '#1d1d22'], // orange, its cut charcoal: the shadow side merges into the dark mass
   ['#1d1d22', '#1d1d22', '#1d1d22', '#1d1d22'], // charcoal: the legs and the whole machine, one mass, no marks inside it
   ['#f6e7c6', '#f6e7c6', '#f6e7c6', '#c7ae86'], // cream accents (boots, fork, plates, helmet), a tan cut
   ['#857c92', '#7d7590', '#6f6a86', '#5d5a78'], // a gouge's shadowed wall (`ruts=cut`): the deep shade's violet, the road's ink
+  ['#d9c39c', '#b6a8cc', '#7f88d2', '#4f60c0'], // the valley's fields: ochre, lavender, blue, deep blue
 ];
 
 /** the ruts lighter than the road instead (`ruts=light`): the worn line polished, catching the light like a flash */
@@ -368,6 +369,13 @@ function skyline(m: Mesh, seed: number, k: number, spec: { R: number; floor: num
       h = Math.max(h, v);
     }
     // (an arc rises from the floor at one end and falls back to it at the other)
+    // (a snowy range is a massif, not a row of cones: sub-summits and notches all along its crest, sharp (folded noise),
+    // smaller ones on the bigger)
+    if (snowline < 1e8) {
+      let v = 0, amp = 1, fr = (R / 260);
+      for (let o = 0; o < 4; o++) { v += amp * (1 - Math.abs(Math.sin(a * fr + k * 7.3 + o * 1.9) * Math.cos(a * fr * 0.61 + o * 2.3 + k))); amp *= 0.5; fr *= 2.1; }
+      h += (h - lo * 0.4) * 0.22 * (v - 0.9) + lo * 0.12 * v;
+    }
     if (arc) { const e = Math.min(a - from, to - a) / ((to - from) * 0.18); h *= Math.max(0, Math.min(1, e)); }
     return floor + h;
   };
@@ -400,9 +408,12 @@ function skyline(m: Mesh, seed: number, k: number, spec: { R: number; floor: num
   return { rows, crest, as, peaks };
 }
 /** the skylines: the farthest range, then a nearer one in front of it, both all round; snow on both */
+// (the ranges, farthest first, in layers that recede: the snow massif, a nearer snowy range, and blue hills in front;
+// each further one hazier, toward the sky's horizon (`haze`))
 const RANGES = [
-  { k: 1, R: 3400, floor: -280, lo: 420, hi: 1050, peaks: 15, body: M.FAR, snow: M.FARSNOW, snowline: -260 + 420, fold: 0.03 },
-  { k: 2, R: 2500, floor: -270, lo: 230, hi: 620, peaks: 12, body: M.MTN, snow: M.MTNSNOW, snowline: -260 + 430, fold: 0.04 },
+  { k: 1, R: 3700, floor: -290, lo: 520, hi: 1180, peaks: 22, body: M.FAR, snow: M.FARSNOW, snowline: -260 + 470, fold: 0.03, haze: 0.16, forest: false },
+  { k: 2, R: 3100, floor: -280, lo: 300, hi: 760, peaks: 16, body: M.MTN, snow: M.MTNSNOW, snowline: -260 + 520, fold: 0.04, haze: 0.09, forest: false },
+  { k: 3, R: 2550, floor: -270, lo: 110, hi: 360, peaks: 10, body: M.RIDGE, snow: M.RIDGE, snowline: 1e9, fold: 0.05, haze: 0.04, forest: false },
 ];
 export function buildRanges(seed: number) {
   const m = new Mesh();
@@ -412,7 +423,23 @@ export function buildRanges(seed: number) {
 /** the skylines' profiles, farthest first: each its radius, floor, snow line, materials, its crest's height round the eye
  * and its summits (angle, height, half-widths each side) — for painting a range by its ridges rather than its faces */
 export function rangeProfiles(seed: number) {
-  return RANGES.map((r) => { const { crest, peaks } = skyline(new Mesh(), seed, r.k, r); return { ...r, crest, peaks }; });
+  return RANGES.map((r) => { const { crest, peaks } = skyline(new Mesh(), seed, r.k, r); return { ...r, from: 0, to: Math.PI * 2, crest, peaks }; });
+}
+/** the foothills in the valley: two arcs, each a long continuous ridge, forested along its foot */
+export function valleyRidges(seed: number) {
+  return [0, 1].map((k) => {
+    const mid = hash(seed, k, 50) * Math.PI * 2 + k * Math.PI, span = 1.0 + 0.6 * hash(seed, k, 51), R = 1150 + 300 * hash(seed, k, 52);
+    return { k: 10 + k, R, floor: -260, lo: 90, hi: 260 + 60 * hash(seed, k, 53), peaks: 3, body: M.RIDGE, snow: M.RIDGE, snowline: 1e9, from: mid - span / 2, to: mid + span / 2, fold: 0.07, haze: 0, forest: true };
+  });
+}
+export function foothillProfiles(seed: number) {
+  return valleyRidges(seed).map((r) => { const { crest, peaks } = skyline(new Mesh(), seed, r.k, r); return { ...r, crest, peaks }; });
+}
+/** the river's line across the valley's floor */
+export function riverLine(seed: number) {
+  const rv: number[][] = [];
+  for (let k = 0; k <= 40; k++) { const z = -2200 + k * 110, x = -520 + Math.sin(k * 0.55 + seed) * 160 + Math.sin(k * 1.7) * 50; rv.push([x, -259, z]); }
+  return rv;
 }
 
 /** the valley: its floor (flat, one blue), the river winding over it (pale), and a foothill ridge or two in the middle
@@ -423,9 +450,8 @@ export function buildValley(seed: number) {
   // (the floor: a flat disc out past the skylines' feet)
   for (let i = 0; i < 24; i++) { const a0 = (i / 24) * Math.PI * 2, a1 = ((i + 1) / 24) * Math.PI * 2; m.tri([0, F, 0], [Math.sin(a0) * 3500, F, Math.cos(a0) * 3500], [Math.sin(a1) * 3500, F, Math.cos(a1) * 3500], M.VALLEY, 0.5); }
   // (the foothills: two arcs, each a long continuous ridge)
-  for (let k = 0; k < 2; k++) {
-    const mid = hash(seed, k, 50) * Math.PI * 2 + k * Math.PI, span = 1.0 + 0.6 * hash(seed, k, 51), R = 1150 + 300 * hash(seed, k, 52);
-    const { rows } = skyline(m, seed, 10 + k, { R, floor: F, lo: 90, hi: 260 + 60 * hash(seed, k, 53), peaks: 3, body: M.RIDGE, snow: M.RIDGE, snowline: 1e9, from: mid - span / 2, to: mid + span / 2, fold: 0.07 });
+  for (const [k, spec] of valleyRidges(seed).entries()) {
+    const { rows } = skyline(m, seed, spec.k, spec);
     // (its forest: a band along the foot, in front of the face, its top edge ragged)
     for (let i = 0; i < rows.length - 1; i++) {
       const a = rows[i], b = rows[i + 1], h = (r: { C: number[] }) => Math.max(0, r.C[1] - F);
@@ -440,8 +466,7 @@ export function buildValley(seed: number) {
     }
   }
   // (the river: a ribbon winding across the floor, pale)
-  const rv: number[][] = [];
-  for (let k = 0; k <= 40; k++) { const z = -2200 + k * 110, x = -520 + Math.sin(k * 0.55 + seed) * 160 + Math.sin(k * 1.7) * 50; rv.push([x, F + 1, z]); }
+  const rv = riverLine(seed);
   for (let k = 0; k < rv.length - 1; k++) {
     const p = rv[k], q = rv[k + 1], dx = q[0] - p[0], dz = q[2] - p[2], L = Math.hypot(dx, dz), w = 16 + 8 * hash(seed, k, 7);
     const nx = (-dz / L) * w, nz = (dx / L) * w;
