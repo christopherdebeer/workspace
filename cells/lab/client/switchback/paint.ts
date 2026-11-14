@@ -20,6 +20,7 @@
  */
 import type { Course } from './course';
 import { M, rangeProfiles, foothillProfiles, riverLine, fallPaths, flagPaths } from './mesh';
+import type { RiderPart } from './mesh';
 import { ground } from './ground';
 import { lines, plain, trackY } from './ruts';
 
@@ -539,6 +540,149 @@ export function flagStrokes(c: Course, s0: number, s1: number, t: number, eye: n
   return new Float32Array(out);
 }
 
+/** The rider painted by its parts, after the rider study: a few big loaded strokes on each part, laid with its form, on
+ * the side of it you see. The arms, legs, boots and the machine's tubes in strokes along them, a few round each; the
+ * jacket's body in strokes wrapping it on a slant, as the study's back is; the helmet in strokes round it, its goggle
+ * strap one dark band; each wheel a ring of strokes round its axle, turning with it; the machine's boxes (tank, fenders,
+ * seat, plates) a couple of strokes along each face you see. Each stroke lit or shaded by its own place on the part,
+ * in its material's four values (the jacket orange, the jeans denim, the tyres near-black, the helmet and boots cream).
+ * At speed the jacket trails dry strokes off behind it. */
+export function riderStrokes(parts: RiderPart[], eye: number[], sun: number[], vel: number[]): Float32Array {
+  const out: number[] = [], R = rng(9157);
+  const nrm = (v: number[]) => { const l = Math.hypot(v[0], v[1], v[2]) || 1; return [v[0] / l, v[1] / l, v[2] / l]; };
+  const sub = (a: number[], b: number[]) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]], add = (a: number[], b: number[], k = 1) => [a[0] + b[0] * k, a[1] + b[1] * k, a[2] + b[2] * k];
+  const dot = (a: number[], b: number[]) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2], crs = (a: number[], b: number[]) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+  const band = (n: number[], lift = 0) => { const l = dot(n, sun) + lift; return l > 0.5 ? 0 : l > 0.1 ? 1 : l > -0.3 ? 2 : 3; };
+  const speed = Math.hypot(vel[0], vel[1], vel[2]), back = speed > 1e-3 ? [-vel[0] / speed, -vel[1] / speed, -vel[2] / speed] : [0, 0, 0];
+  const put = (p: number[], T: number[], L: number, n: number[], W: number, mt: number, b: number, stamp: number, bend = 0) => {
+    if (L <= 0.005 || W <= 0.005) return;
+    out.push(p[0], p[1], p[2], mt + 0.5, T[0], T[1], T[2], L, n[0], n[1], n[2], W, R(), stamp, bend, 3, NEVER, 10 + b, 1, 0);
+  };
+  const LOADED = [9, 0, 1, 9, 13];
+  const matOf = (p: RiderPart) => {
+    if (p.role === 'torso' || p.role === 'arm') return M.JACKET;
+    if (p.role === 'leg') return M.DENIM;
+    if (p.role === 'boot' || p.role === 'head') return M.CREAM;
+    if (p.role === 'glove' || p.role === 'wheel') return M.TYRE;
+    const m = p.mat;
+    if (m === M.ORANGE || m === M.CUT_ORANGE) return M.JACKET;
+    if (m === M.WHITE || m === M.CREAM) return M.CREAM;
+    return M.TYRE;
+  };
+  const trail = (p: number[], W: number, mt: number, b: number, r: number) => {
+    if (speed < 6 || R() > 0.45) return;
+    const L = Math.min(1.1, speed * 0.035) * (0.6 + R() * 0.6);
+    put(add(p, back, L * 0.5 + r * 0.6), back, L, nrm(sub(eye, p)), W * 0.55, mt, b, [5, 6][Math.floor(R() * 2)]);
+  };
+  for (const p of parts) {
+    const mt = matOf(p);
+    if (p.k === 'limb') {
+      const z0 = sub(p.b, p.a), Lz = Math.hypot(z0[0], z0[1], z0[2]); if (Lz < 1e-3) continue;
+      const z = [z0[0] / Lz, z0[1] / Lz, z0[2] / Lz], mid = add(p.a, z0, 0.5), r = (p.ra + p.rb) / 2;
+      const e = nrm(sub(eye, mid)); let ep = sub(e, z.map((v) => v * dot(e, z))); if (Math.hypot(ep[0], ep[1], ep[2]) < 1e-3) ep = p.x; ep = nrm(ep);
+      const q = nrm(crs(z, ep)), reff = (rd: number[]) => r * (1 + (p.sx - 1) * Math.abs(dot(rd, p.x)));
+      const jacket = mt === M.JACKET;
+      if (p.role === 'torso') {
+        // (wrapping it on a slant, row on row from the waist to the shoulders)
+        const rows = Math.max(2, Math.round(Lz / (r * 1.1)));
+        for (let i = 0; i < rows; i++) for (const th of [-1.1, -0.35, 0.4, 1.15]) {
+          const rd = add(ep.map((v) => v * Math.cos(th)), q, Math.sin(th)), c = add(add(p.a, z0, (i + 0.5) / rows), rd, reff(rd));
+          const circ = nrm(crs(z, rd)), T = nrm(add(circ.map((v) => v * 0.85), z, 0.5)), W = (Lz / rows) * 1.5;
+          const b = band(rd); put(c, T, r * 2.0, rd, W * 0.85, mt, b, LOADED[Math.floor(R() * LOADED.length)], (R() - 0.5) * 0.3);
+          if (jacket && Math.abs(th) > 1) trail(c, W, mt, b, r);
+        }
+        continue;
+      }
+      // (along it, a few round it; a thin tube one or two)
+      const thin = r < 0.035, angs = thin ? [0] : [-1.1, -0.4, 0.35, 1.05], n = Math.max(1, Math.round(Lz / (r * (thin ? 12 : 5))));
+      for (let i = 0; i < n; i++) for (const th of angs) {
+        const rd = add(ep.map((v) => v * Math.cos(th)), q, Math.sin(th)), c = add(add(p.a, z0, (i + 0.5) / n), rd, reff(rd) * (thin ? 0 : 0.9));
+        const W = thin ? r * 2.4 : r * 1.0, b = band(rd);
+        put(c, nrm(add(z, crs(z, rd), 0.12)), (Lz / n) * 1.18, rd, W, mt, b, LOADED[Math.floor(R() * LOADED.length)], (R() - 0.5) * 0.2);
+        if (jacket && th === angs[0]) trail(c, W, mt, b, r);
+      }
+      // (and a light caught along it, where it turns to the sun)
+      if (!thin) { let sd = sub(sun, z.map((v) => v * dot(sun, z))); if (Math.hypot(sd[0], sd[1], sd[2]) > 0.1 && dot(nrm(sd), ep) > 0.1) { sd = nrm(sd); put(add(mid, sd, reff(sd) * 0.98), z, Lz * 0.85, sd, r * 0.45, mt, 0, 0); } }
+    } else if (p.k === 'wheel') {
+      // (a ring of strokes round the axle, turning with the wheel; the side you see)
+      const toE = sub(eye, p.c), n = dot(p.ax, toE) > 0 ? p.ax : p.ax.map((v) => -v);
+      const u = nrm(Math.abs(p.ax[1]) < 0.9 ? crs(p.ax, [0, 1, 0]) : crs(p.ax, [1, 0, 0])), v = crs(p.ax, u), rm = (p.ro + p.ri) / 2, N = 12;
+      for (let k = 0; k < N; k++) {
+        const a = p.spin + (k / N) * Math.PI * 2, rad = add(u.map((x) => x * Math.cos(a)), v, Math.sin(a)), T = add(u.map((x) => -x * Math.sin(a)), v, Math.cos(a));
+        const c = add(add(p.c, rad, rm), n, 0.03), b = band(nrm(add(n.map((x) => x * 0.5), rad, 0.6)));
+        put(c, T, ((Math.PI * 2 * rm) / N) * 1.6, n, (p.ro - p.ri) * 1.2, M.TYRE, b, [9, 0, 14][k % 3], 0.25);
+      }
+      // (the tread: a stroke over its rim, where it turns toward you)
+      const ee = nrm(sub(toE, p.ax.map((x) => x * dot(toE, p.ax))));
+      put(add(p.c, ee, p.ro * 0.97), crs(p.ax, ee), p.ro * 1.2, ee, p.ro * 0.35, M.TYRE, band(ee), 14);
+    } else if (p.k === 'head') {
+      // (round it, three rows over the side you see; the goggle strap a dark band round it)
+      const e = nrm(sub(eye, p.c));
+      for (const [lat, n] of [[0.55, 3], [0.15, 4], [-0.3, 3]] as [number, number][]) for (let j = 0; j < n; j++) {
+        const lon = (j - (n - 1) / 2) * 0.7;
+        let hor = nrm(sub(e, p.y.map((x) => x * dot(e, p.y)))); const side = crs(p.y, hor);
+        hor = add(hor.map((x) => x * Math.cos(lon)), side, Math.sin(lon));
+        const rd = nrm(add(hor.map((x) => x * Math.cos(lat)), p.y, Math.sin(lat))), T = nrm(crs(p.y, rd));
+        put(add(p.c, rd, p.r * 0.95), T, p.r * 1.25, rd, p.r * 0.75, M.CREAM, band(rd, 0.15), [0, 1, 9][j % 3], 0.3);
+      }
+      const hor = nrm(sub(e, p.y.map((x) => x * dot(e, p.y))));
+      put(add(add(p.c, hor, p.r * 1.0), p.y, -0.01), nrm(crs(p.y, hor)), p.r * 1.9, hor, p.r * 0.32, M.TYRE, 3, 0, 0.35);
+    } else {
+      // (a couple of strokes along each face you see)
+      for (const [f, P, Q] of [[p.X, p.Y, p.Z], [p.Y, p.Z, p.X], [p.Z, p.X, p.Y]]) for (const sg of [1, -1]) {
+        const fn = nrm(f).map((x) => x * sg), fc = add(p.c, f, sg);
+        if (dot(fn, sub(eye, fc)) <= 0) continue;
+        const lp = Math.hypot(P[0], P[1], P[2]), lq = Math.hypot(Q[0], Q[1], Q[2]), [lng, sht, ll, ls] = lp > lq ? [P, Q, lp, lq] : [Q, P, lq, lp];
+        for (const o of [-0.5, 0.5]) put(add(fc, sht, o), nrm(lng), ll * 2.2, fn, ls * 1.25, mt, band(fn), LOADED[Math.floor(R() * LOADED.length)], (R() - 0.5) * 0.2);
+      }
+    }
+  }
+  return new Float32Array(out);
+}
+
+/** The rider's shadow cast by its parts: each part thrown along the sun onto the ground (at gY) and painted there in a broad
+ * flat stroke or two (a limb along its cast, the body wide, a wheel a ring of them, the head a dab), lavender, so the
+ * shadow is the figure's shape in a few soft strokes, not a scribble over its outline and not a block */
+export function partShadowStrokes(parts: RiderPart[], sun: number[], gY: number): Float32Array {
+  const out: number[] = [], R = rng(313);
+  const cast = (p: number[]) => { const h = Math.max(0, p[1] - gY), k = h / Math.max(0.25, sun[1]); return [p[0] - sun[0] * k, gY + 0.03, p[2] - sun[2] * k]; };
+  const put = (a: number[], b: number[], W: number) => {
+    const dx = b[0] - a[0], dz = b[2] - a[2], L = Math.hypot(dx, dz);
+    const T = L > 1e-3 ? [dx / L, 0, dz / L] : [1, 0, 0];
+    out.push((a[0] + b[0]) / 2, gY + 0.03, (a[2] + b[2]) / 2, M.SHADOW + 0.5, T[0], 0, T[2], Math.max(W * 1.2, L * 1.15), 0, 1, 0, W, R(), [0, 1, 11][Math.floor(R() * 3)], 0, 0, NEVER, 10, 1, 0);
+  };
+  for (const p of parts) {
+    if (p.k === 'limb') { const w = (p.ra + p.rb) * (p.role === 'torso' ? 2.3 : 1.9); put(cast(p.a), cast(p.b), Math.max(0.1, w)); }
+    else if (p.k === 'head') { const c = cast(p.c); put([c[0] - p.r, 0, c[2]], [c[0] + p.r, 0, c[2]], p.r * 2.2); }
+    else if (p.k === 'wheel') {
+      const u = Math.abs(p.ax[1]) < 0.9 ? [p.ax[2], 0, -p.ax[0]] : [1, 0, 0], ul = Math.hypot(u[0], u[1], u[2]) || 1, uu = [u[0] / ul, 0, u[2] / ul], N = 8, rm = (p.ro + p.ri) / 2;
+      for (let k = 0; k < N; k++) {
+        const a0 = (k / N) * Math.PI * 2, a1 = ((k + 1) / N) * Math.PI * 2;
+        const q0 = [p.c[0] + uu[0] * Math.cos(a0) * rm, p.c[1] + Math.sin(a0) * rm, p.c[2] + uu[2] * Math.cos(a0) * rm], q1 = [p.c[0] + uu[0] * Math.cos(a1) * rm, p.c[1] + Math.sin(a1) * rm, p.c[2] + uu[2] * Math.cos(a1) * rm];
+        put(cast(q0), cast(q1), (p.ro - p.ri) * 1.4);
+      }
+    } else if (p.k === 'box') { const c = cast(p.c), X = cast([p.c[0] + p.Z[0], p.c[1] + p.Z[1], p.c[2] + p.Z[2]]), Y = cast([p.c[0] - p.Z[0], p.c[1] - p.Z[1], p.c[2] - p.Z[2]]); put(Y, X, Math.max(0.06, Math.hypot(p.X[0], p.X[2]) * 2.2)); void c; }
+  }
+  return new Float32Array(out);
+}
+
+/** The rider's shadow in a few broad strokes, flat and soft-edged, lavender, along its length (not a scribble of dabs
+ * over its outline) */
+export function shadowStrokes(sh: Float32Array): Float32Array {
+  const n = sh.length / 4; if (n < 3) return new Float32Array(0);
+  let mx = 0, my = 0, mz = 0; for (let i = 0; i < n; i++) { mx += sh[i * 4]; my += sh[i * 4 + 1]; mz += sh[i * 4 + 2]; } mx /= n; my /= n; mz /= n;
+  let xx = 0, xz = 0, zz = 0; for (let i = 0; i < n; i++) { const dx = sh[i * 4] - mx, dz = sh[i * 4 + 2] - mz; xx += dx * dx; xz += dx * dz; zz += dz * dz; }
+  const ang = 0.5 * Math.atan2(2 * xz, xx - zz), ux = Math.cos(ang), uz = Math.sin(ang), vx = -uz, vz = ux;
+  let a0 = Infinity, a1 = -Infinity, b0 = Infinity, b1 = -Infinity;
+  for (let i = 0; i < n; i++) { const dx = sh[i * 4] - mx, dz = sh[i * 4 + 2] - mz, a = dx * ux + dz * uz, b = dx * vx + dz * vz; a0 = Math.min(a0, a); a1 = Math.max(a1, a); b0 = Math.min(b0, b); b1 = Math.max(b1, b); }
+  const out: number[] = [], R = rng(311), L = (a1 - a0) * 0.85, Wd = b1 - b0, rows = 4;
+  for (let k = 0; k < rows; k++) {
+    const b = b0 + Wd * (k + 0.5) / rows, a = (a0 + a1) / 2 + (R() - 0.5) * L * 0.1, taper = 1 - Math.abs(k - (rows - 1) / 2) / (rows * 1.4);
+    out.push(mx + ux * a + vx * b, my + 0.02, mz + uz * a + vz * b, M.SHADOW + 0.5, ux, 0, uz, L * taper, 0, 1, 0, (Wd / rows) * 1.9, R(), [0, 1, 0, 1][k], 0, 0, NEVER, 10 + 0, 1, 0);
+  }
+  return new Float32Array(out);
+}
+
 /** The sky's strokes: level marks round the eye from the horizon up past the top, close enough to cover it, darkening as
  * they rise, a few paler. */
 export function skyStrokes(seed: number): Float32Array {
@@ -570,7 +714,7 @@ export function skyStrokes(seed: number): Float32Array {
 const SEG = 8;
 const VS = `#version 300 es
 layout(location=0) in vec2 aQ; layout(location=1) in vec4 a0; layout(location=2) in vec4 a1; layout(location=3) in vec4 a2; layout(location=4) in vec4 a3; layout(location=5) in vec4 a4;
-uniform mat4 uVP, uPrev; uniform vec3 uOff, uEye, uSun; uniform vec3 uPal[88]; uniform float uFog, uK, uMinW, uStretch, uDens, uGrow, uReveal; uniform vec2 uRes, uFront;
+uniform mat4 uVP, uPrev; uniform vec3 uOff, uEye, uSun; uniform vec3 uPal[100]; uniform float uFog, uK, uMinW, uStretch, uDens, uGrow, uReveal; uniform vec2 uRes, uFront;
 uniform vec3 uSkyLo, uSkyHi, uSkyPale, uSmear;
 out vec2 vUv; out vec3 vA; out vec3 vB; flat out float vStamp; out float vFresh; flat out float vTex;
 float h(float s, float k){ return fract(sin(s*k)*43758.5453); }

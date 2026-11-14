@@ -13,11 +13,12 @@
  */
 import { Course } from './course';
 import { CHUNK, PALETTE, buildChunk, buildFalls, buildFlags, buildRanges, buildRider, buildValley } from './mesh';
+import type { RiderPart } from './mesh';
 import type { Rider, Event } from './sim';
 import { GEARS } from './audio';
 import { buildRuts, Trail } from './ruts';
 import { buildGouges } from './gouge';
-import { STROKE, Painter, Strokes, Brush2D, strokesOver, skyStrokes, lineOf, courseStrokes, rangeStrokes, foothillStrokes, valleyStrokes, fallStrokes, flagStrokes } from './paint';
+import { STROKE, Painter, Strokes, Brush2D, strokesOver, skyStrokes, lineOf, courseStrokes, rangeStrokes, foothillStrokes, valleyStrokes, fallStrokes, flagStrokes, riderStrokes, partShadowStrokes } from './paint';
 
 const VS = `#version 300 es
 in vec4 aP; uniform mat4 uVP; uniform vec3 uOff; uniform float uZj; out vec3 vW; flat out int vM;
@@ -32,7 +33,7 @@ void main() { vec3 w = aP.xyz + uOff; vW = w - uEye; vM = int(aP.w); vT = fract(
   gl_Position.z += uZj * fract(float(gl_VertexID / 3) * .618) * gl_Position.w; }`;
 const FS = `#version 300 es
 precision highp float;
-in vec3 vW; flat in int vM; flat in float vT; uniform vec3 uPal[88]; uniform vec3 uEye; uniform vec3 uSun; uniform float uFog; uniform float uNoThings; out vec4 o;
+in vec3 vW; flat in int vM; flat in float vT; uniform vec3 uPal[100]; uniform vec3 uEye; uniform vec3 uSun; uniform float uFog; uniform float uNoThings; out vec4 o;
 void main() {
   // (painted, the things standing on the ground (the fence, the poles, the pines, a kicker's boards) claim no depth and no
   // stencil: what's behind them is painted, and their strokes over it, so a gap between their strokes shows that, not paper)
@@ -181,7 +182,8 @@ export class Renderer {
     gl.enable(gl.DEPTH_TEST); gl.disable(gl.CULL_FACE);
     gl.useProgram(this.prog);
     gl.uniformMatrix4fv(this.u.uVP, false, this.vp); gl.uniform3fv(this.u.uEye, new Float32Array(view.eye)); gl.uniform1f(this.u.uZj, this.zjit);
-    const body = this.body = buildRider({ x: r.x, y: r.y, z: r.z, heading: r.heading, pitch: r.pitch, lean: r.lean, squash: r.squash, crashT: r.crashT, air: r.air, steer: r.steer, yFront: r.yFront, yRear: r.yRear, dist: r.dist, body: r.body, whip: this.whip || r.whip, trick: r.trickOut ? r.outs : undefined, style: this.style }, t);
+    const riderParts: RiderPart[] = [];
+    const body = this.body = buildRider({ x: r.x, y: r.y, z: r.z, heading: r.heading, pitch: r.pitch, lean: r.lean, squash: r.squash, crashT: r.crashT, air: r.air, steer: r.steer, yFront: r.yFront, yRear: r.yRear, dist: r.dist, body: r.body, whip: this.whip || r.whip, trick: r.trickOut ? r.outs : undefined, style: this.style }, t, this.paint ? riderParts : undefined);
     // (the rider, cut: lit for the picture rather than by the sun, from above, behind the eye and to its left, so what
     // faces you is one flat field and only the side turned toward the eye's right (the flank, the outside of each arm and
     // leg, the undersides) takes its one cut)
@@ -244,7 +246,7 @@ export class Renderer {
       // (the ruts, the track, the flags and the falls are windows sliding along the way: their strokes seeded by place)
       // (not the gouges: they're cut to the eye, finer near it and broader away, so their faces change as you ride and
       // strokes on them couldn't hold still; the road's own strokes run along it instead)
-      const parts = [new Float32Array(0), strokesOver(trackV, 13, null, 4000, true, 0.1, true), shadowOn ? strokesOver(sh, 17, null, 4000, true, 0, true) : new Float32Array(0),  flagStrokes(this.course, r.s - 40, r.s + 320, t, view.eye, SUN), fallStrokes(this.course, r.s - 30, r.s + 420, t), strokesOver(body, 29, null, 9000, true)];
+      const parts = [new Float32Array(0), strokesOver(trackV, 13, null, 4000, true, 0.1, true), shadowOn ? partShadowStrokes(riderParts, SUN, g) : new Float32Array(0),  flagStrokes(this.course, r.s - 40, r.s + 320, t, view.eye, SUN), fallStrokes(this.course, r.s - 30, r.s + 420, t), riderStrokes(riderParts, view.eye, SUN, this.eyeV)];
       const all = new Float32Array(parts.reduce((a, p) => a + p.length, 0)); let at = 0;
       for (const p of parts) { all.set(p, at); at += p.length; }
       if (!this.moving) this.moving = pt.make(all, true); else this.moving.set(all);

@@ -11,7 +11,7 @@
 import { Course, JUMPS, hash } from './course';
 import { STEP, WALL, section, character, groundAt, notch } from './ground';
 
-export const M = { SNOW: 0, TRACK: 1, ROCK: 2, ORANGE: 3, BLACK: 4, WHITE: 5, MTN: 6, MTNSNOW: 7, UMBER: 8, SHADOW: 9, RUT: 10, NAVY: 11, FAR: 12, FARSNOW: 13, RIDGE: 14, FOREST: 15, VALLEY: 16, CUT_ORANGE: 17, CUT_BLACK: 18, CREAM: 19, GOUGE: 20, FIELD: 21 } as const;
+export const M = { SNOW: 0, TRACK: 1, ROCK: 2, ORANGE: 3, BLACK: 4, WHITE: 5, MTN: 6, MTNSNOW: 7, UMBER: 8, SHADOW: 9, RUT: 10, NAVY: 11, FAR: 12, FARSNOW: 13, RIDGE: 14, FOREST: 15, VALLEY: 16, CUT_ORANGE: 17, CUT_BLACK: 18, CREAM: 19, GOUGE: 20, FIELD: 21, JACKET: 22, DENIM: 23, TYRE: 24 } as const;
 /** each material's four bands, lit to unlit (the reference's own colours) */
 export const PALETTE: string[][] = [
   ['#f1ece8', '#d9d0ca', '#a399a2', '#6f6c93'], // snow
@@ -38,6 +38,11 @@ export const PALETTE: string[][] = [
   ['#f6e7c6', '#f6e7c6', '#f6e7c6', '#c7ae86'], // cream accents (boots, fork, plates, helmet), a tan cut
   ['#857c92', '#7d7590', '#6f6a86', '#5d5a78'], // a gouge's shadowed wall (`ruts=cut`): the deep shade's violet, the road's ink
   ['#d9c39c', '#b6a8cc', '#7f88d2', '#4f60c0'], // the valley's fields: ochre, lavender, blue, deep blue
+  // (the rider painted (after the rider study): its jacket orange from lit to deep shade, its jeans denim, the tyres and
+  // the machine's dark parts near-black with grey lights)
+  ['#ff9d52', '#f3712a', '#c7521b', '#8a3512'], // jacket
+  ['#7381b0', '#45527f', '#2a335c', '#171d3b'], // denim
+  ['#62646f', '#393a43', '#222329', '#131418'], // tyre and machine
 ];
 
 /** the ruts lighter than the road instead (`ruts=light`): the worn line polished, catching the light like a flash */
@@ -528,7 +533,16 @@ export interface Pose {
    * whole figure one solid charcoal (for judging its silhouette); 'facets' (or unset): every face its own band */
   style?: 'facets' | 'cut' | 'sil';
 }
-export function buildRider(r: Pose, t: number) {
+/** a part of the rider, as it's built, for painting it by its parts (not its facets): a limb (from a, radius ra, to b,
+ * rb, its section stretched sx toward x), a wheel (centre, axle, outer and inner radius, its spin), the head (centre,
+ * frame, radius), or a box (centre, half-axes); each with its material and its role in the figure */
+export type RiderPart =
+  | { k: 'limb'; a: number[]; b: number[]; ra: number; rb: number; sx: number; x: number[]; mat: number; role: string }
+  | { k: 'wheel'; c: number[]; ax: number[]; ro: number; ri: number; spin: number; mat: number; role: string }
+  | { k: 'head'; c: number[]; x: number[]; y: number[]; z: number[]; r: number; mat: number; role: string }
+  | { k: 'box'; c: number[]; X: number[]; Y: number[]; Z: number[]; mat: number; role: string };
+export function buildRider(r: Pose, t: number, parts?: RiderPart[]) {
+  let role = 'bike';
   const sil = r.style === 'sil', cut = r.style === 'cut' || sil, m = new Mesh(true, cut);
   // (the materials. As facets: the kit's own. Cut: three masses, the jersey and bodywork orange, the legs and the whole
   // machine one charcoal, a few cream accents where it touches and steers (boots, fork) and its plates and helmet)
@@ -562,6 +576,7 @@ export function buildRider(r: Pose, t: number) {
     const p = (i: number, j: number, k: number) => W(T([c[0] + i * h[0], c[1] + cp * j * h[1] - sp * k * h[2], c[2] + sp * j * h[1] + cp * k * h[2]]));
     const P = [p(-1, -1, -1), p(1, -1, -1), p(1, 1, -1), p(-1, 1, -1), p(-1, -1, 1), p(1, -1, 1), p(1, 1, 1), p(-1, 1, 1)];
     for (const [a, b, cc, d] of [[0, 1, 2, 3], [5, 4, 7, 6], [4, 0, 3, 7], [1, 5, 6, 2], [3, 2, 6, 7], [4, 5, 1, 0]]) m.quad(P[a], P[b], P[cc], P[d], mat);
+    if (parts) { const C = p(0, 0, 0); parts.push({ k: 'box', c: C, X: sub(p(1, 0, 0), C), Y: sub(p(0, 1, 0), C), Z: sub(p(0, 0, 1), C), mat, role }); }
   };
   /** a box in its own frame (axes X, Y, Z, local), centre c, half-sizes h */
   const boxF = (c: number[], X: number[], Y: number[], Z: number[], h: number[], mat: number) => {
@@ -573,6 +588,7 @@ export function buildRider(r: Pose, t: number) {
   const limb = (a: number[], b: number[], ra: number, rb: number, mat: number, n = 6, sx = 1, side = [1, 0, 0]) => {
     const z = nrm(sub(b, a)); let x = sub(side, z.map((v) => v * (side[0] * z[0] + side[1] * z[1] + side[2] * z[2])));
     if (len(x) < 1e-3) x = Math.abs(z[1]) < 0.9 ? nrm(crs([0, 1, 0], z)) : [1, 0, 0]; x = nrm(x);
+    if (parts && role !== 'skip') { const A = W(a); parts.push({ k: 'limb', a: A, b: W(b), ra: ra * K, rb: rb * K, sx, x: nrm(sub(W(add(a, x)), A)), mat, role }); }
     const y = crs(z, x);
     const ring = (c: number[], rr: number) => Array.from({ length: n }, (_, k) => { const an = (k / n) * Math.PI * 2 + Math.PI / n; return W(add(add(c, x, Math.cos(an) * rr * sx), y, Math.sin(an) * rr)); });
     const A = ring(a, ra), Bq = ring(b, rb), ca = W(a), cb = W(b);
@@ -594,15 +610,18 @@ export function buildRider(r: Pose, t: number) {
   /** a wheel: a knobbly tyre (a ring, its tread stepped), the rim inside, open between, the hub. Cut: the tyre alone, a
    * thick interrupted ring, open through the middle */
   const wheel = (c: number[], ro: number, ri0: number, w: number, T: (p: number[]) => number[]) => {
+    if (parts) { const C = W(T(c)); parts.push({ k: 'wheel', c: C, ax: nrm(sub(W(T([c[0] + 1, c[1], c[2]])), C)), ro: ro * K, ri: ri0 * K, spin, mat: BK, role: 'wheel' }); }
+    const roleWas = role; role = 'skip';
     const n = 16, ri = cut ? ri0 * 0.86 : ri0, at = (k: number, rr: number, x: number) => { const a = spin + (k / n) * Math.PI * 2; return W(T([c[0] + x, c[1] + Math.sin(a) * rr, c[2] + Math.cos(a) * rr])); };
     for (let k = 0; k < n; k++) {
       const r0 = ro * (k % 2 ? 0.95 : 1);
       m.quad(at(k, r0, -w), at(k + 1, r0, -w), at(k + 1, r0, w), at(k, r0, w), BK);
       for (const x of [-w, w]) { m.quad(at(k, r0, x), at(k + 1, r0, x), at(k + 1, ri, x), at(k, ri, x), BK); if (!cut) m.quad(at(k, ri, x * 0.7), at(k + 1, ri, x * 0.7), at(k + 1, ri * 0.86, x * 0.7), at(k, ri * 0.86, x * 0.7), M.ROCK); }
     }
-    if (cut) return;
+    if (cut) { role = roleWas; return; }
     for (let k = 0; k < 6; k++) { const a = spin * 0.5 + (k / 6) * Math.PI * 2; limb(T(c), T([c[0], c[1] + Math.sin(a) * ri * 0.86, c[2] + Math.cos(a) * ri * 0.86]), 0.006, 0.006, M.ROCK, 3); }
     limb(T([c[0] - w * 1.3, c[1], c[2]]), T([c[0] + w * 1.3, c[1], c[2]]), 0.045, 0.045, M.WHITE, 6);
+    role = roleWas;
   };
   // (the front: wheel, fork legs and stanchions to the clamps, the clamps, bars and grips, number plate, fender. Cut: the
   // fork one cream slash)
@@ -671,11 +690,11 @@ export function buildRider(r: Pose, t: number) {
       -0.62 * feetOff - 1.08 * sm + 0.1 * cs + 0.78 * heel - 0.72 * ns - 0.62 * gk];
     const ankle = add(B([side * 0.2, fr(0.8), -0.08]), Bd(kick)), hip = add(add(hipC, rgP, side * 0.12), upP, -0.03);
     const knee = ik(hip, ankle, 0.46, 0.46, Bd([side * (0.35 + 0.35 * kk * side) + 1.3 * cs - 1.2 * ns, 0.15 - feetOff * 0.6 - sm * 0.7 + 0.5 * cs + 0.8 * heel + 0.6 * ns, 1 - feetOff * 1.6 - sm * 1.9 - 0.4 * cs + 0.6 * heel - 1.6 * ns - gk * 1.4]));
-    limb(add(B([side * 0.2, fr(0.7), -0.18]), Bd(kick)), add(B([side * 0.2, fr(0.7), 0.08]), Bd(kick)), 0.06, 0.05, WH, 5); // boot
+    role = 'boot'; limb(add(B([side * 0.2, fr(0.7), -0.18]), Bd(kick)), add(B([side * 0.2, fr(0.7), 0.08]), Bd(kick)), 0.06, 0.05, WH, 5); // boot
     limb(ankle, L(ankle, knee, 0.45), 0.055, 0.06, WH, 5); // boot's leg
-    limb(L(ankle, knee, 0.4), knee, 0.058, 0.07, BK, 6); // shin
-    limb(L(knee, ankle, 0.35), add(knee, [0, 0.04, 0.03]), 0.05, 0.065, cut ? BK : OR, 5); // knee guard
-    limb(knee, hip, 0.075, 0.095, BK, 6); // thigh
+    role = 'leg'; limb(L(ankle, knee, 0.4), knee, 0.058, 0.07, BK, 6); // shin
+    role = 'skip'; limb(L(knee, ankle, 0.35), add(knee, [0, 0.04, 0.03]), 0.05, 0.065, cut ? BK : OR, 5); // knee guard
+    role = 'leg'; limb(knee, hip, 0.075, 0.095, BK, 6); // thigh
     // (arms: the shoulder to the grip; on the side the effort's on, the elbow up and out (a broad opening), on the other
     // down and in (closing); the sleeve full at the shoulder, narrowing to the elbow, the forearm to the wrist)
     const shoulder = add(add(c3, rgC, side * 0.2), upC, -0.02);
@@ -683,9 +702,12 @@ export function buildRider(r: Pose, t: number) {
     if (side > 0 && grab) grip = L(grip, B([0.1, fr(1.12), -0.58]), Math.min(1, grab)); // (the seat grab: the right hand back on the seat)
     // (compressed (a landing), the elbows go out and back, taking it, not up)
     const elbow = ik(shoulder, grip, 0.3, 0.3, [side * (1 + 0.6 * e * side) * (1 + sqz * 0.5), 0.55 + 0.6 * e * side - sqz * 0.7, -0.25 - sqz * 0.3]);
-    limb(shoulder, elbow, cut ? 0.085 : 0.07, cut ? 0.048 : 0.055, OR, 6); limb(elbow, L(elbow, grip, 0.8), cut ? 0.058 : 0.05, cut ? 0.04 : 0.045, OR, 6);
-    limb(L(elbow, grip, 0.75), grip, 0.045, 0.045, BK, 5); // glove
+    role = 'arm'; limb(shoulder, elbow, cut ? 0.085 : 0.07, cut ? 0.048 : 0.055, OR, 6); limb(elbow, L(elbow, grip, 0.8), cut ? 0.058 : 0.05, cut ? 0.04 : 0.045, OR, 6);
+    role = 'glove'; limb(L(elbow, grip, 0.75), grip, 0.045, 0.045, BK, 5); // glove
   }
+  // (the jersey, for painting, as one tapered body from the pelvis to the shoulders, the back broad)
+  role = 'torso'; if (parts) { const A = W(hipC); parts.push({ k: 'limb', a: A, b: W(c3), ra: 0.15 * K, rb: 0.2 * K, sx: 1.35, x: nrm(sub(W(add(hipC, rgC)), A)), mat: OR, role }); }
+  role = 'skip';
   if (cut) {
     // (the jersey: one shape, lofted through the pelvis, the waist (narrowest), the chest, the shoulders (broadest,
     // rounded over the top); its two parts each with their own lean and twist, so it bends between chest and pelvis)
@@ -708,6 +730,7 @@ export function buildRider(r: Pose, t: number) {
   let hx = yaw([1, 0, 0], look), hy = [0, 1, 0], hz = yaw(zf, look);
   hz = rot(hz, hx, nod); hy = rot(hy, hx, nod); hx = rot(hx, hz, hRoll); hy = rot(hy, hz, hRoll);
   const hc = add(add(c3, nrm(add(upC, [0, 0.6, 0])), 0.17), [0, 0.02, 0.12]);
+  if (parts) { const O = W([0, 0, 0]), dir = (v: number[]) => nrm(sub(W(v), O)); parts.push({ k: 'head', c: W(hc), x: dir(hx), y: dir(hy), z: dir(hz), r: 0.16 * K, mat: WH, role: 'head' }); }
   if (cut) limb(add(c3, upC, 0.02), add(hc, hy, -0.08), 0.06, 0.055, BK, 6); // the neck: one dark cut between helmet and jersey
   // (the helmet: a faceted ball, a little long front to back. Cut: cream, its one dark cut the goggles and strap as one
   // band, an orange stripe over the top)
