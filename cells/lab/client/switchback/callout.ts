@@ -5,7 +5,7 @@
  * each letter a few strokes laid in the order a painter lays them, and each stroke the painter's own brush stamp bent
  * along it, so a bowl or an S is one unbroken stroke, its bristles following the curve. Only a little slanted, each
  * letter a touch off its line, so it's laid in by hand. Written on stroke by stroke in about half a second, held,
- * faded; cream over an orange stroke a little offset (the type's own orange shadow).
+ * then taken up again stroke by stroke as it was laid; cream over an orange stroke a little offset (the type's own orange shadow).
  */
 import { Brush2D } from './paint';
 
@@ -106,21 +106,22 @@ export class Callouts {
   /** drawn over the canvas (its size W × H in CSS pixels, at dpr), at game time t */
   draw(ctx: CanvasRenderingContext2D, W: number, H: number, dpr: number, t: number) {
     const it = this.item; if (!it) return;
-    const age = t - it.t0, hold = it.end + 0.95, fade = 0.4;
-    if (age > hold + fade) { this.item = null; return; }
-    const alpha = age < hold ? 1 : 1 - (age - hold) / fade;
+    // (laid in, held, then taken up again the way it was laid: each stroke's start drawn along after it to its end, the
+    // letters a touch apart as they came)
+    const age = t - it.t0, hold = it.end + 0.95;
+    if (age > hold + it.end) { this.item = null; return; }
     // (a cap height of about a fifteenth of the picture, smaller if the words are long)
     const k = Math.min((W * 0.8) / it.w, H * 0.065), ox = W / 2 - (it.w * k) / 2, oy = H * 0.3 + k / 2;
     // (the stamp's own bristles cover about four fifths of it across: drawn that much broader than the stroke)
     const Wd = WEIGHT * k * 1.45, at = (p: number[], dx: number, dy: number) => [ox + p[0] * k + dx, oy - p[1] * k + dy];
-    ctx.save(); ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.globalAlpha = Math.max(0, alpha);
+    ctx.save(); ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     for (const [layer, dx, dy, wk] of [[0, Wd * 0.1, Wd * 0.18, 1.06], [1, 0, 0, 1]] as [number, number, number, number][]) {
       for (const s of it.strokes) {
-        const f = Math.max(0, Math.min(1, (age - s.at) / s.dur)); if (f <= 0) continue;
+        const f = Math.max(0, Math.min(1, (age - s.at) / s.dur)), g = Math.max(0, Math.min(1, (age - hold - s.at) / s.dur)); if (f <= 0 || g >= 1) continue;
         const col = layer ? s.cream : s.orange;
-        const pts = s.pts.map((p) => at(p, dx, dy)), run = cutTo(pts, f);
+        const pts = s.pts.map((p) => at(p, dx, dy)), run = cutTo(pts, f, g);
         if (run.length > 1) { ctx.strokeStyle = col; ctx.lineWidth = WEIGHT * k * wk * 0.5; ctx.lineCap = 'butt'; ctx.lineJoin = 'round'; ctx.beginPath(); ctx.moveTo(run[0][0], run[0][1]); for (const q of run.slice(1)) ctx.lineTo(q[0], q[1]); ctx.stroke(); }
-        this.brush.along(ctx, pts, Wd * wk, col, s.stamp, f);
+        this.brush.along(ctx, pts, Wd * wk, col, s.stamp, f, g);
       }
     }
     ctx.restore();
@@ -141,15 +142,12 @@ function smooth(p: number[][]) {
   return out;
 }
 
-/** the first fraction f of a run (by length) */
-function cutTo(p: number[][], f: number) {
-  if (f >= 1) return p;
-  let total = 0; for (let i = 1; i < p.length; i++) total += Math.hypot(p[i][0] - p[i - 1][0], p[i][1] - p[i - 1][1]);
-  let left = total * f; const out = [p[0]];
-  for (let i = 1; i < p.length && left > 0; i++) {
-    const L = Math.hypot(p[i][0] - p[i - 1][0], p[i][1] - p[i - 1][1]);
-    if (L >= left) { const t = left / L; out.push([p[i - 1][0] + (p[i][0] - p[i - 1][0]) * t, p[i - 1][1] + (p[i][1] - p[i - 1][1]) * t]); break; }
-    out.push(p[i]); left -= L;
-  }
+/** a run between fractions g and f of its length */
+function cutTo(p: number[][], f: number, g = 0) {
+  if (f >= 1 && g <= 0) return p;
+  const cum = [0]; for (let i = 1; i < p.length; i++) cum.push(cum[i - 1] + Math.hypot(p[i][0] - p[i - 1][0], p[i][1] - p[i - 1][1]));
+  const T = cum[cum.length - 1], a = T * g, b = T * f;
+  const pt = (d: number) => { let i = 1; while (i < cum.length - 1 && cum[i] < d) i++; const t = (d - cum[i - 1]) / Math.max(1e-6, cum[i] - cum[i - 1]); return [p[i - 1][0] + (p[i][0] - p[i - 1][0]) * t, p[i - 1][1] + (p[i][1] - p[i - 1][1]) * t]; };
+  const out = [pt(a)]; for (let i = 1; i < p.length - 1; i++) if (cum[i] > a && cum[i] < b) out.push(p[i]); out.push(pt(b));
   return out;
 }

@@ -930,8 +930,9 @@ export class Brush2D {
   }
   /** a stroke bent along a run of points (`pts`, x y pairs), `W` across, in stamp `st`: the stamp cut into thin slices along
    * its length and each laid where it falls on the run, turned to it, so a curve is one unbroken stroke, its bristles
-   * following the bend. Drawn up to `upTo` of its length (the rest not yet laid, its texture not squashed) */
-  along(ctx: CanvasRenderingContext2D, pts: number[][], W: number, col: string, st = 0, upTo = 1) {
+   * following the bend. Drawn from `from` up to `upTo` of its length (the rest not yet laid, or taken up again; its
+   * texture not squashed) */
+  along(ctx: CanvasRenderingContext2D, pts: number[][], W: number, col: string, st = 0, upTo = 1, from = 0) {
     if (pts.length < 2 || W < 1) return;
     const cum = [0]; for (let i = 1; i < pts.length; i++) cum.push(cum[i - 1] + Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]));
     const L = cum[cum.length - 1]; if (L < 1) return;
@@ -943,7 +944,7 @@ export class Brush2D {
       const ext = d - dd; return [a[0] + (b[0] - a[0]) * f + Math.cos(ang) * ext, a[1] + (b[1] - a[1]) * f + Math.sin(ang) * ext, ang];
     };
     const n = Math.ceil(N * Math.max(0, Math.min(1, upTo))), sw = STAMP.W / N, dw = (total / N) * 1.25;
-    for (let k = 0; k < n; k++) {
+    for (let k = Math.floor(N * Math.max(0, Math.min(1, from))); k < n; k++) {
       const [x, y, ang] = at(-pad + ((k + 0.5) / N) * total);
       ctx.save(); ctx.translate(x, y); ctx.rotate(ang);
       ctx.drawImage(sheet, cx + k * sw, cy, sw, STAMP.H, -dw / 2, -W / 2, dw, W);
