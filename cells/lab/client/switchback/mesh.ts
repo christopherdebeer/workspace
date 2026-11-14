@@ -413,17 +413,26 @@ function skyline(m: Mesh, seed: number, k: number, spec: { R: number; floor: num
 const RANGES = [
   { k: 1, R: 3700, floor: -290, lo: 520, hi: 1180, peaks: 22, body: M.FAR, snow: M.FARSNOW, snowline: -260 + 470, fold: 0.03, haze: 0.16, forest: false },
   { k: 2, R: 3100, floor: -280, lo: 300, hi: 760, peaks: 16, body: M.MTN, snow: M.MTNSNOW, snowline: -260 + 520, fold: 0.04, haze: 0.09, forest: false },
-  { k: 3, R: 2550, floor: -270, lo: 110, hi: 360, peaks: 10, body: M.RIDGE, snow: M.RIDGE, snowline: 1e9, fold: 0.05, haze: 0.04, forest: false },
+  { k: 3, R: 2550, floor: -270, lo: 200, hi: 540, peaks: 11, body: M.RIDGE, snow: M.RIDGE, snowline: 1e9, fold: 0.05, haze: 0.05, forest: false },
 ];
+/** the ranges and, nearer, two arcs of forested hills in the middle distance (where they stand, by the seed), farthest
+ * first; full rings for the ranges, arcs for the hills, so the valley opens between them */
+function rangeSpecs(seed: number) {
+  const arcs = [0, 1].map((j) => {
+    const mid = hash(seed, j, 70) * Math.PI * 2 + j * Math.PI * 0.9, span = 1.4 + 0.8 * hash(seed, j, 71);
+    return { k: 4 + j, R: 1850 + 250 * hash(seed, j, 72), floor: -265, lo: 160, hi: 430 + 120 * hash(seed, j, 73), peaks: 5, body: M.RIDGE, snow: M.RIDGE, snowline: 1e9, fold: 0.06, haze: 0.02, forest: true, from: mid - span / 2, to: mid + span / 2 };
+  });
+  return [...RANGES.map((r) => ({ ...r, from: 0, to: Math.PI * 2 })), ...arcs.sort((p, q) => q.R - p.R)];
+}
 export function buildRanges(seed: number) {
   const m = new Mesh();
-  for (const r of RANGES) skyline(m, seed, r.k, r);
+  for (const r of rangeSpecs(seed)) skyline(m, seed, r.k, r.from === 0 && r.to === Math.PI * 2 ? { ...r, from: undefined, to: undefined } : r);
   return new Float32Array(m.v);
 }
 /** the skylines' profiles, farthest first: each its radius, floor, snow line, materials, its crest's height round the eye
  * and its summits (angle, height, half-widths each side) — for painting a range by its ridges rather than its faces */
 export function rangeProfiles(seed: number) {
-  return RANGES.map((r) => { const { crest, peaks } = skyline(new Mesh(), seed, r.k, r); return { ...r, from: 0, to: Math.PI * 2, crest, peaks }; });
+  return rangeSpecs(seed).map((r) => { const { crest, peaks } = skyline(new Mesh(), seed, r.k, r.from === 0 && r.to === Math.PI * 2 ? { ...r, from: undefined, to: undefined } : r); return { ...r, crest, peaks }; });
 }
 /** the foothills in the valley: two arcs, each a long continuous ridge, forested along its foot */
 export function valleyRidges(seed: number) {

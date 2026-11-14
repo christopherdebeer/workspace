@@ -301,6 +301,41 @@ function layerStrokes(g: Layer, seed: number, out: number[]) {
   const N = Math.ceil((span * g.R) / (W0 * 0.5)), pts: number[][] = [];
   for (let i = 0; i <= N; i++) { const a = g.from + (span * i) / N; pts.push([a * g.R, g.crest(a)]); }
   const keep = [...dp(pts, W0 * 0.9)].sort((p, q) => p - q);
+  // (the spurs: from each summit a main spur runs down toward you to the foot, wandering a little, and branches leave it
+  // down and outward, so the mountain's planes split at every scale; a shoulder sends a shorter one. Each a line in
+  // metres round and up)
+  const spurs: number[][][] = [];
+  for (let q = 1; q < keep.length - 1; q++) {
+    const [xp, hp] = pts[keep[q - 1]], [xs, hs] = pts[keep[q]], [xn, hn] = pts[keep[q + 1]];
+    const prom = hs - Math.max(hp, hn), top = hs - g.floor;
+    if (top < W0 * 6) continue;
+    const summit = prom > W0 * 4, shoulder = !summit && Math.abs((hn - hs) / (xn - xs + 1e-6) - (hs - hp) / (xs - xp + 1e-6)) > 0.35;
+    if (!summit && !shoulder) continue;
+    const reach = summit ? 1 : 0.45, line: number[][] = [[xs, hs]];
+    let x = xs, y = hs, wob = (R0() - 0.5) * 0.5;
+    const step = W0 * 2.5, end = hs - top * reach;
+    while (y > end) { y -= step; wob += (R0() - 0.5) * 0.35; wob *= 0.85; x += step * wob; line.push([x, y]); }
+    spurs.push(line);
+    // (its branches: two or three, leaving it partway down, alternately each way, down and out)
+    if (summit) for (let b = 0; b < 1 + Math.floor(R0() * 2); b++) {
+      const at = Math.floor(line.length * (0.2 + 0.55 * R0())), [bx0, by0] = line[at], dir = (b % 2 ? 1 : -1) * (0.7 + R0() * 0.6), len = (by0 - g.floor) * (0.35 + R0() * 0.3);
+      const br: number[][] = [[bx0, by0]];
+      for (let yy = by0, xx = bx0, k = 0; yy > by0 - len; k++) { yy -= step; xx += step * dir * (1 - k * 0.04); br.push([xx, yy]); }
+      spurs.push(br);
+    }
+  }
+  // (the nearest spur at a point: its x at that height, and how far off it is round; Infinity where none reaches)
+  const nearSpur = (x: number, y: number) => {
+    let best = Infinity, sx = 0;
+    for (const ln of spurs) {
+      if (y > ln[0][1] || y < ln[ln.length - 1][1]) continue;
+      for (let i = 0; i < ln.length - 1; i++) {
+        const [x0, y0] = ln[i], [x1, y1] = ln[i + 1];
+        if (y <= y0 && y >= y1) { const t = (y0 - y) / Math.max(1e-6, y0 - y1), xx = x0 + (x1 - x0) * t; if (Math.abs(x - xx) < best) { best = Math.abs(x - xx); sx = xx; } break; }
+      }
+    }
+    return [best, sx];
+  };
   const streak = (a: number) => Math.sin(a * 41 + g.k * 3) * 0.55 + Math.sin(a * 97 + g.k) * 0.3 + Math.sin(a * 13 + g.k * 5) * 0.4;
   for (let q = 0; q < keep.length - 1; q++) {
     const [x0, h0] = pts[keep[q]], [x1, h1] = pts[keep[q + 1]], dxm = x1 - x0, dh = h1 - h0, Ls = Math.hypot(dxm, dh);
@@ -323,13 +358,25 @@ function layerStrokes(g: Layer, seed: number, out: number[]) {
         // (its tail kept above the layer's foot, where it would paint over what's in front)
         const Lr = Math.min(L, (2 * (y - g.floor)) / Math.max(0.2, -dy) + W0);
         const ca = Math.cos(a), sa = Math.sin(a), rx = sa, rz = ca, tx = ca, tz = -sa;
-        const T = [tx * dr, dy, tz * dr]; { const l = Math.hypot(T[0], T[1], T[2]); T[0] /= l; T[1] /= l; T[2] /= l; }
-        const nn = [-rx * 0.75 + tx * side * 0.55 * slopeF, 0.5 - df * 0.5, -rz * 0.75 + tz * side * 0.55 * slopeF]; { const l = Math.hypot(nn[0], nn[1], nn[2]); nn[0] /= l; nn[1] /= l; nn[2] /= l; }
+        // (under the crest, the nearest spur decides the plane, where it's nearer than the crest: the side of it the point
+        // is on faces that way, lit on the left, shaded on the right, its strokes running down and away from the spur)
+        let pside = side, pslope = slopeF, pdr = dr, pdy = dy, Lu = Lr, onSpur = false;
+        const [ds, sx] = nearSpur(xm, y), dc = cy - y;
+        if (ds < dc * 0.9 && ds < W0 * 14) {
+          const sd = xm > sx ? 1 : -1, k2 = 0.55 + 0.35 * Math.min(1, ds / (W0 * 8));
+          let qdr = sd * k2, qdy = -1; const l2 = Math.hypot(qdr, qdy); qdr /= l2; qdy /= l2;
+          // (turned down the spur's plane only where its head stays under the crest)
+          const Lq = Math.min(L0 * 1.1, (2 * (y - g.floor)) / Math.max(0.2, -qdy) + W0, Math.max(W0, (2 * (dc - W0 * 0.5)) / Math.max(0.2, -qdy)));
+          if (Lq > W0 * 1.5) { pside = sd; pslope = 1; pdr = qdr; pdy = qdy; Lu = Lq; onSpur = ds < W0 * 2.5; }
+        }
+        const T = [tx * pdr, pdy, tz * pdr]; { const l = Math.hypot(T[0], T[1], T[2]); T[0] /= l; T[1] /= l; T[2] /= l; }
+        const nn = [-rx * 0.75 + tx * pside * 0.55 * pslope, 0.5 - df * 0.5, -rz * 0.75 + tz * pside * 0.55 * pslope]; { const l = Math.hypot(nn[0], nn[1], nn[2]); nn[0] /= l; nn[1] /= l; nn[2] /= l; }
         // (snow: above the snow line, in streaks along the ridge and down the gullies)
         const s = streak(a), snowAt = g.snowline + 110 * s - (cy - g.snowline) * 0.35 * (0.5 + 0.5 * s);
-        const snowy = y > snowAt && (depth < tall * 0.55 || s < -0.35);
+        // (and down the spurs' crests, a way below the line)
+        const snowy = (y > snowAt && (depth < tall * 0.55 || s < -0.35)) || (onSpur && y > g.snowline - 160 - 60 * s);
         const p = at(a, y);
-        plan(list, p[0], p[1], p[2], snowy ? g.snow : g.body, g.haze, T, Lr * (0.75 + R0() * 0.5), nn, W0 * (0.85 + R0() * 0.4), R0(), [0, 7, 0, 1][Math.floor(R0() * 4)], (R0() - 0.5) * 0.1, 4);
+        plan(list, p[0], p[1], p[2], snowy ? g.snow : g.body, g.haze, T, Lu * (0.75 + R0() * 0.5), nn, W0 * (0.85 + R0() * 0.4), R0(), [0, 7, 0, 1][Math.floor(R0() * 4)], (R0() - 0.5) * 0.1, 4);
       }
     }
   }
