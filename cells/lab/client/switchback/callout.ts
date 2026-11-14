@@ -64,10 +64,13 @@ const CAPS: Record<string, Cap> = {
 // (the flats: loaded, their bristles along them. Under each, a solid core a little narrower, so the letter's shape is as
 // crisp as the title's and the bristles are the paint on it, not its outline)
 const STAMPS = [0, 1, 0, 7];
-const WEIGHT = 0.27, SLANT = 0.09, GAP = 0.025, SPACE = 0.3;
+const WEIGHT = 0.19, SLANT = 0.09, GAP = 0.06, SPACE = 0.3;
 
-type Laid = { pts: number[][]; len: number; stamp: number };
-type Item = { strokes: Laid[]; total: number; w: number; t0: number };
+type Laid = { pts: number[][]; len: number; stamp: number; at: number; dur: number; cream: string; orange: string };
+type Item = { strokes: Laid[]; end: number; w: number; t0: number };
+// (the colours as the scenery's strokes have them: no two alike, the snow's creams and the fence's oranges, a few a
+// step darker, as a painter's strokes vary)
+const CREAMS = ['#f6f0e8', '#efe7dd', '#fbf7f0', '#e6dcd2', '#f3ece4'], ORANGES = ['#ff7a2e', '#e85a0d', '#f0661a', '#d4500c'];
 
 export class Callouts {
   private item: Item | null = null; private brush = new Brush2D(); private n = 0;
@@ -75,10 +78,12 @@ export class Callouts {
   say(text: string, t: number) {
     let seed = 7 + this.n++ * 131;
     const R = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647; };
-    const strokes: Laid[] = []; let x = 0;
+    const strokes: Laid[] = []; let x = 0, li = 0;
     for (const ch of text.toUpperCase()) {
       const g = CAPS[ch];
       if (!g) { x += SPACE; continue; }
+      // (the letters all at once, each a touch after the one before; in a letter its strokes one after another, quickly)
+      let at = li++ * 0.022 + R() * 0.03;
       // (the skeleton inset by half a stroke, so the ink stays in the letter's box; each letter a touch off its line)
       const lift = (R() - 0.5) * 0.04, turn = (R() - 0.5) * 0.05, h = WEIGHT / 2, kx = (g.w - WEIGHT) / Math.max(0.01, g.w), ky = 1 - WEIGHT, cx = g.w / 2;
       for (const st of g.s) {
@@ -89,31 +94,32 @@ export class Callouts {
         });
         const pts = st.c ? smooth(raw) : raw;
         let len = 0; for (let i = 1; i < pts.length; i++) len += Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]);
-        strokes.push({ pts, len, stamp: STAMPS[Math.floor(R() * STAMPS.length)] });
+        const dur = 0.07 + len * 0.075;
+        strokes.push({ pts, len, stamp: STAMPS[Math.floor(R() * STAMPS.length)], at, dur, cream: CREAMS[Math.floor(R() * CREAMS.length)], orange: ORANGES[Math.floor(R() * ORANGES.length)] });
+        at += dur * 0.7;
       }
       x += g.w + GAP;
     }
     if (!strokes.length) return;
-    this.item = { strokes, total: strokes.reduce((a, s) => a + s.len + 0.2, 0), w: x - GAP + SLANT, t0: t };
+    this.item = { strokes, end: strokes.reduce((a, s) => Math.max(a, s.at + s.dur), 0), w: x - GAP + SLANT, t0: t };
   }
   /** drawn over the canvas (its size W × H in CSS pixels, at dpr), at game time t */
   draw(ctx: CanvasRenderingContext2D, W: number, H: number, dpr: number, t: number) {
     const it = this.item; if (!it) return;
-    const write = 0.5, age = t - it.t0, hold = write + 0.95, fade = 0.4;
+    const age = t - it.t0, hold = it.end + 0.95, fade = 0.4;
     if (age > hold + fade) { this.item = null; return; }
-    const alpha = age < hold ? 1 : 1 - (age - hold) / fade, done = Math.min(1, age / write) * it.total;
-    // (as big as fits: a cap height of about a ninth of the picture, smaller if the words are long)
-    const k = Math.min((W * 0.88) / it.w, H * 0.11), ox = W / 2 - (it.w * k) / 2, oy = H * 0.3 + k / 2;
+    const alpha = age < hold ? 1 : 1 - (age - hold) / fade;
+    // (a cap height of about a fifteenth of the picture, smaller if the words are long)
+    const k = Math.min((W * 0.8) / it.w, H * 0.065), ox = W / 2 - (it.w * k) / 2, oy = H * 0.3 + k / 2;
     // (the stamp's own bristles cover about four fifths of it across: drawn that much broader than the stroke)
-    const Wd = WEIGHT * k * 1.34, at = (p: number[], dx: number, dy: number) => [ox + p[0] * k + dx, oy - p[1] * k + dy];
+    const Wd = WEIGHT * k * 1.45, at = (p: number[], dx: number, dy: number) => [ox + p[0] * k + dx, oy - p[1] * k + dy];
     ctx.save(); ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.globalAlpha = Math.max(0, alpha);
-    for (const [col, dx, dy, wk] of [['#e85a0d', Wd * 0.14, Wd * 0.26, 1.08], ['#fbf3e6', 0, 0, 1]] as [string, number, number, number][]) {
-      let left = done;
+    for (const [layer, dx, dy, wk] of [[0, Wd * 0.1, Wd * 0.18, 1.06], [1, 0, 0, 1]] as [number, number, number, number][]) {
       for (const s of it.strokes) {
-        if (left <= 0) break;
-        const f = Math.min(1, left / s.len); left -= s.len + 0.2;
+        const f = Math.max(0, Math.min(1, (age - s.at) / s.dur)); if (f <= 0) continue;
+        const col = layer ? s.cream : s.orange;
         const pts = s.pts.map((p) => at(p, dx, dy)), run = cutTo(pts, f);
-        if (run.length > 1) { ctx.strokeStyle = col; ctx.lineWidth = WEIGHT * k * wk * 0.88; ctx.lineCap = 'butt'; ctx.lineJoin = 'round'; ctx.beginPath(); ctx.moveTo(run[0][0], run[0][1]); for (const q of run.slice(1)) ctx.lineTo(q[0], q[1]); ctx.stroke(); }
+        if (run.length > 1) { ctx.strokeStyle = col; ctx.lineWidth = WEIGHT * k * wk * 0.5; ctx.lineCap = 'butt'; ctx.lineJoin = 'round'; ctx.beginPath(); ctx.moveTo(run[0][0], run[0][1]); for (const q of run.slice(1)) ctx.lineTo(q[0], q[1]); ctx.stroke(); }
         this.brush.along(ctx, pts, Wd * wk, col, s.stamp, f);
       }
     }
