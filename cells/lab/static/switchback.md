@@ -181,6 +181,10 @@ All made in the page (WebAudio, no files):
 - **The ground:** a gravel crunch under the tyres, more in a slide, none in the air.
 - **One-shots:** a landing's thump, a crash, a glance off rock, a checkpoint's two-note chime.
 
+## Written callouts (`ink`, a flag for now)
+
+With `ink` in the address, a trick, a checkpoint or a wipe-out isn't set in type over the picture: it's written by hand into it (`client/switchback/callout.ts`), by the autograph experiment's newest hand (the same family of hand that signs the title), joined, in sentence case ("Seat grab", "Checkpoint 2"), writing itself out in about half a second in the order and at the pace the hand made its strokes, holding, and fading. It's inked as a loaded brush: each stroke one continuous line, broad where the hand went slowly, round at its turns, cream over an orange line a little offset (the type's own orange shadow), with fine bristle grooves along it. It's drawn in the speed layer's canvas, so it's in a REC or EXPORT video. The type is kept, unseen, for screen readers.
+
 ## Video
 
 Three ways to make a video of a run (`client/switchback/rec.ts`):

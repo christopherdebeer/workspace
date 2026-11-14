@@ -28,6 +28,7 @@ import { MODES, Mode, PAR, Score, bestOf, board, keepBest, overPar, sign } from 
 import { Pad, replay, show as ink } from './sign';
 import { C15R } from './hand';
 import { Composer, Live, exportClip, save } from './rec';
+import { Callouts } from './callout';
 
 const q = new URLSearchParams(location.search);
 const seed = Number(q.get('seed') ?? 1) | 0 || 1, preview = q.has('preview'), still = q.has('still');
@@ -308,8 +309,11 @@ if (direct) { menu.classList.remove('on'); menu.setAttribute('inert', ''); docum
 
 /** a word across the screen for a moment (a checkpoint passed, a return to one) */
 const note = document.getElementById('note')!;
+// (`ink`: the callouts written by hand in the picture (callout.ts); the type kept, unseen, for screen readers)
+const inkFlag = q.has('ink') && q.get('ink') !== '0', callouts = new Callouts();
+if (inkFlag) note.style.opacity = '0';
 let noteTimer = 0;
-function say(text: string) { if (auto && !running) return; note.textContent = text; note.classList.add('on'); clearTimeout(noteTimer); noteTimer = window.setTimeout(() => note.classList.remove('on'), 1400); }
+function say(text: string) { if (auto && !running && !inkFlag) return; if (inkFlag) callouts.say(text, t); note.textContent = text; note.classList.add('on'); clearTimeout(noteTimer); noteTimer = window.setTimeout(() => note.classList.remove('on'), 1400); }
 const scoreEl = $('score'), statusEl = $('status'), comboEl = $('combo');
 let flashT = 0, flashText = '';
 let last = performance.now(), acc = 0, t = 0, drawn = 0, frames = 0, fps = 60, fpsT = 0, seen = 0, bigAir = 0;
@@ -363,6 +367,7 @@ function tick(dt: number) {
   if (ejit) { const e = (drawn % 2) * 0.01; vw.eye = [vw.eye[0] + e, vw.eye[1], vw.eye[2]]; vw.target = [vw.target[0] + e, vw.target[1], vw.target[2]]; }
   if (bgFlag) { const [yw = 0, pc = 4, fv = 60] = bgFlag.map((v) => (v * Math.PI) / 180), d = 100; rd.bgOnly = true; vw.target = [vw.eye[0] + Math.sin(yw) * Math.cos(pc) * d, vw.eye[1] + Math.sin(pc) * d, vw.eye[2] + Math.cos(yw) * Math.cos(pc) * d]; vw.roll = 0; vw.fov = fv; }
   rd.frame(vw, rider, t, still || paused ? 0 : dt, drawn++ < 2 ? 99 : 1);
+  if (inkFlag) callouts.draw(rd.ctx, rd.W, rd.H, rd.dpr, t);
   seen = rider.events.length; sound.sync(seen);
   if (rider.air) bigAir = Math.max(bigAir, rider.airT);
   // (the run's end: its finish reached, its last life gone (once you're put back after the third fall))
