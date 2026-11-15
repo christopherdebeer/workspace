@@ -322,7 +322,10 @@ type Chunk = { x: number; y: number; z: number; vx: number; vy: number; vz: numb
 type Gust = { x: number; y: number; z: number; w: number; col: string };
 /** each colour has one job: white and pale, the air (how fast); orange, the engine pushing (how hard you're speeding up);
  * charcoal, the ground taking it (braking, sliding) */
-const AIR_COLS = ['#ffffff', '#ffffff', '#f1ece8', '#d9d0ca'], PUSH_COLS = ['#e85a0d', '#ff7428', '#e85a0d'], GRIT_COLS = ['#24262e', '#2c2d32', '#3a3b44'];
+/** the speed layer's colours: the air off the rider, the throttle's spray, the brakes' grit, what a wall, a crash and a
+ * landing throw up (a mood (mood.ts) may change them) */
+export const FX = { air: ['#ffffff', '#ffffff', '#f1ece8', '#d9d0ca'], push: ['#e85a0d', '#ff7428', '#e85a0d'], grit: ['#24262e', '#2c2d32', '#3a3b44'], wall: ['#24262e', '#2c2d32', '#4a4b55'], crash: ['#e85a0d', '#24262e', '#f1ece8', '#d9d0ca', '#ffffff'], land: ['#d9d0ca', '#ccbcb2', '#f1ece8', '#4c3b34', '#2c2d32', '#ffffff'] };
+const AIR_COLS = FX.air, PUSH_COLS = FX.push, GRIT_COLS = FX.grit;
 type Streak = { a: number; r: number; w: number; len: number; col: string; sp: number };
 /** a streak of air peeling off the rider: the air leaving a point on the posed body (between two of its vertices, ia and
  * ib, at f), streaming back past it and pushed out round it (dir, in the world, set when it's born), cut loose as it goes
@@ -347,7 +350,7 @@ export class Fx {
     for (let i = 0; i < n; i++) {
       const rear = e.kind === 'roost', side = (R() - 0.5) * 2;
       const sp = rear ? r.v * (0.15 + R() * 0.25) : 2 + R() * 6;
-      const cols = e.kind === 'wall' ? ['#24262e', '#2c2d32', '#4a4b55'] : e.kind === 'crash' ? ['#e85a0d', '#24262e', '#f1ece8', '#d9d0ca', '#ffffff'] : ['#d9d0ca', '#ccbcb2', '#f1ece8', '#4c3b34', '#2c2d32', '#ffffff'];
+      const cols = e.kind === 'wall' ? FX.wall : e.kind === 'crash' ? FX.crash : FX.land;
       const k = 3 + Math.floor(R() * 3), pts: number[] = [];
       for (let j = 0; j < k; j++) { const a = (j / k) * Math.PI * 2 + R() * 0.8, rr = 0.6 + R() * 0.6; pts.push(Math.cos(a) * rr, Math.sin(a) * rr); }
       this.debris.push({

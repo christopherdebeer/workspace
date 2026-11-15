@@ -128,7 +128,9 @@ export function stampAtlas(): { data: Uint8Array; w: number; h: number } {
  * (or NEVER: always laid, the backdrop and what moves), its pass (0 the masses, 1 the detail), and two spare */
 export const STROKE = 20;
 /** the sky's colours and the far off's haze (a mood (mood.ts) may change them before the painter's made) */
-export const SKY = { lo: [0.55, 0.67, 0.96], hi: [0.05, 0.2, 0.8], pale: [0.62, 0.72, 0.98], cloudLit: [0.96, 0.94, 0.96], cloudShade: [0.62, 0.68, 0.93], haze: 1, hazeBase: 0 };
+export const SKY = { lo: [0.55, 0.67, 0.96], hi: [0.05, 0.2, 0.8], pale: [0.62, 0.72, 0.98], cloudLit: [0.96, 0.94, 0.96], cloudShade: [0.62, 0.68, 0.93], haze: 1, hazeBase: 0,
+  // (the near ground's distance, four steps toward the air's own colour)
+  fog: [[0.62, 0.66, 0.9], [0.33, 0.45, 0.88], [0.14, 0.33, 0.84], [0.09, 0.26, 0.78]] };
 export const NEVER = -1e9;
 const ROAD = new Set<number>([M.TRACK, M.RUT]), GROUND = new Set<number>([M.SNOW, M.SHADOW]), ROCKY = new Set<number>([M.ROCK, M.UMBER, M.GOUGE]);
 const RANGE = new Set<number>([M.MTN, M.MTNSNOW, M.FAR, M.FARSNOW, M.RIDGE]);
@@ -777,7 +779,7 @@ const SEG = 8;
 const VS = `#version 300 es
 layout(location=0) in vec2 aQ; layout(location=1) in vec4 a0; layout(location=2) in vec4 a1; layout(location=3) in vec4 a2; layout(location=4) in vec4 a3; layout(location=5) in vec4 a4;
 uniform mat4 uVP, uPrev; uniform vec3 uOff, uEye, uSun; uniform vec3 uPal[100]; uniform float uFog, uK, uMinW, uStretch, uDens, uGrow, uReveal; uniform vec2 uRes, uFront;
-uniform vec3 uSkyLo, uSkyHi, uSkyPale, uSmear, uCloudLit, uCloudShade; uniform float uCloud, uHazeK, uHazeB;
+uniform vec3 uSkyLo, uSkyHi, uSkyPale, uSmear, uCloudLit, uCloudShade; uniform float uCloud, uHazeK, uHazeB; uniform vec3 uFogs[4];
 out vec2 vUv; out vec3 vA; out vec3 vB; flat out float vStamp; out float vFresh; flat out float vTex;
 float h(float s, float k){ return fract(sin(s*k)*43758.5453); }
 void main(){
@@ -857,7 +859,7 @@ void main(){
   else if (far) { bool lit = dot(n, Lf) > .3; float r = h(seed, 3.1); b = lit ? (r > .5 ? 0 : 1) : 3; b2 = lit ? (r > .75 ? 2 : 1) : (r > .7 ? 2 : 3); }
   vec3 A = uPal[mt*4 + b], B = mix(A, uPal[mt*4 + b2], far ? .35 : .45);
   float fd = length((w - uEye).xz), f = floor(clamp((fd - 80.)/520., 0., 1.)*4.)/4.;
-  vec3 fogs[4] = vec3[4](vec3(.62, .66, .9), vec3(.33, .45, .88), vec3(.14, .33, .84), vec3(.09, .26, .78));
+  vec3 fogs[4] = vec3[4](uFogs[0], uFogs[1], uFogs[2], uFogs[3]);
   float fk = min(1., f*1.1)*uFog;
   // (no two strokes alike: a little lighter or darker, a little warmer or cooler)
   vec3 tint = mix(vec3(.95, .98, 1.06), vec3(1.05, 1., .93), h(seed, 4.7))*(1. + (h(seed, 9.13) - .5)*.12);
@@ -912,10 +914,10 @@ export class Painter {
     const p = gl.createProgram()!; gl.attachShader(p, sh(gl.VERTEX_SHADER, VS)); gl.attachShader(p, sh(gl.FRAGMENT_SHADER, FS)); gl.linkProgram(p);
     if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p) ?? 'link');
     this.prog = p;
-    for (const k of ['uSmear', 'uVP', 'uPrev', 'uOff', 'uEye', 'uSun', 'uPal', 'uFog', 'uK', 'uMinW', 'uStretch', 'uDens', 'uRes', 'uAtlas', 'uSkyLo', 'uSkyHi', 'uSkyPale', 'uCloud', 'uCloudLit', 'uCloudShade', 'uHazeK', 'uHazeB', 'uFront', 'uGrow', 'uReveal']) this.u[k] = gl.getUniformLocation(p, k);
+    for (const k of ['uSmear', 'uVP', 'uPrev', 'uOff', 'uEye', 'uSun', 'uPal', 'uFog', 'uK', 'uMinW', 'uStretch', 'uDens', 'uRes', 'uAtlas', 'uSkyLo', 'uSkyHi', 'uSkyPale', 'uCloud', 'uCloudLit', 'uCloudShade', 'uHazeK', 'uHazeB', 'uFogs', 'uFront', 'uGrow', 'uReveal']) this.u[k] = gl.getUniformLocation(p, k);
     gl.useProgram(p);
     gl.uniform3fv(this.u.uPal, palette); gl.uniform3fv(this.u.uSun, new Float32Array(sun));
-    gl.uniform3fv(this.u.uSkyLo, SKY.lo); gl.uniform3fv(this.u.uSkyHi, SKY.hi); gl.uniform3fv(this.u.uSkyPale, SKY.pale); gl.uniform3fv(this.u.uCloudLit, SKY.cloudLit); gl.uniform3fv(this.u.uCloudShade, SKY.cloudShade); gl.uniform1f(this.u.uHazeK, SKY.haze); gl.uniform1f(this.u.uHazeB, SKY.hazeBase);
+    gl.uniform3fv(this.u.uSkyLo, SKY.lo); gl.uniform3fv(this.u.uSkyHi, SKY.hi); gl.uniform3fv(this.u.uSkyPale, SKY.pale); gl.uniform3fv(this.u.uCloudLit, SKY.cloudLit); gl.uniform3fv(this.u.uCloudShade, SKY.cloudShade); gl.uniform1f(this.u.uHazeK, SKY.haze); gl.uniform1f(this.u.uHazeB, SKY.hazeBase); gl.uniform3fv(this.u.uFogs, new Float32Array(SKY.fog.flat()));
     // (the quad: a strip along the stroke, SEG pieces, so a bent stroke bends smoothly)
     const q: number[] = [];
     for (let i = 0; i <= SEG; i++) q.push(i / SEG, -1, i / SEG, 1);
