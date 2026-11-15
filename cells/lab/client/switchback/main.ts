@@ -29,6 +29,7 @@ import { Pad, replay, show as ink } from './sign';
 import { C15R } from './hand';
 import { Composer, Live, exportClip, save } from './rec';
 import { Callouts } from './callout';
+import { applyMood } from './mood';
 
 const q = new URLSearchParams(location.search);
 const seed = Number(q.get('seed') ?? 1) | 0 || 1, preview = q.has('preview'), still = q.has('still');
@@ -54,6 +55,8 @@ const world = document.getElementById('world') as HTMLCanvasElement, speed = doc
 const course = new Course(seed);
 let rider = new Rider(course);
 if (q.get('ruts') === 'light') PALETTE[M.RUT] = RUT_LIGHT;
+// (`mood=gold|mist|autumn|moon`: the same painting in another light (mood.ts))
+applyMood(q.get('mood'));
 const rd = new Renderer(world, speed, course);
 rd.resize(); addEventListener('resize', () => rd.resize());
 rd.speed = q.get('fx') !== '0'; rd.fog = q.get('fog') !== '0';

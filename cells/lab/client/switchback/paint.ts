@@ -127,6 +127,8 @@ export function stampAtlas(): { data: Uint8Array; w: number; h: number } {
  * kind (0 ground, culled from behind; 1 sky; 2 sky, paler; 3 both sides: things, the rider); the station it's laid at
  * (or NEVER: always laid, the backdrop and what moves), its pass (0 the masses, 1 the detail), and two spare */
 export const STROKE = 20;
+/** the sky's colours and the far off's haze (a mood (mood.ts) may change them before the painter's made) */
+export const SKY = { lo: [0.55, 0.67, 0.96], hi: [0.05, 0.2, 0.8], pale: [0.62, 0.72, 0.98], cloudLit: [0.96, 0.94, 0.96], cloudShade: [0.62, 0.68, 0.93], haze: 1, hazeBase: 0 };
 export const NEVER = -1e9;
 const ROAD = new Set<number>([M.TRACK, M.RUT]), GROUND = new Set<number>([M.SNOW, M.SHADOW]), ROCKY = new Set<number>([M.ROCK, M.UMBER, M.GOUGE]);
 const RANGE = new Set<number>([M.MTN, M.MTNSNOW, M.FAR, M.FARSNOW, M.RIDGE]);
@@ -775,7 +777,7 @@ const SEG = 8;
 const VS = `#version 300 es
 layout(location=0) in vec2 aQ; layout(location=1) in vec4 a0; layout(location=2) in vec4 a1; layout(location=3) in vec4 a2; layout(location=4) in vec4 a3; layout(location=5) in vec4 a4;
 uniform mat4 uVP, uPrev; uniform vec3 uOff, uEye, uSun; uniform vec3 uPal[100]; uniform float uFog, uK, uMinW, uStretch, uDens, uGrow, uReveal; uniform vec2 uRes, uFront;
-uniform vec3 uSkyLo, uSkyHi, uSkyPale, uSmear; uniform float uCloud;
+uniform vec3 uSkyLo, uSkyHi, uSkyPale, uSmear, uCloudLit, uCloudShade; uniform float uCloud, uHazeK, uHazeB;
 out vec2 vUv; out vec3 vA; out vec3 vB; flat out float vStamp; out float vFresh; flat out float vTex;
 float h(float s, float k){ return fract(sin(s*k)*43758.5453); }
 void main(){
@@ -833,7 +835,7 @@ void main(){
   vUv = vec2(u, aQ.y*.5 + .5); vStamp = a3.y; vFresh = fresh; vTex = sky || far ? 1. : 0.;
   if (sky) {
     vec3 col;
-    if (a0.w > 1.9) col = mix(vec3(.96, .94, .96), vec3(.62, .68, .93), clamp(a0.w - 2., 0., 1.));
+    if (a0.w > 1.9) col = mix(uCloudLit, uCloudShade, clamp(a0.w - 2., 0., 1.));
     else { col = mix(uSkyLo, uSkyHi, smoothstep(0., .8, a0.w)); if (kind > 1.5) col = mix(col, uSkyPale, .35); }
     vA = col*(.96 + h(seed, 3.7)*.08); vB = col*(1.04 + h(seed, 5.1)*.08);
     return;
@@ -863,7 +865,7 @@ void main(){
   A *= mix(vec3(1.), tint, tk); B *= mix(vec3(1.), tint, tk);
   vA = mix(A, fogs[b], fk); vB = mix(B, fogs[b2], fk);
   // (a planned stroke of the far off: hazed toward the horizon by its distance)
-  if (far && code >= 0) { float hz = fract(a0.w)/.9; vA = mix(vA, uSkyLo, hz); vB = mix(vB, uSkyLo, hz); }
+  if (far && code >= 0) { float hz = min(.88, fract(a0.w)/.9*uHazeK + uHazeB); vA = mix(vA, uSkyLo, hz); vB = mix(vB, uSkyLo, hz); }
 }`;
 const FS = `#version 300 es
 precision highp float;
@@ -910,10 +912,10 @@ export class Painter {
     const p = gl.createProgram()!; gl.attachShader(p, sh(gl.VERTEX_SHADER, VS)); gl.attachShader(p, sh(gl.FRAGMENT_SHADER, FS)); gl.linkProgram(p);
     if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p) ?? 'link');
     this.prog = p;
-    for (const k of ['uSmear', 'uVP', 'uPrev', 'uOff', 'uEye', 'uSun', 'uPal', 'uFog', 'uK', 'uMinW', 'uStretch', 'uDens', 'uRes', 'uAtlas', 'uSkyLo', 'uSkyHi', 'uSkyPale', 'uCloud', 'uFront', 'uGrow', 'uReveal']) this.u[k] = gl.getUniformLocation(p, k);
+    for (const k of ['uSmear', 'uVP', 'uPrev', 'uOff', 'uEye', 'uSun', 'uPal', 'uFog', 'uK', 'uMinW', 'uStretch', 'uDens', 'uRes', 'uAtlas', 'uSkyLo', 'uSkyHi', 'uSkyPale', 'uCloud', 'uCloudLit', 'uCloudShade', 'uHazeK', 'uHazeB', 'uFront', 'uGrow', 'uReveal']) this.u[k] = gl.getUniformLocation(p, k);
     gl.useProgram(p);
     gl.uniform3fv(this.u.uPal, palette); gl.uniform3fv(this.u.uSun, new Float32Array(sun));
-    gl.uniform3f(this.u.uSkyLo, 0.55, 0.67, 0.96); gl.uniform3f(this.u.uSkyHi, 0.05, 0.2, 0.8); gl.uniform3f(this.u.uSkyPale, 0.62, 0.72, 0.98);
+    gl.uniform3fv(this.u.uSkyLo, SKY.lo); gl.uniform3fv(this.u.uSkyHi, SKY.hi); gl.uniform3fv(this.u.uSkyPale, SKY.pale); gl.uniform3fv(this.u.uCloudLit, SKY.cloudLit); gl.uniform3fv(this.u.uCloudShade, SKY.cloudShade); gl.uniform1f(this.u.uHazeK, SKY.haze); gl.uniform1f(this.u.uHazeB, SKY.hazeBase);
     // (the quad: a strip along the stroke, SEG pieces, so a bent stroke bends smoothly)
     const q: number[] = [];
     for (let i = 0; i <= SEG; i++) q.push(i / SEG, -1, i / SEG, 1);
