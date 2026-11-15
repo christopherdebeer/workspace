@@ -988,12 +988,34 @@ export function courseStrokes(c: Course, s0: number, s1: number): Float32Array {
   const open = (s: number) => { const a = c.at(s), b = c.at(s + 1); return !(a.feature === 'gap' || b.feature === 'gap' || a.feature === 'ramp' || a.feature === 'deck'); };
   const jag = (s: number, k: number) => (hash3(c.seed, Math.round(s), k) - 0.5) * 0.5;
   const road = (s: number, u: number) => trackY(c, s, u), g = (s: number, u: number) => ground(c, s, u);
-  for (let s = s0; s < s1; s += 1.6 * (0.8 + R() * 0.4)) {
+  // (snow drifted onto the road from each side, as far as the wind's left it: a reach that wanders along the way, from
+  // nothing (the road's own edge) to most of the way across, so the track's never one width. White strokes along the
+  // way, row on row from the edge in to the reach, their inner ends ragged; the worn edge (a step darker) where the snow
+  // gives out, not along the road's edge)
+  const reach = (s: number, side: number) => {
+    const k = c.seed * 3.1 + side * 17.7, v = 0.5 + 0.32 * Math.sin(s / 23 + k) + 0.22 * Math.sin(s / 9.5 + k * 1.7) + 0.14 * Math.sin(s / 4.1 + k * 0.6);
+    return Math.max(0, Math.min(1, (v - 0.32) / 0.68)) * 0.72;
+  };
+  for (let s = s0; s < s1; s += 1.1 * (0.8 + R() * 0.4)) {
     if (!open(s)) continue;
     const h = c.at(s).width / 2;
-    // (the road's edges)
-    if (R() > 0.12) lay(s, -h + 0.25 + jag(s, 1), s + 1, -h + 0.25 + jag(s + 1, 1), road, M.RUT, 0, 2.8, 0.26, [13, 0, 1]);
-    if (R() > 0.12) lay(s, h - 0.25 + jag(s, 2), s + 1, h - 0.25 + jag(s + 1, 2), road, M.RUT, 0, 2.8, 0.26, [13, 0, 1]);
+    for (const side of [-1, 1]) {
+      const r0 = reach(s, side), r1 = reach(s + 1.4, side), wA = h * r0, wB = h * r1;
+      // (rows of snow from the edge to the reach)
+      for (let d = 0.15; d < Math.max(wA, wB) + 0.2; d += 0.45) {
+        if (d > wA + 0.3 && d > wB + 0.3) break;
+        const ua = side * (h - Math.min(d, wA) + jag(s, 7 + Math.round(d * 3)) * 0.6), ub = side * (h - Math.min(d, wB) + jag(s + 1.4, 7 + Math.round(d * 3)) * 0.6);
+        lay(s, ua, s + 1.4, ub, road, R() < 0.75 ? M.WHITE : M.SNOW, R() < 0.7 ? 0.02 : 0.3, 2.8, 0.85, [11, 0, 10, 12, 1]);
+      }
+      // (the worn edge where the snow gives out)
+      if (R() > 0.25) lay(s, side * (h - wA - 0.2 + jag(s, side + 2) * 0.5), s + 1.4, side * (h - wB - 0.2 + jag(s + 1.4, side + 2) * 0.5), road, M.RUT, 0, 2.6, 0.24, [13, 0, 1]);
+    }
+    // (now and then snow blown across the middle, a streak or two on the slant)
+    if (R() < 0.18) {
+      const u = (R() - 0.5) * h * 1.2, du = (R() - 0.5) * 2.5;
+      lay(s, u, s + 1.8, u + du, road, M.WHITE, 0.02, 2.4, 0.6, [10, 11, 12]);
+      if (R() < 0.5) lay(s + 0.6, u + 0.4, s + 2.2, u + du + 0.3, road, M.SNOW, 0.3, 2, 0.4, [10, 12]);
+    }
   }
   // (the drop's lip, lit)
   for (let s = s0; s < s1; s += 2.2 * (0.8 + R() * 0.4)) {

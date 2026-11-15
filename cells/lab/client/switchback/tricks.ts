@@ -98,7 +98,10 @@ export class Trickster {
     // (a flip where there's air for one: pulled as hard as it needs to come round a whole turn and square up with the
     // margin to spare, if a full pull can)
     const need = (Math.PI * 2 + wrap(plan.slope - Math.atan2(rise, 1))) / Math.max(0.1, T - MARGIN);
-    if (T > 1.5 && need / LIP.spin <= 0.95 && roll < 0.6) { plan.kind = 'flip'; plan.pull = Math.max(0.25, need / LIP.spin); }
+    // (and the helmet clear of the ground when it's upside down, halfway round: the bike then about two metres over it)
+    const ti = Math.PI / Math.max(0.1, need), vh = v * k, y0 = b.y, vy0 = v * rise * k + 1.2;
+    const under = c.point(lipS + vh * ti, 0).y, clear = y0 + vy0 * ti - 4.9 * ti * ti - under;
+    if (T > 1.5 && need / LIP.spin <= 0.95 && roll < 0.6 && clear > 2.6) { plan.kind = 'flip'; plan.pull = Math.max(0.25, need / LIP.spin); }
     else if (T > 1.2 && roll < 0.85) {
       // (the body: one trick, or two strung together where there's air for both)
       plan.kind = 'body';

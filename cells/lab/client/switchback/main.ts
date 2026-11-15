@@ -309,8 +309,9 @@ if (direct) { menu.classList.remove('on'); menu.setAttribute('inert', ''); docum
 
 /** a word across the screen for a moment (a checkpoint passed, a return to one) */
 const note = document.getElementById('note')!;
-// (`ink`: the callouts written by hand in the picture (callout.ts); the type kept, unseen, for screen readers)
-const inkFlag = q.has('ink') && q.get('ink') !== '0', callouts = new Callouts();
+// (the callouts painted into the picture (callout.ts), `ink=0` for the type instead; the type kept, unseen, for screen
+// readers)
+const inkFlag = q.get('ink') !== '0', callouts = new Callouts();
 if (inkFlag) note.style.opacity = '0';
 const inkText = inkFlag ? q.get('inktext') : null; let inkAt = -9;
 let noteTimer = 0;
@@ -351,7 +352,7 @@ function tick(dt: number) {
     if (e.kind === 'checkpoint') say(`CHECKPOINT ${e.k}`);
     if (e.kind === 'trick') say(TRICKS[BODY[e.k]].name);
     if (e.kind === 'refuse') say(e.k ? 'NO ROOM TO FLIP' : 'NOT ENOUGH AIR');
-    if (e.kind === 'crash' && rider.crashWhy) say(({ short: 'SHORT', face: 'INTO THE FACE', 'off the bike': 'STILL OFF THE BIKE', whip: 'STILL WHIPPED', 'nose up': 'NOSE UP', 'nose down': 'NOSE DOWN', hard: 'TOO HARD', over: 'OVER THE EDGE', wall: 'INTO THE WALL' } as Record<string, string>)[rider.crashWhy] ?? 'DOWN');
+    if (e.kind === 'crash' && rider.crashWhy) say(({ short: 'SHORT', face: 'INTO THE FACE', 'off the bike': 'STILL OFF THE BIKE', whip: 'STILL WHIPPED', 'nose up': 'NOSE UP', 'nose down': 'NOSE DOWN', hard: 'TOO HARD', over: 'OVER THE EDGE', wall: 'INTO THE WALL', head: 'ON YOUR HEAD' } as Record<string, string>)[rider.crashWhy] ?? 'DOWN');
     if (e.kind === 'flip') { const n = Math.abs(e.k); say(`${n > 2 ? `${n}× ` : n === 2 ? 'DOUBLE ' : ''}${e.k > 0 ? 'BACKFLIP' : 'FRONT FLIP'}`); }
     // (put back at the flag: the eye goes with you at once, not in a long swoop)
     if (e.kind === 'respawn') { say(e.k ? `CHECKPOINT ${e.k}` : 'START'); snapEye(); }

@@ -340,6 +340,16 @@ export class Rider {
     void inp;
     // (the wall, from the air: a crash)
     if (this.u < -half - 1.4 && this.y < p.y + 0.3) { this.crash('wall'); return; }
+    // (the helmet into the ground before the wheels (upside down in a flip, or nose over): a crash. The head about 1.9 m
+    // up the bike's own up from where it stands, turned with its pitch)
+    {
+      const fx = Math.sin(this.heading), fz = Math.cos(this.heading), cp = Math.cos(this.pitch), sp = Math.sin(this.pitch), hh = 1.9;
+      const hx = this.x - fx * sp * hh, hy = this.y + cp * hh, hz = this.z - fz * sp * hh;
+      // (only past upright, and only when the helmet's the lowest of it, under both wheels: steep off a lip, nose up, the
+      // head's low but the back wheel's lower)
+      const wheelY = this.y + 0.4 * cp - Math.abs(sp) * 0.78;
+      if (cp < -0.1 && hy < wheelY && hy < this.groundAt(hx, hz) + 0.12) { this.crashImp = 0; this.crash('head'); return; }
+    }
     const sy = this.surfaceY(this.s, this.u);
     if (this.y <= sy) {
       // (down. The impact is the speed into the ground's own slope, the way you're going: a landing down a slope that
