@@ -18,7 +18,7 @@ import type { Rider, Event } from './sim';
 import { GEARS } from './audio';
 import { buildRuts, Trail } from './ruts';
 import { buildGouges } from './gouge';
-import { STROKE, Painter, Strokes, Brush2D, strokesOver, skyStrokes, lineOf, courseStrokes, backdropLayers, valleyStrokes, fallStrokes, flagStrokes, riderStrokes, partShadowStrokes } from './paint';
+import { STROKE, Painter, Strokes, Brush2D, strokesOver, skyStrokes, lineOf, courseStrokes, backdropLayers, valleyStrokes, midHillStrokes, MID_SPAN, fallStrokes, flagStrokes, riderStrokes, partShadowStrokes } from './paint';
 
 const VS = `#version 300 es
 in vec4 aP; uniform mat4 uVP; uniform vec3 uOff; uniform float uZj; out vec3 vW; flat out int vM;
@@ -101,6 +101,7 @@ export class Renderer {
   paint = false; painter: Painter | null = null; stretchWanted = 1; leadWanted: [number, number] | null = null;
   /** only the backdrop drawn (`bg=`) */
   bgOnly = false;
+  private mids = new Map<number, Strokes>();
   private floor: Strokes | null = null; private backLayers: { s: Strokes; f: number; cap: number }[] = []; private eye0: number[] | null = null;
   /** the backdrop's parallax starts again from here (the start, or a respawn: the eye's cut there anyway) */
   rebase() { this.eye0 = null; }
@@ -183,6 +184,12 @@ export class Renderer {
       this.chunks.clear();
     }
     this.stream(r.s, this.painter && this.chunks.size === 0 ? 99 : budget);
+    // (the middle distance's hills, a stretch at a time, from a little behind to well ahead; one new stretch a frame)
+    if (this.painter) {
+      const lo = Math.floor((r.s - 400) / MID_SPAN), hi = Math.floor((r.s + 1600) / MID_SPAN);
+      for (const [k, b] of this.mids) if (k < lo || k > hi) { b.free(); this.mids.delete(k); }
+      for (let k = Math.max(0, lo); k <= hi; k++) if (!this.mids.has(k)) { this.mids.set(k, this.painter.make(midHillStrokes(this.course, k))); if (this.mids.size > 2 && budget < 99) break; }
+    }
     const asp = this.W / this.H, fov = asp < 1 ? view.fov * 1.25 : view.fov;
     // (the eye's roll: its up tipped toward its right)
     const fwd = norm([view.target[0] - view.eye[0], 0, view.target[2] - view.eye[2]]), rt = [-fwd[2], 0, fwd[0]];
@@ -257,6 +264,8 @@ export class Renderer {
       paintBegin(); gl.disable(gl.DEPTH_TEST);
       if (this.floor) pt.draw(this.floor, this.layerOff(view.eye, 0.35, 190, true), false);
       for (const l of this.backLayers) pt.draw(l.s, this.layerOff(view.eye, l.f, l.cap, false), false);
+      // (the middle distance's hills, standing in the world: the farther stretches first)
+      for (const k of [...this.mids.keys()].sort((a, b) => b - a)) pt.draw(this.mids.get(k)!, [0, 0, 0], false);
       gl.enable(gl.DEPTH_TEST); pt.end(); gl.useProgram(this.prog);
       gl.disable(gl.STENCIL_TEST);
       // (what's near: its facets only in the depth; then its strokes, laid in the world on them and lifted a little toward

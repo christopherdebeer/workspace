@@ -429,6 +429,61 @@ export function foothillStrokes(seed: number): Float32Array {
   for (const g of foothillProfiles(seed)) layerStrokes(g, seed, out);
   return new Float32Array(out);
 }
+/** The middle distance: hills between the road and the river, on the drop side, standing in the world (not drawn about
+ * the eye), so they pass by as you ride, the nearer faster: two ridges along each stretch of the way (`k`, 240 stations
+ * each), one 250-500 m out, one 550-950 m out, each a crest that rises to a summit or two and falls into saddles, their
+ * feet below the valley's floor; painted as the far ranges are (rows of strokes under each run of the crest, along it,
+ * turning down the fall lower down, lit from the left of the way you look), the farther hazier, a forest over the lower
+ * slopes, its top ragged with treetops. Nowhere within 180 m of the road (a hairpin's other leg) */
+export const MID_SPAN = 240;
+export function midHillStrokes(c: Course, k: number): Float32Array {
+  const R0 = rng(c.seed * 7121 + k * 97), list: number[][] = [], s0 = k * MID_SPAN, s1 = s0 + MID_SPAN;
+  // (the road nearby, to keep clear of)
+  const road: number[][] = [];
+  for (let s = Math.max(0, s0 - 900); s < s1 + 900; s += 15) { const p = c.point(s, 0); road.push([p.x, p.z]); }
+  const clear = (x: number, z: number) => road.every(([rx, rz]) => (rx - x) ** 2 + (rz - z) ** 2 > 180 * 180);
+  for (const [U0, dU, H0, haze] of [[550, 400, 320, 0.12], [250, 250, 200, 0.04]] as number[][]) {
+    const u0 = U0 + R0() * dU, base = c.point(s0 + MID_SPAN / 2, 0).y - 340, ph = R0() * 6.28, peaks = 1 + Math.floor(R0() * 2);
+    // (the crest: from the stretch's start to its end, rising to its summits; its ends low so stretches meet in saddles)
+    const crest: number[][] = [];
+    for (let s = s0 - 30; s <= s1 + 30; s += 30) {
+      const f = (s - s0 + 30) / (MID_SPAN + 60), u = u0 + 60 * Math.sin(f * 4 + ph);
+      const lift = Math.pow(Math.max(0, Math.sin(Math.PI * f * peaks + ph * 0.3)), 1.1) * 0.65 + 0.35 * Math.sin(Math.PI * f);
+      const p = c.point(s, u), top = base + 90 + H0 * lift * (0.92 + 0.16 * R0());
+      crest.push([p.x, top, p.z, clear(p.x, p.z) ? 1 : 0]);
+    }
+    const dist = u0, W0 = Math.max(4, dist * 0.022), L0 = dist * 0.09;
+    for (let i = 0; i < crest.length - 1; i++) {
+      const A = crest[i], B = crest[i + 1];
+      if (!A[3] || !B[3]) continue;
+      const dx = B[0] - A[0], dz = B[2] - A[2], hl = Math.hypot(dx, dz) || 1, dh = B[1] - A[1];
+      // (down along the crest; toward the road is the face you see)
+      let tx = dx / hl, tz = dz / hl, ty = dh / hl; if (ty > 0) { tx = -tx; tz = -tz; ty = -ty; }
+      const toward = [-dz / hl, 0, dx / hl], mid = [(A[0] + B[0]) / 2, (A[2] + B[2]) / 2], pr = c.point(s0 + MID_SPAN / 2, 0);
+      if ((pr.x - mid[0]) * toward[0] + (pr.z - mid[1]) * toward[2] < 0) { toward[0] = -toward[0]; toward[2] = -toward[2]; }
+      const slope = Math.min(1, Math.abs(dh) / hl * 3), side = (dh > 0 ? 1 : -1);
+      const tall = (A[1] + B[1]) / 2 - base, rowH = W0 * 0.55;
+      for (let r = 0; r * rowH < tall; r++) {
+        const depth = r * rowH, df = depth / tall, turn = depth > L0 * 0.6 ? Math.min(0.6, df) : 0;
+        const T = [tx * (1 - turn), ty * (1 - turn) - turn, tz * (1 - turn)], tl = Math.hypot(T[0], T[1], T[2]); T[0] /= tl; T[1] /= tl; T[2] /= tl;
+        const L = Math.min(L0 * 1.6, hl * 0.9) * (0.8 + R0() * 0.4), n = Math.max(1, Math.round(hl / (L * 0.6)));
+        for (let j = 0; j < n; j++) {
+          const f = (j + 0.2 + R0() * 0.6) / n, x = A[0] + dx * f, z = A[2] + dz * f, cy = A[1] + dh * f, y = cy - depth - W0 * (0.4 + R0() * 0.3);
+          if (y < base) continue;
+          const forest = df > 0.42 + 0.12 * Math.sin(x * 0.02 + z * 0.013);
+          const nn = [toward[0] * 0.8 + tx * side * 0.4 * slope, 0.45 - df * 0.3, toward[2] * 0.8 + tz * side * 0.4 * slope], nl = Math.hypot(nn[0], nn[1], nn[2]);
+          plan(list, x, y, z, forest ? M.FOREST : M.RIDGE, haze, forest ? [T[0] * 0.3 + tx * 0.7, 0, T[2] * 0.3 + tz * 0.7] : T, L, [nn[0] / nl, nn[1] / nl, nn[2] / nl], W0 * 1.05, R0(), [0, 7, 0, 1][Math.floor(R0() * 4)], (R0() - 0.5) * 0.1, forest ? 1 + Math.floor(R0() * 3) : 4);
+          // (the forest's top: treetops standing out of it)
+          if (forest && R0() < 0.35 && df < 0.62) plan(list, x, y + W0 * 0.8, z, M.FOREST, haze, [0, -1, 0], W0 * (1.2 + R0()), [toward[0], 0.2, toward[2]], W0 * 0.7, R0(), 0, 0, 2);
+        }
+      }
+    }
+  }
+  list.sort((p, q) => p[1] - q[1]);
+  const out: number[] = []; for (const st of list) out.push(...st);
+  return new Float32Array(out);
+}
+
 /** The valley's floor: fields in patches, ochre, lavender and blues, laid level round the eye, broader further off and
  * hazier; and the river over it, a thin pale line in long strokes along it. */
 export function valleyStrokes(seed: number): Float32Array {
