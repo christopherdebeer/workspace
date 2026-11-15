@@ -153,7 +153,7 @@ function closeLook(): View | null {
   const eye = look === 'side' ? at(0, 3.6, 1.1) : look === 'front' ? at(4.2, 0.4, 1.3) : look === 'rear' ? at(-4, 0.3, 1.4) : at(-2.6, 2.8, 1.7);
   return { eye, target: at(0, 0, 0.85), fov: 0.8, roll: 0 };
 }
-function snapEye() { cam.h = rider.travel; cam.eye = [rider.x - Math.sin(rider.travel) * 6, rider.y + 3.5, rider.z - Math.cos(rider.travel) * 6]; cam.shake = 0; }
+function snapEye() { rd.rebase(); cam.h = rider.travel; cam.eye = [rider.x - Math.sin(rider.travel) * 6, rider.y + 3.5, rider.z - Math.cos(rider.travel) * 6]; cam.shake = 0; }
 function view(dt: number, t: number): View {
   const close = closeLook(); if (close) return close;
   const k = 1 - Math.exp(-dt * (rider.air ? 1.6 : 3.2));
@@ -368,6 +368,7 @@ function tick(dt: number) {
   if ((zjit || ejit || hold) && !heldView && performance.now() - t0 > 4000) heldView = { ...vw, eye: vw.eye.slice(), target: vw.target.slice() };
   if (ejit) { const e = (drawn % 2) * 0.01; vw.eye = [vw.eye[0] + e, vw.eye[1], vw.eye[2]]; vw.target = [vw.target[0] + e, vw.target[1], vw.target[2]]; }
   if (bgFlag) { const [yw = 0, pc = 4, fv = 60] = bgFlag.map((v) => (v * Math.PI) / 180), d = 100; rd.bgOnly = true; vw.target = [vw.eye[0] + Math.sin(yw) * Math.cos(pc) * d, vw.eye[1] + Math.sin(pc) * d, vw.eye[2] + Math.cos(yw) * Math.cos(pc) * d]; vw.roll = 0; vw.fov = fv; }
+  rd.cloudAt(t);
   rd.frame(vw, rider, t, still || paused ? 0 : dt, drawn++ < 2 ? 99 : 1);
   // (`inktext=<words>`: those words lettered every two seconds, for looking at the lettering)
   if (inkText && t - inkAt > 2) { callouts.say(inkText, t); inkAt = t; }

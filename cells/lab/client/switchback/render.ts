@@ -18,7 +18,7 @@ import type { Rider, Event } from './sim';
 import { GEARS } from './audio';
 import { buildRuts, Trail } from './ruts';
 import { buildGouges } from './gouge';
-import { STROKE, Painter, Strokes, Brush2D, strokesOver, skyStrokes, lineOf, courseStrokes, rangeStrokes, foothillStrokes, valleyStrokes, fallStrokes, flagStrokes, riderStrokes, partShadowStrokes } from './paint';
+import { STROKE, Painter, Strokes, Brush2D, strokesOver, skyStrokes, lineOf, courseStrokes, backdropLayers, valleyStrokes, fallStrokes, flagStrokes, riderStrokes, partShadowStrokes } from './paint';
 
 const VS = `#version 300 es
 in vec4 aP; uniform mat4 uVP; uniform vec3 uOff; uniform float uZj; out vec3 vW; flat out int vM;
@@ -101,6 +101,20 @@ export class Renderer {
   paint = false; painter: Painter | null = null; stretchWanted = 1; leadWanted: [number, number] | null = null;
   /** only the backdrop drawn (`bg=`) */
   bgOnly = false;
+  private floor: Strokes | null = null; private backLayers: { s: Strokes; f: number; cap: number }[] = []; private eye0: number[] | null = null;
+  /** the backdrop's parallax starts again from here (the start, or a respawn: the eye's cut there anyway) */
+  rebase() { this.eye0 = null; }
+  /** the clouds drifted round by game time t (about a degree every eight seconds) */
+  cloudAt(t: number) { if (this.painter) this.painter.cloud = t * 0.0022; }
+  /** a backdrop layer's offset: with the eye, less the way it's come since the base times the layer's parallax (a
+   * fraction), that drift soft-capped at `cap` metres; the floor's only down (it rises toward you as you descend, never
+   * closer than about 140 m) */
+  private layerOff(eye: number[], f: number, cap: number, floor: boolean) {
+    if (!this.eye0) this.eye0 = eye.slice();
+    const d = [0, 1, 2].map((k) => (eye[k] - this.eye0![k]) * f), m = Math.hypot(d[0], d[1], d[2]), k = m > 1e-6 ? (cap * Math.tanh(m / cap)) / m : 0;
+    if (floor) { const dy = Math.max(-180, Math.min(0, (eye[1] - this.eye0[1]) * 0.3)); return [eye[0] - d[0] * k, eye[1] - 60 - dy, eye[2] - d[2] * k]; }
+    return [eye[0] - d[0] * k, eye[1] - 60 - d[1] * k, eye[2] - d[2] * k];
+  }
   private strokes = new Map<number, Strokes>(); private backStrokes: Strokes[] = []; private moving: Strokes | null = null; private prevEye: number[] | null = null; private prevEye0: number[] | null = null; private eyeV = [0, 0, 0]; private skyS: Strokes | null = null; private prevVP: Mat | null = null;
   /** your own track, fed after each step of the sim */
   readonly trail: Trail;
@@ -159,7 +173,11 @@ export class Renderer {
     const gl = this.gl;
     if (this.paint && !this.painter) {
       this.painter = new Painter(gl, new Float32Array(PALETTE.flat().map(hex).flat()), SUN);
-      this.backStrokes = [this.painter.make(rangeStrokes(this.course.seed)), this.painter.make(valleyStrokes(this.course.seed)), this.painter.make(foothillStrokes(this.course.seed))];
+      this.floor = this.painter.make(valleyStrokes(this.course.seed));
+      // (each layer's parallax: as if it stood nearer than it does (a range 3.7 km off moves as one a few hundred metres off
+      // would, scaled), so the near hills slide against the far peaks; soft-capped, so it never comes up to you)
+      this.backLayers = backdropLayers(this.course.seed).sort((a, b) => b.R - a.R).map((l) => ({ s: this.painter!.make(l.data), f: Math.min(0.75, Math.pow(1400 / l.R, 1.2)), cap: l.R * 0.36 }));
+      this.backStrokes = [this.floor, ...this.backLayers.map((l) => l.s)];
       this.skyS = this.painter.make(skyStrokes(this.course.seed)); this.painter.stretch = this.stretchWanted; if (this.leadWanted) this.painter.lead = this.leadWanted;
       for (const b of this.chunks.values()) b.free();
       this.chunks.clear();
@@ -234,7 +252,12 @@ export class Renderer {
       // (the ranges over the sky and over each other, farthest first, by the order they're laid, not by depth: so their
       // strokes run over the skyline as a brush does, and a nearer range is painted over the one behind it; then the
       // valley, by depth, so its floor doesn't paint over the ranges' feet it lies behind)
-      paintBegin(); gl.disable(gl.DEPTH_TEST); pt.draw(this.backStrokes[0], off, false); gl.enable(gl.DEPTH_TEST); pt.draw(this.backStrokes[1], off, false); gl.disable(gl.DEPTH_TEST); pt.draw(this.backStrokes[2], off, false); gl.enable(gl.DEPTH_TEST); pt.end(); gl.useProgram(this.prog);
+      // (by order, not depth: the valley's floor first, then the layers farthest first, each moved by its own parallax;
+      // the floor rising toward you as you come down the mountain)
+      paintBegin(); gl.disable(gl.DEPTH_TEST);
+      if (this.floor) pt.draw(this.floor, this.layerOff(view.eye, 0.35, 190, true), false);
+      for (const l of this.backLayers) pt.draw(l.s, this.layerOff(view.eye, l.f, l.cap, false), false);
+      gl.enable(gl.DEPTH_TEST); pt.end(); gl.useProgram(this.prog);
       gl.disable(gl.STENCIL_TEST);
       // (what's near: its facets only in the depth; then its strokes, laid in the world on them and lifted a little toward
       // the eye, tested against that depth pixel by pixel, far chunks first)

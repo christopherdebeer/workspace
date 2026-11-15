@@ -419,6 +419,11 @@ export function rangeStrokes(seed: number): Float32Array {
   for (const g of rangeProfiles(seed)) layerStrokes(g, seed, out);
   return new Float32Array(out);
 }
+/** the backdrop's layers each on its own (the ranges, the hill arcs, the foothills), with how far off each stands, so
+ * each can be moved by its own parallax */
+export function backdropLayers(seed: number): { R: number; data: Float32Array }[] {
+  return [...rangeProfiles(seed), ...foothillProfiles(seed)].map((g) => { const out: number[] = []; layerStrokes(g, seed, out); return { R: g.R, data: new Float32Array(out) }; });
+}
 export function foothillStrokes(seed: number): Float32Array {
   const out: number[] = [];
   for (const g of foothillProfiles(seed)) layerStrokes(g, seed, out);
@@ -715,11 +720,13 @@ const SEG = 8;
 const VS = `#version 300 es
 layout(location=0) in vec2 aQ; layout(location=1) in vec4 a0; layout(location=2) in vec4 a1; layout(location=3) in vec4 a2; layout(location=4) in vec4 a3; layout(location=5) in vec4 a4;
 uniform mat4 uVP, uPrev; uniform vec3 uOff, uEye, uSun; uniform vec3 uPal[100]; uniform float uFog, uK, uMinW, uStretch, uDens, uGrow, uReveal; uniform vec2 uRes, uFront;
-uniform vec3 uSkyLo, uSkyHi, uSkyPale, uSmear;
+uniform vec3 uSkyLo, uSkyHi, uSkyPale, uSmear; uniform float uCloud;
 out vec2 vUv; out vec3 vA; out vec3 vB; flat out float vStamp; out float vFresh; flat out float vTex;
 float h(float s, float k){ return fract(sin(s*k)*43758.5453); }
 void main(){
   vec3 w = a0.xyz + uOff, n = a2.xyz, T = normalize(a1.xyz); float seed = a3.x, kind = a3.w; bool sky = kind > .5 && kind < 2.5, both = kind > 2.5;
+  // (the clouds drift round the sky, the wind's way)
+  if (sky && a0.w > 1.9) { float ca = cos(uCloud), sa = sin(uCloud); vec3 r = a0.xyz; w = vec3(r.x*ca - r.z*sa, r.y, r.x*sa + r.z*ca) + uOff; T = normalize(vec3(T.x*ca - T.z*sa, T.y, T.x*sa + T.z*ca)); n = vec3(n.x*ca - n.z*sa, n.y, n.x*sa + n.z*ca); }
   vec3 V = uEye - w; float dist = length(V); V /= max(dist, 1e-4);
   // (the paint front: a stroke at its station is laid, tail to head, as the front for its pass comes past; the backdrop
   // and what moves are laid as the page opens)
@@ -848,7 +855,7 @@ export class Painter {
     const p = gl.createProgram()!; gl.attachShader(p, sh(gl.VERTEX_SHADER, VS)); gl.attachShader(p, sh(gl.FRAGMENT_SHADER, FS)); gl.linkProgram(p);
     if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p) ?? 'link');
     this.prog = p;
-    for (const k of ['uSmear', 'uVP', 'uPrev', 'uOff', 'uEye', 'uSun', 'uPal', 'uFog', 'uK', 'uMinW', 'uStretch', 'uDens', 'uRes', 'uAtlas', 'uSkyLo', 'uSkyHi', 'uSkyPale', 'uFront', 'uGrow', 'uReveal']) this.u[k] = gl.getUniformLocation(p, k);
+    for (const k of ['uSmear', 'uVP', 'uPrev', 'uOff', 'uEye', 'uSun', 'uPal', 'uFog', 'uK', 'uMinW', 'uStretch', 'uDens', 'uRes', 'uAtlas', 'uSkyLo', 'uSkyHi', 'uSkyPale', 'uCloud', 'uFront', 'uGrow', 'uReveal']) this.u[k] = gl.getUniformLocation(p, k);
     gl.useProgram(p);
     gl.uniform3fv(this.u.uPal, palette); gl.uniform3fv(this.u.uSun, new Float32Array(sun));
     gl.uniform3f(this.u.uSkyLo, 0.55, 0.67, 0.96); gl.uniform3f(this.u.uSkyHi, 0.05, 0.2, 0.8); gl.uniform3f(this.u.uSkyPale, 0.62, 0.72, 0.98);
@@ -880,10 +887,12 @@ export class Painter {
     gl.uniform3fv(this.u.uEye, new Float32Array(eye)); gl.uniform1f(this.u.uK, projY); gl.uniform2f(this.u.uRes, w, h);
     gl.uniform1f(this.u.uMinW, 2.4 * dpr); gl.uniform1f(this.u.uStretch, this.stretch); gl.uniform1f(this.u.uDens, this.dens);
     const fr = this.front ?? [-1e9, -1e9]; gl.uniform2f(this.u.uFront, fr[0], fr[1]); gl.uniform1f(this.u.uGrow, this.grow);
-    gl.uniform1f(this.u.uReveal, Math.min(1, (performance.now() - this.born) / 1600));
+    gl.uniform1f(this.u.uReveal, Math.min(1, (performance.now() - this.born) / 1600)); gl.uniform1f(this.u.uCloud, this.cloud);
     gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, this.atlas); gl.uniform1i(this.u.uAtlas, 0);
     gl.enable(gl.BLEND); gl.blendFuncSeparate(gl.ONE, gl.ONE_MINUS_SRC_ALPHA, gl.ZERO, gl.ONE); gl.depthMask(false);
   }
+  /** how far round the clouds have drifted (rad) */
+  cloud = 0;
   draw(s: Strokes, off: number[], fog: boolean) {
     const gl = this.gl;
     if (!s.n) return;
