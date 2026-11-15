@@ -105,6 +105,8 @@ export class Renderer {
   private floor: Strokes | null = null; private backLayers: { s: Strokes; f: number; cap: number }[] = []; private eye0: number[] | null = null;
   /** the backdrop's parallax starts again from here (the start, or a respawn: the eye's cut there anyway) */
   rebase() { this.eye0 = null; }
+  /** the palette's changed (a mood cycling): the painter's floats again */
+  envChanged() { if (this.painter) this.painter.pal = new Float32Array(PALETTE.flat().map(hex).flat()); }
   /** the clouds drifted round by game time t (about a degree every eight seconds) */
   cloudAt(t: number) { if (this.painter) this.painter.cloud = t * 0.0022; }
   /** a backdrop layer's offset: with the eye, less the way it's come since the base times the layer's parallax (a

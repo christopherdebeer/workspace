@@ -29,7 +29,7 @@ import { Pad, replay, show as ink } from './sign';
 import { C15R } from './hand';
 import { Composer, Live, exportClip, save } from './rec';
 import { Callouts } from './callout';
-import { applyMood } from './mood';
+import { applyMood, cycleAt } from './mood';
 
 const q = new URLSearchParams(location.search);
 const seed = Number(q.get('seed') ?? 1) | 0 || 1, preview = q.has('preview'), still = q.has('still');
@@ -56,7 +56,8 @@ const course = new Course(seed);
 let rider = new Rider(course);
 if (q.get('ruts') === 'light') PALETTE[M.RUT] = RUT_LIGHT;
 // (`mood=gold|mist|autumn|moon`: the same painting in another light (mood.ts))
-applyMood(q.get('mood'));
+let moodShown = '';
+const moodCycle = applyMood(q.get('mood')) && q.get('mood') === 'cycle';
 const rd = new Renderer(world, speed, course);
 rd.resize(); addEventListener('resize', () => rd.resize());
 rd.speed = q.get('fx') !== '0'; rd.fog = q.get('fog') !== '0';
@@ -372,6 +373,7 @@ function tick(dt: number) {
   if (ejit) { const e = (drawn % 2) * 0.01; vw.eye = [vw.eye[0] + e, vw.eye[1], vw.eye[2]]; vw.target = [vw.target[0] + e, vw.target[1], vw.target[2]]; }
   if (bgFlag) { const [yw = 0, pc = 4, fv = 60] = bgFlag.map((v) => (v * Math.PI) / 180), d = 100; rd.bgOnly = true; vw.target = [vw.eye[0] + Math.sin(yw) * Math.cos(pc) * d, vw.eye[1] + Math.sin(pc) * d, vw.eye[2] + Math.cos(yw) * Math.cos(pc) * d]; vw.roll = 0; vw.fov = fv; }
   rd.cloudAt(t);
+  if (moodCycle) { const name = cycleAt(t); rd.envChanged(); if (name !== moodShown) { moodShown = name; if (!name.includes('→')) callouts.say(name === 'day' ? 'DAY' : name.toUpperCase(), t); } }
   rd.frame(vw, rider, t, still || paused ? 0 : dt, drawn++ < 2 ? 99 : 1);
   // (`inktext=<words>`: those words lettered every two seconds, for looking at the lettering)
   if (inkText && t - inkAt > 2) { callouts.say(inkText, t); inkAt = t; }

@@ -130,7 +130,11 @@ export const STROKE = 20;
 /** the sky's colours and the far off's haze (a mood (mood.ts) may change them before the painter's made) */
 export const SKY = { lo: [0.55, 0.67, 0.96], hi: [0.05, 0.2, 0.8], pale: [0.62, 0.72, 0.98], cloudLit: [0.96, 0.94, 0.96], cloudShade: [0.62, 0.68, 0.93], haze: 1, hazeBase: 0,
   // (the near ground's distance, four steps toward the air's own colour)
-  fog: [[0.62, 0.66, 0.9], [0.33, 0.45, 0.88], [0.14, 0.33, 0.84], [0.09, 0.26, 0.78]] };
+  fog: [[0.62, 0.66, 0.9], [0.33, 0.45, 0.88], [0.14, 0.33, 0.84], [0.09, 0.26, 0.78]],
+  // (the light: the sun's direction (empty: the renderer's own), how far its bands are pushed toward shade (lit: −
+  // fewer faces get the lightest band), how much distance flattens a thing's light and shade toward its middle (flat)
+  // and thins its small strokes, the survivors broader, so the big shapes outlast the detail (thin))
+  sun: [] as number[], lit: 0, flat: 0, thin: 0 };
 export const NEVER = -1e9;
 const ROAD = new Set<number>([M.TRACK, M.RUT]), GROUND = new Set<number>([M.SNOW, M.SHADOW]), ROCKY = new Set<number>([M.ROCK, M.UMBER, M.GOUGE]);
 const RANGE = new Set<number>([M.MTN, M.MTNSNOW, M.FAR, M.FARSNOW, M.RIDGE]);
@@ -779,7 +783,7 @@ const SEG = 8;
 const VS = `#version 300 es
 layout(location=0) in vec2 aQ; layout(location=1) in vec4 a0; layout(location=2) in vec4 a1; layout(location=3) in vec4 a2; layout(location=4) in vec4 a3; layout(location=5) in vec4 a4;
 uniform mat4 uVP, uPrev; uniform vec3 uOff, uEye, uSun; uniform vec3 uPal[100]; uniform float uFog, uK, uMinW, uStretch, uDens, uGrow, uReveal; uniform vec2 uRes, uFront;
-uniform vec3 uSkyLo, uSkyHi, uSkyPale, uSmear, uCloudLit, uCloudShade; uniform float uCloud, uHazeK, uHazeB; uniform vec3 uFogs[4];
+uniform vec3 uSkyLo, uSkyHi, uSkyPale, uSmear, uCloudLit, uCloudShade; uniform float uCloud, uHazeK, uHazeB, uLit, uFlat, uThin; uniform vec3 uFogs[4];
 out vec2 vUv; out vec3 vA; out vec3 vB; flat out float vStamp; out float vFresh; flat out float vTex;
 float h(float s, float k){ return fract(sin(s*k)*43758.5453); }
 void main(){
@@ -795,6 +799,8 @@ void main(){
   bool far = a4.w > .5;
   // (thinned with distance, but never the backdrop: thinned, it went to blotches on paper)
   float keep = sky || both || far ? 1. : uDens*mix(1., .5, smoothstep(80., 900., dist));
+  // (the air thins what's far: near, past the first few hundred metres; the far off's planned strokes by their haze)
+  if (!sky && !both) keep *= far ? (a4.y > .5 ? 1. - uThin*min(.85, fract(a0.w)/.9*uHazeK + uHazeB) : 1.) : mix(1., 1. - uThin, smoothstep(150., 700., dist));
   // (a stroke on a face turned away from the eye isn't laid (a thing, thin, is painted on both sides): it shrinks away as its
   // face turns from the eye, rather than going at once; so nothing lifted toward the eye shows through from behind an edge)
   // (not the backdrop's: seen far off and edge on, a peak's flanks turned (by their normal) from the eye were left bare
@@ -844,7 +850,7 @@ void main(){
   }
   // (its colour: the face's band, as the facets pick it, a little jittered stroke by stroke; and the band next to it)
   int mt = int(a0.w); float tone = fract(a0.w);
-  float l = dot(n, uSun) + (tone/.9 - .5)*.42 + (far ? 0. : (h(seed, 78.233) - .5)*.12);
+  float l = dot(n, uSun) + (tone/.9 - .5)*.42 + (far ? 0. : (h(seed, 78.233) - .5)*.12 + uLit);
   int b = l > .62 ? 0 : l > .3 ? 1 : l > -.05 ? 2 : 3;
   int b2 = clamp(b + (h(seed, 3.1) > .5 ? 1 : -1), 0, 3);
   // (the far off in two tones, as the study has it: a face is lit or in shade, so a range reads as a few planes; a stroke
@@ -865,9 +871,11 @@ void main(){
   vec3 tint = mix(vec3(.95, .98, 1.06), vec3(1.05, 1., .93), h(seed, 4.7))*(1. + (h(seed, 9.13) - .5)*.12);
   float tk = far ? .15 : .7;
   A *= mix(vec3(1.), tint, tk); B *= mix(vec3(1.), tint, tk);
+  vec3 mid = (uPal[mt*4 + 1] + uPal[mt*4 + 2])*.5;
+  if (!far) { A = mix(A, mid, fk*uFlat); B = mix(B, mid, fk*uFlat); }
   vA = mix(A, fogs[b], fk); vB = mix(B, fogs[b2], fk);
   // (a planned stroke of the far off: hazed toward the horizon by its distance)
-  if (far && code >= 0) { float hz = min(.88, fract(a0.w)/.9*uHazeK + uHazeB); vA = mix(vA, uSkyLo, hz); vB = mix(vB, uSkyLo, hz); }
+  if (far && code >= 0) { float hz = min(.88, fract(a0.w)/.9*uHazeK + uHazeB); vA = mix(mix(vA, mid, hz*uFlat), uSkyLo, hz); vB = mix(mix(vB, mid, hz*uFlat), uSkyLo, hz); }
 }`;
 const FS = `#version 300 es
 precision highp float;
@@ -914,10 +922,9 @@ export class Painter {
     const p = gl.createProgram()!; gl.attachShader(p, sh(gl.VERTEX_SHADER, VS)); gl.attachShader(p, sh(gl.FRAGMENT_SHADER, FS)); gl.linkProgram(p);
     if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p) ?? 'link');
     this.prog = p;
-    for (const k of ['uSmear', 'uVP', 'uPrev', 'uOff', 'uEye', 'uSun', 'uPal', 'uFog', 'uK', 'uMinW', 'uStretch', 'uDens', 'uRes', 'uAtlas', 'uSkyLo', 'uSkyHi', 'uSkyPale', 'uCloud', 'uCloudLit', 'uCloudShade', 'uHazeK', 'uHazeB', 'uFogs', 'uFront', 'uGrow', 'uReveal']) this.u[k] = gl.getUniformLocation(p, k);
+    for (const k of ['uSmear', 'uVP', 'uPrev', 'uOff', 'uEye', 'uSun', 'uPal', 'uFog', 'uK', 'uMinW', 'uStretch', 'uDens', 'uRes', 'uAtlas', 'uSkyLo', 'uSkyHi', 'uSkyPale', 'uCloud', 'uCloudLit', 'uCloudShade', 'uHazeK', 'uHazeB', 'uFogs', 'uLit', 'uFlat', 'uThin', 'uFront', 'uGrow', 'uReveal']) this.u[k] = gl.getUniformLocation(p, k);
     gl.useProgram(p);
-    gl.uniform3fv(this.u.uPal, palette); gl.uniform3fv(this.u.uSun, new Float32Array(sun));
-    gl.uniform3fv(this.u.uSkyLo, SKY.lo); gl.uniform3fv(this.u.uSkyHi, SKY.hi); gl.uniform3fv(this.u.uSkyPale, SKY.pale); gl.uniform3fv(this.u.uCloudLit, SKY.cloudLit); gl.uniform3fv(this.u.uCloudShade, SKY.cloudShade); gl.uniform1f(this.u.uHazeK, SKY.haze); gl.uniform1f(this.u.uHazeB, SKY.hazeBase); gl.uniform3fv(this.u.uFogs, new Float32Array(SKY.fog.flat()));
+    this.pal = palette; this.sun0 = sun;
     // (the quad: a strip along the stroke, SEG pieces, so a bent stroke bends smoothly)
     const q: number[] = [];
     for (let i = 0; i <= SEG; i++) q.push(i / SEG, -1, i / SEG, 1);
@@ -928,6 +935,15 @@ export class Painter {
     gl.generateMipmap(gl.TEXTURE_2D);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  }
+  /** the palette (as floats) and the renderer's sun; the environment's uploaded each frame, so a mood can change it */
+  pal: Float32Array; private sun0: number[];
+  private env() {
+    const gl = this.gl;
+    gl.uniform3fv(this.u.uPal, this.pal); gl.uniform3fv(this.u.uSun, new Float32Array(SKY.sun.length ? SKY.sun : this.sun0));
+    gl.uniform3fv(this.u.uSkyLo, SKY.lo); gl.uniform3fv(this.u.uSkyHi, SKY.hi); gl.uniform3fv(this.u.uSkyPale, SKY.pale); gl.uniform3fv(this.u.uCloudLit, SKY.cloudLit); gl.uniform3fv(this.u.uCloudShade, SKY.cloudShade);
+    gl.uniform1f(this.u.uHazeK, SKY.haze); gl.uniform1f(this.u.uHazeB, SKY.hazeBase); gl.uniform3fv(this.u.uFogs, new Float32Array(SKY.fog.flat()));
+    gl.uniform1f(this.u.uLit, SKY.lit); gl.uniform1f(this.u.uFlat, SKY.flat); gl.uniform1f(this.u.uThin, SKY.thin);
   }
   make(data: Float32Array, dynamic = false) { return new Strokes(this.gl, this.quad, data, dynamic); }
   /** where the rider is: the front only ever goes on (put back at a checkpoint, what's laid stays laid) */
@@ -940,7 +956,7 @@ export class Painter {
   /** set up for a frame: the eye, its matrices (now and the last frame's), the canvas */
   begin(vp: Float32Array, prev: Float32Array, eye: number[], projY: number, w: number, h: number, dpr: number, smear: number[] = [0, 0, 0]) {
     const gl = this.gl;
-    gl.useProgram(this.prog);
+    gl.useProgram(this.prog); this.env();
     gl.uniform3f(this.u.uSmear, smear[0] * this.stretch, smear[1] * this.stretch, smear[2] * this.stretch);
     gl.uniformMatrix4fv(this.u.uVP, false, vp); gl.uniformMatrix4fv(this.u.uPrev, false, prev);
     gl.uniform3fv(this.u.uEye, new Float32Array(eye)); gl.uniform1f(this.u.uK, projY); gl.uniform2f(this.u.uRes, w, h);
