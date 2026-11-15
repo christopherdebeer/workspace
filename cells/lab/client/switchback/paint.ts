@@ -550,6 +550,21 @@ export function fallStrokes(c: Course, s0: number, s1: number, t: number): Float
       const v = 9.8 * tau, env = Math.min(1, u * 7) * Math.min(1, (1 - u) * 9);
       put(p, T, (1.3 + 0.28 * v) * env * (0.8 + R() * 0.4), n, sh.w * (0.8 + R() * 0.4) * (0.7 + 0.3 * env), seed, stamp, sh.mt, band);
     }
+    // (the runnel feeding it, down the wall's face from its top to the lip: streaks sliding down it, so the fall comes from
+    // somewhere)
+    {
+      const ax = Math.sin(f.heading), az = Math.cos(f.heading);
+      for (let j = 0; j < f.feed.length - 1; j++) {
+        const A = f.feed[j], B = f.feed[j + 1], L = Math.hypot(B[0] - A[0], B[1] - A[1], B[2] - A[2]); if (L < 0.5) continue;
+        const T = [(B[0] - A[0]) / L, (B[1] - A[1]) / L, (B[2] - A[2]) / L], n = norm([-T[0] * T[1], 1 - T[1] * T[1], -T[2] * T[1]]);
+        const count = Math.ceil(L / 1.6) * 2;
+        for (let k = 0; k < count; k++) {
+          const u = (R() + t * (0.5 + R() * 0.4) * 6 / L) % 1, side = (R() * 2 - 1) * (0.5 + 0.5 * j / f.feed.length);
+          const p = [A[0] + (B[0] - A[0]) * u + ax * side, A[1] + (B[1] - A[1]) * u, A[2] + (B[2] - A[2]) * u + az * side];
+          put(p, T, Math.min(L * 0.5, 1.4 + R() * 1.2), n, 0.45 + R() * 0.25, R(), [0, 1, 7][Math.floor(R() * 3)], k % 4 ? M.WHITE : M.FARSNOW, k % 3 ? 0 : 1);
+        }
+      }
+    }
     // (the lip: a few strokes across it, glassy)
     for (let k = 0; k < 6; k++) {
       const side = -0.9 + (1.8 * (k + R() * 0.5)) / 6, p = f.P(0.03, side, 0.4), a = f.P(0.03, side + 0.3, 0.4);

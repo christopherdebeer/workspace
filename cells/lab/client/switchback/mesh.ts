@@ -214,18 +214,22 @@ function cutPoint(c: Course, i: number, k: number, cut = true) {
 /** the waterfalls between stations s0 and s1: each its station, its fall's time T (s), the point on its sheet at a time
  * tau into the fall and a place across it (side, -1 to 1; `out` metres further out from the wall), and its foot */
 export function fallPaths(c: Course, s0: number, s1: number) {
-  const out: { i: number; T: number; P: (tau: number, side: number, outM?: number) => number[]; footY: number; fu: number; lipS: number }[] = [];
+  const out: { i: number; T: number; P: (tau: number, side: number, outM?: number) => number[]; footY: number; fu: number; lipS: number; feed: number[][]; heading: number }[] = [];
   for (let i = Math.max(1, Math.floor(s0)); i < s1; i++) {
     const st = c.at(i), nx = c.at(i + 1);
     if (st.feature !== 'gap' || !st.fall || (st.gapT ?? 1) > 0.5 || (nx.feature === 'gap' && (nx.gapT ?? 1) <= 0.5)) continue;
     // (the lip at the gorge's rim on the wall side, where the stream comes off the mountain's face; below it the gorge has
     // been cut away, so the water falls clear)
-    const lip = cutPoint(c, i, WALL.length - 3, false), foot = cutPoint(c, i, WALL.length), drop = Math.max(4, lip.y - foot.y);
+    // (the lip on the wall's face, in the runnel there (the wall above a fall isn't cut deep: ground.ts notch), the water
+    // thrown clear of it in an arc into the gorge, widening as it goes; fed by the runnel from the wall's top)
+    const lip = cutPoint(c, i, WALL.length - 3, true), foot = cutPoint(c, i, WALL.length), drop = Math.max(4, lip.y - foot.y);
     const T = Math.sqrt(drop / 4.9), P = (tau: number, side: number, outM = 0) => {
-      const a = (2.2 + tau * 1.1) * side, u = lip.u + 0.9 + 3.4 * tau + outM, p = c.point(lip.s + a, u);
-      return [p.x, lip.y + 0.4 - 4.9 * tau * tau, p.z];
+      const a = (1.6 + tau * 1.1) * side, u = lip.u + 0.6 + 3.4 * tau + outM, p = c.point(lip.s + a, u);
+      return [p.x, lip.y + 0.5 - 4.9 * tau * tau, p.z];
     };
-    out.push({ i, T, P, footY: foot.y, fu: lip.u + 0.9 + 3.4 * T, lipS: lip.s });
+    const feed: number[][] = [];
+    for (let k = 0; k <= WALL.length - 3; k++) { const q = cutPoint(c, i, k, true), p = c.point(q.s, q.u); feed.push([p.x, q.y + 0.4, p.z]); }
+    out.push({ i, T, P, footY: foot.y, fu: lip.u + 0.6 + 3.4 * T, lipS: lip.s, feed, heading: c.at(i).heading });
   }
   return out;
 }
