@@ -90,9 +90,9 @@ function set(e: ReturnType<typeof full>) {
 /** the cycle (`mood=cycle`): the day, then each mood in turn and back, each held a while and blended into the next, by
  * game time t (s); `hold` and `blend` seconds */
 export const CYCLE = ['day', 'gold', 'mist', 'autumn', 'moon'];
-export function cycleAt(t: number, hold = 8, blend = 5) {
-  const per = hold + blend, n = CYCLE.length, k = Math.floor(t / per) % n, u = t - Math.floor(t / per) * per;
-  const a = full(CYCLE[k]), b = full(CYCLE[(k + 1) % n]), f = u < hold ? 0 : (u - hold) / blend, s = f * f * (3 - 2 * f);
+/** a blend of two moods (a into b by s, 0 to 1), set */
+function blendSet(an: string, bn: string, s: number) {
+  const a = full(an), b = full(bn);
   const sunA = a.sky.sun.length ? a.sky.sun : SUN0, sunB = b.sky.sun.length ? b.sky.sun : SUN0, sun = mixArr(sunA, sunB, s), sl = Math.hypot(sun[0], sun[1], sun[2]) || 1;
   set({
     pal: a.pal.map((band, i) => band.map((h, j) => mixHex(h, b.pal[i][j] ?? h, s))),
@@ -101,5 +101,18 @@ export function cycleAt(t: number, hold = 8, blend = 5) {
       sun: sun.map((v) => v / sl), lit: a.sky.lit + (b.sky.lit - a.sky.lit) * s, flat: a.sky.flat + (b.sky.flat - a.sky.flat) * s, thin: a.sky.thin + (b.sky.thin - a.sky.thin) * s },
     fx: Object.fromEntries((Object.keys(FX) as (keyof typeof FX)[]).map((k) => [k, a.fx[k].map((h, j) => mixHex(h, b.fx[k][j % b.fx[k].length], s))])) as Record<keyof typeof FX, string[]>,
   });
+}
+export function cycleAt(t: number, hold = 8, blend = 5) {
+  const per = hold + blend, n = CYCLE.length, k = Math.floor(t / per) % n, u = t - Math.floor(t / per) * per;
+  const f = u < hold ? 0 : (u - hold) / blend, s = f * f * (3 - 2 * f);
+  blendSet(CYCLE[k], CYCLE[(k + 1) % n], s);
   return f > 0 ? `${CYCLE[k]} → ${CYCLE[(k + 1) % n]}` : CYCLE[k];
+}
+/** the light down the course (`mood=course`): between its keys (station, mood) by where you are */
+export function lightAlong(s: number, keys: [number, string][]) {
+  let k = 0; while (k < keys.length - 1 && keys[k + 1][0] <= s) k++;
+  if (k >= keys.length - 1) { blendSet(keys[k][1], keys[k][1], 0); return keys[k][1]; }
+  const [s0, a] = keys[k], [s1, b] = keys[k + 1], f = Math.max(0, Math.min(1, (s - s0) / Math.max(1, s1 - s0))), e = f * f * (3 - 2 * f);
+  blendSet(a, b, e);
+  return a === b ? a : f < 0.5 ? a : b;
 }

@@ -33,7 +33,7 @@ void main() { vec3 w = aP.xyz + uOff; vW = w - uEye; vM = int(aP.w); vT = fract(
   gl_Position.z += uZj * fract(float(gl_VertexID / 3) * .618) * gl_Position.w; }`;
 const FS = `#version 300 es
 precision highp float;
-in vec3 vW; flat in int vM; flat in float vT; uniform vec3 uPal[100]; uniform vec3 uEye; uniform vec3 uSun; uniform float uFog; uniform float uNoThings; out vec4 o;
+in vec3 vW; flat in int vM; flat in float vT; uniform vec3 uPal[104]; uniform vec3 uEye; uniform vec3 uSun; uniform float uFog; uniform float uNoThings; out vec4 o;
 void main() {
   // (painted, the things standing on the ground (the fence, the poles, the pines, a kicker's boards) claim no depth and no
   // stencil: what's behind them is painted, and their strokes over it, so a gap between their strokes shows that, not paper)

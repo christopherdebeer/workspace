@@ -9,9 +9,10 @@
  * that keeps its distance from the eye.
  */
 import { Course, JUMPS, hash } from './course';
+import { REGION, grassiness } from './regions';
 import { STEP, WALL, section, character, groundAt, notch } from './ground';
 
-export const M = { SNOW: 0, TRACK: 1, ROCK: 2, ORANGE: 3, BLACK: 4, WHITE: 5, MTN: 6, MTNSNOW: 7, UMBER: 8, SHADOW: 9, RUT: 10, NAVY: 11, FAR: 12, FARSNOW: 13, RIDGE: 14, FOREST: 15, VALLEY: 16, CUT_ORANGE: 17, CUT_BLACK: 18, CREAM: 19, GOUGE: 20, FIELD: 21, JACKET: 22, DENIM: 23, TYRE: 24 } as const;
+export const M = { SNOW: 0, TRACK: 1, ROCK: 2, ORANGE: 3, BLACK: 4, WHITE: 5, MTN: 6, MTNSNOW: 7, UMBER: 8, SHADOW: 9, RUT: 10, NAVY: 11, FAR: 12, FARSNOW: 13, RIDGE: 14, FOREST: 15, VALLEY: 16, CUT_ORANGE: 17, CUT_BLACK: 18, CREAM: 19, GOUGE: 20, FIELD: 21, JACKET: 22, DENIM: 23, TYRE: 24, GRASS: 25 } as const;
 /** each material's four bands, lit to unlit (the reference's own colours) */
 export const PALETTE: string[][] = [
   ['#f1ece8', '#d9d0ca', '#a399a2', '#6f6c93'], // snow
@@ -43,6 +44,7 @@ export const PALETTE: string[][] = [
   ['#ff9d52', '#f3712a', '#c7521b', '#8a3512'], // jacket
   ['#7381b0', '#45527f', '#2a335c', '#171d3b'], // denim
   ['#62646f', '#393a43', '#222329', '#131418'], // tyre and machine
+  ['#d8c47a', '#b3a45e', '#86804c', '#5c5c3c'], // grass, below the snowline (`mood=course`)
 ];
 
 /** the ruts lighter than the road instead (`ruts=light`): the worn line polished, catching the light like a flash */
@@ -67,6 +69,8 @@ export class Mesh {
   slope(a: number[], b: number[], c: number[], flat: number, steep = M.ROCK, k = 0.72) {
     const ux = b[0] - a[0], uy = b[1] - a[1], uz = b[2] - a[2], vx = c[0] - a[0], vy = c[1] - a[1], vz = c[2] - a[2];
     const nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
+    // (below the snowline (`mood=course`), the snow's flats are grass, patchily round the line)
+    if (flat === M.SNOW && REGION.on) { const g = grassiness((a[0] + b[0] + c[0]) / 3, (a[1] + b[1] + c[1]) / 3, (a[2] + b[2] + c[2]) / 3); if (g > 0 && hash(Math.round(a[0] * 3), Math.round(a[2] * 3), 73) < g) flat = M.GRASS; }
     this.tri(a, b, c, Math.abs(ny) / Math.hypot(nx, ny, nz) < k ? steep : flat);
   }
   /** a box from its centre and half-sizes in a frame (origin o, axes x, y, z) */
@@ -345,7 +349,7 @@ function dress(c: Course, m: Mesh, i: number, sec: { u: number; y: number; ds: n
   if (st.flag) m.box(at(-half - 0.9), X, Y, Z, [0, 3, 0], [0.06, 3, 0.06], M.BLACK);
   // (pines down the drop, a few up the wall's top; rocks bedded in the snow)
   const r = hash(c.seed, i, 101);
-  if (i % 2 === 0 && r < 0.26) {
+  if (i % 2 === 0 && r < 0.26 + 0.24 * grassiness(c.point(i, 0).x, st.y, c.point(i, 0).z)) {
     const du = 6 + hash(c.seed, i, 102) * 70, u = half + du, y = groundAt(sec, u);
     const p = c.point(i, u);
     m.pine(p.x, y - 0.3, p.z, 6 + hash(c.seed, i, 103) * 9 * (du > 30 ? 1.4 : 1), c.seed * 9973 + i);

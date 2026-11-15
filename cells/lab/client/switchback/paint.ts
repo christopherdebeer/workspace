@@ -21,6 +21,7 @@
 import type { Course } from './course';
 import { M, rangeProfiles, foothillProfiles, riverLine, fallPaths, flagPaths } from './mesh';
 import type { RiderPart } from './mesh';
+import { REGION, grassiness } from './regions';
 import { ground } from './ground';
 import { lines, plain, trackY } from './ruts';
 
@@ -136,7 +137,7 @@ export const SKY = { lo: [0.55, 0.67, 0.96], hi: [0.05, 0.2, 0.8], pale: [0.62, 
   // and thins its small strokes, the survivors broader, so the big shapes outlast the detail (thin))
   sun: [] as number[], lit: 0, flat: 0, thin: 0 };
 export const NEVER = -1e9;
-const ROAD = new Set<number>([M.TRACK, M.RUT]), GROUND = new Set<number>([M.SNOW, M.SHADOW]), ROCKY = new Set<number>([M.ROCK, M.UMBER, M.GOUGE]);
+const ROAD = new Set<number>([M.TRACK, M.RUT]), GROUND = new Set<number>([M.SNOW, M.SHADOW, M.GRASS]), ROCKY = new Set<number>([M.ROCK, M.UMBER, M.GOUGE]);
 const RANGE = new Set<number>([M.MTN, M.MTNSNOW, M.FAR, M.FARSNOW, M.RIDGE]);
 const BACKDROP = new Set<number>([M.MTN, M.MTNSNOW, M.FAR, M.FARSNOW, M.RIDGE, M.FOREST, M.VALLEY]);
 const hash2 = (a: number, b: number) => { let h = Math.imul(a | 0, 0x27d4eb2d) ^ Math.imul(b | 0, 0x165667b1); h = Math.imul(h ^ (h >>> 15), 0x85ebca6b); return (h ^ (h >>> 13)) >>> 0; };
@@ -797,10 +798,21 @@ export function skyStrokes(seed: number): Float32Array {
 const SEG = 8;
 const VS = `#version 300 es
 layout(location=0) in vec2 aQ; layout(location=1) in vec4 a0; layout(location=2) in vec4 a1; layout(location=3) in vec4 a2; layout(location=4) in vec4 a3; layout(location=5) in vec4 a4;
-uniform mat4 uVP, uPrev; uniform vec3 uOff, uEye, uSun; uniform vec3 uPal[100]; uniform float uFog, uK, uMinW, uStretch, uDens, uGrow, uReveal; uniform vec2 uRes, uFront;
-uniform vec3 uSkyLo, uSkyHi, uSkyPale, uSmear, uCloudLit, uCloudShade; uniform float uCloud, uHazeK, uHazeB, uLit, uFlat, uThin; uniform vec3 uFogs[4];
+uniform mat4 uVP, uPrev; uniform vec3 uOff, uEye, uSun; uniform vec3 uPal[104]; uniform float uFog, uK, uMinW, uStretch, uDens, uGrow, uReveal; uniform vec2 uRes, uFront;
+uniform vec3 uSkyLo, uSkyHi, uSkyPale, uSmear, uCloudLit, uCloudShade; uniform float uCloud, uHazeK, uHazeB, uLit, uFlat, uThin; uniform vec3 uFogs[4]; uniform vec4 uBelt; uniform vec3 uBeltCol;
 out vec2 vUv; out vec3 vA; out vec3 vB; flat out float vStamp; out float vFresh; flat out float vTex;
 float h(float s, float k){ return fract(sin(s*k)*43758.5453); }
+// (the cloud belt (\`mood=course\`): how much cloud lies along the line from the eye to a point, by the share of that line
+// inside the belt's heights: above it, what's below is under a sea of cloud; inside it the air closes in; below it, a
+// ceiling. uBelt: its middle's height, half its depth, the distance that hides, on)
+vec3 belt(vec3 c, vec3 w, float dist){
+  if (uBelt.w < .5) return c;
+  float yb = uBelt.x - uBelt.y, yt = uBelt.x + uBelt.y, lo = min(uEye.y, w.y), hi = max(uEye.y, w.y), dy = hi - lo;
+  float ov = max(0., min(hi, yt) - max(lo, yb)), path = dy > 1. ? ov/dy*dist : (uEye.y > yb && uEye.y < yt ? dist : 0.);
+  float k = 1. - exp(-path/uBelt.z);
+  vec3 col = uBeltCol*mix(.9, 1.06, clamp((w.y - yb)/(2.*uBelt.y), 0., 1.));
+  return mix(c, col, k);
+}
 void main(){
   vec3 w = a0.xyz + uOff, n = a2.xyz, T = normalize(a1.xyz); float seed = a3.x, kind = a3.w; bool sky = kind > .5 && kind < 2.5, both = kind > 2.5;
   // (the clouds drift round the sky, the wind's way)
@@ -860,7 +872,7 @@ void main(){
     vec3 col;
     if (a0.w > 1.9) col = mix(uCloudLit, uCloudShade, clamp(a0.w - 2., 0., 1.));
     else { col = mix(uSkyLo, uSkyHi, smoothstep(0., .8, a0.w)); if (kind > 1.5) col = mix(col, uSkyPale, .35); }
-    vA = col*(.96 + h(seed, 3.7)*.08); vB = col*(1.04 + h(seed, 5.1)*.08);
+    vA = belt(col*(.96 + h(seed, 3.7)*.08), w, dist); vB = belt(col*(1.04 + h(seed, 5.1)*.08), w, dist);
     return;
   }
   // (its colour: the face's band, as the facets pick it, a little jittered stroke by stroke; and the band next to it)
@@ -891,6 +903,7 @@ void main(){
   vA = mix(A, fogs[b], fk); vB = mix(B, fogs[b2], fk);
   // (a planned stroke of the far off: hazed toward the horizon by its distance)
   if (far && code >= 0) { float hz = min(.88, fract(a0.w)/.9*uHazeK + uHazeB); vA = mix(mix(vA, mid, hz*uFlat), uSkyLo, hz); vB = mix(mix(vB, mid, hz*uFlat), uSkyLo, hz); }
+  vA = belt(vA, w, dist); vB = belt(vB, w, dist);
 }`;
 const FS = `#version 300 es
 precision highp float;
@@ -937,7 +950,7 @@ export class Painter {
     const p = gl.createProgram()!; gl.attachShader(p, sh(gl.VERTEX_SHADER, VS)); gl.attachShader(p, sh(gl.FRAGMENT_SHADER, FS)); gl.linkProgram(p);
     if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p) ?? 'link');
     this.prog = p;
-    for (const k of ['uSmear', 'uVP', 'uPrev', 'uOff', 'uEye', 'uSun', 'uPal', 'uFog', 'uK', 'uMinW', 'uStretch', 'uDens', 'uRes', 'uAtlas', 'uSkyLo', 'uSkyHi', 'uSkyPale', 'uCloud', 'uCloudLit', 'uCloudShade', 'uHazeK', 'uHazeB', 'uFogs', 'uLit', 'uFlat', 'uThin', 'uFront', 'uGrow', 'uReveal']) this.u[k] = gl.getUniformLocation(p, k);
+    for (const k of ['uSmear', 'uVP', 'uPrev', 'uOff', 'uEye', 'uSun', 'uPal', 'uFog', 'uK', 'uMinW', 'uStretch', 'uDens', 'uRes', 'uAtlas', 'uSkyLo', 'uSkyHi', 'uSkyPale', 'uCloud', 'uCloudLit', 'uCloudShade', 'uHazeK', 'uHazeB', 'uFogs', 'uLit', 'uFlat', 'uThin', 'uBelt', 'uBeltCol', 'uFront', 'uGrow', 'uReveal']) this.u[k] = gl.getUniformLocation(p, k);
     gl.useProgram(p);
     this.pal = palette; this.sun0 = sun;
     // (the quad: a strip along the stroke, SEG pieces, so a bent stroke bends smoothly)
@@ -959,6 +972,7 @@ export class Painter {
     gl.uniform3fv(this.u.uSkyLo, SKY.lo); gl.uniform3fv(this.u.uSkyHi, SKY.hi); gl.uniform3fv(this.u.uSkyPale, SKY.pale); gl.uniform3fv(this.u.uCloudLit, SKY.cloudLit); gl.uniform3fv(this.u.uCloudShade, SKY.cloudShade);
     gl.uniform1f(this.u.uHazeK, SKY.haze); gl.uniform1f(this.u.uHazeB, SKY.hazeBase); gl.uniform3fv(this.u.uFogs, new Float32Array(SKY.fog.flat()));
     gl.uniform1f(this.u.uLit, SKY.lit); gl.uniform1f(this.u.uFlat, SKY.flat); gl.uniform1f(this.u.uThin, SKY.thin);
+    gl.uniform4f(this.u.uBelt, REGION.beltY, REGION.half, 70, REGION.on ? 1 : 0); gl.uniform3f(this.u.uBeltCol, 0.84, 0.87, 0.88);
   }
   make(data: Float32Array, dynamic = false) { return new Strokes(this.gl, this.quad, data, dynamic); }
   /** where the rider is: the front only ever goes on (put back at a checkpoint, what's laid stays laid) */
@@ -1092,7 +1106,8 @@ export function courseStrokes(c: Course, s0: number, s1: number): Float32Array {
   // way, row on row from the edge in to the reach, their inner ends ragged; no dark edge to it)
   const reach = (s: number, side: number) => {
     const k = c.seed * 3.1 + side * 17.7, v = 0.5 + 0.32 * Math.sin(s / 23 + k) + 0.22 * Math.sin(s / 9.5 + k * 1.7) + 0.14 * Math.sin(s / 4.1 + k * 0.6);
-    return Math.max(0, Math.min(1, (v - 0.32) / 0.68)) * 0.72;
+    const p = c.point(s, 0), g = grassiness(p.x, p.y ?? 0, p.z);
+    return Math.max(0, Math.min(1, (v - 0.32) / 0.68)) * 0.72 * (1 - g * 0.85);
   };
   for (let s = s0; s < s1; s += 1.1 * (0.8 + R() * 0.4)) {
     if (!open(s)) continue;
