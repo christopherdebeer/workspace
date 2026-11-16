@@ -667,6 +667,15 @@ export function valleyStrokes(seed: number): Float32Array {
         plan(list, x, F + 1, z, M.FIELD, haze, [Math.cos(a), 0, -Math.sin(a)], sz * 2, up, sz * 0.6, R0(), [11, 7][Math.floor(R0() * 2)], 0, R0() < 0.5 ? 0 : 1);
       }
     }
+    const rvl = riverLine(seed);
+    // (the river's banks: a low cut either side of it, its walls darker, a lit lip)
+    for (let k = 0; k < rvl.length - 1; k++) {
+      const p = rvl[k], q2 = rvl[k + 1], dx = q2[0] - p[0], dz = q2[2] - p[2], L = Math.hypot(dx, dz), nx = -dz / L, nz = dx / L, d = Math.hypot(p[0], p[2]);
+      for (const sd of [-1, 1]) for (let j = 0; j < 4; j++) {
+        const t = (j + R0()) / 4, x = p[0] + dx * t + nx * sd * 30, z = p[2] + dz * t + nz * sd * 30;
+        plan(list, x, F + 6, z, M.UMBER, Math.min(0.5, d / 5500), [dx / L, 0, dz / L], L * 0.4, [nx * -sd, 0.4, nz * -sd], 9, R0(), 0, 0, j === 0 ? 1 : 3);
+      }
+    }
     list.sort((p, q) => Math.hypot(q[0], q[2]) - Math.hypot(p[0], p[2]));
   }
   const rv = riverLine(seed);
