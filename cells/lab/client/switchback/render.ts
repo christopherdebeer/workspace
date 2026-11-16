@@ -208,12 +208,12 @@ export class Renderer {
     this.stream(r.s, this.painter && this.chunks.size === 0 ? 99 : budget);
     // (the middle distance's hills, a stretch at a time, from a little behind to well ahead; one new stretch a frame)
     // (with the course's regions, the valley as real ground, a stretch at a time, from a little behind to well ahead)
-    if (this.painter && REGION.on && VALLEY_TERRAIN) {
+    if (this.painter && !COMPOSED && REGION.on && VALLEY_TERRAIN) {
       const lo = Math.floor((r.s - 400) / VSPAN), hi = Math.floor((r.s + 2600) / VSPAN);
       for (const [k, v] of this.vchunks) if (k < lo || k > hi) { v.buf.free(); v.strokes.free(); this.vchunks.delete(k); }
       for (let k = Math.max(0, lo); k <= hi; k++) if (!this.vchunks.has(k)) { const v = valleyChunk(this.course, k); this.vchunks.set(k, { buf: new Buf(this.gl, v.verts), strokes: this.painter.make(v.strokes) }); if (budget < 99) break; }
     }
-    if (this.painter && !(REGION.on && VALLEY_TERRAIN)) {
+    if (this.painter && !COMPOSED && !(REGION.on && VALLEY_TERRAIN)) {
       const lo = Math.floor((r.s - 400) / MID_SPAN), hi = Math.floor((r.s + (REGION.on ? 2600 : 1600)) / MID_SPAN);
       for (const [k, b] of this.mids) if (k < lo || k > hi) { b.free(); this.mids.delete(k); }
       for (let k = Math.max(0, lo); k <= hi; k++) if (!this.mids.has(k)) { this.mids.set(k, this.painter.make(REGION.on ? midValleyStrokes(this.course, k) : midHillStrokes(this.course, k))); if (this.mids.size > 2 && budget < 99) break; }
