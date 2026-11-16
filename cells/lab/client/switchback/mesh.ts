@@ -12,7 +12,7 @@ import { Course, JUMPS, hash } from './course';
 import { REGION, grassiness } from './regions';
 import { STEP, WALL, section, character, groundAt, notch } from './ground';
 
-export const M = { SNOW: 0, TRACK: 1, ROCK: 2, ORANGE: 3, BLACK: 4, WHITE: 5, MTN: 6, MTNSNOW: 7, UMBER: 8, SHADOW: 9, RUT: 10, NAVY: 11, FAR: 12, FARSNOW: 13, RIDGE: 14, FOREST: 15, VALLEY: 16, CUT_ORANGE: 17, CUT_BLACK: 18, CREAM: 19, GOUGE: 20, FIELD: 21, JACKET: 22, DENIM: 23, TYRE: 24, GRASS: 25 } as const;
+export const M = { SNOW: 0, TRACK: 1, ROCK: 2, ORANGE: 3, BLACK: 4, WHITE: 5, MTN: 6, MTNSNOW: 7, UMBER: 8, SHADOW: 9, RUT: 10, NAVY: 11, FAR: 12, FARSNOW: 13, RIDGE: 14, FOREST: 15, VALLEY: 16, CUT_ORANGE: 17, CUT_BLACK: 18, CREAM: 19, GOUGE: 20, FIELD: 21, JACKET: 22, DENIM: 23, TYRE: 24, GRASS: 25, MASS_FAR: 26, MASS_BODY: 27, MASS_SHADE: 28, MASS_SNOW: 29, MASS_SNOWSH: 30, MASS_RIDGE: 31, MASS_RIDGESH: 32, MASS_FLOOR: 33, MASS_RIVER: 34 } as const;
 /** each material's four bands, lit to unlit (the reference's own colours) */
 export const PALETTE: string[][] = [
   ['#f1ece8', '#d9d0ca', '#a399a2', '#6f6c93'], // snow
@@ -45,6 +45,8 @@ export const PALETTE: string[][] = [
   ['#7381b0', '#45527f', '#2a335c', '#171d3b'], // denim
   ['#62646f', '#393a43', '#222329', '#131418'], // tyre and machine
   ['#d8c47a', '#b3a45e', '#86804c', '#5c5c3c'], // grass, below the snowline (`mood=course`)
+  // (the composed backdrop's flat masses (`backdrop=mass|painted`): each one colour, all four bands alike)
+  ...['#7a97ee', '#3a63e6', '#1a3ab4', '#f4ece2', '#7f95e4', '#2b48c4', '#162f98', '#4a6ee6', '#dfe6f4'].map((c) => [c, c, c, c]),
 ];
 
 /** the ruts lighter than the road instead (`ruts=light`): the worn line polished, catching the light like a flash */

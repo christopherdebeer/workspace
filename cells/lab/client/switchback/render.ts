@@ -16,6 +16,9 @@ import { CHUNK, PALETTE, buildChunk, buildFalls, buildFlags, buildRanges, buildR
 import type { RiderPart } from './mesh';
 import { REGION } from './regions';
 import { valleyChunk, VSPAN } from './valley';
+import { buildMasses } from './backdrop';
+// (`backdrop=mass|painted`: the composed backdrop experiment (backdrop.ts) in place of the ranges, valley and middle distance)
+const BACKDROP = typeof location !== 'undefined' ? new URLSearchParams(location.search).get('backdrop') : null, COMPOSED = BACKDROP === 'mass' || BACKDROP === 'painted';
 // (`valley=terrain`: the valley as real ground (valley.ts), an unfinished experiment, off by default)
 const VALLEY_TERRAIN = typeof location !== 'undefined' && new URLSearchParams(location.search).get('valley') === 'terrain';
 import type { Rider, Event } from './sim';
@@ -37,7 +40,7 @@ void main() { vec3 w = aP.xyz + uOff; vW = w - uEye; vM = int(aP.w); vT = fract(
   gl_Position.z += uZj * fract(float(gl_VertexID / 3) * .618) * gl_Position.w; }`;
 const FS = `#version 300 es
 precision highp float;
-in vec3 vW; flat in int vM; flat in float vT; uniform vec3 uPal[104]; uniform vec3 uEye; uniform vec3 uSun; uniform float uFog; uniform float uNoThings; out vec4 o;
+in vec3 vW; flat in int vM; flat in float vT; uniform vec3 uPal[140]; uniform vec3 uEye; uniform vec3 uSun; uniform float uFog; uniform float uNoThings; out vec4 o;
 void main() {
   // (painted, the things standing on the ground (the fence, the poles, the pines, a kicker's boards) claim no depth and no
   // stencil: what's behind them is painted, and their strokes over it, so a gap between their strokes shows that, not paper)
@@ -105,6 +108,7 @@ export class Renderer {
   paint = false; painter: Painter | null = null; stretchWanted = 1; leadWanted: [number, number] | null = null;
   /** only the backdrop drawn (`bg=`) */
   bgOnly = false;
+  private masses: { buf: Buf; strokes: Strokes | null } | null = null;
   private mids = new Map<number, Strokes>(); private vchunks = new Map<number, { buf: Buf; strokes: Strokes }>(); private valleyOn = false;
   private floor: Strokes | null = null; private sea: Strokes | null = null; private backLayers: { s: Strokes; f: number; cap: number }[] = []; private eye0: number[] | null = null;
   /** the backdrop's parallax starts again from here (the start, or a respawn: the eye's cut there anyway) */
@@ -274,6 +278,13 @@ export class Renderer {
       // valley, by depth, so its floor doesn't paint over the ranges' feet it lies behind)
       // (by order, not depth: the valley's floor first, then the layers farthest first, each moved by its own parallax;
       // the floor rising toward you as you come down the mountain)
+      if (COMPOSED) {
+        // (the composed backdrop: its flat masses by order (the facets' own program, every band one colour), then its sparse marks)
+        if (!this.masses) { const b = buildMasses(this.course, BACKDROP === 'painted'); this.masses = { buf: new Buf(gl, b.verts), strokes: b.strokes.length ? pt.make(b.strokes) : null }; }
+        gl.disable(gl.DEPTH_TEST); gl.uniform1f(this.u.uFog, 0); gl.uniform3f(this.u.uOff, off[0], off[1], off[2]); this.masses.buf.draw();
+        if (this.masses.strokes) { paintBegin(); gl.disable(gl.DEPTH_TEST); pt.draw(this.masses.strokes, off, false); pt.end(); gl.useProgram(this.prog); }
+        gl.enable(gl.DEPTH_TEST);
+      } else {
       paintBegin(); gl.disable(gl.DEPTH_TEST);
       if (this.floor) pt.draw(this.floor, this.layerOff(view.eye, 0.35, 190, true), false);
       for (const l of this.backLayers) pt.draw(l.s, this.layerOff(view.eye, l.f, l.cap, false), false);
@@ -285,6 +296,7 @@ export class Renderer {
       for (const k of [...this.mids.keys()].sort((a, b) => b - a)) pt.draw(this.mids.get(k)!, [0, 0, 0], false);
       pt.setSink(false);
       gl.enable(gl.DEPTH_TEST); pt.end(); gl.useProgram(this.prog);
+      }
       gl.disable(gl.STENCIL_TEST);
       // (what's near: its facets only in the depth; then its strokes, laid in the world on them and lifted a little toward
       // the eye, tested against that depth pixel by pixel, far chunks first)
