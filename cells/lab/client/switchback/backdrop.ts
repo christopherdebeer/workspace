@@ -70,22 +70,44 @@ export function buildMasses(c: Course, painted: boolean) {
   band(R1 - 1, rpA, r0 + 0.85, ridgeTop, (a) => Math.max(rspur(a), F - 40), M.MASS_RIDGESH, 0.003);
 
   if (painted) {
-    // (sparse brushwork, only where it explains something; strokes in the masses' own colours, planned, far)
+    // (the same shapes made by broad gestures: each plane a handful of wide loaded strokes pulled down its fall from the
+    // crest, in its own colour, so the plane reads as brushed and stays quiet; the edges not all alike: on the lit flank
+    // the strokes start a little above the crest and drag broken into the sky, on the shadow side they start under it so
+    // the body's own edge stays decisive, and toward the ridge the body's strokes run on into the ridge's colour)
     let seed = 7; const R = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647; };
     const put = (Rr: number, a: number, y: number, T: number[], L: number, W: number, mt: number, band: number, stamp = 0) => {
       const p = at(Rr, a, y), n = [-Math.sin(a), 0.3, -Math.cos(a)];
-      strokes.push(p[0], p[1], p[2], mt + 0.5, T[0], T[1], T[2], L, n[0], n[1], n[2], W, R(), stamp, (R() - 0.5) * 0.15, 0, NEVER, 1 + band, 0, 1);
+      // (no haze: the material's fraction is the far off's haze)
+      strokes.push(p[0], p[1], p[2], mt, T[0], T[1], T[2], L, n[0], n[1], n[2], W, R(), stamp, (R() - 0.5) * 0.12, 0, NEVER, 1 + band, 0, 1);
     };
-    const round = (a: number, dy: number, dr: number) => { const t = [Math.cos(a) * dr, dy, -Math.sin(a) * dr], l = Math.hypot(t[0], t[1], t[2]); return [t[0] / l, t[1] / l, t[2] / l]; };
-    // (along the crests: breaking the edge, in the lit body or the snow)
-    for (const [Rr, A0, A1, top, mt] of [[M0.R - 6, M0.a0 + 0.02, M0.a1 - 0.02, M0.top, M.MTNSNOW], [R1 - 4, r0 - 0.1, r0 + 0.8, ridgeTop, M.RIDGE]] as [number, number, number, (a: number) => number, number][])
-      for (let a = A0; a < A1; a += 0.035 + R() * 0.03) { const y = top(a), dy = (top(a + 0.01) - y) / (0.01 * Rr); put(Rr, a, y + 4, round(a, dy, 1), 110 + R() * 80, 20, mt, a > sumA && mt === M.MTNSNOW ? 2 : 0, [0, 7][Math.floor(R() * 2)]); }
-    // (the snowline: pulls down the gullies from the snow into the body)
-    for (let a = M0.a0 + 0.05; a < M0.a1 - 0.05; a += 0.05 + R() * 0.04) { const y = Math.max(snowline(a), M0.top(a) - 300); if (y >= M0.top(a) - 20) continue; put(M0.R - 7, a, y - 40, [0, -1, 0], 110 + R() * 90, 22, M.MTNSNOW, a > sumA && y > spur(a) ? 2 : 0, 1); }
-    // (the shadow's ridge: the spur from the summit, in the shade colour)
-    for (let t = 0.05; t < 0.95; t += 0.09) { const a = sumA + 0.42 * t, y = spur(a); put(M0.R - 8, a, y, round(a, -(sumY - F) / (0.42 * M0.R), 1), 120, 18, M.MTN, 2, 0); }
-    // (a few long pulls down the big planes)
-    for (let i = 0; i < 9; i++) { const a = M0.a0 + 0.1 + R() * 0.8, y = F + 120 + R() * (M0.top(a) - F - 250); if (y > M0.top(a) - 200) continue; put(M0.R - 9, a, y, round(a, -1.4, a > sumA ? 1 : -1), 260 + R() * 160, 26, M.MTN, a > sumA && y > spur(a) ? 2 : 1, 7); }
+    const dir = (a: number, dr: number, dy: number) => { const t = [Math.cos(a) * dr, dy, -Math.sin(a) * dr], l = Math.hypot(t[0], t[1], t[2]); return [t[0] / l, t[1] / l, t[2] / l]; };
+    // (a plane: n strokes across its span, each from its top (lifted by `over` metres) down to its foot, leaning `lean`)
+    const plane = (Rr: number, A0: number, A1: number, top: (a: number) => number, foot: (a: number) => number, n: number, over: (a: number) => number, lean: number, mt: number, band: number, stamps: number[]) => {
+      // (no wider than about 220 m, so more strokes on the broad planes)
+      n = Math.max(n, Math.ceil(((A1 - A0) * Rr * 1.3) / 220)); const w = Math.min(220, ((A1 - A0) / n) * Rr * 1.5);
+      for (let k = 0; k < n; k++) {
+        const a = A0 + ((k + 0.5) / n) * (A1 - A0) + (R() - 0.5) * (A1 - A0) / n * 0.4, t = top(a) + over(a), f = foot(a);
+        if (t - f < 20) continue;
+        // (from its top, down the face on the diagonal, as far as its foot)
+        const T = dir(a, lean, -1), L = ((t - f) / Math.max(0.3, -T[1])) * (0.95 + R() * 0.1), tr = lean / Math.hypot(lean, 1);
+        put(Rr, a + (tr * L) / 2 / Rr, t - (t - f) / 2, T, L, w * (0.85 + R() * 0.3), mt, band, stamps[k % stamps.length]);
+      }
+    };
+    const body = (a: number) => Math.min(M0.top(a), Math.max(M0.top(a) - 300, snowline(a)));
+    // (the massif's lit body, below the snow: dragged over its left flank, decisive under the summit)
+    plane(M0.R - 4, M0.a0 + 0.01, sumA, body, () => F - 30, 5, (a) => (a < a0 + 0.2 ? 30 : -25), 0.7, M.MTN, 0, [0, 7, 1]);
+    // (its shaded face, and on into the ridge's colour at its foot)
+    plane(M0.R - 5, sumA, M0.a1 - 0.01, (a) => Math.min(M0.top(a), body(a)), (a) => Math.max(spur(a), F - 30), 4, () => -10, -0.8, M.MTN, 2, [0, 7]);
+    plane(M0.R - 5, sumA + 0.2, M0.a1, (a) => Math.max(spur(a), F + 60), () => F - 30, 3, () => 0, -0.9, M.RIDGE, 2, [11, 7]);
+    // (its snow: a few broad strokes, connected, down from the crest and on down the gully tongue; in shade on the right)
+    plane(M0.R - 6, M0.a0 + 0.04, sumA, M0.top, body, 5, (a) => (a > sumA - 0.15 ? 18 : 0), 0.6, M.MTNSNOW, 0, [0, 1]);
+    plane(M0.R - 7, sumA, M0.a1 - 0.08, M0.top, (a) => Math.max(body(a), spur(a)), 3, () => -6, -0.7, M.MTNSNOW, 2, [0, 7]);
+    // (the subordinate ridge: lit and shaded, a few strokes each, its far end lost in the floor's colour)
+    plane(R1 - 3, r0 - 0.14, rpA, ridgeTop, () => F - 30, 4, () => 12, 0.8, M.RIDGE, 1, [0, 7]);
+    plane(R1 - 4, rpA, r0 + 0.84, ridgeTop, (a) => Math.max(rspur(a), F - 30), 3, () => -8, -0.8, M.RIDGE, 3, [0, 11]);
+    // (and the one or two marks that explain structure: the summit's ridge line into shade, a snow edge broken down a gully)
+    put(M0.R - 9, sumA + 0.06, spur(sumA + 0.06) - 60, dir(sumA, 1, -(sumY - F) / (0.42 * M0.R)), 260, 22, M.MTNSNOW, 1, 13);
+    put(M0.R - 9, sumA - 0.08, snowline(sumA - 0.08) - 50, [0, -1, 0], 160, 26, M.MTNSNOW, 0, 5);
   }
   return { verts: new Float32Array(m.v), strokes: new Float32Array(strokes) };
 }

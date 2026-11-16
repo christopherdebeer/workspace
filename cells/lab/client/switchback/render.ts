@@ -281,8 +281,12 @@ export class Renderer {
       if (COMPOSED) {
         // (the composed backdrop: its flat masses by order (the facets' own program, every band one colour), then its sparse marks)
         if (!this.masses) { const b = buildMasses(this.course, BACKDROP === 'painted'); this.masses = { buf: new Buf(gl, b.verts), strokes: b.strokes.length ? pt.make(b.strokes) : null }; }
-        gl.disable(gl.DEPTH_TEST); gl.uniform1f(this.u.uFog, 0); gl.uniform3f(this.u.uOff, off[0], off[1], off[2]); this.masses.buf.draw();
-        if (this.masses.strokes) { paintBegin(); gl.disable(gl.DEPTH_TEST); pt.draw(this.masses.strokes, off, false); pt.end(); gl.useProgram(this.prog); }
+        // (the masses mark the stencil's bit 4 where they're drawn; their strokes are clipped to it, so the silhouettes are the
+        // masses' own and the strokes only work inside them)
+        gl.disable(gl.DEPTH_TEST); gl.uniform1f(this.u.uFog, 0); gl.uniform3f(this.u.uOff, off[0], off[1], off[2]);
+        gl.stencilMask(0x04); gl.stencilOp(gl.KEEP, gl.KEEP, gl.REPLACE); gl.stencilFunc(gl.NOTEQUAL, 0x05, 0x01); this.masses.buf.draw();
+        gl.stencilMask(0xff); gl.stencilOp(gl.KEEP, gl.KEEP, gl.KEEP);
+        if (this.masses.strokes) { gl.stencilFunc(gl.EQUAL, 0x04, 0x04); paintBegin(); gl.disable(gl.DEPTH_TEST); pt.draw(this.masses.strokes, off, false); pt.end(); gl.useProgram(this.prog); }
         gl.enable(gl.DEPTH_TEST);
       } else {
       paintBegin(); gl.disable(gl.DEPTH_TEST);
