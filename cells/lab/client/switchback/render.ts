@@ -17,6 +17,8 @@ import type { RiderPart } from './mesh';
 import { REGION } from './regions';
 import { valleyChunk, VSPAN } from './valley';
 import { buildMasses } from './backdrop';
+import { buildPatch } from './patch';
+const PATCH = typeof location !== 'undefined' && new URLSearchParams(location.search).get('valley') === 'patch';
 import { SKY as SKY_ENV } from './paint';
 // (`backdrop=mass|painted`: the composed backdrop experiment (backdrop.ts) in place of the ranges, valley and middle distance)
 const BACKDROP = typeof location !== 'undefined' ? new URLSearchParams(location.search).get('backdrop') : null, COMPOSED = BACKDROP === 'mass' || BACKDROP === 'painted' || (typeof location !== 'undefined' && new URLSearchParams(location.search).has('probe'));
@@ -43,7 +45,7 @@ void main() { vec3 w = aP.xyz + uOff; vW = w - uEye; vM = int(aP.w); vT = fract(
   gl_Position.z += uZj * fract(float(gl_VertexID / 3) * .618) * gl_Position.w; }`;
 const FS = `#version 300 es
 precision highp float;
-in vec3 vW; flat in int vM; flat in float vT; uniform vec3 uPal[140]; uniform vec3 uEye; uniform vec3 uSun; uniform float uFog; uniform float uNoThings; uniform vec4 uBelt; uniform vec3 uBeltCol; out vec4 o;
+in vec3 vW; flat in int vM; flat in float vT; uniform vec3 uPal[152]; uniform vec3 uEye; uniform vec3 uSun; uniform float uFog; uniform float uNoThings; uniform vec4 uBelt; uniform vec3 uBeltCol; uniform vec3 uHazeCol; out vec4 o;
 void main() {
   // (painted, the things standing on the ground (the fence, the poles, the pines, a kicker's boards) claim no depth and no
   // stencil: what's behind them is painted, and their strokes over it, so a gap between their strokes shows that, not paper)
@@ -59,6 +61,8 @@ void main() {
   o = vec4(mix(c, fogs[b], min(1., f * 1.1) * uFog), 1.);
   // (the composed backdrop's masses through the cloud belt (\`mood=course\`), as the strokes are: by how much of the line
   // from the eye lies in the belt's heights; below it, a ceiling thinning the further down you are)
+  // (the regional middle distance: hazed toward the horizon by its distance, so the far slope recedes)
+  if (vM >= 35) o.rgb = mix(o.rgb, uHazeCol, smoothstep(250., 2600., length(vW)) * .6);
   if (vM >= 26 && uBelt.w > .5) {
     float wy = vW.y + uEye.y, dist = length(vW), yb = uBelt.x - uBelt.y, yt = uBelt.x + uBelt.y, lo = min(uEye.y, wy), hi = max(uEye.y, wy), dy = hi - lo;
     float ov = max(0., min(hi, yt) - max(lo, yb)), path = dy > 1. ? ov / dy * dist : (uEye.y > yb && uEye.y < yt ? dist : 0.);
@@ -120,7 +124,7 @@ export class Renderer {
   paint = false; painter: Painter | null = null; stretchWanted = 1; leadWanted: [number, number] | null = null;
   /** only the backdrop drawn (`bg=`) */
   bgOnly = false;
-  private masses: { id: number; buf: Buf; strokes: Strokes | null }[] | null = null;
+  private masses: { id: number; buf: Buf; strokes: Strokes | null }[] | null = null; private patch: Buf | null = null;
   private mids = new Map<number, Strokes>(); private vchunks = new Map<number, { buf: Buf; strokes: Strokes }>(); private valleyOn = false;
   private floor: Strokes | null = null; private sea: Strokes | null = null; private backLayers: { s: Strokes; f: number; cap: number }[] = []; private eye0: number[] | null = null;
   /** the backdrop's parallax starts again from here (the start, or a respawn: the eye's cut there anyway) */
@@ -160,7 +164,7 @@ export class Renderer {
     const p = gl.createProgram()!; gl.attachShader(p, sh(gl.VERTEX_SHADER, VS)); gl.attachShader(p, sh(gl.FRAGMENT_SHADER, FS)); gl.bindAttribLocation(p, 0, 'aP'); gl.linkProgram(p);
     if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p) ?? 'link');
     this.prog = p;
-    for (const n of ['uVP', 'uOff', 'uPal', 'uEye', 'uSun', 'uFog', 'uZj', 'uNoThings', 'uBelt', 'uBeltCol']) this.u[n] = gl.getUniformLocation(p, n);
+    for (const n of ['uVP', 'uOff', 'uPal', 'uEye', 'uSun', 'uFog', 'uZj', 'uNoThings', 'uBelt', 'uBeltCol', 'uHazeCol']) this.u[n] = gl.getUniformLocation(p, n);
     gl.useProgram(p);
     gl.uniform3fv(this.u.uPal, new Float32Array(PALETTE.flat().map(hex).flat()));
     gl.uniform3fv(this.u.uSun, new Float32Array(SUN));
@@ -327,6 +331,13 @@ export class Renderer {
       // the eye, tested against that depth pixel by pixel, far chunks first)
       gl.clear(gl.DEPTH_BUFFER_BIT);
       gl.colorMask(false, false, false, false); near(); gl.colorMask(true, true, true, true);
+      // (the regional middle distance (\`valley=patch\`): opaque masses with real depth, behind the near ground, hiding one
+      // another as they should; the near ground's strokes are painted over them after)
+      if (PATCH && REGION.on && !this.bgOnly) {
+        if (!this.patch) this.patch = new Buf(gl, buildPatch(this.course));
+        gl.uniform1f(this.u.uFog, 0); gl.uniform3f(this.u.uOff, 0, 0, 0); gl.uniform4f(this.u.uBelt, REGION.beltY, REGION.half, 70, 1); gl.uniform3fv(this.u.uBeltCol, SKY_ENV.belt); gl.uniform3fv(this.u.uHazeCol, SKY_ENV.lo);
+        this.patch.draw();
+      }
       gl.depthFunc(gl.LEQUAL);
       paintBegin();
       // (the ground's strokes, the far chunks first so the near paint over them at the edges)
