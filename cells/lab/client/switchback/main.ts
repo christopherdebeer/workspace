@@ -61,7 +61,7 @@ let moodShown = '';
 const moodCycle = applyMood(q.get('mood')) && q.get('mood') === 'cycle';
 // (`mood=course`: the light, the cloud belt and the snowline laid along the course (regions.ts))
 const moodCourse = q.get('mood') === 'course';
-if (moodCourse) setRegions(course);
+if (moodCourse) setRegions(course, q.get('time'));
 const rd = new Renderer(world, speed, course);
 rd.resize(); addEventListener('resize', () => rd.resize());
 rd.speed = q.get('fx') !== '0'; rd.fog = q.get('fog') !== '0';

@@ -66,11 +66,11 @@ export class Mesh {
   }
   quad(a: number[], b: number[], c: number[], d: number[], m: number, tone = this.tone(a, b, c)) { this.tri(a, b, c, m, tone); this.tri(a, c, d, m, tone); }
   /** a triangle whose material is chosen by its slope: rock where it's steeper than `steep`, else `flat` */
-  slope(a: number[], b: number[], c: number[], flat: number, steep = M.ROCK, k = 0.72) {
+  slope(a: number[], b: number[], c: number[], flat: number, steep: number = M.ROCK, k = 0.72) {
     const ux = b[0] - a[0], uy = b[1] - a[1], uz = b[2] - a[2], vx = c[0] - a[0], vy = c[1] - a[1], vz = c[2] - a[2];
     const nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
     // (below the snowline (`mood=course`), the snow's flats are grass, patchily round the line)
-    if (flat === M.SNOW && REGION.on) { const g = grassiness((a[0] + b[0] + c[0]) / 3, (a[1] + b[1] + c[1]) / 3, (a[2] + b[2] + c[2]) / 3); if (g > 0 && hash(Math.round(a[0] * 3), Math.round(a[2] * 3), 73) < g) flat = M.GRASS; }
+    if (flat === M.SNOW && REGION.on) { const g = grassiness((a[0] + b[0] + c[0]) / 3, (a[1] + b[1] + c[1]) / 3, (a[2] + b[2] + c[2]) / 3); if (g > 0 && hash(Math.round(a[0] * 3), Math.round(a[2] * 3), 73) < g) flat = M.GRASS; if (steep === M.ROCK && g > 0.4 && hash(Math.round(a[0] * 2), Math.round(a[2] * 2), 75) < g * 0.6) steep = M.UMBER; }
     this.tri(a, b, c, Math.abs(ny) / Math.hypot(nx, ny, nz) < k ? steep : flat);
   }
   /** a box from its centre and half-sizes in a frame (origin o, axes x, y, z) */

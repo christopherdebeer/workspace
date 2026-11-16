@@ -135,7 +135,9 @@ export const SKY = { lo: [0.55, 0.67, 0.96], hi: [0.05, 0.2, 0.8], pale: [0.62, 
   // (the light: the sun's direction (empty: the renderer's own), how far its bands are pushed toward shade (lit: −
   // fewer faces get the lightest band), how much distance flattens a thing's light and shade toward its middle (flat)
   // and thins its small strokes, the survivors broader, so the big shapes outlast the detail (thin))
-  sun: [] as number[], lit: 0, flat: 0, thin: 0 };
+  sun: [] as number[], lit: 0, flat: 0, thin: 0,
+  // (the cloud belt's own colour, `mood=course`)
+  belt: [0.84, 0.87, 0.88] };
 export const NEVER = -1e9;
 const ROAD = new Set<number>([M.TRACK, M.RUT]), GROUND = new Set<number>([M.SNOW, M.SHADOW, M.GRASS]), ROCKY = new Set<number>([M.ROCK, M.UMBER, M.GOUGE]);
 const RANGE = new Set<number>([M.MTN, M.MTNSNOW, M.FAR, M.FARSNOW, M.RIDGE]);
@@ -280,8 +282,15 @@ export function strokesOver(verts: Float32Array, seed: number, line: number[] | 
     else if (GROUND.has(m) && d < 40) { const A = along(), C = across(), f = (d - 18) / 22; const x = A[0] * (1 - f) + C[0] * f, y = A[1] * (1 - f) + C[1] * f, z = A[2] * (1 - f) + C[2] * f, l = Math.hypot(x, y, z) || 1; [tx, ty, tz] = [x / l, y / l, z / l]; }
     else if (ROCKY.has(m)) [tx, ty, tz] = [fx / fl, fy / fl, fz / fl];
     else [tx, ty, tz] = across();
-    const road = ROAD.has(m), Ls = Math.min(22, 2.3 * (1 + d / 22)) * (road ? 1.7 : 1);
+    const road = ROAD.has(m), Ls = Math.min(22, 2.3 * (1 + d / 22)) * (road ? 1.7 : 1), fl0 = fl;
     // (the masses: big and broad, laid first; then the detail over them)
+    if (m === M.GRASS) {
+      // (grass: broad dry fans for its mass; then tufts, short flicks and rakes standing down the fall, scattered every way a little)
+      emit(tx, ty, tz, Ls * 2, Ls * 2 * 0.4, 2.6, 0, [12, 10, 14, 0], 0.4, 0.3, 0);
+      const fl = fl0 > 0.05 ? [fx / fl0, fy / fl0, fz / fl0] : [tx, ty, tz];
+      emit(fl[0], fl[1], fl[2], Ls * 0.55, Ls * 0.55 * 0.3, 1.8, 1, [8, 15, 14, 12], 0.9, 1.2, 0);
+      continue;
+    }
     emit(tx, ty, tz, Ls * 2.2, Ls * 2.2 * (road ? 0.3 : 0.42), ROCKY.has(m) ? 3.4 : 2.6, 0, road ? [0, 1, 7, 13] : ROCKY.has(m) ? [9, 13, 0, 5] : [11, 7, 0, 10], 0.3, 0.25, 0);
     emit(tx, ty, tz, Ls, Ls * (road ? 0.16 : 0.34), 1.3, 1, road ? [0, 1, 13] : ROCKY.has(m) ? [5, 6, 9, 13, 14] : [2, 3, 4, 1, 10, 12, 8, 15], road ? 0.25 : 0.5, 0.9, 0);
   }
@@ -489,6 +498,35 @@ export function midHillStrokes(c: Course, k: number): Float32Array {
     }
   }
   list.sort((p, q) => p[1] - q[1]);
+  const out: number[] = []; for (const st of list) out.push(...st);
+  return new Float32Array(out);
+}
+
+/** The sea of cloud (`mood=course`), seen from above the belt: billows laid on its top round the eye (out to 1.5 km, so it
+ * never paints beyond the nearest range), each a dome of round, soft strokes, lit along the side toward the sun and on its
+ * crown, its underside and the side away in shade, laid level along the way round the eye; between the billows, troughs
+ * a step darker. y is 0 (drawn at the belt's top). */
+export function seaStrokes(seed: number): Float32Array {
+  const R0 = rng(seed * 811 + 5), list: number[][] = [], up = [0, 1, 0];
+  // (the body of it first: long level strokes, mostly its mid tone, a little shade, so there's no gap between billows)
+  for (let i = 0; i < 2200; i++) {
+    const r = 140 * Math.pow(1500 / 140, R0()), a = R0() * Math.PI * 2, x = Math.sin(a) * r, z = Math.cos(a) * r, size = r * (0.07 + R0() * 0.06);
+    list.push([x, -2, z, M.WHITE + Math.min(0.45, r / 4000), Math.cos(a), 0, -Math.sin(a), size * 2.2, 0, 1, 0, size * 0.45, R0(), [11, 7, 11][Math.floor(R0() * 3)], 0, 0, NEVER, 1 + (R0() < 0.75 ? 1 : 2), 0, 1]);
+  }
+  // (then billows, few and of every size, a big bank now and then: each a soft mound, its crown and the side toward the sun
+  // lit in long level strokes, only its lower skirt a step down; flattened with distance, as a sea of cloud is)
+  for (let i = 0; i < 520; i++) {
+    const r = 160 * Math.pow(1500 / 160, R0()), a = R0() * Math.PI * 2, cx = Math.sin(a) * r, cz = Math.cos(a) * r;
+    const size = r * (R0() < 0.15 ? 0.22 + R0() * 0.12 : 0.07 + R0() * 0.09), haze = Math.min(0.45, r / 4000), n = 6 + Math.floor(size / (r * 0.02));
+    for (let j = 0; j < Math.min(16, n); j++) {
+      const u = (R0() - 0.5) * 2, v = R0() * 2 - 1, crown = 1 - Math.hypot(u * 0.8, v);
+      const x = cx + Math.cos(a) * u * size + Math.sin(a) * v * size * 0.35, z = cz - Math.sin(a) * u * size + Math.cos(a) * v * size * 0.35, y = Math.max(0, crown) * size * 0.22;
+      const band = crown > 0.25 || u < -0.3 ? 0 : v > 0.5 ? 1 : R0() < 0.7 ? 1 : 2;
+      const ta = a + (R0() - 0.5) * 0.25;
+      plan(list, x, y, z, M.WHITE, haze, [Math.cos(ta), 0, -Math.sin(ta)], size * (0.9 + R0() * 0.6), up, size * (0.22 + R0() * 0.14), R0(), [11, 2, 11, 4][Math.floor(R0() * 4)], (R0() - 0.5) * 0.35, band);
+    }
+  }
+  list.sort((p, q) => Math.hypot(q[0], q[2]) - Math.hypot(p[0], p[2]) + (p[1] - q[1]) * 0.001);
   const out: number[] = []; for (const st of list) out.push(...st);
   return new Float32Array(out);
 }
@@ -799,7 +837,7 @@ const SEG = 8;
 const VS = `#version 300 es
 layout(location=0) in vec2 aQ; layout(location=1) in vec4 a0; layout(location=2) in vec4 a1; layout(location=3) in vec4 a2; layout(location=4) in vec4 a3; layout(location=5) in vec4 a4;
 uniform mat4 uVP, uPrev; uniform vec3 uOff, uEye, uSun; uniform vec3 uPal[104]; uniform float uFog, uK, uMinW, uStretch, uDens, uGrow, uReveal; uniform vec2 uRes, uFront;
-uniform vec3 uSkyLo, uSkyHi, uSkyPale, uSmear, uCloudLit, uCloudShade; uniform float uCloud, uHazeK, uHazeB, uLit, uFlat, uThin; uniform vec3 uFogs[4]; uniform vec4 uBelt; uniform vec3 uBeltCol;
+uniform vec3 uSkyLo, uSkyHi, uSkyPale, uSmear, uCloudLit, uCloudShade; uniform float uCloud, uHazeK, uHazeB, uLit, uFlat, uThin; uniform vec3 uFogs[4]; uniform vec4 uBelt; uniform vec3 uBeltCol; uniform float uSink;
 out vec2 vUv; out vec3 vA; out vec3 vB; flat out float vStamp; out float vFresh; flat out float vTex;
 float h(float s, float k){ return fract(sin(s*k)*43758.5453); }
 // (the cloud belt (\`mood=course\`): how much cloud lies along the line from the eye to a point, by the share of that line
@@ -809,7 +847,12 @@ vec3 belt(vec3 c, vec3 w, float dist){
   if (uBelt.w < .5) return c;
   float yb = uBelt.x - uBelt.y, yt = uBelt.x + uBelt.y, lo = min(uEye.y, w.y), hi = max(uEye.y, w.y), dy = hi - lo;
   float ov = max(0., min(hi, yt) - max(lo, yb)), path = dy > 1. ? ov/dy*dist : (uEye.y > yb && uEye.y < yt ? dist : 0.);
-  float k = 1. - exp(-path/uBelt.z);
+  // (inside, banks thicker and thinner, drifting)
+  float bank = .55 + .45*sin(w.x/90. + uCloud*380.)*sin(w.z/70. - uCloud*290.);
+  float k = 1. - exp(-path/(uBelt.z*mix(.45, 1.7, bank)));
+  // (below it, the ceiling thins the further down you are, and breaks: patches of clear sky through it)
+  if (uEye.y < yb) { float under = smoothstep(25., 240., yb - uEye.y), hole = fract(sin(dot(floor(w.xz/520.), vec2(12.9898, 78.233)))*43758.5453);
+    k *= mix(1., hole > .45 ? .12 : .6, under); }
   vec3 col = uBeltCol*mix(.9, 1.06, clamp((w.y - yb)/(2.*uBelt.y), 0., 1.));
   return mix(c, col, k);
 }
@@ -833,6 +876,8 @@ void main(){
   // (not the backdrop's: seen far off and edge on, a peak's flanks turned (by their normal) from the eye were left bare
   // paper; what's behind a range is hidden by its depth anyway)
   if (!sky && !both && !far) g *= smoothstep(-.02, .12, dot(n, V));
+  // (the middle distance's hills where they're down in the sea of cloud, seen from above it: under it, not painted)
+  if (uSink > .5 && uBelt.w > .5 && uEye.y > uBelt.x + uBelt.y) g *= smoothstep(uBelt.x + uBelt.y - 6., uBelt.x + uBelt.y + 10., w.y);
   int mt0 = int(a0.w);
   if (far && (mt0 == 6 || mt0 == 7 || mt0 == 12 || mt0 == 13 || mt0 == 14) && dot(n, V) < 0.) g = 0.;
   if (!sky && dot(n, V) < 0.) n = -n;
@@ -950,7 +995,7 @@ export class Painter {
     const p = gl.createProgram()!; gl.attachShader(p, sh(gl.VERTEX_SHADER, VS)); gl.attachShader(p, sh(gl.FRAGMENT_SHADER, FS)); gl.linkProgram(p);
     if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p) ?? 'link');
     this.prog = p;
-    for (const k of ['uSmear', 'uVP', 'uPrev', 'uOff', 'uEye', 'uSun', 'uPal', 'uFog', 'uK', 'uMinW', 'uStretch', 'uDens', 'uRes', 'uAtlas', 'uSkyLo', 'uSkyHi', 'uSkyPale', 'uCloud', 'uCloudLit', 'uCloudShade', 'uHazeK', 'uHazeB', 'uFogs', 'uLit', 'uFlat', 'uThin', 'uBelt', 'uBeltCol', 'uFront', 'uGrow', 'uReveal']) this.u[k] = gl.getUniformLocation(p, k);
+    for (const k of ['uSmear', 'uVP', 'uPrev', 'uOff', 'uEye', 'uSun', 'uPal', 'uFog', 'uK', 'uMinW', 'uStretch', 'uDens', 'uRes', 'uAtlas', 'uSkyLo', 'uSkyHi', 'uSkyPale', 'uCloud', 'uCloudLit', 'uCloudShade', 'uHazeK', 'uHazeB', 'uFogs', 'uLit', 'uFlat', 'uThin', 'uBelt', 'uBeltCol', 'uSink', 'uFront', 'uGrow', 'uReveal']) this.u[k] = gl.getUniformLocation(p, k);
     gl.useProgram(p);
     this.pal = palette; this.sun0 = sun;
     // (the quad: a strip along the stroke, SEG pieces, so a bent stroke bends smoothly)
@@ -972,7 +1017,7 @@ export class Painter {
     gl.uniform3fv(this.u.uSkyLo, SKY.lo); gl.uniform3fv(this.u.uSkyHi, SKY.hi); gl.uniform3fv(this.u.uSkyPale, SKY.pale); gl.uniform3fv(this.u.uCloudLit, SKY.cloudLit); gl.uniform3fv(this.u.uCloudShade, SKY.cloudShade);
     gl.uniform1f(this.u.uHazeK, SKY.haze); gl.uniform1f(this.u.uHazeB, SKY.hazeBase); gl.uniform3fv(this.u.uFogs, new Float32Array(SKY.fog.flat()));
     gl.uniform1f(this.u.uLit, SKY.lit); gl.uniform1f(this.u.uFlat, SKY.flat); gl.uniform1f(this.u.uThin, SKY.thin);
-    gl.uniform4f(this.u.uBelt, REGION.beltY, REGION.half, 70, REGION.on ? 1 : 0); gl.uniform3f(this.u.uBeltCol, 0.84, 0.87, 0.88);
+    gl.uniform4f(this.u.uBelt, REGION.beltY, REGION.half, 70, REGION.on ? 1 : 0); gl.uniform3fv(this.u.uBeltCol, SKY.belt); gl.uniform1f(this.u.uSink, this.sink);
   }
   make(data: Float32Array, dynamic = false) { return new Strokes(this.gl, this.quad, data, dynamic); }
   /** where the rider is: the front only ever goes on (put back at a checkpoint, what's laid stays laid) */
@@ -997,6 +1042,9 @@ export class Painter {
   }
   /** how far round the clouds have drifted (rad) */
   cloud = 0;
+  /** (the middle distance: sunk into the sea of cloud) */
+  sink = 0;
+  setSink(on: boolean) { this.sink = on ? 1 : 0; this.gl.uniform1f(this.u.uSink, this.sink); }
   draw(s: Strokes, off: number[], fog: boolean) {
     const gl = this.gl;
     if (!s.n) return;

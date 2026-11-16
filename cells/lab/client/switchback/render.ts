@@ -14,11 +14,12 @@
 import { Course } from './course';
 import { CHUNK, PALETTE, buildChunk, buildFalls, buildFlags, buildRanges, buildRider, buildValley } from './mesh';
 import type { RiderPart } from './mesh';
+import { REGION } from './regions';
 import type { Rider, Event } from './sim';
 import { GEARS } from './audio';
 import { buildRuts, Trail } from './ruts';
 import { buildGouges } from './gouge';
-import { STROKE, Painter, Strokes, Brush2D, strokesOver, skyStrokes, lineOf, courseStrokes, backdropLayers, valleyStrokes, midHillStrokes, MID_SPAN, fallStrokes, flagStrokes, riderStrokes, partShadowStrokes } from './paint';
+import { STROKE, Painter, Strokes, Brush2D, strokesOver, skyStrokes, lineOf, courseStrokes, backdropLayers, valleyStrokes, midHillStrokes, MID_SPAN, seaStrokes, fallStrokes, flagStrokes, riderStrokes, partShadowStrokes } from './paint';
 
 const VS = `#version 300 es
 in vec4 aP; uniform mat4 uVP; uniform vec3 uOff; uniform float uZj; out vec3 vW; flat out int vM;
@@ -102,7 +103,7 @@ export class Renderer {
   /** only the backdrop drawn (`bg=`) */
   bgOnly = false;
   private mids = new Map<number, Strokes>();
-  private floor: Strokes | null = null; private backLayers: { s: Strokes; f: number; cap: number }[] = []; private eye0: number[] | null = null;
+  private floor: Strokes | null = null; private sea: Strokes | null = null; private backLayers: { s: Strokes; f: number; cap: number }[] = []; private eye0: number[] | null = null;
   /** the backdrop's parallax starts again from here (the start, or a respawn: the eye's cut there anyway) */
   rebase() { this.eye0 = null; }
   /** the palette's changed (a mood cycling): the painter's floats again */
@@ -267,7 +268,12 @@ export class Renderer {
       if (this.floor) pt.draw(this.floor, this.layerOff(view.eye, 0.35, 190, true), false);
       for (const l of this.backLayers) pt.draw(l.s, this.layerOff(view.eye, l.f, l.cap, false), false);
       // (the middle distance's hills, standing in the world: the farther stretches first)
+      // (the sea of cloud, seen from above the belt (`mood=course`): over the valley and the layers' feet, under the middle
+      // distance's hills where they rise out of it)
+      if (REGION.on && view.eye[1] > REGION.beltY + REGION.half + 4) { if (!this.sea) this.sea = pt.make(seaStrokes(this.course.seed)); pt.draw(this.sea, [view.eye[0], REGION.beltY + REGION.half, view.eye[2]], false); }
+      pt.setSink(true);
       for (const k of [...this.mids.keys()].sort((a, b) => b - a)) pt.draw(this.mids.get(k)!, [0, 0, 0], false);
+      pt.setSink(false);
       gl.enable(gl.DEPTH_TEST); pt.end(); gl.useProgram(this.prog);
       gl.disable(gl.STENCIL_TEST);
       // (what's near: its facets only in the depth; then its strokes, laid in the world on them and lifted a little toward

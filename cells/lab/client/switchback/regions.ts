@@ -10,10 +10,16 @@
 import type { Course } from './course';
 import { hash } from './course';
 
-export const REGION = { on: false, beltS: 0, beltY: 0, half: 70, snowY: 0, seed: 1 };
+export type Time = 'day' | 'dusk' | 'night';
+export const TIMES: Time[] = ['day', 'dusk', 'night'];
+export const REGION = { on: false, beltS: 0, beltY: 0, half: 70, snowY: 0, seed: 1, time: 'day' as Time };
 /** the regions for a mountain: where the belt is (its station and height), the snowline under it */
-export function setRegions(c: Course) {
+/** (time: the run's time of day, `time=day|dusk|night`; unset, the mountain's own, by its seed: day half the time,
+ * dusk a third, night the rest) */
+export function setRegions(c: Course, time?: string | null) {
   REGION.on = true; REGION.seed = c.seed;
+  const r = hash(c.seed, 5, 74);
+  REGION.time = (TIMES as string[]).includes(time ?? '') ? (time as Time) : r < 0.5 ? 'day' : r < 0.83 ? 'dusk' : 'night';
   REGION.beltS = 1000 + Math.round(hash(c.seed, 3, 71) * 500);
   REGION.beltY = c.point(REGION.beltS, 0).y;
   REGION.snowY = REGION.beltY - REGION.half - 20;
@@ -24,8 +30,9 @@ export function grassiness(x: number, y: number, z: number) {
   const patch = (hash(REGION.seed, Math.round(x / 9), Math.round(z / 9), 72) - 0.5) * 60;
   return Math.max(0, Math.min(1, (REGION.snowY + patch - y) / 50));
 }
-/** the light's keys down the course: (station, mood) */
+/** the light's keys down the course, (station, mood): the run's time of day, drifting on as you go down (a day run warms
+ * toward golden hour by the end of a long one; a dusk run darkens into night; night stays night). Not the terrain: the
+ * lower slopes' grass and earth are laid in the ground, and coloured by whatever light there is */
 export function lightKeys(): [number, string][] {
-  const b = REGION.beltS;
-  return [[0, 'day'], [b - 150, 'day'], [b + 450, 'autumn'], [b + 1800, 'autumn'], [b + 2800, 'gold']];
+  return REGION.time === 'day' ? [[0, 'day'], [1500, 'day'], [5000, 'gold']] : REGION.time === 'dusk' ? [[0, 'gold'], [1800, 'gold'], [4500, 'moon']] : [[0, 'moon']];
 }
