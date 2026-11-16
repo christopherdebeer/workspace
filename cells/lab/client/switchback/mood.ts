@@ -92,6 +92,12 @@ const mixHex = (a: string, b: string, t: number) => { const A = rgb(a), B = rgb(
 const mixArr = (a: number[], b: number[], t: number) => a.map((v, i) => v + ((b[i] ?? v) - v) * t);
 function set(e: ReturnType<typeof full>) {
   e.pal.forEach((v, i) => (PALETTE[i] = v));
+  // (the composed backdrop's flat masses (backdrop.ts) take the light's own colours for the ranges, the valley and the
+  // river, so their bodies and their strokes agree whatever the mood)
+  const flat = (k: number, c: string) => (PALETTE[k] = [c, c, c, c]);
+  flat(M.MASS_FAR, PALETTE[M.FAR][0]); flat(M.MASS_BODY, PALETTE[M.MTN][1]); flat(M.MASS_SHADE, PALETTE[M.MTN][2]);
+  flat(M.MASS_SNOW, PALETTE[M.MTNSNOW][0]); flat(M.MASS_SNOWSH, PALETTE[M.MTNSNOW][2]); flat(M.MASS_RIDGE, PALETTE[M.RIDGE][2]);
+  flat(M.MASS_RIDGESH, PALETTE[M.RIDGE][3]); flat(M.MASS_FLOOR, PALETTE[M.VALLEY][0]); flat(M.MASS_RIVER, PALETTE[M.WHITE][2]);
   Object.assign(SKY, e.sky, { fog: e.sky.fog.map((f) => f.slice()), sun: e.sky.sun.slice(), belt: e.sky.belt.slice() });
   for (const k of Object.keys(FX) as (keyof typeof FX)[]) { const a = FX[k]; a.length = 0; a.push(...e.fx[k]); }
 }

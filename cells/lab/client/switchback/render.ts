@@ -17,6 +17,7 @@ import type { RiderPart } from './mesh';
 import { REGION } from './regions';
 import { valleyChunk, VSPAN } from './valley';
 import { buildMasses } from './backdrop';
+import { SKY as SKY_ENV } from './paint';
 // (`backdrop=mass|painted`: the composed backdrop experiment (backdrop.ts) in place of the ranges, valley and middle distance)
 const BACKDROP = typeof location !== 'undefined' ? new URLSearchParams(location.search).get('backdrop') : null, COMPOSED = BACKDROP === 'mass' || BACKDROP === 'painted';
 // (`valley=terrain`: the valley as real ground (valley.ts), an unfinished experiment, off by default)
@@ -40,7 +41,7 @@ void main() { vec3 w = aP.xyz + uOff; vW = w - uEye; vM = int(aP.w); vT = fract(
   gl_Position.z += uZj * fract(float(gl_VertexID / 3) * .618) * gl_Position.w; }`;
 const FS = `#version 300 es
 precision highp float;
-in vec3 vW; flat in int vM; flat in float vT; uniform vec3 uPal[140]; uniform vec3 uEye; uniform vec3 uSun; uniform float uFog; uniform float uNoThings; out vec4 o;
+in vec3 vW; flat in int vM; flat in float vT; uniform vec3 uPal[140]; uniform vec3 uEye; uniform vec3 uSun; uniform float uFog; uniform float uNoThings; uniform vec4 uBelt; uniform vec3 uBeltCol; out vec4 o;
 void main() {
   // (painted, the things standing on the ground (the fence, the poles, the pines, a kicker's boards) claim no depth and no
   // stencil: what's behind them is painted, and their strokes over it, so a gap between their strokes shows that, not paper)
@@ -54,6 +55,15 @@ void main() {
   float d = length(vW.xz), f = floor(clamp((d - 80.) / 520., 0., 1.) * 4.) / 4.;
   vec3 fogs[4] = vec3[4](vec3(.62, .66, .9), vec3(.33, .45, .88), vec3(.14, .33, .84), vec3(.09, .26, .78));
   o = vec4(mix(c, fogs[b], min(1., f * 1.1) * uFog), 1.);
+  // (the composed backdrop's masses through the cloud belt (\`mood=course\`), as the strokes are: by how much of the line
+  // from the eye lies in the belt's heights; below it, a ceiling thinning the further down you are)
+  if (vM >= 26 && uBelt.w > .5) {
+    float wy = vW.y + uEye.y, dist = length(vW), yb = uBelt.x - uBelt.y, yt = uBelt.x + uBelt.y, lo = min(uEye.y, wy), hi = max(uEye.y, wy), dy = hi - lo;
+    float ov = max(0., min(hi, yt) - max(lo, yb)), path = dy > 1. ? ov / dy * dist : (uEye.y > yb && uEye.y < yt ? dist : 0.);
+    float k = 1. - exp(-path / uBelt.z);
+    if (uEye.y < yb) k *= mix(1., .45, smoothstep(25., 240., yb - uEye.y));
+    o.rgb = mix(o.rgb, uBeltCol, k);
+  }
 }`;
 
 export type Mat = Float32Array;
@@ -114,7 +124,7 @@ export class Renderer {
   /** the backdrop's parallax starts again from here (the start, or a respawn: the eye's cut there anyway) */
   rebase() { this.eye0 = null; }
   /** the palette's changed (a mood cycling): the painter's floats again */
-  envChanged() { if (this.painter) this.painter.pal = new Float32Array(PALETTE.flat().map(hex).flat()); }
+  envChanged() { const p = new Float32Array(PALETTE.flat().map(hex).flat()); if (this.painter) this.painter.pal = p; this.gl.useProgram(this.prog); this.gl.uniform3fv(this.u.uPal, p); }
   /** the clouds drifted round by game time t (about a degree every eight seconds) */
   cloudAt(t: number) { if (this.painter) this.painter.cloud = t * 0.0022; }
   /** a backdrop layer's offset: with the eye, less the way it's come since the base times the layer's parallax (a
@@ -148,7 +158,7 @@ export class Renderer {
     const p = gl.createProgram()!; gl.attachShader(p, sh(gl.VERTEX_SHADER, VS)); gl.attachShader(p, sh(gl.FRAGMENT_SHADER, FS)); gl.bindAttribLocation(p, 0, 'aP'); gl.linkProgram(p);
     if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p) ?? 'link');
     this.prog = p;
-    for (const n of ['uVP', 'uOff', 'uPal', 'uEye', 'uSun', 'uFog', 'uZj', 'uNoThings']) this.u[n] = gl.getUniformLocation(p, n);
+    for (const n of ['uVP', 'uOff', 'uPal', 'uEye', 'uSun', 'uFog', 'uZj', 'uNoThings', 'uBelt', 'uBeltCol']) this.u[n] = gl.getUniformLocation(p, n);
     gl.useProgram(p);
     gl.uniform3fv(this.u.uPal, new Float32Array(PALETTE.flat().map(hex).flat()));
     gl.uniform3fv(this.u.uSun, new Float32Array(SUN));
@@ -284,9 +294,12 @@ export class Renderer {
         // (the masses mark the stencil's bit 4 where they're drawn; their strokes are clipped to it, so the silhouettes are the
         // masses' own and the strokes only work inside them)
         gl.disable(gl.DEPTH_TEST); gl.uniform1f(this.u.uFog, 0); gl.uniform3f(this.u.uOff, off[0], off[1], off[2]);
+        gl.uniform4f(this.u.uBelt, REGION.beltY, REGION.half, 70, REGION.on ? 1 : 0); gl.uniform3fv(this.u.uBeltCol, SKY_ENV.belt);
         gl.stencilMask(0x04); gl.stencilOp(gl.KEEP, gl.KEEP, gl.REPLACE); gl.stencilFunc(gl.NOTEQUAL, 0x05, 0x01); this.masses.buf.draw();
         gl.stencilMask(0xff); gl.stencilOp(gl.KEEP, gl.KEEP, gl.KEEP);
         if (this.masses.strokes) { gl.stencilFunc(gl.EQUAL, 0x04, 0x04); paintBegin(); gl.disable(gl.DEPTH_TEST); pt.draw(this.masses.strokes, off, false); pt.end(); gl.useProgram(this.prog); }
+        // (the sea of cloud over it all, seen from above the belt)
+        if (REGION.on && view.eye[1] > REGION.beltY + REGION.half + 4) { gl.stencilFunc(gl.NOTEQUAL, 1, 0x01); paintBegin(); gl.disable(gl.DEPTH_TEST); if (!this.sea) this.sea = pt.make(seaStrokes(this.course.seed)); pt.draw(this.sea, [view.eye[0], REGION.beltY + REGION.half, view.eye[2]], false); pt.end(); gl.useProgram(this.prog); }
         gl.enable(gl.DEPTH_TEST);
       } else {
       paintBegin(); gl.disable(gl.DEPTH_TEST);
