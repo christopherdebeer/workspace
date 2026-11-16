@@ -165,7 +165,7 @@ export function lineOf(c: Course, s0: number, s1: number) {
  *   face's longest edge, painted on both sides; what lies flat on the ground (`flat`: your track, a shadow) is laid as
  *   the ground is.
  */
-export function strokesOver(verts: Float32Array, seed: number, line: number[] | null, cap = 26000, moving = false, place = 0, flat = false): Float32Array {
+export function strokesOver(verts: Float32Array, seed: number, line: number[] | null, cap = 26000, moving = false, place = 0, flat = false, big = 1): Float32Array {
   const out: number[] = [];
   const n = verts.length / 12;
   for (let t = 0; t < n && out.length / STROKE < cap; t++) {
@@ -282,17 +282,18 @@ export function strokesOver(verts: Float32Array, seed: number, line: number[] | 
     else if (GROUND.has(m) && d < 40) { const A = along(), C = across(), f = (d - 18) / 22; const x = A[0] * (1 - f) + C[0] * f, y = A[1] * (1 - f) + C[1] * f, z = A[2] * (1 - f) + C[2] * f, l = Math.hypot(x, y, z) || 1; [tx, ty, tz] = [x / l, y / l, z / l]; }
     else if (ROCKY.has(m)) [tx, ty, tz] = [fx / fl, fy / fl, fz / fl];
     else [tx, ty, tz] = across();
-    const road = ROAD.has(m), Ls = Math.min(22, 2.3 * (1 + d / 22)) * (road ? 1.7 : 1), fl0 = fl;
+    // (`big`: ground seen from far off (the valley): only the masses, broad, never small)
+    const road = ROAD.has(m), Ls = Math.max(big > 1 ? 7 * big : 0, Math.min(22 * big, 2.3 * (1 + d / 22))) * (road ? 1.7 : 1), fl0 = fl;
     // (the masses: big and broad, laid first; then the detail over them)
     if (m === M.GRASS) {
       // (grass: broad dry fans for its mass; then tufts, short flicks and rakes standing down the fall, scattered every way a little)
       emit(tx, ty, tz, Ls * 2, Ls * 2 * 0.4, 2.6, 0, [12, 10, 14, 0], 0.4, 0.3, 0);
       const fl = fl0 > 0.05 ? [fx / fl0, fy / fl0, fz / fl0] : [tx, ty, tz];
-      emit(fl[0], fl[1], fl[2], Ls * 0.55, Ls * 0.55 * 0.3, 1.8, 1, [8, 15, 14, 12], 0.9, 1.2, 0);
+      if (big <= 1) emit(fl[0], fl[1], fl[2], Ls * 0.55, Ls * 0.55 * 0.3, 1.8, 1, [8, 15, 14, 12], 0.9, 1.2, 0);
       continue;
     }
     emit(tx, ty, tz, Ls * 2.2, Ls * 2.2 * (road ? 0.3 : 0.42), ROCKY.has(m) ? 3.4 : 2.6, 0, road ? [0, 1, 7, 13] : ROCKY.has(m) ? [9, 13, 0, 5] : [11, 7, 0, 10], 0.3, 0.25, 0);
-    emit(tx, ty, tz, Ls, Ls * (road ? 0.16 : 0.34), 1.3, 1, road ? [0, 1, 13] : ROCKY.has(m) ? [5, 6, 9, 13, 14] : [2, 3, 4, 1, 10, 12, 8, 15], road ? 0.25 : 0.5, 0.9, 0);
+    if (big <= 1) emit(tx, ty, tz, Ls, Ls * (road ? 0.16 : 0.34), 1.3, 1, road ? [0, 1, 13] : ROCKY.has(m) ? [5, 6, 9, 13, 14] : [2, 3, 4, 1, 10, 12, 8, 15], road ? 0.25 : 0.5, 0.9, 0);
   }
   return new Float32Array(out);
 }

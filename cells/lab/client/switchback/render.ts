@@ -15,6 +15,9 @@ import { Course } from './course';
 import { CHUNK, PALETTE, buildChunk, buildFalls, buildFlags, buildRanges, buildRider, buildValley } from './mesh';
 import type { RiderPart } from './mesh';
 import { REGION } from './regions';
+import { valleyChunk, VSPAN } from './valley';
+// (`valley=terrain`: the valley as real ground (valley.ts), an unfinished experiment, off by default)
+const VALLEY_TERRAIN = typeof location !== 'undefined' && new URLSearchParams(location.search).get('valley') === 'terrain';
 import type { Rider, Event } from './sim';
 import { GEARS } from './audio';
 import { buildRuts, Trail } from './ruts';
@@ -102,7 +105,7 @@ export class Renderer {
   paint = false; painter: Painter | null = null; stretchWanted = 1; leadWanted: [number, number] | null = null;
   /** only the backdrop drawn (`bg=`) */
   bgOnly = false;
-  private mids = new Map<number, Strokes>();
+  private mids = new Map<number, Strokes>(); private vchunks = new Map<number, { buf: Buf; strokes: Strokes }>(); private valleyOn = false;
   private floor: Strokes | null = null; private sea: Strokes | null = null; private backLayers: { s: Strokes; f: number; cap: number }[] = []; private eye0: number[] | null = null;
   /** the backdrop's parallax starts again from here (the start, or a respawn: the eye's cut there anyway) */
   rebase() { this.eye0 = null; }
@@ -188,7 +191,13 @@ export class Renderer {
     }
     this.stream(r.s, this.painter && this.chunks.size === 0 ? 99 : budget);
     // (the middle distance's hills, a stretch at a time, from a little behind to well ahead; one new stretch a frame)
-    if (this.painter) {
+    // (with the course's regions, the valley as real ground, a stretch at a time, from a little behind to well ahead)
+    if (this.painter && REGION.on && VALLEY_TERRAIN) {
+      const lo = Math.floor((r.s - 400) / VSPAN), hi = Math.floor((r.s + 2600) / VSPAN);
+      for (const [k, v] of this.vchunks) if (k < lo || k > hi) { v.buf.free(); v.strokes.free(); this.vchunks.delete(k); }
+      for (let k = Math.max(0, lo); k <= hi; k++) if (!this.vchunks.has(k)) { const v = valleyChunk(this.course, k); this.vchunks.set(k, { buf: new Buf(this.gl, v.verts), strokes: this.painter.make(v.strokes) }); if (budget < 99) break; }
+    }
+    if (this.painter && !(REGION.on && VALLEY_TERRAIN)) {
       const lo = Math.floor((r.s - 400) / MID_SPAN), hi = Math.floor((r.s + (REGION.on ? 2600 : 1600)) / MID_SPAN);
       for (const [k, b] of this.mids) if (k < lo || k > hi) { b.free(); this.mids.delete(k); }
       for (let k = Math.max(0, lo); k <= hi; k++) if (!this.mids.has(k)) { this.mids.set(k, this.painter.make(REGION.on ? midValleyStrokes(this.course, k) : midHillStrokes(this.course, k))); if (this.mids.size > 2 && budget < 99) break; }
@@ -244,7 +253,8 @@ export class Renderer {
       const off = [view.eye[0], view.eye[1] - 60, view.eye[2]];
       // (the ground and the rider (whose strokes, on both sides of it, need its own depth to hide its far side): the things
       // on the ground, the flags and the falls claim no depth or stencil)
-      const near = () => { if (this.bgOnly) return; gl.uniform3f(this.u.uOff, 0, 0, 0); gl.uniform1f(this.u.uNoThings, 1); for (const b of this.chunks.values()) b.draw(); gl.uniform1f(this.u.uNoThings, 0); this.rider.set(body, true); this.rider.draw(); };
+      this.valleyOn = REGION.on && VALLEY_TERRAIN && view.eye[1] < REGION.beltY + REGION.half;
+      const near = () => { if (this.bgOnly) return; gl.uniform3f(this.u.uOff, 0, 0, 0); gl.uniform1f(this.u.uNoThings, 1); for (const b of this.chunks.values()) b.draw(); if (this.valleyOn) for (const v of this.vchunks.values()) v.buf.draw(); gl.uniform1f(this.u.uNoThings, 0); this.rider.set(body, true); this.rider.draw(); };
       // (where things stand, in the stencil: 2 the backdrop, 1 anything near; nothing drawn)
       gl.colorMask(false, false, false, false); gl.disable(gl.DEPTH_TEST); gl.enable(gl.STENCIL_TEST); gl.stencilOp(gl.KEEP, gl.KEEP, gl.REPLACE); gl.stencilFunc(gl.ALWAYS, 2, 0xff);
       gl.uniform1f(this.u.uFog, 0); gl.uniform3f(this.u.uOff, off[0], off[1], off[2]); this.ranges.draw(); this.valley.draw();
@@ -283,6 +293,8 @@ export class Renderer {
       gl.depthFunc(gl.LEQUAL);
       paintBegin();
       // (the ground's strokes, the far chunks first so the near paint over them at the edges)
+      // (the valley's ground first, the farthest stretches first; then the mountain's)
+      if (!this.bgOnly && this.valleyOn) for (const k of [...this.vchunks.keys()].sort((a, b) => b - a)) pt.draw(this.vchunks.get(k)!.strokes, [0, 0, 0], false);
       if (!this.bgOnly) for (const n of [...this.strokes.keys()].sort((a, b) => b - a)) pt.draw(this.strokes.get(n)!, [0, 0, 0], this.fog);
       // (and what moves, each face's strokes its own, so they stay put on it)
       // (the ruts, the track, the flags and the falls are windows sliding along the way: their strokes seeded by place)
