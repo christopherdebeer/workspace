@@ -6,6 +6,7 @@
  */
 import { M, PALETTE } from './mesh';
 import { SKY } from './paint';
+import { REGION } from './regions';
 import { FX, SUN as SUN0 } from './render';
 
 type Mood = { pal: Partial<Record<number, string[]>>; sky: Omit<typeof SKY, 'fog'> & { fog: number[][] }; fx: Partial<Record<keyof typeof FX, string[]>> };
@@ -65,6 +66,13 @@ const hexes = (a: string[]) => a.slice();
 const DAY = { pal: PALETTE.map(hexes), sky: JSON.parse(JSON.stringify(SKY)) as typeof SKY, fx: Object.fromEntries(Object.entries(FX).map(([k, v]) => [k, v.slice()])) as Record<keyof typeof FX, string[]> };
 /** a mood's whole state (the day's, with the mood's own over it) */
 function full(name: string) {
+  const e = fullOwn(name);
+  // (with the course's regions, the valley's floor is land below the snowline (its grass, by whatever light), not the
+  // alpine fields' lavenders and blues)
+  if (REGION.on) { const pal = e.pal.map(hexes); const g = pal[M.GRASS]; pal[M.FIELD] = [g[0], g[1], g[1], g[2]]; pal[M.VALLEY] = [g[2], g[2], g[3], g[3]]; return { ...e, pal }; }
+  return e;
+}
+function fullOwn(name: string) {
   if (name === 'day' || !MOODS[name]) return DAY;
   const m = MOODS[name], pal = DAY.pal.map(hexes);
   for (const [k, v] of Object.entries(m.pal)) pal[Number(k)] = v!;

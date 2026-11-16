@@ -454,6 +454,92 @@ export function foothillStrokes(seed: number): Float32Array {
  * turning down the fall lower down, lit from the left of the way you look), the farther hazier, a forest over the lower
  * slopes, its top ragged with treetops. Nowhere within 180 m of the road (a hairpin's other leg) */
 export const MID_SPAN = 240;
+/** The river in the valley under the course (`mood=course`): a line in the world, not drawn about the eye, so it's a real
+ * place the course can come down to: at station s it's this far out from the road on the drop side, wandering, at the
+ * valley floor's height (the course's own, smoothed, a long way below) */
+export function riverAt(c: Course, s: number) {
+  const u = 640 + 170 * Math.sin(s / 430 + c.seed) + 60 * Math.sin(s / 151 + c.seed * 2.3);
+  const y = (c.point(Math.max(0, s - 160), 0).y + c.point(s, 0).y + c.point(s + 160, 0).y) / 3 - 330;
+  return { u, y };
+}
+/** The middle distance below the belt (`mood=course`): the ground falling from the road's drop side to the river in
+ * spurs, ridges running out and down toward the valley with side valleys between them, so they lead the eye down and the
+ * river shows between them; on a strip of valley floor with the river winding through it. Painted as the course's own
+ * ground is (not the far off's planned strokes): lit by the run's own sun and light, its land coloured by the region
+ * (snow above the snowline, grass and earth below it, trees lower down), and hazed by distance as the near ground is.
+ * Spur faces in strokes down their fall from the ridge; trees as clumps of upright dabs, lit on top, thick in the valley
+ * bottom and along the river, thinning up the slopes; the river pale strokes along it. Seeded by stretch: two to four
+ * spurs, their heights, now and then a bare scree face. Nowhere within 180 m of the road. */
+export function midValleyStrokes(c: Course, k: number): Float32Array {
+  const R0 = rng(c.seed * 7121 + k * 97), s0 = k * MID_SPAN, s1 = s0 + MID_SPAN;
+  const road: number[][] = [];
+  for (let s = Math.max(0, s0 - 900); s < s1 + 900; s += 15) { const p = c.point(s, 0); road.push([p.x, p.z]); }
+  const clear = (x: number, z: number) => road.every(([rx, rz]) => (rx - x) ** 2 + (rz - z) ** 2 > 180 * 180);
+  const items: { d: number; st: number[] }[] = [];
+  const nrm = (v: number[]) => { const l = Math.hypot(v[0], v[1], v[2]) || 1; return [v[0] / l, v[1] / l, v[2] / l]; };
+  // (a stroke of ground: on its face, lit by the sun in the shader; its land by height and place)
+  const put = (p: number[], T: number[], L: number, n: number[], W: number, mt: number, stamp: number, d: number, kind = 0, band = -1) => {
+    if (!clear(p[0], p[2])) return;
+    items.push({ d, st: [p[0], p[1], p[2], mt + 0.45, T[0], T[1], T[2], L, n[0], n[1], n[2], W, R0(), stamp, (R0() - 0.5) * 0.25, kind, NEVER, band >= 0 ? 10 + band : 0, 0, 0] });
+  };
+  const land = (x: number, y: number, z: number, steep: number) => {
+    const g = grassiness(x, y, z);
+    if (steep > 0.8 && R0() < 0.6) return g > 0.3 ? M.UMBER : M.ROCK;
+    return R0() < g ? M.GRASS : M.SNOW;
+  };
+  const tree = (p: number[], size: number, d: number) => {
+    const toward = nrm([-p[0] + c.point(s0 + MID_SPAN / 2, 0).x, 0, -p[2] + c.point(s0 + MID_SPAN / 2, 0).z]);
+    // (a clump of trees, not one: three or four crowns, the one toward the sun lit)
+    for (let j = 0; j < 3 + Math.floor(R0() * 2); j++) { const ox = (R0() - 0.5) * size * 1.6, oz = (R0() - 0.5) * size * 1.6, h = size * (0.8 + R0() * 0.5);
+      put([p[0] + ox, p[1] + h * 0.5, p[2] + oz], [0, 1, 0], h * 1.4, toward, h * 0.75, M.BLACK, [3, 2, 4][Math.floor(R0() * 3)], d - 0.5 - j * 0.01, 3, R0() < 0.5 ? 3 : 2); }
+    put([p[0] - size * 0.3, p[1] + size * 1.0, p[2]], [0, 1, 0], size * 0.7, toward, size * 0.5, M.BLACK, 3, d - 0.6, 3, 1);
+  };
+  // (the valley floor and the river through it, laid first)
+  for (let s = s0; s < s1; s += 12) {
+    const r = riverAt(c, s), r2 = riverAt(c, s + 12), p = c.point(s, r.u), q = c.point(s + 12, r2.u);
+    const T = nrm([q.x - p.x, r2.y - r.y, q.z - p.z]), side = nrm([-T[2], 0, T[0]]);
+    for (let w = -260; w <= 220; w += 28) {
+      const x = p.x + side[0] * w + (R0() - 0.5) * 20, z = p.z + side[2] * w + (R0() - 0.5) * 20, y = r.y + Math.abs(w) * 0.06;
+      put([x, y, z], T, 40 + R0() * 30, [0, 1, 0], 16 + R0() * 8, R0() < grassiness(x, y, z) * 1.2 ? M.GRASS : M.SNOW, [11, 7, 12][Math.floor(R0() * 3)], r.u + w + 2000);
+      // (woods along the river and in the valley bottom)
+      if (Math.abs(w) > 30 && Math.abs(w) < 200 && R0() < 0.3) tree([x, y, z], 12 + R0() * 8, r.u + w + 1999);
+    }
+    // (the river: pale strokes along it, a lit one now and then)
+    for (let j = 0; j < 3; j++) put([p.x + side[0] * (R0() - 0.5) * 10, r.y + 0.5, p.z + side[2] * (R0() - 0.5) * 10], T, 26 + R0() * 18, [0, 1, 0], 9 + R0() * 5, M.WHITE, [0, 7][Math.floor(R0() * 2)], r.u + 1998, 0, R0() < 0.3 ? 0 : 1);
+  }
+  // (the spurs, from just under the road's drop edge out and down to the river)
+  const n = 2 + Math.floor(R0() * 3), scree = R0() < 0.2;
+  for (let q = 0; q < n; q++) {
+    const sk = s0 + ((q + 0.3 + R0() * 0.4) / n) * MID_SPAN, drift = (R0() - 0.5) * 160, top = c.point(sk, 0).y - 30 - R0() * 50;
+    const u0 = 150 + R0() * 60, uR = riverAt(c, sk).u - 70, P: { p: number[]; s: number; u: number }[] = [];
+    for (let t = 0; t <= 1.0001; t += 1 / 14) {
+      const s = sk + drift * t, u = u0 + (uR - u0) * t, floor = riverAt(c, s).y, y = floor + (top - floor) * Math.pow(1 - t, 1.25) * (0.94 + 0.06 * Math.sin(t * 9 + q));
+      const w = c.point(s, u); P.push({ p: [w.x, y, w.z], s, u });
+    }
+    for (let i = 0; i < P.length - 1; i++) {
+      const A = P[i], B = P[i + 1], Tr = nrm([B.p[0] - A.p[0], B.p[1] - A.p[1], B.p[2] - A.p[2]]), floor = riverAt(c, A.s).y, tall = A.p[1] - floor;
+      if (tall < 4) continue;
+      for (const sg of [-1, 1]) {
+        // (its face to that side: from the ridge down and out to the side valley's floor)
+        const reach = tall * 1.25 + 20, f = c.point(A.s + sg * reach, A.u), foot = [f.x, floor + tall * 0.08, f.z];
+        const D = [foot[0] - A.p[0], foot[1] - A.p[1], foot[2] - A.p[2]], dl = Math.hypot(D[0], D[1], D[2]), Td = [D[0] / dl, D[1] / dl, D[2] / dl];
+        let nn = nrm([Tr[1] * Td[2] - Tr[2] * Td[1], Tr[2] * Td[0] - Tr[0] * Td[2], Tr[0] * Td[1] - Tr[1] * Td[0]]); if (nn[1] < 0) nn = nn.map((v) => -v);
+        const steep = Math.abs(Td[1]), dist = A.u, W = 6 + dist * 0.022, L = Math.min(dl * 0.45, 12 + dist * 0.06), across = Math.max(1, Math.round(Math.hypot(B.p[0] - A.p[0], B.p[2] - A.p[2]) / (W * 0.8)));
+        for (let a = 0; a < across; a++) for (let f2 = 0.02; f2 < 1; f2 += (L * 0.55) / dl) {
+          const e = (a + R0()) / across, base = A.p.map((v, j) => v + (B.p[j] - v) * e), x = base[0] + D[0] * f2, y = base[1] + D[1] * f2, z = base[2] + D[2] * f2;
+          const mt = scree && f2 < 0.7 ? M.UMBER : land(x, y, z, steep);
+          put([x, y, z], Td, L * (0.8 + R0() * 0.4), nn, W * (0.85 + R0() * 0.3), mt, mt === M.GRASS ? [12, 10, 14][Math.floor(R0() * 3)] : mt === M.SNOW ? [11, 0, 2][Math.floor(R0() * 3)] : [9, 13, 5][Math.floor(R0() * 3)], A.u + f2 * 40);
+          // (trees, thick low on the face, thinning up it)
+          if (!scree && R0() < Math.max(0, f2 - 0.4) * 0.45 && grassiness(x, y, z) > 0.2) tree([x, y, z], 10 + dist * 0.016 + R0() * 6, A.u + f2 * 40 - 1);
+        }
+      }
+    }
+  }
+  // (the farthest first, so the nearer spurs and their trees paint over what's behind them)
+  items.sort((p, q) => q.d - p.d);
+  const out: number[] = []; for (const it of items) out.push(...it.st);
+  return new Float32Array(out);
+}
 export function midHillStrokes(c: Course, k: number): Float32Array {
   const R0 = rng(c.seed * 7121 + k * 97), list: number[][] = [], s0 = k * MID_SPAN, s1 = s0 + MID_SPAN;
   // (the road nearby, to keep clear of)

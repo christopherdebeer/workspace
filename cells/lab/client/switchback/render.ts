@@ -19,7 +19,7 @@ import type { Rider, Event } from './sim';
 import { GEARS } from './audio';
 import { buildRuts, Trail } from './ruts';
 import { buildGouges } from './gouge';
-import { STROKE, Painter, Strokes, Brush2D, strokesOver, skyStrokes, lineOf, courseStrokes, backdropLayers, valleyStrokes, midHillStrokes, MID_SPAN, seaStrokes, fallStrokes, flagStrokes, riderStrokes, partShadowStrokes } from './paint';
+import { STROKE, Painter, Strokes, Brush2D, strokesOver, skyStrokes, lineOf, courseStrokes, backdropLayers, valleyStrokes, midHillStrokes, midValleyStrokes, MID_SPAN, seaStrokes, fallStrokes, flagStrokes, riderStrokes, partShadowStrokes } from './paint';
 
 const VS = `#version 300 es
 in vec4 aP; uniform mat4 uVP; uniform vec3 uOff; uniform float uZj; out vec3 vW; flat out int vM;
@@ -191,7 +191,7 @@ export class Renderer {
     if (this.painter) {
       const lo = Math.floor((r.s - 400) / MID_SPAN), hi = Math.floor((r.s + 1600) / MID_SPAN);
       for (const [k, b] of this.mids) if (k < lo || k > hi) { b.free(); this.mids.delete(k); }
-      for (let k = Math.max(0, lo); k <= hi; k++) if (!this.mids.has(k)) { this.mids.set(k, this.painter.make(midHillStrokes(this.course, k))); if (this.mids.size > 2 && budget < 99) break; }
+      for (let k = Math.max(0, lo); k <= hi; k++) if (!this.mids.has(k)) { this.mids.set(k, this.painter.make(REGION.on ? midValleyStrokes(this.course, k) : midHillStrokes(this.course, k))); if (this.mids.size > 2 && budget < 99) break; }
     }
     const asp = this.W / this.H, fov = asp < 1 ? view.fov * 1.25 : view.fov;
     // (the eye's roll: its up tipped toward its right)

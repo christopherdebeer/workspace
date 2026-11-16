@@ -14,12 +14,13 @@ export type Time = 'day' | 'dusk' | 'night';
 export const TIMES: Time[] = ['day', 'dusk', 'night'];
 export const REGION = { on: false, beltS: 0, beltY: 0, half: 70, snowY: 0, seed: 1, time: 'day' as Time };
 /** the regions for a mountain: where the belt is (its station and height), the snowline under it */
-/** (time: the run's time of day, `time=day|dusk|night`; unset, the mountain's own, by its seed: day half the time,
- * dusk a third, night the rest) */
+/** (time: the run's time of day, `time=day|dusk|night`, day if unset; `time=auto` the mountain's own, by its seed: day
+ * half the time, dusk a third, night the rest) */
 export function setRegions(c: Course, time?: string | null) {
   REGION.on = true; REGION.seed = c.seed;
   const r = hash(c.seed, 5, 74);
-  REGION.time = (TIMES as string[]).includes(time ?? '') ? (time as Time) : r < 0.5 ? 'day' : r < 0.83 ? 'dusk' : 'night';
+  // (day unless asked; `time=auto` the mountain's own)
+  REGION.time = (TIMES as string[]).includes(time ?? '') ? (time as Time) : time === 'auto' ? (r < 0.5 ? 'day' : r < 0.83 ? 'dusk' : 'night') : 'day';
   REGION.beltS = 1000 + Math.round(hash(c.seed, 3, 71) * 500);
   REGION.beltY = c.point(REGION.beltS, 0).y;
   REGION.snowY = REGION.beltY - REGION.half - 20;
