@@ -489,12 +489,34 @@ export function midValleyStrokes(c: Course, k: number): Float32Array {
   };
   const tree = (p: number[], size: number, d: number) => {
     const toward = nrm([-p[0] + c.point(s0 + MID_SPAN / 2, 0).x, 0, -p[2] + c.point(s0 + MID_SPAN / 2, 0).z]);
+    // (under it, the wood's own dark mass, so trees join into woodland, not dots)
+    put([p[0], p[1] + size * 0.3, p[2]], [toward[2], 0, -toward[0]], size * 3.2, toward, size * 1.3, M.BLACK, 11, d - 0.4, 3, 3);
     // (a clump of trees, not one: three or four crowns, the one toward the sun lit)
     for (let j = 0; j < 3 + Math.floor(R0() * 2); j++) { const ox = (R0() - 0.5) * size * 1.6, oz = (R0() - 0.5) * size * 1.6, h = size * (0.8 + R0() * 0.5);
       put([p[0] + ox, p[1] + h * 0.5, p[2] + oz], [0, 1, 0], h * 1.4, toward, h * 0.75, M.BLACK, [3, 2, 4][Math.floor(R0() * 3)], d - 0.5 - j * 0.01, 3, R0() < 0.5 ? 3 : 2); }
     put([p[0] - size * 0.3, p[1] + size * 1.0, p[2]], [0, 1, 0], size * 0.7, toward, size * 0.5, M.BLACK, 3, d - 0.6, 3, 1);
   };
-  // (the valley floor and the river through it, laid first)
+  // (the far side of the valley: beyond the river the ground rises again, folded into ridges and gullies, to a crest high
+  // enough to stand over the road's drop edge as you look out; forest thick at its foot, thinning up it, grass and rock
+  // above, snow on top where it's above the snowline; its faces lit by the sun as they turn, its strokes down its fall)
+  for (let s = s0; s < s1; s += 14) {
+    const r = riverAt(c, s), fold = Math.sin(s / 95 + c.seed * 1.7) * 0.6 + Math.sin(s / 37 + c.seed) * 0.4;
+    const crestU = r.u + 520 + 160 * Math.sin(s / 300 + c.seed), crestY = r.y + 300 + 140 * Math.sin(s / 210 + c.seed * 0.7) + 60 * fold;
+    for (let t = 0.06; t < 1; t += 0.07) {
+      const u = r.u + 40 + (crestU - r.u - 40) * t, y = r.y + (crestY - r.y) * Math.pow(t, 0.8) + fold * 18 * Math.sin(t * 3);
+      const pA = c.point(s, u), pB = c.point(s, u + 30), pS = c.point(s + 14, u);
+      const yB = r.y + (crestY - r.y) * Math.pow(Math.min(1, t + 30 / (crestU - r.u)), 0.8);
+      const Td = nrm([pA.x - pB.x, y - yB, pA.z - pB.z]), along = nrm([pS.x - pA.x, 0, pS.z - pA.z]);
+      // (the fold turns the face toward one side or the other, so ridges and gullies catch the light differently)
+      let nn = nrm([along[1] * Td[2] - along[2] * Td[1], along[2] * Td[0] - along[0] * Td[2], along[0] * Td[1] - along[1] * Td[0]]); if (nn[1] < 0) nn = nn.map((v) => -v);
+      nn = nrm([nn[0] + along[0] * fold * 0.6, nn[1], nn[2] + along[2] * fold * 0.6]);
+      const x = pA.x + (R0() - 0.5) * 10, z = pA.z + (R0() - 0.5) * 10, dist = u, W = 10 + dist * 0.022, L = 22 + dist * 0.05;
+      const g = grassiness(x, y, z), mt = g < 0.3 ? M.SNOW : t > 0.75 && R0() < 0.5 ? M.ROCK : t > 0.5 && R0() < 0.3 ? M.UMBER : M.GRASS;
+      put([x, y, z], Td, L * (0.8 + R0() * 0.4), nn, W * (0.9 + R0() * 0.3), mt, mt === M.GRASS ? [12, 10, 0][Math.floor(R0() * 3)] : [9, 11, 0][Math.floor(R0() * 3)], 4000 + u);
+      if (t < 0.55 && g > 0.25 && R0() < (0.55 - t) * 1.6) tree([x, y, z], 14 + dist * 0.012 + R0() * 6, 4000 + u - 1);
+    }
+  }
+  // (the valley floor and the river through it)
   for (let s = s0; s < s1; s += 12) {
     const r = riverAt(c, s), r2 = riverAt(c, s + 12), p = c.point(s, r.u), q = c.point(s + 12, r2.u);
     const T = nrm([q.x - p.x, r2.y - r.y, q.z - p.z]), side = nrm([-T[2], 0, T[0]]);
@@ -502,10 +524,12 @@ export function midValleyStrokes(c: Course, k: number): Float32Array {
       const x = p.x + side[0] * w + (R0() - 0.5) * 20, z = p.z + side[2] * w + (R0() - 0.5) * 20, y = r.y + Math.abs(w) * 0.06;
       put([x, y, z], T, 40 + R0() * 30, [0, 1, 0], 16 + R0() * 8, R0() < grassiness(x, y, z) * 1.2 ? M.GRASS : M.SNOW, [11, 7, 12][Math.floor(R0() * 3)], r.u + w + 2000);
       // (woods along the river and in the valley bottom)
-      if (Math.abs(w) > 30 && Math.abs(w) < 200 && R0() < 0.3) tree([x, y, z], 12 + R0() * 8, r.u + w + 1999);
+      if (Math.abs(w) > 34 && Math.abs(w) < 200 && Math.sin((s + w * 2.3) / 60 + c.seed) > -0.2 && R0() < 0.5) tree([x, y, z], 13 + R0() * 8, r.u + w + 1999);
     }
     // (the river: pale strokes along it, a lit one now and then)
-    for (let j = 0; j < 3; j++) put([p.x + side[0] * (R0() - 0.5) * 10, r.y + 0.5, p.z + side[2] * (R0() - 0.5) * 10], T, 26 + R0() * 18, [0, 1, 0], 9 + R0() * 5, M.WHITE, [0, 7][Math.floor(R0() * 2)], r.u + 1998, 0, R0() < 0.3 ? 0 : 1);
+    // (the river: wide and pale, a lit stroke along it now and then, its banks a step darker either side)
+    for (let j = 0; j < 4; j++) put([p.x + side[0] * (R0() - 0.5) * 22, r.y + 0.5, p.z + side[2] * (R0() - 0.5) * 22], T, 30 + R0() * 20, [0, 1, 0], 16 + R0() * 8, M.WHITE, [0, 7][Math.floor(R0() * 2)], r.u + 1998, 0, R0() < 0.35 ? 0 : 1);
+    for (const sd of [-1, 1]) put([p.x + side[0] * sd * 22, r.y + 0.6, p.z + side[2] * sd * 22], T, 34, [0, 1, 0], 7, M.UMBER, 0, r.u + 1997.5, 0, 2);
   }
   // (the spurs, from just under the road's drop edge out and down to the river)
   const n = 2 + Math.floor(R0() * 3), scree = R0() < 0.2;
@@ -629,6 +653,22 @@ export function valleyStrokes(seed: number): Float32Array {
     plan(list, x, F + 0.5, z, M.FIELD, Math.min(0.55, r / 5500), [tx, 0, tz], r * (0.09 + R0() * 0.06), up, r * (0.022 + R0() * 0.01), R0(), [0, 7, 1][Math.floor(R0() * 3)], (R0() - 0.5) * 0.15, band);
   }
   list.sort((p, q) => Math.hypot(q[0], q[2]) - Math.hypot(p[0], p[2]));
+  // (with the course's regions, the valley floor isn't bare: woods in patches over it, each a dark mass of crowns with the
+  // tops toward the light lit, broader further off; and low rises among them, a step lighter on their sunward side)
+  if (REGION.on) {
+    const wood = (x: number, z: number) => Math.sin(x / 260 + seed * 1.3) * Math.sin(z / 210 - seed) + 0.5 * Math.sin((x - z) / 140 + seed);
+    for (let i = 0; i < 9000; i++) {
+      const r = 300 * Math.pow(3400 / 300, R0()), a = R0() * Math.PI * 2, x = Math.sin(a) * r, z = Math.cos(a) * r, haze = Math.min(0.55, r / 5500);
+      if (wood(x, z) > 0.25) {
+        const sz = r * (0.012 + R0() * 0.01), lit = R0() < 0.3;
+        plan(list, x, F + sz * 0.6, z, M.BLACK, haze, [0, 1, 0], sz * 1.4, [-Math.sin(a), 0, -Math.cos(a)], sz * 1.1, R0(), [3, 2, 11][Math.floor(R0() * 3)], 0, lit ? 1 : R0() < 0.5 ? 2 : 3);
+      } else if (wood(x, z) < -0.55 && R0() < 0.5) {
+        const sz = r * (0.03 + R0() * 0.02);
+        plan(list, x, F + 1, z, M.FIELD, haze, [Math.cos(a), 0, -Math.sin(a)], sz * 2, up, sz * 0.6, R0(), [11, 7][Math.floor(R0() * 2)], 0, R0() < 0.5 ? 0 : 1);
+      }
+    }
+    list.sort((p, q) => Math.hypot(q[0], q[2]) - Math.hypot(p[0], p[2]));
+  }
   const rv = riverLine(seed);
   for (let k = 0; k < rv.length - 1; k++) {
     const p = rv[k], q = rv[k + 1], dx = q[0] - p[0], dz = q[2] - p[2], L = Math.hypot(dx, dz), d = Math.hypot((p[0] + q[0]) / 2, (p[2] + q[2]) / 2);
@@ -970,7 +1010,9 @@ void main(){
   // (thinned with distance: a stroke past its turn shrinks away over a little more distance, rather than going at once)
   g *= clamp((keep - h(seed, 12.9898))/.12 + 1., 0., 1.);
   vec4 c = uVP*vec4(w, 1.);
-  if (g <= 0. || c.w < .3) { gl_Position = vec4(2., 2., 2., 1.); return; }
+  // (dropped only when it's wholly behind the eye: dropped when its middle was near or behind it, a stroke under the eye
+  // (on a ramp's lip, passing right beneath it) left bare paper with a hard edge)
+  if (g <= 0. || c.w < -max(a1.w, a2.w)) { gl_Position = vec4(2., 2., 2., 1.); return; }
   // The stroke is laid in the world, on its face, along its own way: nothing about how it lies comes from the screen, so
   // it can't swing as the eye moves. Across it, its width turns from lying on the face toward facing the eye as it gets
   // further off, so it never thins to a sliver (after Brush Rush).
@@ -987,7 +1029,7 @@ void main(){
   float face = sky ? 1. : both ? .35 + .5*smoothstep(4., 40., dist) : .15 + .75*smoothstep(5., 70., dist);
   vec3 Wd = normalize(mix(Bn, Be, face));
   // its size: thinned out, the ones kept are bigger; never thinner on the picture than a few pixels, never more than a part of it
-  float grow = inversesqrt(max(keep, .3)), k = uK*uRes.y*.5/c.w;
+  float grow = inversesqrt(max(keep, .3)), k = uK*uRes.y*.5/max(c.w, .3);
   float len = a1.w*grow, wid = a2.w*grow;
   wid = clamp(wid, uMinW/k, uRes.y*.19/k); len = clamp(len, wid*1.6, uRes.y*.5/k) + min(smearL, uRes.y*.3/k);
   float u = aQ.x*g, c2 = 2.*u - 1., s = (u - .5)*len, bend = a3.z*len*(1. - c2*c2)*.25;
