@@ -1,8 +1,8 @@
 {
   "cell": "c15r/lab",
   "cellId": "lab-8928acf3",
-  "treeVersion": "tree:33cccb570bb43fcf5f0d2ae6d7c99a7a20a4fbc98432b5d5e9028f3452e48753",
-  "syncedAt": "2026-11-16T14:33:21.725Z",
+  "treeVersion": "tree:e6cd7ef82f5137e49bcde6fb24028563be5196a8d1059b5d9b7f5d4b26071d0d",
+  "syncedAt": "2026-11-16T15:01:17.126Z",
   "files": {
     "README.md": "sha256:0be53420ec1d65ca68e1e925e1699b40295ecdd4991d17eb5c464a3ae8a51115",
     "client/autograph/autobiography.ts": "sha256:1aa72dbb927e6de87cdd920842be3b826ae520031f2589fadc9d4fe98abfbd67",
@@ -359,7 +359,7 @@
     "client/squishy/views.mjs": "sha256:3be686168cefd31d7c352ed2b39edc2a20285b2fbb109e9dbbaaede7cb07b675",
     "client/squishy/vmath.ts": "sha256:73cf91f9e4f7eb32096f0046cb88c243b4ddbf71f5efbfacc9d7819745ce4259",
     "client/switchback/audio.ts": "sha256:f485360d23786a2b86a2d73b352577e747aea5d8b71328f4f86f557b49ae4b77",
-    "client/switchback/backdrop.ts": "sha256:a052a5bae8cbcf8ee510a76ef897120fb4f7cbc6c4233bb176d7584dcaf0504f",
+    "client/switchback/backdrop.ts": "sha256:c56805443748b445558a0ced66a99c3fc921d6c91f9e24c7aefaaf7dced1a876",
     "client/switchback/callout.ts": "sha256:cda10dfa26ae0733417f4313453e2d4d77202af2511753befcccbd675c9564da",
     "client/switchback/course.ts": "sha256:e55b4ceebc60065e8d9cbf8fa3bb815488a1074ffe7cdc186a3186168e4e08ed",
     "client/switchback/gesture.ts": "sha256:b3bc2ed351a733a1074e17cae46a8be6e67eae4ef5d0dad68998de316b6399fd",
@@ -372,7 +372,7 @@
     "client/switchback/paint.ts": "sha256:984f770709d04f7b13364a25e259738f3177cd29dc37a760e7992ae29847a519",
     "client/switchback/rec.ts": "sha256:3adb9a0f21e9e6865e8ee5e50d0a17cc230923f78532909b1b6777eab0d5f597",
     "client/switchback/regions.ts": "sha256:bd31f40268f8a1ebd03da6f564f0e47b1fa7fea75b112aac12a4bf3e25022d79",
-    "client/switchback/render.ts": "sha256:830c45194c814e31ee9d1ee8d090ed9dde72ca930440471318b4f4b02b2f82ec",
+    "client/switchback/render.ts": "sha256:b7c6856b0402eb0c4c4fd0ae1416f7a6da486ffcc1c7e33486a046a1dc218f9b",
     "client/switchback/ruts.ts": "sha256:211e8ed8f47532d9f84c82b489905240711a69e7e9b9ae88f1a0ca670cdb5aa5",
     "client/switchback/score.ts": "sha256:76ab4b731089c7ce1a807fbd377d3b9bad679f9d3b982978dffeee523b100be8",
     "client/switchback/sign.ts": "sha256:23ba672653611946c11f8593c7c810ff719c0048652ed1523f6000f0f15f544f",
