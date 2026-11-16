@@ -19,7 +19,9 @@ import { valleyChunk, VSPAN } from './valley';
 import { buildMasses } from './backdrop';
 import { SKY as SKY_ENV } from './paint';
 // (`backdrop=mass|painted`: the composed backdrop experiment (backdrop.ts) in place of the ranges, valley and middle distance)
-const BACKDROP = typeof location !== 'undefined' ? new URLSearchParams(location.search).get('backdrop') : null, COMPOSED = BACKDROP === 'mass' || BACKDROP === 'painted';
+const BACKDROP = typeof location !== 'undefined' ? new URLSearchParams(location.search).get('backdrop') : null, COMPOSED = BACKDROP === 'mass' || BACKDROP === 'painted' || (typeof location !== 'undefined' && new URLSearchParams(location.search).has('probe'));
+// (`probe`: no sky and no backdrop, so what's left as paper is where the landscape would be seen: for measuring how much of a run shows it)
+const PROBE = typeof location !== 'undefined' && new URLSearchParams(location.search).has('probe');
 // (`valley=terrain`: the valley as real ground (valley.ts), an unfinished experiment, off by default)
 const VALLEY_TERRAIN = typeof location !== 'undefined' && new URLSearchParams(location.search).get('valley') === 'terrain';
 import type { Rider, Event } from './sim';
@@ -118,7 +120,7 @@ export class Renderer {
   paint = false; painter: Painter | null = null; stretchWanted = 1; leadWanted: [number, number] | null = null;
   /** only the backdrop drawn (`bg=`) */
   bgOnly = false;
-  private masses: { buf: Buf; strokes: Strokes | null } | null = null;
+  private masses: { id: number; buf: Buf; strokes: Strokes | null }[] | null = null;
   private mids = new Map<number, Strokes>(); private vchunks = new Map<number, { buf: Buf; strokes: Strokes }>(); private valleyOn = false;
   private floor: Strokes | null = null; private sea: Strokes | null = null; private backLayers: { s: Strokes; f: number; cap: number }[] = []; private eye0: number[] | null = null;
   /** the backdrop's parallax starts again from here (the start, or a respawn: the eye's cut there anyway) */
@@ -199,7 +201,7 @@ export class Renderer {
       // would, scaled), so the near hills slide against the far peaks; soft-capped, so it never comes up to you)
       this.backLayers = backdropLayers(this.course.seed).sort((a, b) => b.R - a.R).map((l) => ({ s: this.painter!.make(l.data), f: Math.min(0.75, Math.pow(1400 / l.R, 1.2)), cap: l.R * 0.36 }));
       this.backStrokes = [this.floor, ...this.backLayers.map((l) => l.s)];
-      this.skyS = this.painter.make(skyStrokes(this.course.seed)); this.painter.stretch = this.stretchWanted; if (this.leadWanted) this.painter.lead = this.leadWanted;
+      this.skyS = this.painter.make(skyStrokes(this.course.seed, COMPOSED)); this.painter.skyTex = COMPOSED ? 0.3 : 1; this.painter.stretch = this.stretchWanted; if (this.leadWanted) this.painter.lead = this.leadWanted;
       for (const b of this.chunks.values()) b.free();
       this.chunks.clear();
     }
@@ -278,7 +280,7 @@ export class Renderer {
       gl.stencilOp(gl.KEEP, gl.KEEP, gl.KEEP); gl.disable(gl.DEPTH_TEST);
       // (the sky, wherever nothing near stands: the ranges are painted over it, as a painter would)
       gl.colorMask(true, true, true, true); gl.stencilFunc(gl.NOTEQUAL, 1, 0xff);
-      paintBegin(); if (this.skyS) pt.draw(this.skyS, view.eye, false); pt.end(); gl.useProgram(this.prog);
+      if (!PROBE) { paintBegin(); if (this.skyS) pt.draw(this.skyS, view.eye, false); pt.end(); } gl.useProgram(this.prog);
       // (the backdrop, by its own depth, only where nothing near stands)
       gl.enable(gl.DEPTH_TEST); gl.clear(gl.DEPTH_BUFFER_BIT); gl.colorMask(false, false, false, false); gl.stencilFunc(gl.ALWAYS, 0, 0xff);
       gl.uniform3f(this.u.uOff, off[0], off[1], off[2]); this.ranges.draw(); this.valley.draw();
@@ -290,16 +292,22 @@ export class Renderer {
       // the floor rising toward you as you come down the mountain)
       if (COMPOSED) {
         // (the composed backdrop: its flat masses by order (the facets' own program, every band one colour), then its sparse marks)
-        if (!this.masses) { const b = buildMasses(this.course, BACKDROP === 'painted'); this.masses = { buf: new Buf(gl, b.verts), strokes: b.strokes.length ? pt.make(b.strokes) : null }; }
+        if (!this.masses) this.masses = buildMasses(this.course, BACKDROP === 'painted').map((p) => ({ id: p.id, buf: new Buf(gl, p.verts), strokes: p.strokes.length ? pt.make(p.strokes) : null }));
         // (the masses mark the stencil's bit 4 where they're drawn; their strokes are clipped to it, so the silhouettes are the
         // masses' own and the strokes only work inside them)
         gl.disable(gl.DEPTH_TEST); gl.uniform1f(this.u.uFog, 0); gl.uniform3f(this.u.uOff, off[0], off[1], off[2]);
         gl.uniform4f(this.u.uBelt, REGION.beltY, REGION.half, 70, REGION.on ? 1 : 0); gl.uniform3fv(this.u.uBeltCol, SKY_ENV.belt);
-        gl.stencilMask(0x04); gl.stencilOp(gl.KEEP, gl.KEEP, gl.REPLACE); gl.stencilFunc(gl.NOTEQUAL, 0x05, 0x01); this.masses.buf.draw();
-        gl.stencilMask(0xff); gl.stencilOp(gl.KEEP, gl.KEEP, gl.KEEP);
-        if (this.masses.strokes) { gl.stencilFunc(gl.EQUAL, 0x04, 0x04); paintBegin(); gl.disable(gl.DEPTH_TEST); pt.draw(this.masses.strokes, off, false); pt.end(); gl.useProgram(this.prog); }
+        // (each plane marks the stencil's upper bits with its own id where it's laid; its passages are clipped to that, so
+        // a passage reaches its own plane's edges and no further)
+        if (!PROBE) for (const p of this.masses) {
+          gl.useProgram(this.prog); gl.disable(gl.DEPTH_TEST);
+          gl.stencilMask(0xfc); gl.stencilOp(gl.KEEP, gl.KEEP, gl.REPLACE); gl.stencilFunc(gl.NOTEQUAL, (p.id << 2) | 1, 0x01); p.buf.draw();
+          gl.stencilMask(0xff); gl.stencilOp(gl.KEEP, gl.KEEP, gl.KEEP);
+          if (p.strokes) { gl.stencilFunc(gl.EQUAL, p.id << 2, 0xfc); paintBegin(); gl.disable(gl.DEPTH_TEST); pt.draw(p.strokes, off, false); pt.end(); }
+        }
+        gl.useProgram(this.prog);
         // (the sea of cloud over it all, seen from above the belt)
-        if (REGION.on && view.eye[1] > REGION.beltY + REGION.half + 4) { gl.stencilFunc(gl.NOTEQUAL, 1, 0x01); paintBegin(); gl.disable(gl.DEPTH_TEST); if (!this.sea) this.sea = pt.make(seaStrokes(this.course.seed)); pt.draw(this.sea, [view.eye[0], REGION.beltY + REGION.half, view.eye[2]], false); pt.end(); gl.useProgram(this.prog); }
+        if (!PROBE && REGION.on && view.eye[1] > REGION.beltY + REGION.half + 4) { gl.stencilFunc(gl.NOTEQUAL, 1, 0x01); paintBegin(); gl.disable(gl.DEPTH_TEST); if (!this.sea) this.sea = pt.make(seaStrokes(this.course.seed)); pt.draw(this.sea, [view.eye[0], REGION.beltY + REGION.half, view.eye[2]], false); pt.end(); gl.useProgram(this.prog); }
         gl.enable(gl.DEPTH_TEST);
       } else {
       paintBegin(); gl.disable(gl.DEPTH_TEST);
