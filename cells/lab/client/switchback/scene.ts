@@ -55,18 +55,20 @@ export function buildScene(c: Course): Plane[] {
   }
   pass(river, P(2550, 560, floorY(2550) + 2), P(1750, 620, floorY(1750) + 2), 26, M.WHITE, 0, 0);
   // ── a shoulder: a crest line, its two flanks falling to the floor either side (lit or in shade by the sun as they turn)
-  const shoulder = (name: string, crest: number[][], mt: number, flankBand: [number, number]) => {
+  // (spread: how broad its flanks are for its height (broad and quiet, or steep and sharp); passes: which segments carry a
+  // passage on its lit and shaded sides)
+  const shoulder = (name: string, crest: number[][], mt: number, flankBand: [number, number], spread: number, base: number, passes: (k: number, lit: boolean) => boolean) => {
     const p = plane(name);
     for (let k = 0; k < crest.length - 1; k++) {
       const [a0, b0, y0] = crest[k], [a1, b1, y1] = crest[k + 1], da = a1 - a0, db = b1 - b0, L = Math.hypot(da, db), na = -db / L, nb = da / L;
-      const w0 = (y0 - floorY(a0)) * 1.25 + 60, w1 = (y1 - floorY(a1)) * 1.25 + 60;
+      const w0 = (y0 - floorY(a0)) * spread + base, w1 = (y1 - floorY(a1)) * spread + base;
       for (const sg of [-1, 1]) {
         const f0 = P(a0 + na * w0 * sg, b0 + nb * w0 * sg, floorY(a0 + na * w0 * sg)), f1 = P(a1 + na * w1 * sg, b1 + nb * w1 * sg, floorY(a1 + na * w1 * sg));
         p.mesh.quad(P(a0, b0, y0), P(a1, b1, y1), f1, f0, mt, 0.5);
         // (a broad passage down the flank, on the flank itself: from just under the crest's middle toward the foot's middle,
         // the flank's own normal; not on every segment (a repetition that would show): every other one on the lit side,
         // one on the shaded side)
-        if (sg < 0 ? k % 2 === 0 : k === 1) {
+        if (passes(k, sg < 0)) {
           const c0 = P(a0, b0, y0), c1 = P(a1, b1, y1), C = c0.map((v, i) => (v + c1[i]) / 2), Fm = f0.map((v, i) => (v + f1[i]) / 2), dn = Fm.map((v, i) => v - C[i]), e = c1.map((v, i) => v - c0[i]);
           let n = [e[1] * dn[2] - e[2] * dn[1], e[2] * dn[0] - e[0] * dn[2], e[0] * dn[1] - e[1] * dn[0]]; const nl = Math.hypot(n[0], n[1], n[2]) || 1; n = n.map((v) => v / nl); if (n[1] < 0) n = n.map((v) => -v);
           pass(p, C.map((v, i) => v + dn[i] * 0.06), C.map((v, i) => v + dn[i] * 0.8), Math.min(Math.hypot(e[0], e[2]), 170) * 0.85, M.GRASS, sg < 0 ? flankBand[0] : flankBand[1], 7, n);
@@ -74,9 +76,11 @@ export function buildScene(c: Course): Plane[] {
       }
     }
   };
-  // (the farther, behind the river's middle reach, laid first)
-  shoulder('shoulderB', [[1500, 900, -10], [1900, 650, -25], [2300, 380, -80], [2650, 200, -210], [2850, 130, -340]], M.PATCH_NEAR, [1, 3]);
-  // (the nearer, out from the near slope, crossing in front of the river)
-  shoulder('shoulderA', [[500, 170, -45], [800, 260, -60], [1100, 340, -95], [1350, 420, -180], [1550, 480, -320]], M.PATCH_NEAR, [0, 2]);
+  // (the farther: a broad, quiet mass enclosing the valley's far side, its crest long and gently rounded, its flanks wide,
+  // one passage on its lit side and the rest left alone)
+  shoulder('shoulderB', [[1450, 1000, -40], [1750, 820, -12], [2100, 600, -8], [2450, 380, -40], [2750, 200, -140], [3000, 90, -300]], M.PATCH_NEAR, [1, 3], 2.1, 140, (k, lit) => lit && k === 2);
+  // (the nearer: a short, sharp interruption out from the near slope, steep and narrow, ending abruptly so the river shows
+  // past its end, between it and the far mass: the valley's opening)
+  shoulder('shoulderA', [[520, 170, -35], [760, 250, -45], [960, 320, -70], [1080, 370, -170], [1150, 400, -300]], M.PATCH_NEAR, [0, 2], 0.75, 35, (k, lit) => (lit ? k === 1 : k === 2));
   return planes.map((p) => ({ id: 0, name: p.name, verts: new Float32Array(p.mesh.v), strokes: new Float32Array(p.strokes), world: true }));
 }
