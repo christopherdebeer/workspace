@@ -4,7 +4,7 @@
  * The world is an endless plane of chunks (CHUNK metres square), each made from the seed and its own coordinates
  * alone, so any chunk can be made at any time, in any order, and is always the same. A chunk is a list of boxes on a
  * one-metre lattice: axis-aligned, standing on the ground or on a roof, each with a tag saying what it is (a building,
- * a raised part of its roof, the rim round it, a stair hut, a unit, a tank). Building heights are whole storeys.
+ * a raised part of its roof, the rim round it, a stair hut, a unit, a tank, a wall across an alley). Building heights are whole storeys.
  *
  * That list is the whole interface. The sim asks one question of it (`heightAt`: how high is the top surface here);
  * a renderer turns the boxes into whatever it likes. Nothing here knows about colour, light or triangles.
@@ -19,7 +19,7 @@ export const STOREY = 3;
 /** the buckets a chunk's boxes are sorted into, for `heightAt` (m) */
 const CELL = 8, CELLS = CHUNK / CELL;
 
-export const TAG = { GROUND: 0, BUILDING: 1, STEP: 2, HUT: 3, UNIT: 4, TANK: 5, PLAYER: 6, RIM: 7 } as const;
+export const TAG = { GROUND: 0, BUILDING: 1, STEP: 2, HUT: 3, UNIT: 4, TANK: 5, PLAYER: 6, RIM: 7, BEAM: 8 } as const;
 export type Tag = (typeof TAG)[keyof typeof TAG];
 
 export interface Box { x0: number; z0: number; x1: number; z1: number; y0: number; y1: number; tag: Tag }
@@ -68,6 +68,12 @@ export class City {
       const len = alongX ? w : d;
       if ((w <= max && d <= max) || len < 2 * MIN + gap) { this.lot(boxes, rand, int, x0, z0, x1, z1); return; }
       const at = int(MIN, len - gap - MIN);
+      // (across the gap, now and then, a wall a metre thick, about as high as the roofs it joins: a ledge to run along)
+      if (gap > 0 && rand() < 0.55) {
+        const p = int(1, (alongX ? d : w) - 2), g0 = (alongX ? x0 : z0) + at;
+        const bx0 = alongX ? g0 : x0 + p, bz0 = alongX ? z0 + p : g0, bx1 = alongX ? g0 + gap : bx0 + 1, bz1 = alongX ? bz0 + 1 : g0 + gap;
+        boxes.push({ x0: bx0, z0: bz0, x1: bx1, z1: bz1, y0: 0, y1: STOREY * Math.max(1, Math.round(2 + 4 * this.relief(bx0, bz0))), tag: TAG.BEAM });
+      }
       if (alongX) { split(x0, z0, x0 + at, z1, depth + 1); split(x0 + at + gap, z0, x1, z1, depth + 1); }
       else { split(x0, z0, x1, z0 + at, depth + 1); split(x0, z0 + at + gap, x1, z1, depth + 1); }
     };
@@ -122,6 +128,15 @@ export class City {
     let h = 0;
     for (const i of c.cells[b * CELLS + a]) { const o = c.boxes[i]; if (x >= o.x0 && x < o.x1 && z >= o.z0 && z < o.z1 && o.y1 > h) h = o.y1; }
     return h;
+  }
+
+  /** the box whose top is the surface at a point, if any */
+  topAt(x: number, z: number): Box | null {
+    const cx = Math.floor(x / CHUNK), cz = Math.floor(z / CHUNK), c = this.chunk(cx, cz);
+    const a = Math.min(CELLS - 1, Math.floor((x - cx * CHUNK) / CELL)), b = Math.min(CELLS - 1, Math.floor((z - cz * CHUNK) / CELL));
+    let top: Box | null = null;
+    for (const i of c.cells[b * CELLS + a]) { const o = c.boxes[i]; if (x >= o.x0 && x < o.x1 && z >= o.z0 && z < o.z1 && (!top || o.y1 > top.y1)) top = o; }
+    return top;
   }
 
   /** a roof to start on, near the origin: the middle of the biggest building of chunk (0, 0) */

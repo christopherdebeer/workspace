@@ -1,10 +1,11 @@
 # Roof Jumps
 
 A figure running over an endless city of rooftops, in any direction, leaping whatever is in the
-way. Drag anywhere and it runs that way (the drag is a stick: further is faster). It leaps gaps,
-steps and clutter by itself, runs up walls too high to leap, and comes down slowly, arms out, so
-a drop into a street is a glide you can steer. Tap to
-jump, and once more in the air. A second finger turns the eye. Keys: WASD or the arrows, space,
+way. Drag anywhere and it runs that way (the drag is a stick: further is faster). What it does
+about what is in front of it is its own, and it is not one jump: it hops clutter, bounds and
+flips across gaps, springs up a storey, dives down one and rolls out, glides the long ones,
+dashes off a clean landing, balances along ledges, runs along walls and up them. Tap to
+jump, and once more in the air (a flip). A second finger turns the eye. Keys: WASD or the arrows, space,
 Q and E.
 
 This is a study of two things only, the geometry and the figure moving over it, and it is drawn
@@ -14,19 +15,21 @@ looks can be tried over later without touching it.
 `?seed=` the city · `?look=grid|clay|wire|tags|normals` · `?auto` it runs itself, wandering ·
 `?t=` start that many seconds into such a run · `?still` hold the frame · `?preview` nothing over
 the picture · `?follow=0` the eye never turns by itself · `?far=` chunks drawn each way (4) ·
-`?side=90&zoom=1.6` the eye side on and close, for looking at the rig.
+`?side=90&zoom=1.6` the eye side on and close, for looking at the rig · `?study=<move>&mu=0.5`
+one move's pose held, that far through it.
 
 ## The geometry (`city.ts`)
 
 The world is a plane of chunks, 64 m square, each made from the seed and its own coordinates
 alone: any chunk, at any time, in any order, always the same. A chunk is a list of boxes on a
-one-metre lattice, about 140 of them (1,400 triangles):
+one-metre lattice, about 160 of them (1,600 triangles):
 
 - the chunk inside its streets is split in two again and again into lots, with a street, an alley
   or nothing between the halves;
 - each lot is a building, low and close: two to six three-metre storeys, its height from a slow
   noise over the plane (so a neighbour is mostly within a storey of it), the odd taller one, and
   alleys of one to three metres between;
+- across a gap, now and then, a wall a metre thick, about as high as the roofs it joins;
 - on its roof, perhaps a rim a metre high, a raised part a storey up, a stair hut, a few units, a
   tank.
 
@@ -39,18 +42,36 @@ A point with a velocity, and the judgement that makes the running effortless. At
 or a wall it looks along the way it is going for where it can next stand: the first flat place
 within a storey up or a couple down, else a wall, else the highest place in reach however far
 down. Then it throws itself there on an arc worked out to land it: high enough to clear what is
-between, flat enough to keep its pace. A wall is jumped at, caught and run up. It goes up as
-anything does and comes down at a gentle sink (7.5 m/s at most), so leaps carry far and every
-landing is soft. Turn away in the air and the leap is yours again. Its test holds a direction for a minute, sixteen ways in four
-cities, and checks it never stops, never leaves the surface, and makes at least 5 m/s good
+between, flat enough to keep its pace. Which move it throws is chosen by what is in front of it:
+
+| move | when | what it is |
+|---|---|---|
+| hop | clutter or a rim in the way, close | low and quick, a hurdle |
+| bound | a gap at about this height | flat and fast, the legs split |
+| flip | every other long bound; anything tall in the way | tucked and turned over forwards |
+| spring | a storey up | steep, the arms thrown up, knees to the chest, a deep landing |
+| dive | a storey or two down | headfirst and flat, rolled out of |
+| glide | a long way across or down; any fall | the slow one: arms out, sinking gently, steerable |
+
+On the ground it runs, sprints after a couple of seconds, bursts into a dash out of a roll or off
+a clean landing with room ahead, and balances along anything narrow (a rim, a wall across an
+alley), drawn onto its line if you are going its way. In the air a wall alongside is run along,
+tilted off it, then kicked away from: wall to wall down an alley. A wall ahead too high to spring
+onto is jumped at, caught and run up. Turn away in the air and the leap is yours again.
+
+ Its test holds a direction for a minute, sixteen ways in four
+cities, and checks it never stops, never leaves the surface, makes at least 5 m/s good, and makes every move
 (`node cells/lab/devtools/roofjumps.test.mjs`).
 
 ## The figure (`rig.ts`)
 
 Thirteen bones: pelvis, torso, head, two-part arms, two-part legs, feet. No keyframes. Each pose
-is a dozen joint angles worked out from what the runner is doing: the stride's phase, the
-flight (driving up off one leg, then a glide: upright, arms straight out, legs hanging
-together), the landing's weight, the wall. The hips ride at the height that puts the lower foot on the ground.
+is sixteen joint angles worked out from the move and how far through it is, the stride's phase,
+the landing's weight, the wall's side. A pose is a function of the body alone, so it can be
+looked at without running anything, and that is how the poses are worked on:
+`node cells/lab/devtools/roofjumps-poses.mjs` lays every move out at five points through it,
+from the side and from behind, and `roofjumps-strip.mjs` lays a stretch of a run out frame by
+frame with the move named on each. The hips ride at the height that puts the lower foot on the ground.
 `bones()` gives each bone's matrix and its extent as a tapered block; the lab draws the blocks,
 and anything else could hang on the same matrices.
 
@@ -64,8 +85,8 @@ over the same chunks and bones.
 ## Not yet
 
 Sloped roofs, ledges, planks and wires between buildings (everything is a box so far); vaults,
-wall runs along a wall, slides; feet placed by IK; sound; the eye kept out of walls in a tight
-alley.
+slides; feet placed by IK; hands that reach what they vault; a pose for the kick off a wall;
+sound.
 
 ## After
 

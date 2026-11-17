@@ -36,7 +36,7 @@ const { City, Runner, Rig, CHUNK, STOREY, TAG, VERTEX, chunkMesh, figureMesh, FI
 // a runner holding a direction crosses the city in it
 {
   const DT = 1 / 120, SECONDS = 60;
-  let worst = Infinity, leaps = 0, climbs = 0;
+  let worst = Infinity, leaps = 0, climbs = 0; const moves = {};
   for (const seed of [1, 2, 7, 31]) for (let k = 0; k < 16; k++) {
     const a = (k / 16) * 2 * Math.PI + 0.1, dx = Math.sin(a), dz = Math.cos(a);
     const city = new City(seed), r = new Runner(city), rig = new Rig(), x0 = r.x, z0 = r.z;
@@ -52,12 +52,14 @@ const { City, Runner, Rig, CHUNK, STOREY, TAG, VERTEX, chunkMesh, figureMesh, FI
     }
     const made = (r.x - x0) * dx + (r.z - z0) * dz;
     assert.ok(longest < 0.5, `never stops for long (seed ${seed}, dir ${k}: ${longest.toFixed(2)}s)`);
-    worst = Math.min(worst, made / SECONDS); leaps += r.leaps; climbs += r.climbs;
+    worst = Math.min(worst, made / SECONDS); leaps += r.leaps; climbs += r.climbs; for (const [m, n] of Object.entries(r.made)) moves[m] = (moves[m] ?? 0) + n;
     const bones = rig.bones(r), o = new Float32Array(FIGURE);
     assert.equal(bones.length, 13); assert.equal(figureMesh(bones, o) * VERTEX, FIGURE);
     assert.ok(o.every(Number.isFinite));
   }
   assert.ok(worst > 5, `makes its way at a run (slowest ${worst.toFixed(1)} m/s made good)`);
   console.log(`64 runs of ${SECONDS}s: slowest ${worst.toFixed(1)} m/s made good; ${leaps} leaps, ${climbs} walls run up`);
+  console.log('  moves: ' + Object.entries(moves).sort((a, b) => b[1] - a[1]).map(([m, n]) => `${m} ${n}`).join(', '));
+  for (const m of ['hop', 'bound', 'flip', 'spring', 'dive', 'glide', 'roll', 'dash', 'wallrun', 'climb']) assert.ok(moves[m] > 20, `it ${m}s`);
 }
 console.log('roofjumps: ok');

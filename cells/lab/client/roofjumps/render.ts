@@ -53,7 +53,7 @@ void main() {
     vec3 w = fwidth(vBary), e = smoothstep(vec3(0.0), 1.2 * w, vBary);
     col = mix(vec3(0.12), uFog, min(e.x, min(e.y, e.z)));
   } else if (uLook == 3) {
-    float h = float(tag) / 8.0;
+    float h = float(tag) / 9.0;
     col = (0.55 + 0.45 * cos(6.2832 * (h + vec3(0.0, 0.33, 0.67)))) * lit;
   } else if (uLook == 4) col = n * 0.5 + 0.5;
   float dist = length(vPos - uEye);

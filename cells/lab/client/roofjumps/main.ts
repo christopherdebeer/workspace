@@ -4,19 +4,21 @@
  * moving over it (runner.ts: the body and its judgement; rig.ts: the skeleton posed from it). It is drawn as plainly
  * as it can be (render.ts), on purpose, so that looks can be tried over the same geometry later.
  *
- * Drag anywhere and the figure runs that way (the drag is a stick: further is faster); it leaps gaps, steps and
- * clutter and runs up walls by itself, and comes down slowly, arms out: a drop is a glide you can steer. Tap to jump (and once more in the air). A second
+ * Drag anywhere and the figure runs that way (the drag is a stick: further is faster). What it does about what's in
+ * front of it is its own: it hops clutter, bounds and flips gaps, springs up a storey, dives down one and rolls out,
+ * glides the long ones, dashes off a clean landing, balances along ledges, runs along and up walls. Tap to jump (and once more in the air). A second
  * finger turns the eye. Keys: WASD or the arrows, space, Q and E.
  *
  * Flags: `seed=` the city · `look=grid|clay|wire|tags|normals` how it's drawn · `auto` it runs itself, wandering ·
  * `t=` start that many seconds into such a run · `still` hold the frame · `preview` nothing over the picture (and
  * `auto`) · `follow=0` the eye never turns by itself · `far=` chunks drawn each way (4) · `side=` the eye swung round the
- * figure by that many degrees (90: side on) and `zoom=` brought that many times closer: for looking at the rig.
+ * figure by that many degrees (90: side on) and `zoom=` brought that many times closer: for looking at the rig ·
+ * `study=<move>&mu=` one move's pose held, that far through it (0..1), nothing running.
  */
 import { noise1 } from '../kit/rng';
 import { City } from './city';
 import { Runner } from './runner';
-import type { Input } from './runner';
+import type { Body, Input, Move } from './runner';
 import { Rig } from './rig';
 import { LOOKS, Renderer } from './render';
 import type { Look } from './render';
@@ -35,7 +37,7 @@ rd.resize(); addEventListener('resize', () => rd.resize());
 
 // ─── the eye ──────────────────────────────────────────────────────────────────
 /** `side=`, `zoom=`: the eye swung round the figure and brought closer, for looking at the rig */
-const side = Number(q.get('side') ?? 0) * Math.PI / 180, zoom = Math.max(0.2, Number(q.get('zoom') ?? 1));
+let side = Number(q.get('side') ?? 0) * Math.PI / 180; const zoom = Math.max(0.2, Number(q.get('zoom') ?? 1));
 let yaw = 0.6, pitch = side ? 0.15 : 0.3;
 const eyeAt = { x: runner.x, y: runner.y, z: runner.z };
 
@@ -81,8 +83,8 @@ addEventListener('blur', () => keys.clear());
 /** what's asked of the runner now: a direction on the ground, turned from the screen's by the eye */
 function input(t: number): Input {
   if (auto) {
-    // (by itself: wandering, the heading a slow noise)
-    const a = 7 * noise1(seed + 9, t * 0.06) + t * 0.04;
+    // (by itself: wandering, the heading a slow noise, drawn toward the city's own two directions: along its alleys, its walls, its ledges)
+    const w = 7 * noise1(seed + 9, t * 0.06) + t * 0.04, a = w - 0.22 * Math.sin(4 * w);
     return { x: Math.sin(a), z: Math.cos(a), jump: false };
   }
   const k = (...c: string[]) => (c.some((x) => keys.has(x)) ? 1 : 0);
@@ -91,6 +93,21 @@ function input(t: number): Input {
   const fx = Math.sin(yaw), fz = Math.cos(yaw), j = jump; jump = false;
   return { x: fx * -sy + -fz * sx, z: fz * -sy + fx * sx, jump: j };
 }
+
+// ─── a pose held, to be looked at (`study=`, and `__roofjumps.pose`) ───────────
+let held: Body | null = null;
+function hold(move: string, mu: number, lead = 1, wallSide = 1): void {
+  const ground = ['run', 'dash', 'ledge', 'roll', 'land', 'stand'].includes(move);
+  held = {
+    x: runner.x, y: runner.y, z: runner.z, heading: 0, turn: 0, lead, wallSide, mu,
+    move: (move === 'land' || move === 'stand' ? 'run' : move) as Move,
+    state: ground ? 'ground' : move === 'climb' ? 'climb' : move === 'wallrun' ? 'wall' : 'air',
+    speed: move === 'stand' ? 0 : move === 'land' ? 5 : move === 'dash' ? 18 : move === 'ledge' ? 8 : 12,
+    phase: mu * 2 * Math.PI, climbT: mu * 0.42, wallT: mu * 0.45, land: move === 'land' ? 1 - mu : 0,
+  };
+  yaw = 0; pitch = 0.16;
+}
+if (q.get('study')) hold(q.get('study')!, Number(q.get('mu') ?? 0.5), Number(q.get('lead') ?? 1), Number(q.get('wall') ?? 1));
 
 // ─── the frame ────────────────────────────────────────────────────────────────
 const DT = 1 / 120;
@@ -111,33 +128,46 @@ document.getElementById('another')!.addEventListener('click', () => { const u = 
 
 function frame(now: number): void {
   const dt = Math.min(0.05, (now - last) / 1000); last = now;
-  if (!still) { acc += dt; while (acc >= DT) { advance(DT); acc -= DT; } }
+  if (held) rig.update(1, held);
+  else if (!still) { acc += dt; while (acc >= DT) { advance(DT); acc -= DT; } }
   yaw += (k('KeyE') - k('KeyQ')) * 1.8 * dt;
   // (the eye: close behind the figure and a little above, wide, and round behind wherever it's going)
   const e = (r: number) => (still ? 1 : 1 - Math.exp(-r * dt));
   eyeAt.x += (runner.x - eyeAt.x) * e(10); eyeAt.z += (runner.z - eyeAt.z) * e(10); eyeAt.y += (runner.y - eyeAt.y) * e(6);
-  if (follow && !others.size && runner.speed > 2) {
+  if (follow && !held && !others.size && runner.speed > 2) {
     let d = Math.atan2(runner.vx, runner.vz) - yaw; d -= Math.round(d / (2 * Math.PI)) * 2 * Math.PI;
     yaw += d * Math.max(0, Math.cos(d / 2)) * (auto ? 1.6 : 0.9) * dt;
   }
+  // (and wider the faster it goes)
+  rush += ((held ? 0 : 13 * Math.max(0, Math.min(1, (runner.speed - 10) / 8))) - rush) * e(4);
   rd.resize();
-  const aspect = canvas.width / canvas.height, dist = (aspect < 1 ? 5.6 : 4.6) / zoom, fov = (zoom > 1 ? 50 : aspect < 1 ? 80 : 68) * Math.PI / 180;
-  const tx = eyeAt.x, ty = eyeAt.y + (zoom > 1 ? 1 : 1.7), tz = eyeAt.z, c = Math.cos(pitch), ya = yaw + side;
-  const eye = [tx - Math.sin(ya) * c * dist, ty + Math.sin(pitch) * dist, tz - Math.cos(ya) * c * dist];
-  const vp = mul(perspective(fov, aspect, 0.3, rd.radius * 64 * 1.5), lookAt(eye, [tx, ty, tz], [0, 1, 0]));
+  const aspect = canvas.width / canvas.height, dist = (aspect < 1 ? 5.6 : 4.6) / zoom, fov = ((zoom > 1 ? 50 : aspect < 1 ? 80 : 68) + rush) * Math.PI / 180;
+  const tx = eyeAt.x, ty = eyeAt.y + (zoom > 1 ? 0.95 : 1.7), tz = eyeAt.z, c = Math.cos(pitch), ya = yaw + side;
+  // (never inside a building: the eye comes in along its own line to just short of whatever is between it and the figure)
+  const at = (f: number) => [tx - Math.sin(ya) * c * dist * f, ty + Math.sin(pitch) * dist * f, tz - Math.cos(ya) * c * dist * f];
+  let room = 1;
+  if (!held) for (let f = 0.1; f <= 1.001; f += 0.1) { const p = at(f); if (city.heightAt(p[0], p[2]) > p[1] - 0.25) { room = Math.max(0.12, f - 0.1); break; } }
+  near += (room - near) * (room < near ? 1 : e(3));
+  const eye = at(near);
+  const vp = mul(perspective(fov, aspect, 0.15, rd.radius * 64 * 1.5), lookAt(eye, [tx, ty, tz], [0, 1, 0]));
   rd.stream(runner.x, runner.z, 2);
   const under = city.heightAt(runner.x, runner.z), h = Math.max(0, runner.y - under);
-  rd.draw(vp, eye, rig.bones(runner), { x: runner.x, y: under, z: runner.z, r: 0.5 * (1 - 0.4 * Math.min(1, h / 12)), a: 0.4 * (1 - 0.6 * Math.min(1, h / 20)) });
+  rd.draw(vp, eye, rig.bones(held ?? runner), { x: runner.x, y: under, z: runner.z, r: 0.5 * (1 - 0.4 * Math.min(1, h / 12)), a: 0.4 * (1 - 0.6 * Math.min(1, h / 20)) });
   frames++;
   requestAnimationFrame(frame);
 }
 const k = (c: string) => (keys.has(c) ? 1 : 0);
+let rush = 0, near = 1;
 requestAnimationFrame(frame);
 
 /** what a test (or the curious) can ask of it */
 (window as unknown as Record<string, unknown>).__roofjumps = {
   probe: () => ({
     seed, t: time, frames, x: runner.x, y: runner.y, z: runner.z, state: runner.state, speed: runner.speed, dist: runner.dist,
-    leaps: runner.leaps, climbs: runner.climbs, look: rd.look, tris: rd.tris, pending: rd.pending(runner.x, runner.z),
+    move: runner.move, leaps: runner.leaps, climbs: runner.climbs, walls: runner.walls, rolls: runner.rolls, dashes: runner.dashes, made: runner.made, look: rd.look, tris: rd.tris, pending: rd.pending(runner.x, runner.z),
   }),
+  /** swing the eye round the figure, to that many degrees */
+  view: (deg: number) => { side = deg * Math.PI / 180; },
+  /** hold a move's pose, `mu` through it (and null: let go) */
+  pose: (move: string | null, mu = 0.5, lead = 1, wall = 1) => { if (move) hold(move, mu, lead, wall); else held = null; },
 };
