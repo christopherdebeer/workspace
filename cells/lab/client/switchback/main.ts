@@ -30,7 +30,8 @@ import { C15R } from './hand';
 import { Composer, Live, exportClip, save } from './rec';
 import { Callouts } from './callout';
 import { applyMood, cycleAt, lightAlong } from './mood';
-import { setRegions, lightKeys } from './regions';
+import { setRegions, lightKeys, REGION } from './regions';
+const beltY = new URLSearchParams(location.search).has('belty') ? Number(new URLSearchParams(location.search).get('belty')) : null, beltOsc = Number(new URLSearchParams(location.search).get('beltosc') ?? 0);
 
 const q = new URLSearchParams(location.search);
 const seed = Number(q.get('seed') ?? 1) | 0 || 1, preview = q.has('preview'), still = q.has('still');
@@ -376,6 +377,9 @@ function tick(dt: number) {
   if ((zjit || ejit || hold) && !heldView && performance.now() - t0 > 4000) heldView = { ...vw, eye: vw.eye.slice(), target: vw.target.slice() };
   if (ejit) { const e = (drawn % 2) * 0.01; vw.eye = [vw.eye[0] + e, vw.eye[1], vw.eye[2]]; vw.target = [vw.target[0] + e, vw.target[1], vw.target[2]]; }
   if (bgFlag) { const [yw = 0, pc = 4, fv = 60] = bgFlag.map((v) => (v * Math.PI) / 180), d = 100; rd.bgOnly = true; vw.target = [vw.eye[0] + Math.sin(yw) * Math.cos(pc) * d, vw.eye[1] + Math.sin(pc) * d, vw.eye[2] + Math.cos(yw) * Math.cos(pc) * d]; vw.roll = 0; vw.fov = fv; }
+  // (`belty=<dy>`: the belt moved so its top is dy metres below the eye (the eye where the chase camera puts it), for
+  // testing the cloud's handover; `beltosc=<amp>` swings it ± amp over ~1.5 s, as a jump would)
+  if (beltY !== null && REGION.on) REGION.beltY = vw.eye[1] - REGION.half - beltY - (beltOsc ? beltOsc * Math.sin(t * 4.2) : 0);
   rd.cloudAt(t);
   if (moodCourse) { lightAlong(rider.s, lightKeys()); rd.envChanged(); }
   if (moodCycle) { const name = cycleAt(t); rd.envChanged(); if (name !== moodShown) { moodShown = name; if (!name.includes('→')) callouts.say(name === 'day' ? 'DAY' : name.toUpperCase(), t); } }

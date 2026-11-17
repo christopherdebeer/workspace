@@ -974,25 +974,25 @@ const SEG = 8;
 const VS = `#version 300 es
 layout(location=0) in vec2 aQ; layout(location=1) in vec4 a0; layout(location=2) in vec4 a1; layout(location=3) in vec4 a2; layout(location=4) in vec4 a3; layout(location=5) in vec4 a4;
 uniform mat4 uVP, uPrev; uniform vec3 uOff, uEye, uSun; uniform vec3 uPal[152]; uniform float uFog, uK, uMinW, uStretch, uDens, uGrow, uReveal; uniform vec2 uRes, uFront;
-uniform vec3 uSkyLo, uSkyHi, uSkyPale, uSmear, uCloudLit, uCloudShade; uniform float uCloud, uHazeK, uHazeB, uLit, uFlat, uThin; uniform vec3 uFogs[4]; uniform vec4 uBelt; uniform vec3 uBeltCol; uniform float uSink, uSkyTex;
+uniform vec3 uSkyLo, uSkyHi, uSkyPale, uSmear, uCloudLit, uCloudShade; uniform float uCloud, uHazeK, uHazeB, uLit, uFlat, uThin; uniform vec3 uFogs[4]; uniform vec4 uBelt; uniform vec3 uBeltCol; uniform float uSink, uSkyTex, uSea;
 out vec2 vUv; out vec3 vA; out vec3 vB; flat out float vStamp; out float vFresh; flat out float vTex;
 float h(float s, float k){ return fract(sin(s*k)*43758.5453); }
-// (the cloud belt (\`mood=course\`): how much cloud lies along the line from the eye to a point, by the share of that line
-// inside the belt's heights: above it, what's below is under a sea of cloud; inside it the air closes in; below it, a
-// ceiling. uBelt: its middle's height, half its depth, the distance that hides, on)
-vec3 belt(vec3 c, vec3 w, float dist){
+// (the cloud belt (\`mood=course\`), one model for the strokes and the solid masses alike: how much cloud lies along the
+// line from the eye to a point, by the share of it inside the belt's heights; inside, banks thicker and thinner,
+// drifting; below it, a ceiling thinning the further down you are and breaking into patches of sky. uBelt: its middle's
+// height, half its depth, the distance that hides, on)
+vec3 beltMix(vec3 c, vec3 w, float dist){
   if (uBelt.w < .5) return c;
   float yb = uBelt.x - uBelt.y, yt = uBelt.x + uBelt.y, lo = min(uEye.y, w.y), hi = max(uEye.y, w.y), dy = hi - lo;
   float ov = max(0., min(hi, yt) - max(lo, yb)), path = dy > 1. ? ov/dy*dist : (uEye.y > yb && uEye.y < yt ? dist : 0.);
-  // (inside, banks thicker and thinner, drifting)
   float bank = .55 + .45*sin(w.x/90. + uCloud*380.)*sin(w.z/70. - uCloud*290.);
   float k = 1. - exp(-path/(uBelt.z*mix(.45, 1.7, bank)));
-  // (below it, the ceiling thins the further down you are, and breaks: patches of clear sky through it)
   if (uEye.y < yb) { float under = smoothstep(25., 240., yb - uEye.y), hole = fract(sin(dot(floor(w.xz/520.), vec2(12.9898, 78.233)))*43758.5453);
     k *= mix(1., hole > .45 ? .12 : .6, under); }
   vec3 col = uBeltCol*mix(.9, 1.06, clamp((w.y - yb)/(2.*uBelt.y), 0., 1.));
   return mix(c, col, k);
 }
+vec3 belt(vec3 c, vec3 w, float dist){ return beltMix(c, w, dist); }
 void main(){
   vec3 w = a0.xyz + uOff, n = a2.xyz, T = normalize(a1.xyz); float seed = a3.x, kind = a3.w; bool sky = kind > .5 && kind < 2.5, both = kind > 2.5;
   // (the clouds drift round the sky, the wind's way)
@@ -1014,7 +1014,7 @@ void main(){
   // paper; what's behind a range is hidden by its depth anyway)
   if (!sky && !both && !far) g *= smoothstep(-.02, .12, dot(n, V));
   // (the middle distance's hills where they're down in the sea of cloud, seen from above it: under it, not painted)
-  if (uSink > .5 && uBelt.w > .5 && uEye.y > uBelt.x + uBelt.y) g *= smoothstep(uBelt.x + uBelt.y - 6., uBelt.x + uBelt.y + 10., w.y);
+  if (uSink > .5 && uBelt.w > .5) g *= mix(1., smoothstep(uBelt.x + uBelt.y - 6., uBelt.x + uBelt.y + 10., w.y), smoothstep(uBelt.x + uBelt.y - 60., uBelt.x + uBelt.y + 40., uEye.y));
   int mt0 = int(a0.w);
   if (far && (mt0 == 6 || mt0 == 7 || mt0 == 12 || mt0 == 13 || mt0 == 14) && dot(n, V) < 0.) g = 0.;
   if (!sky && dot(n, V) < 0.) n = -n;
@@ -1088,6 +1088,8 @@ void main(){
   // (a planned stroke of the far off: hazed toward the horizon by its distance)
   if (far && code >= 0) { float hz = min(.88, fract(a0.w)/.9*uHazeK + uHazeB); vA = mix(mix(vA, mid, hz*uFlat), uSkyLo, hz); vB = mix(mix(vB, mid, hz*uFlat), uSkyLo, hz); }
   vA = belt(vA, w, dist); vB = belt(vB, w, dist);
+  // (the sea of cloud's billows, as the eye comes down into the belt: losing their light and shade into the mist's own colour)
+  if (uSea >= 0.) { vA = mix(uBeltCol, vA, uSea); vB = mix(uBeltCol, vB, uSea); }
 }`;
 const FS = `#version 300 es
 precision highp float;
@@ -1134,7 +1136,7 @@ export class Painter {
     const p = gl.createProgram()!; gl.attachShader(p, sh(gl.VERTEX_SHADER, VS)); gl.attachShader(p, sh(gl.FRAGMENT_SHADER, FS)); gl.linkProgram(p);
     if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p) ?? 'link');
     this.prog = p;
-    for (const k of ['uSmear', 'uVP', 'uPrev', 'uOff', 'uEye', 'uSun', 'uPal', 'uFog', 'uK', 'uMinW', 'uStretch', 'uDens', 'uRes', 'uAtlas', 'uSkyLo', 'uSkyHi', 'uSkyPale', 'uCloud', 'uCloudLit', 'uCloudShade', 'uHazeK', 'uHazeB', 'uFogs', 'uLit', 'uFlat', 'uThin', 'uBelt', 'uBeltCol', 'uSink', 'uSkyTex', 'uFront', 'uGrow', 'uReveal']) this.u[k] = gl.getUniformLocation(p, k);
+    for (const k of ['uSmear', 'uVP', 'uPrev', 'uOff', 'uEye', 'uSun', 'uPal', 'uFog', 'uK', 'uMinW', 'uStretch', 'uDens', 'uRes', 'uAtlas', 'uSkyLo', 'uSkyHi', 'uSkyPale', 'uCloud', 'uCloudLit', 'uCloudShade', 'uHazeK', 'uHazeB', 'uFogs', 'uLit', 'uFlat', 'uThin', 'uBelt', 'uBeltCol', 'uSink', 'uSkyTex', 'uSea', 'uFront', 'uGrow', 'uReveal']) this.u[k] = gl.getUniformLocation(p, k);
     gl.useProgram(p);
     this.pal = palette; this.sun0 = sun;
     // (the quad: a strip along the stroke, SEG pieces, so a bent stroke bends smoothly)
@@ -1156,7 +1158,7 @@ export class Painter {
     gl.uniform3fv(this.u.uSkyLo, SKY.lo); gl.uniform3fv(this.u.uSkyHi, SKY.hi); gl.uniform3fv(this.u.uSkyPale, SKY.pale); gl.uniform3fv(this.u.uCloudLit, SKY.cloudLit); gl.uniform3fv(this.u.uCloudShade, SKY.cloudShade);
     gl.uniform1f(this.u.uHazeK, SKY.haze); gl.uniform1f(this.u.uHazeB, SKY.hazeBase); gl.uniform3fv(this.u.uFogs, new Float32Array(SKY.fog.flat()));
     gl.uniform1f(this.u.uLit, SKY.lit); gl.uniform1f(this.u.uFlat, SKY.flat); gl.uniform1f(this.u.uThin, SKY.thin);
-    gl.uniform4f(this.u.uBelt, REGION.beltY, REGION.half, 70, REGION.on ? 1 : 0); gl.uniform3fv(this.u.uBeltCol, SKY.belt); gl.uniform1f(this.u.uSink, this.sink); gl.uniform1f(this.u.uSkyTex, this.skyTex);
+    gl.uniform4f(this.u.uBelt, REGION.beltY, REGION.half, 70, REGION.on ? 1 : 0); gl.uniform3fv(this.u.uBeltCol, SKY.belt); gl.uniform1f(this.u.uSink, this.sink); gl.uniform1f(this.u.uSkyTex, this.skyTex); gl.uniform1f(this.u.uSea, -1);
   }
   make(data: Float32Array, dynamic = false) { return new Strokes(this.gl, this.quad, data, dynamic); }
   /** where the rider is: the front only ever goes on (put back at a checkpoint, what's laid stays laid) */
@@ -1186,6 +1188,8 @@ export class Painter {
   /** (the middle distance: sunk into the sea of cloud) */
   sink = 0;
   setSink(on: boolean) { this.sink = on ? 1 : 0; this.gl.uniform1f(this.u.uSink, this.sink); }
+  /** the sea of cloud's strokes drawn with this much of their own light (−1: not the sea) */
+  setSea(f: number) { this.gl.uniform1f(this.u.uSea, f); }
   draw(s: Strokes, off: number[], fog: boolean) {
     const gl = this.gl;
     if (!s.n) return;

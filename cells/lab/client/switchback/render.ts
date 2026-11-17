@@ -45,7 +45,22 @@ void main() { vec3 w = aP.xyz + uOff; vW = w - uEye; vM = int(aP.w); vT = fract(
   gl_Position.z += uZj * fract(float(gl_VertexID / 3) * .618) * gl_Position.w; }`;
 const FS = `#version 300 es
 precision highp float;
-in vec3 vW; flat in int vM; flat in float vT; uniform vec3 uPal[152]; uniform vec3 uEye; uniform vec3 uSun; uniform float uFog; uniform float uNoThings; uniform vec4 uBelt; uniform vec3 uBeltCol; uniform vec3 uHazeCol; out vec4 o;
+in vec3 vW; flat in int vM; flat in float vT; uniform vec3 uPal[152]; uniform vec3 uEye; uniform vec3 uSun; uniform float uFog; uniform float uNoThings; uniform vec4 uBelt; uniform vec3 uBeltCol; uniform vec3 uHazeCol; uniform float uCloud; out vec4 o;
+// (the cloud belt (\`mood=course\`), one model for the strokes and the solid masses alike: how much cloud lies along the
+// line from the eye to a point, by the share of it inside the belt's heights; inside, banks thicker and thinner,
+// drifting; below it, a ceiling thinning the further down you are and breaking into patches of sky. uBelt: its middle's
+// height, half its depth, the distance that hides, on)
+vec3 beltMix(vec3 c, vec3 w, float dist){
+  if (uBelt.w < .5) return c;
+  float yb = uBelt.x - uBelt.y, yt = uBelt.x + uBelt.y, lo = min(uEye.y, w.y), hi = max(uEye.y, w.y), dy = hi - lo;
+  float ov = max(0., min(hi, yt) - max(lo, yb)), path = dy > 1. ? ov/dy*dist : (uEye.y > yb && uEye.y < yt ? dist : 0.);
+  float bank = .55 + .45*sin(w.x/90. + uCloud*380.)*sin(w.z/70. - uCloud*290.);
+  float k = 1. - exp(-path/(uBelt.z*mix(.45, 1.7, bank)));
+  if (uEye.y < yb) { float under = smoothstep(25., 240., yb - uEye.y), hole = fract(sin(dot(floor(w.xz/520.), vec2(12.9898, 78.233)))*43758.5453);
+    k *= mix(1., hole > .45 ? .12 : .6, under); }
+  vec3 col = uBeltCol*mix(.9, 1.06, clamp((w.y - yb)/(2.*uBelt.y), 0., 1.));
+  return mix(c, col, k);
+}
 void main() {
   // (painted, the things standing on the ground (the fence, the poles, the pines, a kicker's boards) claim no depth and no
   // stencil: what's behind them is painted, and their strokes over it, so a gap between their strokes shows that, not paper)
@@ -59,17 +74,8 @@ void main() {
   float d = length(vW.xz), f = floor(clamp((d - 80.) / 520., 0., 1.) * 4.) / 4.;
   vec3 fogs[4] = vec3[4](vec3(.62, .66, .9), vec3(.33, .45, .88), vec3(.14, .33, .84), vec3(.09, .26, .78));
   o = vec4(mix(c, fogs[b], min(1., f * 1.1) * uFog), 1.);
-  // (the composed backdrop's masses through the cloud belt (\`mood=course\`), as the strokes are: by how much of the line
-  // from the eye lies in the belt's heights; below it, a ceiling thinning the further down you are)
-  // (the regional middle distance: hazed toward the horizon by its distance, so the far slope recedes)
-  if (vM >= 35) o.rgb = mix(o.rgb, uHazeCol, smoothstep(250., 2600., length(vW)) * .6);
-  if (vM >= 26 && uBelt.w > .5) {
-    float wy = vW.y + uEye.y, dist = length(vW), yb = uBelt.x - uBelt.y, yt = uBelt.x + uBelt.y, lo = min(uEye.y, wy), hi = max(uEye.y, wy), dy = hi - lo;
-    float ov = max(0., min(hi, yt) - max(lo, yb)), path = dy > 1. ? ov / dy * dist : (uEye.y > yb && uEye.y < yt ? dist : 0.);
-    float k = 1. - exp(-path / uBelt.z);
-    if (uEye.y < yb) k *= mix(1., .45, smoothstep(25., 240., yb - uEye.y));
-    o.rgb = mix(o.rgb, uBeltCol, k);
-  }
+  // (the composed backdrop's masses, and the regional middle distance, through the cloud belt: the strokes' own model)
+  if (vM >= 26) o.rgb = beltMix(o.rgb, vW + uEye, length(vW));
 }`;
 
 export type Mat = Float32Array;
@@ -129,6 +135,14 @@ export class Renderer {
   private floor: Strokes | null = null; private sea: Strokes | null = null; private backLayers: { s: Strokes; f: number; cap: number }[] = []; private eye0: number[] | null = null;
   /** the backdrop's parallax starts again from here (the start, or a respawn: the eye's cut there anyway) */
   rebase() { this.eye0 = null; }
+  /** how much of the sea of cloud's own light shows, by the eye's height: all of it above the belt's top, merging into the
+   * mist's colour as the eye comes down into the belt, gone 60 m in (where it's the mist's colour anyway): no switch at a
+   * height for a jump to cross back and forth */
+  private seaFade(eye: number[]) { if (!REGION.on) return 0; const k = Math.max(0, Math.min(1, (eye[1] - (REGION.beltY + REGION.half - 60)) / 100)); return k * k * (3 - 2 * k); }
+  private drawSea(pt: Painter, eye: number[]) {
+    if (!this.sea) this.sea = pt.make(seaStrokes(this.course.seed));
+    pt.setSea(this.seaFade(eye)); pt.draw(this.sea, [eye[0], REGION.beltY + REGION.half, eye[2]], false); pt.setSea(-1);
+  }
   /** the palette's changed (a mood cycling): the painter's floats again */
   envChanged() { const p = new Float32Array(PALETTE.flat().map(hex).flat()); if (this.painter) this.painter.pal = p; this.gl.useProgram(this.prog); this.gl.uniform3fv(this.u.uPal, p); }
   /** the clouds drifted round by game time t (about a degree every eight seconds) */
@@ -164,7 +178,7 @@ export class Renderer {
     const p = gl.createProgram()!; gl.attachShader(p, sh(gl.VERTEX_SHADER, VS)); gl.attachShader(p, sh(gl.FRAGMENT_SHADER, FS)); gl.bindAttribLocation(p, 0, 'aP'); gl.linkProgram(p);
     if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p) ?? 'link');
     this.prog = p;
-    for (const n of ['uVP', 'uOff', 'uPal', 'uEye', 'uSun', 'uFog', 'uZj', 'uNoThings', 'uBelt', 'uBeltCol', 'uHazeCol']) this.u[n] = gl.getUniformLocation(p, n);
+    for (const n of ['uVP', 'uOff', 'uPal', 'uEye', 'uSun', 'uFog', 'uZj', 'uNoThings', 'uBelt', 'uBeltCol', 'uHazeCol', 'uCloud']) this.u[n] = gl.getUniformLocation(p, n);
     gl.useProgram(p);
     gl.uniform3fv(this.u.uPal, new Float32Array(PALETTE.flat().map(hex).flat()));
     gl.uniform3fv(this.u.uSun, new Float32Array(SUN));
@@ -273,7 +287,7 @@ export class Renderer {
       const off = [view.eye[0], view.eye[1] - 60, view.eye[2]];
       // (the ground and the rider (whose strokes, on both sides of it, need its own depth to hide its far side): the things
       // on the ground, the flags and the falls claim no depth or stencil)
-      this.valleyOn = REGION.on && VALLEY_TERRAIN && view.eye[1] < REGION.beltY + REGION.half;
+      this.valleyOn = REGION.on && VALLEY_TERRAIN;
       const near = () => { if (this.bgOnly) return; gl.uniform3f(this.u.uOff, 0, 0, 0); gl.uniform1f(this.u.uNoThings, 1); for (const b of this.chunks.values()) b.draw(); if (this.valleyOn) for (const v of this.vchunks.values()) v.buf.draw(); gl.uniform1f(this.u.uNoThings, 0); this.rider.set(body, true); this.rider.draw(); };
       // (where things stand, in the stencil: 2 the backdrop, 1 anything near; nothing drawn)
       gl.colorMask(false, false, false, false); gl.disable(gl.DEPTH_TEST); gl.enable(gl.STENCIL_TEST); gl.stencilOp(gl.KEEP, gl.KEEP, gl.REPLACE); gl.stencilFunc(gl.ALWAYS, 2, 0xff);
@@ -300,7 +314,7 @@ export class Renderer {
         // (the masses mark the stencil's bit 4 where they're drawn; their strokes are clipped to it, so the silhouettes are the
         // masses' own and the strokes only work inside them)
         gl.disable(gl.DEPTH_TEST); gl.uniform1f(this.u.uFog, 0); gl.uniform3f(this.u.uOff, off[0], off[1], off[2]);
-        gl.uniform4f(this.u.uBelt, REGION.beltY, REGION.half, 70, REGION.on ? 1 : 0); gl.uniform3fv(this.u.uBeltCol, SKY_ENV.belt);
+        gl.uniform4f(this.u.uBelt, REGION.beltY, REGION.half, 70, REGION.on ? 1 : 0); gl.uniform3fv(this.u.uBeltCol, SKY_ENV.belt); gl.uniform1f(this.u.uCloud, this.painter ? this.painter.cloud : 0);
         // (each plane marks the stencil's upper bits with its own id where it's laid; its passages are clipped to that, so
         // a passage reaches its own plane's edges and no further)
         if (!PROBE) for (const p of this.masses) {
@@ -311,7 +325,7 @@ export class Renderer {
         }
         gl.useProgram(this.prog);
         // (the sea of cloud over it all, seen from above the belt)
-        if (!PROBE && REGION.on && view.eye[1] > REGION.beltY + REGION.half + 4) { gl.stencilFunc(gl.NOTEQUAL, 1, 0x01); paintBegin(); gl.disable(gl.DEPTH_TEST); if (!this.sea) this.sea = pt.make(seaStrokes(this.course.seed)); pt.draw(this.sea, [view.eye[0], REGION.beltY + REGION.half, view.eye[2]], false); pt.end(); gl.useProgram(this.prog); }
+        if (!PROBE && this.seaFade(view.eye) > 0) { gl.stencilFunc(gl.NOTEQUAL, 1, 0x01); paintBegin(); gl.disable(gl.DEPTH_TEST); this.drawSea(pt, view.eye); pt.end(); gl.useProgram(this.prog); }
         gl.enable(gl.DEPTH_TEST);
       } else {
       paintBegin(); gl.disable(gl.DEPTH_TEST);
@@ -320,7 +334,7 @@ export class Renderer {
       // (the middle distance's hills, standing in the world: the farther stretches first)
       // (the sea of cloud, seen from above the belt (`mood=course`): over the valley and the layers' feet, under the middle
       // distance's hills where they rise out of it)
-      if (REGION.on && view.eye[1] > REGION.beltY + REGION.half + 4) { if (!this.sea) this.sea = pt.make(seaStrokes(this.course.seed)); pt.draw(this.sea, [view.eye[0], REGION.beltY + REGION.half, view.eye[2]], false); }
+      if (this.seaFade(view.eye) > 0) this.drawSea(pt, view.eye);
       pt.setSink(true);
       for (const k of [...this.mids.keys()].sort((a, b) => b - a)) pt.draw(this.mids.get(k)!, [0, 0, 0], false);
       pt.setSink(false);
@@ -335,7 +349,7 @@ export class Renderer {
       // another as they should; the near ground's strokes are painted over them after)
       if (PATCH && REGION.on && !this.bgOnly) {
         if (!this.patch) this.patch = new Buf(gl, buildPatch(this.course));
-        gl.uniform1f(this.u.uFog, 0); gl.uniform3f(this.u.uOff, 0, 0, 0); gl.uniform4f(this.u.uBelt, REGION.beltY, REGION.half, 70, 1); gl.uniform3fv(this.u.uBeltCol, SKY_ENV.belt); gl.uniform3fv(this.u.uHazeCol, SKY_ENV.lo);
+        gl.uniform1f(this.u.uFog, 0); gl.uniform3f(this.u.uOff, 0, 0, 0); gl.uniform4f(this.u.uBelt, REGION.beltY, REGION.half, 70, 1); gl.uniform3fv(this.u.uBeltCol, SKY_ENV.belt); gl.uniform1f(this.u.uCloud, this.painter ? this.painter.cloud : 0); gl.uniform3fv(this.u.uHazeCol, SKY_ENV.lo);
         this.patch.draw();
       }
       gl.depthFunc(gl.LEQUAL);
