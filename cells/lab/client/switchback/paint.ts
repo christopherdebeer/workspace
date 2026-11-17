@@ -1,0 +1,1354 @@
+/**
+ * Switchback painted (`paint=1`): the mountain, and everything on it, laid in brush strokes, with nothing under them.
+ *
+ * The facets stay underneath as the underpainting (so nothing is ever a hole), and the strokes go over them, each one a
+ * mark with a reason: planted on a face of the ground where the chunk is built, running the way that ground runs (along
+ * the road on the road, across the slope on the snow, down the face on rock, level on the far ranges), coloured from the
+ * same four bands the facets use, its bristles mixing toward the band next to it so the colour breaks up as paint does.
+ * The strokes are small and close by the road and grow and thin away from it, so where you ride is drawn finely and the
+ * mountain round it in a few big marks; and thin further off still, out to the ranges. The rider, the fence, the posts,
+ * the pines and the kickers aren't painted: they stay crisp, so what you have to read reads.
+ *
+ * A stroke is built on the screen where it's drawn: its length laid along its way as the eye sees it (never shorter than
+ * a third of itself, however end-on), its width never thinner than a few pixels; and stretched along its own motion on
+ * the screen since the last frame, so the speed is in the marks themselves, as far as they move and no further.
+ *
+ * The marks come from an atlas of brush stamps made here when the page loads (no images): each a brush of bristles,
+ * every bristle carrying its own load of paint, starting and lifting a little apart from the rest, running dry along
+ * the stroke, leaving a groove between it and the next, and piling paint where it lifts. A stamp's red is where paint
+ * is, its green the paint's relief (the ridges catch the light), its blue which of the stroke's two colours.
+ */
+import type { Course } from './course';
+import { M, rangeProfiles, foothillProfiles, riverLine, fallPaths, flagPaths } from './mesh';
+import type { RiderPart } from './mesh';
+import { REGION, grassiness } from './regions';
+import { ground } from './ground';
+import { lines, plain, trackY } from './ruts';
+
+// ─── the stamps ─────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+/** The stamps, each a kind of brush (and two of some, loaded differently):
+ * 0-1 flat · 2 round · 3 dab · 4 round · 5-6 dry flat (running out) · 7 long flat (for the far off) · 8 flick (heavy at the
+ * start, whipped thin, curving) · 9 impasto (few thick bristles, deep ridges, ragged edges) · 10 scumble (broken, dragged
+ * dry over the tooth) · 11 wash (soft-edged, smooth, little relief) · 12 fan (bristles splayed apart along it) · 13 knife
+ * (a palette knife: flat, hard-edged, cut off on a slant, paint ridged at its sides) · 14 rake (a few distinct lines) ·
+ * 15 flick, the other way. */
+const KINDS = ['flat', 'flat', 'round', 'dab', 'round', 'dry', 'dry', 'long', 'flick', 'impasto', 'scumble', 'wash', 'fan', 'knife', 'rake', 'flick'] as const;
+export const STAMP = { W: 256, H: 64, COLS: 4, ROWS: 4 } as const;
+
+function rng(seed: number) { let a = seed >>> 0; return () => { a = (a + 0x9e3779b9) >>> 0; let t = a; t = Math.imul(t ^ (t >>> 16), 0x21f0aaad); t = Math.imul(t ^ (t >>> 15), 0x735a2d97); return ((t ^ (t >>> 15)) >>> 0) / 4294967296; }; }
+const ss = (a: number, b: number, x: number) => { const t = Math.max(0, Math.min(1, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
+
+/** each kind's brush: bristles (lanes), how distinct (groove: 0 none … 1 deep), how they run dry, how ragged, how wavy */
+const BRUSHES: Record<(typeof KINDS)[number], { lanes: [number, number]; groove: number; dry: number; rag: number; wav: number; soft: number; relief: number }> = {
+  flat: { lanes: [8, 13], groove: 0.12, dry: 0.18, rag: 0.3, wav: 0.07, soft: 0.18, relief: 0.7 },
+  round: { lanes: [8, 12], groove: 0.12, dry: 0.2, rag: 0.3, wav: 0.07, soft: 0.2, relief: 0.7 },
+  dab: { lanes: [6, 8], groove: 0.15, dry: 0.1, rag: 0.35, wav: 0.05, soft: 0.2, relief: 0.8 },
+  dry: { lanes: [10, 15], groove: 0.25, dry: 0.65, rag: 0.55, wav: 0.07, soft: 0.15, relief: 0.6 },
+  long: { lanes: [10, 14], groove: 0.1, dry: 0.15, rag: 0.25, wav: 0.03, soft: 0.2, relief: 0.5 },
+  flick: { lanes: [9, 12], groove: 0.15, dry: 0.3, rag: 0.35, wav: 0.16, soft: 0.2, relief: 0.75 },
+  impasto: { lanes: [5, 7], groove: 0.55, dry: 0.08, rag: 0.6, wav: 0.06, soft: 0.1, relief: 1.3 },
+  scumble: { lanes: [12, 18], groove: 0.2, dry: 0.45, rag: 0.95, wav: 0.08, soft: 0.25, relief: 0.4 },
+  wash: { lanes: [26, 34], groove: 0.02, dry: 0.1, rag: 0.12, wav: 0.04, soft: 0.45, relief: 0.15 },
+  fan: { lanes: [6, 8], groove: 0.9, dry: 0.35, rag: 0.4, wav: 0.1, soft: 0.1, relief: 0.6 },
+  knife: { lanes: [30, 40], groove: 0.03, dry: 0.05, rag: 0.15, wav: 0.0, soft: 0.04, relief: 0.5 },
+  rake: { lanes: [4, 6], groove: 1, dry: 0.3, rag: 0.4, wav: 0.08, soft: 0.1, relief: 0.6 },
+};
+
+/** The atlas: STAMP.COLS × STAMP.ROWS stamps, RGBA bytes. */
+export function stampAtlas(): { data: Uint8Array; w: number; h: number } {
+  const { W: CW, H: CH, COLS, ROWS } = STAMP, w = CW * COLS, h = CH * ROWS, data = new Uint8Array(w * h * 4);
+  KINDS.forEach((kind, idx) => {
+    const B = BRUSHES[kind], R = rng(idx * 7717 + 31), lanes = B.lanes[0] + Math.floor(R() * (B.lanes[1] - B.lanes[0] + 1));
+    // (each bristle: its load, where it touches down and lifts, how fast it runs dry, its share of the second colour)
+    const lane = Array.from({ length: lanes }, () => ({
+      load: 0.62 + R() * 0.45, start: R() * (kind === 'dab' ? 0.08 : kind === 'knife' ? 0.02 : 0.13), end: 1 - R() * (0.12 + B.dry * 0.3),
+      rate: B.dry * (0.6 + R() * 0.8), tone: R(),
+    }));
+    // (bristles clump: each band its own width, a few broad, most narrow)
+    const bounds = [0];
+    for (let j = 0; j < lanes; j++) bounds.push(bounds[j] + 0.35 + 1.9 * Math.pow(R(), 1.6));
+    for (let j = 0; j <= lanes; j++) bounds[j] /= bounds[lanes];
+    // (neighbouring bristles were loaded together: their colours are near)
+    for (let p = 0; p < 2; p++) for (let j = 1; j < lanes - 1; j++) lane[j].tone = (lane[j - 1].tone + lane[j].tone * 2 + lane[j + 1].tone) / 4;
+    const wav = R() * 6.28, flip = idx === 15;
+    const noise = (x: number, s: number) => { const i = Math.floor(x), f = x - i, u = f * f * (3 - 2 * f), a = rng(i * 131 + s)(), b = rng((i + 1) * 131 + s)(); return a + (b - a) * u; };
+    const ox = (idx % COLS) * CW, oy = Math.floor(idx / COLS) * CH;
+    for (let py = 0; py < CH; py++) for (let px = 0; px < CW; px++) {
+      let u = (px - 6) / (CW - 12); const v = ((py - 4) / (CH - 8)) * 2 - 1;
+      if (flip) u = 1 - u;
+      let cov = 0, rel = 0, tone = 0.5;
+      if (u > 0 && u < 1 && v > -1 && v < 1) {
+        // (the brush's outline along the stroke)
+        const lift = Math.pow(1 - ss(0.72, 1, u), 0.6);
+        let e: number;
+        switch (kind) {
+          case 'round': e = Math.pow(Math.sin(Math.PI * u), 0.55); break;
+          case 'dab': e = Math.sqrt(Math.max(0, 1 - ((u - 0.5) / 0.5) ** 2)); break;
+          case 'long': e = Math.min(1, u / 0.05) ** 0.5 * (1 - 0.45 * u) * lift; break;
+          case 'flick': e = Math.min(1, u / 0.04) ** 0.4 * Math.pow(1 - u, 0.75); break;
+          case 'wash': e = Math.pow(Math.sin(Math.PI * Math.min(1, u * 1.15)), 0.4); break;
+          case 'fan': e = (0.45 + 0.55 * u) * Math.min(1, u / 0.05) ** 0.5 * (0.4 + 0.6 * lift); break;
+          case 'knife': e = Math.min(1, u / 0.015); break;
+          default: e = Math.min(1, u / 0.08) ** 0.6 * (0.35 + 0.65 * lift);
+        }
+        // (a flick bends as it goes; the rest wave a little)
+        const v2 = e > 0.02 ? v / e + B.wav * Math.sin(u * 7 + wav) + (kind === 'flick' ? 0.5 * u * u : 0) : 9;
+        // (a knife is cut off on a slant)
+        const cut = kind === 'knife' ? u < 1 - 0.25 * (v + 1) : true;
+        const edge = 1 - B.rag * 0.25 * noise(u * 30 + v * 3, idx * 53);
+        if (Math.abs(v2) < edge && cut) {
+          const at = (v2 + 1) / 2 + 0.9 * (noise(u * 3 + v * 2, idx * 71) - 0.5) / lanes;
+          let j = 0; while (j < lanes - 1 && bounds[j + 1] < at) j++;
+          const fj = Math.max(0, Math.min(1, (at - bounds[j]) / (bounds[j + 1] - bounds[j]))), L = lane[j];
+          const gw = 0.5 - 0.35 * B.groove, groove = ss(0, gw, fj) * (1 - ss(1 - gw, 1, fj));
+          let paint = L.load - L.rate * Math.max(0, u - L.start) ** 1.3 + (noise(u * 38 + j * 13.1, idx * 17 + j) - 0.5) * (0.2 + B.rag * 0.4);
+          paint += (noise(u * 9 + j * 3.3, idx * 29) - 0.5) * 0.2;
+          // (a scumble drags dry over the paper's tooth: broken in both directions)
+          if (kind === 'scumble') paint -= 0.55 * noise(u * 70 + v * 23, idx * 61) * noise(u * 17 - v * 9, idx * 67);
+          cov = ss(0.18, 0.36, paint) * ss(L.start, L.start + 0.03, u) * (1 - ss(L.end - 0.035, L.end, u));
+          cov *= 1 - B.groove + B.groove * groove;
+          cov *= 1 - ss(1 - B.soft * 1.6 - 0.05, 1, Math.abs(v2) / edge);
+          // (the relief: the bristles' ridges, the paint piled where each lifts, a knife's paint pushed to its sides)
+          rel = cov * B.relief * ((0.55 + 0.45 * groove) * (0.45 + 0.5 * L.load) + 0.55 * Math.exp(-(((L.end - 0.025 - u) / 0.035) ** 2)));
+          if (kind === 'knife') rel = cov * (0.25 + 0.75 * ss(0.7, 0.95, Math.abs(v2)));
+          tone = Math.max(0, Math.min(1, 0.5 + (L.tone - 0.5) * (kind === 'knife' ? 0.5 : 0.9) + (noise(u * 3 + v2 * 1.5, idx * 41 + 3) - 0.5) * 0.55));
+        }
+      }
+      const o = ((oy + py) * w + ox + px) * 4;
+      data[o] = Math.round(Math.min(1, cov) * 255); data[o + 1] = Math.round(Math.min(1, rel) * 255); data[o + 2] = Math.round(tone * 255); data[o + 3] = 255;
+    }
+  });
+  return { data, w, h };
+}
+
+// ─── the strokes ────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+/** floats per stroke: where (3), material + tone; its way (3), length; its face's normal (3), width; seed, stamp, bend,
+ * kind (0 ground, culled from behind; 1 sky; 2 sky, paler; 3 both sides: things, the rider); the station it's laid at
+ * (or NEVER: always laid, the backdrop and what moves), its pass (0 the masses, 1 the detail), and two spare */
+export const STROKE = 20;
+/** the sky's colours and the far off's haze (a mood (mood.ts) may change them before the painter's made) */
+export const SKY = { lo: [0.55, 0.67, 0.96], hi: [0.05, 0.2, 0.8], pale: [0.62, 0.72, 0.98], cloudLit: [0.96, 0.94, 0.96], cloudShade: [0.62, 0.68, 0.93], haze: 1, hazeBase: 0,
+  // (the near ground's distance, four steps toward the air's own colour)
+  fog: [[0.62, 0.66, 0.9], [0.33, 0.45, 0.88], [0.14, 0.33, 0.84], [0.09, 0.26, 0.78]],
+  // (the light: the sun's direction (empty: the renderer's own), how far its bands are pushed toward shade (lit: −
+  // fewer faces get the lightest band), how much distance flattens a thing's light and shade toward its middle (flat)
+  // and thins its small strokes, the survivors broader, so the big shapes outlast the detail (thin))
+  sun: [] as number[], lit: 0, flat: 0, thin: 0,
+  // (the cloud belt's own colour, `mood=course`)
+  belt: [0.84, 0.87, 0.88] };
+export const NEVER = -1e9;
+const ROAD = new Set<number>([M.TRACK, M.RUT]), GROUND = new Set<number>([M.SNOW, M.SHADOW, M.GRASS]), ROCKY = new Set<number>([M.ROCK, M.UMBER, M.GOUGE]);
+const RANGE = new Set<number>([M.MTN, M.MTNSNOW, M.FAR, M.FARSNOW, M.RIDGE]);
+const BACKDROP = new Set<number>([M.MTN, M.MTNSNOW, M.FAR, M.FARSNOW, M.RIDGE, M.FOREST, M.VALLEY]);
+const hash2 = (a: number, b: number) => { let h = Math.imul(a | 0, 0x27d4eb2d) ^ Math.imul(b | 0, 0x165667b1); h = Math.imul(h ^ (h >>> 15), 0x85ebca6b); return (h ^ (h >>> 13)) >>> 0; };
+
+/** A line to measure against: the road's middle, a point every couple of metres: where, its way, its station. */
+export function lineOf(c: Course, s0: number, s1: number) {
+  const pts: number[] = [];
+  for (let s = Math.max(0, s0); s <= s1; s += 2) { const p = c.point(s, 0), q = c.point(s + 1, 0), dx = q.x - p.x, dz = q.z - p.z, l = Math.hypot(dx, dz) || 1; pts.push(p.x, p.y ?? 0, p.z, dx / l, dz / l, s); }
+  return pts;
+}
+
+/**
+ * Strokes over a mesh's faces (its vertices, four floats each: three to a triangle), enough to cover it with no
+ * underpainting. Each face's strokes are its own (seeded by the face, or by its place: `place`), so a mesh built afresh
+ * each frame (the rider, the ruts) keeps its strokes where they were on it.
+ *
+ * - the ground (the road, the snow, the rock): two passes, the masses (big, broad, laid first as the front comes) and
+ *   the detail over them; sized by the road (`line`: fine by it, broad away), each laid at its station so the front
+ *   lays it; running the way the ground runs (along the road and the snow by it, across the slope further off, down
+ *   the face on rock);
+ * - the backdrop (the ranges, the valley): big level marks, one pass, always laid;
+ * - things (the fence, the posts, the pines, the kickers, the rider, a flag): small, sized by their faces, along each
+ *   face's longest edge, painted on both sides; what lies flat on the ground (`flat`: your track, a shadow) is laid as
+ *   the ground is.
+ */
+export function strokesOver(verts: Float32Array, seed: number, line: number[] | null, cap = 26000, moving = false, place = 0, flat = false, big = 1): Float32Array {
+  const out: number[] = [];
+  const n = verts.length / 12;
+  for (let t = 0; t < n && out.length / STROKE < cap; t++) {
+    // (each face's strokes seeded by the face: by its place in the mesh, or, for a mesh that's a window sliding along the
+    // way (`place`, the size it's known to), by where it is, so the same face keeps the same strokes as the window moves)
+    const R = place > 0 ? rng(hash2(seed, hash2(Math.round((verts[t * 12] + verts[t * 12 + 4] + verts[t * 12 + 8]) / (3 * place)), Math.round((verts[t * 12 + 2] + verts[t * 12 + 6] + verts[t * 12 + 10]) / (3 * place))) ^ Math.round((verts[t * 12 + 1] + verts[t * 12 + 5] + verts[t * 12 + 9]) / (3 * place))) + 7) : rng(hash2(seed, t) + 7);
+    const o = t * 12, mt = verts[o + 3], m = Math.floor(mt);
+    const ax = verts[o], ay = verts[o + 1], az = verts[o + 2], bx = verts[o + 4], by = verts[o + 5], bz = verts[o + 6], cx = verts[o + 8], cy = verts[o + 9], cz = verts[o + 10];
+    const ux = bx - ax, uy = by - ay, uz = bz - az, vx = cx - ax, vy = cy - ay, vz = cz - az;
+    let nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
+    const nl = Math.hypot(nx, ny, nz), area = nl / 2;
+    if (area < 1e-5) continue;
+    nx /= nl; ny /= nl; nz /= nl;
+    const mx = (ax + bx + cx) / 3, mz = (az + bz + cz) / 3;
+    const backdrop = BACKDROP.has(m) || (!line && !moving), ground = !moving && (ROAD.has(m) || GROUND.has(m) || ROCKY.has(m)), thing = !backdrop && !ground;
+    // (the road's middle nearest the face: how far off it is, the road's way there, its station)
+    let d = 0, lx = 0, lz = 1, px = mx, pz = mz, st = NEVER;
+    if (line && !moving) {
+      let best = Infinity;
+      for (let k = 0; k < line.length; k += 6) { const dd = (line[k] - mx) ** 2 + (line[k + 2] - mz) ** 2; if (dd < best) { best = dd; px = line[k]; pz = line[k + 2]; lx = line[k + 3]; lz = line[k + 4]; st = line[k + 5]; } }
+      d = Math.sqrt(best);
+    }
+    const emit = (tx: number, ty: number, tz: number, Ls: number, Ws: number, cover: number, pass: number, stamps: number[], jit: number, bendA: number, kind: number) => {
+      // (never more than a few hundred to a face: the valley's floor is a few faces kilometres across, and uncapped asked for
+      // hundreds of thousands, leaving nothing for the ridges after it)
+      const want = Math.min(backdrop ? 260 : 1e9, (area * cover) / (Ls * Ws));
+      let k = Math.floor(want) + (R() < want - Math.floor(want) ? 1 : 0);
+      while (k-- > 0) {
+        let a = R(), b = R(); if (a + b > 1) { a = 1 - a; b = 1 - b; }
+        const x = ax + ux * a + vx * b, y = ay + uy * a + vy * b, z = az + uz * a + vz * b;
+        const j = (R() - 0.5) * jit, cj = Math.cos(j), sj = Math.sin(j);
+        const bxx = ny * tz - nz * ty, byy = nz * tx - nx * tz, bzz = nx * ty - ny * tx;
+        out.push(x, y, z, mt, tx * cj + bxx * sj, ty * cj + byy * sj, tz * cj + bzz * sj, Ls * (0.75 + R() * 0.5), nx, ny, nz, Ws * (0.8 + R() * 0.4), R(), stamps[Math.floor(R() * stamps.length)], (R() - 0.5) * bendA, kind,
+          st, pass, moving ? 1 : 0, backdrop ? 1 : 0);
+      }
+    };
+    if (thing) {
+      // (a thing: along its face's longest edge, sized by the face; both sides)
+      const e = [[ux, uy, uz], [vx, vy, vz], [cx - bx, cy - by, cz - bz]].sort((p, q) => Math.hypot(q[0], q[1], q[2]) - Math.hypot(p[0], p[1], p[2]))[0], el = Math.hypot(e[0], e[1], e[2]) || 1;
+      const Ls = Math.max(0.07, Math.min(moving ? (flat ? 1.2 : 0.5) : 1.4, Math.sqrt(area) * 1.1));
+      // (a flat thing lying on the ground (your track, a shadow) is laid as the ground is: flat on it, one side; a
+      // standing thing, both sides, turning to the eye)
+      if (flat && ny < 0) { nx = -nx; ny = -ny; nz = -nz; }
+      emit(e[0] / el, e[1] / el, e[2] / el, Ls, Ls * (flat ? 0.35 : 0.5), flat ? 2.2 : 3.2, 0, flat ? [0, 1, 11] : [0, 1, 2, 4, 8, 15], 0.35, flat ? 0.2 : 0.4, flat ? 0 : 3);
+      continue;
+    }
+    // (the face's normal: up, or (a steep face) toward the road it's seen from)
+    // (its outward side: the ground's a height field, so up, steep faces included; a cliff facing the valley faces the
+    // valley, and is culled when the eye's on the other side of it)
+    if (ny < 0) { nx = -nx; ny = -ny; nz = -nz; }
+    // (the way down the face, and across it, and along the road)
+    const fx = nx * ny, fy = ny * ny - 1, fz = nz * ny, fl = Math.hypot(fx, fy, fz);
+    const across = () => { const a = ny * fz - nz * fy, b = nz * fx - nx * fz, c = nx * fy - ny * fx, l = Math.hypot(a, b, c) || 1; return [a / l, b / l, c / l]; };
+    const along = () => { const dp = lx * nx + lz * nz; const x = lx - nx * dp, y = -ny * dp, z = lz - nz * dp; const l = Math.hypot(x, y, z) || 1; return [x / l, y / l, z / l]; };
+    if (backdrop && RANGE.has(m)) {
+      // (its outward side: toward the eye at the middle of the ring, not up; a face turned from there is the far side of a
+      // spur, and isn't painted (the ranges are painted by order, not depth, so it would paint over the side you see))
+      if (nx * mx + ny * (ay + by + cy) / 3 + nz * mz > 0) { nx = -nx; ny = -ny; nz = -nz; }
+      // (a range's face as the studies paint it: strokes set off from the face's upper edge (its crest, where it has one)
+      // and pulled down its fall, so the ridge and the skyline are cut clean by the strokes' heads, and the two sides of a
+      // spur, falling opposite ways, meet in a chevron. The face is cut into columns down its fall; each stroke's head is
+      // at its column's top, or a way below it, most near the top; and they're long)
+      const steep = fl > 0.12; let [tx, ty, tz] = steep ? [fx / fl, fy / fl, fz / fl] : along();
+      // (leaned toward the way the face's upper edge runs down, as much as that edge falls: so on a peak's flanks the strokes
+      // run with the ridges, fanning from the summit, as the study has them; on a level crest, straight down)
+      {
+        const V = [[ax, ay, az], [bx, by, bz], [cx, cy, cz]].sort((p, q) => q[1] - p[1]);
+        let ex = V[1][0] - V[0][0], ey = V[1][1] - V[0][1], ez = V[1][2] - V[0][2]; const el = Math.hypot(ex, ey, ez) || 1;
+        ex /= el; ey /= el; ez /= el;
+        const lean = Math.min(0.72, Math.abs(ey) * 2.5);
+        const x = tx * (1 - lean) + ex * lean, y = ty * (1 - lean) + ey * lean, z = tz * (1 - lean) + ez * lean, l = Math.hypot(x, y, z) || 1;
+        if (steep) [tx, ty, tz] = [x / l, y / l, z / l];
+      }
+      const qx = ny * tz - nz * ty, qy = nz * tx - nx * tz, qz = nx * ty - ny * tx;
+      // (the face in its own plane: s down the fall, c across it)
+      const P = [[0, 0], [ux * tx + uy * ty + uz * tz, ux * qx + uy * qy + uz * qz], [vx * tx + vy * ty + vz * tz, vx * qx + vy * qy + vz * qz]];
+      const c0 = Math.min(P[0][1], P[1][1], P[2][1]), c1 = Math.max(P[0][1], P[1][1], P[2][1]), wide = c1 - c0;
+      const column = (c: number) => {
+        let lo = Infinity, hi = -Infinity;
+        for (let e = 0; e < 3; e++) {
+          const A = P[e], B = P[(e + 1) % 3];
+          if ((c - A[1]) * (c - B[1]) > 0 || A[1] === B[1]) continue;
+          const sv = A[0] + ((c - A[1]) / (B[1] - A[1])) * (B[0] - A[0]); lo = Math.min(lo, sv); hi = Math.max(hi, sv);
+        }
+        return [lo, hi];
+      };
+      const snowy = m === M.MTNSNOW || m === M.FARSNOW;
+      const tall = (area * 2) / Math.max(1, wide), Lm = Math.max(90, Math.min(900, tall * 1.1)), Wm = Math.max(45, Math.min(110, Lm * 0.14));
+      let k = Math.min(260, Math.ceil((area * 4) / (Lm * Wm)));
+      while (k-- > 0) {
+        const c = c0 + wide * R(), [lo, hi] = column(c);
+        if (!(hi > lo)) continue;
+        // (a stroke may run on past its face's foot, over the faces below, which are painted after it)
+        const col = hi - lo, L = Math.max(col, Lm * 0.6) * (0.8 + R() * 0.35) + 12, sc = lo + Math.max(0, col - L) * R() + L * 0.47;
+        const j = (R() - 0.5) * 0.1, cj = Math.cos(j), sj = Math.sin(j);
+        const dx = tx * cj + qx * sj, dy = ty * cj + qy * sj, dz = tz * cj + qz * sj;
+        out.push(ax + tx * sc + qx * c, ay + ty * sc + qy * c, az + tz * sc + qz * c, mt, dx, dy, dz, L, nx, ny, nz, Wm * (0.8 + R() * 0.4), R(), snowy ? [0, 7, 0, 11][Math.floor(R() * 4)] : [0, 7, 0, 5][Math.floor(R() * 4)], (R() - 0.5) * 0.1, 0, NEVER, 0, 0, 1);
+      }
+      continue;
+    }
+    if (backdrop) {
+      // (the far off as the reference has it: a few large calm planes, level, laid edge to edge so no paper shows through)
+      // (a peak's faces brushed down their fall, as a painter cuts a mountain's planes, snow and rock alike; only what's
+      // nearly level (the valley floor) laid level. Sized to the face, so a tall thin facet gets a long narrow stroke that
+      // fills it rather than level dabs that leave paper between them)
+      const steep = fl > 0.25, [tx, ty, tz] = steep ? [fx / fl, fy / fl, fz / fl] : along();
+      const e = Math.max(Math.hypot(ux, uy, uz), Math.hypot(vx, vy, vz), Math.hypot(cx - bx, cy - by, cz - bz)), Ls = Math.max(20, Math.min(420, steep ? e * 0.55 : Math.sqrt(area) * 1.1));
+      const snow = m === M.MTNSNOW || m === M.FARSNOW;
+      emit(tx, ty, tz, Ls, Ls * (steep ? 0.32 : 0.5), 8, 0, steep ? (snow ? [11, 0, 7] : [0, 5, 7, 13]) : [11, 7, 11], steep ? 0.35 : 0.15, 0.15, 0);
+      continue;
+    }
+    let tx: number, ty: number, tz: number;
+    if (ROAD.has(m) || fl < 0.12 || (GROUND.has(m) && d < 18)) [tx, ty, tz] = along();
+    else if (GROUND.has(m) && d < 40) { const A = along(), C = across(), f = (d - 18) / 22; const x = A[0] * (1 - f) + C[0] * f, y = A[1] * (1 - f) + C[1] * f, z = A[2] * (1 - f) + C[2] * f, l = Math.hypot(x, y, z) || 1; [tx, ty, tz] = [x / l, y / l, z / l]; }
+    else if (ROCKY.has(m)) [tx, ty, tz] = [fx / fl, fy / fl, fz / fl];
+    else [tx, ty, tz] = across();
+    // (`big`: ground seen from far off (the valley): only the masses, broad, never small)
+    const road = ROAD.has(m), Ls = Math.max(big > 1 ? 7 * big : 0, Math.min(22 * big, 2.3 * (1 + d / 22))) * (road ? 1.7 : 1), fl0 = fl;
+    // (the masses: big and broad, laid first; then the detail over them)
+    if (m === M.GRASS) {
+      // (grass: broad dry fans for its mass; then tufts, short flicks and rakes standing down the fall, scattered every way a little)
+      emit(tx, ty, tz, Ls * 2, Ls * 2 * 0.4, 2.6, 0, [12, 10, 14, 0], 0.4, 0.3, 0);
+      const fl = fl0 > 0.05 ? [fx / fl0, fy / fl0, fz / fl0] : [tx, ty, tz];
+      if (big <= 1) emit(fl[0], fl[1], fl[2], Ls * 0.55, Ls * 0.55 * 0.3, 1.8, 1, [8, 15, 14, 12], 0.9, 1.2, 0);
+      continue;
+    }
+    emit(tx, ty, tz, Ls * 2.2, Ls * 2.2 * (road ? 0.3 : 0.42), ROCKY.has(m) ? 3.4 : 2.6, 0, road ? [0, 1, 7, 13] : ROCKY.has(m) ? [9, 13, 0, 5] : [11, 7, 0, 10], 0.3, 0.25, 0);
+    if (big <= 1) emit(tx, ty, tz, Ls, Ls * (road ? 0.16 : 0.34), 1.3, 1, road ? [0, 1, 13] : ROCKY.has(m) ? [5, 6, 9, 13, 14] : [2, 3, 4, 1, 10, 12, 8, 15], road ? 0.25 : 0.5, 0.9, 0);
+  }
+  return new Float32Array(out);
+}
+
+/** A layer of the backdrop painted by its form, not its faces: its crest simplified to the segments that matter (a summit,
+ * a shoulder, a long saddle), and each segment painted in rows under it, every stroke sized by its segment (a long flat
+ * saddle a few long level strokes, a steep flank many short ones down along the ridge), the rows turning down the fall
+ * as they go lower on a steep flank. Snow in streaks along the ridges and down the gullies above the snow line. Haze in
+ * its colour (toward the horizon) by the layer's distance. A forested layer has a dark band along its foot, its top
+ * ragged with treetops. Strokes from low to high, so the crest's lie on top. */
+type Layer = { k: number; R: number; floor: number; body: number; snow: number; snowline: number; haze: number; forest: boolean; from: number; to: number; crest: (a: number) => number };
+/** (a planned stroke: `band` 0-3 its colour picked outright, or 4 lit by the far-off's light; `haze` 0-1) */
+const plan = (list: number[][], x: number, y: number, z: number, mt: number, haze: number, t: number[], L: number, n: number[], W: number, seed: number, stamp: number, bend: number, band: number) =>
+  list.push([x, y, z, mt + Math.min(0.9, haze * 0.9), t[0], t[1], t[2], L, n[0], n[1], n[2], W, seed, stamp, bend, 0, NEVER, 1 + band, 0, 1]);
+const dp = (p: number[][], tol: number, i = 0, j = p.length - 1, keep = new Set<number>([0, p.length - 1])): Set<number> => {
+  let best = -1, bd = tol;
+  const [x0, y0] = p[i], [x1, y1] = p[j], L = Math.hypot(x1 - x0, y1 - y0) || 1;
+  for (let k = i + 1; k < j; k++) { const d = Math.abs((p[k][0] - x0) * (y1 - y0) - (p[k][1] - y0) * (x1 - x0)) / L; if (d > bd) { bd = d; best = k; } }
+  if (best >= 0) { keep.add(best); dp(p, tol, i, best, keep); dp(p, tol, best, j, keep); }
+  return keep;
+};
+function layerStrokes(g: Layer, seed: number, out: number[]) {
+  const R0 = rng(seed * 131 + g.k * 17), list: number[][] = [], W0 = g.R * 0.011, L0 = g.R * 0.06, span = g.to - g.from;
+  const at = (a: number, y: number) => [Math.sin(a) * g.R, y, Math.cos(a) * g.R];
+  const N = Math.ceil((span * g.R) / (W0 * 0.5)), pts: number[][] = [];
+  for (let i = 0; i <= N; i++) { const a = g.from + (span * i) / N; pts.push([a * g.R, g.crest(a)]); }
+  const keep = [...dp(pts, W0 * 0.9)].sort((p, q) => p - q);
+  // (the spurs: from each summit a main spur runs down toward you to the foot, wandering a little, and branches leave it
+  // down and outward, so the mountain's planes split at every scale; a shoulder sends a shorter one. Each a line in
+  // metres round and up)
+  const spurs: number[][][] = [];
+  for (let q = 1; q < keep.length - 1; q++) {
+    const [xp, hp] = pts[keep[q - 1]], [xs, hs] = pts[keep[q]], [xn, hn] = pts[keep[q + 1]];
+    const prom = hs - Math.max(hp, hn), top = hs - g.floor;
+    if (top < W0 * 6) continue;
+    const summit = prom > W0 * 4, shoulder = !summit && Math.abs((hn - hs) / (xn - xs + 1e-6) - (hs - hp) / (xs - xp + 1e-6)) > 0.35;
+    if (!summit && !shoulder) continue;
+    const reach = summit ? 1 : 0.45, line: number[][] = [[xs, hs]];
+    let x = xs, y = hs, wob = (R0() - 0.5) * 0.5;
+    const step = W0 * 2.5, end = hs - top * reach;
+    while (y > end) { y -= step; wob += (R0() - 0.5) * 0.35; wob *= 0.85; x += step * wob; line.push([x, y]); }
+    spurs.push(line);
+    // (its branches: two or three, leaving it partway down, alternately each way, down and out)
+    if (summit) for (let b = 0; b < 1 + Math.floor(R0() * 2); b++) {
+      const at = Math.floor(line.length * (0.2 + 0.55 * R0())), [bx0, by0] = line[at], dir = (b % 2 ? 1 : -1) * (0.7 + R0() * 0.6), len = (by0 - g.floor) * (0.35 + R0() * 0.3);
+      const br: number[][] = [[bx0, by0]];
+      for (let yy = by0, xx = bx0, k = 0; yy > by0 - len; k++) { yy -= step; xx += step * dir * (1 - k * 0.04); br.push([xx, yy]); }
+      spurs.push(br);
+    }
+  }
+  // (the nearest spur at a point: its x at that height, and how far off it is round; Infinity where none reaches)
+  const nearSpur = (x: number, y: number) => {
+    let best = Infinity, sx = 0;
+    for (const ln of spurs) {
+      if (y > ln[0][1] || y < ln[ln.length - 1][1]) continue;
+      for (let i = 0; i < ln.length - 1; i++) {
+        const [x0, y0] = ln[i], [x1, y1] = ln[i + 1];
+        if (y <= y0 && y >= y1) { const t = (y0 - y) / Math.max(1e-6, y0 - y1), xx = x0 + (x1 - x0) * t; if (Math.abs(x - xx) < best) { best = Math.abs(x - xx); sx = xx; } break; }
+      }
+    }
+    return [best, sx];
+  };
+  const streak = (a: number) => Math.sin(a * 41 + g.k * 3) * 0.55 + Math.sin(a * 97 + g.k) * 0.3 + Math.sin(a * 13 + g.k * 5) * 0.4;
+  for (let q = 0; q < keep.length - 1; q++) {
+    const [x0, h0] = pts[keep[q]], [x1, h1] = pts[keep[q + 1]], dxm = x1 - x0, dh = h1 - h0, Ls = Math.hypot(dxm, dh);
+    if (Ls < 1 || (h0 <= g.floor + 2 && h1 <= g.floor + 2)) continue;
+    // (down along the ridge, round and up; toward +round is to the left on the picture)
+    let ur = dxm / Ls, uy = dh / Ls; if (uy > 0) { ur = -ur; uy = -uy; }
+    const slope = -uy, side = ur > 0 ? 1 : -1, slopeF = Math.min(1, slope * 3);
+    const tall = (h0 + h1) / 2 - g.floor, rowH = W0 * 0.72, rows = Math.ceil(tall / rowH) + 1;
+    for (let r = 0; r < rows; r++) {
+      const depth = r * rowH, df = Math.min(1, depth / Math.max(1, tall));
+      // (lower on a steep flank, turning down its fall; on a flat saddle staying level)
+      const L = Math.max(L0 * 0.5, Math.min(L0 * 1.9, Ls * 0.65)) * (1 + df * 0.3), n = Math.max(1, Math.round(Ls / (L * 0.6)));
+      // (only once a row's far enough under the crest that turning won't lift its head over it)
+      const st = depth > L * 0.55 ? Math.min(1, df * 1.5) * (slope > 0.12 ? 0.5 : 0.1) : 0;
+      let dr = ur * (1 - st) + side * 0.35 * st, dy = uy * (1 - st) - st; { const l = Math.hypot(dr, dy); dr /= l; dy /= l; }
+      // (kept within its segment: run on past its end, a stroke along a flank would carry on up past the summit)
+      const half = Math.min(0.5, (L * 0.5) / Ls);
+      for (let j = 0; j < n; j++) {
+        const t = half + (1 - 2 * half) * (j + 0.15 + R0() * 0.7) / n, xm = x0 + dxm * t, a = xm / g.R, cy = h0 + dh * t;
+        const y = cy - depth - W0 * (0.42 + R0() * 0.3);
+        if (y < g.floor - W0 * 0.5) continue;
+        // (its tail kept above the layer's foot, where it would paint over what's in front)
+        const Lr = Math.min(L, (2 * (y - g.floor)) / Math.max(0.2, -dy) + W0, Ls * 0.95);
+        const ca = Math.cos(a), sa = Math.sin(a), rx = sa, rz = ca, tx = ca, tz = -sa;
+        // (under the crest, the nearest spur decides the plane, where it's nearer than the crest: the side of it the point
+        // is on faces that way, lit on the left, shaded on the right, its strokes running down and away from the spur)
+        let pside = side, pslope = slopeF, pdr = dr, pdy = dy, Lu = Lr, onSpur = false;
+        const [ds, sx] = nearSpur(xm, y), dc = cy - y;
+        if (ds < dc * 0.9 && ds < W0 * 14) {
+          const sd = xm > sx ? 1 : -1, k2 = 0.55 + 0.35 * Math.min(1, ds / (W0 * 8));
+          let qdr = sd * k2, qdy = -1; const l2 = Math.hypot(qdr, qdy); qdr /= l2; qdy /= l2;
+          // (turned down the spur's plane only where its head stays under the crest)
+          const Lq = Math.min(L0 * 1.9, (2 * (y - g.floor)) / Math.max(0.2, -qdy) + W0, Math.max(W0, (2 * (dc - W0 * 0.5)) / Math.max(0.2, -qdy)));
+          // (and its head, wherever it lands, under the crest there)
+          let Lh = Lq;
+          for (let it = 0; it < 6 && Lh > W0; it++) { const hx = xm - qdr * Lh * 0.5, hy = y - qdy * Lh * 0.5; if (hy < g.crest(hx / g.R) - W0 * 0.5) break; Lh *= 0.7; }
+          if (Lh > W0 * 1.5) { const Lq2 = Lh; pside = sd; pslope = 1; pdr = qdr; pdy = qdy; Lu = Lq2; onSpur = ds < W0 * 2.5; }
+        }
+        const T = [tx * pdr, pdy, tz * pdr]; { const l = Math.hypot(T[0], T[1], T[2]); T[0] /= l; T[1] /= l; T[2] /= l; }
+        const nn = [-rx * 0.75 + tx * pside * 0.55 * pslope, 0.5 - df * 0.5, -rz * 0.75 + tz * pside * 0.55 * pslope]; { const l = Math.hypot(nn[0], nn[1], nn[2]); nn[0] /= l; nn[1] /= l; nn[2] /= l; }
+        // (snow: above the snow line, in streaks along the ridge and down the gullies)
+        const s = streak(a), snowAt = g.snowline + 110 * s - (cy - g.snowline) * 0.35 * (0.5 + 0.5 * s);
+        // (and down the spurs' crests, a way below the line)
+        const snowy = (y > snowAt && (depth < tall * 0.55 || s < -0.35)) || (onSpur && y > g.snowline - 160 - 60 * s);
+        // (its plane's colour, one to the plane: lit (the left side of a ridge, or a level top) or in shade; the lit body
+        // a step darker low down)
+        const lit = pslope < 0.35 ? df < 0.6 : pside > 0, band = lit ? (snowy || df < 0.45 ? 0 : 1) : 3;
+        const p = at(a, y);
+        plan(list, p[0], p[1], p[2], snowy ? g.snow : g.body, g.haze, T, Lu * (0.8 + R0() * 0.4), nn, W0 * (1.0 + R0() * 0.35), R0(), [0, 7, 0, 7][Math.floor(R0() * 4)], (R0() - 0.5) * 0.08, band);
+      }
+    }
+  }
+  list.sort((p, q) => p[1] - q[1]);
+  for (const st of list) out.push(...st);
+  list.length = 0;
+  if (g.forest) {
+    // (a forest over the hill's lower slopes, painted over it: a dense dark band, its top serrated with treetops, rising
+    // and falling along the hill)
+    const M2 = Math.ceil((span * g.R) / (W0 * 0.3));
+    for (let i = 0; i <= M2; i++) {
+      const a = g.from + (span * i) / M2, c = g.crest(a), h = c - g.floor;
+      if (h < 6) continue;
+      const top = g.floor + h * (0.42 + 0.2 * Math.sin(a * 11 + g.k) + 0.1 * Math.sin(a * 37)), ca = Math.cos(a), sa = Math.sin(a), nn = [-sa, 0.2, -ca];
+      // (a treetop: a short upright stroke standing out of the band, close set, so the top's serrated, not a fence)
+      const tH = W0 * (0.7 + R0() * 1.0), p = at(a, top + tH * 0.25);
+      plan(list, p[0], p[1], p[2], M.FOREST, g.haze, [0, -1, 0], tH, nn, W0 * 0.85, R0(), [0, 1][Math.floor(R0() * 2)], 0, R0() < 0.8 ? 2 : 1);
+      // (and the band under it, in level strokes)
+      for (let y = top - W0 * 0.4; y > g.floor - W0; y -= W0 * 0.7) {
+        if (R0() < 0.72) continue;
+        const q = at(a, y);
+        plan(list, q[0], q[1], q[2], M.FOREST, g.haze, [ca, 0, -sa], L0 * (0.7 + R0() * 0.6), nn, W0 * 1.1, R0(), [0, 7][Math.floor(R0() * 2)], 0, R0() < 0.7 ? 2 : 3);
+      }
+    }
+  }
+  list.sort((p, q) => p[1] - q[1]);
+  for (const st of list) out.push(...st);
+}
+export function rangeStrokes(seed: number): Float32Array {
+  const out: number[] = [];
+  for (const g of rangeProfiles(seed)) layerStrokes(g, seed, out);
+  return new Float32Array(out);
+}
+/** the backdrop's layers each on its own (the ranges, the hill arcs, the foothills), with how far off each stands, so
+ * each can be moved by its own parallax */
+export function backdropLayers(seed: number): { R: number; data: Float32Array }[] {
+  return [...rangeProfiles(seed), ...foothillProfiles(seed)].map((g) => { const out: number[] = []; layerStrokes(g, seed, out); return { R: g.R, data: new Float32Array(out) }; });
+}
+export function foothillStrokes(seed: number): Float32Array {
+  const out: number[] = [];
+  for (const g of foothillProfiles(seed)) layerStrokes(g, seed, out);
+  return new Float32Array(out);
+}
+/** The middle distance: hills between the road and the river, on the drop side, standing in the world (not drawn about
+ * the eye), so they pass by as you ride, the nearer faster: two ridges along each stretch of the way (`k`, 240 stations
+ * each), one 250-500 m out, one 550-950 m out, each a crest that rises to a summit or two and falls into saddles, their
+ * feet below the valley's floor; painted as the far ranges are (rows of strokes under each run of the crest, along it,
+ * turning down the fall lower down, lit from the left of the way you look), the farther hazier, a forest over the lower
+ * slopes, its top ragged with treetops. Nowhere within 180 m of the road (a hairpin's other leg) */
+export const MID_SPAN = 240;
+/** The river in the valley under the course (`mood=course`): a line in the world, not drawn about the eye, so it's a real
+ * place the course can come down to: at station s it's this far out from the road on the drop side, wandering, at the
+ * valley floor's height (the course's own, smoothed, a long way below) */
+export function riverAt(c: Course, s: number) {
+  const u = 640 + 170 * Math.sin(s / 430 + c.seed) + 60 * Math.sin(s / 151 + c.seed * 2.3);
+  const y = (c.point(Math.max(0, s - 160), 0).y + c.point(s, 0).y + c.point(s + 160, 0).y) / 3 - 330;
+  return { u, y };
+}
+/** The middle distance below the belt (`mood=course`): the ground falling from the road's drop side to the river in
+ * spurs, ridges running out and down toward the valley with side valleys between them, so they lead the eye down and the
+ * river shows between them; on a strip of valley floor with the river winding through it. Painted as the course's own
+ * ground is (not the far off's planned strokes): lit by the run's own sun and light, its land coloured by the region
+ * (snow above the snowline, grass and earth below it, trees lower down), and hazed by distance as the near ground is.
+ * Spur faces in strokes down their fall from the ridge; trees as clumps of upright dabs, lit on top, thick in the valley
+ * bottom and along the river, thinning up the slopes; the river pale strokes along it. Seeded by stretch: two to four
+ * spurs, their heights, now and then a bare scree face. Nowhere within 180 m of the road. */
+export function midValleyStrokes(c: Course, k: number): Float32Array {
+  const R0 = rng(c.seed * 7121 + k * 97), s0 = k * MID_SPAN, s1 = s0 + MID_SPAN;
+  const road: number[][] = [];
+  for (let s = Math.max(0, s0 - 900); s < s1 + 900; s += 15) { const p = c.point(s, 0); road.push([p.x, p.z]); }
+  const clear = (x: number, z: number) => road.every(([rx, rz]) => (rx - x) ** 2 + (rz - z) ** 2 > 180 * 180);
+  const items: { d: number; st: number[] }[] = [];
+  const nrm = (v: number[]) => { const l = Math.hypot(v[0], v[1], v[2]) || 1; return [v[0] / l, v[1] / l, v[2] / l]; };
+  // (a stroke of ground: on its face, lit by the sun in the shader; its land by height and place)
+  const put = (p: number[], T: number[], L: number, n: number[], W: number, mt: number, stamp: number, d: number, kind = 0, band = -1) => {
+    if (!clear(p[0], p[2])) return;
+    items.push({ d, st: [p[0], p[1], p[2], mt + 0.45, T[0], T[1], T[2], L, n[0], n[1], n[2], W, R0(), stamp, (R0() - 0.5) * 0.25, kind, NEVER, band >= 0 ? 10 + band : 0, 0, 0] });
+  };
+  const land = (x: number, y: number, z: number, steep: number) => {
+    const g = grassiness(x, y, z);
+    if (steep > 0.8 && R0() < 0.6) return g > 0.3 ? M.UMBER : M.ROCK;
+    return R0() < g ? M.GRASS : M.SNOW;
+  };
+  const tree = (p: number[], size: number, d: number) => {
+    const toward = nrm([-p[0] + c.point(s0 + MID_SPAN / 2, 0).x, 0, -p[2] + c.point(s0 + MID_SPAN / 2, 0).z]);
+    // (under it, the wood's own dark mass, so trees join into woodland, not dots)
+    put([p[0], p[1] + size * 0.3, p[2]], [toward[2], 0, -toward[0]], size * 3.2, toward, size * 1.3, M.BLACK, 11, d - 0.4, 3, 3);
+    // (a clump of trees, not one: three or four crowns, the one toward the sun lit)
+    for (let j = 0; j < 3 + Math.floor(R0() * 2); j++) { const ox = (R0() - 0.5) * size * 1.6, oz = (R0() - 0.5) * size * 1.6, h = size * (0.8 + R0() * 0.5);
+      put([p[0] + ox, p[1] + h * 0.5, p[2] + oz], [0, 1, 0], h * 1.4, toward, h * 0.75, M.BLACK, [3, 2, 4][Math.floor(R0() * 3)], d - 0.5 - j * 0.01, 3, R0() < 0.5 ? 3 : 2); }
+    put([p[0] - size * 0.3, p[1] + size * 1.0, p[2]], [0, 1, 0], size * 0.7, toward, size * 0.5, M.BLACK, 3, d - 0.6, 3, 1);
+  };
+  // (the far side of the valley: beyond the river the ground rises again, folded into ridges and gullies, to a crest high
+  // enough to stand over the road's drop edge as you look out; forest thick at its foot, thinning up it, grass and rock
+  // above, snow on top where it's above the snowline; its faces lit by the sun as they turn, its strokes down its fall)
+  for (let s = s0; s < s1; s += 14) {
+    const r = riverAt(c, s), fold = Math.sin(s / 95 + c.seed * 1.7) * 0.6 + Math.sin(s / 37 + c.seed) * 0.4;
+    const crestU = r.u + 520 + 160 * Math.sin(s / 300 + c.seed), crestY = r.y + 300 + 140 * Math.sin(s / 210 + c.seed * 0.7) + 60 * fold;
+    for (let t = 0.06; t < 1; t += 0.07) {
+      const u = r.u + 40 + (crestU - r.u - 40) * t, y = r.y + (crestY - r.y) * Math.pow(t, 0.8) + fold * 18 * Math.sin(t * 3);
+      const pA = c.point(s, u), pB = c.point(s, u + 30), pS = c.point(s + 14, u);
+      const yB = r.y + (crestY - r.y) * Math.pow(Math.min(1, t + 30 / (crestU - r.u)), 0.8);
+      const Td = nrm([pA.x - pB.x, y - yB, pA.z - pB.z]), along = nrm([pS.x - pA.x, 0, pS.z - pA.z]);
+      // (the fold turns the face toward one side or the other, so ridges and gullies catch the light differently)
+      let nn = nrm([along[1] * Td[2] - along[2] * Td[1], along[2] * Td[0] - along[0] * Td[2], along[0] * Td[1] - along[1] * Td[0]]); if (nn[1] < 0) nn = nn.map((v) => -v);
+      nn = nrm([nn[0] + along[0] * fold * 0.6, nn[1], nn[2] + along[2] * fold * 0.6]);
+      const x = pA.x + (R0() - 0.5) * 10, z = pA.z + (R0() - 0.5) * 10, dist = u, W = 10 + dist * 0.022, L = 22 + dist * 0.05;
+      const g = grassiness(x, y, z), mt = g < 0.3 ? M.SNOW : t > 0.75 && R0() < 0.5 ? M.ROCK : t > 0.5 && R0() < 0.3 ? M.UMBER : M.GRASS;
+      put([x, y, z], Td, L * (0.8 + R0() * 0.4), nn, W * (0.9 + R0() * 0.3), mt, mt === M.GRASS ? [12, 10, 0][Math.floor(R0() * 3)] : [9, 11, 0][Math.floor(R0() * 3)], 4000 + u);
+      if (t < 0.55 && g > 0.25 && R0() < (0.55 - t) * 1.6) tree([x, y, z], 14 + dist * 0.012 + R0() * 6, 4000 + u - 1);
+    }
+  }
+  // (the valley floor and the river through it)
+  for (let s = s0; s < s1; s += 12) {
+    const r = riverAt(c, s), r2 = riverAt(c, s + 12), p = c.point(s, r.u), q = c.point(s + 12, r2.u);
+    const T = nrm([q.x - p.x, r2.y - r.y, q.z - p.z]), side = nrm([-T[2], 0, T[0]]);
+    for (let w = -260; w <= 220; w += 28) {
+      const x = p.x + side[0] * w + (R0() - 0.5) * 20, z = p.z + side[2] * w + (R0() - 0.5) * 20, y = r.y + Math.abs(w) * 0.06;
+      put([x, y, z], T, 40 + R0() * 30, [0, 1, 0], 16 + R0() * 8, R0() < grassiness(x, y, z) * 1.2 ? M.GRASS : M.SNOW, [11, 7, 12][Math.floor(R0() * 3)], r.u + w + 2000);
+      // (woods along the river and in the valley bottom)
+      if (Math.abs(w) > 34 && Math.abs(w) < 200 && Math.sin((s + w * 2.3) / 60 + c.seed) > -0.2 && R0() < 0.5) tree([x, y, z], 13 + R0() * 8, r.u + w + 1999);
+    }
+    // (the river: pale strokes along it, a lit one now and then)
+    // (the river: wide and pale, a lit stroke along it now and then, its banks a step darker either side)
+    for (let j = 0; j < 4; j++) put([p.x + side[0] * (R0() - 0.5) * 22, r.y + 0.5, p.z + side[2] * (R0() - 0.5) * 22], T, 30 + R0() * 20, [0, 1, 0], 16 + R0() * 8, M.WHITE, [0, 7][Math.floor(R0() * 2)], r.u + 1998, 0, R0() < 0.35 ? 0 : 1);
+    for (const sd of [-1, 1]) put([p.x + side[0] * sd * 22, r.y + 0.6, p.z + side[2] * sd * 22], T, 34, [0, 1, 0], 7, M.UMBER, 0, r.u + 1997.5, 0, 2);
+  }
+  // (the spurs, from just under the road's drop edge out and down to the river)
+  const n = 2 + Math.floor(R0() * 3), scree = R0() < 0.2;
+  for (let q = 0; q < n; q++) {
+    const sk = s0 + ((q + 0.3 + R0() * 0.4) / n) * MID_SPAN, drift = (R0() - 0.5) * 160, top = c.point(sk, 0).y - 30 - R0() * 50;
+    const u0 = 150 + R0() * 60, uR = riverAt(c, sk).u - 70, P: { p: number[]; s: number; u: number }[] = [];
+    for (let t = 0; t <= 1.0001; t += 1 / 14) {
+      const s = sk + drift * t, u = u0 + (uR - u0) * t, floor = riverAt(c, s).y, y = floor + (top - floor) * Math.pow(1 - t, 1.25) * (0.94 + 0.06 * Math.sin(t * 9 + q));
+      const w = c.point(s, u); P.push({ p: [w.x, y, w.z], s, u });
+    }
+    for (let i = 0; i < P.length - 1; i++) {
+      const A = P[i], B = P[i + 1], Tr = nrm([B.p[0] - A.p[0], B.p[1] - A.p[1], B.p[2] - A.p[2]]), floor = riverAt(c, A.s).y, tall = A.p[1] - floor;
+      if (tall < 4) continue;
+      for (const sg of [-1, 1]) {
+        // (its face to that side: from the ridge down and out to the side valley's floor)
+        const reach = tall * 1.25 + 20, f = c.point(A.s + sg * reach, A.u), foot = [f.x, floor + tall * 0.08, f.z];
+        const D = [foot[0] - A.p[0], foot[1] - A.p[1], foot[2] - A.p[2]], dl = Math.hypot(D[0], D[1], D[2]), Td = [D[0] / dl, D[1] / dl, D[2] / dl];
+        let nn = nrm([Tr[1] * Td[2] - Tr[2] * Td[1], Tr[2] * Td[0] - Tr[0] * Td[2], Tr[0] * Td[1] - Tr[1] * Td[0]]); if (nn[1] < 0) nn = nn.map((v) => -v);
+        const steep = Math.abs(Td[1]), dist = A.u, W = 6 + dist * 0.022, L = Math.min(dl * 0.45, 12 + dist * 0.06), across = Math.max(1, Math.round(Math.hypot(B.p[0] - A.p[0], B.p[2] - A.p[2]) / (W * 0.8)));
+        for (let a = 0; a < across; a++) for (let f2 = 0.02; f2 < 1; f2 += (L * 0.55) / dl) {
+          const e = (a + R0()) / across, base = A.p.map((v, j) => v + (B.p[j] - v) * e), x = base[0] + D[0] * f2, y = base[1] + D[1] * f2, z = base[2] + D[2] * f2;
+          const mt = scree && f2 < 0.7 ? M.UMBER : land(x, y, z, steep);
+          put([x, y, z], Td, L * (0.8 + R0() * 0.4), nn, W * (0.85 + R0() * 0.3), mt, mt === M.GRASS ? [12, 10, 14][Math.floor(R0() * 3)] : mt === M.SNOW ? [11, 0, 2][Math.floor(R0() * 3)] : [9, 13, 5][Math.floor(R0() * 3)], A.u + f2 * 40);
+          // (trees, thick low on the face, thinning up it)
+          if (!scree && R0() < Math.max(0, f2 - 0.4) * 0.45 && grassiness(x, y, z) > 0.2) tree([x, y, z], 10 + dist * 0.016 + R0() * 6, A.u + f2 * 40 - 1);
+        }
+      }
+    }
+  }
+  // (the farthest first, so the nearer spurs and their trees paint over what's behind them)
+  items.sort((p, q) => q.d - p.d);
+  const out: number[] = []; for (const it of items) out.push(...it.st);
+  return new Float32Array(out);
+}
+export function midHillStrokes(c: Course, k: number): Float32Array {
+  const R0 = rng(c.seed * 7121 + k * 97), list: number[][] = [], s0 = k * MID_SPAN, s1 = s0 + MID_SPAN;
+  // (the road nearby, to keep clear of)
+  const road: number[][] = [];
+  for (let s = Math.max(0, s0 - 900); s < s1 + 900; s += 15) { const p = c.point(s, 0); road.push([p.x, p.z]); }
+  const clear = (x: number, z: number) => road.every(([rx, rz]) => (rx - x) ** 2 + (rz - z) ** 2 > 180 * 180);
+  for (const [U0, dU, H0, haze] of [[550, 400, 320, 0.12], [250, 250, 200, 0.04]] as number[][]) {
+    const u0 = U0 + R0() * dU, base = c.point(s0 + MID_SPAN / 2, 0).y - 340, ph = R0() * 6.28, peaks = 1 + Math.floor(R0() * 2);
+    // (the crest: from the stretch's start to its end, rising to its summits; its ends low so stretches meet in saddles)
+    const crest: number[][] = [];
+    for (let s = s0 - 30; s <= s1 + 30; s += 30) {
+      const f = (s - s0 + 30) / (MID_SPAN + 60), u = u0 + 60 * Math.sin(f * 4 + ph);
+      const lift = Math.pow(Math.max(0, Math.sin(Math.PI * f * peaks + ph * 0.3)), 1.1) * 0.65 + 0.35 * Math.sin(Math.PI * f);
+      const p = c.point(s, u), top = base + 90 + H0 * lift * (0.92 + 0.16 * R0());
+      crest.push([p.x, top, p.z, clear(p.x, p.z) ? 1 : 0]);
+    }
+    const dist = u0, W0 = Math.max(4, dist * 0.022), L0 = dist * 0.09;
+    for (let i = 0; i < crest.length - 1; i++) {
+      const A = crest[i], B = crest[i + 1];
+      if (!A[3] || !B[3]) continue;
+      const dx = B[0] - A[0], dz = B[2] - A[2], hl = Math.hypot(dx, dz) || 1, dh = B[1] - A[1];
+      // (down along the crest; toward the road is the face you see)
+      let tx = dx / hl, tz = dz / hl, ty = dh / hl; if (ty > 0) { tx = -tx; tz = -tz; ty = -ty; }
+      const toward = [-dz / hl, 0, dx / hl], mid = [(A[0] + B[0]) / 2, (A[2] + B[2]) / 2], pr = c.point(s0 + MID_SPAN / 2, 0);
+      if ((pr.x - mid[0]) * toward[0] + (pr.z - mid[1]) * toward[2] < 0) { toward[0] = -toward[0]; toward[2] = -toward[2]; }
+      const slope = Math.min(1, Math.abs(dh) / hl * 3), side = (dh > 0 ? 1 : -1);
+      const tall = (A[1] + B[1]) / 2 - base, rowH = W0 * 0.55;
+      for (let r = 0; r * rowH < tall; r++) {
+        const depth = r * rowH, df = depth / tall, turn = depth > L0 * 0.6 ? Math.min(0.6, df) : 0;
+        const T = [tx * (1 - turn), ty * (1 - turn) - turn, tz * (1 - turn)], tl = Math.hypot(T[0], T[1], T[2]); T[0] /= tl; T[1] /= tl; T[2] /= tl;
+        const L = Math.min(L0 * 1.6, hl * 0.9) * (0.8 + R0() * 0.4), n = Math.max(1, Math.round(hl / (L * 0.6)));
+        for (let j = 0; j < n; j++) {
+          const f = (j + 0.2 + R0() * 0.6) / n, x = A[0] + dx * f, z = A[2] + dz * f, cy = A[1] + dh * f, y = cy - depth - W0 * (0.4 + R0() * 0.3);
+          if (y < base) continue;
+          const forest = df > 0.42 + 0.12 * Math.sin(x * 0.02 + z * 0.013);
+          const nn = [toward[0] * 0.8 + tx * side * 0.4 * slope, 0.45 - df * 0.3, toward[2] * 0.8 + tz * side * 0.4 * slope], nl = Math.hypot(nn[0], nn[1], nn[2]);
+          plan(list, x, y, z, forest ? M.FOREST : M.RIDGE, haze, forest ? [T[0] * 0.3 + tx * 0.7, 0, T[2] * 0.3 + tz * 0.7] : T, L, [nn[0] / nl, nn[1] / nl, nn[2] / nl], W0 * 1.05, R0(), [0, 7, 0, 1][Math.floor(R0() * 4)], (R0() - 0.5) * 0.1, forest ? 1 + Math.floor(R0() * 3) : 4);
+          // (the forest's top: treetops standing out of it)
+          if (forest && R0() < 0.35 && df < 0.62) plan(list, x, y + W0 * 0.8, z, M.FOREST, haze, [0, -1, 0], W0 * (1.2 + R0()), [toward[0], 0.2, toward[2]], W0 * 0.7, R0(), 0, 0, 2);
+        }
+      }
+    }
+  }
+  list.sort((p, q) => p[1] - q[1]);
+  const out: number[] = []; for (const st of list) out.push(...st);
+  return new Float32Array(out);
+}
+
+/** The sea of cloud (`mood=course`), seen from above the belt: billows laid on its top round the eye (out to 1.5 km, so it
+ * never paints beyond the nearest range), each a dome of round, soft strokes, lit along the side toward the sun and on its
+ * crown, its underside and the side away in shade, laid level along the way round the eye; between the billows, troughs
+ * a step darker. y is 0 (drawn at the belt's top). */
+export function seaStrokes(seed: number): Float32Array {
+  const R0 = rng(seed * 811 + 5), list: number[][] = [], up = [0, 1, 0];
+  // (the body of it first: long level strokes, mostly its mid tone, a little shade, so there's no gap between billows)
+  for (let i = 0; i < 2200; i++) {
+    const r = 140 * Math.pow(1500 / 140, R0()), a = R0() * Math.PI * 2, x = Math.sin(a) * r, z = Math.cos(a) * r, size = r * (0.07 + R0() * 0.06);
+    list.push([x, -2, z, M.WHITE + Math.min(0.45, r / 4000), Math.cos(a), 0, -Math.sin(a), size * 2.2, 0, 1, 0, size * 0.45, R0(), [11, 7, 11][Math.floor(R0() * 3)], 0, 0, NEVER, 1 + (R0() < 0.75 ? 1 : 2), 0, 1]);
+  }
+  // (then billows, few and of every size, a big bank now and then: each a soft mound, its crown and the side toward the sun
+  // lit in long level strokes, only its lower skirt a step down; flattened with distance, as a sea of cloud is)
+  for (let i = 0; i < 520; i++) {
+    const r = 160 * Math.pow(1500 / 160, R0()), a = R0() * Math.PI * 2, cx = Math.sin(a) * r, cz = Math.cos(a) * r;
+    const size = r * (R0() < 0.15 ? 0.22 + R0() * 0.12 : 0.07 + R0() * 0.09), haze = Math.min(0.45, r / 4000), n = 6 + Math.floor(size / (r * 0.02));
+    for (let j = 0; j < Math.min(16, n); j++) {
+      const u = (R0() - 0.5) * 2, v = R0() * 2 - 1, crown = 1 - Math.hypot(u * 0.8, v);
+      const x = cx + Math.cos(a) * u * size + Math.sin(a) * v * size * 0.35, z = cz - Math.sin(a) * u * size + Math.cos(a) * v * size * 0.35, y = Math.max(0, crown) * size * 0.22;
+      const band = crown > 0.25 || u < -0.3 ? 0 : v > 0.5 ? 1 : R0() < 0.7 ? 1 : 2;
+      const ta = a + (R0() - 0.5) * 0.25;
+      plan(list, x, y, z, M.WHITE, haze, [Math.cos(ta), 0, -Math.sin(ta)], size * (0.9 + R0() * 0.6), up, size * (0.22 + R0() * 0.14), R0(), [11, 2, 11, 4][Math.floor(R0() * 4)], (R0() - 0.5) * 0.35, band);
+    }
+  }
+  list.sort((p, q) => Math.hypot(q[0], q[2]) - Math.hypot(p[0], p[2]) + (p[1] - q[1]) * 0.001);
+  const out: number[] = []; for (const st of list) out.push(...st);
+  return new Float32Array(out);
+}
+
+/** The valley's floor: fields in patches, ochre, lavender and blues, laid level round the eye, broader further off and
+ * hazier; and the river over it, a thin pale line in long strokes along it. */
+export function valleyStrokes(seed: number): Float32Array {
+  const R0 = rng(seed * 53 + 9), list: number[][] = [], F = -260, up = [0, 1, 0];
+  const field = (x: number, z: number) => Math.sin(x / 430 + seed) * Math.sin(z / 350 - seed) + 0.6 * Math.sin((x + z) / 210 + seed * 2) * Math.sin((x - z) / 290);
+  for (let i = 0; i < 26000; i++) {
+    const r = 250 * Math.pow(3550 / 250, R0()), a = R0() * Math.PI * 2, x = Math.sin(a) * r, z = Math.cos(a) * r, v = field(x, z) + (R0() - 0.5) * 0.25;
+    const band = v > 0.5 ? 0 : v > 0.05 ? 1 : v > -0.45 ? 2 : 3, j = (R0() - 0.5) * 0.3;
+    const tx = Math.cos(a + j), tz = -Math.sin(a + j);
+    plan(list, x, F + 0.5, z, M.FIELD, Math.min(0.55, r / 5500), [tx, 0, tz], r * (0.09 + R0() * 0.06), up, r * (0.022 + R0() * 0.01), R0(), [0, 7, 1][Math.floor(R0() * 3)], (R0() - 0.5) * 0.15, band);
+  }
+  list.sort((p, q) => Math.hypot(q[0], q[2]) - Math.hypot(p[0], p[2]));
+  // (with the course's regions, the valley floor isn't bare: woods in patches over it, each a dark mass of crowns with the
+  // tops toward the light lit, broader further off; and low rises among them, a step lighter on their sunward side)
+  if (REGION.on) {
+    // (woods: a few large connected masses, not crowns scattered evenly: where a broad mask is high the wood's body in broad
+    // dark level strokes, its edge ragged with crowns standing out of it; the woods gathered along the river; between them,
+    // the floor left quiet)
+    const rvw = riverLine(seed), dRiver = (x: number, z: number) => { let b = Infinity; for (const p of rvw) b = Math.min(b, (p[0] - x) ** 2 + (p[2] - z) ** 2); return Math.sqrt(b); };
+    const wood = (x: number, z: number) => 0.8 * Math.sin(x / 640 + seed * 1.3) * Math.sin(z / 520 - seed) + 0.3 * Math.sin((x + z) / 330 + seed * 2) + 0.4 * Math.exp(-((dRiver(x, z) / 240) ** 2)) + 0.12;
+    for (let i = 0; i < 10000; i++) {
+      const r = 300 * Math.pow(3400 / 300, R0()), a = R0() * Math.PI * 2, x = Math.sin(a) * r, z = Math.cos(a) * r, haze = Math.min(0.55, r / 5500), w = wood(x, z);
+      if (w > 0.42) {
+        const L = r * (0.1 + R0() * 0.06), aa = a + (R0() - 0.5) * 0.3;
+        plan(list, x, F + r * 0.004, z, M.BLACK, haze, [Math.cos(aa), 0, -Math.sin(aa)], L, [-Math.sin(a), 0.6, -Math.cos(a)], L * 0.32, R0(), [11, 0, 11][Math.floor(R0() * 3)], 0, R0() < 0.5 ? 2 : 3);
+      } else if (w > 0.3) {
+        const sz = r * (0.016 + R0() * 0.012);
+        plan(list, x, F + sz * 0.6, z, M.BLACK, haze, [0, 1, 0], sz * 1.4, [-Math.sin(a), 0, -Math.cos(a)], sz * 1.1, R0(), [3, 2][Math.floor(R0() * 2)], 0, R0() < 0.35 ? 1 : 3);
+      }
+    }
+    const rvl = riverLine(seed);
+    // (the river's banks: a low cut either side of it, its walls darker, a lit lip)
+    for (let k = 0; k < rvl.length - 1; k++) {
+      const p = rvl[k], q2 = rvl[k + 1], dx = q2[0] - p[0], dz = q2[2] - p[2], L = Math.hypot(dx, dz), nx = -dz / L, nz = dx / L, d = Math.hypot(p[0], p[2]);
+      for (const sd of [-1, 1]) for (let j = 0; j < 4; j++) {
+        const t = (j + R0()) / 4, x = p[0] + dx * t + nx * sd * 30, z = p[2] + dz * t + nz * sd * 30;
+        plan(list, x, F + 6, z, M.UMBER, Math.min(0.5, d / 5500), [dx / L, 0, dz / L], L * 0.4, [nx * -sd, 0.4, nz * -sd], 9, R0(), 0, 0, j === 0 ? 1 : 3);
+      }
+    }
+    list.sort((p, q) => Math.hypot(q[0], q[2]) - Math.hypot(p[0], p[2]));
+  }
+  const rv = riverLine(seed);
+  for (let k = 0; k < rv.length - 1; k++) {
+    const p = rv[k], q = rv[k + 1], dx = q[0] - p[0], dz = q[2] - p[2], L = Math.hypot(dx, dz), d = Math.hypot((p[0] + q[0]) / 2, (p[2] + q[2]) / 2);
+    for (let m = 0; m < 3; m++) {
+      const t = (m + R0()) / 3, x = p[0] + dx * t, z = p[2] + dz * t;
+      plan(list, x, F + 1.5, z, M.WHITE, Math.min(0.45, d / 6000), [dx / L, 0, dz / L], L * 0.75, up, (14 + R0() * 6) * (1 + d / 2500), R0(), [0, 7][Math.floor(R0() * 2)], (R0() - 0.5) * 0.1, m === 0 ? 0 : 1);
+    }
+  }
+  const out: number[] = [];
+  for (const st of list) out.push(...st);
+  return new Float32Array(out);
+}
+
+/** A waterfall in strokes, not a ribbon: several sheets one in front of another (the back one in shadow, lilac-grey, the
+ * front ones white, a few pale blue), each a run of streaks sliding down its arc with the water, each streak drawn out
+ * by how fast the water's falling where it is (short at the lip, long below), growing as it comes over the lip and
+ * shrinking away as it lands; at the lip a few strokes across, the glassy edge; at its foot spray, dabs thrown up and
+ * out, growing as they rise and fading. Built each frame, every streak keeping its own place in the flow, so it moves
+ * with the water rather than flickering. */
+export function fallStrokes(c: Course, s0: number, s1: number, t: number): Float32Array {
+  const out: number[] = [];
+  // (kind 3: a thing seen from either side, lifted toward the eye by half its size; kind 0: on a surface, as the ground is)
+  const put = (p: number[], T: number[], L: number, n: number[], W: number, seed: number, stamp: number, mt: number, band: number, kind = 3) => {
+    if (L <= 0.02 || W <= 0.01) return;
+    out.push(p[0], p[1], p[2], mt + 0.5, T[0], T[1], T[2], L, n[0], n[1], n[2], W, seed, stamp, 0, kind, NEVER, 10 + band, 1, 0);
+  };
+  const norm = (v: number[]) => { const l = Math.hypot(v[0], v[1], v[2]) || 1; return [v[0] / l, v[1] / l, v[2] / l]; };
+  for (const f of fallPaths(c, s0, s1)) {
+    const R = rng(f.i * 7919 + 13);
+    // (the sheets, back to front: how far out from the wall, how many streaks, their colour)
+    const sheets = [
+      { out: 0, n: 110, mt: M.RUT, bands: [1, 2], w: 1.0 },
+      { out: 0.25, n: 90, mt: M.WHITE, bands: [2, 1], w: 0.75 },
+      { out: 0.5, n: 70, mt: M.WHITE, bands: [0, 1], w: 0.55 },
+      { out: 0.75, n: 26, mt: M.FARSNOW, bands: [1, 0], w: 0.4 },
+    ];
+    for (const sh of sheets) for (let k = 0; k < sh.n; k++) {
+      const phase = R(), rate = (0.7 + R() * 0.5) / f.T, side = (R() * 2 - 1) * (sh.out === 0 ? 1.02 : 0.95), seed = R(), stamp = [0, 1, 7, 11][Math.floor(R() * 4)], band = sh.bands[R() < 0.65 ? 0 : 1];
+      const u = (phase + t * rate) % 1, tau = u * f.T;
+      const p = f.P(tau, side, sh.out), q = f.P(Math.min(f.T, tau + 0.04), side, sh.out);
+      const T = norm([q[0] - p[0], q[1] - p[1], q[2] - p[2]]);
+      // (the sheet's face: across it (along the road) and down it; its normal out toward the road)
+      const a = f.P(tau, side + 0.05, sh.out), A = norm([a[0] - p[0], a[1] - p[1], a[2] - p[2]]);
+      const n = norm([A[1] * T[2] - A[2] * T[1], A[2] * T[0] - A[0] * T[2], A[0] * T[1] - A[1] * T[0]]);
+      const v = 9.8 * tau, env = Math.min(1, u * 7) * Math.min(1, (1 - u) * 9);
+      put(p, T, (1.3 + 0.28 * v) * env * (0.8 + R() * 0.4), n, sh.w * (0.8 + R() * 0.4) * (0.7 + 0.3 * env), seed, stamp, sh.mt, band);
+    }
+    // (the runnel feeding it, down the wall's face from its top to the lip: streaks sliding down it, so the fall comes from
+    // somewhere)
+    {
+      const ax = Math.sin(f.heading), az = Math.cos(f.heading);
+      for (let j = 0; j < f.feed.length - 1; j++) {
+        const A = f.feed[j], B = f.feed[j + 1], L = Math.hypot(B[0] - A[0], B[1] - A[1], B[2] - A[2]); if (L < 0.5) continue;
+        const T = [(B[0] - A[0]) / L, (B[1] - A[1]) / L, (B[2] - A[2]) / L], n = norm([-T[0] * T[1], 1 - T[1] * T[1], -T[2] * T[1]]);
+        const count = Math.ceil(L / 1.6) * 2;
+        for (let k = 0; k < count; k++) {
+          const u = (R() + t * (0.5 + R() * 0.4) * 6 / L) % 1, side = (R() * 2 - 1) * (0.5 + 0.5 * j / f.feed.length);
+          const p = [A[0] + (B[0] - A[0]) * u + ax * side, A[1] + (B[1] - A[1]) * u, A[2] + (B[2] - A[2]) * u + az * side];
+          put(p, T, Math.min(L * 0.5, 1.4 + R() * 1.2), n, 0.45 + R() * 0.25, R(), [0, 1, 7][Math.floor(R() * 3)], k % 4 ? M.WHITE : M.FARSNOW, k % 3 ? 0 : 1, 0);
+        }
+      }
+    }
+    // (the lip: a few strokes across it, glassy)
+    for (let k = 0; k < 6; k++) {
+      const side = -0.9 + (1.8 * (k + R() * 0.5)) / 6, p = f.P(0.03, side, 0.4), a = f.P(0.03, side + 0.3, 0.4);
+      put(p, norm([a[0] - p[0], a[1] - p[1], a[2] - p[2]]), 1.4, [0, 0, 1], 0.28, R(), 0, M.WHITE, k % 3 === 0 ? 1 : 0);
+    }
+    // (spray at its foot: dabs thrown up and out, growing as they rise, fading as they go)
+    for (let k = 0; k < 26; k++) {
+      const ph = R(), life = 1.3 + R() * 0.9, u = ((t + ph * life) % life) / life, side = (R() * 2 - 1) * 1.2, ang = R() * Math.PI * 2;
+      const base = f.P(f.T, side, 0.3), r = (0.6 + R() * 2.2) * u;
+      const p = [base[0] + Math.cos(ang) * r, f.footY + 0.4 + (1.2 + R() * 2.5) * Math.sin(Math.PI * u * 0.8), base[2] + Math.sin(ang) * r];
+      const sz = (0.5 + R() * 0.7) * (0.4 + u) * (1 - u * u);
+      put(p, norm([Math.cos(ang), 0.6, Math.sin(ang)]), sz * 1.4, [0, 1, 0], sz, R(), [2, 3, 4, 3][Math.floor(R() * 4)], M.WHITE, R() < 0.7 ? 0 : 1);
+    }
+  }
+  return new Float32Array(out);
+}
+
+/** A flag in strokes, by how far off it is. Near (within ~25 m, gone by 40): strokes riding the cloth, four rows of
+ * them from the pole to the free end, four along each row, each tied to its own place on the cloth (not to a facet), so it
+ * moves with the wave and holds still on it; the wave in their colour, lit or in shade as the cloth turns to the sun
+ * or from it. Far (from ~20 m): the banner one gesture, a flick from the pole's top out along it, whipping thin to the
+ * free end, and a shorter one over it; what reads, a few pixels across, is an orange mark on a pole. Either way the pole
+ * one dark upright stroke. */
+export function flagStrokes(c: Course, s0: number, s1: number, t: number, eye: number[], sun: number[]): Float32Array {
+  const out: number[] = [];
+  const norm = (v: number[]) => { const l = Math.hypot(v[0], v[1], v[2]) || 1; return [v[0] / l, v[1] / l, v[2] / l]; };
+  const sub = (p: number[], q: number[]) => [p[0] - q[0], p[1] - q[1], p[2] - q[2]];
+  const put = (p: number[], T: number[], L: number, n: number[], W: number, seed: number, stamp: number, mt: number, band: number, bend = 0) => {
+    if (L <= 0.02 || W <= 0.02) return;
+    out.push(p[0], p[1], p[2], mt + 0.5, T[0], T[1], T[2], L, n[0], n[1], n[2], W, seed, stamp, bend, 3, NEVER, 10 + band, 1, 0);
+  };
+  const smooth = (a: number, b: number, x: number) => { const k = Math.max(0, Math.min(1, (x - a) / (b - a))); return k * k * (3 - 2 * k); };
+  for (const f of flagPaths(c, s0, s1, t)) {
+    const R = rng(f.i * 4421 + 7), d = Math.hypot(f.base[0] - eye[0], f.base[1] + 4 - eye[1], f.base[2] - eye[2]);
+    const wn = 1 - smooth(25, 40, d), wf = smooth(20, 34, d);
+    // (the pole)
+    put([f.base[0], f.base[1] + 3, f.base[2]], [0, 1, 0], 6.1, norm(sub(eye, f.base)), 0.16, R(), 0, M.BLACK, 1);
+    if (wn > 0) for (let r = 0; r < 4; r++) for (let k = 0; k < 4; k++) {
+      const v = (r + 0.5) / 4, a0 = k / 4 - 0.04, a1 = (k + 1) / 4 + 0.04, am = (a0 + a1) / 2;
+      const p0 = f.P(Math.max(0, a0), v), p1 = f.P(Math.min(1, a1), v), pm = f.P(am, v), T = norm(sub(p1, p0));
+      const du = sub(f.P(am + 0.02, v), f.P(am - 0.02, v)), dv = sub(f.P(am, v + 0.05), f.P(am, v - 0.05));
+      let n = norm([du[1] * dv[2] - du[2] * dv[1], du[2] * dv[0] - du[0] * dv[2], du[0] * dv[1] - du[1] * dv[0]]);
+      const e = sub(eye, pm); if (n[0] * e[0] + n[1] * e[1] + n[2] * e[2] < 0) n = [-n[0], -n[1], -n[2]];
+      const l = n[0] * sun[0] + n[1] * sun[1] + n[2] * sun[2], band = l > 0.55 ? 0 : l > 0.2 ? 1 : l > -0.15 ? 2 : 3;
+      // (its sag across the chord, as bend: the cloth's curve between its ends)
+      const chord = Math.hypot(...sub(p1, p0)), mid = [(p0[0] + p1[0]) / 2, (p0[1] + p1[1]) / 2, (p0[2] + p1[2]) / 2];
+      put(pm, T, chord * 1.1, n, (2.3 / 4) * 1.8 * wn, R(), [0, 1, 13, 9][Math.floor(R() * 4)], M.ORANGE, band, Math.max(-0.3, Math.min(0.3, (Math.hypot(...sub(pm, mid)) / Math.max(0.1, chord)) * 2 * (R() < 0.5 ? 1 : -1))));
+    }
+    if (wf > 0) {
+      const top = f.P(0, 0.3), end = f.P(1, 0.55), mid = f.P(0.5, 0.45), T = norm(sub(end, top)), n = norm(sub(eye, mid));
+      put(mid, T, Math.hypot(...sub(end, top)) * 1.15, n, 2.0 * wf, R(), 8, M.ORANGE, 1, 0.15);
+      const m2 = f.P(0.35, 0.2), e2 = f.P(0.75, 0.25);
+      put(m2, norm(sub(e2, f.P(0, 0.2))), Math.hypot(...sub(e2, f.P(0, 0.2))) * 0.9, n, 0.9 * wf, R(), 15, M.ORANGE, 0, -0.1);
+    }
+  }
+  return new Float32Array(out);
+}
+
+/** The rider painted by its parts, after the rider study: a few big loaded strokes on each part, laid with its form, on
+ * the side of it you see. The arms, legs, boots and the machine's tubes in strokes along them, a few round each; the
+ * jacket's body in strokes wrapping it on a slant, as the study's back is; the helmet in strokes round it, its goggle
+ * strap one dark band; each wheel a ring of strokes round its axle, turning with it; the machine's boxes (tank, fenders,
+ * seat, plates) a couple of strokes along each face you see. Each stroke lit or shaded by its own place on the part,
+ * in its material's four values (the jacket orange, the jeans denim, the tyres near-black, the helmet and boots cream).
+ * At speed the jacket trails dry strokes off behind it. */
+export function riderStrokes(parts: RiderPart[], eye: number[], sun: number[], vel: number[]): Float32Array {
+  const out: number[] = [], R = rng(9157);
+  const nrm = (v: number[]) => { const l = Math.hypot(v[0], v[1], v[2]) || 1; return [v[0] / l, v[1] / l, v[2] / l]; };
+  const sub = (a: number[], b: number[]) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]], add = (a: number[], b: number[], k = 1) => [a[0] + b[0] * k, a[1] + b[1] * k, a[2] + b[2] * k];
+  const dot = (a: number[], b: number[]) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2], crs = (a: number[], b: number[]) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+  const band = (n: number[], lift = 0) => { const l = dot(n, sun) + lift; return l > 0.5 ? 0 : l > 0.1 ? 1 : l > -0.3 ? 2 : 3; };
+  const speed = Math.hypot(vel[0], vel[1], vel[2]), back = speed > 1e-3 ? [-vel[0] / speed, -vel[1] / speed, -vel[2] / speed] : [0, 0, 0];
+  const put = (p: number[], T: number[], L: number, n: number[], W: number, mt: number, b: number, stamp: number, bend = 0) => {
+    if (L <= 0.005 || W <= 0.005) return;
+    out.push(p[0], p[1], p[2], mt + 0.5, T[0], T[1], T[2], L, n[0], n[1], n[2], W, R(), stamp, bend, 3, NEVER, 10 + b, 1, 0);
+  };
+  const LOADED = [9, 0, 1, 9, 13];
+  const matOf = (p: RiderPart) => {
+    if (p.role === 'torso' || p.role === 'arm') return M.JACKET;
+    if (p.role === 'leg') return M.DENIM;
+    if (p.role === 'boot' || p.role === 'head') return M.CREAM;
+    if (p.role === 'glove' || p.role === 'wheel') return M.TYRE;
+    const m = p.mat;
+    if (m === M.ORANGE || m === M.CUT_ORANGE) return M.JACKET;
+    if (m === M.WHITE || m === M.CREAM) return M.CREAM;
+    return M.TYRE;
+  };
+  const trail = (p: number[], W: number, mt: number, b: number, r: number) => {
+    if (speed < 6 || R() > 0.45) return;
+    const L = Math.min(1.1, speed * 0.035) * (0.6 + R() * 0.6);
+    put(add(p, back, L * 0.5 + r * 0.6), back, L, nrm(sub(eye, p)), W * 0.55, mt, b, [5, 6][Math.floor(R() * 2)]);
+  };
+  for (const p of parts) {
+    const mt = matOf(p);
+    if (p.k === 'limb') {
+      const z0 = sub(p.b, p.a), Lz = Math.hypot(z0[0], z0[1], z0[2]); if (Lz < 1e-3) continue;
+      const z = [z0[0] / Lz, z0[1] / Lz, z0[2] / Lz], mid = add(p.a, z0, 0.5), r = (p.ra + p.rb) / 2;
+      const e = nrm(sub(eye, mid)); let ep = sub(e, z.map((v) => v * dot(e, z))); if (Math.hypot(ep[0], ep[1], ep[2]) < 1e-3) ep = p.x; ep = nrm(ep);
+      const q = nrm(crs(z, ep)), reff = (rd: number[]) => r * (1 + (p.sx - 1) * Math.abs(dot(rd, p.x)));
+      const jacket = mt === M.JACKET;
+      if (p.role === 'torso') {
+        // (wrapping it on a slant, row on row from the waist to the shoulders)
+        const rows = Math.max(2, Math.round(Lz / (r * 1.1)));
+        for (let i = 0; i < rows; i++) for (const th of [-1.1, -0.35, 0.4, 1.15]) {
+          const rd = add(ep.map((v) => v * Math.cos(th)), q, Math.sin(th)), c = add(add(p.a, z0, (i + 0.5) / rows), rd, reff(rd));
+          const circ = nrm(crs(z, rd)), T = nrm(add(circ.map((v) => v * 0.85), z, 0.5)), W = (Lz / rows) * 1.5;
+          const b = band(rd); put(c, T, r * 2.0, rd, W * 0.85, mt, b, LOADED[Math.floor(R() * LOADED.length)], (R() - 0.5) * 0.3);
+          if (jacket && Math.abs(th) > 1) trail(c, W, mt, b, r);
+        }
+        continue;
+      }
+      // (along it, a few round it; a thin tube one or two)
+      const thin = r < 0.035, angs = thin ? [0] : [-1.1, -0.4, 0.35, 1.05], n = Math.max(1, Math.round(Lz / (r * (thin ? 12 : 5))));
+      for (let i = 0; i < n; i++) for (const th of angs) {
+        const rd = add(ep.map((v) => v * Math.cos(th)), q, Math.sin(th)), c = add(add(p.a, z0, (i + 0.5) / n), rd, reff(rd) * (thin ? 0 : 0.9));
+        const W = thin ? r * 2.4 : r * 1.0, b = band(rd);
+        put(c, nrm(add(z, crs(z, rd), 0.12)), (Lz / n) * 1.18, rd, W, mt, b, LOADED[Math.floor(R() * LOADED.length)], (R() - 0.5) * 0.2);
+        if (jacket && th === angs[0]) trail(c, W, mt, b, r);
+      }
+      // (and a light caught along it, where it turns to the sun)
+      if (!thin) { let sd = sub(sun, z.map((v) => v * dot(sun, z))); if (Math.hypot(sd[0], sd[1], sd[2]) > 0.1 && dot(nrm(sd), ep) > 0.1) { sd = nrm(sd); put(add(mid, sd, reff(sd) * 0.98), z, Lz * 0.85, sd, r * 0.45, mt, 0, 0); } }
+    } else if (p.k === 'wheel') {
+      // (a ring of strokes round the axle, turning with the wheel; the side you see)
+      const toE = sub(eye, p.c), n = dot(p.ax, toE) > 0 ? p.ax : p.ax.map((v) => -v);
+      const u = nrm(Math.abs(p.ax[1]) < 0.9 ? crs(p.ax, [0, 1, 0]) : crs(p.ax, [1, 0, 0])), v = crs(p.ax, u), rm = (p.ro + p.ri) / 2, N = 12;
+      for (let k = 0; k < N; k++) {
+        const a = p.spin + (k / N) * Math.PI * 2, rad = add(u.map((x) => x * Math.cos(a)), v, Math.sin(a)), T = add(u.map((x) => -x * Math.sin(a)), v, Math.cos(a));
+        const c = add(add(p.c, rad, rm), n, 0.03), b = band(nrm(add(n.map((x) => x * 0.5), rad, 0.6)));
+        put(c, T, ((Math.PI * 2 * rm) / N) * 1.6, n, (p.ro - p.ri) * 1.2, M.TYRE, b, [9, 0, 14][k % 3], 0.25);
+      }
+      // (the tread: a stroke over its rim, where it turns toward you)
+      const ee = nrm(sub(toE, p.ax.map((x) => x * dot(toE, p.ax))));
+      put(add(p.c, ee, p.ro * 0.97), crs(p.ax, ee), p.ro * 1.2, ee, p.ro * 0.35, M.TYRE, band(ee), 14);
+    } else if (p.k === 'head') {
+      // (round it, three rows over the side you see; the goggle strap a dark band round it)
+      const e = nrm(sub(eye, p.c));
+      for (const [lat, n] of [[0.55, 3], [0.15, 4], [-0.3, 3]] as [number, number][]) for (let j = 0; j < n; j++) {
+        const lon = (j - (n - 1) / 2) * 0.7;
+        let hor = nrm(sub(e, p.y.map((x) => x * dot(e, p.y)))); const side = crs(p.y, hor);
+        hor = add(hor.map((x) => x * Math.cos(lon)), side, Math.sin(lon));
+        const rd = nrm(add(hor.map((x) => x * Math.cos(lat)), p.y, Math.sin(lat))), T = nrm(crs(p.y, rd));
+        put(add(p.c, rd, p.r * 0.95), T, p.r * 1.25, rd, p.r * 0.75, M.CREAM, band(rd, 0.15), [0, 1, 9][j % 3], 0.3);
+      }
+      const hor = nrm(sub(e, p.y.map((x) => x * dot(e, p.y))));
+      put(add(add(p.c, hor, p.r * 1.0), p.y, -0.01), nrm(crs(p.y, hor)), p.r * 1.9, hor, p.r * 0.32, M.TYRE, 3, 0, 0.35);
+    } else {
+      // (a couple of strokes along each face you see)
+      for (const [f, P, Q] of [[p.X, p.Y, p.Z], [p.Y, p.Z, p.X], [p.Z, p.X, p.Y]]) for (const sg of [1, -1]) {
+        const fn = nrm(f).map((x) => x * sg), fc = add(p.c, f, sg);
+        if (dot(fn, sub(eye, fc)) <= 0) continue;
+        const lp = Math.hypot(P[0], P[1], P[2]), lq = Math.hypot(Q[0], Q[1], Q[2]), [lng, sht, ll, ls] = lp > lq ? [P, Q, lp, lq] : [Q, P, lq, lp];
+        for (const o of [-0.5, 0.5]) put(add(fc, sht, o), nrm(lng), ll * 2.2, fn, ls * 1.25, mt, band(fn), LOADED[Math.floor(R() * LOADED.length)], (R() - 0.5) * 0.2);
+      }
+    }
+  }
+  return new Float32Array(out);
+}
+
+/** The rider's shadow cast by its parts: each part thrown along the sun onto the ground (at gY) and painted there in a broad
+ * flat stroke or two (a limb along its cast, the body wide, a wheel a ring of them, the head a dab), lavender, so the
+ * shadow is the figure's shape in a few soft strokes, not a scribble over its outline and not a block */
+export function partShadowStrokes(parts: RiderPart[], sun: number[], gY: number): Float32Array {
+  const out: number[] = [], R = rng(313);
+  const cast = (p: number[]) => { const h = Math.max(0, p[1] - gY), k = h / Math.max(0.25, sun[1]); return [p[0] - sun[0] * k, gY + 0.03, p[2] - sun[2] * k]; };
+  const put = (a: number[], b: number[], W: number) => {
+    const dx = b[0] - a[0], dz = b[2] - a[2], L = Math.hypot(dx, dz);
+    const T = L > 1e-3 ? [dx / L, 0, dz / L] : [1, 0, 0];
+    out.push((a[0] + b[0]) / 2, gY + 0.03, (a[2] + b[2]) / 2, M.SHADOW + 0.5, T[0], 0, T[2], Math.max(W * 1.2, L * 1.15), 0, 1, 0, W, R(), [0, 1, 11][Math.floor(R() * 3)], 0, 0, NEVER, 10, 1, 0);
+  };
+  for (const p of parts) {
+    if (p.k === 'limb') { const w = (p.ra + p.rb) * (p.role === 'torso' ? 2.3 : 1.9); put(cast(p.a), cast(p.b), Math.max(0.1, w)); }
+    else if (p.k === 'head') { const c = cast(p.c); put([c[0] - p.r, 0, c[2]], [c[0] + p.r, 0, c[2]], p.r * 2.2); }
+    else if (p.k === 'wheel') {
+      const u = Math.abs(p.ax[1]) < 0.9 ? [p.ax[2], 0, -p.ax[0]] : [1, 0, 0], ul = Math.hypot(u[0], u[1], u[2]) || 1, uu = [u[0] / ul, 0, u[2] / ul], N = 8, rm = (p.ro + p.ri) / 2;
+      for (let k = 0; k < N; k++) {
+        const a0 = (k / N) * Math.PI * 2, a1 = ((k + 1) / N) * Math.PI * 2;
+        const q0 = [p.c[0] + uu[0] * Math.cos(a0) * rm, p.c[1] + Math.sin(a0) * rm, p.c[2] + uu[2] * Math.cos(a0) * rm], q1 = [p.c[0] + uu[0] * Math.cos(a1) * rm, p.c[1] + Math.sin(a1) * rm, p.c[2] + uu[2] * Math.cos(a1) * rm];
+        put(cast(q0), cast(q1), (p.ro - p.ri) * 1.4);
+      }
+    } else if (p.k === 'box') { const c = cast(p.c), X = cast([p.c[0] + p.Z[0], p.c[1] + p.Z[1], p.c[2] + p.Z[2]]), Y = cast([p.c[0] - p.Z[0], p.c[1] - p.Z[1], p.c[2] - p.Z[2]]); put(Y, X, Math.max(0.06, Math.hypot(p.X[0], p.X[2]) * 2.2)); void c; }
+  }
+  return new Float32Array(out);
+}
+
+/** The rider's shadow in a few broad strokes, flat and soft-edged, lavender, along its length (not a scribble of dabs
+ * over its outline) */
+export function shadowStrokes(sh: Float32Array): Float32Array {
+  const n = sh.length / 4; if (n < 3) return new Float32Array(0);
+  let mx = 0, my = 0, mz = 0; for (let i = 0; i < n; i++) { mx += sh[i * 4]; my += sh[i * 4 + 1]; mz += sh[i * 4 + 2]; } mx /= n; my /= n; mz /= n;
+  let xx = 0, xz = 0, zz = 0; for (let i = 0; i < n; i++) { const dx = sh[i * 4] - mx, dz = sh[i * 4 + 2] - mz; xx += dx * dx; xz += dx * dz; zz += dz * dz; }
+  const ang = 0.5 * Math.atan2(2 * xz, xx - zz), ux = Math.cos(ang), uz = Math.sin(ang), vx = -uz, vz = ux;
+  let a0 = Infinity, a1 = -Infinity, b0 = Infinity, b1 = -Infinity;
+  for (let i = 0; i < n; i++) { const dx = sh[i * 4] - mx, dz = sh[i * 4 + 2] - mz, a = dx * ux + dz * uz, b = dx * vx + dz * vz; a0 = Math.min(a0, a); a1 = Math.max(a1, a); b0 = Math.min(b0, b); b1 = Math.max(b1, b); }
+  const out: number[] = [], R = rng(311), L = (a1 - a0) * 0.85, Wd = b1 - b0, rows = 4;
+  for (let k = 0; k < rows; k++) {
+    const b = b0 + Wd * (k + 0.5) / rows, a = (a0 + a1) / 2 + (R() - 0.5) * L * 0.1, taper = 1 - Math.abs(k - (rows - 1) / 2) / (rows * 1.4);
+    out.push(mx + ux * a + vx * b, my + 0.02, mz + uz * a + vz * b, M.SHADOW + 0.5, ux, 0, uz, L * taper, 0, 1, 0, (Wd / rows) * 1.9, R(), [0, 1, 0, 1][k], 0, 0, NEVER, 10 + 0, 1, 0);
+  }
+  return new Float32Array(out);
+}
+
+/** The sky's strokes: level marks round the eye from the horizon up past the top, close enough to cover it, darkening as
+ * they rise, a few paler. */
+export function skyStrokes(seed: number, quiet = false): Float32Array {
+  // (as the references have it: deep at the top, paling to the horizon, the strokes long and calm, all on one slant, a
+  // little smaller toward the horizon; and a few clouds, each a cluster of pale strokes, lit above, shaded under)
+  const R = rng(seed * 97 + 3), out: number[] = [], RAD = 3200, SLANT = 0.22;
+  const put = (a: number, el: number, len: number, wid: number, shade: number, kind: number, slant: number) => {
+    const y = RAD * Math.tan(Math.min(1.45, el)) - 120, x = Math.sin(a) * RAD, z = Math.cos(a) * RAD, cs = Math.cos(slant), sn = Math.sin(slant);
+    out.push(x, y, z, shade, Math.cos(a) * cs, sn, -Math.sin(a) * cs, len, -Math.sin(a), 0, -Math.cos(a), wid, R(), [0, 7, 0, 1][Math.floor(R() * 4)], (R() - 0.5) * 0.12 + 0.06, kind, NEVER, 0, 0, 0);
+  };
+  // (quiet (the composed backdrop's): broader, fewer, their shades closer, no pale strokes, fewer clouds: a sky that supports)
+  for (let i = 0; i < (quiet ? 5000 : 12000); i++) {
+    const a = R() * Math.PI * 2, el = -0.02 + Math.pow(R(), 1.15) * 1.46;
+    const len = RAD * (0.11 + R() * 0.12) * (1 + el * 0.6) * (quiet ? 1.5 : 1), wid = len * (0.18 + R() * 0.06) * (quiet ? 1.3 : 1);
+    put(a, el, len, wid, Math.max(0, Math.min(0.8, (el / 0.42 + (R() - 0.5) * (quiet ? 0.04 : 0.14)) * 0.8)), !quiet && R() < 0.07 ? 2 : 1, SLANT + (R() - 0.5) * 0.06);
+  }
+  for (let c = 0; c < (quiet ? 3 : 9); c++) {
+    const ac = R() * Math.PI * 2, ec = 0.1 + R() * 0.32, w = 0.12 + R() * 0.16, n = 14 + Math.floor(R() * 14);
+    for (let i = 0; i < n; i++) {
+      const u = (R() - 0.5) * 2, v = (R() - 0.5) * 2 * (1 - Math.abs(u) * 0.6);
+      const len = RAD * (0.08 + R() * 0.1), wid = len * (0.16 + R() * 0.06);
+      put(ac + u * w, ec + v * 0.035, len, wid, 2 + Math.max(0, Math.min(1, 0.5 - v * 0.6 + (R() - 0.5) * 0.3)), 1, SLANT * 0.6 + (R() - 0.5) * 0.08);
+    }
+  }
+  return new Float32Array(out);
+}
+
+// ─── drawing them ───────────────────────────────────────────────────────────────────────────────────────────────────────
+
+const SEG = 8;
+const VS = `#version 300 es
+layout(location=0) in vec2 aQ; layout(location=1) in vec4 a0; layout(location=2) in vec4 a1; layout(location=3) in vec4 a2; layout(location=4) in vec4 a3; layout(location=5) in vec4 a4;
+uniform mat4 uVP, uPrev; uniform vec3 uOff, uEye, uSun; uniform vec3 uPal[152]; uniform float uFog, uK, uMinW, uStretch, uDens, uGrow, uReveal; uniform vec2 uRes, uFront;
+uniform vec3 uSkyLo, uSkyHi, uSkyPale, uSmear, uCloudLit, uCloudShade; uniform float uCloud, uHazeK, uHazeB, uLit, uFlat, uThin; uniform vec3 uFogs[4]; uniform vec4 uBelt; uniform vec3 uBeltCol; uniform float uSink, uSkyTex, uSea, uWorldS;
+out vec2 vUv; out vec3 vA; out vec3 vB; flat out float vStamp; out float vFresh; flat out float vTex;
+float h(float s, float k){ return fract(sin(s*k)*43758.5453); }
+// (the cloud belt (\`mood=course\`), one model for the strokes and the solid masses alike: how much cloud lies along the
+// line from the eye to a point, by the share of it inside the belt's heights; inside, banks thicker and thinner,
+// drifting; below it, a ceiling thinning the further down you are and breaking into patches of sky. uBelt: its middle's
+// height, half its depth, the distance that hides, on)
+vec3 beltMix(vec3 c, vec3 w, float dist){
+  if (uBelt.w < .5) return c;
+  float yb = uBelt.x - uBelt.y, yt = uBelt.x + uBelt.y, lo = min(uEye.y, w.y), hi = max(uEye.y, w.y), dy = hi - lo;
+  float ov = max(0., min(hi, yt) - max(lo, yb)), path = dy > 1. ? ov/dy*dist : (uEye.y > yb && uEye.y < yt ? dist : 0.);
+  float bank = .55 + .45*sin(w.x/90. + uCloud*380.)*sin(w.z/70. - uCloud*290.);
+  float k = 1. - exp(-path/(uBelt.z*mix(.45, 1.7, bank)));
+  // (below it, a ceiling that thins quickly as you come down out of it and opens into broad patches of sky, by where you
+  // look (drifting slowly), so the sky below the belt isn't one flat grey lid)
+  if (uEye.y < yb) { float under = smoothstep(10., 140., yb - uEye.y);
+    vec2 dir = normalize(w.xz - uEye.xz + vec2(1e-4)); float hole = .5 + .5*sin(dir.x*4.1 + uCloud*150. + 1.3)*sin(dir.y*3.3 - uCloud*110.) + .25*sin(atan(dir.y, dir.x)*7.);
+    k *= mix(1., mix(.55, .05, smoothstep(.35, .6, hole)), under); }
+  vec3 col = uBeltCol*mix(.9, 1.06, clamp((w.y - yb)/(2.*uBelt.y), 0., 1.));
+  return mix(c, col, k);
+}
+vec3 belt(vec3 c, vec3 w, float dist){ return beltMix(c, w, dist); }
+void main(){
+  vec3 w = a0.xyz + uOff, n = a2.xyz, T = normalize(a1.xyz); float seed = a3.x, kind = a3.w; bool sky = kind > .5 && kind < 2.5, both = kind > 2.5;
+  // (the clouds drift round the sky, the wind's way)
+  if (sky && a0.w > 1.9) { float ca = cos(uCloud), sa = sin(uCloud); vec3 r = a0.xyz; w = vec3(r.x*ca - r.z*sa, r.y, r.x*sa + r.z*ca) + uOff; T = normalize(vec3(T.x*ca - T.z*sa, T.y, T.x*sa + T.z*ca)); n = vec3(n.x*ca - n.z*sa, n.y, n.x*sa + n.z*ca); }
+  vec3 V = uEye - w; float dist = length(V); V /= max(dist, 1e-4);
+  // (the paint front: a stroke at its station is laid, tail to head, as the front for its pass comes past; the backdrop
+  // and what moves are laid as the page opens)
+  float g = 1., fresh = 0.;
+  if (a4.x > -1e8) { float fr = a4.y < .5 ? uFront.x : uFront.y; g = clamp((fr - a4.x)/uGrow, 0., 1.); fresh = 1. - clamp((fr - a4.x - uGrow)/25., 0., 1.); }
+  else g = clamp((uReveal*1.5 - h(seed, 7.77)*.9 - (sky ? 0. : .2))/.35, 0., 1.);
+  bool far = a4.w > .5;
+  // (thinned with distance, but never the backdrop: thinned, it went to blotches on paper)
+  float keep = sky || both || far ? 1. : uDens*mix(1., .5, smoothstep(80., 900., dist));
+  // (the air thins what's far: near, past the first few hundred metres; the far off's planned strokes by their haze)
+  if (!sky && !both) keep *= far ? (a4.y > .5 ? 1. - uThin*min(.85, fract(a0.w)/.9*uHazeK + uHazeB) : 1.) : mix(1., 1. - uThin, smoothstep(150., 700., dist));
+  // (a stroke on a face turned away from the eye isn't laid (a thing, thin, is painted on both sides): it shrinks away as its
+  // face turns from the eye, rather than going at once; so nothing lifted toward the eye shows through from behind an edge)
+  // (not the backdrop's: seen far off and edge on, a peak's flanks turned (by their normal) from the eye were left bare
+  // paper; what's behind a range is hidden by its depth anyway)
+  if (!sky && !both && !far) g *= smoothstep(-.02, .12, dot(n, V));
+  // (the middle distance's hills where they're down in the sea of cloud, seen from above it: under it, not painted)
+  if (uSink > .5 && uBelt.w > .5) g *= mix(1., smoothstep(uBelt.x + uBelt.y - 6., uBelt.x + uBelt.y + 10., w.y), smoothstep(uBelt.x + uBelt.y - 60., uBelt.x + uBelt.y + 40., uEye.y));
+  int mt0 = int(a0.w);
+  if (far && (mt0 == 6 || mt0 == 7 || mt0 == 12 || mt0 == 13 || mt0 == 14) && dot(n, V) < 0.) g = 0.;
+  if (!sky && dot(n, V) < 0.) n = -n;
+  // (thinned with distance: a stroke past its turn shrinks away over a little more distance, rather than going at once)
+  g *= clamp((keep - h(seed, 12.9898))/.12 + 1., 0., 1.);
+  vec4 c = uVP*vec4(w, 1.);
+  // (dropped only when it's wholly behind the eye: dropped when its middle was near or behind it, a stroke under the eye
+  // (on a ramp's lip, passing right beneath it) left bare paper with a hard edge)
+  if (g <= 0. || c.w < -max(a1.w, a2.w)) { gl_Position = vec4(2., 2., 2., 1.); return; }
+  // The stroke is laid in the world, on its face, along its own way: nothing about how it lies comes from the screen, so
+  // it can't swing as the eye moves. Across it, its width turns from lying on the face toward facing the eye as it gets
+  // further off, so it never thins to a sliver (after Brush Rush).
+  // (the speed, only near the eye (full within 14 m, gone by 30; further off the subject alone lays it): at pace the stroke turns, on its own face, toward the way the eye is going (one way for every stroke, the
+  // eye's smoothed motion in the world, so it holds steady), and draws out by as far as the eye's gone in a moment: the
+  // ground and the rock fall into line with the motion, and stream past)
+  float smearL = 0.;
+  float nearE = 1. - smoothstep(14., 30., dist);
+  if (!sky && a4.z < .5 && nearE > 0. && dot(uSmear, uSmear) > 1e-3) {
+    vec3 sd = (uSmear - n*dot(uSmear, n))*nearE; float sl = length(sd);
+    if (sl > 1e-3) { sd /= sl; if (dot(sd, T) < 0.) sd = -sd; T = normalize(mix(T, sd, clamp(sl/2.4, 0., 1.)*.9)); smearL = sl; }
+  }
+  vec3 Bn = normalize(cross(n, T)), Be = cross(T, V); float bl = length(Be); Be = bl > .001 ? Be/bl : Bn; if (dot(Be, Bn) < 0.) Be = -Be;
+  float face = sky ? 1. : both ? .35 + .5*smoothstep(4., 40., dist) : .15 + .75*smoothstep(5., 70., dist);
+  vec3 Wd = normalize(mix(Bn, Be, face));
+  // its size: thinned out, the ones kept are bigger; never thinner on the picture than a few pixels, never more than a part of it
+  float grow = inversesqrt(max(keep, .3)), k = uK*uRes.y*.5/max(c.w, .3);
+  float len = a1.w*grow, wid = a2.w*grow;
+  wid = clamp(wid, uMinW/k, uRes.y*.19/k); len = clamp(len, wid*1.6, uRes.y*.5/k) + min(smearL, uRes.y*.3/k);
+  float u = aQ.x*g, c2 = 2.*u - 1., s = (u - .5)*len, bend = a3.z*len*(1. - c2*c2)*.25;
+  vec3 p = w + T*s + Wd*(aQ.y*wid*.5 + bend);
+  vec4 cq = uVP*vec4(p, 1.);
+  // its depth lifted toward the eye, along the line to the eye so it doesn't move on the picture: on the ground a little,
+  // more the further (after Brush Rush), on a thing by half its own size; so it clears its own face, never cutting into it
+  float lift = sky ? 0. : both ? .02 + max(len, wid)*.5 : .25 + dist*.02 + wid*.5;
+  vec4 cl = uVP*vec4(p + V*min(lift, dist*.5), 1.);
+  gl_Position = vec4(cq.xy, cl.z/cl.w*cq.w, cq.w);
+  vUv = vec2(u, aQ.y*.5 + .5); vStamp = a3.y; vFresh = fresh; vTex = sky ? uSkyTex : far ? 1. : 0.;
+  if (sky) {
+    vec3 col;
+    if (a0.w > 1.9) col = mix(uCloudLit, uCloudShade, clamp(a0.w - 2., 0., 1.));
+    else { col = mix(uSkyLo, uSkyHi, smoothstep(0., .8, a0.w)); if (kind > 1.5) col = mix(col, uSkyPale, .35); }
+    vA = belt(col*(.96 + h(seed, 3.7)*.08), w, dist); vB = belt(col*(1.04 + h(seed, 5.1)*.08), w, dist);
+    return;
+  }
+  // (its colour: the face's band, as the facets pick it, a little jittered stroke by stroke; and the band next to it)
+  int mt = int(a0.w); float tone = fract(a0.w);
+  float l = dot(n, uSun) + (tone/.9 - .5)*.42 + (far ? 0. : (h(seed, 78.233) - .5)*.12 + uLit);
+  int b = l > .62 ? 0 : l > .3 ? 1 : l > -.05 ? 2 : 3;
+  int b2 = clamp(b + (h(seed, 3.1) > .5 ? 1 : -1), 0, 3);
+  // (the far off in two tones, as the study has it: a face is lit or in shade, so a range reads as a few planes; a stroke
+  // now and then of the other side's colour streaked through)
+  // (lit as a painter lights the far off, not by the sun: from the left of the way you look at it, high and a little from
+  // in front, so a peak shows a lit face and a shaded one whichever way you look, as the study has it)
+  vec3 rr = normalize(vec3(w.x - uEye.x, 0., w.z - uEye.z)), Lf = normalize(vec3(rr.z, 0., -rr.x)*.75 + vec3(0., .55, 0.) - rr*.3);
+  int code = int(a4.y + .5) - 1;
+  // (a stroke given its colour outright, near: the waterfall's)
+  if (!far && a4.y > 9.5) { b = int(a4.y + .5) - 10; b2 = h(seed, 3.1) > .8 ? clamp(b + 1, 0, 3) : b; }
+  if (far && code >= 0 && code < 4) { b = code; b2 = h(seed, 3.1) > .78 ? clamp(b + (b < 2 ? 1 : -1), 0, 3) : b; }
+  else if (far) { bool lit = dot(n, Lf) > .3; float r = h(seed, 3.1); b = lit ? (r > .5 ? 0 : 1) : 3; b2 = lit ? (r > .75 ? 2 : 1) : (r > .7 ? 2 : 3); }
+  vec3 A = uPal[mt*4 + b], B = mix(A, uPal[mt*4 + b2], far ? .35 : .45);
+  float fd = length((w - uEye).xz), f = floor(clamp((fd - 80.)/520., 0., 1.)*4.)/4.;
+  vec3 fogs[4] = vec3[4](uFogs[0], uFogs[1], uFogs[2], uFogs[3]);
+  float fk = min(1., f*1.1)*uFog;
+  // (no two strokes alike: a little lighter or darker, a little warmer or cooler)
+  vec3 tint = mix(vec3(.95, .98, 1.06), vec3(1.05, 1., .93), h(seed, 4.7))*(1. + (h(seed, 9.13) - .5)*.12);
+  float tk = far ? .15 : .7;
+  A *= mix(vec3(1.), tint, tk); B *= mix(vec3(1.), tint, tk);
+  vec3 mid = (uPal[mt*4 + 1] + uPal[mt*4 + 2])*.5;
+  if (!far) { A = mix(A, mid, fk*uFlat); B = mix(B, mid, fk*uFlat); }
+  vA = mix(A, fogs[b], fk); vB = mix(B, fogs[b2], fk);
+  // (a planned stroke of the far off: hazed toward the horizon by its distance)
+  if (far && code >= 0) { float hz = min(.88, fract(a0.w)/.9*uHazeK + uHazeB); vA = mix(mix(vA, mid, hz*uFlat), uSkyLo, hz); vB = mix(mix(vB, mid, hz*uFlat), uSkyLo, hz); }
+  // (the far off, drawn about the eye, by a level line of sight at its distance, not by a height it doesn't really have)
+  vec3 bw = far && uWorldS < .5 ? vec3(w.x, uEye.y, w.z) : w;
+  vA = belt(vA, bw, dist); vB = belt(vB, bw, dist);
+  // (the sea of cloud's billows, as the eye comes down into the belt: losing their light and shade into the mist's own colour)
+  if (uSea >= 0.) { vA = mix(uBeltCol, vA, uSea); vB = mix(uBeltCol, vB, uSea); }
+}`;
+const FS = `#version 300 es
+precision highp float;
+in vec2 vUv; in vec3 vA; in vec3 vB; flat in float vStamp; in float vFresh; flat in float vTex; uniform sampler2D uAtlas; uniform float uFadeS; out vec4 o;
+void main(){
+  if (uFadeS < 1. && fract(sin(dot(floor(gl_FragCoord.xy / 3.), vec2(12.9898, 78.233))) * 43758.5453) > uFadeS) discard;
+  vec2 cell = vec2(mod(vStamp, ${STAMP.COLS}.), floor(vStamp/${STAMP.COLS}.));
+  vec4 s = texture(uAtlas, (cell + vUv)/vec2(${STAMP.COLS}., ${STAMP.ROWS}.));
+  if (s.r < .05) discard;
+  // (the bristles' ridges and grooves: on the far off and the sky hard, as loaded paint dragged in one long pull)
+  vec3 c = mix(vA, vB, s.b)*mix(.9 + .2*s.g, .72 + .5*s.g, vTex);
+  // (fresh paint, just laid: a little lighter, wet)
+  c = mix(c, c*1.1 + .04, vFresh*.3);
+  // (premultiplied, blended in a fixed order: no dithered coverage to crawl as the strokes shift)
+  float a = smoothstep(.05, .5, s.r);
+  o = vec4(c*a, a);
+}`;
+
+/** a buffer of strokes, drawn instanced (`set` again for what moves) */
+export class Strokes {
+  vao: WebGLVertexArrayObject; buf: WebGLBuffer; n = 0;
+  constructor(private gl: WebGL2RenderingContext, quad: WebGLBuffer, data: Float32Array, dynamic = false) {
+    this.vao = gl.createVertexArray()!; this.buf = gl.createBuffer()!;
+    gl.bindVertexArray(this.vao);
+    gl.bindBuffer(gl.ARRAY_BUFFER, quad); gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 8, 0);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.buf); gl.bufferData(gl.ARRAY_BUFFER, data, dynamic ? gl.DYNAMIC_DRAW : gl.STATIC_DRAW);
+    for (let i = 0; i < 5; i++) { gl.enableVertexAttribArray(1 + i); gl.vertexAttribPointer(1 + i, 4, gl.FLOAT, false, STROKE * 4, i * 16); gl.vertexAttribDivisor(1 + i, 1); }
+    gl.bindVertexArray(null);
+    this.n = data.length / STROKE;
+  }
+  set(data: Float32Array) { const gl = this.gl; gl.bindBuffer(gl.ARRAY_BUFFER, this.buf); gl.bufferData(gl.ARRAY_BUFFER, data, gl.DYNAMIC_DRAW); this.n = data.length / STROKE; }
+  free() { this.gl.deleteBuffer(this.buf); this.gl.deleteVertexArray(this.vao); }
+}
+
+/** the painter: the stamps, the program, and how a buffer of strokes is drawn */
+export class Painter {
+  prog: WebGLProgram; u: Record<string, WebGLUniformLocation | null> = {}; quad: WebGLBuffer; atlas: WebGLTexture;
+  /** how much the strokes stretch along their motion (`stretch=` 0…2); how many are kept (0…1) */
+  stretch = 1; dens = 1;
+  /** the paint front: how far ahead of the rider the masses and the detail are laid, how long a stroke takes to lay (m) */
+  lead: [number, number] = [700, 110]; grow = 22;
+  private front: [number, number] | null = null; private born = performance.now(); private last = performance.now();
+  constructor(private gl: WebGL2RenderingContext, palette: Float32Array, sun: number[]) {
+    const sh = (t: number, s: string) => { const o = gl.createShader(t)!; gl.shaderSource(o, s); gl.compileShader(o); if (!gl.getShaderParameter(o, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(o) ?? 'shader'); return o; };
+    const p = gl.createProgram()!; gl.attachShader(p, sh(gl.VERTEX_SHADER, VS)); gl.attachShader(p, sh(gl.FRAGMENT_SHADER, FS)); gl.linkProgram(p);
+    if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p) ?? 'link');
+    this.prog = p;
+    for (const k of ['uSmear', 'uVP', 'uPrev', 'uOff', 'uEye', 'uSun', 'uPal', 'uFog', 'uK', 'uMinW', 'uStretch', 'uDens', 'uRes', 'uAtlas', 'uSkyLo', 'uSkyHi', 'uSkyPale', 'uCloud', 'uCloudLit', 'uCloudShade', 'uHazeK', 'uHazeB', 'uFogs', 'uLit', 'uFlat', 'uThin', 'uBelt', 'uBeltCol', 'uSink', 'uSkyTex', 'uSea', 'uWorldS', 'uFadeS', 'uFront', 'uGrow', 'uReveal']) this.u[k] = gl.getUniformLocation(p, k);
+    gl.useProgram(p);
+    this.pal = palette; this.sun0 = sun;
+    // (the quad: a strip along the stroke, SEG pieces, so a bent stroke bends smoothly)
+    const q: number[] = [];
+    for (let i = 0; i <= SEG; i++) q.push(i / SEG, -1, i / SEG, 1);
+    this.quad = gl.createBuffer()!; gl.bindBuffer(gl.ARRAY_BUFFER, this.quad); gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(q), gl.STATIC_DRAW);
+    const a = stampAtlas();
+    this.atlas = gl.createTexture()!; gl.bindTexture(gl.TEXTURE_2D, this.atlas);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, a.w, a.h, 0, gl.RGBA, gl.UNSIGNED_BYTE, a.data);
+    gl.generateMipmap(gl.TEXTURE_2D);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  }
+  /** the palette (as floats) and the renderer's sun; the environment's uploaded each frame, so a mood can change it */
+  pal: Float32Array; private sun0: number[];
+  private env() {
+    const gl = this.gl;
+    gl.uniform3fv(this.u.uPal, this.pal); gl.uniform3fv(this.u.uSun, new Float32Array(SKY.sun.length ? SKY.sun : this.sun0));
+    gl.uniform3fv(this.u.uSkyLo, SKY.lo); gl.uniform3fv(this.u.uSkyHi, SKY.hi); gl.uniform3fv(this.u.uSkyPale, SKY.pale); gl.uniform3fv(this.u.uCloudLit, SKY.cloudLit); gl.uniform3fv(this.u.uCloudShade, SKY.cloudShade);
+    gl.uniform1f(this.u.uHazeK, SKY.haze); gl.uniform1f(this.u.uHazeB, SKY.hazeBase); gl.uniform3fv(this.u.uFogs, new Float32Array(SKY.fog.flat()));
+    gl.uniform1f(this.u.uLit, SKY.lit); gl.uniform1f(this.u.uFlat, SKY.flat); gl.uniform1f(this.u.uThin, SKY.thin);
+    gl.uniform4f(this.u.uBelt, REGION.beltY, REGION.half, 70, REGION.on ? 1 : 0); gl.uniform3fv(this.u.uBeltCol, SKY.belt); gl.uniform1f(this.u.uSink, this.sink); gl.uniform1f(this.u.uSkyTex, this.skyTex); gl.uniform1f(this.u.uSea, -1); gl.uniform1f(this.u.uWorldS, 0); gl.uniform1f(this.u.uFadeS, 1);
+  }
+  make(data: Float32Array, dynamic = false) { return new Strokes(this.gl, this.quad, data, dynamic); }
+  /** where the rider is: the front only ever goes on (put back at a checkpoint, what's laid stays laid) */
+  advance(s: number) {
+    // (it sets out from where you are as the page opens, and runs on ahead to its lead, easing up to it and keeping it)
+    const now = performance.now(), dt = Math.min(0.1, (now - this.last) / 1000); this.last = now;
+    if (!this.front) this.front = [s - 4, s - 4];
+    for (const i of [0, 1]) { const want = s + this.lead[i], f = this.front[i]; if (want > f) this.front[i] = f + Math.max((want - f) * Math.min(1, dt * 1.6), Math.min(want - f, 20 * dt)); }
+  }
+  /** set up for a frame: the eye, its matrices (now and the last frame's), the canvas */
+  begin(vp: Float32Array, prev: Float32Array, eye: number[], projY: number, w: number, h: number, dpr: number, smear: number[] = [0, 0, 0]) {
+    const gl = this.gl;
+    gl.useProgram(this.prog); this.env();
+    gl.uniform3f(this.u.uSmear, smear[0] * this.stretch, smear[1] * this.stretch, smear[2] * this.stretch);
+    gl.uniformMatrix4fv(this.u.uVP, false, vp); gl.uniformMatrix4fv(this.u.uPrev, false, prev);
+    gl.uniform3fv(this.u.uEye, new Float32Array(eye)); gl.uniform1f(this.u.uK, projY); gl.uniform2f(this.u.uRes, w, h);
+    gl.uniform1f(this.u.uMinW, 2.4 * dpr); gl.uniform1f(this.u.uStretch, this.stretch); gl.uniform1f(this.u.uDens, this.dens);
+    const fr = this.front ?? [-1e9, -1e9]; gl.uniform2f(this.u.uFront, fr[0], fr[1]); gl.uniform1f(this.u.uGrow, this.grow);
+    gl.uniform1f(this.u.uReveal, Math.min(1, (performance.now() - this.born) / 1600)); gl.uniform1f(this.u.uCloud, this.cloud);
+    gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, this.atlas); gl.uniform1i(this.u.uAtlas, 0);
+    gl.enable(gl.BLEND); gl.blendFuncSeparate(gl.ONE, gl.ONE_MINUS_SRC_ALPHA, gl.ZERO, gl.ONE); gl.depthMask(false);
+  }
+  /** how far round the clouds have drifted (rad) */
+  cloud = 0;
+  /** how hard the sky's bristles show (1 full; the composed backdrop's quiet sky less) */
+  skyTex = 1;
+  /** (the middle distance: sunk into the sea of cloud) */
+  sink = 0;
+  setSink(on: boolean) { this.sink = on ? 1 : 0; this.gl.uniform1f(this.u.uSink, this.sink); }
+  /** the sea of cloud's strokes drawn with this much of their own light (−1: not the sea) */
+  setSea(f: number) { this.gl.uniform1f(this.u.uSea, f); }
+  /** strokes that stand in the world (the set's), not about the eye, and how much of them shows (dissolving) */
+  setWorld(on: boolean, fade: number) { this.gl.uniform1f(this.u.uWorldS, on ? 1 : 0); this.gl.uniform1f(this.u.uFadeS, fade); }
+  draw(s: Strokes, off: number[], fog: boolean) {
+    const gl = this.gl;
+    if (!s.n) return;
+    gl.uniform3f(this.u.uOff, off[0], off[1], off[2]); gl.uniform1f(this.u.uFog, fog ? 1 : 0);
+    gl.bindVertexArray(s.vao); gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, (SEG + 1) * 2, s.n);
+  }
+  end() { const gl = this.gl; gl.disable(gl.BLEND); gl.depthMask(true); gl.bindVertexArray(null); }
+}
+
+// ─── the speed layer's brush ────────────────────────────────────────────────────────────────────────────────────────────
+
+/**
+ * The same stamps, for the 2D speed layer (shards, smears, the air off the rider, debris), when the picture's painted:
+ * a wedge (thick at its base, to its point) becomes a long brush stroke tapering the same way; a chip of debris a dab.
+ * Each colour's stamps are tinted once and kept.
+ */
+export class Brush2D {
+  private atlas: { data: Uint8Array; w: number; h: number };
+  private tinted = new Map<string, HTMLCanvasElement>();
+  constructor() { this.atlas = stampAtlas(); }
+  private sheet(col: string) {
+    let c = this.tinted.get(col);
+    if (c) return c;
+    const { data, w, h } = this.atlas, r = parseInt(col.slice(1, 3), 16), g = parseInt(col.slice(3, 5), 16), b = parseInt(col.slice(5, 7), 16);
+    c = document.createElement('canvas'); c.width = w; c.height = h;
+    const x = c.getContext('2d')!, img = x.createImageData(w, h);
+    for (let i = 0; i < w * h; i++) {
+      const cov = data[i * 4] / 255, rel = data[i * 4 + 1] / 255, tone = data[i * 4 + 2] / 255, k = 0.84 + 0.3 * rel + (tone - 0.5) * 0.12;
+      img.data[i * 4] = Math.min(255, r * k); img.data[i * 4 + 1] = Math.min(255, g * k); img.data[i * 4 + 2] = Math.min(255, b * k);
+      img.data[i * 4 + 3] = Math.round(255 * Math.min(1, Math.max(0, (cov - 0.05) / 0.45)));
+    }
+    x.putImageData(img, 0, 0);
+    this.tinted.set(col, c);
+    return c;
+  }
+  /** a stroke from its base at `a` (half-width w) to its point at `b`, in stamp `st` */
+  wedge(ctx: CanvasRenderingContext2D, a: number[], b: number[], w: number, col: string, st = 0) {
+    const dx = b[0] - a[0], dy = b[1] - a[1], L = Math.hypot(dx, dy);
+    if (L < 1) return;
+    const W = Math.max(2, w * 3), cell = [(st % STAMP.COLS) * STAMP.W, Math.floor(st / STAMP.COLS) * STAMP.H];
+    ctx.save(); ctx.translate(a[0], a[1]); ctx.rotate(Math.atan2(dy, dx));
+    ctx.drawImage(this.sheet(col), cell[0], cell[1], STAMP.W, STAMP.H, -L * 0.03, -W / 2, L * 1.06, W);
+    ctx.restore();
+  }
+  /** a stroke bent along a run of points (`pts`, x y pairs), `W` across, in stamp `st`: the stamp cut into thin slices along
+   * its length and each laid where it falls on the run, turned to it, so a curve is one unbroken stroke, its bristles
+   * following the bend. Drawn from `from` up to `upTo` of its length (the rest not yet laid, or taken up again; its
+   * texture not squashed) */
+  along(ctx: CanvasRenderingContext2D, pts: number[][], W: number, col: string, st = 0, upTo = 1, from = 0) {
+    if (pts.length < 2 || W < 1) return;
+    const cum = [0]; for (let i = 1; i < pts.length; i++) cum.push(cum[i - 1] + Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]));
+    const L = cum[cum.length - 1]; if (L < 1) return;
+    // (the stamp's ends run a little past the run's, as a brush's do)
+    const pad = W * 0.18, total = L + pad * 2, N = Math.max(4, Math.ceil(total / 2.2)), sheet = this.sheet(col), cx = (st % STAMP.COLS) * STAMP.W, cy = Math.floor(st / STAMP.COLS) * STAMP.H;
+    const at = (d: number) => {
+      const dd = Math.max(0, Math.min(L, d)); let i = 1; while (i < cum.length - 1 && cum[i] < dd) i++;
+      const f = (dd - cum[i - 1]) / Math.max(1e-6, cum[i] - cum[i - 1]), a = pts[i - 1], b = pts[i], ang = Math.atan2(b[1] - a[1], b[0] - a[0]);
+      const ext = d - dd; return [a[0] + (b[0] - a[0]) * f + Math.cos(ang) * ext, a[1] + (b[1] - a[1]) * f + Math.sin(ang) * ext, ang];
+    };
+    const n = Math.ceil(N * Math.max(0, Math.min(1, upTo))), sw = STAMP.W / N, dw = (total / N) * 1.25;
+    for (let k = Math.floor(N * Math.max(0, Math.min(1, from))); k < n; k++) {
+      const [x, y, ang] = at(-pad + ((k + 0.5) / N) * total);
+      ctx.save(); ctx.translate(x, y); ctx.rotate(ang);
+      ctx.drawImage(sheet, cx + k * sw, cy, sw, STAMP.H, -dw / 2, -W / 2, dw, W);
+      ctx.restore();
+    }
+  }
+  /** a dab, `s` across, turned by `a` */
+  dab(ctx: CanvasRenderingContext2D, p: number[], s: number, a: number, col: string) {
+    const st = 3, cell = [(st % STAMP.COLS) * STAMP.W, Math.floor(st / STAMP.COLS) * STAMP.H];
+    ctx.save(); ctx.translate(p[0], p[1]); ctx.rotate(a);
+    ctx.drawImage(this.sheet(col), cell[0], cell[1], STAMP.W, STAMP.H, -s * 1.3, -s * 0.6, s * 2.6, s * 1.2);
+    ctx.restore();
+  }
+}
+
+// ─── strokes the course calls for ───────────────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Strokes laid deliberately from the course itself, not scattered over faces: what says where the way goes.
+ * - the road's two edges: long strokes following the course, a band darker than the road, broken now and then;
+ * - the drop's lip (where the ground breaks away beside the road): a lit edge of snow;
+ * - the ruts: the worn lines down the road (ruts.ts's own), a step darker than the road.
+ * Each lies on the surface, its normal the surface's own there.
+ * Each is laid at its station, by the detail's front.
+ */
+export function courseStrokes(c: Course, s0: number, s1: number): Float32Array {
+  const out: number[] = [], R = rng(c.seed * 977 + s0 * 13);
+  /** a stroke laid on the surface from (sa, ua) to (sb, ub), its normal the surface's own there (so it lies along it, not
+   * standing out of a slope) */
+  const lay = (sa: number, ua: number, sb: number, ub: number, y: (s: number, u: number) => number, m: number, tone: number, len: number, wid: number, stamps: number[]) => {
+    const p = c.point(sa, ua), q = c.point(sb, ub);
+    if (p.y == null || q.y == null) return;
+    const ya = y(sa, ua), yb = y(sb, ub), tx = q.x - p.x, ty = yb - ya, tz = q.z - p.z, tl = Math.hypot(tx, ty, tz) || 1;
+    // (across the surface: a step in u)
+    const r = c.point(sa, ua + 0.5), cx = r.x - p.x, cy = y(sa, ua + 0.5) - ya, cz = r.z - p.z;
+    let nx = ty * cz - tz * cy, ny = tz * cx - tx * cz, nz = tx * cy - ty * cx;
+    const nl = Math.hypot(nx, ny, nz) || 1; nx /= nl; ny /= nl; nz /= nl;
+    if (ny < 0) { nx = -nx; ny = -ny; nz = -nz; }
+    out.push(p.x, ya + 0.03, p.z, m + tone * 0.9, tx / tl, ty / tl, tz / tl, len * (0.75 + R() * 0.5), nx, ny, nz, wid * (0.8 + R() * 0.4), R(), stamps[Math.floor(R() * stamps.length)], (R() - 0.5) * 0.2, 0, sa, 1, 0, 0);
+  };
+  const open = (s: number) => { const a = c.at(s), b = c.at(s + 1); return !(a.feature === 'gap' || b.feature === 'gap' || a.feature === 'ramp' || a.feature === 'deck'); };
+  const jag = (s: number, k: number) => (hash3(c.seed, Math.round(s), k) - 0.5) * 0.5;
+  const road = (s: number, u: number) => trackY(c, s, u), g = (s: number, u: number) => ground(c, s, u);
+  // (snow drifted onto the road from each side, as far as the wind's left it: a reach that wanders along the way, from
+  // nothing (the road's own edge) to most of the way across, so the track's never one width. White strokes along the
+  // way, row on row from the edge in to the reach, their inner ends ragged; no dark edge to it)
+  const reach = (s: number, side: number) => {
+    const k = c.seed * 3.1 + side * 17.7, v = 0.5 + 0.32 * Math.sin(s / 23 + k) + 0.22 * Math.sin(s / 9.5 + k * 1.7) + 0.14 * Math.sin(s / 4.1 + k * 0.6);
+    const p = c.point(s, 0), g = grassiness(p.x, p.y ?? 0, p.z);
+    return Math.max(0, Math.min(1, (v - 0.32) / 0.68)) * 0.72 * (1 - g * 0.85);
+  };
+  for (let s = s0; s < s1; s += 1.1 * (0.8 + R() * 0.4)) {
+    if (!open(s)) continue;
+    const h = c.at(s).width / 2;
+    for (const side of [-1, 1]) {
+      const r0 = reach(s, side), r1 = reach(s + 1.4, side), wA = h * r0, wB = h * r1;
+      // (rows of snow from the edge to the reach)
+      for (let d = 0.15; d < Math.max(wA, wB) + 0.2; d += 0.45) {
+        if (d > wA + 0.3 && d > wB + 0.3) break;
+        const ua = side * (h - Math.min(d, wA) + jag(s, 7 + Math.round(d * 3)) * 0.6), ub = side * (h - Math.min(d, wB) + jag(s + 1.4, 7 + Math.round(d * 3)) * 0.6);
+        lay(s, ua, s + 1.4, ub, road, M.WHITE, R() < 0.8 ? 0.95 : 0.7, 2.8, 0.9, [11, 0, 10, 12, 1]);
+      }
+    }
+    // (now and then snow blown across the middle, a streak or two on the slant)
+    if (R() < 0.18) {
+      const u = (R() - 0.5) * h * 1.2, du = (R() - 0.5) * 2.5;
+      lay(s, u, s + 1.8, u + du, road, M.WHITE, 0.95, 2.4, 0.6, [10, 11, 12]);
+      if (R() < 0.5) lay(s + 0.6, u + 0.4, s + 2.2, u + du + 0.3, road, M.WHITE, 0.8, 2, 0.4, [10, 12]);
+    }
+  }
+  // (the drop's lip, lit)
+  for (let s = s0; s < s1; s += 2.2 * (0.8 + R() * 0.4)) {
+    if (!open(s) || R() < 0.2) continue;
+    const h = c.at(s).width / 2, h1 = c.at(s + 1).width / 2;
+    lay(s, h + 2.3 + jag(s, 3), s + 1, h1 + 2.3 + jag(s + 1, 3), g, M.SNOW, 0.95, 3.6, 0.4, [8, 15, 7]);
+  }
+  // (the ruts: the worn lines down the road, as ruts.ts has them, a step darker than the road, broken now and then)
+  for (let s = Math.ceil(s0); s < s1; s += 1.5) {
+    if (!plain(c, Math.round(s)) || !plain(c, Math.round(s + 1.5)) || !open(s)) continue;
+    const A = lines(c, Math.round(s)), B = lines(c, Math.round(s + 1.5));
+    for (let k = 0; k < 3; k++) {
+      if (!A[k].own || R() < 0.2) continue;
+      lay(s, A[k].u, s + 1.5, B[k].u, road, M.RUT, 0.4, 2.2, 0.3, [0, 1, 13]);
+    }
+  }
+  return new Float32Array(out);
+}
+function hash3(a: number, b: number, k: number) { let h = Math.imul(a | 0, 0x27d4eb2d) ^ Math.imul(b | 0, 0x165667b1) ^ Math.imul(k | 0, 0x9e3779b1); h = Math.imul(h ^ (h >>> 15), 0x85ebca6b); return ((h ^ (h >>> 13)) >>> 0) / 4294967296; }

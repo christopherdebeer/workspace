@@ -14,7 +14,7 @@
  * the lab's listing shows it, the sim's run with its score and calls, riding again when it ends); `look=side|front|rear|quarter`
  * a close look at the bike. Any of these skips the title. `ruts=bolts` the ruts as they were before they were carved
  * (`ruts=light`, with them, paler than the road). `wake=fixed` the air on the rider as it was
- * (three streaks set at the helmet and the bars); `wake=0` none on the rider at all.
+ * (three streaks set at the helmet and the bars); `wake=0` none on the rider at all. `paint=0|1` the look for this page (painted is the default, and a setting): everything painted in brush strokes, laid by a paint front ahead of you (`stretch=0…2` how far its strokes stretch along their motion; `front=700,110` how far ahead the front lays the masses and the detail).
  */
 import { Course } from './course';
 import { BODY, Rider, TRICKS, autoSteer, VMAX } from './sim';
@@ -27,10 +27,17 @@ import { Sound } from './audio';
 import { MODES, Mode, PAR, Score, bestOf, board, keepBest, overPar, sign } from './score';
 import { Pad, replay, show as ink } from './sign';
 import { C15R } from './hand';
+import { Composer, Live, exportClip, save } from './rec';
+import { Callouts } from './callout';
+import { applyMood, cycleAt, lightAlong } from './mood';
+import { setRegions, lightKeys, REGION } from './regions';
+const beltY = new URLSearchParams(location.search).has('belty') ? Number(new URLSearchParams(location.search).get('belty')) : null, beltOsc = Number(new URLSearchParams(location.search).get('beltosc') ?? 0);
 
 const q = new URLSearchParams(location.search);
 const seed = Number(q.get('seed') ?? 1) | 0 || 1, preview = q.has('preview'), still = q.has('still');
 const look = q.get('look');
+const zjit = q.has("zjit"), ejit = q.has("ejit"), hold = q.has("hold"), t0 = performance.now();
+let heldView: View | null = null;
 /** straight into it (tests, pinned frames, the preview): no title */
 const direct = preview || still || q.has('auto') || q.has('t') || !!look;
 let auto = q.has('auto') || preview || !direct;
@@ -50,6 +57,13 @@ const world = document.getElementById('world') as HTMLCanvasElement, speed = doc
 const course = new Course(seed);
 let rider = new Rider(course);
 if (q.get('ruts') === 'light') PALETTE[M.RUT] = RUT_LIGHT;
+// (`mood=gold|mist|autumn|moon`: the same painting in another light (mood.ts))
+let moodShown = '';
+const moodCycle = applyMood(q.get('mood')) && q.get('mood') === 'cycle';
+// (`mood=course`: the light, the cloud belt and the snowline laid along the course (regions.ts))
+// (the default: with no mood asked for, the course's regions; `mood=day` the plain look, any other mood that one)
+const moodCourse = !q.has('mood') || q.get('mood') === 'course';
+if (moodCourse) setRegions(course, q.get('time'));
 const rd = new Renderer(world, speed, course);
 rd.resize(); addEventListener('resize', () => rd.resize());
 rd.speed = q.get('fx') !== '0'; rd.fog = q.get('fog') !== '0';
@@ -57,12 +71,21 @@ rd.speed = q.get('fx') !== '0'; rd.fog = q.get('fog') !== '0';
 if (q.get('wake') === 'fixed') rd.wake = 'fixed'; else if (q.get('wake') === '0') rd.wake = 'none';
 /** `ruts=bolts`: the ruts as they were before they were carved */
 if (q.get('ruts') === 'bolts') { rd.rutStyle = 'bolts'; rd.trail.cut = false; }
+/** `paint=1`: the mountain laid in brush strokes over its facets (paint.ts); `stretch=` how far its strokes stretch along their motion (0 none, 1 as drawn, 2 twice) */
+/** the look: painted (the default) or cut facets; kept in the settings, `paint=0|1` for this page only */
+const paintFlag = q.has('paint') ? q.get('paint') !== '0' : null;
+// (`bg=yaw,pitch,fov` (degrees): only the backdrop (the sky, the ranges, the valley), looking that way from where you are,
+// for judging the far off on its own)
+const bgFlag = q.has('bg') ? (q.get('bg') ?? '').split(',').map(Number) : null;
+/** `front=700,110`: how far ahead of the rider the paint front lays the masses and the detail (m) */
+if (q.has('front')) { const [a, b] = (q.get('front') ?? '').split(',').map(Number); if (a > 0 && b > 0) rd.leadWanted = [a, b]; }
+if (q.has('stretch')) rd.stretchWanted = Math.max(0, Math.min(2, Number(q.get('stretch')) || 0));
 rd.style = q.get('rider') === 'facets' ? 'facets' : q.get('rider') === 'sil' ? 'sil' : 'cut'; rd.whip = (Number(q.get('whip') ?? 0) * Math.PI) / 180; rd.world = q.get('world') !== '0';
 const sound = new Sound();
 
 // (settings, kept in this browser where it can)
-type Settings = { sound: boolean; volume: number; camera: 'close' | 'mid' | 'far'; mode: Mode; v: number };
-const settings: Settings = { sound: true, volume: 0.7, camera: 'mid', mode: 'lives', v: 2 };
+type Settings = { sound: boolean; volume: number; camera: 'close' | 'mid' | 'far'; mode: Mode; paint: boolean; v: number };
+const settings: Settings = { sound: true, volume: 0.7, camera: 'mid', mode: 'lives', paint: true, v: 2 };
 try {
   // (settings kept before THREE LIVES was the first choice: the mode they kept was only ever the old first one, so it goes)
   const kept = JSON.parse(localStorage.getItem('switchback') ?? '{}');
@@ -70,6 +93,8 @@ try {
   Object.assign(settings, kept, { v: 2 });
 } catch { /* (private, or blocked: defaults) */ }
 if (!MODES[settings.mode]) settings.mode = 'lives';
+if (typeof settings.paint !== 'boolean') settings.paint = true;
+rd.paint = paintFlag ?? settings.paint;
 const keep = () => { try { localStorage.setItem('switchback', JSON.stringify(settings)); } catch { /* (no matter) */ } };
 /** `mode=run|lives|time|endless` for this page only */
 const modeFlag = q.get('mode') as Mode | null;
@@ -123,6 +148,7 @@ function hint() { if (!hinted) { hinted = true; hintEl.classList.add('gone'); } 
 
 // (start down the hill if asked, ridden by the sim's rider)
 const T0 = Number(q.get('t') ?? 0);
+if (q.has('at')) { rider.putAt(Number(q.get("at")) || 0); }
 for (let t = 0; t < T0; t += 1 / 120) { rider.step(1 / 120, autoInput()); rd.trail.add(rider); }
 rider.events.length = 0;
 
@@ -137,7 +163,7 @@ function closeLook(): View | null {
   const eye = look === 'side' ? at(0, 3.6, 1.1) : look === 'front' ? at(4.2, 0.4, 1.3) : look === 'rear' ? at(-4, 0.3, 1.4) : at(-2.6, 2.8, 1.7);
   return { eye, target: at(0, 0, 0.85), fov: 0.8, roll: 0 };
 }
-function snapEye() { cam.h = rider.travel; cam.eye = [rider.x - Math.sin(rider.travel) * 6, rider.y + 3.5, rider.z - Math.cos(rider.travel) * 6]; cam.shake = 0; }
+function snapEye() { rd.rebase(); cam.h = rider.travel; cam.eye = [rider.x - Math.sin(rider.travel) * 6, rider.y + 3.5, rider.z - Math.cos(rider.travel) * 6]; cam.shake = 0; }
 function view(dt: number, t: number): View {
   const close = closeLook(); if (close) return close;
   const k = 1 - Math.exp(-dt * (rider.air ? 1.6 : 3.2));
@@ -168,7 +194,7 @@ function view(dt: number, t: number): View {
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const menu = $('menu'), go = $<HTMLButtonElement>('go'), again = $<HTMLButtonElement>('again'), finishBtn = $<HTMLButtonElement>('finish'), quit = $<HTMLButtonElement>('quit');
 const sndBtn = $<HTMLButtonElement>('snd'), vol = $<HTMLInputElement>('vol'), another = $<HTMLButtonElement>('another');
-const camBtns = [...document.querySelectorAll<HTMLButtonElement>('[data-cam]')], modeBtns = [...document.querySelectorAll<HTMLButtonElement>('[data-mode]')];
+const lookBtns = [...document.querySelectorAll<HTMLButtonElement>('[data-look]')], camBtns = [...document.querySelectorAll<HTMLButtonElement>('[data-cam]')], modeBtns = [...document.querySelectorAll<HTMLButtonElement>('[data-mode]')];
 const toBoard = $<HTMLButtonElement>('toBoard'), boardBtns = [...document.querySelectorAll<HTMLButtonElement>('[data-board]')];
 const panels = { main: $('main'), prefs: $('prefs'), board: $('board'), card: $('card') };
 /** which of the menu's panels shows: the main one (ride, the mode), the settings, the leaderboard, a finished run's card */
@@ -183,6 +209,7 @@ function showSettings() {
   sndBtn.textContent = settings.sound ? 'ON' : 'OFF'; sndBtn.setAttribute('aria-pressed', String(settings.sound));
   vol.value = String(Math.round(settings.volume * 100)); vol.disabled = !settings.sound;
   for (const b of camBtns) b.setAttribute('aria-pressed', String(b.dataset.cam === settings.camera));
+  for (const b of lookBtns) b.setAttribute('aria-pressed', String((b.dataset.look === 'paint') === rd.paint));
   for (const b of modeBtns) b.setAttribute('aria-pressed', String(b.dataset.mode === settings.mode));
   const best = bestOf(settings.mode, seed), m = settings.mode, mark = (b: { score: number; time: number }) => (m === 'time' ? clock(b.time) : fmt(b.score));
   $('about').textContent = `${MODES[m].about} · PAR ${mark(PAR[m])}${best ? ` · BEST ${mark(best)}` : ''}`;
@@ -283,6 +310,7 @@ $('fromBoard').addEventListener('click', () => { show('main'); toBoard.focus(); 
 sndBtn.addEventListener('click', () => { settings.sound = !settings.sound; keep(); showSettings(); if (settings.sound) sound.start(); });
 vol.addEventListener('input', () => { settings.volume = Number(vol.value) / 100; keep(); showSettings(); });
 for (const b of camBtns) b.addEventListener('click', () => { settings.camera = b.dataset.cam as Settings['camera']; keep(); showSettings(); });
+for (const b of lookBtns) b.addEventListener('click', () => { settings.paint = rd.paint = b.dataset.look === 'paint'; keep(); showSettings(); });
 for (const b of modeBtns) b.addEventListener('click', () => { settings.mode = b.dataset.mode as Mode; keep(); showSettings(); });
 another.addEventListener('click', () => { const u = new URL(location.href); u.searchParams.set('seed', String(1 + Math.floor(Math.random() * 9999))); location.href = u.toString(); });
 $('menuBtn').addEventListener('click', () => open());
@@ -291,13 +319,25 @@ if (direct) { menu.classList.remove('on'); menu.setAttribute('inert', ''); docum
 
 /** a word across the screen for a moment (a checkpoint passed, a return to one) */
 const note = document.getElementById('note')!;
+// (the callouts painted into the picture (callout.ts), `ink=0` for the type instead; the type kept, unseen, for screen
+// readers)
+const inkFlag = q.get('ink') !== '0', callouts = new Callouts();
+if (inkFlag) note.style.opacity = '0';
+const inkText = inkFlag ? q.get('inktext') : null; let inkAt = -9;
 let noteTimer = 0;
-function say(text: string) { if (auto && !running) return; note.textContent = text; note.classList.add('on'); clearTimeout(noteTimer); noteTimer = window.setTimeout(() => note.classList.remove('on'), 1400); }
+function say(text: string) { if (auto && !running && !inkFlag) return; if (inkFlag) callouts.say(text, t); note.textContent = text; note.classList.add('on'); clearTimeout(noteTimer); noteTimer = window.setTimeout(() => note.classList.remove('on'), 1400); }
 const scoreEl = $('score'), statusEl = $('status'), comboEl = $('combo');
 let flashT = 0, flashText = '';
 let last = performance.now(), acc = 0, t = 0, drawn = 0, frames = 0, fps = 60, fpsT = 0, seen = 0, bigAir = 0;
+// (the loop is held while an export steps the game itself)
+let holding = false;
 function loop(now: number) {
   const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  if (!holding) tick(dt);
+  requestAnimationFrame(loop);
+}
+/** one frame: the game advanced by dt (in 1/120 s steps), the picture drawn, the HUD updated */
+function tick(dt: number) {
   const driveKeys = (keys.has('arrowup') || keys.has('w') ? 1 : 0) - (keys.has('arrowdown') || keys.has('s') ? 1 : 0);
   const drive = auto ? 0 : driveKeys || inp.drive, braking = drive < -0.3;
   if (!still && !paused) {
@@ -322,14 +362,32 @@ function loop(now: number) {
     if (e.kind === 'checkpoint') say(`CHECKPOINT ${e.k}`);
     if (e.kind === 'trick') say(TRICKS[BODY[e.k]].name);
     if (e.kind === 'refuse') say(e.k ? 'NO ROOM TO FLIP' : 'NOT ENOUGH AIR');
-    if (e.kind === 'crash' && rider.crashWhy) say(({ short: 'SHORT', face: 'INTO THE FACE', 'off the bike': 'STILL OFF THE BIKE', whip: 'STILL WHIPPED', 'nose up': 'NOSE UP', 'nose down': 'NOSE DOWN', hard: 'TOO HARD', over: 'OVER THE EDGE', wall: 'INTO THE WALL' } as Record<string, string>)[rider.crashWhy] ?? 'DOWN');
+    if (e.kind === 'crash' && rider.crashWhy) say(({ short: 'SHORT', face: 'INTO THE FACE', 'off the bike': 'STILL OFF THE BIKE', whip: 'STILL WHIPPED', 'nose up': 'NOSE UP', 'nose down': 'NOSE DOWN', hard: 'TOO HARD', over: 'OVER THE EDGE', wall: 'INTO THE WALL', head: 'ON YOUR HEAD' } as Record<string, string>)[rider.crashWhy] ?? 'DOWN');
     if (e.kind === 'flip') { const n = Math.abs(e.k); say(`${n > 2 ? `${n}× ` : n === 2 ? 'DOUBLE ' : ''}${e.k > 0 ? 'BACKFLIP' : 'FRONT FLIP'}`); }
     // (put back at the flag: the eye goes with you at once, not in a long swoop)
     if (e.kind === 'respawn') { say(e.k ? `CHECKPOINT ${e.k}` : 'START'); snapEye(); }
   }
   if (!auto) sound.update(rider, braking, paused ? 0 : dt);
   seen = rider.events.length;
-  rd.frame(view(paused ? 0 : dt, t), rider, t, still || paused ? 0 : dt, drawn++ < 2 ? 99 : 1);
+  // (`zjit`: every face's depth nudged a few steps every other frame, nothing else moved, for finding where faces fight in
+  // depth: a held frame that changes under it is fighting)
+  rd.zjit = zjit ? (drawn % 2) * 2.4e-7 : 0;
+  // (`ejit`: the eye moved 1 cm every other frame, for seeing what a small move of the eye does to the strokes)
+  // (a test (`zjit`, `ejit`, `hold`) holds the eye where it's settled after a few seconds, so only what's tested moves)
+  const vw = (zjit || ejit || hold) && heldView && performance.now() - t0 > 4000 ? heldView : view(paused ? 0 : dt, t);
+  if ((zjit || ejit || hold) && !heldView && performance.now() - t0 > 4000) heldView = { ...vw, eye: vw.eye.slice(), target: vw.target.slice() };
+  if (ejit) { const e = (drawn % 2) * 0.01; vw.eye = [vw.eye[0] + e, vw.eye[1], vw.eye[2]]; vw.target = [vw.target[0] + e, vw.target[1], vw.target[2]]; }
+  if (bgFlag) { const [yw = 0, pc = 4, fv = 60] = bgFlag.map((v) => (v * Math.PI) / 180), d = 100; rd.bgOnly = true; vw.target = [vw.eye[0] + Math.sin(yw) * Math.cos(pc) * d, vw.eye[1] + Math.sin(pc) * d, vw.eye[2] + Math.cos(yw) * Math.cos(pc) * d]; vw.roll = 0; vw.fov = fv; }
+  // (`belty=<dy>`: the belt moved so its top is dy metres below the eye (the eye where the chase camera puts it), for
+  // testing the cloud's handover; `beltosc=<amp>` swings it ± amp over ~1.5 s, as a jump would)
+  if (beltY !== null && REGION.on) REGION.beltY = vw.eye[1] - REGION.half - beltY - (beltOsc ? beltOsc * Math.sin(t * 4.2) : 0);
+  rd.cloudAt(t);
+  if (moodCourse) { lightAlong(rider.s, lightKeys()); rd.envChanged(); }
+  if (moodCycle) { const name = cycleAt(t); rd.envChanged(); if (name !== moodShown) { moodShown = name; if (!name.includes('→')) callouts.say(name === 'day' ? 'DAY' : name.toUpperCase(), t); } }
+  rd.frame(vw, rider, t, still || paused ? 0 : dt, drawn++ < 2 ? 99 : 1);
+  // (`inktext=<words>`: those words lettered every two seconds, for looking at the lettering)
+  if (inkText && t - inkAt > 2) { callouts.say(inkText, t); inkAt = t; }
+  if (inkFlag) callouts.draw(rd.ctx, rd.W, rd.H, rd.dpr, t);
   seen = rider.events.length; sound.sync(seen);
   if (rider.air) bigAir = Math.max(bigAir, rider.airT);
   // (the run's end: its finish reached, its last life gone (once you're put back after the third fall))
@@ -346,10 +404,49 @@ function loop(now: number) {
   statusEl.textContent = MODES[mode].lives ? `${'● '.repeat(Math.max(0, 3 - rider.crashes))}${'○ '.repeat(Math.min(3, rider.crashes))}`.trim() : length < Infinity ? `${(Math.min(progress, length) / 1000).toFixed(1)} / ${length / 1000} KM` : `${(progress / 1000).toFixed(1)} KM`;
   comboEl.innerHTML = score.pool ? `${score.chain.join(' · ')} <i>×${score.mult}</i> +${fmt(score.pending)}` : flashT > 0 ? flashText : '';
   drawTrace(dt);
+  live.frame();
   frames++; fpsT += dt; if (fpsT > 1) { fps = frames / fpsT; frames = 0; fpsT = 0; }
-  requestAnimationFrame(loop);
 }
 requestAnimationFrame(loop);
+
+// ── video ──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+// (REC records what you see as you ride; EXPORT renders the run from here offline, on the autopilot, smooth at a fixed
+// size; `rec=<seconds>[,<fps>[,<w>x<h>]]` exports on opening; `rec=headless` hands frames to a script (rec.ts))
+const comp = new Composer([document.querySelector<HTMLCanvasElement>('#world')!, document.querySelector<HTMLCanvasElement>('#speed')!].filter(Boolean));
+const live = new Live(comp);
+const recBtn = document.querySelector<HTMLButtonElement>('#rec'), expBtn = document.querySelector<HTMLButtonElement>('#export');
+const recMsg = document.createElement('div'); recMsg.id = 'recmsg'; recMsg.style.cssText = 'position:fixed;left:50%;bottom:16px;transform:translateX(-50%);z-index:50;font:600 12px/1.4 system-ui;letter-spacing:.08em;color:#fff;background:rgba(10,20,60,.75);padding:8px 12px;border-radius:6px;display:none;max-width:90vw;text-align:center';
+document.body.appendChild(recMsg);
+const tellRec = (m: string, ms = 0) => { recMsg.textContent = m; recMsg.style.display = m ? 'block' : 'none'; if (ms) setTimeout(() => { if (recMsg.textContent === m) recMsg.style.display = 'none'; }, ms); };
+recBtn?.addEventListener('click', async () => {
+  if (!live.on) { live.start(30); recBtn.textContent = 'STOP'; recBtn.setAttribute('aria-pressed', 'true'); close(); tellRec('● REC', 1500); return; }
+  const blob = await live.stop(); recBtn.textContent = 'REC'; recBtn.setAttribute('aria-pressed', 'false');
+  await save(blob, `switchback-ride.${blob.type.includes('mp4') ? 'mp4' : 'webm'}`);
+});
+let exporting = false, cancelExport = false;
+async function runExport(seconds: number, fps = 30, w?: number, h?: number) {
+  if (exporting) { cancelExport = true; return; }
+  exporting = true; cancelExport = false; holding = true;
+  const was = { auto, paused }; auto = true; paused = false; close();
+  const portrait = innerHeight > innerWidth, W = w ?? (portrait ? 1080 : 1920), H = h ?? (portrait ? 1920 : 1080);
+  try {
+    const r = await exportClip({ seconds, fps, w: W, h: H }, comp, (a, b) => rd.setSize(a, b), (dt) => tick(dt), (f, m) => tellRec(`EXPORT ${Math.round(f * 100)}% · ${m} · tap EXPORT to cancel`), () => cancelExport);
+    tellRec(`Done · ${r.note}`, 6000); await save(r.blob, r.name);
+  } catch (e) { tellRec(`Export stopped: ${(e as Error).message ?? e}`, 6000); }
+  rd.resize(); auto = was.auto; paused = was.paused; holding = false; exporting = false; last = performance.now();
+}
+expBtn?.addEventListener('click', () => runExport(15));
+const recFlag = q.get('rec');
+if (recFlag === 'headless') {
+  // (for a script: size the picture, then step a frame at a time and take each as a JPEG)
+  (window as unknown as { __rec: unknown }).__rec = {
+    size: (w: number, h: number) => { holding = true; auto = true; rd.setSize(w, h); },
+    step: (dt: number, quality = 0.9) => { tick(dt); return comp.draw().toDataURL('image/jpeg', quality); },
+  };
+} else if (recFlag) {
+  const [sec, f, size] = recFlag.split(','), [rw, rh] = (size ?? '').split('x').map(Number);
+  setTimeout(() => runExport(Number(sec) || 10, Number(f) || 30, rw || undefined, rh || undefined), 1200);
+}
 
 /** the gesture as it's drawn: a white line where the finger went, orange from where a trick was read; it fades once
  * the finger's lifted */

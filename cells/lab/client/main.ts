@@ -40,6 +40,7 @@ const experiments: Record<string, () => Promise<unknown>> = {
   splats: () => import('./splats/main'),
   drawer: () => import('./drawer/main'),
   roofjumps: () => import('./roofjumps/main'),
+  volley: () => import('./volley/main'),
 };
 
 // (loaded as a worker by an experiment that shapes off the page's thread: serve it)

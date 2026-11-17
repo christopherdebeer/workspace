@@ -14,6 +14,11 @@ Made by `node cells/lab/views.mjs switchback` from `client/switchback/views.mjs`
 ![The title: the sim’s rider showing off behind it; c15r’s autograph across the logo; ride, the mode, the leaderboard](v-title.jpg)
 ![The leaderboard: each mode’s best runs in this browser, each signed; the PAR signed by Claude](v-board.jpg)
 
+## Painted
+
+![Painted (`paint=1`): the same frame with nothing but brush strokes on paper: the road and the snow by it along the way, the rock brushed down its face, the far peaks painted along their ridges, lit from the left, the sky in strokes, the rider and its shadow too](v-painted.jpg)
+![Painted, riding: at speed: each stroke stretched along its own motion on the screen, so the speed is in the ground’s own marks](v-painted-ride.jpg)
+
 ## The bike and rider
 
 ![From the side: cut colour: the orange jersey and bodywork, the legs and the machine one charcoal, cream where it touches and steers](v-side.jpg)

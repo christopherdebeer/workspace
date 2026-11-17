@@ -39,10 +39,16 @@ export const EXPERIMENTS: Experiment[] = [
     presets: [{ label: 'a composed scene', query: 'scene=composed&look=wash' }, { label: 'composed, dry, orbit', query: 'scene=composed&look=dry&orbit' }, { label: 'bench: edit a stroke', query: 'scene=bench' }, { label: 'mist, lit by a tiny network', query: 'scene=mist&light=neural' }, { label: 'mist, error from the reference', query: 'scene=mist&light=neural&diff&bank=9' }, { label: 'brushes', query: 'scene=brushes&look=wash' }, { label: 'brushes, dry', query: 'scene=brushes&look=dry&detail=0.55' }, { label: 'one stone', query: 'scene=stone&look=wash' }, { label: 'sparse', query: 'scene=stone&look=wash&detail=0.25' }, { label: 'dry', query: 'scene=stone&look=dry&detail=0.55' }, { label: 'orbit', query: 'scene=stone&look=wash&detail=0.55&orbit' }, { label: 'brush features', query: 'scene=stone&look=wash&detail=0.25&brush' }, { label: 'garden', query: 'scene=garden' }, { label: 'the ellipses', query: 'scene=garden&mode=1' }, { label: 'plush (9 MB)', query: 'scene=plush' }, { label: 'shoe (9 MB)', query: 'scene=nike' }, { label: 'train (33 MB)', query: 'scene=train' }],
   },
   {
+    id: 'volley', title: 'Volley', group: 'Play', tags: ['hci'],
+    blurb: 'A ball thrown up into fired and glazed sheets and caught again, with no paddle. You are lying on your back; above you hang sheets of tiled clay, one behind another: rosettes, fans and ringed holes in faceted tiles, the glaze in bands. The ball breaks the tile it strikes and falls back, and wherever it comes back through the screen a hand has to be there: a touch made at the last moment catches it (let go to throw), a finger long down is a sprung pad, a moving finger hits it. How fast your finger moves is how hard the ball goes; thrown hard enough it bursts through. Every six sheets a firing, with its own clays, glazes and air. Five lives (and again from the last firing), four firings against the clock, or free.',
+    page: 'static/volley.html', preview: 'preview&seed=1&t=28', readme: 'static/volley.md',
+    presets: [{ label: 'play', query: '' }, { label: 'against the clock', query: 'rules=run' }, { label: 'free', query: 'rules=free' }, { label: 'watch', query: 'auto' }, { label: 'watch the course', query: 'auto&rules=run' }, { label: 'pad only', query: 'hand=pad' }, { label: 'catch only', query: 'hand=catch' }, { label: 'no guide ring', query: 'guide=0' }, { label: 'another seed', query: 'seed=7' }],
+  },
+  {
     id: 'switchback', title: 'Switchback', group: 'Play',
     blurb: 'A downhill motocross run down a mountain made as you ride it: drawn flat and faceted in a few hard colours (ultramarine sky, pale snow, charcoal rock, orange), its speed drawn as vector shards, smears and flying chunks rather than blur. Drag to steer, drag down to brake; kickers over gaps, whoops, the wall, the drop.',
     page: 'static/switchback.html', preview: 'preview&auto=tricks&seed=3&t=3', readme: 'static/switchback.md',
-    presets: [{ label: 'ride', query: 'seed=1' }, { label: 'another mountain', query: 'seed=7' }, { label: 'watch', query: 'seed=3&auto=tricks' }],
+    presets: [{ label: 'ride', query: 'seed=1' }, { label: 'another mountain', query: 'seed=7' }, { label: 'watch', query: 'seed=3&auto=tricks' }, { label: 'cut facets', query: 'seed=1&paint=0' }, { label: 'watch, cut', query: 'seed=3&auto=tricks&paint=0' }],
   },
   {
     id: 'autograph', title: 'Autograph', group: 'Drawings',

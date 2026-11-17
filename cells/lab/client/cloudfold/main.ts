@@ -79,7 +79,7 @@ void main(){
  rgb=pow(max(rgb,vec3(0)),vec3(.92));
  rgb+=(hash(vec3(gl_FragCoord.xy,3.))-.5)/255.;
  color=vec4(rgb,1);
-}`.replaceAll('STEPS',String(steps));
+}`.replace(/STEPS/g,String(steps));
 function start(g:WebGL2RenderingContext){
  function shader(type:number,src:string){const s=g.createShader(type)!;g.shaderSource(s,src);g.compileShader(s);if(!g.getShaderParameter(s,g.COMPILE_STATUS))throw Error(g.getShaderInfoLog(s)??'Shader failed');return s;}
  const vs=shader(g.VERTEX_SHADER,vertex),fs=shader(g.FRAGMENT_SHADER,fragment),program=g.createProgram()!;

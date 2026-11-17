@@ -13,21 +13,61 @@
  */
 import { Course } from './course';
 import { CHUNK, PALETTE, buildChunk, buildFalls, buildFlags, buildRanges, buildRider, buildValley } from './mesh';
+import type { RiderPart } from './mesh';
+import { REGION } from './regions';
+import { buildMasses } from './backdrop';
+import { buildScene, sceneView, SCENE_S } from './scene';
+/** how much of the set stands (0 to 1) at station s: dissolving in over 200 stations as its passage begins, out as it ends */
+const setFade = (s: number) => { const e = (x: number) => Math.max(0, Math.min(1, x)); const a = e((s - (SCENE_S - 650)) / 200), b = e(((SCENE_S + 750) - s) / 200); return a * a * (3 - 2 * a) * b * b * (3 - 2 * b); };
+import { SKY as SKY_ENV } from './paint';
+// (`backdrop=set`: the composed set (scene.ts, backdrop.ts) in place of the ranges, valley and middle distance)
+const BACKDROP = typeof location !== 'undefined' ? new URLSearchParams(location.search).get('backdrop') : null, COMPOSED = BACKDROP === 'set' || (typeof location !== 'undefined' && new URLSearchParams(location.search).has('probe'));
+// (`probe`: no sky and no backdrop, so what's left as paper is where the landscape would be seen: for measuring how much of a run shows it)
+const PROBE = typeof location !== 'undefined' && new URLSearchParams(location.search).has('probe');
 import type { Rider, Event } from './sim';
 import { GEARS } from './audio';
 import { buildRuts, Trail } from './ruts';
 import { buildGouges } from './gouge';
+import { STROKE, Painter, Strokes, Brush2D, strokesOver, skyStrokes, lineOf, courseStrokes, backdropLayers, valleyStrokes, midHillStrokes, MID_SPAN, seaStrokes, fallStrokes, flagStrokes, riderStrokes, partShadowStrokes } from './paint';
 
 const VS = `#version 300 es
-in vec4 aP; uniform mat4 uVP; uniform vec3 uOff; out vec3 vW; flat out int vM;
+in vec4 aP; uniform mat4 uVP; uniform vec3 uOff; uniform float uZj; out vec3 vW; flat out int vM;
 flat out float vT; uniform vec3 uEye;
 // (positions relative to the eye: in world metres, far down the mountain, the faces' screen derivatives lose precision and
 // their normals speckle)
-void main() { vec3 w = aP.xyz + uOff; vW = w - uEye; vM = int(aP.w); vT = fract(aP.w); gl_Position = uVP * vec4(w, 1.); }`;
+void main() { vec3 w = aP.xyz + uOff; vW = w - uEye; vM = int(aP.w); vT = fract(aP.w); gl_Position = uVP * vec4(w, 1.);
+  // (what's laid on the ground (the road, its ruts and gouges, a shadow) is drawn a hair toward the eye in depth, so it
+  // never fights the ground it lies on, however far off)
+  if (vM == 1 || vM == 9 || vM == 10 || vM == 20) gl_Position.z -= 3e-6 * gl_Position.w;
+  // (a test's nudge: a face's depth, and only its depth, moved by its own few steps)
+  gl_Position.z += uZj * fract(float(gl_VertexID / 3) * .618) * gl_Position.w; }`;
 const FS = `#version 300 es
 precision highp float;
-in vec3 vW; flat in int vM; flat in float vT; uniform vec3 uPal[84]; uniform vec3 uEye; uniform vec3 uSun; uniform float uFog; out vec4 o;
+in vec3 vW; flat in int vM; flat in float vT; uniform vec3 uPal[152]; uniform vec3 uEye; uniform vec3 uSun; uniform float uFog; uniform float uNoThings; uniform vec4 uBelt; uniform vec3 uBeltCol; uniform vec3 uHazeCol; uniform float uCloud, uWorld, uFade; out vec4 o;
+// (the cloud belt (\`mood=course\`), one model for the strokes and the solid masses alike: how much cloud lies along the
+// line from the eye to a point, by the share of it inside the belt's heights; inside, banks thicker and thinner,
+// drifting; below it, a ceiling thinning the further down you are and breaking into patches of sky. uBelt: its middle's
+// height, half its depth, the distance that hides, on)
+vec3 beltMix(vec3 c, vec3 w, float dist){
+  if (uBelt.w < .5) return c;
+  float yb = uBelt.x - uBelt.y, yt = uBelt.x + uBelt.y, lo = min(uEye.y, w.y), hi = max(uEye.y, w.y), dy = hi - lo;
+  float ov = max(0., min(hi, yt) - max(lo, yb)), path = dy > 1. ? ov/dy*dist : (uEye.y > yb && uEye.y < yt ? dist : 0.);
+  float bank = .55 + .45*sin(w.x/90. + uCloud*380.)*sin(w.z/70. - uCloud*290.);
+  float k = 1. - exp(-path/(uBelt.z*mix(.45, 1.7, bank)));
+  // (below it, a ceiling that thins quickly as you come down out of it and opens into broad patches of sky, by where you
+  // look (drifting slowly), so the sky below the belt isn't one flat grey lid)
+  if (uEye.y < yb) { float under = smoothstep(10., 140., yb - uEye.y);
+    vec2 dir = normalize(w.xz - uEye.xz + vec2(1e-4)); float hole = .5 + .5*sin(dir.x*4.1 + uCloud*150. + 1.3)*sin(dir.y*3.3 - uCloud*110.) + .25*sin(atan(dir.y, dir.x)*7.);
+    k *= mix(1., mix(.55, .05, smoothstep(.35, .6, hole)), under); }
+  vec3 col = uBeltCol*mix(.9, 1.06, clamp((w.y - yb)/(2.*uBelt.y), 0., 1.));
+  return mix(c, col, k);
+}
 void main() {
+  // (dissolving: a screen door of 3-pixel cells, so a piece comes and goes without popping)
+  if (uFade < 1. && fract(sin(dot(floor(gl_FragCoord.xy / 3.), vec2(12.9898, 78.233))) * 43758.5453) > uFade) discard;
+  // (painted, the things standing on the ground (the fence, the poles, the pines, a kicker's boards) claim no depth and no
+  // stencil: what's behind them is painted, and their strokes over it, so a gap between their strokes shows that, not paper)
+  if (uNoThings > .5 && (vM == 3 || vM == 4 || vM == 5 || vM == 11 || vM == 17 || vM == 18 || vM == 19)) discard;
   vec3 n = normalize(cross(dFdx(vW), dFdy(vW)));
   // (the face's light, nudged by its own tone, picks one of its material's four bands)
   float l = dot(n, uSun) + (vT / .9 - .5) * .42;
@@ -37,6 +77,10 @@ void main() {
   float d = length(vW.xz), f = floor(clamp((d - 80.) / 520., 0., 1.) * 4.) / 4.;
   vec3 fogs[4] = vec3[4](vec3(.62, .66, .9), vec3(.33, .45, .88), vec3(.14, .33, .84), vec3(.09, .26, .78));
   o = vec4(mix(c, fogs[b], min(1., f * 1.1) * uFog), 1.);
+  // (the composed backdrop's masses, and the regional middle distance, through the cloud belt: the strokes' own model)
+  // (what's drawn about the eye (the far masses) has no real height in the world: it takes the cloud a level line of sight
+  // at its distance would, evenly; hazed by its height it split into a pale upper part and a saturated band under it)
+  if (vM >= 26) { vec3 wp = vW + uEye; if (uWorld < .5) wp.y = uEye.y; o.rgb = beltMix(o.rgb, wp, length(vW)); }
 }`;
 
 export type Mat = Float32Array;
@@ -57,6 +101,10 @@ const hex = (h: string) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16) 
 /** the sun: high, ahead and to the right of the way down (the drop side), so the wall's faces catch it and shadows fall back toward the eye */
 export const SUN = norm([-0.5, 0.72, 0.5]);
 export const SKY = '#0741eb';
+/** the eye's near plane: as far out as the eye allows (the depth's precision goes as its square, far off) */
+export const NEAR = 0.6;
+/** the paper the painted picture's laid on (`paint=1`): where no stroke reaches */
+export const PAPER = '#ece7df';
 
 export interface View { eye: number[]; target: number[]; fov: number; roll: number }
 
@@ -82,31 +130,67 @@ export class Renderer {
   /** how the rider's drawn ('cut': flat masses, lit for the picture), a whip held for a pinned frame (rad), and whether
    * the world's drawn at all (`world=0`: the rider alone on the sky, for judging its shapes) */
   style: 'facets' | 'cut' | 'sil' = 'cut'; whip = 0; world = true;
+  /** painted (`paint=1`, paint.ts): the mountain laid in brush strokes over its facets; and the strokes, built with each
+   * chunk, the backdrop's and the sky's once */
+  paint = false; painter: Painter | null = null; stretchWanted = 1; leadWanted: [number, number] | null = null;
+  /** only the backdrop drawn (`bg=`) */
+  bgOnly = false;
+  private masses: { id: number; buf: Buf; strokes: Strokes | null; world: boolean }[] | null = null; private sceneD: number[] = [0, 0, 0];
+  private mids = new Map<number, Strokes>(); 
+  private floor: Strokes | null = null; private sea: Strokes | null = null; private backLayers: { s: Strokes; f: number; cap: number }[] = []; private eye0: number[] | null = null;
+  /** the backdrop's parallax starts again from here (the start, or a respawn: the eye's cut there anyway) */
+  rebase() { this.eye0 = null; }
+  /** how much of the sea of cloud's own light shows, by the eye's height: all of it above the belt's top, merging into the
+   * mist's colour as the eye comes down into the belt, gone 60 m in (where it's the mist's colour anyway): no switch at a
+   * height for a jump to cross back and forth */
+  private seaFade(eye: number[]) { if (!REGION.on) return 0; const k = Math.max(0, Math.min(1, (eye[1] - (REGION.beltY + REGION.half - 60)) / 100)); return k * k * (3 - 2 * k); }
+  private drawSea(pt: Painter, eye: number[]) {
+    if (!this.sea) this.sea = pt.make(seaStrokes(this.course.seed));
+    pt.setSea(this.seaFade(eye)); pt.draw(this.sea, [eye[0], REGION.beltY + REGION.half, eye[2]], false); pt.setSea(-1);
+  }
+  /** the palette's changed (a mood cycling): the painter's floats again */
+  envChanged() { const p = new Float32Array(PALETTE.flat().map(hex).flat()); if (this.painter) this.painter.pal = p; this.gl.useProgram(this.prog); this.gl.uniform3fv(this.u.uPal, p); }
+  /** the clouds drifted round by game time t (about a degree every eight seconds) */
+  cloudAt(t: number) { if (this.painter) this.painter.cloud = t * 0.0022; }
+  /** a backdrop layer's offset: with the eye, less the way it's come since the base times the layer's parallax (a
+   * fraction), that drift soft-capped at `cap` metres; the floor's only down (it rises toward you as you descend, never
+   * closer than about 140 m) */
+  private layerOff(eye: number[], f: number, cap: number, floor: boolean) {
+    if (!this.eye0) this.eye0 = eye.slice();
+    const d = [0, 1, 2].map((k) => (eye[k] - this.eye0![k]) * f), m = Math.hypot(d[0], d[1], d[2]), k = m > 1e-6 ? (cap * Math.tanh(m / cap)) / m : 0;
+    if (floor) { const dy = Math.max(-180, Math.min(0, (eye[1] - this.eye0[1]) * 0.3)); return [eye[0] - d[0] * k, eye[1] - 60 - dy, eye[2] - d[2] * k]; }
+    return [eye[0] - d[0] * k, eye[1] - 60 - d[1] * k, eye[2] - d[2] * k];
+  }
+  private strokes = new Map<number, Strokes>(); private backStrokes: Strokes[] = []; private moving: Strokes | null = null; private prevEye: number[] | null = null; private prevEye0: number[] | null = null; private eyeV = [0, 0, 0]; private skyS: Strokes | null = null; private prevVP: Mat | null = null;
   /** your own track, fed after each step of the sim */
   readonly trail: Trail;
   vp: Mat = new Float32Array(16); W = 1; H = 1; dpr = 1;
   fx = new Fx();
   /** for judging a frame: the speed layer (`fx=0` hides it) and the distance fade (`fog=0` shows each face's own colour) */
   speed = true; fog = true;
+  /** a test's depth nudge (`zjit`) */
+  zjit = 0;
   /** the air on the rider: peeling off the posed figure, or the three streaks set at the helmet and the bars it had
    * before (`wake=fixed`), or none (`wake=0`) */
   wake: 'fixed' | 'peel' | 'none' = 'peel';
   /** this frame's posed rider (its vertices, four floats each), for the air peeling off it */
   body: Float32Array | null = null;
   constructor(readonly canvas: HTMLCanvasElement, readonly overlay: HTMLCanvasElement, readonly course: Course) {
-    const gl = canvas.getContext('webgl2', { antialias: true, preserveDrawingBuffer: true });
+    const gl = canvas.getContext('webgl2', { antialias: true, preserveDrawingBuffer: true, stencil: true });
     if (!gl) throw new Error('no webgl2');
     this.gl = gl; this.ctx = overlay.getContext('2d')!;
     const sh = (t: number, s: string) => { const o = gl.createShader(t)!; gl.shaderSource(o, s); gl.compileShader(o); if (!gl.getShaderParameter(o, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(o) ?? 'shader'); return o; };
     const p = gl.createProgram()!; gl.attachShader(p, sh(gl.VERTEX_SHADER, VS)); gl.attachShader(p, sh(gl.FRAGMENT_SHADER, FS)); gl.bindAttribLocation(p, 0, 'aP'); gl.linkProgram(p);
     if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p) ?? 'link');
     this.prog = p;
-    for (const n of ['uVP', 'uOff', 'uPal', 'uEye', 'uSun', 'uFog']) this.u[n] = gl.getUniformLocation(p, n);
+    for (const n of ['uVP', 'uOff', 'uPal', 'uEye', 'uSun', 'uFog', 'uZj', 'uNoThings', 'uBelt', 'uBeltCol', 'uHazeCol', 'uCloud', 'uWorld', 'uFade']) this.u[n] = gl.getUniformLocation(p, n);
     gl.useProgram(p);
     gl.uniform3fv(this.u.uPal, new Float32Array(PALETTE.flat().map(hex).flat()));
     gl.uniform3fv(this.u.uSun, new Float32Array(SUN));
     this.ranges = new Buf(gl, buildRanges(course.seed)); this.valley = new Buf(gl, buildValley(course.seed)); this.rider = new Buf(gl, null); this.shadow = new Buf(gl, null); this.flags = new Buf(gl, null); this.ruts = new Buf(gl, null); this.track = new Buf(gl, null); this.falls = new Buf(gl, null); this.trail = new Trail(course);
   }
+  /** a fixed size in pixels, one to one (for an export); `resize` puts it back to the window */
+  setSize(w: number, h: number) { this.dpr = 1; this.W = w; this.H = h; for (const c of [this.canvas, this.overlay]) { c.width = w; c.height = h; } }
   resize() {
     this.dpr = Math.min(2, devicePixelRatio || 1);
     this.W = innerWidth; this.H = innerHeight;
@@ -115,23 +199,66 @@ export class Renderer {
   /** keep the chunks from just behind the rider to well ahead built, at most `budget` new ones a frame */
   private stream(s: number, budget: number) {
     const lo = Math.max(0, Math.floor((s - 70) / CHUNK)), hi = Math.floor((s + 640) / CHUNK);
-    for (const [n, b] of this.chunks) if (n < lo || n > hi) { b.free(); this.chunks.delete(n); }
-    for (let n = lo; n <= hi && budget > 0; n++) if (!this.chunks.has(n)) { this.chunks.set(n, new Buf(this.gl, buildChunk(this.course, n))); budget--; }
+    for (const [n, b] of this.chunks) if (n < lo || n > hi) { b.free(); this.chunks.delete(n); this.strokes.get(n)?.free(); this.strokes.delete(n); }
+    for (let n = lo; n <= hi && budget > 0; n++) if (!this.chunks.has(n)) {
+      const v = buildChunk(this.course, n);
+      this.chunks.set(n, new Buf(this.gl, v)); budget--;
+      if (this.painter) {
+        const face = strokesOver(v, this.course.seed * 1009 + n, lineOf(this.course, n * CHUNK - 6, (n + 1) * CHUNK + 6)), way = courseStrokes(this.course, n * CHUNK, (n + 1) * CHUNK);
+        // (the ground's strokes and the way's first, then the things' over them: the things hold no depth, so they're
+        // painted over what's behind them by order)
+        const G: number[] = [], Th: number[] = [];
+        for (let k = 0; k < face.length; k += STROKE) (face[k + 15] > 2.5 ? Th : G).push(...face.subarray(k, k + STROKE));
+        const all = new Float32Array(G.length + way.length + Th.length);
+        all.set(G); all.set(way, G.length); all.set(Th, G.length + way.length);
+        this.strokes.set(n, this.painter.make(all));
+      }
+    }
   }
   frame(view: View, r: Rider, t: number, dt: number, budget = 1) {
     const gl = this.gl;
-    this.stream(r.s, budget);
+    if (this.paint && !this.painter) {
+      this.painter = new Painter(gl, new Float32Array(PALETTE.flat().map(hex).flat()), SUN);
+      this.floor = this.painter.make(valleyStrokes(this.course.seed));
+      // (each layer's parallax: as if it stood nearer than it does (a range 3.7 km off moves as one a few hundred metres off
+      // would, scaled), so the near hills slide against the far peaks; soft-capped, so it never comes up to you)
+      this.backLayers = backdropLayers(this.course.seed).sort((a, b) => b.R - a.R).map((l) => ({ s: this.painter!.make(l.data), f: Math.min(0.75, Math.pow(1400 / l.R, 1.2)), cap: l.R * 0.36 }));
+      this.backStrokes = [this.floor, ...this.backLayers.map((l) => l.s)];
+      this.skyS = this.painter.make(skyStrokes(this.course.seed, COMPOSED)); this.painter.skyTex = COMPOSED ? 0.3 : 1; this.painter.stretch = this.stretchWanted; if (this.leadWanted) this.painter.lead = this.leadWanted;
+      for (const b of this.chunks.values()) b.free();
+      this.chunks.clear();
+    }
+    this.stream(r.s, this.painter && this.chunks.size === 0 ? 99 : budget);
+    // (the middle distance's hills, a stretch at a time, from a little behind to well ahead; one new stretch a frame)
+    // (with the course's regions, the valley as real ground, a stretch at a time, from a little behind to well ahead)
+    // (with the course's regions, no middle distance swept off the road (it stood through the sea of cloud and as clutter on
+    // the drop side): the background is the far ranges and the valley's floor, composed on their own)
+    if (this.painter && !COMPOSED && !REGION.on) {
+      const lo = Math.floor((r.s - 400) / MID_SPAN), hi = Math.floor((r.s + 1600) / MID_SPAN);
+      for (const [k, b] of this.mids) if (k < lo || k > hi) { b.free(); this.mids.delete(k); }
+      for (let k = Math.max(0, lo); k <= hi; k++) if (!this.mids.has(k)) { this.mids.set(k, this.painter.make(midHillStrokes(this.course, k))); if (this.mids.size > 2 && budget < 99) break; }
+    }
     const asp = this.W / this.H, fov = asp < 1 ? view.fov * 1.25 : view.fov;
     // (the eye's roll: its up tipped toward its right)
     const fwd = norm([view.target[0] - view.eye[0], 0, view.target[2] - view.eye[2]]), rt = [-fwd[2], 0, fwd[0]];
     const upv = norm([rt[0] * Math.sin(view.roll), Math.cos(view.roll), rt[2] * Math.sin(view.roll)]);
-    this.vp = mul(perspective(fov, asp, 0.3, 9000), lookAt(view.eye, view.target, upv));
+    this.vp = mul(perspective(fov, asp, NEAR, 9000), lookAt(view.eye, view.target, upv));
+    // (the last frame's eye, for the strokes' stretch: none on a held frame, or when the eye's jumped (put back, a cut))
+    const jump = !this.prevEye || Math.hypot(view.eye[0] - this.prevEye[0], view.eye[1] - this.prevEye[1], view.eye[2] - this.prevEye[2]) > 8;
+    const prev = this.prevVP && dt > 0 && !jump ? this.prevVP : this.vp; this.prevVP = this.vp; this.prevEye = view.eye.slice();
+    // (the eye's motion, smoothed (not its shake), for the strokes' smear: where the world was, as the eye sees it, 0.09 s ago)
+    if (dt > 0 && !jump && this.prevEye0) for (let k = 0; k < 3; k++) this.eyeV[k] += ((view.eye[k] - this.prevEye0[k]) / dt - this.eyeV[k]) * Math.min(1, dt * 6);
+    if (dt === 0 || jump) this.eyeV = dt === 0 ? this.eyeV : [0, 0, 0];
+    this.prevEye0 = view.eye.slice();
+    const smear = dt > 0 ? this.eyeV.map((v) => v * 0.09) : [0, 0, 0];
+    const pt = this.paint ? this.painter : null, paintBegin = () => pt!.begin(this.vp, prev, view.eye, 1 / Math.tan(fov / 2), this.canvas.width, this.canvas.height, this.dpr, smear);
     gl.viewport(0, 0, this.canvas.width, this.canvas.height);
     const sky = hex(SKY); gl.clearColor(sky[0], sky[1], sky[2], 1); gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
     gl.enable(gl.DEPTH_TEST); gl.disable(gl.CULL_FACE);
     gl.useProgram(this.prog);
-    gl.uniformMatrix4fv(this.u.uVP, false, this.vp); gl.uniform3fv(this.u.uEye, new Float32Array(view.eye));
-    const body = this.body = buildRider({ x: r.x, y: r.y, z: r.z, heading: r.heading, pitch: r.pitch, lean: r.lean, squash: r.squash, crashT: r.crashT, air: r.air, steer: r.steer, yFront: r.yFront, yRear: r.yRear, dist: r.dist, body: r.body, whip: this.whip || r.whip, trick: r.trickOut ? r.outs : undefined, style: this.style }, t);
+    gl.uniformMatrix4fv(this.u.uVP, false, this.vp); gl.uniform3fv(this.u.uEye, new Float32Array(view.eye)); gl.uniform1f(this.u.uZj, this.zjit);
+    const riderParts: RiderPart[] = [];
+    const body = this.body = buildRider({ x: r.x, y: r.y, z: r.z, heading: r.heading, pitch: r.pitch, lean: r.lean, squash: r.squash, crashT: r.crashT, air: r.air, steer: r.steer, yFront: r.yFront, yRear: r.yRear, dist: r.dist, body: r.body, whip: this.whip || r.whip, trick: r.trickOut ? r.outs : undefined, style: this.style }, t, this.paint ? riderParts : undefined);
     // (the rider, cut: lit for the picture rather than by the sun, from above, behind the eye and to its left, so what
     // faces you is one flat field and only the side turned toward the eye's right (the flank, the outside of each arm and
     // leg, the undersides) takes its one cut)
@@ -141,6 +268,117 @@ export class Renderer {
       gl.uniform3fv(this.u.uSun, new Float32Array(SUN));
     };
     if (!this.world) { gl.uniform1f(this.u.uFog, 0); gl.uniform3f(this.u.uOff, 0, 0, 0); drawRider(); this.ctx.setTransform(1, 0, 0, 1, 0, 0); this.ctx.clearRect(0, 0, this.overlay.width, this.overlay.height); return; }
+    // (what moves, built afresh: the ruts near the eye, your own track, the flags, the falls, the rider's shadow)
+    const rutsV = this.rutStyle === 'cut' ? buildGouges(this.course, r.s) : buildRuts(this.course, r.s), trackV = this.trail.mesh();
+    const flagsV = buildFlags(this.course, r.s - 40, r.s + 320, t), fallsV = buildFalls(this.course, r.s - 30, r.s + 420, t);
+    const g = this.course.point(r.s, r.u).y + 0.06, sh = new Float32Array(body.length);
+    // (each point of it on the ground where it falls: the road ahead of the rider and behind, not a level plane at the
+    // rider's feet, which a slope going away would leave standing in the air)
+    const hx = Math.sin(r.heading), hz = Math.cos(r.heading), gy = new Map<number, number>();
+    const groundAt = (d: number) => { const k = Math.round(d * 4); let y = gy.get(k); if (y === undefined) { y = this.course.point(r.s + k / 4, r.u).y ?? g - 0.06; gy.set(k, y); } return y + 0.06; };
+    for (let i = 0; i < body.length; i += 4) {
+      const h = body[i + 1] - g, k = Math.max(0, h) / SUN[1];
+      sh[i] = body[i] - SUN[0] * k; sh[i + 2] = body[i + 2] - SUN[2] * k; sh[i + 3] = 9.45;
+      sh[i + 1] = groundAt((sh[i] - r.x) * hx + (sh[i + 2] - r.z) * hz);
+    }
+    const shadowOn = !r.air || body[1] - g < 6;
+    if (pt) {
+      // painted: nothing but strokes, on paper. The facets go only into the depth, for what hides what.
+      const paper = hex(PAPER); gl.clearColor(paper[0], paper[1], paper[2], 1); gl.clearStencil(0); gl.clear(gl.COLOR_BUFFER_BIT | gl.STENCIL_BUFFER_BIT);
+      pt.advance(r.s);
+      const off = [view.eye[0], view.eye[1] - 60, view.eye[2]];
+      // (the ground and the rider (whose strokes, on both sides of it, need its own depth to hide its far side): the things
+      // on the ground, the flags and the falls claim no depth or stencil)
+      const near = () => { if (this.bgOnly) return; gl.uniform3f(this.u.uOff, 0, 0, 0); gl.uniform1f(this.u.uNoThings, 1); for (const b of this.chunks.values()) b.draw(); gl.uniform1f(this.u.uNoThings, 0); this.rider.set(body, true); this.rider.draw(); };
+      // (where things stand, in the stencil: 2 the backdrop, 1 anything near; nothing drawn)
+      gl.colorMask(false, false, false, false); gl.disable(gl.DEPTH_TEST); gl.enable(gl.STENCIL_TEST); gl.stencilOp(gl.KEEP, gl.KEEP, gl.REPLACE); gl.stencilFunc(gl.ALWAYS, 2, 0xff);
+      gl.uniform1f(this.u.uFog, 0); gl.uniform3f(this.u.uOff, off[0], off[1], off[2]); this.ranges.draw(); this.valley.draw();
+      // (what's near marks only where it's seen: hidden behind the ground, a fall or a far chunk would otherwise claim
+      // its whole outline, and nothing would paint there)
+      gl.enable(gl.DEPTH_TEST); gl.clear(gl.DEPTH_BUFFER_BIT); gl.stencilFunc(gl.ALWAYS, 1, 0xff); near();
+      gl.stencilOp(gl.KEEP, gl.KEEP, gl.KEEP); gl.disable(gl.DEPTH_TEST);
+      // (the sky, wherever nothing near stands: the ranges are painted over it, as a painter would)
+      gl.colorMask(true, true, true, true); gl.stencilFunc(gl.NOTEQUAL, 1, 0xff);
+      if (!PROBE) { paintBegin(); if (this.skyS) pt.draw(this.skyS, view.eye, false); pt.end(); } gl.useProgram(this.prog);
+      // (the backdrop, by its own depth, only where nothing near stands)
+      gl.enable(gl.DEPTH_TEST); gl.clear(gl.DEPTH_BUFFER_BIT); gl.colorMask(false, false, false, false); gl.stencilFunc(gl.ALWAYS, 0, 0xff);
+      gl.uniform3f(this.u.uOff, off[0], off[1], off[2]); this.ranges.draw(); this.valley.draw();
+      gl.colorMask(true, true, true, true); gl.stencilFunc(gl.NOTEQUAL, 1, 0xff);
+      // (the ranges over the sky and over each other, farthest first, by the order they're laid, not by depth: so their
+      // strokes run over the skyline as a brush does, and a nearer range is painted over the one behind it; then the
+      // valley, by depth, so its floor doesn't paint over the ranges' feet it lies behind)
+      // (by order, not depth: the valley's floor first, then the layers farthest first, each moved by its own parallax;
+      // the floor rising toward you as you come down the mountain)
+      if (COMPOSED) {
+        // (the composed backdrop: its flat masses by order (the facets' own program, every band one colour), then its sparse marks)
+        if (!this.masses) {
+          // (\`scene\`/\`set\`: the far massif aimed down the scene's valley, without its own floor, river and foothill; then the scene's pieces)
+          const sv = sceneView(this.course);
+          const planes = [...buildMasses(this.course, true, sv.h - 0.12).filter((p) => !['floor', 'river', 'foot', 'apron'].includes(p.name)), ...buildScene(this.course)];
+          this.sceneD = sv.D;
+          // (each its own stencil id, numbered as assembled: kept with the ids they were built with, the scene's reused the massif's)
+          this.masses = planes.map((p, i) => ({ id: i + 1, buf: new Buf(gl, p.verts), strokes: p.strokes.length ? pt.make(p.strokes) : null, world: !!p.world }));
+        }
+        // (the masses mark the stencil's bit 4 where they're drawn; their strokes are clipped to it, so the silhouettes are the
+        // masses' own and the strokes only work inside them)
+        gl.disable(gl.DEPTH_TEST); gl.uniform1f(this.u.uFog, 0); gl.uniform3f(this.u.uOff, off[0], off[1], off[2]);
+        gl.uniform4f(this.u.uBelt, REGION.beltY, REGION.half, 70, REGION.on ? 1 : 0); gl.uniform3fv(this.u.uBeltCol, SKY_ENV.belt); gl.uniform1f(this.u.uCloud, this.painter ? this.painter.cloud : 0);
+        // (each plane marks the stencil's upper bits with its own id where it's laid; its passages are clipped to that, so
+        // a passage reaches its own plane's edges and no further)
+        let depthCleared = false;
+        if (!PROBE) for (const p of this.masses) {
+          // (the set's pieces at their places in the world; the far massif about the eye. The set is built for its passage and
+          // stands only there (further down the run you'd come under it), dissolving in and out at its ends, not popping)
+          const po = p.world ? this.sceneD : off, fade = p.world ? setFade(r.s) : 1;
+          if (fade <= 0) continue;
+          // (the far masses by the order they're laid; the set's surfaces by their depth among themselves, so which flank or
+          // shoulder hides which is settled by where they are, not the order they're drawn in)
+          if (p.world && !depthCleared) { gl.clear(gl.DEPTH_BUFFER_BIT); depthCleared = true; }
+          gl.useProgram(this.prog); if (p.world) gl.enable(gl.DEPTH_TEST); else gl.disable(gl.DEPTH_TEST);
+          gl.uniform3f(this.u.uOff, po[0], po[1], po[2]); gl.uniform1f(this.u.uWorld, p.world ? 1 : 0); gl.uniform1f(this.u.uFade, fade);
+          gl.stencilMask(0xfc); gl.stencilOp(gl.KEEP, gl.KEEP, gl.REPLACE); gl.stencilFunc(gl.NOTEQUAL, (p.id << 2) | 1, 0x01); p.buf.draw();
+          gl.stencilMask(0xff); gl.stencilOp(gl.KEEP, gl.KEEP, gl.KEEP);
+          if (p.strokes) { gl.stencilFunc(gl.EQUAL, p.id << 2, 0xfc); paintBegin(); gl.disable(gl.DEPTH_TEST); pt.setWorld(p.world, fade); pt.draw(p.strokes, po, false); pt.setWorld(false, 1); pt.end(); }
+        }
+        gl.useProgram(this.prog); gl.uniform1f(this.u.uWorld, 0); gl.uniform1f(this.u.uFade, 1);
+        gl.useProgram(this.prog);
+        // (the sea of cloud over it all, seen from above the belt)
+        if (!PROBE && this.seaFade(view.eye) > 0) { gl.stencilFunc(gl.NOTEQUAL, 1, 0x01); paintBegin(); gl.disable(gl.DEPTH_TEST); this.drawSea(pt, view.eye); pt.end(); gl.useProgram(this.prog); }
+        gl.enable(gl.DEPTH_TEST);
+      } else {
+      paintBegin(); gl.disable(gl.DEPTH_TEST);
+      if (this.floor) pt.draw(this.floor, this.layerOff(view.eye, 0.35, 190, true), false);
+      for (const l of this.backLayers) pt.draw(l.s, this.layerOff(view.eye, l.f, l.cap, false), false);
+      // (the middle distance's hills, standing in the world: the farther stretches first)
+      // (the sea of cloud, seen from above the belt (`mood=course`): over the valley and the layers' feet, under the middle
+      // distance's hills where they rise out of it)
+      if (this.seaFade(view.eye) > 0) this.drawSea(pt, view.eye);
+      pt.setSink(true);
+      for (const k of [...this.mids.keys()].sort((a, b) => b - a)) pt.draw(this.mids.get(k)!, [0, 0, 0], false);
+      pt.setSink(false);
+      gl.enable(gl.DEPTH_TEST); pt.end(); gl.useProgram(this.prog);
+      }
+      gl.disable(gl.STENCIL_TEST);
+      // (what's near: its facets only in the depth; then its strokes, laid in the world on them and lifted a little toward
+      // the eye, tested against that depth pixel by pixel, far chunks first)
+      gl.clear(gl.DEPTH_BUFFER_BIT);
+      gl.colorMask(false, false, false, false); near(); gl.colorMask(true, true, true, true);
+      gl.depthFunc(gl.LEQUAL);
+      paintBegin();
+      // (the ground's strokes, the far chunks first so the near paint over them at the edges)
+      // (the valley's ground first, the farthest stretches first; then the mountain's)
+      if (!this.bgOnly) for (const n of [...this.strokes.keys()].sort((a, b) => b - a)) pt.draw(this.strokes.get(n)!, [0, 0, 0], this.fog);
+      // (and what moves, each face's strokes its own, so they stay put on it)
+      // (the ruts, the track, the flags and the falls are windows sliding along the way: their strokes seeded by place)
+      // (not the gouges: they're cut to the eye, finer near it and broader away, so their faces change as you ride and
+      // strokes on them couldn't hold still; the road's own strokes run along it instead)
+      const parts = [new Float32Array(0), strokesOver(trackV, 13, null, 4000, true, 0.1, true), shadowOn ? partShadowStrokes(riderParts, SUN, g) : new Float32Array(0),  flagStrokes(this.course, r.s - 40, r.s + 320, t, view.eye, SUN), fallStrokes(this.course, r.s - 30, r.s + 420, t), riderStrokes(riderParts, view.eye, SUN, this.eyeV)];
+      const all = new Float32Array(parts.reduce((a, p) => a + p.length, 0)); let at = 0;
+      for (const p of parts) { all.set(p, at); at += p.length; }
+      if (!this.moving) this.moving = pt.make(all, true); else this.moving.set(all);
+      if (!this.bgOnly) pt.draw(this.moving, [0, 0, 0], this.fog);
+      pt.end(); gl.depthFunc(gl.LESS); gl.useProgram(this.prog);
+    } else {
     // (the far ranges, round the eye and a little below it, unfaded)
     gl.uniform1f(this.u.uFog, 0); gl.uniform3f(this.u.uOff, view.eye[0], view.eye[1] - 60, view.eye[2]); this.ranges.draw(); this.valley.draw();
     gl.clear(gl.DEPTH_BUFFER_BIT);
@@ -148,23 +386,18 @@ export class Renderer {
     for (const b of this.chunks.values()) b.draw();
     // (the ruts near the eye, and your own track, a hair over the road)
     gl.enable(gl.POLYGON_OFFSET_FILL); gl.polygonOffset(-1, -1);
-    this.ruts.set(this.rutStyle === 'cut' ? buildGouges(this.course, r.s) : buildRuts(this.course, r.s), true); this.ruts.draw();
-    this.track.set(this.trail.mesh(), true); this.track.draw();
+    this.ruts.set(rutsV, true); this.ruts.draw();
+    this.track.set(trackV, true); this.track.draw();
     gl.disable(gl.POLYGON_OFFSET_FILL);
     // (the rider, and its shadow flattened along the sun onto the ground under it)
     drawRider();
-    // (the flags near enough to see, flying)
-    this.flags.set(buildFlags(this.course, r.s - 40, r.s + 320, t), true); this.flags.draw();
-    // (the waterfalls near enough to see, falling)
-    this.falls.set(buildFalls(this.course, r.s - 30, r.s + 420, t), true); this.falls.draw();
-    const g = this.course.point(r.s, r.u).y + 0.06, sh = new Float32Array(body.length);
-    for (let i = 0; i < body.length; i += 4) {
-      const h = body[i + 1] - g, k = Math.max(0, h) / SUN[1];
-      sh[i] = body[i] - SUN[0] * k; sh[i + 1] = g; sh[i + 2] = body[i + 2] - SUN[2] * k; sh[i + 3] = 9.45;
-    }
+    // (the flags near enough to see, flying; the waterfalls near enough to see, falling)
+    this.flags.set(flagsV, true); this.flags.draw();
+    this.falls.set(fallsV, true); this.falls.draw();
     gl.enable(gl.POLYGON_OFFSET_FILL); gl.polygonOffset(-2, -2);
-    if (!r.air || body[1] - g < 6) { this.shadow.set(sh, true); this.shadow.draw(); }
+    if (shadowOn) { this.shadow.set(sh, true); this.shadow.draw(); }
     gl.disable(gl.POLYGON_OFFSET_FILL);
+    }
     // (the speed layer)
     if (this.speed) this.fx.draw(this, view, r, dt); else { this.ctx.setTransform(1, 0, 0, 1, 0, 0); this.ctx.clearRect(0, 0, this.overlay.width, this.overlay.height); }
   }
@@ -181,7 +414,10 @@ type Chunk = { x: number; y: number; z: number; vx: number; vy: number; vz: numb
 type Gust = { x: number; y: number; z: number; w: number; col: string };
 /** each colour has one job: white and pale, the air (how fast); orange, the engine pushing (how hard you're speeding up);
  * charcoal, the ground taking it (braking, sliding) */
-const AIR_COLS = ['#ffffff', '#ffffff', '#f1ece8', '#d9d0ca'], PUSH_COLS = ['#e85a0d', '#ff7428', '#e85a0d'], GRIT_COLS = ['#24262e', '#2c2d32', '#3a3b44'];
+/** the speed layer's colours: the air off the rider, the throttle's spray, the brakes' grit, what a wall, a crash and a
+ * landing throw up (a mood (mood.ts) may change them) */
+export const FX = { air: ['#ffffff', '#ffffff', '#f1ece8', '#d9d0ca'], push: ['#e85a0d', '#ff7428', '#e85a0d'], grit: ['#24262e', '#2c2d32', '#3a3b44'], wall: ['#24262e', '#2c2d32', '#4a4b55'], crash: ['#e85a0d', '#24262e', '#f1ece8', '#d9d0ca', '#ffffff'], land: ['#d9d0ca', '#ccbcb2', '#f1ece8', '#4c3b34', '#2c2d32', '#ffffff'] };
+const AIR_COLS = FX.air, PUSH_COLS = FX.push, GRIT_COLS = FX.grit;
 type Streak = { a: number; r: number; w: number; len: number; col: string; sp: number };
 /** a streak of air peeling off the rider: the air leaving a point on the posed body (between two of its vertices, ia and
  * ib, at f), streaming back past it and pushed out round it (dir, in the world, set when it's born), cut loose as it goes
@@ -190,6 +426,8 @@ type Peel = { ia: number; ib: number; f: number; dir: number[]; age: number; lif
 
 /** the speed layer: shards, smears, wake and debris, all flat vector shapes */
 export class Fx {
+  /** painted: the speed layer laid in the same brush stamps */
+  private brush: Brush2D | null = null;
   debris: Chunk[] = []; gusts: Gust[] = []; pushes: Streak[] = []; grit: Streak[] = []; peels: Peel[] = []; private peelDue = 0; private peelP = new Float32Array(0);
   /** what the ride's doing, as the speed layer (and the eye's field of view) read it: the push (0…1, speeding up on the
    * ground), the brake (0…1, slowing), a shift's pulse (at each change up the engine's gears, as the sound has them) and a
@@ -204,7 +442,7 @@ export class Fx {
     for (let i = 0; i < n; i++) {
       const rear = e.kind === 'roost', side = (R() - 0.5) * 2;
       const sp = rear ? r.v * (0.15 + R() * 0.25) : 2 + R() * 6;
-      const cols = e.kind === 'wall' ? ['#24262e', '#2c2d32', '#4a4b55'] : e.kind === 'crash' ? ['#e85a0d', '#24262e', '#f1ece8', '#d9d0ca', '#ffffff'] : ['#d9d0ca', '#ccbcb2', '#f1ece8', '#4c3b34', '#2c2d32', '#ffffff'];
+      const cols = e.kind === 'wall' ? FX.wall : e.kind === 'crash' ? FX.crash : FX.land;
       const k = 3 + Math.floor(R() * 3), pts: number[] = [];
       for (let j = 0; j < k; j++) { const a = (j / k) * Math.PI * 2 + R() * 0.8, rr = 0.6 + R() * 0.6; pts.push(Math.cos(a) * rr, Math.sin(a) * rr); }
       this.debris.push({
@@ -239,7 +477,9 @@ export class Fx {
     this.push += (push - this.push) * (1 - Math.exp(-dt * 6)); this.brake += (brake - this.brake) * (1 - Math.exp(-dt * 6));
     const scrub = ground ? Math.min(1, Math.abs(r.slip) * 3) : 0;
     /** a wedge: its base across `a` (half-width w, square to the motion), its point at `b` */
+    const br = rd.paint ? (this.brush ??= new Brush2D()) : null;
     const wedge = (a: number[], b: number[], w: number, col: string) => {
+      if (br) { br.wedge(c, a, b, w, col); return; }
       const dx = b[0] - a[0], dy = b[1] - a[1], L = Math.hypot(dx, dy) || 1, nx = -dy / L * w, ny = dx / L * w;
       c.fillStyle = col; c.beginPath(); c.moveTo(a[0] + nx, a[1] + ny); c.lineTo(b[0], b[1]); c.lineTo(a[0] - nx, a[1] - ny); c.closePath(); c.fill();
     };
@@ -282,6 +522,7 @@ export class Fx {
       const s = (d.r * rd.H) / p[2]; if (s < 0.6) continue;
       const q = rd.project([d.x - (d.vx - cv[0]) * 0.05, d.y - (d.vy - cv[1]) * 0.05, d.z - (d.vz - cv[2]) * 0.05]);
       if (q && Math.hypot(q[0] - p[0], q[1] - p[1]) > s * 1.5) wedge(p, q, s * 0.75, d.col);
+      if (br) { br.dab(c, p, s, d.a, d.col); continue; }
       c.fillStyle = d.col; c.beginPath();
       const ca = Math.cos(d.a), sa = Math.sin(d.a);
       for (let j = 0; j < d.pts.length; j += 2) { const x = d.pts[j] * s, y = d.pts[j + 1] * s; c[j ? 'lineTo' : 'moveTo'](p[0] + x * ca - y * sa, p[1] + x * sa + y * ca); }

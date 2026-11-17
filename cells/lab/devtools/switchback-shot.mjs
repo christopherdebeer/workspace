@@ -11,7 +11,7 @@ await withWood(async (lab) => {
   const paths = [];
   for (const [i, q] of shots.entries()) {
     for (const [w, h, tag] of [[1672 / 2, 941 / 2, 'wide'], [390, 844, 'phone']]) {
-      const page = await lab.open(q, { width: Math.round(w), height: Math.round(h) });
+      const page = await lab.open(q.includes('paint=') ? q : q + '&paint=0', { width: Math.round(w), height: Math.round(h) });
       await page.waitForTimeout(2500);
       const p = await lab.state(page); console.log(q, tag, JSON.stringify(p.probe ? await page.evaluate(() => window.__switchback.probe()) : {}));
       paths.push(await lab.shot(page, `switchback-${i}-${tag}`));

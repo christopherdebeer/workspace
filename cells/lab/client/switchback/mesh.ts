@@ -9,9 +9,10 @@
  * that keeps its distance from the eye.
  */
 import { Course, JUMPS, hash } from './course';
+import { REGION, grassiness } from './regions';
 import { STEP, WALL, section, character, groundAt, notch } from './ground';
 
-export const M = { SNOW: 0, TRACK: 1, ROCK: 2, ORANGE: 3, BLACK: 4, WHITE: 5, MTN: 6, MTNSNOW: 7, UMBER: 8, SHADOW: 9, RUT: 10, NAVY: 11, FAR: 12, FARSNOW: 13, RIDGE: 14, FOREST: 15, VALLEY: 16, CUT_ORANGE: 17, CUT_BLACK: 18, CREAM: 19, GOUGE: 20 } as const;
+export const M = { SNOW: 0, TRACK: 1, ROCK: 2, ORANGE: 3, BLACK: 4, WHITE: 5, MTN: 6, MTNSNOW: 7, UMBER: 8, SHADOW: 9, RUT: 10, NAVY: 11, FAR: 12, FARSNOW: 13, RIDGE: 14, FOREST: 15, VALLEY: 16, CUT_ORANGE: 17, CUT_BLACK: 18, CREAM: 19, GOUGE: 20, FIELD: 21, JACKET: 22, DENIM: 23, TYRE: 24, GRASS: 25, MASS_FAR: 26, MASS_BODY: 27, MASS_SHADE: 28, MASS_SNOW: 29, MASS_SNOWSH: 30, MASS_RIDGE: 31, MASS_RIDGESH: 32, MASS_FLOOR: 33, MASS_RIVER: 34, PATCH_NEAR: 35, PATCH_FAR: 36, PATCH_FLOOR: 37 } as const;
 /** each material's four bands, lit to unlit (the reference's own colours) */
 export const PALETTE: string[][] = [
   ['#f1ece8', '#d9d0ca', '#a399a2', '#6f6c93'], // snow
@@ -20,23 +21,34 @@ export const PALETTE: string[][] = [
   ['#ff7a2e', '#e85a0d', '#e85a0d', '#c94a0a'], // orange (flat, nearly: it's the one colour that never goes dull)
   ['#2c2d32', '#1d1e23', '#16171b', '#101114'], // black
   ['#ffffff', '#f1ece8', '#d9d0ca', '#a399a2'], // white
-  ['#2457e3', '#1f4ed4', '#1546cd', '#123cb0'], // far range
-  ['#f4f1ee', '#e3dee0', '#8c9be0', '#4f6bd8'], // far snow: white where it's lit, blue in its shade
+  ['#4b72ee', '#3a63e6', '#1836b0', '#122a90'], // far range: lighter than the sky lit, deep ultramarine in shade
+  ['#f7efe2', '#dcdbef', '#4f6ee0', '#16309c'], // far snow: white where it's lit, deep ultramarine in its shade
   ['#6b5348', '#4c3b34', '#3d2f2a', '#2c221e'], // umber
   ['#a399a2', '#a399a2', '#a399a2', '#a399a2'], // shadow on snow
   ['#ccbcb2', '#ab9c9c', '#8f8394', '#6f6a86'], // ruts: the track's own colours a step down (worn grooves)
   ['#535e8a', '#2c3768', '#162140', '#101a36'], // navy
   // (the backdrop: one family of blues, lighter and flatter the further off; no charcoal in it)
-  ['#5b80f2', '#4c74f0', '#3d66ec', '#3560e6'], // the farthest range
-  ['#f2f3f8', '#e2e5f2', '#aab8f0', '#93a6ee'], // its snow
-  ['#1b49d0', '#1742c2', '#1238a8', '#10329a'], // the foothill ridge
-  ['#163291', '#142d84', '#12287a', '#11246e'], // forest along its foot
+  ['#6f90f3', '#5c80f0', '#2141c0', '#17309a'], // the farthest range
+  ['#f6eee4', '#d9dcf3', '#5a78e4', '#1a35a6'], // its snow
+  ['#8494e0', '#6178d8', '#2c46b8', '#1d3698'], // the hills: lavender-blue where lit, deep in shade
+  ['#1d2c7a', '#18256c', '#131e5c', '#0f184e'], // forest: dark navy
   ['#2f5be6', '#2f5be6', '#2a55e0', '#2a55e0'], // the valley floor
   // (the rider drawn as cut colour (style 'cut'): each mass one flat field, and one cut where it turns from the light)
   ['#ff6c12', '#ff6c12', '#ff6c12', '#1d1d22'], // orange, its cut charcoal: the shadow side merges into the dark mass
   ['#1d1d22', '#1d1d22', '#1d1d22', '#1d1d22'], // charcoal: the legs and the whole machine, one mass, no marks inside it
   ['#f6e7c6', '#f6e7c6', '#f6e7c6', '#c7ae86'], // cream accents (boots, fork, plates, helmet), a tan cut
   ['#857c92', '#7d7590', '#6f6a86', '#5d5a78'], // a gouge's shadowed wall (`ruts=cut`): the deep shade's violet, the road's ink
+  ['#d9c39c', '#b6a8cc', '#7f88d2', '#4f60c0'], // the valley's fields: ochre, lavender, blue, deep blue
+  // (the rider painted (after the rider study): its jacket orange from lit to deep shade, its jeans denim, the tyres and
+  // the machine's dark parts near-black with grey lights)
+  ['#ff9d52', '#f3712a', '#c7521b', '#8a3512'], // jacket
+  ['#7381b0', '#45527f', '#2a335c', '#171d3b'], // denim
+  ['#62646f', '#393a43', '#222329', '#131418'], // tyre and machine
+  ['#d8c47a', '#b3a45e', '#86804c', '#5c5c3c'], // grass, below the snowline (`mood=course`)
+  // (the composed backdrop's flat masses (`backdrop=set`): each one colour, all four bands alike)
+  ...['#7a97ee', '#3a63e6', '#1a3ab4', '#f4ece2', '#7f95e4', '#2b48c4', '#162f98', '#4a6ee6', '#dfe6f4'].map((c) => [c, c, c, c]),
+  // (the regional middle distance's masses (`backdrop=set`'s floor and shoulders): lit or in shade, two tones each)
+  ['#b3a45e', '#b3a45e', '#5c5c3c', '#5c5c3c'], ['#6178d8', '#6178d8', '#2c46b8', '#2c46b8'], ['#86804c', '#86804c', '#86804c', '#86804c'],
 ];
 
 /** the ruts lighter than the road instead (`ruts=light`): the worn line polished, catching the light like a flash */
@@ -58,9 +70,11 @@ export class Mesh {
   }
   quad(a: number[], b: number[], c: number[], d: number[], m: number, tone = this.tone(a, b, c)) { this.tri(a, b, c, m, tone); this.tri(a, c, d, m, tone); }
   /** a triangle whose material is chosen by its slope: rock where it's steeper than `steep`, else `flat` */
-  slope(a: number[], b: number[], c: number[], flat: number, steep = M.ROCK, k = 0.72) {
+  slope(a: number[], b: number[], c: number[], flat: number, steep: number = M.ROCK, k = 0.72) {
     const ux = b[0] - a[0], uy = b[1] - a[1], uz = b[2] - a[2], vx = c[0] - a[0], vy = c[1] - a[1], vz = c[2] - a[2];
     const nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
+    // (below the snowline (`mood=course`), the snow's flats are grass, patchily round the line)
+    if (flat === M.SNOW && REGION.on) { const g = grassiness((a[0] + b[0] + c[0]) / 3, (a[1] + b[1] + c[1]) / 3, (a[2] + b[2] + c[2]) / 3); if (g > 0 && hash(Math.round(a[0] * 3), Math.round(a[2] * 3), 73) < g) flat = M.GRASS; if (steep === M.ROCK && g > 0.4 && hash(Math.round(a[0] * 2), Math.round(a[2] * 2), 75) < g * 0.6) steep = M.UMBER; }
     this.tri(a, b, c, Math.abs(ny) / Math.hypot(nx, ny, nz) < k ? steep : flat);
   }
   /** a box from its centre and half-sizes in a frame (origin o, axes x, y, z) */
@@ -205,24 +219,40 @@ function cutPoint(c: Course, i: number, k: number, cut = true) {
 /** the waterfalls near the rider, built each frame so their water moves: where a gorge has one, at its middle, from a lip
  * partway up the wall's gully the water is thrown clear of the rock and falls in an arc to the gorge's floor, widening as
  * it goes, bands of it sliding down; spray tumbling at its foot */
-export function buildFalls(c: Course, s0: number, s1: number, t: number) {
-  const m = new Mesh(true, true);
+/** the waterfalls between stations s0 and s1: each its station, its fall's time T (s), the point on its sheet at a time
+ * tau into the fall and a place across it (side, -1 to 1; `out` metres further out from the wall), and its foot */
+export function fallPaths(c: Course, s0: number, s1: number) {
+  const out: { i: number; T: number; P: (tau: number, side: number, outM?: number) => number[]; footY: number; fu: number; lipS: number; feed: number[][]; heading: number }[] = [];
   for (let i = Math.max(1, Math.floor(s0)); i < s1; i++) {
     const st = c.at(i), nx = c.at(i + 1);
     if (st.feature !== 'gap' || !st.fall || (st.gapT ?? 1) > 0.5 || (nx.feature === 'gap' && (nx.gapT ?? 1) <= 0.5)) continue;
     // (the lip at the gorge's rim on the wall side, where the stream comes off the mountain's face; below it the gorge has
     // been cut away, so the water falls clear)
-    const lip = cutPoint(c, i, WALL.length - 3, false), foot = cutPoint(c, i, WALL.length), drop = Math.max(4, lip.y - foot.y);
-    const T = Math.sqrt(drop / 4.9), N = 14, P = (tau: number, side: number) => {
-      const a = (2.2 + tau * 1.1) * side, u = lip.u + 0.9 + 3.4 * tau, p = c.point(lip.s + a, u);
-      return [p.x, lip.y + 0.4 - 4.9 * tau * tau, p.z];
+    // (the lip on the wall's face, in the runnel there (the wall above a fall isn't cut deep: ground.ts notch), the water
+    // thrown clear of it in an arc into the gorge, widening as it goes; fed by the runnel from the wall's top)
+    const lip = cutPoint(c, i, WALL.length - 3, true), foot = cutPoint(c, i, WALL.length), drop = Math.max(4, lip.y - foot.y);
+    const T = Math.sqrt(drop / 4.9), P = (tau: number, side: number, outM = 0) => {
+      const a = (1.6 + tau * 1.1) * side, u = lip.u + 0.6 + 3.4 * tau + outM, p = c.point(lip.s + a, u);
+      return [p.x, lip.y + 0.5 - 4.9 * tau * tau, p.z];
     };
+    const feed: number[][] = [];
+    // (only the last two sections above the lip: run from the wall's top, ~100 m back and up, it showed as a white line laid
+    // over rock that should hide it)
+    for (let k = WALL.length - 5; k <= WALL.length - 3; k++) { const q = cutPoint(c, i, k, true), p = c.point(q.s, q.u); feed.push([p.x, q.y + 0.15, p.z]); }
+    out.push({ i, T, P, footY: foot.y, fu: lip.u + 0.6 + 3.4 * T, lipS: lip.s, feed, heading: c.at(i).heading });
+  }
+  return out;
+}
+export function buildFalls(c: Course, s0: number, s1: number, t: number) {
+  const m = new Mesh(true, true);
+  for (const { i, T, P, footY, fu: fu0, lipS } of fallPaths(c, s0, s1)) {
+    const N = 14, foot = { y: footY }, lip = { s: lipS };
     for (let n = 0; n < N; n++) {
       const t0 = (n / N) * T, t1 = ((n + 1) / N) * T, ph = (((t0 + t1) / 2) * 2.4 - t * 1.7) % 1, band = (ph + 1) % 1 < 0.28;
       m.quad(P(t0, -1), P(t0, 1), P(t1, 1), P(t1, -1), band ? M.SNOW : M.WHITE);
     }
     // (spray: a few white shards tumbling where it lands)
-    const fu = lip.u + 0.9 + 3.4 * T;
+    const fu = fu0;
     for (let j = 0; j < 9; j++) {
       const a = t * (2 + hash(i, j) * 3) + j, r = 1.2 + 2.2 * hash(i, j, 2), q = c.point(lip.s + Math.cos(a + j) * r, fu + Math.sin(a * 0.7 + j) * r * 0.6);
       const y = foot.y + 0.6 + ((t * 1.3 + hash(i, j, 3)) % 1) * 3.5, sz = 0.5 + hash(i, j, 4) * 0.6;
@@ -275,7 +305,14 @@ function chevrons(c: Course, m: Mesh, s: number, ramp: boolean) {
 /** the flags' banners between stations s0 and s1, at time t: each an orange banner hung from the top of its pole out
  * over the shoulder, flying: waves running out along it, bigger toward its free end, which droops and trails back a
  * little; its facets catch the light and lose it as they turn, so it flickers between orange's bands as it moves */
-export function buildFlags(c: Course, s0: number, s1: number, t: number) {
+/** the flags between stations s0 and s1 at time t: each its pole's foot, and the point on its banner at a (0 at the pole,
+ * 1 its free end) and v (0 its top edge, 1 its bottom) */
+export function flagPaths(c: Course, s0: number, s1: number, t: number) {
+  const out: { i: number; base: number[]; P: (a: number, v: number) => number[] }[] = [];
+  buildFlags(c, s0, s1, t, (i, base, P) => out.push({ i, base, P }));
+  return out;
+}
+export function buildFlags(c: Course, s0: number, s1: number, t: number, each?: (i: number, base: number[], P: (a: number, v: number) => number[]) => void) {
   const m = new Mesh(true), W = 2.8, cols = 6, rows = 2;
   for (let i = Math.max(0, Math.floor(s0)); i < s1; i++) {
     const st = c.at(i); if (!st.flag) continue;
@@ -291,6 +328,7 @@ export function buildFlags(c: Course, s0: number, s1: number, t: number) {
       const across = (0.08 + 0.6 * a) * wave;
       return [base[0] + ox * out + nx * across, base[1] + up, base[2] + oz * out + nz * across];
     };
+    if (each) { each(i, base, P); continue; }
     for (let u = 0; u < cols; u++) for (let v = 0; v < rows; v++) {
       const a0 = u / cols, a1 = (u + 1) / cols, v0 = v / rows, v1 = (v + 1) / rows;
       m.tri(P(a0, v0), P(a1, v0), P(a1, v1), M.ORANGE, 0.5); m.tri(P(a0, v0), P(a1, v1), P(a0, v1), M.ORANGE, 0.5);
@@ -317,7 +355,7 @@ function dress(c: Course, m: Mesh, i: number, sec: { u: number; y: number; ds: n
   if (st.flag) m.box(at(-half - 0.9), X, Y, Z, [0, 3, 0], [0.06, 3, 0.06], M.BLACK);
   // (pines down the drop, a few up the wall's top; rocks bedded in the snow)
   const r = hash(c.seed, i, 101);
-  if (i % 2 === 0 && r < 0.26) {
+  if (i % 2 === 0 && r < 0.26 + 0.24 * grassiness(c.point(i, 0).x, st.y, c.point(i, 0).z)) {
     const du = 6 + hash(c.seed, i, 102) * 70, u = half + du, y = groundAt(sec, u);
     const p = c.point(i, u);
     m.pine(p.x, y - 0.3, p.z, 6 + hash(c.seed, i, 103) * 9 * (du > 30 ? 1.4 : 1), c.seed * 9973 + i);
@@ -368,6 +406,13 @@ function skyline(m: Mesh, seed: number, k: number, spec: { R: number; floor: num
       h = Math.max(h, v);
     }
     // (an arc rises from the floor at one end and falls back to it at the other)
+    // (a snowy range is a massif, not a row of cones: sub-summits and notches all along its crest, sharp (folded noise),
+    // smaller ones on the bigger)
+    if (snowline < 1e8) {
+      let v = 0, amp = 1, fr = (R / 260);
+      for (let o = 0; o < 4; o++) { v += amp * (1 - Math.abs(Math.sin(a * fr + k * 7.3 + o * 1.9) * Math.cos(a * fr * 0.61 + o * 2.3 + k))); amp *= 0.5; fr *= 2.1; }
+      h += (h - lo * 0.4) * 0.22 * (v - 0.9) + lo * 0.12 * v;
+    }
     if (arc) { const e = Math.min(a - from, to - a) / ((to - from) * 0.18); h *= Math.max(0, Math.min(1, e)); }
     return floor + h;
   };
@@ -397,14 +442,52 @@ function skyline(m: Mesh, seed: number, k: number, spec: { R: number; floor: num
     m.quad(a.S, b.S, b.Fd, a.Fd, body, 0.5);
     m.quad(a.Fd, b.Fd, b.B, a.B, body, 0.5);
   }
-  return { rows, crest, as };
+  return { rows, crest, as, peaks };
 }
 /** the skylines: the farthest range, then a nearer one in front of it, both all round; snow on both */
+// (the ranges, farthest first, in layers that recede: the snow massif, a nearer snowy range, and blue hills in front;
+// each further one hazier, toward the sky's horizon (`haze`))
+const RANGES = [
+  { k: 1, R: 3700, floor: -290, lo: 520, hi: 1180, peaks: 22, body: M.FAR, snow: M.FARSNOW, snowline: -260 + 470, fold: 0.03, haze: 0.16, forest: false },
+  { k: 2, R: 3100, floor: -280, lo: 300, hi: 760, peaks: 16, body: M.MTN, snow: M.MTNSNOW, snowline: -260 + 520, fold: 0.04, haze: 0.09, forest: false },
+  { k: 3, R: 2550, floor: -270, lo: 200, hi: 540, peaks: 11, body: M.RIDGE, snow: M.RIDGE, snowline: 1e9, fold: 0.05, haze: 0.05, forest: false },
+];
+/** the ranges and, nearer, two arcs of forested hills in the middle distance (where they stand, by the seed), farthest
+ * first; full rings for the ranges, arcs for the hills, so the valley opens between them */
+function rangeSpecs(seed: number) {
+  // (four arcs, each taller and darker the nearer, overlapping one another so they stack up the middle distance)
+  const arcs = [0, 1, 2, 3].map((j) => {
+    const mid = hash(seed, j, 70) * Math.PI * 2 + j * Math.PI * 0.5, span = 1.1 + 0.8 * hash(seed, j, 71), R = 1550 + 750 * hash(seed, j, 72);
+    return { k: 4 + j, R, floor: -265, lo: 200, hi: 420 + 280 * hash(seed, j, 73), peaks: 4, body: M.RIDGE, snow: M.RIDGE, snowline: 1e9, fold: 0.06, haze: 0.22 + 0.12 * (R - 1550) / 750, forest: true, from: mid - span / 2, to: mid + span / 2 };
+  });
+  return [...RANGES.map((r) => ({ ...r, from: 0, to: Math.PI * 2 })), ...arcs.sort((p, q) => q.R - p.R)];
+}
 export function buildRanges(seed: number) {
-  const m = new Mesh(), F = -260;
-  skyline(m, seed, 1, { R: 3400, floor: F - 20, lo: 420, hi: 1050, peaks: 15, body: M.FAR, snow: M.FARSNOW, snowline: F + 560, fold: 0.03 });
-  skyline(m, seed, 2, { R: 2500, floor: F - 10, lo: 230, hi: 620, peaks: 12, body: M.MTN, snow: M.MTNSNOW, snowline: F + 430, fold: 0.04 });
+  const m = new Mesh();
+  for (const r of rangeSpecs(seed)) skyline(m, seed, r.k, r.from === 0 && r.to === Math.PI * 2 ? { ...r, from: undefined, to: undefined } : r);
   return new Float32Array(m.v);
+}
+/** the skylines' profiles, farthest first: each its radius, floor, snow line, materials, its crest's height round the eye
+ * and its summits (angle, height, half-widths each side) — for painting a range by its ridges rather than its faces */
+export function rangeProfiles(seed: number) {
+  return rangeSpecs(seed).map((r) => { const { crest, peaks } = skyline(new Mesh(), seed, r.k, r.from === 0 && r.to === Math.PI * 2 ? { ...r, from: undefined, to: undefined } : r); return { ...r, crest, peaks }; });
+}
+/** the foothills in the valley: two arcs, each a long continuous ridge, forested along its foot */
+export function valleyRidges(seed: number) {
+  return [0, 1].map((k) => {
+    const mid = hash(seed, k, 50) * Math.PI * 2 + k * Math.PI, span = 1.0 + 0.6 * hash(seed, k, 51), R = 1150 + 300 * hash(seed, k, 52);
+    return { k: 10 + k, R, floor: -260, lo: 90, hi: 260 + 60 * hash(seed, k, 53), peaks: 3, body: M.RIDGE, snow: M.RIDGE, snowline: 1e9, from: mid - span / 2, to: mid + span / 2, fold: 0.07, haze: 0.28, forest: true };
+  });
+}
+export function foothillProfiles(seed: number) {
+  return valleyRidges(seed).map((r) => { const { crest, peaks } = skyline(new Mesh(), seed, r.k, r); return { ...r, crest, peaks }; });
+}
+/** the river's line across the valley's floor */
+export function riverLine(seed: number) {
+  const rv: number[][] = [];
+  // (across the whole floor, so it leads the eye out to the ranges' feet)
+  for (let k = 0; k <= 64; k++) { const z = -3400 + k * 106, x = -520 + Math.sin(k * 0.34 + seed) * 300 + Math.sin(k * 1.1) * 70; rv.push([x, -259, z]); }
+  return rv;
 }
 
 /** the valley: its floor (flat, one blue), the river winding over it (pale), and a foothill ridge or two in the middle
@@ -415,9 +498,8 @@ export function buildValley(seed: number) {
   // (the floor: a flat disc out past the skylines' feet)
   for (let i = 0; i < 24; i++) { const a0 = (i / 24) * Math.PI * 2, a1 = ((i + 1) / 24) * Math.PI * 2; m.tri([0, F, 0], [Math.sin(a0) * 3500, F, Math.cos(a0) * 3500], [Math.sin(a1) * 3500, F, Math.cos(a1) * 3500], M.VALLEY, 0.5); }
   // (the foothills: two arcs, each a long continuous ridge)
-  for (let k = 0; k < 2; k++) {
-    const mid = hash(seed, k, 50) * Math.PI * 2 + k * Math.PI, span = 1.0 + 0.6 * hash(seed, k, 51), R = 1150 + 300 * hash(seed, k, 52);
-    const { rows } = skyline(m, seed, 10 + k, { R, floor: F, lo: 90, hi: 260 + 60 * hash(seed, k, 53), peaks: 3, body: M.RIDGE, snow: M.RIDGE, snowline: 1e9, from: mid - span / 2, to: mid + span / 2, fold: 0.07 });
+  for (const [k, spec] of valleyRidges(seed).entries()) {
+    const { rows } = skyline(m, seed, spec.k, spec);
     // (its forest: a band along the foot, in front of the face, its top edge ragged)
     for (let i = 0; i < rows.length - 1; i++) {
       const a = rows[i], b = rows[i + 1], h = (r: { C: number[] }) => Math.max(0, r.C[1] - F);
@@ -432,8 +514,7 @@ export function buildValley(seed: number) {
     }
   }
   // (the river: a ribbon winding across the floor, pale)
-  const rv: number[][] = [];
-  for (let k = 0; k <= 40; k++) { const z = -2200 + k * 110, x = -520 + Math.sin(k * 0.55 + seed) * 160 + Math.sin(k * 1.7) * 50; rv.push([x, F + 1, z]); }
+  const rv = riverLine(seed);
   for (let k = 0; k < rv.length - 1; k++) {
     const p = rv[k], q = rv[k + 1], dx = q[0] - p[0], dz = q[2] - p[2], L = Math.hypot(dx, dz), w = 16 + 8 * hash(seed, k, 7);
     const nx = (-dz / L) * w, nz = (dx / L) * w;
@@ -467,7 +548,16 @@ export interface Pose {
    * whole figure one solid charcoal (for judging its silhouette); 'facets' (or unset): every face its own band */
   style?: 'facets' | 'cut' | 'sil';
 }
-export function buildRider(r: Pose, t: number) {
+/** a part of the rider, as it's built, for painting it by its parts (not its facets): a limb (from a, radius ra, to b,
+ * rb, its section stretched sx toward x), a wheel (centre, axle, outer and inner radius, its spin), the head (centre,
+ * frame, radius), or a box (centre, half-axes); each with its material and its role in the figure */
+export type RiderPart =
+  | { k: 'limb'; a: number[]; b: number[]; ra: number; rb: number; sx: number; x: number[]; mat: number; role: string }
+  | { k: 'wheel'; c: number[]; ax: number[]; ro: number; ri: number; spin: number; mat: number; role: string }
+  | { k: 'head'; c: number[]; x: number[]; y: number[]; z: number[]; r: number; mat: number; role: string }
+  | { k: 'box'; c: number[]; X: number[]; Y: number[]; Z: number[]; mat: number; role: string };
+export function buildRider(r: Pose, t: number, parts?: RiderPart[]) {
+  let role = 'bike';
   const sil = r.style === 'sil', cut = r.style === 'cut' || sil, m = new Mesh(true, cut);
   // (the materials. As facets: the kit's own. Cut: three masses, the jersey and bodywork orange, the legs and the whole
   // machine one charcoal, a few cream accents where it touches and steers (boots, fork) and its plates and helmet)
@@ -501,6 +591,7 @@ export function buildRider(r: Pose, t: number) {
     const p = (i: number, j: number, k: number) => W(T([c[0] + i * h[0], c[1] + cp * j * h[1] - sp * k * h[2], c[2] + sp * j * h[1] + cp * k * h[2]]));
     const P = [p(-1, -1, -1), p(1, -1, -1), p(1, 1, -1), p(-1, 1, -1), p(-1, -1, 1), p(1, -1, 1), p(1, 1, 1), p(-1, 1, 1)];
     for (const [a, b, cc, d] of [[0, 1, 2, 3], [5, 4, 7, 6], [4, 0, 3, 7], [1, 5, 6, 2], [3, 2, 6, 7], [4, 5, 1, 0]]) m.quad(P[a], P[b], P[cc], P[d], mat);
+    if (parts) { const C = p(0, 0, 0); parts.push({ k: 'box', c: C, X: sub(p(1, 0, 0), C), Y: sub(p(0, 1, 0), C), Z: sub(p(0, 0, 1), C), mat, role }); }
   };
   /** a box in its own frame (axes X, Y, Z, local), centre c, half-sizes h */
   const boxF = (c: number[], X: number[], Y: number[], Z: number[], h: number[], mat: number) => {
@@ -512,6 +603,7 @@ export function buildRider(r: Pose, t: number) {
   const limb = (a: number[], b: number[], ra: number, rb: number, mat: number, n = 6, sx = 1, side = [1, 0, 0]) => {
     const z = nrm(sub(b, a)); let x = sub(side, z.map((v) => v * (side[0] * z[0] + side[1] * z[1] + side[2] * z[2])));
     if (len(x) < 1e-3) x = Math.abs(z[1]) < 0.9 ? nrm(crs([0, 1, 0], z)) : [1, 0, 0]; x = nrm(x);
+    if (parts && role !== 'skip') { const A = W(a); parts.push({ k: 'limb', a: A, b: W(b), ra: ra * K, rb: rb * K, sx, x: nrm(sub(W(add(a, x)), A)), mat, role }); }
     const y = crs(z, x);
     const ring = (c: number[], rr: number) => Array.from({ length: n }, (_, k) => { const an = (k / n) * Math.PI * 2 + Math.PI / n; return W(add(add(c, x, Math.cos(an) * rr * sx), y, Math.sin(an) * rr)); });
     const A = ring(a, ra), Bq = ring(b, rb), ca = W(a), cb = W(b);
@@ -533,15 +625,18 @@ export function buildRider(r: Pose, t: number) {
   /** a wheel: a knobbly tyre (a ring, its tread stepped), the rim inside, open between, the hub. Cut: the tyre alone, a
    * thick interrupted ring, open through the middle */
   const wheel = (c: number[], ro: number, ri0: number, w: number, T: (p: number[]) => number[]) => {
+    if (parts) { const C = W(T(c)); parts.push({ k: 'wheel', c: C, ax: nrm(sub(W(T([c[0] + 1, c[1], c[2]])), C)), ro: ro * K, ri: ri0 * K, spin, mat: BK, role: 'wheel' }); }
+    const roleWas = role; role = 'skip';
     const n = 16, ri = cut ? ri0 * 0.86 : ri0, at = (k: number, rr: number, x: number) => { const a = spin + (k / n) * Math.PI * 2; return W(T([c[0] + x, c[1] + Math.sin(a) * rr, c[2] + Math.cos(a) * rr])); };
     for (let k = 0; k < n; k++) {
       const r0 = ro * (k % 2 ? 0.95 : 1);
       m.quad(at(k, r0, -w), at(k + 1, r0, -w), at(k + 1, r0, w), at(k, r0, w), BK);
       for (const x of [-w, w]) { m.quad(at(k, r0, x), at(k + 1, r0, x), at(k + 1, ri, x), at(k, ri, x), BK); if (!cut) m.quad(at(k, ri, x * 0.7), at(k + 1, ri, x * 0.7), at(k + 1, ri * 0.86, x * 0.7), at(k, ri * 0.86, x * 0.7), M.ROCK); }
     }
-    if (cut) return;
+    if (cut) { role = roleWas; return; }
     for (let k = 0; k < 6; k++) { const a = spin * 0.5 + (k / 6) * Math.PI * 2; limb(T(c), T([c[0], c[1] + Math.sin(a) * ri * 0.86, c[2] + Math.cos(a) * ri * 0.86]), 0.006, 0.006, M.ROCK, 3); }
     limb(T([c[0] - w * 1.3, c[1], c[2]]), T([c[0] + w * 1.3, c[1], c[2]]), 0.045, 0.045, M.WHITE, 6);
+    role = roleWas;
   };
   // (the front: wheel, fork legs and stanchions to the clamps, the clamps, bars and grips, number plate, fender. Cut: the
   // fork one cream slash)
@@ -610,11 +705,11 @@ export function buildRider(r: Pose, t: number) {
       -0.62 * feetOff - 1.08 * sm + 0.1 * cs + 0.78 * heel - 0.72 * ns - 0.62 * gk];
     const ankle = add(B([side * 0.2, fr(0.8), -0.08]), Bd(kick)), hip = add(add(hipC, rgP, side * 0.12), upP, -0.03);
     const knee = ik(hip, ankle, 0.46, 0.46, Bd([side * (0.35 + 0.35 * kk * side) + 1.3 * cs - 1.2 * ns, 0.15 - feetOff * 0.6 - sm * 0.7 + 0.5 * cs + 0.8 * heel + 0.6 * ns, 1 - feetOff * 1.6 - sm * 1.9 - 0.4 * cs + 0.6 * heel - 1.6 * ns - gk * 1.4]));
-    limb(add(B([side * 0.2, fr(0.7), -0.18]), Bd(kick)), add(B([side * 0.2, fr(0.7), 0.08]), Bd(kick)), 0.06, 0.05, WH, 5); // boot
+    role = 'boot'; limb(add(B([side * 0.2, fr(0.7), -0.18]), Bd(kick)), add(B([side * 0.2, fr(0.7), 0.08]), Bd(kick)), 0.06, 0.05, WH, 5); // boot
     limb(ankle, L(ankle, knee, 0.45), 0.055, 0.06, WH, 5); // boot's leg
-    limb(L(ankle, knee, 0.4), knee, 0.058, 0.07, BK, 6); // shin
-    limb(L(knee, ankle, 0.35), add(knee, [0, 0.04, 0.03]), 0.05, 0.065, cut ? BK : OR, 5); // knee guard
-    limb(knee, hip, 0.075, 0.095, BK, 6); // thigh
+    role = 'leg'; limb(L(ankle, knee, 0.4), knee, 0.058, 0.07, BK, 6); // shin
+    role = 'skip'; limb(L(knee, ankle, 0.35), add(knee, [0, 0.04, 0.03]), 0.05, 0.065, cut ? BK : OR, 5); // knee guard
+    role = 'leg'; limb(knee, hip, 0.075, 0.095, BK, 6); // thigh
     // (arms: the shoulder to the grip; on the side the effort's on, the elbow up and out (a broad opening), on the other
     // down and in (closing); the sleeve full at the shoulder, narrowing to the elbow, the forearm to the wrist)
     const shoulder = add(add(c3, rgC, side * 0.2), upC, -0.02);
@@ -622,9 +717,12 @@ export function buildRider(r: Pose, t: number) {
     if (side > 0 && grab) grip = L(grip, B([0.1, fr(1.12), -0.58]), Math.min(1, grab)); // (the seat grab: the right hand back on the seat)
     // (compressed (a landing), the elbows go out and back, taking it, not up)
     const elbow = ik(shoulder, grip, 0.3, 0.3, [side * (1 + 0.6 * e * side) * (1 + sqz * 0.5), 0.55 + 0.6 * e * side - sqz * 0.7, -0.25 - sqz * 0.3]);
-    limb(shoulder, elbow, cut ? 0.085 : 0.07, cut ? 0.048 : 0.055, OR, 6); limb(elbow, L(elbow, grip, 0.8), cut ? 0.058 : 0.05, cut ? 0.04 : 0.045, OR, 6);
-    limb(L(elbow, grip, 0.75), grip, 0.045, 0.045, BK, 5); // glove
+    role = 'arm'; limb(shoulder, elbow, cut ? 0.085 : 0.07, cut ? 0.048 : 0.055, OR, 6); limb(elbow, L(elbow, grip, 0.8), cut ? 0.058 : 0.05, cut ? 0.04 : 0.045, OR, 6);
+    role = 'glove'; limb(L(elbow, grip, 0.75), grip, 0.045, 0.045, BK, 5); // glove
   }
+  // (the jersey, for painting, as one tapered body from the pelvis to the shoulders, the back broad)
+  role = 'torso'; if (parts) { const A = W(hipC); parts.push({ k: 'limb', a: A, b: W(c3), ra: 0.15 * K, rb: 0.2 * K, sx: 1.35, x: nrm(sub(W(add(hipC, rgC)), A)), mat: OR, role }); }
+  role = 'skip';
   if (cut) {
     // (the jersey: one shape, lofted through the pelvis, the waist (narrowest), the chest, the shoulders (broadest,
     // rounded over the top); its two parts each with their own lean and twist, so it bends between chest and pelvis)
@@ -647,6 +745,7 @@ export function buildRider(r: Pose, t: number) {
   let hx = yaw([1, 0, 0], look), hy = [0, 1, 0], hz = yaw(zf, look);
   hz = rot(hz, hx, nod); hy = rot(hy, hx, nod); hx = rot(hx, hz, hRoll); hy = rot(hy, hz, hRoll);
   const hc = add(add(c3, nrm(add(upC, [0, 0.6, 0])), 0.17), [0, 0.02, 0.12]);
+  if (parts) { const O = W([0, 0, 0]), dir = (v: number[]) => nrm(sub(W(v), O)); parts.push({ k: 'head', c: W(hc), x: dir(hx), y: dir(hy), z: dir(hz), r: 0.16 * K, mat: WH, role: 'head' }); }
   if (cut) limb(add(c3, upC, 0.02), add(hc, hy, -0.08), 0.06, 0.055, BK, 6); // the neck: one dark cut between helmet and jersey
   // (the helmet: a faceted ball, a little long front to back. Cut: cream, its one dark cut the goggles and strap as one
   // band, an orange stripe over the top)
