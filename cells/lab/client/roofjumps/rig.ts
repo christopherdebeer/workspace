@@ -8,7 +8,9 @@
  *
  * The poses are half of it. The other half is reach: where the body says a hand wants to be (a hold: an edge, a sill,
  * a pipe, the wall, the ground), the arm is taken there, shoulder to elbow to hand, whatever the pose had it doing; and
- * let go of as smoothly. So the figure is posed like a drawing and holds on like a mannequin.
+ * let go of as smoothly. The feet the same: a foot that's down is where it was put (on the roof, a lip, a rail, a sill,
+ * the wall) and stays there while the body goes over it. So the figure is posed like a drawing and holds on like a
+ * mannequin.
  *
  * Local axes: +z forward, +y up. A limb hangs down its own -y; a positive swing carries it forward.
  *
@@ -65,6 +67,9 @@ export class Rig {
   private aside = 0;
   /** each hand's reach: how much it has hold of the arm (0..1), and where to */
   private hands = { L: { w: 0, p: [0, 0, 0] as V3 }, R: { w: 0, p: [0, 0, 0] as V3 } };
+  /** and each foot's: planted where it was put, the body going over it; and which way what it's on faces */
+  private soles = { L: { w: 0, p: [0, 0, 0] as V3 }, R: { w: 0, p: [0, 0, 0] as V3 } };
+  private on: V3 = [0, 1, 0];
 
   /** The pose a body's move asks for. */
   target(r: Body): Pose {
@@ -210,6 +215,12 @@ export class Rig {
       if (to) { const e = h.w > 0.05 ? 1 - Math.exp(-32 * dt) : 1; for (let i = 0; i < 3; i++) h.p[i] += (to[i] - h.p[i]) * e; }
       h.w += ((to ? 1 : 0) - h.w) * (1 - Math.exp(-(to ? 22 : 14) * dt));
     }
+    // (the feet: a footfall is where it is at once, and is left quickly)
+    for (const [f, to] of [[this.soles.L, r.reach.fl], [this.soles.R, r.reach.fr]] as const) {
+      if (to) f.p = [to[0], to[1], to[2]];
+      f.w += ((to ? 1 : 0) - f.w) * (1 - Math.exp(-(to ? 40 : 26) * dt));
+    }
+    if (r.reach.fl || r.reach.fr) this.on = r.reach.fn ?? [0, 1, 0];
     // (the hips: where the lower foot reaches the ground; in the air, where they'd be standing, so the feet come up to them)
     const p = this.pose, leg = (hip: number, knee: number) => THIGH * Math.cos(hip) * Math.cos(p.splay) + SHIN * Math.cos(hip - knee) * Math.cos(p.splay);
     // (but a run has its moment off the ground, both legs out: the hips don't drop into the split, they carry over it)
@@ -255,11 +266,35 @@ export class Rig {
       add('foreArm' + n, F, 0, 0.075, 0.075, -FORE, 0.055, 0.06);
       const hip = L ? p.hipL : p.hipR, knee = L ? p.kneeL : p.kneeR;
       const T = sw(rotZ(translate(P, side * 0.095, -HIP, 0), side * p.splay), hip);
-      add('thigh' + n, T, 0, 0.135, 0.14, -THIGH, 0.1, 0.105);
-      const K = sw(translate(T, 0, -THIGH, 0), -knee);
+      let Th = T, K = sw(translate(T, 0, -THIGH, 0), -knee), planted: V3 | null = null;
+      const sole = L ? this.soles.L : this.soles.R;
+      if (sole.w > 0.01) {
+        // (planted: the ankle taken from where the pose had it toward its footfall (a sole's depth off what it's on),
+        // the leg solved to there, the knee forward)
+        const s: V3 = [T[12], T[13], T[14]], was = point(K, 0, -SHIN, 0), fall: V3 = [sole.p[0] + this.on[0] * SOLE, sole.p[1] + this.on[1] * SOLE, sole.p[2] + this.on[2] * SOLE];
+        let to: V3 = [was[0] + (fall[0] - was[0]) * sole.w, was[1] + (fall[1] - was[1]) * sole.w, was[2] + (fall[2] - was[2]) * sole.w];
+        let dir = sub(to, s), d = Math.hypot(dir[0], dir[1], dir[2]);
+        const most = THIGH + SHIN - 0.005;
+        if (d > most) { to = [s[0] + (dir[0] * most) / d, s[1] + (dir[1] * most) / d, s[2] + (dir[2] * most) / d]; d = most; }
+        dir = unit(dir);
+        const a = (THIGH * THIGH - SHIN * SHIN + d * d) / (2 * Math.max(d, 1e-3)), h = Math.sqrt(Math.max(0, THIGH * THIGH - a * a));
+        const pole: V3 = [P[8] + P[4] * 0.3, P[9] + P[5] * 0.3, P[10] + P[6] * 0.3], k = pole[0] * dir[0] + pole[1] * dir[1] + pole[2] * dir[2], out2 = unit([pole[0] - dir[0] * k, pole[1] - dir[1] * k, pole[2] - dir[2] * k]);
+        const kneeAt: V3 = [s[0] + dir[0] * a + out2[0] * h, s[1] + dir[1] * a + out2[1] * h, s[2] + dir[2] * a + out2[2] * h], fwd: V3 = [P[8], P[9], P[10]];
+        Th = aim(s, kneeAt, fwd); K = aim(kneeAt, to, fwd); planted = to;
+      }
+      add('thigh' + n, Th, 0, 0.135, 0.14, -THIGH, 0.1, 0.105);
       add('shin' + n, K, 0, 0.095, 0.1, -SHIN, 0.07, 0.075);
       // (the foot: flat to the ground when it's on it, the toe pointed when it isn't)
-      add('foot' + n, sw(translate(K, 0, -SHIN, 0), -(hip - knee) * (0.35 + 0.5 * this.stood) - 0.5 * (1 - this.stood)), -SOLE, 0.085, 0.25, 0, 0.08, 0.2, 0.06);
+      let Ft = sw(translate(K, 0, -SHIN, 0), -(hip - knee) * (0.35 + 0.5 * this.stood) - 0.5 * (1 - this.stood));
+      if (planted) {
+        // (and the foot flat to what it's on: its sole toward it, its toe the way the body faces, as near as that allows)
+        const y: V3 = this.on, f0: V3 = [P[8], P[9], P[10]], kf = f0[0] * y[0] + f0[1] * y[1] + f0[2] * y[2];
+        let z = unit([f0[0] - y[0] * kf, f0[1] - y[1] * kf, f0[2] - y[2] * kf]);
+        if (Math.abs(kf) > 0.95) z = unit(cross([P[0], P[1], P[2]], y));
+        const x = cross(y, z); Ft = ident();
+        Ft[0] = x[0]; Ft[1] = x[1]; Ft[2] = x[2]; Ft[4] = y[0]; Ft[5] = y[1]; Ft[6] = y[2]; Ft[8] = z[0]; Ft[9] = z[1]; Ft[10] = z[2]; Ft[12] = planted[0]; Ft[13] = planted[1]; Ft[14] = planted[2];
+      }
+      add('foot' + n, Ft, -SOLE, 0.085, 0.25, 0, 0.08, 0.2, 0.06);
     }
     return out;
   }

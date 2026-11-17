@@ -46,23 +46,26 @@ one question, `heightAt(x, z)`. A renderer gets the boxes.
 
 ## The holds (`city.ts`)
 
-Made with the boxes, and tagged, not drawn: the places a hand or a foot can take. Each is a line
-with the way it faces:
+Made with the boxes: the places a hand or a foot can take. They are tags, not things: nothing is
+added to the geometry, but they are drawn on it (within ten metres of the figure; the `holds`
+dials), so what is there to be used can be seen. Each is a line with the way it faces, and says
+what it is for, by hand and by foot:
 
-| hold | where | about how many a chunk |
-|---|---|---|
-| edge | every box's four top edges | 600 |
-| sill | on three in four of a building's faces, one at each storey, set in from the corners | 350 |
-| pipe | on two in five faces, ground to roof | 75 |
-| rail | down the middle of anything a metre wide: a rim, a wall across an alley | 80 |
+| hold | where | by hand | by foot | about how many a chunk |
+|---|---|---|---|---|
+| edge (blue) | every box's four top edges | grab | push off, land on | 600 |
+| sill (green) | on three in four of a building's faces, one at each storey, set in from the corners | grab | toe | 350 |
+| pipe (orange) | on two in five faces, ground to roof | grip | clamp | 75 |
+| rail (white) | down the middle of anything a metre wide: a rim, a wall across an alley | plant | balance along | 80 |
+| face (violet ticks) | every wall two metres high or more, the whole of it | steady | tread: run along, run up, kick off | 310 |
 
 They have their own dice, so the boxes are the same city with or without them. A mover asks what
 is in reach (`holdsNear`, `gripAt`), and what it does depends on what is there. The `holds` dial
-(or `?holds`) shows them, and a red ring where each hand is reaching.
+shows them, with a red ring where each hand is and a black one where each foot is down.
 
 ![What the city offers](roofjumps/v-holds.jpg)
 
-What the runner does with them so far, hands only:
+What the runner does with them so far:
 
 - **Up a wall** it takes the highest hold each hand can reach (a sill, a rung's height of a pipe,
   the top edge) and goes up fast, hand over hand; on a face with nothing to hold it goes up at
@@ -72,6 +75,13 @@ What the runner does with them so far, hands only:
 - **Landing a storey up**, both hands come down on the lip it lands over.
 - **Along a wall** the near hand trails on it. **Out of a dive** both go to the ground first. **A
   deep landing** is three-pointed.
+- **The feet are placed.** A stride has each foot down for part of it; when one comes down it is
+  given a place and stays there, the body going over it, until it lifts. Running, that is the roof
+  ahead of it; along anything narrow, the rail's line; at a lip, the lip. Along a wall and up one,
+  the wall (a sill or a pipe if one is by).
+
+![Feet on the wall](roofjumps/v-wallrun-feet.jpg)
+![A footfall](roofjumps/v-footfall.jpg)
 
 The figure is posed, and then its arms are taken to what they hold (`rig.ts`): from where the
 pose had the hand toward the hold, shoulder to elbow to hand, eased on and off, so it is drawn
@@ -82,7 +92,8 @@ already costed by what is available: a wall with holds is a quick way up, a bare
 
 ![Reaching, held](roofjumps/v-poses-holds.jpg)
 
-Not yet: the feet (holds are for both, only hands use them); catching an edge at the end of a leap
+Not yet: the takeoff and landing feet chosen for their holds (they fall where the stride has them);
+catching an edge at the end of a leap
 that falls short, and hanging from it; swinging; choosing a route for its holds rather than
 finding them on the way.
 
@@ -114,9 +125,15 @@ between, flat enough to keep its pace. Which move it throws is chosen by what is
 
 On the ground it runs, sprints after a couple of seconds, bursts into a dash out of a roll or off
 a clean landing with room ahead, and balances along anything narrow (a rim, a wall across an
-alley), drawn onto its line if you are going its way. In the air a wall alongside is run along,
-tilted off it, then kicked away from: wall to wall down an alley. A wall ahead too high to spring
-onto is jumped at, caught and run up. Turn away in the air and the leap is yours again.
+alley), drawn onto its line if you are going its way.
+
+In the air a wall alongside is run along, tilted off it. Left to itself that is a shallow arc,
+rising then sinking as gravity has it. Leaning into the wall drives it up the wall as it goes
+along: that is how height is gained, and it is paid for, in how long the run lasts and in pace
+along. It ends on the wall's top if it gets there. Away from the wall, or a jump, kicks off it:
+wall to wall down an alley. A wall is only run straight up when it is met nearly square (within
+twenty degrees), in an inside corner, or when a run along it is spent and still being leant into;
+met at a slant with no run to be had, it is slid along. Turn away in the air and the leap is yours again.
 
  Its test holds a direction for a minute, sixteen ways in four
 cities, and checks it never stops, never leaves the surface, makes at least 5 m/s good, and makes every move
@@ -168,12 +185,12 @@ changed. The address keeps the ones that differ from the house, by key, so a tun
 
 | group | what is in it |
 |---|---|
-| holds | show them, whether the hands use them, how high a hand reaches, the pace up a wall with nothing to hold, how low a vault clears, how near a hold must be |
+| holds | show them and how far out, whether hands and feet use them, whether feet are placed, how high a hand reaches, the pace up a wall with nothing to hold, how low a vault clears, how near a hold must be |
 | plan | show it, say it, how far ahead, how many ways each side and how far apart, assist, and the four weights of the score |
 | run | run, sprint and dash speeds, how long a dash lasts, quickness, pace on a ledge and how strongly a ledge draws you |
 | leap | gravity, reach, how far up it springs, how far down it drops before looking higher, the fastest leap, where dives begin, how often it flips, extra height |
 | glide | where glides begin (down, across), gravity gliding, the fastest it sinks, steering in the air |
-| wall | wall runs on or off, how long one lasts, its pace, how near a wall must be, gravity on it, the kick off, the speed up a wall |
+| wall | wall runs on or off, how long one lasts, how hard leaning in lifts and how fast it can rise, what going up costs in time and in pace, its pace, how near a wall must be, gravity on it, the kick off, how square a wall must be met to be climbed, the speed up a wall |
 | eye | distance, height, lens, how much it widens with speed, how fast it comes round behind, swung round the figure |
 | time | the speed of time (down to a twentieth), held, runs itself |
 

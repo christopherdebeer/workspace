@@ -72,15 +72,17 @@ const { plan, foresee, TUNE, HOUSE, DIALS, City, Runner, Rig, CHUNK, STOREY, TAG
   for (const h of a.chunk(0, 1).holds) {
     kinds[h.kind] = (kinds[h.kind] ?? 0) + 1;
     const mx = (h.ax + h.bx) / 2, mz = (h.az + h.bz) / 2;
+    assert.ok(h.hand && h.foot, 'each says what it is for, by hand and by foot');
     if (h.kind === 'pipe') { assert.ok(h.ax === h.bx && h.az === h.bz && h.ay === 0 && h.by > 0); continue; }
+    if (h.kind === 'face') { assert.ok(h.by - h.ay >= 2 && a.heightAt(mx - h.nx * 0.01, mz - h.nz * 0.01) >= h.by); continue; }
     assert.equal(h.ay, h.by);
     // (just inside what it's on: the surface there is at least as high as it)
     assert.ok(a.heightAt(mx - h.nx * 0.01, mz - h.nz * 0.01) >= h.ay, `${h.kind} is on something`);
     if (h.kind === 'sill') assert.equal(h.ay % STOREY, 0);
   }
-  for (const k of ['edge', 'sill', 'pipe', 'rail']) assert.ok(kinds[k] > 0, `a chunk has ${k}s`);
+  for (const k of ['edge', 'sill', 'pipe', 'rail', 'face']) assert.ok(kinds[k] > 0, `a chunk has ${k}s`);
   console.log(`holds in a chunk: ${Object.entries(kinds).map(([k, n]) => `${n} ${k}s`).join(', ')}`);
-  let climbs = 0, gripped = 0, vaults = 0, planted = 0;
+  let climbs = 0, gripped = 0, vaults = 0, planted = 0, strides = 0, footed = 0; const under = {};
   for (const seed of [1, 7]) for (const ang of [0.3, 2.1, 4.4]) {
     const city = new City(seed), r = new Runner(city), dx = Math.sin(ang), dz = Math.cos(ang);
     for (let i = 0; i < 120 * 60; i++) {
@@ -88,6 +90,13 @@ const { plan, foresee, TUNE, HOUSE, DIALS, City, Runner, Rig, CHUNK, STOREY, TAG
       const hands = [r.reach.hl, r.reach.hr].filter(Boolean);
       if (r.state === 'climb') { climbs++; if (hands.length) gripped++; }
       if (r.move === 'vault') { vaults++; if (hands.length) planted++; }
+      // (a foot that's down is on something: the roof it's running on, or a hold: and says which)
+      if (r.state === 'ground' && r.speed > 3 && r.move !== 'roll') { strides++; if (r.reach.fl || r.reach.fr) footed++; }
+      for (const p of [r.reach.fl, r.reach.fr].filter(Boolean)) {
+        const g = city.gripAt(p[0], p[1], p[2], 0.05), k = g ? g.hold.kind : 'roof';
+        if (!g) assert.ok(Math.abs(city.heightAt(p[0], p[2]) - p[1]) < 1e-6, `a foot's on the roof or a hold (${r.move})`);
+        under[`${r.state === 'ground' ? 'running' : r.state === 'wall' ? 'along a wall' : 'up a wall'}: ${k}`] = (under[`${r.state === 'ground' ? 'running' : r.state === 'wall' ? 'along a wall' : 'up a wall'}: ${k}`] ?? 0) + 1;
+      }
       if (r.state !== 'climb' && r.move !== 'vault') continue;
       for (const p of hands) {
         assert.ok(city.gripAt(p[0], p[1], p[2], 0.05), `a hand's on a hold (${r.move})`);
@@ -96,7 +105,26 @@ const { plan, foresee, TUNE, HOUSE, DIALS, City, Runner, Rig, CHUNK, STOREY, TAG
     }
   }
   assert.ok(gripped > climbs * 0.25 && planted > vaults * 0.4, `hands find holds (up walls ${gripped} of ${climbs} steps, over things ${planted} of ${vaults})`);
+  assert.ok(footed > strides * 0.25, 'feet are placed');
+  console.log('  feet down on: ' + Object.entries(under).sort((a, b) => b[1] - a[1]).map(([k, n]) => `${k} ${n}`).join(', '));
   console.log(`up walls, a hand on a hold ${(100 * gripped / climbs).toFixed(0)}% of the time; over things, ${(100 * planted / vaults).toFixed(0)}%`);
+}
+// along a wall: left to itself it sinks; leant into, it gains height, and pays for it in how long it lasts; and a wall
+// is only run straight up when it's met square
+{
+  const run = (lean) => {
+    const city = new City(1), r = new Runner(city);
+    // (find a wall run in its own wandering, then hold along it, leaning in or not)
+    for (let i = 0; i < 120 * 120 && r.state !== 'wall'; i++) r.step(1 / 120, { x: Math.sin(0.3), z: Math.cos(0.3), jump: false });
+    assert.equal(r.state, 'wall');
+    const y0 = r.y, [wx, wz, tx, tz] = [r.wx, r.wz, r.tx, r.tz]; let top = y0, t = 0;
+    while (r.state === 'wall' && t < 5) { r.step(1 / 120, { x: tx + wx * lean, z: tz + wz * lean, jump: false }); top = Math.max(top, r.y); t += 1 / 120; }
+    return { gain: top - y0, t, then: r.state };
+  };
+  const level = run(0), leant = run(1.2);
+  assert.ok(leant.gain > level.gain + 0.5 && (leant.then === 'ground' || leant.gain > level.gain + 1.5), `leaning in gains height, to the top if it's near (${level.gain.toFixed(1)} m level, ${leant.gain.toFixed(1)} m leant in, then ${leant.then})`);
+  assert.ok(leant.then !== 'climb' || leant.t > 0.5, 'without turning into a climb until the run is spent');
+  console.log(`along a wall: ${level.gain.toFixed(1)} m gained level over ${level.t.toFixed(2)}s, ${leant.gain.toFixed(1)} m leaning in over ${leant.t.toFixed(2)}s (then: ${leant.then})`);
 }
 // the plan is what happens: a route foreseen is the route run, for as long as the heading holds; the fan has the way
 // asked in the middle and a best either side; and a dial turned changes what's foreseen

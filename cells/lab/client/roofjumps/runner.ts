@@ -37,7 +37,11 @@ export type State = 'ground' | 'air' | 'climb' | 'wall';
 
 type P3 = [number, number, number];
 /** where each hand wants to be, if anywhere: a point in the world */
-export interface Reach { hl?: P3; hr?: P3 }
+export interface Reach {
+  hl?: P3; hr?: P3;
+  /** and each foot, while it's planted; and which way what it's on faces (up, if not said) */
+  fl?: P3; fr?: P3; fn?: P3;
+}
 
 /** what the rig reads of a body */
 export interface Body {
@@ -95,14 +99,16 @@ export class Runner implements Body {
   planned = false;
   private rollT = 0; private dashT = 0;
   /** on a wall: the way into it, the way along it, the pace along it; and a moment after leaving one before another is taken */
-  private wx = 0; private wz = 0; private tx = 0; private tz = 0; private wsp = 0; private wallCool = 0;
+  wx = 0; wz = 0; tx = 0; tz = 0; private wsp = 0; private wallCool = 0;
   private top = 0;
   reach: Reach = {};
   /** a vault's hand hold; a spring's landing lip; a climb's grips, and when they were last looked for and last had */
   private plant: P3 | null = null; private plant2: P3 | null = null; private lip: [P3, P3] | null = null;
   /** the height a vault lands at: anything higher under it on the way is what it's going over */
   private vaultTo = 0;
-  private grips: Reach = {}; private gripN = 0; private gripT = 0;
+  private grips: Reach = {};
+  /** each foot's footfall: planted or not, and where */
+  private feet = { L: { on: false, p: [0, 0, 0] as P3 }, R: { on: false, p: [0, 0, 0] as P3 } }; private gripN = 0; private gripT = 0;
   private air2 = false; private flats = 0;
   leaps = 0; climbs = 0; walls = 0; rolls = 0; dashes = 0; dist = 0;
   /** times it has come down to the street off a roof */
@@ -115,7 +121,7 @@ export class Runner implements Body {
   get speed(): number { return Math.hypot(this.vx, this.vz); }
 
   /** another of it, as it is now, to be run on ahead without touching this one (plan.ts) */
-  clone(): Runner { const c = Object.assign(Object.create(Runner.prototype) as Runner, this); c.made = { ...this.made }; return c; }
+  clone(): Runner { const c = Object.assign(Object.create(Runner.prototype) as Runner, this); c.made = { ...this.made }; c.feet = { L: { ...this.feet.L }, R: { ...this.feet.R } }; return c; }
   private count(m: Move): void { this.made[m] = (this.made[m] ?? 0) + 1; }
 
   step(dt: number, inp: Input): void {
@@ -136,7 +142,47 @@ export class Runner implements Body {
     this.turn += (dh / dt - this.turn) * (1 - Math.exp(-8 * dt));
     this.dist += Math.hypot(this.x - x0, this.z - z0);
     this.reach = TUNE.reach ? this.reaching() : {};
+    if (TUNE.reach && TUNE.feet) this.stepping(); else this.feet.L.on = this.feet.R.on = false;
     if (this.state === 'ground') { if (this.y < 0.5 && this.high > 4) this.streets++; this.high = this.y; } else this.high = Math.max(this.high, this.y);
+  }
+
+  /**
+   * Where the feet are put. A stride has each foot down for part of it: when one comes down it is given a place (on the
+   * roof ahead of the body; on a rail, on its line; at a lip, on the lip; up a wall, on a sill or a pipe if one's by,
+   * else on the wall; along a wall, on the wall) and it stays there, the body going over it, until it lifts.
+   */
+  private stepping(): void {
+    const sp = this.speed, f = this.feet;
+    const ground = this.state === 'ground' && this.move !== 'roll' && sp > 2, wall = this.state === 'wall', climb = this.state === 'climb';
+    if (!ground && !wall && !climb) { f.L.on = f.R.on = false; return; }
+    const a = ground ? this.phase : wall ? this.wallT * 14 + this.lead * Math.PI : this.climbT * 15;
+    // (how much of a turn a foot is down for: on the ground, as long as the body takes to go 0.9 m over it)
+    const span = ground ? Math.min(2.4, (2 * Math.PI * 0.9) / (1.3 + 0.27 * sp)) : 2.2, from = Math.PI / 2 + 0.3;
+    const fx = Math.sin(this.heading), fz = Math.cos(this.heading);
+    for (const [foot, side, off] of [[f.L, 1, 0], [f.R, -1, Math.PI]] as const) {
+      const ph = (((a + off - from) % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI), down = ph < span;
+      if (down && !foot.on) {
+        let p: P3 | null = null;
+        if (ground) {
+          // (ahead of the body by half of what it'll travel over it, out to its own side)
+          const ax = this.x + fx * 0.45 + fz * side * 0.09, az = this.z + fz * 0.45 - fx * side * 0.09, h = this.city.heightAt(ax, az);
+          if (Math.abs(h - this.y) <= STEP) p = [ax, h, az];
+          // (along something narrow, on its line; past a lip, on the lip)
+          const g = this.city.gripAt(ax, this.y, az, this.move === 'ledge' ? 0.4 : p ? 0.14 : 0.55, (o) => (o.kind === 'rail' || o.kind === 'edge') && Math.abs(o.ay - this.y) < 0.05);
+          if (g) p = [g.x, g.y, g.z];
+        } else {
+          const up = climb ? 0.4 : 0.25, along = climb ? 0 : 0.45, lx = climb ? this.wz * side * 0.13 : 0, lz = climb ? -this.wx * side * 0.13 : 0;
+          const wx = this.x + this.wx * (R + 0.02) + this.tx * along * (wall ? 1 : 0) + lx, wz = this.z + this.wz * (R + 0.02) + this.tz * along * (wall ? 1 : 0) + lz, wy = this.y + up;
+          // (a toe hold if there's one by: a sill, a pipe; else the wall itself)
+          const g = this.city.gripAt(wx, wy, wz, 0.45, (o) => (o.kind === 'sill' || o.kind === 'pipe') && o.nx * this.wx + o.nz * this.wz < -0.5) ?? this.city.gripAt(wx, wy, wz, 0.3, (o) => o.kind === 'face' && o.nx * this.wx + o.nz * this.wz < -0.5);
+          if (g) p = [g.x, g.y, g.z];
+        }
+        if (p) { foot.on = true; foot.p = p; }
+      } else if (!down) foot.on = false;
+    }
+    if (f.L.on) this.reach.fl = f.L.p;
+    if (f.R.on) this.reach.fr = f.R.p;
+    if (!ground && (f.L.on || f.R.on)) this.reach.fn = [-this.wx, 0, -this.wz];
   }
 
   /** Where the hands want to be, this instant. */
@@ -312,7 +358,17 @@ export class Runner implements Body {
       // (something in the way: a lip is stepped up onto; a wall met at a slant is run along; met square, run up)
       if (h - ny <= 0.6) { this.x = px; this.z = pz; this.y = h; this.touch(Math.max(0, -this.vy)); return; }
       this.y = ny;
-      if (this.seek(0.86)) return;
+      // (how square it's met: only a wall met nearly square is run straight up)
+      const square = Math.cos((TUNE.climbSquare * Math.PI) / 180);
+      if (this.seek(square)) return;
+      let nax = 0, naz = 0, most = 0;
+      for (const [ax, az] of AXES) { const k = ax * ux + az * uz; if (k > most && H(this.x + ax * (R + 0.15), this.z + az * (R + 0.15)) > ny + 0.05) { most = k; nax = ax; naz = az; } }
+      if (most > 0 && most < square && s2 * Math.sqrt(1 - most * most) >= 3) {
+        // (met at a slant but not to be run along just now: slid along, what was going into it lost)
+        const vn = this.vx * nax + this.vz * naz; this.vx -= nax * vn; this.vz -= naz * vn; this.planned = false;
+        const g = H(this.x, this.z); if (this.y <= g && this.vy <= 0) { this.y = g; this.touch(-this.vy); }
+        return;
+      }
       this.state = 'climb'; this.move = 'climb'; this.wx = ux; this.wz = uz; this.top = h; this.climbT = 0; this.grips = {}; this.gripN = 0; this.gripT = -1; this.climbs++; this.count('climb'); this.vx = this.vz = this.vy = 0;
       return;
     }
@@ -325,7 +381,7 @@ export class Runner implements Body {
   /** A wall to run along: beside the way it's going (no more head-on than `slant`), within reach, going on ahead. */
   private seek(slant: number): boolean {
     const sp = this.speed;
-    if (!TUNE.walls || this.wallCool > 0 || sp < 6) return false;
+    if (!TUNE.walls || this.wallCool > 0 || sp < 4) return false;
     const H = (x: number, z: number) => this.city.heightAt(x, z), ux = this.vx / sp, uz = this.vz / sp;
     for (const [ax, az] of AXES) {
       const along = ax * ux + az * uz;
@@ -348,18 +404,39 @@ export class Runner implements Body {
     return false;
   }
 
-  /** Along a wall: a shallow arc, rising then sinking, until the wall ends, its top comes, or it's time to kick off. */
+  /**
+   * Along a wall. Left to itself it's a shallow arc, rising then sinking as gravity has it. Leaning into the wall
+   * drives it up the wall as it goes along: that is how height is gained, and it is paid for, in how long the run
+   * lasts and in pace along. Away from the wall, or a jump, kicks off it; so does the run's end, unless it's still
+   * being leant into: then, and only then, the run along turns into a climb. It ends on the wall's top if it gets there.
+   */
   private wall(dt: number, on: boolean, dx: number, dz: number, jump: boolean): void {
     const H = (x: number, z: number) => this.city.heightAt(x, z);
-    this.wallT += dt; this.vy -= TUNE.wallGravity * dt;
+    const into = on ? dx * this.wx + dz * this.wz : 0, back = on && dx * this.tx + dz * this.tz < -0.5, up = Math.max(0, into);
+    this.wallT += dt * (1 + TUNE.wallCost * up);
+    const left = Math.max(0, 1 - this.wallT / TUNE.wallTime);
+    this.vy = Math.min(TUNE.wallRise, this.vy + (up * TUNE.wallLift * Math.min(1, left * 2.5) - TUNE.wallGravity) * dt);
+    this.wsp = Math.max(TUNE.wallSpeed * 0.6, this.wsp - up * TUNE.wallDrag * dt);
+    this.vx = this.tx * this.wsp; this.vz = this.tz * this.wsp;
     const kick = () => {
       this.vx = this.tx * this.wsp * 0.9 - this.wx * TUNE.kick; this.vz = this.tz * this.wsp * 0.9 - this.wz * TUNE.kick;
       this.wallCool = 0.12; this.launch(7.5, 'bound', false, false, 0.75);
     };
-    if (jump || (on && dx * this.wx + dz * this.wz < -0.5) || this.wallT > TUNE.wallTime) { kick(); return; }
+    if (jump || into < -0.5 || back) { kick(); return; }
+    if (left <= 0) {
+      if (up < 0.3) { kick(); return; }
+      // (spent, and still leaning in: the run along is over, and what's left is to go up it hand over hand)
+      this.state = 'climb'; this.move = 'climb'; this.top = H(this.x + this.wx * (R + 0.2), this.z + this.wz * (R + 0.2)); this.climbT = 0; this.grips = {}; this.gripN = 0; this.gripT = -1;
+      this.climbs++; this.count('climb'); this.vx = this.vz = this.vy = 0; return;
+    }
     const nx = this.x + this.tx * this.wsp * dt, nz = this.z + this.tz * this.wsp * dt, ny = this.y + this.vy * dt;
-    // (something across the way: off the wall)
-    if (H(nx + this.tx * R, nz + this.tz * R) > ny + 0.05) { kick(); return; }
+    // (something across the way: a corner. Still asked on into it, it's a wall met square: up it; else off the wall)
+    if (H(nx + this.tx * R, nz + this.tz * R) > ny + 0.05) {
+      if (!on || dx * this.tx + dz * this.tz < 0.3) { kick(); return; }
+      this.top = H(nx + this.tx * R, nz + this.tz * R); this.wx = this.tx; this.wz = this.tz;
+      this.state = 'climb'; this.move = 'climb'; this.climbT = 0; this.grips = {}; this.gripN = 0; this.gripT = -1; this.climbs++; this.count('climb'); this.vx = this.vz = this.vy = 0;
+      return;
+    }
     this.x = nx; this.z = nz; this.y = ny;
     const g = H(nx, nz);
     if (this.y <= g) { this.y = g; this.touch(0); return; }

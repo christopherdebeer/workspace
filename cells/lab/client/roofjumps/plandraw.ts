@@ -30,8 +30,9 @@ function route(r: Route, w: number, alpha: number, rings: boolean, out: Stroke[]
   }
 }
 
-const HOLD_COLOUR = { edge: [0.2, 0.45, 0.9], rail: [0.95, 0.95, 0.95], sill: [0.1, 0.65, 0.3], pipe: [0.95, 0.5, 0.1] } as const;
-/** The holds about a place, as lines; and what the hands are after, as a ring each. */
+const HOLD_COLOUR = { edge: [0.2, 0.45, 0.9], rail: [0.95, 0.95, 0.95], sill: [0.1, 0.65, 0.3], pipe: [0.95, 0.5, 0.1], face: [0.6, 0.35, 0.75] } as const;
+/** The holds about a place, as tags on what they're on: a line each (a wall, for the feet, a row of ticks at knee height
+ * and again a storey up); and where the hands are (red rings) and the feet (black) this instant. */
 export function holdStrokes(holds: Hold[], reach: Reach, x: number, y: number, z: number, r: number): Stroke[] {
   const out: Stroke[] = [];
   for (const h of holds) {
@@ -39,13 +40,22 @@ export function holdStrokes(holds: Hold[], reach: Reach, x: number, y: number, z
     const c = HOLD_COLOUR[h.kind], ox = h.nx * 0.04, oz = h.nz * 0.04;
     const a = Math.max(0, 1 - Math.hypot((h.ax + h.bx) / 2 - x, (h.ay + h.by) / 2 - y, (h.az + h.bz) / 2 - z) / r);
     if (a <= 0) continue;
+    if (h.kind === 'face') {
+      // (a tick a metre: it's a surface, not a line)
+      const l = Math.hypot(h.bx - h.ax, h.bz - h.az), ux = (h.bx - h.ax) / l, uz = (h.bz - h.az) / l;
+      for (let ty = h.ay + 0.5; ty < h.by; ty += 3) for (let t = 0.5; t < l; t += 1) {
+        const px = h.ax + ux * t + ox, pz = h.az + uz * t + oz, k = Math.max(0, 1 - Math.hypot(px - x, ty - y, pz - z) / r) * 0.7;
+        if (k > 0) out.push({ pts: [px, ty, pz, px + ux * 0.12, ty + 0.22, pz + uz * 0.12], cols: [c[0], c[1], c[2], k, c[0], c[1], c[2], k], w: 0.03 });
+      }
+      continue;
+    }
     out.push({ pts: [h.ax + ox, h.ay + 0.02, h.az + oz, h.bx + ox, h.by + 0.02, h.bz + oz], cols: [c[0], c[1], c[2], a, c[0], c[1], c[2], a], w: h.kind === 'edge' ? 0.025 : 0.05 });
   }
-  for (const p of [reach.hl, reach.hr]) {
+  for (const [p, c] of [[reach.hl, [0.95, 0.1, 0.1]], [reach.hr, [0.95, 0.1, 0.1]], [reach.fl, [0.05, 0.05, 0.05]], [reach.fr, [0.05, 0.05, 0.05]]] as const) {
     if (!p) continue;
     const ring: number[] = [], rc: number[] = [];
-    for (let k = 0; k <= 8; k++) { const t = (k / 8) * 2 * Math.PI; ring.push(p[0] + Math.cos(t) * 0.12, p[1] + Math.sin(t) * 0.12, p[2] + Math.sin(t + 1) * 0.08); rc.push(0.95, 0.1, 0.1, 1); }
-    out.push({ pts: ring, cols: rc, w: 0.04 });
+    for (let k = 0; k <= 8; k++) { const t = (k / 8) * 2 * Math.PI; ring.push(p[0] + Math.cos(t) * 0.12, p[1] + 0.02 + Math.sin(t) * 0.12, p[2] + Math.sin(t + 1) * 0.1); rc.push(c[0], c[1], c[2], 1); }
+    out.push({ pts: ring, cols: rc, w: 0.035 });
   }
   return out;
 }

@@ -13,17 +13,19 @@ Made by `node cells/lab/views.mjs roofjumps` from `client/roofjumps/views.mjs`. 
 ![A flip: over something tall, or every other long bound](v-flip.jpg)
 ![A dash: out of a roll, or off a clean landing with room ahead](v-dash.jpg)
 
+## The holds
+
+![Feet on the wall: along a wall with the tags shown: the wall itself is the hold (the ticks), a black ring where a foot is down on it, a red one where the near hand steadies](v-wallrun-feet.jpg)
+![A footfall: running: the foot that is down stays where it was put while the body goes over it](v-footfall.jpg)
+![What the city offers: tags, not things: every top edge (blue), a sill at each storey on most faces (green), a pipe on some (orange), the middle of anything narrow (white), and each wall itself, for the feet (violet ticks); shown within ten metres of the figure](v-holds.jpg)
+![A vault: a hand planted on the edge of what it goes over](v-vault.jpg)
+![Reaching, held: a vault on one hand and on two, a climb, a landing with a hand down, a wall run with a hand on the wall: the pose, and the arm taken to the hold](v-poses-holds.jpg)
+
 ## The moves, held
 
 ![On the ground: run, dash, ledge, a landing, a roll: each at five points through it, from the side](v-poses-ground.jpg)
 ![In the air: hop, bound, flip, spring, dive, glide](v-poses-air.jpg)
 ![From behind: what the chase eye sees of them: bound, spring, glide, ledge, a climb, a wall run](v-poses-rear.jpg)
-
-## The holds
-
-![What the city offers: tagged, not drawn (shown here by a dial): every top edge (blue), a sill at each storey on most faces (green), a pipe on some (orange), the middle of anything narrow (white)](v-holds.jpg)
-![A vault: a hand planted on the edge of what it goes over](v-vault.jpg)
-![Reaching, held: a vault on one hand and on two, a climb, a landing with a hand down, a wall run with a hand on the wall: the pose, and the arm taken to the hold](v-poses-holds.jpg)
 
 ## In motion
 

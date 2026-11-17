@@ -8,7 +8,8 @@
  *
  * Beside the boxes, and made with them, a chunk has its holds: the places a hand or a foot can take. They are tagged,
  * not drawn: a line each (every box's top edges; the middle of anything narrow, a rail; and on a building's faces, on
- * most of them, a sill at each storey, on some a pipe from the ground to the roof), with the way it faces. A mover
+ * most of them, a sill at each storey, on some a pipe from the ground to the roof; and each wall itself, whole), with
+ * the way it faces and what it is for, by hand and by foot. A mover
  * asks what is in reach (`holdsNear`, `gripAt`) and what it does depends on what is there.
  *
  * That list is the whole interface. The sim asks one question of it (`heightAt`: how high is the top surface here);
@@ -29,9 +30,20 @@ export type Tag = (typeof TAG)[keyof typeof TAG];
 
 export interface Box { x0: number; z0: number; x1: number; z1: number; y0: number; y1: number; tag: Tag }
 
-export type HoldKind = 'edge' | 'rail' | 'sill' | 'pipe';
-/** somewhere to put a hand or a foot: a line from a to b, facing (nx, nz) (level, out from the wall; 0, 0 for a rail) */
-export interface Hold { kind: HoldKind; ax: number; ay: number; az: number; bx: number; by: number; bz: number; nx: number; nz: number }
+export type HoldKind = 'edge' | 'rail' | 'sill' | 'pipe' | 'face';
+/**
+ * Somewhere to put a hand or a foot: a line from a to b, facing (nx, nz) (level, out from the wall; 0, 0 for a rail).
+ * A face is the one that isn't a line: the whole of a wall, from a at its foot to b at its top.
+ * What each is for, by hand and by foot (empty: not for that):
+ *
+ *   edge  hand: grab   foot: push off, land on      rail  hand: plant   foot: balance along
+ *   sill  hand: grab   foot: toe                    face  hand: steady  foot: tread (run along, run up, kick off)
+ *   pipe  hand: grip   foot: clamp
+ */
+export interface Hold { kind: HoldKind; hand: string; foot: string; ax: number; ay: number; az: number; bx: number; by: number; bz: number; nx: number; nz: number }
+export const USES: Record<HoldKind, { hand: string; foot: string }> = {
+  edge: { hand: 'grab', foot: 'push' }, sill: { hand: 'grab', foot: 'toe' }, pipe: { hand: 'grip', foot: 'clamp' }, rail: { hand: 'plant', foot: 'balance' }, face: { hand: 'steady', foot: 'tread' },
+};
 /** a hold, and the point on it nearest what was asked */
 export interface Grip { hold: Hold; x: number; y: number; z: number; d: number }
 
@@ -110,22 +122,25 @@ export class City {
   /** the holds a chunk's boxes offer */
   private holdsOf(boxes: Box[], rand: Rand): Hold[] {
     const out: Hold[] = [];
+    const hold = (kind: HoldKind, ax: number, ay: number, az: number, bx: number, by: number, bz: number, nx: number, nz: number) => out.push({ kind, ...USES[kind], ax, ay, az, bx, by, bz, nx, nz });
     for (const b of boxes) {
       const w = b.x1 - b.x0, d = b.z1 - b.z0, y = b.y1;
       // (its four faces: where each is, which way it looks, the line along its top)
       const faces: [number, number, number, number, number, number][] = [[b.x0, b.z0, b.x1, b.z0, 0, -1], [b.x0, b.z1, b.x1, b.z1, 0, 1], [b.x0, b.z0, b.x0, b.z1, -1, 0], [b.x1, b.z0, b.x1, b.z1, 1, 0]];
       for (const [ax, az, bx, bz, nx, nz] of faces) {
-        out.push({ kind: 'edge', ax, ay: y, az, bx, by: y, bz, nx, nz });
+        hold('edge', ax, y, az, bx, y, bz, nx, nz);
+        // (a wall worth the name: all of it, for the feet)
+        if (y - b.y0 >= 2) hold('face', ax, b.y0, az, bx, y, bz, nx, nz);
         if (b.tag !== TAG.BUILDING) continue;
         // (a building's face: most have a sill at each storey, set in from the corners; some a pipe, ground to roof)
         const len = Math.hypot(bx - ax, bz - az), ux = (bx - ax) / len, uz = (bz - az) / len;
-        if (rand() < 0.75) for (let sy = STOREY; sy < y; sy += STOREY) out.push({ kind: 'sill', ax: ax + ux * 0.5, ay: sy, az: az + uz * 0.5, bx: bx - ux * 0.5, by: sy, bz: bz - uz * 0.5, nx, nz });
-        if (rand() < 0.4) { const t = 0.5 + rand() * (len - 1); out.push({ kind: 'pipe', ax: ax + ux * t, ay: 0, az: az + uz * t, bx: ax + ux * t, by: y, bz: az + uz * t, nx, nz }); }
+        if (rand() < 0.75) for (let sy = STOREY; sy < y; sy += STOREY) hold('sill', ax + ux * 0.5, sy, az + uz * 0.5, bx - ux * 0.5, sy, bz - uz * 0.5, nx, nz);
+        if (rand() < 0.4) { const t = 0.5 + rand() * (len - 1); hold('pipe', ax + ux * t, 0, az + uz * t, ax + ux * t, y, az + uz * t, nx, nz); }
       }
       // (anything narrow: its middle, a rail)
       if (Math.min(w, d) <= 1 && Math.max(w, d) >= 2) {
         const mx = (b.x0 + b.x1) / 2, mz = (b.z0 + b.z1) / 2;
-        out.push(w > d ? { kind: 'rail', ax: b.x0, ay: y, az: mz, bx: b.x1, by: y, bz: mz, nx: 0, nz: 0 } : { kind: 'rail', ax: mx, ay: y, az: b.z0, bx: mx, by: y, bz: b.z1, nx: 0, nz: 0 });
+        if (w > d) hold('rail', b.x0, y, mz, b.x1, y, mz, 0, 0); else hold('rail', mx, y, b.z0, mx, y, b.z1, 0, 0);
       }
     }
     return out;
@@ -148,9 +163,17 @@ export class City {
     let best: Grip | null = null;
     for (const h of this.holdsNear(x, z, r)) {
       if (ok && !ok(h)) continue;
-      const dx = h.bx - h.ax, dy = h.by - h.ay, dz = h.bz - h.az, l2 = dx * dx + dy * dy + dz * dz;
-      const t = l2 ? Math.max(0, Math.min(1, ((x - h.ax) * dx + (y - h.ay) * dy + (z - h.az) * dz) / l2)) : 0;
-      const px = h.ax + dx * t, py = h.ay + dy * t, pz = h.az + dz * t, d = Math.hypot(px - x, py - y, pz - z);
+      let px: number, py: number, pz: number;
+      const dx = h.bx - h.ax, dy = h.by - h.ay, dz = h.bz - h.az;
+      if (h.kind === 'face') {
+        // (a wall: the nearest point of all of it)
+        const t = Math.max(0, Math.min(1, ((x - h.ax) * dx + (z - h.az) * dz) / (dx * dx + dz * dz || 1)));
+        px = h.ax + dx * t; pz = h.az + dz * t; py = Math.max(h.ay, Math.min(h.by, y));
+      } else {
+        const l2 = dx * dx + dy * dy + dz * dz, t = l2 ? Math.max(0, Math.min(1, ((x - h.ax) * dx + (y - h.ay) * dy + (z - h.az) * dz) / l2)) : 0;
+        px = h.ax + dx * t; py = h.ay + dy * t; pz = h.az + dz * t;
+      }
+      const d = Math.hypot(px - x, py - y, pz - z);
       if (d <= r && (!best || d < best.d)) best = { hold: h, x: px, y: py, z: pz, d };
     }
     return best;

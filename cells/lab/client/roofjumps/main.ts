@@ -40,7 +40,8 @@ import { holdStrokes, planStrokes } from './plandraw';
 const q = new URLSearchParams(location.search);
 const seed = Number(q.get('seed') ?? 1) | 0 || 1, preview = q.has('preview'), still = q.has('still');
 readTune(q);
-if (preview) TUNE.auto = 1;
+// (a preview is the picture alone: no tags on it)
+if (preview) { TUNE.auto = 1; if (!q.has('holds')) TUNE.holds = 0; }
 if (q.get('follow') === '0') TUNE.follow = 0;
 if (preview) document.body.classList.add('preview');
 // (nothing to be told when it's running itself, or held)
@@ -227,8 +228,8 @@ function eyeFor(x: number, y: number, z: number, heading: number, aspect: number
   const pitch = Math.max(0.02, Math.min(1.45, (TUNE.eyePitch * Math.PI) / 180 + lift));
   const ty = y + (zoom > 1 ? 0.95 : 1.7), c = Math.cos(pitch), ya = heading + (TUNE.side * Math.PI) / 180;
   const at = (f: number) => [x - Math.sin(ya) * c * dist * f, ty + Math.sin(pitch) * dist * f, z - Math.cos(ya) * c * dist * f];
-  const eye = at(room(at));
-  return { eye, vp: mul(perspective(fov, aspect, 0.15, rd.radius * 64 * 1.5), lookAt(eye, [x, ty, z], [0, 1, 0])) };
+  const far = room(at), eye = at(far);
+  return { far, eye, vp: mul(perspective(fov, aspect, 0.15, rd.radius * 64 * 1.5), lookAt(eye, [x, ty, z], [0, 1, 0])) };
 }
 /** how far out the eye can be before something is in the way */
 const clearTo = (at: (f: number) => number[]) => { for (let f = 0.1; f <= 1.001; f += 0.1) { const p = at(f); if (city.heightAt(p[0], p[2]) > p[1] - 0.25) return Math.max(0.12, f - 0.1); } return 1; };
@@ -256,8 +257,11 @@ function frame(now: number): void {
   if (strip) {
     rd.stream(strip[strip.length >> 1].x, strip[strip.length >> 1].z, 4);
     cells(stripCols, strip.length, (i, aspect, rect) => {
-      const m = strip![i], { vp, eye } = eyeFor(m.x, m.y, m.z, m.yaw, aspect, clearTo);
-      rd.draw(vp, eye, m.bones, shadowAt(m.x, m.y, m.z), rect);
+      // (seen from the side asked; from the other, where a wall's in the way of that)
+      const m = strip![i], side = TUNE.side;
+      let v = eyeFor(m.x, m.y, m.z, m.yaw, aspect, clearTo);
+      if (v.far < 0.6 && side) { TUNE.side = -side; const o = eyeFor(m.x, m.y, m.z, m.yaw, aspect, clearTo); if (o.far > v.far) v = o; TUNE.side = side; }
+      rd.draw(v.vp, v.eye, m.bones, shadowAt(m.x, m.y, m.z), rect);
     });
     frames++; requestAnimationFrame(frame); return;
   }
@@ -280,7 +284,7 @@ function frame(now: number): void {
   const { vp, eye } = eyeFor(eyeAt.x, eyeAt.y, eyeAt.z, yaw, canvas.width / canvas.height, (at) => { const room = held ? 1 : clearTo(at); near += (room - near) * (room < near ? 1 : e(3)); return near; });
   rd.stream(runner.x, runner.z, 2);
   rd.draw(vp, eye, rig.bones(held ?? runner), shadowAt(runner.x, runner.y, runner.z));
-  if (TUNE.holds && !held) rd.lines(vp, eye, holdStrokes(city.holdsNear(runner.x, runner.z, 14), runner.reach, runner.x, runner.y, runner.z, 16));
+  if (TUNE.holds && !held) rd.lines(vp, eye, holdStrokes(city.holdsNear(runner.x, runner.z, TUNE.holdsNear), runner.reach, runner.x, runner.y, runner.z, TUNE.holdsNear));
   if (TUNE.plan && thinking && !held) rd.lines(vp, eye, planStrokes(thinking));
   const say = !!TUNE.readout && !!thinking && !held;
   readout.hidden = !say;
