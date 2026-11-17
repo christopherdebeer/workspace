@@ -31,6 +31,10 @@ export const views = [
   { name: 'poses-air', group: 'The moves, held', title: 'In the air', caption: 'hop, bound, flip, spring, dive, glide', ...sheet(['hop', 'bound', 'flip', 'spring', 'dive', 'glide']) },
   { name: 'poses-rear', group: 'The moves, held', title: 'From behind', caption: 'what the chase eye sees of them: bound, spring, glide, ledge, a climb, a wall run', ...sheet(['bound', 'spring', 'glide', 'ledge', 'climb', 'wallrun'], 'side=28') },
 
+  { name: 'holds', group: 'The holds', title: 'What the city offers', caption: 'tagged, not drawn (shown here by a dial): every top edge (blue), a sill at each storey on most faces (green), a pipe on some (orange), the middle of anything narrow (white)', query: 'auto&t=5&still&holds&eyeDist=11&eyePitch=30', size: WIDE, ...built },
+  { name: 'vault', group: 'The holds', title: 'A vault', caption: 'a hand planted on the edge of what it goes over', ...caught('vault', 0.3, 'auto&holds&eyeDist=4&eyePitch=30&side=70') },
+  { name: 'poses-holds', group: 'The holds', title: 'Reaching, held', caption: 'a vault on one hand and on two, a climb, a landing with a hand down, a wall run with a hand on the wall: the pose, and the arm taken to the hold', query: 'sheet=vault,vault2,climb,land,wallrun&side=60&zoom=2.1&far=1', size: { width: CELL * 5, height: CELL * 5 } },
+
   { name: 'strip', group: 'In motion', title: 'Three seconds, frame by frame', caption: 'its own run from 5 s, a frame every tenth of a second, the move named on each', query: 'strip=5&frames=30&every=0.1&cols=6', size: { width: 1320, height: 5 * 190 }, ...built },
   { name: 'strip-side', group: 'In motion', title: 'The same, from the side', caption: '', query: 'strip=5&frames=30&every=0.1&cols=6&side=80&zoom=1.25', size: { width: 1320, height: 5 * 190 }, ...built },
 

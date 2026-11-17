@@ -6,6 +6,11 @@
  * one-metre lattice: axis-aligned, standing on the ground or on a roof, each with a tag saying what it is (a building,
  * a raised part of its roof, the rim round it, a stair hut, a unit, a tank, a wall across an alley). Building heights are whole storeys.
  *
+ * Beside the boxes, and made with them, a chunk has its holds: the places a hand or a foot can take. They are tagged,
+ * not drawn: a line each (every box's top edges; the middle of anything narrow, a rail; and on a building's faces, on
+ * most of them, a sill at each storey, on some a pipe from the ground to the roof), with the way it faces. A mover
+ * asks what is in reach (`holdsNear`, `gripAt`) and what it does depends on what is there.
+ *
  * That list is the whole interface. The sim asks one question of it (`heightAt`: how high is the top surface here);
  * a renderer turns the boxes into whatever it likes. Nothing here knows about colour, light or triangles.
  */
@@ -24,7 +29,13 @@ export type Tag = (typeof TAG)[keyof typeof TAG];
 
 export interface Box { x0: number; z0: number; x1: number; z1: number; y0: number; y1: number; tag: Tag }
 
-export interface Chunk { cx: number; cz: number; boxes: Box[]; cells: number[][] }
+export type HoldKind = 'edge' | 'rail' | 'sill' | 'pipe';
+/** somewhere to put a hand or a foot: a line from a to b, facing (nx, nz) (level, out from the wall; 0, 0 for a rail) */
+export interface Hold { kind: HoldKind; ax: number; ay: number; az: number; bx: number; by: number; bz: number; nx: number; nz: number }
+/** a hold, and the point on it nearest what was asked */
+export interface Grip { hold: Hold; x: number; y: number; z: number; d: number }
+
+export interface Chunk { cx: number; cz: number; boxes: Box[]; cells: number[][]; holds: Hold[]; hcells: number[][] }
 
 const key = (cx: number, cz: number) => `${cx},${cz}`;
 
@@ -85,7 +96,64 @@ export class City {
       const c0 = Math.max(0, Math.floor((b.z0 - oz) / CELL)), c1 = Math.min(CELLS - 1, Math.floor((b.z1 - oz - 1e-6) / CELL));
       for (let a = a0; a <= a1; a++) for (let c = c0; c <= c1; c++) cells[c * CELLS + a].push(i);
     });
-    return { cx, cz, boxes, cells };
+    // (the holds: from the boxes, by their own dice, so the boxes are the same with or without them)
+    const holds = this.holdsOf(boxes, seeded(hash(this.seed, cx, cz, 91)));
+    const hcells: number[][] = Array.from({ length: CELLS * CELLS }, () => []);
+    holds.forEach((h, i) => {
+      const a0 = Math.max(0, Math.floor((Math.min(h.ax, h.bx) - ox) / CELL)), a1 = Math.min(CELLS - 1, Math.floor((Math.max(h.ax, h.bx) - ox) / CELL));
+      const c0 = Math.max(0, Math.floor((Math.min(h.az, h.bz) - oz) / CELL)), c1 = Math.min(CELLS - 1, Math.floor((Math.max(h.az, h.bz) - oz) / CELL));
+      for (let a = a0; a <= a1; a++) for (let c = c0; c <= c1; c++) hcells[c * CELLS + a].push(i);
+    });
+    return { cx, cz, boxes, cells, holds, hcells };
+  }
+
+  /** the holds a chunk's boxes offer */
+  private holdsOf(boxes: Box[], rand: Rand): Hold[] {
+    const out: Hold[] = [];
+    for (const b of boxes) {
+      const w = b.x1 - b.x0, d = b.z1 - b.z0, y = b.y1;
+      // (its four faces: where each is, which way it looks, the line along its top)
+      const faces: [number, number, number, number, number, number][] = [[b.x0, b.z0, b.x1, b.z0, 0, -1], [b.x0, b.z1, b.x1, b.z1, 0, 1], [b.x0, b.z0, b.x0, b.z1, -1, 0], [b.x1, b.z0, b.x1, b.z1, 1, 0]];
+      for (const [ax, az, bx, bz, nx, nz] of faces) {
+        out.push({ kind: 'edge', ax, ay: y, az, bx, by: y, bz, nx, nz });
+        if (b.tag !== TAG.BUILDING) continue;
+        // (a building's face: most have a sill at each storey, set in from the corners; some a pipe, ground to roof)
+        const len = Math.hypot(bx - ax, bz - az), ux = (bx - ax) / len, uz = (bz - az) / len;
+        if (rand() < 0.75) for (let sy = STOREY; sy < y; sy += STOREY) out.push({ kind: 'sill', ax: ax + ux * 0.5, ay: sy, az: az + uz * 0.5, bx: bx - ux * 0.5, by: sy, bz: bz - uz * 0.5, nx, nz });
+        if (rand() < 0.4) { const t = 0.5 + rand() * (len - 1); out.push({ kind: 'pipe', ax: ax + ux * t, ay: 0, az: az + uz * t, bx: ax + ux * t, by: y, bz: az + uz * t, nx, nz }); }
+      }
+      // (anything narrow: its middle, a rail)
+      if (Math.min(w, d) <= 1 && Math.max(w, d) >= 2) {
+        const mx = (b.x0 + b.x1) / 2, mz = (b.z0 + b.z1) / 2;
+        out.push(w > d ? { kind: 'rail', ax: b.x0, ay: y, az: mz, bx: b.x1, by: y, bz: mz, nx: 0, nz: 0 } : { kind: 'rail', ax: mx, ay: y, az: b.z0, bx: mx, by: y, bz: b.z1, nx: 0, nz: 0 });
+      }
+    }
+    return out;
+  }
+
+  /** The holds with anything within `r` of (x, z) (roughly: by the buckets they lie in). */
+  holdsNear(x: number, z: number, r: number): Hold[] {
+    const out = new Set<Hold>();
+    for (let cx = Math.floor((x - r) / CHUNK); cx <= Math.floor((x + r) / CHUNK); cx++) for (let cz = Math.floor((z - r) / CHUNK); cz <= Math.floor((z + r) / CHUNK); cz++) {
+      const c = this.chunk(cx, cz), ox = cx * CHUNK, oz = cz * CHUNK;
+      const a0 = Math.max(0, Math.floor((x - r - ox) / CELL)), a1 = Math.min(CELLS - 1, Math.floor((x + r - ox) / CELL));
+      const c0 = Math.max(0, Math.floor((z - r - oz) / CELL)), c1 = Math.min(CELLS - 1, Math.floor((z + r - oz) / CELL));
+      for (let a = a0; a <= a1; a++) for (let b = c0; b <= c1; b++) for (const i of c.hcells[b * CELLS + a]) out.add(c.holds[i]);
+    }
+    return [...out];
+  }
+
+  /** The nearest point on any hold to (x, y, z) within `r`, of those `ok` allows. */
+  gripAt(x: number, y: number, z: number, r: number, ok?: (h: Hold) => boolean): Grip | null {
+    let best: Grip | null = null;
+    for (const h of this.holdsNear(x, z, r)) {
+      if (ok && !ok(h)) continue;
+      const dx = h.bx - h.ax, dy = h.by - h.ay, dz = h.bz - h.az, l2 = dx * dx + dy * dy + dz * dz;
+      const t = l2 ? Math.max(0, Math.min(1, ((x - h.ax) * dx + (y - h.ay) * dy + (z - h.az) * dz) / l2)) : 0;
+      const px = h.ax + dx * t, py = h.ay + dy * t, pz = h.az + dz * t, d = Math.hypot(px - x, py - y, pz - z);
+      if (d <= r && (!best || d < best.d)) best = { hold: h, x: px, y: py, z: pz, d };
+    }
+    return best;
   }
 
   /** one lot: its building, and what stands on its roof */

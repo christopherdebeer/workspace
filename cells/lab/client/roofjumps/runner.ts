@@ -6,7 +6,8 @@
  * out to land it (`leap`). What it throws is chosen by what's in front of it, so no two crossings in a row are the
  * same thing:
  *
- *   hop      over clutter and rims: low, quick, a hurdle
+ *   vault    over clutter and rims, where there's an edge to put a hand on: lower and quicker still
+ *   hop      the same with nothing to hold: a hurdle
  *   bound    a gap at about this height: flat and fast, the legs split
  *   flip     the same, every so often, turned over in the air
  *   spring   up a storey: steep, the arms thrown up, a crouch on top
@@ -18,16 +19,25 @@
  * wall alongside is run along, tilted off it, and kicked away from, wall to wall down an alley; a wall ahead too
  * high to spring onto is jumped at, caught and run up.
  *
+ * What its hands do is the city's to offer (city.ts: the holds). Up a wall they go to the sills, the pipe, the top
+ * edge, whatever is in reach, and it climbs fast; with nothing to hold it climbs slowly. Over a unit one is planted on
+ * its edge. Landing a storey up, both come down on the lip. Along a wall the near one trails on it; out of a dive both
+ * go to the ground; a deep landing is three-pointed. `reach` is where each hand wants to be: the rig takes it there.
+ *
  * No DOM, no drawing: it asks the city for heights, and keeps what the rig needs to pose a figure (`move`, how far
  * through it, the stride, the leading leg, the wall's side, the landing's weight).
  */
-import type { City } from './city';
+import type { City, Hold } from './city';
 import { TUNE } from './tune';
 
 export interface Input { x: number; z: number; jump: boolean }
 
-export type Move = 'run' | 'dash' | 'ledge' | 'roll' | 'hop' | 'bound' | 'flip' | 'spring' | 'dive' | 'glide' | 'climb' | 'wallrun';
+export type Move = 'run' | 'dash' | 'ledge' | 'roll' | 'vault' | 'hop' | 'bound' | 'flip' | 'spring' | 'dive' | 'glide' | 'climb' | 'wallrun';
 export type State = 'ground' | 'air' | 'climb' | 'wall';
+
+type P3 = [number, number, number];
+/** where each hand wants to be, if anywhere: a point in the world */
+export interface Reach { hl?: P3; hr?: P3 }
 
 /** what the rig reads of a body */
 export interface Body {
@@ -37,6 +47,7 @@ export interface Body {
   phase: number; lead: number; land: number; turn: number; climbT: number; wallT: number;
   /** which side the wall is on, running along one: 1 the figure's +x, -1 the other */
   wallSide: number;
+  reach: Reach;
 }
 
 
@@ -55,6 +66,11 @@ const JUMP = 9.5;
 /** a roll's length (s) */
 const ROLL = 0.5;
 const AXES = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+/** the point of a level hold nearest (x, z) */
+const onHold = (h: Hold, x: number, z: number): P3 => {
+  const dx = h.bx - h.ax, dz = h.bz - h.az, t = Math.max(0, Math.min(1, ((x - h.ax) * dx + (z - h.az) * dz) / (dx * dx + dz * dz || 1)));
+  return [h.ax + dx * t, h.ay, h.az + dz * t];
+};
 
 export class Runner implements Body {
   x = 0; y = 0; z = 0; vx = 0; vy = 0; vz = 0;
@@ -81,6 +97,12 @@ export class Runner implements Body {
   /** on a wall: the way into it, the way along it, the pace along it; and a moment after leaving one before another is taken */
   private wx = 0; private wz = 0; private tx = 0; private tz = 0; private wsp = 0; private wallCool = 0;
   private top = 0;
+  reach: Reach = {};
+  /** a vault's hand hold; a spring's landing lip; a climb's grips, and when they were last looked for and last had */
+  private plant: P3 | null = null; private plant2: P3 | null = null; private lip: [P3, P3] | null = null;
+  /** the height a vault lands at: anything higher under it on the way is what it's going over */
+  private vaultTo = 0;
+  private grips: Reach = {}; private gripN = 0; private gripT = 0;
   private air2 = false; private flats = 0;
   leaps = 0; climbs = 0; walls = 0; rolls = 0; dashes = 0; dist = 0;
   /** times it has come down to the street off a roof */
@@ -113,7 +135,31 @@ export class Runner implements Body {
     let dh = this.heading - h0; dh -= Math.round(dh / (2 * Math.PI)) * 2 * Math.PI;
     this.turn += (dh / dt - this.turn) * (1 - Math.exp(-8 * dt));
     this.dist += Math.hypot(this.x - x0, this.z - z0);
+    this.reach = TUNE.reach ? this.reaching() : {};
     if (this.state === 'ground') { if (this.y < 0.5 && this.high > 4) this.streets++; this.high = this.y; } else this.high = Math.max(this.high, this.y);
+  }
+
+  /** Where the hands want to be, this instant. */
+  private reaching(): Reach {
+    const u = this.mu, L = this.lead === 1, fx = Math.sin(this.heading), fz = Math.cos(this.heading);
+    /** a point by the figure: `a` ahead, `s` to its left, `h` up */
+    const by = (a: number, s: number, h: number): P3 => [this.x + fx * a + fz * s, this.y + h, this.z + fz * a - fx * s];
+    // (up a wall: what it has hold of, until it's gone by below the hips)
+    if (this.state === 'climb') { const g = this.grips, ok = (p?: P3) => (p && p[1] - this.y > 1 ? p : undefined); return { hl: ok(g.hl), hr: ok(g.hr) }; }
+    if (this.state === 'wall') {
+      // (the near hand trails on the wall, about the shoulder's height, a little ahead)
+      const p: P3 = [this.x + this.wx * (R + 0.02) + this.tx * 0.25, this.y + 1.3, this.z + this.wz * (R + 0.02) + this.tz * 0.25];
+      return this.wallSide > 0 ? { hl: p } : { hr: p };
+    }
+    if (this.state === 'air') {
+      if (this.move === 'vault' && this.plant && u > 0.12 && u < 0.82) return this.plant2 ? { hl: this.plant, hr: this.plant2 } : L ? { hr: this.plant } : { hl: this.plant };
+      if (this.move === 'spring' && this.lip && u > 0.6) return { hl: this.lip[0], hr: this.lip[1] };
+      return {};
+    }
+    // (out of a dive, both hands to the ground first; a deep landing, one)
+    if (this.move === 'roll' && u < 0.28) return { hl: by(0.45, 0.16, 0), hr: by(0.45, -0.16, 0) };
+    if (this.move === 'run' && this.land > 0.5) return L ? { hr: by(0.38, -0.26, 0) } : { hl: by(0.38, 0.26, 0) };
+    return {};
   }
 
   private ground(dt: number, mag: number, on: boolean, dx: number, dz: number, jump: boolean): void {
@@ -161,6 +207,8 @@ export class Runner implements Body {
     this.state = 'air'; this.vy = vy; this.airT = 0; this.planned = planned; this.air2 = true;
     this.move = move; this.float = float; this.flightT = Math.max(0.15, T); this.mu = 0;
     this.lead ^= 1; this.leaps++; this.rollT = 0; this.count(move);
+    if (move !== 'vault') this.plant = this.plant2 = null;
+    if (move !== 'spring') this.lip = null;
   }
 
   /** Look along (ux, uz) for where to stand next, and go there: by the move that suits what's between. */
@@ -169,12 +217,12 @@ export class Runner implements Body {
     /** somewhere to stand: the same height for a good stride beyond */
     const flat = (d: number, h: number) => Math.abs(H(d + 0.6) - h) < 0.1 && Math.abs(H(d + 1.2) - h) < 0.1;
     const reach = TUNE.reach + sp, y = this.y, G = TUNE.gravity, RISE = TUNE.rise, DROP = TUNE.drop, VLEAP = TUNE.leapSpeed;
-    let at = -1, to = 0, over = y, wall = -1;
+    let at = -1, to = 0, over = y, wall = -1, overAt = from;
     // (the first place within a storey up or a couple down; what's in the way before it, to clear; or a wall)
     for (let d = from; d <= reach; d += 0.5) {
       const h = H(d);
       if (h > y + RISE) { wall = d; break; }
-      if (h >= y - DROP) { if (flat(d, h)) { at = d; to = h; break; } over = Math.max(over, h); }
+      if (h >= y - DROP) { if (flat(d, h)) { at = d; to = h; break; } if (h > over) { over = h; overAt = d; } }
     }
     if (at < 0 && wall >= 0) {
       // (a wall: jump at it, to meet it near the top of the jump, and run up it from there)
@@ -195,7 +243,15 @@ export class Runner implements Body {
     else if (clear >= 1.2) { move = 'flip'; apex = clear + 0.5; }
     else if (dh <= -TUNE.glideDrop || D > TUNE.glideDist) { move = 'glide'; apex = clear + 0.55 + 0.045 * D; }
     else if (dh <= -TUNE.diveDrop) { move = 'dive'; apex = clear + 0.4; }
-    else if (over - y >= 0.6 && D <= 5) { move = 'hop'; apex = clear + 0.3; }
+    else if (over - y >= 0.6 && D <= 5) {
+      // (something to get over: with an edge of it to put a hand on, a vault, one hand or (every other) two; without, a hop)
+      const g = TUNE.reach ? this.city.gripAt(this.x + ux * overAt, over, this.z + uz * overAt, TUNE.gripReach, (h) => (h.kind === 'edge' || h.kind === 'rail') && Math.abs(h.ay - over) < 0.05) : null;
+      if (g) {
+        move = 'vault'; apex = clear + TUNE.vaultLow;
+        const two = this.leaps % 2 === 0, l = Math.hypot(g.hold.bx - g.hold.ax, g.hold.bz - g.hold.az) || 1, hx = ((g.hold.bx - g.hold.ax) / l) * 0.2, hz = ((g.hold.bz - g.hold.az) / l) * 0.2;
+        this.plant = two ? onHold(g.hold, g.x + hx, g.z + hz) : [g.x, g.y, g.z]; this.plant2 = two ? onHold(g.hold, g.x - hx, g.z - hz) : null;
+      } else { move = 'hop'; apex = clear + 0.3; }
+    }
     else if (D > 4 && ++this.flats % Math.max(1, Math.round(TUNE.flipEvery)) === 0) { move = 'flip'; apex = clear + 1.5; }
     else { move = 'bound'; apex = clear + 0.1 + 0.06 * D; }
     const float = move === 'glide';
@@ -214,7 +270,18 @@ export class Runner implements Body {
       if (v < 5) { v = Math.min(9, Math.max(sp, 5.5)); aimed = false; }
     }
     this.vx = ux * v; this.vz = uz * v;
+    const plant = this.plant, plant2 = this.plant2;
     this.launch(G * up, move, aimed, float, T);
+    if (move === 'vault') {
+      this.plant = plant; this.plant2 = plant2; this.vaultTo = to;
+      // (the hands in the figure's own order: the one on its left to the left)
+      if (plant && plant2 && (plant[0] - plant2[0]) * uz - (plant[2] - plant2[2]) * ux < 0) { this.plant = plant2; this.plant2 = plant; }
+    }
+    if (move === 'spring' && TUNE.reach) {
+      // (a storey up: the lip it lands over, for both hands)
+      const g = this.city.gripAt(this.x + ux * at, to, this.z + uz * at, TUNE.gripReach, (h) => h.kind === 'edge' && Math.abs(h.ay - to) < 0.05);
+      if (g) this.lip = [onHold(g.hold, g.x + uz * 0.2, g.z - ux * 0.2), onHold(g.hold, g.x - uz * 0.2, g.z + ux * 0.2)];
+    }
   }
 
   private air(dt: number, on: boolean, dx: number, dz: number, jump: boolean): void {
@@ -239,16 +306,19 @@ export class Runner implements Body {
     // (a corner can slip between two looks ahead: so where the body itself would be counts too)
     let px = nx + ux * R, pz = nz + uz * R, h = H(px, pz);
     if (H(nx, nz) > h) { px = nx; pz = nz; h = H(nx, nz); }
-    if (h > ny + 0.05) {
+    // (a vault goes over what its hand is on, carried on the hand: that isn't in the way, and isn't landed on)
+    const over = this.move === 'vault' && this.plant ? this.plant[1] + 0.05 : -1;
+    if (h > ny + 0.05 && h > over) {
       // (something in the way: a lip is stepped up onto; a wall met at a slant is run along; met square, run up)
       if (h - ny <= 0.6) { this.x = px; this.z = pz; this.y = h; this.touch(Math.max(0, -this.vy)); return; }
       this.y = ny;
       if (this.seek(0.86)) return;
-      this.state = 'climb'; this.move = 'climb'; this.wx = ux; this.wz = uz; this.top = h; this.climbT = 0; this.climbs++; this.count('climb'); this.vx = this.vz = this.vy = 0;
+      this.state = 'climb'; this.move = 'climb'; this.wx = ux; this.wz = uz; this.top = h; this.climbT = 0; this.grips = {}; this.gripN = 0; this.gripT = -1; this.climbs++; this.count('climb'); this.vx = this.vz = this.vy = 0;
       return;
     }
     this.x = nx; this.z = nz; this.y = ny;
     const g = H(nx, nz);
+    if (g <= over && g > this.vaultTo + 0.3) { if (this.y < g + 0.05) { this.y = g + 0.05; this.vy = Math.max(this.vy, 0); } return; }
     if (this.y <= g && this.vy <= 0) { this.y = g; this.touch(-this.vy); }
   }
 
@@ -315,6 +385,32 @@ export class Runner implements Body {
     }
   }
 
+  /** On the wall it's climbing: the highest hold each hand can reach (a sill, the top edge, a rung's height of a pipe). */
+  private gripsOn(): Reach {
+    const fx = this.x + this.wx * (R + 0.05), fz = this.z + this.wz * (R + 0.05), lx = this.wz, lz = -this.wx, up = TUNE.armReach;
+    const out: Reach = {};
+    let yl = -1, yr = -1;
+    for (const h of this.city.holdsNear(fx, fz, 0.8) as Hold[]) {
+      if (h.kind === 'rail' || h.nx * this.wx + h.nz * this.wz > -0.5) continue;
+      if (h.kind === 'pipe') {
+        // (a pipe: a hand at each rung's height of it, one above the other)
+        if (Math.hypot(h.ax - fx, h.az - fz) > 0.6) continue;
+        const a = Math.min(h.by, Math.floor((this.y + up) / 0.7) * 0.7), b = Math.min(h.by, Math.floor((this.y + up - 0.35) / 0.7) * 0.7 + 0.35);
+        if (a > this.y + 1 && a > yl) { yl = a; out.hl = [h.ax, a, h.az]; }
+        if (b > this.y + 1 && b > yr) { yr = b; out.hr = [h.ax, b, h.az]; }
+        continue;
+      }
+      // (a sill or the top edge: level; a hand either side of where the body is, if the line runs that far)
+      if (h.ay <= this.y + 1 || h.ay > this.y + up) continue;
+      const dx = h.bx - h.ax, dz = h.bz - h.az, l2 = dx * dx + dz * dz || 1;
+      const on = (px: number, pz: number): P3 | null => { const t = Math.max(0, Math.min(1, ((px - h.ax) * dx + (pz - h.az) * dz) / l2)), qx = h.ax + dx * t, qz = h.az + dz * t; return Math.hypot(qx - px, qz - pz) < 0.4 ? [qx, h.ay, qz] : null; };
+      const pl = on(fx + lx * 0.22, fz + lz * 0.22), pr = on(fx - lx * 0.22, fz - lz * 0.22);
+      if (pl && h.ay > yl) { yl = h.ay; out.hl = pl; }
+      if (pr && h.ay > yr) { yr = h.ay; out.hr = pr; }
+    }
+    return out;
+  }
+
   private climb(dt: number, on: boolean, dx: number, dz: number, jump: boolean): void {
     this.climbT += dt;
     // (turned away from the wall, or a jump: off it, the other way)
@@ -322,7 +418,10 @@ export class Runner implements Body {
       const ox = on ? dx : -this.wx, oz = on ? dz : -this.wz;
       this.vx = ox * 8; this.vz = oz * 8; this.launch(JUMP, 'flip', false, false, 0.9); return;
     }
-    this.y += TUNE.climb * dt;
+    // (what there is to hold, looked for a few times a stride: with something in hand it goes up fast, with nothing, slowly)
+    if (TUNE.reach && this.gripN++ % 5 === 0) { this.grips = this.gripsOn(); if (this.grips.hl || this.grips.hr) this.gripT = this.climbT; }
+    const held = !TUNE.reach || (this.gripT >= 0 && this.climbT - this.gripT < 0.3);
+    this.y += (held ? TUNE.climb : TUNE.climbBare) * dt;
     if (this.y < this.top) return;
     // (over the top, unless what's there goes on up: then on up)
     const px = this.x + this.wx * (R + 0.35), pz = this.z + this.wz * (R + 0.35), h = this.city.heightAt(px, pz);

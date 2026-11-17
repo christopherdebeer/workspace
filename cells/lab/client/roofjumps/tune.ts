@@ -56,6 +56,13 @@ export const DIALS: Dial[] = [
   d('wall', 'kick', 'kick off', 2, 12, 0.5, 6, 'm/s'),
   d('wall', 'climb', 'up a wall', 4, 30, 0.5, 14, 'm/s'),
 
+  t('holds', 'holds', 'show the holds', 0),
+  t('holds', 'reach', 'hands go to them', 1),
+  d('holds', 'armReach', 'a hand reaches up', 1.4, 3.2, 0.05, 2.4, 'm'),
+  d('holds', 'climbBare', 'up a wall with no holds', 2, 30, 0.5, 8, 'm/s'),
+  d('holds', 'vaultLow', 'a vault clears by', 0, 1, 0.05, 0.12, 'm'),
+  d('holds', 'gripReach', 'finds a hold within', 0.3, 2, 0.05, 0.9, 'm'),
+
   d('eye', 'eyeDist', 'distance', 2, 20, 0.1, 4.6, 'm'),
   d('eye', 'eyePitch', 'from above', 0, 80, 1, 17, '°'),
   d('eye', 'fov', 'lens', 30, 110, 1, 68, '°'),

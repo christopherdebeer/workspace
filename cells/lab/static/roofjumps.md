@@ -44,6 +44,48 @@ one question, `heightAt(x, z)`. A renderer gets the boxes.
 
 ![The city, from above](roofjumps/v-above.jpg)
 
+## The holds (`city.ts`)
+
+Made with the boxes, and tagged, not drawn: the places a hand or a foot can take. Each is a line
+with the way it faces:
+
+| hold | where | about how many a chunk |
+|---|---|---|
+| edge | every box's four top edges | 600 |
+| sill | on three in four of a building's faces, one at each storey, set in from the corners | 350 |
+| pipe | on two in five faces, ground to roof | 75 |
+| rail | down the middle of anything a metre wide: a rim, a wall across an alley | 80 |
+
+They have their own dice, so the boxes are the same city with or without them. A mover asks what
+is in reach (`holdsNear`, `gripAt`), and what it does depends on what is there. The `holds` dial
+(or `?holds`) shows them, and a red ring where each hand is reaching.
+
+![What the city offers](roofjumps/v-holds.jpg)
+
+What the runner does with them so far, hands only:
+
+- **Up a wall** it takes the highest hold each hand can reach (a sill, a rung's height of a pipe,
+  the top edge) and goes up fast, hand over hand; on a face with nothing to hold it goes up at
+  about half the pace. The top edge is the last hold: the hands stay on it as the body goes by.
+- **Over clutter** with an edge to plant a hand on it vaults, one hand or (every other time) two,
+  the body brought down to the hand and carried over on it; with nothing to hold it hops.
+- **Landing a storey up**, both hands come down on the lip it lands over.
+- **Along a wall** the near hand trails on it. **Out of a dive** both go to the ground first. **A
+  deep landing** is three-pointed.
+
+The figure is posed, and then its arms are taken to what they hold (`rig.ts`): from where the
+pose had the hand toward the hold, shoulder to elbow to hand, eased on and off, so it is drawn
+like a drawing and holds on like a mannequin. Because the plan is the runner run ahead, routes are
+already costed by what is available: a wall with holds is a quick way up, a bare one a slow one.
+
+![A vault](roofjumps/v-vault.jpg)
+
+![Reaching, held](roofjumps/v-poses-holds.jpg)
+
+Not yet: the feet (holds are for both, only hands use them); catching an edge at the end of a leap
+that falls short, and hanging from it; swinging; choosing a route for its holds rather than
+finding them on the way.
+
 ## The runner (`runner.ts`)
 
 A point with a velocity, and the judgement that makes the running effortless. At an edge, a step
@@ -54,7 +96,8 @@ between, flat enough to keep its pace. Which move it throws is chosen by what is
 
 | move | when | what it is |
 |---|---|---|
-| hop | clutter or a rim in the way, close | low and quick, a hurdle |
+| vault | clutter or a rim in the way, close, with an edge to put a hand on | lower and quicker: over it on a hand, or two |
+| hop | the same, with nothing to hold | a hurdle |
 | bound | a gap at about this height | flat and fast, the legs split |
 | flip | every other long bound; anything tall in the way | tucked and turned over forwards |
 | spring | a storey up | steep, the arms thrown up, knees to the chest, a deep landing |
@@ -110,6 +153,7 @@ self-running mode steers by it entirely.
 | white | ledge | cyan | glide |
 | pink | roll | magenta | wall run |
 | yellow | hop | brown | climb |
+| lime | vault | | |
 | blue | bound | violet | flip |
 
 ## The dials (`tune.ts`, `palette.ts`)
@@ -124,6 +168,7 @@ changed. The address keeps the ones that differ from the house, by key, so a tun
 
 | group | what is in it |
 |---|---|
+| holds | show them, whether the hands use them, how high a hand reaches, the pace up a wall with nothing to hold, how low a vault clears, how near a hold must be |
 | plan | show it, say it, how far ahead, how many ways each side and how far apart, assist, and the four weights of the score |
 | run | run, sprint and dash speeds, how long a dash lasts, quickness, pace on a ledge and how strongly a ledge draws you |
 | leap | gravity, reach, how far up it springs, how far down it drops before looking higher, the fastest leap, where dives begin, how often it flips, extra height |

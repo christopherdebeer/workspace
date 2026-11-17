@@ -35,7 +35,7 @@ import { TUNE, readTune, writeTune } from './tune';
 import { palette } from './palette';
 import { plan, words } from './plan';
 import type { Plan, Route } from './plan';
-import { planStrokes } from './plandraw';
+import { holdStrokes, planStrokes } from './plandraw';
 
 const q = new URLSearchParams(location.search);
 const seed = Number(q.get('seed') ?? 1) | 0 || 1, preview = q.has('preview'), still = q.has('still');
@@ -154,13 +154,21 @@ function input(t: number, dt: number): Input {
 // ─── a pose held, to be looked at (`study=`, and `__roofjumps.pose`) ───────────
 let held: Body | null = null;
 function hold(move: string, mu: number, lead = 1, wallSide = 1): void {
-  const ground = ['run', 'dash', 'ledge', 'roll', 'land', 'stand'].includes(move);
+  const ground = ['run', 'dash', 'ledge', 'roll', 'land', 'stand'].includes(move), move2 = move === 'vault2';
+  if (move2) move = 'vault';
+  /** a point by the figure (it faces +z, its left is +x): `a` ahead, `s` to its left, `h` up */
+  const at = (a: number, s: number, h: number): [number, number, number] => [runner.x + s, runner.y + h, runner.z + a];
   held = {
     x: runner.x, y: runner.y, z: runner.z, heading: 0, turn: 0, lead, wallSide, mu,
-    move: (move === 'land' || move === 'stand' ? 'run' : move) as Move,
+    move: (move === 'land' || move === 'stand' ? 'run' : move2 ? 'vault' : move) as Move,
     state: ground ? 'ground' : move === 'climb' ? 'climb' : move === 'wallrun' ? 'wall' : 'air',
     speed: move === 'stand' ? 0 : move === 'land' ? 5 : move === 'dash' ? 18 : move === 'ledge' ? 8 : 12,
     phase: mu * 2 * Math.PI, climbT: mu * 0.42, wallT: mu * 0.45, land: move === 'land' ? 1 - mu : 0,
+    // (a pose held has nothing real to hold: what its hands would be on is put where it would be)
+    reach: move === 'vault' ? (move2 ? { hl: at(0.45, 0.2, -0.05), hr: at(0.45, -0.2, -0.05) } : lead ? { hr: at(0.3, -0.3, -0.05) } : { hl: at(0.3, 0.3, -0.05) })
+      : move === 'climb' ? { hl: at(0.42, 0.22, 1.5 + 0.9 * (1 - mu)), hr: at(0.42, -0.22, 1.5 + 0.9 * (1 - mu)) }
+      : move === 'wallrun' ? (wallSide > 0 ? { hl: at(0.25, 0.4, 1.3) } : { hr: at(0.25, -0.4, 1.3) })
+      : move === 'land' && mu < 0.5 ? { hr: at(0.38, -0.26, 0) } : move === 'roll' && mu < 0.28 ? { hl: at(0.45, 0.16, 0), hr: at(0.45, -0.16, 0) } : {},
   };
   yaw = 0; lift = -0.14;
 }
@@ -272,6 +280,7 @@ function frame(now: number): void {
   const { vp, eye } = eyeFor(eyeAt.x, eyeAt.y, eyeAt.z, yaw, canvas.width / canvas.height, (at) => { const room = held ? 1 : clearTo(at); near += (room - near) * (room < near ? 1 : e(3)); return near; });
   rd.stream(runner.x, runner.z, 2);
   rd.draw(vp, eye, rig.bones(held ?? runner), shadowAt(runner.x, runner.y, runner.z));
+  if (TUNE.holds && !held) rd.lines(vp, eye, holdStrokes(city.holdsNear(runner.x, runner.z, 14), runner.reach, runner.x, runner.y, runner.z, 16));
   if (TUNE.plan && thinking && !held) rd.lines(vp, eye, planStrokes(thinking));
   const say = !!TUNE.readout && !!thinking && !held;
   readout.hidden = !say;

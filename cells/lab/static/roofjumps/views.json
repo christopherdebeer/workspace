@@ -76,6 +76,29 @@
   ]
  },
  {
+  "group": "The holds",
+  "views": [
+   {
+    "name": "holds",
+    "title": "What the city offers",
+    "caption": "tagged, not drawn (shown here by a dial): every top edge (blue), a sill at each storey on most faces (green), a pipe on some (orange), the middle of anything narrow (white)",
+    "file": "v-holds.jpg"
+   },
+   {
+    "name": "vault",
+    "title": "A vault",
+    "caption": "a hand planted on the edge of what it goes over",
+    "file": "v-vault.jpg"
+   },
+   {
+    "name": "poses-holds",
+    "title": "Reaching, held",
+    "caption": "a vault on one hand and on two, a climb, a landing with a hand down, a wall run with a hand on the wall: the pose, and the arm taken to the hold",
+    "file": "v-poses-holds.jpg"
+   }
+  ]
+ },
+ {
   "group": "In motion",
   "views": [
    {

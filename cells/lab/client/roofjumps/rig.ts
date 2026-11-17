@@ -6,13 +6,17 @@
  * height that puts the lower foot on the ground. `bones()` gives each bone's matrix and its extent as a tapered
  * block: a renderer can draw those blocks as they are (the lab's does), or hang anything else on the same matrices.
  *
+ * The poses are half of it. The other half is reach: where the body says a hand wants to be (a hold: an edge, a sill,
+ * a pipe, the wall, the ground), the arm is taken there, shoulder to elbow to hand, whatever the pose had it doing; and
+ * let go of as smoothly. So the figure is posed like a drawing and holds on like a mannequin.
+ *
  * Local axes: +z forward, +y up. A limb hangs down its own -y; a positive swing carries it forward.
  *
  * Each move's pose is a function of the body alone (`target`), so a pose can be looked at without running anything:
  * the page's `study=` holds one, and its `sheet=` lays any of them out, five points through each, to be criticised.
  */
 import type { Body } from './runner';
-import { ident, rotX, rotY, rotZ, translate } from './m4';
+import { ident, point, rotX, rotY, rotZ, translate } from './m4';
 import type { M4 } from './m4';
 
 export interface Pose {
@@ -27,14 +31,26 @@ export interface Pose {
   twist: number;
   /** the whole body tipped forward about the hips, and over to one side */
   lean: number; tilt: number;
+  /** the hips let down, off the ground: the body brought to what a hand is on */
+  sink: number;
 }
-const KEYS: (keyof Pose)[] = ['hipL', 'hipR', 'kneeL', 'kneeR', 'shL', 'shR', 'elL', 'elR', 'spreadL', 'spreadR', 'splay', 'spine', 'head', 'twist', 'lean', 'tilt'];
-const zero = (): Pose => ({ hipL: 0, hipR: 0, kneeL: 0, kneeR: 0, shL: 0, shR: 0, elL: 0, elR: 0, spreadL: 0, spreadR: 0, splay: 0, spine: 0, head: 0, twist: 0, lean: 0, tilt: 0 });
+const KEYS: (keyof Pose)[] = ['hipL', 'hipR', 'kneeL', 'kneeR', 'shL', 'shR', 'elL', 'elR', 'spreadL', 'spreadR', 'splay', 'spine', 'head', 'twist', 'lean', 'tilt', 'sink'];
+const zero = (): Pose => ({ hipL: 0, hipR: 0, kneeL: 0, kneeR: 0, shL: 0, shR: 0, elL: 0, elR: 0, spreadL: 0, spreadR: 0, splay: 0, spine: 0, head: 0, twist: 0, lean: 0, tilt: 0, sink: 0 });
 
 /** a bone: its matrix, and its block from y0 (w0 × d0) to y1 (w1 × d1), centred zc along z */
 export interface Bone { name: string; m: M4; y0: number; w0: number; d0: number; y1: number; w1: number; d1: number; zc: number }
 
-const THIGH = 0.44, SHIN = 0.44, SOLE = 0.07, HIP = 0.06;
+const THIGH = 0.44, SHIN = 0.44, SOLE = 0.07, HIP = 0.06, UPPER = 0.29, FORE = 0.31;
+type V3 = [number, number, number];
+const sub = (a: V3, b: V3): V3 => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+const cross = (a: V3, b: V3): V3 => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+const unit = (a: V3): V3 => { const l = Math.hypot(a[0], a[1], a[2]) || 1; return [a[0] / l, a[1] / l, a[2] / l]; };
+/** a bone's matrix at `o`, its own -y toward `to` (a limb hangs down its -y), turned about that as `fwd` suggests */
+function aim(o: V3, to: V3, fwd: V3): M4 {
+  const y = unit(sub(o, to)), x = unit(cross(y, fwd)), z = cross(x, y), m = ident();
+  m[0] = x[0]; m[1] = x[1]; m[2] = x[2]; m[4] = y[0]; m[5] = y[1]; m[6] = y[2]; m[8] = z[0]; m[9] = z[1]; m[10] = z[2]; m[12] = o[0]; m[13] = o[1]; m[14] = o[2];
+  return m;
+}
 const sm = (a: number, b: number, x: number) => { const t = Math.max(0, Math.min(1, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
 const mixes = (ws: number[]) => (...v: number[]) => v.reduce((s, x, i) => s + x * ws[i], 0);
 /** a limb's swing: forward for positive */
@@ -47,6 +63,8 @@ export class Rig {
   private hipY = 1;
   private bank = 0;
   private aside = 0;
+  /** each hand's reach: how much it has hold of the arm (0..1), and where to */
+  private hands = { L: { w: 0, p: [0, 0, 0] as V3 }, R: { w: 0, p: [0, 0, 0] as V3 } };
 
   /** The pose a body's move asks for. */
   target(r: Body): Pose {
@@ -92,6 +110,17 @@ export class Rig {
         // (a ball, over the shoulders: the turning itself is in bones())
         p.hipL = 1.95; p.hipR = 1.75; p.kneeL = 2.3; p.kneeR = 2.15; p.spine = 0.75; p.head = 0.65;
         p.shL = p.shR = 1.1; both('el', 1.7); both('spread', 0.25);
+        break;
+      }
+      case 'vault': {
+        // (over it on a hand: the body laid over to the hand's side, both legs swung through together on the other)
+        const w = sm(0, 0.3, u) * (1 - sm(0.7, 1, u)), two = !!(r.reach.hl && r.reach.hr), s1 = L ? -1 : 1;
+        // (the hips come down to the hand, the body laid well over it; the legs go through folded, off to the other side)
+        legs(0.7 + 0.95 * w, 0.8 + 0.9 * w, 0.5 + 1.0 * w, 0.7 + 1.1 * w);
+        arms(0.9, 0.5); both('el', 0.6); both('spread', 0.3);
+        p.sink = 0.5 * w; p.tilt = two ? 0 : s1 * 0.75 * w; p.lean = two ? 0.25 + 0.95 * w : 0.3 + 0.35 * w; p.spine = 0.2 * w; p.head = -0.3 - (two ? 0.5 * w : 0);
+        // (on two hands: straight through between them, flat, knees to the chest)
+        if (two) { p.hipL = p.hipR = 0.6 + 1.3 * w; p.kneeL = p.kneeR = 0.6 + 1.5 * w; }
         break;
       }
       case 'hop': {
@@ -176,13 +205,18 @@ export class Rig {
     this.stood += ((r.state === 'ground' ? 1 : 0) - this.stood) * (1 - Math.exp(-14 * dt));
     this.bank += (Math.max(-0.45, Math.min(0.45, r.turn * 0.06 * Math.min(1, r.speed / 8))) - this.bank) * (1 - Math.exp(-10 * dt));
     this.aside += ((r.move === 'wallrun' ? -r.wallSide * 0.5 : 0) - this.aside) * (1 - Math.exp(-16 * dt));
+    // (the hands: taken toward what they reach for, let go when there's nothing; a new hold is moved to, not jumped to)
+    for (const [h, to] of [[this.hands.L, r.reach.hl], [this.hands.R, r.reach.hr]] as const) {
+      if (to) { const e = h.w > 0.05 ? 1 - Math.exp(-32 * dt) : 1; for (let i = 0; i < 3; i++) h.p[i] += (to[i] - h.p[i]) * e; }
+      h.w += ((to ? 1 : 0) - h.w) * (1 - Math.exp(-(to ? 22 : 14) * dt));
+    }
     // (the hips: where the lower foot reaches the ground; in the air, where they'd be standing, so the feet come up to them)
     const p = this.pose, leg = (hip: number, knee: number) => THIGH * Math.cos(hip) * Math.cos(p.splay) + SHIN * Math.cos(hip - knee) * Math.cos(p.splay);
     // (but a run has its moment off the ground, both legs out: the hips don't drop into the split, they carry over it)
     const striding = r.move === 'run' || r.move === 'dash' || r.move === 'ledge', pace = Math.min(1, r.speed / 6);
     const carry = striding ? (0.9 + 0.05 * Math.abs(Math.cos(r.phase))) * pace - 0.55 * r.land : 0;
     const ground = Math.max(carry, HIP + Math.max(leg(p.hipL, p.kneeL), leg(p.hipR, p.kneeR)) + SOLE) + (r.move === 'roll' ? 0.16 : 0);
-    this.hipY = ground * this.stood + 0.98 * (1 - this.stood);
+    this.hipY = ground * this.stood + (0.98 - p.sink) * (1 - this.stood);
   }
 
   /** The skeleton, placed in the world at the body. */
@@ -200,8 +234,25 @@ export class Rig {
     for (const side of [1, -1]) {
       const L = side > 0, n = L ? 'L' : 'R';
       const A = sw(rotZ(translate(S, side * 0.225, 0.43, 0), side * (L ? p.spreadL : p.spreadR)), L ? p.shL : p.shR);
-      add('upperArm' + n, A, 0, 0.09, 0.09, -0.29, 0.075, 0.075);
-      add('foreArm' + n, sw(translate(A, 0, -0.29, 0), L ? p.elL : p.elR), 0, 0.075, 0.075, -0.31, 0.055, 0.06);
+      let F = sw(translate(A, 0, -UPPER, 0), L ? p.elL : p.elR), U = A;
+      const hand = L ? this.hands.L : this.hands.R;
+      if (hand.w > 0.01) {
+        // (reaching: from where the pose had the hand toward the hold, by how much hold it has; the arm solved to there,
+        // the elbow down and out and a little behind)
+        const s: V3 = [A[12], A[13], A[14]], was = point(F, 0, -FORE, 0);
+        let to: V3 = [was[0] + (hand.p[0] - was[0]) * hand.w, was[1] + (hand.p[1] - was[1]) * hand.w, was[2] + (hand.p[2] - was[2]) * hand.w];
+        let dir = sub(to, s), d = Math.hypot(dir[0], dir[1], dir[2]);
+        const most = UPPER + FORE - 0.005;
+        if (d > most) { to = [s[0] + (dir[0] * most) / d, s[1] + (dir[1] * most) / d, s[2] + (dir[2] * most) / d]; d = most; }
+        dir = unit(dir);
+        const a = (UPPER * UPPER - FORE * FORE + d * d) / (2 * Math.max(d, 1e-3)), h = Math.sqrt(Math.max(0, UPPER * UPPER - a * a));
+        const pole: V3 = [-P[4] * 0.7 - P[8] * 0.45 + side * P[0] * 0.5, -P[5] * 0.7 - P[9] * 0.45 + side * P[1] * 0.5, -P[6] * 0.7 - P[10] * 0.45 + side * P[2] * 0.5];
+        const k = pole[0] * dir[0] + pole[1] * dir[1] + pole[2] * dir[2], out2 = unit([pole[0] - dir[0] * k, pole[1] - dir[1] * k, pole[2] - dir[2] * k]);
+        const elbow: V3 = [s[0] + dir[0] * a + out2[0] * h, s[1] + dir[1] * a + out2[1] * h, s[2] + dir[2] * a + out2[2] * h], fwd: V3 = [P[8], P[9], P[10]];
+        U = aim(s, elbow, fwd); F = aim(elbow, to, fwd);
+      }
+      add('upperArm' + n, U, 0, 0.09, 0.09, -UPPER, 0.075, 0.075);
+      add('foreArm' + n, F, 0, 0.075, 0.075, -FORE, 0.055, 0.06);
       const hip = L ? p.hipL : p.hipR, knee = L ? p.kneeL : p.kneeR;
       const T = sw(rotZ(translate(P, side * 0.095, -HIP, 0), side * p.splay), hip);
       add('thigh' + n, T, 0, 0.135, 0.14, -THIGH, 0.1, 0.105);
