@@ -66,6 +66,7 @@ names the global the page reports itself on, `__mistwood` by default): `node cel
 
 ## The experiments
 
+- **Roof Jumps** (`client/roofjumps/`): a figure running over an endless city of rooftops, leaping whatever is in the way, in any direction. Geometry and rig only, drawn in one grey on purpose so looks can be tried over it: chunks of tagged boxes on a one-metre lattice (`city.ts`), a runner that finds where it can next stand and leaps there (`runner.ts`, tested on its own: `devtools/roofjumps.test.mjs`), a thirteen-bone figure posed from what the runner is doing (`rig.ts`), and the looks in one shader (`render.ts`: grid, clay, wire, tags, normals).
 - **Mistwood** (`client/mistwood/`): a walk through a seeded wood in fog. It was its own cell
   (`@c15r/mistwood`); that cell now only redirects here, keeping the query.
 - **Marble Run** (`client/marbles/`): a roster of twelve glass marbles (each its own seeded look and name) released from a gate down wide obstacle boards (pegs, deflectors, splitters, chicanes, spinners, funnels, gates, bends) in a seeded run that grows as you build it, to a funnel and a single-file channel where the result sits at rest; themes (`theme.ts`: atelier by day, nocturne by lamplight) change the place and the materials under a race; rigid spheres with spin against floors, walls, pegs and turning arms (`physics.ts`, `track.ts`, tested on their own), a chase camera, a shadow map.
