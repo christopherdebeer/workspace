@@ -4,7 +4,7 @@
 process.env.EXPERIMENT = 'roofjumps'; process.env.READY = '__roofjumps';
 process.env.MISTWOOD_OUT ??= new URL('./out', import.meta.url).pathname;
 const { withWood } = await import('./harness.mjs');
-const shots = process.argv.slice(2).length ? process.argv.slice(2) : ['auto&t=6&still&preview', 'auto&t=14.2&still&preview', 'auto&seed=7&t=9&still&preview&look=wire', 'auto&seed=7&t=9&still&preview&look=tags'];
+const shots = process.argv.slice(2).length ? process.argv.slice(2) : ['auto&t=5&still&preview', 'auto&t=7.5&still&preview', 'auto&seed=7&t=16&still&preview&look=wire', 'auto&seed=7&t=16&still&preview&look=tags'];
 await withWood(async (lab) => {
   const paths = [];
   for (const [i, q] of shots.entries()) {

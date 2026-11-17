@@ -3,17 +3,22 @@
  *
  * The only input is a direction (and, optionally, a jump). Everything else is the runner's own: at an edge, a step or
  * a wall it looks along the way it's going, finds where it can next stand, and throws itself there on an arc worked
- * out to land it (`leap`). A wall too high to leap onto is jumped at, caught and run up. A long drop is taken and
- * rolled out of. So holding a direction is enough to cross the city in it.
+ * out to land it (`leap`). A wall too high to leap onto is jumped at, caught and run up. And it is light: it goes up
+ * as anything does, but comes down slowly, arms out, at no more than a gentle sink, so a leap carries a long way, a
+ * drop into a street is a glide that can be steered, and every landing is soft. So holding a direction is enough to
+ * cross the city in it.
  *
  * No DOM, no drawing: it asks the city one question (`heightAt`), and keeps what the rig needs to pose a figure
- * (stride phase, time in the air, the leading leg, how hard it landed, the roll).
+ * (stride phase, time in the air, the leading leg, how hard it landed).
  */
 import type { City } from './city';
 
 export interface Input { x: number; z: number; jump: boolean }
 
-export const G = 20;
+/** gravity going up; and coming down, with the fastest it sinks (m/s², m/s) */
+export const G = 20, GF = 7, SINK = 7.5;
+/** how long a fall of `s` metres from rest takes, sinking like that */
+const fall = (s: number) => (s <= (SINK * SINK) / (2 * GF) ? Math.sqrt((2 * Math.max(0, s)) / GF) : SINK / GF + (s - (SINK * SINK) / (2 * GF)) / SINK);
 /** running, and after a couple of seconds of it (m/s) */
 const RUN = 9, SPRINT = 12.5;
 const ACCEL = 42;
@@ -44,8 +49,6 @@ export class Runner {
   lead = 0;
   /** how hard the last landing was, 0..1, fading: the crouch */
   land = 0;
-  /** a roll out of a hard landing: 0..1 through it, or -1 */
-  roll = -1;
   climbT = 0;
   /** rate of turn (rad/s), smoothed: the lean into a bend */
   turn = 0;
@@ -53,7 +56,7 @@ export class Runner {
   planned = false;
   private wx = 0; private wz = 0; private top = 0;
   private air2 = false;
-  leaps = 0; climbs = 0; rolls = 0; dist = 0;
+  leaps = 0; climbs = 0; dist = 0;
 
   constructor(readonly city: City) { const s = city.start(); this.x = s.x; this.y = s.y; this.z = s.z; }
 
@@ -64,7 +67,6 @@ export class Runner {
     const dx = on ? inp.x / Math.hypot(inp.x, inp.z) : 0, dz = on ? inp.z / Math.hypot(inp.x, inp.z) : 0;
     const x0 = this.x, z0 = this.z, h0 = this.heading;
     this.land *= Math.exp(-6 * dt);
-    if (this.roll >= 0) { this.roll += dt / 0.5; if (this.roll >= 1) this.roll = -1; }
     if (this.state === 'ground') this.ground(dt, mag, on, dx, dz, inp.jump);
     else if (this.state === 'air') this.air(dt, on, dx, dz, inp.jump);
     else this.climb(dt, on, dx, dz, inp.jump);
@@ -103,7 +105,7 @@ export class Runner {
 
   private launch(vy: number, planned: boolean): void {
     this.state = 'air'; this.vy = vy; this.vy0 = Math.max(4, vy); this.airT = 0; this.planned = planned; this.air2 = true;
-    this.lead ^= 1; this.leaps++; this.roll = -1;
+    this.lead ^= 1; this.leaps++;
   }
 
   /** Look along (ux, uz) for where to stand next, and go there on an arc that lands it. */
@@ -111,7 +113,7 @@ export class Runner {
     const H = (d: number) => this.city.heightAt(this.x + ux * d, this.z + uz * d);
     /** somewhere to stand: the same height for a good stride beyond */
     const flat = (d: number, h: number) => Math.abs(H(d + 0.6) - h) < 0.1 && Math.abs(H(d + 1.2) - h) < 0.1;
-    const reach = 7 + sp * 0.8, y = this.y;
+    const reach = 8 + sp, y = this.y;
     let at = -1, to = 0, over = y, wall = -1;
     // (the first place within a storey up or a couple down; what's in the way before it, to clear; or a wall)
     for (let d = from; d <= reach; d += 0.5) {
@@ -133,7 +135,7 @@ export class Runner {
     const dh = to - y;
     // (the arc: up to an apex that clears what's between, down to the landing; higher if it'd otherwise be too fast)
     let apex = Math.max(0, dh, over - y) + 0.55 + 0.045 * D, T = 0, up = 0;
-    for (let i = 0; i < 24; i++) { up = Math.sqrt((2 * apex) / G); T = up + Math.sqrt((2 * (apex - dh)) / G); if (D / T <= VLEAP) break; apex += 0.4; }
+    for (let i = 0; i < 24; i++) { up = Math.sqrt((2 * apex) / G); T = up + fall(apex - dh); if (D / T <= VLEAP) break; apex += 0.4; }
     let v = D / T;
     // (keep the pace where the landing has the room for it)
     const keep = Math.min(VLEAP, sp) * 0.85;
@@ -141,7 +143,7 @@ export class Runner {
     // (a hop that would hang in the air: flatter, if what's in the way allows; and off a height, out at a run, to land wherever)
     let aimed = true;
     if (v < 5) {
-      apex = Math.max(0, dh, over - y) + 0.25; up = Math.sqrt((2 * apex) / G); T = up + Math.sqrt((2 * (apex - dh)) / G); v = D / T;
+      apex = Math.max(0, dh, over - y) + 0.25; up = Math.sqrt((2 * apex) / G); T = up + fall(apex - dh); v = D / T;
       if (v < 5) { v = Math.min(9, Math.max(sp, 5)); aimed = false; }
     }
     this.vx = ux * v; this.vz = uz * v;
@@ -159,7 +161,7 @@ export class Runner {
     }
     // (a second jump, off nothing: once a flight)
     if (jump && this.air2) { this.air2 = false; this.vy = JUMP * 0.9; this.vy0 = this.vy; this.airT = 0; this.planned = false; this.lead ^= 1; this.leaps++; }
-    this.vy -= G * dt;
+    this.vy = Math.max(-SINK, this.vy - (this.vy > 0 ? G : GF) * dt);
     const s2 = this.speed, ux = s2 > 0.1 ? this.vx / s2 : 0, uz = s2 > 0.1 ? this.vz / s2 : 0;
     const nx = this.x + this.vx * dt, nz = this.z + this.vz * dt, ny = this.y + this.vy * dt;
     // (a corner can slip between two looks ahead: so where the body itself would be counts too)
@@ -178,8 +180,7 @@ export class Runner {
 
   private touch(impact: number): void {
     this.state = 'ground'; this.vy = 0; this.planned = false;
-    this.land = Math.max(this.land, Math.min(1, impact / 16));
-    if (impact > 15.5) { this.roll = 0; this.rolls++; }
+    this.land = Math.max(this.land, Math.min(1, impact / 9));
   }
 
   private climb(dt: number, on: boolean, dx: number, dz: number, jump: boolean): void {

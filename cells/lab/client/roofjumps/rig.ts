@@ -50,15 +50,16 @@ export class Rig {
       p.elL = p.elR = 0.2 + 1.2 * Math.min(1, s);
       p.spine = 0.06 + 0.18 * s; p.lean = 0.16 * s; p.head = -0.1 * s; p.spread = 0.08;
     } else if (r.state === 'air') {
-      // (the flight: driving up off one leg, tucked over the top, reaching down for the landing)
+      // (the flight: driving up off one leg; then over the top and all the way down, a glide: upright, the arms straight
+      // out to the sides, the legs hanging together)
       const u = Math.max(-1, Math.min(1, r.vy / Math.max(6, r.vy0))), up = sm(0.15, 0.7, u), down = sm(0.15, 0.7, -u), top = 1 - up - down;
       const mix = (a: number, b: number, c: number) => a * up + b * top + c * down;
-      const hipF = mix(1.25, 1.35, 0.8), kneeF = mix(1.5, 1.75, 0.45), hipB = mix(-0.75, 0.9, 0.3), kneeB = mix(0.35, 1.6, 0.75);
-      const shF = mix(1.5, 0.9, 2.5), shB = mix(-0.7, 0.9, 2.3);
+      const hipF = mix(1.2, 0.3, 0.12), kneeF = mix(1.5, 0.5, 0.15), hipB = mix(-0.7, -0.15, 0.02), kneeB = mix(0.35, 0.4, 0.2);
+      const shF = mix(1.2, 0.1, 0), shB = mix(-0.6, 0.1, 0);
       if (r.lead) { p.hipL = hipF; p.kneeL = kneeF; p.hipR = hipB; p.kneeR = kneeB; p.shR = shF; p.shL = shB; }
       else { p.hipR = hipF; p.kneeR = kneeF; p.hipL = hipB; p.kneeL = kneeB; p.shL = shF; p.shR = shB; }
-      p.elL = p.elR = mix(0.9, 0.7, 0.3); p.spread = mix(0.1, 0.45, 0.5);
-      p.spine = mix(0.05, 0.35, 0); p.lean = mix(0.28, 0.12, -0.1); p.head = mix(-0.15, 0, 0.2);
+      p.elL = p.elR = mix(0.7, 0.1, 0.05); p.spread = mix(0.5, 1.45, 1.55);
+      p.spine = mix(0.05, 0.05, -0.05); p.lean = mix(0.3, 0.2, 0.1); p.head = mix(-0.15, -0.1, 0.1);
     } else {
       // (up a wall: a run stood on end, the hands going up ahead)
       const a = r.climbT * 15;
@@ -67,8 +68,8 @@ export class Rig {
       p.shL = 2.5 - 0.5 * Math.sin(a); p.shR = 2.5 + 0.5 * Math.sin(a); p.elL = p.elR = 0.5;
       p.spine = -0.1; p.lean = -0.12; p.head = -0.4; p.spread = 0.1;
     }
-    // (a landing's weight: down into the legs, the arms back; a roll is all of that)
-    const c = r.roll >= 0 ? 1 : r.state === 'ground' ? r.land : 0;
+    // (a landing's weight: down into the legs, the arms back)
+    const c = r.state === 'ground' ? r.land : 0;
     if (c > 0) {
       p.hipL += 1.0 * c; p.hipR += 1.0 * c; p.kneeL += 1.7 * c; p.kneeR += 1.7 * c; p.spine += 0.5 * c;
       p.shL -= 0.5 * c; p.shR -= 0.5 * c; p.head += 0.3 * c;
@@ -90,9 +91,8 @@ export class Rig {
   /** The skeleton, placed in the world at the runner. */
   bones(r: Runner): Bone[] {
     const p = this.pose, out: Bone[] = [];
-    const flip = r.roll >= 0 ? 2 * Math.PI * sm(0, 1, r.roll) : 0;
     let P = rotY(translate(ident(), r.x, r.y, r.z), r.heading);
-    P = rotZ(rotX(translate(P, 0, this.hipY, 0), p.lean + flip), this.bank);
+    P = rotZ(rotX(translate(P, 0, this.hipY, 0), p.lean), this.bank);
     const add = (name: string, m: M4, y0: number, w0: number, d0: number, y1: number, w1: number, d1: number, zc = 0) => out.push({ name, m, y0, w0, d0, y1, w1, d1, zc });
     add('pelvis', P, -0.09, 0.26, 0.17, 0.1, 0.3, 0.18);
     const S = rotX(translate(P, 0, 0.1, 0), p.spine);
@@ -100,7 +100,7 @@ export class Rig {
     add('head', rotX(translate(S, 0, 0.5, 0), p.head), 0, 0.16, 0.18, 0.23, 0.18, 0.2, 0.015);
     for (const side of [1, -1]) {
       const L = side > 0, n = L ? 'L' : 'R';
-      const A = sw(rotZ(translate(S, side * 0.225, 0.43, 0), -side * p.spread), L ? p.shL : p.shR);
+      const A = sw(rotZ(translate(S, side * 0.225, 0.43, 0), side * p.spread), L ? p.shL : p.shR);
       add('upperArm' + n, A, 0, 0.09, 0.09, -0.29, 0.075, 0.075);
       add('foreArm' + n, sw(translate(A, 0, -0.29, 0), L ? p.elL : p.elR), 0, 0.075, 0.075, -0.31, 0.055, 0.06);
       const hip = L ? p.hipL : p.hipR, knee = L ? p.kneeL : p.kneeR;

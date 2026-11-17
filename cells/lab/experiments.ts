@@ -28,8 +28,8 @@ export interface Experiment {
 export const EXPERIMENTS: Experiment[] = [
   {
     id: 'roofjumps', title: 'Roof Jumps', group: 'Play',
-    blurb: 'A figure running over an endless city of rooftops, in any direction, leaping whatever is in the way. A study of two things only: the geometry (chunks of plain boxes on a one-metre lattice, made from a seed as you reach them) and a rigged figure of thirteen blocks whose every pose is worked out from what it is doing. Hold a direction and it does the rest: it finds where it can next stand and throws itself there, runs up walls too high to leap, rolls out of long drops. Drawn as plainly as it can be, on purpose: one grey, one light, so that looks can be tried over the same geometry later.',
-    page: 'static/roofjumps.html', preview: 'preview&seed=1&t=6', readme: 'static/roofjumps.md',
+    blurb: 'A figure running over an endless city of rooftops, in any direction, leaping whatever is in the way. A study of two things only: the geometry (chunks of plain boxes on a one-metre lattice, made from a seed as you reach them) and a rigged figure of thirteen blocks whose every pose is worked out from what it is doing. Hold a direction and it does the rest: it finds where it can next stand and throws itself there, runs up walls too high to leap, and comes down slowly, arms out, so a drop into an alley is a glide. Drawn as plainly as it can be, on purpose: one grey, one light, so that looks can be tried over the same geometry later.',
+    page: 'static/roofjumps.html', preview: 'preview&seed=1&t=5', readme: 'static/roofjumps.md',
     presets: [{ label: 'run', query: '' }, { label: 'watch', query: 'auto' }, { label: 'another city', query: 'seed=7' }, { label: 'clay', query: 'auto&look=clay' }, { label: 'wire', query: 'auto&look=wire' }, { label: 'what each face is', query: 'auto&look=tags' }],
   },
   {

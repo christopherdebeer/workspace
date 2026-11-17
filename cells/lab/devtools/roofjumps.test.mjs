@@ -25,7 +25,7 @@ const { City, Runner, Rig, CHUNK, STOREY, TAG, VERTEX, chunkMesh, figureMesh, FI
       n++;
       for (const v of [b.x0, b.x1, b.z0, b.z1, b.y0, b.y1]) assert.equal(v, Math.round(v));
       assert.ok(b.x0 < b.x1 && b.z0 < b.z1 && b.y0 < b.y1);
-      assert.ok(b.x0 >= i * CHUNK + 2 && b.x1 <= (i + 1) * CHUNK - 2 && b.z0 >= j * CHUNK + 2 && b.z1 <= (j + 1) * CHUNK - 2);
+      assert.ok(b.x0 >= i * CHUNK + 1 && b.x1 <= (i + 1) * CHUNK - 1 && b.z0 >= j * CHUNK + 1 && b.z1 <= (j + 1) * CHUNK - 1);
       if (b.tag === TAG.BUILDING) { assert.equal(b.y0, 0); assert.equal(b.y1 % STOREY, 0); }
     }
     assert.equal(chunkMesh(ch).length, (ch.boxes.length * 5 + 1) * 6 * VERTEX);
@@ -36,7 +36,7 @@ const { City, Runner, Rig, CHUNK, STOREY, TAG, VERTEX, chunkMesh, figureMesh, FI
 // a runner holding a direction crosses the city in it
 {
   const DT = 1 / 120, SECONDS = 60;
-  let worst = Infinity, leaps = 0, climbs = 0, rolls = 0;
+  let worst = Infinity, leaps = 0, climbs = 0;
   for (const seed of [1, 2, 7, 31]) for (let k = 0; k < 16; k++) {
     const a = (k / 16) * 2 * Math.PI + 0.1, dx = Math.sin(a), dz = Math.cos(a);
     const city = new City(seed), r = new Runner(city), rig = new Rig(), x0 = r.x, z0 = r.z;
@@ -52,12 +52,12 @@ const { City, Runner, Rig, CHUNK, STOREY, TAG, VERTEX, chunkMesh, figureMesh, FI
     }
     const made = (r.x - x0) * dx + (r.z - z0) * dz;
     assert.ok(longest < 0.5, `never stops for long (seed ${seed}, dir ${k}: ${longest.toFixed(2)}s)`);
-    worst = Math.min(worst, made / SECONDS); leaps += r.leaps; climbs += r.climbs; rolls += r.rolls;
+    worst = Math.min(worst, made / SECONDS); leaps += r.leaps; climbs += r.climbs;
     const bones = rig.bones(r), o = new Float32Array(FIGURE);
     assert.equal(bones.length, 13); assert.equal(figureMesh(bones, o) * VERTEX, FIGURE);
     assert.ok(o.every(Number.isFinite));
   }
   assert.ok(worst > 5, `makes its way at a run (slowest ${worst.toFixed(1)} m/s made good)`);
-  console.log(`64 runs of ${SECONDS}s: slowest ${worst.toFixed(1)} m/s made good; ${leaps} leaps, ${climbs} walls run up, ${rolls} rolls`);
+  console.log(`64 runs of ${SECONDS}s: slowest ${worst.toFixed(1)} m/s made good; ${leaps} leaps, ${climbs} walls run up`);
 }
 console.log('roofjumps: ok');

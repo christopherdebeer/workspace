@@ -5,7 +5,7 @@
  * as it can be (render.ts), on purpose, so that looks can be tried over the same geometry later.
  *
  * Drag anywhere and the figure runs that way (the drag is a stick: further is faster); it leaps gaps, steps and
- * clutter, runs up walls and rolls out of long drops by itself. Tap to jump (and once more in the air). A second
+ * clutter and runs up walls by itself, and comes down slowly, arms out: a drop is a glide you can steer. Tap to jump (and once more in the air). A second
  * finger turns the eye. Keys: WASD or the arrows, space, Q and E.
  *
  * Flags: `seed=` the city · `look=grid|clay|wire|tags|normals` how it's drawn · `auto` it runs itself, wandering ·
@@ -36,7 +36,7 @@ rd.resize(); addEventListener('resize', () => rd.resize());
 // ─── the eye ──────────────────────────────────────────────────────────────────
 /** `side=`, `zoom=`: the eye swung round the figure and brought closer, for looking at the rig */
 const side = Number(q.get('side') ?? 0) * Math.PI / 180, zoom = Math.max(0.2, Number(q.get('zoom') ?? 1));
-let yaw = 0.6, pitch = side ? 0.15 : 0.42;
+let yaw = 0.6, pitch = side ? 0.15 : 0.3;
 const eyeAt = { x: runner.x, y: runner.y, z: runner.z };
 
 // ─── the hand ─────────────────────────────────────────────────────────────────
@@ -113,16 +113,16 @@ function frame(now: number): void {
   const dt = Math.min(0.05, (now - last) / 1000); last = now;
   if (!still) { acc += dt; while (acc >= DT) { advance(DT); acc -= DT; } }
   yaw += (k('KeyE') - k('KeyQ')) * 1.8 * dt;
-  // (the eye: after the figure, quick across and slower up and down, so a leap is seen against the roofs; and, gently, round behind where it's going)
+  // (the eye: close behind the figure and a little above, wide, and round behind wherever it's going)
   const e = (r: number) => (still ? 1 : 1 - Math.exp(-r * dt));
-  eyeAt.x += (runner.x - eyeAt.x) * e(10); eyeAt.z += (runner.z - eyeAt.z) * e(10); eyeAt.y += (runner.y - eyeAt.y) * e(runner.state === 'climb' ? 6 : 3.5);
+  eyeAt.x += (runner.x - eyeAt.x) * e(10); eyeAt.z += (runner.z - eyeAt.z) * e(10); eyeAt.y += (runner.y - eyeAt.y) * e(6);
   if (follow && !others.size && runner.speed > 2) {
     let d = Math.atan2(runner.vx, runner.vz) - yaw; d -= Math.round(d / (2 * Math.PI)) * 2 * Math.PI;
-    yaw += d * Math.max(0, Math.cos(d / 2)) * (auto ? 1.2 : 0.55) * dt;
+    yaw += d * Math.max(0, Math.cos(d / 2)) * (auto ? 1.6 : 0.9) * dt;
   }
   rd.resize();
-  const aspect = canvas.width / canvas.height, dist = (aspect < 1 ? 11.5 : 9.5) / zoom, fov = (aspect < 1 ? 62 : 52) * Math.PI / 180;
-  const tx = eyeAt.x, ty = eyeAt.y + (zoom > 1 ? 1 : 1.5), tz = eyeAt.z, c = Math.cos(pitch), ya = yaw + side;
+  const aspect = canvas.width / canvas.height, dist = (aspect < 1 ? 5.6 : 4.6) / zoom, fov = (zoom > 1 ? 50 : aspect < 1 ? 80 : 68) * Math.PI / 180;
+  const tx = eyeAt.x, ty = eyeAt.y + (zoom > 1 ? 1 : 1.7), tz = eyeAt.z, c = Math.cos(pitch), ya = yaw + side;
   const eye = [tx - Math.sin(ya) * c * dist, ty + Math.sin(pitch) * dist, tz - Math.cos(ya) * c * dist];
   const vp = mul(perspective(fov, aspect, 0.3, rd.radius * 64 * 1.5), lookAt(eye, [tx, ty, tz], [0, 1, 0]));
   rd.stream(runner.x, runner.z, 2);
@@ -138,6 +138,6 @@ requestAnimationFrame(frame);
 (window as unknown as Record<string, unknown>).__roofjumps = {
   probe: () => ({
     seed, t: time, frames, x: runner.x, y: runner.y, z: runner.z, state: runner.state, speed: runner.speed, dist: runner.dist,
-    leaps: runner.leaps, climbs: runner.climbs, rolls: runner.rolls, look: rd.look, tris: rd.tris, pending: rd.pending(runner.x, runner.z),
+    leaps: runner.leaps, climbs: runner.climbs, look: rd.look, tris: rd.tris, pending: rd.pending(runner.x, runner.z),
   }),
 };

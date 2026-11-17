@@ -4,7 +4,7 @@
  * The world is an endless plane of chunks (CHUNK metres square), each made from the seed and its own coordinates
  * alone, so any chunk can be made at any time, in any order, and is always the same. A chunk is a list of boxes on a
  * one-metre lattice: axis-aligned, standing on the ground or on a roof, each with a tag saying what it is (a building,
- * a raised part of its roof, a stair hut, a unit, a tank). Building heights are whole storeys.
+ * a raised part of its roof, the rim round it, a stair hut, a unit, a tank). Building heights are whole storeys.
  *
  * That list is the whole interface. The sim asks one question of it (`heightAt`: how high is the top surface here);
  * a renderer turns the boxes into whatever it likes. Nothing here knows about colour, light or triangles.
@@ -19,7 +19,7 @@ export const STOREY = 3;
 /** the buckets a chunk's boxes are sorted into, for `heightAt` (m) */
 const CELL = 8, CELLS = CHUNK / CELL;
 
-export const TAG = { GROUND: 0, BUILDING: 1, STEP: 2, HUT: 3, UNIT: 4, TANK: 5, PLAYER: 6 } as const;
+export const TAG = { GROUND: 0, BUILDING: 1, STEP: 2, HUT: 3, UNIT: 4, TANK: 5, PLAYER: 6, RIM: 7 } as const;
 export type Tag = (typeof TAG)[keyof typeof TAG];
 
 export interface Box { x0: number; z0: number; x1: number; z1: number; y0: number; y1: number; tag: Tag }
@@ -41,7 +41,7 @@ export class City {
   }
 
   /** half the street along a chunk's west (axis 0) or south (axis 1) edge: shared by the two chunks it lies between */
-  private margin(cx: number, cz: number, axis: number): number { return 2 + (hash(this.seed, 5, cx, cz, axis) % 3); }
+  private margin(cx: number, cz: number, axis: number): number { return 1 + (hash(this.seed, 5, cx, cz, axis) % 3); }
 
   chunk(cx: number, cz: number): Chunk {
     const k = key(cx, cz);
@@ -60,10 +60,10 @@ export class City {
     const ox = cx * CHUNK, oz = cz * CHUNK, boxes: Box[] = [];
     const int = (a: number, b: number) => a + Math.floor(rand() * (b - a + 1));
     // (the lots: the chunk inside its streets, split in two again and again, a street, an alley or nothing between)
-    const MIN = 6;
+    const MIN = 4;
     const split = (x0: number, z0: number, x1: number, z1: number, depth: number): void => {
-      const w = x1 - x0, d = z1 - z0, max = int(10, 22);
-      const gap = depth === 0 ? 6 : [0, 0, 2, 3, 4][int(0, 4)];
+      const w = x1 - x0, d = z1 - z0, max = int(7, 14);
+      const gap = depth === 0 ? int(4, 6) : [0, 1, 1, 2, 2, 3][int(0, 5)];
       const alongX = w >= d;
       const len = alongX ? w : d;
       if ((w <= max && d <= max) || len < 2 * MIN + gap) { this.lot(boxes, rand, int, x0, z0, x1, z1); return; }
@@ -85,13 +85,19 @@ export class City {
   /** one lot: its building, and what stands on its roof */
   private lot(boxes: Box[], rand: Rand, int: (a: number, b: number) => number, x0: number, z0: number, x1: number, z1: number): void {
     const w = x1 - x0, d = z1 - z0;
-    let storeys = Math.round(3 + 7 * this.relief((x0 + x1) / 2, (z0 + z1) / 2)) + [-1, 0, 0, 1][int(0, 3)];
-    if (rand() < 0.06) storeys += int(4, 7);
-    const H = Math.max(2, storeys) * STOREY;
+    // (low and close: two to six storeys, a neighbour mostly within one of it)
+    let storeys = Math.round(2 + 4 * this.relief((x0 + x1) / 2, (z0 + z1) / 2)) + [-1, 0, 0, 1][int(0, 3)];
+    if (rand() < 0.04) storeys += int(2, 4);
+    const H = Math.max(1, storeys) * STOREY;
     boxes.push({ x0, z0, x1, z1, y0: 0, y1: H, tag: TAG.BUILDING });
+    // (a rim round the roof, a metre high and thick: something to go over at every edge)
+    if (rand() < 0.3 && w >= 6 && d >= 6) {
+      const rim = (a: number, b: number, c: number, e: number) => boxes.push({ x0: a, z0: b, x1: c, z1: e, y0: H, y1: H + 1, tag: TAG.RIM });
+      rim(x0, z0, x1, z0 + 1); rim(x0, z1 - 1, x1, z1); rim(x0, z0 + 1, x0 + 1, z1 - 1); rim(x1 - 1, z0 + 1, x1, z1 - 1);
+    }
     // (a raised part: one side of the roof, or a corner of it, a storey up)
     let step: Box | null = null;
-    if (rand() < 0.38 && w >= 8 && d >= 8) {
+    if (rand() < 0.3 && w >= 8 && d >= 8) {
       const sx = rand() < 0.5 ? w : int(4, w - 4), sz = sx === w ? int(4, d - 4) : rand() < 0.5 ? d : int(4, d - 4);
       const ax = rand() < 0.5 ? x0 : x1 - sx, az = rand() < 0.5 ? z0 : z1 - sz;
       step = { x0: ax, z0: az, x1: ax + sx, z1: az + sz, y0: H, y1: H + STOREY, tag: TAG.STEP };
@@ -104,9 +110,9 @@ export class City {
       const on = step && mx > step.x0 && mx < step.x1 && mz > step.z0 && mz < step.z1 ? step.y1 : H;
       boxes.push({ x0: px, z0: pz, x1: px + pw, z1: pz + pd, y0: H, y1: on + h, tag });
     };
-    if (rand() < 0.4 && w * d >= 64) stand(3, 3, 3, TAG.HUT);
-    for (let n = int(0, Math.min(3, Math.floor((w * d) / 40))); n > 0; n--) { const t = rand() < 0.5; stand(t ? 2 : 1, t ? 1 : 2, 1, TAG.UNIT); }
-    if (rand() < 0.1) stand(2, 2, 4, TAG.TANK);
+    if (rand() < 0.35 && w * d >= 48) stand(3, 3, 3, TAG.HUT);
+    for (let n = int(0, Math.min(3, Math.floor((w * d) / 20))); n > 0; n--) { const t = rand() < 0.5; stand(t ? 2 : 1, t ? 1 : 2, 1, TAG.UNIT); }
+    if (rand() < 0.1) stand(2, 2, 3, TAG.TANK);
   }
 
   /** the height of the top surface at a point (0: the street) */
