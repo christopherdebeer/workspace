@@ -28,7 +28,7 @@ import type { Rider, Event } from './sim';
 import { GEARS } from './audio';
 import { buildRuts, Trail } from './ruts';
 import { buildGouges } from './gouge';
-import { STROKE, Painter, Strokes, Brush2D, strokesOver, skyStrokes, lineOf, courseStrokes, backdropLayers, valleyStrokes, midHillStrokes, midValleyStrokes, MID_SPAN, seaStrokes, fallStrokes, flagStrokes, riderStrokes, partShadowStrokes } from './paint';
+import { STROKE, Painter, Strokes, Brush2D, strokesOver, skyStrokes, lineOf, courseStrokes, backdropLayers, valleyStrokes, midHillStrokes, MID_SPAN, seaStrokes, fallStrokes, flagStrokes, riderStrokes, partShadowStrokes } from './paint';
 
 const VS = `#version 300 es
 in vec4 aP; uniform mat4 uVP; uniform vec3 uOff; uniform float uZj; out vec3 vW; flat out int vM;
@@ -228,10 +228,12 @@ export class Renderer {
     this.stream(r.s, this.painter && this.chunks.size === 0 ? 99 : budget);
     // (the middle distance's hills, a stretch at a time, from a little behind to well ahead; one new stretch a frame)
     // (with the course's regions, the valley as real ground, a stretch at a time, from a little behind to well ahead)
-    if (this.painter && !COMPOSED) {
-      const lo = Math.floor((r.s - 400) / MID_SPAN), hi = Math.floor((r.s + (REGION.on ? 2600 : 1600)) / MID_SPAN);
+    // (with the course's regions, no middle distance swept off the road (it stood through the sea of cloud and as clutter on
+    // the drop side): the background is the far ranges and the valley's floor, composed on their own)
+    if (this.painter && !COMPOSED && !REGION.on) {
+      const lo = Math.floor((r.s - 400) / MID_SPAN), hi = Math.floor((r.s + 1600) / MID_SPAN);
       for (const [k, b] of this.mids) if (k < lo || k > hi) { b.free(); this.mids.delete(k); }
-      for (let k = Math.max(0, lo); k <= hi; k++) if (!this.mids.has(k)) { this.mids.set(k, this.painter.make(REGION.on ? midValleyStrokes(this.course, k) : midHillStrokes(this.course, k))); if (this.mids.size > 2 && budget < 99) break; }
+      for (let k = Math.max(0, lo); k <= hi; k++) if (!this.mids.has(k)) { this.mids.set(k, this.painter.make(midHillStrokes(this.course, k))); if (this.mids.size > 2 && budget < 99) break; }
     }
     const asp = this.W / this.H, fov = asp < 1 ? view.fov * 1.25 : view.fov;
     // (the eye's roll: its up tipped toward its right)
