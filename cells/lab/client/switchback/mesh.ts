@@ -485,7 +485,8 @@ export function foothillProfiles(seed: number) {
 /** the river's line across the valley's floor */
 export function riverLine(seed: number) {
   const rv: number[][] = [];
-  for (let k = 0; k <= 40; k++) { const z = -2200 + k * 110, x = -520 + Math.sin(k * 0.55 + seed) * 160 + Math.sin(k * 1.7) * 50; rv.push([x, -259, z]); }
+  // (across the whole floor, so it leads the eye out to the ranges' feet)
+  for (let k = 0; k <= 64; k++) { const z = -3400 + k * 106, x = -520 + Math.sin(k * 0.34 + seed) * 300 + Math.sin(k * 1.1) * 70; rv.push([x, -259, z]); }
   return rv;
 }
 

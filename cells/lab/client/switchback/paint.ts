@@ -657,15 +657,19 @@ export function valleyStrokes(seed: number): Float32Array {
   // (with the course's regions, the valley floor isn't bare: woods in patches over it, each a dark mass of crowns with the
   // tops toward the light lit, broader further off; and low rises among them, a step lighter on their sunward side)
   if (REGION.on) {
-    const wood = (x: number, z: number) => Math.sin(x / 260 + seed * 1.3) * Math.sin(z / 210 - seed) + 0.5 * Math.sin((x - z) / 140 + seed);
-    for (let i = 0; i < 9000; i++) {
-      const r = 300 * Math.pow(3400 / 300, R0()), a = R0() * Math.PI * 2, x = Math.sin(a) * r, z = Math.cos(a) * r, haze = Math.min(0.55, r / 5500);
-      if (wood(x, z) > 0.25) {
-        const sz = r * (0.012 + R0() * 0.01), lit = R0() < 0.3;
-        plan(list, x, F + sz * 0.6, z, M.BLACK, haze, [0, 1, 0], sz * 1.4, [-Math.sin(a), 0, -Math.cos(a)], sz * 1.1, R0(), [3, 2, 11][Math.floor(R0() * 3)], 0, lit ? 1 : R0() < 0.5 ? 2 : 3);
-      } else if (wood(x, z) < -0.55 && R0() < 0.5) {
-        const sz = r * (0.03 + R0() * 0.02);
-        plan(list, x, F + 1, z, M.FIELD, haze, [Math.cos(a), 0, -Math.sin(a)], sz * 2, up, sz * 0.6, R0(), [11, 7][Math.floor(R0() * 2)], 0, R0() < 0.5 ? 0 : 1);
+    // (woods: a few large connected masses, not crowns scattered evenly: where a broad mask is high the wood's body in broad
+    // dark level strokes, its edge ragged with crowns standing out of it; the woods gathered along the river; between them,
+    // the floor left quiet)
+    const rvw = riverLine(seed), dRiver = (x: number, z: number) => { let b = Infinity; for (const p of rvw) b = Math.min(b, (p[0] - x) ** 2 + (p[2] - z) ** 2); return Math.sqrt(b); };
+    const wood = (x: number, z: number) => 0.6 * Math.sin(x / 700 + seed * 1.3) * Math.sin(z / 560 - seed) + 0.35 * Math.sin((x + z) / 380 + seed * 2) + 0.55 * Math.exp(-((dRiver(x, z) / 260) ** 2)) - 0.1;
+    for (let i = 0; i < 7000; i++) {
+      const r = 300 * Math.pow(3400 / 300, R0()), a = R0() * Math.PI * 2, x = Math.sin(a) * r, z = Math.cos(a) * r, haze = Math.min(0.55, r / 5500), w = wood(x, z);
+      if (w > 0.42) {
+        const L = r * (0.1 + R0() * 0.06), aa = a + (R0() - 0.5) * 0.3;
+        plan(list, x, F + r * 0.004, z, M.BLACK, haze, [Math.cos(aa), 0, -Math.sin(aa)], L, [-Math.sin(a), 0.6, -Math.cos(a)], L * 0.32, R0(), [11, 0, 11][Math.floor(R0() * 3)], 0, R0() < 0.2 ? 2 : 3);
+      } else if (w > 0.3) {
+        const sz = r * (0.016 + R0() * 0.012);
+        plan(list, x, F + sz * 0.6, z, M.BLACK, haze, [0, 1, 0], sz * 1.4, [-Math.sin(a), 0, -Math.cos(a)], sz * 1.1, R0(), [3, 2][Math.floor(R0() * 2)], 0, R0() < 0.35 ? 1 : 3);
       }
     }
     const rvl = riverLine(seed);
@@ -684,7 +688,7 @@ export function valleyStrokes(seed: number): Float32Array {
     const p = rv[k], q = rv[k + 1], dx = q[0] - p[0], dz = q[2] - p[2], L = Math.hypot(dx, dz), d = Math.hypot((p[0] + q[0]) / 2, (p[2] + q[2]) / 2);
     for (let m = 0; m < 3; m++) {
       const t = (m + R0()) / 3, x = p[0] + dx * t, z = p[2] + dz * t;
-      plan(list, x, F + 1.5, z, M.WHITE, Math.min(0.45, d / 6000), [dx / L, 0, dz / L], L * 0.75, up, 11 + R0() * 5, R0(), [0, 7][Math.floor(R0() * 2)], (R0() - 0.5) * 0.1, m === 0 ? 0 : 1);
+      plan(list, x, F + 1.5, z, M.WHITE, Math.min(0.45, d / 6000), [dx / L, 0, dz / L], L * 0.75, up, (14 + R0() * 6) * (1 + d / 2500), R0(), [0, 7][Math.floor(R0() * 2)], (R0() - 0.5) * 0.1, m === 0 ? 0 : 1);
     }
   }
   const out: number[] = [];
