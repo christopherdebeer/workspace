@@ -54,8 +54,11 @@ vec3 beltMix(vec3 c, vec3 w, float dist){
   float ov = max(0., min(hi, yt) - max(lo, yb)), path = dy > 1. ? ov/dy*dist : (uEye.y > yb && uEye.y < yt ? dist : 0.);
   float bank = .55 + .45*sin(w.x/90. + uCloud*380.)*sin(w.z/70. - uCloud*290.);
   float k = 1. - exp(-path/(uBelt.z*mix(.45, 1.7, bank)));
-  if (uEye.y < yb) { float under = smoothstep(25., 240., yb - uEye.y), hole = fract(sin(dot(floor(w.xz/520.), vec2(12.9898, 78.233)))*43758.5453);
-    k *= mix(1., hole > .45 ? .12 : .6, under); }
+  // (below it, a ceiling that thins quickly as you come down out of it and opens into broad patches of sky, by where you
+  // look (drifting slowly), so the sky below the belt isn't one flat grey lid)
+  if (uEye.y < yb) { float under = smoothstep(10., 140., yb - uEye.y);
+    vec2 dir = normalize(w.xz - uEye.xz + vec2(1e-4)); float hole = .5 + .5*sin(dir.x*4.1 + uCloud*150. + 1.3)*sin(dir.y*3.3 - uCloud*110.) + .25*sin(atan(dir.y, dir.x)*7.);
+    k *= mix(1., mix(.55, .05, smoothstep(.35, .6, hole)), under); }
   vec3 col = uBeltCol*mix(.9, 1.06, clamp((w.y - yb)/(2.*uBelt.y), 0., 1.));
   return mix(c, col, k);
 }

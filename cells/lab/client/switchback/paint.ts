@@ -661,12 +661,12 @@ export function valleyStrokes(seed: number): Float32Array {
     // dark level strokes, its edge ragged with crowns standing out of it; the woods gathered along the river; between them,
     // the floor left quiet)
     const rvw = riverLine(seed), dRiver = (x: number, z: number) => { let b = Infinity; for (const p of rvw) b = Math.min(b, (p[0] - x) ** 2 + (p[2] - z) ** 2); return Math.sqrt(b); };
-    const wood = (x: number, z: number) => 0.6 * Math.sin(x / 700 + seed * 1.3) * Math.sin(z / 560 - seed) + 0.35 * Math.sin((x + z) / 380 + seed * 2) + 0.55 * Math.exp(-((dRiver(x, z) / 260) ** 2)) - 0.1;
-    for (let i = 0; i < 7000; i++) {
+    const wood = (x: number, z: number) => 0.8 * Math.sin(x / 640 + seed * 1.3) * Math.sin(z / 520 - seed) + 0.3 * Math.sin((x + z) / 330 + seed * 2) + 0.4 * Math.exp(-((dRiver(x, z) / 240) ** 2)) + 0.12;
+    for (let i = 0; i < 10000; i++) {
       const r = 300 * Math.pow(3400 / 300, R0()), a = R0() * Math.PI * 2, x = Math.sin(a) * r, z = Math.cos(a) * r, haze = Math.min(0.55, r / 5500), w = wood(x, z);
       if (w > 0.42) {
         const L = r * (0.1 + R0() * 0.06), aa = a + (R0() - 0.5) * 0.3;
-        plan(list, x, F + r * 0.004, z, M.BLACK, haze, [Math.cos(aa), 0, -Math.sin(aa)], L, [-Math.sin(a), 0.6, -Math.cos(a)], L * 0.32, R0(), [11, 0, 11][Math.floor(R0() * 3)], 0, R0() < 0.2 ? 2 : 3);
+        plan(list, x, F + r * 0.004, z, M.BLACK, haze, [Math.cos(aa), 0, -Math.sin(aa)], L, [-Math.sin(a), 0.6, -Math.cos(a)], L * 0.32, R0(), [11, 0, 11][Math.floor(R0() * 3)], 0, R0() < 0.5 ? 2 : 3);
       } else if (w > 0.3) {
         const sz = r * (0.016 + R0() * 0.012);
         plan(list, x, F + sz * 0.6, z, M.BLACK, haze, [0, 1, 0], sz * 1.4, [-Math.sin(a), 0, -Math.cos(a)], sz * 1.1, R0(), [3, 2][Math.floor(R0() * 2)], 0, R0() < 0.35 ? 1 : 3);
@@ -992,8 +992,11 @@ vec3 beltMix(vec3 c, vec3 w, float dist){
   float ov = max(0., min(hi, yt) - max(lo, yb)), path = dy > 1. ? ov/dy*dist : (uEye.y > yb && uEye.y < yt ? dist : 0.);
   float bank = .55 + .45*sin(w.x/90. + uCloud*380.)*sin(w.z/70. - uCloud*290.);
   float k = 1. - exp(-path/(uBelt.z*mix(.45, 1.7, bank)));
-  if (uEye.y < yb) { float under = smoothstep(25., 240., yb - uEye.y), hole = fract(sin(dot(floor(w.xz/520.), vec2(12.9898, 78.233)))*43758.5453);
-    k *= mix(1., hole > .45 ? .12 : .6, under); }
+  // (below it, a ceiling that thins quickly as you come down out of it and opens into broad patches of sky, by where you
+  // look (drifting slowly), so the sky below the belt isn't one flat grey lid)
+  if (uEye.y < yb) { float under = smoothstep(10., 140., yb - uEye.y);
+    vec2 dir = normalize(w.xz - uEye.xz + vec2(1e-4)); float hole = .5 + .5*sin(dir.x*4.1 + uCloud*150. + 1.3)*sin(dir.y*3.3 - uCloud*110.) + .25*sin(atan(dir.y, dir.x)*7.);
+    k *= mix(1., mix(.55, .05, smoothstep(.35, .6, hole)), under); }
   vec3 col = uBeltCol*mix(.9, 1.06, clamp((w.y - yb)/(2.*uBelt.y), 0., 1.));
   return mix(c, col, k);
 }
