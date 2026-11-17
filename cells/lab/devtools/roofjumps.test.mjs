@@ -5,8 +5,8 @@
 import { build } from 'esbuild';
 import assert from 'node:assert/strict';
 const lab = new URL('../client/roofjumps/', import.meta.url).pathname;
-const out = await build({ stdin: { contents: `export * from './city'; export * from './runner'; export * from './rig'; export * from './mesh';`, resolveDir: lab, loader: 'ts' }, bundle: true, write: false, format: 'esm', platform: 'node' });
-const { City, Runner, Rig, CHUNK, STOREY, TAG, VERTEX, chunkMesh, figureMesh, FIGURE } = await import('data:text/javascript;base64,' + Buffer.from(out.outputFiles[0].text).toString('base64'));
+const out = await build({ stdin: { contents: `export * from './city'; export * from './runner'; export * from './rig'; export * from './mesh'; export * from './plan'; export * from './tune';`, resolveDir: lab, loader: 'ts' }, bundle: true, write: false, format: 'esm', platform: 'node' });
+const { plan, foresee, TUNE, HOUSE, DIALS, City, Runner, Rig, CHUNK, STOREY, TAG, VERTEX, chunkMesh, figureMesh, FIGURE } = await import('data:text/javascript;base64,' + Buffer.from(out.outputFiles[0].text).toString('base64'));
 
 // the same chunk, whatever was made before it
 {
@@ -61,5 +61,27 @@ const { City, Runner, Rig, CHUNK, STOREY, TAG, VERTEX, chunkMesh, figureMesh, FI
   console.log(`64 runs of ${SECONDS}s: slowest ${worst.toFixed(1)} m/s made good; ${leaps} leaps, ${climbs} walls run up`);
   console.log('  moves: ' + Object.entries(moves).sort((a, b) => b[1] - a[1]).map(([m, n]) => `${m} ${n}`).join(', '));
   for (const m of ['hop', 'bound', 'flip', 'spring', 'dive', 'glide', 'roll', 'dash', 'wallrun', 'climb']) assert.ok(moves[m] > 20, `it ${m}s`);
+}
+// the plan is what happens: a route foreseen is the route run, for as long as the heading holds; the fan has the way
+// asked in the middle and a best either side; and a dial turned changes what's foreseen
+{
+  for (const d of DIALS) assert.ok(d.house >= d.min && d.house <= d.max, `${d.key} within its range`);
+  const STEPS = Math.round(TUNE.horizon * 120);
+  for (const seed of [1, 7]) for (const a of [0.3, 2.1, 4.4]) {
+    const r = new Runner(new City(seed)), dx = Math.sin(a), dz = Math.cos(a);
+    for (let i = 0; i < 400; i++) r.step(1 / 120, { x: dx, z: dz, jump: false });
+    const route = foresee(r, dx, dz), p = plan(r, dx, dz), before = [r.x, r.y, r.z, r.leaps];
+    assert.deepEqual([r.x, r.y, r.z, r.leaps], before, 'thinking moves nothing');
+    assert.equal(p.all.length, 2 * TUNE.fan + 1); assert.equal(p.primary.off, 0);
+    assert.ok(p.left.off < 0 && p.right.off > 0 && p.best.score >= p.primary.score);
+    assert.deepEqual(p.primary.pts, route.pts);
+    for (let i = 0; i < STEPS; i++) r.step(1 / 120, { x: dx, z: dz, jump: false });
+    const n = route.pts.length;
+    assert.ok(Math.hypot(r.x - route.pts[n - 3], r.y - route.pts[n - 2], r.z - route.pts[n - 1]) < 1e-9, 'the route foreseen is the route run');
+    assert.ok(route.legs.length >= 3, 'a route is more than the next jump');
+  }
+  const r = new Runner(new City(1)); for (let i = 0; i < 400; i++) r.step(1 / 120, { x: 0, z: 1, jump: false });
+  const a = foresee(r, 0, 1); TUNE.gravity = 9; const b = foresee(r, 0, 1); TUNE.gravity = HOUSE.gravity;
+  assert.notDeepEqual(a.pts, b.pts, 'a dial turned is felt');
 }
 console.log('roofjumps: ok');

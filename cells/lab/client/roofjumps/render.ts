@@ -67,6 +67,17 @@ const SFS = `#version 300 es
 precision highp float; in vec2 vUv; uniform float uA; out vec4 o;
 void main() { float r = length(vUv); if (r > 1.0) discard; o = vec4(0.0, 0.0, 0.0, uA * (1.0 - smoothstep(0.55, 1.0, r))); }`;
 
+// (lines in the world, for showing working: ribbons a given width, turned to the eye)
+const LVS = `#version 300 es
+in vec3 aPos; in vec4 aCol; uniform mat4 uVP; out vec4 vCol;
+void main() { vCol = aCol; gl_Position = uVP * vec4(aPos, 1.0); }`;
+const LFS = `#version 300 es
+precision highp float; in vec4 vCol; uniform float uA; out vec4 o;
+void main() { o = vec4(vCol.rgb, vCol.a * uA); }`;
+
+/** a line in the world: its points (x y z each), a colour a point (r g b a each), its width (m) */
+export interface Stroke { pts: number[]; cols: number[]; w: number }
+
 interface Built { vao: WebGLVertexArrayObject; buf: WebGLBuffer; n: number; cx: number; cz: number }
 
 export class Renderer {
@@ -75,7 +86,8 @@ export class Renderer {
   /** how far is drawn, in chunks */
   radius = 4;
   fog: [number, number, number] = [0.8, 0.8, 0.79];
-  private prog: WebGLProgram; private sprog: WebGLProgram;
+  private prog: WebGLProgram; private sprog: WebGLProgram; private lprog: WebGLProgram;
+  private lvao: WebGLVertexArrayObject; private lbuf: WebGLBuffer; private ldata = new Float32Array(7 * 6 * 4096);
   private built = new Map<string, Built>();
   private fig: Built; private figData = new Float32Array(FIGURE); private disc: WebGLVertexArrayObject;
   private u: Record<string, WebGLUniformLocation | null> = {};
@@ -88,6 +100,13 @@ export class Renderer {
     this.prog = this.program(VS, FS); this.sprog = this.program(SVS, SFS);
     for (const n of ['uVP', 'uEye', 'uFog', 'uFar', 'uLook']) this.u[n] = gl.getUniformLocation(this.prog, n);
     for (const n of ['uVP', 'uAt', 'uA']) this.u['s' + n] = gl.getUniformLocation(this.sprog, n);
+    this.lprog = this.program(LVS, LFS, ['aPos', 'aCol']);
+    for (const n of ['uVP', 'uA']) this.u['l' + n] = gl.getUniformLocation(this.lprog, n);
+    this.lvao = gl.createVertexArray()!; this.lbuf = gl.createBuffer()!;
+    gl.bindVertexArray(this.lvao); gl.bindBuffer(gl.ARRAY_BUFFER, this.lbuf); gl.bufferData(gl.ARRAY_BUFFER, this.ldata, gl.DYNAMIC_DRAW);
+    gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 28, 0);
+    gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1, 4, gl.FLOAT, false, 28, 12);
+    gl.bindVertexArray(null);
     this.fig = this.vao(this.figData, gl.DYNAMIC_DRAW, 0, 0);
     this.disc = gl.createVertexArray()!;
     gl.bindVertexArray(this.disc);
@@ -97,14 +116,14 @@ export class Renderer {
     gl.bindVertexArray(null);
   }
 
-  private program(vs: string, fs: string): WebGLProgram {
+  private program(vs: string, fs: string, attribs = ['aPos', 'aNor', 'aTag']): WebGLProgram {
     const gl = this.gl, p = gl.createProgram()!;
     for (const [t, src] of [[gl.VERTEX_SHADER, vs], [gl.FRAGMENT_SHADER, fs]] as const) {
       const s = gl.createShader(t)!; gl.shaderSource(s, src); gl.compileShader(s);
       if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s) ?? 'shader');
       gl.attachShader(p, s);
     }
-    gl.bindAttribLocation(p, 0, 'aPos'); gl.bindAttribLocation(p, 1, 'aNor'); gl.bindAttribLocation(p, 2, 'aTag');
+    attribs.forEach((a, i) => gl.bindAttribLocation(p, i, a));
     gl.linkProgram(p);
     if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p) ?? 'link');
     return p;
@@ -163,5 +182,34 @@ export class Renderer {
       gl.depthMask(true);
     }
     gl.bindVertexArray(null);
+  }
+
+  /** Lines in the world, over the picture: plain where they can be seen, faint where something stands in front. */
+  lines(vp: M4, eye: number[], strokes: Stroke[]): void {
+    const gl = this.gl, o = this.ldata; let at = 0;
+    const put = (x: number, y: number, z: number, c: number[], i: number) => { o[at++] = x; o[at++] = y; o[at++] = z; o[at++] = c[i]; o[at++] = c[i + 1]; o[at++] = c[i + 2]; o[at++] = c[i + 3]; };
+    for (const s of strokes) {
+      const n = s.pts.length / 3;
+      for (let i = 0; i + 1 < n && at + 42 <= o.length; i++) {
+        const ax = s.pts[i * 3], ay = s.pts[i * 3 + 1], az = s.pts[i * 3 + 2], bx = s.pts[i * 3 + 3], by = s.pts[i * 3 + 4], bz = s.pts[i * 3 + 5];
+        // (across it: square to the line and to the way it's seen)
+        const dx = bx - ax, dy = by - ay, dz = bz - az, vx = eye[0] - ax, vy = eye[1] - ay, vz = eye[2] - az;
+        let sx = dy * vz - dz * vy, sy = dz * vx - dx * vz, sz = dx * vy - dy * vx; const l = Math.hypot(sx, sy, sz);
+        if (l < 1e-9) continue;
+        // (as wide as asked close to, and no thinner than that looks from six metres however far off it is)
+        const w = (s.w / 2) * Math.max(1, Math.hypot(vx, vy, vz) / 6);
+        sx *= w / l; sy *= w / l; sz *= w / l;
+        const ca = i * 4, cb = i * 4 + 4;
+        put(ax - sx, ay - sy, az - sz, s.cols, ca); put(ax + sx, ay + sy, az + sz, s.cols, ca); put(bx + sx, by + sy, bz + sz, s.cols, cb);
+        put(ax - sx, ay - sy, az - sz, s.cols, ca); put(bx + sx, by + sy, bz + sz, s.cols, cb); put(bx - sx, by - sy, bz - sz, s.cols, cb);
+      }
+    }
+    if (!at) return;
+    gl.useProgram(this.lprog); gl.uniformMatrix4fv(this.u.luVP, false, vp);
+    gl.bindVertexArray(this.lvao); gl.bindBuffer(gl.ARRAY_BUFFER, this.lbuf); gl.bufferSubData(gl.ARRAY_BUFFER, 0, o.subarray(0, at));
+    gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA); gl.disable(gl.CULL_FACE); gl.depthMask(false);
+    gl.disable(gl.DEPTH_TEST); gl.uniform1f(this.u.luA, 0.22); gl.drawArrays(gl.TRIANGLES, 0, at / 7);
+    gl.enable(gl.DEPTH_TEST); gl.uniform1f(this.u.luA, 1); gl.drawArrays(gl.TRIANGLES, 0, at / 7);
+    gl.depthMask(true); gl.bindVertexArray(null);
   }
 }

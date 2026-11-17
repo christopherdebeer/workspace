@@ -12,6 +12,9 @@ This is a study of two things only, the geometry and the figure moving over it, 
 as plainly as it can be on purpose: one grey, one light, fog. The point is to have a core that
 looks can be tried over later without touching it.
 
+Under `dials` is every number of the run, turned while it runs, and the plan: where this heading
+leads, drawn into the city. Keys: P the plan, O the dials, K hold time, L one step of it.
+
 `?seed=` the city · `?look=grid|clay|wire|tags|normals` · `?auto` it runs itself, wandering ·
 `?t=` start that many seconds into such a run · `?still` hold the frame · `?preview` nothing over
 the picture · `?follow=0` the eye never turns by itself · `?far=` chunks drawn each way (4) ·
@@ -62,6 +65,51 @@ onto is jumped at, caught and run up. Turn away in the air and the leap is yours
  Its test holds a direction for a minute, sixteen ways in four
 cities, and checks it never stops, never leaves the surface, makes at least 5 m/s good, and makes every move
 (`node cells/lab/devtools/roofjumps.test.mjs`).
+
+## The plan (`plan.ts`)
+
+Where a heading leads, further than the next jump. A route is the runner itself run on ahead: a
+copy of it, as it is this instant, stepped through the next three seconds holding one direction,
+with every leap, wall and roll it would make on the way. Nothing is guessed: it is the same code
+that moves the real one, so the route drawn is the route taken for as long as the heading holds
+(the test checks that to the last decimal).
+
+A plan is a fan of those: the way asked (the primary) and four ways either side of it, eleven
+degrees apart, each scored: ground made, less what it costs (coming down to the street, climbing
+back up, time spent gliding), more for walls and ledges. The best to the left and the best to the
+right are the alternatives: turn that much and that one is the primary.
+
+`?plan` (or P) draws it into the city: each route a ribbon coloured by the move it is in, a ring
+where each move begins; the primary broad, the two alternatives narrower, the rest of the fan
+hairlines; faint where a building stands in front. `?readout` says it in words, with each route's
+score and a star on the best. `?assist=1` leans your heading onto the best by itself; the
+self-running mode steers by it entirely.
+
+| colour | move | colour | move |
+|---|---|---|---|
+| near black | run | green | spring |
+| orange | dash | red | dive |
+| white | ledge | cyan | glide |
+| pink | roll | magenta | wall run |
+| yellow | hop | brown | climb |
+| blue | bound | violet | flip |
+
+## The dials (`tune.ts`, `palette.ts`)
+
+Every number worth turning, named, ranged, grouped, with a mark where the house keeps it (a
+double tap on a name puts it back; `house` puts them all back). The runner, the planner and the
+eye read them each step, so a dial turned is felt at once, and the plan redraws to show what it
+changed. The address keeps the ones that differ from the house, by key, so a tuning is a link.
+
+| group | what is in it |
+|---|---|
+| plan | show it, say it, how far ahead, how many ways each side and how far apart, assist, and the four weights of the score |
+| run | run, sprint and dash speeds, how long a dash lasts, quickness, pace on a ledge and how strongly a ledge draws you |
+| leap | gravity, reach, how far up it springs, how far down it drops before looking higher, the fastest leap, where dives begin, how often it flips, extra height |
+| glide | where glides begin (down, across), gravity gliding, the fastest it sinks, steering in the air |
+| wall | wall runs on or off, how long one lasts, its pace, how near a wall must be, gravity on it, the kick off, the speed up a wall |
+| eye | distance, height, lens, how much it widens with speed, how fast it comes round behind, swung round the figure |
+| time | the speed of time (down to a twentieth), held, runs itself |
 
 ## The figure (`rig.ts`)
 

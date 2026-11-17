@@ -22,6 +22,7 @@
  * through it, the stride, the leading leg, the wall's side, the landing's weight).
  */
 import type { City } from './city';
+import { TUNE } from './tune';
 
 export interface Input { x: number; z: number; jump: boolean }
 
@@ -38,29 +39,21 @@ export interface Body {
   wallSide: number;
 }
 
-/** gravity; and for a glide coming down, with the fastest it sinks (m/s², m/s) */
-export const G = 20, GF = 8, SINK = 8.5;
+
 /** how long a fall of `s` metres from rest takes: as anything falls, or gliding */
 const fall = (s: number, float: boolean) => {
   s = Math.max(0, s);
+  const G = TUNE.gravity, GF = TUNE.glideGravity, SINK = TUNE.sink;
   if (!float) return Math.sqrt((2 * s) / G);
   return s <= (SINK * SINK) / (2 * GF) ? Math.sqrt((2 * s) / GF) : SINK / GF + (s - (SINK * SINK) / (2 * GF)) / SINK;
 };
-/** running; after a couple of seconds of it; in a dash (m/s) */
-const RUN = 10.5, SPRINT = 14, DASH = 18.5;
-const ACCEL = 42;
 /** a difference in height walked over without a thought (m) */
 const STEP = 0.45;
-/** how far up a leap can land (a storey), and how far down it will choose to before looking for anything higher (m) */
-const RISE = 3.4, DROP = 7;
-/** the fastest a leap carries (m/s) */
-const VLEAP = 19;
-const CLIMB = 14;
 /** the body's radius against walls (m) */
 const R = 0.35;
 const JUMP = 9.5;
-/** a roll's and a dash's length (s) */
-const ROLL = 0.5, DASHT = 0.55;
+/** a roll's length (s) */
+const ROLL = 0.5;
 const AXES = [[1, 0], [-1, 0], [0, 1], [0, -1]];
 
 export class Runner implements Body {
@@ -90,12 +83,17 @@ export class Runner implements Body {
   private top = 0;
   private air2 = false; private flats = 0;
   leaps = 0; climbs = 0; walls = 0; rolls = 0; dashes = 0; dist = 0;
+  /** times it has come down to the street off a roof */
+  streets = 0; private high = 0;
   /** how many of each move it has made */
   made: Partial<Record<Move, number>> = {};
 
   constructor(readonly city: City) { const s = city.start(); this.x = s.x; this.y = s.y; this.z = s.z; }
 
   get speed(): number { return Math.hypot(this.vx, this.vz); }
+
+  /** another of it, as it is now, to be run on ahead without touching this one (plan.ts) */
+  clone(): Runner { const c = Object.assign(Object.create(Runner.prototype) as Runner, this); c.made = { ...this.made }; return c; }
   private count(m: Move): void { this.made[m] = (this.made[m] ?? 0) + 1; }
 
   step(dt: number, inp: Input): void {
@@ -115,6 +113,7 @@ export class Runner implements Body {
     let dh = this.heading - h0; dh -= Math.round(dh / (2 * Math.PI)) * 2 * Math.PI;
     this.turn += (dh / dt - this.turn) * (1 - Math.exp(-8 * dt));
     this.dist += Math.hypot(this.x - x0, this.z - z0);
+    if (this.state === 'ground') { if (this.y < 0.5 && this.high > 4) this.streets++; this.high = this.y; } else this.high = Math.max(this.high, this.y);
   }
 
   private ground(dt: number, mag: number, on: boolean, dx: number, dz: number, jump: boolean): void {
@@ -127,20 +126,20 @@ export class Runner implements Body {
     const fx = sp > 1 ? this.vx / sp : Math.sin(this.heading), fz = sp > 1 ? this.vz / sp : Math.cos(this.heading);
     const ledge = this.y > 0 && H(this.x - fz * 0.8, this.z + fx * 0.8) < this.y - STEP && H(this.x + fz * 0.8, this.z - fx * 0.8) < this.y - STEP;
     const k = Math.min(1, Math.max(0, (this.runT - 0.5) / 2));
-    let top = this.dashT > 0 ? DASH : mag * (RUN + (SPRINT - RUN) * k * k * (3 - 2 * k));
+    let top = this.dashT > 0 ? TUNE.dash : mag * (TUNE.run + (TUNE.sprint - TUNE.run) * k * k * (3 - 2 * k));
     if (ledge) {
-      top = Math.min(top, 10.5);
+      top = Math.min(top, TUNE.ledgeSpeed);
       // (and if it runs our way, drawn onto its line)
       const b = this.city.topAt(this.x, this.z);
       if (b && on) {
         const w = b.x1 - b.x0, d = b.z1 - b.z0;
-        if (w <= 2 && d > w && Math.abs(dz) > 0.6) { dx = 0; dz = Math.sign(dz); this.x += ((b.x0 + b.x1) / 2 - this.x) * (1 - Math.exp(-10 * dt)); }
-        else if (d <= 2 && w > d && Math.abs(dx) > 0.6) { dz = 0; dx = Math.sign(dx); this.z += ((b.z0 + b.z1) / 2 - this.z) * (1 - Math.exp(-10 * dt)); }
+        if (w <= 2 && d > w && Math.abs(dz) > 1 - 0.66 * TUNE.ledgePull) { dx = 0; dz = Math.sign(dz); this.x += ((b.x0 + b.x1) / 2 - this.x) * (1 - Math.exp(-10 * dt)); }
+        else if (d <= 2 && w > d && Math.abs(dx) > 1 - 0.66 * TUNE.ledgePull) { dz = 0; dx = Math.sign(dx); this.z += ((b.z0 + b.z1) / 2 - this.z) * (1 - Math.exp(-10 * dt)); }
       }
     }
     this.move = this.rollT > 0 ? 'roll' : this.dashT > 0 ? 'dash' : ledge ? 'ledge' : 'run';
     // (toward the wanted velocity, at a fixed rate: a turn is quick, a reversal a skid)
-    const tx = dx * top, tz = dz * top, ex = tx - this.vx, ez = tz - this.vz, e = Math.hypot(ex, ez), a = (this.dashT > 0 ? 90 : ACCEL) * dt;
+    const tx = dx * top, tz = dz * top, ex = tx - this.vx, ez = tz - this.vz, e = Math.hypot(ex, ez), a = (this.dashT > 0 ? 90 : TUNE.accel) * dt;
     if (e <= a) { this.vx = tx; this.vz = tz; } else { this.vx += (ex / e) * a; this.vz += (ez / e) * a; }
     sp = this.speed;
     this.phase += ((sp * dt) / (1.3 + 0.27 * sp)) * 2 * Math.PI;
@@ -169,7 +168,7 @@ export class Runner implements Body {
     const H = (d: number) => this.city.heightAt(this.x + ux * d, this.z + uz * d);
     /** somewhere to stand: the same height for a good stride beyond */
     const flat = (d: number, h: number) => Math.abs(H(d + 0.6) - h) < 0.1 && Math.abs(H(d + 1.2) - h) < 0.1;
-    const reach = 8 + sp, y = this.y;
+    const reach = TUNE.reach + sp, y = this.y, G = TUNE.gravity, RISE = TUNE.rise, DROP = TUNE.drop, VLEAP = TUNE.leapSpeed;
     let at = -1, to = 0, over = y, wall = -1;
     // (the first place within a storey up or a couple down; what's in the way before it, to clear; or a wall)
     for (let d = from; d <= reach; d += 0.5) {
@@ -194,12 +193,13 @@ export class Runner implements Body {
     if (dh >= 1.2) { move = 'spring'; apex = clear + 0.6; }
     // (something tall in the way: over it, turned over)
     else if (clear >= 1.2) { move = 'flip'; apex = clear + 0.5; }
-    else if (dh <= -6 || D > 11) { move = 'glide'; apex = clear + 0.55 + 0.045 * D; }
-    else if (dh <= -2) { move = 'dive'; apex = clear + 0.4; }
+    else if (dh <= -TUNE.glideDrop || D > TUNE.glideDist) { move = 'glide'; apex = clear + 0.55 + 0.045 * D; }
+    else if (dh <= -TUNE.diveDrop) { move = 'dive'; apex = clear + 0.4; }
     else if (over - y >= 0.6 && D <= 5) { move = 'hop'; apex = clear + 0.3; }
-    else if (D > 4 && ++this.flats % 2 === 0) { move = 'flip'; apex = clear + 1.5; }
+    else if (D > 4 && ++this.flats % Math.max(1, Math.round(TUNE.flipEvery)) === 0) { move = 'flip'; apex = clear + 1.5; }
     else { move = 'bound'; apex = clear + 0.1 + 0.06 * D; }
     const float = move === 'glide';
+    apex += TUNE.hang;
     // (the arc: up to an apex that clears what's between, down to the landing; higher if it'd otherwise be too fast)
     let T = 0, up = 0;
     for (let i = 0; i < 24; i++) { up = Math.sqrt((2 * apex) / G); T = up + fall(apex - dh, float); if (D / T <= VLEAP) break; apex += 0.4; }
@@ -225,13 +225,13 @@ export class Runner implements Body {
     const sp = this.speed;
     if (this.planned && on && sp > 0.5 && (this.vx * dx + this.vz * dz) / sp < 0.5) this.planned = false;
     if (!this.planned && on) {
-      const top = Math.max(sp, 7), tx = dx * top, tz = dz * top, ex = tx - this.vx, ez = tz - this.vz, e = Math.hypot(ex, ez), a = 16 * dt;
+      const top = Math.max(sp, 7), tx = dx * top, tz = dz * top, ex = tx - this.vx, ez = tz - this.vz, e = Math.hypot(ex, ez), a = TUNE.steer * dt;
       if (e <= a) { this.vx = tx; this.vz = tz; } else { this.vx += (ex / e) * a; this.vz += (ez / e) * a; }
     }
     // (a second jump, off nothing, turned over: once a flight)
     if (jump && this.air2) { this.launch(JUMP * 0.95, 'flip', false, false, 0.8); this.air2 = false; }
-    if (this.float) { this.vy -= (this.vy > 0 ? G : GF) * dt; if (this.vy < -SINK) this.vy += (-SINK - this.vy) * (1 - Math.exp(-8 * dt)); }
-    else this.vy -= G * dt;
+    if (this.float) { this.vy -= (this.vy > 0 ? TUNE.gravity : TUNE.glideGravity) * dt; if (this.vy < -TUNE.sink) this.vy += (-TUNE.sink - this.vy) * (1 - Math.exp(-8 * dt)); }
+    else this.vy -= TUNE.gravity * dt;
     // (a wall alongside: run along it)
     if (this.airT > 0.1 && (!this.planned || (this.float && this.mu > 0.3)) && this.seek(0.62)) return;
     const s2 = this.speed, ux = s2 > 0.1 ? this.vx / s2 : 0, uz = s2 > 0.1 ? this.vz / s2 : 0;
@@ -255,20 +255,20 @@ export class Runner implements Body {
   /** A wall to run along: beside the way it's going (no more head-on than `slant`), within reach, going on ahead. */
   private seek(slant: number): boolean {
     const sp = this.speed;
-    if (this.wallCool > 0 || sp < 6) return false;
+    if (!TUNE.walls || this.wallCool > 0 || sp < 6) return false;
     const H = (x: number, z: number) => this.city.heightAt(x, z), ux = this.vx / sp, uz = this.vz / sp;
     for (const [ax, az] of AXES) {
       const along = ax * ux + az * uz;
       if (along < -0.1 || along > slant) continue;
-      let d = 0.1; while (d <= 1.05 && H(this.x + ax * d, this.z + az * d) <= this.y + 1.2) d += 0.1;
-      if (d > 1.05) continue;
+      let d = 0.1; while (d <= TUNE.wallReach && H(this.x + ax * d, this.z + az * d) <= this.y + 1.2) d += 0.1;
+      if (d > TUNE.wallReach) continue;
       let tx = ux - ax * along, tz = uz - az * along; const tl = Math.hypot(tx, tz); tx /= tl; tz /= tl;
       const wx = this.x + ax * (d + 0.05), wz = this.z + az * (d + 0.05);
       // (it has to go on: a wall there a stride ahead, and nothing across the way along it)
       if (H(wx + tx * 1.5, wz + tz * 1.5) <= this.y + 1.2 || H(this.x + ax * (d - R - 0.05) + tx * 1.5, this.z + az * (d - R - 0.05) + tz * 1.5) > this.y) continue;
       this.x += ax * (d - R - 0.05); this.z += az * (d - R - 0.05);
       this.state = 'wall'; this.move = 'wallrun'; this.wx = ax; this.wz = az; this.tx = tx; this.tz = tz; this.wallT = 0;
-      this.wsp = Math.max(10.5, sp * Math.sqrt(1 - along * along)); this.vy = Math.min(5, Math.max(this.vy, 3.5));
+      this.wsp = Math.max(TUNE.wallSpeed, sp * Math.sqrt(1 - along * along)); this.vy = Math.min(5, Math.max(this.vy, 3.5));
       this.vx = tx * this.wsp; this.vz = tz * this.wsp; this.planned = false;
       // (which side of the figure it's on: the figure's +x is (cos, -sin) of its heading)
       const hd = Math.atan2(tx, tz); this.wallSide = ax * Math.cos(hd) - az * Math.sin(hd) > 0 ? 1 : -1;
@@ -281,12 +281,12 @@ export class Runner implements Body {
   /** Along a wall: a shallow arc, rising then sinking, until the wall ends, its top comes, or it's time to kick off. */
   private wall(dt: number, on: boolean, dx: number, dz: number, jump: boolean): void {
     const H = (x: number, z: number) => this.city.heightAt(x, z);
-    this.wallT += dt; this.vy -= 9 * dt;
+    this.wallT += dt; this.vy -= TUNE.wallGravity * dt;
     const kick = () => {
-      this.vx = this.tx * this.wsp * 0.9 - this.wx * 6; this.vz = this.tz * this.wsp * 0.9 - this.wz * 6;
+      this.vx = this.tx * this.wsp * 0.9 - this.wx * TUNE.kick; this.vz = this.tz * this.wsp * 0.9 - this.wz * TUNE.kick;
       this.wallCool = 0.12; this.launch(7.5, 'bound', false, false, 0.75);
     };
-    if (jump || (on && dx * this.wx + dz * this.wz < -0.5) || this.wallT > 1.1) { kick(); return; }
+    if (jump || (on && dx * this.wx + dz * this.wz < -0.5) || this.wallT > TUNE.wallTime) { kick(); return; }
     const nx = this.x + this.tx * this.wsp * dt, nz = this.z + this.tz * this.wsp * dt, ny = this.y + this.vy * dt;
     // (something across the way: off the wall)
     if (H(nx + this.tx * R, nz + this.tz * R) > ny + 0.05) { kick(); return; }
@@ -311,7 +311,7 @@ export class Runner implements Body {
     // (out of a roll, or landed as meant with room ahead: a dash)
     if (sp > 6 && (this.rollT > 0 || (aimed && was !== 'glide' && was !== 'spring'))) {
       const H = (d: number) => this.city.heightAt(this.x + ux * d, this.z + uz * d);
-      if (this.rollT > 0 || [2, 4, 6].every((d) => Math.abs(H(d) - this.y) <= STEP)) { this.dashT = DASHT + this.rollT; this.dashes++; this.count('dash'); }
+      if (this.rollT > 0 || [2, 4, 6].every((d) => Math.abs(H(d) - this.y) <= STEP)) { this.dashT = TUNE.dashTime + this.rollT; this.dashes++; this.count('dash'); }
     }
   }
 
@@ -322,7 +322,7 @@ export class Runner implements Body {
       const ox = on ? dx : -this.wx, oz = on ? dz : -this.wz;
       this.vx = ox * 8; this.vz = oz * 8; this.launch(JUMP, 'flip', false, false, 0.9); return;
     }
-    this.y += CLIMB * dt;
+    this.y += TUNE.climb * dt;
     if (this.y < this.top) return;
     // (over the top, unless what's there goes on up: then on up)
     const px = this.x + this.wx * (R + 0.35), pz = this.z + this.wz * (R + 0.35), h = this.city.heightAt(px, pz);

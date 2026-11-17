@@ -13,11 +13,33 @@ nav button:focus-visible,nav a:focus-visible{outline:2px solid #222;outline-offs
 .played #hint{opacity:0}
 #stick{position:fixed;width:112px;height:112px;margin:-56px 0 0 -56px;border:1px solid #2223;border-radius:50%;pointer-events:none;opacity:0;transition:opacity .15s}
 #stick.on{opacity:1}#stick i{position:absolute;left:50%;top:50%;width:36px;height:36px;margin:-18px;border-radius:50%;background:#2223}
-.preview header,.preview #hint,.preview #stick{display:none}
+/* the dials (palette.ts): a row of groups, the one touched open under it */
+#dials{position:fixed;left:8px;right:8px;bottom:max(10px,env(safe-area-inset-bottom));max-width:520px;margin:0 auto;display:none;flex-direction:column;background:#f4f4f2f2;border:1px solid #2223;border-radius:6px;padding:6px;z-index:6;max-height:46vh;-webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px)}
+#dials.shown{display:flex}
+#dials .row{display:flex;gap:3px;flex-wrap:wrap}
+#dials .row button{font:inherit;letter-spacing:.08em;color:inherit;background:none;border:1px solid #2223;border-radius:3px;padding:0 9px;min-height:34px;cursor:pointer;position:relative}
+#dials .row button.on{background:#222;color:#f4f4f2}
+#dials .row button.moved::after{content:"";position:absolute;right:3px;top:3px;width:5px;height:5px;border-radius:50%;background:#d2691e}
+#dials .row .reset{margin-left:auto;opacity:.7}
+#dials .tray{overflow-y:auto;padding:6px 4px 2px;display:grid}
+#dials .dial{display:grid;grid-template-columns:minmax(96px,34%) 1fr 76px;align-items:center;gap:8px;min-height:38px}
+#dials .dial.moved span{font-weight:700}
+#dials .dial output{text-align:right;font-variant-numeric:tabular-nums;opacity:.75}
+#dials .dial.switch{grid-template-columns:28px 1fr;cursor:pointer}
+#dials .dial.switch input{width:20px;height:20px;accent-color:#222;margin:0}
+#dials .track{position:relative;display:flex;align-items:center;height:38px}
+#dials .track em{position:absolute;top:50%;width:2px;height:12px;margin:-6px 0 0 -1px;background:#d2691e;opacity:.7;pointer-events:none}
+#dials input[type=range]{width:100%;margin:0;accent-color:#222;touch-action:none;height:38px;background:none}
+#readout{position:fixed;left:8px;top:calc(max(14px,env(safe-area-inset-top)) + 46px);max-width:calc(100% - 16px);font-size:10.5px;line-height:1.5;white-space:pre-wrap;background:#fffc;padding:4px 7px;border-radius:3px;pointer-events:none;z-index:4}
+#readout[hidden]{display:none}
+body:has(#dials.shown) #hint{display:none}
+.preview header,.preview #hint,.preview #stick,.preview #dials,.preview #readout{display:none}
 </style></head><body>
 <canvas id="world" aria-label="A blocky figure running across grey rooftops. Drag to run in any direction; it leaps gaps by itself. Tap to jump."></canvas>
 <header><div><b>ROOF JUMPS</b><br><span>SEED <span id="seed">1</span></span></div>
-<nav><button id="look" aria-label="How it is drawn (cycles)">grid</button><button id="another">another</button><a href="{{readme}}">notes</a></nav></header>
+<nav><button id="dialsbtn" aria-expanded="false" aria-controls="dials" aria-label="The dials: every number of the run, the plan, the eye and time">dials</button><button id="look" aria-label="How it is drawn (cycles)">grid</button><button id="another">another</button><a href="{{readme}}">notes</a></nav></header>
 <div id="stick" aria-hidden="true"><i></i></div>
+<div id="readout" hidden></div>
+<div id="dials" aria-label="The dials"></div>
 <div id="hint">DRAG TO RUN · IT LEAPS BY ITSELF · TAP TO JUMP<br>A SECOND FINGER TURNS THE EYE</div>
 <script type="module" src="{{app}}"></script></body></html>
