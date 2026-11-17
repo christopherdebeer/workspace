@@ -1087,7 +1087,9 @@ void main(){
   vA = mix(A, fogs[b], fk); vB = mix(B, fogs[b2], fk);
   // (a planned stroke of the far off: hazed toward the horizon by its distance)
   if (far && code >= 0) { float hz = min(.88, fract(a0.w)/.9*uHazeK + uHazeB); vA = mix(mix(vA, mid, hz*uFlat), uSkyLo, hz); vB = mix(mix(vB, mid, hz*uFlat), uSkyLo, hz); }
-  vA = belt(vA, w, dist); vB = belt(vB, w, dist);
+  // (the far off, drawn about the eye, by a level line of sight at its distance, not by a height it doesn't really have)
+  vec3 bw = far ? vec3(w.x, uEye.y, w.z) : w;
+  vA = belt(vA, bw, dist); vB = belt(vB, bw, dist);
   // (the sea of cloud's billows, as the eye comes down into the belt: losing their light and shade into the mist's own colour)
   if (uSea >= 0.) { vA = mix(uBeltCol, vA, uSea); vB = mix(uBeltCol, vB, uSea); }
 }`;

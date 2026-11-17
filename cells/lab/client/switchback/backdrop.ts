@@ -53,7 +53,8 @@ export function buildMasses(c: Course, painted: boolean, aim?: number): Plane[] 
 
   // ── the far band, low and pale, all round
   const far = plane('far');
-  band(far, 3700, 0, Math.PI * 2 + 0.01, (a) => F + 70 + 40 * Math.sin(a * 3 + 1) + 25 * Math.sin(a * 7), () => F - 40, M.MASS_FAR, 0.01);
+  // (not a level strip: low hills rising and falling, some a good deal higher, in the far off's own hazed colour)
+  band(far, 3700, 0, Math.PI * 2 + 0.01, (a) => F + 60 + 70 * Math.max(0, Math.sin(a * 3 + 1)) ** 2 + 45 * Math.max(0, Math.sin(a * 7 + 2)) ** 1.5 + 22 * Math.sin(a * 17) + 10 * Math.sin(a * 41), () => F - 40, M.MASS_FAR, 0.006);
   // ── the valley floor
   const floor = plane('floor');
   for (let i = 0; i < 48; i++) { const a = (i / 48) * Math.PI * 2, b = ((i + 1) / 48) * Math.PI * 2; floor.mesh.tri([0, F, 0], at(3600, a, F), at(3600, b, F), M.MASS_FLOOR, 0.5); }

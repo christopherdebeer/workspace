@@ -17,7 +17,7 @@ import type { RiderPart } from './mesh';
 import { REGION } from './regions';
 import { valleyChunk, VSPAN } from './valley';
 import { buildMasses } from './backdrop';
-import { buildScene, sceneView } from './scene';
+import { buildScene, sceneView, SCENE_S } from './scene';
 import { buildPatch } from './patch';
 const PATCH = typeof location !== 'undefined' && new URLSearchParams(location.search).get('valley') === 'patch';
 import { SKY as SKY_ENV } from './paint';
@@ -76,7 +76,9 @@ void main() {
   vec3 fogs[4] = vec3[4](vec3(.62, .66, .9), vec3(.33, .45, .88), vec3(.14, .33, .84), vec3(.09, .26, .78));
   o = vec4(mix(c, fogs[b], min(1., f * 1.1) * uFog), 1.);
   // (the composed backdrop's masses, and the regional middle distance, through the cloud belt: the strokes' own model)
-  if (vM >= 26) o.rgb = beltMix(o.rgb, vW + uEye, length(vW));
+  // (what's drawn about the eye (the far masses) has no real height in the world: it takes the cloud a level line of sight
+  // at its distance would, evenly; hazed by its height it split into a pale upper part and a saturated band under it)
+  if (vM >= 26) { vec3 wp = vW + uEye; if (vM < 35) wp.y = uEye.y; o.rgb = beltMix(o.rgb, wp, length(vW)); }
 }`;
 
 export type Mat = Float32Array;
@@ -327,6 +329,8 @@ export class Renderer {
         if (!PROBE) for (const p of this.masses) {
           // (the scene's pieces: \`set\` at their places in the world, \`scene\` about the eye; the far massif about the eye)
           const po = p.world ? (BACKDROP === 'set' ? this.sceneD : view.eye) : off;
+          // (the set is built for its passage, and only stands there: further down the run you'd come under it)
+          if (p.world && BACKDROP === 'set' && (r.s < SCENE_S - 600 || r.s > SCENE_S + 600)) continue;
           gl.useProgram(this.prog); gl.disable(gl.DEPTH_TEST); gl.uniform3f(this.u.uOff, po[0], po[1], po[2]);
           gl.stencilMask(0xfc); gl.stencilOp(gl.KEEP, gl.KEEP, gl.REPLACE); gl.stencilFunc(gl.NOTEQUAL, (p.id << 2) | 1, 0x01); p.buf.draw();
           gl.stencilMask(0xff); gl.stencilOp(gl.KEEP, gl.KEEP, gl.KEEP);

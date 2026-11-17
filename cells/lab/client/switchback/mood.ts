@@ -95,7 +95,9 @@ function set(e: ReturnType<typeof full>) {
   // (the composed backdrop's flat masses (backdrop.ts) take the light's own colours for the ranges, the valley and the
   // river, so their bodies and their strokes agree whatever the mood)
   const flat = (k: number, c: string) => (PALETTE[k] = [c, c, c, c]);
-  flat(M.MASS_FAR, PALETTE[M.FAR][0]); flat(M.MASS_BODY, PALETTE[M.MTN][1]); flat(M.MASS_SHADE, PALETTE[M.MTN][2]);
+  // (the far band taken most of the way toward the sky's horizon, as distance does: it recedes, not a strip of colour)
+  const toward = (h: string, c: number[], k: number) => '#' + [1, 3, 5].map((i, j) => Math.round(parseInt(h.slice(i, i + 2), 16) * (1 - k) + c[j] * 255 * k).toString(16).padStart(2, '0')).join('');
+  flat(M.MASS_FAR, toward(PALETTE[M.FAR][0], e.sky.lo, 0.6)); flat(M.MASS_BODY, PALETTE[M.MTN][1]); flat(M.MASS_SHADE, PALETTE[M.MTN][2]);
   flat(M.MASS_SNOW, PALETTE[M.MTNSNOW][0]); flat(M.MASS_SNOWSH, PALETTE[M.MTNSNOW][2]); flat(M.MASS_RIDGE, PALETTE[M.RIDGE][2]);
   flat(M.MASS_RIDGESH, PALETTE[M.RIDGE][3]); flat(M.MASS_FLOOR, PALETTE[M.VALLEY][0]); flat(M.MASS_RIVER, PALETTE[M.WHITE][2]);
   const two = (k: number, lit: string, sh: string) => (PALETTE[k] = [lit, lit, sh, sh]);
