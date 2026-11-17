@@ -15,18 +15,15 @@ import { Course } from './course';
 import { CHUNK, PALETTE, buildChunk, buildFalls, buildFlags, buildRanges, buildRider, buildValley } from './mesh';
 import type { RiderPart } from './mesh';
 import { REGION } from './regions';
-import { valleyChunk, VSPAN } from './valley';
 import { buildMasses } from './backdrop';
 import { buildScene, sceneView, SCENE_S } from './scene';
-import { buildPatch } from './patch';
-const PATCH = typeof location !== 'undefined' && new URLSearchParams(location.search).get('valley') === 'patch';
+/** how much of the set stands (0 to 1) at station s: dissolving in over 200 stations as its passage begins, out as it ends */
+const setFade = (s: number) => { const e = (x: number) => Math.max(0, Math.min(1, x)); const a = e((s - (SCENE_S - 650)) / 200), b = e(((SCENE_S + 750) - s) / 200); return a * a * (3 - 2 * a) * b * b * (3 - 2 * b); };
 import { SKY as SKY_ENV } from './paint';
-// (`backdrop=mass|painted`: the composed backdrop experiment (backdrop.ts) in place of the ranges, valley and middle distance)
-const BACKDROP = typeof location !== 'undefined' ? new URLSearchParams(location.search).get('backdrop') : null, COMPOSED = BACKDROP === 'mass' || BACKDROP === 'painted' || BACKDROP === 'scene' || BACKDROP === 'set' || (typeof location !== 'undefined' && new URLSearchParams(location.search).has('probe'));
+// (`backdrop=set`: the composed set (scene.ts, backdrop.ts) in place of the ranges, valley and middle distance)
+const BACKDROP = typeof location !== 'undefined' ? new URLSearchParams(location.search).get('backdrop') : null, COMPOSED = BACKDROP === 'set' || (typeof location !== 'undefined' && new URLSearchParams(location.search).has('probe'));
 // (`probe`: no sky and no backdrop, so what's left as paper is where the landscape would be seen: for measuring how much of a run shows it)
 const PROBE = typeof location !== 'undefined' && new URLSearchParams(location.search).has('probe');
-// (`valley=terrain`: the valley as real ground (valley.ts), an unfinished experiment, off by default)
-const VALLEY_TERRAIN = typeof location !== 'undefined' && new URLSearchParams(location.search).get('valley') === 'terrain';
 import type { Rider, Event } from './sim';
 import { GEARS } from './audio';
 import { buildRuts, Trail } from './ruts';
@@ -46,7 +43,7 @@ void main() { vec3 w = aP.xyz + uOff; vW = w - uEye; vM = int(aP.w); vT = fract(
   gl_Position.z += uZj * fract(float(gl_VertexID / 3) * .618) * gl_Position.w; }`;
 const FS = `#version 300 es
 precision highp float;
-in vec3 vW; flat in int vM; flat in float vT; uniform vec3 uPal[152]; uniform vec3 uEye; uniform vec3 uSun; uniform float uFog; uniform float uNoThings; uniform vec4 uBelt; uniform vec3 uBeltCol; uniform vec3 uHazeCol; uniform float uCloud; out vec4 o;
+in vec3 vW; flat in int vM; flat in float vT; uniform vec3 uPal[152]; uniform vec3 uEye; uniform vec3 uSun; uniform float uFog; uniform float uNoThings; uniform vec4 uBelt; uniform vec3 uBeltCol; uniform vec3 uHazeCol; uniform float uCloud, uWorld, uFade; out vec4 o;
 // (the cloud belt (\`mood=course\`), one model for the strokes and the solid masses alike: how much cloud lies along the
 // line from the eye to a point, by the share of it inside the belt's heights; inside, banks thicker and thinner,
 // drifting; below it, a ceiling thinning the further down you are and breaking into patches of sky. uBelt: its middle's
@@ -63,6 +60,8 @@ vec3 beltMix(vec3 c, vec3 w, float dist){
   return mix(c, col, k);
 }
 void main() {
+  // (dissolving: a screen door of 3-pixel cells, so a piece comes and goes without popping)
+  if (uFade < 1. && fract(sin(dot(floor(gl_FragCoord.xy / 3.), vec2(12.9898, 78.233))) * 43758.5453) > uFade) discard;
   // (painted, the things standing on the ground (the fence, the poles, the pines, a kicker's boards) claim no depth and no
   // stencil: what's behind them is painted, and their strokes over it, so a gap between their strokes shows that, not paper)
   if (uNoThings > .5 && (vM == 3 || vM == 4 || vM == 5 || vM == 11 || vM == 17 || vM == 18 || vM == 19)) discard;
@@ -78,7 +77,7 @@ void main() {
   // (the composed backdrop's masses, and the regional middle distance, through the cloud belt: the strokes' own model)
   // (what's drawn about the eye (the far masses) has no real height in the world: it takes the cloud a level line of sight
   // at its distance would, evenly; hazed by its height it split into a pale upper part and a saturated band under it)
-  if (vM >= 26) { vec3 wp = vW + uEye; if (vM < 35) wp.y = uEye.y; o.rgb = beltMix(o.rgb, wp, length(vW)); }
+  if (vM >= 26) { vec3 wp = vW + uEye; if (uWorld < .5) wp.y = uEye.y; o.rgb = beltMix(o.rgb, wp, length(vW)); }
 }`;
 
 export type Mat = Float32Array;
@@ -133,8 +132,8 @@ export class Renderer {
   paint = false; painter: Painter | null = null; stretchWanted = 1; leadWanted: [number, number] | null = null;
   /** only the backdrop drawn (`bg=`) */
   bgOnly = false;
-  private masses: { id: number; buf: Buf; strokes: Strokes | null; world: boolean }[] | null = null; private sceneD: number[] = [0, 0, 0]; private patch: Buf | null = null;
-  private mids = new Map<number, Strokes>(); private vchunks = new Map<number, { buf: Buf; strokes: Strokes }>(); private valleyOn = false;
+  private masses: { id: number; buf: Buf; strokes: Strokes | null; world: boolean }[] | null = null; private sceneD: number[] = [0, 0, 0];
+  private mids = new Map<number, Strokes>(); 
   private floor: Strokes | null = null; private sea: Strokes | null = null; private backLayers: { s: Strokes; f: number; cap: number }[] = []; private eye0: number[] | null = null;
   /** the backdrop's parallax starts again from here (the start, or a respawn: the eye's cut there anyway) */
   rebase() { this.eye0 = null; }
@@ -181,7 +180,7 @@ export class Renderer {
     const p = gl.createProgram()!; gl.attachShader(p, sh(gl.VERTEX_SHADER, VS)); gl.attachShader(p, sh(gl.FRAGMENT_SHADER, FS)); gl.bindAttribLocation(p, 0, 'aP'); gl.linkProgram(p);
     if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p) ?? 'link');
     this.prog = p;
-    for (const n of ['uVP', 'uOff', 'uPal', 'uEye', 'uSun', 'uFog', 'uZj', 'uNoThings', 'uBelt', 'uBeltCol', 'uHazeCol', 'uCloud']) this.u[n] = gl.getUniformLocation(p, n);
+    for (const n of ['uVP', 'uOff', 'uPal', 'uEye', 'uSun', 'uFog', 'uZj', 'uNoThings', 'uBelt', 'uBeltCol', 'uHazeCol', 'uCloud', 'uWorld', 'uFade']) this.u[n] = gl.getUniformLocation(p, n);
     gl.useProgram(p);
     gl.uniform3fv(this.u.uPal, new Float32Array(PALETTE.flat().map(hex).flat()));
     gl.uniform3fv(this.u.uSun, new Float32Array(SUN));
@@ -229,12 +228,7 @@ export class Renderer {
     this.stream(r.s, this.painter && this.chunks.size === 0 ? 99 : budget);
     // (the middle distance's hills, a stretch at a time, from a little behind to well ahead; one new stretch a frame)
     // (with the course's regions, the valley as real ground, a stretch at a time, from a little behind to well ahead)
-    if (this.painter && !COMPOSED && REGION.on && VALLEY_TERRAIN) {
-      const lo = Math.floor((r.s - 400) / VSPAN), hi = Math.floor((r.s + 2600) / VSPAN);
-      for (const [k, v] of this.vchunks) if (k < lo || k > hi) { v.buf.free(); v.strokes.free(); this.vchunks.delete(k); }
-      for (let k = Math.max(0, lo); k <= hi; k++) if (!this.vchunks.has(k)) { const v = valleyChunk(this.course, k); this.vchunks.set(k, { buf: new Buf(this.gl, v.verts), strokes: this.painter.make(v.strokes) }); if (budget < 99) break; }
-    }
-    if (this.painter && !COMPOSED && !(REGION.on && VALLEY_TERRAIN)) {
+    if (this.painter && !COMPOSED) {
       const lo = Math.floor((r.s - 400) / MID_SPAN), hi = Math.floor((r.s + (REGION.on ? 2600 : 1600)) / MID_SPAN);
       for (const [k, b] of this.mids) if (k < lo || k > hi) { b.free(); this.mids.delete(k); }
       for (let k = Math.max(0, lo); k <= hi; k++) if (!this.mids.has(k)) { this.mids.set(k, this.painter.make(REGION.on ? midValleyStrokes(this.course, k) : midHillStrokes(this.course, k))); if (this.mids.size > 2 && budget < 99) break; }
@@ -290,8 +284,7 @@ export class Renderer {
       const off = [view.eye[0], view.eye[1] - 60, view.eye[2]];
       // (the ground and the rider (whose strokes, on both sides of it, need its own depth to hide its far side): the things
       // on the ground, the flags and the falls claim no depth or stencil)
-      this.valleyOn = REGION.on && VALLEY_TERRAIN;
-      const near = () => { if (this.bgOnly) return; gl.uniform3f(this.u.uOff, 0, 0, 0); gl.uniform1f(this.u.uNoThings, 1); for (const b of this.chunks.values()) b.draw(); if (this.valleyOn) for (const v of this.vchunks.values()) v.buf.draw(); gl.uniform1f(this.u.uNoThings, 0); this.rider.set(body, true); this.rider.draw(); };
+      const near = () => { if (this.bgOnly) return; gl.uniform3f(this.u.uOff, 0, 0, 0); gl.uniform1f(this.u.uNoThings, 1); for (const b of this.chunks.values()) b.draw(); gl.uniform1f(this.u.uNoThings, 0); this.rider.set(body, true); this.rider.draw(); };
       // (where things stand, in the stencil: 2 the backdrop, 1 anything near; nothing drawn)
       gl.colorMask(false, false, false, false); gl.disable(gl.DEPTH_TEST); gl.enable(gl.STENCIL_TEST); gl.stencilOp(gl.KEEP, gl.KEEP, gl.REPLACE); gl.stencilFunc(gl.ALWAYS, 2, 0xff);
       gl.uniform1f(this.u.uFog, 0); gl.uniform3f(this.u.uOff, off[0], off[1], off[2]); this.ranges.draw(); this.valley.draw();
@@ -315,10 +308,11 @@ export class Renderer {
         // (the composed backdrop: its flat masses by order (the facets' own program, every band one colour), then its sparse marks)
         if (!this.masses) {
           // (\`scene\`/\`set\`: the far massif aimed down the scene's valley, without its own floor, river and foothill; then the scene's pieces)
-          const SC = BACKDROP === 'scene' || BACKDROP === 'set', sv = sceneView(this.course);
-          let planes = buildMasses(this.course, BACKDROP !== 'mass', SC ? sv.h - 0.12 : undefined);
-          if (SC) { planes = planes.filter((p) => !['floor', 'river', 'foot', 'apron'].includes(p.name)); planes.push(...buildScene(this.course, planes.length + 1)); this.sceneD = sv.D; }
-          this.masses = planes.map((p) => ({ id: p.id, buf: new Buf(gl, p.verts), strokes: p.strokes.length ? pt.make(p.strokes) : null, world: !!p.world }));
+          const sv = sceneView(this.course);
+          const planes = [...buildMasses(this.course, true, sv.h - 0.12).filter((p) => !['floor', 'river', 'foot', 'apron'].includes(p.name)), ...buildScene(this.course)];
+          this.sceneD = sv.D;
+          // (each its own stencil id, numbered as assembled: kept with the ids they were built with, the scene's reused the massif's)
+          this.masses = planes.map((p, i) => ({ id: i + 1, buf: new Buf(gl, p.verts), strokes: p.strokes.length ? pt.make(p.strokes) : null, world: !!p.world }));
         }
         // (the masses mark the stencil's bit 4 where they're drawn; their strokes are clipped to it, so the silhouettes are the
         // masses' own and the strokes only work inside them)
@@ -326,16 +320,22 @@ export class Renderer {
         gl.uniform4f(this.u.uBelt, REGION.beltY, REGION.half, 70, REGION.on ? 1 : 0); gl.uniform3fv(this.u.uBeltCol, SKY_ENV.belt); gl.uniform1f(this.u.uCloud, this.painter ? this.painter.cloud : 0);
         // (each plane marks the stencil's upper bits with its own id where it's laid; its passages are clipped to that, so
         // a passage reaches its own plane's edges and no further)
+        let depthCleared = false;
         if (!PROBE) for (const p of this.masses) {
-          // (the scene's pieces: \`set\` at their places in the world, \`scene\` about the eye; the far massif about the eye)
-          const po = p.world ? (BACKDROP === 'set' ? this.sceneD : view.eye) : off;
-          // (the set is built for its passage, and only stands there: further down the run you'd come under it)
-          if (p.world && BACKDROP === 'set' && (r.s < SCENE_S - 600 || r.s > SCENE_S + 600)) continue;
-          gl.useProgram(this.prog); gl.disable(gl.DEPTH_TEST); gl.uniform3f(this.u.uOff, po[0], po[1], po[2]);
+          // (the set's pieces at their places in the world; the far massif about the eye. The set is built for its passage and
+          // stands only there (further down the run you'd come under it), dissolving in and out at its ends, not popping)
+          const po = p.world ? this.sceneD : off, fade = p.world ? setFade(r.s) : 1;
+          if (fade <= 0) continue;
+          // (the far masses by the order they're laid; the set's surfaces by their depth among themselves, so which flank or
+          // shoulder hides which is settled by where they are, not the order they're drawn in)
+          if (p.world && !depthCleared) { gl.clear(gl.DEPTH_BUFFER_BIT); depthCleared = true; }
+          gl.useProgram(this.prog); if (p.world) gl.enable(gl.DEPTH_TEST); else gl.disable(gl.DEPTH_TEST);
+          gl.uniform3f(this.u.uOff, po[0], po[1], po[2]); gl.uniform1f(this.u.uWorld, p.world ? 1 : 0); gl.uniform1f(this.u.uFade, fade);
           gl.stencilMask(0xfc); gl.stencilOp(gl.KEEP, gl.KEEP, gl.REPLACE); gl.stencilFunc(gl.NOTEQUAL, (p.id << 2) | 1, 0x01); p.buf.draw();
           gl.stencilMask(0xff); gl.stencilOp(gl.KEEP, gl.KEEP, gl.KEEP);
-          if (p.strokes) { gl.stencilFunc(gl.EQUAL, p.id << 2, 0xfc); paintBegin(); gl.disable(gl.DEPTH_TEST); pt.draw(p.strokes, po, false); pt.end(); }
+          if (p.strokes) { gl.stencilFunc(gl.EQUAL, p.id << 2, 0xfc); paintBegin(); gl.disable(gl.DEPTH_TEST); pt.setWorld(p.world, fade); pt.draw(p.strokes, po, false); pt.setWorld(false, 1); pt.end(); }
         }
+        gl.useProgram(this.prog); gl.uniform1f(this.u.uWorld, 0); gl.uniform1f(this.u.uFade, 1);
         gl.useProgram(this.prog);
         // (the sea of cloud over it all, seen from above the belt)
         if (!PROBE && this.seaFade(view.eye) > 0) { gl.stencilFunc(gl.NOTEQUAL, 1, 0x01); paintBegin(); gl.disable(gl.DEPTH_TEST); this.drawSea(pt, view.eye); pt.end(); gl.useProgram(this.prog); }
@@ -358,18 +358,10 @@ export class Renderer {
       // the eye, tested against that depth pixel by pixel, far chunks first)
       gl.clear(gl.DEPTH_BUFFER_BIT);
       gl.colorMask(false, false, false, false); near(); gl.colorMask(true, true, true, true);
-      // (the regional middle distance (\`valley=patch\`): opaque masses with real depth, behind the near ground, hiding one
-      // another as they should; the near ground's strokes are painted over them after)
-      if (PATCH && REGION.on && !this.bgOnly) {
-        if (!this.patch) this.patch = new Buf(gl, buildPatch(this.course));
-        gl.uniform1f(this.u.uFog, 0); gl.uniform3f(this.u.uOff, 0, 0, 0); gl.uniform4f(this.u.uBelt, REGION.beltY, REGION.half, 70, 1); gl.uniform3fv(this.u.uBeltCol, SKY_ENV.belt); gl.uniform1f(this.u.uCloud, this.painter ? this.painter.cloud : 0); gl.uniform3fv(this.u.uHazeCol, SKY_ENV.lo);
-        this.patch.draw();
-      }
       gl.depthFunc(gl.LEQUAL);
       paintBegin();
       // (the ground's strokes, the far chunks first so the near paint over them at the edges)
       // (the valley's ground first, the farthest stretches first; then the mountain's)
-      if (!this.bgOnly && this.valleyOn) for (const k of [...this.vchunks.keys()].sort((a, b) => b - a)) pt.draw(this.vchunks.get(k)!.strokes, [0, 0, 0], false);
       if (!this.bgOnly) for (const n of [...this.strokes.keys()].sort((a, b) => b - a)) pt.draw(this.strokes.get(n)!, [0, 0, 0], this.fog);
       // (and what moves, each face's strokes its own, so they stay put on it)
       // (the ruts, the track, the flags and the falls are windows sliding along the way: their strokes seeded by place)

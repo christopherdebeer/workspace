@@ -974,7 +974,7 @@ const SEG = 8;
 const VS = `#version 300 es
 layout(location=0) in vec2 aQ; layout(location=1) in vec4 a0; layout(location=2) in vec4 a1; layout(location=3) in vec4 a2; layout(location=4) in vec4 a3; layout(location=5) in vec4 a4;
 uniform mat4 uVP, uPrev; uniform vec3 uOff, uEye, uSun; uniform vec3 uPal[152]; uniform float uFog, uK, uMinW, uStretch, uDens, uGrow, uReveal; uniform vec2 uRes, uFront;
-uniform vec3 uSkyLo, uSkyHi, uSkyPale, uSmear, uCloudLit, uCloudShade; uniform float uCloud, uHazeK, uHazeB, uLit, uFlat, uThin; uniform vec3 uFogs[4]; uniform vec4 uBelt; uniform vec3 uBeltCol; uniform float uSink, uSkyTex, uSea;
+uniform vec3 uSkyLo, uSkyHi, uSkyPale, uSmear, uCloudLit, uCloudShade; uniform float uCloud, uHazeK, uHazeB, uLit, uFlat, uThin; uniform vec3 uFogs[4]; uniform vec4 uBelt; uniform vec3 uBeltCol; uniform float uSink, uSkyTex, uSea, uWorldS;
 out vec2 vUv; out vec3 vA; out vec3 vB; flat out float vStamp; out float vFresh; flat out float vTex;
 float h(float s, float k){ return fract(sin(s*k)*43758.5453); }
 // (the cloud belt (\`mood=course\`), one model for the strokes and the solid masses alike: how much cloud lies along the
@@ -1088,15 +1088,16 @@ void main(){
   // (a planned stroke of the far off: hazed toward the horizon by its distance)
   if (far && code >= 0) { float hz = min(.88, fract(a0.w)/.9*uHazeK + uHazeB); vA = mix(mix(vA, mid, hz*uFlat), uSkyLo, hz); vB = mix(mix(vB, mid, hz*uFlat), uSkyLo, hz); }
   // (the far off, drawn about the eye, by a level line of sight at its distance, not by a height it doesn't really have)
-  vec3 bw = far ? vec3(w.x, uEye.y, w.z) : w;
+  vec3 bw = far && uWorldS < .5 ? vec3(w.x, uEye.y, w.z) : w;
   vA = belt(vA, bw, dist); vB = belt(vB, bw, dist);
   // (the sea of cloud's billows, as the eye comes down into the belt: losing their light and shade into the mist's own colour)
   if (uSea >= 0.) { vA = mix(uBeltCol, vA, uSea); vB = mix(uBeltCol, vB, uSea); }
 }`;
 const FS = `#version 300 es
 precision highp float;
-in vec2 vUv; in vec3 vA; in vec3 vB; flat in float vStamp; in float vFresh; flat in float vTex; uniform sampler2D uAtlas; out vec4 o;
+in vec2 vUv; in vec3 vA; in vec3 vB; flat in float vStamp; in float vFresh; flat in float vTex; uniform sampler2D uAtlas; uniform float uFadeS; out vec4 o;
 void main(){
+  if (uFadeS < 1. && fract(sin(dot(floor(gl_FragCoord.xy / 3.), vec2(12.9898, 78.233))) * 43758.5453) > uFadeS) discard;
   vec2 cell = vec2(mod(vStamp, ${STAMP.COLS}.), floor(vStamp/${STAMP.COLS}.));
   vec4 s = texture(uAtlas, (cell + vUv)/vec2(${STAMP.COLS}., ${STAMP.ROWS}.));
   if (s.r < .05) discard;
@@ -1138,7 +1139,7 @@ export class Painter {
     const p = gl.createProgram()!; gl.attachShader(p, sh(gl.VERTEX_SHADER, VS)); gl.attachShader(p, sh(gl.FRAGMENT_SHADER, FS)); gl.linkProgram(p);
     if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p) ?? 'link');
     this.prog = p;
-    for (const k of ['uSmear', 'uVP', 'uPrev', 'uOff', 'uEye', 'uSun', 'uPal', 'uFog', 'uK', 'uMinW', 'uStretch', 'uDens', 'uRes', 'uAtlas', 'uSkyLo', 'uSkyHi', 'uSkyPale', 'uCloud', 'uCloudLit', 'uCloudShade', 'uHazeK', 'uHazeB', 'uFogs', 'uLit', 'uFlat', 'uThin', 'uBelt', 'uBeltCol', 'uSink', 'uSkyTex', 'uSea', 'uFront', 'uGrow', 'uReveal']) this.u[k] = gl.getUniformLocation(p, k);
+    for (const k of ['uSmear', 'uVP', 'uPrev', 'uOff', 'uEye', 'uSun', 'uPal', 'uFog', 'uK', 'uMinW', 'uStretch', 'uDens', 'uRes', 'uAtlas', 'uSkyLo', 'uSkyHi', 'uSkyPale', 'uCloud', 'uCloudLit', 'uCloudShade', 'uHazeK', 'uHazeB', 'uFogs', 'uLit', 'uFlat', 'uThin', 'uBelt', 'uBeltCol', 'uSink', 'uSkyTex', 'uSea', 'uWorldS', 'uFadeS', 'uFront', 'uGrow', 'uReveal']) this.u[k] = gl.getUniformLocation(p, k);
     gl.useProgram(p);
     this.pal = palette; this.sun0 = sun;
     // (the quad: a strip along the stroke, SEG pieces, so a bent stroke bends smoothly)
@@ -1160,7 +1161,7 @@ export class Painter {
     gl.uniform3fv(this.u.uSkyLo, SKY.lo); gl.uniform3fv(this.u.uSkyHi, SKY.hi); gl.uniform3fv(this.u.uSkyPale, SKY.pale); gl.uniform3fv(this.u.uCloudLit, SKY.cloudLit); gl.uniform3fv(this.u.uCloudShade, SKY.cloudShade);
     gl.uniform1f(this.u.uHazeK, SKY.haze); gl.uniform1f(this.u.uHazeB, SKY.hazeBase); gl.uniform3fv(this.u.uFogs, new Float32Array(SKY.fog.flat()));
     gl.uniform1f(this.u.uLit, SKY.lit); gl.uniform1f(this.u.uFlat, SKY.flat); gl.uniform1f(this.u.uThin, SKY.thin);
-    gl.uniform4f(this.u.uBelt, REGION.beltY, REGION.half, 70, REGION.on ? 1 : 0); gl.uniform3fv(this.u.uBeltCol, SKY.belt); gl.uniform1f(this.u.uSink, this.sink); gl.uniform1f(this.u.uSkyTex, this.skyTex); gl.uniform1f(this.u.uSea, -1);
+    gl.uniform4f(this.u.uBelt, REGION.beltY, REGION.half, 70, REGION.on ? 1 : 0); gl.uniform3fv(this.u.uBeltCol, SKY.belt); gl.uniform1f(this.u.uSink, this.sink); gl.uniform1f(this.u.uSkyTex, this.skyTex); gl.uniform1f(this.u.uSea, -1); gl.uniform1f(this.u.uWorldS, 0); gl.uniform1f(this.u.uFadeS, 1);
   }
   make(data: Float32Array, dynamic = false) { return new Strokes(this.gl, this.quad, data, dynamic); }
   /** where the rider is: the front only ever goes on (put back at a checkpoint, what's laid stays laid) */
@@ -1192,6 +1193,8 @@ export class Painter {
   setSink(on: boolean) { this.sink = on ? 1 : 0; this.gl.uniform1f(this.u.uSink, this.sink); }
   /** the sea of cloud's strokes drawn with this much of their own light (−1: not the sea) */
   setSea(f: number) { this.gl.uniform1f(this.u.uSea, f); }
+  /** strokes that stand in the world (the set's), not about the eye, and how much of them shows (dissolving) */
+  setWorld(on: boolean, fade: number) { this.gl.uniform1f(this.u.uWorldS, on ? 1 : 0); this.gl.uniform1f(this.u.uFadeS, fade); }
   draw(s: Strokes, off: number[], fog: boolean) {
     const gl = this.gl;
     if (!s.n) return;

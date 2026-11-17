@@ -1,5 +1,5 @@
 /**
- * The backdrop composed (`backdrop=mass|painted`, an experiment after Astra's critique): not rings of procedurally
+ * The far masses of the composed set (`backdrop=set`, scene.ts; after Astra's critique): not rings of procedurally
  * populated ranges but one landscape, as the original reference composes it. One massif, a regional landmark at a fixed
  * bearing (seen when the way turns toward it, hidden when it doesn't), built of a few unequal masses that overlap and
  * connect: its summit, a long shoulder stepping down toward the valley, a steeper flank and a subsidiary peak on the

@@ -1,5 +1,5 @@
 /**
- * A composed scene (`backdrop=scene|set`, an experiment after Astra's proposal): the painting composed first, then given
+ * The composed set (`backdrop=set`, an experiment after Astra's proposal): the painting composed first, then given
  * just enough depth. Designed from one viewpoint, the chase camera at station 2100 of seed 1 looking down the way, and
  * built relative to it: a broad valley floor sloping away, the river attached to it, winding out of the distance between
  * two shoulders that overlap it, the nearer crossing in front of the river, the farther behind; the far massif (backdrop.ts)
@@ -20,7 +20,7 @@ export function sceneView(c: Course) {
   return { D: [p.x - Math.sin(h) * 6, p.y + 3.5, p.z - Math.cos(h) * 6], h };
 }
 
-export function buildScene(c: Course, firstId: number): Plane[] {
+export function buildScene(c: Course): Plane[] {
   const { h } = sceneView(c), F = [Math.sin(h), Math.cos(h)], Rt = [-Math.cos(h), Math.sin(h)];
   // (a place in the scene's own terms: a metres ahead, b out to the drop side, y metres from the eye's height)
   const P = (a: number, b: number, y: number) => [F[0] * a + Rt[0] * b, y, F[1] * a + Rt[1] * b];
@@ -29,9 +29,10 @@ export function buildScene(c: Course, firstId: number): Plane[] {
   const plane = (name: string) => { const p = { name, mesh: new Mesh(true), strokes: [] as number[] }; planes.push(p); return p; };
   let seed = 23; const R = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647; };
   // (a passage: one broad stroke between two places, in a material's band)
-  const pass = (p: { strokes: number[] }, A: number[], B: number[], W: number, mt: number, band: number, stamp: number) => {
-    const d = [B[0] - A[0], B[1] - A[1], B[2] - A[2]], L = Math.hypot(d[0], d[1], d[2]) || 1, n = [-(A[0] + B[0]) / 2, 0, -(A[2] + B[2]) / 2], nl = Math.hypot(n[0], n[2]) || 1;
-    p.strokes.push((A[0] + B[0]) / 2, (A[1] + B[1]) / 2, (A[2] + B[2]) / 2, mt, d[0] / L, d[1] / L, d[2] / L, L * 1.05, n[0] / nl, 0.3, n[2] / nl, W, R(), stamp, (R() - 0.5) * 0.1, 0, NEVER, 1 + band, 0, 1);
+  // (its normal: the surface's own, given; else up, for what lies on the floor)
+  const pass = (p: { strokes: number[] }, A: number[], B: number[], W: number, mt: number, band: number, stamp: number, n: number[] = [0, 1, 0]) => {
+    const d = [B[0] - A[0], B[1] - A[1], B[2] - A[2]], L = Math.hypot(d[0], d[1], d[2]) || 1;
+    p.strokes.push((A[0] + B[0]) / 2, (A[1] + B[1]) / 2, (A[2] + B[2]) / 2, mt, d[0] / L, d[1] / L, d[2] / L, L * 1.05, n[0], n[1], n[2], W, R(), stamp, (R() - 0.5) * 0.1, 0, NEVER, 1 + band, 0, 1);
   };
 
   // ── the valley floor, sloping away, wide
@@ -62,8 +63,14 @@ export function buildScene(c: Course, firstId: number): Plane[] {
       for (const sg of [-1, 1]) {
         const f0 = P(a0 + na * w0 * sg, b0 + nb * w0 * sg, floorY(a0 + na * w0 * sg)), f1 = P(a1 + na * w1 * sg, b1 + nb * w1 * sg, floorY(a1 + na * w1 * sg));
         p.mesh.quad(P(a0, b0, y0), P(a1, b1, y1), f1, f0, mt, 0.5);
-        // (a broad passage down the flank from the crest, in the flank's light)
-        pass(p, P(a0 + da * 0.5, b0 + db * 0.5, (y0 + y1) / 2 - 10), P(a0 + da * 0.5 + na * (w0 + w1) * 0.35 * sg, b0 + db * 0.5 + nb * (w0 + w1) * 0.35 * sg, floorY(a0) + 20), Math.min(L, 160) * 0.9, M.GRASS, sg < 0 ? flankBand[0] : flankBand[1], 7);
+        // (a broad passage down the flank, on the flank itself: from just under the crest's middle toward the foot's middle,
+        // the flank's own normal; not on every segment (a repetition that would show): every other one on the lit side,
+        // one on the shaded side)
+        if (sg < 0 ? k % 2 === 0 : k === 1) {
+          const c0 = P(a0, b0, y0), c1 = P(a1, b1, y1), C = c0.map((v, i) => (v + c1[i]) / 2), Fm = f0.map((v, i) => (v + f1[i]) / 2), dn = Fm.map((v, i) => v - C[i]), e = c1.map((v, i) => v - c0[i]);
+          let n = [e[1] * dn[2] - e[2] * dn[1], e[2] * dn[0] - e[0] * dn[2], e[0] * dn[1] - e[1] * dn[0]]; const nl = Math.hypot(n[0], n[1], n[2]) || 1; n = n.map((v) => v / nl); if (n[1] < 0) n = n.map((v) => -v);
+          pass(p, C.map((v, i) => v + dn[i] * 0.06), C.map((v, i) => v + dn[i] * 0.8), Math.min(Math.hypot(e[0], e[2]), 170) * 0.85, M.GRASS, sg < 0 ? flankBand[0] : flankBand[1], 7, n);
+        }
       }
     }
   };
@@ -71,5 +78,5 @@ export function buildScene(c: Course, firstId: number): Plane[] {
   shoulder('shoulderB', [[1500, 900, -10], [1900, 650, -25], [2300, 380, -80], [2650, 200, -210], [2850, 130, -340]], M.PATCH_NEAR, [1, 3]);
   // (the nearer, out from the near slope, crossing in front of the river)
   shoulder('shoulderA', [[500, 170, -45], [800, 260, -60], [1100, 340, -95], [1350, 420, -180], [1550, 480, -320]], M.PATCH_NEAR, [0, 2]);
-  return planes.map((p, i) => ({ id: firstId + i, name: p.name, verts: new Float32Array(p.mesh.v), strokes: new Float32Array(p.strokes), world: true }));
+  return planes.map((p) => ({ id: 0, name: p.name, verts: new Float32Array(p.mesh.v), strokes: new Float32Array(p.strokes), world: true }));
 }

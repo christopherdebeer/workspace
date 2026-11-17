@@ -45,9 +45,9 @@ export const PALETTE: string[][] = [
   ['#7381b0', '#45527f', '#2a335c', '#171d3b'], // denim
   ['#62646f', '#393a43', '#222329', '#131418'], // tyre and machine
   ['#d8c47a', '#b3a45e', '#86804c', '#5c5c3c'], // grass, below the snowline (`mood=course`)
-  // (the composed backdrop's flat masses (`backdrop=mass|painted`): each one colour, all four bands alike)
+  // (the composed backdrop's flat masses (`backdrop=set`): each one colour, all four bands alike)
   ...['#7a97ee', '#3a63e6', '#1a3ab4', '#f4ece2', '#7f95e4', '#2b48c4', '#162f98', '#4a6ee6', '#dfe6f4'].map((c) => [c, c, c, c]),
-  // (the regional middle distance's masses (`valley=patch`): lit or in shade, two tones each)
+  // (the regional middle distance's masses (`backdrop=set`'s floor and shoulders): lit or in shade, two tones each)
   ['#b3a45e', '#b3a45e', '#5c5c3c', '#5c5c3c'], ['#6178d8', '#6178d8', '#2c46b8', '#2c46b8'], ['#86804c', '#86804c', '#86804c', '#86804c'],
 ];
 
