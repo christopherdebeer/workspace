@@ -18,7 +18,10 @@
  * Other flags: `seed=` the city · `look=grid|clay|wire|tags|normals` how it's drawn · `auto` it runs itself, wandering
  * (by the plan's best way) · `t=` start that many seconds into such a run · `still` hold the frame · `preview` nothing
  * over the picture (and `auto`) · `far=` chunks drawn each way (4) · `side=90&zoom=1.6` the eye swung round the figure
- * and brought closer: for looking at the rig · `study=<move>&mu=` one move's pose held, that far through it (0..1).
+ * and brought closer: for looking at the rig · `study=<move>&mu=` one move's pose held, that far through it (0..1) ·
+ * `sheet=<move,move…>` a pose sheet: each of those moves at five points through it, the figure alone (with `side=90`,
+ * from the side) · `strip=<seconds>` a stretch of its own run from there laid out frame by frame, the move named on
+ * each (`frames=24`, `every=0.1`, `cols=6`).
  */
 import { noise1 } from '../kit/rng';
 import { City } from './city';
@@ -40,6 +43,8 @@ readTune(q);
 if (preview) TUNE.auto = 1;
 if (q.get('follow') === '0') TUNE.follow = 0;
 if (preview) document.body.classList.add('preview');
+// (nothing to be told when it's running itself, or held)
+if (TUNE.auto || still) document.body.classList.add('played');
 
 const canvas = document.getElementById('world') as HTMLCanvasElement;
 const city = new City(seed), runner = new Runner(city), rig = new Rig(), rd = new Renderer(canvas, city);
@@ -161,6 +166,20 @@ function hold(move: string, mu: number, lead = 1, wallSide = 1): void {
 }
 if (q.get('study')) hold(q.get('study')!, Number(q.get('mu') ?? 0.5), Number(q.get('lead') ?? 1), Number(q.get('wall') ?? 1));
 
+// ─── the study sheets: many small pictures in the one canvas ───────────────────
+const labels = document.getElementById('labels')!;
+/** `sheet=`: the moves to lay out, each at these points through it */
+const sheet = q.get('sheet')?.split(',').filter(Boolean) ?? null, MUS = [0.05, 0.28, 0.5, 0.72, 0.95];
+/** `strip=`: moments of the run, each kept as it was: the figure's bones, where it was, which way it was going */
+interface Moment { bones: ReturnType<Rig['bones']>; x: number; y: number; z: number; yaw: number; label: string }
+let strip: Moment[] | null = null;
+const stripCols = Math.max(1, Number(q.get('cols') ?? 6) | 0);
+function grid(cols: number, names: string[]): void {
+  document.body.classList.add('sheet');
+  labels.style.gridTemplateColumns = `repeat(${cols}, 1fr)`;
+  labels.replaceChildren(...names.map((n) => { const s = document.createElement('span'); s.textContent = n; return s; }));
+}
+
 // ─── the frame ────────────────────────────────────────────────────────────────
 const DT = 1 / 120;
 let time = 0, acc = 0, last = performance.now(), frames = 0, rush = 0, near = 1;
@@ -169,6 +188,18 @@ const advance = (dt: number) => { runner.step(dt, input(time, dt)); rig.update(d
 for (let n = Math.round(Number(q.get('t') ?? 0) / DT); n > 0; n--) advance(DT);
 Object.assign(eyeAt, { x: runner.x, y: runner.y, z: runner.z });
 if (TUNE.auto && runner.speed > 1) yaw = Math.atan2(runner.vx, runner.vz);
+if (sheet) grid(MUS.length, sheet.flatMap((m) => MUS.map((u) => `${m} ${u}`)));
+if (q.has('strip')) {
+  // (run on to there, then on from there a frame at a time, keeping each)
+  TUNE.auto = 1; strip = [];
+  const n = Math.max(1, Number(q.get('frames') ?? 24) | 0), every = Math.max(DT, Number(q.get('every') ?? 0.1));
+  for (let i = Math.round(Number(q.get('strip')) / DT); i > 0; i--) advance(DT);
+  for (let f = 0; f < n; f++) {
+    strip.push({ bones: rig.bones(runner), x: runner.x, y: runner.y, z: runner.z, yaw: runner.speed > 1 ? Math.atan2(runner.vx, runner.vz) : runner.heading, label: `${time.toFixed(2)}s ${runner.move} ${runner.speed.toFixed(0)}m/s` });
+    for (let i = Math.round(every / DT); i > 0; i--) advance(DT);
+  }
+  grid(stripCols, strip.map((m) => m.label));
+}
 rd.stream(runner.x, runner.z, 9);
 
 const lookBtn = document.getElementById('look')!;
@@ -181,8 +212,47 @@ document.getElementById('another')!.addEventListener('click', () => { const u = 
 /** a route in a line: how far off the way asked, its moves, what it's worth */
 const line = (name: string, r: Route | null, p: Plan) => (r ? `${r === p.best ? '★' : ' '} ${name} ${r.off ? `${r.off > 0 ? '→' : '←'}${Math.abs(Math.round((r.off * 180) / Math.PI))}° ` : ''}${words(r)}  [${r.score.toFixed(0)}${r.streets ? ', street' : ''}]` : '');
 
+/** the eye for a figure at (x, y, z) going `heading`: the matrix, and where the eye is (never inside a building: it
+ * comes in along its own line to just short of whatever is between it and the figure, as far as `room` says, 0..1) */
+function eyeFor(x: number, y: number, z: number, heading: number, aspect: number, room: (at: (f: number) => number[]) => number) {
+  const dist = (TUNE.eyeDist * (aspect < 1 ? 1.22 : 1)) / zoom, fov = ((zoom > 1 ? 50 : TUNE.fov + (aspect < 1 ? 12 : 0)) + rush) * Math.PI / 180;
+  const pitch = Math.max(0.02, Math.min(1.45, (TUNE.eyePitch * Math.PI) / 180 + lift));
+  const ty = y + (zoom > 1 ? 0.95 : 1.7), c = Math.cos(pitch), ya = heading + (TUNE.side * Math.PI) / 180;
+  const at = (f: number) => [x - Math.sin(ya) * c * dist * f, ty + Math.sin(pitch) * dist * f, z - Math.cos(ya) * c * dist * f];
+  const eye = at(room(at));
+  return { eye, vp: mul(perspective(fov, aspect, 0.15, rd.radius * 64 * 1.5), lookAt(eye, [x, ty, z], [0, 1, 0])) };
+}
+/** how far out the eye can be before something is in the way */
+const clearTo = (at: (f: number) => number[]) => { for (let f = 0.1; f <= 1.001; f += 0.1) { const p = at(f); if (city.heightAt(p[0], p[2]) > p[1] - 0.25) return Math.max(0.12, f - 0.1); } return 1; };
+const shadowAt = (x: number, y: number, z: number) => { const under = city.heightAt(x, z), h = Math.max(0, y - under); return { x, y: under, z, r: 0.5 * (1 - 0.4 * Math.min(1, h / 12)), a: 0.4 * (1 - 0.6 * Math.min(1, h / 20)) }; };
+
+/** A sheet: the canvas cut into cells, a picture in each. */
+function cells(cols: number, n: number, each: (i: number, aspect: number, rect: [number, number, number, number]) => void): void {
+  rd.resize();
+  const rows = Math.ceil(n / cols), w = canvas.width / cols, h = canvas.height / rows;
+  for (let i = 0; i < n; i++) each(i, w / h, [Math.round((i % cols) * w), Math.round(canvas.height - (Math.floor(i / cols) + 1) * h), Math.round(w), Math.round(h)]);
+}
+
 function frame(now: number): void {
   const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  if (sheet) {
+    // (each move, at each point through it: the figure alone, on its shadow)
+    cells(MUS.length, sheet.length * MUS.length, (i, aspect, rect) => {
+      hold(sheet[Math.floor(i / MUS.length)], MUS[i % MUS.length], Number(q.get('lead') ?? 1), Number(q.get('wall') ?? 1));
+      rig.update(1, held!);
+      const { vp, eye } = eyeFor(runner.x, runner.y, runner.z, 0, aspect, () => 1);
+      rd.draw(vp, eye, rig.bones(held!), { x: runner.x, y: runner.y, z: runner.z, r: 0.5, a: 0.3 }, rect, true);
+    });
+    frames++; requestAnimationFrame(frame); return;
+  }
+  if (strip) {
+    rd.stream(strip[strip.length >> 1].x, strip[strip.length >> 1].z, 4);
+    cells(stripCols, strip.length, (i, aspect, rect) => {
+      const m = strip![i], { vp, eye } = eyeFor(m.x, m.y, m.z, m.yaw, aspect, clearTo);
+      rd.draw(vp, eye, m.bones, shadowAt(m.x, m.y, m.z), rect);
+    });
+    frames++; requestAnimationFrame(frame); return;
+  }
   if (held) rig.update(1, held);
   else if (stepOnce) { advance(DT); stepOnce = false; }
   else if (!still && !TUNE.pause) { acc += dt * TUNE.time; while (acc >= DT) { advance(DT); acc -= DT; } }
@@ -199,19 +269,9 @@ function frame(now: number): void {
   // (and wider the faster it goes)
   rush += ((held ? 0 : TUNE.rush * Math.max(0, Math.min(1, (runner.speed - 10) / 8))) - rush) * e(4);
   rd.resize();
-  const aspect = canvas.width / canvas.height, dist = (TUNE.eyeDist * (aspect < 1 ? 1.22 : 1)) / zoom, fov = ((zoom > 1 ? 50 : TUNE.fov + (aspect < 1 ? 12 : 0)) + rush) * Math.PI / 180;
-  const pitch = Math.max(0.02, Math.min(1.45, (TUNE.eyePitch * Math.PI) / 180 + lift));
-  const tx = eyeAt.x, ty = eyeAt.y + (zoom > 1 ? 0.95 : 1.7), tz = eyeAt.z, c = Math.cos(pitch), ya = yaw + (TUNE.side * Math.PI) / 180;
-  // (never inside a building: the eye comes in along its own line to just short of whatever is between it and the figure)
-  const at = (f: number) => [tx - Math.sin(ya) * c * dist * f, ty + Math.sin(pitch) * dist * f, tz - Math.cos(ya) * c * dist * f];
-  let room = 1;
-  if (!held) for (let f = 0.1; f <= 1.001; f += 0.1) { const p = at(f); if (city.heightAt(p[0], p[2]) > p[1] - 0.25) { room = Math.max(0.12, f - 0.1); break; } }
-  near += (room - near) * (room < near ? 1 : e(3));
-  const eye = at(near);
-  const vp = mul(perspective(fov, aspect, 0.15, rd.radius * 64 * 1.5), lookAt(eye, [tx, ty, tz], [0, 1, 0]));
+  const { vp, eye } = eyeFor(eyeAt.x, eyeAt.y, eyeAt.z, yaw, canvas.width / canvas.height, (at) => { const room = held ? 1 : clearTo(at); near += (room - near) * (room < near ? 1 : e(3)); return near; });
   rd.stream(runner.x, runner.z, 2);
-  const under = city.heightAt(runner.x, runner.z), h = Math.max(0, runner.y - under);
-  rd.draw(vp, eye, rig.bones(held ?? runner), { x: runner.x, y: under, z: runner.z, r: 0.5 * (1 - 0.4 * Math.min(1, h / 12)), a: 0.4 * (1 - 0.6 * Math.min(1, h / 20)) });
+  rd.draw(vp, eye, rig.bones(held ?? runner), shadowAt(runner.x, runner.y, runner.z));
   if (TUNE.plan && thinking && !held) rd.lines(vp, eye, planStrokes(thinking));
   const say = !!TUNE.readout && !!thinking && !held;
   readout.hidden = !say;
@@ -235,6 +295,16 @@ requestAnimationFrame(frame);
   tune: TUNE,
   /** set a dial by its key */
   set: (key: string, v: number) => { TUNE[key] = v; remember(); pal.refresh(); thought = -1; },
+  /** run on (at once) until it's in that move, that far through it, and hold there, the eye behind it; false if it never came */
+  seek: (move: string, mu = 0.5) => {
+    const through = () => (runner.state === 'wall' ? runner.wallT / 0.6 : runner.state === 'climb' ? runner.climbT / 0.3 : runner.move === 'dash' || runner.move === 'ledge' || runner.move === 'run' ? 1 : runner.mu);
+    let n = 0; advance(DT);
+    while (!(runner.move === move && through() >= mu) && n++ < 120 * 180) advance(DT);
+    TUNE.pause = 1; Object.assign(eyeAt, { x: runner.x, y: runner.y, z: runner.z }); near = 1;
+    if (runner.speed > 1) yaw = Math.atan2(runner.vx, runner.vz);
+    if (wantsPlan()) think(asked(time), time);
+    return runner.move === move;
+  },
   /** swing the eye round the figure, to that many degrees */
   view: (deg: number) => { TUNE.side = deg; },
   /** hold a move's pose, `mu` through it (and null: let go) */

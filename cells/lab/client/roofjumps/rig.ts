@@ -9,7 +9,7 @@
  * Local axes: +z forward, +y up. A limb hangs down its own -y; a positive swing carries it forward.
  *
  * Each move's pose is a function of the body alone (`target`), so a pose can be looked at without running anything:
- * the page's `study=` holds one, and devtools/roofjumps-poses.mjs lays them all out in a sheet to be criticised.
+ * the page's `study=` holds one, and its `sheet=` lays any of them out, five points through each, to be criticised.
  */
 import type { Body } from './runner';
 import { ident, rotX, rotY, rotZ, translate } from './m4';

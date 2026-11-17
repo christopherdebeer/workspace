@@ -1,0 +1,175 @@
+[
+ {
+  "group": "The run",
+  "views": [
+   {
+    "name": "run",
+    "title": "Over the roofs",
+    "caption": "the eye close behind and a little above; one grey, one light, the lattice drawn faintly",
+    "file": "v-run.jpg"
+   },
+   {
+    "name": "phone",
+    "title": "On a phone",
+    "caption": "",
+    "file": "v-phone.jpg"
+   },
+   {
+    "name": "glide",
+    "title": "A glide",
+    "caption": "the slow one: arms out, sinking gently, steerable",
+    "file": "v-glide.jpg"
+   },
+   {
+    "name": "wallrun",
+    "title": "Along a wall",
+    "caption": "tipped off it, the feet on it, the far arm out",
+    "file": "v-wallrun.jpg"
+   },
+   {
+    "name": "dive",
+    "title": "A dive",
+    "caption": "a storey down, headfirst; rolled out of",
+    "file": "v-dive.jpg"
+   },
+   {
+    "name": "spring",
+    "title": "A spring",
+    "caption": "a storey up, the arms thrown up",
+    "file": "v-spring.jpg"
+   },
+   {
+    "name": "flip",
+    "title": "A flip",
+    "caption": "over something tall, or every other long bound",
+    "file": "v-flip.jpg"
+   },
+   {
+    "name": "dash",
+    "title": "A dash",
+    "caption": "out of a roll, or off a clean landing with room ahead",
+    "file": "v-dash.jpg"
+   }
+  ]
+ },
+ {
+  "group": "The moves, held",
+  "views": [
+   {
+    "name": "poses-ground",
+    "title": "On the ground",
+    "caption": "run, dash, ledge, a landing, a roll: each at five points through it, from the side",
+    "file": "v-poses-ground.jpg"
+   },
+   {
+    "name": "poses-air",
+    "title": "In the air",
+    "caption": "hop, bound, flip, spring, dive, glide",
+    "file": "v-poses-air.jpg"
+   },
+   {
+    "name": "poses-rear",
+    "title": "From behind",
+    "caption": "what the chase eye sees of them: bound, spring, glide, ledge, a climb, a wall run",
+    "file": "v-poses-rear.jpg"
+   }
+  ]
+ },
+ {
+  "group": "In motion",
+  "views": [
+   {
+    "name": "strip",
+    "title": "Three seconds, frame by frame",
+    "caption": "its own run from 5 s, a frame every tenth of a second, the move named on each",
+    "file": "v-strip.jpg"
+   },
+   {
+    "name": "strip-side",
+    "title": "The same, from the side",
+    "caption": "",
+    "file": "v-strip-side.jpg"
+   }
+  ]
+ },
+ {
+  "group": "The plan",
+  "views": [
+   {
+    "name": "plan",
+    "title": "The plan, from behind",
+    "caption": "the way asked broad, the best to the left and to the right narrower, the rest of the fan hairlines; coloured by move, a ring where each begins; said in words above",
+    "file": "v-plan.jpg"
+   },
+   {
+    "name": "plan-above",
+    "title": "From above",
+    "caption": "three seconds of route down each of nine headings",
+    "file": "v-plan-above.jpg"
+   },
+   {
+    "name": "plan-slow",
+    "title": "Mid-leap",
+    "caption": "the plan is thought again eight times a second, from wherever the figure is",
+    "file": "v-plan-slow.jpg"
+   }
+  ]
+ },
+ {
+  "group": "The dials",
+  "views": [
+   {
+    "name": "dials",
+    "title": "The palette",
+    "caption": "the plan’s dials open: a mark on each slider where the house keeps it, a dot on a group with something moved",
+    "file": "v-dials.jpg"
+   },
+   {
+    "name": "dials-leap",
+    "title": "The leap",
+    "caption": "gravity, reach, where dives begin, how often it flips",
+    "file": "v-dials-leap.jpg"
+   }
+  ]
+ },
+ {
+  "group": "The city",
+  "views": [
+   {
+    "name": "above",
+    "title": "The city, from above",
+    "caption": "chunks of boxes on a one-metre lattice: lots, alleys, walls across them, rims, huts, units",
+    "file": "v-above.jpg"
+   }
+  ]
+ },
+ {
+  "group": "The looks",
+  "views": [
+   {
+    "name": "look-clay",
+    "title": "Clay",
+    "caption": "no lattice",
+    "file": "v-look-clay.jpg"
+   },
+   {
+    "name": "look-wire",
+    "title": "Wire",
+    "caption": "every triangle’s edges",
+    "file": "v-look-wire.jpg"
+   },
+   {
+    "name": "look-tags",
+    "title": "Tags",
+    "caption": "what each face is",
+    "file": "v-look-tags.jpg"
+   },
+   {
+    "name": "look-normals",
+    "title": "Normals",
+    "caption": "which way each face faces",
+    "file": "v-look-normals.jpg"
+   }
+  ]
+ }
+]

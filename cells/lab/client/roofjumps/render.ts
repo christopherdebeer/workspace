@@ -162,16 +162,17 @@ export class Renderer {
     return n;
   }
 
-  draw(vp: M4, eye: number[], bones: Bone[], shadow: { x: number; y: number; z: number; r: number; a: number }): void {
+  /** The city, the figure, its shadow. `rect` (pixels, from the bottom left): into that part of the canvas only; `bare`: no city, the figure alone. */
+  draw(vp: M4, eye: number[], bones: Bone[], shadow: { x: number; y: number; z: number; r: number; a: number }, rect?: [number, number, number, number], bare = false): void {
     const gl = this.gl, far = this.radius * CHUNK;
-    gl.viewport(0, 0, this.canvas.width, this.canvas.height);
+    if (rect) { gl.enable(gl.SCISSOR_TEST); gl.scissor(...rect); gl.viewport(...rect); } else { gl.disable(gl.SCISSOR_TEST); gl.viewport(0, 0, this.canvas.width, this.canvas.height); }
     gl.clearColor(this.fog[0], this.fog[1], this.fog[2], 1); gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
     gl.enable(gl.DEPTH_TEST); gl.enable(gl.CULL_FACE); gl.disable(gl.BLEND);
     gl.useProgram(this.prog);
     gl.uniformMatrix4fv(this.u.uVP, false, vp); gl.uniform3f(this.u.uEye, eye[0], eye[1], eye[2]);
     gl.uniform3fv(this.u.uFog, this.fog); gl.uniform1f(this.u.uFar, far); gl.uniform1i(this.u.uLook, LOOKS.indexOf(this.look));
     this.tris = 0;
-    for (const c of this.built.values()) { gl.bindVertexArray(c.vao); gl.drawArrays(gl.TRIANGLES, 0, c.n); this.tris += c.n / 3; }
+    if (!bare) for (const c of this.built.values()) { gl.bindVertexArray(c.vao); gl.drawArrays(gl.TRIANGLES, 0, c.n); this.tris += c.n / 3; }
     const n = figureMesh(bones, this.figData);
     gl.bindVertexArray(this.fig.vao); gl.bindBuffer(gl.ARRAY_BUFFER, this.fig.buf); gl.bufferSubData(gl.ARRAY_BUFFER, 0, this.figData);
     gl.drawArrays(gl.TRIANGLES, 0, n); this.tris += n / 3;

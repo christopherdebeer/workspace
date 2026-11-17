@@ -32,6 +32,11 @@ nav button:focus-visible,nav a:focus-visible{outline:2px solid #222;outline-offs
 #dials input[type=range]{width:100%;margin:0;accent-color:#222;touch-action:none;height:38px;background:none}
 #readout{position:fixed;left:8px;top:calc(max(14px,env(safe-area-inset-top)) + 46px);max-width:calc(100% - 16px);font-size:10.5px;line-height:1.5;white-space:pre-wrap;background:#fffc;padding:4px 7px;border-radius:3px;pointer-events:none;z-index:4}
 #readout[hidden]{display:none}
+/* the study sheets: a name on each cell of the canvas */
+#labels{position:fixed;inset:0;display:none;pointer-events:none;font-size:10.5px}
+.sheet #labels{display:grid;grid-auto-rows:1fr}
+#labels span{padding:4px 6px;box-shadow:inset 0 0 0 .5px #2222}
+.sheet header,.sheet #hint,.sheet #stick{display:none}
 body:has(#dials.shown) #hint{display:none}
 .preview header,.preview #hint,.preview #stick,.preview #dials,.preview #readout{display:none}
 </style></head><body>
@@ -40,6 +45,7 @@ body:has(#dials.shown) #hint{display:none}
 <nav><button id="dialsbtn" aria-expanded="false" aria-controls="dials" aria-label="The dials: every number of the run, the plan, the eye and time">dials</button><button id="look" aria-label="How it is drawn (cycles)">grid</button><button id="another">another</button><a href="{{readme}}">notes</a></nav></header>
 <div id="stick" aria-hidden="true"><i></i></div>
 <div id="readout" hidden></div>
+<div id="labels" aria-hidden="true"></div>
 <div id="dials" aria-label="The dials"></div>
 <div id="hint">DRAG TO RUN · IT LEAPS BY ITSELF · TAP TO JUMP<br>A SECOND FINGER TURNS THE EYE</div>
 <script type="module" src="{{app}}"></script></body></html>
