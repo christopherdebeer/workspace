@@ -27,6 +27,12 @@ export interface Experiment {
 
 export const EXPERIMENTS: Experiment[] = [
   {
+    id: 'roofjumps', title: 'Roof Jumps', group: 'Play',
+    blurb: 'A figure running over an endless city of rooftops, in any direction, leaping whatever is in the way. A study of two things only: the geometry (chunks of plain boxes on a one-metre lattice, made from a seed as you reach them) and a rigged figure of thirteen blocks whose every pose is worked out from what it is doing. Hold a direction and it does the rest: it finds where it can next stand and throws itself there, runs up walls too high to leap, and comes down slowly, arms out, so a drop into an alley is a glide. Drawn as plainly as it can be, on purpose: one grey, one light, so that looks can be tried over the same geometry later.',
+    page: 'static/roofjumps.html', preview: 'preview&seed=1&t=5', readme: 'static/roofjumps.md',
+    presets: [{ label: 'run', query: '' }, { label: 'watch', query: 'auto' }, { label: 'another city', query: 'seed=7' }, { label: 'clay', query: 'auto&look=clay' }, { label: 'wire', query: 'auto&look=wire' }, { label: 'what each face is', query: 'auto&look=tags' }],
+  },
+  {
     id: 'splats', title: 'Splats', group: 'Perception',
     blurb: 'Gaussian splatting from scratch, on a phone: a scene as hundreds of thousands of soft coloured ellipsoids, each projected to an ellipse on the screen and blended back to front. A small viewer written to learn from (the formats, the sort, the projection, each in its own file), with ways to see the parts: every splat\'s ellipse, its footprint, the point cloud underneath. A scene made of splats here, three captured ones, or your own .splat or .ply. And One Stone: a boulder drawn in splats on paper, each feature drawing itself (a broken seam, a wash under the ledge, moss stipple, profile accents chosen for the view), simplifying by what each mark is for.',
     page: 'static/splats.html', preview: 'preview&scene=stone', readme: 'static/splats.md',

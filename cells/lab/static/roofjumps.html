@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en" data-exp="roofjumps"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,viewport-fit=cover"><meta name="theme-color" content="#cccccb"><title>Roof Jumps</title>
+<style>
+*{box-sizing:border-box}html,body{margin:0;height:100%;overflow:hidden;background:#cccccb;color:#222;font:500 11px/1.4 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;-webkit-user-select:none;user-select:none}
+canvas{position:fixed;inset:0;width:100%;height:100%;touch-action:none;display:block}
+header{position:fixed;top:max(14px,env(safe-area-inset-top));left:16px;right:16px;display:flex;justify-content:space-between;align-items:flex-start;pointer-events:none;letter-spacing:.08em}
+header b{font-weight:700}header span{opacity:.6}
+nav{display:flex;gap:6px;pointer-events:auto}
+nav button,nav a{font:inherit;letter-spacing:.08em;color:inherit;background:#ffffff66;border:1px solid #2224;border-radius:3px;padding:7px 9px;min-height:32px;cursor:pointer;text-decoration:none;display:inline-flex;align-items:center}
+nav button:focus-visible,nav a:focus-visible{outline:2px solid #222;outline-offset:2px}
+#hint{position:fixed;left:0;right:0;bottom:max(26px,env(safe-area-inset-bottom));text-align:center;letter-spacing:.14em;opacity:.65;pointer-events:none;transition:opacity .6s}
+.played #hint{opacity:0}
+#stick{position:fixed;width:112px;height:112px;margin:-56px 0 0 -56px;border:1px solid #2223;border-radius:50%;pointer-events:none;opacity:0;transition:opacity .15s}
+#stick.on{opacity:1}#stick i{position:absolute;left:50%;top:50%;width:36px;height:36px;margin:-18px;border-radius:50%;background:#2223}
+.preview header,.preview #hint,.preview #stick{display:none}
+</style></head><body>
+<canvas id="world" aria-label="A blocky figure running across grey rooftops. Drag to run in any direction; it leaps gaps by itself. Tap to jump."></canvas>
+<header><div><b>ROOF JUMPS</b><br><span>SEED <span id="seed">1</span></span></div>
+<nav><button id="look" aria-label="How it is drawn (cycles)">grid</button><button id="another">another</button><a href="{{readme}}">notes</a></nav></header>
+<div id="stick" aria-hidden="true"><i></i></div>
+<div id="hint">DRAG TO RUN · IT LEAPS BY ITSELF · TAP TO JUMP<br>A SECOND FINGER TURNS THE EYE</div>
+<script type="module" src="{{app}}"></script></body></html>
