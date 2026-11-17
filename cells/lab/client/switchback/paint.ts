@@ -700,9 +700,10 @@ export function valleyStrokes(seed: number): Float32Array {
  * with the water rather than flickering. */
 export function fallStrokes(c: Course, s0: number, s1: number, t: number): Float32Array {
   const out: number[] = [];
-  const put = (p: number[], T: number[], L: number, n: number[], W: number, seed: number, stamp: number, mt: number, band: number) => {
+  // (kind 3: a thing seen from either side, lifted toward the eye by half its size; kind 0: on a surface, as the ground is)
+  const put = (p: number[], T: number[], L: number, n: number[], W: number, seed: number, stamp: number, mt: number, band: number, kind = 3) => {
     if (L <= 0.02 || W <= 0.01) return;
-    out.push(p[0], p[1], p[2], mt + 0.5, T[0], T[1], T[2], L, n[0], n[1], n[2], W, seed, stamp, 0, 3, NEVER, 10 + band, 1, 0);
+    out.push(p[0], p[1], p[2], mt + 0.5, T[0], T[1], T[2], L, n[0], n[1], n[2], W, seed, stamp, 0, kind, NEVER, 10 + band, 1, 0);
   };
   const norm = (v: number[]) => { const l = Math.hypot(v[0], v[1], v[2]) || 1; return [v[0] / l, v[1] / l, v[2] / l]; };
   for (const f of fallPaths(c, s0, s1)) {
@@ -736,7 +737,7 @@ export function fallStrokes(c: Course, s0: number, s1: number, t: number): Float
         for (let k = 0; k < count; k++) {
           const u = (R() + t * (0.5 + R() * 0.4) * 6 / L) % 1, side = (R() * 2 - 1) * (0.5 + 0.5 * j / f.feed.length);
           const p = [A[0] + (B[0] - A[0]) * u + ax * side, A[1] + (B[1] - A[1]) * u, A[2] + (B[2] - A[2]) * u + az * side];
-          put(p, T, Math.min(L * 0.5, 1.4 + R() * 1.2), n, 0.45 + R() * 0.25, R(), [0, 1, 7][Math.floor(R() * 3)], k % 4 ? M.WHITE : M.FARSNOW, k % 3 ? 0 : 1);
+          put(p, T, Math.min(L * 0.5, 1.4 + R() * 1.2), n, 0.45 + R() * 0.25, R(), [0, 1, 7][Math.floor(R() * 3)], k % 4 ? M.WHITE : M.FARSNOW, k % 3 ? 0 : 1, 0);
         }
       }
     }

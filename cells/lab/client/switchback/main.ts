@@ -61,7 +61,8 @@ if (q.get('ruts') === 'light') PALETTE[M.RUT] = RUT_LIGHT;
 let moodShown = '';
 const moodCycle = applyMood(q.get('mood')) && q.get('mood') === 'cycle';
 // (`mood=course`: the light, the cloud belt and the snowline laid along the course (regions.ts))
-const moodCourse = q.get('mood') === 'course';
+// (the default: with no mood asked for, the course's regions; `mood=day` the plain look, any other mood that one)
+const moodCourse = !q.has('mood') || q.get('mood') === 'course';
 if (moodCourse) setRegions(course, q.get('time'));
 const rd = new Renderer(world, speed, course);
 rd.resize(); addEventListener('resize', () => rd.resize());

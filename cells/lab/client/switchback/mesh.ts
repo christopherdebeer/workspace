@@ -236,7 +236,9 @@ export function fallPaths(c: Course, s0: number, s1: number) {
       return [p.x, lip.y + 0.5 - 4.9 * tau * tau, p.z];
     };
     const feed: number[][] = [];
-    for (let k = 0; k <= WALL.length - 3; k++) { const q = cutPoint(c, i, k, true), p = c.point(q.s, q.u); feed.push([p.x, q.y + 0.4, p.z]); }
+    // (only the last two sections above the lip: run from the wall's top, ~100 m back and up, it showed as a white line laid
+    // over rock that should hide it)
+    for (let k = WALL.length - 5; k <= WALL.length - 3; k++) { const q = cutPoint(c, i, k, true), p = c.point(q.s, q.u); feed.push([p.x, q.y + 0.15, p.z]); }
     out.push({ i, T, P, footY: foot.y, fu: lip.u + 0.6 + 3.4 * T, lipS: lip.s, feed, heading: c.at(i).heading });
   }
   return out;
