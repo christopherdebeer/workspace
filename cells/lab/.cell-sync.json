@@ -1,8 +1,8 @@
 {
   "cell": "c15r/lab",
   "cellId": "lab-8928acf3",
-  "treeVersion": "tree:c7d371067f706c29d6462684dd451aa338324de6d12e75061c8db706f5d4f189",
-  "syncedAt": "2026-11-17T11:01:15.888Z",
+  "treeVersion": "tree:e31e0cf9fb06e9f23e23b53a6173adfc0c8ceb365da1050c77669f339ddeedee",
+  "syncedAt": "2026-11-17T11:41:16.329Z",
   "files": {
     "README.md": "sha256:0be53420ec1d65ca68e1e925e1699b40295ecdd4991d17eb5c464a3ae8a51115",
     "client/autograph/autobiography.ts": "sha256:1aa72dbb927e6de87cdd920842be3b826ae520031f2589fadc9d4fe98abfbd67",
@@ -374,7 +374,7 @@
     "client/switchback/regions.ts": "sha256:bd31f40268f8a1ebd03da6f564f0e47b1fa7fea75b112aac12a4bf3e25022d79",
     "client/switchback/render.ts": "sha256:e84831f391ed2aea75697c9da7b8849d462c889cad519ce49124a438cadf8e2d",
     "client/switchback/ruts.ts": "sha256:211e8ed8f47532d9f84c82b489905240711a69e7e9b9ae88f1a0ca670cdb5aa5",
-    "client/switchback/scene.ts": "sha256:620d2e2657b8d3459f1a5987b6c7cfd457375d061f52573cabb9e54747d1fba2",
+    "client/switchback/scene.ts": "sha256:b8fa7c8d775f8bd3572d90982c966d0d4238d0ac8eab50ac936f29c3f13193fb",
     "client/switchback/score.ts": "sha256:76ab4b731089c7ce1a807fbd377d3b9bad679f9d3b982978dffeee523b100be8",
     "client/switchback/sign.ts": "sha256:23ba672653611946c11f8593c7c810ff719c0048652ed1523f6000f0f15f544f",
     "client/switchback/sim.ts": "sha256:ba18e5478be949826f51323896ecebbe27f9199d88adc24754fd89208aa75e67",
