@@ -44,5 +44,17 @@ export function woodsAt(s: number, y: number) {
   if (!REGION.on) return 0;
   const d = Math.max(0, Math.min(1, (REGION.snowY - y) / 115)), into = d * d * (3 - 2 * d);
   const out = Math.max(0, Math.min(1, (s - REGION.woodsEnd) / 150));
-  return into * (1 - out * out * (3 - 2 * out));
+  return into * (1 - out * out * (3 - 2 * out)) * (1 - 0.85 * clearing(s));
+}
+/** a clearing in the woods at station s, 0 to 1: most stretches of ~650 m have one, ~90 m across with ~40 m edges,
+ * where the pines open and the light comes down (seeded): ridden through, the woods' light opens ahead and closes again */
+export function clearing(s: number) {
+  const B = 650, b = Math.floor(s / B);
+  let cut = 0;
+  for (const k of [b - 1, b, b + 1]) {
+    if (hash(REGION.seed, k, 89) > 0.75) continue;
+    const d = Math.abs(s - (k * B + 150 + hash(REGION.seed, k, 88) * 350)), e = Math.max(0, Math.min(1, (d - 45) / 40));
+    cut = Math.max(cut, 1 - e * e * (3 - 2 * e));
+  }
+  return cut;
 }

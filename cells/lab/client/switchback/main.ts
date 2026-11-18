@@ -32,6 +32,7 @@ import { Composer, Live, exportClip, save } from './rec';
 import { Callouts } from './callout';
 import { applyMood, cycleAt, lightAlong, woodsLook } from './mood';
 import { setRegions, lightKeys, REGION } from './regions';
+import { ground } from './ground';
 const beltY = new URLSearchParams(location.search).has('belty') ? Number(new URLSearchParams(location.search).get('belty')) : null, beltOsc = Number(new URLSearchParams(location.search).get('beltosc') ?? 0);
 
 const q = new URLSearchParams(location.search);
@@ -191,8 +192,14 @@ function view(dt: number, t: number): View {
   const ke = 1 - Math.exp(-dt * 7);
   for (let i = 0; i < 3; i++) cam.eye[i] += (want[i] - cam.eye[i]) * (i === 1 ? 1 - Math.exp(-dt * 4) : ke);
   // (never into the ground: the eye stays above the slope under it)
-  const loc = course.locate(cam.eye[0], cam.eye[2], Math.max(0, rider.s - 8)), gy = course.point(loc.s, Math.max(-9, Math.min(9, loc.u))).y;
-  cam.eye[1] = Math.max(cam.eye[1], gy + 1.8);
+  // (off the trail (the sim gone down the drop, or up the bank) by the ground as it lies there, not the trail's edge; and
+  // the line from the eye to the rider kept clear of the slope between them, so the eye never looks out from inside it)
+  const groundY = (x: number, z: number) => { const l = course.locate(x, z, Math.max(0, rider.s - 8)), half = course.at(l.s).width / 2; return Math.abs(l.u) <= half ? course.point(l.s, l.u).y : ground(course, l.s, l.u); };
+  cam.eye[1] = Math.max(cam.eye[1], groundY(cam.eye[0], cam.eye[2]) + 2.2);
+  for (const f of [0.35, 0.7]) {
+    const x = cam.eye[0] + (rider.x - cam.eye[0]) * f, z = cam.eye[2] + (rider.z - cam.eye[2]) * f, sight = cam.eye[1] + (rider.y + 0.8 - cam.eye[1]) * f, g = groundY(x, z) + 0.8;
+    if (sight < g) cam.eye[1] += (g - sight) / (1 - f);
+  }
   cam.shake *= Math.exp(-dt * 7);
   const sh = cam.shake, jx = Math.sin(t * 61) * sh * 0.3, jy = Math.sin(t * 47 + 1) * sh * 0.25;
   const ah = 12 * d.ahead * (1 - cam.air * 0.75), dr = 3 * d.drop * (1 - cam.air * 0.8);

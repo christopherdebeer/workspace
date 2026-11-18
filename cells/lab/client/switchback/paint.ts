@@ -21,7 +21,7 @@
 import type { Course } from './course';
 import { M, rangeProfiles, foothillProfiles, riverLine, fallPaths, flagPaths } from './mesh';
 import type { RiderPart } from './mesh';
-import { REGION, grassiness } from './regions';
+import { REGION, grassiness, woodsAt } from './regions';
 import { ground } from './ground';
 import { lines, plain, trackY } from './ruts';
 
@@ -719,6 +719,32 @@ export function valleyStrokes(seed: number): Float32Array {
   return new Float32Array(out);
 }
 
+/** Light coming down through the woods: a few long pale veils (translucent, motion class 3), slanting along the sun, each
+ * landing where a pool of light lies on the ground (the same pools the shader lights), only deep in the woods and most
+ * in its clearings' edges. Sparse: a handful to a chunk at most */
+export function shaftStrokes(c: Course, s0: number, s1: number, sun: number[]): Float32Array {
+  const out: number[] = [];
+  if (!REGION.on) return new Float32Array(0);
+  const sl = Math.hypot(sun[0], sun[1], sun[2]) || 1, T = [sun[0] / sl, Math.max(0.35, sun[1] / sl), sun[2] / sl], tl = Math.hypot(T[0], T[1], T[2]);
+  T[0] /= tl; T[1] /= tl; T[2] /= tl;
+  const dap = (x: number, z: number) => 0.5 + 0.5 * Math.sin(x / 6.3 + 2 * Math.sin(z / 9.7)) * Math.sin(z / 5.1 - 2 * Math.sin(x / 8.3));
+  for (let s = Math.ceil(s0 / 6) * 6; s < s1; s += 6) {
+    const st = c.at(s), w = woodsAt(s, st.y);
+    if (w < 0.45) continue;
+    for (const u of [-5, 0, 6, 12]) {
+      const p = c.point(s, u), y = Math.abs(u) <= st.width / 2 ? p.y : ground(c, s, u);
+      if (dap(p.x, p.z) < 0.84 || hash01(c.seed, s, u + 40) > 0.4) continue;
+      const L = 16 + hash01(c.seed, s, u + 41) * 12, W = 1.6 + hash01(c.seed, s, u + 42) * 2.4;
+      for (let k = 0; k < 3; k++) {
+        const o = (k - 1) * W * 0.5, m = [p.x + T[0] * L * 0.5 + T[2] * o, y + T[1] * L * 0.5, p.z + T[2] * L * 0.5 - T[0] * o];
+        out.push(m[0], m[1], m[2], M.SHAFT + 0.5, T[0], T[1], T[2], L * (0.85 + 0.3 * hash01(c.seed, s, k + 43)), 0, 1, 0, W * (0.7 + 0.5 * hash01(c.seed, s, k + 44)), hash01(c.seed, s, k + 45), [7, 11, 0][k], 0, 3, s, 10, 3, 0);
+      }
+    }
+  }
+  return new Float32Array(out);
+}
+const hash01 = (a: number, b: number, c: number) => { let h = 2166136261 ^ Math.floor(a * 9973); h = Math.imul(h ^ Math.floor(b * 7919), 16777619); h = Math.imul(h ^ Math.floor(c * 104729), 16777619); h ^= h >>> 13; h = Math.imul(h, 1540483477); h ^= h >>> 15; return (h >>> 0) / 4294967296; };
+
 /** A waterfall in strokes, not a ribbon: several sheets one in front of another (the back one in shadow, lilac-grey, the
  * front ones white, a few pale blue), each a run of streaks sliding down its arc with the water, each streak drawn out
  * by how fast the water's falling where it is (short at the lip, long below), growing as it comes over the lip and
@@ -1001,8 +1027,11 @@ export function skyStrokes(seed: number, quiet = false): Float32Array {
 const SEG = 8;
 const VS = `#version 300 es
 layout(location=0) in vec2 aQ; layout(location=1) in vec4 a0; layout(location=2) in vec4 a1; layout(location=3) in vec4 a2; layout(location=4) in vec4 a3; layout(location=5) in vec4 a4;
-uniform mat4 uVP, uPrev; uniform vec3 uOff, uEye, uSun; uniform vec3 uPal[156]; uniform float uFog, uK, uMinW, uStretch, uDens, uGrow, uReveal; uniform vec2 uRes, uFront;
-uniform vec3 uSkyLo, uSkyHi, uSkyPale, uSmear, uCloudLit, uCloudShade; uniform float uCloud, uHazeK, uHazeB, uLit, uFlat, uThin; uniform vec3 uFogs[4]; uniform vec4 uBelt; uniform vec3 uBeltCol; uniform float uSink, uSkyTex, uSea, uWorldS, uWoodsIn; uniform vec3 uWoods, uAir; uniform vec2 uWoodsD;
+uniform mat4 uVP, uPrev; uniform vec3 uOff, uEye, uSun; uniform vec3 uPal[160]; uniform float uFog, uK, uMinW, uStretch, uDens, uGrow, uReveal; uniform vec2 uRes, uFront;
+uniform vec3 uSkyLo, uSkyHi, uSkyPale, uSmear, uCloudLit, uCloudShade; uniform float uCloud, uHazeK, uHazeB, uLit, uFlat, uThin; uniform vec3 uFogs[4]; uniform vec4 uBelt; uniform vec3 uBeltCol; uniform float uSink, uSkyTex, uSea, uWorldS, uWoodsIn; uniform vec3 uWoods, uAir; uniform vec2 uWoodsD; uniform float uWS[24]; uniform vec2 uWS0;
+// (how deep in the woods a stroke stands, by its station (the strip uploaded each frame round the rider); the eye's own
+// for what has no station)
+float woodsHere(float st){ if (st < -1e8) return uWoodsIn; float x = (st - uWS0.x)/uWS0.y; if (x < 0. || x > 23.) return uWoodsIn; int i = int(floor(x)); return mix(uWS[i], uWS[min(i + 1, 23)], fract(x)); }
 out vec2 vUv; out vec3 vA; out vec3 vB; flat out float vStamp; out float vFresh; flat out float vTex;
 float h(float s, float k){ return fract(sin(s*k)*43758.5453); }
 // (the cloud belt (\`mood=course\`), one model for the strokes and the solid masses alike: how much cloud lies along the
@@ -1087,6 +1116,8 @@ void main(){
   vec4 cl = uVP*vec4(p + V*min(lift, dist*.5), 1.);
   gl_Position = vec4(cq.xy, cl.z/cl.w*cq.w, cq.w);
   vUv = vec2(u, aQ.y*.5 + .5); vStamp = a3.y; vFresh = fresh; vTex = sky ? uSkyTex : far ? 1. : 0.;
+  // (light (the shafts, motion class 3): a veil, not paint: carried as a negative texture weight, its opacity)
+  if (a4.z > 2.5) vTex = -.32;
   if (sky) {
     vec3 col;
     if (a0.w > 1.9) col = mix(uCloudLit, uCloudShade, clamp(a0.w - 2., 0., 1.));
@@ -1099,7 +1130,18 @@ void main(){
   float l = dot(n, uSun) + (tone/.9 - .5)*.42 + (far ? 0. : (h(seed, 78.233) - .5)*.12 + uLit);
   // (in the woods: under the canopy, pushed toward shade, but where the light comes through, in broad pools fixed on the
   // ground (so they don't swim), lifted toward the light; the pines, already dark, by half)
-  float wIn = !far && !sky ? uWoodsIn*(both ? .5 : 1.) : 0.;
+  // (a pine in the woods lit as a crown, not facet by facet: from above and from the sun's side, by its face's outward
+  // normal (the stroke's own turns to the eye), little of the face's own tone; its rim, edge on to the eye on the sun's
+  // side, catches the light)
+  if (mt == 38) {
+    vec3 no = a2.y < 0. ? -a2.xyz : a2.xyz;
+    float side = dot(normalize(no.xz + vec2(1e-4)), normalize(uSun.xz + vec2(1e-4)));
+    l = .3*no.y + .55*side + (tone/.9 - .5)*.12 + (h(seed, 78.233) - .5)*.08 + uLit - .05;
+    if ((1. - abs(dot(no, V)))*max(side, 0.) > .5) l = max(l, .7);
+  }
+  // (in the woods by where the stroke stands, so a clearing ahead opens bright and the woods ahead close dark; light
+  // itself (the shafts) not shaded)
+  float wIn = !far && !sky && a4.z < 2.5 ? woodsHere(a4.x)*(both ? .5 : 1.) : 0.;
   if (wIn > 0.) {
     float dap = .5 + .5*sin(w.x/6.3 + 2.*sin(w.z/9.7))*sin(w.z/5.1 - 2.*sin(w.x/8.3));
     float pool = smoothstep(1. - uWoods.y - .07, 1. - uWoods.y + .07, dap);
@@ -1130,7 +1172,7 @@ void main(){
   vA = mix(A, fogs[b], fk); vB = mix(B, fogs[b2], fk);
   // (and the forest's air between the rows: each row further off a step into it, so the woods recede rather than stand
   // as one dark wall)
-  if (wIn > 0.) { float wa = uWoodsIn*uWoods.z*smoothstep(uWoodsD.x, uWoodsD.y, dist); vA = mix(vA, uAir, wa); vB = mix(vB, uAir, wa); }
+  if (wIn > 0.) { float wa = max(uWoodsIn, wIn)*uWoods.z*smoothstep(uWoodsD.x, uWoodsD.y, dist); vA = mix(vA, uAir, wa); vB = mix(vB, uAir, wa); }
   // (a planned stroke of the far off: hazed toward the horizon by its distance)
   if (far && code >= 0) { float hz = min(.88, fract(a0.w)/.9*uHazeK + uHazeB); vA = mix(mix(vA, mid, hz*uFlat), uSkyLo, hz); vB = mix(mix(vB, mid, hz*uFlat), uSkyLo, hz); }
   // (the far off, drawn about the eye, by a level line of sight at its distance, not by a height it doesn't really have)
@@ -1148,11 +1190,12 @@ void main(){
   vec4 s = texture(uAtlas, (cell + vUv)/vec2(${STAMP.COLS}., ${STAMP.ROWS}.));
   if (s.r < .05) discard;
   // (the bristles' ridges and grooves: on the far off and the sky hard, as loaded paint dragged in one long pull)
-  vec3 c = mix(vA, vB, s.b)*mix(.9 + .2*s.g, .72 + .5*s.g, vTex);
+  float op = vTex < 0. ? -vTex : 1., tx = max(vTex, 0.);
+  vec3 c = mix(vA, vB, s.b)*mix(.9 + .2*s.g, .72 + .5*s.g, tx);
   // (fresh paint, just laid: a little lighter, wet)
   c = mix(c, c*1.1 + .04, vFresh*.3);
   // (premultiplied, blended in a fixed order: no dithered coverage to crawl as the strokes shift)
-  float a = smoothstep(.05, .5, s.r);
+  float a = smoothstep(.05, .5, s.r)*op;
   o = vec4(c*a, a);
 }`;
 
@@ -1185,7 +1228,7 @@ export class Painter {
     const p = gl.createProgram()!; gl.attachShader(p, sh(gl.VERTEX_SHADER, VS)); gl.attachShader(p, sh(gl.FRAGMENT_SHADER, FS)); gl.linkProgram(p);
     if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p) ?? 'link');
     this.prog = p;
-    for (const k of ['uSmear', 'uVP', 'uPrev', 'uOff', 'uEye', 'uSun', 'uPal', 'uFog', 'uK', 'uMinW', 'uStretch', 'uDens', 'uRes', 'uAtlas', 'uSkyLo', 'uSkyHi', 'uSkyPale', 'uCloud', 'uCloudLit', 'uCloudShade', 'uHazeK', 'uHazeB', 'uFogs', 'uLit', 'uFlat', 'uThin', 'uBelt', 'uBeltCol', 'uSink', 'uSkyTex', 'uSea', 'uWorldS', 'uWoodsIn', 'uWoods', 'uWoodsD', 'uAir', 'uFadeS', 'uFront', 'uGrow', 'uReveal']) this.u[k] = gl.getUniformLocation(p, k);
+    for (const k of ['uSmear', 'uVP', 'uPrev', 'uOff', 'uEye', 'uSun', 'uPal', 'uFog', 'uK', 'uMinW', 'uStretch', 'uDens', 'uRes', 'uAtlas', 'uSkyLo', 'uSkyHi', 'uSkyPale', 'uCloud', 'uCloudLit', 'uCloudShade', 'uHazeK', 'uHazeB', 'uFogs', 'uLit', 'uFlat', 'uThin', 'uBelt', 'uBeltCol', 'uSink', 'uSkyTex', 'uSea', 'uWorldS', 'uWoodsIn', 'uWoods', 'uWoodsD', 'uAir', 'uWS', 'uWS0', 'uFadeS', 'uFront', 'uGrow', 'uReveal']) this.u[k] = gl.getUniformLocation(p, k);
     gl.useProgram(p);
     this.pal = palette; this.sun0 = sun;
     // (the quad: a strip along the stroke, SEG pieces, so a bent stroke bends smoothly)
@@ -1207,6 +1250,7 @@ export class Painter {
     gl.uniform3fv(this.u.uSkyLo, SKY.lo); gl.uniform3fv(this.u.uSkyHi, SKY.hi); gl.uniform3fv(this.u.uSkyPale, SKY.pale); gl.uniform3fv(this.u.uCloudLit, SKY.cloudLit); gl.uniform3fv(this.u.uCloudShade, SKY.cloudShade);
     gl.uniform1f(this.u.uHazeK, SKY.haze); gl.uniform1f(this.u.uHazeB, SKY.hazeBase); gl.uniform3fv(this.u.uFogs, new Float32Array(SKY.fog.flat()));
     gl.uniform1f(this.u.uLit, SKY.lit); gl.uniform1f(this.u.uFlat, SKY.flat); gl.uniform1f(this.u.uThin, SKY.thin);
+    gl.uniform1fv(this.u.uWS, this.woodsStrip); gl.uniform2f(this.u.uWS0, this.woodsS0, 40);
     gl.uniform1f(this.u.uWoodsIn, this.woodsIn); gl.uniform3fv(this.u.uWoods, SKY.woods); gl.uniform2fv(this.u.uWoodsD, SKY.woodsD); gl.uniform3fv(this.u.uAir, SKY.air);
     gl.uniform4f(this.u.uBelt, REGION.beltY, REGION.half, 70, REGION.on ? 1 : 0); gl.uniform3fv(this.u.uBeltCol, SKY.belt); gl.uniform1f(this.u.uSink, this.sink); gl.uniform1f(this.u.uSkyTex, this.skyTex); gl.uniform1f(this.u.uSea, -1); gl.uniform1f(this.u.uWorldS, 0); gl.uniform1f(this.u.uFadeS, 1);
   }
@@ -1237,8 +1281,8 @@ export class Painter {
   skyTex = 1;
   /** (the middle distance: sunk into the sea of cloud) */
   sink = 0;
-  /** how deep in the woods the eye is, 0 to 1 (regions.ts woodsAt) */
-  woodsIn = 0;
+  /** how deep in the woods the eye is, 0 to 1 (regions.ts woodsAt); and along the course round it, every 40 m from woodsS0 */
+  woodsIn = 0; woodsStrip = new Float32Array(24); woodsS0 = 0;
   setSink(on: boolean) { this.sink = on ? 1 : 0; this.gl.uniform1f(this.u.uSink, this.sink); }
   /** the sea of cloud's strokes drawn with this much of their own light (−1: not the sea) */
   setSea(f: number) { this.gl.uniform1f(this.u.uSea, f); }

@@ -28,7 +28,7 @@ import type { Rider, Event } from './sim';
 import { GEARS } from './audio';
 import { buildRuts, Trail } from './ruts';
 import { buildGouges } from './gouge';
-import { STROKE, Painter, Strokes, Brush2D, strokesOver, skyStrokes, lineOf, courseStrokes, backdropLayers, valleyStrokes, midHillStrokes, MID_SPAN, seaStrokes, fallStrokes, flagStrokes, riderStrokes, partShadowStrokes } from './paint';
+import { STROKE, Painter, Strokes, Brush2D, strokesOver, skyStrokes, lineOf, courseStrokes, backdropLayers, valleyStrokes, midHillStrokes, MID_SPAN, seaStrokes, fallStrokes, flagStrokes, riderStrokes, partShadowStrokes, shaftStrokes } from './paint';
 
 const VS = `#version 300 es
 in vec4 aP; uniform mat4 uVP; uniform vec3 uOff; uniform float uZj; out vec3 vW; flat out int vM;
@@ -43,7 +43,7 @@ void main() { vec3 w = aP.xyz + uOff; vW = w - uEye; vM = int(aP.w); vT = fract(
   gl_Position.z += uZj * fract(float(gl_VertexID / 3) * .618) * gl_Position.w; }`;
 const FS = `#version 300 es
 precision highp float;
-in vec3 vW; flat in int vM; flat in float vT; uniform vec3 uPal[156]; uniform vec3 uEye; uniform vec3 uSun; uniform float uFog; uniform float uNoThings; uniform vec4 uBelt; uniform vec3 uBeltCol; uniform vec3 uHazeCol; uniform float uCloud, uWorld, uFade, uGraze; out vec4 o;
+in vec3 vW; flat in int vM; flat in float vT; uniform vec3 uPal[160]; uniform vec3 uEye; uniform vec3 uSun; uniform float uFog; uniform float uNoThings; uniform vec4 uBelt; uniform vec3 uBeltCol; uniform vec3 uHazeCol; uniform float uCloud, uWorld, uFade, uGraze; out vec4 o;
 // (the cloud belt (\`mood=course\`), one model for the strokes and the solid masses alike: how much cloud lies along the
 // line from the eye to a point, by the share of it inside the belt's heights; inside, banks thicker and thinner,
 // drifting; below it, a ceiling thinning the further down you are and breaking into patches of sky. uBelt: its middle's
@@ -208,13 +208,13 @@ export class Renderer {
       const v = buildChunk(this.course, n);
       this.chunks.set(n, new Buf(this.gl, v)); budget--;
       if (this.painter) {
-        const face = strokesOver(v, this.course.seed * 1009 + n, lineOf(this.course, n * CHUNK - 6, (n + 1) * CHUNK + 6)), way = courseStrokes(this.course, n * CHUNK, (n + 1) * CHUNK);
+        const face = strokesOver(v, this.course.seed * 1009 + n, lineOf(this.course, n * CHUNK - 6, (n + 1) * CHUNK + 6)), way = courseStrokes(this.course, n * CHUNK, (n + 1) * CHUNK), shafts = shaftStrokes(this.course, n * CHUNK, (n + 1) * CHUNK, SKY_ENV.sun.length ? SKY_ENV.sun : SUN);
         // (the ground's strokes and the way's first, then the things' over them: the things hold no depth, so they're
         // painted over what's behind them by order)
         const G: number[] = [], Th: number[] = [];
         for (let k = 0; k < face.length; k += STROKE) (face[k + 15] > 2.5 ? Th : G).push(...face.subarray(k, k + STROKE));
-        const all = new Float32Array(G.length + way.length + Th.length);
-        all.set(G); all.set(way, G.length); all.set(Th, G.length + way.length);
+        const all = new Float32Array(G.length + way.length + Th.length + shafts.length);
+        all.set(G); all.set(way, G.length); all.set(Th, G.length + way.length); all.set(shafts, G.length + way.length + Th.length);
         this.strokes.set(n, this.painter.make(all));
       }
     }
@@ -222,7 +222,12 @@ export class Renderer {
   frame(view: View, r: Rider, t: number, dt: number, budget = 1) {
     const gl = this.gl;
     // (how deep in the woods you are: the canopy's shade and the forest's air (paint.ts))
-    if (this.painter) this.painter.woodsIn = REGION.on ? woodsAt(r.s, r.y) : 0;
+    if (this.painter) {
+      const pt = this.painter; pt.woodsIn = REGION.on ? woodsAt(r.s, r.y) : 0;
+      // (and along the course round you, every 40 m from just behind to well ahead: each stroke shaded by where it stands)
+      pt.woodsS0 = Math.floor(r.s / 40) * 40 - 120;
+      for (let k = 0; k < 24; k++) { const s = Math.max(0, pt.woodsS0 + k * 40); pt.woodsStrip[k] = REGION.on ? woodsAt(s, this.course.at(s).y) : 0; }
+    }
     if (this.paint && !this.painter) {
       this.painter = new Painter(gl, new Float32Array(PALETTE.flat().map(hex).flat()), SUN);
       this.floor = this.painter.make(valleyStrokes(this.course.seed));

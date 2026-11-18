@@ -107,6 +107,8 @@ function set(e: ReturnType<typeof full>) {
   Object.assign(SKY, e.sky, { fog: e.sky.fog.map((f) => f.slice()), sun: e.sky.sun.slice(), belt: e.sky.belt.slice(), woods: e.sky.woods.slice(), woodsD: e.sky.woodsD.slice() });
   // (the forest's air: the air the far off recedes into, the belt's and the distance's, never a colour of its own)
   SKY.air = mixArr(SKY.belt, SKY.fog[2], 0.4);
+  // (the light shafts in the woods: the air, lit toward the clouds' lit colour)
+  { const lit = hex(mixArr(SKY.air, SKY.cloudLit, 0.7).map((v) => v * 255)); PALETTE[M.SHAFT] = [lit, mixHex(lit, hex(SKY.air.map((v) => v * 255)), 0.2), mixHex(lit, hex(SKY.air.map((v) => v * 255)), 0.4), mixHex(lit, hex(SKY.air.map((v) => v * 255)), 0.6)]; }
   if (WOODS_LOOK) Object.assign(SKY, WOODS_LOOK);
   for (const k of Object.keys(FX) as (keyof typeof FX)[]) { const a = FX[k]; a.length = 0; a.push(...e.fx[k]); }
 }

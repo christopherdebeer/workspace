@@ -12,7 +12,7 @@ import { Course, JUMPS, hash } from './course';
 import { REGION, grassiness, woodsAt } from './regions';
 import { STEP, WALL, section, character, groundAt, notch } from './ground';
 
-export const M = { SNOW: 0, TRACK: 1, ROCK: 2, ORANGE: 3, BLACK: 4, WHITE: 5, MTN: 6, MTNSNOW: 7, UMBER: 8, SHADOW: 9, RUT: 10, NAVY: 11, FAR: 12, FARSNOW: 13, RIDGE: 14, FOREST: 15, VALLEY: 16, CUT_ORANGE: 17, CUT_BLACK: 18, CREAM: 19, GOUGE: 20, FIELD: 21, JACKET: 22, DENIM: 23, TYRE: 24, GRASS: 25, MASS_FAR: 26, MASS_BODY: 27, MASS_SHADE: 28, MASS_SNOW: 29, MASS_SNOWSH: 30, MASS_RIDGE: 31, MASS_RIDGESH: 32, MASS_FLOOR: 33, MASS_RIVER: 34, PATCH_NEAR: 35, PATCH_FAR: 36, PATCH_FLOOR: 37, PINE: 38 } as const;
+export const M = { SNOW: 0, TRACK: 1, ROCK: 2, ORANGE: 3, BLACK: 4, WHITE: 5, MTN: 6, MTNSNOW: 7, UMBER: 8, SHADOW: 9, RUT: 10, NAVY: 11, FAR: 12, FARSNOW: 13, RIDGE: 14, FOREST: 15, VALLEY: 16, CUT_ORANGE: 17, CUT_BLACK: 18, CREAM: 19, GOUGE: 20, FIELD: 21, JACKET: 22, DENIM: 23, TYRE: 24, GRASS: 25, MASS_FAR: 26, MASS_BODY: 27, MASS_SHADE: 28, MASS_SNOW: 29, MASS_SNOWSH: 30, MASS_RIDGE: 31, MASS_RIDGESH: 32, MASS_FLOOR: 33, MASS_RIVER: 34, PATCH_NEAR: 35, PATCH_FAR: 36, PATCH_FLOOR: 37, PINE: 38, SHAFT: 39 } as const;
 /** each material's four bands, lit to unlit (the reference's own colours) */
 export const PALETTE: string[][] = [
   ['#f1ece8', '#d9d0ca', '#a399a2', '#6f6c93'], // snow
@@ -52,6 +52,8 @@ export const PALETTE: string[][] = [
   // (the pines inside the forest: needles lit olive, through a mossy dark and a navy dark, to black in their own shade;
   // taken from the light's grass and black, whatever the mood (mood.ts))
   ['#8c8150', '#59573f', '#252d52', '#1d213a'],
+  // (light coming down through the woods: the air lit, nearly white (mood.ts))
+  ['#f4ecdc', '#e8dccc', '#d8ccc0', '#c8bcb4'],
 ];
 
 /** the ruts lighter than the road instead (`ruts=light`): the worn line polished, catching the light like a flash */
