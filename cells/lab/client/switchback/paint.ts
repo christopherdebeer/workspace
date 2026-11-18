@@ -140,9 +140,11 @@ export const SKY = { lo: [0.55, 0.67, 0.96], hi: [0.05, 0.2, 0.8], pale: [0.62, 
   belt: [0.84, 0.87, 0.88],
   // (in the woods, by how deep in them you are: how far the canopy's shade pushes the near strokes toward their dark
   // bands, what share of the ground lies in pools of light, how strongly the forest's air takes what's further off; from
-  // how near the air begins to where it's full (m); and the air's colour. Enclosed and dark (much shade, few small pools,
-  // thin air) or airy and luminous (soft shade, more light, pale air thick between the rows), by the light's own mood)
-  woods: [0.45, 0.3, 0.55], woodsD: [12, 110], air: [0.62, 0.68, 0.88] };
+  // how near the air begins to where it's full (m). Enclosed and dark (much shade, few small pools, thin air) or airy and
+  // luminous (soft shade, more light, thicker air between the rows), by the light's own mood. The air's colour isn't the
+  // mood's to choose: it's the same air the far off is hazed into (the belt's and the distance's), so the woods recede
+  // into the background rather than standing pale against it (mood.ts sets it)
+  woods: [0.45, 0.3, 0.45], woodsD: [12, 110], air: [0.62, 0.68, 0.88] };
 export const NEVER = -1e9;
 const ROAD = new Set<number>([M.TRACK, M.RUT]), GROUND = new Set<number>([M.SNOW, M.SHADOW, M.GRASS]), ROCKY = new Set<number>([M.ROCK, M.UMBER, M.GOUGE]);
 const RANGE = new Set<number>([M.MTN, M.MTNSNOW, M.FAR, M.FARSNOW, M.RIDGE]);
