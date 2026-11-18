@@ -240,7 +240,7 @@ function open() {
 function close() { menuOpen = false; resume(); menu.classList.remove('on'); menu.setAttribute('inert', ''); }
 /** paused, nothing over it (the button's first tap): the run held, the button now the menu's */
 function pause() { paused = true; document.body.classList.add('paused'); menuBtn.setAttribute('aria-label', 'Menu and settings'); sound.hush(true); drag = null; gest = null; inp.steer = 0; inp.drive = 0; }
-function resume() { paused = false; document.body.classList.remove('paused'); menuBtn.setAttribute('aria-label', 'Pause'); sound.hush(false); }
+function resume() { paused = false; document.body.classList.remove('paused'); menuBtn.setAttribute('aria-label', 'Pause the run'); sound.hush(false); }
 function begin() {
   // (a fresh run in the mode chosen: a new rider at the top, the eye with it, yours to ride, the score at nothing)
   // (on a page the sim rides, `auto`: the sim's run again, yours as soon as you touch)
