@@ -215,11 +215,11 @@ export function strokesOver(verts: Float32Array, seed: number, line: number[] | 
     if (thing) {
       // (a thing: along its face's longest edge, sized by the face; both sides)
       const e = [[ux, uy, uz], [vx, vy, vz], [cx - bx, cy - by, cz - bz]].sort((p, q) => Math.hypot(q[0], q[1], q[2]) - Math.hypot(p[0], p[1], p[2]))[0], el = Math.hypot(e[0], e[1], e[2]) || 1;
-      const Ls = Math.max(0.07, Math.min(moving ? (flat ? 1.2 : 0.5) : m === M.BLACK ? 5 : 1.4, Math.sqrt(area) * 1.1));
+      const Ls = Math.max(0.07, Math.min(moving ? (flat ? 1.2 : 0.5) : m === M.PINE ? 4 : m === M.BLACK ? 2.5 : 1.4, Math.sqrt(area) * 1.1));
       // (a flat thing lying on the ground (your track, a shadow) is laid as the ground is: flat on it, one side; a
       // standing thing, both sides, turning to the eye)
       if (flat && ny < 0) { nx = -nx; ny = -ny; nz = -nz; }
-      emit(e[0] / el, e[1] / el, e[2] / el, Ls, Ls * (flat ? 0.35 : 0.5), flat ? 2.2 : 3.2, 0, flat ? [0, 1, 11] : [0, 1, 2, 4, 8, 15], 0.35, flat ? 0.2 : 0.4, flat ? 0 : 3);
+      emit(e[0] / el, e[1] / el, e[2] / el, Ls, Ls * (flat ? 0.35 : 0.5), flat || m === M.PINE ? 2.2 : 3.2, 0, flat ? [0, 1, 11] : [0, 1, 2, 4, 8, 15], 0.35, flat ? 0.2 : 0.4, flat ? 0 : 3);
       continue;
     }
     // (the face's normal: up, or (a steep face) toward the road it's seen from)
@@ -994,7 +994,7 @@ export function skyStrokes(seed: number, quiet = false): Float32Array {
 const SEG = 8;
 const VS = `#version 300 es
 layout(location=0) in vec2 aQ; layout(location=1) in vec4 a0; layout(location=2) in vec4 a1; layout(location=3) in vec4 a2; layout(location=4) in vec4 a3; layout(location=5) in vec4 a4;
-uniform mat4 uVP, uPrev; uniform vec3 uOff, uEye, uSun; uniform vec3 uPal[152]; uniform float uFog, uK, uMinW, uStretch, uDens, uGrow, uReveal; uniform vec2 uRes, uFront;
+uniform mat4 uVP, uPrev; uniform vec3 uOff, uEye, uSun; uniform vec3 uPal[156]; uniform float uFog, uK, uMinW, uStretch, uDens, uGrow, uReveal; uniform vec2 uRes, uFront;
 uniform vec3 uSkyLo, uSkyHi, uSkyPale, uSmear, uCloudLit, uCloudShade; uniform float uCloud, uHazeK, uHazeB, uLit, uFlat, uThin; uniform vec3 uFogs[4]; uniform vec4 uBelt; uniform vec3 uBeltCol; uniform float uSink, uSkyTex, uSea, uWorldS;
 out vec2 vUv; out vec3 vA; out vec3 vB; flat out float vStamp; out float vFresh; flat out float vTex;
 float h(float s, float k){ return fract(sin(s*k)*43758.5453); }

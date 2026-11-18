@@ -9,10 +9,10 @@
  * that keeps its distance from the eye.
  */
 import { Course, JUMPS, hash } from './course';
-import { REGION, grassiness } from './regions';
+import { REGION, grassiness, woodsAt } from './regions';
 import { STEP, WALL, section, character, groundAt, notch } from './ground';
 
-export const M = { SNOW: 0, TRACK: 1, ROCK: 2, ORANGE: 3, BLACK: 4, WHITE: 5, MTN: 6, MTNSNOW: 7, UMBER: 8, SHADOW: 9, RUT: 10, NAVY: 11, FAR: 12, FARSNOW: 13, RIDGE: 14, FOREST: 15, VALLEY: 16, CUT_ORANGE: 17, CUT_BLACK: 18, CREAM: 19, GOUGE: 20, FIELD: 21, JACKET: 22, DENIM: 23, TYRE: 24, GRASS: 25, MASS_FAR: 26, MASS_BODY: 27, MASS_SHADE: 28, MASS_SNOW: 29, MASS_SNOWSH: 30, MASS_RIDGE: 31, MASS_RIDGESH: 32, MASS_FLOOR: 33, MASS_RIVER: 34, PATCH_NEAR: 35, PATCH_FAR: 36, PATCH_FLOOR: 37 } as const;
+export const M = { SNOW: 0, TRACK: 1, ROCK: 2, ORANGE: 3, BLACK: 4, WHITE: 5, MTN: 6, MTNSNOW: 7, UMBER: 8, SHADOW: 9, RUT: 10, NAVY: 11, FAR: 12, FARSNOW: 13, RIDGE: 14, FOREST: 15, VALLEY: 16, CUT_ORANGE: 17, CUT_BLACK: 18, CREAM: 19, GOUGE: 20, FIELD: 21, JACKET: 22, DENIM: 23, TYRE: 24, GRASS: 25, MASS_FAR: 26, MASS_BODY: 27, MASS_SHADE: 28, MASS_SNOW: 29, MASS_SNOWSH: 30, MASS_RIDGE: 31, MASS_RIDGESH: 32, MASS_FLOOR: 33, MASS_RIVER: 34, PATCH_NEAR: 35, PATCH_FAR: 36, PATCH_FLOOR: 37, PINE: 38 } as const;
 /** each material's four bands, lit to unlit (the reference's own colours) */
 export const PALETTE: string[][] = [
   ['#f1ece8', '#d9d0ca', '#a399a2', '#6f6c93'], // snow
@@ -49,6 +49,9 @@ export const PALETTE: string[][] = [
   ...['#7a97ee', '#3a63e6', '#1a3ab4', '#f4ece2', '#7f95e4', '#2b48c4', '#162f98', '#4a6ee6', '#dfe6f4'].map((c) => [c, c, c, c]),
   // (the regional middle distance's masses (`backdrop=set`'s floor and shoulders): lit or in shade, two tones each)
   ['#b3a45e', '#b3a45e', '#5c5c3c', '#5c5c3c'], ['#6178d8', '#6178d8', '#2c46b8', '#2c46b8'], ['#86804c', '#86804c', '#86804c', '#86804c'],
+  // (the pines inside the forest: needles lit olive, through a mossy dark and a navy dark, to black in their own shade;
+  // taken from the light's grass and black, whatever the mood (mood.ts))
+  ['#8c8150', '#59573f', '#252d52', '#1d213a'],
 ];
 
 /** the ruts lighter than the road instead (`ruts=light`): the worn line polished, catching the light like a flash */
@@ -360,24 +363,35 @@ function dress(c: Course, m: Mesh, i: number, sec: { u: number; y: number; ds: n
   const centre = c.point(i, 0);
   // Descending through the snowline brings the existing pines uphill to the trail.
   // Windbreaks and clearings follow the mountain, so jumping never moves the treeline.
-  const descent = REGION.on ? Math.max(0, Math.min(1, (REGION.snowY - st.y) / 115)) : 0;
-  const forest = descent * descent * (3 - 2 * descent);
+  const forest = woodsAt(i, st.y);
   const grove = 0.55 + 0.3 * Math.sin(i / 44 + c.seed) + 0.15 * Math.sin(i / 17 - c.seed);
   const shelter = forest * grove;
   const plainShoulder = st.feature === 'none' && !st.flag &&
     c.at(i + 18).feature === 'none' && c.at(Math.max(0, i - 12)).feature === 'none';
   const close = plainShoulder ? shelter : 0;
   const interior = plainShoulder ? forest * forest : 0;
+  // (in the woods the pines are the scenery, not silhouettes: their own material, lit and shaded; above, black as before)
+  const needles = interior > 0.2 || close > 0.3 ? M.PINE : M.BLACK;
   if (i % 2 === 0 && r < 0.26 + 0.24 * grassiness(centre.x, st.y, centre.z) + 0.20 * close) {
     const du = (6 - 3 * interior) + hash(c.seed, i, 102) * (70 - 58 * close) * (1 - 0.85 * interior), u = half + du, y = groundAt(sec, u);
     const p = c.point(i, u);
     const height = 6 + hash(c.seed, i, 103) * 9 * (du > 30 ? 1.4 : 1) + 8 * close;
-    m.pine(p.x, y - 0.3, p.z, height + 6 * interior, c.seed * 9973 + i, M.BLACK, 9 * interior);
+    m.pine(p.x, y - 0.3, p.z, height + 6 * interior, c.seed * 9973 + i, needles, 9 * interior);
   }
   if (i % 3 === 0 && r > 0.9 - 0.55 * close) {
     const du = 9 - 5.8 * interior + hash(c.seed, i, 104) * (25 - 19 * close) * (1 - 0.85 * interior);
     const u = -half - du, y = groundAt(sec, u), p = c.point(i, u);
-    m.pine(p.x, y - 0.3, p.z, 5 + hash(c.seed, i, 105) * 6 + 9 * close + 6 * interior, c.seed * 7919 + i, M.BLACK, 7 * interior);
+    m.pine(p.x, y - 0.3, p.z, 5 + hash(c.seed, i, 105) * 6 + 9 * close + 6 * interior, c.seed * 7919 + i, needles, 7 * interior);
+  }
+  // (inside the forest: rows of tall pines both sides, close to the trail and deep behind it (two rows down the drop, one
+  // up the wall), so you ride through the woods rather than past a few trees)
+  if (interior > 0.15) {
+    for (const [side, k, p0, d0, dd] of [[1, 0, 0.45, 2.5, 7], [1, 1, 0.35, 10, 14], [-1, 2, 0.35, 3, 10]] as const) {
+      if (hash(c.seed, i, 130 + k) > interior * p0) continue;
+      const du = d0 + hash(c.seed, i, 140 + k) * dd, u = side * (half + du), y = groundAt(sec, u), p = c.point(i, u);
+      const h = 11 + hash(c.seed, i, 150 + k) * 11 + k * 2;
+      m.pine(p.x, y - 0.3, p.z, h, c.seed * 6007 + i * 7 + k, M.PINE, (3 + 6 * hash(c.seed, i, 160 + k)) * interior);
+    }
   }
   // (crags: rock towers down the drop where it's a shelf, and on the wall where it's only a bank)
   const chr = character(c, i);

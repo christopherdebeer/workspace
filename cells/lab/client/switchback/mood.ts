@@ -101,6 +101,8 @@ function set(e: ReturnType<typeof full>) {
   flat(M.MASS_SNOW, PALETTE[M.MTNSNOW][0]); flat(M.MASS_SNOWSH, PALETTE[M.MTNSNOW][2]); flat(M.MASS_RIDGE, PALETTE[M.RIDGE][2]);
   flat(M.MASS_RIDGESH, PALETTE[M.RIDGE][3]); flat(M.MASS_FLOOR, PALETTE[M.VALLEY][0]); flat(M.MASS_RIVER, PALETTE[M.WHITE][2]);
   const two = (k: number, lit: string, sh: string) => (PALETTE[k] = [lit, lit, sh, sh]);
+  // (the forest's pines: the light's grass sunk toward black where lit, the forest's navy in the dark, black in shade)
+  { const g = PALETTE[M.GRASS], k = PALETTE[M.BLACK]; const f = PALETTE[M.FOREST][0]; PALETTE[M.PINE] = [mixHex(g[1], k[0], 0.3), mixHex(g[2], k[0], 0.5), mixHex(k[0], f, 0.45), mixHex(k[1], f, 0.25)]; }
   two(M.PATCH_NEAR, PALETTE[M.GRASS][1], PALETTE[M.GRASS][3]); two(M.PATCH_FAR, PALETTE[M.RIDGE][1], PALETTE[M.RIDGE][3]); flat(M.PATCH_FLOOR, PALETTE[M.GRASS][2]);
   Object.assign(SKY, e.sky, { fog: e.sky.fog.map((f) => f.slice()), sun: e.sky.sun.slice(), belt: e.sky.belt.slice() });
   for (const k of Object.keys(FX) as (keyof typeof FX)[]) { const a = FX[k]; a.length = 0; a.push(...e.fx[k]); }

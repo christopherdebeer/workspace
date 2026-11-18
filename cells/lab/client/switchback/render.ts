@@ -43,7 +43,7 @@ void main() { vec3 w = aP.xyz + uOff; vW = w - uEye; vM = int(aP.w); vT = fract(
   gl_Position.z += uZj * fract(float(gl_VertexID / 3) * .618) * gl_Position.w; }`;
 const FS = `#version 300 es
 precision highp float;
-in vec3 vW; flat in int vM; flat in float vT; uniform vec3 uPal[152]; uniform vec3 uEye; uniform vec3 uSun; uniform float uFog; uniform float uNoThings; uniform vec4 uBelt; uniform vec3 uBeltCol; uniform vec3 uHazeCol; uniform float uCloud, uWorld, uFade, uGraze; out vec4 o;
+in vec3 vW; flat in int vM; flat in float vT; uniform vec3 uPal[156]; uniform vec3 uEye; uniform vec3 uSun; uniform float uFog; uniform float uNoThings; uniform vec4 uBelt; uniform vec3 uBeltCol; uniform vec3 uHazeCol; uniform float uCloud, uWorld, uFade, uGraze; out vec4 o;
 // (the cloud belt (\`mood=course\`), one model for the strokes and the solid masses alike: how much cloud lies along the
 // line from the eye to a point, by the share of it inside the belt's heights; inside, banks thicker and thinner,
 // drifting; below it, a ceiling thinning the further down you are and breaking into patches of sky. uBelt: its middle's
@@ -67,7 +67,7 @@ void main() {
   if (uFade < 1. && fract(sin(dot(floor(gl_FragCoord.xy / 3.), vec2(12.9898, 78.233))) * 43758.5453) > uFade) discard;
   // (painted, the things standing on the ground (the fence, the poles, the pines, a kicker's boards) claim no depth and no
   // stencil: what's behind them is painted, and their strokes over it, so a gap between their strokes shows that, not paper)
-  if (uNoThings > .5 && (vM == 3 || vM == 4 || vM == 5 || vM == 11 || vM == 17 || vM == 18 || vM == 19)) discard;
+  if (uNoThings > .5 && (vM == 3 || vM == 4 || vM == 5 || vM == 11 || vM == 17 || vM == 18 || vM == 19 || vM == 38)) discard;
   vec3 n = normalize(cross(dFdx(vW), dFdy(vW)));
   // (claiming depth and paper for the strokes: only a face seen fairly square on (a wall, rock, a kicker's face) claims
   // them; ground seen at a shallow angle (the snow at a kicker's lip, level with the eye) leaves gaps between its strokes,

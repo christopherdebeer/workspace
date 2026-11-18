@@ -12,7 +12,7 @@ import { hash } from './course';
 
 export type Time = 'day' | 'dusk' | 'night';
 export const TIMES: Time[] = ['day', 'dusk', 'night'];
-export const REGION = { on: false, beltS: 0, beltY: 0, half: 70, snowY: 0, seed: 1, time: 'day' as Time };
+export const REGION = { on: false, beltS: 0, beltY: 0, half: 70, snowY: 0, seed: 1, time: 'day' as Time, woodsEnd: Infinity };
 /** the regions for a mountain: where the belt is (its station and height), the snowline under it */
 /** (time: the run's time of day, `time=day|dusk|night`, day if unset; `time=auto` the mountain's own, by its seed: day
  * half the time, dusk a third, night the rest) */
@@ -36,4 +36,13 @@ export function grassiness(x: number, y: number, z: number) {
  * lower slopes' grass and earth are laid in the ground, and coloured by whatever light there is */
 export function lightKeys(): [number, string][] {
   return REGION.time === 'day' ? [[0, 'day'], [1500, 'day'], [5000, 'gold']] : REGION.time === 'dusk' ? [[0, 'gold'], [1800, 'gold'], [4500, 'moon']] : [[0, 'moon']];
+}
+/** how far into the woods a station is, 0 (open snow) to 1 (deep in the forest): coming down through the snowline the
+ * pines close in over the next 115 m of height; past `woodsEnd` (a station; none yet) they thin out again over 150 m, so
+ * a course can ride out of the forest as well as into it */
+export function woodsAt(s: number, y: number) {
+  if (!REGION.on) return 0;
+  const d = Math.max(0, Math.min(1, (REGION.snowY - y) / 115)), into = d * d * (3 - 2 * d);
+  const out = Math.max(0, Math.min(1, (s - REGION.woodsEnd) / 150));
+  return into * (1 - out * out * (3 - 2 * out));
 }
