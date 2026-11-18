@@ -14,7 +14,7 @@
 import { Course } from './course';
 import { CHUNK, PALETTE, buildChunk, buildFalls, buildFlags, buildRanges, buildRider, buildValley } from './mesh';
 import type { RiderPart } from './mesh';
-import { REGION } from './regions';
+import { REGION, woodsAt } from './regions';
 import { buildMasses } from './backdrop';
 import { buildScene, sceneView, SCENE_S } from './scene';
 /** how much of the set stands (0 to 1) at station s: dissolving in over 200 stations as its passage begins, out as it ends */
@@ -221,6 +221,8 @@ export class Renderer {
   }
   frame(view: View, r: Rider, t: number, dt: number, budget = 1) {
     const gl = this.gl;
+    // (how deep in the woods you are: the canopy's shade and the forest's air (paint.ts))
+    if (this.painter) this.painter.woodsIn = REGION.on ? woodsAt(r.s, r.y) : 0;
     if (this.paint && !this.painter) {
       this.painter = new Painter(gl, new Float32Array(PALETTE.flat().map(hex).flat()), SUN);
       this.floor = this.painter.make(valleyStrokes(this.course.seed));

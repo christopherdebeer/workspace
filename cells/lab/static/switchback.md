@@ -135,6 +135,9 @@ Cost: tens of thousands of strokes; a chunk's take about 7 ms to place as it's b
 ![Painted](switchback/v-painted.jpg)
 ![Painted, riding](switchback/v-painted-ride.jpg)
 
+**In the woods** (below the snowline, `woodsAt`): the near strokes darken under the canopy, except in broad pools of light fixed on the ground; the forest's air thickens between the rows, so the woods recede in steps rather than stand as one wall. How enclosed or airy is the light's own (each mood's `woods`: shade, the pools' share, the air's strength; `woodsD`: where the air begins and is full; `air`: its colour), blended down the course like the rest; `woods=dark|airy` holds it one way to compare. Pines and trunks right by the eye shrink away; crowns are kept from overhanging the trail.
+
+
 ## Title, menu, modes, score (`score.ts`)
 
 It opens on its title, the sim's own rider showing off on the mountain behind a veil of the sky's blue: flicking into kinks so the rear steps out, and at each ramp choosing what the flight will hold (on the run-in it flies the flight forward from the lip against the ground to see how long it'll be up and what it'll come down on, and picks what fits: a backflip, pulled up the ramp as hard as that flight needs and trimmed in the air; one of the body's tricks, or two strung together on a long flight, let go as soon as the air left is only enough to get back on; a whip; or nothing; it uses only the player's own inputs, so what it lands, you can). Pick a **mode** (THREE LIVES to begin with) and **RIDE** (which starts the sound too: browsers only start it from a tap), or look at the **LEADERBOARD**:

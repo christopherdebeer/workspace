@@ -30,7 +30,7 @@ import { Pad, replay, show as ink } from './sign';
 import { C15R } from './hand';
 import { Composer, Live, exportClip, save } from './rec';
 import { Callouts } from './callout';
-import { applyMood, cycleAt, lightAlong } from './mood';
+import { applyMood, cycleAt, lightAlong, woodsLook } from './mood';
 import { setRegions, lightKeys, REGION } from './regions';
 const beltY = new URLSearchParams(location.search).has('belty') ? Number(new URLSearchParams(location.search).get('belty')) : null, beltOsc = Number(new URLSearchParams(location.search).get('beltosc') ?? 0);
 
@@ -62,6 +62,7 @@ let rider = new Rider(course);
 if (q.get('ruts') === 'light') PALETTE[M.RUT] = RUT_LIGHT;
 // (`mood=gold|mist|autumn|moon`: the same painting in another light (mood.ts))
 let moodShown = '';
+woodsLook(q.get('woods'));
 const moodCycle = applyMood(q.get('mood')) && q.get('mood') === 'cycle';
 // (`mood=course`: the light, the cloud belt and the snowline laid along the course (regions.ts))
 // (the default: with no mood asked for, the course's regions; `mood=day` the plain look, any other mood that one)

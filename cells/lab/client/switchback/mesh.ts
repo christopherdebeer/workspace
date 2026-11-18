@@ -376,12 +376,12 @@ function dress(c: Course, m: Mesh, i: number, sec: { u: number; y: number; ds: n
     const du = (6 - 3 * interior) + hash(c.seed, i, 102) * (70 - 58 * close) * (1 - 0.85 * interior), u = half + du, y = groundAt(sec, u);
     const p = c.point(i, u);
     const height = 6 + hash(c.seed, i, 103) * 9 * (du > 30 ? 1.4 : 1) + 8 * close;
-    m.pine(p.x, y - 0.3, p.z, height + 6 * interior, c.seed * 9973 + i, needles, 9 * interior);
+    m.pine(p.x, y - 0.3, p.z, Math.min(height + 6 * interior, (du + 1.5) / 0.3), c.seed * 9973 + i, needles, 9 * interior);
   }
   if (i % 3 === 0 && r > 0.9 - 0.55 * close) {
     const du = 9 - 5.8 * interior + hash(c.seed, i, 104) * (25 - 19 * close) * (1 - 0.85 * interior);
     const u = -half - du, y = groundAt(sec, u), p = c.point(i, u);
-    m.pine(p.x, y - 0.3, p.z, 5 + hash(c.seed, i, 105) * 6 + 9 * close + 6 * interior, c.seed * 7919 + i, needles, 7 * interior);
+    m.pine(p.x, y - 0.3, p.z, Math.min(5 + hash(c.seed, i, 105) * 6 + 9 * close + 6 * interior, (du + 1.5) / 0.3), c.seed * 7919 + i, needles, 7 * interior);
   }
   // (inside the forest: rows of tall pines both sides, close to the trail and deep behind it (two rows down the drop, one
   // up the wall), so you ride through the woods rather than past a few trees)
@@ -389,7 +389,8 @@ function dress(c: Course, m: Mesh, i: number, sec: { u: number; y: number; ds: n
     for (const [side, k, p0, d0, dd] of [[1, 0, 0.45, 2.5, 7], [1, 1, 0.35, 10, 14], [-1, 2, 0.35, 3, 10]] as const) {
       if (hash(c.seed, i, 130 + k) > interior * p0) continue;
       const du = d0 + hash(c.seed, i, 140 + k) * dd, u = side * (half + du), y = groundAt(sec, u), p = c.point(i, u);
-      const h = 11 + hash(c.seed, i, 150 + k) * 11 + k * 2;
+      // (a crown's spread is about 0.3 of its height: kept from overhanging the trail, where the eye rides)
+      const h = Math.min(11 + hash(c.seed, i, 150 + k) * 11 + k * 2, (du + 1.5) / 0.3);
       m.pine(p.x, y - 0.3, p.z, h, c.seed * 6007 + i * 7 + k, M.PINE, (3 + 6 * hash(c.seed, i, 160 + k)) * interior);
     }
   }
