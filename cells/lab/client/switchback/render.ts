@@ -192,7 +192,7 @@ export class Renderer {
   /** a fixed size in pixels, one to one (for an export); `resize` puts it back to the window */
   setSize(w: number, h: number) { this.dpr = 1; this.W = w; this.H = h; for (const c of [this.canvas, this.overlay]) { c.width = w; c.height = h; } }
   resize() {
-    this.dpr = Math.min(2, devicePixelRatio || 1);
+    this.dpr = Math.min(1.5, devicePixelRatio || 1);
     this.W = innerWidth; this.H = innerHeight;
     for (const c of [this.canvas, this.overlay]) { c.width = Math.round(this.W * this.dpr); c.height = Math.round(this.H * this.dpr); }
   }
@@ -257,6 +257,8 @@ export class Renderer {
     gl.enable(gl.DEPTH_TEST); gl.disable(gl.CULL_FACE);
     gl.useProgram(this.prog);
     gl.uniformMatrix4fv(this.u.uVP, false, this.vp); gl.uniform3fv(this.u.uEye, new Float32Array(view.eye)); gl.uniform1f(this.u.uZj, this.zjit);
+    // Only the regional set fades. Terrain must claim depth and stencil from frame one.
+    gl.uniform1f(this.u.uFade, 1);
     const riderParts: RiderPart[] = [];
     const body = this.body = buildRider({ x: r.x, y: r.y, z: r.z, heading: r.heading, pitch: r.pitch, lean: r.lean, squash: r.squash, crashT: r.crashT, air: r.air, steer: r.steer, yFront: r.yFront, yRear: r.yRear, dist: r.dist, body: r.body, whip: this.whip || r.whip, trick: r.trickOut ? r.outs : undefined, style: this.style }, t, this.paint ? riderParts : undefined);
     // (the rider, cut: lit for the picture rather than by the sun, from above, behind the eye and to its left, so what
@@ -290,9 +292,8 @@ export class Renderer {
       // (the ground and the rider (whose strokes, on both sides of it, need its own depth to hide its far side): the things
       // on the ground, the flags and the falls claim no depth or stencil)
       const near = () => { if (this.bgOnly) return; gl.uniform3f(this.u.uOff, 0, 0, 0); gl.uniform1f(this.u.uNoThings, 1); for (const b of this.chunks.values()) b.draw(); gl.uniform1f(this.u.uNoThings, 0); this.rider.set(body, true); this.rider.draw(); };
-      // (where things stand, in the stencil: 2 the backdrop, 1 anything near; nothing drawn)
-      gl.colorMask(false, false, false, false); gl.disable(gl.DEPTH_TEST); gl.enable(gl.STENCIL_TEST); gl.stencilOp(gl.KEEP, gl.KEEP, gl.REPLACE); gl.stencilFunc(gl.ALWAYS, 2, 0xff);
-      gl.uniform1f(this.u.uFog, 0); gl.uniform3f(this.u.uOff, off[0], off[1], off[2]); this.ranges.draw(); this.valley.draw();
+      gl.colorMask(false, false, false, false); gl.enable(gl.STENCIL_TEST);
+      gl.stencilOp(gl.KEEP, gl.KEEP, gl.REPLACE);
       // (what's near marks only where it's seen: hidden behind the ground, a fall or a far chunk would otherwise claim
       // its whole outline, and nothing would paint there)
       gl.enable(gl.DEPTH_TEST); gl.clear(gl.DEPTH_BUFFER_BIT); gl.stencilFunc(gl.ALWAYS, 1, 0xff); near();
@@ -300,10 +301,7 @@ export class Renderer {
       // (the sky, wherever nothing near stands: the ranges are painted over it, as a painter would)
       gl.colorMask(true, true, true, true); gl.stencilFunc(gl.NOTEQUAL, 1, 0xff);
       if (!PROBE) { paintBegin(); if (this.skyS) pt.draw(this.skyS, view.eye, false); pt.end(); } gl.useProgram(this.prog);
-      // (the backdrop, by its own depth, only where nothing near stands)
-      gl.enable(gl.DEPTH_TEST); gl.clear(gl.DEPTH_BUFFER_BIT); gl.colorMask(false, false, false, false); gl.stencilFunc(gl.ALWAYS, 0, 0xff);
-      gl.uniform3f(this.u.uOff, off[0], off[1], off[2]); this.ranges.draw(); this.valley.draw();
-      gl.colorMask(true, true, true, true); gl.stencilFunc(gl.NOTEQUAL, 1, 0xff);
+      // The near silhouette reserves the paper until its strokes are laid.
       // (the ranges over the sky and over each other, farthest first, by the order they're laid, not by depth: so their
       // strokes run over the skyline as a brush does, and a nearer range is painted over the one behind it; then the
       // valley, by depth, so its floor doesn't paint over the ranges' feet it lies behind)
@@ -361,8 +359,10 @@ export class Renderer {
       gl.disable(gl.STENCIL_TEST);
       // (what's near: its facets only in the depth; then its strokes, laid in the world on them and lifted a little toward
       // the eye, tested against that depth pixel by pixel, far chunks first)
-      gl.clear(gl.DEPTH_BUFFER_BIT);
-      gl.colorMask(false, false, false, false); near(); gl.colorMask(true, true, true, true);
+      if (COMPOSED) {
+        gl.clear(gl.DEPTH_BUFFER_BIT);
+        gl.colorMask(false, false, false, false); near(); gl.colorMask(true, true, true, true);
+      }
       gl.depthFunc(gl.LEQUAL);
       paintBegin();
       // (the ground's strokes, the far chunks first so the near paint over them at the edges)

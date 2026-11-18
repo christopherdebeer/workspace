@@ -168,7 +168,9 @@ export function lineOf(c: Course, s0: number, s1: number) {
 export function strokesOver(verts: Float32Array, seed: number, line: number[] | null, cap = 26000, moving = false, place = 0, flat = false, big = 1): Float32Array {
   const out: number[] = [];
   const n = verts.length / 12;
-  for (let t = 0; t < n && out.length / STROKE < cap; t++) {
+  const chunk = !!line && !moving, passes: ((ratio: number) => void)[] = [];
+  let requested = 0, carry = 0;
+  for (let t = 0; t < n && (chunk || out.length / STROKE < cap); t++) {
     // (each face's strokes seeded by the face: by its place in the mesh, or, for a mesh that's a window sliding along the
     // way (`place`, the size it's known to), by where it is, so the same face keeps the same strokes as the window moves)
     const R = place > 0 ? rng(hash2(seed, hash2(Math.round((verts[t * 12] + verts[t * 12 + 4] + verts[t * 12 + 8]) / (3 * place)), Math.round((verts[t * 12 + 2] + verts[t * 12 + 6] + verts[t * 12 + 10]) / (3 * place))) ^ Math.round((verts[t * 12 + 1] + verts[t * 12 + 5] + verts[t * 12 + 9]) / (3 * place))) + 7) : rng(hash2(seed, t) + 7);
@@ -193,19 +195,27 @@ export function strokesOver(verts: Float32Array, seed: number, line: number[] | 
       // hundreds of thousands, leaving nothing for the ridges after it)
       const want = Math.min(backdrop ? 260 : 1e9, (area * cover) / (Ls * Ws));
       let k = Math.floor(want) + (R() < want - Math.floor(want) ? 1 : 0);
-      while (k-- > 0) {
+      const draw = (ratio: number) => {
+        if (ratio < 1) {
+          const share = k * ratio + carry;
+          k = Math.floor(share); carry = share - k;
+          const scale = 1 / Math.sqrt(ratio); Ls *= scale; Ws *= scale;
+        }
+        while (k-- > 0) {
         let a = R(), b = R(); if (a + b > 1) { a = 1 - a; b = 1 - b; }
         const x = ax + ux * a + vx * b, y = ay + uy * a + vy * b, z = az + uz * a + vz * b;
         const j = (R() - 0.5) * jit, cj = Math.cos(j), sj = Math.sin(j);
         const bxx = ny * tz - nz * ty, byy = nz * tx - nx * tz, bzz = nx * ty - ny * tx;
         out.push(x, y, z, mt, tx * cj + bxx * sj, ty * cj + byy * sj, tz * cj + bzz * sj, Ls * (0.75 + R() * 0.5), nx, ny, nz, Ws * (0.8 + R() * 0.4), R(), stamps[Math.floor(R() * stamps.length)], (R() - 0.5) * bendA, kind,
           st, pass, moving ? 1 : 0, backdrop ? 1 : 0);
-      }
+        }
+      };
+      if (chunk && k) { requested += k; passes.push(draw); } else draw(1);
     };
     if (thing) {
       // (a thing: along its face's longest edge, sized by the face; both sides)
       const e = [[ux, uy, uz], [vx, vy, vz], [cx - bx, cy - by, cz - bz]].sort((p, q) => Math.hypot(q[0], q[1], q[2]) - Math.hypot(p[0], p[1], p[2]))[0], el = Math.hypot(e[0], e[1], e[2]) || 1;
-      const Ls = Math.max(0.07, Math.min(moving ? (flat ? 1.2 : 0.5) : 1.4, Math.sqrt(area) * 1.1));
+      const Ls = Math.max(0.07, Math.min(moving ? (flat ? 1.2 : 0.5) : m === M.BLACK ? 5 : 1.4, Math.sqrt(area) * 1.1));
       // (a flat thing lying on the ground (your track, a shadow) is laid as the ground is: flat on it, one side; a
       // standing thing, both sides, turning to the eye)
       if (flat && ny < 0) { nx = -nx; ny = -ny; nz = -nz; }
@@ -295,6 +305,8 @@ export function strokesOver(verts: Float32Array, seed: number, line: number[] | 
     emit(tx, ty, tz, Ls * 2.2, Ls * 2.2 * (road ? 0.3 : 0.42), ROCKY.has(m) ? 3.4 : 2.6, 0, road ? [0, 1, 7, 13] : ROCKY.has(m) ? [9, 13, 0, 5] : [11, 7, 0, 10], 0.3, 0.25, 0);
     if (big <= 1) emit(tx, ty, tz, Ls, Ls * (road ? 0.16 : 0.34), 1.3, 1, road ? [0, 1, 13] : ROCKY.has(m) ? [5, 6, 9, 13, 14] : [2, 3, 4, 1, 10, 12, 8, 15], road ? 0.25 : 0.5, 0.9, 0);
   }
+  const ratio = Math.min(1, cap / Math.max(1, requested));
+  for (const draw of passes) draw(ratio);
   return new Float32Array(out);
 }
 
@@ -707,7 +719,7 @@ export function fallStrokes(c: Course, s0: number, s1: number, t: number): Float
   // (kind 3: a thing seen from either side, lifted toward the eye by half its size; kind 0: on a surface, as the ground is)
   const put = (p: number[], T: number[], L: number, n: number[], W: number, seed: number, stamp: number, mt: number, band: number, kind = 3) => {
     if (L <= 0.02 || W <= 0.01) return;
-    out.push(p[0], p[1], p[2], mt + 0.5, T[0], T[1], T[2], L, n[0], n[1], n[2], W, seed, stamp, 0, kind, NEVER, 10 + band, 1, 0);
+    out.push(p[0], p[1], p[2], mt + 0.5, T[0], T[1], T[2], L, n[0], n[1], n[2], W, seed, stamp, 0, kind, NEVER, 10 + band, 2, 0); // motion class 2: water follows its physical surface
   };
   const norm = (v: number[]) => { const l = Math.hypot(v[0], v[1], v[2]) || 1; return [v[0] / l, v[1] / l, v[2] / l]; };
   for (const f of fallPaths(c, s0, s1)) {
@@ -1050,13 +1062,14 @@ void main(){
   // its size: thinned out, the ones kept are bigger; never thinner on the picture than a few pixels, never more than a part of it
   float grow = inversesqrt(max(keep, .3)), k = uK*uRes.y*.5/max(c.w, .3);
   float len = a1.w*grow, wid = a2.w*grow;
-  wid = clamp(wid, uMinW/k, uRes.y*.19/k); len = clamp(len, wid*1.6, uRes.y*.5/k) + min(smearL, uRes.y*.3/k);
+  bool water = a4.z > 1.5;
+  wid = clamp(wid, water ? 0. : uMinW/k, uRes.y*.19/k); len = clamp(len, wid*1.6, uRes.y*.5/k) + min(smearL, uRes.y*.3/k);
   float u = aQ.x*g, c2 = 2.*u - 1., s = (u - .5)*len, bend = a3.z*len*(1. - c2*c2)*.25;
   vec3 p = w + T*s + Wd*(aQ.y*wid*.5 + bend);
   vec4 cq = uVP*vec4(p, 1.);
   // its depth lifted toward the eye, along the line to the eye so it doesn't move on the picture: on the ground a little,
   // more the further (after Brush Rush), on a thing by half its own size; so it clears its own face, never cutting into it
-  float lift = sky ? 0. : both ? .02 + max(len, wid)*.5 : .25 + dist*.02 + wid*.5;
+  float lift = water ? (both ? 0. : .015) : sky ? 0. : both ? .02 + max(len, wid)*.5 : .25 + dist*.02 + wid*.5;
   vec4 cl = uVP*vec4(p + V*min(lift, dist*.5), 1.);
   gl_Position = vec4(cq.xy, cl.z/cl.w*cq.w, cq.w);
   vUv = vec2(u, aQ.y*.5 + .5); vStamp = a3.y; vFresh = fresh; vTex = sky ? uSkyTex : far ? 1. : 0.;

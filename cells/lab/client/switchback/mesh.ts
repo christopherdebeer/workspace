@@ -97,7 +97,9 @@ export class Mesh {
     }
   }
   /** a low-poly pine: a few stacked cones, black */
-  pine(x: number, y: number, z: number, h: number, seed: number, m: number = M.BLACK) {
+  pine(x: number, y: number, z: number, h: number, seed: number, m: number = M.BLACK, trunk = 0) {
+    if (trunk > 0) this.box([x, y, z], [1, 0, 0], [0, 1, 0], [0, 0, 1], [0, trunk * 0.6, 0], [0.38, trunk * 0.64, 0.38], M.BLACK);
+    y += trunk;
     const n = 5 + Math.floor(hash(seed, 1) * 2), tiers = h > 9 ? 4 : 3, a0 = hash(seed, 2) * 6;
     for (let t = 0; t < tiers; t++) {
       const f = t / tiers, base = y + h * (0.12 + f * 0.62), top = base + h * (0.5 - f * 0.12), r = h * 0.3 * (1 - f * 0.55);
@@ -365,16 +367,17 @@ function dress(c: Course, m: Mesh, i: number, sec: { u: number; y: number; ds: n
   const plainShoulder = st.feature === 'none' && !st.flag &&
     c.at(i + 18).feature === 'none' && c.at(Math.max(0, i - 12)).feature === 'none';
   const close = plainShoulder ? shelter : 0;
+  const interior = plainShoulder ? forest * forest : 0;
   if (i % 2 === 0 && r < 0.26 + 0.24 * grassiness(centre.x, st.y, centre.z) + 0.20 * close) {
-    const du = 6 + hash(c.seed, i, 102) * (70 - 58 * close), u = half + du, y = groundAt(sec, u);
+    const du = (6 - 3 * interior) + hash(c.seed, i, 102) * (70 - 58 * close) * (1 - 0.85 * interior), u = half + du, y = groundAt(sec, u);
     const p = c.point(i, u);
     const height = 6 + hash(c.seed, i, 103) * 9 * (du > 30 ? 1.4 : 1) + 8 * close;
-    m.pine(p.x, y - 0.3, p.z, height, c.seed * 9973 + i);
+    m.pine(p.x, y - 0.3, p.z, height + 6 * interior, c.seed * 9973 + i, M.BLACK, 9 * interior);
   }
   if (i % 3 === 0 && r > 0.9 - 0.55 * close) {
-    const du = 9 - 2 * close + hash(c.seed, i, 104) * (25 - 19 * close);
+    const du = 9 - 5.8 * interior + hash(c.seed, i, 104) * (25 - 19 * close) * (1 - 0.85 * interior);
     const u = -half - du, y = groundAt(sec, u), p = c.point(i, u);
-    m.pine(p.x, y - 0.3, p.z, 5 + hash(c.seed, i, 105) * 6 + 9 * close, c.seed * 7919 + i);
+    m.pine(p.x, y - 0.3, p.z, 5 + hash(c.seed, i, 105) * 6 + 9 * close + 6 * interior, c.seed * 7919 + i, M.BLACK, 7 * interior);
   }
   // (crags: rock towers down the drop where it's a shelf, and on the wall where it's only a bank)
   const chr = character(c, i);
