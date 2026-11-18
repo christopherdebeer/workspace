@@ -302,7 +302,11 @@ export function strokesOver(verts: Float32Array, seed: number, line: number[] | 
       if (big <= 1) emit(fl[0], fl[1], fl[2], Ls * 0.55, Ls * 0.55 * 0.3, 1.8, 1, [8, 15, 14, 12], 0.9, 1.2, 0);
       continue;
     }
-    emit(tx, ty, tz, Ls * 2.2, Ls * 2.2 * (road ? 0.3 : 0.42), ROCKY.has(m) ? 3.4 : 2.6, 0, road ? [0, 1, 7, 13] : ROCKY.has(m) ? [9, 13, 0, 5] : [11, 7, 0, 10], 0.3, 0.25, 0);
+    // (a kicker's face: the road rising toward the way it runs (the road itself always falls) stands up toward the eye
+    // coming at it, so its streaks, laid along the way, stand on end with paper between them, and it claims its outline in
+    // the depth (the far side of the gap is hidden behind it): laid broader and thicker there, so it's covered)
+    const kick = road && nx * lx + nz * lz < -0.05;
+    emit(tx, ty, tz, Ls * 2.2, Ls * 2.2 * (kick ? 0.55 : road ? 0.3 : 0.42), kick ? 6 : ROCKY.has(m) ? 3.4 : 2.6, 0, road ? [0, 1, 7, 13] : ROCKY.has(m) ? [9, 13, 0, 5] : [11, 7, 0, 10], 0.3, 0.25, 0);
     if (big <= 1) emit(tx, ty, tz, Ls, Ls * (road ? 0.16 : 0.34), 1.3, 1, road ? [0, 1, 13] : ROCKY.has(m) ? [5, 6, 9, 13, 14] : [2, 3, 4, 1, 10, 12, 8, 15], road ? 0.25 : 0.5, 0.9, 0);
   }
   const ratio = Math.min(1, cap / Math.max(1, requested));
