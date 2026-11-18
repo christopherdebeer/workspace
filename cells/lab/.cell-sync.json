@@ -1,8 +1,8 @@
 {
   "cell": "c15r/lab",
   "cellId": "lab-8928acf3",
-  "treeVersion": "tree:ce401bdd81799e701d2a0da8778f0e195e57a77d00292064ddba10cf2ded915d",
-  "syncedAt": "2026-11-18T17:50:29.150Z",
+  "treeVersion": "tree:53c40d72a0f3c799bff84f87df3a4b7c012f08a3fe8f068689aa96aedbb4025b",
+  "syncedAt": "2026-11-18T23:13:22.468Z",
   "files": {
     "README.md": "sha256:7f343237d183707fe06acca63d508a0f302fa9e678f1549d785e44a1016300d2",
     "client/autograph/autobiography.ts": "sha256:1aa72dbb927e6de87cdd920842be3b826ae520031f2589fadc9d4fe98abfbd67",
@@ -383,7 +383,7 @@
     "client/switchback/mood.ts": "sha256:e5d67e2cfdb9db64c627eabee7de6c2420a5d7cd49f1b7c5c8a8b0a150a02efd",
     "client/switchback/paint.ts": "sha256:c6c4153ba482d686f89c582290f58b739c3389d18acc578490d141283e373749",
     "client/switchback/rec.ts": "sha256:3adb9a0f21e9e6865e8ee5e50d0a17cc230923f78532909b1b6777eab0d5f597",
-    "client/switchback/regions.ts": "sha256:f0870dd7561789845ed0f1f14e44c28773838c112723f448969bf59dc42bc9d8",
+    "client/switchback/regions.ts": "sha256:fed7282e271a70c5377bd331b7f3fb0197306566d34cfadf8de7e7a86fdb84eb",
     "client/switchback/render.ts": "sha256:8cafe18515ddf5848c3e8afc898f62d3a404414cb8339f933a8e5dc6c0453e4d",
     "client/switchback/ruts.ts": "sha256:211e8ed8f47532d9f84c82b489905240711a69e7e9b9ae88f1a0ca670cdb5aa5",
     "client/switchback/scene.ts": "sha256:b8fa7c8d775f8bd3572d90982c966d0d4238d0ac8eab50ac936f29c3f13193fb",
@@ -881,7 +881,7 @@
     "devtools/volley-hit.mjs": "sha256:3193163110b3dc21e50322d1fa7a1031b15a723607c913dfcfdef683318dda38",
     "devtools/volley.test.mjs": "sha256:ad8dd4b049c76066333c710d701d41e5d878b16fad78b23716af2e53f1a67a0b",
     "experiments.ts": "sha256:f0b20773719d2843941afae6f34a57edac186a67ae84e6dbfb1b5bd76c8ca98e",
-    "index.ts": "sha256:ef89255c4f7e29a31cd6d2e587db0e1ce96af321876e362776d69bbc04a021e0",
+    "index.ts": "sha256:497333ee4b18877e219848f555f26c6276848fe653af7e362b76e02afc6b61c6",
     "md.ts": "sha256:789ba0fa8bc21f0206f2c2d7baf24c64613e6ea5606b8fb398bb24f49158b99e",
     "static/autograph.html": "sha256:8b0d23763850444ec00626b5ea2b1e12457c58953926faa8cf9a7f7b58b57372",
     "static/autograph.md": "sha256:2c925644395bc8511af209d8f408e3597a3f94022ca351ee5155abc821067bc6",
