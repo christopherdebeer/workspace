@@ -66,16 +66,16 @@ a:focus-visible,button:focus-visible,input:focus-visible{outline:2px solid #fff;
 .titled header,.titled #hint{transition:opacity .35s}
 body:has(#menu.on) header,body:has(#menu.on) #hint,body:has(#menu.on) #notes{opacity:0}
 .held #menuBtn,.demo #menuBtn{display:none}
-/* (paused: the button turns to the menu's three bars; a word in the middle says how to carry on) */
+/* (paused: the button turns to the menu's three bars) */
 .paused #menuBtn i{width:18px;height:3px;margin:0;box-shadow:0 -6px 0 #fff,0 6px 0 #fff;transform:none}
-#paused{position:fixed;left:0;right:0;top:50%;transform:translateY(-50%);text-align:center;font-size:11px;font-weight:700;letter-spacing:.3em;line-height:2;color:#fff;text-shadow:0 1px 6px rgba(0,0,0,.35);opacity:0;transition:opacity .25s;pointer-events:none}
-.paused #paused{opacity:1}
+/* (the sim riding: no controls to explain) */
+.auto #hint{display:none}
 .preview header,.preview #hint,.preview #notes,.preview #note,.preview #menu{display:none}
 .demo #hint,.demo #notes,.demo #menu{display:none}
 </style></head><body>
 <canvas id="world" aria-label="A motocross rider racing down a faceted mountain road. Drag left or right to steer; drag up for throttle and down to brake; on a ramp, drag down to pull a backflip; in the air, draw a line or a loop and hold it for a trick."></canvas><canvas id="speed"></canvas><canvas id="ink" aria-hidden="true"></canvas>
 <header><div class="title"><button id="menuBtn" aria-label="Pause"><i></i></button><div><b>SWITCH<br>BACK</b><small>SEED <span id="seed">1</span></small></div></div><div class="pace"><b id="score">0</b><span id="status"></span><span id="combo"></span></div></header>
-<div id="note" role="status" aria-live="polite"></div><div id="paused" aria-hidden="true">PAUSED<br>TAP TO CARRY ON · ☰ FOR THE MENU</div><div id="hint">DRAG ← → STEER · ↑ GAS · ↓ BRAKE · ON A RAMP ↓ PULLS<br>IN THE AIR, DRAW A TRICK AND HOLD IT: A LINE ANY OF 8 WAYS, OR A LOOP</div><a id="notes" href="{{readme}}">NOTES</a>
+<div id="note" role="status" aria-live="polite"></div><div id="hint">DRAG ← → STEER · ↑ GAS · ↓ BRAKE · ON A RAMP ↓ PULLS<br>IN THE AIR, DRAW A TRICK AND HOLD IT: A LINE ANY OF 8 WAYS, OR A LOOP</div><a id="notes" href="{{readme}}">NOTES</a>
 <div id="menu" class="on" role="dialog" aria-modal="true" aria-label="Switchback">
   <div><h1>SWITCH<span>BACK</span><canvas id="autograph" aria-hidden="true"></canvas></h1><p class="tag">A RUN DOWN A MOUNTAIN MADE AS YOU RIDE IT</p></div>
   <div>

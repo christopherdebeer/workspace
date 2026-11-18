@@ -5,8 +5,8 @@
  * is a crash, and you're back at the last checkpoint flag.
  *
  * It opens on its title, the sim's own rider riding the mountain behind it; RIDE starts your run (and the sound, which
- * needs a tap). The button top left (or Esc, P) pauses the run, nothing over it; a tap on the picture (or Esc, P, Space)
- * carries on, and the button, paused, opens the menu: the settings, sound and its volume, how far back the eye rides,
+ * needs a tap); a tap on the title's background dismisses it, and the sim rides on to watch. The button top left (or
+ * Esc, P) pauses, nothing over it; a tap on the picture (or P, Space) carries on, and the button, paused, opens the menu: the settings, sound and its volume, how far back the eye rides,
  * another mountain. Settings are kept in this browser.
  *
  * Flags: `seed=` the mountain; `auto` the sim's own rider rides a run, scored and ended in the page's mode like yours but
@@ -145,7 +145,7 @@ addEventListener('keydown', (e) => {
   const k = e.key.toLowerCase();
   // (Esc and P: pause; paused, Esc opens the menu and P carries on; Space carries on too; in the menu Esc carries on)
   if ((k === 'escape' || k === 'p') && !held && !(e.target as HTMLElement).closest('input')) {
-    if (menuOpen) { if (running && k === 'escape') close(); } else if (paused) { if (k === 'escape') open(); else resume(); } else if (running) pause(); else if (k === 'escape') open();
+    if (menuOpen) { if (k === 'escape' && (menu.dataset.panel ?? 'main') === 'main') close(); } else if (paused) { if (k === 'escape') open(); else resume(); } else pause();
     return;
   }
   if (paused && !menuOpen && k === ' ') { resume(); e.preventDefault(); return; }
@@ -213,6 +213,8 @@ const show = (k: keyof typeof panels) => { for (const [n, el] of Object.entries(
 $('mseed').textContent = String(seed);
 /** (this run was the sim's, if only to begin with: it's never kept) */
 let simRun = demo;
+/** (the sim riding, as shown: the controls' explainer hidden while it is) */
+let shownAuto: boolean | null = null;
 let menuOpen = !direct, running = demo, paused = false, finished = false, mode: Mode = settings.mode, score = new Score();
 const fmt = (n: number) => String(Math.round(n)).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
 const clock = (t: number) => `${Math.floor(t / 60)}:${(t % 60).toFixed(1).padStart(4, '0')}`;
@@ -329,7 +331,13 @@ for (const b of lookBtns) b.addEventListener('click', () => { settings.paint = r
 for (const b of modeBtns) b.addEventListener('click', () => { settings.mode = b.dataset.mode as Mode; keep(); showSettings(); });
 another.addEventListener('click', () => { const u = new URL(location.href); u.searchParams.set('seed', String(1 + Math.floor(Math.random() * 9999))); location.href = u.toString(); });
 // (the button: in a run, the first tap pauses; paused, it opens the menu)
-menuBtn.addEventListener('click', () => { if (running && !paused && !menuOpen) pause(); else open(); });
+menuBtn.addEventListener('click', () => { if (!paused && !menuOpen) pause(); else open(); });
+// (a tap on the menu's own background (not a button, a link, a setting): dismissed, as CARRY ON; on the title, the sim's
+// rider rides on, the title gone, to watch as `auto` shows it)
+menu.addEventListener('click', (e) => {
+  if ((menu.dataset.panel ?? 'main') !== 'main' || (e.target as HTMLElement).closest('button,a,input,label,select')) return;
+  close();
+});
 showSettings();
 if (direct) { menu.classList.remove('on'); menu.setAttribute('inert', ''); document.body.classList.add('direct'); if (held) document.body.classList.add('held'); } else { document.body.classList.add('titled'); autograph(900); }
 
@@ -401,6 +409,7 @@ function tick(dt: number) {
   if (moodCourse) { lightAlong(rider.s, lightKeys()); rd.envChanged(); }
   if (moodCycle) { const name = cycleAt(t); rd.envChanged(); if (name !== moodShown) { moodShown = name; if (!name.includes('→')) callouts.say(name === 'day' ? 'DAY' : name.toUpperCase(), t); } }
   rd.frame(vw, rider, t, still || paused ? 0 : dt, drawn++ < 2 ? 99 : 1);
+  if (auto !== shownAuto) { shownAuto = auto; document.body.classList.toggle('auto', auto); }
   // (`inktext=<words>`: those words lettered every two seconds, for looking at the lettering)
   if (inkText && t - inkAt > 2) { callouts.say(inkText, t); inkAt = t; }
   if (inkFlag) callouts.draw(rd.ctx, rd.W, rd.H, rd.dpr, t);

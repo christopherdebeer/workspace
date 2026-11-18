@@ -169,7 +169,7 @@ Each mode keeps its best on each mountain (in this browser), shown under the mod
 
 ![A run, scored](switchback/v-run.jpg)
 
-The two bars top left (or Esc, P) pause a run, with nothing over it; a tap on the picture (or P, Space) carries on. Paused, the button turns to three bars and opens the menu (so does Esc). The button shows on `auto` runs too (not on held frames, `still` or `look=`, nor the lab's preview); paused, a tap carries on without taking the sim's run from it. The menu: **CARRY ON**, **START AGAIN**, **FINISH** (endless), **QUIT** (back to the title). **SETTINGS ›** opens the settings, kept in this browser:
+The two bars top left (or Esc, P) pause a run, with nothing over it; a tap on the picture (or P, Space) carries on. Paused, the button turns to three bars and opens the menu (so does Esc). The button shows on `auto` runs too (not on held frames, `still` or `look=`, nor the lab's preview); paused, a tap carries on without taking the sim's run from it. A tap on the menu's background (not a button or a setting) dismisses it, as **CARRY ON**: on the title, the title goes and the sim's rider rides on to watch, as `auto` shows it (the controls' explainer hidden while the sim rides). The menu: **CARRY ON**, **START AGAIN**, **FINISH** (endless), **QUIT** (back to the title). **SETTINGS ›** opens the settings, kept in this browser:
 
 - **Sound**: on or off, and its volume.
 - **Camera**: how far back the eye rides. MID is the usual chase. CLOSE is tight behind and low: the rider and bike fill the lower half of the screen. FAR is high and well back, an overview of the road ahead with the rider small in it. (`cam=close|mid|far` sets it for one page, for pinned frames.)
