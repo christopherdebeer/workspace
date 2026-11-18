@@ -39,7 +39,7 @@ export function lightKeys(): [number, string][] {
 }
 /** how far into the woods a station is, 0 (open snow) to 1 (deep in the forest): coming down through the snowline the
  * pines close in over the next 115 m of height; past `woodsEnd` (a station; none yet) they thin out again over 150 m, so
- * a course can ride out of the forest as well as into it */
+ * a course can ride out of the forest as well as into it (and the woods' light and air (paint.ts) follow it) */
 export function woodsAt(s: number, y: number) {
   if (!REGION.on) return 0;
   const d = Math.max(0, Math.min(1, (REGION.snowY - y) / 115)), into = d * d * (3 - 2 * d);
