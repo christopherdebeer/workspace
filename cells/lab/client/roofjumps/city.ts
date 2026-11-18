@@ -53,7 +53,7 @@ const key = (cx: number, cz: number) => `${cx},${cz}`;
 
 export class City {
   private chunks = new Map<string, Chunk>();
-  constructor(readonly seed: number) {}
+  constructor(readonly seed: number, readonly practiceLine = false) {}
 
   /** smooth 0..1 over the plane: the skyline's rise and fall */
   private relief(x: number, z: number): number {
@@ -100,7 +100,13 @@ export class City {
       if (alongX) { split(x0, z0, x0 + at, z1, depth + 1); split(x0 + at + gap, z0, x1, z1, depth + 1); }
       else { split(x0, z0, x1, z0 + at, depth + 1); split(x0, z0 + at + gap, x1, z1, depth + 1); }
     };
-    split(ox + this.margin(cx, cz, 0), oz + this.margin(cx, cz, 1), ox + CHUNK - this.margin(cx + 1, cz, 0), oz + CHUNK - this.margin(cx, cz + 1, 1), 0);
+    if (this.practiceLine && cx === 0 && cz === 0) {
+      // Four roofs share the city's ordinary collision, holds and render geometry.
+      for (const [z0, z1, y1] of [[1, 16, 12], [19, 32, 12], [34, 52, 9], [55, 63, 9]]) {
+        boxes.push({ x0: 24, x1: 40, z0, z1, y0: 0, y1, tag: TAG.BUILDING });
+      }
+      boxes.push({ x0: 37, x1: 40, z0: 4, z1: 15, y0: 12, y1: 17, tag: TAG.HUT });
+    } else split(ox + this.margin(cx, cz, 0), oz + this.margin(cx, cz, 1), ox + CHUNK - this.margin(cx + 1, cz, 0), oz + CHUNK - this.margin(cx, cz + 1, 1), 0);
     // (bucketed, for heightAt)
     const cells: number[][] = Array.from({ length: CELLS * CELLS }, () => []);
     boxes.forEach((b, i) => {
@@ -232,6 +238,7 @@ export class City {
 
   /** a roof to start on, near the origin: the middle of the biggest building of chunk (0, 0) */
   start(): { x: number; y: number; z: number } {
+    if (this.practiceLine) return { x: 32, y: 12, z: 5 };
     let best: Box | null = null;
     for (const b of this.chunk(0, 0).boxes) if (b.tag === TAG.BUILDING && (!best || (b.x1 - b.x0) * (b.z1 - b.z0) > (best.x1 - best.x0) * (best.z1 - best.z0))) best = b;
     const x = best ? (best.x0 + best.x1) / 2 : 0, z = best ? (best.z0 + best.z1) / 2 : 0;

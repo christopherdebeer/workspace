@@ -355,14 +355,26 @@ function dress(c: Course, m: Mesh, i: number, sec: { u: number; y: number; ds: n
   if (st.flag) m.box(at(-half - 0.9), X, Y, Z, [0, 3, 0], [0.06, 3, 0.06], M.BLACK);
   // (pines down the drop, a few up the wall's top; rocks bedded in the snow)
   const r = hash(c.seed, i, 101);
-  if (i % 2 === 0 && r < 0.26 + 0.24 * grassiness(c.point(i, 0).x, st.y, c.point(i, 0).z)) {
-    const du = 6 + hash(c.seed, i, 102) * 70, u = half + du, y = groundAt(sec, u);
+  const centre = c.point(i, 0);
+  // Descending through the snowline brings the existing pines uphill to the trail.
+  // Windbreaks and clearings follow the mountain, so jumping never moves the treeline.
+  const descent = REGION.on ? Math.max(0, Math.min(1, (REGION.snowY - st.y) / 115)) : 0;
+  const forest = descent * descent * (3 - 2 * descent);
+  const grove = 0.55 + 0.3 * Math.sin(i / 44 + c.seed) + 0.15 * Math.sin(i / 17 - c.seed);
+  const shelter = forest * grove;
+  const plainShoulder = st.feature === 'none' && !st.flag &&
+    c.at(i + 18).feature === 'none' && c.at(Math.max(0, i - 12)).feature === 'none';
+  const close = plainShoulder ? shelter : 0;
+  if (i % 2 === 0 && r < 0.26 + 0.24 * grassiness(centre.x, st.y, centre.z) + 0.20 * close) {
+    const du = 6 + hash(c.seed, i, 102) * (70 - 58 * close), u = half + du, y = groundAt(sec, u);
     const p = c.point(i, u);
-    m.pine(p.x, y - 0.3, p.z, 6 + hash(c.seed, i, 103) * 9 * (du > 30 ? 1.4 : 1), c.seed * 9973 + i);
+    const height = 6 + hash(c.seed, i, 103) * 9 * (du > 30 ? 1.4 : 1) + 8 * close;
+    m.pine(p.x, y - 0.3, p.z, height, c.seed * 9973 + i);
   }
-  if (i % 3 === 0 && r > 0.9) {
-    const u = -half - 9 - hash(c.seed, i, 104) * 25, y = groundAt(sec, u), p = c.point(i, u);
-    m.pine(p.x, y - 0.3, p.z, 5 + hash(c.seed, i, 105) * 6, c.seed * 7919 + i);
+  if (i % 3 === 0 && r > 0.9 - 0.55 * close) {
+    const du = 9 - 2 * close + hash(c.seed, i, 104) * (25 - 19 * close);
+    const u = -half - du, y = groundAt(sec, u), p = c.point(i, u);
+    m.pine(p.x, y - 0.3, p.z, 5 + hash(c.seed, i, 105) * 6 + 9 * close, c.seed * 7919 + i);
   }
   // (crags: rock towers down the drop where it's a shelf, and on the wall where it's only a bank)
   const chr = character(c, i);

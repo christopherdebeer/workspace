@@ -48,7 +48,8 @@ if (preview) document.body.classList.add('preview');
 if (TUNE.auto || still) document.body.classList.add('played');
 
 const canvas = document.getElementById('world') as HTMLCanvasElement;
-const city = new City(seed), runner = new Runner(city), rig = new Rig(), rd = new Renderer(canvas, city);
+const practiceLine = q.get('line') === 'transfer';
+const city = new City(seed, practiceLine), runner = new Runner(city), rig = new Rig(), rd = new Renderer(canvas, city);
 rd.radius = Math.max(1, Math.min(8, Number(q.get('far') ?? 4) | 0));
 if ((LOOKS as readonly string[]).includes(q.get('look') ?? '')) rd.look = q.get('look') as Look;
 rd.resize(); addEventListener('resize', () => rd.resize());
@@ -57,7 +58,7 @@ rd.resize(); addEventListener('resize', () => rd.resize());
 /** `zoom=`: the eye brought that many times closer, for looking at the rig */
 const zoom = Math.max(0.2, Number(q.get('zoom') ?? 1));
 /** the eye's heading, and what a second finger has added to its height */
-let yaw = 0.6, lift = TUNE.side ? -0.15 : 0;
+let yaw = practiceLine ? 0 : 0.6, lift = TUNE.side ? -0.15 : 0;
 const eyeAt = { x: runner.x, y: runner.y, z: runner.z };
 
 // ─── the hand ─────────────────────────────────────────────────────────────────
@@ -90,7 +91,7 @@ canvas.addEventListener('pointermove', (e) => {
   }
 });
 const up = (e: PointerEvent) => {
-  const tap = (t: number, moved: boolean) => { if (!moved && performance.now() - t < 260) jump = true; };
+  const tap = (t: number, moved: boolean) => { if (e.type !== 'pointercancel' && !moved && performance.now() - t < 260) jump = true; };
   if (e.pointerId === stick.id) { tap(stick.t, stick.moved); stick.id = -1; stick.x = stick.y = 0; knob.classList.remove('on'); }
   else { const o = others.get(e.pointerId); if (o) tap(o.t, o.moved); others.delete(e.pointerId); }
 };
@@ -301,7 +302,7 @@ requestAnimationFrame(frame);
 (window as unknown as Record<string, unknown>).__roofjumps = {
   probe: () => ({
     seed, t: time, frames, x: runner.x, y: runner.y, z: runner.z, state: runner.state, speed: runner.speed, dist: runner.dist,
-    move: runner.move, leaps: runner.leaps, climbs: runner.climbs, walls: runner.walls, rolls: runner.rolls, dashes: runner.dashes, streets: runner.streets, made: runner.made,
+    move: runner.move, leaps: runner.leaps, climbs: runner.climbs, walls: runner.walls, wallSteps: runner.wallSteps, braces: runner.braces, rolls: runner.rolls, dashes: runner.dashes, streets: runner.streets, made: runner.made,
     look: rd.look, tris: rd.tris, pending: rd.pending(runner.x, runner.z),
     plan: thinking && { ahead: words(thinking.primary), score: thinking.primary.score, left: thinking.left && { off: thinking.left.off, score: thinking.left.score }, right: thinking.right && { off: thinking.right.off, score: thinking.right.score }, best: thinking.best.off },
   }),

@@ -34,12 +34,11 @@ export const DIALS: Dial[] = [
   d('run', 'ledgePull', 'a ledge draws you', 0, 1, 0.05, 0.6),
 
   d('leap', 'gravity', 'gravity', 6, 40, 0.5, 20, 'm/s²'),
-  d('leap', 'reach', 'reach', 3, 20, 0.5, 8, 'm'),
+  d('leap', 'jumpReach', 'reach', 3, 20, 0.5, 8, 'm'),
   d('leap', 'rise', 'springs up', 1, 7, 0.1, 3.4, 'm'),
   d('leap', 'drop', 'drops before looking higher', 2, 20, 0.5, 7, 'm'),
   d('leap', 'leapSpeed', 'fastest leap', 8, 30, 0.5, 19, 'm/s'),
   d('leap', 'diveDrop', 'dives from', 0.5, 8, 0.1, 2, 'm down'),
-  d('leap', 'flipEvery', 'flips every nth bound', 1, 8, 1, 2),
   d('leap', 'hang', 'extra height', 0, 2, 0.05, 0, 'm'),
 
   d('glide', 'glideDrop', 'glides from', 2, 20, 0.5, 6, 'm down'),
@@ -66,7 +65,6 @@ export const DIALS: Dial[] = [
   t('holds', 'reach', 'hands and feet go to them', 1),
   t('holds', 'feet', 'feet are placed', 1),
   d('holds', 'armReach', 'a hand reaches up', 1.4, 3.2, 0.05, 2.4, 'm'),
-  d('holds', 'climbBare', 'up a wall with no holds', 2, 30, 0.5, 8, 'm/s'),
   d('holds', 'vaultLow', 'a vault clears by', 0, 1, 0.05, 0.12, 'm'),
   d('holds', 'gripReach', 'finds a hold within', 0.3, 2, 0.05, 0.9, 'm'),
 
@@ -90,7 +88,8 @@ export const TUNE: Tune = { ...HOUSE };
 /** the dials an address names, over the house's */
 export function readTune(q: URLSearchParams): void {
   for (const x of DIALS) {
-    const v = q.get(x.key);
+    const legacy = q.get('reach');
+    const v = x.key === 'jumpReach' && Number(legacy) > 1 ? q.get(x.key) ?? legacy : q.get(x.key);
     if (v === null) continue;
     const n = x.toggle ? (v === '0' || v === 'false' ? 0 : 1) : Number(v);
     if (Number.isFinite(n)) TUNE[x.key] = Math.min(x.max, Math.max(x.min, n));

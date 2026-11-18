@@ -113,7 +113,9 @@ export class Rig {
       }
       case 'roll': {
         // (a ball, over the shoulders: the turning itself is in bones())
-        p.hipL = 1.95; p.hipR = 1.75; p.kneeL = 2.3; p.kneeR = 2.15; p.spine = 0.75; p.head = 0.65;
+        const open = sm(0.62, 1, u);
+        legs(1.95 - 1.1 * open, 2.3 - 1.2 * open, 1.75 - 1.8 * open, 2.15 - 1.4 * open);
+        p.spine = 0.75 - 0.45 * open; p.head = 0.65 - 0.65 * open;
         p.shL = p.shR = 1.1; both('el', 1.7); both('spread', 0.25);
         break;
       }
@@ -194,8 +196,20 @@ export class Rig {
         break;
       }
     }
+    if (r.wallPlant) {
+      legs(1.25, 1.55, -0.35, 0.65); arms(2.4, 1.8); p.lean = 0.22;
+    }
+    if (r.state === 'climb') {
+      const pull = sm(0.1, 0.8, u);
+      legs(0.65 + pull, 1.3, -0.1, 0.65);
+      arms(2.8 - pull * 2, 2.8 - pull * 2); p.lean = -0.23 + pull * 0.75;
+    }
+    if (r.committed && r.state === 'ground') {
+      const load = r.load ?? 0;
+      p.shL -= 1.3 * load; p.shR -= 1.3 * load; p.lean += 0.16 * load;
+    }
     // (a landing's weight: down into the legs, the feet apart, the arms out and back)
-    const c = r.state === 'ground' && r.move !== 'roll' ? r.land : 0;
+    const c = r.state === 'ground' && r.move !== 'roll' ? Math.max(r.land, (r.load ?? 0) * (r.committed ? 0.95 : 0.48)) : 0;
     if (c > 0) {
       p.hipL += 1.05 * c; p.hipR += 1.05 * c; p.kneeL += 1.8 * c; p.kneeR += 1.8 * c; p.spine += 0.45 * c; p.splay += 0.22 * c;
       p.shL -= 0.45 * c; p.shR -= 0.45 * c; p.spreadL += 0.7 * c; p.spreadR += 0.7 * c; p.head -= 0.1 * c;
@@ -225,9 +239,10 @@ export class Rig {
     const p = this.pose, leg = (hip: number, knee: number) => THIGH * Math.cos(hip) * Math.cos(p.splay) + SHIN * Math.cos(hip - knee) * Math.cos(p.splay);
     // (but a run has its moment off the ground, both legs out: the hips don't drop into the split, they carry over it)
     const striding = r.move === 'run' || r.move === 'dash' || r.move === 'ledge', pace = Math.min(1, r.speed / 6);
-    const carry = striding ? (0.9 + 0.05 * Math.abs(Math.cos(r.phase))) * pace - 0.55 * r.land : 0;
+    const carry = striding ? (0.9 + 0.05 * Math.abs(Math.cos(r.phase))) * pace - 0.55 * Math.max(r.land, (r.load ?? 0) * (r.committed ? 0.95 : 0.48)) : 0;
     const ground = Math.max(carry, HIP + Math.max(leg(p.hipL, p.kneeL), leg(p.hipR, p.kneeR)) + SOLE) + (r.move === 'roll' ? 0.16 : 0);
-    this.hipY = ground * this.stood + (0.98 - p.sink) * (1 - this.stood);
+    const hip = ground * this.stood + (0.98 - p.sink) * (1 - this.stood);
+    this.hipY = r.state === 'ground' && r.move !== 'roll' ? Math.min(hip, 0.99 - 0.46 * r.land) : hip;
   }
 
   /** The skeleton, placed in the world at the body. */

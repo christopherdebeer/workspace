@@ -24,6 +24,12 @@ the picture · `?follow=0` the eye never turns by itself · `?far=` chunks drawn
 one move's pose held, that far through it · `?sheet=<move,move…>` and `?strip=<seconds>` the study
 sheets (below).
 
+## The transfer line
+
+Open `/roofjumps?line=transfer` and drag straight up. Four roofs give you a level gap, a one-storey drop, and a second gap. Reload to repeat the approach. Hold a forward drag for a running bound, or tap with a second finger during the last stride for a higher spring. Ease off earlier to stop. From the start, the high wall on the left gives a separate test: turn toward it, tap on the approach, and keep pressing toward the lip to catch it. Try easing the stick before the first lip, then taking the same run with a shallow correction in flight.
+
+The runner loads its last step at the lip. A rising obstacle draws braking into the approach. Each automatic takeoff can add or shed up to 1.5 m/s of horizontal speed after that ground step. A roll uses the available runway. On a short roof the runner absorbs the landing in its legs. The acceleration out of a roll begins on a supporting step while you are still driving forward.
+
 ## The geometry (`city.ts`)
 
 The world is a plane of chunks, 64 m square, each made from the seed and its own coordinates
@@ -67,9 +73,7 @@ shows them, with a red ring where each hand is and a black one where each foot i
 
 What the runner does with them so far:
 
-- **Up a wall** it takes the highest hold each hand can reach (a sill, a rung's height of a pipe,
-  the top edge) and goes up fast, hand over hand; on a face with nothing to hold it goes up at
-  about half the pace. The top edge is the last hold: the hands stay on it as the body goes by.
+- **Up a wall** a committed rising jump can put one foot on the face. The runner drives up from that contact. Keeping pressure toward a reachable top edge catches it with the hands and pulls the hips over. A missed catch returns to flight.
 - **Over clutter** with an edge to plant a hand on it vaults, one hand or (every other time) two,
   the body brought down to the hand and carried over on it; with nothing to hold it hops.
 - **Landing a storey up**, both hands come down on the lip it lands over.
@@ -110,7 +114,7 @@ between, flat enough to keep its pace. Which move it throws is chosen by what is
 | vault | clutter or a rim in the way, close, with an edge to put a hand on | lower and quicker: over it on a hand, or two |
 | hop | the same, with nothing to hold | a hurdle |
 | bound | a gap at about this height | flat and fast, the legs split |
-| flip | every other long bound; anything tall in the way | tucked and turned over forwards |
+| flip | an airborne second tap or a tall obstacle | tucked and turned over forwards |
 | spring | a storey up | steep, the arms thrown up, knees to the chest, a deep landing |
 | dive | a storey or two down | headfirst and flat, rolled out of |
 | glide | a long way across or down; any fall | the slow one: arms out, sinking gently, steerable |
@@ -131,12 +135,9 @@ In the air a wall alongside is run along, tilted off it. Left to itself that is 
 rising then sinking as gravity has it. Leaning into the wall drives it up the wall as it goes
 along: that is how height is gained, and it is paid for, in how long the run lasts and in pace
 along. It ends on the wall's top if it gets there. Away from the wall, or a jump, kicks off it:
-wall to wall down an alley. A wall is only run straight up when it is met nearly square (within
-twenty degrees), in an inside corner, or when a run along it is spent and still being leant into;
-met at a slant with no run to be had, it is slid along. Turn away in the air and the leap is yours again.
+wall to wall down an alley. A grazing contact keeps speed along the face. A direct approach into a high wall can end in a brace. Tap on the approach to plant on it and reach for its lip. Small turns steer an aimed leap gently. A decisive turn gives full air control.
 
- Its test holds a direction for a minute, sixteen ways in four
-cities, and checks it never stops, never leaves the surface, makes at least 5 m/s good, and makes every move
+The fixed-step suite checks surface contact, movement on open routes, planner agreement, and intentional jumps, wall contacts and landings on the transfer line.
 (`node cells/lab/devtools/roofjumps.test.mjs`).
 
 ## The plan (`plan.ts`)
@@ -185,10 +186,10 @@ changed. The address keeps the ones that differ from the house, by key, so a tun
 
 | group | what is in it |
 |---|---|
-| holds | show them and how far out, whether hands and feet use them, whether feet are placed, how high a hand reaches, the pace up a wall with nothing to hold, how low a vault clears, how near a hold must be |
+| holds | show them and how far out, whether hands and feet use them, whether feet are placed, how high a hand reaches, how low a vault clears, how near a hold must be |
 | plan | show it, say it, how far ahead, how many ways each side and how far apart, assist, and the four weights of the score |
 | run | run, sprint and dash speeds, how long a dash lasts, quickness, pace on a ledge and how strongly a ledge draws you |
-| leap | gravity, reach, how far up it springs, how far down it drops before looking higher, the fastest leap, where dives begin, how often it flips, extra height |
+| leap | gravity, reach, how far up it springs, how far down it drops before looking higher, the fastest leap, where dives begin, extra height |
 | glide | where glides begin (down, across), gravity gliding, the fastest it sinks, steering in the air |
 | wall | wall runs on or off, how long one lasts, how hard leaning in lifts and how fast it can rise, what going up costs in time and in pace, its pace, how near a wall must be, gravity on it, the kick off, how square a wall must be met to be climbed, the speed up a wall |
 | eye | distance, height, lens, how much it widens with speed, how fast it comes round behind, swung round the figure |
