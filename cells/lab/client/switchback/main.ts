@@ -5,8 +5,9 @@
  * is a crash, and you're back at the last checkpoint flag.
  *
  * It opens on its title, the sim's own rider riding the mountain behind it; RIDE starts your run (and the sound, which
- * needs a tap). The menu (the button top left, or Esc) pauses, with the settings: sound and its volume, how far back the
- * eye rides, another mountain. Settings are kept in this browser.
+ * needs a tap). The button top left (or Esc, P) pauses the run, nothing over it; a tap on the picture (or Esc, P, Space)
+ * carries on, and the button, paused, opens the menu: the settings, sound and its volume, how far back the eye rides,
+ * another mountain. Settings are kept in this browser.
  *
  * Flags: `seed=` the mountain; `auto` the sim's own rider rides a run, scored and ended in the page's mode like yours but
  * never kept on your board (`auto=tricks` showing off; the preview rides too); `t=` start that many seconds
@@ -40,6 +41,8 @@ const zjit = q.has("zjit"), ejit = q.has("ejit"), hold = q.has("hold"), t0 = per
 let heldView: View | null = null;
 /** straight into it (tests, pinned frames, the preview): no title */
 const direct = preview || still || q.has('auto') || q.has('t') || !!look;
+/** a held frame (`still`, `look=`): nothing to pause, no button */
+const held = still || !!look;
 let auto = q.has('auto') || preview || !direct;
 // (the sim's own rider shows off on the title, and with `auto=tricks`: slides, whips, flips, whatever the jump allows)
 const showing = q.get('auto') === 'tricks' || !direct;
@@ -123,6 +126,8 @@ const keys = new Set<string>();
 const onUi = (e: Event) => !!(e.target as HTMLElement).closest('a,button,input,#menu');
 addEventListener('pointerdown', (e) => {
   if (onUi(e) || menuOpen) return;
+  // (paused, a tap on the picture carries on, and does nothing else: it doesn't steer, nor take a sim's run from it)
+  if (paused) { resume(); return; }
   if (direct) auto = false; hint();
   if (rider.air && rider.crashT <= 0 && !auto && !gest) { const st = new Stroke(Math.min(innerWidth, innerHeight)); st.add(e.clientX, e.clientY); gest = { id: e.pointerId, stroke: st }; trace = { stroke: st, fade: 1 }; return; }
   drag = { x: e.clientX, y: e.clientY, id: e.pointerId };
@@ -137,8 +142,14 @@ addEventListener('pointermove', (e) => {
 const up = (e: PointerEvent) => { if (gest && e.pointerId === gest.id) gest = null; if (drag && e.pointerId === drag.id) { drag = null; inp.steer = 0; inp.drive = 0; } };
 addEventListener('pointerup', up); addEventListener('pointercancel', up);
 addEventListener('keydown', (e) => {
-  if (e.key === 'Escape' && !direct) { if (menuOpen && running) close(); else open(); return; }
-  if (menuOpen || (e.target as HTMLElement).closest('input')) return;
+  const k = e.key.toLowerCase();
+  // (Esc and P: pause; paused, Esc opens the menu and P carries on; Space carries on too; in the menu Esc carries on)
+  if ((k === 'escape' || k === 'p') && !held && !(e.target as HTMLElement).closest('input')) {
+    if (menuOpen) { if (running && k === 'escape') close(); } else if (paused) { if (k === 'escape') open(); else resume(); } else if (running) pause(); else if (k === 'escape') open();
+    return;
+  }
+  if (paused && !menuOpen && k === ' ') { resume(); e.preventDefault(); return; }
+  if (menuOpen || paused || (e.target as HTMLElement).closest('input')) return;
   keys.add(e.key.toLowerCase()); if (direct) auto = false; hint();
 });
 addEventListener('keyup', (e) => keys.delete(e.key.toLowerCase()));
@@ -192,7 +203,7 @@ function view(dt: number, t: number): View {
 // (the title and the menu: one panel. On the title the sim's rider rides behind it; RIDE starts your run. In a run, the
 // menu pauses it: CARRY ON, START AGAIN)
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
-const menu = $('menu'), go = $<HTMLButtonElement>('go'), again = $<HTMLButtonElement>('again'), finishBtn = $<HTMLButtonElement>('finish'), quit = $<HTMLButtonElement>('quit');
+const menu = $('menu'), menuBtn = $<HTMLButtonElement>('menuBtn'), go = $<HTMLButtonElement>('go'), again = $<HTMLButtonElement>('again'), finishBtn = $<HTMLButtonElement>('finish'), quit = $<HTMLButtonElement>('quit');
 const sndBtn = $<HTMLButtonElement>('snd'), vol = $<HTMLInputElement>('vol'), another = $<HTMLButtonElement>('another');
 const lookBtns = [...document.querySelectorAll<HTMLButtonElement>('[data-look]')], camBtns = [...document.querySelectorAll<HTMLButtonElement>('[data-cam]')], modeBtns = [...document.querySelectorAll<HTMLButtonElement>('[data-mode]')];
 const toBoard = $<HTMLButtonElement>('toBoard'), boardBtns = [...document.querySelectorAll<HTMLButtonElement>('[data-board]')];
@@ -216,13 +227,17 @@ function showSettings() {
   sound.on = settings.sound; sound.volume = settings.volume;
 }
 function open() {
+  document.body.classList.remove('paused');
   menuOpen = true; paused = running; menu.classList.add('on'); menu.removeAttribute('inert'); show('main');
   go.textContent = running ? 'CARRY ON' : 'RIDE'; again.hidden = !running; quit.hidden = !running; toBoard.hidden = running;
   // (an endless run is finished by hand: that's when it's scored)
   finishBtn.hidden = !(running && mode === 'endless'); $('modeSet').hidden = running;
   sound.hush(true); go.focus();
 }
-function close() { menuOpen = false; paused = false; menu.classList.remove('on'); menu.setAttribute('inert', ''); sound.hush(false); }
+function close() { menuOpen = false; resume(); menu.classList.remove('on'); menu.setAttribute('inert', ''); }
+/** paused, nothing over it (the button's first tap): the run held, the button now the menu's */
+function pause() { paused = true; document.body.classList.add('paused'); menuBtn.setAttribute('aria-label', 'Menu and settings'); sound.hush(true); drag = null; gest = null; inp.steer = 0; inp.drive = 0; }
+function resume() { paused = false; document.body.classList.remove('paused'); menuBtn.setAttribute('aria-label', 'Pause'); sound.hush(false); }
 function begin() {
   // (a fresh run in the mode chosen: a new rider at the top, the eye with it, yours to ride, the score at nothing)
   // (on a page the sim rides, `auto`: the sim's run again, yours as soon as you touch)
@@ -313,9 +328,10 @@ for (const b of camBtns) b.addEventListener('click', () => { settings.camera = b
 for (const b of lookBtns) b.addEventListener('click', () => { settings.paint = rd.paint = b.dataset.look === 'paint'; keep(); showSettings(); });
 for (const b of modeBtns) b.addEventListener('click', () => { settings.mode = b.dataset.mode as Mode; keep(); showSettings(); });
 another.addEventListener('click', () => { const u = new URL(location.href); u.searchParams.set('seed', String(1 + Math.floor(Math.random() * 9999))); location.href = u.toString(); });
-$('menuBtn').addEventListener('click', () => open());
+// (the button: in a run, the first tap pauses; paused, it opens the menu)
+menuBtn.addEventListener('click', () => { if (running && !paused && !menuOpen) pause(); else open(); });
 showSettings();
-if (direct) { menu.classList.remove('on'); menu.setAttribute('inert', ''); document.body.classList.add('direct'); } else { document.body.classList.add('titled'); autograph(900); }
+if (direct) { menu.classList.remove('on'); menu.setAttribute('inert', ''); document.body.classList.add('direct'); if (held) document.body.classList.add('held'); } else { document.body.classList.add('titled'); autograph(900); }
 
 /** a word across the screen for a moment (a checkpoint passed, a return to one) */
 const note = document.getElementById('note')!;
