@@ -36,16 +36,17 @@ const { plan, foresee, TUNE, HOUSE, DIALS, City, Runner, Rig, CHUNK, STOREY, TAG
 // A runner carries pace over open routes and can stop at a tall facade.
 {
   const DT = 1 / 120, SECONDS = 60;
-  let worst = Infinity, leaps = 0, climbs = 0; const moves = {};
+  let worst = Infinity, leaps = 0, climbs = 0, fromGround = 0; const moves = {};
   for (const seed of [1, 2, 7, 31]) for (let k = 0; k < 16; k++) {
     const a = (k / 16) * 2 * Math.PI + 0.1, dx = Math.sin(a), dz = Math.cos(a);
     const city = new City(seed), r = new Runner(city), rig = new Rig();
     let stopped = 0, longest = 0, active = 0, travelled = 0;
     for (let i = 0; i < SECONDS / DT; i++) {
-      const before = r.dist;
+      const before = r.dist, was = r.state;
       r.step(DT, { x: dx, z: dz, jump: false }); rig.update(DT, r);
-      // A tall wall is a legitimate end to a held line. Retain the stall and
-      // pace checks on open ground and verify holding into a wall never climbs.
+      if (was === 'ground' && r.state === 'wall') fromGround++;
+      // A tall wall out of reach is a legitimate end to a held line (one in reach is gone for: climbed). Retain the
+      // stall and pace checks on open ground.
       const blocked = [0.2, 0.5, 0.9].some(d => city.heightAt(r.x + dx * d, r.z + dz * d) > r.y + 0.6);
       if (!blocked) { active += DT; travelled += r.dist - before; }
       assert.ok(Number.isFinite(r.x + r.y + r.z + r.heading), 'finite');
@@ -58,7 +59,7 @@ const { plan, foresee, TUNE, HOUSE, DIALS, City, Runner, Rig, CHUNK, STOREY, TAG
 
     assert.ok(longest < 0.5, `never stops for long (seed ${seed}, dir ${k}: ${longest.toFixed(2)}s)`);
     if (active > 1) worst = Math.min(worst, travelled / active);
-    assert.equal(r.climbs, 0); leaps += r.leaps; climbs += r.climbs; for (const [m, n] of Object.entries(r.made)) moves[m] = (moves[m] ?? 0) + n;
+    leaps += r.leaps; climbs += r.climbs; for (const [m, n] of Object.entries(r.made)) moves[m] = (moves[m] ?? 0) + n;
     const bones = rig.bones(r), o = new Float32Array(FIGURE);
     assert.equal(bones.length, 13); assert.equal(figureMesh(bones, o) * VERTEX, FIGURE);
     assert.ok(o.every(Number.isFinite));
@@ -66,7 +67,13 @@ const { plan, foresee, TUNE, HOUSE, DIALS, City, Runner, Rig, CHUNK, STOREY, TAG
   assert.ok(worst > 5, `makes its way at a run (slowest open-line pace ${worst.toFixed(1)} m/s)`);
   console.log(`64 runs of ${SECONDS}s: slowest open-line pace ${worst.toFixed(1)} m/s; ${leaps} leaps, ${climbs} walls run up`);
   console.log('  moves: ' + Object.entries(moves).sort((a, b) => b[1] - a[1]).map(([m, n]) => `${m} ${n}`).join(', '));
-  for (const m of ['vault', 'bound', 'flip', 'spring', 'dive', 'glide', 'roll', 'dash', 'wallrun']) assert.ok(moves[m] > 20, `it ${m}s`);
+  for (const m of ['vault', 'bound', 'flip', 'spring', 'dive', 'fall', 'roll', 'dash', 'wallrun', 'climb']) assert.ok(moves[m] > (m === 'flip' ? 10 : 20), `it ${m}s`);
+  // (a glide is the held jump's, never the runner's own)
+  assert.ok(!moves.glide, 'no glide unasked');
+  // (a wall run straight off the ground, met at a slant; and up a face from hold to hold)
+  assert.ok(fromGround > 100, `wall runs from a ground start (${fromGround})`);
+  assert.ok(moves.hang > 20, `chains up a face (${moves.hang} holds hung from)`);
+  console.log(`  ${fromGround} wall runs straight off the ground`);
 }
 // the holds: the same whenever made; each a line on its box (an edge along a top, a sill on a face at a storey, a pipe up
 // a face, a rail down the middle of something narrow); the boxes the same with or without them; and what the hands reach
@@ -94,7 +101,8 @@ const { plan, foresee, TUNE, HOUSE, DIALS, City, Runner, Rig, CHUNK, STOREY, TAG
     for (let i = 0; i < 120 * 60; i++) {
       r.step(1 / 120, { x: dx, z: dz, jump: false });
       const hands = [r.reach.hl, r.reach.hr].filter(Boolean);
-      assert.notEqual(r.state, 'climb');
+      // (up a face, a hand is on a hold: the lip it's pulling over, or the sill or pipe it hangs from)
+      if (r.state === 'climb') for (const p of hands) assert.ok(['edge', 'sill', 'pipe'].includes(city.gripAt(p[0], p[1], p[2], 0.2)?.hold.kind), `climbing, a hand is on a hold (${r.move})`);
       if (r.move === 'vault') { vaults++; if (hands.length) planted++; }
       // (a foot that's down is on something: the roof it's running on, or a hold: and says which)
       if (r.state === 'ground' && r.speed > 3 && r.move !== 'roll') { strides++; if (r.reach.fl || r.reach.fr) footed++; }
@@ -217,11 +225,12 @@ const { plan, foresee, TUNE, HOUSE, DIALS, City, Runner, Rig, CHUNK, STOREY, TAG
   assert.ok(contact > 0 && bottom > contact + 3 && bottom < contact + 24);
   assert.ok(lowestHip < hipAtContact - 0.06 && stand.land < 0.02, 'the rendered pelvis sinks after contact and recovers');
 
-  for (const mode of ['brace', 'catch', 'release', 'skim']) {
+  // (pressed into the practice wall, it goes for its lip by itself; tapped, at once; tapped and let go of, not at all)
+  for (const mode of ['press', 'catch', 'release', 'skim']) {
     const r = new Runner(new City(1, true));
     if (mode === 'skim') { r.x = 36.6; r.y = 13; r.state = 'air'; r.vx = 2; r.vz = 10; }
     let tapped = false, foot = false, hands = false, topped = false;
-    for (let i = 0; i < 180; i++) {
+    for (let i = 0; i < 240; i++) {
       const jump = ['catch', 'release'].includes(mode) && !tapped && r.x > 34;
       tapped ||= jump;
       const into = mode === 'release' && r.wallSteps ? 0 : 1;
@@ -235,11 +244,24 @@ const { plan, foresee, TUNE, HOUSE, DIALS, City, Runner, Rig, CHUNK, STOREY, TAG
       }
       topped ||= r.state === 'ground' && r.y === 17;
     }
-    assert.equal(r.wallSteps, Number(tapped));
-    assert.equal(r.climbs, Number(mode === 'catch'));
-    assert.equal(topped, mode === 'catch'); assert.equal(hands, mode === 'catch');
-    if (tapped) assert.ok(foot);
+    const up = mode === 'catch' || mode === 'press';
+    assert.equal(r.wallSteps, Number(tapped || mode === 'press'), `${mode}: a foot planted on the wall`);
+    assert.equal(r.climbs, Number(up), `${mode}: climbed`);
+    assert.equal(topped, up, `${mode}: on top`); assert.equal(hands, up, `${mode}: hands on its lip`);
+    if (tapped || mode === 'press') assert.ok(foot);
     if (mode === 'skim') assert.ok(r.z > 15 && r.walls === 0 && r.braces > 0);
   }
 }
 console.log('roofjumps: ok');
+// A glide is the held jump's: off a roof with it held, it glides (and comes down slower); without, it falls.
+{
+  const off = (hold) => {
+    const r = new Runner(new City(1, true)); let glided = false, t = 0;
+    while (r.z < 13.6) r.step(1 / 120, { x: 0, z: 1, jump: false });
+    while (t < 3 && !(r.state === 'ground' && t > 0.3)) { r.step(1 / 120, { x: 0, z: 1, jump: false, hold }); glided ||= r.move === 'glide'; t += 1 / 120; }
+    return { glided, made: { ...r.made } };
+  };
+  const held = off(true), not = off(false);
+  assert.ok(held.glided && !not.glided && !not.made.glide, 'it glides only with the jump held');
+  console.log('glide: only held');
+}

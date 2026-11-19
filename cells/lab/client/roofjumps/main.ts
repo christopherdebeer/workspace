@@ -134,7 +134,10 @@ function asked(t: number): Input {
   let sx = stick.x + k('KeyD', 'ArrowRight') - k('KeyA', 'ArrowLeft'), sy = stick.y + k('KeyS', 'ArrowDown') - k('KeyW', 'ArrowUp');
   const l = Math.hypot(sx, sy); if (l > 1) { sx /= l; sy /= l; }
   const fx = Math.sin(yaw), fz = Math.cos(yaw), j = jump; jump = false;
-  return { x: fx * -sy + -fz * sx, z: fz * -sy + fx * sx, jump: j };
+  // (the jump held, to glide: Space held, or a touch held still past a tap)
+  const now = performance.now(), still = (o: { t: number; moved: boolean }) => !o.moved && now - o.t > 260;
+  const hold = keys.has('Space') || (stick.id >= 0 && still(stick)) || [...others.values()].some(still);
+  return { x: fx * -sy + -fz * sx, z: fz * -sy + fx * sx, jump: j, hold };
 }
 /** the plan about what's asked (with nothing asked, about the way it faces) */
 function think(a: Input, t: number): void {
@@ -150,7 +153,7 @@ function input(t: number, dt: number): Input {
   if (Math.abs(lean) < 1e-4 || mag <= 0.1) return a;
   // (to the right is a smaller angle: see plan.ts)
   const c = Math.cos(-lean), s = Math.sin(-lean);
-  return { x: a.x * c + a.z * s, z: a.z * c - a.x * s, jump: a.jump };
+  return { x: a.x * c + a.z * s, z: a.z * c - a.x * s, jump: a.jump, hold: a.hold };
 }
 
 // ─── a pose held, to be looked at (`study=`, and `__roofjumps.pose`) ───────────
