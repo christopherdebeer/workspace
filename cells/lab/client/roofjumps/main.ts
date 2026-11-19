@@ -130,6 +130,14 @@ const wantsPlan = () => !!(TUNE.plan || TUNE.readout || TUNE.assist > 0 || TUNE.
 function asked(t: number): Input {
   // (`takeoff=stand|step|run`, on the practice line: a scripted approach up the first roof and a tap, to film the takeoffs side
   // by side: standing still, off a single step, at a run)
+  // (`catch=clean|late|correct`, on the practice line: a diagonal run to the first gap and the bound across it, three ways:
+  // clean; turned late, just before the lip; corrected shallowly in the flight. To see where the save's foot goes)
+  if (catchStudy) {
+    const r = runner, d = { x: 0.3, z: 0.95 };
+    if (catchStudy === 'late' && r.z > 13.4 && r.state === 'ground' && r.z < 16) return { x: 0.55, z: 0.83, jump: false };
+    if (catchStudy === 'correct' && r.state === 'air') return { x: -0.2, z: 0.98, jump: false };
+    return { ...d, jump: false };
+  }
   if (takeoff) {
     const go = takeoff === 'stand' ? 0 : takeoff === 'step' ? 0.1 : 0.35, tapAt = go + 0.25;
     const moving = takeoff !== 'stand' && t < tapAt + 1.5;
@@ -167,7 +175,7 @@ function input(t: number, dt: number): Input {
   const a = asked(t), mag = Math.hypot(a.x, a.z);
   if (wantsPlan() && (thought < 0 || t - thought >= 0.12)) think(a, t);
   // (by itself, all the way onto the plan; taken over, only as far as `assist` says, like any run of yours)
-  const by = TUNE.auto && !takenOver(t) ? 1 : TUNE.assist;
+  const by = takeoff || catchStudy ? 0 : TUNE.auto && !takenOver(t) ? 1 : TUNE.assist;
   lean += ((thinking && by > 0 && mag > 0.1 ? thinking.best.off * by : 0) - lean) * (1 - Math.exp(-5 * dt));
   if (Math.abs(lean) < 1e-4 || mag <= 0.1) return a;
   // (to the right is a smaller angle: see plan.ts)
@@ -203,7 +211,7 @@ const labels = document.getElementById('labels')!;
 /** `sheet=`: the moves to lay out, each at these points through it */
 const sheet = q.get('sheet')?.split(',').filter(Boolean) ?? null, MUS = [0.05, 0.28, 0.5, 0.72, 0.95];
 /** `strip=`: moments of the run, each kept as it was: the figure's bones, where it was, which way it was going */
-interface Moment { bones: ReturnType<Rig['bones']>; x: number; y: number; z: number; yaw: number; label: string }
+interface Moment { bones: ReturnType<Rig['bones']>; x: number; y: number; z: number; yaw: number; label: string; feet: number[][]; saved: boolean }
 let strip: Moment[] | null = null;
 const stripCols = Math.max(1, Number(q.get('cols') ?? 6) | 0);
 function grid(cols: number, names: string[]): void {
@@ -215,7 +223,7 @@ function grid(cols: number, names: string[]): void {
 // ─── the frame ────────────────────────────────────────────────────────────────
 const DT = 1 / 120;
 /** `takeoff=`: a scripted takeoff to film (see `asked`) */
-const takeoff = q.get('takeoff');
+const takeoff = q.get('takeoff'), catchStudy = q.get('catch');
 let time = 0, acc = 0, last = performance.now(), frames = 0, rush = 0, near = 1;
 const advance = (dt: number) => { runner.step(dt, input(time, dt)); rig.update(dt, runner); time += dt; };
 // (`t=`: run on to there before the first frame)
@@ -225,11 +233,12 @@ if (TUNE.auto && runner.speed > 1) yaw = Math.atan2(runner.vx, runner.vz);
 if (sheet) grid(MUS.length, sheet.flatMap((m) => MUS.map((u) => `${m} ${u}`)));
 if (q.has('strip')) {
   // (run on to there, then on from there a frame at a time, keeping each)
-  if (!takeoff) TUNE.auto = 1; strip = [];
+  if (!takeoff && !catchStudy) TUNE.auto = 1; strip = [];
   const n = Math.max(1, Number(q.get('frames') ?? 24) | 0), every = Math.max(DT, Number(q.get('every') ?? 0.1));
   for (let i = Math.round(Number(q.get('strip')) / DT); i > 0; i--) advance(DT);
   for (let f = 0; f < n; f++) {
-    strip.push({ bones: rig.bones(runner), x: runner.x, y: runner.y, z: runner.z, yaw: runner.speed > 1 ? Math.atan2(runner.vx, runner.vz) : runner.heading, label: `${time.toFixed(2)}s ${runner.move} ${runner.speed.toFixed(0)}m/s` });
+    const saving = !!runner.saveKind;
+    strip.push({ bones: rig.bones(runner), x: runner.x, y: runner.y, z: runner.z, yaw: runner.speed > 1 ? Math.atan2(runner.vx, runner.vz) : runner.heading, label: `${time.toFixed(2)}s ${runner.move}${saving ? ` save:${runner.saveKind}` : ''} ${runner.speed.toFixed(0)}m/s`, feet: [runner.reach.fl, runner.reach.fr].filter(Boolean).map((f) => [...f!]), saved: saving });
     for (let i = Math.round(every / DT); i > 0; i--) advance(DT);
   }
   grid(stripCols, strip.map((m) => m.label));
@@ -292,6 +301,8 @@ function frame(now: number): void {
       let v = eyeFor(m.x, m.y, m.z, m.yaw, aspect, clearTo);
       if (v.far < 0.6 && side) { TUNE.side = -side; const o = eyeFor(m.x, m.y, m.z, m.yaw, aspect, clearTo); if (o.far > v.far) v = o; TUNE.side = side; }
       rd.draw(v.vp, v.eye, m.bones, shadowAt(m.x, m.y, m.z), rect);
+      // (each planted foot marked on the roof: orange while a save is being made, so the footfall that saved it shows)
+      if (m.feet.length) rd.lines(v.vp, v.eye, m.feet.flatMap((f) => { const c = m.saved ? [0.98, 0.45, 0.08, 1] : [0.1, 0.1, 0.12, 0.9], y = f[1] + 0.03; return [{ pts: [f[0] - 0.1, y, f[2], f[0] + 0.1, y, f[2]], cols: [...c, ...c], w: 2 }, { pts: [f[0], y, f[2] - 0.1, f[0], y, f[2] + 0.1], cols: [...c, ...c], w: 2 }]; }));
     });
     frames++; requestAnimationFrame(frame); return;
   }

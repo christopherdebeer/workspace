@@ -35,9 +35,11 @@ export interface Pose {
   lean: number; tilt: number;
   /** the hips let down, off the ground: the body brought to what a hand is on */
   sink: number;
+  /** the head turned (to its left +): it leads */
+  look: number;
 }
-const KEYS: (keyof Pose)[] = ['hipL', 'hipR', 'kneeL', 'kneeR', 'shL', 'shR', 'elL', 'elR', 'spreadL', 'spreadR', 'splay', 'spine', 'head', 'twist', 'lean', 'tilt', 'sink'];
-const zero = (): Pose => ({ hipL: 0, hipR: 0, kneeL: 0, kneeR: 0, shL: 0, shR: 0, elL: 0, elR: 0, spreadL: 0, spreadR: 0, splay: 0, spine: 0, head: 0, twist: 0, lean: 0, tilt: 0, sink: 0 });
+const KEYS: (keyof Pose)[] = ['hipL', 'hipR', 'kneeL', 'kneeR', 'shL', 'shR', 'elL', 'elR', 'spreadL', 'spreadR', 'splay', 'spine', 'head', 'twist', 'lean', 'tilt', 'sink', 'look'];
+const zero = (): Pose => ({ hipL: 0, hipR: 0, kneeL: 0, kneeR: 0, shL: 0, shR: 0, elL: 0, elR: 0, spreadL: 0, spreadR: 0, splay: 0, spine: 0, head: 0, twist: 0, lean: 0, tilt: 0, sink: 0, look: 0 });
 
 /** a bone: its matrix, and its block from y0 (w0 × d0) to y1 (w1 × d1), centred zc along z */
 export interface Bone { name: string; m: M4; y0: number; w0: number; d0: number; y1: number; w1: number; d1: number; zc: number }
@@ -121,6 +123,8 @@ export class Rig {
         legs(1.95 - 1.1 * open, 2.3 - 1.2 * open, 1.75 - 1.8 * open, 2.15 - 1.4 * open);
         p.spine = 0.75 - 0.45 * open; p.head = 0.65 - 0.65 * open;
         p.shL = p.shR = 1.1; both('el', 1.7); both('spread', 0.25);
+        // (coming up: the weight over the front foot, the chest low, before it stands)
+        const exit = sm(0.55, 0.8, u) * (1 - sm(0.88, 1, u)); p.lean += 0.75 * exit; p.head -= 0.35 * exit;
         break;
       }
       case 'vault': {
@@ -192,10 +196,13 @@ export class Rig {
         // (headfirst and flat, the hands leading, the legs left out behind; folding at the end into the roll)
         // (long off the edge, arched out over the drop and reaching further for the ground as it comes, then folding early
         // into the roll: never one held shape)
-        const f = sm(0, 0.3, u), t = sm(0.66, 1, u), arch = sm(0.15, 0.45, u) * (1 - t);
+        // (the fold into the roll begins a fixed while before the ground, however long the flight; a long one spends its
+        // middle looking for the ground, the arms adjusting)
+        const prepD = r.state === 'air' ? 1 - sm(0.08, 0.38, r.ttc ?? 9) : 0, f = sm(0, 0.3, u), t = Math.max(sm(0.85, 1, u), prepD), arch = sm(0.15, 0.45, u) * (1 - t);
         legs(-0.05 - 0.25 * arch + 1.5 * t, 0.1 + 0.5 * arch + 1.8 * t, -0.3 - 0.2 * arch + 1.6 * t, 0.45 + 0.6 * arch + 1.5 * t);
         p.shL = p.shR = 2.85 - 0.9 * t + 0.15 * arch; both('el', 0.1 + 0.9 * t); both('spread', 0.22 + 0.25 * arch);
         p.lean = 0.3 + 1.05 * f + 0.25 * t; p.spine = -0.12 - 0.3 * arch + 0.6 * t; p.head = -0.75 - 0.2 * arch + 1.1 * t;
+        if ((r.flightT ?? 0) > 0.7) { const mid = Math.sin(Math.PI * u) * (1 - t); p.head += 0.35 * mid; p.spreadL += 0.3 * Math.sin(2 * Math.PI * u) * (1 - t); p.spreadR -= 0.3 * Math.sin(2 * Math.PI * u) * (1 - t); }
         break;
       }
       case 'fall': {
@@ -255,6 +262,24 @@ export class Rig {
     if (r.wallPlant) {
       legs(1.25, 1.55, -0.35, 0.65); arms(2.4, 1.8); p.lean = 0.22;
     }
+    // (a flight getting ready for the ground a fixed while before it, whatever its length: the legs coming under, the arms
+    // out for it, the head down to find it)
+    if (r.state === 'air' && ['bound', 'spring', 'hop', 'flip', 'sideflip', 'fall', 'kick', 'underbar'].includes(r.move)) {
+      const k = 1 - sm(0.06, 0.3, r.ttc ?? 9), L2: Partial<Pose> = { hipL: 0.75, hipR: 0.4, kneeL: 0.95, kneeR: 0.85, shL: 0.5, shR: 0.5, spreadL: 0.7, spreadR: 0.7, lean: 0.18, spine: 0.15 };
+      if (k > 0) { for (const [key, v] of Object.entries(L2)) (p as unknown as Record<string, number>)[key] += (v - (p as unknown as Record<string, number>)[key]) * k; p.head += 0.35 * k; }
+    }
+    // (a save: short, pitched forward over the catching foot, the trailing knee coming through high; wide, the outside arm
+    // flung open, the body leaning back toward the line; long, the chest caught forward over two quick steps)
+    if (r.saveKind && r.state === 'ground') {
+      const k = 1 - sm(0.05, 0.4, r.saveT ?? 1), side = r.saveSide ?? 1;
+      if (r.saveKind === 'short') { p.lean += 0.45 * k; p.spine += 0.2 * k; if (side > 0) { p.hipR += 0.9 * k; p.kneeR += 1.1 * k; } else { p.hipL += 0.9 * k; p.kneeL += 1.1 * k; } p.head += 0.15 * k; }
+      else if (r.saveKind === 'wide') { if (side > 0) p.spreadL += 1.4 * k; else p.spreadR += 1.4 * k; p.tilt -= side * 0.3 * k; p.twist += side * 0.25 * k; }
+      else { p.lean += 0.28 * k; p.shL += 0.5 * k; p.shR += 0.5 * k; }
+    }
+    // (the head leads: turned into a turn a beat before the hips, looking where it's going)
+    p.look = Math.max(-0.6, Math.min(0.6, r.turn * 0.22));
+    // (hanging from one hand, swinging on under it: the body tipped by the swing)
+    if (r.swing) p.tilt += Math.max(-0.5, Math.min(0.5, -r.swing * 0.12));
     // (off the ground: the arms driven up hard through the first instant, as if they threw it, by the effort behind it)
     if (r.state === 'air' && u < 0.15 && ['spring', 'bound', 'hop', 'dive', 'flip', 'sideflip', 'underbar'].includes(r.move)) { const k = 1 - u / 0.15; p.shL += 0.9 * k; p.shR += 0.9 * k; }
     // (off balance: leaning with it, the arms out against it, windmilling as it comes back)
@@ -336,7 +361,7 @@ export class Rig {
     add('pelvis', P, -0.09, 0.26, 0.17, 0.1, 0.3, 0.18);
     const S = rotY(rotX(translate(P, 0, 0.1, 0), p.spine + this.chest), p.twist);
     add('torso', S, 0, 0.27, 0.16, 0.47, 0.37, 0.21);
-    add('head', rotX(translate(S, 0, 0.5, 0), p.head - this.chest * 0.5), 0, 0.16, 0.18, 0.23, 0.18, 0.2, 0.015);
+    add('head', rotX(rotY(translate(S, 0, 0.5, 0), p.look), p.head - this.chest * 0.5), 0, 0.16, 0.18, 0.23, 0.18, 0.2, 0.015);
     for (const side of [1, -1]) {
       const L = side > 0, n = L ? 'L' : 'R';
       const A = sw(rotZ(translate(S, side * 0.225, 0.43, 0), side * (L ? p.spreadL : p.spreadR)), L ? p.shL : p.shR);

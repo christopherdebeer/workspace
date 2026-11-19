@@ -59,6 +59,9 @@ export interface Body {
   /** off balance (to the figure's left +), and how fast it's going over; the effort left (1 fresh); the size of the wind-up
    * now loading (0..1); seconds since the start */
   balance?: number; balanceV?: number; stamina?: number; effort?: number; time?: number;
+  /** a save being made: what went wrong ('short', 'wide', 'long'), how long since the landing, the catching side (1 the
+   * figure's left); seconds to the ground in a flight; a flight's planned length; a hang's swing along the wall (m/s) */
+  saveKind?: string; saveT?: number; saveSide?: number; ttc?: number; flightT?: number; swing?: number;
   /** hanging on the way up a face: 0 caught, 1 loading, 2 springing for the next hold */
   chainPhase?: number;
   phase: number; lead: number; land: number; turn: number; climbT: number; wallT: number;
@@ -154,6 +157,24 @@ export class Runner implements Body {
   stamina = 1; private spentT = 9; effort = 0; time = 0;
   /** landings, by how they went */
   landings = { flow: 0, heavy: 0, off: 0 };
+  /**
+   * Imperfection, authored: a hard leap (a late turn, near its fastest, near its reach, spent) carries a small error, chosen
+   * from what made it hard and checked to be saveable; landing off its mark (by that error, or by the air's steering, or
+   * carrying too much speed into a turn), the save is a footfall: the catching foot put where the hips are actually going.
+   * The leap's intended landing; the error authored; the save being made; the last one made (for the study and the tests).
+   */
+  private aim: { x: number; z: number; ux: number; uz: number } | null = null;
+  errorOf: { kind: string; e: number } | null = null; errors = 0;
+  private save: { kind: 'short' | 'wide' | 'long'; ex: number; ez: number; mag: number; t: number; stage: number } | null = null;
+  saves = 0; lastSave: { kind: string; err: number; foot: number } | null = null;
+  /** the way it was last asked to go; seconds to the ground; the planned flight; settling strides owed after a landing */
+  private want: [number, number] = [0, 0]; ttc = 9; private breathT = 0;
+  /** a hang's swing: along the wall (m, m/s), the dip (m, m/s), where it caught, the way along, the near hand (1 its left) */
+  private sw: { s: number; v: number; d: number; dv: number; x0: number; z0: number; tx: number; tz: number; near: number; t: number } | null = null;
+  get saveKind(): string | undefined { return this.save?.kind; }
+  get saveT(): number | undefined { return this.save?.t; }
+  get saveSide(): number | undefined { if (!this.save) return undefined; const h = this.heading; return this.save.ex * Math.cos(h) - this.save.ez * Math.sin(h) >= 0 ? 1 : -1; }
+  get swing(): number | undefined { return this.sw?.v; }
   /** hanging from a lip it caught (s; -1 not hanging); lips caught; and the wall it's braced against, pressed into one */
   private atLip = -1; catches = 0;
   /** leaps off the ground that missed their landing and fell (a kick off a wall into the air isn't one); where this flight began */
@@ -203,7 +224,7 @@ export class Runner implements Body {
   get speed(): number { return Math.hypot(this.vx, this.vz); }
 
   /** another of it, as it is now, to be run on ahead without touching this one (plan.ts) */
-  clone(): Runner { const c = Object.assign(Object.create(Runner.prototype) as Runner, this); c.made = { ...this.made }; c.to = { ...this.to }; c.landings = { ...this.landings }; c.contact = { ...this.contact }; c.chain = this.chain ? { ...this.chain } : null; c.ch = this.ch ? { ...this.ch } : null; c.feet = { L: { ...this.feet.L }, R: { ...this.feet.R } }; return c; }
+  clone(): Runner { const c = Object.assign(Object.create(Runner.prototype) as Runner, this); c.made = { ...this.made }; c.to = { ...this.to }; c.landings = { ...this.landings }; c.contact = { ...this.contact }; c.aim = this.aim ? { ...this.aim } : null; c.save = this.save ? { ...this.save } : null; c.sw = this.sw ? { ...this.sw } : null; c.want = [...this.want] as [number, number]; c.chain = this.chain ? { ...this.chain } : null; c.ch = this.ch ? { ...this.ch } : null; c.feet = { L: { ...this.feet.L }, R: { ...this.feet.R } }; return c; }
   private count(m: Move): void { this.made[m] = (this.made[m] ?? 0) + 1; }
 
   step(dt: number, inp: Input): void {
@@ -211,6 +232,7 @@ export class Runner implements Body {
     const dx = on ? inp.x / Math.hypot(inp.x, inp.z) : 0, dz = on ? inp.z / Math.hypot(inp.x, inp.z) : 0;
     const x0 = this.x, z0 = this.z, h0 = this.heading;
     this.time += dt; this.impactT += dt; this.contact.t += dt;
+    if (on) this.want = [dx, dz];
     // (held: nothing moves, the pose stays (the emphasis))
     if (this.freeze > 0) { this.freeze -= dt; return; }
     if (this.state === 'ground' && this.legHold > 0) this.legHold -= dt;
@@ -266,6 +288,7 @@ export class Runner implements Body {
    */
   private stepping(): void {
     const sp = this.speed, f = this.feet;
+    if (this.save && this.state === 'ground' && this.move !== 'roll' && this.placeSave()) return;
     if (this.state === 'ground' && sp < 0.5 && (this.committed || this.land > 0.005 || this.legVelocity > 0)) {
       const co = Math.cos(this.heading), si = Math.sin(this.heading);
       for (const [foot, side] of [[f.L, 1], [f.R, -1]] as const) {
@@ -324,13 +347,56 @@ export class Runner implements Body {
     if (!ground && (f.L.on || f.R.on)) this.reach.fn = [-this.wx, 0, -this.wz];
   }
 
+  /**
+   * The save: the catching foot (the side the hips are carrying to) put down where they're going, as far out as the error
+   * asks, when it's needed (short: a short step at once, the hips behind; wide: out wide; long: two quick steps ahead, the
+   * speed kept); the stride picked up from it, and the error taken out: the hips' carry stopped, the balance caught. True
+   * while it's still to be placed (the feet as they landed meanwhile).
+   */
+  private placeSave(): boolean {
+    const s = this.save!, f = this.feet, fx = Math.sin(this.heading), fz = Math.cos(this.heading);
+    const at = s.kind === 'short' ? 0.1 : s.kind === 'wide' ? 0.08 : s.stage === 0 ? 0.05 : 0.16;
+    if (s.stage >= (s.kind === 'long' ? 2 : 1)) { if (s.t > 0.45) this.save = null; return false; }
+    if (s.t < at) {
+      // (meanwhile, both feet where it came down, under it)
+      for (const [foot, sd] of [[f.L, 1], [f.R, -1]] as const) if (!foot.on) { const x = this.x + fz * sd * 0.12, z = this.z - fx * sd * 0.12, h = this.city.heightAt(x, z); if (Math.abs(h - this.y) <= STEP) { foot.on = true; foot.p = [x, h, z]; } }
+      if (f.L.on) this.reach.fl = f.L.p; if (f.R.on) this.reach.fr = f.R.p; return true;
+    }
+    // (which foot: the one on the side the hips carry to; a long save's second step, the other)
+    let side = s.ex * fz - s.ez * fx >= 0 ? 1 : -1; if (s.stage === 1) side = -side;
+    const lat = s.kind === 'wide' ? 0.12 + Math.min(0.75, s.mag * 1.1) : 0.1, ahead = s.kind === 'short' ? 0.2 : s.kind === 'long' ? (s.stage ? 0.55 : 0.75) : 0.4;
+    // (out to its side, and further toward where the hips are going)
+    // (as far out as there's roof for it: in only as far as it has to)
+    let x = this.x, z = this.z;
+    for (const k of [1, 0.8, 0.6, 0.4, 0.2, 0]) {
+      x = this.x + fx * ahead + fz * side * 0.1 + s.ex * (lat - 0.1) * k; z = this.z + fz * ahead - fx * side * 0.1 + s.ez * (lat - 0.1) * k;
+      if (Math.abs(this.city.heightAt(x, z) - this.y) <= STEP) break;
+    }
+    const foot = side > 0 ? f.L : f.R; foot.on = true; foot.p = [x, this.city.heightAt(x, z), z];
+    if (side > 0) f.R.on = false; else f.L.on = false;
+    // (the stride picked up from it: this foot in its stance)
+    this.phase = Math.PI / 2 + 0.3 - (side > 0 ? 0 : Math.PI) + 0.05;
+    if (s.stage === 0) {
+      const vl = this.vx * s.ex + this.vz * s.ez; if (vl > 0) { this.vx -= s.ex * vl * 0.85; this.vz -= s.ez * vl * 0.85; }
+      this.balance *= 0.4; this.balanceV *= 0.15; this.saves++;
+      this.lastSave = { kind: s.kind, err: (s.ex * fz - s.ez * fx) * s.mag, foot: (x - this.x) * fz - (z - this.z) * fx };
+    }
+    s.stage++;
+    if (side > 0) this.reach.fl = foot.p; else this.reach.fr = foot.p;
+    return false;
+  }
+
   /** Where the hands want to be, this instant. */
   private reaching(): Reach {
     const u = this.mu, L = this.lead === 1, fx = Math.sin(this.heading), fz = Math.cos(this.heading);
     /** a point by the figure: `a` ahead, `s` to its left, `h` up */
     const by = (a: number, s: number, h: number): P3 => [this.x + fx * a + fz * s, this.y + h, this.z + fz * a - fx * s];
     // (up a wall: what it has hold of, until it's gone by below the hips)
-    if (this.state === 'climb' && this.atLip >= 0) return { ...this.grips };
+    if (this.state === 'climb' && this.atLip >= 0) {
+      // (the near hand first; the far one only once the swing needs it, or before the pull)
+      const w = this.sw, both = !w || w.t > 0.22 || Math.abs(w.s) > 0.35;
+      return both ? { ...this.grips } : w!.near > 0 ? { hl: this.grips.hl } : { hr: this.grips.hr };
+    }
     if (this.state === 'climb') {
       // (hanging: the hands on the hold, let go through the first part of a spring for the next, and on the next one)
       if (this.chain) return this.chain.phase === 2 && this.chain.t < 0.6 * CHAIN_SPRING ? {} : { ...this.grips };
@@ -375,6 +441,10 @@ export class Runner implements Body {
       const wx = this.x + this.pax * (R + 0.03), wz = this.z + this.paz * (R + 0.03);
       return { hl: [wx - this.paz * 0.24, this.y + 1.35, wz + this.pax * 0.24], hr: [wx + this.paz * 0.24, this.y + 1.35, wz - this.pax * 0.24] };
     }
+    // (a short landing: the hand on the catching side slapped down ahead)
+    if (this.save?.kind === 'short' && this.save.t < 0.22) { const sd = this.saveSide ?? 1; const p = by(0.5, sd * 0.24, 0); return sd > 0 ? { hl: p } : { hr: p }; }
+    // (coming up out of a roll: one hand pushing off the ground as the weight comes over the front foot)
+    if (this.move === 'roll' && u > 0.6 && u < 0.84) return L ? { hr: by(0.3, -0.2, 0) } : { hl: by(0.3, 0.2, 0) };
     // (out of a dive, both hands to the ground first; a deep landing, one)
     if (this.move === 'roll' && u < 0.28) return { hl: by(0.45, 0.16, 0), hr: by(0.45, -0.16, 0) };
     if (this.move === 'run' && this.land > 0.5) return L ? { hr: by(0.38, -0.26, 0) } : { hl: by(0.38, 0.26, 0) };
@@ -413,6 +483,10 @@ export class Runner implements Body {
     if (on && sp > TUNE.run && H(this.x + fx * brakeAhead, this.z + fz * brakeAhead) >= this.y + 1.2) top = Math.min(top, TUNE.run);
     if (this.rollT > 0) top = Math.min(sp, top);
     if (this.stickT > 0) { this.stickT -= dt; top = Math.min(top, 1.5); }
+    // (a roll is its own absorb: the save waits until it's come out of it)
+    if (this.save && this.rollT <= 0) this.save.t += dt;
+    // (after a big arrival with nothing near to go for: a couple of settling strides, not a burst)
+    if (this.breathT > 0) { this.breathT -= dt; top = Math.min(top, TUNE.run); }
     this.move = this.rollT > 0 ? 'roll' : this.dashT > 0 ? 'dash' : ledge ? 'ledge' : 'run';
     // (toward the wanted velocity, at a fixed rate: a turn is quick, a reversal a skid)
     // (while the legs are still taking a landing it drives less: the landing is a beat, and the burst comes out of it; let
@@ -629,7 +703,7 @@ export class Runner implements Body {
     this.chain = null; this.ch = null; this.atLip = -1; if (move !== 'spring') this.toWall = null; this.stepFoot = null; this.bracing = false; this.press = 0; this.held = 0; this.rising = vy > 0;
     if (move !== 'vault') this.palmSpin = false;
     this.resetTakeoff(); this.pushPending = false; this.dashT = 0;
-    this.state = 'air'; this.vy = vy; this.airT = 0; this.planned = planned; this.air2 = true; this.attempt = false;
+    this.state = 'air'; this.vy = vy; this.airT = 0; this.planned = planned; this.air2 = true; this.attempt = false; this.aim = null; this.errorOf = null; this.save = null; this.sw = null;
     this.move = move; this.float = float; this.flightT = Math.max(0.15, planned || float ? T : this.comesDown(T)); this.mu = 0;
     this.leaps++; this.rollT = 0; this.count(move);
     if (move !== 'vault' && move !== 'underbar') this.plant = this.plant2 = null;
@@ -733,9 +807,31 @@ export class Runner implements Body {
       else aimed = Math.abs(H(carried * T) - to) < 0.1 && flat(carried * T, to);
       v = carried;
     }
+    // (the mark it means; and, if this is a hard one, the small error it'll actually make, saveable)
+    const aimX = this.x + ux * v * T, aimZ = this.z + uz * v * T;
+    let err: { kind: string; e: number } | null = null;
+    if (aimed && ['bound', 'spring', 'hop', 'dive', 'flip', 'sideflip'].includes(move)) {
+      const turnK = Math.min(1, Math.abs(this.turn) / 3), speedK = Math.max(0, Math.min(1, (v - 14) / 5)), Dv = v * T;
+      const reachK = Math.max(0, Math.min(1, (Dv / reach - 0.55) / 0.45)), ks = [turnK * 0.9, speedK * 0.7, reachK * 0.8];
+      const diff = Math.max(...ks) + 0.25 * (1 - this.stamina);
+      if (diff > 0.3) {
+        const kind = ks[0] >= ks[1] && ks[0] >= ks[2] ? 'wide' : ks[1] >= ks[2] ? 'long' : 'short';
+        for (let e = Math.min(0.55, (diff - 0.3) * 1.1); e > 0.08; e *= 0.5) {
+          if (kind === 'wide') {
+            const a = -Math.sign(this.turn || 1) * Math.atan2(e, Dv), c = Math.cos(a), s2 = Math.sin(a), wx = ux * c + uz * s2, wz = uz * c - ux * s2;
+            if (Math.abs(this.city.heightAt(this.x + wx * Dv, this.z + wz * Dv) - to) < 0.1) { ux = wx; uz = wz; err = { kind, e }; break; }
+          } else {
+            const D2 = Dv + (kind === 'long' ? e : -e);
+            if (Math.abs(H(D2) - to) < 0.1 && (kind === 'short' || Math.abs(H(D2 + 0.6) - to) < 0.1)) { v = D2 / T; err = { kind, e }; break; }
+          }
+        }
+      }
+    }
     this.vx = ux * v; this.vz = uz * v;
     const plant = this.plant, plant2 = this.plant2;
     this.launch(G * up, move, aimed, float, T);
+    this.aim = aimed ? { x: aimX, z: aimZ, ux: Math.cos(0) * (aimX - this.x) / (Math.hypot(aimX - this.x, aimZ - this.z) || 1), uz: (aimZ - this.z) / (Math.hypot(aimX - this.x, aimZ - this.z) || 1) } : null;
+    this.errorOf = err; if (err) this.errors++;
     if (move === 'vault') {
       this.plant = plant; this.plant2 = plant2; this.vaultTo = to; this.palmSpin = spin; if (spin) this.count('palmspin' as Move);
       // (the hands in the figure's own order: the one on its left to the left)
@@ -755,6 +851,8 @@ export class Runner implements Body {
     // (held at the top of a flight a moment, as a drawing would hold it (`apexHold`): the pose held, the body going on
     // across, at its pace, and on its arc, so it lands where it meant to; then the pose catches up)
     this.airT += dt;
+    // (how long to the ground: where it'll be when it gets there, near enough)
+    { let t = 0.3; for (let i = 0; i < 2; i++) { const g = this.city.heightAt(this.x + this.vx * t, this.z + this.vz * t), h = this.y - g, G = this.float ? TUNE.glideGravity : TUNE.gravity; t = h > 0 ? (this.vy + Math.sqrt(this.vy * this.vy + 2 * G * h)) / G : 0; } this.ttc = t; }
     const muT = Math.min(1, this.airT / this.flightT);
     if (TUNE.apexHold > 0 && !this.float) { if (this.vy > 0) this.rising = true; else if (this.rising) { this.rising = false; this.held = TUNE.apexHold; } }
     if (this.held > 0) this.held -= dt;
@@ -858,6 +956,10 @@ export class Runner implements Body {
   private grabTop(lip: { hold: Hold }, top: number, x: number, z: number): void {
     this.top = top; this.chain = null;
     this.grips = { hl: onHold(lip.hold, x + this.wz * 0.18, z - this.wx * 0.18), hr: onHold(lip.hold, x - this.wz * 0.18, z + this.wx * 0.18) };
+    // (what it brought: along the wall, a swing under the hand; downward, a dip, caught; the near hand first, the side it
+    // was travelling toward)
+    const tx = -this.wz, tz = this.wx, along = this.vx * tx + this.vz * tz;
+    this.sw = { s: 0, v: Math.max(-4, Math.min(4, along)), d: 0, dv: Math.min(0, this.vy) * 0.6, x0: this.x, z0: this.z, tx, tz, near: Math.abs(along) > 0.5 ? (along > 0 ? -1 : 1) : this.lead ? 1 : -1, t: 0 };
     this.catchHeight = this.y; this.climbT = 0; this.mu = 0; this.vy = 0; this.vx = this.vz = 0;
     // (caught: hanging, the hips swinging in under it, before anything's decided)
     this.state = 'climb'; this.move = 'hang'; this.atLip = 0; this.catches++;
@@ -1014,20 +1116,50 @@ export class Runner implements Body {
     // (how it went: off its mark (a fall, off a wall, into one) a stagger and a knock to the balance; heavy, deeper and
     // longer in the legs, held at the deepest if the emphasis asks, paid for in pace; else light, flowing on)
     const heavy = impact >= 9 ? Math.min(1, (impact - 9) / 8) : 0, off = was === 'fall' || was === 'kick' || braced;
+    // (off its mark, and how: the hips carrying sideways off the line it meant, or short of it, or past it; or into a turn
+    // too fast, the way it's asked to go well off the way it's going)
+    this.save = null; this.ttc = 9;
+    {
+      const sp0 = this.speed, vx = sp0 > 0.5 ? this.vx / sp0 : 0, vz = sp0 > 0.5 ? this.vz / sp0 : 0;
+      let kind: 'short' | 'wide' | 'long' | null = null, ex = 0, ez = 0, mag = 0;
+      if (this.aim) {
+        const a = this.aim, ox = this.x - a.x, oz = this.z - a.z, along = ox * a.ux + oz * a.uz, lat = -ox * a.uz + oz * a.ux;
+        if (Math.abs(lat) > 0.2 && Math.abs(lat) >= Math.abs(along) * 0.6) { kind = 'wide'; mag = Math.abs(lat); const s = Math.sign(lat); ex = -a.uz * s; ez = a.ux * s; }
+        else if (along < -0.25) { kind = 'short'; mag = -along; }
+        else if (along > 0.4) { kind = 'long'; mag = along; }
+      }
+      // (not off a wall, or out of a fall: those have their own stagger)
+      if (!kind && !off && sp0 > 8 && (this.want[0] || this.want[1])) {
+        const cr = vx * this.want[1] - vz * this.want[0], dot = vx * this.want[0] + vz * this.want[1];
+        // (the hips carry out of the turn: away from the way it's asked, across the way it's going)
+        if (dot > 0 && Math.abs(cr) > 0.6) { kind = 'wide'; mag = Math.min(0.6, Math.abs(cr) * sp0 * 0.05); ex = -(this.want[0] - vx * dot); ez = -(this.want[1] - vz * dot); }
+      }
+      if (kind) {
+        // (the hips carry to the side they're going; short and long saves cross no line, so the lead's side)
+        if (kind !== 'wide') { const s = this.lead ? 1 : -1, h = this.heading; ex = Math.cos(h) * s * 0.0001; ez = -Math.sin(h) * s * 0.0001; }
+        const l = Math.hypot(ex, ez) || 1; this.save = { kind, ex: ex / l, ez: ez / l, mag, t: 0, stage: 0 };
+      }
+      this.aim = null;
+    }
     if (off) {
       this.landings.off++; this.legVelocity = Math.min(12, impact) * 0.9; this.recoverT = 0.25;
-      this.vx *= 0.85; this.vz *= 0.85; this.balanceV += (this.lead ? 1 : -1) * 1.6 + this.wallSide * (was === 'kick' ? 0.8 : 0);
+      this.vx *= 0.85; this.vz *= 0.85;
+      // (knocked toward where the hips are actually carrying, not by which leg led)
+      const side = this.save ? (this.saveSide ?? 1) : this.lead ? 1 : -1;
+      this.balanceV += side * 1.6 + this.wallSide * (was === 'kick' ? 0.8 : 0);
     } else if (heavy > 0) {
       this.landings.heavy++; this.legVelocity = Math.min(14, impact) * 0.95; this.recoverT = 0.15 + 0.35 * heavy; this.hitPending = TUNE.emphasis > 0;
       if (was !== 'dive') { this.vx *= 1 - 0.3 * heavy; this.vz *= 1 - 0.3 * heavy; }
     } else { this.landings.flow++; this.legVelocity = Math.min(10, impact) * 0.75; }
     this.balanceV += this.turn * 0.05;
+    if (this.save) { this.balanceV += (this.saveSide ?? 1) * Math.min(1.5, this.save.mag * 3); if (this.save.kind === 'short') this.recoverT = Math.max(this.recoverT, 0.2); }
     if (impact > 5) { this.impact = Math.min(1, impact / 16); this.impactT = 0; }
     this.phase = Math.PI / 2 + 0.31 + (this.lead ? 0 : Math.PI);
     this.state = 'ground'; this.vy = 0; this.planned = false; this.move = 'run';
     const sp = this.speed, ux = sp > 0.5 ? this.vx / sp : 0, uz = sp > 0.5 ? this.vz / sp : 0;
     // (a dive, or a hard landing, is rolled out of; a spring is landed deep; the rest are run out of)
-    if ((was === 'dive' || impact > 10) && sp > 4) { let room = 0;
+    // (a long landing with room is a running save, not a roll, unless it's a dive's or it's very hard)
+    if ((was === 'dive' || impact > (this.save?.kind === 'long' ? 14 : 10)) && sp > 4) { let room = 0;
       while (room < sp * ROLL && Math.abs(this.city.heightAt(this.x + ux * (room + 0.25), this.z + uz * (room + 0.25)) - this.y) <= STEP) room += 0.25;
       this.rollDuration = Math.min(ROLL, Math.max(0, room - R) / sp);
       this.rollT = this.rollDuration >= 0.24 ? this.rollDuration : 0;
@@ -1044,9 +1176,13 @@ export class Runner implements Body {
       }
     }
     // (out of a roll, or landed as meant with room ahead: a dash)
+    // (only if there's something near to go for and the effort to do it: else a couple of settling strides)
     if (sp > 6 && (this.rollT > 0 || (aimed && was !== 'glide' && was !== 'spring'))) {
       const H = (d: number) => this.city.heightAt(this.x + ux * d, this.z + uz * d);
-      if (this.rollT > 0 || [2, 4, 6].every((d) => Math.abs(H(d) - this.y) <= STEP)) { this.pushPending = true; }
+      let next = 99; for (let d = 1; d <= 16; d += 1) if (Math.abs(H(d) - this.y) > STEP) { next = d; break; }
+      const clear = [2, 4].every((d) => Math.abs(H(d) - this.y) <= STEP);
+      if ((this.rollT > 0 || clear) && next <= 16 && this.stamina > 0.5) this.pushPending = true;
+      else if (heavy > 0 || this.rollT > 0) this.breathT = 0.5;
     }
   }
 
@@ -1058,12 +1194,14 @@ export class Runner implements Body {
       // (a tap too); pressing away, it lets go and drops)
       const into = on ? dx * this.wx + dz * this.wz : 0;
       this.atLip += dt; this.mu = Math.min(1, this.atLip / LIP_BEAT);
+      // (the hand has stopped; the body hasn't: it swings on under it and dips, and settles)
+      if (this.sw) { const w = this.sw; w.t += dt; w.v += (-38 * w.s - 3.5 * w.v) * dt; w.s = Math.max(-0.7, Math.min(0.7, w.s + w.v * dt)); w.dv += (-70 * w.d - 9 * w.dv) * dt; w.d = Math.max(-0.45, Math.min(0.1, w.d + w.dv * dt)); this.x = w.x0 + w.tx * w.s; this.z = w.z0 + w.tz * w.s; this.y = this.catchHeight + w.d; }
       // (held along the wall, neither toward it nor away, after a while longer: let go, and on the way it was going (a brush
       // past); nothing held at all: it hangs, as long as it's left)
       const along = on && Math.abs(into) <= 0.3 && this.atLip > LIP_BEAT + 0.5;
       if (into < -0.3 || along) { this.atLip = -1; this.vx = (along ? dx * 3 : 0) - this.wx * 2; this.vz = (along ? dz * 3 : 0) - this.wz * 2; this.launch(0, 'fall', false, false, 0.4); this.wallCool = 0.3; this.made.fall = (this.made.fall ?? 1) - 1; this.leaps--; this.count('drop' as Move); return; }
       if ((this.atLip >= LIP_BEAT && into > 0.3) || (jump && this.atLip > 0.08)) {
-        this.atLip = -1; this.climbT = 0; this.mu = 0; this.move = 'climb'; this.climbs++; this.count('climb');
+        this.atLip = -1; this.climbT = 0; this.mu = 0; this.move = 'climb'; this.climbs++; this.count('climb'); this.catchHeight = this.y;
       }
       return;
     }
@@ -1072,6 +1210,7 @@ export class Runner implements Body {
       const ox = on ? dx : -this.wx, oz = on ? dz : -this.wz;
       this.vx = ox * 8; this.vz = oz * 8; this.launch(JUMP, 'flip', false, false, 0.9); return;
     }
+    if (this.sw) { const k = 1 - Math.exp(-10 * dt); this.x += (this.sw.x0 - this.x) * k; this.z += (this.sw.z0 - this.z) * k; }
     const duration = Math.max(0.32, (this.top - this.catchHeight) / TUNE.climb + 0.22);
     this.mu = Math.min(1, this.climbT / duration);
     const pull = this.mu * this.mu * (3 - 2 * this.mu);
