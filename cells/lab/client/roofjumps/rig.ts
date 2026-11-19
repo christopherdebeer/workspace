@@ -64,7 +64,7 @@ export class Rig {
   pose = zero();
   /** each joint's speed toward its pose; and the chest's lag behind the hips (rad) and its speed, the hips' last height
    * and speed: weight */
-  private vel = zero(); private ph = 0; private toe = [0, 0];
+  private vel = zero(); private ph = 0; private lastPhase = 0; private toe = [0, 0];
   /** how far a flight has got ready for the ground: it only goes on, so the ground falling away beneath (over an edge) never
    * unfolds it */
   private prep = 0; private chest = 0; private chestV = 0; private lastHip = 1; private hipV = 0;
@@ -73,11 +73,13 @@ export class Rig {
   private hipY = 1;
   private bank = 0;
   private aside = 0;
+  /** the pelvis carried toward a footfall the leg couldn't otherwise reach (world, m) */
+  give: V3 = [0, 0, 0];
   /** each hand's reach: how much it has hold of the arm (0..1), and where to */
   private hands = { L: { w: 0, p: [0, 0, 0] as V3 }, R: { w: 0, p: [0, 0, 0] as V3 } };
   /** and each foot's: planted where it was put, the body going over it; and which way what it's on faces */
-  private soles = { L: { w: 0, p: [0, 0, 0] as V3 }, R: { w: 0, p: [0, 0, 0] as V3 } };
-  private on: V3 = [0, 1, 0];
+  soles = { L: { w: 0, p: [0, 0, 0] as V3, lost: false }, R: { w: 0, p: [0, 0, 0] as V3, lost: false } };
+  on: V3 = [0, 1, 0];
 
   /** The pose a body's move asks for. */
   target(r: Body, ph = r.phase): Pose {
@@ -99,20 +101,51 @@ export class Rig {
       p.elL = 1.45 - 0.35 * Math.sin(a); p.elR = 1.45 + 0.35 * Math.sin(a);
       p.twist = -0.28 * amp * Math.sin(a);
     };
+    /**
+     * The run, each leg by where it is in its own cycle (0 its touchdown, through its stance to its push-off at the stance's
+     * share, then its swing back to the next touchdown): down, the thigh going from ahead to behind (the foot's held by its
+     * footfall anyway); off, the knee folding fast to its deepest about two fifths through the swing, the thigh driven
+     * through, then the shin reaching out to straighten nearly by touchdown, the thigh just retracting to meet the ground.
+     * The arms go with the opposite legs.
+     */
+    const gait = (amp: number, pump: number) => {
+      const sd = r.stanceFrac ?? 0.25, F = Math.PI / 2 + 0.3;
+      const leg = (off: number) => {
+        const c = ((((ph + off - F) % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI)) / (2 * Math.PI);
+        if (c < sd) { const s = c / sd; return { hip: (0.42 - 0.95 * s) * amp, knee: 0.35 + 0.45 * Math.sin(Math.PI * s) }; }
+        // (the fold begins at once off the ground (the heel coming up as the toe leaves), deepest two fifths through)
+        const w = (c - sd) / (1 - sd), x = Math.min(1, w / 0.4), fold = (1 - (1 - x) * (1 - x)) * (1 - sm(0.4, 0.92, w));
+        // (driven through, then pawed back to where the stance takes it from: the thigh lands where the stance starts)
+        const hip = (-0.53 + 1.6 * sm(0.05, 0.72, w) - 0.65 * sm(0.72, 1, w)) * amp;
+        // (folded heel toward the seat at speed, but no tighter than a sprinter's ~130°)
+        return { hip, knee: 0.3 + Math.min(1.98, 0.1 + 1.85 * amp) * fold };
+      };
+      const a = leg(0), b = leg(Math.PI);
+      p.hipL = a.hip; p.kneeL = a.knee; p.hipR = b.hip; p.kneeR = b.knee;
+      p.shL = pump * b.hip / Math.max(0.3, amp); p.shR = pump * a.hip / Math.max(0.3, amp);
+      p.elL = 1.45 + 0.3 * (b.hip / Math.max(0.3, amp)); p.elR = 1.45 + 0.3 * (a.hip / Math.max(0.3, amp));
+      p.twist = -0.28 * (a.hip - b.hip) / 2;
+    };
     switch (r.move) {
       case 'run': {
         const amp = Math.min(1.12, s * 0.95), k = Math.min(1, s);
-        stride(ph, amp, 1.05 * amp);
+        // (from a jog up, keyed to the feet; the two crossfaded so going through 2 m/s isn't a jump)
+        const gk = r.state === 'ground' ? sm(1.6, 2.6, r.speed) : 0;
+        if (gk < 1) stride(ph, amp, 1.05 * amp);
+        if (gk > 0) { const was = { ...p }; gait(amp, 0.9 * amp); if (gk < 1) for (const key of KEYS) p[key] = was[key] + (p[key] - was[key]) * gk; }
         p.elL = 0.2 * (1 - k) + p.elL * k; p.elR = 0.2 * (1 - k) + p.elR * k;
         // (low and driving at pace, pitched well forward from the ankles, the head up to see where it's going)
         p.spine = 0.06 + 0.12 * s; p.lean = Math.min(0.58, 0.1 * k + 0.28 * s); p.head = -0.3 * s; both('spread', 0.1);
+        // (the legs posed against the upright, not the leaning pelvis: the lean taken back out of them)
+        p.hipL += p.lean * gk; p.hipR += p.lean * gk;
         break;
       }
       case 'dash': {
         // (flat out: far over the front foot, the arms swept back and still)
-        stride(ph, 1.22, 0);
+        if (r.state === 'ground' && r.speed > 2) gait(1.15, 0); else stride(ph, 1.22, 0);
         p.shL = p.shR = -1.15; both('el', 0.12); both('spread', 0.32); p.twist *= 0.4;
         p.lean = 0.56; p.spine = 0.16; p.head = -0.5;
+        if (r.state === 'ground' && r.speed > 2) { p.hipL += p.lean; p.hipR += p.lean; }
         break;
       }
       case 'ledge': {
@@ -192,7 +225,8 @@ export class Rig {
       }
       case 'spring': {
         // (straight up off both feet, long, the arms thrown up; knees to the chest over the top; then down, feet apart)
-        const m = mixes([1 - sm(0.3, 0.5, u), sm(0.3, 0.5, u) * (1 - sm(0.68, 0.88, u)), sm(0.68, 0.88, u)]);
+        // (long only as it leaves the ground, then knees to the chest)
+        const m = mixes([1 - sm(0.08, 0.3, u), sm(0.08, 0.3, u) * (1 - sm(0.68, 0.88, u)), sm(0.68, 0.88, u)]);
         legs(m(0.05, 1.55, 0.6), m(0.15, 2.0, 0.75), m(-0.3, 1.35, 0.45), m(0.35, 1.85, 0.6));
         p.shL = p.shR = m(0.35, 0.5, 0.2); both('el', m(0.1, 0.6, 0.25)); both('spread', m(2.65, 1.5, 1.2)); p.splay = m(0, 0.1, 0.3);
         p.spine = m(-0.2, 0.4, 0.1); p.lean = m(0.08, 0.2, 0.12); p.head = m(-0.3, 0.1, 0.25);
@@ -292,6 +326,9 @@ export class Rig {
     if (r.state === 'air' && r.near) { if (r.near > 0) { p.spreadL = Math.min(p.spreadL, 0.35); p.shL = Math.min(p.shL, 1.2); } else { p.spreadR = Math.min(p.spreadR, 0.35); p.shR = Math.min(p.shR, 1.2); } }
     // (the head leads: turned into a turn a beat before the hips, looking where it's going)
     p.look = Math.max(-0.6, Math.min(0.6, r.turn * 0.22));
+    // (whatever was added up, a knee bends no further than a knee does: a heel to the seat on the ground is ~140°, a tuck
+    // a little more)
+    { const most = r.state === 'ground' && r.move !== 'roll' ? 2.4 : 2.6; p.kneeL = Math.min(most, p.kneeL); p.kneeR = Math.min(most, p.kneeR); }
     // (hanging from one hand, swinging on under it: the body tipped by the swing)
     if (r.swing) p.tilt += Math.max(-0.5, Math.min(0.5, -r.swing * 0.12));
     // (off the ground: the arms driven up hard through the first instant, as if they threw it, by the effort behind it)
@@ -331,23 +368,34 @@ export class Rig {
     // with, not snapped to)
     // (getting ready for the ground: only ever further, within a flight)
     if (r.state === 'air') this.prep = Math.max(this.prep, r.ttc !== undefined && r.ttc < 9 ? 1 - sm(0.06, 0.38, r.ttc) : 0); else this.prep = 0;
-    if (dt > 0.2) this.ph = r.phase; else { let d = r.phase - this.ph; d -= Math.round(d / (2 * Math.PI)) * 2 * Math.PI; this.ph += d * (1 - Math.exp(-22 * dt)); }
-    const t = this.target(r, this.ph), w = r.state === 'ground' ? 30 : 20, c = 2 * 0.72 * w;
+    // (its steady advance followed exactly, so the limbs aren't late; only a jump (a re-timed footfall) eased out)
+    const wrap = (x: number) => x - Math.round(x / (2 * Math.PI)) * 2 * Math.PI;
+    if (dt > 0.2) this.ph = r.phase;
+    else { const step = wrap(r.phase - this.lastPhase); if (Math.abs(step) < 0.6) this.ph += step; this.ph += wrap(r.phase - this.ph) * (1 - Math.exp(-22 * dt)); }
+    this.lastPhase = r.phase;
+    const t = this.target(r, this.ph), w = r.state === 'ground' ? 45 : 20, c = 2 * 0.72 * w;
     if (dt > 0.2) { for (const key of KEYS) { this.pose[key] = t[key]; this.vel[key] = 0; } }
     else for (const key of KEYS) { this.vel[key] += ((t[key] - this.pose[key]) * w * w - this.vel[key] * c) * dt; this.pose[key] += this.vel[key] * dt; }
     this.stood += ((r.state === 'ground' ? 1 : 0) - this.stood) * (1 - Math.exp(-14 * dt));
     this.bank += (Math.max(-0.45, Math.min(0.45, r.turn * 0.06 * Math.min(1, r.speed / 8))) - this.bank) * (1 - Math.exp(-10 * dt));
-    this.aside += ((r.move === 'wallrun' ? -r.wallSide * 0.5 : 0) - this.aside) * (1 - Math.exp(-16 * dt));
+    this.aside += ((r.move === 'wallrun' ? -r.wallSide * 0.3 : 0) - this.aside) * (1 - Math.exp(-16 * dt));
     // (the hands: taken toward what they reach for, let go when there's nothing; a new hold is moved to, not jumped to)
     for (const [h, to] of [[this.hands.L, r.reach.hl], [this.hands.R, r.reach.hr]] as const) {
       if (to) { const e = h.w > 0.05 ? 1 - Math.exp(-32 * dt) : 1; for (let i = 0; i < 3; i++) h.p[i] += (to[i] - h.p[i]) * e; }
       h.w += ((to ? 1 : 0) - h.w) * (1 - Math.exp(-(to ? 22 : 14) * dt));
     }
     // (the feet: a footfall is where it is at once, and is left quickly)
-    for (const [f, to] of [[this.soles.L, r.reach.fl], [this.soles.R, r.reach.fr]] as const) {
-      if (to) f.p = [to[0], to[1], to[2]];
+    // (the swing leg brought onto the coming footfall over its last tenth of a second, so it's there as it lands, not
+    // snatched to it)
+    const nf = r.nextFoot;
+    for (const [f, to, side] of [[this.soles.L, r.reach.fl, 1], [this.soles.R, r.reach.fr, -1]] as const) {
+      if (!to && nf && nf.side === side && nf.t < 0.025 && Math.hypot(nf.p[0] - r.x, nf.p[2] - r.z) < 0.6 && Math.abs(nf.p[1] - r.y) < 0.35) { f.p = [nf.p[0], nf.p[1], nf.p[2]]; f.w = Math.max(f.w, 1 - nf.t / 0.025); continue; }
+      // (a new footfall is held afresh; one let go stays let go)
+      if (to && (!f.lost || Math.hypot(to[0] - f.p[0], to[1] - f.p[1], to[2] - f.p[2]) > 0.02)) { f.lost = false; f.p = [to[0], to[1], to[2]]; }
+      if (!to) f.lost = false;
+      const hold = to && !f.lost;
       // (taken up within a few frames: a running stance is under a tenth of a second)
-      f.w += ((to ? 1 : 0) - f.w) * (1 - Math.exp(-(to ? 140 : 26) * dt));
+      f.w += ((hold ? 1 : 0) - f.w) * (1 - Math.exp(-(hold ? (r.state === 'ground' ? 140 : 45) : 90) * dt));
     }
     if (r.reach.fl || r.reach.fr) this.on = r.reach.fn ?? [0, 1, 0];
     // (the hips: where the lower foot reaches the ground; in the air, where they'd be standing, so the feet come up to them)
@@ -357,7 +405,7 @@ export class Rig {
     const carry = striding ? (0.9 + 0.05 * Math.abs(Math.cos(this.ph))) * pace - 0.55 * Math.max(r.land, (r.load ?? 0) * (r.committed ? 0.95 : 0.8)) : 0;
     // (running: the hips lowest through a stance (the leg bending to take it), highest in the flight between, higher for a step
     // planned long or over clutter; low enough that a leg can hold its footfall from in front to behind)
-    const g = r.gait, stride = striding && g && pace > 0.4 ? (g.stance >= 0 ? 0.87 - 0.035 * pace * Math.sin(Math.PI * g.stance) : 0.87 + (0.04 + 0.05 * (r.stepLift ?? 0)) * pace * Math.sin(Math.PI * g.flight)) - 0.55 * Math.max(r.land, (r.load ?? 0) * (r.committed ? 0.95 : 0.8)) : -1;
+    const g = r.gait, stride = striding && g && pace > 0.4 ? (g.stance >= 0 ? 0.95 - 0.02 * pace * Math.sin(Math.PI * g.stance) : 0.95 + (0.035 + 0.05 * (r.stepLift ?? 0)) * pace * Math.sin(Math.PI * g.flight)) - 0.55 * Math.max(r.land, (r.load ?? 0) * (r.committed ? 0.95 : 0.8)) : -1;
     const ground = stride >= 0 ? stride : Math.max(carry, HIP + Math.max(leg(p.hipL, p.kneeL), leg(p.hipR, p.kneeR)) + SOLE) + (r.move === 'roll' ? 0.16 : 0);
     const hip = ground * this.stood + (0.98 - p.sink) * (1 - this.stood);
     this.hipY = r.state === 'ground' && r.move !== 'roll' ? Math.min(hip, 0.99 - 0.46 * r.land) : hip;
@@ -368,18 +416,45 @@ export class Rig {
       this.lastHip = hy; this.hipV = v;
       this.chestV += (-170 * this.chest - 15 * this.chestV - acc * 0.012) * dt; this.chest = Math.max(-0.45, Math.min(0.45, this.chest + this.chestV * dt));
     } else { this.lastHip = r.y + this.hipY; this.hipV = 0; this.chest = this.chestV = 0; }
+    // (a planted foot the leg can't reach from where the pose put the hips: the hips go to it (down, on the ground; toward
+    // the wall, on one), as far as a body would sink or lean to keep its footing; past that, the foot lets go rather than
+    // the leg being pulled out straight and the foot dragged off its footfall)
+    const want: V3 = [0, 0, 0], P0 = this.pelvis(r, [0, 0, 0]), fw = unit([P0[8], 0, P0[10]]);
+    for (const [f, side] of [[this.soles.L, 1], [this.soles.R, -1]] as const) {
+      if (f.w < 0.05) continue;
+      const s = point(P0, side * 0.095, -HIP, 0), fall: V3 = [f.p[0] + this.on[0] * SOLE, f.p[1] + this.on[1] * SOLE, f.p[2] + this.on[2] * SOLE];
+      const d = sub(fall, s), far = Math.hypot(d[0], d[1], d[2]), R = (THIGH + SHIN) * 0.97;
+      // (behind, the toe pivot gives the leg a heel's length more)
+      const behind = this.on[1] > 0.7 && d[0] * fw[0] + d[2] * fw[2] < 0 ? 0.1 : 0, over = far - R - behind;
+      if (over <= 0) continue;
+      const flat = this.on[1] > 0.7, most = flat ? 0.14 : 0.12;
+      let g: V3;
+      if (flat) { const h = Math.hypot(d[0], d[2]), v = -d[1], R2 = R + behind; g = [0, h < R2 ? -Math.max(0, v - Math.sqrt(R2 * R2 - h * h)) : -most, 0]; }
+      else g = [(d[0] / far) * over, (d[1] / far) * over, (d[2] / far) * over];
+      const gl = Math.hypot(g[0], g[1], g[2]);
+      if (gl > most) { g = [(g[0] * most) / gl, (g[1] * most) / gl, (g[2] * most) / gl]; }
+      // (still out of reach: let go)
+      if (over - Math.min(gl, most) > (flat ? 0.05 : 0.015) || far > 1.6) f.lost = true;
+      for (let i = 0; i < 3; i++) if (Math.abs(g[i] * f.w) > Math.abs(want[i])) want[i] = g[i] * f.w;
+    }
+    // (taken quickly, given back a little slower)
+    for (let i = 0; i < 3; i++) { const k = Math.abs(want[i]) > Math.abs(this.give[i]) ? 60 : 18; this.give[i] += (want[i] - this.give[i]) * (dt > 0.2 ? 1 : 1 - Math.exp(-k * dt)); }
+  }
+
+  private pelvis(r: Body, give: V3): M4 {
+    const p = this.pose, spin = r.move === 'flip' ? 2 * Math.PI * sm(0.08, 0.9, r.mu) : r.move === 'roll' ? 2 * Math.PI * sm(0, 1, r.mu) : 0;
+    const side = r.move === 'sideflip' ? (r.lead === 1 ? 1 : -1) * 2 * Math.PI * sm(0.08, 0.9, r.mu) : 0;
+    const round = r.move === 'vault' && r.palmSpin ? 2 * Math.PI * sm(0.15, 0.85, r.mu) * (r.lead === 1 ? -1 : 1) : 0;
+    const P = rotY(translate(ident(), r.x + give[0], r.y + give[1], r.z + give[2]), r.heading + round);
+    return rotZ(rotX(translate(P, this.aside, this.hipY, 0), p.lean + spin), this.bank + p.tilt + side);
   }
 
   /** The skeleton, placed in the world at the body. */
   bones(r: Body): Bone[] {
     const p = this.pose, out: Bone[] = [];
-    // (turned right over, forwards, through a flip or a roll)
-    const spin = r.move === 'flip' ? 2 * Math.PI * sm(0.08, 0.9, r.mu) : r.move === 'roll' ? 2 * Math.PI * sm(0, 1, r.mu) : 0;
-    // (over sideways, the lead leg's way; round on its hand, a palm spin)
-    const side = r.move === 'sideflip' ? (r.lead === 1 ? 1 : -1) * 2 * Math.PI * sm(0.08, 0.9, r.mu) : 0;
-    const round = r.move === 'vault' && r.palmSpin ? 2 * Math.PI * sm(0.15, 0.85, r.mu) * (r.lead === 1 ? -1 : 1) : 0;
-    let P = rotY(translate(ident(), r.x, r.y, r.z), r.heading + round);
-    P = rotZ(rotX(translate(P, this.aside, this.hipY, 0), p.lean + spin), this.bank + p.tilt + side);
+    // (turned right over, forwards, through a flip or a roll; over sideways, the lead leg's way; round on its hand, a palm
+    // spin; and carried toward a footfall it couldn't otherwise reach)
+    const P = this.pelvis(r, this.give);
     const add = (name: string, m: M4, y0: number, w0: number, d0: number, y1: number, w1: number, d1: number, zc = 0) => out.push({ name, m, y0, w0, d0, y1, w1, d1, zc });
     add('pelvis', P, -0.09, 0.26, 0.17, 0.1, 0.3, 0.18);
     const S = rotY(rotX(translate(P, 0, 0.1, 0), p.spine + this.chest), p.twist);

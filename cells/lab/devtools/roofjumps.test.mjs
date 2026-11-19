@@ -437,7 +437,7 @@ console.log('roofjumps: ok');
   TUNE.sprint = HOUSE.sprint;
   const mean = (a) => a.reduce((s, x) => s + x, 0) / a.length, step = mean(falls.slice(1).map((z, i) => z - falls[i])) / 2, cadence = r.speed / step;
   assert.ok(step > 2.1 && step < 2.5 && cadence > 4.2 && cadence < 4.9, `a sprinter's step (${step.toFixed(2)} m, ${cadence.toFixed(1)} a second)`);
-  assert.ok(mean(td) > 0.3 && mean(td) < 0.5 && mean(off) < -0.4, `down ahead, up behind (${mean(td).toFixed(2)}, ${mean(off).toFixed(2)})`);
+  assert.ok(mean(td) > 0.18 && mean(td) < 0.4 && mean(off) < -0.4, `down ahead, up behind (${mean(td).toFixed(2)}, ${mean(off).toFixed(2)})`);
   assert.ok(slid < 0.02 * falls.length, `a planted foot stays put (${slid.toFixed(3)} m slid over ${falls.length} footfalls)`);
   console.log(`stride: ${step.toFixed(2)} m a step, ${cadence.toFixed(1)}/s; down ${mean(td).toFixed(2)} ahead, up ${mean(off).toFixed(2)}; slid ${slid.toFixed(3)} m`);
 }
