@@ -5,8 +5,8 @@
 import { build } from 'esbuild';
 import assert from 'node:assert/strict';
 const lab = new URL('../client/roofjumps/', import.meta.url).pathname;
-const out = await build({ stdin: { contents: `export * from './city'; export * from './runner'; export * from './rig'; export * from './mesh'; export * from './plan'; export * from './tune';`, resolveDir: lab, loader: 'ts' }, bundle: true, write: false, format: 'esm', platform: 'node' });
-const { plan, foresee, TUNE, HOUSE, DIALS, City, Runner, Rig, CHUNK, STOREY, TAG, VERTEX, chunkMesh, figureMesh, FIGURE } = await import('data:text/javascript;base64,' + Buffer.from(out.outputFiles[0].text).toString('base64'));
+const out = await build({ stdin: { contents: `export * from './city'; export * from './runner'; export * from './rig'; export * from './mesh'; export * from './plan'; export * from './tune'; export * from './brush';`, resolveDir: lab, loader: 'ts' }, bundle: true, write: false, format: 'esm', platform: 'node' });
+const { plan, foresee, TUNE, HOUSE, DIALS, City, Runner, Rig, CHUNK, STOREY, TAG, VERTEX, chunkMesh, figureMesh, FIGURE, brushInput, BRUSH_SECONDS } = await import('data:text/javascript;base64,' + Buffer.from(out.outputFiles[0].text).toString('base64'));
 
 // the same chunk, whatever was made before it
 {
@@ -472,4 +472,30 @@ console.log('roofjumps: ok');
   const quick = again.filter((a) => a.room < 1.6);
   assert.ok(quick.length && quick.every((a) => a.contacts <= 1), `a lip close after a landing taken off the landing foot (${JSON.stringify(quick)})`);
   console.log(`run-up: ${fromFoot}/${takeoffs} off a planted foot ${mean(short).toFixed(2)} m short of the lip; last strides ${mean(stepsR).toFixed(2)} of a stride (least ${Math.min(...stepsR).toFixed(2)}); ${quick.length} quick lips each off one contact`);
+}
+
+// Standing and small moves (brush.ts): from a stand, light pushes every way and a turn round. Both feet are down at a stand;
+// a foot down stays where it was put (the body turning over it, the foot pivoting on its ball, stepped when it's left too
+// far); a foot stepping is lifted clear, not dragged; a light push walks, it doesn't sprint.
+{
+  const flat = { heightAt: () => 10, topAt: () => null, gripAt: () => null, holdsNear: () => [], boxesNear: () => [], regionsNear: () => [], regionAt: () => null, start: () => ({ x: 0, y: 10, z: 0 }) };
+  const r = new Runner(flat), rig = new Rig(); rig.update(1, r); const h0 = r.heading, prev = { L: null, R: null };
+  let onF = 0, slid = 0, dragF = 0, standF = 0, bothDown = 0, steps = 0, top = 0, still = 0; const was = [null, null];
+  for (let i = 0; i < BRUSH_SECONDS * 120; i++) {
+    const inp = brushInput(i / 120, h0); r.step(1 / 120, inp); rig.update(1 / 120, r); top = Math.max(top, r.speed);
+    const b = rig.bones(r);
+    for (const [s, key] of [['L', 'fl'], ['R', 'fr']]) {
+      const fm = b.find((o) => o.name === 'foot' + s).m, ball = [fm[12] + fm[8] * 0.13, fm[13], fm[14] + fm[10] * 0.13], v = prev[s] ? Math.hypot(ball[0] - prev[s][0], ball[2] - prev[s][2]) * 120 : 0;
+      if (r.reach[key]) { onF++; if (v > 0.3) slid++; } else if (fm[13] - 10 < 0.085 && v > 0.4) dragF++;
+      prev[s] = ball;
+    }
+    // (settled: a stand over half a second old, its one or two settling steps taken)
+    still = r.speed < 0.05 && !inp.x && !inp.z ? still + 1 / 120 : 0; if (still > 0.6) { standF++; if (r.reach.fl && r.reach.fr) bothDown++; }
+    const now = [r.reach.fl, r.reach.fr]; for (let k = 0; k < 2; k++) if (now[k] && (!was[k] || now[k][0] !== was[k][0] || now[k][2] !== was[k][2])) steps++; was[0] = now[0]; was[1] = now[1];
+  }
+  assert.ok(bothDown > standF * 0.9, `both feet down at a settled stand (${bothDown}/${standF})`);
+  assert.ok(slid < onF * 0.05, `a foot down stays put (${slid} of ${onF} frames moving)`);
+  assert.ok(dragF < 60, `a stepping foot lifted, not dragged (${dragF} frames)`);
+  assert.ok(steps >= 12 && top < 4.5, `small moves stepped, at a walk (${steps} footfalls; fastest ${top.toFixed(1)} m/s)`);
+  console.log(`standing and small moves: both feet down ${(100 * bothDown / standF).toFixed(0)}% of a stand; a foot down moving ${(100 * slid / onF).toFixed(1)}% of frames; ${dragF} frames dragged; ${steps} footfalls; fastest ${top.toFixed(1)} m/s`);
 }

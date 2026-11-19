@@ -230,6 +230,19 @@ From behind, the legs bent out to the sides: the feet were put under the hips (a
 
 Measured: on a flat roof with a gap at any point in the stride, every takeoff off a planted foot 0.5 m short of the lip, the last strides 1.1 of a stride (none under 0.92), and each lip that comes within 1.6 m of a landing taken off the landing foot. In directed runs two thirds of takeoffs are off a planned foot (`offFoot` in the eval; the rest are out of a stumble, from near a stand, or a late turn), the steps before a long gap 2.6 m against a sprinter's 2.3; the knee's fold off the ground eased in (it peaked past what a knee does, about 18 rad/s now), slide measured at the ball of the foot (the heel lifts about it), the toe's lift solved, not stepped (the ankle jumped 2 cm). Score 58.8 to 61.3, legs stretched 13.7% to 9.4%, nothing worse.
 
+**Standing and walking: the feet stay put and step.** Standing still and brushing the stick about showed it: below 2 m/s no foot was ever put down, so the feet slid over the roof at 2 to 7 m/s (a third of the frames they were near it); a light push was a sprint (3.7 m/s in a tenth of a second); and the body spun round on the spot (a right angle in 0.15 s). Now:
+
+- standing, both feet are down where they belong under the body (hip-width, the lead a little ahead); when the body turns or drifts so a foot is left too far from there, it's stepped back under, one foot at a time, lifted, carried and put down; coming to a stand, a step or two settles them;
+- a walk has both feet down for a while each step (more than half the stride a foot is down), opening into the run's flight by about 2.6 m/s; each step's time down is fixed by the step as planned, so slowing in it doesn't put a lifted foot back down; a foot left out of reach behind is taken up early, not dragged;
+- a stepping foot at a walk (or standing) is carried in an arc from where it left to where it'll land, lifted first, the same choice of where as the foot will make; at a run the swing's own pose carries it;
+- a foot down keeps pointing where it was put while the body turns over it; well off it, it pivots on its ball, as a foot does, about a foot's length at most, and then the body twists over it until it's stepped;
+- a light push walks (the stick's response curved: half-pressed is a third of the pace), getting going takes a moment, and going slowly the body turns as fast as its feet can be stepped round;
+- the body moves with them: a walk swings its arms; the hips sway over the foot that's down; turning, the head and then the shoulders go round toward the new way before the hips and feet; and at every pace the hips turn with the leading leg and the shoulders against them (they'd been turning with it, the wrong way).
+
+`?brush=1` films the standing study (brush.ts: from a stand, short light pushes aside, back, a diagonal, a turn right round, a walk); a test runs it: both feet down at a settled stand, a foot down moving in 3% of frames (from 21% when first put down, and every frame before), a stepping foot dragged in 36 frames of 8 s, the fastest 3.7 m/s. The cost: a start from a stand takes a beat, so directed runs stand a little longer (0.12 to 0.26 s in 40); foot slide 56 to 36 cm/s.
+
+**A cartwheel.** Some vaults taken slowly (under 7 m/s; every third one-handed vault) go over sideways on the hands instead: the hand on the side it turns to goes down on the edge first and the other after it, the body wheels right over about the line it's going (straight arms up to the hands, the legs wide and near straight), and gathers to come down on its feet.
+
 ## The dials (`tune.ts`, `palette.ts`)
 
 Every number worth turning, named, ranged, grouped, with a mark where the house keeps it (a
