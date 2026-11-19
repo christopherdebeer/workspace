@@ -300,7 +300,8 @@ export class Runner implements Body {
     if (this.rollT > 0) top = Math.min(sp, top);
     this.move = this.rollT > 0 ? 'roll' : this.dashT > 0 ? 'dash' : ledge ? 'ledge' : 'run';
     // (toward the wanted velocity, at a fixed rate: a turn is quick, a reversal a skid)
-    const tx = dx * top, tz = dz * top, ex = tx - this.vx, ez = tz - this.vz, e = Math.hypot(ex, ez), a = (this.rollT > 0 ? TUNE.accel * 0.3 : TUNE.accel) * dt;
+    // (while the legs are still taking a landing it drives less: the landing is a beat, and the burst comes out of it)
+    const tx = dx * top, tz = dz * top, ex = tx - this.vx, ez = tz - this.vz, e = Math.hypot(ex, ez), a = (this.rollT > 0 ? TUNE.accel * 0.3 : TUNE.accel * (1 - 0.6 * this.land)) * dt;
     if (e <= a) { this.vx = tx; this.vz = tz; } else { this.vx += (ex / e) * a; this.vz += (ez / e) * a; }
     sp = this.speed;
     this.phase += ((sp * dt) / (1.3 + 0.27 * sp)) * 2 * Math.PI;

@@ -3,9 +3,9 @@
 A figure running over an endless city of rooftops, in any direction, leaping whatever is in the
 way. Drag anywhere and it runs that way (the drag is a stick: further is faster). What it does
 about what is in front of it is its own, and it is not one jump: it hops clutter, bounds and
-flips across gaps, springs up a storey, dives down one and rolls out, glides the long ones,
-dashes off a clean landing, balances along ledges, runs along walls and up them. Tap to
-jump, and once more in the air (a flip). A second finger turns the eye. Keys: WASD or the arrows, space,
+flips across gaps, springs up a storey, dives down one and rolls out, falls and catches a lip,
+dashes off a clean landing, balances along ledges, runs along walls and climbs them hold to hold. Tap to
+jump, and once more in the air (a flip); hold (Space, or a touch held still) to glide. A second finger turns the eye. Keys: WASD or the arrows, space,
 Q and E.
 
 ![Over the roofs](roofjumps/v-run.jpg)
@@ -116,8 +116,10 @@ between, flat enough to keep its pace. Which move it throws is chosen by what is
 | bound | a gap at about this height | flat and fast, the legs split |
 | flip | an airborne second tap or a tall obstacle | tucked and turned over forwards |
 | spring | a storey up | steep, the arms thrown up, knees to the chest, a deep landing |
-| dive | a storey or two down | headfirst and flat, rolled out of |
-| glide | a long way across or down; any fall | the slow one: arms out, sinking gently, steerable |
+| dive | a storey or two down, however far | headfirst, arched out over the drop, folding into the roll |
+| fall | a leap that missed its landing | arms up and out, knees drawn up: catches a lip in reach, else lands and rolls |
+| glide | only while the jump is held | the slow one: arms out, sinking gently, steerable |
+| hang | on the way up a face | from a sill or a pipe: caught, loaded, sprung for the next hold |
 
 ![A glide](roofjumps/v-glide.jpg)
 ![A dive](roofjumps/v-dive.jpg)
@@ -131,11 +133,11 @@ On the ground it runs, sprints after a couple of seconds, bursts into a dash out
 a clean landing with room ahead, and balances along anything narrow (a rim, a wall across an
 alley), drawn onto its line if you are going its way.
 
-In the air a wall alongside is run along, tilted off it. Left to itself that is a shallow arc,
+A tall wall met at a slant at pace is stepped onto off one foot and run along, straight off the ground; in the air a wall alongside is run along, tilted off it. Left to itself that is a shallow arc,
 rising then sinking as gravity has it. Leaning into the wall drives it up the wall as it goes
 along: that is how height is gained, and it is paid for, in how long the run lasts and in pace
 along. It ends on the wall's top if it gets there. Away from the wall, or a jump, kicks off it:
-wall to wall down an alley. A grazing contact keeps speed along the face. A direct approach into a high wall can end in a brace. Tap on the approach to plant on it and reach for its lip. Small turns steer an aimed leap gently. A decisive turn gives full air control.
+wall to wall down an alley. A grazing contact keeps speed along the face. Pressed into a tall wall met near square, with a hold in reach, it goes for it after a beat, as a tap would (a tap goes at once): a foot planted on the face, the lip caught and pulled over. Its top out of reach, a sill or a pipe in reach is hung from, and the climb is a chain, as up a fire escape: caught, loaded (knees up, feet on the wall), sprung for the next hold, a storey a beat; pressing in goes again as soon as it's loaded, a tap goes at once, pressing away lets go. A wall with nothing in reach ends in a brace. Going up a storey costs pace; while the legs are still taking a landing it drives less, so a landing is a beat and the burst comes out of it. Small turns steer an aimed leap gently. A decisive turn gives full air control.
 
 The fixed-step suite checks surface contact, movement on open routes, planner agreement, and intentional jumps, wall contacts and landings on the transfer line.
 (`node cells/lab/devtools/roofjumps.test.mjs`).
@@ -261,9 +263,9 @@ over the same chunks and bones.
 
 ## Not yet
 
-Sloped roofs, ledges, planks and wires between buildings (everything is a box so far); vaults,
-slides; feet placed by IK; hands that reach what they vault; a pose for the kick off a wall;
-sound.
+Sloped roofs, ledges, planks and wires between buildings (everything is a box so far); stairs and
+rails to climb (the chain uses sills and pipes); slides; a pose for the kick off a wall; the
+wind-up's length set by the size of what's ahead (it is the depth that grows so far); sound.
 
 ## After
 
@@ -272,3 +274,22 @@ space): one take, close behind a figure who crosses low crowded rooftops over ra
 arms straight out in the air, then sinks down an alley to the street. What is taken from it is
 the eye (close behind, a little above, wide), the city's grain (low, dense, alleys you could
 touch both sides of) and the lightness (the glide). None of its look, on purpose.
+
+A second clip by the same hand (a figure up a zig-zag fire escape to a roof, one take, the eye wide
+and still) was studied frame by frame for movement and feel only. What it measured (24 fps):
+
+- **the sprint**: from a walk to full lean in about 0.4 s; pitched 35 to 40 degrees forward, low, a
+  long stride;
+- **a step up onto a ledge** (about 1.3 m) off one foot, knee driven, arms reaching: about 0.25 s
+  off the ground, and no stop on landing: two steps across, a deep load of about 0.1 s, and up;
+- **a storey of the climb**, about 1.1 s and nearly identical each time: three quick crouched steps
+  (0.45 s), a load (0.2 s), the body full length reaching for the rail above (0.2 s), a pull up into
+  a tuck (0.15 s), and straight on;
+- **the arrival**: a reach to the parapet, over it tucked, a deep crouch, then in about a second
+  down to an ordinary walk.
+
+What carries it: the body changing length (tucked, full stretch, tucked) in every jump; the wind-up
+as long as the action or longer, slow in and explosive out; a contact for every jump (a hand on a
+rail, a foot on a ledge), so the exaggeration is in height and pace while it stays grounded; a
+beat rather than a steady speed. From it: chains up a face, the bound's length changing through
+the flight, misses that fall and catch instead of gliding, the deeper wind-up, the landing beat.

@@ -93,7 +93,8 @@ export class Rig {
         const amp = Math.min(1.12, s * 0.95), k = Math.min(1, s);
         stride(r.phase, amp, 1.05 * amp);
         p.elL = 0.2 * (1 - k) + p.elL * k; p.elR = 0.2 * (1 - k) + p.elR * k;
-        p.spine = 0.05 + 0.12 * s; p.lean = 0.1 * k + 0.13 * s; p.head = -0.14 * s; both('spread', 0.1);
+        // (low and driving at pace, pitched well forward from the ankles, the head up to see where it's going)
+        p.spine = 0.06 + 0.12 * s; p.lean = Math.min(0.46, 0.1 * k + 0.24 * s); p.head = -0.3 * s; both('spread', 0.1);
         break;
       }
       case 'dash': {
@@ -139,11 +140,14 @@ export class Rig {
         break;
       }
       case 'bound': {
-        // (a split in the air: the front leg reaching, the back one left behind, the chest up; then the front leg down for the ground)
-        const w = sm(0, 0.3, u) * (1 - sm(0.72, 1, u)), d = sm(0.72, 1, u);
-        legs(0.45 + 1.0 * w + 0.25 * d, 0.5 - 0.35 * w - 0.2 * d, 0.1 - 1.25 * w, 0.9 - 0.45 * w + 0.4 * d);
-        arms(0.95 * w + 0.4, -1.1 * w - 0.2); both('el', 0.9); both('spread', 0.35); p.twist = (L ? -1 : 1) * 0.35 * w;
-        p.lean = 0.26 - 0.1 * w; p.spine = -0.22 * w; p.head = -0.1;
+        // (the body's length is the move: long off the ground (the drive knee up, the push leg straight out behind), gathered
+        // tight over the gap (both knees to the chest, the arms in), long again reaching for the far side (the lead leg out
+        // in front, the arms forward), then the legs under it for the ground)
+        const m = mixes([1 - sm(0.1, 0.28, u), sm(0.1, 0.28, u) * (1 - sm(0.45, 0.62, u)), sm(0.45, 0.62, u) * (1 - sm(0.8, 0.95, u)), sm(0.8, 0.95, u)]);
+        legs(m(1.05, 1.5, 1.25, 0.55), m(0.9, 2.0, 0.35, 0.6), m(-0.45, 1.2, 0.35, 0.3), m(0.4, 1.85, 1.0, 0.75));
+        arms(m(1.0, 0.6, 1.25, 0.5), m(-0.9, 0.3, 0.6, -0.3)); both('el', m(1.1, 1.6, 0.4, 0.8)); both('spread', m(0.3, 0.2, 0.45, 0.4));
+        p.twist = (L ? -1 : 1) * m(0.35, 0.05, 0.2, 0.1);
+        p.lean = m(0.35, 0.5, 0.15, 0.2); p.spine = m(0, 0.45, -0.15, 0.05); p.head = m(-0.2, 0.15, -0.2, -0.1);
         break;
       }
       case 'flip': {
@@ -164,10 +168,29 @@ export class Rig {
       }
       case 'dive': {
         // (headfirst and flat, the hands leading, the legs left out behind; folding at the end into the roll)
-        const f = sm(0, 0.3, u), t = sm(0.78, 1, u);
-        legs(-0.05 + 1.5 * t, 0.1 + 1.8 * t, -0.3 + 1.6 * t, 0.45 + 1.5 * t);
-        p.shL = p.shR = 2.85 - 0.9 * t; both('el', 0.1 + 0.9 * t); both('spread', 0.22);
-        p.lean = 0.3 + 1.05 * f + 0.25 * t; p.spine = -0.12 + 0.6 * t; p.head = -0.75 + 1.1 * t;
+        // (long off the edge, arched out over the drop and reaching further for the ground as it comes, then folding early
+        // into the roll: never one held shape)
+        const f = sm(0, 0.3, u), t = sm(0.66, 1, u), arch = sm(0.15, 0.45, u) * (1 - t);
+        legs(-0.05 - 0.25 * arch + 1.5 * t, 0.1 + 0.5 * arch + 1.8 * t, -0.3 - 0.2 * arch + 1.6 * t, 0.45 + 0.6 * arch + 1.5 * t);
+        p.shL = p.shR = 2.85 - 0.9 * t + 0.15 * arch; both('el', 0.1 + 0.9 * t); both('spread', 0.22 + 0.25 * arch);
+        p.lean = 0.3 + 1.05 * f + 0.25 * t; p.spine = -0.12 - 0.3 * arch + 0.6 * t; p.head = -0.75 - 0.2 * arch + 1.1 * t;
+        break;
+      }
+      case 'fall': {
+        // (coming down, not floating: the arms up and out for balance, the knees drawn up under it, ready to take the ground)
+        legs(1.1, 1.5, 0.75, 1.35); p.splay = 0.12;
+        p.shL = p.shR = 1.9; both('el', 0.5); both('spread', 1.05);
+        p.spine = 0.2; p.lean = 0.12; p.head = -0.15;
+        break;
+      }
+      case 'hang': {
+        // (from a hold on the way up a face: caught, the legs swinging in under it; loaded, knees to the chest, the feet on the
+        // wall; sprung, the whole body long, the arms up for the next; gathering a little as it comes to it)
+        const ph = r.chainPhase ?? 0;
+        if (ph === 0) { legs(0.35 + 0.3 * u, 0.5 + 0.4 * u, 0.2 + 0.3 * u, 0.6 + 0.3 * u); p.lean = -0.1; }
+        else if (ph === 1) { const k = sm(0, 1, u); legs(0.65 + 0.9 * k, 0.9 + 1.2 * k, 0.55 + 0.85 * k, 0.8 + 1.2 * k); p.lean = -0.1 - 0.15 * k; p.spine = 0.25 * k; }
+        else { const g = sm(0.55, 1, u); legs(-0.05 + 0.8 * g, 0.1 + 1.0 * g, -0.2 + 0.7 * g, 0.25 + 0.9 * g); p.lean = 0.05 - 0.15 * g; p.spine = -0.2 + 0.3 * g; }
+        p.shL = p.shR = 2.9; both('el', 0.3); both('spread', 0.15); p.head = -0.4;
         break;
       }
       case 'glide': {
@@ -199,7 +222,7 @@ export class Rig {
     if (r.wallPlant) {
       legs(1.25, 1.55, -0.35, 0.65); arms(2.4, 1.8); p.lean = 0.22;
     }
-    if (r.state === 'climb') {
+    if (r.state === 'climb' && r.move === 'climb') {
       const pull = sm(0.1, 0.8, u);
       legs(0.65 + pull, 1.3, -0.1, 0.65);
       arms(2.8 - pull * 2, 2.8 - pull * 2); p.lean = -0.23 + pull * 0.75;
@@ -209,7 +232,8 @@ export class Rig {
       p.shL -= 1.3 * load; p.shR -= 1.3 * load; p.lean += 0.16 * load;
     }
     // (a landing's weight: down into the legs, the feet apart, the arms out and back)
-    const c = r.state === 'ground' && r.move !== 'roll' ? Math.max(r.land, (r.load ?? 0) * (r.committed ? 0.95 : 0.48)) : 0;
+    // (the wind-up as deep as the landing: an automatic takeoff loads nearly as deep as a tapped one)
+    const c = r.state === 'ground' && r.move !== 'roll' ? Math.max(r.land, (r.load ?? 0) * (r.committed ? 0.95 : 0.8)) : 0;
     if (c > 0) {
       p.hipL += 1.05 * c; p.hipR += 1.05 * c; p.kneeL += 1.8 * c; p.kneeR += 1.8 * c; p.spine += 0.45 * c; p.splay += 0.22 * c;
       p.shL -= 0.45 * c; p.shR -= 0.45 * c; p.spreadL += 0.7 * c; p.spreadR += 0.7 * c; p.head -= 0.1 * c;
@@ -239,7 +263,7 @@ export class Rig {
     const p = this.pose, leg = (hip: number, knee: number) => THIGH * Math.cos(hip) * Math.cos(p.splay) + SHIN * Math.cos(hip - knee) * Math.cos(p.splay);
     // (but a run has its moment off the ground, both legs out: the hips don't drop into the split, they carry over it)
     const striding = r.move === 'run' || r.move === 'dash' || r.move === 'ledge', pace = Math.min(1, r.speed / 6);
-    const carry = striding ? (0.9 + 0.05 * Math.abs(Math.cos(r.phase))) * pace - 0.55 * Math.max(r.land, (r.load ?? 0) * (r.committed ? 0.95 : 0.48)) : 0;
+    const carry = striding ? (0.9 + 0.05 * Math.abs(Math.cos(r.phase))) * pace - 0.55 * Math.max(r.land, (r.load ?? 0) * (r.committed ? 0.95 : 0.8)) : 0;
     const ground = Math.max(carry, HIP + Math.max(leg(p.hipL, p.kneeL), leg(p.hipR, p.kneeR)) + SOLE) + (r.move === 'roll' ? 0.16 : 0);
     const hip = ground * this.stood + (0.98 - p.sink) * (1 - this.stood);
     this.hipY = r.state === 'ground' && r.move !== 'roll' ? Math.min(hip, 0.99 - 0.46 * r.land) : hip;
