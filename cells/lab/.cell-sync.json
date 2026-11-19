@@ -1,8 +1,8 @@
 {
   "cell": "c15r/lab",
   "cellId": "lab-8928acf3",
-  "treeVersion": "tree:764ae570d8a8c1de1ded0354ad92020edb6b22ef9250deb584ae9533b29c68b6",
-  "syncedAt": "2026-11-19T11:25:59.998Z",
+  "treeVersion": "tree:4d1981990ed6fc76d9e8daffe8aa6a59b09bbc3b658f9ce030025bf7852d9782",
+  "syncedAt": "2026-11-19T13:01:23.759Z",
   "files": {
     "README.md": "sha256:7f343237d183707fe06acca63d508a0f302fa9e678f1549d785e44a1016300d2",
     "client/autograph/autobiography.ts": "sha256:1aa72dbb927e6de87cdd920842be3b826ae520031f2589fadc9d4fe98abfbd67",
@@ -291,7 +291,7 @@
     "client/rescue/views.mjs": "sha256:f90e296628534eef143d98f57514519b4c3bdbe3611ecbf9ace37dbee890b0ec",
     "client/roofjumps/city.ts": "sha256:26ff14c2b93470574e4c2e141f6874ae3a99eb9cd79e2366105c2d648e24723d",
     "client/roofjumps/m4.ts": "sha256:0cbcc1823029dff2f5cfb25129112dd0637b4423ae4ad12e7e8e6ed1008f1632",
-    "client/roofjumps/main.ts": "sha256:bb4a06ca4056019f38d40e6d2cce213dd1bf1d3ced6030ae16490bba852a2bcb",
+    "client/roofjumps/main.ts": "sha256:063b00c7a9367fd2a4c1b63c2c1bc46e3e1d46e7f9d1e14faa5bba84273692d2",
     "client/roofjumps/mesh.ts": "sha256:89ef029653730128db416aafc898ab48fbca090a0d16083d94e30bb921813d2c",
     "client/roofjumps/palette.ts": "sha256:bf2f8fd9b5e29786769bc0a93fb50b894d4ee0ec7444f579123e63aa56205f03",
     "client/roofjumps/plan.ts": "sha256:6533d29da1a3bdf55cd160501d432dceef087ea5ac8fe983382e0e2e19f3808c",
@@ -1377,7 +1377,7 @@
     "static/rescue/views.json": "sha256:9ab7f9b55a5a3c5e53d49ea243ef995013446a4bb0f826d010e4238294633ba4",
     "static/rescue/views.md": "sha256:79b6ef95cd11b0c4c07d92171dd59f4dfec565534ac5051dba20e2e56e6fd30c",
     "static/roofjumps.html": "sha256:f2d18fa3077de3cc5945f23c1473298fb61b814d01ecff3c995bed6ca1ba3493",
-    "static/roofjumps.md": "sha256:9b28728a315f4231c184596d366ba3b5ecd4c6fac9e67300e64491ebaae9c615",
+    "static/roofjumps.md": "sha256:ea73d1109b24641675f8518c3c3539bbcbd661f29e7f4ae9033402625fe306b5",
     "static/roofjumps/v-above.jpg": "sha256:5cc00ca2aab09e11e00b18f659143f1eef8d6ac0f9666492d5f4587324102bd3",
     "static/roofjumps/v-dash.jpg": "sha256:dd4e020e985efad9f942bbc0ef54accf2846e21196c2e005b8018e60f862514e",
     "static/roofjumps/v-dials-leap.jpg": "sha256:4cfd962dd094a552671ec90d9b0de32c68190a48ac6c7dba62a0218e6974258c",
