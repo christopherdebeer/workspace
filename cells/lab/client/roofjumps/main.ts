@@ -128,6 +128,13 @@ const wantsPlan = () => !!(TUNE.plan || TUNE.readout || TUNE.assist > 0 || TUNE.
 
 /** what's asked: a direction on the ground (the stick's, turned from the screen's by the eye; or a wander's) */
 function asked(t: number): Input {
+  // (`takeoff=stand|step|run`, on the practice line: a scripted approach up the first roof and a tap, to film the takeoffs side
+  // by side: standing still, off a single step, at a run)
+  if (takeoff) {
+    const go = takeoff === 'stand' ? 0 : takeoff === 'step' ? 0.1 : 0.35, tapAt = go + 0.25;
+    const moving = takeoff !== 'stand' && t < tapAt + 1.5;
+    return { x: 0, z: moving ? (takeoff === 'step' ? 0.35 : 1) : 0, jump: Math.abs(t - tapAt) < 0.5 / 120 };
+  }
   if (TUNE.auto) {
     // (by itself: wandering, the heading a slow noise, drawn toward the city's own two directions: along its alleys, its walls, its ledges)
     const w = 7 * noise1(seed + 9, t * 0.06) + t * 0.04, a = w - 0.22 * Math.sin(4 * w);
@@ -197,6 +204,8 @@ function grid(cols: number, names: string[]): void {
 
 // ─── the frame ────────────────────────────────────────────────────────────────
 const DT = 1 / 120;
+/** `takeoff=`: a scripted takeoff to film (see `asked`) */
+const takeoff = q.get('takeoff');
 let time = 0, acc = 0, last = performance.now(), frames = 0, rush = 0, near = 1;
 const advance = (dt: number) => { runner.step(dt, input(time, dt)); rig.update(dt, runner); time += dt; };
 // (`t=`: run on to there before the first frame)
@@ -206,7 +215,7 @@ if (TUNE.auto && runner.speed > 1) yaw = Math.atan2(runner.vx, runner.vz);
 if (sheet) grid(MUS.length, sheet.flatMap((m) => MUS.map((u) => `${m} ${u}`)));
 if (q.has('strip')) {
   // (run on to there, then on from there a frame at a time, keeping each)
-  TUNE.auto = 1; strip = [];
+  if (!takeoff) TUNE.auto = 1; strip = [];
   const n = Math.max(1, Number(q.get('frames') ?? 24) | 0), every = Math.max(DT, Number(q.get('every') ?? 0.1));
   for (let i = Math.round(Number(q.get('strip')) / DT); i > 0; i--) advance(DT);
   for (let f = 0; f < n; f++) {
