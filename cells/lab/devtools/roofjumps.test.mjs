@@ -499,3 +499,31 @@ console.log('roofjumps: ok');
   assert.ok(steps >= 12 && top < 4.5, `small moves stepped, at a walk (${steps} footfalls; fastest ${top.toFixed(1)} m/s)`);
   console.log(`standing and small moves: both feet down ${(100 * bothDown / standF).toFixed(0)}% of a stand; a foot down moving ${(100 * slid / onF).toFixed(1)}% of frames; ${dragF} frames dragged; ${steps} footfalls; fastest ${top.toFixed(1)} m/s`);
 }
+
+// A hang, left alone and then pressed at a slant: caught on the practice line's wall, the legs swing in free, then both
+// feet are set on the wall and stay (no walking it), the arms near straight; a press toward the wall at a slant (not
+// straight at it) pulls over.
+{
+  const c = new Runner(new City(1, true)), rig = new Rig(); rig.update(1, c); let tapped = false, hangAt = -1, wall = null, moved = 0, setF = 0, still = 0, maxBend = 0, climbed = false;
+  const prev = { L: null, R: null };
+  for (let i = 0; i < 120 * 6; i++) {
+    const t = i / 120; let inp = { x: 1, z: 0.25, jump: false };
+    if (hangAt < 0) { const jump = !tapped && c.x > 34; tapped ||= jump; inp.jump = jump; }
+    else if (t - hangAt < 2) inp = { x: 0, z: 0, jump: false };
+    else { const tx = -wall[1], tz = wall[0], a = 0.35; inp = { x: wall[0] * a + tx * 0.94, z: wall[1] * a + tz * 0.94, jump: false }; }
+    c.step(1 / 120, inp); rig.update(1 / 120, c);
+    if (c.move === 'hang' && hangAt < 0) { hangAt = t; wall = [c.wx, c.wz]; }
+    if (c.move === 'climb' && hangAt >= 0) climbed = true;
+    if (hangAt >= 0 && t - hangAt > 0.6 && t - hangAt < 2 && c.move === 'hang') {
+      still++; if (c.reach.fl && c.reach.fr) setF++;
+      const b = rig.bones(c);
+      for (const s of ['L', 'R']) { const fm = b.find((o) => o.name === 'foot' + s).m, p = [fm[12], fm[13], fm[14]]; if (prev[s]) moved = Math.max(moved, Math.hypot(p[0] - prev[s][0], p[1] - prev[s][1], p[2] - prev[s][2])); prev[s] = p; }
+      const up = b.find((o) => o.name === 'upperArmL').m, fo = b.find((o) => o.name === 'foreArmL').m, ua = [-up[4], -up[5], -up[6]], fa = [-fo[4], -fo[5], -fo[6]];
+      maxBend = Math.max(maxBend, Math.acos(Math.max(-1, Math.min(1, ua[0] * fa[0] + ua[1] * fa[1] + ua[2] * fa[2]))) * 180 / Math.PI);
+    }
+  }
+  assert.ok(hangAt >= 0 && still > 100 && setF === still && moved < 0.01, `a still hang: both feet set on the wall and kept (${setF}/${still}; moved ${moved.toFixed(3)} m a frame)`);
+  assert.ok(maxBend < 25, `the arms near straight (${maxBend.toFixed(0)}°)`);
+  assert.ok(climbed, 'a press toward the wall at a slant pulls over');
+  console.log(`a still hang: feet set ${setF}/${still}, moved ${moved.toFixed(3)} m a frame, elbows ${maxBend.toFixed(0)}°; a slanted press pulls over`);
+}

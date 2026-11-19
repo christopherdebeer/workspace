@@ -243,6 +243,15 @@ Measured: on a flat roof with a gap at any point in the stride, every takeoff of
 
 **A cartwheel.** Some vaults taken slowly (under 7 m/s; every third one-handed vault) go over sideways on the hands instead: the hand on the side it turns to goes down on the edge first and the other after it, the body wheels right over about the line it's going (straight arms up to the hands, the legs wide and near straight), and gathers to come down on its feet.
 
+**Hanging, catching, loading, bearing weight.**
+
+- *A still hang* walked the wall: the feet kept being put down and lifted on it by the climb's own rhythm while the body hung there. Now, caught, the legs swing in free under the hands; once the swing's spent both feet are set on the wall and kept there (a cat hang), knees bent, arms straight, head up to the lip, and a pitch carried in from the flight is taken out at once (the head had been going into the wall). Pressing toward the wall at all pulls over (a slant counted as "along it" and let go); pressing away lets go.
+- *A lip within reach is caught, not just one met falling against it.* Before, a hand only went to a lip when the body came down against its wall; rising into it braced and slid, a wall run took over beneath it, and coming up short or dropping past it fell a storey. Now a lip within an arm's reach overhead (above the hips), beside the body, that it's heading for (going toward it, or asked to) and won't land on (rising, it won't clear it, or won't be over it when it comes back down; falling, it's below it) is caught, however the flight got there, unless it's falling too fast to hold. In directed runs: 20 catches to 82, missed lips (one in reach that it fell past) 41 to 27.
+- *A takeoff is a load and a release.* The wind-up bent both legs alike (a squat) and the body left still folded. Now the leg that's down takes it, the other drives its knee up and through, the chest drops over the foot; from a stand it's a real dip (a fifth of a second, the hips sinking over the planted feet, the arms swinging back), at a run a shallow one (the hips a little lower over the last steps, not a squat), deeper for a bigger jump; and the first tenth of a second in the air is explosive (the joints' springs as quick as on the ground), so the body opens long off the foot.
+- *The weight over the foot that bears it.* On one foot, the hips go over it (right over it walking or standing, or loading it to go; a little at a run) and the free side's hip lets down a touch. In the standing study the hips lean toward the bearing foot 83% of the time on one foot, always at a run.
+
+A test holds the hang (both feet set and still for the whole hang, elbows within 25°, a slanted press pulling over). Score 58.1 to 69.2, stall back to 0.18 s, nothing worse.
+
 ## The dials (`tune.ts`, `palette.ts`)
 
 Every number worth turning, named, ranged, grouped, with a mark where the house keeps it (a
