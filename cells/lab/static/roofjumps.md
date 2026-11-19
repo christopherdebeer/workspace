@@ -293,3 +293,8 @@ as long as the action or longer, slow in and explosive out; a contact for every 
 rail, a foot on a ledge), so the exaggeration is in height and pace while it stays grounded; a
 beat rather than a steady speed. From it: chains up a face, the bound's length changing through
 the flight, misses that fall and catch instead of gliding, the deeper wind-up, the landing beat.
+
+The clips, where they came from, and what's in them, segment by segment with our labels and timings,
+are recorded in `devtools/refs/roofjumps.json` (with the third clip's prompt, and a reading of how it
+directs movement, in `devtools/refs/README.md`); `node cells/lab/devtools/refs.mjs roofjumps` makes
+the frames again. The clips themselves are never committed.
