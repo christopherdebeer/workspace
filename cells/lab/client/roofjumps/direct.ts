@@ -76,14 +76,16 @@ export function measure(d: Directed): Measure {
   const city = new City(d.seed), r = new Runner(city), f: Follow = { i: 0, t: 0 }, DT = 1 / 120;
   const legs: Leg[] = [{ move: r.move, from: 0, x: r.x, y: r.y, z: r.z }], pts: number[] = [];
   let last = r.move, stall = 0, inside = 0, lo = r.y, hi = r.y, frames = 0, landings = 0, pops = 0, slid = 0, planted = 0, bodyIn = 0, limbIn = 0;
-  const rig = new Rig(); rig.update(1, r); let prev = { ...rig.pose }, feet: (number[] | null)[] = [null, null]; const ff: number[][] = [[0, 0, 0], [0, 0, 0]], held = [0, 0];
+  const rig = new Rig(); rig.update(1, r); let pm = r.move, prev = { ...rig.target(r) }, feet: (number[] | null)[] = [null, null]; const ff: number[][] = [[0, 0, 0], [0, 0, 0]], held = [0, 0];
   const deep = (p: number[]) => [[0, 0], [0.1, 0], [-0.1, 0], [0, 0.1], [0, -0.1]].every(([a, b]) => city.heightAt(p[0] + a, p[2] + b) > p[1] + 0.05);
   for (let i = 0; i < d.seconds / DT; i++) {
     const was = r.state; r.step(DT, follow(r, d.waypoints, f, DT)); frames++; if (was !== 'ground' && r.state === 'ground') landings++;
+    // (a snap: the pose asked for jumping more than 0.3 rad in a frame within one move (between moves the joints' springs
+    // carry it; within one, a jump is a discontinuity in how a move is drawn))
+    const tgt = rig.target(r) as unknown as Record<string, number>, pv = prev as unknown as Record<string, number>;
+    if (pm === r.move && Object.keys(tgt).some((k) => Math.abs(tgt[k] - pv[k]) > 0.3)) pops++;
+    prev = tgt as unknown as typeof prev; pm = r.move;
     rig.update(DT, r);
-    const pose = rig.pose as unknown as Record<string, number>, pv = prev as unknown as Record<string, number>;
-    if (Object.keys(pose).some((k) => Math.abs(pose[k] - pv[k]) > 0.25)) pops++;
-    prev = { ...rig.pose };
     const bones = rig.bones(r), at = (n: string, y = 0) => { const b = bones.find((o) => o.name === n)!; return point(b.m, 0, y, 0); };
     // (a planted foot: where its bone is, frame to frame, while the footfall stays the same)
     for (const [i, key] of [[0, 'fl'], [1, 'fr']] as const) {

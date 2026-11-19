@@ -419,3 +419,25 @@ console.log('roofjumps: ok');
   assert.ok(onIt < footfalls * 0.01 && adjusted > 10, `feet kept off ground detail (${onIt} of ${footfalls} footfalls on it; ${adjusted} adjusted, ${stutters} stutters)`);
   console.log(`ground detail ${JSON.stringify(kinds)}; ${onIt} of ${footfalls} footfalls on it; ${adjusted} steps adjusted, ${stutters} stutters`);
 }
+
+// The stride, on a flat roof at 10.5 m/s: a sprinter's step and cadence; the foot down 0.3-0.5 m ahead of the body and up
+// at least 0.4 m behind it, on its toe; and while it's down, it stays where it was put (no drag).
+{
+  const flat = { heightAt: () => 10, topAt: () => null, gripAt: () => null, holdsNear: () => [], boxesNear: () => [], regionsNear: () => [], regionAt: () => null, start: () => ({ x: 0, y: 10, z: 0 }) };
+  TUNE.sprint = 10.5; const r = new Runner(flat), rig = new Rig(); rig.update(1, r);
+  const falls = [], td = [], off = []; let prevOn = false, last = 0, slid = 0, held = 0, was = null;
+  for (let i = 0; i < 120 * 8; i++) {
+    r.step(1 / 120, { x: 0, z: 1, jump: false }); rig.update(1 / 120, r); if (i < 120 * 4) continue;
+    const on = !!r.reach.fl, foot = rig.bones(r).find((b) => b.name === 'footL').m;
+    if (on && !prevOn) { falls.push(r.reach.fl[2]); td.push(r.reach.fl[2] - r.z); held = 0; }
+    if (on) { if (++held > 4 && was) slid += Math.hypot(foot[12] - was[0], foot[14] - was[1]); last = foot[14] - r.z; }
+    if (!on && prevOn) off.push(last);
+    was = [foot[12], foot[14]]; prevOn = on;
+  }
+  TUNE.sprint = HOUSE.sprint;
+  const mean = (a) => a.reduce((s, x) => s + x, 0) / a.length, step = mean(falls.slice(1).map((z, i) => z - falls[i])) / 2, cadence = r.speed / step;
+  assert.ok(step > 2.1 && step < 2.5 && cadence > 4.2 && cadence < 4.9, `a sprinter's step (${step.toFixed(2)} m, ${cadence.toFixed(1)} a second)`);
+  assert.ok(mean(td) > 0.3 && mean(td) < 0.5 && mean(off) < -0.4, `down ahead, up behind (${mean(td).toFixed(2)}, ${mean(off).toFixed(2)})`);
+  assert.ok(slid < 0.02 * falls.length, `a planted foot stays put (${slid.toFixed(3)} m slid over ${falls.length} footfalls)`);
+  console.log(`stride: ${step.toFixed(2)} m a step, ${cadence.toFixed(1)}/s; down ${mean(td).toFixed(2)} ahead, up ${mean(off).toFixed(2)}; slid ${slid.toFixed(3)} m`);
+}
