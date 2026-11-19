@@ -420,24 +420,56 @@ console.log('roofjumps: ok');
   console.log(`ground detail ${JSON.stringify(kinds)}; ${onIt} of ${footfalls} footfalls on it; ${adjusted} steps adjusted, ${stutters} stutters`);
 }
 
-// The stride, on a flat roof at 10.5 m/s: a sprinter's step and cadence; the foot down 0.3-0.5 m ahead of the body and up
-// at least 0.4 m behind it, on its toe; and while it's down, it stays where it was put (no drag).
+// The stride, on a flat roof at 10.5 m/s: a sprinter's step and cadence; the foot down 0.2-0.4 m ahead of the body and up (its ball)
+// at least 0.3 m behind it, on its toe; and while it's down, it stays where it was put (no drag: the ball of the foot
+// still, the heel lifting about it).
 {
   const flat = { heightAt: () => 10, topAt: () => null, gripAt: () => null, holdsNear: () => [], boxesNear: () => [], regionsNear: () => [], regionAt: () => null, start: () => ({ x: 0, y: 10, z: 0 }) };
   TUNE.sprint = 10.5; const r = new Runner(flat), rig = new Rig(); rig.update(1, r);
   const falls = [], td = [], off = []; let prevOn = false, last = 0, slid = 0, held = 0, was = null;
   for (let i = 0; i < 120 * 8; i++) {
     r.step(1 / 120, { x: 0, z: 1, jump: false }); rig.update(1 / 120, r); if (i < 120 * 4) continue;
-    const on = !!r.reach.fl, foot = rig.bones(r).find((b) => b.name === 'footL').m;
+    const on = !!r.reach.fl, fm = rig.bones(r).find((b) => b.name === 'footL').m, foot = [...fm]; foot[12] += fm[8] * 0.13; foot[14] += fm[10] * 0.13; // (the ball of the foot: what stays put while the heel lifts)
     if (on && !prevOn) { falls.push(r.reach.fl[2]); td.push(r.reach.fl[2] - r.z); held = 0; }
-    if (on) { if (++held > 4 && was) slid += Math.hypot(foot[12] - was[0], foot[14] - was[1]); last = foot[14] - r.z; }
+    if (on && !rig.soles.L.lost) { if (++held > 4 && was) slid += Math.hypot(foot[12] - was[0], foot[14] - was[1]); last = foot[14] - r.z; }
     if (!on && prevOn) off.push(last);
     was = [foot[12], foot[14]]; prevOn = on;
   }
   TUNE.sprint = HOUSE.sprint;
   const mean = (a) => a.reduce((s, x) => s + x, 0) / a.length, step = mean(falls.slice(1).map((z, i) => z - falls[i])) / 2, cadence = r.speed / step;
   assert.ok(step > 2.1 && step < 2.5 && cadence > 4.2 && cadence < 4.9, `a sprinter's step (${step.toFixed(2)} m, ${cadence.toFixed(1)} a second)`);
-  assert.ok(mean(td) > 0.18 && mean(td) < 0.4 && mean(off) < -0.4, `down ahead, up behind (${mean(td).toFixed(2)}, ${mean(off).toFixed(2)})`);
+  assert.ok(mean(td) > 0.18 && mean(td) < 0.4 && mean(off) < -0.3, `down ahead, up behind (${mean(td).toFixed(2)}, ${mean(off).toFixed(2)})`);
   assert.ok(slid < 0.02 * falls.length, `a planted foot stays put (${slid.toFixed(3)} m slid over ${falls.length} footfalls)`);
   console.log(`stride: ${step.toFixed(2)} m a step, ${cadence.toFixed(1)}/s; down ${mean(td).toFixed(2)} ahead, up ${mean(off).toFixed(2)}; slid ${slid.toFixed(3)} m`);
+}
+
+// The run-up: a takeoff is a footfall. Wherever the gap falls in the stride, the steps to it are fitted so the takeoff
+// foot comes down just short of the lip and the jump goes off it; the strides open into it (lengthened, not chopped);
+// and a landing close to the next lip goes again off the foot it came down on.
+{
+  const gaps = (E, G, K, G2) => ({ heightAt: (x, z) => (z >= E && z < E + G) || (z >= E + G + K && z < E + G + K + G2) ? 0 : 10, topAt: () => null, gripAt: () => null, holdsNear: () => [], boxesNear: () => [], regionsNear: () => [], regionAt: () => null, start: () => ({ x: 0, y: 10, z: 0 }) });
+  const short = [], stepsR = [], again = []; let fromFoot = 0, takeoffs = 0;
+  for (let E = 30; E < 32.4; E += 0.2) {
+    const K = 1.6 + (E - 30), r = new Runner(gaps(E, 3, K, 2.5)); let falls = [], was = [null, null], prev = [null, null], landed = -1, landFalls = 0;
+    for (let i = 0; i < 120 * 7; i++) {
+      const s0 = r.state, sp0 = r.speed; r.step(1 / 120, { x: 0, z: 1, jump: false });
+      if (s0 === 'ground' && r.state === 'air' && r.vy > 0) {
+        const on = [prev[0], prev[1]].filter(Boolean), lip = r.z < E ? E : E + 3 + K;
+        if (r.z < E) { takeoffs++; if (on.length) { fromFoot++; short.push(lip - Math.max(...on.map((p) => p[2]))); }
+          const L = 0.55 + 0.17 * sp0, st = falls.slice(-3).map((z, k, a) => k ? z - a[k - 1] : null).filter((x) => x !== null); for (const x of st) stepsR.push(x / L); }
+        else if (landed >= 0) again.push({ contacts: landFalls, room: lip - landed });
+      }
+      if (s0 === 'air' && r.state === 'ground') { landed = r.z; landFalls = 0; }
+      const now = [r.reach.fl, r.reach.fr];
+      for (let k = 0; k < 2; k++) if (now[k] && r.state === 'ground' && (!was[k] || now[k][2] !== was[k][2])) { falls.push(now[k][2]); if (landed >= 0) landFalls++; }
+      prev = now; was = now;
+      if (r.z > E + 3 + K + 6) break;
+    }
+  }
+  const mean = (a) => a.reduce((s, x) => s + x, 0) / a.length;
+  assert.ok(fromFoot === takeoffs && Math.max(...short) < 2 && Math.min(...short) > 0, `off a planted foot, short of the lip (${fromFoot}/${takeoffs}; ${Math.min(...short).toFixed(2)}–${Math.max(...short).toFixed(2)} m)`);
+  assert.ok(mean(stepsR) >= 1 && Math.min(...stepsR) > 0.75, `the last strides opened, not chopped (${mean(stepsR).toFixed(2)} of a stride, least ${Math.min(...stepsR).toFixed(2)})`);
+  const quick = again.filter((a) => a.room < 1.6);
+  assert.ok(quick.length && quick.every((a) => a.contacts <= 1), `a lip close after a landing taken off the landing foot (${JSON.stringify(quick)})`);
+  console.log(`run-up: ${fromFoot}/${takeoffs} off a planted foot ${mean(short).toFixed(2)} m short of the lip; last strides ${mean(stepsR).toFixed(2)} of a stride (least ${Math.min(...stepsR).toFixed(2)}); ${quick.length} quick lips each off one contact`);
 }

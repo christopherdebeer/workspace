@@ -64,14 +64,14 @@ export class Rig {
   pose = zero();
   /** each joint's speed toward its pose; and the chest's lag behind the hips (rad) and its speed, the hips' last height
    * and speed: weight */
-  private vel = zero(); private ph = 0; private lastPhase = 0; private toe = [0, 0];
+  private vel = zero(); private ph = 0; private lastPhase = 0; toe = [0, 0];
   /** how far a flight has got ready for the ground: it only goes on, so the ground falling away beneath (over an edge) never
    * unfolds it */
   private prep = 0; private chest = 0; private chestV = 0; private lastHip = 1; private hipV = 0;
   /** 1 on the ground, 0 off it, eased: where the hips ride */
   private stood = 1;
   private hipY = 1;
-  private bank = 0;
+  bank = 0;
   private aside = 0;
   /** the pelvis carried toward a footfall the leg couldn't otherwise reach (world, m) */
   give: V3 = [0, 0, 0];
@@ -113,8 +113,9 @@ export class Rig {
       const leg = (off: number) => {
         const c = ((((ph + off - F) % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI)) / (2 * Math.PI);
         if (c < sd) { const s = c / sd; return { hip: (0.42 - 0.95 * s) * amp, knee: 0.35 + 0.45 * Math.sin(Math.PI * s) }; }
-        // (the fold begins at once off the ground (the heel coming up as the toe leaves), deepest two fifths through)
-        const w = (c - sd) / (1 - sd), x = Math.min(1, w / 0.4), fold = (1 - (1 - x) * (1 - x)) * (1 - sm(0.4, 0.92, w));
+        // (the fold eased in off the ground (the heel coming up as the toe leaves, as fast as a knee does), deepest two fifths
+        // through)
+        const w = (c - sd) / (1 - sd), fold = sm(0, 0.42, w) * (1 - sm(0.42, 0.92, w));
         // (driven through, then pawed back to where the stance takes it from: the thigh lands where the stance starts)
         const hip = (-0.53 + 1.6 * sm(0.05, 0.72, w) - 0.65 * sm(0.72, 1, w)) * amp;
         // (folded heel toward the seat at speed, but no tighter than a sprinter's ~130°)
@@ -125,6 +126,8 @@ export class Rig {
       p.shL = pump * b.hip / Math.max(0.3, amp); p.shR = pump * a.hip / Math.max(0.3, amp);
       p.elL = 1.45 + 0.3 * (b.hip / Math.max(0.3, amp)); p.elR = 1.45 + 0.3 * (a.hip / Math.max(0.3, amp));
       p.twist = -0.28 * (a.hip - b.hip) / 2;
+      // (the legs set a little in from the hips, so the feet come down near the line the body runs on, as a runner's do)
+      p.splay = -0.07;
     };
     switch (r.move) {
       case 'run': {
@@ -326,9 +329,6 @@ export class Rig {
     if (r.state === 'air' && r.near) { if (r.near > 0) { p.spreadL = Math.min(p.spreadL, 0.35); p.shL = Math.min(p.shL, 1.2); } else { p.spreadR = Math.min(p.spreadR, 0.35); p.shR = Math.min(p.shR, 1.2); } }
     // (the head leads: turned into a turn a beat before the hips, looking where it's going)
     p.look = Math.max(-0.6, Math.min(0.6, r.turn * 0.22));
-    // (whatever was added up, a knee bends no further than a knee does: a heel to the seat on the ground is ~140°, a tuck
-    // a little more)
-    { const most = r.state === 'ground' && r.move !== 'roll' ? 2.4 : 2.6; p.kneeL = Math.min(most, p.kneeL); p.kneeR = Math.min(most, p.kneeR); }
     // (hanging from one hand, swinging on under it: the body tipped by the swing)
     if (r.swing) p.tilt += Math.max(-0.5, Math.min(0.5, -r.swing * 0.12));
     // (off the ground: the arms driven up hard through the first instant, as if they threw it, by the effort behind it)
@@ -357,6 +357,9 @@ export class Rig {
       p.hipL += 1.05 * c; p.hipR += 1.05 * c; p.kneeL += 1.8 * c; p.kneeR += 1.8 * c; p.spine += 0.45 * c; p.splay += 0.22 * c;
       p.shL -= 0.45 * c; p.shR -= 0.45 * c; p.spreadL += 0.7 * c; p.spreadR += 0.7 * c; p.head -= 0.1 * c;
     }
+    // (whatever was added up, a knee bends no further than a knee does: a heel to the seat on the ground is ~140°, a tuck
+    // a little more)
+    { const most = r.state === 'ground' && r.move !== 'roll' ? 2.4 : 2.6; p.kneeL = Math.min(most, p.kneeL); p.kneeR = Math.min(most, p.kneeR); }
     return p;
   }
 
@@ -405,7 +408,7 @@ export class Rig {
     const carry = striding ? (0.9 + 0.05 * Math.abs(Math.cos(this.ph))) * pace - 0.55 * Math.max(r.land, (r.load ?? 0) * (r.committed ? 0.95 : 0.8)) : 0;
     // (running: the hips lowest through a stance (the leg bending to take it), highest in the flight between, higher for a step
     // planned long or over clutter; low enough that a leg can hold its footfall from in front to behind)
-    const g = r.gait, stride = striding && g && pace > 0.4 ? (g.stance >= 0 ? 0.95 - 0.02 * pace * Math.sin(Math.PI * g.stance) : 0.95 + (0.035 + 0.05 * (r.stepLift ?? 0)) * pace * Math.sin(Math.PI * g.flight)) - 0.55 * Math.max(r.land, (r.load ?? 0) * (r.committed ? 0.95 : 0.8)) : -1;
+    const g = r.gait, stride = striding && g && pace > 0.4 ? (g.stance >= 0 ? 0.95 - 0.02 * pace * Math.sin(Math.PI * g.stance) : 0.95 + Math.min(0.16, 1.6 * (r.bounce ?? 0.03)) * pace * Math.sin(Math.PI * g.flight)) - 0.55 * Math.max(r.land, (r.load ?? 0) * (r.committed ? 0.95 : 0.8)) : -1;
     const ground = stride >= 0 ? stride : Math.max(carry, HIP + Math.max(leg(p.hipL, p.kneeL), leg(p.hipR, p.kneeR)) + SOLE) + (r.move === 'roll' ? 0.16 : 0);
     const hip = ground * this.stood + (0.98 - p.sink) * (1 - this.stood);
     this.hipY = r.state === 'ground' && r.move !== 'roll' ? Math.min(hip, 0.99 - 0.46 * r.land) : hip;
@@ -496,7 +499,11 @@ export class Rig {
         let toe = 0;
         { const fw = unit([P[8], 0, P[10]]); if (Math.hypot(fall[0] - s[0], fall[1] - s[1], fall[2] - s[2]) > most && (fall[0] - s[0]) * fw[0] + (fall[2] - s[2]) * fw[2] < 0) {
           const ball: V3 = [fall[0] + fw[0] * 0.13, fall[1], fall[2] + fw[2] * 0.13];
-          for (let th = 0.15; th <= 1.2; th += 0.15) { const c: V3 = [ball[0] - fw[0] * 0.13 * Math.cos(th), ball[1] + 0.13 * Math.sin(th), ball[2] - fw[2] * 0.13 * Math.cos(th)]; toe = th; fall[0] = c[0]; fall[1] = c[1]; fall[2] = c[2]; if (Math.hypot(c[0] - s[0], c[1] - s[1], c[2] - s[2]) <= most) break; } } }
+          // (the heel lifted just as far as it has to: solved, not stepped, so the ankle doesn't jump)
+          const at = (th: number): V3 => [ball[0] - fw[0] * 0.13 * Math.cos(th), ball[1] + 0.13 * Math.sin(th), ball[2] - fw[2] * 0.13 * Math.cos(th)];
+          const far = (th: number) => { const c = at(th); return Math.hypot(c[0] - s[0], c[1] - s[1], c[2] - s[2]); };
+          let lo = 0, hi = 1.2; if (far(hi) > most) lo = hi; else for (let k = 0; k < 14; k++) { const m = (lo + hi) / 2; if (far(m) > most) lo = m; else hi = m; }
+          toe = Math.max(lo, hi === 1.2 && lo === 1.2 ? 1.2 : hi); const c = at(toe); fall[0] = c[0]; fall[1] = c[1]; fall[2] = c[2]; } }
         this.toe[L ? 0 : 1] = toe;
         let to: V3 = [was[0] + (fall[0] - was[0]) * sole.w, was[1] + (fall[1] - was[1]) * sole.w, was[2] + (fall[2] - was[2]) * sole.w];
         let dir = sub(to, s), d = Math.hypot(dir[0], dir[1], dir[2]);
