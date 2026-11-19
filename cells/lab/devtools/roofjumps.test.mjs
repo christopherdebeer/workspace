@@ -268,3 +268,15 @@ console.log('roofjumps: ok');
   assert.ok(held.glided && !not.glided && !not.made.glide, 'it glides only with the jump held');
   console.log('glide: only held');
 }
+
+// Held at the top (apexHold): the flight pauses, then goes on as it was, so an aimed leap still lands where it meant to.
+{
+  const run = (hold) => {
+    TUNE.apexHold = hold; const r = new Runner(new City(1, true)); let falls = 0, held = 0;
+    for (let i = 0; i < 480; i++) { const y = r.y, st = r.state; r.step(1 / 120, { x: 0, z: 1, jump: false }); if (st === 'air' && r.state === 'air' && r.y === y && r.vy <= 0) held++; if (r.move === 'fall') falls++; }
+    TUNE.apexHold = HOUSE.apexHold; return { made: { ...r.made }, falls, held };
+  };
+  const plain = run(0), held = run(0.15);
+  assert.ok(held.held > plain.held + 10 && held.made.bound && !held.falls, `a held top lands as aimed (${held.held} held steps, ${held.falls} falling)`);
+  console.log(`apex hold: ${held.held} steps held, lands as aimed`);
+}

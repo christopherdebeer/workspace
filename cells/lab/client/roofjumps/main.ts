@@ -59,6 +59,8 @@ rd.resize(); addEventListener('resize', () => rd.resize());
 const zoom = Math.max(0.2, Number(q.get('zoom') ?? 1));
 /** the eye's heading, and what a second finger has added to its height */
 let yaw = practiceLine ? 0 : 0.6, lift = TUNE.side ? -0.15 : 0;
+/** the eye by what's happening: out wide and steady for a climb, low for a sprint (0..1, eased) */
+let wideK = 0, lowK = 0;
 const eyeAt = { x: runner.x, y: runner.y, z: runner.z };
 
 // ─── the hand ─────────────────────────────────────────────────────────────────
@@ -227,16 +229,21 @@ const line = (name: string, r: Route | null, p: Plan) => (r ? `${r === p.best ? 
 
 /** the eye for a figure at (x, y, z) going `heading`: the matrix, and where the eye is (never inside a building: it
  * comes in along its own line to just short of whatever is between it and the figure, as far as `room` says, 0..1) */
-function eyeFor(x: number, y: number, z: number, heading: number, aspect: number, room: (at: (f: number) => number[]) => number) {
-  const dist = (TUNE.eyeDist * (aspect < 1 ? 1.22 : 1)) / zoom, fov = ((zoom > 1 ? 50 : TUNE.fov + (aspect < 1 ? 12 : 0)) + rush) * Math.PI / 180;
-  const pitch = Math.max(0.02, Math.min(1.45, (TUNE.eyePitch * Math.PI) / 180 + lift));
+function eyeFor(x: number, y: number, z: number, heading: number, aspect: number, room: (at: (f: number) => number[]) => number, wide = 0, low = 0) {
+  const dist = (TUNE.eyeDist * (aspect < 1 ? 1.22 : 1) * (1 + 0.6 * wide - 0.1 * low)) / zoom, fov = ((zoom > 1 ? 50 : TUNE.fov + (aspect < 1 ? 12 : 0)) + rush) * Math.PI / 180;
+  const pitch = Math.max(0.02, Math.min(1.45, ((TUNE.eyePitch + 12 * wide - 6 * low) * Math.PI) / 180 + lift));
   const ty = y + (zoom > 1 ? 0.95 : 1.7), c = Math.cos(pitch), ya = heading + (TUNE.side * Math.PI) / 180;
   const at = (f: number) => [x - Math.sin(ya) * c * dist * f, ty + Math.sin(pitch) * dist * f, z - Math.cos(ya) * c * dist * f];
   const far = room(at), eye = at(far);
   return { far, eye, vp: mul(perspective(fov, aspect, 0.15, rd.radius * 64 * 1.5), lookAt(eye, [x, ty, z], [0, 1, 0])) };
 }
 /** how far out the eye can be before something is in the way */
-const clearTo = (at: (f: number) => number[]) => { for (let f = 0.1; f <= 1.001; f += 0.1) { const p = at(f); if (city.heightAt(p[0], p[2]) > p[1] - 0.25) return Math.max(0.12, f - 0.1); } return 1; };
+const clearTo = (at: (f: number) => number[]) => {
+  // (along its line, and a little to either side of it: in an alley the walls beside the line are in the way too)
+  const o = at(0), q = at(1), lx = q[2] - o[2], lz = -(q[0] - o[0]), ll = Math.hypot(lx, lz) || 1, sx = (lx / ll) * 0.45, sz = (lz / ll) * 0.45;
+  for (let f = 0.1; f <= 1.001; f += 0.1) { const p = at(f); if ([0, 1, -1].some((k) => city.heightAt(p[0] + sx * k, p[2] + sz * k) > p[1] - 0.25)) return Math.max(0.12, f - 0.1); }
+  return 1;
+};
 const shadowAt = (x: number, y: number, z: number) => { const under = city.heightAt(x, z), h = Math.max(0, y - under); return { x, y: under, z, r: 0.5 * (1 - 0.4 * Math.min(1, h / 12)), a: 0.4 * (1 - 0.6 * Math.min(1, h / 20)) }; };
 
 /** A sheet: the canvas cut into cells, a picture in each. */
@@ -277,7 +284,11 @@ function frame(now: number): void {
   yaw += (k('KeyE') - k('KeyQ')) * 1.8 * dt;
   // (the eye: close behind the figure and a little above, wide, and round behind wherever it's going)
   const e = (r: number) => (still ? 1 : 1 - Math.exp(-r * dt));
-  eyeAt.x += (runner.x - eyeAt.x) * e(10); eyeAt.z += (runner.z - eyeAt.z) * e(10); eyeAt.y += (runner.y - eyeAt.y) * e(6);
+  // (by what it's doing: going up a face, out wider and higher and steadier, so the climb reads whole; flat out, lower)
+  const up = ['climb', 'plant', 'chimney'].includes(runner.state) ? 1 : 0, flat = runner.state === 'ground' && runner.speed > 12 ? 1 : 0;
+  wideK += (up - wideK) * e(2.5); lowK += (flat - lowK) * e(2);
+  const follow = 1 - 0.6 * wideK;
+  eyeAt.x += (runner.x - eyeAt.x) * e(10 * follow); eyeAt.z += (runner.z - eyeAt.z) * e(10 * follow); eyeAt.y += (runner.y - eyeAt.y) * e(6 * follow);
   if (TUNE.follow > 0 && !held && !others.size && !TUNE.pause && runner.speed > 2) {
     let d = Math.atan2(runner.vx, runner.vz) - yaw; d -= Math.round(d / (2 * Math.PI)) * 2 * Math.PI;
     yaw += d * Math.max(0, Math.cos(d / 2)) * TUNE.follow * (TUNE.auto ? 1.8 : 1) * TUNE.time * dt;
@@ -285,7 +296,7 @@ function frame(now: number): void {
   // (and wider the faster it goes)
   rush += ((held ? 0 : TUNE.rush * Math.max(0, Math.min(1, (runner.speed - 10) / 8))) - rush) * e(4);
   rd.resize();
-  const { vp, eye } = eyeFor(eyeAt.x, eyeAt.y, eyeAt.z, yaw, canvas.width / canvas.height, (at) => { const room = held ? 1 : clearTo(at); near += (room - near) * (room < near ? 1 : e(3)); return near; });
+  const { vp, eye } = eyeFor(eyeAt.x, eyeAt.y, eyeAt.z, yaw, canvas.width / canvas.height, (at) => { const room = held ? 1 : clearTo(at); near += (room - near) * (room < near ? 1 : e(3)); return near; }, held ? 0 : wideK, held ? 0 : lowK);
   rd.stream(runner.x, runner.z, 2);
   rd.draw(vp, eye, rig.bones(held ?? runner), shadowAt(runner.x, runner.y, runner.z));
   if (TUNE.holds && !held) rd.lines(vp, eye, holdStrokes(city.holdsNear(runner.x, runner.z, TUNE.holdsNear), runner.reach, runner.x, runner.y, runner.z, TUNE.holdsNear));

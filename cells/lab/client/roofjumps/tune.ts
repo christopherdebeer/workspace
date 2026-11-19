@@ -40,11 +40,12 @@ export const DIALS: Dial[] = [
   d('leap', 'leapSpeed', 'fastest leap', 8, 30, 0.5, 19, 'm/s'),
   d('leap', 'diveDrop', 'dives from', 0.5, 8, 0.1, 2, 'm down'),
   d('leap', 'hang', 'extra height', 0, 2, 0.05, 0, 'm'),
+  d('leap', 'apexHold', 'held at the top', 0, 0.3, 0.01, 0, 's'),
 
   d('glide', 'glideDrop', 'glides from', 2, 20, 0.5, 6, 'm down'),
   d('glide', 'glideDist', 'or across', 4, 25, 0.5, 11, 'm'),
   d('glide', 'glideGravity', 'gravity, gliding', 1, 20, 0.5, 8, 'm/s²'),
-  d('glide', 'sink', 'sinks at most', 2, 20, 0.5, 8.5, 'm/s'),
+  d('glide', 'sink', 'sinks at most', 2, 20, 0.5, 4.5, 'm/s'),
   d('glide', 'steer', 'steering in the air', 0, 40, 1, 16, 'm/s²'),
 
   t('wall', 'walls', 'runs along walls', 1),

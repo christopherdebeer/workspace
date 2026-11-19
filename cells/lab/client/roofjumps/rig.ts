@@ -150,6 +150,16 @@ export class Rig {
         p.lean = m(0.35, 0.5, 0.15, 0.2); p.spine = m(0, 0.45, -0.15, 0.05); p.head = m(-0.2, 0.15, -0.2, -0.1);
         break;
       }
+      case 'kick': {
+        // (off a wall: the pushing leg long behind toward it, the other knee driven up, the arms flung away from it, the body
+        // turned off it; then gathering to land)
+        const k = 1 - sm(0.35, 0.9, u);
+        legs(0.4 + 0.8 * k, 0.6 + 0.6 * k, 0.2 - 0.6 * k, 0.5 - 0.3 * k);
+        arms(0.6 + 0.6 * k, 0.2 - 0.5 * k); both('el', 0.5); p.spreadL = 0.5 + 0.9 * k; p.spreadR = 0.5 + 0.9 * k;
+        p.tilt = -r.wallSide * 0.35 * k; p.twist = -r.wallSide * 0.3 * k; p.lean = 0.15; p.spine = -0.1 * k; p.head = -0.15;
+        break;
+      }
+      case 'sideflip':
       case 'flip': {
         // (tucked tight and turned over forwards; opened out again to land)
         const t = sm(0.05, 0.3, u) * (1 - sm(0.78, 1, u));
@@ -179,7 +189,7 @@ export class Rig {
       case 'fall': {
         // (coming down, not floating: the arms up and out for balance, the knees drawn up under it, ready to take the ground)
         legs(1.1, 1.5, 0.75, 1.35); p.splay = 0.12;
-        p.shL = p.shR = 1.9; both('el', 0.5); both('spread', 1.05);
+        p.shL = p.shR = 0.35; both('el', 0.45); both('spread', 2.15);
         p.spine = 0.2; p.lean = 0.12; p.head = -0.15;
         break;
       }
@@ -204,9 +214,11 @@ export class Rig {
       }
       case 'glide': {
         // (the slow one: upright, the arms straight out, one knee a little raised, the other leg trailing)
-        legs(0.3, 0.75, -0.28, 0.2);
-        p.shL = p.shR = -0.12; both('el', 0.05); both('spread', 1.5);
-        p.spine = -0.1; p.lean = 0.26; p.head = -0.2;
+        // (sinking slowly, held: the arms straight out level, the legs long and together, a slow sway through it)
+        const sway = Math.sin((r.airT ?? 0) * 2.3);
+        legs(0.12, 0.18, 0.02, 0.22); p.splay = 0.04;
+        p.shL = p.shR = 0; both('el', 0.04); p.spreadL = 1.55 + 0.08 * sway; p.spreadR = 1.55 - 0.08 * sway;
+        p.tilt = 0.07 * sway; p.spine = -0.08; p.lean = 0.14; p.head = -0.25;
         break;
       }
       case 'climb': {
@@ -283,8 +295,11 @@ export class Rig {
     const p = this.pose, out: Bone[] = [];
     // (turned right over, forwards, through a flip or a roll)
     const spin = r.move === 'flip' ? 2 * Math.PI * sm(0.08, 0.9, r.mu) : r.move === 'roll' ? 2 * Math.PI * sm(0, 1, r.mu) : 0;
-    let P = rotY(translate(ident(), r.x, r.y, r.z), r.heading);
-    P = rotZ(rotX(translate(P, this.aside, this.hipY, 0), p.lean + spin), this.bank + p.tilt);
+    // (over sideways, the lead leg's way; round on its hand, a palm spin)
+    const side = r.move === 'sideflip' ? (r.lead === 1 ? 1 : -1) * 2 * Math.PI * sm(0.08, 0.9, r.mu) : 0;
+    const round = r.move === 'vault' && r.palmSpin ? 2 * Math.PI * sm(0.15, 0.85, r.mu) * (r.lead === 1 ? -1 : 1) : 0;
+    let P = rotY(translate(ident(), r.x, r.y, r.z), r.heading + round);
+    P = rotZ(rotX(translate(P, this.aside, this.hipY, 0), p.lean + spin), this.bank + p.tilt + side);
     const add = (name: string, m: M4, y0: number, w0: number, d0: number, y1: number, w1: number, d1: number, zc = 0) => out.push({ name, m, y0, w0, d0, y1, w1, d1, zc });
     add('pelvis', P, -0.09, 0.26, 0.17, 0.1, 0.3, 0.18);
     const S = rotY(rotX(translate(P, 0, 0.1, 0), p.spine), p.twist);
