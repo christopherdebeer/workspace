@@ -397,3 +397,23 @@ console.log('roofjumps: ok');
   assert.ok(one && both, 'a lip caught: the near hand first, then both');
   console.log(`saves: late ${late.foot.toFixed(2)} for ${late.err.toFixed(2)}, corrected ${corr.foot.toFixed(2)} for ${corr.err.toFixed(2)}; ${all.length} of ${landings} landings saved; wider for bigger (${mean(small).toFixed(2)} → ${mean(big).toFixed(2)}); near hand first`);
 }
+
+// Ground detail: roofs carry debris, clutter and skylights (on bare roof only); the feet are never put on them, the stride
+// fitted round them (a shorter or longer step; shortened before an edge, a stutter).
+{
+  const kinds = {}; let onIt = 0, footfalls = 0, adjusted = 0, stutters = 0;
+  const c0 = new City(3); for (let i = -1; i <= 1; i++) for (let j = -1; j <= 1; j++) for (const g of c0.chunk(i, j).regions) kinds[g.kind] = (kinds[g.kind] ?? 0) + 1;
+  assert.ok(kinds.debris > 10 && kinds.clutter > 5 && kinds.nogo > 0, `ground detail (${JSON.stringify(kinds)})`);
+  for (const seed of [1, 7]) for (let k = 0; k < 8; k++) {
+    const city = new City(seed), r = new Runner(city), a = (k / 8) * 2 * Math.PI + 0.1; let was = [null, null];
+    for (let i = 0; i < 120 * 30; i++) {
+      r.step(1 / 120, { x: Math.sin(a), z: Math.cos(a), jump: false });
+      const now = [r.reach.fl, r.reach.fr];
+      for (let f = 0; f < 2; f++) if (now[f] && r.state === 'ground' && (!was[f] || now[f][0] !== was[f][0] || now[f][2] !== was[f][2])) { footfalls++; if (city.regionAt(now[f][0], now[f][1], now[f][2])) onIt++; }
+      was = now;
+    }
+    adjusted += r.adjusted; stutters += r.stutters;
+  }
+  assert.ok(onIt < footfalls * 0.01 && adjusted > 10, `feet kept off ground detail (${onIt} of ${footfalls} footfalls on it; ${adjusted} adjusted, ${stutters} stutters)`);
+  console.log(`ground detail ${JSON.stringify(kinds)}; ${onIt} of ${footfalls} footfalls on it; ${adjusted} steps adjusted, ${stutters} stutters`);
+}

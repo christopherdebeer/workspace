@@ -25,7 +25,7 @@ export const STOREY = 3;
 /** the buckets a chunk's boxes are sorted into, for `heightAt` (m) */
 const CELL = 8, CELLS = CHUNK / CELL;
 
-export const TAG = { GROUND: 0, BUILDING: 1, STEP: 2, HUT: 3, UNIT: 4, TANK: 5, PLAYER: 6, RIM: 7, BEAM: 8, STAIR: 9, BAR: 10 } as const;
+export const TAG = { GROUND: 0, BUILDING: 1, STEP: 2, HUT: 3, UNIT: 4, TANK: 5, PLAYER: 6, RIM: 7, BEAM: 8, STAIR: 9, BAR: 10, DEBRIS: 11, CLUTTER: 12, SKYLIGHT: 13 } as const;
 export type Tag = (typeof TAG)[keyof typeof TAG];
 
 export interface Box { x0: number; z0: number; x1: number; z1: number; y0: number; y1: number; tag: Tag }
@@ -49,7 +49,14 @@ export interface Grip { hold: Hold; x: number; y: number; z: number; d: number }
 
 /** a chunk: its boxes (what's stood on, on the lattice), what's drawn but not stood on (`props`: the bars across alleys and
  * their posts, thin and off the lattice), the buckets for heightAt, the holds and theirs */
-export interface Chunk { cx: number; cz: number; boxes: Box[]; props: Box[]; cells: number[][]; holds: Hold[]; hcells: number[][] }
+/**
+ * Ground detail on a roof: not boxes to stand on (the surface is the roof's), but places the feet mind. Debris (rubble,
+ * loose tiles: a foot isn't put on it), clutter (pipe runs, vents, low curbs: stepped over, the knee high), no-go (a
+ * skylight, a fragile panel: never stood on). Drawn as thin props; asked of with `regionsNear`.
+ */
+export type RegionKind = 'debris' | 'clutter' | 'nogo';
+export interface Region { kind: RegionKind; x0: number; z0: number; x1: number; z1: number; y: number }
+export interface Chunk { cx: number; cz: number; boxes: Box[]; props: Box[]; cells: number[][]; holds: Hold[]; hcells: number[][]; regions: Region[] }
 
 const key = (cx: number, cz: number) => `${cx},${cz}`;
 
@@ -142,7 +149,23 @@ export class City {
       const c0 = Math.max(0, Math.floor((Math.min(h.az, h.bz) - oz) / CELL)), c1 = Math.min(CELLS - 1, Math.floor((Math.max(h.az, h.bz) - oz) / CELL));
       for (let a = a0; a <= a1; a++) for (let c = c0; c <= c1; c++) hcells[c * CELLS + a].push(i);
     });
-    return { cx, cz, boxes, props, cells, holds, hcells };
+    // (ground detail on the roofs, by its own dice: only where the roof is bare under all of it)
+    const regions: Region[] = [], gr = seeded(hash(this.seed, cx, cz, 97));
+    const bare = (x0: number, z0: number, x1: number, z1: number, y: number) => [[x0, z0], [x1 - 0.01, z0], [x0, z1 - 0.01], [x1 - 0.01, z1 - 0.01], [(x0 + x1) / 2, (z0 + z1) / 2]].every(([x, z]) => { let h = 0; for (const o of boxes) if (x >= o.x0 && x < o.x1 && z >= o.z0 && z < o.z1) h = Math.max(h, o.y1); return h === y; });
+    for (const b of blds) {
+      const w = b.x1 - b.x0, d = b.z1 - b.z0; if (w < 4 || d < 4) continue;
+      const place = (kind: RegionKind, sw: number, sd: number, tall: number, tag: Tag) => {
+        for (let k = 0; k < 4; k++) {
+          const x0 = b.x0 + 0.5 + gr() * (w - sw - 1), z0 = b.z0 + 0.5 + gr() * (d - sd - 1);
+          if (!bare(x0, z0, x0 + sw, z0 + sd, b.y1)) continue;
+          regions.push({ kind, x0, z0, x1: x0 + sw, z1: z0 + sd, y: b.y1 }); props.push({ x0, z0, x1: x0 + sw, z1: z0 + sd, y0: b.y1, y1: b.y1 + tall, tag }); return;
+        }
+      };
+      for (let n = Math.floor(gr() * 3); n > 0; n--) { const s = 0.8 + gr() * 1.6; place('debris', s, s * (0.6 + gr() * 0.8), 0.04, TAG.DEBRIS); }
+      if (gr() < 0.5) { const along = gr() < 0.5, l = 2 + gr() * Math.min(5, (along ? w : d) - 2); place('clutter', along ? l : 0.3, along ? 0.3 : l, 0.25, TAG.CLUTTER); }
+      if (gr() < 0.2) place('nogo', 1, 1.5, 0.15, TAG.SKYLIGHT);
+    }
+    return { cx, cz, boxes, props, cells, holds, hcells, regions };
   }
 
   /** the holds a chunk's boxes offer */
@@ -252,6 +275,19 @@ export class City {
     if (rand() < 0.35 && w * d >= 48) stand(3, 3, 3, TAG.HUT);
     for (let n = int(0, Math.min(3, Math.floor((w * d) / 20))); n > 0; n--) { const t = rand() < 0.5; stand(t ? 2 : 1, t ? 1 : 2, 1, TAG.UNIT); }
     if (rand() < 0.1) stand(2, 2, 3, TAG.TANK);
+  }
+
+  /** The ground detail with anything within `r` of (x, z). */
+  regionsNear(x: number, z: number, r: number): Region[] {
+    const out: Region[] = [];
+    for (let cx = Math.floor((x - r) / CHUNK); cx <= Math.floor((x + r) / CHUNK); cx++) for (let cz = Math.floor((z - r) / CHUNK); cz <= Math.floor((z + r) / CHUNK); cz++)
+      for (const g of this.chunk(cx, cz).regions) if (x + r > g.x0 && x - r < g.x1 && z + r > g.z0 && z - r < g.z1) out.push(g);
+    return out;
+  }
+  /** the ground detail at a point on a surface at height y, if any */
+  regionAt(x: number, y: number, z: number): Region | null {
+    for (const g of this.regionsNear(x, z, 0.01)) if (Math.abs(g.y - y) < 0.05 && x >= g.x0 && x < g.x1 && z >= g.z0 && z < g.z1) return g;
+    return null;
   }
 
   /** The boxes with anything within `r` of (x, z) (by the buckets they lie in): for a body's own extent against them. */

@@ -22,6 +22,8 @@ export interface Route {
   /** each move as it begins: which, at which point, where */
   legs: Leg[];
   made: number; streets: number; score: number;
+  /** how interesting it is, as a choreographer would judge it (see `interest`) */
+  interest: number;
 }
 
 const STEP = 1 / 120, KEEP = 3;
@@ -40,7 +42,34 @@ export function foresee(r: Runner, dx: number, dz: number, off = 0): Route {
     if (i % KEEP === 0 || i === n) { pts.push(g.x, g.y, g.z); moves.push(g.move); }
   }
   const made = (g.x - x0) * dx + (g.z - z0) * dz, streets = g.streets - streets0;
-  return { dx, dz, off, pts, moves, legs, made, streets, score: made - cost - TUNE.wStreet * streets };
+  const interest = choreo(legs, r.recent, pts);
+  return { dx, dz, off, pts, moves, legs, made, streets, interest, score: made - cost - TUNE.wStreet * streets + TUNE.wChoreo * interest };
+}
+
+/** what each move is worth to watch, before its novelty and its timing */
+export const WORTH: Partial<Record<Move, number>> = { bound: 1, spring: 1.5, dive: 1.5, vault: 1.5, hop: 0.8, flip: 2, sideflip: 2, wallrun: 2, chimney: 2.2, kick: 1, hang: 1.6, climb: 1, underbar: 2.5, glide: 0.5, roll: 0.4, fall: -2.5 };
+
+/**
+ * A route as a choreographer would judge it: each event worth what it is to watch, less if it's one of the last few again
+ * (a phrase repeated stops reading as a decision); spaced as a phrase is (an event too hard on the last is clutter, a long
+ * stretch of nothing is dead air); more for going up and down than for staying level; a fall worth less than nothing.
+ */
+export function choreo(legs: Leg[], recent: Move[], pts: number[]): number {
+  const seen = [...recent], t = (l: Leg) => l.from * KEEP * STEP;
+  let v = 0, lastT = 0, lastY = legs[0]?.y ?? 0, rise = 0;
+  for (const l of legs.slice(1)) {
+    const w = WORTH[l.move];
+    if (w === undefined) continue;
+    const again = seen.slice(-4).filter((m) => m === l.move).length;
+    const gap = t(l) - lastT;
+    // (spacing: under half a second after the last, crowded; past two and a half, dead air before it)
+    const spacing = gap < 0.5 ? 0.5 : gap > 2.5 ? 1 - Math.min(0.6, (gap - 2.5) * 0.3) : 1;
+    v += w > 0 ? (w / (1 + 0.8 * again)) * spacing : w;
+    rise += Math.abs(l.y - lastY); lastY = l.y; lastT = t(l); seen.push(l.move);
+  }
+  // (and the end of the horizon a long way after the last event: dead air)
+  const end = (pts.length / 3) * KEEP * STEP; if (end - lastT > 2.5) v -= Math.min(1, (end - lastT - 2.5) * 0.4);
+  return v + 0.15 * Math.min(10, rise);
 }
 
 export interface Plan { primary: Route; left: Route | null; right: Route | null; best: Route; all: Route[] }

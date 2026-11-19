@@ -36,6 +36,8 @@ import { palette } from './palette';
 import { plan, words } from './plan';
 import type { Plan, Route } from './plan';
 import { holdStrokes, planStrokes } from './plandraw';
+import { follow } from './direct';
+import type { Follow, Waypoint } from './direct';
 
 const q = new URLSearchParams(location.search);
 const seed = Number(q.get('seed') ?? 1) | 0 || 1, preview = q.has('preview'), still = q.has('still');
@@ -132,6 +134,8 @@ function asked(t: number): Input {
   // by side: standing still, off a single step, at a run)
   // (`catch=clean|late|correct`, on the practice line: a diagonal run to the first gap and the bound across it, three ways:
   // clean; turned late, just before the lip; corrected shallowly in the flight. To see where the save's foot goes)
+  // (`direct=x,z;x,z…`: a directed run (devtools/roofjumps-direct.mjs), its waypoints followed as the director followed them)
+  if (directed) return follow(runner, directed, directedAt, DT);
   if (catchStudy) {
     const r = runner, d = { x: 0.3, z: 0.95 };
     if (catchStudy === 'late' && r.z > 13.4 && r.state === 'ground' && r.z < 16) return { x: 0.55, z: 0.83, jump: false };
@@ -175,7 +179,7 @@ function input(t: number, dt: number): Input {
   const a = asked(t), mag = Math.hypot(a.x, a.z);
   if (wantsPlan() && (thought < 0 || t - thought >= 0.12)) think(a, t);
   // (by itself, all the way onto the plan; taken over, only as far as `assist` says, like any run of yours)
-  const by = takeoff || catchStudy ? 0 : TUNE.auto && !takenOver(t) ? 1 : TUNE.assist;
+  const by = takeoff || catchStudy || directed ? 0 : TUNE.auto && !takenOver(t) ? 1 : TUNE.assist;
   lean += ((thinking && by > 0 && mag > 0.1 ? thinking.best.off * by : 0) - lean) * (1 - Math.exp(-5 * dt));
   if (Math.abs(lean) < 1e-4 || mag <= 0.1) return a;
   // (to the right is a smaller angle: see plan.ts)
@@ -224,6 +228,7 @@ function grid(cols: number, names: string[]): void {
 const DT = 1 / 120;
 /** `takeoff=`: a scripted takeoff to film (see `asked`) */
 const takeoff = q.get('takeoff'), catchStudy = q.get('catch');
+const directed: Waypoint[] | null = q.get('direct') ? q.get('direct')!.split(';').map((p) => { const [x, z, a, s] = p.split(',').map(Number); return [x, z, a, s] as Waypoint; }) : null, directedAt: Follow = { i: 0, t: 0 };
 let time = 0, acc = 0, last = performance.now(), frames = 0, rush = 0, near = 1;
 const advance = (dt: number) => { runner.step(dt, input(time, dt)); rig.update(dt, runner); time += dt; };
 // (`t=`: run on to there before the first frame)
@@ -233,7 +238,7 @@ if (TUNE.auto && runner.speed > 1) yaw = Math.atan2(runner.vx, runner.vz);
 if (sheet) grid(MUS.length, sheet.flatMap((m) => MUS.map((u) => `${m} ${u}`)));
 if (q.has('strip')) {
   // (run on to there, then on from there a frame at a time, keeping each)
-  if (!takeoff && !catchStudy) TUNE.auto = 1; strip = [];
+  if (!takeoff && !catchStudy && !directed) TUNE.auto = 1; strip = [];
   const n = Math.max(1, Number(q.get('frames') ?? 24) | 0), every = Math.max(DT, Number(q.get('every') ?? 0.1));
   for (let i = Math.round(Number(q.get('strip')) / DT); i > 0; i--) advance(DT);
   for (let f = 0; f < n; f++) {
@@ -257,13 +262,16 @@ const line = (name: string, r: Route | null, p: Plan) => (r ? `${r === p.best ? 
 
 /** the eye for a figure at (x, y, z) going `heading`: the matrix, and where the eye is (never inside a building: it
  * comes in along its own line to just short of whatever is between it and the figure, as far as `room` says, 0..1) */
-function eyeFor(x: number, y: number, z: number, heading: number, aspect: number, room: (at: (f: number) => number[]) => number, wide = 0, low = 0) {
+function eyeFor(x: number, y: number, z: number, heading: number, aspect: number, room: (at: (f: number) => number[]) => number, wide = 0, low = 0, shake: number[] = [0, 0, 0, 0]) {
   const dist = (TUNE.eyeDist * (aspect < 1 ? 1.22 : 1) * (1 + 0.6 * wide - 0.1 * low)) / zoom, fov = ((zoom > 1 ? 50 : TUNE.fov + (aspect < 1 ? 12 : 0)) + rush) * Math.PI / 180;
   const pitch = Math.max(0.02, Math.min(1.45, ((TUNE.eyePitch + 12 * wide - 6 * low) * Math.PI) / 180 + lift));
   const ty = y + (zoom > 1 ? 0.95 : 1.7), c = Math.cos(pitch), ya = heading + (TUNE.side * Math.PI) / 180;
   const at = (f: number) => [x - Math.sin(ya) * c * dist * f, ty + Math.sin(pitch) * dist * f, z - Math.cos(ya) * c * dist * f];
-  const far = room(at), eye = at(far);
-  return { far, eye, vp: mul(perspective(fov, aspect, 0.15, rd.radius * 64 * 1.5), lookAt(eye, [x, ty, z], [0, 1, 0])) };
+  const far = room(at), e0 = at(far);
+  // (the eye's own motion (lope and impact): a shift of the eye across and up, a roll about its line, a narrowing of the lens)
+  const rx = Math.cos(ya), rz = -Math.sin(ya), eye = [e0[0] + rx * shake[0], e0[1] + shake[1], e0[2] + rz * shake[0]], roll = shake[2];
+  const up = [Math.sin(roll) * rx, Math.cos(roll), Math.sin(roll) * rz];
+  return { far, eye, vp: mul(perspective(fov - shake[3] * Math.PI / 180, aspect, 0.15, rd.radius * 64 * 1.5), lookAt(eye, [x, ty + shake[1] * 0.4, z], up)) };
 }
 /** how far out the eye can be before something is in the way */
 const clearTo = (at: (f: number) => number[]) => {
@@ -310,7 +318,7 @@ function frame(now: number): void {
   else if (stepOnce) { advance(DT); stepOnce = false; }
   else if (!still && !TUNE.pause) { acc += dt * TUNE.time; while (acc >= DT) { advance(DT); acc -= DT; } }
   // (a plan asked for while nothing moves: thought now)
-  if (!held && wantsPlan() && thought < 0) think(asked(time), time);
+  if (!held && !directed && wantsPlan() && thought < 0) think(asked(time), time);
   yaw += (k('KeyE') - k('KeyQ')) * 1.8 * dt;
   // (the eye: close behind the figure and a little above, wide, and round behind wherever it's going)
   const e = (r: number) => (still ? 1 : 1 - Math.exp(-r * dt));
@@ -318,9 +326,19 @@ function frame(now: number): void {
   const up = ['climb', 'plant', 'chimney'].includes(runner.state) ? 1 : 0, flat = runner.state === 'ground' && runner.speed > 12 ? 1 : 0;
   wideK += (up - wideK) * e(2.5); lowK += (flat - lowK) * e(2);
   const follow = 1 - 0.6 * wideK;
-  // (a hard landing, with the emphasis: the eye dips with it, and comes back)
-  const dip = TUNE.emphasis * runner.impact * 0.35 * Math.exp(-runner.impactT * 9) * Math.sin(Math.min(Math.PI, runner.impactT * 18));
-  eyeAt.x += (runner.x - eyeAt.x) * e(10 * follow); eyeAt.z += (runner.z - eyeAt.z) * e(10 * follow); eyeAt.y += (runner.y - dip - eyeAt.y) * e(6 * follow);
+  // (the eye's own motion, dialled from none (0) through full (1, a hand-held eye) to exaggerated (2). Lope: riding the stride,
+  // a bob on each footfall, a sway each stride, a roll into turns. Impact: a landing's dip, by how hard, a shake on a heavy
+  // one, a lurch on a short save; exaggerated, the lens punched in and the dip held)
+  const L = held ? 0 : TUNE.eyeLope, I = held ? 0 : TUNE.eyeImpact, ground = runner.state === 'ground' && runner.move !== 'roll', pace = Math.min(1, runner.speed / 8);
+  const bob = ground ? -L * (0.03 + 0.02 * Math.max(0, L - 1)) * pace * Math.cos(2 * runner.phase) : 0, sway = ground ? L * 0.025 * pace * Math.sin(runner.phase) : 0;
+  const roll = -L * Math.max(-0.12, Math.min(0.12, runner.turn * 0.025 * pace));
+  const it = runner.impactT, hit = runner.impact, hang = I > 1 ? (I - 1) * 0.08 : 0, te = Math.max(0, it - hang);
+  const dip = I * hit * 0.3 * (it < hang ? 1 : Math.exp(-te * 9)) * Math.sin(Math.min(Math.PI / 2 + (it < hang ? 0 : te * 18), Math.PI));
+  const shk = I * Math.max(0, hit - 0.5) * 0.08 * Math.exp(-it * 14), jx = shk * Math.sin(it * 71), jy = shk * Math.sin(it * 53 + 1);
+  const lurch = runner.saveKind === 'short' ? I * 0.12 * Math.exp(-(runner.saveT ?? 0) * 8) : 0, punch = I > 1 ? (I - 1) * 7 * hit * Math.exp(-it * 6) : 0;
+  const shakeV = [sway + jx, bob - dip * 0.3 + jy - lurch * 0.5, roll, punch];
+  const dipE = dip + TUNE.emphasis * hit * 0.35 * Math.exp(-it * 9) * Math.sin(Math.min(Math.PI, it * 18));
+  eyeAt.x += (runner.x - eyeAt.x) * e(10 * follow); eyeAt.z += (runner.z - eyeAt.z) * e(10 * follow); eyeAt.y += (runner.y - dipE - eyeAt.y) * e(6 * follow);
   if (TUNE.follow > 0 && !held && !others.size && !TUNE.pause && runner.speed > 2) {
     let d = Math.atan2(runner.vx, runner.vz) - yaw; d -= Math.round(d / (2 * Math.PI)) * 2 * Math.PI;
     yaw += d * Math.max(0, Math.cos(d / 2)) * TUNE.follow * (TUNE.auto ? 1.8 : 1) * TUNE.time * dt;
@@ -328,7 +346,7 @@ function frame(now: number): void {
   // (and wider the faster it goes)
   rush += ((held ? 0 : TUNE.rush * Math.max(0, Math.min(1, (runner.speed - 10) / 8))) - rush) * e(4);
   rd.resize();
-  const { vp, eye } = eyeFor(eyeAt.x, eyeAt.y, eyeAt.z, yaw, canvas.width / canvas.height, (at) => { const room = held ? 1 : clearTo(at); near += (room - near) * (room < near ? 1 : e(3)); return near; }, held ? 0 : wideK, held ? 0 : lowK);
+  const { vp, eye } = eyeFor(eyeAt.x, eyeAt.y, eyeAt.z, yaw, canvas.width / canvas.height, (at) => { const room = held ? 1 : clearTo(at); near += (room - near) * (room < near ? 1 : e(3)); return near; }, held ? 0 : wideK, held ? 0 : lowK, shakeV);
   rd.stream(runner.x, runner.z, 2);
   rd.draw(vp, eye, rig.bones(held ?? runner), shadowAt(runner.x, runner.y, runner.z));
   if (TUNE.holds && !held) rd.lines(vp, eye, holdStrokes(city.holdsNear(runner.x, runner.z, TUNE.holdsNear), runner.reach, runner.x, runner.y, runner.z, TUNE.holdsNear));

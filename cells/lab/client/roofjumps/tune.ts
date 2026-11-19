@@ -24,6 +24,7 @@ export const DIALS: Dial[] = [
   d('plan', 'wClimb', 'cost of a climb', 0, 20, 0.5, 6, '/s'),
   d('plan', 'wGlide', 'cost of gliding', 0, 10, 0.5, 2, '/s'),
   d('plan', 'wFlow', 'worth of a wall or ledge', 0, 10, 0.5, 2, '/s'),
+  d('plan', 'wChoreo', 'worth of what is good to watch', 0, 5, 0.1, 1),
 
   d('run', 'run', 'run', 4, 16, 0.5, 10.5, 'm/s'),
   d('run', 'sprint', 'sprint', 6, 22, 0.5, 14, 'm/s'),
@@ -76,6 +77,8 @@ export const DIALS: Dial[] = [
   d('eye', 'rush', 'widens with speed', 0, 30, 1, 13, '°'),
   d('eye', 'follow', 'comes round behind', 0, 4, 0.05, 0.9),
   d('eye', 'side', 'swung round', -180, 180, 5, 0, '°'),
+  d('eye', 'eyeLope', 'rides the stride (0 none, 1 full, 2 exaggerated)', 0, 2, 0.05, 0.4),
+  d('eye', 'eyeImpact', 'feels the landings (0 none, 1 full, 2 exaggerated)', 0, 2, 0.05, 0.4),
 
   d('time', 'time', 'speed of time', 0.05, 1.5, 0.05, 1, '×'),
   t('time', 'pause', 'held', 0),

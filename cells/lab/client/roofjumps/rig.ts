@@ -276,6 +276,8 @@ export class Rig {
       else if (r.saveKind === 'wide') { if (side > 0) p.spreadL += 1.4 * k; else p.spreadR += 1.4 * k; p.tilt -= side * 0.3 * k; p.twist += side * 0.25 * k; }
       else { p.lean += 0.28 * k; p.shL += 0.5 * k; p.shR += 0.5 * k; }
     }
+    // (over clutter: the knees up high, the hips carried over it)
+    if (r.state === 'ground' && (r.stepOver ?? 0) > 0) { const k = Math.min(1, (r.stepOver ?? 0) / 0.15); p.kneeL += 0.7 * k; p.kneeR += 0.7 * k; p.hipL += 0.4 * k; p.hipR += 0.4 * k; }
     // (the head leads: turned into a turn a beat before the hips, looking where it's going)
     p.look = Math.max(-0.6, Math.min(0.6, r.turn * 0.22));
     // (hanging from one hand, swinging on under it: the body tipped by the swing)

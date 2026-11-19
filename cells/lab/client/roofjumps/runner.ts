@@ -61,7 +61,7 @@ export interface Body {
   balance?: number; balanceV?: number; stamina?: number; effort?: number; time?: number;
   /** a save being made: what went wrong ('short', 'wide', 'long'), how long since the landing, the catching side (1 the
    * figure's left); seconds to the ground in a flight; a flight's planned length; a hang's swing along the wall (m/s) */
-  saveKind?: string; saveT?: number; saveSide?: number; ttc?: number; flightT?: number; swing?: number;
+  stepOver?: number; saveKind?: string; saveT?: number; saveSide?: number; ttc?: number; flightT?: number; swing?: number;
   /** hanging on the way up a face: 0 caught, 1 loading, 2 springing for the next hold */
   chainPhase?: number;
   phase: number; lead: number; land: number; turn: number; climbT: number; wallT: number;
@@ -224,8 +224,13 @@ export class Runner implements Body {
   get speed(): number { return Math.hypot(this.vx, this.vz); }
 
   /** another of it, as it is now, to be run on ahead without touching this one (plan.ts) */
-  clone(): Runner { const c = Object.assign(Object.create(Runner.prototype) as Runner, this); c.made = { ...this.made }; c.to = { ...this.to }; c.landings = { ...this.landings }; c.contact = { ...this.contact }; c.aim = this.aim ? { ...this.aim } : null; c.save = this.save ? { ...this.save } : null; c.sw = this.sw ? { ...this.sw } : null; c.want = [...this.want] as [number, number]; c.chain = this.chain ? { ...this.chain } : null; c.ch = this.ch ? { ...this.ch } : null; c.feet = { L: { ...this.feet.L }, R: { ...this.feet.R } }; return c; }
-  private count(m: Move): void { this.made[m] = (this.made[m] ?? 0) + 1; }
+  clone(): Runner { const c = Object.assign(Object.create(Runner.prototype) as Runner, this); c.made = { ...this.made }; c.recent = [...this.recent]; c.to = { ...this.to }; c.landings = { ...this.landings }; c.contact = { ...this.contact }; c.aim = this.aim ? { ...this.aim } : null; c.save = this.save ? { ...this.save } : null; c.sw = this.sw ? { ...this.sw } : null; c.want = [...this.want] as [number, number]; c.chain = this.chain ? { ...this.chain } : null; c.ch = this.ch ? { ...this.ch } : null; c.feet = { L: { ...this.feet.L }, R: { ...this.feet.R } }; return c; }
+  /** footfalls moved off ground detail, and of those the ones shortened in the last strides before an edge (a stutter);
+   * seconds still stepping high over clutter */
+  adjusted = 0; stutters = 0; stepOver = 0;
+  /** the last few things it did (not running): what the choreographer's novelty is judged against */
+  recent: Move[] = [];
+  private count(m: Move): void { this.made[m] = (this.made[m] ?? 0) + 1; if (m !== 'run' && m !== 'dash') { this.recent.push(m); if (this.recent.length > 6) this.recent.shift(); } }
 
   step(dt: number, inp: Input): void {
     const mag = Math.min(1, Math.hypot(inp.x, inp.z)), on = mag > 0.1;
@@ -289,13 +294,16 @@ export class Runner implements Body {
   private stepping(): void {
     const sp = this.speed, f = this.feet;
     if (this.save && this.state === 'ground' && this.move !== 'roll' && this.placeSave()) return;
+    // (clutter under the stride: stepped over high)
+    if (this.state === 'ground') { const g = this.city.regionAt(this.x + Math.sin(this.heading) * 0.3, this.y, this.z + Math.cos(this.heading) * 0.3); if (g?.kind === 'clutter') this.stepOver = 0.3; }
+    this.stepOver = Math.max(0, this.stepOver - 1 / 120);
     if (this.state === 'ground' && sp < 0.5 && (this.committed || this.land > 0.005 || this.legVelocity > 0)) {
       const co = Math.cos(this.heading), si = Math.sin(this.heading);
       for (const [foot, side] of [[f.L, 1], [f.R, -1]] as const) {
         if (!foot.on) {
           const x = this.x + co * side * 0.13, z = this.z - si * side * 0.13;
           const y = this.city.heightAt(x, z);
-          if (Math.abs(y - this.y) <= STEP) { foot.p = [x, y, z]; foot.on = true; }
+          if (Math.abs(y - this.y) <= STEP && !this.city.regionAt(x, y, z)) { foot.p = [x, y, z]; foot.on = true; }
         }
       }
       if (f.L.on) this.reach.fl = f.L.p;
@@ -327,7 +335,19 @@ export class Runner implements Body {
         let p: P3 | null = null;
         if (ground) {
           // (ahead of the body by half of what it'll travel over it, out to its own side)
-          const ax = this.x + fx * 0.45 + fz * side * 0.09, az = this.z + fz * 0.45 - fx * side * 0.09, h = this.city.heightAt(ax, az);
+          let ax = this.x + fx * 0.45 + fz * side * 0.09, az = this.z + fz * 0.45 - fx * side * 0.09; const h = this.city.heightAt(ax, az);
+          // (not on debris, clutter or a skylight: the nearest clear place, a shorter or longer step, a little in or out)
+          if (this.city.regionAt(ax, h, az)) {
+            for (const [da, dl] of [[-0.25, 0], [0.25, 0], [-0.25, 0.12], [-0.4, 0], [0.4, 0], [0.15, -0.15], [-0.55, 0], [0.6, 0]]) {
+              const bx = ax + fx * da + fz * side * dl, bz = az + fz * da - fx * side * dl;
+              if (!this.city.regionAt(bx, h, bz) && Math.abs(this.city.heightAt(bx, bz) - this.y) <= STEP) {
+                ax = bx; az = bz; this.adjusted++;
+                // (shortened with an edge close ahead: the stride fitted to the takeoff)
+                if (da < 0) { for (let d = 0.5; d <= 2.5; d += 0.5) if (Math.abs(this.city.heightAt(this.x + fx * d, this.z + fz * d) - this.y) > STEP) { this.stutters++; break; } }
+                this.phase += (da / (1.3 + 0.27 * sp)) * Math.PI; break;
+              }
+            }
+          }
           if (Math.abs(h - this.y) <= STEP) p = [ax, h, az];
           // (along something narrow, on its line; past a lip, on the lip)
           const g = this.city.gripAt(ax, this.y, az, this.move === 'ledge' ? 0.4 : p ? 0.14 : 0.55, (o) => (o.kind === 'rail' || o.kind === 'edge') && Math.abs(o.ay - this.y) < 0.05);
@@ -359,7 +379,7 @@ export class Runner implements Body {
     if (s.stage >= (s.kind === 'long' ? 2 : 1)) { if (s.t > 0.45) this.save = null; return false; }
     if (s.t < at) {
       // (meanwhile, both feet where it came down, under it)
-      for (const [foot, sd] of [[f.L, 1], [f.R, -1]] as const) if (!foot.on) { const x = this.x + fz * sd * 0.12, z = this.z - fx * sd * 0.12, h = this.city.heightAt(x, z); if (Math.abs(h - this.y) <= STEP) { foot.on = true; foot.p = [x, h, z]; } }
+      for (const [foot, sd] of [[f.L, 1], [f.R, -1]] as const) if (!foot.on) { const x = this.x + fz * sd * 0.12, z = this.z - fx * sd * 0.12, h = this.city.heightAt(x, z); if (Math.abs(h - this.y) <= STEP && !this.city.regionAt(x, h, z)) { foot.on = true; foot.p = [x, h, z]; } }
       if (f.L.on) this.reach.fl = f.L.p; if (f.R.on) this.reach.fr = f.R.p; return true;
     }
     // (which foot: the one on the side the hips carry to; a long save's second step, the other)
@@ -370,7 +390,7 @@ export class Runner implements Body {
     let x = this.x, z = this.z;
     for (const k of [1, 0.8, 0.6, 0.4, 0.2, 0]) {
       x = this.x + fx * ahead + fz * side * 0.1 + s.ex * (lat - 0.1) * k; z = this.z + fz * ahead - fx * side * 0.1 + s.ez * (lat - 0.1) * k;
-      if (Math.abs(this.city.heightAt(x, z) - this.y) <= STEP) break;
+      if (Math.abs(this.city.heightAt(x, z) - this.y) <= STEP && !this.city.regionAt(x, this.y, z)) break;
     }
     const foot = side > 0 ? f.L : f.R; foot.on = true; foot.p = [x, this.city.heightAt(x, z), z];
     if (side > 0) f.R.on = false; else f.L.on = false;
