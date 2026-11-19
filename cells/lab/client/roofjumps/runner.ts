@@ -883,7 +883,8 @@ export class Runner implements Body {
     if (this.hold && this.vy < 0 && !this.float) { this.float = true; this.move = 'glide'; this.planned = false; this.count('glide'); }
     else if (!this.hold && this.float && this.move === 'glide') { this.float = false; this.move = 'fall'; }
     const sp = this.speed;
-    if (this.planned && on && sp > 0.5 && (this.vx * dx + this.vz * dz) / sp < 0.5) this.planned = false;
+    // (turned decisively in the air: where it lands now is its choice, not the mark it missed)
+    if (this.planned && on && sp > 0.5 && (this.vx * dx + this.vz * dz) / sp < 0.5) { this.planned = false; this.aim = null; }
     if (on) {
       // (steered, not driven: a flight doesn't gain pace in the air (a little from a standing jump); a glide does, gliding)
       const top = this.float ? Math.max(sp, 7) : this.planned ? sp : Math.max(sp, 3);

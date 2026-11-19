@@ -31,7 +31,10 @@ export function follow(r: Runner, wps: Waypoint[], f: Follow, dt: number): Input
 export interface Directed { seed: number; waypoints: Waypoint[]; seconds: number }
 
 /** Direct a seed: a waypoint at a time, the next chosen when it's near the last, from the fan's most interesting way. */
-export function direct(seed: number, seconds = 40, wChoreo = 1.5, every = 1.5): Directed {
+/** how the director judges: the worth of what's good to watch, of ground made, of a turn away from the line it's on (per
+ * radian past 45°), and how often it decides */
+export const DIRECTOR = { wChoreo: 1.5, wMade: 0.12, wTurn: 0, every: 1.5 };
+export function direct(seed: number, seconds = 40, wChoreo = DIRECTOR.wChoreo, every = DIRECTOR.every): Directed {
   const r = new Runner(new City(seed)), wps: Waypoint[] = [], f: Follow = { i: 0, t: 0 }, seen = new Set<string>(), DT = 1 / 120;
   const cell = (x: number, z: number) => `${Math.floor(x / 6)},${Math.floor(z / 6)}`;
   const choose = () => {
@@ -40,7 +43,8 @@ export function direct(seed: number, seconds = 40, wChoreo = 1.5, every = 1.5): 
       const a = (k / 16) * 2 * Math.PI, route = foresee(r, Math.sin(a), Math.cos(a)), n = route.pts.length / 3;
       let again = 0; for (let i = 0; i < n; i += 4) if (seen.has(cell(route.pts[i * 3], route.pts[i * 3 + 2]))) again++;
       const ex = route.pts[(n - 1) * 3], ez = route.pts[(n - 1) * 3 + 2], made = Math.hypot(ex - r.x, ez - r.z);
-      const score = wChoreo * route.interest + 0.12 * made - 3 * route.streets - 4 * (again / Math.ceil(n / 4)) - (made < 3 ? 2 : 0);
+      let turn = 0; if (wps.length) { let d = a - wps[wps.length - 1][2]; d -= Math.round(d / (2 * Math.PI)) * 2 * Math.PI; turn = Math.max(0, Math.abs(d) - Math.PI / 4); }
+      const score = wChoreo * route.interest + DIRECTOR.wMade * made - 3 * route.streets - 4 * (again / Math.ceil(n / 4)) - (made < 3 ? 2 : 0) - DIRECTOR.wTurn * turn;
       if (!best || score > best.score) best = { score, to: [Math.round(ex * 10) / 10, Math.round(ez * 10) / 10, a, every] };
     }
     wps.push(best!.to);
@@ -59,16 +63,16 @@ export interface Event { t: number; move: Move; y: number; worth: number }
 export interface Measure {
   seed: number; seconds: number; distance: number; pace: number; leaps: number; events: number; distinct: number; entropy: number;
   repeats: number; longestRepeat: number; meanGap: number; deadAir: number; saves: number; misses: number; falls: number;
-  stall: number; inside: number; heightRange: number; interest: number; perMinute: number; score: number; timeline: Event[];
+  stall: number; inside: number; landings: number; saveRate: number; heightRange: number; interest: number; perMinute: number; score: number; timeline: Event[];
 }
 
 /** Run a directed seed, and measure it. */
 export function measure(d: Directed): Measure {
   const city = new City(d.seed), r = new Runner(city), f: Follow = { i: 0, t: 0 }, DT = 1 / 120;
   const legs: Leg[] = [{ move: r.move, from: 0, x: r.x, y: r.y, z: r.z }], pts: number[] = [];
-  let last = r.move, stall = 0, inside = 0, lo = r.y, hi = r.y, frames = 0;
+  let last = r.move, stall = 0, inside = 0, lo = r.y, hi = r.y, frames = 0, landings = 0;
   for (let i = 0; i < d.seconds / DT; i++) {
-    r.step(DT, follow(r, d.waypoints, f, DT)); frames++;
+    const was = r.state; r.step(DT, follow(r, d.waypoints, f, DT)); frames++; if (was !== 'ground' && r.state === 'ground') landings++;
     if (i % 3 === 0) pts.push(r.x, r.y, r.z);
     if (r.move !== last) { last = r.move; legs.push({ move: last, from: pts.length / 3, x: r.x, y: r.y, z: r.z }); }
     if (r.state === 'ground' && r.speed < 1) stall += DT;
@@ -84,8 +88,9 @@ export function measure(d: Directed): Measure {
   const interest = choreo(legs, [], pts), minutes = d.seconds / 60;
   const m = { seed: d.seed, seconds: d.seconds, distance: r.dist, pace: r.dist / d.seconds, leaps: r.leaps, events: n, distinct: Object.keys(counts).length, entropy,
     repeats, longestRepeat: longest, meanGap: gaps.reduce((a, b) => a + b, 0) / gaps.length, deadAir: Math.max(...gaps), saves: r.saves, misses: r.misses, falls: r.made.fall ?? 0,
-    stall, inside: inside / frames, heightRange: hi - lo, interest, perMinute: interest / minutes, score: 0, timeline };
+    stall, inside: inside / frames, landings, saveRate: r.saves / Math.max(1, landings), heightRange: hi - lo, interest, perMinute: interest / minutes, score: 0, timeline };
   // (one number to climb: what's good to watch a minute, with variety, less what went wrong)
-  m.score = m.perMinute + 3 * m.entropy - 1.5 * (m.repeats / minutes) - 2 * (m.misses / minutes) - 0.5 * m.stall - 0.3 * Math.max(0, m.deadAir - 3) - 20 * m.inside;
+  m.score = m.perMinute + 3 * m.entropy - 1.5 * (m.repeats / minutes) - 2 * (m.misses / minutes) - 0.5 * m.stall - 0.3 * Math.max(0, m.deadAir - 3) - 20 * m.inside - 60 * Math.max(0, m.saveRate - 0.12);
+  // (and quiet: most landings shouldn't need saving, so a save means something)
   return m;
 }

@@ -20,8 +20,8 @@ if (args.includes('--compare')) {
 }
 const seeds = args.filter((x) => /^\d+$/.test(x)).map(Number), SEEDS = seeds.length ? seeds : [1, 2, 3, 5, 7, 11];
 const out = await build({ stdin: { contents: `export * from './direct'; export * from './tune';`, resolveDir: join(here, '../client/roofjumps'), loader: 'ts' }, bundle: true, write: false, format: 'esm', platform: 'node' });
-const { direct, measure, TUNE } = await import('data:text/javascript;base64,' + Buffer.from(out.outputFiles[0].text).toString('base64'));
-const set = opt('set'); if (set) for (const kv of set.split(',')) { const [k, v] = kv.split('='); TUNE[k] = Number(v); }
+const { direct, measure, TUNE, DIRECTOR } = await import('data:text/javascript;base64,' + Buffer.from(out.outputFiles[0].text).toString('base64'));
+const set = opt('set'); if (set) for (const kv of set.split(',')) { const [k, v] = kv.split('='); if (k in DIRECTOR) DIRECTOR[k] = Number(v); else TUNE[k] = Number(v); }
 mkdirSync(OUT, { recursive: true });
 const all = {}, seconds = Number(opt('seconds') ?? 40);
 for (const seed of SEEDS) {
@@ -32,7 +32,9 @@ for (const seed of SEEDS) {
 const name = opt('name') ?? 'latest';
 writeFileSync(join(OUT, `report-${name}.json`), JSON.stringify(all, null, 1));
 const rows = Object.values(all).sort((a, b) => b.score - a.score);
-const mean = rows.reduce((t, m) => t + m.score, 0) / rows.length;
+const mean = rows.reduce((t, m) => t + m.score, 0) / rows.length, sd = Math.sqrt(rows.reduce((t, m) => t + (m.score - mean) ** 2, 0) / Math.max(1, rows.length - 1));
+const avg = (k) => rows.reduce((t, m) => t + m[k], 0) / rows.length;
+console.log(`summary: mean ${mean.toFixed(2)} ± ${(sd / Math.sqrt(rows.length)).toFixed(2)} (s.e.); interest/min ${avg('perMinute').toFixed(1)}, entropy ${avg('entropy').toFixed(2)}, repeats ${avg('repeats').toFixed(1)}, saves ${avg('saves').toFixed(1)} (${(100 * avg('saveRate')).toFixed(0)}% of landings), misses ${avg('misses').toFixed(1)}, stall ${avg('stall').toFixed(2)}s, dead air ${avg('deadAir').toFixed(1)}s, pace ${avg('pace').toFixed(1)}, events ${avg('events').toFixed(0)}`);
 writeFileSync(join(OUT, `report-${name}.md`), `# Directed seeds (${name})\n\nmean score ${mean.toFixed(2)}${set ? ` · dials ${set}` : ''}\n\n| seed | score | interest/min | entropy | events | distinct | repeats | dead air | misses | saves | stall | inside | pace |\n|---|---|---|---|---|---|---|---|---|---|---|---|---|\n` +
   rows.map((m) => `| ${m.seed} | ${m.score.toFixed(1)} | ${m.perMinute.toFixed(1)} | ${m.entropy.toFixed(2)} | ${m.events} | ${m.distinct} | ${m.repeats} | ${m.deadAir.toFixed(1)} s | ${m.misses} | ${m.saves} | ${m.stall.toFixed(1)} s | ${(m.inside * 100).toFixed(1)}% | ${m.pace.toFixed(1)} |`).join('\n') + '\n');
 console.log(`mean score ${mean.toFixed(2)} → ${join(OUT, `report-${name}.md`)}`);
