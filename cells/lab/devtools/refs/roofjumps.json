@@ -4,14 +4,151 @@
   "clips": [
     {
       "id": "kyo-rooftops",
-      "url": null,
+      "url": "https://x.com/KYOGETSU_2026/status/2122537506919047545",
       "author": "梔虚月 (@KYOGETSU_2026)",
       "title": "空間の連続性を検証中",
       "titleEn": "testing the continuity of space",
-      "uploaded": null,
-      "duration": 20,
-      "notes": "The first reference (Roof Jumps' first slice, before this manifest). Its URL was not recorded. One take, close behind a figure crossing low crowded rooftops over rails and units, arms straight out in the air, then sinking down an alley to the street. Taken from it: the eye (close behind, a little above, wide), the city's grain, the lightness (the glide).",
-      "segments": []
+      "uploaded": "2026-11-17",
+      "duration": 20.04,
+      "notes": "The first reference (Roof Jumps' first slice, before this manifest; URL recovered 2026-11-19). One take, the eye close behind and a little above, wide. A figure drops her bag, runs off along a railed walkway and crosses low crowded rooftops over rails, units and alleys, nearly every leap held arms straight out (a display posture more than a mechanical one), runs along building faces over an alley, then sinks a long way down an alley to the street, lands and turns. Taken from it: the eye, the city's grain, the lightness (the glide). Labelled 2026-11-19 from a 4 fps sheet (times to the quarter second).",
+      "segments": [
+        {
+          "t0": 0.0,
+          "t1": 1.25,
+          "label": "the bag dropped",
+          "moves": [],
+          "ours": "(stand)",
+          "camera": "close behind",
+          "fps": 4
+        },
+        {
+          "t0": 1.25,
+          "t1": 2.0,
+          "label": "off along the walkway, over the rail",
+          "moves": [
+            "acceleration",
+            "rail hop"
+          ],
+          "ours": "run, hop",
+          "camera": "close behind",
+          "notes": "airborne arms out ~1.75-2.0"
+        },
+        {
+          "t0": 2.0,
+          "t1": 3.25,
+          "label": "along a roof edge, leap to the next",
+          "moves": [
+            "run",
+            "gap jump"
+          ],
+          "ours": "run, bound",
+          "camera": "close behind",
+          "notes": "arms straight out, held, through the flight ~2.75-3.25"
+        },
+        {
+          "t0": 3.25,
+          "t1": 4.5,
+          "label": "up onto a higher block and over",
+          "moves": [
+            "climb up",
+            "drop"
+          ],
+          "ours": "spring (or plant and catch)",
+          "camera": "close behind",
+          "notes": "springs straight up the face, arms up ~3.5; on top arms out ~3.75; over and down ~4.25"
+        },
+        {
+          "t0": 4.5,
+          "t1": 5.5,
+          "label": "over an air-conditioning unit",
+          "moves": [
+            "hop",
+            "leap"
+          ],
+          "ours": "hop / vault",
+          "camera": "close behind",
+          "notes": "arms out over it ~4.75-5.0"
+        },
+        {
+          "t0": 5.5,
+          "t1": 7.0,
+          "label": "across the roofs, over an alley",
+          "moves": [
+            "run",
+            "gap jump"
+          ],
+          "ours": "run, bound",
+          "camera": "close behind, low"
+        },
+        {
+          "t0": 7.0,
+          "t1": 9.0,
+          "label": "along the faces over an alley",
+          "moves": [
+            "wall run"
+          ],
+          "ours": "wallrun, kick (wall to wall)",
+          "camera": "close behind, above the alley",
+          "notes": "on one face ~7.25-7.75, across to the other ~8.0-8.75"
+        },
+        {
+          "t0": 9.0,
+          "t1": 11.25,
+          "label": "over the rooftops, a parapet, a crouched landing",
+          "moves": [
+            "gap jump",
+            "precision",
+            "landing"
+          ],
+          "ours": "bound, ledge, landing",
+          "camera": "close behind, higher",
+          "notes": "crouched landing on a ledge ~10.5; down onto a roof, arms out ~11.0"
+        },
+        {
+          "t0": 11.25,
+          "t1": 12.4,
+          "label": "run to the alley's edge",
+          "moves": [
+            "run"
+          ],
+          "ours": "run",
+          "camera": "close behind"
+        },
+        {
+          "t0": 12.4,
+          "t1": 15.75,
+          "label": "the long sink down the alley",
+          "moves": [
+            "drop (exaggerated: a glide)"
+          ],
+          "ours": "glide (held)",
+          "camera": "above and behind, following down",
+          "fps": 6,
+          "width": 300,
+          "cols": 10,
+          "notes": "about 3.3 s from the edge to the street, arms straight out, legs together, slowly sinking past the wires: four or five storeys, a sink of roughly 4-5 m/s"
+        },
+        {
+          "t0": 15.75,
+          "t1": 16.5,
+          "label": "landing in the street",
+          "moves": [
+            "landing"
+          ],
+          "ours": "landing (deep)",
+          "camera": "behind, at the street",
+          "fps": 12,
+          "notes": "the skirt belled out on touchdown ~15.75; a crouch; up ~16.25"
+        },
+        {
+          "t0": 16.5,
+          "t1": 20.0,
+          "label": "turns; close-ups (no movement)",
+          "moves": [],
+          "fps": 2
+        }
+      ],
+      "source": "1280x720, 24 fps; AI-generated, by the author's account"
     },
     {
       "id": "kyo-stair",
