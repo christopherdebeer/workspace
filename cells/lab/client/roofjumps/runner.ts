@@ -56,6 +56,9 @@ export interface Body {
   wallPlant?: boolean; committed?: boolean; load?: number;
   /** seconds in the air (a glide's sway); a vault turned round on its hand (a palm spin) */
   airT?: number; palmSpin?: boolean;
+  /** off balance (to the figure's left +), and how fast it's going over; the effort left (1 fresh); the size of the wind-up
+   * now loading (0..1); seconds since the start */
+  balance?: number; balanceV?: number; stamina?: number; effort?: number; time?: number;
   /** hanging on the way up a face: 0 caught, 1 loading, 2 springing for the next hold */
   chainPhase?: number;
   phase: number; lead: number; land: number; turn: number; climbT: number; wallT: number;
@@ -135,6 +138,19 @@ export class Runner implements Body {
   /** a vault turned round on its hand; a held moment at the top of a flight (`apexHold`), and whether it's still rising; a
    * stuck landing on something narrow, the seconds it's still settling */
   palmSpin = false; private held = 0; private rising = false; private stickT = 0;
+  /** balance: how far off it is (rad, to the figure's left +) and how fast it's going over; corrected like a spring */
+  balance = 0; balanceV = 0; private prevTurn = 0;
+  /** a landing's recovery still being paid (s); a heavy one's held frame owed at its deepest; how hard the last one was and
+   * how long ago (the eye dips by it) */
+  private recoverT = 0; private hitPending = false; impact = 0; impactT = 9;
+  /** the whole body held a moment (the emphasis: a wind-up held at full load, a heavy landing at its deepest); whether the
+   * wind-up now firing has had its hold */
+  private freeze = 0; private tamed = false;
+  /** effort left (1 fresh): big releases spend it, easy running gives it back; when it was last spent; the size of the
+   * wind-up loading now */
+  stamina = 1; private spentT = 9; effort = 0; time = 0;
+  /** landings, by how they went */
+  landings = { flow: 0, heavy: 0, off: 0 };
   get chainPhase(): number | undefined { return this.chain?.phase; }
   braces = 0;
   private bracing = false;
@@ -170,20 +186,34 @@ export class Runner implements Body {
   get speed(): number { return Math.hypot(this.vx, this.vz); }
 
   /** another of it, as it is now, to be run on ahead without touching this one (plan.ts) */
-  clone(): Runner { const c = Object.assign(Object.create(Runner.prototype) as Runner, this); c.made = { ...this.made }; c.to = { ...this.to }; c.chain = this.chain ? { ...this.chain } : null; c.ch = this.ch ? { ...this.ch } : null; c.feet = { L: { ...this.feet.L }, R: { ...this.feet.R } }; return c; }
+  clone(): Runner { const c = Object.assign(Object.create(Runner.prototype) as Runner, this); c.made = { ...this.made }; c.to = { ...this.to }; c.landings = { ...this.landings }; c.chain = this.chain ? { ...this.chain } : null; c.ch = this.ch ? { ...this.ch } : null; c.feet = { L: { ...this.feet.L }, R: { ...this.feet.R } }; return c; }
   private count(m: Move): void { this.made[m] = (this.made[m] ?? 0) + 1; }
 
   step(dt: number, inp: Input): void {
     const mag = Math.min(1, Math.hypot(inp.x, inp.z)), on = mag > 0.1;
     const dx = on ? inp.x / Math.hypot(inp.x, inp.z) : 0, dz = on ? inp.z / Math.hypot(inp.x, inp.z) : 0;
     const x0 = this.x, z0 = this.z, h0 = this.heading;
+    this.time += dt; this.impactT += dt;
+    // (held: nothing moves, the pose stays (the emphasis))
+    if (this.freeze > 0) { this.freeze -= dt; return; }
     if (this.state === 'ground') {
-      const depth = this.land * 0.46;
+      const depth = this.land * 0.46, wasDown = this.legVelocity > 0;
       this.legVelocity += (-175 * depth - 19 * this.legVelocity) * dt;
       const next = Math.max(0, Math.min(0.46, depth + this.legVelocity * dt));
       if (next === 0 || next === 0.46) this.legVelocity = 0;
       this.land = next / 0.46;
+      // (a heavy landing at its deepest: held there a moment, if the emphasis asks)
+      if (this.hitPending && wasDown && this.legVelocity <= 0) { this.hitPending = false; this.freeze = 0.05 * TUNE.emphasis; }
     } else this.land *= Math.exp(-12 * dt);
+    // (balance: knocked by what happens, corrected like a spring on the ground; in the air it just fades)
+    if (this.state === 'ground') {
+      if (this.move === 'ledge') this.balanceV += (Math.sin(this.dist * 2.3) + Math.sin(this.dist * 0.9 + 1)) * 1.6 * dt;
+      if (this.speed > 6) this.balanceV += (this.turn - this.prevTurn) * 0.02;
+      this.balanceV += (-60 * this.balance - 9 * this.balanceV) * dt; this.balance += this.balanceV * dt;
+    } else { const k = Math.exp(-3 * dt); this.balance *= k; this.balanceV *= k; }
+    this.prevTurn = this.turn;
+    // (effort comes back, running easily, a while after the last big one)
+    this.spentT += dt; if (this.spentT > 0.8 && this.state === 'ground') this.stamina = Math.min(1, this.stamina + 0.15 * dt);
     this.wallCool -= dt;
     if (this.state === 'ground') this.ground(dt, mag, on, dx, dz, inp.jump);
     else if (this.state === 'air') this.air(dt, on, dx, dz, inp.jump);
@@ -351,7 +381,11 @@ export class Runner implements Body {
     // (while the legs are still taking a landing it drives less: the landing is a beat, and the burst comes out of it; let
     // go with room ahead, it settles, through a walk to a stand, over about a second; with no room, it stops short)
     const settling = !on && sp > 0.5 && this.rollT <= 0 && (() => { const s = (sp * sp) / (2 * TUNE.accel * 0.25) + 0.6; for (let d = 0.5; d <= s; d += 0.5) if (Math.abs(H(this.x + fx * d, this.z + fz * d) - this.y) > STEP) return false; return true; })();
-    const tx = dx * top, tz = dz * top, ex = tx - this.vx, ez = tz - this.vz, e = Math.hypot(ex, ez), a = (this.rollT > 0 ? TUNE.accel * 0.3 : settling ? TUNE.accel * 0.25 : TUNE.accel * (1 - 0.6 * this.land)) * dt;
+    // (and while a landing is still being recovered from, or it's off balance, it drives less; spent, it runs a little slower)
+    if (this.recoverT > 0) this.recoverT -= dt;
+    top *= 0.9 + 0.1 * this.stamina;
+    const drive = (this.recoverT > 0 ? 0.5 : 1) * (1 - Math.min(0.5, Math.abs(this.balance) * 2));
+    const tx = dx * top, tz = dz * top, ex = tx - this.vx, ez = tz - this.vz, e = Math.hypot(ex, ez), a = (this.rollT > 0 ? TUNE.accel * 0.3 : settling ? TUNE.accel * 0.25 : TUNE.accel * (1 - 0.6 * this.land) * drive) * dt;
     if (e <= a) { this.vx = tx; this.vz = tz; } else { this.vx += (ex / e) * a; this.vz += (ez / e) * a; }
     sp = this.speed;
     this.phase += ((sp * dt) / (1.3 + 0.27 * sp)) * 2 * Math.PI;
@@ -362,6 +396,7 @@ export class Runner implements Body {
       this.committed = true;
       this.load = Math.min(1, this.load + dt / 0.115);
       if (this.load >= 1 || (this.load >= 0.65 && this.inStance())) {
+        this.effort = 0.8; if (this.tame()) return;
         this.strongJump(); return;
       }
     }
@@ -384,9 +419,12 @@ export class Runner implements Body {
           this.to.left = this.leftSupports();
           if (!this.inStance()) this.phase = Math.floor(this.phase / (2 * Math.PI)) * 2 * Math.PI + Math.PI / 2 + 0.31 + (this.to.left ? 0 : Math.PI);
         }
-        // (the wind-up as long as what's ahead asks: up a storey, longer; across or down, quick)
-        this.load = Math.min(1, this.load + dt * (H(this.x + ux * edge, this.z + uz * edge) > this.y + 1.2 ? 6 : 9));
+        // (the wind-up as big as what's ahead asks: up a storey, deeper and longer; across or down, quick; spent, slower)
+        const rise = H(this.x + ux * edge, this.z + uz * edge) - this.y;
+        this.effort = rise > 1.2 ? Math.min(1, 0.5 + rise / 6.8) : 0.25;
+        this.load = Math.min(1, this.load + dt * (9 - 4 * this.effort) * (0.7 + 0.3 * this.stamina));
         if ((this.load >= 0.65 && edge <= ahead) || edge <= R + sp * dt) {
+          if (this.tame()) return;
           this.leap(ux, uz, edge, sp); return;
         }
       } else if (!preparing) this.load = 0;
@@ -440,6 +478,15 @@ export class Runner implements Body {
     return true;
   }
 
+  /** a big wind-up, before it goes: held at full load a moment (the emphasis); true while it's being held */
+  private tame(): boolean {
+    if (TUNE.emphasis <= 0 || this.effort < 0.5 || this.tamed) { this.tamed = false; return false; }
+    this.tamed = true; this.load = 1; this.freeze = (0.04 + 0.05 * this.effort) * TUNE.emphasis;
+    return true;
+  }
+  /** a big release spends effort */
+  private spend(e: number): void { this.stamina = Math.max(0, this.stamina - e * 0.18); this.spentT = 0; }
+
   private resetTakeoff(): void { this.to.buffer = 0; this.to.load = 0; this.to.committed = false; }
 
   private strongJump(): void {
@@ -460,6 +507,8 @@ export class Runner implements Body {
 
   private launch(vy: number, move: Move, planned: boolean, float: boolean, T: number): void {
     const ground = this.state === 'ground';
+    if (ground && vy > 0) this.spend(this.effort || 0.25);
+    this.effort = 0;
     if (ground) {
       const supportLeft = this.load ? this.to.left : this.leftSupports();
       this.lead = supportLeft ? 0 : 1;
@@ -815,7 +864,7 @@ export class Runner implements Body {
       this.ch = null; this.vx = this.tx * c.pace - nx * 2.5; this.vz = this.tz * c.pace - nz * 2.5; this.wx = nx; this.wz = nz;
       this.launch(Math.max(this.vy, 4), 'bound', false, false, 0.6); this.wallCool = 0.3; return;
     }
-    this.vy = TIC_UP;
+    this.vy = TIC_UP; this.spend(0.3);
   }
 
   private wallStep(dt: number, into: number): void {
@@ -839,11 +888,22 @@ export class Runner implements Body {
   }
 
   private touch(impact: number): void {
-    const was = this.move, aimed = this.planned;
+    const was = this.move, aimed = this.planned, braced = this.bracing;
     this.resetTakeoff(); this.land = 0;
     // (up a storey costs pace)
     if (was === 'spring') { this.vx *= 0.82; this.vz *= 0.82; }
-    this.legVelocity = Math.min(10, impact) * 0.9;
+    // (how it went: off its mark (a fall, off a wall, into one) a stagger and a knock to the balance; heavy, deeper and
+    // longer in the legs, held at the deepest if the emphasis asks, paid for in pace; else light, flowing on)
+    const heavy = impact >= 9 ? Math.min(1, (impact - 9) / 8) : 0, off = was === 'fall' || was === 'kick' || braced;
+    if (off) {
+      this.landings.off++; this.legVelocity = Math.min(12, impact) * 0.9; this.recoverT = 0.25;
+      this.vx *= 0.85; this.vz *= 0.85; this.balanceV += (this.lead ? 1 : -1) * 1.6 + this.wallSide * (was === 'kick' ? 0.8 : 0);
+    } else if (heavy > 0) {
+      this.landings.heavy++; this.legVelocity = Math.min(14, impact) * 0.95; this.recoverT = 0.15 + 0.35 * heavy; this.hitPending = TUNE.emphasis > 0;
+      if (was !== 'dive') { this.vx *= 1 - 0.3 * heavy; this.vz *= 1 - 0.3 * heavy; }
+    } else { this.landings.flow++; this.legVelocity = Math.min(10, impact) * 0.75; }
+    this.balanceV += this.turn * 0.05;
+    if (impact > 5) { this.impact = Math.min(1, impact / 16); this.impactT = 0; }
     this.phase = Math.PI / 2 + 0.31 + (this.lead ? 0 : Math.PI);
     this.state = 'ground'; this.vy = 0; this.planned = false; this.move = 'run';
     const sp = this.speed, ux = sp > 0.5 ? this.vx / sp : 0, uz = sp > 0.5 ? this.vz / sp : 0;
@@ -915,11 +975,12 @@ export class Runner implements Body {
     }
     if (c.phase === 1) {
       this.mu = Math.min(1, c.t / CHAIN_LOAD);
-      if (!(jump && c.t > 0.05) && !(into > 0.55 && c.t >= CHAIN_LOAD)) return;
+      if (!(jump && c.t > 0.05) && !(into > 0.55 && c.t >= CHAIN_LOAD / (0.7 + 0.3 * this.stamina))) return;
       // (for the next: the roof's lip if it's within a spring and a reach, else a hold a storey or so up)
       const top = H(wx, wz);
       if (top - c.y <= 3.3) c.next = top;
       else { const g = this.holdUp(c.y + 1.2, c.y + 3.6); if (!g) return; c.next = g.y; }
+      this.effort = 0.8; if (this.tame()) return; this.spend(0.7); this.effort = 0;
       c.phase = 2; c.t = 0; c.y0 = this.y; c.y1 = c.next - (c.next === top ? TUNE.armReach * 0.75 : HANG); this.chains++; this.count('hang');
       return;
     }

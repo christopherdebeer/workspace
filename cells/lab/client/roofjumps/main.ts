@@ -288,7 +288,9 @@ function frame(now: number): void {
   const up = ['climb', 'plant', 'chimney'].includes(runner.state) ? 1 : 0, flat = runner.state === 'ground' && runner.speed > 12 ? 1 : 0;
   wideK += (up - wideK) * e(2.5); lowK += (flat - lowK) * e(2);
   const follow = 1 - 0.6 * wideK;
-  eyeAt.x += (runner.x - eyeAt.x) * e(10 * follow); eyeAt.z += (runner.z - eyeAt.z) * e(10 * follow); eyeAt.y += (runner.y - eyeAt.y) * e(6 * follow);
+  // (a hard landing, with the emphasis: the eye dips with it, and comes back)
+  const dip = TUNE.emphasis * runner.impact * 0.35 * Math.exp(-runner.impactT * 9) * Math.sin(Math.min(Math.PI, runner.impactT * 18));
+  eyeAt.x += (runner.x - eyeAt.x) * e(10 * follow); eyeAt.z += (runner.z - eyeAt.z) * e(10 * follow); eyeAt.y += (runner.y - dip - eyeAt.y) * e(6 * follow);
   if (TUNE.follow > 0 && !held && !others.size && !TUNE.pause && runner.speed > 2) {
     let d = Math.atan2(runner.vx, runner.vz) - yaw; d -= Math.round(d / (2 * Math.PI)) * 2 * Math.PI;
     yaw += d * Math.max(0, Math.cos(d / 2)) * TUNE.follow * (TUNE.auto ? 1.8 : 1) * TUNE.time * dt;

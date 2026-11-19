@@ -60,6 +60,9 @@ const sw = (m: M4, a: number) => rotX(m, -a);
 
 export class Rig {
   pose = zero();
+  /** each joint's speed toward its pose; and the chest's lag behind the hips (rad) and its speed, the hips' last height
+   * and speed: weight */
+  private vel = zero(); private chest = 0; private chestV = 0; private lastHip = 1; private hipV = 0;
   /** 1 on the ground, 0 off it, eased: where the hips ride */
   private stood = 1;
   private hipY = 1;
@@ -252,6 +255,16 @@ export class Rig {
     if (r.wallPlant) {
       legs(1.25, 1.55, -0.35, 0.65); arms(2.4, 1.8); p.lean = 0.22;
     }
+    // (off the ground: the arms driven up hard through the first instant, as if they threw it, by the effort behind it)
+    if (r.state === 'air' && u < 0.15 && ['spring', 'bound', 'hop', 'dive', 'flip', 'sideflip', 'underbar'].includes(r.move)) { const k = 1 - u / 0.15; p.shL += 0.9 * k; p.shR += 0.9 * k; }
+    // (off balance: leaning with it, the arms out against it, windmilling as it comes back)
+    const b = r.balance ?? 0, bv = r.balanceV ?? 0;
+    if (b || bv) {
+      p.tilt += b * 0.7; p.spreadL += Math.max(0, b) * 2.2 + Math.abs(b) * 0.4; p.spreadR += Math.max(0, -b) * 2.2 + Math.abs(b) * 0.4;
+      p.shL += bv * 0.15; p.shR -= bv * 0.15;
+    }
+    // (spent, and slow: breathing hard, the chest heaving)
+    if (r.state === 'ground' && r.speed < 4 && (r.stamina ?? 1) < 0.95) { const h = (1 - (r.stamina ?? 1)) * Math.sin((r.time ?? 0) * 7); p.spine += 0.06 * h + 0.08 * (1 - (r.stamina ?? 1)); p.head -= 0.04 * h; }
     if (r.state === 'climb' && r.move === 'climb') {
       const pull = sm(0.1, 0.8, u);
       legs(0.65 + pull, 1.3, -0.1, 0.65);
@@ -263,7 +276,7 @@ export class Rig {
     }
     // (a landing's weight: down into the legs, the feet apart, the arms out and back)
     // (the wind-up as deep as the landing: an automatic takeoff loads nearly as deep as a tapped one)
-    const c = r.state === 'ground' && r.move !== 'roll' ? Math.max(r.land, (r.load ?? 0) * (r.committed ? 0.95 : 0.8)) : 0;
+    const c = r.state === 'ground' && r.move !== 'roll' ? Math.max(r.land, (r.load ?? 0) * (r.committed ? 0.95 : 0.8) * (0.75 + 0.35 * (r.effort ?? 0))) : 0;
     if (c > 0) {
       p.hipL += 1.05 * c; p.hipR += 1.05 * c; p.kneeL += 1.8 * c; p.kneeR += 1.8 * c; p.spine += 0.45 * c; p.splay += 0.22 * c;
       p.shL -= 0.45 * c; p.shR -= 0.45 * c; p.spreadL += 0.7 * c; p.spreadR += 0.7 * c; p.head -= 0.1 * c;
@@ -273,8 +286,11 @@ export class Rig {
 
   /** Ease the pose toward the body's; `dt` large sets it at once. */
   update(dt: number, r: Body): void {
-    const t = this.target(r), k = 1 - Math.exp(-(r.state === 'ground' ? 28 : 18) * dt);
-    for (const key of KEYS) this.pose[key] += (t[key] - this.pose[key]) * k;
+    // (each joint toward its pose as a spring a little under critical damping, so a limb carries past where it's going
+    // and comes back: follow-through; set at once for a long step)
+    const t = this.target(r), w = r.state === 'ground' ? 30 : 20, c = 2 * 0.72 * w;
+    if (dt > 0.2) { for (const key of KEYS) { this.pose[key] = t[key]; this.vel[key] = 0; } }
+    else for (const key of KEYS) { this.vel[key] += ((t[key] - this.pose[key]) * w * w - this.vel[key] * c) * dt; this.pose[key] += this.vel[key] * dt; }
     this.stood += ((r.state === 'ground' ? 1 : 0) - this.stood) * (1 - Math.exp(-14 * dt));
     this.bank += (Math.max(-0.45, Math.min(0.45, r.turn * 0.06 * Math.min(1, r.speed / 8))) - this.bank) * (1 - Math.exp(-10 * dt));
     this.aside += ((r.move === 'wallrun' ? -r.wallSide * 0.5 : 0) - this.aside) * (1 - Math.exp(-16 * dt));
@@ -297,6 +313,13 @@ export class Rig {
     const ground = Math.max(carry, HIP + Math.max(leg(p.hipL, p.kneeL), leg(p.hipR, p.kneeR)) + SOLE) + (r.move === 'roll' ? 0.16 : 0);
     const hip = ground * this.stood + (0.98 - p.sink) * (1 - this.stood);
     this.hipY = r.state === 'ground' && r.move !== 'roll' ? Math.min(hip, 0.99 - 0.46 * r.land) : hip;
+    // (the chest a beat behind the hips: when they're stopped short (a landing), it carries on down and comes back up;
+    // when they're thrown up, it's left a little behind)
+    if (dt > 0 && dt <= 0.2) {
+      const hy = r.y + this.hipY, v = (hy - this.lastHip) / dt, acc = Math.max(-200, Math.min(200, (v - this.hipV) / dt));
+      this.lastHip = hy; this.hipV = v;
+      this.chestV += (-170 * this.chest - 15 * this.chestV - acc * 0.012) * dt; this.chest = Math.max(-0.45, Math.min(0.45, this.chest + this.chestV * dt));
+    } else { this.lastHip = r.y + this.hipY; this.hipV = 0; this.chest = this.chestV = 0; }
   }
 
   /** The skeleton, placed in the world at the body. */
@@ -311,9 +334,9 @@ export class Rig {
     P = rotZ(rotX(translate(P, this.aside, this.hipY, 0), p.lean + spin), this.bank + p.tilt + side);
     const add = (name: string, m: M4, y0: number, w0: number, d0: number, y1: number, w1: number, d1: number, zc = 0) => out.push({ name, m, y0, w0, d0, y1, w1, d1, zc });
     add('pelvis', P, -0.09, 0.26, 0.17, 0.1, 0.3, 0.18);
-    const S = rotY(rotX(translate(P, 0, 0.1, 0), p.spine), p.twist);
+    const S = rotY(rotX(translate(P, 0, 0.1, 0), p.spine + this.chest), p.twist);
     add('torso', S, 0, 0.27, 0.16, 0.47, 0.37, 0.21);
-    add('head', rotX(translate(S, 0, 0.5, 0), p.head), 0, 0.16, 0.18, 0.23, 0.18, 0.2, 0.015);
+    add('head', rotX(translate(S, 0, 0.5, 0), p.head - this.chest * 0.5), 0, 0.16, 0.18, 0.23, 0.18, 0.2, 0.015);
     for (const side of [1, -1]) {
       const L = side > 0, n = L ? 'L' : 'R';
       const A = sw(rotZ(translate(S, side * 0.225, 0.43, 0), side * (L ? p.spreadL : p.spreadR)), L ? p.shL : p.shR);

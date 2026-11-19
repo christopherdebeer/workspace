@@ -107,7 +107,7 @@ const { plan, foresee, TUNE, HOUSE, DIALS, City, Runner, Rig, CHUNK, STOREY, TAG
       r.step(1 / 120, { x: dx, z: dz, jump: false });
       const hands = [r.reach.hl, r.reach.hr].filter(Boolean);
       // (up a face, a hand is on a hold: the lip it's pulling over, or the sill or pipe it hangs from)
-      if (r.state === 'climb') for (const p of hands) assert.ok(['edge', 'sill', 'pipe'].includes(city.gripAt(p[0], p[1], p[2], 0.2)?.hold.kind), `climbing, a hand is on a hold (${r.move})`);
+      if (r.state === 'climb') for (const p of hands) assert.ok(city.gripAt(p[0], p[1], p[2], 0.2, (h) => ['edge', 'sill', 'pipe'].includes(h.kind)), `climbing, a hand is on a hold (${r.move})`);
       if (r.move === 'vault') { vaults++; if (hands.length) planted++; }
       // (a foot that's down is on something: the roof it's running on, or a hold: and says which)
       if (r.state === 'ground' && r.speed > 3 && r.move !== 'roll') { strides++; if (r.reach.fl || r.reach.fr) footed++; }
@@ -298,4 +298,24 @@ console.log('roofjumps: ok');
   for (let i = 0; i < 240; i++) open.step(1 / 120, { x: 0, z: 1, jump: false });
   const v0 = open.speed; while (open.speed > 0.05 && t < 3) { open.step(1 / 120, { x: 0, z: 0, jump: false }); t += 1 / 120; }
   console.log(`  settles from ${v0.toFixed(1)} m/s in ${t.toFixed(2)} s`);
+}
+
+// Pace and weight: landings graded; a knock to the balance damps out; the emphasis holds but doesn't change where a leap
+// lands; big efforts spend effort and easy running gives it back.
+{
+  const grades = { flow: 0, heavy: 0, off: 0 };
+  for (const seed of [1, 7]) for (const a of [0.3, 2.1, 4.4]) { const r = new Runner(new City(seed)); for (let i = 0; i < 120 * 40; i++) r.step(1 / 120, { x: Math.sin(a), z: Math.cos(a), jump: false }); for (const k of Object.keys(grades)) grades[k] += r.landings[k]; }
+  assert.ok(grades.flow > 0 && grades.heavy > 0 && grades.off > 0, `landings graded (${JSON.stringify(grades)})`);
+  const still = new Runner(new City(1, true)); still.balanceV = 3; let most = 0;
+  for (let i = 0; i < 120; i++) { still.step(1 / 120, { x: 0, z: 0, jump: false }); most = Math.max(most, Math.abs(still.balance)); }
+  assert.ok(most > 0.05 && Math.abs(still.balance) < 0.02, `a knock damps out (${most.toFixed(2)} at most, ${still.balance.toFixed(3)} after a second)`);
+  TUNE.emphasis = 1; const r = new Runner(new City(1, true)); let falls = 0, frozen = 0;
+  for (let i = 0; i < 600; i++) { const x = r.x, y = r.y, z = r.z; r.step(1 / 120, { x: 0, z: 1, jump: false }); if (r.move === 'fall') falls++; if (r.x === x && r.y === y && r.z === z && r.speed > 1) frozen++; }
+  TUNE.emphasis = HOUSE.emphasis;
+  assert.ok(r.made.bound && !falls && frozen > 3, `emphasis holds (${frozen} steps) and lands as aimed`);
+  const tired = new Runner(new City(1, true)); let low = 1;
+  for (let i = 0; i < 120 * 6; i++) { tired.step(1 / 120, { x: 0, z: 0, jump: i % 150 === 0 }); low = Math.min(low, tired.stamina); }
+  const back = tired.stamina; for (let i = 0; i < 120 * 4; i++) tired.step(1 / 120, { x: 0, z: 0, jump: false });
+  assert.ok(low < 0.8 && tired.stamina > back && tired.stamina > 0.95, `effort spent (${low.toFixed(2)}) and given back (${tired.stamina.toFixed(2)})`);
+  console.log(`landings ${JSON.stringify(grades)}; balance ${most.toFixed(2)} then ${Math.abs(still.balance).toFixed(3)}; emphasis ${frozen} held steps; effort down to ${low.toFixed(2)}, back to ${tired.stamina.toFixed(2)}`);
 }
