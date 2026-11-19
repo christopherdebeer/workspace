@@ -17,7 +17,7 @@ looks can be tried over later without touching it.
 Under `dials` is every number of the run, turned while it runs, and the plan: where this heading
 leads, drawn into the city. Keys: P the plan, O the dials, K hold time, L one step of it.
 
-`?seed=` the city · `?look=grid|clay|wire|tags|normals` · `?auto` it runs itself, wandering ·
+`?seed=` the city · `?look=grid|clay|wire|tags|normals` · `?auto` it runs itself, wandering (a hand on it, the stick, the keys, a tap, takes over at once; let go and the wander comes back in over a second and a half) ·
 `?t=` start that many seconds into such a run · `?still` hold the frame · `?preview` nothing over
 the picture · `?follow=0` the eye never turns by itself · `?far=` chunks drawn each way (4) ·
 `?side=90&zoom=1.6` the eye side on and close, for looking at the rig · `?study=<move>&mu=0.5`

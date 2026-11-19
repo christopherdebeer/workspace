@@ -135,19 +135,28 @@ function asked(t: number): Input {
     const moving = takeoff !== 'stand' && t < tapAt + 1.5;
     return { x: 0, z: moving ? (takeoff === 'step' ? 0.35 : 1) : 0, jump: Math.abs(t - tapAt) < 0.5 / 120 };
   }
-  if (TUNE.auto) {
-    // (by itself: wandering, the heading a slow noise, drawn toward the city's own two directions: along its alleys, its walls, its ledges)
-    const w = 7 * noise1(seed + 9, t * 0.06) + t * 0.04, a = w - 0.22 * Math.sin(4 * w);
-    return { x: Math.sin(a), z: Math.cos(a), jump: false };
-  }
   let sx = stick.x + k('KeyD', 'ArrowRight') - k('KeyA', 'ArrowLeft'), sy = stick.y + k('KeyS', 'ArrowDown') - k('KeyW', 'ArrowUp');
   const l = Math.hypot(sx, sy); if (l > 1) { sx /= l; sy /= l; }
   const fx = Math.sin(yaw), fz = Math.cos(yaw), j = jump; jump = false;
   // (the jump held, to glide: Space held, or a touch held still past a tap)
   const now = performance.now(), still = (o: { t: number; moved: boolean }) => !o.moved && now - o.t > 260;
   const hold = keys.has('Space') || (stick.id >= 0 && still(stick)) || [...others.values()].some(still);
-  return { x: fx * -sy + -fz * sx, z: fz * -sy + fx * sx, jump: j, hold };
+  const own: Input = { x: fx * -sy + -fz * sx, z: fz * -sy + fx * sx, jump: j, hold };
+  if (TUNE.auto) {
+    // (by itself: wandering, the heading a slow noise, drawn toward the city's own two directions: along its alleys, its
+    // walls, its ledges. But a hand on it takes over at once (the stick, the keys, a tap, a hold), for as long as it's on;
+    // let go, the wander comes back in over a second and a half, from the way it was last sent)
+    const w = 7 * noise1(seed + 9, t * 0.06) + t * 0.04, a = w - 0.22 * Math.sin(4 * w), wander = { x: Math.sin(a), z: Math.cos(a) };
+    const m = Math.hypot(own.x, own.z);
+    if (m > 0.1 || own.jump || own.hold) { taken = t; if (m > 0.1) { ownDir.x = own.x / m; ownDir.z = own.z / m; } return own; }
+    const back = Math.min(1, (t - taken) / 1.5), e = back * back * (3 - 2 * back), bx = ownDir.x * (1 - e) + wander.x * e, bz = ownDir.z * (1 - e) + wander.z * e, bl = Math.hypot(bx, bz) || 1;
+    return taken > -9 && back < 1 ? { x: bx / bl, z: bz / bl, jump: false } : { ...wander, jump: false };
+  }
+  return own;
 }
+/** auto, taken over: when a hand was last on it, and the way it sent it */
+let taken = -99; const ownDir = { x: 0, z: 1 };
+const takenOver = (t: number) => t - taken < 1.5;
 /** the plan about what's asked (with nothing asked, about the way it faces) */
 function think(a: Input, t: number): void {
   const m = Math.hypot(a.x, a.z);
@@ -157,7 +166,8 @@ function think(a: Input, t: number): void {
 function input(t: number, dt: number): Input {
   const a = asked(t), mag = Math.hypot(a.x, a.z);
   if (wantsPlan() && (thought < 0 || t - thought >= 0.12)) think(a, t);
-  const by = TUNE.auto ? 1 : TUNE.assist;
+  // (by itself, all the way onto the plan; taken over, only as far as `assist` says, like any run of yours)
+  const by = TUNE.auto && !takenOver(t) ? 1 : TUNE.assist;
   lean += ((thinking && by > 0 && mag > 0.1 ? thinking.best.off * by : 0) - lean) * (1 - Math.exp(-5 * dt));
   if (Math.abs(lean) < 1e-4 || mag <= 0.1) return a;
   // (to the right is a smaller angle: see plan.ts)
