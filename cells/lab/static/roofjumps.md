@@ -43,7 +43,12 @@ one-metre lattice, about 160 of them (1,600 triangles):
   alleys of one to three metres between;
 - across a gap, now and then, a wall a metre thick, about as high as the roofs it joins;
 - on its roof, perhaps a rim a metre high, a raised part a storey up, a stair hut, a few units, a
-  tank.
+  tank;
+- up one side of some of the taller ones, a stair: a storey a step, each step a metre deep (as an
+  iron stair up a wall would go if the city were all boxes; a height field can't hang one off a
+  face), sprung up a storey a beat, each step's narrow top a rail;
+- across some alleys between two roofs of a height, a bar on posts a little above them: drawn, not
+  stood on (a chunk's `props`), a hold for the hands to go under it by.
 
 Every box carries a tag saying what it is, and nothing about how it looks. The sim asks the city
 one question, `heightAt(x, z)`. A renderer gets the boxes.
@@ -120,7 +125,8 @@ between, flat enough to keep its pace. Which move it throws is chosen by what is
 | dive | a storey or two down, however far | headfirst, arched out over the drop, folding into the roll |
 | fall | a leap that missed its landing | arms up and out, knees drawn up: catches a lip in reach, else lands and rolls |
 | glide | only while the jump is held | the slow one: arms out, sinking gently, steerable |
-| hang | on the way up a face | from a sill or a pipe: caught, loaded, sprung for the next hold |
+| hang | on the way up a face | from a sill or a pipe: caught (the feet walking up), loaded (both feet set on the wall), sprung for the next hold |
+| underbar | a gap with a bar across it at about head height, the far roof level | feet first under the bar, the hands on it, laid back, legs straight through |
 | chimney | up a narrow alley, leaning in on a wall run | wall to wall, a kick every 0.27 s, hands on both walls |
 | kick | off a wall | the pushing leg long behind, the arms flung away, turned off it |
 
@@ -140,7 +146,7 @@ A tall wall met at a slant at pace is stepped onto off one foot and run along, s
 rising then sinking as gravity has it. Leaning into the wall drives it up the wall as it goes
 along: that is how height is gained, and it is paid for, in how long the run lasts and in pace
 along. It ends on the wall's top if it gets there. Away from the wall, or a jump, kicks off it:
-wall to wall down an alley. A grazing contact keeps speed along the face. Pressed into a tall wall met near square, with a hold in reach, it goes for it after a beat, as a tap would (a tap goes at once): a foot planted on the face, the lip caught and pulled over. Its top out of reach, a sill or a pipe in reach is hung from, and the climb is a chain, as up a fire escape: caught, loaded (knees up, feet on the wall), sprung for the next hold, a storey a beat; pressing in goes again as soon as it's loaded, a tap goes at once, pressing away lets go. A wall with nothing in reach ends in a brace. Between two walls no more than 3.2 m apart, leaning in on a wall run goes up the alley wall to wall (the chimney, after the references): a kick every 0.27 s, about 0.9 m a kick, a top in reach caught and pulled over, let go and it drops. A leap the takeoff's limit would leave short keeps its aim with a higher arc (too long, a flatter one), so it lands where it meant to far more often; one that can't comes down where it can, and a fall is only a real fall. An aimed landing on something narrow is stuck: the pace taken in the legs, a moment to settle. The `held at the top` dial (`apexHold`, none by default) holds a flight at its top for a moment, as a drawing would, then lets it go on as it was. The glide sinks at most 4.5 m/s (the first reference's long sink down an alley), arms straight out and level, legs together, swaying slowly. The eye pulls out wider, higher and steadier while it climbs, comes a little lower flat out, and keeps clear of walls beside its line as well as in it. Going up a storey costs pace; while the legs are still taking a landing it drives less, so a landing is a beat and the burst comes out of it. Small turns steer an aimed leap gently. A decisive turn gives full air control.
+wall to wall down an alley. A grazing contact keeps speed along the face. Pressed into a tall wall met near square, with a hold in reach, it goes for it after a beat, as a tap would (a tap goes at once): a foot planted on the face, the lip caught and pulled over. Its top out of reach, a sill or a pipe in reach is hung from, and the climb is a chain, as up a fire escape: caught, loaded (knees up, feet on the wall), sprung for the next hold, a storey a beat; pressing in goes again as soon as it's loaded, a tap goes at once, pressing away lets go. A wall with nothing in reach ends in a brace. Between two walls no more than 3.2 m apart, leaning in on a wall run goes up the alley wall to wall (the chimney, after the references): a kick every 0.27 s, about 0.9 m a kick, a top in reach caught and pulled over, let go and it drops. Let go with room ahead, it settles, through a walk to a stand; with an edge close, it stops short. A leap the takeoff's limit would leave short keeps its aim with a higher arc (too long, a flatter one), so it lands where it meant to far more often; one that can't comes down where it can, and a fall is only a real fall. An aimed landing on something narrow is stuck: the pace taken in the legs, a moment to settle. The `held at the top` dial (`apexHold`, none by default) holds a flight at its top for a moment, as a drawing would, then lets it go on as it was. The glide sinks at most 4.5 m/s (the first reference's long sink down an alley), arms straight out and level, legs together, swaying slowly. The eye pulls out wider, higher and steadier while it climbs, comes a little lower flat out, and keeps clear of walls beside its line as well as in it. Going up a storey costs pace; while the legs are still taking a landing it drives less, so a landing is a beat and the burst comes out of it. Small turns steer an aimed leap gently. A decisive turn gives full air control.
 
 The fixed-step suite checks surface contact, movement on open routes, planner agreement, and intentional jumps, wall contacts and landings on the transfer line.
 (`node cells/lab/devtools/roofjumps.test.mjs`).
@@ -266,9 +272,9 @@ over the same chunks and bones.
 
 ## Not yet
 
-Sloped roofs, ledges, planks and wires between buildings (everything is a box so far); bars to
-go under (an underbar) or swing on; stairs and rails to climb (the chain uses sills and pipes);
-slides; the feet walking up the wall while hanging (they step generically); sound.
+Sloped roofs, ledges, planks and wires between buildings (everything is a box so far); a zig-zag
+fire escape (the height field allows only the stepped stair); swinging round a bar (a lache) and
+rooftop pipes to go under; slides; sound.
 
 ## After
 

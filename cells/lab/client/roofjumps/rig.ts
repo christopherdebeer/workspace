@@ -150,6 +150,15 @@ export class Rig {
         p.lean = m(0.35, 0.5, 0.15, 0.2); p.spine = m(0, 0.45, -0.15, 0.05); p.head = m(-0.2, 0.15, -0.2, -0.1);
         break;
       }
+      case 'underbar': {
+        // (under a bar feet first: the hands up on it, the body laid back under it, the legs out straight through the gap,
+        // then down for the far side)
+        const t = sm(0.1, 0.35, u) * (1 - sm(0.7, 0.95, u));
+        legs(0.4 + 1.15 * t, 0.6 - 0.45 * t, 0.3 + 1.05 * t, 0.7 - 0.5 * t); p.splay = 0.08;
+        p.shL = p.shR = 1.2 + 1.6 * t; both('el', 0.3); both('spread', 0.25);
+        p.lean = 0.1 - 0.75 * t; p.spine = 0.15 * t; p.head = 0.2 * t;
+        break;
+      }
       case 'kick': {
         // (off a wall: the pushing leg long behind toward it, the other knee driven up, the arms flung away from it, the body
         // turned off it; then gathering to land)

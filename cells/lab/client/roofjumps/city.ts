@@ -25,12 +25,12 @@ export const STOREY = 3;
 /** the buckets a chunk's boxes are sorted into, for `heightAt` (m) */
 const CELL = 8, CELLS = CHUNK / CELL;
 
-export const TAG = { GROUND: 0, BUILDING: 1, STEP: 2, HUT: 3, UNIT: 4, TANK: 5, PLAYER: 6, RIM: 7, BEAM: 8 } as const;
+export const TAG = { GROUND: 0, BUILDING: 1, STEP: 2, HUT: 3, UNIT: 4, TANK: 5, PLAYER: 6, RIM: 7, BEAM: 8, STAIR: 9, BAR: 10 } as const;
 export type Tag = (typeof TAG)[keyof typeof TAG];
 
 export interface Box { x0: number; z0: number; x1: number; z1: number; y0: number; y1: number; tag: Tag }
 
-export type HoldKind = 'edge' | 'rail' | 'sill' | 'pipe' | 'face';
+export type HoldKind = 'edge' | 'rail' | 'sill' | 'pipe' | 'face' | 'bar';
 /**
  * Somewhere to put a hand or a foot: a line from a to b, facing (nx, nz) (level, out from the wall; 0, 0 for a rail).
  * A face is the one that isn't a line: the whole of a wall, from a at its foot to b at its top.
@@ -38,16 +38,18 @@ export type HoldKind = 'edge' | 'rail' | 'sill' | 'pipe' | 'face';
  *
  *   edge  hand: grab   foot: push off, land on      rail  hand: plant   foot: balance along
  *   sill  hand: grab   foot: toe                    face  hand: steady  foot: tread (run along, run up, kick off)
- *   pipe  hand: grip   foot: clamp
+ *   pipe  hand: grip   foot: clamp                  bar   hand: swing (a pipe across an alley, under which to go)
  */
 export interface Hold { kind: HoldKind; hand: string; foot: string; ax: number; ay: number; az: number; bx: number; by: number; bz: number; nx: number; nz: number }
 export const USES: Record<HoldKind, { hand: string; foot: string }> = {
-  edge: { hand: 'grab', foot: 'push' }, sill: { hand: 'grab', foot: 'toe' }, pipe: { hand: 'grip', foot: 'clamp' }, rail: { hand: 'plant', foot: 'balance' }, face: { hand: 'steady', foot: 'tread' },
+  edge: { hand: 'grab', foot: 'push' }, sill: { hand: 'grab', foot: 'toe' }, pipe: { hand: 'grip', foot: 'clamp' }, rail: { hand: 'plant', foot: 'balance' }, face: { hand: 'steady', foot: 'tread' }, bar: { hand: 'swing', foot: '' },
 };
 /** a hold, and the point on it nearest what was asked */
 export interface Grip { hold: Hold; x: number; y: number; z: number; d: number }
 
-export interface Chunk { cx: number; cz: number; boxes: Box[]; cells: number[][]; holds: Hold[]; hcells: number[][] }
+/** a chunk: its boxes (what's stood on, on the lattice), what's drawn but not stood on (`props`: the bars across alleys and
+ * their posts, thin and off the lattice), the buckets for heightAt, the holds and theirs */
+export interface Chunk { cx: number; cz: number; boxes: Box[]; props: Box[]; cells: number[][]; holds: Hold[]; hcells: number[][] }
 
 const key = (cx: number, cz: number) => `${cx},${cz}`;
 
@@ -116,13 +118,31 @@ export class City {
     });
     // (the holds: from the boxes, by their own dice, so the boxes are the same with or without them)
     const holds = this.holdsOf(boxes, seeded(hash(this.seed, cx, cz, 91)));
+    // (bars: a pipe across some alleys between two roofs of a height, a little above them, on posts: by their own dice)
+    const props: Box[] = [], br = seeded(hash(this.seed, cx, cz, 93)), blds = boxes.filter((b) => b.tag === TAG.BUILDING);
+    for (const a of blds) for (const b of blds) {
+      if (a === b || a.y1 !== b.y1 || br() > 0.3) continue;
+      const y = a.y1 + 1.3;
+      // (b across an alley from a, to its east or north: the gap, and how much of their faces face each other)
+      for (const ax of [0, 1]) {
+        const gap = ax === 0 ? b.x0 - a.x1 : b.z0 - a.z1, lo = ax === 0 ? Math.max(a.z0, b.z0) : Math.max(a.x0, b.x0), hi = ax === 0 ? Math.min(a.z1, b.z1) : Math.min(a.x1, b.x1);
+        if (gap < 1 || gap > 3 || hi - lo < 3) continue;
+        const m = Math.round((lo + hi) / 2) + 0.5, s0 = (ax === 0 ? a.x1 : a.z1) - 0.6, s1 = (ax === 0 ? b.x0 : b.z0) + 0.6;
+        // (its ends on bare roof: not on a rim, a unit, anything stood on the roof)
+        const top = (p: number) => { const x = ax === 0 ? p : m, z = ax === 0 ? m : p; let h = 0; for (const o of boxes) if (x >= o.x0 && x < o.x1 && z >= o.z0 && z < o.z1) h = Math.max(h, o.y1); return h; };
+        if (top(s0) !== a.y1 || top(s1) !== a.y1 || top((s0 + s1) / 2) > a.y1 - 1) continue;
+        const bar = (p0: number, p1: number, q0: number, q1: number, y0: number, y1: number): Box => ax === 0 ? { x0: p0, x1: p1, z0: q0, z1: q1, y0, y1, tag: TAG.BAR } : { x0: q0, x1: q1, z0: p0, z1: p1, y0, y1, tag: TAG.BAR };
+        props.push(bar(s0, s1, m - 0.04, m + 0.04, y - 0.04, y + 0.04), bar(s0, s0 + 0.08, m - 0.04, m + 0.04, a.y1, y), bar(s1 - 0.08, s1, m - 0.04, m + 0.04, a.y1, y));
+        holds.push(ax === 0 ? { kind: 'bar', ...USES.bar, ax: s0, ay: y, az: m, bx: s1, by: y, bz: m, nx: 0, nz: 0 } : { kind: 'bar', ...USES.bar, ax: m, ay: y, az: s0, bx: m, by: y, bz: s1, nx: 0, nz: 0 });
+      }
+    }
     const hcells: number[][] = Array.from({ length: CELLS * CELLS }, () => []);
     holds.forEach((h, i) => {
       const a0 = Math.max(0, Math.floor((Math.min(h.ax, h.bx) - ox) / CELL)), a1 = Math.min(CELLS - 1, Math.floor((Math.max(h.ax, h.bx) - ox) / CELL));
       const c0 = Math.max(0, Math.floor((Math.min(h.az, h.bz) - oz) / CELL)), c1 = Math.min(CELLS - 1, Math.floor((Math.max(h.az, h.bz) - oz) / CELL));
       for (let a = a0; a <= a1; a++) for (let c = c0; c <= c1; c++) hcells[c * CELLS + a].push(i);
     });
-    return { cx, cz, boxes, cells, holds, hcells };
+    return { cx, cz, boxes, props, cells, holds, hcells };
   }
 
   /** the holds a chunk's boxes offer */
@@ -187,11 +207,27 @@ export class City {
 
   /** one lot: its building, and what stands on its roof */
   private lot(boxes: Box[], rand: Rand, int: (a: number, b: number) => number, x0: number, z0: number, x1: number, z1: number): void {
-    const w = x1 - x0, d = z1 - z0;
+    let w = x1 - x0, d = z1 - z0;
     // (low and close: two to six storeys, a neighbour mostly within one of it)
     let storeys = Math.round(2 + 4 * this.relief((x0 + x1) / 2, (z0 + z1) / 2)) + [-1, 0, 0, 1][int(0, 3)];
     if (rand() < 0.04) storeys += int(2, 4);
     const H = Math.max(1, storeys) * STOREY;
+    // (a stair up one side, now and then, on a taller one: a storey a step, a metre deep, as an iron stair up a wall would
+    // go if the city were all boxes; the building drawn in a metre to make room for it)
+    const steps = Math.round(H / STOREY) - 1;
+    if (steps >= 2 && rand() < 0.18) {
+      const L = 2, along = w >= steps * L + 1 ? 'x' : d >= steps * L + 1 ? 'z' : '';
+      if (along) {
+        const low = rand() < 0.5, rev = rand() < 0.5;
+        for (let k = 1; k <= steps; k++) {
+          const a = rev ? (along === 'x' ? x1 : z1) - k * L : (along === 'x' ? x0 : z0) + (k - 1) * L;
+          if (along === 'x') boxes.push({ x0: a, x1: a + L, z0: low ? z0 : z1 - 1, z1: low ? z0 + 1 : z1, y0: 0, y1: k * STOREY, tag: TAG.STAIR });
+          else boxes.push({ z0: a, z1: a + L, x0: low ? x0 : x1 - 1, x1: low ? x0 + 1 : x1, y0: 0, y1: k * STOREY, tag: TAG.STAIR });
+        }
+        if (along === 'x') { if (low) z0 += 1; else z1 -= 1; } else { if (low) x0 += 1; else x1 -= 1; }
+      }
+    }
+    w = x1 - x0; d = z1 - z0;
     boxes.push({ x0, z0, x1, z1, y0: 0, y1: H, tag: TAG.BUILDING });
     // (a rim round the roof, a metre high and thick: something to go over at every edge)
     if (rand() < 0.3 && w >= 6 && d >= 6) {

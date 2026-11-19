@@ -13,7 +13,7 @@ export const MOVE_COLOUR: Record<Move, [number, number, number]> = {
   run: [0.16, 0.16, 0.18], dash: [0.98, 0.5, 0.1], ledge: [0.95, 0.95, 0.95], roll: [0.93, 0.35, 0.6],
   vault: [0.75, 0.9, 0.1], hop: [0.95, 0.8, 0.15], bound: [0.13, 0.42, 0.95], flip: [0.55, 0.3, 0.95], spring: [0.1, 0.68, 0.32],
   dive: [0.88, 0.16, 0.16], glide: [0.1, 0.72, 0.8], climb: [0.55, 0.38, 0.2], wallrun: [0.85, 0.15, 0.8],
-  fall: [0.45, 0.45, 0.5], hang: [0.7, 0.5, 0.25], chimney: [0.95, 0.3, 0.55], sideflip: [0.7, 0.3, 0.95],
+  fall: [0.45, 0.45, 0.5], hang: [0.7, 0.5, 0.25], chimney: [0.95, 0.3, 0.55], sideflip: [0.7, 0.3, 0.95], underbar: [0.9, 0.9, 0.25],
 };
 
 function route(r: Route, w: number, alpha: number, rings: boolean, out: Stroke[]): void {
@@ -32,7 +32,7 @@ function route(r: Route, w: number, alpha: number, rings: boolean, out: Stroke[]
   }
 }
 
-const HOLD_COLOUR = { edge: [0.2, 0.45, 0.9], rail: [0.95, 0.95, 0.95], sill: [0.1, 0.65, 0.3], pipe: [0.95, 0.5, 0.1], face: [0.6, 0.35, 0.75] } as const;
+const HOLD_COLOUR = { edge: [0.2, 0.45, 0.9], rail: [0.95, 0.95, 0.95], sill: [0.1, 0.65, 0.3], pipe: [0.95, 0.5, 0.1], face: [0.6, 0.35, 0.75], bar: [0.85, 0.85, 0.3] } as const;
 /** The holds about a place, as tags on what they're on: a line each (a wall, for the feet, a row of ticks at knee height
  * and again a storey up); and where the hands are (red rings) and the feet (black) this instant. */
 export function holdStrokes(holds: Hold[], reach: Reach, x: number, y: number, z: number, r: number): Stroke[] {

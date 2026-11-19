@@ -37,7 +37,7 @@ import { TUNE } from './tune';
 /** a direction; a jump tapped; and the jump held (to glide) */
 export interface Input { x: number; z: number; jump: boolean; hold?: boolean }
 
-export type Move = 'kick' | 'run' | 'dash' | 'ledge' | 'roll' | 'vault' | 'hop' | 'bound' | 'flip' | 'spring' | 'dive' | 'glide' | 'fall' | 'climb' | 'hang' | 'wallrun' | 'chimney' | 'sideflip';
+export type Move = 'kick' | 'run' | 'dash' | 'ledge' | 'roll' | 'vault' | 'hop' | 'bound' | 'flip' | 'spring' | 'dive' | 'glide' | 'fall' | 'climb' | 'hang' | 'wallrun' | 'chimney' | 'sideflip' | 'underbar';
 export type State = 'ground' | 'air' | 'climb' | 'wall' | 'plant' | 'chimney';
 
 type P3 = [number, number, number];
@@ -225,6 +225,19 @@ export class Runner implements Body {
       if (f.R.on) this.reach.fr = f.R.p;
       return;
     }
+    // (hanging, loaded: both feet set on the wall under the hips; springing: off it)
+    if (this.state === 'climb' && this.chain && this.chain.phase >= 1) {
+      if (this.chain.phase === 2) { f.L.on = f.R.on = false; return; }
+      for (const [foot, side] of [[f.L, 1], [f.R, -1]] as const) {
+        if (foot.on) continue;
+        const x = this.x + this.wx * (R + 0.02) + this.wz * side * 0.16, z = this.z + this.wz * (R + 0.02) - this.wx * side * 0.16;
+        const g = this.city.gripAt(x, this.y + 0.75, z, 0.35, (o) => (o.kind === 'face' || o.kind === 'sill' || o.kind === 'pipe') && o.nx * this.wx + o.nz * this.wz < -0.5);
+        if (g) { foot.on = true; foot.p = [g.x, g.y, g.z]; }
+      }
+      if (f.L.on) this.reach.fl = f.L.p; if (f.R.on) this.reach.fr = f.R.p;
+      if (f.L.on || f.R.on) this.reach.fn = [-this.wx, 0, -this.wz];
+      return;
+    }
     const ground = this.state === 'ground' && this.move !== 'roll' && sp > 2, wall = this.state === 'wall', climb = this.state === 'climb';
     if (!ground && !wall && !climb) { f.L.on = f.R.on = false; return; }
     const a = ground ? this.phase : wall ? this.wallT * 14 + this.lead * Math.PI : this.climbT * 15;
@@ -290,6 +303,7 @@ export class Runner implements Body {
       return this.wallSide > 0 ? { hl: p } : { hr: p };
     }
     if (this.state === 'air') {
+      if (this.move === 'underbar' && this.plant && this.plant2 && u > 0.1 && u < 0.7) return { hl: this.plant, hr: this.plant2 };
       if (this.move === 'vault' && this.plant && u > 0.12 && u < 0.82) return this.plant2 ? { hl: this.plant, hr: this.plant2 } : L ? { hr: this.plant } : { hl: this.plant };
       if (this.move === 'spring' && this.lip && u > 0.6) return { hl: this.lip[0], hr: this.lip[1] };
       return {};
@@ -334,8 +348,10 @@ export class Runner implements Body {
     if (this.stickT > 0) { this.stickT -= dt; top = Math.min(top, 1.5); }
     this.move = this.rollT > 0 ? 'roll' : this.dashT > 0 ? 'dash' : ledge ? 'ledge' : 'run';
     // (toward the wanted velocity, at a fixed rate: a turn is quick, a reversal a skid)
-    // (while the legs are still taking a landing it drives less: the landing is a beat, and the burst comes out of it)
-    const tx = dx * top, tz = dz * top, ex = tx - this.vx, ez = tz - this.vz, e = Math.hypot(ex, ez), a = (this.rollT > 0 ? TUNE.accel * 0.3 : TUNE.accel * (1 - 0.6 * this.land)) * dt;
+    // (while the legs are still taking a landing it drives less: the landing is a beat, and the burst comes out of it; let
+    // go with room ahead, it settles, through a walk to a stand, over about a second; with no room, it stops short)
+    const settling = !on && sp > 0.5 && this.rollT <= 0 && (() => { const s = (sp * sp) / (2 * TUNE.accel * 0.25) + 0.6; for (let d = 0.5; d <= s; d += 0.5) if (Math.abs(H(this.x + fx * d, this.z + fz * d) - this.y) > STEP) return false; return true; })();
+    const tx = dx * top, tz = dz * top, ex = tx - this.vx, ez = tz - this.vz, e = Math.hypot(ex, ez), a = (this.rollT > 0 ? TUNE.accel * 0.3 : settling ? TUNE.accel * 0.25 : TUNE.accel * (1 - 0.6 * this.land)) * dt;
     if (e <= a) { this.vx = tx; this.vz = tz; } else { this.vx += (ex / e) * a; this.vz += (ez / e) * a; }
     sp = this.speed;
     this.phase += ((sp * dt) / (1.3 + 0.27 * sp)) * 2 * Math.PI;
@@ -454,7 +470,7 @@ export class Runner implements Body {
     this.state = 'air'; this.vy = vy; this.airT = 0; this.planned = planned; this.air2 = true;
     this.move = move; this.float = float; this.flightT = Math.max(0.15, planned || float ? T : this.comesDown(T)); this.mu = 0;
     this.leaps++; this.rollT = 0; this.count(move);
-    if (move !== 'vault') this.plant = this.plant2 = null;
+    if (move !== 'vault' && move !== 'underbar') this.plant = this.plant2 = null;
     if (move !== 'spring') this.lip = null;
   }
 
@@ -512,6 +528,13 @@ export class Runner implements Body {
       } else { move = 'hop'; apex = clear + 0.3; }
     }
     else { move = 'bound'; apex = clear + 0.1 + 0.06 * D; }
+    // (a bar across the way, about head height over the gap, and the far side level with this one: under it, feet first,
+    // the hands on it (an underbar))
+    let bar: P3 | null = null;
+    if ((move === 'bound' || move === 'hop') && TUNE.reach && Math.abs(dh) < 0.6) {
+      const mid = (from + at) / 2, g = this.city.gripAt(this.x + ux * mid, y + 1.3, this.z + uz * mid, Math.max(1.2, (at - from) / 2), (h) => h.kind === 'bar' && h.ay - y > 0.9 && h.ay - y < 1.8);
+      if (g) { move = 'underbar'; apex = clear + 0.15; bar = [g.x, g.y, g.z]; }
+    }
     const float = false;
     apex += TUNE.hang;
     // (the arc: up to an apex that clears what's between, down to the landing; higher if it'd otherwise be too fast)
@@ -534,7 +557,8 @@ export class Runner implements Body {
     const carried = Math.max(sp - 1.5, Math.min(sp + 1.5, v));
     if (Math.abs(carried - v) > 0.001) {
       let a2 = apex, u2 = up, T2 = T;
-      const step = carried < v ? 0.2 : -0.1, lo = clear + 0.1, hi = clear + 3.4;
+      // (flatter only across a gap: over something, never lower than it was, or it'd go through what it's going over)
+      const step = carried < v ? 0.2 : -0.1, lo = move === 'bound' || move === 'dive' || move === 'underbar' ? clear + 0.1 : apex, hi = clear + 3.4;
       for (let i = 0; i < 40; i++) {
         const nA = a2 + step; if (nA < lo || nA > hi) break;
         a2 = nA; u2 = Math.sqrt((2 * a2) / G); T2 = u2 + fall(a2 - dh, float);
@@ -553,6 +577,7 @@ export class Runner implements Body {
       // (the hands in the figure's own order: the one on its left to the left)
       if (plant && plant2 && (plant[0] - plant2[0]) * uz - (plant[2] - plant2[2]) * ux < 0) { this.plant = plant2; this.plant2 = plant; }
     }
+    if (move === 'underbar' && bar) { this.plant = [bar[0] + uz * 0.22, bar[1], bar[2] - ux * 0.22]; this.plant2 = [bar[0] - uz * 0.22, bar[1], bar[2] + ux * 0.22]; }
     if (move === 'spring' && TUNE.reach) {
       // (a storey up: the lip it lands over, for both hands)
       const g = this.city.gripAt(this.x + ux * at, to, this.z + uz * at, TUNE.gripReach, (h) => h.kind === 'edge' && Math.abs(h.ay - to) < 0.05);
@@ -604,7 +629,8 @@ export class Runner implements Body {
     let px = nx + ux * R, pz = nz + uz * R, h = H(px, pz);
     if (H(nx, nz) > h) { px = nx; pz = nz; h = H(nx, nz); }
     // (a vault goes over what its hand is on, carried on the hand: that isn't in the way, and isn't landed on)
-    const over = this.move === 'vault' && this.plant ? this.plant[1] + 0.05 : -1;
+    // (only once the feet are up near it, tucked over: below that, what the hand is on is in the way like anything else)
+    const over = this.move === 'vault' && this.plant && this.y + this.vy * dt > this.plant[1] - 0.6 ? this.plant[1] + 0.05 : -1;
     if (h > ny + 0.05 && h > over) {
       // (something in the way: a lip is stepped up onto; a wall met at a slant is run along; met square, run up)
       if (h - ny <= 0.6) { this.x = px; this.z = pz; this.y = h; this.touch(Math.max(0, -this.vy)); return; }

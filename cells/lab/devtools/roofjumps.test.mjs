@@ -28,7 +28,7 @@ const { plan, foresee, TUNE, HOUSE, DIALS, City, Runner, Rig, CHUNK, STOREY, TAG
       assert.ok(b.x0 >= i * CHUNK + 1 && b.x1 <= (i + 1) * CHUNK - 1 && b.z0 >= j * CHUNK + 1 && b.z1 <= (j + 1) * CHUNK - 1);
       if (b.tag === TAG.BUILDING) { assert.equal(b.y0, 0); assert.equal(b.y1 % STOREY, 0); }
     }
-    assert.equal(chunkMesh(ch).length, (ch.boxes.length * 5 + 1) * 6 * VERTEX);
+    assert.equal(chunkMesh(ch).length, ((ch.boxes.length + ch.props.length) * 5 + 1) * 6 * VERTEX);
     assert.equal(c.heightAt(i * CHUNK + 0.5, j * CHUNK + 20), 0);
   }
   console.log(`${n} boxes in 49 chunks (${(n / 49).toFixed(0)} a chunk, ${(n * 10 / 49).toFixed(0)} triangles)`);
@@ -88,9 +88,11 @@ const { plan, foresee, TUNE, HOUSE, DIALS, City, Runner, Rig, CHUNK, STOREY, TAG
   for (const h of a.chunk(0, 1).holds) {
     kinds[h.kind] = (kinds[h.kind] ?? 0) + 1;
     const mx = (h.ax + h.bx) / 2, mz = (h.az + h.bz) / 2;
-    assert.ok(h.hand && h.foot, 'each says what it is for, by hand and by foot');
+    assert.ok(h.hand && (h.foot || h.kind === 'bar'), 'each says what it is for, by hand and by foot (a bar, by hand only)');
     if (h.kind === 'pipe') { assert.ok(h.ax === h.bx && h.az === h.bz && h.ay === 0 && h.by > 0); continue; }
     if (h.kind === 'face') { assert.ok(h.by - h.ay >= 2 && a.heightAt(mx - h.nx * 0.01, mz - h.nz * 0.01) >= h.by); continue; }
+    // (a bar: across a gap, a little above the roofs at either end)
+    if (h.kind === 'bar') { assert.ok(a.heightAt(mx, mz) < h.ay - 1 && Math.abs(a.heightAt(h.ax, h.az) - (h.ay - 1.3)) < 1e-6 && Math.abs(a.heightAt(h.bx, h.bz) - (h.ay - 1.3)) < 1e-6, 'a bar spans a gap between two roofs'); continue; }
     assert.equal(h.ay, h.by);
     // (just inside what it's on: the surface there is at least as high as it)
     assert.ok(a.heightAt(mx - h.nx * 0.01, mz - h.nz * 0.01) >= h.ay, `${h.kind} is on something`);
@@ -279,4 +281,21 @@ console.log('roofjumps: ok');
   const plain = run(0), held = run(0.15);
   assert.ok(held.held > plain.held + 10 && held.made.bound && !held.falls, `a held top lands as aimed (${held.held} held steps, ${held.falls} falling)`);
   console.log(`apex hold: ${held.held} steps held, lands as aimed`);
+}
+
+// The city's stairs and bars: stairs a storey a step up a building's side, each step narrow (a rail along it); bars across
+// alleys, drawn but not stood on. And let go with room ahead it settles through a walk; at an edge it stops short.
+{
+  let stairs = 0, bars = 0, steps = 0;
+  for (const seed of [1, 2, 7]) { const c = new City(seed); for (let i = -2; i <= 2; i++) for (let j = -2; j <= 2; j++) { const ch = c.chunk(i, j); steps += ch.boxes.filter((b) => b.tag === TAG.STAIR).length; stairs += ch.boxes.filter((b) => b.tag === TAG.STAIR && b.y1 === STOREY).length; bars += ch.holds.filter((h) => h.kind === 'bar').length; for (const b of ch.props) assert.ok(c.heightAt((b.x0 + b.x1) / 2, (b.z0 + b.z1) / 2) <= b.y0 + 1e-6 || b.y1 - b.y0 > 1, 'a prop is not stood on'); } }
+  assert.ok(stairs > 10 && steps > stairs * 2 && bars > 10, `stairs (${stairs}, ${steps} steps) and bars (${bars})`);
+  console.log(`city: ${stairs} stairs (${steps} steps), ${bars} bars across alleys`);
+  let under = 0;
+  for (const seed of [1, 2, 7, 31]) for (let k = 0; k < 16; k++) { const r = new Runner(new City(seed)), a = (k / 16) * 2 * Math.PI + 0.1; for (let i = 0; i < 120 * 30; i++) r.step(1 / 120, { x: Math.sin(a), z: Math.cos(a), jump: false }); under += r.made.underbar ?? 0; }
+  assert.ok(under > 3, `under bars (${under})`);
+  console.log(`  ${under} underbars in 64 half-minute runs`);
+  const open = new Runner(new City(1)); let t = 0;
+  for (let i = 0; i < 240; i++) open.step(1 / 120, { x: 0, z: 1, jump: false });
+  const v0 = open.speed; while (open.speed > 0.05 && t < 3) { open.step(1 / 120, { x: 0, z: 0, jump: false }); t += 1 / 120; }
+  console.log(`  settles from ${v0.toFixed(1)} m/s in ${t.toFixed(2)} s`);
 }

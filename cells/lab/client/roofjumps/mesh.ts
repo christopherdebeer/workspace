@@ -24,13 +24,13 @@ function quad(o: Float32Array, at: number, a: V3, b: V3, c: V3, d: V3, tag: numb
   return at;
 }
 
-/** A chunk: its ground, and each box's top and sides. */
+/** A chunk: its ground, and each box's top and sides (and its props', drawn the same). */
 export function chunkMesh(c: Chunk): Float32Array {
-  const o = new Float32Array((c.boxes.length * 5 + 1) * 6 * VERTEX);
+  const o = new Float32Array(((c.boxes.length + c.props.length) * 5 + 1) * 6 * VERTEX);
   let at = 0;
   const x = c.cx * CHUNK, z = c.cz * CHUNK;
   at = quad(o, at, [x, 0, z], [x + CHUNK, 0, z], [x + CHUNK, 0, z + CHUNK], [x, 0, z + CHUNK], TAG.GROUND, [x, -1, z]);
-  for (const b of c.boxes) {
+  for (const b of [...c.boxes, ...c.props]) {
     const m: V3 = [(b.x0 + b.x1) / 2, (b.y0 + b.y1) / 2, (b.z0 + b.z1) / 2];
     const p = (i: number, j: number, k: number): V3 => [i ? b.x1 : b.x0, j ? b.y1 : b.y0, k ? b.z1 : b.z0];
     at = quad(o, at, p(0, 1, 0), p(1, 1, 0), p(1, 1, 1), p(0, 1, 1), b.tag, m);
