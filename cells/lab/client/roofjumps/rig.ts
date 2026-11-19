@@ -193,6 +193,15 @@ export class Rig {
         p.shL = p.shR = 2.9; both('el', 0.3); both('spread', 0.15); p.head = -0.4;
         break;
       }
+      case 'chimney': {
+        // (up an alley wall to wall: the legs split across it, the pushing one long, the other gathered toward the far wall;
+        // the arms out to both walls (the hands taken to them); a kick's gather and push by how far across it is)
+        const k = sm(0, 0.35, u) * (1 - sm(0.75, 1, u));
+        legs(0.9 + 0.5 * k, 1.4 - 0.6 * k, -0.1 - 0.3 * k, 0.6 + 0.3 * k); p.splay = 0.35 + 0.15 * k;
+        p.shL = p.shR = 0.6; both('el', 0.35); both('spread', 1.45);
+        p.tilt = -r.wallSide * 0.25 * (1 - 2 * u); p.lean = 0.12; p.spine = 0.1; p.head = -0.35;
+        break;
+      }
       case 'glide': {
         // (the slow one: upright, the arms straight out, one knee a little raised, the other leg trailing)
         legs(0.3, 0.75, -0.28, 0.2);

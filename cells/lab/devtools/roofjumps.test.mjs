@@ -73,6 +73,9 @@ const { plan, foresee, TUNE, HOUSE, DIALS, City, Runner, Rig, CHUNK, STOREY, TAG
   // (a wall run straight off the ground, met at a slant; and up a face from hold to hold)
   assert.ok(fromGround > 100, `wall runs from a ground start (${fromGround})`);
   assert.ok(moves.hang > 20, `chains up a face (${moves.hang} holds hung from)`);
+  assert.ok(moves.chimney > 50, `up narrow alleys wall to wall (${moves.chimney})`);
+  // (a contact for every jump: few flights end as falls)
+  assert.ok(moves.fall < leaps * 0.15, `few leaps fall (${moves.fall} of ${leaps})`);
   console.log(`  ${fromGround} wall runs straight off the ground`);
 }
 // the holds: the same whenever made; each a line on its box (an edge along a top, a sill on a face at a storey, a pipe up

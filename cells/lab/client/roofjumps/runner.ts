@@ -24,7 +24,7 @@
  *
  * Its states (`state`), each a method of its own: ground (running, loading a takeoff, landing in its legs), air (a flight:
  * a leap, a fall, a glide while the jump is held), wall (running along one), plant (a foot put on a wall it jumped at,
- * driving up off it), climb (hands on a hold: pulling over a lip, or hanging from a sill on the way up a face, loading,
+ * driving up off it), chimney (up a narrow alley between two walls, kicking from one to the other), climb (hands on a hold: pulling over a lip, or hanging from a sill on the way up a face, loading,
  * and springing for the next: a chain, as up a fire escape). A move that misses its landing falls: it catches a lip in
  * reach, or comes down and rolls. It glides only while the jump is held.
  *
@@ -37,8 +37,8 @@ import { TUNE } from './tune';
 /** a direction; a jump tapped; and the jump held (to glide) */
 export interface Input { x: number; z: number; jump: boolean; hold?: boolean }
 
-export type Move = 'run' | 'dash' | 'ledge' | 'roll' | 'vault' | 'hop' | 'bound' | 'flip' | 'spring' | 'dive' | 'glide' | 'fall' | 'climb' | 'hang' | 'wallrun';
-export type State = 'ground' | 'air' | 'climb' | 'wall' | 'plant';
+export type Move = 'run' | 'dash' | 'ledge' | 'roll' | 'vault' | 'hop' | 'bound' | 'flip' | 'spring' | 'dive' | 'glide' | 'fall' | 'climb' | 'hang' | 'wallrun' | 'chimney';
+export type State = 'ground' | 'air' | 'climb' | 'wall' | 'plant' | 'chimney';
 
 type P3 = [number, number, number];
 /** where each hand wants to be, if anywhere: a point in the world */
@@ -80,6 +80,8 @@ const ROLL = 0.5;
 const AXES = [[1, 0], [-1, 0], [0, 1], [0, -1]];
 /** hanging from a hold: the feet this far below the hands (m); the catch settling, the least load, a spring for the next (s) */
 const HANG = 2.05, CHAIN_CATCH = 0.12, CHAIN_LOAD = 0.18, CHAIN_SPRING = 0.32;
+/** up a narrow alley: a kick from one wall to the other this long (s), off it this fast upward (m/s); no wider than (m) */
+const TIC = 0.27, TIC_UP = 6.3, ALLEY = 3.2;
 /** the point of a level hold nearest (x, z) */
 const onHold = (h: Hold, x: number, z: number): P3 => {
   const dx = h.bx - h.ax, dz = h.bz - h.az, t = Math.max(0, Math.min(1, ((x - h.ax) * dx + (z - h.az) * dz) / (dx * dx + dz * dz || 1)));
@@ -116,6 +118,10 @@ export class Runner implements Body {
   chains = 0; private press = 0;
   /** hanging from a hold on the way up a face: its height, what phase, how long in it, and where it springs from */
   private chain: { y: number; phase: number; t: number; y0: number; y1: number; next: number } | null = null;
+  /** up a narrow alley: the way to the wall it started on (ax, az), a point on that wall's face, the faces apart, which
+   * wall it's on (1 the first), how long since the last kick, how many, how far along the alley, and its pace along it */
+  private ch: { ax: number; az: number; ox: number; oz: number; gap: number; side: number; t: number; kicks: number; along: number; pace: number } | null = null;
+  chimneys = 0;
   get chainPhase(): number | undefined { return this.chain?.phase; }
   braces = 0;
   private bracing = false;
@@ -153,7 +159,7 @@ export class Runner implements Body {
   get speed(): number { return Math.hypot(this.vx, this.vz); }
 
   /** another of it, as it is now, to be run on ahead without touching this one (plan.ts) */
-  clone(): Runner { const c = Object.assign(Object.create(Runner.prototype) as Runner, this); c.made = { ...this.made }; c.chain = this.chain ? { ...this.chain } : null; c.feet = { L: { ...this.feet.L }, R: { ...this.feet.R } }; return c; }
+  clone(): Runner { const c = Object.assign(Object.create(Runner.prototype) as Runner, this); c.made = { ...this.made }; c.chain = this.chain ? { ...this.chain } : null; c.ch = this.ch ? { ...this.ch } : null; c.feet = { L: { ...this.feet.L }, R: { ...this.feet.R } }; return c; }
   private count(m: Move): void { this.made[m] = (this.made[m] ?? 0) + 1; }
 
   step(dt: number, inp: Input): void {
@@ -172,6 +178,7 @@ export class Runner implements Body {
     else if (this.state === 'air') this.air(dt, on, dx, dz, inp.jump);
     else if (this.state === 'wall') this.wall(dt, on, dx, dz, inp.jump);
     else if (this.state === 'plant') this.wallStep(dt, on ? dx * this.wx + dz * this.wz : 0);
+    else if (this.state === 'chimney') this.chimney(dt, on);
     else this.climb(dt, on, dx, dz, inp.jump);
     this.hold = !!inp.hold;
     // (facing: the way it's going; up a wall, the wall)
@@ -249,6 +256,21 @@ export class Runner implements Body {
       // (hanging: the hands on the hold, let go through the first part of a spring for the next, and on the next one)
       if (this.chain) return this.chain.phase === 2 && this.chain.t < 0.6 * CHAIN_SPRING ? {} : { ...this.grips };
       return this.mu < 0.88 ? { ...this.grips } : {};
+    }
+    if (this.state === 'chimney' && this.ch) {
+      // (a hand on each wall, about the shoulders, a little ahead; the foot on the wall it has just kicked from)
+      const c = this.ch, ahead = 0.25, y = this.y + 1.35;
+      const onA: P3 = [c.ox + this.tx * (c.along + ahead), y, c.oz + this.tz * (c.along + ahead)];
+      const onB: P3 = [c.ox - c.ax * c.gap + this.tx * (c.along + ahead), y, c.oz - c.az * c.gap + this.tz * (c.along + ahead)];
+      const aLeft = c.ax * Math.cos(this.heading) - c.az * Math.sin(this.heading) > 0;
+      const r: Reach = aLeft ? { hl: onA, hr: onB } : { hl: onB, hr: onA };
+      if (c.t < 0.1) {
+        const w: P3 = c.side > 0 ? [onA[0] - this.tx * ahead, this.y + 0.3, onA[2] - this.tz * ahead] : [onB[0] - this.tx * ahead, this.y + 0.3, onB[2] - this.tz * ahead];
+        const nx = c.side > 0 ? c.ax : -c.ax, nz = c.side > 0 ? c.az : -c.az;
+        const g = this.city.gripAt(w[0], w[1], w[2], 0.35, (q) => q.kind === 'face' && q.nx * nx + q.nz * nz < -0.5);
+        if (g) { r[this.lead === 1 ? 'fr' : 'fl'] = [g.x, g.y, g.z]; r.fn = [-nx, 0, -nz]; }
+      }
+      return r;
     }
     if (this.state === 'plant') return this.stepFoot && this.stepAge < 0.15 ? { [this.lead === 1 ? 'fr' : 'fl']: this.stepFoot, fn: [-this.wx, 0, -this.wz] } : {};
     if (this.state === 'wall') {
@@ -411,14 +433,24 @@ export class Runner implements Body {
       const supportLeft = this.load ? this.supportLeft : this.leftSupports();
       this.lead = supportLeft ? 0 : 1;
     } else this.lead ^= 1;
-    this.chain = null; this.stepFoot = null; this.bracing = false; this.press = 0;
+    this.chain = null; this.ch = null; this.stepFoot = null; this.bracing = false; this.press = 0;
     this.committed = false; this.jumpBuffer = 0;
     this.load = 0; this.pushPending = false; this.dashT = 0;
     this.state = 'air'; this.vy = vy; this.airT = 0; this.planned = planned; this.air2 = true;
-    this.move = move; this.float = float; this.flightT = Math.max(0.15, T); this.mu = 0;
+    this.move = move; this.float = float; this.flightT = Math.max(0.15, planned || float ? T : this.comesDown(T)); this.mu = 0;
     this.leaps++; this.rollT = 0; this.count(move);
     if (move !== 'vault') this.plant = this.plant2 = null;
     if (move !== 'spring') this.lip = null;
+  }
+
+  /** an unaimed flight: when it will come down on whatever's under it (or `T`, if that's not within a few seconds) */
+  private comesDown(T: number): number {
+    let x = this.x, y = this.y, z = this.z, vy = this.vy; const h = 1 / 60;
+    for (let t = h; t < 3; t += h) {
+      vy -= TUNE.gravity * h; x += this.vx * h; z += this.vz * h; y += vy * h;
+      if (vy < 0 && y <= this.city.heightAt(x, z)) return t;
+    }
+    return T;
   }
 
   /** Look along (ux, uz) for where to stand next, and go there: by the move that suits what's between. */
@@ -481,9 +513,20 @@ export class Runner implements Body {
     }
     // Keep the horizontal impulse within a running step. If the original mark is out of
     // reach, keep travelling and let the actual roof, lip or wall receive the runner.
+    // (and keep the aim: too slow for the mark at the pace it can carry, a higher arc, so the flight lasts long enough;
+    // too fast, a flatter one, so it's shorter; only if neither lands it does it go unaimed, to land wherever it can)
     const carried = Math.max(sp - 1.5, Math.min(sp + 1.5, v));
     if (Math.abs(carried - v) > 0.001) {
-      aimed = Math.abs(H(carried * T) - to) < 0.1 && flat(carried * T, to);
+      let a2 = apex, u2 = up, T2 = T;
+      const step = carried < v ? 0.2 : -0.1, lo = clear + 0.1, hi = clear + 3.4;
+      for (let i = 0; i < 40; i++) {
+        const nA = a2 + step; if (nA < lo || nA > hi) break;
+        a2 = nA; u2 = Math.sqrt((2 * a2) / G); T2 = u2 + fall(a2 - dh, float);
+        if (carried < v ? carried * T2 >= D : carried * T2 <= D) break;
+      }
+      const at2 = carried * T2;
+      if (Math.abs(H(at2) - to) < 0.1 && flat(at2, to)) { apex = a2; up = u2; T = T2; aimed = true; }
+      else aimed = Math.abs(H(carried * T) - to) < 0.1 && flat(carried * T, to);
       v = carried;
     }
     this.vx = ux * v; this.vz = uz * v;
@@ -655,6 +698,8 @@ export class Runner implements Body {
   private wall(dt: number, on: boolean, dx: number, dz: number, jump: boolean): void {
     const H = (x: number, z: number) => this.city.heightAt(x, z);
     const into = on ? dx * this.wx + dz * this.wz : 0, back = on && dx * this.tx + dz * this.tz < -0.5, up = Math.max(0, into);
+    // (a wall close across the way, as tall: a narrow alley; leaning in, up it wall to wall)
+    if (TUNE.walls && up > 0.2) { const d = this.across(); if (d > 0) { this.intoChimney(d); return; } }
     this.wallT += dt * (1 + TUNE.wallCost * up);
     const left = Math.max(0, 1 - this.wallT / TUNE.wallTime);
     this.vy = Math.min(TUNE.wallRise, this.vy + (up * TUNE.wallLift * Math.min(1, left * 2.5) - TUNE.wallGravity) * dt);
@@ -677,6 +722,47 @@ export class Runner implements Body {
     // (its top: onto it; or it has ended: on, off the end of it)
     if (top > this.y - 0.7) { this.x += this.wx * (R + 0.3); this.z += this.wz * (R + 0.3); this.y = H(this.x, this.z); this.touch(0); return; }
     this.launch(Math.max(this.vy, 4.5), 'bound', false, false, 0.7);
+  }
+
+  /** how far the wall across a narrow alley is (from the body), or 0 if there's none in reach as tall as this one */
+  private across(): number {
+    for (let d = R + 0.3; d <= ALLEY; d += 0.1) if (this.city.heightAt(this.x - this.wx * d, this.z - this.wz * d) > this.y + 1.6) return d;
+    return 0;
+  }
+  private intoChimney(d: number): void {
+    const ox = this.x + this.wx * (R + 0.05), oz = this.z + this.wz * (R + 0.05);
+    this.ch = { ax: this.wx, az: this.wz, ox, oz, gap: d + R + 0.05, side: 1, t: 0, kicks: 0, along: 0, pace: Math.min(4, this.wsp * 0.35) };
+    this.state = 'chimney'; this.move = 'chimney'; this.vy = TIC_UP; this.chimneys++; this.count('chimney');
+  }
+  /**
+   * Up a narrow alley, wall to wall: off one with a kick up and across, onto the other, a kick every TIC seconds, drifting
+   * on along the alley; a top come within reach is caught and pulled over; let go (no direction held), it drops; the
+   * alley widening or a wall ending, it's off into the air.
+   */
+  private chimney(dt: number, on: boolean): void {
+    const c = this.ch!, H = (x: number, z: number) => this.city.heightAt(x, z);
+    c.t += dt; c.along += c.pace * dt;
+    this.vy -= TUNE.gravity * dt; this.y += this.vy * dt;
+    const from = c.side > 0 ? R : c.gap - R, to = c.side > 0 ? c.gap - R : R, k = Math.min(1, c.t / TIC), e = k * k * (3 - 2 * k), lat = from + (to - from) * e;
+    this.x = c.ox - c.ax * lat + this.tx * c.along; this.z = c.oz - c.az * lat + this.tz * c.along;
+    this.vx = this.tx * c.pace; this.vz = this.tz * c.pace; this.mu = k; this.wallSide = c.side;
+    const g = H(this.x, this.z);
+    if (this.y <= g) { this.ch = null; this.y = g; this.touch(Math.max(0, -this.vy)); return; }
+    if (k < 1) return;
+    // (on the other wall: its top in reach is caught; else kicked off again, if it goes on and it's still wanted)
+    c.side = -c.side; c.t = 0; c.kicks++; this.lead ^= 1;
+    const nx = c.side > 0 ? c.ax : -c.ax, nz = c.side > 0 ? c.az : -c.az;
+    const fx = this.x + nx * (R + 0.05), fz = this.z + nz * (R + 0.05), top = H(fx, fz), reach = top - this.y;
+    if (reach > 0.5 && reach <= TUNE.armReach) {
+      const lip = this.city.gripAt(fx, top, fz, 0.5, (q) => q.kind === 'edge' && q.nx * nx + q.nz * nz < -0.9);
+      if (lip) { this.wx = nx; this.wz = nz; this.ch = null; this.grabTop(lip, top, fx, fz); return; }
+    }
+    const fwd = H(fx + this.tx * 0.6, fz + this.tz * 0.6), back = H(this.x - nx * (c.gap - R + 0.05) + this.tx * 0.6, this.z - nz * (c.gap - R + 0.05) + this.tz * 0.6);
+    if (!on || c.kicks >= 12 || reach <= 0.5 || fwd <= this.y + 0.6 || back <= this.y + 0.6) {
+      this.ch = null; this.vx = this.tx * c.pace - nx * 2.5; this.vz = this.tz * c.pace - nz * 2.5; this.wx = nx; this.wz = nz;
+      this.launch(Math.max(this.vy, 4), 'bound', false, false, 0.6); this.wallCool = 0.3; return;
+    }
+    this.vy = TIC_UP;
   }
 
   private wallStep(dt: number, into: number): void {
