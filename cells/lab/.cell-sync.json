@@ -1,8 +1,8 @@
 {
   "cell": "c15r/lab",
   "cellId": "lab-8928acf3",
-  "treeVersion": "tree:c57aa6a44a999397c9e496112289f9cfb865ab54b56132dec54a8538bb466afd",
-  "syncedAt": "2026-11-19T10:05:15.132Z",
+  "treeVersion": "tree:b5c7fdc0a791e4fede2a02e43d39fdd6931da6ed889aab7dd4237d5c6d1a2021",
+  "syncedAt": "2026-11-19T10:07:47.625Z",
   "files": {
     "README.md": "sha256:7f343237d183707fe06acca63d508a0f302fa9e678f1549d785e44a1016300d2",
     "client/autograph/autobiography.ts": "sha256:1aa72dbb927e6de87cdd920842be3b826ae520031f2589fadc9d4fe98abfbd67",
@@ -771,9 +771,9 @@
     "devtools/reference/taohua-jiangxue-river.jpg": "sha256:f4ddc0931de1f9b59544b6035ab9fc13c7ea16ac19a6b466bf66a0fe250a2558",
     "devtools/reference/taohua-qinhuai-river.jpg": "sha256:6b8b7a16fa3dcb996c5609350362676f6445bcc8e47b55f04818f9cd5e1477e9",
     "devtools/refs.mjs": "sha256:3873a87aec06c40f79a8c1d9f8041874a6323573bfcb589c9a1b40d70c2b37fe",
-    "devtools/refs/README.md": "sha256:aac030d82659ade102a9f745ed2c85cb00fa490bd6dd5fcaaffc0a52210acf12",
+    "devtools/refs/README.md": "sha256:820fddb9a4cf6e2c5dfa8a627b846be768911d094bbad7d90e8e025fb0693dc5",
     "devtools/refs/kyo-kling-parkour.prompt.md": "sha256:f1a9641ef9ea136242f97504493ac9e453b4bb6dbef6c9a6bdaa49de90286e4d",
-    "devtools/refs/roofjumps.json": "sha256:8b1bc7a8511c405c0d0d4b59bf470357a651f6d18ef2fdae2abd84f1c981762d",
+    "devtools/refs/roofjumps.json": "sha256:46c2648a65bf70e6be9121483e4849198d3cbaf304713fb4e2cffd01248ecddc",
     "devtools/rescue-coast-fidelity.mjs": "sha256:0a9e85cec261014ea43dd670cfa4ea85c3bf9552ee16c1f70378607ff674d39e",
     "devtools/rescue-coast-smoke.mjs": "sha256:6334e977d1753499bf231025d16b3e022d7f84f5eea372d42ecfbb8c9d41864f",
     "devtools/rescue-coast.test.mjs": "sha256:8d6999cf8f88c32a31ea4438c581d520365bad2ab8d9a8d165ff1857e1b075ba",
