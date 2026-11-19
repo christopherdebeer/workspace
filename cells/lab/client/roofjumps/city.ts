@@ -254,6 +254,18 @@ export class City {
     if (rand() < 0.1) stand(2, 2, 3, TAG.TANK);
   }
 
+  /** The boxes with anything within `r` of (x, z) (by the buckets they lie in): for a body's own extent against them. */
+  boxesNear(x: number, z: number, r: number): Box[] {
+    const out = new Set<Box>();
+    for (let cx = Math.floor((x - r) / CHUNK); cx <= Math.floor((x + r) / CHUNK); cx++) for (let cz = Math.floor((z - r) / CHUNK); cz <= Math.floor((z + r) / CHUNK); cz++) {
+      const c = this.chunk(cx, cz), ox = cx * CHUNK, oz = cz * CHUNK;
+      const a0 = Math.max(0, Math.floor((x - r - ox) / CELL)), a1 = Math.min(CELLS - 1, Math.floor((x + r - ox) / CELL));
+      const c0 = Math.max(0, Math.floor((z - r - oz) / CELL)), c1 = Math.min(CELLS - 1, Math.floor((z + r - oz) / CELL));
+      for (let a = a0; a <= a1; a++) for (let b = c0; b <= c1; b++) for (const i of c.cells[b * CELLS + a]) out.add(c.boxes[i]);
+    }
+    return [...out];
+  }
+
   /** the height of the top surface at a point (0: the street) */
   heightAt(x: number, z: number): number {
     const cx = Math.floor(x / CHUNK), cz = Math.floor(z / CHUNK), c = this.chunk(cx, cz);

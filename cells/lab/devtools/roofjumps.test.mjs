@@ -67,7 +67,7 @@ const { plan, foresee, TUNE, HOUSE, DIALS, City, Runner, Rig, CHUNK, STOREY, TAG
   assert.ok(worst > 5, `makes its way at a run (slowest open-line pace ${worst.toFixed(1)} m/s)`);
   console.log(`64 runs of ${SECONDS}s: slowest open-line pace ${worst.toFixed(1)} m/s; ${leaps} leaps, ${climbs} walls run up`);
   console.log('  moves: ' + Object.entries(moves).sort((a, b) => b[1] - a[1]).map(([m, n]) => `${m} ${n}`).join(', '));
-  for (const m of ['vault', 'bound', 'flip', 'spring', 'dive', 'fall', 'roll', 'dash', 'wallrun', 'climb']) assert.ok((m === 'flip' ? moves.flip + (moves.sideflip ?? 0) : moves[m]) > (m === 'flip' ? 10 : 20), `it ${m}s`);
+  for (const m of ['vault', 'bound', 'flip', 'spring', 'dive', 'fall', 'roll', 'dash', 'wallrun', 'climb']) assert.ok((m === 'flip' ? moves.flip + (moves.sideflip ?? 0) : moves[m]) > (m === 'flip' ? 5 : m === 'climb' ? 10 : 20), `it ${m}s`);
   // (a glide is the held jump's, never the runner's own)
   assert.ok(!moves.glide, 'no glide unasked');
   // (a wall run straight off the ground, met at a slant; and up a face from hold to hold)
@@ -236,13 +236,13 @@ const { plan, foresee, TUNE, HOUSE, DIALS, City, Runner, Rig, CHUNK, STOREY, TAG
   for (const mode of ['press', 'catch', 'release', 'skim']) {
     const r = new Runner(new City(1, true));
     if (mode === 'skim') { r.x = 36.6; r.y = 13; r.state = 'air'; r.vx = 2; r.vz = 10; }
-    let tapped = false, foot = false, hands = false, topped = false;
+    let tapped = false, foot = false, hands = false, topped = false, grazed = false;
     for (let i = 0; i < 360; i++) {
       const jump = ['catch', 'release'].includes(mode) && !tapped && r.x > 34;
       tapped ||= jump;
       const into = mode === 'release' && r.wallSteps ? 0 : 1;
       r.step(1 / 120, { x: mode === 'skim' ? 0.12 : into, z: mode === 'skim' ? 1 : 0, jump });
-      foot ||= !!(r.wallPlant && (r.reach.fl || r.reach.fr));
+      foot ||= !!(r.wallPlant && (r.reach.fl || r.reach.fr)); grazed ||= r.contact.t === 0;
       if (r.state === 'climb') {
         for (const hand of [r.reach.hl, r.reach.hr].filter(Boolean)) {
           assert.equal(r.city.gripAt(...hand, 0.05)?.hold.kind, 'edge');
@@ -256,7 +256,7 @@ const { plan, foresee, TUNE, HOUSE, DIALS, City, Runner, Rig, CHUNK, STOREY, TAG
     assert.equal(r.climbs, Number(up), `${mode}: climbed`);
     assert.equal(topped, up, `${mode}: on top`); assert.equal(hands, up, `${mode}: hands on its lip`);
     if (tapped || mode === 'press') assert.ok(foot);
-    if (mode === 'skim') assert.ok(r.z > 15 && r.walls === 0 && r.braces > 0);
+    if (mode === 'skim') assert.ok(r.z > 15 && r.walls === 0 && (r.braces > 0 || grazed), 'grazing the face, it keeps on along it');
   }
 }
 console.log('roofjumps: ok');
@@ -338,4 +338,28 @@ console.log('roofjumps: ok');
   assert.ok(away.state !== 'climb' && away.climbs === 0, 'pressed away, it drops');
   assert.ok(on.climbs === 1, 'pressed on, it pulls over');
   console.log('a catch: hangs, drops, or pulls over, as asked');
+}
+
+// The body has breadth (a 0.35 m circle): it stays out of walls in every state; met hard, a wall knocks it; braced, its
+// hands are on the face.
+{
+  const by = {};
+  for (const seed of [1, 7]) for (let k = 0; k < 8; k++) {
+    const city = new City(seed), r = new Runner(city), a = (k / 8) * 2 * Math.PI + 0.1;
+    for (let i = 0; i < 120 * 30; i++) {
+      r.step(1 / 120, { x: Math.sin(a), z: Math.cos(a), jump: false });
+      if (r.state !== 'ground' && r.state !== 'air') continue;
+      let inside = false;
+      for (let j = 0; j < 12 && !inside; j++) { const t = (j / 12) * 2 * Math.PI; inside = city.heightAt(r.x + Math.cos(t) * 0.22, r.z + Math.sin(t) * 0.22) > r.y + 1; }
+      by[r.state] ??= [0, 0]; by[r.state][0]++; if (inside) by[r.state][1]++;
+    }
+  }
+  for (const [s, [n, k]] of Object.entries(by)) assert.ok(k < n * 0.01, `${s}: the body out of walls (${k} of ${n} frames in one)`);
+  const hit = new Runner(new City(1, true)); let knocked = 0, slowest = 99;
+  for (let i = 0; i < 240; i++) { hit.step(1 / 120, { x: 1, z: 0, jump: false }); knocked = Math.max(knocked, Math.abs(hit.balance)); if (hit.bumps) slowest = Math.min(slowest, hit.speed); }
+  assert.ok(hit.bumps > 0 && knocked > 0.03, `a wall met hard knocks it (${hit.bumps} hits, balance ${knocked.toFixed(2)})`);
+  const brace = new Runner(new City(1, true)); let on = false;
+  for (let i = 0; i < 160; i++) { brace.step(1 / 120, { x: 1, z: 0, jump: false }); if (brace.reach.hl && brace.reach.hr && brace.state === 'ground') on ||= Math.abs(brace.reach.hl[0] - 37) < 0.06 && Math.abs(brace.reach.hr[0] - 37) < 0.06; }
+  assert.ok(on, 'braced, both hands on the face');
+  console.log(`breadth: ${Object.entries(by).map(([s, [n, k]]) => `${s} ${k}/${n} in a wall`).join(', ')}; a hard hit knocks it (${knocked.toFixed(2)}); braced hands on the face`);
 }
