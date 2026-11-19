@@ -168,7 +168,7 @@ export class Runner implements Body {
   private save: { kind: 'short' | 'wide' | 'long'; ex: number; ez: number; mag: number; t: number; stage: number } | null = null;
   saves = 0; lastSave: { kind: string; err: number; foot: number } | null = null;
   /** the way it was last asked to go; seconds to the ground; the planned flight; settling strides owed after a landing */
-  private want: [number, number] = [0, 0]; ttc = 9; private breathT = 0;
+  private want: [number, number] = [0, 0]; private launchWant: [number, number] = [0, 0]; ttc = 9; private breathT = 0;
   /** a hang's swing: along the wall (m, m/s), the dip (m, m/s), where it caught, the way along, the near hand (1 its left) */
   private sw: { s: number; v: number; d: number; dv: number; x0: number; z0: number; tx: number; tz: number; near: number; t: number } | null = null;
   get saveKind(): string | undefined { return this.save?.kind; }
@@ -723,7 +723,7 @@ export class Runner implements Body {
     this.chain = null; this.ch = null; this.atLip = -1; if (move !== 'spring') this.toWall = null; this.stepFoot = null; this.bracing = false; this.press = 0; this.held = 0; this.rising = vy > 0;
     if (move !== 'vault') this.palmSpin = false;
     this.resetTakeoff(); this.pushPending = false; this.dashT = 0;
-    this.state = 'air'; this.vy = vy; this.airT = 0; this.planned = planned; this.air2 = true; this.attempt = false; this.aim = null; this.errorOf = null; this.save = null; this.sw = null;
+    this.state = 'air'; this.vy = vy; this.airT = 0; this.planned = planned; this.air2 = true; this.attempt = false; this.launchWant = [this.want[0], this.want[1]]; this.aim = null; this.errorOf = null; this.save = null; this.sw = null;
     this.move = move; this.float = float; this.flightT = Math.max(0.15, planned || float ? T : this.comesDown(T)); this.mu = 0;
     this.leaps++; this.rollT = 0; this.count(move);
     if (move !== 'vault' && move !== 'underbar') this.plant = this.plant2 = null;
@@ -831,14 +831,16 @@ export class Runner implements Body {
     const aimX = this.x + ux * v * T, aimZ = this.z + uz * v * T;
     let err: { kind: string; e: number } | null = null;
     if (aimed && ['bound', 'spring', 'hop', 'dive', 'flip', 'sideflip'].includes(move)) {
-      const turnK = Math.min(1, Math.abs(this.turn) / 3), speedK = Math.max(0, Math.min(1, (v - 14) / 5)), Dv = v * T;
+      // (a late turn: how far what's asked is off the way it's going as it leaves, per right angle)
+      const lateTurn = this.want[0] || this.want[1] ? Math.acos(Math.max(-1, Math.min(1, ux * this.want[0] + uz * this.want[1]))) : 0;
+      const turnK = Math.min(1, lateTurn / (Math.PI / 2)), speedK = Math.max(0, Math.min(1, (v - 14) / 5)), Dv = v * T;
       const reachK = Math.max(0, Math.min(1, (Dv / reach - 0.55) / 0.45)), ks = [turnK * 0.9, speedK * 0.7, reachK * 0.8];
       const diff = Math.max(...ks) + 0.25 * (1 - this.stamina);
       if (diff > 0.3) {
         const kind = ks[0] >= ks[1] && ks[0] >= ks[2] ? 'wide' : ks[1] >= ks[2] ? 'long' : 'short';
         for (let e = Math.min(0.55, (diff - 0.3) * 1.1); e > 0.08; e *= 0.5) {
           if (kind === 'wide') {
-            const a = -Math.sign(this.turn || 1) * Math.atan2(e, Dv), c = Math.cos(a), s2 = Math.sin(a), wx = ux * c + uz * s2, wz = uz * c - ux * s2;
+            const a = -Math.sign((ux * this.want[1] - uz * this.want[0]) || this.turn || 1) * Math.atan2(e, Dv), c = Math.cos(a), s2 = Math.sin(a), wx = ux * c + uz * s2, wz = uz * c - ux * s2;
             if (Math.abs(this.city.heightAt(this.x + wx * Dv, this.z + wz * Dv) - to) < 0.1) { ux = wx; uz = wz; err = { kind, e }; break; }
           } else {
             const D2 = Dv + (kind === 'long' ? e : -e);
@@ -872,7 +874,8 @@ export class Runner implements Body {
     // across, at its pace, and on its arc, so it lands where it meant to; then the pose catches up)
     this.airT += dt;
     // (how long to the ground: where it'll be when it gets there, near enough)
-    { let t = 0.3; for (let i = 0; i < 2; i++) { const g = this.city.heightAt(this.x + this.vx * t, this.z + this.vz * t), h = this.y - g, G = this.float ? TUNE.glideGravity : TUNE.gravity; t = h > 0 ? (this.vy + Math.sqrt(this.vy * this.vy + 2 * G * h)) / G : 0; } this.ttc = t; }
+    // (marched along the flight to the first ground it meets: not flickering between the roof and the street over a gap)
+    { const G = this.float ? TUNE.glideGravity : TUNE.gravity; let t = 0.04; for (; t < 2.5; t += 0.04) if (this.vy - G * t < 0 && this.y + this.vy * t - 0.5 * G * t * t <= this.city.heightAt(this.x + this.vx * t, this.z + this.vz * t)) break; this.ttc = t; }
     const muT = Math.min(1, this.airT / this.flightT);
     if (TUNE.apexHold > 0 && !this.float) { if (this.vy > 0) this.rising = true; else if (this.rising) { this.rising = false; this.held = TUNE.apexHold; } }
     if (this.held > 0) this.held -= dt;
@@ -885,7 +888,10 @@ export class Runner implements Body {
     const sp = this.speed;
     // (turned decisively in the air: where it lands now is its choice, not the mark it missed)
     if (this.planned && on && sp > 0.5 && (this.vx * dx + this.vz * dz) / sp < 0.5) { this.planned = false; this.aim = null; }
-    if (on) {
+    // (an aimed flight is only steered by a change in what's asked since it left the ground: the direction held at takeoff
+    // is what the leap was chosen with, and steering toward it again would only pull it off its own mark)
+    const changed = !this.planned || dx * this.launchWant[0] + dz * this.launchWant[1] < 0.985;
+    if (on && changed) {
       // (steered, not driven: a flight doesn't gain pace in the air (a little from a standing jump); a glide does, gliding)
       const top = this.float ? Math.max(sp, 7) : this.planned ? sp : Math.max(sp, 3);
       const tx = dx * top, tz = dz * top;
@@ -1145,7 +1151,9 @@ export class Runner implements Body {
       let kind: 'short' | 'wide' | 'long' | null = null, ex = 0, ez = 0, mag = 0;
       if (this.aim) {
         const a = this.aim, ox = this.x - a.x, oz = this.z - a.z, along = ox * a.ux + oz * a.uz, lat = -ox * a.uz + oz * a.ux;
-        if (Math.abs(lat) > 0.2 && Math.abs(lat) >= Math.abs(along) * 0.6) { kind = 'wide'; mag = Math.abs(lat); const s = Math.sign(lat); ex = -a.uz * s; ez = a.ux * s; }
+        // (more than a stride off: it came down somewhere else (on something on the way), not a misjudged landing)
+        if (Math.hypot(along, lat) > 1.2) { /* no save */ }
+        else if (Math.abs(lat) > 0.2 && Math.abs(lat) >= Math.abs(along) * 0.6) { kind = 'wide'; mag = Math.abs(lat); const s = Math.sign(lat); ex = -a.uz * s; ez = a.ux * s; }
         else if (along < -0.25) { kind = 'short'; mag = -along; }
         else if (along > 0.4) { kind = 'long'; mag = along; }
       }

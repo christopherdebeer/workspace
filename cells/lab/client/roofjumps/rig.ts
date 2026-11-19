@@ -64,7 +64,7 @@ export class Rig {
   pose = zero();
   /** each joint's speed toward its pose; and the chest's lag behind the hips (rad) and its speed, the hips' last height
    * and speed: weight */
-  private vel = zero(); private chest = 0; private chestV = 0; private lastHip = 1; private hipV = 0;
+  private vel = zero(); private ph = 0; private chest = 0; private chestV = 0; private lastHip = 1; private hipV = 0;
   /** 1 on the ground, 0 off it, eased: where the hips ride */
   private stood = 1;
   private hipY = 1;
@@ -77,7 +77,7 @@ export class Rig {
   private on: V3 = [0, 1, 0];
 
   /** The pose a body's move asks for. */
-  target(r: Body): Pose {
+  target(r: Body, ph = r.phase): Pose {
     const p = zero(), s = r.speed / 10, u = r.mu, L = r.lead === 1;
     /** the legs and the arms, by which leg leads */
     const legs = (hipF: number, kneeF: number, hipB: number, kneeB: number) => { if (L) { p.hipL = hipF; p.kneeL = kneeF; p.hipR = hipB; p.kneeR = kneeB; } else { p.hipR = hipF; p.kneeR = kneeF; p.hipL = hipB; p.kneeL = kneeB; } };
@@ -96,7 +96,7 @@ export class Rig {
     switch (r.move) {
       case 'run': {
         const amp = Math.min(1.12, s * 0.95), k = Math.min(1, s);
-        stride(r.phase, amp, 1.05 * amp);
+        stride(ph, amp, 1.05 * amp);
         p.elL = 0.2 * (1 - k) + p.elL * k; p.elR = 0.2 * (1 - k) + p.elR * k;
         // (low and driving at pace, pitched well forward from the ankles, the head up to see where it's going)
         p.spine = 0.06 + 0.12 * s; p.lean = Math.min(0.46, 0.1 * k + 0.24 * s); p.head = -0.3 * s; both('spread', 0.1);
@@ -104,15 +104,15 @@ export class Rig {
       }
       case 'dash': {
         // (flat out: far over the front foot, the arms swept back and still)
-        stride(r.phase, 1.22, 0);
+        stride(ph, 1.22, 0);
         p.shL = p.shR = -1.15; both('el', 0.12); both('spread', 0.32); p.twist *= 0.4;
         p.lean = 0.56; p.spine = 0.16; p.head = -0.5;
         break;
       }
       case 'ledge': {
         // (along something narrow: short steps, the arms out and tipping against each other to keep it)
-        const w = Math.sin(r.phase * 0.5);
-        stride(r.phase, Math.min(0.8, s * 0.8), 0);
+        const w = Math.sin(ph * 0.5);
+        stride(ph, Math.min(0.8, s * 0.8), 0);
         p.shL = p.shR = 0; both('el', 0.1); p.spreadL = 1.3 + 0.3 * w; p.spreadR = 1.3 - 0.3 * w; p.tilt = 0.07 * w; p.twist *= 0.5;
         p.spine = 0.08; p.lean = 0.14; p.head = 0.1;
         break;
@@ -315,7 +315,10 @@ export class Rig {
   update(dt: number, r: Body): void {
     // (each joint toward its pose as a spring a little under critical damping, so a limb carries past where it's going
     // and comes back: follow-through; set at once for a long step)
-    const t = this.target(r), w = r.state === 'ground' ? 30 : 20, c = 2 * 0.72 * w;
+    // (the stride's phase as the limbs follow it: smoothed, so a footfall re-timed (a landing, a save, a stutter) is caught up
+    // with, not snapped to)
+    if (dt > 0.2) this.ph = r.phase; else { let d = r.phase - this.ph; d -= Math.round(d / (2 * Math.PI)) * 2 * Math.PI; this.ph += d * (1 - Math.exp(-22 * dt)); }
+    const t = this.target(r, this.ph), w = r.state === 'ground' ? 30 : 20, c = 2 * 0.72 * w;
     if (dt > 0.2) { for (const key of KEYS) { this.pose[key] = t[key]; this.vel[key] = 0; } }
     else for (const key of KEYS) { this.vel[key] += ((t[key] - this.pose[key]) * w * w - this.vel[key] * c) * dt; this.pose[key] += this.vel[key] * dt; }
     this.stood += ((r.state === 'ground' ? 1 : 0) - this.stood) * (1 - Math.exp(-14 * dt));
@@ -336,7 +339,7 @@ export class Rig {
     const p = this.pose, leg = (hip: number, knee: number) => THIGH * Math.cos(hip) * Math.cos(p.splay) + SHIN * Math.cos(hip - knee) * Math.cos(p.splay);
     // (but a run has its moment off the ground, both legs out: the hips don't drop into the split, they carry over it)
     const striding = r.move === 'run' || r.move === 'dash' || r.move === 'ledge', pace = Math.min(1, r.speed / 6);
-    const carry = striding ? (0.9 + 0.05 * Math.abs(Math.cos(r.phase))) * pace - 0.55 * Math.max(r.land, (r.load ?? 0) * (r.committed ? 0.95 : 0.8)) : 0;
+    const carry = striding ? (0.9 + 0.05 * Math.abs(Math.cos(this.ph))) * pace - 0.55 * Math.max(r.land, (r.load ?? 0) * (r.committed ? 0.95 : 0.8)) : 0;
     const ground = Math.max(carry, HIP + Math.max(leg(p.hipL, p.kneeL), leg(p.hipR, p.kneeR)) + SOLE) + (r.move === 'roll' ? 0.16 : 0);
     const hip = ground * this.stood + (0.98 - p.sink) * (1 - this.stood);
     this.hipY = r.state === 'ground' && r.move !== 'roll' ? Math.min(hip, 0.99 - 0.46 * r.land) : hip;

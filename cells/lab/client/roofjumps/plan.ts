@@ -56,7 +56,7 @@ export const WORTH: Partial<Record<Move, number>> = { bound: 1, spring: 1.5, div
  */
 export function choreo(legs: Leg[], recent: Move[], pts: number[]): number {
   const seen = [...recent], t = (l: Leg) => l.from * KEEP * STEP;
-  let v = 0, lastT = 0, lastY = legs[0]?.y ?? 0, rise = 0;
+  let v = 0, lastT = 0, lastY = legs[0]?.y ?? 0, rise = 0, lastBig = -9;
   for (const l of legs.slice(1)) {
     const w = WORTH[l.move];
     if (w === undefined) continue;
@@ -64,7 +64,9 @@ export function choreo(legs: Leg[], recent: Move[], pts: number[]): number {
     const gap = t(l) - lastT;
     // (spacing: under half a second after the last, crowded; past two and a half, dead air before it)
     const spacing = gap < 0.5 ? 0.5 : gap > 2.5 ? 1 - Math.min(0.6, (gap - 2.5) * 0.3) : 1;
-    v += w > 0 ? (w / (1 + 0.8 * again)) * spacing : w;
+    // (a big event wants room after the last big one: a breath between them, not a pile-up)
+    const big = w >= 1.5, room = big ? Math.min(1, 0.4 + Math.max(0, t(l) - lastBig) / 1.2) : 1; if (big) lastBig = t(l);
+    v += w > 0 ? (w / (1 + 0.8 * again)) * spacing * room : w;
     rise += Math.abs(l.y - lastY); lastY = l.y; lastT = t(l); seen.push(l.move);
   }
   // (and the end of the horizon a long way after the last event: dead air)

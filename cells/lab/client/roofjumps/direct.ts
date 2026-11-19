@@ -12,6 +12,8 @@ import { City } from './city';
 import { Runner } from './runner';
 import type { Input, Move } from './runner';
 import { foresee, choreo, WORTH } from './plan';
+import { Rig } from './rig';
+import { point } from './m4';
 import type { Leg } from './plan';
 
 /** a direction held (heading, rad) for so long (s), as a player would hold the stick; and where the director expected it
@@ -63,16 +65,35 @@ export interface Event { t: number; move: Move; y: number; worth: number }
 export interface Measure {
   seed: number; seconds: number; distance: number; pace: number; leaps: number; events: number; distinct: number; entropy: number;
   repeats: number; longestRepeat: number; meanGap: number; deadAir: number; saves: number; misses: number; falls: number;
-  stall: number; inside: number; landings: number; saveRate: number; heightRange: number; interest: number; perMinute: number; score: number; timeline: Event[];
+  stall: number; inside: number; landings: number; saveRate: number;
+  /** the body: frames a joint jumped (more than 0.25 rad in a frame), a planted foot slid (cm a second), head or hips in a
+   * wall, a hand or foot deep in one; the rhythm: the share of big events crowded on the last big one (under 0.7 s) */
+  pops: number; slide: number; bodyIn: number; limbIn: number; crowded: number; heightRange: number; interest: number; perMinute: number; score: number; timeline: Event[];
 }
 
 /** Run a directed seed, and measure it. */
 export function measure(d: Directed): Measure {
   const city = new City(d.seed), r = new Runner(city), f: Follow = { i: 0, t: 0 }, DT = 1 / 120;
   const legs: Leg[] = [{ move: r.move, from: 0, x: r.x, y: r.y, z: r.z }], pts: number[] = [];
-  let last = r.move, stall = 0, inside = 0, lo = r.y, hi = r.y, frames = 0, landings = 0;
+  let last = r.move, stall = 0, inside = 0, lo = r.y, hi = r.y, frames = 0, landings = 0, pops = 0, slid = 0, planted = 0, bodyIn = 0, limbIn = 0;
+  const rig = new Rig(); rig.update(1, r); let prev = { ...rig.pose }, feet: (number[] | null)[] = [null, null]; const ff: number[][] = [[0, 0, 0], [0, 0, 0]], held = [0, 0];
+  const deep = (p: number[]) => [[0, 0], [0.1, 0], [-0.1, 0], [0, 0.1], [0, -0.1]].every(([a, b]) => city.heightAt(p[0] + a, p[2] + b) > p[1] + 0.05);
   for (let i = 0; i < d.seconds / DT; i++) {
     const was = r.state; r.step(DT, follow(r, d.waypoints, f, DT)); frames++; if (was !== 'ground' && r.state === 'ground') landings++;
+    rig.update(DT, r);
+    const pose = rig.pose as unknown as Record<string, number>, pv = prev as unknown as Record<string, number>;
+    if (Object.keys(pose).some((k) => Math.abs(pose[k] - pv[k]) > 0.25)) pops++;
+    prev = { ...rig.pose };
+    const bones = rig.bones(r), at = (n: string, y = 0) => { const b = bones.find((o) => o.name === n)!; return point(b.m, 0, y, 0); };
+    // (a planted foot: where its bone is, frame to frame, while the footfall stays the same)
+    for (const [i, key] of [[0, 'fl'], [1, 'fr']] as const) {
+      const now = r.reach[key], p = at(i ? 'footR' : 'footL');
+      // (once it has settled: past the few frames a footfall takes to be taken up)
+      if (now && feet[i] && now[0] === feet[i]![0] && now[2] === feet[i]![2]) { held[i]++; if (held[i] > 4) { slid += Math.hypot(p[0] - ff[i][0], p[2] - ff[i][2]); planted++; } } else held[i] = 0;
+      ff[i] = p; feet[i] = now ? [...now] : null;
+    }
+    if (deep(at('head', 0.12)) || deep(at('pelvis'))) bodyIn++;
+    if (r.state !== 'climb' && r.state !== 'plant' && [at('foreArmL', -0.31), at('foreArmR', -0.31), at('footL'), at('footR')].some(deep)) limbIn++;
     if (i % 3 === 0) pts.push(r.x, r.y, r.z);
     if (r.move !== last) { last = r.move; legs.push({ move: last, from: pts.length / 3, x: r.x, y: r.y, z: r.z }); }
     if (r.state === 'ground' && r.speed < 1) stall += DT;
@@ -88,9 +109,12 @@ export function measure(d: Directed): Measure {
   const interest = choreo(legs, [], pts), minutes = d.seconds / 60;
   const m = { seed: d.seed, seconds: d.seconds, distance: r.dist, pace: r.dist / d.seconds, leaps: r.leaps, events: n, distinct: Object.keys(counts).length, entropy,
     repeats, longestRepeat: longest, meanGap: gaps.reduce((a, b) => a + b, 0) / gaps.length, deadAir: Math.max(...gaps), saves: r.saves, misses: r.misses, falls: r.made.fall ?? 0,
-    stall, inside: inside / frames, landings, saveRate: r.saves / Math.max(1, landings), heightRange: hi - lo, interest, perMinute: interest / minutes, score: 0, timeline };
+    stall, inside: inside / frames, landings, saveRate: r.saves / Math.max(1, landings),
+    pops: pops / frames, slide: (100 * slid) / Math.max(1, planted * DT), bodyIn: bodyIn / frames, limbIn: limbIn / frames, crowded: 0, heightRange: hi - lo, interest, perMinute: interest / minutes, score: 0, timeline };
+  // (big events (worth 1.5 or more) crowded on the last big one, under 0.7 s: busy, not phrased)
+  { let lastBig = -9, big = 0, crowd = 0; for (const e of timeline) if ((WORTH[e.move] ?? 0) >= 1.5) { big++; if (e.t - lastBig < 0.7) crowd++; lastBig = e.t; } m.crowded = crowd / Math.max(1, big); }
   // (one number to climb: what's good to watch a minute, with variety, less what went wrong)
-  m.score = m.perMinute + 3 * m.entropy - 1.5 * (m.repeats / minutes) - 2 * (m.misses / minutes) - 0.5 * m.stall - 0.3 * Math.max(0, m.deadAir - 3) - 20 * m.inside - 60 * Math.max(0, m.saveRate - 0.12);
+  m.score = m.perMinute + 3 * m.entropy - 1.5 * (m.repeats / minutes) - 2 * (m.misses / minutes) - 0.5 * m.stall - 0.3 * Math.max(0, m.deadAir - 3) - 20 * m.inside - 60 * Math.max(0, m.saveRate - 0.12) - 20 * m.crowded - 200 * m.pops - 100 * m.bodyIn - 30 * m.limbIn;
   // (and quiet: most landings shouldn't need saving, so a save means something)
   return m;
 }

@@ -7,6 +7,8 @@
 //   node cells/lab/devtools/roofjumps-direct.mjs 4 9 --pictures   these, filmed
 //   node cells/lab/devtools/roofjumps-direct.mjs --set k=v,k=v    with dials turned (to compare)
 //   node cells/lab/devtools/roofjumps-direct.mjs --compare a.json b.json   two reports' scores, seed by seed
+//   node cells/lab/devtools/roofjumps-direct.mjs 1 2 … 24 --check     each dimension against the baseline in git (--baseline
+//                                                                      writes it); fails if any is worse beyond its noise
 import { build } from 'esbuild';
 import { mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
@@ -34,10 +36,26 @@ writeFileSync(join(OUT, `report-${name}.json`), JSON.stringify(all, null, 1));
 const rows = Object.values(all).sort((a, b) => b.score - a.score);
 const mean = rows.reduce((t, m) => t + m.score, 0) / rows.length, sd = Math.sqrt(rows.reduce((t, m) => t + (m.score - mean) ** 2, 0) / Math.max(1, rows.length - 1));
 const avg = (k) => rows.reduce((t, m) => t + m[k], 0) / rows.length;
-console.log(`summary: mean ${mean.toFixed(2)} ± ${(sd / Math.sqrt(rows.length)).toFixed(2)} (s.e.); interest/min ${avg('perMinute').toFixed(1)}, entropy ${avg('entropy').toFixed(2)}, repeats ${avg('repeats').toFixed(1)}, saves ${avg('saves').toFixed(1)} (${(100 * avg('saveRate')).toFixed(0)}% of landings), misses ${avg('misses').toFixed(1)}, stall ${avg('stall').toFixed(2)}s, dead air ${avg('deadAir').toFixed(1)}s, pace ${avg('pace').toFixed(1)}, events ${avg('events').toFixed(0)}`);
+console.log(`summary: mean ${mean.toFixed(2)} ± ${(sd / Math.sqrt(rows.length)).toFixed(2)} (s.e.); interest/min ${avg('perMinute').toFixed(1)}, entropy ${avg('entropy').toFixed(2)}, repeats ${avg('repeats').toFixed(1)}, saves ${avg('saves').toFixed(1)} (${(100 * avg('saveRate')).toFixed(0)}% of landings), misses ${avg('misses').toFixed(1)}, stall ${avg('stall').toFixed(2)}s, dead air ${avg('deadAir').toFixed(1)}s, pace ${avg('pace').toFixed(1)}, events ${avg('events').toFixed(0)}; body: pops ${(100 * avg('pops')).toFixed(2)}%, foot slide ${avg('slide').toFixed(1)} cm/s, body in walls ${(100 * avg('bodyIn')).toFixed(2)}%, limbs in walls ${(100 * avg('limbIn')).toFixed(2)}%; big events crowded ${(100 * avg('crowded')).toFixed(0)}%`);
 writeFileSync(join(OUT, `report-${name}.md`), `# Directed seeds (${name})\n\nmean score ${mean.toFixed(2)}${set ? ` · dials ${set}` : ''}\n\n| seed | score | interest/min | entropy | events | distinct | repeats | dead air | misses | saves | stall | inside | pace |\n|---|---|---|---|---|---|---|---|---|---|---|---|---|\n` +
   rows.map((m) => `| ${m.seed} | ${m.score.toFixed(1)} | ${m.perMinute.toFixed(1)} | ${m.entropy.toFixed(2)} | ${m.events} | ${m.distinct} | ${m.repeats} | ${m.deadAir.toFixed(1)} s | ${m.misses} | ${m.saves} | ${m.stall.toFixed(1)} s | ${(m.inside * 100).toFixed(1)}% | ${m.pace.toFixed(1)} |`).join('\n') + '\n');
 console.log(`mean score ${mean.toFixed(2)} → ${join(OUT, `report-${name}.md`)}`);
+// (the guard: each dimension's mean and its standard error, kept in git as the baseline; --check fails a change that makes
+// any of them worse beyond its noise (two standard errors, or a tenth of the baseline, whichever's more))
+const DIMS = { score: 1, perMinute: 1, entropy: 1, misses: -1, saveRate: -1, stall: -1, inside: -1, pops: -1, slide: -1, bodyIn: -1, limbIn: -1, crowded: -1 };
+const stats = Object.fromEntries(Object.keys(DIMS).map((k) => { const xs = rows.map((m) => m[k]), mu = xs.reduce((a, b) => a + b, 0) / xs.length, sdv = Math.sqrt(xs.reduce((a, b) => a + (b - mu) ** 2, 0) / Math.max(1, xs.length - 1)); return [k, { mean: mu, se: sdv / Math.sqrt(xs.length) }]; }));
+const BASE = join(here, 'roofjumps-direct-baseline.json');
+if (args.includes('--baseline')) { writeFileSync(BASE, JSON.stringify({ seeds: SEEDS, seconds, stats }, null, 1) + '\n'); console.log(`baseline written: ${BASE}`); }
+if (args.includes('--check')) {
+  const base = JSON.parse(readFileSync(BASE, 'utf8')); let bad = 0;
+  for (const [k, dir] of Object.entries(DIMS)) {
+    const b = base.stats[k], n = stats[k], tol = Math.max(2 * Math.max(b.se, n.se), Math.abs(b.mean) * 0.1, 1e-4), worse = dir > 0 ? b.mean - n.mean : n.mean - b.mean;
+    const flag = worse > tol ? 'WORSE' : worse < -tol ? 'better' : 'same';
+    if (flag === 'WORSE') bad++;
+    console.log(`${k.padEnd(10)} ${b.mean.toFixed(4).padStart(10)} → ${n.mean.toFixed(4).padStart(10)}  ${flag}`);
+  }
+  console.log(bad ? `check: ${bad} worse` : 'check: no dimension worse'); if (bad) process.exit(1);
+}
 if (args.includes('--pictures')) {
   process.env.EXPERIMENT = 'roofjumps'; process.env.READY = '__roofjumps';
   const { withWood } = await import('./harness.mjs');
