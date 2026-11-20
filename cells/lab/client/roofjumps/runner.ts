@@ -247,7 +247,7 @@ export class Runner implements Body {
   /** each foot's footfall: planted or not, and where */
   private feet = { L: { on: false, p: [0, 0, 0] as P3, done: false }, R: { on: false, p: [0, 0, 0] as P3, done: false } };
   /** a step taken standing: which foot, from where to where, how far through (s) and how long it takes */
-  private standStep: { side: number; from: P3; to: P3; t: number; dur: number } | null = null;
+  standStep: { side: number; from: P3; to: P3; t: number; dur: number } | null = null;
   /** where each foot last was: on the ground now, or where it left it */
   get footAt(): { L: P3; R: P3 } { return { L: this.feet.L.p, R: this.feet.R.p }; }
   /** a foot in the air between footfalls, at a walk or standing: where it left, where it's going, and how far there (0..1) */
@@ -300,7 +300,15 @@ export class Runner implements Body {
   get speed(): number { return Math.hypot(this.vx, this.vz); }
 
   /** another of it, as it is now, to be run on ahead without touching this one (plan.ts) */
-  clone(): Runner { const c = Object.assign(Object.create(Runner.prototype) as Runner, this); c.made = { ...this.made }; c.nextFall = this.nextFall ? [...this.nextFall] as P3 : null; c.recent = [...this.recent]; c.to = { ...this.to }; c.landings = { ...this.landings }; c.contact = { ...this.contact }; c.aim = this.aim ? { ...this.aim } : null; c.save = this.save ? { ...this.save } : null; c.sw = this.sw ? { ...this.sw } : null; c.want = [...this.want] as [number, number]; c.chain = this.chain ? { ...this.chain } : null; c.ch = this.ch ? { ...this.ch } : null; c.feet = { L: { ...this.feet.L }, R: { ...this.feet.R } }; return c; }
+  /**
+   * A copy to run on ahead (the planner's forecasts, a leap tried out): everything it holds copied, nothing shared but the
+   * city, so running the copy can't move this one (a step under way, a run-up's plan, where a foot is).
+   */
+  clone(): Runner {
+    const c = Object.assign(Object.create(Runner.prototype) as Runner, this) as unknown as Record<string, unknown>;
+    for (const [k, v] of Object.entries(this)) if (k !== 'city' && v && typeof v === 'object') c[k] = structuredClone(v);
+    return c as unknown as Runner;
+  }
   /** footfalls moved off ground detail, and of those the ones shortened in the last strides before an edge (a stutter);
    * seconds still stepping high over clutter */
   adjusted = 0; stutters = 0; stepOver = 0;

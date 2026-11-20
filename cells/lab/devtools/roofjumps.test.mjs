@@ -155,8 +155,10 @@ const { plan, foresee, TUNE, HOUSE, DIALS, City, Runner, Rig, CHUNK, STOREY, TAG
   for (const seed of [1, 7]) for (const a of [0.3, 2.1, 4.4]) {
     const r = new Runner(new City(seed)), dx = Math.sin(a), dz = Math.cos(a);
     for (let i = 0; i < 400; i++) r.step(1 / 120, { x: dx, z: dz, jump: false });
-    const route = foresee(r, dx, dz), p = plan(r, dx, dz), before = [r.x, r.y, r.z, r.leaps];
-    assert.deepEqual([r.x, r.y, r.z, r.leaps], before, 'thinking moves nothing');
+    // (the whole runner, before and after thinking: not just where it is)
+    const state = () => JSON.stringify(Object.entries(r).filter(([k]) => k !== 'city'));
+    const before = state(), route = foresee(r, dx, dz), p = plan(r, dx, dz);
+    assert.equal(state(), before, 'thinking moves nothing');
     assert.equal(p.all.length, 2 * TUNE.fan + 1); assert.equal(p.primary.off, 0);
     assert.ok(p.left.off < 0 && p.right.off > 0 && p.best.score >= p.primary.score);
     assert.deepEqual(p.primary.pts, route.pts);
@@ -526,4 +528,18 @@ console.log('roofjumps: ok');
   assert.ok(maxBend < 25, `the arms near straight (${maxBend.toFixed(0)}°)`);
   assert.ok(climbed, 'a press toward the wall at a slant pulls over');
   console.log(`a still hang: feet set ${setF}/${still}, moved ${moved.toFixed(3)} m a frame, elbows ${maxBend.toFixed(0)}°; a slanted press pulls over`);
+}
+
+// Thinking moves nothing, mid-step too, and is foreseen at the press held: a forecast made while a standing step is under
+// way leaves it where it was; a light press on the practice line is foreseen staying on the roof it's on, as it does.
+{
+  const flat = { heightAt: () => 10, topAt: () => null, gripAt: () => null, holdsNear: () => [], boxesNear: () => [], regionsNear: () => [], regionAt: () => null, start: () => ({ x: 0, y: 10, z: 0 }) };
+  const r = new Runner(flat), h0 = r.heading; let checked = false;
+  for (let i = 0; i < 120 * 8 && !checked; i++) { r.step(1 / 120, brushInput(i / 120, h0)); if (r.standStep && r.standStep.t === 0) { const was = JSON.stringify(Object.entries(r).filter(([k]) => k !== 'city')); plan(r, 0, 1); assert.equal(JSON.stringify(Object.entries(r).filter(([k]) => k !== 'city')), was, 'a forecast mid-step moves nothing'); checked = true; } }
+  assert.ok(checked, 'a standing step to think during');
+  const c = new Runner(new City(1, true)), h = c.heading, dx = Math.sin(h), dz = Math.cos(h);
+  for (let i = 0; i < 30; i++) c.step(1 / 120, { x: dx * 0.35, z: dz * 0.35, jump: false });
+  const light = foresee(c, dx * 0.35, dz * 0.35), g = c.clone(); for (let i = 0; i < Math.round(TUNE.horizon * 120); i++) g.step(1 / 120, { x: dx * 0.35, z: dz * 0.35, jump: false });
+  const n = light.pts.length; assert.ok(Math.hypot(g.x - light.pts[n - 3], g.y - light.pts[n - 2], g.z - light.pts[n - 1]) < 1e-9, 'a light press foreseen as it runs');
+  console.log(`thinking: moves nothing mid-step; a light press foreseen to z ${light.pts[n - 1].toFixed(1)} (on its own roof), as it runs`);
 }

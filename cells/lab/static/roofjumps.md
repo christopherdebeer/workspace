@@ -261,6 +261,8 @@ A test holds the hang (both feet set and still for the whole hang, elbows within
 
 Score 69.2 to 71.2, nothing worse.
 
+**Two planner faults, found in review, fixed.** Thinking moved the athlete: a copy made to run ahead shared some of what it held with the runner (a standing step under way, a run-up's plan, where a foot was), so a forecast advanced a live step (0 to 0.24 s with the full fan on). A copy now copies everything but the city, and the test compares the whole runner before and after thinking, mid-step too. And the route shown dropped the player's press: forecasts and the fan's alternatives ran at a full press whatever was held, so easing off (a careful approach on the practice line, staying on the roof) was shown as a committed run a storey down. They now run at the press held (the line stays on its roof, as it does).
+
 ## The dials (`tune.ts`, `palette.ts`)
 
 Every number worth turning, named, ranged, grouped, with a mark where the house keeps it (a

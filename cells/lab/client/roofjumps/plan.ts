@@ -31,7 +31,8 @@ const STEP = 1 / 120, KEEP = 3;
 /** One route: the runner run on, holding (dx, dz), for the horizon. */
 export function foresee(r: Runner, dx: number, dz: number, off = 0): Route {
   const g = r.clone(), pts: number[] = [g.x, g.y, g.z], moves: Move[] = [g.move], legs: Leg[] = [{ move: g.move, from: 0, x: g.x, y: g.y, z: g.z }];
-  const x0 = g.x, z0 = g.z, streets0 = g.streets, n = Math.round(TUNE.horizon / STEP);
+  // (held as hard as it's asked: a light press is foreseen as one; what it makes is measured along the way, at any press)
+  const x0 = g.x, z0 = g.z, streets0 = g.streets, n = Math.round(TUNE.horizon / STEP), m = Math.hypot(dx, dz) || 1, ux = dx / m, uz = dz / m;
   let cost = 0, last = g.move;
   for (let i = 1; i <= n; i++) {
     g.step(STEP, { x: dx, z: dz, jump: false });
@@ -41,7 +42,7 @@ export function foresee(r: Runner, dx: number, dz: number, off = 0): Route {
     if (g.move !== last) { last = g.move; legs.push({ move: last, from: pts.length / 3, x: g.x, y: g.y, z: g.z }); }
     if (i % KEEP === 0 || i === n) { pts.push(g.x, g.y, g.z); moves.push(g.move); }
   }
-  const made = (g.x - x0) * dx + (g.z - z0) * dz, streets = g.streets - streets0;
+  const made = (g.x - x0) * ux + (g.z - z0) * uz, streets = g.streets - streets0;
   const interest = choreo(legs, r.recent, pts);
   return { dx, dz, off, pts, moves, legs, made, streets, interest, score: made - cost - TUNE.wStreet * streets + TUNE.wChoreo * interest };
 }
@@ -80,7 +81,9 @@ export interface Plan { primary: Route; left: Route | null; right: Route | null;
 export function plan(r: Runner, dx: number, dz: number): Plan {
   const a = Math.atan2(dx, dz), n = Math.round(TUNE.fan), step = (TUNE.fanStep * Math.PI) / 180, all: Route[] = [];
   // (to the figure's right is toward -x of its own axes: a smaller angle here)
-  for (let k = -n; k <= n; k++) all.push(k ? foresee(r, Math.sin(a - k * step), Math.cos(a - k * step), k * step) : foresee(r, dx, dz));
+  // (the others at the same press as the way asked)
+  const m = Math.min(1, Math.hypot(dx, dz));
+  for (let k = -n; k <= n; k++) all.push(k ? foresee(r, m * Math.sin(a - k * step), m * Math.cos(a - k * step), k * step) : foresee(r, dx, dz));
   const primary = all[n];
   const pick = (rs: Route[]) => rs.reduce<Route | null>((b, x) => (!b || x.score > b.score ? x : b), null);
   const left = pick(all.slice(0, n)), right = pick(all.slice(n + 1));

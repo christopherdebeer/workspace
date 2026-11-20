@@ -177,7 +177,10 @@ const takenOver = (t: number) => t - taken < 1.5;
 /** the plan about what's asked (with nothing asked, about the way it faces) */
 function think(a: Input, t: number): void {
   const m = Math.hypot(a.x, a.z);
-  thinking = plan(runner, m > 0.1 ? a.x / m : Math.sin(runner.heading), m > 0.1 ? a.z / m : Math.cos(runner.heading)); thought = t;
+  // (foreseen at the press actually held: easing off shows a careful line, not a committed one; let go, where a full press
+  // would take it)
+  const k = m > 0.1 ? Math.min(1, m) / m : 0;
+  thinking = plan(runner, m > 0.1 ? a.x * k : Math.sin(runner.heading), m > 0.1 ? a.z * k : Math.cos(runner.heading)); thought = t;
 }
 /** what the runner is given: what's asked, leant onto the plan's best way as far as `assist` says (all the way, by itself) */
 function input(t: number, dt: number): Input {
