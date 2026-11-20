@@ -625,6 +625,8 @@ console.log('roofjumps: ok');
     assert.ok(stretched < frames * 0.06, `${c.name}: its feet where its legs reach (${stretched} of ${frames} frames out)`);
     rows.push(`${c.name} ${c.proportions.stature} m reach×${b.reachScale.toFixed(2)} stride×${b.strideScale.toFixed(2)} (${r.leaps} leaps)`);
   }
+  const radius = (n) => new Runner(new City(1, true), CHARACTERS.find((c) => c.name === n)).R_;
+  assert.ok(radius('child') < radius('runner') && radius('runner') < radius('broad') && radius('runner') === 0.35, `a body's breadth with its size (${['child', 'runner', 'broad'].map((n) => radius(n).toFixed(2)).join(' < ')})`);
   const child = bodyOf(CHARACTERS.find((c) => c.name === 'child').proportions);
   assert.ok(child.blocks.head.y1 / 1.3 > b0.blocks.head.y1 / 1.82 && child.reachScale < 0.8, 'a child: a larger head for its height, a shorter reach');
   console.log(`characters: ${rows.join('; ')}`);

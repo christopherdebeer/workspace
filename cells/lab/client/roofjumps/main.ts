@@ -40,6 +40,7 @@ import { holdStrokes, planStrokes } from './plandraw';
 import { follow } from './direct';
 import { brushInput } from './brush';
 import { sceneByKey, SCENES } from './scenes';
+import { heldBody } from './poses';
 import { CHARACTERS, characterByName } from './character';
 import type { Follow, Waypoint } from './direct';
 
@@ -266,22 +267,7 @@ function input(t: number, dt: number): Input {
 // ─── a pose held, to be looked at (`study=`, and `__roofjumps.pose`) ───────────
 let held: Body | null = null;
 function hold(move: string, mu: number, lead = 1, wallSide = 1): void {
-  const ground = ['run', 'dash', 'ledge', 'roll', 'land', 'stand'].includes(move), move2 = move === 'vault2';
-  if (move2) move = 'vault';
-  /** a point by the figure (it faces +z, its left is +x): `a` ahead, `s` to its left, `h` up */
-  const at = (a: number, s: number, h: number): [number, number, number] => [runner.x + s, runner.y + h, runner.z + a];
-  held = {
-    x: runner.x, y: runner.y, z: runner.z, heading: 0, turn: 0, lead, wallSide, mu,
-    move: (move === 'land' || move === 'stand' ? 'run' : move2 ? 'vault' : move) as Move,
-    state: ground ? 'ground' : move === 'climb' ? 'climb' : move === 'wallrun' ? 'wall' : 'air',
-    speed: move === 'stand' ? 0 : move === 'land' ? 5 : move === 'dash' ? 18 : move === 'ledge' ? 8 : 12,
-    phase: mu * 2 * Math.PI, climbT: mu * 0.42, wallT: mu * 0.45, land: move === 'land' ? 1 - mu : 0,
-    // (a pose held has nothing real to hold: what its hands would be on is put where it would be)
-    reach: move === 'vault' ? (move2 ? { hl: at(0.45, 0.2, -0.05), hr: at(0.45, -0.2, -0.05) } : lead ? { hr: at(0.3, -0.3, -0.05) } : { hl: at(0.3, 0.3, -0.05) })
-      : move === 'climb' ? { hl: at(0.42, 0.22, 1.5 + 0.9 * (1 - mu)), hr: at(0.42, -0.22, 1.5 + 0.9 * (1 - mu)) }
-      : move === 'wallrun' ? (wallSide > 0 ? { hl: at(0.25, 0.4, 1.3) } : { hr: at(0.25, -0.4, 1.3) })
-      : move === 'land' && mu < 0.5 ? { hr: at(0.38, -0.26, 0) } : move === 'roll' && mu < 0.28 ? { hl: at(0.45, 0.16, 0), hr: at(0.45, -0.16, 0) } : {},
-  };
+  held = heldBody(runner, move, mu, lead, wallSide, runner.build.reachScale);
   yaw = 0; lift = -0.14;
 }
 if (q.get('study')) hold(q.get('study')!, Number(q.get('mu') ?? 0.5), Number(q.get('lead') ?? 1), Number(q.get('wall') ?? 1));
