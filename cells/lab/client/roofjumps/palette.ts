@@ -7,7 +7,10 @@ import type { Dial } from './tune';
 
 const shown = (d: Dial, v: number) => `${Number(v.toFixed(2))}${d.unit ? ' ' + d.unit : ''}`;
 
-export function palette(el: HTMLElement, changed: (key: string) => void) {
+/** a tab of the panel that isn't dials: its name, and what it shows when opened */
+export interface Extra { name: string; build: () => HTMLElement[] }
+
+export function palette(el: HTMLElement, changed: (key: string) => void, extras: Extra[] = []) {
   const groups = [...new Set(DIALS.map((d) => d.group))];
   const row = document.createElement('div'); row.className = 'row'; row.setAttribute('role', 'tablist');
   const tray = document.createElement('div'); tray.className = 'tray'; tray.setAttribute('role', 'tabpanel');
@@ -19,13 +22,19 @@ export function palette(el: HTMLElement, changed: (key: string) => void) {
     b.addEventListener('click', () => show(g));
     row.append(b); tabs.set(g, b);
   }
+  for (const x of extras) {
+    const b = document.createElement('button'); b.textContent = x.name; b.setAttribute('role', 'tab'); b.className = 'extra';
+    b.addEventListener('click', () => show(x.name));
+    row.append(b); tabs.set(x.name, b);
+  }
   const reset = document.createElement('button'); reset.textContent = 'house'; reset.className = 'reset'; reset.title = 'every dial back where the house keeps it';
   reset.addEventListener('click', () => { for (const d of DIALS) if (TUNE[d.key] !== d.house) { TUNE[d.key] = d.house; changed(d.key); } show(open); });
   row.append(reset);
   function show(g: string) {
     open = g;
     for (const [k, b] of tabs) { b.classList.toggle('on', k === g); b.setAttribute('aria-selected', String(k === g)); b.classList.toggle('moved', DIALS.some((d) => d.group === k && TUNE[d.key] !== d.house)); }
-    tray.replaceChildren(...DIALS.filter((d) => d.group === g).map(dial));
+    const x = extras.find((e) => e.name === g);
+    tray.replaceChildren(...(x ? x.build() : DIALS.filter((d) => d.group === g).map(dial)));
   }
   function dial(d: Dial): HTMLElement {
     const w = document.createElement('label'); w.className = d.toggle ? 'dial switch' : 'dial';

@@ -10,6 +10,7 @@
  * once more in the air). A second finger turns the eye. Keys: WASD or the arrows, space, Q and E; P the plan, O the
  * dials, K hold time, L one step of it.
  *
+ * The studies (the dials' last tab): every scene and scripted test run above as a link, the dials kept.
  * The dials (tune.ts, under `dials`): every number of the run, the plan, the eye and time, turned while it runs; the
  * address keeps the ones that differ from the house, by their keys (`?gravity=14&plan&time=0.25`). The plan (plan.ts,
  * `?plan`): where this heading leads over the next few seconds, drawn into the city, with the best way to the left and
@@ -38,7 +39,7 @@ import type { Plan, Route } from './plan';
 import { holdStrokes, planStrokes } from './plandraw';
 import { follow } from './direct';
 import { brushInput } from './brush';
-import { sceneByKey } from './scenes';
+import { sceneByKey, SCENES } from './scenes';
 import type { Follow, Waypoint } from './direct';
 
 const q = new URLSearchParams(location.search);
@@ -119,7 +120,38 @@ const dialsEl = document.getElementById('dials')!, dialsBtn = document.getElemen
 let thinking: Plan | null = null, thought = -1, lean = 0;
 /** the address keeps the dials that differ from the house */
 function remember(): void { const u = new URL(location.href); writeTune(u.searchParams); history.replaceState(null, '', u); }
-const pal = palette(dialsEl, () => { remember(); thought = -1; });
+/**
+ * The studies, from the dials: each authored scene (scenes.ts) and each scripted run the tests and tools use, as a link
+ * that opens the page in it, the dials kept. What's running now, again from the start, or back to the free run.
+ */
+const STUDY_KEYS = ['scene', 'fixed', 'line', 'takeoff', 'catch', 'brush', 'from', 'hold', 'direct', 'sheet', 'study', 'mu', 'strip', 'frames', 'every', 'cols', 't', 'side', 'zoom', 'auto', 'lead', 'wall'];
+const studyHref = (set: Record<string, string>) => { const u = new URL(location.href); for (const k of STUDY_KEYS) u.searchParams.delete(k); for (const [k, v] of Object.entries(set)) u.searchParams.set(k, v); return u.href; };
+/** a street spot near the start for this seed, clear on every side (as the street-start tests find theirs) */
+function streetSpot(): [number, number] | null {
+  const c0 = city.start();
+  for (let a = 0; a < 40; a++) { const ang = a * 2.39, d = 8 + a * 1.3, x = c0.x + Math.cos(ang) * d, z = c0.z + Math.sin(ang) * d; if (city.heightAt(x, z) < 0.5 && [[1, 0], [-1, 0], [0, 1], [0, -1]].every(([u, v]) => city.heightAt(x + u * 1.5, z + v * 1.5) < 0.5)) return [x, z]; }
+  return null;
+}
+function studies(): HTMLElement[] {
+  const now = location.search, here = (set: Record<string, string>) => { const want = new URL(studyHref(set)).searchParams; return STUDY_KEYS.every((k) => want.get(k) === new URLSearchParams(now).get(k)); };
+  const link = (label: string, set: Record<string, string>, title = '', mark = true) => { const a = document.createElement('a'); a.textContent = label; a.href = studyHref(set); if (title) a.title = title; if (mark && here(set)) a.className = 'on'; return a; };
+  const group = (name: string, items: HTMLElement[]) => { const g = document.createElement('div'); g.className = 'studies'; const h = document.createElement('h3'); h.textContent = name; const l = document.createElement('div'); l.className = 'list'; l.append(...items); g.append(h, l); return g; };
+  const cur = Object.fromEntries(STUDY_KEYS.filter((k) => q.has(k)).map((k) => [k, q.get(k) ?? '']));
+  const spot = streetSpot();
+  return [
+    group('now', [link('free run', {}), ...(Object.keys(cur).length ? [link('again', cur, 'this study from its start', false)] : []), link('it runs itself', { auto: '1' }, 'wandering by the plan\'s best way')]),
+    group('scenes', SCENES.flatMap((sc) => [link(sc.title, { scene: sc.key }, sc.asks), ...(sc.eye ? [link('↳ still eye', { scene: sc.key, fixed: '1' }, `${sc.title}, from a still eye on the room`)] : [])])),
+    group('test runs', [
+      link('the transfer line', { line: 'transfer' }), link('takeoff: standing', { line: 'transfer', takeoff: 'stand' }), link('takeoff: off a step', { line: 'transfer', takeoff: 'step' }), link('takeoff: at a run', { line: 'transfer', takeoff: 'run' }),
+      link('catch: clean', { line: 'transfer', catch: 'clean' }), link('catch: turned late', { line: 'transfer', catch: 'late' }), link('catch: corrected in the air', { line: 'transfer', catch: 'correct' }),
+      link('brushes from a stand', { brush: '1' }, 'light pushes every way and a turn round, to see the feet'),
+      ...(spot ? [0, 1, 2, 3].map((k) => link(`from the street, held ${['north', 'east', 'south', 'west'][k]}`, { from: `${spot[0].toFixed(1)},${spot[1].toFixed(1)}`, hold: String(((k * Math.PI) / 2 + 0.3).toFixed(3)) })) : []),
+      ...[0, 1, 2, 3].map((k) => link(`a held line ${['north', 'east', 'south', 'west'][k]}`, { hold: String(((k * Math.PI) / 2 + 0.1).toFixed(3)) })),
+      link('poses on the ground', { sheet: 'run,dash,ledge,roll', side: '90', zoom: '2.1' }), link('poses in the air', { sheet: 'hop,bound,flip,spring,dive', side: '90', zoom: '2.1' }), link('its own run, frame by frame', { strip: '5', frames: '30', every: '0.1' }),
+    ]),
+  ];
+}
+const pal = palette(dialsEl, () => { remember(); thought = -1; }, [{ name: 'studies', build: studies }]);
 dialsBtn.addEventListener('click', () => { const on = dialsEl.classList.toggle('shown'); dialsBtn.setAttribute('aria-expanded', String(on)); });
 const flip = (key: string) => { TUNE[key] = TUNE[key] ? 0 : 1; remember(); pal.refresh(); thought = -1; };
 let stepOnce = false;

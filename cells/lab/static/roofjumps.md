@@ -362,6 +362,7 @@ each is a link, and each picture here is one of them:
   are made so). `__roofjumps.pose(move, mu)` holds a pose; `__roofjumps.set(key, value)` turns a
   dial; `__roofjumps.probe()` says where it is, what it is doing and what it plans.
 - **Slowly**: the `time` dial, down to a twentieth; K holds it, L steps it.
+- **From the dials**: the panel's last tab, *studies*, lists every authored scene (and its still eye, where it has one) and each scripted run the tests and tools use (the transfer line, the three takeoffs, the three catches, the brushes from a stand, a start from this seed's street held four ways, held lines, the pose sheets, its own run frame by frame), each a link that opens the page in it with the dials kept; and what's running now, again from its start, or back to the free run.
 
 What the first sheets showed, and what was changed for it: the run sank into its own split (the
 hips now carry over it: a run has its moment off the ground); the dash leant so far it read as a
