@@ -91,7 +91,7 @@ export function measure(d: Directed): Measure {
     const bones = rig.bones(r), at = (n: string, y = 0) => { const b = bones.find((o) => o.name === n)!; return point(b.m, 0, y, 0); };
     // (a planted foot: where its bone is, frame to frame, while the footfall stays the same)
     for (const [i, key] of [[0, 'fl'], [1, 'fr']] as const) {
-      const now = r.reach[key], fb = bones.find((o) => o.name === (i ? 'footR' : 'footL'))!, p = point(fb.m, 0, 0, 0.13); // (the ball of the foot: the heel lifts about it)
+      const now = r.reach[key], fb = bones.find((o) => o.name === (i ? 'footR' : 'footL'))!, p = point(fb.m, 0, -0.07, 0.13); // (the ball of the foot, on the ground under the sole: the heel lifts about it)
       // (once it has settled: past the few frames a footfall takes to be taken up)
       if (now && feet[i] && now[0] === feet[i]![0] && now[2] === feet[i]![2] && !(i ? rig.soles.R : rig.soles.L).lost) { held[i]++; if (held[i] > 4) { slid += Math.hypot(p[0] - ff[i][0], p[2] - ff[i][2]); planted++; } } else held[i] = 0;
       ff[i] = p; feet[i] = now ? [...now] : null;

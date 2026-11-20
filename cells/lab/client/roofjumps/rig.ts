@@ -225,6 +225,8 @@ export class Rig {
         legs(0.4 + 1.15 * t, 0.6 - 0.45 * t, 0.3 + 1.05 * t, 0.7 - 0.5 * t); p.splay = 0.08;
         p.shL = p.shR = 1.2 + 1.6 * t; both('el', 0.3); both('spread', 0.25);
         p.lean = 0.1 - 0.75 * t; p.spine = 0.15 * t; p.head = 0.2 * t;
+        // (and the hips let down under it, laid back, a hand's breadth clear of it (the bar where the hands are))
+        { const bar = r.reach.hl?.[1] ?? r.reach.hr?.[1]; if (bar !== undefined) p.sink = Math.max(p.sink, Math.min(0.6, r.y + 0.98 - (bar - 0.3)) * sm(0.05, 0.25, u) * (1 - sm(0.8, 0.98, u))); }
         break;
       }
       case 'kick': {
@@ -286,6 +288,12 @@ export class Rig {
         // head up to the lip)
         const ht = r.hangT ?? -1;
         if (ht >= 0) { const k = sm(0.2, 0.6, ht); legs(0.35 + 0.55 * k, 0.5 + 0.8 * k, 0.2 + 0.6 * k, 0.6 + 0.75 * k); both('el', 0.3 - 0.27 * k); p.lean = -0.1 - 0.1 * k; p.spine = 0.1 * k; p.head = -0.4 - 0.15 * k; }
+        // (swung out from the wall under the hands: the body a pendulum from them, its line tipped by how far out the hips
+        // are, the legs trailing long; its feet gone to a wall behind: the legs reached back to it, bent to take it, then
+        // driven straight)
+        const so = r.swingOut ?? 0, sf = r.swingFeet;
+        if (so > 0.05 && !sf) { const k = Math.min(1, so / 1.2); p.lean += Math.atan(so / 1.1); legs(0.15 + 0.25 * k, 0.2 + 0.2 * k, -0.1, 0.3); both('el', 0.05); }
+        if (sf) { const k = sm(0, 0.14, sf.t); legs(-0.35 - 0.25 * k, 1.2 - 0.3 * k, -0.25 - 0.2 * k, 1.0 - 0.2 * k); p.lean += 0.45; p.spine = -0.15; p.head = -0.2; }
         break;
       }
       case 'chimney': {
@@ -307,6 +315,16 @@ export class Rig {
         break;
       }
       case 'climb': {
+        // (pulled over a lip with no foot on the wall: up to the hands (elbows bending, the legs hanging); over them (the arms
+        // straightening down, the chest forward over the top); the lead knee up onto it, then the weight onto that foot)
+        if (r.pulling) {
+          const a1 = sm(0, 0.45, u), a2 = sm(0.4, 0.7, u), a3 = sm(0.65, 0.95, u);
+          const sh = 2.9 - 1.9 * a1 - 0.8 * a2 + 0.3 * a3; p.shL = p.shR = sh;
+          both('el', 0.3 + 1.4 * a1 * (1 - a2) + 0.1 * a3); both('spread', 0.2 + 0.3 * a2);
+          legs(0.2 + 0.2 * a1 + 1.4 * a3, 0.4 + 0.3 * a1 + 1.7 * a3 - 0.6 * sm(0.9, 1, u), 0.1 + 0.25 * a2 + 0.3 * a3, 0.3 + 0.5 * a2);
+          p.lean = -0.1 + 0.25 * a1 + 0.45 * a2 - 0.5 * a3; p.spine = 0.1 + 0.3 * a2 - 0.25 * a3; p.head = -0.45 + 0.25 * a2;
+          break;
+        }
         // (up a wall: a run stood on end, leaning back off it, the hands going up ahead)
         const a = r.climbT * 15;
         p.hipL = 0.75 + 0.65 * Math.sin(a); p.hipR = 0.75 - 0.65 * Math.sin(a);
@@ -356,6 +374,9 @@ export class Rig {
     // (going slowly and turning: the head, then the shoulders, round toward the new way before the hips and feet get there)
     { const ta = r.turnAhead ?? 0, lo = r.state === 'ground' ? 1 - sm(3, 6, r.speed) : 0;
       if (lo > 0 && ta) { p.look = Math.max(-0.9, Math.min(0.9, p.look + 0.7 * ta * lo)); p.twist += Math.max(-0.45, Math.min(0.45, 0.45 * ta)) * lo; p.hips += Math.max(-0.2, Math.min(0.2, 0.15 * ta)) * lo; } }
+    // (a balance check at a lip: tipped out over it and back, twice, dying away; the arms out and wheeling to hold it, the
+    // head down to the drop)
+    { const k = r.teeter ?? 0; if (k > 0 && r.state === 'ground') { const fade = 1 - sm(0.6, 1, k), ph = k * 2 * Math.PI * 2.2; p.lean += 0.32 * Math.sin(ph) * fade + 0.08 * fade; p.shL = 1.35 + 0.6 * Math.sin(ph + 0.6) * fade; p.shR = 1.35 + 0.6 * Math.sin(ph + 0.6 + Math.PI) * fade; both('spread', 1.5 * fade + 0.2); both('el', 0.25); p.head -= 0.35 * fade; } }
     // (hanging from one hand, swinging on under it: the body tipped by the swing)
     if (r.swing) p.tilt += Math.max(-0.5, Math.min(0.5, -r.swing * 0.12));
     // (off the ground: the arms driven up hard through the first instant, as if they threw it, by the effort behind it)
@@ -432,7 +453,7 @@ export class Rig {
     const t = this.target(r, this.ph), w = r.state === 'ground' ? 45 : caught ? 55 : r.state === 'air' && (r.airT ?? 9) < 0.12 && r.from === 'ground' ? 50 : 20, c = 2 * 0.72 * w;
     if (dt > 0.2) { for (const key of KEYS) { this.pose[key] = t[key]; this.vel[key] = 0; } }
     else for (const key of KEYS) { this.vel[key] += ((t[key] - this.pose[key]) * w * w - this.vel[key] * c) * dt; this.pose[key] += this.vel[key] * dt; }
-    if (r.move === 'hang') { if (this.pose.lean > 0.3) { this.pose.lean = 0.3; this.vel.lean = Math.min(0, this.vel.lean); } if (this.pose.spine > 0.35) { this.pose.spine = 0.35; this.vel.spine = Math.min(0, this.vel.spine); } }
+    if (r.move === 'hang') { const most = 0.3 + Math.min(0.9, Math.atan((r.swingOut ?? 0) / 1.1) + (r.swingFeet ? 0.45 : 0)); if (this.pose.lean > most) { this.pose.lean = most; this.vel.lean = Math.min(0, this.vel.lean); } if (this.pose.spine > 0.35) { this.pose.spine = 0.35; this.vel.spine = Math.min(0, this.vel.spine); } }
     this.stood += ((r.state === 'ground' ? 1 : 0) - this.stood) * (1 - Math.exp(-14 * dt));
     this.bank += (Math.max(-0.45, Math.min(0.45, r.turn * 0.06 * Math.min(1, r.speed / 8))) - this.bank) * (1 - Math.exp(-10 * dt));
     // (walking or standing on one foot: the hips over it; along a wall, off it)
@@ -597,14 +618,18 @@ export class Rig {
         // footfall to the push-off instead of dragging it)
         let toe = 0;
         { const fw: V3 = this.on[1] > 0.7 && r.state === 'ground' ? [Math.sin(sole.yaw), 0, Math.cos(sole.yaw)] : unit([P[8], 0, P[10]]); if (Math.hypot(fall[0] - s[0], fall[1] - s[1], fall[2] - s[2]) > most && (fall[0] - s[0]) * fw[0] + (fall[2] - s[2]) * fw[2] < 0) {
-          const ball: V3 = [fall[0] + fw[0] * 0.13, fall[1], fall[2] + fw[2] * 0.13];
+          // (the ball on the ground, under the foot: what it pivots about, so the toe stays where it is as the heel comes up)
+          const on = this.on, ball: V3 = [fall[0] + fw[0] * 0.13 - on[0] * SOLE, fall[1] - on[1] * SOLE, fall[2] + fw[2] * 0.13 - on[2] * SOLE];
           // (the heel lifted just as far as it has to: solved, not stepped, so the ankle doesn't jump)
-          const at = (th: number): V3 => [ball[0] - fw[0] * 0.13 * Math.cos(th), ball[1] + 0.13 * Math.sin(th), ball[2] - fw[2] * 0.13 * Math.cos(th)];
+          const at = (th: number): V3 => { const c = Math.cos(th), sn = Math.sin(th), a = -0.13 * c + SOLE * sn, b = 0.13 * sn + SOLE * c; return [ball[0] + fw[0] * a + on[0] * b, ball[1] + fw[1] * a + on[1] * b, ball[2] + fw[2] * a + on[2] * b]; };
           const far = (th: number) => { const c = at(th); return Math.hypot(c[0] - s[0], c[1] - s[1], c[2] - s[2]); };
-          let lo = 0, hi = 1.2; if (far(hi) > most) lo = hi; else for (let k = 0; k < 14; k++) { const m = (lo + hi) / 2; if (far(m) > most) lo = m; else hi = m; }
-          toe = Math.max(lo, hi === 1.2 && lo === 1.2 ? 1.2 : hi); const c = at(toe); fall[0] = c[0]; fall[1] = c[1]; fall[2] = c[2]; } }
+          let lo = 0, hi = 1.5; if (far(hi) > most) lo = hi; else for (let k = 0; k < 14; k++) { const m = (lo + hi) / 2; if (far(m) > most) lo = m; else hi = m; }
+          toe = Math.max(lo, hi === 1.5 && lo === 1.5 ? 1.5 : hi); const c = at(toe); fall[0] = c[0]; fall[1] = c[1]; fall[2] = c[2]; } }
         this.toe[L ? 0 : 1] = toe;
-        let to: V3 = [was[0] + (fall[0] - was[0]) * sole.w, was[1] + (fall[1] - was[1]) * sole.w, was[2] + (fall[2] - was[2]) * sole.w];
+        // (on it once it's taken the weight: blended from the pose's foot onto the footfall through the touch, all the way on by
+        // nine tenths of the weight, so a planted foot doesn't trail a tenth of the body's motion)
+        const wk = Math.min(1, sole.w / 0.9);
+        let to: V3 = [was[0] + (fall[0] - was[0]) * wk, was[1] + (fall[1] - was[1]) * wk, was[2] + (fall[2] - was[2]) * wk];
         let dir = sub(to, s), d = Math.hypot(dir[0], dir[1], dir[2]);
         if (d > most) { to = [s[0] + (dir[0] * most) / d, s[1] + (dir[1] * most) / d, s[2] + (dir[2] * most) / d]; d = most; }
         dir = unit(dir);

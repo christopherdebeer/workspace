@@ -32,6 +32,8 @@ export interface Scene {
   /** what we suspect it can't or doesn't do, that it should (empty: a check on what it should already do) */
   gap?: string;
   course: Course; seconds: number;
+  /** a still eye to film it from too, wide on the whole room (`?fixed` on the page) */
+  eye?: [number, number, number];
   input: (t: number, r: Runner, mem: Record<string, number>) => Input;
   should: Should[];
 }
@@ -47,6 +49,8 @@ const after = (r: Run, t: number) => r.frames.filter((f) => f.t >= t);
 const first = (r: Run, pred: (f: Frame) => boolean) => r.frames.find(pred);
 const count = (r: Run, m: string) => r.moves.filter((x) => x.move === m).length;
 const seq = (r: Run) => r.moves.map((m) => m.move).filter((m, i, a) => m !== 'run' && m !== a[i - 1]).join(' › ');
+/** the sole's depth under the ankle (rig.ts SOLE): the ball measured where it touches, on the ground */
+const SOLE_D = 0.07;
 const pops = (r: Run) => r.frames.filter((f) => f.jump).length;
 const plantedSlide = (r: Run) => r.frames.reduce((s, f) => s + f.slid, 0);
 /** cm a second a planted foot moves, over the time a foot is planted */
@@ -59,6 +63,109 @@ const commonShoulds: Should[] = [
 
 /** two gaps of 3 m between three roofs of a height, the line straight down +z */
 const twoGaps = (): Course => ({ boxes: [B(24, 40, 2, 18, 12), B(24, 40, 21, 31, 12), B(24, 40, 34, 52, 12)], start: { x: 32, z: 4 }, alone: true });
+
+/**
+ * The courtyard: one room to cross three ways (after Astra's brief). From the start roof (13 m) the far side's high opening
+ * (a notch 13.4 m up between a taller building and the side wall) is in view. A narrow parapet (0.5 m wide, 12.5 m) runs
+ * from just off the start roof's edge toward the opening; below it and beside it a broad roof (10 m); on the left a side
+ * wall (20 m) rises past everything. The same corner serves several purposes: the parapet is a line to run, an edge to
+ * catch; the side wall is a wall to run, a wall to plant feet on from a swing. `mirror`: the room the other way round (x
+ * about 28); `shift`: the parapet that much nearer the side wall. Positions in a run's inputs are in the unmirrored room.
+ */
+interface Yard { mirror: boolean; shift: number }
+const yardBoxes = (y: Yard): Box[] => {
+  const m = (b: Box): Box => (y.mirror ? { ...b, x0: 56 - b.x1, x1: 56 - b.x0 } : b);
+  return [
+    B(14, 40, 2, 14, 13), // the start roof
+    B(14, 39.5, 17, 29, 10), // the broad roof, up to the opening's face
+    B(36.6 + y.shift, 37.1 + y.shift, 15, 28, 12.5), // the parapet (a body's width short of the far side: a way round its end)
+    B(39.5, 42, 10, 36, 20), // the side wall
+    B(36.5, 39.5, 29, 31.5, 13.4), // the opening: its sill, the notch's floor
+    B(14, 36.5, 29, 42, 18), B(36.5, 39.5, 31.5, 42, 18), // the far side, and the opening's back
+  ].map(m);
+};
+/** the room, started from `sx` along the start roof (26: square to the room; further left, lined up with the parapet) */
+const yard = (y: Yard, sx = 26): Course => ({ boxes: yardBoxes(y), start: { x: y.mirror ? 56 - sx : sx, z: 4 }, alone: true });
+/** the still eye on the room: high over the start roof's right-hand edge, looking across it at three-quarters */
+const yardEye = (y: Yard): [number, number, number] => [y.mirror ? 56 - 24 : 24, 19.5, 12.5];
+/** the run's x in the unmirrored room, and a stick angle the right way round */
+const yx = (y: Yard, r: Runner) => (y.mirror ? 56 - r.x : r.x);
+const ygo = (y: Yard, deg: number, mag = 1) => go(y.mirror ? -deg : deg, mag);
+const onOpening = (y: Yard) => (f: { x: number; y: number; z: number; state: string }) => { const x = y.mirror ? 56 - f.x : f.x; return f.state === 'ground' && Math.abs(f.y - 13.4) < 0.05 && f.z > 29 && f.z < 31.5 && x > 36.5 && x < 39.5; };
+const onParapet = (y: Yard) => (f: { x: number; y: number; z: number; state: string }) => { const x = y.mirror ? 56 - f.x : f.x; return f.state === 'ground' && Math.abs(f.y - 12.5) < 0.05 && x > 36.5 + y.shift && x < 37.2 + y.shift; };
+const endsUp = (y: Yard): Should => ({ says: 'it ends stood in the opening', check: (r) => ok(r.frames.slice(-30).some(onOpening(y)), `ended at x ${r.runner.x.toFixed(1)}, y ${r.runner.y.toFixed(1)}, z ${r.runner.z.toFixed(1)} (${r.runner.state})`) });
+
+/** someone finding their way: down onto the broad roof, slow, a look up, and up into the opening from below */
+const yardFind = (y: Yard): Scene => ({
+  key: 'yard-find' + (y.mirror ? '-mirror' : '') + (y.shift ? '-shift' : ''), title: 'The courtyard, finding a way' + (y.mirror ? ' (mirrored)' : ''),
+  asks: 'Someone finding their way. An ordinary bound down onto the broad roof, slow across it toward the opening, a pause under it (theirs: the stick let go), then pressed at it: up, both hands on the sill, a knee over, stood. Satisfying first time.',
+  watch: 'The bound and its landing; the slow approach; the pause under the opening; the reach and the knee.',
+  course: yard(y), seconds: 8, eye: yardEye(y),
+  input: (t, r, m) => {
+    if (r.state === 'ground' && r.y > 13.3 && r.z > 28) return none;
+    if (!m.down && r.state === 'ground' && r.y < 10.1 && r.z > 17) m.down = t;
+    if (!m.down) return go(0);
+    // (slow across the broad roof to under the opening, a pause there, then at it)
+    if (!m.under && r.z > 28.2 && yx(y, r) > 37.6 + y.shift) m.under = t;
+    if (!m.under) { const px = yx(y, r) < 36 + y.shift && r.z < 28.2 ? 35.8 + y.shift : 38.4 + y.shift, ddx = px - yx(y, r), ddz = 28.5 - r.z; return ygo(y, (Math.atan2(ddx, ddz) * 180) / Math.PI, Math.hypot(ddx, ddz) < 1.2 ? 0.3 : 0.5); }
+    return t < m.under + 0.7 ? none : go(0);
+  },
+  should: [...commonShoulds,
+    { says: 'it comes down onto the broad roof first', check: (r) => { const l = r.lands[0], f = l && r.frames.find((x) => x.t >= l.t); return ok(!!f && Math.abs(f.y - 10) < 0.05, f ? `first landing at y ${f.y.toFixed(1)}` : 'no landing'); } },
+    { says: 'it stands under the opening a beat before going up', check: (r) => { const st = r.frames.filter((f) => f.state === 'ground' && f.z > 26 && Math.abs(f.y - 10) < 0.05 && f.speed < 0.6); return ok(st.length >= 30, `${(st.length / 120).toFixed(2)} s stood under it`); } },
+    endsUp(y),
+  ],
+});
+
+/** someone who knows the room: onto the parapet, along it, into the side wall, up it to the opening */
+const yardKnow = (y: Yard): Scene => ({
+  key: 'yard-know' + (y.mirror ? '-mirror' : '') + (y.shift ? '-shift' : ''), title: 'The courtyard, knowing the room' + (y.mirror ? ' (mirrored)' : '') + (y.shift ? ' (parapet moved)' : ''),
+  asks: 'Someone who knows it. From a little further left, onto the near end of the parapet, along its narrow top, and off it into the side wall: a wall foot that sends them up and on to the opening. The first footfall should be seen setting up the third: the takeoff arranged two strides before the parapet, the parapet foot already turning the body toward the wall.',
+  watch: 'The stride before the parapet; the foot on its top; the turn into the wall; the wall foot; arriving in the opening without a stop.',
+  course: yard(y, 33), seconds: 6, eye: yardEye(y),
+  input: (t, r, m) => {
+    if (r.state === 'ground' && r.y > 13.3 && r.z > 28) return none;
+    if (!m.on && r.state === 'ground' && Math.abs(r.y - 12.5) < 0.05 && r.z > 15) m.on = t;
+    // (across the start roof to the parapet's line, then straight down it: the takeoff lined up two strides out)
+    if (!m.on) return ygo(y, Math.max(-30, Math.min(30, (36.85 + y.shift - yx(y, r)) * 12)));
+    if (r.state === 'wall' || m.wall) { m.wall = 1; return ygo(y, 0); }
+    return r.z < 21 ? go(0) : ygo(y, 40);
+  },
+  should: [...commonShoulds,
+    { says: 'it runs the parapet\'s top', check: (r) => { const n = r.frames.filter(onParapet(y)).length; return ok(n >= 24, `${(n / 120).toFixed(2)} s on it`); } },
+    { says: 'then a foot on the side wall', check: (r) => ok(r.frames.some((f) => f.state === 'wall'), seq(r)) },
+    { says: 'and no hang on the way: it flows', check: (r) => ok(!r.moves.some((x) => x.move === 'hang'), seq(r)) },
+    endsUp(y),
+  ],
+});
+
+/** someone saving a line: too square off the parapet, a hand catches it, the swing, feet to the side wall, up to the opening */
+const yardSave = (y: Yard): Scene => ({
+  key: 'yard-save' + (y.mirror ? '-mirror' : '') + (y.shift ? '-shift' : ''), title: 'The courtyard, saving a line' + (y.mirror ? ' (mirrored)' : '') + (y.shift ? ' (parapet moved)' : ''),
+  asks: 'Someone saving a line. Along the parapet, then turned at the wall too square and too late: the foot takes the weight but the hips carry on over the edge, and the wall step is gone. A hand catches the parapet; the body swings out below the line it meant to take. Pressed toward the side wall on the swing, the feet go to it, and off them up to the opening\'s sill from below. The mistake opens a route with a different rhythm.',
+  watch: 'The foot that can\'t turn the body; the hand catching; the swing (which way, how far); the feet meeting the side wall; the reach up to the sill.',
+  course: yard(y, 33), seconds: 7, eye: yardEye(y),
+  input: (t, r, m) => {
+    if (r.state === 'ground' && r.y > 13.3 && r.z > 28) return none;
+    if (!m.on && r.state === 'ground' && Math.abs(r.y - 12.5) < 0.05 && r.z > 15) m.on = t;
+    // (across the start roof to the parapet's line, then straight down it: the takeoff lined up two strides out)
+    if (!m.on) return ygo(y, Math.max(-30, Math.min(30, (36.85 + y.shift - yx(y, r)) * 12)));
+    if (!m.turned && r.z > 25) m.turned = t;
+    if (!m.turned) return go(0);
+    if (!m.hung && r.move === 'hang') m.hung = t;
+    if (!m.hung) return ygo(y, 85);
+    if (!m.kicked && r.move === 'kick') m.kicked = t;
+    // (a beat in the swing, then toward the side wall for the feet; off them, at the opening, and pulled into it)
+    return t < m.hung + 0.25 ? none : !m.kicked ? ygo(y, 85) : ygo(y, 5);
+  },
+  should: [...commonShoulds,
+    { says: 'it runs the parapet\'s top', check: (r) => { const n = r.frames.filter(onParapet(y)).length; return ok(n >= 24, `${(n / 120).toFixed(2)} s on it`); } },
+    { says: 'a hand catches the parapet as the hips go over', check: (r) => { const h = r.frames.find((f) => f.state === 'climb' && f.y < 12 && f.y > 9.5); return ok(!!h, h ? `hung at y ${h.y.toFixed(1)}` : seq(r)); } },
+    { says: 'the body swings out under the hand (half a metre or more)', check: (r) => { const hs = r.frames.filter((f) => f.state === 'climb' && f.move === 'hang'); const xs = hs.map((f) => (y.mirror ? 56 - f.x : f.x)); const sw = xs.length ? Math.max(...xs) - Math.min(...xs) : 0; return ok(sw >= 0.5, `swung ${sw.toFixed(2)} m`); } },
+    { says: 'then the feet on the side wall, off the swing', check: (r) => { const h = r.frames.findIndex((f) => f.move === 'hang'); return ok(h >= 0 && r.frames.slice(h).some((f) => f.state === 'wall' || f.move === 'kick'), seq(r)); } },
+    endsUp(y),
+  ],
+});
 
 export const SCENES: Scene[] = [
   {
@@ -98,8 +205,7 @@ export const SCENES: Scene[] = [
     key: 'hang-intents', title: 'Hanging: stay, pass along, go up',
     asks: 'Caught as above; then the stick asks three things in turn: nothing (stay), along the wall (shimmy along the lip, hand over hand), then into it (up). Can the player get, and recognise, each?',
     watch: 'Whether steering along the wall moves the hands along the lip (it should), or lets go.',
-    gap: 'There is no shimmy: steering along the wall while hanging lets go after a beat.',
-    course: { boxes: [B(24, 40, 2, 18, 12), B(16, 48, 22.2, 40, 14.5)], start: { x: 32, z: 4 }, alone: true }, seconds: 6,
+    course: { boxes: [B(24, 40, 2, 18, 12), B(16, 48, 22.2, 40, 14.5)], start: { x: 32, z: 4 }, alone: true }, seconds: 6.6,
     input: (t, r, m) => { if (!m.hung && r.move === 'hang') { m.hung = t; m.x0 = r.x; } if (r.y > 14.4 && r.state === 'ground') return none; if (!m.hung) return go(0, 0.6); const s = t - m.hung; return s < 1 ? none : s < 2.4 ? go(RIGHT) : go(0); },
     should: [...commonShoulds,
       { says: 'steered along the wall, it moves along the lip still hanging (a shimmy), not let go', check: (r) => { const h = first(r, (f) => f.move === 'hang'); if (!h) return ok(false, 'never hung'); const along = r.frames.filter((f) => f.t > h.t + 1.1 && f.t < h.t + 2.3); const held = along.every((f) => f.move === 'hang'); const moved = along.length ? Math.abs(along[along.length - 1].x - along[0].x) : 0; return ok(held && moved > 0.4, `${held ? 'held' : 'let go'}, moved ${moved.toFixed(2)} m along`); } },
@@ -110,13 +216,12 @@ export const SCENES: Scene[] = [
     key: 'edge-stop', title: 'Stopping at the lip',
     asks: 'A run at a roof\'s edge, the stick let go 8 m short. It should come to a stand before the lip, and if it ends close, check its balance there (a teeter, arms out) rather than just standing.',
     watch: 'The deceleration (steps shortening, weight back); the stop; any balance check near the edge.',
-    gap: 'No teeter or balance check at an edge it stopped close to.',
     course: { boxes: [B(24, 40, 2, 30, 12)], start: { x: 32, z: 4 }, alone: true }, seconds: 4,
     input: (t, r) => (r.z < 22 ? go(0) : none),
     should: [...commonShoulds,
       { says: 'it stops on the roof, not off the edge', check: (r) => ok(r.runner.y > 11.9 && r.runner.z < 30, `ended at z ${r.runner.z.toFixed(2)}, y ${r.runner.y.toFixed(1)}`) },
       { says: 'it ends standing on both feet', check: (r) => { const f = r.frames[r.frames.length - 1]; return ok(f.fl && f.fr && f.speed < 0.1, `${f.fl && f.fr ? 'both feet' : 'one foot'}, ${f.speed.toFixed(2)} m/s`); } },
-      { says: 'stopped within a metre of the lip, it shows a balance check (a teeter)', check: (r) => { const near = 30 - r.runner.z < 1; return ok(!near, near ? `stopped ${(30 - r.runner.z).toFixed(2)} m from the lip, no teeter` : `stopped ${(30 - r.runner.z).toFixed(2)} m short`); } },
+      { says: 'it comes to a stand close to the lip (within 0.8 m) and checks its balance there (a teeter)', check: (r) => { const gap = 30 - r.runner.z, n = (r.runner.made as Record<string, number>).teeter ?? 0; return ok(gap < 0.8 && n > 0, `stopped ${gap.toFixed(2)} m from the lip, ${n ? 'a teeter' : 'no teeter'}`); } },
     ],
   },
   {
@@ -156,19 +261,18 @@ export const SCENES: Scene[] = [
     asks: 'The reference\'s best passage: from the street, a face with a sill at every storey. The same action repeated (a reach, a hang, a load, a spring) should gain a storey each time with a rhythm, and end: over the top, a crouch, a walk out.',
     watch: 'The rhythm of the repeated storeys; the gather before each spring; the ending at the top.',
     course: { boxes: [B(20, 44, 10, 30, 12)], holds: [3, 6, 9].map((y) => ({ kind: 'sill' as const, ax: 26, ay: y, az: 10, bx: 38, by: y, bz: 10, nx: 0, nz: -1 })), start: { x: 32, z: 4 }, alone: true }, seconds: 7,
-    input: () => go(0),
+    input: (t, r) => (r.y > 11.9 && r.state === 'ground' && r.z > 12 ? none : go(0)),
     should: [...commonShoulds,
       { says: 'it reaches the roof (12 m)', check: (r) => ok(r.runner.y > 11.9, `ended at y ${r.runner.y.toFixed(1)}; ${seq(r)}`) },
-      { says: 'by repeated hangs, a storey each', check: (r) => ok(count(r, 'hang') >= 3, `${count(r, 'hang')} hangs`) },
+      { says: 'by repeated hangs, a storey each', check: (r) => { const n = (r.runner.made as Record<string, number>).hang ?? 0; return ok(n >= 3, `${n} hangs`); } },
     ],
   },
   {
     key: 'tic-tac', title: 'Off one wall to a higher lip',
     asks: 'A lip 5.7 m up, just beyond a straight jump\'s reach, in a corner with a taller wall alongside. A traceur kicks off the side wall (a tic-tac) to gain the height and catch it.',
     watch: 'Whether the side wall is used to go up toward the lip, or just run along.',
-    gap: 'No tic-tac: a wall is only run along, run up, or kicked away from.',
     course: { boxes: [B(16, 48, 16, 34, 5.7), B(36, 40, 2, 16, 10)], start: { x: 33, z: 4 }, alone: true }, seconds: 5,
-    input: () => go(12),
+    input: (t, r) => (r.y > 5.6 && r.state === 'ground' && r.z > 18 ? none : go(12)),
     should: [...commonShoulds,
       { says: 'it gets onto the 5.7 m roof', check: (r) => ok(r.runner.y > 5.6, `ended at y ${r.runner.y.toFixed(1)}; ${seq(r)}`) },
       { says: 'by kicking off the side wall', check: (r) => ok(count(r, 'kick') > 0 && r.runner.y > 5.6, seq(r)) },
@@ -178,7 +282,6 @@ export const SCENES: Scene[] = [
     key: 'underbar', title: 'Under a bar across a gap',
     asks: 'A bar across a 2.4 m gap, 1.3 m above the roofs. Under it feet first, hands on it: is there room for the hips and the trailing foot, and does the body actually pass beneath it?',
     watch: 'The hands on the bar; the hips and feet passing under it; the exit.',
-    gap: 'The underbar is chosen from height samples; whether the body clears beneath the bar isn\'t checked.',
     course: { boxes: [B(24, 40, 2, 18, 12), B(24, 40, 20.4, 36, 12)], bars: [{ x0: 26, x1: 38, z0: 19.15, z1: 19.25, y: 13.3 }], start: { x: 32, z: 4 }, alone: true }, seconds: 4,
     input: (t, r) => (r.z > 26 && r.state === 'ground' ? none : go(0)),
     should: [...commonShoulds,
@@ -218,13 +321,15 @@ export const SCENES: Scene[] = [
       { says: 'by a climb or mantle, not a full spring over it', check: (r) => { const m = r.moves.find((x) => x.t > 0.5 && x.move !== 'run'); return ok(!!m && (m.move === 'climb' || m.move === 'hang'), m ? `first move: ${m.move}` : 'none'); } },
     ],
   },
+  yardFind({ mirror: false, shift: 0 }), yardKnow({ mirror: false, shift: 0 }), yardSave({ mirror: false, shift: 0 }),
+  yardKnow({ mirror: true, shift: 0 }), yardSave({ mirror: false, shift: 0.5 }),
 ];
 
 /** run a scene, the drawn body with it, and keep what the checks need */
 export function runScene(s: Scene, seed = 1): Run {
   const city = new City(seed, false, s.course), r = new Runner(city), rig = new Rig(); rig.update(1, r);
   const DT = 1 / 120, mem: Record<string, number> = {}, frames: Frame[] = [], ups: Run['ups'] = [], lands: Run['lands'] = [], moves: Run['moves'] = [{ t: 0, move: r.move }];
-  let prevPv: number[] | null = null; const prevBall: (number[] | null)[] = [null, null], prevFall: (number[] | null)[] = [null, null];
+  let prevPv: number[] | null = null; const prevBall: (number[] | null)[] = [null, null], prevFall: (number[] | null)[] = [null, null], prevSet = [false, false];
   for (let i = 0; i < s.seconds / DT; i++) {
     const t = i * DT, s0 = r.state, m0 = r.move, vy0 = r.vy, sp0 = r.speed, fl0 = r.reach.fl, fr0 = r.reach.fr; r.takeoffBy = '';
     r.step(DT, s.input(t, r, mem)); rig.update(DT, r);
@@ -236,9 +341,12 @@ export function runScene(s: Scene, seed = 1): Run {
     prevPv = pv;
     let slid = 0, stretched = false;
     for (const [k, s2, key] of [[0, 'L', 'fl'], [1, 'R', 'fr']] as const) {
-      const now = r.reach[key], fm = at('foot' + s2), ball = [fm[12] + fm[8] * 0.13, fm[13], fm[14] + fm[10] * 0.13], sole = s2 === 'L' ? rig.soles.L : rig.soles.R;
+      const now = r.reach[key], fm = at('foot' + s2), ball = [fm[12] + fm[8] * 0.13 - fm[4] * SOLE_D, fm[13] + fm[9] * 0.13 - fm[5] * SOLE_D, fm[14] + fm[10] * 0.13 - fm[6] * SOLE_D], sole = s2 === 'L' ? rig.soles.L : rig.soles.R;
       const same = !!now && !!prevFall[k] && now[0] === prevFall[k]![0] && now[2] === prevFall[k]![2];
-      if (same && sole.w > 0.9 && !sole.lost && prevBall[k]) slid += Math.hypot(ball[0] - prevBall[k]![0], ball[2] - prevBall[k]![2]);
+      // (planted this frame and the last: a foot still coming down onto its footfall isn't sliding on it)
+      const set = sole.w > 0.9 && !sole.lost;
+      if (same && set && prevSet[k] && prevBall[k]) slid += Math.hypot(ball[0] - prevBall[k]![0], ball[2] - prevBall[k]![2]);
+      prevSet[k] = set;
       if (now && sole.w > 0.9 && !sole.lost) { const hp = point(at('thigh' + s2), 0, 0, 0), on = rig.on; if (Math.hypot(now[0] + on[0] * 0.07 - hp[0], now[1] + on[1] * 0.07 - hp[1], now[2] + on[2] * 0.07 - hp[2]) > 0.9) stretched = true; }
       prevBall[k] = ball; prevFall[k] = now ? [...now] : null;
     }

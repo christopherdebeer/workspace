@@ -61,7 +61,7 @@ export interface Body {
   balance?: number; balanceV?: number; stamina?: number; effort?: number; time?: number;
   /** a save being made: what went wrong ('short', 'wide', 'long'), how long since the landing, the catching side (1 the
    * figure's left); seconds to the ground in a flight; a flight's planned length; a hang's swing along the wall (m/s) */
-  stanceFrac?: number; bounce?: number; vx?: number; vy?: number; vz?: number; roomAhead?: number; roomAway?: number; turnAhead?: number; hangT?: number; from?: string; inStep?: (side: number) => { from: [number, number, number]; to: [number, number, number]; k: number } | null; wallPhase?: number; near?: number; against?: number; nextFoot?: { side: number; p: [number, number, number]; t: number } | null; stepOver?: number; gait?: { stance: number; flight: number }; stepLift?: number; shift?: number; saveKind?: string; saveT?: number; saveSide?: number; ttc?: number; flightT?: number; swing?: number;
+  stanceFrac?: number; bounce?: number; vx?: number; vy?: number; vz?: number; roomAhead?: number; roomAway?: number; turnAhead?: number; hangT?: number; from?: string; inStep?: (side: number) => { from: [number, number, number]; to: [number, number, number]; k: number } | null; wallPhase?: number; near?: number; against?: number; nextFoot?: { side: number; p: [number, number, number]; t: number } | null; stepOver?: number; gait?: { stance: number; flight: number }; stepLift?: number; shift?: number; saveKind?: string; saveT?: number; saveSide?: number; ttc?: number; flightT?: number; swing?: number; swingOut?: number; pulling?: boolean; teeter?: number; swingFeet?: { ax: number; az: number; t: number } | null;
   /** hanging on the way up a face: 0 caught, 1 loading, 2 springing for the next hold */
   chainPhase?: number;
   phase: number; lead: number; land: number; turn: number; climbT: number; wallT: number;
@@ -106,7 +106,7 @@ const HANG = 2.05, CHAIN_CATCH = 0.12, CHAIN_LOAD = 0.18, CHAIN_SPRING = 0.32;
 const TIC = 0.27, TIC_UP = 6.3, ALLEY = 3.2;
 /** a lip caught: the hips swing in under it this long before anything's decided (s); pressed into a wall, braced this long
  * before it goes for it (s) */
-const LIP_BEAT = 0.3, BRACE = 0.35;
+const LIP_BEAT = 0.3, BRACE = 0.35, TEETER = 1.1;
 /** the point of a level hold nearest (x, z) */
 const onHold = (h: Hold, x: number, z: number): P3 => {
   const dx = h.bx - h.ax, dz = h.bz - h.az, t = Math.max(0, Math.min(1, ((x - h.ax) * dx + (z - h.az) * dz) / (dx * dx + dz * dz || 1)));
@@ -206,11 +206,32 @@ export class Runner implements Body {
   /** the way it was last asked to go; seconds to the ground; the planned flight; settling strides owed after a landing */
   private want: [number, number] = [0, 0]; private launchWant: [number, number] = [0, 0]; ttc = 9; private breathT = 0;
   /** a hang's swing: along the wall (m, m/s), the dip (m, m/s), where it caught, the way along, the near hand (1 its left) */
-  private sw: { s: number; v: number; d: number; dv: number; x0: number; z0: number; tx: number; tz: number; near: number; t: number } | null = null;
+  /**
+   * Hanging from a lip by the hands: a pendulum under them. `s`, `v` along the wall (m, m/s); `o`, `ov` out from it (the hips
+   * swung away from the face, never into it: the feet take that); `d`, `dv` up and down from the still hang (above it, falling
+   * into the arms; below, the dip, caught). `x0, z0` the still hang's place, moving along the lip with a shimmy; `tx, tz` along
+   * the wall; `near` the hand that caught first. `feet`: planted on a wall it swung to, (`ax`, `az`) toward it, and how long.
+   */
+  private sw: { s: number; v: number; d: number; dv: number; o: number; ov: number; x0: number; z0: number; tx: number; tz: number; near: number; t: number; feet: { ax: number; az: number; t: number } | null; shim: number; stuck: number; pumped: number } | null = null;
+  /** stepped off the side of a narrow top it couldn't turn on: its edge may be caught going away from it, until then */
+  private overrun: { until: number; y: number } | null = null;
+  /** where a swing's feet last went to a wall, and until when that's not tried there again (it came back to the same hang) */
+  private swungFrom: { x: number; z: number; until: number } | null = null;
+  /** how long the stick has asked to go off the line it's running (rad > 0.26) */
+  private turnAsk = 0;
+  /** a balance check at a lip it stopped close to: how long's left of it */
+  teeterT = 0; private teetered = false;
+  /** how far through a balance check at a lip (0 none, rising to 1 at its end) */
+  get teeter(): number { return this.teeterT > 0 ? 1 - this.teeterT / TEETER : 0; }
   get saveKind(): string | undefined { return this.save?.kind; }
   get saveT(): number | undefined { return this.save?.t; }
   get saveSide(): number | undefined { if (!this.save) return undefined; const h = this.heading; return this.save.ex * Math.cos(h) - this.save.ez * Math.sin(h) >= 0 ? 1 : -1; }
   get swing(): number | undefined { return this.sw?.v; }
+  /** the hang's swing out from the wall (m), and its feet on a wall it swung to */
+  get swingOut(): number { return this.sw?.o ?? 0; }
+  /** pulled up over a lip with no foot on the wall: a pull, a press, a knee (the rig's to draw, by `mu`) */
+  get pulling(): boolean { return this.state === 'climb' && this.move === 'climb' && !this.stepFoot && !this.chain; }
+  get swingFeet(): { ax: number; az: number; t: number } | null { return this.sw?.feet ?? null; }
   /** hanging from a lip it caught (s; -1 not hanging); lips caught; and the wall it's braced against, pressed into one */
   private atLip = -1; catches = 0;
   /** leaps off the ground that missed their landing and fell (a kick off a wall into the air isn't one); where this flight began */
@@ -425,6 +446,9 @@ export class Runner implements Body {
    */
   private stepping(): void {
     const sp = this.speed, f = this.feet;
+    // (pulled up over a lip with no foot on the wall: the feet leave what they stood on as the pull takes the weight, and come
+    // up under it, not dragged after the hips)
+    if (this.pulling) { f.L.on = f.R.on = false; this.reach.fl = this.reach.fr = undefined; return; }
     if (this.save && this.state === 'ground' && this.move !== 'roll' && this.placeSave()) return;
     // (clutter under the stride: stepped over high)
     if (this.state === 'ground') { const g = this.city.regionAt(this.x + Math.sin(this.heading) * 0.3, this.y, this.z + Math.cos(this.heading) * 0.3); if (g?.kind === 'clutter') this.stepOver = 0.3; }
@@ -761,6 +785,8 @@ export class Runner implements Body {
   private ground(dt: number, mag: number, on: boolean, dx: number, dz: number, jump: boolean): void {
     const H = (x: number, z: number) => this.city.heightAt(x, z);
     this.runT = mag > 0.5 ? this.runT + dt : 0;
+    // (how long it's been asked off the line it's running: a turn set up early, or one asked at the last moment)
+    { const s0 = this.speed; if (on && s0 > 2 && (dx * this.vx + dz * this.vz) / (s0 * (Math.hypot(dx, dz) || 1)) < Math.cos(0.26)) this.turnAsk += dt; else this.turnAsk = 0; }
     if (jump) this.to.buffer = 0.22;
     if (this.rollT > 0) { this.rollT -= dt; this.mu = 1 - Math.max(0, this.rollT) / this.rollDuration; }
     if (this.dashT > 0) this.dashT = on ? this.dashT - dt : 0;
@@ -798,12 +824,23 @@ export class Runner implements Body {
     // (toward the wanted velocity, at a fixed rate: a turn is quick, a reversal a skid)
     // (while the legs are still taking a landing it drives less: the landing is a beat, and the burst comes out of it; let
     // go with room ahead, it settles, through a walk to a stand, over about a second; with no room, it stops short)
-    const settling = !on && sp > 0.5 && this.rollT <= 0 && (() => { const s = (sp * sp) / (2 * TUNE.accel * 0.25) + 0.6; for (let d = 0.5; d <= s; d += 0.5) if (Math.abs(H(this.x + fx * d, this.z + fz * d) - this.y) > STEP) return false; return true; })();
+    const settling = !on && sp > 0.5 && this.rollT <= 0 && (() => { const s = (sp * sp) / (2 * TUNE.accel * 0.25) + 0.15; for (let d = 0.25; d <= s; d += 0.25) if (Math.abs(H(this.x + fx * d, this.z + fz * d) - this.y) > STEP) return false; return true; })();
     // (and while a landing is still being recovered from, or it's off balance, it drives less; spent, it runs a little slower)
     if (this.recoverT > 0) this.recoverT -= dt;
     top *= 0.9 + 0.1 * this.stamina;
     const drive = (this.recoverT > 0 ? 0.5 : 1) * (1 - Math.min(0.5, Math.abs(this.balance) * 2));
-    const tx = dx * top, tz = dz * top, ex = tx - this.vx, ez = tz - this.vz, e = Math.hypot(ex, ez), a = (this.rollT > 0 ? TUNE.accel * 0.3 : settling ? TUNE.accel * 0.25 : TUNE.accel * (1 - 0.6 * this.land) * drive * (this.vx * ex + this.vz * ez >= 0 || sp < 0.1 ? Math.min(1, 0.3 + sp / 4) : 1)) * dt;
+    // (let go running at a lip: braked only as hard as it takes to come to a stand just short of it (the last step close to
+    // the edge), not stopped a body's length back)
+    let edgeD = 0; if (!on && sp > 0.5 && !settling && this.rollT <= 0) for (let d = 0.3; d <= 6; d += 0.1) if (H(this.x + fx * d, this.z + fz * d) < this.y - STEP) { edgeD = d; break; }
+    const atLip = edgeD > 0 ? Math.min(1, (sp * sp) / (2 * Math.max(0.05, edgeD - 0.42)) / TUNE.accel) : 1;
+    const tx = dx * top, tz = dz * top, ex = tx - this.vx, ez = tz - this.vz, e = Math.hypot(ex, ez), a = (this.rollT > 0 ? TUNE.accel * 0.3 : settling ? TUNE.accel * 0.25 : TUNE.accel * Math.max(0.3, atLip) * (1 - 0.6 * this.land) * drive * (this.vx * ex + this.vz * ez >= 0 || sp < 0.1 ? Math.min(1, 0.3 + sp / 4) : 1)) * dt;
+    // (come to a stand close to a lip it ran at: a balance check, the body tipping out over it and back, the arms out)
+    if (this.teeterT > 0) this.teeterT = Math.max(0, this.teeterT - dt);
+    if (sp > 2.5) this.teetered = false;
+    if (!on && !this.teetered && sp < 0.4 && this.rollT <= 0) {
+      const ux = Math.sin(this.heading), uz = Math.cos(this.heading);
+      if ([0.3, 0.45, 0.6].some((d) => H(this.x + ux * d, this.z + uz * d) < this.y - STEP)) { this.teeterT = TEETER; this.teetered = true; this.count('teeter' as Move); }
+    }
     // (turning at pace takes a plant and a moment: the way it's going swings round only as fast as the feet can push it
     // sideways (about 19 m/s² at 13 m/s, a 35° change in under half a second; at a walk, at once): so a change of mind
     // late into a takeoff is still being made as it leaves)
@@ -844,7 +881,7 @@ export class Runner implements Body {
           this.effort = Math.max(this.effort, rise > 1.2 ? Math.min(1, 0.5 + rise / 6.8) : 0.2); this.load = Math.max(this.load, 0.65); this.offFoot++;
           if (this.tame()) return;
           if (this.plantFirst(ux, uz, edge)) return;
-          this.takeoffBy = 'runup'; this.leap(ux, uz, edge, sp); return;
+          this.takeoffBy = 'runup'; const nt = this.offNarrow(ux, uz, dx, dz, sp); if (nt === 'over') { this.overrunOff(ux, uz, dx, dz, sp); return; } this.leap(nt ? nt[0] : ux, nt ? nt[1] : uz, nt ? Math.min(edge, 0.3) : edge, sp); return;
         }
         this.approach = null;
       }
@@ -869,7 +906,7 @@ export class Runner implements Body {
         // unless the lip's right there)
         if (this.approach) {
           if (this.approach.steps >= 1) this.load = Math.min(this.approach.steps === 1 ? 0.3 + 0.4 * this.effort : 0.15 + 0.25 * this.effort, this.load + dt * 6);
-          if (edge <= R + sp * dt) { if (this.tame()) return; if (this.plantFirst(ux, uz, edge)) return; if (this.approach.steps === 0) this.offFoot++; this.takeoffBy = this.approach.steps === 0 ? 'runup-lip' : 'runup-short'; this.leap(ux, uz, edge, sp); return; }
+          if (edge <= R + sp * dt) { if (this.tame()) return; if (this.plantFirst(ux, uz, edge)) return; if (this.approach.steps === 0) this.offFoot++; this.takeoffBy = this.approach.steps === 0 ? 'runup-lip' : 'runup-short'; const nt = this.offNarrow(ux, uz, dx, dz, sp); if (nt === 'over') { this.overrunOff(ux, uz, dx, dz, sp); return; } this.leap(nt ? nt[0] : ux, nt ? nt[1] : uz, nt ? Math.min(edge, 0.3) : edge, sp); return; }
         } else {
         if (this.load < 0.1) {
           // The next contact unless a foot is already supporting the runner.
@@ -886,7 +923,10 @@ export class Runner implements Body {
         if ((this.load >= 0.65 && edge <= ahead) || edge <= R + sp * dt) {
           if (this.tame()) return;
           if (this.plantFirst(ux, uz, edge)) return;
-          this.takeoffBy = 'edge'; this.leap(ux, uz, edge, sp); return;
+          // (off a narrow top: only as far round as the foot on it can turn the body; asked further, over the side)
+          const nt = this.offNarrow(ux, uz, dx, dz, sp);
+          if (nt === 'over') { this.overrunOff(ux, uz, dx, dz, sp); return; }
+          this.takeoffBy = 'edge'; this.leap(nt ? nt[0] : ux, nt ? nt[1] : uz, nt ? Math.min(edge, 0.3) : edge, sp); return;
         }
         }
       } else if (!preparing) this.load = Math.max(0, this.load - dt * 8);
@@ -931,8 +971,11 @@ export class Runner implements Body {
     for (const [bx, bz] of AXES) if (bx * dx + bz * dz > 0.65 && H(this.x + bx * (R + 0.1), this.z + bz * (R + 0.1)) > this.y + TUNE.rise) { ax = bx; az = bz; }
     if (!ax && !az) { this.press = 0; return false; }
     const wx = this.x + ax * (R + 0.3), wz = this.z + az * (R + 0.3), top = H(wx, wz);
-    const apex = (10.5 * 10.5) / (2 * TUNE.gravity), reachable = top - this.y <= apex + TUNE.armReach + 0.38 ||
-      !!this.city.gripAt(wx, this.y + apex + TUNE.armReach - 0.5, wz, 1.2, (g) => (g.kind === 'sill' || g.kind === 'pipe') && g.nx * ax + g.nz * az < -0.5);
+    // (its top in a jump and a reach; or a sill or a pipe anywhere up the way there, from a reach above the head up: a sill at
+    // a storey is as good a start up a face as one at the top of the jump)
+    const apex = (10.5 * 10.5) / (2 * TUNE.gravity), sill = (g: Hold) => (g.kind === 'sill' || g.kind === 'pipe') && g.nx * ax + g.nz * az < -0.5;
+    let reachable = top - this.y <= apex + TUNE.armReach + 0.38;
+    for (let h = 1.8; !reachable && h <= apex + TUNE.armReach - 0.3; h += 0.8) reachable = !!this.city.gripAt(wx, this.y + h, wz, 0.9, sill);
     if (!reachable) { this.press = 0; return false; }
     this.press += dt; this.pax = ax; this.paz = az;
     if (this.press < BRACE) return false;
@@ -960,8 +1003,11 @@ export class Runner implements Body {
     const f = this.feet;
     if (this.state !== 'ground' || f.L.on || f.R.on) return false;
     const nf = this.nextFoot, side = nf ? nf.side : this.lead ? 1 : -1, foot = side > 0 ? f.L : f.R;
-    const d = Math.max(0, Math.min(AHEAD, edge - 0.15)), x = this.x + ux * d + uz * side * TRACK, z = this.z + uz * d - ux * side * TRACK, h = this.city.heightAt(x, z);
-    if (Math.abs(h - this.y) > STEP) return false;
+    const d = Math.max(0, Math.min(AHEAD, edge - 0.15));
+    let x = this.x + ux * d + uz * side * TRACK, z = this.z + uz * d - ux * side * TRACK, h = this.city.heightAt(x, z);
+    // (on something narrow, on its line: one foot in front of the other)
+    if (Math.abs(h - this.y) > STEP) { x = this.x + ux * d; z = this.z + uz * d; h = this.city.heightAt(x, z); }
+    if (Math.abs(h - this.y) > STEP) { x = this.x; z = this.z; h = this.y; }
     foot.on = true; foot.p = [x, h, z]; foot.done = false;
     this.phase = Math.floor(this.phase / (2 * Math.PI)) * 2 * Math.PI + Math.PI / 2 + 0.31 + (side > 0 ? 0 : Math.PI);
     if (side > 0) this.reach.fl = foot.p; else this.reach.fr = foot.p;
@@ -1038,6 +1084,7 @@ export class Runner implements Body {
     const s0 = Math.hypot(vx0, vz0), ux = s0 > 2 ? vx0 / s0 : dx, uz = s0 > 2 ? vz0 / s0 : dz;
     // (only if, that way, there's somewhere to land within a storey before anything taller: else it's a wall, not a step)
     const landable = (() => { for (let d = 0.2; d <= 3.2; d += 0.25) { const h = this.city.heightAt(this.x + ux * d, this.z + uz * d); if (h > this.y + TUNE.rise) return false; if (h > this.y + STEP) return true; } return false; })();
+    if (this.ticTac(dx, dz, mag, vx0, vz0)) return true;
     if (Math.hypot(vx0, vz0) <= 6 && this.mantle(dx, dz, mag)) return true;
     if (facing > 0.3 && top <= this.y + TUNE.rise && landable && mag >= 0.55 && this.time - this.metT > 0.8) { if (this.plantFirst(ux, uz, 0.3)) return true; this.metT = this.time; keep(); this.takeoffBy = 'metwall'; this.leap(ux, uz, 0.05, s0); return true; }
     keep();
@@ -1180,6 +1227,12 @@ export class Runner implements Body {
     // (the arc: up to an apex that clears what's between, down to the landing; higher if it'd otherwise be too fast)
     let T = 0, up = 0;
     for (let i = 0; i < 24; i++) { up = Math.sqrt((2 * apex) / G); T = up + fall(apex - dh, float); if (D / T <= VLEAP) break; apex += 0.4; }
+    // (a vault taken off close to what it's over: steeper, the hand driving it up, so it's up by the top when it gets there)
+    if (move === 'vault') {
+      const tf = Math.max(0.05, overAt / Math.max(4, sp)), need = over - y - 0.3;
+      let vy0 = G * up;
+      if (vy0 * tf - (G * tf * tf) / 2 < need) { vy0 = Math.min(7, (need + (G * tf * tf) / 2) / tf); up = vy0 / G; T = up + fall((vy0 * vy0) / (2 * G) - dh, float); }
+    }
     let v = D / T;
     // (keep the pace where the landing has the room for it)
     const keep = Math.min(VLEAP, sp) * (float ? 0.85 : 1);
@@ -1363,9 +1416,9 @@ export class Runner implements Body {
     // (the body's breadth: not into a wall it's passing, falling past, kicking off)
     // (vaulting: not the thing it's going over, carried on its hand, while it's up by it: not what's below, falling on)
     this.resolve(this.move === 'vault' && this.plant && this.y > this.plant[1] - 1.2 ? Math.max(0.6, this.plant[1] + 0.1 - this.y) : 0.6);
-    // (carried up onto the hand over a few frames, not in one, and never more than half a metre into what it's over)
+    // (carried up onto the hand over a few frames, not in one, and never more than 0.65 m into what it's over)
     const g = H(this.x, this.z);
-    if (g <= over && g > this.vaultTo + 0.3) { if (this.y < g + 0.05) { const gap = g + 0.05 - this.y; this.y += Math.max(gap * (1 - Math.exp(-40 * dt)), gap - 0.5); this.vy = Math.max(this.vy, 0); } return; }
+    if (g <= over && g > this.vaultTo + 0.3) { if (this.y < g + 0.05) { const gap = g + 0.05 - this.y; this.y += Math.max(gap * (1 - Math.exp(-40 * dt)), gap - 0.65); this.vy = Math.max(this.vy, 0); } return; }
     if (this.y <= g && this.vy <= 0) { this.y = g; this.touch(-this.vy); }
   }
 
@@ -1378,9 +1431,18 @@ export class Runner implements Body {
   private reachLip(): boolean {
     if (!TUNE.walls || !TUNE.reach || this.move === 'vault' || this.move === 'underbar' || this.float || this.airT < 0.08) return false;
     const reach = TUNE.armReach, G = TUNE.gravity;
-    const g = this.city.gripAt(this.x, this.y + reach * 0.6, this.z, R + 0.35, (h) => h.kind === 'edge' && h.ay - this.y > 0.9 && h.ay - this.y <= reach && Math.abs(h.ay - this.leftY) > 0.1);
+    // (over the side of a narrow top it couldn't turn on: that top's own edge, caught going away from it, a hand reaching back
+    // as the hips go by, before they've dropped below it)
+    const over = !!this.overrun && this.time < this.overrun.until;
+    const g = over ? this.city.gripAt(this.x, this.overrun!.y, this.z, R + 0.8, (h) => h.kind === 'edge' && Math.abs(h.ay - this.overrun!.y) < 0.05 && h.ay - this.y > 0.12 && (this.x - h.ax) * h.nx + (this.z - h.az) * h.nz > 0)
+      : this.city.gripAt(this.x, this.y + reach * 0.6, this.z, R + 0.35, (h) => h.kind === 'edge' && h.ay - this.y > 0.9 && h.ay - this.y <= reach && Math.abs(h.ay - this.leftY) > 0.1);
     if (!g) return false;
     const nx = g.hold.nx, nz = g.hold.nz, out = (this.x - g.x) * nx + (this.z - g.z) * nz, top = g.y;
+    if (over) {
+      if (out < 0.05 || out > R + 0.8) return false;
+      this.wx = -nx; this.wz = -nz; this.grabTop({ hold: g.hold }, top, g.x, g.z); this.lipReached++; this.count('overcatch' as Move);
+      return true;
+    }
     if (this.lipBad(g.x, g.z)) return false;
     if (out < -0.05 || out > R + 0.3) return false;
     // (only one it's heading for: going toward it, or asked to; not one it's passing alongside or leaving)
@@ -1421,6 +1483,63 @@ export class Runner implements Body {
     this.grabTop(lip, top, x, z);
     return true;
   }
+  /**
+   * Off the side of a narrow top (a parapet, a wall's top: a drop both sides), asked to go off it at an angle to the line
+   * it's running: the foot on it can turn the body only so far, and further the longer the turn's been asked (one set up a
+   * few strides out, up to 60°; one asked at the last moment, 25°). The way it can go (null: it isn't on one, or isn't
+   * turning), or 'over': asked well past that, the foot can't drive the turn and the hips go on over the side.
+   */
+  private offNarrow(ux: number, uz: number, dx: number, dz: number, sp: number): [number, number] | 'over' | null {
+    const H = (x: number, z: number) => this.city.heightAt(x, z), px = -uz, pz = ux, m = Math.hypot(dx, dz);
+    if (sp < 4 || m < 0.5 || !(H(this.x + px * 0.7, this.z + pz * 0.7) < this.y - STEP && H(this.x - px * 0.7, this.z - pz * 0.7) < this.y - STEP)) return null;
+    const hu = Math.atan2(ux, uz), ha = Math.atan2(dx / m, dz / m);
+    let dh = ha - hu; while (dh > Math.PI) dh -= 2 * Math.PI; while (dh < -Math.PI) dh += 2 * Math.PI;
+    if (Math.abs(dh) < 0.2) return null;
+    const most = ((25 + 35 * Math.min(1, this.turnAsk / 0.3)) * Math.PI) / 180;
+    if (Math.abs(dh) > most + 0.35) return 'over';
+    const h = hu + Math.sign(dh) * Math.min(Math.abs(dh), most);
+    return [Math.sin(h), Math.cos(h)];
+  }
+  /** over the side of a narrow top it couldn't turn on: what the foot gave it (a turn of 25°, some pace), and off, its edge
+   * still there to be caught by a hand going by */
+  private overrunOff(ux: number, uz: number, dx: number, dz: number, sp: number): void {
+    const hu = Math.atan2(ux, uz), ha = Math.atan2(dx, dz);
+    let dh = ha - hu; while (dh > Math.PI) dh -= 2 * Math.PI; while (dh < -Math.PI) dh += 2 * Math.PI;
+    const h = hu + Math.sign(dh) * 0.45, v = sp * 0.9;
+    this.vx = Math.sin(h) * v; this.vz = Math.cos(h) * v;
+    this.launch(0.4, 'fall', false, false, 0.5); this.overrun = { until: this.time + 0.9, y: this.y }; this.count('overrun' as Move);
+  }
+  /**
+   * A tic-tac: met at a run, a tall wall beside the way it's asked, and ahead a lip too high for a straight jump but within one
+   * off a wall: a foot on the side wall, and off it up and across to the lip (the pace into the wall turned into height),
+   * for the hands to take it.
+   */
+  private ticTac(dx: number, dz: number, mag: number, vx0: number, vz0: number): boolean {
+    const s0 = Math.hypot(vx0, vz0), m = Math.hypot(dx, dz);
+    if (!TUNE.walls || mag < 0.55 || s0 < 3.5 || m < 0.5 || this.wallCool > 0) return false;
+    const H = (x: number, z: number) => this.city.heightAt(x, z), ux = dx / m, uz = dz / m;
+    for (const [ax, az] of AXES) {
+      // (the side wall: beside the line (not across it), and standing higher than the lip)
+      const k = ax * ux + az * uz; if (Math.abs(k) > 0.6) continue;
+      // (touching, or a step away: a foot reaches it)
+      let side = 0; for (let e = 0.12; e <= 0.9 && side < this.y + TUNE.rise + 1; e += 0.13) side = H(this.x + ax * (R + e), this.z + az * (R + e));
+      if (side < this.y + TUNE.rise + 1) continue;
+      // (the lip ahead, along the way asked, off the side wall: too high to jump to, low enough to tic-tac to)
+      const fx = ux - ax * k, fz = uz - az * k, fl = Math.hypot(fx, fz) || 1, px = fx / fl, pz = fz / fl;
+      let at = 0, top = 0; for (let d = 0.3; d <= 2.6; d += 0.1) { const h = H(this.x + px * d, this.z + pz * d); if (h > this.y + STEP) { at = d; top = h; break; } }
+      if (!at || top - this.y <= TUNE.rise || top - this.y > TUNE.rise + 3) continue;
+      if (top >= side - 0.3) continue;
+      // (as high as gets the hand over the lip; the pace into the wall pays for it: a slow one can't)
+      const apex = Math.max(1, top - this.y - TUNE.armReach + 0.35), vy = Math.sqrt(2 * TUNE.gravity * apex);
+      if (vy > 4 + 0.9 * s0) continue;
+      const T = vy / TUNE.gravity, across = Math.min(4, (at + 0.2) / T);
+      this.vx = px * across - ax * 0.8; this.vz = pz * across - az * 0.8;
+      this.wx = ax; this.wz = az; this.wallSide = (ax * Math.cos(this.heading) - az * Math.sin(this.heading)) > 0 ? 1 : -1;
+      this.launch(vy, 'kick', false, false, 2 * T); this.wallCool = 0.25; this.count('tictac' as Move);
+      return true;
+    }
+    return false;
+  }
   /** hands on a lip at `top`: climbing over it from here */
   private grabTop(lip: { hold: Hold }, top: number, x: number, z: number): void {
     this.top = top; this.chain = null;
@@ -1428,8 +1547,14 @@ export class Runner implements Body {
     // (what it brought: along the wall, a swing under the hand; downward, a dip, caught; the near hand first, the side it
     // was travelling toward)
     const tx = -this.wz, tz = this.wx, along = this.vx * tx + this.vz * tz;
-    this.sw = { s: 0, v: Math.max(-4, Math.min(4, along)), d: 0, dv: Math.min(0, this.vy) * 0.6, x0: this.x, z0: this.z, tx, tz, near: Math.abs(along) > 0.5 ? (along > 0 ? -1 : 1) : this.lead ? 1 : -1, t: 0 };
-    this.catchHeight = this.y; this.climbT = 0; this.mu = 0; this.vy = 0; this.vx = this.vz = 0;
+    // (and out from the wall: carried on away from it, the hips swing out under the hands; caught high (going over the
+    // edge), it drops into the arms first)
+    const out = Math.max(0, Math.min(5, -(this.vx * this.wx + this.vz * this.wz))), over = !!this.overrun && this.time < this.overrun.until;
+    const rest = over ? top - 1.95 : this.y, o0 = over ? Math.max(0, -((this.x - x) * this.wx + (this.z - z) * this.wz) - (R + 0.05)) : 0;
+    const x0 = over ? x - this.wx * (R + 0.05) : this.x, z0 = over ? z - this.wz * (R + 0.05) : this.z;
+    this.sw = { s: 0, v: Math.max(-4, Math.min(4, along)), d: this.y - rest, dv: over ? this.vy : Math.min(0, this.vy) * 0.6, o: o0, ov: out, x0, z0, tx, tz, near: Math.abs(along) > 0.5 ? (along > 0 ? -1 : 1) : this.lead ? 1 : -1, t: 0, feet: null, shim: 0, stuck: 0, pumped: 0 };
+    this.overrun = null;
+    this.catchHeight = rest; this.climbT = 0; this.mu = 0; this.vy = 0; this.vx = this.vz = 0;
     // (caught: hanging, the hips swinging in under it, before anything's decided)
     this.state = 'climb'; this.move = 'hang'; this.atLip = 0; this.catches++;
   }
@@ -1548,9 +1673,12 @@ export class Runner implements Body {
   private chimneyUp(dt: number, dx: number, dz: number, mag: number): boolean {
     if (!TUNE.walls || mag < 0.55 || this.speed > 3 || (this.badChim && this.time < this.badChim.until && Math.hypot(this.x - this.badChim.x, this.z - this.badChim.z) < 1.5)) { this.wedge = 0; return false; }
     const H = (x: number, z: number) => this.city.heightAt(x, z), tall = this.y + 1.6;
+    // (pressed head-on at the end of an alley: up it off its side walls, the nearer first, nowhere to go along it)
+    const endOn = H(this.x + dx * (R + 0.15), this.z + dz * (R + 0.15)) > tall;
     for (const [ax, az] of AXES) {
-      if (dx * ax + dz * az < 0.5) continue;
-      let dw = 0; for (let d = R; d <= R + 0.25; d += 0.05) if (H(this.x + ax * d, this.z + az * d) > tall) { dw = d; break; }
+      const side = endOn && Math.abs(dx * ax + dz * az) < 0.4;
+      if (dx * ax + dz * az < 0.5 && !side) continue;
+      let dw = 0; for (let d = R; d <= R + (side ? 0.9 : 0.25); d += 0.05) if (H(this.x + ax * d, this.z + az * d) > tall) { dw = d; break; }
       if (!dw) continue;
       let dop = 0; for (let d = 0.3; d <= ALLEY; d += 0.1) if (H(this.x - ax * d, this.z - az * d) > tall) { dop = d; break; }
       if (!dop) continue;
@@ -1561,7 +1689,7 @@ export class Runner implements Body {
       const ta = -az, tb = ax, sgn = dx * ta + dz * tb >= 0 ? 1 : -1;
       this.wx = ax; this.wz = az; this.tx = ta * sgn; this.tz = tb * sgn; this.wsp = 0; this.vx = this.vz = 0;
       const hd = Math.atan2(this.tx, this.tz); this.wallSide = ax * Math.cos(hd) - az * Math.sin(hd) > 0 ? 1 : -1;
-      this.intoChimney(dop + (dw - R - 0.05));
+      this.intoChimney(dop + (dw - R - 0.05), side);
       return true;
     }
     this.wedge = 0; return false;
@@ -1628,7 +1756,8 @@ export class Runner implements Body {
       if (lip) { this.grabTop(lip, top, x, z); return; }
     }
     // (its top out of reach: a sill, or a pipe, in reach on the way up it, hung from; and from there, the next)
-    if (into > 0.55 && this.stepAge >= 0.06 && this.vy < 2.5 && reach > TUNE.armReach) {
+    // (taken as it comes into reach on the way up, the arm long; or about the top of the rise, from below it)
+    if (into > 0.55 && this.stepAge >= 0.06 && reach > TUNE.armReach) {
       const g = this.holdUp(this.y + 0.9, this.y + TUNE.armReach);
       if (g) { this.hangFrom(g); return; }
     }
@@ -1704,51 +1833,144 @@ export class Runner implements Body {
     // settle before it goes on along it)
     if (aimed && this.rollT <= 0 && (was === 'bound' || was === 'hop' || was === 'spring') && sp > 1) {
       const H = (x: number, z: number) => this.city.heightAt(x, z), px = -uz, pz = ux;
-      if (H(this.x + px * 0.7, this.z + pz * 0.7) < this.y - STEP && H(this.x - px * 0.7, this.z - pz * 0.7) < this.y - STEP) {
+      // (unless it runs on along it, far enough to run on: a parapet landed on along its length is run, the chest still going)
+      // (along its own length, which way it's going: a narrow top is a line, and the run's line drifts across it)
+      let along = 0; const b = this.city.topAt(this.x, this.z);
+      if (b && b.x1 - b.x0 < b.z1 - b.z0 && Math.abs(uz) > 0.8) along = uz > 0 ? b.z1 - this.z : this.z - b.z0;
+      else if (b && b.z1 - b.z0 < b.x1 - b.x0 && Math.abs(ux) > 0.8) along = ux > 0 ? b.x1 - this.x : this.x - b.x0;
+      else while (along < 4 && Math.abs(H(this.x + ux * (along + 0.3), this.z + uz * (along + 0.3)) - this.y) <= STEP) along += 0.3;
+      if (along < Math.max(2.4, sp * 0.3) && H(this.x + px * 0.7, this.z + pz * 0.7) < this.y - STEP && H(this.x - px * 0.7, this.z - pz * 0.7) < this.y - STEP) {
         this.vx *= 0.15; this.vz *= 0.15; this.stickT = 0.3; this.legVelocity = Math.max(this.legVelocity, 4); this.count('stick' as Move);
         return;
       }
     }
     // (out of a roll, or landed as meant with room ahead: a dash)
     // (only if there's something near to go for and the effort to do it: else a couple of settling strides)
-    if (sp > 6 && (this.rollT > 0 || (aimed && was !== 'glide' && was !== 'spring'))) {
+    // (not out of a vault: it's carried its pace over, and a low wall ahead isn't a gap to go for: a dash per wall on a line of
+    // them ran it up to 18 m/s and every landing a save)
+    if (sp > 6 && (this.rollT > 0 || (aimed && was !== 'glide' && was !== 'spring' && was !== 'vault'))) {
       const H = (d: number) => this.city.heightAt(this.x + ux * d, this.z + uz * d);
-      let next = 99; for (let d = 1; d <= 16; d += 1) if (Math.abs(H(d) - this.y) > STEP) { next = d; break; }
+      let next = 99; for (let d = 1; d <= 16; d += 1) if (H(d) < this.y - STEP) { next = d; break; }
       const clear = [2, 4].every((d) => Math.abs(H(d) - this.y) <= STEP);
       if ((this.rollT > 0 || clear) && next <= 16 && this.stamina > 0.5) this.pushPending = true;
       else if (heavy > 0 || this.rollT > 0) this.breathT = 0.5;
     }
   }
 
+  /**
+   * The hang's swing, and what the stick does with it (true: it's gone, out of the hang). Left alone, the swing dies down.
+   * Along the wall: hand over hand along the lip (a shimmy), while it goes on. Toward another wall (one beside, that the swing
+   * takes the feet to): the feet go to it, and off them up and away, at a hold above if there's one to have. Away: let go,
+   * with what the swing has (out on the swing out, back in on the way back). Toward the hang's own wall: pulled over (the
+   * caller's), once the swing's come back in.
+   */
+  private swing2(dt: number, on: boolean, dx: number, dz: number, into: number): boolean {
+    const w = this.sw!, H = (x: number, z: number) => this.city.heightAt(x, z), nx = -this.wx, nz = -this.wz, G = TUNE.gravity, L = 1.1;
+    w.t += dt;
+    // (the feet on a wall it swung to: a beat of load, and off them)
+    if (w.feet) {
+      const f = w.feet; f.t += dt; w.ov *= Math.exp(-14 * dt); w.v *= Math.exp(-14 * dt); w.dv *= Math.exp(-14 * dt);
+      if (f.t < 0.14) { this.x = w.x0 + w.tx * w.s + nx * w.o; this.z = w.z0 + w.tz * w.s + nz * w.o; return true; }
+      const vy = 7.2, T = vy / G;
+      // (up to a hold within reach above, if there's one: arriving under it at the top of the rise; else up and away)
+      const g = this.city.gripAt(this.x, this.y + 3, this.z, 2.6, (h) => h.kind === 'edge' && h.ay - this.y > 2.2 && h.ay - this.y < 4.6 && Math.abs(h.ay - this.top) > 0.3);
+      let vx = -f.ax * 2.2, vz = -f.az * 2.2;
+      if (g) { const tx = g.x + g.hold.nx * (R + 0.1) - this.x, tz = g.z + g.hold.nz * (R + 0.1) - this.z, k = Math.min(1, 4.5 / (Math.hypot(tx, tz) / T || 1)); vx = (tx / T) * k; vz = (tz / T) * k; }
+      this.badLip = { x: w.x0, z: w.z0, until: this.time + 1 };
+      this.sw = null; this.atLip = -1; this.vx = vx; this.vz = vz; this.launch(vy, 'kick', false, false, 2 * T); this.wallCool = 0.25; this.count('swingkick' as Move);
+      return true;
+    }
+    // (the pendulum: along the wall and out from it; let alone it dies away, held it keeps on)
+    const W2 = G / L, damp = on ? 0.5 : 1.6;
+    w.v += (-W2 * w.s - damp * w.v) * dt; w.s += w.v * dt; if (Math.abs(w.s) > 1.3) { w.s = Math.sign(w.s) * 1.3; w.v = 0; }
+    w.ov += (-W2 * w.o - damp * w.ov) * dt; w.o += w.ov * dt;
+    // (swung back into the wall: the feet take it)
+    if (w.o < 0) { w.o = 0; w.ov = -w.ov * 0.15; }
+    if (w.o > 1.5) { w.o = 1.5; w.ov = 0; }
+    // (above the still hang: falling into the arms; below it, the dip caught and settling)
+    if (w.d > 0) w.dv -= G * dt; else w.dv += (-70 * w.d - 9 * w.dv) * dt;
+    w.d = Math.max(-0.45, w.d + w.dv * dt); if (w.d < 0 && w.dv < -6) w.dv = -6;
+    // (a shimmy: hand over hand along the lip, while there's lip, the swing small)
+    const along = on ? dx * w.tx + dz * w.tz : 0;
+    if (Math.abs(along) > 0.4 && Math.abs(into) < 0.5 && w.o < 0.4 && this.atLip > LIP_BEAT) {
+      const sp = 0.9 * Math.min(1, Math.abs(along)) * Math.sign(along), x1 = w.x0 + w.tx * sp * dt, z1 = w.z0 + w.tz * sp * dt;
+      const hx = x1 + this.wx * (R + 0.05) + w.tx * Math.sign(sp) * 0.3, hz = z1 + this.wz * (R + 0.05) + w.tz * Math.sign(sp) * 0.3;
+      const lip = this.city.gripAt(hx, this.top, hz, 0.25, (h) => h.kind === 'edge' && Math.abs(h.ay - this.top) < 0.05 && h.nx * this.wx + h.nz * this.wz < -0.9);
+      const clear = H(x1 + w.tx * Math.sign(sp) * R, z1 + w.tz * Math.sign(sp) * R) < this.y + 0.3;
+      if (!(lip && clear)) w.stuck += dt;
+      // (against a wall along it (a corner): nowhere on along, so up and over)
+      if (!clear && w.stuck > 0.3) { this.atLip = -1; this.climbT = 0; this.mu = 0; this.move = 'climb'; this.climbs++; this.count('climb'); this.catchHeight = this.y; this.climbIn = null; return true; }
+      // (at the lip's end: after a beat, let go on the way it's asked (a brush past))
+      if (w.stuck > 0.5) { this.sw = null; this.atLip = -1; this.vx = dx * 3 - this.wx * 2; this.vz = dz * 3 - this.wz * 2; this.launch(0, 'fall', false, false, 0.4); this.wallCool = 0.3; this.made.fall = (this.made.fall ?? 1) - 1; this.leaps--; this.count('drop' as Move); return true; }
+      if (lip && clear) {
+        w.stuck = 0; w.x0 = x1; w.z0 = z1; w.shim += Math.abs(sp) * dt;
+        // (the hands go one past the other: the leading one reaches on, the other comes up to it)
+        const k = (w.shim / 0.3) % 2, lead = k < 1, step = (k % 1) * 0.3, gx = w.x0 + this.wx * (R + 0.05), gz = w.z0 + this.wz * (R + 0.05);
+        const on1 = onHold(lip.hold, gx + w.tx * Math.sign(sp) * (lead ? step : 0.3) - 0.0, gz + w.tz * Math.sign(sp) * (lead ? step : 0.3));
+        const on2 = onHold(lip.hold, gx + w.tx * Math.sign(sp) * (lead ? 0 : step - 0.3 + 0.0), gz + w.tz * Math.sign(sp) * (lead ? 0 : step - 0.3));
+        const leftLeads = (w.tx * Math.sign(sp)) * -this.wz + (w.tz * Math.sign(sp)) * this.wx > 0;
+        this.grips = leftLeads ? { hl: on1, hr: on2 } : { hl: on2, hr: on1 };
+        this.count('shimmy' as Move);
+      }
+    }
+    this.x = w.x0 + w.tx * w.s + nx * w.o; this.z = w.z0 + w.tz * w.s + nz * w.o;
+    this.y = this.catchHeight + w.d + (w.s * w.s + w.o * w.o) / (2 * L);
+    // (pressed away with a wall behind, within what a swing can reach: not let go (nowhere to drop to that's better), the
+    // swing pumped out toward it, for the feet)
+    let behind = 0; for (let d = 0.6; d <= 3; d += 0.2) if (H(this.x - this.wx * d, this.z - this.wz * d) > this.y + 1.6) { behind = d; break; }
+    if (into < -0.15 && behind) { if (w.ov >= 0) w.ov += 6 * dt * Math.min(1, -into); w.pumped += dt; }
+    // (pumped a while and the feet still can't have it (a wall too far for a swing): there's nowhere to drop to, so it's a
+    // pull up, as in a narrow alley)
+    if (w.pumped > 1.5 && w.o < 0.4) { w.pumped = 0; this.atLip = -1; this.climbT = 0; this.mu = 0; this.move = 'climb'; this.climbs++; this.count('climb'); this.catchHeight = this.y; this.climbIn = null; return true; }
+    // (let go: with what the swing has, and a push off the wall)
+    if (into < -0.15 && !behind) {
+      const vo = w.ov + 1.5 * Math.min(1, -into);
+      this.sw = null; this.atLip = -1;
+      this.vx = w.tx * w.v + nx * vo; this.vz = w.tz * w.v + nz * vo;
+      this.launch(Math.max(0, (w.s * w.v + w.o * w.ov) / L) + 0.4, 'fall', false, false, 0.4); this.wallCool = 0.3; this.made.fall = (this.made.fall ?? 1) - 1; this.leaps--; this.count('drop' as Move);
+      return true;
+    }
+    // (toward a wall beside, that the swing has taken the feet to (the legs' length from the hips): the feet to it)
+    if (on && this.atLip > 0.12) {
+      const m = Math.hypot(dx, dz) || 1, px = dx / m, pz = dz / m;
+      let best: number[] | null = null;
+      for (const [ax, az] of AXES) {
+        if (ax * px + az * pz < 0.6 || ax * this.wx + az * this.wz > 0.5) continue;
+        for (let k = 0.3; k <= 1.25; k += 0.15) if (H(this.x + ax * (R + k), this.z + az * (R + k)) > this.y + 1.4) { best = [ax, az]; break; }
+        if (best) break;
+      }
+      // (only for somewhere to go off them: a hold above in a kick's reach; else the feet are no use there)
+      const up = best && this.city.gripAt(this.x, this.y + 3, this.z, 2.6, (h) => h.kind === 'edge' && h.ay - this.y > 2.2 && h.ay - this.y < 4.6 && Math.abs(h.ay - this.top) > 0.3);
+      const tried = this.swungFrom && this.time < this.swungFrom.until && Math.hypot(this.x - this.swungFrom.x, this.z - this.swungFrom.z) < 1.5;
+      if (best && up && !tried) { this.swungFrom = { x: this.x, z: this.z, until: this.time + 6 }; w.feet = { ax: best[0], az: best[1], t: 0 }; this.count('swingfeet' as Move); return true; }
+    }
+    return false;
+  }
   private climb(dt: number, on: boolean, dx: number, dz: number, jump: boolean): void {
     this.climbT += dt;
     if (this.chain) { this.hang(dt, on ? dx * this.wx + dz * this.wz : 0, jump); return; }
     if (this.atLip >= 0) {
       // (hanging from a lip it caught: a beat for the hips to swing in under it; then pressing on toward the wall pulls over
       // (a tap too); pressing away, it lets go and drops)
-      let into = on ? dx * this.wx + dz * this.wz : 0;
-      // (pressing away when away is a wall close behind (a narrow alley): there's nowhere to drop to, so it's a pull up)
-      if (into < -0.15) for (let d = 0.6; d <= ALLEY; d += 0.2) if (this.city.heightAt(this.x - this.wx * d, this.z - this.wz * d) > this.y + 1.6) { into = -into; break; }
+      const into = on ? dx * this.wx + dz * this.wz : 0;
       this.atLip += dt; this.mu = Math.min(1, this.atLip / LIP_BEAT);
-      // (the hand has stopped; the body hasn't: it swings on under it and dips, and settles)
-      if (this.sw) { const w = this.sw; w.t += dt; w.v += (-38 * w.s - 3.5 * w.v) * dt; w.s = Math.max(-0.7, Math.min(0.7, w.s + w.v * dt)); w.dv += (-70 * w.d - 9 * w.dv) * dt; w.d = Math.max(-0.45, Math.min(0.1, w.d + w.dv * dt)); this.x = w.x0 + w.tx * w.s; this.z = w.z0 + w.tz * w.s; this.y = this.catchHeight + w.d; }
-      // (held along the wall, neither toward it nor away, after a while longer: let go, and on the way it was going (a brush
-      // past); nothing held at all: it hangs, as long as it's left)
-      const along = on && Math.abs(into) <= 0.15 && this.atLip > LIP_BEAT + 0.8;
-      if (into < -0.15 || along) { this.atLip = -1; this.vx = (along ? dx * 3 : 0) - this.wx * 2; this.vz = (along ? dz * 3 : 0) - this.wz * 2; this.launch(0, 'fall', false, false, 0.4); this.wallCool = 0.3; this.made.fall = (this.made.fall ?? 1) - 1; this.leaps--; this.count('drop' as Move); return; }
-      // (pressing on at all toward it (not away, not straight along) pulls over)
-      if ((this.atLip >= LIP_BEAT && into > 0.15) || (jump && this.atLip > 0.08)) {
+      if (this.sw && this.swing2(dt, on, dx, dz, into)) return;
+      // (pressing on at all toward it (not away, not straight along) pulls over, once the swing out has come back in)
+      if (((this.atLip >= LIP_BEAT && into > 0.15) || (jump && this.atLip > 0.08)) && (!this.sw || (this.sw.o < 0.4 && this.sw.d <= 0.15))) {
         this.atLip = -1; this.climbT = 0; this.mu = 0; this.move = 'climb'; this.climbs++; this.count('climb'); this.catchHeight = this.y; this.climbIn = null;
       }
       return;
     }
-    // (turned away from the wall, or a jump: off it, the other way)
-    if ((on && dx * this.wx + dz * this.wz < -0.4) || jump) {
+    // (turned away from the wall, or a jump: off it, the other way; not into a wall close behind (an alley): nowhere to go)
+    let behind = false; for (let d = 0.6; d <= 3 && !behind; d += 0.2) behind = this.city.heightAt(this.x - this.wx * d, this.z - this.wz * d) > this.y + 1.6;
+    if (((on && dx * this.wx + dz * this.wz < -0.4) || jump) && !behind) {
       const ox = on ? dx : -this.wx, oz = on ? dz : -this.wz;
       this.vx = ox * 8; this.vz = oz * 8; this.launch(JUMP, 'flip', false, false, 0.9); return;
     }
     if (this.sw) { const k = 1 - Math.exp(-10 * dt); this.x += (this.sw.x0 - this.x) * k; this.z += (this.sw.z0 - this.z) * k; }
-    const duration = Math.max(0.32, (this.top - this.catchHeight) / TUNE.climb + 0.22);
+    // (up a wall on its feet: a run up it; a pull with no foot on the wall (out of a hang, or a mantle from a stand): the pull
+    // up to the hands, the press over them, the knee onto the top: longer, and by how far it has to come)
+    const duration = this.stepFoot ? Math.max(0.32, (this.top - this.catchHeight) / TUNE.climb + 0.22) : 0.5 + 0.18 * Math.max(0, this.top - this.catchHeight);
     this.mu = Math.min(1, this.climbT / duration);
     const pull = this.mu * this.mu * (3 - 2 * this.mu);
     this.y = this.catchHeight + (this.top - this.catchHeight) * pull;

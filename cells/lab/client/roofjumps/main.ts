@@ -67,6 +67,9 @@ rd.resize(); addEventListener('resize', () => rd.resize());
 // ─── the eye ──────────────────────────────────────────────────────────────────
 /** `zoom=`: the eye brought that many times closer, for looking at the rig */
 const zoom = Math.max(0.2, Number(q.get('zoom') ?? 1));
+/** `fixed=x,y,z`: a still eye at that point in the world, turning only to keep the figure in view (a wide tripod on a
+ * room, to judge it whole: what's there to be seen before it's needed); a scene may name its own (`Scene.eye`) */
+const fixedEye = ((v) => (v && v.length === 3 && v.every(Number.isFinite) ? v : null))(q.get('fixed')?.split(',').map(Number));
 /** the eye's heading, and what a second finger has added to its height */
 let yaw = practiceLine ? 0 : 0.6, lift = TUNE.side ? -0.15 : 0;
 /** the eye by what's happening: out wide and steady for a climb, low for a sprint (0..1, eased) */
@@ -324,7 +327,9 @@ function frame(now: number): void {
       // (seen from the side asked; from the other, where a wall's in the way of that)
       const m = strip![i], side = TUNE.side;
       let v = eyeFor(m.x, m.y, m.z, m.yaw, aspect, clearTo);
-      if (v.far < 0.6 && side) { TUNE.side = -side; const o = eyeFor(m.x, m.y, m.z, m.yaw, aspect, clearTo); if (o.far > v.far) v = o; TUNE.side = side; }
+      const still = fixedEye ?? scene?.eye ?? null;
+      if (still && q.has('fixed')) v = { far: 1, eye: still, vp: mul(perspective((50 * Math.PI) / 180, aspect, 0.15, rd.radius * 64 * 1.5), lookAt(still, [m.x, m.y + 1, m.z], [0, 1, 0])) };
+      else if (v.far < 0.6 && side) { TUNE.side = -side; const o = eyeFor(m.x, m.y, m.z, m.yaw, aspect, clearTo); if (o.far > v.far) v = o; TUNE.side = side; }
       // (walls close: up and over rather than in close)
       if (v.far < 0.6) { const l0 = lift; for (const up of [0.35, 0.7, 1]) { lift = l0 + up; const o = eyeFor(m.x, m.y, m.z, m.yaw, aspect, clearTo); if (o.far > v.far + 0.1) v = o; if (v.far >= 0.8) break; } lift = l0; }
       rd.draw(v.vp, v.eye, m.bones, shadowAt(m.x, m.y, m.z), rect);
@@ -365,7 +370,8 @@ function frame(now: number): void {
   // (and wider the faster it goes)
   rush += ((held ? 0 : TUNE.rush * Math.max(0, Math.min(1, (runner.speed - 10) / 8))) - rush) * e(4);
   rd.resize();
-  const { vp, eye } = eyeFor(eyeAt.x, eyeAt.y, eyeAt.z, yaw, canvas.width / canvas.height, (at) => { const room = held ? 1 : clearTo(at); near += (room - near) * (room < near ? 1 : e(3)); return near; }, held ? 0 : wideK, held ? 0 : lowK, shakeV);
+  const tripod = q.has('fixed') ? fixedEye ?? scene?.eye ?? null : null;
+  const { vp, eye } = tripod ? { eye: tripod, vp: mul(perspective((50 * Math.PI) / 180, canvas.width / canvas.height, 0.15, rd.radius * 64 * 1.5), lookAt(tripod, [runner.x, runner.y + 1, runner.z], [0, 1, 0])) } : eyeFor(eyeAt.x, eyeAt.y, eyeAt.z, yaw, canvas.width / canvas.height, (at) => { const room = held ? 1 : clearTo(at); near += (room - near) * (room < near ? 1 : e(3)); return near; }, held ? 0 : wideK, held ? 0 : lowK, shakeV);
   rd.stream(runner.x, runner.z, 2);
   rd.draw(vp, eye, rig.bones(held ?? runner), shadowAt(runner.x, runner.y, runner.z));
   if (TUNE.holds && !held) rd.lines(vp, eye, holdStrokes(city.holdsNear(runner.x, runner.z, TUNE.holdsNear), runner.reach, runner.x, runner.y, runner.z, TUNE.holdsNear));

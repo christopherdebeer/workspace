@@ -1,64 +1,69 @@
 {
  "date": "2026-11-20",
- "build": "after 7fb0ca8 (the 1–5 pass)",
+ "build": "after 5134b37 (the courtyard pass)",
  "summary": [
   {
-   "scene": "stair-ascent",
-   "gap": "From the street it can't use a face's sills: it stands at the wall. A hold is only looked for near the top of a jump's reach, so a sill at 3 m (easily reached) never counts."
-  },
-  {
-   "scene": "tic-tac",
-   "gap": "No tic-tac: a lip just beyond a straight jump, in a corner with a taller wall beside it, is left. It stands pressing into the corner."
-  },
-  {
-   "scene": "street-deadend",
-   "gap": "Pressed straight at the end wall of a 2.2 m alley, it stands there. The chimney starts only when pressing into one of the side walls."
-  },
-  {
-   "scene": "hang-intents",
-   "gap": "Now hangs (the short catch works), and shows the gap: steered along the wall it lets go after a beat instead of moving along the lip (no shimmy); then it can't pull up from where it fell."
-  },
-  {
-   "scene": "transfer-clean",
-   "gap": "Even the clean run fails one check: planted feet move 5 to 25 cm/s in every scene, mostly around landings and the first steps after them."
-  },
-  {
-   "scene": "underbar",
-   "gap": "Under the bar, the hips come within 5 cm of it (13.25 m against 13.30 m): clearance isn't ensured, only happens."
-  },
-  {
-   "scene": "edge-stop",
-   "gap": "It stops 1.07 m short of the lip, standing square; nothing in it would show a balance check at the edge if it stopped closer."
-  },
-  {
-   "scene": "short-catch",
-   "gap": "Fixed: the approach limits the jump. At a light press the leap's power (press, the foot planted for it, effort left, less for turning off it) caps the takeoff's rise, so it comes up short, catches the lip and hangs; pressed, it climbs."
-  },
-  {
-   "scene": "late-change",
-   "gap": "Fixed: a late change costs. Sideways acceleration at speed is limited, so the swing is still being made as it leaves: the landing is a wide save and the second takeoff comes later and slower, at an angle (15.6 m/s at 17° against 19.4 clean). Still fragile: one frame's difference in when the stick comes back flips the second gap from a bound to a dive off the far side."
+   "scene": "sharp-turns",
+   "gap": "Planted feet still move a little at a hard turn at pace (8 cm over the scene, 4.5 cm/s against a 3 cm/s bar): the toe pivot runs out of range when the leg is far behind."
   },
   {
    "scene": "vault-angles",
-   "gap": "Fixed: all three walls vaulted, the style by the angle met (square: two hands; 25°: a side vault; 60°: a palm spin). Left: the dashes between vaults carry it to 18 m/s, and each landing is a save; and a 60° vault is a long flat glide over a unit, not a turn on the hand."
+   "gap": "A 60° vault is a long flat glide over the unit on one hand, not a turn about it; and the last vault's foot moves a few centimetres (3.4 cm/s)."
+  },
+  {
+   "scene": "tic-tac",
+   "gap": "The tic-tac is taken from the corner (the side wall within a step), not a stride before it; and in a corner like this the chase and side eyes come in so close they show the back of the body, not the move."
+  },
+  {
+   "scene": "edge-stop",
+   "gap": "The teeter reads, but the arms reach forward rather than wheeling out to the sides."
+  },
+  {
+   "scene": "yard-save",
+   "gap": "Fixed: the save is a route. Turned off the parapet too square and too late, the foot can't turn the body (a narrow top turns it 25° asked late, up to 60° set up early); it goes over the side, a hand catches the parapet's edge going by, the body swings out 1.1 m under it, the feet go to the side wall, and off them up to the opening's sill from below, hung, pulled over."
+  },
+  {
+   "scene": "yard-know",
+   "gap": "Fixed: onto the parapet at a run (landed along its length it's run, not stuck), along it, off it into the side wall at 40° (the turn set up early, so the foot can give it), a wall run, and into the opening without a stop. Mirrored, the same."
+  },
+  {
+   "scene": "yard-find",
+   "gap": "Fixed: down onto the broad roof, slow round the parapet's end, a pause under the opening, then up: a spring, a hand on the sill, the pull, a knee over."
+  },
+  {
+   "scene": "hang-intents",
+   "gap": "Fixed: a shimmy, hand over hand along the lip while it's held along; at the lip's end it lets go, against a wall it pulls up."
+  },
+  {
+   "scene": "stair-ascent",
+   "gap": "Fixed: from the street it springs at the face and takes the 3 m sill as it comes into reach, then the 6 m and the 9 m, and over the top."
+  },
+  {
+   "scene": "street-deadend",
+   "gap": "Fixed: pressed head-on at the end of the alley, it goes up off the side walls (a chimney with nowhere to go along) and over a side wall's lip."
   },
   {
    "scene": "mantle-box",
-   "gap": "Fixed: walked or jogged (up to 6 m/s) into a chest-high box, it mantles: hands on the top, hips in over them, a short step on. Left: the mantle takes a third of a second, so the push and knee-up aren't seen."
+   "gap": "Fixed: the mantle takes about 0.8 s now, drawn as a pull up to the hands, a press over them and a knee onto the top; the feet leave the roof as the pull takes the weight."
   },
   {
-   "scene": "drop-rebound",
-   "gap": "Fixed: a storey down is dropped feet first, not dived (dives start at 4.5 m), and with no room the roll is skipped: it lands and rebounds into the next gap within 0.03 s. Costs the directed score (a dive and roll counted 1.9 against a bound's 1)."
+   "scene": "underbar",
+   "gap": "Fixed: the hips let down under the bar while it lies back, a hand's breadth clear of it."
+  },
+  {
+   "scene": "transfer-clean",
+   "gap": "Fixed: the foot slide in every scene was mostly the measure (a foot still coming down counted as sliding) and the toe pivot (about a point at ankle height, so the drawn toe slid 5 cm as the heel came up). Measured on the sole's ball, true slide is a few centimetres in two scenes and none in the rest."
   }
  ],
  "seen": {
-  "transfer-clean": "Chase view: both gaps taken off a stride, no stutter; landings flow into running. Reads as competent and quiet.",
-  "late-change": "Side view: the bound off the swing lands with the outside leg thrown wide (save:wide), a dash to 17 m/s, a bound over the second gap at a slant, running out to a stop. Reads as a recovery.",
-  "short-catch": "Side view: at the light press it runs at 5 to 7 m/s, springs, comes up short against the far wall, hangs (arms straight) about a second, then pulls over.",
-  "stair-ascent": "Chase view: runs at the face and stops dead against it, standing for the rest of the scene.",
-  "vault-angles": "Chase view: three vaults, each different: square over the first, a slanted side vault, and over the third along it, flat. Between them it dashes up to 18 m/s and every landing shows a wide or long save.",
-  "drop-rebound": "Side view: off the ledge feet first (leaning on), lands upright on the lower roof, one stride and straight into a bound over the next gap.",
-  "sharp-turns": "Chase view: the turns are made without visible skating; the reversal dips to 4 m/s and leans. Hard to judge the plant foot from behind.",
-  "mantle-box": "Side view: walks to the box at 3 m/s, and between two frames is up on it (the mantle is quick); then runs off its far side and bounds."
+  "yard-save": "Room eye: along the parapet arms out for balance; the turn at its end tips the body over the side; one hand on the edge, the body slung out under it toward the side wall; a kick off it; one hand on the opening's sill; pulled in, stood.",
+  "yard-know": "Room eye: a bound onto the parapet's near end, run along it, a bound off it into the side wall, a wall run up it and a kick into the opening. Reads as one line.",
+  "yard-find": "Chase eye: a bound down and a roll on the broad roof, a slow walk round the parapet's end, stood under the opening, a spring and a hang from the sill, the pull over.",
+  "mantle-box": "Side view: walks to the box, a pull and press (crouched over the top at 3.17 s), stood, runs off its far side.",
+  "edge-stop": "Side view: let go running, it slows over a second and stops at the lip; the body tips forward over it and back, the arms held out in front.",
+  "tic-tac": "Chase eye: runs into the corner, kicks up off the side wall to the 5.7 m lip, hangs, pulls over. The eye is too close in the corner to see the kick well.",
+  "stair-ascent": "Side view: a spring at the face, a hang from each sill in turn (the side eye is pushed in against the body here), over the top and a stop.",
+  "vault-angles": "Chase view: three vaults at 11 to 14 m/s, square, slanted and along the third; no dashes between, no saves.",
+  "street-deadend": "Chase view: up the alley's end off its side walls, over the lip onto a side roof."
  }
 }

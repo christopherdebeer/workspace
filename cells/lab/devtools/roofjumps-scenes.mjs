@@ -14,7 +14,7 @@ mkdirSync(OUT, { recursive: true });
 const report = [];
 for (const s of chosen) {
   const run = runScene(s), checks = judge(s, run), r = run.runner;
-  report.push({ key: s.key, title: s.title, asks: s.asks, watch: s.watch, gap: s.gap ?? '', seconds: s.seconds, sequence: sequence(run), checks, end: { x: +r.x.toFixed(2), y: +r.y.toFixed(2), z: +r.z.toFixed(2), state: r.state, move: r.move }, takeoffs: run.ups.map((u) => ({ t: +u.t.toFixed(2), foot: u.foot, move: u.move, by: u.by })), landings: run.lands.map((l) => ({ t: +l.t.toFixed(2), v: +l.v.toFixed(1), from: l.from, save: l.save })) });
+  report.push({ key: s.key, title: s.title, eye: s.eye ?? null, asks: s.asks, watch: s.watch, gap: s.gap ?? '', seconds: s.seconds, sequence: sequence(run), checks, end: { x: +r.x.toFixed(2), y: +r.y.toFixed(2), z: +r.z.toFixed(2), state: r.state, move: r.move }, takeoffs: run.ups.map((u) => ({ t: +u.t.toFixed(2), foot: u.foot, move: u.move, by: u.by })), landings: run.lands.map((l) => ({ t: +l.t.toFixed(2), v: +l.v.toFixed(1), from: l.from, save: l.save })) });
   const passed = checks.filter((c) => c.ok).length;
   console.log(`\n${s.key.padEnd(16)} ${passed}/${checks.length}  ${sequence(run) || 'run'}`);
   for (const c of checks) console.log(`   ${c.ok ? '✓' : '✗'} ${c.says} — ${c.saw}`);
@@ -24,7 +24,7 @@ if (film) {
   process.env.EXPERIMENT = 'roofjumps'; process.env.READY = '__roofjumps';
   const { withWood } = await import('./harness.mjs');
   await withWood(async (lab) => {
-    for (const s of chosen) for (const [view, extra] of [['chase', ''], ['side', '&side=90&zoom=1.1']]) {
+    for (const s of chosen) for (const [view, extra] of [['chase', ''], ['side', '&side=90&zoom=1.1'], ...(s.eye ? [['room', '&fixed']] : [])]) {
       const n = 16, every = s.seconds / n;
       const p = await lab.open(`scene=${s.key}&strip=0&frames=${n}&every=${every.toFixed(4)}&cols=8&holds=0${extra}`, { width: 1600, height: 560, dpr: 1 });
       for (let k = 0; k < 80 && (await p.evaluate(() => window.__roofjumps.probe().pending)) > 0; k++) await p.waitForTimeout(250);
@@ -56,7 +56,8 @@ if (film) {
       <ul class="checks">${checks}</ul>
     </div>
     <figure><img src="${r.key}-chase.png" alt="${esc(r.title)}, from the chase eye, frame by frame" loading="lazy"><figcaption>Chase eye</figcaption></figure>
-    <figure><img src="${r.key}-side.png" alt="${esc(r.title)}, from the side, frame by frame" loading="lazy"><figcaption>From the side</figcaption></figure>
+    <figure><img src="${r.key}-side.png" alt="${esc(r.title)}, from the side, frame by frame" loading="lazy"><figcaption>From the side</figcaption></figure>${r.eye ? `
+    <figure><img src="${r.key}-room.png" alt="${esc(r.title)}, from a still eye on the room, frame by frame" loading="lazy"><figcaption>From a still eye on the room</figcaption></figure>` : ''}
   </div>
 </article>`; }).join('\n');
   const html = `<title>Roof Jumps Scenes</title>

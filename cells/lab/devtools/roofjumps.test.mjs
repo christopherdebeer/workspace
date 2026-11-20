@@ -436,7 +436,7 @@ console.log('roofjumps: ok');
   const falls = [], td = [], off = []; let prevOn = false, last = 0, slid = 0, held = 0, was = null;
   for (let i = 0; i < 120 * 8; i++) {
     r.step(1 / 120, { x: 0, z: 1, jump: false }); rig.update(1 / 120, r); if (i < 120 * 4) continue;
-    const on = !!r.reach.fl, fm = rig.bones(r).find((b) => b.name === 'footL').m, foot = [...fm]; foot[12] += fm[8] * 0.13; foot[14] += fm[10] * 0.13; // (the ball of the foot: what stays put while the heel lifts)
+    const on = !!r.reach.fl, fm = rig.bones(r).find((b) => b.name === 'footL').m, foot = [...fm]; foot[12] += fm[8] * 0.13 - fm[4] * 0.07; foot[14] += fm[10] * 0.13 - fm[6] * 0.07; // (the ball of the foot, on the ground under the sole (0.07 deep): what stays put while the heel lifts)
     if (on && !prevOn) { falls.push(r.reach.fl[2]); td.push(r.reach.fl[2] - r.z); held = 0; }
     if (on && !rig.soles.L.lost) { if (++held > 4 && was) slid += Math.hypot(foot[12] - was[0], foot[14] - was[1]); last = foot[14] - r.z; }
     if (!on && prevOn) off.push(last);
@@ -492,7 +492,7 @@ console.log('roofjumps: ok');
     const inp = brushInput(i / 120, h0); r.step(1 / 120, inp); rig.update(1 / 120, r); top = Math.max(top, r.speed);
     const b = rig.bones(r);
     for (const [s, key] of [['L', 'fl'], ['R', 'fr']]) {
-      const fm = b.find((o) => o.name === 'foot' + s).m, ball = [fm[12] + fm[8] * 0.13, fm[13], fm[14] + fm[10] * 0.13], v = prev[s] ? Math.hypot(ball[0] - prev[s][0], ball[2] - prev[s][2]) * 120 : 0;
+      const fm = b.find((o) => o.name === 'foot' + s).m, ball = [fm[12] + fm[8] * 0.13 - fm[4] * 0.07, fm[13], fm[14] + fm[10] * 0.13 - fm[6] * 0.07], v = prev[s] ? Math.hypot(ball[0] - prev[s][0], ball[2] - prev[s][2]) * 120 : 0;
       if (r.reach[key]) { onF++; if (v > 0.3) slid++; } else if (fm[13] - 10 < 0.085 && v > 0.4) dragF++;
       prev[s] = ball;
     }
