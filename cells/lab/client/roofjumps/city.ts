@@ -30,6 +30,19 @@ export type Tag = (typeof TAG)[keyof typeof TAG];
 
 export interface Box { x0: number; z0: number; x1: number; z1: number; y0: number; y1: number; tag: Tag }
 
+/**
+ * An authored course (a scene to study): its boxes in place of chunk (0, 0)'s, holds added by hand (no sills or pipes by
+ * dice, no ground detail, no bars of its own: only what's written), bars as hold and prop together, where to start, and
+ * whether the rest of the city is there or empty street.
+ */
+export interface Course {
+  boxes: Box[];
+  holds?: { kind: HoldKind; ax: number; ay: number; az: number; bx: number; by: number; bz: number; nx: number; nz: number }[];
+  bars?: { x0: number; x1: number; z0: number; z1: number; y: number }[];
+  start: { x: number; z: number };
+  alone?: boolean;
+}
+
 export type HoldKind = 'edge' | 'rail' | 'sill' | 'pipe' | 'face' | 'bar';
 /**
  * Somewhere to put a hand or a foot: a line from a to b, facing (nx, nz) (level, out from the wall; 0, 0 for a rail).
@@ -62,7 +75,7 @@ const key = (cx: number, cz: number) => `${cx},${cz}`;
 
 export class City {
   private chunks = new Map<string, Chunk>();
-  constructor(readonly seed: number, readonly practiceLine = false) {}
+  constructor(readonly seed: number, readonly practiceLine = false, readonly course: Course | null = null) {}
 
   /** smooth 0..1 over the plane: the skyline's rise and fall */
   private relief(x: number, z: number): number {
@@ -109,7 +122,10 @@ export class City {
       if (alongX) { split(x0, z0, x0 + at, z1, depth + 1); split(x0 + at + gap, z0, x1, z1, depth + 1); }
       else { split(x0, z0, x1, z0 + at, depth + 1); split(x0, z0 + at + gap, x1, z1, depth + 1); }
     };
-    if (this.practiceLine && cx === 0 && cz === 0) {
+    const authored = !!this.course && cx === 0 && cz === 0;
+    if (authored) boxes.push(...this.course!.boxes.map((b) => ({ ...b })));
+    else if (this.course?.alone) { /* (the rest: empty street) */ }
+    else if (this.practiceLine && cx === 0 && cz === 0) {
       // Four roofs share the city's ordinary collision, holds and render geometry.
       for (const [z0, z1, y1] of [[1, 16, 12], [19, 32, 12], [34, 52, 9], [55, 63, 9]]) {
         boxes.push({ x0: 24, x1: 40, z0, z1, y0: 0, y1, tag: TAG.BUILDING });
@@ -124,10 +140,16 @@ export class City {
       for (let a = a0; a <= a1; a++) for (let c = c0; c <= c1; c++) cells[c * CELLS + a].push(i);
     });
     // (the holds: from the boxes, by their own dice, so the boxes are the same with or without them)
-    const holds = this.holdsOf(boxes, seeded(hash(this.seed, cx, cz, 91)));
+    const holds = this.holdsOf(boxes, seeded(hash(this.seed, cx, cz, 91)), authored);
+    if (authored) for (const h of this.course!.holds ?? []) holds.push({ ...h, ...USES[h.kind] });
     // (bars: a pipe across some alleys between two roofs of a height, a little above them, on posts: by their own dice)
     const props: Box[] = [], br = seeded(hash(this.seed, cx, cz, 93)), blds = boxes.filter((b) => b.tag === TAG.BUILDING);
-    for (const a of blds) for (const b of blds) {
+    if (authored) for (const b of this.course!.bars ?? []) {
+      props.push({ x0: b.x0, x1: b.x1, z0: b.z0, z1: b.z1, y0: b.y - 0.04, y1: b.y + 0.04, tag: TAG.BAR });
+      const alongX = b.x1 - b.x0 >= b.z1 - b.z0, mx = (b.x0 + b.x1) / 2, mz = (b.z0 + b.z1) / 2;
+      holds.push(alongX ? { kind: 'bar', ...USES.bar, ax: b.x0, ay: b.y, az: mz, bx: b.x1, by: b.y, bz: mz, nx: 0, nz: 0 } : { kind: 'bar', ...USES.bar, ax: mx, ay: b.y, az: b.z0, bx: mx, by: b.y, bz: b.z1, nx: 0, nz: 0 });
+    }
+    for (const a of authored ? [] : blds) for (const b of blds) {
       if (a === b || a.y1 !== b.y1 || br() > 0.3) continue;
       const y = a.y1 + 1.3;
       // (b across an alley from a, to its east or north: the gap, and how much of their faces face each other)
@@ -152,7 +174,7 @@ export class City {
     // (ground detail on the roofs, by its own dice: only where the roof is bare under all of it)
     const regions: Region[] = [], gr = seeded(hash(this.seed, cx, cz, 97));
     const bare = (x0: number, z0: number, x1: number, z1: number, y: number) => [[x0, z0], [x1 - 0.01, z0], [x0, z1 - 0.01], [x1 - 0.01, z1 - 0.01], [(x0 + x1) / 2, (z0 + z1) / 2]].every(([x, z]) => { let h = 0; for (const o of boxes) if (x >= o.x0 && x < o.x1 && z >= o.z0 && z < o.z1) h = Math.max(h, o.y1); return h === y; });
-    for (const b of blds) {
+    for (const b of authored ? [] : blds) {
       const w = b.x1 - b.x0, d = b.z1 - b.z0; if (w < 4 || d < 4) continue;
       const place = (kind: RegionKind, sw: number, sd: number, tall: number, tag: Tag) => {
         for (let k = 0; k < 4; k++) {
@@ -169,7 +191,7 @@ export class City {
   }
 
   /** the holds a chunk's boxes offer */
-  private holdsOf(boxes: Box[], rand: Rand): Hold[] {
+  private holdsOf(boxes: Box[], rand: Rand, plain = false): Hold[] {
     const out: Hold[] = [];
     const hold = (kind: HoldKind, ax: number, ay: number, az: number, bx: number, by: number, bz: number, nx: number, nz: number) => out.push({ kind, ...USES[kind], ax, ay, az, bx, by, bz, nx, nz });
     for (const b of boxes) {
@@ -180,7 +202,7 @@ export class City {
         hold('edge', ax, y, az, bx, y, bz, nx, nz);
         // (a wall worth the name: all of it, for the feet)
         if (y - b.y0 >= 2) hold('face', ax, b.y0, az, bx, y, bz, nx, nz);
-        if (b.tag !== TAG.BUILDING) continue;
+        if (b.tag !== TAG.BUILDING || plain) continue;
         // (a building's face: most have a sill at each storey, set in from the corners; some a pipe, ground to roof)
         const len = Math.hypot(bx - ax, bz - az), ux = (bx - ax) / len, uz = (bz - az) / len;
         if (rand() < 0.75) for (let sy = STOREY; sy < y; sy += STOREY) hold('sill', ax + ux * 0.5, sy, az + uz * 0.5, bx - ux * 0.5, sy, bz - uz * 0.5, nx, nz);
@@ -322,6 +344,7 @@ export class City {
 
   /** a roof to start on, near the origin: the middle of the biggest building of chunk (0, 0) */
   start(): { x: number; y: number; z: number } {
+    if (this.course) { const { x, z } = this.course.start; return { x, y: this.heightAt(x, z), z }; }
     if (this.practiceLine) return { x: 32, y: 12, z: 5 };
     let best: Box | null = null;
     for (const b of this.chunk(0, 0).boxes) if (b.tag === TAG.BUILDING && (!best || (b.x1 - b.x0) * (b.z1 - b.z0) > (best.x1 - best.x0) * (best.z1 - best.z0))) best = b;

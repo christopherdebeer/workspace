@@ -5,8 +5,8 @@
 import { build } from 'esbuild';
 import assert from 'node:assert/strict';
 const lab = new URL('../client/roofjumps/', import.meta.url).pathname;
-const out = await build({ stdin: { contents: `export * from './city'; export * from './runner'; export * from './rig'; export * from './mesh'; export * from './plan'; export * from './tune'; export * from './brush';`, resolveDir: lab, loader: 'ts' }, bundle: true, write: false, format: 'esm', platform: 'node' });
-const { plan, foresee, TUNE, HOUSE, DIALS, City, Runner, Rig, CHUNK, STOREY, TAG, VERTEX, chunkMesh, figureMesh, FIGURE, brushInput, BRUSH_SECONDS } = await import('data:text/javascript;base64,' + Buffer.from(out.outputFiles[0].text).toString('base64'));
+const out = await build({ stdin: { contents: `export * from './city'; export * from './runner'; export * from './rig'; export * from './mesh'; export * from './plan'; export * from './tune'; export * from './brush'; export * from './scenes';`, resolveDir: lab, loader: 'ts' }, bundle: true, write: false, format: 'esm', platform: 'node' });
+const { plan, foresee, TUNE, HOUSE, DIALS, City, Runner, Rig, CHUNK, STOREY, TAG, VERTEX, chunkMesh, figureMesh, FIGURE, brushInput, BRUSH_SECONDS, SCENES, runScene, judge } = await import('data:text/javascript;base64,' + Buffer.from(out.outputFiles[0].text).toString('base64'));
 
 // the same chunk, whatever was made before it
 {
@@ -585,4 +585,17 @@ console.log('roofjumps: ok');
   assert.ok(footed >= ups * 0.97, `a takeoff has a foot under it (${footed}/${ups})`);
   assert.ok(sideBySide <= quick * 0.05, `a quick jump after a landing off one foot (${sideBySide} of ${quick} off two side by side)`);
   console.log(`takeoffs: ${footed}/${ups} with a foot down; ${quick} quick after a landing, ${sideBySide} off two feet side by side`);
+}
+
+// The scenes (scenes.ts) are repeatable: each runs on its authored course with its scripted stick and comes out the same
+// twice; its checks run (whether they hold is the scenes report's business, not this test's: the failing ones are the
+// critique).
+{
+  let n = 0;
+  for (const sc of SCENES) {
+    const a = runScene(sc), b = runScene(sc);
+    assert.equal(`${a.runner.x},${a.runner.y},${a.runner.z},${a.moves.length}`, `${b.runner.x},${b.runner.y},${b.runner.z},${b.moves.length}`, `${sc.key} runs the same twice`);
+    n += judge(sc, a).filter((c) => c.ok).length;
+  }
+  console.log(`scenes: ${SCENES.length} repeatable; ${n} checks hold (see devtools/roofjumps-scenes.mjs for the report)`);
 }
