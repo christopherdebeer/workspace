@@ -45,14 +45,24 @@ nav button:focus-visible,nav a:focus-visible{outline:2px solid #222;outline-offs
 #labels span{padding:4px 6px;box-shadow:inset 0 0 0 .5px #2222}
 .sheet header,.sheet #hint,.sheet #stick{display:none}
 body:has(#dials.shown) #hint{display:none}
+/* the menu (menu.ts): the title over the sky, and at the foot the push to take control; nothing else over the picture */
+#menu{position:fixed;inset:0;pointer-events:none;display:flex;flex-direction:column;justify-content:space-between;align-items:center;color:#f2e6da;text-shadow:0 1px 14px #2a2440aa;font-family:system-ui,-apple-system,"Segoe UI",sans-serif;padding:max(13vh,env(safe-area-inset-top)) 16px max(7vh,calc(env(safe-area-inset-bottom) + 24px))}
+#menu[hidden]{display:none}
+#menu h1{margin:0;font-weight:500;font-style:italic;font-size:clamp(28px,9vw,52px);letter-spacing:.42em;margin-right:-.42em}
+#menu .foot{display:flex;flex-direction:column;align-items:center;gap:14px}
+#menu button{pointer-events:auto;font:italic 700 clamp(22px,6.4vw,34px) system-ui,-apple-system,"Segoe UI",sans-serif;letter-spacing:.08em;color:inherit;text-shadow:inherit;background:none;border:0;border-bottom:1.5px solid currentColor;padding:6px 18px 14px;min-height:44px;cursor:pointer}
+#menu button:focus-visible{outline:2px solid #f2e6da;outline-offset:4px}
+#menu p{margin:0;font-style:italic;font-size:clamp(13px,3.6vw,16px);letter-spacing:.16em;opacity:.9;min-height:1.4em}
+.menu header,.menu #hint,.menu #stick,.menu #dials,.menu #readout{display:none}
 .preview header,.preview #hint,.preview #stick,.preview #dials,.preview #readout{display:none}
 </style></head><body>
-<canvas id="world" aria-label="A blocky figure running across grey rooftops. Drag to run in any direction; it leaps gaps by itself. Tap to jump."></canvas>
+<canvas id="world" aria-label="Roof Jumps. At the start, the characters stand on a high ledge over the city: swipe sideways on a character to choose who runs, on the sky for the time of day, on the city for another city, on the roof for another look; swipe up or press Take control to leap. Then drag to run in any direction; it leaps gaps by itself. Tap to jump."></canvas>
 <header><div><b>ROOF JUMPS</b><br><span>SEED <span id="seed">1</span></span></div>
 <nav><button id="dialsbtn" aria-expanded="false" aria-controls="dials" aria-label="The dials: every number of the run, the plan, the eye and time">dials</button><button id="look" aria-label="How it is drawn (cycles)">grid</button><button id="another">another</button><a href="{{readme}}">notes</a></nav></header>
 <div id="stick" aria-hidden="true"><i></i></div>
 <div id="readout" hidden></div>
 <div id="labels" aria-hidden="true"></div>
 <div id="dials" aria-label="The dials"></div>
+<div id="menu" hidden><h1>ROOFJUMPS</h1><div class="foot"><button id="take" type="button">Take control</button><p id="menusay" aria-live="polite">Swipe to choose</p></div></div>
 <div id="hint">DRAG TO RUN · IT LEAPS BY ITSELF · TAP TO JUMP<br>A SECOND FINGER TURNS THE EYE</div>
 <script type="module" src="{{app}}"></script></body></html>

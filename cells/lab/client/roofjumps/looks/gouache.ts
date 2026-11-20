@@ -30,7 +30,7 @@ vec3 concrete(float seed) {
 vec3 dressed(float mat, vec3 n) {
   int k = int(mat + 0.5);
   // (hair: the face under it, the character's skin)
-  if (k == 1 && n.y < -0.3) return uFigure[0];
+  if (k % 8 == 1 && n.y < -0.3) return uFigure[k - 1];
   return uFigure[k];
 }
 vec3 look(Surf s) {

@@ -111,7 +111,10 @@ export class Renderer {
   private u: Record<string, WebGLUniformLocation | null> = {};
   tris = 0;
 
-  constructor(readonly canvas: HTMLCanvasElement, readonly city: City) {
+  /** a time of day over the look's own: the sun, and (for a look with a sky) the sky and the haze (menu.ts) */
+  time: { sun: [number, number, number]; sky: { top: [number, number, number]; horizon: [number, number, number]; clouds: number }; fog: [number, number, number]; fogNear: number } | null = null;
+
+  constructor(readonly canvas: HTMLCanvasElement, public city: City) {
     const gl = canvas.getContext('webgl2', { antialias: true, stencil: true });
     if (!gl) throw new Error('WebGL2 is needed');
     this.gl = gl;
@@ -213,6 +216,12 @@ export class Renderer {
     if (this.canvas.width !== w || this.canvas.height !== h) { this.canvas.width = w; this.canvas.height = h; }
   }
 
+  /** Another city: everything made of the last one dropped. */
+  setCity(city: City): void {
+    for (const c of this.built.values()) { this.gl.deleteVertexArray(c.vao); this.gl.deleteBuffer(c.buf); }
+    this.built.clear(); this.strokes.reset(); this.city = city;
+  }
+
   /** Make the chunks round (x, z) that aren't made yet (nearest first, at most `budget` of them); drop the far ones. */
   stream(x: number, z: number, budget: number): void {
     const gl = this.gl, cx = Math.floor(x / CHUNK), cz = Math.floor(z / CHUNK), R = this.radius, want: [number, number, number][] = [];
@@ -232,7 +241,7 @@ export class Renderer {
 
   /** The city, the figure, its shadow. `rect` (pixels, from the bottom left): into that part of the canvas only; `bare`: no city, the figure alone. */
   draw(vp: M4, eye: number[], bones: Bone[], shadow: { x: number; y: number; z: number; r: number; a: number }, rect?: [number, number, number, number], bare = false): void {
-    const gl = this.gl, far = this.radius * CHUNK, def = this.def, fog = def.fog ?? this.fog, sun = def.sun ?? [0.42, 0.8, 0.28];
+    const gl = this.gl, far = this.radius * CHUNK, def = this.def, T = def.strokes ? null : this.time, fog = T?.fog ?? def.fog ?? this.fog, sun = T?.sun ?? def.sun ?? [0.42, 0.8, 0.28], sky = def.sky && T ? T.sky : def.sky;
     const full: [number, number, number, number] = rect ?? [0, 0, this.canvas.width, this.canvas.height];
     // (the figure first, so the sun's pass has it too)
     const n = figureMesh(bones, this.figData);
@@ -243,15 +252,15 @@ export class Renderer {
     if (def.paint) this.painter.begin(full[2], full[3]);
     else if (rect) { gl.enable(gl.SCISSOR_TEST); gl.scissor(...rect); gl.viewport(...rect); } else { gl.disable(gl.SCISSOR_TEST); gl.viewport(0, 0, this.canvas.width, this.canvas.height); }
     gl.clearColor(fog[0], fog[1], fog[2], 1); gl.clearStencil(0); gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT | gl.STENCIL_BUFFER_BIT);
-    if (def.sky && !bare) {
+    if (sky && !bare) {
       gl.disable(gl.DEPTH_TEST); gl.useProgram(this.kprog); gl.uniformMatrix4fv(this.u.kuInv, false, invert(vp));
-      gl.uniform3fv(this.u.kuTop, def.sky.top); gl.uniform3fv(this.u.kuHor, def.sky.horizon); gl.uniform1f(this.u.kuClouds, def.sky.clouds ?? 0);
+      gl.uniform3fv(this.u.kuTop, sky.top); gl.uniform3fv(this.u.kuHor, sky.horizon); gl.uniform1f(this.u.kuClouds, sky.clouds ?? 0);
       gl.bindVertexArray(this.screen); gl.drawArrays(gl.TRIANGLES, 0, 3);
     }
     gl.enable(gl.DEPTH_TEST); gl.enable(gl.CULL_FACE); gl.disable(gl.BLEND);
     gl.useProgram(this.prog);
     gl.uniformMatrix4fv(this.u.uVP, false, vp); gl.uniform3f(this.u.uEye, eye[0], eye[1], eye[2]);
-    gl.uniform3fv(this.u.uFog, fog); gl.uniform1f(this.u.uFar, far); gl.uniform1f(this.u.uFogNear, def.fogNear ?? 0.3); gl.uniform1i(this.u.uLook, LOOKS.indexOf(def.name));
+    gl.uniform3fv(this.u.uFog, fog); gl.uniform1f(this.u.uFar, far); gl.uniform1f(this.u.uFogNear, T?.fogNear ?? def.fogNear ?? 0.3); gl.uniform1i(this.u.uLook, LOOKS.indexOf(def.name));
     { const l = Math.hypot(sun[0], sun[1], sun[2]); gl.uniform3f(this.u.uSun, sun[0] / l, sun[1] / l, sun[2] / l); }
     gl.activeTexture(gl.TEXTURE3); gl.bindTexture(gl.TEXTURE_2D, this.smap); gl.uniform1i(this.u.uShadowMap, 3); gl.activeTexture(gl.TEXTURE0);
     gl.uniform3fv(this.u.uFigure, this.palette.flat()); gl.uniform1i(this.u.uMask, def.paint ? 1 : 0); gl.uniform1i(this.u.uShadowOn, sunVP ? 1 : 0); if (sunVP) gl.uniformMatrix4fv(this.u.uSunVP, false, sunVP);
@@ -363,7 +372,7 @@ export class Renderer {
 }
 
 /** a 4×4 matrix's inverse (column-major), for the sky's rays */
-function invert(m: M4): Float32Array {
+export function invert(m: M4): Float32Array {
   const a = m, o = new Float32Array(16);
   const b00 = a[0] * a[5] - a[1] * a[4], b01 = a[0] * a[6] - a[2] * a[4], b02 = a[0] * a[7] - a[3] * a[4], b03 = a[1] * a[6] - a[2] * a[5];
   const b04 = a[1] * a[7] - a[3] * a[5], b05 = a[2] * a[7] - a[3] * a[6], b06 = a[8] * a[13] - a[9] * a[12], b07 = a[8] * a[14] - a[10] * a[12];

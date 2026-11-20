@@ -188,7 +188,7 @@ export const strokeGouacheRules: StrokeRules = {
           litPull(0.45);
           if (p.kind === 'foreArm') {
             // (the hand: closed and darker on a hold; open, lighter, a little larger reaching)
-            const skin = (palette[0] ?? col) as V, d = unit(sub(p.b, p.a)), s = p.gripping ? 0.085 : 0.11;
+            const skin = (palette[p.mat - (p.mat % 8)] ?? col) as V, d = unit(sub(p.b, p.a)), s = p.gripping ? 0.085 : 0.11;
             accents.push(m({ kind: K.DAB, a: sub(p.b, scale(d, s * 0.3)), b: add(p.b, scale(d, s * 0.9)), width: s, col: p.gripping ? scale(mulv(skin, [0.75, 0.72, 0.75]), 0.85) : mix(skin, scale(skin, 1.08), front), key: `${key}/hand` }));
           }
         }

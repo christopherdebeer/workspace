@@ -5,8 +5,8 @@
 import { build } from 'esbuild';
 import assert from 'node:assert/strict';
 const lab = new URL('../client/roofjumps/', import.meta.url).pathname;
-const out = await build({ stdin: { contents: `export * from './city'; export * from './runner'; export * from './rig'; export * from './mesh'; export * from './plan'; export * from './tune'; export * from './brush'; export * as STROKES from './strokes'; export { strokeGouacheRules } from './looks/stroke-gouache'; export { sumiRules } from './looks/sumi'; export * from './scenes'; export * from './character';`, resolveDir: lab, loader: 'ts' }, bundle: true, write: false, format: 'esm', platform: 'node' });
-const { plan, foresee, TUNE, HOUSE, DIALS, City, Runner, Rig, CHUNK, STOREY, TAG, VERTEX, chunkMesh, figureMesh, FIGURE, FIGURE_BASE, brushInput, BRUSH_SECONDS, SCENES, runScene, judge, CHARACTERS, bodyOf, STROKES, strokeGouacheRules, sumiRules } = await import('data:text/javascript;base64,' + Buffer.from(out.outputFiles[0].text).toString('base64'));
+const out = await build({ stdin: { contents: `export * from './city'; export * from './runner'; export * from './rig'; export * from './mesh'; export * from './plan'; export * from './tune'; export * from './brush'; export * as STROKES from './strokes'; export * as MENU from './menu'; export { strokeGouacheRules } from './looks/stroke-gouache'; export { sumiRules } from './looks/sumi'; export * from './scenes'; export * from './character';`, resolveDir: lab, loader: 'ts' }, bundle: true, write: false, format: 'esm', platform: 'node' });
+const { plan, foresee, TUNE, HOUSE, DIALS, City, Runner, Rig, CHUNK, STOREY, TAG, VERTEX, chunkMesh, figureMesh, FIGURE, FIGURE_BASE, brushInput, BRUSH_SECONDS, SCENES, runScene, judge, CHARACTERS, bodyOf, STROKES, MENU, strokeGouacheRules, sumiRules } = await import('data:text/javascript;base64,' + Buffer.from(out.outputFiles[0].text).toString('base64'));
 
 // the same chunk, whatever was made before it
 {
@@ -651,4 +651,19 @@ console.log('roofjumps: ok');
   assert.ok(marks(sumiRules).length * 8 < a.length, 'sumi leaves most of it out');
 }
 console.log('roof jumps: brushwork ok');
+
+// the menu's ledge (menu.ts): found in every city tried, every spot on the roof's own height with nothing in front of it
+// to the lip, the same ledge whenever it's asked for
+{
+  const ledges = [];
+  for (let sd = 1; sd <= 12; sd++) {
+    const city = new City(sd), L = MENU.findLedge(city, CHARACTERS.length);
+    assert.ok(L, `seed ${sd}: a ledge`);
+    assert.equal(L.spots.length, CHARACTERS.length);
+    for (const p of L.spots) { assert.equal(city.heightAt(p[0], p[2]), L.y); assert.equal(city.heightAt(p[0] + L.n[0] * 0.8, p[2] + L.n[2] * 0.8), L.y); }
+    assert.deepEqual(MENU.findLedge(new City(sd), CHARACTERS.length).spots, L.spots);
+    ledges.push(`${sd}:${L.y}m${L.across ? `→${L.across.y}m@${L.across.d.toFixed(1)}` : ''}`);
+  }
+  console.log('menu ledges:', ledges.join(' '));
+}
 

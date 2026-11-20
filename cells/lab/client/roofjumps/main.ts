@@ -10,6 +10,11 @@
  * once more in the air). A second finger turns the eye. Keys: WASD or the arrows, space, Q and E; P the plan, O the
  * dials, K hold time, L one step of it.
  *
+ * It opens on the menu (menu.ts): every character along a high ledge over the city, backs turned, the eye behind one.
+ * Swipe sideways on a character to choose who runs, on the sky for the time of day, on the city for another city, on
+ * the roof for another look; swipe up (or Take control, W, ↑) and that one leaps off into the city. `?play` (or any
+ * other flag) skips it; `?menu` asks for it whatever else is set; `time=dusk|golden hour|day|morning` the light.
+ *
  * The studies (the dials' last tab): every scene and scripted test run above as a link, the dials kept.
  * The dials (tune.ts, under `dials`): every number of the run, the plan, the eye and time, turned while it runs; the
  * address keeps the ones that differ from the house, by their keys (`?gravity=14&plan&time=0.25`). The plan (plan.ts,
@@ -29,7 +34,7 @@ import { City } from './city';
 import { Runner } from './runner';
 import type { Body, Input, Move } from './runner';
 import { Rig } from './rig';
-import { LOOKS, Renderer } from './render';
+import { LOOKS, Renderer, invert } from './render';
 import type { Look } from './render';
 import { lookAt, mul, perspective } from './m4';
 import { TUNE, readTune, writeTune, HOUSE } from './tune';
@@ -42,10 +47,14 @@ import { brushInput } from './brush';
 import { sceneByKey, SCENES } from './scenes';
 import { heldBody } from './poses';
 import { CHARACTERS, characterByName } from './character';
+import { TIMES, findLedge, sunOf, underAt } from './menu';
+import type { Ledge, Under } from './menu';
+import type { Bone } from './rig';
 import type { Follow, Waypoint } from './direct';
 
 const q = new URLSearchParams(location.search);
-const seed = Number(q.get('seed') ?? 1) | 0 || 1, preview = q.has('preview'), still = q.has('still');
+let seed = Number(q.get('seed') ?? 1) | 0 || 1;
+const preview = q.has('preview'), still = q.has('still');
 readTune(q);
 // (a preview is the picture alone: no tags on it)
 if (preview) { TUNE.auto = 1; if (!q.has('holds')) TUNE.holds = 0; }
@@ -59,8 +68,9 @@ const practiceLine = q.get('line') === 'transfer';
 /** `scene=<key>`: one of the authored scenes (scenes.ts): its course, its scripted stick */
 const scene = sceneByKey(q.get('scene')), sceneMem: Record<string, number> = {};
 /** `character=<name>`: who runs (character.ts): its proportions, what it wears, its colours */
-const character = characterByName(q.get('character'));
-const city = new City(seed, practiceLine, scene?.course ?? null), runner = new Runner(city, character), rig = new Rig(character), rd = new Renderer(canvas, city);
+let character = characterByName(q.get('character'));
+let city = new City(seed, practiceLine, scene?.course ?? null), runner = new Runner(city, character), rig = new Rig(character);
+const rd = new Renderer(canvas, city);
 rd.palette = character.palette;
 /** the way the body faced at the start, that `brush=` pushes are turned from */
 const brushHeading = runner.heading;
@@ -93,6 +103,7 @@ const knob = document.getElementById('stick')!, nub = knob.firstElementChild as 
 const REACH = 56;
 canvas.addEventListener('pointerdown', (e) => {
   canvas.setPointerCapture(e.pointerId);
+  if (menu.active) { if (!menu.swipe) menu.swipe = { id: e.pointerId, x: e.clientX, y: e.clientY, under: menuUnder(e.clientX, e.clientY) }; return; }
   if (stick.id < 0) {
     Object.assign(stick, { id: e.pointerId, x0: e.clientX, y0: e.clientY, x: 0, y: 0, t: performance.now(), moved: false });
     knob.style.left = `${e.clientX}px`; knob.style.top = `${e.clientY}px`; nub.style.transform = '';
@@ -100,6 +111,7 @@ canvas.addEventListener('pointerdown', (e) => {
   document.body.classList.add('played');
 });
 canvas.addEventListener('pointermove', (e) => {
+  if (menu.active) return;
   if (e.pointerId === stick.id) {
     let x = (e.clientX - stick.x0) / REACH, y = (e.clientY - stick.y0) / REACH; const l = Math.hypot(x, y);
     if (l > 0.18) { stick.moved = true; knob.classList.add('on'); }
@@ -113,6 +125,14 @@ canvas.addEventListener('pointermove', (e) => {
   }
 });
 const up = (e: PointerEvent) => {
+  if (menu.active) {
+    // (sideways: change what's under the finger; up (a push forward): take control)
+    const sw = menu.swipe; if (!sw || sw.id !== e.pointerId) return; menu.swipe = null;
+    const dx = e.clientX - sw.x, dy = e.clientY - sw.y;
+    if (e.type !== 'pointercancel' && Math.abs(dx) > 36 && Math.abs(dx) > Math.abs(dy) * 1.2) menuSwipe(sw.under, dx < 0 ? 1 : -1);
+    else if (e.type !== 'pointercancel' && dy < -50 && -dy > Math.abs(dx)) takeControl();
+    return;
+  }
   const tap = (t: number, moved: boolean) => { if (e.type !== 'pointercancel' && !moved && performance.now() - t < 260) jump = true; };
   if (e.pointerId === stick.id) { tap(stick.t, stick.moved); stick.id = -1; stick.x = stick.y = 0; knob.classList.remove('on'); }
   else { const o = others.get(e.pointerId); if (o) tap(o.t, o.moved); others.delete(e.pointerId); }
@@ -182,6 +202,17 @@ dialsBtn.addEventListener('click', () => { const on = dialsEl.classList.toggle('
 const flip = (key: string) => { TUNE[key] = TUNE[key] ? 0 : 1; remember(); pal.refresh(); thought = -1; };
 let stepOnce = false;
 addEventListener('keydown', (e) => {
+  if (menu.active) {
+    const c = e.code;
+    if (c === 'ArrowLeft' || c === 'KeyA') menuSwipe({ kind: 'character', i: menu.sel }, -1);
+    else if (c === 'ArrowRight' || c === 'KeyD') menuSwipe({ kind: 'character', i: menu.sel }, 1);
+    else if (c === 'ArrowUp' || c === 'KeyW' || c === 'Enter' || c === 'Space') takeControl();
+    else if (c === 'KeyT') menuSwipe({ kind: 'sky' }, 1);
+    else if (c === 'KeyG') menuSwipe({ kind: 'city' }, 1);
+    else if (c === 'KeyV') menuSwipe({ kind: 'roof' }, 1);
+    else return;
+    e.preventDefault(); return;
+  }
   if ((e.target as HTMLElement).tagName === 'INPUT') return;
   if (e.code === 'Space' && !e.repeat) jump = true;
   if (e.code === 'KeyP') flip('plan');
@@ -222,6 +253,8 @@ function asked(t: number): Input {
     const moving = takeoff !== 'stand' && t < tapAt + 1.5;
     return { x: 0, z: moving ? (takeoff === 'step' ? 0.35 : 1) : 0, jump: Math.abs(t - tapAt) < 0.5 / 120 };
   }
+  // (just taken control from the menu: off the ledge, out over the city, before the hand's own)
+  if (menu.launch > 0 && t < menu.launch && Math.hypot(stick.x, stick.y) < 0.2) return { x: Math.sin(menu.heading), z: Math.cos(menu.heading), jump: false };
   let sx = stick.x + k('KeyD', 'ArrowRight') - k('KeyA', 'ArrowLeft'), sy = stick.y + k('KeyS', 'ArrowDown') - k('KeyW', 'ArrowUp');
   const l = Math.hypot(sx, sy); if (l > 1) { sx /= l; sy /= l; }
   const fx = Math.sin(yaw), fz = Math.cos(yaw), j = jump; jump = false;
@@ -353,6 +386,106 @@ function cells(cols: number, n: number, each: (i: number, aspect: number, rect: 
   for (let i = 0; i < n; i++) each(i, w / h, [Math.round((i % cols) * w), Math.round(canvas.height - (Math.floor(i / cols) + 1) * h), Math.round(w), Math.round(h)]);
 }
 
+// ─── the menu (menu.ts): the page as it opens, the characters along a ledge ────
+/** the menu, when the page is opened plainly (only these flags, or `menu`); `play` (or any other flag) skips it */
+const MENU_FLAGS = new Set(['seed', 'look', 'character', 'time', 'far', 'menu']);
+const menu = {
+  active: q.has('menu') || [...q.keys()].every((key) => MENU_FLAGS.has(key)),
+  ledge: null as Ledge | null, sel: 0, at: 0, timeI: 0, rigs: [] as Rig[],
+  /** the others, left on the ledge once one's taken, and which one was */
+  crew: [] as Bone[], crewI: -1,
+  vp: null as Float32Array | null, eye: [0, 0, 0], target: [0, 0, 0], fov: 1,
+  launch: -1, heading: 0, blend: 1, from: null as { eye: number[]; target: number[]; fov: number } | null,
+  swipe: null as { id: number; x: number; y: number; under: Under } | null,
+};
+/** who stands where along the ledge, left to right as the eye sees them: the runner centre-left, as on the poster */
+const ORDER = ((names) => { const o = names.map((nm) => CHARACTERS.findIndex((c) => c.name === nm)).filter((i) => i >= 0); for (let i = 0; i < CHARACTERS.length; i++) if (!o.includes(i)) o.push(i); return o; })(['broad', 'teen', 'runner', 'slight', 'child', 'older']);
+const menuEl = document.getElementById('menu'), menuSay = document.getElementById('menusay');
+let sayUntil = 0;
+function say(text: string): void { if (!menuSay) return; menuSay.textContent = text; sayUntil = performance.now() + 1800; }
+/** a time of day for the light: relative to the way the ledge looks (or north, out of the menu) */
+function applyTime(): void { const T = TIMES[menu.timeI]; rd.time = { sun: sunOf(T, menu.ledge?.heading ?? 0), sky: T.sky, fog: T.fog, fogNear: T.fogNear }; }
+/** find this city's ledge and stand everyone along it (another seed tried if this one has none) */
+function placeMenu(): void {
+  for (let n = 0; n < 12 && !(menu.ledge = findLedge(city, CHARACTERS.length)); n++) { seed++; city = new City(seed); rd.setCity(city); }
+  menu.rigs = CHARACTERS.map((c) => new Rig(c));
+  rd.palette = CHARACTERS.flatMap((c) => c.palette);
+  applyTime();
+  document.getElementById('seed')!.textContent = String(seed);
+}
+/** everyone on the ledge but `skip`, standing, facing out; each dressed from its own eight of the palette */
+function crewBones(skip: number): Bone[] {
+  const L = menu.ledge!, out: Bone[] = [];
+  ORDER.forEach((i, slot) => {
+    if (i === skip) return;
+    const p = L.spots[slot], rg = menu.rigs[i], body = heldBody({ x: p[0], y: p[1], z: p[2] }, 'stand', 0.15 + ((i * 0.37) % 0.7), i % 2, 1, rg.body.reachScale);
+    body.heading = L.heading; rg.update(1, body);
+    for (const b of rg.bones(body)) out.push({ ...b, mat: (b.mat ?? 0) + 8 * i });
+  });
+  return out;
+}
+/** the runner's bones, and (once taken from the menu) the others on the ledge with it */
+function withCrew(own: Bone[]): Bone[] { return menu.crewI < 0 ? own : [...own.map((b) => ({ ...b, mat: (b.mat ?? 0) + 8 * menu.crewI })), ...menu.crew]; }
+/** the eye on the ledge: behind the one chosen (between two, as it moves along), a little above their heads, looking out */
+function menuView(aspect: number, now: number) {
+  const L = menu.ledge!, s = Math.max(0, Math.min(L.spots.length - 1, menu.at)), i0 = Math.floor(s), i1 = Math.min(L.spots.length - 1, i0 + 1), f = s - i0;
+  const P = [0, 1, 2].map((k) => L.spots[i0][k] + (L.spots[i1][k] - L.spots[i0][k]) * f), n = L.n, t = L.t, back = aspect < 1 ? 6 : 5;
+  // (breathing: a hand-held eye, barely)
+  const sway = 0.25 + Math.sin(now * 0.31) * 0.07, bob = Math.sin(now * 0.23) * 0.04;
+  const eye = [P[0] - n[0] * back + t[0] * sway, P[1] + 1.8 + bob, P[2] - n[2] * back + t[2] * sway], target = [P[0] + n[0] * 30, P[1] - 1.6, P[2] + n[2] * 30];
+  const fov = ((aspect < 1 ? 48 : 38) * Math.PI) / 180;
+  return { eye, target, fov, vp: mul(perspective(fov, aspect, 0.15, rd.radius * 64 * 1.5), lookAt(eye, target, [0, 1, 0])) };
+}
+function menuFrame(dt: number): void {
+  const L = menu.ledge!;
+  menu.at += (menu.sel - menu.at) * (1 - Math.exp(-6 * dt));
+  rd.resize();
+  const v = menuView(canvas.width / canvas.height, performance.now() / 1000);
+  Object.assign(menu, { vp: v.vp, eye: v.eye, target: v.target, fov: v.fov });
+  const c = L.spots[Math.round(menu.at)];
+  rd.stream(c[0], c[2], 3);
+  rd.draw(v.vp, v.eye, crewBones(-1), shadowAt(c[0], c[1], c[2]));
+  if (menuSay && sayUntil && performance.now() > sayUntil) { menuSay.textContent = 'Swipe to choose'; sayUntil = 0; }
+}
+/** what's under a point of the page, on the ledge's picture */
+function menuUnder(cx: number, cy: number): Under {
+  if (!menu.vp || !menu.ledge) return { kind: 'city' };
+  return underAt([(cx / canvas.clientWidth) * 2 - 1, 1 - (cy / canvas.clientHeight) * 2], menu.vp, invert(menu.vp), menu.eye, city, menu.ledge);
+}
+/** a sideways swipe on something: the next (d = 1) or the last of what it changes */
+function menuSwipe(u: Under, d: number): void {
+  if (u.kind === 'character') { menu.sel = Math.max(0, Math.min(ORDER.length - 1, menu.sel + d)); say(CHARACTERS[ORDER[menu.sel]].title); }
+  else if (u.kind === 'sky') { menu.timeI = (menu.timeI + d + TIMES.length) % TIMES.length; applyTime(); say(TIMES[menu.timeI].name); }
+  else if (u.kind === 'roof') { setLook(LOOKS[(LOOKS.indexOf(rd.look) + d + LOOKS.length) % LOOKS.length]); say(rd.look); }
+  else {
+    seed = Math.max(1, seed + d); city = new City(seed); rd.setCity(city); runner = new Runner(city, character); placeMenu(); say(`seed ${seed}`);
+  }
+  const u2 = new URL(location.href);
+  u2.searchParams.set('seed', String(seed)); u2.searchParams.set('character', CHARACTERS[ORDER[menu.sel]].name); u2.searchParams.set('time', TIMES[menu.timeI].name); u2.searchParams.set('look', rd.look);
+  history.replaceState(null, '', u2);
+}
+/** the one the eye is behind takes the leap: it's the runner now, and the hand's */
+function takeControl(): void {
+  if (!menu.active || !menu.ledge) return;
+  const L = menu.ledge, i = ORDER[menu.sel], p = L.spots[menu.sel];
+  character = CHARACTERS[i]; runner = new Runner(city, character); runner.x = p[0]; runner.y = p[1]; runner.z = p[2]; runner.heading = L.heading;
+  rig = new Rig(character); rig.update(1, runner);
+  menu.crew = crewBones(i); menu.crewI = i;
+  yaw = L.heading; Object.assign(eyeAt, { x: p[0], y: p[1], z: p[2] }); near = 1;
+  menu.from = { eye: menu.eye, target: menu.target, fov: menu.fov }; menu.blend = 0;
+  menu.launch = time + 1.4; menu.heading = L.heading; menu.active = false;
+  document.body.classList.remove('menu'); document.body.classList.add('played'); if (menuEl) menuEl.hidden = true;
+  const u = new URL(location.href); u.searchParams.set('character', character.name); history.replaceState(null, '', u);
+}
+if (menu.active) {
+  if (!q.has('look')) rd.look = 'gouache';
+  menu.sel = menu.at = Math.max(0, ORDER.indexOf(CHARACTERS.findIndex((c) => c.name === character.name)));
+  menu.timeI = Math.max(0, TIMES.findIndex((t) => t.name === q.get('time')));
+  placeMenu();
+  document.body.classList.add('menu'); if (menuEl) menuEl.hidden = false;
+  document.getElementById('take')?.addEventListener('click', takeControl);
+} else if (q.has('time')) { const i = TIMES.findIndex((t) => t.name === q.get('time')); if (i >= 0) { menu.timeI = i; applyTime(); } }
+
 function frame(now: number): void {
   const dt = Math.min(0.05, (now - last) / 1000); last = now;
   if (sheet) {
@@ -382,6 +515,7 @@ function frame(now: number): void {
     });
     frames++; requestAnimationFrame(frame); return;
   }
+  if (menu.active && menu.ledge) { menuFrame(dt); frames++; requestAnimationFrame(frame); return; }
   if (held) rig.update(1, held);
   else if (stepOnce) { advance(DT); stepOnce = false; }
   else if (!still && !TUNE.pause) { acc += dt * TUNE.time; while (acc >= DT) { advance(DT); acc -= DT; } }
@@ -415,9 +549,16 @@ function frame(now: number): void {
   rush += ((held ? 0 : TUNE.rush * Math.max(0, Math.min(1, (runner.speed - 10) / 8))) - rush) * e(4);
   rd.resize();
   const tripod = q.has('fixed') ? fixedEye ?? scene?.eye ?? null : null;
-  const { vp, eye } = tripod ? { eye: tripod, vp: mul(perspective((50 * Math.PI) / 180, canvas.width / canvas.height, 0.15, rd.radius * 64 * 1.5), lookAt(tripod, [runner.x, runner.y + 1, runner.z], [0, 1, 0])) } : eyeFor(eyeAt.x, eyeAt.y, eyeAt.z, yaw, canvas.width / canvas.height, (at) => { const room = held ? 1 : clearTo(at); near += (room - near) * (room < near ? 1 : e(3)); return near; }, held ? 0 : wideK, held ? 0 : lowK, shakeV);
+  let { vp, eye } = tripod ? { eye: tripod, vp: mul(perspective((50 * Math.PI) / 180, canvas.width / canvas.height, 0.15, rd.radius * 64 * 1.5), lookAt(tripod, [runner.x, runner.y + 1, runner.z], [0, 1, 0])) } : eyeFor(eyeAt.x, eyeAt.y, eyeAt.z, yaw, canvas.width / canvas.height, (at) => { const room = held ? 1 : clearTo(at); near += (room - near) * (room < near ? 1 : e(3)); return near; }, held ? 0 : wideK, held ? 0 : lowK, shakeV);
   rd.stream(runner.x, runner.z, 2);
-  rd.draw(vp, eye, rig.bones(held ?? runner), shadowAt(runner.x, runner.y, runner.z));
+  // (just come from the menu: the eye carried from where it was on the ledge to the chase, over most of a second)
+  if (menu.from && menu.blend < 1) {
+    menu.blend = Math.min(1, menu.blend + dt / 0.9); const b = menu.blend * menu.blend * (3 - 2 * menu.blend), aspect = canvas.width / canvas.height;
+    const E = [0, 1, 2].map((i) => menu.from!.eye[i] + (eye[i] - menu.from!.eye[i]) * b), T = [0, 1, 2].map((i) => menu.from!.target[i] + ([runner.x, runner.y + 1.7, runner.z][i] - menu.from!.target[i]) * b);
+    const fov = menu.from.fov + (((TUNE.fov + (aspect < 1 ? 12 : 0)) * Math.PI) / 180 - menu.from.fov) * b;
+    vp = mul(perspective(fov, aspect, 0.15, rd.radius * 64 * 1.5), lookAt(E, T, [0, 1, 0])); eye = E;
+  }
+  rd.draw(vp, eye, withCrew(rig.bones(held ?? runner)), shadowAt(runner.x, runner.y, runner.z));
   const guides = rd.def.guides !== false;
   if (guides && TUNE.holds && !held) rd.lines(vp, eye, holdStrokes(city.holdsNear(runner.x, runner.z, TUNE.holdsNear), runner.reach, runner.x, runner.y, runner.z, TUNE.holdsNear));
   if (guides && TUNE.plan && thinking && !held) rd.lines(vp, eye, planStrokes(thinking));
@@ -438,6 +579,7 @@ requestAnimationFrame(frame);
     seed, t: time, frames, x: runner.x, y: runner.y, z: runner.z, state: runner.state, speed: runner.speed, dist: runner.dist,
     move: runner.move, leaps: runner.leaps, climbs: runner.climbs, walls: runner.walls, wallSteps: runner.wallSteps, braces: runner.braces, rolls: runner.rolls, dashes: runner.dashes, streets: runner.streets, made: runner.made,
     look: rd.look, tris: rd.tris, pending: rd.pending(runner.x, runner.z),
+    menu: menu.active, chosen: CHARACTERS[ORDER[menu.sel]]?.name, character: character.name, timeOfDay: TIMES[menu.timeI].name,
     plan: thinking && { ahead: words(thinking.primary), score: thinking.primary.score, left: thinking.left && { off: thinking.left.off, score: thinking.left.score }, right: thinking.right && { off: thinking.right.off, score: thinking.right.score }, best: thinking.best.off },
   }),
   tune: TUNE,

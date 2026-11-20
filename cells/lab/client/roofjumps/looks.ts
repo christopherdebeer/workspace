@@ -54,8 +54,9 @@ struct Surf {
   vec3 bary; vec3 eye;         // where in its triangle; where it's seen from
 };
 uniform vec3 uSun;
-// (the figure's palette, by material (character.ts MAT): the character's colours, for a look to treat as it treats colour)
-uniform vec3 uFigure[8];
+// (the figure's palette, by material (character.ts MAT): the character's colours, for a look to treat as it treats colour;
+// eight a character, for as many as are drawn at once (the menu's line): a bone's material is 8 × which + what)
+uniform vec3 uFigure[64];
 uniform highp sampler2DShadow uShadowMap; uniform mat4 uSunVP; uniform int uShadowOn;
 // (how much the sun reaches this point (0..1): the shadow map, softened over a few texels; 1 where there's none)
 float sunLit(vec3 p, vec3 n) {

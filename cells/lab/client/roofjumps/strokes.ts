@@ -460,6 +460,8 @@ export class StrokePainter {
     }
     return this.missing(keys);
   }
+  /** forget every chunk's stamps (another city) */
+  reset(): void { for (const l of this.chunks.values()) this.free(l); this.chunks.clear(); }
   /** how many of these chunks still have no paint */
   missing(keys: string[]): number { return keys.filter((k) => !this.chunks.has(k)).length; }
 
