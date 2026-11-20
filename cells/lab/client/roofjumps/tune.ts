@@ -39,7 +39,7 @@ export const DIALS: Dial[] = [
   d('leap', 'rise', 'springs up', 1, 7, 0.1, 3.4, 'm'),
   d('leap', 'drop', 'drops before looking higher', 2, 20, 0.5, 7, 'm'),
   d('leap', 'leapSpeed', 'fastest leap', 8, 30, 0.5, 19, 'm/s'),
-  d('leap', 'diveDrop', 'dives from', 0.5, 8, 0.1, 2, 'm down'),
+  d('leap', 'diveDrop', 'dives from', 0.5, 8, 0.1, 4.5, 'm down'),
   d('leap', 'hang', 'extra height', 0, 2, 0.05, 0, 'm'),
   d('leap', 'apexHold', 'held at the top', 0, 0.3, 0.01, 0, 's'),
   d('leap', 'emphasis', 'effort shown', 0, 1, 0.05, 0),

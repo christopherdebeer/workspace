@@ -1,28 +1,64 @@
 {
-  "date": "2026-11-20",
-  "build": "after 4138ae9",
-  "summary": [
-    { "scene": "short-catch", "gap": "The approach doesn't limit the jump. At a light press (0.6) it still springs a 4.2 m gap and 2.5 m rise cleanly: the leap is solved for the landing, not from the run-up and plant it had." },
-    { "scene": "late-change", "gap": "A late change of mind costs nothing. A 35° swing in the last stride before the lip lands clean, and the second gap is taken as if nothing happened." },
-    { "scene": "vault-angles", "gap": "A waist-high wall met at a run is hung from and climbed, not vaulted. The vault happens only when the jump decision catches the box from further back, and the vault style doesn't follow the approach angle." },
-    { "scene": "mantle-box", "gap": "No mantle. It walks up to a chest-high box, stands, then hangs from it (feet near the roof) and climbs, or springs." },
-    { "scene": "drop-rebound", "gap": "A one-storey step down is a headfirst dive and a roll, and the next gap 2 m on isn't taken: it stops at the lip. It should drop, land on its feet and rebound." },
-    { "scene": "stair-ascent", "gap": "From the street it can't use a face's sills: it stands at the wall. A hold is only looked for near the top of a jump's reach, so a sill at 3 m (easily reached) never counts." },
-    { "scene": "tic-tac", "gap": "No tic-tac: a lip just beyond a straight jump, in a corner with a taller wall beside it, is left. It stands pressing into the corner." },
-    { "scene": "street-deadend", "gap": "Pressed straight at the end wall of a 2.2 m alley, it stands there. The chimney starts only when pressing into one of the side walls." },
-    { "scene": "hang-intents", "gap": "Untested this pass: the light approach made the jump instead of catching (see short-catch), so it never hung. Shimmying along a lip doesn't exist; this scene is ready to show it once a catch happens." },
-    { "scene": "transfer-clean", "gap": "Even the clean run fails one check: planted feet move 5 to 25 cm/s in every scene, mostly around landings and the first steps after them." },
-    { "scene": "underbar", "gap": "Under the bar, the hips come within 5 cm of it (13.25 m against 13.30 m): clearance isn't ensured, only happens." },
-    { "scene": "edge-stop", "gap": "It stops 1.07 m short of the lip, standing square; nothing in it would show a balance check at the edge if it stopped closer." }
-  ],
-  "seen": {
-    "transfer-clean": "Chase view: both gaps taken off a stride, no stutter; landings flow into running. Reads as competent and quiet.",
-    "late-change": "Side view: the swing comes in the last stride but the bound and landing look identical to the clean run; no wide foot, no outside arm.",
-    "short-catch": "Side view: at the light press it runs at 5 to 6 m/s, crouches at the lip, springs, and is up: nothing about it looks underpowered.",
-    "stair-ascent": "Chase view: runs at the face and stops dead against it, standing for the rest of the scene.",
-    "vault-angles": "Chase view: the first wall is hung from (1.12 s) and climbed; the second likewise; only once is there a vault. A 1 m wall shouldn't be a climb.",
-    "drop-rebound": "Side view: off the ledge headfirst (a dive) for a 3 m drop, a forward roll, then running out to the next lip and stopping there.",
-    "sharp-turns": "Chase view: the turns are made without visible skating; the reversal dips to 4 m/s and leans. Hard to judge the plant foot from behind.",
-    "mantle-box": "Side view: walks to the box at 3 m/s, stands beside it about a second, then hangs off its 1.5 m edge with the feet near the roof and climbs; then bounds off the far side."
+ "date": "2026-11-20",
+ "build": "after 7fb0ca8 (the 1–5 pass)",
+ "summary": [
+  {
+   "scene": "stair-ascent",
+   "gap": "From the street it can't use a face's sills: it stands at the wall. A hold is only looked for near the top of a jump's reach, so a sill at 3 m (easily reached) never counts."
+  },
+  {
+   "scene": "tic-tac",
+   "gap": "No tic-tac: a lip just beyond a straight jump, in a corner with a taller wall beside it, is left. It stands pressing into the corner."
+  },
+  {
+   "scene": "street-deadend",
+   "gap": "Pressed straight at the end wall of a 2.2 m alley, it stands there. The chimney starts only when pressing into one of the side walls."
+  },
+  {
+   "scene": "hang-intents",
+   "gap": "Now hangs (the short catch works), and shows the gap: steered along the wall it lets go after a beat instead of moving along the lip (no shimmy); then it can't pull up from where it fell."
+  },
+  {
+   "scene": "transfer-clean",
+   "gap": "Even the clean run fails one check: planted feet move 5 to 25 cm/s in every scene, mostly around landings and the first steps after them."
+  },
+  {
+   "scene": "underbar",
+   "gap": "Under the bar, the hips come within 5 cm of it (13.25 m against 13.30 m): clearance isn't ensured, only happens."
+  },
+  {
+   "scene": "edge-stop",
+   "gap": "It stops 1.07 m short of the lip, standing square; nothing in it would show a balance check at the edge if it stopped closer."
+  },
+  {
+   "scene": "short-catch",
+   "gap": "Fixed: the approach limits the jump. At a light press the leap's power (press, the foot planted for it, effort left, less for turning off it) caps the takeoff's rise, so it comes up short, catches the lip and hangs; pressed, it climbs."
+  },
+  {
+   "scene": "late-change",
+   "gap": "Fixed: a late change costs. Sideways acceleration at speed is limited, so the swing is still being made as it leaves: the landing is a wide save and the second takeoff comes later and slower, at an angle (15.6 m/s at 17° against 19.4 clean). Still fragile: one frame's difference in when the stick comes back flips the second gap from a bound to a dive off the far side."
+  },
+  {
+   "scene": "vault-angles",
+   "gap": "Fixed: all three walls vaulted, the style by the angle met (square: two hands; 25°: a side vault; 60°: a palm spin). Left: the dashes between vaults carry it to 18 m/s, and each landing is a save; and a 60° vault is a long flat glide over a unit, not a turn on the hand."
+  },
+  {
+   "scene": "mantle-box",
+   "gap": "Fixed: walked or jogged (up to 6 m/s) into a chest-high box, it mantles: hands on the top, hips in over them, a short step on. Left: the mantle takes a third of a second, so the push and knee-up aren't seen."
+  },
+  {
+   "scene": "drop-rebound",
+   "gap": "Fixed: a storey down is dropped feet first, not dived (dives start at 4.5 m), and with no room the roll is skipped: it lands and rebounds into the next gap within 0.03 s. Costs the directed score (a dive and roll counted 1.9 against a bound's 1)."
   }
+ ],
+ "seen": {
+  "transfer-clean": "Chase view: both gaps taken off a stride, no stutter; landings flow into running. Reads as competent and quiet.",
+  "late-change": "Side view: the bound off the swing lands with the outside leg thrown wide (save:wide), a dash to 17 m/s, a bound over the second gap at a slant, running out to a stop. Reads as a recovery.",
+  "short-catch": "Side view: at the light press it runs at 5 to 7 m/s, springs, comes up short against the far wall, hangs (arms straight) about a second, then pulls over.",
+  "stair-ascent": "Chase view: runs at the face and stops dead against it, standing for the rest of the scene.",
+  "vault-angles": "Chase view: three vaults, each different: square over the first, a slanted side vault, and over the third along it, flat. Between them it dashes up to 18 m/s and every landing shows a wide or long save.",
+  "drop-rebound": "Side view: off the ledge feet first (leaning on), lands upright on the lower roof, one stride and straight into a bound over the next gap.",
+  "sharp-turns": "Chase view: the turns are made without visible skating; the reversal dips to 4 m/s and leans. Hard to judge the plant foot from behind.",
+  "mantle-box": "Side view: walks to the box at 3 m/s, and between two frames is up on it (the mantle is quick); then runs off its far side and bounds."
+ }
 }

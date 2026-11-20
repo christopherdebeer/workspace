@@ -40,7 +40,10 @@ if (film) {
   const esc = (t) => String(t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   const held = report.reduce((n, s) => n + s.checks.filter((c) => c.ok).length, 0), all = report.reduce((n, s) => n + s.checks.length, 0);
   const title = (k) => report.find((r) => r.key === k)?.title ?? k;
-  const gaps = notes.summary.filter((g) => report.some((r) => r.key === g.scene)).map((g) => `<li><a href="#${g.scene}">${esc(title(g.scene))}</a><p>${esc(g.gap)}</p></li>`).join('');
+  const item = (g) => `<li><a href="#${g.scene}">${esc(title(g.scene))}</a><p>${esc(g.gap.replace(/^Fixed: /, ''))}</p></li>`, here = notes.summary.filter((g) => report.some((r) => r.key === g.scene));
+  // (what a pass fixed (a note starting 'Fixed:') listed after what's still missing)
+  const fixed = here.filter((g) => g.gap.startsWith('Fixed:')).map(item).join('');
+  const gaps = here.filter((g) => !g.gap.startsWith('Fixed:')).map((g) => `<li><a href="#${g.scene}">${esc(title(g.scene))}</a><p>${esc(g.gap)}</p></li>`).join('');
   const cards = report.map((r) => {
     const okN = r.checks.filter((c) => c.ok).length;
     const checks = r.checks.map((c) => `<li class="${c.ok ? 'held' : 'failed'}"><span class="mark">${c.ok ? 'holds' : 'fails'}</span><span class="says">${esc(c.says)}</span><span class="saw">${esc(c.saw)}</span></li>`).join('');
@@ -104,6 +107,7 @@ a:focus-visible { outline: 2px solid var(--fail); outline-offset: 2px; }
     <p class="tally">${held}/${all} checks hold across ${report.length} scenes${notes.date ? ` · notes from the viewing of ${esc(notes.date)} (${esc(notes.build)})` : ''}</p>
   </section>
   ${gaps ? `<section class="gaps"><h2>What it can't or doesn't do yet</h2><ol>${gaps}</ol></section>` : ''}
+  ${fixed ? `<section class="gaps"><h2>Fixed in the last pass</h2><ol>${fixed}</ol></section>` : ''}
   ${cards}
 </main>`;
   writeFileSync(OUT + 'report.html', html);

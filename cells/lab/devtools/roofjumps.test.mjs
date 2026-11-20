@@ -201,7 +201,10 @@ const { plan, foresee, TUNE, HOUSE, DIALS, City, Runner, Rig, CHUNK, STOREY, TAG
     if (runner.move !== before) seen.push(runner.move);
   }
   assert.ok(loaded && corrected);
-  assert.match(seen.join(' '), /bound .*dive roll (run )?dash/);
+  // (the 3 m step down to the third roof is a storey: dropped and run out of on the feet (a bound), not dived and rolled;
+  // a dive is for drops beyond TUNE.diveDrop)
+  assert.match(seen.join(' '), /^bound( run)?( dash)? bound( run)?( dash)? bound/);
+  assert.ok(!seen.includes('roll') && !seen.includes('dive'), 'a storey down is run out of: ' + seen.join(' '));
 }
 
 // Compare intentions on identical geometry using the normal fixed-step input.
@@ -577,9 +580,10 @@ console.log('roofjumps: ok');
   for (const seed of [1, 7]) for (let k = 0; k < 8; k++) {
     const a = (k / 8) * 2 * Math.PI + 0.2, r = new Runner(new City(seed)); let landed = -9;
     for (let i = 0; i < 120 * 30; i++) {
-      const s0 = r.state, fl = r.reach.fl, fr = r.reach.fr; r.step(1 / 120, { x: Math.sin(a), z: Math.cos(a), jump: false });
+      const sp0 = r.speed, s0 = r.state, fl = r.reach.fl, fr = r.reach.fr; r.step(1 / 120, { x: Math.sin(a), z: Math.cos(a), jump: false });
       if (s0 === 'air' && r.state === 'ground') landed = i;
-      if (s0 === 'ground' && r.state === 'air' && r.vy > 0) { ups++; if (fl || fr) footed++; if (i - landed < 60) { quick++; if (fl && fr && Math.hypot(fl[0] - fr[0], fl[2] - fr[2]) < 0.3) sideBySide++; } }
+      // (quick and on the move: a standing spring (under 2 m/s) goes off both feet, and should)
+      if (s0 === 'ground' && r.state === 'air' && r.vy > 0) { ups++; if (fl || fr) footed++; if (i - landed < 60 && sp0 >= 2) { quick++; if (fl && fr && Math.hypot(fl[0] - fr[0], fl[2] - fr[2]) < 0.3) sideBySide++; } }
     }
   }
   assert.ok(footed >= ups * 0.97, `a takeoff has a foot under it (${footed}/${ups})`);

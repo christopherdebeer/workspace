@@ -145,7 +145,8 @@ function asked(t: number): Input {
   // (`direct=x,z;x,z…`: a directed run (devtools/roofjumps-direct.mjs), its waypoints followed as the director followed them)
   // (`brush=1`: from a stand, short light pushes every way and a turn round (brush.ts), to see the feet)
   if (brushStudy) return brushInput(t, brushHeading);
-  if (scene) return scene.input(t, runner, sceneMem);
+  // (on the frame's own time, as runScene gives it: a summed clock drifts, and a scene's timing can turn on one frame)
+  if (scene) return scene.input(Math.round(t / DT) * DT, runner, sceneMem);
   // (`hold=<radians>`: one world direction held hard, as the tests hold a line; with `from=x,z`, from the street)
   if (holdAt !== null) return { x: Math.sin(holdAt), z: Math.cos(holdAt), jump: false };
   if (directed) return follow(runner, directed, directedAt, DT);
