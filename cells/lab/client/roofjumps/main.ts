@@ -32,7 +32,7 @@ import { Rig } from './rig';
 import { LOOKS, Renderer } from './render';
 import type { Look } from './render';
 import { lookAt, mul, perspective } from './m4';
-import { TUNE, readTune, writeTune } from './tune';
+import { TUNE, readTune, writeTune, HOUSE } from './tune';
 import { palette } from './palette';
 import { plan, words } from './plan';
 import type { Plan, Route } from './plan';
@@ -124,6 +124,12 @@ function remember(): void { const u = new URL(location.href); writeTune(u.search
  * The studies, from the dials: each authored scene (scenes.ts) and each scripted run the tests and tools use, as a link
  * that opens the page in it, the dials kept. What's running now, again from the start, or back to the free run.
  */
+/** the eye's dials as a whole, by name: the chase eye (the house's), and a painter's (high, a long lens, framed for a tall
+ * picture with the figure in its city, as the painted stills are) */
+const CAMERAS: Record<string, Record<string, number>> = {
+  chase: Object.fromEntries(['fov', 'eyeDist', 'eyePitch', 'rush', 'side'].map((k) => [k, HOUSE[k]])),
+  painter: { fov: 30, eyeDist: 10, eyePitch: 34, rush: 2, side: 20 },
+};
 const STUDY_KEYS = ['scene', 'fixed', 'line', 'takeoff', 'catch', 'brush', 'from', 'hold', 'direct', 'sheet', 'study', 'mu', 'strip', 'frames', 'every', 'cols', 't', 'side', 'zoom', 'auto', 'lead', 'wall'];
 const studyHref = (set: Record<string, string>) => { const u = new URL(location.href); for (const k of STUDY_KEYS) u.searchParams.delete(k); for (const [k, v] of Object.entries(set)) u.searchParams.set(k, v); return u.href; };
 /** a street spot near the start for this seed, clear on every side (as the street-start tests find theirs) */
@@ -153,9 +159,16 @@ function studies(): HTMLElement[] {
 }
 /** the looks (looks.ts), from the dials: each a button, the one drawn marked; kept in the address */
 function looks(): HTMLElement[] {
-  const g = document.createElement('div'); g.className = 'studies'; const l = document.createElement('div'); l.className = 'list';
-  for (const name of LOOKS) { const a = document.createElement('a'); a.textContent = name; a.href = '#'; if (name === rd.look) a.className = 'on'; a.addEventListener('click', (e) => { e.preventDefault(); setLook(name); pal.refresh(); }); l.append(a); }
-  g.append(l); return [g];
+  const group = (title: string, items: [string, boolean, () => void][]) => {
+    const g = document.createElement('div'); g.className = 'studies'; const h = document.createElement('h3'); h.textContent = title; const l = document.createElement('div'); l.className = 'list';
+    for (const [name, on, act] of items) { const a = document.createElement('a'); a.textContent = name; a.href = '#'; if (on) a.className = 'on'; a.addEventListener('click', (e) => { e.preventDefault(); act(); pal.refresh(); }); l.append(a); }
+    g.append(h, l); return g;
+  };
+  const cam = (name: string) => Object.entries(CAMERAS[name]).every(([k, v]) => TUNE[k] === v);
+  return [
+    group('look', LOOKS.map((name) => [name, name === rd.look, () => setLook(name)])),
+    group('camera', Object.keys(CAMERAS).map((name) => [name, cam(name), () => { for (const [k, v] of Object.entries(CAMERAS[name])) TUNE[k] = v; remember(); }])),
+  ];
 }
 const pal = palette(dialsEl, () => { remember(); thought = -1; }, [{ name: 'looks', build: looks }, { name: 'studies', build: studies }]);
 dialsBtn.addEventListener('click', () => { const on = dialsEl.classList.toggle('shown'); dialsBtn.setAttribute('aria-expanded', String(on)); });

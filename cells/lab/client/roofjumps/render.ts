@@ -12,6 +12,8 @@ import type { Bone } from './rig';
 import type { M4 } from './m4';
 
 import { LOOK_DEFS, LOOK_PRELUDE } from './looks';
+import { Painter } from './paint';
+import { lookAt, mul } from './m4';
 import type { LookDef } from './looks';
 
 /** the looks by name, in the order the page cycles them */
@@ -31,7 +33,7 @@ void main() {
 const FS = `#version 300 es
 precision highp float;
 in vec3 vPos; flat in vec3 vNor; flat in float vTag; in vec3 vBary; flat in vec4 vRect; flat in vec2 vSpan; flat in float vSeed;
-uniform vec3 uEye; uniform vec3 uFog; uniform float uFar; uniform float uFogNear; uniform int uLook;
+uniform vec3 uEye; uniform vec3 uFog; uniform float uFar; uniform float uFogNear; uniform int uLook; uniform int uMask;
 out vec4 o;
 ${LOOK_PRELUDE}
 ${LOOK_DEFS.map((d, i) => `// ─── ${d.name}\n${d.glsl.replace(/\bvec3 look\(/, `vec3 look_${i}(`)}`).join('\n')}
@@ -40,7 +42,8 @@ void main() {
   vec3 col = vec3(0.0);
   ${LOOK_DEFS.map((_, i) => `${i ? 'else ' : ''}if (uLook == ${i}) col = look_${i}(s);`).join('\n  ')}
   float dist = length(vPos - uEye);
-  o = vec4(mix(col, uFog, smoothstep(uFar * uFogNear, uFar, dist)), 1.0);
+  // (painted after: the figure marked in alpha, so the strokes keep it apart from what's behind it)
+  o = vec4(mix(col, uFog, smoothstep(uFar * uFogNear, uFar, dist)), uMask == 1 && s.tag == 6 ? 0.0 : 1.0);
 }`;
 // (a sky behind: from straight up to the horizon, a look's; the eye's ray from each pixel)
 const KVS = `#version 300 es
@@ -62,6 +65,11 @@ void main() {
   float t = (uPlane.w - dot(uPlane.xyz, aPos)) / min(-0.05, dot(uPlane.xyz, uL));
   vec3 p = aPos + uL * max(0.0, t) + uPlane.xyz * 0.015; vW = p; gl_Position = uVP * vec4(p, 1.0);
 }`;
+// (depth from the sun, for the shadow map)
+const DVS = `#version 300 es
+in vec3 aPos; uniform mat4 uVP; void main() { gl_Position = uVP * vec4(aPos, 1.0); }`;
+const DFS = `#version 300 es
+precision mediump float; out vec4 o; void main() { o = vec4(1.0); }`;
 const CFS = `#version 300 es
 precision highp float; in vec3 vW; uniform vec3 uMin; uniform vec3 uMax; uniform vec4 uShade; out vec4 o;
 void main() { if (any(lessThan(vW, uMin)) || any(greaterThan(vW, uMax))) discard; o = uShade; }`;
@@ -104,8 +112,18 @@ export class Renderer {
     if (!gl) throw new Error('WebGL2 is needed');
     this.gl = gl;
     this.prog = this.program(VS, FS); this.sprog = this.program(SVS, SFS);
-    for (const n of ['uVP', 'uEye', 'uFog', 'uFar', 'uFogNear', 'uLook', 'uSun']) this.u[n] = gl.getUniformLocation(this.prog, n);
+    for (const n of ['uVP', 'uEye', 'uFog', 'uFar', 'uFogNear', 'uLook', 'uSun', 'uMask']) this.u[n] = gl.getUniformLocation(this.prog, n);
     this.kprog = this.program(KVS, KFS, ['aPos']); for (const n of ['uInv', 'uTop', 'uHor', 'uClouds']) this.u['k' + n] = gl.getUniformLocation(this.kprog, n);
+    this.dprog = this.program(DVS, DFS, ['aPos']); this.u.duVP = gl.getUniformLocation(this.dprog, 'uVP');
+    for (const n of ['uShadowMap', 'uSunVP', 'uShadowOn']) this.u[n] = gl.getUniformLocation(this.prog, n);
+    // (the sun's shadow map: a depth texture compared on lookup, always bound so a look can ask whether or not it's drawn)
+    this.smap = gl.createTexture()!; gl.bindTexture(gl.TEXTURE_2D, this.smap);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.DEPTH_COMPONENT24, SMAP, SMAP, 0, gl.DEPTH_COMPONENT, gl.UNSIGNED_INT, null);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_COMPARE_MODE, gl.COMPARE_REF_TO_TEXTURE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_COMPARE_FUNC, gl.LEQUAL);
+    this.sfb = gl.createFramebuffer()!; gl.bindFramebuffer(gl.FRAMEBUFFER, this.sfb); gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.TEXTURE_2D, this.smap, 0); gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    this.painter = new Painter(gl, (vs, fs, a) => this.program(vs, fs, a));
     this.cprog = this.program(CVS, CFS, ['aPos']); for (const n of ['uVP', 'uL', 'uPlane', 'uMin', 'uMax', 'uShade']) this.u['c' + n] = gl.getUniformLocation(this.cprog, n);
     for (const n of ['uVP', 'uAt', 'uA']) this.u['s' + n] = gl.getUniformLocation(this.sprog, n);
     this.lprog = this.program(LVS, LFS, ['aPos', 'aCol']);
@@ -129,6 +147,28 @@ export class Renderer {
     gl.bindVertexArray(null);
   }
   private screen: WebGLVertexArrayObject;
+  private dprog!: WebGLProgram; private smap!: WebGLTexture; private sfb!: WebGLFramebuffer; private painter!: Painter;
+  /**
+   * The sun's view: an orthographic box along the light, centred on (x, y, z) (snapped to its texels, so the shadows don't
+   * crawl as it follows), drawn with everything in it: the buildings and the figure.
+   */
+  private sunPass(x: number, y: number, z: number, sun: number[], figN: number): M4 {
+    const gl = this.gl, l = Math.hypot(sun[0], sun[1], sun[2]), d = [sun[0] / l, sun[1] / l, sun[2] / l], H = 48, step = (2 * H) / SMAP;
+    const up = Math.abs(d[1]) > 0.95 ? [0, 0, 1] : [0, 1, 0];
+    let view = lookAt([x + d[0] * 150, y + d[1] * 150, z + d[2] * 150], [x, y, z], up);
+    // (snap: the centre moved to a whole texel in the sun's view)
+    const cx = view[0] * x + view[4] * y + view[8] * z + view[12], cy = view[1] * x + view[5] * y + view[9] * z + view[13];
+    const sx = Math.round(cx / step) * step - cx, sy = Math.round(cy / step) * step - cy;
+    view = mul(ortho(-H + sx, H + sx, -H + sy, H + sy, 1, 320), view);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.sfb); gl.viewport(0, 0, SMAP, SMAP); gl.disable(gl.SCISSOR_TEST);
+    gl.clear(gl.DEPTH_BUFFER_BIT); gl.enable(gl.DEPTH_TEST); gl.disable(gl.CULL_FACE); gl.colorMask(false, false, false, false);
+    gl.enable(gl.POLYGON_OFFSET_FILL); gl.polygonOffset(1.5, 3);
+    gl.useProgram(this.dprog); gl.uniformMatrix4fv(this.u.duVP, false, view);
+    for (const c of this.built.values()) { gl.bindVertexArray(c.vao); gl.drawArrays(gl.TRIANGLES, 0, c.n); }
+    gl.bindVertexArray(this.fig.vao); gl.drawArrays(gl.TRIANGLES, 0, figN);
+    gl.disable(gl.POLYGON_OFFSET_FILL); gl.colorMask(true, true, true, true); gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    return view;
+  }
   /** the look being drawn */
   get def(): LookDef { return LOOK_DEFS.find((d) => d.name === this.look) ?? LOOK_DEFS[0]; }
 
@@ -184,7 +224,14 @@ export class Renderer {
   /** The city, the figure, its shadow. `rect` (pixels, from the bottom left): into that part of the canvas only; `bare`: no city, the figure alone. */
   draw(vp: M4, eye: number[], bones: Bone[], shadow: { x: number; y: number; z: number; r: number; a: number }, rect?: [number, number, number, number], bare = false): void {
     const gl = this.gl, far = this.radius * CHUNK, def = this.def, fog = def.fog ?? this.fog, sun = def.sun ?? [0.42, 0.8, 0.28];
-    if (rect) { gl.enable(gl.SCISSOR_TEST); gl.scissor(...rect); gl.viewport(...rect); } else { gl.disable(gl.SCISSOR_TEST); gl.viewport(0, 0, this.canvas.width, this.canvas.height); }
+    const full: [number, number, number, number] = rect ?? [0, 0, this.canvas.width, this.canvas.height];
+    // (the figure first, so the sun's pass has it too)
+    const n = figureMesh(bones, this.figData);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.fig.buf); gl.bufferSubData(gl.ARRAY_BUFFER, 0, this.figData);
+    let sunVP: M4 | null = null;
+    if (def.shadow === 'map' && !bare) { const pm = bones.find((b) => b.name === 'pelvis')?.m; sunVP = this.sunPass(pm ? pm[12] : eye[0], pm ? pm[13] : eye[1], pm ? pm[14] : eye[2], sun, n); }
+    if (def.paint) this.painter.begin(full[2], full[3]);
+    else if (rect) { gl.enable(gl.SCISSOR_TEST); gl.scissor(...rect); gl.viewport(...rect); } else { gl.disable(gl.SCISSOR_TEST); gl.viewport(0, 0, this.canvas.width, this.canvas.height); }
     gl.clearColor(fog[0], fog[1], fog[2], 1); gl.clearStencil(0); gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT | gl.STENCIL_BUFFER_BIT);
     if (def.sky && !bare) {
       gl.disable(gl.DEPTH_TEST); gl.useProgram(this.kprog); gl.uniformMatrix4fv(this.u.kuInv, false, invert(vp));
@@ -196,10 +243,11 @@ export class Renderer {
     gl.uniformMatrix4fv(this.u.uVP, false, vp); gl.uniform3f(this.u.uEye, eye[0], eye[1], eye[2]);
     gl.uniform3fv(this.u.uFog, fog); gl.uniform1f(this.u.uFar, far); gl.uniform1f(this.u.uFogNear, def.fogNear ?? 0.3); gl.uniform1i(this.u.uLook, LOOKS.indexOf(def.name));
     { const l = Math.hypot(sun[0], sun[1], sun[2]); gl.uniform3f(this.u.uSun, sun[0] / l, sun[1] / l, sun[2] / l); }
+    gl.activeTexture(gl.TEXTURE3); gl.bindTexture(gl.TEXTURE_2D, this.smap); gl.uniform1i(this.u.uShadowMap, 3); gl.activeTexture(gl.TEXTURE0);
+    gl.uniform1i(this.u.uMask, def.paint ? 1 : 0); gl.uniform1i(this.u.uShadowOn, sunVP ? 1 : 0); if (sunVP) gl.uniformMatrix4fv(this.u.uSunVP, false, sunVP);
     this.tris = 0;
     if (!bare) for (const c of this.built.values()) { gl.bindVertexArray(c.vao); gl.drawArrays(gl.TRIANGLES, 0, c.n); this.tris += c.n / 3; }
-    const n = figureMesh(bones, this.figData);
-    gl.bindVertexArray(this.fig.vao); gl.bindBuffer(gl.ARRAY_BUFFER, this.fig.buf); gl.bufferSubData(gl.ARRAY_BUFFER, 0, this.figData);
+    gl.bindVertexArray(this.fig.vao);
     gl.drawArrays(gl.TRIANGLES, 0, n); this.tris += n / 3;
     const kind = def.shadow ?? 'disc';
     if (kind === 'cast' && shadow.a > 0 && bones.length) this.cast(vp, bones, sun, def.shade ?? [0.1, 0.1, 0.15, 0.35], n);
@@ -210,6 +258,7 @@ export class Renderer {
       gl.depthMask(true);
     }
     gl.bindVertexArray(null);
+    if (def.paint) this.painter.finish(full, invert(vp), def.paint);
   }
 
   /**
@@ -295,4 +344,11 @@ function invert(m: M4): Float32Array {
   o[8] = (a[4] * b10 - a[5] * b08 + a[7] * b06) * k; o[9] = (a[1] * b08 - a[0] * b10 - a[3] * b06) * k; o[10] = (a[12] * b04 - a[13] * b02 + a[15] * b00) * k; o[11] = (a[9] * b02 - a[8] * b04 - a[11] * b00) * k;
   o[12] = (a[5] * b07 - a[4] * b09 - a[6] * b06) * k; o[13] = (a[0] * b09 - a[1] * b07 + a[2] * b06) * k; o[14] = (a[13] * b01 - a[12] * b03 - a[14] * b00) * k; o[15] = (a[8] * b03 - a[9] * b01 + a[10] * b00) * k;
   return o;
+}
+
+/** the sun's shadow map's size, texels a side */
+const SMAP = 2048;
+/** an orthographic projection (column-major) */
+function ortho(l: number, r: number, b: number, t: number, n: number, f: number): M4 {
+  const o = new Float32Array(16); o[0] = 2 / (r - l); o[5] = 2 / (t - b); o[10] = -2 / (f - n); o[12] = -(r + l) / (r - l); o[13] = -(t + b) / (t - b); o[14] = -(f + n) / (f - n); o[15] = 1; return o;
 }

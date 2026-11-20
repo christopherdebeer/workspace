@@ -14,6 +14,7 @@
  *   gouache  painted: weathered concrete, copings, windows, a lavender haze, the figure dressed (looks/gouache.ts)
  */
 import { gouache } from './looks/gouache';
+import type { PaintSettings } from './paint';
 
 export interface LookDef {
   name: string;
@@ -25,8 +26,11 @@ export interface LookDef {
   sky?: { top: [number, number, number]; horizon: [number, number, number]; clouds?: number };
   /** the way the light comes from (toward it, unit) */
   sun?: [number, number, number];
-  /** the figure's shadow: a soft disc under it, its own shape cast along the light, or none */
-  shadow?: 'disc' | 'cast' | 'none';
+  /** the figure's shadow: a soft disc under it, its own shape cast along the light, or none; 'map': everything casts
+   * along the sun (the buildings onto each other, the figure onto all of it), for the look to use (sunLit) */
+  shadow?: 'disc' | 'cast' | 'map' | 'none';
+  /** painted in screen space after it's drawn (paint.ts): strokes, edges, paper */
+  paint?: PaintSettings;
   /** its colour and how dark, for a cast shadow */
   shade?: [number, number, number, number];
   /** false: the working guides (holds, the plan's lines) aren't drawn over it, to be looked at as itself */
@@ -42,6 +46,16 @@ struct Surf {
   vec3 bary; vec3 eye;         // where in its triangle; where it's seen from
 };
 uniform vec3 uSun;
+uniform highp sampler2DShadow uShadowMap; uniform mat4 uSunVP; uniform int uShadowOn;
+// (how much the sun reaches this point (0..1): the shadow map, softened over a few texels; 1 where there's none)
+float sunLit(vec3 p, vec3 n) {
+  if (uShadowOn == 0) return 1.0;
+  vec4 q = uSunVP * vec4(p + n * 0.06, 1.0); vec3 c = q.xyz / q.w * 0.5 + 0.5;
+  if (any(lessThan(c.xy, vec2(0.0))) || any(greaterThan(c.xy, vec2(1.0)))) return 1.0;
+  float s = 0.0, t = 1.0 / 2048.0;
+  for (int j = -1; j <= 1; j++) for (int i = -1; i <= 1; i++) s += texture(uShadowMap, vec3(c.xy + vec2(i, j) * t * 1.5, c.z - 0.0015));
+  return s / 9.0;
+}
 float line(float x, float period) {
   float d = abs(fract(x / period + 0.5) - 0.5) * period, w = fwidth(x);
   return (1.0 - smoothstep(0.0, 1.5 * w, d)) * clamp(0.12 / w, 0.0, 1.0);

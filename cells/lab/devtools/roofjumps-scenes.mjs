@@ -2,7 +2,7 @@
 // and (with --film) filmed from the chase eye and from the side into devtools/out/scenes/, with a report (report.json,
 // and report.html: a contact sheet of every scene, what it asks, what it should do and whether it did).
 //
-//   node cells/lab/devtools/roofjumps-scenes.mjs [keys…] [--film] [--look=gouache]
+//   node cells/lab/devtools/roofjumps-scenes.mjs [keys…] [--film] [--look=gouache] [--eye=painter]
 import { build } from 'esbuild';
 import { mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 const lab = new URL('../client/roofjumps/', import.meta.url).pathname;
@@ -12,6 +12,8 @@ const { SCENES, runScene, judge, sequence } = await import('data:text/javascript
 const args = process.argv.slice(2), keys = args.filter((a) => !a.startsWith('--')), film = args.includes('--film');
 // (`--look=<name>`: filmed in that look (looks.ts), into devtools/out/scenes-<name>/, the checks and report as ever)
 const look = args.find((a) => a.startsWith('--look='))?.slice(7) ?? '';
+// (`--eye=painter`: the chase film through the painter's camera (main.ts CAMERAS): high, a long lens)
+const EYES = { painter: '&fov=30&eyeDist=10&eyePitch=34&rush=2&side=20' }, eye = EYES[args.find((a) => a.startsWith('--eye='))?.slice(6)] ?? '';
 const chosen = keys.length ? SCENES.filter((s) => keys.includes(s.key)) : SCENES;
 mkdirSync(OUT, { recursive: true });
 const report = [];
@@ -27,7 +29,7 @@ if (film) {
   process.env.EXPERIMENT = 'roofjumps'; process.env.READY = '__roofjumps';
   const { withWood } = await import('./harness.mjs');
   await withWood(async (lab) => {
-    for (const s of chosen) for (const [view, extra] of [['chase', ''], ['side', '&side=90&zoom=1.1'], ...(s.eye ? [['room', '&fixed']] : [])]) {
+    for (const s of chosen) for (const [view, extra] of [['chase', eye], ['side', '&side=90&zoom=1.1'], ...(s.eye ? [['room', '&fixed']] : [])]) {
       // (close round its first takeoff, if it asks: a flight is a third of a second; else across the whole run)
       const run0 = s.close ? runScene(s) : null, t0 = run0 ? (typeof s.close === 'function' ? s.close(run0) : run0.ups[0] ? Math.max(0, run0.ups[0].t - 0.25) : 0) : 0;
       const n = 16, every = s.close ? 1 / 30 : s.seconds / n;

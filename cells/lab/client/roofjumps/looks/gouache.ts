@@ -6,8 +6,9 @@
  * edge with its shadow under it; windows in storeys and bays on the larger walls (dark panes, a pale frame and sill), few
  * enough to give scale and not crowd the figure; rooftop units with their louvres; a warm low sun and cool shade; the
  * distance going to lavender. The figure dressed (a dark jacket, darker trousers, pale shoes, dark hair), drawn with a
- * darker edge so it holds against the walls. Its shadow is cast: its own shape on the roof under it and on the nearest
- * wall the light throws it onto, to show how much air is between them.
+ * darker edge so it holds against the walls. The light is a shadow map from the sun (the buildings throw their shadows
+ * across each other, the figure onto all of it), massed into two values; and the frame is painted after (paint.ts):
+ * strokes that follow the picture, edges where pigment pools, a paper grain.
  *
  * Only paint. What can be held (a sill, a pipe, a coping) is still the city's holds (city.ts), and the windows here are
  * drawn where none is: the next step is one placement giving both the painted feature and the thing a hand can take.
@@ -19,7 +20,8 @@ export const gouache: LookDef = {
   fog: [0.77, 0.74, 0.83], fogNear: 0.12,
   sky: { top: [0.58, 0.56, 0.7], horizon: [0.89, 0.83, 0.84], clouds: 0.5 },
   sun: [-0.55, 0.6, 0.58],
-  shadow: 'cast', shade: [0.19, 0.17, 0.28, 0.5], guides: false,
+  shadow: 'map', guides: false,
+  paint: { brush: 9, far: 1.8, edges: 0.7, colourEdges: 0.45, wobble: 2.2, grain: 0.7 },
   glsl: /* glsl */ `
 vec3 concrete(float seed) {
   vec3 warm = vec3(0.64, 0.62, 0.58), green = vec3(0.57, 0.61, 0.6), cool = vec3(0.6, 0.61, 0.63), terra = vec3(0.67, 0.55, 0.51);
@@ -35,12 +37,15 @@ vec3 dressed(float kind, vec3 n) {
 vec3 look(Surf s) {
   vec3 n = s.n, sun = normalize(uSun), V = normalize(s.eye - s.pos);
   float ndl = dot(n, sun);
-  // (warm where the low sun reaches, cool in shade)
-  vec3 light = mix(vec3(0.79, 0.81, 0.9), vec3(1.04, 0.99, 0.93), smoothstep(-0.05, 0.35, ndl));
+  // (the light as a painter masses it: in the sun or not, a narrow edge between; lit planes warm, shadow one cool colour,
+  // a little warmth bounced up into the shadowed walls)
+  float inSun = smoothstep(0.0, 0.18, ndl) * sunLit(s.pos, n);
+  float mass = smoothstep(0.38, 0.62, inSun);
+  vec3 light = mix(vec3(0.7, 0.71, 0.79) + vec3(0.06, 0.04, 0.0) * (1.0 - abs(n.y)) * smoothstep(0.5, -0.5, n.y + 0.2), vec3(1.05, 0.99, 0.91), mass);
   if (s.tag == 6) {
     // (the figure: two tones, and a darker edge where it turns away, so it reads against the walls)
     vec3 c = dressed(s.seed, n);
-    float l = smoothstep(-0.1, 0.25, ndl);
+    float l = smoothstep(0.35, 0.65, smoothstep(-0.1, 0.25, ndl) * sunLit(s.pos, n));
     c = mix(c * vec3(0.55, 0.57, 0.68), c * 1.04, l);
     return c * (1.0 - 0.35 * smoothstep(0.55, 0.95, 1.0 - abs(dot(n, V))));
   }
