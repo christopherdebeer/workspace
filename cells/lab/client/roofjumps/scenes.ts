@@ -262,6 +262,24 @@ export const SCENES: Scene[] = [
     ],
   },
   {
+    key: 'paint-alley', title: 'The painted alley: an approach, a correction in the air, a catch',
+    asks: 'The replay the brushwork looks are judged on (strokes.ts): a roof approach, the stick swung left in the air and back, and a lip caught short across an alley to a higher roof, a tall dark block beyond it and another to the left, so a dry gap in a near wall has something dark behind it to leak. Does the runner still catch, hang and pull up?',
+    watch: 'In each look: where the hand is going and when it closes on the coping; which shoe bears weight; the air between the body and the far wall before the catch; the far wall\'s paint staying planted as the eye swings.',
+    course: { boxes: [B(24, 40, 2, 18, 12), B(22, 42, 22.2, 40, 14.5), B(20, 44, 46, 60, 27), B(6, 19, 6, 38, 21), B(42, 54, 0, 16, 9)], start: { x: 32, z: 4 } }, seconds: 6,
+    eye: [44, 16.5, 13],
+    input: (t, r, m) => {
+      if (!m.hung && r.move === 'hang') m.hung = t;
+      if (!m.air && r.state === 'air') m.air = t;
+      if (r.y > 14.4 && r.state === 'ground') return r.z > 30 ? none : go(0, 0.5);
+      if (m.air && !m.hung) return t < m.air + 0.22 ? go(24, 0.6) : go(0, 0.6);
+      return !m.hung ? go(0, 0.6) : t < m.hung + 1.2 ? none : go(0);
+    },
+    should: [...commonShoulds,
+      { says: 'the lip is caught', check: (r) => ok(count(r, 'hang') > 0, seq(r)) },
+      { says: 'pressed in, it pulls up onto the higher roof', check: (r) => ok(r.runner.y > 14.4 && r.runner.state === 'ground', `ended ${r.runner.state} at y ${r.runner.y.toFixed(1)}`) },
+    ],
+  },
+  {
     key: 'hang-intents', title: 'Hanging: stay, pass along, go up',
     asks: 'Caught as above; then the stick asks three things in turn: nothing (stay), along the wall (shimmy along the lip, hand over hand), then into it (up). Can the player get, and recognise, each?',
     watch: 'Whether steering along the wall moves the hands along the lip (it should), or lets go.',

@@ -66,6 +66,7 @@ rd.palette = character.palette;
 const brushHeading = runner.heading;
 // (`from=x,z`: start there instead, on whatever's there: the street, to see it find its way up)
 if (q.has('from')) { const [fx, fz] = q.get('from')!.split(',').map(Number); runner.x = fx; runner.z = fz; runner.y = city.heightAt(fx, fz); }
+if (q.has('cost')) rd.strokes.cost = { depth: 0, city: 0, shadow: 0, figure: 0, stamps: 0, chunks: 0 };
 rd.radius = Math.max(1, Math.min(8, Number(q.get('far') ?? 4) | 0));
 if ((LOOKS as readonly string[]).includes(q.get('look') ?? '')) rd.look = q.get('look') as Look;
 rd.resize(); addEventListener('resize', () => rd.resize());
@@ -440,6 +441,11 @@ requestAnimationFrame(frame);
     plan: thinking && { ahead: words(thinking.primary), score: thinking.primary.score, left: thinking.left && { off: thinking.left.off, score: thinking.left.score }, right: thinking.right && { off: thinking.right.off, score: thinking.right.score }, best: thinking.best.off },
   }),
   tune: TUNE,
+  /** brushwork: what each pass cost last frame (with `?cost`), and how many stamps were drawn */
+  cost: () => ({ ...(rd.strokes.cost ?? {}), stamps: rd.strokes.stamps }),
+  /** brushwork: count the paint's fragments a pixel, pass by pass, on the next frame (read it back after with `overdraw`) */
+  count: (on: boolean) => { rd.strokes.counting = on; },
+  overdraw: () => rd.strokes.overdraw,
   /** set a dial by its key */
   set: (key: string, v: number) => { TUNE[key] = v; remember(); pal.refresh(); thought = -1; },
   /** run on (at once) until it's in that move, that far through it, and hold there, the eye behind it; false if it never came */

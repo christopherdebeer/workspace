@@ -5,8 +5,8 @@
 import { build } from 'esbuild';
 import assert from 'node:assert/strict';
 const lab = new URL('../client/roofjumps/', import.meta.url).pathname;
-const out = await build({ stdin: { contents: `export * from './city'; export * from './runner'; export * from './rig'; export * from './mesh'; export * from './plan'; export * from './tune'; export * from './brush'; export * from './scenes'; export * from './character';`, resolveDir: lab, loader: 'ts' }, bundle: true, write: false, format: 'esm', platform: 'node' });
-const { plan, foresee, TUNE, HOUSE, DIALS, City, Runner, Rig, CHUNK, STOREY, TAG, VERTEX, chunkMesh, figureMesh, FIGURE, FIGURE_BASE, brushInput, BRUSH_SECONDS, SCENES, runScene, judge, CHARACTERS, bodyOf } = await import('data:text/javascript;base64,' + Buffer.from(out.outputFiles[0].text).toString('base64'));
+const out = await build({ stdin: { contents: `export * from './city'; export * from './runner'; export * from './rig'; export * from './mesh'; export * from './plan'; export * from './tune'; export * from './brush'; export * as STROKES from './strokes'; export { strokeGouacheRules } from './looks/stroke-gouache'; export { sumiRules } from './looks/sumi'; export * from './scenes'; export * from './character';`, resolveDir: lab, loader: 'ts' }, bundle: true, write: false, format: 'esm', platform: 'node' });
+const { plan, foresee, TUNE, HOUSE, DIALS, City, Runner, Rig, CHUNK, STOREY, TAG, VERTEX, chunkMesh, figureMesh, FIGURE, FIGURE_BASE, brushInput, BRUSH_SECONDS, SCENES, runScene, judge, CHARACTERS, bodyOf, STROKES, strokeGouacheRules, sumiRules } = await import('data:text/javascript;base64,' + Buffer.from(out.outputFiles[0].text).toString('base64'));
 
 // the same chunk, whatever was made before it
 {
@@ -631,3 +631,24 @@ console.log('roofjumps: ok');
   assert.ok(child.blocks.head.y1 / 1.3 > b0.blocks.head.y1 / 1.82 && child.reachScale < 0.8, 'a child: a larger head for its height, a shorter reach');
   console.log(`characters: ${rows.join('; ')}`);
 }
+
+// brushwork (strokes.ts): a long mark tiled into stamps that meet exactly, all on one anchor; a chunk's marks the same
+// whenever they're made; a far chunk's marks a subset of its near ones; every lip a hand can catch kept (rank 1) in
+// stroke gouache; sumi far sparser than gouache
+{
+  const { deposit, STAMP, showsTo } = STROKES, f = [];
+  deposit({ layer: 0, kind: 0, a: [0, 0, 0], b: [10, 0, 0], n: [0, 1, 0], width: 0.3, col: [1, 1, 1], alpha: 1, key: 'k', seg: 3 }, f);
+  const n = f.length / STAMP; assert.equal(n, 4);
+  for (let i = 0; i < n; i++) { assert.equal(f[i * STAMP + 23], i / n); assert.equal(f[i * STAMP + 27], (i + 1) / n); assert.deepEqual(f.slice(i * STAMP + 16, i * STAMP + 19), f.slice(16, 19)); }
+  const sc = SCENES.find((s) => s.key === 'paint-alley'), city = new City(1, false, sc.course), ch = city.chunk(1, 0);
+  const marks = (R, keeps = () => true) => { const ms = []; R.city(ch, city, (m) => { if (keeps(m.rank ?? 0.5)) ms.push(m); }, keeps); return ms; };
+  const a = marks(strokeGouacheRules), b = marks(strokeGouacheRules);
+  assert.deepEqual(a.map((m) => [m.key, m.a, m.b]), b.map((m) => [m.key, m.a, m.b]), 'a chunk paints the same twice');
+  const keeps = (r) => showsTo(r, 256) > 64, far = marks(strokeGouacheRules, keeps), keys = new Set(a.map((m) => m.key));
+  assert.ok(far.length < a.length * 0.6 && far.every((m) => keys.has(m.key) || m.key.includes('/p')), `far ${far.length} of ${a.length}`);
+  const lips = ch.holds.filter((h) => h.kind === 'edge').length, kept = far.filter((m) => m.key.endsWith('/cap') && m.rank === 1).length;
+  assert.ok(kept > 0 && kept <= lips, `building lips kept far: ${kept} of ${lips} edge holds`);
+  assert.ok(marks(sumiRules).length * 8 < a.length, 'sumi leaves most of it out');
+}
+console.log('roof jumps: brushwork ok');
+

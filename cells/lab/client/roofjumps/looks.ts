@@ -12,8 +12,13 @@
  *   tags     what each face is, as a colour
  *   normals  which way each face faces
  *   gouache  painted: weathered concrete, copings, windows, a lavender haze, the figure dressed (looks/gouache.ts)
+ *   stroke-gouache  every visible mark a brush stroke, opaque and chalky (strokes.ts, looks/stroke-gouache.ts)
+ *   sumi     the same strokes, most left out: ink lips, a wash, the paper (looks/sumi.ts)
  */
 import { gouache } from './looks/gouache';
+import { strokeGouache } from './looks/stroke-gouache';
+import { sumi } from './looks/sumi';
+import type { StrokeRules } from './strokes';
 import type { PaintSettings } from './paint';
 
 export interface LookDef {
@@ -35,6 +40,9 @@ export interface LookDef {
   shade?: [number, number, number, number];
   /** false: the working guides (holds, the plan's lines) aren't drawn over it, to be looked at as itself */
   guides?: boolean;
+  /** brushwork: drawn as brush strokes laid on the solid world, not as its shaded faces (strokes.ts); the rules that
+   * choose and load them */
+  strokes?: StrokeRules;
 }
 
 /** What every look can use: what the mesh says of a face, and some shared means of drawing it. */
@@ -83,4 +91,4 @@ const tags: LookDef = { name: 'tags', glsl: `vec3 look(Surf s) { float h = float
 const normals: LookDef = { name: 'normals', glsl: `vec3 look(Surf s) { return s.n * 0.5 + 0.5; }` };
 
 /** the looks, in the order the page cycles them */
-export const LOOK_DEFS: LookDef[] = [grid, clay, wire, tags, normals, gouache];
+export const LOOK_DEFS: LookDef[] = [grid, clay, wire, tags, normals, gouache, strokeGouache, sumi];

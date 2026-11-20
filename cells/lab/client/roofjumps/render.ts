@@ -13,6 +13,8 @@ import type { M4 } from './m4';
 
 import { LOOK_DEFS, LOOK_PRELUDE } from './looks';
 import { Painter } from './paint';
+import { StrokePainter } from './strokes';
+import type { V } from './strokes';
 import { lookAt, mul } from './m4';
 import type { LookDef } from './looks';
 
@@ -126,6 +128,7 @@ export class Renderer {
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_COMPARE_MODE, gl.COMPARE_REF_TO_TEXTURE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_COMPARE_FUNC, gl.LEQUAL);
     this.sfb = gl.createFramebuffer()!; gl.bindFramebuffer(gl.FRAMEBUFFER, this.sfb); gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.TEXTURE_2D, this.smap, 0); gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     this.painter = new Painter(gl, (vs, fs, a) => this.program(vs, fs, a));
+    this.strokes = new StrokePainter(gl, (vs, fs, a) => this.program(vs, fs, a));
     this.cprog = this.program(CVS, CFS, ['aPos']); for (const n of ['uVP', 'uL', 'uPlane', 'uMin', 'uMax', 'uShade']) this.u['c' + n] = gl.getUniformLocation(this.cprog, n);
     for (const n of ['uVP', 'uAt', 'uA']) this.u['s' + n] = gl.getUniformLocation(this.sprog, n);
     this.lprog = this.program(LVS, LFS, ['aPos', 'aCol']);
@@ -149,6 +152,10 @@ export class Renderer {
     gl.bindVertexArray(null);
   }
   private screen: WebGLVertexArrayObject;
+  /** the brushwork looks' painter (strokes.ts) */
+  strokes!: StrokePainter;
+  /** brushwork: how far detail is kept (1: as the rules rank it) */
+  detail = 1;
   private dprog!: WebGLProgram; private smap!: WebGLTexture; private sfb!: WebGLFramebuffer; private painter!: Painter;
   /**
    * The sun's view: an orthographic box along the light, centred on (x, y, z) (snapped to its texels, so the shadows don't
@@ -220,7 +227,7 @@ export class Renderer {
   pending(x: number, z: number): number {
     const cx = Math.floor(x / CHUNK), cz = Math.floor(z / CHUNK), R = this.radius; let n = 0;
     for (let a = -R; a <= R; a++) for (let b = -R; b <= R; b++) if (!this.built.has(`${cx + a},${cz + b}`)) n++;
-    return n;
+    return n + (this.def.strokes ? this.strokes.missing([...this.built.keys()]) : 0);
   }
 
   /** The city, the figure, its shadow. `rect` (pixels, from the bottom left): into that part of the canvas only; `bare`: no city, the figure alone. */
@@ -232,6 +239,7 @@ export class Renderer {
     gl.bindBuffer(gl.ARRAY_BUFFER, this.fig.buf); gl.bufferSubData(gl.ARRAY_BUFFER, 0, this.figData);
     let sunVP: M4 | null = null;
     if (def.shadow === 'map' && !bare) { const pm = bones.find((b) => b.name === 'pelvis')?.m; sunVP = this.sunPass(pm ? pm[12] : eye[0], pm ? pm[13] : eye[1], pm ? pm[14] : eye[2], sun, n); }
+    if (def.strokes) { this.brushwork(vp, eye, bones, n, sunVP, rect, bare); return; }
     if (def.paint) this.painter.begin(full[2], full[3]);
     else if (rect) { gl.enable(gl.SCISSOR_TEST); gl.scissor(...rect); gl.viewport(...rect); } else { gl.disable(gl.SCISSOR_TEST); gl.viewport(0, 0, this.canvas.width, this.canvas.height); }
     gl.clearColor(fog[0], fog[1], fog[2], 1); gl.clearStencil(0); gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT | gl.STENCIL_BUFFER_BIT);
@@ -261,6 +269,26 @@ export class Renderer {
     }
     gl.bindVertexArray(null);
     if (def.paint) this.painter.finish(full, invert(vp), def.paint);
+  }
+
+  /** A brushwork look's frame (strokes.ts): paper, the solid world in depth, the strokes. */
+  private brushwork(vp: M4, eye: number[], bones: Bone[], figN: number, sunVP: M4 | null, rect: [number, number, number, number] | undefined, bare: boolean): void {
+    const gl = this.gl, rules = this.def.strokes!;
+    if (rect) { gl.enable(gl.SCISSOR_TEST); gl.scissor(...rect); gl.viewport(...rect); } else { gl.disable(gl.SCISSOR_TEST); gl.viewport(0, 0, this.canvas.width, this.canvas.height); }
+    gl.clearColor(rules.paper[0], rules.paper[1], rules.paper[2], 1); gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT | gl.STENCIL_BUFFER_BIT);
+    if (!bare) this.strokes.sync([...this.built.keys()], this.city, rules, 3, Math.floor(eye[0] / CHUNK), Math.floor(eye[2] / CHUNK), this.radius * CHUNK);
+    gl.activeTexture(gl.TEXTURE3); gl.bindTexture(gl.TEXTURE_2D, this.smap); gl.activeTexture(gl.TEXTURE0);
+    const pm = bones.find((b) => b.name === 'pelvis')?.m, sunC: V = pm ? [pm[12], pm[13], pm[14]] : [eye[0], eye[1], eye[2]];
+    this.tris = 0;
+    this.strokes.draw({
+      vp, eye, far: this.radius * CHUNK, rules, city: this.city, bones, palette: this.palette, sunVP, sunC, detail: this.detail, bare,
+      solid: () => {
+        gl.useProgram(this.dprog); gl.uniformMatrix4fv(this.u.duVP, false, vp); gl.enable(gl.CULL_FACE);
+        if (!bare) for (const c of this.built.values()) { gl.bindVertexArray(c.vao); gl.drawArrays(gl.TRIANGLES, 0, c.n); this.tris += c.n / 3; }
+        gl.bindVertexArray(this.fig.vao); gl.drawArrays(gl.TRIANGLES, 0, figN); gl.disable(gl.CULL_FACE);
+      },
+    });
+    gl.bindVertexArray(null);
   }
 
   /**
