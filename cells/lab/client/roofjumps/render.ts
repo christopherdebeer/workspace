@@ -1,15 +1,9 @@
 /**
- * Roof Jumps' renderer: deliberately the plainest one that shows the geometry. One program, one grey, one light, fog
- * to the page's colour. The geometry carries no look of its own (see mesh.ts), so everything about how it's drawn is
- * in this file's fragment shader, as a `look`:
- *
- *   grid     clay, with the lattice the city is built on drawn faintly over it (a metre, a storey): the default
- *   clay     flat grey, lit
- *   wire     every triangle's edges, nothing else
- *   tags     what each face is, as a colour
- *   normals  which way each face faces
- *
- * A new aesthetic is a new look here, or a new renderer over the same chunks and bones.
+ * Roof Jumps' renderer: one program over the city's chunks and the figure's bones. The geometry carries no look of its
+ * own (mesh.ts says what a face is, and where on its box); how it's drawn is a look (looks.ts), each self-contained,
+ * the program built from all of them and the one asked for picked when drawing. Around them: the haze the distance
+ * fades into, a sky (a look's, else the haze), and the figure's shadow (a disc under it, or its own shape cast along the
+ * light onto the roof under it and the nearest wall).
  */
 import type { City } from './city';
 import { CHUNK } from './city';
@@ -17,48 +11,60 @@ import { FIGURE, VERTEX, chunkMesh, figureMesh } from './mesh';
 import type { Bone } from './rig';
 import type { M4 } from './m4';
 
-export const LOOKS = ['grid', 'clay', 'wire', 'tags', 'normals'] as const;
-export type Look = (typeof LOOKS)[number];
+import { LOOK_DEFS, LOOK_PRELUDE } from './looks';
+import type { LookDef } from './looks';
+
+/** the looks by name, in the order the page cycles them */
+export const LOOKS = LOOK_DEFS.map((d) => d.name);
+export type Look = string;
 
 const VS = `#version 300 es
-in vec3 aPos; in vec3 aNor; in float aTag;
+in vec3 aPos; in vec3 aNor; in float aTag; in vec4 aRect; in vec2 aSpan; in float aSeed;
 uniform mat4 uVP;
-out vec3 vPos; flat out vec3 vNor; flat out float vTag; out vec3 vBary;
+out vec3 vPos; flat out vec3 vNor; flat out float vTag; out vec3 vBary; flat out vec4 vRect; flat out vec2 vSpan; flat out float vSeed;
 void main() {
-  vPos = aPos; vNor = aNor; vTag = aTag;
+  vPos = aPos; vNor = aNor; vTag = aTag; vRect = aRect; vSpan = aSpan; vSeed = aSeed;
   int k = gl_VertexID % 3; vBary = vec3(k == 0, k == 1, k == 2);
   gl_Position = uVP * vec4(aPos, 1.0);
 }`;
+/** the program's fragment shader: the prelude, each look as its own function, and the one asked for picked */
 const FS = `#version 300 es
 precision highp float;
-in vec3 vPos; flat in vec3 vNor; flat in float vTag; in vec3 vBary;
-uniform vec3 uEye; uniform vec3 uFog; uniform float uFar; uniform int uLook;
+in vec3 vPos; flat in vec3 vNor; flat in float vTag; in vec3 vBary; flat in vec4 vRect; flat in vec2 vSpan; flat in float vSeed;
+uniform vec3 uEye; uniform vec3 uFog; uniform float uFar; uniform float uFogNear; uniform int uLook;
 out vec4 o;
-float line(float x, float period) {
-  float d = abs(fract(x / period + 0.5) - 0.5) * period, w = fwidth(x);
-  return (1.0 - smoothstep(0.0, 1.5 * w, d)) * clamp(0.12 / w, 0.0, 1.0);
-}
+${LOOK_PRELUDE}
+${LOOK_DEFS.map((d, i) => `// ─── ${d.name}\n${d.glsl.replace(/\bvec3 look\(/, `vec3 look_${i}(`)}`).join('\n')}
 void main() {
-  int tag = int(vTag + 0.5);
-  vec3 n = normalize(vNor);
-  float lit = 0.64 + 0.36 * dot(n, normalize(vec3(0.42, 0.8, 0.28)));
-  float base = tag == 0 ? 0.40 : tag == 6 ? 0.13 : tag == 1 ? 0.74 : 0.69;
-  vec3 col = vec3(base * lit);
-  if (uLook == 0 && tag != 6) {
-    // (the lattice: a metre across a top, a storey up a side and four metres along it)
-    float g = abs(n.y) > 0.5 ? max(line(vPos.x, 1.0), line(vPos.z, 1.0)) * 0.5 + max(line(vPos.x, 4.0), line(vPos.z, 4.0)) * 0.5
-      : max(line(vPos.y, 3.0), line(abs(n.x) > 0.5 ? vPos.z : vPos.x, 4.0));
-    col *= 1.0 - 0.2 * g;
-  } else if (uLook == 2) {
-    vec3 w = fwidth(vBary), e = smoothstep(vec3(0.0), 1.2 * w, vBary);
-    col = mix(vec3(0.12), uFog, min(e.x, min(e.y, e.z)));
-  } else if (uLook == 3) {
-    float h = float(tag) / 9.0;
-    col = (0.55 + 0.45 * cos(6.2832 * (h + vec3(0.0, 0.33, 0.67)))) * lit;
-  } else if (uLook == 4) col = n * 0.5 + 0.5;
+  Surf s = Surf(vPos, normalize(vNor), int(vTag + 0.5), vRect, vSpan, vSeed, vBary, uEye);
+  vec3 col = vec3(0.0);
+  ${LOOK_DEFS.map((_, i) => `${i ? 'else ' : ''}if (uLook == ${i}) col = look_${i}(s);`).join('\n  ')}
   float dist = length(vPos - uEye);
-  o = vec4(mix(col, uFog, smoothstep(uFar * 0.3, uFar, dist)), 1.0);
+  o = vec4(mix(col, uFog, smoothstep(uFar * uFogNear, uFar, dist)), 1.0);
 }`;
+// (a sky behind: from straight up to the horizon, a look's; the eye's ray from each pixel)
+const KVS = `#version 300 es
+in vec2 aPos; out vec2 vNdc; void main() { vNdc = aPos; gl_Position = vec4(aPos, 0.9999, 1.0); }`;
+const KFS = `#version 300 es
+precision highp float; in vec2 vNdc; uniform mat4 uInv; uniform vec3 uTop; uniform vec3 uHor; uniform float uClouds; out vec4 o;
+${LOOK_PRELUDE}
+void main() {
+  vec4 a = uInv * vec4(vNdc, -1.0, 1.0), b = uInv * vec4(vNdc, 1.0, 1.0); vec3 d = normalize(b.xyz / b.w - a.xyz / a.w);
+  float up = clamp(d.y, 0.0, 1.0); vec3 c = mix(uHor, uTop, pow(up, 0.6));
+  // (soft painted cloud, streaked along the horizon)
+  if (d.y > 0.02) { vec2 p = d.xz / (d.y + 0.15); float k = fbm(p * vec2(0.9, 2.2)); c = mix(c, uHor * 1.06 + 0.03, smoothstep(0.45, 0.8, k) * uClouds * (1.0 - up)); }
+  o = vec4(c, 1.0);
+}`;
+// (the figure's own shape thrown along the light onto a plane, kept within that face of what it falls on)
+const CVS = `#version 300 es
+in vec3 aPos; uniform mat4 uVP; uniform vec3 uL; uniform vec4 uPlane; out vec3 vW;
+void main() {
+  float t = (uPlane.w - dot(uPlane.xyz, aPos)) / min(-0.05, dot(uPlane.xyz, uL));
+  vec3 p = aPos + uL * max(0.0, t) + uPlane.xyz * 0.015; vW = p; gl_Position = uVP * vec4(p, 1.0);
+}`;
+const CFS = `#version 300 es
+precision highp float; in vec3 vW; uniform vec3 uMin; uniform vec3 uMax; uniform vec4 uShade; out vec4 o;
+void main() { if (any(lessThan(vW, uMin)) || any(greaterThan(vW, uMax))) discard; o = uShade; }`;
 // (the figure's shadow: a soft disc on whatever is under it; without it a leap can't be read)
 const SVS = `#version 300 es
 in vec2 aPos; uniform mat4 uVP; uniform vec4 uAt; out vec2 vUv;
@@ -86,7 +92,7 @@ export class Renderer {
   /** how far is drawn, in chunks */
   radius = 4;
   fog: [number, number, number] = [0.8, 0.8, 0.79];
-  private prog: WebGLProgram; private sprog: WebGLProgram; private lprog: WebGLProgram;
+  private prog: WebGLProgram; private sprog: WebGLProgram; private lprog: WebGLProgram; private kprog: WebGLProgram; private cprog: WebGLProgram;
   private lvao: WebGLVertexArrayObject; private lbuf: WebGLBuffer; private ldata = new Float32Array(7 * 6 * 4096);
   private built = new Map<string, Built>();
   private fig: Built; private figData = new Float32Array(FIGURE); private disc: WebGLVertexArrayObject;
@@ -94,11 +100,13 @@ export class Renderer {
   tris = 0;
 
   constructor(readonly canvas: HTMLCanvasElement, readonly city: City) {
-    const gl = canvas.getContext('webgl2', { antialias: true });
+    const gl = canvas.getContext('webgl2', { antialias: true, stencil: true });
     if (!gl) throw new Error('WebGL2 is needed');
     this.gl = gl;
     this.prog = this.program(VS, FS); this.sprog = this.program(SVS, SFS);
-    for (const n of ['uVP', 'uEye', 'uFog', 'uFar', 'uLook']) this.u[n] = gl.getUniformLocation(this.prog, n);
+    for (const n of ['uVP', 'uEye', 'uFog', 'uFar', 'uFogNear', 'uLook', 'uSun']) this.u[n] = gl.getUniformLocation(this.prog, n);
+    this.kprog = this.program(KVS, KFS, ['aPos']); for (const n of ['uInv', 'uTop', 'uHor', 'uClouds']) this.u['k' + n] = gl.getUniformLocation(this.kprog, n);
+    this.cprog = this.program(CVS, CFS, ['aPos']); for (const n of ['uVP', 'uL', 'uPlane', 'uMin', 'uMax', 'uShade']) this.u['c' + n] = gl.getUniformLocation(this.cprog, n);
     for (const n of ['uVP', 'uAt', 'uA']) this.u['s' + n] = gl.getUniformLocation(this.sprog, n);
     this.lprog = this.program(LVS, LFS, ['aPos', 'aCol']);
     for (const n of ['uVP', 'uA']) this.u['l' + n] = gl.getUniformLocation(this.lprog, n);
@@ -114,9 +122,17 @@ export class Renderer {
     gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, 1, 1, -1, -1, 1, 1, -1, 1]), gl.STATIC_DRAW);
     gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
     gl.bindVertexArray(null);
+    this.screen = gl.createVertexArray()!;
+    gl.bindVertexArray(this.screen); gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+    gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+    gl.bindVertexArray(null);
   }
+  private screen: WebGLVertexArrayObject;
+  /** the look being drawn */
+  get def(): LookDef { return LOOK_DEFS.find((d) => d.name === this.look) ?? LOOK_DEFS[0]; }
 
-  private program(vs: string, fs: string, attribs = ['aPos', 'aNor', 'aTag']): WebGLProgram {
+  private program(vs: string, fs: string, attribs = ['aPos', 'aNor', 'aTag', 'aRect', 'aSpan', 'aSeed']): WebGLProgram {
     const gl = this.gl, p = gl.createProgram()!;
     for (const [t, src] of [[gl.VERTEX_SHADER, vs], [gl.FRAGMENT_SHADER, fs]] as const) {
       const s = gl.createShader(t)!; gl.shaderSource(s, src); gl.compileShader(s);
@@ -136,6 +152,9 @@ export class Renderer {
     gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 3, gl.FLOAT, false, S, 0);
     gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1, 3, gl.FLOAT, false, S, 12);
     gl.enableVertexAttribArray(2); gl.vertexAttribPointer(2, 1, gl.FLOAT, false, S, 24);
+    gl.enableVertexAttribArray(3); gl.vertexAttribPointer(3, 4, gl.FLOAT, false, S, 28);
+    gl.enableVertexAttribArray(4); gl.vertexAttribPointer(4, 2, gl.FLOAT, false, S, 44);
+    gl.enableVertexAttribArray(5); gl.vertexAttribPointer(5, 1, gl.FLOAT, false, S, 52);
     gl.bindVertexArray(null);
     return { vao, buf, n: data.length / VERTEX, cx, cz };
   }
@@ -164,25 +183,74 @@ export class Renderer {
 
   /** The city, the figure, its shadow. `rect` (pixels, from the bottom left): into that part of the canvas only; `bare`: no city, the figure alone. */
   draw(vp: M4, eye: number[], bones: Bone[], shadow: { x: number; y: number; z: number; r: number; a: number }, rect?: [number, number, number, number], bare = false): void {
-    const gl = this.gl, far = this.radius * CHUNK;
+    const gl = this.gl, far = this.radius * CHUNK, def = this.def, fog = def.fog ?? this.fog, sun = def.sun ?? [0.42, 0.8, 0.28];
     if (rect) { gl.enable(gl.SCISSOR_TEST); gl.scissor(...rect); gl.viewport(...rect); } else { gl.disable(gl.SCISSOR_TEST); gl.viewport(0, 0, this.canvas.width, this.canvas.height); }
-    gl.clearColor(this.fog[0], this.fog[1], this.fog[2], 1); gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+    gl.clearColor(fog[0], fog[1], fog[2], 1); gl.clearStencil(0); gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT | gl.STENCIL_BUFFER_BIT);
+    if (def.sky && !bare) {
+      gl.disable(gl.DEPTH_TEST); gl.useProgram(this.kprog); gl.uniformMatrix4fv(this.u.kuInv, false, invert(vp));
+      gl.uniform3fv(this.u.kuTop, def.sky.top); gl.uniform3fv(this.u.kuHor, def.sky.horizon); gl.uniform1f(this.u.kuClouds, def.sky.clouds ?? 0);
+      gl.bindVertexArray(this.screen); gl.drawArrays(gl.TRIANGLES, 0, 3);
+    }
     gl.enable(gl.DEPTH_TEST); gl.enable(gl.CULL_FACE); gl.disable(gl.BLEND);
     gl.useProgram(this.prog);
     gl.uniformMatrix4fv(this.u.uVP, false, vp); gl.uniform3f(this.u.uEye, eye[0], eye[1], eye[2]);
-    gl.uniform3fv(this.u.uFog, this.fog); gl.uniform1f(this.u.uFar, far); gl.uniform1i(this.u.uLook, LOOKS.indexOf(this.look));
+    gl.uniform3fv(this.u.uFog, fog); gl.uniform1f(this.u.uFar, far); gl.uniform1f(this.u.uFogNear, def.fogNear ?? 0.3); gl.uniform1i(this.u.uLook, LOOKS.indexOf(def.name));
+    { const l = Math.hypot(sun[0], sun[1], sun[2]); gl.uniform3f(this.u.uSun, sun[0] / l, sun[1] / l, sun[2] / l); }
     this.tris = 0;
     if (!bare) for (const c of this.built.values()) { gl.bindVertexArray(c.vao); gl.drawArrays(gl.TRIANGLES, 0, c.n); this.tris += c.n / 3; }
     const n = figureMesh(bones, this.figData);
     gl.bindVertexArray(this.fig.vao); gl.bindBuffer(gl.ARRAY_BUFFER, this.fig.buf); gl.bufferSubData(gl.ARRAY_BUFFER, 0, this.figData);
     gl.drawArrays(gl.TRIANGLES, 0, n); this.tris += n / 3;
-    if (shadow.a > 0 && this.look !== 'wire') {
+    const kind = def.shadow ?? 'disc';
+    if (kind === 'cast' && shadow.a > 0 && bones.length) this.cast(vp, bones, sun, def.shade ?? [0.1, 0.1, 0.15, 0.35], n);
+    else if (shadow.a > 0 && kind === 'disc') {
       gl.useProgram(this.sprog); gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA); gl.depthMask(false); gl.disable(gl.CULL_FACE);
       gl.uniformMatrix4fv(this.u.suVP, false, vp); gl.uniform4f(this.u.suAt, shadow.x, shadow.y + 0.03, shadow.z, shadow.r); gl.uniform1f(this.u.suA, shadow.a);
       gl.bindVertexArray(this.disc); gl.drawArrays(gl.TRIANGLES, 0, 6);
       gl.depthMask(true);
     }
     gl.bindVertexArray(null);
+  }
+
+  /**
+   * The figure's shadow cast: its own triangles thrown along the light onto the roof under it (kept within that roof)
+   * and onto the nearest wall the light carries it to, within a few metres (kept within that face), each pixel darkened
+   * once however many of its blocks overlap there.
+   */
+  private cast(vp: M4, bones: Bone[], sun: number[], shade: number[], n: number): void {
+    const gl = this.gl, l = Math.hypot(sun[0], sun[1], sun[2]), L = [-sun[0] / l, -sun[1] / l, -sun[2] / l];
+    const pm = bones.find((b) => b.name === 'pelvis')?.m ?? bones[0].m, px = pm[12], py = pm[13], pz = pm[14];
+    const planes: { n: number[]; d: number; min: number[]; max: number[]; a: number }[] = [];
+    // (the roof under it)
+    const top = this.city.topAt(px, pz), gy = this.city.heightAt(px, pz);
+    if (py - gy < 12) planes.push({ n: [0, 1, 0], d: gy, min: top ? [top.x0, gy - 0.1, top.z0] : [px - 30, gy - 0.1, pz - 30], max: top ? [top.x1, gy + 0.1, top.z1] : [px + 30, gy + 0.1, pz + 30], a: 1 });
+    // (a wall the light carries it onto: along the light, the first face taller than the hips)
+    const hl = Math.hypot(L[0], L[2]) || 1, hx = L[0] / hl, hz = L[2] / hl, drop = L[1] / hl;
+    let wx = px, wz = pz;
+    for (let d = 0.3; d <= 7; d += 0.15) {
+      const x = px + hx * d, z = pz + hz * d, y = py + drop * d;
+      if (this.city.heightAt(x, z) > y + 0.3) {
+        // (which face: the way it was crossed)
+        const b = this.city.boxesNear(x, z, 0.01).find((o) => x >= o.x0 && x < o.x1 && z >= o.z0 && z < o.z1 && o.y1 > y);
+        if (b) {
+          const fromX = wx < b.x0 ? -1 : wx >= b.x1 ? 1 : 0, fromZ = wz < b.z0 ? -1 : wz >= b.z1 ? 1 : 0;
+          const nn = fromX ? [fromX, 0, 0] : [0, 0, fromZ || -Math.sign(hz)], dd = nn[0] ? (fromX < 0 ? b.x0 : b.x1) * nn[0] : (nn[2] < 0 ? b.z0 : b.z1) * nn[2];
+          planes.push({ n: nn, d: dd, min: [b.x0 - 0.02, Math.max(b.y0, gy) - 0.02, b.z0 - 0.02], max: [b.x1 + 0.02, b.y1 + 0.02, b.z1 + 0.02], a: Math.max(0, 1 - d / 7) });
+        }
+        break;
+      }
+      wx = x; wz = z;
+    }
+    gl.useProgram(this.cprog); gl.uniformMatrix4fv(this.u.cuVP, false, vp); gl.uniform3f(this.u.cuL, L[0], L[1], L[2]);
+    gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA); gl.depthMask(false); gl.disable(gl.CULL_FACE);
+    gl.enable(gl.STENCIL_TEST); gl.stencilOp(gl.KEEP, gl.KEEP, gl.INCR); gl.bindVertexArray(this.fig.vao);
+    planes.forEach((p) => {
+      gl.clear(gl.STENCIL_BUFFER_BIT); gl.stencilFunc(gl.EQUAL, 0, 0xff);
+      gl.uniform4f(this.u.cuPlane, p.n[0], p.n[1], p.n[2], p.d); gl.uniform3fv(this.u.cuMin, p.min); gl.uniform3fv(this.u.cuMax, p.max);
+      gl.uniform4f(this.u.cuShade, shade[0], shade[1], shade[2], shade[3] * p.a);
+      gl.drawArrays(gl.TRIANGLES, 0, n);
+    });
+    gl.disable(gl.STENCIL_TEST); gl.depthMask(true); gl.disable(gl.BLEND);
   }
 
   /** Lines in the world, over the picture: plain where they can be seen, faint where something stands in front. */
@@ -213,4 +281,18 @@ export class Renderer {
     gl.enable(gl.DEPTH_TEST); gl.uniform1f(this.u.luA, 1); gl.drawArrays(gl.TRIANGLES, 0, at / 7);
     gl.depthMask(true); gl.bindVertexArray(null);
   }
+}
+
+/** a 4×4 matrix's inverse (column-major), for the sky's rays */
+function invert(m: M4): Float32Array {
+  const a = m, o = new Float32Array(16);
+  const b00 = a[0] * a[5] - a[1] * a[4], b01 = a[0] * a[6] - a[2] * a[4], b02 = a[0] * a[7] - a[3] * a[4], b03 = a[1] * a[6] - a[2] * a[5];
+  const b04 = a[1] * a[7] - a[3] * a[5], b05 = a[2] * a[7] - a[3] * a[6], b06 = a[8] * a[13] - a[9] * a[12], b07 = a[8] * a[14] - a[10] * a[12];
+  const b08 = a[8] * a[15] - a[11] * a[12], b09 = a[9] * a[14] - a[10] * a[13], b10 = a[9] * a[15] - a[11] * a[13], b11 = a[10] * a[15] - a[11] * a[14];
+  const det = b00 * b11 - b01 * b10 + b02 * b09 + b03 * b08 - b04 * b07 + b05 * b06, k = det ? 1 / det : 0;
+  o[0] = (a[5] * b11 - a[6] * b10 + a[7] * b09) * k; o[1] = (a[2] * b10 - a[1] * b11 - a[3] * b09) * k; o[2] = (a[13] * b05 - a[14] * b04 + a[15] * b03) * k; o[3] = (a[10] * b04 - a[9] * b05 - a[11] * b03) * k;
+  o[4] = (a[6] * b08 - a[4] * b11 - a[7] * b07) * k; o[5] = (a[0] * b11 - a[2] * b08 + a[3] * b07) * k; o[6] = (a[14] * b02 - a[12] * b05 - a[15] * b01) * k; o[7] = (a[8] * b05 - a[10] * b02 + a[11] * b01) * k;
+  o[8] = (a[4] * b10 - a[5] * b08 + a[7] * b06) * k; o[9] = (a[1] * b08 - a[0] * b10 - a[3] * b06) * k; o[10] = (a[12] * b04 - a[13] * b02 + a[15] * b00) * k; o[11] = (a[9] * b02 - a[8] * b04 - a[11] * b00) * k;
+  o[12] = (a[5] * b07 - a[4] * b09 - a[6] * b06) * k; o[13] = (a[0] * b09 - a[1] * b07 + a[2] * b06) * k; o[14] = (a[13] * b01 - a[12] * b03 - a[14] * b00) * k; o[15] = (a[8] * b03 - a[9] * b01 + a[10] * b00) * k;
+  return o;
 }

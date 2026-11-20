@@ -1,0 +1,70 @@
+/**
+ * Roof Jumps' looks: how the city and the figure are drawn, each one self-contained, so one can be added, taken out or
+ * tried against another without touching the rest. A look is a GLSL function `vec3 look(Surf s)` (a face's colour from
+ * what the mesh says it is: mesh.ts), and what it asks of the renderer around it: the colour of the haze it fades into,
+ * a sky behind (or the haze), where the sun is, and how the figure's shadow falls (a soft disc under it; or cast, its own
+ * shape thrown along the light onto the roof under it and the nearest wall). The renderer builds its program from
+ * whatever is in LOOK_DEFS, in order; the page cycles through them (the look button, and the looks tab of the dials).
+ *
+ *   grid     clay, with the lattice the city is built on drawn faintly over it (a metre, a storey): the default
+ *   clay     flat grey, lit
+ *   wire     every triangle's edges, nothing else
+ *   tags     what each face is, as a colour
+ *   normals  which way each face faces
+ *   gouache  painted: weathered concrete, copings, windows, a lavender haze, the figure dressed (looks/gouache.ts)
+ */
+import { gouache } from './looks/gouache';
+
+export interface LookDef {
+  name: string;
+  /** `vec3 look(Surf s) { … }`: the face's colour before the haze (the helpers and Surf are in LOOK_PRELUDE) */
+  glsl: string;
+  /** the haze the distance fades into, and where it starts (a share of how far is drawn) */
+  fog?: [number, number, number]; fogNear?: number;
+  /** a sky behind the city, from straight up to the horizon (else the haze's colour) */
+  sky?: { top: [number, number, number]; horizon: [number, number, number]; clouds?: number };
+  /** the way the light comes from (toward it, unit) */
+  sun?: [number, number, number];
+  /** the figure's shadow: a soft disc under it, its own shape cast along the light, or none */
+  shadow?: 'disc' | 'cast' | 'none';
+  /** its colour and how dark, for a cast shadow */
+  shade?: [number, number, number, number];
+  /** false: the working guides (holds, the plan's lines) aren't drawn over it, to be looked at as itself */
+  guides?: boolean;
+}
+
+/** What every look can use: what the mesh says of a face, and some shared means of drawing it. */
+export const LOOK_PRELUDE = `
+struct Surf {
+  vec3 pos; vec3 n; int tag;   // where, which way, what (city.ts TAG)
+  vec4 rect; vec2 span;        // its box's footprint (x0 z0 x1 z1) and its bottom and top
+  float seed;                  // a number its box keeps (0..1); for the figure, its bone's kind (mesh.ts BONE_KIND)
+  vec3 bary; vec3 eye;         // where in its triangle; where it's seen from
+};
+uniform vec3 uSun;
+float line(float x, float period) {
+  float d = abs(fract(x / period + 0.5) - 0.5) * period, w = fwidth(x);
+  return (1.0 - smoothstep(0.0, 1.5 * w, d)) * clamp(0.12 / w, 0.0, 1.0);
+}
+float hash12(vec2 p) { vec3 q = fract(vec3(p.xyx) * 0.1031); q += dot(q, q.yzx + 33.33); return fract((q.x + q.y) * q.z); }
+float noise(vec2 p) { vec2 i = floor(p), f = fract(p), u = f * f * (3.0 - 2.0 * f);
+  return mix(mix(hash12(i), hash12(i + vec2(1, 0)), u.x), mix(hash12(i + vec2(0, 1)), hash12(i + vec2(1, 1)), u.x), u.y); }
+float fbm(vec2 p) { float v = 0.0, a = 0.5; for (int i = 0; i < 4; i++) { v += a * noise(p); p = p * 2.03 + 17.1; a *= 0.5; } return v; }
+float litOf(vec3 n) { return 0.64 + 0.36 * dot(n, normalize(vec3(0.42, 0.8, 0.28))); }
+vec3 clayOf(Surf s) { float base = s.tag == 0 ? 0.40 : s.tag == 6 ? 0.13 : s.tag == 1 ? 0.74 : 0.69; return vec3(base * litOf(s.n)); }
+`;
+
+const grid: LookDef = { name: 'grid', glsl: `vec3 look(Surf s) {
+  vec3 col = clayOf(s); if (s.tag == 6) return col;
+  // (the lattice: a metre across a top, a storey up a side and four metres along it)
+  float g = abs(s.n.y) > 0.5 ? max(line(s.pos.x, 1.0), line(s.pos.z, 1.0)) * 0.5 + max(line(s.pos.x, 4.0), line(s.pos.z, 4.0)) * 0.5
+    : max(line(s.pos.y, 3.0), line(abs(s.n.x) > 0.5 ? s.pos.z : s.pos.x, 4.0));
+  return col * (1.0 - 0.2 * g);
+}` };
+const clay: LookDef = { name: 'clay', glsl: `vec3 look(Surf s) { return clayOf(s); }` };
+const wire: LookDef = { name: 'wire', shadow: 'none', glsl: `vec3 look(Surf s) { vec3 w = fwidth(s.bary), e = smoothstep(vec3(0.0), 1.2 * w, s.bary); return mix(vec3(0.12), vec3(0.8, 0.8, 0.79), min(e.x, min(e.y, e.z))); }` };
+const tags: LookDef = { name: 'tags', glsl: `vec3 look(Surf s) { float h = float(s.tag) / 9.0; return (0.55 + 0.45 * cos(6.2832 * (h + vec3(0.0, 0.33, 0.67)))) * litOf(s.n); }` };
+const normals: LookDef = { name: 'normals', glsl: `vec3 look(Surf s) { return s.n * 0.5 + 0.5; }` };
+
+/** the looks, in the order the page cycles them */
+export const LOOK_DEFS: LookDef[] = [grid, clay, wire, tags, normals, gouache];

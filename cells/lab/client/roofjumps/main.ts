@@ -151,7 +151,13 @@ function studies(): HTMLElement[] {
     ]),
   ];
 }
-const pal = palette(dialsEl, () => { remember(); thought = -1; }, [{ name: 'studies', build: studies }]);
+/** the looks (looks.ts), from the dials: each a button, the one drawn marked; kept in the address */
+function looks(): HTMLElement[] {
+  const g = document.createElement('div'); g.className = 'studies'; const l = document.createElement('div'); l.className = 'list';
+  for (const name of LOOKS) { const a = document.createElement('a'); a.textContent = name; a.href = '#'; if (name === rd.look) a.className = 'on'; a.addEventListener('click', (e) => { e.preventDefault(); setLook(name); pal.refresh(); }); l.append(a); }
+  g.append(l); return [g];
+}
+const pal = palette(dialsEl, () => { remember(); thought = -1; }, [{ name: 'looks', build: looks }, { name: 'studies', build: studies }]);
 dialsBtn.addEventListener('click', () => { const on = dialsEl.classList.toggle('shown'); dialsBtn.setAttribute('aria-expanded', String(on)); });
 const flip = (key: string) => { TUNE[key] = TUNE[key] ? 0 : 1; remember(); pal.refresh(); thought = -1; };
 let stepOnce = false;
@@ -304,7 +310,8 @@ rd.stream(runner.x, runner.z, 9);
 
 const lookBtn = document.getElementById('look')!;
 const showLook = () => { lookBtn.textContent = rd.look; };
-lookBtn.addEventListener('click', () => { rd.look = LOOKS[(LOOKS.indexOf(rd.look) + 1) % LOOKS.length]; showLook(); const u = new URL(location.href); u.searchParams.set('look', rd.look); history.replaceState(null, '', u); });
+function setLook(name: string): void { rd.look = name; showLook(); const u = new URL(location.href); u.searchParams.set('look', rd.look); history.replaceState(null, '', u); }
+lookBtn.addEventListener('click', () => setLook(LOOKS[(LOOKS.indexOf(rd.look) + 1) % LOOKS.length]));
 showLook();
 document.getElementById('seed')!.textContent = String(seed);
 document.getElementById('another')!.addEventListener('click', () => { const u = new URL(location.href); u.searchParams.set('seed', String(1 + Math.floor(Math.random() * 9999))); location.href = u.href; });
@@ -366,7 +373,7 @@ function frame(now: number): void {
       if (v.far < 0.6) { const l0 = lift; for (const up of [0.35, 0.7, 1]) { lift = l0 + up; const o = eyeFor(m.x, m.y, m.z, m.yaw, aspect, clearTo); if (o.far > v.far + 0.1) v = o; if (v.far >= 0.8) break; } lift = l0; }
       rd.draw(v.vp, v.eye, m.bones, shadowAt(m.x, m.y, m.z), rect);
       // (each planted foot marked on the roof: orange while a save is being made, so the footfall that saved it shows)
-      if (m.feet.length) rd.lines(v.vp, v.eye, m.feet.flatMap((f) => { const c = m.saved ? [0.98, 0.45, 0.08, 1] : [0.1, 0.1, 0.12, 0.9], y = f[1] + 0.03; return [{ pts: [f[0] - 0.1, y, f[2], f[0] + 0.1, y, f[2]], cols: [...c, ...c], w: 2 }, { pts: [f[0], y, f[2] - 0.1, f[0], y, f[2] + 0.1], cols: [...c, ...c], w: 2 }]; }));
+      if (m.feet.length && rd.def.guides !== false) rd.lines(v.vp, v.eye, m.feet.flatMap((f) => { const c = m.saved ? [0.98, 0.45, 0.08, 1] : [0.1, 0.1, 0.12, 0.9], y = f[1] + 0.03; return [{ pts: [f[0] - 0.1, y, f[2], f[0] + 0.1, y, f[2]], cols: [...c, ...c], w: 2 }, { pts: [f[0], y, f[2] - 0.1, f[0], y, f[2] + 0.1], cols: [...c, ...c], w: 2 }]; }));
     });
     frames++; requestAnimationFrame(frame); return;
   }
@@ -406,8 +413,9 @@ function frame(now: number): void {
   const { vp, eye } = tripod ? { eye: tripod, vp: mul(perspective((50 * Math.PI) / 180, canvas.width / canvas.height, 0.15, rd.radius * 64 * 1.5), lookAt(tripod, [runner.x, runner.y + 1, runner.z], [0, 1, 0])) } : eyeFor(eyeAt.x, eyeAt.y, eyeAt.z, yaw, canvas.width / canvas.height, (at) => { const room = held ? 1 : clearTo(at); near += (room - near) * (room < near ? 1 : e(3)); return near; }, held ? 0 : wideK, held ? 0 : lowK, shakeV);
   rd.stream(runner.x, runner.z, 2);
   rd.draw(vp, eye, rig.bones(held ?? runner), shadowAt(runner.x, runner.y, runner.z));
-  if (TUNE.holds && !held) rd.lines(vp, eye, holdStrokes(city.holdsNear(runner.x, runner.z, TUNE.holdsNear), runner.reach, runner.x, runner.y, runner.z, TUNE.holdsNear));
-  if (TUNE.plan && thinking && !held) rd.lines(vp, eye, planStrokes(thinking));
+  const guides = rd.def.guides !== false;
+  if (guides && TUNE.holds && !held) rd.lines(vp, eye, holdStrokes(city.holdsNear(runner.x, runner.z, TUNE.holdsNear), runner.reach, runner.x, runner.y, runner.z, TUNE.holdsNear));
+  if (guides && TUNE.plan && thinking && !held) rd.lines(vp, eye, planStrokes(thinking));
   const say = !!TUNE.readout && !!thinking && !held;
   readout.hidden = !say;
   if (say && frames % 6 === 0) {

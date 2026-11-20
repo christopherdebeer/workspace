@@ -2,13 +2,16 @@
 // and (with --film) filmed from the chase eye and from the side into devtools/out/scenes/, with a report (report.json,
 // and report.html: a contact sheet of every scene, what it asks, what it should do and whether it did).
 //
-//   node cells/lab/devtools/roofjumps-scenes.mjs [keys…] [--film]
+//   node cells/lab/devtools/roofjumps-scenes.mjs [keys…] [--film] [--look=gouache]
 import { build } from 'esbuild';
 import { mkdirSync, writeFileSync, readFileSync } from 'node:fs';
-const lab = new URL('../client/roofjumps/', import.meta.url).pathname, OUT = new URL('./out/scenes/', import.meta.url).pathname;
+const lab = new URL('../client/roofjumps/', import.meta.url).pathname;
+const OUT = new URL(`./out/scenes${process.argv.find((a) => a.startsWith('--look=')) ? '-' + process.argv.find((a) => a.startsWith('--look=')).slice(7) : ''}/`, import.meta.url).pathname;
 const out = await build({ stdin: { contents: `export * from './scenes';`, resolveDir: lab, loader: 'ts' }, bundle: true, write: false, format: 'esm', platform: 'node' });
 const { SCENES, runScene, judge, sequence } = await import('data:text/javascript;base64,' + Buffer.from(out.outputFiles[0].text).toString('base64'));
 const args = process.argv.slice(2), keys = args.filter((a) => !a.startsWith('--')), film = args.includes('--film');
+// (`--look=<name>`: filmed in that look (looks.ts), into devtools/out/scenes-<name>/, the checks and report as ever)
+const look = args.find((a) => a.startsWith('--look='))?.slice(7) ?? '';
 const chosen = keys.length ? SCENES.filter((s) => keys.includes(s.key)) : SCENES;
 mkdirSync(OUT, { recursive: true });
 const report = [];
@@ -28,7 +31,7 @@ if (film) {
       // (close round its first takeoff, if it asks: a flight is a third of a second; else across the whole run)
       const run0 = s.close ? runScene(s) : null, t0 = run0 ? (typeof s.close === 'function' ? s.close(run0) : run0.ups[0] ? Math.max(0, run0.ups[0].t - 0.25) : 0) : 0;
       const n = 16, every = s.close ? 1 / 30 : s.seconds / n;
-      const p = await lab.open(`scene=${s.key}&strip=${t0.toFixed(4)}&frames=${n}&every=${every.toFixed(4)}&cols=8&holds=0${extra}`, { width: 1600, height: 560, dpr: 1 });
+      const p = await lab.open(`scene=${s.key}&strip=${t0.toFixed(4)}&frames=${n}&every=${every.toFixed(4)}&cols=8&holds=0${extra}${look ? `&look=${look}` : ''}`, { width: 1600, height: 560, dpr: 1 });
       for (let k = 0; k < 80 && (await p.evaluate(() => window.__roofjumps.probe().pending)) > 0; k++) await p.waitForTimeout(250);
       await p.waitForTimeout(800); await p.screenshot({ path: `${OUT}${s.key}-${view}.png` }); await p.close();
       console.log(`filmed ${s.key} (${view})`);
@@ -64,7 +67,7 @@ if (film) {
     <figure><img src="${r.key}-room.png" alt="${esc(r.title)}, from a still eye on the room, frame by frame" loading="lazy"><figcaption>From a still eye on the room</figcaption></figure>` : ''}
   </div>
 </article>`; }).join('\n');
-  const html = `<title>Roof Jumps Scenes</title>
+  const html = `<title>${look ? `Roof Jumps in ${look[0].toUpperCase() + look.slice(1)}` : 'Roof Jumps Scenes'}</title>
 <meta name="claude:viewport-fit-sides" content="cover">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
 <style>
@@ -107,7 +110,7 @@ a:focus-visible { outline: 2px solid var(--fail); outline-offset: 2px; }
 </style>
 <main>
   <section>
-    <h1>Roof Jumps scenes</h1>
+    <h1>${look ? `Roof Jumps scenes, in ${esc(look)}` : 'Roof Jumps scenes'}</h1>
     <p class="lede">Authored courses, each run with a scripted stick, the same every time, to film and judge. Each asks what the athlete should do, including things it can't yet. The checks that fail are the critique. Re-run with <code>node cells/lab/devtools/roofjumps-scenes.mjs --film</code>; open one on the page with <code>?scene=&lt;key&gt;</code>.</p>
     <p class="tally">${held}/${all} checks hold across ${report.length} scenes${notes.date ? ` · notes from the viewing of ${esc(notes.date)} (${esc(notes.build)})` : ''}</p>
   </section>
