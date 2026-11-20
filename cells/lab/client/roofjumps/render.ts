@@ -14,7 +14,8 @@ import type { M4 } from './m4';
 import { LOOK_DEFS, LOOK_PRELUDE } from './looks';
 import { Painter } from './paint';
 import { StrokePainter } from './strokes';
-import type { V } from './strokes';
+import type { Light, V } from './strokes';
+import { lightKey } from './strokes';
 import { lookAt, mul } from './m4';
 import type { LookDef } from './looks';
 
@@ -236,12 +237,12 @@ export class Renderer {
   pending(x: number, z: number): number {
     const cx = Math.floor(x / CHUNK), cz = Math.floor(z / CHUNK), R = this.radius; let n = 0;
     for (let a = -R; a <= R; a++) for (let b = -R; b <= R; b++) if (!this.built.has(`${cx + a},${cz + b}`)) n++;
-    return n + (this.def.strokes ? this.strokes.missing([...this.built.keys()]) : 0);
+    return n + (this.def.strokes ? this.strokes.missing([...this.built.keys()], this.light()) : 0);
   }
 
   /** The city, the figure, its shadow. `rect` (pixels, from the bottom left): into that part of the canvas only; `bare`: no city, the figure alone. */
   draw(vp: M4, eye: number[], bones: Bone[], shadow: { x: number; y: number; z: number; r: number; a: number }, rect?: [number, number, number, number], bare = false): void {
-    const gl = this.gl, far = this.radius * CHUNK, def = this.def, T = def.strokes ? null : this.time, fog = T?.fog ?? def.fog ?? this.fog, sun = T?.sun ?? def.sun ?? [0.42, 0.8, 0.28], sky = def.sky && T ? T.sky : def.sky;
+    const gl = this.gl, far = this.radius * CHUNK, def = this.def, T = this.time, fog = T?.fog ?? def.fog ?? this.fog, sun = T?.sun ?? def.sun ?? [0.42, 0.8, 0.28], sky = def.sky && T ? T.sky : def.sky;
     const full: [number, number, number, number] = rect ?? [0, 0, this.canvas.width, this.canvas.height];
     // (the figure first, so the sun's pass has it too)
     const n = figureMesh(bones, this.figData);
@@ -280,17 +281,27 @@ export class Renderer {
     if (def.paint) this.painter.finish(full, invert(vp), def.paint);
   }
 
+  /** the roof a picture leads to (the menu's first landing): a brushwork look picks it out */
+  focus: Light['focus'] = null;
+  private lit: Light | null = null;
+  /** the light a brushwork look paints in: the time of day's, or its own; and the focus */
+  light(): Light {
+    const R = this.def.strokes!, T = this.time, l = { sun: (T?.sun ?? R.sun) as V, top: (T?.sky.top ?? R.skyField?.top ?? R.paper) as V, horizon: (T?.sky.horizon ?? R.skyField?.horizon ?? R.paper) as V, haze: (R.fadeToPaper ? R.haze : (T?.fog ?? R.haze)) as V, hazeNear: T && !R.fadeToPaper ? T.fogNear : R.hazeNear, focus: this.focus };
+    const key = lightKey(l); if (!this.lit || this.lit.key !== key) this.lit = { ...l, key };
+    return this.lit;
+  }
   /** A brushwork look's frame (strokes.ts): paper, the solid world in depth, the strokes. */
   private brushwork(vp: M4, eye: number[], bones: Bone[], figN: number, sunVP: M4 | null, rect: [number, number, number, number] | undefined, bare: boolean): void {
     const gl = this.gl, rules = this.def.strokes!;
     if (rect) { gl.enable(gl.SCISSOR_TEST); gl.scissor(...rect); gl.viewport(...rect); } else { gl.disable(gl.SCISSOR_TEST); gl.viewport(0, 0, this.canvas.width, this.canvas.height); }
     gl.clearColor(rules.paper[0], rules.paper[1], rules.paper[2], 1); gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT | gl.STENCIL_BUFFER_BIT);
-    if (!bare) this.strokes.sync([...this.built.keys()], this.city, rules, 3, Math.floor(eye[0] / CHUNK), Math.floor(eye[2] / CHUNK), this.radius * CHUNK);
+    const light = this.light();
+    if (!bare) this.strokes.sync([...this.built.keys()], this.city, rules, 3, Math.floor(eye[0] / CHUNK), Math.floor(eye[2] / CHUNK), this.radius * CHUNK, light);
     gl.activeTexture(gl.TEXTURE3); gl.bindTexture(gl.TEXTURE_2D, this.smap); gl.activeTexture(gl.TEXTURE0);
     const pm = bones.find((b) => b.name === 'pelvis')?.m, sunC: V = pm ? [pm[12], pm[13], pm[14]] : [eye[0], eye[1], eye[2]];
     this.tris = 0;
     this.strokes.draw({
-      vp, eye, far: this.radius * CHUNK, rules, city: this.city, bones, palette: this.palette, sunVP, sunC, detail: this.detail, bare,
+      vp, inv: invert(vp), light, eye, far: this.radius * CHUNK, rules, city: this.city, bones, palette: this.palette, sunVP, sunC, detail: this.detail, bare,
       solid: () => {
         gl.useProgram(this.dprog); gl.uniformMatrix4fv(this.u.duVP, false, vp); gl.enable(gl.CULL_FACE);
         if (!bare) for (const c of this.built.values()) { gl.bindVertexArray(c.vao); gl.drawArrays(gl.TRIANGLES, 0, c.n); this.tris += c.n / 3; }

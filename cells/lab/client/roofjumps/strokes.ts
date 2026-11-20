@@ -75,14 +75,16 @@ export const K = {
   HANG: 4,
   /** a dab: an oval, loaded (a head, a hand) */
   DAB: 5,
+  /** an underpainting: the whole of its receiver, flat and opaque, a little uneven (what the broad strokes go over) */
+  FILL: 6,
 } as const;
 /** added to a kind: the mark turns about its own line to face the eye (an edge between two faces, a bar, a pipe) */
 export const EDGE = 8;
 /** the layers, painted in this order: broad colour, shadow, edges and lips, accents */
 export const LAYER = { BROAD: 0, SHADOW: 1, EDGE: 2, ACCENT: 3 } as const;
 const LAYERS = 4;
-/** floats a stamp: eight vec4s */
-export const STAMP = 32;
+/** floats a stamp: nine vec4s */
+export const STAMP = 36;
 
 /** A mark, as a rule says it. */
 export interface Mark {
@@ -105,6 +107,8 @@ export interface Mark {
   seg?: number;
   /** a sky mark: no haze, never withdrawn */
   sky?: boolean;
+  /** a second pigment carried in the brush, laid by irregular bristle groups and heavier on one side; how much of it */
+  col2?: V; mix2?: number;
 }
 
 const NOCLIP: [V, V] = [[-1e5, -1e5, -1e5], [1e5, 1e5, 1e5]];
@@ -120,7 +124,7 @@ export function deposit(m: Mark, out: number[]): void {
   for (let i = 0; i < n; i++) {
     const s0 = i / n, s1 = (i + 1) / n, c = add(m.a, scale(d, (s0 + s1) / 2)), U = scale(d, (s1 - s0) / 2), Vv = scale(across, hw);
     out.push(c[0], c[1], c[2], m.alpha, U[0], U[1], U[2], m.kind, Vv[0], Vv[1], Vv[2], seed, m.col[0], m.col[1], m.col[2], m.rank ?? 0.5,
-      anchor[0], anchor[1], anchor[2], m.dry ?? 0, clip[0][0], clip[0][1], clip[0][2], s0, clip[1][0], clip[1][1], clip[1][2], s1, m.heart ?? 0.5, tin, tout, m.sky ? 1 : 0);
+      anchor[0], anchor[1], anchor[2], m.dry ?? 0, clip[0][0], clip[0][1], clip[0][2], s0, clip[1][0], clip[1][1], clip[1][2], s1, m.heart ?? 0.5, tin, tout, m.sky ? 1 : 0, ...(m.col2 ?? m.col), m.mix2 ?? 0);
   }
 }
 
@@ -201,7 +205,9 @@ export function onLine(city: City, a: V, b: V): number | null {
  * the way across it, how its turned faces take the sun; whether a foot bears weight, whether a hand is closed on a hold */
 export interface Part { name: string; kind: string; mat: number; a: V; b: V; side: V; toEye: V; width: number; length: number;
   /** how end-on it's seen (0: side on … 1: along its length), and its girth (what's seen of it end-on) */
-  endOn: number; girth: number; sunSide: number; sunFront: number; planted: boolean; gripping: boolean }
+  endOn: number; girth: number;
+  /** (a foot) the height of what's under it */
+  ground: number; sunSide: number; sunFront: number; planted: boolean; gripping: boolean }
 
 /** The runner's bones as parts, from the pose and the eye. */
 export function partsOf(bones: Bone[], eye: number[], sun: V, city: City): Part[] {
@@ -223,7 +229,7 @@ export function partsOf(bones: Bone[], eye: number[], sun: V, city: City): Part[
     if (kind === 'foreArm') {
       const h = b; for (const o of city.holdsNear(h[0], h[2], 0.6)) if (o.kind !== 'face') { const d = segDist(h, [o.ax, o.ay, o.az], [o.bx, o.by, o.bz]); if (d < 0.1) { gripping = true; break; } }
     }
-    out.push({ name: bn.name, kind, mat: bn.mat ?? 0, a: add(a, scale(e, depth)), b: add(b, scale(e, depth)), side, toEye: e, width, length: len(sub(b, a)), endOn: Math.abs(dot(dir, e)), girth: Math.max(pw, qw) * 1.15, sunSide: dot(side, sun), sunFront: dot(e, sun), planted, gripping });
+    out.push({ name: bn.name, kind, mat: bn.mat ?? 0, a: add(a, scale(e, depth)), b: add(b, scale(e, depth)), side, toEye: e, width, length: len(sub(b, a)), endOn: Math.abs(dot(dir, e)), girth: Math.max(pw, qw) * 1.15, ground: kind === 'foot' ? city.heightAt(c[0], c[2]) : 0, sunSide: dot(side, sun), sunFront: dot(e, sun), planted, gripping });
   }
   return out;
 }
@@ -263,6 +269,11 @@ export function onto(p: V, r: Receiver, sun: V): V | null {
   const t = (r.d - dot(r.n, p)) / k; return t < -0.05 ? null : add(p, scale(L, Math.max(0, t)));
 }
 
+/** The light a frame is painted in: the sun, the sky's two ends, the haze; and the roof a picture leads to (the first
+ * landing, from the menu). Made from a time of day (menu.ts TIMES) or the look's own; the city is repainted when it changes. */
+export interface Light { sun: V; top: V; horizon: V; haze: V; hazeNear: number; focus: { x0: number; z0: number; x1: number; z1: number; y: number } | null; key: string }
+export const lightKey = (l: Omit<Light, 'key'>) => [l.sun, l.top, l.horizon, l.haze].map((v) => v.map((x) => x.toFixed(3)).join(',')).join('|') + `|${l.hazeNear}|${l.focus ? Object.values(l.focus).join(',') : ''}`;
+
 /** A look's rules: what to say about each feature, and how. */
 export interface StrokeRules {
   /** the ground of the image, and how much its grain shows */
@@ -274,24 +285,26 @@ export interface StrokeRules {
   sun: V;
   /** the city's marks for a chunk (made once and kept; made again when it moves between near and far). `keeps`: whether
    * a mark of that rank is wanted (far chunks keep only what would still show at their distance): asked before work */
-  city(c: Chunk, city: City, put: (m: Mark) => void, keeps: (rank: number) => boolean): void;
-  /** the sky's marks, as directions from the eye (each end a unit direction): laid far off, behind everything */
-  sky?: Mark[];
+  city(c: Chunk, city: City, put: (m: Mark) => void, keeps: (rank: number) => boolean, light: Light): void;
+  /** the sky: a continuous field from `top` to `horizon` behind everything (none: the paper is the sky) */
+  skyField?: { top: V; horizon: V };
+  /** the sky's marks over the field, as directions from the eye (each end a unit direction): laid far off */
+  sky?(light: Light): Mark[];
   /** the runner's marks, from its parts (each frame) */
-  figure(parts: Part[], palette: V[], put: (m: Mark) => void): void;
-  /** the runner's shadow: its marks on what receives it */
-  shadow(parts: Part[], rs: Receiver[], put: (m: Mark) => void): void;
+  figure(parts: Part[], palette: V[], put: (m: Mark) => void, light: Light): void;
+  /** the runner's shadow: its marks on what receives it (none: the shadow passages, from the sun's map, carry it) */
+  shadow?(parts: Part[], rs: Receiver[], put: (m: Mark) => void, light: Light): void;
 }
 
 // ─── drawing
 
 const VS = `#version 300 es
 precision highp float;
-in vec2 aQ; in vec4 a0; in vec4 a1; in vec4 a2; in vec4 a3; in vec4 a4; in vec4 a5; in vec4 a6; in vec4 a7;
+in vec2 aQ; in vec4 a0; in vec4 a1; in vec4 a2; in vec4 a3; in vec4 a4; in vec4 a5; in vec4 a6; in vec4 a7; in vec4 a8;
 uniform mat4 uVP; uniform vec3 uEye; uniform float uFar; uniform float uFogNear; uniform float uDetail; uniform vec3 uSunC;
 uniform highp sampler2DShadow uShadowMap; uniform mat4 uSunVP; uniform int uShadowOn;
 out vec2 vQ; out vec3 vW; out float vFog;
-flat out vec4 vCol; flat out vec4 vP; flat out vec4 vS; flat out vec3 vMin; flat out vec3 vMax; flat out vec2 vT;
+flat out vec4 vCol; flat out vec4 vP; flat out vec4 vS; flat out vec3 vMin; flat out vec3 vMax; flat out vec2 vT; flat out vec4 vCol2; flat out vec3 vN; flat out float vReach;
 float lit(vec3 p) {
   if (uShadowOn == 0) return 1.0;
   vec4 q = uSunVP * vec4(p, 1.0); vec3 c = q.xyz / q.w * 0.5 + 0.5;
@@ -308,16 +321,15 @@ void main() {
   // (whole marks withdraw with distance, by rank, all of a mark's stamps on its one anchor)
   float rank = a3.w, f0 = (14.0 + (uFar * 1.15 - 14.0) * rank * rank) * uDetail; bool sky = a7.w > 0.5;
   if (!sky) alpha *= 1.0 - smoothstep(f0 * 0.7, f0, length(uEye - a4.xyz));
-  if (kind == 3) {
-    // (a shadow passage: laid only where its place is out of the sun, judged across it; only near enough for the map)
-    vec3 n6 = N * 0.06; float s = lit(c + n6) + lit(c + U * 0.6 + V * 0.6 + n6) + lit(c - U * 0.6 + V * 0.6 + n6) + lit(c + U * 0.6 - V * 0.6 + n6) + lit(c - U * 0.6 - V * 0.6 + n6);
-    alpha *= smoothstep(0.3, 0.7, 1.0 - s / 5.0) * (1.0 - smoothstep(34.0, 44.0, length((c - uSunC).xz)));
-  }
+  // (a shadow passage: the receiver's real shadow, from the sun's map, is its mask (in the fragment); as far as the map reaches)
+  vN = N; vReach = 1.0;
+  vCol2 = a8;
   vCol = vec4(a3.xyz, alpha); vP = vec4(float(kind), a2.w, a4.w, a7.x); vS = vec4(a5.w, a6.w, a7.y, a7.z);
   vMin = edge ? vec3(-1e5) : a5.xyz; vMax = edge ? vec3(1e5) : a6.xyz; vQ = aQ;
   float s0 = a5.w, s1 = a6.w;
   vT = vec2(length(U) * 2.0 / max(s1 - s0, 1e-4), length(V) * 2.0 / 1.15);
   vec3 p = c + U * aQ.x + V * aQ.y; vW = p;
+  if (kind == 3) vReach = 1.0 - smoothstep(36.0, 46.0, length((p - uSunC).xz));
   vFog = sky ? 0.0 : smoothstep(uFar * uFogNear, uFar, length(uEye - p));
   if (alpha < 0.004) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
   gl_Position = uVP * vec4(p + N * (0.004 + dist * 0.0012), 1.0);
@@ -330,13 +342,17 @@ float fbm(vec2 p) { float v = 0.0, a = 0.5; for (int i = 0; i < 3; i++) { v += a
 `;
 const FS = `#version 300 es
 precision highp float;
-in vec2 vQ; in vec3 vW; in float vFog; flat in vec4 vCol; flat in vec4 vP; flat in vec4 vS; flat in vec3 vMin; flat in vec3 vMax; flat in vec2 vT;
+in vec2 vQ; in vec3 vW; in float vFog; flat in vec4 vCol; flat in vec4 vP; flat in vec4 vS; flat in vec3 vMin; flat in vec3 vMax; flat in vec2 vT; flat in vec4 vCol2; flat in vec3 vN; flat in float vReach;
 uniform vec3 uHaze; uniform float uFade; uniform float uGrain; uniform int uCount;
+uniform highp sampler2DShadow uShadowMap; uniform highp mat4 uSunVP; uniform highp int uShadowOn;
 out vec4 o;
 ${NOISE}
 void main() {
   if (uCount == 1) { o = vec4(1.0 / 255.0); return; }
-  if (any(lessThan(vW, vMin)) || any(greaterThan(vW, vMax))) discard;
+  // (cut to its receiver, give or take a pixel's footprint: the clip is judged at the pixel's centre, the depth by its
+  // samples, so an edge pixel cut whole would leave paper in the samples that are the receiver's)
+  vec3 px = fwidth(vW) * 1.5 + 0.004;
+  if (any(lessThan(vW, vMin - px)) || any(greaterThan(vW, vMax + px))) discard;
   int kind = int(vP.x + 0.5); float sd = vP.y * 97.0, dry = vP.z, heart = vP.w;
   float Lm = max(vT.x, 1e-3), Wm = max(vT.y, 0.02);
   float u = mix(vS.x, vS.y, vQ.x * 0.5 + 0.5), um = u * Lm, t = vQ.y * 1.15, at = abs(t);
@@ -353,7 +369,21 @@ void main() {
   float dz = dry * (0.9 * smoothstep(0.4, 1.0, u) + 0.3 * smoothstep(0.55, 1.0, at / max(hw, 1e-3)));
   float gap = dz > 0.0 ? smoothstep(dz - 0.09, dz + 0.09, br + 0.18 * (grain - 0.5) + 0.1) : 1.0;
   vec3 col = vCol.rgb; float a;
-  if (kind == 0 || kind == 3) {
+  // (the second pigment: in irregular groups of bristles, heavier toward one side of the brush)
+  if (vCol2.a > 0.0) { float g = noise(vec2((t * 0.5 + 0.5) * 3.2 + sd * 1.3, k * 0.06)) + 0.3 * t; col = mix(col, vCol2.rgb, vCol2.a * smoothstep(0.42, 0.72, g + 0.25 * (br - 0.5))); }
+  if (kind == 6) {
+    // (underpainting: all of its receiver, a little uneven, no edge of its own: the clip is its edge)
+    a = 1.0; col *= 0.975 + 0.05 * noise(vec2(um * 0.12, t * 0.6 + sd));
+  } else if (kind == 3) {
+    // (a shadow passage: its receiver's shadow, from the sun's map, read through the brush so its edge breaks a little)
+    float sh = 0.0;
+    if (uShadowOn == 1) {
+      vec4 q = uSunVP * vec4(vW + vN * 0.07, 1.0); vec3 c = q.xyz / q.w * 0.5 + 0.5; vec2 j = (vec2(noise(vec2(um * 1.9, t * 2.0 + sd)), noise(vec2(um * 1.3 + 7.0, t * 2.6))) - 0.5) * (6.0 / 2048.0);
+      if (all(greaterThan(c.xy, vec2(0.0))) && all(lessThan(c.xy, vec2(1.0)))) { float l = 0.0; for (int y = -1; y <= 1; y++) for (int x = -1; x <= 1; x++) l += texture(uShadowMap, vec3(c.xy + j + vec2(x, y) / 2048.0, c.z - 0.0015)); sh = 1.0 - l / 9.0; }
+    }
+    a = smoothstep(0.38, 0.62, sh + 0.35 * (br - 0.5)) * vReach;
+    col *= 0.96 + 0.08 * noise(vec2(k * 0.4, t * 1.2 + sd));
+  } else if (kind == 0) {
     a = (1.0 - smoothstep(hw - 0.06, hw, at)) * gap;
     col *= 0.95 + 0.1 * noise(vec2(k * 0.5, t * 1.5 + sd));
     col *= 1.0 - 0.06 * (1.0 - smoothstep(0.0, 0.35, abs(u - heart)));
@@ -386,7 +416,24 @@ ${NOISE}
 void main() { float g = 0.5 * noise(gl_FragCoord.xy * 0.45) + 0.5 * noise(gl_FragCoord.xy * 1.3 + 9.0), f = fbm(gl_FragCoord.xy * 0.012);
   o = vec4(uPaper * (1.0 - uGrain * (0.05 * (g - 0.5) + 0.03 * (f - 0.5))), 1.0); }`;
 
-interface Layered { buf: WebGLBuffer; vaos: WebGLVertexArrayObject[]; counts: number[]; far?: boolean }
+// (the sky as one field: from straight up to the horizon, deep above and warm only in a narrow band low down, a slow
+// unevenness in it fixed to the sky; only where nothing solid is in front)
+const KVS = `#version 300 es
+in vec2 aQ; out vec2 vNdc; void main() { vNdc = aQ; gl_Position = vec4(aQ, 0.99999, 1.0); }`;
+const KFS = `#version 300 es
+precision highp float; in vec2 vNdc; uniform mat4 uInv; uniform vec3 uTop; uniform vec3 uHor; uniform float uGrain; out vec4 o;
+${NOISE}
+void main() {
+  vec4 a = uInv * vec4(vNdc, -1.0, 1.0), b = uInv * vec4(vNdc, 1.0, 1.0); vec3 d = normalize(b.xyz / b.w - a.xyz / a.w);
+  vec2 p = d.xz / (max(d.y, 0.0) + 0.25);
+  float up = clamp(d.y + 0.02 * (fbm(p * 0.7) - 0.5), 0.0, 1.0), band = smoothstep(0.0, 0.09, up);
+  vec3 c = mix(uHor, mix(mix(uHor, uTop, 0.8), uTop, smoothstep(0.09, 0.45, up)), band);
+  c *= 0.97 + 0.06 * fbm(p * vec2(0.35, 1.1) + 3.0);
+  float g = 0.5 * noise(gl_FragCoord.xy * 0.45) + 0.5 * noise(gl_FragCoord.xy * 1.3 + 9.0);
+  o = vec4(c * (1.0 - uGrain * 0.06 * (g - 0.5)), 1.0);
+}`;
+
+interface Layered { buf: WebGLBuffer; vaos: WebGLVertexArrayObject[]; counts: number[]; far?: boolean; key?: string }
 /** how far (m) a mark of a rank shows before it has withdrawn (as the vertex shader has it, at detail 1) */
 export const showsTo = (rank: number, far: number) => 14 + (far * 1.15 - 14) * rank * rank;
 /** what each pass cost, the last frame it was asked (ms, with the GPU waited on between: coarse, but the same on a phone) */
@@ -394,7 +441,8 @@ export interface Cost { depth: number; city: number; shadow: number; figure: num
 
 /** The painter for a brushwork look: the stamps of each chunk, kept; the runner's each frame; the passes. */
 export class StrokePainter {
-  private prog: WebGLProgram; private pprog: WebGLProgram; private corner: WebGLBuffer;
+  private prog: WebGLProgram; private pprog: WebGLProgram; private kprog: WebGLProgram; private corner: WebGLBuffer;
+  private skyFor = ''; private skyMarks: Mark[] = [];
   private u: Record<string, WebGLUniformLocation | null> = {};
   private chunks = new Map<string, Layered>(); private rulesFor: StrokeRules | null = null;
   private dyn: Layered; private dynCap = 2048; private dynData = new Float32Array(2048 * STAMP);
@@ -403,9 +451,10 @@ export class StrokePainter {
   stamps = 0;
 
   constructor(private gl: WebGL2RenderingContext, program: (vs: string, fs: string, attribs: string[]) => WebGLProgram) {
-    this.prog = program(VS, FS, ['aQ', 'a0', 'a1', 'a2', 'a3', 'a4', 'a5', 'a6', 'a7']);
+    this.prog = program(VS, FS, ['aQ', 'a0', 'a1', 'a2', 'a3', 'a4', 'a5', 'a6', 'a7', 'a8']);
     for (const n of ['uVP', 'uEye', 'uFar', 'uFogNear', 'uDetail', 'uSunC', 'uShadowMap', 'uSunVP', 'uShadowOn', 'uHaze', 'uFade', 'uGrain', 'uCount']) this.u[n] = gl.getUniformLocation(this.prog, n);
     this.pprog = program(PVS, PFS, ['aQ']); for (const n of ['uPaper', 'uGrain']) this.u['p' + n] = gl.getUniformLocation(this.pprog, n);
+    this.kprog = program(KVS, KFS, ['aQ']); for (const n of ['uInv', 'uTop', 'uHor', 'uGrain']) this.u['k' + n] = gl.getUniformLocation(this.kprog, n);
     this.corner = gl.createBuffer()!; gl.bindBuffer(gl.ARRAY_BUFFER, this.corner); gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
     this.dyn = this.layered(this.dynData, gl.DYNAMIC_DRAW, [0, 0, 0, 0]);
   }
@@ -422,7 +471,7 @@ export class StrokePainter {
     gl.bindVertexArray(vao);
     gl.bindBuffer(gl.ARRAY_BUFFER, this.corner); gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
     gl.bindBuffer(gl.ARRAY_BUFFER, buf);
-    for (let i = 0; i < 8; i++) { gl.enableVertexAttribArray(1 + i); gl.vertexAttribPointer(1 + i, 4, gl.FLOAT, false, STAMP * 4, (first * STAMP + i * 4) * 4); gl.vertexAttribDivisor(1 + i, 1); }
+    for (let i = 0; i < 9; i++) { gl.enableVertexAttribArray(1 + i); gl.vertexAttribPointer(1 + i, 4, gl.FLOAT, false, STAMP * 4, (first * STAMP + i * 4) * 4); gl.vertexAttribDivisor(1 + i, 1); }
     gl.bindVertexArray(null);
     return vao;
   }
@@ -442,34 +491,35 @@ export class StrokePainter {
    * `budget`), drop those no longer drawn. A chunk next to the eye's has all its marks; one further off only those that
    * would still show from there (by rank), and is made again, whole, when the eye comes near.
    */
-  sync(keys: string[], city: City, rules: StrokeRules, budget: number, ex: number, ez: number, far: number): number {
+  sync(keys: string[], city: City, rules: StrokeRules, budget: number, ex: number, ez: number, far: number, light: Light): number {
     if (this.rulesFor !== rules) { for (const l of this.chunks.values()) this.free(l); this.chunks.clear(); this.rulesFor = rules; }
     const want = new Set(keys); let made = 0;
     for (const [k, l] of this.chunks) if (!want.has(k)) { this.free(l); this.chunks.delete(k); }
     const ring = (k: string) => { const [cx, cz] = k.split(',').map(Number); return Math.max(Math.abs(cx - ex), Math.abs(cz - ez)); };
     for (const k of [...keys].sort((a, b) => ring(a) - ring(b))) {
       const isFar = ring(k) >= 2, have = this.chunks.get(k);
-      if (have && (have.far === isFar || (!have.far && isFar && ring(k) === 2))) continue;
+      // (made already, for this light: kept; for another light, kept and drawn until it's made again)
+      if (have && have.key === light.key && (have.far === isFar || (!have.far && isFar && ring(k) === 2))) continue;
       if (made++ >= budget) break;
       const [cx, cz] = k.split(',').map(Number), marks: Mark[] = [], from = (ring(k) - 1) * 64;
       const keeps = (rank: number) => !isFar || showsTo(rank, far) > from;
-      rules.city(city.chunk(cx, cz), city, (m) => { if (keeps(m.rank ?? 0.5)) marks.push(m); }, keeps);
+      rules.city(city.chunk(cx, cz), city, (m) => { if (keeps(m.rank ?? 0.5)) marks.push(m); }, keeps, light);
       const { data, counts } = this.stampsOf(marks);
       if (have) this.free(have);
-      this.chunks.set(k, { ...this.layered(data, this.gl.STATIC_DRAW, counts), far: isFar });
+      this.chunks.set(k, { ...this.layered(data, this.gl.STATIC_DRAW, counts), far: isFar, key: light.key });
     }
     return this.missing(keys);
   }
   /** forget every chunk's stamps (another city) */
   reset(): void { for (const l of this.chunks.values()) this.free(l); this.chunks.clear(); }
-  /** how many of these chunks still have no paint */
-  missing(keys: string[]): number { return keys.filter((k) => !this.chunks.has(k)).length; }
+  /** how many of these chunks still have no paint (or paint in another light) */
+  missing(keys: string[], light?: Light): number { return keys.filter((k) => !this.chunks.has(k) || (light && this.chunks.get(k)!.key !== light.key)).length; }
 
   /**
    * The frame: paper; `solid` (the renderer draws the city and the body into depth); then the paint. `sunVP`: the sun's
    * map, bound, for the shadow passages, centred at `sunC`.
    */
-  draw(o: { vp: M4; eye: number[]; far: number; rules: StrokeRules; city: City; bones: Bone[]; palette: V[]; sunVP: M4 | null; sunC: V; detail: number; solid: () => void; bare: boolean }): void {
+  draw(o: { vp: M4; inv: Float32Array; eye: number[]; far: number; rules: StrokeRules; light: Light; city: City; bones: Bone[]; palette: V[]; sunVP: M4 | null; sunC: V; detail: number; solid: () => void; bare: boolean }): void {
     const gl = this.gl, R = o.rules, timing = !!this.cost, t0 = timing ? (gl.finish(), performance.now()) : 0;
     let tick = t0; const lap = (k: keyof Cost) => { count(k); if (!timing) return; gl.finish(); const n = performance.now(); (this.cost as Cost)[k] = n - tick; tick = n; };
     // (counting: each pass's paint fragments per pixel, read back after it)
@@ -489,20 +539,29 @@ export class StrokePainter {
     o.solid();
     gl.colorMask(true, true, true, true);
     lap('depth');
+    // (the sky, one field, where nothing solid is)
+    if (R.skyField && !o.bare && !this.counting) {
+      gl.depthMask(false); gl.depthFunc(gl.LEQUAL); gl.useProgram(this.kprog); gl.uniformMatrix4fv(this.u.kuInv, false, o.inv);
+      gl.uniform3fv(this.u.kuTop, o.light.top); gl.uniform3fv(this.u.kuHor, o.light.horizon); gl.uniform1f(this.u.kuGrain, R.grain);
+      gl.bindVertexArray(this.dyn.vaos[0]); gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    }
     // (the paint)
     gl.useProgram(this.prog);
     gl.uniformMatrix4fv(this.u.uVP, false, o.vp); gl.uniform3f(this.u.uEye, o.eye[0], o.eye[1], o.eye[2]); gl.uniform1f(this.u.uFar, o.far);
-    gl.uniform1f(this.u.uFogNear, R.hazeNear); gl.uniform1f(this.u.uDetail, o.detail); gl.uniform3fv(this.u.uSunC, o.sunC);
+    gl.uniform1f(this.u.uFogNear, o.light.hazeNear); gl.uniform1f(this.u.uDetail, o.detail); gl.uniform3fv(this.u.uSunC, o.sunC);
     gl.uniform1i(this.u.uShadowMap, 3); gl.uniform1i(this.u.uShadowOn, o.sunVP ? 1 : 0); if (o.sunVP) gl.uniformMatrix4fv(this.u.uSunVP, false, o.sunVP);
-    gl.uniform3fv(this.u.uHaze, R.haze); gl.uniform1f(this.u.uFade, R.fadeToPaper); gl.uniform1f(this.u.uGrain, R.grain); gl.uniform1i(this.u.uCount, this.counting ? 1 : 0);
+    gl.uniform3fv(this.u.uHaze, o.light.haze); gl.uniform1f(this.u.uFade, R.fadeToPaper); gl.uniform1f(this.u.uGrain, R.grain); gl.uniform1i(this.u.uCount, this.counting ? 1 : 0);
     gl.depthMask(false); gl.depthFunc(gl.LEQUAL); gl.enable(gl.BLEND);
+    // (toward the eye by the slope too: a face seen edge-on still passes against its own depth, no paper at a box's edge)
+    gl.enable(gl.POLYGON_OFFSET_FILL); gl.polygonOffset(-2, -2);
     if (this.counting) gl.blendFunc(gl.ONE, gl.ONE); else gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ZERO, gl.ONE);
     // (the moving marks: the sky about the eye, the runner's shadow, the runner)
     const dyn: Mark[][] = [[], [], []];
-    if (R.sky && !o.bare) for (const m of R.sky) dyn[0].push({ ...m, a: add(o.eye as V, scale(m.a, o.far * 1.3)), b: add(o.eye as V, scale(m.b, o.far * 1.3)), width: m.width * o.far * 1.3 });
-    const parts = o.bones.length ? partsOf(o.bones, o.eye, unit(R.sun), o.city) : [];
-    if (parts.length && !o.bare) { const pel = parts.find((p) => p.kind === 'pelvis') ?? parts[0], c = scale(add(pel.a, pel.b), 0.5); R.shadow(parts, receivers(o.city, c[0], c[1], c[2], R.sun), (m) => dyn[1].push(m)); }
-    if (parts.length) R.figure(parts, o.palette, (m) => dyn[2].push(m));
+    if (R.sky && this.skyFor !== o.light.key) { this.skyMarks = R.sky(o.light); this.skyFor = o.light.key; }
+    if (R.sky && !o.bare) for (const m of this.skyMarks) dyn[0].push({ ...m, a: add(o.eye as V, scale(m.a, o.far * 1.3)), b: add(o.eye as V, scale(m.b, o.far * 1.3)), width: m.width * o.far * 1.3 });
+    const parts = o.bones.length ? partsOf(o.bones, o.eye, unit(o.light.sun), o.city) : [];
+    if (parts.length && !o.bare && R.shadow) { const pel = parts.find((p) => p.kind === 'pelvis') ?? parts[0], c = scale(add(pel.a, pel.b), 0.5); R.shadow(parts, receivers(o.city, c[0], c[1], c[2], o.light.sun), (m) => dyn[1].push(m), o.light); }
+    if (parts.length) R.figure(parts, o.palette, (m) => dyn[2].push(m), o.light);
     const flat: number[] = [], dc: number[] = [];
     for (const ms of dyn) { const n0 = flat.length; for (const m of ms) deposit(m, flat); dc.push((flat.length - n0) / STAMP); }
     const nd = Math.min(this.dynCap, flat.length / STAMP); this.dynData.set(flat.slice(0, nd * STAMP));
@@ -526,7 +585,7 @@ export class StrokePainter {
     lap('figure');
     this.stamps = stamps;
     if (this.cost) { this.cost.stamps = stamps; this.cost.chunks = this.chunks.size; }
-    gl.depthMask(true); gl.depthFunc(gl.LESS); gl.disable(gl.BLEND); gl.bindVertexArray(null);
+    gl.disable(gl.POLYGON_OFFSET_FILL); gl.depthMask(true); gl.depthFunc(gl.LESS); gl.disable(gl.BLEND); gl.bindVertexArray(null);
   }
   /** set: each paint fragment adds one to the colour, and each pass's share is read back into `overdraw` (fragments a
    * pixel, on average, and at most: the paint's cost, as the GPU sees it, apart from the time) */

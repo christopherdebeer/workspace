@@ -421,6 +421,26 @@ function applyTime(): void { const T = TIMES[menu.timeI]; rd.time = { sun: sunOf
 /** find this city's ledge and stand everyone along it (another seed tried if this one has none) */
 function placeMenu(): void {
   for (let n = 0; n < 12 && !(menu.ledge = findLedge(city, CHARACTERS.length)); n++) { seed++; city = new City(seed); rd.setCity(city); }
+  // (the first landing, across the gap from the middle of the line: the paint picks it out)
+  // (the first roof below the ledge that the eye can see, out along the way it looks: what's under a roof right at the
+  // lip is mostly hidden by the lip itself)
+  {
+    const L = menu.ledge; rd.focus = null;
+    if (L) {
+      const m = L.spots[L.spots.length >> 1], eye = [m[0] - L.n[0] * EYE_BACK, m[1] + EYE_UP, m[2] - L.n[2] * EYE_BACK];
+      // (and enough of it seen to be a place to land, not a sliver past the lip: three metres of its top in view)
+      const seenOf = new Map<object, number>();
+      for (let s = 1.2; s < 40 && !rd.focus; s += 0.5) {
+        const x = m[0] + L.n[0] * s, z = m[2] + L.n[2] * s, h = city.heightAt(x, z);
+        if (h < 2 || h > L.y - 0.5) continue;
+        let seen = true;
+        for (let k = 0.05; k < 0.97 && seen; k += 0.03) { const qx = eye[0] + (x - eye[0]) * k, qz = eye[2] + (z - eye[2]) * k, qy = eye[1] + (h - eye[1]) * k; if (city.heightAt(qx, qz) > qy + 0.05) seen = false; }
+        const b = seen ? city.topAt(x, z) : null; if (!b) continue;
+        const n = (seenOf.get(b) ?? 0) + 0.5; seenOf.set(b, n);
+        if (n >= 3) rd.focus = { x0: b.x0, z0: b.z0, x1: b.x1, z1: b.z1, y: b.y1 };
+      }
+    }
+  }
   menu.rigs = CHARACTERS.map((c) => new Rig(c));
   rd.palette = CHARACTERS.flatMap((c) => c.palette);
   applyTime();
@@ -652,7 +672,7 @@ requestAnimationFrame(frame);
     seed, t: time, frames, x: runner.x, y: runner.y, z: runner.z, state: runner.state, speed: runner.speed, dist: runner.dist,
     move: runner.move, leaps: runner.leaps, climbs: runner.climbs, walls: runner.walls, wallSteps: runner.wallSteps, braces: runner.braces, rolls: runner.rolls, dashes: runner.dashes, streets: runner.streets, made: runner.made,
     look: rd.look, tris: rd.tris, pending: rd.pending(runner.x, runner.z),
-    menu: menu.active, hop: menu.hop && { state: menu.hop.r.state, move: menu.hop.r.move, y: menu.hop.r.y, t: menu.hop.t, up: menu.hop.up, down: menu.hop.down, speed: menu.hop.r.speed }, chosen: CHARACTERS[ORDER[menu.sel]]?.name, character: character.name, timeOfDay: TIMES[menu.timeI].name,
+    focus: rd.focus, menu: menu.active, hop: menu.hop && { state: menu.hop.r.state, move: menu.hop.r.move, y: menu.hop.r.y, t: menu.hop.t, up: menu.hop.up, down: menu.hop.down, speed: menu.hop.r.speed }, chosen: CHARACTERS[ORDER[menu.sel]]?.name, character: character.name, timeOfDay: TIMES[menu.timeI].name,
     plan: thinking && { ahead: words(thinking.primary), score: thinking.primary.score, left: thinking.left && { off: thinking.left.off, score: thinking.left.score }, right: thinking.right && { off: thinking.right.off, score: thinking.right.score }, best: thinking.best.off },
   }),
   tune: TUNE,

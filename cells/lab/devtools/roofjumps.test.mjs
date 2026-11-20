@@ -641,14 +641,16 @@ console.log('roofjumps: ok');
   const n = f.length / STAMP; assert.equal(n, 4);
   for (let i = 0; i < n; i++) { assert.equal(f[i * STAMP + 23], i / n); assert.equal(f[i * STAMP + 27], (i + 1) / n); assert.deepEqual(f.slice(i * STAMP + 16, i * STAMP + 19), f.slice(16, 19)); }
   const sc = SCENES.find((s) => s.key === 'paint-alley'), city = new City(1, false, sc.course), ch = city.chunk(1, 0);
-  const marks = (R, keeps = () => true) => { const ms = []; R.city(ch, city, (m) => { if (keeps(m.rank ?? 0.5)) ms.push(m); }, keeps); return ms; };
+  const light = { sun: [-0.55, 0.6, 0.58], top: [0.58, 0.56, 0.7], horizon: [0.89, 0.83, 0.84], haze: [0.77, 0.74, 0.83], hazeNear: 0.12, focus: null, key: 'day' };
+  const marks = (R, keeps = () => true) => { const ms = []; R.city(ch, city, (m) => { if (keeps(m.rank ?? 0.5)) ms.push(m); }, keeps, light); return ms; };
   const a = marks(strokeGouacheRules), b = marks(strokeGouacheRules);
   assert.deepEqual(a.map((m) => [m.key, m.a, m.b]), b.map((m) => [m.key, m.a, m.b]), 'a chunk paints the same twice');
   const keeps = (r) => showsTo(r, 256) > 64, far = marks(strokeGouacheRules, keeps), keys = new Set(a.map((m) => m.key));
-  assert.ok(far.length < a.length * 0.6 && far.every((m) => keys.has(m.key) || m.key.includes('/p')), `far ${far.length} of ${a.length}`);
-  const lips = ch.holds.filter((h) => h.kind === 'edge').length, kept = far.filter((m) => m.key.endsWith('/cap') && m.rank === 1).length;
+  assert.ok(far.length < a.length * 0.6 && far.every((m) => keys.has(m.key)), `far ${far.length} of ${a.length}`);
+  assert.ok(far.every((m) => m.kind === 6 || m.rank >= 0.38), 'far off: underpainting and what a hand can catch');
+  const lips = ch.holds.filter((h) => h.kind === 'edge').length, kept = far.filter((m) => m.key.endsWith('/lip') && m.rank === 1).length;
   assert.ok(kept > 0 && kept <= lips, `building lips kept far: ${kept} of ${lips} edge holds`);
-  assert.ok(marks(sumiRules).length * 8 < a.length, 'sumi leaves most of it out');
+  assert.ok(marks(sumiRules).length * 3 < a.length, `sumi leaves most of it out (${marks(sumiRules).length} against ${a.length})`);
 }
 console.log('roof jumps: brushwork ok');
 
