@@ -79,6 +79,9 @@ export class Rig {
   private aside = 0;
   /** the pelvis carried toward a footfall the leg couldn't otherwise reach (world, m) */
   give: V3 = [0, 0, 0];
+  /** a jump in where the body is that its motion doesn't explain (put onto a lip, onto a wall's top), drawn out of over a
+   * tenth of a second rather than snapped to (world, m) */
+  private slip: V3 = [0, 0, 0]; private was: V3 | null = null; private wasState = ''; private wasV: V3 = [0, 0, 0];
   /** each hand's reach: how much it has hold of the arm (0..1), and where to */
   private hands = { L: { w: 0, p: [0, 0, 0] as V3 }, R: { w: 0, p: [0, 0, 0] as V3 } };
   /** and each foot's: planted where it was put, the body going over it; and which way what it's on faces */
@@ -401,6 +404,16 @@ export class Rig {
 
   /** Ease the pose toward the body's; `dt` large sets it at once. */
   update(dt: number, r: Body): void {
+    // (where it is against where its motion would have put it: the difference kept as an offset, eased away)
+    if (this.was && dt > 0 && dt <= 0.2) {
+      const ex = this.was[0] + this.wasV[0] * dt, ey = this.was[1] + this.wasV[1] * dt, ez = this.was[2] + this.wasV[2] * dt, jx = ex - r.x, jy = ey - r.y, jz = ez - r.z;
+      // (never left trailing below where it's been put (into what it was put on): put up onto something, the hips start
+      // where they were and the legs bend under them, then rise at the legs' pace; and not moves that carry the body by hand on purpose (a climb, a hang's spring): only a change of state, or the run and the flight)
+      const steered = r.state === 'climb' || r.state === 'chimney' || r.state === 'plant';
+      if ((!steered || r.state !== this.wasState) && Math.hypot(jx, jy, jz) > 0.06 && Math.hypot(jx, jy, jz) < 1.5) { this.slip[0] += jx; this.slip[1] += Math.max(0, jy); this.slip[2] += jz; if (jy < -0.06 && r.state === 'ground') this.hipY = Math.max(0.45, this.hipY + jy); }
+      const k = Math.exp(-(r.state === "ground" ? 20 : 16) * dt); this.slip = [this.slip[0] * k, this.slip[1] * k, this.slip[2] * k];
+    } else this.slip = [0, 0, 0];
+    this.wasState = r.state; this.was = [r.x, r.y, r.z]; this.wasV = [r.vx ?? 0, r.state === 'air' || r.state === 'wall' ? r.vy ?? 0 : 0, r.vz ?? 0];
     // (each joint toward its pose as a spring a little under critical damping, so a limb carries past where it's going
     // and comes back: follow-through; set at once for a long step)
     // (the stride's phase as the limbs follow it: smoothed, so a footfall re-timed (a landing, a save, a stutter) is caught up
@@ -495,7 +508,9 @@ export class Rig {
     const walk = r.state === 'ground' && r.move === 'run' && stride < 0 ? sm(0.2, 0.6, r.speed) * (1 - sm(2.2, 3, r.speed)) : 0;
     const groundW = walk > 0 ? Math.min(ground, ground - walk * (0.05 + 0.03 * (r.reach.fl && r.reach.fr ? 1 : 0))) : ground;
     const hip = groundW * this.stood + (0.98 - p.sink) * (1 - this.stood);
-    this.hipY = r.state === 'ground' && r.move !== 'roll' ? Math.min(hip, 0.99 - 0.46 * r.land) : hip;
+    const hipTo = r.state === 'ground' && r.move !== 'roll' ? Math.min(hip, 0.99 - 0.46 * r.land) : hip;
+    // (the hips never jump up: risen to a new height at most as fast as legs push (6 m/s); let down as fast as a landing takes them)
+    this.hipY = dt > 0 && dt <= 0.2 ? Math.max(this.hipY - 18 * dt, Math.min(this.hipY + 6 * dt, hipTo)) : hipTo;
     // (the chest a beat behind the hips: when they're stopped short (a landing), it carries on down and comes back up;
     // when they're thrown up, it's left a little behind)
     if (dt > 0 && dt <= 0.2) {
@@ -506,7 +521,7 @@ export class Rig {
     // (a planted foot the leg can't reach from where the pose put the hips: the hips go to it (down, on the ground; toward
     // the wall, on one), as far as a body would sink or lean to keep its footing; past that, the foot lets go rather than
     // the leg being pulled out straight and the foot dragged off its footfall)
-    const want: V3 = [0, 0, 0], P0 = this.pelvis(r, [0, 0, 0]), fw = unit([P0[8], 0, P0[10]]);
+    const want: V3 = [0, 0, 0], P0 = this.pelvis(r, this.slip), fw = unit([P0[8], 0, P0[10]]);
     for (const [f, side] of [[this.soles.L, 1], [this.soles.R, -1]] as const) {
       if (f.w < 0.05) continue;
       const s = point(P0, side * 0.095, -HIP, 0), fall: V3 = [f.p[0] + this.on[0] * SOLE, f.p[1] + this.on[1] * SOLE, f.p[2] + this.on[2] * SOLE];
@@ -541,7 +556,7 @@ export class Rig {
     const p = this.pose, out: Bone[] = [];
     // (turned right over, forwards, through a flip or a roll; over sideways, the lead leg's way; round on its hand, a palm
     // spin; and carried toward a footfall it couldn't otherwise reach)
-    const P = this.pelvis(r, this.give);
+    const P = this.pelvis(r, [this.give[0] + this.slip[0], this.give[1] + this.slip[1], this.give[2] + this.slip[2]]);
     const add = (name: string, m: M4, y0: number, w0: number, d0: number, y1: number, w1: number, d1: number, zc = 0) => out.push({ name, m, y0, w0, d0, y1, w1, d1, zc });
     add('pelvis', P, -0.09, 0.26, 0.17, 0.1, 0.3, 0.18);
     const S = rotY(rotX(translate(P, 0, 0.1, 0), p.spine + this.chest), p.twist);

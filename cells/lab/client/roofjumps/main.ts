@@ -20,7 +20,7 @@
  * over the picture (and `auto`) · `far=` chunks drawn each way (4) · `side=90&zoom=1.6` the eye swung round the figure
  * and brought closer: for looking at the rig · `study=<move>&mu=` one move's pose held, that far through it (0..1) ·
  * `sheet=<move,move…>` a pose sheet: each of those moves at five points through it, the figure alone (with `side=90`,
- * from the side) · `brush=1` from a stand, light pushes every way and a turn round (brush.ts), to see the feet · `strip=<seconds>` a stretch of its own run from there laid out frame by frame, the move named on
+ * from the side) · `from=x,z` start there (the street) · `hold=<radians>` one world direction held · `brush=1` from a stand, light pushes every way and a turn round (brush.ts), to see the feet · `strip=<seconds>` a stretch of its own run from there laid out frame by frame, the move named on
  * each (`frames=24`, `every=0.1`, `cols=6`).
  */
 import { noise1 } from '../kit/rng';
@@ -55,6 +55,8 @@ const practiceLine = q.get('line') === 'transfer';
 const city = new City(seed, practiceLine), runner = new Runner(city), rig = new Rig(), rd = new Renderer(canvas, city);
 /** the way the body faced at the start, that `brush=` pushes are turned from */
 const brushHeading = runner.heading;
+// (`from=x,z`: start there instead, on whatever's there: the street, to see it find its way up)
+if (q.has('from')) { const [fx, fz] = q.get('from')!.split(',').map(Number); runner.x = fx; runner.z = fz; runner.y = city.heightAt(fx, fz); }
 rd.radius = Math.max(1, Math.min(8, Number(q.get('far') ?? 4) | 0));
 if ((LOOKS as readonly string[]).includes(q.get('look') ?? '')) rd.look = q.get('look') as Look;
 rd.resize(); addEventListener('resize', () => rd.resize());
@@ -140,6 +142,8 @@ function asked(t: number): Input {
   // (`direct=x,z;x,z…`: a directed run (devtools/roofjumps-direct.mjs), its waypoints followed as the director followed them)
   // (`brush=1`: from a stand, short light pushes every way and a turn round (brush.ts), to see the feet)
   if (brushStudy) return brushInput(t, brushHeading);
+  // (`hold=<radians>`: one world direction held hard, as the tests hold a line; with `from=x,z`, from the street)
+  if (holdAt !== null) return { x: Math.sin(holdAt), z: Math.cos(holdAt), jump: false };
   if (directed) return follow(runner, directed, directedAt, DT);
   if (catchStudy) {
     const r = runner, d = { x: 0.3, z: 0.95 };
@@ -187,7 +191,7 @@ function input(t: number, dt: number): Input {
   const a = asked(t), mag = Math.hypot(a.x, a.z);
   if (wantsPlan() && (thought < 0 || t - thought >= 0.12)) think(a, t);
   // (by itself, all the way onto the plan; taken over, only as far as `assist` says, like any run of yours)
-  const by = takeoff || catchStudy || directed || brushStudy ? 0 : TUNE.auto && !takenOver(t) ? 1 : TUNE.assist;
+  const by = takeoff || catchStudy || directed || brushStudy || holdAt !== null ? 0 : TUNE.auto && !takenOver(t) ? 1 : TUNE.assist;
   lean += ((thinking && by > 0 && mag > 0.1 ? thinking.best.off * by : 0) - lean) * (1 - Math.exp(-5 * dt));
   if (Math.abs(lean) < 1e-4 || mag <= 0.1) return a;
   // (to the right is a smaller angle: see plan.ts)
@@ -235,7 +239,7 @@ function grid(cols: number, names: string[]): void {
 // ─── the frame ────────────────────────────────────────────────────────────────
 const DT = 1 / 120;
 /** `takeoff=`: a scripted takeoff to film (see `asked`) */
-const takeoff = q.get('takeoff'), catchStudy = q.get('catch'), brushStudy = q.has('brush');
+const takeoff = q.get('takeoff'), catchStudy = q.get('catch'), brushStudy = q.has('brush'), holdAt = q.has('hold') ? Number(q.get('hold')) : null;
 const directed: Waypoint[] | null = q.get('direct') ? q.get('direct')!.split(';').map((p) => { const [x, z, a, s] = p.split(',').map(Number); return [x, z, a, s] as Waypoint; }) : null, directedAt: Follow = { i: 0, t: 0 };
 let time = 0, acc = 0, last = performance.now(), frames = 0, rush = 0, near = 1;
 const advance = (dt: number) => { runner.step(dt, input(time, dt)); rig.update(dt, runner); time += dt; };
@@ -246,7 +250,7 @@ if (TUNE.auto && runner.speed > 1) yaw = Math.atan2(runner.vx, runner.vz);
 if (sheet) grid(MUS.length, sheet.flatMap((m) => MUS.map((u) => `${m} ${u}`)));
 if (q.has('strip')) {
   // (run on to there, then on from there a frame at a time, keeping each)
-  if (!takeoff && !catchStudy && !directed && !brushStudy) TUNE.auto = 1; strip = [];
+  if (!takeoff && !catchStudy && !directed && !brushStudy && holdAt === null) TUNE.auto = 1; strip = [];
   const n = Math.max(1, Number(q.get('frames') ?? 24) | 0), every = Math.max(DT, Number(q.get('every') ?? 0.1));
   for (let i = Math.round(Number(q.get('strip')) / DT); i > 0; i--) advance(DT);
   for (let f = 0; f < n; f++) {
