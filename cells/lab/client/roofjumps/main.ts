@@ -47,7 +47,7 @@ import { brushInput } from './brush';
 import { sceneByKey, SCENES } from './scenes';
 import { heldBody } from './poses';
 import { CHARACTERS, characterByName } from './character';
-import { TIMES, findLedge, sunOf, underAt } from './menu';
+import { EYE_BACK, EYE_UP, TIMES, findLedge, idlePose, sunOf, underAt } from './menu';
 import type { Ledge, Under } from './menu';
 import type { Bone } from './rig';
 import type { Follow, Waypoint } from './direct';
@@ -397,6 +397,8 @@ const menu = {
   vp: null as Float32Array | null, eye: [0, 0, 0], target: [0, 0, 0], fov: 1,
   launch: -1, heading: 0, blend: 1, from: null as { eye: number[]; target: number[]; fov: number } | null,
   swipe: null as { id: number; x: number; y: number; under: Under } | null,
+  /** how attentive each is (0 resting … 1 chosen, eased), and when each was last chosen (s, for the look back) */
+  attention: [] as number[], chosenAt: [] as number[],
 };
 /** who stands where along the ledge, left to right as the eye sees them: the runner centre-left, as on the poster */
 const ORDER = ((names) => { const o = names.map((nm) => CHARACTERS.findIndex((c) => c.name === nm)).filter((i) => i >= 0); for (let i = 0; i < CHARACTERS.length; i++) if (!o.includes(i)) o.push(i); return o; })(['broad', 'teen', 'runner', 'slight', 'child', 'older']);
@@ -413,26 +415,45 @@ function placeMenu(): void {
   applyTime();
   document.getElementById('seed')!.textContent = String(seed);
 }
-/** everyone on the ledge but `skip`, standing, facing out; each dressed from its own eight of the palette */
-function crewBones(skip: number): Bone[] {
-  const L = menu.ledge!, out: Bone[] = [];
+/**
+ * Everyone on the ledge but `skip`, standing about, facing out (menu.ts idlePose): the one chosen attentive, looking back
+ * over its shoulder at the eye as it's chosen; once one has gone (`watch`), the rest following it with their heads.
+ * Each dressed from its own eight of the palette.
+ */
+function crewBones(skip: number, dt = 0, watch: number[] | null = null): Bone[] {
+  const L = menu.ledge!, out: Bone[] = [], now = performance.now() / 1000;
   ORDER.forEach((i, slot) => {
     if (i === skip) return;
     const p = L.spots[slot], rg = menu.rigs[i], body = heldBody({ x: p[0], y: p[1], z: p[2] }, 'stand', 0.15 + ((i * 0.37) % 0.7), i % 2, 1, rg.body.reachScale);
     body.heading = L.heading; rg.update(1, body);
-    for (const b of rg.bones(body)) out.push({ ...b, mat: (b.mat ?? 0) + 8 * i });
+    const want = !watch && menu.active && slot === menu.sel ? 1 : 0, cur = menu.attention[i] ?? want;
+    menu.attention[i] = cur + (want - cur) * (1 - Math.exp(-(want > cur ? 5 : 2.5) * dt));
+    // (the look: back at the eye just after being chosen (a rise, a hold, a turn away again); or toward the runner)
+    let yaw = 0, pitch = 0;
+    const toward = (q: number[], most: number) => {
+      const dx = q[0] - p[0], dz = q[2] - p[2]; let a = Math.atan2(dx, dz) - L.heading; a -= Math.round(a / (2 * Math.PI)) * 2 * Math.PI;
+      return Math.max(-most, Math.min(most, a));
+    };
+    if (watch) { yaw = toward(watch, 1.3); pitch = Math.max(-0.5, Math.min(0.3, Math.atan2(watch[1] - p[1] - 1.6, Math.hypot(watch[0] - p[0], watch[2] - p[2]) + 0.1))) * -1; }
+    else if (want) {
+      const s = now - (menu.chosenAt[i] ?? -99), g = s < 0 ? 0 : s < 0.35 ? s / 0.35 : s < 0.95 ? 1 : s < 1.7 ? 1 - (s - 0.95) / 0.75 : 0;
+      yaw = g * g * (3 - 2 * g) * toward(menu.eye, 1.15); pitch = -0.08 * g;
+    }
+    const bones = rg.bones(body);
+    idlePose(bones, { heading: L.heading, attention: menu.attention[i], look: { yaw, pitch }, t: now, seed: i + 1 });
+    for (const b of bones) out.push({ ...b, mat: (b.mat ?? 0) + 8 * i });
   });
   return out;
 }
 /** the runner's bones, and (once taken from the menu) the others on the ledge with it */
-function withCrew(own: Bone[]): Bone[] { return menu.crewI < 0 ? own : [...own.map((b) => ({ ...b, mat: (b.mat ?? 0) + 8 * menu.crewI })), ...menu.crew]; }
+function withCrew(own: Bone[], dt = 0): Bone[] { if (menu.crewI < 0) return own; menu.crew = crewBones(menu.crewI, dt, [runner.x, runner.y + 1, runner.z]); return [...own.map((b) => ({ ...b, mat: (b.mat ?? 0) + 8 * menu.crewI })), ...menu.crew]; }
 /** the eye on the ledge: behind the one chosen (between two, as it moves along), a little above their heads, looking out */
 function menuView(aspect: number, now: number) {
   const L = menu.ledge!, s = Math.max(0, Math.min(L.spots.length - 1, menu.at)), i0 = Math.floor(s), i1 = Math.min(L.spots.length - 1, i0 + 1), f = s - i0;
-  const P = [0, 1, 2].map((k) => L.spots[i0][k] + (L.spots[i1][k] - L.spots[i0][k]) * f), n = L.n, t = L.t, back = aspect < 1 ? 6 : 5;
+  const P = [0, 1, 2].map((k) => L.spots[i0][k] + (L.spots[i1][k] - L.spots[i0][k]) * f), n = L.n, t = L.t, back = aspect < 1 ? EYE_BACK : EYE_BACK - 1.2;
   // (breathing: a hand-held eye, barely)
   const sway = 0.25 + Math.sin(now * 0.31) * 0.07, bob = Math.sin(now * 0.23) * 0.04;
-  const eye = [P[0] - n[0] * back + t[0] * sway, P[1] + 1.8 + bob, P[2] - n[2] * back + t[2] * sway], target = [P[0] + n[0] * 30, P[1] - 1.6, P[2] + n[2] * 30];
+  const eye = [P[0] - n[0] * back + t[0] * sway, P[1] + EYE_UP + bob, P[2] - n[2] * back + t[2] * sway], target = [P[0] + n[0] * 30, P[1] - 5.5, P[2] + n[2] * 30];
   const fov = ((aspect < 1 ? 48 : 38) * Math.PI) / 180;
   return { eye, target, fov, vp: mul(perspective(fov, aspect, 0.15, rd.radius * 64 * 1.5), lookAt(eye, target, [0, 1, 0])) };
 }
@@ -444,7 +465,7 @@ function menuFrame(dt: number): void {
   Object.assign(menu, { vp: v.vp, eye: v.eye, target: v.target, fov: v.fov });
   const c = L.spots[Math.round(menu.at)];
   rd.stream(c[0], c[2], 3);
-  rd.draw(v.vp, v.eye, crewBones(-1), shadowAt(c[0], c[1], c[2]));
+  rd.draw(v.vp, v.eye, crewBones(-1, dt), shadowAt(c[0], c[1], c[2]));
   if (menuSay && sayUntil && performance.now() > sayUntil) { menuSay.textContent = 'Swipe to choose'; sayUntil = 0; }
 }
 /** what's under a point of the page, on the ledge's picture */
@@ -454,7 +475,7 @@ function menuUnder(cx: number, cy: number): Under {
 }
 /** a sideways swipe on something: the next (d = 1) or the last of what it changes */
 function menuSwipe(u: Under, d: number): void {
-  if (u.kind === 'character') { menu.sel = Math.max(0, Math.min(ORDER.length - 1, menu.sel + d)); say(CHARACTERS[ORDER[menu.sel]].title); }
+  if (u.kind === 'character') { const s = Math.max(0, Math.min(ORDER.length - 1, menu.sel + d)); if (s !== menu.sel) { menu.sel = s; menu.chosenAt[ORDER[s]] = performance.now() / 1000; } say(CHARACTERS[ORDER[menu.sel]].title); }
   else if (u.kind === 'sky') { menu.timeI = (menu.timeI + d + TIMES.length) % TIMES.length; applyTime(); say(TIMES[menu.timeI].name); }
   else if (u.kind === 'roof') { setLook(LOOKS[(LOOKS.indexOf(rd.look) + d + LOOKS.length) % LOOKS.length]); say(rd.look); }
   else {
@@ -482,6 +503,8 @@ if (menu.active) {
   menu.sel = menu.at = Math.max(0, ORDER.indexOf(CHARACTERS.findIndex((c) => c.name === character.name)));
   menu.timeI = Math.max(0, TIMES.findIndex((t) => t.name === q.get('time')));
   placeMenu();
+  // (the one the eye opens behind glances back at it, a moment after)
+  menu.chosenAt[ORDER[menu.sel]] = performance.now() / 1000 + 1.2;
   document.body.classList.add('menu'); if (menuEl) menuEl.hidden = false;
   document.getElementById('take')?.addEventListener('click', takeControl);
 } else if (q.has('time')) { const i = TIMES.findIndex((t) => t.name === q.get('time')); if (i >= 0) { menu.timeI = i; applyTime(); } }
@@ -558,7 +581,7 @@ function frame(now: number): void {
     const fov = menu.from.fov + (((TUNE.fov + (aspect < 1 ? 12 : 0)) * Math.PI) / 180 - menu.from.fov) * b;
     vp = mul(perspective(fov, aspect, 0.15, rd.radius * 64 * 1.5), lookAt(E, T, [0, 1, 0])); eye = E;
   }
-  rd.draw(vp, eye, withCrew(rig.bones(held ?? runner)), shadowAt(runner.x, runner.y, runner.z));
+  rd.draw(vp, eye, withCrew(rig.bones(held ?? runner), dt), shadowAt(runner.x, runner.y, runner.z));
   const guides = rd.def.guides !== false;
   if (guides && TUNE.holds && !held) rd.lines(vp, eye, holdStrokes(city.holdsNear(runner.x, runner.z, TUNE.holdsNear), runner.reach, runner.x, runner.y, runner.z, TUNE.holdsNear));
   if (guides && TUNE.plan && thinking && !held) rd.lines(vp, eye, planStrokes(thinking));

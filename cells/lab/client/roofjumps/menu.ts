@@ -14,7 +14,9 @@ import { TAG } from './city';
 
 type V3 = [number, number, number];
 /** how far apart they stand along the ledge (m): shoulder to shoulder, near enough */
-const SPACING = 0.78;
+const SPACING = 1.4;
+/** where the menu's eye is, behind the line and above the roof (m): the ledge must leave it a clear view (main.ts menuView) */
+export const EYE_BACK = 7.6, EYE_UP = 3.6;
 export interface Ledge {
   box: Box; y: number;
   /** out over the edge (level, unit), and along it (to the line's right, seen from behind) */
@@ -46,10 +48,11 @@ export function findLedge(city: City, count: number): Ledge | null {
           for (const d of [0, 0.4, 0.8, -0.6]) if (Math.abs(city.heightAt(p[0] + n[0] * d, p[2] + n[2] * d) - y) > 0.01) clear = false;
           spots.push(p);
         }
-        // (and room behind for the eye: nothing taller than them within it, from the line back to where the eye stands)
-        for (let i = 0; i < count && clear; i += Math.max(1, count - 1)) for (let s = 0.5; s <= 7.5; s += 0.5) for (const k of [-1.5, 0, 1.5]) {
+        // (and room behind for the eye: nothing on the roof between it and anyone's feet, along the line it sees them by, nor
+        // standing up behind it)
+        for (let i = 0; i < count && clear; i++) for (let s = 0.3; s <= EYE_BACK + 1.5; s += 0.3) for (const k of [-0.5, 0, 0.5]) {
           const p = spots[i], x = p[0] - n[0] * s + t[0] * k, z = p[2] - n[2] * s + t[2] * k;
-          if (city.heightAt(x, z) > y + 0.6) clear = false;
+          if (city.heightAt(x, z) > y + 0.05 + Math.min(EYE_UP, (EYE_UP * s) / EYE_BACK) * 0.85) clear = false;
         }
         if (!clear) continue;
         // (across: the first roof out over the gap; open: how far below the view out over it falls)
@@ -111,4 +114,52 @@ export function underAt(ndc: [number, number], vp: Float32Array, inv: Float32Arr
 function mulPoint(m: Float32Array, p: number[]): number[] {
   const x = m[0] * p[0] + m[4] * p[1] + m[8] * p[2] + m[12], y = m[1] * p[0] + m[5] * p[1] + m[9] * p[2] + m[13], z = m[2] * p[0] + m[6] * p[1] + m[10] * p[2] + m[14], w = m[3] * p[0] + m[7] * p[1] + m[11] * p[2] + m[15];
   return [x / w, y / w, z / w];
+}
+
+/**
+ * Standing about, as a layer over a standing pose's bones (the rig has no idle of its own): the head turned about the
+ * neck, the upper body bent at the waist, the whole leaned over the feet. At rest: a slouch, slow breathing, the weight
+ * shifting from leg to leg, the head drifting, looking about and down at the drop. Attentive (`attention` 1, the one
+ * chosen): up straight, chest up, a quicker breath, leaning a little toward the edge, the eyes out over the city; and
+ * `look` (radians, about up and across): a turn of the head asked for over that (a look back over the shoulder at the
+ * eye when chosen, or toward the runner once one's gone).
+ */
+export function idlePose(bones: { name: string; m: Float32Array }[], o: { heading: number; attention: number; look: { yaw: number; pitch: number }; t: number; seed: number }): void {
+  const f: V3 = [Math.sin(o.heading), 0, Math.cos(o.heading)], r: V3 = [-f[2], 0, f[0]], up: V3 = [0, 1, 0], a = o.attention, t = o.t, sd = o.seed;
+  const wander = (k: number, rate: number) => noise(sd * 13.7 + k, t * rate) * 2 - 1;
+  const at = (n: string) => bones.find((b) => b.name === n);
+  const head = at('head'), torso = at('torso'), feet = bones.filter((b) => b.name.startsWith('foot'));
+  if (!head || !torso) return;
+  const neck: V3 = [head.m[12], head.m[13], head.m[14]], waist: V3 = [torso.m[12], torso.m[13], torso.m[14]];
+  const ground: V3 = feet.length ? [feet.reduce((s, b) => s + b.m[12], 0) / feet.length, Math.min(...feet.map((b) => b.m[13])), feet.reduce((s, b) => s + b.m[14], 0) / feet.length] : [waist[0], waist[1] - 1, waist[2]];
+  const isHead = (n: string) => n === 'head' || n === 'worn:head';
+  const isUpper = (n: string) => isHead(n) || /^(torso|upperArm|foreArm)/.test(n) || /^worn:(torso|upperArm|foreArm)/.test(n);
+  // (a positive turn about `r` tips the top back: a slouch, forward, is negative)
+  const breath = Math.sin(t * (1.6 + 0.9 * a) + sd * 5) * (0.012 + 0.008 * a);
+  const headYaw = (1 - a) * wander(1, 0.18) * 0.45 + o.look.yaw, headPitch = (1 - a) * (0.16 + 0.12 * wander(2, 0.12)) - a * 0.04 + o.look.pitch;
+  const slouch = (1 - a) * 0.08 - a * 0.035, sway = (1 - a) * wander(3, 0.09) * 0.03 + a * Math.sin(t * 2.1 + sd) * 0.006;
+  const apply = (sel: (n: string) => boolean, M: Float32Array) => { for (const b of bones) if (sel(b.name)) b.m = mulM(M, b.m); };
+  apply(isHead, mulM(rotAbout(neck, up, headYaw), rotAbout(neck, r, -headPitch)));
+  // (the shoulders go a little way with a turn of the head: a look back is a turn of the body too)
+  apply(isUpper, mulM(rotAbout(waist, up, o.look.yaw * 0.3), rotAbout(waist, r, -(slouch + breath))));
+  apply(() => true, mulM(rotAbout(ground, f, sway), rotAbout(ground, r, -a * 0.03)));
+}
+/** a 1-D value noise (0..1) */
+function noise(seed: number, x: number): number {
+  const h = (i: number) => { let v = Math.imul((i | 0) ^ Math.imul(seed * 1000 | 0, 0x9e3779b1), 0x85ebca6b); v ^= v >>> 13; v = Math.imul(v, 0xc2b2ae35); v ^= v >>> 16; return (v >>> 0) / 4294967296; };
+  const i = Math.floor(x), u = x - i, s = u * u * (3 - 2 * u); return h(i) * (1 - s) + h(i + 1) * s;
+}
+/** a turn by `ang` about `axis` (unit) through `p`, as a matrix (column-major) */
+function rotAbout(p: V3, axis: V3, ang: number): Float32Array {
+  const [x, y, z] = axis, c = Math.cos(ang), s = Math.sin(ang), k = 1 - c, m = new Float32Array(16);
+  m[0] = c + x * x * k; m[1] = y * x * k + z * s; m[2] = z * x * k - y * s;
+  m[4] = x * y * k - z * s; m[5] = c + y * y * k; m[6] = z * y * k + x * s;
+  m[8] = x * z * k + y * s; m[9] = y * z * k - x * s; m[10] = c + z * z * k; m[15] = 1;
+  m[12] = p[0] - (m[0] * p[0] + m[4] * p[1] + m[8] * p[2]); m[13] = p[1] - (m[1] * p[0] + m[5] * p[1] + m[9] * p[2]); m[14] = p[2] - (m[2] * p[0] + m[6] * p[1] + m[10] * p[2]);
+  return m;
+}
+function mulM(a: Float32Array, b: Float32Array): Float32Array {
+  const o = new Float32Array(16);
+  for (let c = 0; c < 4; c++) for (let r = 0; r < 4; r++) o[c * 4 + r] = a[r] * b[c * 4] + a[4 + r] * b[c * 4 + 1] + a[8 + r] * b[c * 4 + 2] + a[12 + r] * b[c * 4 + 3];
+  return o;
 }
