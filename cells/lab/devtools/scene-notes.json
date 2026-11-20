@@ -1,7 +1,11 @@
 {
  "date": "2026-11-20",
- "build": "after 5134b37 (the courtyard pass)",
+ "build": "after 327b822 (the stride pass)",
  "summary": [
+  {
+   "scene": "stride-gap-a",
+   "gap": "From behind (the chase eye) the stride carried across the gap barely reads: the legs overlap along the line of sight. It reads in profile, so per the note this is framing and silhouette, not the movement: the eye straight behind hides it."
+  },
   {
    "scene": "sharp-turns",
    "gap": "Planted feet still move a little at a hard turn at pace (8 cm over the scene, 4.5 cm/s against a 3 cm/s bar): the toe pivot runs out of range when the leg is far behind."
@@ -53,6 +57,10 @@
   {
    "scene": "transfer-clean",
    "gap": "Fixed: the foot slide in every scene was mostly the measure (a foot still coming down counted as sliding) and the toe pivot (about a point at ankle height, so the drawn toe slid 5 cm as the heel came up). Measured on the sole's ball, true slide is a few centimetres in two scenes and none in the rest."
+  },
+  {
+   "scene": "stride-gap-b",
+   "gap": "Fixed: a small running jump is one stride. The flight plays the run's own half-stride stretched to fit it: the push foot the last to leave, its heel folding up and recovering behind the hips, the other leg driven through and reaching out to take the far roof, the push knee coming through into the next step 0.22 s after the landing. Gathered feet: 3% of the flight, from 54% (off the right) and 76% (off the left: the landing layer was written for the left leg). A precision aimed at something narrow still brings the feet together."
   }
  ],
  "seen": {
@@ -64,6 +72,8 @@
   "tic-tac": "Chase eye: runs into the corner, kicks up off the side wall to the 5.7 m lip, hangs, pulls over. The eye is too close in the corner to see the kick well.",
   "stair-ascent": "Side view: a spring at the face, a hang from each sill in turn (the side eye is pushed in against the body here), over the top and a stop.",
   "vault-angles": "Chase view: three vaults at 11 to 14 m/s, square, slanted and along the third; no dashes between, no saves.",
-  "street-deadend": "Chase view: up the alley's end off its side walls, over the lip onto a side roof."
+  "street-deadend": "Chase view: up the alley's end off its side walls, over the lip onto a side roof.",
+  "stride-gap-a": "Side view, 1/30 s: the left toe the last off the near roof, the right knee driving, the right foot reaching down to the far roof while the left heel is folded behind; the left knee through into the next step. Chase view: the same stride, but the legs hide each other from straight behind.",
+  "stride-gap-b": "Side view, before the change: both feet tucked together under the hips from a third of the way across to the landing. After: the right toe last off, the left reaching for the far side, the right heel recovering behind."
  }
 }

@@ -20,8 +20,10 @@ export interface Frame {
   fl: boolean; fr: boolean; save: string; hang: number;
   /** the drawn body: the hips jumped this frame; a held foot's ball moved (m); a held foot out of the leg's reach */
   jump: boolean; slid: number; stretched: boolean; pelvisY: number;
+  /** the drawn body: each foot's ball (on the ground under the sole), and the pelvis */
+  ballL: number[]; ballR: number[]; pelvis: number[];
 }
-export interface Run { frames: Frame[]; runner: Runner; ups: { t: number; foot: boolean; move: string; by: string }[]; lands: { t: number; v: number; from: string; save: string }[]; moves: { t: number; move: string }[] }
+export interface Run { frames: Frame[]; runner: Runner; ups: { t: number; foot: boolean; move: string; by: string; side: string }[]; lands: { t: number; v: number; from: string; save: string; side: string }[]; moves: { t: number; move: string }[] }
 export interface Should { says: string; check: (r: Run) => { ok: boolean; saw: string } }
 export interface Scene {
   key: string; title: string;
@@ -34,6 +36,8 @@ export interface Scene {
   course: Course; seconds: number;
   /** a still eye to film it from too, wide on the whole room (`?fixed` on the page) */
   eye?: [number, number, number];
+  /** filmed close round its first takeoff (frames every 1/30 s from just before it), not across the whole run */
+  close?: boolean;
   input: (t: number, r: Runner, mem: Record<string, number>) => Input;
   should: Should[];
 }
@@ -165,6 +169,32 @@ const yardSave = (y: Yard): Scene => ({
     { says: 'then the feet on the side wall, off the swing', check: (r) => { const h = r.frames.findIndex((f) => f.move === 'hang'); return ok(h >= 0 && r.frames.slice(h).some((f) => f.state === 'wall' || f.move === 'kick'), seq(r)); } },
     endsUp(y),
   ],
+});
+
+/**
+ * One stride across a gap (after Astra's note: "the runner loses the stride as soon as they leave the roof"). A run, then a
+ * narrow gap where a footfall would be: the push foot the last to leave, the other knee already coming through and taking
+ * the far roof, the push heel still recovering behind and coming through into the next step; the beat stretched a little,
+ * not stopped and started again. `at`: where the gap starts (moved half a stride, the other foot pushes).
+ */
+const strideGap = (at: number, gap: number): Course => ({ boxes: gap ? [B(24, 40, 2, at, 12), B(24, 40, at + gap, 60, 12)] : [B(24, 40, 2, 60, 12)], start: { x: 32, z: 4 }, alone: true });
+const flightOf = (r: Run) => { const u = r.ups[0], l = u && r.lands.find((x) => x.t > u.t); return u && l ? r.frames.filter((f) => f.t > u.t && f.t < l.t) : []; };
+/** the feet along the way it runs (+z), and how often in the flight they're bunched under the hips together */
+const gathered = (r: Run) => { const fl = flightOf(r); return fl.length ? fl.filter((f) => Math.abs(f.ballL[2] - f.ballR[2]) < 0.3).length / fl.length : 1; };
+/** the push foot's next footfall after the landing: how long after it */
+const nextOf = (r: Run, side: string) => { const l = r.lands[0]; if (!l) return null; const fs = r.frames.filter((f) => f.t > l.t); for (let i = 1; i < fs.length; i++) { const a = side === 'L' ? fs[i - 1].fl : fs[i - 1].fr, b = side === 'L' ? fs[i].fl : fs[i].fr; if (!a && b) return fs[i].t - l.t; } return null; };
+const strideShoulds: Should[] = [
+  { says: 'off one foot, landing on the other', check: (r) => { const u = r.ups[0], l = r.lands[0]; const okk = !!u && !!l && (u.side === 'L' || u.side === 'R') && (l.side === 'L' || l.side === 'R') && u.side !== l.side; return ok(okk, u && l ? `off ${u.side || 'no foot'}, landed on ${l.side || '?'}` : seq(r)); } },
+  { says: 'one leg coming through while the other goes down: the feet not gathered together under the hips (under a third of the flight within 30 cm of each other along the run)', check: (r) => { const g = gathered(r); return ok(g < 0.34, `${Math.round(100 * g)}% of the flight gathered`); } },
+  { says: 'the push leg comes through into the next step, a stride\'s time after the landing', check: (r) => { const u = r.ups[0]; const n = u ? nextOf(r, u.side) : null; return ok(n !== null && n < 0.4, n === null ? 'no next step by the push foot' : `${n.toFixed(2)} s after the landing`); } },
+];
+const strideScene = (key: string, title: string, at: number, gap: number): Scene => ({
+  key, title,
+  asks: gap ? 'Three ordinary strides, then a narrow gap where the next footfall would be. One stride should carry across it: the push foot the last thing to leave the near roof, the other knee already travelling and taking the far roof, the push heel still recovering behind the hips there and coming through into the next step. The gap stretches the beat a little; it doesn\'t stop the run in the air and start it again on landing.' : 'The reference: the same run with no gap, to see the stride the gap should keep.',
+  watch: gap ? 'From the side: follow the toe that left the near roof all the way to its next step, while the other leg takes the landing. From behind: whether it still reads.' : 'The rhythm of the footfalls, to hold the gap\'s against.',
+  course: strideGap(at, gap), seconds: 3.2, close: true,
+  input: (t, r) => (r.z > 40 ? none : go(0)),
+  should: gap ? [...commonShoulds, ...strideShoulds] : [...commonShoulds],
 });
 
 export const SCENES: Scene[] = [
@@ -323,6 +353,7 @@ export const SCENES: Scene[] = [
   },
   yardFind({ mirror: false, shift: 0 }), yardKnow({ mirror: false, shift: 0 }), yardSave({ mirror: false, shift: 0 }),
   yardKnow({ mirror: true, shift: 0 }), yardSave({ mirror: false, shift: 0.5 }),
+  strideScene('stride-flat', 'Three strides, no gap', 0, 0), strideScene('stride-gap-a', 'One stride across a gap', 22, 1.4), strideScene('stride-gap-b', 'One stride across a gap, off the other foot', 20, 1.4),
 ];
 
 /** run a scene, the drawn body with it, and keep what the checks need */
@@ -334,8 +365,10 @@ export function runScene(s: Scene, seed = 1): Run {
     const t = i * DT, s0 = r.state, m0 = r.move, vy0 = r.vy, sp0 = r.speed, fl0 = r.reach.fl, fr0 = r.reach.fr; r.takeoffBy = '';
     r.step(DT, s.input(t, r, mem)); rig.update(DT, r);
     if (r.move !== m0) moves.push({ t, move: r.move });
-    if (s0 === 'ground' && r.state === 'air' && r.vy > 0) ups.push({ t, foot: !!(fl0 || fr0), move: r.move, by: r.takeoffBy });
-    if (s0 === 'air' && r.state === 'ground') lands.push({ t, v: -vy0, from: m0, save: r.saveKind ?? '' });
+    if (s0 === 'ground' && r.state === 'air' && r.vy > 0) ups.push({ t, foot: !!(fl0 || fr0), move: r.move, by: r.takeoffBy, side: fl0 && fr0 ? 'both' : fl0 ? 'L' : fr0 ? 'R' : '' });
+    if (s0 === 'air' && r.state === 'ground') lands.push({ t, v: -vy0, from: m0, save: r.saveKind ?? '', side: '' });
+    // (which foot took the landing: the first down after it)
+    { const l = lands[lands.length - 1]; if (l && !l.side && r.state === 'ground' && t - l.t < 0.3) l.side = r.reach.fl && r.reach.fr ? 'both' : r.reach.fl ? 'L' : r.reach.fr ? 'R' : ''; }
     const b = rig.bones(r), at = (n: string) => b.find((o) => o.name === n)!.m, pm = at('pelvis'), pv = [pm[12], pm[13], pm[14]];
     const jump = !!prevPv && Math.hypot(pv[0] - prevPv[0], pv[1] - prevPv[1], pv[2] - prevPv[2]) > Math.max(0.15, (Math.max(sp0, r.speed) + Math.abs(vy0) + Math.abs(r.vy)) * DT + 0.12);
     prevPv = pv;
@@ -350,7 +383,8 @@ export function runScene(s: Scene, seed = 1): Run {
       if (now && sole.w > 0.9 && !sole.lost) { const hp = point(at('thigh' + s2), 0, 0, 0), on = rig.on; if (Math.hypot(now[0] + on[0] * 0.07 - hp[0], now[1] + on[1] * 0.07 - hp[1], now[2] + on[2] * 0.07 - hp[2]) > 0.9) stretched = true; }
       prevBall[k] = ball; prevFall[k] = now ? [...now] : null;
     }
-    frames.push({ t, x: r.x, y: r.y, z: r.z, vx: r.vx, vz: r.vz, vy: r.vy, speed: r.speed, state: r.state, move: r.move, fl: !!r.reach.fl, fr: !!r.reach.fr, save: r.saveKind ?? '', hang: r.hangT, jump, slid, stretched, pelvisY: pv[1] });
+    const ballOf = (n: string) => { const fm = at(n); return [fm[12] + fm[8] * 0.13 - fm[4] * SOLE_D, fm[13] + fm[9] * 0.13 - fm[5] * SOLE_D, fm[14] + fm[10] * 0.13 - fm[6] * SOLE_D]; };
+    frames.push({ t, x: r.x, y: r.y, z: r.z, vx: r.vx, vz: r.vz, vy: r.vy, speed: r.speed, state: r.state, move: r.move, fl: !!r.reach.fl, fr: !!r.reach.fr, save: r.saveKind ?? '', hang: r.hangT, jump, slid, stretched, pelvisY: pv[1], ballL: ballOf('footL'), ballR: ballOf('footR'), pelvis: pv });
   }
   return { frames, runner: r, ups, lands, moves };
 }

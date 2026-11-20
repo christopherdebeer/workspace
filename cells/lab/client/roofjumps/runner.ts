@@ -61,7 +61,7 @@ export interface Body {
   balance?: number; balanceV?: number; stamina?: number; effort?: number; time?: number;
   /** a save being made: what went wrong ('short', 'wide', 'long'), how long since the landing, the catching side (1 the
    * figure's left); seconds to the ground in a flight; a flight's planned length; a hang's swing along the wall (m/s) */
-  stanceFrac?: number; bounce?: number; vx?: number; vy?: number; vz?: number; roomAhead?: number; roomAway?: number; turnAhead?: number; hangT?: number; from?: string; inStep?: (side: number) => { from: [number, number, number]; to: [number, number, number]; k: number } | null; wallPhase?: number; near?: number; against?: number; nextFoot?: { side: number; p: [number, number, number]; t: number } | null; stepOver?: number; gait?: { stance: number; flight: number }; stepLift?: number; shift?: number; saveKind?: string; saveT?: number; saveSide?: number; ttc?: number; flightT?: number; swing?: number; swingOut?: number; pulling?: boolean; teeter?: number; swingFeet?: { ax: number; az: number; t: number } | null;
+  stanceFrac?: number; bounce?: number; vx?: number; vy?: number; vz?: number; roomAhead?: number; roomAway?: number; turnAhead?: number; hangT?: number; from?: string; inStep?: (side: number) => { from: [number, number, number]; to: [number, number, number]; k: number } | null; wallPhase?: number; near?: number; against?: number; nextFoot?: { side: number; p: [number, number, number]; t: number } | null; stepOver?: number; gait?: { stance: number; flight: number }; stepLift?: number; shift?: number; saveKind?: string; saveT?: number; saveSide?: number; ttc?: number; flightT?: number; swing?: number; swingOut?: number; pulling?: boolean; teeter?: number; precise?: boolean; swingFeet?: { ax: number; az: number; t: number } | null;
   /** hanging on the way up a face: 0 caught, 1 loading, 2 springing for the next hold */
   chainPhase?: number;
   phase: number; lead: number; land: number; turn: number; climbT: number; wallT: number;
@@ -221,6 +221,8 @@ export class Runner implements Body {
   private turnAsk = 0;
   /** a balance check at a lip it stopped close to: how long's left of it */
   teeterT = 0; private teetered = false;
+  /** this flight is a precision: aimed to stop on something narrow, both feet brought together for it */
+  precise = false;
   /** how far through a balance check at a lip (0 none, rising to 1 at its end) */
   get teeter(): number { return this.teeterT > 0 ? 1 - this.teeterT / TEETER : 0; }
   get saveKind(): string | undefined { return this.save?.kind; }
@@ -1298,6 +1300,10 @@ export class Runner implements Body {
     this.vx = ux * v; this.vz = uz * v;
     const plant = this.plant, plant2 = this.plant2;
     this.launch(G * up, move, aimed, float, T);
+    // (aimed at something narrow to stop on (a rim, a wall's top, a parapet's end): a precision, landed on both feet together)
+    { const H = (x: number, z: number) => this.city.heightAt(x, z), px = -uz, pz = ux, h = H(aimX, aimZ);
+      let along = 0; while (along < 2.4 && Math.abs(H(aimX + ux * (along + 0.3), aimZ + uz * (along + 0.3)) - h) <= STEP) along += 0.3;
+      this.precise = aimed && along < 2.4 && H(aimX + px * 0.7, aimZ + pz * 0.7) < h - STEP && H(aimX - px * 0.7, aimZ - pz * 0.7) < h - STEP; }
     this.aim = aimed ? { x: aimX, z: aimZ, ux: Math.cos(0) * (aimX - this.x) / (Math.hypot(aimX - this.x, aimZ - this.z) || 1), uz: (aimZ - this.z) / (Math.hypot(aimX - this.x, aimZ - this.z) || 1) } : null;
     this.errorOf = err; if (err) this.errors++;
     if (move === 'vault') {

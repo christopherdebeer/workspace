@@ -25,8 +25,10 @@ if (film) {
   const { withWood } = await import('./harness.mjs');
   await withWood(async (lab) => {
     for (const s of chosen) for (const [view, extra] of [['chase', ''], ['side', '&side=90&zoom=1.1'], ...(s.eye ? [['room', '&fixed']] : [])]) {
-      const n = 16, every = s.seconds / n;
-      const p = await lab.open(`scene=${s.key}&strip=0&frames=${n}&every=${every.toFixed(4)}&cols=8&holds=0${extra}`, { width: 1600, height: 560, dpr: 1 });
+      // (close round its first takeoff, if it asks: a flight is a third of a second; else across the whole run)
+      const run0 = s.close ? runScene(s) : null, t0 = run0?.ups[0] ? Math.max(0, run0.ups[0].t - 0.25) : 0;
+      const n = 16, every = s.close ? 1 / 30 : s.seconds / n;
+      const p = await lab.open(`scene=${s.key}&strip=${t0.toFixed(4)}&frames=${n}&every=${every.toFixed(4)}&cols=8&holds=0${extra}`, { width: 1600, height: 560, dpr: 1 });
       for (let k = 0; k < 80 && (await p.evaluate(() => window.__roofjumps.probe().pending)) > 0; k++) await p.waitForTimeout(250);
       await p.waitForTimeout(800); await p.screenshot({ path: `${OUT}${s.key}-${view}.png` }); await p.close();
       console.log(`filmed ${s.key} (${view})`);

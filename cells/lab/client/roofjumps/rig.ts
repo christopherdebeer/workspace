@@ -75,6 +75,8 @@ export class Rig {
   /** 1 on the ground, 0 off it, eased: where the hips ride */
   stood = 1;
   hipY = 1;
+  /** how far this frame's pose is a running stride carried across a gap (followed as briskly as on the ground) */
+  private carriedK = 0;
   bank = 0;
   private aside = 0;
   /** the pelvis carried toward a footfall the leg couldn't otherwise reach (world, m) */
@@ -137,6 +139,33 @@ export class Rig {
       p.hips = -0.12 * (a.hip - b.hip) / 2; p.twist = 0.4 * (a.hip - b.hip) / 2;
       // (the legs set a little in from the hips, so the feet come down near the line the body runs on, as a runner's do)
       p.splay = -0.07;
+    };
+    /** a running leg at `c` through its own cycle (0 its touchdown, the stance to `sd`, its swing back to 1): as `gait` has it */
+    const legAt = (c: number, amp: number, sd: number) => {
+      c = ((c % 1) + 1) % 1;
+      if (c < sd) { const s2 = c / sd; return { hip: (0.42 - 0.95 * s2) * amp, knee: 0.35 + 0.45 * Math.sin(Math.PI * s2) }; }
+      const w = (c - sd) / (1 - sd), x = Math.min(1, w / 0.42), fold = (0.5 * (1 - (1 - x) * (1 - x)) + 0.5 * sm(0, 0.42, w)) * (1 - sm(0.42, 0.92, w));
+      return { hip: (-0.53 + 1.6 * sm(0.05, 0.72, w) - 0.65 * sm(0.72, 1, w)) * amp, knee: 0.3 + Math.min(1.98, 0.1 + 1.85 * amp) * fold };
+    };
+    /**
+     * A small running jump carried in one stride (how far it is that way, 0..1): off the ground at a run, a short flight. The
+     * flight is the stride's own, stretched to fit it: the push leg from its toe-off through its fold, the heel recovering
+     * behind the hips; the other leg driven through and reaching out to take the far side. Each leg finishing what it
+     * started, not both gathered under the hips to start again on landing.
+     */
+    // (not a precision: there the feet coming together is the point, the pace to be killed on landing)
+    const carried = r.state === 'air' && r.move === 'bound' && r.from === 'ground' && r.speed > 4 && !r.precise ? 1 - sm(0.5, 0.75, r.flightT ?? 9) : 0;
+    this.carriedK = carried;
+    const strideThrough = (k: number) => {
+      const sd = r.stanceFrac ?? 0.25, amp = Math.min(1.2, s * 1.05), cp = sd + (0.5 - sd) * Math.min(1, u);
+      const push = legAt(cp, amp, sd), drive = legAt(cp + 0.5, amp, sd);
+      // (the front leg is the one that didn't push: `legs` puts its first pair on it)
+      const was = { ...p }; legs(drive.hip, drive.knee, push.hip, push.knee);
+      const pump = 1.05 * amp, f = drive.hip / Math.max(0.3, amp), b = push.hip / Math.max(0.3, amp);
+      if (L) { p.shL = pump * b; p.shR = pump * f; p.elL = 1.45 + 0.3 * b; p.elR = 1.45 + 0.3 * f; } else { p.shR = pump * b; p.shL = pump * f; p.elR = 1.45 + 0.3 * b; p.elL = 1.45 + 0.3 * f; }
+      { const hl = L ? drive.hip : push.hip, hr = L ? push.hip : drive.hip; p.hips = -0.12 * (hl - hr) / 2; p.twist = 0.4 * (hl - hr) / 2; }
+      p.lean = Math.min(0.5, 0.12 + 0.28 * s); p.spine = 0.06 + 0.12 * s; p.head = -0.3 * s; p.splay = -0.07;
+      for (const key of KEYS) p[key] = was[key] + (p[key] - was[key]) * k;
     };
     switch (r.move) {
       case 'run': {
@@ -216,6 +245,7 @@ export class Rig {
         arms(m(1.0, 0.6, 1.25, 0.5), m(-0.9, 0.3, 0.6, -0.3)); both('el', m(1.1, 1.6, 0.4, 0.8)); both('spread', m(0.3, 0.2, 0.45, 0.4));
         p.twist = (L ? -1 : 1) * m(0.35, 0.05, 0.2, 0.1);
         p.lean = m(0.35, 0.5, 0.15, 0.2); p.spine = m(0, 0.45, -0.15, 0.05); p.head = m(-0.2, 0.15, -0.2, -0.1);
+        if (carried > 0) strideThrough(carried);
         break;
       }
       case 'underbar': {
@@ -350,7 +380,9 @@ export class Rig {
     // (a flight getting ready for the ground a fixed while before it, whatever its length: the legs coming under, the arms
     // out for it, the head down to find it)
     if (r.state === 'air' && ['bound', 'spring', 'hop', 'flip', 'sideflip', 'fall', 'kick', 'underbar'].includes(r.move)) {
-      const k = Math.max(this.prep, 1 - sm(0.06, 0.3, r.ttc ?? 9)), L2: Partial<Pose> = { hipL: 0.75, hipR: 0.4, kneeL: 0.95, kneeR: 0.85, shL: 0.5, shR: 0.5, spreadL: 0.7, spreadR: 0.7, lean: 0.18, spine: 0.15 };
+      // (the leg that lands is the front one, the one that didn't push: whichever that is, not always the left; and a stride
+      // carried across a small gap is its own landing, its front leg reaching for the ground already)
+      const k = Math.max(this.prep, 1 - sm(0.06, 0.3, r.ttc ?? 9)) * (1 - carried), L2: Partial<Pose> = L ? { hipL: 0.75, hipR: 0.4, kneeL: 0.95, kneeR: 0.85, shL: 0.5, shR: 0.5, spreadL: 0.7, spreadR: 0.7, lean: 0.18, spine: 0.15 } : { hipR: 0.75, hipL: 0.4, kneeR: 0.95, kneeL: 0.85, shL: 0.5, shR: 0.5, spreadL: 0.7, spreadR: 0.7, lean: 0.18, spine: 0.15 };
       if (k > 0) { for (const [key, v] of Object.entries(L2)) (p as unknown as Record<string, number>)[key] += (v - (p as unknown as Record<string, number>)[key]) * k; p.head += 0.35 * k; }
     }
     // (a save: short, pitched forward over the catching foot, the trailing knee coming through high; wide, the outside arm
@@ -450,7 +482,7 @@ export class Rig {
     // is a release, not an easing)
     // (and caught hanging: the body comes under the hands at once, not pitched on into the wall)
     const caught = r.move === 'hang' && (r.hangT ?? 9) < 0.2;
-    const t = this.target(r, this.ph), w = r.state === 'ground' ? 45 : caught ? 55 : r.state === 'air' && (r.airT ?? 9) < 0.12 && r.from === 'ground' ? 50 : 20, c = 2 * 0.72 * w;
+    const t = this.target(r, this.ph), w = r.state === 'ground' || this.carriedK > 0.5 ? 45 : caught ? 55 : r.state === 'air' && (r.airT ?? 9) < 0.12 && r.from === 'ground' ? 50 : 20, c = 2 * 0.72 * w;
     if (dt > 0.2) { for (const key of KEYS) { this.pose[key] = t[key]; this.vel[key] = 0; } }
     else for (const key of KEYS) { this.vel[key] += ((t[key] - this.pose[key]) * w * w - this.vel[key] * c) * dt; this.pose[key] += this.vel[key] * dt; }
     if (r.move === 'hang') { const most = 0.3 + Math.min(0.9, Math.atan((r.swingOut ?? 0) / 1.1) + (r.swingFeet ? 0.45 : 0)); if (this.pose.lean > most) { this.pose.lean = most; this.vel.lean = Math.min(0, this.vel.lean); } if (this.pose.spine > 0.35) { this.pose.spine = 0.35; this.vel.spine = Math.min(0, this.vel.spine); } }
