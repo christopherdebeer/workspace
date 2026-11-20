@@ -9,6 +9,10 @@ header b{font-weight:700}header span{opacity:.6}
 nav{display:flex;gap:6px;pointer-events:auto}
 nav button,nav a{font:inherit;letter-spacing:.08em;color:inherit;background:#ffffff66;border:1px solid #2224;border-radius:3px;padding:7px 9px;min-height:32px;cursor:pointer;text-decoration:none;display:inline-flex;align-items:center}
 nav button:focus-visible,nav a:focus-visible{outline:2px solid #222;outline-offset:2px}
+/* the two round buttons, top right: settings (the dials) and the menu */
+nav .icon{width:42px;height:42px;min-height:42px;padding:0;border-radius:50%;justify-content:center;background:#ffffff8c;-webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px);border:1px solid #2223;color:#222}
+nav .icon[aria-expanded=true]{background:#222;color:#f4f4f2}
+nav{gap:8px}
 #hint{position:fixed;left:0;right:0;bottom:max(26px,env(safe-area-inset-bottom));text-align:center;letter-spacing:.14em;opacity:.65;pointer-events:none;transition:opacity .6s}
 .played #hint{opacity:0}
 #stick{position:fixed;width:112px;height:112px;margin:-56px 0 0 -56px;border:1px solid #2223;border-radius:50%;pointer-events:none;opacity:0;transition:opacity .15s}
@@ -53,12 +57,17 @@ body:has(#dials.shown) #hint{display:none}
 #menu button{pointer-events:auto;font:italic 700 clamp(22px,6.4vw,34px) system-ui,-apple-system,"Segoe UI",sans-serif;letter-spacing:.08em;color:inherit;text-shadow:inherit;background:none;border:0;border-bottom:1.5px solid currentColor;padding:6px 18px 14px;min-height:44px;cursor:pointer}
 #menu button:focus-visible{outline:2px solid #f2e6da;outline-offset:4px}
 #menu p{margin:0;font-style:italic;font-size:clamp(13px,3.6vw,16px);letter-spacing:.16em;opacity:.9;min-height:1.4em}
-.menu header,.menu #hint,.menu #stick,.menu #dials,.menu #readout{display:none}
+/* on the menu: the settings button alone, no title block (the menu's own is over the sky), nothing to be told */
+.menu header>div,.menu #menubtn,.menu #hint,.menu #stick,.menu #readout{display:none}
+.menu header{justify-content:flex-end}
+.menu nav .icon{background:#fff3;border-color:#fff5;color:#f2e6da}
+.menu nav .icon[aria-expanded=true]{background:#f2e6da;color:#222}
 .preview header,.preview #hint,.preview #stick,.preview #dials,.preview #readout{display:none}
 </style></head><body>
 <canvas id="world" aria-label="Roof Jumps. At the start, the characters stand on a high ledge over the city: swipe sideways on a character to choose who runs, on the sky for the time of day, on the city for another city, on the roof for another look; swipe up or press Take control to leap. Then drag to run in any direction; it leaps gaps by itself. Tap to jump."></canvas>
 <header><div><b>ROOF JUMPS</b><br><span>SEED <span id="seed">1</span></span></div>
-<nav><button id="dialsbtn" aria-expanded="false" aria-controls="dials" aria-label="The dials: every number of the run, the plan, the eye and time">dials</button><button id="look" aria-label="How it is drawn (cycles)">grid</button><button id="another">another</button><a href="{{readme}}">notes</a></nav></header>
+<nav><button id="dialsbtn" class="icon" aria-expanded="false" aria-controls="dials" aria-label="Settings: the look, another city, the notes, every dial, the studies" title="Settings"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></button><button id="menubtn" class="icon" aria-label="Back to the menu, on the ledge" title="Menu"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg></button></nav></header>
+<a id="notes" href="{readme}" hidden>notes</a>
 <div id="stick" aria-hidden="true"><i></i></div>
 <div id="readout" hidden></div>
 <div id="labels" aria-hidden="true"></div>

@@ -4,6 +4,8 @@
  * moving over it (runner.ts: the body and its judgement; rig.ts: the skeleton posed from it). It is drawn as plainly
  * as it can be (render.ts), on purpose, so that looks can be tried over the same geometry later.
  *
+ * Top right: settings (the dials, with the look, another city and the notes in their looks tab) and the menu.
+ *
  * Drag anywhere and the figure runs that way (the drag is a stick: further is faster). What it does about what's in
  * front of it is its own: it hops clutter, bounds and flips gaps, springs up a storey, dives down one and rolls out,
  * glides the long ones, dashes off a clean landing, balances along ledges, runs along and up walls. Tap to jump (and
@@ -194,7 +196,9 @@ function looks(): HTMLElement[] {
     g.append(h, l); return g;
   };
   const cam = (name: string) => Object.entries(CAMERAS[name]).every(([k, v]) => TUNE[k] === v);
+  const notes = (document.getElementById('notes') as HTMLAnchorElement | null)?.href;
   return [
+    group('page', [['another city', false, anotherCity], ...(notes ? [['notes', false, () => { location.href = notes; }] as [string, boolean, () => void]] : [])]),
     group('look', LOOKS.map((name) => [name, name === rd.look, () => setLook(name)])),
     group('character', CHARACTERS.map((c) => [c.title, c.name === character.name, () => { const u = new URL(location.href); if (c.name === 'runner') u.searchParams.delete('character'); else u.searchParams.set('character', c.name); location.href = u.href; }])),
     group('camera', Object.keys(CAMERAS).map((name) => [name, cam(name), () => { for (const [k, v] of Object.entries(CAMERAS[name])) TUNE[k] = v; remember(); }])),
@@ -350,13 +354,14 @@ if (q.has('strip')) {
 }
 rd.stream(runner.x, runner.z, 9);
 
-const lookBtn = document.getElementById('look')!;
-const showLook = () => { lookBtn.textContent = rd.look; };
-function setLook(name: string): void { rd.look = name; showLook(); const u = new URL(location.href); u.searchParams.set('look', rd.look); history.replaceState(null, '', u); }
-lookBtn.addEventListener('click', () => setLook(LOOKS[(LOOKS.indexOf(rd.look) + 1) % LOOKS.length]));
-showLook();
+function setLook(name: string): void { rd.look = name; const u = new URL(location.href); u.searchParams.set('look', rd.look); history.replaceState(null, '', u); }
 document.getElementById('seed')!.textContent = String(seed);
-document.getElementById('another')!.addEventListener('click', () => { const u = new URL(location.href); u.searchParams.set('seed', String(1 + Math.floor(Math.random() * 9999))); location.href = u.href; });
+/** another city: on the menu, its next ledge, there and then; in play, the page again on a new seed */
+function anotherCity(): void {
+  if (menu.active) { menuSwipe({ kind: 'city' }, 1 + Math.floor(Math.random() * 50)); return; }
+  const u = new URL(location.href); u.searchParams.set('seed', String(1 + Math.floor(Math.random() * 9999))); location.href = u.href;
+}
+document.getElementById('menubtn')?.addEventListener('click', backToMenu);
 
 /** a route in a line: how far off the way asked, its moves, what it's worth */
 const line = (name: string, r: Route | null, p: Plan) => (r ? `${r === p.best ? '★' : ' '} ${name} ${r.off ? `${r.off > 0 ? '→' : '←'}${Math.abs(Math.round((r.off * 180) / Math.PI))}° ` : ''}${words(r)}  [${r.score.toFixed(0)}${r.streets ? ', street' : ''}]` : '');
@@ -514,6 +519,20 @@ function menuSwipe(u: Under, d: number): void {
   const u2 = new URL(location.href);
   u2.searchParams.set('seed', String(seed)); u2.searchParams.set('character', CHARACTERS[ORDER[menu.sel]].name); u2.searchParams.set('time', TIMES[menu.timeI].name); u2.searchParams.set('look', rd.look);
   history.replaceState(null, '', u2);
+}
+/**
+ * Back to the menu (the round button): the line on the ledge again, the eye behind whoever was running. From play that
+ * began on the menu, in place; from a study or a scene, the page opened afresh on its city's menu.
+ */
+function backToMenu(): void {
+  if (menu.active) return;
+  if (!menu.ledge) { const u = new URL(location.origin + location.pathname); for (const k of ['seed', 'look', 'character', 'time']) { const v = new URL(location.href).searchParams.get(k); if (v) u.searchParams.set(k, v); } u.searchParams.set('menu', ''); location.href = u.href; return; }
+  Object.assign(menu, { active: true, crewI: -1, crew: [], hop: null, launch: -1, from: null, blend: 1, swipe: null });
+  menu.sel = menu.at = Math.max(0, ORDER.indexOf(CHARACTERS.findIndex((c) => c.name === character.name)));
+  menu.chosenAt[ORDER[menu.sel]] = performance.now() / 1000 + 0.6;
+  rd.palette = CHARACTERS.flatMap((c) => c.palette);
+  dialsEl.classList.remove('shown'); dialsBtn.setAttribute('aria-expanded', 'false');
+  document.body.classList.add('menu'); if (menuEl) menuEl.hidden = false;
 }
 /** the one the eye is behind takes the leap: it's the runner now, and the hand's */
 function takeControl(): void {
