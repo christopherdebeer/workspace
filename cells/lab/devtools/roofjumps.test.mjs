@@ -568,3 +568,21 @@ console.log('roofjumps: ok');
   assert.ok(jumps < frames * 0.0005, `the drawn body doesn't jump (${jumps} frames in ${frames})`);
   console.log(`from the street: ${runs} runs, off it ${(100 * up / frames).toFixed(0)}% of the time; drawn hips jumped in ${jumps} of ${frames} frames`);
 }
+
+// A takeoff has a foot under it: across held lines in the city, every jump off the ground leaves with a foot down (one
+// is put down first if it's between footfalls), and one coming quickly after a landing goes off one foot, the other
+// coming through, not off two set side by side.
+{
+  let ups = 0, footed = 0, quick = 0, sideBySide = 0;
+  for (const seed of [1, 7]) for (let k = 0; k < 8; k++) {
+    const a = (k / 8) * 2 * Math.PI + 0.2, r = new Runner(new City(seed)); let landed = -9;
+    for (let i = 0; i < 120 * 30; i++) {
+      const s0 = r.state, fl = r.reach.fl, fr = r.reach.fr; r.step(1 / 120, { x: Math.sin(a), z: Math.cos(a), jump: false });
+      if (s0 === 'air' && r.state === 'ground') landed = i;
+      if (s0 === 'ground' && r.state === 'air' && r.vy > 0) { ups++; if (fl || fr) footed++; if (i - landed < 60) { quick++; if (fl && fr && Math.hypot(fl[0] - fr[0], fl[2] - fr[2]) < 0.3) sideBySide++; } }
+    }
+  }
+  assert.ok(footed >= ups * 0.97, `a takeoff has a foot under it (${footed}/${ups})`);
+  assert.ok(sideBySide <= quick * 0.05, `a quick jump after a landing off one foot (${sideBySide} of ${quick} off two side by side)`);
+  console.log(`takeoffs: ${footed}/${ups} with a foot down; ${quick} quick after a landing, ${sideBySide} off two feet side by side`);
+}

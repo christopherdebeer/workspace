@@ -644,8 +644,10 @@ export class Runner implements Body {
     const at = s.kind === 'short' ? 0.1 : s.kind === 'wide' ? 0.08 : s.stage === 0 ? 0.05 : 0.16;
     if (s.stage >= (s.kind === 'long' ? 2 : 1)) { if (s.t > 0.45) this.save = null; return false; }
     if (s.t < at) {
-      // (meanwhile, both feet where it came down, under it)
-      for (const [foot, sd] of [[f.L, 1], [f.R, -1]] as const) if (!foot.on) { const x = this.x + fz * sd * 0.12, z = this.z - fx * sd * 0.12, h = this.city.heightAt(x, z); if (Math.abs(h - this.y) <= STEP && !this.city.regionAt(x, h, z)) { foot.on = true; foot.p = [x, h, z]; } }
+      // (meanwhile, on the foot it came down on, under it; the other still coming through: the catching step, or straight
+      // into a jump if one's taken first; not both feet set down side by side)
+      const sd = this.lead ? 1 : -1, foot = sd > 0 ? f.L : f.R;
+      if (!f.L.on && !f.R.on) { const x = this.x + fx * AHEAD * 0.5 + fz * sd * TRACK, z = this.z + fz * AHEAD * 0.5 - fx * sd * TRACK, h = this.city.heightAt(x, z); if (Math.abs(h - this.y) <= STEP && !this.city.regionAt(x, h, z)) { foot.on = true; foot.p = [x, h, z]; } }
       if (f.L.on) this.reach.fl = f.L.p; if (f.R.on) this.reach.fr = f.R.p; return true;
     }
     // (which foot: the one on the side the hips carry to; a long save's second step, the other)
@@ -816,6 +818,7 @@ export class Runner implements Body {
       this.load = Math.min(1, this.load + dt / (0.115 + 0.11 * (1 - Math.min(1, this.speed / 4))));
       if (this.load >= 1 || (this.load >= 0.65 && this.inStance())) {
         this.effort = 0.8; if (this.tame()) return;
+        if (this.plantFirst(Math.sin(this.heading), Math.cos(this.heading), 1)) return;
         (this.takeoffBy = 'tap', this.strongJump()); return;
       }
     }
@@ -832,6 +835,7 @@ export class Runner implements Body {
           const rise = H(this.x + ux * edge, this.z + uz * edge) - this.y;
           this.effort = Math.max(this.effort, rise > 1.2 ? Math.min(1, 0.5 + rise / 6.8) : 0.2); this.load = Math.max(this.load, 0.65); this.offFoot++;
           if (this.tame()) return;
+          if (this.plantFirst(ux, uz, edge)) return;
           this.takeoffBy = 'runup'; this.leap(ux, uz, edge, sp); return;
         }
         this.approach = null;
@@ -855,7 +859,7 @@ export class Runner implements Body {
         // unless the lip's right there)
         if (this.approach) {
           if (this.approach.steps >= 1) this.load = Math.min(this.approach.steps === 1 ? 0.3 + 0.4 * this.effort : 0.15 + 0.25 * this.effort, this.load + dt * 6);
-          if (edge <= R + sp * dt) { if (this.tame()) return; if (this.approach.steps === 0) this.offFoot++; this.takeoffBy = this.approach.steps === 0 ? 'runup-lip' : 'runup-short'; this.leap(ux, uz, edge, sp); return; }
+          if (edge <= R + sp * dt) { if (this.tame()) return; if (this.plantFirst(ux, uz, edge)) return; if (this.approach.steps === 0) this.offFoot++; this.takeoffBy = this.approach.steps === 0 ? 'runup-lip' : 'runup-short'; this.leap(ux, uz, edge, sp); return; }
         } else {
         if (this.load < 0.1) {
           // The next contact unless a foot is already supporting the runner.
@@ -871,6 +875,7 @@ export class Runner implements Body {
         this.load = Math.min(1, this.load + dt * (9 - 4 * this.effort) * (0.7 + 0.3 * this.stamina));
         if ((this.load >= 0.65 && edge <= ahead) || edge <= R + sp * dt) {
           if (this.tame()) return;
+          if (this.plantFirst(ux, uz, edge)) return;
           this.takeoffBy = 'edge'; this.leap(ux, uz, edge, sp); return;
         }
         }
@@ -890,7 +895,7 @@ export class Runner implements Body {
     else if (h < this.y && mag < 0.55 && sp < 6) { this.vx = this.vz = 0; }
     else if (h < this.y) { this.x = nx; this.z = nz; this.vy = 0; this.launch(0, 'fall', false, false, 0.3); this.leaps--; }
     // (a corner the look ahead went past: leapt, from where it stands)
-    else if (on && h <= this.y + TUNE.rise && mag >= 0.55) { this.takeoffBy = 'corner'; this.leap(dx, dz, 0.05, sp); }
+    else if (on && h <= this.y + TUNE.rise && mag >= 0.55) { if (!this.plantFirst(dx, dz, 0.05)) { this.takeoffBy = 'corner'; this.leap(dx, dz, 0.05, sp); } }
     // (a tall wall met at a slant, at pace, with wall going on along it: stepped onto off one foot, and run along)
     else if (on && sp >= 4 && this.seek(0.85, dx, dz)) return;
     else if (on && this.goFor(dt, dx, dz, nx, nz)) return;
@@ -934,6 +939,23 @@ export class Runner implements Body {
     // (only from a stand, or a hold: a running takeoff is never stopped to be held)
     if (TUNE.emphasis <= 0 || this.effort < 0.5 || this.tamed || this.speed > 3) { this.tamed = false; return false; }
     this.tamed = true; this.load = 1; this.freeze = (0.04 + 0.05 * this.effort) * TUNE.emphasis;
+    return true;
+  }
+  /**
+   * A takeoff needs a foot under it: if neither is down (the stride between footfalls), the next one's put down now,
+   * under the body and short of the lip, and the jump's taken off it next step (the body not moved meanwhile, so it
+   * doesn't go off the edge first). True if it planted (and the takeoff waits).
+   */
+  private plantFirst(ux: number, uz: number, edge: number): boolean {
+    const f = this.feet;
+    if (this.state !== 'ground' || f.L.on || f.R.on) return false;
+    const nf = this.nextFoot, side = nf ? nf.side : this.lead ? 1 : -1, foot = side > 0 ? f.L : f.R;
+    const d = Math.max(0, Math.min(AHEAD, edge - 0.15)), x = this.x + ux * d + uz * side * TRACK, z = this.z + uz * d - ux * side * TRACK, h = this.city.heightAt(x, z);
+    if (Math.abs(h - this.y) > STEP) return false;
+    foot.on = true; foot.p = [x, h, z]; foot.done = false;
+    this.phase = Math.floor(this.phase / (2 * Math.PI)) * 2 * Math.PI + Math.PI / 2 + 0.31 + (side > 0 ? 0 : Math.PI);
+    if (side > 0) this.reach.fl = foot.p; else this.reach.fr = foot.p;
+    this.to.left = side > 0; this.approach = { side, at: foot.p, steps: 0, stretch: 1 };
     return true;
   }
   /** a big release spends effort */
@@ -996,7 +1018,7 @@ export class Runner implements Body {
     const s0 = Math.hypot(vx0, vz0), ux = s0 > 2 ? vx0 / s0 : dx, uz = s0 > 2 ? vz0 / s0 : dz;
     // (only if, that way, there's somewhere to land within a storey before anything taller: else it's a wall, not a step)
     const landable = (() => { for (let d = 0.2; d <= 3.2; d += 0.25) { const h = this.city.heightAt(this.x + ux * d, this.z + uz * d); if (h > this.y + TUNE.rise) return false; if (h > this.y + STEP) return true; } return false; })();
-    if (facing > 0.3 && top <= this.y + TUNE.rise && landable && mag >= 0.55 && this.time - this.metT > 0.8) { this.metT = this.time; keep(); this.takeoffBy = 'metwall'; this.leap(ux, uz, 0.05, s0); return true; }
+    if (facing > 0.3 && top <= this.y + TUNE.rise && landable && mag >= 0.55 && this.time - this.metT > 0.8) { if (this.plantFirst(ux, uz, 0.3)) return true; this.metT = this.time; keep(); this.takeoffBy = 'metwall'; this.leap(ux, uz, 0.05, s0); return true; }
     keep();
     if (Math.hypot(vx0, vz0) >= 4 && this.seek(0.85, dx, dz)) return true;
     lose();
