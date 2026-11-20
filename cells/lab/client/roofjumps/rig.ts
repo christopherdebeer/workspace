@@ -316,7 +316,8 @@ export class Rig {
         // (along a wall: tipped right off it, the feet on it; the near arm trailing along it, the far one out for balance)
         stride((r.wallPhase ?? 0) + r.lead * Math.PI, 1.0, 0.5);
         const near = r.wallSide > 0;
-        p.tilt = r.wallSide * 0.82; p.lean = 0.22; p.spine = 0.1; p.head = -0.2;
+        // (tipped off it as far as there's room: in a narrow alley, the far wall stops it)
+        p.tilt = r.wallSide * 0.82 * Math.max(0.25, Math.min(1, ((r.roomAway ?? 9) - 0.35) / 0.9)); p.lean = 0.22; p.spine = 0.1; p.head = -0.2;
         if (near) { p.spreadL = 0.25; p.shL = -0.5; p.elL = 0.3; p.spreadR = 1.45; p.shR = 0.1; p.elR = 0.15; }
         else { p.spreadR = 0.25; p.shR = -0.5; p.elR = 0.3; p.spreadL = 1.45; p.shL = 0.1; p.elL = 0.15; }
         break;
@@ -381,14 +382,17 @@ export class Rig {
       // through ready to go, the chest down over the foot)
       const wind = r.state === 'ground' && (r.load ?? 0) > r.land, down = r.reach.fl && !r.reach.fr ? 1 : r.reach.fr && !r.reach.fl ? -1 : (r.lead === 1 ? -1 : 1);
       if (wind) {
-        const sup = down > 0, k = c * (0.8 + 0.4 * (r.effort ?? 0)) * (1 - 0.5 * sm(3, 8, r.speed));
+        const ef = r.effort ?? 0, sup = down > 0, k = c * (0.45 + 1.1 * ef) * (1 - 0.5 * sm(3, 8, r.speed) * (1 - 0.6 * ef));
         if (sup) { p.hipL += 0.7 * k; p.kneeL += 1.3 * k; p.hipR += 1.4 * k; p.kneeR += 1.0 * k; } else { p.hipR += 0.7 * k; p.kneeR += 1.3 * k; p.hipL += 1.4 * k; p.kneeL += 1.0 * k; }
-        p.spine += 0.5 * k; p.lean += 0.2 * k;
-      } else { p.hipL += 1.05 * c; p.hipR += 1.05 * c; p.kneeL += 1.8 * c; p.kneeR += 1.8 * c; p.splay += 0.22 * c; p.spine += 0.45 * c; }
+        // (up against a wall, the chest kept off it: the load goes down, not forward)
+        if (!r.against) { p.spine += 0.5 * k; p.lean += 0.2 * k; }
+      } else { p.hipL += 1.05 * c; p.hipR += 1.05 * c; p.kneeL += 1.8 * c; p.kneeR += 1.8 * c; p.splay += 0.22 * c; if (!r.against) p.spine += 0.45 * c; }
       p.shL -= 0.45 * c; p.shR -= 0.45 * c; p.spreadL += 0.7 * c; p.spreadR += 0.7 * c; p.head -= 0.1 * c;
     }
     // (on one foot, the hip on the free side lets down a little: the pelvis tipped over the foot that bears it)
     if (r.state === 'ground' && r.move !== 'roll') { const bear = r.reach.fl && !r.reach.fr ? 1 : r.reach.fr && !r.reach.fl ? -1 : 0; p.tilt += 0.06 * bear * (1 - 0.5 * sm(2, 6, r.speed)); }
+    // (a wall close in front: the body pitched forward no further than leaves the head short of it)
+    if (r.state === 'ground') { const room = r.roomAhead ?? 9; if (room < 1.1) { const most = Math.asin(Math.max(0, Math.min(1, (room - 0.2) / 0.9))); const over = p.lean + 0.5 * p.spine - most; if (over > 0) { p.lean -= over; } } }
     // (whatever was added up, a knee bends no further than a knee does: a heel to the seat on the ground is ~140°, a tuck
     // a little more)
     { const most = r.state === 'ground' && r.move !== 'roll' ? 2.4 : 2.6; p.kneeL = Math.min(most, p.kneeL); p.kneeR = Math.min(most, p.kneeR); }
@@ -481,7 +485,7 @@ export class Rig {
     const striding = r.move === 'run' || r.move === 'dash' || r.move === 'ledge', pace = Math.min(1, r.speed / 6);
     // (a wind-up's sink: deep from a stand (a squat to spring from), shallow at a run (the hips lowered a little over the
     // last steps and the takeoff leg bent under it, not a squat), deeper for a bigger jump)
-    const windDown = (r.load ?? 0) * (r.committed ? 0.95 : 0.8) * (1 - 0.7 * sm(3, 8, r.speed)) * (0.8 + 0.4 * (r.effort ?? 0));
+    const ef = r.effort ?? 0, windDown = (r.load ?? 0) * (r.committed ? 0.95 : 0.8) * (1 - 0.7 * sm(3, 8, r.speed) * (1 - 0.6 * ef)) * (0.45 + 1.1 * ef);
     const carry = striding ? (0.9 + 0.05 * Math.abs(Math.cos(this.ph))) * pace - 0.55 * Math.max(r.land, windDown) : 0;
     // (running: the hips lowest through a stance (the leg bending to take it), highest in the flight between, higher for a step
     // planned long or over clutter; low enough that a leg can hold its footfall from in front to behind)

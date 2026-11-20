@@ -252,6 +252,15 @@ Measured: on a flat roof with a gap at any point in the stride, every takeoff of
 
 A test holds the hang (both feet set and still for the whole hang, elbows within 25°, a slanted press pulling over). Score 58.1 to 69.2, stall back to 0.18 s, nothing worse.
 
+**The force has to come from somewhere.** With the jumps exaggerated, what sells them is the body paying for them: the load before and the sink after, as deep as the energy. Measured first: the hips before a 3 to 5 m apex jump were as high as before a hop (0.85 to 0.88 m whatever the jump), and landings sank in proportion to the impact speed, not its square. Now:
+
+- *a takeoff's wind-up is as deep as the jump it makes.* When the run-up settles on a lip (or the lip comes into view), the leap it'll make is tried on a copy of the runner and its height (v² / 2g) and added pace set the effort; the effort sets how deep and long the wind-up sinks (deeper at a run too, for a big one), the last steps lower as it comes, and it's what stamina pays. The hips before a hop now sink to 0.84 m, before a 3 to 5 m one to 0.65 m;
+- *a landing sinks by the energy it brings*: the depth by the impact speed squared, against the most the legs can push, and the legs softer the deeper it goes, so a big one sinks further and for longer; a light one barely (the sink below 4 m/s halved, above 13 m/s deeper);
+- *a jump taken while a landing's still being sunk into goes from that load*, a rebound;
+- and a wind-up up against a wall, or with a wall close in front, keeps the chest off it (the load goes down, not forward), and a wall run in a narrow alley is tipped off its wall only as far as the far wall allows (the head had gone into it).
+
+Score 69.2 to 71.2, nothing worse.
+
 ## The dials (`tune.ts`, `palette.ts`)
 
 Every number worth turning, named, ranged, grouped, with a mark where the house keeps it (a

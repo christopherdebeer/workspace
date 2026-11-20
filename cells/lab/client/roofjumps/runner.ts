@@ -61,7 +61,7 @@ export interface Body {
   balance?: number; balanceV?: number; stamina?: number; effort?: number; time?: number;
   /** a save being made: what went wrong ('short', 'wide', 'long'), how long since the landing, the catching side (1 the
    * figure's left); seconds to the ground in a flight; a flight's planned length; a hang's swing along the wall (m/s) */
-  stanceFrac?: number; bounce?: number; turnAhead?: number; hangT?: number; from?: string; inStep?: (side: number) => { from: [number, number, number]; to: [number, number, number]; k: number } | null; wallPhase?: number; near?: number; against?: number; nextFoot?: { side: number; p: [number, number, number]; t: number } | null; stepOver?: number; gait?: { stance: number; flight: number }; stepLift?: number; shift?: number; saveKind?: string; saveT?: number; saveSide?: number; ttc?: number; flightT?: number; swing?: number;
+  stanceFrac?: number; bounce?: number; roomAhead?: number; roomAway?: number; turnAhead?: number; hangT?: number; from?: string; inStep?: (side: number) => { from: [number, number, number]; to: [number, number, number]; k: number } | null; wallPhase?: number; near?: number; against?: number; nextFoot?: { side: number; p: [number, number, number]; t: number } | null; stepOver?: number; gait?: { stance: number; flight: number }; stepLift?: number; shift?: number; saveKind?: string; saveT?: number; saveSide?: number; ttc?: number; flightT?: number; swing?: number;
   /** hanging on the way up a face: 0 caught, 1 loading, 2 springing for the next hold */
   chainPhase?: number;
   phase: number; lead: number; land: number; turn: number; climbT: number; wallT: number;
@@ -270,6 +270,10 @@ export class Runner implements Body {
   private leftY = 0;
   /** how far round from the way it faces it's asked to go (rad, to its left +): the turn still to come */
   get turnAhead(): number { return this.ahead; }
+  /** along a wall: how far off it, the other way, another wall stands (m, 9: none within 1.5): room to tip away into */
+  get roomAway(): number { if (this.state !== 'wall') return 9; for (let d = 0.3; d <= 1.5; d += 0.1) if (this.city.heightAt(this.x - this.wx * d, this.z - this.wz * d) > this.y + 0.8) return d; return 9; }
+  /** how far ahead (m) a wall stands taller than the head, within 1.2 m (9: none): room to pitch forward into */
+  get roomAhead(): number { const fx = Math.sin(this.heading), fz = Math.cos(this.heading); for (let d = 0.2; d <= 1.2; d += 0.1) if (this.city.heightAt(this.x + fx * d, this.z + fz * d) > this.y + 1.2) return d; return 9; }
   /** hanging from a lip, how long (s); -1 not */
   get hangT(): number { return this.state === 'climb' && !this.chain ? this.atLip : -1; }
   private ahead = 0;
@@ -348,7 +352,7 @@ export class Runner implements Body {
     if (this.state === 'ground' && this.legHold > 0) this.legHold -= dt;
     else if (this.state === 'ground') {
       const depth = this.land * 0.46, wasDown = this.legVelocity > 0;
-      this.legVelocity += (-175 * depth - 19 * this.legVelocity) * dt;
+      this.legVelocity += (-this.sinkK * depth - 1.44 * Math.sqrt(this.sinkK) * this.legVelocity) * dt;
       const next = Math.max(0, Math.min(0.46, depth + this.legVelocity * dt));
       if (next === 0 || next === 0.46) this.legVelocity = 0;
       this.land = next / 0.46;
@@ -533,6 +537,17 @@ export class Runner implements Body {
   }
 
   /**
+   * How big the jump from here at `edge` will be: the leap it would make, tried on a copy (nothing of this one changed),
+   * as the effort it takes, 0.2 (a hop across) to 1 (the most it has): the height its takeoff must throw the body to
+   * (v² / 2g), with the pace it must add. What the wind-up's depth answers to: the force has to come from somewhere.
+   */
+  private effortFor(ux: number, uz: number, edge: number, sp: number): number {
+    const c = this.clone(); c.leap(ux, uz, edge, sp);
+    const apex = Math.max(0, c.vy) ** 2 / (2 * TUNE.gravity), add = Math.max(0, Math.hypot(c.vx, c.vz) - sp);
+    return Math.max(0.2, Math.min(1, 0.15 + apex / 4 + add / 6));
+  }
+
+  /**
    * The run-up: is there a takeoff ahead that it'll go for (the stick held on, the way it's going; an edge within about
    * three strides it can leap from, not a wall), and if so how many steps to it from the foot just put down at `p`, and
    * how long the next. The takeoff foot's put just short of the lip. None left (it's within about half a stride): this
@@ -548,7 +563,7 @@ export class Runner implements Body {
     let edge = 0; for (let d = 0.2; d <= 3.2 * L; d += 0.1) if (Math.abs(H(d) - this.y) > STEP) { edge = d; break; }
     if (!edge || H(edge) > this.y + TUNE.rise) { this.runUpWhy = edge ? 'wall' : 'far'; return null; }
     const c = Math.max(0.25, Math.min(0.55, 0.15 + 0.03 * sp)), pd = (p[0] - this.x) * fx + (p[2] - this.z) * fz, D = edge - c - pd;
-    if (D <= 0.6 * L) return { steps: 0, next: 0 };
+    if (D <= 0.6 * L) { this.effort = this.effortFor(fx, fz, edge, sp); return { steps: 0, next: 0 }; }
     let best = 0, bestCost = 1e9;
     for (let n = Math.max(1, Math.floor(D / (1.35 * L))); n <= Math.ceil(D / (0.8 * L)) + 1; n++) {
       const r = D / n / L; if (r > 1.38) continue;
@@ -558,6 +573,7 @@ export class Runner implements Body {
     }
     if (!best) { this.runUpWhy = 'nofit'; return null; }
     this.runUpWhy = '';
+    if (best <= 2) this.effort = this.effortFor(fx, fz, edge, sp);
     // (the steps rising toward the last but one, the last 0.92 of it)
     const w: number[] = []; for (let i = 0; i < best; i++) w.push(best === 1 ? 1 : i === best - 1 ? 0.92 * (1 + 0.1) : 1 + (0.1 * i) / Math.max(1, best - 2));
     const tot = w.reduce((a, b) => a + b, 0);
@@ -794,12 +810,13 @@ export class Runner implements Body {
     if (ap && ap.steps === 0 && ap.at && on && !preparing && this.rollT <= 0 && mag >= 0.55 && sp > 2) {
       const ux = this.vx / sp, uz = this.vz / sp, ft = ap.side > 0 ? this.feet.L : this.feet.R, past = (this.x - ap.at[0]) * ux + (this.z - ap.at[2]) * uz;
       this.to.left = ap.side > 0;
-      this.load = Math.max(this.load, Math.min(1, 0.5 + (past + 0.25) * 1.5, this.load + dt * 10));
+      // (a jump taken while a landing's still being sunk into goes from that load: a rebound)
+      this.load = Math.max(this.load, this.land * 0.9, Math.min(1, 0.5 + (past + 0.25) * 1.5, this.load + dt * 10));
       if (past >= 0.1 + 0.012 * sp || !ft.on) {
         let edge = 0; for (let d = 0.1; d <= 3.5 * stepLen(sp); d += 0.1) if (Math.abs(H(this.x + ux * d, this.z + uz * d) - this.y) > STEP) { edge = d; break; }
         if (edge && H(this.x + ux * edge, this.z + uz * edge) <= this.y + TUNE.rise) {
           const rise = H(this.x + ux * edge, this.z + uz * edge) - this.y;
-          this.effort = rise > 1.2 ? Math.min(1, 0.5 + rise / 6.8) : 0.25; this.load = Math.max(this.load, 0.65); this.offFoot++;
+          this.effort = Math.max(this.effort, rise > 1.2 ? Math.min(1, 0.5 + rise / 6.8) : 0.2); this.load = Math.max(this.load, 0.65); this.offFoot++;
           if (this.tame()) return;
           this.takeoffBy = 'runup'; this.leap(ux, uz, edge, sp); return;
         }
@@ -823,7 +840,7 @@ export class Runner implements Body {
         // (a run-up in hand: its steps take it to the takeoff foot; the wind-up only begun, the jump not before that foot,
         // unless the lip's right there)
         if (this.approach) {
-          if (this.approach.steps >= 1) this.load = Math.min(this.approach.steps === 1 ? 0.55 : 0.3, this.load + dt * 6);
+          if (this.approach.steps >= 1) this.load = Math.min(this.approach.steps === 1 ? 0.3 + 0.4 * this.effort : 0.15 + 0.25 * this.effort, this.load + dt * 6);
           if (edge <= R + sp * dt) { if (this.tame()) return; if (this.approach.steps === 0) this.offFoot++; this.takeoffBy = this.approach.steps === 0 ? 'runup-lip' : 'runup-short'; this.leap(ux, uz, edge, sp); return; }
         } else {
         if (this.load < 0.1) {
@@ -836,7 +853,7 @@ export class Runner implements Body {
         }
         // (the wind-up as big as what's ahead asks: up a storey, deeper and longer; across or down, quick; spent, slower)
         const rise = H(this.x + ux * edge, this.z + uz * edge) - this.y;
-        this.effort = rise > 1.2 ? Math.min(1, 0.5 + rise / 6.8) : 0.25;
+        if (this.load < 0.1 || !this.effort) this.effort = Math.max(this.effortFor(ux, uz, edge, sp), rise > 1.2 ? Math.min(1, 0.5 + rise / 6.8) : 0.2);
         this.load = Math.min(1, this.load + dt * (9 - 4 * this.effort) * (0.7 + 0.3 * this.stamina));
         if ((this.load >= 0.65 && edge <= ahead) || edge <= R + sp * dt) {
           if (this.tame()) return;
@@ -908,6 +925,16 @@ export class Runner implements Body {
   /** a big release spends effort */
   private spend(e: number): void { this.stamina = Math.max(0, this.stamina - e * 0.18); this.spentT = 0; }
 
+  /**
+   * A landing taken in the legs, as deep as what it brought: the depth by the energy (the impact speed squared, against
+   * the most the legs can push), the legs softer the deeper it goes, so a big one sinks further and for longer.
+   */
+  private sinkInto(impact: number, k: number): void {
+    const e = Math.min(1, (impact / 15) ** 2), depth = 0.46 * Math.min(1, (0.06 + e) * k);
+    this.sinkK = 175 * (1 - 0.5 * e); this.legVelocity = depth * Math.sqrt(this.sinkK) / 0.45;
+  }
+  /** the legs' stiffness taking the landing now */
+  private sinkK = 175;
   private resetTakeoff(): void { this.to.buffer = 0; this.to.load = 0; this.to.committed = false; }
 
   /**
@@ -1496,15 +1523,15 @@ export class Runner implements Body {
       this.aim = null;
     }
     if (off) {
-      this.landings.off++; this.legVelocity = Math.min(12, impact) * 0.9; this.recoverT = 0.25;
+      this.landings.off++; this.sinkInto(impact, 1); this.recoverT = 0.25;
       this.vx *= 0.85; this.vz *= 0.85;
       // (knocked toward where the hips are actually carrying, not by which leg led)
       const side = this.save ? (this.saveSide ?? 1) : this.lead ? 1 : -1;
       this.balanceV += side * 1.6 + this.wallSide * (was === 'kick' ? 0.8 : 0);
     } else if (heavy > 0) {
-      this.landings.heavy++; this.legVelocity = Math.min(14, impact) * 0.95; this.recoverT = 0.15 + 0.35 * heavy; this.hitPending = TUNE.emphasis > 0;
+      this.landings.heavy++; this.sinkInto(impact, 1.1); this.recoverT = 0.15 + 0.35 * heavy; this.hitPending = TUNE.emphasis > 0;
       if (was !== 'dive') { this.vx *= 1 - 0.3 * heavy; this.vz *= 1 - 0.3 * heavy; }
-    } else { this.landings.flow++; this.legVelocity = Math.min(10, impact) * 0.75; }
+    } else { this.landings.flow++; this.sinkInto(impact, 0.85); }
     this.balanceV += this.turn * 0.05;
     if (this.save) { this.balanceV += (this.saveSide ?? 1) * Math.min(1.5, this.save.mag * 3); if (this.save.kind === 'short') this.recoverT = Math.max(this.recoverT, 0.2); }
     if (impact > 5) { this.impact = Math.min(1, impact / 16); this.impactT = 0; }
