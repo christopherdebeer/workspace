@@ -97,6 +97,8 @@ interface Built { vao: WebGLVertexArrayObject; buf: WebGLBuffer; n: number; cx: 
 export class Renderer {
   gl: WebGL2RenderingContext;
   look: Look = 'grid';
+  /** the figure's colours by material (character.ts): the character being drawn */
+  palette: [number, number, number][] = [[0.78, 0.6, 0.48], [0.11, 0.1, 0.1], [0.21, 0.21, 0.28], [0.13, 0.14, 0.2], [0.87, 0.84, 0.77], [0.5, 0.3, 0.24], [0.34, 0.38, 0.3], [0.8, 0.78, 0.72]];
   /** how far is drawn, in chunks */
   radius = 4;
   fog: [number, number, number] = [0.8, 0.8, 0.79];
@@ -112,7 +114,7 @@ export class Renderer {
     if (!gl) throw new Error('WebGL2 is needed');
     this.gl = gl;
     this.prog = this.program(VS, FS); this.sprog = this.program(SVS, SFS);
-    for (const n of ['uVP', 'uEye', 'uFog', 'uFar', 'uFogNear', 'uLook', 'uSun', 'uMask']) this.u[n] = gl.getUniformLocation(this.prog, n);
+    for (const n of ['uVP', 'uEye', 'uFog', 'uFar', 'uFogNear', 'uLook', 'uSun', 'uMask', 'uFigure']) this.u[n] = gl.getUniformLocation(this.prog, n);
     this.kprog = this.program(KVS, KFS, ['aPos']); for (const n of ['uInv', 'uTop', 'uHor', 'uClouds']) this.u['k' + n] = gl.getUniformLocation(this.kprog, n);
     this.dprog = this.program(DVS, DFS, ['aPos']); this.u.duVP = gl.getUniformLocation(this.dprog, 'uVP');
     for (const n of ['uShadowMap', 'uSunVP', 'uShadowOn']) this.u[n] = gl.getUniformLocation(this.prog, n);
@@ -244,7 +246,7 @@ export class Renderer {
     gl.uniform3fv(this.u.uFog, fog); gl.uniform1f(this.u.uFar, far); gl.uniform1f(this.u.uFogNear, def.fogNear ?? 0.3); gl.uniform1i(this.u.uLook, LOOKS.indexOf(def.name));
     { const l = Math.hypot(sun[0], sun[1], sun[2]); gl.uniform3f(this.u.uSun, sun[0] / l, sun[1] / l, sun[2] / l); }
     gl.activeTexture(gl.TEXTURE3); gl.bindTexture(gl.TEXTURE_2D, this.smap); gl.uniform1i(this.u.uShadowMap, 3); gl.activeTexture(gl.TEXTURE0);
-    gl.uniform1i(this.u.uMask, def.paint ? 1 : 0); gl.uniform1i(this.u.uShadowOn, sunVP ? 1 : 0); if (sunVP) gl.uniformMatrix4fv(this.u.uSunVP, false, sunVP);
+    gl.uniform3fv(this.u.uFigure, this.palette.flat()); gl.uniform1i(this.u.uMask, def.paint ? 1 : 0); gl.uniform1i(this.u.uShadowOn, sunVP ? 1 : 0); if (sunVP) gl.uniformMatrix4fv(this.u.uSunVP, false, sunVP);
     this.tris = 0;
     if (!bare) for (const c of this.built.values()) { gl.bindVertexArray(c.vao); gl.drawArrays(gl.TRIANGLES, 0, c.n); this.tris += c.n / 3; }
     gl.bindVertexArray(this.fig.vao);

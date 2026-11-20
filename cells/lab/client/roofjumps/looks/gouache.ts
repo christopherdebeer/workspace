@@ -5,8 +5,8 @@
  * streaked where water runs down from the top, rust bleeding through here and there; a lighter coping along every top
  * edge with its shadow under it; windows in storeys and bays on the larger walls (dark panes, a pale frame and sill), few
  * enough to give scale and not crowd the figure; rooftop units with their louvres; a warm low sun and cool shade; the
- * distance going to lavender. The figure dressed (a dark jacket, darker trousers, pale shoes, dark hair), drawn with a
- * darker edge so it holds against the walls. The light is a shadow map from the sun (the buildings throw their shadows
+ * distance going to lavender. The figure dressed from its character's palette (character.ts), drawn with a darker edge so
+ * it holds against the walls. The light is a shadow map from the sun (the buildings throw their shadows
  * across each other, the figure onto all of it), massed into two values; and the frame is painted after (paint.ts):
  * strokes that follow the picture, edges where pigment pools, a paper grain.
  *
@@ -27,12 +27,11 @@ vec3 concrete(float seed) {
   vec3 warm = vec3(0.64, 0.62, 0.58), green = vec3(0.57, 0.61, 0.6), cool = vec3(0.6, 0.61, 0.63), terra = vec3(0.67, 0.55, 0.51);
   return seed < 0.4 ? mix(warm, cool, seed / 0.4) : seed < 0.9 ? mix(cool, green, (seed - 0.4) / 0.5) : mix(warm, terra, 0.7);
 }
-vec3 dressed(float kind, vec3 n) {
-  int k = int(kind + 0.5);
-  if (k == 7) return vec3(0.87, 0.84, 0.77);                                  // shoes
-  if (k == 2) return n.y < -0.3 ? vec3(0.78, 0.6, 0.48) : vec3(0.11, 0.1, 0.1); // hair, the face under it
-  if (k == 1 || k == 3 || k == 4) return vec3(0.21, 0.21, 0.28);              // the jacket
-  return vec3(0.13, 0.14, 0.2);                                               // trousers
+vec3 dressed(float mat, vec3 n) {
+  int k = int(mat + 0.5);
+  // (hair: the face under it, the character's skin)
+  if (k == 1 && n.y < -0.3) return uFigure[0];
+  return uFigure[k];
 }
 vec3 look(Surf s) {
   vec3 n = s.n, sun = normalize(uSun), V = normalize(s.eye - s.pos);

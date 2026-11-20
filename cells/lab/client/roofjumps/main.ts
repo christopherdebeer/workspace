@@ -40,6 +40,7 @@ import { holdStrokes, planStrokes } from './plandraw';
 import { follow } from './direct';
 import { brushInput } from './brush';
 import { sceneByKey, SCENES } from './scenes';
+import { CHARACTERS, characterByName } from './character';
 import type { Follow, Waypoint } from './direct';
 
 const q = new URLSearchParams(location.search);
@@ -56,7 +57,10 @@ const canvas = document.getElementById('world') as HTMLCanvasElement;
 const practiceLine = q.get('line') === 'transfer';
 /** `scene=<key>`: one of the authored scenes (scenes.ts): its course, its scripted stick */
 const scene = sceneByKey(q.get('scene')), sceneMem: Record<string, number> = {};
-const city = new City(seed, practiceLine, scene?.course ?? null), runner = new Runner(city), rig = new Rig(), rd = new Renderer(canvas, city);
+/** `character=<name>`: who runs (character.ts): its proportions, what it wears, its colours */
+const character = characterByName(q.get('character'));
+const city = new City(seed, practiceLine, scene?.course ?? null), runner = new Runner(city, character), rig = new Rig(character), rd = new Renderer(canvas, city);
+rd.palette = character.palette;
 /** the way the body faced at the start, that `brush=` pushes are turned from */
 const brushHeading = runner.heading;
 // (`from=x,z`: start there instead, on whatever's there: the street, to see it find its way up)
@@ -167,6 +171,7 @@ function looks(): HTMLElement[] {
   const cam = (name: string) => Object.entries(CAMERAS[name]).every(([k, v]) => TUNE[k] === v);
   return [
     group('look', LOOKS.map((name) => [name, name === rd.look, () => setLook(name)])),
+    group('character', CHARACTERS.map((c) => [c.title, c.name === character.name, () => { const u = new URL(location.href); if (c.name === 'runner') u.searchParams.delete('character'); else u.searchParams.set('character', c.name); location.href = u.href; }])),
     group('camera', Object.keys(CAMERAS).map((name) => [name, cam(name), () => { for (const [k, v] of Object.entries(CAMERAS[name])) TUNE[k] = v; remember(); }])),
   ];
 }

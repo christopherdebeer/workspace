@@ -13,6 +13,7 @@ import type { Box, Course } from './city';
 import { Runner } from './runner';
 import type { Input } from './runner';
 import { Rig } from './rig';
+import type { Character } from './character';
 import { point } from './m4';
 
 export interface Frame {
@@ -57,8 +58,6 @@ const after = (r: Run, t: number) => r.frames.filter((f) => f.t >= t);
 const first = (r: Run, pred: (f: Frame) => boolean) => r.frames.find(pred);
 const count = (r: Run, m: string) => r.moves.filter((x) => x.move === m).length;
 const seq = (r: Run) => r.moves.map((m) => m.move).filter((m, i, a) => m !== 'run' && m !== a[i - 1]).join(' › ');
-/** the sole's depth under the ankle (rig.ts SOLE): the ball measured where it touches, on the ground */
-const SOLE_D = 0.07;
 const pops = (r: Run) => r.frames.filter((f) => f.jump).length;
 const plantedSlide = (r: Run) => r.frames.reduce((s, f) => s + f.slid, 0);
 /** cm a second a planted foot moves, over the time a foot is planted */
@@ -403,8 +402,8 @@ export const SCENES: Scene[] = [
 ];
 
 /** run a scene, the drawn body with it, and keep what the checks need */
-export function runScene(s: Scene, seed = 1): Run {
-  const city = new City(seed, false, s.course), r = new Runner(city), rig = new Rig(); rig.update(1, r);
+export function runScene(s: Scene, seed = 1, character?: Character): Run {
+  const city = new City(seed, false, s.course), r = new Runner(city, character), rig = new Rig(character); rig.update(1, r);
   const DT = 1 / 120, mem: Record<string, number> = {}, frames: Frame[] = [], ups: Run['ups'] = [], lands: Run['lands'] = [], moves: Run['moves'] = [{ t: 0, move: r.move }];
   let prevPv: number[] | null = null; const prevBall: (number[] | null)[] = [null, null], prevFall: (number[] | null)[] = [null, null], prevSet = [false, false];
   for (let i = 0; i < s.seconds / DT; i++) {
@@ -420,7 +419,7 @@ export function runScene(s: Scene, seed = 1): Run {
     prevPv = pv;
     let slid = 0, stretched = false;
     for (const [k, s2, key] of [[0, 'L', 'fl'], [1, 'R', 'fr']] as const) {
-      const now = r.reach[key], fm = at('foot' + s2), ball = [fm[12] + fm[8] * 0.13 - fm[4] * SOLE_D, fm[13] + fm[9] * 0.13 - fm[5] * SOLE_D, fm[14] + fm[10] * 0.13 - fm[6] * SOLE_D], sole = s2 === 'L' ? rig.soles.L : rig.soles.R;
+      const now = r.reach[key], fm = at('foot' + s2), ball = [fm[12] + fm[8] * rig.body.ball - fm[4] * rig.body.sole, fm[13] + fm[9] * rig.body.ball - fm[5] * rig.body.sole, fm[14] + fm[10] * rig.body.ball - fm[6] * rig.body.sole], sole = s2 === 'L' ? rig.soles.L : rig.soles.R;
       const same = !!now && !!prevFall[k] && now[0] === prevFall[k]![0] && now[2] === prevFall[k]![2];
       // (planted this frame and the last: a foot still coming down onto its footfall isn't sliding on it)
       const set = sole.w > 0.9 && !sole.lost;
@@ -429,7 +428,7 @@ export function runScene(s: Scene, seed = 1): Run {
       if (now && sole.w > 0.9 && !sole.lost) { const hp = point(at('thigh' + s2), 0, 0, 0), on = rig.on; if (Math.hypot(now[0] + on[0] * 0.07 - hp[0], now[1] + on[1] * 0.07 - hp[1], now[2] + on[2] * 0.07 - hp[2]) > 0.9) stretched = true; }
       prevBall[k] = ball; prevFall[k] = now ? [...now] : null;
     }
-    const ballOf = (n: string) => { const fm = at(n); return [fm[12] + fm[8] * 0.13 - fm[4] * SOLE_D, fm[13] + fm[9] * 0.13 - fm[5] * SOLE_D, fm[14] + fm[10] * 0.13 - fm[6] * SOLE_D]; };
+    const ballOf = (n: string) => { const fm = at(n), bl = rig.body.ball, so = rig.body.sole; return [fm[12] + fm[8] * bl - fm[4] * so, fm[13] + fm[9] * bl - fm[5] * so, fm[14] + fm[10] * bl - fm[6] * so]; };
     frames.push({ t, x: r.x, y: r.y, z: r.z, vx: r.vx, vz: r.vz, vy: r.vy, speed: r.speed, state: r.state, move: r.move, fl: !!r.reach.fl, fr: !!r.reach.fr, save: r.saveKind ?? '', hang: r.hangT, jump, slid, stretched, pelvisY: pv[1], ballL: ballOf('footL'), ballR: ballOf('footR'), pelvis: pv });
   }
   return { frames, runner: r, ups, lands, moves };

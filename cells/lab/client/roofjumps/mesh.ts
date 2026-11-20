@@ -2,7 +2,7 @@
  * Roof Jumps' triangles: the city's boxes and the figure's bones as flat-shaded faces, and nothing more. Two
  * triangles a face, five faces a box (no undersides), six a bone. Each vertex is its place, its face's normal, its
  * box's tag, and where on the box it is (the box's footprint and its bottom and top, and a number the box keeps for
- * itself: a seed, the same every time it's built; for the figure, which bone). What a face is and where, never what
+ * itself: a seed, the same every time it's built; for the figure, what it's made of: character.ts MAT). What a face is and where, never what
  * colour it is: a look is the renderer's business (looks.ts).
  */
 import type { Chunk } from './city';
@@ -49,18 +49,20 @@ export function chunkMesh(c: Chunk): Float32Array {
   return o;
 }
 
-/** floats the figure takes: thirteen bones, six faces each */
-export const FIGURE = 13 * 6 * 6 * VERTEX;
+/** floats the figure takes: thirteen bones, six faces each; and room for what a character wears (up to twelve blocks) */
+export const FIGURE_BASE = 13 * 6 * 6 * VERTEX, FIGURE = (13 + 12) * 6 * 6 * VERTEX;
 
 /** The figure: each bone's tapered block, through its matrix. */
 export function figureMesh(bones: Bone[], o: Float32Array): number {
   let at = 0;
   for (const b of bones) {
+    if (at + 36 * VERTEX > o.length) break;
     const p = (i: number, j: number, k: number): V3 => {
       const w = j ? b.w1 : b.w0, d = j ? b.d1 : b.d0;
-      return point(b.m, (i ? 0.5 : -0.5) * w, j ? b.y1 : b.y0, b.zc + (k ? 0.5 : -0.5) * d);
+      return point(b.m, (b.x ?? 0) + (i ? 0.5 : -0.5) * w, j ? b.y1 : b.y0, b.zc + (k ? 0.5 : -0.5) * d);
     };
-    const m = point(b.m, 0, (b.y0 + b.y1) / 2, b.zc), e: Extra = [0, 0, 0, 0, 0, 0, BONE_KIND[b.name.replace(/[LR]$/, '')] ?? 0];
+    // (its seed: what it's made of (character.ts MAT), for a look to dress it from the character's palette)
+    const m = point(b.m, b.x ?? 0, (b.y0 + b.y1) / 2, b.zc), e: Extra = [0, 0, 0, 0, 0, 0, b.mat ?? BONE_KIND[b.name.replace(/[LR]$/, '')] ?? 0];
     at = quad(o, at, p(0, 1, 0), p(1, 1, 0), p(1, 1, 1), p(0, 1, 1), TAG.PLAYER, m, e);
     at = quad(o, at, p(0, 0, 0), p(1, 0, 0), p(1, 0, 1), p(0, 0, 1), TAG.PLAYER, m, e);
     at = quad(o, at, p(0, 0, 0), p(1, 0, 0), p(1, 1, 0), p(0, 1, 0), TAG.PLAYER, m, e);

@@ -5,8 +5,8 @@
 import { build } from 'esbuild';
 import assert from 'node:assert/strict';
 const lab = new URL('../client/roofjumps/', import.meta.url).pathname;
-const out = await build({ stdin: { contents: `export * from './city'; export * from './runner'; export * from './rig'; export * from './mesh'; export * from './plan'; export * from './tune'; export * from './brush'; export * from './scenes';`, resolveDir: lab, loader: 'ts' }, bundle: true, write: false, format: 'esm', platform: 'node' });
-const { plan, foresee, TUNE, HOUSE, DIALS, City, Runner, Rig, CHUNK, STOREY, TAG, VERTEX, chunkMesh, figureMesh, FIGURE, brushInput, BRUSH_SECONDS, SCENES, runScene, judge } = await import('data:text/javascript;base64,' + Buffer.from(out.outputFiles[0].text).toString('base64'));
+const out = await build({ stdin: { contents: `export * from './city'; export * from './runner'; export * from './rig'; export * from './mesh'; export * from './plan'; export * from './tune'; export * from './brush'; export * from './scenes'; export * from './character';`, resolveDir: lab, loader: 'ts' }, bundle: true, write: false, format: 'esm', platform: 'node' });
+const { plan, foresee, TUNE, HOUSE, DIALS, City, Runner, Rig, CHUNK, STOREY, TAG, VERTEX, chunkMesh, figureMesh, FIGURE, FIGURE_BASE, brushInput, BRUSH_SECONDS, SCENES, runScene, judge, CHARACTERS, bodyOf } = await import('data:text/javascript;base64,' + Buffer.from(out.outputFiles[0].text).toString('base64'));
 
 // the same chunk, whatever was made before it
 {
@@ -61,7 +61,7 @@ const { plan, foresee, TUNE, HOUSE, DIALS, City, Runner, Rig, CHUNK, STOREY, TAG
     if (active > 1) worst = Math.min(worst, travelled / active);
     leaps += r.leaps; misses += r.misses; climbs += r.climbs; for (const [m, n] of Object.entries(r.made)) moves[m] = (moves[m] ?? 0) + n;
     const bones = rig.bones(r), o = new Float32Array(FIGURE);
-    assert.equal(bones.length, 13); assert.equal(figureMesh(bones, o) * VERTEX, FIGURE);
+    assert.equal(bones.length, 13); assert.equal(figureMesh(bones, o) * VERTEX, FIGURE_BASE);
     assert.ok(o.every(Number.isFinite));
   }
   // (the slowest is a held line pressed into a dead end too wide to chimney and too tall to climb (seed 1, dir 10): it runs
@@ -602,4 +602,30 @@ console.log('roofjumps: ok');
     n += judge(sc, a).filter((c) => c.ok).length;
   }
   console.log(`scenes: ${SCENES.length} repeatable; ${n} checks hold (see devtools/roofjumps-scenes.mjs for the report)`);
+}
+
+// Characters (character.ts): the runner's own body is exactly the one the rig always had; every other is a sane body (as
+// tall as asked, a child's head a larger share and its reach shorter), and each runs a held line with its skeleton whole
+// and finite, what it wears drawn, its feet where its legs can reach.
+{
+  const b0 = bodyOf(CHARACTERS[0].proportions);
+  assert.deepEqual([b0.thigh, b0.shin, b0.sole, b0.hipDrop, b0.upper, b0.fore, b0.spine, b0.neck, b0.shoulderX, b0.shoulderY, b0.hipX, b0.legScale, b0.reachScale], [0.44, 0.44, 0.07, 0.06, 0.29, 0.31, 0.1, 0.5, 0.225, 0.43, 0.095, 1, 1], 'the runner is the rig\'s own body');
+  const rows = [];
+  for (const c of CHARACTERS) {
+    const b = bodyOf(c.proportions), top = b.thigh + b.shin + b.hipDrop + b.sole + b.spine + b.neck + b.blocks.head.y1;
+    assert.ok(Math.abs(top - c.proportions.stature) < 0.12, `${c.name}: as tall as asked (${top.toFixed(2)} for ${c.proportions.stature})`);
+    const r = new Runner(new City(1, true), c), rig = new Rig(c); rig.update(1, r); let stretched = 0, frames = 0;
+    for (let i = 0; i < 120 * 6; i++) {
+      r.step(1 / 120, { x: 0, z: 1, jump: false }); rig.update(1 / 120, r);
+      const bones = rig.bones(r); frames++;
+      assert.ok(bones.every((o) => o.m.every(Number.isFinite)), `${c.name}: finite`);
+      assert.equal(bones.length, 13 + c.wears.length, `${c.name}: its skeleton and what it wears`);
+      for (const [s2, key] of [['L', 'fl'], ['R', 'fr']]) { const f = r.reach[key]; if (!f) continue; const t = bones.find((o) => o.name === 'thigh' + s2).m; if (Math.hypot(f[0] - t[12], f[1] + b.sole - t[13], f[2] - t[14]) > (b.thigh + b.shin) * 1.05) stretched++; }
+    }
+    assert.ok(stretched < frames * 0.06, `${c.name}: its feet where its legs reach (${stretched} of ${frames} frames out)`);
+    rows.push(`${c.name} ${c.proportions.stature} m reach×${b.reachScale.toFixed(2)} stride×${b.strideScale.toFixed(2)} (${r.leaps} leaps)`);
+  }
+  const child = bodyOf(CHARACTERS.find((c) => c.name === 'child').proportions);
+  assert.ok(child.blocks.head.y1 / 1.3 > b0.blocks.head.y1 / 1.82 && child.reachScale < 0.8, 'a child: a larger head for its height, a shorter reach');
+  console.log(`characters: ${rows.join('; ')}`);
 }

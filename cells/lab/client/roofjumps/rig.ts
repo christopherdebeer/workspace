@@ -20,6 +20,8 @@
 import type { Body } from './runner';
 import { ident, point, rotX, rotY, rotZ, translate } from './m4';
 import type { M4 } from './m4';
+import { bodyOf, characterByName } from './character';
+import type { Body as Build, Block, Character } from './character';
 
 export interface Pose {
   hipL: number; hipR: number; kneeL: number; kneeR: number;
@@ -44,9 +46,8 @@ const KEYS: (keyof Pose)[] = ['hipL', 'hipR', 'kneeL', 'kneeR', 'shL', 'shR', 'e
 const zero = (): Pose => ({ hipL: 0, hipR: 0, kneeL: 0, kneeR: 0, shL: 0, shR: 0, elL: 0, elR: 0, spreadL: 0, spreadR: 0, splay: 0, spine: 0, head: 0, twist: 0, lean: 0, tilt: 0, sink: 0, look: 0, hips: 0 });
 
 /** a bone: its matrix, and its block from y0 (w0 × d0) to y1 (w1 × d1), centred zc along z */
-export interface Bone { name: string; m: M4; y0: number; w0: number; d0: number; y1: number; w1: number; d1: number; zc: number }
+export interface Bone { name: string; m: M4; y0: number; w0: number; d0: number; y1: number; w1: number; d1: number; zc: number; x?: number; mat?: number }
 
-const THIGH = 0.44, SHIN = 0.44, SOLE = 0.07, HIP = 0.06, UPPER = 0.29, FORE = 0.31;
 type V3 = [number, number, number];
 const sub = (a: V3, b: V3): V3 => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
 const cross = (a: V3, b: V3): V3 => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
@@ -65,6 +66,9 @@ const mixes = (ws: number[]) => (...v: number[]) => v.reduce((s, x, i) => s + x 
 const sw = (m: M4, a: number) => rotX(m, -a);
 
 export class Rig {
+  /** who it draws: the character, and the body worked out from its proportions (character.ts) */
+  readonly character: Character; readonly body: Build;
+  constructor(character?: Character) { this.character = character ?? characterByName(null); this.body = bodyOf(this.character.proportions); }
   pose = zero();
   /** each joint's speed toward its pose; and the chest's lag behind the hips (rad) and its speed, the hips' last height
    * and speed: weight */
@@ -561,22 +565,24 @@ export class Rig {
     }
     if (r.reach.fl || r.reach.fr) this.on = r.reach.fn ?? [0, 1, 0];
     // (the hips: where the lower foot reaches the ground; in the air, where they'd be standing, so the feet come up to them)
-    const p = this.pose, leg = (hip: number, knee: number) => THIGH * Math.cos(hip) * Math.cos(p.splay) + SHIN * Math.cos(hip - knee) * Math.cos(p.splay);
+    const p = this.pose, leg = (hip: number, knee: number) => this.body.thigh * Math.cos(hip) * Math.cos(p.splay) + this.body.shin * Math.cos(hip - knee) * Math.cos(p.splay);
     // (but a run has its moment off the ground, both legs out: the hips don't drop into the split, they carry over it)
     const striding = r.move === 'run' || r.move === 'dash' || r.move === 'ledge', pace = Math.min(1, r.speed / 6);
     // (a wind-up's sink: deep from a stand (a squat to spring from), shallow at a run (the hips lowered a little over the
     // last steps and the takeoff leg bent under it, not a squat), deeper for a bigger jump)
     const ef = r.effort ?? 0, windDown = (r.load ?? 0) * (r.committed ? 0.95 : 0.8) * (1 - 0.7 * sm(3, 8, r.speed) * (1 - 0.6 * ef)) * (0.45 + 1.1 * ef);
-    const carry = striding ? (0.9 + 0.05 * Math.abs(Math.cos(this.ph))) * pace - 0.55 * Math.max(r.land, windDown) : 0;
+    // (heights in the runner's metres, for its legs: scaled to this body's)
+    const Ls = this.body.legScale;
+    const carry = striding ? ((0.9 + 0.05 * Math.abs(Math.cos(this.ph))) * pace - 0.55 * Math.max(r.land, windDown)) * Ls : 0;
     // (running: the hips lowest through a stance (the leg bending to take it), highest in the flight between, higher for a step
     // planned long or over clutter; low enough that a leg can hold its footfall from in front to behind)
-    const g = r.gait, stride = striding && g && pace > 0.4 ? (g.stance >= 0 ? 0.95 - 0.02 * pace * Math.sin(Math.PI * g.stance) : 0.95 + Math.min(0.16, 1.6 * (r.bounce ?? 0.03)) * pace * Math.sin(Math.PI * g.flight)) - 0.55 * Math.max(r.land, windDown) : -1;
-    const ground = stride >= 0 ? stride : Math.max(carry, HIP + Math.max(leg(p.hipL, p.kneeL), leg(p.hipR, p.kneeR)) + SOLE) + (r.move === 'roll' ? 0.16 : 0) - (r.state === 'ground' ? 0.4 * windDown : 0);
+    const g = r.gait, stride = striding && g && pace > 0.4 ? (g.stance >= 0 ? 0.95 - 0.02 * pace * Math.sin(Math.PI * g.stance) : 0.95 + Math.min(0.16, 1.6 * (r.bounce ?? 0.03)) * pace * Math.sin(Math.PI * g.flight)) * Ls - 0.55 * Math.max(r.land, windDown) * Ls : -1;
+    const ground = stride >= 0 ? stride : Math.max(carry, this.body.hipDrop + Math.max(leg(p.hipL, p.kneeL), leg(p.hipR, p.kneeR)) + this.body.sole) + (r.move === 'roll' ? 0.16 * Ls : 0) - (r.state === 'ground' ? 0.4 * windDown * Ls : 0);
     // (walking: a little lower than standing, so a foot down can be held from in front to behind; lowest with both down)
     const walk = r.state === 'ground' && r.move === 'run' && stride < 0 ? sm(0.2, 0.6, r.speed) * (1 - sm(2.2, 3, r.speed)) : 0;
-    const groundW = walk > 0 ? Math.min(ground, ground - walk * (0.05 + 0.03 * (r.reach.fl && r.reach.fr ? 1 : 0))) : ground;
-    const hip = groundW * this.stood + (0.98 - p.sink) * (1 - this.stood);
-    const hipTo = r.state === 'ground' && r.move !== 'roll' ? Math.min(hip, 0.99 - 0.46 * r.land) : hip;
+    const groundW = walk > 0 ? Math.min(ground, ground - walk * (0.05 + 0.03 * (r.reach.fl && r.reach.fr ? 1 : 0)) * Ls) : ground;
+    const hip = groundW * this.stood + (0.98 - p.sink) * Ls * (1 - this.stood);
+    const hipTo = r.state === 'ground' && r.move !== 'roll' ? Math.min(hip, (0.99 - 0.46 * r.land) * Ls) : hip;
     // (the hips never jump up: risen to a new height at most as fast as legs push (6 m/s); let down as fast as a landing takes them)
     this.hipY = dt > 0 && dt <= 0.2 ? Math.max(this.hipY - 18 * dt, Math.min(this.hipY + 6 * dt, hipTo)) : hipTo;
     // (the chest a beat behind the hips: when they're stopped short (a landing), it carries on down and comes back up;
@@ -592,8 +598,8 @@ export class Rig {
     const want: V3 = [0, 0, 0], P0 = this.pelvis(r, this.slip), fw = unit([P0[8], 0, P0[10]]);
     for (const [f, side] of [[this.soles.L, 1], [this.soles.R, -1]] as const) {
       if (f.w < 0.05) continue;
-      const s = point(P0, side * 0.095, -HIP, 0), fall: V3 = [f.p[0] + this.on[0] * SOLE, f.p[1] + this.on[1] * SOLE, f.p[2] + this.on[2] * SOLE];
-      const d = sub(fall, s), far = Math.hypot(d[0], d[1], d[2]), R = (THIGH + SHIN) * 0.97;
+      const s = point(P0, side * this.body.hipX, -this.body.hipDrop, 0), fall: V3 = [f.p[0] + this.on[0] * this.body.sole, f.p[1] + this.on[1] * this.body.sole, f.p[2] + this.on[2] * this.body.sole];
+      const d = sub(fall, s), far = Math.hypot(d[0], d[1], d[2]), R = (this.body.thigh + this.body.shin) * 0.97;
       // (behind, the toe pivot gives the leg a heel's length more)
       const behind = this.on[1] > 0.7 && d[0] * fw[0] + d[2] * fw[2] < 0 ? 0.1 : 0, over = far - R - behind;
       if (over <= 0) continue;
@@ -626,49 +632,50 @@ export class Rig {
     // spin; and carried toward a footfall it couldn't otherwise reach)
     const P = this.pelvis(r, [this.give[0] + this.slip[0], this.give[1] + this.slip[1], this.give[2] + this.slip[2]]);
     const add = (name: string, m: M4, y0: number, w0: number, d0: number, y1: number, w1: number, d1: number, zc = 0) => out.push({ name, m, y0, w0, d0, y1, w1, d1, zc });
-    add('pelvis', P, -0.09, 0.26, 0.17, 0.1, 0.3, 0.18);
-    const S = rotY(rotX(translate(P, 0, 0.1, 0), p.spine + this.chest), p.twist);
-    add('torso', S, 0, 0.27, 0.16, 0.47, 0.37, 0.21);
-    add('head', rotX(rotY(translate(S, 0, 0.5, 0), p.look), p.head - this.chest * 0.5), 0, 0.16, 0.18, 0.23, 0.18, 0.2, 0.015);
+    const b = this.body, blk = (name: string, m: M4, k: Block) => add(name, m, k.y0, k.w0, k.d0, k.y1, k.w1, k.d1, k.zc ?? 0);
+    blk('pelvis', P, b.blocks.pelvis);
+    const S = rotY(rotX(translate(P, 0, b.spine, 0), p.spine + this.chest + b.stoop), p.twist);
+    blk('torso', S, b.blocks.torso);
+    blk('head', rotX(rotY(translate(S, 0, b.neck, 0), p.look), p.head - this.chest * 0.5 - b.stoop * 0.6), b.blocks.head);
     for (const side of [1, -1]) {
       const L = side > 0, n = L ? 'L' : 'R';
-      const A = sw(rotZ(translate(S, side * 0.225, 0.43, 0), side * (L ? p.spreadL : p.spreadR)), L ? p.shL : p.shR);
-      let F = sw(translate(A, 0, -UPPER, 0), L ? p.elL : p.elR), U = A;
+      const A = sw(rotZ(translate(S, side * b.shoulderX, b.shoulderY, 0), side * (L ? p.spreadL : p.spreadR)), L ? p.shL : p.shR);
+      let F = sw(translate(A, 0, -this.body.upper, 0), L ? p.elL : p.elR), U = A;
       const hand = L ? this.hands.L : this.hands.R;
       if (hand.w > 0.01) {
         // (reaching: from where the pose had the hand toward the hold, by how much hold it has; the arm solved to there,
         // the elbow down and out and a little behind)
-        const s: V3 = [A[12], A[13], A[14]], was = point(F, 0, -FORE, 0);
+        const s: V3 = [A[12], A[13], A[14]], was = point(F, 0, -this.body.fore, 0);
         let to: V3 = [was[0] + (hand.p[0] - was[0]) * hand.w, was[1] + (hand.p[1] - was[1]) * hand.w, was[2] + (hand.p[2] - was[2]) * hand.w];
         let dir = sub(to, s), d = Math.hypot(dir[0], dir[1], dir[2]);
-        const most = UPPER + FORE - 0.005;
+        const most = this.body.upper + this.body.fore - 0.005;
         if (d > most) { to = [s[0] + (dir[0] * most) / d, s[1] + (dir[1] * most) / d, s[2] + (dir[2] * most) / d]; d = most; }
         dir = unit(dir);
-        const a = (UPPER * UPPER - FORE * FORE + d * d) / (2 * Math.max(d, 1e-3)), h = Math.sqrt(Math.max(0, UPPER * UPPER - a * a));
+        const a = (this.body.upper * this.body.upper - this.body.fore * this.body.fore + d * d) / (2 * Math.max(d, 1e-3)), h = Math.sqrt(Math.max(0, this.body.upper * this.body.upper - a * a));
         const pole: V3 = [-P[4] * 0.7 - P[8] * 0.45 + side * P[0] * 0.5, -P[5] * 0.7 - P[9] * 0.45 + side * P[1] * 0.5, -P[6] * 0.7 - P[10] * 0.45 + side * P[2] * 0.5];
         const k = pole[0] * dir[0] + pole[1] * dir[1] + pole[2] * dir[2], out2 = unit([pole[0] - dir[0] * k, pole[1] - dir[1] * k, pole[2] - dir[2] * k]);
         const elbow: V3 = [s[0] + dir[0] * a + out2[0] * h, s[1] + dir[1] * a + out2[1] * h, s[2] + dir[2] * a + out2[2] * h], fwd: V3 = [P[8], P[9], P[10]];
         U = aim(s, elbow, fwd); F = aim(elbow, to, fwd);
       }
-      add('upperArm' + n, U, 0, 0.09, 0.09, -UPPER, 0.075, 0.075);
-      add('foreArm' + n, F, 0, 0.075, 0.075, -FORE, 0.055, 0.06);
+      blk('upperArm' + n, U, b.blocks.upperArm);
+      blk('foreArm' + n, F, b.blocks.foreArm);
       const hip = L ? p.hipL : p.hipR, knee = L ? p.kneeL : p.kneeR;
-      const T = sw(rotZ(translate(P, side * 0.095, -HIP, 0), side * p.splay), hip);
-      let Th = T, K = sw(translate(T, 0, -THIGH, 0), -knee), planted: V3 | null = null;
+      const T = sw(rotZ(translate(P, side * b.hipX, -this.body.hipDrop, 0), side * p.splay), hip);
+      let Th = T, K = sw(translate(T, 0, -this.body.thigh, 0), -knee), planted: V3 | null = null;
       const sole = L ? this.soles.L : this.soles.R;
       if (sole.w > 0.01) {
         // (planted: the ankle taken from where the pose had it toward its footfall (a sole's depth off what it's on),
         // the leg solved to there, the knee forward)
-        const s: V3 = [T[12], T[13], T[14]], was = point(K, 0, -SHIN, 0), fall: V3 = [sole.p[0] + this.on[0] * SOLE, sole.p[1] + this.on[1] * SOLE, sole.p[2] + this.on[2] * SOLE];
-        const most = THIGH + SHIN - 0.005;
+        const s: V3 = [T[12], T[13], T[14]], was = point(K, 0, -this.body.shin, 0), fall: V3 = [sole.p[0] + this.on[0] * this.body.sole, sole.p[1] + this.on[1] * this.body.sole, sole.p[2] + this.on[2] * this.body.sole];
+        const most = this.body.thigh + this.body.shin - 0.005;
         // (out of reach behind: up onto the toe, the heel lifting, the foot pivoting about its ball, so the leg stays on its
         // footfall to the push-off instead of dragging it)
         let toe = 0;
         { const fw: V3 = this.on[1] > 0.7 && r.state === 'ground' ? [Math.sin(sole.yaw), 0, Math.cos(sole.yaw)] : unit([P[8], 0, P[10]]); if (Math.hypot(fall[0] - s[0], fall[1] - s[1], fall[2] - s[2]) > most && (fall[0] - s[0]) * fw[0] + (fall[2] - s[2]) * fw[2] < 0) {
           // (the ball on the ground, under the foot: what it pivots about, so the toe stays where it is as the heel comes up)
-          const on = this.on, ball: V3 = [fall[0] + fw[0] * 0.13 - on[0] * SOLE, fall[1] - on[1] * SOLE, fall[2] + fw[2] * 0.13 - on[2] * SOLE];
+          const on = this.on, ball: V3 = [fall[0] + fw[0] * this.body.ball - on[0] * this.body.sole, fall[1] - on[1] * this.body.sole, fall[2] + fw[2] * this.body.ball - on[2] * this.body.sole];
           // (the heel lifted just as far as it has to: solved, not stepped, so the ankle doesn't jump)
-          const at = (th: number): V3 => { const c = Math.cos(th), sn = Math.sin(th), a = -0.13 * c + SOLE * sn, b = 0.13 * sn + SOLE * c; return [ball[0] + fw[0] * a + on[0] * b, ball[1] + fw[1] * a + on[1] * b, ball[2] + fw[2] * a + on[2] * b]; };
+          const at = (th: number): V3 => { const c = Math.cos(th), sn = Math.sin(th), a = -this.body.ball * c + this.body.sole * sn, b = this.body.ball * sn + this.body.sole * c; return [ball[0] + fw[0] * a + on[0] * b, ball[1] + fw[1] * a + on[1] * b, ball[2] + fw[2] * a + on[2] * b]; };
           const far = (th: number) => { const c = at(th); return Math.hypot(c[0] - s[0], c[1] - s[1], c[2] - s[2]); };
           let lo = 0, hi = 1.5; if (far(hi) > most) lo = hi; else for (let k = 0; k < 14; k++) { const m = (lo + hi) / 2; if (far(m) > most) lo = m; else hi = m; }
           toe = Math.max(lo, hi === 1.5 && lo === 1.5 ? 1.5 : hi); const c = at(toe); fall[0] = c[0]; fall[1] = c[1]; fall[2] = c[2]; } }
@@ -680,15 +687,15 @@ export class Rig {
         let dir = sub(to, s), d = Math.hypot(dir[0], dir[1], dir[2]);
         if (d > most) { to = [s[0] + (dir[0] * most) / d, s[1] + (dir[1] * most) / d, s[2] + (dir[2] * most) / d]; d = most; }
         dir = unit(dir);
-        const a = (THIGH * THIGH - SHIN * SHIN + d * d) / (2 * Math.max(d, 1e-3)), h = Math.sqrt(Math.max(0, THIGH * THIGH - a * a));
+        const a = (this.body.thigh * this.body.thigh - this.body.shin * this.body.shin + d * d) / (2 * Math.max(d, 1e-3)), h = Math.sqrt(Math.max(0, this.body.thigh * this.body.thigh - a * a));
         const pole: V3 = [P[8] + P[4] * 0.3, P[9] + P[5] * 0.3, P[10] + P[6] * 0.3], k = pole[0] * dir[0] + pole[1] * dir[1] + pole[2] * dir[2], out2 = unit([pole[0] - dir[0] * k, pole[1] - dir[1] * k, pole[2] - dir[2] * k]);
         const kneeAt: V3 = [s[0] + dir[0] * a + out2[0] * h, s[1] + dir[1] * a + out2[1] * h, s[2] + dir[2] * a + out2[2] * h], fwd: V3 = [P[8], P[9], P[10]];
         Th = aim(s, kneeAt, fwd); K = aim(kneeAt, to, fwd); planted = to;
       }
-      add('thigh' + n, Th, 0, 0.135, 0.14, -THIGH, 0.1, 0.105);
-      add('shin' + n, K, 0, 0.095, 0.1, -SHIN, 0.07, 0.075);
+      blk('thigh' + n, Th, b.blocks.thigh);
+      blk('shin' + n, K, b.blocks.shin);
       // (the foot: flat to the ground when it's on it, the toe pointed when it isn't)
-      let Ft = sw(translate(K, 0, -SHIN, 0), -(hip - knee) * (0.35 + 0.5 * this.stood) - 0.5 * (1 - this.stood));
+      let Ft = sw(translate(K, 0, -this.body.shin, 0), -(hip - knee) * (0.35 + 0.5 * this.stood) - 0.5 * (1 - this.stood));
       if (planted) {
         // (and the foot flat to what it's on: its sole toward it, its toe the way the body faces, as near as that allows)
         const y: V3 = this.on, f0: V3 = this.on[1] > 0.7 && r.state === 'ground' ? [Math.sin(sole.yaw), 0, Math.cos(sole.yaw)] : this.on[1] < 0.7 && (r.state === 'climb' || r.state === 'chimney') ? [0, 1, 0] : [P[8], P[9], P[10]], kf = f0[0] * y[0] + f0[1] * y[1] + f0[2] * y[2];
@@ -699,7 +706,16 @@ export class Rig {
         const x = unit(cross(y, z)), y2 = cross(z, x); Ft = ident();
         Ft[0] = x[0]; Ft[1] = x[1]; Ft[2] = x[2]; Ft[4] = y2[0]; Ft[5] = y2[1]; Ft[6] = y2[2]; Ft[8] = z[0]; Ft[9] = z[1]; Ft[10] = z[2]; Ft[12] = planted[0]; Ft[13] = planted[1]; Ft[14] = planted[2];
       }
-      add('foot' + n, Ft, -SOLE, 0.085, 0.25, 0, 0.08, 0.2, 0.06);
+      blk('foot' + n, Ft, b.blocks.foot);
+    }
+    // (dressed: each bone its material; and what's worn, on the bone it's fixed to, sized with the body (a head's with the
+    // head))
+    const c = this.character, sc = this.character.proportions.stature / 1.82;
+    for (const o of out) o.mat = c.dress[o.name.replace(/[LR]$/, '') as keyof Character['dress']];
+    for (const w of c.wears) {
+      const on = out.find((o) => o.name === w.bone); if (!on) continue;
+      const k = w.bone === 'head' ? this.body.blocks.head.w1 / 0.18 : sc, m = rotX(translate(on.m, w.at[0] * k, w.at[1] * k, w.at[2] * k), w.tilt ?? 0);
+      out.push({ name: 'worn:' + w.bone, m, y0: w.block.y0 * k, w0: w.block.w0 * k, d0: w.block.d0 * k, y1: w.block.y1 * k, w1: w.block.w1 * k, d1: w.block.d1 * k, zc: (w.block.zc ?? 0) * k, x: (w.block.x ?? 0) * k, mat: w.mat });
     }
     return out;
   }

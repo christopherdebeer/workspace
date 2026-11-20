@@ -2,23 +2,25 @@
 // and (with --film) filmed from the chase eye and from the side into devtools/out/scenes/, with a report (report.json,
 // and report.html: a contact sheet of every scene, what it asks, what it should do and whether it did).
 //
-//   node cells/lab/devtools/roofjumps-scenes.mjs [keys…] [--film] [--look=gouache] [--eye=painter]
+//   node cells/lab/devtools/roofjumps-scenes.mjs [keys…] [--film] [--look=gouache] [--eye=painter] [--character=teen]
 import { build } from 'esbuild';
 import { mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 const lab = new URL('../client/roofjumps/', import.meta.url).pathname;
-const OUT = new URL(`./out/scenes${process.argv.find((a) => a.startsWith('--look=')) ? '-' + process.argv.find((a) => a.startsWith('--look=')).slice(7) : ''}/`, import.meta.url).pathname;
-const out = await build({ stdin: { contents: `export * from './scenes';`, resolveDir: lab, loader: 'ts' }, bundle: true, write: false, format: 'esm', platform: 'node' });
-const { SCENES, runScene, judge, sequence } = await import('data:text/javascript;base64,' + Buffer.from(out.outputFiles[0].text).toString('base64'));
+const OUT = new URL(`./out/scenes${['--look=', '--character='].map((f) => process.argv.find((a) => a.startsWith(f))?.slice(f.length)).filter(Boolean).map((v) => '-' + v).join('')}/`, import.meta.url).pathname;
+const out = await build({ stdin: { contents: `export * from './scenes'; export * from './character';`, resolveDir: lab, loader: 'ts' }, bundle: true, write: false, format: 'esm', platform: 'node' });
+const { SCENES, runScene, judge, sequence, characterByName } = await import('data:text/javascript;base64,' + Buffer.from(out.outputFiles[0].text).toString('base64'));
 const args = process.argv.slice(2), keys = args.filter((a) => !a.startsWith('--')), film = args.includes('--film');
 // (`--look=<name>`: filmed in that look (looks.ts), into devtools/out/scenes-<name>/, the checks and report as ever)
 const look = args.find((a) => a.startsWith('--look='))?.slice(7) ?? '';
+// (`--character=<name>`: run, checked and filmed as that character (character.ts))
+const who = args.find((a) => a.startsWith('--character='))?.slice(12) ?? '', ch = who ? characterByName(who) : undefined;
 // (`--eye=painter`: the chase film through the painter's camera (main.ts CAMERAS): high, a long lens)
 const EYES = { painter: '&fov=30&eyeDist=10&eyePitch=34&rush=2&side=20' }, eye = EYES[args.find((a) => a.startsWith('--eye='))?.slice(6)] ?? '';
 const chosen = keys.length ? SCENES.filter((s) => keys.includes(s.key)) : SCENES;
 mkdirSync(OUT, { recursive: true });
 const report = [];
 for (const s of chosen) {
-  const run = runScene(s), checks = judge(s, run), r = run.runner;
+  const run = runScene(s, 1, ch), checks = judge(s, run), r = run.runner;
   report.push({ key: s.key, title: s.title, eye: s.eye ?? null, asks: s.asks, watch: s.watch, gap: s.gap ?? '', seconds: s.seconds, sequence: sequence(run), checks, end: { x: +r.x.toFixed(2), y: +r.y.toFixed(2), z: +r.z.toFixed(2), state: r.state, move: r.move }, takeoffs: run.ups.map((u) => ({ t: +u.t.toFixed(2), foot: u.foot, move: u.move, by: u.by })), landings: run.lands.map((l) => ({ t: +l.t.toFixed(2), v: +l.v.toFixed(1), from: l.from, save: l.save })) });
   const passed = checks.filter((c) => c.ok).length;
   console.log(`\n${s.key.padEnd(16)} ${passed}/${checks.length}  ${sequence(run) || 'run'}`);
@@ -31,9 +33,9 @@ if (film) {
   await withWood(async (lab) => {
     for (const s of chosen) for (const [view, extra] of [['chase', eye], ['side', '&side=90&zoom=1.1'], ...(s.eye ? [['room', '&fixed']] : [])]) {
       // (close round its first takeoff, if it asks: a flight is a third of a second; else across the whole run)
-      const run0 = s.close ? runScene(s) : null, t0 = run0 ? (typeof s.close === 'function' ? s.close(run0) : run0.ups[0] ? Math.max(0, run0.ups[0].t - 0.25) : 0) : 0;
+      const run0 = s.close ? runScene(s, 1, ch) : null, t0 = run0 ? (typeof s.close === 'function' ? s.close(run0) : run0.ups[0] ? Math.max(0, run0.ups[0].t - 0.25) : 0) : 0;
       const n = 16, every = s.close ? 1 / 30 : s.seconds / n;
-      const p = await lab.open(`scene=${s.key}&strip=${t0.toFixed(4)}&frames=${n}&every=${every.toFixed(4)}&cols=8&holds=0${extra}${look ? `&look=${look}` : ''}`, { width: 1600, height: 560, dpr: 1 });
+      const p = await lab.open(`scene=${s.key}&strip=${t0.toFixed(4)}&frames=${n}&every=${every.toFixed(4)}&cols=8&holds=0${extra}${look ? `&look=${look}` : ''}${who ? `&character=${who}` : ''}`, { width: 1600, height: 560, dpr: 1 });
       for (let k = 0; k < 80 && (await p.evaluate(() => window.__roofjumps.probe().pending)) > 0; k++) await p.waitForTimeout(250);
       await p.waitForTimeout(800); await p.screenshot({ path: `${OUT}${s.key}-${view}.png` }); await p.close();
       console.log(`filmed ${s.key} (${view})`);
