@@ -12,7 +12,8 @@
  *
  * It opens on the menu (menu.ts): every character along a high ledge over the city, backs turned, the eye behind one.
  * Swipe sideways on a character to choose who runs, on the sky for the time of day, on the city for another city, on
- * the roof for another look; swipe up (or Take control, W, ↑) and that one leaps off into the city. `?play` (or any
+ * the roof for another look; tap (or Space) and the one chosen jumps where it stands; swipe up (or Take control, W,
+ * ↑) and that one leaps off into the city. `?play` (or any
  * other flag) skips it; `?menu` asks for it whatever else is set; `time=dusk|golden hour|day|morning` the light.
  *
  * The studies (the dials' last tab): every scene and scripted test run above as a link, the dials kept.
@@ -103,7 +104,7 @@ const knob = document.getElementById('stick')!, nub = knob.firstElementChild as 
 const REACH = 56;
 canvas.addEventListener('pointerdown', (e) => {
   canvas.setPointerCapture(e.pointerId);
-  if (menu.active) { if (!menu.swipe) menu.swipe = { id: e.pointerId, x: e.clientX, y: e.clientY, under: menuUnder(e.clientX, e.clientY) }; return; }
+  if (menu.active) { if (!menu.swipe) menu.swipe = { id: e.pointerId, x: e.clientX, y: e.clientY, t: performance.now(), under: menuUnder(e.clientX, e.clientY) }; return; }
   if (stick.id < 0) {
     Object.assign(stick, { id: e.pointerId, x0: e.clientX, y0: e.clientY, x: 0, y: 0, t: performance.now(), moved: false });
     knob.style.left = `${e.clientX}px`; knob.style.top = `${e.clientY}px`; nub.style.transform = '';
@@ -131,6 +132,8 @@ const up = (e: PointerEvent) => {
     const dx = e.clientX - sw.x, dy = e.clientY - sw.y;
     if (e.type !== 'pointercancel' && Math.abs(dx) > 36 && Math.abs(dx) > Math.abs(dy) * 1.2) menuSwipe(sw.under, dx < 0 ? 1 : -1);
     else if (e.type !== 'pointercancel' && dy < -50 && -dy > Math.abs(dx)) takeControl();
+    // (a tap: the one chosen jumps, there on the ledge, as a tap jumps in play)
+    else if (e.type !== 'pointercancel' && Math.hypot(dx, dy) < 12 && performance.now() - sw.t < 260) menuJump();
     return;
   }
   const tap = (t: number, moved: boolean) => { if (e.type !== 'pointercancel' && !moved && performance.now() - t < 260) jump = true; };
@@ -206,7 +209,8 @@ addEventListener('keydown', (e) => {
     const c = e.code;
     if (c === 'ArrowLeft' || c === 'KeyA') menuSwipe({ kind: 'character', i: menu.sel }, -1);
     else if (c === 'ArrowRight' || c === 'KeyD') menuSwipe({ kind: 'character', i: menu.sel }, 1);
-    else if (c === 'ArrowUp' || c === 'KeyW' || c === 'Enter' || c === 'Space') takeControl();
+    else if (c === 'ArrowUp' || c === 'KeyW' || c === 'Enter') takeControl();
+    else if (c === 'Space') { if (!e.repeat) menuJump(); }
     else if (c === 'KeyT') menuSwipe({ kind: 'sky' }, 1);
     else if (c === 'KeyG') menuSwipe({ kind: 'city' }, 1);
     else if (c === 'KeyV') menuSwipe({ kind: 'roof' }, 1);
@@ -396,7 +400,9 @@ const menu = {
   crew: [] as Bone[], crewI: -1,
   vp: null as Float32Array | null, eye: [0, 0, 0], target: [0, 0, 0], fov: 1,
   launch: -1, heading: 0, blend: 1, from: null as { eye: number[]; target: number[]; fov: number } | null,
-  swipe: null as { id: number; x: number; y: number; under: Under } | null,
+  swipe: null as { id: number; x: number; y: number; t: number; under: Under } | null,
+  /** the one chosen, jumping where it stands (a tap): a runner of its own for the while, the game's own jump */
+  hop: null as { i: number; r: Runner; rig: Rig; acc: number; jump: boolean; up: boolean; down: number; t: number } | null,
   /** how attentive each is (0 resting … 1 chosen, eased), and when each was last chosen (s, for the look back) */
   attention: [] as number[], chosenAt: [] as number[],
 };
@@ -439,6 +445,7 @@ function crewBones(skip: number, dt = 0, watch: number[] | null = null): Bone[] 
       const s = now - (menu.chosenAt[i] ?? -99), g = s < 0 ? 0 : s < 0.35 ? s / 0.35 : s < 0.95 ? 1 : s < 1.7 ? 1 - (s - 0.95) / 0.75 : 0;
       yaw = g * g * (3 - 2 * g) * toward(menu.eye, 1.15); pitch = -0.08 * g;
     }
+    if (menu.hop && menu.hop.i === i) { for (const b of menu.hop.rig.bones(menu.hop.r)) out.push({ ...b, mat: (b.mat ?? 0) + 8 * i }); return; }
     const bones = rg.bones(body);
     idlePose(bones, { heading: L.heading, attention: menu.attention[i], look: { yaw, pitch }, t: now, seed: i + 1 });
     for (const b of bones) out.push({ ...b, mat: (b.mat ?? 0) + 8 * i });
@@ -457,8 +464,31 @@ function menuView(aspect: number, now: number) {
   const fov = ((aspect < 1 ? 48 : 38) * Math.PI) / 180;
   return { eye, target, fov, vp: mul(perspective(fov, aspect, 0.15, rd.radius * 64 * 1.5), lookAt(eye, target, [0, 1, 0])) };
 }
+/** a tap in the menu: the one chosen jumps where it stands (again, in the air: the second jump, as in play) */
+function menuJump(): void {
+  const L = menu.ledge; if (!L) return;
+  const i = ORDER[menu.sel];
+  if (menu.hop && menu.hop.i === i) { menu.hop.jump = true; return; }
+  const p = L.spots[menu.sel], r = new Runner(city, CHARACTERS[i]); r.x = p[0]; r.y = p[1]; r.z = p[2]; r.heading = L.heading;
+  const rg = new Rig(CHARACTERS[i]); rg.update(1, r);
+  menu.hop = { i, r, rig: rg, acc: 0, jump: true, up: false, down: 0, t: 0 };
+}
+/** the jump on: stepped as play steps, until it's down, settled, and back to standing about */
+function hopFrame(dt: number): void {
+  const h = menu.hop; if (!h) return;
+  h.acc += dt;
+  while (h.acc >= DT) {
+    h.r.step(DT, { x: 0, z: 0, jump: h.jump }); h.jump = false; h.rig.update(DT, h.r); h.acc -= DT; h.t += DT;
+    if (h.r.state !== 'ground') h.up = true; else if (h.up) h.down += DT;
+  }
+  // (down and still a moment, or it never left, or it has wandered: back to its place, standing about)
+  const p = menu.ledge!.spots[ORDER.indexOf(h.i)];
+  if ((h.up && h.down > 0.6 && h.r.speed < 0.4) || (!h.up && h.t > 1) || h.t > 4 || Math.hypot(h.r.x - p[0], h.r.z - p[2]) > 1.5) menu.hop = null;
+}
 function menuFrame(dt: number): void {
   const L = menu.ledge!;
+  hopFrame(dt);
+  if (menu.hop && menu.hop.i !== ORDER[menu.sel] && menu.hop.r.state === 'ground') menu.hop = null;
   menu.at += (menu.sel - menu.at) * (1 - Math.exp(-6 * dt));
   rd.resize();
   const v = menuView(canvas.width / canvas.height, performance.now() / 1000);
@@ -488,6 +518,7 @@ function menuSwipe(u: Under, d: number): void {
 /** the one the eye is behind takes the leap: it's the runner now, and the hand's */
 function takeControl(): void {
   if (!menu.active || !menu.ledge) return;
+  menu.hop = null;
   const L = menu.ledge, i = ORDER[menu.sel], p = L.spots[menu.sel];
   character = CHARACTERS[i]; runner = new Runner(city, character); runner.x = p[0]; runner.y = p[1]; runner.z = p[2]; runner.heading = L.heading;
   rig = new Rig(character); rig.update(1, runner);
@@ -602,7 +633,7 @@ requestAnimationFrame(frame);
     seed, t: time, frames, x: runner.x, y: runner.y, z: runner.z, state: runner.state, speed: runner.speed, dist: runner.dist,
     move: runner.move, leaps: runner.leaps, climbs: runner.climbs, walls: runner.walls, wallSteps: runner.wallSteps, braces: runner.braces, rolls: runner.rolls, dashes: runner.dashes, streets: runner.streets, made: runner.made,
     look: rd.look, tris: rd.tris, pending: rd.pending(runner.x, runner.z),
-    menu: menu.active, chosen: CHARACTERS[ORDER[menu.sel]]?.name, character: character.name, timeOfDay: TIMES[menu.timeI].name,
+    menu: menu.active, hop: menu.hop && { state: menu.hop.r.state, move: menu.hop.r.move, y: menu.hop.r.y, t: menu.hop.t, up: menu.hop.up, down: menu.hop.down, speed: menu.hop.r.speed }, chosen: CHARACTERS[ORDER[menu.sel]]?.name, character: character.name, timeOfDay: TIMES[menu.timeI].name,
     plan: thinking && { ahead: words(thinking.primary), score: thinking.primary.score, left: thinking.left && { off: thinking.left.off, score: thinking.left.score }, right: thinking.right && { off: thinking.right.off, score: thinking.right.score }, best: thinking.best.off },
   }),
   tune: TUNE,
