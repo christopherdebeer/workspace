@@ -36,8 +36,12 @@ export interface Scene {
   course: Course; seconds: number;
   /** a still eye to film it from too, wide on the whole room (`?fixed` on the page) */
   eye?: [number, number, number];
-  /** filmed close round its first takeoff (frames every 1/30 s from just before it), not across the whole run */
-  close?: boolean;
+  /** filmed close (frames every 1/30 s) from just before its first takeoff, or from the time this gives; not across the whole run */
+  close?: boolean | ((r: Run) => number);
+  /** what makes a run of it the same move again (for the basin: devtools/roofjumps-basin.mjs); by default, its sequence */
+  signature?: (r: Run) => string;
+  /** the signature of the move the scene is after (the basin's target); by default, whatever the unperturbed run does */
+  move?: string;
   input: (t: number, r: Runner, mem: Record<string, number>) => Input;
   should: Should[];
 }
@@ -149,6 +153,8 @@ const yardSave = (y: Yard): Scene => ({
   asks: 'Someone saving a line. Along the parapet, then turned at the wall too square and too late: the foot takes the weight but the hips carry on over the edge, and the wall step is gone. A hand catches the parapet; the body swings out below the line it meant to take. Pressed toward the side wall on the swing, the feet go to it, and off them up to the opening\'s sill from below. The mistake opens a route with a different rhythm.',
   watch: 'The foot that can\'t turn the body; the hand catching; the swing (which way, how far); the feet meeting the side wall; the reach up to the sill.',
   course: yard(y, 33), seconds: 7, eye: yardEye(y),
+  move: 'caught going over › feet to the wall › into the opening',
+  signature: (r) => { const m = r.runner.made as Record<string, number>; return [(m.overcatch ?? 0) ? 'caught going over' : '', (m.swingkick ?? 0) ? 'feet to the wall' : '', r.frames.slice(-30).some(onOpening(y)) ? 'into the opening' : 'not in'].filter(Boolean).join(' › '); },
   input: (t, r, m) => {
     if (r.state === 'ground' && r.y > 13.3 && r.z > 28) return none;
     if (!m.on && r.state === 'ground' && Math.abs(r.y - 12.5) < 0.05 && r.z > 15) m.on = t;
@@ -196,6 +202,31 @@ const strideScene = (key: string, title: string, at: number, gap: number): Scene
   input: (t, r) => (r.z > 40 ? none : go(0)),
   should: gap ? [...commonShoulds, ...strideShoulds] : [...commonShoulds],
 });
+
+/**
+ * The stairwell (after Astra: a move nobody named). Two flights beside a well, a half-landing round the well's end, the
+ * inside rail doubling back round it, and the upper landing's edge out over the well's end, its underside a little above
+ * the rail. Run down the first flight too fast to take the turn, the rail is caught and the body swings round it out over
+ * the well; swung flat and wide enough, the trailing foot can reach that underside, and pressed there, the leg's load
+ * sends the body out down the second flight. Nothing in the room marks that underside as a place for a foot.
+ */
+/** where down the first flight the turn's asked (the scripted player's decision) */
+let STAIR_TURN = 19.1;
+export const setStairTurn = (z: number) => { STAIR_TURN = z; };
+/** how high the upper landing's underside is over the well (the rail at the turn is at 9.9) */
+let SOFFIT = 10.05;
+export const setSoffit = (y: number) => { SOFFIT = y; };
+export const stairwell = (start: number): Course => {
+  const boxes: Box[] = [B(30.6, 40, 2, 14, 12), B(14, 29.4, 2, 13, 6), B(29.4, 30.6, 12, 21, 3)];
+  for (let i = 0; i < 8; i++) boxes.push(B(30.6, 33, 14 + i * 0.625, 14 + (i + 1) * 0.625, 12 - 0.375 * (i + 1), TAG.STAIR));
+  boxes.push(B(30.6, 33, 19, 21, 9), B(27, 33, 21, 22, 9), B(27, 29.4, 19, 21, 9));
+  for (let i = 0; i < 8; i++) boxes.push(B(27, 29.4, 19 - (i + 1) * 0.75, 19 - i * 0.75, 9 - 0.375 * (i + 1), TAG.STAIR));
+  // (the stairwell's walls, and the upper landing's edge out over the well's end: a slab, open beneath)
+  boxes.push(B(33, 34, 13, 23, 15), B(26, 27, 12, 23, 15), B(26, 34, 22, 23, 15));
+  boxes.push({ x0: 29.4, x1: 30.6, z0: 19, z1: 21, y0: SOFFIT, y1: SOFFIT + 0.3, tag: TAG.SLAB });
+  const rail = (ax: number, ay: number, az: number, bx: number, by: number, bz: number) => ({ kind: 'rail' as const, ax, ay, az, bx, by, bz, nx: 0, nz: 0 });
+  return { boxes, holds: [rail(30.6, 12.9, 14, 30.6, 9.9, 19), rail(30.6, 9.9, 19, 30.6, 9.9, 21), rail(30.6, 9.9, 21, 29.4, 9.9, 21), rail(29.4, 9.9, 21, 29.4, 9.9, 19), rail(29.4, 9.9, 19, 29.4, 6.9, 13)], start: { x: start, z: 4 }, alone: true };
+};
 
 export const SCENES: Scene[] = [
   {
@@ -353,6 +384,21 @@ export const SCENES: Scene[] = [
   },
   yardFind({ mirror: false, shift: 0 }), yardKnow({ mirror: false, shift: 0 }), yardSave({ mirror: false, shift: 0 }),
   yardKnow({ mirror: true, shift: 0 }), yardSave({ mirror: false, shift: 0.5 }),
+  {
+    key: 'stair-swing', title: 'The stairwell: round the rail, a foot on the underside',
+    asks: 'Down the first flight too fast to take the turn, the rail caught and swung round. Swung flat and wide, the trailing foot can reach the underside of the landing\'s edge over the well; leaned toward it, the foot takes load there; let go, the leg sends the body out down the second flight, landing running. No marker says that underside is for a foot.',
+    watch: 'The hand on the rail; the swing out over the well; the foot on the underside, the body between hand and foot; the exit down the second flight.',
+    course: stairwell(31.5), seconds: 4.5,
+    move: 'swing › underside › down the flight',
+    eye: [31.8, 15.5, 12.2], close: (r) => Math.max(0, (r.moves.find((x) => x.move === 'swing')?.t ?? 0.3) - 0.1),
+    signature: (r) => { const m = r.runner.made as Record<string, number>, f = r.frames[r.frames.length - 1]; return [(m.railswing ?? 0) ? 'swing' : '', (m.underfoot ?? 0) ? 'underside' : (m.swingfoot ?? 0) ? 'foot' : '', f.state === 'ground' && f.x < 29.45 && f.z < 19 ? 'down the flight' : f.y < 5.5 ? 'into the well' : 'elsewhere'].filter(Boolean).join(' › '); },
+    input: (t, r, m) => { if (!m.turn && r.z > STAIR_TURN) m.turn = t; if (!m.turn) return go(0); if (r.state === 'swing') { if (!m.foot && r.swingFoot) m.foot = t; if (m.foot && t > m.foot + 0.06) return go(-150); return r.x < 30.5 ? go(0, 0.8) : go(180); } return r.z < 14 && r.state === 'ground' ? none : go(180); },
+    should: [...commonShoulds,
+      { says: 'the rail is caught, and the body swings round it', check: (r) => ok(count(r, 'swing') > 0, seq(r)) },
+      { says: 'the trailing foot finds the underside, and takes load there', check: (r) => { const m = r.runner.made as Record<string, number>; return ok((m.underfoot ?? 0) > 0, `underside ${m.underfoot ?? 0}, any face ${m.swingfoot ?? 0}`); } },
+      { says: 'out down the second flight, running', check: (r) => { const f = r.frames[r.frames.length - 1]; return ok(f.state === 'ground' && f.x < 29.45 && f.x > 26.9 && f.z < 19, `ended at x ${f.x.toFixed(1)}, y ${f.y.toFixed(1)}, z ${f.z.toFixed(1)} (${f.state})`); } },
+    ],
+  },
   strideScene('stride-flat', 'Three strides, no gap', 0, 0), strideScene('stride-gap-a', 'One stride across a gap', 22, 1.4), strideScene('stride-gap-b', 'One stride across a gap, off the other foot', 20, 1.4),
 ];
 

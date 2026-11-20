@@ -26,7 +26,7 @@ if (film) {
   await withWood(async (lab) => {
     for (const s of chosen) for (const [view, extra] of [['chase', ''], ['side', '&side=90&zoom=1.1'], ...(s.eye ? [['room', '&fixed']] : [])]) {
       // (close round its first takeoff, if it asks: a flight is a third of a second; else across the whole run)
-      const run0 = s.close ? runScene(s) : null, t0 = run0?.ups[0] ? Math.max(0, run0.ups[0].t - 0.25) : 0;
+      const run0 = s.close ? runScene(s) : null, t0 = run0 ? (typeof s.close === 'function' ? s.close(run0) : run0.ups[0] ? Math.max(0, run0.ups[0].t - 0.25) : 0) : 0;
       const n = 16, every = s.close ? 1 / 30 : s.seconds / n;
       const p = await lab.open(`scene=${s.key}&strip=${t0.toFixed(4)}&frames=${n}&every=${every.toFixed(4)}&cols=8&holds=0${extra}`, { width: 1600, height: 560, dpr: 1 });
       for (let k = 0; k < 80 && (await p.evaluate(() => window.__roofjumps.probe().pending)) > 0; k++) await p.waitForTimeout(250);
@@ -40,6 +40,8 @@ if (film) {
 {
   let notes = { summary: [], seen: {}, date: '', build: '' }; try { notes = JSON.parse(readFileSync(new URL('./scene-notes.json', import.meta.url), 'utf8')); } catch { /* none yet */ }
   const esc = (t) => String(t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  // (a basin measured for it (devtools/roofjumps-basin.mjs): how far its move survives the input being off)
+  const basinOf = (key) => { try { const b = JSON.parse(readFileSync(new URL(`./out/basin/${key}.json`, import.meta.url), 'utf8')), w = b.widths; return `<dt>Basin</dt><dd>${Math.round(b.share * 100)}% of ${b.lateMap.flat().length + b.turnMap.flat().length} perturbed runs do <code>${esc(b.signature)}</code>: the start ${w.start ? `${w.start[0]} to ${w.start[1]} m` : 'not off at all'} across, the stick ${w.late ? `up to ${w.late[1]} frames` : 'not at all'} late, ${w.turn ? `${w.turn[0]}° to ${w.turn[1]}°` : 'not'} turned</dd>`; } catch { return ''; } };
   const held = report.reduce((n, s) => n + s.checks.filter((c) => c.ok).length, 0), all = report.reduce((n, s) => n + s.checks.length, 0);
   const title = (k) => report.find((r) => r.key === k)?.title ?? k;
   const item = (g) => `<li><a href="#${g.scene}">${esc(title(g.scene))}</a><p>${esc(g.gap.replace(/^Fixed: /, ''))}</p></li>`, here = notes.summary.filter((g) => report.some((r) => r.key === g.scene));
@@ -54,7 +56,7 @@ if (film) {
   <div class="body">
     <div class="words">
       <p class="asks">${esc(r.asks)}</p>
-      <dl><dt>Watch</dt><dd>${esc(r.watch)}</dd>${r.gap ? `<dt>Suspected gap</dt><dd>${esc(r.gap)}</dd>` : ''}${notes.seen[r.key] ? `<dt>Seen on film</dt><dd>${esc(notes.seen[r.key])}</dd>` : ''}<dt>What it did</dt><dd><code>${esc(r.sequence || 'ran')}</code></dd></dl>
+      <dl><dt>Watch</dt><dd>${esc(r.watch)}</dd>${r.gap ? `<dt>Suspected gap</dt><dd>${esc(r.gap)}</dd>` : ''}${notes.seen[r.key] ? `<dt>Seen on film</dt><dd>${esc(notes.seen[r.key])}</dd>` : ''}<dt>What it did</dt><dd><code>${esc(r.sequence || 'ran')}</code></dd>${basinOf(r.key)}</dl>
       <ul class="checks">${checks}</ul>
     </div>
     <figure><img src="${r.key}-chase.png" alt="${esc(r.title)}, from the chase eye, frame by frame" loading="lazy"><figcaption>Chase eye</figcaption></figure>

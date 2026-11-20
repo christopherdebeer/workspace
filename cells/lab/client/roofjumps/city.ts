@@ -25,7 +25,7 @@ export const STOREY = 3;
 /** the buckets a chunk's boxes are sorted into, for `heightAt` (m) */
 const CELL = 8, CELLS = CHUNK / CELL;
 
-export const TAG = { GROUND: 0, BUILDING: 1, STEP: 2, HUT: 3, UNIT: 4, TANK: 5, PLAYER: 6, RIM: 7, BEAM: 8, STAIR: 9, BAR: 10, DEBRIS: 11, CLUTTER: 12, SKYLIGHT: 13 } as const;
+export const TAG = { GROUND: 0, BUILDING: 1, STEP: 2, HUT: 3, UNIT: 4, TANK: 5, PLAYER: 6, RIM: 7, BEAM: 8, STAIR: 9, BAR: 10, DEBRIS: 11, CLUTTER: 12, SKYLIGHT: 13, SLAB: 14 } as const;
 export type Tag = (typeof TAG)[keyof typeof TAG];
 
 export interface Box { x0: number; z0: number; x1: number; z1: number; y0: number; y1: number; tag: Tag }
@@ -329,8 +329,33 @@ export class City {
     const cx = Math.floor(x / CHUNK), cz = Math.floor(z / CHUNK), c = this.chunk(cx, cz);
     const a = Math.min(CELLS - 1, Math.floor((x - cx * CHUNK) / CELL)), b = Math.min(CELLS - 1, Math.floor((z - cz * CHUNK) / CELL));
     let h = 0;
-    for (const i of c.cells[b * CELLS + a]) { const o = c.boxes[i]; if (x >= o.x0 && x < o.x1 && z >= o.z0 && z < o.z1 && o.y1 > h) h = o.y1; }
+    for (const i of c.cells[b * CELLS + a]) { const o = c.boxes[i]; if (x >= o.x0 && x < o.x1 && z >= o.z0 && z < o.z1 && o.y1 > h && !(o.tag === TAG.SLAB && o.y0 > this.refY + 0.45)) h = o.y1; }
     return h;
+  }
+  /**
+   * The city is asked as a height field (the top of what's at a point), which has no undersides. A slab (a landing, a
+   * floor with space beneath it) is the exception: it's floor only for a body at its underside or above (within a step:
+   * `refY`, the height of the body asking, which the runner sets each step); beneath it, it's open, and a ceiling
+   * (`ceilingAt`).
+   */
+  refY = Infinity;
+  /** the underside of a slab over (x, z) that a body standing at `y` would put its head into (Infinity if none) */
+  ceilingAt(x: number, y: number, z: number): number {
+    let c = Infinity;
+    for (const o of this.boxesNear(x, z, 0.01)) if (o.tag === TAG.SLAB && x >= o.x0 && x < o.x1 && z >= o.z0 && z < o.z1 && o.y0 > y + 0.45 && o.y0 < c) c = o.y0;
+    return c;
+  }
+  /** what's near (x, y, z) within `r`, as faces a limb could put itself against: the nearest point on each box, and the way
+   * its face there looks (out of it; down from an underside) */
+  facesNear(x: number, y: number, z: number, r: number): { p: [number, number, number]; n: [number, number, number]; box: Box }[] {
+    const out: { p: [number, number, number]; n: [number, number, number]; box: Box }[] = [];
+    for (const b of this.boxesNear(x, z, r)) {
+      const px = Math.max(b.x0, Math.min(b.x1, x)), py = Math.max(b.y0, Math.min(b.y1, y)), pz = Math.max(b.z0, Math.min(b.z1, z));
+      const dx = x - px, dy = y - py, dz = z - pz, d = Math.hypot(dx, dy, dz);
+      if (d > r || d < 1e-6) continue;
+      out.push({ p: [px, py, pz], n: [dx / d, dy / d, dz / d], box: b });
+    }
+    return out;
   }
 
   /** the box whose top is the surface at a point, if any */

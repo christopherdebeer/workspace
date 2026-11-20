@@ -248,6 +248,21 @@ export class Rig {
         if (carried > 0) strideThrough(carried);
         break;
       }
+      case 'swing': {
+        // (on one hand from a rail: that arm long overhead, the other out for balance; the body hung along the line from the
+        // hand, legs long and trailing; a foot put to a face, that leg bent to it and taking load, the other trailing)
+        const hand = r.swingLine, ft = r.swingFoot, holdL = !!r.reach.hl;
+        if (holdL) { p.shL = 2.9; p.elL = 0.15; p.shR = 1.1; p.elR = 0.6; p.spreadR = 1.3; } else { p.shR = 2.9; p.elR = 0.15; p.shL = 1.1; p.elL = 0.6; p.spreadL = 1.3; }
+        p.hipL = p.hipR = 0.15; p.kneeL = p.kneeR = 0.3;
+        if (ft) { const k = Math.min(1, 0.4 + ft.press * 3); if (ft.side > 0) { p.hipL = 0.5 + 0.4 * k; p.kneeL = 0.6 + 0.8 * k; p.hipR = -0.25; } else { p.hipR = 0.5 + 0.4 * k; p.kneeR = 0.6 + 0.8 * k; p.hipL = -0.25; } }
+        if (hand) {
+          const fx = Math.sin(r.heading), fz = Math.cos(r.heading), lx = Math.cos(r.heading), lz = -Math.sin(r.heading);
+          const af = hand[0] * fx + hand[2] * fz, al = hand[0] * lx + hand[2] * lz, au = Math.max(0.05, hand[1]);
+          p.lean = Math.max(-1.2, Math.min(1.2, Math.atan2(af, au))); p.tilt = Math.max(-1.2, Math.min(1.2, -Math.atan2(al, au)));
+        }
+        p.spine = 0.1; p.head = -0.2;
+        break;
+      }
       case 'underbar': {
         // (under a bar feet first: the hands up on it, the body laid back under it, the legs out straight through the gap,
         // then down for the far side)
