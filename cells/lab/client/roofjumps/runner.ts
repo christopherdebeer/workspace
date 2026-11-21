@@ -51,6 +51,11 @@ export interface Reach {
 }
 
 /** what the rig reads of a body */
+/** where a foot is in bearing the weight (see `Runner.footing`) */
+export type ContactPhase = 'air' | 'touch' | 'accept' | 'push' | 'unload';
+/** a foot's contact: its phase, where it's down, the way that surface faces, its share of the weight (0..1), how long down */
+export interface Contact { phase: ContactPhase; p: P3; normal: P3; load: number; since: number }
+const freeContact = (): Contact => ({ phase: 'air', p: [0, 0, 0], normal: [0, 1, 0], load: 0, since: 0 });
 export interface Body {
   x: number; y: number; z: number; heading: number; speed: number; state: State; move: Move;
   /** how far through the move, 0..1 (a flight, a roll) */
@@ -63,6 +68,7 @@ export interface Body {
   balance?: number; balanceV?: number; stamina?: number; effort?: number; time?: number;
   /** a save being made: what went wrong ('short', 'wide', 'long'), how long since the landing, the catching side (1 the
    * figure's left); seconds to the ground in a flight; a flight's planned length; a hang's swing along the wall (m/s) */
+  footing?: Record<'L' | 'R', Contact>; letGo?: (side: number) => void;
   stanceFrac?: number; pushAlong?: number; pushAcross?: number; bounce?: number; vx?: number; vy?: number; vz?: number; roomAhead?: number; roomAway?: number; turnAhead?: number; hangT?: number; from?: string; inStep?: (side: number) => { from: [number, number, number]; to: [number, number, number]; k: number; off?: boolean } | null; wallPhase?: number; near?: number; against?: number; nextFoot?: { side: number; p: [number, number, number]; t: number } | null; stepOver?: number; gait?: { stance: number; flight: number }; stepLift?: number; shift?: number; saveKind?: string; saveT?: number; saveSide?: number; ttc?: number; flightT?: number; swing?: number; swingOut?: number; swingLine?: [number, number, number] | null; swingFoot?: { side: number; press: number } | null; pulling?: boolean; teeter?: number; precise?: boolean; swingFeet?: { ax: number; az: number; t: number } | null;
   /** hanging on the way up a face: 0 caught, 1 loading, 2 springing for the next hold */
   chainPhase?: number;
@@ -504,8 +510,47 @@ export class Runner implements Body {
     if (this.state === 'ground' && this.resolve(STEP)) this.y = this.city.heightAt(this.x, this.z);
     this.dist += Math.hypot(this.x - x0, this.z - z0);
     this.reach = TUNE.reach ? this.reaching() : {};
+    // (a foot the figure couldn't hold (out of the leg's reach from where the hips are: the rig said so last step) is let go
+    // of here too, as a step: it swings to where it's going and comes down when its time is up)
+    if (this.state === 'ground') for (const [side, foot] of [[1, this.feet.L], [-1, this.feet.R]] as const) if (this.letGoAsked.includes(side) && foot.on) {
+      const sp = Math.max(1.5, this.speed), ux = this.speed > 0.5 ? this.vx / this.speed : Math.sin(this.heading), uz = this.speed > 0.5 ? this.vz / this.speed : Math.cos(this.heading);
+      const ax = this.x + ux * this.ahead_ + uz * side * this.track_, az = this.z + uz * this.ahead_ - ux * side * this.track_;
+      const other = side > 0 ? this.feet.R : this.feet.L; foot.on = false; foot.done = false; foot.up = this.time; foot.held = { from: [...foot.p] as P3, t: this.time, need: other.on ? Math.hypot(ax - foot.p[0], az - foot.p[2]) / (2.5 * sp) + 0.06 : 0.06 };
+    }
+    this.letGoAsked = [];
     if (TUNE.reach && TUNE.feet) this.stepping(); else this.feet.L.on = this.feet.R.on = false;
+    this.contacts();
+    if (this.feet.L.on || this.feet.R.on || this.state !== 'ground') this.supportT = this.time;
     if (this.state === 'ground') { if (this.y < 0.5 && this.high > 4) this.streets++; this.high = this.y; } else this.high = Math.max(this.high, this.y);
+  }
+
+  /**
+   * Each foot's footing, the one account of it the runner and the figure share: whether it's on something, where, the way
+   * that surface faces, how much of the weight it bears, and where it is in bearing it. A foot touches (the first moment
+   * down, bearing little), accepts the weight, pushes (the body going on past it, the weight leaving), and unloads (the
+   * other foot has it); off, it's in the air. The weight: all on a foot that's down alone; between two, by where the body
+   * is along the line from one to the other, so it goes across in the double support, not at a footfall.
+   */
+  footing: Record<'L' | 'R', Contact> = { L: freeContact(), R: freeContact() };
+  /** feet the figure couldn't hold last step, to be let go of (1 left, -1 right) */
+  private letGoAsked: number[] = [];
+  /** when a foot (or anything but the ground) last held the body up: a jog's moment in the air is short */
+  private supportT = 0;
+  /** the figure can't hold this foot where it's down (it's out of the leg's reach): let it go */
+  letGo(side: number): void { if (!this.letGoAsked.includes(side)) this.letGoAsked.push(side); }
+  private contacts(): void {
+    const f = this.feet, on = { L: f.L.on && !!(this.reach.fl), R: f.R.on && !!(this.reach.fr) };
+    let wL = on.L && !on.R ? 1 : on.R && !on.L ? 0 : 0.5;
+    if (on.L && on.R) { const ax = f.L.p[0] - f.R.p[0], az = f.L.p[2] - f.R.p[2], l2 = ax * ax + az * az; wL = l2 > 1e-4 ? Math.max(0, Math.min(1, ((this.x - f.R.p[0]) * ax + (this.z - f.R.p[2]) * az) / l2)) : 0.5; }
+    const nrm: P3 = this.state === 'ground' ? [0, 1, 0] : this.reach.fn ? [this.reach.fn[0], this.reach.fn[1], this.reach.fn[2]] : [0, 1, 0];
+    for (const [k, foot, w] of [['L', f.L, wL], ['R', f.R, 1 - wL]] as const) {
+      const c = this.footing[k], load = on[k] ? (on.L && on.R ? w : 1) : 0;
+      if (!on[k]) { this.footing[k] = { ...freeContact(), load: 0 }; continue; }
+      const since = c.phase === 'air' ? 0 : c.since + this.dt, ux = this.speed > 0.3 ? this.vx / this.speed : Math.sin(this.heading), uz = this.speed > 0.3 ? this.vz / this.speed : Math.cos(this.heading);
+      const past = (this.x - foot.p[0]) * ux + (this.z - foot.p[2]) * uz > 0;
+      const phase: ContactPhase = since < 0.04 && load < 0.9 ? 'touch' : load < 0.15 && (on.L && on.R) ? 'unload' : load >= c.load - 1e-4 && !past ? 'accept' : 'push';
+      this.footing[k] = { phase, p: foot.p, normal: nrm, load, since };
+    }
   }
 
   /**
@@ -566,6 +611,7 @@ export class Runner implements Body {
       // foot is down into what was its swing, and a foot caught mid-swing would be planted at once, a step ahead)
       // (a held swing belongs to one time in the air: a foot down, by whatever means, has none)
       if (foot.on) foot.held = null;
+      const other = side > 0 ? f.R : f.L;
       const wt = ground ? walkToRun(sp) : 1, aim: P3 = [this.x + fx * this.ahead_ + fz * side * this.track_, this.y, this.z + fz * this.ahead_ - fx * side * this.track_];
       // (and due down far from where its swing has got to (the pace changed under it): held in the air, swung on from where
       // it's drawn now, for as long as a foot takes to go that far)
@@ -578,13 +624,17 @@ export class Runner implements Body {
           const now: P3 = [sw.from[0] + (sw.to[0] - sw.from[0]) * e, sw.from[1] + (sw.to[1] - sw.from[1]) * e, sw.from[2] + (sw.to[2] - sw.from[2]) * e];
           const need = Math.hypot(aim[0] - now[0], aim[2] - now[2]) / (2.5 * Math.max(1.5, sp));
           // (and no shorter than the least swing still owed since it lifted: done, it can come down at once, not wait on the ground)
-          if (need > 0.05) foot.held = { from: now, t: this.time, need: Math.max(need + 0.04, 0.22 * (1 - wt) + 0.06 * wt - (this.time - foot.up)) };
+          // (but with nothing else under the body, only as long as it must: it comes down short of the full swing instead)
+          if (need > 0.05) foot.held = { from: now, t: this.time, need: Math.min(other.on || (wt >= 1 && this.time - this.supportT < 0.08) ? 9 : 0.06, Math.max(need + 0.04, 0.22 * (1 - wt) + 0.06 * wt - (this.time - foot.up))) };
         }
         if (foot.held && this.time - foot.held.t < foot.held.need) swungLong = false;
       }
       // (a foot stepped round in a turn, its swing done: down where it's going, its time down or not; one taken up early only
       // for being far behind waits for its time, so a straight walk keeps its cadence)
-      const heldDone = !!foot.held && !!foot.held.turn && this.time - foot.held.t >= foot.held.need;
+      // (and the handover: a foot let go of, its swing done, comes down whenever nothing else is holding the body up, whatever
+      // its time down says; on the ground the body is never left with neither foot under it waiting on the stride's clock.
+      // Jogging, the gait has its moment in the air: only once that's gone on longer than a jog's own (0.14 s))
+      const heldDone = !!foot.held && this.time - foot.held.t >= foot.held.need && (!!foot.held.turn || (ground && !other.on && (wt < 1 || this.time - this.supportT > 0.14)));
       if ((down || (heldDone && ground)) && !foot.on && !foot.done && swungLong) {
         let p: P3 | null = null;
         if (ground) {
@@ -615,7 +665,9 @@ export class Runner implements Body {
           if (g) p = [g.x, g.y, g.z];
         }
         if (p) { foot.on = true; foot.p = p; foot.held = null; }
-      } else if (!down) { if (foot.on) foot.up = this.time; foot.on = false; foot.done = false; }
+      } else if (!down && !(ground && foot.on && !other.on && walkToRun(sp) < 1)) { if (foot.on) foot.up = this.time; foot.on = false; foot.done = false; }
+      // (walking, a foot's time down isn't up while the other isn't down: it stays, the body going on over it, until the other
+      // takes the weight, or the leg can't reach it and the figure lets it go)
       // (on the ground, a foot left out of the leg's reach behind (on its toe and all) is taken up early, not dragged; and
       // stays up till its time down is over)
       // (walking, its stance runs to where the walk's own takes it, a little past (a walk's feet are down together a while),
@@ -624,11 +676,11 @@ export class Runner implements Body {
       // (and it swings at once, from where it left to where it's going, not hanging there till its time down is up: in a sharp
       // turn that leaves a foot behind, across the new line)
       else if (ground && foot.on && sp < 4) {
-        const bx = foot.p[0] - this.x, bz = foot.p[2] - this.z, back = -(bx * fx + bz * fz), t = walkToRun(sp), other = side > 0 ? f.R : f.L;
+        const bx = foot.p[0] - this.x, bz = foot.p[2] - this.z, back = -(bx * fx + bz * fz), t = walkToRun(sp);
         // (or turned over until it's on the other side of the line (a sharp turn at a walk): stepped round, not crossed)
         const hl = Math.cos(this.heading), hz = -Math.sin(this.heading), across = -((foot.p[0] - this.x) * hl + (foot.p[2] - this.z) * hz) * side;
         const turned = other.on && t < 0.5 && across > 0.03 * this.build.legScale;
-        if ((other.on || t > 0.5) && (back > (0.42 + 0.03 * sp) * t + Math.min(0.55 * this.build.legScale, this.stance_ - this.ahead_ + 0.08) * (1 - t) || turned)) {
+        if ((other.on || (t > 0.5 && sp >= 2.6)) && (back > (0.42 + 0.03 * sp) * t + Math.min(0.55 * this.build.legScale, this.stance_ - this.ahead_ + 0.08) * (1 - t) || turned)) {
           foot.on = false; foot.done = false; foot.up = this.time;
           foot.held = { turn: turned, from: [...foot.p] as P3, t: this.time, need: Math.max(0.3 * (1 - t) + 0.14 * t, Math.hypot(aim[0] - foot.p[0], aim[2] - foot.p[2]) / (2.5 * Math.max(1.5, sp)) + 0.06) };
         }

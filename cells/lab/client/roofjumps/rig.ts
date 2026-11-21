@@ -76,7 +76,7 @@ export class Rig {
   pose = zero();
   /** each joint's speed toward its pose; and the chest's lag behind the hips (rad) and its speed, the hips' last height
    * and speed: weight */
-  private vel = zero(); private ph = 0; private lastPhase = 0; toe = [0, 0];
+  private vel = zero(); private ph = 0; private lastPhase = 0; toe = [0, 0]; private toeWas = [0, 0];
   /** how far a flight has got ready for the ground: it only goes on, so the ground falling away beneath (over an edge) never
    * unfolds it */
   private prep = 0; private chest = 0; private chestV = 0; private lastHip = 1; private hipV = 0;
@@ -549,8 +549,10 @@ export class Rig {
     // line from one to the other, so it moves across through the double support, not at a footfall; the hips carried part
     // of the way over where it bears (more walking, less running), so they lead into a turn over the foot that's taking it)
     const onGround = r.state === 'ground' && r.move !== 'roll', fl = onGround ? r.reach.fl : undefined, fr = onGround ? r.reach.fr : undefined;
+    // (the runner's account of it, where there is one: the one both go by)
     let wL = fl && !fr ? 1 : fr && !fl ? 0 : 0.5;
-    if (fl && fr) { const ax = fl[0] - fr[0], az = fl[2] - fr[2], l2 = ax * ax + az * az; wL = l2 > 1e-4 ? Math.max(0, Math.min(1, ((r.x - fr[0]) * ax + (r.z - fr[2]) * az) / l2)) : 0.5; }
+    if (r.footing && (fl || fr)) { const a = r.footing.L.load, b = r.footing.R.load; wL = a + b > 1e-6 ? a / (a + b) : 0.5; }
+    else if (fl && fr) { const ax = fl[0] - fr[0], az = fl[2] - fr[2], l2 = ax * ax + az * az; wL = l2 > 1e-4 ? Math.max(0, Math.min(1, ((r.x - fr[0]) * ax + (r.z - fr[2]) * az) / l2)) : 0.5; }
     this.weightL = wL;
     const bear = fl && !fr ? 1 : fr && !fl ? -1 : 0;
     let over = bear * 0.04 * Math.min(1, (r.load ?? 0) * 1.5);
@@ -706,11 +708,13 @@ export class Rig {
       const gl = Math.hypot(g[0], g[1], g[2]);
       if (gl > most) { g = [(g[0] * most) / gl, (g[1] * most) / gl, (g[2] * most) / gl]; }
       // (still out of reach: let go)
-      if (over - Math.min(gl, most) > (flat ? 0.05 : 0.015) || far > 1.6) f.lost = true;
+      if (over - Math.min(gl, most) > (flat ? 0.05 : 0.015) || far > 1.6) { f.lost = true; /* (and the runner told: one account of the feet) */ if (r.state === 'ground' && r.letGo) r.letGo(side); }
       for (let i = 0; i < 3; i++) if (Math.abs(g[i] * f.w) > Math.abs(want[i])) want[i] = g[i] * f.w;
     }
     // (taken quickly, given back a little slower)
     for (let i = 0; i < 3; i++) { const k = Math.abs(want[i]) > Math.abs(this.give[i]) ? 60 : 18; this.give[i] += (want[i] - this.give[i]) * (dt > 0.2 ? 1 : 1 - Math.exp(-k * dt)); }
+    // (the bones solved once a step, keeping what the next step depends on; drawing them reads, it doesn't change them)
+    this.toeWas = this.toe.slice(); this.solve(r, true);
   }
 
   private pelvis(r: Body, give: V3): M4 {
@@ -722,7 +726,13 @@ export class Rig {
   }
 
   /** The skeleton, placed in the world at the body. */
-  bones(r: Body): Bone[] {
+  /** The figure's bones, as the last update left it. Reading them changes nothing: however often they're drawn (a phone,
+   * a slow-motion strip, the checker), they're the same bones at the same moment. */
+  bones(r: Body): Bone[] { return this.solve(r, false); }
+  /** the bones solved; `commit`, from the fixed update only: what the next update depends on (the heel's lift, where a free
+   * foot was drawn) kept */
+  private solve(r: Body, commit: boolean): Bone[] {
+    const toes = [0, 0];
     const p = this.pose, out: Bone[] = [];
     // (turned right over, forwards, through a flip or a roll; over sideways, the lead leg's way; round on its hand, a palm
     // spin; and carried toward a footfall it couldn't otherwise reach)
@@ -780,8 +790,8 @@ export class Rig {
           // behind in a turn isn't stood up on its toe at once)
           const byKnee = reachTo < most && far(0.95) <= most, want = byKnee ? Math.max(reachTo, far(0.95)) : most;
           let lo = 0, hi = byKnee ? 0.95 : far(0) > most ? 1.5 : 0; if (far(hi) > want) lo = hi; else for (let k = 0; k < 14; k++) { const m = (lo + hi) / 2; if (far(m) > want) lo = m; else hi = m; }
-          toe = Math.max(lo, hi === 1.5 && lo === 1.5 ? 1.5 : hi); /* (the heel coming up no faster than a heel can: ~12 rad/s, not stood on the toe in a frame) */ if (this.mocapK > 0 && r.speed < 3) toe = Math.min(toe, this.toe[L ? 0 : 1] + 0.25); const c = at(toe); fall[0] = c[0]; fall[1] = c[1]; fall[2] = c[2]; } }
-        this.toe[L ? 0 : 1] = toe;
+          toe = Math.max(lo, hi === 1.5 && lo === 1.5 ? 1.5 : hi); /* (the heel coming up no faster than a heel can: ~12 rad/s, not stood on the toe in a frame) */ if (this.mocapK > 0 && r.speed < 3) toe = Math.min(toe, this.toeWas[L ? 0 : 1] + 0.25); const c = at(toe); fall[0] = c[0]; fall[1] = c[1]; fall[2] = c[2]; } }
+        toes[L ? 0 : 1] = toe; if (commit) this.toe[L ? 0 : 1] = toe;
         // (on it once it's taken the weight: blended from the pose's foot onto the footfall through the touch, all the way on by
         // nine tenths of the weight, so a planted foot doesn't trail a tenth of the body's motion)
         const wk = Math.min(1, sole.w / 0.9); plantK = wk;
@@ -804,7 +814,7 @@ export class Rig {
         let z = unit([f0[0] - y[0] * kf, f0[1] - y[1] * kf, f0[2] - y[2] * kf]);
         if (Math.abs(kf) > 0.95) z = unit(cross([P[0], P[1], P[2]], y));
         // (on the toe: the foot pitched heel up about its ball)
-        const th = this.toe[L ? 0 : 1]; if (th) { const yy = y; z = unit([z[0] * Math.cos(th) - yy[0] * Math.sin(th), z[1] * Math.cos(th) - yy[1] * Math.sin(th), z[2] * Math.cos(th) - yy[2] * Math.sin(th)]); }
+        const th = toes[L ? 0 : 1]; if (th) { const yy = y; z = unit([z[0] * Math.cos(th) - yy[0] * Math.sin(th), z[1] * Math.cos(th) - yy[1] * Math.sin(th), z[2] * Math.cos(th) - yy[2] * Math.sin(th)]); }
         // (coming onto it, the sole turns from the swing's angle to flat as the weight comes on (a forefoot settling), not in
         // a frame)
         if (plantK < 1) { const sz: V3 = unit([Ft[8], Ft[9], Ft[10]]), sy: V3 = unit([Ft[4], Ft[5], Ft[6]]), e = plantK * plantK * (3 - 2 * plantK); z = unit([sz[0] + (z[0] - sz[0]) * e, sz[1] + (z[1] - sz[1]) * e, sz[2] + (z[2] - sz[2]) * e]); const yb = unit([sy[0] + (y[0] - sy[0]) * e, sy[1] + (y[1] - sy[1]) * e, sy[2] + (y[2] - sy[2]) * e]); const xb = unit(cross(yb, z)), y3 = cross(z, xb); Ft = ident(); Ft[0] = xb[0]; Ft[1] = xb[1]; Ft[2] = xb[2]; Ft[4] = y3[0]; Ft[5] = y3[1]; Ft[6] = y3[2]; Ft[8] = z[0]; Ft[9] = z[1]; Ft[10] = z[2]; Ft[12] = planted[0]; Ft[13] = planted[1]; Ft[14] = planted[2]; }
@@ -815,8 +825,8 @@ export class Rig {
       }
       blk('foot' + n, Ft, b.blocks.foot);
       // (where this foot is against the line, if it's free: for the next frame's swing out)
-      if (sole.w < 0.5 && r.state === 'ground') { const fx = Math.sin(r.heading), fz = Math.cos(r.heading), bp = point(Ft, 0, 0, b.ball); this.freeLat[L ? 0 : 1] = ((bp[0] - P[12]) * fz - (bp[2] - P[14]) * fx) * side; }
-      else this.freeLat[L ? 0 : 1] = null;
+      if (!commit) { /* (read only) */ } else if (sole.w < 0.5 && r.state === 'ground') { const fx = Math.sin(r.heading), fz = Math.cos(r.heading), bp = point(Ft, 0, 0, b.ball); this.freeLat[L ? 0 : 1] = ((bp[0] - P[12]) * fz - (bp[2] - P[14]) * fx) * side; }
+      else if (commit) this.freeLat[L ? 0 : 1] = null;
     }
     // (dressed: each bone its material; and what's worn, on the bone it's fixed to, sized with the body (a head's with the
     // head))

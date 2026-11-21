@@ -670,3 +670,16 @@ console.log('roof jumps: brushwork ok');
   console.log('menu ledges:', ledges.join(' '));
 }
 
+
+// Drawing is reading (rig.ts `bones`): the same run's bones read every tick and every fourth agree wherever both read them,
+// so a phone, a slow-motion strip and the checker all see the same figure.
+{
+  const sc = SCENES.find((s) => s.key === 'sharp-turns'), runs = {};
+  for (const every of [1, 4]) {
+    const r = new Runner(new City(1, false, sc.course)), rig = new Rig(); rig.update(1, r); const mem = {}; runs[every] = [];
+    for (let i = 0; i < sc.seconds * 120; i++) { r.step(1 / 120, sc.input(i / 120, r, mem)); rig.update(1 / 120, r); if (i % every === 0) { const b = rig.bones(r); if (i % 4 === 0) runs[every].push(b.map((o) => [o.m[12], o.m[13], o.m[14]])); } }
+  }
+  let d = 0; runs[1].forEach((a, k) => a.forEach((p, j) => { const q = runs[4][k][j]; d = Math.max(d, Math.hypot(p[0] - q[0], p[1] - q[1], p[2] - q[2])); }));
+  assert.ok(d < 1e-6, `bones the same however often they're read (${(d * 100).toFixed(2)} cm apart)`);
+  console.log('drawing is reading: sharp-turns bones at 30 Hz and 120 Hz agree');
+}
