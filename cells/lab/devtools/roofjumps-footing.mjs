@@ -6,14 +6,16 @@
 //   node cells/lab/devtools/roofjumps-footing.mjs [--trials N] [scene keys…]
 import { build } from 'esbuild';
 const lab = new URL('../client/roofjumps/', import.meta.url).pathname;
-const out = await build({ stdin: { contents: `export * from './scenes'; export * from './city'; export * from './runner'; export * from './rig'; export * from './m4';`, resolveDir: lab, loader: 'ts' }, bundle: true, write: false, format: 'esm', platform: 'node' });
+const out = await build({ stdin: { contents: `export * from './scenes'; export * from './city'; export * from './runner'; export * from './rig'; export * from './m4'; export * from './character';`, resolveDir: lab, loader: 'ts' }, bundle: true, write: false, format: 'esm', platform: 'node' });
 const M = await import('data:text/javascript;base64,' + Buffer.from(out.outputFiles[0].text).toString('base64'));
+/** the character run (`CHARACTER=<name>`; the runner by default) */
+const CH = M.characterByName(process.env.CHARACTER);
 const args = process.argv.slice(2), ti = args.indexOf('--trials'), TRIALS = ti >= 0 ? +args.splice(ti, 2)[1] : 8, keys = args.length ? args : M.SCENES.map((s) => s.key), DT = 1 / 120;
 const flat = { heightAt: () => 10, topAt: () => null, gripAt: () => null, holdsNear: () => [], boxesNear: () => [], regionsNear: () => [], regionAt: () => null, start: () => ({ x: 0, y: 10, z: 0 }) };
 function rng(seed) { let s = seed >>> 0; return () => ((s = (s * 1664525 + 1013904223) >>> 0) / 4294967296); }
 /** one run measured */
 function run(world, input, seconds) {
-  const r = new M.Runner(world), rig = new M.Rig(); rig.update(1, r); const mem = {};
+  const r = new M.Runner(world, CH), rig = new M.Rig(CH); rig.update(1, r); const mem = {};
   let dis = 0, gap = 0, worstGap = 0, gapAt = 0, fly = 0, worstFly = 0, plantedT = 0, slid = 0, turnOn = 0, turnAll = 0, flips = 0, kneeTurn = 0, kneeT = 0; const kd = [null, null]; const prev = { L: null, R: null };
   for (let i = 0; i < seconds / DT; i++) {
     const t = i * DT, v0 = [r.vx, r.vz], s0 = r.speed; r.step(DT, input(t, r, mem));

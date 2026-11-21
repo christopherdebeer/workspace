@@ -10,8 +10,10 @@
 import { build } from 'esbuild';
 import { mkdirSync, writeFileSync } from 'node:fs';
 const lab = new URL('../client/roofjumps/', import.meta.url).pathname, OUT = new URL('./out/legs/', import.meta.url).pathname;
-const out = await build({ stdin: { contents: `export * from './scenes'; export * from './city'; export * from './runner'; export * from './rig'; export * from './m4';`, resolveDir: lab, loader: 'ts' }, bundle: true, write: false, format: 'esm', platform: 'node' });
+const out = await build({ stdin: { contents: `export * from './scenes'; export * from './city'; export * from './runner'; export * from './rig'; export * from './m4'; export * from './character';`, resolveDir: lab, loader: 'ts' }, bundle: true, write: false, format: 'esm', platform: 'node' });
 const M = await import('data:text/javascript;base64,' + Buffer.from(out.outputFiles[0].text).toString('base64'));
+/** the character run (`CHARACTER=<name>`; the runner by default) */
+const CH = M.characterByName(process.env.CHARACTER);
 const args = process.argv.slice(2), film = args.includes('--film'), keys = args.filter((a) => !a.startsWith('--'));
 const KEYS = keys.length ? keys : ['gait-walk', 'gait-jog', 'gait-run', 'sharp-turns', 'edge-stop', 'transfer-clean'];
 const MIN = 0.6, DT = 1 / 120, deg = (r) => (r * 180) / Math.PI;
@@ -21,7 +23,7 @@ const angle = (a, b) => Math.acos(Math.max(-1, Math.min(1, dot(a, b))));
 
 /** a scene run with the legs recorded each frame */
 function record(sc) {
-  const city = new M.City(1, false, sc.course), r = new M.Runner(city), rig = new M.Rig(); rig.update(1, r);
+  const city = new M.City(1, false, sc.course), r = new M.Runner(city, CH), rig = new M.Rig(CH); rig.update(1, r);
   const mem = {}, F = [];
   for (let i = 0; i < sc.seconds / DT; i++) {
     const t = i * DT; r.step(DT, sc.input(t, r, mem)); rig.update(DT, r);
@@ -130,7 +132,7 @@ if (film) {
   const { withWood } = await import('./harness.mjs');
   await withWood(async (w) => {
     for (const fl of films) for (const [view, extra] of [['side', '&side=90&zoom=1.7'], ['behind', '&side=0&zoom=1.7'], ['front', '&side=180&zoom=1.7']]) {
-      const file = `${fl.key}-${view}.png`, p = await w.open(`scene=${fl.key}${process.env.MOCAP === '0' ? '&mocap=0' : ''}&strip=${fl.t.toFixed(4)}&frames=16&every=0.025&cols=8&holds=0&marks=0&look=clay${extra}`, { width: 1600, height: 520, dpr: 1 });
+      const file = `${fl.key}-${view}.png`, p = await w.open(`scene=${fl.key}${process.env.MOCAP === '0' ? '&mocap=0' : ''}&strip=${fl.t.toFixed(4)}&frames=16&every=0.025&cols=8&holds=0&marks=0&look=clay${process.env.CHARACTER ? '&character=' + process.env.CHARACTER : ''}${extra}`, { width: 1600, height: 520, dpr: 1 });
       for (let k = 0; k < 80 && (await p.evaluate(() => window.__roofjumps.probe().pending)) > 0; k++) await p.waitForTimeout(250);
       await p.waitForTimeout(500); await p.screenshot({ path: OUT + file }); await p.close(); fl[view] = file; console.log(`filmed ${fl.key} ${view}`);
     }

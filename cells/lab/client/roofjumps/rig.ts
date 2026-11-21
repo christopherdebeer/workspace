@@ -699,11 +699,11 @@ export class Rig {
       const fx = Math.sin(r.heading), fz = Math.cos(r.heading), legL = 0.985 * (this.body.thigh + this.body.shin);
       // (by the foot ahead or under: one well behind is on its way off, onto its toe, and reaches what it must that way)
       const down = [r.reach.fl, r.reach.fr].filter((f): f is V3 => !!f).map((f) => ({ f, along: (f[0] - r.x) * fx + (f[2] - r.z) * fz }));
-      const lead = down.filter((d) => d.along > -0.15), use = lead.length ? lead : down;
+      const lead = down.filter((d) => d.along > -0.15 * Ls), use = lead.length ? lead : down;
       for (const { f, along } of use) {
         // (the joint sits a little under the pelvis's centre as it leans: 0.035 m more; a foot already out of reach, or well
         // off the level, says nothing about the vault)
-        const dx = f[0] - r.x, dz = f[2] - r.z, reachL = legL + (along < -0.15 ? 0.12 : 0), d2 = dx * dx + dz * dz;
+        const dx = f[0] - r.x, dz = f[2] - r.z, reachL = legL + (along < -0.15 * Ls ? 0.12 * Ls : 0), d2 = dx * dx + dz * dz;
         if (d2 >= reachL * reachL * 0.9 || Math.abs(f[1] - r.y) > 0.2) continue;
         vault = Math.min(vault, this.body.hipDrop + 0.035 * Ls + Math.sqrt(reachL * reachL - d2) + this.body.sole + (f[1] - r.y));
       }
@@ -735,16 +735,16 @@ export class Rig {
       const s = point(P0, side * this.body.hipX, -this.body.hipDrop, 0), fall: V3 = [f.p[0] + this.on[0] * this.body.sole, f.p[1] + this.on[1] * this.body.sole, f.p[2] + this.on[2] * this.body.sole];
       const d = sub(fall, s), far = Math.hypot(d[0], d[1], d[2]), R = (this.body.thigh + this.body.shin) * (r.state === 'ground' && r.speed < 0.3 ? 0.995 : 0.985); /* (a leg let nearly straight: at 97% every planted knee was held bent 28°; standing, straighter still) */
       // (behind, the toe pivot gives the leg a heel's length more)
-      const behind = this.on[1] > 0.7 && d[0] * fw[0] + d[2] * fw[2] < 0 ? 0.1 : 0, over = far - R - behind;
+      const behind = this.on[1] > 0.7 && d[0] * fw[0] + d[2] * fw[2] < 0 ? 0.1 * this.body.legScale : 0, over = far - R - behind;
       if (over <= 0) continue;
-      const flat = this.on[1] > 0.7, most = flat ? 0.14 : 0.12;
+      const flat = this.on[1] > 0.7, most = (flat ? 0.14 : 0.12) * this.body.legScale; /* (as far as a body this size sinks or leans to keep a foot) */
       let g: V3;
       if (flat) { const h = Math.hypot(d[0], d[2]), v = -d[1], R2 = R + behind; g = [0, h < R2 ? -Math.max(0, v - Math.sqrt(R2 * R2 - h * h)) : -most, 0]; }
       else g = [(d[0] / far) * over, (d[1] / far) * over, (d[2] / far) * over];
       const gl = Math.hypot(g[0], g[1], g[2]);
       if (gl > most) { g = [(g[0] * most) / gl, (g[1] * most) / gl, (g[2] * most) / gl]; }
       // (still out of reach: let go)
-      if (over - Math.min(gl, most) > (flat ? 0.05 : 0.015) || far > 1.6) { f.lost = true; /* (and the runner told: one account of the feet) */ if (r.state === 'ground' && r.letGo) r.letGo(side); }
+      if (over - Math.min(gl, most) > (flat ? 0.05 : 0.015) * this.body.legScale || far > 1.6 * this.body.legScale) { f.lost = true; /* (and the runner told: one account of the feet) */ if (r.state === 'ground' && r.letGo) r.letGo(side); }
       for (let i = 0; i < 3; i++) if (Math.abs(g[i] * f.w) > Math.abs(want[i])) want[i] = g[i] * f.w;
     }
     // (taken quickly, given back a little slower)

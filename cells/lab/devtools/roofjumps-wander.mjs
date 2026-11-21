@@ -11,13 +11,15 @@
 import { build } from 'esbuild';
 import { mkdirSync, writeFileSync } from 'node:fs';
 const lab = new URL('../client/roofjumps/', import.meta.url).pathname, OUT = new URL('./out/wander/', import.meta.url).pathname;
-const out = await build({ stdin: { contents: `export * from './scenes'; export * from './city'; export * from './runner'; export * from './rig'; export * from './m4';`, resolveDir: lab, loader: 'ts' }, bundle: true, write: false, format: 'esm', platform: 'node' });
+const out = await build({ stdin: { contents: `export * from './scenes'; export * from './city'; export * from './runner'; export * from './rig'; export * from './m4'; export * from './character';`, resolveDir: lab, loader: 'ts' }, bundle: true, write: false, format: 'esm', platform: 'node' });
 const M = await import('data:text/javascript;base64,' + Buffer.from(out.outputFiles[0].text).toString('base64'));
+/** the character run (`CHARACTER=<name>`; the runner by default) */
+const CH = M.characterByName(process.env.CHARACTER);
 const args = process.argv.slice(2), film = args.includes('--film'), key = args.find((a) => !a.startsWith('--')) ?? 'gait-wander';
 const DT = 1 / 120, deg = (r) => (r * 180) / Math.PI, wrap = (a) => { a %= 2 * Math.PI; return a > Math.PI ? a - 2 * Math.PI : a < -Math.PI ? a + 2 * Math.PI : a; };
 const axis = (m, i) => { const v = [m[i * 4], m[i * 4 + 1], m[i * 4 + 2]], l = Math.hypot(...v) || 1; return v.map((x) => x / l); };
 const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
-const sc = M.sceneByKey(key), city = new M.City(1, false, sc.course), r = new M.Runner(city), rig = new M.Rig(); rig.update(1, r);
+const sc = M.sceneByKey(key), city = new M.City(1, false, sc.course), r = new M.Runner(city, CH), rig = new M.Rig(CH); rig.update(1, r);
 const F = [], mem = {};
 for (let i = 0; i < sc.seconds / DT; i++) {
   const t = i * DT, inp = sc.input(t, r, mem); r.step(DT, inp); rig.update(DT, r);
@@ -86,7 +88,7 @@ if (film) {
   const { withWood } = await import('./harness.mjs');
   await withWood(async (w) => {
     for (const m of moments.slice(0, 8)) for (const [view, extra] of [['chase', '&zoom=1.6'], ['side', '&side=90&zoom=2.2'], ['front', '&side=180&zoom=2.2']]) {
-      const file = `${key}-${m.t.toFixed(2)}-${view}.png`, p = await w.open(`scene=${key}${process.env.MOCAP === '0' ? '&mocap=0' : ''}&strip=${Math.max(0, m.t - 0.25).toFixed(4)}&frames=16&every=${(1 / 30).toFixed(4)}&cols=8&holds=0&marks=0&look=clay${extra}`, { width: 1600, height: 520, dpr: 1 });
+      const file = `${key}-${m.t.toFixed(2)}-${view}.png`, p = await w.open(`scene=${key}${process.env.MOCAP === '0' ? '&mocap=0' : ''}&strip=${Math.max(0, m.t - 0.25).toFixed(4)}&frames=16&every=${(1 / 30).toFixed(4)}&cols=8&holds=0&marks=0&look=clay${process.env.CHARACTER ? '&character=' + process.env.CHARACTER : ''}${extra}`, { width: 1600, height: 520, dpr: 1 });
       for (let k = 0; k < 80 && (await p.evaluate(() => window.__roofjumps.probe().pending)) > 0; k++) await p.waitForTimeout(250);
       await p.waitForTimeout(400); await p.screenshot({ path: OUT + file }); await p.close(); m[view] = file; console.log(`filmed ${m.t.toFixed(2)} s ${view}`);
     }
