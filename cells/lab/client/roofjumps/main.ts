@@ -325,7 +325,7 @@ const labels = document.getElementById('labels')!;
 /** `sheet=`: the moves to lay out, each at these points through it */
 const sheet = q.get('sheet')?.split(',').filter(Boolean) ?? null, MUS = [0.05, 0.28, 0.5, 0.72, 0.95];
 /** `strip=`: moments of the run, each kept as it was: the figure's bones, where it was, which way it was going */
-interface Moment { bones: ReturnType<Rig['bones']>; x: number; y: number; z: number; yaw: number; label: string; feet: number[][]; saved: boolean }
+interface Moment { bones: ReturnType<Rig['bones']>; x: number; y: number; z: number; yaw: number; label: string; feet: number[][]; saved: boolean; wide: number }
 let strip: Moment[] | null = null;
 const stripCols = Math.max(1, Number(q.get('cols') ?? 6) | 0);
 function grid(cols: number, names: string[]): void {
@@ -353,7 +353,7 @@ if (q.has('strip')) {
   for (let i = Math.round(Number(q.get('strip')) / DT); i > 0; i--) advance(DT);
   for (let f = 0; f < n; f++) {
     const saving = !!runner.saveKind;
-    strip.push({ bones: rig.bones(runner), x: runner.x, y: runner.y, z: runner.z, yaw: runner.speed > 1 ? Math.atan2(runner.vx, runner.vz) : runner.heading, label: `${time.toFixed(2)}s ${runner.move}${saving ? ` save:${runner.saveKind}` : ''} ${runner.speed.toFixed(0)}m/s`, feet: [runner.reach.fl, runner.reach.fr].filter(Boolean).map((f) => [...f!]), saved: saving });
+    strip.push({ bones: rig.bones(runner), x: runner.x, y: runner.y, z: runner.z, yaw: runner.speed > 1 && (runner.state === 'ground' || runner.state === 'air') ? Math.atan2(runner.vx, runner.vz) : runner.heading, wide: ['climb', 'plant', 'chimney', 'swing', 'wall'].includes(runner.state) || runner.move === 'kick' ? 1 : 0, label: `${time.toFixed(2)}s ${runner.move}${saving ? ` save:${runner.saveKind}` : ''} ${runner.speed.toFixed(0)}m/s`, feet: [runner.reach.fl, runner.reach.fr].filter(Boolean).map((f) => [...f!]), saved: saving });
     for (let i = Math.round(every / DT); i > 0; i--) advance(DT);
   }
   grid(stripCols, strip.map((m) => m.label));
@@ -602,12 +602,15 @@ function frame(now: number): void {
     cells(stripCols, strip.length, (i, aspect, rect) => {
       // (seen from the side asked; from the other, where a wall's in the way of that)
       const m = strip![i], side = TUNE.side;
-      let v = eyeFor(m.x, m.y, m.z, m.yaw, aspect, clearTo);
+      // (framed as the eye in play would: out wider and higher up a face, between walls, on a bar)
+      let v = eyeFor(m.x, m.y, m.z, m.yaw, aspect, clearTo, m.wide);
       const still = fixedEye ?? scene?.eye ?? null;
       if (still && q.has('fixed')) v = { far: 1, eye: still, vp: mul(perspective((50 * Math.PI) / 180, aspect, 0.15, rd.radius * 64 * 1.5), lookAt(still, [m.x, m.y + 1, m.z], [0, 1, 0])) };
-      else if (v.far < 0.6 && side) { TUNE.side = -side; const o = eyeFor(m.x, m.y, m.z, m.yaw, aspect, clearTo); if (o.far > v.far) v = o; TUNE.side = side; }
+      else if (v.far < 0.6 && side) { TUNE.side = -side; const o = eyeFor(m.x, m.y, m.z, m.yaw, aspect, clearTo, m.wide); if (o.far > v.far) v = o; TUNE.side = side; }
       // (walls close: up and over rather than in close)
-      if (v.far < 0.6) { const l0 = lift; for (const up of [0.35, 0.7, 1]) { lift = l0 + up; const o = eyeFor(m.x, m.y, m.z, m.yaw, aspect, clearTo); if (o.far > v.far + 0.1) v = o; if (v.far >= 0.8) break; } lift = l0; }
+      if (v.far < 0.75) { const l0 = lift; for (const up of [0.2, 0.4, 0.7]) { lift = l0 + up; const o = eyeFor(m.x, m.y, m.z, m.yaw, aspect, clearTo, m.wide); if (o.far > v.far + 0.05) v = o; if (v.far >= 0.75) break; } lift = l0; }
+      // (still hemmed in (backed into a corner, facing it): round to one side or the other, whichever sees it)
+      if (v.far < 0.5 && !(still && q.has('fixed'))) for (const turn of [0.8, -0.8]) { const o = eyeFor(m.x, m.y, m.z, m.yaw + turn, aspect, clearTo, m.wide); if (o.far > v.far + 0.1) v = o; }
       rd.draw(v.vp, v.eye, m.bones, shadowAt(m.x, m.y, m.z), rect);
       // (each planted foot marked on the roof: orange while a save is being made, so the footfall that saved it shows)
       if (m.feet.length && rd.def.guides !== false && q.get('marks') !== '0') rd.lines(v.vp, v.eye, m.feet.flatMap((f) => { const c = m.saved ? [0.98, 0.45, 0.08, 1] : [0.1, 0.1, 0.12, 0.9], y = f[1] + 0.03; return [{ pts: [f[0] - 0.1, y, f[2], f[0] + 0.1, y, f[2]], cols: [...c, ...c], w: 2 }, { pts: [f[0], y, f[2] - 0.1, f[0], y, f[2] + 0.1], cols: [...c, ...c], w: 2 }]; }));

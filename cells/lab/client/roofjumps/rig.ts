@@ -190,6 +190,20 @@ export class Rig {
       p.lean = Math.min(0.5, 0.12 + 0.28 * s); p.spine = 0.06 + 0.12 * s; p.head = -0.3 * s; p.splay = -0.07;
       for (const key of KEYS) p[key] = was[key] + (p[key] - was[key]) * k;
     };
+    /**
+     * Arms out in the air, as the references fly: from just after the takeoff, both arms open out to the sides, near straight,
+     * a little forward and the one over the lead leg a touch higher; held through the flight; brought down and forward a
+     * little to meet the ground. `k` how far in (0..1); `gather`, the knees drawn up in the middle of a long flight.
+     */
+    const armsOut = (k: number, gather = 0) => {
+      if (k <= 0) return;
+      const mix = (a: number, b: number) => a + (b - a) * k, hi = 0.18, lo = 0;
+      p.spreadL = mix(p.spreadL, 1.45 + (L ? lo : hi) * 0.5); p.spreadR = mix(p.spreadR, 1.45 + (L ? hi : lo) * 0.5);
+      p.shL = mix(p.shL, 0.2 + (L ? lo : hi)); p.shR = mix(p.shR, 0.2 + (L ? hi : lo));
+      p.elL = mix(p.elL, 0.12); p.elR = mix(p.elR, 0.12); p.twist = mix(p.twist, 0); p.hips = mix(p.hips, 0);
+      if (gather > 0) { p.kneeL += 0.45 * gather; p.kneeR += 0.45 * gather; p.hipL += 0.25 * gather; p.hipR += 0.25 * gather; }
+    };
+    const flying = r.state === 'air', long = sm(0.35, 0.7, r.flightT ?? 0);
     switch (r.move) {
       case 'run': {
         const amp = Math.min(1.12, s * 0.95), k = Math.min(1, s);
@@ -262,6 +276,8 @@ export class Rig {
           p.shL = p.shR = 0.9 + 2.1 * o; both('el', 0.5 - 0.4 * o); both('spread', 0.25 - 0.1 * o);
           p.sink = 0; p.tilt = 0; p.lean = 0.25 * (1 - o) + 0.05; p.spine = 0.05; p.head = -0.2 * o; p.twist = 0;
         }
+        // (the hand off it, over and coming down: the arms out, the knees gathered under it)
+        if (!r.wheel && !r.reach.hl && !r.reach.hr && u > 0.45) armsOut(sm(0.45, 0.65, u) * (1 - 0.4 * sm(0.85, 1, u)), 0.6 * sm(0.45, 0.6, u) * (1 - sm(0.8, 0.95, u)));
         break;
       }
       case 'hop': {
@@ -270,6 +286,7 @@ export class Rig {
         legs(0.5 + 0.95 * w, 0.9 - 0.5 * w, -0.1 - 0.2 * w, 0.5 + 1.75 * w); p.splay = 0.18 * w;
         arms(1.25, -0.9); both('el', 1.2); both('spread', 0.2); p.twist = (L ? -1 : 1) * 0.3;
         p.lean = 0.42; p.spine = 0.2; p.head = -0.3;
+        if (flying) armsOut(sm(0.05, 0.25, u) * (1 - 0.45 * sm(0.8, 0.98, u)));
         break;
       }
       case 'bound': {
@@ -282,6 +299,7 @@ export class Rig {
         p.twist = (L ? -1 : 1) * m(0.35, 0.05, 0.2, 0.1);
         p.lean = m(0.35, 0.5, 0.15, 0.2); p.spine = m(0, 0.45, -0.15, 0.05); p.head = m(-0.2, 0.15, -0.2, -0.1);
         if (carried > 0) strideThrough(carried);
+        if (flying) armsOut(sm(0.04, 0.18, u) * (1 - 0.45 * sm(0.8, 0.98, u)), long * sm(0.2, 0.45, u) * (1 - sm(0.65, 0.85, u)));
         break;
       }
       case 'swing': {

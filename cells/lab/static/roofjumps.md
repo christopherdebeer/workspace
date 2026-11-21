@@ -502,6 +502,26 @@ The first gouache was a nod: paint-coloured textures on a render, still plainly 
 `node cells/lab/views.mjs roofjumps` makes every picture here from `client/roofjumps/views.mjs`
 (each `static/roofjumps/v-<name>.jpg`, the whole set in `static/roofjumps/views.md`).
 
+### Against the references, segment by segment
+
+Every movement segment of the three clips was set against our nearest equivalent, filmed from the same kind of eye
+(close behind). In order of how much it matters: the air pose (every reference flight holds the arms out wide; ours ran
+on nothing, arms down); getting up to speed (theirs leans 35-40° into it over ~0.4 s, arms pumping; ours is upright and
+at full pace in under 0.4 s); landings without a beat (theirs crouch on a ledge, in the street, on arrival); over things
+(theirs a high hop with the arms out; ours a kong that reads as hanging legs from behind); climbing (hands dropping at
+the end of a spring, a hang that lingers, no feet on the wall, a plank of a spring); flow (theirs never stops).
+
+Done from it so far:
+
+- *Arms out in the air.* Every bound, hurdle hop and vault (once the hand's off) opens the arms out to the sides, near
+  straight, a touch forward and the one over the lead leg a little higher, and holds them through the flight, bringing them
+  down a little to meet the ground; a long flight draws the knees up in its middle. Over the running stride a short bound
+  carries through the air, so the legs keep running while the arms fly.
+- *The eye in the films.* What looked like the eye jammed into the figure's back in alleys was the contact sheets' eye
+  only: in play the eye already widens and rises up a face and between walls. The sheets now frame each moment as play
+  would (wide up a face, between walls, on a bar, off a wall; aimed by the body's facing off the ground, not by a velocity
+  spinning round a bar), and rise at most 0.7 rad to clear walls. Two frames of a kick out of a corner still crowd in.
+
 ## The city in the references (to tag; no look yet)
 
 What the three clips' city has that a body could use or would brush past, set against what we have now. Each
