@@ -392,7 +392,9 @@ export class Rig {
         const ph = r.chainPhase ?? 0;
         if (ph === 0) { legs(0.35 + 0.3 * u, 0.5 + 0.4 * u, 0.2 + 0.3 * u, 0.6 + 0.3 * u); p.lean = -0.1; }
         else if (ph === 1) { const k = sm(0, 1, u); legs(0.65 + 0.9 * k, 0.9 + 1.2 * k, 0.55 + 0.85 * k, 0.8 + 1.2 * k); p.lean = -0.1 - 0.15 * k; p.spine = 0.25 * k; }
-        else if (ph === 2) { const g = sm(0.55, 1, u); legs(-0.05 + 0.8 * g, 0.1 + 1.0 * g, -0.2 + 0.7 * g, 0.25 + 0.9 * g); p.lean = 0.05 - 0.15 * g; p.spine = -0.2 + 0.3 * g; }
+        // (sprung: long, the arms up for the next, but not a plank: one knee driven up off the wall, the other leg trailing
+        // straight, gathering to meet the hold)
+        else if (ph === 2) { const g = sm(0.55, 1, u), d = 1 - sm(0.4, 0.8, u); legs(0.75 * d + 0.8 * g, 1.2 * d + 0.9 * g, -0.25 * d - 0.05 + 0.75 * g, 0.2 * d + 0.15 + 0.85 * g); p.lean = 0.05 - 0.15 * g; p.spine = -0.2 + 0.3 * g; }
         // (shimmying along: hanging straight, the hips swaying with each reach, the legs loose)
         else if (ph === 3) { const sw = Math.sin(u * Math.PI * 2); legs(0.25 + 0.12 * sw, 0.35, 0.25 - 0.12 * sw, 0.35); p.tilt = 0.12 * sw; p.lean = -0.05; }
         // (up a pipe: the knees drawn up and clamping it, each pull pressing the feet down on it)
@@ -492,6 +494,8 @@ export class Rig {
     // (up against a wall: upright, the head back out of it)
     if (r.against) { p.lean = Math.min(p.lean, 0.1); p.spine = Math.min(p.spine, 0.05); p.head = Math.min(p.head, 0); }
     // (in the air with a wall close beside: the arm on that side kept in, not flung into it)
+    // (a wall coming: the arms go up and forward for it ahead of the contact, long, the hands open to take what's on it)
+    { const rf = r.state === 'air' ? r.reachFor ?? 0 : 0; if (rf > 0) { const k = sm(0, 0.6, rf), m = (a: number, b: number) => a + (b - a) * k; p.shL = m(p.shL, 2.55); p.shR = m(p.shR, 2.45); p.elL = m(p.elL, 0.12); p.elR = m(p.elR, 0.15); p.spreadL = m(p.spreadL, 0.3); p.spreadR = m(p.spreadR, 0.3); } }
     if (r.state === 'air' && r.near) { if (r.near > 0) { p.spreadL = Math.min(p.spreadL, 0.35); p.shL = Math.min(p.shL, 1.2); } else { p.spreadR = Math.min(p.spreadR, 0.35); p.shR = Math.min(p.shR, 1.2); } }
     // (the head leads: turned into a turn a beat before the hips, looking where it's going)
     p.look = Math.max(-0.6, Math.min(0.6, r.turn * 0.22));

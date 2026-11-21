@@ -524,6 +524,15 @@ Done from it so far:
 - *A beat on landing.* Drawn, not felt (the runner's drive and timings untouched): a precision onto a ledge sinks a good
   half, a drop by how fast it falls (all of it from 10 m/s), a leap level to level only lightly and runs through; in over
   60 ms, out over a quarter second.
+- *Climbing, as the references climb.* The hands are set for the hold it springs to as the spring starts, so they come back
+  on reaching up for it (they had been left on the hold below, and the arms swung down to it at the top of every spring).
+  Against a wall it's slid into, a hold at head height is taken on contact, not slid past first. In the air with a wall
+  coming that stands above it, the arms go up and forward for it about a third of a second ahead of meeting it, and stay
+  up against it. Loading on a hold, one foot walks up the wall. The spring isn't a plank: one knee drives up off the wall,
+  the other leg trails.
+- *No foot on ground detail.* Every footfall, whatever chose it (a plan, the stride, a landing's first foot, a foot planted
+  to go from), is moved off rubble, clutter or a skylight to the nearest clear spot, out to 1.3 m. The street test's 30 s
+  runs: none of 670 footfalls on it (had been 6 of 662, a landing's first foot each time).
 - *The eye in the films.* What looked like the eye jammed into the figure's back in alleys was the contact sheets' eye
   only: in play the eye already widens and rises up a face and between walls. The sheets now frame each moment as play
   would (wide up a face, between walls, on a bar, off a wall; aimed by the body's facing off the ground, not by a velocity
