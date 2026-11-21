@@ -1,8 +1,8 @@
 {
   "cell": "c15r/lab",
   "cellId": "lab-8928acf3",
-  "treeVersion": "tree:b48bfa3401f105533a260da62c81ee2a6d3dc90122ef58cfcc26eb193a45901b",
-  "syncedAt": "2026-11-21T15:12:40.297Z",
+  "treeVersion": "tree:d481442d7593f935baa3162798a93b67ef572c75036b7a2bc75c48ab445b3f3c",
+  "syncedAt": "2026-11-21T15:45:19.720Z",
   "files": {
     "README.md": "sha256:7f343237d183707fe06acca63d508a0f302fa9e678f1549d785e44a1016300d2",
     "client/autograph/autobiography.ts": "sha256:1aa72dbb927e6de87cdd920842be3b826ae520031f2589fadc9d4fe98abfbd67",
@@ -309,7 +309,7 @@
     "client/roofjumps/plandraw.ts": "sha256:1e7f1390cb71074dec37f0e32bee110d24206e64f7fde778c8118db2def6e0bd",
     "client/roofjumps/poses.ts": "sha256:16e5aa7fcd46c80c3c9f280ddd89d2a33182531f29e6f218022aefa13fa4180a",
     "client/roofjumps/render.ts": "sha256:ff4e0545c146d5640306274d728fcb736b4aec00d270257e82c77102c82d2aa5",
-    "client/roofjumps/rig.ts": "sha256:dcd3fcafb238e92b71f1ac735a26fdb23eb8b7dc9f9262338e0fc33065a5b3ac",
+    "client/roofjumps/rig.ts": "sha256:9e17664087afc481d4cc8a20d1e1e4c718ffafb2428b3b3eeb3bd9cc5e2cbc91",
     "client/roofjumps/runner.ts": "sha256:6e42b92d42434789542fb149b095761dfbd7f345379b005cf151d2b86c2725d8",
     "client/roofjumps/scenes.ts": "sha256:c7a8e7af6dcecb6bc0137b8dffe92c2fc83205486d960d78774d98773460bc43",
     "client/roofjumps/strokes.ts": "sha256:916ccd65e8726c33662aab781d3b71cc46f8cdf758fd3df5e369881413db846e",
@@ -805,6 +805,7 @@
     "devtools/roofjumps-legs.mjs": "sha256:87b43649892b090728913366c1dde0a44a150dd8d7963815c3a1f00b0d6af92a",
     "devtools/roofjumps-poses.mjs": "sha256:b9d1957ff6ae27927f6a490fd486afad1a0fe80d5bd7b872166f07bb5dd55a25",
     "devtools/roofjumps-scenes.mjs": "sha256:0da5858cfd617b3637a6ff385c4381e19c097fa3d8aeff1d34a6113bb2e6edf9",
+    "devtools/roofjumps-sheet.mjs": "sha256:a3e06dbf2684147ee9721c85424f6aa4aecff7edd906bfb35f4c80a77fa96076",
     "devtools/roofjumps-shot.mjs": "sha256:acfb5de2d6fe6fd21ab8a50011d8960fd2ffa649cc751449be2d594e5d2f079b",
     "devtools/roofjumps-wander.mjs": "sha256:753ddeb61bf8c410ccffda547a9b3f6d706d7074fd9de1db87601ffd1ccc193c",
     "devtools/roofjumps.test.mjs": "sha256:19e6519b6b9a6ed38ded0fd537bd6299eb3a3b77796ad42655dedf2e22438382",
