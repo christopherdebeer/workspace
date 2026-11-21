@@ -604,7 +604,7 @@ function frame(now: number): void {
       if (v.far < 0.6) { const l0 = lift; for (const up of [0.35, 0.7, 1]) { lift = l0 + up; const o = eyeFor(m.x, m.y, m.z, m.yaw, aspect, clearTo); if (o.far > v.far + 0.1) v = o; if (v.far >= 0.8) break; } lift = l0; }
       rd.draw(v.vp, v.eye, m.bones, shadowAt(m.x, m.y, m.z), rect);
       // (each planted foot marked on the roof: orange while a save is being made, so the footfall that saved it shows)
-      if (m.feet.length && rd.def.guides !== false) rd.lines(v.vp, v.eye, m.feet.flatMap((f) => { const c = m.saved ? [0.98, 0.45, 0.08, 1] : [0.1, 0.1, 0.12, 0.9], y = f[1] + 0.03; return [{ pts: [f[0] - 0.1, y, f[2], f[0] + 0.1, y, f[2]], cols: [...c, ...c], w: 2 }, { pts: [f[0], y, f[2] - 0.1, f[0], y, f[2] + 0.1], cols: [...c, ...c], w: 2 }]; }));
+      if (m.feet.length && rd.def.guides !== false && q.get('feet') !== '0') rd.lines(v.vp, v.eye, m.feet.flatMap((f) => { const c = m.saved ? [0.98, 0.45, 0.08, 1] : [0.1, 0.1, 0.12, 0.9], y = f[1] + 0.03; return [{ pts: [f[0] - 0.1, y, f[2], f[0] + 0.1, y, f[2]], cols: [...c, ...c], w: 2 }, { pts: [f[0], y, f[2] - 0.1, f[0], y, f[2] + 0.1], cols: [...c, ...c], w: 2 }]; }));
     });
     frames++; requestAnimationFrame(frame); return;
   }

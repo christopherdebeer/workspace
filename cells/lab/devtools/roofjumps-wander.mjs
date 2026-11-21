@@ -86,7 +86,7 @@ if (film) {
   const { withWood } = await import('./harness.mjs');
   await withWood(async (w) => {
     for (const m of moments.slice(0, 8)) for (const [view, extra] of [['chase', '&zoom=1.6'], ['side', '&side=90&zoom=2.2']]) {
-      const file = `${key}-${m.t.toFixed(2)}-${view}.png`, p = await w.open(`scene=${key}&strip=${Math.max(0, m.t - 0.25).toFixed(4)}&frames=16&every=${(1 / 30).toFixed(4)}&cols=8&holds=0&look=clay${extra}`, { width: 1600, height: 520, dpr: 1 });
+      const file = `${key}-${m.t.toFixed(2)}-${view}.png`, p = await w.open(`scene=${key}&strip=${Math.max(0, m.t - 0.25).toFixed(4)}&frames=16&every=${(1 / 30).toFixed(4)}&cols=8&holds=0&feet=0&look=clay${extra}`, { width: 1600, height: 520, dpr: 1 });
       for (let k = 0; k < 80 && (await p.evaluate(() => window.__roofjumps.probe().pending)) > 0; k++) await p.waitForTimeout(250);
       await p.waitForTimeout(400); await p.screenshot({ path: OUT + file }); await p.close(); m[view] = file; console.log(`filmed ${m.t.toFixed(2)} s ${view}`);
     }

@@ -375,11 +375,11 @@ export class Runner implements Body {
   /** where a foot comes down ahead of the body, how far out from its line, how far the body goes over a foot while it's
    * down: the runner's, for its legs, scaled to this body's */
   // (walking: the body goes 1.24 steps over each planted foot (so each is down about three fifths of the stride, and
-  // both are down together a while at each step, as a walk is), the foot coming down about two fifths of that ahead;
+  // both are down together a while at each step, as a walk is), the foot coming down under a third of that ahead;
   // blended into the run's as the pace rises)
-  private get ahead_(): number { const t = walkToRun(this.speed); return (AHEAD * t + 0.42 * 1.24 * this.stepLenOf(Math.max(WALK, this.speed)) * (1 - t)) * (t >= 1 ? this.build.legScale : 1); }
+  private get ahead_(): number { const t = walkToRun(this.speed); return (AHEAD * t + 0.3 * 1.24 * this.stepLenOf(Math.max(WALK, this.speed)) * (1 - t)) * (t >= 1 ? this.build.legScale : 1); }
   private get track_(): number { return TRACK * this.build.legScale; }
-  private get stance_(): number { const t = walkToRun(this.speed); return t >= 1 ? STANCE * this.build.legScale : STANCE * this.build.legScale * t + 1.24 * this.stepLenOf(Math.max(WALK, this.speed)) * (1 - t); }
+  private get stance_(): number { const t = walkToRun(this.speed); return t >= 1 ? STANCE * this.build.legScale : STANCE * this.build.legScale * t + Math.min(0.85 * this.build.legScale, 1.24 * this.stepLenOf(Math.max(WALK, this.speed))) * (1 - t); }
 
   get speed(): number { return Math.hypot(this.vx, this.vz); }
 
@@ -601,9 +601,10 @@ export class Runner implements Body {
       } else if (!down) { if (foot.on) foot.up = this.time; foot.on = false; foot.done = false; foot.held = null; }
       // (on the ground, a foot left out of the leg's reach behind (on its toe and all) is taken up early, not dragged; and
       // stays up till its time down is over)
-      // (walking, its stance runs to where the walk's own takes it, a little past: a walk's feet are down together a while)
+      // (walking, its stance runs to where the walk's own takes it, a little past (a walk's feet are down together a while),
+      // but no further behind than the leg reaches with the heel up)
       // (and at a walk, never before the other foot is down: a walk always has a foot on the ground)
-      else if (ground && foot.on && sp < 4) { const bx = foot.p[0] - this.x, bz = foot.p[2] - this.z, back = -(bx * fx + bz * fz), t = walkToRun(sp), other = side > 0 ? f.R : f.L; if ((other.on || t > 0.5) && back > (0.42 + 0.03 * sp) * t + (this.stance_ - this.ahead_ + 0.08) * (1 - t)) { foot.on = false; foot.done = true; foot.up = this.time; } }
+      else if (ground && foot.on && sp < 4) { const bx = foot.p[0] - this.x, bz = foot.p[2] - this.z, back = -(bx * fx + bz * fz), t = walkToRun(sp), other = side > 0 ? f.R : f.L; if ((other.on || t > 0.5) && back > (0.42 + 0.03 * sp) * t + Math.min(0.55 * this.build.legScale, this.stance_ - this.ahead_ + 0.08) * (1 - t)) { foot.on = false; foot.done = true; foot.up = this.time; } }
     }
     if (f.L.on) this.reach.fl = f.L.p;
     if (f.R.on) this.reach.fr = f.R.p;

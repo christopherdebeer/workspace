@@ -13,8 +13,8 @@ const lab = new URL('../client/roofjumps/', import.meta.url).pathname, OUT = new
 const out = await build({ stdin: { contents: `export * from './scenes'; export * from './city'; export * from './runner'; export * from './rig'; export * from './m4';`, resolveDir: lab, loader: 'ts' }, bundle: true, write: false, format: 'esm', platform: 'node' });
 const M = await import('data:text/javascript;base64,' + Buffer.from(out.outputFiles[0].text).toString('base64'));
 const args = process.argv.slice(2), film = args.includes('--film'), keys = args.filter((a) => !a.startsWith('--'));
-const KEYS = keys.length ? keys : ['gait-jog', 'gait-run', 'sharp-turns', 'edge-stop', 'transfer-clean'];
-const DT = 1 / 120, deg = (r) => (r * 180) / Math.PI;
+const KEYS = keys.length ? keys : ['gait-walk', 'gait-jog', 'gait-run', 'sharp-turns', 'edge-stop', 'transfer-clean'];
+const MIN = 0.6, DT = 1 / 120, deg = (r) => (r * 180) / Math.PI;
 const axis = (m, i) => { const v = [m[i * 4], m[i * 4 + 1], m[i * 4 + 2]], l = Math.hypot(...v) || 1; return v.map((x) => x / l); };
 const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 const angle = (a, b) => Math.acos(Math.max(-1, Math.min(1, dot(a, b))));
@@ -40,13 +40,13 @@ function record(sc) {
 }
 /** the legs measured: per footfall and over the run (the ground frames at speed only) */
 function measure(F) {
-  const run = F.filter((f) => f.ground && f.speed > 2.5), out = { frames: run.length, speed: run.length ? run.reduce((s, f) => s + f.speed, 0) / run.length : 0, feet: {} };
+  const run = F.filter((f) => f.ground && f.speed > MIN), out = { frames: run.length, speed: run.length ? run.reduce((s, f) => s + f.speed, 0) / run.length : 0, feet: {} };
   const falls = [];
   for (const s of ['L', 'R']) {
     const side = s === 'L' ? 1 : -1, steps = [];
     for (let i = 1; i < F.length; i++) {
       const a = F[i - 1], b = F[i];
-      if (!(b.ground && b.speed > 2.5)) continue;
+      if (!(b.ground && b.speed > MIN)) continue;
       if (b[s].planted && !a[s].planted) {
         // (a footfall: where across the line it lands (+ its own side), the knee and sole as it lands, how fast the foot was
         // going along the ground just before (a stamp is still going forward; a good one is pawed back near the ground's speed))
@@ -129,8 +129,8 @@ if (film) {
   process.env.EXPERIMENT = 'roofjumps'; process.env.READY = '__roofjumps';
   const { withWood } = await import('./harness.mjs');
   await withWood(async (w) => {
-    for (const fl of films) for (const [view, extra] of [['side', '&side=90&zoom=2.4'], ['behind', '&side=180&zoom=2.4'], ['front', '&side=0&zoom=2.4']]) {
-      const file = `${fl.key}-${view}.png`, p = await w.open(`scene=${fl.key}&strip=${fl.t.toFixed(4)}&frames=16&every=0.025&cols=8&holds=0&look=clay${extra}`, { width: 1600, height: 520, dpr: 1 });
+    for (const fl of films) for (const [view, extra] of [['side', '&side=90&zoom=1.7'], ['behind', '&side=180&zoom=1.7'], ['front', '&side=0&zoom=1.7']]) {
+      const file = `${fl.key}-${view}.png`, p = await w.open(`scene=${fl.key}&strip=${fl.t.toFixed(4)}&frames=16&every=0.025&cols=8&holds=0&feet=0&look=clay${extra}`, { width: 1600, height: 520, dpr: 1 });
       for (let k = 0; k < 80 && (await p.evaluate(() => window.__roofjumps.probe().pending)) > 0; k++) await p.waitForTimeout(250);
       await p.waitForTimeout(500); await p.screenshot({ path: OUT + file }); await p.close(); fl[view] = file; console.log(`filmed ${fl.key} ${view}`);
     }

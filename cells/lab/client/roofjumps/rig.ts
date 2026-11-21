@@ -578,9 +578,27 @@ export class Rig {
     // planned long or over clutter; low enough that a leg can hold its footfall from in front to behind)
     const g = r.gait, stride = striding && g && pace > 0.4 ? (g.stance >= 0 ? 0.95 - 0.02 * pace * Math.sin(Math.PI * g.stance) : 0.95 + Math.min(0.16, 1.6 * (r.bounce ?? 0.03)) * pace * Math.sin(Math.PI * g.flight)) * Ls - 0.55 * Math.max(r.land, windDown) * Ls : -1;
     const ground = stride >= 0 ? stride : Math.max(carry, this.body.hipDrop + Math.max(leg(p.hipL, p.kneeL), leg(p.hipR, p.kneeR)) + this.body.sole) + (r.move === 'roll' ? 0.16 * Ls : 0) - (r.state === 'ground' ? 0.4 * windDown * Ls : 0);
-    // (walking: a little lower than standing, so a foot down can be held from in front to behind; lowest with both down)
+    // (walking: the hips vault over each planted foot on a nearly straight leg, as a walk does: as high as such a leg reaches
+    // to each foot down (a little more for one behind, its heel rising onto the toe), the lower of the two; so highest over
+    // a foot, lowest as the weight passes from one to the other)
     const walk = r.state === 'ground' && r.move === 'run' && stride < 0 ? sm(0.2, 0.6, r.speed) * (1 - sm(2.2, 3, r.speed)) : 0;
-    const groundW = walk > 0 ? Math.min(ground, ground - walk * (0.05 + 0.03 * (r.reach.fl && r.reach.fr ? 1 : 0)) * Ls) : ground;
+    let vault = Infinity;
+    if (walk > 0) {
+      const fx = Math.sin(r.heading), fz = Math.cos(r.heading), legL = 0.985 * (this.body.thigh + this.body.shin);
+      // (by the foot ahead or under: one well behind is on its way off, onto its toe, and reaches what it must that way)
+      const down = [r.reach.fl, r.reach.fr].filter((f): f is V3 => !!f).map((f) => ({ f, along: (f[0] - r.x) * fx + (f[2] - r.z) * fz }));
+      const lead = down.filter((d) => d.along > -0.15), use = lead.length ? lead : down;
+      for (const { f, along } of use) {
+        // (the joint sits a little under the pelvis's centre as it leans: 0.035 m more; a foot already out of reach, or well
+        // off the level, says nothing about the vault)
+        const dx = f[0] - r.x, dz = f[2] - r.z, reachL = legL + (along < -0.15 ? 0.12 : 0), d2 = dx * dx + dz * dz;
+        if (d2 >= reachL * reachL * 0.9 || Math.abs(f[1] - r.y) > 0.2) continue;
+        vault = Math.min(vault, this.body.hipDrop + 0.035 * Ls + Math.sqrt(reachL * reachL - d2) + this.body.sole + (f[1] - r.y));
+      }
+      // (and never more than a little under the pose's own height: the vault rides on the walk, it doesn't sit it down)
+      if (vault < Infinity) vault = Math.max(vault, ground - 0.12 * Ls);
+    }
+    const groundW = walk > 0 && vault < Infinity ? ground * (1 - walk) + Math.min(ground, vault) * walk : ground;
     const hip = groundW * this.stood + (0.98 - p.sink) * Ls * (1 - this.stood);
     const hipTo = r.state === 'ground' && r.move !== 'roll' ? Math.min(hip, (0.99 - 0.46 * r.land) * Ls) : hip;
     // (the hips never jump up: risen to a new height at most as fast as legs push (6 m/s); let down as fast as a landing takes them)

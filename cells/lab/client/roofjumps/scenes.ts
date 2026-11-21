@@ -262,6 +262,13 @@ export const SCENES: Scene[] = [
     ],
   },
   {
+    key: 'gait-walk', title: 'Gait: a walk on a long flat roof',
+    asks: 'Nothing in the way, a light press: a walk. Does it look like a person walking: legs nearly straight, the hips riding over each foot in turn, the heel down first and the toe last, both feet down together for a moment at each step, the arms swinging easily?',
+    watch: 'The knees and feet, from the side and from behind (devtools/roofjumps-legs.mjs films and measures it).',
+    course: { boxes: [B(4, 60, 2, 62, 9)], start: { x: 32, z: 4 }, alone: true }, seconds: 6, input: () => go(0, 0.25),
+    should: [...commonShoulds],
+  },
+  {
     key: 'gait-jog', title: 'Gait: a jog on a long flat roof',
     asks: 'Nothing in the way, half a press: the plainest running there is. Do the legs look like a person jogging: a soft knee at touchdown, the foot under the hips, the heel lifting behind, a little bounce, feet on two close lines that never cross?',
     watch: 'The knees and feet, from the side and from behind (devtools/roofjumps-legs.mjs films and measures it).',
