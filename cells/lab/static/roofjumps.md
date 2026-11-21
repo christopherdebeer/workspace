@@ -199,6 +199,16 @@ Tried and left out: bringing a swinging foot down early to catch the body when i
 
 Two filming bugs were found on the way. The films hid the footfall markers with `feet=0`, which is also the dial that places the feet, so every strip since had planting off (the flag is now `marks=0`). And the legs tool's front and behind were swapped.
 
+### One account of the feet (after an outside review)
+
+A review of the build (by Astra) put it plainly: the runner decided the body's velocity and the feet were fitted to a body already going that way, and three parts of the program kept their own idea of whether a foot was down. Five changes followed, each measured (`devtools/roofjumps-footing.mjs`: disagreements, gaps with no foot down, planted slide and the share of each cut made with a foot down, over the 28 scenes and eight 12-second trials of random stick input on a flat roof; `devtools/roofjumps-determinism.mjs`: the bones read at different rates):
+
+- *Drawing is reading.* Reading the bones used to change state: the heel's lift and where a free foot was drawn, both fed into the next step. So the same run drawn at 30 Hz and 120 Hz came out up to 5.7 cm apart. Both are now kept by a solve at the end of each fixed step, and reading the bones changes nothing. All 28 scenes agree exactly, and a unit test holds it.
+- *One account of the feet.* The runner keeps each foot's footing: whether it's down, where, the way the surface faces, its share of the weight, and its phase (touching, taking weight, pushing, unloading, in the air). The figure reads the weight from it. A foot the figure can't reach is let go of by the runner as a step, instead of the runner claiming it while the figure has given it up (581 ticks of disagreement → 10).
+- *The handover.* A walk always has a foot down. A let-go foot comes down as soon as nothing else holds the body. A walking stance doesn't end while the other foot is still up. The far-behind release needs the other foot down below a true jog. A jog's moment in the air is held to about its own length. The worst time on the ground at a walk with no foot down went from 425 ms to under 160 ms.
+- *The planted foot makes the cut.* Running on the open roof, braking and turning happen only while a foot is down (none in the air between steps), and up to three times as hard while it is. In sharp-turns the share of the cut made with a foot down went from 28% to 93%, planted slide from 11.7 to 0 cm/s, and the reversal from 0.45 to 0.34 s. Every course holds except vault-angles' known slide (143 of 144).
+- *Arms for balance.* When the body's momentum carries it off to the side of what's bearing it, past a step's width, and no step is coming (standing, along something narrow, the other foot still up), the arm on the far side from the fall lifts out to carry weight back over the support, the near arm a little, and the elbows straighten. There's a dead zone, so easy walking and running show none of it. A running cut falls into its turn on purpose, so little shows there.
+
 ## The plan (`plan.ts`)
 
 Where a heading leads, further than the next jump. A route is the runner itself run on ahead: a

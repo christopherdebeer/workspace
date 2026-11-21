@@ -88,6 +88,8 @@ export class Rig {
   bank = 0;
   /** the share of the weight on the left foot (0..1; the rest on the right) */
   weightL = 0.5;
+  /** the arms out for balance (−1..1: + the body falling to its left, the right arm out), eased */
+  armBal = 0;
   private aside = 0;
   /** the pelvis carried toward a footfall the leg couldn't otherwise reach (world, m) */
   give: V3 = [0, 0, 0];
@@ -534,6 +536,30 @@ export class Rig {
     // (and caught hanging: the body comes under the hands at once, not pitched on into the wall)
     const caught = r.move === 'hang' && (r.hangT ?? 9) < 0.2;
     const t = this.target(r, this.ph), w = r.state === 'ground' || this.carriedK > 0.5 ? 45 : caught ? 55 : r.state === 'air' && (r.airT ?? 9) < 0.12 && r.from === 'ground' ? 50 : 20, c = 2 * 0.72 * w;
+    // (the arms keeping the balance the feet can't: where the body's going (its capture point, its motion carried on over the
+    // pendulum's quickness) off to the side of what bears it, past what a step's width allows, and no step coming to catch
+    // it (standing, along something narrow, the other foot still up): the arm on the far side from the fall lifts out to
+    // carry weight back over the support, the near one a little, the elbows straightening; an athlete shows none of it
+    // walking or running easily, so nothing within the dead zone; and running, a cut falls into the turn on purpose, over
+    // the outside foot: little of it there)
+    { const on = r.state === 'ground' && r.move !== 'roll' && r.footing ? r.footing : null;
+      let want = 0;
+      if (on && (on.L.load > 0 || on.R.load > 0)) {
+        const a = on.L.load, b = on.R.load, sx = (on.L.p[0] * a + on.R.p[0] * b) / (a + b), sz = (on.L.p[2] * a + on.R.p[2] * b) / (a + b);
+        const om = Math.sqrt(9.8 / (0.95 * this.body.legScale)), qx = r.x + (r.vx ?? 0) / om - sx, qz = r.z + (r.vz ?? 0) / om - sz;
+        const lat = qx * Math.cos(r.heading) - qz * Math.sin(r.heading), both = a > 0.15 && b > 0.15;
+        // (with both feet bearing, anywhere between them is over the support)
+        const room = both ? 0.06 + 0.5 * Math.hypot(on.L.p[0] - on.R.p[0], on.L.p[2] - on.R.p[2]) : 0.06;
+        const err = Math.sign(lat) * Math.max(0, Math.abs(lat) - room), noStep = r.move === 'ledge' || r.speed < 0.5 ? 1 : both ? 0.3 : 0.6 * (1 - 0.85 * sm(1.5, 4, r.speed));
+        want = Math.max(-1, Math.min(1, err / 0.15)) * noStep;
+      }
+      this.armBal += (want - this.armBal) * (dt > 0.2 ? 1 : 1 - Math.exp(-10 * dt));
+      const k = Math.abs(this.armBal);
+      if (k > 0.01) {
+        // (falling to its left (+): the right arm out most)
+        const far = this.armBal > 0 ? 'spreadR' : 'spreadL', near = this.armBal > 0 ? 'spreadL' : 'spreadR';
+        t[far] += 1.2 * k; t[near] += 0.45 * k; t.elL += (0.3 - t.elL) * k * 0.7; t.elR += (0.3 - t.elR) * k * 0.7;
+      } }
     if (dt > 0.2) { for (const key of KEYS) { this.pose[key] = t[key]; this.vel[key] = 0; } }
     else for (const key of KEYS) { this.vel[key] += ((t[key] - this.pose[key]) * w * w - this.vel[key] * c) * dt; this.pose[key] += this.vel[key] * dt; }
     if (r.move === 'hang') { const most = 0.3 + Math.min(0.9, Math.atan((r.swingOut ?? 0) / 1.1) + (r.swingFeet ? 0.45 : 0)); if (this.pose.lean > most) { this.pose.lean = most; this.vel.lean = Math.min(0, this.vel.lean); } if (this.pose.spine > 0.35) { this.pose.spine = 0.35; this.vel.spine = Math.min(0, this.vel.spine); } }
