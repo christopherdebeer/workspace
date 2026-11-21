@@ -215,6 +215,15 @@ Then three more from the same review:
 - *Knees with a memory.* A planted knee bends the way it bent last step (more so the straighter the leg, where the hips alone say little), and toward the way its foot points once it bears weight. So it goes with the foot it stands on, not round with the turning hips: knees turning round the leg fell from 59 to 44°/s on average, and in sharp-turns from 126 to 83°/s.
 - *Saves that can fail.* A save that finds no roof for the catching foot used to plant it anyway, on air, and take 85% of the body's motion toward the fall. Now it fails: no foot, nothing taken off, and the stumble carries on into a run-out, a hand catch or a fall. A foot that could only get part way out corrects that much less. No authored scene happens to need a failed save yet.
 
+*Committed at every pace.* Limiting the committed aim to walking and jogging had kept the courses passing, but it hid two faults that showed when it was applied at a run. First, the run-up planned each footfall only as the previous foot came down, by which time the foot it was planning was already in the air: the course numbers relied on moving that foot in its last tenth of a second, which no body can do. Second, when the takeoff foot couldn't make the lip, the runner could put a foot down behind the other at 10 m/s. Now:
+
+- *Plans two steps out.* As each foot lands, the planner gives the next foot its spot and the foot after that its own, so a foot is committed to a planned spot as it leaves the ground and later plans only fine-tune it.
+- *Sees four strides ahead* (was 3.2). The adjustment is spread over the last three steps, rising toward the lip, the way a jumper opens into a takeoff: for a lip 30.8 m away, 1.10 · 1.14 · 1.18 strides, where it had been 0.96 · 1.22 · 1.23, and before that, committed with no change to the planner, 1.07 · 1.26 · −0.23.
+- *Never aimed behind the hips at a run.* A plan made before a jump doesn't carry through the flight.
+- *What a running foot commits to is its choice of spot* (the plan's longer or shorter step, a step aside), not where the body will be when it lands. That moves with the body: a few hundredths of a second either way is tens of centimetres at 11 m/s, and the way it's going can't change in the air.
+
+The courses hold (143 of 144), the run-up's last strides average 1.09 with none under 0.91, and flicks at a jog land 9 cm on average from where the foot was heading a tenth of a second before (was 15–21 cm), with no snaps. Running the planner four strides out instead of four and a half kept edge-stop's teeter (at 4.5 it stopped short of the lip and didn't check its balance).
+
 ## The plan (`plan.ts`)
 
 Where a heading leads, further than the next jump. A route is the runner itself run on ahead: a
