@@ -246,6 +246,19 @@ Asked for: a figure that misses a wall or a ledge should grasp any handhold in r
 
 A scene for it, `short-grab`: across a 5.5 m alley at a roof 12 m up from one at 6 m, the jump comes up short; it grabs the 9 m sill, springs to the lip and is over (spring › fall › hang › climb). Over the street test's held lines (four cities, sixteen ways, a minute each), 138 grabs, 78 of them going on up. Building it found a fault the new path set off: placed a hair too far out from a face, the hang read the roof's height past the face's end as the ground and sprang down to it; a hang's next lip now has to be above it.
 
+### More to hold, held more ways, climbed by what's there
+
+Asked for: more kinds of hold, holds caught side-on or one-handed, and climbs that vary with what's on the face.
+
+- *Kinds* (`city.ts` `fixturesOf`, by their own dice so sills and pipes are where they were). A stone **ledge** across a face at a storey (two hands, shimmy along it, the feet stand on it); **units** under windows (a short top to grab, a step for the feet); a **sign's** bracket out from the wall (a short bar to hang from, no use to the feet); a **balcony**, a slab a metre out with a rail round it (a good grip, the slab under it to stand on). Each only where the face has room in front of it, all of it, to its depth. All are drawn (thin boxes, not stood on), and now so is every pipe (a thing to climb should be seen) and every hold a course places by hand (`holdProps`). Sills stay undrawn in the plain looks: there are some 400 a chunk, and they'd nearly double the city's geometry.
+- *Caught side-on, one-handed.* A hold to the side of the body (an arm reaches further out sideways than up the front), or too small for two hands at once (a pipe, a bracket), is caught by the near hand alone. The body hangs turned off it, the free arm out, and swings square under it as the other hand comes on (beside it on a sill; under it on a pipe; behind it along a bracket). A spring across to a hold beside is caught the same way, leading hand first.
+- *Climbs by what's asked and what's there* (`hang`):
+  - **up:** a hold the feet can stand on (a ledge, a unit, a balcony) is stepped up onto, knee and then foot, and stood on, chest to the wall, hands flat on it; from there a reach and a little jump (`up-from-standing`). A pipe goes up hand over hand, knees clamping it, the feet straddling it and stepping in turn. Anything else is sprung from, as before.
+  - **up and to a side:** sprung for a hold up that way (`diagonal`); with nothing that way, straight up.
+  - **along the face:** shimmied hand over hand, the hands leapfrogging in 0.45 m steps at 1.1 m/s, never into a building standing against the face; at the hold's end, or off something small, sprung across to a hold beside (`across`). Two and a half seconds of going along since last down and it lets go: a traverse, not a way across a block.
+- *Scenes:* `pipe-one-hand` (a one-armed catch on a pipe to the side, and up it), `ledge-step-up`, `shimmy-across` (along a sill, across to a pipe, up it), `diagonal-unit` (up and across to a unit, stood on, the lip). Over the street test's held lines: 166 grabs, 55 of them one-handed; climbs 284 up, 43 shimmies, 13 pipes, 13 step-ups (10 then up from standing), 12 diagonals. The time split is the same as before (hanging 24%, on the street 18%).
+- *Found on the way:* a hold up and to the side with the stick a little off square left it hanging for good (neither straight up nor across); it goes straight up now. A shimmy could carry the body into a building abutting the face; it stops there now.
+
 ## The plan (`plan.ts`)
 
 Where a heading leads, further than the next jump. A route is the runner itself run on ahead: a

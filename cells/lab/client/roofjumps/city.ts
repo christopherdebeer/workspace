@@ -43,7 +43,7 @@ export interface Course {
   alone?: boolean;
 }
 
-export type HoldKind = 'edge' | 'rail' | 'sill' | 'pipe' | 'face' | 'bar';
+export type HoldKind = 'edge' | 'rail' | 'sill' | 'pipe' | 'face' | 'bar' | 'ledge' | 'ac' | 'sign' | 'balcony';
 /**
  * Somewhere to put a hand or a foot: a line from a to b, facing (nx, nz) (level, out from the wall; 0, 0 for a rail).
  * A face is the one that isn't a line: the whole of a wall, from a at its foot to b at its top.
@@ -52,9 +52,14 @@ export type HoldKind = 'edge' | 'rail' | 'sill' | 'pipe' | 'face' | 'bar';
  *   edge  hand: grab   foot: push off, land on      rail  hand: plant   foot: balance along
  *   sill  hand: grab   foot: toe                    face  hand: steady  foot: tread (run along, run up, kick off)
  *   pipe  hand: grip   foot: clamp                  bar   hand: swing (a pipe across an alley, under which to go)
+ *   ledge hand: grab, shimmy  foot: stand (a stone band across a face: two hands, along it, toes on it)
+ *   ac    hand: grab (short)  foot: step (a unit under a window: its top's front edge)
+ *   sign  hand: hang (short)  foot: none (a bracket out from the wall: a bar to hang from, one hand or two along it)
+ *   balcony hand: grab, shimmy  foot: stand (its rail: a good grip, and a slab under it to put the feet on)
  */
 export interface Hold { kind: HoldKind; hand: string; foot: string; ax: number; ay: number; az: number; bx: number; by: number; bz: number; nx: number; nz: number }
 export const USES: Record<HoldKind, { hand: string; foot: string }> = {
+  ledge: { hand: 'grab', foot: 'stand' }, ac: { hand: 'grab', foot: 'step' }, sign: { hand: 'hang', foot: '' }, balcony: { hand: 'grab', foot: 'stand' },
   edge: { hand: 'grab', foot: 'push' }, sill: { hand: 'grab', foot: 'toe' }, pipe: { hand: 'grip', foot: 'clamp' }, rail: { hand: 'plant', foot: 'balance' }, face: { hand: 'steady', foot: 'tread' }, bar: { hand: 'swing', foot: '' },
 };
 /** a hold, and the point on it nearest what was asked */
@@ -72,6 +77,27 @@ export interface Region { kind: RegionKind; x0: number; z0: number; x1: number; 
 export interface Chunk { cx: number; cz: number; boxes: Box[]; props: Box[]; cells: number[][]; holds: Hold[]; hcells: number[][]; regions: Region[] }
 
 const key = (cx: number, cz: number) => `${cx},${cz}`;
+
+/** what's drawn of a hold: thin boxes, off the lattice, not stood on (a pipe a column, a sill a band, a ledge a deeper one, a
+ * unit a box, a sign's bracket and board, a balcony's slab and rail); nothing for what's part of a box already (an edge, a face) */
+export function holdProps(h: Hold): Box[] {
+  const { nx, nz } = h, len = Math.hypot(h.bx - h.ax, h.bz - h.az), ux = len ? (h.bx - h.ax) / len : -nz, uz = len ? (h.bz - h.az) / len : nx;
+  // (a box from a to b along the hold, from o0 to o1 out from it (negative: back toward the wall), between y0 and y1)
+  const box = (o0: number, o1: number, y0: number, y1: number, tag: Tag, w = 0): Box => {
+    const xs = [h.ax + nx * o0 - ux * w, h.ax + nx * o1 - ux * w, h.bx + nx * o0 + ux * w, h.bx + nx * o1 + ux * w], zs = [h.az + nz * o0 - uz * w, h.az + nz * o1 - uz * w, h.bz + nz * o0 + uz * w, h.bz + nz * o1 + uz * w];
+    return { x0: Math.min(...xs), x1: Math.max(...xs), z0: Math.min(...zs), z1: Math.max(...zs), y0, y1, tag };
+  };
+  switch (h.kind) {
+    case 'pipe': return [box(0.01, 0.11, h.ay, h.by, TAG.BAR, 0.05)];
+    case 'sill': return [box(0, 0.12, h.ay - 0.06, h.ay, TAG.RIM)];
+    case 'ledge': return [box(-0.3, 0, h.ay - 0.22, h.ay, TAG.RIM)];
+    case 'ac': return [box(-0.48, 0.02, h.ay - 0.55, h.ay, TAG.UNIT)];
+    case 'sign': { const sx = h.bx - h.ax, sz = h.bz - h.az, l = Math.hypot(sx, sz) || 1, px = -sz / l * 0.03, pz = sx / l * 0.03, ext = (o0: number, o1: number, y0: number, y1: number, tag: Tag): Box => { const xs = [h.ax + (sx / l) * o0 - px, h.ax + (sx / l) * o1 + px], zs = [h.az + (sz / l) * o0 - pz, h.az + (sz / l) * o1 + pz]; return { x0: Math.min(...xs), x1: Math.max(...xs), z0: Math.min(...zs), z1: Math.max(...zs), y0, y1, tag }; };
+      return [ext(-0.2, l + 0.05, h.ay - 0.05, h.ay + 0.03, TAG.BAR), ext(0.05, l, h.ay - 0.85, h.ay - 0.12, TAG.UNIT)]; }
+    case 'balcony': return [box(-1, 0, h.ay - 1.15, h.ay - 1, TAG.SLAB), box(-0.05, 0, h.ay - 1, h.ay, TAG.BAR)];
+    default: return [];
+  }
+}
 
 export class City {
   private chunks = new Map<string, Chunk>();
@@ -141,9 +167,13 @@ export class City {
     });
     // (the holds: from the boxes, by their own dice, so the boxes are the same with or without them)
     const holds = this.holdsOf(boxes, seeded(hash(this.seed, cx, cz, 91)), authored);
+    // (fixtures on the faces, by their own dice again, so sills and pipes are where they were: drawn, and holds)
+    const fixtures = authored ? { holds: [] as Hold[], props: [] as Box[] } : this.fixturesOf(boxes, seeded(hash(this.seed, cx, cz, 95)));
+    holds.push(...fixtures.holds);
     if (authored) for (const h of this.course!.holds ?? []) holds.push({ ...h, ...USES[h.kind] });
     // (bars: a pipe across some alleys between two roofs of a height, a little above them, on posts: by their own dice)
-    const props: Box[] = [], br = seeded(hash(this.seed, cx, cz, 93)), blds = boxes.filter((b) => b.tag === TAG.BUILDING);
+    // (what's drawn of the holds: every pipe (a thing to climb should be seen), and every hold a course places by hand)
+    const props: Box[] = [...fixtures.props, ...holds.filter((h) => h.kind === 'pipe').flatMap((h) => holdProps(h)), ...(authored ? (this.course!.holds ?? []).filter((h) => h.kind !== 'pipe').flatMap((h) => holdProps({ ...h, ...USES[h.kind] })) : [])], br = seeded(hash(this.seed, cx, cz, 93)), blds = boxes.filter((b) => b.tag === TAG.BUILDING);
     if (authored) for (const b of this.course!.bars ?? []) {
       props.push({ x0: b.x0, x1: b.x1, z0: b.z0, z1: b.z1, y0: b.y - 0.04, y1: b.y + 0.04, tag: TAG.BAR });
       const alongX = b.x1 - b.x0 >= b.z1 - b.z0, mx = (b.x0 + b.x1) / 2, mz = (b.z0 + b.z1) / 2;
@@ -188,6 +218,58 @@ export class City {
       if (gr() < 0.2) place('nogo', 1, 1.5, 0.15, TAG.SKYLIGHT);
     }
     return { cx, cz, boxes, props, cells, holds, hcells, regions };
+  }
+
+  /**
+   * What's fixed to a chunk's building faces, beyond sills and pipes: a stone ledge across a face at a storey, units under
+   * windows, a sign's bracket out from the wall, a balcony. Each a hold (its kind says what a hand and a foot do with it) and
+   * what's drawn of it (thin boxes, off the lattice, not stood on). Only where the face has room in front of it.
+   */
+  fixturesOf(boxes: Box[], rand: Rand): { holds: Hold[]; props: Box[] } {
+    const holds: Hold[] = [], props: Box[] = [];
+    const hold = (kind: HoldKind, ax: number, ay: number, az: number, bx: number, by: number, bz: number, nx: number, nz: number) => holds.push({ kind, ...USES[kind], ax, ay, az, bx, by, bz, nx, nz });
+    const top = (x: number, z: number) => { let h = 0; for (const o of boxes) if (x >= o.x0 && x < o.x1 && z >= o.z0 && z < o.z1) h = Math.max(h, o.y1); return h; };
+    // (a box from two corners along the face, out to `out`, between y0 and y1)
+    const slab = (px: number, pz: number, qx: number, qz: number, nx: number, nz: number, o0: number, o1: number, y0: number, y1: number, tag: Tag) => {
+      const xs = [px + nx * o0, px + nx * o1, qx + nx * o0, qx + nx * o1], zs = [pz + nz * o0, pz + nz * o1, qz + nz * o0, qz + nz * o1];
+      props.push({ x0: Math.min(...xs), x1: Math.max(...xs), z0: Math.min(...zs), z1: Math.max(...zs), y0, y1, tag });
+    };
+    for (const b of boxes) {
+      if (b.tag !== TAG.BUILDING || b.y1 - b.y0 < 2 * STOREY) continue;
+      const storeys = Math.floor((b.y1 - 0.5) / STOREY);
+      for (const [ax, az, bx, bz, nx, nz] of [[b.x0, b.z0, b.x1, b.z0, 0, -1], [b.x0, b.z1, b.x1, b.z1, 0, 1], [b.x0, b.z0, b.x0, b.z1, -1, 0], [b.x1, b.z0, b.x1, b.z1, 1, 0]] as const) {
+        const len = Math.hypot(bx - ax, bz - az); if (len < 3) continue;
+        const ux = (bx - ax) / len, uz = (bz - az) / len, at = (t: number): [number, number] => [ax + ux * t, az + uz * t];
+        // (room in front, at a height: nothing standing there as high)
+        // (room in front, under what's fixed there: nothing standing up to its underside, along it and out to its depth)
+        const open = (t0: number, t1: number, out: number, y0: number) => { for (let i = 0; i <= 4; i++) for (const o of [0.02, out / 2, out]) { const [x, z] = at(t0 + ((t1 - t0) * i) / 4); if (top(x + nx * o, z + nz * o) > y0 - 0.02) return false; } return true; };
+        const k = () => 1 + Math.floor(rand() * Math.max(1, storeys - 1));
+        // (a ledge: a stone band the face's length, at a storey)
+        if (rand() < 0.25) { const y = k() * STOREY - 0.4; if (y < b.y1 - 1 && open(0.1, len - 0.1, 0.35, y - 0.22)) { const [p, q] = [at(0.1), at(len - 0.1)]; slab(p[0], p[1], q[0], q[1], nx, nz, 0, 0.3, y - 0.22, y, TAG.RIM); hold('ledge', p[0] + nx * 0.3, y, p[1] + nz * 0.3, q[0] + nx * 0.3, y, q[1] + nz * 0.3, nx, nz); } }
+        // (units under windows: a storey's sill height, a few along)
+        if (rand() < 0.35) for (let n = 1 + Math.floor(rand() * 3); n > 0; n--) {
+          const t = 0.8 + rand() * (len - 1.6), y = k() * STOREY + 0.9; if (y > b.y1 - 0.8 || !open(t - 0.45, t + 0.45, 0.55, y - 0.55)) continue;
+          const [p, q] = [at(t - 0.45), at(t + 0.45)]; slab(p[0], p[1], q[0], q[1], nx, nz, 0, 0.5, y - 0.55, y, TAG.UNIT); hold('ac', p[0] + nx * 0.48, y, p[1] + nz * 0.48, q[0] + nx * 0.48, y, q[1] + nz * 0.48, nx, nz);
+        }
+        // (a sign's bracket out from the wall, its board hung under it)
+        if (rand() < 0.15) {
+          const t = 1 + rand() * (len - 2), y = k() * STOREY + 1.6; const [x, z] = at(t);
+          if (y < b.y1 - 0.8 && open(t - 0.05, t + 0.05, 1.1, y - 0.85)) {
+            // (both thin across the face: 6 cm)
+            const thin = (o0: number, o1: number, y0: number, y1: number, tag: Tag) => slab(x - ux * 0.03, z - uz * 0.03, x + ux * 0.03, z + uz * 0.03, nx, nz, o0, o1, y0, y1, tag);
+            thin(0, 1.05, y - 0.05, y + 0.03, TAG.BAR); thin(0.25, 1.0, y - 0.85, y - 0.12, TAG.UNIT);
+            hold('sign', x + nx * 0.2, y, z + nz * 0.2, x + nx * 1.0, y, z + nz * 1.0, nx, nz); }
+        }
+        // (a balcony: a slab a metre out, a rail round its front)
+        if (rand() < 0.2) {
+          const t = 1.6 + rand() * (len - 3.2), y = k() * STOREY; if (y > b.y1 - 1.2 || !open(t - 1.2, t + 1.2, 1.05, y - 0.15)) continue;
+          const [p, q] = [at(t - 1.2), at(t + 1.2)];
+          slab(p[0], p[1], q[0], q[1], nx, nz, 0, 1.0, y - 0.15, y, TAG.SLAB); slab(p[0], p[1], q[0], q[1], nx, nz, 0.95, 1.0, y, y + 1.0, TAG.BAR);
+          hold('balcony', p[0] + nx * 1.0, y + 1.0, p[1] + nz * 1.0, q[0] + nx * 1.0, y + 1.0, q[1] + nz * 1.0, nx, nz);
+        }
+      }
+    }
+    return { holds, props };
   }
 
   /** the holds a chunk's boxes offer */

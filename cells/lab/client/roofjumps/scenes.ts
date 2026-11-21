@@ -9,7 +9,7 @@
  * Courses run along +z from a start facing +z (the figure's left is +x). Heights in metres; a storey is 3.
  */
 import { City, TAG } from './city';
-import type { Box, Course } from './city';
+import type { Box, Course, HoldKind } from './city';
 import { Runner } from './runner';
 import type { Input } from './runner';
 import { Rig } from './rig';
@@ -227,6 +227,66 @@ export const stairwell = (start: number): Course => {
   return { boxes, holds: [rail(30.6, 12.9, 14, 30.6, 9.9, 19), rail(30.6, 9.9, 19, 30.6, 9.9, 21), rail(30.6, 9.9, 21, 29.4, 9.9, 21), rail(29.4, 9.9, 21, 29.4, 9.9, 19), rail(29.4, 9.9, 19, 29.4, 6.9, 13)], start: { x: start, z: 4 }, alone: true };
 };
 
+/**
+ * The holds' scenes: across a 5.5 m alley from a 6 m roof, a jump at a taller face comes up short, and what's on the face
+ * decides the climb. Each steered as a player would: into the wall, or along it while hanging.
+ */
+function holdScenes(): Scene[] {
+  const F = 25.5, out = (k: HoldKind) => (k === 'ledge' ? 0.3 : k === 'ac' ? 0.48 : 0);
+  const H = (kind: HoldKind, x0: number, x1: number, y: number) => ({ kind, ax: x0, ay: y, az: F - out(kind), bx: x1, by: y, bz: F - out(kind), nx: 0, nz: -1 });
+  const pipe = (x: number, top: number) => ({ kind: 'pipe' as const, ax: x, ay: 0, az: F, bx: x, by: top, bz: F, nx: 0, nz: -1 });
+  const course = (hi: number, holds: Course['holds'], x = 32): Course => ({ boxes: [B(20, 44, 0, 20, 6), B(20, 44, F, 40, hi)], holds, start: { x, z: 8 }, alone: true });
+  // (run at the lip and jump; hanging, steered by `steer`; up top, stand)
+  const input = (hi: number, steer: (r: Runner) => Input) => (t: number, r: Runner, mem: Record<string, number>): Input => {
+    if (r.y > hi - 0.1 && r.state === 'ground') return none;
+    if (r.state === 'climb') return steer(r);
+    if (!mem.jumped && r.state === 'ground' && r.z > 19.3) { mem.jumped = 1; return { ...go(0), jump: true }; }
+    return go(0);
+  };
+  const made = (r: Run, k: string) => ((r.runner.climbsBy as Record<string, number>)[k] ?? 0);
+  const onTop = (hi: number) => ({ says: `and onto the ${hi} m roof`, check: (r: Run) => ok(r.runner.y > hi - 0.1, `ended at y ${r.runner.y.toFixed(1)}; ${seq(r)}; ${JSON.stringify(r.runner.climbsBy)}`) });
+  return [
+    {
+      key: 'pipe-one-hand', title: 'A pipe to the side, one hand, and up it',
+      asks: 'Short of a 15 m roof with nothing on the face but a drainpipe 0.7 m to the side of the jump. A hand goes out sideways to it, the body hanging turned off it; it comes square, the other hand on, and goes up the pipe hand over hand to the lip.',
+      watch: 'The one-armed catch, side-on; the swing square; the knees clamping the pipe on the way up.',
+      course: course(15, [pipe(32.7, 15)]), seconds: 8, input: input(15, () => go(0)),
+      should: [...commonShoulds,
+        { says: 'caught one-handed, to the side', check: (r) => ok(r.runner.oneHanded > 0, `${r.runner.oneHanded} one-handed`) },
+        { says: 'up the pipe hand over hand', check: (r) => ok(made(r, 'pipe') > 0, JSON.stringify(r.runner.climbsBy)) },
+        onTop(15)],
+    },
+    {
+      key: 'ledge-step-up', title: 'A ledge, stepped up onto',
+      asks: 'Short of an 11.5 m roof, a stone ledge across the face at 8.6 m. Caught; a foot is got onto it and the body stands up on it, the chest to the wall; from standing, a reach and a jump to the lip.',
+      watch: 'The step-up (knee on, stood up) and the jump from standing, against springing from a hang.',
+      course: course(11.5, [H('ledge', 20.1, 43.9, 8.6)]), seconds: 7, input: input(11.5, () => go(0)),
+      should: [...commonShoulds,
+        { says: 'stepped up onto the ledge, and up from standing on it', check: (r) => ok(made(r, 'step-up') > 0 && made(r, 'up-from-standing') > 0, JSON.stringify(r.runner.climbsBy)) },
+        onTop(11.5)],
+    },
+    {
+      key: 'shimmy-across', title: 'Along a sill, across to a pipe',
+      asks: 'Short of a 15 m roof; a sill at 9 m that stops short, a pipe 1.6 m past its end. Steered along the wall: shimmied hand over hand to the sill\'s end, a spring across to the pipe (the leading hand first), and up it.',
+      watch: 'The hands leapfrogging along the sill; the sideways spring and one-armed catch; the pipe.',
+      course: course(15, [H('sill', 27, 31, 9), pipe(32.6, 15)], 29), seconds: 9.5, input: input(15, (r) => (r.x < 32.2 ? { x: 1, z: 0.15, jump: false } : go(0))),
+      should: [...commonShoulds,
+        { says: 'shimmied along the sill, then across to the pipe', check: (r) => ok(made(r, 'shimmy') > 0 && made(r, 'across') > 0, JSON.stringify(r.runner.climbsBy)) },
+        { says: 'and up the pipe', check: (r) => ok(made(r, 'pipe') > 0, JSON.stringify(r.runner.climbsBy)) },
+        onTop(15)],
+    },
+    {
+      key: 'diagonal-unit', title: 'Up and across to a unit, and up from it',
+      asks: 'Short of a 15 m roof; a sill at 9 m, and up and to the side a unit under a window. Steered up and that way: sprung diagonally for the unit, stepped up onto it, and from standing on it, the lip.',
+      watch: 'The diagonal spring and its one-handed catch; the unit used as a step.',
+      course: course(15, [H('sill', 27, 33, 9), H('ac', 30.6, 31.5, 11.9)], 29), seconds: 7, input: input(15, (r) => (r.y < 9 ? { x: 0.7, z: 0.7, jump: false } : go(0))),
+      should: [...commonShoulds,
+        { says: 'sprung up and across to the unit, and stepped up onto it', check: (r) => ok(made(r, 'diagonal') > 0 && made(r, 'step-up') > 0, JSON.stringify(r.runner.climbsBy)) },
+        onTop(15)],
+    },
+  ];
+}
+
 export const SCENES: Scene[] = [
   {
     key: 'transfer-clean', title: 'A clean transfer, two gaps',
@@ -410,6 +470,7 @@ export const SCENES: Scene[] = [
       { says: 'and up from it onto the 12 m roof', check: (r) => ok(r.runner.y > 11.9, `ended at y ${r.runner.y.toFixed(1)}; ${seq(r)}`) },
     ],
   },
+  ...holdScenes(),
   {
     key: 'underbar', title: 'Under a bar across a gap',
     asks: 'A bar across a 2.4 m gap, 1.3 m above the roofs. Under it feet first, hands on it: is there room for the hips and the trailing foot, and does the body actually pass beneath it?',

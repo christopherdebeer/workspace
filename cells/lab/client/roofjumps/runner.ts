@@ -71,8 +71,10 @@ export interface Body {
   footing?: Record<'L' | 'R', Contact>; letGo?: (side: number) => void;
   reportShoe?: (side: number, p: [number, number, number]) => void;
   stanceFrac?: number; pushAlong?: number; pushAcross?: number; bounce?: number; vx?: number; vy?: number; vz?: number; roomAhead?: number; roomAway?: number; turnAhead?: number; hangT?: number; from?: string; inStep?: (side: number) => { from: [number, number, number]; to: [number, number, number]; k: number; off?: boolean } | null; wallPhase?: number; near?: number; against?: number; nextFoot?: { side: number; p: [number, number, number]; t: number } | null; stepOver?: number; gait?: { stance: number; flight: number }; stepLift?: number; shift?: number; saveKind?: string; saveT?: number; saveSide?: number; ttc?: number; flightT?: number; swing?: number; swingOut?: number; swingLine?: [number, number, number] | null; swingFoot?: { side: number; press: number } | null; pulling?: boolean; teeter?: number; precise?: boolean; swingFeet?: { ax: number; az: number; t: number } | null;
-  /** hanging on the way up a face: 0 caught, 1 loading, 2 springing for the next hold */
+  /** hanging on a face: 0 caught, 1 loading, 2 springing for the next hold, 3 shimmying, 4 up a pipe, 5 stepping up onto it, 6 stood on it */
   chainPhase?: number;
+  /** hanging by one hand: 1 the left, -1 the right */
+  oneHand?: number;
   phase: number; lead: number; land: number; turn: number; climbT: number; wallT: number;
   /** which side the wall is on, running along one: 1 the figure's +x, -1 the other */
   wallSide: number;
@@ -117,6 +119,8 @@ const TIC = 0.27, TIC_UP = 6.3, ALLEY = 3.2;
  * before it goes for it (s) */
 const LIP_BEAT = 0.3, BRACE = 0.35, TEETER = 1.1, LEG = 1.0, LEAN_WAIT = 0.22;
 /** the point of a level hold nearest (x, z) */
+/** a place on a hold, for a hand: how high, which hold, where along it */
+type Spot = { y: number; hold: Hold; x: number; z: number };
 const onHold = (h: Hold, x: number, z: number): P3 => {
   const dx = h.bx - h.ax, dz = h.bz - h.az, t = Math.max(0, Math.min(1, ((x - h.ax) * dx + (z - h.az) * dz) / (dx * dx + dz * dz || 1)));
   return [h.ax + dx * t, h.ay, h.az + dz * t];
@@ -169,8 +173,14 @@ export class Runner implements Body {
   lipReached = 0;
   /** sills and pipes grabbed in the air when a jump failed */
   holdsGrabbed = 0;
+  /** of those, caught one-handed (to a side, or a small hold) */
+  oneHanded = 0;
+  /** climbs from a hang, by kind: shimmies, pipe climbs, step-ups, springs across */
+  climbsBy: Record<string, number> = {};
   /** let go of a hold on purpose: no grabbing again until it's down (not a ladder of grabs and drops down a face) */
   private dropped = false;
+  /** time spent going along a face since last down (shimmying): a traverse, not a way of crossing a block */
+  private travT = 0;
   /** which way the last takeoff came about (a tap, a run-up's foot, an edge met, …) */
   takeoffBy = '';
   /** why there's no run-up, as last planned (or '' when there is one) */
@@ -185,7 +195,13 @@ export class Runner implements Body {
   /** springs from hold to hold up a face; and seconds pressed into a wall in reach, before it goes for it */
   chains = 0; private press = 0;
   /** hanging from a hold on the way up a face: its height, what phase, how long in it, and where it springs from */
-  private chain: { y: number; phase: number; t: number; y0: number; y1: number; next: number; dur?: number } | null = null;
+  /**
+   * Hanging on a face: what's held, and what's being done from it. Phases: 0 caught (coming in under the hands), 1 hanging
+   * (loading for the next), 2 springing (up, up and across, or across to a hold beside), 3 shimmying along it, 4 hand over
+   * hand up a pipe, 5 stepping up onto it (a hold the feet can stand on), 6 stood on it.
+   */
+  private chain: { y: number; phase: number; t: number; y0: number; y1: number; next: number; dur?: number; hold?: Hold; one?: number; turn?: number;
+    x0?: number; z0?: number; x1?: number; z1?: number; to?: Spot | null; stand?: number } | null = null;
   /** up a narrow alley: the way to the wall it started on (ax, az), a point on that wall's face, the faces apart, which
    * wall it's on (1 the first), how long since the last kick, how many, how far along the alley, and its pace along it */
   ch: { ax: number; az: number; ox: number; oz: number; gap: number; side: number; t: number; kicks: number; along: number; pace: number; foot?: P3 | null; footKick?: number } | null = null;
@@ -278,6 +294,8 @@ export class Runner implements Body {
   private steady: { ax: number; az: number; d: number } | null = null;
   /** a heavy landing held at its deepest a while (the emphasis): the legs stay down, the body goes on */
   private legHold = 0;
+  /** hanging by one hand: 1 the left, -1 the right; 0 both or not hanging */
+  get oneHand(): number { return this.chain?.one ?? 0; }
   get chainPhase(): number | undefined { return this.chain ? this.chain.phase : this.atLip >= 0 ? (this.atLip < LIP_BEAT ? 0 : 1) : undefined; }
   braces = 0;
   private bracing = false;
@@ -526,7 +544,7 @@ export class Runner implements Body {
     const sp = this.speed;
     // (facing: up a wall, the wall; up an alley wall to wall, along it (not the way it's crossing); else the way it's going, at
     // any walking pace: a body walking turns to face its way, it doesn't drift sideways or backwards on its feet)
-    const want = this.state === 'climb' || this.state === 'plant' ? Math.atan2(this.wx, this.wz) : this.state === 'chimney' ? Math.atan2(this.tx, this.tz) : sp > WALK ? Math.atan2(this.vx, this.vz) : this.heading;
+    const want = this.state === 'climb' || this.state === 'plant' ? Math.atan2(this.wx, this.wz) + (this.chain?.turn ?? 0) : this.state === 'chimney' ? Math.atan2(this.tx, this.tz) : sp > WALK ? Math.atan2(this.vx, this.vz) : this.heading;
     let d = want - this.heading; d -= Math.round(d / (2 * Math.PI)) * 2 * Math.PI;
     // (on the ground going slowly, the body turns as fast as its feet can be stepped round, not on the spot)
     let turnBy = d * (1 - Math.exp(-16 * dt)); if (this.state === 'ground' && sp < 3) { const most = (4 + 2.5 * sp) * dt; turnBy = Math.max(-most, Math.min(most, turnBy)); }
@@ -643,11 +661,21 @@ export class Runner implements Body {
     // (hanging, loaded: both feet set on the wall under the hips; springing: off it)
     if (this.state === 'climb' && this.chain && this.chain.phase >= 1) {
       if (this.chain.phase === 2) { f.L.on = f.R.on = false; return; }
+      // (stepped up onto what it held: both feet on it, hip-width)
+      if (this.chain.phase === 6 && this.chain.stand !== undefined) {
+        const y = this.chain.stand;
+        f.L.on = f.R.on = true; f.L.p = [this.x + this.wz * 0.12, y, this.z - this.wx * 0.12]; f.R.p = [this.x - this.wz * 0.12, y, this.z + this.wx * 0.12];
+        this.reach.fl = f.L.p; this.reach.fr = f.R.p; this.reach.fn = [0, 1, 0]; return;
+      }
+      // (moving on the face (shimmying, up a pipe): a foot left more than a step behind where it would go is stepped on to
+      // there, the two at different heights so they go in turn)
+      const moving = this.chain.phase === 3 || this.chain.phase === 4;
       for (const [foot, side] of [[f.L, 1], [f.R, -1]] as const) {
-        if (foot.on) continue;
-        const x = this.x + this.wx * (this.R_ + 0.02) + this.wz * side * 0.16, z = this.z + this.wz * (this.R_ + 0.02) - this.wx * side * 0.16;
-        const g = this.city.gripAt(x, this.y + 0.75, z, 0.35, (o) => (o.kind === 'face' || o.kind === 'sill' || o.kind === 'pipe') && o.nx * this.wx + o.nz * this.wz < -0.5);
-        if (g) { foot.on = true; foot.p = [g.x, g.y, g.z]; }
+        const x = this.x + this.wx * (this.R_ + 0.02) + this.wz * side * 0.16, z = this.z + this.wz * (this.R_ + 0.02) - this.wx * side * 0.16, fy = this.y + 0.75 + (moving ? side * 0.15 : 0);
+        if (foot.on && !(moving && Math.hypot(foot.p[0] - x, foot.p[1] - fy, foot.p[2] - z) > 0.35)) continue;
+        const g = this.city.gripAt(x, fy, z, 0.35, (o) => (o.kind === 'face' || o.kind === 'sill' || o.kind === 'pipe') && o.nx * this.wx + o.nz * this.wz < -0.5);
+        // (a pipe straddled: each foot to its own side of it, against the wall, not stood on its line)
+        if (g) { foot.on = true; foot.p = g.hold.kind === 'pipe' ? [g.x + this.wz * side * 0.11 - this.wx * 0.02, g.y, g.z - this.wx * side * 0.11 - this.wz * 0.02] : [g.x, g.y, g.z]; }
       }
       if (f.L.on) this.reach.fl = f.L.p; if (f.R.on) this.reach.fr = f.R.p;
       if (f.L.on || f.R.on) this.reach.fn = [-this.wx, 0, -this.wz];
@@ -1006,7 +1034,13 @@ export class Runner implements Body {
     }
     if (this.state === 'climb') {
       // (hanging: the hands on the hold, let go through the first part of a spring for the next, and on the next one)
-      if (this.chain) return this.chain.phase === 2 && this.chain.t < 0.6 * (this.chain.dur ?? CHAIN_SPRING) ? {} : { ...this.grips };
+      if (this.chain) {
+        const c = this.chain;
+        if (c.phase === 2 && c.t < 0.6 * (c.dur ?? CHAIN_SPRING)) return {};
+        // (stood on it: the hands flat on the wall above, steadying)
+        if (c.phase === 6) { const y = this.y + 1.45, x = this.x + this.wx * (this.R_ - 0.05), z = this.z + this.wz * (this.R_ - 0.05); return { hl: [x + this.wz * 0.22, y, z - this.wx * 0.22], hr: [x - this.wz * 0.22, y, z + this.wx * 0.22] }; }
+        return c.one ? (c.one > 0 ? { hl: this.grips.hl } : { hr: this.grips.hr }) : { ...this.grips };
+      }
       return this.mu < 0.88 ? { ...this.grips } : {};
     }
     if (this.state === 'chimney' && this.ch) {
@@ -1841,13 +1875,14 @@ export class Runner implements Body {
     }
     let best: { y: number; hold: Hold; x: number; z: number; d: number } | null = null;
     for (const h of this.city.holdsNear(this.x, this.z, this.R_ + 0.8)) {
-      if (h.kind !== 'sill' && h.kind !== 'pipe') continue;
+      if (!Runner.HANGS.has(h.kind)) continue;
       const p = onHold(h, this.x, this.z), y = h.kind === 'pipe' ? Math.max(h.ay, Math.min(h.by, this.y + reach * 0.9)) : h.ay, rel = y - this.y;
       // (overhead, the arm long: from about the head up to the reach)
       if (rel < 1.5 * this.build.reachScale || rel > reach) continue;
       // (in front: out from the face on its side, not past its end, and not leaving it)
-      const out = (this.x - p[0]) * h.nx + (this.z - p[2]) * h.nz, d = Math.hypot(this.x - p[0], this.z - p[2]);
-      if (out < -0.05 || out > this.R_ + 0.4 || d > this.R_ + 0.45) continue;
+      // (or beside it: an arm reaches out sideways further than up the front, one hand)
+      const out = (this.x - p[0]) * h.nx + (this.z - p[2]) * h.nz, d = Math.hypot(this.x - p[0], this.z - p[2]), lat = Math.sqrt(Math.max(0, d * d - out * out));
+      if (out < -0.05 || out > this.R_ + 0.4 + (h.kind === 'sign' || h.kind === 'balcony' ? 1 : 0) || d > this.R_ + 0.45 + Math.min(0.35, lat) + (h.kind === 'sign' || h.kind === 'balcony' ? 1 : 0)) continue;
       const toward = -(this.vx * h.nx + this.vz * h.nz), asked = this.mag > 0.1 ? -(this.want[0] * h.nx + this.want[1] * h.nz) : 0;
       if (toward < -1 || (toward < 0.3 && asked < 0.5 && !this.bracing && out > this.R_ + 0.15)) continue;
       // (somewhere to hang: the body's place under it clear)
@@ -1857,8 +1892,12 @@ export class Runner implements Body {
     }
     if (!best) return false;
     const h = best.hold;
-    this.wx = -h.nx; this.wz = -h.nz; this.x = best.x + h.nx * this.R_; this.z = best.z + h.nz * this.R_;
-    this.hangFrom(best); this.chain!.y0 = this.y; this.holdsGrabbed++; this.count('grab' as Move);
+    this.wx = -h.nx; this.wz = -h.nz;
+    // (to a side of the body, or too small a thing for two hands at once (a pipe, a sign's bracket): the near hand alone, the
+    // body turned side-on under it (its other shoulder away from the wall), swinging in square as the other hand comes on)
+    const lat = (best.x - this.x) * -this.wz + (best.z - this.z) * this.wx, side = Math.abs(lat) > 0.25 || h.kind === 'pipe' || h.kind === 'sign';
+    const one = side ? (lat > 0 ? -1 : 1) : 0, turn = side ? Math.sign(lat || 1) * Math.min(1.1, 0.5 + Math.abs(lat)) : 0;
+    this.hangFrom(best, one, turn); this.chain!.y0 = this.y; this.holdsGrabbed++; this.count((side ? 'grab-one' : 'grab') as Move); if (side) this.oneHanded++;
     return true;
   }
 
@@ -2080,24 +2119,49 @@ export class Runner implements Body {
     // (caught: hanging, the hips swinging in under it, before anything's decided)
     this.state = 'climb'; this.move = 'hang'; this.atLip = 0; this.catches++;
   }
-  /** a hold to hang from on the face ahead, between `lo` and `hi`: a sill, or a pipe at that height */
-  private holdUp(lo: number, hi: number): { y: number; hold: Hold; x: number; z: number } | null {
-    const x = this.x + this.wx * (this.R_ + 0.05), z = this.z + this.wz * (this.R_ + 0.05);
-    let best: { y: number; hold: Hold; x: number; z: number } | null = null;
-    for (const h of this.city.holdsNear(x, z, 1.4)) {
-      if ((h.kind !== 'sill' && h.kind !== 'pipe') || h.nx * this.wx + h.nz * this.wz > -0.5) continue;
+  /** what a hand can hang from on a face: a sill, a pipe, a ledge, a unit's top, a sign's bracket, a balcony's rail */
+  private static HANGS = new Set(['sill', 'pipe', 'ledge', 'ac', 'sign', 'balcony']);
+  /** what the feet can stand on, and at what height below the hand: a ledge or a unit's top at it, a balcony's slab a rail below */
+  private standOf(h: Hold): number | null { return h.kind === 'ledge' || h.kind === 'ac' ? h.ay : h.kind === 'balcony' ? h.ay - 1 : null; }
+  /**
+   * The holds on the face ahead (facing `wx, wz`) a hand could take, between `lo` and `hi`, and from `-side` to `side` along
+   * the face of where the body is (a positive `lat` to its right): each with where the hand goes on it.
+   */
+  private holdsAround(lo: number, hi: number, side: number): (Spot & { lat: number })[] {
+    const x = this.x + this.wx * (this.R_ + 0.05), z = this.z + this.wz * (this.R_ + 0.05), tx = -this.wz, tz = this.wx, out: (Spot & { lat: number })[] = [];
+    for (const h of this.city.holdsNear(x, z, side + 1.2)) {
+      if (!Runner.HANGS.has(h.kind) || h.nx * this.wx + h.nz * this.wz > -0.5 || h === this.chain?.hold) continue;
       const p = onHold(h, x, z), y = h.kind === 'pipe' ? Math.min(h.by, hi) : h.ay;
-      if (Math.hypot(p[0] - x, p[2] - z) > 1.2 || y < lo || y > hi) continue;
-      if (!best || y > best.y) best = { y, hold: h, x: p[0], z: p[2] };
+      const lat = (p[0] - x) * tx + (p[2] - z) * tz, off = -((p[0] - x) * this.wx + (p[2] - z) * this.wz);
+      if (Math.abs(lat) > side || off > 1.3 || off < -0.4 || y < lo || y > hi || (h.kind === 'pipe' && y < h.ay + 0.3)) continue;
+      // (and somewhere to hang under it: the body's place clear, not in a building beside)
+      const bx = p[0] + h.nx * this.R_, bz = p[2] + h.nz * this.R_, by = y - this.hangLen;
+      if ([[0, 0], [0.2, 0], [-0.2, 0], [0, 0.2], [0, -0.2]].some(([a, b]) => this.city.heightAt(bx + a, bz + b) > by + 0.3)) continue;
+      out.push({ y, hold: h, x: p[0], z: p[2], lat });
     }
+    return out;
+  }
+  /** a hold to hang from on the face ahead, between `lo` and `hi`, in front (the highest) */
+  private holdUp(lo: number, hi: number): Spot | null {
+    let best: Spot | null = null;
+    for (const g of this.holdsAround(lo, hi, 1.2)) if (!best || g.y > best.y) best = g;
     return best;
   }
-  /** hands on a hold part way up a face: hanging from it, to load and spring for the next */
-  private hangFrom(g: { y: number; hold: Hold; x: number; z: number }): void {
-    const l = Math.hypot(g.hold.bx - g.hold.ax, g.hold.bz - g.hold.az) > 0.1;
-    this.grips = l ? { hl: onHold(g.hold, g.x + this.wz * 0.18, g.z - this.wx * 0.18), hr: onHold(g.hold, g.x - this.wz * 0.18, g.z + this.wx * 0.18) }
-      : { hl: [g.x, g.y + 0.12, g.z], hr: [g.x, g.y - 0.1, g.z] };
-    this.chain = { y: g.y, phase: 0, t: 0, y0: this.y, y1: g.y - this.hangLen, next: 0 };
+  /**
+   * Hands on a hold part way up a face: hanging from it, to load and go on. `one` a hand alone first (1 the left, -1 the
+   * right: reached for to a side, or a hold too small for two at once), the body turned side-on to it by `turn` and coming
+   * square under it as the other hand joins.
+   */
+  private hangFrom(g: Spot, one = 0, turn = 0): void {
+    const h = g.hold, l = Math.hypot(h.bx - h.ax, h.bz - h.az) > 0.1;
+    // (a sign's bracket runs out from the wall: the hands one behind the other along it; a pipe, one above the other)
+    const ox = h.kind === 'sign' ? -this.wx * 0.2 : this.wz * 0.18, oz = h.kind === 'sign' ? -this.wz * 0.2 : -this.wx * 0.18;
+    this.grips = h.kind === 'pipe' || !l ? { hl: [g.x, g.y + 0.12, g.z], hr: [g.x, g.y - 0.1, g.z] }
+      : { hl: onHold(h, g.x + ox, g.z + oz), hr: onHold(h, g.x - ox, g.z - oz) };
+    if (one) { const at: P3 = [g.x, g.y, g.z]; if (one > 0) this.grips.hl = at; else this.grips.hr = at; }
+    this.chain = { y: g.y, phase: 0, t: 0, y0: this.y, y1: g.y - this.hangLen, next: 0, hold: h, one, turn, x0: this.x, z0: this.z, x1: g.x + h.nx * this.R_, z1: g.z + h.nz * this.R_ };
+    // (from a sign's bracket, out from the wall: hung under the hands, not a body's breadth off the wall)
+    if (h.kind === 'sign') { this.chain.x1 = g.x - this.wx * 0.05; this.chain.z1 = g.z - this.wz * 0.05; }
     this.vy = 0; this.vx = this.vz = 0; this.climbT = 0; this.mu = 0;
     this.state = 'climb'; this.move = 'hang'; this.count('hang');
   }
@@ -2292,7 +2356,7 @@ export class Runner implements Body {
   }
 
   private touch(impact: number): void {
-    this.dropped = false;
+    this.dropped = false; this.travT = 0;
     const was = this.move, aimed = this.planned, braced = this.bracing;
     this.resetTakeoff(); this.land = 0; this.approach = null; this.stepTo = 0;
     // (up a storey costs pace)
@@ -2522,51 +2586,141 @@ export class Runner implements Body {
   }
 
   /**
-   * Hanging from a hold on the way up a face, as up a fire escape: caught (the body swinging in under the hands), loaded
-   * (knees up, feet on the wall), and sprung for the next hold: the roof's lip, pulled over; or a sill a storey up, hung
-   * from again. Pressing into the wall goes again as soon as it's loaded; a tap goes at once (the rhythm is yours);
-   * pressing away lets go.
+   * Hanging from a hold on a face: caught (the body swinging in under the hands; one hand first if that's all it got, the
+   * other coming on as it comes square), then what it does is what's asked and what's there:
+   * - up: a hold the feet can stand on (a ledge, a unit, a balcony) is stepped up onto, and from standing on it, the next;
+   *   a pipe is gone up hand over hand; anything else, sprung from for the next hold up or the lip;
+   * - up and to a side: sprung for a hold up that way;
+   * - along the face: shimmied along what it's on, hand over hand; at its end (or from something small), across to a hold beside;
+   * - away: let go. Asked some other way, or up with nowhere further to go, after a beat it lets go too; left alone, it hangs.
+   * A tap goes at once (the rhythm is yours).
    */
   private hang(dt: number, into: number, jump: boolean): void {
-    const c = this.chain!, H = (x: number, z: number) => this.city.heightAt(x, z);
+    const c = this.chain!, H = (x: number, z: number) => this.city.heightAt(x, z), h = c.hold;
+    const tx = -this.wz, tz = this.wx, along = this.mag > 0.1 ? this.want[0] * tx + this.want[1] * tz : 0;
     const wx = this.x + this.wx * (this.R_ + 0.05), wz = this.z + this.wz * (this.R_ + 0.05);
     c.t += dt;
-    if (into < -0.4) { this.dropped = true; this.chain = null; this.vx = -this.wx * 3; this.vz = -this.wz * 3; this.launch(2, 'fall', false, false, 0.4); this.wallCool = 0.3; return; }
+    const letGo = (push: number) => { this.dropped = true; this.chain = null; this.vx = -this.wx * push; this.vz = -this.wz * push; this.launch(push > 2 ? 2 : 0, 'fall', false, false, 0.4); this.wallCool = 0.3; };
+    if (into < -0.4 && c.phase !== 2) { letGo(3); return; }
+    // (a hand alone: the body comes square under it, and once it has, the other hand on)
+    if (c.turn) { c.turn *= Math.exp(-(c.phase === 0 ? 3 : 7) * dt); if (Math.abs(c.turn) < 0.12) c.turn = 0; }
+    if (c.one && !c.turn && c.phase === 1 && h) {
+      // (the other hand on beside the first, where the hold has room (a pipe: under it; a sign's bracket: behind it along it))
+      // (the left on, the right goes to its right (+t), and the other way about)
+      const at = (c.one > 0 ? this.grips.hl : this.grips.hr)!, l = Math.hypot(h.bx - h.ax, h.bz - h.az) > 0.1, off = c.one > 0 ? 0.36 : -0.36;
+      const other: P3 = h.kind === 'pipe' || !l ? [at[0], at[1] - 0.22, at[2]] : h.kind === 'sign' ? onHold(h, at[0] - this.wx * 0.4, at[2] - this.wz * 0.4) : onHold(h, at[0] + tx * off, at[2] + tz * off);
+      if (c.one > 0) this.grips.hr = other; else this.grips.hl = other;
+      c.one = 0;
+    }
     if (c.phase === 0) {
-      // (caught: the body comes in under the hands)
-      const k = Math.min(1, c.t / CHAIN_CATCH); this.y = c.y0 + (c.y1 - c.y0) * (k * k * (3 - 2 * k)); this.mu = k;
+      // (caught: the body comes in under the hands, from where it was)
+      const k = Math.min(1, c.t / (c.one ? CHAIN_CATCH * 2 : CHAIN_CATCH)), e = k * k * (3 - 2 * k);
+      this.y = c.y0 + (c.y1 - c.y0) * e; this.mu = k;
+      if (c.x0 !== undefined && c.x1 !== undefined) { this.x = c.x0 + (c.x1 - c.x0) * e; this.z = c.z0! + (c.z1! - c.z0!) * e; }
       if (k >= 1) { c.phase = 1; c.t = 0; }
       return;
     }
-    if (c.phase === 1) {
-      this.mu = Math.min(1, c.t / CHAIN_LOAD);
-      // (asked some other way than up it, or asked up with nowhere further to go: after a beat, let go, down the face and on
-      // (a hang isn't a place to be stuck); left alone, it hangs)
-      const letGo = () => { this.dropped = true; this.chain = null; this.vx = -this.wx * 1.2; this.vz = -this.wz * 1.2; this.launch(0, 'fall', false, false, 0.4); this.wallCool = 0.3; };
-      if (this.mag > 0.1 && into < 0.3 && c.t > 0.5) { letGo(); return; }
-      if (into > 0.55 && c.t > 1.1) { const top = H(wx, wz); if (!(top - c.y <= 3.3 && top > c.y + 0.3) && !this.holdUp(c.y + 1.2, c.y + 3.6)) { letGo(); return; } }
-      if (!(jump && c.t > 0.05) && !(into > 0.55 && c.t >= CHAIN_LOAD / (0.7 + 0.3 * this.stamina))) return;
-      // (for the next: the roof's lip if it's within a spring and a reach, else a hold a storey or so up)
-      const top = H(wx, wz);
-      if (top - c.y <= 3.3 && top > c.y + 0.3) c.next = top; /* (a lip above it: never the ground read off past the face's end) */
-      else { const g = this.holdUp(c.y + 1.2, c.y + 3.6); if (!g) return; c.next = g.y; }
-      this.effort = 0.8; if (this.tame()) return; this.spend(0.7); this.effort = 0;
-      c.phase = 2; c.t = 0; c.y0 = this.y; c.y1 = c.next - (c.next === top ? this.armReach * 0.75 : this.hangLen); this.chains++; this.count('hang');
-      // (sprung as a body is: as long as gravity takes to rise that far, not shot up it)
-      c.dur = Math.max(CHAIN_SPRING, Math.sqrt((2 * Math.max(0, c.y1 - c.y0)) / TUNE.gravity));
+    const count = (k: string) => { this.climbsBy[k] = (this.climbsBy[k] ?? 0) + 1; };
+    // (springing for a spot: from where it is to under it, up and across as far as it goes, the catch at the end)
+    const spring = (to: Spot, lip: boolean, how: string) => {
+      this.effort = 0.8; if (this.tame()) return false; this.spend(0.7); this.effort = 0;
+      c.phase = 2; c.t = 0; c.y0 = this.y; c.next = to.y; c.to = lip ? null : to; c.y1 = to.y - (lip ? this.armReach * 0.75 : this.hangLen);
+      c.x0 = this.x; c.z0 = this.z; c.x1 = to.x + to.hold.nx * this.R_; c.z1 = to.z + to.hold.nz * this.R_; if (lip) { c.x1 = this.x; c.z1 = this.z; }
+      const across = Math.hypot(c.x1 - c.x0, c.z1 - c.z0);
+      c.dur = Math.max(CHAIN_SPRING, Math.sqrt((2 * Math.max(0, c.y1 - c.y0)) / TUNE.gravity), across / 4);
+      c.one = across > 0.4 ? (((c.x1 - c.x0) * tx + (c.z1 - c.z0) * tz) > 0 ? -1 : 1) : 0;
+      this.chains++; this.count('hang'); count(how); return true;
+    };
+    if (c.phase === 1 || c.phase === 6) {
+      const standing = c.phase === 6;
+      this.mu = standing ? 1 : Math.min(1, c.t / CHAIN_LOAD);
+      const loaded = jump && c.t > 0.05 || c.t >= CHAIN_LOAD / (0.7 + 0.3 * this.stamina);
+      // (what it can reach from here: from standing on a hold, a reach and a little jump above it; hanging, a spring's worth)
+      const reachTop = standing ? this.armReach + 0.9 : 3.3, top = H(wx, wz), lipOk = top > this.y + 0.3 && top - (standing ? this.y : c.y) <= reachTop;
+      const lo = standing ? this.y + 1.6 : c.y + 1.2, hi = standing ? this.y + this.armReach + 0.9 : c.y + 3.6;
+      // (up and to a side: a hold up that way, if there's one)
+      if (into > 0.35 && Math.abs(along) >= 0.45 && loaded) {
+        let best: (Spot & { lat: number }) | null = null;
+        for (const g of this.holdsAround(lo - 0.6, hi, 2.2)) if (g.lat * along > 0.3 && g.y > c.y + 0.4 && (!best || g.y + Math.abs(g.lat) * 0.5 > best.y + Math.abs(best.lat) * 0.5)) best = g;
+        if (best && spring(best, false, 'diagonal')) return;
+      }
+      // (up: straight up, or up and to a side with nothing that way)
+      if (into > 0.55 && loaded) {
+        if (lipOk) { spring({ y: top, hold: h!, x: this.x, z: this.z }, true, standing ? 'up-from-standing' : 'up'); return; }
+        // (a pipe: up it hand over hand, not sprung from)
+        if (!standing && h?.kind === 'pipe' && c.y < h.by - 0.3) { c.phase = 4; c.t = 0; c.one = 0; c.turn = 0; count('pipe'); return; }
+        // (something to stand on: stepped up onto)
+        const st = !standing && h ? this.standOf(h) : null;
+        if (st !== null) { c.phase = 5; c.t = 0; c.y0 = this.y; c.stand = st; c.x0 = this.x; c.z0 = this.z; c.one = 0; c.turn = 0; count('step-up'); return; }
+        const g = this.holdUp(lo, hi); if (g && spring(g, false, standing ? 'up-from-standing' : 'up')) return;
+      }
+      // (along it: shimmied, while there's hold left that way; past its end, or off something small, across to one beside)
+      if (Math.abs(along) >= 0.55 && into < 0.55 && !standing) {
+        const ends = h ? [onHold(h, h.ax, h.az), onHold(h, h.bx, h.bz)] : [], left = ends.length ? Math.max(...ends.map((e) => ((e[0] - this.x) * tx + (e[2] - this.z) * tz) * Math.sign(along))) : 0;
+        const room = this.city.heightAt(this.x + tx * Math.sign(along) * (this.R_ * 0.6 + 0.05), this.z + tz * Math.sign(along) * (this.R_ * 0.6 + 0.05)) <= this.y + 0.3;
+        if (h && h.kind !== 'pipe' && h.kind !== 'sign' && left > 0.3 && room) { c.phase = 3; c.t = 0; count('shimmy'); return; }
+        if (loaded) {
+          let best: (Spot & { lat: number }) | null = null;
+          for (const g of this.holdsAround(c.y - 1.2, c.y + 1.5, 2.4)) if (g.lat * along > 0.35 && (!best || Math.abs(g.lat) + Math.abs(g.y - c.y) < Math.abs(best.lat) + Math.abs(best.y - c.y))) best = g;
+          if (best && spring(best, false, 'across')) return;
+        }
+      }
+      // (nothing it's asked for to be had: after a beat, let go)
+      const stuck = into > 0.55 ? c.t > 1.1 : this.mag > 0.1 ? c.t > (Math.abs(along) >= 0.55 ? 1.1 : 0.5) : false;
+      if (stuck && (into <= 0.55 || !(lipOk || this.holdUp(lo, hi)))) { letGo(1.2); return; }
+      return;
+    }
+    if (c.phase === 3) {
+      // (shimmying: along the hold hand over hand, as long as it's asked and there's hold; the hands leapfrogging)
+      const dir = Math.sign(along), sp = 1.1;
+      this.travT += dt; if (this.travT > 2.5) { letGo(1.2); return; }
+      const ends = [onHold(h!, h!.ax, h!.az), onHold(h!, h!.bx, h!.bz)], left = Math.max(...ends.map((e) => ((e[0] - this.x) * tx + (e[2] - this.z) * tz) * (dir || 1)));
+      // (and only on into clear air: not into a building standing against the face)
+      const nx2 = this.x + tx * dir * (sp * dt + this.R_ * 0.6), nz2 = this.z + tz * dir * (sp * dt + this.R_ * 0.6), clear = this.city.heightAt(nx2, nz2) <= this.y + 0.3 && this.city.heightAt(nx2 - this.wx * 0.1, nz2 - this.wz * 0.1) <= this.y + 0.3;
+      if (!dir || into > 0.55 || left < 0.25 || !clear) { c.phase = 1; c.t = CHAIN_LOAD; return; }
+      this.x += tx * dir * sp * dt; this.z += tz * dir * sp * dt; this.mu = (c.t * sp / 0.45) % 1;
+      // (the leading hand reaches on, the other comes up to it: each a step of 0.45 m, the hands set on the hold between)
+      const L = 0.45, u = (this.x * tx + this.z * tz) * dir, n = Math.floor(u / L), f = u / L - n, hx = this.x + this.wx * this.R_, hz = this.z + this.wz * this.R_;
+      const uLead = n * L + 0.18 + L * sm01(f / 0.5), uTrail = n * L - 0.18 + L * sm01((f - 0.5) / 0.5);
+      const at = (uu: number): P3 => { const d = (uu - u) * dir; return onHold(h!, hx + tx * d, hz + tz * d); };
+      if (dir > 0) { this.grips.hr = at(uLead); this.grips.hl = at(uTrail); } else { this.grips.hl = at(uLead); this.grips.hr = at(uTrail); }
+      return;
+    }
+    if (c.phase === 4) {
+      // (up a pipe hand over hand, the feet clamping it: a hand's reach at a time, to its top; there, the lip if it's in reach)
+      const climb = 1.3, topHand = h!.by - 0.05;
+      if (into < 0.3) { c.phase = 1; c.t = CHAIN_LOAD; return; }
+      c.y = Math.min(topHand, c.y + climb * dt); this.y = c.y - this.hangLen; this.mu = (c.t * 2) % 1;
+      const sw = Math.sin(c.t * Math.PI * 2), px = this.x + this.wx * this.R_, pz = this.z + this.wz * this.R_;
+      this.grips = { hl: [px, c.y + 0.12 + 0.12 * sw, pz], hr: [px, c.y + 0.12 - 0.12 * sw, pz] };
+      if (c.y >= topHand) {
+        const top = H(wx, wz);
+        if (top > c.y - 0.2 && top - c.y <= 1.2) { const lip = this.city.gripAt(wx, top, wz, 0.6, (g) => g.kind === 'edge' && g.nx * this.wx + g.nz * this.wz < -0.9); if (lip) { this.grabTop(lip, top, wx, wz); return; } }
+        c.phase = 1; c.t = CHAIN_LOAD;
+      }
+      return;
+    }
+    if (c.phase === 5) {
+      // (stepping up onto it: pulled up, a knee onto it, stood up on it, the chest to the wall)
+      const k = Math.min(1, c.t / 0.7), e = k * k * (3 - 2 * k), st = c.stand!;
+      const fx = (h!.kind === 'balcony' ? 0.45 : 0.12);
+      const ex = onHold(h!, this.x, this.z), x1 = ex[0] - h!.nx * fx + h!.nx * 0, z1 = ex[2] - h!.nz * fx;
+      this.y = c.y0 + (st - c.y0) * e; this.x = c.x0! + (x1 - c.x0!) * sm01(k * 1.4 - 0.3); this.z = c.z0! + (z1 - c.z0!) * sm01(k * 1.4 - 0.3); this.mu = k;
+      if (k >= 1) { c.phase = 6; c.t = 0; this.move = 'hang'; }
       return;
     }
     // (springing: fast off the wall, slowing into the catch, the body long, arms up for the next)
     const k = Math.min(1, c.t / (c.dur ?? CHAIN_SPRING)), e = 1 - (1 - k) * (1 - k);
     this.y = c.y0 + (c.y1 - c.y0) * e; this.mu = k;
+    if (c.x0 !== undefined && c.x1 !== undefined) { const f = sm01(k); this.x = c.x0 + (c.x1 - c.x0) * f; this.z = c.z0! + (c.z1! - c.z0!) * f; }
     if (k < 1) return;
-    const top = H(wx, wz);
-    if (Math.abs(c.next - top) < 0.05) {
-      const lip = this.city.gripAt(wx, top, wz, 0.5, (g) => g.kind === 'edge' && g.nx * this.wx + g.nz * this.wz < -0.9);
+    if (!c.to) {
+      const top = H(wx, wz), lip = this.city.gripAt(wx, top, wz, 0.5, (g) => g.kind === 'edge' && g.nx * this.wx + g.nz * this.wz < -0.9);
       if (lip) { this.grabTop(lip, top, wx, wz); return; }
     } else {
-      const g = this.holdUp(c.next - 0.05, c.next + 0.05);
-      if (g) { this.hangFrom(g); this.chain!.y0 = this.y; return; }
+      // (caught: across, the leading hand first)
+      const to = c.to, one = c.one ?? 0; this.wx = -to.hold.nx; this.wz = -to.hold.nz;
+      this.hangFrom(to, one, one ? -one * 0.45 : 0); this.chain!.y0 = this.y; this.chain!.x0 = this.x; this.chain!.z0 = this.z; return;
     }
     this.chain = null; this.launch(0, 'fall', false, false, 0.3);
   }

@@ -363,8 +363,20 @@ export class Rig {
         const ph = r.chainPhase ?? 0;
         if (ph === 0) { legs(0.35 + 0.3 * u, 0.5 + 0.4 * u, 0.2 + 0.3 * u, 0.6 + 0.3 * u); p.lean = -0.1; }
         else if (ph === 1) { const k = sm(0, 1, u); legs(0.65 + 0.9 * k, 0.9 + 1.2 * k, 0.55 + 0.85 * k, 0.8 + 1.2 * k); p.lean = -0.1 - 0.15 * k; p.spine = 0.25 * k; }
-        else { const g = sm(0.55, 1, u); legs(-0.05 + 0.8 * g, 0.1 + 1.0 * g, -0.2 + 0.7 * g, 0.25 + 0.9 * g); p.lean = 0.05 - 0.15 * g; p.spine = -0.2 + 0.3 * g; }
-        p.shL = p.shR = 2.9; both('el', 0.3); both('spread', 0.15); p.head = -0.4;
+        else if (ph === 2) { const g = sm(0.55, 1, u); legs(-0.05 + 0.8 * g, 0.1 + 1.0 * g, -0.2 + 0.7 * g, 0.25 + 0.9 * g); p.lean = 0.05 - 0.15 * g; p.spine = -0.2 + 0.3 * g; }
+        // (shimmying along: hanging straight, the hips swaying with each reach, the legs loose)
+        else if (ph === 3) { const sw = Math.sin(u * Math.PI * 2); legs(0.25 + 0.12 * sw, 0.35, 0.25 - 0.12 * sw, 0.35); p.tilt = 0.12 * sw; p.lean = -0.05; }
+        // (up a pipe: the knees drawn up and clamping it, each pull pressing the feet down on it)
+        else if (ph === 4) { const sw = Math.sin(u * Math.PI * 2); legs(1.1 + 0.35 * sw, 1.5 + 0.3 * sw, 1.1 - 0.35 * sw, 1.5 - 0.3 * sw); p.splay = 0.05; p.lean = -0.25; p.spine = 0.25; }
+        // (stepping up onto it: pulled up to the chest, a knee onto it, then stood up on that leg)
+        else if (ph === 5) { const a1 = sm(0, 0.4, u), a2 = sm(0.3, 0.75, u), a3 = sm(0.65, 1, u); legs(0.3 + 1.6 * a2 - 1.7 * a3, 0.4 + 1.9 * a2 - 2.1 * a3, 0.3 + 0.3 * a1 - 0.5 * a3, 0.5 + 0.5 * a2 - 0.85 * a3); p.lean = -0.1 + 0.4 * a2 - 0.35 * a3; p.spine = 0.25 * a2 * (1 - a3); }
+        // (stood on it: upright, the chest to the wall, the knees soft)
+        else { legs(0.12, 0.2, 0.08, 0.16); p.lean = -0.08; p.spine = 0; }
+        p.shL = p.shR = ph === 6 ? 2.2 : ph === 5 ? 2.9 - 1.6 * sm(0, 0.6, u) : 2.9; both('el', ph === 6 ? 0.9 : 0.3); both('spread', 0.15); p.head = ph === 6 ? -0.15 : -0.4;
+        // (by one hand: the other arm out from the body for balance, the body hanging turned off it)
+        const one = r.oneHand ?? 0;
+        if (one > 0) { p.shR = 0.9; p.elR = 0.35; p.spreadR = 1.1; p.tilt = (p.tilt ?? 0) + 0.15; }
+        else if (one < 0) { p.shL = 0.9; p.elL = 0.35; p.spreadL = 1.1; p.tilt = (p.tilt ?? 0) - 0.15; }
         // (from a lip, settled: a still hang, the arms straight, the knees bent and the feet set on the wall under it, the
         // head up to the lip)
         const ht = r.hangT ?? -1;

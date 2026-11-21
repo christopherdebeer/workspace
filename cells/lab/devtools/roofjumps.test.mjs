@@ -93,7 +93,9 @@ const { plan, foresee, TUNE, HOUSE, DIALS, City, Runner, Rig, CHUNK, STOREY, TAG
   for (const h of a.chunk(0, 1).holds) {
     kinds[h.kind] = (kinds[h.kind] ?? 0) + 1;
     const mx = (h.ax + h.bx) / 2, mz = (h.az + h.bz) / 2;
-    assert.ok(h.hand && (h.foot || h.kind === 'bar'), 'each says what it is for, by hand and by foot (a bar, by hand only)');
+    assert.ok(h.hand && (h.foot || h.kind === 'bar' || h.kind === 'sign'), 'each says what it is for, by hand and by foot (a bar or a sign\'s bracket, by hand only)');
+    // (a fixture out from its face (a ledge, a unit, a sign's bracket, a balcony's rail): its wall behind it, within a metre, as high)
+    if (['ledge', 'ac', 'sign', 'balcony'].includes(h.kind)) { assert.ok([0.31, 0.5, 0.25, 1.05].some((o) => a.heightAt(h.ax - h.nx * o, h.az - h.nz * o) >= h.ay), `${h.kind} is fixed to a wall`); continue; }
     if (h.kind === 'pipe') { assert.ok(h.ax === h.bx && h.az === h.bz && h.ay === 0 && h.by > 0); continue; }
     if (h.kind === 'face') { assert.ok(h.by - h.ay >= 2 && a.heightAt(mx - h.nx * 0.01, mz - h.nz * 0.01) >= h.by); continue; }
     // (a bar: across a gap, a little above the roofs at either end)
@@ -111,8 +113,9 @@ const { plan, foresee, TUNE, HOUSE, DIALS, City, Runner, Rig, CHUNK, STOREY, TAG
     for (let i = 0; i < 120 * 60; i++) {
       r.step(1 / 120, { x: dx, z: dz, jump: false });
       const hands = [r.reach.hl, r.reach.hr].filter(Boolean);
-      // (up a face, a hand is on a hold: the lip it's pulling over, or the sill or pipe it hangs from)
-      if (r.state === 'climb') for (const p of hands) assert.ok(city.gripAt(p[0], p[1], p[2], 0.2, (h) => ['edge', 'sill', 'pipe'].includes(h.kind)), `climbing, a hand is on a hold (${r.move})`);
+      // (up a face, a hand is on a hold: the lip it's pulling over, or what it hangs from (a sill, a pipe, a ledge, a unit, a
+      // sign's bracket, a balcony's rail); stood on a ledge, flat on the wall above)
+      if (r.state === 'climb') for (const p of hands) assert.ok(city.gripAt(p[0], p[1], p[2], 0.2, (h) => ['edge', 'sill', 'pipe', 'ledge', 'ac', 'sign', 'balcony', 'face'].includes(h.kind)), `climbing, a hand is on a hold (${r.move})`);
       if (r.move === 'vault') { vaults++; if (hands.length) planted++; }
       // (a foot that's down is on something: the roof it's running on, or a hold: and says which)
       if (r.state === 'ground' && r.speed > 3 && r.move !== 'roll') { strides++; if (r.reach.fl || r.reach.fr) footed++; }
