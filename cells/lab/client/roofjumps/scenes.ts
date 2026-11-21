@@ -262,6 +262,20 @@ export const SCENES: Scene[] = [
     ],
   },
   {
+    key: 'gait-jog', title: 'Gait: a jog on a long flat roof',
+    asks: 'Nothing in the way, half a press: the plainest running there is. Do the legs look like a person jogging: a soft knee at touchdown, the foot under the hips, the heel lifting behind, a little bounce, feet on two close lines that never cross?',
+    watch: 'The knees and feet, from the side and from behind (devtools/roofjumps-legs.mjs films and measures it).',
+    course: { boxes: [B(4, 60, 2, 62, 9)], start: { x: 32, z: 4 }, alone: true }, seconds: 5, input: () => go(0, 0.45),
+    should: [...commonShoulds],
+  },
+  {
+    key: 'gait-run', title: 'Gait: running flat out on a long flat roof',
+    asks: 'Nothing in the way, a full press: the run at speed. Do the legs look like an athlete running: the thigh driven high, the heel folding to the seat, the foot pawing back to land under the hips, a short stance, no stamp, no wobble?',
+    watch: 'The knees and feet, from the side and from behind (devtools/roofjumps-legs.mjs films and measures it).',
+    course: { boxes: [B(4, 60, 2, 62, 9)], start: { x: 32, z: 4 }, alone: true }, seconds: 5.5, input: (t, r) => (r.z > 56 ? none : go(0)),
+    should: [...commonShoulds],
+  },
+  {
     key: 'paint-alley', title: 'The painted alley: an approach, a correction in the air, a catch',
     asks: 'The replay the brushwork looks are judged on (strokes.ts): a roof approach, the stick swung left in the air and back, and a lip caught short across an alley to a higher roof, a tall dark block beyond it and another to the left, so a dry gap in a near wall has something dark behind it to leak. Does the runner still catch, hang and pull up?',
     watch: 'In each look: where the hand is going and when it closes on the coping; which shoe bears weight; the air between the body and the far wall before the catch; the far wall\'s paint staying planted as the eye swings.',
