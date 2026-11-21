@@ -285,7 +285,7 @@ export class Runner implements Body {
   private vaultTo = 0;
   private grips: Reach = {};
   /** each foot's footfall: planted or not, and where */
-  private feet = { L: { on: false, p: [0, 0, 0] as P3, done: false, up: -9, held: null as { from: P3; t: number; need: number } | null }, R: { on: false, p: [0, 0, 0] as P3, done: false, up: -9, held: null as { from: P3; t: number; need: number } | null } };
+  private feet = { L: { on: false, p: [0, 0, 0] as P3, done: false, up: -9, held: null as { from: P3; t: number; need: number; turn?: boolean } | null }, R: { on: false, p: [0, 0, 0] as P3, done: false, up: -9, held: null as { from: P3; t: number; need: number; turn?: boolean } | null } };
   /** a step taken standing: which foot, from where to where, how far through (s) and how long it takes */
   standStep: { side: number; from: P3; to: P3; t: number; dur: number } | null = null;
   /** where each foot last was: on the ground now, or where it left it */
@@ -298,9 +298,10 @@ export class Runner implements Body {
     const f = side > 0 ? this.feet.L : this.feet.R, sp = this.speed; if (f.on || sp < WALK) return null;
     const rate = this.phaseRate, span = this.span, from = Math.PI / 2 + 0.3;
     const d = (((from - (this.phase + (side > 0 ? 0 : Math.PI))) % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI), t = d / Math.max(0.1, rate), dur = (2 * Math.PI - span) / Math.max(0.1, rate);
-    // (held in the air, due down but its swing not done: from where it was drawn when held, to where it's going, by its own clock)
+    // (held in the air, due down but its swing not done: from where it was drawn when held, to where it's going, by its own
+    // clock; one taken up early waiting on its time down hovers just short of the ground meanwhile, not set on it)
     const hd = f.held;
-    if (hd) { const ux = this.vx / sp, uz = this.vz / sp, x = this.x + ux * this.ahead_ + uz * side * this.track_, z = this.z + uz * this.ahead_ - ux * side * this.track_; return { from: hd.from, to: [x, this.city.heightAt(x, z), z], k: Math.min(1, (this.time - hd.t) / hd.need) }; }
+    if (hd) { const ux = this.vx / sp, uz = this.vz / sp, x = this.x + ux * this.ahead_ + uz * side * this.track_, z = this.z + uz * this.ahead_ - ux * side * this.track_; return { from: hd.from, to: [x, this.city.heightAt(x, z), z], k: Math.min(hd.turn ? 1 : 0.9, (this.time - hd.t) / hd.need) }; }
     // (where it'll come down: where it's planned to, if it's the next and there's a plan; else where the stride will put it)
     // (the same choice the foot will make as it lands: the plan if it's still near where the stride would put it)
     const nf = this.nextFoot, ux = this.vx / sp, uz = this.vz / sp, x = this.x + this.vx * t + ux * this.ahead_ + uz * side * this.track_, z = this.z + this.vz * t + uz * this.ahead_ - ux * side * this.track_;
@@ -418,7 +419,7 @@ export class Runner implements Body {
     for (const [side, off, on] of [[1, 0, this.feet.L.on], [-1, Math.PI, this.feet.R.on]] as const) {
       if (on) continue;
       // (a foot on a held swing comes down when that's done, not when the stride says)
-      const hd = (side > 0 ? this.feet.L : this.feet.R).held, d = (((from - (this.phase + off)) % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI), t = hd ? Math.max(0, hd.need - (this.time - hd.t)) + 0.02 : d / rate;
+      const hd = (side > 0 ? this.feet.L : this.feet.R).held, d = (((from - (this.phase + off)) % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI), t = hd ? Math.max(hd.need - (this.time - hd.t) + 0.02, hd.turn ? 0 : d / rate) : d / rate;
       if (!best || t < best.t) best = { side, p: this.nextFall, t };
     }
     return best;
@@ -483,8 +484,9 @@ export class Runner implements Body {
     this.hold = !!inp.hold;
     // (facing: the way it's going; up a wall, the wall)
     const sp = this.speed;
-    // (facing: up a wall, the wall; up an alley wall to wall, along it (not the way it's crossing); else the way it's going)
-    const want = this.state === 'climb' || this.state === 'plant' ? Math.atan2(this.wx, this.wz) : this.state === 'chimney' ? Math.atan2(this.tx, this.tz) : sp > 1 ? Math.atan2(this.vx, this.vz) : this.heading;
+    // (facing: up a wall, the wall; up an alley wall to wall, along it (not the way it's crossing); else the way it's going, at
+    // any walking pace: a body walking turns to face its way, it doesn't drift sideways or backwards on its feet)
+    const want = this.state === 'climb' || this.state === 'plant' ? Math.atan2(this.wx, this.wz) : this.state === 'chimney' ? Math.atan2(this.tx, this.tz) : sp > WALK ? Math.atan2(this.vx, this.vz) : this.heading;
     let d = want - this.heading; d -= Math.round(d / (2 * Math.PI)) * 2 * Math.PI;
     // (on the ground going slowly, the body turns as fast as its feet can be stepped round, not on the spot)
     let turnBy = d * (1 - Math.exp(-16 * dt)); if (this.state === 'ground' && sp < 3) { const most = (4 + 2.5 * sp) * dt; turnBy = Math.max(-most, Math.min(most, turnBy)); }
@@ -543,7 +545,8 @@ export class Runner implements Body {
       return;
     }
     const ground = this.state === 'ground' && this.move !== 'roll' && sp >= WALK, wall = this.state === 'wall', climb = this.state === 'climb';
-    if (!ground && !wall && !climb) { f.L.on = f.R.on = false; return; }
+    // (off the ground, no step is being drawn on it: what was, before a takeoff, says nothing about the landing)
+    if (!ground && !wall && !climb) { f.L.on = f.R.on = false; this.swung = { L: null, R: null }; f.L.held = f.R.held = null; return; }
     // (just caught, swinging in under the hands: the legs hang free till the swing's spent)
     if (climb && this.atLip >= 0 && this.atLip < LIP_BEAT && !this.chain) { f.L.on = f.R.on = false; return; }
     const a = ground ? this.phase : wall ? this.wallPhase + this.lead * Math.PI : this.climbT * 15;
@@ -575,8 +578,9 @@ export class Runner implements Body {
         }
         if (foot.held && this.time - foot.held.t < foot.held.need) swungLong = false;
       }
-      // (a foot taken up early, its swing done: down where it's going, its time down or not)
-      const heldDone = !!foot.held && this.time - foot.held.t >= foot.held.need;
+      // (a foot stepped round in a turn, its swing done: down where it's going, its time down or not; one taken up early only
+      // for being far behind waits for its time, so a straight walk keeps its cadence)
+      const heldDone = !!foot.held && !!foot.held.turn && this.time - foot.held.t >= foot.held.need;
       if ((down || (heldDone && ground)) && !foot.on && !foot.done && swungLong) {
         let p: P3 | null = null;
         if (ground) {
@@ -619,9 +623,10 @@ export class Runner implements Body {
         const bx = foot.p[0] - this.x, bz = foot.p[2] - this.z, back = -(bx * fx + bz * fz), t = walkToRun(sp), other = side > 0 ? f.R : f.L;
         // (or turned over until it's on the other side of the line (a sharp turn at a walk): stepped round, not crossed)
         const hl = Math.cos(this.heading), hz = -Math.sin(this.heading), across = -((foot.p[0] - this.x) * hl + (foot.p[2] - this.z) * hz) * side;
-        if ((other.on || t > 0.5) && (back > (0.42 + 0.03 * sp) * t + Math.min(0.55 * this.build.legScale, this.stance_ - this.ahead_ + 0.08) * (1 - t) || (other.on && t < 0.5 && across > 0.03 * this.build.legScale))) {
+        const turned = other.on && t < 0.5 && across > 0.03 * this.build.legScale;
+        if ((other.on || t > 0.5) && (back > (0.42 + 0.03 * sp) * t + Math.min(0.55 * this.build.legScale, this.stance_ - this.ahead_ + 0.08) * (1 - t) || turned)) {
           foot.on = false; foot.done = false; foot.up = this.time;
-          foot.held = { from: [...foot.p] as P3, t: this.time, need: Math.max(0.3 * (1 - t) + 0.14 * t, Math.hypot(aim[0] - foot.p[0], aim[2] - foot.p[2]) / (2.5 * Math.max(1.5, sp)) + 0.06) };
+          foot.held = { turn: turned, from: [...foot.p] as P3, t: this.time, need: Math.max(0.3 * (1 - t) + 0.14 * t, Math.hypot(aim[0] - foot.p[0], aim[2] - foot.p[2]) / (2.5 * Math.max(1.5, sp)) + 0.06) };
         }
       }
     }

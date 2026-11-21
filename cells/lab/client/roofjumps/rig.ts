@@ -91,7 +91,7 @@ export class Rig {
   /** each hand's reach: how much it has hold of the arm (0..1), and where to */
   private hands = { L: { w: 0, p: [0, 0, 0] as V3 }, R: { w: 0, p: [0, 0, 0] as V3 } };
   /** and each foot's: planted where it was put, the body going over it; and which way what it's on faces */
-  soles = { L: { w: 0, p: [0, 0, 0] as V3, lost: false, yaw: 0, off: [0, 0, 0] as V3, aim: null as V3 | null }, R: { w: 0, p: [0, 0, 0] as V3, lost: false, yaw: 0, off: [0, 0, 0] as V3, aim: null as V3 | null } };
+  soles = { L: { w: 0, p: [0, 0, 0] as V3, lost: false, yaw: 0, off: [0, 0, 0] as V3, aim: null as V3 | null, coming: false }, R: { w: 0, p: [0, 0, 0] as V3, lost: false, yaw: 0, off: [0, 0, 0] as V3, aim: null as V3 | null, coming: false } };
   on: V3 = [0, 1, 0];
   /** each free leg swung out at the hip (rad), so its foot keeps to its own side of the line, not across behind the other;
    * and how far to its own side each free foot was last drawn (m; null when down) */
@@ -531,18 +531,19 @@ export class Rig {
     // (the feet: a footfall is where it is at once, and is left quickly)
     // (the swing leg brought onto the coming footfall over its last tenth of a second, so it's there as it lands, not
     // snatched to it)
-    const nf = r.nextFoot;
+    const nf = r.nextFoot, Ls0 = this.body.legScale;
     for (const [f, to, side] of [[this.soles.L, r.reach.fl, 1], [this.soles.R, r.reach.fr, -1]] as const) {
       // (a foot stepping at a walk, or standing: carried from where it left to where it's going, lifted first and carried after (an arc
       // as high as the step is long), put down; at a run the swing's own pose carries it instead)
       const sf = r.inStep ? r.inStep(side) : null;
-      if (!to && sf && r.state === 'ground') {
+      // (but from a jog up, the last tenth of a second is the landing's, below)
+      if (!to && sf && r.state === 'ground' && !(r.speed > 2.2 && nf && nf.side === side && nf.t < 0.1)) {
         const wk = 1 - sm(2.2, 3.4, r.speed);
         if (wk > 0) {
           // (where it's going, eased toward when that changes in the air (a step planned as the other foot lands), not jumped to)
           const ka = 1 - Math.exp(-(sf.k > 0.85 ? 60 : 18) * dt); f.aim = f.aim ? [f.aim[0] + (sf.to[0] - f.aim[0]) * ka, f.aim[1] + (sf.to[1] - f.aim[1]) * ka, f.aim[2] + (sf.to[2] - f.aim[2]) * ka] : [...sf.to] as V3;
           sf.to = f.aim;
-          const k = sf.k, e = sm(0.1, 0.95, k), len = Math.hypot(sf.to[0] - sf.from[0], sf.to[2] - sf.from[2]), liftH = 0.05 + 0.08 * Math.min(1, len / 0.8), lift = liftH * Math.max(Math.sqrt(Math.max(0, Math.sin(Math.PI * Math.min(1, k * 1.05)))), 0.45 * Math.sqrt(Math.max(0, Math.sin(Math.PI * e)))); /* (and clear of the ground whenever it's travelling) */
+          const k = sf.k, e = sm(0.1, 0.95, k), len = Math.hypot(sf.to[0] - sf.from[0], sf.to[2] - sf.from[2]), liftH = (0.05 + 0.08 * Math.min(1, len / 0.8)) * (1 + 0.3 * Math.max(0, r.speed - 1.5)), lift = liftH * Math.max(Math.sqrt(Math.max(0, Math.sin(Math.PI * Math.min(1, k * 1.05)))), 0.45 * Math.sqrt(Math.max(0, Math.sin(Math.PI * e)))); /* (and clear of the ground whenever it's travelling) */
           // (round its own side of the body, not through it: where the straight way from where it left to where it's going
           // would pass under the body or over to the other side (a sharp turn leaves a foot behind, across the new line), the
           // foot is swung round the hips the way that keeps it on its own side, from exactly where it left to where it lands)
@@ -561,7 +562,12 @@ export class Rig {
         }
       }
       f.aim = null;
-      if (!to && nf && nf.side === side && nf.t < 0.025 && Math.hypot(nf.p[0] - r.x, nf.p[2] - r.z) < 0.6 && Math.abs(nf.p[1] - r.y) < 0.35) { f.p = [nf.p[0], nf.p[1], nf.p[2]]; f.w = Math.max(f.w, 1 - nf.t / 0.025); continue; }
+      // (running, over its last tenth of a second the swinging foot is taken onto its footfall, a place fixed on the ground,
+      // coming down the last few centimetres onto it: so it arrives there nearly still, pawed back to the ground's speed,
+      // not flung forward and stopped dead; at a walk the step drawn above does this)
+      const W = r.speed > 2.2 ? 0.1 : 0.025;
+      f.coming = false;
+      if (!to && nf && nf.side === side && nf.t < W && Math.hypot(nf.p[0] - r.x, nf.p[2] - r.z) < 0.6 + r.speed * nf.t && Math.abs(nf.p[1] - r.y) < 0.35) { const k = nf.t / W; f.p = [nf.p[0], nf.p[1] + 0.09 * Math.sqrt(k) * Ls0, nf.p[2]]; f.w = Math.max(f.w, sm(0, 1, 1 - k)); f.lost = false; f.coming = true; continue; }
       // (a new footfall is held afresh; one let go stays let go)
       // (a new footfall: no pivot carried over)
       if (to && Math.hypot(to[0] - f.p[0] + f.off[0], to[2] - f.p[2] + f.off[2]) > 0.02) f.off = [0, 0, 0];
@@ -638,7 +644,8 @@ export class Rig {
     // the leg being pulled out straight and the foot dragged off its footfall)
     const want: V3 = [0, 0, 0], P0 = this.pelvis(r, this.slip), fw = unit([P0[8], 0, P0[10]]);
     for (const [f, side] of [[this.soles.L, 1], [this.soles.R, -1]] as const) {
-      if (f.w < 0.05) continue;
+      // (a foot still coming down onto its footfall isn't on it: the body neither reaches for it nor gives it up)
+      if (f.w < 0.05 || f.coming) continue;
       const s = point(P0, side * this.body.hipX, -this.body.hipDrop, 0), fall: V3 = [f.p[0] + this.on[0] * this.body.sole, f.p[1] + this.on[1] * this.body.sole, f.p[2] + this.on[2] * this.body.sole];
       const d = sub(fall, s), far = Math.hypot(d[0], d[1], d[2]), R = (this.body.thigh + this.body.shin) * 0.97;
       // (behind, the toe pivot gives the leg a heel's length more)
@@ -702,7 +709,7 @@ export class Rig {
       blk('foreArm' + n, F, b.blocks.foreArm);
       const hip = L ? p.hipL : p.hipR, knee = L ? p.kneeL : p.kneeR;
       const T = sw(rotZ(translate(P, side * b.hipX, -this.body.hipDrop, 0), side * (p.splay + this.legOut[L ? 0 : 1])), hip);
-      let Th = T, K = sw(translate(T, 0, -this.body.thigh, 0), -knee), planted: V3 | null = null;
+      let Th = T, K = sw(translate(T, 0, -this.body.thigh, 0), -knee), planted: V3 | null = null, plantK = 1;
       const sole = L ? this.soles.L : this.soles.R;
       if (sole.w > 0.01) {
         // (planted: the ankle taken from where the pose had it toward its footfall (a sole's depth off what it's on),
@@ -723,7 +730,7 @@ export class Rig {
         this.toe[L ? 0 : 1] = toe;
         // (on it once it's taken the weight: blended from the pose's foot onto the footfall through the touch, all the way on by
         // nine tenths of the weight, so a planted foot doesn't trail a tenth of the body's motion)
-        const wk = Math.min(1, sole.w / 0.9);
+        const wk = Math.min(1, sole.w / 0.9); plantK = wk;
         let to: V3 = [was[0] + (fall[0] - was[0]) * wk, was[1] + (fall[1] - was[1]) * wk, was[2] + (fall[2] - was[2]) * wk];
         let dir = sub(to, s), d = Math.hypot(dir[0], dir[1], dir[2]);
         if (d > most) { to = [s[0] + (dir[0] * most) / d, s[1] + (dir[1] * most) / d, s[2] + (dir[2] * most) / d]; d = most; }
@@ -744,8 +751,13 @@ export class Rig {
         if (Math.abs(kf) > 0.95) z = unit(cross([P[0], P[1], P[2]], y));
         // (on the toe: the foot pitched heel up about its ball)
         const th = this.toe[L ? 0 : 1]; if (th) { const yy = y; z = unit([z[0] * Math.cos(th) - yy[0] * Math.sin(th), z[1] * Math.cos(th) - yy[1] * Math.sin(th), z[2] * Math.cos(th) - yy[2] * Math.sin(th)]); }
+        // (coming onto it, the sole turns from the swing's angle to flat as the weight comes on (a forefoot settling), not in
+        // a frame)
+        if (plantK < 1) { const sz: V3 = unit([Ft[8], Ft[9], Ft[10]]), sy: V3 = unit([Ft[4], Ft[5], Ft[6]]), e = plantK * plantK * (3 - 2 * plantK); z = unit([sz[0] + (z[0] - sz[0]) * e, sz[1] + (z[1] - sz[1]) * e, sz[2] + (z[2] - sz[2]) * e]); const yb = unit([sy[0] + (y[0] - sy[0]) * e, sy[1] + (y[1] - sy[1]) * e, sy[2] + (y[2] - sy[2]) * e]); const xb = unit(cross(yb, z)), y3 = cross(z, xb); Ft = ident(); Ft[0] = xb[0]; Ft[1] = xb[1]; Ft[2] = xb[2]; Ft[4] = y3[0]; Ft[5] = y3[1]; Ft[6] = y3[2]; Ft[8] = z[0]; Ft[9] = z[1]; Ft[10] = z[2]; Ft[12] = planted[0]; Ft[13] = planted[1]; Ft[14] = planted[2]; }
+        else {
         const x = unit(cross(y, z)), y2 = cross(z, x); Ft = ident();
         Ft[0] = x[0]; Ft[1] = x[1]; Ft[2] = x[2]; Ft[4] = y2[0]; Ft[5] = y2[1]; Ft[6] = y2[2]; Ft[8] = z[0]; Ft[9] = z[1]; Ft[10] = z[2]; Ft[12] = planted[0]; Ft[13] = planted[1]; Ft[14] = planted[2];
+        }
       }
       blk('foot' + n, Ft, b.blocks.foot);
       // (where this foot is against the line, if it's free: for the next frame's swing out)
