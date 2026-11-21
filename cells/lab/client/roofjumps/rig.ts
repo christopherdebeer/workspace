@@ -253,11 +253,17 @@ export class Rig {
         break;
       }
       case 'ledge': {
-        // (along something narrow: short steps, the arms out and tipping against each other to keep it)
-        const w = Math.sin(ph * 0.5);
-        stride(ph, Math.min(0.8, s * 0.8), 0);
-        p.shL = p.shR = 0; both('el', 0.1); p.spreadL = 1.3 + 0.3 * w; p.spreadR = 1.3 - 0.3 * w; p.tilt = 0.07 * w; p.twist *= 0.5;
-        p.spine = 0.08; p.lean = 0.14; p.head = 0.1;
+        // (along something narrow, slow: short steps, the feet put one before the other on its line, the knees soft and a little
+        // sunk, the chest upright and the eyes down on where it's going; the arms out to the sides and a little back, below the
+        // shoulder, the elbows soft, still: what corrections there are come from the balance itself (`armBal`), not a rhythm)
+        // (run along it, it's a run: the arms back toward their swing, a little out, as the pace goes up)
+        const run = sm(3, 7, r.speed);
+        stride(ph, Math.min(0.45 + 0.4 * run, s * (0.6 + 0.3 * run)), 0.6 * run);
+        const bal = 1 - run, m = (a: number, b: number) => a + (b - a) * bal;
+        p.shL = m(p.shL, -0.25); p.shR = m(p.shR, -0.25); p.elL = m(p.elL, 0.35); p.elR = m(p.elR, 0.35);
+        p.spreadL = m(0.35, 0.95); p.spreadR = m(0.35, 0.95); p.twist *= 0.4 + 0.6 * run;
+        p.splay = -0.12; p.kneeL += 0.15 * bal; p.kneeR += 0.15 * bal;
+        p.spine = 0.05; p.lean = m(Math.min(0.45, 0.12 + 0.25 * s), 0.06); p.head = m(-0.2 * s, 0.25);
         break;
       }
       case 'roll': {
@@ -633,7 +639,9 @@ export class Rig {
       if (k > 0.01) {
         // (falling to its left (+): the right arm out most)
         const far = this.armBal > 0 ? 'spreadR' : 'spreadL', near = this.armBal > 0 ? 'spreadL' : 'spreadR';
-        t[far] += 1.2 * k; t[near] += 0.45 * k; t.elL += (0.3 - t.elL) * k * 0.7; t.elR += (0.3 - t.elR) * k * 0.7;
+        // (along an edge, held out already: a correction is the far arm lifted a little more, the near one a touch, not flung up)
+        const g = r.move === 'ledge' ? 0.5 : 1;
+        t[far] += 1.2 * k * g; t[near] += 0.45 * k * g; t.elL += (0.3 - t.elL) * k * 0.7; t.elR += (0.3 - t.elR) * k * 0.7;
       } }
     if (dt > 0.2) { for (const key of KEYS) { this.pose[key] = t[key]; this.vel[key] = 0; } }
     else for (const key of KEYS) { this.vel[key] += ((t[key] - this.pose[key]) * w * w - this.vel[key] * c) * dt; this.pose[key] += this.vel[key] * dt; }

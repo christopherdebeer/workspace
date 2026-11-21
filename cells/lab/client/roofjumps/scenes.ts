@@ -297,6 +297,16 @@ function holdScenes(): Scene[] {
         { says: 'across, onto the far roof', check: (r) => ok(r.runner.z > 23 && r.runner.y > 11.9, `ended at z ${r.runner.z.toFixed(1)}, y ${r.runner.y.toFixed(1)}`) }],
     },
     {
+      key: 'edge-walk', title: 'Walking a narrow wall top',
+      asks: 'A light press along a wall top 30 cm wide, across a gap, a roof either end. A traceur walks it balancing: short steps, one foot before the other, the arms out to the sides and a little back, still, corrections from the balance, not a rhythm.',
+      watch: 'The arms (out, low, a little back, soft); the feet on the line; nothing flapping.',
+      course: { boxes: [B(28, 36, 0, 12, 9), B(31.85, 32.15, 12, 22, 9), B(28, 36, 22, 34, 9)], start: { x: 32, z: 6 }, alone: true }, seconds: 14,
+      input: (t, r) => (r.z > 26 ? none : go(0, 0.35)),
+      should: [...commonShoulds,
+        { says: 'walked along the top, balancing (the ledge move)', check: (r) => ok(r.moves.some((m) => m.move === 'ledge'), seq(r)) },
+        { says: 'across, onto the far roof', check: (r) => ok(r.runner.z > 22.5 && r.runner.y > 8.9, `ended at z ${r.runner.z.toFixed(1)}, y ${r.runner.y.toFixed(1)}`) }],
+    },
+    {
       key: 'diagonal-unit', title: 'Up and across to a unit, and up from it',
       asks: 'Short of a 15 m roof; a sill at 9 m, and up and to the side a unit under a window. Steered up and that way: sprung diagonally for the unit, stepped up onto it, and from standing on it, the lip.',
       watch: 'The diagonal spring and its one-handed catch; the unit used as a step.',

@@ -551,6 +551,13 @@ Done from it so far:
   a railing across the way is an edge a long stride short of it, taken from there; the leap clears it, a hand on its rail
   if there's a vault in it, carried up onto the hand if the arc comes short. Scene `rail-hop`: over the railing on a hand,
   the feet clearing it, across a 2.5 m gap.
+- *Balancing along an edge.* It had looked part bad dance, part zombie: the arms straight out at the shoulder and flapping
+  up and down against each other in time with the stride, the legs taking running strides. Now, slow along something
+  narrow: short steps, the feet one before the other on its line, the knees soft, the chest upright and the eyes down on
+  the way; the arms out to the sides and a little back, below the shoulder, the elbows soft, still: corrections come from
+  the balance (the far arm lifted a little more, half what it is elsewhere), not a rhythm. Run along it, it blends back to a
+  run, the arms a little out. Scene `edge-walk`. (Held as a pose with nothing under it, its soft knees put a foot 10 cm
+  into the ground, as the run's and the dash's do; in play the feet are on the edge.)
 - *The eye in the films.* What looked like the eye jammed into the figure's back in alleys was the contact sheets' eye
   only: in play the eye already widens and rises up a face and between walls. The sheets now frame each moment as play
   would (wide up a face, between walls, on a bar, off a wall; aimed by the body's facing off the ground, not by a velocity
