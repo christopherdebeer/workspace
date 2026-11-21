@@ -2,7 +2,7 @@
 // heading and push re-seeded every 100–350 ms for 12 s), how often the runner says a foot is down while the figure has
 // given it up (disagreements); the longest time on the ground walking with no foot down (gaps), and jogging, the longest
 // moment in the air; and how far planted
-// feet slide (cm a second of planted time, the drawn ball of the foot: what stays put as the heel comes up or it pivots).
+// feet slide (and, at a run, the share of the braking and turning done with a foot down: cuts the feet make) (cm a second of planted time, the drawn ball of the foot: what stays put as the heel comes up or it pivots).
 //   node cells/lab/devtools/roofjumps-footing.mjs [--trials N] [scene keys…]
 import { build } from 'esbuild';
 const lab = new URL('../client/roofjumps/', import.meta.url).pathname;
@@ -14,9 +14,11 @@ function rng(seed) { let s = seed >>> 0; return () => ((s = (s * 1664525 + 10139
 /** one run measured */
 function run(world, input, seconds) {
   const r = new M.Runner(world), rig = new M.Rig(); rig.update(1, r); const mem = {};
-  let dis = 0, gap = 0, worstGap = 0, gapAt = 0, fly = 0, worstFly = 0, plantedT = 0, slid = 0; const prev = { L: null, R: null };
+  let dis = 0, gap = 0, worstGap = 0, gapAt = 0, fly = 0, worstFly = 0, plantedT = 0, slid = 0, turnOn = 0, turnAll = 0; const prev = { L: null, R: null };
   for (let i = 0; i < seconds / DT; i++) {
-    const t = i * DT; r.step(DT, input(t, r, mem));
+    const t = i * DT, v0 = [r.vx, r.vz], s0 = r.speed; r.step(DT, input(t, r, mem));
+    // (at a run on the ground, the braking and turning done to the body: how much of it with a foot down)
+    if (r.state === 'ground' && s0 > 3) { const ux = v0[0] / s0, uz = v0[1] / s0, dx = r.vx - v0[0], dz = r.vz - v0[1], along = dx * ux + dz * uz, lat = -dx * uz + dz * ux, g = Math.hypot(Math.min(0, along), lat); turnAll += g; if (r.reach.fl || r.reach.fr) turnOn += g; }
     // (the runner still claiming a foot the figure gave up last step: told, it should have let go)
     const ground = r.state === 'ground' && r.move !== 'roll';
     for (const [k, key] of [['L', 'fl'], ['R', 'fr']]) if (ground && r.reach[key] && rig.soles[k].lost) dis++;
@@ -34,7 +36,7 @@ function run(world, input, seconds) {
       prev[k] = planted ? [ball[0], ball[2]] : null;
     }
   }
-  return { dis, gap: worstGap, gapAt, fly: worstFly, slide: plantedT ? (slid / plantedT) * 100 : 0 };
+  return { dis, gap: worstGap, gapAt, fly: worstFly, onFoot: turnAll > 0.5 ? turnOn / turnAll : null, slide: plantedT ? (slid / plantedT) * 100 : 0 };
 }
 const rows = [];
 for (const key of keys) { const sc = M.SCENES.find((s) => s.key === key); rows.push({ name: key, ...run(new M.City(1, false, sc.course), sc.input, sc.seconds) }); }
@@ -43,6 +45,6 @@ for (let n = 0; n < TRIALS; n++) {
   const input = (t) => { if (t >= next) { next = t + 0.1 + 0.25 * R(); hd += (R() - 0.5) * 3.2; mag = R() < 0.15 ? 0 : 0.2 + 0.8 * R(); } return { x: Math.sin(hd) * mag, z: Math.cos(hd) * mag }; };
   rows.push({ name: `random stick ${n + 1}`, ...run(flat, input, 12) });
 }
-for (const r of rows) console.log(`${r.name.padEnd(22)} disagreements ${String(r.dis).padStart(4)}  walking gap ${(r.gap * 1000).toFixed(0).padStart(4)} ms${r.gap > 0.03 ? ` (at ${r.gapAt.toFixed(2)} s)` : '            '}  jog flight ${(r.fly * 1000).toFixed(0).padStart(4)} ms  slide ${r.slide.toFixed(1)} cm/s`);
+for (const r of rows) console.log(`${r.name.padEnd(22)} disagreements ${String(r.dis).padStart(4)}  walking gap ${(r.gap * 1000).toFixed(0).padStart(4)} ms${r.gap > 0.03 ? ` (at ${r.gapAt.toFixed(2)} s)` : '            '}  jog flight ${(r.fly * 1000).toFixed(0).padStart(4)} ms  slide ${r.slide.toFixed(1)} cm/s${r.onFoot !== null ? `  cut on a foot ${(r.onFoot * 100).toFixed(0)}%` : ''}`);
 const sum = (f) => rows.reduce((a, r) => a + f(r), 0);
 console.log(`total disagreements ${sum((r) => r.dis)}; runs with a walking gap ${rows.filter((r) => r.gap > 0.03).length}/${rows.length}, worst ${(Math.max(...rows.map((r) => r.gap)) * 1000).toFixed(0)} ms; worst jog flight ${(Math.max(...rows.map((r) => r.fly)) * 1000).toFixed(0)} ms; runs sliding over 3 cm/s ${rows.filter((r) => r.slide > 3).length}`);

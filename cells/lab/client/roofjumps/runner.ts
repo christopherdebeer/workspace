@@ -730,7 +730,10 @@ export class Runner implements Body {
         else {
           // (a little past where it belongs, the way the body's going, so the next isn't needed at once)
           const to = home(pick), vx = this.vx * 0.12, vz = this.vz * 0.12; to[0] += vx; to[2] += vz;
-          if (Math.abs(this.city.heightAt(to[0], to[2]) - this.y) <= STEP && !this.city.regionAt(to[0], this.y, to[2])) {
+          // (where it belongs isn't sound (over a lip, on something): a little further back, until it is; a stand is on both feet)
+          const ok = (q: P3) => Math.abs(this.city.heightAt(q[0], q[2]) - this.y) <= STEP && !this.city.regionAt(q[0], this.y, q[2]);
+          for (let n = 0; n < 3 && !ok(to); n++) { to[0] -= fx * 0.12; to[2] -= fz * 0.12; to[1] = this.city.heightAt(to[0], to[2]); }
+          if (ok(to)) {
             // (a foot already in the air from walking: on from where it's got to)
             const sw = !foot.on ? (pick > 0 ? this.swung.L : this.swung.R) : null, e = sw ? sw.k * sw.k * (3 - 2 * sw.k) : 0;
             const from: P3 = sw ? [sw.from[0] + (sw.to[0] - sw.from[0]) * e, sw.from[1] + (sw.to[1] - sw.from[1]) * e, sw.from[2] + (sw.to[2] - sw.from[2]) * e] : [...foot.p] as P3;
@@ -1033,6 +1036,19 @@ export class Runner implements Body {
     // late into a takeoff is still being made as it leaves)
     let cx = e <= a ? ex : (ex / e) * a, cz = e <= a ? ez : (ez / e) * a;
     if (sp > 3) { const ux0 = this.vx / sp, uz0 = this.vz / sp, lat = -cx * uz0 + cz * ux0, most = (14 + 60 / sp) * dt; if (Math.abs(lat) > most) { const k = (Math.sign(lat) * most - lat); cx += -uz0 * k; cz += ux0 * k; } }
+    // (running, the feet make the cut: the body is braked and turned only while a foot is down, none of it in the air between
+    // steps, and with a foot down that much harder (up to three times, all of it from 5 m/s), so the change of way lands in
+    // the foot that's planted and is seen to, while the whole of it takes about as long as before; only running on the open
+    // roof (not along something narrow, where the feet are its own), not stopping short of a lip it was let go at, nor in a roll)
+    { const runK = sp > 3 && edgeD <= 0 && this.rollT <= 0 && this.move === 'run' ? sm01((sp - 3) / 2) : 0;
+      if (runK > 0) {
+        const ux0 = this.vx / sp, uz0 = this.vz / sp, down = this.feet.L.on || this.feet.R.on;
+        const split = (x: number, z: number) => { const al = x * ux0 + z * uz0; return { fwd: Math.max(0, al), br: Math.min(0, al), la: -x * uz0 + z * ux0 }; };
+        const c0 = split(cx, cz); let br = c0.br, la = c0.la;
+        if (!down) { br *= 1 - runK; la *= 1 - runK; }
+        else { const B = 1 + 2 * runK, eS = split(ex, ez); br = Math.max(eS.br, c0.br * B); la = Math.sign(eS.la) * Math.min(Math.abs(eS.la), Math.abs(c0.la) * B); }
+        const al = c0.fwd + br; cx = ux0 * al - uz0 * la; cz = uz0 * al + ux0 * la;
+      } }
     // (and braking or turning takes the feet: the body is a weight carried over them, and they can push it back or round only
     // so hard (`grip`, about 1.4 g), so a hard stop or a sharp turn at pace is two or three steps, leaning against them, not a
     // frame; except stopping short of a lip it was let go at, and in a roll. Slower, less: a walker pushes the body round
