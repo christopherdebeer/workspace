@@ -183,6 +183,22 @@ They're played by distance, not time: each leg at its own place in the runner's 
 
 Measured against it: at a walk the knee bends to 63° in the swing (it was 47°; the capture has 65°) and lands at 22° (it was 18.5°; real walking measured the same way is 21–27°), the heel rises 37° before push-off, and the trunk stays upright; at a jog the swing knee folds to 84° (it was 57°) and the swing foot clears 0.20 m (it was 0.06); the run above 8 m/s is unchanged. The walk's arms swing little, because the captured walker's did: a livelier walk is a matter of choosing another take.
 
+### Weight (`runner.ts` ground, `rig.ts`)
+
+The body had no weight. Braking from 6 m/s into an 85° turn took it to 1.2 m/s and round onto the new heading in an eighth of a second (nearly 4 g), and while it stood on one foot spinning there, the other foot hung in the air for over half a second. The stride's clock runs on pace, so when the pace collapsed, the foot in the air hung with it, swinging round behind and then across. From in front that was a leg flung out sideways and then the legs scissoring: what read as drunk.
+
+Now the feet carry it. Braking and turning take the feet, and they push the body back or round only so hard (`grip`, about 1.4 g). Slower, they push less: a walker pushes only as far as a foot is out from under them, about 2.5 m/s² plus 1.6 for each m/s. So a hard stop is two or three steps and a sharp turn at a walk is stepped round over half a second, not spun on one foot. Running (from 3 m/s, fully by 5) keeps the run's own handling, which the courses are made for, and a reversal (asked back against the way it's going) is a skid braked as hard as before. The figure shows where the weight is:
+
+- **Shared between the feet.** All on one foot when it stands alone. Between two feet, by where the body is along the line from one to the other, so the weight moves across during the double support instead of jumping at the footfall.
+- **Hips over the support.** The hips are carried part of the way over the point of support (about 2 cm each side at a walk; real walkers shift 2–3 cm), so they lead into a turn over the foot that's taking it.
+- **Leaning against the push.** Back over the feet braking, forward driving on, banked into a turn by the sideways push (where push and gravity balance, about half of it in the trunk).
+
+On the wander's sharp turn (the worst moment this morning), the swing foot across the line fell from 41 cm to 11 cm, stamps from 3 to 2, hops at a walk from 3 to 1; the courses hold as before (142 of 144).
+
+Tried and left out: bringing a swinging foot down early to catch the body when it falls off its support (its momentum carried past the standing foot, or too long on one foot). Measured properly, single support was never as long as it looked once braking was spread over steps, and the early footfalls cost stamps.
+
+Two filming bugs were found on the way. The films hid the footfall markers with `feet=0`, which is also the dial that places the feet, so every strip since had planting off (the flag is now `marks=0`). And the legs tool's front and behind were swapped.
+
 ## The plan (`plan.ts`)
 
 Where a heading leads, further than the next jump. A route is the runner itself run on ahead: a

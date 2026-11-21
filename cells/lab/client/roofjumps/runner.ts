@@ -63,7 +63,7 @@ export interface Body {
   balance?: number; balanceV?: number; stamina?: number; effort?: number; time?: number;
   /** a save being made: what went wrong ('short', 'wide', 'long'), how long since the landing, the catching side (1 the
    * figure's left); seconds to the ground in a flight; a flight's planned length; a hang's swing along the wall (m/s) */
-  stanceFrac?: number; bounce?: number; vx?: number; vy?: number; vz?: number; roomAhead?: number; roomAway?: number; turnAhead?: number; hangT?: number; from?: string; inStep?: (side: number) => { from: [number, number, number]; to: [number, number, number]; k: number } | null; wallPhase?: number; near?: number; against?: number; nextFoot?: { side: number; p: [number, number, number]; t: number } | null; stepOver?: number; gait?: { stance: number; flight: number }; stepLift?: number; shift?: number; saveKind?: string; saveT?: number; saveSide?: number; ttc?: number; flightT?: number; swing?: number; swingOut?: number; swingLine?: [number, number, number] | null; swingFoot?: { side: number; press: number } | null; pulling?: boolean; teeter?: number; precise?: boolean; swingFeet?: { ax: number; az: number; t: number } | null;
+  stanceFrac?: number; pushAlong?: number; pushAcross?: number; bounce?: number; vx?: number; vy?: number; vz?: number; roomAhead?: number; roomAway?: number; turnAhead?: number; hangT?: number; from?: string; inStep?: (side: number) => { from: [number, number, number]; to: [number, number, number]; k: number; off?: boolean } | null; wallPhase?: number; near?: number; against?: number; nextFoot?: { side: number; p: [number, number, number]; t: number } | null; stepOver?: number; gait?: { stance: number; flight: number }; stepLift?: number; shift?: number; saveKind?: string; saveT?: number; saveSide?: number; ttc?: number; flightT?: number; swing?: number; swingOut?: number; swingLine?: [number, number, number] | null; swingFoot?: { side: number; press: number } | null; pulling?: boolean; teeter?: number; precise?: boolean; swingFeet?: { ax: number; az: number; t: number } | null;
   /** hanging on the way up a face: 0 caught, 1 loading, 2 springing for the next hold */
   chainPhase?: number;
   phase: number; lead: number; land: number; turn: number; climbT: number; wallT: number;
@@ -115,6 +115,8 @@ const onHold = (h: Hold, x: number, z: number): P3 => {
   return [h.ax + dx * t, h.ay, h.az + dz * t];
 };
 
+/** smoothstep of 0..1 */
+const sm01 = (x: number) => { const t = Math.max(0, Math.min(1, x)); return t * t * (3 - 2 * t); };
 export class Runner implements Body {
   x = 0; y = 0; z = 0; vx = 0; vy = 0; vz = 0;
   heading = 0; state: State = 'ground'; move: Move = 'run'; mu = 0;
@@ -285,23 +287,23 @@ export class Runner implements Body {
   private vaultTo = 0;
   private grips: Reach = {};
   /** each foot's footfall: planted or not, and where */
-  private feet = { L: { on: false, p: [0, 0, 0] as P3, done: false, up: -9, held: null as { from: P3; t: number; need: number; turn?: boolean } | null }, R: { on: false, p: [0, 0, 0] as P3, done: false, up: -9, held: null as { from: P3; t: number; need: number; turn?: boolean } | null } };
+  private feet = { L: { on: false, p: [0, 0, 0] as P3, done: false, up: -9, held: null as { from: P3; t: number; need: number; turn?: boolean} | null }, R: { on: false, p: [0, 0, 0] as P3, done: false, up: -9, held: null as { from: P3; t: number; need: number; turn?: boolean} | null } };
   /** a step taken standing: which foot, from where to where, how far through (s) and how long it takes */
   standStep: { side: number; from: P3; to: P3; t: number; dur: number } | null = null;
   /** where each foot last was: on the ground now, or where it left it */
   get footAt(): { L: P3; R: P3 } { return { L: this.feet.L.p, R: this.feet.R.p }; }
   /** a foot in the air between footfalls, at a walk or standing: where it left, where it's going, and how far there (0..1) */
   /** a foot in the air between footfalls (at a walk or standing): where it left, where it's going, how far there (0..1) */
-  inStep(side: number): { from: P3; to: P3; k: number } | null {
+  inStep(side: number): { from: P3; to: P3; k: number; off?: boolean } | null {
     if (this.state !== 'ground' || this.move === 'roll') return null;
-    const ss = this.standStep; if (ss) return ss.side === side ? { from: ss.from, to: ss.to, k: Math.min(1, ss.t / ss.dur) } : null;
+    const ss = this.standStep; if (ss) return ss.side === side ? { from: ss.from, to: ss.to, k: Math.min(1, ss.t / ss.dur), off: true } : null;
     const f = side > 0 ? this.feet.L : this.feet.R, sp = this.speed; if (f.on || sp < WALK) return null;
     const rate = this.phaseRate, span = this.span, from = Math.PI / 2 + 0.3;
     const d = (((from - (this.phase + (side > 0 ? 0 : Math.PI))) % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI), t = d / Math.max(0.1, rate), dur = (2 * Math.PI - span) / Math.max(0.1, rate);
     // (held in the air, due down but its swing not done: from where it was drawn when held, to where it's going, by its own
     // clock; one taken up early waiting on its time down hovers just short of the ground meanwhile, not set on it)
     const hd = f.held;
-    if (hd) { const ux = this.vx / sp, uz = this.vz / sp, x = this.x + ux * this.ahead_ + uz * side * this.track_, z = this.z + uz * this.ahead_ - ux * side * this.track_; return { from: hd.from, to: [x, this.city.heightAt(x, z), z], k: Math.min(hd.turn ? 1 : 0.9, (this.time - hd.t) / hd.need) }; }
+    if (hd) { const ux = this.vx / sp, uz = this.vz / sp, x = this.x + ux * this.ahead_ + uz * side * this.track_, z = this.z + uz * this.ahead_ - ux * side * this.track_; return { from: hd.from, to: [x, this.city.heightAt(x, z), z], k: Math.min(hd.turn ? 1 : 0.9, (this.time - hd.t) / hd.need), off: !!hd.turn }; }
     // (where it'll come down: where it's planned to, if it's the next and there's a plan; else where the stride will put it)
     // (the same choice the foot will make as it lands: the plan if it's still near where the stride would put it)
     const nf = this.nextFoot, ux = this.vx / sp, uz = this.vz / sp, x = this.x + this.vx * t + ux * this.ahead_ + uz * side * this.track_, z = this.z + this.vz * t + uz * this.ahead_ - ux * side * this.track_;
@@ -408,6 +410,8 @@ export class Runner implements Body {
   /** the step being taken, as planned (m): the stride's timing keeps to it, so a foot comes down where it was meant to
    * even as the pace changes under it; 0, none planned */
   private stepTo = 0; private shiftTarget = 0; shift = 0;
+  /** what the feet are pushing the body by (m/s²), along the way it's going (− a brake) and across it (+ to its right) */
+  pushAlong = 0; pushAcross = 0;
   /** the share of a stride cycle a foot is down for (the rig times each leg's swing by it) */
   get stanceFrac(): number { return this.span / (2 * Math.PI); }
   /** the next footfall and how long until it comes (s), for the swing leg to be brought onto it before it lands */
@@ -977,6 +981,20 @@ export class Runner implements Body {
     // late into a takeoff is still being made as it leaves)
     let cx = e <= a ? ex : (ex / e) * a, cz = e <= a ? ez : (ez / e) * a;
     if (sp > 3) { const ux0 = this.vx / sp, uz0 = this.vz / sp, lat = -cx * uz0 + cz * ux0, most = (14 + 60 / sp) * dt; if (Math.abs(lat) > most) { const k = (Math.sign(lat) * most - lat); cx += -uz0 * k; cz += ux0 * k; } }
+    // (and braking or turning takes the feet: the body is a weight carried over them, and they can push it back or round only
+    // so hard (`grip`, about 1.4 g), so a hard stop or a sharp turn at pace is two or three steps, leaning against them, not a
+    // frame; except stopping short of a lip it was let go at, and in a roll. Slower, less: a walker pushes the body round
+    // only as far as a foot is out from under it (about 2.5 m/s² and 1.6 more for each m/s), so a sharp turn at a walk is
+    // stepped round over half a second, not spun on one foot. Running (from 3 m/s, all of it by 5) it's left to the run's own
+    // handling, which the courses are made for; and a reversal (asked back against the way it's going) is a skid, braked
+    // as hard as the run brakes)
+    if (sp > 0.3 && sp < 5 && edgeD <= 0 && this.rollT <= 0 && !(on && (dx * this.vx + dz * this.vz) / sp < -0.5)) {
+      const ux0 = this.vx / sp, uz0 = this.vz / sp, along = cx * ux0 + cz * uz0, lat = -cx * uz0 + cz * ux0, br = Math.min(0, along), g = Math.hypot(br, lat), most = Math.min(TUNE.grip, 2.5 + 1.6 * sp) * dt / Math.max(1e-3, 1 - sm01((sp - 3) / 2));
+      if (g > most) { const k = most / g, a2 = Math.max(0, along) + br * k, l2 = lat * k; cx = ux0 * a2 - uz0 * l2; cz = uz0 * a2 + ux0 * l2; }
+    }
+    // (what the feet are doing to the body, for the figure to lean against: along the way it's going and across it, eased)
+    { const kk = 1 - Math.exp(-12 * dt), ux0 = sp > 0.3 ? this.vx / sp : Math.sin(this.heading), uz0 = sp > 0.3 ? this.vz / sp : Math.cos(this.heading), al = (cx * ux0 + cz * uz0) / dt, la = (-cx * uz0 + cz * ux0) / dt;
+      this.pushAlong += (al - this.pushAlong) * kk; this.pushAcross += (la - this.pushAcross) * kk; }
     this.vx += cx; this.vz += cz;
     sp = this.speed;
     // (the stride: a step's worth of phase by the step's length; a planned long step slower, a short one quicker. But never

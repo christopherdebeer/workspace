@@ -86,6 +86,8 @@ export class Rig {
   /** how far this frame's pose is a running stride carried across a gap (followed as briskly as on the ground) */
   private carriedK = 0;
   bank = 0;
+  /** the share of the weight on the left foot (0..1; the rest on the right) */
+  weightL = 0.5;
   private aside = 0;
   /** the pelvis carried toward a footfall the leg couldn't otherwise reach (world, m) */
   give: V3 = [0, 0, 0];
@@ -195,6 +197,9 @@ export class Rig {
         p.spine = 0.06 + 0.12 * s; p.lean = Math.min(0.58, 0.1 * k + 0.28 * s); p.head = -0.3 * s; both('spread', 0.1);
         // (the legs posed against the upright, not the leaning pelvis: the lean taken back out of them)
         p.hipL += p.lean * gk; p.hipR += p.lean * gk;
+        // (leaning against what the feet push: back over them braking, forward driving on; as push and gravity balance, part
+        // of it in the trunk)
+        if (r.state === 'ground') { const pa = r.pushAlong ?? 0; p.lean += pa < 0 ? Math.max(-0.35, 0.45 * Math.atan(pa / 9.8)) : Math.min(0.15, 0.25 * Math.atan(pa / 9.8)); }
         // (on the ground below a sprint: the legs, the arms and the trunk as people move, from the captured walk, jog and run,
         // each leg at its own place in the runner's stride, stretched to its stance (mocap.ts); the feet still the rig's)
         const mk = MOCAP.on && r.state === 'ground' ? 1 - sm(6, 8, r.speed) : 0;
@@ -533,12 +538,27 @@ export class Rig {
     else for (const key of KEYS) { this.vel[key] += ((t[key] - this.pose[key]) * w * w - this.vel[key] * c) * dt; this.pose[key] += this.vel[key] * dt; }
     if (r.move === 'hang') { const most = 0.3 + Math.min(0.9, Math.atan((r.swingOut ?? 0) / 1.1) + (r.swingFeet ? 0.45 : 0)); if (this.pose.lean > most) { this.pose.lean = most; this.vel.lean = Math.min(0, this.vel.lean); } if (this.pose.spine > 0.35) { this.pose.spine = 0.35; this.vel.spine = Math.min(0, this.vel.spine); } }
     this.stood += ((r.state === 'ground' ? 1 : 0) - this.stood) * (1 - Math.exp(-14 * dt));
-    this.bank += (Math.max(-0.45, Math.min(0.45, r.turn * 0.06 * Math.min(1, r.speed / 8))) - this.bank) * (1 - Math.exp(-10 * dt));
+    // (banked into a turn by what the feet push it round with: leaning so the push and gravity balance (atan(a / g)), the
+    // trunk about half of that, the legs taking the rest out to the feet; in the air, by the turn alone)
+    const bankTo = r.state === 'ground' && r.pushAcross !== undefined ? -0.6 * Math.atan((r.pushAcross ?? 0) / 9.8) : r.turn * 0.06 * Math.min(1, r.speed / 8);
+    this.bank += (Math.max(-0.45, Math.min(0.45, bankTo)) - this.bank) * (1 - Math.exp(-10 * dt));
     // (walking or standing on one foot: the hips over it; along a wall, off it)
     // (the body's weight over the foot that bears it: right over it walking or standing on it, or loading it to go; a
     // little at a run, where the feet come down near the line anyway)
-    const bear = r.state === 'ground' && r.move !== 'roll' ? (r.reach.fl && !r.reach.fr ? 1 : r.reach.fr && !r.reach.fl ? -1 : 0) : 0;
-    const over = bear * (0.045 * (1 - 0.65 * sm(2, 6, r.speed)) + 0.04 * Math.min(1, (r.load ?? 0) * 1.5));
+    // (how the weight is shared between the feet: all on one standing alone; between two, by where the body is along the
+    // line from one to the other, so it moves across through the double support, not at a footfall; the hips carried part
+    // of the way over where it bears (more walking, less running), so they lead into a turn over the foot that's taking it)
+    const onGround = r.state === 'ground' && r.move !== 'roll', fl = onGround ? r.reach.fl : undefined, fr = onGround ? r.reach.fr : undefined;
+    let wL = fl && !fr ? 1 : fr && !fl ? 0 : 0.5;
+    if (fl && fr) { const ax = fl[0] - fr[0], az = fl[2] - fr[2], l2 = ax * ax + az * az; wL = l2 > 1e-4 ? Math.max(0, Math.min(1, ((r.x - fr[0]) * ax + (r.z - fr[2]) * az) / l2)) : 0.5; }
+    this.weightL = wL;
+    const bear = fl && !fr ? 1 : fr && !fl ? -1 : 0;
+    let over = bear * 0.04 * Math.min(1, (r.load ?? 0) * 1.5);
+    if (fl || fr) {
+      const sx = fl && fr ? fr[0] + (fl[0] - fr[0]) * wL : (fl ?? fr)![0], sz = fl && fr ? fr[2] + (fl[2] - fr[2]) * wL : (fl ?? fr)![2];
+      const lat = (sx - r.x) * Math.cos(r.heading) - (sz - r.z) * Math.sin(r.heading);
+      over += Math.max(-0.07, Math.min(0.07, lat * (0.55 - 0.35 * sm(2, 6, r.speed))));
+    }
     this.aside += ((r.move === 'wallrun' ? -r.wallSide * 0.3 : over) - this.aside) * (1 - Math.exp(-(r.move === 'wallrun' ? 16 : 12) * dt));
     // (the hands: taken toward what they reach for, let go when there's nothing; a new hold is moved to, not jumped to)
     for (const [h, to] of [[this.hands.L, r.reach.hl], [this.hands.R, r.reach.hr]] as const) {
@@ -565,6 +585,8 @@ export class Rig {
           // (or as a person's foot goes: the captured path's height, for a step as long as the captured one, less for a short one;
           // never much under the hand-made arc, so a step re-aimed as it comes down isn't dragged over the ground)
           if (path) lift = Math.max(path.lift * 0.88 * Ls0 * Math.min(1, 0.35 + len / 0.7), 0.7 * lift);
+          // (a foot let go of but not yet on its way (its swing still to start) is off the ground, not turned on it with the body)
+          if (k < 0.9) lift = Math.max(lift, 0.02);
           // (round its own side of the body, not through it: where the straight way from where it left to where it's going
           // would pass under the body or over to the other side (a sharp turn leaves a foot behind, across the new line), the
           // foot is swung round the hips the way that keeps it on its own side, from exactly where it left to where it lands)
@@ -583,7 +605,7 @@ export class Rig {
           // its knee folded and opening), the path only taking it from the ground and setting it down on its footfall)
           // (how far through its swing by the stride's own clock, which the clip keeps; the step's `k` runs ahead of it)
           const TAU = 2 * Math.PI, sd = r.stanceFrac ?? 0.25, cyc = ((((r.phase - Math.PI / 2 - 0.3 - (side > 0 ? 0 : Math.PI)) % TAU) + TAU) % TAU) / TAU, sw = Math.max(0, (cyc - sd) / (1 - sd));
-          const free = this.mocapK * 0.9 * sm(0.02, 0.15, sw) * (1 - sm(0.55, 0.82, sw)) * sm(0.02, 0.1, k);
+          const free = sf.off ? 0 : this.mocapK * 0.9 * sm(0.02, 0.15, sw) * (1 - sm(0.55, 0.82, sw)) * sm(0.02, 0.1, k); /* (not a step off the stride's clock (stepped round, caught): the clip's leg is on the clock) */
           f.w = wk * (1 - free); f.lost = false; f.yaw = turnTo(f.yaw, r.heading, 1 - Math.exp(-14 * dt)); continue;
         }
       }

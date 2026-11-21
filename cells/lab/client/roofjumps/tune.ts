@@ -31,6 +31,7 @@ export const DIALS: Dial[] = [
   d('run', 'dash', 'dash', 8, 30, 0.5, 18.5, 'm/s'),
   d('run', 'dashTime', 'dash lasts', 0, 2, 0.05, 0.55, 's'),
   d('run', 'accel', 'quickness', 10, 120, 1, 42, 'm/s²'),
+  d('run', 'grip', 'grip (braking and turning)', 4, 60, 0.5, 14, 'm/s²'),
   d('run', 'ledgeSpeed', 'on a ledge', 4, 16, 0.5, 10.5, 'm/s'),
   d('run', 'ledgePull', 'a ledge draws you', 0, 1, 0.05, 0.3),
 
