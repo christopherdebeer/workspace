@@ -1310,8 +1310,11 @@ export class Runner implements Body {
    * the most the legs can push), the legs softer the deeper it goes, so a big one sinks further and for longer.
    */
   private sinkInto(impact: number, k: number): void {
-    const e = Math.min(1, (impact / 15) ** 2), depth = 0.46 * Math.min(1, (0.06 + e) * k);
-    this.sinkK = 175 * (1 - 0.5 * e); this.legVelocity = depth * Math.sqrt(this.sinkK) / 0.45;
+    // (the legs give with how fast the body comes down: a bound's landing at 3–4 m/s sinks a hand's breadth into the landing
+    // leg, a storey's drop all the way; had been by the square of it, so anything but a big drop barely bent a knee)
+    const e2 = Math.min(1, impact / 15), e = e2 * e2, depth = 0.46 * Math.min(1, (0.04 + 1.3 * e2) * k);
+    // (and softer: the weight taken over a stride or two, not snapped back in a tenth of a second)
+    this.sinkK = 120 * (1 - 0.4 * e); this.legVelocity = depth * Math.sqrt(this.sinkK) / 0.45;
   }
   /** the legs' stiffness taking the landing now */
   private sinkK = 175;

@@ -102,6 +102,8 @@ const stick = { id: -1, x0: 0, y0: 0, x: 0, y: 0, t: 0, moved: false };
 const others = new Map<number, { x: number; y: number; t: number; moved: boolean }>();
 const keys = new Set<string>();
 let jump = false;
+/** when a jump was last tapped (performance.now ms) */
+let tappedAt = -1e9;
 const knob = document.getElementById('stick')!, nub = knob.firstElementChild as HTMLElement;
 const REACH = 56;
 canvas.addEventListener('pointerdown', (e) => {
@@ -138,7 +140,7 @@ const up = (e: PointerEvent) => {
     else if (e.type !== 'pointercancel' && Math.hypot(dx, dy) < 12 && performance.now() - sw.t < 260) menuJump();
     return;
   }
-  const tap = (t: number, moved: boolean) => { if (e.type !== 'pointercancel' && !moved && performance.now() - t < 260) jump = true; };
+  const tap = (t: number, moved: boolean) => { if (e.type !== 'pointercancel' && !moved && performance.now() - t < 260) { jump = true; tappedAt = performance.now(); } };
   if (e.pointerId === stick.id) { tap(stick.t, stick.moved); stick.id = -1; stick.x = stick.y = 0; knob.classList.remove('on'); }
   else { const o = others.get(e.pointerId); if (o) tap(o.t, o.moved); others.delete(e.pointerId); }
 };
@@ -222,7 +224,7 @@ addEventListener('keydown', (e) => {
     e.preventDefault(); return;
   }
   if ((e.target as HTMLElement).tagName === 'INPUT') return;
-  if (e.code === 'Space' && !e.repeat) jump = true;
+  if (e.code === 'Space' && !e.repeat) { jump = true; tappedAt = performance.now(); }
   if (e.code === 'KeyP') flip('plan');
   if (e.code === 'KeyK') flip('pause');
   if (e.code === 'KeyL') stepOnce = true;
@@ -268,7 +270,9 @@ function asked(t: number): Input {
   const fx = Math.sin(yaw), fz = Math.cos(yaw), j = jump; jump = false;
   // (the jump held, to glide: Space held, or a touch held still past a tap)
   const now = performance.now(), still = (o: { t: number; moved: boolean }) => !o.moved && now - o.t > 260;
-  const hold = keys.has('Space') || (stick.id >= 0 && still(stick)) || [...others.values()].some(still);
+  // (but not the thumb resting on the stick from before the jump: with two fingers, the other taps the jump, and a still thumb
+  // isn't holding it; with one, the finger that tapped and pressed again is)
+  const hold = keys.has('Space') || (stick.id >= 0 && still(stick) && stick.t >= tappedAt - 300) || [...others.values()].some(still);
   const own: Input = { x: fx * -sy + -fz * sx, z: fz * -sy + fx * sx, jump: j, hold };
   if (TUNE.auto) {
     // (by itself: wandering, the heading a slow noise, drawn toward the city's own two directions: along its alleys, its

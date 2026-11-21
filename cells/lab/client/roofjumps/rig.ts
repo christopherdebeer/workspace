@@ -493,8 +493,15 @@ export class Rig {
         if (sup) { p.hipL += 0.7 * k; p.kneeL += 1.3 * k; p.hipR += 1.4 * k; p.kneeR += 1.0 * k; } else { p.hipR += 0.7 * k; p.kneeR += 1.3 * k; p.hipL += 1.4 * k; p.kneeL += 1.0 * k; }
         // (up against a wall, the chest kept off it: the load goes down, not forward)
         if (!r.against) { p.spine += 0.5 * k; p.lean += 0.2 * k; }
-      } else { p.hipL += 1.05 * c; p.hipR += 1.05 * c; p.kneeL += 1.8 * c; p.kneeR += 1.8 * c; p.splay += 0.22 * c; if (!r.against) p.spine += 0.45 * c; }
-      p.shL -= 0.45 * c; p.shR -= 0.45 * c; p.spreadL += 0.7 * c; p.spreadR += 0.7 * c; p.head -= 0.1 * c;
+      } else {
+        // (a landing: down into both legs, the chest coming down over them and the head with it, the arms thrown forward and
+        // down to meet it; the chest and arms showing it sooner than the legs, so a light landing still reads as weight)
+        const u2 = Math.min(1, c * 2);
+        p.hipL += 1.05 * c; p.hipR += 1.05 * c; p.kneeL += 1.8 * c; p.kneeR += 1.8 * c; p.splay += 0.22 * c;
+        if (!r.against) { p.spine += 0.3 * u2; p.lean += 0.12 * u2; }
+        p.head += 0.12 * u2; p.shL += 0.5 * u2; p.shR += 0.5 * u2; p.elL += 0.3 * u2; p.elR += 0.3 * u2;
+      }
+      if (wind) { p.shL -= 0.45 * c; p.shR -= 0.45 * c; p.spreadL += 0.7 * c; p.spreadR += 0.7 * c; p.head -= 0.1 * c; } else { p.spreadL += 0.35 * c; p.spreadR += 0.35 * c; }
     }
     // (on one foot, the hip on the free side lets down a little: the pelvis tipped over the foot that bears it)
     if (r.state === 'ground' && r.move !== 'roll') { const bear = r.reach.fl && !r.reach.fr ? 1 : r.reach.fr && !r.reach.fl ? -1 : 0; p.tilt += 0.06 * bear * (1 - 0.5 * sm(2, 6, r.speed)); }
