@@ -276,6 +276,27 @@ export const SCENES: Scene[] = [
     should: [...commonShoulds],
   },
   {
+    key: 'gait-wander', title: 'Gait: wandering a rooftop at a slow, changing pace',
+    asks: 'How a player moves when not running anywhere: a semi-random wander about a wide empty roof, the stick drifting between a light and a middling press, turning gently and now and then sharply, easing off, pausing, setting off again. Does it look like a person walking and jogging about: weight onto each foot, toes where it\'s going, no hop at a walk, no twisting on a planted foot, no legs crossing in a turn?',
+    watch: 'The feet through the turns, the pauses and the restarts (devtools/roofjumps-legs.mjs measures and films it).',
+    course: { boxes: [B(2, 62, 2, 62, 9)], start: { x: 32, z: 30 }, alone: true }, seconds: 16,
+    input: (t, r) => {
+      // (in spells of 1.2 to 2.6 s, each with its own press and turn, from a seeded hash of which spell it is; every fifth a
+      // pause; a sharp change of heading now and then; drawn back toward the middle when far out)
+      const h = (n: number) => { let x = Math.imul(n * 2654435761, 1597334677) >>> 0; x ^= x >>> 15; x = Math.imul(x, 2246822519) >>> 0; x ^= x >>> 13; return (x >>> 0) / 4294967296; };
+      let at = 0, i = 0; while (at + 1.2 + 1.4 * h(i * 7 + 1) <= t) { at += 1.2 + 1.4 * h(i * 7 + 1); i++; }
+      const k = (t - at) / (1.2 + 1.4 * h(i * 7 + 1));
+      if (i % 5 === 4) return none;
+      let head = 0; for (let j = 0; j <= i; j++) head += (h(j * 7 + 2) - 0.5) * (h(j * 7 + 3) < 0.25 ? 2.8 : 1.1);
+      head += (h(i * 7 + 4) - 0.5) * 0.8 * k;
+      const dx = r.x - 32, dz = r.z - 32, far = Math.hypot(dx, dz);
+      if (far > 18) head = Math.atan2(-dx, -dz);
+      const mag = 0.15 + 0.5 * h(i * 7 + 5);
+      return { x: Math.sin(head) * mag, z: Math.cos(head) * mag, jump: false };
+    },
+    should: [...commonShoulds],
+  },
+  {
     key: 'paint-alley', title: 'The painted alley: an approach, a correction in the air, a catch',
     asks: 'The replay the brushwork looks are judged on (strokes.ts): a roof approach, the stick swung left in the air and back, and a lip caught short across an alley to a higher roof, a tall dark block beyond it and another to the left, so a dry gap in a near wall has something dark behind it to leak. Does the runner still catch, hang and pull up?',
     watch: 'In each look: where the hand is going and when it closes on the coping; which shoe bears weight; the air between the body and the far wall before the catch; the far wall\'s paint staying planted as the eye swings.',
