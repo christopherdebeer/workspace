@@ -129,8 +129,8 @@ if (film) {
   process.env.EXPERIMENT = 'roofjumps'; process.env.READY = '__roofjumps';
   const { withWood } = await import('./harness.mjs');
   await withWood(async (w) => {
-    for (const fl of films) for (const [view, extra] of [['side', '&side=90&zoom=1.7'], ['behind', '&side=180&zoom=1.7'], ['front', '&side=0&zoom=1.7']]) {
-      const file = `${fl.key}-${view}.png`, p = await w.open(`scene=${fl.key}${process.env.MOCAP === '0' ? '&mocap=0' : ''}&strip=${fl.t.toFixed(4)}&frames=16&every=0.025&cols=8&holds=0&feet=0&look=clay${extra}`, { width: 1600, height: 520, dpr: 1 });
+    for (const fl of films) for (const [view, extra] of [['side', '&side=90&zoom=1.7'], ['behind', '&side=0&zoom=1.7'], ['front', '&side=180&zoom=1.7']]) {
+      const file = `${fl.key}-${view}.png`, p = await w.open(`scene=${fl.key}${process.env.MOCAP === '0' ? '&mocap=0' : ''}&strip=${fl.t.toFixed(4)}&frames=16&every=0.025&cols=8&holds=0&marks=0&look=clay${extra}`, { width: 1600, height: 520, dpr: 1 });
       for (let k = 0; k < 80 && (await p.evaluate(() => window.__roofjumps.probe().pending)) > 0; k++) await p.waitForTimeout(250);
       await p.waitForTimeout(500); await p.screenshot({ path: OUT + file }); await p.close(); fl[view] = file; console.log(`filmed ${fl.key} ${view}`);
     }

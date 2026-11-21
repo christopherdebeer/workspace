@@ -85,8 +85,8 @@ if (film) {
   process.env.EXPERIMENT = 'roofjumps'; process.env.READY = '__roofjumps';
   const { withWood } = await import('./harness.mjs');
   await withWood(async (w) => {
-    for (const m of moments.slice(0, 8)) for (const [view, extra] of [['chase', '&zoom=1.6'], ['side', '&side=90&zoom=2.2']]) {
-      const file = `${key}-${m.t.toFixed(2)}-${view}.png`, p = await w.open(`scene=${key}&strip=${Math.max(0, m.t - 0.25).toFixed(4)}&frames=16&every=${(1 / 30).toFixed(4)}&cols=8&holds=0&feet=0&look=clay${extra}`, { width: 1600, height: 520, dpr: 1 });
+    for (const m of moments.slice(0, 8)) for (const [view, extra] of [['chase', '&zoom=1.6'], ['side', '&side=90&zoom=2.2'], ['front', '&side=180&zoom=2.2']]) {
+      const file = `${key}-${m.t.toFixed(2)}-${view}.png`, p = await w.open(`scene=${key}${process.env.MOCAP === '0' ? '&mocap=0' : ''}&strip=${Math.max(0, m.t - 0.25).toFixed(4)}&frames=16&every=${(1 / 30).toFixed(4)}&cols=8&holds=0&marks=0&look=clay${extra}`, { width: 1600, height: 520, dpr: 1 });
       for (let k = 0; k < 80 && (await p.evaluate(() => window.__roofjumps.probe().pending)) > 0; k++) await p.waitForTimeout(250);
       await p.waitForTimeout(400); await p.screenshot({ path: OUT + file }); await p.close(); m[view] = file; console.log(`filmed ${m.t.toFixed(2)} s ${view}`);
     }
@@ -125,5 +125,5 @@ ${Object.entries(byBand).map(([b, a]) => `<tr><td>${b}</td><td>${a.length}</td><
 ${summary.map((k) => `<tr><td>${esc(k.kind)}</td><td>${k.moments}</td><td>${esc(k.worst.say)} at ${k.worst.t.toFixed(2)} s</td></tr>`).join('')}
 </tbody></table>
 <h2>From above</h2><p class="k">The hips' path; each footfall a dot with a tick the way its toes point (left blue, right orange); the filmed moments ringed, by time.</p>${map}
-${moments.filter((m) => m.chase).map((m) => `<h2>${m.t.toFixed(2)} s: ${esc(m.kind)}</h2><p class="k">${esc(m.say)}</p><img src="${m.chase}" alt="${m.t.toFixed(2)} s from the chase eye"><img src="${m.side}" alt="${m.t.toFixed(2)} s from the side">`).join('\n')}`);
+${moments.filter((m) => m.chase).map((m) => `<h2>${m.t.toFixed(2)} s: ${esc(m.kind)}</h2><p class="k">${esc(m.say)}</p><img src="${m.chase}" alt="${m.t.toFixed(2)} s from the chase eye"><img src="${m.side}" alt="${m.t.toFixed(2)} s from the side"><img src="${m.front}" alt="${m.t.toFixed(2)} s from in front">`).join('\n')}`);
 console.log(`→ ${OUT}report.html`);
