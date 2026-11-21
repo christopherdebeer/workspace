@@ -570,6 +570,11 @@ Done from it so far:
   broken where it comes in), only where the alley's clear all the way across. About 2.4 a chunk. Run across at pace (as
   along anything narrow). Going up between walls (a chimney) or a hang under one now meets its underside as a ceiling: had
   climbed into it and been pushed out sideways into the building beside. Scene `walkway`.
+- *Railings are solid to the body.* Drawn, not in the height field (so the planner's edges and landings are untouched), but
+  as solid as a thin wall up to the rail: the body is pushed off one like anything else, unless it's above the rail (going
+  over it). Walked at, it stops at the rail; on a walkway it's kept between its railings. Held hard at an edge, the runner
+  still leaps the railing (and dives for the street, as off any roof). Scene `railing-stop`. On the way: stood on a unit or
+  a ledge, the hands on the wall above are put where the wall is (a unit's depth off), not a fixed reach ahead.
 - *The eye in the films.* What looked like the eye jammed into the figure's back in alleys was the contact sheets' eye
   only: in play the eye already widens and rises up a face and between walls. The sheets now frame each moment as play
   would (wide up a face, between walls, on a bar, off a wall; aimed by the body's facing off the ground, not by a velocity
@@ -605,6 +610,16 @@ later, per look. Times are in the clips (`devtools/refs/roofjumps.json`).
 | potted plants on ledges and stairs | stair 1.3-2.4 | clutter regions (pipe runs, vents, curbs) | stepped over or round | a clutter kind `plants` |
 | walkways and bridges between roofs | rooftops 1.25-2.0 (a railed walkway) | done: railed walkways across some alleys (slabs, open beneath) | run across, rails either side | |
 | street furniture (bins, bikes, hydrants, steps) | rooftops 15.75-16.5 (the street landing) | an empty street | land beside, vault, step | street clutter kinds |
+| bundles of pipes up and across a face, with bends | kiuzyx 24-30 | single drainpipes, straight up | climb, shimmy along the level runs, round a bend | `pipe` runs with segments (up, across, bends), drawn as bundles |
+| ladders up a building's side | kiuzyx 42-48 | none | climbed hand over hand, fast | hold `ladder` (rungs: a pipe climbed quickly) |
+| balcony bands (a balcony the face's length, every storey) | kiuzyx 6-12, 42-48 | single balconies | shimmy along the rail, step up storey to storey | balconies the face's width, stacked |
+| projecting pods and boxes on a face | kiuzyx 24-30 | none | stand on, step up from | as a unit, bigger: hold `ac`-like with a top to stand on |
+| rooftop billboards and frames | kiuzyx 0-6, 12-18 | none | climb the frame, swing from it | tag `BILLBOARD` (a board on a lattice frame), holds on the frame |
+| panel water tanks on roofs | kiuzyx 42-48 | `TANK` boxes | climb onto | have it (the stand and its holds still to do, above) |
+| an elevated railway on a viaduct | kiuzyx 18-24 | none | run along its top, under it | a long box on piers across chunks; its own scale |
+| steep stepped streets | kiuzyx 6-12 | stairs up buildings' sides | run down and up them | street stairs between levels |
+| pitched tile roofs among the flat | kiuzyx 6-12 | everything flat | land on, slide, run along the ridge | sloped roofs (see Not yet) |
+| rust streaks, lit windows, neon | kiuzyx throughout | | | the look's, later |
 
 ## Not yet
 

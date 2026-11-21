@@ -28,7 +28,9 @@ clip whose source has gone can't be made again; its labels and timings still sta
 | `kyo-stair` | a sprint, a step up, a fire escape climbed rail to rail a storey a beat, the roof, the bag | the climb chain, body length, the landing beat, rhythm |
 | `kyo-kling-parkour` | eight cut shots, each a named move: kong, wall run and tic tac, cat leap, webster, dive roll, underbar and side flip, a parapet, a last flip | the move vocabulary, momentum through moves, contact; with its prompt (`kyo-kling-parkour.prompt.md`) |
 
-All three are by 梔虚月 (@KYOGETSU_2026) and, by the author's account, generated (Kling).
+| `kiuzyx-city` | a city, not a movement: eight slow high shots of a dense Japanese city at dusk (by 𝖐𝖎𝖚, @kiuzyx) | what the city has: faces, pipes, balconies, ladders, tanks, wires, signs; tagged `"for": "city"` |
+
+The first three are by 梔虚月 (@KYOGETSU_2026) and, by the author's account, generated (Kling).
 
 ### The prompt, read for how it directs movement
 

@@ -1,6 +1,6 @@
 {
   "set": "roofjumps",
-  "about": "Reference clips for Roof Jumps' movement and feel (not its look). Labels are ours: what is seen, where, by time from the clip's start (s). Moves use the parkour names where they apply; 'ours' maps a segment to the runner's move or state. Clips and frames are never committed: devtools/refs.mjs makes them again into devtools/out/refs/.",
+  "about": "Reference clips for Roof Jumps' movement and feel, and (marked `\"for\": \"city\"`) for its city: what's in it, not how it's painted. Labels are ours: what is seen, where, by time from the clip's start (s). Moves use the parkour names where they apply; 'ours' maps a segment to the runner's move or state. Clips and frames are never committed: devtools/refs.mjs makes them again into devtools/out/refs/.",
   "clips": [
     {
       "id": "kyo-rooftops",
@@ -410,6 +410,129 @@
           "camera": "close side, then wide rear",
           "prompt": "shot 8 (not in the shared prompt)",
           "notes": "launch close to the eye 13.25-13.5; inverted over the city 14.0-14.25; lands running 14.5-14.75"
+        }
+      ]
+    },
+    {
+      "id": "kiuzyx-city",
+      "for": "city",
+      "url": "https://x.com/kiuzyx/status/2124133228831502826",
+      "author": "𝖐𝖎𝖚 (@kiuzyx)",
+      "title": "a job that slowly kills you",
+      "uploaded": "2026-11-21",
+      "duration": 48.39,
+      "notes": "A city reference, not a movement one: eight slow, high, still-eyed shots of a dense Japanese city at dusk (lyrics laid over them). Studied for what the city has and how it's put together: off-white and beige concrete faces in tight grids of small, warm-lit windows; continuous balcony bands with railings; bundles of pipes run up and across the faces with bends; ladders up the sides; units on balconies and roofs; panel water tanks, railings and frames on the roofs; blade signs and rooftop billboards; rust streaks; utility poles with dense overhead wires; dark pitched tile roofs and a pagoda among the flat concrete; glass towers behind; steep stepped streets, alleys a body wide. Labelled 2026-11-21 from a 1 fps sheet.",
+      "source": "1080x1440 (portrait), ~48 s; looks AI-generated",
+      "sheet": {
+        "fps": 1,
+        "cols": 10
+      },
+      "segments": [
+        {
+          "t0": 0,
+          "t1": 6,
+          "label": "towers at dusk over low white blocks",
+          "city": [
+            "glass towers behind",
+            "a domed white block",
+            "street with cars",
+            "lit windows"
+          ],
+          "notes": "the low city in front of the high: layers of height"
+        },
+        {
+          "t0": 6,
+          "t1": 12,
+          "label": "a dense hillside neighbourhood, a temple roof, the sea",
+          "city": [
+            "balcony bands",
+            "units on balconies",
+            "blade signs",
+            "pitched tile roofs",
+            "pagoda",
+            "a steep stepped street",
+            "overhead wires",
+            "the sea beyond"
+          ],
+          "notes": "faces packed edge to edge, every one with balconies and railings; a figure with an umbrella on the stepped street"
+        },
+        {
+          "t0": 12,
+          "t1": 18,
+          "label": "a street of shops, taxis, tanks behind",
+          "city": [
+            "shopfronts with awnings",
+            "vending machines",
+            "taxis",
+            "storage tanks",
+            "rooftop frames"
+          ],
+          "notes": "the street level the roofs stand on"
+        },
+        {
+          "t0": 18,
+          "t1": 24,
+          "label": "an elevated railway in front of a block with round windows",
+          "city": [
+            "a viaduct with a train",
+            "round windows",
+            "trees below"
+          ],
+          "notes": "a line through the city at a storey or two up"
+        },
+        {
+          "t0": 24,
+          "t1": 30,
+          "label": "a beige face thick with pipes, pods and units",
+          "city": [
+            "pipe bundles up and across, with bends",
+            "rust streaks",
+            "units",
+            "a sign box",
+            "projecting pods",
+            "an alley a body wide",
+            "bins and crates at the foot"
+          ],
+          "notes": "the richest face for holds: pipes to climb and shimmy, pods to stand on"
+        },
+        {
+          "t0": 30,
+          "t1": 36,
+          "label": "a white glass box, a bus, bare trees",
+          "city": [
+            "a glass-fronted block",
+            "a bus",
+            "trees",
+            "a lit grid of offices behind"
+          ],
+          "notes": ""
+        },
+        {
+          "t0": 36,
+          "t1": 42,
+          "label": "a neon shopping street face",
+          "city": [
+            "neon signs",
+            "dense blade signs",
+            "people",
+            "lit shopfronts"
+          ],
+          "notes": "the night face of the street"
+        },
+        {
+          "t0": 42,
+          "t1": 48,
+          "label": "a plain white block, its roof, the street",
+          "city": [
+            "a ladder up the side",
+            "panel water tanks",
+            "roof railings",
+            "balcony bands",
+            "utility pole with dense wires",
+            "bins",
+            "a car"
+          ],
+          "notes": "wires strung across the whole frame at a storey or two: a city's real hazard to a jump"
         }
       ]
     }

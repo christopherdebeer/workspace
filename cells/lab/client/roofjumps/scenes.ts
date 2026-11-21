@@ -317,6 +317,15 @@ function holdScenes(): Scene[] {
         { says: 'at roof height all the way across (never into the alley)', check: (r) => { const lo = Math.min(...r.frames.filter((f) => f.z > 20 && f.z < 23).map((f) => f.y)); return ok(lo > 11.9, `lowest ${lo.toFixed(2)} m over the alley`); } }],
     },
     {
+      key: 'railing-stop', title: 'Held at a railing over a drop',
+      asks: 'A roof edge with a railing, twelve metres of nothing beyond it. Walked straight at it (a light press: held hard, it leaps the railing and dives for the street, as off any roof): the railing is solid to the body (only gone over above its rail), so it stops at it, not through it and off.',
+      watch: 'Stopping at the rail; never past its line.',
+      course: { boxes: [B(20, 44, 0, 20, 12)], holds: [{ kind: 'railing' as const, ax: 20, ay: 13, az: 19.94, bx: 44, by: 13, bz: 19.94, nx: 0, nz: 1 }], start: { x: 32, z: 14 }, alone: true }, seconds: 6,
+      input: () => go(0, 0.35),
+      should: [...commonShoulds,
+        { says: 'never past the railing (its line at z 19.94), on the roof at the end', check: (r) => { const far = Math.max(...r.frames.map((f) => f.z)); return ok(far < 19.94 && r.runner.y > 11.9, `furthest z ${far.toFixed(2)}, ended at y ${r.runner.y.toFixed(1)}`); } }],
+    },
+    {
       key: 'diagonal-unit', title: 'Up and across to a unit, and up from it',
       asks: 'Short of a 15 m roof; a sill at 9 m, and up and to the side a unit under a window. Steered up and that way: sprung diagonally for the unit, stepped up onto it, and from standing on it, the lip.',
       watch: 'The diagonal spring and its one-handed catch; the unit used as a step.',

@@ -1108,7 +1108,10 @@ export class Runner implements Body {
         // (stood on it: the hands flat on the wall above, steadying)
         // (stood on a fire escape's rail, the wall a metre off: no wall to put the hands to; they're the body's, for balance)
         if (c.phase === 6 && c.hold?.kind === 'escape') return {};
-        if (c.phase === 6) { const y = this.y + 1.45, x = this.x + this.wx * (this.R_ - 0.05), z = this.z + this.wz * (this.R_ - 0.05); return { hl: [x + this.wz * 0.22, y, z - this.wx * 0.22], hr: [x - this.wz * 0.22, y, z + this.wx * 0.22] }; }
+        // (stood on what it held: the hands flat on the wall above it, where the wall is (a unit's or a ledge's depth off), not a
+        // fixed reach ahead; none if it's out of reach)
+        if (c.phase === 6) { let df = -1; for (let d = 0.15; d <= 0.9; d += 0.05) if (this.city.heightAt(this.x + this.wx * d, this.z + this.wz * d) > this.y + 1.5) { df = d; break; } if (df < 0) return {};
+          const y = this.y + 1.45, x = this.x + this.wx * df, z = this.z + this.wz * df; return { hl: [x + this.wz * 0.22, y, z - this.wx * 0.22], hr: [x - this.wz * 0.22, y, z + this.wx * 0.22] }; }
         return c.one ? (c.one > 0 ? { hl: this.grips.hl } : { hr: this.grips.hr }) : { ...this.grips };
       }
       return this.mu < 0.88 ? { ...this.grips } : {};
@@ -1513,6 +1516,16 @@ export class Runner implements Body {
           const e = [this.x - b.x0, b.x1 - this.x, this.z - b.z0, b.z1 - this.z], m = Math.min(...e), k = e.indexOf(m);
           dx = k === 0 ? -1 : k === 1 ? 1 : 0; dz = k === 2 ? -1 : k === 3 ? 1 : 0; d = -m;
         } else { dx /= d; dz /= d; }
+        const push = this.R_ - d; this.x += dx * push; this.z += dz * push; px += dx; pz += dz; moved = hit = true;
+      }
+      // (a railing: drawn, not in the height field, but as solid to the body as a thin wall up to its rail; gone over above it)
+      for (const h of this.city.holdsNear(this.x, this.z, this.R_ + 0.3)) {
+        if (h.kind !== 'railing' || h.ay <= this.y + lift || this.y + this.height_ <= h.ay - 1) continue;
+        const ex = h.bx - h.ax, ez = h.bz - h.az, l2 = ex * ex + ez * ez || 1, t = Math.max(0, Math.min(1, ((this.x - h.ax) * ex + (this.z - h.az) * ez) / l2));
+        let dx = this.x - (h.ax + ex * t), dz = this.z - (h.az + ez * t), d = Math.hypot(dx, dz);
+        if (d >= this.R_) continue;
+        // (on its line: back to the side it was going from)
+        if (d < 1e-6) { const s0 = -Math.sign(this.vx * h.nx + this.vz * h.nz || 1); dx = h.nx * s0; dz = h.nz * s0; d = 0; } else { dx /= d; dz /= d; }
         const push = this.R_ - d; this.x += dx * push; this.z += dz * push; px += dx; pz += dz; moved = hit = true;
       }
       if (!moved) break;
