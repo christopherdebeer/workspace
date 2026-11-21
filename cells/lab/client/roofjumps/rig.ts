@@ -76,7 +76,7 @@ export class Rig {
   pose = zero();
   /** each joint's speed toward its pose; and the chest's lag behind the hips (rad) and its speed, the hips' last height
    * and speed: weight */
-  private vel = zero(); private ph = 0; private lastPhase = 0; toe = [0, 0]; private toeWas = [0, 0];
+  private vel = zero(); private ph = 0; private lastPhase = 0; toe = [0, 0]; private toeWas = [0, 0]; private ankle: (V3 | null)[] = [null, null]; private ankleWas: (V3 | null)[] = [null, null]; private stepDt = 0;
   /** each planted knee's bend direction last step (unit, world), kept so a knee isn't swung round by the hips turning over a
    * fixed foot, nor flipped where a near-straight leg says little about which way it should bend */
   kneeDir: (V3 | null)[] = [null, null]; private kneeWas: (V3 | null)[] = [null, null];
@@ -104,7 +104,7 @@ export class Rig {
   /** each hand's reach: how much it has hold of the arm (0..1), and where to */
   private hands = { L: { w: 0, p: [0, 0, 0] as V3 }, R: { w: 0, p: [0, 0, 0] as V3 } };
   /** and each foot's: planted where it was put, the body going over it; and which way what it's on faces */
-  soles = { L: { w: 0, p: [0, 0, 0] as V3, lost: false, yaw: 0, off: [0, 0, 0] as V3, aim: null as V3 | null, coming: false }, R: { w: 0, p: [0, 0, 0] as V3, lost: false, yaw: 0, off: [0, 0, 0] as V3, aim: null as V3 | null, coming: false } };
+  soles = { L: { w: 0, p: [0, 0, 0] as V3, lost: false, yaw: 0, off: [0, 0, 0] as V3, aim: null as V3 | null, coming: false, arcKey: NaN, arc: false, at: null as V3 | null, swing: false }, R: { w: 0, p: [0, 0, 0] as V3, lost: false, yaw: 0, off: [0, 0, 0] as V3, aim: null as V3 | null, coming: false, arcKey: NaN, arc: false, at: null as V3 | null, swing: false } };
   on: V3 = [0, 1, 0];
   /** each free leg swung out at the hip (rad), so its foot keeps to its own side of the line, not across behind the other;
    * and how far to its own side each free foot was last drawn (m; null when down) */
@@ -614,7 +614,7 @@ export class Rig {
     for (const [f, to, side] of [[this.soles.L, r.reach.fl, 1], [this.soles.R, r.reach.fr, -1]] as const) {
       // (a foot stepping at a walk, or standing: carried from where it left to where it's going, lifted first and carried after (an arc
       // as high as the step is long), put down; at a run the swing's own pose carries it instead)
-      const sf = r.inStep ? r.inStep(side) : null;
+      const sf = r.inStep ? r.inStep(side) : null; f.swing = false;
       // (but from a jog up, the last tenth of a second is the landing's, below)
       if (!to && sf && r.state === 'ground' && !(r.speed > 2.2 && nf && nf.side === side && nf.t < 0.1)) {
         const wk = 1 - sm(2.2, 3.4, r.speed);
@@ -634,21 +634,34 @@ export class Rig {
           // foot is swung round the hips the way that keeps it on its own side, from exactly where it left to where it lands)
           let fx2 = sf.from[0] + (sf.to[0] - sf.from[0]) * e, fz2 = sf.from[2] + (sf.to[2] - sf.from[2]) * e;
           { const lx = Math.cos(r.heading), lz = -Math.sin(r.heading), latOf = (x: number, z: number) => ((x - r.x) * lx + (z - r.z) * lz) * side;
-            if (latOf(fx2, fz2) < 0.08 * this.body.legScale && (latOf(sf.from[0], sf.from[2]) < 0.1 || latOf(sf.to[0], sf.to[2]) < 0.1)) {
+            // (decided once a swing, as it sets off: whether it goes round, and which way; not afresh each frame, where a slight
+            // turn could flip it from one path to the other in the middle of the swing)
+            const key = sf.from[0] * 1000 + sf.from[2];
+            if (f.arcKey !== key) { f.arcKey = key; f.arc = latOf(fx2, fz2) < 0.08 * this.body.legScale && (latOf(sf.from[0], sf.from[2]) < 0.1 || latOf(sf.to[0], sf.to[2]) < 0.1); }
+            if (f.arc) {
               const ax = sf.from[0] - r.x, az = sf.from[2] - r.z, bx = sf.to[0] - r.x, bz = sf.to[2] - r.z, ra = Math.hypot(ax, az), rb = Math.hypot(bx, bz);
               const a0 = Math.atan2(ax, az), b0 = Math.atan2(bx, bz); let d = b0 - a0; d -= Math.round(d / (2 * Math.PI)) * 2 * Math.PI;
-              const at = (k: number, dd: number) => { const th = a0 + dd * k, rr = Math.max(0.16, ra + (rb - ra) * k); return [r.x + Math.sin(th) * rr, r.z + Math.cos(th) * rr]; };
+              const at = (k: number, dd: number) => { const th = a0 + dd * k, lin = ra + (rb - ra) * k, rr = lin + Math.max(0, 0.16 - lin) * Math.sin(Math.PI * Math.max(0, Math.min(1, k))); /* (clear of the body through the middle, exactly from and to its spots at the ends) */ return [r.x + Math.sin(th) * rr, r.z + Math.cos(th) * rr]; };
               // (the way round that passes its own side)
               const mid = at(0.5, d); if (latOf(mid[0], mid[1]) < 0) d -= Math.sign(d || 1) * 2 * Math.PI;
               if (Math.abs(d) < 1.5 * Math.PI) { const q = at(e, d); fx2 = q[0]; fz2 = q[1]; }
             } }
-          f.p = [fx2, sf.from[1] + (sf.to[1] - sf.from[1]) * e + lift, fz2];
+          // (and no faster than a foot moves (4 m/s and twice the body's pace): whatever its path is asked to do in a frame (a
+          // target re-planned, a change of mind, a swing handed from one way of stepping to another), the foot gets there by
+          // travelling, not by appearing)
+          { const want: V3 = [fx2, sf.from[1] + (sf.to[1] - sf.from[1]) * e + lift, fz2], last = f.at;
+            if (last && dt > 0 && dt <= 0.2) { const dx = want[0] - last[0], dy = want[1] - last[1], dz = want[2] - last[2], d = Math.hypot(dx, dy, dz), most = (4 + 2 * r.speed) * dt;
+              f.p = d > most ? [last[0] + (dx * most) / d, last[1] + (dy * most) / d, last[2] + (dz * most) / d] : want; } else f.p = want; }
           // (and with the clips, through the middle of the swing the clip's own leg carries the foot (its thigh driven through,
           // its knee folded and opening), the path only taking it from the ground and setting it down on its footfall)
           // (how far through its swing by the stride's own clock, which the clip keeps; the step's `k` runs ahead of it)
           const TAU = 2 * Math.PI, sd = r.stanceFrac ?? 0.25, cyc = ((((r.phase - Math.PI / 2 - 0.3 - (side > 0 ? 0 : Math.PI)) % TAU) + TAU) % TAU) / TAU, sw = Math.max(0, (cyc - sd) / (1 - sd));
-          const free = sf.off ? 0 : this.mocapK * 0.9 * sm(0.02, 0.15, sw) * (1 - sm(0.55, 0.82, sw)) * sm(0.02, 0.1, k); /* (not a step off the stride's clock (stepped round, caught): the clip's leg is on the clock) */
-          f.w = wk * (1 - free); f.lost = false; f.yaw = turnTo(f.yaw, r.heading, 1 - Math.exp(-14 * dt)); continue;
+          const free = sf.off ? 0 : this.mocapK * 0.9 * sm(0.02, 0.15, sw) * (1 - sm(0.55, 0.82, sw)) * sm(0.05, 0.35, k); /* (not a step off the stride's clock (stepped round, caught): the clip's leg is on the clock) */
+          // (and the clip's leg taking the foot over, or handing it back, no faster than the foot can cross the gap between where
+          // the clip has it and where the path does: the share changing by at most 8 a second, not opening on the stride's clock
+          // in a few frames)
+          { const wantW = wk * (1 - free), dw = 8 * dt; f.w = dt > 0 && dt <= 0.2 ? f.w + Math.max(-dw, Math.min(dw, wantW - f.w)) : wantW; }
+          f.lost = false; f.swing = true; f.yaw = turnTo(f.yaw, r.heading, 1 - Math.exp(-14 * dt)); continue;
         }
       }
       f.aim = null;
@@ -757,7 +770,7 @@ export class Rig {
     // (taken quickly, given back a little slower)
     for (let i = 0; i < 3; i++) { const k = Math.abs(want[i]) > Math.abs(this.give[i]) ? 60 : 18; this.give[i] += (want[i] - this.give[i]) * (dt > 0.2 ? 1 : 1 - Math.exp(-k * dt)); }
     // (the bones solved once a step, keeping what the next step depends on; drawing them reads, it doesn't change them)
-    this.toeWas = this.toe.slice(); this.kneeWas = this.kneeDir.slice(); this.kneeDir = [null, null]; this.solve(r, true);
+    this.toeWas = this.toe.slice(); this.kneeWas = this.kneeDir.slice(); this.kneeDir = [null, null]; this.ankleWas = this.ankle.slice(); this.stepDt = dt > 0 && dt <= 0.2 ? dt : 0; this.solve(r, true);
   }
 
   private pelvis(r: Body, give: V3): M4 {
@@ -820,10 +833,14 @@ export class Rig {
         // (out of reach behind: up onto the toe, the heel lifting, the foot pivoting about its ball, so the leg stays on its
         // footfall to the push-off instead of dragging it)
         let toe = 0;
+        // (a foot in the air, on its way, isn't pivoting about a ball on the ground: where it's drawn is where its path has it
+        // (which set off from where the pivoting had it), the heel's lift only easing out of the foot's angle)
+        const aloft = sole.swing && r.state === 'ground';
+        if (aloft) toe = Math.max(0, this.toeWas[L ? 0 : 1] - 0.08);
         // (walking and running from the clips: the heel comes up as far as the clip's knee wants, not only once the leg's run out:
         // so the knee's already bending through the push-off, the toe still down, as a person's does, not straight to the last)
         const dk = Math.sqrt(this.body.thigh ** 2 + this.body.shin ** 2 + 2 * this.body.thigh * this.body.shin * Math.cos(knee)), reachTo = Math.min(most, most + (dk - most) * this.mocapK * (1 - sm(1.8, 2.8, r.speed)));
-        { const fw: V3 = this.on[1] > 0.7 && r.state === 'ground' ? [Math.sin(sole.yaw), 0, Math.cos(sole.yaw)] : unit([P[8], 0, P[10]]); if (Math.hypot(fall[0] - s[0], fall[1] - s[1], fall[2] - s[2]) > reachTo && (fall[0] - s[0]) * fw[0] + (fall[2] - s[2]) * fw[2] < 0) {
+        if (!aloft) { const fw: V3 = this.on[1] > 0.7 && r.state === 'ground' ? [Math.sin(sole.yaw), 0, Math.cos(sole.yaw)] : unit([P[8], 0, P[10]]); if (Math.hypot(fall[0] - s[0], fall[1] - s[1], fall[2] - s[2]) > reachTo && (fall[0] - s[0]) * fw[0] + (fall[2] - s[2]) * fw[2] < 0) {
           // (the ball on the ground, under the foot: what it pivots about, so the toe stays where it is as the heel comes up)
           const on = this.on, ball: V3 = [fall[0] + fw[0] * this.body.ball - on[0] * this.body.sole, fall[1] - on[1] * this.body.sole, fall[2] + fw[2] * this.body.ball - on[2] * this.body.sole];
           // (the heel lifted just as far as it has to: solved, not stepped, so the ankle doesn't jump)
@@ -839,6 +856,11 @@ export class Rig {
         // nine tenths of the weight, so a planted foot doesn't trail a tenth of the body's motion)
         const wk = Math.min(1, sole.w / 0.9); plantK = wk;
         let to: V3 = [was[0] + (fall[0] - was[0]) * wk, was[1] + (fall[1] - was[1]) * wk, was[2] + (fall[2] - was[2]) * wk];
+        // (and a foot in the air drawn where it was last drawn and on toward that, no faster than a foot moves (4 m/s and twice the
+        // body's pace), whatever carries it: the path, the clip's leg, the share between them)
+        { const last = this.ankleWas[L ? 0 : 1];
+          if (aloft && last && this.stepDt > 0) { const dx = to[0] - last[0], dy = to[1] - last[1], dz = to[2] - last[2], dd = Math.hypot(dx, dy, dz), lim = (4 + 2 * r.speed) * this.stepDt; if (dd > lim) to = [last[0] + (dx * lim) / dd, last[1] + (dy * lim) / dd, last[2] + (dz * lim) / dd]; }
+        }
         let dir = sub(to, s), d = Math.hypot(dir[0], dir[1], dir[2]);
         if (d > most) { to = [s[0] + (dir[0] * most) / d, s[1] + (dir[1] * most) / d, s[2] + (dir[2] * most) / d]; d = most; }
         dir = unit(dir);
@@ -854,6 +876,7 @@ export class Rig {
       }
       blk('thigh' + n, Th, b.blocks.thigh);
       blk('shin' + n, K, b.blocks.shin);
+      if (commit) this.ankle[L ? 0 : 1] = r.state === 'ground' ? point(K, 0, -this.body.shin, 0) : null;
       // (the foot: flat to the ground when it's on it, the toe pointed when it isn't)
       let Ft = sw(translate(K, 0, -this.body.shin, 0), -(hip - knee) * (0.35 + 0.5 * this.stood) - 0.5 * (1 - this.stood));
       if (planted) {
@@ -872,6 +895,8 @@ export class Rig {
         }
       }
       blk('foot' + n, Ft, b.blocks.foot);
+      // (where this sole is drawn, told to the runner: the one account of where a foot in the air is)
+      if (commit) { const at: V3 = [Ft[12] - this.on[0] * this.body.sole, Ft[13] - this.on[1] * this.body.sole, Ft[14] - this.on[2] * this.body.sole]; sole.at = at; if (r.reportShoe) r.reportShoe(L ? 1 : -1, at); }
       // (where this foot is against the line, if it's free: for the next frame's swing out)
       if (!commit) { /* (read only) */ } else if (sole.w < 0.5 && r.state === 'ground') { const fx = Math.sin(r.heading), fz = Math.cos(r.heading), bp = point(Ft, 0, 0, b.ball); this.freeLat[L ? 0 : 1] = ((bp[0] - P[12]) * fz - (bp[2] - P[14]) * fx) * side; }
       else if (commit) this.freeLat[L ? 0 : 1] = null;
