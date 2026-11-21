@@ -90,12 +90,14 @@ export const strokeGouacheRules: StrokeRules = {
     const f = light.focus;
     const isFocus = (b: Box) => !!f && Math.abs(b.y1 - f.y) < 0.01 && b.x0 < f.x1 && b.x1 > f.x0 && b.z0 < f.z1 && b.z1 > f.z0;
     for (const b of [...c.boxes, ...c.props]) {
-      // (every box keeps its underpainting at any distance: it's solid in depth whatever else is drawn, so is painted)
-      const base = baseOf(b), big = (b.x1 - b.x0) * (b.z1 - b.z0) > 12 && b.y1 - b.y0 > 2, rank = 1;
+      // (every box keeps its underpainting at any distance: it's solid in depth whatever else is drawn, so is painted; but the
+      // small things fixed to a face (a fire escape's posts and steps, a unit, a sign's board) withdraw with the detail)
+      const small = !!b.fixture;
+      const base = baseOf(b), big = (b.x1 - b.x0) * (b.z1 - b.z0) > 12 && b.y1 - b.y0 > 2, rank = small ? DETAIL : 1;
       if (b.tag === TAG.BAR) {
         const alongX = b.x1 - b.x0 >= b.z1 - b.z0, y = (b.y0 + b.y1) / 2, mx = (b.x0 + b.x1) / 2, mz = (b.z0 + b.z1) / 2;
         const a: V = alongX ? [b.x0, y, mz] : [mx, y, b.z0], e: V = alongX ? [b.x1, y, mz] : [mx, y, b.z1];
-        put({ layer: LAYER.EDGE, kind: K.PULL + EDGE, a, b: e, width: Math.max(0.06, Math.min(b.y1 - b.y0, alongX ? b.z1 - b.z0 : b.x1 - b.x0)), col: mulv(base, T.shade([0, 0, 1])), alpha: 1, dry: 0.3, rank: 0.75, key: `bar:${a.join(',')}` });
+        put({ layer: LAYER.EDGE, kind: K.PULL + EDGE, a, b: e, width: Math.max(0.06, Math.min(b.y1 - b.y0, alongX ? b.z1 - b.z0 : b.x1 - b.x0)), col: mulv(base, T.shade([0, 0, 1])), alpha: 1, dry: 0.3, rank: small ? DETAIL : 0.75, key: `bar:${a.join(',')}` });
         continue;
       }
       const near = city.boxesNear((b.x0 + b.x1) / 2, (b.z0 + b.z1) / 2, Math.max(b.x1 - b.x0, b.z1 - b.z0) / 2 + 1);

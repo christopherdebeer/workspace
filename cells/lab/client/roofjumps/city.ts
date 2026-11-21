@@ -28,7 +28,8 @@ const CELL = 8, CELLS = CHUNK / CELL;
 export const TAG = { GROUND: 0, BUILDING: 1, STEP: 2, HUT: 3, UNIT: 4, TANK: 5, PLAYER: 6, RIM: 7, BEAM: 8, STAIR: 9, BAR: 10, DEBRIS: 11, CLUTTER: 12, SKYLIGHT: 13, SLAB: 14 } as const;
 export type Tag = (typeof TAG)[keyof typeof TAG];
 
-export interface Box { x0: number; z0: number; x1: number; z1: number; y0: number; y1: number; tag: Tag }
+/** a box; `fixture` for the small things fixed to a face (a unit, a sign, a balcony, a fire escape's parts): drawn as detail */
+export interface Box { x0: number; z0: number; x1: number; z1: number; y0: number; y1: number; tag: Tag; fixture?: true }
 
 /**
  * An authored course (a scene to study): its boxes in place of chunk (0, 0)'s, holds added by hand (no sills or pipes by
@@ -43,7 +44,7 @@ export interface Course {
   alone?: boolean;
 }
 
-export type HoldKind = 'edge' | 'rail' | 'sill' | 'pipe' | 'face' | 'bar' | 'ledge' | 'ac' | 'sign' | 'balcony';
+export type HoldKind = 'edge' | 'rail' | 'sill' | 'pipe' | 'face' | 'bar' | 'ledge' | 'ac' | 'sign' | 'balcony' | 'escape';
 /**
  * Somewhere to put a hand or a foot: a line from a to b, facing (nx, nz) (level, out from the wall; 0, 0 for a rail).
  * A face is the one that isn't a line: the whole of a wall, from a at its foot to b at its top.
@@ -56,10 +57,11 @@ export type HoldKind = 'edge' | 'rail' | 'sill' | 'pipe' | 'face' | 'bar' | 'led
  *   ac    hand: grab (short)  foot: step (a unit under a window: its top's front edge)
  *   sign  hand: hang (short)  foot: none (a bracket out from the wall: a bar to hang from, one hand or two along it)
  *   balcony hand: grab, shimmy  foot: stand (its rail: a good grip, and a slab under it to put the feet on)
+ *   escape hand: grab  foot: stand on the rail itself (a fire escape's landing rail, a storey apart, climbed rail to rail)
  */
 export interface Hold { kind: HoldKind; hand: string; foot: string; ax: number; ay: number; az: number; bx: number; by: number; bz: number; nx: number; nz: number }
 export const USES: Record<HoldKind, { hand: string; foot: string }> = {
-  ledge: { hand: 'grab', foot: 'stand' }, ac: { hand: 'grab', foot: 'step' }, sign: { hand: 'hang', foot: '' }, balcony: { hand: 'grab', foot: 'stand' },
+  ledge: { hand: 'grab', foot: 'stand' }, ac: { hand: 'grab', foot: 'step' }, sign: { hand: 'hang', foot: '' }, balcony: { hand: 'grab', foot: 'stand' }, escape: { hand: 'grab', foot: 'stand' },
   edge: { hand: 'grab', foot: 'push' }, sill: { hand: 'grab', foot: 'toe' }, pipe: { hand: 'grip', foot: 'clamp' }, rail: { hand: 'plant', foot: 'balance' }, face: { hand: 'steady', foot: 'tread' }, bar: { hand: 'swing', foot: '' },
 };
 /** a hold, and the point on it nearest what was asked */
@@ -78,6 +80,29 @@ export interface Chunk { cx: number; cz: number; boxes: Box[]; props: Box[]; cel
 
 const key = (cx: number, cz: number) => `${cx},${cz}`;
 
+/**
+ * A fire escape landing, drawn from its rail (the hold, along its front, `ay` the rail's top): the grated slab a metre deep
+ * back to the wall, the rail as a top bar on posts with a mid bar, the ends railed too; and the flight down from it to the
+ * landing a storey below, a run of steps along the wall, a switchback (each flight the other way from the one below).
+ */
+function escapeProps(h: Hold): Box[] {
+  const { nx, nz } = h, len = Math.hypot(h.bx - h.ax, h.bz - h.az), ux = (h.bx - h.ax) / len, uz = (h.bz - h.az) / len, y = h.ay - 1;
+  // (a box between two points along the rail (t0..t1, from a), from o0 to o1 back toward the wall, y0..y1)
+  const box = (t0: number, t1: number, o0: number, o1: number, y0: number, y1: number, tag: Tag): Box => {
+    const xs = [h.ax + ux * t0 - nx * o0, h.ax + ux * t1 - nx * o0, h.ax + ux * t0 - nx * o1, h.ax + ux * t1 - nx * o1], zs = [h.az + uz * t0 - nz * o0, h.az + uz * t1 - nz * o0, h.az + uz * t0 - nz * o1, h.az + uz * t1 - nz * o1];
+    return { x0: Math.min(...xs), x1: Math.max(...xs), z0: Math.min(...zs), z1: Math.max(...zs), y0, y1, tag, fixture: true };
+  };
+  const out: Box[] = [box(0, len, 0, 1, y - 0.06, y, TAG.SLAB), box(0, len, 0, 0.04, h.ay - 0.04, h.ay, TAG.BAR), box(0, len, 0, 0.03, y + 0.5, y + 0.53, TAG.BAR)];
+  for (let t = 0; t <= len + 1e-6; t += len / 3) out.push(box(Math.min(len - 0.04, t), Math.min(len, t + 0.04), 0, 0.04, y, h.ay, TAG.BAR));
+  for (const t of [0, len - 0.04]) out.push(box(t, t + 0.04, 0, 1, h.ay - 0.04, h.ay, TAG.BAR));
+  // (the flight down: from this landing's far end (by the storey, alternately) to the one below, eight steps, 0.6 m wide by the wall)
+  if (y > STOREY + 0.1) {
+    const odd = Math.round(y / STOREY) % 2 === 1, n = 8;
+    for (let i = 0; i < n; i++) { const f = i / n, t0 = odd ? len * f : len * (1 - f) - len / n, yy = y - STOREY * (1 - f); out.push(box(Math.max(0, t0), Math.min(len, t0 + len / n), 0.4, 1, yy - 0.05, yy, TAG.STAIR)); }
+  }
+  return out;
+}
+
 /** what's drawn of a hold: thin boxes, off the lattice, not stood on (a pipe a column, a sill a band, a ledge a deeper one, a
  * unit a box, a sign's bracket and board, a balcony's slab and rail); nothing for what's part of a box already (an edge, a face) */
 export function holdProps(h: Hold): Box[] {
@@ -85,16 +110,17 @@ export function holdProps(h: Hold): Box[] {
   // (a box from a to b along the hold, from o0 to o1 out from it (negative: back toward the wall), between y0 and y1)
   const box = (o0: number, o1: number, y0: number, y1: number, tag: Tag, w = 0): Box => {
     const xs = [h.ax + nx * o0 - ux * w, h.ax + nx * o1 - ux * w, h.bx + nx * o0 + ux * w, h.bx + nx * o1 + ux * w], zs = [h.az + nz * o0 - uz * w, h.az + nz * o1 - uz * w, h.bz + nz * o0 + uz * w, h.bz + nz * o1 + uz * w];
-    return { x0: Math.min(...xs), x1: Math.max(...xs), z0: Math.min(...zs), z1: Math.max(...zs), y0, y1, tag };
+    return { x0: Math.min(...xs), x1: Math.max(...xs), z0: Math.min(...zs), z1: Math.max(...zs), y0, y1, tag, fixture: true };
   };
   switch (h.kind) {
     case 'pipe': return [box(0.01, 0.11, h.ay, h.by, TAG.BAR, 0.05)];
     case 'sill': return [box(0, 0.12, h.ay - 0.06, h.ay, TAG.RIM)];
     case 'ledge': return [box(-0.3, 0, h.ay - 0.22, h.ay, TAG.RIM)];
     case 'ac': return [box(-0.48, 0.02, h.ay - 0.55, h.ay, TAG.UNIT)];
-    case 'sign': { const sx = h.bx - h.ax, sz = h.bz - h.az, l = Math.hypot(sx, sz) || 1, px = -sz / l * 0.03, pz = sx / l * 0.03, ext = (o0: number, o1: number, y0: number, y1: number, tag: Tag): Box => { const xs = [h.ax + (sx / l) * o0 - px, h.ax + (sx / l) * o1 + px], zs = [h.az + (sz / l) * o0 - pz, h.az + (sz / l) * o1 + pz]; return { x0: Math.min(...xs), x1: Math.max(...xs), z0: Math.min(...zs), z1: Math.max(...zs), y0, y1, tag }; };
+    case 'sign': { const sx = h.bx - h.ax, sz = h.bz - h.az, l = Math.hypot(sx, sz) || 1, px = -sz / l * 0.03, pz = sx / l * 0.03, ext = (o0: number, o1: number, y0: number, y1: number, tag: Tag): Box => { const xs = [h.ax + (sx / l) * o0 - px, h.ax + (sx / l) * o1 + px], zs = [h.az + (sz / l) * o0 - pz, h.az + (sz / l) * o1 + pz]; return { x0: Math.min(...xs), x1: Math.max(...xs), z0: Math.min(...zs), z1: Math.max(...zs), y0, y1, tag, fixture: true }; };
       return [ext(-0.2, l + 0.05, h.ay - 0.05, h.ay + 0.03, TAG.BAR), ext(0.05, l, h.ay - 0.85, h.ay - 0.12, TAG.UNIT)]; }
     case 'balcony': return [box(-1, 0, h.ay - 1.15, h.ay - 1, TAG.SLAB), box(-0.05, 0, h.ay - 1, h.ay, TAG.BAR)];
+    case 'escape': return escapeProps(h);
     default: return [];
   }
 }
@@ -232,7 +258,7 @@ export class City {
     // (a box from two corners along the face, out to `out`, between y0 and y1)
     const slab = (px: number, pz: number, qx: number, qz: number, nx: number, nz: number, o0: number, o1: number, y0: number, y1: number, tag: Tag) => {
       const xs = [px + nx * o0, px + nx * o1, qx + nx * o0, qx + nx * o1], zs = [pz + nz * o0, pz + nz * o1, qz + nz * o0, qz + nz * o1];
-      props.push({ x0: Math.min(...xs), x1: Math.max(...xs), z0: Math.min(...zs), z1: Math.max(...zs), y0, y1, tag });
+      props.push({ x0: Math.min(...xs), x1: Math.max(...xs), z0: Math.min(...zs), z1: Math.max(...zs), y0, y1, tag, fixture: true });
     };
     for (const b of boxes) {
       if (b.tag !== TAG.BUILDING || b.y1 - b.y0 < 2 * STOREY) continue;
@@ -266,6 +292,15 @@ export class City {
           const [p, q] = [at(t - 1.2), at(t + 1.2)];
           slab(p[0], p[1], q[0], q[1], nx, nz, 0, 1.0, y - 0.15, y, TAG.SLAB); slab(p[0], p[1], q[0], q[1], nx, nz, 0.95, 1.0, y, y + 1.0, TAG.BAR);
           hold('balcony', p[0] + nx * 1.0, y + 1.0, p[1] + nz * 1.0, q[0] + nx * 1.0, y + 1.0, q[1] + nz * 1.0, nx, nz);
+        }
+        // (a fire escape: a landing at every storey from the first up to the one below the roof, its rail a hold a storey from
+        // the next, the flights between drawn; on a face long enough, with room in front of it all the way up)
+        if (rand() < 0.12 && storeys >= 3 && len >= 5) {
+          const t = 1 + rand() * (len - 4.6), w = 3;
+          if (open(t, t + w, 1.05, STOREY - 0.2)) for (let k2 = 1; k2 * STOREY < b.y1 - 1.2; k2++) {
+            const y = k2 * STOREY, [p, q] = [at(t), at(t + w)], e: Hold = { kind: 'escape', ...USES.escape, ax: p[0] + nx * 1.0, ay: y + 1.0, az: p[1] + nz * 1.0, bx: q[0] + nx * 1.0, by: y + 1.0, bz: q[1] + nz * 1.0, nx, nz };
+            holds.push(e); props.push(...escapeProps(e));
+          }
         }
       }
     }

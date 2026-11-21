@@ -533,6 +533,16 @@ Done from it so far:
 - *No foot on ground detail.* Every footfall, whatever chose it (a plan, the stride, a landing's first foot, a foot planted
   to go from), is moved off rubble, clutter or a skylight to the nearest clear spot, out to 1.3 m. The street test's 30 s
   runs: none of 670 footfalls on it (had been 6 of 662, a landing's first foot each time).
+- *Fire escapes* (the stair clip's whole climb). On about one in eight faces long and tall enough, with room in front of
+  it all the way up: a landing at every storey from the first to the one below the roof, a grated slab a metre out with a
+  rail round its front and ends, and the flights between drawn as switchbacks. Each landing's rail is a hold (`escape`):
+  caught from the street, stepped up onto (a step, quicker than up onto a ledge) and stood on, as in the clip; from
+  standing on it, a jump for the next rail a storey up; from the top landing, the roof's lip, looked for out where the face
+  is (a metre off) and sprung in to. Scene `fire-escape`: street to a 15 m roof in about 8 s, a storey about 1.3 s (the
+  clip's 1.1). Pressing into a face now sees holds out to a metre and a half from it (a balcony's rail, a fire escape's).
+  Fixture parts are marked as such, and the painted look lets them withdraw with the detail at distance.
+- *Climbs by kind, kept.* A hold the feet can stand on is stepped up onto first; the lip from it only if it's right overhead
+  (had been reached for straight from the hang once the lip could be seen from a hold a little off the wall).
 - *The eye in the films.* What looked like the eye jammed into the figure's back in alleys was the contact sheets' eye
   only: in play the eye already widens and rises up a face and between walls. The sheets now frame each moment as play
   would (wide up a face, between walls, on a bar, off a wall; aimed by the body's facing off the ground, not by a velocity
@@ -550,7 +560,7 @@ later, per look. Times are in the clips (`devtools/refs/roofjumps.json`).
 | parapets, low roof-edge walls | rooftops 5.8-6.5, 9-11; kling 11.3-13.2 (run along) | `RIM` boxes, `edge` holds | grab; take off from, land on, run along | have it; a parapet run as its own line (precision along it) |
 | units on roofs (condensers) | rooftops 4.5-5.5 (hopped) | `UNIT` boxes | plant, vault, step | have it |
 | units on walls | rooftops 3.3-5.5, kling 3.5, stills | `ac` hold, drawn | grab, step | have it |
-| fire escapes: switchback stairs, landings, rails up a face | stair 3.5-14.5 (the whole climb) | `STAIR` boxes up a building's side; sills | landing edge: grab; landing: stand; rails: grab; stairs: run | tag `ESCAPE` (landings as slabs open beneath, flights, rails); holds on the landing edges and rails |
+| fire escapes: switchback stairs, landings, rails up a face | stair 3.5-14.5 (the whole climb) | done: `escape` holds (the landings' rails), landings, rails and flights drawn | landing edge: grab; landing: stand; rails: grab; stairs: run | tag `ESCAPE` (landings as slabs open beneath, flights, rails); holds on the landing edges and rails |
 | balconies | stills, stair background | `balcony` hold, drawn | grab rail, stand on slab | have it |
 | window grilles, bars over windows | rooftops faces, stair | sills (undrawn) | hands and feet anywhere on it | hold `grille` (a face you can grip all over); tag `GRILLE` |
 | window frames, sills | everywhere | `sill` hold, not drawn in the plain looks | grab, toe | a tag so a look can draw them cheaply |

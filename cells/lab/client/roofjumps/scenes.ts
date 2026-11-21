@@ -276,6 +276,16 @@ function holdScenes(): Scene[] {
         onTop(15)],
     },
     {
+      key: 'fire-escape', title: 'Up a fire escape, rail to rail',
+      asks: 'The reference\'s climb (kyo-stair): from the street, a fire escape up a 15 m face, a landing every storey. Run at it and press in: the first rail caught, stepped up onto; from standing on it, a jump for the next a storey up; a storey a beat to the top landing, and from there the roof\'s lip.',
+      watch: 'The rhythm storey to storey; standing on the rail, the body long reaching for the next; the step up; the pull over at the top.',
+      course: { boxes: [B(20, 44, F, 40, 15)], holds: [3, 6, 9, 12].map((y) => ({ kind: 'escape' as const, ax: 30, ay: y + 1, az: F - 1, bx: 33, by: y + 1, bz: F - 1, nx: 0, nz: -1 })), start: { x: 31.5, z: 16 }, alone: true }, seconds: 10,
+      input: (t, r) => (r.y > 14.9 && r.state === 'ground' ? none : go(0)),
+      should: [...commonShoulds,
+        { says: 'up the landings rail to rail: stepped up onto each, and on from standing on it', check: (r) => ok(made(r, 'step-up') >= 3 && made(r, 'up-from-standing') >= 3, JSON.stringify(r.runner.climbsBy)) },
+        onTop(15)],
+    },
+    {
       key: 'diagonal-unit', title: 'Up and across to a unit, and up from it',
       asks: 'Short of a 15 m roof; a sill at 9 m, and up and to the side a unit under a window. Steered up and that way: sprung diagonally for the unit, stepped up onto it, and from standing on it, the lip.',
       watch: 'The diagonal spring and its one-handed catch; the unit used as a step.',
