@@ -502,6 +502,37 @@ The first gouache was a nod: paint-coloured textures on a render, still plainly 
 `node cells/lab/views.mjs roofjumps` makes every picture here from `client/roofjumps/views.mjs`
 (each `static/roofjumps/v-<name>.jpg`, the whole set in `static/roofjumps/views.md`).
 
+## The city in the references (to tag; no look yet)
+
+What the three clips' city has that a body could use or would brush past, set against what we have now. Each
+needs a tag (and, where a hand or foot can use it, a hold kind with its uses) before it needs a look; the look comes
+later, per look. Times are in the clips (`devtools/refs/roofjumps.json`).
+
+| detail | seen | we have | hand / foot | to add |
+|---|---|---|---|---|
+| railings (walkway and roof-edge rails, fire-escape rails) | rooftops 1.3-2.0 (hopped), stair 2.3-14.5, kling 11.3 | a `rail` hold only along the top of something narrow | grab, plant to vault, swing under; balance along the top | tag `RAILING` (posts and a top rail, thin, off the lattice); hold `railing` |
+| parapets, low roof-edge walls | rooftops 5.8-6.5, 9-11; kling 11.3-13.2 (run along) | `RIM` boxes, `edge` holds | grab; take off from, land on, run along | have it; a parapet run as its own line (precision along it) |
+| units on roofs (condensers) | rooftops 4.5-5.5 (hopped) | `UNIT` boxes | plant, vault, step | have it |
+| units on walls | rooftops 3.3-5.5, kling 3.5, stills | `ac` hold, drawn | grab, step | have it |
+| fire escapes: switchback stairs, landings, rails up a face | stair 3.5-14.5 (the whole climb) | `STAIR` boxes up a building's side; sills | landing edge: grab; landing: stand; rails: grab; stairs: run | tag `ESCAPE` (landings as slabs open beneath, flights, rails); holds on the landing edges and rails |
+| balconies | stills, stair background | `balcony` hold, drawn | grab rail, stand on slab | have it |
+| window grilles, bars over windows | rooftops faces, stair | sills (undrawn) | hands and feet anywhere on it | hold `grille` (a face you can grip all over); tag `GRILLE` |
+| window frames, sills | everywhere | `sill` hold, not drawn in the plain looks | grab, toe | a tag so a look can draw them cheaply |
+| blade signs (tall boards out from a wall) | kling 7.2-9.2, stair | `sign` bracket (short bar) | grab its top or edge; swing round it | hold `blade` (vertical edge and top); tag `SIGN` |
+| utility poles | rooftops 12.4-15.75, kling 6.4-7.2 | none | climb (as a pipe), swing round | tag `POLE`; hold `pipe` standing free (no wall) |
+| overhead wires between buildings and poles | rooftops 12.4-15.75 (sunk past), kling 6.4-7.2 | none | nothing to hold; brushed past, ducked | tag `WIRE` (lines, not boxes: something the camera and the flight path mind) |
+| water tanks on stands | kling background, stills | `TANK` boxes | its stand's legs and cross-braces: climb; its top: land on | holds on the stand (`pipe`-like legs, `bar`-like braces) |
+| roof stair housings, huts with doors | everywhere | `HUT` boxes | climb onto, kick off | have it |
+| pipe runs along walls (horizontal) | rooftops faces, stair | drainpipes (vertical `pipe`) only | shimmy along | a `pipe` hold that runs level |
+| gutters and eaves at roof edges | stair 14.5-16.5, low roofs in kling | `edge` holds | grab (a lip that sticks out) | tag `EAVE`; an `edge` that overhangs |
+| corrugated and pitched sheet roofs (low sheds) | kling 7.6-9.0 | everything is a flat box | land on, slide, run up | tag `SHED`; needs sloped roofs (see Not yet) |
+| satellite dishes | kling 7.3 | none | plant a hand; an obstacle | tag `DISH` (a roof prop, clutter to the feet) |
+| antennas, aerials | rooftops and kling backgrounds | none | nothing; skyline detail | tag `AERIAL` (thin roof prop) |
+| laundry lines, poles on roofs | rooftops background | none | duck under; an obstacle | tag `LINE` (clutter) |
+| potted plants on ledges and stairs | stair 1.3-2.4 | clutter regions (pipe runs, vents, curbs) | stepped over or round | a clutter kind `plants` |
+| walkways and bridges between roofs | rooftops 1.25-2.0 (a railed walkway) | bars across some alleys | run across, rails either side | tag `WALKWAY` (a narrow box stood on, with railings) |
+| street furniture (bins, bikes, hydrants, steps) | rooftops 15.75-16.5 (the street landing) | an empty street | land beside, vault, step | street clutter kinds |
+
 ## Not yet
 
 Sloped roofs, ledges, planks and wires between buildings (everything is a box so far); a zig-zag
