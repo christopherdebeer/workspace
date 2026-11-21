@@ -77,6 +77,9 @@ export class Rig {
   /** each joint's speed toward its pose; and the chest's lag behind the hips (rad) and its speed, the hips' last height
    * and speed: weight */
   private vel = zero(); private ph = 0; private lastPhase = 0; toe = [0, 0]; private toeWas = [0, 0];
+  /** each planted knee's bend direction last step (unit, world), kept so a knee isn't swung round by the hips turning over a
+   * fixed foot, nor flipped where a near-straight leg says little about which way it should bend */
+  kneeDir: (V3 | null)[] = [null, null]; private kneeWas: (V3 | null)[] = [null, null];
   /** how far a flight has got ready for the ground: it only goes on, so the ground falling away beneath (over an edge) never
    * unfolds it */
   private prep = 0; private chest = 0; private chestV = 0; private lastHip = 1; private hipV = 0;
@@ -605,8 +608,8 @@ export class Rig {
       if (!to && sf && r.state === 'ground' && !(r.speed > 2.2 && nf && nf.side === side && nf.t < 0.1)) {
         const wk = 1 - sm(2.2, 3.4, r.speed);
         if (wk > 0) {
-          // (where it's going, eased toward when that changes in the air (a step planned as the other foot lands), not jumped to)
-          const ka = 1 - Math.exp(-(sf.k > 0.85 ? 60 : 18) * dt); f.aim = f.aim ? [f.aim[0] + (sf.to[0] - f.aim[0]) * ka, f.aim[1] + (sf.to[1] - f.aim[1]) * ka, f.aim[2] + (sf.to[2] - f.aim[2]) * ka] : [...sf.to] as V3;
+          // (where it's going, as the runner has committed it (already changing course only as a foot can))
+          f.aim = [...sf.to] as V3;
           sf.to = f.aim;
           const k = sf.k, path = MOCAP.on ? swingPath(r.speed, Math.min(1, sf.k / 0.9)) : null, e = path ? path.along : sm(0.1, 0.95, k), len = Math.hypot(sf.to[0] - sf.from[0], sf.to[2] - sf.from[2]), liftH = (0.05 + 0.08 * Math.min(1, len / 0.8)) * (1 + 0.3 * Math.max(0, r.speed - 1.5));
           let lift = liftH * Math.max(Math.sqrt(Math.max(0, Math.sin(Math.PI * Math.min(1, k * 1.05)))), 0.45 * Math.sqrt(Math.max(0, Math.sin(Math.PI * e)))); /* (and clear of the ground whenever it's travelling) */
@@ -740,7 +743,7 @@ export class Rig {
     // (taken quickly, given back a little slower)
     for (let i = 0; i < 3; i++) { const k = Math.abs(want[i]) > Math.abs(this.give[i]) ? 60 : 18; this.give[i] += (want[i] - this.give[i]) * (dt > 0.2 ? 1 : 1 - Math.exp(-k * dt)); }
     // (the bones solved once a step, keeping what the next step depends on; drawing them reads, it doesn't change them)
-    this.toeWas = this.toe.slice(); this.solve(r, true);
+    this.toeWas = this.toe.slice(); this.kneeWas = this.kneeDir.slice(); this.kneeDir = [null, null]; this.solve(r, true);
   }
 
   private pelvis(r: Body, give: V3): M4 {
@@ -826,7 +829,12 @@ export class Rig {
         if (d > most) { to = [s[0] + (dir[0] * most) / d, s[1] + (dir[1] * most) / d, s[2] + (dir[2] * most) / d]; d = most; }
         dir = unit(dir);
         const a = (this.body.thigh * this.body.thigh - this.body.shin * this.body.shin + d * d) / (2 * Math.max(d, 1e-3)), h = Math.sqrt(Math.max(0, this.body.thigh * this.body.thigh - a * a));
-        const pole: V3 = [P[8] + P[4] * 0.3, P[9] + P[5] * 0.3, P[10] + P[6] * 0.3], k = pole[0] * dir[0] + pole[1] * dir[1] + pole[2] * dir[2], out2 = unit([pole[0] - dir[0] * k, pole[1] - dir[1] * k, pole[2] - dir[2] * k]);
+        // (the way the knee bends: forward of the hips and a little up, as the pose has it; carried on from where it bent last
+        // step (more the straighter the leg, where the hips alone say little), and toward the way the foot points once it bears
+        // weight: so the knee goes with the foot it stands on, not round with the turning hips)
+        const prevK = this.kneeWas[L ? 0 : 1], straight = Math.max(0, 1 - h / (0.35 * this.body.thigh)), fy = sole.yaw, carry = prevK ? 0.6 + 1.4 * straight : 0;
+        const pole: V3 = [P[8] + P[4] * 0.3 + (prevK ? prevK[0] * carry : 0) + Math.sin(fy) * 0.5 * plantK, P[9] + P[5] * 0.3 + (prevK ? prevK[1] * carry : 0), P[10] + P[6] * 0.3 + (prevK ? prevK[2] * carry : 0) + Math.cos(fy) * 0.5 * plantK], k = pole[0] * dir[0] + pole[1] * dir[1] + pole[2] * dir[2], out2 = unit([pole[0] - dir[0] * k, pole[1] - dir[1] * k, pole[2] - dir[2] * k]);
+        if (commit) this.kneeDir[L ? 0 : 1] = out2;
         const kneeAt: V3 = [s[0] + dir[0] * a + out2[0] * h, s[1] + dir[1] * a + out2[1] * h, s[2] + dir[2] * a + out2[2] * h], fwd: V3 = [P[8], P[9], P[10]];
         Th = aim(s, kneeAt, fwd); K = aim(kneeAt, to, fwd); planted = to;
       }
