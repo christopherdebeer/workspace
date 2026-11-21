@@ -32,7 +32,7 @@ function record(sc) {
       const ball = M.point(ft, 0, -rig.body.sole, rig.body.ball);
       // (the knee's bend: 0 straight; the sole's pitch: + toe up; the foot's speed)
       const knee = deg(angle(axis(th, 1), axis(sh, 1))), z = axis(ft, 2), pitch = deg(Math.asin(Math.max(-1, Math.min(1, z[1]))));
-      f[s] = { knee, pitch, ball, planted: sole.w > 0.9 && !sole.lost, hip: [th[12], th[13], th[14]], kneeP: [sh[12], sh[13], sh[14]], groundY: city.heightAt(ball[0], ball[2]) };
+      f[s] = { knee, pitch, ball, planted: !!(s === 'L' ? r.reach.fl : r.reach.fr) && sole.w > 0.9, hip: [th[12], th[13], th[14]], kneeP: [sh[12], sh[13], sh[14]], groundY: city.heightAt(ball[0], ball[2]) };
     }
     F.push(f);
   }

@@ -90,7 +90,10 @@ const ROLL = 0.5;
 const AXES = [[1, 0], [-1, 0], [0, 1], [0, -1]];
 /** a running step (one foot to the other), by pace: 1.6 m at 6 m/s, 2.3 m at 10.5, 2.9 m at 14 (a sprinter's, so the
  * cadence is 3.8 to 4.8 steps a second, not a churn); and how far ahead of the body a foot comes down */
-export const stepLen = (sp: number) => 0.55 + 0.17 * sp;
+export const stepLen = (sp: number) => { const run = 0.55 + 0.17 * sp, t = walkToRun(sp); return t >= 1 ? run : (0.4 + 0.22 * sp) * (1 - t) + run * t; };
+/** a walk's step is its own (0.62 m at 1 m/s, as people walk), not a slow run's: blended into the run's between 1.8 and
+ * 2.6 m/s (0 walking, 1 running) */
+export const walkToRun = (sp: number) => { const t = Math.max(0, Math.min(1, (sp - 1.8) / 0.8)); return t * t * (3 - 2 * t); };
 const AHEAD = 0.25;
 /** how far out to its own side a running foot is put: near the line the body runs on, as a runner's are (not under each hip) */
 const TRACK = 0.04;
@@ -282,7 +285,7 @@ export class Runner implements Body {
   private vaultTo = 0;
   private grips: Reach = {};
   /** each foot's footfall: planted or not, and where */
-  private feet = { L: { on: false, p: [0, 0, 0] as P3, done: false }, R: { on: false, p: [0, 0, 0] as P3, done: false } };
+  private feet = { L: { on: false, p: [0, 0, 0] as P3, done: false, up: -9, held: null as { from: P3; t: number; need: number } | null }, R: { on: false, p: [0, 0, 0] as P3, done: false, up: -9, held: null as { from: P3; t: number; need: number } | null } };
   /** a step taken standing: which foot, from where to where, how far through (s) and how long it takes */
   standStep: { side: number; from: P3; to: P3; t: number; dur: number } | null = null;
   /** where each foot last was: on the ground now, or where it left it */
@@ -293,8 +296,11 @@ export class Runner implements Body {
     if (this.state !== 'ground' || this.move === 'roll') return null;
     const ss = this.standStep; if (ss) return ss.side === side ? { from: ss.from, to: ss.to, k: Math.min(1, ss.t / ss.dur) } : null;
     const f = side > 0 ? this.feet.L : this.feet.R, sp = this.speed; if (f.on || sp < WALK) return null;
-    const rate = (sp / (2 * this.stepNow)) * 2 * Math.PI, span = this.span, from = Math.PI / 2 + 0.3;
+    const rate = this.phaseRate, span = this.span, from = Math.PI / 2 + 0.3;
     const d = (((from - (this.phase + (side > 0 ? 0 : Math.PI))) % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI), t = d / Math.max(0.1, rate), dur = (2 * Math.PI - span) / Math.max(0.1, rate);
+    // (held in the air, due down but its swing not done: from where it was drawn when held, to where it's going, by its own clock)
+    const hd = f.held;
+    if (hd) { const ux = this.vx / sp, uz = this.vz / sp, x = this.x + ux * this.ahead_ + uz * side * this.track_, z = this.z + uz * this.ahead_ - ux * side * this.track_; return { from: hd.from, to: [x, this.city.heightAt(x, z), z], k: Math.min(1, (this.time - hd.t) / hd.need) }; }
     // (where it'll come down: where it's planned to, if it's the next and there's a plan; else where the stride will put it)
     // (the same choice the foot will make as it lands: the plan if it's still near where the stride would put it)
     const nf = this.nextFoot, ux = this.vx / sp, uz = this.vz / sp, x = this.x + this.vx * t + ux * this.ahead_ + uz * side * this.track_, z = this.z + this.vz * t + uz * this.ahead_ - ux * side * this.track_;
@@ -324,12 +330,18 @@ export class Runner implements Body {
   /** each foot's step in the air at the last footing, so a stand taken mid-step steps on from where the foot is */
   private swung: { L: { from: P3; to: P3; k: number } | null; R: { from: P3; to: P3; k: number } | null } = { L: null, R: null };
   /** the step being taken (m): as planned, else the stride's at this pace */
-  private get stepNow(): number { return this.stepTo || this.stepLenOf(Math.max(WALK, this.speed)) * this.stepScale; }
+  // (a planned step only if it's a real one: a run-up's plan can come out at nothing or less where a lip is very near)
+  // (and slow, never much longer than this pace's own: a step planned at speed isn't crawled over at a walk; at speed a run-up's
+  // stretched step is as planned)
+  private get stepNow(): number { const own = this.stepLenOf(Math.max(WALK, this.speed)), planned = this.stepTo > 0.3 ? this.stepTo : own * Math.max(0.6, this.stepScale); return this.speed < 3 ? Math.min(planned, own * 1.25) : planned; }
+  /** how fast the stride turns (rad/s): a step's worth of phase per step's length gone; the one rate the feet are timed by,
+   * and foreseen by (inStep, nextFoot) */
+  private get phaseRate(): number { return (this.speed / (2 * this.stepNow)) * 2 * Math.PI; }
   /** how much of a stride's turn a foot is down for, this step: fixed by the step as planned, so a change of pace in it
    * doesn't open or close a foot's time on the ground under it */
   /** how much of a stride's turn a foot is down for: as long as the body takes to go its stance over it; at a walk that's
    * more than half, so both feet are down for a while each step (a walk), and less as it quickens (a run, with its flight) */
-  private get span(): number { return Math.min(3.6, (Math.PI * this.stance_) / this.stepNow); }
+  private get span(): number { return Math.min(4.1, (Math.PI * this.stance_) / this.stepNow); }
   private air2 = false;
   /** the jump held, this step: a fall becomes a glide */
   private hold = false;
@@ -362,9 +374,12 @@ export class Runner implements Body {
   private get height_(): number { return this.character.proportions.stature * (1.8 / 1.82); }
   /** where a foot comes down ahead of the body, how far out from its line, how far the body goes over a foot while it's
    * down: the runner's, for its legs, scaled to this body's */
-  private get ahead_(): number { return AHEAD * this.build.legScale; }
+  // (walking: the body goes 1.24 steps over each planted foot (so each is down about three fifths of the stride, and
+  // both are down together a while at each step, as a walk is), the foot coming down about two fifths of that ahead;
+  // blended into the run's as the pace rises)
+  private get ahead_(): number { const t = walkToRun(this.speed); return (AHEAD * t + 0.42 * 1.24 * this.stepLenOf(Math.max(WALK, this.speed)) * (1 - t)) * (t >= 1 ? this.build.legScale : 1); }
   private get track_(): number { return TRACK * this.build.legScale; }
-  private get stance_(): number { return STANCE * this.build.legScale; }
+  private get stance_(): number { const t = walkToRun(this.speed); return t >= 1 ? STANCE * this.build.legScale : STANCE * this.build.legScale * t + 1.24 * this.stepLenOf(Math.max(WALK, this.speed)) * (1 - t); }
 
   get speed(): number { return Math.hypot(this.vx, this.vz); }
 
@@ -398,7 +413,7 @@ export class Runner implements Body {
   get nextFoot(): { side: number; p: P3; t: number } | null {
     const ss = this.standStep; if (ss && this.state === 'ground') return { side: ss.side, p: ss.to, t: Math.max(0, ss.dur - ss.t) };
     if (this.state !== 'ground' || this.move === 'roll' || this.speed < WALK || !this.nextFall) return null;
-    const rate = ((this.speed / (2 * (this.stepTo || this.stepLenOf(this.speed) * this.stepScale))) * 2 * Math.PI) || 1, from = Math.PI / 2 + 0.3;
+    const rate = this.phaseRate || 1, from = Math.PI / 2 + 0.3;
     let best: { side: number; p: P3; t: number } | null = null;
     for (const [side, off, on] of [[1, 0, this.feet.L.on], [-1, Math.PI, this.feet.R.on]] as const) {
       if (on) continue;
@@ -536,18 +551,39 @@ export class Runner implements Body {
     const fx = ground && sp > 0.5 ? this.vx / sp : Math.sin(this.heading), fz = ground && sp > 0.5 ? this.vz / sp : Math.cos(this.heading);
     for (const [foot, side, off] of [[f.L, 1, 0], [f.R, -1, Math.PI]] as const) {
       const ph = (((a + off - from) % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI), down = ph < span;
-      if (down && !foot.on && !foot.done) {
+      // (a foot just lifted swings a while before it can come down again: slowing, a walk's longer stance widens the time a
+      // foot is down into what was its swing, and a foot caught mid-swing would be planted at once, a step ahead)
+      const wt = ground ? walkToRun(sp) : 1, aim: P3 = [this.x + fx * this.ahead_ + fz * side * this.track_, this.y, this.z + fz * this.ahead_ - fx * side * this.track_];
+      // (and due down far from where its swing has got to (the pace changed under it): held in the air, swung on from where
+      // it's drawn now, for as long as a foot takes to go that far)
+      let swungLong = !ground || this.time - foot.up >= 0.22 * (1 - wt) + 0.06 * wt;
+      if (ground && down && !foot.on && !foot.done && swungLong) {
+        // (only a foot swinging on the ground: one coming down out of the air has no swing drawn on the ground to finish)
+        const sw = side > 0 ? this.swung.L : this.swung.R;
+        if (!foot.held && sw) {
+          const e = sw.k * sw.k * (3 - 2 * sw.k);
+          const now: P3 = [sw.from[0] + (sw.to[0] - sw.from[0]) * e, sw.from[1] + (sw.to[1] - sw.from[1]) * e, sw.from[2] + (sw.to[2] - sw.from[2]) * e];
+          const need = Math.hypot(aim[0] - now[0], aim[2] - now[2]) / (2.5 * Math.max(1.5, sp));
+          if (need > 0.05) foot.held = { from: now, t: this.time, need: need + 0.04 };
+        }
+        if (foot.held && this.time - foot.held.t < foot.held.need) swungLong = false;
+      }
+      if (down && !foot.on && !foot.done && swungLong) {
         let p: P3 | null = null;
         if (ground) {
           // (where the footstep plan put it, if it's still sound; else ahead of the body, out to its own side)
           let ax = this.x + fx * this.ahead_ + fz * side * this.track_, az = this.z + fz * this.ahead_ - fx * side * this.track_;
           const n = this.nextFall;
-          if (n && Math.hypot(n[0] - ax, n[2] - az) < 0.9 && Math.abs(this.city.heightAt(n[0], n[2]) - this.y) <= STEP && !this.city.regionAt(n[0], this.y, n[2])) { ax = n[0]; az = n[2]; }
+          if (n && Math.hypot(n[0] - ax, n[2] - az) < 0.9 * wt + 0.3 * (1 - wt) && Math.abs(this.city.heightAt(n[0], n[2]) - this.y) <= STEP && !this.city.regionAt(n[0], this.y, n[2])) { ax = n[0]; az = n[2]; }
           // (no sound plan, and the default spot's on something: the nearest clear spot by it, short of it first)
           else if (this.city.regionAt(ax, this.y, az)) for (const [da, dl] of [[-0.15, 0], [0.15, 0], [-0.3, 0], [0, 0.15 * side], [0.3, 0], [-0.15, 0.2 * side], [0.15, 0.2 * side], [-0.5, 0], [0.5, 0], [0, 0.35 * side], [-0.7, 0], [0.7, 0], [0, -0.3 * side]]) {
             const qx = ax + fx * da + fz * dl, qz = az + fz * da - fx * dl;
             if (Math.abs(this.city.heightAt(qx, qz) - this.y) <= STEP && !this.city.regionAt(qx, this.y, qz)) { ax = qx; az = qz; break; }
           }
+          // (at a walk, where the step drawn in the air was already going, if that's near and sound: the foot is put down where
+          // it's seen to be coming down, not snatched to a spot worked out afresh this frame)
+          const sw = side > 0 ? this.swung.L : this.swung.R;
+          if (sw && sp < 3.4 && Math.hypot(sw.to[0] - ax, sw.to[2] - az) < 0.45 && Math.abs(this.city.heightAt(sw.to[0], sw.to[2]) - this.y) <= STEP && !this.city.regionAt(sw.to[0], this.y, sw.to[2])) { ax = sw.to[0]; az = sw.to[2]; }
           const h = this.city.heightAt(ax, az);
           if (Math.abs(h - this.y) <= STEP) { p = [ax, h, az]; this.planSteps(p, side, fx, fz, sp); }
           // (along something narrow, on its line; past a lip, on the lip)
@@ -561,11 +597,13 @@ export class Runner implements Body {
           const g = this.city.gripAt(wx, wy, wz, 0.45, (o) => (o.kind === 'sill' || o.kind === 'pipe') && o.nx * this.wx + o.nz * this.wz < -0.5) ?? this.city.gripAt(wx, wy, wz, 0.3, (o) => o.kind === 'face' && o.nx * this.wx + o.nz * this.wz < -0.5);
           if (g) p = [g.x, g.y, g.z];
         }
-        if (p) { foot.on = true; foot.p = p; }
-      } else if (!down) { foot.on = false; foot.done = false; }
+        if (p) { foot.on = true; foot.p = p; foot.held = null; }
+      } else if (!down) { if (foot.on) foot.up = this.time; foot.on = false; foot.done = false; foot.held = null; }
       // (on the ground, a foot left out of the leg's reach behind (on its toe and all) is taken up early, not dragged; and
       // stays up till its time down is over)
-      else if (ground && foot.on && sp < 4) { const bx = foot.p[0] - this.x, bz = foot.p[2] - this.z, back = -(bx * fx + bz * fz); if (back > 0.42 + 0.03 * sp) { foot.on = false; foot.done = true; } }
+      // (walking, its stance runs to where the walk's own takes it, a little past: a walk's feet are down together a while)
+      // (and at a walk, never before the other foot is down: a walk always has a foot on the ground)
+      else if (ground && foot.on && sp < 4) { const bx = foot.p[0] - this.x, bz = foot.p[2] - this.z, back = -(bx * fx + bz * fz), t = walkToRun(sp), other = side > 0 ? f.R : f.L; if ((other.on || t > 0.5) && back > (0.42 + 0.03 * sp) * t + (this.stance_ - this.ahead_ + 0.08) * (1 - t)) { foot.on = false; foot.done = true; foot.up = this.time; } }
     }
     if (f.L.on) this.reach.fl = f.L.p;
     if (f.R.on) this.reach.fr = f.R.p;
@@ -916,8 +954,11 @@ export class Runner implements Body {
     if (sp > 3) { const ux0 = this.vx / sp, uz0 = this.vz / sp, lat = -cx * uz0 + cz * ux0, most = (14 + 60 / sp) * dt; if (Math.abs(lat) > most) { const k = (Math.sign(lat) * most - lat); cx += -uz0 * k; cz += ux0 * k; } }
     this.vx += cx; this.vz += cz;
     sp = this.speed;
-    // (the stride: a step's worth of phase by the step's length; a planned long step slower, a short one quicker)
-    this.phase += ((sp * dt) / (2 * (this.stepTo || this.stepLenOf(sp) * this.stepScale))) * 2 * Math.PI;
+    // (the stride: a step's worth of phase by the step's length; a planned long step slower, a short one quicker. But never
+    // a step much longer than this pace's own: slowing, a stride planned at speed isn't kept, or the cycle crawls over it
+    // and the legs hold a split while the body glides; well under the pace it was planned at, the plan is let go)
+    if (this.stepTo && sp < 3 && this.stepTo > this.stepLenOf(sp) * 1.45) { this.stepTo = 0; this.stepScale = 1; this.nextFall = null; }
+    this.phase += this.phaseRate * dt;
     // (the body's line drawn toward a footfall set out to the side, and back)
     { const k = 1 - Math.exp(-8 * dt), d = (this.shiftTarget - this.shift) * k, lx = Math.cos(this.heading), lz = -Math.sin(this.heading);
       if (Math.abs(this.city.heightAt(this.x + lx * d, this.z + lz * d) - this.y) <= STEP) { this.x += lx * d; this.z += lz * d; this.shift += d; }
@@ -2079,8 +2120,10 @@ export class Runner implements Body {
       return true;
     }
     // (the pendulum: along the wall and out from it; let alone it dies away, held it keeps on)
-    const W2 = G / L, damp = on ? 0.5 : 1.6;
+    const W2 = G / L, damp = on ? 0.5 : 1.6, s0 = w.s;
     w.v += (-W2 * w.s - damp * w.v) * dt; w.s += w.v * dt; if (Math.abs(w.s) > 1.3) { w.s = Math.sign(w.s) * 1.3; w.v = 0; }
+    // (swung along the wall into something standing beside it (a corner, a taller neighbour): stopped by it, a little rebound)
+    { const bx = w.x0 + w.tx * w.s + nx * w.o + w.tx * Math.sign(w.v) * this.R_, bz = w.z0 + w.tz * w.s + nz * w.o + w.tz * Math.sign(w.v) * this.R_; if (H(bx, bz) > this.y + 0.2) { w.s = s0; w.v = -0.2 * w.v; } }
     w.ov += (-W2 * w.o - damp * w.ov) * dt; w.o += w.ov * dt;
     // (swung back into the wall: the feet take it)
     if (w.o < 0) { w.o = 0; w.ov = -w.ov * 0.15; }

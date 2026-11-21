@@ -47,7 +47,8 @@ const { plan, foresee, TUNE, HOUSE, DIALS, City, Runner, Rig, CHUNK, STOREY, TAG
       if (was === 'ground' && r.state === 'wall') fromGround++;
       // A tall wall out of reach is a legitimate end to a held line (one in reach is gone for: climbed). Retain the
       // stall and pace checks on open ground.
-      const blocked = [0.2, 0.5, 0.9].some(d => city.heightAt(r.x + dx * d, r.z + dz * d) > r.y + 0.6);
+      // (or just run into something: a corner just off the line, met at speed, is a fair stop too)
+      const blocked = [0.2, 0.5, 0.9].some(d => city.heightAt(r.x + dx * d, r.z + dz * d) > r.y + 0.6) || (r.contact.t < 0.6 && stopped === 0 && r.speed < 1);
       if (!blocked) { active += DT; travelled += r.dist - before; }
       assert.ok(Number.isFinite(r.x + r.y + r.z + r.heading), 'finite');
       const h = city.heightAt(r.x, r.z);

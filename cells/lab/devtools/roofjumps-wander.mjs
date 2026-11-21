@@ -25,7 +25,7 @@ for (let i = 0; i < sc.seconds / DT; i++) {
   const f = { t, ask: Math.hypot(inp.x, inp.z), state: r.state, move: r.move, speed: r.speed, facing: r.heading, pelvis: [pel[12], pel[13], pel[14]] };
   for (const s of ['L', 'R']) {
     const th = at('thigh' + s), sh = at('shin' + s), ft = at('foot' + s), sole = rig.soles[s], z = axis(ft, 2);
-    f[s] = { knee: deg(Math.acos(Math.max(-1, Math.min(1, dot(axis(th, 1), axis(sh, 1)))))), pitch: deg(Math.asin(Math.max(-1, Math.min(1, z[1])))), yaw: Math.atan2(z[0], z[2]), ball: M.point(ft, 0, -rig.body.sole, rig.body.ball), planted: sole.w > 0.9 && !sole.lost, y: city.heightAt(ft[12], ft[14]) };
+    f[s] = { knee: deg(Math.acos(Math.max(-1, Math.min(1, dot(axis(th, 1), axis(sh, 1)))))), pitch: deg(Math.asin(Math.max(-1, Math.min(1, z[1])))), yaw: Math.atan2(z[0], z[2]), ball: M.point(ft, 0, -rig.body.sole, rig.body.ball), planted: !!(s === 'L' ? r.reach.fl : r.reach.fr) && sole.w > 0.9, y: city.heightAt(ft[12], ft[14]) };
   }
   F.push(f);
 }
