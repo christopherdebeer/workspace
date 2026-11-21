@@ -231,6 +231,17 @@ export class Rig {
           // (the chest's pitch is the clip's movement about the rig's own carriage)
           if (c) for (const key of MOCAP_KEYS) if (key in c) p[key] += key === 'spine' ? c[key] * mk : (c[key] - p[key]) * mk;
         }
+        // (driving out of a stand or a slow pace: pitched into it from the ankles ahead of the speed, as a sprinter's first
+        // strides are (the references go from a walk to 35-40° of lean in about 0.4 s), the arms pumping hard and the elbows
+        // bent; easing off as the pace arrives and the push dies)
+        if (r.state === 'ground') {
+          const pa = Math.max(0, r.pushAlong ?? 0), dk = Math.min(1, pa / 22) * (1 - sm(7, 11, r.speed)) * sm(0.05, 0.6, r.speed);
+          if (dk > 0) {
+            const was = p.lean; p.lean = Math.min(0.72, p.lean + 0.5 * dk); p.hipL += (p.lean - was) * gk; p.hipR += (p.lean - was) * gk;
+            p.spine += 0.1 * dk; p.head -= 0.25 * dk; p.shL = Math.max(-1.3, Math.min(1.6, p.shL * (1 + 1.2 * dk))); p.shR = Math.max(-1.3, Math.min(1.6, p.shR * (1 + 1.2 * dk)));
+            p.elL += (1.6 - p.elL) * dk; p.elR += (1.6 - p.elR) * dk;
+          }
+        }
         break;
       }
       case 'dash': {
@@ -513,11 +524,11 @@ export class Rig {
     }
     // (a landing's weight: down into the legs, the feet apart, the arms out and back)
     // (the wind-up as deep as the landing: an automatic takeoff loads nearly as deep as a tapped one)
-    const c = r.state === 'ground' && r.move !== 'roll' ? Math.max(r.land, (r.load ?? 0) * (r.committed ? 0.95 : 0.8) * (0.75 + 0.35 * (r.effort ?? 0))) : 0;
+    const landK = Math.max(r.land, this.beat(r)), c = r.state === 'ground' && r.move !== 'roll' ? Math.max(landK, (r.load ?? 0) * (r.committed ? 0.95 : 0.8) * (0.75 + 0.35 * (r.effort ?? 0))) : 0;
     if (c > 0) {
       // (a landing's weight is taken in both legs; a wind-up is in the leg that's down, the other driving its knee up and
       // through ready to go, the chest down over the foot)
-      const wind = r.state === 'ground' && (r.load ?? 0) > r.land, down = r.reach.fl && !r.reach.fr ? 1 : r.reach.fr && !r.reach.fl ? -1 : (r.lead === 1 ? -1 : 1);
+      const wind = r.state === 'ground' && (r.load ?? 0) > landK, down = r.reach.fl && !r.reach.fr ? 1 : r.reach.fr && !r.reach.fl ? -1 : (r.lead === 1 ? -1 : 1);
       if (wind) {
         const ef = r.effort ?? 0, sup = down > 0, k = c * (0.45 + 1.1 * ef) * (1 - 0.5 * sm(3, 8, r.speed) * (1 - 0.6 * ef));
         if (sup) { p.hipL += 0.7 * k; p.kneeL += 1.3 * k; p.hipR += 1.4 * k; p.kneeR += 1.0 * k; } else { p.hipR += 0.7 * k; p.kneeR += 1.3 * k; p.hipL += 1.4 * k; p.kneeL += 1.0 * k; }
@@ -544,7 +555,25 @@ export class Rig {
   }
 
   /** Ease the pose toward the body's; `dt` large sets it at once. */
+  /** a flight's landing, seen: how long it was in the air, and how far into the beat after it came down */
+  private airFor = 0; private beatT = 9; private beatK = 0; private fallMax = 0; private precise = false;
+  /**
+   * The beat on landing (0..1, as a landing's depth): the references sink into every landing from a real flight, a ledge, a
+   * roof, the street, if only for a moment, before going on; the runner's own legs take only what the impact asks, which at
+   * a run is a hand's breadth. Drawn, not felt: in fast (60 ms), out over a quarter second.
+   */
+  private beat(r: Body): number {
+    if (r.state !== 'ground' || r.move === 'roll' || this.beatK <= 0) return 0;
+    return this.beatK * Math.min(1, this.beatT / 0.06) * Math.exp(-Math.max(0, this.beatT - 0.06) / 0.13);
+  }
   update(dt: number, r: Body): void {
+    // (as deep as what it came down onto asks: a precision onto a ledge, a good half; a drop, by how fast it falls (all of it from
+    // 10 m/s); a leap level to level, light, run through)
+    if (dt > 0 && dt <= 0.2) {
+      if (r.state === 'air') { this.airFor += dt; this.fallMax = Math.max(this.fallMax, -(r.vy ?? 0)); this.precise = this.precise || !!r.precise; }
+      else { if (this.airFor > 0) { this.beatK = Math.max(0.1 * sm(0.25, 0.6, this.airFor), this.precise ? 0.55 * sm(0.15, 0.45, this.airFor) : 0, 0.75 * sm(4, 10, this.fallMax)); this.beatT = 0; } this.airFor = 0; this.fallMax = 0; this.precise = false; }
+      this.beatT += dt;
+    }
     // (a swinging foot drawn nearer the line than six centimetres, or across it (a turn's lean carrying the free leg under the
     // body): the leg swung out at the hip until it's back on its own side; let go of slowly once it is)
     if (dt > 0 && dt <= 0.2) for (let i = 0; i < 2; i++) {
@@ -735,7 +764,7 @@ export class Rig {
     const ef = r.effort ?? 0, windDown = (r.load ?? 0) * (r.committed ? 0.95 : 0.8) * (1 - 0.7 * sm(3, 8, r.speed) * (1 - 0.6 * ef)) * (0.45 + 1.1 * ef);
     // (heights in the runner's metres, for its legs: scaled to this body's)
     const Ls = this.body.legScale;
-    const carry = striding ? ((0.9 + 0.05 * Math.abs(Math.cos(this.ph))) * pace - 0.55 * Math.max(r.land, windDown)) * Ls : 0;
+    const carry = striding ? ((0.9 + 0.05 * Math.abs(Math.cos(this.ph))) * pace - 0.55 * Math.max(r.land, this.beat(r), windDown)) * Ls : 0;
     // (running: the hips lowest through a stance (the leg bending to take it), highest in the flight between, higher for a step
     // planned long or over clutter; low enough that a leg can hold its footfall from in front to behind)
     const g = r.gait, stride = striding && g && pace > 0.4 ? (g.stance >= 0 ? 0.95 - 0.02 * pace * Math.sin(Math.PI * g.stance) : 0.95 + Math.min(0.16, 1.6 * (r.bounce ?? 0.03)) * pace * Math.sin(Math.PI * g.flight)) * Ls - 0.55 * Math.max(r.land, windDown) * Ls : -1;
@@ -765,7 +794,7 @@ export class Rig {
     // (on the ground no higher than a straight-legged stand allows (this body's own legs, nearly straight), less as a landing
     // takes it: a fixed 0.99 m had stood every stand on knees bent 28°)
     const tallest = this.body.hipDrop + 0.995 * (this.body.thigh + this.body.shin) + this.body.sole;
-    const hipTo = r.state === 'ground' && r.move !== 'roll' ? Math.min(hip, tallest - 0.46 * r.land * Ls) : hip;
+    const hipTo = r.state === 'ground' && r.move !== 'roll' ? Math.min(hip, tallest - 0.46 * Math.max(r.land, this.beat(r)) * Ls) : hip;
     // (the hips never jump up: risen to a new height at most as fast as legs push (6 m/s); let down as fast as a landing takes them)
     this.hipY = dt > 0 && dt <= 0.2 ? Math.max(this.hipY - 18 * dt, Math.min(this.hipY + 6 * dt, hipTo)) : hipTo;
     // (the chest a beat behind the hips: when they're stopped short (a landing), it carries on down and comes back up;

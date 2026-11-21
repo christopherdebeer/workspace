@@ -517,6 +517,13 @@ Done from it so far:
   straight, a touch forward and the one over the lead leg a little higher, and holds them through the flight, bringing them
   down a little to meet the ground; a long flight draws the knees up in its middle. Over the running stride a short bound
   carries through the air, so the legs keep running while the arms fly.
+- *Into a start.* Driving out of a stand or a slow pace, the body pitches into it from the ankles ahead of the speed (to
+  about 0.72 rad: 0.35 by a tenth of a second, 0.7 by a fifth, where it had been 0.05 and 0.24, the lean coming only as
+  the pace did), the arms pumping harder (to 75° back and 90° forward) with the elbows bent; easing off as the pace
+  arrives. Laid over the captured clips, which had owned the lean below 8 m/s.
+- *A beat on landing.* Drawn, not felt (the runner's drive and timings untouched): a precision onto a ledge sinks a good
+  half, a drop by how fast it falls (all of it from 10 m/s), a leap level to level only lightly and runs through; in over
+  60 ms, out over a quarter second.
 - *The eye in the films.* What looked like the eye jammed into the figure's back in alleys was the contact sheets' eye
   only: in play the eye already widens and rises up a face and between walls. The sheets now frame each moment as play
   would (wide up a face, between walls, on a bar, off a wall; aimed by the body's facing off the ground, not by a velocity
