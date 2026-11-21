@@ -318,11 +318,15 @@ export class Runner implements Body {
     // clock; one taken up early waiting on its time down hovers just short of the ground meanwhile, not set on it)
     const hd = f.held;
     if (hd) { const ux = this.vx / sp, uz = this.vz / sp, x = this.x + ux * this.ahead_ + uz * side * this.track_, z = this.z + uz * this.ahead_ - ux * side * this.track_; return { from: hd.from, to: [x, this.city.heightAt(x, z), z], k: Math.min(hd.turn ? 1 : 0.9, (this.time - hd.t) / hd.need), off: !!hd.turn, rel: true }; }
-    // (where it'll come down: where it's planned to, if it's the next and there's a plan; else where the stride will put it)
+    // (where it'll come down: where it's planned to, if it's the next and there's a plan; else where the stride will put it;
+    // no further on than a swing's time (half a second at most) carries the body, braking as it's being braked, never past where
+    // it would stop: slowing, the stride's clock slows and the pace drops, and the foot had been sent out ahead into a lunge)
     // (the same choice the foot will make as it lands: the plan if it's still near where the stride would put it)
-    const planned = side > 0 ? this.planFor.L : this.planFor.R, nf = planned ? { side, p: planned } : null, ux = this.vx / sp, uz = this.vz / sp, x = this.x + this.vx * t + ux * this.ahead_ + uz * side * this.track_, z = this.z + this.vz * t + uz * this.ahead_ - ux * side * this.track_;
+    const planned = side > 0 ? this.planFor.L : this.planFor.R, nf = planned ? { side, p: planned } : null, ux = this.vx / sp, uz = this.vz / sp, tP = Math.min(t, 0.5), brk = Math.min(0, this.pushAlong), go = brk < -0.5 ? Math.max(0, Math.min(sp * tP + 0.5 * brk * tP * tP, (sp * sp) / (-2 * brk))) : sp * tP, x = this.x + ux * (go + this.ahead_) + uz * side * this.track_, z = this.z + uz * (go + this.ahead_) - ux * side * this.track_;
     let to: P3 = [x, this.city.heightAt(x, z), z]; const base: P3 = to;
-    if (nf && nf.side === side && Math.hypot(nf.p[0] - x, nf.p[2] - z) < 0.9) to = nf.p;
+    // (the plan's spot, if it's still on this line: one planned for a line it's turned off since (well to the side of where
+    // the stride would put it now) is for a run it's no longer making)
+    if (nf && nf.side === side) { const ox = nf.p[0] - x, oz = nf.p[2] - z, along = ox * ux + oz * uz, across = -ox * uz + oz * ux; if (Math.abs(along) < 0.9 && Math.abs(across) < 0.25) to = nf.p; }
     return { from: f.p, to, base, k: Math.max(0, Math.min(1, 1 - t / Math.max(0.05, dur))) };
   }
   private dt = 1 / 120;
@@ -714,11 +718,18 @@ export class Runner implements Body {
       // centimetres; and the way it's going can't change in the air at a run anyway)
       const run = sp > 3.4 && w.base && !w.rel;
       if (run) {
-        const cx = w.to[0] - w.base![0], cz = w.to[2] - w.base![2], c = foot.choice ?? [cx, cz], ddx = cx - c[0], ddz = cz - c[1], dd = Math.hypot(ddx, ddz), most = (4 * (1 - w.k) + 0.5) * this.dt, e = dd > most ? most / dd : 1;
-        foot.choice = [c[0] + ddx * e, c[1] + ddz * e]; const x = w.base![0] + foot.choice[0], z = w.base![2] + foot.choice[1]; foot.aim = [x, this.city.heightAt(x, z), z]; continue;
+        // (held along and across the way it's going, so a turn carries it round with the body rather than leaving it where it was)
+        const ux = this.vx / sp, uz = this.vz / sp, wx = w.to[0] - w.base![0], wz = w.to[2] - w.base![2], ca = wx * ux + wz * uz, cc = -wx * uz + wz * ux;
+        const c = foot.choice ?? [ca, cc]; if (ca < c[0]) c[0] = ca; /* (a step shortened, freely: the foot just comes down sooner) */
+        const dda = ca - c[0], ddc = cc - c[1], dd = Math.hypot(dda, ddc), most = (4 * (1 - w.k) + 0.5) * this.dt, e = dd > most ? most / dd : 1;
+        foot.choice = [c[0] + dda * e, c[1] + ddc * e];
+        const x = w.base![0] + ux * foot.choice[0] - uz * foot.choice[1], z = w.base![2] + uz * foot.choice[0] + ux * foot.choice[1]; foot.aim = [x, this.city.heightAt(x, z), z]; continue;
       }
       foot.choice = null;
       if (!foot.aim) foot.aim = [...w.to] as P3;
+      // (a step can always be shortened (the foot just comes down sooner): what's wanted nearer along the way than the aim,
+      // the aim comes back to it at once; only reaching further, or swerving, is limited to what the foot can still do)
+      if (sp > 0.3) { const ux = this.vx / sp, uz = this.vz / sp, back = (w.to[0] - foot.aim[0]) * ux + (w.to[2] - foot.aim[2]) * uz; if (back < 0) foot.aim = [foot.aim[0] + ux * back, foot.aim[1], foot.aim[2] + uz * back]; }
       const dx = w.to[0] - foot.aim[0], dz = w.to[2] - foot.aim[2], d = Math.hypot(dx, dz), most = (4 * (1 - w.k) + 0.5 + (w.rel ? sp : 0)) * this.dt; /* (a held foot's spot goes with the body: that much more) */
       const e = d > most ? most / d : 1; let x = foot.aim[0] + dx * e, z = foot.aim[2] + dz * e;
       if (this.speed > 2.6) { const ux = this.vx / this.speed, uz = this.vz / this.speed, ah = (x - this.x) * ux + (z - this.z) * uz, least = 0.1 + 0.02 * this.speed; if (ah < least) { x += ux * (least - ah); z += uz * (least - ah); } }
@@ -1097,7 +1108,11 @@ export class Runner implements Body {
         const split = (x: number, z: number) => { const al = x * ux0 + z * uz0; return { fwd: Math.max(0, al), br: Math.min(0, al), la: -x * uz0 + z * ux0 }; };
         const c0 = split(cx, cz); let br = c0.br, la = c0.la;
         if (!down) { br *= 1 - runK; la *= 1 - runK; }
-        else { const B = 1 + 2 * runK, eS = split(ex, ez); br = Math.max(eS.br, c0.br * B); la = Math.sign(eS.la) * Math.min(Math.abs(eS.la), Math.abs(c0.la) * B); }
+        else {
+          // (braked only on a foot that's ahead of the hips, as walking is)
+          let ahead = -9; for (const ft of [this.feet.L, this.feet.R]) if (ft.on) ahead = Math.max(ahead, (ft.p[0] - this.x) * ux0 + (ft.p[2] - this.z) * uz0);
+          const skid = on && (dx * this.vx + dz * this.vz) / sp < -0.5, B = 1 + 2 * runK, eS = split(ex, ez); br = Math.max(eS.br, c0.br * B) * (skid ? 1 : sm01((ahead + 0.05) / 0.2)); la = Math.sign(eS.la) * Math.min(Math.abs(eS.la), Math.abs(c0.la) * B);
+        }
         const al = c0.fwd + br; cx = ux0 * al - uz0 * la; cz = uz0 * al + ux0 * la;
       } }
     // (and braking or turning takes the feet: the body is a weight carried over them, and they can push it back or round only
@@ -1108,8 +1123,12 @@ export class Runner implements Body {
     // handling, which the courses are made for; and a reversal (asked back against the way it's going) is a skid, braked
     // as hard as the run brakes)
     if (sp > 0.3 && sp < 5 && edgeD <= 0 && this.rollT <= 0 && !(on && (dx * this.vx + dz * this.vz) / sp < -0.5)) {
-      const ux0 = this.vx / sp, uz0 = this.vz / sp, along = cx * ux0 + cz * uz0, lat = -cx * uz0 + cz * ux0, br = Math.min(0, along), g = Math.hypot(br, lat), most = Math.min(TUNE.grip, 2.5 + 1.6 * sp) * dt / Math.max(1e-3, 1 - sm01((sp - 3) / 2));
-      if (g > most) { const k = most / g, a2 = Math.max(0, along) + br * k, l2 = lat * k; cx = ux0 * a2 - uz0 * l2; cz = uz0 * a2 + ux0 * l2; }
+      const ux0 = this.vx / sp, uz0 = this.vz / sp, along = cx * ux0 + cz * uz0, lat = -cx * uz0 + cz * ux0; let br = Math.min(0, along);
+      // (and only braked by a foot that's ahead of it: a foot behind the hips can only push them on, so passing over the one
+      // foot down, it carries on until the next comes down ahead to brake on; a stop is braking steps, not a glide)
+      { let ahead = -9; for (const ft of [this.feet.L, this.feet.R]) if (ft.on) ahead = Math.max(ahead, (ft.p[0] - this.x) * ux0 + (ft.p[2] - this.z) * uz0); br *= ahead < -8 ? 0.3 : sm01((ahead + 0.05) / 0.2); }
+      const g = Math.hypot(br, lat), most = Math.min(TUNE.grip, 2.5 + 1.6 * sp) * dt / Math.max(1e-3, 1 - sm01((sp - 3) / 2));
+      { const k = g > most ? most / g : 1, a2 = Math.max(0, along) + br * k, l2 = lat * k; cx = ux0 * a2 - uz0 * l2; cz = uz0 * a2 + ux0 * l2; }
     }
     // (what the feet are doing to the body, for the figure to lean against: along the way it's going and across it, eased)
     { const kk = 1 - Math.exp(-12 * dt), ux0 = sp > 0.3 ? this.vx / sp : Math.sin(this.heading), uz0 = sp > 0.3 ? this.vz / sp : Math.cos(this.heading), al = (cx * ux0 + cz * uz0) / dt, la = (-cx * uz0 + cz * ux0) / dt;

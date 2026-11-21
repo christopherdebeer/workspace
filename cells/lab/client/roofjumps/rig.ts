@@ -89,6 +89,8 @@ export class Rig {
   /** how far this frame's pose is a running stride carried across a gap (followed as briskly as on the ground) */
   private carriedK = 0;
   bank = 0;
+  /** the feet's sideways push, averaged over about a quarter second */
+  private pushAvg = 0;
   /** the share of the weight on the left foot (0..1; the rest on the right) */
   weightL = 0.5;
   /** the arms out for balance (−1..1: + the body falling to its left, the right arm out), eased */
@@ -569,7 +571,9 @@ export class Rig {
     this.stood += ((r.state === 'ground' ? 1 : 0) - this.stood) * (1 - Math.exp(-14 * dt));
     // (banked into a turn by what the feet push it round with: leaning so the push and gravity balance (atan(a / g)), the
     // trunk about half of that, the legs taking the rest out to the feet; in the air, by the turn alone)
-    const bankTo = r.state === 'ground' && r.pushAcross !== undefined ? -0.6 * Math.atan((r.pushAcross ?? 0) / 9.8) : r.turn * 0.06 * Math.min(1, r.speed / 8);
+    // (by the push over the last quarter second or so: the turn's, not each footfall's, which comes in pulses as the feet make it)
+    this.pushAvg += ((r.pushAcross ?? 0) - this.pushAvg) * (dt > 0.2 ? 1 : 1 - Math.exp(-4 * dt));
+    const bankTo = r.state === 'ground' && r.pushAcross !== undefined ? -0.6 * Math.atan(this.pushAvg / 9.8) : r.turn * 0.06 * Math.min(1, r.speed / 8);
     this.bank += (Math.max(-0.45, Math.min(0.45, bankTo)) - this.bank) * (1 - Math.exp(-10 * dt));
     // (walking or standing on one foot: the hips over it; along a wall, off it)
     // (the body's weight over the foot that bears it: right over it walking or standing on it, or loading it to go; a
