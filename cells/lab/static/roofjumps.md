@@ -236,6 +236,16 @@ Astra on standing brushes, the stick touched for a moment: a small stick brush r
 
 Snaps over 6 cm in the brush set: 215 to 0; the worst tick 5.9 cm, a circling thumb's swing at its speed limit. The filmed brush now goes on 2 cm after the thumb, not 41. Every brush stops within 3 cm; the circle, a walk kept up for 1.4 s, stops in 16 cm. Walking gaps across the footing runs 1 of 36 (worst 33 ms; was 2, 75 ms), and the courses are as they were (141 of 144). Not yet: the tic-tac in its scene takes off just after a foot leaves the roof unless the stride happens to land one there (its run-up isn't planned to the wall as a gap's is), which is why a full press keeps the stride's own first foot; and a backstep that's more than a weight shift and a settling step.
 
+### A failed jump grabs what's there
+
+Asked for: a figure that misses a wall or a ledge should grasp any handhold in reach, not fall past it. Lips were already caught (the wall's own top, in reach overhead), but nothing else was: a jump short of a roof too high to reach, a run up a wall that didn't make it, a drop into the gap it meant to cross all fell past every sill and pipe on the face.
+
+- *Grabbed in the air* (`reachHold`): once a jump is failing (below where it went from and not coming down where it was aimed, or against the wall), a sill or a pipe on the face in front, in a hand's reach overhead, is caught. From there it's a hang like any on the way up a face: loaded and sprung for the next hold or the lip, or let go of. Not on a drop it chose, not going away from the face, not falling too fast for hands to hold (over 11 m/s).
+- *Off a run up a wall that runs out*, still leaning in at all: a hold in reach is grabbed before it pushes off.
+- *A hang isn't a place to be stuck*: asked some other way than up for half a second, or up with nowhere further to go for a second, it lets go, down the face and on (left alone, it hangs). Let go of on purpose, it doesn't grab again until it's down, so it doesn't ladder down a face grab by grab.
+
+A scene for it, `short-grab`: across a 5.5 m alley at a roof 12 m up from one at 6 m, the jump comes up short; it grabs the 9 m sill, springs to the lip and is over (spring › fall › hang › climb). Over the street test's held lines (four cities, sixteen ways, a minute each), 138 grabs, 78 of them going on up. Building it found a fault the new path set off: placed a hair too far out from a face, the hang read the roof's height past the face's end as the ground and sprang down to it; a hang's next lip now has to be above it.
+
 ## The plan (`plan.ts`)
 
 Where a heading leads, further than the next jump. A route is the runner itself run on ahead: a

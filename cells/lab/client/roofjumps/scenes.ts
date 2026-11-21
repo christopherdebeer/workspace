@@ -399,6 +399,18 @@ export const SCENES: Scene[] = [
     ],
   },
   {
+    key: 'short-grab', title: 'Short of a roof, a sill grabbed',
+    asks: 'A jump across a 5.5 m alley at a roof 12 m up, too high to reach from a 6 m roof: it comes up short. A traceur doesn\'t fall to the street past the sills on the face: a hand grabs the one in reach, and from there it\'s a climb.',
+    watch: 'Whether the falling body takes the sill in front of it as it comes down, and goes on up from it to the lip.',
+    course: { boxes: [B(20, 44, 0, 20, 6), B(20, 44, 25.5, 40, 12)], holds: [3, 6, 9].map((y) => ({ kind: 'sill' as const, ax: 26, ay: y, az: 25.5, bx: 38, by: y, bz: 25.5, nx: 0, nz: -1 })), start: { x: 32, z: 8 }, alone: true }, seconds: 5,
+    input: (t, r, mem) => { if (r.y > 11.9 && r.state === 'ground') return none; if (!mem.jumped && r.state === 'ground' && r.z > 19.3) { mem.jumped = 1; return { ...go(0), jump: true }; } return go(0); },
+    should: [...commonShoulds,
+      { says: 'a sill grabbed in the air as the jump comes down short', check: (r) => ok(r.runner.holdsGrabbed > 0, `${r.runner.holdsGrabbed} grabbed; ${seq(r)}`) },
+      { says: 'never down into the alley (no lower than the 6 m roof it left, less a body)', check: (r) => { const lo = Math.min(...r.frames.map((f) => f.y)); return ok(lo > 4, `lowest ${lo.toFixed(1)} m`); } },
+      { says: 'and up from it onto the 12 m roof', check: (r) => ok(r.runner.y > 11.9, `ended at y ${r.runner.y.toFixed(1)}; ${seq(r)}`) },
+    ],
+  },
+  {
     key: 'underbar', title: 'Under a bar across a gap',
     asks: 'A bar across a 2.4 m gap, 1.3 m above the roofs. Under it feet first, hands on it: is there room for the hips and the trailing foot, and does the body actually pass beneath it?',
     watch: 'The hands on the bar; the hips and feet passing under it; the exit.',

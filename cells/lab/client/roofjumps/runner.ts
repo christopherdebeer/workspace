@@ -167,6 +167,10 @@ export class Runner implements Body {
   offFoot = 0;
   /** lips caught in the air by reaching for them (not met against the wall) */
   lipReached = 0;
+  /** sills and pipes grabbed in the air when a jump failed */
+  holdsGrabbed = 0;
+  /** let go of a hold on purpose: no grabbing again until it's down (not a ladder of grabs and drops down a face) */
+  private dropped = false;
   /** which way the last takeoff came about (a tap, a run-up's foot, an edge met, …) */
   takeoffBy = '';
   /** why there's no run-up, as last planned (or '' when there is one) */
@@ -1703,6 +1707,8 @@ export class Runner implements Body {
     else this.vy -= TUNE.gravity * dt;
     // (a lip in a hand's reach that it won't land on: caught, whatever the flight was doing)
     if (this.reachLip()) return;
+    // (no lip, and it isn't going to make it: a sill or a pipe on a face in a hand's reach, grabbed)
+    if (this.reachHold()) return;
     // (a wall alongside: run along it)
     if (this.airT > 0.1 && (!this.planned || (this.float && this.mu > 0.3)) && this.seek(0.62, dx, dz)) return;
     const s2 = this.speed, ux = s2 > 0.1 ? this.vx / s2 : 0, uz = s2 > 0.1 ? this.vz / s2 : 0;
@@ -1812,6 +1818,47 @@ export class Runner implements Body {
     if ([[0, 0], [0.2, 0], [-0.2, 0], [0, 0.2], [0, -0.2]].some(([a, b]) => this.city.heightAt(hx + a, hz + b) > this.y + 0.3)) return false;
     this.wx = -nx; this.wz = -nz; this.x = hx; this.z = hz;
     this.grabTop({ hold: g.hold }, top, g.x, g.z); this.lipReached++;
+    return true;
+  }
+
+  /**
+   * A jump that won't make it, a hold grabbed: come up short of a roof too high to reach, slid down a wall it couldn't get up,
+   * dropped into the gap it meant to cross. Whatever's on the face in front, in a hand's reach overhead (a sill, a pipe), is
+   * caught and hung from, and from there it's a hang like any on the way up a face: loaded and sprung for the next, the lip
+   * pulled over, or let go of. Only once it's failing: below where it went from and not coming down where it was aimed, or
+   * against the wall; not on a drop it chose (a fall off a roof stepped from, a glide), not going away from the face, not
+   * falling too fast for hands to hold.
+   */
+  private reachHold(): boolean {
+    if (!TUNE.walls || !TUNE.reach || this.move === 'vault' || this.move === 'underbar' || this.float || this.airT < 0.12 || this.vy > 1 || this.vy < -11) return false;
+    if ((this.move === 'fall' && !this.bracing) || this.dropped) return false;
+    const G = TUNE.gravity, reach = this.armReach;
+    // (failing: below the takeoff (or against the wall), and not about to land where it was aimed)
+    if (!this.bracing && this.y > this.leftY - 0.3) return false;
+    if (this.aim) {
+      const ay = this.city.heightAt(this.aim.x, this.aim.z), drop = this.y - ay;
+      if (drop >= 0) { const t = (this.vy + Math.sqrt(this.vy * this.vy + 2 * G * drop)) / G; if (Math.hypot(this.x + this.vx * t - this.aim.x, this.z + this.vz * t - this.aim.z) < 0.9) return false; }
+    }
+    let best: { y: number; hold: Hold; x: number; z: number; d: number } | null = null;
+    for (const h of this.city.holdsNear(this.x, this.z, this.R_ + 0.8)) {
+      if (h.kind !== 'sill' && h.kind !== 'pipe') continue;
+      const p = onHold(h, this.x, this.z), y = h.kind === 'pipe' ? Math.max(h.ay, Math.min(h.by, this.y + reach * 0.9)) : h.ay, rel = y - this.y;
+      // (overhead, the arm long: from about the head up to the reach)
+      if (rel < 1.5 * this.build.reachScale || rel > reach) continue;
+      // (in front: out from the face on its side, not past its end, and not leaving it)
+      const out = (this.x - p[0]) * h.nx + (this.z - p[2]) * h.nz, d = Math.hypot(this.x - p[0], this.z - p[2]);
+      if (out < -0.05 || out > this.R_ + 0.4 || d > this.R_ + 0.45) continue;
+      const toward = -(this.vx * h.nx + this.vz * h.nz), asked = this.mag > 0.1 ? -(this.want[0] * h.nx + this.want[1] * h.nz) : 0;
+      if (toward < -1 || (toward < 0.3 && asked < 0.5 && !this.bracing && out > this.R_ + 0.15)) continue;
+      // (somewhere to hang: the body's place under it clear)
+      const hx = p[0] + h.nx * (this.R_ + 0.05), hz = p[2] + h.nz * (this.R_ + 0.05);
+      if ([[0, 0], [0.2, 0], [-0.2, 0], [0, 0.2], [0, -0.2]].some(([a, b]) => this.city.heightAt(hx + a, hz + b) > this.y + 0.3)) continue;
+      if (!best || d < best.d) best = { y, hold: h, x: p[0], z: p[2], d };
+    }
+    if (!best) return false;
+    const h = best.hold;
+    this.wx = -h.nx; this.wz = -h.nz; this.x = best.x + h.nx * this.R_; this.z = best.z + h.nz * this.R_;
+    this.hangFrom(best); this.chain!.y0 = this.y; this.holdsGrabbed++; this.count('grab' as Move);
     return true;
   }
 
@@ -2237,12 +2284,15 @@ export class Runner implements Body {
       if (g) { this.hangFrom(g); return; }
     }
     if (this.vy <= 0 || into < 0.1 || this.stepAge > 0.5) {
+      // (coming off it, still leaning in at all: a hold in reach grabbed rather than pushed away from)
+      if (into > 0.1 && reach > this.armReach) { const g = this.holdUp(this.y + 1.2, this.y + this.armReach); if (g) { this.hangFrom(g); this.holdsGrabbed++; return; } }
       this.launch(this.vy, 'bound', false, false, 0.55);
       this.vx = -this.wx * 1.6; this.vz = -this.wz * 1.6; this.wallCool = 0.25;
     }
   }
 
   private touch(impact: number): void {
+    this.dropped = false;
     const was = this.move, aimed = this.planned, braced = this.bracing;
     this.resetTakeoff(); this.land = 0; this.approach = null; this.stepTo = 0;
     // (up a storey costs pace)
@@ -2481,7 +2531,7 @@ export class Runner implements Body {
     const c = this.chain!, H = (x: number, z: number) => this.city.heightAt(x, z);
     const wx = this.x + this.wx * (this.R_ + 0.05), wz = this.z + this.wz * (this.R_ + 0.05);
     c.t += dt;
-    if (into < -0.4) { this.chain = null; this.vx = -this.wx * 3; this.vz = -this.wz * 3; this.launch(2, 'fall', false, false, 0.4); this.wallCool = 0.3; return; }
+    if (into < -0.4) { this.dropped = true; this.chain = null; this.vx = -this.wx * 3; this.vz = -this.wz * 3; this.launch(2, 'fall', false, false, 0.4); this.wallCool = 0.3; return; }
     if (c.phase === 0) {
       // (caught: the body comes in under the hands)
       const k = Math.min(1, c.t / CHAIN_CATCH); this.y = c.y0 + (c.y1 - c.y0) * (k * k * (3 - 2 * k)); this.mu = k;
@@ -2490,10 +2540,15 @@ export class Runner implements Body {
     }
     if (c.phase === 1) {
       this.mu = Math.min(1, c.t / CHAIN_LOAD);
+      // (asked some other way than up it, or asked up with nowhere further to go: after a beat, let go, down the face and on
+      // (a hang isn't a place to be stuck); left alone, it hangs)
+      const letGo = () => { this.dropped = true; this.chain = null; this.vx = -this.wx * 1.2; this.vz = -this.wz * 1.2; this.launch(0, 'fall', false, false, 0.4); this.wallCool = 0.3; };
+      if (this.mag > 0.1 && into < 0.3 && c.t > 0.5) { letGo(); return; }
+      if (into > 0.55 && c.t > 1.1) { const top = H(wx, wz); if (!(top - c.y <= 3.3 && top > c.y + 0.3) && !this.holdUp(c.y + 1.2, c.y + 3.6)) { letGo(); return; } }
       if (!(jump && c.t > 0.05) && !(into > 0.55 && c.t >= CHAIN_LOAD / (0.7 + 0.3 * this.stamina))) return;
       // (for the next: the roof's lip if it's within a spring and a reach, else a hold a storey or so up)
       const top = H(wx, wz);
-      if (top - c.y <= 3.3) c.next = top;
+      if (top - c.y <= 3.3 && top > c.y + 0.3) c.next = top; /* (a lip above it: never the ground read off past the face's end) */
       else { const g = this.holdUp(c.y + 1.2, c.y + 3.6); if (!g) return; c.next = g.y; }
       this.effort = 0.8; if (this.tame()) return; this.spend(0.7); this.effort = 0;
       c.phase = 2; c.t = 0; c.y0 = this.y; c.y1 = c.next - (c.next === top ? this.armReach * 0.75 : this.hangLen); this.chains++; this.count('hang');
