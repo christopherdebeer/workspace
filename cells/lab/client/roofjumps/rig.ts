@@ -21,7 +21,11 @@ import type { Body } from './runner';
 import { ident, point, rotX, rotY, rotZ, translate } from './m4';
 import type { M4 } from './m4';
 import { bodyOf, characterByName } from './character';
+import { clipPose, MOCAP, swingPath } from './mocap';
 import type { Body as Build, Block, Character } from './character';
+
+/** the pose keys the captured locomotion gives */
+const MOCAP_KEYS = ['hipL', 'hipR', 'kneeL', 'kneeR', 'shL', 'shR', 'elL', 'elR', 'spreadL', 'spreadR', 'splay', 'hips', 'twist', 'lean', 'spine'] as const;
 
 export interface Pose {
   hipL: number; hipR: number; kneeL: number; kneeR: number;
@@ -95,11 +99,14 @@ export class Rig {
   on: V3 = [0, 1, 0];
   /** each free leg swung out at the hip (rad), so its foot keeps to its own side of the line, not across behind the other;
    * and how far to its own side each free foot was last drawn (m; null when down) */
+  /** how far the clips have the legs (0..1): set by `target` */
+  mocapK = 0;
   private legOut = [0, 0]; private freeLat: (number | null)[] = [null, null];
 
   /** The pose a body's move asks for. */
   target(r: Body, ph = r.phase): Pose {
     const p = zero(), s = r.speed / 10, u = r.mu, L = r.lead === 1;
+    this.mocapK = 0;
     /** the legs and the arms, by which leg leads */
     const legs = (hipF: number, kneeF: number, hipB: number, kneeB: number) => { if (L) { p.hipL = hipF; p.kneeL = kneeF; p.hipR = hipB; p.kneeR = kneeB; } else { p.hipR = hipF; p.kneeR = kneeF; p.hipL = hipB; p.kneeL = kneeB; } };
     /** the arm opposite the leading leg, and the other */
@@ -188,6 +195,16 @@ export class Rig {
         p.spine = 0.06 + 0.12 * s; p.lean = Math.min(0.58, 0.1 * k + 0.28 * s); p.head = -0.3 * s; both('spread', 0.1);
         // (the legs posed against the upright, not the leaning pelvis: the lean taken back out of them)
         p.hipL += p.lean * gk; p.hipR += p.lean * gk;
+        // (on the ground below a sprint: the legs, the arms and the trunk as people move, from the captured walk, jog and run,
+        // each leg at its own place in the runner's stride, stretched to its stance (mocap.ts); the feet still the rig's)
+        const mk = MOCAP.on && r.state === 'ground' ? 1 - sm(6, 8, r.speed) : 0;
+        this.mocapK = mk;
+        if (mk > 0) {
+          const F = Math.PI / 2 + 0.3, TAU = 2 * Math.PI, at = (o: number) => ((((ph - F - o) % TAU) + TAU) % TAU) / TAU;
+          const c = clipPose(r.speed, at(0), at(Math.PI), r.stanceFrac ?? 0.25);
+          // (the chest's pitch is the clip's movement about the rig's own carriage)
+          if (c) for (const key of MOCAP_KEYS) if (key in c) p[key] += key === 'spine' ? c[key] * mk : (c[key] - p[key]) * mk;
+        }
         break;
       }
       case 'dash': {
@@ -543,7 +560,11 @@ export class Rig {
           // (where it's going, eased toward when that changes in the air (a step planned as the other foot lands), not jumped to)
           const ka = 1 - Math.exp(-(sf.k > 0.85 ? 60 : 18) * dt); f.aim = f.aim ? [f.aim[0] + (sf.to[0] - f.aim[0]) * ka, f.aim[1] + (sf.to[1] - f.aim[1]) * ka, f.aim[2] + (sf.to[2] - f.aim[2]) * ka] : [...sf.to] as V3;
           sf.to = f.aim;
-          const k = sf.k, e = sm(0.1, 0.95, k), len = Math.hypot(sf.to[0] - sf.from[0], sf.to[2] - sf.from[2]), liftH = (0.05 + 0.08 * Math.min(1, len / 0.8)) * (1 + 0.3 * Math.max(0, r.speed - 1.5)), lift = liftH * Math.max(Math.sqrt(Math.max(0, Math.sin(Math.PI * Math.min(1, k * 1.05)))), 0.45 * Math.sqrt(Math.max(0, Math.sin(Math.PI * e)))); /* (and clear of the ground whenever it's travelling) */
+          const k = sf.k, path = MOCAP.on ? swingPath(r.speed, Math.min(1, sf.k / 0.9)) : null, e = path ? path.along : sm(0.1, 0.95, k), len = Math.hypot(sf.to[0] - sf.from[0], sf.to[2] - sf.from[2]), liftH = (0.05 + 0.08 * Math.min(1, len / 0.8)) * (1 + 0.3 * Math.max(0, r.speed - 1.5));
+          let lift = liftH * Math.max(Math.sqrt(Math.max(0, Math.sin(Math.PI * Math.min(1, k * 1.05)))), 0.45 * Math.sqrt(Math.max(0, Math.sin(Math.PI * e)))); /* (and clear of the ground whenever it's travelling) */
+          // (or as a person's foot goes: the captured path's height, for a step as long as the captured one, less for a short one;
+          // never much under the hand-made arc, so a step re-aimed as it comes down isn't dragged over the ground)
+          if (path) lift = Math.max(path.lift * 0.88 * Ls0 * Math.min(1, 0.35 + len / 0.7), 0.7 * lift);
           // (round its own side of the body, not through it: where the straight way from where it left to where it's going
           // would pass under the body or over to the other side (a sharp turn leaves a foot behind, across the new line), the
           // foot is swung round the hips the way that keeps it on its own side, from exactly where it left to where it lands)
@@ -558,7 +579,12 @@ export class Rig {
               if (Math.abs(d) < 1.5 * Math.PI) { const q = at(e, d); fx2 = q[0]; fz2 = q[1]; }
             } }
           f.p = [fx2, sf.from[1] + (sf.to[1] - sf.from[1]) * e + lift, fz2];
-          f.w = wk; f.lost = false; f.yaw = turnTo(f.yaw, r.heading, 1 - Math.exp(-14 * dt)); continue;
+          // (and with the clips, through the middle of the swing the clip's own leg carries the foot (its thigh driven through,
+          // its knee folded and opening), the path only taking it from the ground and setting it down on its footfall)
+          // (how far through its swing by the stride's own clock, which the clip keeps; the step's `k` runs ahead of it)
+          const TAU = 2 * Math.PI, sd = r.stanceFrac ?? 0.25, cyc = ((((r.phase - Math.PI / 2 - 0.3 - (side > 0 ? 0 : Math.PI)) % TAU) + TAU) % TAU) / TAU, sw = Math.max(0, (cyc - sd) / (1 - sd));
+          const free = this.mocapK * 0.9 * sm(0.02, 0.15, sw) * (1 - sm(0.55, 0.82, sw)) * sm(0.02, 0.1, k);
+          f.w = wk * (1 - free); f.lost = false; f.yaw = turnTo(f.yaw, r.heading, 1 - Math.exp(-14 * dt)); continue;
         }
       }
       f.aim = null;
@@ -719,14 +745,20 @@ export class Rig {
         // (out of reach behind: up onto the toe, the heel lifting, the foot pivoting about its ball, so the leg stays on its
         // footfall to the push-off instead of dragging it)
         let toe = 0;
-        { const fw: V3 = this.on[1] > 0.7 && r.state === 'ground' ? [Math.sin(sole.yaw), 0, Math.cos(sole.yaw)] : unit([P[8], 0, P[10]]); if (Math.hypot(fall[0] - s[0], fall[1] - s[1], fall[2] - s[2]) > most && (fall[0] - s[0]) * fw[0] + (fall[2] - s[2]) * fw[2] < 0) {
+        // (walking and running from the clips: the heel comes up as far as the clip's knee wants, not only once the leg's run out:
+        // so the knee's already bending through the push-off, the toe still down, as a person's does, not straight to the last)
+        const dk = Math.sqrt(this.body.thigh ** 2 + this.body.shin ** 2 + 2 * this.body.thigh * this.body.shin * Math.cos(knee)), reachTo = Math.min(most, most + (dk - most) * this.mocapK * (1 - sm(1.8, 2.8, r.speed)));
+        { const fw: V3 = this.on[1] > 0.7 && r.state === 'ground' ? [Math.sin(sole.yaw), 0, Math.cos(sole.yaw)] : unit([P[8], 0, P[10]]); if (Math.hypot(fall[0] - s[0], fall[1] - s[1], fall[2] - s[2]) > reachTo && (fall[0] - s[0]) * fw[0] + (fall[2] - s[2]) * fw[2] < 0) {
           // (the ball on the ground, under the foot: what it pivots about, so the toe stays where it is as the heel comes up)
           const on = this.on, ball: V3 = [fall[0] + fw[0] * this.body.ball - on[0] * this.body.sole, fall[1] - on[1] * this.body.sole, fall[2] + fw[2] * this.body.ball - on[2] * this.body.sole];
           // (the heel lifted just as far as it has to: solved, not stepped, so the ankle doesn't jump)
           const at = (th: number): V3 => { const c = Math.cos(th), sn = Math.sin(th), a = -this.body.ball * c + this.body.sole * sn, b = this.body.ball * sn + this.body.sole * c; return [ball[0] + fw[0] * a + on[0] * b, ball[1] + fw[1] * a + on[1] * b, ball[2] + fw[2] * a + on[2] * b]; };
           const far = (th: number) => { const c = at(th); return Math.hypot(c[0] - s[0], c[1] - s[1], c[2] - s[2]); };
-          let lo = 0, hi = 1.5; if (far(hi) > most) lo = hi; else for (let k = 0; k < 14; k++) { const m = (lo + hi) / 2; if (far(m) > most) lo = m; else hi = m; }
-          toe = Math.max(lo, hi === 1.5 && lo === 1.5 ? 1.5 : hi); const c = at(toe); fall[0] = c[0]; fall[1] = c[1]; fall[2] = c[2]; } }
+          // (the clip's knee asking the heel up only so far (55°): past that, as the leg's length alone has it, so a foot left far
+          // behind in a turn isn't stood up on its toe at once)
+          const byKnee = reachTo < most && far(0.95) <= most, want = byKnee ? Math.max(reachTo, far(0.95)) : most;
+          let lo = 0, hi = byKnee ? 0.95 : far(0) > most ? 1.5 : 0; if (far(hi) > want) lo = hi; else for (let k = 0; k < 14; k++) { const m = (lo + hi) / 2; if (far(m) > want) lo = m; else hi = m; }
+          toe = Math.max(lo, hi === 1.5 && lo === 1.5 ? 1.5 : hi); /* (the heel coming up no faster than a heel can: ~12 rad/s, not stood on the toe in a frame) */ if (this.mocapK > 0 && r.speed < 3) toe = Math.min(toe, this.toe[L ? 0 : 1] + 0.25); const c = at(toe); fall[0] = c[0]; fall[1] = c[1]; fall[2] = c[2]; } }
         this.toe[L ? 0 : 1] = toe;
         // (on it once it's taken the weight: blended from the pose's foot onto the footfall through the touch, all the way on by
         // nine tenths of the weight, so a planted foot doesn't trail a tenth of the body's motion)
