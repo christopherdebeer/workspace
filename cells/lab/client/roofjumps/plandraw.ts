@@ -46,9 +46,13 @@ export function holdStrokes(holds: Hold[], reach: Reach, x: number, y: number, z
     if (h.kind === 'face') {
       // (a tick a metre: it's a surface, not a line)
       const l = Math.hypot(h.bx - h.ax, h.bz - h.az), ux = (h.bx - h.ax) / l, uz = (h.bz - h.az) / l;
+      // (and where a foot's on it now (a run along it, up it, a kick off it), the ticks by the foot lit, longer and bolder: the
+      // wall seen being used, not just marked)
+      const feet = [reach.fl, reach.fr].filter((p): p is [number, number, number] => !!p && Math.abs((p[0] - h.ax) * h.nx + (p[2] - h.az) * h.nz) < 0.3 && p[1] >= h.ay - 0.1 && p[1] <= h.by + 0.1);
       for (let ty = h.ay + 0.5; ty < h.by; ty += 3) for (let t = 0.5; t < l; t += 1) {
-        const px = h.ax + ux * t + ox, pz = h.az + uz * t + oz, k = Math.max(0, 1 - Math.hypot(px - x, ty - y, pz - z) / r) * 0.7;
-        if (k > 0) out.push({ pts: [px, ty, pz, px + ux * 0.12, ty + 0.22, pz + uz * 0.12], cols: [c[0], c[1], c[2], k, c[0], c[1], c[2], k], w: 0.03 });
+        const px = h.ax + ux * t + ox, pz = h.az + uz * t + oz, lit = feet.reduce((m, p) => Math.max(m, 1 - Math.hypot(p[0] - px, (p[1] - ty) * 0.35, p[2] - pz) / 1.6), 0);
+        const k = Math.max(0, 1 - Math.hypot(px - x, ty - y, pz - z) / r) * 0.7 * (1 - lit) + lit, len = 1 + 1.5 * lit;
+        if (k > 0) out.push({ pts: [px, ty, pz, px + ux * 0.12 * len, ty + 0.22 * len, pz + uz * 0.12 * len], cols: [c[0], c[1], c[2], k, c[0], c[1], c[2], k], w: 0.03 + 0.04 * lit });
       }
       continue;
     }

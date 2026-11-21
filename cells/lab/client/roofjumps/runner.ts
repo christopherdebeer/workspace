@@ -643,7 +643,29 @@ export class Runner implements Body {
     }
     // (pulled up over a lip with no foot on the wall: the feet leave what they stood on as the pull takes the weight, and come
     // up under it, not dragged after the hips)
-    if (this.pulling) { f.L.on = f.R.on = false; this.reach.fl = this.reach.fr = undefined; return; }
+    // (pulled up over a lip with no foot on the wall to start: the lead foot set high on the wall as the pull begins, pushing as
+    // the body rises past it; then that knee brought up and the foot put on the top, a quarter metre in, while the hips are
+    // still below it (the knee on); the other foot after it for the stand. As the references' every pull-over goes)
+    if (this.pulling) {
+      const u = this.mu, lead = this.lead ? f.L : f.R, trail = this.lead ? f.R : f.L, ls = this.lead ? 1 : -1;
+      const onTop = (sd: number): P3 | null => { const x = this.x + this.wx * (this.R_ + 0.28) + this.wz * sd * 0.12, z = this.z + this.wz * (this.R_ + 0.28) - this.wx * sd * 0.12, h = this.city.heightAt(x, z); return Math.abs(h - this.top) < 0.05 ? [x, h, z] : null; };
+      // (the wall foot let go once the body's risen past it (it would run out of the leg's reach), swung up, and on the top by 0.55)
+      if (u >= 0.4 && u < 0.55) { lead.on = false; trail.on = false; }
+      else if (u < 0.4) {
+        if (!lead.on || lead.p[1] > this.top - 0.3) {
+          const x = this.x + this.wx * (this.R_ + 0.02) + this.wz * ls * 0.12, z = this.z + this.wz * (this.R_ + 0.02) - this.wx * ls * 0.12;
+          const g = this.city.gripAt(x, Math.min(this.top - 0.45, this.y + 0.75), z, 0.35, (o) => o.kind === 'face' && o.nx * this.wx + o.nz * this.wz < -0.5);
+          if (g) { lead.on = true; lead.p = [g.x, g.y, g.z]; } else lead.on = false;
+        }
+        trail.on = false;
+      } else {
+        const a = onTop(ls); if (a) { if (!lead.on || Math.abs(lead.p[1] - this.top) > 0.05) { lead.on = true; lead.p = a; } } else lead.on = false;
+        if (u >= 0.85) { const b = onTop(-ls); if (b && (!trail.on || Math.abs(trail.p[1] - this.top) > 0.05)) { trail.on = true; trail.p = b; } } else trail.on = false;
+      }
+      this.reach.fl = f.L.on ? f.L.p : undefined; this.reach.fr = f.R.on ? f.R.p : undefined;
+      if (f.L.on || f.R.on) this.reach.fn = u < 0.55 ? [-this.wx, 0, -this.wz] : [0, 1, 0];
+      return;
+    }
     if (this.save && this.state === 'ground' && this.move !== 'roll' && this.placeSave()) return;
     // (clutter under the stride: stepped over high)
     if (this.state === 'ground') { const g = this.city.regionAt(this.x + Math.sin(this.heading) * 0.3, this.y, this.z + Math.cos(this.heading) * 0.3); if (g?.kind === 'clutter') this.stepOver = 0.3; }

@@ -558,6 +558,13 @@ Done from it so far:
   the balance (the far arm lifted a little more, half what it is elsewhere), not a rhythm. Run along it, it blends back to a
   run, the arms a little out. Scene `edge-walk`. (Held as a pose with nothing under it, its soft knees put a foot 10 cm
   into the ground, as the run's and the dash's do; in play the feet are on the edge.)
+- *The pull-over, as the references go over.* Pulled up over a lip with no foot on the wall to start, the lead foot is set
+  high on the wall as the pull begins and pushes as the body rises past it; let go once it has (it would run out of the
+  leg's reach); that knee brought up and the foot put on the top a quarter metre in while the hips are still below it (the
+  knee on, over the arms pressing straight); the other foot after it for the stand.
+- *The wall's ticks answer.* The hold guides mark a wall the feet can use with a short slanted tick a metre (knee height,
+  and a storey up); they never seemed to take part, since a wall is used anywhere along it. Now the ticks by a foot that's
+  on the wall light, longer and bolder, so the wall's seen being used.
 - *The eye in the films.* What looked like the eye jammed into the figure's back in alleys was the contact sheets' eye
   only: in play the eye already widens and rises up a face and between walls. The sheets now frame each moment as play
   would (wide up a face, between walls, on a bar, off a wall; aimed by the body's facing off the ground, not by a velocity
