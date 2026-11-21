@@ -93,6 +93,9 @@ export class Rig {
   /** and each foot's: planted where it was put, the body going over it; and which way what it's on faces */
   soles = { L: { w: 0, p: [0, 0, 0] as V3, lost: false, yaw: 0, off: [0, 0, 0] as V3, aim: null as V3 | null }, R: { w: 0, p: [0, 0, 0] as V3, lost: false, yaw: 0, off: [0, 0, 0] as V3, aim: null as V3 | null } };
   on: V3 = [0, 1, 0];
+  /** each free leg swung out at the hip (rad), so its foot keeps to its own side of the line, not across behind the other;
+   * and how far to its own side each free foot was last drawn (m; null when down) */
+  private legOut = [0, 0]; private freeLat: (number | null)[] = [null, null];
 
   /** The pose a body's move asks for. */
   target(r: Body, ph = r.phase): Pose {
@@ -476,6 +479,13 @@ export class Rig {
 
   /** Ease the pose toward the body's; `dt` large sets it at once. */
   update(dt: number, r: Body): void {
+    // (a swinging foot drawn nearer the line than six centimetres, or across it (a turn's lean carrying the free leg under the
+    // body): the leg swung out at the hip until it's back on its own side; let go of slowly once it is)
+    if (dt > 0 && dt <= 0.2) for (let i = 0; i < 2; i++) {
+      const lat = this.freeLat[i], want = 0.06 * this.body.legScale;
+      if (lat !== null && lat < want) this.legOut[i] = Math.min(0.35, this.legOut[i] + ((want - lat) / (0.85 * this.body.legScale)) * Math.min(1, 15 * dt));
+      else this.legOut[i] = Math.max(0, this.legOut[i] - 0.8 * dt);
+    }
     // (where it is against where its motion would have put it: the difference kept as an offset, eased away)
     if (this.was && dt > 0 && dt <= 0.2) {
       const ex = this.was[0] + this.wasV[0] * dt, ey = this.was[1] + this.wasV[1] * dt, ez = this.was[2] + this.wasV[2] * dt, jx = ex - r.x, jy = ey - r.y, jz = ez - r.z;
@@ -532,8 +542,21 @@ export class Rig {
           // (where it's going, eased toward when that changes in the air (a step planned as the other foot lands), not jumped to)
           const ka = 1 - Math.exp(-(sf.k > 0.85 ? 60 : 18) * dt); f.aim = f.aim ? [f.aim[0] + (sf.to[0] - f.aim[0]) * ka, f.aim[1] + (sf.to[1] - f.aim[1]) * ka, f.aim[2] + (sf.to[2] - f.aim[2]) * ka] : [...sf.to] as V3;
           sf.to = f.aim;
-          const k = sf.k, e = sm(0.1, 0.95, k), len = Math.hypot(sf.to[0] - sf.from[0], sf.to[2] - sf.from[2]), lift = (0.05 + 0.08 * Math.min(1, len / 0.8)) * Math.sqrt(Math.max(0, Math.sin(Math.PI * Math.min(1, k * 1.05))));
-          f.p = [sf.from[0] + (sf.to[0] - sf.from[0]) * e, sf.from[1] + (sf.to[1] - sf.from[1]) * e + lift, sf.from[2] + (sf.to[2] - sf.from[2]) * e];
+          const k = sf.k, e = sm(0.1, 0.95, k), len = Math.hypot(sf.to[0] - sf.from[0], sf.to[2] - sf.from[2]), liftH = 0.05 + 0.08 * Math.min(1, len / 0.8), lift = liftH * Math.max(Math.sqrt(Math.max(0, Math.sin(Math.PI * Math.min(1, k * 1.05)))), 0.45 * Math.sqrt(Math.max(0, Math.sin(Math.PI * e)))); /* (and clear of the ground whenever it's travelling) */
+          // (round its own side of the body, not through it: where the straight way from where it left to where it's going
+          // would pass under the body or over to the other side (a sharp turn leaves a foot behind, across the new line), the
+          // foot is swung round the hips the way that keeps it on its own side, from exactly where it left to where it lands)
+          let fx2 = sf.from[0] + (sf.to[0] - sf.from[0]) * e, fz2 = sf.from[2] + (sf.to[2] - sf.from[2]) * e;
+          { const lx = Math.cos(r.heading), lz = -Math.sin(r.heading), latOf = (x: number, z: number) => ((x - r.x) * lx + (z - r.z) * lz) * side;
+            if (latOf(fx2, fz2) < 0.08 * this.body.legScale && (latOf(sf.from[0], sf.from[2]) < 0.1 || latOf(sf.to[0], sf.to[2]) < 0.1)) {
+              const ax = sf.from[0] - r.x, az = sf.from[2] - r.z, bx = sf.to[0] - r.x, bz = sf.to[2] - r.z, ra = Math.hypot(ax, az), rb = Math.hypot(bx, bz);
+              const a0 = Math.atan2(ax, az), b0 = Math.atan2(bx, bz); let d = b0 - a0; d -= Math.round(d / (2 * Math.PI)) * 2 * Math.PI;
+              const at = (k: number, dd: number) => { const th = a0 + dd * k, rr = Math.max(0.16, ra + (rb - ra) * k); return [r.x + Math.sin(th) * rr, r.z + Math.cos(th) * rr]; };
+              // (the way round that passes its own side)
+              const mid = at(0.5, d); if (latOf(mid[0], mid[1]) < 0) d -= Math.sign(d || 1) * 2 * Math.PI;
+              if (Math.abs(d) < 1.5 * Math.PI) { const q = at(e, d); fx2 = q[0]; fz2 = q[1]; }
+            } }
+          f.p = [fx2, sf.from[1] + (sf.to[1] - sf.from[1]) * e + lift, fz2];
           f.w = wk; f.lost = false; f.yaw = turnTo(f.yaw, r.heading, 1 - Math.exp(-14 * dt)); continue;
         }
       }
@@ -678,7 +701,7 @@ export class Rig {
       blk('upperArm' + n, U, b.blocks.upperArm);
       blk('foreArm' + n, F, b.blocks.foreArm);
       const hip = L ? p.hipL : p.hipR, knee = L ? p.kneeL : p.kneeR;
-      const T = sw(rotZ(translate(P, side * b.hipX, -this.body.hipDrop, 0), side * p.splay), hip);
+      const T = sw(rotZ(translate(P, side * b.hipX, -this.body.hipDrop, 0), side * (p.splay + this.legOut[L ? 0 : 1])), hip);
       let Th = T, K = sw(translate(T, 0, -this.body.thigh, 0), -knee), planted: V3 | null = null;
       const sole = L ? this.soles.L : this.soles.R;
       if (sole.w > 0.01) {
@@ -725,6 +748,9 @@ export class Rig {
         Ft[0] = x[0]; Ft[1] = x[1]; Ft[2] = x[2]; Ft[4] = y2[0]; Ft[5] = y2[1]; Ft[6] = y2[2]; Ft[8] = z[0]; Ft[9] = z[1]; Ft[10] = z[2]; Ft[12] = planted[0]; Ft[13] = planted[1]; Ft[14] = planted[2];
       }
       blk('foot' + n, Ft, b.blocks.foot);
+      // (where this foot is against the line, if it's free: for the next frame's swing out)
+      if (sole.w < 0.5 && r.state === 'ground') { const fx = Math.sin(r.heading), fz = Math.cos(r.heading), bp = point(Ft, 0, 0, b.ball); this.freeLat[L ? 0 : 1] = ((bp[0] - P[12]) * fz - (bp[2] - P[14]) * fx) * side; }
+      else this.freeLat[L ? 0 : 1] = null;
     }
     // (dressed: each bone its material; and what's worn, on the bone it's fixed to, sized with the body (a head's with the
     // head))
