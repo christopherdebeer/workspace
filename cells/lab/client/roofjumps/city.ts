@@ -195,6 +195,27 @@ export class City {
       }
       boxes.push({ x0: 37, x1: 40, z0: 4, z1: 15, y0: 12, y1: 17, tag: TAG.HUT });
     } else split(ox + this.margin(cx, cz, 0), oz + this.margin(cx, cz, 1), ox + CHUNK - this.margin(cx + 1, cz, 0), oz + CHUNK - this.margin(cx, cz + 1, 1), 0);
+    // (walkways: across some alleys two to four metres wide between roofs of a height, a metre-wide bridge at roof height, open
+    // beneath (a slab: the alley under it is still the alley), railed both sides; by their own dice, so the rest is as it was)
+    if (!authored && !this.course?.alone && !(this.practiceLine && cx === 0 && cz === 0)) {
+      const wr = seeded(hash(this.seed, cx, cz, 79)), blds0 = boxes.filter((b) => b.tag === TAG.BUILDING);
+      for (const a of blds0) for (const b of blds0) {
+        if (a === b || a.y1 !== b.y1) continue;
+        for (const ax of [0, 1]) {
+          const gap = ax === 0 ? b.x0 - a.x1 : b.z0 - a.z1, lo = ax === 0 ? Math.max(a.z0, b.z0) : Math.max(a.x0, b.x0), hi = ax === 0 ? Math.min(a.z1, b.z1) : Math.min(a.x1, b.x1);
+          if (gap < 2 || gap > 4 || hi - lo < 4 || wr() > 0.22) continue;
+          const m = Math.round((lo + hi) / 2) - 1, H = a.y1;
+          // (its ends on bare roof: nothing standing at either end of it)
+          const bare = (x: number, z: number) => { let h = 0; for (const o of boxes) if (x >= o.x0 && x < o.x1 && z >= o.z0 && z < o.z1) h = Math.max(h, o.y1); return h === H; };
+          const e0 = ax === 0 ? [a.x1 - 0.5, m + 0.5] : [m + 0.5, a.z1 - 0.5], e1 = ax === 0 ? [b.x0 + 0.5, m + 0.5] : [m + 0.5, b.z0 + 0.5];
+          if (!bare(e0[0], e0[1]) || !bare(e1[0], e1[1])) continue;
+          // (and the alley open all the way across under it and over it: nothing standing in its way)
+          const w: Box = ax === 0 ? { x0: a.x1, x1: b.x0, z0: m, z1: m + 1, y0: H - 1, y1: H, tag: TAG.SLAB } : { x0: m, x1: m + 1, z0: a.z1, z1: b.z0, y0: H - 1, y1: H, tag: TAG.SLAB };
+          if (boxes.some((o) => o !== a && o !== b && o.x0 < w.x1 && o.x1 > w.x0 && o.z0 < w.z1 && o.z1 > w.z0)) continue;
+          boxes.push(ax === 0 ? { x0: a.x1, x1: b.x0, z0: m, z1: m + 1, y0: H - 1, y1: H, tag: TAG.SLAB } : { x0: m, x1: m + 1, z0: a.z1, z1: b.z0, y0: H - 1, y1: H, tag: TAG.SLAB });
+        }
+      }
+    }
     // (bucketed, for heightAt)
     const cells: number[][] = Array.from({ length: CELLS * CELLS }, () => []);
     boxes.forEach((b, i) => {
@@ -271,6 +292,13 @@ export class City {
       const xs = [px + nx * o0, px + nx * o1, qx + nx * o0, qx + nx * o1], zs = [pz + nz * o0, pz + nz * o1, qz + nz * o0, qz + nz * o1];
       props.push({ x0: Math.min(...xs), x1: Math.max(...xs), z0: Math.min(...zs), z1: Math.max(...zs), y0, y1, tag, fixture: true });
     };
+    // (a walkway's railings: along both its long sides, a little in, a metre up)
+    const walkways = boxes.filter((b) => b.tag === TAG.SLAB && b.y1 - b.y0 === 1 && Math.min(b.x1 - b.x0, b.z1 - b.z0) === 1);
+    for (const w of walkways) {
+      const alongX = w.x1 - w.x0 > w.z1 - w.z0, i = 0.06, H = w.y1;
+      const sides: [number, number, number, number, number, number][] = alongX ? [[w.x0, w.z0 + i, w.x1, w.z0 + i, 0, -1], [w.x0, w.z1 - i, w.x1, w.z1 - i, 0, 1]] : [[w.x0 + i, w.z0, w.x0 + i, w.z1, -1, 0], [w.x1 - i, w.z0, w.x1 - i, w.z1, 1, 0]];
+      for (const [ax, az, bx, bz, nx, nz] of sides) { const e: Hold = { kind: 'railing', ...USES.railing, ax, ay: H + 1, az, bx, by: H + 1, bz, nx, nz }; holds.push(e); props.push(...railingProps(e)); }
+    }
     // (a railing round a roof with no parapet, now and then (by each roof's own dice, so the rest is as it was): its top rail a
     // hold a metre up, a little in from the edge, with posts and a mid rail drawn; only along an edge whose roof is bare by it)
     for (const b of boxes) {
@@ -281,6 +309,8 @@ export class City {
       for (const [ax, az, bx, bz, nx, nz] of [[b.x0, b.z0 + i, b.x1, b.z0 + i, 0, -1], [b.x0, b.z1 - i, b.x1, b.z1 - i, 0, 1], [b.x0 + i, b.z0, b.x0 + i, b.z1, -1, 0], [b.x1 - i, b.z0, b.x1 - i, b.z1, 1, 0]] as const) {
         const len = Math.hypot(bx - ax, bz - az), ux = (bx - ax) / len, uz = (bz - az) / len;
         let bare = true; for (let t = 0.2; t < len && bare; t += 0.5) bare = top(ax + ux * t - nx * 0.25, az + uz * t - nz * 0.25) === H;
+        // (not across where a walkway comes in: it's the way on)
+        if (bare && walkways.some((w) => w.y1 === H && w.x0 <= Math.max(ax, bx) + 0.1 && w.x1 >= Math.min(ax, bx) - 0.1 && w.z0 <= Math.max(az, bz) + 0.1 && w.z1 >= Math.min(az, bz) - 0.1 && (nx ? Math.abs((nx > 0 ? w.x0 : w.x1) - (nx > 0 ? b.x1 : b.x0)) < 0.01 : Math.abs((nz > 0 ? w.z0 : w.z1) - (nz > 0 ? b.z1 : b.z0)) < 0.01))) bare = false;
         if (!bare) continue;
         const e: Hold = { kind: 'railing', ...USES.railing, ax, ay: H + 1, az, bx, by: H + 1, bz, nx, nz };
         holds.push(e); props.push(...railingProps(e));

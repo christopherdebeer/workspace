@@ -565,6 +565,11 @@ Done from it so far:
 - *The wall's ticks answer.* The hold guides mark a wall the feet can use with a short slanted tick a metre (knee height,
   and a storey up); they never seemed to take part, since a wall is used anywhere along it. Now the ticks by a foot that's
   on the wall light, longer and bolder, so the wall's seen being used.
+- *Walkways.* Across some alleys two to four metres wide between roofs of a height (by their own dice): a bridge a metre wide
+  at roof height, open beneath (a slab: the alley under it is still the alley), railed both sides (the roofs' railings
+  broken where it comes in), only where the alley's clear all the way across. About 2.4 a chunk. Run across at pace (as
+  along anything narrow). Going up between walls (a chimney) or a hang under one now meets its underside as a ceiling: had
+  climbed into it and been pushed out sideways into the building beside. Scene `walkway`.
 - *The eye in the films.* What looked like the eye jammed into the figure's back in alleys was the contact sheets' eye
   only: in play the eye already widens and rises up a face and between walls. The sheets now frame each moment as play
   would (wide up a face, between walls, on a bar, off a wall; aimed by the body's facing off the ground, not by a velocity
@@ -598,7 +603,7 @@ later, per look. Times are in the clips (`devtools/refs/roofjumps.json`).
 | antennas, aerials | rooftops and kling backgrounds | none | nothing; skyline detail | tag `AERIAL` (thin roof prop) |
 | laundry lines, poles on roofs | rooftops background | none | duck under; an obstacle | tag `LINE` (clutter) |
 | potted plants on ledges and stairs | stair 1.3-2.4 | clutter regions (pipe runs, vents, curbs) | stepped over or round | a clutter kind `plants` |
-| walkways and bridges between roofs | rooftops 1.25-2.0 (a railed walkway) | bars across some alleys | run across, rails either side | tag `WALKWAY` (a narrow box stood on, with railings) |
+| walkways and bridges between roofs | rooftops 1.25-2.0 (a railed walkway) | done: railed walkways across some alleys (slabs, open beneath) | run across, rails either side | |
 | street furniture (bins, bikes, hydrants, steps) | rooftops 15.75-16.5 (the street landing) | an empty street | land beside, vault, step | street clutter kinds |
 
 ## Not yet

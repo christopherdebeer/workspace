@@ -556,6 +556,10 @@ export class Runner implements Body {
     else if (this.state === 'chimney') this.chimney(dt, on);
     else if (this.state === 'swing') this.railSwing(dt, on, dx, dz, mag);
     else this.climb(dt, on, dx, dz, inp.jump);
+    // (a slab overhead (a walkway over an alley, a landing's underside): going up between walls, up one or along one, the head
+    // comes up against it, not through it (in the air, the flight's own check has it))
+    // (held with the head just clear of it, so nothing takes the slab for a wall the body's in and pushes it out sideways)
+    if (this.state === 'chimney' || this.state === 'climb' || this.state === 'wall') { const c = this.city.ceilingAt?.(this.x, this.y, this.z) ?? Infinity, hh = this.height_ + 0.01; if (this.y + hh > c) { this.y = c - hh; this.vy = Math.min(this.vy, 0); } }
     this.hold = !!inp.hold;
     // (facing: the way it's going; up a wall, the wall)
     const sp = this.speed;

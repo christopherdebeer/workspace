@@ -307,6 +307,16 @@ function holdScenes(): Scene[] {
         { says: 'across, onto the far roof', check: (r) => ok(r.runner.z > 22.5 && r.runner.y > 8.9, `ended at z ${r.runner.z.toFixed(1)}, y ${r.runner.y.toFixed(1)}`) }],
     },
     {
+      key: 'walkway', title: 'Across a walkway over an alley',
+      asks: 'Two roofs of a height, a 3 m alley between, a railed walkway a metre wide across it (the references\' rooftops are joined so). Held across: along the walkway at a run, no jump, the railings either side.',
+      watch: 'Running the walkway at roof height; nothing under it, the alley below.',
+      course: { boxes: [B(20, 44, 0, 20, 12), B(31, 32, 20, 23, 12, TAG.SLAB, 11), B(20, 44, 23, 40, 12)], holds: [31.06, 31.94].map((x, i) => ({ kind: 'railing' as const, ax: x, ay: 13, az: 20, bx: x, by: 13, bz: 23, nx: i ? 1 : -1, nz: 0 })), start: { x: 31.5, z: 8 }, alone: true }, seconds: 4,
+      input: (t, r) => (r.z > 30 && r.state === 'ground' ? none : go(0)),
+      should: [...commonShoulds,
+        { says: 'across on the walkway, not jumped (no takeoff)', check: (r) => ok(r.ups.length === 0 && r.runner.z > 24, `${r.ups.length} takeoffs; ${seq(r)}`) },
+        { says: 'at roof height all the way across (never into the alley)', check: (r) => { const lo = Math.min(...r.frames.filter((f) => f.z > 20 && f.z < 23).map((f) => f.y)); return ok(lo > 11.9, `lowest ${lo.toFixed(2)} m over the alley`); } }],
+    },
+    {
       key: 'diagonal-unit', title: 'Up and across to a unit, and up from it',
       asks: 'Short of a 15 m roof; a sill at 9 m, and up and to the side a unit under a window. Steered up and that way: sprung diagonally for the unit, stepped up onto it, and from standing on it, the lip.',
       watch: 'The diagonal spring and its one-handed catch; the unit used as a step.',
