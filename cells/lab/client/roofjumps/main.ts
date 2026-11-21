@@ -29,7 +29,7 @@
  * over the picture (and `auto`) · `far=` chunks drawn each way (4) · `side=90&zoom=1.6` the eye swung round the figure
  * and brought closer: for looking at the rig · `study=<move>&mu=` one move's pose held, that far through it (0..1) ·
  * `sheet=<move,move…>` a pose sheet: each of those moves at five points through it, the figure alone (with `side=90`,
- * from the side) · `scene=<key>` an authored scene (scenes.ts) · `from=x,z` start there (the street) · `hold=<radians>` one world direction held · `brush=1` from a stand, light pushes every way and a turn round (brush.ts), to see the feet · `strip=<seconds>` a stretch of its own run from there laid out frame by frame, the move named on
+ * from the side) · `scene=<key>` an authored scene (scenes.ts) · `from=x,z` start there (the street) · `hold=<radians>` one world direction held · `brush=1` from a stand, light pushes every way and a turn round (brush.ts), to see the feet (`brush=filmed`: the one 12 px back brush Astra filmed) · `strip=<seconds>` a stretch of its own run from there laid out frame by frame, the move named on
  * each (`frames=24`, `every=0.1`, `cols=6`).
  */
 import { noise1 } from '../kit/rng';
@@ -46,7 +46,7 @@ import { plan, words } from './plan';
 import type { Plan, Route } from './plan';
 import { holdStrokes, planStrokes } from './plandraw';
 import { follow } from './direct';
-import { brushInput } from './brush';
+import { brushInput, FILMED } from './brush';
 import { sceneByKey, SCENES } from './scenes';
 import { heldBody } from './poses';
 import { CHARACTERS, characterByName } from './character';
@@ -119,7 +119,9 @@ canvas.addEventListener('pointermove', (e) => {
   if (menu.active) return;
   if (e.pointerId === stick.id) {
     let x = (e.clientX - stick.x0) / REACH, y = (e.clientY - stick.y0) / REACH; const l = Math.hypot(x, y);
-    if (l > 0.18) { stick.moved = true; knob.classList.add('on'); }
+    // (a thumb that's moved the runner isn't a tap: the same tenth of the stick's reach that starts it moving (runner `on`), so a
+    // small drag ending in a jump never happens)
+    if (l > 0.1) { stick.moved = true; knob.classList.add('on'); }
     if (l > 1) { x /= l; y /= l; }
     stick.x = x; stick.y = y; nub.style.transform = `translate(${x * REACH}px,${y * REACH}px)`;
   } else {
@@ -183,7 +185,7 @@ function studies(): HTMLElement[] {
     group('test runs', [
       link('the transfer line', { line: 'transfer' }), link('takeoff: standing', { line: 'transfer', takeoff: 'stand' }), link('takeoff: off a step', { line: 'transfer', takeoff: 'step' }), link('takeoff: at a run', { line: 'transfer', takeoff: 'run' }),
       link('catch: clean', { line: 'transfer', catch: 'clean' }), link('catch: turned late', { line: 'transfer', catch: 'late' }), link('catch: corrected in the air', { line: 'transfer', catch: 'correct' }),
-      link('brushes from a stand', { brush: '1' }, 'light pushes every way and a turn round, to see the feet'),
+      link('brushes from a stand', { brush: '1' }, 'light pushes every way and a turn round, to see the feet'), link('the filmed brush', { brush: 'filmed' }, '12 px straight back for 133 ms, from a stand: the first regression for small moves'),
       ...(spot ? [0, 1, 2, 3].map((k) => link(`from the street, held ${['north', 'east', 'south', 'west'][k]}`, { from: `${spot[0].toFixed(1)},${spot[1].toFixed(1)}`, hold: String(((k * Math.PI) / 2 + 0.3).toFixed(3)) })) : []),
       ...[0, 1, 2, 3].map((k) => link(`a held line ${['north', 'east', 'south', 'west'][k]}`, { hold: String(((k * Math.PI) / 2 + 0.1).toFixed(3)) })),
       link('poses on the ground', { sheet: 'run,dash,ledge,roll', side: '90', zoom: '2.1' }), link('poses in the air', { sheet: 'hop,bound,flip,spring,dive', side: '90', zoom: '2.1' }), link('its own run, frame by frame', { strip: '5', frames: '30', every: '0.1' }),
@@ -246,7 +248,7 @@ function asked(t: number): Input {
   // clean; turned late, just before the lip; corrected shallowly in the flight. To see where the save's foot goes)
   // (`direct=x,z;x,z…`: a directed run (devtools/roofjumps-direct.mjs), its waypoints followed as the director followed them)
   // (`brush=1`: from a stand, short light pushes every way and a turn round (brush.ts), to see the feet)
-  if (brushStudy) return brushInput(t, brushHeading);
+  if (brushStudy) return brushInput(t, brushHeading, q.get('brush') === 'filmed' ? FILMED : undefined);
   // (on the frame's own time, as runScene gives it: a summed clock drifts, and a scene's timing can turn on one frame)
   if (scene) return scene.input(Math.round(t / DT) * DT, runner, sceneMem);
   // (`hold=<radians>`: one world direction held hard, as the tests hold a line; with `from=x,z`, from the street)

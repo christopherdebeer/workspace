@@ -296,6 +296,8 @@ export class Runner implements Body {
   /** each foot's footfall: planted or not, and where */
   private feet = { L: { on: false, p: [0, 0, 0] as P3, done: false, up: -9, held: null as { from: P3; t: number; need: number; turn?: boolean } | null, aim: null as P3 | null, choice: null as number[] | null, drawn: null as P3 | null, k0: null as number | null, from0: null as P3 | null, kWas: 0 }, R: { on: false, p: [0, 0, 0] as P3, done: false, up: -9, held: null as { from: P3; t: number; need: number; turn?: boolean } | null, aim: null as P3 | null, choice: null as number[] | null, drawn: null as P3 | null, k0: null as number | null, from0: null as P3 | null, kWas: 0 } };
   /** a step taken standing: which foot, from where to where, how far through (s) and how long it takes */
+  /** the foot it set off on from its last stand (1 left, -1 right), for the record */
+  firstFoot = 0;
   standStep: { side: number; from: P3; to: P3; t: number; dur: number } | null = null;
   /** where each foot last was: on the ground now, or where it left it */
   get footAt(): { L: P3; R: P3 } { return { L: this.feet.L.p, R: this.feet.R.p }; }
@@ -611,13 +613,29 @@ export class Runner implements Body {
     // from there, by the body turning or drifting off it, is stepped back under it, one at a time, lifted and put down)
     if (this.state === 'ground' && this.move !== 'roll' && sp < WALK) { this.standing(); this.stood = true; return; }
     // (setting off mid-step: that step put down where it was going)
+    let stepping = 0;
     if (this.standStep) {
       // (and the step it's in the middle of carried on from where the foot is, to where it was going, not set there at once)
-      const ss = this.standStep, foot = ss.side > 0 ? f.L : f.R, from = this.shoe(foot);
+      const ss = this.standStep; stepping = ss.side; const foot = ss.side > 0 ? f.L : f.R, from = this.shoe(foot);
       foot.on = false; foot.up = this.time; foot.held = { turn: true, from, t: this.time, need: Math.max(0.06, Math.hypot(ss.to[0] - from[0], ss.to[2] - from[2]) / 2.5) }; this.standStep = null;
     }
     // (setting off from a stand: no plan carried from before it; the stride takes the feet from where they stand)
-    if (this.stood && this.state === 'ground') { this.stood = false; this.nextFall = null; this.stepTo = 0; this.planFor = { L: null, R: null }; }
+    if (this.stood && this.state === 'ground') {
+      this.stood = false; this.nextFall = null; this.stepTo = 0; this.planFor = { L: null, R: null };
+      // (and the first foot the one a person would take: one already in the air from a step at a stand; going off to a side,
+      // the foot on that side stepping out, the weight on the other; forward or back, the foot furthest behind the way it's
+      // going, the one the weight's coming off (the rear foot going forward, the front one stepping back). The stride's clock
+      // set so that foot's swing starts now, the other's stance. On a light press, the small moves from a stand: a full press bursts
+      // off on the stride's own clock)
+      const wx = this.want[0] || this.vx, wz = this.want[1] || this.vz, wl = Math.hypot(wx, wz);
+      if (wl > 1e-3 && this.mag < 0.8) {
+        const ux = wx / wl, uz = wz / wl, lat = ux * Math.cos(this.heading) - uz * Math.sin(this.heading);
+        let side = stepping;
+        if (!side) side = !f.L.on && f.R.on ? 1 : !f.R.on && f.L.on ? -1 : Math.abs(lat) > 0.5 ? (lat > 0 ? 1 : -1) : ((f.L.p[0] - this.x) * ux + (f.L.p[2] - this.z) * uz <= (f.R.p[0] - this.x) * ux + (f.R.p[2] - this.z) * uz ? 1 : -1);
+        this.phase = Math.floor(this.phase / (2 * Math.PI)) * 2 * Math.PI + Math.PI / 2 + 0.3 + Math.max(Math.PI, this.span + 0.01) - (side > 0 ? 0 : Math.PI); /* (that foot just off the ground, and the other down: at a walk mid-stance, into a run just come down) */
+        this.firstFoot = side;
+      }
+    }
     // (hanging, loaded: both feet set on the wall under the hips; springing: off it)
     if (this.state === 'climb' && this.chain && this.chain.phase >= 1) {
       if (this.chain.phase === 2) { f.L.on = f.R.on = false; return; }
@@ -1109,7 +1127,13 @@ export class Runner implements Body {
     // the edge), not stopped a body's length back)
     let edgeD = 0; if (!on && sp > 0.5 && !settling && this.rollT <= 0) for (let d = 0.3; d <= 6; d += 0.1) if (H(this.x + fx * d, this.z + fz * d) < this.y - STEP) { edgeD = d; break; }
     const atLip = edgeD > 0 ? Math.min(1, (sp * sp) / (2 * Math.max(0.05, edgeD - 0.42)) / TUNE.accel) : 1;
-    const tx = dx * top, tz = dz * top, ex = tx - this.vx, ez = tz - this.vz, e = Math.hypot(ex, ez), a = (this.rollT > 0 ? TUNE.accel * 0.3 : settling ? TUNE.accel * 0.25 : TUNE.accel * Math.max(0.3, atLip) * (1 - 0.6 * this.land) * drive * (this.vx * ex + this.vz * ez >= 0 || sp < 0.1 ? Math.min(1, 0.3 + sp / 4) : 1)) * dt;
+    const tx = dx * top, tz = dz * top, ex = tx - this.vx, ez = tz - this.vz, e = Math.hypot(ex, ez); let a = (this.rollT > 0 ? TUNE.accel * 0.3 : settling ? TUNE.accel * 0.25 : TUNE.accel * Math.max(0.3, atLip) * (1 - 0.6 * this.land) * drive * (this.vx * ex + this.vz * ez >= 0 || sp < 0.1 ? Math.min(1, 0.3 + sp / 4) : 1)) * dt;
+    // (getting going on a light press: from a stand the weight goes onto the first step over a quarter second, a couple of m/s²
+    // and more as it gets going, as a person's does, not launched to a walk in a frame and left coasting on a foot behind it
+    // once the thumb's gone (a brush of the stick is a step, not a stroll); a full press still bursts off, and once going (over
+    // 1.2 m/s) it's the stride's own business, turns and all)
+    { const easy = (1 - Math.max(0, Math.min(1, (mag - 0.45) / 0.35))) * (1 - sm01((sp - 0.6) / 0.6)), gain = this.vx * ex + this.vz * ez >= 0 || sp < 0.1;
+      if (easy > 0 && gain && !this.rollT) a = Math.min(a, a + ((2.5 + 4 * sp) * dt - a) * easy); }
     // (come to a stand close to a lip it ran at: a balance check, the body tipping out over it and back, the arms out)
     if (this.teeterT > 0) this.teeterT = Math.max(0, this.teeterT - dt);
     if (sp > 2.5) this.teetered = false;
@@ -1150,7 +1174,9 @@ export class Runner implements Body {
       const ux0 = this.vx / sp, uz0 = this.vz / sp, along = cx * ux0 + cz * uz0, lat = -cx * uz0 + cz * ux0; let br = Math.min(0, along);
       // (and only braked by a foot that's ahead of it: a foot behind the hips can only push them on, so passing over the one
       // foot down, it carries on until the next comes down ahead to brake on; a stop is braking steps, not a glide)
-      { let ahead = -9; for (const ft of [this.feet.L, this.feet.R]) if (ft.on) ahead = Math.max(ahead, (ft.p[0] - this.x) * ux0 + (ft.p[2] - this.z) * uz0); br *= ahead < -8 ? 0.3 : sm01((ahead + 0.05) / 0.2); }
+      { let ahead = -9; for (const ft of [this.feet.L, this.feet.R]) if (ft.on) ahead = Math.max(ahead, (ft.p[0] - this.x) * ux0 + (ft.p[2] - this.z) * uz0); br *= ahead < -8 ? 0.3 : Math.max(sm01((ahead + 0.05) / 0.2), 0.7 * (1 - sm01((sp - 0.4) / 0.5))); }
+      // (slower than a walk, the foot under it is enough: the body's checked over its ankle and hips, a brushed step ending
+      // where it was going instead of drifting on until a foot comes down ahead)
       const g = Math.hypot(br, lat), most = Math.min(TUNE.grip, 2.5 + 1.6 * sp) * dt / Math.max(1e-3, 1 - sm01((sp - 3) / 2));
       { const k = g > most ? most / g : 1, a2 = Math.max(0, along) + br * k, l2 = lat * k; cx = ux0 * a2 - uz0 * l2; cz = uz0 * a2 + ux0 * l2; }
     }
@@ -1850,6 +1876,8 @@ export class Runner implements Body {
       let at = 0, top = 0; for (let d = 0.3; d <= 2.6; d += 0.1) { const h = H(this.x + px * d, this.z + pz * d); if (h > this.y + STEP) { at = d; top = h; break; } }
       if (!at || top - this.y <= TUNE.rise || top - this.y > TUNE.rise + 3) continue;
       if (top >= side - 0.3) continue;
+      // (gone off a foot, like any takeoff: between steps it waits for the next to come down, unless there's no room left for one)
+      if (!this.feet.L.on && !this.feet.R.on && at > 0.9) continue;
       // (as high as gets the hand over the lip; the pace into the wall pays for it: a slow one can't)
       const apex = Math.max(1, top - this.y - this.armReach + 0.35), vy = Math.sqrt(2 * TUNE.gravity * apex);
       if (vy > 4 + 0.9 * s0) continue;

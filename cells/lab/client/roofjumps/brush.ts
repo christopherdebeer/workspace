@@ -17,9 +17,12 @@ export const BRUSHES: [number, number, number, number][] = [
   [6.9, 0.3, -2.4, 0.5],
 ];
 export const BRUSH_SECONDS = 8.2;
+/** `?brush=filmed`: the one brush Astra filmed, the first regression for small moves: 12 px of the touch stick's 56 straight
+ * back, for 133 ms, from a stand */
+export const FILMED: [number, number, number, number][] = [[0.6, 0.133, Math.PI, 12 / 56]];
 
 /** what's asked at `t`, for a body that faced `heading` at the start */
-export function brushInput(t: number, heading: number): Input {
-  for (const [at, len, dir, mag] of BRUSHES) if (t >= at && t < at + len) { const a = heading + dir; return { x: Math.sin(a) * mag, z: Math.cos(a) * mag, jump: false }; }
+export function brushInput(t: number, heading: number, set = BRUSHES): Input {
+  for (const [at, len, dir, mag] of set) if (t >= at && t < at + len) { const a = heading + dir; return { x: Math.sin(a) * mag, z: Math.cos(a) * mag, jump: false }; }
   return { x: 0, z: 0, jump: false };
 }
