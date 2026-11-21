@@ -207,7 +207,7 @@ export class Rig {
         if (r.state === 'ground') { const pa = r.pushAlong ?? 0; p.lean += pa < 0 ? Math.max(-0.35, 0.45 * Math.atan(pa / 9.8)) : Math.min(0.15, 0.25 * Math.atan(pa / 9.8)); }
         // (on the ground below a sprint: the legs, the arms and the trunk as people move, from the captured walk, jog and run,
         // each leg at its own place in the runner's stride, stretched to its stance (mocap.ts); the feet still the rig's)
-        const mk = MOCAP.on && r.state === 'ground' ? 1 - sm(6, 8, r.speed) : 0;
+        const mk = MOCAP.on && r.state === 'ground' ? (1 - sm(6, 8, r.speed)) * sm(0.15, 0.6, r.speed) : 0; /* (not standing: a clip's walk frozen where its clock stopped isn't a stand) */
         this.mocapK = mk;
         if (mk > 0) {
           const F = Math.PI / 2 + 0.3, TAU = 2 * Math.PI, at = (o: number) => ((((ph - F - o) % TAU) + TAU) % TAU) / TAU;
@@ -708,7 +708,10 @@ export class Rig {
     }
     const groundW = walk > 0 && vault < Infinity ? ground * (1 - walk) + Math.min(ground, vault) * walk : ground;
     const hip = groundW * this.stood + (0.98 - p.sink) * Ls * (1 - this.stood);
-    const hipTo = r.state === 'ground' && r.move !== 'roll' ? Math.min(hip, (0.99 - 0.46 * r.land) * Ls) : hip;
+    // (on the ground no higher than a straight-legged stand allows (this body's own legs, nearly straight), less as a landing
+    // takes it: a fixed 0.99 m had stood every stand on knees bent 28°)
+    const tallest = this.body.hipDrop + 0.995 * (this.body.thigh + this.body.shin) + this.body.sole;
+    const hipTo = r.state === 'ground' && r.move !== 'roll' ? Math.min(hip, tallest - 0.46 * r.land * Ls) : hip;
     // (the hips never jump up: risen to a new height at most as fast as legs push (6 m/s); let down as fast as a landing takes them)
     this.hipY = dt > 0 && dt <= 0.2 ? Math.max(this.hipY - 18 * dt, Math.min(this.hipY + 6 * dt, hipTo)) : hipTo;
     // (the chest a beat behind the hips: when they're stopped short (a landing), it carries on down and comes back up;
@@ -726,7 +729,7 @@ export class Rig {
       // (a foot still coming down onto its footfall isn't on it: the body neither reaches for it nor gives it up)
       if (f.w < 0.05 || f.coming) continue;
       const s = point(P0, side * this.body.hipX, -this.body.hipDrop, 0), fall: V3 = [f.p[0] + this.on[0] * this.body.sole, f.p[1] + this.on[1] * this.body.sole, f.p[2] + this.on[2] * this.body.sole];
-      const d = sub(fall, s), far = Math.hypot(d[0], d[1], d[2]), R = (this.body.thigh + this.body.shin) * 0.97;
+      const d = sub(fall, s), far = Math.hypot(d[0], d[1], d[2]), R = (this.body.thigh + this.body.shin) * (r.state === 'ground' && r.speed < 0.3 ? 0.995 : 0.985); /* (a leg let nearly straight: at 97% every planted knee was held bent 28°; standing, straighter still) */
       // (behind, the toe pivot gives the leg a heel's length more)
       const behind = this.on[1] > 0.7 && d[0] * fw[0] + d[2] * fw[2] < 0 ? 0.1 : 0, over = far - R - behind;
       if (over <= 0) continue;
