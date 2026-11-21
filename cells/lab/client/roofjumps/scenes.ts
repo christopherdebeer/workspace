@@ -286,6 +286,17 @@ function holdScenes(): Scene[] {
         onTop(15)],
     },
     {
+      key: 'rail-hop', title: 'Over a railing at the edge, across',
+      asks: 'A roof with a railing along its edge (the references\' walkways and roofs are railed), a 2.5 m gap to the next. Held across: the railing is gone over, a hand on its rail, into the leap; the feet clear it.',
+      watch: 'The hand on the rail; the feet over it, not through it.',
+      course: { boxes: [B(20, 44, 0, 20, 12), B(20, 44, 22.5, 40, 12)], holds: [{ kind: 'railing' as const, ax: 20, ay: 13, az: 19.94, bx: 44, by: 13, bz: 19.94, nx: 0, nz: 1 }], start: { x: 32, z: 6 }, alone: true }, seconds: 3.5,
+      input: (t, r) => (r.z > 26 && r.state === 'ground' ? none : go(0)),
+      should: [...commonShoulds,
+        { says: 'over the railing into the leap (a vault or a hop)', check: (r) => ok(r.ups.some((u) => u.move === 'vault' || u.move === 'hop' || u.move === 'flip'), seq(r)) },
+        { says: 'the feet over the rail, not through it (the body at least 0.6 m up as it crosses the railing\'s line)', check: (r) => { const f = r.frames.find((q, i) => i > 0 && r.frames[i - 1].z < 19.94 && q.z >= 19.94); return ok(!!f && f.y > 12.6, f ? `${(f.y - 12).toFixed(2)} m up crossing it` : 'never crossed'); } },
+        { says: 'across, onto the far roof', check: (r) => ok(r.runner.z > 23 && r.runner.y > 11.9, `ended at z ${r.runner.z.toFixed(1)}, y ${r.runner.y.toFixed(1)}`) }],
+    },
+    {
       key: 'diagonal-unit', title: 'Up and across to a unit, and up from it',
       asks: 'Short of a 15 m roof; a sill at 9 m, and up and to the side a unit under a window. Steered up and that way: sprung diagonally for the unit, stepped up onto it, and from standing on it, the lip.',
       watch: 'The diagonal spring and its one-handed catch; the unit used as a step.',

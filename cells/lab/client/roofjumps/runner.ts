@@ -181,6 +181,8 @@ export class Runner implements Body {
   climbsBy: Record<string, number> = {};
   /** let go of a hold on purpose: no grabbing again until it's down (not a ladder of grabs and drops down a face) */
   private dropped = false;
+  /** the vault's hand is on a railing (drawn, not in the height field) */
+  private overRailing = false;
   /** time spent going along a face since last down (shimmying): a traverse, not a way of crossing a block */
   private travT = 0;
   /** which way the last takeoff came about (a tap, a run-up's foot, an edge met, …) */
@@ -920,9 +922,25 @@ export class Runner implements Body {
    * not leapt as a drop. 0 if there's none.
    */
   private edgeAlong(ux: number, uz: number, from: number, to: number, step: number): number {
-    let prev = this.y;
-    for (let d = from; d <= to; d += step) { const h = this.city.heightAt(this.x + ux * d, this.z + uz * d); if (Math.abs(h - prev) > STEP) return d; prev = h; }
-    return 0;
+    let prev = this.y, edge = 0;
+    for (let d = from; d <= to; d += step) { const h = this.city.heightAt(this.x + ux * d, this.z + uz * d); if (Math.abs(h - prev) > STEP) { edge = d; break; } prev = h; }
+    // (a railing across the way (drawn, not in the height field) is an edge too, taken a long stride short of it: it's gone over
+    // from there, a hand on its rail, not run into)
+    const r = this.railingAlong(ux, uz, to);
+    if (r > 0) { const e = Math.max(from, r - 0.9); if (!edge || e < edge) edge = e; }
+    return edge;
+  }
+  /** how far along (ux, uz) a railing crosses the way, at about this height (its rail a metre up), within `to`; 0 if none */
+  private railingAlong(ux: number, uz: number, to: number): number {
+    let best = 0;
+    for (const h of this.city.holdsNear(this.x + ux * to * 0.5, this.z + uz * to * 0.5, to * 0.5 + 0.5)) {
+      if (h.kind !== 'railing' || Math.abs(h.ay - 1 - this.y) > 0.3) continue;
+      // (where the line ahead meets the rail's line, if it does, between its ends)
+      const ex = h.bx - h.ax, ez = h.bz - h.az, den = ux * ez - uz * ex; if (Math.abs(den) < 1e-6) continue;
+      const qx = h.ax - this.x, qz = h.az - this.z, d = (qx * ez - qz * ex) / den, t = (qx * uz - qz * ux) / den;
+      if (d > 0.05 && d <= to && t >= 0 && t <= 1 && (!best || d < best)) best = d;
+    }
+    return best;
   }
   private planRunUp(p: P3, side: number, fx: number, fz: number, sp: number): { steps: number; next: number; after: number } | null {
     void side;
@@ -1555,7 +1573,7 @@ export class Runner implements Body {
     this.state = 'air'; this.vy = vy; this.airT = 0; this.planned = planned; this.air2 = true; this.attempt = false; this.launchWant = [this.want[0], this.want[1]]; this.aim = null; this.errorOf = null; this.save = null; this.sw = null;
     this.move = move; this.float = float; this.flightT = Math.max(0.15, planned || float ? T : this.comesDown(T)); this.mu = 0;
     this.leaps++; this.rollT = 0; this.count(move);
-    if (move !== 'vault' && move !== 'underbar') this.plant = this.plant2 = null;
+    if (move !== 'vault' && move !== 'underbar') { this.plant = this.plant2 = null; this.overRailing = false; }
     if (move !== 'spring') this.lip = null;
   }
 
@@ -1596,6 +1614,8 @@ export class Runner implements Body {
       for (let d = from; d <= reach; d += 0.5) { const h = H(d); if (h < y - DROP && (at < 0 || h > to) && flat(d, h)) { at = d; to = h; } }
       if (at < 0) { this.vx = ux * sp; this.vz = uz * sp; this.launch(JUMP * 0.8, 'bound', false, false, 2 * JUMP * 0.8 / G); return; }
     }
+    // (a railing on the way (drawn, not in the height field): over it too, a hand on its rail if there's a vault in it)
+    for (let d = Math.max(0, from - 0.6); d <= Math.min(at + 0.7, 4); d += 0.1) { const g = this.city.gripAt(this.x + ux * d, y + 1, this.z + uz * d, 0.12, (h) => h.kind === 'railing' && h.ay > y + 0.3 && h.ay < y + 1.3); if (g) { if (g.y > over) { over = g.y; overAt = d; } break; } }
     let D = at + 0.7;
     const dh = to - y, clear = Math.max(0, dh, over - y);
     // (which move: by the rise, the drop, the distance, what's in the way)
@@ -1608,7 +1628,7 @@ export class Runner implements Body {
     else if (dh <= -TUNE.diveDrop) { move = 'dive'; apex = clear + 0.4 + (D > TUNE.glideDist ? 0.04 * D : 0); }
     else if (over - y >= 0.6 && D <= 5) {
       // (something to get over: with an edge of it to put a hand on, a vault, one hand or (every other) two; without, a hop)
-      const g = TUNE.reach ? this.city.gripAt(this.x + ux * overAt, over, this.z + uz * overAt, TUNE.gripReach, (h) => (h.kind === 'edge' || h.kind === 'rail') && Math.abs(h.ay - over) < 0.05) : null;
+      const g = TUNE.reach ? this.city.gripAt(this.x + ux * overAt, over, this.z + uz * overAt, TUNE.gripReach, (h) => (h.kind === 'edge' || h.kind === 'rail' || h.kind === 'railing') && Math.abs(h.ay - over) < 0.05) : null;
       if (g) {
         move = 'vault'; apex = clear + TUNE.vaultLow;
         // (which vault, by how it's met: square on and fast, both hands (a dash over); square on and slower, one (a speed
@@ -1616,7 +1636,7 @@ export class Runner implements Body {
         // hands (a cartwheel); come at it along it, round on the hand (a palm spin))
         const sq = Math.abs(ux * g.hold.nx + uz * g.hold.nz), angle = Math.acos(Math.min(1, sq)) * 180 / Math.PI;
         const two = angle < 25 && sp >= 7, l = Math.hypot(g.hold.bx - g.hold.ax, g.hold.bz - g.hold.az) || 1, hx = ((g.hold.bx - g.hold.ax) / l) * 0.2, hz = ((g.hold.bz - g.hold.az) / l) * 0.2;
-        this.plant = two ? onHold(g.hold, g.x + hx, g.z + hz) : [g.x, g.y, g.z]; this.plant2 = two ? onHold(g.hold, g.x - hx, g.z - hz) : null;
+        this.plant = two ? onHold(g.hold, g.x + hx, g.z + hz) : [g.x, g.y, g.z]; this.plant2 = two ? onHold(g.hold, g.x - hx, g.z - hz) : null; this.overRailing = g.hold.kind === 'railing';
         spin = angle > 55;
         // (a cartwheel: at an angle and slow, one hand and then the other, over sideways on them; high enough to go over upside
         // down on straight arms)
@@ -1831,6 +1851,9 @@ export class Runner implements Body {
     this.x = nx; this.z = nz; this.y = ny;
     // (a slab overhead (a landing's underside): the head comes up against it, and the rise stops there)
     { const c = this.city.ceilingAt?.(this.x, this.y, this.z) ?? Infinity, hh = this.height_ - 0.05; if (this.y + hh > c) { this.y = Math.min(this.y, c - hh); this.vy = Math.min(this.vy, 0); } }
+    // (over a railing on a hand (the railing drawn, not in the height field): carried up onto the hand as over anything else, so
+    // the tucked feet go over the rail, not through it)
+    if (this.move === 'vault' && this.plant && this.overRailing) { const hd = Math.hypot(this.x - this.plant[0], this.z - this.plant[2]), want = this.plant[1] - 0.35; if (hd < 0.8 && this.y < want) { const gap = want - this.y; this.y += Math.min(gap, 6 * dt); this.vy = Math.max(this.vy, 0); } }
     // (the body's breadth: not into a wall it's passing, falling past, kicking off)
     // (vaulting: not the thing it's going over, carried on its hand, while it's up by it: not what's below, falling on)
     this.resolve(this.move === 'vault' && this.plant && this.y > this.plant[1] - 1.2 ? Math.max(0.6, this.plant[1] + 0.1 - this.y) : 0.6);

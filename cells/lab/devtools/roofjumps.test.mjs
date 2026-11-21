@@ -95,6 +95,8 @@ const { plan, foresee, TUNE, HOUSE, DIALS, City, Runner, Rig, CHUNK, STOREY, TAG
     const mx = (h.ax + h.bx) / 2, mz = (h.az + h.bz) / 2;
     assert.ok(h.hand && (h.foot || h.kind === 'bar' || h.kind === 'sign'), 'each says what it is for, by hand and by foot (a bar or a sign\'s bracket, by hand only)');
     // (a fixture out from its face (a ledge, a unit, a sign's bracket, a balcony's rail): its wall behind it, within a metre, as high)
+    // (a railing: its top rail a metre over the roof it stands on, just in from the edge)
+    if (h.kind === 'railing') { assert.ok(Math.abs(a.heightAt(mx - h.nx * 0.1, mz - h.nz * 0.1) - (h.ay - 1)) < 1e-6, 'a railing stands on its roof'); continue; }
     if (['ledge', 'ac', 'sign', 'balcony', 'escape'].includes(h.kind)) { assert.ok([0.31, 0.5, 0.25, 1.05].some((o) => a.heightAt(h.ax - h.nx * o, h.az - h.nz * o) >= h.ay), `${h.kind} is fixed to a wall`); continue; }
     if (h.kind === 'pipe') { assert.ok(h.ax === h.bx && h.az === h.bz && h.ay === 0 && h.by > 0); continue; }
     if (h.kind === 'face') { assert.ok(h.by - h.ay >= 2 && a.heightAt(mx - h.nx * 0.01, mz - h.nz * 0.01) >= h.by); continue; }

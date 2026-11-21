@@ -543,6 +543,14 @@ Done from it so far:
   Fixture parts are marked as such, and the painted look lets them withdraw with the detail at distance.
 - *Climbs by kind, kept.* A hold the feet can stand on is stepped up onto first; the lip from it only if it's right overhead
   (had been reached for straight from the hang once the lip could be seen from a hold a little off the wall).
+- *Railings* (on nearly every roof and walkway in the clips). On about three in ten roofs without a parapet (each roof's own
+  dice; not on the practice line, which stays the takeoff studies' baseline): a railing a little in from the edge, along
+  each edge whose roof is bare by it, its top rail a hold (`railing`: a hand planted on it, the feet along its top) a metre
+  up, posts and a mid rail drawn. Drawn, not solid: made solid (a thin box in the height field) the run-up planner took its
+  8 cm top for a lip and a landing (and its half-metre look-ahead stepped over it), and sprang onto it and off the roof. So
+  a railing across the way is an edge a long stride short of it, taken from there; the leap clears it, a hand on its rail
+  if there's a vault in it, carried up onto the hand if the arc comes short. Scene `rail-hop`: over the railing on a hand,
+  the feet clearing it, across a 2.5 m gap.
 - *The eye in the films.* What looked like the eye jammed into the figure's back in alleys was the contact sheets' eye
   only: in play the eye already widens and rises up a face and between walls. The sheets now frame each moment as play
   would (wide up a face, between walls, on a bar, off a wall; aimed by the body's facing off the ground, not by a velocity
@@ -556,7 +564,7 @@ later, per look. Times are in the clips (`devtools/refs/roofjumps.json`).
 
 | detail | seen | we have | hand / foot | to add |
 |---|---|---|---|---|
-| railings (walkway and roof-edge rails, fire-escape rails) | rooftops 1.3-2.0 (hopped), stair 2.3-14.5, kling 11.3 | a `rail` hold only along the top of something narrow | grab, plant to vault, swing under; balance along the top | tag `RAILING` (posts and a top rail, thin, off the lattice); hold `railing` |
+| railings (walkway and roof-edge rails, fire-escape rails) | rooftops 1.3-2.0 (hopped), stair 2.3-14.5, kling 11.3 | roof-edge railings done (`railing` holds, drawn, vaulted on a hand); walkways not yet | grab, plant to vault, swing under; balance along the top | tag `RAILING` (posts and a top rail, thin, off the lattice); hold `railing` |
 | parapets, low roof-edge walls | rooftops 5.8-6.5, 9-11; kling 11.3-13.2 (run along) | `RIM` boxes, `edge` holds | grab; take off from, land on, run along | have it; a parapet run as its own line (precision along it) |
 | units on roofs (condensers) | rooftops 4.5-5.5 (hopped) | `UNIT` boxes | plant, vault, step | have it |
 | units on walls | rooftops 3.3-5.5, kling 3.5, stills | `ac` hold, drawn | grab, step | have it |

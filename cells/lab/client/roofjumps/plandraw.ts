@@ -33,7 +33,7 @@ function route(r: Route, w: number, alpha: number, rings: boolean, out: Stroke[]
 }
 
 /** a colour a kind (every kind: a hold with none would stop the frame) */
-const HOLD_COLOUR: Record<HoldKind, readonly [number, number, number]> = { edge: [0.2, 0.45, 0.9], rail: [0.95, 0.95, 0.95], sill: [0.1, 0.65, 0.3], pipe: [0.95, 0.5, 0.1], face: [0.6, 0.35, 0.75], bar: [0.85, 0.85, 0.3], ledge: [0.15, 0.8, 0.75], ac: [0.9, 0.3, 0.6], sign: [0.95, 0.8, 0.1], balcony: [0.4, 0.9, 0.35], escape: [0.55, 0.75, 0.95] };
+const HOLD_COLOUR: Record<HoldKind, readonly [number, number, number]> = { edge: [0.2, 0.45, 0.9], rail: [0.95, 0.95, 0.95], sill: [0.1, 0.65, 0.3], pipe: [0.95, 0.5, 0.1], face: [0.6, 0.35, 0.75], bar: [0.85, 0.85, 0.3], ledge: [0.15, 0.8, 0.75], ac: [0.9, 0.3, 0.6], sign: [0.95, 0.8, 0.1], balcony: [0.4, 0.9, 0.35], escape: [0.55, 0.75, 0.95], railing: [0.8, 0.8, 0.85] };
 /** The holds about a place, as tags on what they're on: a line each (a wall, for the feet, a row of ticks at knee height
  * and again a storey up); and where the hands are (red rings) and the feet (black) this instant. */
 export function holdStrokes(holds: Hold[], reach: Reach, x: number, y: number, z: number, r: number): Stroke[] {
