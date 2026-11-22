@@ -226,3 +226,16 @@ explain each character. The work, in order:
   runner. A brush too small to step: the jacket registers the turn while the planted sole keeps its edge against the roof. The
   first committed step: the heel breaks, the gap opens between the legs. If the pale shoe or trouser highlight changes shape
   before either, the paint is adding to the jank. Alongside the dive.
+- G1, first cut:
+  - bent marks in the painter: a mark's `path`, one stroke over all its legs, its taper, load and dry lift over the whole length,
+    the stamps lapped at each bend;
+  - the figure painted in strokes across joints: a sleeve shoulder to wrist and a trouser leg hip to ankle as one bent stroke each
+    (where one cloth covers both, and not seen end-on);
+  - an arm raised in line with the body (the dive, a reach) gets one sweep from the hip up the back through the shoulder into
+    the arm.
+  - Found:
+    - edge pulls on a bent path drifted off the limb past the joint (now each point moves across the limb as it runs there);
+    - edge pulls sized by the chain's average stuck out past a shin (now sized by the narrowest member);
+    - a chain run past the ankle left a dry, streaky tail (now no extension past the end, a wetter exit);
+    - the turned edge on bare skin read as a seam (now a soft half-tone).
+  - Suite unchanged.

@@ -109,11 +109,15 @@ export interface Mark {
   sky?: boolean;
   /** a second pigment carried in the brush, laid by irregular bristle groups and heavier on one side; how much of it */
   col2?: V; mix2?: number;
+  /** a bent mark: its path, a to b through these (a, then the points, then b); one stroke, its taper, load and dry lift over the
+   * whole length, its stamps one a leg, overlapping at each bend (Switchback's strokes bend on strips) */
+  path?: V[];
 }
 
 const NOCLIP: [V, V] = [[-1e5, -1e5, -1e5], [1e5, 1e5, 1e5]];
 /** Deposit a mark as its stamps: one, or several tiling it exactly, each knowing its share of the whole. */
 export function deposit(m: Mark, out: number[]): void {
+  if (m.path && m.path.length) { depositPath(m, out); return; }
   const d = sub(m.b, m.a), L = len(d);
   if (L < 1e-5) return;
   const dir = scale(d, 1 / L);
@@ -126,6 +130,30 @@ export function deposit(m: Mark, out: number[]): void {
     out.push(c[0], c[1], c[2], m.alpha, U[0], U[1], U[2], m.kind, Vv[0], Vv[1], Vv[2], seed, m.col[0], m.col[1], m.col[2], m.rank ?? 0.5,
       anchor[0], anchor[1], anchor[2], m.dry ?? 0, clip[0][0], clip[0][1], clip[0][2], s0, clip[1][0], clip[1][1], clip[1][2], s1, m.heart ?? 0.5, tin, tout, m.sky ? 1 : 0, ...(m.col2 ?? m.col), m.mix2 ?? 0);
   }
+}
+
+/** a bent mark's stamps: a leg of its path each, each knowing its share of the whole length (so the shader's taper, bristles and
+ * dry lift run the whole stroke), lapped a little past each bend so no gap opens there, its width across each leg as it turns */
+function depositPath(m: Mark, out: number[]): void {
+  const pts = [m.a, ...m.path!, m.b], legs: { a: V; b: V; l: number }[] = [];
+  for (let i = 0; i + 1 < pts.length; i++) { const l = len(sub(pts[i + 1], pts[i])); if (l > 1e-5) legs.push({ a: pts[i], b: pts[i + 1], l }); }
+  const L = legs.reduce((t, g) => t + g.l, 0); if (L < 1e-5) return;
+  const hw = (m.width / 2) * 1.15, seed = (hashKey(m.key) % 100000) / 100000, clip = m.clip ?? NOCLIP, Lm = Math.max(L, 1e-4);
+  const [tin, tout] = m.taper ?? [Math.min(Lm * 0.3, m.width * 0.6), Math.min(Lm * 0.45, m.width * 1.5)];
+  // (the anchor, where the load is fullest along the whole: what withdraws it, all its stamps together)
+  let at = (m.heart ?? 0.5) * L, anchor = m.a; for (const g of legs) { if (at <= g.l) { anchor = add(g.a, scale(sub(g.b, g.a), at / g.l)); break; } at -= g.l; }
+  let run = 0;
+  legs.forEach((g, i) => {
+    const dir = scale(sub(g.b, g.a), 1 / g.l), lap = Math.min(hw * 0.6, g.l * 0.4), e0 = i > 0 ? lap : 0, e1 = i < legs.length - 1 ? lap : 0;
+    const a = sub(g.a, scale(dir, e0)), b = add(g.b, scale(dir, e1)), s0 = Math.max(0, (run - e0) / L), s1 = Math.min(1, (run + g.l + e1) / L);
+    run += g.l;
+    let across: V;
+    if (m.side) { const sd = unit(m.side), k = dot(sd, dir); across = sub(sd, scale(dir, k)); across = len(across) > 1e-4 ? unit(across) : sd; }
+    else across = m.n ? unit(cross(m.n, dir)) : unit(Math.abs(dir[1]) > 0.9 ? cross(dir, [1, 0, 0]) : cross(dir, [0, 1, 0]));
+    const c = scale(add(a, b), 0.5), U = scale(sub(b, a), 0.5), Vv = scale(across, hw);
+    out.push(c[0], c[1], c[2], m.alpha, U[0], U[1], U[2], m.kind, Vv[0], Vv[1], Vv[2], seed, m.col[0], m.col[1], m.col[2], m.rank ?? 0.5,
+      anchor[0], anchor[1], anchor[2], m.dry ?? 0, clip[0][0], clip[0][1], clip[0][2], s0, clip[1][0], clip[1][1], clip[1][2], s1, m.heart ?? 0.5, tin, tout, m.sky ? 1 : 0, ...(m.col2 ?? m.col), m.mix2 ?? 0);
+  });
 }
 
 // ─── features

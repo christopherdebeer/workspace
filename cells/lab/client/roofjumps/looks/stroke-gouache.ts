@@ -23,6 +23,7 @@ import { TAG } from '../city';
 import { DRESS } from '../dressing';
 import type { Light, Mark, StrokeRules, V } from '../strokes';
 import { EDGE, K, LAYER, add, boxSeed, cross, dot, lipsOf, mix, onLine, planesOf, rng, scale, smooth, sub, unit, hashKey } from '../strokes';
+const len = (v: V) => Math.hypot(v[0], v[1], v[2]);
 
 const DAY_SUN: V = [-0.55, 0.6, 0.58];
 const WARM: V = [0.64, 0.62, 0.58], GREEN: V = [0.57, 0.61, 0.6], COOL: V = [0.6, 0.61, 0.63], TERRA: V = [0.67, 0.55, 0.51];
@@ -280,10 +281,48 @@ export const strokeGouacheRules: StrokeRules = {
   figure(parts, palette, put, light) {
     // (all marks, no mask: the body claims no depth (render.ts), so each part is painted whole, far to near, its own body then
     // its lit pull then its accents, the near limbs over the far; contact shadows first, on the ground)
-    const T = tints(light), ground: Mark[] = [], byPart: Mark[][] = [];
+    const T = tints(light), ground: Mark[] = [], items: { d: number; ms: Mark[][] }[] = [];
+    // (strokes across joints (Astra's studies): a sleeve shoulder to wrist and a trouser leg hip to ankle as one bent stroke each,
+    // where one cloth covers both; and, an arm raised in line with the body (a dive, a reach), one sweep from the hip up the back
+    // through the shoulder into the arm. The pose says where the brush lifts, not the skeleton)
+    const by = new Map(parts.map((p) => [p.name, p])), chained = new Set<string>();
+    const tonesOf = (p: (typeof parts)[number]) => { const col = (palette[p.mat] ?? palette[0]) as V, dark = mulv(col, mix([0.55, 0.57, 0.68], scale(T.deep, 0.8), T.dk)), lit = mulv(col, mix([1.05, 1.05, 1.05], T.sunlit, T.dk)), front = smooth(-0.35, 0.45, p.sunFront); return { dark, lit, front, tone: mix(dark, lit, 0.45 + 0.35 * front) }; };
+    const chain = (ps: (typeof parts)[number][], key: string, wk = 1.22, heart = 0.15): Mark[][] => {
+      const p0 = ps[0], { dark, lit, front, tone } = tonesOf(p0), w = ps.reduce((t, p) => t + p.width, 0) / ps.length, sg = Math.sign(p0.sunSide) || 1, rt = Math.min(w * 0.3, 0.05);
+      const pts = [ps[0].a, ...ps.map((p) => p.b)], ext = Math.min(0.05, w * 0.3), d0 = unit(sub(pts[1], pts[0])), dn = unit(sub(pts[pts.length - 1], pts[pts.length - 2]));
+      // (a little past its start into the body; not past its end, where nothing covers a dry tail)
+      pts[0] = sub(pts[0], scale(d0, ext)); void dn;
+      // (an edge pull's path: each point moved across the limb as it runs there, the side kept square to the bend, so it stays on
+      // the limb past the joint instead of drifting off it)
+      const across = (i: number) => { const dir = unit(sub(pts[Math.min(pts.length - 1, i + 1)], pts[Math.max(0, i - 1)])), k = dot(p0.side, dir), s = sub(p0.side, scale(dir, k)); return len(s) > 1e-4 ? unit(s) : p0.side; };
+      const off = (o: V) => { const amt = dot(o, p0.side); return pts.map((q, i) => add(q, scale(across(i), amt))); }, mk = (q: V[], o: Partial<Mark>): Mark => ({ layer: 0, kind: K.PULL, a: q[0], b: q[q.length - 1], path: q.slice(1, -1), side: p0.side, width: w * wk, col: tone, col2: mix(tone, lit, 0.35), mix2: 0.35, alpha: 1, dry: 0.06, heart, rank: 1, key, taper: [w * 0.4, w * 0.3], ...o });
+      const body = [mk(pts, {})], lights: Mark[] = [];
+      // (the edge pulls sized by the narrowest of the chain (a shin, a forearm), so they stay inside it all the way down)
+      const wn = Math.min(...ps.map((p) => p.width));
+      if (front > 0.1) lights.push(mk(off(scale(p0.side, sg * wn * 0.2)), { width: wn * 0.5, col: scale(lit, 1.06), mix2: 0, alpha: 0.9, dry: 0.35, key: `${key}/lit`, taper: [rt, rt * 1.5] }));
+      // (on skin the turned edge is a soft half-tone, not a seam down the leg)
+      const skin = p0.mat % 8 === 0;
+      lights.push(mk(off(scale(p0.side, -sg * wn * 0.32)), { width: wn * 0.26, col: skin ? mix(dark, tone, 0.55) : scale(dark, 0.8), mix2: 0, alpha: skin ? 0.55 : 0.85, dry: 0.2, key: `${key}/turn`, taper: [rt, rt * 1.5] }));
+      return [body, lights];
+    };
+    for (const n of ['L', 'R']) for (const [u, l] of [['upperArm', 'foreArm'], ['thigh', 'shin']]) {
+      const pu = by.get(u + n), pl = by.get(l + n);
+      if (!pu || !pl || pu.mat !== pl.mat || pu.endOn > 0.45 || pl.endOn > 0.45) continue;
+      chained.add(pu.name); chained.add(pl.name);
+      items.push({ d: Math.max(pu.dist, pl.dist), ms: chain([pu, pl], `fig:${u}${n}+`) });
+    }
+    { const to = by.get('torso'), pe = by.get('pelvis');
+      if (to && pe) {
+        // (the arm most in line with the body's long axis, raised along it)
+        const up = unit(sub(to.b, to.a)); let best: { k: number; u: (typeof parts)[number]; f: (typeof parts)[number] } | null = null;
+        for (const n of ['L', 'R']) { const u = by.get('upperArm' + n), f = by.get('foreArm' + n); if (!u || !f) continue; const k = dot(up, unit(sub(u.b, u.a))); if (k > 0.55 && (!best || k > best.k)) best = { k, u, f }; }
+        if (best) { const { tone, lit } = tonesOf(to), hip = scale(add(pe.a, pe.b), 0.5), w = to.width * 0.75;
+          items.push({ d: to.dist - 0.002, ms: [[{ layer: 0, kind: K.PULL, a: hip, b: best.f.b, path: [to.b, best.u.a, best.u.b], side: to.side, width: w, col: tone, col2: mix(tone, lit, 0.4), mix2: 0.45, alpha: 0.95, dry: 0.35, heart: 0.3, rank: 1, key: 'fig:sweep', taper: [w * 0.3, w * 0.9] }]] }); }
+      } }
     for (const p of [...parts].sort((x, y) => y.dist - x.dist)) {
+      if (chained.has(p.name)) continue;
       const body: Mark[] = [], lights: Mark[] = [], accents: Mark[] = [], under = { push: (..._m: Mark[]) => 0 };
-      byPart.push(body, lights, accents);
+      items.push({ d: p.dist, ms: [body, lights, accents] });
       const col = (palette[p.mat] ?? palette[0]) as V, dark = mulv(col, mix([0.55, 0.57, 0.68], scale(T.deep, 0.8), T.dk)), lit = mulv(col, mix([1.05, 1.05, 1.05], T.sunlit, T.dk));
       // (what's worn takes the light by its own face (a skirt's quads, a coat's: so a fold turns light to dark), the body's
       // parts by how their turned faces meet it)
@@ -342,7 +381,7 @@ export const strokeGouacheRules: StrokeRules = {
         }
       }
     }
-    for (const m of [...ground, ...byPart.flat()]) put(m);
+    for (const m of [...ground, ...items.sort((a, b) => b.d - a.d).flatMap((it) => it.ms.flat())]) put(m);
   },
 };
 
