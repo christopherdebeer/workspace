@@ -104,3 +104,16 @@ thresholds to turn checks green. The work, in order:
   - marks lift toward the eye along their view ray (the same depth clearance as the old normal bias, without the slide across
     the screen);
   - withdrawn marks shrink to their anchor instead of fading, so no half-alpha ghosts far off.
+- Step 7 (with 6 folded in), first cut:
+  - Switchback-style coverage over near planes (`scatter` in stroke-gouache.ts), in two sizes (masses, then detail), sized by the
+    plane rather than the eye, laid down walls and along roofs;
+  - each stroke has its own value near the plane's mass, a tint, and the next value over as its second pigment;
+  - painted over the broad pulls (the first try sat under them and showed nothing). Any plane over 4 m² gets it, so the roof
+    you stand on is painted too.
+  - Hard four-value bands made shaded walls look like camouflage, so values are continuous now.
+  - Kept to the nine nearest chunks (ranks 0.42 and 0.36).
+  - Cost on seed 5 from a roof: 156k to 294k stamps (1.9×). City pass about 1–2 ms headless (software GPU, so only relative).
+    Not yet timed on a phone.
+  - Still to judge: parapets look blotchy where the darker underpainting shows between strokes.
+- `devtools/roofjumps-cost.mjs`: stamps and pass times on the running page, plus a still.
+- Left of item 4: the stamp atlas (5), and premultiplied blending with chunks painted far to near (from 4).

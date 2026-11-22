@@ -138,6 +138,31 @@ function paintDetail(d: Detail, put: (m: Mark) => void, keeps: (rank: number) =>
   });
 }
 
+/** Switchback's coverage, over a near plane: strokes scattered by area (`cover` times over, as many as fit, each its own value
+ * near the plane's mass, the next value over in the brush as its second pigment, a tint warm or cool of its own), in two sizes, masses then detail, laid the way the
+ * surface goes: down a wall, along a roof's long way. Sized by the plane (a big wall broader strokes), so it's the same however
+ * it's seen from; capped a plane, the survivors growing to keep the cover. */
+function scatter(put: (m: Mark) => void, p: ReturnType<typeof planesOf>[number], col: V, T: ReturnType<typeof tints>, pb: V, m: number, r: () => number): void {
+  const area = p.w * p.h, base = Math.min(3.2, Math.max(0.9, 0.7 + 0.12 * Math.sqrt(area)));
+  const lit = (k: number): V => T.tone(pb, p.n, Math.max(0, Math.min(1, k)));
+  for (const [pass, L0, wr, cover, cap] of [['m', base * 2.0, 0.42, 0.9, 16], ['d', base, 0.34, 0.7, 32]] as const) {
+    let L = L0, W = L * wr, n = Math.round((area * cover) / (L * W));
+    if (n > cap) { const g = Math.sqrt(n / cap); L *= g; W *= g; n = cap; }
+    for (let i = 0; i < n; i++) {
+      // (where: anywhere on it; which way: down a wall (a little off), along a roof's long way)
+      const x = r() * p.w, y = r() * p.h, ang = p.top ? (r() - 0.5) * 0.6 : Math.PI / 2 + (r() - 0.5) * 0.5;
+      const along = p.top ? (p.w >= p.h ? 0 : Math.PI / 2) + ang : ang;
+      const ca = Math.cos(along) * L / 2, sa = Math.sin(along) * L / 2, c = add(add(p.o, scale(p.t, x)), scale(p.up, y));
+      const a = add(add(c, scale(p.t, -ca)), scale(p.up, -sa)), b = add(add(c, scale(p.t, ca)), scale(p.up, sa));
+      // (its value: about the plane's mass (no hard bands: on a shaded wall they broke it into camouflage); a tint of its own)
+      const k = Math.max(0, Math.min(1, m + (r() - 0.5) * 0.22)), v = 0.94 + r() * 0.12, warm = (r() - 0.5) * 0.08;
+      const c1 = mulv(lit(k), [v * (1 + warm), v, v * (1 - warm)]), c2 = lit(k + (r() < 0.5 ? -0.3 : 0.3));
+      const down = !p.top && r() < 0.8;
+      put({ layer: LAYER.BROAD, kind: K.PULL, a: down ? b : a, b: down ? a : b, n: p.n, width: W, col: pass === 'm' ? mix(c1, col, 0.35) : c1, col2: c2, mix2: 0.35, alpha: 0.92, dry: 0.3 + r() * 0.4, heart: r(), rank: pass === 'm' ? 0.42 : DETAIL + 0.06, key: `${p.key}/s${pass}${i}`, clip: p.clip, taper: [W * 0.4, L * 0.35] });
+    }
+  }
+}
+
 export const strokeGouacheRules: StrokeRules = {
   paper: [0.93, 0.9, 0.84], grain: 1, haze: [0.77, 0.74, 0.83], hazeNear: 0.12, fadeToPaper: 0, sun: DAY_SUN,
   skyField: { top: [0.58, 0.56, 0.7], horizon: [0.89, 0.83, 0.84] },
@@ -176,7 +201,7 @@ export const strokeGouacheRules: StrokeRules = {
         const col2 = m > 0.5 ? mulv(col, [1.12, 1.0, 0.88]) : mix(col, scale(mulv(pb, T.deep), 0.9), 0.7);
         // (underpainted a value down and cooler, as gouache is laid dark to light: what the dry lifts and broken edges show)
         put(fillOf(`${p.key}/fill`, p.o, p.t, p.up, p.n, p.w, p.h, mix(scale(col, 0.8), scale(mulv(pb, T.deep), 0.85), 0.3), p.clip, rank));
-        if (!keeps(BRUSH) || !big) continue;
+        if (!keeps(BRUSH) || !big) { if (p.w * p.h > 4) scatter(put, p, col, T, pb, m, r); continue; }
         if (p.top) pulls(put, p.key, p.o, p.t, p.up, p.n, p.w, p.h, col, col2, Math.max(1, Math.min(4, Math.round(p.h / 3.5))), p.clip, BRUSH, r);
         else {
           // (a wall dragged down from its top, in a few broad strokes, drying out toward the street)
@@ -192,6 +217,8 @@ export const strokeGouacheRules: StrokeRules = {
             put({ layer: LAYER.BROAD, kind: K.PULL, a: add(add(p.o, scale(p.t, x)), [0, p.h - 0.3, 0]), b: add(add(p.o, scale(p.t, x)), [0, p.h - 0.3 - l, 0]), n: p.n, width: 0.25 + r() * 0.35, col: scale(col, 0.8), alpha: 0.55, dry: 0.7, heart: 0.05, rank: DETAIL, key: `${p.key}/w${i}`, clip: p.clip, taper: [0.05, l * 0.5] });
           }
         }
+        // (over the broad strokes, Switchback's coverage: the plane broken into strokes of its own values)
+        scatter(put, p, col, T, pb, m, r);
         // (its shadow: one passage, masked by the plane's real shadow)
         if (m > 0.2 && keeps(SHADOW)) put(fillOf(`${p.key}/shade`, p.o, p.t, p.up, p.n, p.w, p.h, scale(mulv(pb, T.shade(p.n)), 0.92), p.clip, SHADOW, K.SHADE, LAYER.SHADOW, { col2: mulv(pb, T.deep), mix2: 0.35 }));
       }
