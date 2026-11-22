@@ -203,3 +203,26 @@ thresholds to turn checks green. The work, in order:
     step;
   - painted as skin pulls in stroke-gouache, replacing the forearm's dab.
   - 23 bones (was 13). Suite unchanged, 0 pose misses, bones identical at 30 and 120 Hz.
+
+## Queued: the painted figure, from Astra's studies (`static/roofjumps-studies/`)
+
+Two generated studies from the dense motion sheets, and a critique (`astra-paint-critique.md`). The target: the side-on dive (the
+lavender figure and the schoolgirl), where one sweep from hip through shoulder into the reaching arm carries the pose, and in
+the uniform the white collar alone says which way the chest turns. The same skeleton, two paintings, because different marks
+explain each character. The work, in order:
+
+- **G1. A stroke that spans a joint; a contact that interrupts it.** A persistent garment mark from the hip, across the shoulder,
+  into the upper arm (shortening as the arm folds across, the elbow's overlap showing). The vault's coat stays one mass while
+  the solved wrist fixes the sleeve's end to the rail. The pose decides where the brush lifts.
+- **G2. Contact as the point of the picture.** A planted hand gets a short, hard edge where it interrupts the rail; the far sleeve
+  goes into the coat. A hang shows the small exposed interval where the hand meets the lip and how far the shoulder hangs
+  below it; at distance that says more than any uniform detail.
+- **G3. The view from behind (the one the player has).** The rear jacket is a rectangle with bars: one broad oblique pull across
+  the back, an uneven hem over a lifted thigh, not frayed edges.
+- **G4. Identity under reduction.** Protect what identifies each character at gameplay size before any detail: the hood's forward
+  pitch and the gap between the legs (the teen), the pack offset from the head (the child), the collar's white (the
+  schoolgirl). Judge at the original cell size, not the studies' enlarged figures.
+- **G5. The test: does the paint hold from frame to frame?** The light multidirectional brush from rest, camera behind the indigo
+  runner. A brush too small to step: the jacket registers the turn while the planted sole keeps its edge against the roof. The
+  first committed step: the heel breaks, the gap opens between the legs. If the pale shoe or trouser highlight changes shape
+  before either, the paint is adding to the jank. Alongside the dive.
