@@ -97,3 +97,10 @@ thresholds to turn checks green. The work, in order:
 
   Paper and sky still use screen grain, which is right for paper. Not yet checked in motion; a two-frame comparison while the
   eye pans would confirm there's no crawl.
+
+## Pass 3 (09:05 UTC, directed by hand; the overnight timer died with its container at about 01:15)
+
+- Steps 3 and 4:
+  - marks lift toward the eye along their view ray (the same depth clearance as the old normal bias, without the slide across
+    the screen);
+  - withdrawn marks shrink to their anchor instead of fading, so no half-alpha ghosts far off.

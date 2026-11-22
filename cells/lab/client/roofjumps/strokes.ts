@@ -323,7 +323,10 @@ void main() {
   float alpha = a0.w;
   // (whole marks withdraw with distance, by rank, all of a mark's stamps on its one anchor)
   float rank = a3.w, f0 = (14.0 + (uFar * 1.15 - 14.0) * rank * rank) * uDetail; bool sky = a7.w > 0.5;
-  if (!sky) alpha *= 1.0 - smoothstep(f0 * 0.7, f0, length(uEye - a4.xyz));
+  // (withdrawing, a mark shrinks to its anchor rather than fading (Switchback's rule): no ghost of half-alpha marks far off,
+  // and what's left is whole paint; a stamp of a tiled mark shrinks toward the mark's anchor, so the mark goes as one)
+  float gone = sky ? 0.0 : smoothstep(f0 * 0.7, f0, length(uEye - a4.xyz));
+  if (gone > 0.0) { vec3 an = a4.xyz; c = an + (c - an) * (1.0 - gone); U *= 1.0 - gone; V *= 1.0 - gone; if (gone > 0.999) alpha = 0.0; }
   // (a shadow passage: the receiver's real shadow, from the sun's map, is its mask (in the fragment); as far as the map reaches)
   vN = N; vReach = 1.0;
   vCol2 = a8;
@@ -335,7 +338,10 @@ void main() {
   if (kind == 3) vReach = 1.0 - smoothstep(36.0, 46.0, length((p - uSunC).xz));
   vFog = sky ? 0.0 : smoothstep(uFar * uFogNear, uFar, length(uEye - p));
   if (alpha < 0.004) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
-  gl_Position = uVP * vec4(p + N * (0.004 + dist * 0.0012), 1.0);
+  // (brought toward the eye along its own view ray (Switchback's lift), by what the old normal bias gave in depth: the same
+  // clearance over its receiver, but no slide across the screen as the eye moves)
+  vec3 ep = uEye - p; float ed = length(ep);
+  gl_Position = uVP * vec4(p + ep / max(ed, 1e-4) * min((0.004 + dist * 0.0012) / max(abs(dot(N, ep / max(ed, 1e-4))), 0.25), ed * 0.5), 1.0);
 }`;
 const NOISE = `
 float hash12(vec2 p) { vec3 q = fract(vec3(p.xyx) * 0.1031); q += dot(q, q.yzx + 33.33); return fract((q.x + q.y) * q.z); }
