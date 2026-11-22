@@ -55,3 +55,13 @@ thresholds to turn checks green. The work, in order:
   graded outcomes as fixtures, e.g. the slab-height sweep (9.70 m falls, 9.90–10.20 m exits, 10.40 m finds the slab but
   fails the push, 10.75 m and up falls).
 - Local leftovers: vault-angles planted slide (8 cm/s); the courtyard pause under the opening runs short.
+
+## Pass 2 (started by hand, about 00:50 UTC)
+
+- Street-level stills (clay and gouache at dusk, from=0.5,36 fixed=-1.5,1.8,22 on seed 1): poles, wires, awnings, neon,
+  ladders, pipes and window rows all read.
+- Wires were broken into level dashes; each segment now spans its own rise, so the sag joins up.
+- Gouache at dusk: lit rooms glow (their own light once the sun is low), dark panes deepen.
+- Noted for item 4: gouache's paint thickens wires into heavy black zigzags; thin things need their own stroke rule.
+- Noted: street poles stand 1.3 m out in narrow streets and are draw-only (the runner goes through them). They could become
+  obstacles, or holds (a pole to swing round), once contact goes by shape (critique C).

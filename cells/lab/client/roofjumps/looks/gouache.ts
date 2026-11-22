@@ -66,8 +66,10 @@ vec3 look(Surf s) {
     // (the details (dressing.ts): their own colours, softened toward the concrete; lit panes and neon their own light)
     c = mix(dressOf(s), vec3(0.6, 0.6, 0.6), 0.18) * (0.94 + 0.1 * fbm(fc * 1.7));
     // (by day a lit room's only a warmer pane, the sky's reflection over it; neon its own light)
-    if (s.tag == 15) c = s.seed > 0.74 ? mix(vec3(0.3, 0.32, 0.36), vec3(0.78, 0.66, 0.46), 0.45) : mix(vec3(0.24, 0.27, 0.32), vec3(0.45, 0.48, 0.56), s.seed);
-    if (s.tag == 21) return c;
+    // (as the sun goes down a lit room shows, then glows: its own light, past the shading)
+    float dark = smoothstep(0.45, 0.08, normalize(uSun).y);
+    if (s.tag == 15) c = s.seed > 0.74 ? mix(mix(vec3(0.3, 0.32, 0.36), vec3(0.78, 0.66, 0.46), 0.45), vec3(1.0, 0.8, 0.5), dark) : mix(vec3(0.24, 0.27, 0.32), vec3(0.45, 0.48, 0.56), s.seed) * (1.0 - 0.35 * dark);
+    if (s.tag == 21 || (s.tag == 15 && s.seed > 0.74 && dark > 0.5)) return c;
   } else if (s.tag == 10) {
     c = vec3(0.3, 0.29, 0.32);                                                  // painted steel
   } else if (s.tag == 13) {

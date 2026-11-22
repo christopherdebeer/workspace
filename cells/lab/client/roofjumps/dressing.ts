@@ -22,12 +22,12 @@ function onFace(d: Detail, p: P3, a0: number, a1: number, o0: number, o1: number
 }
 /** an upright box standing on a point */
 const stand = (p: P3, w: number, d: number, h: number, tag: Tag, y0 = p[1]): Box => ({ x0: p[0] - w / 2, x1: p[0] + w / 2, z0: p[2] - d / 2, z1: p[2] + d / 2, y0, y1: y0 + h, tag });
-/** a line strung a to b as short level boxes (a wire's sag, a line of washing): axis-free, a run of thin steps */
+/** a line strung a to b as short boxes, each spanning its own rise (a wire's sag, a line of washing): a run that joins up */
 function strung(a: P3, b: P3, t: number, tag: Tag, n = 8): Box[] {
   const out: Box[] = [];
   for (let i = 0; i < n; i++) {
     const p = a.map((v, k) => v + (b[k] - v) * (i / n)), q = a.map((v, k) => v + (b[k] - v) * ((i + 1) / n));
-    out.push({ x0: Math.min(p[0], q[0]) - t, x1: Math.max(p[0], q[0]) + t, z0: Math.min(p[2], q[2]) - t, z1: Math.max(p[2], q[2]) + t, y0: (p[1] + q[1]) / 2 - t, y1: (p[1] + q[1]) / 2 + t, tag });
+    out.push({ x0: Math.min(p[0], q[0]) - t, x1: Math.max(p[0], q[0]) + t, z0: Math.min(p[2], q[2]) - t, z1: Math.max(p[2], q[2]) + t, y0: Math.min(p[1], q[1]) - t, y1: Math.max(p[1], q[1]) + t, tag });
   }
   return out;
 }
@@ -97,7 +97,7 @@ export const DRESS: Record<DetailKind, (d: Detail) => Box[]> = {
     return out;
   },
   pole: (d) => { const [p] = d.pts; return [stand(p, d.w, d.w, d.h, TAG.POLE), stand(p, 1.2, 0.08, 0.08, TAG.POLE, p[1] + d.h - 1.5)]; },
-  wire: (d) => { const out: Box[] = []; for (let i = 0; i + 1 < d.pts.length; i++) out.push(...strung(d.pts[i], d.pts[i + 1], 0.015, TAG.WIRE, 5)); return out; },
+  wire: (d) => { const out: Box[] = []; for (let i = 0; i + 1 < d.pts.length; i++) out.push(...strung(d.pts[i], d.pts[i + 1], 0.015, TAG.WIRE, 6)); return out; },
   vending: (d) => { const [p] = d.pts; return [onFace(d, [p[0] - d.n[0] * 0.4, 0, p[2] - d.n[1] * 0.4], -d.w / 2, d.w / 2, 0, 0.75, 0, d.h, TAG.FURNITURE, d.seed % 967 / 967)]; },
   bin: (d) => { const [p] = d.pts; return [onFace(d, [p[0] - d.n[0] * 0.35, 0, p[2] - d.n[1] * 0.35], -d.w / 2, d.w / 2, 0.05, 0.55, 0, d.h, TAG.FURNITURE, 0.1)]; },
 };
