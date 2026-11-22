@@ -386,7 +386,7 @@ export const strokeGouacheRules: StrokeRules = {
         const off2 = scale(p.side, -sg * p.width * 0.4); lights.push(m({ a: add(pa, off2), b: add(pb, off2), width: p.width * 0.28, col: scale(dark, 0.8), mix2: 0, alpha: 0.85, dry: 0.3, key: `${key}/turn`, taper: [rt, rt * 1.5] }));
       };
       // (seen end-on, a limb's pull shortens to nothing: its mass as a dab, so the body's depth is covered)
-      if (p.endOn > 0.45 && p.kind !== 'head') { const c = scale(add(p.a, p.b), 0.5), up = scale(unit(cross(p.side, p.toEye)), p.girth * 0.5); under.push(m({ kind: K.DAB, a: sub(c, up), b: add(c, up), width: p.girth * 1.25, col: scale(dark, 0.45), key: `${key}/endU` })); body.push(m({ kind: K.DAB, a: sub(c, scale(up, 0.85)), b: add(c, scale(up, 0.85)), width: p.girth * 1.05, key: `${key}/end` })); }
+      if (p.endOn > 0.45 && p.kind !== 'head') { const c = scale(add(p.a, p.b), 0.5), up = scale(unit(cross(p.side, p.toEye)), p.girth * 0.5); under.push(m({ kind: K.DAB, a: sub(c, up), b: add(c, up), width: p.girth * 1.25, col: scale(dark, 0.45), key: `${key}/endU` })); body.push(m({ kind: K.PULL, a: sub(c, scale(up, 0.85)), b: add(c, scale(up, 0.85)), width: p.girth * 1.0, dry: 0.1, taper: [p.girth * 0.2, p.girth * 0.3], key: `${key}/end` })); } /* (a short stroke, not a soft dab: no blurred circles) */
       switch (p.kind) {
         case 'head': {
           // (the head in strokes, not dabs: the face a pull down its plane (forehead to chin) with a darker plane on the shadow
