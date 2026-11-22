@@ -21,6 +21,8 @@ import type { Body } from './runner';
 import { ident, point, rotX, rotY, rotZ, translate } from './m4';
 import type { M4 } from './m4';
 import { bodyOf, characterByName } from './character';
+import { Cloth } from './cloth';
+import type { Capsule } from './cloth';
 import { clipPose, MOCAP, swingPath } from './mocap';
 import type { Body as Build, Block, Character } from './character';
 
@@ -857,6 +859,35 @@ export class Rig {
    * update (`commit`), so however often it's drawn it's the same */
   private swing = new Map<string, { d: V3; dv: V3; at: V3 }>();
   private flares = new Map<number, { f: number; fv: number; vy: number; at: V3 }>();
+  /** each cloth (cloth.ts) and the waist's frame it was last held by; changed only by the fixed update */
+  private cloths = new Map<number, { c: Cloth; m: number[] }>();
+  /** a skirt's cloth: stepped by the fixed update (the waist eased from its last frame to this one, the hips and legs kept out);
+   * read as it was; never stepped yet (a held pose), settled where it hangs, as a copy. Drawn a thin block a quad */
+  private clothOf(wi: number, w: Character['wears'][number], k: number, m: M4, out: Bone[], commit: boolean, put: (mm: M4, y1: number, w0: number, d0: number, w1: number, d1: number) => void): void {
+    const B = w.block, spec = w.cloth!, ring = { a0: B.w0 * k / 2, c0: B.d0 * k / 2, a1: B.w1 * k / 2, c1: B.d1 * k / 2, L: -B.y1 * k };
+    const caps: Capsule[] = [], pt = (o: Bone, y: number) => point(o.m, 0, y, 0) as [number, number, number];
+    // (a thigh from a third of the way down (its top is the hips', and the waist's ring is close round it), a shin all of it)
+    for (const o of out) if (/^(thigh|shin)[LR]$/.test(o.name)) caps.push({ a: pt(o, o.name.startsWith('thigh') ? o.y1 * 0.35 : 0), b: pt(o, o.y1), r: Math.max(o.w1, o.d1) / 2 + 0.025 });
+    caps.push({ a: point(m, 0, 0.02, 0) as [number, number, number], b: point(m, 0, -0.1, 0) as [number, number, number], r: Math.min(ring.a0, ring.c0) * 0.92 });
+    const mm = Array.from(m);
+    let s = this.cloths.get(wi);
+    if (commit) {
+      if (!s) { const c0 = new Cloth(spec, ring, mm); s = { c: c0.settled(mm, caps), m: mm }; this.cloths.set(wi, s); }
+      else if (this.stepDt > 0) { s.c.step(this.stepDt, s.m, mm, caps); s.m = mm; }
+    }
+    const c = s ? s.c : new Cloth(spec, ring, mm).settled(mm, caps);
+    for (let v = 0; v + 1 < c.nv; v++) for (let u = 0; u < c.nu; u++) {
+      const tl = c.at(u, v), tr = c.at(u + 1, v), bl = c.at(u, v + 1), br = c.at(u + 1, v + 1);
+      const top: V3 = [(tl[0] + tr[0]) / 2, (tl[1] + tr[1]) / 2, (tl[2] + tr[2]) / 2], bot: V3 = [(bl[0] + br[0]) / 2, (bl[1] + br[1]) / 2, (bl[2] + br[2]) / 2];
+      const dy: V3 = [top[0] - bot[0], top[1] - bot[1], top[2] - bot[2]], len = Math.hypot(dy[0], dy[1], dy[2]) || 1e-6, Y: V3 = [dy[0] / len, dy[1] / len, dy[2] / len];
+      const ex: V3 = [tr[0] - tl[0] + br[0] - bl[0], tr[1] - tl[1] + br[1] - bl[1], tr[2] - tl[2] + br[2] - bl[2]], e = ex[0] * Y[0] + ex[1] * Y[1] + ex[2] * Y[2];
+      let X: V3 = [ex[0] - Y[0] * e, ex[1] - Y[1] * e, ex[2] - Y[2] * e]; const xl = Math.hypot(X[0], X[1], X[2]) || 1; X = [X[0] / xl, X[1] / xl, X[2] / xl];
+      const Z: V3 = [X[1] * Y[2] - X[2] * Y[1], X[2] * Y[0] - X[0] * Y[2], X[0] * Y[1] - X[1] * Y[0]];
+      const q = m.slice() as M4; q[0] = X[0]; q[1] = X[1]; q[2] = X[2]; q[4] = Y[0]; q[5] = Y[1]; q[6] = Y[2]; q[8] = Z[0]; q[9] = Z[1]; q[10] = Z[2]; q[12] = top[0]; q[13] = top[1]; q[14] = top[2];
+      const wt = Math.hypot(tr[0] - tl[0], tr[1] - tl[1], tr[2] - tl[2]) * 1.12, wb = Math.hypot(br[0] - bl[0], br[1] - bl[1], br[2] - bl[2]) * 1.12;
+      put(q, -len * 1.05, wt, 0.02, wb, 0.02);
+    }
+  }
   /** a skirt's flare: belled out by the air as it falls; at a landing, the fall stopped, the cloth goes on: a kick of it */
   private flared(i: number, h: NonNullable<Character['wears'][number]['hang']>, m: M4, commit: boolean): number {
     const at: V3 = [m[12], m[13], m[14]];
@@ -1042,6 +1073,7 @@ export class Rig {
       const k = w.bone === 'head' ? this.body.blocks.head.w1 / 0.18 : sc, B = w.block, h = w.hang;
       const m = rotX(translate(on.m, w.at[0] * k, w.at[1] * k, w.at[2] * k), w.tilt ?? 0);
       const put = (mm: M4, y1: number, w0: number, d0: number, w1: number, d1: number) => out.push({ name: 'worn:' + w.bone, m: mm, y0: 0, w0, d0, y1, w1, d1, zc: 0, x: 0, mat: w.mat, loose: true });
+      if (w.cloth) { this.clothOf(wi, w, k, m, out, commit, put); return; }
       if (!h) { out.push({ name: 'worn:' + w.bone, m, y0: B.y0 * k, w0: B.w0 * k, d0: B.d0 * k, y1: B.y1 * k, w1: B.w1 * k, d1: B.d1 * k, zc: (B.zc ?? 0) * k, x: (B.x ?? 0) * k, mat: w.mat }); return; }
       const fl = h.flare ? this.flared(wi, h, m, commit) : 0;
       if (h.ring) {

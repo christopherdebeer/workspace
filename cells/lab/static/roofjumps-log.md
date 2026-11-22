@@ -168,3 +168,15 @@ thresholds to turn checks green. The work, in order:
   - The pose check doesn't hold loose pieces to the ground (it flagged her ponytail through the floor at a held flip apex).
   - The skeleton test counts links and panels.
   - Suite: unchanged; 0 pose misses.
+- The skirt as cloth (asked for, after looking at Fab's): `cloth.ts`, Fab's XPBD solver cut down.
+  - A 10 x 4 ring of points, the waist held to the pelvis; stretch, soft shear and bending; gravity.
+  - Normal-weighted air against the body's carried speed (75% horizontal, 35% vertical); the cloth's own damping.
+  - Capsules: the hips, the thighs from a third down, the shins. Held poses settle a copy.
+  - Found on the way, by measuring the hem against the pelvis:
+    - isotropic drag at 11 m/s blew it horizontal;
+    - the legs as a wall flipped it over the hips;
+    - stiff shear and bend made a rigid cone that tilted with the hips;
+    - no damping let strides pump it up;
+    - thigh capsules from the hip joint lifted the waist.
+  - Now it hangs plumb, drapes over the forward thigh, swings with the stride, lifts on a drop.
+  - Suite unchanged; 0 pose misses.

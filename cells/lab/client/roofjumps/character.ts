@@ -28,7 +28,10 @@ export interface Attachment { bone: string; at: [number, number, number]; block:
    * each swinging from the end of the one before, so it bends and whips. `ring`: that many panels round the bone (a skirt, a
    * coat's tails), the block's w0 x d0 their ring at the top and w1 x d1 at the hem at rest, each swinging on its own,
    * splayed out by the flare and pushed out by a thigh coming up under it */
-  hang?: { rest: number; fall: number; drag: number; stiff: number; damp: number; max?: number; flare?: number; segs?: number; ring?: number } }
+  hang?: { rest: number; fall: number; drag: number; stiff: number; damp: number; max?: number; flare?: number; segs?: number; ring?: number };
+  /** cloth (cloth.ts): the block's w0 x d0 the waist's ring, w1 x d1 the hem's at rest, its length the skirt's; a grid nu round
+   * by nv down, simulated (gravity, air, the legs and hips kept out); drawn a thin block a quad */
+  cloth?: { nu: number; nv: number; drag: number; damp?: number; stretch?: number; shear?: number; bend?: number } }
 
 /** the proportions a character is asked as: each continuous, 0 the runner's own where it has one */
 export interface Proportions {
@@ -165,7 +168,7 @@ export const CHARACTERS: Character[] = [
     palette: pal({ top: [0.07, 0.075, 0.11], bottoms: [0.07, 0.075, 0.11], shoes: [0.06, 0.055, 0.055], hair: [0.05, 0.045, 0.05], accent: [0.78, 0.14, 0.17], accent2: [0.07, 0.075, 0.11], trim: [0.93, 0.93, 0.9] }),
     dress: { ...DRESS, thigh: MAT.skin, shin: MAT.skin },
     wears: [
-      { bone: 'pelvis', at: [0, 0.05, 0], block: { y0: 0, w0: 0.27, d0: 0.19, y1: -0.35, w1: 0.38, d1: 0.31 }, mat: MAT.bottoms, hang: { rest: 3, fall: 0.6, drag: 0.06, stiff: 130, damp: 15, max: 0.7, flare: 1, ring: 8 } },
+      { bone: 'pelvis', at: [0, 0.05, 0], block: { y0: 0, w0: 0.27, d0: 0.19, y1: -0.36, w1: 0.38, d1: 0.31 }, mat: MAT.bottoms, cloth: { nu: 10, nv: 4, drag: 1.2 } },
       { bone: 'torso', at: [0, 0.44, -0.1], block: { y0: 0, w0: 0.29, d0: 0.02, y1: -0.21, w1: 0.31, d1: 0.02 }, mat: MAT.trim, tilt: -0.12 },
       { bone: 'torso', at: [0, 0.435, -0.115], block: { y0: 0, w0: 0.25, d0: 0.02, y1: -0.18, w1: 0.27, d1: 0.02 }, mat: MAT.accent2, tilt: -0.12 },
       { bone: 'torso', at: [0, 0.445, 0.082], block: { y0: 0, w0: 0.24, d0: 0.02, y1: -0.09, w1: 0.13, d1: 0.02 }, mat: MAT.trim, tilt: 0.1 },

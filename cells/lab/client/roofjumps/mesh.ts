@@ -57,9 +57,9 @@ export function chunkMesh(c: Chunk): Float32Array {
   return o.subarray(0, at);
 }
 
-/** floats the figure takes: thirteen bones, six faces each; and room for what a character wears (up to thirty-two blocks: a skirt's panels, a ponytail's links);
+/** floats the figure takes: thirteen bones, six faces each; and room for what a character wears (up to forty-eight blocks: a skirt's cloth a block a quad, a ponytail's links);
  * and room for eight such, for the menu's line of characters (each dressed from its own eight of the palette) */
-export const FIGURE_BASE = 13 * 6 * 6 * VERTEX, FIGURE = (13 + 32) * 6 * 6 * VERTEX * 8;
+export const FIGURE_BASE = 13 * 6 * 6 * VERTEX, FIGURE = (13 + 48) * 6 * 6 * VERTEX * 8;
 
 /** The figure: each bone's tapered block, through its matrix. */
 export function figureMesh(bones: Bone[], o: Float32Array): number {
