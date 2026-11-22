@@ -336,6 +336,21 @@ export const strokeGouacheRules: StrokeRules = {
         if (best) { const { tone, lit } = tonesOf(to), hip = scale(add(pe.a, pe.b), 0.5), w = to.width * 0.75;
           items.push({ d: to.dist - 0.002, ms: [[{ layer: 0, kind: K.PULL, a: hip, b: best.f.b, path: [to.b, best.u.a, best.u.b], side: to.side, width: w, col: tone, col2: mix(tone, lit, 0.4), mix2: 0.45, alpha: 0.95, dry: 0.35, heart: 0.3, rank: 1, key: 'fig:sweep', taper: [w * 0.3, w * 0.9] }]] }); }
       } }
+    // (seen from behind, the view the player has: the back isn't a rectangle with bars on it. One broad pull across it from the
+    // shoulder on the sun's side down to the other hip, a value up from the cloth; and the hem lifted over a thigh coming up)
+    { const to = by.get('torso'), pe = by.get('pelvis'), sl = by.get('upperArmL'), sr = by.get('upperArmR');
+      if (to && pe && sl && sr && dot(to.fwd, to.toEye) < -0.25) {
+        const { tone, lit, dark } = tonesOf(to), sunL = (sl.sunSide + sl.sunFront) >= (sr.sunSide + sr.sunFront);
+        const sh = sunL ? sl.a : sr.a, hip = len(sub(pe.a, sh)) > len(sub(pe.b, sh)) ? pe.a : pe.b, w = to.width * 0.85, mid = scale(add(sh, hip), 0.5); /* (across the back: the far hip; broad, so it's the back turning, not a strap) */
+        const pull: Mark = { layer: 0, kind: K.PULL, a: sh, b: hip, path: [add(mid, scale(to.side, (sunL ? -1 : 1) * to.width * 0.08))], side: to.side, width: w, col: add(mix(tone, scale(lit, 1.35), 0.55), [0.02, 0.02, 0.03]), col2: tone, mix2: 0.55, alpha: 0.7, dry: 0.65, heart: 0.2, rank: 1, key: 'fig:back', taper: [w * 0.45, w * 1.1] };
+        const ms: Mark[] = [pull];
+        const up = unit(sub(to.b, to.a));
+        for (const n of ['L', 'R']) { const th = by.get('thigh' + n); if (!th) continue; const lift = -dot(unit(sub(th.b, th.a)), up);
+          // (a thigh forward and up: the hem over it lifted, a short dark pull angled up across the bottom of the back)
+          if (lift < 0.55) { const c0 = scale(add(pe.a, pe.b), 0.5), over = add(th.a, scale(sub(th.b, th.a), 0.25));
+            ms.push({ layer: 0, kind: K.PULL, a: c0, b: add(over, scale(up, to.width * 0.15)), side: to.side, width: to.width * 0.16, col: scale(dark, 0.85), mix2: 0, alpha: 0.85, dry: 0.3, rank: 1, key: `fig:hem${n}`, taper: [0.02, 0.04] }); } }
+        items.push({ d: to.dist - 0.003, ms: [ms] });
+      } }
     for (const p of [...parts].sort((x, y) => y.dist - x.dist)) {
       if (chained.has(p.name)) continue;
       const body: Mark[] = [], lights: Mark[] = [], accents: Mark[] = [], under = { push: (..._m: Mark[]) => 0 };

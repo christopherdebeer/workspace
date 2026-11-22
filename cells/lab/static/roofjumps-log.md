@@ -249,3 +249,8 @@ explain each character. The work, in order:
     - the planted test missed a palm a hand's thickness above the box.
   - Not yet: the hang's shoulder-to-lip interval as its own mark; the far sleeve losing itself in the coat.
   - Noticed: the older figure's coat (cloth quads) paints as lumpy dabs; the coat wants its quads as one garment mark.
+- G3, first cut: the view from behind.
+  - Seen from behind, one broad, soft, dry pull across the back from the shoulder on the sun's side to the far hip, a value up
+    from the cloth (on the dark navy a plain value up was invisible; as a narrow, hard band it read as a strap);
+  - and the hem lifted over a thigh coming up, a short dark pull.
+  - The indigo runner's back now turns in the light rather than being a rectangle with bars.
