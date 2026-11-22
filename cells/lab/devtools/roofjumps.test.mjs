@@ -304,6 +304,23 @@ console.log('roofjumps: ok');
   console.log(`apex hold: the pose held ${held.held} steps, the flight the same`);
 }
 
+// the city's details (tagged for the looks to come): the same whenever made; every kind found somewhere; each where it belongs:
+// on a face (the building just behind it as tall as it), on a roof (on bare roof, at its height), in the street (at the ground)
+{
+  const a = new City(3), b = new City(3); b.chunk(1, 1);
+  assert.deepEqual(a.chunk(0, 0).details, b.chunk(0, 0).details, 'details the same whenever made');
+  const kinds = {}, FACE = ['windows', 'pipes', 'ladder', 'blade', 'rust', 'awning', 'neon'], ROOF = ['billboard', 'aerial', 'dish'], STREET = ['pole', 'vending', 'bin'];
+  for (let i = -2; i <= 2; i++) for (let j = -2; j <= 2; j++) for (const d of a.chunk(i, j).details) {
+    kinds[d.kind] = (kinds[d.kind] ?? 0) + 1;
+    const [x, y, z] = d.pts[0];
+    if (FACE.includes(d.kind)) { const back = Math.max(...[0.05, 0.2, 0.5, 1].map((o) => a.heightAt(x - d.n[0] * o, z - d.n[1] * o))); assert.ok(back >= y - 0.01, `a ${d.kind} is on a face (${back} behind it at ${y.toFixed(2)})`); }
+    if (ROOF.includes(d.kind)) assert.ok(Math.abs(a.heightAt(x, z) - y) < 1e-6, `a ${d.kind} is on a roof`);
+    if (STREET.includes(d.kind)) assert.ok(y === 0 && a.heightAt(x, z) === 0, `a ${d.kind} is in the street`);
+  }
+  for (const k of ['windows', 'pipes', 'blade', 'rust', 'awning', 'aerial', 'pole', 'wire', 'bin']) assert.ok(kinds[k] > 0, `details: some ${k}`);
+  console.log(`details in 25 chunks: ${Object.entries(kinds).map(([k, n]) => `${n} ${k}`).join(', ')}`);
+}
+
 // The city's stairs and bars: stairs a storey a step up a building's side, each step narrow (a rail along it); bars across
 // alleys, drawn but not stood on. And let go with room ahead it settles through a walk; at an edge it stops short.
 {

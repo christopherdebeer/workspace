@@ -77,7 +77,21 @@ export interface Grip { hold: Hold; x: number; y: number; z: number; d: number }
  */
 export type RegionKind = 'debris' | 'clutter' | 'nogo';
 export interface Region { kind: RegionKind; x0: number; z0: number; x1: number; z1: number; y: number }
-export interface Chunk { cx: number; cz: number; boxes: Box[]; props: Box[]; cells: number[][]; holds: Hold[]; hcells: number[][]; regions: Region[] }
+/**
+ * The city's details, tagged for the looks to come (none draws them yet; `?details` shows them as lines): what a dense city
+ * has on and about its buildings that the references show and that isn't a box, a hold or a fixture already. Each a kind, its
+ * points (a line or a run: a pipe's bends, a wire's sag; or one point, its foot), the way it faces (out from its face; 0, 0
+ * standing free), its size (`w` across, `h` up), a number of its own to vary by, and for some how many and how many lit.
+ *
+ *   on a face   windows (a storey's row: `count`, `lit` of them), pipes (a bundle of `count`, up and across with its bends),
+ *               ladder, blade (a sign standing out from the face), rust (a streak down from a unit or a bend), awning and
+ *               neon (over a shopfront at street level)
+ *   on a roof   billboard (a board on a frame, facing out), aerial, dish, laundry (a line strung across)
+ *   in the street  pole, wire (pole to pole, and down to a face), vending (a machine against a face), bin
+ */
+export type DetailKind = 'windows' | 'pipes' | 'ladder' | 'blade' | 'rust' | 'awning' | 'neon' | 'billboard' | 'aerial' | 'dish' | 'laundry' | 'pole' | 'wire' | 'vending' | 'bin';
+export interface Detail { kind: DetailKind; pts: [number, number, number][]; n: [number, number]; w: number; h: number; seed: number; count?: number; lit?: number }
+export interface Chunk { cx: number; cz: number; boxes: Box[]; props: Box[]; cells: number[][]; holds: Hold[]; hcells: number[][]; regions: Region[]; details: Detail[] }
 
 const key = (cx: number, cz: number) => `${cx},${cz}`;
 
@@ -275,7 +289,9 @@ export class City {
       if (gr() < 0.5) { const along = gr() < 0.5, l = 2 + gr() * Math.min(5, (along ? w : d) - 2); place('clutter', along ? l : 0.3, along ? 0.3 : l, 0.25, TAG.CLUTTER); }
       if (gr() < 0.2) place('nogo', 1, 1.5, 0.15, TAG.SKYLIGHT);
     }
-    return { cx, cz, boxes, props, cells, holds, hcells, regions };
+    // (the details, by their own dice, after everything else: nothing above moves for them)
+    const details = authored || this.course?.alone || (this.practiceLine && cx === 0 && cz === 0) ? [] : this.detailsOf(boxes, holds, seeded(hash(this.seed, cx, cz, 99)));
+    return { cx, cz, boxes, props, cells, holds, hcells, regions, details };
   }
 
   /**
@@ -361,6 +377,65 @@ export class City {
       }
     }
     return { holds, props };
+  }
+
+  /** a chunk's details (see `Detail`): on its buildings' faces and roofs, and in the street by them */
+  detailsOf(boxes: Box[], holds: Hold[], rand: Rand): Detail[] {
+    const out: Detail[] = [], seed = () => Math.floor(rand() * 1e6);
+    const top = (x: number, z: number) => { let h = 0; for (const o of boxes) if (x >= o.x0 && x < o.x1 && z >= o.z0 && z < o.z1) h = Math.max(h, o.y1); return h; };
+    const add = (kind: DetailKind, pts: [number, number, number][], n: [number, number], w: number, h: number, extra: Partial<Detail> = {}) => out.push({ kind, pts, n, w, h, seed: seed(), ...extra });
+    for (const b of boxes) {
+      if (b.tag !== TAG.BUILDING) continue;
+      const H = b.y1, storeys = Math.max(1, Math.round(H / STOREY));
+      for (const [ax, az, bx, bz, nx, nz] of [[b.x0, b.z0, b.x1, b.z0, 0, -1], [b.x0, b.z1, b.x1, b.z1, 0, 1], [b.x0, b.z0, b.x0, b.z1, -1, 0], [b.x1, b.z0, b.x1, b.z1, 1, 0]] as const) {
+        const len = Math.hypot(bx - ax, bz - az); if (len < 2) continue;
+        const ux = (bx - ax) / len, uz = (bz - az) / len, at = (t: number, y: number, out0 = 0.02): [number, number, number] => [ax + ux * t + nx * out0, y, az + uz * t + nz * out0];
+        // (what's in front of this face: open to the sky (a street or a wide yard) or another building close (an alley)
+        const front = (out1: number) => top(ax + ux * len / 2 + nx * out1, az + uz * len / 2 + nz * out1), street = front(1.5) === 0 && front(4) === 0;
+        // (the windows: a row a storey, set in from the corners, sill to head; how many lit, by the storey's dice)
+        const shop = street && rand() < 0.3;
+        for (let k = shop ? 1 : 0; k < storeys; k++) { const y = k * STOREY + 0.9, n = Math.max(1, Math.floor((len - 1.2) / 1.6)); if (y + 1.4 > H) break; add('windows', [at(0.6, y), at(len - 0.6, y)], [nx, nz], len - 1.2, 1.4, { count: n, lit: Math.round(n * rand() * 0.8) }); }
+        // (a shopfront at street level: an awning over it, sometimes neon above)
+        if (shop) { add('awning', [at(0.4, 2.6, 0.9), at(len - 0.4, 2.6, 0.9)], [nx, nz], len - 0.8, 0.5); if (rand() < 0.45) add('neon', [at(len * 0.2, 3.2), at(len * 0.8, 3.2)], [nx, nz], len * 0.6, 0.6); }
+        // (a bundle of pipes: up from the street, across a way at a storey, on up to the roof)
+        if (storeys >= 2 && rand() < 0.3) {
+          const t0 = 0.5 + rand() * (len - 1), y1 = STOREY * (1 + Math.floor(rand() * (storeys - 1))) + 1.5, t1 = Math.max(0.4, Math.min(len - 0.4, t0 + (rand() < 0.5 ? -1 : 1) * (1 + rand() * 2.5)));
+          const pts = [at(t0, 0, 0.12), at(t0, y1, 0.12), at(t1, y1 + 0.4, 0.12), at(t1, H, 0.12)];
+          add('pipes', pts, [nx, nz], 0.35, H, { count: 2 + Math.floor(rand() * 3) }); if (rand() < 0.6) add('rust', [at(t1, y1 + 0.3), at(t1, Math.max(0.3, y1 - 2 - rand() * 3))], [nx, nz], 0.3, 2.5);
+        }
+        // (a ladder up the side, from the first storey to over the roof's edge)
+        if (storeys >= 2 && rand() < 0.08) { const t = 0.6 + rand() * (len - 1.2); add('ladder', [at(t, STOREY, 0.1), at(t, H + 1, 0.1)], [nx, nz], 0.5, H + 1 - STOREY); }
+        // (a blade sign standing out from the face, a few storeys up)
+        if (storeys >= 2 && rand() < 0.15) { const t = 0.5 + rand() * (len - 1), y0 = STOREY + 0.5, h = Math.min(H - y0 - 0.3, 2 + rand() * 3); if (h > 1) add('blade', [at(t, y0 + h, 0.6), at(t, y0, 0.6)], [nx, nz], 0.5, h); }
+        // (at street level against the face: a vending machine, a bin)
+        if (street && rand() < 0.12) { const t = 0.6 + rand() * (len - 1.2), p = at(t, 0, 0.4); if (top(p[0], p[2]) === 0) add('vending', [p], [nx, nz], 0.9, 1.8); }
+        if (street && rand() < 0.15) { const t = 0.4 + rand() * (len - 0.8), p = at(t, 0, 0.35); if (top(p[0], p[2]) === 0) add('bin', [p], [nx, nz], 0.5, 1); }
+        // (poles along a street face, a pole every fourteen metres or so, wires strung pole to pole with a sag, and one down to
+        // the face at the first storey)
+        if (street && len >= 6 && rand() < 0.5) {
+          const poles: [number, number, number][] = [];
+          for (let t = 2 + rand() * 4; t < len - 1; t += 12 + rand() * 4) { const p = at(t, 0, 1.3); if (top(p[0], p[2]) === 0) { poles.push(p); add('pole', [p], [0, 0], 0.25, 8); } }
+          for (let i = 0; i + 1 < poles.length; i++) for (const hy of [6.6, 7.2]) { const a = poles[i], c = poles[i + 1], m: [number, number, number] = [(a[0] + c[0]) / 2, hy - 0.35, (a[2] + c[2]) / 2]; add('wire', [[a[0], hy, a[2]], m, [c[0], hy, c[2]]], [0, 0], 0.02, 0); }
+          if (poles.length && H > 5) { const p = poles[0]; add('wire', [[p[0], 6.3, p[2]], [p[0] - nx * 0.65, 5.2, p[2] - nz * 0.65], [p[0] - nx * 1.28, 4.6, p[2] - nz * 1.28]], [0, 0], 0.02, 0); }
+        }
+      }
+      // (rust down from each unit on its faces)
+      for (const h of holds) { const wx = (h.ax + h.bx) / 2 - h.nx * 0.48, wz = (h.az + h.bz) / 2 - h.nz * 0.48; if (h.kind !== 'ac' || wx < b.x0 - 0.01 || wx > b.x1 + 0.01 || wz < b.z0 - 0.01 || wz > b.z1 + 0.01 || h.ay > b.y1) continue; if (rand() < 0.5) { const mx = (h.ax + h.bx) / 2 - h.nx * 0.46, mz = (h.az + h.bz) / 2 - h.nz * 0.46; add('rust', [[mx, h.ay - 0.55, mz], [mx, Math.max(0.3, h.ay - 0.55 - 1 - rand() * 2.5), mz]], [h.nx, h.nz], 0.4, 2); } }
+      // (on the roof, where it's bare: a billboard on a frame along an edge, aerials, a dish, a line of laundry)
+      const w = b.x1 - b.x0, d = b.z1 - b.z0, bare = (x: number, z: number) => top(x, z) === H, onRoof = (fx: number, fz: number): [number, number, number] => [b.x0 + 0.5 + fx * (w - 1), H, b.z0 + 0.5 + fz * (d - 1)];
+      if (w >= 6 && d >= 6 && rand() < 0.07) { const alongX = rand() < 0.5, e = rand() < 0.5 ? 0 : 1, a: [number, number, number] = alongX ? [b.x0 + 1, H, e ? b.z1 - 1 : b.z0 + 1] : [e ? b.x1 - 1 : b.x0 + 1, H, b.z0 + 1], c: [number, number, number] = alongX ? [b.x1 - 1, H, a[2]] : [a[0], H, b.z1 - 1]; if (bare(a[0], a[2]) && bare(c[0], c[2])) add('billboard', [a, c], alongX ? [0, e ? 1 : -1] : [e ? 1 : -1, 0], Math.hypot(c[0] - a[0], c[2] - a[2]), 3); }
+      for (let n = rand() < 0.35 ? 1 + Math.floor(rand() * 2) : 0; n > 0; n--) { const p = onRoof(rand(), rand()); if (bare(p[0], p[2])) add('aerial', [p], [0, 0], 0.6, 1.5 + rand() * 1.5); }
+      if (rand() < 0.15) { const p = onRoof(rand(), rand()); if (bare(p[0], p[2])) add('dish', [p], [0, 0], 0.8, 1.1); }
+      if (w >= 4 && d >= 4 && rand() < 0.1) { const a = onRoof(0.2, 0.3 + 0.4 * rand()), c = onRoof(0.8, a[2] > 0 ? (a[2] - b.z0 - 0.5) / (d - 1) : 0.5); if (bare(a[0], a[2]) && bare(c[0], c[2])) add('laundry', [[a[0], H + 1.6, a[2]], [c[0], H + 1.6, c[2]]], [0, 0], Math.hypot(c[0] - a[0], c[2] - a[2]), 1.6); }
+    }
+    return out;
+  }
+  /** the details about (x, z) within `r` (by their first point), from the chunks there */
+  detailsNear(x: number, z: number, r: number): Detail[] {
+    const out: Detail[] = [];
+    for (let cx = Math.floor((x - r) / CHUNK); cx <= Math.floor((x + r) / CHUNK); cx++) for (let cz = Math.floor((z - r) / CHUNK); cz <= Math.floor((z + r) / CHUNK); cz++)
+      for (const d of this.chunk(cx, cz).details) if (Math.hypot(d.pts[0][0] - x, d.pts[0][2] - z) <= r) out.push(d);
+    return out;
   }
 
   /** the holds a chunk's boxes offer */

@@ -621,6 +621,32 @@ later, per look. Times are in the clips (`devtools/refs/roofjumps.json`).
 | pitched tile roofs among the flat | kiuzyx 6-12 | everything flat | land on, slide, run along the ridge | sloped roofs (see Not yet) |
 | rust streaks, lit windows, neon | kiuzyx throughout | | | the look's, later |
 
+## The city's details, tagged (`city.ts` `Detail`, `?details`)
+
+For the looks to come: what a dense city has on and about its buildings (from the references, the kiuzyx clip most of all)
+that isn't a box, a hold or a fixture, tagged as data now so a look can draw it later. None draws them yet; `?details` shows
+them as coloured lines about the runner (window rows faint, the rest bold) to check what's tagged where. Each chunk's
+`details`, by their own dice after everything else (nothing else moves for them): a kind, its points (a line, a run with its
+bends or sag, or one point at its foot), the way it faces, its size, a number to vary by, and for some how many and how many lit.
+
+| kind | where | what's recorded |
+|---|---|---|
+| `windows` | every storey of every face, set in from the corners | a row, sill to head; how many windows, how many lit |
+| `pipes` | three in ten faces of two storeys up | a bundle (2-4) from the street up, across a way at a storey, on to the roof |
+| `rust` | down from half the units, and from a pipe bundle's bend | a streak |
+| `ladder` | one face in twelve of two storeys up | from the first storey to over the roof's edge |
+| `blade` | one in seven | a sign standing out from the face, two to five metres tall |
+| `awning`, `neon` | three in ten street faces (shopfronts) | over the street level; neon above some |
+| `vending`, `bin` | against street faces | at the ground |
+| `pole`, `wire` | half the street faces six metres or longer | poles about every fourteen metres, two wires pole to pole with a sag, one down to the face |
+| `billboard` | one big roof in fourteen | a board along an edge, facing out |
+| `aerial`, `dish`, `laundry` | on bare roof | where they stand; a line strung across |
+
+Over 25 chunks: about 22,000 window rows, 1,600 pipe bundles, 2,500 rust streaks, 850 blade signs, 400 ladders, 400 awnings,
+170 neon, 350 poles and their wires, 600 aerials, 180 dishes, 90 laundry lines, 16 billboards, 190 bins, 140 vending machines.
+Not tagged yet from the list above: grilles, eaves, tank stands, balcony bands (balconies are single), projecting pods, the
+elevated railway, stepped streets, pitched roofs.
+
 ## Not yet
 
 Sloped roofs, ledges, planks and wires between buildings (everything is a box so far); a zig-zag

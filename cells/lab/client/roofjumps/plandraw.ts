@@ -4,7 +4,7 @@
  * hairlines. (render.ts draws them, and still shows them, faint, behind what stands in front.)
  */
 import type { Move, Reach } from './runner';
-import type { Hold, HoldKind } from './city';
+import type { Detail, DetailKind, Hold, HoldKind } from './city';
 import type { Plan, Route } from './plan';
 import type { Stroke } from './render';
 
@@ -73,5 +73,25 @@ export function planStrokes(p: Plan): Stroke[] {
   if (p.left) route(p.left, 0.08, 0.8, true, out);
   if (p.right) route(p.right, 0.08, 0.8, true, out);
   route(p.primary, 0.16, 1, true, out);
+  return out;
+}
+
+/** a colour a detail kind, for the `?details` view (every kind) */
+const DETAIL_COLOUR: Record<DetailKind, readonly [number, number, number]> = {
+  windows: [0.95, 0.8, 0.35], pipes: [0.55, 0.55, 0.6], ladder: [0.85, 0.85, 0.85], blade: [0.95, 0.3, 0.35], rust: [0.7, 0.35, 0.15], awning: [0.3, 0.6, 0.9], neon: [1, 0.3, 0.8],
+  billboard: [0.95, 0.95, 0.4], aerial: [0.6, 0.9, 0.6], dish: [0.8, 0.8, 1], laundry: [0.9, 0.7, 0.9], pole: [0.35, 0.3, 0.25], wire: [0.1, 0.1, 0.1], vending: [0.2, 0.8, 0.9], bin: [0.4, 0.6, 0.3],
+};
+/** The city's tagged details about a place, as lines (none of the looks draws them yet): a window row as its outline, a line or
+ * a run (a pipe's bends, a wire's sag) as itself, a thing standing at a point (a pole, an aerial, a machine) as an upright its height */
+export function detailStrokes(details: Detail[], x: number, z: number, r: number): Stroke[] {
+  const out: Stroke[] = [];
+  for (const d of details) {
+    const a = Math.max(0, 1 - Math.hypot(d.pts[0][0] - x, d.pts[0][2] - z) / r); if (a <= 0) continue;
+    // (the windows faint and fine, there being so many; the rest bold)
+    const k = d.kind === 'windows' ? a * 0.4 : a, c = DETAIL_COLOUR[d.kind], line = (pts: number[]) => out.push({ pts, cols: Array.from({ length: pts.length / 3 }, () => [c[0], c[1], c[2], k]).flat(), w: d.kind === 'wire' ? 0.02 : d.kind === 'windows' ? 0.015 : 0.05 });
+    if (d.kind === 'windows') { const [p, q] = d.pts; line([p[0], p[1], p[2], q[0], q[1], q[2], q[0], q[1] + d.h, q[2], p[0], p[1] + d.h, p[2], p[0], p[1], p[2]]); }
+    else if (d.pts.length > 1) line(d.pts.flat());
+    else { const p = d.pts[0]; line([p[0], p[1], p[2], p[0], p[1] + d.h, p[2]]); }
+  }
   return out;
 }

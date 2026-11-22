@@ -44,7 +44,7 @@ import { TUNE, readTune, writeTune, HOUSE } from './tune';
 import { palette } from './palette';
 import { plan, words } from './plan';
 import type { Plan, Route } from './plan';
-import { holdStrokes, planStrokes } from './plandraw';
+import { holdStrokes, detailStrokes, planStrokes } from './plandraw';
 import { follow } from './direct';
 import { brushInput, FILMED } from './brush';
 import { sceneByKey, SCENES } from './scenes';
@@ -662,6 +662,8 @@ function frame(now: number): void {
   }
   rd.draw(vp, eye, withCrew(rig.bones(held ?? runner), dt), shadowAt(runner.x, runner.y, runner.z));
   const guides = rd.def.guides !== false;
+  // (`?details`: the city's tagged details, as lines, for checking what's tagged where before any look draws them)
+  if (q.has('details') && !held) rd.lines(vp, eye, detailStrokes(city.detailsNear(runner.x, runner.z, 30), runner.x, runner.z, 30));
   if (guides && TUNE.holds && !held) rd.lines(vp, eye, holdStrokes(city.holdsNear(runner.x, runner.z, TUNE.holdsNear), runner.reach, runner.x, runner.y, runner.z, TUNE.holdsNear));
   if (guides && TUNE.plan && thinking && !held) rd.lines(vp, eye, planStrokes(thinking));
   const say = !!TUNE.readout && !!thinking && !held;
