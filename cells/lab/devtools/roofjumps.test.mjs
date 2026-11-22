@@ -5,8 +5,8 @@
 import { build } from 'esbuild';
 import assert from 'node:assert/strict';
 const lab = new URL('../client/roofjumps/', import.meta.url).pathname;
-const out = await build({ stdin: { contents: `export * from './city'; export * from './runner'; export * from './rig'; export * from './mesh'; export * from './plan'; export * from './tune'; export * from './brush'; export * as STROKES from './strokes'; export * as MENU from './menu'; export { strokeGouacheRules } from './looks/stroke-gouache'; export { sumiRules } from './looks/sumi'; export * from './scenes'; export * from './character';`, resolveDir: lab, loader: 'ts' }, bundle: true, write: false, format: 'esm', platform: 'node' });
-const { plan, foresee, TUNE, HOUSE, DIALS, City, Runner, Rig, CHUNK, STOREY, TAG, VERTEX, chunkMesh, figureMesh, FIGURE, FIGURE_BASE, brushInput, BRUSH_SECONDS, SCENES, runScene, judge, CHARACTERS, bodyOf, STROKES, MENU, strokeGouacheRules, sumiRules } = await import('data:text/javascript;base64,' + Buffer.from(out.outputFiles[0].text).toString('base64'));
+const out = await build({ stdin: { contents: `export * from './city'; export * from './runner'; export * from './rig'; export * from './mesh'; export * from './plan'; export * from './tune'; export * from './brush'; export * as STROKES from './strokes'; export * as MENU from './menu'; export { strokeGouacheRules } from './looks/stroke-gouache'; export { sumiRules } from './looks/sumi'; export * from './scenes'; export * from './character'; export * from './dressing';`, resolveDir: lab, loader: 'ts' }, bundle: true, write: false, format: 'esm', platform: 'node' });
+const { dressingOf, DRESS, plan, foresee, TUNE, HOUSE, DIALS, City, Runner, Rig, CHUNK, STOREY, TAG, VERTEX, chunkMesh, figureMesh, FIGURE, FIGURE_BASE, brushInput, BRUSH_SECONDS, SCENES, runScene, judge, CHARACTERS, bodyOf, STROKES, MENU, strokeGouacheRules, sumiRules } = await import('data:text/javascript;base64,' + Buffer.from(out.outputFiles[0].text).toString('base64'));
 
 // the same chunk, whatever was made before it
 {
@@ -28,7 +28,7 @@ const { plan, foresee, TUNE, HOUSE, DIALS, City, Runner, Rig, CHUNK, STOREY, TAG
       assert.ok(b.x0 >= i * CHUNK + 1 && b.x1 <= (i + 1) * CHUNK - 1 && b.z0 >= j * CHUNK + 1 && b.z1 <= (j + 1) * CHUNK - 1);
       if (b.tag === TAG.BUILDING) { assert.equal(b.y0, 0); assert.equal(b.y1 % STOREY, 0); }
     }
-    assert.equal(chunkMesh(ch).length, ((ch.boxes.length + ch.props.length) * 5 + 1) * 6 * VERTEX);
+    { const dr = dressingOf(ch.details), flat = dr.filter((b) => b.flat).length; assert.equal(chunkMesh(ch).length, ((ch.boxes.length + ch.props.length + dr.length - flat) * 5 + flat + 1) * 6 * VERTEX); }
     assert.equal(c.heightAt(i * CHUNK + 0.5, j * CHUNK + 20), 0);
   }
   console.log(`${n} boxes in 49 chunks (${(n / 49).toFixed(0)} a chunk, ${(n * 10 / 49).toFixed(0)} triangles)`);
@@ -328,6 +328,10 @@ console.log('roofjumps: ok');
     if (d.kind === 'windows') for (const h of d.holds ?? []) assert.ok(h.kind === 'sill' && Math.abs(h.ay - d.pts[0][1]) < 0.01 && h.nx === d.n[0] && h.nz === d.n[1], 'a row of windows sits on its sill');
   } }
   assert.ok(linked.windows > 1000 && linked.rust > 100, `details coupled to holds (${JSON.stringify(linked)})`);
+  // (and every kind drawn (dressing.ts): some boxes, none empty or inside out, about where the detail is)
+  { const drawn = {}; for (const d of a.chunk(0, 0).details.concat(a.chunk(1, 0).details)) { const bs = DRESS[d.kind](d); drawn[d.kind] = (drawn[d.kind] ?? 0) + bs.length;
+    for (const b of bs) { assert.ok(b.x0 <= b.x1 && b.z0 <= b.z1 && b.y0 < b.y1, `a ${d.kind}'s box the right way out`); const xs = d.pts.map((p) => p[0]), zs = d.pts.map((p) => p[2]), ys = d.pts.map((p) => p[1]); assert.ok(b.x0 > Math.min(...xs) - 1.5 && b.x1 < Math.max(...xs) + 1.5 && b.z0 > Math.min(...zs) - 1.5 && b.z1 < Math.max(...zs) + 1.5 && b.y1 <= Math.max(...ys) + d.h + 1.5, `a ${d.kind}'s box by it`); } }
+    console.log(`details drawn (2 chunks): ${Object.entries(drawn).map(([k, n]) => `${n} ${k}`).join(', ')}`); }
   console.log(`details coupled to holds: ${Object.entries(linked).map(([k, n]) => `${n} ${k}`).join(', ')}`);
 }
 

@@ -42,6 +42,18 @@ ${LOOK_PRELUDE}
 ${LOOK_DEFS.map((d, i) => `// ─── ${d.name}\n${d.glsl.replace(/\bvec3 look\(/, `vec3 look_${i}(`)}`).join('\n')}
 void main() {
   Surf s = Surf(vPos, normalize(vNor), int(vTag + 0.5), vRect, vSpan, vSeed, vBary, uEye);
+  // (the details drawn as one quad a row (dressing.ts), cut here: a row of windows into its panes (its seed: how many, the
+  // share lit, and 100 more where it sits on its sill) and the sill under each; a ladder's quad into its rungs)
+  if (s.tag == 15) {
+    float wx = vRect.z - vRect.x, wz = vRect.w - vRect.y, W = max(wx, wz), f = (wx > wz ? vPos.x - vRect.x : vPos.z - vRect.y) / W;
+    float sill = step(100.0, vSeed), k = vSeed - sill * 100.0, n = floor(k), litShare = fract(k) / 0.9;
+    float slot = W / n, pw = min(1.1, slot * 0.62) / slot, a = abs(fract(f * n) - 0.5), y = vPos.y - vSpan.x, i = floor(f * n);
+    if (y > 0.2 && a < pw * 0.5) { float h = hash12(vec2(i + vRect.x * 7.1, vRect.y * 3.3 + vSpan.x)); s.seed = h < litShare ? 0.75 + 0.25 * fract(h * 17.0) : 0.5 * fract(h * 23.0); }
+    else if (sill > 0.5 && y < 0.08 && a < pw * 0.5 + 0.08 / slot) s.tag = 7;
+    else discard;
+  } else if (s.tag == 25) {
+    float y = vPos.y - vSpan.x; if (abs(fract(y / 0.3) - 0.5) > 0.06) discard; s.tag = 10;
+  }
   vec3 col = vec3(0.0);
   ${LOOK_DEFS.map((_, i) => `${i ? 'else ' : ''}if (uLook == ${i}) col = look_${i}(s);`).join('\n  ')}
   float dist = length(vPos - uEye);

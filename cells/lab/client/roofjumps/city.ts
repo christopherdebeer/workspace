@@ -27,11 +27,13 @@ export const STOREY = 3;
 /** the buckets a chunk's boxes are sorted into, for `heightAt` (m) */
 const CELL = 8, CELLS = CHUNK / CELL;
 
-export const TAG = { GROUND: 0, BUILDING: 1, STEP: 2, HUT: 3, UNIT: 4, TANK: 5, PLAYER: 6, RIM: 7, BEAM: 8, STAIR: 9, BAR: 10, DEBRIS: 11, CLUTTER: 12, SKYLIGHT: 13, SLAB: 14 } as const;
+export const TAG = { GROUND: 0, BUILDING: 1, STEP: 2, HUT: 3, UNIT: 4, TANK: 5, PLAYER: 6, RIM: 7, BEAM: 8, STAIR: 9, BAR: 10, DEBRIS: 11, CLUTTER: 12, SKYLIGHT: 13, SLAB: 14,
+  /** the details' (dressing.ts): drawn only */
+  WINDOW: 15, PIPE: 16, SIGN: 17, WIRE: 18, POLE: 19, AWNING: 20, NEON: 21, RUST: 22, FURNITURE: 23, CLOTH: 24, RUNGS: 25 } as const;
 export type Tag = (typeof TAG)[keyof typeof TAG];
 
 /** a box; `fixture` for the small things fixed to a face (a unit, a sign, a balcony, a fire escape's parts): drawn as detail */
-export interface Box { x0: number; z0: number; x1: number; z1: number; y0: number; y1: number; tag: Tag; fixture?: true }
+export interface Box { x0: number; z0: number; x1: number; z1: number; y0: number; y1: number; tag: Tag; fixture?: true; /** drawn: its own number (else one from where it stands); only its face out that way (a pane, a streak) */ seed?: number; flat?: [number, number] }
 
 /**
  * An authored course (a scene to study): its boxes in place of chunk (0, 0)'s, holds added by hand (no sills or pipes by

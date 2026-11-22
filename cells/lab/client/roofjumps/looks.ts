@@ -76,7 +76,22 @@ float noise(vec2 p) { vec2 i = floor(p), f = fract(p), u = f * f * (3.0 - 2.0 * 
   return mix(mix(hash12(i), hash12(i + vec2(1, 0)), u.x), mix(hash12(i + vec2(0, 1)), hash12(i + vec2(1, 1)), u.x), u.y); }
 float fbm(vec2 p) { float v = 0.0, a = 0.5; for (int i = 0; i < 4; i++) { v += a * noise(p); p = p * 2.03 + 17.1; a *= 0.5; } return v; }
 float litOf(vec3 n) { return 0.64 + 0.36 * dot(n, normalize(vec3(0.42, 0.8, 0.28))); }
-vec3 clayOf(Surf s) { float base = s.tag == 0 ? 0.40 : s.tag == 6 ? 0.13 : s.tag == 1 ? 0.74 : 0.69; return vec3(base * litOf(s.n)); }
+// (the details' own colours (dressing.ts), plain: a pane dark or lit, pipes and steel dark, a sign or an awning or a cloth one of a
+// few colours by its seed, neon bright, rust a streak)
+vec3 dressOf(Surf s) {
+  float k = s.seed;
+  vec3 pick = k < 0.25 ? vec3(0.72, 0.28, 0.24) : k < 0.5 ? vec3(0.24, 0.42, 0.62) : k < 0.75 ? vec3(0.86, 0.72, 0.3) : vec3(0.36, 0.56, 0.4);
+  if (s.tag == 15) return k > 0.74 ? vec3(0.98, 0.84, 0.55) : mix(vec3(0.17, 0.2, 0.25), vec3(0.32, 0.36, 0.43), k * 2.0);
+  if (s.tag == 16) return vec3(0.42, 0.42, 0.4) * (abs(s.n.y) < 0.5 ? 1.0 - 0.35 * line(abs(s.n.x) > 0.5 ? s.pos.z : s.pos.x, 0.11) : 1.0);
+  if (s.tag == 17 || s.tag == 20 || s.tag == 24) return pick * (s.tag == 24 ? 1.15 : 1.0);
+  if (s.tag == 18) return vec3(0.12, 0.12, 0.13);
+  if (s.tag == 19) return vec3(0.38, 0.36, 0.34);
+  if (s.tag == 21) return mix(vec3(1.0, 0.35, 0.6), vec3(0.35, 0.9, 1.0), step(0.5, k));
+  if (s.tag == 22) return vec3(0.52, 0.32, 0.22);
+  return mix(vec3(0.75, 0.2, 0.18), vec3(0.3, 0.32, 0.36), step(0.5, k));
+}
+bool isDetail(Surf s) { return s.tag >= 15 && s.tag <= 24; }
+vec3 clayOf(Surf s) { if (isDetail(s)) return dressOf(s) * (s.tag == 21 || (s.tag == 15 && s.seed > 0.74) ? 1.0 : litOf(s.n)); float base = s.tag == 0 ? 0.40 : s.tag == 6 ? 0.13 : s.tag == 1 ? 0.74 : 0.69; return vec3(base * litOf(s.n)); }
 `;
 
 const grid: LookDef = { name: 'grid', glsl: `vec3 look(Surf s) {
@@ -88,7 +103,7 @@ const grid: LookDef = { name: 'grid', glsl: `vec3 look(Surf s) {
 }` };
 const clay: LookDef = { name: 'clay', glsl: `vec3 look(Surf s) { return clayOf(s); }` };
 const wire: LookDef = { name: 'wire', shadow: 'none', glsl: `vec3 look(Surf s) { vec3 w = fwidth(s.bary), e = smoothstep(vec3(0.0), 1.2 * w, s.bary); return mix(vec3(0.12), vec3(0.8, 0.8, 0.79), min(e.x, min(e.y, e.z))); }` };
-const tags: LookDef = { name: 'tags', glsl: `vec3 look(Surf s) { float h = float(s.tag) / 9.0; return (0.55 + 0.45 * cos(6.2832 * (h + vec3(0.0, 0.33, 0.67)))) * litOf(s.n); }` };
+const tags: LookDef = { name: 'tags', glsl: `vec3 look(Surf s) { float h = float(s.tag) / 25.0; return (0.55 + 0.45 * cos(6.2832 * (h + vec3(0.0, 0.33, 0.67)))) * litOf(s.n); }` };
 const normals: LookDef = { name: 'normals', glsl: `vec3 look(Surf s) { return s.n * 0.5 + 0.5; }` };
 
 /** the looks, in the order the page cycles them */

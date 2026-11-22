@@ -624,8 +624,12 @@ later, per look. Times are in the clips (`devtools/refs/roofjumps.json`).
 ## The city's details, tagged (`city.ts` `Detail`, `?details`)
 
 For the looks to come: what a dense city has on and about its buildings (from the references, the kiuzyx clip most of all)
-that isn't a box, a hold or a fixture, tagged as data now so a look can draw it later. None draws them yet; `?details` shows
-them as coloured lines about the runner (window rows faint, the rest bold) to check what's tagged where. Each chunk's
+that isn't a box, a hold or a fixture, tagged as data. Each kind is drawn as a few plain boxes (`dressing.ts` `DRESS`, a row a
+kind, so a new kind can't go undrawn) with tags of their own (`WINDOW` to `RUNGS`), coloured flat in the plain looks and softly in
+gouache (which no longer paints windows of its own: they're the details, sitting on their sills). To keep the mesh light, a window
+row is one quad cut into its panes as it's drawn (which lit from its seed, the sill under each where the row has its sill hold),
+a pipe bundle one striped box a run, a ladder two rails and one quad cut into rungs. `?details` still shows them as coloured lines
+about the runner to check what's tagged where. Each chunk's
 `details`, by their own dice after everything else (nothing else moves for them): a kind, its points (a line, a run with its
 bends or sag, or one point at its foot), the way it faces, its size, a number to vary by, and for some how many and how many lit.
 

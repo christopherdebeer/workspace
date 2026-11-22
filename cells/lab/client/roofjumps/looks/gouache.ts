@@ -3,15 +3,14 @@
  * weathered render streaked below its copings). Flat, chalky colour with a hand's variation in it, not texture: each
  * building its own concrete (warm grey, a blue-green grey, now and then a faded terracotta), mottled in broad patches,
  * streaked where water runs down from the top, rust bleeding through here and there; a lighter coping along every top
- * edge with its shadow under it; windows in storeys and bays on the larger walls (dark panes, a pale frame and sill), few
- * enough to give scale and not crowd the figure; rooftop units with their louvres; a warm low sun and cool shade; the
+ * edge with its shadow under it; rooftop units with their louvres; a warm low sun and cool shade; the
  * distance going to lavender. The figure dressed from its character's palette (character.ts), drawn with a darker edge so
  * it holds against the walls. The light is a shadow map from the sun (the buildings throw their shadows
  * across each other, the figure onto all of it), massed into two values; and the frame is painted after (paint.ts):
  * strokes that follow the picture, edges where pigment pools, a paper grain.
  *
- * Only paint. What can be held (a sill, a pipe, a coping) is still the city's holds (city.ts), and the windows here are
- * drawn where none is: the next step is one placement giving both the painted feature and the thing a hand can take.
+ * The windows, pipes, signs and the rest are the city's details (parts.ts), drawn as their own boxes (dressing.ts) and
+ * coloured here: one placement giving both what's painted and what a hand can take (a window row on its sill, a bundle's runs).
  */
 import type { LookDef } from '../looks';
 
@@ -63,6 +62,12 @@ vec3 look(Surf s) {
     if (wall && s.tag == 4) c *= 1.0 - 0.18 * line(v, 0.09);
     else if (s.tag == 4) { vec2 m = vec2((s.rect.x + s.rect.z) * 0.5, (s.rect.y + s.rect.w) * 0.5); float r = length(s.pos.xz - m); c *= 1.0 - 0.25 * smoothstep(0.32, 0.3, r) * (0.5 + 0.5 * line(r, 0.05)); }
     c *= 0.92 + 0.12 * fbm(fc * 1.3);
+  } else if (isDetail(s)) {
+    // (the details (dressing.ts): their own colours, softened toward the concrete; lit panes and neon their own light)
+    c = mix(dressOf(s), vec3(0.6, 0.6, 0.6), 0.18) * (0.94 + 0.1 * fbm(fc * 1.7));
+    // (by day a lit room's only a warmer pane, the sky's reflection over it; neon its own light)
+    if (s.tag == 15) c = s.seed > 0.74 ? mix(vec3(0.3, 0.32, 0.36), vec3(0.78, 0.66, 0.46), 0.45) : mix(vec3(0.24, 0.27, 0.32), vec3(0.45, 0.48, 0.56), s.seed);
+    if (s.tag == 21) return c;
   } else if (s.tag == 10) {
     c = vec3(0.3, 0.29, 0.32);                                                  // painted steel
   } else if (s.tag == 13) {
@@ -83,22 +88,6 @@ vec3 look(Surf s) {
       c *= 1.0 - 0.14 * smoothstep(2.5, 0.0, v - bottom);
       // (the coping: a paler band along the top edge, its shadow just under it)
       if (s.tag == 1 || s.tag == 3 || s.tag == 7) { if (d < 0.16) c = c * 1.16 + 0.02; else if (d < 0.23) c *= 0.7; }
-      // (windows: storeys up from the street, bays across, on walls big enough for them; some walls blank; never the top
-      // storey's upper part, never the street storey)
-      if (s.tag == 1 && W > 3.0 && H > 5.0 && s.seed > 0.18) {
-        float sy = v - bottom, storey = floor(sy / 3.0), ys = sy - storey * 3.0;
-        float nb = max(1.0, floor(W / 3.3)), bw = W / nb, bay = floor(u / bw), ub = u - bay * bw - bw * 0.5;
-        bool here = storey >= 1.0 && sy < H - 1.6 && hash12(vec2(bay + s.seed * 91.0, storey * 0.37 + s.seed)) > 0.32;
-        if (here) {
-          float hw = 0.46, inside = step(abs(ub), hw) * step(0.95, ys) * step(ys, 2.25);
-          if (inside > 0.5) {
-            float edge = min(hw - abs(ub), min(ys - 0.95, 2.25 - ys));
-            vec3 pane = mix(vec3(0.2, 0.24, 0.28), vec3(0.42, 0.45, 0.52), smoothstep(1.2, 2.2, ys) * 0.5);
-            c = edge < 0.05 || abs(ub) < 0.025 ? c * 0.7 + 0.18 : pane;
-          } else if (abs(ub) < hw + 0.08 && ys > 0.86 && ys < 0.95) c = c * 1.2 + 0.03;   // the sill
-          else if (abs(ub) < hw + 0.04 && ys < 0.86 && ys > -0.8) c *= 1.0 - 0.1 * smoothstep(-0.8, 0.86, ys);  // its stain
-        }
-      }
     } else {
       // (a roof's top: the coping round its edge, paler, jointed)
       float e = min(min(s.pos.x - s.rect.x, s.rect.z - s.pos.x), min(s.pos.z - s.rect.y, s.rect.w - s.pos.z));

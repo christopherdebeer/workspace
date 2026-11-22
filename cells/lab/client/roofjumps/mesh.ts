@@ -9,6 +9,7 @@ import type { Chunk } from './city';
 import { CHUNK, TAG } from './city';
 import type { Bone } from './rig';
 import { point } from './m4';
+import { dressingOf } from './dressing';
 
 /** floats a vertex: x y z, nx ny nz, tag, the box's x0 z0 x1 z1, its y0 y1, its seed (the figure: its bone's kind) */
 export const VERTEX = 14;
@@ -31,22 +32,29 @@ function quad(o: Float32Array, at: number, a: V3, b: V3, c: V3, d: V3, tag: numb
   return at;
 }
 
-/** A chunk: its ground, and each box's top and sides (and its props', drawn the same). */
+/** A chunk: its ground, and each box's top and sides (and its props' and its details' (dressing.ts), drawn the same). */
 export function chunkMesh(c: Chunk): Float32Array {
-  const o = new Float32Array(((c.boxes.length + c.props.length) * 5 + 1) * 6 * VERTEX);
+  const all = [...c.boxes, ...c.props, ...dressingOf(c.details)], o = new Float32Array((all.length * 5 + 1) * 6 * VERTEX);
   let at = 0;
   const x = c.cx * CHUNK, z = c.cz * CHUNK;
   at = quad(o, at, [x, 0, z], [x + CHUNK, 0, z], [x + CHUNK, 0, z + CHUNK], [x, 0, z + CHUNK], TAG.GROUND, [x, -1, z], [x, z, x + CHUNK, z + CHUNK, 0, 0, seedOf(x, z, 0)]);
-  for (const b of [...c.boxes, ...c.props]) {
-    const m: V3 = [(b.x0 + b.x1) / 2, (b.y0 + b.y1) / 2, (b.z0 + b.z1) / 2], e: Extra = [b.x0, b.z0, b.x1, b.z1, b.y0, b.y1, seedOf(b.x0, b.z0, b.y1)];
+  for (const b of all) {
+    const m: V3 = [(b.x0 + b.x1) / 2, (b.y0 + b.y1) / 2, (b.z0 + b.z1) / 2], e: Extra = [b.x0, b.z0, b.x1, b.z1, b.y0, b.y1, b.seed ?? seedOf(b.x0, b.z0, b.y1)];
     const p = (i: number, j: number, k: number): V3 => [i ? b.x1 : b.x0, j ? b.y1 : b.y0, k ? b.z1 : b.z0];
+    if (b.flat) {
+      // (only its face out: a pane, a streak)
+      const [nx, nz] = b.flat, behind: V3 = [m[0] - nx, m[1], m[2] - nz];
+      at = Math.abs(nx) > 0.5 ? quad(o, at, p(nx > 0 ? 1 : 0, 0, 0), p(nx > 0 ? 1 : 0, 0, 1), p(nx > 0 ? 1 : 0, 1, 1), p(nx > 0 ? 1 : 0, 1, 0), b.tag, behind, e)
+        : quad(o, at, p(0, 0, nz > 0 ? 1 : 0), p(1, 0, nz > 0 ? 1 : 0), p(1, 1, nz > 0 ? 1 : 0), p(0, 1, nz > 0 ? 1 : 0), b.tag, behind, e);
+      continue;
+    }
     at = quad(o, at, p(0, 1, 0), p(1, 1, 0), p(1, 1, 1), p(0, 1, 1), b.tag, m, e);
     at = quad(o, at, p(0, 0, 0), p(1, 0, 0), p(1, 1, 0), p(0, 1, 0), b.tag, m, e);
     at = quad(o, at, p(0, 0, 1), p(1, 0, 1), p(1, 1, 1), p(0, 1, 1), b.tag, m, e);
     at = quad(o, at, p(0, 0, 0), p(0, 0, 1), p(0, 1, 1), p(0, 1, 0), b.tag, m, e);
     at = quad(o, at, p(1, 0, 0), p(1, 0, 1), p(1, 1, 1), p(1, 1, 0), b.tag, m, e);
   }
-  return o;
+  return o.subarray(0, at);
 }
 
 /** floats the figure takes: thirteen bones, six faces each; and room for what a character wears (up to twelve blocks);
