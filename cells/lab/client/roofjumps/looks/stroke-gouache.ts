@@ -305,11 +305,28 @@ export const strokeGouacheRules: StrokeRules = {
       lights.push(mk(off(scale(p0.side, -sg * wn * 0.32)), { width: wn * 0.26, col: skin ? mix(dark, tone, 0.55) : scale(dark, 0.8), mix2: 0, alpha: skin ? 0.55 : 0.85, dry: 0.2, key: `${key}/turn`, taper: [rt, rt * 1.5] }));
       return [body, lights];
     };
+    // (a hand in contact (closed on a hold, or planted): the sleeve ends hard at the wrist, and the hand is one compact, hard
+    // edged mark round what it holds, a thin dark line under it where it meets it: contact as the point of the picture)
+    const contact = { L: ['palmL', 'fingersL', 'tipsL'].some((k) => by.get(k)?.gripping || by.get(k)?.planted), R: ['palmR', 'fingersR', 'tipsR'].some((k) => by.get(k)?.gripping || by.get(k)?.planted) };
+    for (const n of ['L', 'R'] as const) {
+      const pa = by.get('palm' + n), fi = by.get('fingers' + n), ti = by.get('tips' + n); if (!contact[n] || !pa || !fi || !ti) continue;
+      chained.add(pa.name); chained.add(fi.name); chained.add(ti.name);
+      const skin = (palette[pa.mat - (pa.mat % 8)] ?? palette[0]) as V, sk = scale(mulv(skin, mix([0.92, 0.9, 0.94], T.sunlit, T.dk * 0.6)), 0.86), w = pa.width * 1.25;
+      const low = [pa.b, fi.b, ti.b].reduce((q, r) => (r[1] < q[1] ? r : q)), along = unit(pa.side), cl = scale(along, w * 0.75);
+      items.push({ d: Math.min(pa.dist, fi.dist, ti.dist) - 0.004, ms: [[
+        { layer: 0, kind: K.PULL + EDGE, a: sub(low, cl), b: add(low, cl), width: 0.022, col: scale(T.deep, 0.32), alpha: 0.85, dry: 0, rank: 1, key: `fig:contact${n}` },
+        { layer: 0, kind: K.PULL, a: pa.a, b: ti.b, path: [pa.b, fi.b], side: pa.side, width: w, col: sk, mix2: 0, alpha: 1, dry: 0, heart: 0.5, rank: 1, key: `fig:grip${n}`, taper: [0.006, 0.008] },
+      ]] });
+    }
     for (const n of ['L', 'R']) for (const [u, l] of [['upperArm', 'foreArm'], ['thigh', 'shin']]) {
       const pu = by.get(u + n), pl = by.get(l + n);
-      if (!pu || !pl || pu.mat !== pl.mat || pu.endOn > 0.45 || pl.endOn > 0.45) continue;
+      // (one gesture only while the joint is open: folded sharply (a tuck, a crouch) the two are two masses, painted apart)
+      if (!pu || !pl || pu.mat !== pl.mat || pu.endOn > 0.45 || pl.endOn > 0.45 || dot(unit(sub(pu.b, pu.a)), unit(sub(pl.b, pl.a))) < 0.15) continue;
       chained.add(pu.name); chained.add(pl.name);
-      items.push({ d: Math.max(pu.dist, pl.dist), ms: chain([pu, pl], `fig:${u}${n}+`) });
+      const ms = chain([pu, pl], `fig:${u}${n}+`);
+      // (a hand in contact: the sleeve ends hard at the wrist, no dry tail)
+      if (u === 'upperArm' && contact[n as 'L' | 'R']) for (const m of ms.flat()) { m.taper = [m.taper?.[0] ?? 0.02, 0.006]; m.dry = 0; }
+      items.push({ d: Math.max(pu.dist, pl.dist), ms });
     }
     { const to = by.get('torso'), pe = by.get('pelvis');
       if (to && pe) {

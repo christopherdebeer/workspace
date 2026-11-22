@@ -260,6 +260,11 @@ export function partsOf(bones: Bone[], eye: number[], sun: V, city: City): Part[
     if (kind === 'foreArm') {
       const h = b; for (const o of city.holdsNear(h[0], h[2], 0.6)) if (o.kind !== 'face') { const d = segDist(h, [o.ax, o.ay, o.az], [o.bx, o.by, o.bz]); if (d < 0.1) { gripping = true; break; } }
     }
+    // (a hand's parts: closed on a hold, or the palm planted on what's under it (a vault's box, a rail's top))
+    if (kind === 'palm' || kind === 'fingers' || kind === 'tips') {
+      for (const o of city.holdsNear(c[0], c[2], 0.6)) if (o.kind !== 'face') { const d = segDist(c, [o.ax, o.ay, o.az], [o.bx, o.by, o.bz]); if (d < 0.12) { gripping = true; break; } }
+      const under = city.heightAt(c[0], c[2]); if (!gripping && under > 0.05 && c[1] - under < 0.16 && c[1] - under > -0.04) planted = true;
+    }
     out.push({ name: bn.name, kind, mat: bn.mat ?? 0, a: add(a, scale(e, depth)), b: add(b, scale(e, depth)), side, toEye: e, width, length: len(sub(b, a)), endOn: Math.abs(dot(dir, e)), girth: Math.max(pw, qw) * 1.15, ground: kind === 'foot' ? city.heightAt(c[0], c[2]) : 0, sunSide: dot(side, sun), sunFront: dot(e, sun), planted, gripping, fwd: Z, dist: len(sub(eye as V, c)) - (/^worn:(shin|thigh|upperArm|foreArm|foot)/.test(bn.name) ? 0.08 : 0) });
   }
   return out;

@@ -239,3 +239,13 @@ explain each character. The work, in order:
     - a chain run past the ankle left a dry, streaky tail (now no extension past the end, a wetter exit);
     - the turned edge on bare skin read as a seam (now a soft half-tone).
   - Suite unchanged.
+- G2, first cut: contact as the point of the picture.
+  - A hand's parts know when they're closed on a hold or the palm is planted on what's under it.
+  - Then the sleeve ends hard at the wrist (no taper, no dry tail), and the hand is one compact, hard-edged mark round what it
+    holds, with a thin dark line under it where it meets it.
+  - Found:
+    - a sharply folded limb (a tuck) made a chain's edge pulls cross over (now a joint folded past ~80 degrees paints its two
+      parts apart);
+    - the planted test missed a palm a hand's thickness above the box.
+  - Not yet: the hang's shoulder-to-lip interval as its own mark; the far sleeve losing itself in the coat.
+  - Noticed: the older figure's coat (cloth quads) paints as lumpy dabs; the coat wants its quads as one garment mark.
