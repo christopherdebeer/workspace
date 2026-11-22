@@ -319,7 +319,8 @@ export class Renderer {
       solid: () => {
         gl.useProgram(this.dprog); gl.uniformMatrix4fv(this.u.duVP, false, vp); gl.uniform1i(this.u.dNoDetails, 1); gl.enable(gl.CULL_FACE);
         if (!bare) for (const c of this.built.values()) { gl.bindVertexArray(c.vao); gl.drawArrays(gl.TRIANGLES, 0, c.n); this.tris += c.n / 3; }
-        gl.bindVertexArray(this.fig.vao); gl.drawArrays(gl.TRIANGLES, 0, figN); gl.disable(gl.CULL_FACE);
+        // (the body claims no depth here: it's all marks, painted far to near (its rule), never a dark mask under them)
+        gl.disable(gl.CULL_FACE);
       },
     });
     gl.bindVertexArray(null);

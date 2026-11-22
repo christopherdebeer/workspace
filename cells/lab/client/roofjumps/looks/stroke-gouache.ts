@@ -278,36 +278,55 @@ export const strokeGouacheRules: StrokeRules = {
     return out;
   },
   figure(parts, palette, put, light) {
-    const T = tints(light), under: Mark[] = [], body: Mark[] = [], lights: Mark[] = [], accents: Mark[] = [];
-    for (const p of parts) {
+    // (all marks, no mask: the body claims no depth (render.ts), so each part is painted whole, far to near, its own body then
+    // its lit pull then its accents, the near limbs over the far; contact shadows first, on the ground)
+    const T = tints(light), ground: Mark[] = [], byPart: Mark[][] = [];
+    for (const p of [...parts].sort((x, y) => y.dist - x.dist)) {
+      const body: Mark[] = [], lights: Mark[] = [], accents: Mark[] = [], under = { push: (..._m: Mark[]) => 0 };
+      byPart.push(body, lights, accents);
       const col = (palette[p.mat] ?? palette[0]) as V, dark = mulv(col, mix([0.55, 0.57, 0.68], scale(T.deep, 0.8), T.dk)), lit = mulv(col, mix([1.05, 1.05, 1.05], T.sunlit, T.dk));
-      const front = smooth(-0.35, 0.45, p.sunFront), tone = mix(dark, lit, 0.25 + 0.35 * front), key = `fig:${p.name}`;
-      // (a little past each end, so the marks overlap at the joints and cover the body's depth whole)
+      const front = smooth(-0.35, 0.45, p.sunFront), tone = mix(dark, lit, 0.45 + 0.35 * front), key = `fig:${p.name}`;
+      // (a little past each end, so the marks overlap at the joints)
       const ext = scale(unit(sub(p.b, p.a)), Math.min(0.06, p.width * 0.35)), pa = sub(p.a, ext), pb = add(p.b, ext);
       const m = (o: Partial<Mark>): Mark => ({ layer: 0, kind: K.PULL, a: pa, b: pb, side: p.side, width: p.width * 1.2, col: tone, col2: mix(tone, lit, 0.35), mix2: 0.35, alpha: 1, dry: 0.2, heart: 0.25, rank: 1, key, ...o });
       // (the lit pull: narrower, on the sun's side of it, where its turned face can be seen)
-      const litPull = (k: number) => { if (front < 0.15 || Math.abs(p.sunSide) < 0.05) return; const off = scale(p.side, Math.sign(p.sunSide) * p.width * 0.25); lights.push(m({ a: add(pa, off), b: add(pb, off), width: p.width * k, col: lit, mix2: 0, alpha: 0.95, dry: 0.45, key: `${key}/lit` })); };
+      // (and the turned-away side: a narrow dark pull along the edge away from the sun, which models it as the mask once did
+      // all round)
+      const litPull = (k: number) => {
+        const sg = Math.sign(p.sunSide) || 1, rt = Math.min(p.width * 0.3, 0.05);
+        if (front > 0.1) { const off = scale(p.side, sg * p.width * 0.22); lights.push(m({ a: add(pa, off), b: add(pb, off), width: p.width * (k + 0.1), col: scale(lit, 1.06), mix2: 0, alpha: 0.9, dry: 0.5, key: `${key}/lit`, taper: [rt, rt * 1.5] })); }
+        const off2 = scale(p.side, -sg * p.width * 0.4); lights.push(m({ a: add(pa, off2), b: add(pb, off2), width: p.width * 0.28, col: scale(dark, 0.8), mix2: 0, alpha: 0.85, dry: 0.3, key: `${key}/turn`, taper: [rt, rt * 1.5] }));
+      };
       // (seen end-on, a limb's pull shortens to nothing: its mass as a dab, so the body's depth is covered)
       if (p.endOn > 0.45 && p.kind !== 'head') { const c = scale(add(p.a, p.b), 0.5), up = scale(unit(cross(p.side, p.toEye)), p.girth * 0.5); under.push(m({ kind: K.DAB, a: sub(c, up), b: add(c, up), width: p.girth * 1.25, col: scale(dark, 0.45), key: `${key}/endU` })); body.push(m({ kind: K.DAB, a: sub(c, scale(up, 0.85)), b: add(c, scale(up, 0.85)), width: p.girth * 1.05, key: `${key}/end` })); }
       switch (p.kind) {
-        case 'head': under.push(m({ width: p.width * 1.05, col: scale(dark, 0.6), mix2: 0, dry: 0, taper: [0.02, 0.02], key: `${key}/under` })); body.push(m({ kind: K.DAB, a: sub(p.a, scale(unit(sub(p.b, p.a)), p.length * 0.2)), b: add(p.b, scale(unit(sub(p.b, p.a)), p.length * 0.2)), width: p.width * 1.45, col: mix(tone, lit, 0.2), mix2: 0 })); break;
+        case 'head': {
+          // (a face, the skin, where the head faces the eye; the hair over the crown and round the back)
+          const skin = (palette[p.mat - (p.mat % 8)] ?? col) as V, d = unit(sub(p.b, p.a)), c = scale(add(p.a, p.b), 0.5), facing = dot(p.fwd, p.toEye);
+          const sk = mix(mulv(skin, mix([0.62, 0.6, 0.68], scale(T.deep, 0.85), T.dk)), mulv(skin, mix([1.04, 1.02, 1.0], T.sunlit, T.dk)), 0.4 + 0.45 * front);
+          body.push(m({ kind: K.DAB, a: sub(c, scale(d, p.length * 0.62)), b: add(c, scale(d, p.length * 0.55)), width: p.width * 1.25, col: sk, mix2: 0, key: `${key}/face` }));
+          const back = scale(p.fwd, -p.width * 0.28 * Math.max(0.2, facing)), hc = add(add(c, scale(d, p.length * 0.2)), back);
+          body.push(m({ kind: K.DAB, a: sub(hc, scale(d, p.length * (facing > 0.3 ? 0.35 : 0.6))), b: add(hc, scale(d, p.length * 0.55)), width: p.width * (facing > 0.3 ? 1.2 : 1.35), col: mix(tone, lit, 0.15), mix2: 0, key: `${key}/hair` }));
+          break;
+        }
         case 'pelvis': case 'torso':
           under.push(m({ width: p.width * 1.38, col: scale(dark, 0.45), mix2: 0, dry: 0.1, key: `${key}/under` }));
-          body.push(m({ heart: p.kind === 'torso' ? 0.7 : 0.4, taper: [0.06, 0.08] }));
-          litPull(0.5);
+          body.push(m({ heart: p.kind === 'torso' ? 0.7 : 0.4, taper: [p.width * 0.3, p.width * 0.35] }));
+          // (the pelvis lies across the body: its edges would be bands at the waist, so only the torso is modelled)
+          if (p.kind === 'torso') litPull(0.5);
           break;
         case 'foot': {
           under.push(m({ width: p.width * 1.45, col: scale(dark, 0.4), mix2: 0, dry: 0.05, key: `${key}/under` }));
           // (the shoe that bears weight loaded and dark, a small dark contact under it; the one in the air lighter, drier)
           body.push(m({ width: p.width * 1.25, col: p.planted ? scale(tone, 0.82) : mix(tone, lit, 0.4), dry: p.planted ? 0.05 : 0.45, heart: 0.5, taper: [0.03, 0.04] }));
-          if (p.planted) { const g = p.ground + 0.004, a: V = [p.a[0], g, p.a[2]], b: V = [p.b[0], g, p.b[2]]; accents.push({ layer: 0, kind: K.DAB, a, b, n: [0, 1, 0], width: p.girth * 1.7, col: scale(T.deep, 0.35), alpha: 0.55, rank: 1, key: `${key}/contact` }); }
+          if (p.planted) { const g = p.ground + 0.004, a: V = [p.a[0], g, p.a[2]], b: V = [p.b[0], g, p.b[2]]; ground.push({ layer: 0, kind: K.DAB, a, b, n: [0, 1, 0], width: p.girth * 1.7, col: scale(T.deep, 0.35), alpha: 0.55, rank: 1, key: `${key}/contact` }); }
           break;
         }
         case 'worn': body.push(m({ taper: [0.02, 0.04] })); break;
         default: {
           // (a limb: a pull from the joint, tapering toward the hand or the foot)
           under.push(m({ width: p.width * 1.45, col: scale(dark, 0.45), mix2: 0, dry: 0.15, key: `${key}/under`, taper: [0.03, 0.05] }));
-          body.push(m({ width: p.width * 1.22, heart: 0.15, taper: [0.03, 0.06] }));
+          body.push(m({ width: p.width * 1.22, heart: 0.15, taper: [p.width * 0.4, p.width * 0.5] }));
           litPull(0.45);
           if (p.kind === 'foreArm') {
             // (the hand: closed and darker on a hold; open, lighter, a little larger reaching)
@@ -317,7 +336,7 @@ export const strokeGouacheRules: StrokeRules = {
         }
       }
     }
-    for (const m of [...under, ...body, ...lights, ...accents]) put(m);
+    for (const m of [...ground, ...byPart.flat()]) put(m);
   },
 };
 

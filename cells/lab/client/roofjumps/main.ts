@@ -268,7 +268,7 @@ function asked(t: number): Input {
     return { x: 0, z: moving ? (takeoff === 'step' ? 0.35 : 1) : 0, jump: Math.abs(t - tapAt) < 0.5 / 120 };
   }
   // (just taken control from the menu: off the ledge, out over the city, before the hand's own)
-  if (menu.launch > 0 && t < menu.launch && Math.hypot(stick.x, stick.y) < 0.2) return { x: Math.sin(menu.heading), z: Math.cos(menu.heading), jump: false };
+  if (menu?.launch > 0 && t < menu.launch && Math.hypot(stick.x, stick.y) < 0.2) return { x: Math.sin(menu.heading), z: Math.cos(menu.heading), jump: false };
   let sx = stick.x + k('KeyD', 'ArrowRight') - k('KeyA', 'ArrowLeft'), sy = stick.y + k('KeyS', 'ArrowDown') - k('KeyW', 'ArrowUp');
   const l = Math.hypot(sx, sy); if (l > 1) { sx /= l; sy /= l; }
   const fx = Math.sin(yaw), fz = Math.cos(yaw), j = jump; jump = false;

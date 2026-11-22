@@ -207,7 +207,10 @@ export interface Part { name: string; kind: string; mat: number; a: V; b: V; sid
   /** how end-on it's seen (0: side on … 1: along its length), and its girth (what's seen of it end-on) */
   endOn: number; girth: number;
   /** (a foot) the height of what's under it */
-  ground: number; sunSide: number; sunFront: number; planted: boolean; gripping: boolean }
+  ground: number; sunSide: number; sunFront: number; planted: boolean; gripping: boolean;
+  /** the way the bone faces (its own z: the face, the chest, the toes); how far its middle is from the eye (for painting far
+   * to near: its marks are brought forward by its thickness, its middle isn't) */
+  fwd: V; dist: number }
 
 /** The runner's bones as parts, from the pose and the eye. */
 export function partsOf(bones: Bone[], eye: number[], sun: V, city: City): Part[] {
@@ -229,7 +232,7 @@ export function partsOf(bones: Bone[], eye: number[], sun: V, city: City): Part[
     if (kind === 'foreArm') {
       const h = b; for (const o of city.holdsNear(h[0], h[2], 0.6)) if (o.kind !== 'face') { const d = segDist(h, [o.ax, o.ay, o.az], [o.bx, o.by, o.bz]); if (d < 0.1) { gripping = true; break; } }
     }
-    out.push({ name: bn.name, kind, mat: bn.mat ?? 0, a: add(a, scale(e, depth)), b: add(b, scale(e, depth)), side, toEye: e, width, length: len(sub(b, a)), endOn: Math.abs(dot(dir, e)), girth: Math.max(pw, qw) * 1.15, ground: kind === 'foot' ? city.heightAt(c[0], c[2]) : 0, sunSide: dot(side, sun), sunFront: dot(e, sun), planted, gripping });
+    out.push({ name: bn.name, kind, mat: bn.mat ?? 0, a: add(a, scale(e, depth)), b: add(b, scale(e, depth)), side, toEye: e, width, length: len(sub(b, a)), endOn: Math.abs(dot(dir, e)), girth: Math.max(pw, qw) * 1.15, ground: kind === 'foot' ? city.heightAt(c[0], c[2]) : 0, sunSide: dot(side, sun), sunFront: dot(e, sun), planted, gripping, fwd: Z, dist: len(sub(eye as V, c)) });
   }
   return out;
 }

@@ -123,3 +123,17 @@ thresholds to turn checks green. The work, in order:
   - big near walls are fully covered (broad pulls plus scatter);
   - parapets and the roof underfoot are about a third covered;
   - past the nine near chunks it's bare paper, with the fills doing all the work there.
+- The figure in stroke-gouache, unmasked:
+  - the body no longer claims depth in the stroke pass;
+  - the dark under-stroke round every part is gone (it was there to cover the body's depth, and was what made the figure read
+    black);
+  - parts are painted far to near (by each bone's own middle, not its forward-brought marks, or the hood covered the face),
+    each part's body, lit pull and accents together.
+- Pose-sheet iterations (`sheet=run,land,hang&side=70&zoom=3`, the teen from the front at `side=200`):
+  1. a face (skin, toward where the head faces) with the hair over the crown and round the back, not a black disc;
+  2. lighter overall (tone 0.45 + 0.35 of the sun's side), a wider lit pull, and a narrow dark pull on the turned-away edge to
+     model the form; rounder tapers at the joints (by the part's width);
+  3. sorted by the bone's middle, so the hood no longer paints over the face; the pelvis gets no edge pulls (it lies across
+     the body, so they were bands at the waist).
+- Fixed: `t=` with `auto` crashed the page (the input read `menu.launch` before the menu existed).
+- The still tool takes `W=`/`H=` for its size.
