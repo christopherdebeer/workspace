@@ -192,3 +192,8 @@ thresholds to turn checks green. The work, in order:
   - Cost: +0.2 ms a fixed step (desktop). A `long-drop` scene (39 scenes; 195/198 checks).
   - Filmed: the short drop opens the skirt out and back like the reference's leaps. The long drop is taken as a dive, not the
     reference's upright glide (movement, not cloth: noted).
+- A new reference, `ychive-hands` (`"for": "hands"`): "How to animate hands", a tutorial by Ju Neng Binggui shared by YCHive.
+  - Contents: finger segments with the knuckle a segment into the palm; fingers as cylinders folding into a fist that is a box
+    of planes; the thumb's root a wedge deep in the palm; poses with their segments overlaid; the thumb two knuckles, not three.
+  - For the runner's hands, which are dabs now: open reaching, closed on a hold, palm planted.
+  - Manifest only. `node devtools/refs.mjs roofjumps ychive-hands` remakes the sheet and strips.
