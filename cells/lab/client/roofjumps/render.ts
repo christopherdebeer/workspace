@@ -81,10 +81,12 @@ void main() {
   vec3 p = aPos + uL * max(0.0, t) + uPlane.xyz * 0.015; vW = p; gl_Position = uVP * vec4(p, 1.0);
 }`;
 // (depth from the sun, for the shadow map)
+// (also the strokes' solid depth: there the details (dressing.ts) claim none (`uNoDetails`), as Switchback's things don't: their
+// marks are painted over what's behind them, never holes of paper where a mark didn't reach)
 const DVS = `#version 300 es
-in vec3 aPos; uniform mat4 uVP; void main() { gl_Position = uVP * vec4(aPos, 1.0); }`;
+in vec3 aPos; in vec3 aNor; in float aTag; uniform mat4 uVP; flat out float vTag; void main() { vTag = aTag; gl_Position = uVP * vec4(aPos, 1.0); }`;
 const DFS = `#version 300 es
-precision mediump float; out vec4 o; void main() { o = vec4(1.0); }`;
+precision mediump float; flat in float vTag; uniform int uNoDetails; out vec4 o; void main() { if (uNoDetails == 1 && vTag > 14.5 && vTag < 25.5) discard; o = vec4(1.0); }`;
 const CFS = `#version 300 es
 precision highp float; in vec3 vW; uniform vec3 uMin; uniform vec3 uMax; uniform vec4 uShade; out vec4 o;
 void main() { if (any(lessThan(vW, uMin)) || any(greaterThan(vW, uMax))) discard; o = uShade; }`;
@@ -134,7 +136,7 @@ export class Renderer {
     this.prog = this.program(VS, FS); this.sprog = this.program(SVS, SFS);
     for (const n of ['uVP', 'uEye', 'uFog', 'uFar', 'uFogNear', 'uLook', 'uSun', 'uMask', 'uFigure']) this.u[n] = gl.getUniformLocation(this.prog, n);
     this.kprog = this.program(KVS, KFS, ['aPos']); for (const n of ['uInv', 'uTop', 'uHor', 'uClouds']) this.u['k' + n] = gl.getUniformLocation(this.kprog, n);
-    this.dprog = this.program(DVS, DFS, ['aPos']); this.u.duVP = gl.getUniformLocation(this.dprog, 'uVP');
+    this.dprog = this.program(DVS, DFS, ['aPos', 'aNor', 'aTag']); this.u.duVP = gl.getUniformLocation(this.dprog, 'uVP'); this.u.dNoDetails = gl.getUniformLocation(this.dprog, 'uNoDetails');
     for (const n of ['uShadowMap', 'uSunVP', 'uShadowOn']) this.u[n] = gl.getUniformLocation(this.prog, n);
     // (the sun's shadow map: a depth texture compared on lookup, always bound so a look can ask whether or not it's drawn)
     this.smap = gl.createTexture()!; gl.bindTexture(gl.TEXTURE_2D, this.smap);
@@ -188,7 +190,7 @@ export class Renderer {
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.sfb); gl.viewport(0, 0, SMAP, SMAP); gl.disable(gl.SCISSOR_TEST);
     gl.clear(gl.DEPTH_BUFFER_BIT); gl.enable(gl.DEPTH_TEST); gl.disable(gl.CULL_FACE); gl.colorMask(false, false, false, false);
     gl.enable(gl.POLYGON_OFFSET_FILL); gl.polygonOffset(1.5, 3);
-    gl.useProgram(this.dprog); gl.uniformMatrix4fv(this.u.duVP, false, view);
+    gl.useProgram(this.dprog); gl.uniformMatrix4fv(this.u.duVP, false, view); gl.uniform1i(this.u.dNoDetails, 0);
     for (const c of this.built.values()) { gl.bindVertexArray(c.vao); gl.drawArrays(gl.TRIANGLES, 0, c.n); }
     gl.bindVertexArray(this.fig.vao); gl.drawArrays(gl.TRIANGLES, 0, figN);
     gl.disable(gl.POLYGON_OFFSET_FILL); gl.colorMask(true, true, true, true); gl.bindFramebuffer(gl.FRAMEBUFFER, null);
@@ -315,7 +317,7 @@ export class Renderer {
     this.strokes.draw({
       vp, inv: invert(vp), light, eye, far: this.radius * CHUNK, rules, city: this.city, bones, palette: this.palette, sunVP, sunC, detail: this.detail, bare,
       solid: () => {
-        gl.useProgram(this.dprog); gl.uniformMatrix4fv(this.u.duVP, false, vp); gl.enable(gl.CULL_FACE);
+        gl.useProgram(this.dprog); gl.uniformMatrix4fv(this.u.duVP, false, vp); gl.uniform1i(this.u.dNoDetails, 1); gl.enable(gl.CULL_FACE);
         if (!bare) for (const c of this.built.values()) { gl.bindVertexArray(c.vao); gl.drawArrays(gl.TRIANGLES, 0, c.n); this.tris += c.n / 3; }
         gl.bindVertexArray(this.fig.vao); gl.drawArrays(gl.TRIANGLES, 0, figN); gl.disable(gl.CULL_FACE);
       },

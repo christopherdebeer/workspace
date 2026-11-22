@@ -65,3 +65,27 @@ thresholds to turn checks green. The work, in order:
 - Noted for item 4: gouache's paint thickens wires into heavy black zigzags; thin things need their own stroke rule.
 - Noted: street poles stand 1.3 m out in narrow streets and are draw-only (the runner goes through them). They could become
   obstacles, or holds (a pole to swing round), once contact goes by shape (critique C).
+
+### Item 4 begins: stroke-gouache, by Switchback's lessons
+
+- Found and fixed a regression from the first visual pass: in stroke-gouache, every detail claimed depth but had no paint, so
+  poles, awnings and window rows were holes of paper. Following Switchback's rule for things, details now claim no depth in the
+  stroke pass (render.ts `uNoDetails`; they still cast sun shadows). Each is all marks:
+  - a window row, a pull a pane (lit ones warm, glowing at dusk);
+  - anything thin, one line along it; a wire, one line a span;
+  - anything with faces, its faces filled; rust, a wash.
+- Fixed an older bug: bars (railing posts, ladder sides) were always painted as horizontal lines, so posts showed as paper. They
+  now follow their longest axis, and stay out to mid-distance (rank 0.62).
+- A survey of Switchback's painter (client/switchback/paint.ts, static/switchback.md §Painted) against ours gave this plan, in
+  order:
+  1. no screen-locked terms in the stroke shader (dry-lift grain and colour grain use gl_FragCoord, so they crawl over moving
+     marks): anchor grain to the mark's own coordinates;
+  2. a pixel floor and ceiling on mark width (Switchback: 2.4·dpr px minimum, 0.19 of the height maximum), and widths that turn
+     toward the eye with distance, so lips, pipes, wires and poles never thin to nothing;
+  3. a lift along the view ray in place of the normal bias;
+  4. far marks shrink away rather than fade, and the survivors grow; premultiplied blending, chunks painted far to near;
+  5. a stamp atlas (bristle lanes, ragged edges, paint piled at the lift), with stamps chosen per subject;
+  6. four value bands a stroke, mixed with a neighbouring band, a tint a stroke, stepped haze;
+  7. scatter by coverage in two passes (masses, then detail) in place of the opaque fill and a few pulls, sized by distance from
+     the line the runner is on. Keep our sun-shadow passages, which Switchback lacks.
+- Known: a blade sign's face near the camera on seed 1's street (from=0.5,36) shows as paper. To look at.

@@ -18,8 +18,9 @@
  *            a hold); the bearing shoe loaded, a small dark contact under it
  */
 import type { LookDef } from '../looks';
-import type { Box } from '../city';
+import type { Box, Detail } from '../city';
 import { TAG } from '../city';
+import { DRESS } from '../dressing';
 import type { Light, Mark, StrokeRules, V } from '../strokes';
 import { EDGE, K, LAYER, add, boxSeed, cross, dot, lipsOf, mix, onLine, planesOf, rng, scale, smooth, sub, unit, hashKey } from '../strokes';
 
@@ -38,6 +39,22 @@ const baseOf = (b: Box | null): V => {
     case TAG.STAIR: return scale(concrete(boxSeed(b)), 0.9);
     case TAG.BAR: return [0.24, 0.22, 0.24];
     default: return concrete(boxSeed(b));
+  }
+};
+
+/** the details' colours (dressing.ts tags), as the plain looks have them: a sign, an awning or a cloth one of a few by its seed */
+const dressCol = (b: Box): V => {
+  const k = b.seed ?? 0.5, pick: V = k < 0.25 ? [0.72, 0.28, 0.24] : k < 0.5 ? [0.24, 0.42, 0.62] : k < 0.75 ? [0.86, 0.72, 0.3] : [0.36, 0.56, 0.4];
+  switch (b.tag) {
+    case TAG.PIPE: return [0.42, 0.42, 0.4];
+    case TAG.SIGN: case TAG.AWNING: return pick;
+    case TAG.CLOTH: return scale(pick, 1.15);
+    case TAG.WIRE: return [0.12, 0.12, 0.13];
+    case TAG.POLE: return [0.38, 0.36, 0.34];
+    case TAG.NEON: return k < 0.5 ? [1.0, 0.35, 0.6] : [0.35, 0.9, 1.0];
+    case TAG.RUST: return [0.52, 0.32, 0.22];
+    case TAG.FURNITURE: return k < 0.5 ? [0.75, 0.2, 0.18] : [0.3, 0.32, 0.36];
+    default: return baseOf(b);
   }
 };
 /** the light as a painter masses it, from the frame's: in the sun or not (the edge between wider when it's low), a warm
@@ -75,6 +92,52 @@ function pulls(put: (m: Mark) => void, key: string, o: V, t: V, up: V, n: V, w: 
   }
 }
 
+/** one detail's marks (see `city`) */
+function paintDetail(d: Detail, put: (m: Mark) => void, keeps: (rank: number) => boolean, T: ReturnType<typeof tints>): void {
+  const key = `det:${d.kind}:${d.pts[0].map((v) => v.toFixed(2)).join(',')}`, r = rng(hashKey(key)), n: V = [d.n[0], 0, d.n[1]];
+  if (d.kind === 'windows') {
+    // (each pane: a pull across it, a little out from the wall; dark ones the sky's cool in them, lit ones warm, and at dusk
+    // their own light)
+    const [p, q] = d.pts, cnt = d.count ?? 1, u = unit(sub(q, p)), slot = d.w / cnt, pw = Math.min(1.1, slot * 0.62), y0 = p[1] + 0.15, y1 = p[1] + d.h - 0.1;
+    const lit = new Set<number>(); for (const i of Array.from({ length: cnt }, (_, i) => i).sort(() => r() - 0.5).slice(0, d.lit ?? 0)) lit.add(i);
+    for (let i = 0; i < cnt; i++) {
+      const c0 = add(add(p, scale(u, slot * (i + 0.5))), scale(n, 0.03)), a = add(c0, scale(u, -pw / 2)), b = add(c0, scale(u, pw / 2)), my = (y0 + y1) / 2;
+      const dark: V = mix(mulv([0.24, 0.27, 0.32], T.shade(n)), [0.4, 0.44, 0.52], 0.25 * (1 - T.dk));
+      const col: V = lit.has(i) ? mix(mix(dark, [0.78, 0.66, 0.46], 0.45), [1.0, 0.8, 0.5], T.dk) : scale(dark, 1 - 0.3 * T.dk);
+      const lo: V = [Math.min(a[0], b[0]) - 0.02, y0, Math.min(a[2], b[2]) - 0.02], hi: V = [Math.max(a[0], b[0]) + 0.02, y1, Math.max(a[2], b[2]) + 0.02];
+      put({ layer: LAYER.ACCENT, kind: K.PULL, a: [a[0], my, a[2]], b: [b[0], my, b[2]], n, width: (y1 - y0) * 1.2, col, col2: scale(col, 1.12), mix2: 0.3, alpha: 1, dry: 0.15 + r() * 0.2, heart: r(), rank: 0.42, key: `${key}/${i}`, clip: [lo, hi], taper: [0.05, 0.12] });
+    }
+    return;
+  }
+  if (d.kind === 'wire') {
+    // (a wire: one line a span, pole to sag to pole, not a mark a piece)
+    if (!keeps(DETAIL)) return;
+    for (let i = 0; i + 1 < d.pts.length; i++) put({ layer: LAYER.ACCENT, kind: K.PULL + EDGE, a: d.pts[i], b: d.pts[i + 1], width: 0.03, col: [0.13, 0.13, 0.15], alpha: 0.9, dry: 0.2, rank: DETAIL, key: `${key}/${i}`, taper: [0.02, 0.02] });
+    return;
+  }
+  const small = d.kind === 'aerial' || d.kind === 'dish' || d.kind === 'laundry' || d.kind === 'rust' || d.kind === 'bin', rank = small ? DETAIL : 0.42;
+  if (!keeps(rank)) return;
+  DRESS[d.kind](d).forEach((b, j) => {
+    if (b.tag === TAG.RUNGS) return;
+    const col = dressCol(b), k = `${key}/${j}`, ext = [b.x1 - b.x0, b.y1 - b.y0, b.z1 - b.z0], order = [0, 1, 2].sort((i, l) => ext[l] - ext[i]);
+    const glow = b.tag === TAG.NEON;
+    if (b.flat) {
+      // (a streak: a wash down the face)
+      const cx = (b.x0 + b.x1) / 2, cz = (b.z0 + b.z1) / 2, fn: V = [b.flat[0], 0, b.flat[1]];
+      put({ layer: LAYER.ACCENT, kind: K.WASH, a: [cx, b.y1, cz], b: [cx, b.y0, cz], n: fn, width: Math.max(ext[0], ext[2]), col: scale(T.tone(col, fn), 0.9), alpha: 0.55, rank, key: k, taper: [0.05, (b.y1 - b.y0) * 0.5] });
+      return;
+    }
+    if (ext[order[1]] < 0.2) {
+      // (thin: one line along it, its width its own)
+      const m: V = [(b.x0 + b.x1) / 2, (b.y0 + b.y1) / 2, (b.z0 + b.z1) / 2], ax = order[0], half = ext[ax] / 2;
+      const a: V = [...m] as V, e: V = [...m] as V; a[ax] -= half; e[ax] += half;
+      put({ layer: LAYER.ACCENT, kind: K.PULL + EDGE, a, b: e, width: Math.max(0.02, ext[order[1]]), col: glow ? col : scale(mulv(col, T.shade(n)), 0.85), alpha: 1, dry: 0.3, rank, key: k });
+      return;
+    }
+    for (const p of planesOf(b, [])) put(fillOf(`${k}/${p.key}`, p.o, p.t, p.up, p.n, p.w, p.h, glow ? col : T.tone(col, p.n), p.clip, rank, K.FILL, LAYER.ACCENT));
+  });
+}
+
 export const strokeGouacheRules: StrokeRules = {
   paper: [0.93, 0.9, 0.84], grain: 1, haze: [0.77, 0.74, 0.83], hazeNear: 0.12, fadeToPaper: 0, sun: DAY_SUN,
   skyField: { top: [0.58, 0.56, 0.7], horizon: [0.89, 0.83, 0.84] },
@@ -95,9 +158,11 @@ export const strokeGouacheRules: StrokeRules = {
       const small = !!b.fixture;
       const base = baseOf(b), big = (b.x1 - b.x0) * (b.z1 - b.z0) > 12 && b.y1 - b.y0 > 2, rank = small ? DETAIL : 1;
       if (b.tag === TAG.BAR) {
-        const alongX = b.x1 - b.x0 >= b.z1 - b.z0, y = (b.y0 + b.y1) / 2, mx = (b.x0 + b.x1) / 2, mz = (b.z0 + b.z1) / 2;
-        const a: V = alongX ? [b.x0, y, mz] : [mx, y, b.z0], e: V = alongX ? [b.x1, y, mz] : [mx, y, b.z1];
-        put({ layer: LAYER.EDGE, kind: K.PULL + EDGE, a, b: e, width: Math.max(0.06, Math.min(b.y1 - b.y0, alongX ? b.z1 - b.z0 : b.x1 - b.x0)), col: mulv(base, T.shade([0, 0, 1])), alpha: 1, dry: 0.3, rank: small ? DETAIL : 0.75, key: `bar:${a.join(',')}` });
+        // (along its longest axis, whichever: a rail across, a post or a ladder's side up)
+        const ext = [b.x1 - b.x0, b.y1 - b.y0, b.z1 - b.z0], ax = ext.indexOf(Math.max(...ext)), m: V = [(b.x0 + b.x1) / 2, (b.y0 + b.y1) / 2, (b.z0 + b.z1) / 2];
+        const a: V = [...m] as V, e: V = [...m] as V; a[ax] -= ext[ax] / 2; e[ax] += ext[ax] / 2;
+        const thick = Math.min(...ext.filter((_, i) => i !== ax).map((v) => Math.max(v, 0)), 1e9), wide = Math.max(...ext.filter((_, i) => i !== ax));
+        put({ layer: LAYER.EDGE, kind: K.PULL + EDGE, a, b: e, width: Math.max(0.04, Math.min(wide, Math.max(thick, 0.04))), col: mulv(base, T.shade([0, 0, 1])), alpha: 1, dry: 0.3, rank: small ? 0.62 : 0.75, key: `bar:${a.join(',')}` });
         continue;
       }
       const near = city.boxesNear((b.x0 + b.x1) / 2, (b.z0 + b.z1) / 2, Math.max(b.x1 - b.x0, b.z1 - b.z0) / 2 + 1);
@@ -131,6 +196,11 @@ export const strokeGouacheRules: StrokeRules = {
         if (m > 0.2 && keeps(SHADOW)) put(fillOf(`${p.key}/shade`, p.o, p.t, p.up, p.n, p.w, p.h, scale(mulv(pb, T.shade(p.n)), 0.92), p.clip, SHADOW, K.SHADE, LAYER.SHADOW, { col2: mulv(pb, T.deep), mix2: 0.35 }));
       }
     }
+    // (the details (dressing.ts), painted as Switchback paints its things: they claim no depth (render.ts), so each is all
+    // marks, laid over what's behind it. A window row a mark a pane (lit or not by its dice; lit glows as the light goes);
+    // anything thin (a wire, a pole, a rail, a bundle of pipes) one line along it; anything with faces, its faces filled; rust
+    // a wash down the wall)
+    if (keeps(0.42)) for (const d of c.details) paintDetail(d, put, keeps, T);
     // (lips: every one a hand can catch keeps its dark line on the roof; near, the full coping too)
     for (const l of lipsOf(c, city)) {
       if (!l.box || !lipped.has(l.box.tag) || l.box.y1 - l.box.y0 < 0.5) continue;
