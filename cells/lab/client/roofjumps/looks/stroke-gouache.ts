@@ -389,12 +389,29 @@ export const strokeGouacheRules: StrokeRules = {
       if (p.endOn > 0.45 && p.kind !== 'head') { const c = scale(add(p.a, p.b), 0.5), up = scale(unit(cross(p.side, p.toEye)), p.girth * 0.5); under.push(m({ kind: K.DAB, a: sub(c, up), b: add(c, up), width: p.girth * 1.25, col: scale(dark, 0.45), key: `${key}/endU` })); body.push(m({ kind: K.DAB, a: sub(c, scale(up, 0.85)), b: add(c, scale(up, 0.85)), width: p.girth * 1.05, key: `${key}/end` })); }
       switch (p.kind) {
         case 'head': {
-          // (a face, the skin, where the head faces the eye; the hair over the crown and round the back)
-          const skin = (palette[p.mat - (p.mat % 8)] ?? col) as V, d = unit(sub(p.b, p.a)), c = scale(add(p.a, p.b), 0.5), facing = dot(p.fwd, p.toEye);
+          // (the head in strokes, not dabs: the face a pull down its plane (forehead to chin) with a darker plane on the shadow
+          // side of cheek and jaw; the hair a broad stroke bent over the crown, a mass down the back, fringe strokes toward the
+          // brow where the face is seen, a lock down each side, one lighter stroke for its sheen and one darker for its depth)
+          const skin = (palette[p.mat - (p.mat % 8)] ?? col) as V, d = unit(sub(p.b, p.a)), c = scale(add(p.a, p.b), 0.5), facing = dot(p.fwd, p.toEye), L = p.length, w = p.width;
+          const fw = unit(sub(p.fwd, scale(d, dot(p.fwd, d)))), bk = scale(fw, -1), sd = unit(p.side), sg = Math.sign(p.sunSide) || 1;
           const sk = mix(mulv(skin, mix([0.62, 0.6, 0.68], scale(T.deep, 0.85), T.dk)), mulv(skin, mix([1.04, 1.02, 1.0], T.sunlit, T.dk)), 0.4 + 0.45 * front);
-          body.push(m({ kind: K.DAB, a: sub(c, scale(d, p.length * 0.62)), b: add(c, scale(d, p.length * 0.55)), width: p.width * 1.25, col: sk, mix2: 0, key: `${key}/face` }));
-          const back = scale(p.fwd, -p.width * 0.28 * Math.max(0.2, facing)), hc = add(add(c, scale(d, p.length * 0.2)), back);
-          body.push(m({ kind: K.DAB, a: sub(hc, scale(d, p.length * (facing > 0.3 ? 0.35 : 0.6))), b: add(hc, scale(d, p.length * 0.55)), width: p.width * (facing > 0.3 ? 1.2 : 1.35), col: mix(tone, lit, 0.15), mix2: 0, key: `${key}/hair` }));
+          const at = (u: number, v: number, f: number): V => add(add(add(c, scale(d, L * u)), scale(sd, w * v)), scale(fw, w * f));
+          const st = (a: V, b: V, width: number, colr: V, key2: string, o: Partial<Mark> = {}): Mark => ({ layer: 0, kind: K.PULL, a, b, side: sd, width, col: colr, mix2: 0, alpha: 1, dry: 0.15, heart: 0.4, rank: 1, key: `${key}/${key2}`, taper: [width * 0.25, width * 0.45], ...o });
+          // (the face, where it's seen)
+          if (facing > -0.35) {
+            body.push(st(at(-0.5, 0, 0.18), at(0.28, 0, 0.18), w * 0.82, sk, 'face', { side: sd }));
+            body.push(st(at(-0.42, -sg * 0.27, 0.08), at(0.15, -sg * 0.3, 0.05), w * 0.3, mix(sk, scale(sk, 0.72), 0.7), 'cheek', { alpha: 0.85 }));
+          }
+          const hair = tone, hl = add(mix(tone, lit, 0.6), [0.06, 0.05, 0.05]), hd = scale(tone, 0.7);
+          // (the crown: one broad stroke bent over the top, side to side; the back of the head, a mass down it)
+          body.push(st(at(0.12, -0.55, -0.05), at(0.12, 0.55, -0.05), L * 0.5, hair, 'crown', { path: [at(0.52, 0, -0.12)], heart: 0.5 }));
+          body.push(st(at(0.45, 0, -0.2), at(-0.32, 0, -0.42), w * 0.85, hair, 'back', { side: sd }));
+          // (fringe toward the brow and a lock down each side, where the face is seen)
+          if (facing > -0.2) for (const [k, v] of [[0, -0.22], [1, 0.05], [2, 0.3]] as const) lights.push(st(at(0.48, v * 0.6, 0.0), at(0.24, v, 0.42), w * 0.22, k === 1 ? hl : hair, `fringe${k}`, { side: d }));
+          for (const v of [-0.48, 0.48]) lights.push(st(at(0.3, v, 0.05), at(-0.18, v * 1.05, -0.05), w * 0.2, hair, `lock${v > 0 ? 'r' : 'l'}`, { side: fw }));
+          // (its sheen and its depth)
+          lights.push(st(at(0.42, sg * 0.15, -0.05), at(0.1, sg * 0.42, -0.25), w * 0.16, hl, 'sheen', { alpha: 0.8, dry: 0.45 }));
+          lights.push(st(at(0.2, -sg * 0.2, -0.3), at(-0.25, -sg * 0.1, -0.45), w * 0.18, hd, 'depth', { alpha: 0.8 }));
           break;
         }
         case 'pelvis': case 'torso':
@@ -458,17 +475,6 @@ export const strokeGouacheRules: StrokeRules = {
         det(ft.dist, [{ layer: 0, kind: K.PULL + EDGE, a: add(ft.a, down), b: add(ft.b, down), width: 0.016, col: sole, alpha: 0.9, dry: 0.1, rank: 1, key: `fig:sole${n}` }]);
       }
     }
-    // (hair: a sheen arcing over the crown, and two strands swept back, in the hair's own colour)
-    { const hd = by.get('head');
-      if (hd) {
-        const col = (palette[hd.mat] ?? palette[0]) as V, lit = mulv(col, mix([1.0, 1.0, 1.0], T.sunlit, T.dk)), d = unit(sub(hd.b, hd.a)), c = scale(add(hd.a, hd.b), 0.5), back = scale(hd.fwd, -1), s = unit(hd.side), w = hd.width, L = hd.length;
-        // (dark hair takes a sheen; pale hair (white, grey) a darker strand does the work)
-        const pale = col[0] * 0.3 + col[1] * 0.59 + col[2] * 0.11 > 0.45, sheen = pale ? scale(col, 0.72) : add(scale(lit, 1.0), [0.16, 0.15, 0.15]), deep = scale(col, pale ? 0.62 : 0.6);
-        det(hd.dist - 0.001, [
-          { layer: 0, kind: K.PULL, a: add(add(c, scale(d, L * 0.4)), scale(s, -w * 0.32)), b: add(add(c, scale(d, L * 0.4)), scale(s, w * 0.32)), path: [add(add(c, scale(d, L * 0.6)), scale(back, w * 0.12))], side: d, width: 0.02, col: sheen, mix2: 0, alpha: 0.5, dry: 0.6, rank: 1, key: 'fig:sheen', taper: [0.01, 0.02] },
-          { layer: 0, kind: K.PULL, a: add(add(c, scale(d, L * 0.52)), scale(back, w * 0.1)), b: add(add(c, scale(back, w * 0.5)), scale(d, -L * 0.08)), path: [add(add(c, scale(d, L * 0.35)), scale(back, w * 0.42))], side: s, width: 0.012, col: deep, mix2: 0, alpha: 0.55, dry: 0.4, rank: 1, key: 'fig:strand', taper: [0.004, 0.02] },
-        ]);
-      } }
     // (a skirt's pleats: a fine line down each panel of cloth worn as bottoms; not a coat)
     for (const q of parts) if (q.grid && q.mat % 8 === 3) {
       const { dark } = tonesOf(q);
