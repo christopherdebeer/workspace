@@ -155,3 +155,16 @@ thresholds to turn checks green. The work, in order:
   - the skirt also flares: belled by the fall, kicked out at a landing.
   - Filmed on drop-rebound: it trails back on the run, bells from the drop, is widest at the landing; the ponytail streams.
   - Suite unchanged (determinism exact; she makes 6 of 6 leaps; no pose misses).
+- Hair, skirts and other loose attachments:
+  - chains (`segs`): hair and a scarf's end are links, each swinging from the end of the one before;
+  - rings (`ring`): a skirt or coat is panels round the hips, each splayed to the hem, coupled to its neighbours (a hem that
+    ripples rather than a fringe), pushed out by a lifting thigh, splayed further by the flare;
+  - before moving (held poses, first frames) a loose piece hangs where rest and gravity balance (upside down the ponytail now
+    hangs down).
+  - The schoolgirl: 8-panel skirt; hair gathered at the crown and a 3-link ponytail.
+  - The others: the slight figure's ponytail (3 links) and scarf (2); the older figure's coat skirt (6 stiff panels); the
+    child's bag (a stiff bounce).
+  - The figure buffer holds 32 worn blocks a character (was 12).
+  - The pose check doesn't hold loose pieces to the ground (it flagged her ponytail through the floor at a held flip apex).
+  - The skeleton test counts links and panels.
+  - Suite: unchanged; 0 pose misses.

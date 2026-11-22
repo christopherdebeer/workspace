@@ -659,7 +659,7 @@ console.log('roofjumps: ok');
       r.step(1 / 120, { x: 0, z: 1, jump: false }); rig.update(1 / 120, r);
       const bones = rig.bones(r); frames++;
       assert.ok(bones.every((o) => o.m.every(Number.isFinite)), `${c.name}: finite`);
-      assert.equal(bones.length, 13 + c.wears.length, `${c.name}: its skeleton and what it wears`);
+      assert.equal(bones.length, 13 + c.wears.reduce((n, w) => n + (w.hang?.ring ?? w.hang?.segs ?? 1), 0), `${c.name}: its skeleton and what it wears (a chain's links, a ring's panels)`);
       for (const [s2, key] of [['L', 'fl'], ['R', 'fr']]) { const f = r.reach[key]; if (!f) continue; const t = bones.find((o) => o.name === 'thigh' + s2).m; if (Math.hypot(f[0] - t[12], f[1] + b.sole - t[13], f[2] - t[14]) > (b.thigh + b.shin) * 1.05) stretched++; }
     }
     assert.ok(stretched < frames * 0.06, `${c.name}: its feet where its legs reach (${stretched} of ${frames} frames out)`);

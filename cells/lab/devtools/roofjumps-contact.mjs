@@ -6,7 +6,7 @@ import { mkdirSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 const { withWood } = await import('./harness.mjs');
 const look = process.argv[2] ?? 'stroke-gouache', only = process.argv[3]?.split(',');
-const CHARS = (only ?? ['runner', 'teen', 'child', 'broad', 'slight', 'older']);
+const CHARS = (only ?? ['runner', 'teen', 'child', 'broad', 'slight', 'older', 'schoolgirl']);
 const TURN = ['stand', 'run', 'hang'], ANGLES = [20, 70, 120, 200, 290], MOTION = ['run', 'vault', 'land', 'climb', 'roll', 'flip'];
 const OUT = new URL('./out/contact/', import.meta.url).pathname, CELL = 300;
 mkdirSync(OUT, { recursive: true });

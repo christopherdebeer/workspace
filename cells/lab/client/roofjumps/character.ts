@@ -23,9 +23,12 @@ export interface Block { y0: number; w0: number; d0: number; y1: number; w1: num
 /** something worn, fixed to a bone: where on it (its own space), the block, its material; `tilt` turns it about x (rad) */
 export interface Attachment { bone: string; at: [number, number, number]; block: Block; mat: Mat; tilt?: number;
   /** it moves (rig.ts): it swings toward a pull made of where it rests on the bone (`rest`), gravity (`fall`) and the wind of
-   * its own motion (`drag`), as a damped spring (`stiff`, `damp`), never more than `max` (rad) from its rest; and `flare`,
-   * a skirt's: belled out by the air as it falls, and by a landing */
-  hang?: { rest: number; fall: number; drag: number; stiff: number; damp: number; max?: number; flare?: number } }
+   * its own motion (`drag`), as a damped spring (`stiff`, `damp`), never more than `max` (rad) from its rest; `flare`, a
+   * skirt's: belled out by the air as it falls, and by a landing. `segs`: a chain of that many links (hair, a scarf's end),
+   * each swinging from the end of the one before, so it bends and whips. `ring`: that many panels round the bone (a skirt, a
+   * coat's tails), the block's w0 x d0 their ring at the top and w1 x d1 at the hem at rest, each swinging on its own,
+   * splayed out by the flare and pushed out by a thigh coming up under it */
+  hang?: { rest: number; fall: number; drag: number; stiff: number; damp: number; max?: number; flare?: number; segs?: number; ring?: number } }
 
 /** the proportions a character is asked as: each continuous, 0 the runner's own where it has one */
 export interface Proportions {
@@ -133,7 +136,7 @@ export const CHARACTERS: Character[] = [
   {
     name: 'child', title: 'A child with a bag', proportions: { stature: 1.3, age: 9, build: -0.2, shoulders: 0, hips: 0, legs: 0 },
     palette: pal({ top: [0.55, 0.32, 0.27], bottoms: [0.24, 0.27, 0.36], shoes: [0.3, 0.32, 0.4], hair: [0.32, 0.22, 0.14], accent: [0.86, 0.66, 0.28] }), dress: { ...DRESS, foreArm: MAT.skin },
-    wears: [{ bone: 'torso', at: [0, 0.08, -0.14], block: { y0: 0, w0: 0.24, d0: 0.11, y1: 0.28, w1: 0.22, d1: 0.1 }, mat: MAT.accent }],
+    wears: [{ bone: 'torso', at: [0, 0.36, -0.14], block: { y0: 0, w0: 0.22, d0: 0.1, y1: -0.28, w1: 0.24, d1: 0.11 }, mat: MAT.accent, hang: { rest: 5, fall: 1, drag: 0.02, stiff: 160, damp: 14, max: 0.3 } }],
   },
   {
     name: 'broad', title: 'Tall and broad, in a cap', proportions: { stature: 1.95, age: 34, build: 0.6, shoulders: 0.5, hips: -0.1, legs: -0.1 },
@@ -144,14 +147,14 @@ export const CHARACTERS: Character[] = [
     name: 'slight', title: 'Slight, with a ponytail and scarf', proportions: { stature: 1.66, age: 24, build: -0.45, shoulders: -0.35, hips: 0.4, legs: 0.2 },
     palette: pal({ top: [0.52, 0.42, 0.5], bottoms: [0.14, 0.14, 0.17], shoes: [0.88, 0.86, 0.82], hair: [0.36, 0.2, 0.12], accent: [0.78, 0.52, 0.3] }), dress: DRESS,
     wears: [
-      { bone: 'head', at: [0, 0.15, -0.1], block: { y0: 0, w0: 0.06, d0: 0.06, y1: -0.26, w1: 0.035, d1: 0.04 }, mat: MAT.hair, tilt: 0.35 },
-      { bone: 'torso', at: [0.06, 0.42, 0.06], block: { y0: 0, w0: 0.08, d0: 0.03, y1: -0.3, w1: 0.07, d1: 0.025 }, mat: MAT.accent, tilt: 0.1 },
+      { bone: 'head', at: [0, 0.15, -0.1], block: { y0: 0, w0: 0.06, d0: 0.06, y1: -0.3, w1: 0.035, d1: 0.04 }, mat: MAT.hair, tilt: 0.35, hang: { rest: 0.5, fall: 1, drag: 0.1, stiff: 40, damp: 5, segs: 3 } },
+      { bone: 'torso', at: [0.06, 0.42, 0.06], block: { y0: 0, w0: 0.08, d0: 0.03, y1: -0.34, w1: 0.07, d1: 0.025 }, mat: MAT.accent, tilt: 0.1, hang: { rest: 1.2, fall: 1, drag: 0.08, stiff: 50, damp: 7, max: 1.4, segs: 2 } },
     ],
   },
   {
     name: 'older', title: 'Older, in a coat', proportions: { stature: 1.74, age: 64, build: 0.15, shoulders: -0.05, hips: 0.1, legs: -0.15 },
     palette: pal({ top: [0.42, 0.36, 0.3], bottoms: [0.3, 0.3, 0.32], shoes: [0.2, 0.17, 0.15], hair: [0.72, 0.7, 0.68], accent: [0.42, 0.36, 0.3] }), dress: DRESS,
-    wears: [{ bone: 'pelvis', at: [0, 0.02, 0], block: { y0: 0, w0: 0.34, d0: 0.22, y1: -0.36, w1: 0.38, d1: 0.24 }, mat: MAT.top }],
+    wears: [{ bone: 'pelvis', at: [0, 0.02, 0], block: { y0: 0, w0: 0.34, d0: 0.22, y1: -0.36, w1: 0.38, d1: 0.24 }, mat: MAT.top, hang: { rest: 4, fall: 0.6, drag: 0.04, stiff: 150, damp: 18, max: 0.45, flare: 0.35, ring: 6 } }],
   },
   {
     // (the references' figure (kyo-rooftops, kyo-kling-parkour): a schoolgirl who flings her bag and runs the roofs. A dark
@@ -162,13 +165,15 @@ export const CHARACTERS: Character[] = [
     palette: pal({ top: [0.07, 0.075, 0.11], bottoms: [0.07, 0.075, 0.11], shoes: [0.06, 0.055, 0.055], hair: [0.05, 0.045, 0.05], accent: [0.78, 0.14, 0.17], accent2: [0.07, 0.075, 0.11], trim: [0.93, 0.93, 0.9] }),
     dress: { ...DRESS, thigh: MAT.skin, shin: MAT.skin },
     wears: [
-      { bone: 'pelvis', at: [0, 0.05, 0], block: { y0: 0, w0: 0.27, d0: 0.19, y1: -0.35, w1: 0.38, d1: 0.31 }, mat: MAT.bottoms, hang: { rest: 3, fall: 0.5, drag: 0.05, stiff: 120, damp: 16, max: 0.55, flare: 1 } },
+      { bone: 'pelvis', at: [0, 0.05, 0], block: { y0: 0, w0: 0.27, d0: 0.19, y1: -0.35, w1: 0.38, d1: 0.31 }, mat: MAT.bottoms, hang: { rest: 3, fall: 0.6, drag: 0.06, stiff: 130, damp: 15, max: 0.7, flare: 1, ring: 8 } },
       { bone: 'torso', at: [0, 0.44, -0.1], block: { y0: 0, w0: 0.29, d0: 0.02, y1: -0.21, w1: 0.31, d1: 0.02 }, mat: MAT.trim, tilt: -0.12 },
       { bone: 'torso', at: [0, 0.435, -0.115], block: { y0: 0, w0: 0.25, d0: 0.02, y1: -0.18, w1: 0.27, d1: 0.02 }, mat: MAT.accent2, tilt: -0.12 },
       { bone: 'torso', at: [0, 0.445, 0.082], block: { y0: 0, w0: 0.24, d0: 0.02, y1: -0.09, w1: 0.13, d1: 0.02 }, mat: MAT.trim, tilt: 0.1 },
       { bone: 'torso', at: [0, 0.44, 0.095], block: { y0: 0, w0: 0.2, d0: 0.02, y1: -0.07, w1: 0.1, d1: 0.02 }, mat: MAT.accent2, tilt: 0.1 },
       { bone: 'torso', at: [0, 0.37, 0.108], block: { y0: 0, w0: 0.1, d0: 0.03, y1: -0.15, w1: 0.05, d1: 0.025 }, mat: MAT.accent, tilt: 0.12 },
-      { bone: 'head', at: [0, 0.2, -0.1], block: { y0: 0, w0: 0.075, d0: 0.065, y1: -0.42, w1: 0.05, d1: 0.04 }, mat: MAT.hair, tilt: 0.3, hang: { rest: 0.4, fall: 1, drag: 0.1, stiff: 34, damp: 5 } },
+      // (the hair gathered at the crown, its tie, and the tail: three links)
+      { bone: 'head', at: [0, 0.17, -0.07], block: { y0: 0, w0: 0.16, d0: 0.1, y1: -0.14, w1: 0.17, d1: 0.08 }, mat: MAT.hair, tilt: 0.25 },
+      { bone: 'head', at: [0, 0.205, -0.105], block: { y0: 0, w0: 0.08, d0: 0.075, y1: -0.5, w1: 0.04, d1: 0.03 }, mat: MAT.hair, tilt: 0.3, hang: { rest: 0.5, fall: 1, drag: 0.1, stiff: 38, damp: 5, segs: 3 } },
       { bone: 'shinL', at: [0, -0.2, 0], block: { y0: 0, w0: 0.092, d0: 0.097, y1: -0.25, w1: 0.08, d1: 0.086 }, mat: MAT.trim },
       { bone: 'shinR', at: [0, -0.2, 0], block: { y0: 0, w0: 0.092, d0: 0.097, y1: -0.25, w1: 0.08, d1: 0.086 }, mat: MAT.trim },
     ],

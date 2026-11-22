@@ -18,7 +18,9 @@ const measure = (c, move, mu) => {
   const b = bodyOf(c.proportions), body = heldBody({ x: 0, y: 0, z: 0 }, move, mu, 1, 1, b.reachScale), rig = new Rig(c);
   rig.update(1, body); const bones = rig.bones(body);
   const corners = (o) => { const ps = []; for (const i of [0, 1]) for (const j of [0, 1]) for (const k of [0, 1]) { const w = j ? o.w1 : o.w0, d = j ? o.d1 : o.d0; ps.push(point(o.m, (o.x ?? 0) + (i ? 0.5 : -0.5) * w, j ? o.y1 : o.y0, o.zc + (k ? 0.5 : -0.5) * d)); } return ps; };
-  const low = Math.min(...bones.flatMap((o) => corners(o).map((p) => p[1])));
+  // (what hangs loose (a skirt's panels, a ponytail's links) hangs by gravity, and a held pose has nothing real under it: not
+  // counted for the lowest block)
+  const low = Math.min(...bones.filter((o) => !o.loose).flatMap((o) => corners(o).map((p) => p[1])));
   const feet = Math.min(...bones.filter((o) => o.name.startsWith('foot')).flatMap((o) => corners(o).map((p) => p[1])));
   const pel = bones.find((o) => o.name === 'pelvis').m, head = bones.find((o) => o.name === 'head').m;
   const hands = {};

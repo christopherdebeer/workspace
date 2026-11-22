@@ -50,7 +50,7 @@ const KEYS: (keyof Pose)[] = ['hipL', 'hipR', 'kneeL', 'kneeR', 'shL', 'shR', 'e
 const zero = (): Pose => ({ hipL: 0, hipR: 0, kneeL: 0, kneeR: 0, shL: 0, shR: 0, elL: 0, elR: 0, spreadL: 0, spreadR: 0, splay: 0, spine: 0, head: 0, twist: 0, lean: 0, tilt: 0, sink: 0, look: 0, hips: 0 });
 
 /** a bone: its matrix, and its block from y0 (w0 × d0) to y1 (w1 × d1), centred zc along z */
-export interface Bone { name: string; m: M4; y0: number; w0: number; d0: number; y1: number; w1: number; d1: number; zc: number; x?: number; mat?: number }
+export interface Bone { name: string; m: M4; y0: number; w0: number; d0: number; y1: number; w1: number; d1: number; zc: number; x?: number; mat?: number; /** worn, and hanging loose (character.ts `hang`) */ loose?: true }
 
 type V3 = [number, number, number];
 const sub = (a: V3, b: V3): V3 => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
@@ -852,41 +852,64 @@ export class Rig {
     return rotZ(rotX(translate(P, this.aside, this.hipY, 0), p.lean + spin), this.bank + p.tilt + side);
   }
 
-  /** what's worn that moves (character.ts `hang`), each its own: the way it hangs (world), that way's speed, where it was fixed
-   * last step, its flare and the flare's speed, the last step's fall. Changed only by the fixed update (`commit`), so however
-   * often it's drawn it's the same */
-  private swing = new Map<number, { d: V3; dv: V3; at: V3; f: number; fv: number; vy: number }>();
-  /** a moving attachment: from its frame as fixed (`m`, hanging down its own -y), the frame it hangs in now, and its flare */
-  private hung(i: number, h: NonNullable<Character['wears'][number]['hang']>, m: M4, commit: boolean): { m: M4; flare: number } {
+  /** what's worn that moves (character.ts `hang`): each link's or panel's the way it hangs (world), that way's speed and where
+   * it was fixed last step; each flaring attachment's flare, its speed and the last step's fall. Changed only by the fixed
+   * update (`commit`), so however often it's drawn it's the same */
+  private swing = new Map<string, { d: V3; dv: V3; at: V3 }>();
+  private flares = new Map<number, { f: number; fv: number; vy: number; at: V3 }>();
+  /** a skirt's flare: belled out by the air as it falls; at a landing, the fall stopped, the cloth goes on: a kick of it */
+  private flared(i: number, h: NonNullable<Character['wears'][number]['hang']>, m: M4, commit: boolean): number {
+    const at: V3 = [m[12], m[13], m[14]];
+    let s = this.flares.get(i);
+    if (!s) { s = { f: 0, fv: 0, vy: 0, at }; if (commit) this.flares.set(i, s); }
+    if (commit && this.stepDt > 0) {
+      const dt = this.stepDt, vy = (at[1] - s.at[1]) / dt, target = Math.max(0, Math.min(1.1, (-vy - 1.2) / 5)) * (h.flare ?? 0), stop = Math.max(0, vy - s.vy);
+      if (stop > 2.5) s.fv += stop * 0.9 * (h.flare ?? 0);
+      s.fv += ((target - s.f) * 45 - s.fv * 9) * dt; s.f = Math.max(0, Math.min(1.3, s.f + s.fv * dt)); s.vy = vy; s.at = at;
+    }
+    return s.f;
+  }
+  /** a panel kept outside a thigh: its way down given at least the outward lean of a thigh that comes toward it, and a little */
+  private clearThighs(d: V3, o: V3, thighs: Bone[]): V3 {
+    const ol = Math.hypot(o[0], o[1], o[2]) || 1, on: V3 = [o[0] / ol, o[1] / ol, o[2] / ol];
+    for (const t of thighs) {
+      const td: V3 = [-t.m[4], -t.m[5], -t.m[6]], need = td[0] * on[0] + td[1] * on[1] + td[2] * on[2] + 0.14, have = d[0] * on[0] + d[1] * on[1] + d[2] * on[2];
+      if (need > 0.3 && have < need) { const g = need - have; d = [d[0] + on[0] * g, d[1] + on[1] * g, d[2] + on[2] * g]; const l = Math.hypot(d[0], d[1], d[2]) || 1; d = [d[0] / l, d[1] / l, d[2] / l]; }
+    }
+    return d;
+  }
+  /** a moving link or panel: from its frame as fixed (`m`, hanging down its own -y), the frame it hangs in now */
+  private hung(key: string, h: NonNullable<Character['wears'][number]['hang']>, m: M4, commit: boolean, keep?: (d: V3) => V3): M4 {
     const rest: V3 = [-m[4], -m[5], -m[6]], at: V3 = [m[12], m[13], m[14]], nrm = (v: V3): V3 => { const l = Math.hypot(v[0], v[1], v[2]) || 1; return [v[0] / l, v[1] / l, v[2] / l]; };
-    let s = this.swing.get(i);
-    if (!s) { s = { d: nrm(rest), dv: [0, 0, 0], at, f: 0, fv: 0, vy: 0 }; if (commit) this.swing.set(i, s); }
+    let s = this.swing.get(key);
+    if (!s) {
+      // (not yet moving (a held pose, a first frame): where its rest and gravity balance, kept by the same limits)
+      let d0 = nrm([rest[0] * h.rest, rest[1] * h.rest - h.fall, rest[2] * h.rest]);
+      const rn0 = nrm(rest), c0 = d0[0] * rn0[0] + d0[1] * rn0[1] + d0[2] * rn0[2];
+      if (h.max !== undefined && Math.acos(Math.max(-1, Math.min(1, c0))) > h.max) { const pp = nrm([d0[0] - rn0[0] * c0, d0[1] - rn0[1] * c0, d0[2] - rn0[2] * c0]); d0 = [rn0[0] * Math.cos(h.max) + pp[0] * Math.sin(h.max), rn0[1] * Math.cos(h.max) + pp[1] * Math.sin(h.max), rn0[2] * Math.cos(h.max) + pp[2] * Math.sin(h.max)]; }
+      if (keep) d0 = keep(d0);
+      s = { d: d0, dv: [0, 0, 0], at }; if (commit) this.swing.set(key, s);
+    }
     if (commit && this.stepDt > 0) {
       const dt = this.stepDt, v: V3 = [(at[0] - s.at[0]) / dt, (at[1] - s.at[1]) / dt, (at[2] - s.at[2]) / dt];
-      // (the pull: its rest on the body, gravity, and the air its own motion meets (against the way it goes))
+      // (the pull: its rest, gravity, and the air its own motion meets (against the way it goes))
       const t = nrm([rest[0] * h.rest - v[0] * h.drag, rest[1] * h.rest - h.fall - v[1] * h.drag, rest[2] * h.rest - v[2] * h.drag]);
-      for (let a = 0; a < 3; a++) { s.dv[a] += ((t[a] - s.d[a]) * h.stiff - s.dv[a] * h.damp) * dt; }
+      for (let a = 0; a < 3; a++) s.dv[a] += ((t[a] - s.d[a]) * h.stiff - s.dv[a] * h.damp) * dt;
       let d = nrm([s.d[0] + s.dv[0] * dt, s.d[1] + s.dv[1] * dt, s.d[2] + s.dv[2] * dt]);
-      // (held within its reach of its rest: a skirt doesn't leave the hips)
+      // (held within its reach of its rest)
       const rn = nrm(rest), cos = d[0] * rn[0] + d[1] * rn[1] + d[2] * rn[2];
       if (h.max !== undefined && Math.acos(Math.max(-1, Math.min(1, cos))) > h.max) {
         const perp = nrm([d[0] - rn[0] * cos, d[1] - rn[1] * cos, d[2] - rn[2] * cos]), c2 = Math.cos(h.max), s2 = Math.sin(h.max);
         d = [rn[0] * c2 + perp[0] * s2, rn[1] * c2 + perp[1] * s2, rn[2] * c2 + perp[2] * s2]; s.dv = [s.dv[0] * 0.5, s.dv[1] * 0.5, s.dv[2] * 0.5];
       }
-      s.d = d;
-      if (h.flare) {
-        // (belled out by the air as it falls; and at a landing, the fall stopped, the cloth goes on: a kick of flare)
-        const target = Math.max(0, Math.min(1.1, (-v[1] - 1.2) / 5)) * h.flare, stop = Math.max(0, v[1] - s.vy);
-        if (stop > 2.5) s.fv += stop * 0.9 * h.flare;
-        s.fv += ((target - s.f) * 45 - s.fv * 9) * dt; s.f = Math.max(0, Math.min(1.3, s.f + s.fv * dt));
-      }
-      s.vy = v[1]; s.at = at;
+      if (keep) d = keep(d);
+      s.d = d; s.at = at;
     }
     // (its frame: hanging along d, its own x kept as near as it can be)
     const Y: V3 = [-s.d[0], -s.d[1], -s.d[2]], x0: V3 = [m[0], m[1], m[2]], dx = x0[0] * Y[0] + x0[1] * Y[1] + x0[2] * Y[2];
     const X = nrm([x0[0] - Y[0] * dx, x0[1] - Y[1] * dx, x0[2] - Y[2] * dx]), Z: V3 = [X[1] * Y[2] - X[2] * Y[1], X[2] * Y[0] - X[0] * Y[2], X[0] * Y[1] - X[1] * Y[0]];
-    const out = m.slice() as M4; out[0] = X[0]; out[1] = X[1]; out[2] = X[2]; out[4] = Y[0]; out[5] = Y[1]; out[6] = Y[2]; out[8] = Z[0]; out[9] = Z[1]; out[10] = Z[2];
-    return { m: out, flare: s.f };
+    const o = m.slice() as M4; o[0] = X[0]; o[1] = X[1]; o[2] = X[2]; o[4] = Y[0]; o[5] = Y[1]; o[6] = Y[2]; o[8] = Z[0]; o[9] = Z[1]; o[10] = Z[2];
+    return o;
   }
 
   /** The skeleton, placed in the world at the body. */
@@ -1013,13 +1036,40 @@ export class Rig {
     // head))
     const c = this.character, sc = this.character.proportions.stature / 1.82;
     for (const o of out) o.mat = c.dress[o.name.replace(/[LR]$/, '') as keyof Character['dress']];
+    const thighs = out.filter((o) => o.name === 'thighL' || o.name === 'thighR');
     c.wears.forEach((w, wi) => {
       const on = out.find((o) => o.name === w.bone); if (!on) return;
-      const k = w.bone === 'head' ? this.body.blocks.head.w1 / 0.18 : sc;
-      let m = rotX(translate(on.m, w.at[0] * k, w.at[1] * k, w.at[2] * k), w.tilt ?? 0), fl = 0;
-      if (w.hang) { const s = this.hung(wi, w.hang, m, commit); m = s.m; fl = s.flare; }
-      const fw = 1 + 0.9 * fl, fy = 1 - 0.38 * fl;
-      out.push({ name: 'worn:' + w.bone, m, y0: w.block.y0 * k, w0: w.block.w0 * k, d0: w.block.d0 * k, y1: w.block.y1 * k * fy, w1: w.block.w1 * k * fw, d1: w.block.d1 * k * fw, zc: (w.block.zc ?? 0) * k, x: (w.block.x ?? 0) * k, mat: w.mat });
+      const k = w.bone === 'head' ? this.body.blocks.head.w1 / 0.18 : sc, B = w.block, h = w.hang;
+      const m = rotX(translate(on.m, w.at[0] * k, w.at[1] * k, w.at[2] * k), w.tilt ?? 0);
+      const put = (mm: M4, y1: number, w0: number, d0: number, w1: number, d1: number) => out.push({ name: 'worn:' + w.bone, m: mm, y0: 0, w0, d0, y1, w1, d1, zc: 0, x: 0, mat: w.mat, loose: true });
+      if (!h) { out.push({ name: 'worn:' + w.bone, m, y0: B.y0 * k, w0: B.w0 * k, d0: B.d0 * k, y1: B.y1 * k, w1: B.w1 * k, d1: B.d1 * k, zc: (B.zc ?? 0) * k, x: (B.x ?? 0) * k, mat: w.mat }); return; }
+      const fl = h.flare ? this.flared(wi, h, m, commit) : 0;
+      if (h.ring) {
+        // (a ring of panels round the bone: each set on the ring at the top, splayed out to the hem's ring (more as it flares),
+        // swinging on its own, and pushed out by a thigh coming up under it)
+        const n = h.ring, L = -B.y1 * k, a0 = B.w0 * k / 2, c0 = B.d0 * k / 2, a1 = B.w1 * k / 2, c1 = B.d1 * k / 2;
+        for (let p = 0; p < n; p++) {
+          const th = (2 * Math.PI * (p + 0.5)) / n, cx = Math.sin(th), cz = Math.cos(th);
+          const out0 = Math.hypot(a1 * cx, c1 * cz) - Math.hypot(a0 * cx, c0 * cz), splay = Math.atan2(out0, L) + fl * 0.9;
+          const pm = rotX(rotY(translate(m, a0 * cx, 0, c0 * cz), th), -splay);
+          const seg = 2 * Math.PI * Math.hypot(a0 * cx, c0 * cz) / n * 1.3, hem = 2 * Math.PI * (Math.hypot(a0 * cx, c0 * cz) + L * Math.sin(splay)) / n * 1.3;
+          const ow: V3 = [m[0] * cx + m[8] * cz, m[1] * cx + m[9] * cz, m[2] * cx + m[10] * cz];
+          // (cloth: each panel drawn toward its neighbours' hang, so the hem moves as one with a ripple in it, not a fringe)
+          const nb = (q: number) => this.swing.get(`${wi}:${(q + n) % n}`)?.d;
+          const sm = this.hung(`${wi}:${p}`, h, pm, commit, (d) => { const a = nb(p - 1), b = nb(p + 1); if (a && b) { d = [d[0] * 0.5 + (a[0] + b[0]) * 0.25, d[1] * 0.5 + (a[1] + b[1]) * 0.25, d[2] * 0.5 + (a[2] + b[2]) * 0.25]; const l = Math.hypot(d[0], d[1], d[2]) || 1; d = [d[0] / l, d[1] / l, d[2] / l]; } return this.clearThighs(d, ow, thighs); });
+          put(sm, -L * (1 - 0.25 * fl), seg, 0.025, hem, 0.025);
+        }
+        return;
+      }
+      // (a chain: each link from the end of the one before, resting along it)
+      const segs = h.segs ?? 1, L = (B.y1 * k) / segs;
+      let mm = m;
+      for (let s = 0; s < segs; s++) {
+        const t0 = s / segs, t1 = (s + 1) / segs, lw = (t: number) => (B.w0 + (B.w1 - B.w0) * t) * k, ld = (t: number) => (B.d0 + (B.d1 - B.d0) * t) * k;
+        const sm = this.hung(`${wi}:${s}`, h, mm, commit);
+        put(sm, L * (1 - 0.3 * fl), lw(t0), ld(t0), lw(t1), ld(t1));
+        mm = translate(sm, 0, L * 0.92, 0);
+      }
     });
     return out;
   }
