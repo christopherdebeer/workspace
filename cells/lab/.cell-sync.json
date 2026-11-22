@@ -1,8 +1,8 @@
 {
   "cell": "c15r/lab",
   "cellId": "lab-8928acf3",
-  "treeVersion": "tree:c7bc1bf9f962c66b7382ebc7b717aa0575e3365ce3f61836e7f8193d9b4dc63f",
-  "syncedAt": "2026-11-22T15:09:33.973Z",
+  "treeVersion": "tree:0648db37d194e18ac20ced11445ae383a6734d19a9808697e9f2c2a83999b34c",
+  "syncedAt": "2026-11-22T15:18:09.037Z",
   "files": {
     "README.md": "sha256:7f343237d183707fe06acca63d508a0f302fa9e678f1549d785e44a1016300d2",
     "client/autograph/autobiography.ts": "sha256:1aa72dbb927e6de87cdd920842be3b826ae520031f2589fadc9d4fe98abfbd67",
@@ -297,7 +297,7 @@
     "client/roofjumps/dressing.ts": "sha256:3cf3e4571c196573fcc07034b2e9d695674de7ba5f25d2589bb1d8fda380c057",
     "client/roofjumps/looks.ts": "sha256:c5eb3f28c7783708e63e4b4539ff83422b59ba474cfea0e0a3df012c728eafae",
     "client/roofjumps/looks/gouache.ts": "sha256:2c95c5943ac667ed8773a9f1c5dde6741dd6baa29376df798a36e7401f4cfcaf",
-    "client/roofjumps/looks/stroke-gouache.ts": "sha256:7d7cfd57ccbfa20566a7781c3e4d9c6a816a6af43ae584e0df8799ea4017c2cf",
+    "client/roofjumps/looks/stroke-gouache.ts": "sha256:1a1ab480e56e41c7ff3ee70624f3b03f5df457d95bc96c294cdccff947233703",
     "client/roofjumps/looks/sumi.ts": "sha256:4acee64f1c5cae7b3e1bb717a401f52a69ff07198561596384885870f2a297ef",
     "client/roofjumps/m4.ts": "sha256:0cbcc1823029dff2f5cfb25129112dd0637b4423ae4ad12e7e8e6ed1008f1632",
     "client/roofjumps/main.ts": "sha256:0033a181c8b90743fb87624c3bd5074db179c2b433fa7cfb275264a1dcb3da2f",
@@ -1415,7 +1415,7 @@
     "static/rescue/views.json": "sha256:9ab7f9b55a5a3c5e53d49ea243ef995013446a4bb0f826d010e4238294633ba4",
     "static/rescue/views.md": "sha256:79b6ef95cd11b0c4c07d92171dd59f4dfec565534ac5051dba20e2e56e6fd30c",
     "static/roofjumps-critique-astra.md": "sha256:b510324b67fe1e543f9920c2dc73219482c5e98b6e0b52953bb0e15d43eb0fcc",
-    "static/roofjumps-log.md": "sha256:381b903c68c6c72ff2fd5b448e0d77c28abbf6d6191cc20715da77a02e0c9e64",
+    "static/roofjumps-log.md": "sha256:56c1a94a666ed4df4bcf9eb49a14d82aab2a1b25d691b7a5e38f6303b5e1e178",
     "static/roofjumps-studies/astra-flat.jpg": "sha256:25159bee5d384403ac6629365dd1ceba01fedfeee892c7a6111a9f3b5c35a697",
     "static/roofjumps-studies/astra-full.jpg": "sha256:2be795dbb14758693d6c6af58bf168d012967666ca0063fe8f13ffc3cb26ea56",
     "static/roofjumps-studies/astra-paint-critique.md": "sha256:859008d2a33ad2c612672031c1ff8f71edff191e6ae62712ba7c7c582c581200",
