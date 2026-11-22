@@ -25,3 +25,33 @@ to Switchback's techniques and rendering. Every half hour: pick up what's outsta
   rung quad: 3.7 MB a chunk, of which the city before was 2.3.
 - `devtools/roofjumps-still.mjs`: a still of the running page (a look, a seed).
 - Next: street-level stills (poles, wires, awnings, vending), a night/lit check, then the stroke-gouache treatment (item 4).
+
+## Queued: Astra's critique (after items 1–4 are done)
+
+The full text is in `static/roofjumps-critique-astra.md`. The thread running through it: a mistake should change what the athlete
+can do next, and the player should be able to read, a moment ahead, what this body can still do from here. Don't tune
+thresholds to turn checks green. The work, in order:
+
+- **A. The one phrase (priority):** a playable scene as a single sequence. Stand at a parapet, take a small step back,
+  change your mind, drive forward, land slightly wrong on the far side. The scene ties the weakest part (brushes) to the
+  strongest (recoveries).
+- **B. A backward brush that commits gradually:** a 12 px backward brush jumps from a 98° turn to 180° between 242 and 250 ms,
+  and from 12 to 47 cm of travel after release. A single backward step should be there across a wide range of brush timings:
+  - a shoe reaches behind and takes the weight;
+  - the chest keeps facing where the player was looking;
+  - if the player keeps going, the trailing hip opens into a turn;
+  - if they let go, there is already somewhere to stop.
+
+  Test it by sweeping the brush length one tick at a time and asserting no cliff. Also fix the 39 cm single-tick shoe snap at
+  22 px / 400 ms.
+- **C. Contact by shape, not by name:** today `standOf` and the pipe, shimmy and fire-escape timing checks go by kind. Keep the
+  differences that describe the contact itself (wrappable, forefoot-narrow, whole-shoe deep, no knee clearance), and drop the
+  catalogue names. Tests:
+  - an unnamed projection the same size as a unit allows the same step;
+  - as it gets shallower, the move goes from standing, to a forefoot push, to a hang.
+- **D. late-change, made legible rather than green:** the second takeoff should show the bad first landing, through a shorter
+  last-but-one stride, the less convenient leg, or a lower line toward a different catch.
+- **E. Legibility:** a loaded, bent leg against the stairwell underside should read through the camera and the paint. Keep
+  graded outcomes as fixtures, e.g. the slab-height sweep (9.70 m falls, 9.90–10.20 m exits, 10.40 m finds the slab but
+  fails the push, 10.75 m and up falls).
+- Local leftovers: vault-angles planted slide (8 cm/s); the courtyard pause under the opening runs short.
