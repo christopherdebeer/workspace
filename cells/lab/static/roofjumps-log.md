@@ -117,3 +117,9 @@ thresholds to turn checks green. The work, in order:
   - Still to judge: parapets look blotchy where the darker underpainting shows between strokes.
 - `devtools/roofjumps-cost.mjs`: stamps and pass times on the running page, plus a still.
 - Left of item 4: the stamp atlas (5), and premultiplied blending with chunks painted far to near (from 4).
+- Asked for: `?under=0` (or U, live) leaves out the brush looks' flat underpainting so only the strokes show. Bars (rails,
+  railings, ladders' sides) now claim no depth in the stroke pass either, like the details; they still cast sun shadows.
+- What it shows (seed 5, from a roof):
+  - big near walls are fully covered (broad pulls plus scatter);
+  - parapets and the roof underfoot are about a third covered;
+  - past the nine near chunks it's bare paper, with the fills doing all the work there.

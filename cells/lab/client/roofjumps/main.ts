@@ -24,7 +24,7 @@
  * `?plan`): where this heading leads over the next few seconds, drawn into the city, with the best way to the left and
  * to the right of it; `?readout` says it in words; `?assist=1` steers onto the best.
  *
- * Other flags: `seed=` the city · `look=grid|clay|wire|tags|normals` how it's drawn · `auto` it runs itself, wandering
+ * Other flags: `under=0` (or U) the brush looks without their flat underpainting, only the strokes · `seed=` the city · `look=grid|clay|wire|tags|normals` how it's drawn · `auto` it runs itself, wandering
  * (by the plan's best way) · `t=` start that many seconds into such a run · `still` hold the frame · `preview` nothing
  * over the picture (and `auto`) · `far=` chunks drawn each way (4) · `side=90&zoom=1.6` the eye swung round the figure
  * and brought closer: for looking at the rig · `study=<move>&mu=` one move's pose held, that far through it (0..1) ·
@@ -79,6 +79,7 @@ rd.palette = character.palette;
 const brushHeading = runner.heading;
 // (`from=x,z`: start there instead, on whatever's there: the street, to see it find its way up)
 if (q.has('from')) { const [fx, fz] = q.get('from')!.split(',').map(Number); runner.x = fx; runner.z = fz; runner.y = city.heightAt(fx, fz); }
+rd.strokes.noUnder = q.get('under') === '0';
 if (q.has('cost')) rd.strokes.cost = { depth: 0, city: 0, shadow: 0, figure: 0, stamps: 0, chunks: 0 };
 rd.radius = Math.max(1, Math.min(8, Number(q.get('far') ?? 4) | 0));
 if ((LOOKS as readonly string[]).includes(q.get('look') ?? '')) rd.look = q.get('look') as Look;
@@ -231,6 +232,7 @@ addEventListener('keydown', (e) => {
   if (e.code === 'KeyK') flip('pause');
   if (e.code === 'KeyL') stepOnce = true;
   if (e.code === 'KeyO') dialsBtn.click();
+  if (e.code === 'KeyU') { rd.strokes.noUnder = !rd.strokes.noUnder; rd.strokes.reset(); }
   keys.add(e.code);
   if (e.code.startsWith('Arrow') || e.code === 'Space') e.preventDefault();
   document.body.classList.add('played');

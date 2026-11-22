@@ -462,6 +462,8 @@ export class StrokePainter {
   /** set to measure each pass (`?cost`): filled each frame */
   cost: Cost | null = null;
   stamps = 0;
+  /** the underpainting left out (`?under=0`, U): only the strokes, to see what they cover */
+  noUnder = false;
 
   constructor(private gl: WebGL2RenderingContext, program: (vs: string, fs: string, attribs: string[]) => WebGLProgram) {
     this.prog = program(VS, FS, ['aQ', 'a0', 'a1', 'a2', 'a3', 'a4', 'a5', 'a6', 'a7', 'a8']);
@@ -516,7 +518,7 @@ export class StrokePainter {
       if (made++ >= budget) break;
       const [cx, cz] = k.split(',').map(Number), marks: Mark[] = [], from = (ring(k) - 1) * 64;
       const keeps = (rank: number) => !isFar || showsTo(rank, far) > from;
-      rules.city(city.chunk(cx, cz), city, (m) => { if (keeps(m.rank ?? 0.5)) marks.push(m); }, keeps, light);
+      rules.city(city.chunk(cx, cz), city, (m) => { if (keeps(m.rank ?? 0.5) && !(this.noUnder && m.kind === K.FILL && m.layer === LAYER.BROAD)) marks.push(m); }, keeps, light);
       const { data, counts } = this.stampsOf(marks);
       if (have) this.free(have);
       this.chunks.set(k, { ...this.layered(data, this.gl.STATIC_DRAW, counts), far: isFar, key: light.key });

@@ -81,12 +81,12 @@ void main() {
   vec3 p = aPos + uL * max(0.0, t) + uPlane.xyz * 0.015; vW = p; gl_Position = uVP * vec4(p, 1.0);
 }`;
 // (depth from the sun, for the shadow map)
-// (also the strokes' solid depth: there the details (dressing.ts) claim none (`uNoDetails`), as Switchback's things don't: their
+// (also the strokes' solid depth: there the details (dressing.ts) and bars (rails, railings, ladders' sides) claim none (`uNoDetails`), as Switchback's things don't: their
 // marks are painted over what's behind them, never holes of paper where a mark didn't reach)
 const DVS = `#version 300 es
 in vec3 aPos; in vec3 aNor; in float aTag; uniform mat4 uVP; flat out float vTag; void main() { vTag = aTag; gl_Position = uVP * vec4(aPos, 1.0); }`;
 const DFS = `#version 300 es
-precision mediump float; flat in float vTag; uniform int uNoDetails; out vec4 o; void main() { if (uNoDetails == 1 && vTag > 14.5 && vTag < 25.5) discard; o = vec4(1.0); }`;
+precision mediump float; flat in float vTag; uniform int uNoDetails; out vec4 o; void main() { if (uNoDetails == 1 && ((vTag > 14.5 && vTag < 25.5) || abs(vTag - 10.0) < 0.5)) discard; o = vec4(1.0); }`;
 const CFS = `#version 300 es
 precision highp float; in vec3 vW; uniform vec3 uMin; uniform vec3 uMax; uniform vec4 uShade; out vec4 o;
 void main() { if (any(lessThan(vW, uMin)) || any(greaterThan(vW, uMax))) discard; o = uShade; }`;
