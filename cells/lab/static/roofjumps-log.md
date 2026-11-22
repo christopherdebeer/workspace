@@ -89,3 +89,11 @@ thresholds to turn checks green. The work, in order:
   7. scatter by coverage in two passes (masses, then detail) in place of the opaque fill and a few pulls, sized by distance from
      the line the runner is on. Keep our sun-shadow passages, which Switchback lacks.
 - Known: a blade sign's face near the camera on seed 1's street (from=0.5,36) shows as paper. To look at.
+- Steps 1 and 2 done:
+  - the stroke shader's grain is now in the mark's own metres (it travels with the mark), calmed where it would be finer than a
+    pixel;
+  - no line mark is drawn narrower than about two pixels (`uPx`: a pixel's size a metre off, unprojected each frame), so far
+    railings, lips and wires hold as lines.
+
+  Paper and sky still use screen grain, which is right for paper. Not yet checked in motion; a two-frame comparison while the
+  eye pans would confirm there's no crawl.

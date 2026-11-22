@@ -301,7 +301,7 @@ export interface StrokeRules {
 const VS = `#version 300 es
 precision highp float;
 in vec2 aQ; in vec4 a0; in vec4 a1; in vec4 a2; in vec4 a3; in vec4 a4; in vec4 a5; in vec4 a6; in vec4 a7; in vec4 a8;
-uniform mat4 uVP; uniform vec3 uEye; uniform float uFar; uniform float uFogNear; uniform float uDetail; uniform vec3 uSunC;
+uniform mat4 uVP; uniform vec3 uEye; uniform float uFar; uniform float uFogNear; uniform float uDetail; uniform vec3 uSunC; uniform float uPx;
 uniform highp sampler2DShadow uShadowMap; uniform mat4 uSunVP; uniform int uShadowOn;
 out vec2 vQ; out vec3 vW; out float vFog;
 flat out vec4 vCol; flat out vec4 vP; flat out vec4 vS; flat out vec3 vMin; flat out vec3 vMax; flat out vec2 vT; flat out vec4 vCol2; flat out vec3 vN; flat out float vReach;
@@ -316,6 +316,9 @@ void main() {
   vec3 toE = uEye - c; float dist = length(toE); vec3 e = toE / max(dist, 1e-4);
   // (an edge: turned about its own line to the eye, and brought forward of what it lies along by its own half-width)
   if (edge) { vec3 d = normalize(U); vec3 s = cross(d, e); if (length(s) < 1e-3) s = cross(d, vec3(0.0, 1.0, 0.0)); V = normalize(s) * length(V); c += e * length(V); }
+  // (never thinner than a couple of pixels (Switchback's floor): a lip, a pipe, a wire, a pole far off is still a mark, not
+  // a gap; \`uPx\` the world's size of a pixel a metre off)
+  if (kind != 6 && kind != 3) { float w = length(V), wmin = uPx * dist * 1.1; if (w > 1e-6 && w < wmin) V *= wmin / w; }
   vec3 N = cross(U, V); N = length(N) > 1e-9 ? normalize(N) : e; if (dot(N, toE) < 0.0) N = -N;
   float alpha = a0.w;
   // (whole marks withdraw with distance, by rank, all of a mark's stamps on its one anchor)
@@ -364,7 +367,11 @@ void main() {
   float hw = prof * side;
   // (bristles: streaks along it, a dozen and more across it, whatever its width)
   float br = 0.6 * noise(vec2((t * 0.5 + 0.5) * 13.0 + sd, k * 0.3)) + 0.4 * noise(vec2((t * 0.5 + 0.5) * 34.0 + sd * 1.7, k * 0.7));
-  float grain = 0.5 * noise(gl_FragCoord.xy * 0.45) + 0.5 * noise(gl_FragCoord.xy * 1.3 + 9.0);
+  // (the paper's tooth in the mark: on the mark itself, in its own metres, so it travels with it (no crawl as the eye moves);
+  // calmed toward its mean where it would be finer than a pixel)
+  vec2 mq = vec2(um, t * Wm * 0.5) + sd;
+  float gq = clamp(0.6 / max(fwidth(um) * 40.0, 1e-4), 0.0, 1.0);
+  float grain = 0.5 + gq * (0.5 * noise(mq * 40.0) + 0.5 * noise(mq * 110.0 + 9.0) - 0.5);
   // (the dry lift: toward its exit, and a little along its sides; the paper's tooth shows through it)
   float dz = dry * (0.9 * smoothstep(0.4, 1.0, u) + 0.3 * smoothstep(0.55, 1.0, at / max(hw, 1e-3)));
   float gap = dz > 0.0 ? smoothstep(dz - 0.09, dz + 0.09, br + 0.18 * (grain - 0.5) + 0.1) : 1.0;
@@ -452,7 +459,7 @@ export class StrokePainter {
 
   constructor(private gl: WebGL2RenderingContext, program: (vs: string, fs: string, attribs: string[]) => WebGLProgram) {
     this.prog = program(VS, FS, ['aQ', 'a0', 'a1', 'a2', 'a3', 'a4', 'a5', 'a6', 'a7', 'a8']);
-    for (const n of ['uVP', 'uEye', 'uFar', 'uFogNear', 'uDetail', 'uSunC', 'uShadowMap', 'uSunVP', 'uShadowOn', 'uHaze', 'uFade', 'uGrain', 'uCount']) this.u[n] = gl.getUniformLocation(this.prog, n);
+    for (const n of ['uVP', 'uEye', 'uFar', 'uFogNear', 'uDetail', 'uSunC', 'uPx', 'uShadowMap', 'uSunVP', 'uShadowOn', 'uHaze', 'uFade', 'uGrain', 'uCount']) this.u[n] = gl.getUniformLocation(this.prog, n);
     this.pprog = program(PVS, PFS, ['aQ']); for (const n of ['uPaper', 'uGrain']) this.u['p' + n] = gl.getUniformLocation(this.pprog, n);
     this.kprog = program(KVS, KFS, ['aQ']); for (const n of ['uInv', 'uTop', 'uHor', 'uGrain']) this.u['k' + n] = gl.getUniformLocation(this.kprog, n);
     this.corner = gl.createBuffer()!; gl.bindBuffer(gl.ARRAY_BUFFER, this.corner); gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
@@ -549,6 +556,11 @@ export class StrokePainter {
     gl.useProgram(this.prog);
     gl.uniformMatrix4fv(this.u.uVP, false, o.vp); gl.uniform3f(this.u.uEye, o.eye[0], o.eye[1], o.eye[2]); gl.uniform1f(this.u.uFar, o.far);
     gl.uniform1f(this.u.uFogNear, o.light.hazeNear); gl.uniform1f(this.u.uDetail, o.detail); gl.uniform3fv(this.u.uSunC, o.sunC);
+    { // (a pixel's size a metre off: two points a pixel apart at the screen's middle, unprojected)
+      const un = (y: number): V => { const m = o.inv, x = 0, z = 0.5; const w = m[3] * x + m[7] * y + m[11] * z + m[15]; return [(m[0] * x + m[4] * y + m[8] * z + m[12]) / w, (m[1] * x + m[5] * y + m[9] * z + m[13]) / w, (m[2] * x + m[6] * y + m[10] * z + m[14]) / w]; };
+      const p0 = un(0), p1 = un(2 / Math.max(1, gl.drawingBufferHeight)), d0 = Math.hypot(p0[0] - o.eye[0], p0[1] - o.eye[1], p0[2] - o.eye[2]);
+      gl.uniform1f(this.u.uPx, Math.hypot(p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2]) / Math.max(d0, 1e-6));
+    }
     gl.uniform1i(this.u.uShadowMap, 3); gl.uniform1i(this.u.uShadowOn, o.sunVP ? 1 : 0); if (o.sunVP) gl.uniformMatrix4fv(this.u.uSunVP, false, o.sunVP);
     gl.uniform3fv(this.u.uHaze, o.light.haze); gl.uniform1f(this.u.uFade, R.fadeToPaper); gl.uniform1f(this.u.uGrain, R.grain); gl.uniform1i(this.u.uCount, this.counting ? 1 : 0);
     gl.depthMask(false); gl.depthFunc(gl.LEQUAL); gl.enable(gl.BLEND);
