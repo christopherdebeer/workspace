@@ -149,6 +149,21 @@ export const CHARACTERS: Character[] = [
     palette: pal({ top: [0.42, 0.36, 0.3], bottoms: [0.3, 0.3, 0.32], shoes: [0.2, 0.17, 0.15], hair: [0.72, 0.7, 0.68], accent: [0.42, 0.36, 0.3] }), dress: DRESS,
     wears: [{ bone: 'pelvis', at: [0, 0.02, 0], block: { y0: 0, w0: 0.34, d0: 0.22, y1: -0.36, w1: 0.38, d1: 0.24 }, mat: MAT.top }],
   },
+  {
+    // (the first reference's figure (kyo-rooftops): a schoolgirl who drops her bag and runs the roofs; her skirt bells out on a
+    // landing there. A sailor-style uniform: white top, the navy collar's flap down her back, a red neckerchief, a pleated navy
+    // skirt, bare knees, navy knee socks, loafers; long dark hair down her back)
+    name: 'schoolgirl', title: 'A schoolgirl in a sailor uniform', proportions: { stature: 1.6, age: 16, build: -0.3, shoulders: -0.3, hips: 0.2, legs: 0.25 },
+    palette: pal({ top: [0.9, 0.9, 0.87], bottoms: [0.15, 0.17, 0.3], shoes: [0.32, 0.2, 0.13], hair: [0.09, 0.07, 0.07], accent: [0.78, 0.17, 0.19], accent2: [0.15, 0.17, 0.3] }),
+    dress: { ...DRESS, thigh: MAT.skin, shin: MAT.accent2 },
+    wears: [
+      { bone: 'pelvis', at: [0, 0.05, 0], block: { y0: 0, w0: 0.32, d0: 0.21, y1: -0.3, w1: 0.42, d1: 0.31 }, mat: MAT.bottoms },
+      { bone: 'torso', at: [0, 0.44, -0.1], block: { y0: 0, w0: 0.27, d0: 0.03, y1: -0.19, w1: 0.29, d1: 0.03 }, mat: MAT.accent2, tilt: -0.12 },
+      { bone: 'torso', at: [0, 0.44, 0.085], block: { y0: 0, w0: 0.22, d0: 0.03, y1: -0.07, w1: 0.12, d1: 0.03 }, mat: MAT.accent2, tilt: 0.1 },
+      { bone: 'torso', at: [0, 0.37, 0.1], block: { y0: 0, w0: 0.1, d0: 0.03, y1: -0.15, w1: 0.05, d1: 0.025 }, mat: MAT.accent, tilt: 0.12 },
+      { bone: 'head', at: [0, 0.12, -0.09], block: { y0: 0, w0: 0.17, d0: 0.06, y1: -0.32, w1: 0.15, d1: 0.04 }, mat: MAT.hair, tilt: 0.12 },
+    ],
+  },
 ];
 
 export const characterByName = (n: string | null | undefined): Character => CHARACTERS.find((c) => c.name === n) ?? CHARACTERS[0];

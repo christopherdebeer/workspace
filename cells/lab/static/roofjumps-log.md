@@ -137,3 +137,11 @@ thresholds to turn checks green. The work, in order:
      the body, so they were bands at the waist).
 - Fixed: `t=` with `auto` crashed the page (the input read `menu.launch` before the menu existed).
 - The still tool takes `W=`/`H=` for its size.
+- Asked for: a new character, the schoolgirl from the first reference (kyo-rooftops). `character=schoolgirl`, 1.60 m, age 16.
+  - Dress: a sailor-style uniform (white top; the navy collar as a flap down the back and a band at the front; a red
+    neckerchief), a flared navy skirt, bare thighs, navy knee socks, loafers, long dark hair down her back.
+  - Checks: 6 of 6 leaps (reach x0.85, stride x0.87); no pose misses. She's the seventh in the menu line, and the palette
+    array has room for eight.
+  - Contact sheet: devtools/out/contact/contact-schoolgirl.png. The skirt doesn't move yet (the reference's bell on landing
+    wants moving attachments).
+- `devtools/roofjumps-contact.mjs`: a contact sheet a character (turnaround and motion), for art direction.
