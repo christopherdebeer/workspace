@@ -292,3 +292,11 @@ picture, contact and cast shadow drawn plainly, the cloth pushed further than th
   - Cloth (the skirt, the coat) is painted a column at a time, waist to hem, as one bent stroke each, lit by its own face. Its
     quads carry their place in the grid from the rig. The coat is now a sheet with folds, not a staircase of blocks.
   - Suite unchanged.
+- The head in strokes, not blurred dabs (asked for):
+  - the face a pull down its plane, a darker cheek and jaw plane on the shadow side, and a short stroke across the jaw (so the
+    chin is round);
+  - the hair a broad stroke bent over the crown (laid across: up the head), a mass down the back, three fringe strokes toward
+    the brow where the face is seen, a lock down each side, a lighter stroke for sheen and a darker one for depth.
+  - A part seen end-on is a short stroke too.
+  - Found: the crown's stroke, laid along its own run, pinched into two lobes; the face stroke's taper made a V chin.
+  - Not yet: the older figure's pale hair reads chalky; the hood (a worn block) still paints as a rectangle.

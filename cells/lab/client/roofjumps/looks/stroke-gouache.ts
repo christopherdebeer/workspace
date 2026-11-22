@@ -399,15 +399,17 @@ export const strokeGouacheRules: StrokeRules = {
           const st = (a: V, b: V, width: number, colr: V, key2: string, o: Partial<Mark> = {}): Mark => ({ layer: 0, kind: K.PULL, a, b, side: sd, width, col: colr, mix2: 0, alpha: 1, dry: 0.15, heart: 0.4, rank: 1, key: `${key}/${key2}`, taper: [width * 0.25, width * 0.45], ...o });
           // (the face, where it's seen)
           if (facing > -0.35) {
-            body.push(st(at(-0.5, 0, 0.18), at(0.28, 0, 0.18), w * 0.82, sk, 'face', { side: sd }));
+            body.push(st(at(-0.46, 0, 0.18), at(0.3, 0, 0.18), w * 0.84, sk, 'face', { side: sd, taper: [w * 0.22, w * 0.12] }));
+            // (the jaw: a short stroke across the bottom of the face, so the chin is round, not the face stroke's point)
+            body.push(st(at(-0.36, -0.3, 0.16), at(-0.36, 0.3, 0.16), L * 0.2, sk, 'jaw', { side: d, taper: [w * 0.12, w * 0.12] }));
             body.push(st(at(-0.42, -sg * 0.27, 0.08), at(0.15, -sg * 0.3, 0.05), w * 0.3, mix(sk, scale(sk, 0.72), 0.7), 'cheek', { alpha: 0.85 }));
           }
           const hair = tone, hl = add(mix(tone, lit, 0.6), [0.06, 0.05, 0.05]), hd = scale(tone, 0.7);
           // (the crown: one broad stroke bent over the top, side to side; the back of the head, a mass down it)
-          body.push(st(at(0.12, -0.55, -0.05), at(0.12, 0.55, -0.05), L * 0.5, hair, 'crown', { path: [at(0.52, 0, -0.12)], heart: 0.5 }));
-          body.push(st(at(0.45, 0, -0.2), at(-0.32, 0, -0.42), w * 0.85, hair, 'back', { side: sd }));
+          body.push(st(at(0.24, -0.56, -0.16), at(0.24, 0.56, -0.16), L * 0.44, hair, 'crown', { side: d, path: [at(0.44, -0.2, -0.16), at(0.44, 0.2, -0.16)], heart: 0.5, taper: [L * 0.08, L * 0.08] })); /* (across it: up the head, since it runs side to side) */
+          body.push(st(at(0.36, 0, -0.26), at(-0.3, 0, -0.42), w * 0.86, hair, 'back', { side: sd, taper: [w * 0.08, w * 0.35] }));
           // (fringe toward the brow and a lock down each side, where the face is seen)
-          if (facing > -0.2) for (const [k, v] of [[0, -0.22], [1, 0.05], [2, 0.3]] as const) lights.push(st(at(0.48, v * 0.6, 0.0), at(0.24, v, 0.42), w * 0.22, k === 1 ? hl : hair, `fringe${k}`, { side: d }));
+          if (facing > -0.2) for (const [k, v] of [[0, -0.22], [1, 0.05], [2, 0.3]] as const) lights.push(st(at(0.48, v * 0.6, 0.0), at(0.24, v, 0.42), w * 0.22, k === 1 ? hl : hair, `fringe${k}`, { side: sd }));
           for (const v of [-0.48, 0.48]) lights.push(st(at(0.3, v, 0.05), at(-0.18, v * 1.05, -0.05), w * 0.2, hair, `lock${v > 0 ? 'r' : 'l'}`, { side: fw }));
           // (its sheen and its depth)
           lights.push(st(at(0.42, sg * 0.15, -0.05), at(0.1, sg * 0.42, -0.25), w * 0.16, hl, 'sheen', { alpha: 0.8, dry: 0.45 }));
