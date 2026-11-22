@@ -197,3 +197,9 @@ thresholds to turn checks green. The work, in order:
     of planes; the thumb's root a wedge deep in the palm; poses with their segments overlaid; the thumb two knuckles, not three.
   - For the runner's hands, which are dabs now: open reaching, closed on a hold, palm planted.
   - Manifest only. `node devtools/refs.mjs roofjumps ychive-hands` remakes the sheet and strips.
+- Hands, from `ychive-hands`:
+  - five blocks a hand: palm; fingers in two from a knuckle inside the palm; thumb in two from a root by the wrist;
+  - shaped by use (closed on a hold, planted flat on a vault, open reaching or in flight, loose otherwise), eased on the fixed
+    step;
+  - painted as skin pulls in stroke-gouache, replacing the forearm's dab.
+  - 23 bones (was 13). Suite unchanged, 0 pose misses, bones identical at 30 and 120 Hz.

@@ -133,7 +133,7 @@ export function idlePose(bones: { name: string; m: Float32Array }[], o: { headin
   const neck: V3 = [head.m[12], head.m[13], head.m[14]], waist: V3 = [torso.m[12], torso.m[13], torso.m[14]];
   const ground: V3 = feet.length ? [feet.reduce((s, b) => s + b.m[12], 0) / feet.length, Math.min(...feet.map((b) => b.m[13])), feet.reduce((s, b) => s + b.m[14], 0) / feet.length] : [waist[0], waist[1] - 1, waist[2]];
   const isHead = (n: string) => n === 'head' || n === 'worn:head';
-  const isUpper = (n: string) => isHead(n) || /^(torso|upperArm|foreArm)/.test(n) || /^worn:(torso|upperArm|foreArm)/.test(n);
+  const isUpper = (n: string) => isHead(n) || /^(torso|upperArm|foreArm|palm|fingers|tips|thumb)/.test(n) || /^worn:(torso|upperArm|foreArm)/.test(n);
   // (a positive turn about `r` tips the top back: a slouch, forward, is negative)
   const breath = Math.sin(t * (1.6 + 0.9 * a) + sd * 5) * (0.012 + 0.008 * a);
   const headYaw = (1 - a) * wander(1, 0.18) * 0.45 + o.look.yaw, headPitch = (1 - a) * (0.16 + 0.12 * wander(2, 0.12)) - a * 0.04 + o.look.pitch;

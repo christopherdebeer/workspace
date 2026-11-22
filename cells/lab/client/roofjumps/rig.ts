@@ -859,6 +859,41 @@ export class Rig {
    * update (`commit`), so however often it's drawn it's the same */
   private swing = new Map<string, { d: V3; dv: V3; at: V3 }>();
   private flares = new Map<number, { f: number; fv: number; vy: number; at: V3 }>();
+  /**
+   * The hands, as the reference has them built (ychive-hands: how a hand is drawn): a palm; the four fingers together in two
+   * segments, from a knuckle a segment *into* the palm (not at its edge), so that curled right over they fold into the fist's
+   * box; the thumb, two segments seen, from a root deep in the palm by the wrist on its forward side, swung across the palm to
+   * wrap. Its shape by what the hand's doing, eased on the fixed update: closed on a hold (hanging, climbing, swinging), the
+   * palm planted and the fingers straight (a vault, a kick off a wall), open and spread (reaching for one, or the arms out in
+   * the air), and otherwise loose, a little curled (tighter at a run).
+   */
+  private handK = [{ c1: 0.55, c2: 0.7, th: 0.35 }, { c1: 0.55, c2: 0.7, th: 0.35 }];
+  private hand(out: Bone[], F: M4, side: number, i: number, r: Body, held: number): void {
+    const s = (this.body.fore / 0.31), fore = this.body.fore;
+    const gripping = held > 0.5 && ['climb', 'hang', 'plant', 'swing', 'chimney', 'wall'].includes(r.state as string);
+    const planting = held > 0.3 && !gripping && (r.move === 'vault' || r.move === 'kick' || r.move === 'roll');
+    const open = !gripping && !planting && (held > 0.01 || (r.state === 'air' && ((r.reachFor ?? 0) > 0.2 || ['bound', 'hop', 'glide', 'spring', 'dive', 'fall'].includes(r.move))));
+    const t = gripping ? { c1: 1.45, c2: 1.35, th: 1.15 } : planting ? { c1: -0.12, c2: 0.0, th: 0.6 } : open ? { c1: 0.15, c2: 0.12, th: 0.8 } : r.speed > 6 ? { c1: 0.85, c2: 0.95, th: 0.55 } : { c1: 0.55, c2: 0.7, th: 0.35 };
+    // (eased on the fixed update; never stepped (a held pose, a sheet), the shape it's asked for)
+    if (this.committing && this.stepDt > 0) this.handLive = true;
+    const k = this.handLive ? this.handK[i] : t;
+    if (this.stepDt > 0 && this.committing) { const e = 1 - Math.exp(-16 * this.stepDt); k.c1 += (t.c1 - k.c1) * e; k.c2 += (t.c2 - k.c2) * e; k.th += (t.th - k.th) * e; }
+    const n = side > 0 ? 'L' : 'R', mat = 0, W = translate(F, 0, -fore, 0);
+    const put = (name: string, m: M4, y1: number, w0: number, d0: number, w1: number, d1: number) => out.push({ name: name + n, m, y0: 0, w0: w0 * s, d0: d0 * s, y1: y1 * s, w1: w1 * s, d1: d1 * s, zc: 0, mat });
+    // (curling toward the palm: the palm's face looks in, toward the body, at rest)
+    const curl = (m: M4, a: number) => rotZ(m, -side * a);
+    put('palm', W, -0.095, 0.032, 0.07, 0.03, 0.085);
+    const K1 = curl(translate(W, 0, -0.082 * s, 0), k.c1);
+    put('fingers', K1, -0.05, 0.024, 0.082, 0.022, 0.08);
+    const K2 = curl(translate(K1, 0, -0.05 * s, 0), k.c2);
+    put('tips', K2, -0.042, 0.02, 0.078, 0.016, 0.07);
+    // (the thumb from its root by the wrist, forward of the fingers, tilted out forward, swung across the palm as it closes)
+    const T1 = curl(rotX(translate(W, 0, -0.022 * s, 0.03 * s), -(0.45 + 0.25 * k.th)), 0.25 + 0.75 * k.th);
+    put('thumb', T1, -0.045, 0.026, 0.026, 0.024, 0.022);
+    const T2 = curl(translate(T1, 0, -0.045 * s, 0), 0.15 + 0.55 * k.th);
+    put('thumbtip', T2, -0.035, 0.022, 0.02, 0.018, 0.017);
+  }
+  private committing = false; private handLive = false;
   /** each cloth (cloth.ts) and the waist's frame it was last held by; changed only by the fixed update */
   private cloths = new Map<number, { c: Cloth; m: number[] }>();
   /** a skirt's cloth: stepped by the fixed update (the waist eased from its last frame to this one, the hips and legs kept out);
@@ -952,6 +987,7 @@ export class Rig {
   /** the bones solved; `commit`, from the fixed update only: what the next update depends on (the heel's lift, where a free
    * foot was drawn) kept */
   private solve(r: Body, commit: boolean): Bone[] {
+    this.committing = commit;
     const toes = [0, 0];
     const p = this.pose, out: Bone[] = [];
     // (turned right over, forwards, through a flip or a roll; over sideways, the lead leg's way; round on its hand, a palm
@@ -985,6 +1021,7 @@ export class Rig {
       }
       blk('upperArm' + n, U, b.blocks.upperArm);
       blk('foreArm' + n, F, b.blocks.foreArm);
+      this.hand(out, F, side, L ? 0 : 1, r, hand.w);
       const hip = L ? p.hipL : p.hipR, knee = L ? p.kneeL : p.kneeR;
       const T = sw(rotZ(translate(P, side * b.hipX, -this.body.hipDrop, 0), side * (p.splay + this.legOut[L ? 0 : 1])), hip);
       let Th = T, K = sw(translate(T, 0, -this.body.thigh, 0), -knee), planted: V3 | null = null, plantK = 1;
@@ -1068,7 +1105,7 @@ export class Rig {
     // (dressed: each bone its material; and what's worn, on the bone it's fixed to, sized with the body (a head's with the
     // head))
     const c = this.character, sc = this.character.proportions.stature / 1.82;
-    for (const o of out) o.mat = c.dress[o.name.replace(/[LR]$/, '') as keyof Character['dress']];
+    for (const o of out) o.mat = c.dress[o.name.replace(/[LR]$/, '') as keyof Character['dress']] ?? 0; /* (the hands: skin) */
     const thighs = out.filter((o) => o.name === 'thighL' || o.name === 'thighR');
     c.wears.forEach((w, wi) => {
       const on = out.find((o) => o.name === w.bone); if (!on) return;

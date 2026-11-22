@@ -326,16 +326,19 @@ export const strokeGouacheRules: StrokeRules = {
           break;
         }
         case 'worn': body.push(m({ taper: [0.02, 0.04] })); break;
+        case 'palm': case 'fingers': case 'tips': case 'thumb': case 'thumbtip': {
+          // (the hand (rig.ts: palm, fingers in two, thumb in two): one skin pull a part, lit by its own face like cloth, a
+          // little darker closed on a hold)
+          const skin = (palette[p.mat - (p.mat % 8)] ?? col) as V, nf = dot(p.fwd, p.toEye) >= 0 ? p.fwd : scale(p.fwd, -1), lk = smooth(-0.3, 0.6, Math.abs(dot(nf, T.S)));
+          const sk = mix(mulv(skin, mix([0.62, 0.6, 0.68], scale(T.deep, 0.85), T.dk)), mulv(skin, mix([1.04, 1.02, 1.0], T.sunlit, T.dk)), 0.35 + 0.5 * lk);
+          body.push(m({ width: p.width * 1.15, col: scale(sk, p.gripping ? 0.88 : 1), mix2: 0, dry: 0.1, heart: 0.5, taper: [p.width * 0.35, p.width * 0.4], key: `${key}/hand` }));
+          break;
+        }
         default: {
           // (a limb: a pull from the joint, tapering toward the hand or the foot)
           under.push(m({ width: p.width * 1.45, col: scale(dark, 0.45), mix2: 0, dry: 0.15, key: `${key}/under`, taper: [0.03, 0.05] }));
           body.push(m({ width: p.width * 1.22, heart: 0.15, taper: [p.width * 0.4, p.width * 0.5] }));
           litPull(0.45);
-          if (p.kind === 'foreArm') {
-            // (the hand: closed and darker on a hold; open, lighter, a little larger reaching)
-            const skin = (palette[p.mat - (p.mat % 8)] ?? col) as V, d = unit(sub(p.b, p.a)), s = p.gripping ? 0.085 : 0.11;
-            accents.push(m({ kind: K.DAB, a: sub(p.b, scale(d, s * 0.3)), b: add(p.b, scale(d, s * 0.9)), width: s, mix2: 0, col: p.gripping ? scale(mulv(skin, [0.75, 0.72, 0.75]), 0.85) : mix(mulv(skin, mix([1, 1, 1], T.sunlit, T.dk)), scale(skin, 1.08), front * (1 - T.dk)), key: `${key}/hand` }));
-          }
         }
       }
     }

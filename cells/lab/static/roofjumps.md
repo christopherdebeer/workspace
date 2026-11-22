@@ -651,6 +651,25 @@ Over 25 chunks: about 22,000 window rows, 1,600 pipe bundles, 2,500 rust streaks
 Not tagged yet from the list above: grilles, eaves, tank stands, balcony bands (balconies are single), projecting pods, the
 elevated railway, stepped streets, pitched roofs.
 
+## Hands (after `ychive-hands`)
+
+The runner had no hands: the forearm ended at the wrist, and the painted look put a skin dab there. Now each hand is five blocks,
+built the way the reference (a tutorial on how hands are drawn) builds one:
+- a flat palm;
+- the four fingers together, as a mitten in two segments, from a knuckle a segment *into* the palm (85% of its length, not its
+  edge: the reference's first correction), so that curled right over they fold into the fist's box;
+- the thumb, two segments seen ("the thumb is two knuckles, not three"), from a root deep in the palm by the wrist on its forward
+  side, tilted out, swung across the palm as it closes.
+
+Its shape follows what the hand's doing, eased on the fixed update (a held pose takes it at once):
+- closed on a hold: hanging, climbing, swinging;
+- the palm planted, fingers straight: a vault, a kick off a wall;
+- open and spread: reaching for a hold, or the arms out in the air;
+- otherwise loose and a little curled, tighter at a run.
+
+Hands are skin in every look. In stroke-gouache each part is one skin pull, lit by its own face. Thirteen bones became 23, so
+the figure buffer grew to match.
+
 ## The city's parts, in one place (`parts.ts`)
 
 Everything a chunk is furnished with once its boxes are laid out is a row of `PARTS` in `parts.ts`: its name, the hold kinds
