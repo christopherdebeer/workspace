@@ -285,7 +285,10 @@ export const strokeGouacheRules: StrokeRules = {
       const body: Mark[] = [], lights: Mark[] = [], accents: Mark[] = [], under = { push: (..._m: Mark[]) => 0 };
       byPart.push(body, lights, accents);
       const col = (palette[p.mat] ?? palette[0]) as V, dark = mulv(col, mix([0.55, 0.57, 0.68], scale(T.deep, 0.8), T.dk)), lit = mulv(col, mix([1.05, 1.05, 1.05], T.sunlit, T.dk));
-      const front = smooth(-0.35, 0.45, p.sunFront), tone = mix(dark, lit, 0.45 + 0.35 * front), key = `fig:${p.name}`;
+      // (what's worn takes the light by its own face (a skirt's quads, a coat's: so a fold turns light to dark), the body's
+      // parts by how their turned faces meet it)
+      const face = p.kind === 'worn' ? (dot(p.fwd, p.toEye) >= 0 ? p.fwd : scale(p.fwd, -1)) : null;
+      const front = face ? smooth(-0.25, 0.55, dot(face, T.S)) : smooth(-0.35, 0.45, p.sunFront), tone = mix(dark, lit, (face ? 0.3 : 0.45) + (face ? 0.55 : 0.35) * front), key = `fig:${p.name}`;
       // (a little past each end, so the marks overlap at the joints)
       const ext = scale(unit(sub(p.b, p.a)), Math.min(0.06, p.width * 0.35)), pa = sub(p.a, ext), pb = add(p.b, ext);
       const m = (o: Partial<Mark>): Mark => ({ layer: 0, kind: K.PULL, a: pa, b: pb, side: p.side, width: p.width * 1.2, col: tone, col2: mix(tone, lit, 0.35), mix2: 0.35, alpha: 1, dry: 0.2, heart: 0.25, rank: 1, key, ...o });

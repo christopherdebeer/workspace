@@ -31,7 +31,7 @@ export interface Attachment { bone: string; at: [number, number, number]; block:
   hang?: { rest: number; fall: number; drag: number; stiff: number; damp: number; max?: number; flare?: number; segs?: number; ring?: number };
   /** cloth (cloth.ts): the block's w0 x d0 the waist's ring, w1 x d1 the hem's at rest, its length the skirt's; a grid nu round
    * by nv down, simulated (gravity, air, the legs and hips kept out); drawn a thin block a quad */
-  cloth?: { nu: number; nv: number; drag: number; damp?: number; stretch?: number; shear?: number; bend?: number } }
+  cloth?: { nu: number; nv: number; drag: number; damp?: number; stretch?: number; shear?: number; bend?: number; pleat?: number } }
 
 /** the proportions a character is asked as: each continuous, 0 the runner's own where it has one */
 export interface Proportions {
@@ -157,7 +157,7 @@ export const CHARACTERS: Character[] = [
   {
     name: 'older', title: 'Older, in a coat', proportions: { stature: 1.74, age: 64, build: 0.15, shoulders: -0.05, hips: 0.1, legs: -0.15 },
     palette: pal({ top: [0.42, 0.36, 0.3], bottoms: [0.3, 0.3, 0.32], shoes: [0.2, 0.17, 0.15], hair: [0.72, 0.7, 0.68], accent: [0.42, 0.36, 0.3] }), dress: DRESS,
-    wears: [{ bone: 'pelvis', at: [0, 0.02, 0], block: { y0: 0, w0: 0.34, d0: 0.22, y1: -0.36, w1: 0.38, d1: 0.24 }, mat: MAT.top, hang: { rest: 4, fall: 0.6, drag: 0.04, stiff: 150, damp: 18, max: 0.45, flare: 0.35, ring: 6 } }],
+    wears: [{ bone: 'pelvis', at: [0, 0.02, 0], block: { y0: 0, w0: 0.34, d0: 0.22, y1: -0.36, w1: 0.38, d1: 0.24 }, mat: MAT.top, cloth: { nu: 8, nv: 4, drag: 0.8, damp: 7, pleat: 1.25, bend: 6e-4 } }],
   },
   {
     // (the references' figure (kyo-rooftops, kyo-kling-parkour): a schoolgirl who flings her bag and runs the roofs. A dark

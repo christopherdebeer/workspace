@@ -10,7 +10,7 @@
 
 type V3 = [number, number, number];
 export interface Capsule { a: V3; b: V3; r: number }
-export interface ClothSpec { nu: number; nv: number; drag: number; damp?: number; stretch?: number; shear?: number; bend?: number }
+export interface ClothSpec { nu: number; nv: number; drag: number; damp?: number; stretch?: number; shear?: number; bend?: number; pleat?: number }
 
 /** where a point of the ring sits at rest, in the waist's own frame: the waist's ring (a0 × c0) at the top, the hem's (a1 × c1)
  * at length L below */
@@ -21,19 +21,23 @@ const SUB = 4, G = 9.81;
 export class Cloth {
   readonly nu: number; readonly nv: number;
   pos: Float64Array; private prev: Float64Array; private vel: Float64Array;
-  private cons: { i: number; j: number; rest: number; alpha: number }[] = [];
+  /** each constraint: two points, held between lo and hi apart (lo = hi: a length), how compliant */
+  private cons: { i: number; j: number; lo: number; hi: number; alpha: number }[] = [];
   private spec: ClothSpec; private ring: Ring;
   constructor(spec: ClothSpec, ring: Ring, frame: Float32Array | number[]) {
     this.spec = spec; this.ring = ring; this.nu = spec.nu; this.nv = spec.nv;
     const n = this.nu * this.nv; this.pos = new Float64Array(n * 3); this.prev = new Float64Array(n * 3); this.vel = new Float64Array(n * 3);
     const rest = this.restLocal(), idx = (u: number, v: number) => ((u + this.nu) % this.nu) + v * this.nu;
     const d = (i: number, j: number) => Math.hypot(rest[i * 3] - rest[j * 3], rest[i * 3 + 1] - rest[j * 3 + 1], rest[i * 3 + 2] - rest[j * 3 + 2]);
-    const add = (i: number, j: number, alpha: number) => this.cons.push({ i, j, rest: d(i, j), alpha });
+    // (round the skirt, below the waist, its pleats: it can open, up to `pleat` times as wide at the hem, as a pleated skirt does
+    // in the air, but no narrower than a little under its rest)
+    const add = (i: number, j: number, alpha: number, open = 1) => { const r = d(i, j); this.cons.push({ i, j, lo: open > 1 ? r * 0.92 : r, hi: r * open, alpha }); };
+    const fold = (v: number) => 1 + ((spec.pleat ?? 2.2) - 1) * (v / (this.nv - 1));
     const st = spec.stretch ?? 1e-7, sh = spec.shear ?? 2e-5, bd = spec.bend ?? 1.5e-3;
     for (let v = 0; v < this.nv; v++) for (let u = 0; u < this.nu; u++) {
-      add(idx(u, v), idx(u + 1, v), st);
-      if (v + 1 < this.nv) { add(idx(u, v), idx(u, v + 1), st); add(idx(u, v), idx(u + 1, v + 1), sh); add(idx(u + 1, v), idx(u, v + 1), sh); }
-      add(idx(u, v), idx(u + 2, v), bd);
+      add(idx(u, v), idx(u + 1, v), st, fold(v));
+      if (v + 1 < this.nv) { add(idx(u, v), idx(u, v + 1), st); add(idx(u, v), idx(u + 1, v + 1), sh, (fold(v) + fold(v + 1)) / 2); add(idx(u + 1, v), idx(u, v + 1), sh, (fold(v) + fold(v + 1)) / 2); }
+      add(idx(u, v), idx(u + 2, v), bd, fold(v));
       if (v + 2 < this.nv) add(idx(u, v), idx(u, v + 2), bd);
     }
     this.place(frame);
@@ -71,8 +75,8 @@ export class Cloth {
       // (the body's own speed (the waist's middle): the air close round a body is carried with it, mostly)
       let bx = 0, by = 0, bz = 0; for (let u = 0; u < this.nu; u++) { const o = u * 3; bx += h1[o] - h0[o]; by += h1[o + 1] - h0[o + 1]; bz += h1[o + 2] - h0[o + 2]; }
       // (carried with it: three quarters of the way it runs (the body shelters the cloth from the air ahead), a third of the way
-      // it falls (the air comes up under a skirt))
-      const E = 0.75 / (this.nu * dt), Ey = 0.35 / (this.nu * dt); bx *= E; by *= Ey; bz *= E;
+      // it falls (the air comes up under a skirt, but not all of it))
+      const E = 0.75 / (this.nu * dt), Ey = 0.55 / (this.nu * dt); bx *= E; by *= Ey; bz *= E;
       for (let i = 0; i < n; i++) {
         const o = i * 3; x[o] = p[o]; x[o + 1] = p[o + 1]; x[o + 2] = p[o + 2];
         if (i < this.nu) { p[o] = h0[o] + (h1[o] - h0[o]) * k; p[o + 1] = h0[o + 1] + (h1[o + 1] - h0[o + 1]) * k; p[o + 2] = h0[o + 2] + (h1[o + 2] - h0[o + 2]) * k; continue; }
@@ -83,7 +87,7 @@ export class Cloth {
         const rx = v[o] - bx, ry = v[o + 1] - by, rz = v[o + 2] - bz, vn = rx * nr[o] + ry * nr[o + 1] + rz * nr[o + 2], fn = 1 - Math.exp(-drag * h), ft = 1 - Math.exp(-drag * 0.18 * h);
         v[o] -= nr[o] * vn * fn + (rx - nr[o] * vn) * ft; v[o + 1] -= nr[o + 1] * vn * fn + (ry - nr[o + 1] * vn) * ft; v[o + 2] -= nr[o + 2] * vn * fn + (rz - nr[o + 2] * vn) * ft;
         // (and the cloth's own losses: its motion against the body's dies away, so a stride's fling settles before the next)
-        const dm = Math.exp(-(this.spec.damp ?? 5) * h), Bx = bx / 0.75, By = by / 0.35, Bz = bz / 0.75;
+        const dm = Math.exp(-(this.spec.damp ?? 5) * h), Bx = bx / 0.75, By = by / 0.55, Bz = bz / 0.75;
         v[o] = Bx + (v[o] - Bx) * dm; v[o + 1] = By + (v[o + 1] - By) * dm; v[o + 2] = Bz + (v[o + 2] - Bz) * dm;
         p[o] += v[o] * h; p[o + 1] += v[o + 1] * h; p[o + 2] += v[o + 2] * h;
       }
@@ -91,10 +95,22 @@ export class Cloth {
       for (const c of this.cons) {
         const wi = c.i < this.nu ? 0 : 1, wj = c.j < this.nu ? 0 : 1, W = wi + wj; if (!W) continue;
         const a = c.i * 3, b = c.j * 3, dx = p[b] - p[a], dy = p[b + 1] - p[a + 1], dz = p[b + 2] - p[a + 2], l = Math.hypot(dx, dy, dz); if (l < 1e-9) continue;
-        const C = l - c.rest, dl = -C / (W + c.alpha * ah), gx = dx / l, gy = dy / l, gz = dz / l;
+        const C = l < c.lo ? l - c.lo : l > c.hi ? l - c.hi : 0; if (!C) continue;
+        const dl = -C / (W + c.alpha * ah), gx = dx / l, gy = dy / l, gz = dz / l;
         p[a] -= wi * dl * gx; p[a + 1] -= wi * dl * gy; p[a + 2] -= wi * dl * gz; p[b] += wj * dl * gx; p[b + 1] += wj * dl * gy; p[b + 2] += wj * dl * gz;
       }
       for (let i = this.nu; i < n; i++) { const o = i * 3; for (const cap of body) push(p, o, cap); }
+      // (it opens, it doesn't turn inside out: no point further round from the waist's own down than a little past level, so a
+      // fall bells it into a disc, an umbrella's, not over the hips)
+      const ax = -(m0[4] + (m1[4] - m0[4]) * k), ay = -(m0[5] + (m1[5] - m0[5]) * k), az = -(m0[6] + (m1[6] - m0[6]) * k), al = Math.hypot(ax, ay, az) || 1;
+      let cx = 0, cy = 0, cz = 0; for (let u = 0; u < this.nu; u++) { cx += p[u * 3]; cy += p[u * 3 + 1]; cz += p[u * 3 + 2]; } cx /= this.nu; cy /= this.nu; cz /= this.nu;
+      const dx0 = ax / al, dy0 = ay / al, dz0 = az / al, MAX = 1.66, cm = Math.cos(MAX), sn = Math.sin(MAX);
+      for (let i = this.nu; i < n; i++) {
+        const o = i * 3, ex = p[o] - cx, ey = p[o + 1] - cy, ez = p[o + 2] - cz, l = Math.hypot(ex, ey, ez); if (l < 1e-6) continue;
+        const along = (ex * dx0 + ey * dy0 + ez * dz0) / l; if (along >= cm) continue;
+        let rx = ex / l - dx0 * along, ry = ey / l - dy0 * along, rz = ez / l - dz0 * along; const rl = Math.hypot(rx, ry, rz) || 1; rx /= rl; ry /= rl; rz /= rl;
+        p[o] = cx + (dx0 * cm + rx * sn) * l; p[o + 1] = cy + (dy0 * cm + ry * sn) * l; p[o + 2] = cz + (dz0 * cm + rz * sn) * l;
+      }
       for (let i = this.nu; i < n; i++) { const o = i * 3; v[o] = (p[o] - x[o]) / h; v[o + 1] = (p[o + 1] - x[o + 1]) / h; v[o + 2] = (p[o + 2] - x[o + 2]) / h; }
     }
   }

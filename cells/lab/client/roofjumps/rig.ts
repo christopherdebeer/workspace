@@ -873,6 +873,8 @@ export class Rig {
     let s = this.cloths.get(wi);
     if (commit) {
       if (!s) { const c0 = new Cloth(spec, ring, mm); s = { c: c0.settled(mm, caps), m: mm }; this.cloths.set(wi, s); }
+      // (a jump of the waist more than a metre in a step is a body put somewhere (a start, a respawn), not moved: hung again there)
+      else if (Math.hypot(mm[12] - s.m[12], mm[13] - s.m[13], mm[14] - s.m[14]) > 1) { s.c = s.c.settled(mm, caps); s.m = mm; }
       else if (this.stepDt > 0) { s.c.step(this.stepDt, s.m, mm, caps); s.m = mm; }
     }
     const c = s ? s.c : new Cloth(spec, ring, mm).settled(mm, caps);

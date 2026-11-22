@@ -180,3 +180,15 @@ thresholds to turn checks green. The work, in order:
     - thigh capsules from the hip joint lifted the waist.
   - Now it hangs plumb, drapes over the forward thigh, swings with the stride, lifts on a drop.
   - Suite unchanged; 0 pose misses.
+- Cloth, continued:
+  - Pleats: edges round can open to 2.2x at the hem. Without them a fall crumpled the skirt up the body, the hem's circumference
+    fixed.
+  - A cone limit: no further than 5 degrees past level from the waist's axis. Before it, a fall turned the skirt inside out
+    within 0.2 s.
+  - Air from below carried at 55%. Teleports re-hang the cloth instead of flinging it 2.5 m.
+  - Measured in a unit test: the hem goes from radius 0.13 to 0.29 in a 12 m fall, never above 0.08 m up the hips' axis, and
+    hangs again after landing.
+  - The older figure's coat is cloth. Folds are lit per quad in stroke-gouache.
+  - Cost: +0.2 ms a fixed step (desktop). A `long-drop` scene (39 scenes; 195/198 checks).
+  - Filmed: the short drop opens the skirt out and back like the reference's leaps. The long drop is taken as a dive, not the
+    reference's upright glide (movement, not cloth: noted).

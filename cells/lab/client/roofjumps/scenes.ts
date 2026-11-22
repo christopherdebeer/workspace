@@ -476,6 +476,16 @@ export const SCENES: Scene[] = [
     ],
   },
   {
+    key: 'long-drop', title: 'Off a high roof, four storeys down',
+    asks: 'The reference\'s long sink (kyo-rooftops 12.4-16.5 s): run off an 18 m roof onto one at 6 m, a fall of a second and a half (taken as a dive and a roll: the upright sink of the reference, arms out, is a glide this does not choose). What hangs loose should answer the fall; and at the landing, the cloth going on as the body stops.',
+    watch: 'The skirt and hair through the fall; the landing.',
+    course: { boxes: [B(24, 40, 2, 16, 18), B(20, 44, 16, 44, 6)], start: { x: 32, z: 4 }, alone: true }, seconds: 4,
+    input: (t, r) => (r.y < 7 && r.state === 'ground' ? none : go(0)),
+    should: [
+      { says: 'it lands on the low roof', check: (r) => ok(r.runner.y > 5.9 && r.runner.y < 6.5 && r.runner.z > 16, `ended z ${r.runner.z.toFixed(1)}, y ${r.runner.y.toFixed(1)}`) },
+    ],
+  },
+  {
     key: 'precision-rail', title: 'A precision landing on a wall top',
     asks: 'A gap onto a wall a metre wide running the way it\'s going, then on along it and across to the next roof. The landing should stick and balance; the run along it short-stepped, arms out.',
     watch: 'The stick on landing; balance along the wall; the takeoff off its end.',

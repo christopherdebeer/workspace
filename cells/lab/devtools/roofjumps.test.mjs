@@ -304,6 +304,26 @@ console.log('roofjumps: ok');
   console.log(`apex hold: the pose held ${held.held} steps, the flight the same`);
 }
 
+// a skirt as cloth (cloth.ts): standing it hangs; in a long fall it bells (the hem up and out, opened by its pleats) but doesn't
+// turn inside out over the hips (judged along the hips' own axis: a falling body tilts); landed, it hangs again
+{
+  const c = CHARACTERS.find((x) => x.name === 'schoolgirl'), r = new Runner(new City(1, true), c), rig = new Rig(c); rig.update(1, r);
+  for (let i = 0; i < 60; i++) { r.step(1 / 120, { x: 0, z: 0, jump: false }); rig.update(1 / 120, r); }
+  const hem = () => { const b = rig.bones(r), pel = b.find((o) => o.name === 'pelvis').m, sk = b.filter((o) => o.name === 'worn:pelvis').slice(-c.wears[0].cloth.nu);
+    const pts = sk.map((o) => [o.m[12] + o.m[4] * o.y1, o.m[13] + o.m[5] * o.y1, o.m[14] + o.m[6] * o.y1]);
+    return { up: pts.reduce((s, q) => s + q[1] - pel[13], 0) / pts.length, top: Math.max(...pts.map((q) => (q[0] - pel[12]) * pel[4] + (q[1] - pel[13]) * pel[5] + (q[2] - pel[14]) * pel[6])), rad: pts.reduce((s, q) => s + Math.hypot(q[0] - pel[12], q[2] - pel[14]), 0) / pts.length }; };
+  const rest = hem(); r.y += 12; r.state = 'air'; r.vy = 0; r.move = 'fall';
+  let most = rest, highest = -1;
+  for (let i = 0; i < 120 * 3 && !(r.state === 'ground' && i > 60); i++) { r.step(1 / 120, { x: 0, z: 0, jump: false }); rig.update(1 / 120, r); const h = hem(); if (r.state === 'air') { if (h.rad > most.rad) most = h; highest = Math.max(highest, h.top); } }
+  for (let i = 0; i < 120; i++) { r.step(1 / 120, { x: 0, z: 0, jump: false }); rig.update(1 / 120, r); }
+  const after = hem();
+  assert.ok(rest.up < -0.2, `standing, the skirt hangs (hem ${rest.up.toFixed(2)} m from the hips)`);
+  assert.ok(most.rad > rest.rad * 1.5 && most.up > rest.up + 0.15, `in a long fall it bells (radius ${rest.rad.toFixed(2)} to ${most.rad.toFixed(2)}, hem ${rest.up.toFixed(2)} to ${most.up.toFixed(2)})`);
+  assert.ok(highest < 0.12, `but doesn't turn inside out (full inversion would put it ~0.36 m up; a disc tilted a little past level, ~0.1) in the fall (highest hem point ${highest.toFixed(2)} m up the hips' own axis)`);
+  assert.ok(after.up < -0.18, `landed, it hangs again (hem ${after.up.toFixed(2)})`);
+  console.log(`skirt: hangs ${rest.up.toFixed(2)} m, radius ${rest.rad.toFixed(2)}; a long fall bells it to radius ${most.rad.toFixed(2)}, hem ${most.up.toFixed(2)}; never above ${highest.toFixed(2)}; landed, ${after.up.toFixed(2)}`);
+}
+
 // the city's details (tagged for the looks to come): the same whenever made; every kind found somewhere; each where it belongs:
 // on a face (the building just behind it as tall as it), on a roof (on bare roof, at its height), in the street (at the ground)
 {
