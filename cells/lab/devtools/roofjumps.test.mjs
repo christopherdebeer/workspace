@@ -98,7 +98,7 @@ const { plan, foresee, TUNE, HOUSE, DIALS, City, Runner, Rig, CHUNK, STOREY, TAG
     // (a railing: its top rail a metre over the roof it stands on, just in from the edge)
     if (h.kind === 'railing') { assert.ok(Math.abs(a.heightAt(mx - h.nx * 0.1, mz - h.nz * 0.1) - (h.ay - 1)) < 1e-6, 'a railing stands on its roof'); continue; }
     if (['ledge', 'ac', 'sign', 'balcony', 'escape'].includes(h.kind)) { assert.ok([0.31, 0.5, 0.25, 1.05].some((o) => a.heightAt(h.ax - h.nx * o, h.az - h.nz * o) >= h.ay), `${h.kind} is fixed to a wall`); continue; }
-    if (h.kind === 'pipe') { assert.ok(h.ax === h.bx && h.az === h.bz && h.ay === 0 && h.by > 0); continue; }
+    if (h.kind === 'pipe') { assert.ok(h.ax === h.bx && h.az === h.bz && h.ay >= 0 && h.by > h.ay); continue; }
     if (h.kind === 'face') { assert.ok(h.by - h.ay >= 2 && a.heightAt(mx - h.nx * 0.01, mz - h.nz * 0.01) >= h.by); continue; }
     // (a bar: across a gap, a little above the roofs at either end)
     if (h.kind === 'bar') { assert.ok(a.heightAt(mx, mz) < h.ay - 1 && Math.abs(a.heightAt(h.ax, h.az) - (h.ay - 1.3)) < 1e-6 && Math.abs(a.heightAt(h.bx, h.bz) - (h.ay - 1.3)) < 1e-6, 'a bar spans a gap between two roofs'); continue; }
@@ -319,6 +319,16 @@ console.log('roofjumps: ok');
   }
   for (const k of ['windows', 'pipes', 'blade', 'rust', 'awning', 'aerial', 'pole', 'wire', 'bin']) assert.ok(kinds[k] > 0, `details: some ${k}`);
   console.log(`details in 25 chunks: ${Object.entries(kinds).map(([k, n]) => `${n} ${k}`).join(', ')}`);
+  // (and coupled to the holds: what's seen of a hold is that hold, in the chunk's holds (one object, not a copy): a bundle's runs
+  // and a ladder are pipes to climb, a row of windows above the ground sits on its sill, rust runs from its unit or its pipe)
+  const linked = {};
+  for (let i = -2; i <= 2; i++) for (let j = -2; j <= 2; j++) { const ch = a.chunk(i, j); for (const d of ch.details) {
+    if (d.kind === 'pipes' || d.kind === 'ladder') assert.ok(d.holds?.length && d.holds.every((h) => h.kind === 'pipe'), `a ${d.kind} is climbed`);
+    for (const h of d.holds ?? []) { assert.ok(ch.holds.includes(h), `a ${d.kind}'s hold is one of the chunk's`); linked[d.kind] = (linked[d.kind] ?? 0) + 1; }
+    if (d.kind === 'windows') for (const h of d.holds ?? []) assert.ok(h.kind === 'sill' && Math.abs(h.ay - d.pts[0][1]) < 0.01 && h.nx === d.n[0] && h.nz === d.n[1], 'a row of windows sits on its sill');
+  } }
+  assert.ok(linked.windows > 1000 && linked.rust > 100, `details coupled to holds (${JSON.stringify(linked)})`);
+  console.log(`details coupled to holds: ${Object.entries(linked).map(([k, n]) => `${n} ${k}`).join(', ')}`);
 }
 
 // The city's stairs and bars: stairs a storey a step up a building's side, each step narrow (a rail along it); bars across

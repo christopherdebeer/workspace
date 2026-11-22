@@ -647,6 +647,29 @@ Over 25 chunks: about 22,000 window rows, 1,600 pipe bundles, 2,500 rust streaks
 Not tagged yet from the list above: grilles, eaves, tank stands, balcony bands (balconies are single), projecting pods, the
 elevated railway, stepped streets, pitched roofs.
 
+## The city's parts, in one place (`parts.ts`)
+
+Everything a chunk is furnished with once its boxes are laid out is a row of `PARTS` in `parts.ts`: its name, the hold kinds
+and detail kinds it makes, what it draws, its own dice (`salt`), when it applies, and one maker that makes all of it together.
+`furnish()` runs them in order: the structure (edges, faces, sills, drainpipes, rails; 91), the fixtures (ledges, units, signs,
+balconies, fire escapes, railings, walkways' railings; 95), a course's own holds and bars, what's drawn of the holds, bars across
+alleys (93), ground detail (97), the details (99). A part's dice are its own, so adding a part or changing one moves nothing else;
+moving the old code here left the city as it was, hold for hold. To add a kind of thing: a row (and its kinds in `HoldKind` or
+`DetailKind`, its uses in `USES`).
+
+What's seen and what's held are made together, so they can't drift apart. A detail carries `holds`, the very holds it shows (the
+same objects as the chunk's):
+
+| detail | its holds |
+|---|---|
+| `pipes` | its two runs up the face (street to the jog, the jog to the roof): pipes, climbed as a drainpipe is |
+| `ladder` | a pipe from the first storey to the roof (climbed hand over hand for now; its own kind when it has its own climb) |
+| `windows` | above the ground, the row sits on the face's sill at that storey, where the face has sills (three in four) |
+| `rust` | the unit it runs from, or the pipe bundle's run above it |
+
+Over 25 chunks: 12,800 window rows on their sills, 3,200 bundle runs and 390 ladders to climb, 2,500 rust streaks on what they
+run from. The windows moved for it (a row's foot at its storey, not 0.9 m above), nothing that's held did.
+
 ## Not yet
 
 Sloped roofs, ledges, planks and wires between buildings (everything is a box so far); a zig-zag
