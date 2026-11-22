@@ -21,7 +21,11 @@ export type Mat = (typeof MAT)[keyof typeof MAT];
 /** a block on a bone: in the bone's own space, from y0 (w0 × d0) to y1 (w1 × d1), centred at (x, z) */
 export interface Block { y0: number; w0: number; d0: number; y1: number; w1: number; d1: number; x?: number; zc?: number }
 /** something worn, fixed to a bone: where on it (its own space), the block, its material; `tilt` turns it about x (rad) */
-export interface Attachment { bone: string; at: [number, number, number]; block: Block; mat: Mat; tilt?: number }
+export interface Attachment { bone: string; at: [number, number, number]; block: Block; mat: Mat; tilt?: number;
+  /** it moves (rig.ts): it swings toward a pull made of where it rests on the bone (`rest`), gravity (`fall`) and the wind of
+   * its own motion (`drag`), as a damped spring (`stiff`, `damp`), never more than `max` (rad) from its rest; and `flare`,
+   * a skirt's: belled out by the air as it falls, and by a landing */
+  hang?: { rest: number; fall: number; drag: number; stiff: number; damp: number; max?: number; flare?: number } }
 
 /** the proportions a character is asked as: each continuous, 0 the runner's own where it has one */
 export interface Proportions {
@@ -150,18 +154,23 @@ export const CHARACTERS: Character[] = [
     wears: [{ bone: 'pelvis', at: [0, 0.02, 0], block: { y0: 0, w0: 0.34, d0: 0.22, y1: -0.36, w1: 0.38, d1: 0.24 }, mat: MAT.top }],
   },
   {
-    // (the first reference's figure (kyo-rooftops): a schoolgirl who drops her bag and runs the roofs; her skirt bells out on a
-    // landing there. A sailor-style uniform: white top, the navy collar's flap down her back, a red neckerchief, a pleated navy
-    // skirt, bare knees, navy knee socks, loafers; long dark hair down her back)
+    // (the references' figure (kyo-rooftops, kyo-kling-parkour): a schoolgirl who flings her bag and runs the roofs. A dark
+    // sailor-style uniform (top and a full pleated skirt to the knee), the collar edged white (a dark flap over a white one, at
+    // the back and the front), a red neckerchief, white socks to mid-calf, black loafers; black hair in a high ponytail. The
+    // skirt and the ponytail move (`hang`): the skirt bells in the air and on a landing, the ponytail streams behind)
     name: 'schoolgirl', title: 'A schoolgirl in a sailor uniform', proportions: { stature: 1.6, age: 16, build: -0.3, shoulders: -0.3, hips: 0.2, legs: 0.25 },
-    palette: pal({ top: [0.9, 0.9, 0.87], bottoms: [0.15, 0.17, 0.3], shoes: [0.32, 0.2, 0.13], hair: [0.09, 0.07, 0.07], accent: [0.78, 0.17, 0.19], accent2: [0.15, 0.17, 0.3] }),
-    dress: { ...DRESS, thigh: MAT.skin, shin: MAT.accent2 },
+    palette: pal({ top: [0.07, 0.075, 0.11], bottoms: [0.07, 0.075, 0.11], shoes: [0.06, 0.055, 0.055], hair: [0.05, 0.045, 0.05], accent: [0.78, 0.14, 0.17], accent2: [0.07, 0.075, 0.11], trim: [0.93, 0.93, 0.9] }),
+    dress: { ...DRESS, thigh: MAT.skin, shin: MAT.skin },
     wears: [
-      { bone: 'pelvis', at: [0, 0.05, 0], block: { y0: 0, w0: 0.32, d0: 0.21, y1: -0.3, w1: 0.42, d1: 0.31 }, mat: MAT.bottoms },
-      { bone: 'torso', at: [0, 0.44, -0.1], block: { y0: 0, w0: 0.27, d0: 0.03, y1: -0.19, w1: 0.29, d1: 0.03 }, mat: MAT.accent2, tilt: -0.12 },
-      { bone: 'torso', at: [0, 0.44, 0.085], block: { y0: 0, w0: 0.22, d0: 0.03, y1: -0.07, w1: 0.12, d1: 0.03 }, mat: MAT.accent2, tilt: 0.1 },
-      { bone: 'torso', at: [0, 0.37, 0.1], block: { y0: 0, w0: 0.1, d0: 0.03, y1: -0.15, w1: 0.05, d1: 0.025 }, mat: MAT.accent, tilt: 0.12 },
-      { bone: 'head', at: [0, 0.12, -0.09], block: { y0: 0, w0: 0.17, d0: 0.06, y1: -0.32, w1: 0.15, d1: 0.04 }, mat: MAT.hair, tilt: 0.12 },
+      { bone: 'pelvis', at: [0, 0.05, 0], block: { y0: 0, w0: 0.27, d0: 0.19, y1: -0.35, w1: 0.38, d1: 0.31 }, mat: MAT.bottoms, hang: { rest: 3, fall: 0.5, drag: 0.05, stiff: 120, damp: 16, max: 0.55, flare: 1 } },
+      { bone: 'torso', at: [0, 0.44, -0.1], block: { y0: 0, w0: 0.29, d0: 0.02, y1: -0.21, w1: 0.31, d1: 0.02 }, mat: MAT.trim, tilt: -0.12 },
+      { bone: 'torso', at: [0, 0.435, -0.115], block: { y0: 0, w0: 0.25, d0: 0.02, y1: -0.18, w1: 0.27, d1: 0.02 }, mat: MAT.accent2, tilt: -0.12 },
+      { bone: 'torso', at: [0, 0.445, 0.082], block: { y0: 0, w0: 0.24, d0: 0.02, y1: -0.09, w1: 0.13, d1: 0.02 }, mat: MAT.trim, tilt: 0.1 },
+      { bone: 'torso', at: [0, 0.44, 0.095], block: { y0: 0, w0: 0.2, d0: 0.02, y1: -0.07, w1: 0.1, d1: 0.02 }, mat: MAT.accent2, tilt: 0.1 },
+      { bone: 'torso', at: [0, 0.37, 0.108], block: { y0: 0, w0: 0.1, d0: 0.03, y1: -0.15, w1: 0.05, d1: 0.025 }, mat: MAT.accent, tilt: 0.12 },
+      { bone: 'head', at: [0, 0.2, -0.1], block: { y0: 0, w0: 0.075, d0: 0.065, y1: -0.42, w1: 0.05, d1: 0.04 }, mat: MAT.hair, tilt: 0.3, hang: { rest: 0.4, fall: 1, drag: 0.1, stiff: 34, damp: 5 } },
+      { bone: 'shinL', at: [0, -0.2, 0], block: { y0: 0, w0: 0.092, d0: 0.097, y1: -0.25, w1: 0.08, d1: 0.086 }, mat: MAT.trim },
+      { bone: 'shinR', at: [0, -0.2, 0], block: { y0: 0, w0: 0.092, d0: 0.097, y1: -0.25, w1: 0.08, d1: 0.086 }, mat: MAT.trim },
     ],
   },
 ];

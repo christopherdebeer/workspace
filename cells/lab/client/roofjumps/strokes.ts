@@ -232,7 +232,7 @@ export function partsOf(bones: Bone[], eye: number[], sun: V, city: City): Part[
     if (kind === 'foreArm') {
       const h = b; for (const o of city.holdsNear(h[0], h[2], 0.6)) if (o.kind !== 'face') { const d = segDist(h, [o.ax, o.ay, o.az], [o.bx, o.by, o.bz]); if (d < 0.1) { gripping = true; break; } }
     }
-    out.push({ name: bn.name, kind, mat: bn.mat ?? 0, a: add(a, scale(e, depth)), b: add(b, scale(e, depth)), side, toEye: e, width, length: len(sub(b, a)), endOn: Math.abs(dot(dir, e)), girth: Math.max(pw, qw) * 1.15, ground: kind === 'foot' ? city.heightAt(c[0], c[2]) : 0, sunSide: dot(side, sun), sunFront: dot(e, sun), planted, gripping, fwd: Z, dist: len(sub(eye as V, c)) });
+    out.push({ name: bn.name, kind, mat: bn.mat ?? 0, a: add(a, scale(e, depth)), b: add(b, scale(e, depth)), side, toEye: e, width, length: len(sub(b, a)), endOn: Math.abs(dot(dir, e)), girth: Math.max(pw, qw) * 1.15, ground: kind === 'foot' ? city.heightAt(c[0], c[2]) : 0, sunSide: dot(side, sun), sunFront: dot(e, sun), planted, gripping, fwd: Z, dist: len(sub(eye as V, c)) - (/^worn:(shin|thigh|upperArm|foreArm|foot)/.test(bn.name) ? 0.08 : 0) });
   }
   return out;
 }

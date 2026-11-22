@@ -145,3 +145,13 @@ thresholds to turn checks green. The work, in order:
   - Contact sheet: devtools/out/contact/contact-schoolgirl.png. The skirt doesn't move yet (the reference's bell on landing
     wants moving attachments).
 - `devtools/roofjumps-contact.mjs`: a contact sheet a character (turnaround and motion), for art direction.
+- The schoolgirl, restyled from the extracted reference sheets (kyo-rooftops, kyo-kling-parkour):
+  - a dark sailor top and skirt (not white), the collar edged white back and front, the red neckerchief;
+  - white socks to mid-calf, black loafers, a high ponytail; a longer, fuller skirt.
+  - Worn parts on a limb are painted just after the limb (the socks were lost under the shins in the far-to-near sort).
+- Moving attachments (character.ts `hang`, rig.ts `hung`):
+  - the skirt and the ponytail each swing as a damped spring toward a pull of their rest on the bone, gravity and the wind of
+    their own motion, changed only on the fixed update;
+  - the skirt also flares: belled by the fall, kicked out at a landing.
+  - Filmed on drop-rebound: it trails back on the run, bells from the drop, is widest at the landing; the ponytail streams.
+  - Suite unchanged (determinism exact; she makes 6 of 6 leaps; no pose misses).
