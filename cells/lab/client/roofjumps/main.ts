@@ -333,7 +333,8 @@ const stripCols = Math.max(1, Number(q.get('cols') ?? 6) | 0);
 function grid(cols: number, names: string[]): void {
   document.body.classList.add('sheet');
   labels.style.gridTemplateColumns = `repeat(${cols}, 1fr)`;
-  labels.replaceChildren(...names.map((n) => { const s = document.createElement('span'); s.textContent = n; return s; }));
+  // (a preview is the picture alone: no names on its frames either)
+  labels.replaceChildren(...names.map((n) => { const s = document.createElement('span'); s.textContent = preview ? '' : n; return s; }));
 }
 
 // ─── the frame ────────────────────────────────────────────────────────────────
