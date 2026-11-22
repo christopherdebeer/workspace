@@ -302,7 +302,8 @@ export const strokeGouacheRules: StrokeRules = {
       if (front > 0.1) lights.push(mk(off(scale(p0.side, sg * wn * 0.2)), { width: wn * 0.5, col: scale(lit, 1.06), mix2: 0, alpha: 0.9, dry: 0.35, key: `${key}/lit`, taper: [rt, rt * 1.5] }));
       // (on skin the turned edge is a soft half-tone, not a seam down the leg)
       const skin = p0.mat % 8 === 0;
-      lights.push(mk(off(scale(p0.side, -sg * wn * 0.32)), { width: wn * 0.26, col: skin ? mix(dark, tone, 0.55) : scale(dark, 0.8), mix2: 0, alpha: skin ? 0.55 : 0.85, dry: 0.2, key: `${key}/turn`, taper: [rt, rt * 1.5] }));
+      // (the turned edge a soft half-tone, wide and half-laid, so it shades the limb rather than striping it)
+      lights.push(mk(off(scale(p0.side, -sg * wn * 0.3)), { width: wn * 0.42, col: skin ? mix(dark, tone, 0.55) : mix(dark, tone, 0.35), mix2: 0, alpha: skin ? 0.45 : 0.6, dry: 0.45, key: `${key}/turn`, taper: [rt * 2, rt * 3] }));
       return [body, lights];
     };
     // (a hand in contact (closed on a hold, or planted): the sleeve ends hard at the wrist, and the hand is one compact, hard
@@ -351,8 +352,21 @@ export const strokeGouacheRules: StrokeRules = {
             ms.push({ layer: 0, kind: K.PULL, a: c0, b: add(over, scale(up, to.width * 0.15)), side: to.side, width: to.width * 0.16, col: scale(dark, 0.85), mix2: 0, alpha: 0.85, dry: 0.3, rank: 1, key: `fig:hem${n}`, taper: [0.02, 0.04] }); } }
         items.push({ d: to.dist - 0.003, ms: [ms] });
       } }
+    // (cloth (a skirt, a coat): a column of its quads, waist to hem, one bent stroke, lit by its own face, so a fold turns light
+    // to dark across the hem and the cloth is a sheet, not a pile of blocks)
+    { const cols = new Map<string, (typeof parts)[number][]>();
+      for (const q of parts) if (q.grid) { const k = `${q.mat}:${q.grid[0]}`; (cols.get(k) ?? cols.set(k, []).get(k)!).push(q); }
+      for (const [k, qs] of cols) {
+        qs.sort((x, y) => x.grid![1] - y.grid![1]); const q0 = qs[0], last = qs[qs.length - 1];
+        const col = (palette[q0.mat] ?? palette[0]) as V, dark = mulv(col, mix([0.55, 0.57, 0.68], scale(T.deep, 0.8), T.dk)), lit = mulv(col, mix([1.05, 1.05, 1.05], T.sunlit, T.dk));
+        const f = qs.reduce((t, q) => add(t, dot(q.fwd, q.toEye) >= 0 ? q.fwd : scale(q.fwd, -1)), [0, 0, 0] as V), face = smooth(-0.25, 0.55, dot(unit(f), T.S));
+        const w = qs.reduce((t, q) => t + q.gw!, 0) / qs.length, tone = mix(dark, lit, 0.3 + 0.55 * face), down = unit(sub(last.bot!, q0.top!));
+        const across = (() => { const sd = cross(down, q0.toEye); return len(sd) > 1e-4 ? unit(sd) : q0.side; })();
+        for (const q of qs) chained.add(q.name + '#' + q.grid!.join(','));
+        items.push({ d: qs.reduce((t, q) => t + q.dist, 0) / qs.length, ms: [[{ layer: 0, kind: K.PULL, a: q0.top!, b: last.bot!, path: qs.slice(1).map((q) => q.top!), side: across, width: w * 1.15, col: tone, col2: mix(tone, lit, 0.3), mix2: 0.25, alpha: 1, dry: 0.12, heart: 0.3, rank: 1, key: `fig:cloth${k}`, taper: [0.004, w * 0.25] }]] });
+      } }
     for (const p of [...parts].sort((x, y) => y.dist - x.dist)) {
-      if (chained.has(p.name)) continue;
+      if (chained.has(p.name) || (p.grid && chained.has(p.name + '#' + p.grid.join(',')))) continue;
       const body: Mark[] = [], lights: Mark[] = [], accents: Mark[] = [], under = { push: (..._m: Mark[]) => 0 };
       items.push({ d: p.dist, ms: [body, lights, accents] });
       const col = (palette[p.mat] ?? palette[0]) as V, dark = mulv(col, mix([0.55, 0.57, 0.68], scale(T.deep, 0.8), T.dk)), lit = mulv(col, mix([1.05, 1.05, 1.05], T.sunlit, T.dk));
@@ -396,7 +410,9 @@ export const strokeGouacheRules: StrokeRules = {
           if (p.planted) { const g = p.ground + 0.004, a: V = [p.a[0], g, p.a[2]], b: V = [p.b[0], g, p.b[2]]; ground.push({ layer: 0, kind: K.DAB, a, b, n: [0, 1, 0], width: p.girth * 1.7, col: scale(T.deep, 0.35), alpha: 0.55, rank: 1, key: `${key}/contact` }); }
           break;
         }
-        case 'worn': body.push(m({ taper: [0.02, 0.04] })); break;
+        // (what's worn: one pull a block; cloth's panels (a skirt's, a coat's) laid square-ended and wet, so they join into one
+        // sheet rather than scalloping into lumps)
+        case 'worn': body.push(m(p.name === 'worn:pelvis' ? { taper: [0.004, 0.004], dry: 0.04, width: p.width * 1.08, mix2: 0.15 } : { taper: [0.02, 0.04] })); break;
         case 'palm': case 'fingers': case 'tips': case 'thumb': case 'thumbtip': {
           // (the hand (rig.ts: palm, fingers in two, thumb in two): one skin pull a part, lit by its own face like cloth, a
           // little darker closed on a hold)
@@ -412,6 +428,51 @@ export const strokeGouacheRules: StrokeRules = {
           litPull(0.45);
         }
       }
+    }
+    // (detail the blocks can't show, from the character's own clothes and hair: brushwork, not geometry. Each painted just after
+    // the part it's on)
+    const det = (d: number, ms: Mark[]) => { if (ms.length) items.push({ d: d - 0.0015, ms: [ms] }); };
+    const skinOf = (q: (typeof parts)[number]) => q.mat % 8 === 0, WUP: V = [0, 1, 0];
+    const crease = (pu: (typeof parts)[number], pl: (typeof parts)[number], key: string) => {
+      const du = unit(sub(pu.b, pu.a)), dl = unit(sub(pl.b, pl.a)), bend = Math.acos(Math.max(-1, Math.min(1, dot(du, dl))));
+      if (bend < 0.5 || pl.endOn > 0.6) return;
+      const k = Math.min(1, (bend - 0.5) / 1.0), bis = unit(sub(dl, du)), w = Math.min(pu.width, pl.width), at = add(pu.b, scale(bis, w * 0.28)), L = 0.035 + 0.045 * k;
+      const { dark } = tonesOf(pu), m = (b: V, i: number): Mark => ({ layer: 0, kind: K.PULL, a: at, b, side: pu.side, width: 0.011, col: scale(dark, 0.72), mix2: 0, alpha: 0.8, dry: 0.25, rank: 1, key: `${key}${i}`, taper: [0.004, 0.012] });
+      det(Math.min(pu.dist, pl.dist), [m(sub(at, scale(du, L)), 0), m(add(at, scale(dl, L * 0.85)), 1)]);
+    };
+    for (const n of ['L', 'R'] as const) {
+      const ua = by.get('upperArm' + n), fa = by.get('foreArm' + n), th = by.get('thigh' + n), sh = by.get('shin' + n), ft = by.get('foot' + n);
+      // (a cuff at the wrist, a hem at the ankle: a darker band across, where the cloth isn't skin)
+      for (const [q, key, skip] of [[fa, 'cuff', contact[n]], [sh, 'hem', false]] as const) {
+        if (!q || skinOf(q) || skip || q.endOn > 0.6) continue;
+        const { dark } = tonesOf(q), dir = unit(sub(q.b, q.a)), c = sub(q.b, scale(dir, 0.022)), s = scale(unit(q.side), q.width * 0.6);
+        det(q.dist, [{ layer: 0, kind: K.PULL, a: sub(c, s), b: add(c, s), side: dir, width: 0.03, col: scale(dark, 0.86), mix2: 0, alpha: 0.9, dry: 0.15, rank: 1, key: `fig:${key}${n}`, taper: [0.008, 0.01] }]);
+      }
+      // (creases inside a bent elbow, behind a bent knee: more as it bends)
+      if (ua && fa && !skinOf(ua)) crease(ua, fa, `fig:elbow${n}`);
+      if (th && sh && !skinOf(th)) crease(th, sh, `fig:knee${n}`);
+      // (the shoe: its sole along the bottom (darker on a pale shoe, paler on a dark one), and the toe)
+      if (ft) {
+        const col = (palette[ft.mat] ?? palette[0]) as V, pale = col[0] * 0.3 + col[1] * 0.59 + col[2] * 0.11 > 0.45, down = scale(WUP, -ft.girth * 0.62);
+        const sole: V = pale ? [0.42, 0.42, 0.44] : [0.78, 0.76, 0.72];
+        det(ft.dist, [{ layer: 0, kind: K.PULL + EDGE, a: add(ft.a, down), b: add(ft.b, down), width: 0.016, col: sole, alpha: 0.9, dry: 0.1, rank: 1, key: `fig:sole${n}` }]);
+      }
+    }
+    // (hair: a sheen arcing over the crown, and two strands swept back, in the hair's own colour)
+    { const hd = by.get('head');
+      if (hd) {
+        const col = (palette[hd.mat] ?? palette[0]) as V, lit = mulv(col, mix([1.0, 1.0, 1.0], T.sunlit, T.dk)), d = unit(sub(hd.b, hd.a)), c = scale(add(hd.a, hd.b), 0.5), back = scale(hd.fwd, -1), s = unit(hd.side), w = hd.width, L = hd.length;
+        // (dark hair takes a sheen; pale hair (white, grey) a darker strand does the work)
+        const pale = col[0] * 0.3 + col[1] * 0.59 + col[2] * 0.11 > 0.45, sheen = pale ? scale(col, 0.72) : add(scale(lit, 1.0), [0.16, 0.15, 0.15]), deep = scale(col, pale ? 0.62 : 0.6);
+        det(hd.dist - 0.001, [
+          { layer: 0, kind: K.PULL, a: add(add(c, scale(d, L * 0.4)), scale(s, -w * 0.32)), b: add(add(c, scale(d, L * 0.4)), scale(s, w * 0.32)), path: [add(add(c, scale(d, L * 0.6)), scale(back, w * 0.12))], side: d, width: 0.02, col: sheen, mix2: 0, alpha: 0.5, dry: 0.6, rank: 1, key: 'fig:sheen', taper: [0.01, 0.02] },
+          { layer: 0, kind: K.PULL, a: add(add(c, scale(d, L * 0.52)), scale(back, w * 0.1)), b: add(add(c, scale(back, w * 0.5)), scale(d, -L * 0.08)), path: [add(add(c, scale(d, L * 0.35)), scale(back, w * 0.42))], side: s, width: 0.012, col: deep, mix2: 0, alpha: 0.55, dry: 0.4, rank: 1, key: 'fig:strand', taper: [0.004, 0.02] },
+        ]);
+      } }
+    // (a skirt's pleats: a fine line down each panel of cloth worn as bottoms; not a coat)
+    for (const q of parts) if (q.grid && q.mat % 8 === 3) {
+      const { dark } = tonesOf(q);
+      det(q.dist, [{ layer: 0, kind: K.PULL, a: q.top!, b: q.bot!, side: q.side, width: 0.008, col: scale(dark, 0.7), mix2: 0, alpha: 0.65, dry: 0.3, rank: 1, key: `fig:pleat${Math.round(q.a[0] * 100)}${Math.round(q.a[2] * 100)}`, taper: [0.003, 0.006] }]);
     }
     for (const m of [...ground, ...items.sort((a, b) => b.d - a.d).flatMap((it) => it.ms.flat())]) put(m);
   },

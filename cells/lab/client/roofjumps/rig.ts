@@ -52,7 +52,7 @@ const KEYS: (keyof Pose)[] = ['hipL', 'hipR', 'kneeL', 'kneeR', 'shL', 'shR', 'e
 const zero = (): Pose => ({ hipL: 0, hipR: 0, kneeL: 0, kneeR: 0, shL: 0, shR: 0, elL: 0, elR: 0, spreadL: 0, spreadR: 0, splay: 0, spine: 0, head: 0, twist: 0, lean: 0, tilt: 0, sink: 0, look: 0, hips: 0 });
 
 /** a bone: its matrix, and its block from y0 (w0 × d0) to y1 (w1 × d1), centred zc along z */
-export interface Bone { name: string; m: M4; y0: number; w0: number; d0: number; y1: number; w1: number; d1: number; zc: number; x?: number; mat?: number; /** worn, and hanging loose (character.ts `hang`) */ loose?: true }
+export interface Bone { name: string; m: M4; y0: number; w0: number; d0: number; y1: number; w1: number; d1: number; zc: number; x?: number; mat?: number; /** worn, and hanging loose (character.ts `hang`) */ loose?: true; /** a cloth's quad: its column and row, and the columns round */ grid?: [number, number, number] }
 
 type V3 = [number, number, number];
 const sub = (a: V3, b: V3): V3 => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
@@ -923,6 +923,7 @@ export class Rig {
       const q = m.slice() as M4; q[0] = X[0]; q[1] = X[1]; q[2] = X[2]; q[4] = Y[0]; q[5] = Y[1]; q[6] = Y[2]; q[8] = Z[0]; q[9] = Z[1]; q[10] = Z[2]; q[12] = top[0]; q[13] = top[1]; q[14] = top[2];
       const wt = Math.hypot(tr[0] - tl[0], tr[1] - tl[1], tr[2] - tl[2]) * 1.12, wb = Math.hypot(br[0] - bl[0], br[1] - bl[1], br[2] - bl[2]) * 1.12;
       put(q, -len * 1.05, wt, 0.02, wb, 0.02);
+      out[out.length - 1].grid = [u, v, c.nu];
     }
   }
   /** a skirt's flare: belled out by the air as it falls; at a landing, the fall stopped, the cloth goes on: a kick of it */

@@ -271,3 +271,24 @@ picture, contact and cast shadow drawn plainly, the cloth pushed further than th
   the rail); the hang's tucked knees with a gap to the wall.
 - **R5. Secondary motion read.** Check that the scarf, ponytail and coat carry the motion as in the studies, and push the cloth
   where it lags too little.
+- Correction to R1-R5 (from the user): not so flat, and stick to the characters.
+  - The round-two studies go too flat (cut paper), and they take liberties with the designs (a beanie for the cap, a changed
+    jacket, a scarf). Our characters stay as defined: the studies inform the painting, not the designs.
+  - The point of the brush is to say more than the rig's blocks can. So R1 becomes **detail marks from each character's own
+    definition**, painted, not modelled:
+    - cuffs at the wrists and hems at the ankles (where the cloth isn't skin);
+    - creases at a bent elbow or knee, more as it bends;
+    - hair with a sheen and a few strands;
+    - a shoe's sole line and toe;
+    - a skirt's pleats.
+  - R2-R5 stand, but painterly rather than flat.
+- Detail marks, first set, each from the character's own parts and colours, painted just after the part it's on:
+  - cuffs at the wrists and hems at the ankles (not on skin, nor on a hand in contact);
+  - creases inside a bent elbow and behind a bent knee, longer as it bends;
+  - hair: a sheen over the crown on dark hair, a darker strand on pale hair, one strand swept back;
+  - shoes: a sole line along the bottom (darker on pale shoes, paler on dark) and the toe;
+  - a skirt's pleats, a fine line down each column.
+  - The turned edge on limbs is now a soft, wide, half-laid half-tone; as a narrow dark pull it read as a racing stripe.
+  - Cloth (the skirt, the coat) is painted a column at a time, waist to hem, as one bent stroke each, lit by its own face. Its
+    quads carry their place in the grid from the rig. The coat is now a sheet with folds, not a staircase of blocks.
+  - Suite unchanged.

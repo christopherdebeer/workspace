@@ -238,7 +238,10 @@ export interface Part { name: string; kind: string; mat: number; a: V; b: V; sid
   ground: number; sunSide: number; sunFront: number; planted: boolean; gripping: boolean;
   /** the way the bone faces (its own z: the face, the chest, the toes); how far its middle is from the eye (for painting far
    * to near: its marks are brought forward by its thickness, its middle isn't) */
-  fwd: V; dist: number }
+  fwd: V; dist: number;
+  /** a cloth's quad (rig.ts): its column and row and the columns round; its top and bottom (middles), brought forward as a and b
+   * are; its width */
+  grid?: [number, number, number]; top?: V; bot?: V; gw?: number }
 
 /** The runner's bones as parts, from the pose and the eye. */
 export function partsOf(bones: Bone[], eye: number[], sun: V, city: City): Part[] {
@@ -265,7 +268,8 @@ export function partsOf(bones: Bone[], eye: number[], sun: V, city: City): Part[
       for (const o of city.holdsNear(c[0], c[2], 0.6)) if (o.kind !== 'face') { const d = segDist(c, [o.ax, o.ay, o.az], [o.bx, o.by, o.bz]); if (d < 0.12) { gripping = true; break; } }
       const under = city.heightAt(c[0], c[2]); if (!gripping && under > 0.05 && c[1] - under < 0.16 && c[1] - under > -0.04) planted = true;
     }
-    out.push({ name: bn.name, kind, mat: bn.mat ?? 0, a: add(a, scale(e, depth)), b: add(b, scale(e, depth)), side, toEye: e, width, length: len(sub(b, a)), endOn: Math.abs(dot(dir, e)), girth: Math.max(pw, qw) * 1.15, ground: kind === 'foot' ? city.heightAt(c[0], c[2]) : 0, sunSide: dot(side, sun), sunFront: dot(e, sun), planted, gripping, fwd: Z, dist: len(sub(eye as V, c)) - (/^worn:(shin|thigh|upperArm|foreArm|foot)/.test(bn.name) ? 0.08 : 0) });
+    out.push({ name: bn.name, kind, mat: bn.mat ?? 0, a: add(a, scale(e, depth)), b: add(b, scale(e, depth)), side, toEye: e, width, length: len(sub(b, a)), endOn: Math.abs(dot(dir, e)), girth: Math.max(pw, qw) * 1.15, ground: kind === 'foot' ? city.heightAt(c[0], c[2]) : 0, sunSide: dot(side, sun), sunFront: dot(e, sun), planted, gripping, fwd: Z, dist: len(sub(eye as V, c)) - (/^worn:(shin|thigh|upperArm|foreArm|foot)/.test(bn.name) ? 0.08 : 0),
+      ...(bn.grid ? { grid: bn.grid, top: add(point(m, 0, 0, 0) as V, scale(e, depth)), bot: add(point(m, 0, bn.y1, 0) as V, scale(e, depth)), gw: (bn.w0 + bn.w1) / 2 } : {}) });
   }
   return out;
 }
