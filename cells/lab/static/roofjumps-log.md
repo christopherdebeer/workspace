@@ -254,3 +254,20 @@ explain each character. The work, in order:
     from the cloth (on the dark navy a plain value up was invisible; as a narrow, hard band it read as a strap);
   - and the hem lifted over a thigh coming up, a short dark pull.
   - The indigo runner's back now turns in the light rather than being a rectangle with bars.
+
+## Queued: round two of the studies (`static/roofjumps-studies/round2/`)
+
+Seven single-frame studies on the clean study frames. They agree: clothes as two or three flat values meeting at hard,
+straight edges (cut paper), the light splitting a form with one hard terminator, the figure the crispest thing in the
+picture, contact and cast shadow drawn plainly, the cloth pushed further than the body. Work, with G4 and G5 still to come:
+
+- **R1. Hard-edged planes for the figure.** A "crisp" mark: no side wobble, no bristles, no dry lift, a clean square end; and per
+  garment a shadow plane under a lit plane cut by one straight terminator from the sun's side (replacing the soft lit and turn
+  pulls). The back's diagonal (G3) becomes that terminator.
+- **R2. A cast shadow, crisp and joined to the feet.** One flat dark shape on the ground under a standing or running figure.
+- **R3. The figure crispest, the city softer behind it.** City marks keep their broad planes but lose some edge contrast near the
+  figure.
+- **R4. Accents and contact.** The shoes and socks at the top of the figure's values. Planted hands splayed flat (fingers apart on
+  the rail); the hang's tucked knees with a gap to the wall.
+- **R5. Secondary motion read.** Check that the scarf, ponytail and coat carry the motion as in the studies, and push the cloth
+  where it lags too little.
