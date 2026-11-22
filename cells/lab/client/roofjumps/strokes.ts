@@ -112,6 +112,8 @@ export interface Mark {
   /** a bent mark: its path, a to b through these (a, then the points, then b); one stroke, its taper, load and dry lift over the
    * whole length, its stamps one a leg, overlapping at each bend (Switchback's strokes bend on strips) */
   path?: V[];
+  /** a bent mark's width at each of its points (a, the path's, b): the form swelling and narrowing along it */
+  widths?: number[];
 }
 
 const NOCLIP: [V, V] = [[-1e5, -1e5, -1e5], [1e5, 1e5, 1e5]];
@@ -135,8 +137,8 @@ export function deposit(m: Mark, out: number[]): void {
 /** a bent mark's stamps: a leg of its path each, each knowing its share of the whole length (so the shader's taper, bristles and
  * dry lift run the whole stroke), lapped a little past each bend so no gap opens there, its width across each leg as it turns */
 function depositPath(m: Mark, out: number[]): void {
-  const pts = [m.a, ...m.path!, m.b], legs: { a: V; b: V; l: number }[] = [];
-  for (let i = 0; i + 1 < pts.length; i++) { const l = len(sub(pts[i + 1], pts[i])); if (l > 1e-5) legs.push({ a: pts[i], b: pts[i + 1], l }); }
+  const pts = [m.a, ...m.path!, m.b], legs: { a: V; b: V; l: number; k: number }[] = [];
+  for (let i = 0; i + 1 < pts.length; i++) { const l = len(sub(pts[i + 1], pts[i])); if (l > 1e-5) legs.push({ a: pts[i], b: pts[i + 1], l, k: i }); }
   const L = legs.reduce((t, g) => t + g.l, 0); if (L < 1e-5) return;
   const hw = (m.width / 2) * 1.15, seed = (hashKey(m.key) % 100000) / 100000, clip = m.clip ?? NOCLIP, Lm = Math.max(L, 1e-4);
   const [tin, tout] = m.taper ?? [Math.min(Lm * 0.3, m.width * 0.6), Math.min(Lm * 0.45, m.width * 1.5)];
@@ -150,7 +152,8 @@ function depositPath(m: Mark, out: number[]): void {
     let across: V;
     if (m.side) { const sd = unit(m.side), k = dot(sd, dir); across = sub(sd, scale(dir, k)); across = len(across) > 1e-4 ? unit(across) : sd; }
     else across = m.n ? unit(cross(m.n, dir)) : unit(Math.abs(dir[1]) > 0.9 ? cross(dir, [1, 0, 0]) : cross(dir, [0, 1, 0]));
-    const c = scale(add(a, b), 0.5), U = scale(sub(b, a), 0.5), Vv = scale(across, hw);
+    const lw = m.widths && m.widths.length === pts.length ? ((m.widths[g.k] + m.widths[g.k + 1]) / 2 / 2) * 1.15 : hw;
+    const c = scale(add(a, b), 0.5), U = scale(sub(b, a), 0.5), Vv = scale(across, lw);
     out.push(c[0], c[1], c[2], m.alpha, U[0], U[1], U[2], m.kind, Vv[0], Vv[1], Vv[2], seed, m.col[0], m.col[1], m.col[2], m.rank ?? 0.5,
       anchor[0], anchor[1], anchor[2], m.dry ?? 0, clip[0][0], clip[0][1], clip[0][2], s0, clip[1][0], clip[1][1], clip[1][2], s1, m.heart ?? 0.5, tin, tout, m.sky ? 1 : 0, ...(m.col2 ?? m.col), m.mix2 ?? 0);
   });

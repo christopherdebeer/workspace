@@ -300,3 +300,23 @@ picture, contact and cast shadow drawn plainly, the cloth pushed further than th
   - A part seen end-on is a short stroke too.
   - Found: the crown's stroke, laid along its own run, pinched into two lobes; the face stroke's taper made a V chin.
   - Not yet: the older figure's pale hair reads chalky; the hood (a worn block) still paints as a rectangle.
+
+## The form layer (agreed: the rig decides pose and contact, the brush decides form and silhouette within a small margin)
+
+- Variable-width bent marks: a path's `widths`, one per point, so one stroke swells and narrows.
+- Profiles by body part, from how bodies are built, not from the blocks (the block gives only scale and direction):
+  - the thigh full at the hip, the quad forward, narrowing to the knee;
+  - the calf swelling behind the shin, slim at the ankle;
+  - a deltoid capping the arm; the forearm full below the elbow, tapering to the wrist.
+  - Each is offset toward the part's front or back as it's seen. Loose cloth eases a profile toward a tube; skin shows it all.
+- Limbs are painted from the profile: one mass along the form, a found contour on the shadow side, a lost lit edge on the
+  light side. A thigh starts up inside the hips.
+- The torso: the seat one stroke across hip to hip (crotch to waist, dropping a little in the middle), the chest a form
+  (waist eased under loose cloth, ribcage full, narrowing to the neck), and the slope from the neck into each shoulder.
+- Found:
+  - the hips laid along the pelvis's own axis collapsed to a knot; laid up the body, they were shorter than wide (a blob);
+  - clothed limbs came out thinner than the old strokes.
+- Tested on the slight figure's dive and the indigo runner from behind: the leg now grows from the hip and tapers, the seat
+  joins torso to legs, the back reads as a body, not bars.
+- Next: arms from behind; the near side lock of hair sticking out in front of the face; the head's own form; then the image
+  studies on pose and description, not on our render.
