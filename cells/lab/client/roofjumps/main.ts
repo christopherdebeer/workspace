@@ -590,7 +590,7 @@ if (menu.active) {
 } else if (q.has('time')) { const i = TIMES.findIndex((t) => t.name === q.get('time')); if (i >= 0) { menu.timeI = i; applyTime(); } }
 
 // (`brushes`: the brush test board (brushtest.ts), in the stroke look, the city left out)
-const brushTest = q.has('brushes') ? (() => { rd.look = 'stroke-gouache'; rd.noFigure = true; const b = boardMarks(); rd.extra = b.marks;
+const brushTest = q.has('brushes') ? (() => { rd.look = 'stroke-gouache'; rd.noFigure = true; if (q.get('ground') === 'ochre') rd.strokes.paperOverride = [0.7, 0.54, 0.37]; const b = boardMarks(); rd.extra = b.marks;
   const el = document.createElement('div'); el.style.cssText = 'position:fixed;left:8px;bottom:8px;font:12px system-ui;color:#2a2018;background:#f3e8d8cc;padding:6px 8px;border-radius:6px;white-space:pre;z-index:9';
   el.textContent = 'brush test board\n' + b.rows.join('\n'); document.body.appendChild(el); return { bones: boardBones() }; })() : null;
 

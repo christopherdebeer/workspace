@@ -165,7 +165,9 @@ function scatter(put: (m: Mark) => void, p: ReturnType<typeof planesOf>[number],
 }
 
 export const strokeGouacheRules: StrokeRules = {
-  paper: [0.7, 0.54, 0.37], grain: 1.3, haze: [0.77, 0.74, 0.83], hazeNear: 0.12, fadeToPaper: 0, sun: DAY_SUN,
+  // (the paper: pale, as it always was. The ochre board of the round-four and -five studies was the generator's, not ours; the
+  // brush board (?brushes) can use it to judge whites, the game doesn't)
+  paper: [0.93, 0.9, 0.84], grain: 1, haze: [0.77, 0.74, 0.83], hazeNear: 0.12, fadeToPaper: 0, sun: DAY_SUN,
   skyField: { top: [0.58, 0.56, 0.7], horizon: [0.89, 0.83, 0.84] },
   city(c, city, put, keeps, light) {
     const T = tints(light), ox = c.cx * 64, oz = c.cz * 64, up0: V = [0, 1, 0], sKey = `street:${c.cx},${c.cz}`, rnd = rng(hashKey(sKey));

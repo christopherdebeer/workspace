@@ -399,3 +399,8 @@ picture, contact and cast shadow drawn plainly, the cloth pushed further than th
   - sides torn about the width rather than eating into it;
   - bristle ridges lighter and grooves darker, a little impasto highlight on the ridges;
   - bent marks smoothed (Catmull-Rom, four legs a span, widths eased), so curves and swells are continuous.
+- Correction (from the user): the ochre ground was the image generator's, not a direction, and mustn't become the game's baseline.
+  - The stroke look is back on its pale paper, with its underpainting whole (broken underpainting on pale paper reads as white
+    specks).
+  - Only the brush board can take a toned ground (`?brushes&ground=ochre`), to judge whites; its underpainting breaks only then.
+  - Kept from the oil-sketch move: the drier city strokes, the bristles, and the figure brush.

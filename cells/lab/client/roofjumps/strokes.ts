@@ -449,7 +449,7 @@ float fbm(vec2 p) { float v = 0.0, a = 0.5; for (int i = 0; i < 3; i++) { v += a
 const FS = `#version 300 es
 precision highp float;
 in vec2 vQ; in vec3 vW; in float vFog; flat in vec4 vCol; flat in vec4 vP; flat in vec4 vS; flat in vec3 vMin; flat in vec3 vMax; flat in vec2 vT; flat in vec4 vCol2; flat in vec3 vN; flat in float vReach; flat in float vBody;
-uniform vec3 uHaze; uniform float uFade; uniform float uGrain; uniform int uCount; uniform sampler2D uBody; uniform int uBodyOn;
+uniform vec3 uHaze; uniform float uFade; uniform float uGrain; uniform int uCount; uniform sampler2D uBody; uniform int uBodyOn; uniform float uBreak;
 uniform highp sampler2DShadow uShadowMap; uniform highp mat4 uSunVP; uniform highp int uShadowOn;
 out vec4 o;
 ${NOISE}
@@ -494,7 +494,8 @@ void main() {
     vec3 ext = vMax - vMin, dd = min(vW - vMin, vMax - vW); float e = 1e5;
     if (ext.x > 0.05) e = min(e, dd.x); if (ext.y > 0.05) e = min(e, dd.y); if (ext.z > 0.05) e = min(e, dd.z);
     float hole = fbm(vec2(um * 0.35, t * 1.2) + sd) + 0.3 * smoothstep(0.0, 1.2, e);
-    a = smoothstep(0.46, 0.56, hole); col *= 0.96 + 0.08 * noise(vec2(um * 0.12, t * 0.6 + sd));
+    // (broken only on a toned ground (uBreak); on pale paper, whole, or the paper reads as white specks)
+    a = uBreak > 0.5 ? smoothstep(0.46, 0.56, hole) : 1.0; col *= 0.96 + 0.08 * noise(vec2(um * 0.12, t * 0.6 + sd));
   } else if (kind == 3) {
     // (a shadow passage: its receiver's shadow, from the sun's map, read through the brush so its edge breaks a little)
     float sh = 0.0;
@@ -607,13 +608,15 @@ export class StrokePainter {
   stamps = 0;
   /** the underpainting left out (`?under=0`, U): only the strokes, to see what they cover */
   noUnder = false;
+  /** another ground than the look's, and its underpainting broken to show it (the brush board's ochre: for judging whites) */
+  paperOverride: V | null = null;
   /** the lit body: its program, its mesh's buffer and VAO, where it's rendered (a colour texture and depth, the drawing buffer's
    * size), and whether it was rendered this frame */
   private bprog!: WebGLProgram; private bbuf!: WebGLBuffer; private bvao!: WebGLVertexArrayObject; private bfbo: WebGLFramebuffer | null = null; private btex: WebGLTexture | null = null; private brb: WebGLRenderbuffer | null = null; private bsize = [0, 0]; private bodyOn = false; private bibuf!: WebGLBuffer; private bicount = 0;
 
   constructor(private gl: WebGL2RenderingContext, program: (vs: string, fs: string, attribs: string[]) => WebGLProgram) {
     this.prog = program(VS, FS, ['aQ', 'a0', 'a1', 'a2', 'a3', 'a4', 'a5', 'a6', 'a7', 'a8']);
-    for (const n of ['uVP', 'uEye', 'uFar', 'uFogNear', 'uDetail', 'uSunC', 'uPx', 'uShadowMap', 'uSunVP', 'uShadowOn', 'uHaze', 'uFade', 'uGrain', 'uCount', 'uBody', 'uBodyOn']) this.u[n] = gl.getUniformLocation(this.prog, n);
+    for (const n of ['uVP', 'uEye', 'uFar', 'uFogNear', 'uDetail', 'uSunC', 'uPx', 'uShadowMap', 'uSunVP', 'uShadowOn', 'uHaze', 'uFade', 'uGrain', 'uCount', 'uBody', 'uBodyOn', 'uBreak']) this.u[n] = gl.getUniformLocation(this.prog, n);
     this.pprog = program(PVS, PFS, ['aQ']); for (const n of ['uPaper', 'uGrain']) this.u['p' + n] = gl.getUniformLocation(this.pprog, n);
     this.kprog = program(KVS, KFS, ['aQ']); for (const n of ['uInv', 'uTop', 'uHor', 'uGrain']) this.u['k' + n] = gl.getUniformLocation(this.kprog, n);
     this.corner = gl.createBuffer()!; gl.bindBuffer(gl.ARRAY_BUFFER, this.corner); gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
@@ -733,7 +736,7 @@ export class StrokePainter {
     if (this.counting) { gl.clearColor(0, 0, 0, 0); gl.clear(gl.COLOR_BUFFER_BIT); this.overdraw = {}; }
     // (paper)
     gl.disable(gl.DEPTH_TEST); gl.depthMask(false); gl.disable(gl.BLEND); gl.disable(gl.CULL_FACE);
-    gl.useProgram(this.pprog); gl.uniform3fv(this.u.puPaper, R.paper); gl.uniform1f(this.u.puGrain, R.grain);
+    gl.useProgram(this.pprog); gl.uniform3fv(this.u.puPaper, this.paperOverride ?? R.paper); gl.uniform1f(this.u.puGrain, R.grain);
     if (!this.counting) { gl.bindVertexArray(this.dyn.vaos[0]); gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4); }
     // (the solid world, in depth only)
     gl.depthMask(true); gl.enable(gl.DEPTH_TEST); gl.depthFunc(gl.LESS); gl.colorMask(false, false, false, false);
@@ -756,7 +759,7 @@ export class StrokePainter {
       gl.uniform1f(this.u.uPx, Math.hypot(p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2]) / Math.max(d0, 1e-6));
     }
     gl.uniform1i(this.u.uShadowMap, 3); gl.uniform1i(this.u.uShadowOn, o.sunVP ? 1 : 0); if (o.sunVP) gl.uniformMatrix4fv(this.u.uSunVP, false, o.sunVP);
-    gl.uniform3fv(this.u.uHaze, o.light.haze); gl.uniform1f(this.u.uFade, R.fadeToPaper); gl.uniform1f(this.u.uGrain, R.grain); gl.uniform1i(this.u.uCount, this.counting ? 1 : 0);
+    gl.uniform3fv(this.u.uHaze, o.light.haze); gl.uniform1f(this.u.uFade, R.fadeToPaper); gl.uniform1f(this.u.uGrain, R.grain); gl.uniform1i(this.u.uCount, this.counting ? 1 : 0); gl.uniform1f(this.u.uBreak, this.paperOverride ? 1 : 0);
     gl.depthMask(false); gl.depthFunc(gl.LEQUAL); gl.enable(gl.BLEND);
     // (toward the eye by the slope too: a face seen edge-on still passes against its own depth, no paper at a box's edge)
     gl.enable(gl.POLYGON_OFFSET_FILL); gl.polygonOffset(-2, -2);

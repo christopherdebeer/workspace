@@ -2,7 +2,7 @@
  * The brush test board (`?brushes`): single strokes on the toned ground, to get the figure's brush right on its own before it's
  * laid over a figure (round five's studies: `static/roofjumps-studies/round5/`). A board in the air, facing the eye, the city
  * not drawn; lit forms (a column, a limb, a head) for marks that take their colour from the lit body; each row a kind of mark,
- * each column a variation. Labels in the page.
+ * each column a variation. Labels in the page. On the game's pale paper; `&ground=ochre` a toned board, to judge whites.
  */
 import type { Bone } from './rig';
 import type { Mark, V } from './strokes';
