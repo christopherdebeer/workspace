@@ -453,6 +453,8 @@ void main() {
   float prof = sqrt(smoothstep(0.0, tin, u)) * sqrt(smoothstep(1.0, 1.0 - tout, u));
   float k = um / Wm;
   float side = 1.0 - 0.17 * noise(vec2(k * 0.9, sd + (t > 0.0 ? 3.1 : 7.7))) - 0.08 * noise(vec2(k * 4.0, sd + (t > 0.0 ? 1.3 : 5.9)));
+  // (a figure's marks a loaded brush's: sides torn by the bristles, the edge breaking where the paint thins)
+  if (vBody > 0.0) side *= 1.0 - 0.22 * noise(vec2(k * 2.3, sd + (t > 0.0 ? 11.0 : 17.0))) - 0.12 * noise(vec2(k * 9.0, sd + (t > 0.0 ? 4.0 : 8.0)));
   float hw = prof * side;
   // (bristles: streaks along it, a dozen and more across it, whatever its width)
   float br = 0.6 * noise(vec2((t * 0.5 + 0.5) * 13.0 + sd, k * 0.3)) + 0.4 * noise(vec2((t * 0.5 + 0.5) * 34.0 + sd * 1.7, k * 0.7));
@@ -486,6 +488,7 @@ void main() {
     col *= 0.96 + 0.08 * noise(vec2(k * 0.4, t * 1.2 + sd));
   } else if (kind == 0) {
     a = (1.0 - smoothstep(hw - 0.06, hw, at)) * gap;
+    if (vBody > 0.0) a *= smoothstep(0.0, 0.25, br + 0.6 - at / max(hw, 1e-3) * 0.7);
     // (the bristles show in the paint: ridges a little lighter, grooves a little darker)
     col *= 0.93 + 0.1 * noise(vec2(k * 0.5, t * 1.5 + sd)) + 0.22 * (br - 0.5);
     col *= 1.0 - 0.06 * (1.0 - smoothstep(0.0, 0.35, abs(u - heart)));
@@ -528,7 +531,7 @@ float lit(vec3 p) {
 }
 void main() {
   vec3 n = normalize(vNw), V = normalize(uEye - vW); if (dot(n, V) < 0.0) n = -n;
-  vec3 base = uPal[vM]; float lum = dot(base, vec3(0.3, 0.59, 0.11)), lift = max(0.0, 0.3 - lum) * 0.75;
+  vec3 base = uPal[vM]; float lum = dot(base, vec3(0.3, 0.59, 0.11)), lift = max(0.0, 0.32 - lum) * 1.1;
   float ndl = dot(n, normalize(uSun)), sun = smoothstep(-0.2, 0.55, ndl) * lit(vW + n * 0.03);
   vec3 dark = base * uShade, light = base * uSunlit + uSunlit * lift;
   // (the turn from light to shade, warm to cool; a little warmth bounced up from the roof into the undersides; a cool rim)

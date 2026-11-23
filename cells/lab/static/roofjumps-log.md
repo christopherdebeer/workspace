@@ -373,3 +373,17 @@ picture, contact and cast shadow drawn plainly, the cloth pushed further than th
 - The ponytail's tip is one calligraphic flick.
 - Next: the figure's strokes looser and more gestural (wider, fewer, bending with the gesture), the head, hands and shoes as a
   few gestural strokes, the sky and the far city looser too.
+- Round five (`static/roofjumps-studies/round5/`): six characters as oil sketches. Focus now brushwork and the characters, not
+  the city.
+  - Tried:
+    - no contour;
+    - masses wider and drier;
+    - three broad wrap strokes across the torso;
+    - the hair one broad curved mass, a lit stroke and flyaway flicks;
+    - a swirl along a skirt's hem;
+    - cuffs, hems and sole lines removed;
+    - the lit body's shade lighter, the dark-cloth lift stronger;
+    - figure marks given torn sides and broken edges in the shader.
+  - Result, honestly: small gains. The figures still read as tubes: their strokes keep clean, straight sides and the rig's
+    proportions, and the heads still read as blocks. The tuning isn't converging. The next step is to build and test the
+    figure's brush on its own: a test page of single strokes against the studies' marks, before laying it over the figure.

@@ -278,7 +278,7 @@ export const strokeGouacheRules: StrokeRules = {
     }
     return out;
   },
-  bodyLight(light) { const T = tints(light); return { sunlit: T.sunlit, shade: mix([0.7, 0.71, 0.79], add(T.deep, [0.05, 0.05, 0.06]), T.dk) }; },
+  bodyLight(light) { const T = tints(light); return { sunlit: scale(T.sunlit, 1.08), shade: mix([0.82, 0.8, 0.95], add(T.deep, [0.12, 0.11, 0.15]), T.dk) }; },
   figure(parts, palette, put, light) {
     // (several figures at once (the menu's line of characters): each painted on its own; every figure's bones start at its pelvis.
     // Painted together, the parts looked up by name were only the last figure's, and the rest lost their bodies)
@@ -347,10 +347,11 @@ export const strokeGouacheRules: StrokeRules = {
       const acrossAt = (i: number) => { const d = unit(sub(pts[Math.min(pts.length - 1, i + 1)], pts[Math.max(0, i - 1)])), s0 = sub(side, scale(d, dot(side, d))); return len(s0) > 1e-4 ? unit(s0) : side; };
       const edge = (k: number, f: number) => pts.map((q, i) => add(q, scale(acrossAt(i), k * ws[i] * f)));
       const n = pts.length, wMid = ws[Math.floor(n / 2)];
-      const mass: Mark = { layer: 0, kind: K.PULL, a: pts[0], b: pts[n - 1], path: pts.slice(1, -1), widths: ws, side, width: wMid, col: tone, col2: mix(tone, lit, 0.3), mix2: 0.3, alpha: 1, dry: 0.3, heart: 0.2, rank: 1, key, body: 0.85, taper: [ws[0] * 0.25, ws[n - 1] * 0.3] };
+      const mass: Mark = { layer: 0, kind: K.PULL, a: pts[0], b: pts[n - 1], path: pts.slice(1, -1), widths: ws.map((w) => w * 1.12), side, width: wMid * 1.12, col: tone, col2: mix(tone, lit, 0.3), mix2: 0.3, alpha: 1, dry: 0.45, heart: 0.2, rank: 1, key, body: 0.85, taper: [ws[0] * 0.25, ws[n - 1] * 0.3] };
       const sh = edge(-sg, 0.4), cw = ws.map((w) => w * 0.17);
       const found: Mark = { layer: 0, kind: K.PULL, a: sh[0], b: sh[n - 1], path: sh.slice(1, -1), widths: cw, side, width: wMid * 0.17, col: mix(dark, tone, 0.25), mix2: 0, alpha: 0.75, dry: 0.12, heart: 0.5, rank: 1, key: `${key}/found`, taper: [wMid * 0.4, wMid * 0.6] };
-      const lights: Mark[] = [found];
+      // (no contour: the silhouette is where the strokes' own broken ends stop)
+      void found; const lights: Mark[] = [];
       if (front > 0.15) { const lt = edge(sg, 0.22).slice(1, -1); if (lt.length >= 2) lights.push({ layer: 0, kind: K.PULL, a: lt[0], b: lt[lt.length - 1], path: lt.slice(1, -1), side, width: wMid * 0.3, col: scale(lit, 1.05), mix2: 0, alpha: 0.75, dry: 0.5, heart: 0.4, rank: 1, key: `${key}/lit`, taper: [wMid * 0.5, wMid * 0.8] }); }
       // (pass two, the modelling: across the form at stations along it, a cool half-tone laid in from the shadow side toward the
       // middle, a warm plane laid out from the middle on the lit side, each bent a little with the form's turn; so the form reads
@@ -380,6 +381,15 @@ export const strokeGouacheRules: StrokeRules = {
           void low; void lowW;
           items.push({ d: pe.dist + 0.001, ms: [[{ layer: 0, kind: K.PULL, a: add(mid, scale(sd, -half)), b: add(mid, scale(sd, half)), path: [add(mid, scale(up, -h * 0.08))], side: up, width: h, col: tone, col2: mix(tone, lit, 0.25), mix2: 0.25, alpha: 1, dry: 0.05, heart: 0.5, rank: 1, key: 'fig:hips', body: 0.85, taper: [h * 0.18, h * 0.18] }]] }); }
         const ms = paintPts(to, upP, upW, 'fig:chest', sd);
+        // (wrapped: three broad strokes across the torso, diagonal and bending round it, each a third of its height, the ones
+        // toward the light lighter and warmer; their ends ragged past its edge, as the sketch's are)
+        { const { tone, lit, dark } = tonesOf(to), h = len(sub(to.b, to.a)), sg = Math.sign(to.sunSide) || 1;
+          for (let k = 0; k < 3; k++) {
+            const t = 0.22 + 0.27 * k, c = lv(t, 0.02), w0 = to.width * (0.62 + 0.05 * k), tilt = scale(up, h * 0.16 * (k % 2 ? -1 : 1));
+            const a = add(add(c, scale(sd, -w0)), tilt), b = add(sub(c, tilt), scale(sd, w0)), mid = add(c, scale(up, h * 0.04));
+            const col = k === 1 ? mix(tone, lit, 0.55) : k === 0 ? mix(tone, sg > 0 ? lit : dark, 0.3) : tone;
+            ms[1].push({ layer: 0, kind: K.PULL, a: sg > 0 ? b : a, b: sg > 0 ? a : b, path: [mid], side: up, width: h * 0.36, col, col2: mix(col, lit, 0.3), mix2: 0.3, alpha: 1, dry: 0.55, heart: 0.25, rank: 0.6, key: `fig:wrap${k}`, taper: [h * 0.06, h * 0.18], body: 0.3 });
+          } }
         for (const n of ['L', 'R']) { const ua = by.get('upperArm' + n); if (!ua) continue; const { tone } = tonesOf(to), neck = add(to.b, scale(up, 0.01)), mid = add(scale(add(neck, ua.a), 0.5), scale(up, 0.035));
           ms[0].push({ layer: 0, kind: K.PULL, a: neck, b: ua.a, path: [mid], side: up, width: to.width * 0.28, col: tone, mix2: 0, alpha: 1, dry: 0.1, rank: 1, key: `fig:trap${n}`, taper: [to.width * 0.08, to.width * 0.1] }); }
         items.push({ d: to.dist, ms });
@@ -419,6 +429,7 @@ export const strokeGouacheRules: StrokeRules = {
       } }
     // (cloth (a skirt, a coat): a column of its quads, waist to hem, one bent stroke, lit by its own face, so a fold turns light
     // to dark across the hem and the cloth is a sheet, not a pile of blocks)
+    const hemOf: { col: string; q: (typeof parts)[number] }[] = [];
     { const cols = new Map<string, (typeof parts)[number][]>();
       for (const q of parts) if (q.grid) { const k = `${q.mat}:${q.grid[0]}`; (cols.get(k) ?? cols.set(k, []).get(k)!).push(q); }
       for (const [k, qs] of cols) {
@@ -428,8 +439,14 @@ export const strokeGouacheRules: StrokeRules = {
         const w = qs.reduce((t, q) => t + q.gw!, 0) / qs.length, tone = mix(dark, lit, 0.3 + 0.55 * face), down = unit(sub(last.bot!, q0.top!));
         const across = (() => { const sd = cross(down, q0.toEye); return len(sd) > 1e-4 ? unit(sd) : q0.side; })();
         for (const q of qs) chained.add(q.name + '#' + q.grid!.join(','));
+        hemOf.push({ col: k, q: last });
         items.push({ d: qs.reduce((t, q) => t + q.dist, 0) / qs.length, ms: [[{ layer: 0, kind: K.PULL, a: q0.top!, b: last.bot!, path: qs.slice(1).map((q) => q.top!), side: across, width: w * 1.15, col: tone, col2: mix(tone, lit, 0.3), mix2: 0.25, alpha: 1, dry: 0.12, heart: 0.3, rank: 1, key: `fig:cloth${k}`, body: 0.85, taper: [0.004, w * 0.25] }]] });
       } }
+    // (the hem swirled: one or two strokes round the cloth's bottom row (where it's seen), lighter where it lifts)
+    { const by2 = new Map<number, (typeof parts)[number][]>(); for (const h of hemOf) { const mt = h.q.mat; (by2.get(mt) ?? by2.set(mt, []).get(mt)!).push(h.q); }
+      for (const [mt, qs] of by2) { const seen = qs.filter((q) => dot(q.fwd, q.toEye) > -0.35).sort((x, y) => x.grid![0] - y.grid![0]); if (seen.length < 3) continue;
+        const pts = seen.map((q) => add(scale(add(q.top!, q.bot!), 0.5), scale(sub(q.bot!, q.top!), 0.25))), q0 = seen[0], { tone, lit } = tonesOf(q0), w = len(sub(q0.bot!, q0.top!)) * 0.75;
+        items.push({ d: Math.min(...seen.map((q) => q.dist)) - 0.002, ms: [[{ layer: 0, kind: K.PULL, a: pts[0], b: pts[pts.length - 1], path: pts.slice(1, -1), side: unit(sub(q0.bot!, q0.top!)), width: w, col: mix(tone, lit, 0.6), col2: tone, mix2: 0.3, alpha: 0.85, dry: 0.5, heart: 0.35, rank: 0.6, key: `fig:hem${mt}`, taper: [w * 0.3, w * 0.8], body: 0.45 }]] }); } }
     for (const p of [...parts].sort((x, y) => y.dist - x.dist)) {
       if (chained.has(p.name) || (p.grid && chained.has(p.name + '#' + p.grid.join(',')))) continue;
       const body: Mark[] = [], lights: Mark[] = [], accents: Mark[] = [], under = { push: (..._m: Mark[]) => 0 };
@@ -470,15 +487,13 @@ export const strokeGouacheRules: StrokeRules = {
             body.push(st(at(-0.42, -sg * 0.27, 0.08), at(0.15, -sg * 0.3, 0.05), w * 0.3, mix(sk, scale(sk, 0.72), 0.7), 'cheek', { alpha: 0.85 }));
           }
           const hair = tone, hl = add(mix(tone, lit, 0.6), [0.06, 0.05, 0.05]), hd = scale(tone, 0.7);
-          // (the crown: one broad stroke bent over the top, side to side; the back of the head, a mass down it)
-          body.push(st(at(0.24, -0.56, -0.16), at(0.24, 0.56, -0.16), L * 0.44, hair, 'crown', { side: d, path: [at(0.44, -0.2, -0.16), at(0.44, 0.2, -0.16)], heart: 0.5, taper: [L * 0.08, L * 0.08] })); /* (across it: up the head, since it runs side to side) */
-          body.push(st(at(0.36, 0, -0.26), at(-0.3, 0, -0.42), w * 0.86, hair, 'back', { side: sd, taper: [w * 0.08, w * 0.35] }));
-          // (fringe toward the brow and a lock down each side, where the face is seen)
-          if (facing > -0.2) for (const [k, v] of [[0, -0.22], [1, 0.05], [2, 0.3]] as const) lights.push(st(at(0.48, v * 0.6, 0.0), at(0.24, v, 0.42), w * 0.22, k === 1 ? hl : hair, `fringe${k}`, { side: sd }));
-          for (const v of [-0.48, 0.48]) lights.push(st(at(0.3, v, 0.05), at(-0.18, v * 1.05, -0.05), w * 0.2, hair, `lock${v > 0 ? 'r' : 'l'}`, { side: fw }));
-          // (its sheen and its depth)
-          lights.push(st(at(0.42, sg * 0.15, -0.05), at(0.1, sg * 0.42, -0.25), w * 0.16, hl, 'sheen', { alpha: 0.8, dry: 0.45 }));
-          lights.push(st(at(0.2, -sg * 0.2, -0.3), at(-0.25, -sg * 0.1, -0.45), w * 0.18, hd, 'depth', { alpha: 0.8 }));
+          // (the sketch's hair: one broad stroke over the crown and down the back, curving with the skull, and one lighter across
+          // its lit side; then flyaway flicks)
+          body.push(st(at(0.55, 0, 0.05), at(-0.3, 0, -0.4), w * 1.05, hair, 'mass', { path: [at(0.35, 0, -0.42)], side: sd, taper: [L * 0.35, L * 0.4], dry: 0.35 }));
+          lights.push(st(at(0.5, sg * 0.1, 0.0), at(0.0, sg * 0.4, -0.38), w * 0.4, hl, 'lit', { path: [at(0.35, sg * 0.3, -0.25)], alpha: 0.85, dry: 0.45 }));
+          // (flyaway: thin flicks off the crown and back, curling out as the sketch's hair does)
+          for (let k = 0; k < 4; k++) { const v = -0.45 + 0.3 * k, a = at(0.38, v * 0.6, -0.2), b = at(-0.05 - 0.15 * (k % 2), v * 1.5, -0.8), mid = add(scale(add(a, b), 0.5), scale(d, L * 0.18));
+            lights.push(st(a, b, w * 0.045, k % 2 ? hd : hair, `flick${k}`, { path: [mid], alpha: 0.85, dry: 0.35, taper: [0.003, w * 0.25], body: 0 })); }
           break;
         }
         case 'pelvis': case 'torso':
@@ -526,20 +541,7 @@ export const strokeGouacheRules: StrokeRules = {
     };
     for (const n of ['L', 'R'] as const) {
       const ua = by.get('upperArm' + n), fa = by.get('foreArm' + n), th = by.get('thigh' + n), sh = by.get('shin' + n), ft = by.get('foot' + n);
-      // (a cuff at the wrist, a hem at the ankle: a darker band across, where the cloth isn't skin)
-      for (const [q, key, skip] of [[fa, 'cuff', contact[n]], [sh, 'hem', false]] as const) {
-        if (!q || skinOf(q) || skip || q.endOn > 0.6) continue;
-        const { dark } = tonesOf(q), dir = unit(sub(q.b, q.a)), c = sub(q.b, scale(dir, 0.022)), s = scale(unit(q.side), q.width * 0.6);
-        det(q.dist, [{ layer: 0, kind: K.PULL, a: sub(c, s), b: add(c, s), side: dir, width: 0.03, col: scale(dark, 0.86), mix2: 0, alpha: 0.9, dry: 0.15, rank: 1, key: `fig:${key}${n}`, taper: [0.008, 0.01] }]);
-      }
-      // (creases inside a bent elbow, behind a bent knee: more as it bends)
-      void crease;
-      // (the shoe: its sole along the bottom (darker on a pale shoe, paler on a dark one), and the toe)
-      if (ft) {
-        const col = (palette[ft.mat] ?? palette[0]) as V, pale = col[0] * 0.3 + col[1] * 0.59 + col[2] * 0.11 > 0.45, down = scale(WUP, -ft.girth * 0.62);
-        const sole: V = pale ? [0.42, 0.42, 0.44] : [0.78, 0.76, 0.72];
-        det(ft.dist, [{ layer: 0, kind: K.PULL + EDGE, a: add(ft.a, down), b: add(ft.b, down), width: 0.016, col: sole, alpha: 0.9, dry: 0.1, rank: 1, key: `fig:sole${n}` }]);
-      }
+      void crease; void ua; void fa; void th; void sh;
     }
     // (a skirt's pleats: a fine line down each panel of cloth worn as bottoms; not a coat)
     for (const q of parts) if (q.grid && q.mat % 8 === 3) {
