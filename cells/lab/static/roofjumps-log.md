@@ -462,3 +462,28 @@ strokes picking up the masses under them.
   - 52 floats a stroke.
   - On the board, row G: a ribbon turned 180 degrees about its length (broad face, edge, its back, darker), and a stroke
     wrapping round a column, from its lit front onto the side away.
+
+## The figures re-laid in spline strokes (first pass): a field of strokes a form, not a stroke a bone
+
+- Asked: don't fixate on one stroke per bone or limb; a form is many strokes.
+- The design: each form (a sleeve or a leg across its joint, the torso, the hair, the face) is a stroke field over its own
+  surface. The surface is parametrised along the form (over its bones, by length) and round it, from the bones' real blocks
+  (each part now carries its bone).
+- Each form gets:
+  - a block-in, one broad stroke down its middle as wide as it is (a painter's first pass);
+  - strokes along it at several places round the side the eye sees;
+  - strokes wrapping across it at several places along it.
+- The strokes:
+  - lie on the surface (a normal at every point, so they turn, narrow and darken as the form turns away);
+  - are lit by the sun;
+  - are seeded by form and place, their points fixed in the bones' own space, so they come back each frame and move with the
+    body;
+  - are counted by screen size (more near, fewer far), never wider than the form.
+- Hands, feet, worn blocks and cloth keep their stamp marks for now.
+- Found: as a dense field the forms read as knitted fabric; with too few strokes each grew wider than the form and flared into
+  fins. Now 2-3 along and 1-2 across, widths capped by the form.
+- Not yet:
+  - the joins between forms (the waist, the neck) show gaps;
+  - the hair reads as a helmet;
+  - the light is dark overall;
+  - cloth (skirt, coat), hands and feet are not yet in splines.

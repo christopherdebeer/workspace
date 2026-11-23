@@ -290,6 +290,8 @@ export interface Part { name: string; kind: string; mat: number; a: V; b: V; sid
   /** the way the bone faces (its own z: the face, the chest, the toes); how far its middle is from the eye (for painting far
    * to near: its marks are brought forward by its thickness, its middle isn't) */
   fwd: V; dist: number;
+  /** the bone itself (its frame and block): for strokes laid on its real surface */
+  bone?: Bone;
   /** a cloth's quad (rig.ts): its column and row and the columns round; its top and bottom (middles), brought forward as a and b
    * are; its width */
   grid?: [number, number, number]; top?: V; bot?: V; gw?: number }
@@ -353,7 +355,7 @@ export function partsOf(bones: Bone[], eye: number[], sun: V, city: City): Part[
       for (const o of city.holdsNear(c[0], c[2], 0.6)) if (o.kind !== 'face') { const d = segDist(c, [o.ax, o.ay, o.az], [o.bx, o.by, o.bz]); if (d < 0.12) { gripping = true; break; } }
       const under = city.heightAt(c[0], c[2]); if (!gripping && under > 0.05 && c[1] - under < 0.16 && c[1] - under > -0.04) planted = true;
     }
-    out.push({ name: bn.name, kind, mat: bn.mat ?? 0, a: add(a, scale(e, depth)), b: add(b, scale(e, depth)), side, toEye: e, width, length: len(sub(b, a)), endOn: Math.abs(dot(dir, e)), girth: Math.max(pw, qw) * 1.15, ground: kind === 'foot' ? city.heightAt(c[0], c[2]) : 0, sunSide: dot(side, sun), sunFront: dot(e, sun), planted, gripping, fwd: Z, dist: len(sub(eye as V, c)) - (/^worn:(shin|thigh|upperArm|foreArm|foot)/.test(bn.name) ? 0.08 : 0),
+    out.push({ name: bn.name, kind, mat: bn.mat ?? 0, a: add(a, scale(e, depth)), b: add(b, scale(e, depth)), side, toEye: e, width, length: len(sub(b, a)), endOn: Math.abs(dot(dir, e)), girth: Math.max(pw, qw) * 1.15, ground: kind === 'foot' ? city.heightAt(c[0], c[2]) : 0, sunSide: dot(side, sun), sunFront: dot(e, sun), planted, gripping, fwd: Z, bone: bn, dist: len(sub(eye as V, c)) - (/^worn:(shin|thigh|upperArm|foreArm|foot)/.test(bn.name) ? 0.08 : 0),
       ...(bn.grid ? { grid: bn.grid, top: add(point(m, 0, 0, 0) as V, scale(e, depth)), bot: add(point(m, 0, bn.y1, 0) as V, scale(e, depth)), gw: (bn.w0 + bn.w1) / 2 } : {}) });
   }
   return out;
@@ -419,7 +421,7 @@ export interface StrokeRules {
   /** the sky's marks over the field, as directions from the eye (each end a unit direction): laid far off */
   sky?(light: Light): Mark[];
   /** the runner's marks, from its parts (each frame) */
-  figure(parts: Part[], palette: V[], put: (m: Mark) => void, light: Light): void;
+  figure(parts: Part[], palette: V[], put: (m: Mark) => void, light: Light, putSpline?: (s: Spline) => void): void;
   /** the runner's shadow: its marks on what receives it (none: the shadow passages, from the sun's map, carry it) */
   shadow?(parts: Part[], rs: Receiver[], put: (m: Mark) => void, light: Light): void;
 }
@@ -877,7 +879,8 @@ export class StrokePainter {
     if (R.sky && !o.bare) for (const m of this.skyMarks) dyn[0].push({ ...m, a: add(o.eye as V, scale(m.a, o.far * 1.3)), b: add(o.eye as V, scale(m.b, o.far * 1.3)), width: m.width * o.far * 1.3 });
     const parts = o.bones.length && !o.noFigure ? partsOf(o.bones, o.eye, unit(o.light.sun), o.city) : [];
     if (parts.length && !o.bare && R.shadow) { const pel = parts.find((p) => p.kind === 'pelvis') ?? parts[0], c = scale(add(pel.a, pel.b), 0.5); R.shadow(parts, receivers(o.city, c[0], c[1], c[2], o.light.sun), (m) => dyn[1].push(m), o.light); }
-    if (parts.length && !o.noFigure) R.figure(parts, o.palette, (m) => dyn[2].push(m), o.light);
+    const figSpl: Spline[] = [];
+    if (parts.length && !o.noFigure) R.figure(parts, o.palette, (m) => dyn[2].push(m), o.light, (sp) => figSpl.push(sp));
     if (o.extra) for (const m of o.extra) dyn[m.pick ? 3 : 2].push(m);
     { const keep: Mark[] = []; for (const m of dyn[2]) (m.pick ? dyn[3] : keep).push(m); dyn[2] = keep; }
     const flat: number[] = [], dc: number[] = [];
@@ -902,7 +905,7 @@ export class StrokePainter {
     if (this.bodyOn) { gl.activeTexture(gl.TEXTURE4); gl.bindTexture(gl.TEXTURE_2D, this.btex); gl.activeTexture(gl.TEXTURE0); gl.uniform1i(this.u.uBody, 4); gl.uniform1i(this.u.uBodyOn, 1); }
     drawDyn(2);
     // (the spline strokes: one strip each, through their control points)
-    const spl = o.splines ?? [], sDry = spl.filter((m) => !m.pick), sWet = spl.filter((m) => m.pick);
+    const spl = [...figSpl, ...(o.splines ?? [])], sDry = spl.filter((m) => !m.pick), sWet = spl.filter((m) => m.pick);
     const drawSplines = (ms: Spline[], wet: boolean) => {
       if (!ms.length) return; const data: number[] = []; for (const m of ms) depositSpline(m, data);
       gl.useProgram(this.sprog); const vao = gl.createVertexArray()!; gl.bindVertexArray(vao);

@@ -281,11 +281,11 @@ export const strokeGouacheRules: StrokeRules = {
     return out;
   },
   bodyLight(light) { const T = tints(light); return { sunlit: scale(T.sunlit, 1.08), shade: mix([0.82, 0.8, 0.95], add(T.deep, [0.12, 0.11, 0.15]), T.dk) }; },
-  figure(parts, palette, put, light) {
+  figure(parts, palette, put, light, putSpline) {
     // (several figures at once (the menu's line of characters): each painted on its own; every figure's bones start at its pelvis.
     // Painted together, the parts looked up by name were only the last figure's, and the rest lost their bodies)
     const starts = parts.flatMap((q, i) => (q.name === 'pelvis' ? [i] : []));
-    if (starts.length > 1) { starts.forEach((s, k) => strokeGouacheRules.figure(parts.slice(k ? s : 0, starts[k + 1] ?? parts.length), palette, put, light)); return; }
+    if (starts.length > 1) { starts.forEach((s, k) => strokeGouacheRules.figure(parts.slice(k ? s : 0, starts[k + 1] ?? parts.length), palette, put, light, putSpline)); return; }
     // (all marks, no mask: the body claims no depth (render.ts), so each part is painted whole, far to near, its own body then
     // its lit pull then its accents, the near limbs over the far; contact shadows first, on the ground)
     const T = tints(light), ground: Mark[] = [], items: { d: number; ms: Mark[][] }[] = [];
@@ -293,6 +293,74 @@ export const strokeGouacheRules: StrokeRules = {
     // where one cloth covers both; and, an arm raised in line with the body (a dive, a reach), one sweep from the hip up the back
     // through the shoulder into the arm. The pose says where the brush lifts, not the skeleton)
     const by = new Map(parts.map((p) => [p.name, p])), chained = new Set<string>();
+    // ─── the stroke field (spline strokes over the body's own surface): each form (a sleeve, a leg, the torso, the hair, the
+    // face) a field of strokes, not a stroke a bone: strokes along it at several places round it, strokes wrapping across it at
+    // several places along it, spanning its joints; as many as its size on the screen warrants; each seeded by its form and place,
+    // its points fixed in the bones' own space (so the same strokes come back each frame, moving with the body); each lying on
+    // the surface (its normal at each point), lit by the sun on it
+    const fielded = new Set<string>();
+    if (putSpline) {
+      const P3 = (m: Float32Array | number[], x: number, y: number, z: number): V => [m[0] * x + m[4] * y + m[8] * z + m[12], m[1] * x + m[5] * y + m[9] * z + m[13], m[2] * x + m[6] * y + m[10] * z + m[14]];
+      const D3 = (m: Float32Array | number[], x: number, y: number, z: number): V => unit([m[0] * x + m[4] * y + m[8] * z, m[1] * x + m[5] * y + m[9] * z, m[2] * x + m[6] * y + m[10] * z]);
+      const hr = (k: string) => (hashKey(k) % 100000) / 100000;
+      type Bn = NonNullable<(typeof parts)[number]['bone']>;
+      /** a chain's surface: s along it (0..1, over its bones by length), θ round it; the point, its normal, its local half-girth */
+      const surf = (bs: Bn[], s: number, th: number, puff: number) => {
+        const lens = bs.map((b) => Math.abs(b.y1 - b.y0)), tot = lens.reduce((a, b) => a + b, 0) || 1; let at = s * tot, k = 0;
+        while (k < bs.length - 1 && at > lens[k]) { at -= lens[k]; k++; }
+        const b = bs[k], f = Math.min(1, at / (lens[k] || 1)), y = b.y0 + (b.y1 - b.y0) * f, hw = ((b.w0 + (b.w1 - b.w0) * f) / 2) * puff, hd = ((b.d0 + (b.d1 - b.d0) * f) / 2) * puff;
+        const c = Math.cos(th), sn = Math.sin(th), x = (b.x ?? 0) + c * hw, z = (b.zc ?? 0) + sn * hd;
+        return { p: P3(b.m, x, y, z), n: D3(b.m, c / Math.max(hw, 1e-4), 0, sn / Math.max(hd, 1e-4)), r: (hw + hd) / 2, len: tot };
+      };
+      /** the angle round a bone that faces the eye */
+      const thEye = (b: Bn, eye: V) => { const m = b.m, d: V = [eye[0] - m[12], eye[1] - m[13], eye[2] - m[14]]; return Math.atan2(d[0] * m[8] + d[1] * m[9] + d[2] * m[10], d[0] * m[0] + d[1] * m[1] + d[2] * m[2]); };
+      const pig = (q: (typeof parts)[number], k: string): V => { const c = (palette[q.mat] ?? palette[0]) as V, lum = c[0] * 0.3 + c[1] * 0.59 + c[2] * 0.11, lift = Math.max(0, 0.32 - lum) * 0.9, v = 0.92 + 0.16 * hr(k + 'v'), w = (hr(k + 'w') - 0.5) * 0.06; return [(c[0] + lift) * v * (1 + w), (c[1] + lift) * v, (c[2] + lift * 1.1) * v * (1 - w)]; };
+      /** a form's field. along: strokes along it (count, how far round each side of the eye's side they reach); wrap: strokes across
+       * it (count, how far round); puff: how far the cloth stands off the body */
+      const field = (key: string, qs: (typeof parts)[number][], o: { along: number; wrap: number; reach: number; puff: number; s0?: number; s1?: number; thC?: number; dry?: number }) => {
+        const bs = qs.map((q) => q.bone!).filter(Boolean) as Bn[]; if (bs.length !== qs.length) return;
+        const q0 = qs[0], eye = q0.toEye, dist = qs.reduce((t, q) => t + q.dist, 0) / qs.length, detail = Math.max(0.5, Math.min(1.3, 2.4 / Math.max(dist, 0.5)));
+        const eyeP: V = add(scale(add(q0.a, q0.b), 0.5), scale(eye, q0.dist)), thc = o.thC ?? thEye(bs[0], eyeP), s0 = o.s0 ?? 0, s1 = o.s1 ?? 1;
+        const nA = Math.max(2, Math.round(o.along * detail)), nW = Math.max(0, Math.round(o.wrap * detail)), len0 = surf(bs, 0.5, 0, o.puff).len;
+        // (first the block-in: the whole form as one broad stroke down its middle, as wide as it is, facing the eye; the field over it)
+        { const ss = [0, 1, 2, 3].map((j) => s0 + ((s1 - s0) * j) / 3), cs = ss.map((s) => surf(bs, s, thc, 0.001)), es = ss.map((s) => surf(bs, s, thc, o.puff));
+          putSpline({ ctrl: cs.map((p) => p.p) as [V, V, V, V], surfs: es.map((p) => p.n) as [V, V, V, V], widths: es.map((p) => p.r * 2 * 1.08) as [number, number, number, number], col: scale(pig(q0, `${key}m`), 0.92), load: 0.6, dry: 0.2, heart: 0.3, body: 0.001, key: `${key}m`, rank: 1, taper: [len0 * 0.05, len0 * 0.08] }); }
+        for (let i = 0; i < nA; i++) {
+          const k = `${key}a${i}`, th = thc + (nA > 1 ? (i / (nA - 1) - 0.5) * 2 * o.reach : 0) + (hr(k + 't') - 0.5) * 0.35;
+          const a = s0 + (s1 - s0) * hr(k + 's0') * 0.18, b = s1 - (s1 - s0) * hr(k + 's1') * 0.2, ss = [0, 1, 2, 3].map((j) => a + ((b - a) * j) / 3);
+          const pts = ss.map((s) => surf(bs, s, th + (hr(k + 'b') - 0.5) * 0.25 * Math.sin(s * 3), o.puff));
+          const wd = pts.map((p) => Math.max(0.012, Math.min(p.r * 1.25, ((2 * o.reach * p.r) / nA) * 1.4))); /* (never wider than the form) */
+          putSpline({ ctrl: pts.map((p) => p.p) as [V, V, V, V], surfs: pts.map((p) => p.n) as [V, V, V, V], widths: wd as [number, number, number, number], col: pig(q0, k), load: 0.75 + 0.2 * hr(k + 'l'), dry: o.dry ?? 0.35, heart: 0.3, body: 0.001, key: k, rank: 0.9 });
+        }
+        for (let j = 0; j < nW; j++) {
+          const k = `${key}w${j}`, s = s0 + (s1 - s0) * ((j + 0.5) / nW + (hr(k + 's') - 0.5) * 0.12), r = o.reach * (0.85 + 0.3 * hr(k + 'r')), tw = (hr(k + 'tw') - 0.5) * 0.12;
+          const pts = [0, 1, 2, 3].map((i) => surf(bs, Math.min(1, Math.max(0, s + tw * (i - 1.5))), thc - r + (2 * r * i) / 3, o.puff * 1.02));
+          const wd = Math.min((len0 * Math.abs(s1 - s0)) / (nW * 2.2), surf(bs, s, thc, o.puff).r * 1.3);
+          putSpline({ ctrl: pts.map((p) => p.p) as [V, V, V, V], surfs: pts.map((p) => p.n) as [V, V, V, V], widths: [wd * 0.8, wd, wd, wd * 0.75], col: pig(q0, k), load: 0.7, dry: (o.dry ?? 0.35) + 0.1, heart: 0.35, body: 0.001, key: k, rank: 0.7 });
+        }
+        for (const q of qs) fielded.add(q.name);
+      };
+      // (the limbs, a sleeve or a leg shoulder to wrist, hip to ankle, when one cloth covers both; skin too (bare legs, arms))
+      for (const n of ['L', 'R']) for (const [u, l, al, wr] of [['upperArm', 'foreArm', 2, 1], ['thigh', 'shin', 3, 1]] as const) {
+        const pu = by.get(u + n), pl = by.get(l + n); if (!pu || !pl) continue;
+        if (pu.mat === pl.mat) field(`f:${u}${n}`, [pu, pl], { along: al, wrap: wr, reach: 1.25, puff: pu.mat % 8 === 0 ? 1.0 : 1.12 });
+        else { field(`f:${u}${n}`, [pu], { along: al, wrap: 1, reach: 1.25, puff: pu.mat % 8 === 0 ? 1.0 : 1.12 }); field(`f:${l}${n}`, [pl], { along: al, wrap: 1, reach: 1.25, puff: pl.mat % 8 === 0 ? 1.0 : 1.12 }); }
+      }
+      // (the torso: the hips and the chest as one form in the top's colour where it covers both, else each its own; wraps across it)
+      { const pe = by.get('pelvis'), to = by.get('torso');
+        if (pe && to) { if (pe.mat === to.mat) field('f:trunk', [pe, to], { along: 3, wrap: 2, reach: 1.35, puff: 1.12 });
+          else { field('f:hips', [pe], { along: 2, wrap: 1, reach: 1.35, puff: 1.1 }); field('f:chest', [to], { along: 3, wrap: 2, reach: 1.35, puff: 1.12 }); } } }
+      // (the head: the face where it's seen (skin, a few strokes down it), the hair over the crown and round the back and sides)
+      { const hd = by.get('head');
+        if (hd?.bone) {
+          const b = hd.bone, front = Math.PI / 2; /* (the head's own z is its face) */
+          const facing = dot(hd.fwd, hd.toEye);
+          if (facing > -0.2) { const sk = { ...hd, mat: hd.mat - (hd.mat % 8) }; field('f:face', [sk], { along: 2, wrap: 0, reach: 0.55, puff: 1.0, s0: 0.0, s1: 0.75, thC: front, dry: 0.15 }); }
+          field('f:hair', [hd], { along: 4, wrap: 0, reach: 1.9, puff: 1.12, s0: 1.0, s1: 0.3, thC: -front });
+          void b;
+        } }
+      for (const nme of fielded) chained.add(nme);
+    }
     // (a painter's value range: dark cloth painted lighter where the light takes it, a little toward the light's colour, so a near
     // black can still be modelled; pale cloth a little cooler in its shade)
     const tonesOf = (p: (typeof parts)[number]) => { const col = (palette[p.mat] ?? palette[0]) as V, lum = col[0] * 0.3 + col[1] * 0.59 + col[2] * 0.11, lift = Math.max(0, 0.3 - lum) * 0.75;
@@ -369,7 +437,7 @@ export const strokeGouacheRules: StrokeRules = {
     // seat a little behind and the chest a little before, as it faces. Two masses, each its own cloth's colour, lapped at the
     // waist; and the slope from the neck down into each shoulder)
     { const to = by.get('torso'), pe = by.get('pelvis');
-      if (to && pe && to.endOn < 0.7) {
+      if (to && pe && to.endOn < 0.7 && !fielded.has('torso')) {
         const up = unit(sub(to.b, to.a)), sd = (() => { const s0 = sub(to.side, scale(up, dot(to.side, up))); return len(s0) > 1e-4 ? unit(s0) : to.side; })();
         const toward = dot(to.fwd, sd), hipW = Math.max(Math.abs(dot(sub(pe.b, pe.a), sd)) + pe.width * 0.35, to.width * 0.8), loose = to.mat % 8 !== 0 ? 0.55 : 1;
         const lv = (t: number, of: number): V => add(add(to.a, scale(sub(to.b, to.a), t)), scale(sd, of * to.width * toward));
@@ -398,6 +466,7 @@ export const strokeGouacheRules: StrokeRules = {
       } }
     for (const n of ['L', 'R']) for (const [u, l] of [['upperArm', 'foreArm'], ['thigh', 'shin']]) {
       const pu = by.get(u + n), pl = by.get(l + n);
+      if (fielded.has(u + n)) continue;
       // (one gesture only while the joint is open: folded sharply (a tuck, a crouch) the two are two masses, painted apart)
       if (!pu || !pl || pu.mat !== pl.mat || pu.endOn > 0.45 || pl.endOn > 0.45 || dot(unit(sub(pu.b, pu.a)), unit(sub(pl.b, pl.a))) < 0.15) continue;
       chained.add(pu.name); chained.add(pl.name);
@@ -407,7 +476,7 @@ export const strokeGouacheRules: StrokeRules = {
       items.push({ d: Math.max(pu.dist, pl.dist), ms });
     }
     { const to = by.get('torso'), pe = by.get('pelvis');
-      if (to && pe) {
+      if (to && pe && !fielded.has('torso')) {
         // (the arm most in line with the body's long axis, raised along it)
         const up = unit(sub(to.b, to.a)); let best: { k: number; u: (typeof parts)[number]; f: (typeof parts)[number] } | null = null;
         for (const n of ['L', 'R']) { const u = by.get('upperArm' + n), f = by.get('foreArm' + n); if (!u || !f) continue; const k = dot(up, unit(sub(u.b, u.a))); if (k > 0.55 && (!best || k > best.k)) best = { k, u, f }; }
@@ -417,7 +486,7 @@ export const strokeGouacheRules: StrokeRules = {
     // (seen from behind, the view the player has: the back isn't a rectangle with bars on it. One broad pull across it from the
     // shoulder on the sun's side down to the other hip, a value up from the cloth; and the hem lifted over a thigh coming up)
     { const to = by.get('torso'), pe = by.get('pelvis'), sl = by.get('upperArmL'), sr = by.get('upperArmR');
-      if (to && pe && sl && sr && dot(to.fwd, to.toEye) < -0.25) {
+      if (to && pe && sl && sr && dot(to.fwd, to.toEye) < -0.25 && !fielded.has('torso')) {
         const { tone, lit, dark } = tonesOf(to), sunL = (sl.sunSide + sl.sunFront) >= (sr.sunSide + sr.sunFront);
         const sh = sunL ? sl.a : sr.a, hip = len(sub(pe.a, sh)) > len(sub(pe.b, sh)) ? pe.a : pe.b, w = to.width * 0.85, mid = scale(add(sh, hip), 0.5); /* (across the back: the far hip; broad, so it's the back turning, not a strap) */
         const pull: Mark = { layer: 0, kind: K.PULL, a: sh, b: hip, path: [add(mid, scale(to.side, (sunL ? -1 : 1) * to.width * 0.08))], side: to.side, width: w, col: add(mix(tone, scale(lit, 1.35), 0.55), [0.02, 0.02, 0.03]), col2: tone, mix2: 0.55, alpha: 0.7, dry: 0.65, heart: 0.2, rank: 1, key: 'fig:back', taper: [w * 0.45, w * 1.1] };
@@ -472,7 +541,7 @@ export const strokeGouacheRules: StrokeRules = {
       // (seen end-on, a limb's pull shortens to nothing: its mass as a dab, so the body's depth is covered)
       if (p.endOn > 0.45 && p.kind !== 'head') { const c = scale(add(p.a, p.b), 0.5), up = scale(unit(cross(p.side, p.toEye)), p.girth * 0.5); under.push(m({ kind: K.DAB, a: sub(c, up), b: add(c, up), width: p.girth * 1.25, col: scale(dark, 0.45), key: `${key}/endU` })); body.push(m({ kind: K.PULL, a: sub(c, scale(up, 0.85)), b: add(c, scale(up, 0.85)), width: p.girth * 1.0, dry: 0.1, taper: [p.girth * 0.2, p.girth * 0.3], key: `${key}/end` })); } /* (a short stroke, not a soft dab: no blurred circles) */
       switch (p.kind) {
-        case 'head': {
+        case 'head': { if (fielded.has('head')) break;
           // (the head in strokes, not dabs: the face a pull down its plane (forehead to chin) with a darker plane on the shadow
           // side of cheek and jaw; the hair a broad stroke bent over the crown, a mass down the back, fringe strokes toward the
           // brow where the face is seen, a lock down each side, one lighter stroke for its sheen and one darker for its depth)
