@@ -133,7 +133,7 @@ export interface Mark {
  * control point its width; the stroke its pigment, surface, load and pickup, as a Mark's. For the figure, the points come from
  * the bones each frame, so the stroke moves with the body.
  */
-export interface Spline { ctrl: [V, V, V, V]; widths: [number, number, number, number]; /** a surface normal at each control point: the ribbon turns with them, lies on the form as it wraps, edge-on where it turns away (none: the one `surf`) */ surfs?: [V, V, V, V]; col: V; col2?: V; mix2?: number; alpha?: number; kind?: number; dry?: number; heart?: number; taper?: [number, number]; rank?: number; key: string; surf?: V; load?: number; body?: number; pick?: number; smear?: number }
+export interface Spline { ctrl: [V, V, V, V]; widths: [number, number, number, number]; /** a surface normal at each control point: the ribbon turns with them, lies on the form as it wraps, edge-on where it turns away (none: the one `surf`) */ surfs?: [V, V, V, V]; col: V; col2?: V; mix2?: number; alpha?: number; kind?: number; dry?: number; heart?: number; taper?: [number, number]; rank?: number; key: string; surf?: V; load?: number; body?: number; pick?: number; smear?: number; /** shown only from its surface's outward side (the far side of a form hides itself: strokes can be laid all round a form, fixed on it, and the eye decides which show) */ front?: boolean }
 /** floats a spline: ten vec4s */
 export const SPLINE = 52;
 export function depositSpline(m: Spline, out: number[]): void {
@@ -141,7 +141,7 @@ export function depositSpline(m: Spline, out: number[]): void {
   const [tin, tout] = m.taper ?? [Math.min(L * 0.3, wm * 0.6), Math.min(L * 0.45, wm * 1.5)];
   out.push(p0[0], p0[1], p0[2], m.alpha ?? 1, p1[0], p1[1], p1[2], m.kind ?? 0, p2[0], p2[1], p2[2], seed, p3[0], p3[1], p3[2], m.rank ?? 1,
     w[0], w[1], w[2], w[3], m.col[0], m.col[1], m.col[2], m.dry ?? 0.3, ...(m.col2 ?? m.col), m.mix2 ?? 0, ...(m.surf ?? [0, 0, 0]), m.load ?? 0,
-    m.heart ?? 0.4, tin, tout, -(m.body ?? 0.001), m.pick ?? 0, m.smear ?? 0.15, m.surfs ? 1 : 0, 0,
+    m.heart ?? 0.4, tin, tout, -(m.body ?? 0.001), m.pick ?? 0, m.smear ?? 0.15, m.surfs ? 1 : 0, m.front ? 1 : 0,
     ...(m.surfs ? [...m.surfs[0], m.surfs[1][0], m.surfs[1][1], m.surfs[1][2], m.surfs[2][0], m.surfs[2][1], m.surfs[2][2], ...m.surfs[3]] : new Array(12).fill(0)));
 }
 
@@ -507,7 +507,7 @@ void main() {
   vec3 ac = cross(sn, tg); if (length(ac) < 1e-4) ac = cross(e, tg); ac = normalize(ac);
   float w = wat(u), wm = max(max(b4.x, b4.y), max(b4.z, b4.w));
   // (seen edge-on, narrower and fainter; never thinner than a couple of pixels)
-  float alpha = b0.w; if (hasS) { float facing = abs(dot(sn, e)); w *= mix(0.4, 1.0, smoothstep(0.05, 0.45, facing)); alpha *= smoothstep(0.03, 0.22, facing); }
+  float alpha = b0.w; if (hasS) { float fs = dot(sn, e), facing = abs(fs); w *= mix(b9.w > 0.5 ? 0.85 : 0.4, 1.0, smoothstep(0.05, 0.45, facing)); alpha *= b9.w > 0.5 ? smoothstep(-0.3, -0.05, fs) : smoothstep(0.03, 0.22, facing); }
   w = max(w, uPx * dist * 1.1);
   float L = length(b1.xyz - b0.xyz) + length(b2.xyz - b1.xyz) + length(b3.xyz - b2.xyz);
   vec3 q = p + ac * sideS * w * 0.5 * 1.15;
@@ -527,7 +527,7 @@ float fbm(vec2 p) { float v = 0.0, a = 0.5; for (int i = 0; i < 3; i++) { v += a
 const FS = `#version 300 es
 precision highp float;
 in vec2 vQ; in vec3 vW; in float vFog; flat in vec4 vCol; flat in vec4 vP; flat in vec4 vS; flat in vec3 vMin; flat in vec3 vMax; flat in vec2 vT; flat in vec4 vCol2; flat in vec3 vN; flat in float vReach; flat in float vBody; flat in vec4 vSurf; flat in vec3 vU; flat in vec3 vV2; flat in vec3 vPick; flat in vec2 vWr; in vec3 vSn;
-uniform vec3 uHaze; uniform float uFade; uniform float uGrain; uniform int uCount; uniform sampler2D uBody; uniform int uBodyOn; uniform float uBreak; uniform vec3 uEyeF; uniform vec3 uPaperF; uniform vec3 uSunD; uniform vec3 uLit; uniform vec3 uShd; uniform sampler2D uUnder; uniform int uUnderOn; uniform vec2 uRes;
+uniform vec3 uHaze; uniform float uFade; uniform float uGrain; uniform int uCount; uniform sampler2D uBody; uniform int uBodyOn; uniform float uBreak; uniform vec3 uEyeF; uniform vec3 uPaperF; uniform vec3 uSunD; uniform vec3 uLit; uniform vec3 uShd; uniform sampler2D uUnder; uniform int uUnderOn; uniform vec2 uRes; uniform float uGloss;
 uniform highp sampler2DShadow uShadowMap; uniform highp mat4 uSunVP; uniform highp int uShadowOn;
 out vec4 o;
 ${NOISE}
@@ -589,10 +589,10 @@ void main() {
       a *= smoothstep(0.0, 0.2, br + 0.75 - at / max(hw, 1e-3) * 0.75);
       // (the end breaks into bristle streaks; the paint's ridges catch the light, its grooves hold the shade (impasto))
       a *= smoothstep(0.0, 0.18, (1.0 - u) / max(tout, 0.03) + (br - 0.5) * 1.1 - 0.15);
-      col *= 0.86 + 0.3 * br; col += vec3(0.07, 0.065, 0.06) * smoothstep(0.62, 0.85, br);
+      col *= 0.93 + 0.14 * br; col += vec3(0.07, 0.065, 0.06) * smoothstep(0.62, 0.85, br) * uGloss;
     }
     // (the bristles show in the paint: ridges a little lighter, grooves a little darker)
-    col *= 0.93 + 0.1 * noise(vec2(k * 0.5, t * 1.5 + sd)) + 0.22 * (br - 0.5);
+    col *= 0.93 + 0.1 * noise(vec2(k * 0.5, t * 1.5 + sd)) + (vBody > 0.0 ? 0.1 : 0.22) * (br - 0.5);
     col *= 1.0 - 0.06 * (1.0 - smoothstep(0.0, 0.35, abs(u - heart)));
   } else if (kind == 1) {
     float r = at / max(hw, 1e-3);
@@ -621,12 +621,12 @@ void main() {
   // gloss on the ridges where they turn to the light)
   if (dot(vSn, vSn) > 0.01) {
     float e1 = 0.06, b1 = 0.6 * noise(vec2(((t + e1) * 0.5 + 0.5) * 13.0 + sd, k * 0.3)) + 0.4 * noise(vec2(((t + e1) * 0.5 + 0.5) * 34.0 + sd * 1.7, k * 0.7));
-    float rel = (0.25 + max(thick, 0.0)) * 0.9, dh = (b1 - br) / e1;
+    float rel = (0.25 + max(thick, 0.0)) * 0.9 * uGloss, dh = (b1 - br) / e1;
     vec3 n0 = normalize(vSn), n = normalize(n0 - vV2 * dh * rel * 0.12), L = normalize(uSunD), Vw = normalize(uEyeF - vW);
     float lam = smoothstep(-0.2, 0.6, dot(n, L)), gloss = pow(max(dot(reflect(-L, n), Vw), 0.0), 18.0) * (0.15 + 0.5 * min(thick, 1.0));
     // (the shade not black: the sky fills it, and a little bounces up from below)
     float bounce = max(0.0, -n.y) * 0.12;
-    col = col * (mix(uShd * 0.72, uLit * 1.12, lam) + vec3(0.1, 0.07, 0.04) * bounce * 2.0) + vec3(gloss) * 0.6;
+    col = col * (mix(uShd * 0.72, uLit * 1.12, lam) + vec3(0.1, 0.07, 0.04) * bounce * 2.0) + vec3(gloss) * 0.6 * uGloss;
   }
   // (wet into wet: the paint under it picked up and dragged along the stroke, most where it lands)
   if (uUnderOn == 1 && vPick.z > 0.0) {
@@ -713,13 +713,15 @@ export class StrokePainter {
   private sprog!: WebGLProgram; private su: Record<string, WebGLUniformLocation | null> = {}; private sstrip!: WebGLBuffer; private sbuf!: WebGLBuffer;
   /** another ground than the look's, and its underpainting broken to show it (the brush board's ochre: for judging whites) */
   paperOverride: V | null = null;
+  /** the paint's relief: its ridges' gloss and bump (1), or none (0, `paint=flat`: to see how much of the look is that light) */
+  gloss = 0.25;
   /** the lit body: its program, its mesh's buffer and VAO, where it's rendered (a colour texture and depth, the drawing buffer's
    * size), and whether it was rendered this frame */
   private bprog!: WebGLProgram; private bbuf!: WebGLBuffer; private bvao!: WebGLVertexArrayObject; private bfbo: WebGLFramebuffer | null = null; private btex: WebGLTexture | null = null; private brb: WebGLRenderbuffer | null = null; private bsize = [0, 0]; private bodyOn = false; private bibuf!: WebGLBuffer; private bicount = 0;
 
   constructor(private gl: WebGL2RenderingContext, program: (vs: string, fs: string, attribs: string[]) => WebGLProgram) {
     this.prog = program(VS, FS, ['aQ', 'a0', 'a1', 'a2', 'a3', 'a4', 'a5', 'a6', 'a7', 'a8', 'a9', 'a10']);
-    for (const n of ['uVP', 'uEye', 'uFar', 'uFogNear', 'uDetail', 'uSunC', 'uPx', 'uShadowMap', 'uSunVP', 'uShadowOn', 'uHaze', 'uFade', 'uGrain', 'uCount', 'uBody', 'uBodyOn', 'uBreak', 'uSunD', 'uLit', 'uShd', 'uUnder', 'uUnderOn', 'uRes', 'uEyeF', 'uPaperF']) this.u[n] = gl.getUniformLocation(this.prog, n);
+    for (const n of ['uVP', 'uEye', 'uFar', 'uFogNear', 'uDetail', 'uSunC', 'uPx', 'uShadowMap', 'uSunVP', 'uShadowOn', 'uHaze', 'uFade', 'uGrain', 'uCount', 'uBody', 'uBodyOn', 'uBreak', 'uSunD', 'uLit', 'uShd', 'uUnder', 'uUnderOn', 'uRes', 'uEyeF', 'uPaperF', 'uGloss']) this.u[n] = gl.getUniformLocation(this.prog, n);
     this.pprog = program(PVS, PFS, ['aQ']); for (const n of ['uPaper', 'uGrain']) this.u['p' + n] = gl.getUniformLocation(this.pprog, n);
     this.kprog = program(KVS, KFS, ['aQ']); for (const n of ['uInv', 'uTop', 'uHor', 'uGrain']) this.u['k' + n] = gl.getUniformLocation(this.kprog, n);
     this.corner = gl.createBuffer()!; gl.bindBuffer(gl.ARRAY_BUFFER, this.corner); gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
@@ -867,7 +869,7 @@ export class StrokePainter {
     }
     gl.uniform1i(u.uShadowMap, 3); gl.uniform1i(u.uShadowOn, o.sunVP ? 1 : 0); if (o.sunVP) gl.uniformMatrix4fv(u.uSunVP, false, o.sunVP);
     gl.uniform3fv(u.uHaze, o.light.haze); gl.uniform1f(u.uFade, R.fadeToPaper); gl.uniform1f(u.uGrain, R.grain); gl.uniform1i(u.uCount, this.counting ? 1 : 0); gl.uniform1f(u.uBreak, this.paperOverride ? 1 : 0);
-    { const BL = R.bodyLight ? R.bodyLight(o.light) : { sunlit: [1, 1, 1] as V, shade: [0.6, 0.6, 0.7] as V }; gl.uniform3fv(u.uSunD, o.light.sun); gl.uniform3fv(u.uLit, BL.sunlit); gl.uniform3fv(u.uShd, BL.shade); gl.uniform1i(u.uUnderOn, 0); gl.uniform2f(u.uRes, gl.drawingBufferWidth, gl.drawingBufferHeight); gl.uniform3f(u.uEyeF, o.eye[0], o.eye[1], o.eye[2]); gl.uniform3fv(u.uPaperF, this.paperOverride ?? R.paper); }
+    { const BL = R.bodyLight ? R.bodyLight(o.light) : { sunlit: [1, 1, 1] as V, shade: [0.6, 0.6, 0.7] as V }; gl.uniform3fv(u.uSunD, o.light.sun); gl.uniform3fv(u.uLit, BL.sunlit); gl.uniform3fv(u.uShd, BL.shade); gl.uniform1i(u.uUnderOn, 0); gl.uniform2f(u.uRes, gl.drawingBufferWidth, gl.drawingBufferHeight); gl.uniform3f(u.uEyeF, o.eye[0], o.eye[1], o.eye[2]); gl.uniform3fv(u.uPaperF, this.paperOverride ?? R.paper); gl.uniform1f(u.uGloss, this.gloss); }
     };
     gl.useProgram(this.sprog); setU(this.su);
     gl.useProgram(this.prog); setU(this.u);
@@ -914,7 +916,7 @@ export class StrokePainter {
       gl.bindBuffer(gl.ARRAY_BUFFER, this.sstrip); gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
       gl.bindBuffer(gl.ARRAY_BUFFER, this.sbuf); gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(data), gl.DYNAMIC_DRAW);
       for (let i = 0; i < 13; i++) { gl.enableVertexAttribArray(1 + i); gl.vertexAttribPointer(1 + i, 4, gl.FLOAT, false, SPLINE * 4, i * 16); gl.vertexAttribDivisor(1 + i, 1); }
-      gl.uniform1i(this.su.uBody, 4); gl.uniform1i(this.su.uBodyOn, this.bodyOn ? 1 : 0); gl.uniform1i(this.su.uUnder, 5); gl.uniform1i(this.su.uUnderOn, wet ? 1 : 0);
+      gl.uniform1f(this.su.uGloss, this.gloss); gl.uniform1i(this.su.uBody, 4); gl.uniform1i(this.su.uBodyOn, this.bodyOn ? 1 : 0); gl.uniform1i(this.su.uUnder, 5); gl.uniform1i(this.su.uUnderOn, wet ? 1 : 0);
       gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, (SSEG + 1) * 2, ms.length);
       for (let i = 0; i < 13; i++) { gl.vertexAttribDivisor(1 + i, 0); gl.disableVertexAttribArray(1 + i); }
       gl.bindVertexArray(null); gl.deleteVertexArray(vao); gl.useProgram(this.prog);

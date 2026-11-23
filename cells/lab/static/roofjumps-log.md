@@ -495,3 +495,11 @@ strokes picking up the masses under them.
 - Cloth: skirt and coat columns are now spline strokes (4 points along the column, normals from the quads), with a narrower fold stroke a value off on every other column. The hem is drawn in overlapping runs of four.
 - Wrap strokes are narrower and translucent, so they read less like bandages. New `aim=` URL key (the height looked at) for head close-ups.
 - Still to do: the side-view face (hair covers the profile), hands and feet as splines, Astra's critique items.
+
+## 23 November (afternoon): the figure painter as masses, then passages
+In response to the critique of the 13:29 build. The full notes are in `roofjumps-studies/round6/README.md`.
+- The gloss test (`paint=flat`) showed the ridge gloss caused most of the plastic shine. Its default dropped from 1 to 0.25, and the bristle value contrast on figure strokes was halved.
+- Every figure stroke is now fixed on the body (bone space, fixed counts), with no eye-chosen angle and no distance-scaled count. Far-side strokes hide themselves (spline flag `front`). Strokes are sorted far to near by form, with garment layers lifted.
+- Garment masses: jacket panels, the shoulder slope, sleeves through the elbow, a collar band, the neck under the jaw, the head blocked in in the hair's dark with face planes over it, and attachments as splines.
+- New URL keys: `paint=masses` (broad masses only), `paint=flat` (no ridge gloss), `aim=` (the height looked at).
+- Not yet done: the brush-from-rest motion test (only the frozen-pose orbit was rendered); hands and feet are still stamps.

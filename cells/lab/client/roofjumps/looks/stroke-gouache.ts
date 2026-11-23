@@ -21,7 +21,7 @@ import type { LookDef } from '../looks';
 import type { Box, Detail } from '../city';
 import { TAG } from '../city';
 import { DRESS } from '../dressing';
-import type { Light, Mark, StrokeRules, V } from '../strokes';
+import type { Light, Mark, Spline, StrokeRules, V } from '../strokes';
 import { EDGE, K, LAYER, add, boxSeed, cross, dot, lipsOf, mix, onLine, planesOf, rng, scale, smooth, sub, unit, hashKey } from '../strokes';
 const len = (v: V) => Math.hypot(v[0], v[1], v[2]);
 
@@ -293,119 +293,153 @@ export const strokeGouacheRules: StrokeRules = {
     // where one cloth covers both; and, an arm raised in line with the body (a dive, a reach), one sweep from the hip up the back
     // through the shoulder into the arm. The pose says where the brush lifts, not the skeleton)
     const by = new Map(parts.map((p) => [p.name, p])), chained = new Set<string>();
-    // ─── the stroke field (spline strokes over the body's own surface): each form (a sleeve, a leg, the torso, the hair, the
-    // face) a field of strokes, not a stroke a bone: strokes along it at several places round it, strokes wrapping across it at
-    // several places along it, spanning its joints; as many as its size on the screen warrants; each seeded by its form and place,
-    // its points fixed in the bones' own space (so the same strokes come back each frame, moving with the body); each lying on
-    // the surface (its normal at each point), lit by the sun on it
+    // ─── the figure as painted masses, then passages (spline strokes over the body's own surface). Each garment chooses its
+    // strokes as a painter would block it in: the jacket as its panels (back, sides, the two fronts), the slope of its shoulders
+    // nape to shoulder point, its sleeves hung from there through the elbow to the cuff, its collar round the neck; the neck in
+    // the head's shadow, under the jaw; the head as the skull's mass, the brow's turn, the cheek on the sun's side, the jaw over
+    // the neck; the hair as locks round the back and sides, clear of the face. Every stroke is fixed on the body (in its bones'
+    // own space, seeded by its place, a fixed count: nothing chosen by the eye or by distance), and laid all round a form: a
+    // stroke on the far side of a form hides itself (`front`), so the eye decides only what shows, never where paint goes.
+    // The finished figure's strokes are painted far to near by form, a garment's layer over the one beneath it (the jacket's
+    // hem over the trousers, the jaw over the neck, the hair over the collar).
+    // `paint=masses` (paintMode.masses): only the masses, to judge whether the figure reads without its passages.
     const hr = (k: string) => (hashKey(k) % 100000) / 100000;
-    const pig = (q: (typeof parts)[number], k: string): V => { const c = (palette[q.mat] ?? palette[0]) as V, lum = c[0] * 0.3 + c[1] * 0.59 + c[2] * 0.11, lift = Math.max(0, 0.32 - lum) * (q.mat % 8 === 1 ? 0.5 : 1.05), /* (hair kept near its own dark: black hair stays black) */ v = 0.92 + 0.16 * hr(k + 'v'), w = (hr(k + 'w') - 0.5) * 0.06; return [(c[0] + lift) * v * (1 + w), (c[1] + lift) * v, (c[2] + lift * 1.1) * v * (1 - w)]; };
-    const fielded = new Set<string>();
+    const pig = (q: (typeof parts)[number], k: string): V => { const c = (palette[q.mat] ?? palette[0]) as V, lum = c[0] * 0.3 + c[1] * 0.59 + c[2] * 0.11, lift = Math.max(0, 0.32 - lum) * (q.mat % 8 === 1 ? 0.5 : 1.05), v = 0.94 + 0.12 * hr(k + 'v'), w = (hr(k + 'w') - 0.5) * 0.05; return [(c[0] + lift) * v * (1 + w), (c[1] + lift) * v, (c[2] + lift * 1.1) * v * (1 - w)]; };
+    const fielded = new Set<string>(), SP: { d: number; s: Spline }[] = [], masses = paintMode.masses;
     if (putSpline) {
       const P3 = (m: Float32Array | number[], x: number, y: number, z: number): V => [m[0] * x + m[4] * y + m[8] * z + m[12], m[1] * x + m[5] * y + m[9] * z + m[13], m[2] * x + m[6] * y + m[10] * z + m[14]];
       const D3 = (m: Float32Array | number[], x: number, y: number, z: number): V => unit([m[0] * x + m[4] * y + m[8] * z, m[1] * x + m[5] * y + m[9] * z, m[2] * x + m[6] * y + m[10] * z]);
       type Bn = NonNullable<(typeof parts)[number]['bone']>;
-      /** a chain's surface: s along it (0..1, over its bones by length), θ round it; the point, its normal, its local half-girth */
+      type V4 = [V, V, V, V]; type N4 = [number, number, number, number];
+      /** put a stroke: at a form's distance, less a layer's lift (a garment over what's under it) */
+      const ps = (s: Spline, d: number, layer = 0) => { SP.push({ d: d - layer * 0.02, s }); };
+      /** a chain's surface: s along it (0..1 over its bones by length, past either end extrapolated), θ round it (0 its +x, π/2 its +z) */
       const surf = (bs: Bn[], s: number, th: number, puff: number) => {
         const lens = bs.map((b) => Math.abs(b.y1 - b.y0)), tot = lens.reduce((a, b) => a + b, 0) || 1; let at = s * tot, k = 0;
         while (k < bs.length - 1 && at > lens[k]) { at -= lens[k]; k++; }
         const b = bs[k], fr = at / (lens[k] || 1), f = Math.max(0, Math.min(1, fr)), fy = Math.max(-0.35, Math.min(1.35, fr)), y = b.y0 + (b.y1 - b.y0) * fy, hw = ((b.w0 + (b.w1 - b.w0) * f) / 2) * puff, hd = ((b.d0 + (b.d1 - b.d0) * f) / 2) * puff;
         const c = Math.cos(th), sn = Math.sin(th), x = (b.x ?? 0) + c * hw, z = (b.zc ?? 0) + sn * hd;
-        return { p: P3(b.m, x, y, z), n: D3(b.m, c / Math.max(hw, 1e-4), 0, sn / Math.max(hd, 1e-4)), r: (hw + hd) / 2, len: tot };
+        return { p: P3(b.m, x, y, z), n: D3(b.m, c / Math.max(hw, 1e-4), 0, sn / Math.max(hd, 1e-4)), r: (hw + hd) / 2, t: Math.hypot(hw * sn, hd * c), len: tot };
       };
-      /** the angle round a bone that faces the eye */
-      const thEye = (b: Bn, eye: V) => { const m = b.m, d: V = [eye[0] - m[12], eye[1] - m[13], eye[2] - m[14]]; return Math.atan2(d[0] * m[8] + d[1] * m[9] + d[2] * m[10], d[0] * m[0] + d[1] * m[1] + d[2] * m[2]); };
-      /** a form's field. along: strokes along it (count, how far round each side of the eye's side they reach); wrap: strokes across
-       * it (count, how far round); puff: how far the cloth stands off the body */
-      const field = (key: string, qs: (typeof parts)[number][], o: { along: number; wrap: number; reach: number; puff: number; s0?: number; s1?: number; thC?: number; dry?: number }) => {
-        const bs = qs.map((q) => q.bone!).filter(Boolean) as Bn[]; if (bs.length !== qs.length) return;
-        const q0 = qs[0], eye = q0.toEye, dist = qs.reduce((t, q) => t + q.dist, 0) / qs.length, detail = Math.max(0.5, Math.min(1.3, 2.4 / Math.max(dist, 0.5)));
-        const eyeP: V = add(scale(add(q0.a, q0.b), 0.5), scale(eye, q0.dist)), thc = o.thC ?? thEye(bs[0], eyeP), s0 = o.s0 ?? -0.08, s1 = o.s1 ?? 1.08; /* (lapping past its ends into the next form: no gap at a join) */
-        const nA = Math.max(2, Math.round(o.along * detail)), nW = Math.max(0, Math.round(o.wrap * detail)), len0 = surf(bs, 0.5, 0, o.puff).len;
-        // (first the block-in: the whole form as one broad stroke down its middle, as wide as it is, facing the eye; the field over it)
-        { const ss = [0, 1, 2, 3].map((j) => s0 + ((s1 - s0) * j) / 3), cs = ss.map((s) => surf(bs, s, thc, 0.001)), es = ss.map((s) => surf(bs, s, thc, o.puff));
-          putSpline({ ctrl: cs.map((p) => p.p) as [V, V, V, V], surfs: es.map((p) => p.n) as [V, V, V, V], widths: es.map((p) => p.r * 2 * 1.08) as [number, number, number, number], col: scale(pig(q0, `${key}m`), 0.92), load: 0.6, dry: 0.2, heart: 0.3, body: 0.001, key: `${key}m`, rank: 1, taper: [len0 * 0.05, len0 * 0.08] }); }
-        for (let i = 0; i < nA; i++) {
-          const k = `${key}a${i}`, th = thc + (nA > 1 ? (i / (nA - 1) - 0.5) * 2 * o.reach : 0) + (hr(k + 't') - 0.5) * 0.35;
-          const a = s0 + (s1 - s0) * hr(k + 's0') * 0.18, b = s1 - (s1 - s0) * hr(k + 's1') * 0.2, ss = [0, 1, 2, 3].map((j) => a + ((b - a) * j) / 3);
-          const pts = ss.map((s) => surf(bs, s, th + (hr(k + 'b') - 0.5) * 0.25 * Math.sin(s * 3), o.puff));
-          const wd = pts.map((p) => Math.max(0.012, Math.min(p.r * 1.25, ((2 * o.reach * p.r) / nA) * 1.4))); /* (never wider than the form) */
-          putSpline({ ctrl: pts.map((p) => p.p) as [V, V, V, V], surfs: pts.map((p) => p.n) as [V, V, V, V], widths: wd as [number, number, number, number], col: pig(q0, k), load: 0.75 + 0.2 * hr(k + 'l'), dry: o.dry ?? 0.35, heart: 0.3, body: 0.001, key: k, rank: 0.9 });
-        }
-        for (let j = 0; j < nW; j++) {
-          const k = `${key}w${j}`, s = s0 + (s1 - s0) * ((j + 0.5) / nW + (hr(k + 's') - 0.5) * 0.12), r = o.reach * (0.85 + 0.3 * hr(k + 'r')), tw = (hr(k + 'tw') - 0.5) * 0.12;
-          const pts = [0, 1, 2, 3].map((i) => surf(bs, Math.min(1, Math.max(0, s + tw * (i - 1.5))), thc - r + (2 * r * i) / 3, o.puff * 1.02));
-          const wd = Math.min((len0 * Math.abs(s1 - s0)) / (nW * 2.2), surf(bs, s, thc, o.puff).r * 1.3);
-          putSpline({ ctrl: pts.map((p) => p.p) as [V, V, V, V], surfs: pts.map((p) => p.n) as [V, V, V, V], widths: [wd * 0.6, wd * 0.8, wd * 0.8, wd * 0.55], col: pig(q0, k), alpha: 0.75, load: 0.7, dry: (o.dry ?? 0.35) + 0.1, heart: 0.35, body: 0.001, key: k, rank: 0.7 });
+      const run = (bs: Bn[], ss: number[], th: (s: number, i: number) => number, puff: number) => { const q = ss.map((s, i) => surf(bs, s, th(s, i), puff)); return { c: q.map((x) => x.p) as V4, n: q.map((x) => x.n) as V4, r: q.map((x) => x.r) as N4, t: q.map((x) => x.t) as N4, len: q[0].len }; };
+      const lerp4 = (a: number, b: number): N4 => [a, a + (b - a) / 3, a + ((b - a) * 2) / 3, b];
+      /** a form's panels: n broad strokes all round it, along it from s0 to s1, each as wide as its share of the girth (and a
+       * little over, so they meet), each its own value of the pigment; the masses */
+      const panels = (key: string, qs: (typeof parts)[number][], o: { n: number; s0: number; s1: number; puff: number; th0?: number; grow?: number; layer?: number }) => {
+        const bs = qs.map((q) => q.bone!).filter(Boolean) as Bn[]; if (bs.length !== qs.length) return; const q0 = qs[0], d = qs.reduce((t, q) => t + q.dist, 0) / qs.length;
+        for (let i = 0; i < o.n; i++) {
+          const k = `${key}p${i}`, th = (o.th0 ?? 0) + (2 * Math.PI * i) / o.n + (hr(k) - 0.5) * 0.12, R = run(bs, lerp4(o.s0, o.s1), () => th, o.puff), g = o.grow ?? 1;
+          const share = (2 * Math.PI) / o.n;
+          ps({ ctrl: R.c, surfs: R.n, widths: R.t.map((t, j) => 2 * t * Math.sin(share / 2) * 1.15 * (1 + (g - 1) * (j / 3))) as N4, col: pig(q0, k), load: 0.65, dry: 0.12, heart: 0.35, body: 0.001, key: k, rank: 1, front: true, taper: [R.len * 0.04, R.len * 0.07] }, d, o.layer ?? 0);
         }
         for (const q of qs) fielded.add(q.name);
       };
-      // (the limbs, a sleeve or a leg shoulder to wrist, hip to ankle, when one cloth covers both; skin too (bare legs, arms))
-      for (const n of ['L', 'R']) for (const [u, l, al, wr] of [['upperArm', 'foreArm', 2, 1], ['thigh', 'shin', 3, 1]] as const) {
-        const pu = by.get(u + n), pl = by.get(l + n); if (!pu || !pl) continue;
-        if (pu.mat === pl.mat) field(`f:${u}${n}`, [pu, pl], { along: al, wrap: wr, reach: 1.25, puff: pu.mat % 8 === 0 ? 1.0 : 1.12, s0: u === 'thigh' ? -0.14 : -0.1 });
-        else { field(`f:${u}${n}`, [pu], { along: al, wrap: 1, reach: 1.25, puff: pu.mat % 8 === 0 ? 1.0 : 1.12 }); field(`f:${l}${n}`, [pl], { along: al, wrap: 1, reach: 1.25, puff: pl.mat % 8 === 0 ? 1.0 : 1.12 }); }
+      /** a form's passages: narrower strokes along it, a value off the masses, fixed round it (seeded), all round */
+      const along = (key: string, qs: (typeof parts)[number][], o: { n: number; s0: number; s1: number; puff: number; w: number; layer?: number }) => {
+        if (masses) return; const bs = qs.map((q) => q.bone!).filter(Boolean) as Bn[]; if (bs.length !== qs.length) return; const q0 = qs[0], d = qs.reduce((t, q) => t + q.dist, 0) / qs.length;
+        for (let i = 0; i < o.n; i++) {
+          const k = `${key}a${i}`, th = (2 * Math.PI * (i + hr(k + 't'))) / o.n, a = o.s0 + (o.s1 - o.s0) * hr(k + 's0') * 0.25, b = o.s1 - (o.s1 - o.s0) * hr(k + 's1') * 0.3;
+          const R = run(bs, lerp4(a, b), (s) => th + (hr(k + 'b') - 0.5) * 0.3 * Math.sin(s * 3), o.puff * 1.01), lt = hr(k + 'c') > 0.5;
+          ps({ ctrl: R.c, surfs: R.n, widths: R.r.map((r) => r * o.w) as N4, col: scale(pig(q0, k), lt ? 1.1 : 0.88), load: 0.75, dry: 0.4, heart: 0.3, body: 0.001, key: k, rank: 0.8, front: true }, d - 0.001, o.layer ?? 0);
+        }
+      };
+      const skinOf = (q: (typeof parts)[number]) => ({ ...q, mat: q.mat - (q.mat % 8) });
+      const pe = by.get('pelvis'), to = by.get('torso'), hd = by.get('head');
+      // (the legs: a trouser leg (or a bare one) hip to ankle as four panels, through the knee; passages down it)
+      for (const n of ['L', 'R']) { const th = by.get('thigh' + n), sh = by.get('shin' + n); if (!th || !sh) continue;
+        if (th.mat === sh.mat) { panels(`f:leg${n}`, [th, sh], { n: 4, s0: -0.1, s1: 1.02, puff: th.mat % 8 === 0 ? 1.0 : 1.1, th0: 0.4 }); along(`f:leg${n}`, [th, sh], { n: 4, s0: 0, s1: 1, puff: 1.1, w: 0.45 }); }
+        else { panels(`f:thigh${n}`, [th], { n: 4, s0: -0.12, s1: 1.06, puff: 1.1, th0: 0.4 }); panels(`f:shin${n}`, [sh], { n: 4, s0: -0.04, s1: 1.02, puff: sh.mat % 8 === 0 ? 1.0 : 1.08, th0: 0.4 }); } }
+      // (the trunk: the hips, and over them the top as its panels (back, two sides, two fronts meeting at the middle), the top's
+      // hem over the hips; then the shoulders' slope; the sleeves hung from the shoulder points)
+      if (pe && to?.bone) {
+        const same = pe.mat === to.mat, tb = to.bone;
+        if (!same) panels('f:hips', [pe], { n: 4, s0: -0.15, s1: 1.1, puff: 1.1, th0: Math.PI / 4 });
+        const trunk = same ? [pe, to] : [to], s0 = same ? -0.05 : -0.12, layer = same ? 0 : 1;
+        // (the back, the sides, and the fronts each side of the middle: the fronts' meeting is the opening a jacket has)
+        { const bs = trunk.map((q) => q.bone!) as Bn[], d = to.dist;
+          const P: [string, number, number][] = [['back', -Math.PI / 2, 0.92], ['sideL', 0.05, 0.95], ['sideR', Math.PI - 0.05, 0.95], ['frontL', Math.PI / 2 - 0.42, 0.52], ['frontR', Math.PI / 2 + 0.42, 0.52]];
+          for (const [nm, th, wf] of P) { const k = `f:top:${nm}`, R = run(bs, lerp4(s0, 0.93), () => th, 1.12);
+            ps({ ctrl: R.c, surfs: R.n, widths: R.t.map((t, j) => t * 2 * wf * (1.05 - 0.08 * j / 3)) as N4, col: pig(to, k), load: 0.65, dry: 0.12, heart: 0.35, body: 0.001, key: k, rank: 1, front: true, taper: [R.len * 0.03, R.len * 0.06] }, d, layer); }
+          for (const q of trunk) fielded.add(q.name);
+          along('f:top', trunk, { n: 7, s0, s1: 0.9, puff: 1.12, w: 0.38, layer }); }
+        // (the shoulders' slope: from the collar out over the top to each shoulder point, behind and in front, a little down
+        // as it goes; the line a jacket hangs from)
+        for (const sd of [-1, 1]) for (const fb of [-1, 1]) {
+          const k = `f:yoke${sd}${fb}`, y1 = tb.y1, yl = Math.abs(tb.y1 - tb.y0), hw = tb.w1 / 2, hdp = tb.d1 / 2, x0 = tb.x ?? 0, z0 = (tb.zc ?? 0) + fb * hdp * 0.45;
+          const pts = [0.18, 0.45, 0.75, 1.02].map((f) => P3(tb.m, x0 + sd * hw * f, y1 + yl * (0.035 - 0.1 * f * f), z0)) as V4, nn = D3(tb.m, sd * 0.25, 0.75, fb * 0.65);
+          ps({ ctrl: pts, surfs: [nn, nn, nn, nn], widths: [hdp * 1.0, hdp * 1.05, hdp * 1.0, hdp * 0.85], col: scale(pig(to, k), fb < 0 ? 1.04 : 1.0), load: 0.6, dry: 0.15, heart: 0.35, body: 0.001, key: k, rank: 1, front: true, taper: [hdp * 0.2, hdp * 0.3] }, to.dist - 0.003, layer + 1);
+        }
       }
-      // (the torso: the hips and the chest as one form in the top's colour where it covers both, else each its own; wraps across it)
-      { const pe = by.get('pelvis'), to = by.get('torso');
-        if (pe && to) { if (pe.mat === to.mat) field('f:trunk', [pe, to], { along: 3, wrap: 2, reach: 1.35, puff: 1.12 });
-          else { field('f:hips', [pe], { along: 2, wrap: 1, reach: 1.35, puff: 1.1 }); field('f:chest', [to], { along: 3, wrap: 2, reach: 1.35, puff: 1.12 }); } } }
-      // (the neck: from inside the collar up into the head, skin, so the head sits on the body)
-      { const to = by.get('torso'), hd = by.get('head');
-        if (to?.bone && hd?.bone) { const a = P3(to.bone.m, to.bone.x ?? 0, to.bone.y1 * 0.88, to.bone.zc ?? 0), b = P3(hd.bone.m, hd.bone.x ?? 0, hd.bone.y0 + (hd.bone.y1 - hd.bone.y0) * 0.25, hd.bone.zc ?? 0), w = Math.min(hd.bone.w0, hd.bone.d0) * 0.42;
-          const m1 = add(scale(a, 0.67), scale(b, 0.33)), m2 = add(scale(a, 0.33), scale(b, 0.67)), sk = { ...hd, mat: hd.mat - (hd.mat % 8) };
-          putSpline({ ctrl: [a, m1, m2, b], widths: [w * 1.1, w, w, w * 0.95], col: scale(pig(sk, 'f:neck'), 0.68), load: 0.6, dry: 0.15, heart: 0.4, body: 0.001, key: 'f:neck', rank: 1, surfs: [hd.toEye, hd.toEye, hd.toEye, hd.toEye] }); } }
-      // (the head: the face where it's seen (skin, a few strokes down it), the hair over the crown and round the back and sides)
-      { const hd = by.get('head');
-        if (hd?.bone) {
-          const b = hd.bone, front = Math.PI / 2; /* (the head's own z is its face) */
-          const facing = dot(hd.fwd, hd.toEye);
-          // (the hair: not a cap but locks. Each a stroke from near the crown down over the skull's curve (the head as an ellipsoid,
-          // φ from its top, θ round it), ending in a taper at the nape, behind the ear or, where the face is seen, as a fringe over
-          // the brow; a dark mass under them on the back of the head; a few lighter locks where the sun takes it; flicks off the ends)
-          { const hw = ((b.w0 + b.w1) / 4) * 1.07, hh = (Math.abs(b.y1 - b.y0) / 2) * 1.06, hdp = ((b.d0 + b.d1) / 4) * 1.07, yc = (b.y0 + b.y1) / 2 + Math.abs(b.y1 - b.y0) * 0.04, xc = b.x ?? 0, zc = b.zc ?? 0;
-            const E = (ph: number, th: number, pf = 1) => { const sp = Math.sin(ph), cp = Math.cos(ph), c = Math.cos(th), sn = Math.sin(th);
-              return { p: P3(b.m, xc + c * sp * hw * pf, yc + cp * hh * pf, zc + sn * sp * hdp * pf), n: D3(b.m, (c * sp) / hw, cp / hh, (sn * sp) / hdp) }; };
-            const eyeP: V = add(hd.b, scale(hd.toEye, hd.dist)), te = thEye(b, eyeP), hcol = pig(hd, 'f:hair'), dk = scale(hcol, 0.72), r0 = (hw + hdp) / 2;
-            const vis = (th: number) => Math.cos(th - te) > -0.35;
-            // (the face, where it's seen: a smooth plane, brow to chin, round with the skull, not dry; the jaw across its foot;
-            // a darker plane down the cheek away from the sun)
-            if (facing > -0.25) { const sk = { ...hd, mat: hd.mat - (hd.mat % 8) }, fc = pig(sk, 'f:face'), sg = hd.sunSide > 0 ? 1 : -1;
-              const fs = [0.75, 1.45, 2.15, 2.8].map((ph) => E(ph, front, 0.99));
-              putSpline({ ctrl: fs.map((q) => q.p) as [V, V, V, V], surfs: fs.map((q) => q.n) as [V, V, V, V], widths: [hw * 1.5, hw * 1.7, hw * 1.4, hw * 0.7], col: fc, load: 0.55, dry: 0.05, heart: 0.5, body: 0.001, key: 'f:face', rank: 1, taper: [r0 * 0.3, r0 * 0.35] });
-              const js = [-1, -0.35, 0.35, 1].map((t) => E(2.35, front + t * 0.9, 0.995));
-              putSpline({ ctrl: js.map((q) => q.p) as [V, V, V, V], surfs: js.map((q) => q.n) as [V, V, V, V], widths: [r0 * 0.3, r0 * 0.45, r0 * 0.45, r0 * 0.3], col: scale(fc, 0.95), load: 0.5, dry: 0.08, heart: 0.5, body: 0.001, key: 'f:jaw', rank: 0.9 });
-              const cs = [1.3, 1.7, 2.1, 2.45].map((ph, i) => E(ph, front - sg * (0.75 - i * 0.08), 1.0));
-              putSpline({ ctrl: cs.map((q) => q.p) as [V, V, V, V], surfs: cs.map((q) => q.n) as [V, V, V, V], widths: [r0 * 0.3, r0 * 0.4, r0 * 0.35, r0 * 0.2], col: scale(fc, 0.8), alpha: 0.85, load: 0.5, dry: 0.1, heart: 0.4, body: 0.001, key: 'f:cheek', rank: 0.8 }); }
-            // (the mass: one broad dark stroke down the back of the skull, crown to nape, under the locks)
-            { const ths = -front, ps = [0.25, 1.0, 1.75, 2.45].map((ph) => E(ph, ths, 0.97));
-              if (vis(ths) || facing < 0.5) putSpline({ ctrl: ps.map((q) => q.p) as [V, V, V, V], surfs: ps.map((q) => q.n) as [V, V, V, V], widths: [hw * 1.4, hw * 2.0, hw * 1.9, hw * 1.2], col: dk, load: 0.6, dry: 0.2, heart: 0.3, body: 0.001, key: 'f:hairm', rank: 1, taper: [r0 * 0.3, r0 * 0.5] }); }
-            // (the locks round the head: θ from the back round each side; the ones toward the face end higher, behind the ear)
-            const nL = 11;
-            for (let i = 0; i < nL; i++) {
-              const k = `f:hl${i}`, th = -front + (i / (nL - 1) - 0.5) * 2 * 2.35 + (hr(k + 't') - 0.5) * 0.2, toFace = Math.max(0, Math.cos(th - front));
-              if (!vis(th) || toFace > 0.75) continue;
-              const ph1 = 2.45 - toFace * 0.95 + (hr(k + 'e') - 0.5) * 0.25, sw = (hr(k + 'w') - 0.5) * 0.35, ph0 = 0.08 + 0.12 * hr(k + 's');
-              const ps = [0, 1, 2, 3].map((j) => { const f = j / 3; return E(ph0 + (ph1 - ph0) * f, th + sw * f * f, 1.0 + 0.04 * Math.sin(f * 3)); });
-              const w = r0 * (0.55 + 0.25 * hr(k + 'd')), lit = hr(k + 'c') > 0.7;
-              putSpline({ ctrl: ps.map((q) => q.p) as [V, V, V, V], surfs: ps.map((q) => q.n) as [V, V, V, V], widths: [w * 0.7, w, w * 0.85, w * 0.4], col: lit ? add(scale(hcol, 1.15), [0.04, 0.035, 0.03]) : pig(hd, k), load: 0.7, dry: 0.4, heart: 0.3, body: 0.001, key: k, rank: 0.9, taper: [r0 * 0.15, r0 * 0.7] });
-            }
-            // (the fringe, where the face is seen: short locks from the front of the crown down over the brow)
-            if (facing > -0.2) for (let i = 0; i < 4; i++) {
-              const k = `f:hf${i}`, th = front + (i / 3 - 0.5) * 1.5 + (hr(k + 't') - 0.5) * 0.15, ph1 = 0.95 + 0.2 * hr(k + 'e');
-              const ps = [0, 1, 2, 3].map((j) => { const f = j / 3; return E(0.12 + (ph1 - 0.12) * f, th + (i - 1.5) * 0.08 * f, 1.02); });
-              const w = r0 * 0.45;
-              putSpline({ ctrl: ps.map((q) => q.p) as [V, V, V, V], surfs: ps.map((q) => q.n) as [V, V, V, V], widths: [w * 0.8, w, w * 0.8, w * 0.3], col: pig(hd, k), load: 0.65, dry: 0.4, heart: 0.3, body: 0.001, key: k, rank: 0.95, taper: [r0 * 0.1, r0 * 0.5] });
-            }
-            // (flicks: a few thin strokes off the ends, curling out)
-            for (let i = 0; i < 3; i++) {
-              const k = `f:hk${i}`, th = -front + (i - 1) * 1.1 + (hr(k + 't') - 0.5) * 0.4; if (!vis(th)) continue;
-              const a0 = E(2.0, th), a1 = E(2.3, th + 0.1, 1.06), a2 = E(2.5, th + 0.25, 1.18), a3 = E(2.6, th + 0.45, 1.32);
-              putSpline({ ctrl: [a0.p, a1.p, a2.p, a3.p], surfs: [a0.n, a1.n, a2.n, a3.n], widths: [r0 * 0.18, r0 * 0.14, r0 * 0.1, r0 * 0.05], col: dk, load: 0.6, dry: 0.4, heart: 0.3, body: 0.001, key: k, rank: 0.8, taper: [0.002, r0 * 0.4] });
-            }
-            fielded.add(hd.name); }
-          void b;
-        } }
+      // (the sleeves: from the shoulder point through the elbow to the cuff, three panels round, wider toward the cuff, as a sleeve
+      // hangs; bare arms the same, in skin and close)
+      for (const n of ['L', 'R']) { const ua = by.get('upperArm' + n), fa = by.get('foreArm' + n); if (!ua || !fa) continue;
+        const cloth = ua.mat % 8 !== 0;
+        if (ua.mat === fa.mat) { panels(`f:arm${n}`, [ua, fa], { n: 3, s0: -0.1, s1: 1.02, puff: cloth ? 1.12 : 1.0, th0: 0.3, grow: cloth ? 1.18 : 1, layer: 1 }); along(`f:arm${n}`, [ua, fa], { n: 3, s0: 0, s1: 1, puff: 1.12, w: 0.4, layer: 1 }); }
+        else { panels(`f:ua${n}`, [ua], { n: 3, s0: -0.12, s1: 1.04, puff: cloth ? 1.12 : 1.0, th0: 0.3, layer: 1 }); panels(`f:fa${n}`, [fa], { n: 3, s0: -0.05, s1: 1.02, puff: fa.mat % 8 ? 1.12 : 1.0, th0: 0.3, layer: 1 }); } }
+      // (the neck: from inside the collar to under the jaw, in the head's shadow; then the collar round it (a passage), the head
+      // over both)
+      if (to?.bone && hd?.bone) {
+        const tb = to.bone, hb = hd.bone, sk = skinOf(hd), rN = Math.min(hb.w0, hb.d0) * 0.24, a = P3(tb.m, tb.x ?? 0, tb.y1 * 0.97, (tb.zc ?? 0) - tb.d1 * 0.05), b = P3(hb.m, hb.x ?? 0, hb.y0 + Math.abs(hb.y1 - hb.y0) * 0.22, (hb.zc ?? 0) - hb.d0 * 0.1);
+        const m1 = add(scale(a, 0.67), scale(b, 0.33)), m2 = add(scale(a, 0.33), scale(b, 0.67));
+        ps({ ctrl: [a, m1, m2, b], widths: [rN * 2.3, rN * 2.0, rN * 2.0, rN * 2.1], col: scale(pig(sk, 'f:neck'), 0.74), load: 0.55, dry: 0.12, heart: 0.4, body: 0.001, key: 'f:neck', rank: 1 }, hd.dist + 0.02, 0);
+        // (the collar: a band standing round the neck's foot, from one side of the front, round behind, to the other; under the
+        // hair at the back, over the shoulder's line in front)
+        if (!masses && to.mat % 8 !== 0) { const cr = rN * 1.75, ch = Math.abs(tb.y1 - tb.y0) * 0.11, x0 = tb.x ?? 0, z0 = (tb.zc ?? 0) - tb.d1 * 0.05, cc = add(pig(to, 'f:collar'), [0.035, 0.03, 0.03]);
+          for (const [k, a0, a1] of [['f:collarL', Math.PI / 2 + 0.55, 1.5 * Math.PI], ['f:collarR', 1.5 * Math.PI, 2.5 * Math.PI - 0.55]] as const) {
+            const as = lerp4(a0, a1), pts = as.map((t) => P3(tb.m, x0 + Math.cos(t) * cr, tb.y1 + ch * 0.35, z0 + Math.sin(t) * cr * 1.1)) as V4, ns = as.map((t) => D3(tb.m, Math.cos(t), 0.25, Math.sin(t))) as V4;
+            ps({ ctrl: pts, surfs: ns, widths: [ch * 0.8, ch, ch, ch * 0.8], col: cc, load: 0.6, dry: 0.2, heart: 0.35, body: 0.001, key: k, rank: 0.9, front: true, taper: [ch * 0.4, ch * 0.5] }, to.dist - 0.01, 2); } }
+      }
+      // (the head: an ellipsoid round its bone (φ from its top, θ round it, π/2 its face))
+      if (hd?.bone) {
+        const b = hd.bone, front = Math.PI / 2, d = hd.dist;
+        const hw = ((b.w0 + b.w1) / 4) * 1.04, hh = (Math.abs(b.y1 - b.y0) / 2) * 1.04, hdp = ((b.d0 + b.d1) / 4) * 1.04, yc = (b.y0 + b.y1) / 2 + Math.abs(b.y1 - b.y0) * 0.03, xc = b.x ?? 0, zc = b.zc ?? 0, r0 = (hw + hdp) / 2;
+        const E = (ph: number, th: number, pf = 1) => { const sp = Math.sin(ph), cp = Math.cos(ph), c = Math.cos(th), sn = Math.sin(th);
+          return { p: P3(b.m, xc + c * sp * hw * pf, yc + cp * hh * pf, zc + sn * sp * hdp * pf), n: D3(b.m, (c * sp) / hw, cp / hh, (sn * sp) / hdp) }; };
+        const E4 = (f: (i: number) => [number, number, number?]) => { const q = [0, 1, 2, 3].map((i) => { const [ph, th, pf] = f(i); return E(ph, th, pf ?? 1); }); return { c: q.map((x) => x.p) as V4, n: q.map((x) => x.n) as V4 }; };
+        const sk = skinOf(hd), fc = pig(sk, 'f:face'), sg = hd.sunSide > 0 ? 1 : -1, hcol = pig(hd, 'f:hair'), dk = scale(hcol, 0.75);
+        const face = (s: Spline, layer: number) => ps({ load: 0.55, dry: 0.08, heart: 0.45, body: 0.001, rank: 1, front: true, ...s }, d, layer);
+        // (the block-in: the head's whole shape in the hair's dark, on its axis a little behind the middle, facing the eye; the
+        // face laid over it, so the hair stays round it as its silhouette from any side)
+        { const pts = [1.1, 0.4, -0.4, -0.85].map((c) => P3(b.m, xc, yc + c * hh, zc - hdp * 0.3)) as V4;
+          ps({ ctrl: pts, widths: [hw * 1.3, hw * 2.05, hw * 2.0, hw * 1.25], col: scale(hcol, 0.82), load: 0.55, dry: 0.15, heart: 0.35, body: 0.001, key: 'f:headblock', rank: 1, taper: [r0 * 0.4, r0 * 0.5] }, d, 0); }
+        // (the face's masses: the face one plane, brow to chin, narrowing to the chin; a plane down each side of it, cheek to jaw
+        // (the sun's side lighter, the other darker: the face's turn, which says where it looks); the brow's turn, a short darker
+        // stroke across under it; the jaw ear to ear, over the neck)
+        { const q = E4((i) => [0.95 + 0.6 * i, front]); face({ ctrl: q.c, surfs: q.n, widths: [hw * 1.45, hw * 1.4, hw * 1.15, hw * 0.65], col: fc, key: 'f:face', taper: [r0 * 0.15, r0 * 0.2] }, 1); }
+        for (const s of [-1, 1]) { const lit = s === sg, q = E4((i) => [1.3 + 0.42 * i, front + s * (1.12 - 0.08 * i)]);
+          face({ ctrl: q.c, surfs: q.n, widths: [r0 * 0.85, r0 * 1.05, r0 * 0.95, r0 * 0.6], col: scale(fc, lit ? 1.06 : 0.78), key: `f:side${s}`, taper: [r0 * 0.2, r0 * 0.3] }, 1); }
+        { const q = E4((i) => [1.22 + 0.06 * Math.sin((i / 3) * Math.PI), front + (i / 3 - 0.5) * 1.5, 1.01]); face({ ctrl: q.c, surfs: q.n, widths: [r0 * 0.1, r0 * 0.15, r0 * 0.15, r0 * 0.1], col: scale(fc, 0.8), alpha: 0.55, key: 'f:browline', taper: [r0 * 0.15, r0 * 0.15] }, 2); }
+        { const q = E4((i) => [2.55 + 0.1 * Math.sin((i / 3) * Math.PI), front + (i / 3 - 0.5) * 2.4, 1.02]); face({ ctrl: q.c, surfs: q.n, widths: [r0 * 0.35, r0 * 0.5, r0 * 0.5, r0 * 0.35], col: scale(fc, 0.86), key: 'f:jaw', front: false, taper: [r0 * 0.2, r0 * 0.2] }, 2); }
+        // (the hair's mass: the crown, from over the brow back; the skull round the back to the nape, darker, in four; down each
+        // temple to the top of the ear; clear of the face)
+        const hairM = (k: string, f: (i: number) => [number, number, number?], wd: N4, col: V) => { const q = E4(f); ps({ ctrl: q.c, surfs: q.n, widths: wd, col, load: 0.6, dry: 0.2, heart: 0.3, body: 0.001, key: k, rank: 1, front: true, taper: [r0 * 0.2, r0 * 0.45] }, d, 3); };
+        hairM('f:crown', (j) => [-0.1 + 0.4 * j, front, 1.04], [hw * 1.8, hw * 2.0, hw * 1.9, hw * 1.6], scale(hcol, 0.92));
+        for (let i = 0; i < 4; i++) { const th = front + Math.PI + (i - 1.5) * 0.85; hairM(`f:skull${i}`, (j) => [0.05 + (2.4 - 0.3 * Math.abs(i - 1.5)) * (j / 3), th + (i - 1.5) * 0.08 * j, 1.02], [hw * 0.95, hw * 1.15, hw * 1.1, hw * 0.75], i % 2 ? dk : scale(hcol, 0.85)); }
+        for (const s of [-1, 1]) hairM(`f:temple${s}`, (j) => [0.2 + 0.55 * j, front + s * (1.6 - 0.1 * j), 1.04], [hw * 1.0, hw * 1.0, hw * 0.85, hw * 0.45], scale(hcol, s === sg ? 1.0 : 0.8));
+        // (passages: the locks, from near the crown over the skull, ending in tapers at the nape and behind the ears (never across
+        // the face: those toward it end at the temple); a fringe over the brow; flicks off the ends)
+        if (!masses) {
+          const nL = 12;
+          for (let i = 0; i < nL; i++) {
+            const k = `f:hl${i}`, th = front + Math.PI + (i / (nL - 1) - 0.5) * 2 * 2.2 + (hr(k + 't') - 0.5) * 0.2, toFace = Math.cos(th - front); if (toFace > 0.3) continue;
+            const ph1 = 2.4 - Math.max(0, toFace + 0.4) * 1.1 + (hr(k + 'e') - 0.5) * 0.25, sw = (hr(k + 'w') - 0.5) * 0.35, ph0 = 0.08 + 0.12 * hr(k + 's'), w = r0 * (0.5 + 0.25 * hr(k + 'd')), lit = hr(k + 'c') > 0.65;
+            const q = E4((j) => { const f = j / 3; return [ph0 + (ph1 - ph0) * f, th + sw * f * f, 1.03 + 0.04 * Math.sin(f * 3)]; });
+            ps({ ctrl: q.c, surfs: q.n, widths: [w * 0.7, w, w * 0.85, w * 0.4], col: lit ? add(scale(hcol, 1.15), [0.04, 0.035, 0.03]) : pig(hd, k), load: 0.7, dry: 0.4, heart: 0.3, body: 0.001, key: k, rank: 0.9, front: true, taper: [r0 * 0.15, r0 * 0.7] }, d, 4);
+          }
+          for (let i = 0; i < 4; i++) { const k = `f:hf${i}`, th = front + (i / 3 - 0.5) * 1.3 + (hr(k + 't') - 0.5) * 0.15, ph1 = 0.75 + 0.2 * hr(k + 'e'), q = E4((j) => [0.1 + (ph1 - 0.1) * (j / 3), th + (i - 1.5) * 0.08 * (j / 3), 1.04]);
+            ps({ ctrl: q.c, surfs: q.n, widths: [r0 * 0.36, r0 * 0.45, r0 * 0.36, r0 * 0.14], col: pig(hd, k), load: 0.65, dry: 0.4, heart: 0.3, body: 0.001, key: k, rank: 0.95, front: true, taper: [r0 * 0.1, r0 * 0.5] }, d, 4); }
+          for (let i = 0; i < 3; i++) { const k = `f:hk${i}`, th = front + Math.PI + (i - 1) * 1.1 + (hr(k + 't') - 0.5) * 0.4, q = E4((j) => [2.1 + 0.18 * j, th + 0.15 * j * j, 1.03 + 0.1 * j]);
+            ps({ ctrl: q.c, surfs: q.n, widths: [r0 * 0.18, r0 * 0.14, r0 * 0.1, r0 * 0.05], col: dk, load: 0.6, dry: 0.4, heart: 0.3, body: 0.001, key: k, rank: 0.8, front: true, taper: [0.002, r0 * 0.4] }, d, 4); }
+        }
+        fielded.add(hd.name);
+      }
+      // (what's worn over the garments (a collar's flaps, a neckerchief, socks, a hood, a cap, a bag, a ponytail): a flap (a thin
+      // block) one flat stroke down it, seen from either side; anything with depth its panels round it; each over what it sits on)
+      for (const q of parts) { if (q.kind !== 'worn' || q.grid || !q.bone) continue; const b = q.bone, w = (b.w0 + b.w1) / 2, dp = (b.d0 + b.d1) / 2;
+        if (dp < 0.35 * w) { const k = `f:${q.name}:${Math.round(q.a[0] * 1000)}:${Math.round(q.a[2] * 1000)}`, ys = lerp4(b.y0, b.y1), nn = D3(b.m, 0, 0, 1);
+          ps({ ctrl: ys.map((y, i) => P3(b.m, b.x ?? 0, y, b.zc ?? 0)) as V4, surfs: [nn, nn, nn, nn], widths: ys.map((_, i) => b.w0 + ((b.w1 - b.w0) * i) / 3) as N4, col: pig(q, k), load: 0.6, dry: 0.12, heart: 0.4, body: 0.001, key: k, rank: 1, taper: [w * 0.08, w * 0.12] }, q.dist, 3); }
+        else panels(`f:${q.name}:${Math.round(q.a[0] * 1000)}`, [q], { n: 3, s0: -0.04, s1: 1.04, puff: 1.04, th0: 0.5, layer: 3 });
+        fielded.add(q.name); }
       for (const nme of fielded) chained.add(nme);
     }
     // (a painter's value range: dark cloth painted lighter where the light takes it, a little toward the light's colour, so a near
@@ -566,9 +600,9 @@ export const strokeGouacheRules: StrokeRules = {
           const segL = line.slice(1).map((p, i) => len(sub(p, line[i]))), tot = segL.reduce((a, b) => a + b, 0) || 1;
           const at = (f: number) => { let d = f * tot, i = 0; while (i < segL.length - 1 && d > segL[i]) { d -= segL[i]; i++; } const t = Math.min(1, d / (segL[i] || 1)); return { p: add(line[i], scale(sub(line[i + 1], line[i]), t)), n: nrm[Math.min(i, nrm.length - 1)] }; };
           const fs = [0, 1 / 3, 2 / 3, 1].map(at), gi = q0.grid![0];
-          putSpline({ ctrl: fs.map((x) => x.p) as [V, V, V, V], surfs: fs.map((x) => x.n) as [V, V, V, V], widths: [w * 1.1, w * 1.2, w * 1.25, w * 1.3], col: pig(q0, `c${k}`), load: 0.7, dry: 0.15, heart: 0.3, body: 0.001, key: `fig:cloth${k}`, rank: 1, taper: [0.004, w * 0.3] });
+          SP.push({ d: qs.reduce((t, q) => t + q.dist, 0) / qs.length - 0.04, s: { ctrl: fs.map((x) => x.p) as [V, V, V, V], surfs: fs.map((x) => x.n) as [V, V, V, V], widths: [w * 1.1, w * 1.2, w * 1.25, w * 1.3], col: pig(q0, `c${k}`), load: 0.7, dry: 0.15, heart: 0.3, body: 0.001, key: `fig:cloth${k}`, rank: 1, taper: [0.004, w * 0.3]  } });
           if (gi % 2 === 0) { const ls = [0.12, 0.4, 0.68, 0.98].map(at), up = face > 0.5;
-            putSpline({ ctrl: ls.map((x) => x.p) as [V, V, V, V], surfs: ls.map((x) => x.n) as [V, V, V, V], widths: [w * 0.3, w * 0.5, w * 0.55, w * 0.4], col: scale(pig(q0, `c${k}l`), up ? 1.12 : 0.85), load: 0.75, dry: 0.35, heart: 0.3, body: 0.001, key: `fig:fold${k}`, rank: 0.8, taper: [w * 0.2, w * 0.4] }); }
+            SP.push({ d: qs.reduce((t, q) => t + q.dist, 0) / qs.length - 0.041, s: { ctrl: ls.map((x) => x.p) as [V, V, V, V], surfs: ls.map((x) => x.n) as [V, V, V, V], widths: [w * 0.3, w * 0.5, w * 0.55, w * 0.4], col: scale(pig(q0, `c${k}l`), up ? 1.12 : 0.85), load: 0.75, dry: 0.35, heart: 0.3, body: 0.001, key: `fig:fold${k}`, rank: 0.8, taper: [w * 0.2, w * 0.4]  } }); }
           continue;
         }
         items.push({ d: qs.reduce((t, q) => t + q.dist, 0) / qs.length, ms: [[{ layer: 0, kind: K.PULL, a: q0.top!, b: last.bot!, path: qs.slice(1).map((q) => q.top!), side: across, width: w * 1.15, col: tone, col2: mix(tone, lit, 0.3), mix2: 0.25, alpha: 1, dry: 0.12, heart: 0.3, rank: 1, key: `fig:cloth${k}`, body: 0.85, taper: [0.004, w * 0.25] }]] });
@@ -579,7 +613,7 @@ export const strokeGouacheRules: StrokeRules = {
         const pts = seen.map((q) => add(scale(add(q.top!, q.bot!), 0.5), scale(sub(q.bot!, q.top!), 0.25))), q0 = seen[0], { tone, lit } = tonesOf(q0), w = len(sub(q0.bot!, q0.top!)) * 0.75;
         // (as splines: the hem in runs of four quads, each run one stroke round it, overlapping the next by one)
         if (putSpline) { for (let i = 0; i + 3 < seen.length + 2; i += 3) { const ix = [0, 1, 2, 3].map((j) => Math.min(seen.length - 1, i + j)); if (ix[0] === ix[3]) break;
-            const qq = ix.map((j) => seen[j]); putSpline({ ctrl: ix.map((j) => pts[j]) as [V, V, V, V], surfs: qq.map((q) => (dot(q.fwd, q.toEye) >= 0 ? q.fwd : scale(q.fwd, -1))) as [V, V, V, V], widths: [w * 0.6, w, w, w * 0.6], col: scale(pig(q0, `hem${mt}${i}`), 1.1), alpha: 0.85, load: 0.6, dry: 0.45, heart: 0.35, body: 0.001, key: `fig:hem${mt}:${i}`, rank: 0.6, taper: [w * 0.3, w * 0.6] }); }
+            const qq = ix.map((j) => seen[j]); SP.push({ d: Math.min(...seen.map((q) => q.dist)) - 0.05, s: { ctrl: ix.map((j) => pts[j]) as [V, V, V, V], surfs: qq.map((q) => (dot(q.fwd, q.toEye) >= 0 ? q.fwd : scale(q.fwd, -1))) as [V, V, V, V], widths: [w * 0.6, w, w, w * 0.6], col: scale(pig(q0, `hem${mt}${i}`), 1.1), alpha: 0.85, load: 0.6, dry: 0.45, heart: 0.35, body: 0.001, key: `fig:hem${mt}:${i}`, rank: 0.6, taper: [w * 0.3, w * 0.6]  } }); }
           continue; }
         items.push({ d: Math.min(...seen.map((q) => q.dist)) - 0.002, ms: [[{ layer: 0, kind: K.PULL, a: pts[0], b: pts[pts.length - 1], path: pts.slice(1, -1), side: unit(sub(q0.bot!, q0.top!)), width: w, col: mix(tone, lit, 0.6), col2: tone, mix2: 0.3, alpha: 0.85, dry: 0.5, heart: 0.35, rank: 0.6, key: `fig:hem${mt}`, taper: [w * 0.3, w * 0.8], body: 0.45 }]] }); } }
     for (const p of [...parts].sort((x, y) => y.dist - x.dist)) {
@@ -691,9 +725,14 @@ export const strokeGouacheRules: StrokeRules = {
         const a = sub(tip.b, scale(d, L * 0.3)), m = add(add(tip.b, scale(d, L * 0.45)), scale(s, L * 0.35)), b = add(add(tip.b, scale(d, L * 0.3)), scale(s, L * 0.75));
         det(tip.dist - 0.001, [{ layer: 0, kind: K.PULL, a, b, path: [m], side: s, width: tip.width * 0.18, col: scale(col, 0.85), mix2: 0, alpha: 0.9, dry: 0.3, heart: 0.2, rank: 0.5, key: 'fig:flick', taper: [0.004, L * 0.4] }]);
       } }
+    // (the figure's strokes, far to near by form, a garment over what's under it)
+    if (putSpline) for (const x of SP.sort((a, b) => b.d - a.d)) putSpline(x.s);
     for (const m of [...ground, ...items.sort((a, b) => b.d - a.d).flatMap((it) => it.ms.flat())]) put(m);
   },
 };
+
+/** how much of the figure to paint: `masses` only its broad masses (main.ts, `paint=masses`) */
+export const paintMode = { masses: false };
 
 export const strokeGouache: LookDef = {
   name: 'stroke-gouache', fog: strokeGouacheRules.haze, fogNear: 0.12, sun: DAY_SUN, shadow: 'map', guides: false, strokes: strokeGouacheRules,

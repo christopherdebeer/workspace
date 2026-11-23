@@ -32,6 +32,7 @@
  * from the side) · `scene=<key>` an authored scene (scenes.ts) · `from=x,z` start there (the street) · `hold=<radians>` one world direction held · `brush=1` from a stand, light pushes every way and a turn round (brush.ts), to see the feet (`brush=filmed`: the one 12 px back brush Astra filmed) · `strip=<seconds>` a stretch of its own run from there laid out frame by frame, the move named on
  * each (`frames=24`, `every=0.1`, `cols=6`).
  */
+import { paintMode } from './looks/stroke-gouache';
 import { noise1 } from '../kit/rng';
 import { City } from './city';
 import { Runner } from './runner';
@@ -81,6 +82,8 @@ const brushHeading = runner.heading;
 // (`from=x,z`: start there instead, on whatever's there: the street, to see it find its way up)
 if (q.has('from')) { const [fx, fz] = q.get('from')!.split(',').map(Number); runner.x = fx; runner.z = fz; runner.y = city.heightAt(fx, fz); }
 rd.strokes.noUnder = q.get('under') === '0';
+if (q.get('paint') === 'flat') rd.strokes.gloss = 0;
+if (q.get('paint') === 'masses') paintMode.masses = true;
 if (q.has('cost')) rd.strokes.cost = { depth: 0, city: 0, shadow: 0, figure: 0, stamps: 0, chunks: 0 };
 rd.radius = Math.max(1, Math.min(8, Number(q.get('far') ?? 4) | 0));
 if ((LOOKS as readonly string[]).includes(q.get('look') ?? '')) rd.look = q.get('look') as Look;
