@@ -15,3 +15,12 @@ The five changes, in the order agreed:
 - `hands-shoes.jpg`: the teen's hands, the schoolgirl's loafers and socks, and the runner's shoe in profile.
 
 Hands are one shape (the palm through the fingers to their tips) plus the thumb, over the cuff. Shoes are painted along the foot, heel to toe: the top, two sides, a darker sole, a toe cap, and an ankle stroke down into the shoe from inside the trouser leg. Anything else of the body gets panels round its own block. The contact line under a gripping hand, the skirt's pleats and the ponytail's flick are drawn as splines. The old stamp figure (the torso and limb pulls, the back pull, the seat, the wraps) is now painted only where splines aren't available; the ground contact shadows stay as stamps. A unit test checks that every character is painted wholly in splines.
+
+## Then: mass, against the round seven studies
+- `pairs-before-mass.jpg` and `pairs-after-mass.jpg`: each render beside its study at the same framing, before and after this pass.
+
+The gap at thumbnail size was mass, not detail. The changes:
+- **Room in the clothes.** The top's ease is 1.2 at the shoulder rising to 1.48 at the hem; sleeves go from 1.25 to 1.65; trouser legs from 1.25, widening below the knee. Panels are wider (1.32× their share of the girth), and skirt and coat columns are wider still, so they overlap into one mass.
+- **No edge threads.** Strokes past the silhouette are hidden again.
+- **Shadow a value, not a hue.** A figure's shadow plane is now mostly a value down (the lit tint mixed in), so a navy's shadow stays navy rather than turning saturated blue.
+- **Darks kept dark.** The lift on dark cloth is smaller.
