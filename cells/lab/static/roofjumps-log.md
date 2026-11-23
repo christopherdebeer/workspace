@@ -503,3 +503,6 @@ In response to the critique of the 13:29 build. The full notes are in `roofjumps
 - Garment masses: jacket panels, the shoulder slope, sleeves through the elbow, a collar band, the neck under the jaw, the head blocked in in the hair's dark with face planes over it, and attachments as splines.
 - New URL keys: `paint=masses` (broad masses only), `paint=flat` (no ridge gloss), `aim=` (the height looked at).
 - Not yet done: the brush-from-rest motion test (only the frozen-pose orbit was rendered); hands and feet are still stamps.
+
+## 23 November (evening): round seven worked in order
+The full notes are in `roofjumps-studies/round8/README.md`. The changes: a hard terminator per form and no per-stroke value noise; garment ease profiles (top, sleeves, trouser legs) with hem and cuff bands; drape strokes from the shoulder points; face planes (sockets, nose, mouth) with flattened face normals; a larger sailor collar; skirt and coat flare. Still to do: the brush-from-rest motion test, and hands and feet as splines.

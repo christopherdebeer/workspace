@@ -304,7 +304,7 @@ export const strokeGouacheRules: StrokeRules = {
     // hem over the trousers, the jaw over the neck, the hair over the collar).
     // `paint=masses` (paintMode.masses): only the masses, to judge whether the figure reads without its passages.
     const hr = (k: string) => (hashKey(k) % 100000) / 100000;
-    const pig = (q: (typeof parts)[number], k: string): V => { const c = (palette[q.mat] ?? palette[0]) as V, lum = c[0] * 0.3 + c[1] * 0.59 + c[2] * 0.11, lift = Math.max(0, 0.32 - lum) * (q.mat % 8 === 1 ? 0.5 : 1.05), v = 0.94 + 0.12 * hr(k + 'v'), w = (hr(k + 'w') - 0.5) * 0.05; return [(c[0] + lift) * v * (1 + w), (c[1] + lift) * v, (c[2] + lift * 1.1) * v * (1 - w)]; };
+    const pig = (q: (typeof parts)[number], k: string): V => { const c = (palette[q.mat] ?? palette[0]) as V, lum = c[0] * 0.3 + c[1] * 0.59 + c[2] * 0.11, lift = Math.max(0, 0.32 - lum) * (q.mat % 8 === 1 ? 0.5 : 1.05), v = 0.98 + 0.04 * hr(k + 'v'), w = (hr(k + 'w') - 0.5) * 0.02; /* (one value a form: the light makes the difference, not the stroke) */ return [(c[0] + lift) * v * (1 + w), (c[1] + lift) * v, (c[2] + lift * 1.1) * v * (1 - w)]; };
     const fielded = new Set<string>(), SP: { d: number; s: Spline }[] = [], masses = paintMode.masses;
     if (putSpline) {
       const P3 = (m: Float32Array | number[], x: number, y: number, z: number): V => [m[0] * x + m[4] * y + m[8] * z + m[12], m[1] * x + m[5] * y + m[9] * z + m[13], m[2] * x + m[6] * y + m[10] * z + m[14]];
@@ -321,11 +321,13 @@ export const strokeGouacheRules: StrokeRules = {
         const c = Math.cos(th), sn = Math.sin(th), x = (b.x ?? 0) + c * hw, z = (b.zc ?? 0) + sn * hd;
         return { p: P3(b.m, x, y, z), n: D3(b.m, c / Math.max(hw, 1e-4), 0, sn / Math.max(hd, 1e-4)), r: (hw + hd) / 2, t: Math.hypot(hw * sn, hd * c), len: tot };
       };
-      const run = (bs: Bn[], ss: number[], th: (s: number, i: number) => number, puff: number) => { const q = ss.map((s, i) => surf(bs, s, th(s, i), puff)); return { c: q.map((x) => x.p) as V4, n: q.map((x) => x.n) as V4, r: q.map((x) => x.r) as N4, t: q.map((x) => x.t) as N4, len: q[0].len }; };
+      type Ease = number | ((s: number) => number);
+      const ez = (e: Ease, s: number) => (typeof e === 'number' ? e : e(s));
+      const run = (bs: Bn[], ss: number[], th: (s: number, i: number) => number, puff: Ease) => { const q = ss.map((s, i) => surf(bs, s, th(s, i), ez(puff, s))); return { c: q.map((x) => x.p) as V4, n: q.map((x) => x.n) as V4, r: q.map((x) => x.r) as N4, t: q.map((x) => x.t) as N4, len: q[0].len }; };
       const lerp4 = (a: number, b: number): N4 => [a, a + (b - a) / 3, a + ((b - a) * 2) / 3, b];
       /** a form's panels: n broad strokes all round it, along it from s0 to s1, each as wide as its share of the girth (and a
        * little over, so they meet), each its own value of the pigment; the masses */
-      const panels = (key: string, qs: (typeof parts)[number][], o: { n: number; s0: number; s1: number; puff: number; th0?: number; grow?: number; layer?: number }) => {
+      const panels = (key: string, qs: (typeof parts)[number][], o: { n: number; s0: number; s1: number; puff: Ease; th0?: number; grow?: number; layer?: number }) => {
         const bs = qs.map((q) => q.bone!).filter(Boolean) as Bn[]; if (bs.length !== qs.length) return; const q0 = qs[0], d = qs.reduce((t, q) => t + q.dist, 0) / qs.length;
         for (let i = 0; i < o.n; i++) {
           const k = `${key}p${i}`, th = (o.th0 ?? 0) + (2 * Math.PI * i) / o.n + (hr(k) - 0.5) * 0.12, R = run(bs, lerp4(o.s0, o.s1), () => th, o.puff), g = o.grow ?? 1;
@@ -335,19 +337,26 @@ export const strokeGouacheRules: StrokeRules = {
         for (const q of qs) fielded.add(q.name);
       };
       /** a form's passages: narrower strokes along it, a value off the masses, fixed round it (seeded), all round */
-      const along = (key: string, qs: (typeof parts)[number][], o: { n: number; s0: number; s1: number; puff: number; w: number; layer?: number }) => {
+      const along = (key: string, qs: (typeof parts)[number][], o: { n: number; s0: number; s1: number; puff: Ease; w: number; layer?: number }) => {
         if (masses) return; const bs = qs.map((q) => q.bone!).filter(Boolean) as Bn[]; if (bs.length !== qs.length) return; const q0 = qs[0], d = qs.reduce((t, q) => t + q.dist, 0) / qs.length;
         for (let i = 0; i < o.n; i++) {
           const k = `${key}a${i}`, th = (2 * Math.PI * (i + hr(k + 't'))) / o.n, a = o.s0 + (o.s1 - o.s0) * hr(k + 's0') * 0.25, b = o.s1 - (o.s1 - o.s0) * hr(k + 's1') * 0.3;
-          const R = run(bs, lerp4(a, b), (s) => th + (hr(k + 'b') - 0.5) * 0.3 * Math.sin(s * 3), o.puff * 1.01), lt = hr(k + 'c') > 0.5;
-          ps({ ctrl: R.c, surfs: R.n, widths: R.r.map((r) => r * o.w) as N4, col: scale(pig(q0, k), lt ? 1.1 : 0.88), load: 0.75, dry: 0.4, heart: 0.3, body: 0.001, key: k, rank: 0.8, front: true }, d - 0.001, o.layer ?? 0);
+          const R = run(bs, lerp4(a, b), (s) => th + (hr(k + 'b') - 0.5) * 0.3 * Math.sin(s * 3), (s: number) => ez(o.puff, s) * 1.01), lt = hr(k + 'c') > 0.5;
+          ps({ ctrl: R.c, surfs: R.n, widths: R.r.map((r) => r * o.w) as N4, col: scale(pig(q0, k), lt ? 1.05 : 0.95), load: 0.75, dry: 0.4, heart: 0.3, body: 0.001, key: k, rank: 0.8, front: true }, d - 0.001, o.layer ?? 0);
         }
+      };
+      /** a band round a form at s (a hem, a cuff, a waistband): two half rings, each shown from its own side */
+      const band = (key: string, qs: (typeof parts)[number][], s: number, puff: number, wd: number, col: V, layer: number) => {
+        const bs = qs.map((q) => q.bone!).filter(Boolean) as Bn[]; if (bs.length !== qs.length) return; const d = qs.reduce((t, q) => t + q.dist, 0) / qs.length;
+        for (const h of [0, 1]) { const k = `${key}b${h}`, R = run(bs, [s, s, s, s], (_, i) => h * Math.PI + (i / 3) * Math.PI * 1.08 - 0.04, puff);
+          ps({ ctrl: R.c, surfs: R.n, widths: [wd * 0.85, wd, wd, wd * 0.85], col, load: 0.6, dry: 0.2, heart: 0.4, body: 0.001, key: k, rank: 0.9, front: true, taper: [wd * 0.3, wd * 0.3] }, d - 0.002, layer); }
       };
       const skinOf = (q: (typeof parts)[number]) => ({ ...q, mat: q.mat - (q.mat % 8) });
       const pe = by.get('pelvis'), to = by.get('torso'), hd = by.get('head');
       // (the legs: a trouser leg (or a bare one) hip to ankle as four panels, through the knee; passages down it)
       for (const n of ['L', 'R']) { const th = by.get('thigh' + n), sh = by.get('shin' + n); if (!th || !sh) continue;
-        if (th.mat === sh.mat) { panels(`f:leg${n}`, [th, sh], { n: 4, s0: -0.1, s1: 1.02, puff: th.mat % 8 === 0 ? 1.0 : 1.1, th0: 0.4 }); along(`f:leg${n}`, [th, sh], { n: 4, s0: 0, s1: 1, puff: 1.1, w: 0.45 }); }
+        if (th.mat === sh.mat) { const legE: Ease = th.mat % 8 === 0 ? 1.0 : (s) => 1.1 + 0.22 * Math.max(0, s - 0.45) ** 1.5 * 2; /* (a trouser leg hangs straight from the knee: wider than the shin toward the ankle) */
+          panels(`f:leg${n}`, [th, sh], { n: 4, s0: -0.1, s1: 1.02, puff: legE, th0: 0.4 }); along(`f:leg${n}`, [th, sh], { n: 4, s0: 0, s1: 1, puff: legE, w: 0.45 }); }
         else { panels(`f:thigh${n}`, [th], { n: 4, s0: -0.12, s1: 1.06, puff: 1.1, th0: 0.4 }); panels(`f:shin${n}`, [sh], { n: 4, s0: -0.04, s1: 1.02, puff: sh.mat % 8 === 0 ? 1.0 : 1.08, th0: 0.4 }); } }
       // (the trunk: the hips, and over them the top as its panels (back, two sides, two fronts meeting at the middle), the top's
       // hem over the hips; then the shoulders' slope; the sleeves hung from the shoulder points)
@@ -355,13 +364,21 @@ export const strokeGouacheRules: StrokeRules = {
         const same = pe.mat === to.mat, tb = to.bone;
         if (!same) panels('f:hips', [pe], { n: 4, s0: -0.15, s1: 1.1, puff: 1.1, th0: Math.PI / 4 });
         const trunk = same ? [pe, to] : [to], s0 = same ? -0.05 : -0.12, layer = same ? 0 : 1;
+        const topE = (s: number) => 1.08 + 0.15 * (1 - Math.max(0, Math.min(1, (s - s0 - 0.1) / (0.93 - s0 - 0.1)))) ** 0.8; /* (a top: close at the shoulder, looser down the body, fullest where it blouses over its hem) */
         // (the back, the sides, and the fronts each side of the middle: the fronts' meeting is the opening a jacket has)
         { const bs = trunk.map((q) => q.bone!) as Bn[], d = to.dist;
           const P: [string, number, number][] = [['back', -Math.PI / 2, 0.92], ['sideL', 0.05, 0.95], ['sideR', Math.PI - 0.05, 0.95], ['frontL', Math.PI / 2 - 0.42, 0.52], ['frontR', Math.PI / 2 + 0.42, 0.52]];
-          for (const [nm, th, wf] of P) { const k = `f:top:${nm}`, R = run(bs, lerp4(s0, 0.93), () => th, 1.12);
+          for (const [nm, th, wf] of P) { const k = `f:top:${nm}`, R = run(bs, lerp4(s0, 0.93), () => th, topE);
             ps({ ctrl: R.c, surfs: R.n, widths: R.t.map((t, j) => t * 2 * wf * (1.05 - 0.08 * j / 3)) as N4, col: pig(to, k), load: 0.65, dry: 0.12, heart: 0.35, body: 0.001, key: k, rank: 1, front: true, taper: [R.len * 0.03, R.len * 0.06] }, d, layer); }
           for (const q of trunk) fielded.add(q.name);
-          along('f:top', trunk, { n: 7, s0, s1: 0.9, puff: 1.12, w: 0.38, layer }); }
+          // (the drape: from each shoulder point, where the top hangs from, strokes fanning down across the front and the back toward
+          // the other hip, sagging as cloth does; a value either side of the masses)
+          if (!masses) for (const [fn, f] of [['F', Math.PI / 2], ['B', -Math.PI / 2]] as const) for (const sd of [-1, 1]) for (let i = 0; i < 3; i++) {
+            const k = `f:drape${fn}${sd}${i}`, ta = f + sd * (1.2 - 0.12 * i) * (f > 0 ? 1 : -1), tb2 = f - sd * (0.15 + 0.32 * i + (hr(k) - 0.5) * 0.2) * (f > 0 ? 1 : -1);
+            const sa = 0.9 - 0.05 * i, sb = s0 + 0.06 + 0.12 * i + 0.06 * hr(k + 's'), R = run(bs, [0, 1, 2, 3].map((j) => sa + (sb - sa) * (j / 3)), (_, j) => { const e = j / 3; return ta + (tb2 - ta) * (e * e * (3 - 2 * e)); }, (s: number) => topE(s) * 1.012);
+            ps({ ctrl: R.c, surfs: R.n, widths: R.r.map((r, j) => r * (0.3 + 0.12 * Math.sin((j / 3) * Math.PI))) as N4, col: scale(pig(to, k), i % 2 ? 0.97 : 1.035), load: 0.75, dry: 0.4, heart: 0.3, body: 0.001, key: k, rank: 0.8, front: true }, d - 0.001, layer); }
+          // (its hem: a band round the bottom, the cloth gathered there a value darker)
+          band('f:tophem', trunk, s0 + 0.035, topE(s0) * 1.02, Math.abs(tb.y1 - tb.y0) * 0.08, scale(pig(to, 'f:tophem'), 0.88), layer + 0.5); }
         // (the shoulders' slope: from the collar out over the top to each shoulder point, behind and in front, a little down
         // as it goes; the line a jacket hangs from)
         for (const sd of [-1, 1]) for (const fb of [-1, 1]) {
@@ -374,7 +391,9 @@ export const strokeGouacheRules: StrokeRules = {
       // hangs; bare arms the same, in skin and close)
       for (const n of ['L', 'R']) { const ua = by.get('upperArm' + n), fa = by.get('foreArm' + n); if (!ua || !fa) continue;
         const cloth = ua.mat % 8 !== 0;
-        if (ua.mat === fa.mat) { panels(`f:arm${n}`, [ua, fa], { n: 3, s0: -0.1, s1: 1.02, puff: cloth ? 1.12 : 1.0, th0: 0.3, grow: cloth ? 1.18 : 1, layer: 1 }); along(`f:arm${n}`, [ua, fa], { n: 3, s0: 0, s1: 1, puff: 1.12, w: 0.4, layer: 1 }); }
+        if (ua.mat === fa.mat) { const armE: Ease = cloth ? (s) => (s > 0.93 ? 1.06 : 1.06 + 0.26 * Math.max(0, s) ** 1.3) : 1.0; /* (a sleeve: close at the shoulder, fuller to the forearm, gathered at the cuff) */
+          panels(`f:arm${n}`, [ua, fa], { n: 3, s0: -0.1, s1: 0.95, puff: armE, th0: 0.3, layer: 1 }); along(`f:arm${n}`, [ua, fa], { n: 3, s0: 0, s1: 0.92, puff: armE, w: 0.4, layer: 1 });
+          if (cloth) { const L = Math.abs(ua.bone!.y1 - ua.bone!.y0) + Math.abs(fa.bone!.y1 - fa.bone!.y0); band(`f:cuff${n}`, [ua, fa], 0.955, 1.12, L * 0.07, scale(pig(ua, `f:cuff${n}`), 0.9), 1.5); } }
         else { panels(`f:ua${n}`, [ua], { n: 3, s0: -0.12, s1: 1.04, puff: cloth ? 1.12 : 1.0, th0: 0.3, layer: 1 }); panels(`f:fa${n}`, [fa], { n: 3, s0: -0.05, s1: 1.02, puff: fa.mat % 8 ? 1.12 : 1.0, th0: 0.3, layer: 1 }); } }
       // (the neck: from inside the collar to under the jaw, in the head's shadow; then the collar round it (a passage), the head
       // over both)
@@ -397,19 +416,30 @@ export const strokeGouacheRules: StrokeRules = {
           return { p: P3(b.m, xc + c * sp * hw * pf, yc + cp * hh * pf, zc + sn * sp * hdp * pf), n: D3(b.m, (c * sp) / hw, cp / hh, (sn * sp) / hdp) }; };
         const E4 = (f: (i: number) => [number, number, number?]) => { const q = [0, 1, 2, 3].map((i) => { const [ph, th, pf] = f(i); return E(ph, th, pf ?? 1); }); return { c: q.map((x) => x.p) as V4, n: q.map((x) => x.n) as V4 }; };
         const sk = skinOf(hd), fc = pig(sk, 'f:face'), sg = hd.sunSide > 0 ? 1 : -1, hcol = pig(hd, 'f:hair'), dk = scale(hcol, 0.75);
-        const face = (s: Spline, layer: number) => ps({ load: 0.55, dry: 0.08, heart: 0.45, body: 0.001, rank: 1, front: true, ...s }, d, layer);
+        // (a face is flatter at the front than the skull: its planes' normals drawn toward the face's own forward, so the light
+        // splits it side to side (the cheek turning away) and not, as on an egg, across the mouth)
+        const fwd = D3(b.m, 0, 0.12, 1), flat = (n: V4) => n.map((x) => unit(add(x, scale(fwd, 1.6)))) as V4;
+        const face = (s: Spline, layer: number) => ps({ load: 0.55, dry: 0.08, heart: 0.45, body: 0.001, rank: 1, front: true, ...s, surfs: s.key === 'f:jaw' ? undefined : s.surfs && !s.key.startsWith('f:side') ? flat(s.surfs) : s.surfs }, d, layer);
         // (the block-in: the head's whole shape in the hair's dark, on its axis a little behind the middle, facing the eye; the
         // face laid over it, so the hair stays round it as its silhouette from any side)
-        { const pts = [1.1, 0.4, -0.4, -0.85].map((c) => P3(b.m, xc, yc + c * hh, zc - hdp * 0.3)) as V4;
-          ps({ ctrl: pts, widths: [hw * 1.3, hw * 2.05, hw * 2.0, hw * 1.25], col: scale(hcol, 0.82), load: 0.55, dry: 0.15, heart: 0.35, body: 0.001, key: 'f:headblock', rank: 1, taper: [r0 * 0.4, r0 * 0.5] }, d, 0); }
+        { const lo = [-0.05, -0.3, -0.55, -0.75].map((c) => P3(b.m, xc, yc + c * hh, zc - hdp * 0.2)) as V4;
+          ps({ ctrl: lo, widths: [hw * 1.75, hw * 1.6, hw * 1.25, hw * 0.8], col: scale(fc, 0.8), load: 0.55, dry: 0.15, heart: 0.35, body: 0.001, key: 'f:headblockLo', rank: 1, taper: [r0 * 0.2, r0 * 0.4] }, d + 0.001, 0); /* (below the ears the head's block is the face's shade, not the hair's: no beard round the chin) */
+          const pts = [1.1, 0.5, 0.0, -0.3].map((c) => P3(b.m, xc, yc + c * hh, zc - hdp * 0.35)) as V4;
+          ps({ ctrl: pts, widths: [hw * 1.3, hw * 2.05, hw * 1.95, hw * 1.5], col: scale(hcol, 0.82), load: 0.55, dry: 0.15, heart: 0.35, body: 0.001, key: 'f:headblock', rank: 1, taper: [r0 * 0.4, r0 * 0.5] }, d, 0); }
         // (the face's masses: the face one plane, brow to chin, narrowing to the chin; a plane down each side of it, cheek to jaw
         // (the sun's side lighter, the other darker: the face's turn, which says where it looks); the brow's turn, a short darker
         // stroke across under it; the jaw ear to ear, over the neck)
         { const q = E4((i) => [0.95 + 0.6 * i, front]); face({ ctrl: q.c, surfs: q.n, widths: [hw * 1.45, hw * 1.4, hw * 1.15, hw * 0.65], col: fc, key: 'f:face', taper: [r0 * 0.15, r0 * 0.2] }, 1); }
         for (const s of [-1, 1]) { const lit = s === sg, q = E4((i) => [1.3 + 0.42 * i, front + s * (1.12 - 0.08 * i)]);
           face({ ctrl: q.c, surfs: q.n, widths: [r0 * 0.85, r0 * 1.05, r0 * 0.95, r0 * 0.6], col: scale(fc, lit ? 1.06 : 0.78), key: `f:side${s}`, taper: [r0 * 0.2, r0 * 0.3] }, 1); }
-        { const q = E4((i) => [1.22 + 0.06 * Math.sin((i / 3) * Math.PI), front + (i / 3 - 0.5) * 1.5, 1.01]); face({ ctrl: q.c, surfs: q.n, widths: [r0 * 0.1, r0 * 0.15, r0 * 0.15, r0 * 0.1], col: scale(fc, 0.8), alpha: 0.55, key: 'f:browline', taper: [r0 * 0.15, r0 * 0.15] }, 2); }
-        { const q = E4((i) => [2.55 + 0.1 * Math.sin((i / 3) * Math.PI), front + (i / 3 - 0.5) * 2.4, 1.02]); face({ ctrl: q.c, surfs: q.n, widths: [r0 * 0.35, r0 * 0.5, r0 * 0.5, r0 * 0.35], col: scale(fc, 0.86), key: 'f:jaw', front: false, taper: [r0 * 0.2, r0 * 0.2] }, 2); }
+        // (the face's few planes, where they're seen: the sockets a band of shade under the brow, the nose's shaded side, the
+        // mouth a short dark touch; no eyes: the planes say where it looks)
+        if (!masses) {
+          { const q = E4((i) => [1.42 + 0.05 * Math.sin((i / 3) * Math.PI), front + (i / 3 - 0.5) * 1.25, 1.01]); face({ ctrl: q.c, surfs: q.n, widths: [r0 * 0.14, r0 * 0.22, r0 * 0.22, r0 * 0.14], col: scale(fc, 0.8), alpha: 0.7, key: 'f:sockets', taper: [r0 * 0.15, r0 * 0.15] }, 2); }
+          { const q = E4((i) => [1.48 + 0.15 * i, front - sg * 0.13, 1.02]); face({ ctrl: q.c, surfs: q.n, widths: [r0 * 0.06, r0 * 0.1, r0 * 0.12, r0 * 0.1], col: scale(fc, 0.82), alpha: 0.75, key: 'f:nose', taper: [r0 * 0.05, r0 * 0.05] }, 2); }
+          { const q = E4((i) => [2.18, front + (i / 3 - 0.5) * 0.42, 1.01]); face({ ctrl: q.c, surfs: q.n, widths: [r0 * 0.03, r0 * 0.06, r0 * 0.06, r0 * 0.03], col: scale(fc, 0.7), alpha: 0.7, key: 'f:mouth', taper: [r0 * 0.04, r0 * 0.04] }, 2); }
+        }
+        { const q = E4((i) => [2.55 + 0.1 * Math.sin((i / 3) * Math.PI), front + (i / 3 - 0.5) * 2.4, 1.02]); face({ ctrl: q.c, surfs: q.n, widths: [r0 * 0.25, r0 * 0.35, r0 * 0.35, r0 * 0.25], col: scale(fc, 0.9), key: 'f:jaw', front: false, taper: [r0 * 0.2, r0 * 0.2] }, 2); }
         // (the hair's mass: the crown, from over the brow back; the skull round the back to the nape, darker, in four; down each
         // temple to the top of the ear; clear of the face)
         const hairM = (k: string, f: (i: number) => [number, number, number?], wd: N4, col: V) => { const q = E4(f); ps({ ctrl: q.c, surfs: q.n, widths: wd, col, load: 0.6, dry: 0.2, heart: 0.3, body: 0.001, key: k, rank: 1, front: true, taper: [r0 * 0.2, r0 * 0.45] }, d, 3); };
@@ -428,6 +458,8 @@ export const strokeGouacheRules: StrokeRules = {
           }
           for (let i = 0; i < 4; i++) { const k = `f:hf${i}`, th = front + (i / 3 - 0.5) * 1.3 + (hr(k + 't') - 0.5) * 0.15, ph1 = 0.75 + 0.2 * hr(k + 'e'), q = E4((j) => [0.1 + (ph1 - 0.1) * (j / 3), th + (i - 1.5) * 0.08 * (j / 3), 1.04]);
             ps({ ctrl: q.c, surfs: q.n, widths: [r0 * 0.36, r0 * 0.45, r0 * 0.36, r0 * 0.14], col: pig(hd, k), load: 0.65, dry: 0.4, heart: 0.3, body: 0.001, key: k, rank: 0.95, front: true, taper: [r0 * 0.1, r0 * 0.5] }, d, 4); }
+          for (let i = 0; i < 6; i++) { const k = `f:ht${i}`, th = front + (i - 2.5) * 0.9 + (hr(k) - 0.5) * 0.4, ph = 0.25 + 0.5 * hr(k + 'p'), q = E4((j) => [ph + 0.12 * j, th + (hr(k + 'd') - 0.5) * 0.25 * j, 1.0 + 0.07 * j]);
+            ps({ ctrl: q.c, surfs: q.n, widths: [r0 * 0.14, r0 * 0.12, r0 * 0.08, r0 * 0.03], col: i % 2 ? dk : pig(hd, k), load: 0.6, dry: 0.45, heart: 0.3, body: 0.001, key: k, rank: 0.7, front: true, taper: [0.002, r0 * 0.3] }, d, 4); }
           for (let i = 0; i < 3; i++) { const k = `f:hk${i}`, th = front + Math.PI + (i - 1) * 1.1 + (hr(k + 't') - 0.5) * 0.4, q = E4((j) => [2.1 + 0.18 * j, th + 0.15 * j * j, 1.03 + 0.1 * j]);
             ps({ ctrl: q.c, surfs: q.n, widths: [r0 * 0.18, r0 * 0.14, r0 * 0.1, r0 * 0.05], col: dk, load: 0.6, dry: 0.4, heart: 0.3, body: 0.001, key: k, rank: 0.8, front: true, taper: [0.002, r0 * 0.4] }, d, 4); }
         }
@@ -582,6 +614,7 @@ export const strokeGouacheRules: StrokeRules = {
     // (cloth (a skirt, a coat): a column of its quads, waist to hem, one bent stroke, lit by its own face, so a fold turns light
     // to dark across the hem and the cloth is a sheet, not a pile of blocks)
     const hemOf: { col: string; q: (typeof parts)[number] }[] = [];
+    const pe0 = ((q) => (q ? scale(add(q.a, q.b), 0.5) : null))(by.get('pelvis'));
     { const cols = new Map<string, (typeof parts)[number][]>();
       for (const q of parts) if (q.grid) { const k = `${q.mat}:${q.grid[0]}`; (cols.get(k) ?? cols.set(k, []).get(k)!).push(q); }
       for (const [k, qs] of cols) {
@@ -599,7 +632,11 @@ export const strokeGouacheRules: StrokeRules = {
           const line = [...qs.map((q) => q.top!), last.bot!], nrm = qs.map((q) => (dot(q.fwd, q.toEye) >= 0 ? q.fwd : scale(q.fwd, -1)));
           const segL = line.slice(1).map((p, i) => len(sub(p, line[i]))), tot = segL.reduce((a, b) => a + b, 0) || 1;
           const at = (f: number) => { let d = f * tot, i = 0; while (i < segL.length - 1 && d > segL[i]) { d -= segL[i]; i++; } const t = Math.min(1, d / (segL[i] || 1)); return { p: add(line[i], scale(sub(line[i + 1], line[i]), t)), n: nrm[Math.min(i, nrm.length - 1)] }; };
-          const fs = [0, 1 / 3, 2 / 3, 1].map(at), gi = q0.grid![0];
+          // (flared: the cloth pushed out from the column's top, more toward the hem, as a skirt swings and a coat streams; the
+          // painter pushes the cloth further than the body)
+          const fs = [0, 1 / 3, 2 / 3, 1].map(at), gi = q0.grid![0], top0 = fs[0].p;
+          for (let j = 1; j < 4; j++) { const p = fs[j].p, off: V = [p[0] - top0[0], 0, p[2] - top0[2]], f = [0, 0.04, 0.1, 0.2][j], ax = pe0 ? [p[0] - pe0[0], 0, p[2] - pe0[2]] as V : off, al = Math.hypot(ax[0], ax[2]) || 1, L = len(sub(p, top0));
+            fs[j] = { ...fs[j], p: add(p, scale([ax[0] / al, 0, ax[2] / al], L * f)) }; }
           SP.push({ d: qs.reduce((t, q) => t + q.dist, 0) / qs.length - 0.04, s: { ctrl: fs.map((x) => x.p) as [V, V, V, V], surfs: fs.map((x) => x.n) as [V, V, V, V], widths: [w * 1.1, w * 1.2, w * 1.25, w * 1.3], col: pig(q0, `c${k}`), load: 0.7, dry: 0.15, heart: 0.3, body: 0.001, key: `fig:cloth${k}`, rank: 1, taper: [0.004, w * 0.3]  } });
           if (gi % 2 === 0) { const ls = [0.12, 0.4, 0.68, 0.98].map(at), up = face > 0.5;
             SP.push({ d: qs.reduce((t, q) => t + q.dist, 0) / qs.length - 0.041, s: { ctrl: ls.map((x) => x.p) as [V, V, V, V], surfs: ls.map((x) => x.n) as [V, V, V, V], widths: [w * 0.3, w * 0.5, w * 0.55, w * 0.4], col: scale(pig(q0, `c${k}l`), up ? 1.12 : 0.85), load: 0.75, dry: 0.35, heart: 0.3, body: 0.001, key: `fig:fold${k}`, rank: 0.8, taper: [w * 0.2, w * 0.4]  } }); }

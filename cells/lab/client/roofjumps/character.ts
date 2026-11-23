@@ -169,8 +169,8 @@ export const CHARACTERS: Character[] = [
     dress: { ...DRESS, thigh: MAT.skin, shin: MAT.skin },
     wears: [
       { bone: 'pelvis', at: [0, 0.05, 0], block: { y0: 0, w0: 0.27, d0: 0.19, y1: -0.36, w1: 0.38, d1: 0.31 }, mat: MAT.bottoms, cloth: { nu: 10, nv: 4, drag: 1.2 } },
-      { bone: 'torso', at: [0, 0.44, -0.1], block: { y0: 0, w0: 0.29, d0: 0.02, y1: -0.21, w1: 0.31, d1: 0.02 }, mat: MAT.trim, tilt: -0.12 },
-      { bone: 'torso', at: [0, 0.435, -0.115], block: { y0: 0, w0: 0.25, d0: 0.02, y1: -0.18, w1: 0.27, d1: 0.02 }, mat: MAT.accent2, tilt: -0.12 },
+      { bone: 'torso', at: [0, 0.44, -0.1], block: { y0: 0, w0: 0.33, d0: 0.02, y1: -0.25, w1: 0.36, d1: 0.02 }, mat: MAT.trim, tilt: -0.12 },
+      { bone: 'torso', at: [0, 0.435, -0.115], block: { y0: 0, w0: 0.28, d0: 0.02, y1: -0.215, w1: 0.31, d1: 0.02 }, mat: MAT.accent2, tilt: -0.12 },
       { bone: 'torso', at: [0, 0.445, 0.082], block: { y0: 0, w0: 0.24, d0: 0.02, y1: -0.09, w1: 0.13, d1: 0.02 }, mat: MAT.trim, tilt: 0.1 },
       { bone: 'torso', at: [0, 0.44, 0.095], block: { y0: 0, w0: 0.2, d0: 0.02, y1: -0.07, w1: 0.1, d1: 0.02 }, mat: MAT.accent2, tilt: 0.1 },
       { bone: 'torso', at: [0, 0.37, 0.108], block: { y0: 0, w0: 0.1, d0: 0.03, y1: -0.15, w1: 0.05, d1: 0.025 }, mat: MAT.accent, tilt: 0.12 },

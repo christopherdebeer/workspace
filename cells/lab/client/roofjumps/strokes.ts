@@ -507,7 +507,7 @@ void main() {
   vec3 ac = cross(sn, tg); if (length(ac) < 1e-4) ac = cross(e, tg); ac = normalize(ac);
   float w = wat(u), wm = max(max(b4.x, b4.y), max(b4.z, b4.w));
   // (seen edge-on, narrower and fainter; never thinner than a couple of pixels)
-  float alpha = b0.w; if (hasS) { float fs = dot(sn, e), facing = abs(fs); w *= mix(b9.w > 0.5 ? 0.85 : 0.4, 1.0, smoothstep(0.05, 0.45, facing)); alpha *= b9.w > 0.5 ? smoothstep(-0.3, -0.05, fs) : smoothstep(0.03, 0.22, facing); }
+  float alpha = b0.w; if (hasS) { float fs = dot(sn, e), facing = abs(fs); w *= mix(b9.w > 0.5 ? 0.85 : 0.4, 1.0, smoothstep(0.05, 0.45, facing)); alpha *= b9.w > 0.5 ? smoothstep(-0.14, 0.04, fs) : smoothstep(0.03, 0.22, facing); }
   w = max(w, uPx * dist * 1.1);
   float L = length(b1.xyz - b0.xyz) + length(b2.xyz - b1.xyz) + length(b3.xyz - b2.xyz);
   vec3 q = p + ac * sideS * w * 0.5 * 1.15;
@@ -623,8 +623,9 @@ void main() {
     float e1 = 0.06, b1 = 0.6 * noise(vec2(((t + e1) * 0.5 + 0.5) * 13.0 + sd, k * 0.3)) + 0.4 * noise(vec2(((t + e1) * 0.5 + 0.5) * 34.0 + sd * 1.7, k * 0.7));
     float rel = (0.25 + max(thick, 0.0)) * 0.9 * uGloss, dh = (b1 - br) / e1;
     vec3 n0 = normalize(vSn), n = normalize(n0 - vV2 * dh * rel * 0.12), L = normalize(uSunD), Vw = normalize(uEyeF - vW);
-    float lam = smoothstep(-0.2, 0.6, dot(n, L)), gloss = pow(max(dot(reflect(-L, n), Vw), 0.0), 18.0) * (0.15 + 0.5 * min(thick, 1.0));
-    // (the shade not black: the sky fills it, and a little bounces up from below)
+    float nl = dot(n, L), lam = vBody > 0.0 ? smoothstep(-0.02, 0.14, nl + 0.08 * (br - 0.5)) : smoothstep(-0.2, 0.6, nl), gloss = pow(max(dot(reflect(-L, n), Vw), 0.0), 18.0) * (0.15 + 0.5 * min(thick, 1.0));
+    // (a figure's form: two values split by one edge (the terminator), broken a little by the bristles, not a smooth gradient;
+    // the shade not black: the sky fills it, and a little bounces up from below)
     float bounce = max(0.0, -n.y) * 0.12;
     col = col * (mix(uShd * 0.72, uLit * 1.12, lam) + vec3(0.1, 0.07, 0.04) * bounce * 2.0) + vec3(gloss) * 0.6 * uGloss;
   }
