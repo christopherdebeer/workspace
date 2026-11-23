@@ -278,6 +278,7 @@ export const strokeGouacheRules: StrokeRules = {
     }
     return out;
   },
+  bodyLight(light) { const T = tints(light); return { sunlit: T.sunlit, shade: mix([0.7, 0.71, 0.79], add(T.deep, [0.05, 0.05, 0.06]), T.dk) }; },
   figure(parts, palette, put, light) {
     // (several figures at once (the menu's line of characters): each painted on its own; every figure's bones start at its pelvis.
     // Painted together, the parts looked up by name were only the last figure's, and the rest lost their bodies)
@@ -346,7 +347,7 @@ export const strokeGouacheRules: StrokeRules = {
       const acrossAt = (i: number) => { const d = unit(sub(pts[Math.min(pts.length - 1, i + 1)], pts[Math.max(0, i - 1)])), s0 = sub(side, scale(d, dot(side, d))); return len(s0) > 1e-4 ? unit(s0) : side; };
       const edge = (k: number, f: number) => pts.map((q, i) => add(q, scale(acrossAt(i), k * ws[i] * f)));
       const n = pts.length, wMid = ws[Math.floor(n / 2)];
-      const mass: Mark = { layer: 0, kind: K.PULL, a: pts[0], b: pts[n - 1], path: pts.slice(1, -1), widths: ws, side, width: wMid, col: tone, col2: mix(tone, lit, 0.3), mix2: 0.3, alpha: 1, dry: 0.06, heart: 0.2, rank: 1, key, taper: [ws[0] * 0.25, ws[n - 1] * 0.3] };
+      const mass: Mark = { layer: 0, kind: K.PULL, a: pts[0], b: pts[n - 1], path: pts.slice(1, -1), widths: ws, side, width: wMid, col: tone, col2: mix(tone, lit, 0.3), mix2: 0.3, alpha: 1, dry: 0.06, heart: 0.2, rank: 1, key, body: 0.85, taper: [ws[0] * 0.25, ws[n - 1] * 0.3] };
       const sh = edge(-sg, 0.4), cw = ws.map((w) => w * 0.17);
       const found: Mark = { layer: 0, kind: K.PULL, a: sh[0], b: sh[n - 1], path: sh.slice(1, -1), widths: cw, side, width: wMid * 0.17, col: mix(dark, tone, 0.25), mix2: 0, alpha: 0.75, dry: 0.12, heart: 0.5, rank: 1, key: `${key}/found`, taper: [wMid * 0.4, wMid * 0.6] };
       const lights: Mark[] = [found];
@@ -356,7 +357,7 @@ export const strokeGouacheRules: StrokeRules = {
       // round, not a tinted tube. Smaller than the mass, withdrawn first at a distance)
       const cool = mix(mix(dark, tone, 0.35), mulv(tone, [0.78, 0.8, 1.0]), 0.35), warm = add(mix(tone, lit, 0.9), [0.05, 0.03, 0.0]);
       // (as bands along the form, following its width: cross strokes stacked into arrowheads)
-      { const band = (k: number, f: number, wf: number, col: V, alpha: number, tag: string): Mark => { const q = edge(k, f); return { layer: 0, kind: K.PULL, a: q[0], b: q[n - 1], path: q.slice(1, -1), widths: ws.map((w) => w * wf), side, width: wMid * wf, col, mix2: 0, alpha, dry: 0.15, heart: 0.4, rank: 0.55, key: `${key}/${tag}`, taper: [wMid * 0.2, wMid * 0.3] }; };
+      { const band = (k: number, f: number, wf: number, col: V, alpha: number, tag: string): Mark => { const q = edge(k, f); return { layer: 0, kind: K.PULL, a: q[0], b: q[n - 1], path: q.slice(1, -1), widths: ws.map((w) => w * wf), side, width: wMid * wf, col, mix2: 0, alpha, dry: 0.15, heart: 0.4, rank: 0.55, key: `${key}/${tag}`, body: 0.45, taper: [wMid * 0.2, wMid * 0.3] }; };
         lights.push(band(-sg, 0.22, 0.36, cool, 0.65, 'cool'));
         if (front > 0.05) lights.push(band(sg, 0.16, 0.26, warm, 0.6 * Math.min(1, front * 1.5), 'warm')); }
       // (pass three, the painting-in: smaller strokes over the form along its run, each its own value and temperature about the
@@ -368,7 +369,7 @@ export const strokeGouacheRules: StrokeRules = {
           const ac = acrossAt(i0), d = unit(sub(pts[i0 + 1], pts[i0])), v = (hr(`${key}v${j}`) - 0.5) * 1.5, sideK = (hr(`${key}s${j}`) - 0.5) * 0.44; /* (inside the form: offset plus half its width within the silhouette) */
           const towardLight = sideK * sg, col = mix(mix(tone, towardLight > 0 ? lit : tone, Math.abs(sideK) * 1.2), v > 0 ? warm : tone, Math.abs(v) * 0.22); /* (never darker than the local tone: the darks are the folds' and the shadow's) */
           const L = Math.min(w * 2.4, total / cnt * 2.4), c2 = add(c, scale(ac, sideK * w)), a = sub(c2, scale(d, L / 2)), b = add(c2, scale(d, L / 2));
-          lights.push({ layer: 0, kind: K.PULL, a, b, side: ac, width: w * (0.12 + 0.1 * hr(`${key}w${j}`)), col, mix2: 0, alpha: 0.55, dry: 0.25, heart: hr(`${key}h${j}`), rank: 0.45, key: `${key}/p${j}`, taper: [w * 0.03, w * 0.05] }); /* (blunt brush ends: pointed tapers stacked into chevrons) */
+          lights.push({ layer: 0, kind: K.PULL, a, b, side: ac, width: w * (0.12 + 0.1 * hr(`${key}w${j}`)), col, mix2: 0, alpha: 0.55, dry: 0.25, heart: hr(`${key}h${j}`), rank: 0.45, key: `${key}/p${j}`, body: 0.55, taper: [w * 0.03, w * 0.05] }); /* (blunt brush ends: pointed tapers stacked into chevrons) */
         } }
       return [[mass], lights];
     };
@@ -388,7 +389,7 @@ export const strokeGouacheRules: StrokeRules = {
         // the legs' forms start up inside it)
         { const { tone, lit } = tonesOf(pe), crotch = add(scale(add(pe.a, pe.b), 0.5), scale(up, -0.07)), waist = lv(0.16, 0), mid = scale(add(crotch, waist), 0.5), h = len(sub(waist, crotch)) * 1.25, half = hipW * 0.42;
           void low; void lowW;
-          items.push({ d: pe.dist + 0.001, ms: [[{ layer: 0, kind: K.PULL, a: add(mid, scale(sd, -half)), b: add(mid, scale(sd, half)), path: [add(mid, scale(up, -h * 0.08))], side: up, width: h, col: tone, col2: mix(tone, lit, 0.25), mix2: 0.25, alpha: 1, dry: 0.05, heart: 0.5, rank: 1, key: 'fig:hips', taper: [h * 0.18, h * 0.18] }]] }); }
+          items.push({ d: pe.dist + 0.001, ms: [[{ layer: 0, kind: K.PULL, a: add(mid, scale(sd, -half)), b: add(mid, scale(sd, half)), path: [add(mid, scale(up, -h * 0.08))], side: up, width: h, col: tone, col2: mix(tone, lit, 0.25), mix2: 0.25, alpha: 1, dry: 0.05, heart: 0.5, rank: 1, key: 'fig:hips', body: 0.85, taper: [h * 0.18, h * 0.18] }]] }); }
         const ms = paintPts(to, upP, upW, 'fig:chest', sd);
         for (const n of ['L', 'R']) { const ua = by.get('upperArm' + n); if (!ua) continue; const { tone } = tonesOf(to), neck = add(to.b, scale(up, 0.01)), mid = add(scale(add(neck, ua.a), 0.5), scale(up, 0.035));
           ms[0].push({ layer: 0, kind: K.PULL, a: neck, b: ua.a, path: [mid], side: up, width: to.width * 0.28, col: tone, mix2: 0, alpha: 1, dry: 0.1, rank: 1, key: `fig:trap${n}`, taper: [to.width * 0.08, to.width * 0.1] }); }
@@ -438,7 +439,7 @@ export const strokeGouacheRules: StrokeRules = {
         const w = qs.reduce((t, q) => t + q.gw!, 0) / qs.length, tone = mix(dark, lit, 0.3 + 0.55 * face), down = unit(sub(last.bot!, q0.top!));
         const across = (() => { const sd = cross(down, q0.toEye); return len(sd) > 1e-4 ? unit(sd) : q0.side; })();
         for (const q of qs) chained.add(q.name + '#' + q.grid!.join(','));
-        items.push({ d: qs.reduce((t, q) => t + q.dist, 0) / qs.length, ms: [[{ layer: 0, kind: K.PULL, a: q0.top!, b: last.bot!, path: qs.slice(1).map((q) => q.top!), side: across, width: w * 1.15, col: tone, col2: mix(tone, lit, 0.3), mix2: 0.25, alpha: 1, dry: 0.12, heart: 0.3, rank: 1, key: `fig:cloth${k}`, taper: [0.004, w * 0.25] }]] });
+        items.push({ d: qs.reduce((t, q) => t + q.dist, 0) / qs.length, ms: [[{ layer: 0, kind: K.PULL, a: q0.top!, b: last.bot!, path: qs.slice(1).map((q) => q.top!), side: across, width: w * 1.15, col: tone, col2: mix(tone, lit, 0.3), mix2: 0.25, alpha: 1, dry: 0.12, heart: 0.3, rank: 1, key: `fig:cloth${k}`, body: 0.85, taper: [0.004, w * 0.25] }]] });
       } }
     for (const p of [...parts].sort((x, y) => y.dist - x.dist)) {
       if (chained.has(p.name) || (p.grid && chained.has(p.name + '#' + p.grid.join(',')))) continue;
@@ -451,7 +452,7 @@ export const strokeGouacheRules: StrokeRules = {
       const front = face ? smooth(-0.25, 0.55, dot(face, T.S)) : smooth(-0.35, 0.45, p.sunFront), tone = mix(dark, lit, (face ? 0.3 : 0.45) + (face ? 0.55 : 0.35) * front), key = `fig:${p.name}`;
       // (a little past each end, so the marks overlap at the joints)
       const ext = scale(unit(sub(p.b, p.a)), Math.min(0.06, p.width * 0.35)), pa = sub(p.a, ext), pb = add(p.b, ext);
-      const m = (o: Partial<Mark>): Mark => ({ layer: 0, kind: K.PULL, a: pa, b: pb, side: p.side, width: p.width * 1.2, col: tone, col2: mix(tone, lit, 0.35), mix2: 0.35, alpha: 1, dry: 0.2, heart: 0.25, rank: 1, key, ...o });
+      const m = (o: Partial<Mark>): Mark => ({ layer: 0, kind: K.PULL, a: pa, b: pb, side: p.side, width: p.width * 1.2, col: tone, col2: mix(tone, lit, 0.35), mix2: 0.35, alpha: 1, dry: 0.2, heart: 0.25, rank: 1, key, body: 0.75, ...o });
       // (the lit pull: narrower, on the sun's side of it, where its turned face can be seen)
       // (and the turned-away side: a narrow dark pull along the edge away from the sun, which models it as the mask once did
       // all round)

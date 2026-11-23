@@ -346,3 +346,15 @@ picture, contact and cast shadow drawn plainly, the cloth pushed further than th
   - Now each figure (its bones start at its pelvis) is painted on its own.
   - A unit test checks three figures painted together make the same marks as each alone. The studies had only ever painted one
     figure, which is why they missed it.
+- Painting over a lit body (agreed):
+  - each frame the figure is rendered off-screen as smooth tubes, each bone an elliptic tube tapering from its start's width
+    and depth to its end's, domed past each end (joints round over; a head, a hand, a foot an egg), with smooth normals;
+  - it's lit per point by the real sun and the shadow map, in the look's own warm light and cool shade, with the dark-cloth
+    value lift, a little bounce from below and a cool rim;
+  - each figure mark takes its colour, as much as it asks (`body`), from that image under its own pixel: masses most, the
+    painting-in and modelling bands some; contours, folds and details keep their own.
+  - The mark keeps its shape, edge and brush; the light now turns across the form.
+  - Cost: the mesh is built into a reused buffer and drawn indexed, 0.3 ms a frame for the schoolgirl's 64 bones (desktop),
+    plus one small render.
+  - Next: the head, hands and shoes as shapes of their own (they're still the rig's), the loose silhouette (sweater, scarf
+    wrap), and the light read back in the stroke shader for marks' directions.

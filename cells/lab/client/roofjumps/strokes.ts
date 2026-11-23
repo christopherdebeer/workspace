@@ -107,6 +107,9 @@ export interface Mark {
   seg?: number;
   /** a sky mark: no haze, never withdrawn */
   sky?: boolean;
+  /** a figure's mark: how much of its colour it takes from the lit body underneath it (0: its own; 1: the body's), where the
+   * body is under it */
+  body?: number;
   /** a second pigment carried in the brush, laid by irregular bristle groups and heavier on one side; how much of it */
   col2?: V; mix2?: number;
   /** a bent mark: its path, a to b through these (a, then the points, then b); one stroke, its taper, load and dry lift over the
@@ -130,7 +133,7 @@ export function deposit(m: Mark, out: number[]): void {
   for (let i = 0; i < n; i++) {
     const s0 = i / n, s1 = (i + 1) / n, c = add(m.a, scale(d, (s0 + s1) / 2)), U = scale(d, (s1 - s0) / 2), Vv = scale(across, hw);
     out.push(c[0], c[1], c[2], m.alpha, U[0], U[1], U[2], m.kind, Vv[0], Vv[1], Vv[2], seed, m.col[0], m.col[1], m.col[2], m.rank ?? 0.5,
-      anchor[0], anchor[1], anchor[2], m.dry ?? 0, clip[0][0], clip[0][1], clip[0][2], s0, clip[1][0], clip[1][1], clip[1][2], s1, m.heart ?? 0.5, tin, tout, m.sky ? 1 : 0, ...(m.col2 ?? m.col), m.mix2 ?? 0);
+      anchor[0], anchor[1], anchor[2], m.dry ?? 0, clip[0][0], clip[0][1], clip[0][2], s0, clip[1][0], clip[1][1], clip[1][2], s1, m.heart ?? 0.5, tin, tout, m.sky ? 1 : -(m.body ?? 0), ...(m.col2 ?? m.col), m.mix2 ?? 0);
   }
 }
 
@@ -155,7 +158,7 @@ function depositPath(m: Mark, out: number[]): void {
     const lw = m.widths && m.widths.length === pts.length ? ((m.widths[g.k] + m.widths[g.k + 1]) / 2 / 2) * 1.15 : hw;
     const c = scale(add(a, b), 0.5), U = scale(sub(b, a), 0.5), Vv = scale(across, lw);
     out.push(c[0], c[1], c[2], m.alpha, U[0], U[1], U[2], m.kind, Vv[0], Vv[1], Vv[2], seed, m.col[0], m.col[1], m.col[2], m.rank ?? 0.5,
-      anchor[0], anchor[1], anchor[2], m.dry ?? 0, clip[0][0], clip[0][1], clip[0][2], s0, clip[1][0], clip[1][1], clip[1][2], s1, m.heart ?? 0.5, tin, tout, m.sky ? 1 : 0, ...(m.col2 ?? m.col), m.mix2 ?? 0);
+      anchor[0], anchor[1], anchor[2], m.dry ?? 0, clip[0][0], clip[0][1], clip[0][2], s0, clip[1][0], clip[1][1], clip[1][2], s1, m.heart ?? 0.5, tin, tout, m.sky ? 1 : -(m.body ?? 0), ...(m.col2 ?? m.col), m.mix2 ?? 0);
   });
 }
 
@@ -246,6 +249,40 @@ export interface Part { name: string; kind: string; mat: number; a: V; b: V; sid
    * are; its width */
   grid?: [number, number, number]; top?: V; bot?: V; gw?: number }
 
+/**
+ * The lit body's mesh: each bone a smooth tube, its cross-section an ellipse from its start's width and depth to its end's,
+ * with a domed cap past each end (so joints round over and a short block (a head, a hand, a foot) is an egg), smooth normals.
+ * Floats a vertex: position, normal, material.
+ */
+const BN = 8, BCAP = 2, BRINGS = BCAP * 2 + 2, BVERTS = BRINGS * (BN + 1);
+let bodyBuf = new Float32Array(1 << 14);
+/** the lit body's triangles, as indices into bodyMesh's vertices: the same pattern a bone, offset (made once, for this many) */
+export function bodyIndex(bones: number): Uint32Array {
+  const out = new Uint32Array(bones * (BRINGS - 1) * BN * 6); let at = 0;
+  for (let k = 0; k < bones; k++) { const base = k * BVERTS; for (let r = 0; r + 1 < BRINGS; r++) for (let j = 0; j < BN; j++) {
+    const a = base + r * (BN + 1) + j, b = a + 1, c = a + BN + 2, d = a + BN + 1; out[at++] = a; out[at++] = b; out[at++] = c; out[at++] = a; out[at++] = c; out[at++] = d; } }
+  return out;
+}
+export function bodyMesh(bones: Bone[]): Float32Array {
+  if (bodyBuf.length < bones.length * BVERTS * 7) bodyBuf = new Float32Array(bones.length * BVERTS * 7 * 1.25);
+  const out = bodyBuf, ring = new Float64Array(BRINGS * 4); let at = 0;
+  for (const b of bones) {
+    const m = b.m, x0 = b.x ?? 0, zc = b.zc ?? 0, s = Math.sign(b.y1 - b.y0) || 1, mat = b.mat ?? 0, r0 = Math.min(b.w0, b.d0) / 2, r1 = Math.min(b.w1, b.d1) / 2;
+    // (rings, from the start's cap through the tube to the end's: y, half width, half depth, how far the normal tips along)
+    let ri = 0; const put = (y: number, hw: number, hd: number, tip: number) => { ring[ri * 4] = y; ring[ri * 4 + 1] = hw; ring[ri * 4 + 2] = hd; ring[ri * 4 + 3] = tip; ri++; };
+    for (let k = BCAP; k >= 1; k--) { const ph = (k / BCAP) * (Math.PI / 2) * 0.9, c = Math.cos(ph); put(b.y0 - s * r0 * Math.sin(ph) * 0.7, (b.w0 / 2) * c, (b.d0 / 2) * c, -s * Math.sin(ph)); }
+    put(b.y0, b.w0 / 2, b.d0 / 2, 0); put(b.y1, b.w1 / 2, b.d1 / 2, 0);
+    for (let k = 1; k <= BCAP; k++) { const ph = (k / BCAP) * (Math.PI / 2) * 0.9, c = Math.cos(ph); put(b.y1 + s * r1 * Math.sin(ph) * 0.7, (b.w1 / 2) * c, (b.d1 / 2) * c, s * Math.sin(ph)); }
+    for (let r = 0; r < BRINGS; r++) for (let j = 0; j <= BN; j++) {
+      const y = ring[r * 4], hw = ring[r * 4 + 1], hd = ring[r * 4 + 2], tip = ring[r * 4 + 3], a = (2 * Math.PI * j) / BN, ca = Math.cos(a), sa = Math.sin(a), k = Math.sqrt(1 - tip * tip);
+      const lx = x0 + ca * hw, lz = zc + sa * hd; let nx = ca / Math.max(hw, 1e-4), nz = sa / Math.max(hd, 1e-4); const nl = Math.hypot(nx, nz) || 1; nx = (nx / nl) * k; nz = (nz / nl) * k;
+      out[at++] = m[0] * lx + m[4] * y + m[8] * lz + m[12]; out[at++] = m[1] * lx + m[5] * y + m[9] * lz + m[13]; out[at++] = m[2] * lx + m[6] * y + m[10] * lz + m[14];
+      out[at++] = m[0] * nx + m[4] * tip + m[8] * nz; out[at++] = m[1] * nx + m[5] * tip + m[9] * nz; out[at++] = m[2] * nx + m[6] * tip + m[10] * nz; out[at++] = mat;
+    }
+  }
+  return out.subarray(0, at);
+}
+
 /** The runner's bones as parts, from the pose and the eye. */
 export function partsOf(bones: Bone[], eye: number[], sun: V, city: City): Part[] {
   const out: Part[] = [];
@@ -329,6 +366,9 @@ export interface StrokeRules {
   /** the city's marks for a chunk (made once and kept; made again when it moves between near and far). `keeps`: whether
    * a mark of that rank is wanted (far chunks keep only what would still show at their distance): asked before work */
   city(c: Chunk, city: City, put: (m: Mark) => void, keeps: (rank: number) => boolean, light: Light): void;
+  /** the lit body under the figure's marks: the light's colour where the sun reaches and the shade's where it doesn't (none: no
+   * body is rendered, marks keep their own colour) */
+  bodyLight?(light: Light): { sunlit: V; shade: V };
   /** the sky: a continuous field from `top` to `horizon` behind everything (none: the paper is the sky) */
   skyField?: { top: V; horizon: V };
   /** the sky's marks over the field, as directions from the eye (each end a unit direction): laid far off */
@@ -347,7 +387,7 @@ in vec2 aQ; in vec4 a0; in vec4 a1; in vec4 a2; in vec4 a3; in vec4 a4; in vec4 
 uniform mat4 uVP; uniform vec3 uEye; uniform float uFar; uniform float uFogNear; uniform float uDetail; uniform vec3 uSunC; uniform float uPx;
 uniform highp sampler2DShadow uShadowMap; uniform mat4 uSunVP; uniform int uShadowOn;
 out vec2 vQ; out vec3 vW; out float vFog;
-flat out vec4 vCol; flat out vec4 vP; flat out vec4 vS; flat out vec3 vMin; flat out vec3 vMax; flat out vec2 vT; flat out vec4 vCol2; flat out vec3 vN; flat out float vReach;
+flat out vec4 vCol; flat out vec4 vP; flat out vec4 vS; flat out vec3 vMin; flat out vec3 vMax; flat out vec2 vT; flat out vec4 vCol2; flat out vec3 vN; flat out float vReach; flat out float vBody;
 float lit(vec3 p) {
   if (uShadowOn == 0) return 1.0;
   vec4 q = uSunVP * vec4(p, 1.0); vec3 c = q.xyz / q.w * 0.5 + 0.5;
@@ -365,7 +405,7 @@ void main() {
   vec3 N = cross(U, V); N = length(N) > 1e-9 ? normalize(N) : e; if (dot(N, toE) < 0.0) N = -N;
   float alpha = a0.w;
   // (whole marks withdraw with distance, by rank, all of a mark's stamps on its one anchor)
-  float rank = a3.w, f0 = (14.0 + (uFar * 1.15 - 14.0) * rank * rank) * uDetail; bool sky = a7.w > 0.5;
+  float rank = a3.w, f0 = (14.0 + (uFar * 1.15 - 14.0) * rank * rank) * uDetail; bool sky = a7.w > 0.5; vBody = max(0.0, -a7.w);
   // (withdrawing, a mark shrinks to its anchor rather than fading (Switchback's rule): no ghost of half-alpha marks far off,
   // and what's left is whole paint; a stamp of a tiled mark shrinks toward the mark's anchor, so the mark goes as one)
   float gone = sky ? 0.0 : smoothstep(f0 * 0.7, f0, length(uEye - a4.xyz));
@@ -394,8 +434,8 @@ float fbm(vec2 p) { float v = 0.0, a = 0.5; for (int i = 0; i < 3; i++) { v += a
 `;
 const FS = `#version 300 es
 precision highp float;
-in vec2 vQ; in vec3 vW; in float vFog; flat in vec4 vCol; flat in vec4 vP; flat in vec4 vS; flat in vec3 vMin; flat in vec3 vMax; flat in vec2 vT; flat in vec4 vCol2; flat in vec3 vN; flat in float vReach;
-uniform vec3 uHaze; uniform float uFade; uniform float uGrain; uniform int uCount;
+in vec2 vQ; in vec3 vW; in float vFog; flat in vec4 vCol; flat in vec4 vP; flat in vec4 vS; flat in vec3 vMin; flat in vec3 vMax; flat in vec2 vT; flat in vec4 vCol2; flat in vec3 vN; flat in float vReach; flat in float vBody;
+uniform vec3 uHaze; uniform float uFade; uniform float uGrain; uniform int uCount; uniform sampler2D uBody; uniform int uBodyOn;
 uniform highp sampler2DShadow uShadowMap; uniform highp mat4 uSunVP; uniform highp int uShadowOn;
 out vec4 o;
 ${NOISE}
@@ -457,11 +497,39 @@ void main() {
     float r = length(vec2(vQ.x, t)) / side;
     a = 1.0 - smoothstep(0.8, 1.0, r);
   }
+  // (a figure's mark takes its colour, as much as it asks, from the lit body under it (rendered just before, smooth, lit per point):
+  // the light turns across the form; the mark keeps its own shape, edge and brush. Its own variation kept as a nudge about it)
+  if (uBodyOn == 1 && vBody > 0.0) { vec4 bd = texelFetch(uBody, ivec2(gl_FragCoord.xy), 0); if (bd.a > 0.5) col = mix(col, bd.rgb * (0.88 + 0.24 * clamp(dot(col, vec3(0.3, 0.59, 0.11)) / max(dot(vCol.rgb, vec3(0.3, 0.59, 0.11)), 0.02), 0.0, 1.0)), vBody); }
   a *= vCol.a * (1.0 - vFog * uFade);
   col = mix(col, uHaze, vFog * (1.0 - uFade));
   col *= 1.0 - uGrain * 0.08 * (grain - 0.5);
   if (a < 0.003) discard;
   o = vec4(col, min(a, 1.0));
+}`;
+// (the lit body: the figure as smooth tubes, lit per point, under its marks (they take their colour from it))
+const BVS = `#version 300 es
+in vec3 aPos; in vec3 aNor; in float aMat; uniform mat4 uVP; out vec3 vW; out vec3 vNw; flat out int vM;
+void main() { vW = aPos; vNw = aNor; vM = int(aMat + 0.5); gl_Position = uVP * vec4(aPos, 1.0); }`;
+const BFS = `#version 300 es
+precision highp float;
+in vec3 vW; in vec3 vNw; flat in int vM; uniform vec3 uPal[64]; uniform vec3 uSun; uniform vec3 uEye; uniform vec3 uSunlit; uniform vec3 uShade;
+uniform highp sampler2DShadow uShadowMap; uniform mat4 uSunVP; uniform int uShadowOn; out vec4 o;
+float lit(vec3 p) {
+  if (uShadowOn == 0) return 1.0;
+  vec4 q = uSunVP * vec4(p, 1.0); vec3 c = q.xyz / q.w * 0.5 + 0.5;
+  if (any(lessThan(c.xy, vec2(0.0))) || any(greaterThan(c.xy, vec2(1.0)))) return 1.0;
+  float s = 0.0; for (int y = -1; y <= 1; y++) for (int x = -1; x <= 1; x++) s += texture(uShadowMap, vec3(c.xy + vec2(x, y) / 2048.0, c.z - 0.002)); return s / 9.0;
+}
+void main() {
+  vec3 n = normalize(vNw), V = normalize(uEye - vW); if (dot(n, V) < 0.0) n = -n;
+  vec3 base = uPal[vM]; float lum = dot(base, vec3(0.3, 0.59, 0.11)), lift = max(0.0, 0.3 - lum) * 0.75;
+  float ndl = dot(n, normalize(uSun)), sun = smoothstep(-0.2, 0.55, ndl) * lit(vW + n * 0.03);
+  vec3 dark = base * uShade, light = base * uSunlit + uSunlit * lift;
+  // (the turn from light to shade, warm to cool; a little warmth bounced up from the roof into the undersides; a cool rim)
+  vec3 c = mix(dark, light, 0.12 + 0.88 * sun);
+  c += base * vec3(0.10, 0.07, 0.04) * max(0.0, -n.y) * (1.0 - sun);
+  c = mix(c, c * vec3(0.92, 0.95, 1.08) + 0.02, pow(1.0 - max(dot(n, V), 0.0), 3.0) * 0.6);
+  o = vec4(c, 1.0);
 }`;
 // (the paper: its colour and its tooth, everywhere, before anything)
 const PVS = `#version 300 es
@@ -507,14 +575,56 @@ export class StrokePainter {
   stamps = 0;
   /** the underpainting left out (`?under=0`, U): only the strokes, to see what they cover */
   noUnder = false;
+  /** the lit body: its program, its mesh's buffer and VAO, where it's rendered (a colour texture and depth, the drawing buffer's
+   * size), and whether it was rendered this frame */
+  private bprog!: WebGLProgram; private bbuf!: WebGLBuffer; private bvao!: WebGLVertexArrayObject; private bfbo: WebGLFramebuffer | null = null; private btex: WebGLTexture | null = null; private brb: WebGLRenderbuffer | null = null; private bsize = [0, 0]; private bodyOn = false; private bibuf!: WebGLBuffer; private bicount = 0;
 
   constructor(private gl: WebGL2RenderingContext, program: (vs: string, fs: string, attribs: string[]) => WebGLProgram) {
     this.prog = program(VS, FS, ['aQ', 'a0', 'a1', 'a2', 'a3', 'a4', 'a5', 'a6', 'a7', 'a8']);
-    for (const n of ['uVP', 'uEye', 'uFar', 'uFogNear', 'uDetail', 'uSunC', 'uPx', 'uShadowMap', 'uSunVP', 'uShadowOn', 'uHaze', 'uFade', 'uGrain', 'uCount']) this.u[n] = gl.getUniformLocation(this.prog, n);
+    for (const n of ['uVP', 'uEye', 'uFar', 'uFogNear', 'uDetail', 'uSunC', 'uPx', 'uShadowMap', 'uSunVP', 'uShadowOn', 'uHaze', 'uFade', 'uGrain', 'uCount', 'uBody', 'uBodyOn']) this.u[n] = gl.getUniformLocation(this.prog, n);
     this.pprog = program(PVS, PFS, ['aQ']); for (const n of ['uPaper', 'uGrain']) this.u['p' + n] = gl.getUniformLocation(this.pprog, n);
     this.kprog = program(KVS, KFS, ['aQ']); for (const n of ['uInv', 'uTop', 'uHor', 'uGrain']) this.u['k' + n] = gl.getUniformLocation(this.kprog, n);
     this.corner = gl.createBuffer()!; gl.bindBuffer(gl.ARRAY_BUFFER, this.corner); gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
     this.dyn = this.layered(this.dynData, gl.DYNAMIC_DRAW, [0, 0, 0, 0]);
+    this.bprog = program(BVS, BFS, ['aPos', 'aNor', 'aMat']);
+    for (const n of ['uVP', 'uPal', 'uSun', 'uEye', 'uSunlit', 'uShade', 'uShadowMap', 'uSunVP', 'uShadowOn']) this.u['b' + n] = gl.getUniformLocation(this.bprog, n);
+    this.bbuf = gl.createBuffer()!; this.bvao = gl.createVertexArray()!; this.bibuf = gl.createBuffer()!;
+    gl.bindVertexArray(this.bvao); gl.bindBuffer(gl.ARRAY_BUFFER, this.bbuf);
+    gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 28, 0);
+    gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1, 3, gl.FLOAT, false, 28, 12);
+    gl.enableVertexAttribArray(2); gl.vertexAttribPointer(2, 1, gl.FLOAT, false, 28, 24);
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.bibuf);
+    gl.bindVertexArray(null);
+  }
+
+  /** the lit body: the figure as smooth tubes (bodyMesh) into its own colour and depth, the size of the drawing buffer and in the
+   * same viewport, so a mark can read the body under its own pixel */
+  private renderBody(o: { vp: M4; eye: number[]; bones: Bone[]; palette: V[]; sunVP: M4 | null; light: Light; rules: StrokeRules }): void {
+    const gl = this.gl, R = o.rules; this.bodyOn = false;
+    if (!R.bodyLight || !o.bones.length || this.counting) return;
+    const W = gl.drawingBufferWidth, H = gl.drawingBufferHeight;
+    if (!this.bfbo || this.bsize[0] !== W || this.bsize[1] !== H) {
+      if (this.bfbo) { gl.deleteFramebuffer(this.bfbo); gl.deleteTexture(this.btex); gl.deleteRenderbuffer(this.brb); }
+      this.btex = gl.createTexture()!; gl.bindTexture(gl.TEXTURE_2D, this.btex); gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, W, H, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+      this.brb = gl.createRenderbuffer()!; gl.bindRenderbuffer(gl.RENDERBUFFER, this.brb); gl.renderbufferStorage(gl.RENDERBUFFER, gl.DEPTH_COMPONENT24, W, H);
+      this.bfbo = gl.createFramebuffer()!; gl.bindFramebuffer(gl.FRAMEBUFFER, this.bfbo);
+      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, this.btex, 0); gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.RENDERBUFFER, this.brb);
+      this.bsize = [W, H];
+    }
+    const mesh = bodyMesh(o.bones), L = R.bodyLight(o.light);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.bfbo);
+    gl.clearColor(0, 0, 0, 0); gl.clearDepth(1); gl.depthMask(true); gl.colorMask(true, true, true, true); gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+    gl.enable(gl.DEPTH_TEST); gl.depthFunc(gl.LESS); gl.disable(gl.BLEND); gl.disable(gl.CULL_FACE);
+    gl.useProgram(this.bprog); gl.uniformMatrix4fv(this.u.buVP, false, o.vp);
+    const pal = new Float32Array(64 * 3); o.palette.slice(0, 64).forEach((c, i) => pal.set(c, i * 3)); gl.uniform3fv(this.u.buPal, pal);
+    gl.uniform3fv(this.u.buSun, o.light.sun); gl.uniform3f(this.u.buEye, o.eye[0], o.eye[1], o.eye[2]); gl.uniform3fv(this.u.buSunlit, L.sunlit); gl.uniform3fv(this.u.buShade, L.shade);
+    gl.uniform1i(this.u.buShadowMap, 3); gl.uniform1i(this.u.buShadowOn, o.sunVP ? 1 : 0); if (o.sunVP) gl.uniformMatrix4fv(this.u.buSunVP, false, o.sunVP);
+    gl.bindVertexArray(this.bvao); gl.bindBuffer(gl.ARRAY_BUFFER, this.bbuf); gl.bufferData(gl.ARRAY_BUFFER, mesh, gl.DYNAMIC_DRAW);
+    if (this.bicount < o.bones.length) { this.bicount = Math.max(o.bones.length, 96); gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.bibuf); gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, bodyIndex(this.bicount), gl.STATIC_DRAW); }
+    gl.drawElements(gl.TRIANGLES, o.bones.length * (BRINGS - 1) * BN * 6, gl.UNSIGNED_INT, 0); gl.bindVertexArray(null);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    this.bodyOn = true;
   }
 
   /** a buffer of stamps sorted by layer, and a VAO onto each layer of it */
@@ -579,6 +689,7 @@ export class StrokePainter {
    */
   draw(o: { vp: M4; inv: Float32Array; eye: number[]; far: number; rules: StrokeRules; light: Light; city: City; bones: Bone[]; palette: V[]; sunVP: M4 | null; sunC: V; detail: number; solid: () => void; bare: boolean }): void {
     const gl = this.gl, R = o.rules, timing = !!this.cost, t0 = timing ? (gl.finish(), performance.now()) : 0;
+    this.renderBody(o);
     let tick = t0; const lap = (k: keyof Cost) => { count(k); if (!timing) return; gl.finish(); const n = performance.now(); (this.cost as Cost)[k] = n - tick; tick = n; };
     // (counting: each pass's paint fragments per pixel, read back after it)
     const vpx = gl.getParameter(gl.VIEWPORT) as Int32Array, px = new Uint8Array(vpx[2] * vpx[3] * 4); let before = 0;
@@ -644,7 +755,9 @@ export class StrokePainter {
     if (timing) { gl.finish(); const n = performance.now(); (this.cost as Cost).city += n - tick; tick = n; }
     // (the runner last, against the same depth: its far-side marks hidden by its own near side, all of it by whatever of
     // the city stands in front)
+    if (this.bodyOn) { gl.activeTexture(gl.TEXTURE4); gl.bindTexture(gl.TEXTURE_2D, this.btex); gl.activeTexture(gl.TEXTURE0); gl.uniform1i(this.u.uBody, 4); gl.uniform1i(this.u.uBodyOn, 1); }
     drawDyn(2);
+    gl.uniform1i(this.u.uBodyOn, 0);
     lap('figure');
     this.stamps = stamps;
     if (this.cost) { this.cost.stamps = stamps; this.cost.chunks = this.chunks.size; }
