@@ -43,6 +43,7 @@ import { lookAt, mul, perspective } from './m4';
 import { TUNE, readTune, writeTune, HOUSE } from './tune';
 import { palette } from './palette';
 import { plan, words } from './plan';
+import { BOARD, boardBones, boardMarks } from './brushtest';
 import type { Plan, Route } from './plan';
 import { holdStrokes, detailStrokes, planStrokes } from './plandraw';
 import { follow } from './direct';
@@ -588,8 +589,18 @@ if (menu.active) {
   document.getElementById('take')?.addEventListener('click', takeControl);
 } else if (q.has('time')) { const i = TIMES.findIndex((t) => t.name === q.get('time')); if (i >= 0) { menu.timeI = i; applyTime(); } }
 
+// (`brushes`: the brush test board (brushtest.ts), in the stroke look, the city left out)
+const brushTest = q.has('brushes') ? (() => { rd.look = 'stroke-gouache'; rd.noFigure = true; const b = boardMarks(); rd.extra = b.marks;
+  const el = document.createElement('div'); el.style.cssText = 'position:fixed;left:8px;bottom:8px;font:12px system-ui;color:#2a2018;background:#f3e8d8cc;padding:6px 8px;border-radius:6px;white-space:pre;z-index:9';
+  el.textContent = 'brush test board\n' + b.rows.join('\n'); document.body.appendChild(el); return { bones: boardBones() }; })() : null;
+
 function frame(now: number): void {
   const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  if (brushTest) {
+    const aspect = canvas.width / canvas.height, eye = [BOARD.x, BOARD.y, BOARD.z + 7.5], vp = mul(perspective((40 * Math.PI) / 180, aspect, 0.5, 80), lookAt(eye, [BOARD.x, BOARD.y, BOARD.z], [0, 1, 0]));
+    rd.draw(vp, eye, brushTest.bones, { x: 0, y: -100, z: 0, r: 0, a: 0 }, undefined, true);
+    frames++; requestAnimationFrame(frame); return;
+  }
   if (sheet) {
     // (each move, at each point through it: the figure alone, on its shadow)
     cells(MUS.length, sheet.length * MUS.length, (i, aspect, rect) => {

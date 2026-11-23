@@ -387,3 +387,15 @@ picture, contact and cast shadow drawn plainly, the cloth pushed further than th
   - Result, honestly: small gains. The figures still read as tubes: their strokes keep clean, straight sides and the rig's
     proportions, and the heads still read as blocks. The tuning isn't converging. The next step is to build and test the
     figure's brush on its own: a test page of single strokes against the studies' marks, before laying it over the figure.
+- The brush test board, `?brushes` (`brushtest.ts`): single strokes on the toned ground, the city left out, beside lit forms.
+  Rows: one pull at three drynesses (old brush, then the figure brush); bent pulls (arc, S, swelling); impasto (socks, shoe, lit
+  over dark, hair mass and flicks); strokes over lit forms. It showed what was wrong at once:
+  - every stroke was a pointed lozenge (both ends tapering);
+  - bends were hard angles and a swelling stroke a stack of rectangles;
+  - the figure's torn sides barely differed from plain;
+  - the bristles were faint.
+- The figure brush, fixed on the board:
+  - lands blunt (a rounded end, the brush's own width), keeps its width, and ends breaking into bristle streaks;
+  - sides torn about the width rather than eating into it;
+  - bristle ridges lighter and grooves darker, a little impasto highlight on the ridges;
+  - bent marks smoothed (Catmull-Rom, four legs a span, widths eased), so curves and swells are continuous.

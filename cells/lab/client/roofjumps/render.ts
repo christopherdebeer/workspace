@@ -14,7 +14,7 @@ import type { M4 } from './m4';
 import { LOOK_DEFS, LOOK_PRELUDE } from './looks';
 import { Painter } from './paint';
 import { StrokePainter } from './strokes';
-import type { Light, V } from './strokes';
+import type { Light, Mark, V } from './strokes';
 import { lightKey } from './strokes';
 import { lookAt, mul } from './m4';
 import type { LookDef } from './looks';
@@ -172,6 +172,8 @@ export class Renderer {
   private screen: WebGLVertexArrayObject;
   /** the brushwork looks' painter (strokes.ts) */
   strokes!: StrokePainter;
+  /** marks drawn as the figure's, and the figure's own left out (the brush test board) */
+  extra: Mark[] | null = null; noFigure = false;
   /** brushwork: how far detail is kept (1: as the rules rank it) */
   detail = 1;
   private dprog!: WebGLProgram; private smap!: WebGLTexture; private sfb!: WebGLFramebuffer; private painter!: Painter;
@@ -315,7 +317,7 @@ export class Renderer {
     const pm = bones.find((b) => b.name === 'pelvis')?.m, sunC: V = pm ? [pm[12], pm[13], pm[14]] : [eye[0], eye[1], eye[2]];
     this.tris = 0;
     this.strokes.draw({
-      vp, inv: invert(vp), light, eye, far: this.radius * CHUNK, rules, city: this.city, bones, palette: this.palette, sunVP, sunC, detail: this.detail, bare,
+      vp, inv: invert(vp), light, eye, far: this.radius * CHUNK, rules, city: this.city, bones, palette: this.palette, sunVP, sunC, detail: this.detail, bare, extra: this.extra ?? undefined, noFigure: this.noFigure,
       solid: () => {
         gl.useProgram(this.dprog); gl.uniformMatrix4fv(this.u.duVP, false, vp); gl.uniform1i(this.u.dNoDetails, 1); gl.enable(gl.CULL_FACE);
         if (!bare) for (const c of this.built.values()) { gl.bindVertexArray(c.vao); gl.drawArrays(gl.TRIANGLES, 0, c.n); this.tris += c.n / 3; }

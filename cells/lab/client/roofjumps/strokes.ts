@@ -139,8 +139,22 @@ export function deposit(m: Mark, out: number[]): void {
 
 /** a bent mark's stamps: a leg of its path each, each knowing its share of the whole length (so the shader's taper, bristles and
  * dry lift run the whole stroke), lapped a little past each bend so no gap opens there, its width across each leg as it turns */
+/** a path smoothed: Catmull-Rom through its points, four legs between each pair; widths eased along with it */
+function smoothPath(pts: V[], ws?: number[]): { pts: V[]; ws?: number[] } {
+  if (pts.length < 3) return { pts, ws };
+  const out: V[] = [], ow: number[] = [], S = 4, at = (i: number) => pts[Math.max(0, Math.min(pts.length - 1, i))], wa = (i: number) => ws![Math.max(0, Math.min(ws!.length - 1, i))];
+  for (let i = 0; i + 1 < pts.length; i++) for (let s = 0; s < S; s++) {
+    const t = s / S, t2 = t * t, t3 = t2 * t, p0 = at(i - 1), p1 = at(i), p2 = at(i + 1), p3 = at(i + 2);
+    out.push([0, 1, 2].map((k) => 0.5 * (2 * p1[k] + (-p0[k] + p2[k]) * t + (2 * p0[k] - 5 * p1[k] + 4 * p2[k] - p3[k]) * t2 + (-p0[k] + 3 * p1[k] - 3 * p2[k] + p3[k]) * t3)) as V);
+    if (ws) { const e = t * t * (3 - 2 * t); ow.push(wa(i) + (wa(i + 1) - wa(i)) * e); }
+  }
+  out.push(pts[pts.length - 1]); if (ws) ow.push(ws[ws.length - 1]);
+  return { pts: out, ws: ws ? ow : undefined };
+}
 function depositPath(m: Mark, out: number[]): void {
-  const pts = [m.a, ...m.path!, m.b], legs: { a: V; b: V; l: number; k: number }[] = [];
+  const sm = smoothPath([m.a, ...m.path!, m.b], m.widths && m.widths.length === m.path!.length + 2 ? m.widths : undefined);
+  m = { ...m, widths: sm.ws };
+  const pts = sm.pts, legs: { a: V; b: V; l: number; k: number }[] = [];
   for (let i = 0; i + 1 < pts.length; i++) { const l = len(sub(pts[i + 1], pts[i])); if (l > 1e-5) legs.push({ a: pts[i], b: pts[i + 1], l, k: i }); }
   const L = legs.reduce((t, g) => t + g.l, 0); if (L < 1e-5) return;
   const hw = (m.width / 2) * 1.15, seed = (hashKey(m.key) % 100000) / 100000, clip = m.clip ?? NOCLIP, Lm = Math.max(L, 1e-4);
@@ -451,10 +465,14 @@ void main() {
   // (its taper in and out, in metres along it; its sides wandering, each its own way)
   float tin = clamp(vS.z / Lm, 0.002, 0.5), tout = clamp(vS.w / Lm, 0.002, 0.6);
   float prof = sqrt(smoothstep(0.0, tin, u)) * sqrt(smoothstep(1.0, 1.0 - tout, u));
+  // (a figure's brush lands blunt (a rounded end, the brush's own width) and keeps its width to the end, where it breaks into the
+  // bristles' streaks instead of coming to a point)
+  float ci = clamp(0.5 * max(vT.y, 0.02) / max(vT.x, 1e-3), 0.004, 0.45);
+  if (vBody > 0.0) prof = sqrt(max(0.0, 1.0 - pow(1.0 - clamp(u / ci, 0.0, 1.0), 2.0))) * (0.82 + 0.18 * smoothstep(1.0, 1.0 - tout, u));
   float k = um / Wm;
   float side = 1.0 - 0.17 * noise(vec2(k * 0.9, sd + (t > 0.0 ? 3.1 : 7.7))) - 0.08 * noise(vec2(k * 4.0, sd + (t > 0.0 ? 1.3 : 5.9)));
   // (a figure's marks a loaded brush's: sides torn by the bristles, the edge breaking where the paint thins)
-  if (vBody > 0.0) side *= 1.0 - 0.22 * noise(vec2(k * 2.3, sd + (t > 0.0 ? 11.0 : 17.0))) - 0.12 * noise(vec2(k * 9.0, sd + (t > 0.0 ? 4.0 : 8.0)));
+  if (vBody > 0.0) side = min(1.1, (side + 0.12) * (1.0 + 0.32 * (noise(vec2(k * 3.0, sd + (t > 0.0 ? 11.0 : 17.0))) - 0.5) + 0.2 * (noise(vec2(k * 12.0, sd + (t > 0.0 ? 4.0 : 8.0))) - 0.5)));
   float hw = prof * side;
   // (bristles: streaks along it, a dozen and more across it, whatever its width)
   float br = 0.6 * noise(vec2((t * 0.5 + 0.5) * 13.0 + sd, k * 0.3)) + 0.4 * noise(vec2((t * 0.5 + 0.5) * 34.0 + sd * 1.7, k * 0.7));
@@ -488,7 +506,12 @@ void main() {
     col *= 0.96 + 0.08 * noise(vec2(k * 0.4, t * 1.2 + sd));
   } else if (kind == 0) {
     a = (1.0 - smoothstep(hw - 0.06, hw, at)) * gap;
-    if (vBody > 0.0) a *= smoothstep(0.0, 0.25, br + 0.6 - at / max(hw, 1e-3) * 0.7);
+    if (vBody > 0.0) {
+      a *= smoothstep(0.0, 0.2, br + 0.75 - at / max(hw, 1e-3) * 0.75);
+      // (the end breaks into bristle streaks; the paint's ridges catch the light, its grooves hold the shade (impasto))
+      a *= smoothstep(0.0, 0.18, (1.0 - u) / max(tout, 0.03) + (br - 0.5) * 1.1 - 0.15);
+      col *= 0.86 + 0.3 * br; col += vec3(0.07, 0.065, 0.06) * smoothstep(0.62, 0.85, br);
+    }
     // (the bristles show in the paint: ridges a little lighter, grooves a little darker)
     col *= 0.93 + 0.1 * noise(vec2(k * 0.5, t * 1.5 + sd)) + 0.22 * (br - 0.5);
     col *= 1.0 - 0.06 * (1.0 - smoothstep(0.0, 0.35, abs(u - heart)));
@@ -696,7 +719,7 @@ export class StrokePainter {
    * The frame: paper; `solid` (the renderer draws the city and the body into depth); then the paint. `sunVP`: the sun's
    * map, bound, for the shadow passages, centred at `sunC`.
    */
-  draw(o: { vp: M4; inv: Float32Array; eye: number[]; far: number; rules: StrokeRules; light: Light; city: City; bones: Bone[]; palette: V[]; sunVP: M4 | null; sunC: V; detail: number; solid: () => void; bare: boolean }): void {
+  draw(o: { vp: M4; inv: Float32Array; eye: number[]; far: number; rules: StrokeRules; light: Light; city: City; bones: Bone[]; palette: V[]; sunVP: M4 | null; sunC: V; detail: number; solid: () => void; bare: boolean; extra?: Mark[]; noFigure?: boolean }): void {
     const gl = this.gl, R = o.rules, timing = !!this.cost, t0 = timing ? (gl.finish(), performance.now()) : 0;
     this.renderBody(o);
     let tick = t0; const lap = (k: keyof Cost) => { count(k); if (!timing) return; gl.finish(); const n = performance.now(); (this.cost as Cost)[k] = n - tick; tick = n; };
@@ -742,9 +765,10 @@ export class StrokePainter {
     const dyn: Mark[][] = [[], [], []];
     if (R.sky && this.skyFor !== o.light.key) { this.skyMarks = R.sky(o.light); this.skyFor = o.light.key; }
     if (R.sky && !o.bare) for (const m of this.skyMarks) dyn[0].push({ ...m, a: add(o.eye as V, scale(m.a, o.far * 1.3)), b: add(o.eye as V, scale(m.b, o.far * 1.3)), width: m.width * o.far * 1.3 });
-    const parts = o.bones.length ? partsOf(o.bones, o.eye, unit(o.light.sun), o.city) : [];
+    const parts = o.bones.length && !o.noFigure ? partsOf(o.bones, o.eye, unit(o.light.sun), o.city) : [];
     if (parts.length && !o.bare && R.shadow) { const pel = parts.find((p) => p.kind === 'pelvis') ?? parts[0], c = scale(add(pel.a, pel.b), 0.5); R.shadow(parts, receivers(o.city, c[0], c[1], c[2], o.light.sun), (m) => dyn[1].push(m), o.light); }
-    if (parts.length) R.figure(parts, o.palette, (m) => dyn[2].push(m), o.light);
+    if (parts.length && !o.noFigure) R.figure(parts, o.palette, (m) => dyn[2].push(m), o.light);
+    if (o.extra) dyn[2].push(...o.extra);
     const flat: number[] = [], dc: number[] = [];
     for (const ms of dyn) { const n0 = flat.length; for (const m of ms) deposit(m, flat); dc.push((flat.length - n0) / STAMP); }
     const nd = Math.min(this.dynCap, flat.length / STAMP); this.dynData.set(flat.slice(0, nd * STAMP));
