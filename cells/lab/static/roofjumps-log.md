@@ -433,3 +433,12 @@ Known: a tight wrap still facets (the bristle pattern restarts each leg); the li
 
 Next: the figure re-laid with these: few big splats, each with its surface from the lit body's form, a load, and the top
 strokes picking up the masses under them.
+- Board fixes:
+  - **The wrap faceted.** Each leg of a bent mark sized its brush coordinates by its own width, so the bristles and torn sides
+    jumped at every joint; and straight-edged legs showed corners at a sharp turn. Now every leg is the mark's widest brush (its
+    own widths as shares, eased), and bent marks are smoothed into ten legs a span, so each turns little. The bristles flow round
+    the bend.
+  - **Light contrast:** shade to 0.6 of the look's shade, light to 1.1, over a narrower turn. A splat facing away from the sun
+    is now a clear deep violet.
+  - Noted: two headless renders of the board came back blank with no error; re-run, the same source draws. Treat a blank still
+    as a harness flake before blaming the code.

@@ -147,10 +147,11 @@ export function deposit(m: Mark, out: number[]): void {
 
 /** a bent mark's stamps: a leg of its path each, each knowing its share of the whole length (so the shader's taper, bristles and
  * dry lift run the whole stroke), lapped a little past each bend so no gap opens there, its width across each leg as it turns */
-/** a path smoothed: Catmull-Rom through its points, four legs between each pair; widths eased along with it */
+/** a path smoothed: Catmull-Rom through its points, ten legs between each pair; widths eased along with it */
 function smoothPath(pts: V[], ws?: number[]): { pts: V[]; ws?: number[] } {
   if (pts.length < 3) return { pts, ws };
-  const out: V[] = [], ow: number[] = [], S = 4, at = (i: number) => pts[Math.max(0, Math.min(pts.length - 1, i))], wa = (i: number) => ws![Math.max(0, Math.min(ws!.length - 1, i))];
+  // (legs enough that each turns little: a straight-edged stamp at a sharp turn shows its corners)
+  const out: V[] = [], ow: number[] = [], S = 10, at = (i: number) => pts[Math.max(0, Math.min(pts.length - 1, i))], wa = (i: number) => ws![Math.max(0, Math.min(ws!.length - 1, i))];
   for (let i = 0; i + 1 < pts.length; i++) for (let s = 0; s < S; s++) {
     const t = s / S, t2 = t * t, t3 = t2 * t, p0 = at(i - 1), p1 = at(i), p2 = at(i + 1), p3 = at(i + 2);
     out.push([0, 1, 2].map((k) => 0.5 * (2 * p1[k] + (-p0[k] + p2[k]) * t + (2 * p0[k] - 5 * p1[k] + 4 * p2[k] - p3[k]) * t2 + (-p0[k] + 3 * p1[k] - 3 * p2[k] + p3[k]) * t3)) as V);
@@ -171,15 +172,17 @@ function depositPath(m: Mark, out: number[]): void {
   let at = (m.heart ?? 0.5) * L, anchor = m.a; for (const g of legs) { if (at <= g.l) { anchor = add(g.a, scale(sub(g.b, g.a), at / g.l)); break; } at -= g.l; }
   let run = 0;
   legs.forEach((g, i) => {
-    const dir = scale(sub(g.b, g.a), 1 / g.l), lap = Math.min(hw * 0.6, g.l * 0.4), e0 = i > 0 ? lap : 0, e1 = i < legs.length - 1 ? lap : 0;
+    const dir = scale(sub(g.b, g.a), 1 / g.l), lap = Math.min(hw * 0.3, g.l * 0.35), e0 = i > 0 ? lap : 0, e1 = i < legs.length - 1 ? lap : 0;
     const a = sub(g.a, scale(dir, e0)), b = add(g.b, scale(dir, e1)), s0 = Math.max(0, (run - e0) / L), s1 = Math.min(1, (run + g.l + e1) / L);
     run += g.l;
     let across: V;
     if (m.side) { const sd = unit(m.side), k = dot(sd, dir); across = sub(sd, scale(dir, k)); across = len(across) > 1e-4 ? unit(across) : sd; }
     else across = m.n ? unit(cross(m.n, dir)) : unit(Math.abs(dir[1]) > 0.9 ? cross(dir, [1, 0, 0]) : cross(dir, [0, 1, 0]));
     // (a swelling mark: the leg's stamp as wide as its wider end, its ends' widths as shares of that, eased between in the shader)
-    const wa = m.widths && m.widths.length === pts.length ? m.widths[g.k] : 0, wb = m.widths && m.widths.length === pts.length ? m.widths[g.k + 1] : 0;
-    const lw = wa || wb ? (Math.max(wa, wb) / 2) * 1.15 : hw, r0 = wa || wb ? wa / Math.max(wa, wb) : 1, r1 = wa || wb ? wb / Math.max(wa, wb) : 1;
+    // (every leg the same brush: as wide as the mark's widest, so its bristles and torn sides run on unbroken across the joints;
+    // each leg's own widths as shares of that)
+    const wa = m.widths && m.widths.length === pts.length ? m.widths[g.k] : 0, wb = m.widths && m.widths.length === pts.length ? m.widths[g.k + 1] : 0, wmax = m.widths && m.widths.length === pts.length ? Math.max(...m.widths) : 0;
+    const lw = wmax ? (wmax / 2) * 1.15 : hw, r0 = wmax ? wa / wmax : 1, r1 = wmax ? wb / wmax : 1;
     const c = scale(add(a, b), 0.5), U = scale(sub(b, a), 0.5), Vv = scale(across, lw);
     out.push(c[0], c[1], c[2], m.alpha, U[0], U[1], U[2], m.kind, Vv[0], Vv[1], Vv[2], seed, m.col[0], m.col[1], m.col[2], m.rank ?? 0.5,
       anchor[0], anchor[1], anchor[2], m.dry ?? 0, clip[0][0], clip[0][1], clip[0][2], s0, clip[1][0], clip[1][1], clip[1][2], s1, m.heart ?? 0.5, tin, tout, m.sky ? 1 : -(m.body ?? 0), ...(m.col2 ?? m.col), m.mix2 ?? 0, ...(m.surf ?? [0, 0, 0]), m.load ?? 0, m.pick ?? 0, m.smear ?? 0.15, r0, r1);
@@ -559,8 +562,8 @@ void main() {
     float e1 = 0.06, b1 = 0.6 * noise(vec2(((t + e1) * 0.5 + 0.5) * 13.0 + sd, k * 0.3)) + 0.4 * noise(vec2(((t + e1) * 0.5 + 0.5) * 34.0 + sd * 1.7, k * 0.7));
     float rel = (0.25 + max(thick, 0.0)) * 0.9, dh = (b1 - br) / e1;
     vec3 n0 = normalize(vSurf.xyz), n = normalize(n0 - vV2 * dh * rel * 0.12), L = normalize(uSunD), Vw = normalize(uEyeF - vW);
-    float lam = smoothstep(-0.25, 0.75, dot(n, L)), gloss = pow(max(dot(reflect(-L, n), Vw), 0.0), 18.0) * (0.15 + 0.5 * min(thick, 1.0));
-    col = col * mix(uShd * 0.78, uLit * 1.05, lam) + vec3(gloss) * 0.6;
+    float lam = smoothstep(-0.2, 0.6, dot(n, L)), gloss = pow(max(dot(reflect(-L, n), Vw), 0.0), 18.0) * (0.15 + 0.5 * min(thick, 1.0));
+    col = col * mix(uShd * 0.6, uLit * 1.1, lam) + vec3(gloss) * 0.6;
   }
   // (wet into wet: the paint under it picked up and dragged along the stroke, most where it lands)
   if (uUnderOn == 1 && vPick.z > 0.0) {
