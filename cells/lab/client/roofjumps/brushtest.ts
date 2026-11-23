@@ -90,5 +90,12 @@ export function boardSplines(time: number): { rows: string[]; splines: Spline[] 
     put({ ctrl: [sh, mid(sh, el, 0.6), mid(el, wr, 0.35), wr], widths: [0.2, 0.17, 0.15, 0.12], col: navy, key: 'sFsleeve' });
     put({ ctrl: [mid(sh, el, 0.1), mid(sh, el, 0.65), mid(el, wr, 0.3), mid(el, wr, 0.8)], widths: [0.05, 0.06, 0.05, 0.03], col: lilac, load: 0.6, key: 'sFlit', taper: [0.03, 0.08] });
   }
-  return { rows: ['spline strokes: one strip each, no joins', 'A light · B view · C load · D wet into wet · E kinds', 'F (right of D) a sleeve pinned to a bending limb'], splines: sp };
+  // G (top) twisting: a ribbon turning 180 degrees about its own length (broad face, edge, its back); and a stroke wrapping round a
+  // column (its surface turning with it from the lit front to the side away)
+  put({ ctrl: line(-2.8, 2.45, -0.6, 2.45), widths: [0.26, 0.26, 0.26, 0.24], col: green, load: 0.8, key: 'sGtwist',
+    surfs: [0, 60, 120, 180].map((d) => [0, Math.sin((d * Math.PI) / 180), Math.cos((d * Math.PI) / 180)] as V) as [V, V, V, V] });
+  { const c = P(1.5, 2.4, -0.35), r = 0.42, ang = [-85, -30, 30, 85].map((d) => (d * Math.PI) / 180);
+    put({ ctrl: ang.map((a, i) => [c[0] + Math.sin(a) * r, c[1] + 0.05 * (i - 1.5), c[2] + Math.cos(a) * r] as V) as [V, V, V, V], widths: [0.2, 0.24, 0.24, 0.18], col: lilac, load: 0.8, key: 'sGwrap',
+      surfs: ang.map((a) => [Math.sin(a), 0, Math.cos(a)] as V) as [V, V, V, V] }); }
+  return { rows: ['spline strokes: one strip each, no joins', 'G (top) twisting: a ribbon turned 180°, a wrap round a column', 'A light · B view · C load · D wet into wet · E kinds', 'F (right of D) a sleeve pinned to a bending limb'], splines: sp };
 }

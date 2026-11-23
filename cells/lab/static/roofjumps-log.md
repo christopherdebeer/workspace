@@ -454,3 +454,11 @@ strokes picking up the masses under them.
     the bones each frame. Over three moments the stroke bends with the limb, its bristles and edges fixed to it, not crawling.
   - The city stays on stamps.
   - Next: the figure's strokes as splines from its bones.
+- Spline strokes twist in 3D:
+  - a surface normal at each control point (`surfs`), eased along the curve;
+  - the ribbon lies across the surface at each point (its width direction from the normal and the curve's tangent), so it turns
+    as it goes, narrowing edge-on where the surface turns away;
+  - lighting follows the turning normal point by point (a smooth varying now, shared with the stamps).
+  - 52 floats a stroke.
+  - On the board, row G: a ribbon turned 180 degrees about its length (broad face, edge, its back, darker), and a stroke
+    wrapping round a column, from its lit front onto the side away.

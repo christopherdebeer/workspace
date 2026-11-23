@@ -133,15 +133,16 @@ export interface Mark {
  * control point its width; the stroke its pigment, surface, load and pickup, as a Mark's. For the figure, the points come from
  * the bones each frame, so the stroke moves with the body.
  */
-export interface Spline { ctrl: [V, V, V, V]; widths: [number, number, number, number]; col: V; col2?: V; mix2?: number; alpha?: number; kind?: number; dry?: number; heart?: number; taper?: [number, number]; rank?: number; key: string; surf?: V; load?: number; body?: number; pick?: number; smear?: number }
+export interface Spline { ctrl: [V, V, V, V]; widths: [number, number, number, number]; /** a surface normal at each control point: the ribbon turns with them, lies on the form as it wraps, edge-on where it turns away (none: the one `surf`) */ surfs?: [V, V, V, V]; col: V; col2?: V; mix2?: number; alpha?: number; kind?: number; dry?: number; heart?: number; taper?: [number, number]; rank?: number; key: string; surf?: V; load?: number; body?: number; pick?: number; smear?: number }
 /** floats a spline: ten vec4s */
-export const SPLINE = 40;
+export const SPLINE = 52;
 export function depositSpline(m: Spline, out: number[]): void {
   const [p0, p1, p2, p3] = m.ctrl, w = m.widths, seed = (hashKey(m.key) % 100000) / 100000, L = len(sub(p1, p0)) + len(sub(p2, p1)) + len(sub(p3, p2)), wm = Math.max(...w);
   const [tin, tout] = m.taper ?? [Math.min(L * 0.3, wm * 0.6), Math.min(L * 0.45, wm * 1.5)];
   out.push(p0[0], p0[1], p0[2], m.alpha ?? 1, p1[0], p1[1], p1[2], m.kind ?? 0, p2[0], p2[1], p2[2], seed, p3[0], p3[1], p3[2], m.rank ?? 1,
     w[0], w[1], w[2], w[3], m.col[0], m.col[1], m.col[2], m.dry ?? 0.3, ...(m.col2 ?? m.col), m.mix2 ?? 0, ...(m.surf ?? [0, 0, 0]), m.load ?? 0,
-    m.heart ?? 0.4, tin, tout, -(m.body ?? 0.001), m.pick ?? 0, m.smear ?? 0.15, 0, 0);
+    m.heart ?? 0.4, tin, tout, -(m.body ?? 0.001), m.pick ?? 0, m.smear ?? 0.15, m.surfs ? 1 : 0, 0,
+    ...(m.surfs ? [...m.surfs[0], m.surfs[1][0], m.surfs[1][1], m.surfs[1][2], m.surfs[2][0], m.surfs[2][1], m.surfs[2][2], ...m.surfs[3]] : new Array(12).fill(0)));
 }
 
 const NOCLIP: [V, V] = [[-1e5, -1e5, -1e5], [1e5, 1e5, 1e5]];
@@ -431,7 +432,7 @@ in vec2 aQ; in vec4 a0; in vec4 a1; in vec4 a2; in vec4 a3; in vec4 a4; in vec4 
 uniform mat4 uVP; uniform vec3 uEye; uniform float uFar; uniform float uFogNear; uniform float uDetail; uniform vec3 uSunC; uniform float uPx;
 uniform highp sampler2DShadow uShadowMap; uniform mat4 uSunVP; uniform int uShadowOn;
 out vec2 vQ; out vec3 vW; out float vFog;
-flat out vec4 vCol; flat out vec4 vP; flat out vec4 vS; flat out vec3 vMin; flat out vec3 vMax; flat out vec2 vT; flat out vec4 vCol2; flat out vec3 vN; flat out float vReach; flat out float vBody; flat out vec4 vSurf; flat out vec3 vU; flat out vec3 vV2; flat out vec3 vPick; flat out vec2 vWr;
+flat out vec4 vCol; flat out vec4 vP; flat out vec4 vS; flat out vec3 vMin; flat out vec3 vMax; flat out vec2 vT; flat out vec4 vCol2; flat out vec3 vN; flat out float vReach; flat out float vBody; flat out vec4 vSurf; flat out vec3 vU; flat out vec3 vV2; flat out vec3 vPick; flat out vec2 vWr; out vec3 vSn;
 float lit(vec3 p) {
   if (uShadowOn == 0) return 1.0;
   vec4 q = uSunVP * vec4(p, 1.0); vec3 c = q.xyz / q.w * 0.5 + 0.5;
@@ -449,7 +450,7 @@ void main() {
   vec3 N = cross(U, V); N = length(N) > 1e-9 ? normalize(N) : e; if (dot(N, toE) < 0.0) N = -N;
   float alpha = a0.w;
   // (a splat on a surface: seen edge-on it narrows and fades, no sliver, no gap)
-  vSurf = vec4(a9.xyz, a9.w); vU = normalize(U); vV2 = normalize(V); vWr = a10.zw;
+  vSurf = vec4(a9.xyz, a9.w); vU = normalize(U); vV2 = normalize(V); vWr = a10.zw; vSn = a9.xyz;
   if (dot(a9.xyz, a9.xyz) > 0.01) { float facing = abs(dot(normalize(a9.xyz), e)); V *= mix(0.4, 1.0, smoothstep(0.05, 0.45, facing)); alpha *= smoothstep(0.03, 0.22, facing); }
   // (whole marks withdraw with distance, by rank, all of a mark's stamps on its one anchor)
   float rank = a3.w, f0 = (14.0 + (uFar * 1.15 - 14.0) * rank * rank) * uDetail; bool sky = a7.w > 0.5; vBody = max(0.0, -a7.w);
@@ -479,23 +480,28 @@ void main() {
 const SSEG = 32;
 const SVS = `#version 300 es
 precision highp float;
-in vec2 aQ; in vec4 b0; in vec4 b1; in vec4 b2; in vec4 b3; in vec4 b4; in vec4 b5; in vec4 b6; in vec4 b7; in vec4 b8; in vec4 b9;
+in vec2 aQ; in vec4 b0; in vec4 b1; in vec4 b2; in vec4 b3; in vec4 b4; in vec4 b5; in vec4 b6; in vec4 b7; in vec4 b8; in vec4 b9; in vec4 b10; in vec4 b11; in vec4 b12;
 uniform mat4 uVP; uniform vec3 uEye; uniform float uFar; uniform float uFogNear; uniform float uDetail; uniform vec3 uSunC; uniform float uPx;
 uniform highp sampler2DShadow uShadowMap; uniform mat4 uSunVP; uniform int uShadowOn;
 out vec2 vQ; out vec3 vW; out float vFog;
-flat out vec4 vCol; flat out vec4 vP; flat out vec4 vS; flat out vec3 vMin; flat out vec3 vMax; flat out vec2 vT; flat out vec4 vCol2; flat out vec3 vN; flat out float vReach; flat out float vBody; flat out vec4 vSurf; flat out vec3 vU; flat out vec3 vV2; flat out vec3 vPick; flat out vec2 vWr;
+flat out vec4 vCol; flat out vec4 vP; flat out vec4 vS; flat out vec3 vMin; flat out vec3 vMax; flat out vec2 vT; flat out vec4 vCol2; flat out vec3 vN; flat out float vReach; flat out float vBody; flat out vec4 vSurf; flat out vec3 vU; flat out vec3 vV2; flat out vec3 vPick; flat out vec2 vWr; out vec3 vSn;
 vec3 cr(vec3 a, vec3 b, vec3 c, vec3 d, float t) { float t2 = t * t, t3 = t2 * t; return 0.5 * (2.0 * b + (-a + c) * t + (2.0 * a - 5.0 * b + 4.0 * c - d) * t2 + (-a + 3.0 * b - 3.0 * c + d) * t3); }
 vec3 at(float u) {
   vec3 P0 = b0.xyz, P1 = b1.xyz, P2 = b2.xyz, P3 = b3.xyz, Pm = 2.0 * P0 - P1, Pp = 2.0 * P3 - P2;
   float x = clamp(u, 0.0, 1.0) * 3.0; int i = int(min(floor(x), 2.0)); float f = x - float(i);
   return i == 0 ? cr(Pm, P0, P1, P2, f) : i == 1 ? cr(P0, P1, P2, P3, f) : cr(P1, P2, P3, Pp, f);
 }
+vec3 nat(float u) {
+  vec3 N0 = b10.xyz, N1 = vec3(b10.w, b11.x, b11.y), N2 = vec3(b11.zw, b12.x), N3 = b12.yzw;
+  float x = clamp(u, 0.0, 1.0) * 3.0; int i = int(min(floor(x), 2.0)); float f = x - float(i), e = f * f * (3.0 - 2.0 * f);
+  vec3 n = i == 0 ? mix(N0, N1, e) : i == 1 ? mix(N1, N2, e) : mix(N2, N3, e); return length(n) > 1e-4 ? normalize(n) : N1;
+}
 float wat(float u) { float x = clamp(u, 0.0, 1.0) * 3.0; int i = int(min(floor(x), 2.0)); float f = x - float(i), e = f * f * (3.0 - 2.0 * f); return i == 0 ? mix(b4.x, b4.y, e) : i == 1 ? mix(b4.y, b4.z, e) : mix(b4.z, b4.w, e); }
 void main() {
   float u = aQ.x, sideS = aQ.y;
   vec3 p = at(u), tg = at(min(u + 0.01, 1.0)) - at(max(u - 0.01, 0.0)); tg = length(tg) > 1e-6 ? normalize(tg) : vec3(1.0, 0.0, 0.0);
   vec3 toE = uEye - p; float dist = length(toE); vec3 e = toE / max(dist, 1e-4);
-  bool hasS = dot(b7.xyz, b7.xyz) > 0.01; vec3 sn = hasS ? normalize(b7.xyz) : e;
+  bool twist = b9.z > 0.5, hasS = twist || dot(b7.xyz, b7.xyz) > 0.01; vec3 sn = twist ? nat(u) : hasS ? normalize(b7.xyz) : e;
   vec3 ac = cross(sn, tg); if (length(ac) < 1e-4) ac = cross(e, tg); ac = normalize(ac);
   float w = wat(u), wm = max(max(b4.x, b4.y), max(b4.z, b4.w));
   // (seen edge-on, narrower and fainter; never thinner than a couple of pixels)
@@ -505,7 +511,7 @@ void main() {
   vec3 q = p + ac * sideS * w * 0.5 * 1.15;
   vQ = vec2(u * 2.0 - 1.0, sideS); vW = q; vFog = smoothstep(uFar * uFogNear, uFar, length(uEye - q));
   vCol = vec4(b5.xyz, alpha); vP = vec4(b1.w, b2.w, b5.w, b8.x); vS = vec4(0.0, 1.0, b8.y, b8.z); vMin = vec3(-1e5); vMax = vec3(1e5);
-  vT = vec2(L, wm); vCol2 = b6; vN = sn; vReach = 1.0; vBody = max(0.0, -b8.w); vSurf = b7; vU = tg; vV2 = ac; vWr = vec2(1.0);
+  vT = vec2(L, wm); vCol2 = b6; vN = sn; vReach = 1.0; vBody = max(0.0, -b8.w); vSurf = b7; vU = tg; vV2 = ac; vWr = vec2(1.0); vSn = hasS ? sn : vec3(0.0);
   { vec4 q0 = uVP * vec4(p, 1.0), q1 = uVP * vec4(p + tg, 1.0); vec2 sd2 = q1.xy / q1.w - q0.xy / q0.w; vPick = vec3(length(sd2) > 1e-6 ? normalize(sd2) : vec2(1.0, 0.0), b9.x); }
   vec3 ep = uEye - q; float ed = length(ep);
   gl_Position = uVP * vec4(q + ep / max(ed, 1e-4) * min(0.004 + dist * 0.0012, ed * 0.5), 1.0);
@@ -518,7 +524,7 @@ float fbm(vec2 p) { float v = 0.0, a = 0.5; for (int i = 0; i < 3; i++) { v += a
 `;
 const FS = `#version 300 es
 precision highp float;
-in vec2 vQ; in vec3 vW; in float vFog; flat in vec4 vCol; flat in vec4 vP; flat in vec4 vS; flat in vec3 vMin; flat in vec3 vMax; flat in vec2 vT; flat in vec4 vCol2; flat in vec3 vN; flat in float vReach; flat in float vBody; flat in vec4 vSurf; flat in vec3 vU; flat in vec3 vV2; flat in vec3 vPick; flat in vec2 vWr;
+in vec2 vQ; in vec3 vW; in float vFog; flat in vec4 vCol; flat in vec4 vP; flat in vec4 vS; flat in vec3 vMin; flat in vec3 vMax; flat in vec2 vT; flat in vec4 vCol2; flat in vec3 vN; flat in float vReach; flat in float vBody; flat in vec4 vSurf; flat in vec3 vU; flat in vec3 vV2; flat in vec3 vPick; flat in vec2 vWr; in vec3 vSn;
 uniform vec3 uHaze; uniform float uFade; uniform float uGrain; uniform int uCount; uniform sampler2D uBody; uniform int uBodyOn; uniform float uBreak; uniform vec3 uEyeF; uniform vec3 uPaperF; uniform vec3 uSunD; uniform vec3 uLit; uniform vec3 uShd; uniform sampler2D uUnder; uniform int uUnderOn; uniform vec2 uRes;
 uniform highp sampler2DShadow uShadowMap; uniform highp mat4 uSunVP; uniform highp int uShadowOn;
 out vec4 o;
@@ -611,10 +617,10 @@ void main() {
   if (ld > 0.0) { a *= smoothstep(0.0, 0.12, thick * 1.6 - (1.0 - br) * 0.7 + 0.15); col *= 0.94 + 0.12 * min(thick, 1.0); }
   // (lit as a splat on its surface: the sun on the surface's normal, bumped by the bristles' relief (the paint's thickness), a
   // gloss on the ridges where they turn to the light)
-  if (dot(vSurf.xyz, vSurf.xyz) > 0.01) {
+  if (dot(vSn, vSn) > 0.01) {
     float e1 = 0.06, b1 = 0.6 * noise(vec2(((t + e1) * 0.5 + 0.5) * 13.0 + sd, k * 0.3)) + 0.4 * noise(vec2(((t + e1) * 0.5 + 0.5) * 34.0 + sd * 1.7, k * 0.7));
     float rel = (0.25 + max(thick, 0.0)) * 0.9, dh = (b1 - br) / e1;
-    vec3 n0 = normalize(vSurf.xyz), n = normalize(n0 - vV2 * dh * rel * 0.12), L = normalize(uSunD), Vw = normalize(uEyeF - vW);
+    vec3 n0 = normalize(vSn), n = normalize(n0 - vV2 * dh * rel * 0.12), L = normalize(uSunD), Vw = normalize(uEyeF - vW);
     float lam = smoothstep(-0.2, 0.6, dot(n, L)), gloss = pow(max(dot(reflect(-L, n), Vw), 0.0), 18.0) * (0.15 + 0.5 * min(thick, 1.0));
     col = col * mix(uShd * 0.6, uLit * 1.1, lam) + vec3(gloss) * 0.6;
   }
@@ -714,7 +720,7 @@ export class StrokePainter {
     this.kprog = program(KVS, KFS, ['aQ']); for (const n of ['uInv', 'uTop', 'uHor', 'uGrain']) this.u['k' + n] = gl.getUniformLocation(this.kprog, n);
     this.corner = gl.createBuffer()!; gl.bindBuffer(gl.ARRAY_BUFFER, this.corner); gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
     this.dyn = this.layered(this.dynData, gl.DYNAMIC_DRAW, [0, 0, 0, 0]);
-    this.sprog = program(SVS, FS, ['aQ', 'b0', 'b1', 'b2', 'b3', 'b4', 'b5', 'b6', 'b7', 'b8', 'b9']);
+    this.sprog = program(SVS, FS, ['aQ', 'b0', 'b1', 'b2', 'b3', 'b4', 'b5', 'b6', 'b7', 'b8', 'b9', 'b10', 'b11', 'b12']);
     for (const n of Object.keys(this.u)) this.su[n] = gl.getUniformLocation(this.sprog, n);
     { const st: number[] = []; for (let i = 0; i <= SSEG; i++) st.push(i / SSEG, -1, i / SSEG, 1); this.sstrip = gl.createBuffer()!; gl.bindBuffer(gl.ARRAY_BUFFER, this.sstrip); gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(st), gl.STATIC_DRAW); }
     this.sbuf = gl.createBuffer()!;
@@ -902,10 +908,10 @@ export class StrokePainter {
       gl.useProgram(this.sprog); const vao = gl.createVertexArray()!; gl.bindVertexArray(vao);
       gl.bindBuffer(gl.ARRAY_BUFFER, this.sstrip); gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
       gl.bindBuffer(gl.ARRAY_BUFFER, this.sbuf); gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(data), gl.DYNAMIC_DRAW);
-      for (let i = 0; i < 10; i++) { gl.enableVertexAttribArray(1 + i); gl.vertexAttribPointer(1 + i, 4, gl.FLOAT, false, SPLINE * 4, i * 16); gl.vertexAttribDivisor(1 + i, 1); }
+      for (let i = 0; i < 13; i++) { gl.enableVertexAttribArray(1 + i); gl.vertexAttribPointer(1 + i, 4, gl.FLOAT, false, SPLINE * 4, i * 16); gl.vertexAttribDivisor(1 + i, 1); }
       gl.uniform1i(this.su.uBody, 4); gl.uniform1i(this.su.uBodyOn, this.bodyOn ? 1 : 0); gl.uniform1i(this.su.uUnder, 5); gl.uniform1i(this.su.uUnderOn, wet ? 1 : 0);
       gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, (SSEG + 1) * 2, ms.length);
-      for (let i = 0; i < 10; i++) gl.vertexAttribDivisor(1 + i, 0);
+      for (let i = 0; i < 13; i++) { gl.vertexAttribDivisor(1 + i, 0); gl.disableVertexAttribArray(1 + i); }
       gl.bindVertexArray(null); gl.deleteVertexArray(vao); gl.useProgram(this.prog);
     };
     drawSplines(sDry, false);
