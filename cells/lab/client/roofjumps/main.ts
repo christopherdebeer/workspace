@@ -167,7 +167,7 @@ const CAMERAS: Record<string, Record<string, number>> = {
   chase: Object.fromEntries(['fov', 'eyeDist', 'eyePitch', 'rush', 'side'].map((k) => [k, HOUSE[k]])),
   painter: { fov: 30, eyeDist: 10, eyePitch: 34, rush: 2, side: 20 },
 };
-const STUDY_KEYS = ['scene', 'fixed', 'line', 'takeoff', 'catch', 'brush', 'from', 'hold', 'direct', 'sheet', 'study', 'mu', 'strip', 'frames', 'every', 'cols', 't', 'side', 'zoom', 'auto', 'lead', 'wall'];
+const STUDY_KEYS = ['scene', 'fixed', 'line', 'takeoff', 'catch', 'brush', 'from', 'hold', 'direct', 'sheet', 'study', 'mu', 'strip', 'frames', 'every', 'cols', 't', 'side', 'zoom', 'aim', 'auto', 'lead', 'wall'];
 const studyHref = (set: Record<string, string>) => { const u = new URL(location.href); for (const k of STUDY_KEYS) u.searchParams.delete(k); for (const [k, v] of Object.entries(set)) u.searchParams.set(k, v); return u.href; };
 /** a street spot near the start for this seed, clear on every side (as the street-start tests find theirs) */
 function streetSpot(): [number, number] | null {
@@ -381,7 +381,7 @@ const line = (name: string, r: Route | null, p: Plan) => (r ? `${r === p.best ? 
 function eyeFor(x: number, y: number, z: number, heading: number, aspect: number, room: (at: (f: number) => number[]) => number, wide = 0, low = 0, shake: number[] = [0, 0, 0, 0]) {
   const dist = (TUNE.eyeDist * (aspect < 1 ? 1.22 : 1) * (1 + 0.6 * wide - 0.1 * low)) / zoom, fov = ((zoom > 1 ? 50 : TUNE.fov + (aspect < 1 ? 12 : 0)) + rush) * Math.PI / 180;
   const pitch = Math.max(0.02, Math.min(1.45, ((TUNE.eyePitch + 12 * wide - 6 * low) * Math.PI) / 180 + lift));
-  const ty = y + (zoom > 1 ? 0.95 : 1.7), c = Math.cos(pitch), ya = heading + (TUNE.side * Math.PI) / 180;
+  const ty = y + (q.has('aim') ? Number(q.get('aim')) : zoom > 1 ? 0.95 : 1.7) /* (`aim=`: the height looked at, m) */, c = Math.cos(pitch), ya = heading + (TUNE.side * Math.PI) / 180;
   const at = (f: number) => [x - Math.sin(ya) * c * dist * f, ty + Math.sin(pitch) * dist * f, z - Math.cos(ya) * c * dist * f];
   const far = room(at), e0 = at(far);
   // (the eye's own motion (lope and impact): a shift of the eye across and up, a roll about its line, a narrowing of the lens)

@@ -487,3 +487,11 @@ strokes picking up the masses under them.
   - the hair reads as a helmet;
   - the light is dark overall;
   - cloth (skirt, coat), hands and feet are not yet in splines.
+
+## 23 November: joins, light, hair, cloth
+- Joins: field strokes lap past each form's ends (s from -0.08 to 1.08; the surface extrapolated past the bone), limbs reach up into the shoulder and hip, and a neck stroke runs from inside the collar into the head.
+- Light: the splat shade takes more sky fill and a little warm bounce from below; dark cloth is lifted a little more, hair less, so black hair stays black.
+- Head: the head is an ellipsoid. The face is one smooth plane, brow to chin, with a jaw stroke across it and a darker cheek plane away from the sun. The hair is a dark mass down the back, with eleven tapered locks from near the crown to the nape or behind the ear, a fringe when the face is seen, and flicks off the ends. It no longer reads as a helmet.
+- Cloth: skirt and coat columns are now spline strokes (4 points along the column, normals from the quads), with a narrower fold stroke a value off on every other column. The hem is drawn in overlapping runs of four.
+- Wrap strokes are narrower and translucent, so they read less like bandages. New `aim=` URL key (the height looked at) for head close-ups.
+- Still to do: the side-view face (hair covers the profile), hands and feet as splines, Astra's critique items.

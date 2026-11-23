@@ -624,7 +624,9 @@ void main() {
     float rel = (0.25 + max(thick, 0.0)) * 0.9, dh = (b1 - br) / e1;
     vec3 n0 = normalize(vSn), n = normalize(n0 - vV2 * dh * rel * 0.12), L = normalize(uSunD), Vw = normalize(uEyeF - vW);
     float lam = smoothstep(-0.2, 0.6, dot(n, L)), gloss = pow(max(dot(reflect(-L, n), Vw), 0.0), 18.0) * (0.15 + 0.5 * min(thick, 1.0));
-    col = col * mix(uShd * 0.6, uLit * 1.1, lam) + vec3(gloss) * 0.6;
+    // (the shade not black: the sky fills it, and a little bounces up from below)
+    float bounce = max(0.0, -n.y) * 0.12;
+    col = col * (mix(uShd * 0.72, uLit * 1.12, lam) + vec3(0.1, 0.07, 0.04) * bounce * 2.0) + vec3(gloss) * 0.6;
   }
   // (wet into wet: the paint under it picked up and dragged along the stroke, most where it lands)
   if (uUnderOn == 1 && vPick.z > 0.0) {
