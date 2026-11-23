@@ -339,3 +339,10 @@ picture, contact and cast shadow drawn plainly, the cloth pushed further than th
   - Honest gap to the target, after this pass: the surfaces are still flat gouache planes beside its oil modelling, the head,
     hands and shoes are still the rig's shapes, there's no bunched cloth silhouette or scarf wrap, and the light is per part,
     not per point.
+- Fixed (reported from a phone): in stroke-gouache the menu's characters, and the runner while the line was still drawn, had
+  lost their bodies; only hands, feet and heads were painted.
+  - Cause: all the figures' bones are painted in one call, and the form layer looks parts up by name, so it found only the last
+    figure's `torso`, `thighL` and so on, and marked every figure's parts of those names as done.
+  - Now each figure (its bones start at its pelvis) is painted on its own.
+  - A unit test checks three figures painted together make the same marks as each alone. The studies had only ever painted one
+    figure, which is why they missed it.

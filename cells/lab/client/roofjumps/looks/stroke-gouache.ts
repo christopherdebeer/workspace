@@ -279,6 +279,10 @@ export const strokeGouacheRules: StrokeRules = {
     return out;
   },
   figure(parts, palette, put, light) {
+    // (several figures at once (the menu's line of characters): each painted on its own; every figure's bones start at its pelvis.
+    // Painted together, the parts looked up by name were only the last figure's, and the rest lost their bodies)
+    const starts = parts.flatMap((q, i) => (q.name === 'pelvis' ? [i] : []));
+    if (starts.length > 1) { starts.forEach((s, k) => strokeGouacheRules.figure(parts.slice(k ? s : 0, starts[k + 1] ?? parts.length), palette, put, light)); return; }
     // (all marks, no mask: the body claims no depth (render.ts), so each part is painted whole, far to near, its own body then
     // its lit pull then its accents, the near limbs over the far; contact shadows first, on the ground)
     const T = tints(light), ground: Mark[] = [], items: { d: number; ms: Mark[][] }[] = [];

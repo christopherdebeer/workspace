@@ -742,3 +742,13 @@ console.log('roof jumps: brushwork ok');
   assert.ok(d < 1e-6, `bones the same however often they're read (${(d * 100).toFixed(2)} cm apart)`);
   console.log('drawing is reading: sharp-turns bones at 30 Hz and 120 Hz agree');
 }
+
+// the painted figure: several figures at once (the menu's line) are each painted whole, as each would be alone
+{
+  const city = new City(1, true), sets = CHARACTERS.slice(0, 3).map((c, i) => { const r = new Runner(city, c), rig = new Rig(c); r.x += i * 1.5; rig.update(1, r); return rig.bones(r); });
+  const light = { sun: [-0.55, 0.6, 0.58], top: [0.58, 0.56, 0.7], horizon: [0.89, 0.83, 0.84], haze: [0.77, 0.74, 0.83], key: 't' }, pal = Array.from({ length: 64 }, () => [0.5, 0.5, 0.5]), eye = [2, 2, -4];
+  const count = (bones) => { let n = 0; strokeGouacheRules.figure(STROKES.partsOf(bones, eye, [-0.55, 0.6, 0.58], city), pal, () => n++, light); return n; };
+  const alone = sets.reduce((t, b) => t + count(b), 0), together = count(sets.flat());
+  assert.equal(together, alone, `several figures painted as each alone (${together} marks together, ${alone} apart)`);
+  console.log(`painted figures: ${together} marks for three together, the same as apart`);
+}
