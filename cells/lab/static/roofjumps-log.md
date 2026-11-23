@@ -442,3 +442,15 @@ strokes picking up the masses under them.
     is now a clear deep violet.
   - Noted: two headless renders of the board came back blank with no error; re-run, the same source draws. Treat a blank still
     as a harness flake before blaming the code.
+- Spline strokes (`strokes.ts` `Spline`), on the board (`?brushes=splines`, `&t=` to hold a moment):
+  - a stroke is four control points with a width at each, and the stroke's pigment, surface, load and pickup;
+  - drawn as one strip of 32 segments evaluated on the GPU (uniform Catmull-Rom with its ends extended, widths eased between
+    the points), so there are no joins, seams or notches at any curvature;
+  - the strip lies on its surface, or turns to the eye, narrows and fades edge-on, and never thins below two pixels;
+  - its own vertex shader emits the same varyings as the stamps, so the same fragment shader paints it: the figure brush's blunt
+    landing, bristle exit, torn sides, load, splat light and wet pickup all carry over;
+  - forty floats a stroke, against ten to thirty stamps for a bent mark.
+  - The board's rows, redrawn as splines; and a row F, a sleeve pinned to a limb bending at the elbow with time, its points from
+    the bones each frame. Over three moments the stroke bends with the limb, its bristles and edges fixed to it, not crawling.
+  - The city stays on stamps.
+  - Next: the figure's strokes as splines from its bones.

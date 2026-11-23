@@ -5,7 +5,7 @@
  * each column a variation. Labels in the page. On the game's pale paper; `&ground=ochre` a toned board, to judge whites.
  */
 import type { Bone } from './rig';
-import type { Mark, V } from './strokes';
+import type { Mark, Spline, V } from './strokes';
 import { K } from './strokes';
 import { translate, rotZ, ident } from './m4';
 
@@ -54,4 +54,41 @@ export function boardMarks(): { rows: string[]; marks: Mark[] } {
   put({ a: P(0.1, -1.95), b: P(1.0, -1.7), path: [P(0.6, -1.65)], width: 0.03, col: hair, surf: [0, 0, 1], load: 0.6, key: 'Eflick', taper: [0.004, 0.2] });
   put({ a: P(1.3, -1.9), b: P(2.6, -1.8), width: 0.36, col: navy, surf: [0, 0, 1], load: 0.25, dry: 0.7, alpha: 0.85, key: 'Escumble' });
   return { rows: ['A light: facing the sun, the eye, sideways, away', 'B view: its surface 0, 45, 65, 78, 86 degrees from the eye', 'C load: 0.2, 0.5, 1 · one draining to dry-brush', 'D wet into wet: picking up 0, 0.5, 1 of the dark under it', 'E kinds: pull, wrap, dab, flick, scumble'], marks: m };
+}
+
+/** the board in spline strokes (strokes.ts `Spline`): the same rows, each stroke one strip through four points; and a row of strokes
+ * pinned to a limb that bends with time (a shoulder, an elbow): its sleeve one stroke across the joint, its points from the bones */
+export function boardSplines(time: number): { rows: string[]; splines: Spline[] } {
+  const sp: Spline[] = [], navy: V = [0.3, 0.3, 0.55], lilac: V = [0.66, 0.6, 0.82], white: V = [0.93, 0.91, 0.86], ochre: V = [0.8, 0.6, 0.2], green: V = [0.36, 0.5, 0.34], hair: V = [0.3, 0.18, 0.1];
+  const SUN: V = [-0.55, 0.6, 0.58], nrm = (v: V): V => { const l = Math.hypot(v[0], v[1], v[2]); return [v[0] / l, v[1] / l, v[2] / l]; };
+  const line = (x0: number, y0: number, x1: number, y1: number, bow = 0): [V, V, V, V] => [P(x0, y0), P(x0 + (x1 - x0) / 3, y0 + (y1 - y0) / 3 + bow), P(x0 + (2 * (x1 - x0)) / 3, y0 + (2 * (y1 - y0)) / 3 + bow), P(x1, y1)];
+  const put = (o: Partial<Spline> & { ctrl: [V, V, V, V]; widths: [number, number, number, number]; col: V; key: string }) => sp.push({ dry: 0.25, heart: 0.3, body: 0.001, surf: [0, 0, 1], load: 0.8, ...o });
+  // A light
+  ([['sun', nrm(SUN)], ['eye', [0, 0, 1]], ['side', nrm([0.9, 0, 0.4])], ['away', nrm([0.55, -0.6, 0.3])]] as [string, V][]).forEach(([k, n], i) =>
+    put({ ctrl: line(-2.7 + i * 1.4, 1.75, -1.75 + i * 1.4, 1.85, 0.04), widths: [0.3, 0.3, 0.3, 0.28], col: lilac, surf: n, load: 0.9, key: `sA${k}` }));
+  // B view
+  [0, 45, 65, 78, 86].forEach((deg, i) => { const r = (deg * Math.PI) / 180, cx = -2.42 + i * 1.15, e = nrm([-cx, -0.95, 7.5]), s0 = nrm([e[2], 0, -e[0]]);
+    put({ ctrl: line(cx - 0.38, 0.9, cx + 0.38, 1.0), widths: [0.28, 0.28, 0.28, 0.26], col: green, load: 0.7, surf: nrm([e[0] * Math.cos(r) + s0[0] * Math.sin(r), e[1] * Math.cos(r), e[2] * Math.cos(r) + s0[2] * Math.sin(r)]), key: `sB${deg}` }); });
+  // C load, and a long stroke draining, bowed
+  [0.2, 0.5, 1.0].forEach((l, i) => put({ ctrl: line(-2.8 + i * 0.9, 0.05, -2.2 + i * 0.9, 0.1), widths: [0.28, 0.28, 0.27, 0.26], col: white, load: l, key: `sC${l}` }));
+  put({ ctrl: line(0.0, 0.0, 2.7, 0.15, 0.18), widths: [0.24, 0.26, 0.24, 0.2], col: navy, load: 0.8, key: 'sClong' });
+  // D wet into wet
+  for (let i = 0; i < 3; i++) { const x = -2.3 + i * 1.7;
+    put({ ctrl: line(x, -0.55, x, -1.25), widths: [0.42, 0.44, 0.42, 0.4], col: navy, key: `sDu${i}` });
+    put({ ctrl: line(x - 0.55, -0.85, x + 0.7, -0.95, 0.04), widths: [0.18, 0.18, 0.17, 0.15], col: ochre, pick: [0, 0.5, 1][i], key: `sDp${i}` }); }
+  // E kinds: pull, a wrap (a tight curve, swelling), a dab, a flick, a scumble
+  put({ ctrl: line(-2.8, -1.85, -1.9, -1.8), widths: [0.24, 0.24, 0.23, 0.22], col: navy, key: 'sEpull' });
+  put({ ctrl: [P(-1.6, -2.0), P(-1.35, -1.68), P(-1.05, -1.68), P(-0.8, -1.95)], widths: [0.2, 0.3, 0.28, 0.16], col: lilac, surf: nrm([0, 0.4, 0.92]), key: 'sEwrap' });
+  put({ ctrl: line(-0.45, -1.85, -0.2, -1.8), widths: [0.3, 0.32, 0.3, 0.28], col: white, load: 1, key: 'sEdab', taper: [0.1, 0.12] });
+  put({ ctrl: [P(0.1, -1.95), P(0.4, -1.68), P(0.75, -1.64), P(1.0, -1.72)], widths: [0.03, 0.03, 0.02, 0.012], col: hair, load: 0.6, key: 'sEflick', taper: [0.004, 0.2] });
+  put({ ctrl: line(1.3, -1.9, 2.6, -1.8), widths: [0.36, 0.36, 0.34, 0.3], col: navy, load: 0.25, dry: 0.7, alpha: 0.85, key: 'sEscumble' });
+  // F pinned: a limb (shoulder at the right edge) bending at the elbow with time; one sleeve stroke across the joint from points on
+  // the bones, a highlight on its upper edge, a cuff at the wrist: all move with it
+  { const sh = P(2.35, -0.4), a1 = -1.9 + 0.35 * Math.sin(time * 1.3), a2 = a1 + 0.4 + 0.9 * (0.5 + 0.5 * Math.sin(time * 1.3 + 0.8)), l1 = 0.62, l2 = 0.55;
+    const el: V = [sh[0] + Math.cos(a1) * l1, sh[1] + Math.sin(a1) * l1, sh[2]], wr: V = [el[0] + Math.cos(a2) * l2, el[1] + Math.sin(a2) * l2, el[2]];
+    const mid = (a: V, b: V, t: number): V => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2]];
+    put({ ctrl: [sh, mid(sh, el, 0.6), mid(el, wr, 0.35), wr], widths: [0.2, 0.17, 0.15, 0.12], col: navy, key: 'sFsleeve' });
+    put({ ctrl: [mid(sh, el, 0.1), mid(sh, el, 0.65), mid(el, wr, 0.3), mid(el, wr, 0.8)], widths: [0.05, 0.06, 0.05, 0.03], col: lilac, load: 0.6, key: 'sFlit', taper: [0.03, 0.08] });
+  }
+  return { rows: ['spline strokes: one strip each, no joins', 'A light · B view · C load · D wet into wet · E kinds', 'F (right of D) a sleeve pinned to a bending limb'], splines: sp };
 }

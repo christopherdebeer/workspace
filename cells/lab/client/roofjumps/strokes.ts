@@ -127,6 +127,23 @@ export interface Mark {
   pick?: number; smear?: number;
 }
 
+/**
+ * A spline stroke: one continuous stroke along a curve through four control points (centripetal-free uniform Catmull-Rom, its
+ * ends extended), drawn as a single strip evaluated on the GPU: no joins, no seams, width, load and light eased along it. Each
+ * control point its width; the stroke its pigment, surface, load and pickup, as a Mark's. For the figure, the points come from
+ * the bones each frame, so the stroke moves with the body.
+ */
+export interface Spline { ctrl: [V, V, V, V]; widths: [number, number, number, number]; col: V; col2?: V; mix2?: number; alpha?: number; kind?: number; dry?: number; heart?: number; taper?: [number, number]; rank?: number; key: string; surf?: V; load?: number; body?: number; pick?: number; smear?: number }
+/** floats a spline: ten vec4s */
+export const SPLINE = 40;
+export function depositSpline(m: Spline, out: number[]): void {
+  const [p0, p1, p2, p3] = m.ctrl, w = m.widths, seed = (hashKey(m.key) % 100000) / 100000, L = len(sub(p1, p0)) + len(sub(p2, p1)) + len(sub(p3, p2)), wm = Math.max(...w);
+  const [tin, tout] = m.taper ?? [Math.min(L * 0.3, wm * 0.6), Math.min(L * 0.45, wm * 1.5)];
+  out.push(p0[0], p0[1], p0[2], m.alpha ?? 1, p1[0], p1[1], p1[2], m.kind ?? 0, p2[0], p2[1], p2[2], seed, p3[0], p3[1], p3[2], m.rank ?? 1,
+    w[0], w[1], w[2], w[3], m.col[0], m.col[1], m.col[2], m.dry ?? 0.3, ...(m.col2 ?? m.col), m.mix2 ?? 0, ...(m.surf ?? [0, 0, 0]), m.load ?? 0,
+    m.heart ?? 0.4, tin, tout, -(m.body ?? 0.001), m.pick ?? 0, m.smear ?? 0.15, 0, 0);
+}
+
 const NOCLIP: [V, V] = [[-1e5, -1e5, -1e5], [1e5, 1e5, 1e5]];
 /** Deposit a mark as its stamps: one, or several tiling it exactly, each knowing its share of the whole. */
 export function deposit(m: Mark, out: number[]): void {
@@ -457,6 +474,42 @@ void main() {
   { vec4 q0 = uVP * vec4(c, 1.0), q1 = uVP * vec4(c + U, 1.0); vec2 sd2 = q1.xy / q1.w - q0.xy / q0.w; vPick = vec3(length(sd2) > 1e-6 ? normalize(sd2) : vec2(1.0, 0.0), a10.x); vSurf.w = a9.w; }
   gl_Position = uVP * vec4(p + ep / max(ed, 1e-4) * min((0.004 + dist * 0.0012) / max(abs(dot(N, ep / max(ed, 1e-4))), 0.25), ed * 0.5), 1.0);
 }`;
+// (a spline stroke's vertex shader: the curve evaluated at this vertex's place along it; the strip as wide as the stroke there, laid
+// on its surface (or turned to the eye); the same varyings as the stamps', so it is painted by the same fragment shader)
+const SSEG = 32;
+const SVS = `#version 300 es
+precision highp float;
+in vec2 aQ; in vec4 b0; in vec4 b1; in vec4 b2; in vec4 b3; in vec4 b4; in vec4 b5; in vec4 b6; in vec4 b7; in vec4 b8; in vec4 b9;
+uniform mat4 uVP; uniform vec3 uEye; uniform float uFar; uniform float uFogNear; uniform float uDetail; uniform vec3 uSunC; uniform float uPx;
+uniform highp sampler2DShadow uShadowMap; uniform mat4 uSunVP; uniform int uShadowOn;
+out vec2 vQ; out vec3 vW; out float vFog;
+flat out vec4 vCol; flat out vec4 vP; flat out vec4 vS; flat out vec3 vMin; flat out vec3 vMax; flat out vec2 vT; flat out vec4 vCol2; flat out vec3 vN; flat out float vReach; flat out float vBody; flat out vec4 vSurf; flat out vec3 vU; flat out vec3 vV2; flat out vec3 vPick; flat out vec2 vWr;
+vec3 cr(vec3 a, vec3 b, vec3 c, vec3 d, float t) { float t2 = t * t, t3 = t2 * t; return 0.5 * (2.0 * b + (-a + c) * t + (2.0 * a - 5.0 * b + 4.0 * c - d) * t2 + (-a + 3.0 * b - 3.0 * c + d) * t3); }
+vec3 at(float u) {
+  vec3 P0 = b0.xyz, P1 = b1.xyz, P2 = b2.xyz, P3 = b3.xyz, Pm = 2.0 * P0 - P1, Pp = 2.0 * P3 - P2;
+  float x = clamp(u, 0.0, 1.0) * 3.0; int i = int(min(floor(x), 2.0)); float f = x - float(i);
+  return i == 0 ? cr(Pm, P0, P1, P2, f) : i == 1 ? cr(P0, P1, P2, P3, f) : cr(P1, P2, P3, Pp, f);
+}
+float wat(float u) { float x = clamp(u, 0.0, 1.0) * 3.0; int i = int(min(floor(x), 2.0)); float f = x - float(i), e = f * f * (3.0 - 2.0 * f); return i == 0 ? mix(b4.x, b4.y, e) : i == 1 ? mix(b4.y, b4.z, e) : mix(b4.z, b4.w, e); }
+void main() {
+  float u = aQ.x, sideS = aQ.y;
+  vec3 p = at(u), tg = at(min(u + 0.01, 1.0)) - at(max(u - 0.01, 0.0)); tg = length(tg) > 1e-6 ? normalize(tg) : vec3(1.0, 0.0, 0.0);
+  vec3 toE = uEye - p; float dist = length(toE); vec3 e = toE / max(dist, 1e-4);
+  bool hasS = dot(b7.xyz, b7.xyz) > 0.01; vec3 sn = hasS ? normalize(b7.xyz) : e;
+  vec3 ac = cross(sn, tg); if (length(ac) < 1e-4) ac = cross(e, tg); ac = normalize(ac);
+  float w = wat(u), wm = max(max(b4.x, b4.y), max(b4.z, b4.w));
+  // (seen edge-on, narrower and fainter; never thinner than a couple of pixels)
+  float alpha = b0.w; if (hasS) { float facing = abs(dot(sn, e)); w *= mix(0.4, 1.0, smoothstep(0.05, 0.45, facing)); alpha *= smoothstep(0.03, 0.22, facing); }
+  w = max(w, uPx * dist * 1.1);
+  float L = length(b1.xyz - b0.xyz) + length(b2.xyz - b1.xyz) + length(b3.xyz - b2.xyz);
+  vec3 q = p + ac * sideS * w * 0.5 * 1.15;
+  vQ = vec2(u * 2.0 - 1.0, sideS); vW = q; vFog = smoothstep(uFar * uFogNear, uFar, length(uEye - q));
+  vCol = vec4(b5.xyz, alpha); vP = vec4(b1.w, b2.w, b5.w, b8.x); vS = vec4(0.0, 1.0, b8.y, b8.z); vMin = vec3(-1e5); vMax = vec3(1e5);
+  vT = vec2(L, wm); vCol2 = b6; vN = sn; vReach = 1.0; vBody = max(0.0, -b8.w); vSurf = b7; vU = tg; vV2 = ac; vWr = vec2(1.0);
+  { vec4 q0 = uVP * vec4(p, 1.0), q1 = uVP * vec4(p + tg, 1.0); vec2 sd2 = q1.xy / q1.w - q0.xy / q0.w; vPick = vec3(length(sd2) > 1e-6 ? normalize(sd2) : vec2(1.0, 0.0), b9.x); }
+  vec3 ep = uEye - q; float ed = length(ep);
+  gl_Position = uVP * vec4(q + ep / max(ed, 1e-4) * min(0.004 + dist * 0.0012, ed * 0.5), 1.0);
+}`;
 const NOISE = `
 float hash12(vec2 p) { vec3 q = fract(vec3(p.xyx) * 0.1031); q += dot(q, q.yzx + 33.33); return fract((q.x + q.y) * q.z); }
 float noise(vec2 p) { vec2 i = floor(p), f = fract(p), u = f * f * (3.0 - 2.0 * f);
@@ -647,6 +700,7 @@ export class StrokePainter {
   /** the underpainting left out (`?under=0`, U): only the strokes, to see what they cover */
   noUnder = false;
   private utex: WebGLTexture | null = null; private usize = [0, 0];
+  private sprog!: WebGLProgram; private su: Record<string, WebGLUniformLocation | null> = {}; private sstrip!: WebGLBuffer; private sbuf!: WebGLBuffer;
   /** another ground than the look's, and its underpainting broken to show it (the brush board's ochre: for judging whites) */
   paperOverride: V | null = null;
   /** the lit body: its program, its mesh's buffer and VAO, where it's rendered (a colour texture and depth, the drawing buffer's
@@ -660,6 +714,10 @@ export class StrokePainter {
     this.kprog = program(KVS, KFS, ['aQ']); for (const n of ['uInv', 'uTop', 'uHor', 'uGrain']) this.u['k' + n] = gl.getUniformLocation(this.kprog, n);
     this.corner = gl.createBuffer()!; gl.bindBuffer(gl.ARRAY_BUFFER, this.corner); gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
     this.dyn = this.layered(this.dynData, gl.DYNAMIC_DRAW, [0, 0, 0, 0]);
+    this.sprog = program(SVS, FS, ['aQ', 'b0', 'b1', 'b2', 'b3', 'b4', 'b5', 'b6', 'b7', 'b8', 'b9']);
+    for (const n of Object.keys(this.u)) this.su[n] = gl.getUniformLocation(this.sprog, n);
+    { const st: number[] = []; for (let i = 0; i <= SSEG; i++) st.push(i / SSEG, -1, i / SSEG, 1); this.sstrip = gl.createBuffer()!; gl.bindBuffer(gl.ARRAY_BUFFER, this.sstrip); gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(st), gl.STATIC_DRAW); }
+    this.sbuf = gl.createBuffer()!;
     this.bprog = program(BVS, BFS, ['aPos', 'aNor', 'aMat']);
     for (const n of ['uVP', 'uPal', 'uSun', 'uEye', 'uSunlit', 'uShade', 'uShadowMap', 'uSunVP', 'uShadowOn']) this.u['b' + n] = gl.getUniformLocation(this.bprog, n);
     this.bbuf = gl.createBuffer()!; this.bvao = gl.createVertexArray()!; this.bibuf = gl.createBuffer()!;
@@ -761,7 +819,7 @@ export class StrokePainter {
    * The frame: paper; `solid` (the renderer draws the city and the body into depth); then the paint. `sunVP`: the sun's
    * map, bound, for the shadow passages, centred at `sunC`.
    */
-  draw(o: { vp: M4; inv: Float32Array; eye: number[]; far: number; rules: StrokeRules; light: Light; city: City; bones: Bone[]; palette: V[]; sunVP: M4 | null; sunC: V; detail: number; solid: () => void; bare: boolean; extra?: Mark[]; noFigure?: boolean }): void {
+  draw(o: { vp: M4; inv: Float32Array; eye: number[]; far: number; rules: StrokeRules; light: Light; city: City; bones: Bone[]; palette: V[]; sunVP: M4 | null; sunC: V; detail: number; solid: () => void; bare: boolean; extra?: Mark[]; noFigure?: boolean; splines?: Spline[] }): void {
     const gl = this.gl, R = o.rules, timing = !!this.cost, t0 = timing ? (gl.finish(), performance.now()) : 0;
     this.renderBody(o);
     let tick = t0; const lap = (k: keyof Cost) => { count(k); if (!timing) return; gl.finish(); const n = performance.now(); (this.cost as Cost)[k] = n - tick; tick = n; };
@@ -789,17 +847,20 @@ export class StrokePainter {
       gl.bindVertexArray(this.dyn.vaos[0]); gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
     }
     // (the paint)
-    gl.useProgram(this.prog);
-    gl.uniformMatrix4fv(this.u.uVP, false, o.vp); gl.uniform3f(this.u.uEye, o.eye[0], o.eye[1], o.eye[2]); gl.uniform1f(this.u.uFar, o.far);
-    gl.uniform1f(this.u.uFogNear, o.light.hazeNear); gl.uniform1f(this.u.uDetail, o.detail); gl.uniform3fv(this.u.uSunC, o.sunC);
+    const setU = (u: Record<string, WebGLUniformLocation | null>) => {
+    gl.uniformMatrix4fv(u.uVP, false, o.vp); gl.uniform3f(u.uEye, o.eye[0], o.eye[1], o.eye[2]); gl.uniform1f(u.uFar, o.far);
+    gl.uniform1f(u.uFogNear, o.light.hazeNear); gl.uniform1f(u.uDetail, o.detail); gl.uniform3fv(u.uSunC, o.sunC);
     { // (a pixel's size a metre off: two points a pixel apart at the screen's middle, unprojected)
       const un = (y: number): V => { const m = o.inv, x = 0, z = 0.5; const w = m[3] * x + m[7] * y + m[11] * z + m[15]; return [(m[0] * x + m[4] * y + m[8] * z + m[12]) / w, (m[1] * x + m[5] * y + m[9] * z + m[13]) / w, (m[2] * x + m[6] * y + m[10] * z + m[14]) / w]; };
       const p0 = un(0), p1 = un(2 / Math.max(1, gl.drawingBufferHeight)), d0 = Math.hypot(p0[0] - o.eye[0], p0[1] - o.eye[1], p0[2] - o.eye[2]);
-      gl.uniform1f(this.u.uPx, Math.hypot(p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2]) / Math.max(d0, 1e-6));
+      gl.uniform1f(u.uPx, Math.hypot(p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2]) / Math.max(d0, 1e-6));
     }
-    gl.uniform1i(this.u.uShadowMap, 3); gl.uniform1i(this.u.uShadowOn, o.sunVP ? 1 : 0); if (o.sunVP) gl.uniformMatrix4fv(this.u.uSunVP, false, o.sunVP);
-    gl.uniform3fv(this.u.uHaze, o.light.haze); gl.uniform1f(this.u.uFade, R.fadeToPaper); gl.uniform1f(this.u.uGrain, R.grain); gl.uniform1i(this.u.uCount, this.counting ? 1 : 0); gl.uniform1f(this.u.uBreak, this.paperOverride ? 1 : 0);
-    { const BL = R.bodyLight ? R.bodyLight(o.light) : { sunlit: [1, 1, 1] as V, shade: [0.6, 0.6, 0.7] as V }; gl.uniform3fv(this.u.uSunD, o.light.sun); gl.uniform3fv(this.u.uLit, BL.sunlit); gl.uniform3fv(this.u.uShd, BL.shade); gl.uniform1i(this.u.uUnderOn, 0); gl.uniform2f(this.u.uRes, gl.drawingBufferWidth, gl.drawingBufferHeight); gl.uniform3f(this.u.uEyeF, o.eye[0], o.eye[1], o.eye[2]); gl.uniform3fv(this.u.uPaperF, this.paperOverride ?? R.paper); }
+    gl.uniform1i(u.uShadowMap, 3); gl.uniform1i(u.uShadowOn, o.sunVP ? 1 : 0); if (o.sunVP) gl.uniformMatrix4fv(u.uSunVP, false, o.sunVP);
+    gl.uniform3fv(u.uHaze, o.light.haze); gl.uniform1f(u.uFade, R.fadeToPaper); gl.uniform1f(u.uGrain, R.grain); gl.uniform1i(u.uCount, this.counting ? 1 : 0); gl.uniform1f(u.uBreak, this.paperOverride ? 1 : 0);
+    { const BL = R.bodyLight ? R.bodyLight(o.light) : { sunlit: [1, 1, 1] as V, shade: [0.6, 0.6, 0.7] as V }; gl.uniform3fv(u.uSunD, o.light.sun); gl.uniform3fv(u.uLit, BL.sunlit); gl.uniform3fv(u.uShd, BL.shade); gl.uniform1i(u.uUnderOn, 0); gl.uniform2f(u.uRes, gl.drawingBufferWidth, gl.drawingBufferHeight); gl.uniform3f(u.uEyeF, o.eye[0], o.eye[1], o.eye[2]); gl.uniform3fv(u.uPaperF, this.paperOverride ?? R.paper); }
+    };
+    gl.useProgram(this.sprog); setU(this.su);
+    gl.useProgram(this.prog); setU(this.u);
     gl.depthMask(false); gl.depthFunc(gl.LEQUAL); gl.enable(gl.BLEND);
     // (toward the eye by the slope too: a face seen edge-on still passes against its own depth, no paper at a box's edge)
     gl.enable(gl.POLYGON_OFFSET_FILL); gl.polygonOffset(-2, -2);
@@ -834,12 +895,27 @@ export class StrokePainter {
     // the city stands in front)
     if (this.bodyOn) { gl.activeTexture(gl.TEXTURE4); gl.bindTexture(gl.TEXTURE_2D, this.btex); gl.activeTexture(gl.TEXTURE0); gl.uniform1i(this.u.uBody, 4); gl.uniform1i(this.u.uBodyOn, 1); }
     drawDyn(2);
+    // (the spline strokes: one strip each, through their control points)
+    const spl = o.splines ?? [], sDry = spl.filter((m) => !m.pick), sWet = spl.filter((m) => m.pick);
+    const drawSplines = (ms: Spline[], wet: boolean) => {
+      if (!ms.length) return; const data: number[] = []; for (const m of ms) depositSpline(m, data);
+      gl.useProgram(this.sprog); const vao = gl.createVertexArray()!; gl.bindVertexArray(vao);
+      gl.bindBuffer(gl.ARRAY_BUFFER, this.sstrip); gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+      gl.bindBuffer(gl.ARRAY_BUFFER, this.sbuf); gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(data), gl.DYNAMIC_DRAW);
+      for (let i = 0; i < 10; i++) { gl.enableVertexAttribArray(1 + i); gl.vertexAttribPointer(1 + i, 4, gl.FLOAT, false, SPLINE * 4, i * 16); gl.vertexAttribDivisor(1 + i, 1); }
+      gl.uniform1i(this.su.uBody, 4); gl.uniform1i(this.su.uBodyOn, this.bodyOn ? 1 : 0); gl.uniform1i(this.su.uUnder, 5); gl.uniform1i(this.su.uUnderOn, wet ? 1 : 0);
+      gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, (SSEG + 1) * 2, ms.length);
+      for (let i = 0; i < 10; i++) gl.vertexAttribDivisor(1 + i, 0);
+      gl.bindVertexArray(null); gl.deleteVertexArray(vao); gl.useProgram(this.prog);
+    };
+    drawSplines(sDry, false);
     // (the wet layer: what's painted so far copied, and the strokes that pick paint up laid over it, sampling it)
-    if (dc[3] > 0 && !this.counting) {
+    if ((dc[3] > 0 || sWet.length) && !this.counting) {
       const W = gl.drawingBufferWidth, H = gl.drawingBufferHeight;
       if (!this.utex || this.usize[0] !== W || this.usize[1] !== H) { if (this.utex) gl.deleteTexture(this.utex); this.utex = gl.createTexture()!; gl.bindTexture(gl.TEXTURE_2D, this.utex); gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, W, H, 0, gl.RGBA, gl.UNSIGNED_BYTE, null); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE); this.usize = [W, H]; }
       gl.activeTexture(gl.TEXTURE5); gl.bindTexture(gl.TEXTURE_2D, this.utex); gl.copyTexSubImage2D(gl.TEXTURE_2D, 0, 0, 0, 0, 0, W, H); gl.activeTexture(gl.TEXTURE0);
       gl.uniform1i(this.u.uUnder, 5); gl.uniform1i(this.u.uUnderOn, 1); drawDyn(3); gl.uniform1i(this.u.uUnderOn, 0);
+      drawSplines(sWet, true);
     }
     gl.uniform1i(this.u.uBodyOn, 0);
     lap('figure');
