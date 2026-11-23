@@ -404,3 +404,32 @@ picture, contact and cast shadow drawn plainly, the cloth pushed further than th
     specks).
   - Only the brush board can take a toned ground (`?brushes&ground=ochre`), to judge whites; its underpainting breaks only then.
   - Kept from the oil-sketch move: the drier city strokes, the bristles, and the figure brush.
+
+## Brush splats: the primitives (planned, then built on the board, `?brushes`)
+
+A mark is a splat: an oriented stroke in 3D (a path, widths along it), its pigment, and four properties, each in the stamp
+(widened from 36 to 44 floats: two vec4s more):
+- **surface** (`surf`): the normal of what it lies on. Lit by the sun on it (the look's warm light, cool shade), with the
+  bristles' relief bumping the normal, and a gloss on ridges turned to the light.
+- **view**: from the same normal, a splat seen edge-on narrows (to 40%) and fades, so no slivers and no gaps.
+- **load** (`load`): paint drains along it: thick and opaque where it lands, the bristles breaking it where it thins. The
+  relief is the paint's thickness.
+- **pickup** (`pick`, `smear`): wet into wet. What's painted so far is copied to a texture, and marks that pick up paint are laid
+  last, sampling it back along their own direction: they drag the paint under them, most where they land, and only paint, not
+  paper.
+- Also: a swelling mark's legs carry their ends' widths, eased in the shader.
+
+Kinds, as presets of these on the figure brush (blunt landing, bristle exit, torn sides):
+- pull: a long loaded stroke;
+- wrap: a bent, swelling stroke round a form;
+- dab: impasto, short, full load;
+- flick: thin, calligraphic;
+- scumble: dry, little load, broken over.
+
+Board rows: A light (surface toward the sun, the eye, sideways, away); B view (0 to 86 degrees from the eye); C load (0.2, 0.5, 1,
+and one draining); D pickup (0, 0.5, 1 over a dark passage); E the kinds.
+
+Known: a tight wrap still facets (the bristle pattern restarts each leg); the light rows want more contrast.
+
+Next: the figure re-laid with these: few big splats, each with its surface from the lit body's form, a load, and the top
+strokes picking up the masses under them.

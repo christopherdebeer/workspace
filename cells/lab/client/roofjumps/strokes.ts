@@ -84,7 +84,7 @@ export const EDGE = 8;
 export const LAYER = { BROAD: 0, SHADOW: 1, EDGE: 2, ACCENT: 3 } as const;
 const LAYERS = 4;
 /** floats a stamp: nine vec4s */
-export const STAMP = 36;
+export const STAMP = 44;
 
 /** A mark, as a rule says it. */
 export interface Mark {
@@ -117,6 +117,14 @@ export interface Mark {
   path?: V[];
   /** a bent mark's width at each of its points (a, the path's, b): the form swelling and narrowing along it */
   widths?: number[];
+  /** the splat's surface: the normal of what it lies on (lit by the sun, its bristles' relief bumping it; and seen edge-on it
+   * narrows and fades). None: lit as before */
+  surf?: V;
+  /** its paint load (0..1): thick and opaque where it lands, draining along it to dry-brush; its relief is the paint's thickness */
+  load?: number;
+  /** wet into wet (0..1): how much of the paint already under it it picks up and drags along, strongest where it lands; and
+   * how far it drags it (m) */
+  pick?: number; smear?: number;
 }
 
 const NOCLIP: [V, V] = [[-1e5, -1e5, -1e5], [1e5, 1e5, 1e5]];
@@ -133,7 +141,7 @@ export function deposit(m: Mark, out: number[]): void {
   for (let i = 0; i < n; i++) {
     const s0 = i / n, s1 = (i + 1) / n, c = add(m.a, scale(d, (s0 + s1) / 2)), U = scale(d, (s1 - s0) / 2), Vv = scale(across, hw);
     out.push(c[0], c[1], c[2], m.alpha, U[0], U[1], U[2], m.kind, Vv[0], Vv[1], Vv[2], seed, m.col[0], m.col[1], m.col[2], m.rank ?? 0.5,
-      anchor[0], anchor[1], anchor[2], m.dry ?? 0, clip[0][0], clip[0][1], clip[0][2], s0, clip[1][0], clip[1][1], clip[1][2], s1, m.heart ?? 0.5, tin, tout, m.sky ? 1 : -(m.body ?? 0), ...(m.col2 ?? m.col), m.mix2 ?? 0);
+      anchor[0], anchor[1], anchor[2], m.dry ?? 0, clip[0][0], clip[0][1], clip[0][2], s0, clip[1][0], clip[1][1], clip[1][2], s1, m.heart ?? 0.5, tin, tout, m.sky ? 1 : -(m.body ?? 0), ...(m.col2 ?? m.col), m.mix2 ?? 0, ...(m.surf ?? [0, 0, 0]), m.load ?? 0, m.pick ?? 0, m.smear ?? 0.15, 1, 1);
   }
 }
 
@@ -169,10 +177,12 @@ function depositPath(m: Mark, out: number[]): void {
     let across: V;
     if (m.side) { const sd = unit(m.side), k = dot(sd, dir); across = sub(sd, scale(dir, k)); across = len(across) > 1e-4 ? unit(across) : sd; }
     else across = m.n ? unit(cross(m.n, dir)) : unit(Math.abs(dir[1]) > 0.9 ? cross(dir, [1, 0, 0]) : cross(dir, [0, 1, 0]));
-    const lw = m.widths && m.widths.length === pts.length ? ((m.widths[g.k] + m.widths[g.k + 1]) / 2 / 2) * 1.15 : hw;
+    // (a swelling mark: the leg's stamp as wide as its wider end, its ends' widths as shares of that, eased between in the shader)
+    const wa = m.widths && m.widths.length === pts.length ? m.widths[g.k] : 0, wb = m.widths && m.widths.length === pts.length ? m.widths[g.k + 1] : 0;
+    const lw = wa || wb ? (Math.max(wa, wb) / 2) * 1.15 : hw, r0 = wa || wb ? wa / Math.max(wa, wb) : 1, r1 = wa || wb ? wb / Math.max(wa, wb) : 1;
     const c = scale(add(a, b), 0.5), U = scale(sub(b, a), 0.5), Vv = scale(across, lw);
     out.push(c[0], c[1], c[2], m.alpha, U[0], U[1], U[2], m.kind, Vv[0], Vv[1], Vv[2], seed, m.col[0], m.col[1], m.col[2], m.rank ?? 0.5,
-      anchor[0], anchor[1], anchor[2], m.dry ?? 0, clip[0][0], clip[0][1], clip[0][2], s0, clip[1][0], clip[1][1], clip[1][2], s1, m.heart ?? 0.5, tin, tout, m.sky ? 1 : -(m.body ?? 0), ...(m.col2 ?? m.col), m.mix2 ?? 0);
+      anchor[0], anchor[1], anchor[2], m.dry ?? 0, clip[0][0], clip[0][1], clip[0][2], s0, clip[1][0], clip[1][1], clip[1][2], s1, m.heart ?? 0.5, tin, tout, m.sky ? 1 : -(m.body ?? 0), ...(m.col2 ?? m.col), m.mix2 ?? 0, ...(m.surf ?? [0, 0, 0]), m.load ?? 0, m.pick ?? 0, m.smear ?? 0.15, r0, r1);
   });
 }
 
@@ -397,11 +407,11 @@ export interface StrokeRules {
 
 const VS = `#version 300 es
 precision highp float;
-in vec2 aQ; in vec4 a0; in vec4 a1; in vec4 a2; in vec4 a3; in vec4 a4; in vec4 a5; in vec4 a6; in vec4 a7; in vec4 a8;
+in vec2 aQ; in vec4 a0; in vec4 a1; in vec4 a2; in vec4 a3; in vec4 a4; in vec4 a5; in vec4 a6; in vec4 a7; in vec4 a8; in vec4 a9; in vec4 a10;
 uniform mat4 uVP; uniform vec3 uEye; uniform float uFar; uniform float uFogNear; uniform float uDetail; uniform vec3 uSunC; uniform float uPx;
 uniform highp sampler2DShadow uShadowMap; uniform mat4 uSunVP; uniform int uShadowOn;
 out vec2 vQ; out vec3 vW; out float vFog;
-flat out vec4 vCol; flat out vec4 vP; flat out vec4 vS; flat out vec3 vMin; flat out vec3 vMax; flat out vec2 vT; flat out vec4 vCol2; flat out vec3 vN; flat out float vReach; flat out float vBody;
+flat out vec4 vCol; flat out vec4 vP; flat out vec4 vS; flat out vec3 vMin; flat out vec3 vMax; flat out vec2 vT; flat out vec4 vCol2; flat out vec3 vN; flat out float vReach; flat out float vBody; flat out vec4 vSurf; flat out vec3 vU; flat out vec3 vV2; flat out vec3 vPick; flat out vec2 vWr;
 float lit(vec3 p) {
   if (uShadowOn == 0) return 1.0;
   vec4 q = uSunVP * vec4(p, 1.0); vec3 c = q.xyz / q.w * 0.5 + 0.5;
@@ -418,6 +428,9 @@ void main() {
   if (kind != 6 && kind != 3) { float w = length(V), wmin = uPx * dist * 1.1; if (w > 1e-6 && w < wmin) V *= wmin / w; }
   vec3 N = cross(U, V); N = length(N) > 1e-9 ? normalize(N) : e; if (dot(N, toE) < 0.0) N = -N;
   float alpha = a0.w;
+  // (a splat on a surface: seen edge-on it narrows and fades, no sliver, no gap)
+  vSurf = vec4(a9.xyz, a9.w); vU = normalize(U); vV2 = normalize(V); vWr = a10.zw;
+  if (dot(a9.xyz, a9.xyz) > 0.01) { float facing = abs(dot(normalize(a9.xyz), e)); V *= mix(0.4, 1.0, smoothstep(0.05, 0.45, facing)); alpha *= smoothstep(0.03, 0.22, facing); }
   // (whole marks withdraw with distance, by rank, all of a mark's stamps on its one anchor)
   float rank = a3.w, f0 = (14.0 + (uFar * 1.15 - 14.0) * rank * rank) * uDetail; bool sky = a7.w > 0.5; vBody = max(0.0, -a7.w);
   // (withdrawing, a mark shrinks to its anchor rather than fading (Switchback's rule): no ghost of half-alpha marks far off,
@@ -438,6 +451,7 @@ void main() {
   // (brought toward the eye along its own view ray (Switchback's lift), by what the old normal bias gave in depth: the same
   // clearance over its receiver, but no slide across the screen as the eye moves)
   vec3 ep = uEye - p; float ed = length(ep);
+  { vec4 q0 = uVP * vec4(c, 1.0), q1 = uVP * vec4(c + U, 1.0); vec2 sd2 = q1.xy / q1.w - q0.xy / q0.w; vPick = vec3(length(sd2) > 1e-6 ? normalize(sd2) : vec2(1.0, 0.0), a10.x); vSurf.w = a9.w; }
   gl_Position = uVP * vec4(p + ep / max(ed, 1e-4) * min((0.004 + dist * 0.0012) / max(abs(dot(N, ep / max(ed, 1e-4))), 0.25), ed * 0.5), 1.0);
 }`;
 const NOISE = `
@@ -448,8 +462,8 @@ float fbm(vec2 p) { float v = 0.0, a = 0.5; for (int i = 0; i < 3; i++) { v += a
 `;
 const FS = `#version 300 es
 precision highp float;
-in vec2 vQ; in vec3 vW; in float vFog; flat in vec4 vCol; flat in vec4 vP; flat in vec4 vS; flat in vec3 vMin; flat in vec3 vMax; flat in vec2 vT; flat in vec4 vCol2; flat in vec3 vN; flat in float vReach; flat in float vBody;
-uniform vec3 uHaze; uniform float uFade; uniform float uGrain; uniform int uCount; uniform sampler2D uBody; uniform int uBodyOn; uniform float uBreak;
+in vec2 vQ; in vec3 vW; in float vFog; flat in vec4 vCol; flat in vec4 vP; flat in vec4 vS; flat in vec3 vMin; flat in vec3 vMax; flat in vec2 vT; flat in vec4 vCol2; flat in vec3 vN; flat in float vReach; flat in float vBody; flat in vec4 vSurf; flat in vec3 vU; flat in vec3 vV2; flat in vec3 vPick; flat in vec2 vWr;
+uniform vec3 uHaze; uniform float uFade; uniform float uGrain; uniform int uCount; uniform sampler2D uBody; uniform int uBodyOn; uniform float uBreak; uniform vec3 uEyeF; uniform vec3 uPaperF; uniform vec3 uSunD; uniform vec3 uLit; uniform vec3 uShd; uniform sampler2D uUnder; uniform int uUnderOn; uniform vec2 uRes;
 uniform highp sampler2DShadow uShadowMap; uniform highp mat4 uSunVP; uniform highp int uShadowOn;
 out vec4 o;
 ${NOISE}
@@ -473,7 +487,7 @@ void main() {
   float side = 1.0 - 0.17 * noise(vec2(k * 0.9, sd + (t > 0.0 ? 3.1 : 7.7))) - 0.08 * noise(vec2(k * 4.0, sd + (t > 0.0 ? 1.3 : 5.9)));
   // (a figure's marks a loaded brush's: sides torn by the bristles, the edge breaking where the paint thins)
   if (vBody > 0.0) side = min(1.1, (side + 0.12) * (1.0 + 0.32 * (noise(vec2(k * 3.0, sd + (t > 0.0 ? 11.0 : 17.0))) - 0.5) + 0.2 * (noise(vec2(k * 12.0, sd + (t > 0.0 ? 4.0 : 8.0))) - 0.5)));
-  float hw = prof * side;
+  float hw = prof * side * mix(vWr.x, vWr.y, vQ.x * 0.5 + 0.5);
   // (bristles: streaks along it, a dozen and more across it, whatever its width)
   float br = 0.6 * noise(vec2((t * 0.5 + 0.5) * 13.0 + sd, k * 0.3)) + 0.4 * noise(vec2((t * 0.5 + 0.5) * 34.0 + sd * 1.7, k * 0.7));
   // (the paper's tooth in the mark: on the mark itself, in its own metres, so it travels with it (no crawl as the eye moves);
@@ -536,6 +550,27 @@ void main() {
   a *= vCol.a * (1.0 - vFog * uFade);
   col = mix(col, uHaze, vFog * (1.0 - uFade));
   col *= 1.0 - uGrain * 0.08 * (grain - 0.5);
+  // (load: the paint thins as it's laid out along the stroke, thick where it lands; where it's thin the bristles break it)
+  float ld = vSurf.w, thick = ld > 0.0 ? ld * (1.15 - 0.85 * u) : 0.0;
+  if (ld > 0.0) { a *= smoothstep(0.0, 0.12, thick * 1.6 - (1.0 - br) * 0.7 + 0.15); col *= 0.94 + 0.12 * min(thick, 1.0); }
+  // (lit as a splat on its surface: the sun on the surface's normal, bumped by the bristles' relief (the paint's thickness), a
+  // gloss on the ridges where they turn to the light)
+  if (dot(vSurf.xyz, vSurf.xyz) > 0.01) {
+    float e1 = 0.06, b1 = 0.6 * noise(vec2(((t + e1) * 0.5 + 0.5) * 13.0 + sd, k * 0.3)) + 0.4 * noise(vec2(((t + e1) * 0.5 + 0.5) * 34.0 + sd * 1.7, k * 0.7));
+    float rel = (0.25 + max(thick, 0.0)) * 0.9, dh = (b1 - br) / e1;
+    vec3 n0 = normalize(vSurf.xyz), n = normalize(n0 - vV2 * dh * rel * 0.12), L = normalize(uSunD), Vw = normalize(uEyeF - vW);
+    float lam = smoothstep(-0.25, 0.75, dot(n, L)), gloss = pow(max(dot(reflect(-L, n), Vw), 0.0), 18.0) * (0.15 + 0.5 * min(thick, 1.0));
+    col = col * mix(uShd * 0.78, uLit * 1.05, lam) + vec3(gloss) * 0.6;
+  }
+  // (wet into wet: the paint under it picked up and dragged along the stroke, most where it lands)
+  if (uUnderOn == 1 && vPick.z > 0.0) {
+    vec2 back = -vPick.xy * vec2(0.5 * uRes.x, 0.5 * uRes.y) / max(uRes.x, uRes.y) * 60.0 * (0.4 + br);
+    // (only paint is picked up, never the paper: where what's behind is paper, what's here; where neither, nothing)
+    vec4 un = texture(uUnder, (gl_FragCoord.xy + back) / uRes), here = texture(uUnder, gl_FragCoord.xy / uRes);
+    float pb = step(0.06, distance(un.rgb, uPaperF)), ph = step(0.06, distance(here.rgb, uPaperF));
+    vec3 src = pb > 0.5 ? un.rgb : here.rgb; float wet = vPick.z * (1.0 - smoothstep(0.0, 0.85, u)) * max(pb, ph);
+    col = mix(col, src, wet * (0.35 + 0.4 * br));
+  }
   if (a < 0.003) discard;
   o = vec4(col, min(a, 1.0));
 }`;
@@ -608,6 +643,7 @@ export class StrokePainter {
   stamps = 0;
   /** the underpainting left out (`?under=0`, U): only the strokes, to see what they cover */
   noUnder = false;
+  private utex: WebGLTexture | null = null; private usize = [0, 0];
   /** another ground than the look's, and its underpainting broken to show it (the brush board's ochre: for judging whites) */
   paperOverride: V | null = null;
   /** the lit body: its program, its mesh's buffer and VAO, where it's rendered (a colour texture and depth, the drawing buffer's
@@ -615,8 +651,8 @@ export class StrokePainter {
   private bprog!: WebGLProgram; private bbuf!: WebGLBuffer; private bvao!: WebGLVertexArrayObject; private bfbo: WebGLFramebuffer | null = null; private btex: WebGLTexture | null = null; private brb: WebGLRenderbuffer | null = null; private bsize = [0, 0]; private bodyOn = false; private bibuf!: WebGLBuffer; private bicount = 0;
 
   constructor(private gl: WebGL2RenderingContext, program: (vs: string, fs: string, attribs: string[]) => WebGLProgram) {
-    this.prog = program(VS, FS, ['aQ', 'a0', 'a1', 'a2', 'a3', 'a4', 'a5', 'a6', 'a7', 'a8']);
-    for (const n of ['uVP', 'uEye', 'uFar', 'uFogNear', 'uDetail', 'uSunC', 'uPx', 'uShadowMap', 'uSunVP', 'uShadowOn', 'uHaze', 'uFade', 'uGrain', 'uCount', 'uBody', 'uBodyOn', 'uBreak']) this.u[n] = gl.getUniformLocation(this.prog, n);
+    this.prog = program(VS, FS, ['aQ', 'a0', 'a1', 'a2', 'a3', 'a4', 'a5', 'a6', 'a7', 'a8', 'a9', 'a10']);
+    for (const n of ['uVP', 'uEye', 'uFar', 'uFogNear', 'uDetail', 'uSunC', 'uPx', 'uShadowMap', 'uSunVP', 'uShadowOn', 'uHaze', 'uFade', 'uGrain', 'uCount', 'uBody', 'uBodyOn', 'uBreak', 'uSunD', 'uLit', 'uShd', 'uUnder', 'uUnderOn', 'uRes', 'uEyeF', 'uPaperF']) this.u[n] = gl.getUniformLocation(this.prog, n);
     this.pprog = program(PVS, PFS, ['aQ']); for (const n of ['uPaper', 'uGrain']) this.u['p' + n] = gl.getUniformLocation(this.pprog, n);
     this.kprog = program(KVS, KFS, ['aQ']); for (const n of ['uInv', 'uTop', 'uHor', 'uGrain']) this.u['k' + n] = gl.getUniformLocation(this.kprog, n);
     this.corner = gl.createBuffer()!; gl.bindBuffer(gl.ARRAY_BUFFER, this.corner); gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
@@ -674,7 +710,7 @@ export class StrokePainter {
     gl.bindVertexArray(vao);
     gl.bindBuffer(gl.ARRAY_BUFFER, this.corner); gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
     gl.bindBuffer(gl.ARRAY_BUFFER, buf);
-    for (let i = 0; i < 9; i++) { gl.enableVertexAttribArray(1 + i); gl.vertexAttribPointer(1 + i, 4, gl.FLOAT, false, STAMP * 4, (first * STAMP + i * 4) * 4); gl.vertexAttribDivisor(1 + i, 1); }
+    for (let i = 0; i < 11; i++) { gl.enableVertexAttribArray(1 + i); gl.vertexAttribPointer(1 + i, 4, gl.FLOAT, false, STAMP * 4, (first * STAMP + i * 4) * 4); gl.vertexAttribDivisor(1 + i, 1); }
     gl.bindVertexArray(null);
     return vao;
   }
@@ -760,23 +796,25 @@ export class StrokePainter {
     }
     gl.uniform1i(this.u.uShadowMap, 3); gl.uniform1i(this.u.uShadowOn, o.sunVP ? 1 : 0); if (o.sunVP) gl.uniformMatrix4fv(this.u.uSunVP, false, o.sunVP);
     gl.uniform3fv(this.u.uHaze, o.light.haze); gl.uniform1f(this.u.uFade, R.fadeToPaper); gl.uniform1f(this.u.uGrain, R.grain); gl.uniform1i(this.u.uCount, this.counting ? 1 : 0); gl.uniform1f(this.u.uBreak, this.paperOverride ? 1 : 0);
+    { const BL = R.bodyLight ? R.bodyLight(o.light) : { sunlit: [1, 1, 1] as V, shade: [0.6, 0.6, 0.7] as V }; gl.uniform3fv(this.u.uSunD, o.light.sun); gl.uniform3fv(this.u.uLit, BL.sunlit); gl.uniform3fv(this.u.uShd, BL.shade); gl.uniform1i(this.u.uUnderOn, 0); gl.uniform2f(this.u.uRes, gl.drawingBufferWidth, gl.drawingBufferHeight); gl.uniform3f(this.u.uEyeF, o.eye[0], o.eye[1], o.eye[2]); gl.uniform3fv(this.u.uPaperF, this.paperOverride ?? R.paper); }
     gl.depthMask(false); gl.depthFunc(gl.LEQUAL); gl.enable(gl.BLEND);
     // (toward the eye by the slope too: a face seen edge-on still passes against its own depth, no paper at a box's edge)
     gl.enable(gl.POLYGON_OFFSET_FILL); gl.polygonOffset(-2, -2);
     if (this.counting) gl.blendFunc(gl.ONE, gl.ONE); else gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ZERO, gl.ONE);
     // (the moving marks: the sky about the eye, the runner's shadow, the runner)
-    const dyn: Mark[][] = [[], [], []];
+    const dyn: Mark[][] = [[], [], [], []];
     if (R.sky && this.skyFor !== o.light.key) { this.skyMarks = R.sky(o.light); this.skyFor = o.light.key; }
     if (R.sky && !o.bare) for (const m of this.skyMarks) dyn[0].push({ ...m, a: add(o.eye as V, scale(m.a, o.far * 1.3)), b: add(o.eye as V, scale(m.b, o.far * 1.3)), width: m.width * o.far * 1.3 });
     const parts = o.bones.length && !o.noFigure ? partsOf(o.bones, o.eye, unit(o.light.sun), o.city) : [];
     if (parts.length && !o.bare && R.shadow) { const pel = parts.find((p) => p.kind === 'pelvis') ?? parts[0], c = scale(add(pel.a, pel.b), 0.5); R.shadow(parts, receivers(o.city, c[0], c[1], c[2], o.light.sun), (m) => dyn[1].push(m), o.light); }
     if (parts.length && !o.noFigure) R.figure(parts, o.palette, (m) => dyn[2].push(m), o.light);
-    if (o.extra) dyn[2].push(...o.extra);
+    if (o.extra) for (const m of o.extra) dyn[m.pick ? 3 : 2].push(m);
+    { const keep: Mark[] = []; for (const m of dyn[2]) (m.pick ? dyn[3] : keep).push(m); dyn[2] = keep; }
     const flat: number[] = [], dc: number[] = [];
     for (const ms of dyn) { const n0 = flat.length; for (const m of ms) deposit(m, flat); dc.push((flat.length - n0) / STAMP); }
     const nd = Math.min(this.dynCap, flat.length / STAMP); this.dynData.set(flat.slice(0, nd * STAMP));
     gl.bindBuffer(gl.ARRAY_BUFFER, this.dyn.buf); gl.bufferSubData(gl.ARRAY_BUFFER, 0, this.dynData, 0, nd * STAMP);
-    const dynAt = [0, dc[0], dc[0] + dc[1]];
+    const dynAt = [0, dc[0], dc[0] + dc[1], dc[0] + dc[1] + dc[2]];
     const drawDyn = (i: number) => { const n = Math.min(dc[i], Math.max(0, nd - dynAt[i])); if (!n) return; const v = this.vaoAt(this.dyn.buf, dynAt[i]); gl.bindVertexArray(v); gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, n); gl.bindVertexArray(null); gl.deleteVertexArray(v); };
     drawDyn(0);
     count('sky');
@@ -793,6 +831,13 @@ export class StrokePainter {
     // the city stands in front)
     if (this.bodyOn) { gl.activeTexture(gl.TEXTURE4); gl.bindTexture(gl.TEXTURE_2D, this.btex); gl.activeTexture(gl.TEXTURE0); gl.uniform1i(this.u.uBody, 4); gl.uniform1i(this.u.uBodyOn, 1); }
     drawDyn(2);
+    // (the wet layer: what's painted so far copied, and the strokes that pick paint up laid over it, sampling it)
+    if (dc[3] > 0 && !this.counting) {
+      const W = gl.drawingBufferWidth, H = gl.drawingBufferHeight;
+      if (!this.utex || this.usize[0] !== W || this.usize[1] !== H) { if (this.utex) gl.deleteTexture(this.utex); this.utex = gl.createTexture()!; gl.bindTexture(gl.TEXTURE_2D, this.utex); gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, W, H, 0, gl.RGBA, gl.UNSIGNED_BYTE, null); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE); this.usize = [W, H]; }
+      gl.activeTexture(gl.TEXTURE5); gl.bindTexture(gl.TEXTURE_2D, this.utex); gl.copyTexSubImage2D(gl.TEXTURE_2D, 0, 0, 0, 0, 0, W, H); gl.activeTexture(gl.TEXTURE0);
+      gl.uniform1i(this.u.uUnder, 5); gl.uniform1i(this.u.uUnderOn, 1); drawDyn(3); gl.uniform1i(this.u.uUnderOn, 0);
+    }
     gl.uniform1i(this.u.uBodyOn, 0);
     lap('figure');
     this.stamps = stamps;
