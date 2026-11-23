@@ -751,4 +751,9 @@ console.log('roof jumps: brushwork ok');
   const alone = sets.reduce((t, b) => t + count(b), 0), together = count(sets.flat());
   assert.equal(together, alone, `several figures painted as each alone (${together} marks together, ${alone} apart)`);
   console.log(`painted figures: ${together} marks for three together, the same as apart`);
+  // (painted in splines, every part of every figure is a spline: the only stamps left are the contact shadows on the ground)
+  for (const c of CHARACTERS) { const r = new Runner(city, c), rig = new Rig(c); rig.update(1, r); const bones = rig.bones(r);
+    const stamps = [], spl = []; strokeGouacheRules.figure(STROKES.partsOf(bones, eye, [-0.55, 0.6, 0.58], city), pal, (m) => stamps.push(m), light, (s) => spl.push(s));
+    const off = stamps.filter((m) => !/contact/.test(m.key)); assert.equal(off.length, 0, `${c.name}: no stamps on the figure in splines (${off.map((m) => m.key).slice(0, 4).join(', ')})`); assert.ok(spl.length > 80, `${c.name}: painted in splines (${spl.length})`); }
+  console.log(`every character painted wholly in splines (${CHARACTERS.length} characters; only ground contact shadows as stamps)`);
 }

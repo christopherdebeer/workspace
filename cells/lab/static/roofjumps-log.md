@@ -506,3 +506,4 @@ In response to the critique of the 13:29 build. The full notes are in `roofjumps
 
 ## 23 November (evening): round seven worked in order
 The full notes are in `roofjumps-studies/round8/README.md`. The changes: a hard terminator per form and no per-stroke value noise; garment ease profiles (top, sleeves, trouser legs) with hem and cuff bands; drape strokes from the shoulder points; face planes (sockets, nose, mouth) with flattened face normals; a larger sailor collar; skirt and coat flare. Still to do: the brush-from-rest motion test, and hands and feet as splines.
+- Every part is now a spline: hands (one shape, plus the thumb), shoes (along the foot, with a sole, a toe and the ankle), a catch-all for anything left, and contact lines, pleats and the flick converted. The old stamp figure is off when splines are available. New unit test: every character is painted wholly in splines, with only the ground contact shadows as stamps.

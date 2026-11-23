@@ -9,3 +9,9 @@ The five changes, in the order agreed:
 
 - `cast-play-size.jpg`: the teen, the slight figure, the schoolgirl, the older figure and the runner.
 - `heads.jpg`: the teen, the slight figure, the runner in profile, and the schoolgirl from the front.
+
+## Then: every part painted the new way
+- `cast-all-splines.jpg`: the cast with nothing on the figure left as an old stamp.
+- `hands-shoes.jpg`: the teen's hands, the schoolgirl's loafers and socks, and the runner's shoe in profile.
+
+Hands are one shape (the palm through the fingers to their tips) plus the thumb, over the cuff. Shoes are painted along the foot, heel to toe: the top, two sides, a darker sole, a toe cap, and an ankle stroke down into the shoe from inside the trouser leg. Anything else of the body gets panels round its own block. The contact line under a gripping hand, the skirt's pleats and the ponytail's flick are drawn as splines. The old stamp figure (the torso and limb pulls, the back pull, the seat, the wraps) is now painted only where splines aren't available; the ground contact shadows stay as stamps. A unit test checks that every character is painted wholly in splines.

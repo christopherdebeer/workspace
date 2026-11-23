@@ -472,10 +472,37 @@ export const strokeGouacheRules: StrokeRules = {
           ps({ ctrl: ys.map((y, i) => P3(b.m, b.x ?? 0, y, b.zc ?? 0)) as V4, surfs: [nn, nn, nn, nn], widths: ys.map((_, i) => b.w0 + ((b.w1 - b.w0) * i) / 3) as N4, col: pig(q, k), load: 0.6, dry: 0.12, heart: 0.4, body: 0.001, key: k, rank: 1, taper: [w * 0.08, w * 0.12] }, q.dist, 3); }
         else panels(`f:${q.name}:${Math.round(q.a[0] * 1000)}`, [q], { n: 3, s0: -0.04, s1: 1.04, puff: 1.04, th0: 0.5, layer: 3 });
         fielded.add(q.name); }
+      // (the shoes: along the foot, heel to toe (its block's z; its y is the shoe's height): its top, its two sides, the sole a
+      // value darker, the toe rounded; and the ankle, a short stroke from inside the trouser leg down into the shoe)
+      for (const n of ['L', 'R']) { const ft = by.get('foot' + n); if (!ft?.bone) continue; const b = ft.bone, x0 = b.x ?? 0, zc = b.zc ?? 0, h = Math.abs(b.y1 - b.y0), wd = (b.w0 + b.w1) / 2, dz = (Math.min(b.d0, b.d1) + Math.max(b.d0, b.d1)) / 4 * 1.04, yt = Math.max(b.y0, b.y1), yb = Math.min(b.y0, b.y1);
+        const zs = lerp4(zc - dz, zc + dz), along = (k: string, x: number, y: number, nn: V, w: N4, col: V) => ps({ ctrl: zs.map((z, i) => P3(b.m, x, y + (i === 3 ? (y > yb + h * 0.5 ? -h * 0.25 : h * 0.15) : 0), z)) as V4, surfs: [nn, nn, nn, nn], widths: w, col, load: 0.65, dry: 0.12, heart: 0.4, body: 0.001, key: k, rank: 1, front: true, taper: [w[0] * 0.3, w[3] * 0.6] }, ft.dist, 1.2);
+        const c = pig(ft, `f:shoe${n}`);
+        along(`f:shoe${n}t`, x0, yt - h * 0.1, D3(b.m, 0, 1, 0.15), [wd * 0.95, wd * 1.05, wd * 1.05, wd * 0.8], c);
+        for (const sd of [-1, 1]) along(`f:shoe${n}s${sd}`, x0 + sd * wd * 0.45, (yt + yb) / 2, D3(b.m, sd, 0.1, 0), [h * 0.95, h * 1.0, h, h * 0.8], scale(c, 0.97));
+        along(`f:shoe${n}b`, x0, yb + h * 0.08, D3(b.m, 0, -0.3, 0), [wd * 0.9, wd, wd, wd * 0.7], scale(c, 0.7));
+        { const tz = zc + dz * 0.95, tc = [-1, -0.35, 0.35, 1].map((t) => P3(b.m, x0 + t * wd * 0.48, (yt + yb) / 2, tz + (1 - t * t) * dz * 0.06)) as V4, tn = D3(b.m, 0, 0.3, 1);
+          ps({ ctrl: tc, surfs: [tn, tn, tn, tn], widths: [h * 0.8, h * 0.9, h * 0.9, h * 0.8], col: scale(c, 1.03), load: 0.6, dry: 0.12, heart: 0.4, body: 0.001, key: `f:toe${n}`, rank: 1, front: true, taper: [h * 0.3, h * 0.3] }, ft.dist - 0.002, 1.3); }
+        const sh = by.get('shin' + n); if (sh?.bone) { const sb = sh.bone, a = P3(sb.m, sb.x ?? 0, sb.y1 * 0.92, sb.zc ?? 0), bb = P3(b.m, x0, yt - h * 0.2, zc - dz * 0.35), w = (sb.w1 + sb.d1) / 2;
+          ps({ ctrl: [a, add(scale(a, 0.67), scale(bb, 0.33)), add(scale(a, 0.33), scale(bb, 0.67)), bb], widths: [w, w * 0.95, w * 0.95, w * 0.9], col: pig(sh, `f:ankle${n}`), load: 0.6, dry: 0.15, heart: 0.4, body: 0.001, key: `f:ankle${n}`, rank: 1 }, sh.dist, 0.8); }
+        fielded.add(ft.name); }
+      // (the hands: one shape, palm through the fingers to their tips, a little fuller than the bones; the thumb its own; a hand that
+      // holds or is planted a value darker and closed)
+      for (const n of ['L', 'R']) { const pa = by.get('palm' + n), fi = by.get('fingers' + n), ti = by.get('tips' + n), th = by.get('thumb' + n), tt = by.get('thumbtip' + n);
+        const grip = [pa, fi, ti].some((q) => q?.gripping || q?.planted), sk = (q: (typeof parts)[number]) => (grip ? { ...q, mat: q.mat } : q);
+        if (pa?.bone && fi?.bone && ti?.bone) { panels(`f:hand${n}`, [sk(pa), sk(fi), sk(ti)], { n: 3, s0: -0.12, s1: 1.08, puff: 1.18, th0: 0.4, layer: 2 }); }
+        if (th?.bone && tt?.bone) panels(`f:thumb${n}`, [th, tt], { n: 2, s0: -0.1, s1: 1.08, puff: 1.12, th0: 0.6, layer: 2.1 }); }
+      // (anything else of the body not painted yet: panels round its own block)
+      for (const q of parts) { if (fielded.has(q.name) || q.grid || !q.bone || q.kind === 'worn') continue;
+        panels(`f:${q.name}`, [q], { n: 4, s0: -0.08, s1: 1.08, puff: 1.06, th0: 0.4, layer: 1 }); fielded.add(q.name); }
       for (const nme of fielded) chained.add(nme);
     }
     // (a painter's value range: dark cloth painted lighter where the light takes it, a little toward the light's colour, so a near
     // black can still be modelled; pale cloth a little cooler in its shade)
+    /** an old mark as a spline: its line (a, its path, b) through four points by length; facing the eye; its width, colour, edge */
+    const toSpline = (m: Mark): Spline => { const pts = [m.a, ...(m.path ?? []), m.b], sl = pts.slice(1).map((p, i) => len(sub(p, pts[i]))), tot = sl.reduce((a, b) => a + b, 0) || 1;
+      const at = (f: number): V => { let dd = f * tot, i = 0; while (i < sl.length - 1 && dd > sl[i]) { dd -= sl[i]; i++; } return add(pts[i], scale(sub(pts[i + 1], pts[i]), Math.min(1, dd / (sl[i] || 1)))); };
+      return { ctrl: [at(0), at(1 / 3), at(2 / 3), at(1)], widths: [m.width, m.width, m.width, m.width], col: m.col, alpha: m.alpha, dry: m.dry, heart: m.heart, taper: m.taper, rank: m.rank, key: m.key, body: 0.001, load: 0.6 }; };
+    const detail = (d: number, ms: Mark[]) => { for (const m of ms) SP.push({ d: d - 0.0015, s: toSpline(m) }); };
     const tonesOf = (p: (typeof parts)[number]) => { const col = (palette[p.mat] ?? palette[0]) as V, lum = col[0] * 0.3 + col[1] * 0.59 + col[2] * 0.11, lift = Math.max(0, 0.3 - lum) * 0.75;
       const dark = mulv(col, mix([0.55, 0.57, 0.68], scale(T.deep, 0.8), T.dk)), lit0 = mulv(col, mix([1.05, 1.05, 1.05], T.sunlit, T.dk)), lit = add(lit0, scale(mix([1.0, 0.96, 0.92], T.sunlit, T.dk), lift)), front = smooth(-0.35, 0.45, p.sunFront);
       return { dark, lit, front, tone: mix(dark, lit, 0.45 + 0.35 * front) }; };
@@ -487,6 +514,7 @@ export const strokeGouacheRules: StrokeRules = {
       chained.add(pa.name); chained.add(fi.name); chained.add(ti.name);
       const skin = (palette[pa.mat - (pa.mat % 8)] ?? palette[0]) as V, sk = scale(mulv(skin, mix([0.92, 0.9, 0.94], T.sunlit, T.dk * 0.6)), 0.86), w = pa.width * 1.25;
       const low = [pa.b, fi.b, ti.b].reduce((q, r) => (r[1] < q[1] ? r : q)), along = unit(pa.side), cl = scale(along, w * 0.75);
+      if (putSpline) { detail(Math.min(pa.dist, fi.dist, ti.dist) - 0.004, [{ layer: 0, kind: K.PULL, a: sub(low, cl), b: add(low, cl), width: 0.018, col: scale(T.deep, 0.32), alpha: 0.85, dry: 0, rank: 1, key: `fig:contact${n}`, taper: [0.004, 0.004] }]); continue; }
       items.push({ d: Math.min(pa.dist, fi.dist, ti.dist) - 0.004, ms: [[
         { layer: 0, kind: K.PULL + EDGE, a: sub(low, cl), b: add(low, cl), width: 0.022, col: scale(T.deep, 0.32), alpha: 0.85, dry: 0, rank: 1, key: `fig:contact${n}` },
         { layer: 0, kind: K.PULL, a: pa.a, b: ti.b, path: [pa.b, fi.b], side: pa.side, width: w, col: sk, mix2: 0, alpha: 1, dry: 0, heart: 0.5, rank: 1, key: `fig:grip${n}`, taper: [0.006, 0.008] },
@@ -736,7 +764,7 @@ export const strokeGouacheRules: StrokeRules = {
     }
     // (detail the blocks can't show, from the character's own clothes and hair: brushwork, not geometry. Each painted just after
     // the part it's on)
-    const det = (d: number, ms: Mark[]) => { if (ms.length) items.push({ d: d - 0.0015, ms: [ms] }); };
+    const det = (d: number, ms: Mark[]) => { if (!ms.length) return; if (putSpline) detail(d, ms); else items.push({ d: d - 0.0015, ms: [ms] }); };
     const skinOf = (q: (typeof parts)[number]) => q.mat % 8 === 0, WUP: V = [0, 1, 0];
     const crease = (pu: (typeof parts)[number], pl: (typeof parts)[number], key: string) => {
       const du = unit(sub(pu.b, pu.a)), dl = unit(sub(pl.b, pl.a)), bend = Math.acos(Math.max(-1, Math.min(1, dot(du, dl))));
@@ -764,7 +792,8 @@ export const strokeGouacheRules: StrokeRules = {
       } }
     // (the figure's strokes, far to near by form, a garment over what's under it)
     if (putSpline) for (const x of SP.sort((a, b) => b.d - a.d)) putSpline(x.s);
-    for (const m of [...ground, ...items.sort((a, b) => b.d - a.d).flatMap((it) => it.ms.flat())]) put(m);
+    // (the old stamp figure only where there are no splines; the contact shadows on the ground either way)
+    for (const m of [...ground, ...(putSpline ? [] : items.sort((a, b) => b.d - a.d).flatMap((it) => it.ms.flat()))]) put(m);
   },
 };
 
