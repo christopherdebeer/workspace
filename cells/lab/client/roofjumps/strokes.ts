@@ -469,7 +469,12 @@ void main() {
   if (vCol2.a > 0.0) { float g = noise(vec2((t * 0.5 + 0.5) * 3.2 + sd * 1.3, k * 0.06)) + 0.3 * t; col = mix(col, vCol2.rgb, vCol2.a * smoothstep(0.42, 0.72, g + 0.25 * (br - 0.5))); }
   if (kind == 6) {
     // (underpainting: all of its receiver, a little uneven, no edge of its own: the clip is its edge)
-    a = 1.0; col *= 0.975 + 0.05 * noise(vec2(um * 0.12, t * 0.6 + sd));
+    // (laid as an oil sketch's ground is: broken toward its edges, and here and there inside, so the toned board shows through;
+    // the breaks on the mark itself, so they travel with it)
+    vec3 ext = vMax - vMin, dd = min(vW - vMin, vMax - vW); float e = 1e5;
+    if (ext.x > 0.05) e = min(e, dd.x); if (ext.y > 0.05) e = min(e, dd.y); if (ext.z > 0.05) e = min(e, dd.z);
+    float hole = fbm(vec2(um * 0.35, t * 1.2) + sd) + 0.3 * smoothstep(0.0, 1.2, e);
+    a = smoothstep(0.46, 0.56, hole); col *= 0.96 + 0.08 * noise(vec2(um * 0.12, t * 0.6 + sd));
   } else if (kind == 3) {
     // (a shadow passage: its receiver's shadow, from the sun's map, read through the brush so its edge breaks a little)
     float sh = 0.0;
@@ -481,7 +486,8 @@ void main() {
     col *= 0.96 + 0.08 * noise(vec2(k * 0.4, t * 1.2 + sd));
   } else if (kind == 0) {
     a = (1.0 - smoothstep(hw - 0.06, hw, at)) * gap;
-    col *= 0.95 + 0.1 * noise(vec2(k * 0.5, t * 1.5 + sd));
+    // (the bristles show in the paint: ridges a little lighter, grooves a little darker)
+    col *= 0.93 + 0.1 * noise(vec2(k * 0.5, t * 1.5 + sd)) + 0.22 * (br - 0.5);
     col *= 1.0 - 0.06 * (1.0 - smoothstep(0.0, 0.35, abs(u - heart)));
   } else if (kind == 1) {
     float r = at / max(hw, 1e-3);

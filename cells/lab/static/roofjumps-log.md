@@ -358,3 +358,18 @@ picture, contact and cast shadow drawn plainly, the cloth pushed further than th
     plus one small render.
   - Next: the head, hands and shoes as shapes of their own (they're still the rig's), the loose silhouette (sweater, scarf
     wrap), and the light read back in the stroke shader for marks' directions.
+
+## The stroke look becomes an oil sketch (round four, `static/roofjumps-studies/round4/`)
+
+- Asked for: the oil sketch is *the* stroke look, not a second one.
+- A toned ground: a warm ochre board. The city's underpainting breaks toward its edges and here and there inside (on the mark
+  itself, so it travels with it), and the board shows through.
+- The city's broad pulls, scatter and wall drags are drier, so they break where the brush runs out.
+- The bristles show in every pull: ridges lighter, grooves darker.
+- The figure in a few big strokes, per form: the shadow mass (dragged dry at its ends), the cool half-tone, a heavier lit top
+  (brighter, drier), the contour. All coloured from the lit body.
+- Taken out: the scattered painting-in strokes, fold arcs, laces, knuckles, face details. The sketch says a form in a few big
+  strokes and leaves the rest.
+- The ponytail's tip is one calligraphic flick.
+- Next: the figure's strokes looser and more gestural (wider, fewer, bending with the gesture), the head, hands and shoes as a
+  few gestural strokes, the sky and the far city looser too.
