@@ -320,3 +320,22 @@ picture, contact and cast shadow drawn plainly, the cloth pushed further than th
   joins torso to legs, the back reads as a body, not bars.
 - Next: arms from behind; the near side lock of hair sticking out in front of the face; the head's own form; then the image
   studies on pose and description, not on our render.
+- Passes and cloth, toward round three's target (the slight figure's dive):
+  - a modelling pass: a cool half-tone band on the shadow side and a warm plane on the lit, each following the form's width;
+  - a painting-in pass: smaller strokes along each form, each its own value and temperature about the local tone, never darker
+    than it, blunt-ended, kept inside the silhouette;
+  - a painter's value range: dark cloth lifted toward the light's colour where lit, so near-black trousers can be modelled;
+  - fitted cloth's folds from the pose: compression at bent elbows and knees (more as they close), stacking at trouser hems and
+    sleeve cuffs, tension from the armpit when an arm reaches, a roll where a top meets the waistband. Each a barely darker
+    trough under a lit ridge, irregular in length and lean;
+  - refinement at the points of attention: knuckles and the thumb's edge, the brow shadow and the shadow side of the nose and
+    cheek when the face is seen, shoe toe caps and laces, the ponytail's tip frayed into strands;
+  - the hip-to-arm sweep now goes under the chest as a gesture underlayer.
+  - Found, by checking every character:
+    - folds on near-black cloth were black chevrons (now ridge-led);
+    - cross-contour modelling strokes tapered into stacked arrowheads and spiked past the silhouette (now bands);
+    - painting-in strokes reaching past the edge made saw-teeth; dry tips spiked.
+  - Rule kept: nothing inside a form crosses its silhouette; the found edge is the only edge.
+  - Honest gap to the target, after this pass: the surfaces are still flat gouache planes beside its oil modelling, the head,
+    hands and shoes are still the rig's shapes, there's no bunched cloth silhouette or scarf wrap, and the light is per part,
+    not per point.
