@@ -42,7 +42,7 @@ import { Rig } from './rig';
 import { LOOKS, Renderer, invert } from './render';
 import type { Look } from './render';
 import { lookAt, mul, perspective } from './m4';
-import { TUNE, readTune, writeTune, HOUSE } from './tune';
+import { TUNE, readTune, writeTune, HOUSE, SCENE_TUNE } from './tune';
 import { palette } from './palette';
 import { plan, words } from './plan';
 import { BOARD, boardBones, boardMarks, boardSplines } from './brushtest';
@@ -61,6 +61,8 @@ import type { Follow, Waypoint } from './direct';
 const q = new URLSearchParams(location.search);
 let seed = Number(q.get('seed') ?? 1) | 0 || 1;
 const preview = q.has('preview'), still = q.has('still');
+// (a scene runs under the dials it was written against (tune.ts SCENE_TUNE); the address's own dials over those)
+if (q.get('scene')) Object.assign(TUNE, SCENE_TUNE);
 readTune(q);
 // (a preview is the picture alone: no tags on it)
 if (preview) { TUNE.auto = 1; if (!q.has('holds')) TUNE.holds = 0; }

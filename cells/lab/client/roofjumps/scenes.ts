@@ -15,6 +15,11 @@ import type { Input } from './runner';
 import { Rig } from './rig';
 import type { Character } from './character';
 import { point } from './m4';
+import { SCENE_TUNE, TUNE } from './tune';
+
+/** whether scenes run under the dials they were written against (tune.ts `SCENE_TUNE`): off, under the dials as they stand
+ * (the scenes devtool's `--dials=`) */
+export const sceneTune = { use: true };
 
 export interface Frame {
   t: number; x: number; y: number; z: number; vx: number; vz: number; vy: number; speed: number; state: string; move: string;
@@ -596,6 +601,12 @@ export const SCENES: Scene[] = [
 
 /** run a scene, the drawn body with it, and keep what the checks need */
 export function runScene(s: Scene, seed = 1, character?: Character): Run {
+  // (under the dials it was written against, for as long as it runs)
+  const kept: Record<string, number> = {};
+  if (sceneTune.use) for (const [k, v] of Object.entries(SCENE_TUNE)) { kept[k] = TUNE[k]; TUNE[k] = v; }
+  try { return runScene0(s, seed, character); } finally { for (const [k, v] of Object.entries(kept)) TUNE[k] = v; }
+}
+function runScene0(s: Scene, seed: number, character?: Character): Run {
   const city = new City(seed, false, s.course), r = new Runner(city, character), rig = new Rig(character); rig.update(1, r);
   const DT = 1 / 120, mem: Record<string, number> = {}, frames: Frame[] = [], ups: Run['ups'] = [], lands: Run['lands'] = [], moves: Run['moves'] = [{ t: 0, move: r.move }];
   let prevPv: number[] | null = null; const prevBall: (number[] | null)[] = [null, null], prevFall: (number[] | null)[] = [null, null], prevSet = [false, false];

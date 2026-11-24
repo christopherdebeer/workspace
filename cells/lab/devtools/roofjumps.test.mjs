@@ -6,7 +6,7 @@ import { build } from 'esbuild';
 import assert from 'node:assert/strict';
 const lab = new URL('../client/roofjumps/', import.meta.url).pathname;
 const out = await build({ stdin: { contents: `export * from './city'; export * from './runner'; export * from './rig'; export * from './mesh'; export * from './plan'; export * from './tune'; export * from './brush'; export * as STROKES from './strokes'; export * as MENU from './menu'; export { strokeGouacheRules } from './looks/stroke-gouache'; export { sumiRules } from './looks/sumi'; export * from './scenes'; export * from './character'; export * from './dressing';`, resolveDir: lab, loader: 'ts' }, bundle: true, write: false, format: 'esm', platform: 'node' });
-const { dressingOf, DRESS, plan, foresee, TUNE, HOUSE, DIALS, City, Runner, Rig, CHUNK, STOREY, TAG, VERTEX, chunkMesh, figureMesh, FIGURE, FIGURE_BASE, brushInput, BRUSH_SECONDS, SCENES, runScene, judge, CHARACTERS, bodyOf, STROKES, MENU, strokeGouacheRules, sumiRules } = await import('data:text/javascript;base64,' + Buffer.from(out.outputFiles[0].text).toString('base64'));
+const { dressingOf, DRESS, plan, foresee, TUNE, HOUSE, SCENE_TUNE, DIALS, City, Runner, Rig, CHUNK, STOREY, TAG, VERTEX, chunkMesh, figureMesh, FIGURE, FIGURE_BASE, brushInput, BRUSH_SECONDS, SCENES, runScene, judge, CHARACTERS, bodyOf, STROKES, MENU, strokeGouacheRules, sumiRules } = await import('data:text/javascript;base64,' + Buffer.from(out.outputFiles[0].text).toString('base64'));
 
 // the same chunk, whatever was made before it
 {
@@ -69,7 +69,8 @@ const { dressingOf, DRESS, plan, foresee, TUNE, HOUSE, DIALS, City, Runner, Rig,
   }
   // (the slowest is a held line pressed into a dead end too wide to chimney and too tall to climb (seed 1, dir 10): it runs
   // the walls and kicks back and forth; it never stops, but makes little way)
-  assert.ok(worst > 4.5, `makes its way at a run (slowest open-line pace ${worst.toFixed(1)} m/s)`);
+  // (a third of the sprint: 4.5 m/s when the sprint was 14)
+  assert.ok(worst > 0.32 * TUNE.sprint, `makes its way at a run (slowest open-line pace ${worst.toFixed(1)} m/s, sprint ${TUNE.sprint})`);
   console.log(`64 runs of ${SECONDS}s: slowest open-line pace ${worst.toFixed(1)} m/s; ${leaps} leaps, ${climbs} walls run up`);
   console.log('  moves: ' + Object.entries(moves).sort((a, b) => b[1] - a[1]).map(([m, n]) => `${m} ${n}`).join(', '));
   for (const m of ['vault', 'bound', 'flip', 'spring', 'dive', 'fall', 'roll', 'dash', 'wallrun', 'climb']) // (each still happens: how often is the director's eval's business (devtools/roofjumps-direct.mjs), not a count to chase)
@@ -104,6 +105,10 @@ const { dressingOf, DRESS, plan, foresee, TUNE, HOUSE, DIALS, City, Runner, Rig,
   assert.equal(leapsDown, 0, `never leaps for the street from a roof (${leapsDown})`);
   console.log(`the street a fall: ${lines} held lines, none leapt for the street; ${balks} stopped at an edge with only the street beyond`);
 }
+
+// (from here, scripted runs on the practice line and elsewhere, written against the dials of their day, as the scenes are:
+// under those (tune.ts SCENE_TUNE))
+Object.assign(TUNE, SCENE_TUNE); const BASE = { ...HOUSE, ...SCENE_TUNE };
 // the holds: the same whenever made; each a line on its box (an edge along a top, a sill on a face at a storey, a pipe up
 // a face, a rail down the middle of something narrow); the boxes the same with or without them; and what the hands reach
 // for is on one of them: up a wall, a sill, a pipe or the top edge, in arm's reach; over a unit, its edge
@@ -200,7 +205,7 @@ const { dressingOf, DRESS, plan, foresee, TUNE, HOUSE, DIALS, City, Runner, Rig,
     assert.equal(route.pts.length, 3 * (1 + Math.floor(STEPS / 3)), 'forecasts the full horizon even at a wall');
   }
   const r = new Runner(new City(1, true)); for (let i = 0; i < 128; i++) r.step(1 / 120, { x: 0, z: 1, jump: false });
-  const a = foresee(r, 0, 1); TUNE.gravity = 9; const b = foresee(r, 0, 1); TUNE.gravity = HOUSE.gravity;
+  const a = foresee(r, 0, 1); TUNE.gravity = 9; const b = foresee(r, 0, 1); TUNE.gravity = BASE.gravity;
   assert.notDeepEqual(a.pts, b.pts, 'a dial turned is felt');
 }
 
@@ -317,7 +322,7 @@ console.log('roofjumps: ok');
   const run = (hold) => {
     TUNE.apexHold = hold; const r = new Runner(new City(1, true)); let held = 0; const path = [];
     for (let i = 0; i < 480; i++) { const mu = r.mu, x = r.x, z = r.z, st = r.state; r.step(1 / 120, { x: 0, z: 1, jump: false }); path.push(r.x, r.y, r.z); if (st === 'air' && r.state === 'air' && r.mu === mu && (r.x !== x || r.z !== z)) held++; }
-    TUNE.apexHold = HOUSE.apexHold; return { made: { ...r.made }, held, path };
+    TUNE.apexHold = BASE.apexHold; return { made: { ...r.made }, held, path };
   };
   const plain = run(0), held = run(0.15);
   assert.ok(held.held > plain.held + 10 && held.made.bound && !held.made.fall, `the pose held while it goes on (${held.held} steps)`);
@@ -404,7 +409,7 @@ console.log('roofjumps: ok');
   assert.ok(most > 0.05 && Math.abs(still.balance) < 0.02, `a knock damps out (${most.toFixed(2)} at most, ${still.balance.toFixed(3)} after a second)`);
   TUNE.emphasis = 1; const r = new Runner(new City(1, true)); let falls = 0, frozen = 0;
   for (let i = 0; i < 600; i++) { const x = r.x, y = r.y, z = r.z; r.step(1 / 120, { x: 0, z: 1, jump: false }); if (r.move === 'fall') falls++; if (r.x === x && r.y === y && r.z === z && r.speed > 1) frozen++; }
-  TUNE.emphasis = HOUSE.emphasis;
+  TUNE.emphasis = BASE.emphasis;
   assert.ok(r.made.bound && !falls && frozen > 3, `emphasis holds (${frozen} steps) and lands as aimed`);
   const tired = new Runner(new City(1, true)); let low = 1;
   for (let i = 0; i < 120 * 6; i++) { tired.step(1 / 120, { x: 0, z: 0, jump: i % 150 === 0 }); low = Math.min(low, tired.stamina); }
@@ -523,7 +528,7 @@ console.log('roofjumps: ok');
     if (!on && prevOn) off.push(last);
     was = [foot[12], foot[14]]; prevOn = on;
   }
-  TUNE.sprint = HOUSE.sprint;
+  TUNE.sprint = BASE.sprint;
   const mean = (a) => a.reduce((s, x) => s + x, 0) / a.length, step = mean(falls.slice(1).map((z, i) => z - falls[i])) / 2, cadence = r.speed / step;
   assert.ok(step > 2.1 && step < 2.5 && cadence > 4.2 && cadence < 4.9, `a sprinter's step (${step.toFixed(2)} m, ${cadence.toFixed(1)} a second)`);
   assert.ok(mean(td) > 0.18 && mean(td) < 0.4 && mean(off) < -0.3, `down ahead, up behind (${mean(td).toFixed(2)}, ${mean(off).toFixed(2)})`);

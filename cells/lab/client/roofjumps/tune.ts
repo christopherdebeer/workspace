@@ -14,36 +14,36 @@ const d = (group: string, key: string, name: string, min: number, max: number, s
 const t = (group: string, key: string, name: string, house: number): Dial => ({ group, key, name, min: 0, max: 1, step: 1, house, toggle: true });
 
 export const DIALS: Dial[] = [
-  t('plan', 'plan', 'show the plan', 0),
+  t('plan', 'plan', 'show the plan', 1),
   t('plan', 'readout', 'say it in words', 0),
   d('plan', 'horizon', 'how far ahead', 0.5, 6, 0.1, 3, 's'),
   d('plan', 'fan', 'ways each side', 1, 6, 1, 4),
   d('plan', 'fanStep', 'between ways', 4, 30, 1, 11, '°'),
-  d('plan', 'assist', 'steer onto the best', 0, 1, 0.05, 0),
-  d('plan', 'wStreet', 'cost of the street', 0, 40, 1, 14),
+  d('plan', 'assist', 'steer onto the best', 0, 1, 0.05, 1),
+  d('plan', 'wStreet', 'cost of the street', 0, 40, 1, 40),
   d('plan', 'wClimb', 'cost of a climb', 0, 20, 0.5, 6, '/s'),
   d('plan', 'wGlide', 'cost of gliding', 0, 10, 0.5, 2, '/s'),
   d('plan', 'wFlow', 'worth of a wall or ledge', 0, 10, 0.5, 2, '/s'),
   d('plan', 'wChoreo', 'worth of what is good to watch', 0, 5, 0.1, 1),
 
-  d('run', 'run', 'run', 4, 16, 0.5, 10.5, 'm/s'),
-  d('run', 'sprint', 'sprint', 6, 22, 0.5, 14, 'm/s'),
-  d('run', 'dash', 'dash', 8, 30, 0.5, 18.5, 'm/s'),
-  d('run', 'dashTime', 'dash lasts', 0, 2, 0.05, 0.55, 's'),
-  d('run', 'accel', 'quickness', 10, 120, 1, 42, 'm/s²'),
-  d('run', 'grip', 'grip (braking and turning)', 4, 60, 0.5, 14, 'm/s²'),
-  d('run', 'ledgeSpeed', 'on a ledge', 4, 16, 0.5, 10.5, 'm/s'),
-  d('run', 'ledgePull', 'a ledge draws you', 0, 1, 0.05, 0.3),
+  d('run', 'run', 'run', 4, 16, 0.5, 6.5, 'm/s'),
+  d('run', 'sprint', 'sprint', 6, 22, 0.5, 11, 'm/s'),
+  d('run', 'dash', 'dash', 8, 30, 0.5, 14, 'm/s'),
+  d('run', 'dashTime', 'dash lasts', 0, 2, 0.05, 1.15, 's'),
+  d('run', 'accel', 'quickness', 10, 120, 1, 31, 'm/s²'),
+  d('run', 'grip', 'grip (braking and turning)', 4, 60, 0.5, 4, 'm/s²'),
+  d('run', 'ledgeSpeed', 'on a ledge', 4, 16, 0.5, 7.5, 'm/s'),
+  d('run', 'ledgePull', 'a ledge draws you', 0, 1, 0.05, 0.6),
 
-  d('leap', 'gravity', 'gravity', 6, 40, 0.5, 20, 'm/s²'),
-  d('leap', 'jumpReach', 'reach', 3, 20, 0.5, 8, 'm'),
-  d('leap', 'rise', 'springs up', 1, 7, 0.1, 3.4, 'm'),
-  d('leap', 'drop', 'drops before looking higher', 2, 20, 0.5, 7, 'm'),
-  d('leap', 'leapSpeed', 'fastest leap', 8, 30, 0.5, 19, 'm/s'),
-  d('leap', 'diveDrop', 'dives from', 0.5, 8, 0.1, 4.5, 'm down'),
-  d('leap', 'hang', 'extra height', 0, 2, 0.05, 0, 'm'),
+  d('leap', 'gravity', 'gravity', 6, 40, 0.5, 29.5, 'm/s²'),
+  d('leap', 'jumpReach', 'reach', 3, 20, 0.5, 11, 'm'),
+  d('leap', 'rise', 'springs up', 1, 7, 0.1, 4.6, 'm'),
+  d('leap', 'drop', 'drops before looking higher', 2, 20, 0.5, 4, 'm'),
+  d('leap', 'leapSpeed', 'fastest leap', 8, 30, 0.5, 15, 'm/s'),
+  d('leap', 'diveDrop', 'dives from', 0.5, 8, 0.1, 6.9, 'm down'),
+  d('leap', 'hang', 'extra height', 0, 2, 0.05, 0.55, 'm'),
   d('leap', 'apexHold', 'held at the top', 0, 0.3, 0.01, 0, 's'),
-  d('leap', 'emphasis', 'effort shown', 0, 1, 0.05, 0),
+  d('leap', 'emphasis', 'effort shown', 0, 1, 0.05, 1),
 
   t('leap', 'streetFail', 'the street is a fall (a life, back to a checkpoint)', 1),
   d('glide', 'glideDrop', 'glides from', 2, 20, 0.5, 6, 'm down'),
@@ -54,16 +54,16 @@ export const DIALS: Dial[] = [
 
   t('wall', 'walls', 'runs along walls', 1),
   d('wall', 'wallTime', 'a wall run lasts', 0.2, 4, 0.05, 1.5, 's'),
-  d('wall', 'wallLift', 'leaning in lifts you', 0, 60, 1, 30, 'm/s²'),
+  d('wall', 'wallLift', 'leaning in lifts you', 0, 60, 1, 47, 'm/s²'),
   d('wall', 'wallRise', 'climbing at most', 0, 14, 0.5, 6, 'm/s'),
   d('wall', 'wallCost', 'going up spends the run', 0, 4, 0.1, 1, '×'),
   d('wall', 'wallDrag', 'and the pace along', 0, 12, 0.5, 3, 'm/s²'),
   d('wall', 'climbSquare', 'a climb only if met within', 0, 60, 1, 20, '° of square'),
-  d('wall', 'wallSpeed', 'at least', 4, 20, 0.5, 10.5, 'm/s'),
+  d('wall', 'wallSpeed', 'at least', 4, 20, 0.5, 8, 'm/s'),
   d('wall', 'wallReach', 'takes a wall within', 0.4, 2.5, 0.05, 1.05, 'm'),
-  d('wall', 'wallGravity', 'gravity on a wall', 0, 20, 0.5, 9, 'm/s²'),
-  d('wall', 'kick', 'kick off', 2, 12, 0.5, 6, 'm/s'),
-  d('wall', 'climb', 'up a wall', 4, 30, 0.5, 14, 'm/s'),
+  d('wall', 'wallGravity', 'gravity on a wall', 0, 20, 0.5, 16, 'm/s²'),
+  d('wall', 'kick', 'kick off', 2, 12, 0.5, 9, 'm/s'),
+  d('wall', 'climb', 'up a wall', 4, 30, 0.5, 23.5, 'm/s'),
 
   t('holds', 'holds', 'show the holds', 1),
   d('holds', 'holdsNear', 'shown within', 3, 40, 1, 10, 'm'),
@@ -79,8 +79,8 @@ export const DIALS: Dial[] = [
   d('eye', 'rush', 'widens with speed', 0, 30, 1, 13, '°'),
   d('eye', 'follow', 'comes round behind', 0, 4, 0.05, 0.9),
   d('eye', 'side', 'swung round', -180, 180, 5, 0, '°'),
-  d('eye', 'eyeLope', 'rides the stride (0 none, 1 full, 2 exaggerated)', 0, 2, 0.05, 0.4),
-  d('eye', 'eyeImpact', 'feels the landings (0 none, 1 full, 2 exaggerated)', 0, 2, 0.05, 0.4),
+  d('eye', 'eyeLope', 'rides the stride (0 none, 1 full, 2 exaggerated)', 0, 2, 0.05, 1.5),
+  d('eye', 'eyeImpact', 'feels the landings (0 none, 1 full, 2 exaggerated)', 0, 2, 0.05, 1.55),
 
   d('time', 'time', 'speed of time', 0.05, 1.5, 0.05, 1, '×'),
   t('time', 'pause', 'held', 0),
@@ -88,6 +88,12 @@ export const DIALS: Dial[] = [
 ];
 
 export type Tune = Record<string, number>;
+/**
+ * The dials the authored scenes (scenes.ts) were written against: the house as it was before the 24 November set (heavier,
+ * slower, more wall and ledge). A scene's scripted stick is timed to those arcs and that pace, so scenes run under these
+ * (`runScene`, and `?scene=`), and stay a test of the mechanics they were made for; an address's dials still go over them.
+ */
+export const SCENE_TUNE: Tune = { plan: 0, assist: 0, wStreet: 14, run: 10.5, sprint: 14, dash: 18.5, dashTime: 0.55, accel: 42, grip: 14, ledgeSpeed: 10.5, ledgePull: 0.3, gravity: 20, jumpReach: 8, rise: 3.4, drop: 7, leapSpeed: 19, diveDrop: 4.5, hang: 0, emphasis: 0, wallLift: 30, wallSpeed: 10.5, wallGravity: 9, kick: 6, climb: 14, eyeLope: 0.4, eyeImpact: 0.4 };
 export const HOUSE: Tune = Object.fromEntries(DIALS.map((x) => [x.key, x.house]));
 /** the dials as they stand */
 export const TUNE: Tune = { ...HOUSE };

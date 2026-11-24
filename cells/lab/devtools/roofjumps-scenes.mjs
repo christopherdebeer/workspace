@@ -8,9 +8,9 @@ import { mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 const lab = new URL('../client/roofjumps/', import.meta.url).pathname;
 const OUT = new URL(`./out/scenes${['--look=', '--character=', '--dials='].map((f) => (f === '--dials=' ? (process.argv.some((a) => a.startsWith(f)) ? 'dials' : '') : process.argv.find((a) => a.startsWith(f))?.slice(f.length))).filter(Boolean).map((v) => '-' + v).join('')}/`, import.meta.url).pathname;
 const out = await build({ stdin: { contents: `export * from './scenes'; export * from './character'; export * from './tune';`, resolveDir: lab, loader: 'ts' }, bundle: true, write: false, format: 'esm', platform: 'node' });
-const { SCENES, runScene, judge, sequence, characterByName, readTune } = await import('data:text/javascript;base64,' + Buffer.from(out.outputFiles[0].text).toString('base64'));
+const { SCENES, runScene, judge, sequence, characterByName, readTune, sceneTune } = await import('data:text/javascript;base64,' + Buffer.from(out.outputFiles[0].text).toString('base64'));
 // (`--dials=<query>`: the dials as an address names them (tune.ts), over the house's: the scenes run and judged under them)
-const dialsArg = process.argv.find((a) => a.startsWith('--dials='))?.slice(8) ?? ''; if (dialsArg) readTune(new URLSearchParams(dialsArg));
+const dialsArg = process.argv.find((a) => a.startsWith('--dials='))?.slice(8) ?? ''; if (dialsArg) { sceneTune.use = false; readTune(new URLSearchParams(dialsArg)); }
 const args = process.argv.slice(2), keys = args.filter((a) => !a.startsWith('--')), film = args.includes('--film');
 // (`--look=<name>`: filmed in that look (looks.ts), into devtools/out/scenes-<name>/, the checks and report as ever)
 const look = args.find((a) => a.startsWith('--look='))?.slice(7) ?? '';

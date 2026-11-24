@@ -111,3 +111,9 @@ Lives lost a minute, by the autopilot (4 characters × 3 seeds × 60 s, street c
 What still brings it down: single misses in the air (a spring, a bound or a kick short, a climb that fails).
 
 Checkpoints collected: about 1 a minute (house) and 0.1 a minute (proposed). The wander doesn't seek them; the planner doesn't value them yet.
+
+## Adopted (24 November): the proposed dials are the house
+
+The house is now the proposed set (the autopilot left off), with `wallSpeed 8` and `wStreet 40` added: plan 1, assist 1, wStreet 40, run 6.5, sprint 11, dash 14, dashTime 1.15, accel 31, grip 4, ledgeSpeed 7.5, ledgePull 0.6, gravity 29.5, jumpReach 11, rise 4.6, drop 4, leapSpeed 15, diveDrop 6.9, hang 0.55, emphasis 1, wallLift 47, wallSpeed 8, wallGravity 16, kick 9, climb 23.5, eyeLope 1.5, eyeImpact 1.55.
+
+The authored scenes, and the unit tests' scripted runs on the practice line, run under the dials they were written against (`SCENE_TUNE` in tune.ts: the old house), so they stay tests of the mechanics they were made for. An address's dials, or the scenes devtool's `--dials=`, go over those. The scenes hold 195/198 that way.
