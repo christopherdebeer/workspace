@@ -75,7 +75,7 @@ export function choreo(legs: Leg[], recent: Move[], pts: number[]): number {
   return v + 0.15 * Math.min(10, rise);
 }
 
-export interface Plan { primary: Route; left: Route | null; right: Route | null; best: Route; all: Route[] }
+export interface Plan { primary: Route; left: Route | null; right: Route | null; best: Route; all: Route[]; /** every way on leads down to the street, and the street is a fall: better to stop and wait (the stop route) */ stop: boolean }
 
 /** The fan about (dx, dz): the way asked, the best either side, and the best of all. */
 export function plan(r: Runner, dx: number, dz: number): Plan {
@@ -90,7 +90,12 @@ export function plan(r: Runner, dx: number, dz: number): Plan {
   // (the way asked wins a tie, and a little more than a tie: no flickering between two as good as each other)
   let best = primary;
   for (const x of all) if (x.score > best.score + (best === primary ? 1.5 : 0)) best = x;
-  return { primary, left, right, best, all };
+  // (the street a fall, and every way in the fan down to it: standing still is the way, until the way asked turns)
+  if (TUNE.streetFail > 0 && best.streets > 0 && r.y >= 0.5 && r.state === 'ground') {
+    const still = foresee(r, 0, 0, 0);
+    if (still.streets === 0) return { primary, left, right, best: still, all, stop: true };
+  }
+  return { primary, left, right, best, all, stop: false };
 }
 
 /** a route in a few words: its moves in order (the running between them left out), the first `most` of them */

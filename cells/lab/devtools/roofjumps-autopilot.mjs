@@ -16,7 +16,7 @@ M.readTune(new URLSearchParams(DIALS)); M.TUNE.auto = 1;
 const DT = 1 / 120, T = M.TUNE;
 const rows = [];
 for (const ch of CHARS) for (const seed of SEEDS) {
-  const city = new M.City(seed, false, null), CH = M.characterByName(ch); let r = new M.Runner(city, CH); const cp = new M.Checkpoints(r); let lives = 0, balks = 0, misses = 0, streets = 0, made = {};
+  const city = new M.City(seed, false, null), CH = M.characterByName(ch); let r = new M.Runner(city, CH); const cp = new M.Checkpoints(r); let roofT = 0, lives = 0, balks = 0, misses = 0, streets = 0, made = {};
   const tally = () => { balks += r.balks; misses += r.misses; streets += r.streets; for (const [k, v] of Object.entries(r.made)) made[k] = (made[k] ?? 0) + v; };
   let thinking = null, thought = -1, lean = 0, path = 0, air = 0, stuck = 0, still = 0, maxDrop = 0, top = r.y, groundV = 0, groundN = 0, reach = 0, reachN = 0, flights = [], fT = 0, wasAir = false;
   const x0 = r.x, z0 = r.z; let px = r.x, pz = r.z, st0 = r.streets; const why = [];
@@ -26,10 +26,10 @@ for (const ch of CHARS) for (const seed of SEEDS) {
     if (r.streets > st0) { st0 = r.streets; const fan = thinking ? thinking.all.map((x) => x.streets) : []; why.push({ t: +t.toFixed(1), moves: [...r.recent].slice(-4), anyClear: fan.some((v) => v === 0), allDown: fan.length > 0 && fan.every((v) => v > 0) }); }
     lean += ((thinking ? thinking.best.off : 0) - lean) * (1 - Math.exp(-5 * DT));
     const c = Math.cos(-lean), s = Math.sin(-lean);
-    r.step(DT, { x: ask.x * c + ask.z * s, z: ask.z * c - ask.x * s, jump: false });
+    r.step(DT, thinking?.stop ? { x: 0, z: 0, jump: false } : { x: ask.x * c + ask.z * s, z: ask.z * c - ask.x * s, jump: false });
     // (the street a fall: a life, and back to the checkpoint)
     if (M.TUNE.streetFail > 0) { const ev = cp.update(r, city, t); if (ev.lost) { lives++; if (r.streets > st0) { const fan = thinking ? thinking.all.map((x) => x.streets) : []; why.push({ t: +t.toFixed(1), moves: [...r.recent].slice(-4), anyClear: fan.some((v) => v === 0), allDown: fan.length > 0 && fan.every((v) => v > 0) }); } tally(); r = cp.respawn(() => new M.Runner(city, CH)); st0 = 0; thinking = null; px = r.x; pz = r.z; wasAir = false; continue; } }
-    path += Math.hypot(r.x - px, r.z - pz); px = r.x; pz = r.z;
+    path += Math.hypot(r.x - px, r.z - pz); px = r.x; pz = r.z; if (r.y >= 0.5) roofT += DT;
     const inAir = r.state === 'air';
     if (inAir) { air += DT; fT += DT; top = Math.max(top, r.y); } else { if (wasAir) { flights.push(fT); maxDrop = Math.max(maxDrop, top - r.y); } fT = 0; top = r.y; }
     wasAir = inAir;
@@ -37,11 +37,11 @@ for (const ch of CHARS) for (const seed of SEEDS) {
     if (r.speed < 0.6) { still += DT; if (still > 1) stuck += DT; } else still = 0;
   }
   tally(); const leaps = Object.entries(made).filter(([k]) => !['run', 'dash', 'roll'].includes(k)).reduce((a, [, v]) => a + v, 0);
-  rows.push({ ch, seed, path: +path.toFixed(1), net: +Math.hypot(r.x - x0, r.z - z0).toFixed(1), streets, misses, lives, balks, items: cp.collected.size, falls: made.fall ?? 0, leaps, air: +(air / SECONDS).toFixed(3), flight: +(flights.reduce((a, b) => a + b, 0) / Math.max(1, flights.length)).toFixed(2), maxDrop: +maxDrop.toFixed(1), vGround: +(groundV / Math.max(1, groundN)).toFixed(2), stuck: +stuck.toFixed(1), planReach: +(reach / Math.max(1, reachN)).toFixed(1), made, why });
+  rows.push({ ch, seed, path: +path.toFixed(1), net: +Math.hypot(r.x - x0, r.z - z0).toFixed(1), streets, misses, lives, balks, roofT: +roofT.toFixed(1), items: cp.collected.size, falls: made.fall ?? 0, leaps, air: +(air / SECONDS).toFixed(3), flight: +(flights.reduce((a, b) => a + b, 0) / Math.max(1, flights.length)).toFixed(2), maxDrop: +maxDrop.toFixed(1), vGround: +(groundV / Math.max(1, groundN)).toFixed(2), stuck: +stuck.toFixed(1), planReach: +(reach / Math.max(1, reachN)).toFixed(1), made, why });
   const z = rows[rows.length - 1]; console.log(`${LABEL.padEnd(8)} ${ch.padEnd(11)} s${seed}  path ${z.path}m  lives ${z.lives}  items ${z.items}  balks ${z.balks}  streets ${z.streets}  misses ${z.misses}  falls ${z.falls}  leaps ${z.leaps}  air ${(z.air * 100).toFixed(0)}%  flight ${z.flight}s  drop ${z.maxDrop}m  v ${z.vGround}  stuck ${z.stuck}s  plan reaches ${z.planReach}m`);
 }
 const sum = (k) => rows.reduce((a, r) => a + r[k], 0), n = rows.length, moves = {};
 for (const r of rows) for (const [k, v] of Object.entries(r.made)) moves[k] = (moves[k] ?? 0) + v;
-const agg = { label: LABEL, dials: DIALS, seconds: SECONDS, runs: n, path: +(sum('path') / n).toFixed(1), streetsPerMin: +((sum('streets') / n) * (60 / SECONDS)).toFixed(2), livesPerMin: +((sum('lives') / n) * (60 / SECONDS)).toFixed(2), itemsPerMin: +((sum('items') / n) * (60 / SECONDS)).toFixed(2), balksPerMin: +((sum('balks') / n) * (60 / SECONDS)).toFixed(1), missesPerMin: +((sum('misses') / n) * (60 / SECONDS)).toFixed(2), fallsPerMin: +((sum('falls') / n) * (60 / SECONDS)).toFixed(2), leapsPerMin: +((sum('leaps') / n) * (60 / SECONDS)).toFixed(1), air: +(sum('air') / n).toFixed(3), flight: +(sum('flight') / n).toFixed(2), vGround: +(sum('vGround') / n).toFixed(2), stuck: +(sum('stuck') / n).toFixed(1), planReach: +(sum('planReach') / n).toFixed(1), moves };
+const agg = { label: LABEL, dials: DIALS, seconds: SECONDS, runs: n, path: +(sum('path') / n).toFixed(1), streetsPerMin: +((sum('streets') / n) * (60 / SECONDS)).toFixed(2), livesPerMin: +((sum('lives') / n) * (60 / SECONDS)).toFixed(2), streetsPerRoofMin: +((sum('streets') / Math.max(1, sum('roofT'))) * 60).toFixed(2), roofShare: +(sum('roofT') / (n * SECONDS)).toFixed(2), itemsPerMin: +((sum('items') / n) * (60 / SECONDS)).toFixed(2), balksPerMin: +((sum('balks') / n) * (60 / SECONDS)).toFixed(1), missesPerMin: +((sum('misses') / n) * (60 / SECONDS)).toFixed(2), fallsPerMin: +((sum('falls') / n) * (60 / SECONDS)).toFixed(2), leapsPerMin: +((sum('leaps') / n) * (60 / SECONDS)).toFixed(1), air: +(sum('air') / n).toFixed(3), flight: +(sum('flight') / n).toFixed(2), vGround: +(sum('vGround') / n).toFixed(2), stuck: +(sum('stuck') / n).toFixed(1), planReach: +(sum('planReach') / n).toFixed(1), moves };
 console.log(JSON.stringify(agg));
 mkdirSync(OUT, { recursive: true }); writeFileSync(OUT + LABEL + '.json', JSON.stringify({ agg, rows }, null, 1));

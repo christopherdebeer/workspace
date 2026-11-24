@@ -313,6 +313,8 @@ function input(t: number, dt: number): Input {
   // (by itself, all the way onto the plan; taken over, only as far as `assist` says, like any run of yours)
   const by = takeoff || catchStudy || directed || brushStudy || scene || holdAt !== null ? 0 : TUNE.auto && !takenOver(t) ? 1 : TUNE.assist;
   lean += ((thinking && by > 0 && mag > 0.1 ? thinking.best.off * by : 0) - lean) * (1 - Math.exp(-5 * dt));
+  // (by itself, and every way on down to the street (the street a fall): it stops, until the wander turns it)
+  if (by >= 1 && thinking?.stop) return { x: 0, z: 0, jump: false };
   if (Math.abs(lean) < 1e-4 || mag <= 0.1) return a;
   // (to the right is a smaller angle: see plan.ts)
   const c = Math.cos(-lean), s = Math.sin(-lean);
