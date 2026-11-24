@@ -1,0 +1,160 @@
+/**
+ * A bout: two fencers on a piste, the box between them, and the referee's few words. It owns time: `advance(dt)`
+ * runs as many fixed substeps as dt holds (the blades need them small: 1/2000 s), and each substep is
+ *
+ *   bodies (footwork, pose, where each hand is sent) → blades predict → blades' own constraints →
+ *   contacts (blade/blade, blade/bell, blade/body with the tip's force, floor) → velocities → the box.
+ *
+ * Fencer 0 is "you" only to the code that draws and listens; to the bout they're the same.
+ */
+import { Fencer } from './fencer';
+import { Box, award, type Light } from './box';
+import { BladePair, bodyContact, floorContact, guardContact, type ContactStats, type TipContact } from './contact';
+import type { Weapon } from './weapons';
+import type { V } from './v3';
+
+export const H = 1 / 2000;
+/** the piste: 14 m, en garde lines 2 m either side of the middle */
+export const PISTE = { half: 7, garde: 2, width: 1.5 };
+
+export type Phase = 'ready' | 'fence' | 'halt' | 'over';
+export type BoutEvent =
+  | { type: 'clash'; t: number; at: V; strength: number }
+  | { type: 'guard'; t: number; who: 0 | 1; strength: number }
+  | { type: 'light'; t: number; who: 0 | 1; light: Light }
+  | { type: 'halt'; t: number; call: string; points: [number, number] }
+  | { type: 'allez'; t: number }
+  | { type: 'over'; t: number; winner: 0 | 1 };
+
+export interface Options { weapon: Weapon; to: number }
+
+export class Bout {
+  readonly fencers: [Fencer, Fencer];
+  readonly box: Box;
+  readonly pair: BladePair;
+  t = 0;
+  phase: Phase = 'ready';
+  phaseAt = 0;
+  score: [number, number] = [0, 0];
+  call = '';
+  /** what happened since the last `drain` */
+  events: BoutEvent[] = [];
+  /** this substep's contacts, for the readout */
+  readonly tips: [TipContact, TipContact] = [{ part: null, axial: 0, force: 0 }, { part: null, axial: 0, force: 0 }];
+  readonly clash: ContactStats = { clash: 0, at: [0, 0, 0], touching: false };
+  /** the hardest each tip pressed since the last drain, N (a press too brief or too light to register still shows) */
+  peak: [number, number] = [0, 0];
+  private acc = 0;
+  private lastClash = -1;
+
+  constructor(readonly opts: Options) {
+    this.fencers = [new Fencer(opts.weapon, -PISTE.garde, 1), new Fencer(opts.weapon, PISTE.garde, -1)];
+    this.box = new Box(opts.weapon);
+    this.pair = new BladePair(this.fencers[0].blade, this.fencers[1].blade);
+  }
+
+  /** run on by dt (real seconds); returns how many substeps ran */
+  advance(dt: number): number {
+    this.acc += Math.min(dt, 0.05);
+    let n = 0;
+    while (this.acc >= H) { this.substep(); this.acc -= H; n++; }
+    return n;
+  }
+
+  drain(): BoutEvent[] { const e = this.events; this.events = []; this.peak = [0, 0]; return e; }
+
+  private substep() {
+    const h = H, [A, B] = this.fencers;
+    this.t += h;
+    this.referee();
+    const moving = this.phase === 'fence' || this.phase === 'halt';
+    for (const f of this.fencers) {
+      // (before "allez", nobody moves their feet)
+      if (!moving) { f.intent.step = null; f.intent.lunge = false; }
+      f.step(h);
+    }
+    this.keepApart();
+    for (const f of this.fencers) f.blade.predict(h);
+    for (const f of this.fencers) f.blade.solve(h);
+    this.pair.solve(this.clash);
+    const g0 = guardContact(A.blade, B.blade), g1 = guardContact(B.blade, A.blade);
+    bodyContact(A.blade, B.capsules, h, this.tips[0]);
+    bodyContact(B.blade, A.capsules, h, this.tips[1]);
+    for (const f of this.fencers) floorContact(f.blade);
+    // (once more for the blades' own lengths: the contacts pushed nodes about)
+    for (const f of this.fencers) f.blade.solve(h);
+    for (const f of this.fencers) f.blade.finish(h);
+    this.peak[0] = Math.max(this.peak[0], this.tips[0].axial);
+    this.peak[1] = Math.max(this.peak[1], this.tips[1].axial);
+    // the box hears the tips
+    if (this.phase === 'fence' || (this.phase === 'halt' && !this.box.locked(this.t) && this.box.first !== null)) {
+      for (const i of [0, 1] as const) {
+        const tc = this.tips[i], had = this.box.lights[i];
+        this.box.tip(i, this.t, h, tc.part && tc.axial >= this.opts.weapon.tipForce ? tc.part : null);
+        const now = this.box.lights[i];
+        if (now && !had) this.events.push({ type: 'light', t: this.t, who: i, light: now });
+      }
+    }
+    if (this.clash.clash > 0.3 && this.t - this.lastClash > 0.03) {
+      this.lastClash = this.t;
+      this.events.push({ type: 'clash', t: this.t, at: this.clash.at, strength: this.clash.clash });
+    }
+    if (g0 > 2e-4) this.events.push({ type: 'guard', t: this.t, who: 0, strength: g0 });
+    if (g1 > 2e-4) this.events.push({ type: 'guard', t: this.t, who: 1, strength: g1 });
+  }
+
+  /** the referee: en garde, allez, halt, the point, and the end */
+  private referee() {
+    const since = this.t - this.phaseAt;
+    if (this.phase === 'ready' && since > 0.9) this.go('fence', () => this.events.push({ type: 'allez', t: this.t }));
+    if (this.phase === 'fence') {
+      if (this.box.first !== null) this.go('halt');
+      // (both feet over the end of the piste behind you: a touch against)
+      for (const i of [0, 1] as const) {
+        const f = this.fencers[i], rear = f.s + f.facing * f.back;
+        if (Math.abs(rear) > PISTE.half && Math.sign(rear) === -f.facing) {
+          this.box.register(i === 0 ? 1 : 0, this.t, 'torso');
+          this.events.push({ type: 'light', t: this.t, who: i === 0 ? 1 : 0, light: this.box.lights[i === 0 ? 1 : 0]! });
+          this.call = 'off the end';
+          this.go('halt');
+        }
+      }
+    }
+    if (this.phase === 'halt' && this.box.locked(this.t) && since > 1.4) {
+      let { points, call } = award(this.opts.weapon, this.box.lights);
+      // (a double at one touch from the end, both level, counts for nobody: they fence for the last touch)
+      const last = this.opts.to - 1;
+      if (points[0] && points[1] && this.score[0] === last && this.score[1] === last) { points = [0, 0]; call = 'coup double: annulled'; }
+      this.score = [this.score[0] + points[0], this.score[1] + points[1]];
+      this.call = this.call || call;
+      this.events.push({ type: 'halt', t: this.t, call: this.call, points });
+      if (this.score[0] >= this.opts.to || this.score[1] >= this.opts.to) {
+        this.go('over');
+        this.events.push({ type: 'over', t: this.t, winner: this.score[0] > this.score[1] ? 0 : 1 });
+      } else this.enGarde();
+    }
+  }
+
+  /** both back to their lines, the box cleared */
+  enGarde() {
+    this.fencers[0].reset(-PISTE.garde);
+    this.fencers[1].reset(PISTE.garde);
+    this.box.reset();
+    this.call = '';
+    this.go('ready');
+  }
+  restart() { this.score = [0, 0]; this.enGarde(); }
+
+  private go(p: Phase, then?: () => void) { this.phase = p; this.phaseAt = this.t; then?.(); }
+
+  /** bodies don't pass through each other (corps-à-corps): each is held back by half the overlap */
+  private keepApart() {
+    const [A, B] = this.fencers, gap = B.reachFront - A.reachFront;
+    if (gap >= 0) return;
+    A.s += gap / 2; B.s -= gap / 2;
+    A.pose(); B.pose();
+  }
+
+  /** the distance between the fencers' fronts, m */
+  get gap() { return this.fencers[1].reachFront - this.fencers[0].reachFront; }
+}

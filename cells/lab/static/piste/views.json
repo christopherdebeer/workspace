@@ -1,0 +1,37 @@
+[
+ {
+  "group": "The bout",
+  "views": [
+   {
+    "name": "mask",
+    "title": "En garde, through the mask",
+    "caption": "at the lines, before allez: their point toward you, your own bell low on the right",
+    "file": "v-mask.jpg"
+   },
+   {
+    "name": "close",
+    "title": "In distance",
+    "caption": "a riposte coming: their bell turned toward your blade, your blade crossing theirs",
+    "file": "v-close.jpg"
+   },
+   {
+    "name": "wrist",
+    "title": "Touched on the wrist",
+    "caption": "they lunged as you came forward, at the nearest target: your arm. Their lamp is lit",
+    "file": "v-wrist.jpg"
+   },
+   {
+    "name": "double",
+    "title": "Coup double, from the side",
+    "caption": "both tips home inside the 45 ms: both blades bowed against the chests, both lamps lit",
+    "file": "v-double.jpg"
+   },
+   {
+    "name": "readout",
+    "title": "What the box hears",
+    "caption": "the readout: the gap, each tip's force against its 7.35 N, how far each blade is bowed, how hard each hand is working, what the opponent is doing",
+    "file": "v-readout.jpg"
+   }
+  ]
+ }
+]

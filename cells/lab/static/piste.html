@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en" data-exp="piste"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,viewport-fit=cover"><meta name="theme-color" content="#121317"><title>Piste</title>
+<style>
+:root{--ink:#e9e6df;--you:#3fdc6a;--them:#ff3b30}
+*{box-sizing:border-box}html,body{margin:0;height:100%;overflow:hidden;overscroll-behavior:none;background:#121317;color:var(--ink);font-family:"Helvetica Neue",Helvetica,Arial,sans-serif;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none;-webkit-tap-highlight-color:transparent}
+canvas#view{position:fixed;inset:0;width:100%;height:100%;touch-action:none;display:block}
+/* the mask: a fine mesh just in front of the eye (out of focus: a faint lattice and a darkening at its edge) */
+#mask{position:fixed;inset:0;pointer-events:none;
+  background:
+    radial-gradient(ellipse 72% 66% at 50% 46%,#0000 58%,#0008 86%,#000d 100%),
+    repeating-linear-gradient(0deg,#0000 0 2px,#00000012 2px 3px),
+    repeating-linear-gradient(90deg,#0000 0 2px,#00000012 2px 3px)}
+.nomask #mask{display:none}
+#top{position:fixed;top:max(12px,env(safe-area-inset-top));left:0;right:0;display:flex;justify-content:center;align-items:center;gap:18px;pointer-events:none}
+#top i{display:block;width:46px;height:22px;border-radius:5px;background:#ffffff14;border:1px solid #ffffff30;transition:background .08s,box-shadow .08s}
+#lampYou.on{background:var(--you);box-shadow:0 0 28px var(--you)}
+#lampThem.on{background:var(--them);box-shadow:0 0 28px var(--them)}
+#top i.off{background:#fff;box-shadow:0 0 24px #fff}
+#score{font-size:22px;letter-spacing:.12em;font-variant-numeric:tabular-nums;min-width:4.5em;text-align:center}
+#labels{position:fixed;top:calc(max(12px,env(safe-area-inset-top)) + 28px);left:0;right:0;display:flex;justify-content:center;gap:120px;font-size:9px;letter-spacing:.3em;text-transform:uppercase;opacity:.55;pointer-events:none}
+#mid{position:fixed;left:0;right:0;top:24%;text-align:center;pointer-events:none}
+#say{font-size:clamp(30px,9vw,60px);letter-spacing:.18em;text-indent:.18em;text-transform:uppercase;font-weight:300}
+#sub{margin-top:8px;font-size:11px;letter-spacing:.24em;text-transform:uppercase;opacity:.8}
+#say:empty,#sub:empty{display:none}
+#readout{position:fixed;left:max(10px,env(safe-area-inset-left));top:calc(max(12px,env(safe-area-inset-top)) + 46px);margin:0;font:11px/1.45 ui-monospace,Menlo,monospace;white-space:pre;color:#cfe;opacity:.85;pointer-events:none;display:none;text-shadow:0 1px 2px #000}
+.readout #readout{display:block}
+.readout #hint{display:none}
+#bar{position:fixed;right:max(12px,env(safe-area-inset-right));bottom:max(12px,env(safe-area-inset-bottom));display:flex;gap:8px}
+#bar a{font-size:10px;letter-spacing:.22em;text-transform:uppercase;text-decoration:none;color:var(--ink);background:#0006;border:1px solid #ffffff40;border-radius:999px;padding:0 14px;min-height:36px;display:inline-flex;align-items:center}
+/* under the thumbs: the hand's ring and where the thumb is; the body's rail (extend, then lunge; below, retreat) */
+#marks{position:fixed;inset:0;pointer-events:none}
+#markR{position:absolute;transform:translate(-50%,-50%);border:1px solid #ffffff55;border-radius:50%}
+#markRdot,#markLdot{position:absolute;left:-9px;top:-9px;width:18px;height:18px;border-radius:50%;background:#ffffff60;will-change:transform}
+#markL{position:absolute;width:3px;margin-left:-1.5px;background:linear-gradient(#ff3b3088 0 var(--ext),#ffffff55 var(--ext) calc(100% - var(--ret)),#ffffff22 calc(100% - var(--ret)))}
+#hint{position:fixed;left:0;right:0;bottom:calc(max(12px,env(safe-area-inset-bottom)) + 48px);text-align:center;font-size:10px;letter-spacing:.2em;line-height:2;text-transform:uppercase;opacity:.6;pointer-events:none;transition:opacity 1s}
+[hidden]{display:none!important}
+.preview #top,.preview #labels,.preview #mid,.preview #bar,.preview #marks,.preview #hint,.preview #readout{display:none}
+</style></head><body>
+<canvas id="view" aria-label="Looking out through a fencing mask down a piste at an opponent en garde, their épée pointed at you; your own guard and blade low in the view."></canvas>
+<div id="mask"></div>
+<div id="marks"><div id="markR" hidden></div><div id="markRdot" hidden></div><div id="markL" hidden></div><div id="markLdot" hidden></div></div>
+<div id="top"><i id="lampThem"></i><div id="score">0 · 0</div><i id="lampYou"></i></div>
+<div id="labels"><span>them</span><span>you</span></div>
+<div id="mid" role="status"><div id="say"></div><div id="sub"></div></div>
+<div id="hint">left thumb: up to extend, further to lunge · tap to advance · down to retreat<br>right thumb: the point</div>
+<pre id="readout"></pre>
+<div id="bar"><a href="?readout&view=side">side</a><a href="{{readme}}">notes</a></div>
+<script type="module" src="{{app}}"></script></body></html>
