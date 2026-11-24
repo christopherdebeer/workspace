@@ -24,7 +24,7 @@ for (const ch of CHARS) for (const seed of SEEDS) {
     const t = i * DT, w = 7 * M.noise1(seed + 9, t * 0.06) + t * 0.04, a = w - 0.22 * Math.sin(4 * w), ask = { x: Math.sin(a), z: Math.cos(a) };
     if (thought < 0 || t - thought >= 0.12) { thinking = M.plan(r, ask.x, ask.z); thought = t; const b = thinking.best; reach += Math.hypot(b.pts[b.pts.length - 3] - b.pts[0], b.pts[b.pts.length - 1] - b.pts[2]); reachN++; }
     if (r.streets > st0) { st0 = r.streets; const fan = thinking ? thinking.all.map((x) => x.streets) : []; why.push({ t: +t.toFixed(1), moves: [...r.recent].slice(-4), anyClear: fan.some((v) => v === 0), allDown: fan.length > 0 && fan.every((v) => v > 0) }); }
-    lean += ((thinking ? thinking.best.off : 0) - lean) * (1 - Math.exp(-5 * DT));
+    lean += ((thinking ? thinking.best.off : 0) - lean) * (1 - Math.exp(-12 * DT));
     const c = Math.cos(-lean), s = Math.sin(-lean);
     r.step(DT, thinking?.stop ? { x: 0, z: 0, jump: false } : { x: ask.x * c + ask.z * s, z: ask.z * c - ask.x * s, jump: false });
     // (the street a fall: a life, and back to the checkpoint)

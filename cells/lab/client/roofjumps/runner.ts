@@ -2712,7 +2712,9 @@ export class Runner implements Body {
     const wx = this.x + this.wx * (this.R_ + 0.05), wz = this.z + this.wz * (this.R_ + 0.05);
     c.t += dt;
     const letGo = (push: number) => { this.dropped = true; this.chain = null; this.vx = -this.wx * push; this.vz = -this.wz * push; this.launch(push > 2 ? 2 : 0, 'fall', false, false, 0.4); this.wallCool = 0.3; };
-    if (into < -0.4 && c.phase !== 2) { letGo(3); return; }
+    // (the street under it, and the street a fall: it holds on, whatever it's asked; it goes only up, along or onto something)
+    const overStreet = TUNE.streetFail > 0 && this.city.heightAt(this.x - this.wx * 0.8, this.z - this.wz * 0.8) < STREET && this.y >= STREET;
+    if (into < -0.4 && c.phase !== 2 && !overStreet) { letGo(3); return; }
     // (a hand alone: the body comes square under it, and once it has, the other hand on)
     if (c.turn) { c.turn *= Math.exp(-(c.phase === 0 ? 3 : 7) * dt); if (Math.abs(c.turn) < 0.12) c.turn = 0; }
     if (c.one && !c.turn && c.phase === 1 && h) {
@@ -2785,13 +2787,13 @@ export class Runner implements Body {
       }
       // (nothing it's asked for to be had: after a beat, let go)
       const stuck = into > 0.55 ? c.t > 1.1 : this.mag > 0.1 ? c.t > (Math.abs(along) >= 0.55 ? 1.1 : 0.5) : false;
-      if (stuck && (into <= 0.55 || !(lipOk || this.holdUp(lo, hi)))) { letGo(1.2); return; }
+      if (stuck && !overStreet && (into <= 0.55 || !(lipOk || this.holdUp(lo, hi)))) { letGo(1.2); return; }
       return;
     }
     if (c.phase === 3) {
       // (shimmying: along the hold hand over hand, as long as it's asked and there's hold; the hands leapfrogging)
       const dir = Math.sign(along), sp = 1.1;
-      this.travT += dt; if (this.travT > 2.5) { letGo(1.2); return; }
+      this.travT += dt; if (this.travT > 2.5) { if (overStreet) { this.travT = 0; c.phase = 1; c.t = 0; return; } letGo(1.2); return; }
       const ends = [onHold(h!, h!.ax, h!.az), onHold(h!, h!.bx, h!.bz)], left = Math.max(...ends.map((e) => ((e[0] - this.x) * tx + (e[2] - this.z) * tz) * (dir || 1)));
       // (and only on into clear air: not into a building standing against the face)
       const nx2 = this.x + tx * dir * (sp * dt + this.R_ * 0.6), nz2 = this.z + tz * dir * (sp * dt + this.R_ * 0.6), clear = this.city.heightAt(nx2, nz2) <= this.y + 0.3 && this.city.heightAt(nx2 - this.wx * 0.1, nz2 - this.wz * 0.1) <= this.y + 0.3;
