@@ -85,6 +85,7 @@ const brushHeading = runner.heading;
 // (`from=x,z`: start there instead, on whatever's there: the street, to see it find its way up)
 if (q.has('from')) { const [fx, fz] = q.get('from')!.split(',').map(Number); runner.x = fx; runner.z = fz; runner.y = city.heightAt(fx, fz); }
 rd.strokes.noUnder = q.get('under') === '0';
+rd.strokes.noShade = q.get('shade') === '0';
 if (q.get('paint') === 'flat') rd.strokes.gloss = 0;
 if (q.has('citystamps')) rd.strokes.splineCity = false;
 // (`windows=flat|room`: the near panes as painted, or their rooms without the middle layers (the full rooms by default))

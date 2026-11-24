@@ -750,6 +750,8 @@ export class StrokePainter {
   splines = 0;
   /** the underpainting left out (`?under=0`, U): only the strokes, to see what they cover */
   noUnder = false;
+  /** the shadow passages left out (`?shade=0`): to see what's under them */
+  noShade = false;
   private utex: WebGLTexture | null = null; private usize = [0, 0];
   private sprog!: WebGLProgram; private su: Record<string, WebGLUniformLocation | null> = {}; private sstrip!: WebGLBuffer; private cstrip!: WebGLBuffer; private wprog!: WebGLProgram; private wu: Record<string, WebGLUniformLocation | null> = {}; private wquad!: WebGLBuffer; private sbuf!: WebGLBuffer;
   /** another ground than the look's, and its underpainting broken to show it (the brush board's ochre: for judging whites) */
@@ -891,7 +893,7 @@ export class StrokePainter {
       if (made++ >= budget) break;
       const [cx, cz] = k.split(',').map(Number), marks: Mark[] = [], from = (ring(k) - 1) * 64;
       const keeps = (rank: number) => !isFar || showsTo(rank, far) > from;
-      rules.city(city.chunk(cx, cz), city, (m) => { if (keeps(m.rank ?? 0.5) && !(this.noUnder && m.kind === K.FILL && m.layer === LAYER.BROAD)) marks.push(m); }, keeps, light, { size: band, from });
+      rules.city(city.chunk(cx, cz), city, (m) => { if (keeps(m.rank ?? 0.5) && !(this.noUnder && m.kind === K.FILL && m.layer === LAYER.BROAD) && !(this.noShade && m.kind === K.SHADE)) marks.push(m); }, keeps, light, { size: band, from });
       // (its pulls and lines as spline strokes, by layer, uncut; the underpainting, the shadow passages and the washes as stamps)
       const stamped: Mark[] = [], spl: Spline[][] = Array.from({ length: LAYERS }, () => []);
       for (const m of marks) { if (this.splineCity && (m.kind === K.PULL || m.kind === K.PULL + EDGE) && !m.sky && !m.crisp) spl[Math.max(0, Math.min(LAYERS - 1, m.layer))].push(markSpline(m)); else stamped.push(m); }

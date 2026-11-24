@@ -365,7 +365,9 @@ export const strokeGouacheRules: StrokeRules = {
         // (over the broad strokes, Switchback's coverage: the plane broken into strokes of its own values)
         scatter(put, p, col, T, pb, m, r, size, rk);
         // (its shadow: one passage, masked by the plane's real shadow)
-        if (m > 0.2 && keeps(SHADOW)) put(fillOf(`${p.key}/shade`, p.o, p.t, p.up, p.n, p.w, p.h, scale(mulv(pb, T.shade(p.n)), 0.92), p.clip, SHADOW, K.SHADE, LAYER.SHADOW, { col2: mulv(pb, T.deep), mix2: 0.35 }));
+        // (near, a glaze: laid over the brushwork thin and a value darker, so the shadow drops the value and the strokes still show
+        // through it; at dusk, when shadow covers most of the roofs, an opaque passage left them flat)
+        if (m > 0.2 && keeps(SHADOW)) put(fillOf(`${p.key}/shade`, p.o, p.t, p.up, p.n, p.w, p.h, scale(mulv(pb, T.shade(p.n)), 0.7), p.clip, SHADOW, K.SHADE, LAYER.SHADOW, { col2: mulv(pb, T.deep), mix2: 0.35, alpha: 0.52 }));
       }
     }
     // (the details (dressing.ts), painted as Switchback paints its things: they claim no depth (render.ts), so each is all
