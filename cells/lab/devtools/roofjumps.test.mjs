@@ -42,13 +42,13 @@ const { dressingOf, DRESS, plan, foresee, TUNE, HOUSE, DIALS, City, Runner, Rig,
     const city = new City(seed), r = new Runner(city), rig = new Rig();
     let stopped = 0, longest = 0, active = 0, travelled = 0;
     for (let i = 0; i < SECONDS / DT; i++) {
-      const before = r.dist, was = r.state;
+      const before = r.dist, was = r.state, b0 = r.balks;
       r.step(DT, { x: dx, z: dz, jump: false }); rig.update(DT, r);
       if (was === 'ground' && r.state === 'wall') fromGround++;
       // A tall wall out of reach is a legitimate end to a held line (one in reach is gone for: climbed). Retain the
       // stall and pace checks on open ground.
       // (or just run into something: a corner just off the line, met at speed, is a fair stop too)
-      const blocked = [0.2, 0.5, 0.9].some(d => city.heightAt(r.x + dx * d, r.z + dz * d) > r.y + 0.6) || (r.contact.t < 0.6 && stopped === 0 && r.speed < 1);
+      const blocked = [0.2, 0.5, 0.9].some(d => city.heightAt(r.x + dx * d, r.z + dz * d) > r.y + 0.6) || (r.contact.t < 0.6 && stopped === 0 && r.speed < 1) || r.balks > b0; /* (or stopped at an edge with only the street beyond, where the street is a fall: a fair stop) */
       if (!blocked) { active += DT; travelled += r.dist - before; }
       assert.ok(Number.isFinite(r.x + r.y + r.z + r.heading), 'finite');
       const h = city.heightAt(r.x, r.z);

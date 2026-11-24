@@ -19,6 +19,9 @@ import { hash, seeded } from '../kit/rng';
 import type { Rand } from '../kit/rng';
 import { furnish } from './parts';
 import type { PartCtx } from './parts';
+import { bridgeDeadEnds, placeItems } from './reach';
+import type { Item } from './reach';
+import { TUNE } from './tune';
 
 /** a chunk's side (m) */
 export const CHUNK = 64;
@@ -95,7 +98,7 @@ export interface Region { kind: RegionKind; x0: number; z0: number; x1: number; 
  */
 export type DetailKind = 'windows' | 'pipes' | 'ladder' | 'blade' | 'rust' | 'awning' | 'neon' | 'billboard' | 'aerial' | 'dish' | 'laundry' | 'pole' | 'wire' | 'vending' | 'bin';
 export interface Detail { kind: DetailKind; pts: [number, number, number][]; n: [number, number]; w: number; h: number; seed: number; count?: number; lit?: number; /** the holds it is (what's seen of them: a bundle's runs, a ladder, the sill under a row of windows, the unit rust runs from) */ holds?: Hold[] }
-export interface Chunk { cx: number; cz: number; boxes: Box[]; props: Box[]; cells: number[][]; holds: Hold[]; hcells: number[][]; regions: Region[]; details: Detail[] }
+export interface Chunk { cx: number; cz: number; boxes: Box[]; props: Box[]; cells: number[][]; holds: Hold[]; hcells: number[][]; regions: Region[]; details: Detail[]; /** checkpoints to collect (reach.ts), where the street is a fall */ items: Item[] }
 
 const key = (cx: number, cz: number) => `${cx},${cz}`;
 
@@ -179,6 +182,9 @@ export class City {
         }
       }
     }
+    // (the street a fall: no roof left a trap. One with no way on (reach.ts) is bridged to a neighbour it can then get onto)
+    const open = !authored && !this.course?.alone && !(this.practiceLine && cx === 0 && cz === 0);
+    if (open && TUNE.streetFail > 0) bridgeDeadEnds(boxes);
     // (bucketed, for heightAt)
     const cells: number[][] = Array.from({ length: CELLS * CELLS }, () => []);
     boxes.forEach((b, i) => {
@@ -197,9 +203,18 @@ export class City {
       const c0 = Math.max(0, Math.floor((Math.min(h.az, h.bz) - oz) / CELL)), c1 = Math.min(CELLS - 1, Math.floor((Math.max(h.az, h.bz) - oz) / CELL));
       for (let a = a0; a <= a1; a++) for (let c = c0; c <= c1; c++) hcells[c * CELLS + a].push(i);
     });
-    return { cx, cz, boxes, props, cells, holds, hcells, regions, details };
+    // (its checkpoints: things to collect, on roofs with ways on; by their own dice)
+    const items = open && TUNE.streetFail > 0 ? placeItems(boxes, cx, cz, seeded(hash(this.seed, cx, cz, 83))) : [];
+    return { cx, cz, boxes, props, cells, holds, hcells, regions, details, items };
   }
 
+
+  /** the checkpoints about (x, z) within `r`, from the chunks there */
+  itemsNear(x: number, z: number, r: number): Item[] {
+    const out: Item[] = [], c0x = Math.floor((x - r) / CHUNK), c1x = Math.floor((x + r) / CHUNK), c0z = Math.floor((z - r) / CHUNK), c1z = Math.floor((z + r) / CHUNK);
+    for (let a = c0x; a <= c1x; a++) for (let b = c0z; b <= c1z; b++) for (const it of this.chunk(a, b).items) if (Math.hypot(it.x - x, it.z - z) <= r) out.push(it);
+    return out;
+  }
 
   /** the details about (x, z) within `r` (by their first point), from the chunks there */
   detailsNear(x: number, z: number, r: number): Detail[] {

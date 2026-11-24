@@ -100,6 +100,8 @@ const JUMP0 = 9.5;
  * another gravity they scale by √(g / 20), so a jump goes as high and a drop lands as hard as it did, only quicker or slower */
 const G0 = 20;
 const gs = () => Math.sqrt(TUNE.gravity / G0);
+/** the street: under the rule that it's a fall (`streetFail`), never somewhere to land, from anywhere above it */
+const STREET = 0.5;
 /** a roll's length (s) */
 const ROLL = 0.5;
 const AXES = [[1, 0], [-1, 0], [0, 1], [0, -1]];
@@ -290,6 +292,8 @@ export class Runner implements Body {
   private atLip = -1; catches = 0;
   /** leaps off the ground that missed their landing and fell (a kick off a wall into the air isn't one); where this flight began */
   misses = 0;
+  /** stopped at an edge with nowhere but the street beyond (`streetFail`) */
+  balks = 0;
   /** the state it last left for the air from */
   from: State = 'ground';
   /** this flight is a go at a wall (to plant on it), not a leap for a landing: coming down off it isn't a miss */
@@ -1396,6 +1400,7 @@ export class Runner implements Body {
       if (this.resolve(STEP)) { this.y = H(this.x, this.z); if (on && !preparing && this.metWall(dt, dx, dz, mag, vx0, vz0)) return; }
     }
     else if (h < this.y && mag < 0.55 && sp < 6) { this.vx = this.vz = 0; }
+    else if (h < STREET && this.y >= STREET && TUNE.streetFail > 0) { this.vx = this.vz = 0; this.balks++; }
     else if (h < this.y) { this.x = nx; this.z = nz; this.vy = 0; this.launch(0, 'fall', false, false, 0.3); this.leaps--; }
     // (a corner the look ahead went past: leapt, from where it stands)
     else if (on && h <= this.y + TUNE.rise && mag >= 0.55) { if (!this.plantFirst(dx, dz, 0.05)) { this.takeoffBy = 'corner'; this.leap(dx, dz, 0.05, sp); } }
@@ -1638,6 +1643,8 @@ export class Runner implements Body {
     // (and room for the body's breadth: nothing taller within its radius either side of where it comes down)
     const flat = (d: number, h: number) => Math.abs(H(d + 0.6) - h) < 0.1 && Math.abs(H(d + 1.2) - h) < 0.1 && side(d + 0.6, this.R_) <= h + STEP && side(d + 0.6, -this.R_) <= h + STEP;
     const reach = TUNE.jumpReach + sp, y = this.y, G = TUNE.gravity, RISE = TUNE.rise, DROP = TUNE.drop, VLEAP = TUNE.leapSpeed;
+    // (the street a fall: never chosen, from up here)
+    const noStreet = TUNE.streetFail > 0 && y >= STREET, land = (h: number) => !noStreet || h >= STREET;
     let at = -1, to = 0, over = y, wall = -1, overAt = from;
     // (the first place within a storey up or a couple down; what's in the way before it, to clear; or a wall)
     for (let d = from; d <= reach; d += 0.5) {
@@ -1645,7 +1652,7 @@ export class Runner implements Body {
       if (h > y + RISE) { wall = d; break; }
       // (a low, narrow top met at a run (a unit, a parapet, taken at an angle) is something to get over, not to land on)
       const narrow = sp >= 5 && h > y + STEP && h <= y + 1.2 && [1.8, 2.2, 2.6].some((e) => Math.abs(H(d + e) - h) > 0.1);
-      if (h >= y - DROP) { if (flat(d, h) && !narrow) { at = d; to = h; break; } if (h > over) { over = h; overAt = d; } }
+      if (h >= y - DROP && land(h)) { if (flat(d, h) && !narrow) { at = d; to = h; break; } if (h > over) { over = h; overAt = d; } }
     }
     if (at < 0 && wall >= 0) {
       // A high wall beyond the edge: cross toward it on the available momentum.
@@ -1654,7 +1661,9 @@ export class Runner implements Body {
     }
     if (at < 0) {
       // (nothing near this height: the highest place in reach, however far down)
-      for (let d = from; d <= reach; d += 0.5) { const h = H(d); if (h < y - DROP && (at < 0 || h > to) && flat(d, h)) { at = d; to = h; } }
+      for (let d = from; d <= reach; d += 0.5) { const h = H(d); if (h < y - DROP && land(h) && (at < 0 || h > to) && flat(d, h)) { at = d; to = h; } }
+      // (nowhere but the street: not jumped. Stopped at the edge (a balk), the planner sees a way that stops)
+      if (at < 0 && noStreet) { this.vx = this.vz = 0; this.balks++; return; }
       if (at < 0) { const JUMP = JUMP0 * gs(); this.vx = ux * sp; this.vz = uz * sp; this.launch(JUMP * 0.8, 'bound', false, false, 2 * JUMP * 0.8 / G); return; }
     }
     // (a railing on the way (drawn, not in the height field): over it too, a hand on its rail if there's a vault in it)
@@ -1912,6 +1921,9 @@ export class Runner implements Body {
    * below it): coming up short of a storey, falling past a wall's top, dropping off a roof's edge it didn't mean to leave.
    * Not the lip it just left, not one it's aimed to land beyond, not mid-vault or in a held glide.
    */
+  /** a save: falling, with the street under it and the street a fall (`streetFail`): any hold in reach is reached for, further
+   * and at a faster fall than a planned catch would be */
+  private get saving(): boolean { return TUNE.streetFail > 0 && this.vy < 0 && this.leftY >= STREET && this.city.heightAt(this.x, this.z) < STREET; }
   private reachLip(): boolean {
     if (!TUNE.walls || !TUNE.reach || this.move === 'vault' || this.move === 'underbar' || this.float || this.airT < 0.08 / gs()) return false;
     const reach = this.armReach, G = TUNE.gravity;
@@ -1919,7 +1931,7 @@ export class Runner implements Body {
     // as the hips go by, before they've dropped below it)
     const over = !!this.overrun && this.time < this.overrun.until;
     const g = over ? this.city.gripAt(this.x, this.overrun!.y, this.z, this.R_ + 0.8, (h) => h.kind === 'edge' && Math.abs(h.ay - this.overrun!.y) < 0.05 && h.ay - this.y > 0.12 && (this.x - h.ax) * h.nx + (this.z - h.az) * h.nz > 0)
-      : this.city.gripAt(this.x, this.y + reach * 0.6, this.z, this.R_ + 0.35, (h) => h.kind === 'edge' && h.ay - this.y > 0.9 && h.ay - this.y <= reach && Math.abs(h.ay - this.leftY) > 0.1);
+      : this.city.gripAt(this.x, this.y + reach * 0.6, this.z, this.R_ + (this.saving ? 0.7 : 0.35), (h) => h.kind === 'edge' && h.ay - this.y > 0.9 && h.ay - this.y <= reach && Math.abs(h.ay - this.leftY) > 0.1);
     if (!g) return false;
     const nx = g.hold.nx, nz = g.hold.nz, out = (this.x - g.x) * nx + (this.z - g.z) * nz, top = g.y;
     if (over) {
@@ -1933,7 +1945,7 @@ export class Runner implements Body {
     const toward = -(this.vx * nx + this.vz * nz), asked = -(this.want[0] * nx + this.want[1] * nz) * (this.mag > 0.1 ? 1 : 0);
     if (toward < 1 && asked < 0.5) return false;
     // (falling too fast for a hand to hold)
-    if (this.vy < -10 * gs()) return false;
+    if (this.vy < -(this.saving ? 15 : 10) * gs()) return false;
     // (aimed onto it, and still able to get there: let the flight land it)
     if (this.aim && Math.abs(this.city.heightAt(this.aim.x, this.aim.z) - top) < 0.1 && this.vy > -2 * gs()) return false;
     const apex = this.y + Math.max(0, this.vy) ** 2 / (2 * G);
@@ -1961,8 +1973,8 @@ export class Runner implements Body {
    * falling too fast for hands to hold.
    */
   private reachHold(): boolean {
-    if (!TUNE.walls || !TUNE.reach || this.move === 'vault' || this.move === 'underbar' || this.float || this.airT < 0.12 / gs() || this.vy > 1 * gs() || this.vy < -11 * gs()) return false;
-    if ((this.move === 'fall' && !this.bracing) || this.dropped) return false;
+    if (!TUNE.walls || !TUNE.reach || this.move === 'vault' || this.move === 'underbar' || this.float || this.airT < 0.12 / gs() || this.vy > 1 * gs() || this.vy < -(this.saving ? 15 : 11) * gs()) return false;
+    if ((this.move === 'fall' && !this.bracing && !this.saving) || this.dropped) return false;
     const G = TUNE.gravity, reach = this.armReach;
     // (failing: below the takeoff (or against the wall), and not about to land where it was aimed)
     if (!this.bracing && this.y > this.leftY - 0.3) return false;
@@ -1971,7 +1983,7 @@ export class Runner implements Body {
       if (drop >= 0) { const t = (this.vy + Math.sqrt(this.vy * this.vy + 2 * G * drop)) / G; if (Math.hypot(this.x + this.vx * t - this.aim.x, this.z + this.vz * t - this.aim.z) < 0.9) return false; }
     }
     let best: { y: number; hold: Hold; x: number; z: number; d: number } | null = null;
-    for (const h of this.city.holdsNear(this.x, this.z, this.R_ + 0.8)) {
+    for (const h of this.city.holdsNear(this.x, this.z, this.R_ + (this.saving ? 1.2 : 0.8))) {
       if (!Runner.HANGS.has(h.kind)) continue;
       const p = onHold(h, this.x, this.z), y = h.kind === 'pipe' ? Math.max(h.ay, Math.min(h.by, this.y + reach * 0.9)) : h.ay, rel = y - this.y;
       // (overhead, the arm long: from about the head up to the reach)

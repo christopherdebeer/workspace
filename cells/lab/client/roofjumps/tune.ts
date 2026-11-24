@@ -45,6 +45,7 @@ export const DIALS: Dial[] = [
   d('leap', 'apexHold', 'held at the top', 0, 0.3, 0.01, 0, 's'),
   d('leap', 'emphasis', 'effort shown', 0, 1, 0.05, 0),
 
+  t('leap', 'streetFail', 'the street is a fall (a life, back to a checkpoint)', 1),
   d('glide', 'glideDrop', 'glides from', 2, 20, 0.5, 6, 'm down'),
   d('glide', 'glideDist', 'or across', 4, 25, 0.5, 11, 'm'),
   d('glide', 'glideGravity', 'gravity, gliding', 1, 20, 0.5, 8, 'm/s²'),

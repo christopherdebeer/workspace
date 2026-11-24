@@ -35,6 +35,7 @@
 import { paintMode } from './looks/stroke-gouache';
 import { noise1 } from '../kit/rng';
 import { City } from './city';
+import { Checkpoints, itemBones } from './checkpoint';
 import { Runner } from './runner';
 import type { Body, Input, Move } from './runner';
 import { Rig } from './rig';
@@ -347,7 +348,19 @@ const DT = 1 / 120;
 const takeoff = q.get('takeoff'), catchStudy = q.get('catch'), brushStudy = q.has('brush'), holdAt = q.has('hold') ? Number(q.get('hold')) : null;
 const directed: Waypoint[] | null = q.get('direct') ? q.get('direct')!.split(';').map((p) => { const [x, z, a, s] = p.split(',').map(Number); return [x, z, a, s] as Waypoint; }) : null, directedAt: Follow = { i: 0, t: 0 };
 let time = 0, acc = 0, last = performance.now(), frames = 0, rush = 0, near = 1;
-const advance = (dt: number) => { runner.step(dt, input(time, dt)); rig.update(dt, runner); time += dt; };
+// (the street a fall (`streetFail`), in play (not a scene, a study or a scripted run): a life lost coming down to it, put back
+// where it was last surefooted or the last checkpoint it took)
+let cp: Checkpoints | null = null, cpOf: Runner | null = null;
+const playing = () => TUNE.streetFail > 0 && !scene && !takeoff && !catchStudy && !brushStudy && !directed && holdAt === null && !q.get('study');
+const advance = (dt: number) => {
+  runner.step(dt, input(time, dt)); rig.update(dt, runner); time += dt;
+  if (!playing()) return;
+  // (a runner put in afresh (the menu, a new seed or character): its own checkpoints from there)
+  if (!cp || cpOf !== runner) { cp = new Checkpoints(runner); cpOf = runner; }
+  const ev = cp.update(runner, city, time);
+  if (ev.lost) { runner = cp.respawn(() => new Runner(city, character)); cpOf = runner; rig.update(1, runner); thinking = null; say(`down in the street: ${cp.lost} lost · back to the ${cp.spot.by === 'item' ? 'checkpoint' : cp.spot.by === 'start' ? 'start' : 'last sure footing'}`); }
+  else if (ev.took) say(`checkpoint ${cp.collected.size}`);
+};
 // (`t=`: run on to there before the first frame)
 for (let n = Math.round(Number(q.get('t') ?? 0) / DT); n > 0; n--) advance(DT);
 Object.assign(eyeAt, { x: runner.x, y: runner.y, z: runner.z });
@@ -680,7 +693,8 @@ function frame(now: number): void {
     const fov = menu.from.fov + (((TUNE.fov + (aspect < 1 ? 12 : 0)) * Math.PI) / 180 - menu.from.fov) * b;
     vp = mul(perspective(fov, aspect, 0.15, rd.radius * 64 * 1.5), lookAt(E, T, [0, 1, 0])); eye = E;
   }
-  rd.draw(vp, eye, withCrew(rig.bones(held ?? runner), dt), shadowAt(runner.x, runner.y, runner.z));
+  const items = cp && playing() && !held ? itemBones(city, cp, runner.x, runner.z, time) : [];
+  rd.draw(vp, eye, [...withCrew(rig.bones(held ?? runner), dt), ...items], shadowAt(runner.x, runner.y, runner.z));
   const guides = rd.def.guides !== false;
   // (`?details`: the city's tagged details, as lines, for checking what's tagged where before any look draws them)
   if (q.has('details') && !held) rd.lines(vp, eye, detailStrokes(city.detailsNear(runner.x, runner.z, 30), runner.x, runner.z, 30));
