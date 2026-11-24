@@ -537,3 +537,16 @@ The full notes are in `roofjumps-studies/round8/README.md`. The changes: a hard 
   - a climb that ends back down marks that lip bad for 3 s, and the hold-grab path checks it (a loop the new layout exposed);
   - dead-end bridges are now on the lattice.
 - Renders: `roofjumps-studies/city2/` (`time=dusk`).
+
+## 24 November: window interiors (interior mapping)
+- `interiors.ts`. Every near pane is an instanced quad at its glass. For each pixel, the view ray is carried into a shallow room box in the window's own coordinates:
+  - **the reveal:** the jambs, the sill's top seen from above, the head's underside seen from below;
+  - **the middle layers,** opaque and fixed in room space: a counter's lit edge, and behind it someone (a bowed head and a shoulder), with a slow shift of weight;
+  - **the room:** back wall (a kitchen's cabinets with their shadow and a strip of work light; a living room's lamp; an office's desks), side walls, floor and ceiling (an office's light bands);
+  - **the glass:** a broken pull of reflected sky, stronger at a grazing look and over dark rooms.
+  - Office and ribbon rows share one room the row long, so the ceiling bands run on behind the mullions.
+- Each room comes from its painted pane's state (`paneLayout`, the same dice): a kitchen or living room when lit, curtained, a screen's blue, a lamp in the dark, or dark. Some lit rooms are occupied.
+- Only the near chunks get rooms; they fade out at about 35–46 m into the panes painted under them.
+- `windows=flat` (none) and `windows=room` (no middle layers), to compare. `at=x,y,z` aims a fixed eye.
+- **First test** (`roofjumps-studies/city3/`): the kitchen beside two dark windows, 6 m from the start, at dusk. From the side, the jamb hides the person while the back wall and the counter stay. From below, the ceiling and the head of the opening show.
+- **Still to do:** the jump (from above) view, a moving sequence, the phone's GPU time for the cutoff, and a baked brush atlas in place of the shader's procedural paint.
