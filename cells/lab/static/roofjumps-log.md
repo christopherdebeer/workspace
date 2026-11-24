@@ -550,3 +550,12 @@ The full notes are in `roofjumps-studies/round8/README.md`. The changes: a hard 
 - `windows=flat` (none) and `windows=room` (no middle layers), to compare. `at=x,y,z` aims a fixed eye.
 - **First test** (`roofjumps-studies/city3/`): the kitchen beside two dark windows, 6 m from the start, at dusk. From the side, the jamb hides the person while the back wall and the counter stay. From below, the ceiling and the head of the opening show.
 - **Still to do:** the jump (from above) view, a moving sequence, the phone's GPU time for the cutoff, and a baked brush atlas in place of the shader's procedural paint.
+
+## 24 November: strokes near, blocked in beyond
+- Only the near chunks (the eye's chunk and the ring about it: green in `?chunks`) get strokes. They now get more of them:
+  - the masses' coverage pass at 1.25 (was 0.9);
+  - the detail pass at 1.0 (was 0.7);
+  - a third pass of small accents, a wider value and a warmer or cooler tint either side of the mass, loaded.
+- Every chunk beyond is blocked in: each face its mass's colour, flat, with its shadow passage; the windows as a few merged bands. No brushwork, edges, rails, sills, pipes or small details. Small fixed things are flat fills.
+- `lodOf` is now two bands, near (1) and blocked (2), so chunks are remade only when they cross that one boundary.
+- Cost (wide view): about 465–480 k strokes in the near chunks and about 85 k stamps beyond (it was about 428 k strokes across the whole view). Not yet measured on a phone.

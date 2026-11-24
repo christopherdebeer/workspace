@@ -423,8 +423,9 @@ export const lightKey = (l: Omit<Light, 'key'>) => [l.sun, l.top, l.horizon, l.h
  * cover: each still smaller on the screen than a near one), `from` how far off it is (m). See `lodOf`.
  */
 export interface Lod { size: number; from: number }
-/** the brush for a chunk `ring` chunks from the eye's: full near; then two and a half, four and six times the size */
-export const lodOf = (ring: number): number => (ring <= 1 ? 1 : ring === 2 ? 2.5 : ring === 3 ? 4 : 6);
+/** the brush for a chunk `ring` chunks from the eye's: 1 for the eye's chunk and the ring about it (the strokes, all of them);
+ * 2 beyond (blocked in: the masses flat, no brushwork) */
+export const lodOf = (ring: number): number => (ring <= 1 ? 1 : 2); /* (near: strokes; beyond, blocked in: see the look's city) */
 
 /** A look's rules: what to say about each feature, and how. */
 export interface StrokeRules {
