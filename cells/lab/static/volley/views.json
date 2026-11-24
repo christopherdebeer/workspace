@@ -1,0 +1,65 @@
+[
+ {
+  "group": "Firings",
+  "views": [
+   {
+    "name": "ready",
+    "title": "Before the first ball",
+    "caption": "the first firing’s door: a great rosette, its petals open, a band of lapis round its hub; the rules to choose under it",
+    "file": "v-ready.jpg"
+   },
+   {
+    "name": "lapis",
+    "title": "The first firing: lapis",
+    "caption": "cream body, terracotta, a soft ochre glaze and a hard lapis one; a ringed hole, a fan, the next sheet out of focus beyond",
+    "file": "v-lapis.jpg"
+   },
+   {
+    "name": "celadon",
+    "title": "The second: celadon",
+    "caption": "porcelain and lilac, a celadon ring round a rosette, oxblood the glaze that takes two",
+    "file": "v-celadon.jpg"
+   },
+   {
+    "name": "tenmoku",
+    "title": "The third: tenmoku",
+    "caption": "terracotta and bisque, amber glaze and the black one, crazed; the hand’s ring in cream, its arc of dashes full: a bat",
+    "file": "v-tenmoku.jpg"
+   },
+   {
+    "name": "wide",
+    "title": "On a wider screen",
+    "caption": "the way is the screen’s shape: a wider sheet, more of it",
+    "file": "v-wide.jpg"
+   }
+  ]
+ },
+ {
+  "group": "Blows",
+  "views": [
+   {
+    "name": "blow",
+    "title": "A blow that doesn’t break",
+    "caption": "a hard glazed tile struck too softly to break: the flash where it landed, chips spalling off toward you, the tiles round it jolted, the ball squashed against it",
+    "file": "v-blow.jpg"
+   },
+   {
+    "name": "cracked",
+    "title": "What it leaves",
+    "caption": "the tile knocked in a little, cracked from where it was struck down to the clay: one more and it goes",
+    "file": "v-cracked.jpg"
+   }
+  ]
+ },
+ {
+  "group": "The rules",
+  "views": [
+   {
+    "name": "course",
+    "title": "The course, fired",
+    "caption": "four firings against the clock: the time, the splits against the best, the misses",
+    "file": "v-course.jpg"
+   }
+  ]
+ }
+]

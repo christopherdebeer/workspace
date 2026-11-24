@@ -1,0 +1,88 @@
+{
+ "date": "2026-11-20",
+ "build": "after 664aa4e (the stairwell pass)",
+ "summary": [
+  {
+   "scene": "stair-swing",
+   "gap": "The move is found and has a basin (66% of 231 perturbed runs), but it's still a scripted player finding it; the open questions are a human thumb's: whether a lean held a beat ahead reads as 'reach for what's coming' or as a mistake, whether 'let go / turn the stick to leave' is learnable, and whether a different stairwell offers the same thing where a player would predict. The rig draws the swing as a pose tipped along the line from the hand, not a body whose orientation comes from its contacts."
+  },
+  {
+   "scene": "stride-gap-a",
+   "gap": "From behind (the chase eye) the stride carried across the gap barely reads: the legs overlap along the line of sight. It reads in profile, so per the note this is framing and silhouette, not the movement: the eye straight behind hides it."
+  },
+  {
+   "scene": "sharp-turns",
+   "gap": "Planted feet still move a little at a hard turn at pace (8 cm over the scene, 4.5 cm/s against a 3 cm/s bar): the toe pivot runs out of range when the leg is far behind."
+  },
+  {
+   "scene": "vault-angles",
+   "gap": "A 60° vault is a long flat glide over the unit on one hand, not a turn about it; and the last vault's foot moves a few centimetres (3.4 cm/s)."
+  },
+  {
+   "scene": "tic-tac",
+   "gap": "The tic-tac is taken from the corner (the side wall within a step), not a stride before it; and in a corner like this the chase and side eyes come in so close they show the back of the body, not the move."
+  },
+  {
+   "scene": "edge-stop",
+   "gap": "The teeter reads, but the arms reach forward rather than wheeling out to the sides."
+  },
+  {
+   "scene": "yard-save",
+   "gap": "Fixed: the save is a route. Turned off the parapet too square and too late, the foot can't turn the body (a narrow top turns it 25° asked late, up to 60° set up early); it goes over the side, a hand catches the parapet's edge going by, the body swings out 1.1 m under it, the feet go to the side wall, and off them up to the opening's sill from below, hung, pulled over."
+  },
+  {
+   "scene": "yard-know",
+   "gap": "Fixed: onto the parapet at a run (landed along its length it's run, not stuck), along it, off it into the side wall at 40° (the turn set up early, so the foot can give it), a wall run, and into the opening without a stop. Mirrored, the same."
+  },
+  {
+   "scene": "yard-find",
+   "gap": "Fixed: down onto the broad roof, slow round the parapet's end, a pause under the opening, then up: a spring, a hand on the sill, the pull, a knee over."
+  },
+  {
+   "scene": "hang-intents",
+   "gap": "Fixed: a shimmy, hand over hand along the lip while it's held along; at the lip's end it lets go, against a wall it pulls up."
+  },
+  {
+   "scene": "stair-ascent",
+   "gap": "Fixed: from the street it springs at the face and takes the 3 m sill as it comes into reach, then the 6 m and the 9 m, and over the top."
+  },
+  {
+   "scene": "street-deadend",
+   "gap": "Fixed: pressed head-on at the end of the alley, it goes up off the side walls (a chimney with nowhere to go along) and over a side wall's lip."
+  },
+  {
+   "scene": "mantle-box",
+   "gap": "Fixed: the mantle takes about 0.8 s now, drawn as a pull up to the hands, a press over them and a knee onto the top; the feet leave the roof as the pull takes the weight."
+  },
+  {
+   "scene": "underbar",
+   "gap": "Fixed: the hips let down under the bar while it lies back, a hand's breadth clear of it."
+  },
+  {
+   "scene": "transfer-clean",
+   "gap": "Fixed: the foot slide in every scene was mostly the measure (a foot still coming down counted as sliding) and the toe pivot (about a point at ankle height, so the drawn toe slid 5 cm as the heel came up). Measured on the sole's ball, true slide is a few centimetres in two scenes and none in the rest."
+  },
+  {
+   "scene": "stride-gap-b",
+   "gap": "Fixed: a small running jump is one stride. The flight plays the run's own half-stride stretched to fit it: the push foot the last to leave, its heel folding up and recovering behind the hips, the other leg driven through and reaching out to take the far roof, the push knee coming through into the next step 0.22 s after the landing. Gathered feet: 3% of the flight, from 54% (off the right) and 76% (off the left: the landing layer was written for the left leg). A precision aimed at something narrow still brings the feet together."
+  },
+  {
+   "scene": "yard-save",
+   "gap": "Basin: 63% of 91 perturbed runs make the same save (caught going over, feet to the wall, into the opening); it survives the stick 12 frames late, the start 0.4 m either way, the stick turned −6° to 12°. Past those edges it's mostly into the opening another way."
+  }
+ ],
+ "seen": {
+  "yard-save": "Room eye: along the parapet arms out for balance; the turn at its end tips the body over the side; one hand on the edge, the body slung out under it toward the side wall; a kick off it; one hand on the opening's sill; pulled in, stood.",
+  "yard-know": "Room eye: a bound onto the parapet's near end, run along it, a bound off it into the side wall, a wall run up it and a kick into the opening. Reads as one line.",
+  "yard-find": "Chase eye: a bound down and a roll on the broad roof, a slow walk round the parapet's end, stood under the opening, a spring and a hang from the sill, the pull over.",
+  "mantle-box": "Side view: walks to the box, a pull and press (crouched over the top at 3.17 s), stood, runs off its far side.",
+  "edge-stop": "Side view: let go running, it slows over a second and stops at the lip; the body tips forward over it and back, the arms held out in front.",
+  "tic-tac": "Chase eye: runs into the corner, kicks up off the side wall to the 5.7 m lip, hangs, pulls over. The eye is too close in the corner to see the kick well.",
+  "stair-ascent": "Side view: a spring at the face, a hang from each sill in turn (the side eye is pushed in against the body here), over the top and a stop.",
+  "vault-angles": "Chase view: three vaults at 11 to 14 m/s, square, slanted and along the third; no dashes between, no saves.",
+  "street-deadend": "Chase view: up the alley's end off its side walls, over the lip onto a side roof.",
+  "stride-gap-a": "Side view, 1/30 s: the left toe the last off the near roof, the right knee driving, the right foot reaching down to the far roof while the left heel is folded behind; the left knee through into the next step. Chase view: the same stride, but the legs hide each other from straight behind.",
+  "stride-gap-b": "Side view, before the change: both feet tucked together under the hips from a third of the way across to the landing. After: the right toe last off, the left reaching for the far side, the right heel recovering behind.",
+  "stair-swing": "Still eye inside the stairwell: down the first flight at about 8 m/s, the hand on the rail at the turn, the body slung out flat round it over the well, the trailing foot up on the underside of the landing's edge (marked), then out onto the second flight and running down it. Side eye: the same, harder to follow as the eye dodges the walls."
+ }
+}

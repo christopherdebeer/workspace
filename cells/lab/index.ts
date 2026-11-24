@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
+import { gzipSync } from 'node:zlib';
 import { EXPERIMENTS, groups, type Experiment } from './experiments';
 import { markdown } from './md';
 import { probe } from './client/squishy-lab/probes';
@@ -293,7 +294,14 @@ const text = (statusCode: number, type: string, body: string, cache: string) => 
   body,
 });
 
-export const handler = async (event: { rawPath?: string; rawQueryString?: string }) => {
+/** A Lambda's response is at most 6 MB: the bundle (every experiment, ~7 MB) is over it, so on its first ask after a
+ * deploy the response failed and the page didn't load, though the file had been stored and loaded fine from then on.
+ * Whatever large is returned is gzipped: ~7 MB of script is ~2 MB. Always, not by the asker's Accept-Encoding: the CDN
+ * in front doesn't pass that on to this Lambda (so asking it left the response whole, and failing), and every browser
+ * takes gzip. */
+const MAX_PLAIN = 1_000_000;
+
+export const handler = async (event: { rawPath?: string; rawQueryString?: string; headers?: Record<string, string | undefined> }) => {
   const path = (event.rawPath ?? '/').replace(/^\/@[^/]+\/lab(?=\/|$)/, '') || '/';
   try {
     const b = build();
@@ -306,6 +314,14 @@ export const handler = async (event: { rawPath?: string; rawQueryString?: string
       if (!o) return text(404, 'text/plain; charset=utf-8', 'not in this lab', 'no-store');
       await publish(path, o);
       const binary = !o.type.startsWith('text/') && !o.type.startsWith('application/javascript');
+      if (!binary && o.body.length > MAX_PLAIN) {
+        return {
+          statusCode: 200,
+          headers: { 'content-type': o.type, 'content-encoding': 'gzip', vary: 'accept-encoding', 'cache-control': 'public, max-age=31536000, immutable' },
+          body: gzipSync(o.body).toString('base64'),
+          isBase64Encoded: true,
+        };
+      }
       return {
         statusCode: 200,
         headers: { 'content-type': o.type, 'cache-control': 'public, max-age=31536000, immutable' },

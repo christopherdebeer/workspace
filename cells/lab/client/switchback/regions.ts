@@ -1,0 +1,60 @@
+/**
+ * The course's regions (`mood=course`, a flag for now): one descent, three things changing, each tied to what it belongs
+ * to, after Astra's notes. Light, by how far down the course you are, across the whole scene (keyed to the station, so a
+ * respawn at a checkpoint has the light that belongs there): the clear day at the top, warming below the cloud, toward
+ * golden hour further down. Atmosphere, by altitude: a belt of cloud at a height partway down (seeded), above which the
+ * valley's under a sea of cloud and the far ranges rise out of it, inside which the air closes in to tens of metres, and
+ * below which it's a grey ceiling. Terrain, by place, built into the ground as it's laid: below a snowline under the belt,
+ * the snow gives way to grass, patchy at its edge, the road's drifts dwindle and the pines thicken.
+ */
+import type { Course } from './course';
+import { hash } from './course';
+
+export type Time = 'day' | 'dusk' | 'night';
+export const TIMES: Time[] = ['day', 'dusk', 'night'];
+export const REGION = { on: false, beltS: 0, beltY: 0, half: 70, snowY: 0, seed: 1, time: 'day' as Time, woodsEnd: Infinity };
+/** the regions for a mountain: where the belt is (its station and height), the snowline under it */
+/** (time: the run's time of day, `time=day|dusk|night`, day if unset; `time=auto` the mountain's own, by its seed: day
+ * half the time, dusk a third, night the rest) */
+export function setRegions(c: Course, time?: string | null) {
+  REGION.on = true; REGION.seed = c.seed;
+  const r = hash(c.seed, 5, 74);
+  // (day unless asked; `time=auto` the mountain's own)
+  REGION.time = (TIMES as string[]).includes(time ?? '') ? (time as Time) : time === 'auto' ? (r < 0.5 ? 'day' : r < 0.83 ? 'dusk' : 'night') : 'day';
+  REGION.beltS = 1000 + Math.round(hash(c.seed, 3, 71) * 500);
+  REGION.beltY = c.point(REGION.beltS, 0).y;
+  REGION.snowY = REGION.beltY - REGION.half - 20;
+}
+/** how far below the snowline a point is, 0 (snow) to 1 (grass), patchy round the line (by place) */
+export function grassiness(x: number, y: number, z: number) {
+  if (!REGION.on) return 0;
+  const patch = (hash(REGION.seed, Math.round(x / 9), Math.round(z / 9), 72) - 0.5) * 60;
+  return Math.max(0, Math.min(1, (REGION.snowY + patch - y) / 50));
+}
+/** the light's keys down the course, (station, mood): the run's time of day, drifting on as you go down (a day run warms
+ * toward golden hour by the end of a long one; a dusk run darkens into night; night stays night). Not the terrain: the
+ * lower slopes' grass and earth are laid in the ground, and coloured by whatever light there is */
+export function lightKeys(): [number, string][] {
+  return REGION.time === 'day' ? [[0, 'day'], [1500, 'day'], [5000, 'gold']] : REGION.time === 'dusk' ? [[0, 'gold'], [1800, 'gold'], [4500, 'moon']] : [[0, 'moon']];
+}
+/** how far into the woods a station is, 0 (open snow) to 1 (deep in the forest): coming down through the snowline the
+ * pines close in over the next 115 m of height; past `woodsEnd` (a station; none yet) they thin out again over 150 m, so
+ * a course can ride out of the forest as well as into it (and the woods' light and air (paint.ts) follow it) */
+export function woodsAt(s: number, y: number) {
+  if (!REGION.on) return 0;
+  const d = Math.max(0, Math.min(1, (REGION.snowY - y) / 115)), into = d * d * (3 - 2 * d);
+  const out = Math.max(0, Math.min(1, (s - REGION.woodsEnd) / 150));
+  return into * (1 - out * out * (3 - 2 * out)) * (1 - 0.85 * clearing(s));
+}
+/** a clearing in the woods at station s, 0 to 1: most stretches of ~650 m have one, ~90 m across with ~40 m edges,
+ * where the pines open and the light comes down (seeded): ridden through, the woods' light opens ahead and closes again */
+export function clearing(s: number) {
+  const B = 650, b = Math.floor(s / B);
+  let cut = 0;
+  for (const k of [b - 1, b, b + 1]) {
+    if (hash(REGION.seed, k, 89) > 0.75) continue;
+    const d = Math.abs(s - (k * B + 150 + hash(REGION.seed, k, 88) * 350)), e = Math.max(0, Math.min(1, (d - 45) / 40));
+    cut = Math.max(cut, 1 - e * e * (3 - 2 * e));
+  }
+  return cut;
+}

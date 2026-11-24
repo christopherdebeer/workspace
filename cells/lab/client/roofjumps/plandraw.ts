@@ -1,0 +1,116 @@
+/**
+ * Roof Jumps' plan, drawn into the city: each route a ribbon along where it goes, coloured by the move it's in, a ring
+ * where each move begins. The primary is broad; the best to the left and to the right narrower; the rest of the fan
+ * hairlines. (render.ts draws them, and still shows them, faint, behind what stands in front.)
+ */
+import type { Move, Reach } from './runner';
+import type { Detail, DetailKind, Hold, HoldKind } from './city';
+import type { Plan, Route } from './plan';
+import type { Stroke } from './render';
+
+export const MOVE_COLOUR: Record<Move, [number, number, number]> = {
+  kick: [0.85, 0.15, 0.55],
+  run: [0.16, 0.16, 0.18], dash: [0.98, 0.5, 0.1], ledge: [0.95, 0.95, 0.95], roll: [0.93, 0.35, 0.6],
+  vault: [0.75, 0.9, 0.1], hop: [0.95, 0.8, 0.15], bound: [0.13, 0.42, 0.95], flip: [0.55, 0.3, 0.95], spring: [0.1, 0.68, 0.32],
+  dive: [0.88, 0.16, 0.16], glide: [0.1, 0.72, 0.8], climb: [0.55, 0.38, 0.2], wallrun: [0.85, 0.15, 0.8],
+  fall: [0.45, 0.45, 0.5], hang: [0.7, 0.5, 0.25], chimney: [0.95, 0.3, 0.55], sideflip: [0.7, 0.3, 0.95], underbar: [0.9, 0.9, 0.25], swing: [0.3, 0.85, 0.75],
+};
+
+function route(r: Route, w: number, alpha: number, rings: boolean, out: Stroke[]): void {
+  const pts: number[] = [], cols: number[] = [], n = r.moves.length;
+  for (let i = 0; i < n; i++) {
+    const c = MOVE_COLOUR[r.moves[i]];
+    // (a little off whatever it runs on, and fading toward its far end)
+    pts.push(r.pts[i * 3], r.pts[i * 3 + 1] + 0.1, r.pts[i * 3 + 2]); cols.push(c[0], c[1], c[2], alpha * (1 - 0.6 * (i / n)));
+  }
+  out.push({ pts, cols, w });
+  if (!rings) return;
+  for (const l of r.legs.slice(1)) {
+    const c = MOVE_COLOUR[l.move], ring: number[] = [], rc: number[] = [];
+    for (let k = 0; k <= 10; k++) { const a = (k / 10) * 2 * Math.PI; ring.push(l.x + Math.cos(a) * 0.4, l.y + 0.1, l.z + Math.sin(a) * 0.4); rc.push(c[0], c[1], c[2], alpha); }
+    out.push({ pts: ring, cols: rc, w: w * 0.6 });
+  }
+}
+
+/** a colour a kind (every kind: a hold with none would stop the frame) */
+const HOLD_COLOUR: Record<HoldKind, readonly [number, number, number]> = { edge: [0.2, 0.45, 0.9], rail: [0.95, 0.95, 0.95], sill: [0.1, 0.65, 0.3], pipe: [0.95, 0.5, 0.1], face: [0.6, 0.35, 0.75], bar: [0.85, 0.85, 0.3], ledge: [0.15, 0.8, 0.75], ac: [0.9, 0.3, 0.6], sign: [0.95, 0.8, 0.1], balcony: [0.4, 0.9, 0.35], escape: [0.55, 0.75, 0.95], railing: [0.8, 0.8, 0.85] };
+/** The holds about a place, as tags on what they're on: a line each (a wall, for the feet, a row of ticks at knee height
+ * and again a storey up); and where the hands are (red rings) and the feet (black) this instant. */
+export function holdStrokes(holds: Hold[], reach: Reach, x: number, y: number, z: number, r: number): Stroke[] {
+  const out: Stroke[] = [];
+  for (const h of holds) {
+    // (a little out from the wall it's on, so it's seen)
+    const c = HOLD_COLOUR[h.kind], ox = h.nx * 0.04, oz = h.nz * 0.04;
+    const a = Math.max(0, 1 - Math.hypot((h.ax + h.bx) / 2 - x, (h.ay + h.by) / 2 - y, (h.az + h.bz) / 2 - z) / r);
+    if (a <= 0) continue;
+    if (h.kind === 'face') {
+      // (a tick a metre: it's a surface, not a line)
+      const l = Math.hypot(h.bx - h.ax, h.bz - h.az), ux = (h.bx - h.ax) / l, uz = (h.bz - h.az) / l;
+      // (and where a foot's on it now (a run along it, up it, a kick off it), the ticks by the foot lit, longer and bolder: the
+      // wall seen being used, not just marked)
+      const feet = [reach.fl, reach.fr].filter((p): p is [number, number, number] => !!p && Math.abs((p[0] - h.ax) * h.nx + (p[2] - h.az) * h.nz) < 0.3 && p[1] >= h.ay - 0.1 && p[1] <= h.by + 0.1);
+      for (let ty = h.ay + 0.5; ty < h.by; ty += 3) for (let t = 0.5; t < l; t += 1) {
+        const px = h.ax + ux * t + ox, pz = h.az + uz * t + oz, lit = feet.reduce((m, p) => Math.max(m, 1 - Math.hypot(p[0] - px, (p[1] - ty) * 0.35, p[2] - pz) / 1.6), 0);
+        const k = Math.max(0, 1 - Math.hypot(px - x, ty - y, pz - z) / r) * 0.7 * (1 - lit) + lit, len = 1 + 1.5 * lit;
+        if (k > 0) out.push({ pts: [px, ty, pz, px + ux * 0.12 * len, ty + 0.22 * len, pz + uz * 0.12 * len], cols: [c[0], c[1], c[2], k, c[0], c[1], c[2], k], w: 0.03 + 0.04 * lit });
+      }
+      continue;
+    }
+    out.push({ pts: [h.ax + ox, h.ay + 0.02, h.az + oz, h.bx + ox, h.by + 0.02, h.bz + oz], cols: [c[0], c[1], c[2], a, c[0], c[1], c[2], a], w: h.kind === 'edge' ? 0.025 : 0.05 });
+  }
+  for (const [p, c] of [[reach.hl, [0.95, 0.1, 0.1]], [reach.hr, [0.95, 0.1, 0.1]], [reach.fl, [0.05, 0.05, 0.05]], [reach.fr, [0.05, 0.05, 0.05]]] as const) {
+    if (!p) continue;
+    const ring: number[] = [], rc: number[] = [];
+    for (let k = 0; k <= 8; k++) { const t = (k / 8) * 2 * Math.PI; ring.push(p[0] + Math.cos(t) * 0.12, p[1] + 0.02 + Math.sin(t) * 0.12, p[2] + Math.sin(t + 1) * 0.1); rc.push(c[0], c[1], c[2], 1); }
+    out.push({ pts: ring, cols: rc, w: 0.035 });
+  }
+  return out;
+}
+
+export function planStrokes(p: Plan): Stroke[] {
+  const out: Stroke[] = [];
+  for (const r of p.all) if (r !== p.primary && r !== p.left && r !== p.right) route(r, 0.03, 0.35, false, out);
+  if (p.left) route(p.left, 0.08, 0.8, true, out);
+  if (p.right) route(p.right, 0.08, 0.8, true, out);
+  route(p.primary, 0.16, 1, true, out);
+  return out;
+}
+
+/** a colour a detail kind, for the `?details` view (every kind) */
+const DETAIL_COLOUR: Record<DetailKind, readonly [number, number, number]> = {
+  windows: [0.95, 0.8, 0.35], pipes: [0.55, 0.55, 0.6], ladder: [0.85, 0.85, 0.85], blade: [0.95, 0.3, 0.35], rust: [0.7, 0.35, 0.15], awning: [0.3, 0.6, 0.9], neon: [1, 0.3, 0.8],
+  billboard: [0.95, 0.95, 0.4], aerial: [0.6, 0.9, 0.6], dish: [0.8, 0.8, 1], laundry: [0.9, 0.7, 0.9], pole: [0.35, 0.3, 0.25], wire: [0.1, 0.1, 0.1], vending: [0.2, 0.8, 0.9], bin: [0.4, 0.6, 0.3], dormer: [0.4, 0.5, 0.7],
+};
+/** The city's tagged details about a place, as lines (none of the looks draws them yet): a window row as its outline, a line or
+ * a run (a pipe's bends, a wire's sag) as itself, a thing standing at a point (a pole, an aerial, a machine) as an upright its height */
+export function detailStrokes(details: Detail[], x: number, z: number, r: number): Stroke[] {
+  const out: Stroke[] = [];
+  for (const d of details) {
+    const a = Math.max(0, 1 - Math.hypot(d.pts[0][0] - x, d.pts[0][2] - z) / r); if (a <= 0) continue;
+    // (the windows faint and fine, there being so many; the rest bold)
+    const k = d.kind === 'windows' ? a * 0.4 : a, c = DETAIL_COLOUR[d.kind], line = (pts: number[]) => out.push({ pts, cols: Array.from({ length: pts.length / 3 }, () => [c[0], c[1], c[2], k]).flat(), w: d.kind === 'wire' ? 0.02 : d.kind === 'windows' ? 0.015 : 0.05 });
+    if (d.kind === 'windows') { const [p, q] = d.pts; line([p[0], p[1], p[2], q[0], q[1], q[2], q[0], q[1] + d.h, q[2], p[0], p[1] + d.h, p[2], p[0], p[1], p[2]]); }
+    else if (d.pts.length > 1) line(d.pts.flat());
+    else { const p = d.pts[0]; line([p[0], p[1], p[2], p[0], p[1] + d.h, p[2]]); }
+  }
+  return out;
+}
+
+/**
+ * The chunks drawn about the eye, as lines (`?chunks`), to reason about the brush's distance bands (strokes.ts `lodOf`): each
+ * chunk's outline at the street and again high over the roofs, a post at each corner, coloured by its band: green the full
+ * brush (the eye's chunk and the ring about it), yellow 2.5 times, orange 4, red 6. And the window rooms' reach (interiors.ts:
+ * fading from 35 m, gone by 46 m), a cyan ring about the eye.
+ */
+export function chunkStrokes(ex: number, ez: number, radius: number, high = 30): Stroke[] {
+  const out: Stroke[] = [], C = 64, cx0 = Math.floor(ex / C), cz0 = Math.floor(ez / C);
+  const band = (ring: number): [number, number, number] => (ring <= 1 ? [0.2, 0.85, 0.35] : ring === 2 ? [0.95, 0.85, 0.2] : ring === 3 ? [0.98, 0.55, 0.15] : [0.9, 0.2, 0.2]);
+  const line = (pts: number[], c: [number, number, number], a: number, w: number) => out.push({ pts, cols: Array.from({ length: pts.length / 3 }, () => [c[0], c[1], c[2], a]).flat(), w });
+  for (let i = -radius; i <= radius; i++) for (let j = -radius; j <= radius; j++) {
+    const cx = cx0 + i, cz = cz0 + j, ring = Math.max(Math.abs(i), Math.abs(j)), c = band(ring), x0 = cx * C + 0.5, z0 = cz * C + 0.5, x1 = x0 + C - 1, z1 = z0 + C - 1;
+    for (const y of [0.3, high]) line([x0, y, z0, x1, y, z0, x1, y, z1, x0, y, z1, x0, y, z0], c, y > 1 ? 0.9 : 0.6, y > 1 ? 0.14 : 0.08);
+    for (const [x, z] of [[x0, z0], [x1, z0], [x1, z1], [x0, z1]]) line([x, 0, z, x, high, z], c, 0.7, 0.1);
+  }
+  for (const [r, y] of [[46, 0.4], [46, high], [35, high]]) { const pts: number[] = []; for (let k = 0; k <= 48; k++) { const a = (k / 48) * Math.PI * 2; pts.push(ex + Math.cos(a) * r, y, ez + Math.sin(a) * r); } line(pts, [0.3, 0.9, 1.0], r === 35 ? 0.5 : 0.9, 0.08); }
+  return out;
+}

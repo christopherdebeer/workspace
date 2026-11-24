@@ -1,0 +1,618 @@
+{
+ "set": "roofjumps",
+ "about": "Reference clips for Roof Jumps' movement and feel, and (marked `\"for\": \"city\"`) for its city: what's in it, not how it's painted. Labels are ours: what is seen, where, by time from the clip's start (s). Moves use the parkour names where they apply; 'ours' maps a segment to the runner's move or state. Clips and frames are never committed: devtools/refs.mjs makes them again into devtools/out/refs/.",
+ "clips": [
+  {
+   "id": "kyo-rooftops",
+   "url": "https://x.com/KYOGETSU_2026/status/2122537506919047545",
+   "author": "梔虚月 (@KYOGETSU_2026)",
+   "title": "空間の連続性を検証中",
+   "titleEn": "testing the continuity of space",
+   "uploaded": "2026-11-17",
+   "duration": 20.04,
+   "notes": "The first reference (Roof Jumps' first slice, before this manifest; URL recovered 2026-11-19). One take, the eye close behind and a little above, wide. A figure drops her bag, runs off along a railed walkway and crosses low crowded rooftops over rails, units and alleys, nearly every leap held arms straight out (a display posture more than a mechanical one), runs along building faces over an alley, then sinks a long way down an alley to the street, lands and turns. Taken from it: the eye, the city's grain, the lightness (the glide). Labelled 2026-11-19 from a 4 fps sheet (times to the quarter second).",
+   "segments": [
+    {
+     "t0": 0.0,
+     "t1": 1.25,
+     "label": "the bag dropped",
+     "moves": [],
+     "ours": "(stand)",
+     "camera": "close behind",
+     "fps": 4
+    },
+    {
+     "t0": 1.25,
+     "t1": 2.0,
+     "label": "off along the walkway, over the rail",
+     "moves": [
+      "acceleration",
+      "rail hop"
+     ],
+     "ours": "run, hop",
+     "camera": "close behind",
+     "notes": "airborne arms out ~1.75-2.0"
+    },
+    {
+     "t0": 2.0,
+     "t1": 3.25,
+     "label": "along a roof edge, leap to the next",
+     "moves": [
+      "run",
+      "gap jump"
+     ],
+     "ours": "run, bound",
+     "camera": "close behind",
+     "notes": "arms straight out, held, through the flight ~2.75-3.25"
+    },
+    {
+     "t0": 3.25,
+     "t1": 4.5,
+     "label": "up onto a higher block and over",
+     "moves": [
+      "climb up",
+      "drop"
+     ],
+     "ours": "spring (or plant and catch)",
+     "camera": "close behind",
+     "notes": "springs straight up the face, arms up ~3.5; on top arms out ~3.75; over and down ~4.25"
+    },
+    {
+     "t0": 4.5,
+     "t1": 5.5,
+     "label": "over an air-conditioning unit",
+     "moves": [
+      "hop",
+      "leap"
+     ],
+     "ours": "hop / vault",
+     "camera": "close behind",
+     "notes": "arms out over it ~4.75-5.0"
+    },
+    {
+     "t0": 5.5,
+     "t1": 7.0,
+     "label": "across the roofs, over an alley",
+     "moves": [
+      "run",
+      "gap jump"
+     ],
+     "ours": "run, bound",
+     "camera": "close behind, low"
+    },
+    {
+     "t0": 7.0,
+     "t1": 9.0,
+     "label": "along the faces over an alley",
+     "moves": [
+      "wall run"
+     ],
+     "ours": "wallrun, kick (wall to wall)",
+     "camera": "close behind, above the alley",
+     "notes": "on one face ~7.25-7.75, across to the other ~8.0-8.75"
+    },
+    {
+     "t0": 9.0,
+     "t1": 11.25,
+     "label": "over the rooftops, a parapet, a crouched landing",
+     "moves": [
+      "gap jump",
+      "precision",
+      "landing"
+     ],
+     "ours": "bound, ledge, landing",
+     "camera": "close behind, higher",
+     "notes": "crouched landing on a ledge ~10.5; down onto a roof, arms out ~11.0"
+    },
+    {
+     "t0": 11.25,
+     "t1": 12.4,
+     "label": "run to the alley's edge",
+     "moves": [
+      "run"
+     ],
+     "ours": "run",
+     "camera": "close behind"
+    },
+    {
+     "t0": 12.4,
+     "t1": 15.75,
+     "label": "the long sink down the alley",
+     "moves": [
+      "drop (exaggerated: a glide)"
+     ],
+     "ours": "glide (held)",
+     "camera": "above and behind, following down",
+     "fps": 6,
+     "width": 300,
+     "cols": 10,
+     "notes": "about 3.3 s from the edge to the street, arms straight out, legs together, slowly sinking past the wires: four or five storeys, a sink of roughly 4-5 m/s"
+    },
+    {
+     "t0": 15.75,
+     "t1": 16.5,
+     "label": "landing in the street",
+     "moves": [
+      "landing"
+     ],
+     "ours": "landing (deep)",
+     "camera": "behind, at the street",
+     "fps": 12,
+     "notes": "the skirt belled out on touchdown ~15.75; a crouch; up ~16.25"
+    },
+    {
+     "t0": 16.5,
+     "t1": 20.0,
+     "label": "turns; close-ups (no movement)",
+     "moves": [],
+     "fps": 2
+    }
+   ],
+   "source": "1280x720, 24 fps; AI-generated, by the author's account"
+  },
+  {
+   "id": "kyo-stair",
+   "url": "https://x.com/KYOGETSU_2026/status/2122860490011664469",
+   "author": "梔虚月 (@KYOGETSU_2026)",
+   "title": "おはようございます！ 忘れ物を取りに戻ります",
+   "titleEn": "Good morning! Going back for something I forgot",
+   "uploaded": "2026-11-18",
+   "duration": 25.04,
+   "source": "1280x720, 24 fps; AI-generated (by the author's account, made with Kling)",
+   "notes": "A figure sprints along a street, steps up onto a ledge, climbs a zig-zag fire escape by springing rail to rail straight up through the flights (a storey a beat), reaches the roof, walks to her bag. The eye is wide and nearly still for the climb: everything reads in silhouette. Studied 2026-11-19: the climb chain, the bound's length change, the landing beat came from it.",
+   "segments": [
+    {
+     "t0": 0.0,
+     "t1": 1.25,
+     "label": "walk to sprint",
+     "moves": [
+      "acceleration"
+     ],
+     "ours": "run",
+     "camera": "side, panning",
+     "fps": 8,
+     "notes": "walk to full lean in ~0.4 s; pitched 35-40 deg forward, low, long stride"
+    },
+    {
+     "t0": 1.25,
+     "t1": 2.5,
+     "label": "step up onto a ledge, load, up",
+     "moves": [
+      "step vault",
+      "precision"
+     ],
+     "ours": "spring (small), landing beat",
+     "camera": "side, panning",
+     "fps": 24,
+     "cols": 10,
+     "width": 330,
+     "notes": "off one foot 1.50-1.65, knee driven, arms reaching; airborne ~0.25 s; lands on the ledge ~1.80 and keeps going: two steps, a deep load 2.08-2.17 (~0.1 s), up onto the stairs 2.2"
+    },
+    {
+     "t0": 2.25,
+     "t1": 3.5,
+     "label": "up the first flight",
+     "moves": [
+      "stair run"
+     ],
+     "ours": "run",
+     "camera": "wide, rising",
+     "fps": 8
+    },
+    {
+     "t0": 3.5,
+     "t1": 9.5,
+     "label": "fire escape: a storey a beat",
+     "moves": [
+      "climb up",
+      "cat leap",
+      "pull up"
+     ],
+     "ours": "hang chain",
+     "camera": "wide, rising slowly",
+     "fps": 6,
+     "width": 400,
+     "cols": 6,
+     "notes": "about 1.1 s a storey, nearly identical each time"
+    },
+    {
+     "t0": 7.3,
+     "t1": 8.8,
+     "label": "one storey at 24 fps",
+     "moves": [
+      "stair run",
+      "load",
+      "dyno",
+      "pull up"
+     ],
+     "ours": "hang: loaded, sprung, caught",
+     "camera": "wide",
+     "fps": 24,
+     "crop": "560:600:360:60",
+     "width": 200,
+     "notes": "steps 7.34-7.80 (~0.45 s, 3 crouched steps); load 7.84-8.05 (~0.2 s); full-length reach for the rail above 8.09-8.30 (~0.2 s); pull up into a tuck 8.34-8.47 (~0.15 s); onto the next flight 8.5"
+    },
+    {
+     "t0": 9.5,
+     "t1": 14.5,
+     "label": "fire escape, higher",
+     "moves": [
+      "climb up"
+     ],
+     "ours": "hang chain",
+     "camera": "wide",
+     "fps": 4,
+     "width": 400,
+     "cols": 5
+    },
+    {
+     "t0": 14.5,
+     "t1": 19.5,
+     "label": "roof arrival, settle, the bag",
+     "moves": [
+      "climb up",
+      "vault",
+      "landing",
+      "walk"
+     ],
+     "ours": "climb, landing beat, settle",
+     "camera": "wide, then closer",
+     "fps": 5,
+     "width": 400,
+     "cols": 5,
+     "notes": "reach to the parapet 16.1-16.3; over it tucked 16.5; deep crouch on landing 16.9; up 17.1; in about a second down to a walk 17.5-18.3; bends for the bag 18.5"
+    },
+    {
+     "t0": 19.5,
+     "t1": 25.0,
+     "label": "close-ups (no movement)",
+     "moves": [],
+     "fps": 2
+    }
+   ]
+  },
+  {
+   "id": "kyo-kling-parkour",
+   "url": "https://x.com/KYOGETSU_2026/status/2122531659639820411",
+   "author": "梔虚月 (@KYOGETSU_2026)",
+   "title": "おはようございます！ Kling4.0のアニメーションをテスト中です♥",
+   "titleEn": "Good morning! Testing Kling 4.0's animation",
+   "uploaded": "2026-11-17",
+   "duration": 15.04,
+   "source": "1280x720, 24 fps; AI-generated with Kling 4.0, from the prompt in refs/kyo-kling-parkour.prompt.md (eight shots planned; seven given in the prompt as shared)",
+   "notes": "A cut sequence, not one take: eight shots, each a named parkour move, the eye changing every 1.5-2 s. Labelled 2026-11-19 against the prompt's shot list; where what's seen differs from what was asked, the label says what's seen.",
+   "segments": [
+    {
+     "t0": 0.0,
+     "t1": 0.7,
+     "label": "bag thrown, sprint off",
+     "moves": [
+      "acceleration"
+     ],
+     "ours": "run",
+     "camera": "low rear tracking",
+     "prompt": "shot 1"
+    },
+    {
+     "t0": 0.7,
+     "t1": 1.6,
+     "label": "over a block: a high spread leap",
+     "moves": [
+      "kong vault (asked)",
+      "leap (seen)"
+     ],
+     "ours": "vault / spring",
+     "camera": "low rear tracking",
+     "prompt": "shot 1",
+     "notes": "asked a kong; seen a high leap, arms spread wide, symmetric: more display than vault"
+    },
+    {
+     "t0": 1.6,
+     "t1": 3.4,
+     "label": "up an alley wall to wall",
+     "moves": [
+      "wall run",
+      "tic tac",
+      "chimney"
+     ],
+     "ours": "wallrun, kick (wall to wall)",
+     "camera": "low frontal tracking",
+     "prompt": "shot 2",
+     "notes": "hands and feet on both walls, rising between them: a kick off one side about every 0.25 s, 1.60-3.35"
+    },
+    {
+     "t0": 3.4,
+     "t1": 5.0,
+     "label": "cat leap, hang, mantle",
+     "moves": [
+      "precision",
+      "cat leap",
+      "climb up"
+     ],
+     "ours": "plant, climb (lip)",
+     "camera": "lateral tracking",
+     "prompt": "shot 3",
+     "notes": "leap 3.48-3.73; a hand on the top ~3.82; hanging, the feet walking up the wall, 3.90-4.30; over 4.40-4.98"
+    },
+    {
+     "t0": 5.0,
+     "t1": 6.4,
+     "label": "rooftop sprint",
+     "moves": [
+      "dash vault (asked)",
+      "sprint (seen)"
+     ],
+     "ours": "run, dash",
+     "camera": "low rear, at the feet",
+     "prompt": "shot 4"
+    },
+    {
+     "t0": 6.4,
+     "t1": 7.2,
+     "label": "across a gap, turned over tucked",
+     "moves": [
+      "webster"
+     ],
+     "ours": "flip",
+     "camera": "low rear",
+     "prompt": "shot 4",
+     "notes": "a tucked ball at the top ~6.75, arms out to land ~7.0"
+    },
+    {
+     "t0": 7.2,
+     "t1": 9.2,
+     "label": "down to a lower roof, dive roll, run",
+     "moves": [
+      "drop",
+      "dive roll",
+      "speed vault (asked)"
+     ],
+     "ours": "dive, roll",
+     "camera": "overhead tracking",
+     "prompt": "shot 5",
+     "notes": "tuck ~8.25; up and running ~8.75"
+    },
+    {
+     "t0": 9.2,
+     "t1": 11.3,
+     "label": "under a pipe, side flip, past the eye",
+     "moves": [
+      "underbar",
+      "side flip"
+     ],
+     "ours": "(not yet: underbar); flip",
+     "camera": "retreating frontal, whip pan",
+     "prompt": "shot 6",
+     "notes": "pipe ~9.5; arms spread ~9.75; inverted 10.0-10.25; lands and runs at the eye 10.5-11.0"
+    },
+    {
+     "t0": 11.3,
+     "t1": 13.2,
+     "label": "along the parapet, the alleys below",
+     "moves": [
+      "palm spin (asked)",
+      "kong vault (asked)",
+      "run (seen)"
+     ],
+     "ours": "run, ledge",
+     "camera": "elevated rear three-quarter",
+     "prompt": "shot 7"
+    },
+    {
+     "t0": 13.2,
+     "t1": 15.0,
+     "label": "the last leap: dive and flip onto the far roof",
+     "moves": [
+      "gap jump",
+      "flip"
+     ],
+     "ours": "dive / flip, landing",
+     "camera": "close side, then wide rear",
+     "prompt": "shot 8 (not in the shared prompt)",
+     "notes": "launch close to the eye 13.25-13.5; inverted over the city 14.0-14.25; lands running 14.5-14.75"
+    }
+   ]
+  },
+  {
+   "id": "kiuzyx-city",
+   "for": "city",
+   "url": "https://x.com/kiuzyx/status/2124133228831502826",
+   "author": "𝖐𝖎𝖚 (@kiuzyx)",
+   "title": "a job that slowly kills you",
+   "uploaded": "2026-11-21",
+   "duration": 48.39,
+   "notes": "A city reference, not a movement one: eight slow, high, still-eyed shots of a dense Japanese city at dusk (lyrics laid over them). Studied for what the city has and how it's put together: off-white and beige concrete faces in tight grids of small, warm-lit windows; continuous balcony bands with railings; bundles of pipes run up and across the faces with bends; ladders up the sides; units on balconies and roofs; panel water tanks, railings and frames on the roofs; blade signs and rooftop billboards; rust streaks; utility poles with dense overhead wires; dark pitched tile roofs and a pagoda among the flat concrete; glass towers behind; steep stepped streets, alleys a body wide. Labelled 2026-11-21 from a 1 fps sheet.",
+   "source": "1080x1440 (portrait), ~48 s; looks AI-generated",
+   "sheet": {
+    "fps": 1,
+    "cols": 10
+   },
+   "segments": [
+    {
+     "t0": 0,
+     "t1": 6,
+     "label": "towers at dusk over low white blocks",
+     "city": [
+      "glass towers behind",
+      "a domed white block",
+      "street with cars",
+      "lit windows"
+     ],
+     "notes": "the low city in front of the high: layers of height"
+    },
+    {
+     "t0": 6,
+     "t1": 12,
+     "label": "a dense hillside neighbourhood, a temple roof, the sea",
+     "city": [
+      "balcony bands",
+      "units on balconies",
+      "blade signs",
+      "pitched tile roofs",
+      "pagoda",
+      "a steep stepped street",
+      "overhead wires",
+      "the sea beyond"
+     ],
+     "notes": "faces packed edge to edge, every one with balconies and railings; a figure with an umbrella on the stepped street"
+    },
+    {
+     "t0": 12,
+     "t1": 18,
+     "label": "a street of shops, taxis, tanks behind",
+     "city": [
+      "shopfronts with awnings",
+      "vending machines",
+      "taxis",
+      "storage tanks",
+      "rooftop frames"
+     ],
+     "notes": "the street level the roofs stand on"
+    },
+    {
+     "t0": 18,
+     "t1": 24,
+     "label": "an elevated railway in front of a block with round windows",
+     "city": [
+      "a viaduct with a train",
+      "round windows",
+      "trees below"
+     ],
+     "notes": "a line through the city at a storey or two up"
+    },
+    {
+     "t0": 24,
+     "t1": 30,
+     "label": "a beige face thick with pipes, pods and units",
+     "city": [
+      "pipe bundles up and across, with bends",
+      "rust streaks",
+      "units",
+      "a sign box",
+      "projecting pods",
+      "an alley a body wide",
+      "bins and crates at the foot"
+     ],
+     "notes": "the richest face for holds: pipes to climb and shimmy, pods to stand on"
+    },
+    {
+     "t0": 30,
+     "t1": 36,
+     "label": "a white glass box, a bus, bare trees",
+     "city": [
+      "a glass-fronted block",
+      "a bus",
+      "trees",
+      "a lit grid of offices behind"
+     ],
+     "notes": ""
+    },
+    {
+     "t0": 36,
+     "t1": 42,
+     "label": "a neon shopping street face",
+     "city": [
+      "neon signs",
+      "dense blade signs",
+      "people",
+      "lit shopfronts"
+     ],
+     "notes": "the night face of the street"
+    },
+    {
+     "t0": 42,
+     "t1": 48,
+     "label": "a plain white block, its roof, the street",
+     "city": [
+      "a ladder up the side",
+      "panel water tanks",
+      "roof railings",
+      "balcony bands",
+      "utility pole with dense wires",
+      "bins",
+      "a car"
+     ],
+     "notes": "wires strung across the whole frame at a storey or two: a city's real hazard to a jump"
+    }
+   ]
+  },
+  {
+   "id": "ychive-hands",
+   "for": "hands",
+   "url": "https://x.com/YCHive7/status/2123796352832512374",
+   "author": "YCHive (@YCHive7), sharing a tutorial by the Chinese artist Ju Neng Binggui",
+   "title": "How to animate hands",
+   "uploaded": "2026-11-20",
+   "duration": 54.02,
+   "notes": "A hand-drawing tutorial, not a movement clip: how a hand is built, so it can be drawn (and posed) in any position. Fingers as segments, with the base knuckle a segment into the palm (not at its edge); fingers as cylinders folding into a fist that is a box of planes; the thumb's root a wedge deep in the palm toward the wrist, turning with it; then poses put together with the segments overlaid (a pinch, a fist, a point, a grip, an open hand); the thumb two knuckles, not three. Studied for the runner's hands: an open reaching hand, a hand closed on a hold, a palm planted on a vault. Labelled 2026-11-22 from a 1 fps sheet.",
+   "source": "1280x720, ~54 s; drawn animation with titles in Chinese and English",
+   "sheet": {
+    "fps": 1,
+    "cols": 6
+   },
+   "segments": [
+    {
+     "t0": 0,
+     "t1": 2,
+     "label": "a film still: a hand rolling a capsule between its fingers",
+     "hands": [
+      "fingertip roll"
+     ],
+     "notes": "the opener: the kind of fine finger motion the tutorial is for"
+    },
+    {
+     "t0": 2,
+     "t1": 11,
+     "label": "P1 fingers and palms: segments, and where the bend is",
+     "hands": [
+      "finger segments",
+      "knuckle inside the palm"
+     ],
+     "notes": "wrong (bent at the palm's edge) against right (bent a segment into the palm, where the knuckle is); the palm side of the fingers longer than it looks"
+    },
+    {
+     "t0": 11,
+     "t1": 18,
+     "label": "P2 where are the fingers: cylinders and joints, folding into a fist",
+     "hands": [
+      "fingers as cylinders",
+      "fist as a box"
+     ],
+     "notes": "the closed fist read as a block with planes (top, front, side, the thumb's face)"
+    },
+    {
+     "t0": 18,
+     "t1": 29,
+     "label": "P3 thumbs up: the thumb's root a wedge deep in the palm",
+     "hands": [
+      "thumb metacarpal",
+      "thenar pad"
+     ],
+     "notes": "the thumb moves from near the wrist, the pad of the palm moving with it; its root is hidden in the palm"
+    },
+    {
+     "t0": 29,
+     "t1": 50,
+     "label": "put together: poses with the segments overlaid",
+     "hands": [
+      "pinch",
+      "fist",
+      "point",
+      "grip",
+      "open"
+     ],
+     "notes": "each pose drawn, then its segments coloured over it: the same few parts make every pose"
+    },
+    {
+     "t0": 50,
+     "t1": 54,
+     "label": "the thumb is two knuckles, not three",
+     "hands": [
+      "thumb joints"
+     ],
+     "notes": "the visible thumb two segments, its third (the root) in the palm"
+    }
+   ]
+  }
+ ]
+}
