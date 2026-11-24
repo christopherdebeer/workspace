@@ -11,6 +11,7 @@ import type { City } from './city';
 import type { M4 } from './m4';
 import type { Bone } from './rig';
 import type { Runner } from './runner';
+import type { Spline } from './strokes';
 import { STREET } from './reach';
 import type { Item } from './reach';
 
@@ -70,6 +71,21 @@ export function itemBones(city: City, cp: Checkpoints, x: number, z: number, t: 
     const yaw = t * 0.8 + it.x * 0.37, m = at(it.x, it.y, it.z, yaw);
     out.push({ name: 'item:post', m, y0: 0, y1: 1.5, w0: 0.07, d0: 0.07, w1: 0.06, d1: 0.06, zc: 0, mat: 7 });
     out.push({ name: 'item:flag', m, x: 0.24, y0: 1.08, y1: 1.46, w0: 0.42, d0: 0.035, w1: 0.38, d1: 0.03, zc: 0, mat });
+  }
+  return out;
+}
+
+/** the checkpoints not yet taken, painted (the stroke looks): the post a pale upright stroke, the flag a warm one across it,
+ * turning on the post; each a few strokes so it reads as made, not stamped */
+export function itemSplines(city: City, cp: Checkpoints, x: number, z: number, t: number, r = 45): Spline[] {
+  const out: Spline[] = [];
+  for (const it of city.itemsNear(x, z, r)) {
+    if (cp.collected.has(it.id)) continue;
+    const yaw = t * 0.8 + it.x * 0.37, c = Math.cos(yaw), s = Math.sin(yaw), P = (u: number, y: number): [number, number, number] => [it.x + c * u, it.y + y, it.z - s * u];
+    const n: [number, number, number] = [s, 0, c], k = it.id;
+    out.push({ ctrl: [P(0, -0.02), P(0, 0.5), P(0, 1.0), P(0, 1.5)], widths: [0.07, 0.065, 0.06, 0.055], col: [0.86, 0.84, 0.78], key: `item:${k}:post`, load: 0.6, dry: 0.15, heart: 0.4, body: 0.001, taper: [0.01, 0.02] });
+    for (const [j, y] of [[0, 1.4], [1, 1.27], [2, 1.14]] as const)
+      out.push({ ctrl: [P(0.02, y), P(0.16, y + 0.01), P(0.3, y - 0.01), P(0.44, y - 0.02 * j)], widths: [0.14, 0.14, 0.13, 0.1], surfs: [n, n, n, n], col: j === 1 ? [0.78, 0.26, 0.15] : [0.86, 0.33, 0.18], key: `item:${k}:flag${j}`, load: 0.7, dry: 0.25, heart: 0.35, body: 0.001, taper: [0.01, 0.06] });
   }
   return out;
 }

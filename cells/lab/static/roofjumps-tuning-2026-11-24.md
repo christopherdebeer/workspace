@@ -90,3 +90,24 @@ What it would take:
 3. **The city must be passable for the dials.** Which gaps can be crossed depends on gravity, the speeds and the leap's reach. Changing the dials changes which roofs are dead ends, and with this rule a dead end is fatal. A reachability check over the roofs, using the jump envelope the dials allow, should shape generation and place the checkpoints.
 4. **Checkpoints** on roofs the check knows have a way on.
 5. **The planner:** street cost at its maximum, a wider fan (a small gain), and routes that stop or turn back.
+
+## Done: the street as a fall (`streetFail`, on by default)
+
+1. **The leap never chooses the street.** The street isn't counted as a landing (neither within `drop`, nor in the "highest place in reach" fallback). With nothing else in reach, the runner balks: it stops at the edge. Running off an edge onto the street stops it too.
+2. **Saves.** Falling toward the street, the hands reach further for a lip or a hold (0.7 m rather than 0.35 m out; holds within 1.2 m), and hold on at a faster fall (15 m/s rather than 10–11 m/s at house gravity). A hang over the street holds on: it doesn't let go when steered away, or when nothing else is to be had (it waits).
+3. **The city passable for the dials** (`reach.ts`). A roof graph is built from the leap's envelope (`maxGap(dh)`, `upReach`). A roof with no way on gets a bridge (a slab at its height across the narrowest gap to a neighbour it can then get onto). By this envelope, dead ends are rare: 2 of 10,535 roofs under the house dials, 10 under the proposed (2 of those bridged). The envelope ignores holds, so it errs toward bridging. The city wasn't the problem; the runner was.
+4. **Checkpoints** (`checkpoint.ts`). The place to come back to is the last place the runner was surefooted (on a roof, on its feet, 3 s without leaving the ground; kept up to date while it stays so) or the last checkpoint collected, whichever is later. Checkpoints are about 2.5 a chunk, on roofs with two or more ways on, in a clear spot. They're taken within 1.3 m. For now each is a post with a flag (painted as strokes in the stroke looks, drawn as blocks in the others). Coming down to the street is a life lost: the runner is put back, fresh, at that place.
+5. **The planner** can stop: when every way in its fan leads down to the street, it stands still until the way asked turns. In autopilot mode it follows its chosen way faster (lean rate 12/s rather than 5/s), so the way taken is the way foreseen.
+
+Lives lost a minute, by the autopilot (4 characters × 3 seeds × 60 s, street cost 40):
+
+| | house | proposed + wallSpeed 8 |
+|---|---|---|
+| rule off (street landings per roof-minute) | 1.06 | 1.84 |
+| rule on: leap, balk and saves | 1.33 | 1.92 |
+| + the planner can stop | 1.25 | 1.83 |
+| + hold on over the street, follow the plan faster | **0.5** | **0.67** |
+
+What still brings it down: single misses in the air (a spring, a bound or a kick short, a climb that fails).
+
+Checkpoints collected: about 1 a minute (house) and 0.1 a minute (proposed). The wander doesn't seek them; the planner doesn't value them yet.

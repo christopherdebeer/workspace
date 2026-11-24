@@ -35,7 +35,7 @@
 import { paintMode } from './looks/stroke-gouache';
 import { noise1 } from '../kit/rng';
 import { City } from './city';
-import { Checkpoints, itemBones } from './checkpoint';
+import { Checkpoints, itemBones, itemSplines } from './checkpoint';
 import { Runner } from './runner';
 import type { Body, Input, Move } from './runner';
 import { Rig } from './rig';
@@ -696,7 +696,10 @@ function frame(now: number): void {
     const fov = menu.from.fov + (((TUNE.fov + (aspect < 1 ? 12 : 0)) * Math.PI) / 180 - menu.from.fov) * b;
     vp = mul(perspective(fov, aspect, 0.15, rd.radius * 64 * 1.5), lookAt(E, T, [0, 1, 0])); eye = E;
   }
-  const items = cp && playing() && !held ? itemBones(city, cp, runner.x, runner.z, time) : [];
+  // (the checkpoints: painted as strokes in a stroke look, drawn as blocks with the figure in the others)
+  const showItems = !!cp && playing() && !held && !brushTest, painted = !!rd.def.strokes;
+  if (!brushTest) rd.splines = showItems && painted ? itemSplines(city, cp!, runner.x, runner.z, time) : null;
+  const items = showItems && !painted ? itemBones(city, cp!, runner.x, runner.z, time) : [];
   rd.draw(vp, eye, [...withCrew(rig.bones(held ?? runner), dt), ...items], shadowAt(runner.x, runner.y, runner.z));
   const guides = rd.def.guides !== false;
   // (`?details`: the city's tagged details, as lines, for checking what's tagged where before any look draws them)

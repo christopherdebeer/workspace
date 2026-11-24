@@ -33,8 +33,10 @@ const { dressingOf, DRESS, plan, foresee, TUNE, HOUSE, DIALS, City, Runner, Rig,
   }
   console.log(`${n} boxes in 49 chunks (${(n / 49).toFixed(0)} a chunk, ${(n * 10 / 49).toFixed(0)} triangles)`);
 }
-// A runner carries pace over open routes and can stop at a tall facade.
+// A runner carries pace over open routes and can stop at a tall facade. (The street a fall changes what a held line does at a
+// dead end (it balks, or hangs on rather than drop): this is the running, so with that rule off.)
 {
+  TUNE.streetFail = 0;
   const DT = 1 / 120, SECONDS = 60;
   let worst = Infinity, leaps = 0, climbs = 0, fromGround = 0, misses = 0; const moves = {};
   for (const seed of [1, 2, 7, 31]) for (let k = 0; k < 16; k++) {
@@ -82,6 +84,25 @@ const { dressingOf, DRESS, plan, foresee, TUNE, HOUSE, DIALS, City, Runner, Rig,
   assert.ok(misses < leaps * 0.1, `few leaps miss (${misses} of ${leaps})`);
   console.log(`  ${misses} of ${leaps} leaps missed their landing`);
   console.log(`  ${fromGround} wall runs straight off the ground`);
+  TUNE.streetFail = HOUSE.streetFail;
+}
+
+// The street a fall (`streetFail`): a runner holding a line across the city never leaps or runs down into the street from a
+// roof (it stops at the edge instead); whatever does bring it down is a miss in the air (a fall), never a choice
+{
+  const DT = 1 / 120; let leapsDown = 0, balks = 0, lines = 0;
+  for (const seed of [1, 2]) for (let k = 0; k < 8; k++) {
+    const a = (k / 8) * 2 * Math.PI + 0.3, dx = Math.sin(a), dz = Math.cos(a), city = new City(seed), r = new Runner(city);
+    for (let i = 0; i < 30 / DT; i++) {
+      const was = r.state, y0 = r.y; r.step(DT, { x: dx, z: dz, jump: false });
+      // (off a roof onto the street in one go, under its own steam: a leap or a run that chose it)
+      if (was === 'ground' && y0 >= 0.5 && r.state === 'air' && r.move !== 'fall' && r.aim && city.heightAt(r.aim.x, r.aim.z) < 0.5) leapsDown++;
+      if (r.state === 'ground' && r.y < 0.5 && y0 >= 0.5) break;
+    }
+    balks += r.balks > 0 ? 1 : 0; lines++;
+  }
+  assert.equal(leapsDown, 0, `never leaps for the street from a roof (${leapsDown})`);
+  console.log(`the street a fall: ${lines} held lines, none leapt for the street; ${balks} stopped at an edge with only the street beyond`);
 }
 // the holds: the same whenever made; each a line on its box (an edge along a top, a sill on a face at a storey, a pipe up
 // a face, a rail down the middle of something narrow); the boxes the same with or without them; and what the hands reach
