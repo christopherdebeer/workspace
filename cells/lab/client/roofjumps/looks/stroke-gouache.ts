@@ -24,7 +24,7 @@ import { DRESS } from '../dressing';
 import type { Light, Lod, Mark, Spline, StrokeRules, V } from '../strokes';
 import type { Room } from '../interiors';
 import { STOREY } from '../city';
-import { EDGE, K, LAYER, add, boxSeed, cross, dot, lipsOf, mix, onLine, planesOf, rng, scale, smooth, sub, unit, hashKey } from '../strokes';
+import { EDGE, K, LAYER, castMark, add, boxSeed, cross, dot, lipsOf, mix, onLine, planesOf, rng, scale, smooth, sub, unit, hashKey } from '../strokes';
 const len = (v: V) => Math.hypot(v[0], v[1], v[2]);
 
 const DAY_SUN: V = [-0.55, 0.6, 0.58];
@@ -309,9 +309,10 @@ export const strokeGouacheRules: StrokeRules = {
     // (the street: underpainted dark, a few pulls, its shadow)
     {
       const clip: [V, V] = [[ox - 0.01, -1, oz - 0.01], [ox + 64.01, 1, oz + 64.01]], col = T.tone(baseOf(null), up0);
-      put(fillOf(`${sKey}/fill`, [ox, 0, oz], [1, 0, 0], [0, 0, 1], up0, 64, 64, scale(col, 0.82), clip, 0.9));
-      if (!blocked && keeps(rk(BRUSH))) pulls(put, sKey, [ox, 0, oz], [1, 0, 0], [0, 0, 1], up0, 64, 64, col, scale(mulv(col, T.shade(up0)), 1.15), 6, clip, rk(BRUSH), rnd, size);
-      if (keeps(SHADOW)) put(fillOf(`${sKey}/shade`, [ox, 0, oz], [1, 0, 0], [0, 0, 1], up0, 64, 64, scale(mulv(baseOf(null), T.shade(up0)), 0.85), clip, SHADOW, K.SHADE, LAYER.SHADOW));
+      const PS = blocked ? put : (mk: Mark) => put(castMark(mk));
+      PS(fillOf(`${sKey}/fill`, [ox, 0, oz], [1, 0, 0], [0, 0, 1], up0, 64, 64, scale(col, 0.82), clip, 0.9));
+      if (!blocked && keeps(rk(BRUSH))) pulls(PS, sKey, [ox, 0, oz], [1, 0, 0], [0, 0, 1], up0, 64, 64, col, scale(mulv(col, T.shade(up0)), 1.15), 6, clip, rk(BRUSH), rnd, size);
+      if (blocked && keeps(SHADOW)) put(fillOf(`${sKey}/shade`, [ox, 0, oz], [1, 0, 0], [0, 0, 1], up0, 64, 64, scale(mulv(baseOf(null), T.shade(up0)), 0.85), clip, SHADOW, K.SHADE, LAYER.SHADOW));
     }
     const f = light.focus;
     const isFocus = (b: Box) => !!f && Math.abs(b.y1 - f.y) < 0.01 && b.x0 < f.x1 && b.x1 > f.x0 && b.z0 < f.z1 && b.z1 > f.z0;
@@ -336,6 +337,8 @@ export const strokeGouacheRules: StrokeRules = {
       const focused = isFocus(b);
       for (const p of planesOf(b, near)) {
         const r = rng(hashKey(p.key)), pb = p.top ? scale(base, 1.04) : base, m = T.mass(p.n);
+        // (near, a face in the sun takes the cast shadow in its own strokes (strokes.ts castMark): no passage laid over them)
+        const P = !blocked && m > 0.2 ? (mk: Mark) => put(castMark(mk)) : put;
         // (the first landing: a warm roof, picked out, the way in)
         let col = p.top && focused ? mulv(scale(base, 1.12), mix(T.shade(p.n), T.sunlit, 0.9)) : T.tone(pb, p.n, m);
         if (!p.top) col = scale(col, 0.97);
@@ -343,31 +346,28 @@ export const strokeGouacheRules: StrokeRules = {
         const col2 = m > 0.5 ? mulv(col, [1.12, 1.0, 0.88]) : mix(col, scale(mulv(pb, T.deep), 0.9), 0.7);
         // (underpainted a value down and cooler, as gouache is laid dark to light: what the dry lifts and broken edges show)
         // (a small thing (a unit, a hut's side, a fire escape's step): laid in pulls, no flat block; a big plane underpainted first)
-        if (blocked) { put(fillOf(`${p.key}/fill`, p.o, p.t, p.up, p.n, p.w, p.h, col, p.clip, rank)); if (m > 0.2 && keeps(SHADOW)) put(fillOf(`${p.key}/shade`, p.o, p.t, p.up, p.n, p.w, p.h, scale(mulv(pb, T.shade(p.n)), 0.92), p.clip, SHADOW, K.SHADE, LAYER.SHADOW)); continue; }
-        if (p.w * p.h <= 4) { brushPlane(put, p, pb, T, rank, `${p.key}/b`, LAYER.BROAD, size); continue; }
-        put(fillOf(`${p.key}/fill`, p.o, p.t, p.up, p.n, p.w, p.h, mix(scale(col, 0.8), scale(mulv(pb, T.deep), 0.85), 0.3), p.clip, rank));
-        if (!keeps(rk(BRUSH)) || !big) { scatter(put, p, col, T, pb, m, r, size, rk); continue; }
-        if (p.top) pulls(put, p.key, p.o, p.t, p.up, p.n, p.w, p.h, col, col2, Math.max(1, Math.min(4, Math.round(p.h / 3.5))), p.clip, rk(BRUSH), r, size);
+        if (blocked) { P(fillOf(`${p.key}/fill`, p.o, p.t, p.up, p.n, p.w, p.h, col, p.clip, rank)); if (m > 0.2 && keeps(SHADOW)) P(fillOf(`${p.key}/shade`, p.o, p.t, p.up, p.n, p.w, p.h, scale(mulv(pb, T.shade(p.n)), 0.92), p.clip, SHADOW, K.SHADE, LAYER.SHADOW)); continue; }
+        if (p.w * p.h <= 4) { brushPlane(P, p, pb, T, rank, `${p.key}/b`, LAYER.BROAD, size); continue; }
+        P(fillOf(`${p.key}/fill`, p.o, p.t, p.up, p.n, p.w, p.h, mix(scale(col, 0.8), scale(mulv(pb, T.deep), 0.85), 0.3), p.clip, rank));
+        if (!keeps(rk(BRUSH)) || !big) { scatter(P, p, col, T, pb, m, r, size, rk); continue; }
+        if (p.top) pulls(P, p.key, p.o, p.t, p.up, p.n, p.w, p.h, col, col2, Math.max(1, Math.min(4, Math.round(p.h / 3.5))), p.clip, rk(BRUSH), r, size);
         else {
           // (a wall dragged down from its top, in a few broad strokes, drying out toward the street)
           const cols = Math.max(1, Math.min(3, Math.round(p.w / (3.5 * size)))), cw = p.w / cols;
           for (let i = 0; i < cols; i++) {
             const x = (i + 0.5 + (r() - 0.5) * 0.25) * cw, reach = p.h * (0.55 + 0.45 * r());
             const a = add(add(p.o, scale(p.t, x)), [0, p.h + 0.2, 0]), e = add(add(p.o, scale(p.t, x + (r() - 0.5) * 0.4)), [0, p.h - reach, 0]);
-            put({ layer: LAYER.BROAD, kind: K.PULL, a, b: e, n: p.n, width: cw * 1.3, col: scale(col, 0.92 + r() * 0.16), col2, mix2: 0.75, alpha: 0.95, dry: 0.6 + r() * 0.3, heart: 0.1, rank: rk(BRUSH), load: 0.7, key: `${p.key}/d${i}`, clip: p.clip, taper: [0.1, Math.min(3, reach * 0.35)] });
+            P({ layer: LAYER.BROAD, kind: K.PULL, a, b: e, n: p.n, width: cw * 1.3, col: scale(col, 0.92 + r() * 0.16), col2, mix2: 0.75, alpha: 0.95, dry: 0.6 + r() * 0.3, heart: 0.1, rank: rk(BRUSH), load: 0.7, key: `${p.key}/d${i}`, clip: p.clip, taper: [0.1, Math.min(3, reach * 0.35)] });
           }
           // (weathering: a broken streak or two run down from under the coping)
           for (let i = size < 3 && r() < 0.65 ? 1 + (r() < 0.4 ? 1 : 0) : 0; i > 0; i--) {
             const x = 0.4 + r() * (p.w - 0.8), l = Math.min(p.h - 0.4, 1.5 + r() * 3.5);
-            put({ layer: LAYER.BROAD, kind: K.PULL, a: add(add(p.o, scale(p.t, x)), [0, p.h - 0.3, 0]), b: add(add(p.o, scale(p.t, x)), [0, p.h - 0.3 - l, 0]), n: p.n, width: 0.25 + r() * 0.35, col: scale(col, 0.8), alpha: 0.55, dry: 0.7, heart: 0.05, rank: DETAIL, key: `${p.key}/w${i}`, clip: p.clip, taper: [0.05, l * 0.5] });
+            P({ layer: LAYER.BROAD, kind: K.PULL, a: add(add(p.o, scale(p.t, x)), [0, p.h - 0.3, 0]), b: add(add(p.o, scale(p.t, x)), [0, p.h - 0.3 - l, 0]), n: p.n, width: 0.25 + r() * 0.35, col: scale(col, 0.8), alpha: 0.55, dry: 0.7, heart: 0.05, rank: DETAIL, key: `${p.key}/w${i}`, clip: p.clip, taper: [0.05, l * 0.5] });
           }
         }
         // (over the broad strokes, Switchback's coverage: the plane broken into strokes of its own values)
-        scatter(put, p, col, T, pb, m, r, size, rk);
+        scatter(P, p, col, T, pb, m, r, size, rk);
         // (its shadow: one passage, masked by the plane's real shadow)
-        // (near, a glaze: laid over the brushwork thin and a value darker, so the shadow drops the value and the strokes still show
-        // through it; at dusk, when shadow covers most of the roofs, an opaque passage left them flat)
-        if (m > 0.2 && keeps(SHADOW)) put(fillOf(`${p.key}/shade`, p.o, p.t, p.up, p.n, p.w, p.h, scale(mulv(pb, T.shade(p.n)), 0.7), p.clip, SHADOW, K.SHADE, LAYER.SHADOW, { col2: mulv(pb, T.deep), mix2: 0.35, alpha: 0.52 }));
       }
     }
     // (the details (dressing.ts), painted as Switchback paints its things: they claim no depth (render.ts), so each is all
@@ -408,6 +408,10 @@ export const strokeGouacheRules: StrokeRules = {
   // (the rooms behind the near panes (interiors.ts): a pane's room by its state (a kitchen or a living room lit, curtains, a
   // screen's blue, a lamp in the dark, dark); a residential pane its own room, an office's or a ribbon's panes one room the row
   // long, so its ceiling lights run on behind the mullions; someone in some of the lit ones)
+  // (the cast shadow's tint: the shade's colour over the sun's, a little deeper)
+  cast(light) { const T = tints(light), s = T.shade([0, 1, 0]), l = T.sunlit, r: V = [s[0] / l[0], s[1] / l[1], s[2] / l[2]], gy = (r[0] + r[1] + r[2]) / 3;
+    // (half of its hue: the shade's cool, not a blue cast over everything)
+    return mix(r, [gy, gy, gy], 0.5).map((v) => v * 0.9) as V; },
   windows(c) {
     const out: Room[] = [];
     for (const d of c.details) {

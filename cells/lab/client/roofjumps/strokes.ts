@@ -149,6 +149,9 @@ export function depositSpline(m: Spline, out: number[]): void {
     ...(m.surfs ? [...m.surfs[0], m.surfs[1][0], m.surfs[1][1], m.surfs[1][2], m.surfs[2][0], m.surfs[2][1], m.surfs[2][2], ...m.surfs[3]] : new Array(12).fill(0)));
 }
 
+/** a mark that takes the cast shadow in its own paint (its load carried past 10; the shader reads it so) */
+export const castMark = (m: Mark): Mark => ({ ...m, load: (m.load ?? 0) + 10 });
+
 /**
  * A mark as a spline (the city's pulls and lines): its line (a, its path, b) through four points by length, its widths eased
  * along it, lying on its support (`n`) but keeping its own colour (`unlit`: the rule lit it); not cut to anything (a stroke runs
@@ -439,6 +442,8 @@ export interface StrokeRules {
   /** the city's marks for a chunk (made once and kept; made again when it moves between near and far). `keeps`: whether
    * a mark of that rank is wanted (far chunks keep only what would still show at their distance): asked before work */
   city(c: Chunk, city: City, put: (m: Mark) => void, keeps: (rank: number) => boolean, light: Light, lod?: Lod): void;
+  /** the cast shadow's tint, what a lit stroke's pigment is multiplied by where its place is out of the sun (see `castMark`) */
+  cast?(light: Light): V;
   /** the rooms behind a near chunk's panes (interiors.ts): none, its panes stay as painted */
   windows?(c: Chunk, light: Light): Room[];
   /** the lit body under the figure's marks: the light's colour where the sun reaches and the shade's where it doesn't (none: no
@@ -562,7 +567,7 @@ float fbm(vec2 p) { float v = 0.0, a = 0.5; for (int i = 0; i < 3; i++) { v += a
 const FS = `#version 300 es
 precision highp float;
 in vec2 vQ; in vec3 vW; in float vFog; flat in vec4 vCol; flat in vec4 vP; flat in vec4 vS; flat in vec3 vMin; flat in vec3 vMax; flat in vec2 vT; flat in vec4 vCol2; flat in vec3 vN; flat in float vReach; flat in float vBody; flat in vec4 vSurf; flat in vec3 vU; flat in vec3 vV2; flat in vec3 vPick; flat in vec2 vWr; in vec3 vSn;
-uniform vec3 uHaze; uniform float uFade; uniform float uGrain; uniform int uCount; uniform sampler2D uBody; uniform int uBodyOn; uniform float uBreak; uniform vec3 uEyeF; uniform vec3 uPaperF; uniform vec3 uSunD; uniform vec3 uLit; uniform vec3 uShd; uniform sampler2D uUnder; uniform int uUnderOn; uniform vec2 uRes; uniform float uGloss;
+uniform vec3 uCast; uniform vec3 uHaze; uniform float uFade; uniform float uGrain; uniform int uCount; uniform sampler2D uBody; uniform int uBodyOn; uniform float uBreak; uniform vec3 uEyeF; uniform vec3 uPaperF; uniform vec3 uSunD; uniform vec3 uLit; uniform vec3 uShd; uniform sampler2D uUnder; uniform int uUnderOn; uniform vec2 uRes; uniform float uGloss;
 uniform highp sampler2DShadow uShadowMap; uniform highp mat4 uSunVP; uniform highp int uShadowOn;
 out vec4 o;
 ${NOISE}
@@ -645,12 +650,19 @@ void main() {
   }
   // (a figure's mark takes its colour, as much as it asks, from the lit body under it (rendered just before, smooth, lit per point):
   // the light turns across the form; the mark keeps its own shape, edge and brush. Its own variation kept as a nudge about it)
+  // (the cast shadow, in the paint itself: a stroke that takes it (its load carried past 10: see castMark) reads the sun's map
+  // under its own pixel, and where its place is out of the light its pigment goes to the shade's (uCast, the light's), the edge
+  // broken by its own bristles; no passage laid over it)
+  float ldRaw = vSurf.w; bool takesCast = ldRaw > 9.5;
+  if (takesCast && uShadowOn == 1) { vec4 q2 = uSunVP * vec4(vW + vN * 0.07, 1.0); vec3 c2 = q2.xyz / q2.w * 0.5 + 0.5; float sh2 = 0.0;
+    if (all(greaterThan(c2.xy, vec2(0.0))) && all(lessThan(c2.xy, vec2(1.0)))) { float l2 = 0.0; for (int y = -1; y <= 1; y++) for (int x = -1; x <= 1; x++) l2 += texture(uShadowMap, vec3(c2.xy + vec2(x, y) / 2048.0, c2.z - 0.0015)); sh2 = 1.0 - l2 / 9.0; }
+    col *= mix(vec3(1.0), uCast, smoothstep(0.38, 0.62, sh2 + 0.35 * (br - 0.5))); }
   if (uBodyOn == 1 && vBody > 0.0) { vec4 bd = texelFetch(uBody, ivec2(gl_FragCoord.xy), 0); if (bd.a > 0.5) col = mix(col, bd.rgb * (0.88 + 0.24 * clamp(dot(col, vec3(0.3, 0.59, 0.11)) / max(dot(vCol.rgb, vec3(0.3, 0.59, 0.11)), 0.02), 0.0, 1.0)), vBody); }
   a *= vCol.a * (1.0 - vFog * uFade);
   col = mix(col, uHaze, vFog * (1.0 - uFade));
   col *= 1.0 - uGrain * 0.08 * (grain - 0.5);
   // (load: the paint thins as it's laid out along the stroke, thick where it lands; where it's thin the bristles break it)
-  float ld = vSurf.w, thick = ld > 0.0 ? ld * (1.15 - 0.85 * u) : 0.0;
+  float ld = takesCast ? ldRaw - 10.0 : ldRaw, thick = ld > 0.0 ? ld * (1.15 - 0.85 * u) : 0.0;
   if (ld > 0.0) { a *= smoothstep(0.0, 0.12, thick * 1.6 - (1.0 - br) * 0.7 + 0.15); col *= 0.94 + 0.12 * min(thick, 1.0); }
   // (lit as a splat on its surface: the sun on the surface's normal, bumped by the bristles' relief (the paint's thickness), a
   // gloss on the ridges where they turn to the light)
@@ -766,7 +778,7 @@ export class StrokePainter {
 
   constructor(private gl: WebGL2RenderingContext, program: (vs: string, fs: string, attribs: string[]) => WebGLProgram) {
     this.prog = program(VS, FS, ['aQ', 'a0', 'a1', 'a2', 'a3', 'a4', 'a5', 'a6', 'a7', 'a8', 'a9', 'a10']);
-    for (const n of ['uVP', 'uEye', 'uFar', 'uFogNear', 'uDetail', 'uSunC', 'uPx', 'uShadowMap', 'uSunVP', 'uShadowOn', 'uHaze', 'uFade', 'uGrain', 'uCount', 'uBody', 'uBodyOn', 'uBreak', 'uSunD', 'uLit', 'uShd', 'uUnder', 'uUnderOn', 'uRes', 'uEyeF', 'uPaperF', 'uGloss']) this.u[n] = gl.getUniformLocation(this.prog, n);
+    for (const n of ['uVP', 'uEye', 'uFar', 'uFogNear', 'uDetail', 'uSunC', 'uPx', 'uShadowMap', 'uSunVP', 'uShadowOn', 'uHaze', 'uFade', 'uGrain', 'uCount', 'uBody', 'uBodyOn', 'uBreak', 'uSunD', 'uLit', 'uShd', 'uUnder', 'uUnderOn', 'uRes', 'uEyeF', 'uPaperF', 'uGloss', 'uCast']) this.u[n] = gl.getUniformLocation(this.prog, n);
     this.pprog = program(PVS, PFS, ['aQ']); for (const n of ['uPaper', 'uGrain']) this.u['p' + n] = gl.getUniformLocation(this.pprog, n);
     this.kprog = program(KVS, KFS, ['aQ']); for (const n of ['uInv', 'uTop', 'uHor', 'uGrain']) this.u['k' + n] = gl.getUniformLocation(this.kprog, n);
     this.corner = gl.createBuffer()!; gl.bindBuffer(gl.ARRAY_BUFFER, this.corner); gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
@@ -952,7 +964,7 @@ export class StrokePainter {
     }
     gl.uniform1i(u.uShadowMap, 3); gl.uniform1i(u.uShadowOn, o.sunVP ? 1 : 0); if (o.sunVP) gl.uniformMatrix4fv(u.uSunVP, false, o.sunVP);
     gl.uniform3fv(u.uHaze, o.light.haze); gl.uniform1f(u.uFade, R.fadeToPaper); gl.uniform1f(u.uGrain, R.grain); gl.uniform1i(u.uCount, this.counting ? 1 : 0); gl.uniform1f(u.uBreak, this.paperOverride ? 1 : 0);
-    { const BL = R.bodyLight ? R.bodyLight(o.light) : { sunlit: [1, 1, 1] as V, shade: [0.6, 0.6, 0.7] as V }; gl.uniform3fv(u.uSunD, o.light.sun); gl.uniform3fv(u.uLit, BL.sunlit); gl.uniform3fv(u.uShd, BL.shade); gl.uniform1i(u.uUnderOn, 0); gl.uniform2f(u.uRes, gl.drawingBufferWidth, gl.drawingBufferHeight); gl.uniform3f(u.uEyeF, o.eye[0], o.eye[1], o.eye[2]); gl.uniform3fv(u.uPaperF, this.paperOverride ?? R.paper); gl.uniform1f(u.uGloss, this.gloss); }
+    { const BL = R.bodyLight ? R.bodyLight(o.light) : { sunlit: [1, 1, 1] as V, shade: [0.6, 0.6, 0.7] as V }; gl.uniform3fv(u.uSunD, o.light.sun); gl.uniform3fv(u.uLit, BL.sunlit); gl.uniform3fv(u.uShd, BL.shade); gl.uniform1i(u.uUnderOn, 0); gl.uniform2f(u.uRes, gl.drawingBufferWidth, gl.drawingBufferHeight); gl.uniform3f(u.uEyeF, o.eye[0], o.eye[1], o.eye[2]); gl.uniform3fv(u.uPaperF, this.paperOverride ?? R.paper); gl.uniform1f(u.uGloss, this.gloss); gl.uniform3fv(u.uCast, R.cast ? R.cast(o.light) : [0.6, 0.6, 0.7]); }
     };
     gl.useProgram(this.sprog); setU(this.su);
     gl.useProgram(this.prog); setU(this.u);
