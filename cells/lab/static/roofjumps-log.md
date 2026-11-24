@@ -513,3 +513,10 @@ The full notes are in `roofjumps-studies/round8/README.md`. The changes: a hard 
 - **No placeholder blocks.** Every detail box and every small fixed thing (a fire escape's steps and posts, a unit, a sign's board) is laid in pulls, face by face (`brushBox`/`brushPlane`), with a few shorter broken-colour strokes over the near ones. Small faces of big boxes are the same. Ladder rungs are painted (they were skipped).
 - Cost was left alone for now (about +30% stamps in a wide view); it's to be weighed once the look is right.
 - Before and after: `roofjumps-studies/city1/before-after.jpg`.
+- **The city in spline strokes, uncut.** A chunk's pulls and lines become spline strokes when it's built (`markSpline`). Each lies on its surface but keeps the colour its rule gave it (the new `unlit` flag), and nothing cuts it: a stroke runs past an edge as a brush does. The underpainting, the shadow passages and the washes stay stamps. Splines draw layer by layer with the stamps, so shadow passages still go over the brushwork. Details:
+  - city strokes use a 6-segment strip, not the figure's 32;
+  - the spline shader now withdraws strokes by rank with distance, as stamps do (without that, every far stroke was drawn: about 14 s a frame in software, now about 3 ms);
+  - a chunk's strokes are written straight into one typed array;
+  - coverage strokes are kept mostly on their face (so no plumes past a roofline), windows have square ends, and far details' brush grows slower and their colour quiets toward the wall's.
+  - `?citystamps` restores the old stamp path.
+- Stamps against splines: `roofjumps-studies/city1/stamps-vs-splines.jpg` (top stamps, bottom splines; near and high views).

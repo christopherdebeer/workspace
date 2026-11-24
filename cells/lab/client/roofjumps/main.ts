@@ -86,6 +86,7 @@ const brushHeading = runner.heading;
 if (q.has('from')) { const [fx, fz] = q.get('from')!.split(',').map(Number); runner.x = fx; runner.z = fz; runner.y = city.heightAt(fx, fz); }
 rd.strokes.noUnder = q.get('under') === '0';
 if (q.get('paint') === 'flat') rd.strokes.gloss = 0;
+if (q.has('citystamps')) rd.strokes.splineCity = false;
 if (q.get('paint') === 'masses') paintMode.masses = true;
 if (q.has('cost')) rd.strokes.cost = { depth: 0, city: 0, shadow: 0, figure: 0, stamps: 0, chunks: 0 };
 rd.radius = Math.max(1, Math.min(8, Number(q.get('far') ?? 4) | 0));

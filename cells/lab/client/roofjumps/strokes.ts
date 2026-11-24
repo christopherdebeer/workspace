@@ -133,7 +133,7 @@ export interface Mark {
  * control point its width; the stroke its pigment, surface, load and pickup, as a Mark's. For the figure, the points come from
  * the bones each frame, so the stroke moves with the body.
  */
-export interface Spline { ctrl: [V, V, V, V]; widths: [number, number, number, number]; /** a surface normal at each control point: the ribbon turns with them, lies on the form as it wraps, edge-on where it turns away (none: the one `surf`) */ surfs?: [V, V, V, V]; col: V; col2?: V; mix2?: number; alpha?: number; kind?: number; dry?: number; heart?: number; taper?: [number, number]; rank?: number; key: string; surf?: V; load?: number; body?: number; pick?: number; smear?: number; /** shown only from its surface's outward side (the far side of a form hides itself: strokes can be laid all round a form, fixed on it, and the eye decides which show) */ front?: boolean }
+export interface Spline { ctrl: [V, V, V, V]; widths: [number, number, number, number]; /** a surface normal at each control point: the ribbon turns with them, lies on the form as it wraps, edge-on where it turns away (none: the one `surf`) */ surfs?: [V, V, V, V]; col: V; col2?: V; mix2?: number; alpha?: number; kind?: number; dry?: number; heart?: number; taper?: [number, number]; rank?: number; key: string; surf?: V; load?: number; body?: number; pick?: number; smear?: number; /** its surface orients it, but it keeps its own colour (a city stroke: already lit by its rule), not lit again as a splat */ unlit?: boolean; /** shown only from its surface's outward side (the far side of a form hides itself: strokes can be laid all round a form, fixed on it, and the eye decides which show) */ front?: boolean }
 /** floats a spline: ten vec4s */
 export const SPLINE = 52;
 export function depositSpline(m: Spline, out: number[]): void {
@@ -141,8 +141,21 @@ export function depositSpline(m: Spline, out: number[]): void {
   const [tin, tout] = m.taper ?? [Math.min(L * 0.3, wm * 0.6), Math.min(L * 0.45, wm * 1.5)];
   out.push(p0[0], p0[1], p0[2], m.alpha ?? 1, p1[0], p1[1], p1[2], m.kind ?? 0, p2[0], p2[1], p2[2], seed, p3[0], p3[1], p3[2], m.rank ?? 1,
     w[0], w[1], w[2], w[3], m.col[0], m.col[1], m.col[2], m.dry ?? 0.3, ...(m.col2 ?? m.col), m.mix2 ?? 0, ...(m.surf ?? [0, 0, 0]), m.load ?? 0,
-    m.heart ?? 0.4, tin, tout, -(m.body ?? 0.001), m.pick ?? 0, m.smear ?? 0.15, m.surfs ? 1 : 0, m.front ? 1 : 0,
+    m.heart ?? 0.4, tin, tout, -(m.body ?? 0.001), m.pick ?? 0, m.smear ?? 0.15, m.surfs ? 1 : 0, (m.front ? 1 : 0) + (m.unlit ? 2 : 0),
     ...(m.surfs ? [...m.surfs[0], m.surfs[1][0], m.surfs[1][1], m.surfs[1][2], m.surfs[2][0], m.surfs[2][1], m.surfs[2][2], ...m.surfs[3]] : new Array(12).fill(0)));
+}
+
+/**
+ * A mark as a spline (the city's pulls and lines): its line (a, its path, b) through four points by length, its widths eased
+ * along it, lying on its support (`n`) but keeping its own colour (`unlit`: the rule lit it); not cut to anything (a stroke runs
+ * past an edge as a brush does). An edge (no support) faces the eye.
+ */
+export function markSpline(m: Mark): Spline {
+  const pts = [m.a, ...(m.path ?? []), m.b], ws = m.widths && m.widths.length === pts.length ? m.widths : pts.map(() => m.width);
+  const sl = pts.slice(1).map((p, i) => len(sub(p, pts[i]))), tot = sl.reduce((x, y) => x + y, 0) || 1;
+  const at = (f: number): [V, number] => { let d = f * tot, i = 0; while (i < sl.length - 1 && d > sl[i]) { d -= sl[i]; i++; } const t = Math.min(1, d / (sl[i] || 1)); return [add(pts[i], scale(sub(pts[i + 1], pts[i]), t)), ws[i] + (ws[i + 1] - ws[i]) * t]; };
+  const q = [0, 1 / 3, 2 / 3, 1].map(at), edge = (m.kind & 8) !== 0 || !m.n;
+  return { ctrl: q.map((x) => x[0]) as [V, V, V, V], widths: q.map((x) => x[1]) as [number, number, number, number], col: m.col, col2: m.col2, mix2: m.mix2, alpha: m.alpha, kind: m.kind & 7, dry: m.dry, heart: m.heart, taper: m.taper, rank: m.rank, key: m.key, surf: edge ? undefined : m.n, unlit: true, load: m.load, pick: m.pick, smear: m.smear };
 }
 
 const NOCLIP: [V, V] = [[-1e5, -1e5, -1e5], [1e5, 1e5, 1e5]];
@@ -488,6 +501,8 @@ void main() {
 // (a spline stroke's vertex shader: the curve evaluated at this vertex's place along it; the strip as wide as the stroke there, laid
 // on its surface (or turned to the eye); the same varyings as the stamps', so it is painted by the same fragment shader)
 const SSEG = 32;
+/** the segments of a city stroke's strip */
+const CSEG = 6;
 const SVS = `#version 300 es
 precision highp float;
 in vec2 aQ; in vec4 b0; in vec4 b1; in vec4 b2; in vec4 b3; in vec4 b4; in vec4 b5; in vec4 b6; in vec4 b7; in vec4 b8; in vec4 b9; in vec4 b10; in vec4 b11; in vec4 b12;
@@ -514,14 +529,19 @@ void main() {
   bool twist = b9.z > 0.5, hasS = twist || dot(b7.xyz, b7.xyz) > 0.01; vec3 sn = twist ? nat(u) : hasS ? normalize(b7.xyz) : e;
   vec3 ac = cross(sn, tg); if (length(ac) < 1e-4) ac = cross(e, tg); ac = normalize(ac);
   float w = wat(u), wm = max(max(b4.x, b4.y), max(b4.z, b4.w));
+  // (withdrawing with the distance by its rank, as a stamp does: shrunk to its middle, and gone (no fragments) past its reach)
+  float rk = b3.w, f1 = (14.0 + (uFar * 1.15 - 14.0) * rk * rk) * uDetail, gone = smoothstep(f1 * 0.7, f1, length(uEye - at(0.5)));
+  if (gone > 0.999) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
+  if (gone > 0.0) { vec3 an = at(0.5); p = an + (p - an) * (1.0 - gone); w *= 1.0 - gone; }
   // (seen edge-on, narrower and fainter; never thinner than a couple of pixels)
-  float alpha = b0.w; if (hasS) { float fs = dot(sn, e), facing = abs(fs); w *= mix(b9.w > 0.5 ? 0.85 : 0.4, 1.0, smoothstep(0.05, 0.45, facing)); alpha *= b9.w > 0.5 ? smoothstep(-0.04, 0.14, fs) : smoothstep(0.03, 0.22, facing); }
+  bool front = mod(b9.w, 2.0) > 0.5, unlit = b9.w > 1.5;
+  float alpha = b0.w; if (hasS) { float fs = dot(sn, e), facing = abs(fs); w *= mix(front ? 0.85 : 0.4, 1.0, smoothstep(0.05, 0.45, facing)); alpha *= front ? smoothstep(-0.04, 0.14, fs) : smoothstep(0.03, 0.22, facing); }
   w = max(w, uPx * dist * 1.1);
   float L = length(b1.xyz - b0.xyz) + length(b2.xyz - b1.xyz) + length(b3.xyz - b2.xyz);
   vec3 q = p + ac * sideS * w * 0.5 * 1.15;
   vQ = vec2(u * 2.0 - 1.0, sideS); vW = q; vFog = smoothstep(uFar * uFogNear, uFar, length(uEye - q));
   vCol = vec4(b5.xyz, alpha); vP = vec4(b1.w, b2.w, b5.w, b8.x); vS = vec4(0.0, 1.0, b8.y, b8.z); vMin = vec3(-1e5); vMax = vec3(1e5);
-  vT = vec2(L, wm); vCol2 = b6; vN = sn; vReach = 1.0; vBody = max(0.0, -b8.w); vSurf = b7; vU = tg; vV2 = ac; vWr = vec2(1.0); vSn = hasS ? sn : vec3(0.0);
+  vT = vec2(L, wm); vCol2 = b6; vN = sn; vReach = 1.0; vBody = max(0.0, -b8.w); vSurf = b7; vU = tg; vV2 = ac; vWr = vec2(1.0); vSn = hasS && !unlit ? sn : vec3(0.0);
   { vec4 q0 = uVP * vec4(p, 1.0), q1 = uVP * vec4(p + tg, 1.0); vec2 sd2 = q1.xy / q1.w - q0.xy / q0.w; vPick = vec3(length(sd2) > 1e-6 ? normalize(sd2) : vec2(1.0, 0.0), b9.x); }
   vec3 ep = uEye - q; float ed = length(ep);
   gl_Position = uVP * vec4(q + ep / max(ed, 1e-4) * min(0.004 + dist * 0.0012, ed * 0.5), 1.0);
@@ -701,7 +721,7 @@ void main() {
   o = vec4(c * (1.0 - uGrain * 0.06 * (g - 0.5)), 1.0);
 }`;
 
-interface Layered { buf: WebGLBuffer; vaos: WebGLVertexArrayObject[]; counts: number[]; far?: boolean; key?: string; band?: number }
+interface Layered { buf: WebGLBuffer; vaos: WebGLVertexArrayObject[]; counts: number[]; far?: boolean; key?: string; band?: number; /** its spline strokes, by layer */ spl?: { buf: WebGLBuffer; vaos: WebGLVertexArrayObject[]; counts: number[] } }
 /** how far (m) a mark of a rank shows before it has withdrawn (as the vertex shader has it, at detail 1) */
 export const showsTo = (rank: number, far: number) => 14 + (far * 1.15 - 14) * rank * rank;
 /** what each pass cost, the last frame it was asked (ms, with the GPU waited on between: coarse, but the same on a phone) */
@@ -717,12 +737,16 @@ export class StrokePainter {
   /** set to measure each pass (`?cost`): filled each frame */
   cost: Cost | null = null;
   stamps = 0;
+  /** spline strokes drawn last frame (the city's) */
+  splines = 0;
   /** the underpainting left out (`?under=0`, U): only the strokes, to see what they cover */
   noUnder = false;
   private utex: WebGLTexture | null = null; private usize = [0, 0];
-  private sprog!: WebGLProgram; private su: Record<string, WebGLUniformLocation | null> = {}; private sstrip!: WebGLBuffer; private sbuf!: WebGLBuffer;
+  private sprog!: WebGLProgram; private su: Record<string, WebGLUniformLocation | null> = {}; private sstrip!: WebGLBuffer; private cstrip!: WebGLBuffer; private sbuf!: WebGLBuffer;
   /** another ground than the look's, and its underpainting broken to show it (the brush board's ochre: for judging whites) */
   paperOverride: V | null = null;
+  /** the city's pulls and lines painted as spline strokes (uncut), not stamps (`?citystamps` back) */
+  splineCity = true;
   /** the paint's relief: its ridges' gloss and bump (1), or none (0, `paint=flat`: to see how much of the look is that light) */
   gloss = 0.25;
   /** the lit body: its program, its mesh's buffer and VAO, where it's rendered (a colour texture and depth, the drawing buffer's
@@ -739,6 +763,8 @@ export class StrokePainter {
     this.sprog = program(SVS, FS, ['aQ', 'b0', 'b1', 'b2', 'b3', 'b4', 'b5', 'b6', 'b7', 'b8', 'b9', 'b10', 'b11', 'b12']);
     for (const n of Object.keys(this.u)) this.su[n] = gl.getUniformLocation(this.sprog, n);
     { const st: number[] = []; for (let i = 0; i <= SSEG; i++) st.push(i / SSEG, -1, i / SSEG, 1); this.sstrip = gl.createBuffer()!; gl.bindBuffer(gl.ARRAY_BUFFER, this.sstrip); gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(st), gl.STATIC_DRAW); }
+    // (the city's strokes are near straight: a shorter strip is enough, its shading along the stroke being the fragment's)
+    { const st: number[] = []; for (let i = 0; i <= CSEG; i++) st.push(i / CSEG, -1, i / CSEG, 1); this.cstrip = gl.createBuffer()!; gl.bindBuffer(gl.ARRAY_BUFFER, this.cstrip); gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(st), gl.STATIC_DRAW); }
     this.sbuf = gl.createBuffer()!;
     this.bprog = program(BVS, BFS, ['aPos', 'aNor', 'aMat']);
     for (const n of ['uVP', 'uPal', 'uSun', 'uEye', 'uSunlit', 'uShade', 'uShadowMap', 'uSunVP', 'uShadowOn']) this.u['b' + n] = gl.getUniformLocation(this.bprog, n);
@@ -797,7 +823,23 @@ export class StrokePainter {
     gl.bindVertexArray(null);
     return vao;
   }
-  private free(l: Layered): void { const gl = this.gl; for (const v of l.vaos) gl.deleteVertexArray(v); gl.deleteBuffer(l.buf); }
+  private free(l: Layered): void { const gl = this.gl; for (const v of l.vaos) gl.deleteVertexArray(v); gl.deleteBuffer(l.buf); if (l.spl) { for (const v of l.spl.vaos) gl.deleteVertexArray(v); gl.deleteBuffer(l.spl.buf); } }
+  /** a chunk's spline strokes, by layer, in one buffer, a vertex array a layer (the shared strip; the strokes instanced) */
+  private splined(ms: Spline[][]): { buf: WebGLBuffer; vaos: WebGLVertexArrayObject[]; counts: number[] } {
+    // (written straight into one typed array, a stroke at a time: a chunk can hold tens of thousands)
+    const gl = this.gl, counts = ms.map((l) => l.length), data = new Float32Array(counts.reduce((x, y) => x + y, 0) * SPLINE), tmp: number[] = []; let o = 0;
+    for (const l of ms) for (const m of l) { tmp.length = 0; depositSpline(m, tmp); data.set(tmp, o); o += SPLINE; }
+    const buf = gl.createBuffer()!; gl.bindBuffer(gl.ARRAY_BUFFER, buf); gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW);
+    const vaos: WebGLVertexArrayObject[] = []; let first = 0;
+    for (const n of counts) {
+      const vao = gl.createVertexArray()!; gl.bindVertexArray(vao);
+      gl.bindBuffer(gl.ARRAY_BUFFER, this.cstrip); gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+      gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+      for (let i = 0; i < 13; i++) { gl.enableVertexAttribArray(1 + i); gl.vertexAttribPointer(1 + i, 4, gl.FLOAT, false, SPLINE * 4, (first * SPLINE + i * 4) * 4); gl.vertexAttribDivisor(1 + i, 1); }
+      gl.bindVertexArray(null); vaos.push(vao); first += n;
+    }
+    return { buf, vaos, counts };
+  }
 
   /** marks into stamps, sorted by layer (and, within a layer, in the order said: the paint order on a surface) */
   private stampsOf(marks: Mark[]): { data: Float32Array; counts: number[] } {
@@ -826,9 +868,12 @@ export class StrokePainter {
       const [cx, cz] = k.split(',').map(Number), marks: Mark[] = [], from = (ring(k) - 1) * 64;
       const keeps = (rank: number) => !isFar || showsTo(rank, far) > from;
       rules.city(city.chunk(cx, cz), city, (m) => { if (keeps(m.rank ?? 0.5) && !(this.noUnder && m.kind === K.FILL && m.layer === LAYER.BROAD)) marks.push(m); }, keeps, light, { size: band, from });
-      const { data, counts } = this.stampsOf(marks);
+      // (its pulls and lines as spline strokes, by layer, uncut; the underpainting, the shadow passages and the washes as stamps)
+      const stamped: Mark[] = [], spl: Spline[][] = Array.from({ length: LAYERS }, () => []);
+      for (const m of marks) { if (this.splineCity && (m.kind === K.PULL || m.kind === K.PULL + EDGE) && !m.sky) spl[Math.max(0, Math.min(LAYERS - 1, m.layer))].push(markSpline(m)); else stamped.push(m); }
+      const { data, counts } = this.stampsOf(stamped);
       if (have) this.free(have);
-      this.chunks.set(k, { ...this.layered(data, this.gl.STATIC_DRAW, counts), far: isFar, key: light.key, band });
+      this.chunks.set(k, { ...this.layered(data, this.gl.STATIC_DRAW, counts), far: isFar, key: light.key, band, spl: this.splined(spl) });
     }
     return this.missing(keys);
   }
@@ -906,7 +951,17 @@ export class StrokePainter {
     drawDyn(0);
     count('sky');
     let stamps = nd;
-    const layer = (l: number) => { if (o.bare) return; for (const c of this.chunks.values()) { const n = c.counts[l]; if (!n) continue; gl.bindVertexArray(c.vaos[l]); gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, n); stamps += n; } };
+    // (a layer: its stamps, then its spline strokes, chunk by chunk)
+    const splLayer = (l: number) => {
+      let any = false;
+      for (const c of this.chunks.values()) { const n = c.spl?.counts[l]; if (!n) continue;
+        if (!any) { gl.useProgram(this.sprog); gl.uniform1f(this.su.uGloss, this.gloss); gl.uniform1i(this.su.uBodyOn, 0); gl.uniform1i(this.su.uUnderOn, 0); any = true; }
+        gl.bindVertexArray(c.spl!.vaos[l]); gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, (CSEG + 1) * 2, n); this.splines += n; }
+      if (any) { gl.bindVertexArray(null); gl.useProgram(this.prog); }
+    };
+    this.splines = 0;
+    const layer = (l: number) => { if (o.bare) return; layerStamps(l); splLayer(l); };
+    const layerStamps = (l: number) => { for (const c of this.chunks.values()) { const n = c.counts[l]; if (!n) continue; gl.bindVertexArray(c.vaos[l]); gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, n); stamps += n; } };
     layer(LAYER.BROAD); layer(LAYER.SHADOW);
     lap('city');
     drawDyn(1);
@@ -943,7 +998,7 @@ export class StrokePainter {
     gl.uniform1i(this.u.uBodyOn, 0);
     lap('figure');
     this.stamps = stamps;
-    if (this.cost) { this.cost.stamps = stamps; this.cost.chunks = this.chunks.size; }
+    if (this.cost) { this.cost.stamps = stamps; this.cost.chunks = this.chunks.size; (this.cost as Cost & { splines?: number }).splines = this.splines; }
     gl.disable(gl.POLYGON_OFFSET_FILL); gl.depthMask(true); gl.depthFunc(gl.LESS); gl.disable(gl.BLEND); gl.bindVertexArray(null);
   }
   /** set: each paint fragment adds one to the colour, and each pass's share is read back into `overdraw` (fragments a

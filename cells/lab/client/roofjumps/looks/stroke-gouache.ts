@@ -137,7 +137,9 @@ function rungs(put: (m: Mark) => void, b: Box, col: V, rank: number, key: string
 }
 
 /** one detail's marks (see `city`) */
-function paintDetail(d: Detail, put: (m: Mark) => void, keeps: (rank: number) => boolean, T: ReturnType<typeof tints>, size = 1, rk: (r: number) => number = (r) => r): void {
+function paintDetail(d: Detail, put: (m: Mark) => void, keeps: (rank: number) => boolean, T: ReturnType<typeof tints>, size0 = 1, rk: (r: number) => number = (r) => r): void {
+  // (a detail's brush grows slower than the masses' (it's small), and its colour quiets toward the wall's further off)
+  const size = Math.min(size0, 1 + (size0 - 1) * 0.4), quiet = Math.min(0.75, (size0 - 1) * 0.2);
   const key = `det:${d.kind}:${d.pts[0].map((v) => v.toFixed(2)).join(',')}`, r = rng(hashKey(key)), n: V = [d.n[0], 0, d.n[1]];
   if (d.kind === 'windows') {
     // (each pane: a pull across it, a little out from the wall; dark ones the sky's cool in them, lit ones warm, and at dusk
@@ -150,7 +152,7 @@ function paintDetail(d: Detail, put: (m: Mark) => void, keeps: (rank: number) =>
       const dark: V = mix(mulv([0.24, 0.27, 0.32], T.shade(n)), [0.4, 0.44, 0.52], 0.25 * (1 - T.dk));
       const col: V = lit.has(i) ? mix(mix(dark, [0.78, 0.66, 0.46], 0.45), [1.0, 0.8, 0.5], T.dk) : scale(dark, 1 - 0.3 * T.dk);
       const lo: V = [Math.min(a[0], b[0]) - 0.02, y0, Math.min(a[2], b[2]) - 0.02], hi: V = [Math.max(a[0], b[0]) + 0.02, y1, Math.max(a[2], b[2]) + 0.02];
-      put({ layer: LAYER.ACCENT, kind: K.PULL, a: [a[0], my, a[2]], b: [b[0], my, b[2]], n, width: (y1 - y0) * 1.2, col, col2: scale(col, 1.12), mix2: 0.3, alpha: 1, dry: 0.15 + r() * 0.2, heart: r(), rank: rk(0.42), key: `${key}/${i}`, clip: [lo, hi], taper: [0.05, 0.12] });
+      put({ layer: LAYER.ACCENT, kind: K.PULL, a: [a[0], my, a[2]], b: [b[0], my, b[2]], n, width: (y1 - y0) * 1.2, col, col2: scale(col, 1.12), mix2: 0.3, alpha: 1, dry: 0.15 + r() * 0.2, heart: r(), rank: rk(0.42), key: `${key}/${i}`, clip: [lo, hi], taper: [0.02, 0.04] });
     }
     return;
   }
@@ -164,7 +166,7 @@ function paintDetail(d: Detail, put: (m: Mark) => void, keeps: (rank: number) =>
   const small = d.kind === 'aerial' || d.kind === 'dish' || d.kind === 'laundry' || d.kind === 'rust' || d.kind === 'bin', rank = rk(small ? DETAIL : 0.42);
   if (!keeps(rank)) return;
   DRESS[d.kind](d).forEach((b, j) => {
-    const col = dressCol(b), k = `${key}/${j}`, ext = [b.x1 - b.x0, b.y1 - b.y0, b.z1 - b.z0], order = [0, 1, 2].sort((i, l) => ext[l] - ext[i]);
+    const col = mix(dressCol(b), [0.52, 0.52, 0.55], quiet), k = `${key}/${j}`, ext = [b.x1 - b.x0, b.y1 - b.y0, b.z1 - b.z0], order = [0, 1, 2].sort((i, l) => ext[l] - ext[i]);
     const glow = b.tag === TAG.NEON;
     if (b.tag === TAG.RUNGS) { rungs(put, b, scale(mulv(col, T.shade(n)), 0.8), rank, k, size); return; }
     if (b.flat) {
@@ -197,8 +199,11 @@ function scatter(put: (m: Mark) => void, p: ReturnType<typeof planesOf>[number],
     if (n > cap) { const g = Math.sqrt(n / cap); L *= g; W *= g; n = cap; }
     for (let i = 0; i < n; i++) {
       // (where: anywhere on it; which way: down a wall (a little off), along a roof's long way)
-      const x = r() * p.w, y = r() * p.h, ang = p.top ? (r() - 0.5) * 0.6 : Math.PI / 2 + (r() - 0.5) * 0.5;
+      const ang = p.top ? (r() - 0.5) * 0.6 : Math.PI / 2 + (r() - 0.5) * 0.5;
       const along = p.top ? (p.w >= p.h ? 0 : Math.PI / 2) + ang : ang;
+      // (uncut, a stroke is kept mostly on its face: its middle far enough in that little more than a tenth of it hangs over)
+      const et = (Math.abs(Math.cos(along)) * L + Math.abs(Math.sin(along)) * W) / 2 * 0.85, eu = (Math.abs(Math.sin(along)) * L + Math.abs(Math.cos(along)) * W) / 2 * 0.85;
+      const x = p.w > 2 * et ? et + r() * (p.w - 2 * et) : p.w / 2, y = p.h > 2 * eu ? eu + r() * (p.h - 2 * eu) : p.h / 2;
       const ca = Math.cos(along) * L / 2, sa = Math.sin(along) * L / 2, c = add(add(p.o, scale(p.t, x)), scale(p.up, y));
       const a = add(add(c, scale(p.t, -ca)), scale(p.up, -sa)), b = add(add(c, scale(p.t, ca)), scale(p.up, sa));
       // (its value: about the plane's mass (no hard bands: on a shaded wall they broke it into camouflage); a tint of its own)
