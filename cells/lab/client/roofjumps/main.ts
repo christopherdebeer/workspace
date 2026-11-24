@@ -87,6 +87,8 @@ if (q.has('from')) { const [fx, fz] = q.get('from')!.split(',').map(Number); run
 rd.strokes.noUnder = q.get('under') === '0';
 if (q.get('paint') === 'flat') rd.strokes.gloss = 0;
 if (q.has('citystamps')) rd.strokes.splineCity = false;
+// (`windows=flat|room`: the near panes as painted, or their rooms without the middle layers (the full rooms by default))
+if (q.get('windows') === 'flat' || q.get('windows') === 'room') rd.strokes.interiors = q.get('windows') as 'flat' | 'room';
 if (q.get('paint') === 'masses') paintMode.masses = true;
 if (q.has('cost')) rd.strokes.cost = { depth: 0, city: 0, shadow: 0, figure: 0, stamps: 0, chunks: 0 };
 rd.radius = Math.max(1, Math.min(8, Number(q.get('far') ?? 4) | 0));
@@ -98,6 +100,8 @@ rd.resize(); addEventListener('resize', () => rd.resize());
 const zoom = Math.max(0.2, Number(q.get('zoom') ?? 1));
 /** `fixed=x,y,z`: a still eye at that point in the world, turning only to keep the figure in view (a wide tripod on a
  * room, to judge it whole: what's there to be seen before it's needed); a scene may name its own (`Scene.eye`) */
+/** `at=x,y,z`: what a fixed eye looks at (else the runner) */
+const fixedAt = ((v) => (v && v.length === 3 && v.every(Number.isFinite) ? v : null))(q.get('at')?.split(',').map(Number));
 const fixedEye = ((v) => (v && v.length === 3 && v.every(Number.isFinite) ? v : null))(q.get('fixed')?.split(',').map(Number));
 /** the eye's heading, and what a second finger has added to its height */
 let yaw = practiceLine ? 0 : 0.6, lift = TUNE.side ? -0.15 : 0;
@@ -644,7 +648,7 @@ function frame(now: number): void {
       // (framed as the eye in play would: out wider and higher up a face, between walls, on a bar)
       let v = eyeFor(m.x, m.y, m.z, m.yaw, aspect, clearTo, m.wide);
       const still = fixedEye ?? scene?.eye ?? null;
-      if (still && q.has('fixed')) v = { far: 1, eye: still, vp: mul(perspective((50 * Math.PI) / 180, aspect, 0.15, rd.radius * 64 * 1.5), lookAt(still, [m.x, m.y + 1, m.z], [0, 1, 0])) };
+      if (still && q.has('fixed')) v = { far: 1, eye: still, vp: mul(perspective((50 * Math.PI) / 180, aspect, 0.15, rd.radius * 64 * 1.5), lookAt(still, fixedAt ?? [m.x, m.y + 1, m.z], [0, 1, 0])) };
       else if (v.far < 0.6 && side) { TUNE.side = -side; const o = eyeFor(m.x, m.y, m.z, m.yaw, aspect, clearTo, m.wide); if (o.far > v.far) v = o; TUNE.side = side; }
       // (walls close: up and over rather than in close)
       if (v.far < 0.75) { const l0 = lift; for (const up of [0.2, 0.4, 0.7]) { lift = l0 + up; const o = eyeFor(m.x, m.y, m.z, m.yaw, aspect, clearTo, m.wide); if (o.far > v.far + 0.05) v = o; if (v.far >= 0.75) break; } lift = l0; }

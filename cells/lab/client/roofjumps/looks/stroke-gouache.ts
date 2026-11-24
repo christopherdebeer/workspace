@@ -22,6 +22,8 @@ import type { Box, Detail } from '../city';
 import { STYLE, TAG } from '../city';
 import { DRESS } from '../dressing';
 import type { Light, Lod, Mark, Spline, StrokeRules, V } from '../strokes';
+import type { Room } from '../interiors';
+import { STOREY } from '../city';
 import { EDGE, K, LAYER, add, boxSeed, cross, dot, lipsOf, mix, onLine, planesOf, rng, scale, smooth, sub, unit, hashKey } from '../strokes';
 const len = (v: V) => Math.hypot(v[0], v[1], v[2]);
 
@@ -146,6 +148,21 @@ function rungs(put: (m: Mark) => void, b: Box, col: V, rank: number, key: string
     put({ layer: LAYER.ACCENT, kind: K.PULL + EDGE, a, b: e, width: 0.035 * Math.max(1, size * 0.7), col, alpha: 0.95, dry: 0.3, rank, key: `${key}/r${i}`, taper: [0.01, 0.01] });
   }
   void n;
+}
+
+/**
+ * A window row's panes as they're painted near (one a slot; see paintDetail): where each is, how wide, and its state, by the
+ * same dice the painting uses, so the room behind a pane (interiors.ts) is the room its painted pane says.
+ */
+function paneLayout(d: Detail): { key: string; form: string; u: V; n: V; p: V; slot: number; pw: number; y0: number; y1: number; panes: { t: number; state: string }[] } {
+  const key = `det:${d.kind}:${d.pts[0].map((v) => v.toFixed(2)).join(',')}`, r = rng(hashKey(key)), n: V = [d.n[0], 0, d.n[1]];
+  const form = d.form ?? 'pane', [p, q] = d.pts, cnt = d.count ?? 1, u = unit(sub(q, p)), slot = d.w / cnt;
+  const ratio = form === 'ribbon' ? 0.97 : form === 'curtain' ? 0.92 : form === 'tall' ? 0.5 : form === 'frame' ? 0.56 : 0.62;
+  const pw = Math.min(form === 'ribbon' || form === 'curtain' ? 9 : 1.1, slot * ratio), y0 = p[1] + 0.12, y1 = p[1] + d.h - 0.08;
+  const litN = Math.min(cnt, d.lit ?? 0), order = Array.from({ length: cnt }, (_, i) => i).sort(() => r() - 0.5), lit = new Set(order.slice(0, litN));
+  const panes = Array.from({ length: cnt }, (_, i) => { const sr = rng(hashKey(`${key}/s${i}`))(), on = lit.has(i);
+    return { t: slot * (i + 0.5), state: !on ? (sr < 0.06 ? 'lamp' : 'dark') : sr < 0.45 ? 'warm' : sr < 0.65 ? 'curtain' : sr < 0.82 ? 'blinds' : sr < 0.92 ? 'screen' : 'warm' }; });
+  return { key, form, u, n, p, slot, pw, y0, y1, panes };
 }
 
 /** one detail's marks (see `city`) */
@@ -376,6 +393,25 @@ export const strokeGouacheRules: StrokeRules = {
       put({ layer: LAYER.ACCENT, kind: K.PULL, a: add(a, [0, 0.03, 0]), b: add(b, [0, 0.03, 0]), n, width: 0.11, col: scale(T.tone(base, n), T.mass(n) > 0.5 ? 1.08 : 0.9), alpha: 1, dry: 0.4 + r() * 0.3, heart: r(), rank: 0.36, key: `${key}/ledge`, clip: [lo, hi] });
       put({ layer: LAYER.ACCENT, kind: K.WASH, a: add(a, [0, -0.08, 0]), b: add(b, [0, -0.08, 0]), n, width: 0.08, col: scale(mulv(base, T.shade(n)), 0.7), alpha: 0.55, rank: DETAIL, key: `${key}/under`, clip: [lo, hi] });
     }
+  },
+  // (the rooms behind the near panes (interiors.ts): a pane's room by its state (a kitchen or a living room lit, curtains, a
+  // screen's blue, a lamp in the dark, dark); a residential pane its own room, an office's or a ribbon's panes one room the row
+  // long, so its ceiling lights run on behind the mullions; someone in some of the lit ones)
+  windows(c) {
+    const out: Room[] = [];
+    for (const d of c.details) {
+      if (d.kind !== 'windows') continue;
+      const L = paneLayout(d), shared = L.form === 'curtain' || L.form === 'ribbon', h = L.y1 - L.y0, floorY = Math.floor((L.y0 + 0.05) / STOREY) * STOREY;
+      const reveal = L.form === 'curtain' ? 0.07 : L.form === 'ribbon' ? 0.12 : L.form === 'tall' ? 0.3 : 0.22;
+      for (const [i, pn] of L.panes.entries()) {
+        const kr = rng(hashKey(`${L.key}/room${i}`)), seed = kr(), x0 = pn.t - L.pw / 2, o = add(L.p, scale(L.u, x0)); o[1] = L.y0;
+        const lit = pn.state !== 'dark' && pn.state !== 'lamp';
+        const type = shared ? (lit ? 3 : 0) : pn.state === 'dark' ? 0 : pn.state === 'lamp' ? 6 : pn.state === 'screen' ? 5 : pn.state === 'curtain' || pn.state === 'blinds' ? 4 : seed < 0.5 ? 1 : 2;
+        out.push({ o, u: L.u, n: L.n, w: L.pw, h, D: shared ? 7 : 3.2 + seed * 0.8, L: shared ? x0 : 0.8, R: shared ? d.w - (x0 + L.pw) : 0.8, F: Math.max(0.75, L.y0 - floorY), C: Math.max(0.35, floorY + STOREY - 0.2 - L.y1),
+          type, lit: lit ? 1 : 0, seed, occ: lit && (type === 1 || type === 2 ? kr() < 0.45 : type === 3 ? kr() < 0.25 : false) ? 1 : 0, reveal, ox: shared ? x0 : 0 });
+      }
+    }
+    return out;
   },
   sky(light) {
     // (over the field, a few broad quiet pulls carried across it, close in value to where they lie; and low down, a long

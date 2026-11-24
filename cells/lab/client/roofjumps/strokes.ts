@@ -31,6 +31,8 @@
  * share, and the camera, the replay, the city and the rig are the same for both.
  */
 import type { Box, Chunk, City, Hold } from './city';
+import { ROOM_FLOATS, WIN_FS, WIN_VS, depositRoom } from './interiors';
+import type { Room } from './interiors';
 import { TAG } from './city';
 import type { Bone } from './rig';
 import type { M4 } from './m4';
@@ -436,6 +438,8 @@ export interface StrokeRules {
   /** the city's marks for a chunk (made once and kept; made again when it moves between near and far). `keeps`: whether
    * a mark of that rank is wanted (far chunks keep only what would still show at their distance): asked before work */
   city(c: Chunk, city: City, put: (m: Mark) => void, keeps: (rank: number) => boolean, light: Light, lod?: Lod): void;
+  /** the rooms behind a near chunk's panes (interiors.ts): none, its panes stay as painted */
+  windows?(c: Chunk, light: Light): Room[];
   /** the lit body under the figure's marks: the light's colour where the sun reaches and the shade's where it doesn't (none: no
    * body is rendered, marks keep their own colour) */
   bodyLight?(light: Light): { sunlit: V; shade: V };
@@ -723,7 +727,7 @@ void main() {
   o = vec4(c * (1.0 - uGrain * 0.06 * (g - 0.5)), 1.0);
 }`;
 
-interface Layered { buf: WebGLBuffer; vaos: WebGLVertexArrayObject[]; counts: number[]; far?: boolean; key?: string; band?: number; /** its spline strokes, by layer */ spl?: { buf: WebGLBuffer; vaos: WebGLVertexArrayObject[]; counts: number[] } }
+interface Layered { buf: WebGLBuffer; vaos: WebGLVertexArrayObject[]; counts: number[]; far?: boolean; key?: string; band?: number; /** its spline strokes, by layer */ spl?: { buf: WebGLBuffer; vaos: WebGLVertexArrayObject[]; counts: number[] }; /** its near panes' rooms */ win?: { buf: WebGLBuffer; vao: WebGLVertexArrayObject; count: number } }
 /** how far (m) a mark of a rank shows before it has withdrawn (as the vertex shader has it, at detail 1) */
 export const showsTo = (rank: number, far: number) => 14 + (far * 1.15 - 14) * rank * rank;
 /** what each pass cost, the last frame it was asked (ms, with the GPU waited on between: coarse, but the same on a phone) */
@@ -739,12 +743,14 @@ export class StrokePainter {
   /** set to measure each pass (`?cost`): filled each frame */
   cost: Cost | null = null;
   stamps = 0;
+  /** the rooms behind the near panes: all their layers (`full`), the room without the middle ones (`room`), none (`flat`) */
+  interiors: 'full' | 'room' | 'flat' = 'full';
   /** spline strokes drawn last frame (the city's) */
   splines = 0;
   /** the underpainting left out (`?under=0`, U): only the strokes, to see what they cover */
   noUnder = false;
   private utex: WebGLTexture | null = null; private usize = [0, 0];
-  private sprog!: WebGLProgram; private su: Record<string, WebGLUniformLocation | null> = {}; private sstrip!: WebGLBuffer; private cstrip!: WebGLBuffer; private sbuf!: WebGLBuffer;
+  private sprog!: WebGLProgram; private su: Record<string, WebGLUniformLocation | null> = {}; private sstrip!: WebGLBuffer; private cstrip!: WebGLBuffer; private wprog!: WebGLProgram; private wu: Record<string, WebGLUniformLocation | null> = {}; private wquad!: WebGLBuffer; private sbuf!: WebGLBuffer;
   /** another ground than the look's, and its underpainting broken to show it (the brush board's ochre: for judging whites) */
   paperOverride: V | null = null;
   /** the city's pulls and lines painted as spline strokes (uncut), not stamps (`?citystamps` back) */
@@ -763,6 +769,9 @@ export class StrokePainter {
     this.corner = gl.createBuffer()!; gl.bindBuffer(gl.ARRAY_BUFFER, this.corner); gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
     this.dyn = this.layered(this.dynData, gl.DYNAMIC_DRAW, [0, 0, 0, 0]);
     this.sprog = program(SVS, FS, ['aQ', 'b0', 'b1', 'b2', 'b3', 'b4', 'b5', 'b6', 'b7', 'b8', 'b9', 'b10', 'b11', 'b12']);
+    this.wprog = program(WIN_VS, WIN_FS, ['aQ', 'w0', 'w1', 'w2', 'w3', 'w4', 'w5']);
+    for (const n of ['uVP', 'uEye', 'uWinFar', 'uGlow', 'uSkyTop', 'uSkyHor', 'uHaze', 'uFar', 'uFogNear', 'uTime', 'uMiddle']) this.wu[n] = gl.getUniformLocation(this.wprog, n);
+    this.wquad = gl.createBuffer()!; gl.bindBuffer(gl.ARRAY_BUFFER, this.wquad); gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([0, 0, 1, 0, 0, 1, 1, 1]), gl.STATIC_DRAW);
     for (const n of Object.keys(this.u)) this.su[n] = gl.getUniformLocation(this.sprog, n);
     { const st: number[] = []; for (let i = 0; i <= SSEG; i++) st.push(i / SSEG, -1, i / SSEG, 1); this.sstrip = gl.createBuffer()!; gl.bindBuffer(gl.ARRAY_BUFFER, this.sstrip); gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(st), gl.STATIC_DRAW); }
     // (the city's strokes are near straight: a shorter strip is enough, its shading along the stroke being the fragment's)
@@ -825,7 +834,19 @@ export class StrokePainter {
     gl.bindVertexArray(null);
     return vao;
   }
-  private free(l: Layered): void { const gl = this.gl; for (const v of l.vaos) gl.deleteVertexArray(v); gl.deleteBuffer(l.buf); if (l.spl) { for (const v of l.spl.vaos) gl.deleteVertexArray(v); gl.deleteBuffer(l.spl.buf); } }
+  private free(l: Layered): void { const gl = this.gl; for (const v of l.vaos) gl.deleteVertexArray(v); gl.deleteBuffer(l.buf); if (l.spl) { for (const v of l.spl.vaos) gl.deleteVertexArray(v); gl.deleteBuffer(l.spl.buf); } if (l.win) { gl.deleteVertexArray(l.win.vao); gl.deleteBuffer(l.win.buf); } }
+  /** a chunk's rooms, instanced over the shared quad */
+  private roomed(rooms: Room[]): { buf: WebGLBuffer; vao: WebGLVertexArrayObject; count: number } | undefined {
+    if (!rooms.length) return undefined;
+    const gl = this.gl, data = new Float32Array(rooms.length * ROOM_FLOATS); rooms.forEach((r, i) => depositRoom(r, data, i * ROOM_FLOATS));
+    const buf = gl.createBuffer()!; gl.bindBuffer(gl.ARRAY_BUFFER, buf); gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW);
+    const vao = gl.createVertexArray()!; gl.bindVertexArray(vao);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.wquad); gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+    gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+    for (let i = 0; i < 6; i++) { gl.enableVertexAttribArray(1 + i); gl.vertexAttribPointer(1 + i, 4, gl.FLOAT, false, ROOM_FLOATS * 4, i * 16); gl.vertexAttribDivisor(1 + i, 1); }
+    gl.bindVertexArray(null);
+    return { buf, vao, count: rooms.length };
+  }
   /** a chunk's spline strokes, by layer, in one buffer, a vertex array a layer (the shared strip; the strokes instanced) */
   private splined(ms: Spline[][]): { buf: WebGLBuffer; vaos: WebGLVertexArrayObject[]; counts: number[] } {
     // (written straight into one typed array, a stroke at a time: a chunk can hold tens of thousands)
@@ -875,7 +896,9 @@ export class StrokePainter {
       for (const m of marks) { if (this.splineCity && (m.kind === K.PULL || m.kind === K.PULL + EDGE) && !m.sky && !m.crisp) spl[Math.max(0, Math.min(LAYERS - 1, m.layer))].push(markSpline(m)); else stamped.push(m); }
       const { data, counts } = this.stampsOf(stamped);
       if (have) this.free(have);
-      this.chunks.set(k, { ...this.layered(data, this.gl.STATIC_DRAW, counts), far: isFar, key: light.key, band, spl: this.splined(spl) });
+      // (the rooms behind its panes, near only)
+      const win = band === 1 && rules.windows ? this.roomed(rules.windows(city.chunk(cx, cz), light)) : undefined;
+      this.chunks.set(k, { ...this.layered(data, this.gl.STATIC_DRAW, counts), far: isFar, key: light.key, band, spl: this.splined(spl), win });
     }
     return this.missing(keys);
   }
@@ -969,6 +992,17 @@ export class StrokePainter {
     drawDyn(1);
     lap('shadow');
     layer(LAYER.EDGE); layer(LAYER.ACCENT);
+    // (the rooms behind the near panes, over the panes painted there, fading into them with the distance)
+    if (this.interiors !== 'flat' && !o.bare && !this.counting) {
+      let any = false;
+      for (const c of this.chunks.values()) { if (!c.win) continue;
+        if (!any) { const w = this.wu, S = unit(o.light.sun), dk = 1 - Math.max(0, Math.min(1, (S[1] - 0.17) / (0.55 - 0.17)));
+          gl.useProgram(this.wprog); gl.uniformMatrix4fv(w.uVP, false, o.vp); gl.uniform3f(w.uEye, o.eye[0], o.eye[1], o.eye[2]); gl.uniform1f(w.uWinFar, 46);
+          gl.uniform1f(w.uGlow, dk * dk * (3 - 2 * dk)); gl.uniform3fv(w.uSkyTop, o.light.top); gl.uniform3fv(w.uSkyHor, o.light.horizon); gl.uniform3fv(w.uHaze, o.light.haze);
+          gl.uniform1f(w.uFar, o.far); gl.uniform1f(w.uFogNear, o.light.hazeNear); gl.uniform1f(w.uTime, performance.now() / 1000); gl.uniform1i(w.uMiddle, this.interiors === 'full' ? 1 : 0); any = true; }
+        gl.bindVertexArray(c.win.vao); gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, c.win.count); }
+      if (any) { gl.bindVertexArray(null); gl.useProgram(this.prog); }
+    }
     count('edges');
     if (timing) { gl.finish(); const n = performance.now(); (this.cost as Cost).city += n - tick; tick = n; }
     // (the runner last, against the same depth: its far-side marks hidden by its own near side, all of it by whatever of
