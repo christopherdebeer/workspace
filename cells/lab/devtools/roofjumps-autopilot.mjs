@@ -18,10 +18,11 @@ const rows = [];
 for (const ch of CHARS) for (const seed of SEEDS) {
   const city = new M.City(seed, false, null), r = new M.Runner(city, M.characterByName(ch));
   let thinking = null, thought = -1, lean = 0, path = 0, air = 0, stuck = 0, still = 0, maxDrop = 0, top = r.y, groundV = 0, groundN = 0, reach = 0, reachN = 0, flights = [], fT = 0, wasAir = false;
-  const x0 = r.x, z0 = r.z; let px = r.x, pz = r.z;
+  const x0 = r.x, z0 = r.z; let px = r.x, pz = r.z, st0 = r.streets; const why = [];
   for (let i = 0; i < SECONDS / DT; i++) {
     const t = i * DT, w = 7 * M.noise1(seed + 9, t * 0.06) + t * 0.04, a = w - 0.22 * Math.sin(4 * w), ask = { x: Math.sin(a), z: Math.cos(a) };
     if (thought < 0 || t - thought >= 0.12) { thinking = M.plan(r, ask.x, ask.z); thought = t; const b = thinking.best; reach += Math.hypot(b.pts[b.pts.length - 3] - b.pts[0], b.pts[b.pts.length - 1] - b.pts[2]); reachN++; }
+    if (r.streets > st0) { st0 = r.streets; const fan = thinking ? thinking.all.map((x) => x.streets) : []; why.push({ t: +t.toFixed(1), moves: [...r.recent].slice(-4), anyClear: fan.some((v) => v === 0), allDown: fan.length > 0 && fan.every((v) => v > 0) }); }
     lean += ((thinking ? thinking.best.off : 0) - lean) * (1 - Math.exp(-5 * DT));
     const c = Math.cos(-lean), s = Math.sin(-lean);
     r.step(DT, { x: ask.x * c + ask.z * s, z: ask.z * c - ask.x * s, jump: false });
@@ -33,7 +34,7 @@ for (const ch of CHARS) for (const seed of SEEDS) {
     if (r.speed < 0.6) { still += DT; if (still > 1) stuck += DT; } else still = 0;
   }
   const made = r.made, leaps = Object.entries(made).filter(([k]) => !['run', 'dash', 'roll'].includes(k)).reduce((a, [, v]) => a + v, 0);
-  rows.push({ ch, seed, path: +path.toFixed(1), net: +Math.hypot(r.x - x0, r.z - z0).toFixed(1), streets: r.streets, misses: r.misses, falls: made.fall ?? 0, leaps, air: +(air / SECONDS).toFixed(3), flight: +(flights.reduce((a, b) => a + b, 0) / Math.max(1, flights.length)).toFixed(2), maxDrop: +maxDrop.toFixed(1), vGround: +(groundV / Math.max(1, groundN)).toFixed(2), stuck: +stuck.toFixed(1), planReach: +(reach / Math.max(1, reachN)).toFixed(1), made });
+  rows.push({ ch, seed, path: +path.toFixed(1), net: +Math.hypot(r.x - x0, r.z - z0).toFixed(1), streets: r.streets, misses: r.misses, falls: made.fall ?? 0, leaps, air: +(air / SECONDS).toFixed(3), flight: +(flights.reduce((a, b) => a + b, 0) / Math.max(1, flights.length)).toFixed(2), maxDrop: +maxDrop.toFixed(1), vGround: +(groundV / Math.max(1, groundN)).toFixed(2), stuck: +stuck.toFixed(1), planReach: +(reach / Math.max(1, reachN)).toFixed(1), made, why });
   const z = rows[rows.length - 1]; console.log(`${LABEL.padEnd(8)} ${ch.padEnd(11)} s${seed}  path ${z.path}m  streets ${z.streets}  misses ${z.misses}  falls ${z.falls}  leaps ${z.leaps}  air ${(z.air * 100).toFixed(0)}%  flight ${z.flight}s  drop ${z.maxDrop}m  v ${z.vGround}  stuck ${z.stuck}s  plan reaches ${z.planReach}m`);
 }
 const sum = (k) => rows.reduce((a, r) => a + r[k], 0), n = rows.length, moves = {};
