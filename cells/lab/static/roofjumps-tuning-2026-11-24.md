@@ -64,3 +64,29 @@ What still fails is mostly authored timing: the scripted stick was written again
 3. Decide on dives. `diveDrop=6.9` with `drop=4` all but removes them; `diveDrop` around 5 brings some back.
 4. The camera's `eyeLope 1.5` and `eyeImpact 1.55` are nearly four times the house values. The sim can't judge that; it needs checking on a phone for comfort.
 5. Planning: the planner foresees with the runner itself, so its routes stay true under any dials. But its 3 s horizon reaches only 21 m at the slower pace, against 27 m. A horizon of about 3.8 s would see as far, at about 25% more planning cost. Its weights are in metres made, so the street cost (14) weighs relatively more at the slower pace; that probably helps.
+
+## If landing in the street is a failure (a life lost, back to a checkpoint)
+
+Then street landings per minute is the number that matters. The autopilot stands in for a competent player.
+
+| autopilot (4 characters × 5 seeds × 60 s) | street landings / min |
+|---|---|
+| house, street cost 14 (as now) | 2.0 |
+| house, street cost 40 | 1.1 |
+| house, street cost 40, fan ±132° | 1.05 |
+| proposed + wallSpeed 8, street cost 40 | 1.4 |
+| proposed + wallSpeed 8, street cost 40, fan ±132° | 1.15 |
+
+Even with the planner pushed as far as its dials go, it's about one life a minute. A 3.8 s horizon didn't help.
+
+Each street landing was logged (`why` in the autopilot's output). In about 95% of them, every route in the fan already went down at the last plan: by then, nothing could be done. They come from:
+- **misses in the air:** bound › fall, spring › fall, kick › fall, hang › fall;
+- **deliberate drops:** the leap's choice takes "the highest place in reach, however far down" when nothing is level, and dives can end in the street;
+- **boxed in:** a roof with no way on, where every heading leads down.
+
+What it would take:
+1. **The leap shouldn't choose the street.** Under this rule, with nothing in reach but the street, the runner should stop at the edge (and the planner then sees a route that stops).
+2. **Saves matter more.** A miss should look for a catch (a lip, a sill, a pipe, a fire escape) before it falls through. That's where the gravity fix pays off.
+3. **The city must be passable for the dials.** Which gaps can be crossed depends on gravity, the speeds and the leap's reach. Changing the dials changes which roofs are dead ends, and with this rule a dead end is fatal. A reachability check over the roofs, using the jump envelope the dials allow, should shape generation and place the checkpoints.
+4. **Checkpoints** on roofs the check knows have a way on.
+5. **The planner:** street cost at its maximum, a wider fan (a small gain), and routes that stop or turn back.
