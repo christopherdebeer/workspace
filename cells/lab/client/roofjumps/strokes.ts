@@ -401,6 +401,14 @@ export function onto(p: V, r: Receiver, sun: V): V | null {
 export interface Light { sun: V; top: V; horizon: V; haze: V; hazeNear: number; focus: { x0: number; z0: number; x1: number; z1: number; y: number } | null; key: string }
 export const lightKey = (l: Omit<Light, 'key'>) => [l.sun, l.top, l.horizon, l.haze].map((v) => v.map((x) => x.toFixed(3)).join(',')).join('|') + `|${l.hazeNear}|${l.focus ? Object.values(l.focus).join(',') : ''}`;
 
+/**
+ * How a chunk is painted for its distance: `size` the brush (1 near; larger further off: bigger strokes, so fewer, the same
+ * cover: each still smaller on the screen than a near one), `from` how far off it is (m). See `lodOf`.
+ */
+export interface Lod { size: number; from: number }
+/** the brush for a chunk `ring` chunks from the eye's: full near; then two and a half, four and six times the size */
+export const lodOf = (ring: number): number => (ring <= 1 ? 1 : ring === 2 ? 2.5 : ring === 3 ? 4 : 6);
+
 /** A look's rules: what to say about each feature, and how. */
 export interface StrokeRules {
   /** the ground of the image, and how much its grain shows */
@@ -412,7 +420,7 @@ export interface StrokeRules {
   sun: V;
   /** the city's marks for a chunk (made once and kept; made again when it moves between near and far). `keeps`: whether
    * a mark of that rank is wanted (far chunks keep only what would still show at their distance): asked before work */
-  city(c: Chunk, city: City, put: (m: Mark) => void, keeps: (rank: number) => boolean, light: Light): void;
+  city(c: Chunk, city: City, put: (m: Mark) => void, keeps: (rank: number) => boolean, light: Light, lod?: Lod): void;
   /** the lit body under the figure's marks: the light's colour where the sun reaches and the shade's where it doesn't (none: no
    * body is rendered, marks keep their own colour) */
   bodyLight?(light: Light): { sunlit: V; shade: V };
@@ -693,7 +701,7 @@ void main() {
   o = vec4(c * (1.0 - uGrain * 0.06 * (g - 0.5)), 1.0);
 }`;
 
-interface Layered { buf: WebGLBuffer; vaos: WebGLVertexArrayObject[]; counts: number[]; far?: boolean; key?: string }
+interface Layered { buf: WebGLBuffer; vaos: WebGLVertexArrayObject[]; counts: number[]; far?: boolean; key?: string; band?: number }
 /** how far (m) a mark of a rank shows before it has withdrawn (as the vertex shader has it, at detail 1) */
 export const showsTo = (rank: number, far: number) => 14 + (far * 1.15 - 14) * rank * rank;
 /** what each pass cost, the last frame it was asked (ms, with the GPU waited on between: coarse, but the same on a phone) */
@@ -811,16 +819,16 @@ export class StrokePainter {
     for (const [k, l] of this.chunks) if (!want.has(k)) { this.free(l); this.chunks.delete(k); }
     const ring = (k: string) => { const [cx, cz] = k.split(',').map(Number); return Math.max(Math.abs(cx - ex), Math.abs(cz - ez)); };
     for (const k of [...keys].sort((a, b) => ring(a) - ring(b))) {
-      const isFar = ring(k) >= 2, have = this.chunks.get(k);
-      // (made already, for this light: kept; for another light, kept and drawn until it's made again)
-      if (have && have.key === light.key && (have.far === isFar || (!have.far && isFar && ring(k) === 2))) continue;
+      const isFar = ring(k) >= 2, have = this.chunks.get(k), band = lodOf(ring(k));
+      // (made already, for this light and at this brush: kept; for another light or brush, kept and drawn until it's made again)
+      if (have && have.key === light.key && have.band === band) continue;
       if (made++ >= budget) break;
       const [cx, cz] = k.split(',').map(Number), marks: Mark[] = [], from = (ring(k) - 1) * 64;
       const keeps = (rank: number) => !isFar || showsTo(rank, far) > from;
-      rules.city(city.chunk(cx, cz), city, (m) => { if (keeps(m.rank ?? 0.5) && !(this.noUnder && m.kind === K.FILL && m.layer === LAYER.BROAD)) marks.push(m); }, keeps, light);
+      rules.city(city.chunk(cx, cz), city, (m) => { if (keeps(m.rank ?? 0.5) && !(this.noUnder && m.kind === K.FILL && m.layer === LAYER.BROAD)) marks.push(m); }, keeps, light, { size: band, from });
       const { data, counts } = this.stampsOf(marks);
       if (have) this.free(have);
-      this.chunks.set(k, { ...this.layered(data, this.gl.STATIC_DRAW, counts), far: isFar, key: light.key });
+      this.chunks.set(k, { ...this.layered(data, this.gl.STATIC_DRAW, counts), far: isFar, key: light.key, band });
     }
     return this.missing(keys);
   }

@@ -21,7 +21,7 @@ import type { LookDef } from '../looks';
 import type { Box, Detail } from '../city';
 import { TAG } from '../city';
 import { DRESS } from '../dressing';
-import type { Light, Mark, Spline, StrokeRules, V } from '../strokes';
+import type { Light, Lod, Mark, Spline, StrokeRules, V } from '../strokes';
 import { EDGE, K, LAYER, add, boxSeed, cross, dot, lipsOf, mix, onLine, planesOf, rng, scale, smooth, sub, unit, hashKey } from '../strokes';
 const len = (v: V) => Math.hypot(v[0], v[1], v[2]);
 
@@ -79,12 +79,13 @@ const fillOf = (key: string, o: V, t: V, up: V, n: V, w: number, h: number, col:
   layer, kind, a: add(add(o, scale(t, -0.1)), scale(up, h / 2)), b: add(add(o, scale(t, w + 0.1)), scale(up, h / 2)), n, width: (h + 0.2) / 1.15, col, alpha: 1, rank, key, clip, taper: [0.001, 0.001], ...extra,
 });
 /** broad pulls across a plane, in rows, each row one way; two pigments in the brush */
-function pulls(put: (m: Mark) => void, key: string, o: V, t: V, up: V, n: V, w: number, h: number, col: V, col2: V, rows: number, clip: [V, V], rank: number, rnd: () => number): void {
-  const rh = h / rows;
+function pulls(put: (m: Mark) => void, key: string, o: V, t: V, up: V, n: V, w: number, h: number, col: V, col2: V, rows0: number, clip: [V, V], rank: number, rnd: () => number, size = 1): void {
+  // (further off, a bigger brush: fewer rows, longer pulls, the same cover)
+  const rows = Math.max(1, Math.round(rows0 / size)), rh = h / rows;
   for (let r = 0; r < rows; r++) {
     const over = Math.min(0.9, rh * 0.45) + 0.25, v = (r + 0.5) * rh, fwd = rnd() < 0.5; let s = -over, i = 0;
     while (s < w + over) {
-      const L = Math.min(w + 2 * over, 7 + rnd() * 7), e = Math.min(w + over, s + L);
+      const L = Math.min(w + 2 * over, (7 + rnd() * 7) * size), e = Math.min(w + over, s + L);
       const a = add(add(o, scale(t, s)), scale(up, v + (rnd() - 0.5) * rh * 0.15)), b = add(add(o, scale(t, e)), scale(up, v + (rnd() - 0.5) * rh * 0.15));
       put({ layer: LAYER.BROAD, kind: K.PULL, a: fwd ? a : b, b: fwd ? b : a, n, width: rh * 1.35, col: scale(col, 0.93 + rnd() * 0.14), col2, mix2: 0.7, alpha: 0.95, dry: 0.5 + rnd() * 0.3, heart: 0.15, rank, key: `${key}/p${r}.${i++}`, clip, taper: [Math.min(0.9, rh * 0.45), Math.min(1.8, rh * 0.8)] });
       if (e >= w + over) break;
@@ -93,20 +94,63 @@ function pulls(put: (m: Mark) => void, key: string, o: V, t: V, up: V, n: V, w: 
   }
 }
 
+/**
+ * A box laid in brush pulls, each face its own: across its long way, as many as its short way takes at this brush (`size`),
+ * overlapping, each its own value about the face's tone with a second pigment toward its shade, loaded where it lands and
+ * dry at its exit; cut to the face. No flat fill: what was a placeholder block is paint.
+ */
+function brushBox(put: (m: Mark) => void, b: Box, col: V, T: ReturnType<typeof tints>, rank: number, key: string, layer: number, size: number, glow = false): void {
+  for (const p of planesOf(b, [])) brushPlane(put, p, col, T, rank, key, layer, size, glow);
+}
+/** one face laid in pulls (see brushBox) */
+function brushPlane(put: (m: Mark) => void, p: ReturnType<typeof planesOf>[number], col: V, T: ReturnType<typeof tints>, rank: number, key: string, layer: number, size: number, glow = false): void {
+  const r = rng(hashKey(key + p.key));
+  {
+    if (p.w * p.h < 0.004) return;
+    const longW = p.w >= p.h, L = longW ? p.w : p.h, S = longW ? p.h : p.w, n = Math.max(1, Math.min(3, Math.round(S / (0.5 * size)))), sw = S / n;
+    const tone = glow ? col : T.tone(col, p.n), shade = glow ? scale(col, 0.85) : mulv(col, T.shade(p.n));
+    for (let i = 0; i < n; i++) {
+      const v = (i + 0.5) * sw + (r() - 0.5) * sw * 0.15, fwd = r() < 0.5, over = Math.min(0.08, L * 0.05);
+      const at = (u: number): V => longW ? add(add(p.o, scale(p.t, u)), scale(p.up, v)) : add(add(p.o, scale(p.t, v)), scale(p.up, u));
+      const a = at(-over), e = at(L + over), c = scale(tone, 0.86 + r() * 0.26);
+      put({ layer, kind: K.PULL, a: fwd ? a : e, b: fwd ? e : a, n: p.n, width: sw * 1.3, col: c, col2: mix(c, shade, 0.6), mix2: 0.45, alpha: 1, dry: 0.4 + r() * 0.4, heart: r() * 0.5, load: 0.75, rank, key: `${key}/${p.key}.${i}`, clip: p.clip, taper: [Math.min(0.05, L * 0.1), Math.min(0.15, L * 0.25)] });
+    }
+    // (over them, a few shorter strokes a value either side, a little across: broken colour, as the walls have it; near only)
+    const area = p.w * p.h, extra = size < 3 && area > 0.25 ? Math.min(3, Math.round(area / (0.8 * size * size))) : 0;
+    for (let j = 0; j < extra; j++) {
+      const u0 = r() * L, v0 = r() * S, l = Math.min(L, (0.35 + r() * 0.6) * Math.max(0.6, Math.sqrt(area)) * size), tilt = (r() - 0.5) * 0.6;
+      const at = (u: number, v: number): V => longW ? add(add(p.o, scale(p.t, u)), scale(p.up, v)) : add(add(p.o, scale(p.t, v)), scale(p.up, u));
+      const a = at(u0 - l / 2, v0 - tilt * l / 2), e = at(u0 + l / 2, v0 + tilt * l / 2), c = r() < 0.5 ? scale(tone, 1.04 + r() * 0.05) : mix(tone, shade, 0.4 + r() * 0.3);
+      put({ layer, kind: K.PULL, a, b: e, n: p.n, width: Math.min(S, sw) * (0.45 + r() * 0.25), col: c, alpha: 0.85, dry: 0.5 + r() * 0.4, heart: r(), load: 0.6, rank, key: `${key}/${p.key}.x${j}`, clip: p.clip, taper: [0.02, l * 0.3] });
+    }
+  }
+}
+
+/** a ladder's rungs (dressing.ts gives them as one flat face): a short pull across every 0.3 m up it */
+function rungs(put: (m: Mark) => void, b: Box, col: V, rank: number, key: string, size: number): void {
+  const n: V = b.flat ? [b.flat[0], 0, b.flat[1]] : [0, 0, 1], wide = b.x1 - b.x0 > b.z1 - b.z0, step = 0.3 * Math.max(1, size);
+  for (let y = b.y0 + 0.15, i = 0; y < b.y1; y += step, i++) {
+    const a: V = wide ? [b.x0, y, (b.z0 + b.z1) / 2] : [(b.x0 + b.x1) / 2, y, b.z0], e: V = wide ? [b.x1, y, (b.z0 + b.z1) / 2] : [(b.x0 + b.x1) / 2, y, b.z1];
+    put({ layer: LAYER.ACCENT, kind: K.PULL + EDGE, a, b: e, width: 0.035 * Math.max(1, size * 0.7), col, alpha: 0.95, dry: 0.3, rank, key: `${key}/r${i}`, taper: [0.01, 0.01] });
+  }
+  void n;
+}
+
 /** one detail's marks (see `city`) */
-function paintDetail(d: Detail, put: (m: Mark) => void, keeps: (rank: number) => boolean, T: ReturnType<typeof tints>): void {
+function paintDetail(d: Detail, put: (m: Mark) => void, keeps: (rank: number) => boolean, T: ReturnType<typeof tints>, size = 1, rk: (r: number) => number = (r) => r): void {
   const key = `det:${d.kind}:${d.pts[0].map((v) => v.toFixed(2)).join(',')}`, r = rng(hashKey(key)), n: V = [d.n[0], 0, d.n[1]];
   if (d.kind === 'windows') {
     // (each pane: a pull across it, a little out from the wall; dark ones the sky's cool in them, lit ones warm, and at dusk
     // their own light)
-    const [p, q] = d.pts, cnt = d.count ?? 1, u = unit(sub(q, p)), slot = d.w / cnt, pw = Math.min(1.1, slot * 0.62), y0 = p[1] + 0.15, y1 = p[1] + d.h - 0.1;
+    // (further off, panes run together: a stroke for every few, the lit ones still their own)
+    const [p, q] = d.pts, g = Math.max(1, Math.round(size)), cnt0 = d.count ?? 1, cnt = Math.max(1, Math.round(cnt0 / g)), u = unit(sub(q, p)), slot = d.w / cnt, pw = Math.min(1.1 * g, slot * (g > 1 ? 0.8 : 0.62)), y0 = p[1] + 0.15, y1 = p[1] + d.h - 0.1;
     const lit = new Set<number>(); for (const i of Array.from({ length: cnt }, (_, i) => i).sort(() => r() - 0.5).slice(0, d.lit ?? 0)) lit.add(i);
     for (let i = 0; i < cnt; i++) {
       const c0 = add(add(p, scale(u, slot * (i + 0.5))), scale(n, 0.03)), a = add(c0, scale(u, -pw / 2)), b = add(c0, scale(u, pw / 2)), my = (y0 + y1) / 2;
       const dark: V = mix(mulv([0.24, 0.27, 0.32], T.shade(n)), [0.4, 0.44, 0.52], 0.25 * (1 - T.dk));
       const col: V = lit.has(i) ? mix(mix(dark, [0.78, 0.66, 0.46], 0.45), [1.0, 0.8, 0.5], T.dk) : scale(dark, 1 - 0.3 * T.dk);
       const lo: V = [Math.min(a[0], b[0]) - 0.02, y0, Math.min(a[2], b[2]) - 0.02], hi: V = [Math.max(a[0], b[0]) + 0.02, y1, Math.max(a[2], b[2]) + 0.02];
-      put({ layer: LAYER.ACCENT, kind: K.PULL, a: [a[0], my, a[2]], b: [b[0], my, b[2]], n, width: (y1 - y0) * 1.2, col, col2: scale(col, 1.12), mix2: 0.3, alpha: 1, dry: 0.15 + r() * 0.2, heart: r(), rank: 0.42, key: `${key}/${i}`, clip: [lo, hi], taper: [0.05, 0.12] });
+      put({ layer: LAYER.ACCENT, kind: K.PULL, a: [a[0], my, a[2]], b: [b[0], my, b[2]], n, width: (y1 - y0) * 1.2, col, col2: scale(col, 1.12), mix2: 0.3, alpha: 1, dry: 0.15 + r() * 0.2, heart: r(), rank: rk(0.42), key: `${key}/${i}`, clip: [lo, hi], taper: [0.05, 0.12] });
     }
     return;
   }
@@ -116,12 +160,13 @@ function paintDetail(d: Detail, put: (m: Mark) => void, keeps: (rank: number) =>
     for (let i = 0; i + 1 < d.pts.length; i++) put({ layer: LAYER.ACCENT, kind: K.PULL + EDGE, a: d.pts[i], b: d.pts[i + 1], width: 0.03, col: [0.13, 0.13, 0.15], alpha: 0.9, dry: 0.2, rank: DETAIL, key: `${key}/${i}`, taper: [0.02, 0.02] });
     return;
   }
-  const small = d.kind === 'aerial' || d.kind === 'dish' || d.kind === 'laundry' || d.kind === 'rust' || d.kind === 'bin', rank = small ? DETAIL : 0.42;
+  // (kept as far as the brush goes: further off, painted with it, bigger and fewer)
+  const small = d.kind === 'aerial' || d.kind === 'dish' || d.kind === 'laundry' || d.kind === 'rust' || d.kind === 'bin', rank = rk(small ? DETAIL : 0.42);
   if (!keeps(rank)) return;
   DRESS[d.kind](d).forEach((b, j) => {
-    if (b.tag === TAG.RUNGS) return;
     const col = dressCol(b), k = `${key}/${j}`, ext = [b.x1 - b.x0, b.y1 - b.y0, b.z1 - b.z0], order = [0, 1, 2].sort((i, l) => ext[l] - ext[i]);
     const glow = b.tag === TAG.NEON;
+    if (b.tag === TAG.RUNGS) { rungs(put, b, scale(mulv(col, T.shade(n)), 0.8), rank, k, size); return; }
     if (b.flat) {
       // (a streak: a wash down the face)
       const cx = (b.x0 + b.x1) / 2, cz = (b.z0 + b.z1) / 2, fn: V = [b.flat[0], 0, b.flat[1]];
@@ -135,7 +180,7 @@ function paintDetail(d: Detail, put: (m: Mark) => void, keeps: (rank: number) =>
       put({ layer: LAYER.ACCENT, kind: K.PULL + EDGE, a, b: e, width: Math.max(0.02, ext[order[1]]), col: glow ? col : scale(mulv(col, T.shade(n)), 0.85), alpha: 1, dry: 0.3, rank, key: k });
       return;
     }
-    for (const p of planesOf(b, [])) put(fillOf(`${k}/${p.key}`, p.o, p.t, p.up, p.n, p.w, p.h, glow ? col : T.tone(col, p.n), p.clip, rank, K.FILL, LAYER.ACCENT));
+    brushBox(put, b, col, T, rank, k, LAYER.ACCENT, size, glow);
   });
 }
 
@@ -143,8 +188,9 @@ function paintDetail(d: Detail, put: (m: Mark) => void, keeps: (rank: number) =>
  * near the plane's mass, the next value over in the brush as its second pigment, a tint warm or cool of its own), in two sizes, masses then detail, laid the way the
  * surface goes: down a wall, along a roof's long way. Sized by the plane (a big wall broader strokes), so it's the same however
  * it's seen from; capped a plane, the survivors growing to keep the cover. */
-function scatter(put: (m: Mark) => void, p: ReturnType<typeof planesOf>[number], col: V, T: ReturnType<typeof tints>, pb: V, m: number, r: () => number): void {
-  const area = p.w * p.h, base = Math.min(3.2, Math.max(0.9, 0.7 + 0.12 * Math.sqrt(area)));
+function scatter(put: (m: Mark) => void, p: ReturnType<typeof planesOf>[number], col: V, T: ReturnType<typeof tints>, pb: V, m: number, r: () => number, size = 1, rk: (r: number) => number = (x) => x): void {
+  // (the brush by the distance too: further off, bigger strokes, so fewer, the same cover)
+  const area = p.w * p.h, base = Math.min(3.2, Math.max(0.9, 0.7 + 0.12 * Math.sqrt(area))) * size;
   const lit = (k: number): V => T.tone(pb, p.n, Math.max(0, Math.min(1, k)));
   for (const [pass, L0, wr, cover, cap] of [['m', base * 2.0, 0.42, 0.9, 16], ['d', base, 0.34, 0.7, 32]] as const) {
     let L = L0, W = L * wr, n = Math.round((area * cover) / (L * W));
@@ -159,7 +205,7 @@ function scatter(put: (m: Mark) => void, p: ReturnType<typeof planesOf>[number],
       const k = Math.max(0, Math.min(1, m + (r() - 0.5) * 0.22)), v = 0.94 + r() * 0.12, warm = (r() - 0.5) * 0.08;
       const c1 = mulv(lit(k), [v * (1 + warm), v, v * (1 - warm)]), c2 = lit(k + (r() < 0.5 ? -0.3 : 0.3));
       const down = !p.top && r() < 0.8;
-      put({ layer: LAYER.BROAD, kind: K.PULL, a: down ? b : a, b: down ? a : b, n: p.n, width: W, col: pass === 'm' ? mix(c1, col, 0.35) : c1, col2: c2, mix2: 0.35, alpha: 0.92, dry: 0.55 + r() * 0.35, heart: r(), rank: pass === 'm' ? 0.42 : DETAIL + 0.06, key: `${p.key}/s${pass}${i}`, clip: p.clip, taper: [W * 0.4, L * 0.35] });
+      put({ layer: LAYER.BROAD, kind: K.PULL, a: down ? b : a, b: down ? a : b, n: p.n, width: W, col: pass === 'm' ? mix(c1, col, 0.35) : c1, col2: c2, mix2: 0.35, alpha: 0.92, dry: 0.55 + r() * 0.35, heart: r(), rank: rk(pass === 'm' ? 0.42 : DETAIL + 0.06), load: 0.6, key: `${p.key}/s${pass}${i}`, clip: p.clip, taper: [W * 0.4, L * 0.35] });
     }
   }
 }
@@ -169,13 +215,16 @@ export const strokeGouacheRules: StrokeRules = {
   // brush board (?brushes) can use it to judge whites, the game doesn't)
   paper: [0.93, 0.9, 0.84], grain: 1, haze: [0.77, 0.74, 0.83], hazeNear: 0.12, fadeToPaper: 0, sun: DAY_SUN,
   skyField: { top: [0.58, 0.56, 0.7], horizon: [0.89, 0.83, 0.84] },
-  city(c, city, put, keeps, light) {
+  city(c, city, put, keeps, light, lod?: Lod) {
+    // (the brush for the distance (strokes.ts lodOf): bigger further off; and what it lays kept as far as it's drawn, its rank
+    // raised with the brush, so a far roof is painted in a few big strokes rather than left as its flat underpainting)
+    const size = lod?.size ?? 1, rk = (r: number) => Math.min(1, r * (1 + 0.32 * (size - 1)));
     const T = tints(light), ox = c.cx * 64, oz = c.cz * 64, up0: V = [0, 1, 0], sKey = `street:${c.cx},${c.cz}`, rnd = rng(hashKey(sKey));
     // (the street: underpainted dark, a few pulls, its shadow)
     {
       const clip: [V, V] = [[ox - 0.01, -1, oz - 0.01], [ox + 64.01, 1, oz + 64.01]], col = T.tone(baseOf(null), up0);
       put(fillOf(`${sKey}/fill`, [ox, 0, oz], [1, 0, 0], [0, 0, 1], up0, 64, 64, scale(col, 0.82), clip, 0.9));
-      if (keeps(BRUSH)) pulls(put, sKey, [ox, 0, oz], [1, 0, 0], [0, 0, 1], up0, 64, 64, col, scale(mulv(col, T.shade(up0)), 1.15), 6, clip, BRUSH, rnd);
+      if (keeps(rk(BRUSH))) pulls(put, sKey, [ox, 0, oz], [1, 0, 0], [0, 0, 1], up0, 64, 64, col, scale(mulv(col, T.shade(up0)), 1.15), 6, clip, rk(BRUSH), rnd, size);
       if (keeps(SHADOW)) put(fillOf(`${sKey}/shade`, [ox, 0, oz], [1, 0, 0], [0, 0, 1], up0, 64, 64, scale(mulv(baseOf(null), T.shade(up0)), 0.85), clip, SHADOW, K.SHADE, LAYER.SHADOW));
     }
     const f = light.focus;
@@ -193,6 +242,8 @@ export const strokeGouacheRules: StrokeRules = {
         put({ layer: LAYER.EDGE, kind: K.PULL + EDGE, a, b: e, width: Math.max(0.04, Math.min(wide, Math.max(thick, 0.04))), col: mulv(base, T.shade([0, 0, 1])), alpha: 1, dry: 0.3, rank: small ? 0.62 : 0.75, key: `bar:${a.join(',')}` });
         continue;
       }
+      // (a small thing fixed to a face (a fire escape's step, a unit, a sign's board): laid in pulls, face by face, no flat block)
+      if (small) { brushBox(put, b, base, T, rank, `fx:${b.x0},${b.y0},${b.z0}`, LAYER.ACCENT, size); continue; }
       const near = city.boxesNear((b.x0 + b.x1) / 2, (b.z0 + b.z1) / 2, Math.max(b.x1 - b.x0, b.z1 - b.z0) / 2 + 1);
       const focused = isFocus(b);
       for (const p of planesOf(b, near)) {
@@ -203,25 +254,27 @@ export const strokeGouacheRules: StrokeRules = {
         // (the second pigment: toward the sky's cool in the shade, the horizon's warmth in the light)
         const col2 = m > 0.5 ? mulv(col, [1.12, 1.0, 0.88]) : mix(col, scale(mulv(pb, T.deep), 0.9), 0.7);
         // (underpainted a value down and cooler, as gouache is laid dark to light: what the dry lifts and broken edges show)
+        // (a small thing (a unit, a hut's side, a fire escape's step): laid in pulls, no flat block; a big plane underpainted first)
+        if (p.w * p.h <= 4) { brushPlane(put, p, pb, T, rank, `${p.key}/b`, LAYER.BROAD, size); continue; }
         put(fillOf(`${p.key}/fill`, p.o, p.t, p.up, p.n, p.w, p.h, mix(scale(col, 0.8), scale(mulv(pb, T.deep), 0.85), 0.3), p.clip, rank));
-        if (!keeps(BRUSH) || !big) { if (p.w * p.h > 4) scatter(put, p, col, T, pb, m, r); continue; }
-        if (p.top) pulls(put, p.key, p.o, p.t, p.up, p.n, p.w, p.h, col, col2, Math.max(1, Math.min(4, Math.round(p.h / 3.5))), p.clip, BRUSH, r);
+        if (!keeps(rk(BRUSH)) || !big) { scatter(put, p, col, T, pb, m, r, size, rk); continue; }
+        if (p.top) pulls(put, p.key, p.o, p.t, p.up, p.n, p.w, p.h, col, col2, Math.max(1, Math.min(4, Math.round(p.h / 3.5))), p.clip, rk(BRUSH), r, size);
         else {
           // (a wall dragged down from its top, in a few broad strokes, drying out toward the street)
-          const cols = Math.max(1, Math.min(3, Math.round(p.w / 3.5))), cw = p.w / cols;
+          const cols = Math.max(1, Math.min(3, Math.round(p.w / (3.5 * size)))), cw = p.w / cols;
           for (let i = 0; i < cols; i++) {
             const x = (i + 0.5 + (r() - 0.5) * 0.25) * cw, reach = p.h * (0.55 + 0.45 * r());
             const a = add(add(p.o, scale(p.t, x)), [0, p.h + 0.2, 0]), e = add(add(p.o, scale(p.t, x + (r() - 0.5) * 0.4)), [0, p.h - reach, 0]);
-            put({ layer: LAYER.BROAD, kind: K.PULL, a, b: e, n: p.n, width: cw * 1.3, col: scale(col, 0.92 + r() * 0.16), col2, mix2: 0.75, alpha: 0.95, dry: 0.6 + r() * 0.3, heart: 0.1, rank: BRUSH, key: `${p.key}/d${i}`, clip: p.clip, taper: [0.1, Math.min(3, reach * 0.35)] });
+            put({ layer: LAYER.BROAD, kind: K.PULL, a, b: e, n: p.n, width: cw * 1.3, col: scale(col, 0.92 + r() * 0.16), col2, mix2: 0.75, alpha: 0.95, dry: 0.6 + r() * 0.3, heart: 0.1, rank: rk(BRUSH), load: 0.7, key: `${p.key}/d${i}`, clip: p.clip, taper: [0.1, Math.min(3, reach * 0.35)] });
           }
           // (weathering: a broken streak or two run down from under the coping)
-          for (let i = r() < 0.65 ? 1 + (r() < 0.4 ? 1 : 0) : 0; i > 0; i--) {
+          for (let i = size < 3 && r() < 0.65 ? 1 + (r() < 0.4 ? 1 : 0) : 0; i > 0; i--) {
             const x = 0.4 + r() * (p.w - 0.8), l = Math.min(p.h - 0.4, 1.5 + r() * 3.5);
             put({ layer: LAYER.BROAD, kind: K.PULL, a: add(add(p.o, scale(p.t, x)), [0, p.h - 0.3, 0]), b: add(add(p.o, scale(p.t, x)), [0, p.h - 0.3 - l, 0]), n: p.n, width: 0.25 + r() * 0.35, col: scale(col, 0.8), alpha: 0.55, dry: 0.7, heart: 0.05, rank: DETAIL, key: `${p.key}/w${i}`, clip: p.clip, taper: [0.05, l * 0.5] });
           }
         }
         // (over the broad strokes, Switchback's coverage: the plane broken into strokes of its own values)
-        scatter(put, p, col, T, pb, m, r);
+        scatter(put, p, col, T, pb, m, r, size, rk);
         // (its shadow: one passage, masked by the plane's real shadow)
         if (m > 0.2 && keeps(SHADOW)) put(fillOf(`${p.key}/shade`, p.o, p.t, p.up, p.n, p.w, p.h, scale(mulv(pb, T.shade(p.n)), 0.92), p.clip, SHADOW, K.SHADE, LAYER.SHADOW, { col2: mulv(pb, T.deep), mix2: 0.35 }));
       }
@@ -230,7 +283,7 @@ export const strokeGouacheRules: StrokeRules = {
     // marks, laid over what's behind it. A window row a mark a pane (lit or not by its dice; lit glows as the light goes);
     // anything thin (a wire, a pole, a rail, a bundle of pipes) one line along it; anything with faces, its faces filled; rust
     // a wash down the wall)
-    if (keeps(0.42)) for (const d of c.details) paintDetail(d, put, keeps, T);
+    if (keeps(rk(0.42))) for (const d of c.details) paintDetail(d, put, keeps, T, size, rk);
     // (lips: every one a hand can catch keeps its dark line on the roof; near, the full coping too)
     for (const l of lipsOf(c, city)) {
       if (!l.box || !lipped.has(l.box.tag) || l.box.y1 - l.box.y0 < 0.5) continue;
