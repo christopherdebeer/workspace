@@ -95,3 +95,22 @@ export function detailStrokes(details: Detail[], x: number, z: number, r: number
   }
   return out;
 }
+
+/**
+ * The chunks drawn about the eye, as lines (`?chunks`), to reason about the brush's distance bands (strokes.ts `lodOf`): each
+ * chunk's outline at the street and again high over the roofs, a post at each corner, coloured by its band: green the full
+ * brush (the eye's chunk and the ring about it), yellow 2.5 times, orange 4, red 6. And the window rooms' reach (interiors.ts:
+ * fading from 35 m, gone by 46 m), a cyan ring about the eye.
+ */
+export function chunkStrokes(ex: number, ez: number, radius: number, high = 30): Stroke[] {
+  const out: Stroke[] = [], C = 64, cx0 = Math.floor(ex / C), cz0 = Math.floor(ez / C);
+  const band = (ring: number): [number, number, number] => (ring <= 1 ? [0.2, 0.85, 0.35] : ring === 2 ? [0.95, 0.85, 0.2] : ring === 3 ? [0.98, 0.55, 0.15] : [0.9, 0.2, 0.2]);
+  const line = (pts: number[], c: [number, number, number], a: number, w: number) => out.push({ pts, cols: Array.from({ length: pts.length / 3 }, () => [c[0], c[1], c[2], a]).flat(), w });
+  for (let i = -radius; i <= radius; i++) for (let j = -radius; j <= radius; j++) {
+    const cx = cx0 + i, cz = cz0 + j, ring = Math.max(Math.abs(i), Math.abs(j)), c = band(ring), x0 = cx * C + 0.5, z0 = cz * C + 0.5, x1 = x0 + C - 1, z1 = z0 + C - 1;
+    for (const y of [0.3, high]) line([x0, y, z0, x1, y, z0, x1, y, z1, x0, y, z1, x0, y, z0], c, y > 1 ? 0.9 : 0.6, y > 1 ? 0.14 : 0.08);
+    for (const [x, z] of [[x0, z0], [x1, z0], [x1, z1], [x0, z1]]) line([x, 0, z, x, high, z], c, 0.7, 0.1);
+  }
+  for (const [r, y] of [[46, 0.4], [46, high], [35, high]]) { const pts: number[] = []; for (let k = 0; k <= 48; k++) { const a = (k / 48) * Math.PI * 2; pts.push(ex + Math.cos(a) * r, y, ez + Math.sin(a) * r); } line(pts, [0.3, 0.9, 1.0], r === 35 ? 0.5 : 0.9, 0.08); }
+  return out;
+}
