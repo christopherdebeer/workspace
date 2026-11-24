@@ -29,7 +29,7 @@ export function maxGap(dh: number): number {
 /** a roof: a box something can stand on above the street */
 // (made when first asked: city.ts and this import each other)
 let ROOF: Set<number> | null = null;
-export const isRoof = (b: Box) => (ROOF ??= new Set<number>([TAG.BUILDING, TAG.BEAM, TAG.SLAB, TAG.HUT])).has(b.tag) && b.y1 >= STOREY && !b.fixture;
+export const isRoof = (b: Box) => (ROOF ??= new Set<number>([TAG.BUILDING, TAG.BEAM, TAG.SLAB, TAG.HUT, TAG.MANSARD])).has(b.tag) && b.y1 >= STOREY && !b.fixture;
 
 /** the gap between two roofs' footprints across one axis, with how much of the other axis they share; diagonal: none */
 function gapOf(a: Box, b: Box): { g: number; share: number; axis: 0 | 1 } | null {
@@ -80,11 +80,11 @@ export function bridgeDeadEnds(boxes: Box[]): Box[] {
     const b = best.b, H = a.y1;
     let s: Box;
     if (best.axis === 0) {
-      const lo = Math.max(a.z0, b.z0), hi = Math.min(a.z1, b.z1), m = (lo + hi) / 2, east = b.x0 >= a.x1;
-      s = { x0: east ? a.x1 : b.x1, x1: east ? b.x0 : a.x0, z0: m - 0.6, z1: m + 0.6, y0: H - 0.6, y1: H, tag: TAG.SLAB };
+      const lo = Math.max(a.z0, b.z0), hi = Math.min(a.z1, b.z1), m = Math.round((lo + hi) / 2) - 1, east = b.x0 >= a.x1;
+      s = { x0: east ? a.x1 : b.x1, x1: east ? b.x0 : a.x0, z0: m, z1: m + 2, y0: H - 1, y1: H, tag: TAG.SLAB };
     } else {
-      const lo = Math.max(a.x0, b.x0), hi = Math.min(a.x1, b.x1), m = (lo + hi) / 2, north = b.z0 >= a.z1;
-      s = { x0: m - 0.6, x1: m + 0.6, z0: north ? a.z1 : b.z1, z1: north ? b.z0 : a.z0, y0: H - 0.6, y1: H, tag: TAG.SLAB };
+      const lo = Math.max(a.x0, b.x0), hi = Math.min(a.x1, b.x1), m = Math.round((lo + hi) / 2) - 1, north = b.z0 >= a.z1;
+      s = { x0: m, x1: m + 2, z0: north ? a.z1 : b.z1, z1: north ? b.z0 : a.z0, y0: H - 1, y1: H, tag: TAG.SLAB };
     }
     // (the alley under it and over it clear: nothing standing where it goes)
     if ([...boxes, ...added].some((o) => o !== a && o !== b && o.x0 < s.x1 && o.x1 > s.x0 && o.z0 < s.z1 && o.z1 > s.z0 && o.y1 > H - 3)) continue;

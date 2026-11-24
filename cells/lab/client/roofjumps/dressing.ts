@@ -99,6 +99,8 @@ export const DRESS: Record<DetailKind, (d: Detail) => Box[]> = {
   pole: (d) => { const [p] = d.pts; return [stand(p, d.w, d.w, d.h, TAG.POLE), stand(p, 1.2, 0.08, 0.08, TAG.POLE, p[1] + d.h - 1.5)]; },
   wire: (d) => { const out: Box[] = []; for (let i = 0; i + 1 < d.pts.length; i++) out.push(...strung(d.pts[i], d.pts[i + 1], 0.015, TAG.WIRE, 6)); return out; },
   vending: (d) => { const [p] = d.pts; return [onFace(d, [p[0] - d.n[0] * 0.4, 0, p[2] - d.n[1] * 0.4], -d.w / 2, d.w / 2, 0, 0.75, 0, d.h, TAG.FURNITURE, d.seed % 967 / 967)]; },
+  // (a dormer: out from a mansard's face, its front (where its window is) and a little roof over it)
+  dormer: (d) => { const [p] = d.pts; return [onFace(d, [p[0] - d.n[0] * 0.02, p[1], p[2] - d.n[1] * 0.02], -d.w / 2, d.w / 2, 0, 0.55, p[1], p[1] + d.h, TAG.MANSARD), onFace(d, [p[0], p[1], p[2]], -d.w / 2 - 0.08, d.w / 2 + 0.08, -0.05, 0.62, p[1] + d.h, p[1] + d.h + 0.14, TAG.MANSARD)]; },
   bin: (d) => { const [p] = d.pts; return [onFace(d, [p[0] - d.n[0] * 0.35, 0, p[2] - d.n[1] * 0.35], -d.w / 2, d.w / 2, 0.05, 0.55, 0, d.h, TAG.FURNITURE, 0.1)]; },
 };
 

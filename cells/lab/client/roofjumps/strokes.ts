@@ -125,6 +125,8 @@ export interface Mark {
   /** wet into wet (0..1): how much of the paint already under it it picks up and drags along, strongest where it lands; and
    * how far it drags it (m) */
   pick?: number; smear?: number;
+  /** kept exact (a window's pane): a clipped stamp, never an uncut spline stroke */
+  crisp?: boolean;
 }
 
 /**
@@ -870,7 +872,7 @@ export class StrokePainter {
       rules.city(city.chunk(cx, cz), city, (m) => { if (keeps(m.rank ?? 0.5) && !(this.noUnder && m.kind === K.FILL && m.layer === LAYER.BROAD)) marks.push(m); }, keeps, light, { size: band, from });
       // (its pulls and lines as spline strokes, by layer, uncut; the underpainting, the shadow passages and the washes as stamps)
       const stamped: Mark[] = [], spl: Spline[][] = Array.from({ length: LAYERS }, () => []);
-      for (const m of marks) { if (this.splineCity && (m.kind === K.PULL || m.kind === K.PULL + EDGE) && !m.sky) spl[Math.max(0, Math.min(LAYERS - 1, m.layer))].push(markSpline(m)); else stamped.push(m); }
+      for (const m of marks) { if (this.splineCity && (m.kind === K.PULL || m.kind === K.PULL + EDGE) && !m.sky && !m.crisp) spl[Math.max(0, Math.min(LAYERS - 1, m.layer))].push(markSpline(m)); else stamped.push(m); }
       const { data, counts } = this.stampsOf(stamped);
       if (have) this.free(have);
       this.chunks.set(k, { ...this.layered(data, this.gl.STATIC_DRAW, counts), far: isFar, key: light.key, band, spl: this.splined(spl) });

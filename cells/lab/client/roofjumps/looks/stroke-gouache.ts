@@ -19,7 +19,7 @@
  */
 import type { LookDef } from '../looks';
 import type { Box, Detail } from '../city';
-import { TAG } from '../city';
+import { STYLE, TAG } from '../city';
 import { DRESS } from '../dressing';
 import type { Light, Lod, Mark, Spline, StrokeRules, V } from '../strokes';
 import { EDGE, K, LAYER, add, boxSeed, cross, dot, lipsOf, mix, onLine, planesOf, rng, scale, smooth, sub, unit, hashKey } from '../strokes';
@@ -32,6 +32,18 @@ const mulv = (a: V, b: V): V => [a[0] * b[0], a[1] * b[1], a[2] * b[2]];
 const baseOf = (b: Box | null): V => {
   if (!b) return [0.36, 0.37, 0.41];
   switch (b.tag) {
+    // (a building by its style: a mansard's limestone, a tenement's tile, a slab's pale concrete, an office's dark glass, a
+    // plain block's concrete; a mansard's top storey slate, its chimneys brick)
+    case TAG.BUILDING: { const s = boxSeed(b), j = (s - 0.5) * 0.06;
+      switch (b.style) {
+        case STYLE.MANSARD: return [0.86 + j, 0.8 + j, 0.7 + j * 0.5];
+        case STYLE.TENEMENT: return s < 0.5 ? [0.64 + j, 0.55 + j, 0.47] : [0.58 + j, 0.52 + j, 0.5];
+        case STYLE.SLAB: return [0.84 + j, 0.83 + j, 0.8 + j];
+        case STYLE.OFFICE: return s < 0.5 ? [0.2, 0.24, 0.28] : [0.24, 0.26, 0.24];
+        default: return concrete(s);
+      } }
+    case TAG.MANSARD: return [0.34, 0.4, 0.5];
+    case TAG.CHIMNEY: return [0.58, 0.36, 0.27];
     case TAG.UNIT: return [0.55, 0.58, 0.6];
     case TAG.TANK: return [0.5, 0.47, 0.44];
     case TAG.BEAM: return [0.34, 0.33, 0.35];
@@ -70,7 +82,7 @@ function tints(L: Light) {
   const tone = (base: V, n: V, m = mass(n)) => mulv(base, mix(shade(n), sunlit, m));
   return { S, dk, sunlit, shade, mass, tone, deep };
 }
-const lipped = new Set<number>([TAG.BUILDING, TAG.HUT, TAG.RIM, TAG.STEP, TAG.STAIR, TAG.TANK, TAG.UNIT]);
+const lipped = new Set<number>([TAG.BUILDING, TAG.HUT, TAG.RIM, TAG.STEP, TAG.STAIR, TAG.TANK, TAG.UNIT, TAG.MANSARD, TAG.CHIMNEY]);
 /** ranks: what withdraws when (strokes.ts showsTo): the masses never; the brushwork by ~80 m; the coping by ~40 m */
 const BRUSH = 0.55, SHADOW = 0.5, COPING = 0.33, DETAIL = 0.3;
 
@@ -142,18 +154,64 @@ function paintDetail(d: Detail, put: (m: Mark) => void, keeps: (rank: number) =>
   const size = Math.min(size0, 1 + (size0 - 1) * 0.4), quiet = Math.min(0.75, (size0 - 1) * 0.2);
   const key = `det:${d.kind}:${d.pts[0].map((v) => v.toFixed(2)).join(',')}`, r = rng(hashKey(key)), n: V = [d.n[0], 0, d.n[1]];
   if (d.kind === 'windows') {
-    // (each pane: a pull across it, a little out from the wall; dark ones the sky's cool in them, lit ones warm, and at dusk
-    // their own light)
-    // (further off, panes run together: a stroke for every few, the lit ones still their own)
-    const [p, q] = d.pts, g = Math.max(1, Math.round(size)), cnt0 = d.count ?? 1, cnt = Math.max(1, Math.round(cnt0 / g)), u = unit(sub(q, p)), slot = d.w / cnt, pw = Math.min(1.1 * g, slot * (g > 1 ? 0.8 : 0.62)), y0 = p[1] + 0.15, y1 = p[1] + d.h - 0.1;
-    const lit = new Set<number>(); for (const i of Array.from({ length: cnt }, (_, i) => i).sort(() => r() - 0.5).slice(0, d.lit ?? 0)) lit.add(i);
+    // (a row of windows, by its building's form (parts.ts): punched panes, framed ones with a cross, tall French ones with a
+    // railing and now and then shutters, a ribbon running the face, or a curtain wall of glass bays. Each pane its own state by
+    // the row's dice: dark (the sky's cool in it), lit warm, a curtain drawn, blinds down, a screen's blue, a lamp in the dark.
+    // Near, a lit room shows something of itself: someone in it, a lamp, the line of a table. Further off, panes run together:
+    // a stroke for every few, the lit ones still their own)
+    const form = d.form ?? 'pane', [p, q] = d.pts, g = Math.max(1, Math.round(size)), cnt0 = d.count ?? 1, cnt = Math.max(1, Math.round(cnt0 / g)), u = unit(sub(q, p)), slot = d.w / cnt;
+    const ratio = form === 'ribbon' ? 0.97 : form === 'curtain' ? 0.92 : form === 'tall' ? 0.5 : form === 'frame' ? 0.56 : 0.62;
+    const pw = Math.min((form === 'ribbon' || form === 'curtain' ? 9 : 1.1) * g, slot * (g > 1 ? Math.max(ratio, 0.8) : ratio)), y0 = p[1] + 0.12, y1 = p[1] + d.h - 0.08, my = (y0 + y1) / 2, hh = y1 - y0;
+    const near = size < 1.5 && keeps(DETAIL), glow = T.dk, rkW = rk(0.42);
+    const litN = Math.min(cnt, Math.round(((d.lit ?? 0) / cnt0) * cnt)), order = Array.from({ length: cnt }, (_, i) => i).sort(() => r() - 0.5), lit = new Set(order.slice(0, litN));
+    const dark: V = mix(mulv([0.22, 0.25, 0.3], T.shade(n)), [0.4, 0.44, 0.52], 0.25 * (1 - glow));
+    const warm: V = mix(mix(dark, [0.8, 0.66, 0.44], 0.5), [1.0, 0.78, 0.48], glow);
+    const at = (t: number, y: number, out = 0.03): V => { const c = add(p, scale(u, t)); return [c[0] + n[0] * out, y, c[2] + n[2] * out]; };
+    const line = (a: V, b: V, w: number, col: V, k: string, alpha = 0.9) => put({ layer: LAYER.ACCENT, kind: K.PULL + EDGE, a, b, width: w, col, alpha, dry: 0.25, rank: DETAIL, key: `${key}/${k}`, taper: [0.005, 0.01] });
+    const frameCol = scale(mulv([0.82, 0.8, 0.76], T.shade(n)), 0.95), iron: V = [0.12, 0.12, 0.13];
     for (let i = 0; i < cnt; i++) {
-      const c0 = add(add(p, scale(u, slot * (i + 0.5))), scale(n, 0.03)), a = add(c0, scale(u, -pw / 2)), b = add(c0, scale(u, pw / 2)), my = (y0 + y1) / 2;
-      const dark: V = mix(mulv([0.24, 0.27, 0.32], T.shade(n)), [0.4, 0.44, 0.52], 0.25 * (1 - T.dk));
-      const col: V = lit.has(i) ? mix(mix(dark, [0.78, 0.66, 0.46], 0.45), [1.0, 0.8, 0.5], T.dk) : scale(dark, 1 - 0.3 * T.dk);
+      const t = slot * (i + 0.5), a = at(t - pw / 2, my), b = at(t + pw / 2, my), kr = rng(hashKey(`${key}/s${i}`)), sr = kr();
+      // (its state)
+      const on = lit.has(i), state = !on ? (sr < 0.06 && glow > 0.3 ? 'lamp' : 'dark') : sr < 0.45 ? 'warm' : sr < 0.65 ? 'curtain' : sr < 0.82 ? 'blinds' : sr < 0.92 ? 'screen' : 'warm';
+      const col: V = state === 'dark' || state === 'lamp' ? scale(dark, 1 - 0.3 * glow) : state === 'screen' ? mix(dark, [0.46, 0.6, 0.78], 0.35 + 0.5 * glow) : state === 'curtain' ? mix(warm, [0.95, 0.88, 0.72], 0.35) : warm;
       const lo: V = [Math.min(a[0], b[0]) - 0.02, y0, Math.min(a[2], b[2]) - 0.02], hi: V = [Math.max(a[0], b[0]) + 0.02, y1, Math.max(a[2], b[2]) + 0.02];
-      put({ layer: LAYER.ACCENT, kind: K.PULL, a: [a[0], my, a[2]], b: [b[0], my, b[2]], n, width: (y1 - y0) * 1.2, col, col2: scale(col, 1.12), mix2: 0.3, alpha: 1, dry: 0.15 + r() * 0.2, heart: r(), rank: rk(0.42), key: `${key}/${i}`, clip: [lo, hi], taper: [0.02, 0.04] });
+      put({ layer: LAYER.ACCENT, kind: K.PULL, a, b, n, width: hh * 1.2, col, col2: scale(col, state === 'dark' ? 1.15 : 1.08), mix2: 0.3, alpha: 1, dry: 0.15 + kr() * 0.2, heart: kr(), rank: rkW, key: `${key}/${i}`, clip: [lo, hi], taper: [0.02, 0.04], crisp: true });
+      if (!near) continue;
+      // (the room, near: someone in it (a head and shoulders, dark against the light), a lamp, the line of a table or a sofa)
+      if (state === 'warm' || state === 'curtain') {
+        const ir = kr();
+        if (ir < 0.3) { const x = t + (kr() - 0.5) * pw * 0.5, sh: V = mix(warm, [0.22, 0.18, 0.17], 0.7), base = y0 + hh * 0.05, top = y0 + hh * (0.55 + 0.15 * kr());
+          put({ layer: LAYER.ACCENT, kind: K.PULL, a: at(x, base, 0.035), b: at(x, top, 0.035), n, width: Math.min(pw * 0.42, 0.52), col: sh, alpha: 0.95, dry: 0.2, rank: DETAIL, key: `${key}/${i}fig`, taper: [0.06, 0.1], crisp: true }); /* (shoulders: the top of the body as wide as they are, rounding over) */
+          put({ layer: LAYER.ACCENT, kind: K.DAB, a: at(x, top - 0.02, 0.036), b: at(x, top + 0.24, 0.036), n, width: Math.min(pw * 0.26, 0.26), col: sh, alpha: 0.95, rank: DETAIL, key: `${key}/${i}head` }); }
+        else if (ir < 0.5) put({ layer: LAYER.ACCENT, kind: K.PULL, a: at(t - pw * 0.4, y0 + hh * 0.18, 0.035), b: at(t + pw * 0.4, y0 + hh * 0.18, 0.035), n, width: hh * 0.14, col: mix(warm, [0.3, 0.22, 0.18], 0.55), alpha: 0.85, dry: 0.3, rank: DETAIL, key: `${key}/${i}tab`, taper: [0.02, 0.03] });
+        else if (ir < 0.65) put({ layer: LAYER.ACCENT, kind: K.DAB, a: at(t + (kr() - 0.5) * pw * 0.6, y0 + hh * 0.5, 0.036), b: at(t + (kr() - 0.5) * pw * 0.6, y0 + hh * 0.62, 0.036), n, width: 0.14, col: [1.0, 0.9, 0.62], alpha: 0.95, rank: DETAIL, key: `${key}/${i}lamp` });
+      }
+      if (state === 'lamp') put({ layer: LAYER.ACCENT, kind: K.DAB, a: at(t, y0 + hh * 0.45, 0.036), b: at(t, y0 + hh * 0.55, 0.036), n, width: 0.12, col: [1.0, 0.82, 0.52], alpha: 0.9, rank: DETAIL, key: `${key}/${i}lmp` });
+      // (drawn curtains: a lighter fall down each side; blinds: slats across)
+      if (state === 'curtain') for (const sd of [-1, 1]) put({ layer: LAYER.ACCENT, kind: K.PULL, a: at(t + sd * pw * 0.36, y1 - 0.02, 0.034), b: at(t + sd * pw * 0.38, y0 + 0.02, 0.034), n, width: pw * 0.22, col: mix(warm, [0.97, 0.92, 0.8], 0.6), alpha: 0.9, dry: 0.3, rank: DETAIL, key: `${key}/${i}c${sd}`, taper: [0.01, 0.04] });
+      if (state === 'blinds') for (let k = 1; k < 5; k++) line(at(t - pw * 0.48, y0 + (hh * k) / 5, 0.035), at(t + pw * 0.48, y0 + (hh * k) / 5, 0.035), 0.025, mix(warm, [0.35, 0.28, 0.24], 0.5), `${i}b${k}`, 0.7);
+      // (the form's own: a frame's cross; a French window's railing across its foot, and shutters either side; mullions between bays)
+      if (form === 'frame') { line(at(t, y0, 0.04), at(t, y1, 0.04), 0.035, frameCol, `${i}fv`); line(at(t - pw / 2, y0 + hh * 0.62, 0.04), at(t + pw / 2, y0 + hh * 0.62, 0.04), 0.03, frameCol, `${i}fh`); }
+      if (form === 'tall') {
+        line(at(t - pw * 0.58, y0 + hh * 0.3, 0.12), at(t + pw * 0.58, y0 + hh * 0.3, 0.12), 0.035, iron, `${i}r`);
+        for (let k = 0; k < 4; k++) { const x = t - pw * 0.55 + (pw * 1.1 * k) / 3; line(at(x, y0 - 0.05, 0.12), at(x, y0 + hh * 0.3, 0.12), 0.02, iron, `${i}rv${k}`, 0.8); }
+        line(at(t, y0, 0.04), at(t, y1, 0.04), 0.03, frameCol, `${i}fv`);
+        if (kr() < 0.4) { const sc = mix(mulv([0.42, 0.5, 0.48], T.shade(n)), mulv([0.42, 0.5, 0.48], T.sunlit), T.mass(n) * 0.6);
+          for (const sd of [-1, 1]) put({ layer: LAYER.ACCENT, kind: K.PULL, a: at(t + sd * pw * 0.8, y1, 0.05), b: at(t + sd * pw * 0.8, y0, 0.05), n, width: pw * 0.55, col: sc, alpha: 1, dry: 0.3, rank: DETAIL, key: `${key}/${i}sh${sd}`, taper: [0.01, 0.02] }); }
+      }
+      if ((form === 'curtain' || form === 'ribbon') && i > 0) line(at(t - slot / 2, y0 - (form === 'curtain' ? 0.1 : 0), 0.04), at(t - slot / 2, y1, 0.04), 0.04, form === 'curtain' ? [0.1, 0.11, 0.12] : frameCol, `${i}m`);
     }
+    // (a curtain wall's spandrel: the dark band at each floor, under the glass)
+    if (form === 'curtain') put({ layer: LAYER.ACCENT, kind: K.PULL, a: at(0, y0 - 0.12, 0.035), b: at(d.w, y0 - 0.12, 0.035), n, width: 0.22, col: [0.12, 0.13, 0.15], alpha: 0.9, dry: 0.2, rank: rkW, key: `${key}/spandrel`, taper: [0.01, 0.01], crisp: true });
+    return;
+  }
+  if (d.kind === 'dormer') {
+    // (a dormer: its cheeks and little roof in the slate, a window in its face (lit or not by its dice), a lighter sill)
+    const [p0] = d.pts, nn: V = [d.n[0], 0, d.n[1]], ux: V = [-d.n[1], 0, d.n[0]], w = d.w, h = d.h, at2 = (x: number, y: number, o: number): V => [p0[0] + ux[0] * x + nn[0] * o, p0[1] + y, p0[2] + ux[2] * x + nn[2] * o];
+    const slate = T.tone([0.34, 0.4, 0.5], nn), on = (d.lit ?? 0) > 0, wc: V = on ? mix(mix(slate, [0.8, 0.66, 0.44], 0.5), [1.0, 0.78, 0.48], T.dk) : scale(mulv([0.22, 0.25, 0.3], T.shade(nn)), 1 - 0.3 * T.dk);
+    put({ layer: LAYER.ACCENT, kind: K.PULL, a: at2(0, h, 0.5), b: at2(0, 0, 0.5), n: nn, width: w * 1.15, col: scale(T.tone([0.8, 0.76, 0.7], nn), 0.95), alpha: 1, dry: 0.3, rank: rk(0.42), key: `${key}/face`, taper: [0.01, 0.02] });
+    put({ layer: LAYER.ACCENT, kind: K.PULL, a: at2(0, h * 0.82, 0.52), b: at2(0, h * 0.18, 0.52), n: nn, width: w * 0.62, col: wc, alpha: 1, dry: 0.2, rank: rk(0.42), key: `${key}/win`, taper: [0.01, 0.02], crisp: true, clip: ((c0: V, c1: V): [V, V] => [[Math.min(c0[0], c1[0]) - 0.02, c0[1], Math.min(c0[2], c1[2]) - 0.02], [Math.max(c0[0], c1[0]) + 0.02, c1[1], Math.max(c0[2], c1[2]) + 0.02]])(at2(-w * 0.3, h * 0.2, 0.49), at2(w * 0.3, h * 0.8, 0.56)) });
+    put({ layer: LAYER.ACCENT, kind: K.PULL, a: at2(-w * 0.62, h * 0.95, 0.3), b: at2(w * 0.62, h * 0.95, 0.3), n: [0, 1, 0], width: 0.7, col: T.tone([0.34, 0.4, 0.5], [0, 1, 0]), alpha: 1, dry: 0.3, rank: rk(0.42), key: `${key}/roof`, taper: [0.02, 0.04] });
     return;
   }
   if (d.kind === 'wire') {

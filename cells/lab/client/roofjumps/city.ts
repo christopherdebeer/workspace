@@ -32,11 +32,19 @@ const CELL = 8, CELLS = CHUNK / CELL;
 
 export const TAG = { GROUND: 0, BUILDING: 1, STEP: 2, HUT: 3, UNIT: 4, TANK: 5, PLAYER: 6, RIM: 7, BEAM: 8, STAIR: 9, BAR: 10, DEBRIS: 11, CLUTTER: 12, SKYLIGHT: 13, SLAB: 14,
   /** the details' (dressing.ts): drawn only */
-  WINDOW: 15, PIPE: 16, SIGN: 17, WIRE: 18, POLE: 19, AWNING: 20, NEON: 21, RUST: 22, FURNITURE: 23, CLOTH: 24, RUNGS: 25 } as const;
+  WINDOW: 15, PIPE: 16, SIGN: 17, WIRE: 18, POLE: 19, AWNING: 20, NEON: 21, RUST: 22, FURNITURE: 23, CLOTH: 24, RUNGS: 25,
+  /** a mansard's top storey (set in a metre, slate) and a chimney stack on it */
+  MANSARD: 26, CHIMNEY: 27 } as const;
+/**
+ * A building's style: what it's built as, which says its colour, its windows and what's on its roof. By neighbourhood (a slow
+ * noise over the city: an old quarter of mansards and tenements, a residential one of tenements and plain blocks, a modern
+ * one of slabs and offices) and by the building's own number; the tallest are offices wherever they stand.
+ */
+export const STYLE = { BLOCK: 0, MANSARD: 1, OFFICE: 2, SLAB: 3, TENEMENT: 4 } as const;
 export type Tag = (typeof TAG)[keyof typeof TAG];
 
 /** a box; `fixture` for the small things fixed to a face (a unit, a sign, a balcony, a fire escape's parts): drawn as detail */
-export interface Box { x0: number; z0: number; x1: number; z1: number; y0: number; y1: number; tag: Tag; fixture?: true; /** drawn: its own number (else one from where it stands); only its face out that way (a pane, a streak) */ seed?: number; flat?: [number, number] }
+export interface Box { x0: number; z0: number; x1: number; z1: number; y0: number; y1: number; tag: Tag; fixture?: true; /** drawn: its own number (else one from where it stands); only its face out that way (a pane, a streak) */ seed?: number; flat?: [number, number]; /** a building's style (STYLE) */ style?: number }
 
 /**
  * An authored course (a scene to study): its boxes in place of chunk (0, 0)'s, holds added by hand (no sills or pipes by
@@ -96,8 +104,8 @@ export interface Region { kind: RegionKind; x0: number; z0: number; x1: number; 
  *   on a roof   billboard (a board on a frame, facing out), aerial, dish, laundry (a line strung across)
  *   in the street  pole, wire (pole to pole, and down to a face), vending (a machine against a face), bin
  */
-export type DetailKind = 'windows' | 'pipes' | 'ladder' | 'blade' | 'rust' | 'awning' | 'neon' | 'billboard' | 'aerial' | 'dish' | 'laundry' | 'pole' | 'wire' | 'vending' | 'bin';
-export interface Detail { kind: DetailKind; pts: [number, number, number][]; n: [number, number]; w: number; h: number; seed: number; count?: number; lit?: number; /** the holds it is (what's seen of them: a bundle's runs, a ladder, the sill under a row of windows, the unit rust runs from) */ holds?: Hold[] }
+export type DetailKind = 'windows' | 'pipes' | 'ladder' | 'blade' | 'rust' | 'awning' | 'neon' | 'billboard' | 'aerial' | 'dish' | 'laundry' | 'pole' | 'wire' | 'vending' | 'bin' | 'dormer';
+export interface Detail { /** windows: their form, by the building's style (pane, frame, tall, ribbon, curtain) */ form?: string; kind: DetailKind; pts: [number, number, number][]; n: [number, number]; w: number; h: number; seed: number; count?: number; lit?: number; /** the holds it is (what's seen of them: a bundle's runs, a ladder, the sill under a row of windows, the unit rust runs from) */ holds?: Hold[] }
 export interface Chunk { cx: number; cz: number; boxes: Box[]; props: Box[]; cells: number[][]; holds: Hold[]; hcells: number[][]; regions: Region[]; details: Detail[]; /** checkpoints to collect (reach.ts), where the street is a fall */ items: Item[] }
 
 const key = (cx: number, cz: number) => `${cx},${cz}`;
@@ -258,6 +266,22 @@ export class City {
     return best;
   }
 
+  /** which neighbourhood a place is in: a slow noise, 0..1 (its own salt: not the skyline's) */
+  private quarter(x: number, z: number): number {
+    const S = 190, fx = x / S, fz = z / S, ix = Math.floor(fx), iz = Math.floor(fz);
+    const u = fx - ix, v = fz - iz, su = u * u * (3 - 2 * u), sv = v * v * (3 - 2 * v);
+    const n = (i: number, j: number) => hash(this.seed, 78, i, j) / 4294967296;
+    return (n(ix, iz) * (1 - su) + n(ix + 1, iz) * su) * (1 - sv) + (n(ix, iz + 1) * (1 - su) + n(ix + 1, iz + 1) * su) * sv;
+  }
+  /** a building's style, from where it stands and how tall it is (no dice drawn: the rest of the city as it was) */
+  private styleOf(x0: number, z0: number, x1: number, z1: number, storeys: number): number {
+    const q = this.quarter((x0 + x1) / 2, (z0 + z1) / 2), j = hash(this.seed, 91, x0, z0) / 4294967296;
+    if (storeys >= 7) return j < 0.8 ? STYLE.OFFICE : STYLE.SLAB;
+    if (q < 0.36) return storeys >= 3 && j < 0.65 ? STYLE.MANSARD : j < 0.85 ? STYLE.TENEMENT : STYLE.BLOCK;
+    if (q < 0.66) return j < 0.55 ? STYLE.TENEMENT : j < 0.85 ? STYLE.BLOCK : STYLE.SLAB;
+    return j < 0.5 ? STYLE.SLAB : j < 0.7 && storeys >= 4 ? STYLE.OFFICE : STYLE.BLOCK;
+  }
+
   /** one lot: its building, and what stands on its roof */
   private lot(boxes: Box[], rand: Rand, int: (a: number, b: number) => number, x0: number, z0: number, x1: number, z1: number): void {
     let w = x1 - x0, d = z1 - z0;
@@ -281,7 +305,8 @@ export class City {
       }
     }
     w = x1 - x0; d = z1 - z0;
-    boxes.push({ x0, z0, x1, z1, y0: 0, y1: H, tag: TAG.BUILDING });
+    const style = this.styleOf(x0, z0, x1, z1, storeys), first = boxes.length + 1;
+    boxes.push({ x0, z0, x1, z1, y0: 0, y1: H, tag: TAG.BUILDING, style });
     // (a rim round the roof, a metre high and thick: something to go over at every edge)
     if (rand() < 0.3 && w >= 6 && d >= 6) {
       const rim = (a: number, b: number, c: number, e: number) => boxes.push({ x0: a, z0: b, x1: c, z1: e, y0: H, y1: H + 1, tag: TAG.RIM });
@@ -305,6 +330,19 @@ export class City {
     if (rand() < 0.35 && w * d >= 48) stand(3, 3, 3, TAG.HUT);
     for (let n = int(0, Math.min(3, Math.floor((w * d) / 20))); n > 0; n--) { const t = rand() < 0.5; stand(t ? 2 : 1, t ? 1 : 2, 1, TAG.UNIT); }
     if (rand() < 0.1) stand(2, 2, 3, TAG.TANK);
+    // (a mansard: its roof is a storey set in a metre all round (slate; a ledge round it at the cornice), chimney stacks along its
+    // top; what the dice put on the flat roof taken off again (they were drawn all the same, so the rest of the city is as it was))
+    if (style === STYLE.MANSARD && w >= 6 && d >= 6) {
+      boxes.splice(first);
+      const m: Box = { x0: x0 + 1, z0: z0 + 1, x1: x1 - 1, z1: z1 - 1, y0: H, y1: H + STOREY, tag: TAG.MANSARD, style };
+      boxes.push(m);
+      const n = 2 + (hash(this.seed, 92, x0, z0) % 3), alongX = w >= d;
+      for (let k = 0; k < n; k++) {
+        const t = Math.round(((k + 0.5) / n) * ((alongX ? w : d) - 4)) + 1, side = (hash(this.seed, 93, x0 + k, z0) & 1) === 0;
+        const cx = alongX ? x0 + 1 + t : side ? x0 + 1 : x1 - 2, cz = alongX ? (side ? z0 + 1 : z1 - 2) : z0 + 1 + t;
+        boxes.push({ x0: cx, z0: cz, x1: cx + 1, z1: cz + 1, y0: H + STOREY, y1: H + STOREY + 1, tag: TAG.CHIMNEY });
+      }
+    }
   }
 
   /** The ground detail with anything within `r` of (x, z). */

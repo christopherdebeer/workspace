@@ -8,7 +8,7 @@
  */
 import { hash, seeded } from '../kit/rng';
 import type { Rand } from '../kit/rng';
-import { STOREY, TAG, USES } from './city';
+import { STOREY, STYLE, TAG, USES } from './city';
 import type { Box, Course, Detail, DetailKind, Hold, HoldKind, Region, RegionKind, Tag } from './city';
 
 /** what a part works in: the chunk's boxes as laid out, and what's been furnished so far (in `PARTS` order) */
@@ -193,22 +193,36 @@ function details(boxes: Box[], holds: Hold[], rand: Rand): { details: Detail[]; 
   const top = (x: number, z: number) => { let h = 0; for (const o of boxes) if (x >= o.x0 && x < o.x1 && z >= o.z0 && z < o.z1) h = Math.max(h, o.y1); return h; };
   const add = (kind: DetailKind, pts: [number, number, number][], n: [number, number], w: number, h: number, extra: Partial<Detail> = {}) => out.push({ kind, pts, n, w, h, seed: seed(), ...extra });
   for (const b of boxes) {
+    // (a mansard's storey: dormers along each face, a window in each, lit or not by its dice)
+    if (b.tag === TAG.MANSARD) {
+      for (const [ax, az, bx, bz, nx, nz] of [[b.x0, b.z0, b.x1, b.z0, 0, -1], [b.x0, b.z1, b.x1, b.z1, 0, 1], [b.x0, b.z0, b.x0, b.z1, -1, 0], [b.x1, b.z0, b.x1, b.z1, 1, 0]] as const) {
+        const len = Math.hypot(bx - ax, bz - az), k = Math.floor((len - 1) / 2.4), ux = (bx - ax) / len, uz = (bz - az) / len;
+        for (let i = 0; i < k; i++) { const t = ((i + 0.5) / k) * len; add('dormer', [[ax + ux * t, b.y0 + 0.5, az + uz * t]], [nx, nz], 1.1, 1.7, { lit: rand() < 0.35 ? 1 : 0 }); }
+      }
+      continue;
+    }
     if (b.tag !== TAG.BUILDING) continue;
-    const H = b.y1, storeys = Math.max(1, Math.round(H / STOREY));
+    const H = b.y1, storeys = Math.max(1, Math.round(H / STOREY)), style = b.style ?? STYLE.BLOCK;
+    // (its windows by its style: a plain block's punched panes; a tenement's framed ones; a mansard's tall French windows; a slab's
+    // ribbon along each floor; an office's curtain wall of glass bays, floor to ceiling, most of them lit at dusk)
+    const form = style === STYLE.OFFICE ? 'curtain' : style === STYLE.SLAB ? 'ribbon' : style === STYLE.MANSARD ? 'tall' : style === STYLE.TENEMENT ? 'frame' : 'pane';
+    const rowY = (k: number) => form === 'curtain' ? k * STOREY + 0.25 : form === 'ribbon' ? k * STOREY + 0.95 : form === 'tall' ? (k ? k * STOREY + 0.35 : 0.5) : k ? k * STOREY : 0.9;
+    const rowH = form === 'curtain' ? STOREY - 0.45 : form === 'ribbon' ? 1.1 : form === 'tall' ? 2.2 : 1.4, bay = form === 'curtain' ? 1.5 : form === 'ribbon' ? 1.25 : form === 'tall' ? 2.3 : 1.6;
+    const litShare = form === 'curtain' ? 0.35 + 0.55 : 0.8;
     for (const [ax, az, bx, bz, nx, nz] of [[b.x0, b.z0, b.x1, b.z0, 0, -1], [b.x0, b.z1, b.x1, b.z1, 0, 1], [b.x0, b.z0, b.x0, b.z1, -1, 0], [b.x1, b.z0, b.x1, b.z1, 1, 0]] as const) {
       const len = Math.hypot(bx - ax, bz - az); if (len < 2) continue;
       const ux = (bx - ax) / len, uz = (bz - az) / len, at = (t: number, y: number, out0 = 0.02): [number, number, number] => [ax + ux * t + nx * out0, y, az + uz * t + nz * out0];
       // (what's in front of this face: open to the sky (a street or a wide yard) or another building close (an alley)
       const front = (out1: number) => top(ax + ux * len / 2 + nx * out1, az + uz * len / 2 + nz * out1), street = front(1.5) === 0 && front(4) === 0;
       // (the windows: a row a storey, set in from the corners, sill to head; how many lit, by the storey's dice)
-      const shop = street && rand() < 0.3;
+      const shop = street && rand() < (form === 'tall' ? 0.55 : form === 'curtain' ? 0 : 0.3);
       // (a row above the ground sits on the face's sill at that storey, if it has one: the sill's the hold, the row's what's seen of it)
       const onFace = (h: Hold) => h.nx === nx && h.nz === nz && Math.abs((h.ax - ax) * nx + (h.az - az) * nz) < 0.01 && h.ax >= Math.min(ax, bx) - 0.01 && h.ax <= Math.max(ax, bx) + 0.01 && h.az >= Math.min(az, bz) - 0.01 && h.az <= Math.max(az, bz) + 0.01;
       const sills = holds.filter((h) => h.kind === 'sill' && onFace(h));
       for (let k = shop ? 1 : 0; k < storeys; k++) {
-        const y = k ? k * STOREY : 0.9, n = Math.max(1, Math.floor((len - 1.2) / 1.6)); if (y + 1.4 > H) break;
+        const y = rowY(k), n = Math.max(1, Math.floor((len - 1.2) / bay)); if (y + rowH > H) break;
         const sill = sills.find((h) => Math.abs(h.ay - y) < 0.01);
-        add('windows', [at(0.6, y), at(len - 0.6, y)], [nx, nz], len - 1.2, 1.4, { count: n, lit: Math.round(n * rand() * 0.8), ...(sill ? { holds: [sill] } : {}) });
+        add('windows', [at(0.6, y), at(len - 0.6, y)], [nx, nz], len - 1.2, rowH, { form, count: n, lit: Math.round(n * rand() * litShare), ...(sill ? { holds: [sill] } : {}) });
       }
       // (a shopfront at street level: an awning over it, sometimes neon above)
       if (shop) { add('awning', [at(0.4, 2.6, 0.9), at(len - 0.4, 2.6, 0.9)], [nx, nz], len - 0.8, 0.5); if (rand() < 0.45) add('neon', [at(len * 0.2, 3.2), at(len * 0.8, 3.2)], [nx, nz], len * 0.6, 0.6); }
@@ -302,7 +316,7 @@ export const PARTS: Part[] = [
       if (gr() < 0.2) place('nogo', 1, 1.5, 0.15, TAG.SKYLIGHT);
     }
     } },
-  { name: 'details', salt: 99, holds: ['pipe'], details: ['windows', 'pipes', 'ladder', 'blade', 'rust', 'awning', 'neon', 'billboard', 'aerial', 'dish', 'laundry', 'pole', 'wire', 'vending', 'bin'], props: 'none yet (the looks to come)',
+  { name: 'details', salt: 99, holds: ['pipe'], details: ['windows', 'pipes', 'ladder', 'blade', 'rust', 'awning', 'neon', 'billboard', 'aerial', 'dish', 'laundry', 'pole', 'wire', 'vending', 'bin', 'dormer'], props: 'none yet (the looks to come)',
     when: generated, make: (ctx, rand) => { const d = details(ctx.boxes, ctx.holds, rand); ctx.details.push(...d.details); ctx.holds.push(...d.holds); } },
 ];
 

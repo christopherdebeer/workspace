@@ -520,3 +520,20 @@ The full notes are in `roofjumps-studies/round8/README.md`. The changes: a hard 
   - coverage strokes are kept mostly on their face (so no plumes past a roofline), windows have square ends, and far details' brush grows slower and their colour quiets toward the wall's.
   - `?citystamps` restores the old stamp path.
 - Stamps against splines: `roofjumps-studies/city1/stamps-vs-splines.jpg` (top stamps, bottom splines; near and high views).
+
+## 24 November: building styles and windows
+- **Styles** (city.ts `STYLE`, on each building box). Five: block, mansard, office, slab, tenement. They're chosen by neighbourhood (a slow noise: an old quarter of mansards and tenements, a residential one of tenements and blocks, a modern one of slabs and offices) and by the building's own number. The tallest buildings are offices. Styles draw no dice, so the rest of the city is as it was.
+- **Mansards.** The top storey is set in a metre all round: slate, with a pale cornice ledge round it that's a new place to land. Chimney stacks along its top (new tags MANSARD and CHIMNEY). Dormers on each face, lit or not (a new `dormer` detail).
+- **Windows by style** (`Detail.form`):
+  - plain blocks: punched panes;
+  - tenements: framed panes with a cross;
+  - mansards: tall French windows with an iron railing, and shutters on some; shopfronts more often at street level;
+  - slabs: ribbon windows;
+  - offices: a curtain wall of floor-to-ceiling bays with mullions and a dark spandrel at each floor, mostly lit at dusk.
+- **Each pane has its own state:** dark, lit warm, curtains drawn, blinds, a screen's blue, or a lamp in a dark room. Near, a lit room shows something: a figure, a lamp, the line of a table.
+- **Colours by style:** limestone, tile, pale concrete, dark glass, concrete; slate and chimney brick.
+- **Window panes stay exact** (a new `crisp` flag: clipped stamps, never uncut splines), so windows are rectangles, as in every reference, while the brushwork round them stays loose.
+- **Fixes:**
+  - a climb that ends back down marks that lip bad for 3 s, and the hold-grab path checks it (a loop the new layout exposed);
+  - dead-end bridges are now on the lattice.
+- Renders: `roofjumps-studies/city2/` (`time=dusk`).

@@ -79,7 +79,7 @@ export function planStrokes(p: Plan): Stroke[] {
 /** a colour a detail kind, for the `?details` view (every kind) */
 const DETAIL_COLOUR: Record<DetailKind, readonly [number, number, number]> = {
   windows: [0.95, 0.8, 0.35], pipes: [0.55, 0.55, 0.6], ladder: [0.85, 0.85, 0.85], blade: [0.95, 0.3, 0.35], rust: [0.7, 0.35, 0.15], awning: [0.3, 0.6, 0.9], neon: [1, 0.3, 0.8],
-  billboard: [0.95, 0.95, 0.4], aerial: [0.6, 0.9, 0.6], dish: [0.8, 0.8, 1], laundry: [0.9, 0.7, 0.9], pole: [0.35, 0.3, 0.25], wire: [0.1, 0.1, 0.1], vending: [0.2, 0.8, 0.9], bin: [0.4, 0.6, 0.3],
+  billboard: [0.95, 0.95, 0.4], aerial: [0.6, 0.9, 0.6], dish: [0.8, 0.8, 1], laundry: [0.9, 0.7, 0.9], pole: [0.35, 0.3, 0.25], wire: [0.1, 0.1, 0.1], vending: [0.2, 0.8, 0.9], bin: [0.4, 0.6, 0.3], dormer: [0.4, 0.5, 0.7],
 };
 /** The city's tagged details about a place, as lines (none of the looks draws them yet): a window row as its outline, a line or
  * a run (a pipe's bends, a wire's sag) as itself, a thing standing at a point (a pole, an aerial, a machine) as an upright its height */

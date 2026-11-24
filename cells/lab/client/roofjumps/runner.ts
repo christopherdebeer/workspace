@@ -518,6 +518,13 @@ export class Runner implements Body {
   private count(m: Move): void { this.made[m] = (this.made[m] ?? 0) + 1; if (m !== 'run' && m !== 'dash') { this.recent.push(m); if (this.recent.length > 6) this.recent.shift(); } }
 
   step(dt: number, inp: Input): void {
+    const s0 = this.state, top0 = this.top;
+    this.step0(dt, inp);
+    // (a climb that ended back down (whatever ended it): that lip marked bad for a while, so it isn't caught and climbed again
+    // and again: a loop that goes nowhere)
+    if (s0 === 'climb' && this.state === 'ground' && this.y < top0 - STEP) this.badLip = { x: this.x, z: this.z, until: this.time + 3 };
+  }
+  private step0(dt: number, inp: Input): void {
     // (the slabs overhead that count are the ones this body's head reaches: see City.refY)
     this.city.refY = this.y;
     const mag = Math.min(1, Math.hypot(inp.x, inp.z)), on = mag > 0.1;
@@ -1986,6 +1993,8 @@ export class Runner implements Body {
     for (const h of this.city.holdsNear(this.x, this.z, this.R_ + (this.saving ? 1.2 : 0.8))) {
       if (!Runner.HANGS.has(h.kind)) continue;
       const p = onHold(h, this.x, this.z), y = h.kind === 'pipe' ? Math.max(h.ay, Math.min(h.by, this.y + reach * 0.9)) : h.ay, rel = y - this.y;
+      // (not where a climb just found nothing to stand on over it)
+      if (this.lipBad(p[0], p[2])) continue;
       // (overhead, the arm long: from about the head up to the reach)
       if (rel < (this.bracing ? 1.15 : 1.5) * this.build.reachScale || rel > reach) continue; /* (against the wall, one at head height: taken on contact, not slid past first) */
       // (in front: out from the face on its side, not past its end, and not leaving it)
