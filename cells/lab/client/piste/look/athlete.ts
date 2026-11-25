@@ -218,7 +218,7 @@ export function buildAthlete(): Athlete {
     const rings: Ring[] = [];
     for (let i = 0; i < N; i++) {
       const s = i / (N - 1), { p, d } = pa.at(s), [u, w] = axesAbout(d, F.u);
-      const r = prof([[0, 0.084], [0.12, 0.074], [sE - 0.06, 0.06], [sE, 0.057], [sE + 0.1, 0.056], [0.85, 0.049], [1, 0.047]], s);
+      const r = prof([[0, 0.045], [0.07, 0.066], [0.14, 0.067], [sE - 0.06, 0.06], [sE, 0.057], [sE + 0.1, 0.055], [0.85, 0.046], [1, 0.041]], s);
       rings.push({ c: p, u, w, r: () => [r, r * 0.93] });
     }
     // the inside of the elbow (toward the chord from shoulder to wrist) gathers as it bends
@@ -228,13 +228,13 @@ export function buildAthlete(): Athlete {
       weights: (i) => { const s = i / (N - 1), k = blend(s, sE - 0.07, sE + 0.07); return [[up1, 1 - k], [fore, k]]; },
       extra: (i, j, p) => {
         const s = i / (N - 1), near = Math.max(0, 1 - Math.abs(s - sE) / 0.13), face = Math.max(0, dot(norm(sub(p, rings[i].c)), inner));
-        return [0, armSign * Math.min(1, s * 1.4) * 0.8, armSign * near * face, s < 0.5 ? partTop : PART.always];
+        return [0, armSign * Math.min(1, s * 1.4) * 0.8, armSign * near * face, s < sE - 0.14 ? partTop : PART.always];
       },
     });
   };
-  const wrist = madd(f.hand, norm(sub(f.elbow, f.hand)), 0.095);
-  sleeve([madd(madd(f.shoulder, up, 0.025), F.r, -0.01), f.elbow, wrist], B.upperW, B.foreW, PART.upperSleeve, 1);
-  sleeve([madd(c[7].a, up, 0.02), c[7].b, madd(c[8].b, norm(sub(c[8].a, c[8].b)), 0.035)], B.upperR, B.foreR, PART.rearArm, -1);
+  const wrist = madd(f.hand, norm(sub(f.elbow, f.hand)), 0.125);
+  sleeve([madd(madd(lerp(f.shoulder, c[7].a, 0.16), up, 0.004), F.r, -0.02), f.elbow, wrist], B.upperW, B.foreW, PART.upperSleeve, 1);
+  sleeve([madd(madd(lerp(c[7].a, f.shoulder, 0.16), up, 0.0), F.r, 0.012), c[7].b, madd(c[8].b, norm(sub(c[8].a, c[8].b)), 0.035)], B.upperR, B.foreR, PART.rearArm, -1);
 
   // ── legs: breeches full to below the knee, the band, the knee and calf under the sock, the ankle ───────────────────
   const leg = (th: number, sh: number, pole: V) => {
@@ -245,7 +245,7 @@ export function buildAthlete(): Athlete {
       const { p, d } = pa.at(s), [u, w] = axesAbout(d, pole);
       // (the kneecap at the front of the knee; the calf full at the back; breeches loose above the band)
       const kneeK = Math.max(0, 1 - Math.abs(s - sK) / 0.06), calfK = Math.max(0, 1 - Math.abs(s - (sK + 0.2)) / 0.14);
-      const r = tone === TONE.breeches ? prof([[0, 0.118], [0.3, 0.108], [sK - 0.05, 0.086], [band, 0.073]], s) : prof([[band, 0.058], [sK + 0.2, 0.056], [0.85, 0.042], [1, 0.039]], s);
+      const r = tone === TONE.breeches ? prof([[0, 0.118], [0.3, 0.108], [sK - 0.05, 0.084], [band, 0.068]], s) : prof([[band, 0.063], [band + 0.04, 0.057], [sK + 0.2, 0.056], [0.85, 0.042], [1, 0.039]], s);
       rings.push({ c: p, u, w, r: (a) => { const ca = Math.cos(a); return [r * (1 + (ca > 0 ? 0.18 * kneeK * ca : 0.22 * calfK * -ca)), r * 0.94]; } });
       mats.push(MAT.fabric); tones.push(tone);
     };
@@ -254,7 +254,7 @@ export function buildAthlete(): Athlete {
     const wts = (s: number): W => { const k = blend(s, sK - 0.06, sK + 0.06), hipK = 1 - blend(s, 0, 0.14); return [[th === 9 ? B.thighF : B.thighB, (1 - k) * (1 - hipK * 0.5)], [sh === 10 ? B.shinF : B.shinB, k], [B.pelvis, (1 - k) * hipK * 0.5]]; };
     loft(m, leg1, { seg: 14, col: white, mat: fab, tone: tone1[0], seams: [0.25], capA: true, weights: (i) => wts((i / (N - 1)) * band) });
     // the band: a narrow cuff, a little proud
-    const bandRings: Ring[] = [band - 0.012, band + 0.012].map((s) => { const { p, d } = pa.at(s), [u, w] = axesAbout(d, pole); return { c: p, u, w, r: () => [0.077, 0.073] }; });
+    const bandRings: Ring[] = [band - 0.012, band + 0.012].map((s) => { const { p, d } = pa.at(s), [u, w] = axesAbout(d, pole); return { c: p, u, w, r: () => [0.07, 0.067] }; });
     loft(m, bandRings, { seg: 14, col: white, mat: fab, tone: TONE.breeches, seams: [0.25], weights: () => wts(band) });
     for (let i = 0; i < 14; i++) { const s = band + (1 - band) * (i / 13); add1(s, TONE.sock); }
     const leg2 = rings.splice(0);
@@ -320,31 +320,39 @@ export function buildAthlete(): Athlete {
 
   // ── the weapon hand: a gloved hand on the grip ─────────────────────────────────────────────────────────────────
   {
-    const hb = bind[B.handW], L = (x: number, y: number, z: number): V => add(hb.o, add(scale(hb.x, x), add(scale(hb.y, y), scale(hb.z, z))));
+    // (the hand's frame: x along the grip toward the guard, y toward the thumb, Z toward the palm's side of the grip (the
+    // inside, toward the body): so the back of the hand and the knuckles are outside, the fingers wrap under the grip
+    // and their tips come round on the inside, the thumb along the top)
+    const hb = bind[B.handW], Z = scale(hb.z, -1), L = (x: number, y: number, z: number): V => add(hb.o, add(scale(hb.x, x), add(scale(hb.y, y), scale(Z, z))));
     const gw: W = [[B.handW, 1]];
     // the cuff (gauntlet): over the sleeve's end, round the forearm, its edge flared
     const fa = norm(sub(f.hand, f.elbow)), cuffRings: Ring[] = [];
-    for (let i = 0; i < 5; i++) { const s = i / 4, p = madd(f.hand, fa, -0.16 + s * 0.095), [u, w] = axesAbout(fa, F.u), r = prof([[0, 0.056], [0.25, 0.057], [0.7, 0.049], [1, 0.04]], s); cuffRings.push({ c: p, u, w, r: () => [r, r * 0.95] }); }
-    loft(m, cuffRings, { seg: 14, col: white, mat: fab, tone: TONE.glove, seams: [0.0], weights: (i) => [[B.foreW, 1 - i / 6], [B.handW, i / 6]] });
+    // (flared at its edge over the sleeve, narrowing to a padded wrist, so from the eye the hand shows past it)
+    for (let i = 0; i < 7; i++) { const s = i / 6, p = madd(f.hand, fa, -0.175 + s * 0.14), [u, w] = axesAbout(fa, F.u), r = prof([[0, 0.055], [0.12, 0.053], [0.5, 0.045], [0.8, 0.038], [1, 0.034]], s); cuffRings.push({ c: p, u, w, r: () => [r, r * 0.94] }); }
+    loft(m, cuffRings, { seg: 16, col: white, mat: fab, tone: TONE.glove, seams: [0.0], weights: (i) => [[B.foreW, 1 - i / 8], [B.handW, i / 8]] });
     // the closed hand as a box of planes (after the hand-construction reference): its top the back of the hand, its
     // front the fingers' first segments, its sides; from the wrist to the knuckle ridge, on the outside of the grip,
     // padded a little fuller than a hand
     const backRings: Ring[] = [];
     for (let i = 0; i < 6; i++) { const s = i / 5, x = -0.078 + s * 0.116, hu = prof([[0, 0.031], [0.5, 0.04], [1, 0.037]], s);
-      backRings.push({ c: L(x, -0.002, -0.016), u: hb.y, w: hb.z, r: (a) => boxR(a, hu, Math.sin(a) < 0 ? 0.031 : 0.02) }); }
+      backRings.push({ c: L(x, -0.002, -0.016), u: hb.y, w: Z, r: (a) => boxR(a, hu, Math.sin(a) < 0 ? 0.031 : 0.02) }); }
     loft(m, backRings, { seg: 16, col: white, mat: fab, tone: TONE.glove, seams: [0.75], capA: true, capB: true, weights: () => gw });
+    // the palm's inside under the thumb (its heel and the thumb's root), closing the fist round the grip
+    const palmRings: Ring[] = [];
+    for (let i = 0; i < 5; i++) { const s = i / 4; palmRings.push({ c: L(-0.07 + s * 0.085, 0.0, 0.012), u: hb.y, w: Z, r: (a) => boxR(a, prof([[0, 0.024], [0.6, 0.026], [1, 0.02]], s), 0.014, 3) }); }
+    loft(m, palmRings, { seg: 14, col: white, mat: fab, tone: TONE.glove, capA: true, capB: true, weights: () => gw });
     // the knuckle ridge: a knuckle at each finger's root
-    const fingerX = [0.026, 0.008, -0.01, -0.027];
+    const fingerX = [0.029, 0.0095, -0.0095, -0.028];
     for (const x of fingerX) {
-      const kRings: Ring[] = [-0.009, 0, 0.009].map((dx, k) => ({ c: L(x + dx, -0.008, -0.043), u: hb.y, w: hb.z, r: () => [k === 1 ? 0.0115 : 0.006, k === 1 ? 0.0095 : 0.005] }));
+      const kRings: Ring[] = [-0.009, 0, 0.009].map((dx, k) => ({ c: L(x + dx, -0.008, -0.043), u: hb.y, w: Z, r: () => [k === 1 ? 0.0115 : 0.006, k === 1 ? 0.0095 : 0.005] }));
       loft(m, kRings, { seg: 8, col: white, mat: fab, tone: TONE.glove, capA: true, capB: true, weights: () => gw });
     }
     // fingers: round the grip from the knuckles, under it, to the palm side
     for (const [k, x] of fingerX.entries()) {
-      const fr: Ring[] = [], R = 0.027, r0 = k === 3 ? 0.0085 : 0.0102;
+      const fr: Ring[] = [], R = 0.0275, r0 = k === 3 ? 0.0095 : 0.0112;
       for (let i = 0; i < 9; i++) {
-        const a = 0.15 + (i / 8) * (Math.PI * 0.95), dir = add(scale(hb.z, -Math.cos(a)), scale(hb.y, -Math.sin(a)));
-        const tan = add(scale(hb.z, Math.sin(a)), scale(hb.y, -Math.cos(a)));
+        const a = 0.15 + (i / 8) * (Math.PI * 0.95), dir = add(scale(Z, -Math.cos(a)), scale(hb.y, -Math.sin(a)));
+        const tan = add(scale(Z, Math.sin(a)), scale(hb.y, -Math.cos(a)));
         const ctr = add(L(x, 0, 0), scale(dir, R)), [u, w] = axesAbout(tan, hb.x);
         fr.push({ c: ctr, u, w, r: () => [r0, r0 * 0.92] });
       }
@@ -353,8 +361,8 @@ export function buildAthlete(): Athlete {
     // the thumb: from the root at the side of the hand, along the top of the grip toward the guard, crossing it
     // the thumb: its root a wedge deep in the palm by the wrist (turning with it), then two knuckles seen, lying along
     // the top of the grip toward the guard and crossing onto it
-    const tp = path([L(-0.068, 0.006, -0.012), L(-0.03, 0.024, -0.008), L(0.008, 0.028, 0.0), L(0.042, 0.022, 0.006)]), tr: Ring[] = [];
-    for (let i = 0; i < 9; i++) { const s = i / 8, { p, d } = tp.at(s), [u, w] = axesAbout(d, hb.y), r = prof([[0, 0.022], [0.3, 0.015], [0.62, 0.0125], [0.68, 0.0135], [1, 0.0105]], s), wedge = 1 + 0.5 * Math.max(0, 1 - s / 0.35);
+    const tp = path([L(-0.07, 0.008, 0.008), L(-0.034, 0.025, 0.006), L(0.004, 0.03, 0.002), L(0.04, 0.025, 0.0)]), tr: Ring[] = [];
+    for (let i = 0; i < 9; i++) { const s = i / 8, { p, d } = tp.at(s), [u, w] = axesAbout(d, hb.y), r = prof([[0, 0.024], [0.3, 0.016], [0.62, 0.0135], [0.68, 0.0145], [1, 0.0115]], s), wedge = 1 + 0.6 * Math.max(0, 1 - s / 0.4);
       tr.push({ c: p, u, w, r: () => [r, r * 0.88 * wedge] }); }
     loft(m, tr, { seg: 10, col: white, mat: fab, tone: TONE.glove, capA: true, capB: true, weights: () => gw });
   }

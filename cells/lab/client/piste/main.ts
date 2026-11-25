@@ -95,7 +95,7 @@ const recorder = replays ? new Recorder(bout) : null;
 // ─── what the eye sees ─────────────────────────────────────────────────────────────────────────────────────────────
 let look: V | null = null;
 /** the first-person eye: how far right of the head, back, down; how far right and down it looks of their chest */
-const FP = { fov: 1.3, right: 0.0, back: -0.15, down: 0.03, aimRight: 0.22, aimDown: 0.5 };
+const FP = { fov: 1.3, right: 0.0, back: -0.15, down: 0.03, aimRight: 0.25, aimDown: 0.6 };
 const fovOf = () => {
   const aspect = canvas.clientWidth / Math.max(1, canvas.clientHeight), wide = (Number(qs.get('fov')) || 80) * Math.PI / 180;
   return Math.min(1.66, Math.max(0.75, 2 * Math.atan(Math.tan(wide / 2) / aspect)));
