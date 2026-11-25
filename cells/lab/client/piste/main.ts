@@ -31,30 +31,54 @@ const weapon = WEAPONS[qs.get('weapon') ?? ''] ?? EPEE;
 const timeScale = Math.min(4, Math.max(0.02, Number(qs.get('time') ?? 1) || 1));
 const viewMode = (qs.get('view') ?? 'mask') as 'mask' | 'side' | 'over';
 const lesson = LESSONS.find((l) => l.id === qs.get('lesson')) ?? null;
-const BOUT_FLAGS = ['auto', 'preview', 'level', 'ai', 'weapon', 'to', 'view', 't', 'still', 'readout', 'time', 'assist', 'seed'];
+const BOUT_FLAGS = ['study', 'auto', 'preview', 'level', 'ai', 'weapon', 'to', 'view', 't', 'still', 'readout', 'time', 'assist', 'seed'];
 const mode: 'menu' | 'lesson' | 'bout' = lesson ? 'lesson' : BOUT_FLAGS.some((f) => qs.has(f)) ? 'bout' : 'menu';
 const level = LEVELS[clamp(Math.round(Number(qs.get('level') ?? 2)), 0, LEVELS.length - 1)] ?? LEVELS[2];
 const assist = preview ? 0 : qs.has('assist') ? clamp(Number(qs.get('assist')) || 0, 0, 1) : mode === 'lesson' ? 0 : level.assist;
-const replays = !preview && qs.get('replay') !== '0';
+/**
+ * The study: five seconds in the room, nearly uneventful, to judge the look by: the opponent takes one step closer, you
+ * roll your wrist a little, both settle (and again). Can you feel how much distance closed, and see what your hand did?
+ */
+const study = qs.has('study');
+const replays = !preview && !study && qs.get('replay') !== '0';
 
 const body = document.body;
 body.classList.add(mode);
+if (study) body.classList.add('study');
 if (preview) body.classList.add('preview');
 if (qs.get('mask') === '0' || viewMode !== 'mask') body.classList.add('nomask');
 if (readout) body.classList.add('readout');
 
 const $ = (id: string) => document.getElementById(id)!;
 const canvas = document.querySelector('canvas')!;
-const bout = new Bout({ weapon, to: Math.max(1, Number(qs.get('to') ?? 5) || 5), referee: mode !== 'lesson' });
+const bout = new Bout({ weapon, to: Math.max(1, Number(qs.get('to') ?? 5) || 5), referee: mode !== 'lesson' && !study });
+/** the study's script, by the bout's clock (it loops every six seconds) */
+const STUDY = { step: 0.9, roll: [2.0, 2.8] as [number, number], rollTo: 0.6, loop: 6 };
+const studyClock = () => bout.t % STUDY.loop;
+const studyYou: Controller = { intent: () => {
+  const t = studyClock(), u = Math.min(1, Math.max(0, (t - STUDY.roll[0]) / (STUDY.roll[1] - STUDY.roll[0]))), e = u * u * (3 - 2 * u);
+  return { ...idle(), extend: 0.12, roll: STUDY.rollTo * e };
+} };
+let studyLap = 0, studyStepped = -1;
+const studyThem: Controller = { intent: () => {
+  const lap = Math.floor(bout.t / STUDY.loop), t = studyClock();
+  // (each lap from the en garde lines again)
+  if (lap !== studyLap) { studyLap = lap; bout.place(3.32); }
+  const I = { ...idle(), extend: 0.12 };
+  if (t >= STUDY.step && studyStepped !== lap) { studyStepped = lap; I.step = 'advance'; }
+  return I;
+} };
+
 const thumbs = new Thumbs(canvas);
 thumbs.scheme = qs.get('thumb') === 'point' ? 'point' : 'hand';
 const ai = qs.get('ai') ?? 'sparring';
 const runner = lesson ? new LessonRunner(bout, lesson, seed) : null;
-const them: Controller = runner ? runner.coach : ai === 'dummy' ? new Dummy(0) : ai === 'line' ? new Dummy(1) : new Opponent(bout, 1, qs.has('level') ? level.style : SPARRING, seed);
+const them: Controller = study ? studyThem : runner ? runner.coach : ai === 'dummy' ? new Dummy(0) : ai === 'line' ? new Dummy(1) : new Opponent(bout, 1, qs.has('level') ? level.style : SPARRING, seed);
 const standIn = new Opponent(bout, 0, SPARRING, seed + 101);
 let driven: Intent | null = null;
 const you: Controller = {
   intent: (dt) => {
+    if (study) return studyYou.intent(dt);
     if (driven) return driven;
     if (auto) return standIn.intent(dt);
     const I = thumbs.intent();
@@ -76,7 +100,8 @@ function view(b: Bout): View {
   const [me, op] = b.fencers, fov = fovOf();
   if (viewMode === 'side') {
     const mid = (me.s + op.s) / 2;
-    return { eye: [mid, 1.25, -4.2], at: [mid, 1.0, 0], fov: Math.min(1.2, fov), self: -1 };
+    // (from under the windows, the dark wall behind them: the room is 7.2 m across)
+    return { eye: [mid, 1.2, -3.2], at: [mid, 0.95, 0], fov: Math.min(1.3, fov * 1.15), self: -1 };
   }
   // (the head watches their chest and their guard, a little below the horizon; it turns slowly, as a head does)
   const want = lerp(add(op.capsules[0].b, [0, -0.15, 0]), op.blade.guard, 0.35);
@@ -86,8 +111,11 @@ function view(b: Bout): View {
     return { eye: [eye[0], eye[1] + 0.35, eye[2]], at: look, fov: Math.min(fov, 1.3), self: -1 };
   }
   // (a tall view looks lower, so your own guard is in it; a wide one keeps their mask in it)
-  const at = add(look, [0, -0.28 * Math.min(1, (fov - 0.75) / 0.9), 0]);
-  return { eye: me.eye, at, fov, self: 0 };
+  // (a tighter lens than the old wide one: the opponent at a size you can read them by, your own bell coming into the
+  // lower right, as it would to your eye looking past it)
+  const fp = Math.min(fov, 1.45);
+  const at = add(madd(look, me.frame.r, 0.1), [0, -0.3 * Math.min(1, (fp - 0.75) / 0.7), 0]);
+  return { eye: madd(me.eye, me.frame.r, 0.035), at, fov: fp, self: 0 };
 }
 
 // ─── replays: the touch again, slowly, from the side, with what happened written as it happens ──────────────────────
@@ -125,10 +153,10 @@ function replayView(b: Bout): View {
   // (the action is between the guards; a wide screen sees it from the side, both fencers fitted in; a tall one from
   // high behind your shoulder, down the piste, which is the shape of a tall screen)
   const [me, op] = b.fencers, mid = lerp(me.blade.guard, op.blade.guard, 0.5), at: V = [mid[0], 1.0, 0];
-  const aspect = canvas.clientWidth / Math.max(1, canvas.clientHeight), fov = 0.8;
+  const aspect = canvas.clientWidth / Math.max(1, canvas.clientHeight);
   if (aspect >= 1) {
-    const span = Math.abs(op.s - me.s) + 2.6, d = clamp(span / 2 / (Math.tan(fov / 2) * aspect), 2.6, 10);
-    return { eye: [mid[0] - 0.4, 1.4, -d], at: [at[0], 0.95, 0], fov, self: -1, marks: replay?.marks };
+    const d = 3.1, span = Math.abs(op.s - me.s) + 2.6, wide = clamp(2 * Math.atan(span / 2 / d / aspect), 0.6, 1.3);
+    return { eye: [mid[0] - 0.3, 1.35, -d], at: [at[0], 0.95, 0], fov: wide, self: -1, marks: replay?.marks };
   }
   const eye = madd(madd(me.eye, me.frame.f, -2.3), me.frame.r, -1.1);
   return { eye: [eye[0], eye[1] + 1.5, eye[2]], at, fov: 0.95, self: -1, marks: replay?.marks };

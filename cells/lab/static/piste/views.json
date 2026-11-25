@@ -1,5 +1,28 @@
 [
  {
+  "group": "The look",
+  "views": [
+   {
+    "name": "study-start",
+    "title": "The study: en garde in the daylight room",
+    "caption": "five quiet seconds to judge the look by: the opponent at their line, your bell low on the right, the windows' light on the floor",
+    "file": "v-study-start.jpg"
+   },
+   {
+    "name": "study-closer",
+    "title": "One step closer",
+    "caption": "the same moment a step later: how much nearer they are, read off their size, the piste's lines and the window light sliding under them",
+    "file": "v-study-closer.jpg"
+   },
+   {
+    "name": "study-rolled",
+    "title": "Your hand rolled",
+    "caption": "the wrist turned a little: the blade's faces take the window differently, the bell (mounted off-centre) shifts, the glove turns",
+    "file": "v-study-rolled.jpg"
+   }
+  ]
+ },
+ {
   "group": "Learning",
   "views": [
    {

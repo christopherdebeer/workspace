@@ -6,6 +6,9 @@ export const ready = '__piste';
 const PHONE = { width: 390, height: 844 }, WIDE = { width: 1000, height: 560 };
 const until = async (v, fn, ms = 120000) => { const t0 = Date.now(); while (Date.now() - t0 < ms) { if (await v.page.evaluate(fn)) return true; await v.wait(300); } return false; };
 export const views = [
+  { name: 'study-start', group: 'The look', title: 'The study: en garde in the daylight room', caption: 'five quiet seconds to judge the look by: the opponent at their line, your bell low on the right, the windows\' light on the floor', query: 'study&t=0.8&still', size: PHONE, settle: 1200 },
+  { name: 'study-closer', group: 'The look', title: 'One step closer', caption: 'the same moment a step later: how much nearer they are, read off their size, the piste\'s lines and the window light sliding under them', query: 'study&t=1.9&still', size: PHONE, settle: 1200 },
+  { name: 'study-rolled', group: 'The look', title: 'Your hand rolled', caption: 'the wrist turned a little: the blade\'s faces take the window differently, the bell (mounted off-centre) shifts, the glove turns', query: 'study&t=3.4&still', size: PHONE, settle: 1200 },
   { name: 'menu', group: 'Learning', title: 'Learn, or fence', caption: 'seven lessons in the order a beginner learns them; four opponents, each allowing less bullet time', query: '', size: PHONE, settle: 800 },
   { name: 'brief', group: 'Learning', title: 'A lesson’s brief', caption: 'what the master says before the first repetition', query: 'lesson=quarte', size: PHONE, settle: 800 },
   { name: 'lesson', group: 'Learning', title: 'A lesson under way', caption: 'the coach about to attack on your inside line; the count of good repetitions at full speed, and the pace', query: 'lesson=quarte', size: PHONE, settle: 800,
