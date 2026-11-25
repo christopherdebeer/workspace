@@ -1,5 +1,5 @@
-// Piste's cloth in motion (node cells/lab/devtools/piste-lunge.mjs [t0] [t1]): a lunge and its recovery from the side,
-// frame by frame (each frame's page runs the bout and the cloth on to that moment), cropped to the lunging fencer, to
+// Piste's athlete in motion (node cells/lab/devtools/piste-lunge.mjs [t0] [t1]): a lunge and its recovery from the side,
+// frame by frame (each frame's page runs the bout and its secondary motion on to that moment), cropped to the lunging fencer, to
 // see the jacket swing and settle. Writes devtools/out/lunge-strip.png.
 process.env.EXPERIMENT = 'piste'; process.env.READY = '__piste';
 const { withWood } = await import('./harness.mjs');

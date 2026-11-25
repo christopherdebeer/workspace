@@ -27,7 +27,7 @@ export const MAIN_FS = `#version 300 es
 precision highp float;
 precision highp sampler2DShadow;
 in vec3 vP; in vec3 vN; in vec3 vC; flat in float vM; in vec4 vL; in vec2 vT;
-uniform vec3 eye; uniform vec3 sunDir; uniform sampler2DShadow shadow; uniform float exposure;
+uniform vec3 eye; uniform vec3 sunDir; uniform sampler2DShadow shadow; uniform float exposure; uniform float clay; uniform float alpha;
 uniform vec4 feet[4]; uniform vec4 tips[2]; uniform vec3 bladeA[2]; uniform vec3 bladeB[2];
 out vec4 o;
 
@@ -148,7 +148,8 @@ void main(){
   }
   else if (M == 15) { // cloth: slightly greyed white; a fine weave where it can be seen; seams stitched; folds shaded
     float shade = vC.r, seamD = vC.g;
-    alb = mix(vec3(0.66, 0.655, 0.625), vec3(0.62, 0.615, 0.59), vC.b);
+    int tone = int(vC.b + 0.5);
+    alb = tone == 0 ? vec3(0.66, 0.655, 0.625) : tone == 1 ? vec3(0.62, 0.615, 0.59) : tone == 2 ? vec3(0.52, 0.5, 0.46) : vec3(0.69, 0.69, 0.67);
     vec2 q = vT * 700.0; vec2 fw = fwidth(q);
     float seen = clamp(1.0 - max(fw.x, fw.y) * 0.9, 0.0, 1.0);
     float weave = sin(q.x * 6.2832) * sin(q.y * 6.2832) * 0.5 + sin((q.x + q.y) * 3.1416) * 0.5;
@@ -165,6 +166,8 @@ void main(){
   else if (M == 8) { rough = 0.55; spec = 0.05; }
   else if (M == 9) { rough = 0.6; spec = 0.03; }
 
+  // clay: the figure as a plain grey model, to judge its shape alone
+  if (clay > 0.5 && M != 1 && M != 2 && M != 12 && M != 6 && M != 11) { alb = vec3(0.55); rough = 0.9; metal = 0.0; spec = 0.03; }
   vec3 col;
   if (M == 6 || M == 11) col = emit;
   else {
@@ -202,7 +205,7 @@ void main(){
   col = mix(col, HAZE * (0.55 + 0.45 * dot(col, vec3(0.333))), hz * (M == 1 || M == 2 ? 0.35 : 0.8));
   col *= exposure;
   col = (col * (2.51 * col + 0.03)) / (col * (2.43 * col + 0.59) + 0.14);
-  o = vec4(pow(clamp(col, 0.0, 1.0), vec3(1.0 / 2.2)), 1.0);
+  o = vec4(pow(clamp(col, 0.0, 1.0), vec3(1.0 / 2.2)), alpha);
 }`;
 
 export const SHADOW_VS = `#version 300 es
@@ -210,3 +213,30 @@ layout(location=0) in vec3 p; uniform mat4 lvp;
 void main(){ gl_Position = lvp * vec4(p, 1.0); }`;
 export const SHADOW_FS = `#version 300 es
 precision mediump float; out vec4 o; void main(){ o = vec4(1.0); }`;
+
+/** the athlete, skinned: four joints a vertex; the inside of each elbow gathered as it bends; the hem and sleeves
+ * moved by their springs; parts the eye inside the mask doesn't see of its own body sent off screen */
+export const SKIN_VS = `#version 300 es
+layout(location=0) in vec3 p; layout(location=1) in vec3 n; layout(location=2) in vec4 c; layout(location=3) in vec2 t;
+layout(location=4) in vec4 jt; layout(location=5) in vec4 wt; layout(location=6) in vec4 ex;
+uniform mat4 vp; uniform mat4 lvp; uniform mat4 bones[15];
+uniform vec3 hem; uniform vec3 sleeveW; uniform vec3 sleeveR; uniform vec2 bend; uniform int hide;
+out vec3 vP; out vec3 vN; out vec3 vC; flat out float vM; out vec4 vL; out vec2 vT;
+void main(){
+  mat4 M = bones[int(jt.x)] * wt.x + bones[int(jt.y)] * wt.y + bones[int(jt.z)] * wt.z + bones[int(jt.w)] * wt.w;
+  vec3 q = (M * vec4(p, 1.0)).xyz, nn = normalize(mat3(M) * n);
+  q += hem * ex.x + (ex.y > 0.0 ? sleeveW * ex.y : sleeveR * -ex.y);
+  float g = ex.z > 0.0 ? ex.z * bend.x : -ex.z * bend.y;
+  q -= nn * g * 0.012;
+  vC = c.rgb; if (c.a > 14.5 && c.a < 15.5) vC.r *= 1.0 - 0.38 * g;
+  vP = q; vN = nn; vM = c.a; vT = t; vL = lvp * vec4(q, 1.0);
+  int part = int(ex.w + 0.5);
+  gl_Position = ((hide >> part) & 1) == 1 ? vec4(0.0, 0.0, 2.0, 1.0) : vp * vec4(q, 1.0);
+}`;
+export const SKIN_SHADOW_VS = `#version 300 es
+layout(location=0) in vec3 p; layout(location=4) in vec4 jt; layout(location=5) in vec4 wt; layout(location=6) in vec4 ex;
+uniform mat4 lvp; uniform mat4 bones[15]; uniform vec3 hem;
+void main(){
+  mat4 M = bones[int(jt.x)] * wt.x + bones[int(jt.y)] * wt.y + bones[int(jt.z)] * wt.z + bones[int(jt.w)] * wt.w;
+  gl_Position = lvp * vec4((M * vec4(p, 1.0)).xyz + hem * ex.x, 1.0);
+}`;

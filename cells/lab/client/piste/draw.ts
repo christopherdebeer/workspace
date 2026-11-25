@@ -4,15 +4,16 @@
  * (one shadow pass, from the sun, fitted to where they are); everything else is the room's own light (look/shaders.ts):
  * the day from the windows, the lamps, the room reflected in the steel.
  *
- * Three draw calls a frame: the shadow, the room, the fencers.
+ * Draw calls a frame: in the sun's view the weapons and each athlete; then the room, the weapons, each athlete. The
+ * athletes are one mesh on the GPU, skinned per fencer from its joints; only the weapons are built on the CPU.
  */
 import type { Bout } from './bout';
 import { Mesh, MAT, STRIDE } from './look/mesh';
 import { buildSalle } from './look/salle';
-import { dressFencer } from './look/figure';
-import { Wardrobe } from './look/cloth';
+import { weapon, capsules } from './look/figure';
+import { buildAthlete, boneFrames, skinMatrices, Secondary, bendOf, SKIN_STRIDE, BONES, PART, type Athlete } from './look/athlete';
 import type { Fencer } from './fencer';
-import { MAIN_VS, MAIN_FS, SHADOW_VS, SHADOW_FS } from './look/shaders';
+import { MAIN_VS, MAIN_FS, SHADOW_VS, SHADOW_FS, SKIN_VS, SKIN_SHADOW_VS } from './look/shaders';
 import { type V, cross, dot, norm, sub } from './v3';
 
 export interface View {
@@ -24,6 +25,10 @@ export interface View {
   self: number;
   /** marks in the world (a replay's touches and contacts): where, colour, size */
   marks?: { p: V; c: [number, number, number]; r: number }[];
+  /** the figures as plain grey models (to judge their shape alone) */
+  clay?: boolean;
+  /** the body's contact capsules over the dressed figures */
+  bodies?: boolean;
 }
 
 /** the sun's direction: in through the left-hand windows, from high up and a little behind you */
@@ -40,10 +45,17 @@ export class Renderer {
   private us: Record<string, WebGLUniformLocation | null> = {};
   private shadowTex: WebGLTexture; private shadowFb: WebGLFramebuffer;
   exposure = 1.05;
-  /** each fencer's clothes (a replay's copy of a fencer gets its own) */
-  private wardrobes = new WeakMap<Fencer, Wardrobe>();
-  /** time spent on cloth and dressing, last frame, ms (for a readout) */
-  dressMs = 0;
+  /** the athlete: built once, resident on the GPU, skinned per fencer */
+  private athlete: Athlete;
+  private skin: WebGLProgram; private skinShade: WebGLProgram;
+  private skinVao: WebGLVertexArrayObject;
+  private uk: Record<string, WebGLUniformLocation | null> = {};
+  private uks: Record<string, WebGLUniformLocation | null> = {};
+  /** each fencer's secondary motion (a replay's copy of a fencer gets its own) */
+  private secondary = new WeakMap<Fencer, Secondary>();
+  private bones = [new Float32Array(BONES * 16), new Float32Array(BONES * 16)];
+  /** time spent last frame, ms: posing (joints and springs), and the weapons built on the CPU */
+  poseMs = 0; weaponMs = 0;
 
   constructor(readonly canvas: HTMLCanvasElement) {
     const gl = canvas.getContext('webgl2', { antialias: true, alpha: false, powerPreference: 'high-performance' });
@@ -51,7 +63,19 @@ export class Renderer {
     this.gl = gl;
     this.main = program(gl, MAIN_VS, MAIN_FS);
     this.shade = program(gl, SHADOW_VS, SHADOW_FS);
-    for (const k of ['vp', 'lvp', 'eye', 'sunDir', 'shadow', 'exposure', 'feet', 'tips', 'bladeA', 'bladeB']) this.u[k] = gl.getUniformLocation(this.main, k);
+    for (const k of ['vp', 'lvp', 'eye', 'sunDir', 'shadow', 'exposure', 'feet', 'tips', 'bladeA', 'bladeB', 'clay', 'alpha']) this.u[k] = gl.getUniformLocation(this.main, k);
+    this.skin = program(gl, SKIN_VS, MAIN_FS);
+    this.skinShade = program(gl, SKIN_SHADOW_VS, SHADOW_FS);
+    for (const k of ['vp', 'lvp', 'eye', 'sunDir', 'shadow', 'exposure', 'feet', 'tips', 'bladeA', 'bladeB', 'clay', 'alpha', 'bones', 'hem', 'sleeveW', 'sleeveR', 'bend', 'hide']) this.uk[k] = gl.getUniformLocation(this.skin, k);
+    for (const k of ['lvp', 'bones', 'hem']) this.uks[k] = gl.getUniformLocation(this.skinShade, k);
+    this.athlete = buildAthlete();
+    this.skinVao = gl.createVertexArray()!;
+    gl.bindVertexArray(this.skinVao);
+    const vb = gl.createBuffer()!; gl.bindBuffer(gl.ARRAY_BUFFER, vb); gl.bufferData(gl.ARRAY_BUFFER, this.athlete.verts, gl.STATIC_DRAW);
+    const ib = gl.createBuffer()!; gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ib); gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, this.athlete.index, gl.STATIC_DRAW);
+    const st = SKIN_STRIDE * 4;
+    [[0, 3, 0], [1, 3, 12], [2, 4, 24], [3, 2, 40], [4, 4, 48], [5, 4, 64], [6, 4, 80]].forEach(([l, n, o]) => { gl.enableVertexAttribArray(l); gl.vertexAttribPointer(l, n, gl.FLOAT, false, st, o); });
+    gl.bindVertexArray(null);
     this.us.lvp = gl.getUniformLocation(this.shade, 'lvp');
     const room = buildSalle();
     this.roomN = room.n;
@@ -78,14 +102,10 @@ export class Renderer {
     gl.enable(gl.DEPTH_TEST);
   }
 
-  /** step the fencers' clothes to the bout's time without drawing (for a page run on to a moment: the cloth arrives
-   * with its motion, not freshly hung) */
+  /** step the fencers' secondary motion to the bout's time without drawing (for a page run on to a moment: the hem
+   * arrives with its swing) */
   simulate(bout: Bout) {
-    for (const f of bout.fencers) {
-      let w = this.wardrobes.get(f);
-      if (!w) { w = new Wardrobe(f); this.wardrobes.set(f, w); }
-      w.update(f, bout.t);
-    }
+    bout.fencers.forEach((f, i) => this.pose(f, bout.t, i));
   }
 
   resize(dpr: number) {
@@ -97,13 +117,10 @@ export class Renderer {
     const gl = this.gl, m = this.mesh;
     m.reset();
     const t0 = performance.now();
-    bout.fencers.forEach((f, i) => {
-      let w = this.wardrobes.get(f);
-      if (!w) { w = new Wardrobe(f); this.wardrobes.set(f, w); }
-      w.update(f, bout.t);
-      dressFencer(m, f, i === view.self, i * 101 + 7, w);
-    });
-    this.dressMs = performance.now() - t0;
+    const poses = bout.fencers.map((f, i) => this.pose(f, bout.t, i));
+    const t1 = performance.now();
+    bout.fencers.forEach((f, i) => weapon(m, f, i * 101 + 7));
+    this.poseMs = t1 - t0; this.weaponMs = performance.now() - t1;
     for (const k of view.marks ?? []) m.ellipsoid(k.p, [k.r, 0, 0], [0, k.r, 0], [0, 0, k.r], 10, 7, () => [k.c, MAT.lamp]);
     gl.bindBuffer(gl.ARRAY_BUFFER, this.dynBuf);
     gl.bufferData(gl.ARRAY_BUFFER, m.data.subarray(0, m.n * STRIDE), gl.DYNAMIC_DRAW);
@@ -119,6 +136,11 @@ export class Renderer {
     gl.uniformMatrix4fv(this.us.lvp, false, lvp);
     gl.bindVertexArray(this.dynVao);
     gl.drawArrays(gl.TRIANGLES, 0, m.n);
+    // (both bodies whole in the sun's view: the player's shadow too)
+    gl.useProgram(this.skinShade);
+    gl.uniformMatrix4fv(this.uks.lvp, false, lvp);
+    gl.bindVertexArray(this.skinVao);
+    poses.forEach((ps, i) => { gl.uniformMatrix4fv(this.uks.bones, false, this.bones[i]); gl.uniform3fv(this.uks.hem, ps.hem); gl.drawElements(gl.TRIANGLES, this.athlete.count, gl.UNSIGNED_INT, 0); });
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
 
     gl.viewport(0, 0, this.canvas.width, this.canvas.height);
@@ -131,6 +153,7 @@ export class Renderer {
     gl.uniform3fv(this.u.eye, view.eye);
     gl.uniform3fv(this.u.sunDir, SUN);
     gl.uniform1f(this.u.exposure, this.exposure);
+    gl.uniform1f(this.u.clay, 0); gl.uniform1f(this.u.alpha, 1);
     gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, this.shadowTex); gl.uniform1i(this.u.shadow, 0);
     // contact shadows: under each shoe, and under each tip (w: how strongly)
     const feet: number[] = [];
@@ -145,7 +168,48 @@ export class Renderer {
     gl.drawArrays(gl.TRIANGLES, 0, this.roomN);
     gl.bindVertexArray(this.dynVao);
     gl.drawArrays(gl.TRIANGLES, 0, m.n);
+    // the athletes
+    const vpM = mul(perspective(view.fov, aspect, 0.03, 60), lookAt(view.eye, view.at, [0, 1, 0]));
+    gl.useProgram(this.skin);
+    const U = this.uk;
+    gl.uniformMatrix4fv(U.vp, false, vpM); gl.uniformMatrix4fv(U.lvp, false, lvp);
+    gl.uniform3fv(U.eye, view.eye); gl.uniform3fv(U.sunDir, SUN); gl.uniform1f(U.exposure, this.exposure);
+    gl.uniform1f(U.clay, view.clay ? 1 : 0); gl.uniform1f(U.alpha, 1);
+    gl.uniform1i(U.shadow, 0); gl.uniform4fv(U.feet, feet); gl.uniform4fv(U.tips, tips);
+    gl.uniform3fv(U.bladeA, [...bout.fencers[0].blade.guard, ...bout.fencers[1].blade.guard]);
+    gl.uniform3fv(U.bladeB, [...bout.fencers[0].blade.tip, ...bout.fencers[1].blade.tip]);
+    gl.bindVertexArray(this.skinVao);
+    poses.forEach((ps, i) => {
+      gl.uniformMatrix4fv(U.bones, false, this.bones[i]);
+      gl.uniform3fv(U.hem, ps.hem); gl.uniform3fv(U.sleeveW, ps.sleeve[0]); gl.uniform3fv(U.sleeveR, ps.sleeve[1]); gl.uniform2fv(U.bend, ps.bend);
+      // (looking out of this one: not its head, its torso, its rear arm, the top of its own sleeve)
+      gl.uniform1i(U.hide, i === view.self ? (1 << PART.head) | (1 << PART.torso) | (1 << PART.rearArm) | (1 << PART.upperSleeve) : 0);
+      gl.drawElements(gl.TRIANGLES, this.athlete.count, gl.UNSIGNED_INT, 0);
+    });
+    // the contact capsules over them (debug)
+    if (view.bodies) {
+      const o = new Mesh(8000);
+      bout.fencers.forEach((f) => capsules(o, f));
+      gl.useProgram(this.main);
+      gl.uniform1f(this.u.alpha, 0.38);
+      gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA); gl.depthMask(false);
+      gl.bindBuffer(gl.ARRAY_BUFFER, this.dynBuf);
+      gl.bufferData(gl.ARRAY_BUFFER, o.data.subarray(0, o.n * STRIDE), gl.DYNAMIC_DRAW);
+      gl.bindVertexArray(this.dynVao);
+      gl.drawArrays(gl.TRIANGLES, 0, o.n);
+      gl.disable(gl.BLEND); gl.depthMask(true);
+    }
     gl.bindVertexArray(null);
+  }
+
+  /** a fencer's joints this frame (into this.bones[i]), and its secondary motion */
+  pose(f: Fencer, t: number, i: number) {
+    skinMatrices(boneFrames(f), this.athlete.bind, this.bones[i]);
+    let sec = this.secondary.get(f);
+    if (!sec) { sec = new Secondary(); this.secondary.set(f, sec); }
+    sec.update(f, t);
+    const c = f.capsules;
+    return { hem: sec.hem, sleeve: sec.sleeve, bend: [bendOf(f.shoulder, f.elbow, f.hand), bendOf(c[7].a, c[7].b, c[8].b)] };
   }
 }
 
