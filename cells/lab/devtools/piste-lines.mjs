@@ -1,3 +1,7 @@
+// Piste's opponent against line play, at every level (node cells/lab/devtools/piste-lines.mjs; ONLY=master,club to
+// choose levels): a held line, and a line timed to their steps (bent back, re-extended as they advance), each played
+// with a human's reaction (0.22 s) and aim (a few centimetres off, wandering), five bouts a level. Prints wins, single
+// touches each way, doubles, how tired the line player's arm was, and what the opponent was doing at each touch.
 import { build } from 'esbuild';
 const lab = new URL('../client/piste/', import.meta.url).pathname;
 const out = await build({ stdin: { contents: `export * from './bout'; export * from './weapons'; export * from './ai'; export * from './fencer'; export * from './intent'; export * from './v3';`, resolveDir: lab, loader: 'ts' }, bundle: true, write: false, format: 'esm', platform: 'node' });
