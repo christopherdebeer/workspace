@@ -9,6 +9,7 @@
 import { Blade, thumbOf } from './blade';
 import type { Intent } from './intent';
 import { idle } from './intent';
+import { BodyMotion } from './motion';
 import type { Part, Weapon } from './weapons';
 import { type V, type Frame, add, clamp, cross, dirWorld, dot, madd, norm, rot, scale, smooth, sub, toWorld, len } from './v3';
 
@@ -52,6 +53,11 @@ export class Fencer {
   capsules: Capsule[] = [];
   shoulder: V = [0, 0, 0]; elbow: V = [0, 0, 0]; elbowLook: V = [0, 0, 0]; hand: V = [0, 0, 0];
   eye: V = [0, 0, 0];
+  /** where the weapon shoulder would be if the body were rigid: the hand is placed from here (the body's own sway is
+   * the body's, not the intent's) */
+  anchor: V = [0, 0, 0];
+  /** the rest of the body's own motion: its mass lagging, its rear arm swinging, its breathing (motion.ts) */
+  readonly motion: BodyMotion;
   /**
    * How tired the weapon arm is, 0..1. An arm held out at shoulder height with a weapon at the end of it tires in
    * seconds; it recovers when it's bent. A tired arm is weaker (its muscles push less), and its point wanders: the
@@ -65,6 +71,7 @@ export class Fencer {
 
   constructor(readonly weapon: Weapon, s: number, facing: 1 | -1) {
     this.s = s; this.facing = facing;
+    this.motion = new BodyMotion(facing > 0 ? 0.4 : 2.9);
     this.pose();
     const [P, G] = this.handTarget();
     this.blade = new Blade(weapon, P, G);
@@ -76,6 +83,7 @@ export class Fencer {
     this.s = s; this.lunge = 0; this.front = BODY.stance / 2; this.back = -BODY.stance / 2; this.act = null; this.queued = null;
     this.ext = this.hx = this.hy = this.px = this.py = this.roll = 0;
     this.fatigue = 0;
+    this.motion.reset();
     this.blade.strength = 1;
     this.intent = idle();
     this.pose();
@@ -130,16 +138,21 @@ export class Fencer {
     const F = this.frame, L = this.lunge;
     const hipsFwd = BODY.lungeHips * L, hipsUp = BODY.pelvis - BODY.lungeDrop * L;
     // (side on: the weapon shoulder leads, the torso leans into a lunge)
-    const lean = 0.16 * L;
-    const pelvis = toWorld(F, hipsFwd, hipsUp, 0);
-    const chest = toWorld(F, hipsFwd + 0.04 + Math.sin(lean) * 0.42, hipsUp + Math.cos(lean) * 0.42, 0.0);
-    const neck = toWorld(F, hipsFwd + 0.05 + Math.sin(lean) * 0.52, hipsUp + Math.cos(lean) * 0.52, 0);
-    this.shoulder = toWorld(F, hipsFwd + 0.13 + Math.sin(lean) * 0.47, hipsUp + Math.cos(lean) * 0.47, 0.05);
-    const rearShoulder = toWorld(F, hipsFwd - 0.1 + Math.sin(lean) * 0.47, hipsUp + Math.cos(lean) * 0.47, -0.04);
-    const head = toWorld(F, hipsFwd + 0.07 + Math.sin(lean) * 0.7, hipsUp + Math.cos(lean) * 0.7, -0.01);
-    this.eye = toWorld(F, hipsFwd + 0.13 + Math.sin(lean) * BODY.eye, hipsUp + Math.cos(lean) * BODY.eye, -0.005);
+    const lean = 0.16 * L, sl = Math.sin(lean), cl = Math.cos(lean);
+    // the body's own motion (motion.ts): the pelvis's own bob and shift, the trunk's sway over it (in proportion to
+    // height: its top, half a metre up, takes all of it) and its breath, the head's steadying, the rear shoulder's turn
+    const K = this.motion, pF = hipsFwd + K.pelvis[0], pU = hipsUp + K.pelvis[1], tF = K.trunk[0], tU = K.trunk[1];
+    const at = (fwd: number, up: number, right: number, y: number) => toWorld(F, pF + fwd + sl * y + tF * y / 0.5, pU + cl * y + tU * Math.min(1, y / 0.42), right);
+    const pelvis = toWorld(F, pF, pU, 0);
+    const chest = at(0.04, 0, 0, 0.42);
+    const neck = at(0.05, 0, 0, 0.52);
+    this.shoulder = at(0.13, 0, 0.05, 0.47);
+    this.anchor = toWorld(F, hipsFwd + 0.13 + sl * 0.47, hipsUp + cl * 0.47, 0.05);
+    const rearShoulder = at(-0.1 - K.profile, 0, -0.04, 0.47);
+    const head = madd(madd(at(0.07, 0, -0.01, 0.7), f, K.head[0]), u, K.head[1]);
+    this.eye = madd(madd(at(0.13, 0, -0.005, BODY.eye), f, K.eye[0]), u, K.eye[1]);
     // legs: hips to knees (bent, out) to feet
-    const hipF = toWorld(F, hipsFwd + 0.08, hipsUp, 0.05), hipB = toWorld(F, hipsFwd - 0.08, hipsUp, -0.03);
+    const hipF = toWorld(F, pF + 0.08, pU, 0.05), hipB = toWorld(F, pF - 0.08, pU, -0.03);
     const footF = toWorld(F, this.front, 0.05 + this.frontLift, 0.04), footB = toWorld(F, this.back, 0.05 + this.backLift, -0.06);
     const kneeF = knee(hipF, footF, 0.46, 0.46, add(scale(f, 1), [0, 0.2, 0]));
     const kneeB = knee(hipB, footB, 0.46, 0.46, add(scale(f, -0.3), add(scale(r, -0.8), [0, 0.2, 0])));
@@ -151,9 +164,11 @@ export class Fencer {
     this.elbow = knee(this.shoulder, this.hand, BODY.upperArm, BODY.forearm, add(scale(r, 0.2), [0, -1, 0]));
     this.elbowLook = this.elbow;
     // the rear arm, relaxed, low and a little back (the modern épée carriage: no raised arm); in a lunge it swings back
-    // and straightens, for balance
-    const rearElbow = toWorld(F, hipsFwd - 0.12 - 0.12 * L, hipsUp + 0.26 - 0.06 * L, -0.2);
-    const rearHand = toWorld(F, hipsFwd - 0.04 - 0.4 * L, hipsUp + 0.03 + 0.02 * L, -0.24);
+    // and straightens, for balance. It's posed for the motion's lunge (thrown ahead of the feet, overshooting), turned
+    // back with the shoulder, and its hand swings
+    const Lr = K.rearLunge, [swF, swU] = K.rearSwing;
+    const rearElbow = toWorld(F, pF - 0.12 - 0.12 * Lr - K.profile + 0.5 * tF + 0.45 * swF, pU + 0.26 - 0.06 * Lr + 0.45 * swU, -0.2);
+    const rearHand = toWorld(F, pF - 0.04 - 0.4 * Lr - K.profile + 0.3 * tF + swF, pU + 0.03 + 0.02 * Lr + swU, -0.24);
     this.capsules = [
       // (the trunk is an oval, wide along the piste and thin across it, side on: this, the core, is as thin as it is
       // across; two more at the end of the list widen it fore and aft. Fitted to the dressed figure: devtools/piste-fit.mjs)
@@ -196,7 +211,7 @@ export class Fencer {
 
   /** where the guard is sent at extension `e` with the hand moved (hx right, hy up), within the arm's reach */
   guardFor(e: number, hx: number, hy: number): V {
-    const F = this.frame, S = this.shoulder, toS = (a: number, b: number, c: number) => add(S, dirWorld(F, a, b, c));
+    const F = this.frame, S = this.anchor, toS = (a: number, b: number, c: number) => add(S, dirWorld(F, a, b, c));
     let G = toS(0.36 + 0.23 * e, -0.2 + 0.16 * e, 0.12 - 0.11 * e);
     G = add(G, add(scale(F.r, hx), scale(F.u, hy)));
     const reach = BODY.upperArm + BODY.forearm + BODY.gripToGuard - 0.005, d = sub(G, S), l = len(d);
@@ -224,6 +239,11 @@ export class Fencer {
     this.blade.strength = 1 - FATIGUE.weak * this.fatigue;
     this.feet(h);
     this.follow(h);
+    const L = this.lunge;
+    this.motion.update({
+      pelvisF: this.facing * this.s + BODY.lungeHips * L, pelvisU: BODY.pelvis - BODY.lungeDrop * L,
+      lunge: L, ext: this.ext, lift: Math.max(this.frontLift, this.backLift), moving: !!this.act, fatigue: this.fatigue,
+    }, h);
     this.pose();
     const [P, G] = this.handTarget();
     this.blade.aim(P, G, h);
@@ -263,7 +283,7 @@ export function aimAt(f: Fencer, p: V, e: number, extraHand: [number, number] = 
  * riposte or an attack from close is made with the arm only as long as it needs to be. (Below 0: too close even bent.)
  */
 export function reachFor(f: Fencer, p: V): number {
-  const need = len(sub(p, f.shoulder)) - f.weapon.blade * 0.985 + 0.025;
+  const need = len(sub(p, f.anchor)) - f.weapon.blade * 0.985 + 0.025;
   // (the guard's distance from the shoulder runs from about 0.43 m bent to 0.6 m straight: see guardFor)
   return (need - 0.43) / 0.17;
 }
